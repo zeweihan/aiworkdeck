@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Workbench operations cluster (project-overview mixin modules): file open/tabs,
 // AI command routing, OCR capture and recognition, staging area, clipboard capture.
 export default {
@@ -67,4 +69,14 @@ export default {
   // clipboardBridge.js
   imageCaptured: 'Image captured',
   fileCaptured: 'File captured',
+  imageCaptureFailed: 'Failed to record image',
+  clipboardRecordFailed: 'Failed to record clipboard',
+  fileCaptureFailed: 'Failed to record file',
+
+  // FileTree.vue drag move: when the backend rolls back a failed physical move it still
+  // returns a success response (DB stays consistent with disk, see
+  // ProjectFileService.moveSingleFileWithPhysical), so the frontend compares the returned
+  // parentId to detect a move that did not actually happen (commonly a file locked on Windows).
+  fileMoveOccupied: 'This file may be in use and could not be moved',
+  filesMoveOccupiedCount: '{count} file(s) may be in use and could not be moved',
 }

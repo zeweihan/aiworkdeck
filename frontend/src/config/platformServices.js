@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 平台服务在界面上的展示元数据（首启向导步骤 2 与系统管理「平台服务」分区共用）。
  *
@@ -57,8 +59,9 @@ export function localTierReady(key) {
 
 /**
  * 最近一次本机转写探测的原文（`{status, model, diarization, message, nextStep}`），
- * 未探过时为 null。界面用它渲染「下一步该做什么」——
- * `MODEL_MISSING` 要给下载入口，`SERVICE_DOWN` 要给重启指路，两者不能合并。
+ * 未探过时为 null。界面用它渲染「下一步该做什么」——四态各有各的出路：
+ * `RUNTIME_MISSING` 下运行时组件、`MODEL_MISSING` 下模型（1.5GB）、
+ * `SERVICE_DOWN` 重启应用、`READY` 可用。四者不能合并成一句「不可用」。
  */
 const localAsrProbe = reactive({ result: null })
 

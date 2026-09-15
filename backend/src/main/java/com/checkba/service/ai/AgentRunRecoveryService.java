@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.model.entity.AgentRunRecord;
@@ -45,6 +48,7 @@ public class AgentRunRecoveryService {
     private final AgentRunRecordRepository recordRepository;
     private final ProjectAiMessageRepository messageRepository;
     private final AgentRunStateService agentRunStateService;
+    private volatile AgentInboxService inboxService;
 
     public AgentRunRecoveryService(AgentRunRecordRepository recordRepository,
                                    ProjectAiMessageRepository messageRepository,
@@ -52,6 +56,11 @@ public class AgentRunRecoveryService {
         this.recordRepository = recordRepository;
         this.messageRepository = messageRepository;
         this.agentRunStateService = agentRunStateService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setInboxService(AgentInboxService inboxService) {
+        this.inboxService = inboxService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -90,6 +99,7 @@ public class AgentRunRecoveryService {
             try {
                 // mark 同时写内存与 DB：内存这一份是 /connect 推 run_state 的唯一数据源
                 agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.INTERRUPTED);
+                if (inboxService != null) inboxService.interruptConversationRuns(conversationId);
                 appendInterruptNotice(conversationId);
                 count++;
             } catch (Exception e) {

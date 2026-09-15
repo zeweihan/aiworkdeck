@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // libreofficeExecutorClient.js — framework-agnostic LibreOffice executor client.
 //
 // Epic #43 task ④. Plain ES module (NO Vue) so it can be unit-driven by the
@@ -13,6 +15,8 @@
 // offset-shaped actions must map to anchors on the worker, never integer offsets.
 
 export const EDITOR_ACTIONS = [
+  // Ephemeral inline review: immutable paragraph validation, no saved bookmarks.
+  'update_comment', 'get_review_layout', 'set_review_balloons', 'get_review_context', 'goto_review_range', 'apply_review_edit',
   // [verified] proven against the Phase 0 spike UNO bridge
   'insert_at_cursor', 'replace_selection', 'find_replace', 'get_selection',
   // find_text_locations returns stable anchorIds (bookmarks), NOT integer offsets (§0.2)
@@ -26,19 +30,32 @@ export const EDITOR_ACTIONS = [
   // (select_paragraph/collapse_selection), edit (delete_selection), format
   // (format_selection/set_paragraph_format), recover (undo/redo).
   'get_document_text', 'get_cursor_context', 'get_clauses', 'select_paragraph', 'collapse_selection',
+  // 人工补全：内存快照校验后同步接受，不使用 AI 编辑通道。
+  'get_completion_context', 'accept_completion', 'insert_completion_content',
+  // 右键：选区外查菜单与引擎原生菜单二选一（#601）。
+  'set_host_context_menu', 'get_context_menu_context',
   'delete_selection', 'format_selection', 'set_paragraph_format', 'undo', 'redo',
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").
   'move_cursor', 'delete_backward', 'delete_forward', 'insert_paragraph', 'get_cursor_rect',
+  // [overlay Tab] 表格里跳格 / 正文里插制表符——判定在 worker（宿主不知道光标属于
+  // 哪个 story）。宿主发起，不是 AI 管线。
+  'tab_key',
   // [overlay 快捷键] desktop-parity keys (Cmd/Ctrl+A/B/I/U, Home/End) — the
   // worker holds the .uno: allowlist (UI_COMMANDS in office_thread.js).
   'ui_command',
   // [视图缩放] 触控板捏合 / Cmd+加减号；{value} 绝对百分比、{delta} 相对增量，
   // 不带参数就是只读回当前缩放。宿主发起，不是 AI 管线。
   'set_zoom',
+  // [主题] 纸外工作区配色随宿主深浅主题切换（dev-board#273）。editor-main 收到
+  // lo-relay set-theme 后发起；幂等、只动 AppBackground 不动文档。
+  'set_app_theme',
   // [自建工具栏 P1] 工具栏状态一次性回读、样式下拉数据、LO chrome 开关、修订开关。
   // 全部宿主发起（EditorToolbar → executor），不是 AI 管线。
   'get_ui_state', 'list_styles', 'set_chrome', 'set_track_changes',
+  // [修订显示三态 dev-board#368] 全部修订 / 简洁标记（页边） / 最终稿。纯显示切换，
+  // 不改内容也不动 RecordChanges；不带 mode 就是只读回引擎的真实状态。
+  'set_revision_view',
   // [自建工具栏 P2b] 用户对当前选区加批注（署名用户本人；AI 管线走 add_comment）
   'add_comment_at_selection',
   // [自建查找栏 P3] 上一个/下一个匹配。不留书签——只动视图光标。
@@ -71,15 +88,26 @@ export const EDITOR_ACTIONS = [
   // [#79 click-to-open] LO WASM 不触发 window.open（v0.7.1 真机证实）：编辑器页
   // 监听 canvas 点击后经此原语读取光标处链接再转发宿主。
   'get_hyperlink_at_cursor',
+  // [EvidenceLink dev-board#103] 书签名 = linkKey 的证据锚点五原语。Host-initiated
+  //（EvidenceLink 服务 / 拖拽关联 / 底稿面板），不是 AI 管线；失败双字段 error+message。
+  'bookmark_selection', 'get_bookmark_context', 'check_link_anchors', 'adopt_legacy_links', 'goto_bookmark',
   // [批注] Word comment on an anchored range — 解释/说明类文字不进正文的通道
   // （backend doc_add_comment）。
   'add_comment',
   // [第 2 期 版本对比] host-initiated：当前文档与旧版字节比较产出修订，随后切只读。
   'compare_document',
+  // [三方合并 dev-board#630/#631/#632] host-initiated：合并比对稿。
+  // build_merge_draft 把「主线侧原生比较 + 另一侧逐段重放」整条链做在**一条命令里**
+  //（修订署名必须同命令内切换，见 office_thread.js 的说明）；merge_take_other 是同段
+  // 冲突「用律师乙的」。sheet_get_active_cell / slide_get_current 供溯源光标条取数。
+  'build_merge_draft', 'merge_take_other', 'sheet_get_active_cell', 'slide_get_current',
   // [格式增强] 富格式原语：编号/表格/格式读取/全文标准格式化；insert_under_heading
   // 是后端一直在派发但从未接通的原语（本次补齐 worker 实现）。
   'set_numbering', 'format_table', 'insert_table', 'get_formatting', 'apply_house_style',
   'insert_under_heading',
+  // [样式画像 dev-board#111] 项目模板画像：set_style_profile 换 worker 的 HOUSE、
+  // apply_style_profile 落到样式定义与正文；insert_toc / set_page_setup 补齐目录与纸张。
+  'set_style_profile', 'apply_style_profile', 'insert_toc', 'set_page_setup',
   // [Word 表格单元格级] doc_table_* 原语：读表 / 改一格 / 增删行列。insert_table 与
   // format_table 是"整张表"粒度，这一组补的是"改既有表里的一格"（issue #261）。
   'table_read', 'table_set_cell', 'table_add_row', 'table_delete_row',
@@ -100,7 +128,7 @@ export const EDITOR_ACTIONS = [
   // 这一组同时也是文档能力矩阵 4.2 节 Word 待办里"包一层 AI 工具面"的落点：
   // doc_list_revisions/doc_accept(_all)_revision(s)/doc_reject(_all)_revision(s)、
   // doc_get_comments/doc_resolve_comment/doc_delete_comment 直接复用同一批 action。
-  'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_all_revisions',
+  'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_revisions', 'resolve_all_revisions',
   'list_comments', 'goto_comment', 'set_comment_resolved', 'delete_comment',
   // [批注回复] doc_reply_comment 的落点——同一批注锚点上追加一条新批注，见
   // office_thread.js reply_comment 的实现注释（原生线程属性 best-effort）。
@@ -136,7 +164,31 @@ export const EDITOR_ACTIONS = [
   // [诊断] 当前文档内核类型（writer/calc/impress/unknown）——审阅按钮等 UI 按 kind
   // 隐藏的判据；load_document 的返回值里也带 kind，宿主常规路径无需二次往返调用本诊断。
   'get_doc_kind',
+  // [取消] 宿主对在飞的批量命令（find_replace / apply_house_style）喊停：
+  // {reqId} 取自 onProgress 回调。宿主发起，不是 AI 管线（dev-board#108）。
+  'cancel',
 ]
+
+// 按 action 分级的等待预算（ms）。整文档传输与全文批量改稿都远超 30s 默认值；
+// 与 zetaOfficeRelay.js 的 ACTION_BUDGET_MS 和后端 EditorBridgeService
+// ACTION_TIMEOUT_SECONDS 三处同表，改一处要同步另两处。
+export const ACTION_BUDGET_MS = {
+  load_document: 180000, export_document: 180000,
+  find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
+  apply_style_profile: 120000,
+  // 流式 chunk 和收尾都可能一次写完整表格；完整回答插入也复用 stream_insert。
+  stream_insert: 120000, stream_flush: 120000,
+  // resolve_revisions（批量处置一张审阅卡片）最坏情况下 K 接近全文 redline 总数 N
+  // （一次连续大范围编辑落在同一分钟、同一作者），与 resolve_all_revisions 同量级预算。
+  resolve_revisions: 120000,
+  // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，超时后
+  // 后端把「不再等」报成失败，模型重发一次 —— 同一份报告插了两遍。
+  insert_at_cursor: 120000, insert_under_heading: 120000,
+  replace_selection: 120000, modify_paragraph: 120000,
+  // 三方合并：三次 load（另一侧/上一版/主线）+ 两遍格式扫描 + 一次原生比较 + 逐段重放
+  // 全在一条命令里；420 段 32 页的夹具实测约 22 秒，按 load_document 同量级给预算。
+  build_merge_draft: 180000,
+}
 
 /**
  * Create an executor client bound (later, via connect) to a ZetaOffice worker
@@ -146,6 +198,9 @@ export const EDITOR_ACTIONS = [
  * @param {number} [opts.timeoutMs=30000]
  * @param {(msg:string)=>void} [opts.onError] optional error sink
  * @param {(attrs:object)=>void} [opts.onTelemetry] optional editor.action usage sink (app-side only)
+ * @param {(reqId:string, p:{done:number,total:number})=>void} [opts.onProgress]
+ *        batch progress from the worker for a command still in flight
+ *        (find_replace >50 hits / apply_house_style, dev-board#108)
  */
 export function createLibreOfficeExecutor(opts = {}) {
   const timeoutMs = opts.timeoutMs || 30000
@@ -155,6 +210,13 @@ export function createLibreOfficeExecutor(opts = {}) {
 
   function handleMessage(e) {
     const d = (e && e.data) || {}
+    if (d.cmd === 'progress') {
+      const p = { done: Number(d.done) || 0, total: Number(d.total) || 0 }
+      const entry = pending.get(d.reqId)
+      if (entry && entry.onProgress) { try { entry.onProgress(p) } catch (err) { /* ignore */ } }
+      if (opts.onProgress) { try { opts.onProgress(d.reqId, p) } catch (err) { /* ignore */ } }
+      return
+    }
     if (d.cmd !== 'result') return
     const entry = pending.get(d.reqId)
     if (!entry) return
@@ -182,18 +244,20 @@ export function createLibreOfficeExecutor(opts = {}) {
 
   function isConnected() { return !!workerPort }
 
-  function request(action, params) {
+  // callOpts（可选）：{onProgress(p), onIssued(reqId)}——serveExecutor 用 onIssued 记下
+  // worker 侧 reqId，宿主的 cancel 才能对上号。
+  function request(action, params, callOpts) {
     if (!workerPort) return Promise.reject(new Error('LibreOffice office worker not connected'))
     const reqId = 'lo_' + Date.now() + '_' + (++reqSeq)
-    // Whole-document transfers get a longer deadline (mirror of the host-side
-    // relay budget in zetaOfficeRelay.js — see the comment there).
-    const budget = (action === 'load_document' || action === 'export_document')
-      ? Math.max(timeoutMs, 180000) : timeoutMs
+    // Whole-document transfers and whole-document batch edits get a longer
+    // deadline (mirror of the host-side relay budget in zetaOfficeRelay.js).
+    const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (pending.has(reqId)) { pending.delete(reqId); reject(new Error('LibreOffice command timeout: ' + action)) }
       }, budget)
-      pending.set(reqId, { resolve, reject, timer })
+      pending.set(reqId, { resolve, reject, timer, onProgress: callOpts && callOpts.onProgress })
+      if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
       workerPort.postMessage({ cmd: 'exec', reqId, action, params: params || {} })
     })
   }
@@ -202,7 +266,7 @@ export function createLibreOfficeExecutor(opts = {}) {
    * Editor-agnostic command entry point — SAME signature/contract as
    * the WPS-era useWpsBridge.executeCommand (removed #79). Unknown / ppt_* actions reject.
    */
-  async function executeCommand(action, params = {}) {
+  async function executeCommand(action, params = {}, callOpts) {
     if (action && action.startsWith && action.startsWith('ppt_')) {
       const m = 'ppt_* not supported by the LibreOffice executor: ' + action
       if (opts.onError) opts.onError(m)
@@ -217,7 +281,7 @@ export function createLibreOfficeExecutor(opts = {}) {
     }
     const startMs = Date.now()
     try {
-      const result = await request(action, params)
+      const result = await request(action, params, callOpts)
       trackEditorAction(action, params, !!(result && result.success), Date.now() - startMs, false)
       return result
     } catch (e) {

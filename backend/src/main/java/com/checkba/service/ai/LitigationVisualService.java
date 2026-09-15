@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import cn.hutool.json.JSONObject;
@@ -44,6 +47,23 @@ public class LitigationVisualService {
     /** 引擎最低可用的 Python。低于此版本 import 期就会 SyntaxError，不如提前说清楚。 */
     private static final int MIN_MINOR = 11;
 
+    /** 承载 litviz / graphviz / drawio 的原生资源包 id（docs/NATIVE_PACK_DISTRIBUTION.md） */
+    public static final String PACK_ID = "litigation-visual";
+
+    /**
+     * 原生资源包服务。**可选注入**：单测与评测直接 {@code new LitigationVisualService()}，
+     * 那些场景下资源解析链只走「显式配置 → 随包内置 → dev 目录爬升」三步。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.pack.NativePackService packService;
+
+    /**
+     * 能力槽注册表（规范 v2.10 §15）。**可选注入**，理由同上：单测直接 new 本类。
+     * 用户在设置页把出图引擎换成某个能力包时，选中的实现目录优先于下面全部四档。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.capability.CapabilitySlotRegistry slotRegistry;
+
     @Value("${litviz.dir:}")
     private String configuredDir;
 
@@ -85,8 +105,46 @@ public class LitigationVisualService {
         resolved = null;
     }
 
+    /**
+     * 向 pack 服务登记「随包内置资源在场」探针，并登记「pack 状态变化」回调。
+     *
+     * <p>探针供广场的 packReady 与自动补下载区分「资源真缺」与「老版本随包资源还在」；
+     * 状态变化回调解决另一个问题——{@link #resolved} 是懒加载且只算一次的缓存，用户在
+     * 广场点「安装/卸载」是不重启后端的 live 操作，此前没有任何生产调用点会碰
+     * {@link #invalidate()}，装完 pack 面板仍然显示上一次探测出的「不可用」，
+     * 只能重启后端才会生效。
+     */
+    @jakarta.annotation.PostConstruct
+    void registerPackProbe() {
+        if (packService != null) {
+            packService.registerBuiltinProbe(PACK_ID, this::isEngineAvailableWithoutPack);
+            packService.onPackChanged(PACK_ID, this::invalidate);
+        }
+        if (slotRegistry != null) {
+            // 「内置实现」= 不算能力槽也不算 pack 的那条链（显式配置 / 随包内置 / dev 目录爬升）。
+            // 探针必须绕开槽本身，否则 candidates() 会把当前选中的能力包当成内置候选。
+            slotRegistry.registerBuiltin(
+                    com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM,
+                    () -> resolveBuiltinLitvizDir(false));
+            // runtime() 的解析结果只算一次；切槽是不重启后端的 live 操作，
+            // 不失效缓存的话「切换即生效」就是假的（pack 那条路踩过同一个坑）
+            slotRegistry.onSlotChanged(
+                    com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM,
+                    this::invalidate);
+        }
+    }
+
+    /**
+     * 不借助资源包时引擎是否可用（显式配置 / 随包内置注入的 LITVIZ_DIR / dev 目录爬升三步）。
+     * 供 packReady 判定复用——随包内置优先于 pack，老用户不该被逼着重下一遍。
+     * <b>语义与解析顺序调整无关</b>：这里问的始终是「把 pack 拿掉还剩什么」。
+     */
+    public boolean isEngineAvailableWithoutPack() {
+        return resolveLitvizDir(false) != null;
+    }
+
     private Runtime resolveRuntime() {
-        Path dir = resolveLitvizDir();
+        Path dir = resolveLitvizDir(true);
         String python = resolvePython();
         String version = python == null ? "" : probeVersion(python);
         String gv = firstNonBlank(configuredGraphvizDir, System.getenv("LITVIZ_GRAPHVIZ_DIR"));
@@ -95,24 +153,61 @@ public class LitigationVisualService {
             Path sibling = dir.resolveSibling("graphviz").resolve("bin");
             if (Files.isDirectory(sibling)) gv = sibling.toString();
         }
+        if (gv == null && packService != null) {
+            // 末位：资源包里的 graphviz/bin
+            Path packBin = packService.componentDir(PACK_ID, "graphviz")
+                    .map(p -> p.resolve("bin")).filter(Files::isDirectory).orElse(null);
+            if (packBin != null) gv = packBin.toString();
+        }
         log.info("litviz runtime: dir={} python={} ({}) graphviz={}", dir, python, version, gv);
         return new Runtime(dir, python, version, gv);
     }
 
     /**
-     * litviz 目录的定位顺序：显式配置 → 宿主注入的环境变量 → 相对后端工作目录往上找。
+     * litviz 目录的定位顺序：<b>显式配置 → 宿主注入的环境变量 → 原生资源包 → 相对后端
+     * 工作目录往上找</b>。
      *
-     * <p>最后一条覆盖两种真实布局：dev 态后端 cwd 是 {@code backend/}，litviz 在
-     * {@code ../litviz}；打包态 cwd 是用户数据目录，靠 Electron 注入 LITVIZ_DIR，
-     * 走不到这一条。
+     * <p>前两档是「开发者/宿主显式指定」：{@code litviz.dir} 配置、{@code LITVIZ_DIR}
+     * 环境变量。打包态的随包内置资源正是走 LITVIZ_DIR 那一档（{@code backend-service.js}
+     * 带 existsSync 守卫地注入），所以规范 §5 的「随包内置优先于 pack、老用户不强迫重下」
+     * 依然成立。
+     *
+     * <p><b>2026-09 起 pack 提到了「cwd 目录爬升」之前</b>（dev-board#499）：pack 有了自动
+     * 追新，而爬升这一档在打包态是纯运气——cwd 是用户数据目录 {@code ~/.aiworkdeck}，
+     * 恰好存在一个 {@code ~/litviz} 或 {@code ~/.aiworkdeck/litviz} 就会把刚追新好的 pack
+     * 整个盖掉，且没有任何提示。爬升本来只为 dev 态（cwd={@code backend/}，命中
+     * {@code ../litviz}）而存在，让它压过一个签过名、有版本号、会自动更新的资源包是错的。
+     * 反过来说：dev 态一旦本机装了 pack，仓库里的 {@code litviz/} 就不再自动生效——
+     * 要改引擎源码调试，显式设 {@code LITVIZ_DIR} 或 {@code litviz.dir}（它们仍是最高优先级）。
+     *
+     * @param includePack false = 跳过资源包这一步（isEngineAvailableWithoutPack 用）
      */
-    private Path resolveLitvizDir() {
+    private Path resolveLitvizDir(boolean includePack) {
+        // 能力槽选中的实现优先于全部内置档（设计稿第 5.2 节）。选中内置/未选/选中的实现
+        // 已损坏时 resolve 返回 empty，继续走下面原有的四档链——降级逻辑只有一份。
+        if (slotRegistry != null) {
+            Path slotDir = slotRegistry.resolve(
+                    com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM,
+                    includePack).orElse(null);
+            if (slotDir != null && Files.isRegularFile(slotDir.resolve("cli.py"))) {
+                return slotDir;
+            }
+        }
+        return resolveBuiltinLitvizDir(includePack);
+    }
+
+    /** 原有的四档链：显式配置 → 环境变量 → 资源包 → cwd 爬升（dev-board#499 起 pack 压过爬升）。也是能力槽的 builtin 探针。 */
+    private Path resolveBuiltinLitvizDir(boolean includePack) {
         for (String candidate : new String[]{configuredDir, System.getenv("LITVIZ_DIR")}) {
             if (candidate != null && !candidate.isBlank()) {
                 Path p = Paths.get(candidate).toAbsolutePath().normalize();
                 if (Files.isRegularFile(p.resolve("cli.py"))) return p;
                 log.warn("litviz.dir 指向的位置没有 cli.py，忽略：{}", p);
             }
+        }
+        if (includePack && packService != null) {
+            Path packDir = packService.componentDir(PACK_ID, "litviz").orElse(null);
+            if (packDir != null && Files.isRegularFile(packDir.resolve("cli.py"))) return packDir;
         }
         Path cwd = Paths.get("").toAbsolutePath().normalize();
         for (Path base : new Path[]{cwd, cwd.getParent(), cwd.getParent() == null ? null : cwd.getParent().getParent()}) {
@@ -211,6 +306,21 @@ public class LitigationVisualService {
         return null;
     }
 
+    /** 旧资源包仍能画语义地图，但 1.0.1 不含时间轴大师；不能把目录存在当作能力齐全。 */
+    public String timelineUnavailableReason() {
+        String why = unavailableReason();
+        if (why != null) return why;
+        if (!Files.isRegularFile(runtime().litvizDir().resolve("skills/mqc-timeline-master/scripts/pipeline.py"))) {
+            return com.checkba.service.LangText.of(
+                    "事实时间轴引擎不可用：诉讼可视化资源包版本过旧或组件缺失，请更新资源包后重试。"
+                            + "也可以改用 litigation_checkpoint + litigation_render 语义地图路线出图。",
+                    "The timeline engine is unavailable: the litigation visual resource pack is outdated or incomplete. "
+                            + "Update the resource pack and retry, or use litigation_checkpoint + litigation_render "
+                            + "to draw from a semantic map.");
+        }
+        return null;
+    }
+
     // ==================== 调用 ====================
 
     public Result render(Path mapFile, Path outBase, String mode, String formats) {
@@ -233,6 +343,34 @@ public class LitigationVisualService {
 
     public Result doctor() {
         return invoke(List.of("doctor"));
+    }
+
+    /**
+     * 驱动时间轴大师（mqc-timeline-master）分段管线的一个阶段。
+     *
+     * <p>管线以 workdir 为状态目录（state.json 与模型产出的四份 JSON 都在里面），
+     * cli.py 的 timeline 子命令负责 chdir 与文本→JSON 的转达。模型要写的文件由
+     * {@code LitigationTimelineTools} 直接写进 workdir，不经过这里。
+     *
+     * @param emphasisSource 仅 mark 阶段有意义：user/model/none，如实记录深红是谁挑的
+     */
+    public Result timeline(Path workdir, String stage, List<String> stageArgs, String emphasisSource) {
+        String why = timelineUnavailableReason();
+        if (why != null) {
+            return new Result(false, JSONUtil.createObj().set("ok", false).set("error", why), "");
+        }
+        List<String> args = new ArrayList<>(List.of(
+                "timeline", "--workdir", workdir.toString(), "--stage", stage));
+        if (emphasisSource != null && !emphasisSource.isBlank()) {
+            args.add("--emphasis-source");
+            args.add(emphasisSource.trim());
+        }
+        if (stageArgs != null) {
+            for (String a : stageArgs) {
+                if (a != null && !a.isBlank()) args.add(a);
+            }
+        }
+        return invoke(args);
     }
 
     private Result invoke(List<String> cliArgs) {
@@ -269,22 +407,25 @@ public class LitigationVisualService {
 
             if (!proc.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 proc.destroyForcibly();
+                // 超时这一刻排空线程可能还卡在 synchronized(sink) 里追加最后一行——
+                // 读必须跟它用同一把锁，否则 toString() 可能读到半写内容，
+                // 极端情况下内部数组扩容中途还可能抛异常，被外层 catch 吞掉后
+                // 把「出图超时」这个清楚的提示换成一个看起来像引擎崩溃的困惑消息。
                 return new Result(false, JSONUtil.createObj().set("ok", false)
-                        .set("error", "出图超时（" + TIMEOUT_MS / 1000 + " 秒）"), err.toString());
+                        .set("error", "出图超时（" + TIMEOUT_MS / 1000 + " 秒）"), readSink(err));
             }
             op.join(5000);
             ep.join(5000);
 
-            String stdout;
-            String stderr;
-            synchronized (out) { stdout = out.toString().trim(); }
-            synchronized (err) { stderr = err.toString().trim(); }
+            String stdout = readSink(out);
+            String stderr = readSink(err);
 
             if (stdout.isEmpty()) {
                 // cli.py 的契约是「无论成败都打一行 JSON」。什么都没有，说明解释器
                 // 自己崩了（缺模块、权限、被杀），stderr 才是有用的那半边。
                 return new Result(false, JSONUtil.createObj().set("ok", false)
-                        .set("error", "引擎没有返回结果（退出码 " + proc.exitValue() + "）"), stderr);
+                        .set("error", "引擎没有返回结果（退出码 " + proc.exitValue() + "）"
+                                + diagnosticSummary(stderr)), stderr);
             }
             // 契约是恰好一行；真出现多行时取最后一行（JSON 一定是最后打的），
             // 不直接失败——宁可少一点洁癖，也别让用户为一行杂音丢掉整张图。
@@ -317,11 +458,31 @@ public class LitigationVisualService {
         return t;
     }
 
+    /**
+     * 安全地取出 pump() 排空线程正在写的缓冲区快照。StringBuilder 本身不是线程安全的，
+     * 必须跟 pump() 里 append 用的同一把锁（sink 自身的对象监视器）同步，
+     * 否则 toString() 可能在 append 中途读到半写内容，甚至在内部数组扩容中途抛异常。
+     * 包可见：供测试直接驱动，不依赖真实子进程。
+     */
+    static String readSink(StringBuilder sink) {
+        synchronized (sink) {
+            return sink.toString().trim();
+        }
+    }
+
+    /** 对话只带有界诊断，去掉终端转义/控制字符；完整 stderr 留在 Result 供排障。 */
+    public static String diagnosticSummary(String stderr) {
+        if (stderr == null || stderr.isBlank()) return "";
+        String safe = stderr.replaceAll("\\u001B\\[[0-?]*[ -/]*[@-~]", "")
+                .replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", "").trim();
+        return "\nstderr：" + safe.substring(Math.max(0, safe.length() - 800));
+    }
+
     /** 读一份引擎自带的参考文档（渐进披露用）。越界返回 null。 */
     public String readReference(String relativePath) {
         Runtime rt = runtime();
         if (rt.litvizDir() == null) return null;
-        Path engine = rt.litvizDir().resolve("engine").normalize();
+        Path engine = rt.litvizDir().resolve("skills").resolve("mqc-litigation-visual-redraw").normalize();
         Path target = engine.resolve(relativePath).normalize();
         // 只许读 engine/ 内部：relativePath 来自 LLM，不做这一步就是任意文件读取。
         if (!target.startsWith(engine) || !Files.isRegularFile(target)) return null;

@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package com.checkba.model.entity;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.Table;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+
+/**
+ * 文档里抽出来的一个实体（企业 / 法规 / 案例 / 本项目内的另一份文档）及其检索结果（dev-board#182、#541）。
+ *
+ * <p><b>检索状态五态</b>：PENDING（还没打上游）、OK（拿到结果）、NOT_FOUND（<b>查完了，上游明确说没有</b>——
+ * 这是一次成功的检索，不是故障）、UNAVAILABLE（通道不可用——未配置、点数耗尽、网关未开放；
+ * <b>不是查无此项</b>）、ERROR（打了但失败）。
+ * 后三态都必须把可读原因写进 {@link #retrievalNote}：窗格里显示
+ * 「法宝检索本次不可用：账号点数耗尽」远好过一个空白格子。
+ *
+ * <p>NOT_FOUND 与 UNAVAILABLE 分开是因为用户的下一步完全不同：
+ * 前者「文档里这家公司/这个条号可能写错了」，后者「过一会儿再试/去查账」。
+ * 把「查无此企业」混进 UNAVAILABLE 会让窗格摆出一句「请联系 hi@aiworkdeck.com」——
+ * 对着一家虚构公司让用户去找客服（dev-board#395）。
+ */
+@Entity
+@Table(name = "doc_insight_entity", indexes = {
+        @Index(name = "idx_die_run", columnList = "run_id"),
+        // 7 天缓存命中查询：同项目同类同归一键的最近一次成功检索
+        @Index(name = "idx_die_cache", columnList = "project_id,kind,norm_key,fetched_at")
+})
+@Getter
+@Setter
+public class DocInsightEntity {
+
+    public static final String KIND_COMPANY = "COMPANY";
+    public static final String KIND_LAW = "LAW";
+    public static final String KIND_CASE = "CASE";
+    /**
+     * 正文里用书名号提到的<b>本项目里的另一份文件</b>（dev-board#541）。
+     * 「检索」是与项目文件树比对，不打任何外部库：命中写 {@code retrievalJson.fileId} 供窗格直接打开，
+     * 没命中落 NOT_FOUND（「文档提到但项目里缺这份」——尽调里这本身就是一条线索，不是故障）。
+     */
+    public static final String KIND_DOC = "DOC";
+
+    public static final String RETRIEVAL_PENDING = "PENDING";
+    public static final String RETRIEVAL_OK = "OK";
+    /** 查完了，上游明确回「没有这一项」。是一次完成的检索，摘要里按完成计数。 */
+    public static final String RETRIEVAL_NOT_FOUND = "NOT_FOUND";
+    /** 通道不可用（未配置 / 点数耗尽 / 未开放）。与「查了但没查到」是两回事。 */
+    public static final String RETRIEVAL_UNAVAILABLE = "UNAVAILABLE";
+    public static final String RETRIEVAL_ERROR = "ERROR";
+
+    /**
+     * {@link #retrievalHint} 的四个配置类取值（dev-board#458）。
+     *
+     * <p>它们和其余失败的分别在于：<b>重试一次也不会变</b>。窗格据此把「下一步」摆成
+     * 一个按钮（去连接账户 / 去充值），而不是一句散文加一个没用的「重试」。
+     * 判定必须走这个码，不许在前端拿 retrievalNote 做中文子串匹配——note 是双语的
+     * （LangText），英文版一上线子串判定整条失效。
+     */
+    public static final String HINT_NOT_CONNECTED = "NOT_CONNECTED";
+    public static final String HINT_NO_CREDITS = "NO_CREDITS";
+    public static final String HINT_UNAUTHORIZED = "UNAUTHORIZED";
+    /** 本机（自建部署 / 非 local-mode）没有该通道凭证：只能由部署管理员在服务端补。 */
+    public static final String HINT_NO_CREDENTIAL = "NO_CREDENTIAL";
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "run_id", nullable = false)
+    private Long runId;
+
+    @Column(name = "project_id", nullable = false)
+    private Long projectId;
+
+    @Column(name = "doc_file_id", nullable = false)
+    private Long docFileId;
+
+    /** COMPANY / LAW / CASE。 */
+    @Column(name = "kind", length = 16, nullable = false)
+    private String kind;
+
+    /** 展示名（企业全称 / 法规名+条号 / 案号或案件标题）。 */
+    @Column(name = "name", length = 500, nullable = false)
+    private String name;
+
+    /** 归一键：去重与缓存命中都按它。 */
+    @Column(name = "norm_key", length = 500, nullable = false)
+    private String normKey;
+
+    /** {@code [{"quote":"...","paragraph":null}]}，最多 20 条、每条 quote ≤ 120 字。 */
+    @Column(name = "mentions_json", columnDefinition = "TEXT")
+    private String mentionsJson;
+
+    @Column(name = "retrieval_status", length = 16, nullable = false)
+    private String retrievalStatus = RETRIEVAL_PENDING;
+
+    /** 结果来自哪条通道：qichacha / qichacha-mcp / pkulaw-semantic / pkulaw-keyword / 案例 server 名。 */
+    @Column(name = "retrieval_source", length = 64)
+    private String retrievalSource;
+
+    /** 检索结果 JSON 原文（企业档为裁过的工商摘要，法规/案例为上游返回正文）。 */
+    @Column(name = "retrieval_json", columnDefinition = "TEXT")
+    private String retrievalJson;
+
+    /** 不可用/失败的可读原因，直接显示给用户。 */
+    @Column(name = "retrieval_note", length = 1000)
+    private String retrievalNote;
+
+    /**
+     * 结构化的失败原因码（dev-board#458），只在配置类失败时非空：
+     * NOT_CONNECTED / NO_CREDITS / UNAUTHORIZED / NO_CREDENTIAL。
+     * 为空 = 瞬时错误或成功，窗格照旧只显示 note + 「重试」。
+     */
+    @Column(name = "retrieval_hint", length = 32)
+    private String retrievalHint;
+
+    @Column(name = "fetched_at")
+    private LocalDateTime fetchedAt;
+}

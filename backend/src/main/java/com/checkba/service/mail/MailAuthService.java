@@ -1,8 +1,13 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.mail;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.LangText;
+import com.checkba.service.UserService;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,17 +45,23 @@ public class MailAuthService {
     private final UserRepository userRepository;
     private final boolean localMode;
     private final boolean passwordlessEnabled;
+    private final ReviewAccountGate reviewAccount;
+    private final UserService userService;
 
     @Autowired
     public MailAuthService(VerificationCodeStore codeStore, MailRouter mailRouter,
                            UserRepository userRepository,
                            @Value("${security.local-mode:false}") boolean localMode,
-                           @Value("${mail.passwordless-login-enabled:false}") boolean passwordlessEnabled) {
+                           @Value("${mail.passwordless-login-enabled:false}") boolean passwordlessEnabled,
+                           ReviewAccountGate reviewAccount,
+                           UserService userService) {
         this.codeStore = codeStore;
         this.mailRouter = mailRouter;
         this.userRepository = userRepository;
         this.localMode = localMode;
         this.passwordlessEnabled = passwordlessEnabled;
+        this.reviewAccount = reviewAccount;
+        this.userService = userService;
     }
 
     /** 邮箱验证在本部署形态下是否启用（非 local-mode 且至少一条发信通道配齐）。 */
@@ -125,8 +136,8 @@ public class MailAuthService {
     /**
      * 免密登录发码。
      *
-     * <p>**邮箱未绑定任何账号时，不发信但照常返回**——回包对「已注册」和「未注册」必须
-     * 完全一致，否则这个匿名端点就成了账号枚举器，谁都能拿它批量探测某人是不是用户。
+     * <p>**注册登录合一**：未注册的邮箱也会收到码，验过就建号（与手机号那条同口径）。
+     * 正因为已注册/未注册在「收不收得到码」上没有差别，这个匿名端点才不是账号枚举器。
      * IP 维度的限频在 AuthAbuseGuard，邮箱维度的冷却与日上限在 VerificationCodeStore。
      */
     public void sendSigninCode(String email) {
@@ -134,26 +145,40 @@ public class MailAuthService {
             throw new IllegalArgumentException(LangText.of("邮箱登录未启用", "Passwordless email sign-in is not enabled"));
         }
         String normalized = MailRouter.normalize(email);
-        if (userRepository.findByVerifiedEmail(normalized).isEmpty()) {
+        // 审核账号的码是固定的，没有信要发。
+        if (reviewAccount.matches(normalized)) {
             return;
         }
+        // **对未注册地址也发**：这条和手机号那条一样是「注册登录合一」，
+        // 验过码没有账号就建一个。既然已注册与未注册都会收到码、回包也一致，
+        // 就不存在「这个邮箱注册过没有」的枚举面了——原先那条「未注册不发信」
+        // 的静默返回反而是枚举器（对方能从「收没收到信」读出结论）。
+        // 代价是任意地址都能触发一封信，靠 AuthAbuseGuard 的 IP 限频与
+        // VerificationCodeStore 的邮箱冷却/当日上限兜住，与短信同一套护栏。
         sendWithRollback(SCENE_SIGNIN, normalized, LangText.of("登录验证码", "Sign-in Verification Code"));
     }
 
     /**
-     * 核销免密登录码并返回对应账号。错码/过期/无此账号一律同一句话——
-     * 同样是为了不泄露该邮箱是否注册过。
+     * 核销免密登录码并返回对应账号；该邮箱没有账号就建一个。
+     * 错码与过期一律同一句话，不区分。
      */
     public User verifySigninCode(String email, String code) {
         if (!passwordlessActive()) {
             throw new IllegalArgumentException(LangText.of("邮箱登录未启用", "Passwordless email sign-in is not enabled"));
         }
         String normalized = MailRouter.normalize(email);
+        // 审核账号没有就建一个专用空账号。**这是这条旁路唯一会建号的地方**，
+        // 且只对配置里那一个标识。理由见 UserService#findOrCreateReviewAccount：
+        // verified_email 只能靠「登录后绑定」写上去，要求事先绑好等于把审核邮箱
+        // 挂到某个真人账号上，那个固定码就成了进真账号的钥匙。
+        if (reviewAccount.accepts(normalized, code)) {
+            return userService.findOrCreateReviewAccount(normalized);
+        }
         if (!codeStore.verify(SCENE_SIGNIN, normalized, code)) {
             throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
-        return userRepository.findByVerifiedEmail(normalized)
-                .orElseThrow(() -> new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code")));
+        // 验过码即证明控制权，没有账号就建——与 findOrCreateByPhone 同口径。
+        return userService.findOrCreateByEmail(normalized).user();
     }
 
     // ==================== 内部 ====================

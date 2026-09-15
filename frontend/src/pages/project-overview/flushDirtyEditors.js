@@ -1,0 +1,65 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// 离开工作台前把还没落盘的编辑器内容存下来。
+//
+// 病灶：自动保存是防抖的，用户敲完最后一个字到真正落盘之间有一段窗口。
+// closeFile / evictLibreInstance 都会先 await flushSave 再拆实例，但**离开整个页面**
+// 的三条路（切项目 / 返回项目列表 / 退出登录）走的是 uni.reLaunch，页面组件树直接销毁，
+// 一次 flush 都没有。LibreOfficeEditor 的 beforeUnmount 自己写着「export 需要活的
+// webview，从这里保存已经太晚」——所以 Office 文档那几秒的改动**静默丢失，且无任何提示**。
+//
+// 刻意做成零依赖的纯函数：既能被 project-overview.vue 直接用，也能在 node:test 里
+// 真跑一遍（本目录其余模块都 import 了 @/ 别名，测不动）。
+
+/**
+ * 逐个 flush 还脏的编辑器实例。
+ *
+ * 判据与 closeFile 保持一致：
+ * - Office 文档（LibreOfficeEditor）要求 ready 且非 docLoadFailed——加载失败的实例画布是
+ *   空白原型，保存会拿空白覆盖真文件（同 evictLibreInstance 的取舍）；
+ * - 纯文本（PlainTextEditor）只要求有 file。
+ *
+ * 单个实例保存失败不许拖累其它实例：逐个 try/catch，全部尝试完才返回。
+ *
+ * @param {object} libreRefs      形如 { 'left:123': inst }，来自 project-overview 的 _libreRefs
+ * @param {object} plainTextRefs  形如 { left: inst, right: inst }，来自 _plainTextRefs
+ * @returns {Promise<{flushed: number, failed: number}>}
+ */
+export async function flushDirtyEditors(libreRefs, plainTextRefs) {
+  let flushed = 0
+  const failed = new Set()
+
+  const attempt = async (inst) => {
+    try {
+      const saved = await inst.flushSave({ timeoutMs: 10000 })
+      if (saved === false || inst.dirty || inst.saving) failed.add(inst)
+      else flushed++
+    } catch (e) {
+      failed.add(inst)
+      console.warn('[ProjectOverview] leave flush-save failed:', e)
+    }
+  }
+
+  for (const inst of Object.values(libreRefs || {})) {
+    if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)
+        && typeof inst.flushSave === 'function') {
+      await attempt(inst)
+    }
+  }
+
+  for (const inst of Object.values(plainTextRefs || {})) {
+    if (inst && inst.file && (inst.dirty || inst.saving) && typeof inst.flushSave === 'function') {
+      await attempt(inst)
+    }
+  }
+
+  // 前面的实例保存完后，用户仍可能在等待另一实例时编辑；也可能有新实例注册。
+  // 离开前同步重读当前注册表，不能用逐项保存时的旧状态放行导航。
+  for (const inst of Object.values(libreRefs || {})) {
+    if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)) failed.add(inst)
+  }
+  for (const inst of Object.values(plainTextRefs || {})) {
+    if (inst && inst.file && (inst.dirty || inst.saving)) failed.add(inst)
+  }
+  return { flushed, failed: failed.size }
+}

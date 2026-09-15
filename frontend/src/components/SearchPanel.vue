@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="search-panel">
     <!-- Header Area -->
@@ -68,18 +70,25 @@
             :placeholder="$t('files.tagFilterPlaceholder')"
           />
         </view>
-        <view class="tags-container">
-          <view
-            v-for="tag in shownTags"
-            :key="tag.id"
-            class="tag-chip"
-            :class="{ selected: selectedTagIds.includes(tag.id) }"
-            :style="getTagStyle(tag)"
-            @tap="toggleTag(tag.id)"
-          >
-            <text class="tag-name">{{ tag.name }}</text>
+        <!-- 分组只是展示形式，过滤/截断/排序全部作用于 shownTags 这一份全量列表，
+             按组切片渲染，不另起一套逻辑（三个分组共用一份过滤与截断） -->
+        <template v-for="group in shownTagGroups" :key="group.type">
+          <view v-if="group.tags.length > 0" class="tag-subsec-head">
+            <text class="tag-subsec-title">{{ $t(group.labelKey) }}</text>
           </view>
-        </view>
+          <view v-if="group.tags.length > 0" class="tags-container">
+            <view
+              v-for="tag in group.tags"
+              :key="tag.id"
+              class="tag-chip"
+              :class="{ selected: selectedTagIds.includes(tag.id) }"
+              :style="getTagStyle(tag)"
+              @tap="toggleTag(tag.id)"
+            >
+              <text class="tag-name">{{ tag.name }}</text>
+            </view>
+          </view>
+        </template>
         <text
           class="tag-more"
           v-if="filteredTags.length > shownTags.length"
@@ -155,6 +164,7 @@
 <script>
 import { searchProjectContent, getProjectTags } from '@/services/api'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
+import { TAG_TYPE_PARTY, TAG_TYPE_ISSUE, TAG_TYPE_NORMAL, normalizeTagType } from '@/utils/tagTypes.js'
 
 // 标签超过这个数量才值得再给它一个过滤框
 const TAG_FILTER_THRESHOLD = 12
@@ -231,6 +241,16 @@ export default {
     shownTags() {
       if (this.tagsExpanded || this.tagFilter.trim()) return this.filteredTags
       return this.filteredTags.slice(0, TAG_MAX_COLLAPSED)
+    },
+    // 展开态按「当事人 / 争议焦点 / 其他标签」三组渲染；shownTags 已经算好过滤+截断，
+    // 这里只按类型切片，组内相对顺序原样保留（filteredTags 排好的序不受影响）
+    shownTagGroups() {
+      const list = this.shownTags
+      return [
+        { type: TAG_TYPE_PARTY, labelKey: 'files.tagGroupParty', tags: list.filter(t => normalizeTagType(t) === TAG_TYPE_PARTY) },
+        { type: TAG_TYPE_ISSUE, labelKey: 'files.tagGroupIssue', tags: list.filter(t => normalizeTagType(t) === TAG_TYPE_ISSUE) },
+        { type: TAG_TYPE_NORMAL, labelKey: 'files.tagGroupOther', tags: list.filter(t => normalizeTagType(t) === TAG_TYPE_NORMAL) }
+      ]
     }
   },
   mounted() {
@@ -272,9 +292,9 @@ export default {
             };
         } else {
             return {
-                backgroundColor: '#FFFFFF',
-                borderColor: '#E9ECEF', // Neutral border
-                color: '#6C757D' // Neutral text
+                backgroundColor: 'var(--awd-surface)',
+                borderColor: 'var(--awd-border)', // Neutral border
+                color: 'var(--awd-text-2)' // Neutral text
             };
         }
     },
@@ -349,7 +369,8 @@ export default {
         this.collapsedFiles = {}
       } catch (e) {
         console.error('Search failed:', e)
-        uni.showToast({ title: 'Search failed', icon: 'none' })
+        // 失败提示同样按 seq 收口：陈旧请求的迟到失败不该盖在新结果上弹「搜索失败」
+        if (seq === this._searchSeq) uni.showToast({ title: 'Search failed', icon: 'none' })
       } finally {
         if (seq === this._searchSeq) this.loading = false
       }
@@ -418,29 +439,20 @@ export default {
 
 <style lang="scss" scoped>
 /* Brands Colors from color.md */
-$brand-forest: #1A5336;
 $brand-mint: #5BD197;
-$brand-mint-light: #5BD197; /* Keeping same for now */
-$brand-mint-lightest: #E6F9F0;
-$gray-pale: #F8F9FA;
-$gray-light: #E9ECEF;
-$gray-medium: #6C757D;
-$gray-dark: #2C3338;
-$white: #FFFFFF;
-$border-color: #E9ECEF;
 
 .search-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: $gray-pale;
+  background-color: var(--awd-bg);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场） */
 .search-header {
     padding: var(--awd-panel-gap) 0 var(--awd-panel-gap);
-    background-color: $gray-pale;
+    background-color: var(--awd-bg);
     border-bottom: 1px solid transparent; /* Prepare for sticky behavior if needed */
 }
 
@@ -452,7 +464,7 @@ $border-color: #E9ECEF;
     display: flex;
     align-items: center;
     height: var(--awd-panel-row-h);
-    background: $white;
+    background: var(--awd-surface);
     border: 1px solid var(--awd-panel-border);
     border-radius: var(--awd-panel-radius);
     padding: 0 8px;
@@ -460,8 +472,8 @@ $border-color: #E9ECEF;
     box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 
     &.focused {
-      border-color: $brand-mint;
-      box-shadow: 0 0 0 3px rgba($brand-mint, 0.15);
+      border-color: var(--awd-mint);
+      box-shadow: 0 0 0 3px var(--awd-accent-soft);
     }
 
     .search-icon {
@@ -473,7 +485,7 @@ $border-color: #E9ECEF;
     .search-input {
       flex: 1;
       font-size: var(--awd-panel-fs);
-      color: $gray-dark;
+      color: var(--awd-text);
       border: none;
       outline: none;
       background: transparent;
@@ -481,7 +493,7 @@ $border-color: #E9ECEF;
       min-width: 0;
 
       &::placeholder {
-          color: #adb5bd;
+          color: var(--awd-text-3);
       }
     }
 
@@ -545,6 +557,22 @@ $border-color: #E9ECEF;
   &:hover { text-decoration: underline; }
 }
 
+/* 展开态内的三段分组头（当事人/争议焦点/其他标签）：与 .tag-sec-head 同一套令牌，
+   不折叠、不带计数/清除按钮——判据类型已经写在标题里了 */
+.tag-subsec-head {
+  display: flex;
+  align-items: center;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
+}
+
+.tag-subsec-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
+}
+
 .tag-filter-box {
   margin: 2px var(--awd-panel-pad-x) 4px;
 }
@@ -556,7 +584,7 @@ $border-color: #E9ECEF;
   padding: 0 8px;
   font-size: var(--awd-panel-fs-meta);
   color: var(--awd-panel-text);
-  background: $white;
+  background: var(--awd-surface);
   border: 1px solid var(--awd-panel-border);
   border-radius: 4px;
   outline: none;
@@ -608,14 +636,14 @@ $border-color: #E9ECEF;
 
 .search-stats {
   font-size: var(--awd-panel-fs-meta);
-  color: $gray-medium;
+  color: var(--awd-text-2);
   padding: 0 var(--awd-panel-pad-x);
   display: flex;
   align-items: center;
   gap: 4px;
 
   .highlight {
-      color: $brand-forest;
+      color: var(--awd-accent-text);
       font-weight: 600;
   }
 }
@@ -628,16 +656,16 @@ $border-color: #E9ECEF;
 }
 
 .file-group {
-    background: $white;
+    background: var(--awd-surface);
     margin-bottom: 8px;
     border-top: 1px solid transparent;
     border-bottom: 1px solid transparent;
 
     &:first-child {
-        border-top: 1px solid $border-color;
+        border-top: 1px solid var(--awd-border);
     }
     &:last-child {
-        border-bottom: 1px solid $border-color;
+        border-bottom: 1px solid var(--awd-border);
     }
 }
 
@@ -649,14 +677,14 @@ $border-color: #E9ECEF;
   transition: background-color 0.1s;
 
   &:hover {
-    background-color: $gray-pale;
+    background-color: var(--awd-bg);
   }
 
   .arrow-icon {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: $gray-medium;
+    color: var(--awd-text-2);
     margin-right: 8px;
     width: 16px;
     height: 16px;
@@ -686,21 +714,21 @@ $border-color: #E9ECEF;
       .file-name {
           font-size: 13px;
           font-weight: 500;
-          color: $gray-dark;
+          color: var(--awd-text);
           margin-bottom: 2px;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
 
           &:hover {
-              color: $brand-forest;
+              color: var(--awd-accent-text);
               text-decoration: underline;
           }
       }
 
       .file-path {
           font-size: 10px;
-          color: #999;
+          color: var(--awd-text-3);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -708,8 +736,8 @@ $border-color: #E9ECEF;
   }
 
   .badge {
-    background-color: $gray-light;
-    color: $gray-medium;
+    background-color: var(--awd-surface-3);
+    color: var(--awd-text-2);
     font-size: 10px;
     font-weight: 600;
     padding: 2px 6px;
@@ -732,7 +760,7 @@ $border-color: #E9ECEF;
   font-family: "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 
   &:hover {
-    background-color: rgba($brand-mint, 0.05);
+    background-color: var(--awd-accent-wash);
     .match-highlight {
         background-color: rgba($brand-mint, 0.3);
     }
@@ -744,12 +772,12 @@ $border-color: #E9ECEF;
       top: 0;
       bottom: 0;
       width: 1px;
-      background-color: $border-color;
+      background-color: var(--awd-surface-3);
   }
 
   .line-number {
       font-size: 10px;
-      color: #adb5bd;
+      color: var(--awd-text-3);
       width: 10px;
       text-align: right;
       margin-right: 12px;
@@ -759,14 +787,14 @@ $border-color: #E9ECEF;
   .match-content {
      font-size: 11px;
      line-height: 1.5;
-     color: $gray-medium;
+     color: var(--awd-text-2);
      white-space: pre;
      overflow: hidden;
      text-overflow: ellipsis;
 
      .match-highlight {
-         background-color: rgba($brand-mint, 0.15);
-         color: $brand-forest;
+         background-color: var(--awd-accent-soft);
+         color: var(--awd-accent-text);
          border-radius: 2px;
          padding: 0 1px;
          font-weight: 500;
@@ -783,11 +811,11 @@ $border-color: #E9ECEF;
 
    .empty-icon {
        margin-bottom: 16px;
-       color: $gray-light;
+       color: var(--awd-info-text);
    }
 
    .empty-text {
-      color: #adb5bd;
+      color: var(--awd-text-3);
       font-size: 13px;
    }
 }

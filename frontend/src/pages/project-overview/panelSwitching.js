@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的左栏面板切换状态机：toggleLeftPane / 模式级 tab 记忆持久化。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
@@ -44,49 +46,16 @@ export const panelSwitchingMethods = {
         // 否则律师下次回到版本面板，还端着上一次右键那份文件的过滤条。
         if (key !== 'version') this.versionFileFilter = null
 
-        // Check if it's a dynamic plugin and open its tab
-        const plugin = this.dynamicPlugins.find(p => p.key === key)
-        if (plugin) {
-          this.openFile({
-            id: plugin.key,
-            name: plugin.label,
-            fileType: 'plugin',
-            frontendEntry: plugin.frontendEntry
-          })
-        }
+        // 动态插件（Web 插件 → PluginPane，纯工具/skill 插件 → PluginGuidePane）在
+        // 左栏面板区渲染，与诉讼可视化/脱敏等一致（「左栏一个图标 = 一个插件」）。
+        // 这里**不再** openFile 一个 fileType:'plugin' 的中栏标签——isFileTypeSupported
+        // 没有 'plugin'，那条老路只会弹「无法打开文件」的模态（dev-board#132 真机复现），
+        // 从来没渲染出过东西。leftPaneKey 已经切到本插件，左栏 v-else-if 分支负责显示。
 
-        // 恢复新模式下的活跃 tab。记忆里的 id 可能已经关掉、也可能在新面板下
-        // 根本不可见（版本对比标签只在 version/files 下可见），直接照抄会把律师
-        // strand 在一个空白编辑区上——所以先验证「还在且可见」，否则退回下面
-        // 「挑第一个可见标签」的兜底逻辑。
-        const savedLeftId = this.lastActiveIdsByMode.left[key]
-        const savedRightId = this.lastActiveIdsByMode.right[key]
-        const savedLeftTab = savedLeftId ? this.leftFiles.find(f => f.id === savedLeftId) : null
-        const savedRightTab = savedRightId ? this.rightFiles.find(f => f.id === savedRightId) : null
-        const savedLeft = savedLeftTab && this.isTabVisible(savedLeftTab) ? savedLeftId : null
-        const savedRight = savedRightTab && this.isTabVisible(savedRightTab) ? savedRightId : null
-
-        if (savedLeft) {
-          this.activeFileIdLeft = savedLeft
-        } else {
-          // 如果新模式没有记录，且当前 active 的 tab 在新模式下不可见，则设为 null
-          const curLeft = this.leftFiles.find(f => f.id === this.activeFileIdLeft)
-          if (curLeft && !this.isTabVisible(curLeft)) {
-            // 尝试找一个在新模式下可见的 tab
-            const firstVisible = this.leftFiles.find(f => this.isTabVisible(f))
-            this.activeFileIdLeft = firstVisible ? firstVisible.id : null
-          }
-        }
-
-        if (savedRight) {
-          this.activeFileIdRight = savedRight
-        } else {
-          const curRight = this.rightFiles.find(f => f.id === this.activeFileIdRight)
-          if (curRight && !this.isTabVisible(curRight)) {
-            const firstVisible = this.rightFiles.find(f => this.isTabVisible(f))
-            this.activeFileIdRight = firstVisible ? firstVisible.id : null
-          }
-        }
+        // 标签常驻、与左栏面板解耦（dev-board#394）：切面板不再按 lastActiveIdsByMode
+        // 换活跃标签，也不再因「新面板下不可见」把 activeFileId 置空——律师点一下
+        // 插件中心，正在改的催款函不该凭空没了。lastActiveIdsByMode 仍照记，
+        // 关标签时的兜底（fileOpenTabs.js）与存量本地存储都还读它。
       }
 
       // Persistence

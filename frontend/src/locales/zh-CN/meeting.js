@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 会议录音的全部界面文案：面板 components/MeetingRecordingPanel.vue 与
 // 录音引擎 utils/meetingRecorder.js（引擎的报错直接显示在面板里，同属一个语境）。
 //
@@ -23,7 +25,7 @@ export default {
   tierDescByok: '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。',
   tierDescNoPlatform: '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。',
   tierDescNotConnected: '连接官网账户后即可直接转写，不用自己开通听悟。',
-  tierDescPlatform: '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。',
+  tierDescPlatform: '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣；未识别到人声也可能按处理时长计费。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。',
   localSwitchLabel: '录音不出本机',
   localSwitchNoteOn: '音频不上传，转写在本机完成；比云端慢，且没有说话人分离。',
   localSwitchNoteReady: '打开后音频不上传，转写在本机完成（比云端慢，且没有说话人分离）。',
@@ -35,6 +37,7 @@ export default {
   cancelDownload: '取消下载',
   // 「约」在这里、不在 {size} 里：{size} 是 model-manager 的 sizeHint（形如 '1.5 GB'，
   // 语言中立），同一个值还要喂给 admin 的确认文案，修饰词写进那边会漏到英文界面上
+  downloadRuntime: '下载本机语音识别组件（约 {size}）',
   downloadModel: '下载模型（约 {size}）',
   recheck: '重新检测',
   downloadStartFailed: '开始下载失败，稍后重试',
@@ -44,10 +47,15 @@ export default {
   notConfiguredByok: '未配置转写服务：录音会保存到项目文件，但不能转文字。管理员可在「系统管理 - 平台服务 - 会议录音转写」里填阿里云听悟凭证，或改用平台代采。',
 
   // ---- 录音 ----
+  micDeviceLabel: '麦克风',
+  micDeviceFallbackName: '麦克风 {n}',
+  micDeviceFallback: '选中的麦克风不可用，已切换到默认设备',
   startRecording: '开始录音',
   startHint: '点击即开始，说话人自动区分，结束后自动转写',
   recording: '录音中',
+  connectingMic: '正在连接麦克风…',
   paused: '已暂停',
+  interrupted: '已中断',
   pause: '暂停',
   resume: '继续',
   stopRecording: '结束录音',
@@ -62,6 +70,7 @@ export default {
   micPermissionDenied: '拿不到麦克风权限，到系统设置里允许本应用使用麦克风',
   finishWriteBackFailed: '录音已保存，但状态回写失败：{message}',
   uploadStalled: '上传受阻，正在重试（第 {attempt} 次）',
+  deviceInterrupted: '录音设备已断开或权限被收回，录音已中断，请点击"停止"保存已录制内容',
 
   // ---- 列表与状态徽标 ----
   sectionTitle: '录音记录',
@@ -70,6 +79,7 @@ export default {
   statusRecorded: '未转写',
   statusTranscribing: '转写中',
   statusTranscribed: '已转写',
+  statusEmpty: '未识别到人声',
   statusFailed: '转写失败',
 
   // ---- 详情动作 ----
@@ -89,8 +99,18 @@ export default {
   transcribe: '开始转写',
   retryTranscribe: '重试转写',
   transcribingHint: '转写与说话人分离进行中，通常几分钟内完成，可离开此页',
+  // 进度提示（dev-board#532）：阶段来自后端 progress.stage 的三个枚举值
+  transcribingStagePreparing: '准备音频（转码与上传）',
+  transcribingStageLocal: '本机转写',
+  transcribingStageUpstream: '转写与说话人分离',
+  transcribingProgress: '{stage} · 已用 {elapsed} / 预计约 {estimated}{mark}',
+  transcribingProgressNoEstimate: '{stage} · 已用 {elapsed}',
+  transcribingEstimatedMark: '（估算）',
   transcribeFailed: '转写失败',
   submitTranscribeFailed: '提交转写失败：{message}',
+  resultUnreadable: '未能读取转写结果，请稍后重试。原始录音仍然保留。',
+  emptyTranscriptBillingHint: '平台转写可能仍按处理时长扣除 Credits；重试会再次提交并可能再次计费。',
+  emptyTranscriptHint: '未检测到有效语音。请检查麦克风选择、输入音量与连接，播放录音确认是否有声音；若确有对话，可重新转写。',
 
   // ---- 说话人 ----
   speakersTitle: '说话人（点击改名）',

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.meeting;
 
 import com.checkba.model.entity.MeetingRecording;
@@ -145,6 +148,7 @@ class MeetingTranscriptionPlatformPathTest {
                 meetingRepository, projectFileRepository, storageResolver, settingService,
                 transcoder, tingwu, oss, resolver, gateway, mock(LocalAsrClient.class),
                 mock(MeetingTranscriptionService.UrlFetcher.class), uploader,
+                MeetingTranscriptionService.DEFAULT_TRANSCODE_TIMEOUT,
                 "", "", "", "", "");
     }
 
@@ -274,6 +278,46 @@ class MeetingTranscriptionPlatformPathTest {
         verifyNoInteractions(oss);
         verifyNoInteractions(tingwu);
         assertEquals(15, transport.to("/asr/task/").get(0).timeout(), "task 超时 15 秒");
+    }
+
+    @Test
+    @DisplayName("轮询完成但 Paragraphs 为空：落 EMPTY，不是 FAILED（真实故障就是这条触发的）")
+    void pollCompletesWithEmptyTranscriptionFallsToEmpty() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_abc");
+        String emptyTranscription = "{\"Transcription\":{\"Paragraphs\":[]}}";
+        transport.task.add(new PlatformGatewayTransport.Reply(200, """
+                {"status":"completed","taskId":"asr_abc",
+                 "transcription":%s,"autoChapters":null,"summarization":null,"meetingAssistance":null,
+                 "billing":{"service":"asr","op":"transcribe","units":42,"unit":"minute","chargedCents":420}}"""
+                .formatted(quote(emptyTranscription))));
+
+        MeetingRecording out = service().refreshIfNeeded(m);
+
+        assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
+        assertNull(out.getError());
+        verifyNoInteractions(oss);
+        verifyNoInteractions(tingwu);
+    }
+
+    @Test
+    @DisplayName("平台完成的静音元数据落 EMPTY，保留网关任务号用于计费提示")
+    void pollCompletesWithSilentAudioMetadata() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_silent");
+        String transcription = """
+                {"TaskId":"silent","AudioInfo":{"Size":712629,"Duration":118728,"SampleRate":16000}}
+                """;
+        transport.task.add(new PlatformGatewayTransport.Reply(200, """
+                {"status":"completed","taskId":"asr_silent","transcription":%s,
+                 "billing":{"chargedCents":20}}
+                """.formatted(quote(transcription))));
+        MeetingRecording out = service().refreshIfNeeded(m);
+        assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
+        assertEquals("asr_silent", out.getGatewayTaskId());
+        assertNull(out.getError());
+        verifyNoInteractions(oss, tingwu);
+        assertEquals(1, transport.calls.size(), "读结果不能另建任务或自行退款");
     }
 
     @Test

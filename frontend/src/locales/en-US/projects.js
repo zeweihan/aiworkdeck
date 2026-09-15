@@ -1,14 +1,18 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Project list page + Project overview page (project-list.vue / project-home.vue and its five project-home/* subcomponents)
 export default {
   // project-list.vue: header and empty states
   myProjects: 'My Projects',
   pullFromTeamLibrary: 'Pull a Case File from the Team Case Library',
-  personalCenter: 'Profile',
+  // Lands on the Personal group of the unified Settings page (merged 2026-08-20; key kept)
+  personalCenter: 'Settings',
+  // Header "Calendar" entry, opens pages/calendar/calendar (cross-project task calendar)
+  calendarEntry: 'Calendar',
   allProjects: 'All Projects',
   loading: 'Loading…',
   clientEmptyHint: 'After your lawyer shares a case file with you, it will appear here.',
   newProject: 'New Project',
-  createSectionTitle: 'New',
   emptyHint: 'No matters yet. Start below: open an existing folder, or create one.',
   // project-list.vue: view toggle and list-view column headers
   gridView: 'Grid view',
@@ -16,12 +20,6 @@ export default {
   nameColumn: 'Name',
   clientColumn: 'Client',
   clientInferred: 'inferred',
-  detailToggle: 'Details',
-  detailToggleHint: 'Show matter type, counterparty, opened date and next step from the project profile (filled in on the project overview)',
-  matterTypeField: 'Matter type',
-  counterpartyField: 'Counterparty',
-  openedAtField: 'Opened',
-  nextStepField: 'Next step',
   createdColumn: 'Created',
   updatedColumn: 'Last modified',
   membersColumn: 'Members',
@@ -60,6 +58,7 @@ export default {
   activitySectionTitle: 'Activity',
   taskSectionTitle: 'Schedule & Tasks',
   conversationSectionTitle: 'AI Conversations',
+  learnedTemplateLine: 'Learned template: {font} {size}pt / {levels} heading levels / {tables} table styles',
   missingProjectParam: 'Missing project parameter',
   saveFailed: 'Save failed',
 

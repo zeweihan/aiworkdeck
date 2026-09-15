@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 命令注册表守卫。把 spec §4 的快捷键口径从「文档里的约定」变成「CI 里的断言」——
 // 口径写在文档里会腐烂，写成测试才拦得住人。
 //
@@ -110,7 +112,7 @@ test('客户视图下 AI 菜单整条不可用', () => {
 
 test('客户视图拿不到插件广场与底部工具', () => {
   const client = { page: 'workbench', role: 'CLIENT', flags: { hasProject: true } }
-  for (const id of ['ai.pluginMarket', 'view.toolsPanel', 'view.toolVariables', 'tools.ocrCapture']) {
+  for (const id of ['ai.pluginMarket', 'view.toolsPanel', 'view.toolFavorites', 'tools.ocrCapture']) {
     assert.equal(isEnabled(COMMAND_BY_ID.get(id), client), false, id + ' 对客户可用了')
   }
 })

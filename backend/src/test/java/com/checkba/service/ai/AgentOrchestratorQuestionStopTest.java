@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.config.AiContextProperties;
@@ -106,7 +109,7 @@ class AgentOrchestratorQuestionStopTest {
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<ChatMessage>(List.of(
                         SystemMessage.from("system"), UserMessage.from("帮我起草一份股权转让协议"))));
 
@@ -136,7 +139,8 @@ class AgentOrchestratorQuestionStopTest {
                 new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
-                mock(com.checkba.service.telemetry.MatterClassifierService.class));
+                mock(com.checkba.service.telemetry.MatterClassifierService.class),
+                new com.checkba.service.ai.OfficePassStateStore());
     }
 
     private ScriptModel run(String conversationId, AiMessage... script) {
@@ -283,6 +287,8 @@ class AgentOrchestratorQuestionStopTest {
                 "子任务结果是 JSON，截断后前端结构化卡片直接解析失败");
         assertEquals(16000, AgentOrchestrator.toolOutputDisplayLimit("extract_file_text"));
         assertEquals(16000, AgentOrchestrator.toolOutputDisplayLimit("pdf_inspect"));
+        assertEquals(16000, AgentOrchestrator.toolOutputDisplayLimit("doc_audit_structure"),
+                "结构审计报告是给用户核对的成果，面板不能只显示前 4000 字");
         assertEquals(4000, AgentOrchestrator.toolOutputDisplayLimit("doc_replace_text"));
         assertEquals(4000, AgentOrchestrator.toolOutputDisplayLimit(null));
     }

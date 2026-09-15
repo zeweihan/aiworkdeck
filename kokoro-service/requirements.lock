@@ -76,6 +76,8 @@ dlinfo==2.0.0
     # via phonemizer-fork
 docopt==0.6.2
     # via num2words
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+    # via -r requirements.in
 espeakng-loader==0.2.4
     # via
     #   -r requirements.in

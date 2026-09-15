@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.model.entity;
 
 import jakarta.persistence.*;
@@ -46,6 +49,18 @@ public class UserActivityLog {
      */
     @Column(name = "target_name", length = 512)
     private String targetName;
+
+    /**
+     * 结构化项目归属。可为空——老数据没有这一列，前端归类为「未关联项目」。
+     */
+    @Column(name = "project_id")
+    private Long projectId;
+
+    /**
+     * 项目名，按 projectId 批量查 Project 表回填，不落库。
+     */
+    @Transient
+    private String projectName;
 
     /**
      * 发生时间
@@ -108,6 +123,22 @@ public class UserActivityLog {
 
     public void setTargetName(String targetName) {
         this.targetName = targetName;
+    }
+
+    public Long getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(Long projectId) {
+        this.projectId = projectId;
+    }
+
+    public String getProjectName() {
+        return projectName;
+    }
+
+    public void setProjectName(String projectName) {
+        this.projectName = projectName;
     }
 
     public LocalDateTime getTimestamp() {

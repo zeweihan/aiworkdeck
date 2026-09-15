@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.User;
@@ -30,14 +33,22 @@ public class WebFavoriteController {
     private final UserRepository userRepository;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** 我的收藏返回条数上限：个人中心那一栏没有搜索框，比项目内收藏的 80 放宽一些 */
+    private static final int MY_FAVORITES_DEFAULT_LIMIT = 200;
+    private static final int MY_FAVORITES_MAX_LIMIT = 500;
+
     @GetMapping("/api/favorites/my")
-    public ResponseEntity<?> myFavorites(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+    public ResponseEntity<?> myFavorites(
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
+        // 性能关键：与项目内收藏同口径——限量 + 返回轻量列表（meta 可能包含 html 快照，体积巨大）
+        int lim = (limit == null ? MY_FAVORITES_DEFAULT_LIMIT : Math.max(1, Math.min(MY_FAVORITES_MAX_LIMIT, limit)));
         List<WebFavorite> list = webFavoriteService.listMyFavorites(userId);
-        return ResponseEntity.ok(list);
+        return ResponseEntity.ok(list.stream().limit(lim).map(WebFavoriteListItem::from).toList());
     }
 
     @GetMapping("/api/projects/{projectId}/favorites")

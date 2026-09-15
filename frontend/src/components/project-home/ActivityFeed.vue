@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="activity-feed">
     <view v-if="loading" class="activity-hint">{{ $t('projects.activityLoadingHint') }}</view>
@@ -69,14 +71,14 @@ export default {
 <style scoped>
 .activity-hint {
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .activity-guide-title {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .activity-guide-desc {
@@ -84,7 +86,7 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   line-height: 19px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .activity-row {
@@ -92,7 +94,7 @@ export default {
   align-items: flex-start;
   gap: 10px;
   padding: 8px 0;
-  border-bottom: 1px solid #F1F3F5;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .activity-row:last-child {
@@ -104,20 +106,20 @@ export default {
   height: 7px;
   margin-top: 6px;
   border-radius: 50%;
-  background: #CED4DA;
+  background: var(--awd-surface-3);
   flex: none;
 }
 
 .activity-dot.dot-running {
-  background: #5BD197;
+  background: var(--awd-mint);
 }
 
 .activity-dot.dot-attention {
-  background: #F5B60D;
+  background: var(--awd-warning);
 }
 
 .activity-dot.dot-error {
-  background: #E74C3C;
+  background: var(--awd-danger);
 }
 
 .activity-body {
@@ -130,7 +132,7 @@ export default {
   display: block;
   font-size: 13px;
   line-height: 20px;
-  color: #2C3338;
+  color: var(--awd-text);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -139,6 +141,23 @@ export default {
   display: block;
   margin-top: 2px;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
+}
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度，见 project-home-pane.scss 的注释 */
+@container home-pane (max-width: 359px) {
+  .activity-row {
+    gap: 8px;
+    padding: 6px 0;
+  }
+
+  .activity-title {
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .activity-time {
+    font-size: 10px;
+  }
 }
 </style>

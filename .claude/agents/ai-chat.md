@@ -13,8 +13,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - `controller/ai/AiAgentController.java` — 主入口（/api/agent）：GET /connect/{cid}（建 SSE）、POST /chat（异步 200）、POST /cancel/{cid}、/history/rollback、/tasks/active、/ppt/generate、**POST /subtask/cancel**、**POST /tasks/cancel**。**对话只有这一条链路**。
   - **任务级取消（长任务可控）**：`POST /api/agent/subtask/cancel` body `{conversationId, subtaskId}` 停一个 `dispatch_subtask`；`POST /api/agent/tasks/cancel` body `{conversationId, taskId}` 停一个后台任务（PPT 生成等，接的是早就写好却零调用方的 `BackgroundTaskService.cancelTask`）。返回 200 `{"status":"ok","message":"正在停止…"}` / 404「已经结束，无需停止」/ 403 无权。**两层鉴权**：控制器判 `canUseConversation`，服务再判「这个 subtaskId/taskId 确实登记在这个会话名下」——少一层就能拿自己的会话 ID + 猜到的 ID 去掐别人的任务。**这两个端点不打 `AgentRunStateService.mark`**：掐的是一个子任务/后台任务，会话仍是 RUNNING、主循环继续跑（PR#173 要求的状态点只针对轮次终态）。**文案只许说「正在停止」**：`future.cancel(true)` 打不断阻塞的 HTTP 读，子 Agent 的中断检查在每轮开头，最坏白烧一次在途 LLM 调用；后台任务取消更只是簿记 + 广播，pptx-service 那边照样跑完落盘。子任务被停后回喂模型的文案明说 "stopped by the user, do NOT dispatch again automatically"——否则模型下一轮立刻重派，用户看到的是「点了停止反而又跑起来」。
   - **`/ppt/generate` 的 runAsync 现在会落一条 ASSISTANT 消息**（原来整段成功文本被丢弃：文件生成了但历史里一个字都没有，主 Agent 下一轮不知道这个文件存在、刷新页面用户也看不出发生过什么）。走契约 D 双通道：`content` = 工具原样全文（fileId / PPTX 服务项目 ID / 可编辑与否都在里面，模型需要），`displayContent` = 一句人话。落库失败只 log。
+  - **`POST /chat` 的 `skillIds`（可选字符串数组）= 用户主动选择的 skill，本轮强制生效**（`AgentChatRequest.skillIds`）。与触发词自动命中取**并集**；无效 id（不存在/已停用/所属插件停用/当前应用语言不可用）静默忽略——SSE `skill_update` 下发的是真正生效的清单，用户看得见它没被点亮。**无状态**：后端不持久化，前端每次请求携带。旧字段 `pinnedSkillId` 已 `@Deprecated`，语义收编成「只有一项的 skillIds」（仍受理，供不发 skillIds 的存量客户端）。ASK 模式下整体不参与。
+    - **必须同时注入 prompt 与参与工具可见性**——这两件事的判据现在同源收敛在 `SkillRouter.activateForTurn`。旧的 pinnedSkillId 静默 bug 就出在这里：编排器按钉选裁工具，而 `ContextAssemblerService` 自己又 `match(userPrompt)` 重新匹配了一遍，于是钉选的 skill 被裁了工具却拿不到 prompt。**组装器一律读 `skillRouter.activeSkills(conversationId)`，不许再 match 一次。**
 - **契约 D「发送内容 ≠ 显示内容」**：`model/entity/ProjectAiMessage` 的可空列 `displayContent`（TEXT，ddl-auto 自动建列）。**语义红线：模型永远只看 `content`，用户看 `displayContent`、为空回退 `content`**——`ContextAssemblerService` 的历史栈与所有上下文组装一律读 `content`，一个字都不许改成读 `displayContent`（否则模型丢掉计划审批卡回喂的修订版全文、PPT 结果里的 fileId 这类它真正需要的细节）。写入口：`ProjectAiMessageService.saveMessage(...)` 的六参重载（五参版本 = displayContent 传 null），空白一律归一为 null——「缺省 = 与今天行为完全一致」是存量兼容前提。请求侧：`POST /api/agent/chat` 可选字段 `displayText`；读侧：`GET /api/ai/history` 直接序列化实体，自动带上 `displayContent`，前端渲染 `displayContent || content`。用途是「点一个按钮时用户气泡里不该出现代拟的机器口吻长句」（病灶：计划审批卡把「我已修订计划（共 N 处改动…）」当用户消息发出去）。
-- `controller/ai/AiChatController.java` — 已不含任何对话端点，只剩会话周边：`GET /history`、`GET /conversations`（合并 AgentRunStateService 运行状态）、`GET /conversation/{id}/metadata`、`GET /assistants`、`GET /config`、`POST /export-docx`。**v1 同步端点 `POST /api/ai/chat` 已于 2026-08 供应商三档改造中删除**，连带 `AiChatService`、`MultiModalContentService`、`GeminiChatLanguageModel`、`GeminiCacheService` 与三个 DTO（AiChatRequest/AiChatResponse/AiChatContext）。删除依据：端点虽仍映射，但前端唯一调用方（project-overview.vue 的 handleAiSend）在 AI 面板换成 ChatInterface 组件后模板里已无任何绑定，且 `api.js` 的 payload 还漏传 contexts 与 assistantId——双重死。随之废弃的 system_setting 键：`ai.systemPrompt.OLLAMA`、`ai.systemPrompt.GEMINI`（唯一读者是 AiChatService，且它按**模型名字符串**而非 provider 选 key，所以那两个 admin 提示词 tab 对全部通道早已失效）。**今天真正生效的 system prompt 由 `ContextAssemblerService` 拼装、provider 无关、admin 无入口。**
+- `controller/ai/AiChatController.java` — 已不含任何对话端点，只剩会话周边：`GET /history`、`GET /conversations`（合并 AgentRunStateService 运行状态）、`GET /conversation/{id}/metadata`、`GET /config`、`POST /export-docx`。**v1 同步端点 `POST /api/ai/chat` 已于 2026-08 供应商三档改造中删除**，连带 `AiChatService`、`MultiModalContentService`、`GeminiChatLanguageModel`、`GeminiCacheService` 与三个 DTO（AiChatRequest/AiChatResponse/AiChatContext）。删除依据：端点虽仍映射，但前端唯一调用方（project-overview.vue 的 handleAiSend）在 AI 面板换成 ChatInterface 组件后模板里已无任何绑定，且 `api.js` 的 payload 还漏传 contexts 与 assistantId——双重死。随之废弃的 system_setting 键：`ai.systemPrompt.OLLAMA`、`ai.systemPrompt.GEMINI`（唯一读者是 AiChatService，且它按**模型名字符串**而非 provider 选 key，所以那两个 admin 提示词 tab 对全部通道早已失效）。**今天真正生效的 system prompt 由 `ContextAssemblerService` 拼装、provider 无关、admin 无入口。**
 - **项目级会话列表（2026-08 项目概览页 A 期）**：`GET /api/projects/{projectId}/conversations`，控制器在 `controller/ProjectOverviewController.java`（**不在 ai 包下**——它是概览页那一组端点之一），业务落既有 `service/ProjectAiMessageService.listProjectConversations(...)`（**`com.checkba.service`，没有 `.ai` 子包**；放这里是为了就地复用它的 private `cleanTitle` / `extractPreview` / `truncatePreview`，不新起服务）。仓储是新增的 `ProjectAiMessageRepository.findProjectConversationSummaries(projectId, before, beforeId)`，**与既有 `findConversationSummaries` 并存、后者一行不改**（那条服务 `/api/ai/conversations`，动了会牵动整个 AI 面板）。
   - **与 `/api/ai/conversations` 是两条独立通道，别合并**：既有那条是 user-scoped（同时按 projectId 与 userId 过滤，「我在这个项目里的会话」）且返回**裸数组**；新这条去掉 userId 条件变成「这个项目的全部会话」且返回**信封** `{code:0,data:{conversations:[...],nextBefore,nextBeforeId}}`。
   - **可见性是分层的，这是唯一的语义变更**：**只放开列表层**（title / lastMessage / updatedAt / runStatus / ownerUserId / ownerName），**正文层一行都不放开**——正文仍按 `ProjectAiMessageService.canUseConversation` 判权。放开正文正是 2026-08 安全审计修过的那类问题，不要顺手做进去。
@@ -24,9 +26,9 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   - **limit 只能在 Java 层做**：这条 JPQL 用了 4 个标量子查询 + GROUP BY + HAVING，套 `Pageable` 会逼出手写 countQuery 或两段式。服务层取全部汇总行后 `stream().limit(limit + 1)`，第 limit+1 条存在即 hasMore，游标取第 limit 条的 `(updatedAt, conversationId)`。
   - **前端不许再清洗一次**：title / lastMessage 已由服务端过 `cleanTitle` / `extractPreview` / `truncatePreview`，`ConversationList.vue` 不许再剥标签、不许再截字数（仓里已有两套并行漂移的正则，不许出第三套）。两个已知展示形态要有兜底：`lastMessage` 可能是**空串**（`extractPreview` 对以 import/def/function/class/const/let/var/public/private 开头的正文直接返回空串，服务端此时回退到用户第一条消息，**回退条件只判空串、不判长度**——「已核对」「好的」是合法短回复），`title` 可能是字面量**「新对话」**（清洗兜底与 LLM 起标题失败写库同文案，前端无法区分）。
   - **点开一条历史 → 进工作台并打开它**：概览页 `reLaunch` 到工作台时带 `conversationId` query，工作台 `onLoad` 读到后调既有 `loadHistoryChat({ conversationId })`（`pages/project-overview/project-overview.vue:4729`）。那个方法内部要 `$refs.chatInterface.loadMessages(...)`，**必须在 mounted 且 AI 面板已渲染之后调**；它同时会清掉该会话的未读蓝点、并带竞态防护（快速切换时丢弃已不是当前会话的旧响应）。概览页本身**绝不内嵌 ChatInterface**——`loadHistoryChat` 是完整切换会话，会在用户还没进工作台时就抢占当前会话。
-- `service/ai/AiAssistantService.java` — 只剩 `loadAssistants()`（读 `ai.assistants`，`GET /assistants` 在用）。`getAssistant()` 与 `assistantCache` 随 v1 删除：那个缓存键只有 modelId 加 assistantId、不含密钥指纹（对比 `ChatModelFactory` 刻意带了 `keyFingerprint()`），server 模式多租户下会让后来的用户复用别人平台 key 建出的实例。**将来若再引入按模型缓存的助手实例，缓存键必须带密钥指纹。**
+- **「智慧助手」（AiAssistantConfig / AiAssistantService / `GET /assistants`）已于 2026-08-19 整体移除**：生产库 `ai.assistants` 只有四条从未被真配置过的远古脚手架默认值，功能从未生效——`assistantId` 在前端 `useAgentStream.sendMessage` 组装 payload 时就被丢弃，后端从不消费。裁决为不做数据迁移的干净删除；system_setting 里遗留的 `ai.assistants` 行不清理（不读不写即废弃）。
 - **conversationId 服务端签发**（安全审计遗留 + Office 插件 Phase D）：`controller/ai/ConversationIssuanceController.java` `POST /api/agent/conversations` body `{projectId}` → `{"conversationId":"conv-<毫秒>-<16位随机base64url>"}`（鉴权 + hasReadPermission）。登记簿 `service/ai/ConversationIssuanceService.java`（内存 Map，惰性 24h 过期）；`ProjectAiMessageService.canUseConversation` 开头先查登记——签发给谁就归谁，关掉「空会话首条消息落库前任何登录用户可抢占」的窗口。开关 `security.conversation-issuance-required`（默认 false）：true（官方云配）时**尚无消息**的未登记会话一律拒绝（已有消息仍按 DB 归属，进程重启丢登记不影响历史）；local-mode 恒不强制，桌面自造 conv-毫秒 ID 流程不变。
-- `service/ai/AgentOrchestrator.java`（1381 行）— **编排器**：handleUserMessage（@Async("taskExecutor")）+ runLoop（递归）。RunGuard：打转检测（StuckDetector 滑动窗口，先干预后熔断）、连续失败提示=3、步数预算 MAX_LOOP_DEPTH=30、故障转移已试模型集。工具分发 dispatchTool、artifact/<title> 处理、检查点触发、反问停机（见下文「一条消息的完整链路」）。
+- `service/ai/AgentOrchestrator.java` — 编排器：持久化 inbox 受理、每会话串行消费、工具边界插入新指令。普通 30 轮/过卷 120 轮/subagent 6 轮固定上限已移除；每 64 轮切出同步调用栈，保留取消、超时、资源并发、压缩及真实无进展暂停。`StuckDetector` 同时比较工具调用与结果，变化中的轮询不按重复失败处理。详见下方 2026-09-10 契约。
 - `service/ai/AgentStreamHandler.java`（493 行）— StreamingResponseHandler：token 流→SSE；<bubble_type>/<artifact> 边界解析缓冲、编辑器流过滤、token 用量上报。每次 runLoop 新建实例。
 - `service/ai/AgentRunStateService.java` — 每会话运行状态登记簿：RUNNING/PAUSED/AWAITING_APPROVAL/**AWAITING_INPUT**/FINISHED/ERROR/CANCELLED/**INTERRUPTED**。内存 map 是快路径，同时写透 `agent_run_record` 表（entity `model/entity/AgentRunRecord`，ddl-auto 自动建表；DB 写失败只 log 不阻断）。**新增终止分支必打状态点**（PR#173 状态机契约）。
   - **AWAITING_INPUT = 模型反问（`<question>` 标签）等用户回答**，SSE `bubble_end` 的 status 字面量是 `awaiting_input`。刻意不复用 AWAITING_APPROVAL：会话列表要把「待回答」与「待审批」显示成两种文案。停机语义与审批完全一致——答案是**下一轮普通用户消息**，不做阻塞式挂起（工具分发在流式回调线程上，撞 600s callTimeout 与 180s 看门狗；用户关掉 app 明天再来那一轮必死）。
@@ -35,6 +37,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - `service/ai/TodoListService.java` — 任务清单（`todo_write` → `plan_update` 事件）。与 run 状态同款「内存 map 快路径 + 写透 DB」：新表 `agent_todo_list`（entity `model/entity/AgentTodoList`，整表 JSON 一行，ddl-auto 自动建表；写失败只 log 不阻断——进度卡坏掉不该让对话中断）。唯一读路径 `currentList()` 未命中时按 conversationId **惰性回填**：此前清单是纯内存的、进程重启即丢，而 run 状态却能回收成 INTERRUPTED 并给用户「继续」按钮，点下去清单已经没了——是个假承诺。空 list 是「查过 DB 确实没有」的**负缓存**占位（`reminder()` 每轮工具执行都调，不占位会每轮打库）；读失败刻意不写负缓存（留恢复窗口）。`purgeStaleLists()` 每日清 30 天未更新的行并摘掉内存条目。**清单刻意不并进 `agent_run_record`**：两条写路径各自 findByConversationId→save 会互相盖字段（lost update），且清理口径不同。`plan_update` 事件形状未变。
 - `service/ai/AgentRunRecoveryService.java` — 启动回收（harness 二期）：ApplicationReadyEvent 把 DB 里遗留的 RUNNING 全部翻成 INTERRUPTED 并塞回内存 map（/connect 的 run_state 只读内存），同时给该会话最后一条半截 ASSISTANT 消息追加 `> **[进程中断]** …`（按「含 [进程中断] 即跳过」幂等）。前端 run_state=INTERRUPTED → `agentPaused={reason:'process_interrupted'}` → 复用「继续」按钮（发一条「继续」消息，编排器起跑照常翻回 RUNNING）。**刻意不做 runLoop 快照重放**：工具副作用无法保证幂等；恢复粒度就是「从已持久化的轮次级执行日志继续」，丢失窗口只有最后一个未完成的 LLM 轮。
 - `service/ai/ContextAssemblerService.java` — assemble()：prompts/system_prompt.md + enforcement 段 + 模式约束 + Skill 注入 + 记忆 + 文件上下文 + 历史栈。**应用语言二选一（EN 版 PR5）**：注入 AppLanguageService，en-US 时基底 prompt 换 `prompts/system_prompt.en.md`（缺失回退中文版），enforcement/模式约束/系统时间格式（Locale.ENGLISH，时区仍 Asia/Shanghai）/活跃文档指引/readHint/末位提醒全部切英文文本（文件尾部的 EN_* 常量与 *En 方法）；zh-CN 路径代码与文本一字未动。**两版协议面（标签/停机条件/工具规则）必须逐条一致**——改中文版任一硬编码段时必须同步对应英文段与 system_prompt.en.md（en 文件里有 zh § 行号对照注释）。语言切换测试在 ContextAssemblerServiceTest 的「应用语言切换」组。activeContext 正文来源二选一：ContextItem.inlineContent（Office 插件等外部客户端随请求内联携带，200k 截断）优先，否则 read_document(fileId)——见 resolveActiveDocumentContent；末位 [系统提醒] 两条路径共用不变。
+  - **法域与字形规则（dev-board#375，2026-09-02）**：zh 版基底 prompt 的「Simplified Chinese / Mainland China」是产品语言与人设，**不是法域断言**——身份段之后加了一段「适用法域以文档为准」（繁體 + 台灣法源 = 台灣法；禁止跨法域套概念；`law_*` 只覆盖内地法；**写进文档的文字跟随文档字形与用语**，「简体中文」只约束对用户的回答）。en 版对应段落在 jurisdiction-neutral 之后，措辞刻意避开 "Simplified Chinese" 字样（`ContextAssemblerServiceTest.englishModeAssemblesEnglishSystemPrompt` 断言英文模式不含它）。enforcement 段的 Language 小节两版各加一行同义规则（弱模型对 system prompt 中段视而不见，末位 enforcement 才管用）。病灶：台湾认购合约被按内地法审、简体句子插进繁體正文。
   - **enforcement 段与模式约束是「比 system_prompt.md 更末位」的文本，两边打架时它赢**（本仓实证：末位注意力最高，只写在 system prompt 里的约束被弱模型稳定无视，PR#209）。所以给模型加任何新的停机/输出形态时，**必须同时改这里**，否则功能整条是死的。反问那次就踩了三处：① Stop Conditions 原文是「**STOP ONLY** when you output implementation_plan」——把反问停机明确排除在外了，已改成 STOP + 补一条 **ALSO STOP** for `<question>`；② Output Structure 第 5 项「`<final>` REQUIRED for all non-chitchat」会让模型为了满足 REQUIRED 而在问完之后硬编一段答案，已补「以 `<question>` 收尾时不要求 `<final>`」的例外；③ AGENT 模式约束第 1 条「自动执行，无需等待用户确认」已补「但缺少影响成果正确性的前提时先用 `<question>` 问」。
 - `service/ai/ChatModelFactory.java` — 供应商路由，2026-08 起收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`（本地，实验档）。**GEMINI 档已下线**（手写的 GeminiChatLanguageModel 不支持 tools 也没有流式，AGENT/PLAN 下是死路；Gemini 系列模型改由 OpenRouter 的 `google/*` 提供），存量库里的 `ai.activeProvider=GEMINI` 由 `migrateRetiredGeminiProvider()`（ApplicationReadyEvent，幂等）改写成 OLLAMA——不迁移的话 `resolveProvider()` 只 warn 一句就静默回退 yml，用户的选择被改掉而设置页显示的又是另一回事。provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。公有解析 API：`resolveProvider()` / `resolveDefaultModel()`（DB `ai.defaultModel` → yml `open-router.default-model`）/ `getAuxChatModel()`（辅助模型，非白名单抛 `FeatureNotConfiguredException(feature="ai-aux-model")`，不静默回落）/ `resolveOllamaModelName()` / `resolveOllamaBaseUrl()`。**判定顺序不许改**：平台通道短路 → 白名单短路 → provider 分流（由 ChatModelFactoryTest 固化）。`AllowedModels.java` 白名单（分档单价，见下节）。
 - **平台通道 AWD_CLOUD「AI WorkDeck 云端」（商业化 PR-B）**：key 由官网 provision（`service/ai/PlatformAiChannel.java`，缓存 `~/.aiworkdeck/platform-ai-key.json` 0600），判定**先于白名单短路**，取不到 key **绝不静默回退 BYOK**（会花用户自己的钱）。`service/ai/PlatformUsageAccountant.java` 用 OpenRouter `GET /api/v1/key` 累计消费差分补 `TokenUsage.costSource=platform` 的真实扣费（langchain4j 0.36 拿不到响应里的 `usage.cost`）；BYOK 仍是单价表估算，标 `costSource=estimate`。两套数字**分开标注不得合并**（Spec §3）。账户连接在 `service/account/`，权益在 `service/entitlement/`，两者与解锁门、计费契约一并见 `.claude/agents/licensing-billing.md`。
@@ -54,20 +57,65 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - `ProjectMemoryExtractor` 与 `project_memory` **保持现状不动**，概览页只是不读它。
 
 **模型目录与区域判定（2026-08 供应商三档改造）**
-- `service/ai/AllowedModels.java` 是**模型目录的唯一事实来源**（14 条：GLOBAL 9 + INTERNATIONAL 5）。枚举带元数据：displayName（中文）/ Vendor（中文厂商名，前端按它分组）/ Region / contextLength / priceTiers。前端**不许再硬编码任何模型清单**——历史上有三份互不同步的副本（本枚举、ChatInterface.vue 硬编码数组、project-overview.vue 死代码），后果是「后端加模型用户看不到、前端加模型被工厂静默回落默认模型」。
+- `service/ai/AllowedModels.java` 是**模型目录的唯一事实来源**（14 条：GLOBAL 9 + INTERNATIONAL 5）。枚举带元数据：displayName（中文）/ Vendor（中文厂商名，前端按它分组）/ Region / contextLength / **vision（是否支持图像输入）** / priceTiers。前端**不许再硬编码任何模型清单**——历史上有三份互不同步的副本（本枚举、ChatInterface.vue 硬编码数组、project-overview.vue 死代码），后果是「后端加模型用户看不到、前端加模型被工厂静默回落默认模型」。
 - **分档计价**：OpenRouter 对部分模型按输入长度分档涨价，白名单里 4 个模型有档（qwen3.7-flash 三档，seed-2.0-lite / gpt-5.6-terra / grok-4.5 两档）。价格是 `PriceTier(minPromptTokens, inputPricePerM, outputPricePerM)` 列表，按 minPromptTokens 升序、首档下限恒为 0，取档用 `priceTierFor(promptTokens)`（负数/0 回落首档，取档不许抛异常——记账抛异常会把整条流式对话带崩）。`TokenUsageService.calculateCost` 已按档计价；**只读首档会在长上下文下系统性低报**。刻意不建模提示缓存命中价（langchain4j 0.36 的 TokenUsage 只回 input/output，拿不到命中 token 数），因此估算值对命中缓存的轮次偏高——**已知偏差不是 bug**，真花的钱以 PlatformUsageAccountant 对账为准。
 - **价格漂移唯一护栏**：`AllowedModelsLiveContractTest`（联网对拍 `GET https://openrouter.ai/api/v1/models`，断言在线 + supported_parameters 含 tools + 单价一致，容差 1%）。门控 `RUN_LIVE_MODEL_CHECK=1`，默认跳过——mvn test 默认离线可跑是硬要求。首次对拍就抓到 5 条价格错，其中 kimi-k2.6 的输入/输出价分别对用户超收 14% 与 40%。**2026-08-10 第二次对拍又抓到两条**：glm-5.2 与 kimi-k2.6 的上游单价分别涨了 3.0 倍与 1.6 倍，而枚举还是旧值——方向是低报，BYOK 估算系统性偏低且没有任何东西会报警（平台通道走真实扣费，看不出来）。**因为这条护栏是 env 门控、不进 CI，漂移只会在有人手动跑的时候被发现**，所以改动模型相关的 PR 顺手跑一次 `RUN_LIVE_MODEL_CHECK=1 mvn test -Dtest=AllowedModelsLiveContractTest`。**测试红了不许放宽容差**，先核对线上再改枚举。结构性前提（首档为 0、严格升序）与区域集合大小由离线的 `AllowedModelsTest` 守。
+  - **同一条护栏现在也对拍 vision 位**（2026-08-29）：判据是 `architecture.input_modalities` 含 `"image"`。两个方向严重性不同——我们标 true 而上游没有 = 图片块发给读不了图的模型换来必然的 400，必须红；我们标 false 而上游有 = 只是把用户的图白白降级成 OCR，也断言但错误信息说清是「漏标」。vision 位与单价一样是**人手抄的、会在我们背后变**，而这条护栏同样 env 门控不进 CI。
 - `service/ai/NetworkRegionService.java` — 区域判定，**走桌面本地判定（后端 JVM 信号）**，不走官网回传、不走前端 `navigator.language`（渲染进程的 `utils/zetaOfficeBoot.js` 把 navigator.language shim 成 zh-CN，前端读到的语言不可信）。API：`SETTING_KEY="ai.networkRegion"`、`MODE_AUTO/MODE_DOMESTIC/MODE_INTERNATIONAL`、`mode()`（非法值回落 auto）/ `effectiveRegion()`（返 `AllowedModels.Region`）/ `isManuallyOverridden()` / `detect()` / `detectionBasis()`。判据：`Locale.getDefault().getCountry()=="CN"` **或**时区属大陆集合 → 判大陆（effectiveRegion 返 GLOBAL，只放行区域无关模型）；**港澳台不算大陆**。误判方向刻意偏保守（宁可少给选项，不可给必然 403 的坏选项），所以手动覆盖是一等设置、设置页必须给入口。
-- `controller/ai/AiModelCatalogController.java` — `GET /api/ai/models`（鉴权口径同 AiChatController：X-Session-Id → userId，null 则 401）。响应契约：`{networkRegion, networkRegionMode, networkRegionBasis, defaultModel, models:[{id,name,vendor,region,contextLength,inputPricePerM,outputPricePerM,tiered}]}`。models 只含 `AllowedModels.availableIn(effectiveRegion())`；价格取首档，`tiered=true` 表示有分档、UI 要提示「长上下文单价更高」。defaultModel 必须由 `ChatModelFactory.resolveDefaultModel()` 解析（DB `ai.defaultModel` 优先于 yml），前端自己挑「清单第一条」会和实际发出去的模型不一致。刻意不放进 AiChatController——那是被治理过一轮的胖控制器，模型目录与对话没有共享状态。
+- `controller/ai/AiModelCatalogController.java` — `GET /api/ai/models`（鉴权口径同 AiChatController：X-Session-Id → userId，null 则 401）。响应契约：`{networkRegion, networkRegionMode, networkRegionBasis, defaultModel, models:[{id,name,vendor,region,contextLength,**vision**,inputPricePerM,outputPricePerM,tiered}]}`。models 只含 `AllowedModels.availableIn(effectiveRegion())`；价格取首档，`tiered=true` 表示有分档、UI 要提示「长上下文单价更高」。defaultModel 必须由 `ChatModelFactory.resolveDefaultModel()` 解析（DB `ai.defaultModel` 优先于 yml），前端自己挑「清单第一条」会和实际发出去的模型不一致。刻意不放进 AiChatController——那是被治理过一轮的胖控制器，模型目录与对话没有共享状态。响应契约由 `AiModelCatalogControllerTest` 守（2026-08-29 新建；此前 `ChatModelFactoryTest` 有一段注释声称「护栏在模型目录端点的测试里」，**而那个测试根本不存在**，端点契约一直零覆盖——别再相信那条注释）。
 - **模型相关 system_setting 键**（DB 优先于 yml，改完必须 `chatModelFactory.clearCache()`）：`ai.defaultModel`（空→yml `ai.model.open-router.default-model`）、`ai.auxModel`（起标题/上下文摘要/记忆抽取/memory_search/文件自动打标签；空→yml `ai.aux-model`）、`ai.subagentModel`（空→`ai.auxModel`）、`ai.networkRegion`（auto|domestic|international）。
 - `service/ai/OllamaProbeService.java` + `controller/ai/OllamaProbeController.java` — 本地 Ollama 只读探测，`GET /api/ai/ollama/probe?model=<可选>`（鉴权同上）。**为什么需要**：Ollama 档没有密钥可校验，向导无法用「Key 填了没有」判断可用性；改造前全仓零探测代码，用户选完本地档要到发第一条消息才收到 Connection refused。打 `{ollama.baseUrl}/api/tags`，连接与响应各 **2 秒**超时（跑在向导关键路径上）。**永远返回 200**，结论在 `status` 三态：`READY`（服务在跑且目标模型已 pull，`command=null`，nextStep 明说只支持 ASK 模式）/ `MODEL_MISSING`（`command="ollama pull <model>"`）/ `SERVICE_DOWN`（连不上、非 200、响应解析不了一律归这档，`command="ollama serve"`）。完整响应：`{status, baseUrl, targetModel, installedModels[], message, nextStep, command}`。目标模型 = system_setting `ai.ollama.modelName`（空白视为未配置）→ yml `ai.model.ollama.model-name`；query 参数 `model` 再优先于二者（向导里没保存就先试）。地址同理走 `ai.ollama.baseUrl` → yml。**这两个键的字面量定义在 `ChatModelFactory.SETTING_OLLAMA_MODEL / SETTING_OLLAMA_BASE_URL`，探测服务引用它们**：探测读的键必须与真实路由读的键是同一个，各写一份的话用户在设置页换了本机模型后会看到「探测说已就绪、对话却发给 yml 里那个模型」。模型名比对两边都补默认 tag（`llama3` ≡ `llama3:latest`）。**baseUrl 刻意不接受调用方传入**——桌面后端与云后端共用这套代码，放开等于做成 SSRF 跳板。
 - **前端消费侧**（改模型选择器前先看这三条）：① `frontend/src/components/ChatInterface.vue` 的模型清单来自 `GET /api/ai/models`（`api.js` 的 `fetchAiModels()`，同一端点只有这一个函数名），下拉按 vendor 分组、`region=INTERNATIONAL` 的组排在最后并标注「需国际网络」、`tiered=true` 显示「长上下文单价更高」、每条显示首档单价；默认选中项取响应里的 `defaultModel`，**不许自己取 `models[0]`**。② 模型选择持久化在 uni storage 键 `ai_selected_model`（全局非按项目）；恢复时必须校验该 id 仍在端点返回集合里，不在则回落 `defaultModel` 并提示一次——AI 面板挂在 `v-if` 上，不落盘会静默复位，而这个选择有计费含义，静默换计价对象是本次要修的老毛病。③ `provider=OLLAMA` 时模式选择器只留 ASK（本地档不支持工具调用），判据取 `GET /api/ai/config` 的 `activeProvider`（模型目录端点不回 provider）；该字段现在由 `ChatModelFactory.resolveProvider()` 透出，与真实路由同源。
 - **AI PPT 的模型与密钥**不走上面这套：由 `tools/PptxTools.buildModelConfig` 按 `ai.activeProvider` / `ai.defaultModel` / DB 密钥解析后，随 `model_config` **每次请求**下发给 pptx-service（该字段曾在 re-vendor banana-slides 时被整包替换掉，源码级存活检查在 `pptx-service/compat_smoke_test.sh`）。图像模型是常量 `PptxServiceClient.IMAGE_MODEL`，**刻意不进 AllowedModels**——它按张计费、没有 prompt/completion 单价，进白名单会破坏分档计价的前提。本地 Ollama 档下 AI PPT 在入口即拒（`FeatureNotConfiguredException(feature="ai-ppt")`），因为本地模型没有 OpenAI 兼容的图像生成接口，放行只会跑到图片阶段才失败。
 
+**图片多模态（视觉直送，2026-08-29 dev-board#266）**
+
+- **一句话**：模型支持视觉 → 图片附件作为 `ImageContent` 内容块直送模型；不支持 → 降级走既有 OCR，并在选模型时就告诉用户。降级全自动，前端不做任何拦截。
+- **能力判据只有一处**：`AllowedModels.vision` 位（14 条里 11 条 true，纯文本的是 deepseek-v4-flash / deepseek-v4-pro / glm-5.2）。经 `GET /api/ai/models` 下发，**前端不许自建「哪些模型能看图」的表**。境内 GLOBAL 9 条里有 6 条支持视觉，所以这条路在境内是通的。
+- **默认模型是纯文本的**（`ai.model.open-router.default-model` = deepseek/deepseek-v4-flash），所以降级是常态而不是边缘情况。前端提示必须覆盖「用户从没手动选过模型」这一档，否则绝大多数用户静默无提示。
+- **判定必须落在「真正生效的模型」上**：`ChatModelFactory.resolveTarget(modelId, logFallback)` 是通道+模型 id 的**唯一解析口径**，`getChatModel` / `getStreamingChatModel` 都改成调它再分派（两份会漂移，漂移的表现是同步路与流式路发给不同模型）。能力判定走 `effectiveModelSupportsVision(modelId)`：请求里的 modelId 有三条静默改写路径（非白名单回落默认模型 / 显式本地档忽略云端模型 / 平台通道回落），按请求 id 判就会把 image 块发给读不了图的模型。**OLLAMA 档恒 false**（langchain4j-ollama 是另一套图片编组，本次不接）。
+- **组装点**：`ContextAssemblerService`。图片项在 contextItems 循环里分叉——直送时**不调 read_document、不注入 `<file>` 正文**，只在 system 里留一条 `<image id name note=.../>` 标识（告诉模型图随消息发了、别再调读取工具），字节收进 `visionAttachments`，在**末位用户消息**里以 `UserMessage.from(List<Content>)` 组装（`TextContent` 必须排第一——末位提醒的注意力位置是真机日志换来的结论）。**同一张图绝不许既进视觉又进 OCR**：那会既付图像 token 又付 OCR 的钱，还给模型两份可能打架的输入。
+- **降级时必须明示**：`<file source="ocr" reason="...">` 段里写清「这是 OCR 转写、你看不到图像本身、识别可能有误」。不写的话模型会把识别误差当成原文事实。
+- **`DetailLevel` 必须显式传 HIGH**。langchain4j 0.36 所有不带 DetailLevel 的 `ImageContent` 重载都在构造器里硬塞 **LOW**（字节码实证），LOW 会让上游把图缩到单块低分辨率——扫描件、合同签署页的字直接糊掉，读文书还不如现有 OCR，而且不报错不告警，只是模型开始胡说。
+- **PDF 永远不走视觉**：`ai.context.vision.extensions` 刻意不含 pdf（与含 pdf 的 `ocr-extensions` 是两张表，别合并）。langchain4j-open-ai 0.36 的 `InternalOpenAiHelper.toOpenAiContent` 只认 TextContent / ImageContent，`PdfFileContent` 抛 `Unknown content type`（真 jar 探针实测）。
+- **判图是双判据**（fileType 优先、退回文件名后缀，同 `lowaDocKind` 的路数）：`ContextItem.fileType` 是客户端自填、原样落库、无校验，而 OCR 那条路判的是文件名扩展名；只认其一会打出「既不走视觉也不走 OCR」的空洞。
+- **闸门**：单张 10MB（`vision.max-image-bytes`，与 OCR 那道闸对齐）、单轮 4 张（`max-images-per-turn`）。`ProjectFileService.getFileBytes` 一路 `readAllBytes` **没有任何上限**，今天图片不撑爆堆全靠 OCR 前面那道闸——跳过 OCR 等于绕开它。超限一律降级走 OCR 并明示，不是静默丢弃。按 contextItem.id 读字节**必须过 `ToolFileGuard.rejectIfOutsideProject`**（那个 id 来自 HTTP 请求体，可信度不比 LLM 参数高）。
+- **`UserMessage.text()` 就是 `singleText()`，多模态一律抛**（0.36 字节码：text() 只有一条 `invokevirtual singleText()`；`hasSingleText()` 要求 contents 恰好一条且是 TextContent，所以「文本+图片」照抛）。取文本的单一口径收成 `context/ChatMessageText`（`of` / `imageCountOf` / `containsImage`），新增取文本处一律调它。**slf4j 的参数是提前求值的**——`log.debug("...", m.text().length())` 在 INFO 级别也照样执行，这就是接上多模态后第一个炸的点（AgentOrchestrator 那处已改）。
+- **压缩层三件事**：① `RunLoopCompactor.estimateTokens` 给每张图折算 `vision.token-estimate-per-image`（1200，方向偏高）——按 0 计的话带大图的栈永远触发不了主动压缩、只能等 400；**绝不能按 base64 长度算**，一张 500KB 的图会估成 33 万 token 让每轮都强制压缩。② `forceCompact` 的最后一层兜底会**摘掉图像块**并留一行说明——剪枝与折叠都碰不到 ImageContent，不摘的话带图的栈一旦超窗就恒返回原实例、判「压不动」终态，每次重试都必然再撞同一个 400。非 force 不摘（无谓的能力降级）。③ `ContextCompressor` 的 `removeRedundancy` / `compressToolResults` 遇到含图的 UserMessage **原样保留不重建**（`UserMessage.from(text)` 只装得下文本，重建 = 静默剥图）。
+- **故障转移要按视觉收窄**：`nextFailoverModel(..., regionAgnosticOnly, visionOnly)`，栈里有图时只接受支持视觉的候选。转移**只换 modelId、不换消息栈**，切给读不了图的模型是一个必然的 400，而且这个 400 会被当成新一轮错误继续往下切、一次烧完整条链。生产默认链 `deepseek-v4-flash`（纯文本）+ `qwen3.7-flash`（视觉）恰好是这个形状。
+- **图片不跨轮存活**：`ProjectAiMessage` 只有 content 单列，历史回放只重建文本。多轮能继续看图，靠的是前端每轮重送 contextItems（桌面端的内联附件标签、插件端的 attachedFiles 都跨轮保留）——与今天 OCR 文本每轮重新注入是同一口径。要做「后端自动回放历史图片」得先加「消息↔附件」持久化，不是改一行。
+- **计费**：平台通道走 `PlatformUsageAccountant` 的账户消费差分，图片怎么计价都被差分吃进去，**金额天然精确**。BYOK 估算也无需改：11 条视觉模型里只有 Gemini 3.6 Flash 有 `pricing.image`（$7.5e-7/张，可忽略），其余的图像开销全折进 `prompt_tokens`，既有分档计价天然覆盖。**口径迁移要知道**：图片从 OCR 网关（按页扣 Credits）搬到 OpenRouter key 计量后，用户会看到 OCR 那项归零、AI 花费变多——同一笔支出换了个口袋，两张账目前没有任何地方加总。
+- **`logRequests` 三处已全部关掉**：openai4j 0.23 的 `RequestLoggingInterceptor.logDebug` 在调 `Logger.debug` **之前**先执行 `getBody(request)`（字节码实证），而这个版本不截断 base64——日志级别停在 INFO 一行不打印，却每次请求都把整个请求体物化成 String。一张 5MB 的图 base64 后 6.7MB，最多 30 轮。
+- **`ProjectContextHolder` 必须在 assemble 最开头设置**（本次顺手修的既有 bug）：它是 ThreadLocal，`ToolFileGuard` 的项目归属从它取，而那三行 set 原来排在附件注入与活跃文档注入**之后**——@Async 线程上拿到 null 就 fail closed，那句 `Error: no project context ...` 被原样当成文件正文注进 `<file>` CDATA；taskExecutor 池化复用、assemble 从不 clear，还可能拿到**上一个项目**的 id。两种坏法都不报错。测试里 LegalTools 是 mock 的，所以这个顺序错误在单测中完全不可见——`ContextAssemblerServiceTest.projectContextIsSetBeforeAnyFileRead` 直接钉住「读文件那一刻 holder 里是什么」。
+- 验证：`mvn test -Dtest=ContextAssemblerServiceTest,AllowedModelsTest,AiModelCatalogControllerTest,ChatModelFactoryTest,AgentOrchestratorFailoverTest,RunLoopCompactorTest`；联网对拍 `RUN_LIVE_MODEL_CHECK=1 mvn test -Dtest=AllowedModelsLiveContractTest`。
+
+**提示缓存（Anthropic 显式断点，2026-09-03）**
+
+- **一句话**：`runLoop` 每轮都是无状态请求，同一段 system prompt 一轮工具循环最多重发 30 遍；Anthropic 系模型**不做自动前缀缓存**，必须我们自己在 content block 上打 `cache_control`。断点打在通道层 `service/ai/OpenRouterStreamingChatModel`；`ContextAssemblerService` 只做一件事：把易变段挪到 system 末尾并用分隔标记隔开（见下文契约），编排器一行未动。
+- **供应商分两类，别搞反**（2026-09-03 核对 https://openrouter.ai/docs/features/prompt-caching）：OpenAI / Grok / Moonshot / Groq / DeepSeek / Z.AI / Gemini 2.5 **自动**做前缀缓存，请求体不需要任何标记，加标记反而是无谓的报文变更；**Anthropic 与 Alibaba（Qwen）必须显式开启**（文档原文 "require you to enable it on a per-message basis"），不打标记就一个 token 都不缓存。两家都接了。
+- **Qwen 比 Claude 更要紧，别只顾着 Anthropic**：白名单里两条 Claude 都是 `Region.INTERNATIONAL`，**境内直接 403 region**（真机实证），也就是说 Anthropic 那半边只对能走国际网络的用户生效；而 `qwen/qwen3.7-flash` 是 `ai.auxModel` / `ai.subagentModel` 的默认值、子 Agent 拿它跑完整工具循环、且是 `Region.GLOBAL`。
+- **判据是双份的**：`requiresExplicitPromptCache(modelId)` = 模型 id 前缀 `anthropic/` / `qwen/` / `alibaba/`（忽略大小写）**或** `AllowedModels` vendor ∈ {ANTHROPIC, ALIBABA}。只认枚举会漏掉 `ai.subagentModel` / `ai.auxModel` / 故障转移链上被配的白名单外 id（`:beta` 变体、新型号），那些请求会静默按全价跑。
+- **为什么是「序列化后改写 JSON」而不是构造对象**：openai4j 0.23 的 `SystemMessage.content` 是 `String`、`Content` 只有 type/text/imageUrl 三个字段（字节码实证），都塞不进 `cache_control`。`markSystemForCaching(body)` 在 `Json.toJson` 之后改写**第一条** system 的 content。
+- **摘标记必须在序列化之前，这是字节级护栏的前提**：不做显式缓存的通道走 `stripVolatileSeparator(messages)`——在 `toOpenAiMessages` **之前**把标记从 `SystemMessage` 里去掉，然后照旧 `Json.toJson`。**不能在序列化之后用 Jackson 改写**：openai4j 的 `Json` 开着 `INDENT_OUTPUT`，Jackson 重新输出会把整个报文压成紧凑格式，那些通道的请求体就不再与改造前逐字节一致了。护栏是 `OpenRouterPromptCacheTest.nonAnthropicRequestBodyIsByteIdentical` 与 `nonAnthropicStripsSeparatorAndStaysByteIdentical`（都用 `Json.toJson` 重建等价请求做快照对比），任何波及全体模型的报文改动都会让它们红。
+- **只打 1 个断点**：Anthropic 上限 4 个，本次预算全给 system（每轮重发、体量最大，Office 插件会话把最长 20 万字符的正文内联在里面）。历史消息的滚动断点、以及 OpenRouter 的「顶层 `cache_control` 自动推进断点」模式都没接。**改写失败一律原样返回**：打不上标记只是不省钱，绝不能让本轮对话失败。
+- **短于最小长度不报错，只是不缓存**：Anthropic 最小可缓存前缀 Sonnet 4.x / Opus 4-4.1 = 1024 token，Haiku 3.5 = 2048，Opus 4.5+ 与 Haiku 4.5 = 4096。刻意**不在代码里判长度**——那要维护一张会腐烂的阈值表，而多打一个标记是空操作。
+- **分隔标记契约（跨轮次命中的全部机制）**：`ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR` = `"\n\n<!-- awd:volatile -->\n"`，在 system 里**恰好出现一次**，由 `assemble()` 在最后一步拼上。它把 system 切成两段：
+  - **稳定段（标记之前，打断点）**：基底 prompt + enforcement + 模式约束 + skill 注入 + `# User Context Files` + `# Active Document`（含最长 20 万字符的内联正文）。
+  - **易变段（标记之后，不打断点）**：`# Current Context`（Current System Time / Agent Mode / Phase / Project ID / Task List ID / Plan ID）+ `## Phase Instructions` + `# 项目记忆` / `# 相关记忆` / `# 用户偏好与习惯`。
+  通道层 `markSystemForCaching` 按标记拆成两个 text block，只给第一块打 `cache_control`，**标记本身被吃掉、模型永远看不到**；没有标记时退化成「整段 system 一个断点」（旧行为兜底）。
+- **地雷一：任何每轮可能变的内容，一律 append 到标记之后**。写进稳定段的话缓存永远不命中，**不报错、只是静默按全价计费**——没有任何东西会告诉你。特别注意：`# 相关记忆` 是按 `userPrompt` 现查的（`ContextAssemblerService` 里 `retrieveMemories(projectId, userPrompt, null, 5)`）且排序带随机项，**同一个问题两次的结果都可能不同**，所以它必须在标记之后（这就是为什么易变段不止 `# Current Context` 那几行）。同理，**`assemble()` 里 `systemText.append(SYSTEM_VOLATILE_SEPARATOR)` 那一行之后再往 `systemText` 追加任何东西，都会掉进被缓存的前缀里**——新增注入段要么放在标记之前（确认它稳定），要么 append 到 `volatileText`。
+- **「末位」语义没有被破坏**：本仓真正的末位约束是**挂在用户消息尾部**的 `[系统提醒]`（`activeDocumentReminder`），不是 system 的尾巴；system 里那些「必须/禁止」类指引（#419 的 `office_replace_batch` 批量指引、纯文本约束等）仍在稳定段的末尾，易变段排在它们之后不算把它们从末位挤走——易变段是状态与记忆，不是行为约束。新增行为约束仍按老规矩挂用户消息末位。
+- **验证「稳定」这件事本身要靠测试**：`ContextAssemblerServiceTest.volatileFieldsLiveAfterTheSeparator`（标记恰好一次、时间戳/阶段/阶段指引都在标记之后、内联正文在标记之前）与 `stablePrefixIsByteIdenticalAcrossTurns`（连续两次 assemble 的标记前半段逐字节相同）。
+- **turn 内本来就命中**：`assemble()` 每条用户消息只调一次（`AgentOrchestrator:512` 是全仓唯一调用点），递归 runLoop 复用同一个 messages 列表，所以一轮工具循环里第 2..N 次往返用的是同一段 system。分隔标记要解决的是**跨轮次**那一档。
+- **可观测性是唯一的判据**：`ReasoningStreamingHandler.onCacheUsage(promptTokens, cachedTokens, cacheWriteTokens)`（第三个 default 方法）→ `AgentStreamHandler` 打一条 info `Prompt cache conv=… model=… promptTokens=… cachedTokens=… cacheWriteTokens=…`。**没有它，system 里多一个变动的字节就会让缓存永久失效而无人知晓。** 字段两套名都认：OpenRouter 统一的 `prompt_tokens_details.cached_tokens` / `cache_write_tokens`，以及部分直通时露出的 Anthropic 原生 `cache_read_input_tokens` / `cache_creation_input_tokens`——**openai4j 0.23 的 `Usage` 一个都没有**（只多一个 `completion_tokens_details`），只能从原始 JSON 树读，所以 `Response.tokenUsage()` 这条路是死的。没有缓存字段时不回调（避免日志里全是 `cached=0`）。
+- **不改计费**：`TokenUsageService.calculateCost` 与 `AllowedModels` 的定价建模一字未动，BYOK 估算命中缓存的轮次仍偏高（已知偏差，`AllowedModels` javadoc 的「刻意不建模提示缓存命中价」那段仍然成立）；平台通道走 `PlatformUsageAccountant` 真实扣费，天然精确。把缓存读价（约输入价 1/10）与写价（5 分钟 TTL = 输入价 1.25x）建模进单价表是另一张卡。
+- 验证：`mvn test -Dtest=OpenRouterPromptCacheTest,ContextAssemblerServiceTest,OpenRouterStreamingChatModelTest,StreamingTransportFailureTest,AgentStreamHandlerReasoningTest`。
+
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
+- **组件级可用性闸（dev-board#396）**：`AgentToolComponent.isAvailable()`（default true）。返回 false 的组件**仍然登记进 builtinTools**（resolve/execute 照常命中），但**它的 spec 不进 builtinSpecifications**——模型看不见即不会去试，而万一被 XML 兜底路径调到，拿到的是工具自己那句可行动的错误（远好过 "tool not found"）。探测在 `ToolRegistry.init` 的 @PostConstruct 上跑，所以实现**必须自己缓存且绝不抛异常**（抛了也被 `componentAvailable` 兜成"可用"，最坏多下发一个工具，但不许让后端起不来）。今天唯一的使用者是 `PythonTools`：`run_python` 无条件 `docker run python:3.9-slim`，判据是「docker 可执行文件在 **且** `docker version` 成功」（Docker Desktop 装了没开的机器上 CLI 在、守护进程不在，run 一样起不来），3 秒超时、输出 DISCARD（接了管道又不读会把子进程卡在 write 上）、**进程级**缓存（不是每实例一份：eval 里每个 harness 都会新建一个 PythonTools，逐个 fork docker 子进程会把测试拖慢几分钟）。护栏 `ToolRegistryAvailabilityTest` / `PythonToolsDockerGateTest`。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
-- tools/：FileTools(12，含 create_folder/rename_project_file/move_project_file/move_file 四个 DB 感知文件树原语——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(1)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。
+- tools/：FileTools(13，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(2，dev-board #53：task_create/task_list，项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。
 
 **记忆/证据/MCP/子 Agent**
 - memory/：MemoryPipelineService（轮次结束异步触发写侧管线）、MemoryManager（检索）、AgenticRetriever、MemCellExtractor、ProjectMemoryExtractor、MemoryEvidenceFormatter（证据账本：时间锚点/来源/更新信号，PR#155）。记忆五作用域 + 拟人化排序（重要性×衰减×随机）。
@@ -80,13 +128,16 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 **可靠性层（2026-08 harness 加固，治"跑一半停了"）**
 - LLM timeout 600s（application.yml open-router.timeout；0.36 的单值=OkHttp callTimeout 整通墙钟上限，不是空闲超时）。
-- **流式模型必须 `logResponses(false)`（`ChatModelFactory.streamingBuilder`，两个流式通道共用的唯一构建口径）**。这不是调优是可靠性契约，改回 true 会让**整个传输层错误处理静默失效**：openai4j 0.23 的 `StreamingRequestExecutor$2.onFailure` 在该开关打开时先调 `ResponseLoggingInterceptor.log(response)` 再走 errorHandler，而 okhttp-sse 的 `RealEventSource.onFailure(call, e)` 在「连接失败/被断、压根没拿到响应」这条路径上传的 response **恒为 null**（另一条 `processResponse` 失败分支才是 t==null/response!=null，两者互斥，所以 response 为 null 时 t 必非 null），于是 `response.code()` 抛 NPE；`onFailure` 只 catch IOException，NPE 掀掉 OkHttp Dispatcher 线程，**紧随其后的 errorHandler 那一行永远走不到**。表现：本轮既不 onComplete 也不 onError，SSE 零字节，只能等看门狗兜底；后端日志里唯一痕迹是 `Exception in thread "OkHttp Dispatcher" ... Cannot invoke "okhttp3.Response.code()" because "response" is null`。**排障陷阱**：真正的 IOException 在这条路上被彻底销毁（`LOGGER.debug("onFailure()", t)` 那行本身也在开关内、且全仓无 logging 级别配置停在 INFO 不打印），所以「日志里只有 NPE、看不到网络错误」不代表网络没问题——修好这个开关才拿得到底层异常。回归守护 `StreamingTransportFailureTest`（连不上必须回调 onError；它走工厂那份真实 builder，用例里自己拼 builder 就永远是绿的）。非流式 `OpenAiChatModel` 走 SyncRequestExecutor 没这条路径，**所以「辅助模型秒回成功」不能用来证明流式通道的网络正常**（不同 executor、不同 OkHttpClient/连接池、且不带工具定义）。
+- **流式通道是自有的 `service/ai/OpenRouterStreamingChatModel`，不再是 langchain4j 0.36 的 `OpenAiStreamingChatModel`（2026-09-02，dev-board#364）**。唯一构建口径 `ChatModelFactory.streamingModel(apiKey, baseUrl, modelId, timeout)`，平台通道与 BYOK 两个流式路径都走它；Ollama 流式仍是 langchain4j 的。换实现的直接原因是**思考型模型**：OpenRouter 对 Kimi K3（`moonshotai/kimi-k3`）这类模型从第 4 秒起就流式返回 `delta.reasoning`（真机探测：每个思考 chunk 是 `content:""` + `reasoning:"…"` + `reasoning_details:[…]`，前面夹 `: OPENROUTER PROCESSING` 注释保活），而 openai4j 0.23 的 `Delta` 只有 role/content/toolCalls/functionCall 四个字段，reasoning 在反序列化那一刻就丢了、注释行被 okhttp-sse 静默吞掉，langchain4j 只对非 null 的 content 调 `onNext`——于是几百秒的思考期间编排器收到的全是 `onNext("")`（**恰好把看门狗喂活、又一个字节都不往前端发**），用户看到的就是「思考中 281 秒、什么都没有、分不清死机还是在想」。这条流在 langchain4j 那一层没有任何钩子能拿到 reasoning，所以只能自己读 HTTP/SSE。**刻意复用不重写**：`InternalOpenAiHelper.toOpenAiMessages/toTools`（含 ImageContent 编组）、openai4j 的 `Json`（请求体，snake_case + NON_NULL + INDENT_OUTPUT——**断言请求体时先去空白**）、`OpenAiStreamingResponseBuilder`（tool_calls 按 index 拼装、usage、finish_reason），本类只管 HTTP + SSE 行协议 + 多转发两条通道。与旧实现对齐的请求参数：`stream=true`、`stream_options.include_usage=true`、`temperature=0.7`；错误语义对齐：非 2xx 抛 `OpenAiHttpException(code, body)`（`LlmErrorClassifier` 按状态码分类），IOException 原样 onError，**HTTP 200 里用 data 事件送来的 `{"error":{...}}` 也当错误**（旧实现会按空回复静默收尾）。护栏 `OpenRouterStreamingChatModelTest`（假服务端回放真机抓到的片段形状）+ `StreamingTransportFailureTest`（连不上必须 onError；它走工厂那份真实口径）。**旧的 `logResponses(false)` 地雷随之消失**（openai4j 的 `StreamingRequestExecutor$2.onFailure` 在 response==null 时先调 `ResponseLoggingInterceptor.log` 抛 NPE、errorHandler 永远走不到），但非流式 `OpenAiChatModel` 仍必须 `logRequests(false)`（请求体物化，理由在 `streamingModel` 的 javadoc）。**「辅助模型秒回成功」仍不能用来证明流式通道的网络正常**（不同 HTTP 客户端/连接池、且不带工具定义）。
+  - **`ReasoningStreamingHandler`**（extends `StreamingResponseHandler<AiMessage>`）多三个 default 方法：`onReasoning(delta)`、`onKeepAlive()` 与 `onCacheUsage(promptTokens, cachedTokens, cacheWriteTokens)`（提示缓存，见上文「提示缓存」一节）。客户端只对 `instanceof` 这个接口的 handler 转发，回放评测与各测试的脚本模型按老接口写不受影响。`AgentStreamHandler` 实现它：reasoning → SSE `reasoning_delta`（**不进 fullContentBuilder、不进编辑器流、不过标签解析**：思考文本不是正文，不落库、不回喂模型——契约 D）；两者都刷新看门狗的 `lastActivityNanos`。**`streamedAnyReasoning` 与 `streamedAnyToken` 刻意分开**：看门狗选时限时任一为真都算「流已开始」（思考几分钟是正常的，改用 180s 停滞时限），而编排器的「可安全重放」判定仍只看正文——思考卡重放一遍无害，正文重放才会让用户看到重复内容。护栏 `AgentStreamHandlerReasoningTest`。
+  - **看门狗首字节 60s 保持不变**：真正的零字节死流仍在 60s 被掐；思考型模型靠 reasoning 增量 + OpenRouter 保活注释刷新活动时间，不会再被误杀。**注意 K3 的思考也是按输出单价计费的**（$15/M），思考 281 秒的那一轮反复被掐重放会成倍烧钱——这就是首字节时限不能靠「调大」而必须靠「认得出模型还活着」来解决的原因。
+  - **前端**：`useAgentStream.handleEvent` 认 `reasoning_delta` → `appendReasoning()`——没有过程卡时写顶层 `bubble.thinking.content`（ghost 态的 ThinkingCard 实时滚动显示），已有工具过程后挂到最后一个过程卡的 thinking 条目（与 `<thinking>` 标签的落点同口径，否则第二轮起的思考会把首轮顶层卡的时长越算越长）。**不过 `processTextStream`**：思考文本里出现 `<final>` 字样只是模型自言自语。等待首 token 的活性计数本来就有（`sendMessage` 起算 `thinking.startTime`，ThinkingCard 按 `chat.thinkingLive` 读秒）；新增的是 **SSE 链路状态 `linkStatus`**（`{state:'live'|'reconnecting', attempt}`，`scheduleReconnect` 置 reconnecting、建连成功与 `resetSSE` 回 live），ChatInterface 输入区据此渲染 `chat.linkReconnecting` 提示条——之前断线重连只写 console.warn，用户看到的是计时器一直走、分不清模型在想还是连接死了。**前端判死阈值 `HEARTBEAT_STALE_MS=45000` = 后端 `SseEmitterService.HEARTBEAT_INTERVAL_SECONDS=15` 的 3 倍**，两边任一改动都要同步（`reasoning-stream.test.mjs` 与 `SseEmitterServiceTest.heartbeatSweepReachesEveryLiveConnection` 各守一侧）。Office 插件的 `sse.js` 对未知事件名直接忽略，`reasoning_delta` 不影响任务窗格。
 - **「AI 全线连不上」优先怀疑 JVM 里冻住的代理端口，不要先怀疑密钥或网络**（2026-08-16 实证，两个 e2e home + 用户真机三处复现）。macOS 上**任何 JVM 启动时都会把系统代理设置自动灌进** `http(s).proxyHost/Port` 系统属性——**不需要任何 `-D`、不需要 `JAVA_TOOL_OPTIONS`**（裸 `java Foo.java` 就已经有 `https.proxyHost=127.0.0.1`），OkHttp 走 `ProxySelector.getDefault()` 于是全部 AI 流量被送去本地代理端口。桌面后端是**长命 JVM**（开 app 起、连跑数天），启动那刻把端口**冻住**；用户的代理工具换端口或重启后（实测 1235 → 8234），后端仍在拨旧端口，**每一个 AI 请求都 `ConnectException: Connection refused`**。
   - 判定三件套：`jcmd <后端PID> VM.system_properties | grep proxy` 拿 JVM 冻住的端口 → `scutil --proxy` 拿系统当前端口 → `nc -z 127.0.0.1 <旧端口>` 确认旧端口已死。两者不一致就是它。
   - **已自愈**：`service/SystemProxyRefresher.java` 每 60s 对齐一次（`scutil --proxy` → `System.setProperty`），开关 `network.proxy.auto-refresh`（默认 true）。成立前提是 `DefaultProxySelector` 每次 `select()` 都重读系统属性、运行期 `setProperty` 立即生效（由 `SystemProxyRefresherTest` 的端到端用例守住）；**运行期打开 `java.net.useSystemProxies` 无效**（类初始化时固化，返 DIRECT），所以只能自己读 OS 再写属性。启用条件刻意收窄成「macOS + 启动时继承到回环代理」：非回环的企业代理端口稳定，动它只有风险。**启动时系统没开代理的情况不接管**（没有被冻住的旧端口，不存在要治的病），那种情况仍靠重启后端。老版本（≤ v0.16.0）没有这层自愈，临时解仍是重启 app。
   - **表现极具迷惑性，两个假信号**：① 修复前流式路撞上文那个 NPE 被吞、静默 180s，日志里只有 NPE 看不到 ConnectException；② **同步路（辅助模型起标题/记忆/分类器）会「秒回」**——但那是 RetryUtils 重试 3 次约 1.4s 全败后写入的**兜底字面量「新对话」**，不是成功。**排障时先看标题是不是字面量「新对话」**，别拿它当"通道正常"的证据。
   - **找日志别找错地方**：`-Duser.home=` 会整体改写 `~/.aiworkdeck` 的位置，e2e 后端的日志在 `<user.home>/run/backend.log`。在真实 `~/.aiworkdeck/logs/backend.log` 里翻 e2e 的证据只会得出「什么都没有」的错误结论。
-- `AgentStreamHandler`：终态幂等（AtomicBoolean terminated）+ **流看门狗** armInactivityWatchdog(**首字节 60s / 停滞 180s**，5s 轮询)——两条时限刻意分开：停滞时限要照顾「生成长工具参数时中途静默几十秒」所以必须给足，而「从头到尾零字节」没有这种正当理由，合成一个值就是让用户干等三分钟。首字节这条只在 `streamedAnyToken == false` 时生效，而这恰好就是编排器判定「可安全重放」的条件，所以误杀代价上限是白跑一轮、不会让用户看到重复或半截内容。守护 `AgentStreamWatchdogTest`。
+- `AgentStreamHandler`：终态幂等（AtomicBoolean terminated）+ **流看门狗** armInactivityWatchdog(**首字节 60s / 停滞 180s**，5s 轮询)——两条时限刻意分开：停滞时限要照顾「生成长工具参数时中途静默几十秒」所以必须给足，而「从头到尾零字节」没有这种正当理由，合成一个值就是让用户干等三分钟。首字节这条只在 `streamedAnyToken == false && streamedAnyReasoning == false` 时生效（前者恰好是编排器判定「可安全重放」的条件），所以误杀代价上限是白跑一轮、不会让用户看到重复或半截内容；思考增量与 OpenRouter 保活注释（`onReasoning` / `onKeepAlive`）都刷新活动时间，思考型模型静默几分钟不会被首字节时限掐掉。守护 `AgentStreamWatchdogTest` + `AgentStreamHandlerReasoningTest`。
 - `AgentOrchestrator.setOnError`：失败按 `LlmErrorClassifier.Kind` 分类（**七类**：RATE_LIMITED / TRANSIENT / MODEL_UNAVAILABLE / REGION_BLOCKED / **QUOTA_EXHAUSTED** / **CONTEXT_OVERFLOW** / FATAL，OpenAiHttpException 的结构化状态码优先于文本匹配），且**零 token 已流出**才允许重放。限流退避 30/60s ×2（限流窗口按分钟计，用 8/16/32 会在同一窗口连撞三次白烧预算），瞬时 8/16/32s ×3（RunGuard.llmRetries，成功轮与切模型后清零）；用户文案两套，限流说「限流等待中」不说「服务不可用」。
 - **QUOTA_EXHAUSTED = 配额/余额耗尽**（2026-08 对标 dsh）：402、或 4xx + 配额语义（insufficient credits/quota/balance、quota exceeded、余额不足…）。**判定先于 429**——余额耗尽很多服务商也回 429，但它是终局：不退避（重试白烧）、不换模型（同一账户换哪个都没钱）。SSE error 载荷带 `AI_QUOTA_EXHAUSTED` 标记（`LlmErrorClassifier.QUOTA_EXHAUSTED_MARKER`），前端 useAgentStream includes 命中换中文引导（自备 Key 去服务商充值 / 平台通道去官网查额度分配）。
 - **CONTEXT_OVERFLOW = 上下文超窗**（400 + 上下文语义，先于通用 400→FATAL 判定）：不退避（原样重发必撞同一个 400）、不走故障转移链，走**专用恢复通道**——`RunLoopCompactor.forceCompact`（跳过阈值判断）强制压缩后同 depth 重放一次。**重试凭证 = compact 返回了新实例（确实缩小了）**，压不动直接终态（载荷带 `AI_CONTEXT_OVERFLOW` 标记换中文引导）。预算 `RunGuard.overflowCompactions` 1 次/轮，成功轮清零（长任务「涨→压→涨→压」合法）。存在意义：主动 compaction 靠 chars/token=2 估算，中文语料系统性低估，服务商的 400 是最后的事实来源。
@@ -96,6 +147,20 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **自动 compaction**（`context/RunLoopCompactor` + `ai.context.compaction`）：runLoop 每轮 generate 前估算 token，超「历史可用预算 × 0.8」时把中段折叠成一条摘要，保留 system prompt + 首条用户消息 + 最近 8 条。**结构感知**：保留段绝不以 ToolExecutionResultMessage 打头（拆散 tool_calls 配对会让 OpenAI 兼容通道直接 400），这也是不能直接复用 ContextCompressor 的原因——那套会把消息重建成纯文本、抹掉 toolExecutionRequests。摘要本地生成不调 LLM（交互路径中间插同步 LLM 调用等于新增一处卡死成因），上一版摘要会并进新摘要。压缩失败一律原样继续；中段不足 4 条不压，回放评测用例碰不到阈值。
   - **剪枝先于折叠**（2026-08 对标 dsh tool-result-pruner）：触发后先把中段（keepRecent 尾部**刻意不动**——模型正在引用）超过 8192 字符的工具结果剪成首 4096 + 尾 1024 + 省略标记（`PRUNE_MARKER`，提示模型要全文重调工具），只改正文不动 id/toolName（配对不断）；剪完重估、够了就完全不折叠。**必须变小**：折叠后估算不降反升就放弃折叠退回剪枝版（小中段的摘要头开销会得不偿失，溢出恢复还会拿着更大的栈白撞 400）。
   - `forceCompact(messages, modelId)`：CONTEXT_OVERFLOW 恢复通道专用，跳过阈值判断做剪枝 + 折叠；返回原实例 = 压不动（调用方据此放弃重试）。
+- **步数预算与批量原语（改文件类工具前必读，dev-board#419 / #466）**：预算按 **LLM 轮数**计，不是按工具调用数——
+  一轮里发 N 个工具调用只花 1 步（原生分支与 XML 兜底分支都是执行完本轮全部调用才 `runLoop(depth+1)`）。
+  所以「一次要改/搬很多个对象」的任务，成败取决于**有没有一个批量原语**、以及**有没有在末位逼模型用它**：
+  弱模型（Kimi 实证）一轮只发一个调用，十几个对象就把 30 步用光，任务干到一半 `bubble_end reason=max_depth` 暂停。
+  今天有两个：`office_replace_batch`（Word 面多处替换，#419）与 `move_files_batch`（项目文件树批量移动，#466）。
+  两者的形状必须一致，新增同类原语照抄：**≤50 条 / 形状校验全部前置 / 逐条回报 `moved: N` + FAILED 段 /
+  明说「只重试 FAILED、绝不整批重发」**（整批重发会把已成功的做第二遍）/ `@ToolMeta(refreshFiles = true)` 每次调用只刷一次。
+  **`move_files_batch` 的索引契约**：`dbPathIndex` 一次建、**每成功一项后重建**——批内先建的目标文件夹、改过的路径
+  必须对后续条目可见，拿旧索引接着走会静默解析到过时位置。缺失的目标文件夹由 `ensureFolderPath` 自动补建，
+  所以「先 create_folder 再逐个 move」那条链整条不需要。`move_file` 与 `move_files_batch` 共用私有 `moveOnePath`，
+  两个入口对同一件事的拒绝理由不能有出入。**批量不是原子的**：物理文件已搬走的回滚不了（`delete_file` 停用、
+  移动也没有回收站），所以单条失败只记账不掀翻整批，成功清单逐条写明目的地供用户核对。
+  **刻意不抬 MAX_LOOP_DEPTH**：#422 的 `min(30+块数,120)` 是有状态源（`OfficePassStateStore.totalChunks`）兜底的，
+  文件整理没有等价状态源，抬平会让所有失控轮次的最坏烧钱翻倍，而暂停本身正是成本闸。
 - **StuckDetector**（先干预后熔断）：RunGuard 的单槽 lastCallSignature 换成 6 格滑动窗口，识别 A/A/A 与 **A/B/A/B 交替**（旧实现对交替完全无感，一路空转到步数预算耗尽）。首次检出只往 **messages 末位**追加 `[系统提醒]` UserMessage、工具照常执行；二次检出才拒绝执行并回喂 `Error:` 前缀的熔断反馈。末位是硬要求——只写 system prompt 的约束会被弱模型无视（PR#209 实证）。
 - 截断 `<tool_code>`（有开无闭）不再静默正常收尾：回喂纠正提示重试，最多 2 轮（RunGuard.malformedToolRounds）。
 - **工具执行期可取消**：两条工具循环（原生分支与 XML 兜底分支）都在**每个工具执行前**查一次 `isCancelled`，命中即 `handleCancellation` 并丢弃本轮剩余工具。此前只在 runLoop 入口与 onComplete 开头各查一次，于是「停止」在 `dispatch_subtask`（可跑 630 秒）或 AI PPT（十几分钟）中间完全不生效。已跑完的工具副作用不回滚（取消的固有语义）。**新增工具循环必须带这个检查点**。
@@ -106,7 +171,21 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - 线程池：`config/AsyncExecutorConfig.java` 显式 taskExecutor(16/32/队列200) + memoryExecutor(2/4)——MemoryPipelineService 的同步 LLM 调用已隔离，别再挂回 taskExecutor。
 - 进程重启续跑（二期）：run 状态持久化 + 启动回收，见上文 AgentRunStateService / AgentRunRecoveryService。只有 RUNNING 跨重启复活（回收成 INTERRUPTED），FINISHED/ERROR/CANCELLED 仍是进程内状态，避免僵尸状态。
 
+**轮次隔离：runId / RunGuard（2026-09-09，dev-board#533；审计「留给维护者拍板」第 2、4 条的落地）**
+- **一次 `POST /api/agent/chat` = 一个轮次 = 一个 runId**（`AgentOrchestrator.beginRun` 现签 UUID，进程内唯一、不入库、不上 SSE）。`AgentOrchestrator.RunGuard` 现在持有本轮的**全部**状态：conversationId、runId、SSE 连接代次、取消标志（AtomicBoolean）、流式缓冲（同步的 StringBuilder）、本轮 ASSISTANT 行 id，外加原有的 StuckDetector / triedModels / llmRetries / malformedToolRounds / overflowCompactions / activeFileId。**改造前这四样都是 `conversationId -> 单槽` 的 map**，同一会话两个并发轮次（双击发送 / 两个标签页 / 客户端重试 / 手机端镜像同一会话）必然互相踩：后起一轮把行 id 槽清掉，先起那一轮收尾时拿到**别人的行 id** 去 update（两轮合并成一行、一轮的正文永久消失）；后起一轮开头无条件 `cancelledConversations.remove(cid)`，把上一轮尚未生效的取消标志擦掉（用户点了停止，旧轮次一路跑到底继续烧 token、继续改文档）。
+- **`activeRuns`（conversationId → 当前轮次的 RunGuard）是唯一的解析入口**：`POST /cancel/{cid}` → `setCancelled` 解析出当前活跃 runId 再置位；`/connect/{cid}` 的断线恢复快照 `getRecoverySnapshot` 同样按它解析。**没有活跃轮次时 cancel 是 no-op**——这是刻意的语义改变：会话级的粘性取消标志正是要消灭的缺陷（它会误杀「停止后立刻再发」的新一轮）。前端 `useAgentStream.abort()` 先 `await` 掉 POST /cancel 再拆本地 SSE，用户随后手动发的新消息必然排在后面，顺序天然正确。**轮次登记同步发生在控制器线程上**（2026-09-09 补齐）：`handleUserMessage` 不再整体挂 `@Async`——`beginRun` 在返回给控制器之前完成，之后才把循环本体提交给 `taskExecutor`（线程池经 `setTurnExecutor` 方法注入，**刻意不进构造器**：本类构造器由 `@RequiredArgsConstructor` 生成，加字段就要同步改 EvalHarness 与九个编排器测试；字段为空时就地同步执行，正是各单测与回放评测里 `new AgentOrchestrator(...)` 的既有行为）。此前「chat 已返回 200、池线程还没执行 beginRun」那个空窗里发来的 cancel 会**整个落空**（云端 taskExecutor 打满时窗口会放大到秒级），用户点了停止却眼看着它继续写文档、继续烧 token；现在窗口不存在——起跑后第一件事就是 `runLoop` 顶部的取消检查，模型一次都不会被调用。提交被有界队列的 AbortPolicy 拒绝时先 `endRun` 撤销登记再把异常原样抛回控制器，不留「有活跃轮次但什么都没跑」的幽灵。
+- **被取代的旧轮次继续跑完，但对会话级状态全程静默**（`isCurrentRun` 判据 = `activeRuns.get(cid) == guard`）：run_state 状态点（`markRunState`）、`bubble_end` / `cancelled` / `error` / `doc_stream_end` / `text_delta` / `skill_update`（`sendRunEvent`）、`closeSse`、`officePassStateStore.clear` 一律跳过。不这样的话旧轮次的一个 `bubble_end` 就能把新轮次的气泡当场结束掉，一次 `mark(FINISHED)` 就能把新轮次的 RUNNING 盖成终态。**它自己的东西照写**：消息行、执行日志、重试预算——所以两轮的回复在历史里各自完整，这正是回归用例断言的东西。刻意不强杀旧轮次：工具副作用（已写进文档、已发出的请求）回滚不了，跑完不比半路掐更危险。
+- **`SkillRouter` 的登记簿改按 runId 索引**（`activeByRun`，原 `activeByConversation`）：`activateForTurn(conversationId, runId, …)`（conversationId 只用于埋点归属）、`activeSkills(runId)` / `activeSkill(runId)` / `visibleTools(runId, …)`、新增 `clearRun(runId)` 由编排器在每条终态路径上调。本类不再持有任何 conversationId 级的可变状态。`ContextAssemblerService.assemble` 因此多了一个 **`runId` 形参（第 2 位）**——prompt 注入与工具白名单必须读同一轮的生效集合，这条「同源」契约在并发下只有按 runId 才成立。
+- **流式增量也过轮次闸**（2026-09-09 补齐）：`AgentStreamHandler` 构造器多了第 8 个参数 `BooleanSupplier currentRunGate`，编排器传 `() -> isCurrentRun(guard)`。本类所有会话级 SSE 出口收进私有的 `sendSse`（`text_delta` / `reasoning_delta` / `bubble_start` / `artifact` / `token_usage`，以及无编排器回调时的 `bubble_end` 与 `error`+close），闸关就静默丢弃；`runLoop` 里 `setOnEditorStream` 的回调体整体加了 `isCurrentRun(guard)` 前置判断（`doc_stream_data` / `wps_stream_data` 与 `noteStreamContent` 都按 conversationId 寻址，是会话级的）。**闸只管往 emitter 上发什么**：本轮的内容累积、看门狗、终态幂等、`onToken` / `onEditorStream` / `onComplete` / `onError` 回调一概不受影响——被取代的旧轮次照常跑到自己的终态、落自己的库，只是对 SSE 完全静默。七参构造器保留（恒开闸），给无轮次概念的调用方与三个既有 handler 单测用；**编排器必须走带闸的重载**。
+- **对外契约零变化**：SSE 事件名与载荷、`/api/agent/chat` 与 `/api/agent/connect/{id}` 的请求响应形态一字未动，runId 不出现在任何载荷里；前端与 Office/WPS 插件不需要改。
+- **仍然存在的已知局限（刻意没做）**：① 埋点 `TelemetryTurnTracker` 仍按 conversationId 记，被取代那一轮的 `ai.turn` 不会闭合；② 跨进程重启的 `AgentRunRecoveryService` 仍按 conversationId 回收（重启后进程内一个 RunGuard 都不剩，`agent_run_record` 每会话一行仍然正确，加 runId 列没有消费者）；③ 旧轮次收尾时仍会执行 `editorBridgeService.setStreamingMode(cid, false)`，把新轮次正在进行的编辑器流式写入模式一起关掉。**这里刻意没加闸**：流式模式是工具打开、收尾关闭的会话级开关，给旧轮次加闸只会换成「旧轮次开的流式模式永远不关」这种更难查的泄漏；正确修法是把流式模式本身做成轮次级状态，属 ai-doc-bridge 领域。
+
 **前端消费**
+- **对话分层与常驻进度（2026-09-10，dev-board#584）**：`ChatInterface` 通过 `AgentMessage/chatTurns.mjs` 按 USER 分轮，保留原 bubbles 与全局索引。主消息中的 `RootBubble` 使用 `hideActivity`，只保留正文/产物/反问/停止提示；每轮一个入口打开 `TurnActivityPanel`（任务、模型返回的思考记录、完整执行记录、轮次定位）。固定入口在消息滚动区外，浮层内部限高滚动，待回答/审批有常驻定位按钮；后台任务取消仍走原来的输入区与 BackgroundTaskIndicator，不混用生命周期。
+  - 任务跨轮继承直到 todo_write 覆写，不能在 sendMessage 清空全局 planTodos；新 assistant bubble 复制当前快照。历史从成功的 JSON todo_write 参数恢复快照，无法解析的旧格式保留原执行记录，不猜造任务。历史/暂停清单的 in_progress 是最后记录状态，TodoProgressCard `live=false` 不显示动态执行文案或转圈。
+  - `useChatReadingPosition` 观察实际消息内容高度（ResizeObserver），仅在 followLatest 时贴底。向上阅读/定位历史暂停跟随，点击“回到最新”恢复；禁止重新加 bubbles 全树 deep watcher。导航仅滚动本聊天容器。
+  - 历史 root thinking/final 在剥离 process 后全量提取，保留多段回复；嵌套 thinking 留在对应 process。此改动不重写 bubble_start 或服务端消息持久化边界。`input_applied` 切换 assistant 段前必须先 `flushRemainingBuffer()`，否则上一段无标签正文会被 resetParser 静默丢弃（question-stream.test.mjs 定向回归）。
+  - 回归：`npm run test:project-home`、`npm run test:tag-protocol`；浏览器真实 Vue 组件 + 合成历史/SSE 边界夹具：`node tests/chat-presentation-ui/run.mjs`（Chrome 路径可用 CHROME_PATH 覆盖；无需真实模型或业务数据）。
 - `frontend/src/composables/useAgentStream.js`（1233 行）— SSE 核心：connectSSE（fetch+ReadableStream，非 EventSource）、sendMessage、abort、handleEvent（~:352 分派）、handleTag/processTextDelta（XML 标签驱动气泡组装）、handleStateRecovery。
 - `frontend/src/components/ChatInterface.vue`（3620 行）+ `AgentMessage/`（RootBubble/ProcessCard/ThinkingCard/TodoProgressCard/WalkthroughCard/TitleCard/**QuestionCard**/**SubtaskResultCard**）。
 - **反问卡（`AgentMessage/QuestionCard.vue`）**：`<question>`/`<option>` 由 useAgentStream 解析成气泡上的 `question={text,options,answered}`，**反问正文不进 `bubble.content`**——卡片不接这个字段等于正文对用户不可见。`<option>` 只在 question 作用域内当标签（正文里的字面量 `<option>` 不造问题卡）。卡片挂在 RootBubble 的 main-content 之后，正文为空时只渲染选项（兼容正文仍在 content 的旧格式，防显示两遍）；可操作性沿用 `isLatest && !isStreaming && !answered` 那条链；`RootBubble.isReady/hasContent` **必须把「只有 question」也算作有可见产出**，漏了整条气泡会卡在 ghost thinking 态。点选项 = `sendMessage({prompt: 选项原文})`，**不拼「我选择了 X」**（契约 D：选项本来就短、像用户自己打的）。
@@ -118,9 +197,19 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - `step_update` 前端分派与 `handleStepUpdate` **已删**（后端零生产者）。`subtask_progress` 改推 `proc.items` 而不是 `proc.steps`——ProcessCard 里 items 与 steps 是 v-if/v-else-if 关系，解析器建的过程卡都有 items，往 steps 推永远不显示（此前子任务状态行就是这么半死的）。
 - **计划审批卡（2026-08）**：ArtifactCard 对 task_list/plan/implementation_plan 三类 draft 计划内联渲染正文并给「按此推进 / 修订」按钮（仅最新一条助手消息可操作，RootBubble 的 isLatest→actionable 链）；修订态就地编辑，提交时行级 LCS 统计改动处数，handleArtifactApprove 把「已修订 N 处 + 修订版全文」回喂模型。工具过程卡一律收进可折叠组（无步骤归属的归「执行过程」组），流式中展开最新组、结束后全收起。
 
+## 2026-09-10 记忆与运行中输入（dev-board #559–563）
+
+- `AgentInboxService` / `AgentInboxController` / `AgentInboxItem` 以 DB 保存输入、完整附件上下文、幂等键及 revision。`POST /api/agent/chat` 返回 receipt，正在运行时默认 steer，可选 queue；编辑/排序/删除只针对 pending。删除保留幂等 tombstone。每会话锁覆盖 claim/register/finalize，模型执行在锁外；目前单后端消费，不能将进程锁当成多实例租约。
+- `inbox_updated` 是权威快照；`input_applied` 携带 messageId/runId/sequence。最初 POST 靠 receipt 显示，不重复发 applied；自动接续先发新 run 快照再发 applied。原生/XML 工具批次在安全边界应用新指令，未开始的旧工具回填取消结果；已经执行的副作用保留。取消/错误/待审批/待回答/无进展均暂停队列；只有明确“立即发送”才主动启动暂停队列中的该项。
+- 前端 `AgentInbox.vue`、`agentInboxState.mjs` 与 `chatSubmissionState.mjs` 管理队列、事件去重和提交事务。发送与停止分开，执行中可输入；新会话只断开本地视图，旧会话继续。迟到 receipt 不得清空新会话草稿；附件草稿按原始 HTML 快照比较。
+- `service/ai/memory/document/*`、`MemoryDocumentController`、`MemoryDocument`/`MemoryDocumentSpace` 是 Markdown 记忆真源。`/api/ai/memory/{spaces,files,file,download}`；个人/项目使用权限校验后的 opaque spaceId，团队/律所由官网共享服务校验成员/管理员。每空间 remember.md 自动维护 topic 链接；UTF-8 128 KiB、路径校验、expectedRevision 冲突及删除墓碑由后端负责。legacy 读写/同步向同一文档服务收敛，不保留可独立写入的副本。
+- `MemoryTools` 暴露 memory_list/read/search/write/edit/delete；Agent/Plan 的 skill 白名单不能隐藏这些基础工具，ASK 只允许前三个。ContextAssembler 每轮注入有权限的限量索引，正文按需由模型读取。`MemoryBrowser.vue` 从对话与设置进入，支持索引跳转、编辑、下载及冲突提示。
+- 桌面共享记忆使用已连接账户 Bearer；服务器使用专用 `memory.shared.base-url`/`memory.shared.secret` 与绑定账户 ID，不能复用只读协作目录密钥。官网配套契约与 PR 见 `doc/ai-alignment/memory-report.md`；无账户/服务未配置的共享空间显示不可用，不能伪装成本地共享。
+- 测试与实际结果：`doc/ai-alignment/validation-report.md`；隔离运行配方：`doc/ai-alignment/test-environment.md`。不可将模拟 provider E2E 称为真实模型测试。
+
 ## 一条消息的完整链路
 
-ChatInterface.handleSubmit（~:927）→ useAgentStream.sendMessage（确保 SSE 已连 → POST /chat）→ Controller 异步 200 → handleUserMessage（@Async：存 USER 消息→标题→SkillRouter.activateForTurn→assemble→取流式模型→mark(RUNNING)→runLoop）→ StreamHandler.onNext 逐 token 发 SSE → onComplete 回调检测工具请求（原生 function calling 或 XML 兜底）→ dispatchTool→ToolRegistry.execute→副作用（file_change/refresh_files）→ 结果追加 messages → **递归 runLoop(depth+1)** → 无工具时收尾：artifact 解析（implementation_plan 停机待审批/task_list 继续）→ **反问停机（`<question>` → AWAITING_INPUT）** → 存 ASSISTANT → MemoryPipeline 异步 → mark(FINISHED) → bubble_end → 关 SSE。
+ChatInterface.handleSubmit（~:927）→ useAgentStream.sendMessage（确保 SSE 已连 → POST /chat）→ Controller 异步 200 → handleUserMessage（@Async：存 USER 消息→标题→SkillRouter.activateForTurn（手动 skillIds ∪ 自动命中）→发 skill_update→assemble→取流式模型→mark(RUNNING)→runLoop）→ StreamHandler.onNext 逐 token 发 SSE → onComplete 回调检测工具请求（原生 function calling 或 XML 兜底）→ dispatchTool→ToolRegistry.execute→副作用（file_change/refresh_files）→ 结果追加 messages → **递归 runLoop(depth+1)** → 无工具时收尾：artifact 解析（implementation_plan 停机待审批/task_list 继续）→ **反问停机（`<question>` → AWAITING_INPUT）** → 存 ASSISTANT → MemoryPipeline 异步 → mark(FINISHED) → bubble_end → 关 SSE。
 
 **反问停机（`<question>`）的实现契约**（`AgentOrchestrator.containsQuestion` / `stopForUserQuestion`）：
 - 判据只认**起始标签** `<question` 后接空白/`/`/`>`（正则 `QUESTION_TAG_START`，忽略大小写）。刻意不要求闭合标签：模型漏掉 `</question>` 时问句已经流给用户看了，按「有问题」停机远好过静默收尾——后者会留下一个没有下文的问句而状态显示已完成。`<questionnaire>` 这类同前缀标签不会误命中（有测试钉住）。
@@ -134,7 +223,15 @@ ChatInterface.handleSubmit（~:927）→ useAgentStream.sendMessage（确保 SSE
 
 ## SSE 事件名清单
 
-connected / bubble_start / text_delta / artifact / token_usage / bubble_end（status: finished|paused|awaiting_approval|awaiting_input）/ error / cancelled / file_change / client_action / title_update / doc_stream_data（旧名 wps_stream_data 双轨待摘）/ state_recovery（断线重连快照）/ run_state / plan_update / background_task_start|complete / task_progress / heartbeat / subtask_progress。前端分派均在 useAgentStream.handleEvent。超限 paused 契约见 PR#172。
+connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的 reasoning 增量，`{"content":"…"}`，只进思考卡、不进正文与历史；state_recovery 快照不含它，重连后思考文本不回放）/ artifact / token_usage / bubble_end（status: finished|paused|awaiting_approval|awaiting_input）/ error / cancelled / file_change / client_action / title_update / doc_stream_data（旧名 wps_stream_data 双轨待摘）/ state_recovery（断线重连快照）/ run_state / plan_update / **skill_update** / background_task_start|complete / task_progress / heartbeat / subtask_progress / **pass_progress**（整篇分段过卷进度，dev-board#422）。前端分派均在 useAgentStream.handleEvent。超限 paused 契约见 PR#172。
+
+**`pass_progress`（整篇分段过卷进度）**：载荷 `{"chunk":3,"total":12,"replaced":7,"done":false}`——`chunk`/`total` 是块序号与总块数（1 起），`replaced` 是**全程累计**成功改动处数（不是本块的），`done=true` 表示过卷结束（收尾或 stop）。生产者只有 `OfficeEditTools.office_pass_step`，每次返回后发一条。消费者目前只有 Office/WPS 任务窗格（`office-addin/taskpane/lib/chatSession.js` 的 `passProgress`），主前端 useAgentStream 未消费（桌面端走 LOWA，没有这个工具）。纯展示：发不出去不影响工具结果，客户端收到坏载荷也只是静默忽略。**`done` 之后客户端必须归位**——挂着「12/12 段」比不显示更误导。
+
+**`skill_update`（本轮生效的 skill 清单）**：载荷 `{"skills":[{"id","name","source"}]}`，source ∈ `auto`（触发词自动命中）/ `manual`（用户在面板里主动选的，含旧字段 pinnedSkillId）；`name` 已由 `SkillRouter.displayName` 按应用语言解析（en 优先 name_en）。生产者只有 `AgentOrchestrator`，紧跟 `activateForTurn` 之后发一次。
+- **每轮必发、空也发**：前端拿它做整表覆写（`useAgentStream.activeSkills`），漏发一次上一轮的 chip 就一直挂着，用户以为某个技能还生效着。
+- **ASK 模式恒发空列表**：该模式不传工具、ContextAssembler 也跳过 skill 注入，手动选择在 ASK 下不参与激活——不让「面板亮着 skill、实际什么都没注入」这种显示与实际不一致的状态出现。
+- 前端分派放在**气泡守卫之前**（与 plan_update 同理）：切回会话/重连时 `currentAssistantBubble` 为 null，挂守卫后面就再也收不到。
+- 「新出现的自动命中 skill」才触发 chip 闪现 + toast（`skillNotice`），手动选的和连续几轮都命中的同一枚都不闪——那是噪音不是信息。
 
 ## ChatInterface.vue 内部地图
 
@@ -146,8 +243,120 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 ## 已知地雷
 
+- **SSE 长连接端点不许持有 JPA EntityManager（v0.38.3 走查 D1）**：`spring.jpa.open-in-view` 从未配置、走默认 true，
+  OSIV 会把 connect 里归属校验拿到的 JDBC 连接一直占到流结束（Spring 下 Hibernate 是 DELAYED_ACQUISITION_AND_HOLD），
+  客户端断开走 onError 时 OSIV 甚至不关 EntityManager，连接永久泄漏；池子 10 条，切几次会话后端整体卡死。
+  现由 `config/OpenEntityManagerInViewConfig` 替换 Boot 自动配置的拦截器并排除 `/api/agent/connect/**`（其余路径 OSIV 不变，
+  **不要全局关 OSIV**）。新增任何 SseEmitter / 长轮询端点必须加进 `LONG_LIVED_STREAM_PATHS`。护栏 `SseConnectPoolReleaseTest`
+  （真 Tomcat + Hikari 活跃数）。另：Spring 6.1 的 `ResponseBodyEmitter.complete()` 在 I/O 发送失败后是空操作，
+  断线收尾靠容器 onError 分派，`SseEmitterService.emitTo` 里的 complete() 只兜非 I/O 失败。
+- **uni-h5 的 `<textarea>`/`<input>` 缺省 maxlength=140，且 v-model 有 100ms 节流**：新增输入控件必须显式 `:maxlength`
+  （记忆编辑器 -1 + 保存时按 128 KiB UTF-8 校验）；「打完字立刻点按钮」的提交路径要读 confirm 事件值或控件 DOM 值
+  （`MemoryBrowser.liveFieldValue`，同 `utils/identityProfile.js` 的 submittedInputValue）。e2e 必须真按键输入，
+  原生 value setter 会绕过这两类缺陷。
+- **「立即发送」会恢复停住的队列**：停止时本地 SSE 已断开，`useAgentStream.updateInbox` 对 `submissionMode=steer`
+  的补丁先 `connectSSE` 再发 PATCH（前端不带 Last-Event-ID，连晚了会丢 input_applied）。
+- **队列自动接续不许先关流**：正常收尾由 `AgentOrchestrator.endRunAndDrain` 在 inbox 锁内判断——还有下一条待处理就
+  **不关流**，接续那一轮沿用同一条连接（`beginRun` 记的是当前代次，它自己收尾时再关）；队列跑空才 `closeSse`。
+  曾经是「bubble_end → closeSse → drain」，接续那一轮的事件全部发进没有 emitter 的会话，前端看不到、条目一直挂在待处理。
+  护栏 `AgentOrchestratorInboxTest.finishingWithQueuedFollowUpKeepsTheStreamOpenForTheContinuedRun`。
+
 - **改 AgentOrchestrator 构造器必须同步 EvalHarness**（已踩三次；现构造器末三参是
   TelemetryService/TelemetryTurnTracker/MatterClassifierService）。
+- **编排器里凡是「会话级」的写操作，一律走 `markRunState` / `sendRunEvent` / `closeSse(guard)`，不要直接调
+  `agentRunStateService.mark` 或 `sseEmitterService.send(conversationId, …)`**（dev-board#533）。直接调等于
+  绕过 `isCurrentRun` 判据，被新一轮取代的旧轮次会把新轮次的气泡与状态点一起终结掉——而这类 bug 只在
+  并发轮次下才现形，单轮跑一百遍都是绿的。工具副作用类通知（`client_action` refresh_files / `file_change`）
+  是例外：它们描述的是已经发生的文件变化，与哪一轮在前台无关。
+- **新增终态分支必须调 `endRun(guard)`**：漏了会在 `activeRuns` 里留一条僵尸轮次，此后这个会话的
+  「停止」会打到一个已经死掉的 run 上（用户看到点了没反应），断线重连还会拿到过期快照。
+- **`SkillRouter` / `ContextAssemblerService` 拿的是 runId，不是 conversationId**：两处签名里它们都是
+  `String`，传错了编译照过、单轮也照跑，只有并发轮次才会露出「A 轮的 prompt 配 B 轮的工具」。
+- **工具返回空白会掀翻整轮**：`ToolExecutionResultMessage.from(req, text)` 的
+  `ensureNotBlank(text, "text")` 对空串直接抛异常，用户看到的是
+  「Callback Error: text cannot be null or blank」——一个返回空串的工具就能打掉整轮对话。
+  两条入栈点（`AgentOrchestrator` 原生分支、`SubAgentService.executeScoped`）现在都把空白归一成
+  `AgentOrchestrator.BLANK_TOOL_OUTPUT` 并**按 FAILURE 处理**（进连续失败纠正回路）。
+  **新增任何往 messages 里塞工具结果的路径都要带这条归一**；XML 兜底分支因为有模板包裹不受影响。
+  上游诱因是抽取层：`read_document`/`read_file` 对 **Office 格式**必须走
+  `DocumentTextService`（Tika/PDFBox，与 `extract_file_text` 同一套）——docx 既不在
+  `FileContentExtractorService.ALLOWED_TEXT_EXTENSIONS` 也不在 `ai.context.ocr-extensions`，
+  只按那两个白名单分支就恒返回空串。抽不出正文时**返回一句可行动的说明，绝不返回空白**。
+  `ContextAssemblerService` 注入文件正文的两处守卫（`<file>` 段与 `<active_document>` 段）
+  也一律**判空白而不只判 null**，否则模型看到一段空 CDATA 会转头自己再调一次读取工具。
+- **轮次异常终止必须落库**：`onComplete` 的 catch 走 `finishWithError(...)`（与
+  `handleStreamErrorTerminal` 共用），把 `executionLog` + 已流出的部分内容 + 「[生成出错，已中断]」
+  一并写进 ASSISTANT 消息。只发 SSE 不落库 = 那一轮在历史里一个字都没有（「历史对话吃消息」）。
+  同理**执行日志的 `executionLog.append` 必须排在 `ToolExecutionResultMessage.from` 入栈之前**：
+  入栈抛异常时排在后面的 append 不会执行，崩溃轮的过程卡整段丢失。
+  内部一致性错误的 SSE 载荷带 `LlmErrorClassifier.INTERNAL_ERROR_MARKER`（`AI_INTERNAL_ERROR`），
+  前端 `useAgentStream` 据此换成人话（`agentStream.internalErrorNotice`，两套 locale 成对）——
+  这个标记**不由 `classify()` 产出**，是编排器直接拼的，别往 `Kind` 枚举里加。
+- **XML 兜底路径的工具反馈不许谎报成功**：`<tool_code>` 分支回喂模型的
+  「[System Tool Execution Log]」文案里，"The tool executed successfully." 曾是**无条件**拼进去的，
+  与同一条消息里的 `Status: FAILURE` 直接打架，紧跟着还催「output `<final>` IMMEDIATELY」。
+  XML 兜底是弱模型的主路径，而末位/最强指令会赢（PR#209 实证）——工具失败时模型被引导去宣布任务完成，
+  用户看到的就是「AI 说做完了，其实什么都没发生」。现按 `xmlToolSuccess` 二选一：成功给原收敛指令，
+  失败给纠错指令。**同一分支还补了原生分支早就有的空输出归一**（空白 → `BLANK_TOOL_OUTPUT` + FAILURE）：
+  模板包裹让它不会像原生分支那样抛 `ensureNotBlank`，但「Output: 空 + 断言成功」照样把模型骗去收尾。
+  回归用例 `AgentOrchestratorXmlToolFeedbackTest`。
+- **读取类工具的 OCR 路由：图片与扫描件一律走云端 OCR，三个工具口径必须一致**（dev-board#396）。
+  `read_file`（按路径）、`read_document`（按 fileId，LegalTools）、`extract_file_text`（按 fileId，FileTools）
+  三条读取路都是 `isOcrSupported(fileName)` → `extractTextWithOcr(File)` → `OcrService`
+  → 平台网关（阿里云 OCR，按页扣 Credits），扩展名表是 `ai.context.ocr-extensions`
+  （jpg/jpeg/png/gif/bmp/webp/pdf）。**图片直接 OCR、PDF 先抽文字层抽不出才 OCR**——
+  图片抽 Tika 是纯浪费，文本型 PDF 走 OCR 是白花钱。
+  `extract_file_text` 此前<b>没有</b>这条分支（只有 Tika），项目里的 jpg 恒抽不出正文，
+  返回的提示又只说「try read_file with OCR for **image PDFs**」——模型据此认定图片读不了，
+  转头调 `run_python` 想自己跑 OCR，撞上 "Cannot run program docker" 后**自己下结论**
+  「OCR 环境（docker）不可用」并这样告诉用户。三处修复缺一不可：路由（工具真能读）、
+  @Tool 描述与 system prompt（模型知道它能读，不去另找路子）、run_python 的可用性闸
+  （没有 Docker 就别摆出这条死路）。
+  **OCR 失败一律 `Error:` 开头并把底层原因原样带出**：`extractTextWithOcr` 的失败是
+  `[System: ...]` 形态（非空、无 Error 前缀），直接透传会被 `ToolResult.success()` 判成成功、
+  当作正文喂给模型。Credits 不足、OCR 未开通、上游报错长得都不一样，模型要转述真实原因而不是自己编。
+  护栏 `ExtractFileTextOcrTest`。
+- **读取类工具的正文必须有上限，单一来源是 `ToolFileGuard.capToolText`（80k）**：
+  `extract_file_text` 一直有这个上限，`read_file` / `read_document` 没有——一次读一份几 MB 的合同
+  就产生几十万字符的单条 `ToolExecutionResultMessage`，下一轮必然被服务商以上下文超限 400 挡回。
+  **而且救不回来**：这条超长结果落在 `RunLoopCompactor` 的 keepRecent **尾区**（尾部平时刻意不剪），
+  中段又往往不够 `minMiddleMessages` 条数，于是 `forceCompact` 恒返回原实例、编排器判「压不动」终态，
+  同一份文档每次重试都必然再撞同一个 400。两道防线都要在：工具侧截断 +
+  `forceCompact` 兜底剪尾（**只在 force 下**；非 force 的尾部豁免是刻意设计，别一起改掉）。
+  回归用例 `OversizedToolResultRecoveryTest`。
+- **文件夹上下文要走 `DocumentTextService`，不是 `FileContentExtractorService.extractText`**：
+  后者的白名单（java/js/md/txt/csv…）不含 docx/xlsx/pptx/doc/pdf，恒返回空串，
+  `buildFolderContext` 随后 `if (!text.isEmpty())` 把这些文件**静默跳过**——
+  上下文里「### Folder Document Contents」标题下一个字都没有。17ca80d7 修的是**单文件**路径
+  （`read_document` 改走 Tika）与 `<file>` 段守卫，**文件夹路径当时漏了**。
+  抽不出正文的文件现在会在 `[System Note: ...]` 里点名留痕，不再凭空消失。
+  回归用例 `FolderContextOfficeFormatTest`。
+  （同文件的 `extractFileText` / `collectFolderContent` 有同样的白名单缺陷，但**零生产调用方**，
+  本次刻意没动——要用它们之前先照 `buildFolderContext` 改。）
+- **工具失败判据只认前缀，中英文各一个**：`ToolRegistry.ToolResult.success()` 认
+  `Error` 前缀、`错误` 前缀与 `{"error"` JSON 形态。中文前缀是补的——MemoryTools / TagTools /
+  TaskTools / EvidenceTools / PptxTools 共 37 处失败返回写的是「错误：…」，它们**自认为在报错**，
+  判据却只认英文，于是全被判成 SUCCESS：过程卡给失败调用打绿勾、`appendFailureNudge` 把
+  `consecutiveFailures` 清零（连续失败纠正回路对这些工具永不触发，模型能对着同一个错误
+  重试到步数上限）、埋点也记 `success=true`。
+  **新增失败返回必须以 `Error` 或「错误」开头**，别写成「XX 失败：…」——判据看不见。
+  反过来也别改成按包含匹配：合同正文里出现「失败」「违约」是家常便饭，误判成失败比漏判更糟
+  （回归用例 `ToolFailureClassificationTest` 把这条也钉住了）。
+  **`GatewayException` 的 `unavailable()` 文案刻意没加标记**：`Kind.BUDGET_EXCEEDED`
+  按设计「是可恢复的确认，不是失败」，一并标成失败会误伤它——要动先想清楚这一档。
+- **聊天输入框的 Enter 必须先判输入法组合**：中文/日文/韩文输入时，按 Enter「上屏候选词」
+  同样会派发 keydown（`isComposing=true`，部分浏览器只给 `keyCode=229`）。
+  `ChatInterface.handleEnterKey` 不挡住的话，这一下会把**还没上屏的拼音**直接当消息发出去。
+  编辑器侧（`zetaOfficeImeOverlay` / `zetaoffice/editor-main.js`）早就为同一类问题做了
+  composing 闩，聊天输入框一直漏着。守卫必须排在 `handleSubmit` 之前。
+  回归用例 `frontend/tests/project-home/frontend-audit-batch.test.mjs`。
+- **聊天气泡 ID 必须走 `nextBubbleId()`，不许用裸 `Date.now()`**：用户气泡与助手气泡是在
+  **同一个同步块**里先后创建的（`useAgentStream` 里 `push(createUserBubble(...))` 紧接着
+  `createAssistantBubble()`），同一毫秒 = 同一个 ID。而 `ChatInterface` 的列表是
+  `:key="msg.id || index"`——key 撞了之后 Vue 的 diff 会**复用错节点**：一条消息的正文
+  渲染进另一条气泡、用户/助手样式串位、旧内容残留，也就是「历史对话记录杂乱无序」的一种成因。
+  新增任何气泡创建点都要用 `composables/bubbleId.js` 的 `nextBubbleId()`（单调序号 + 时间戳）。
+  回归用例 `frontend/tests/project-home/bubble-id.test.mjs`。
 - **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
   唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
   （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。
@@ -182,6 +391,23 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   （缓存键含模型名，但不含 baseUrl，只改地址时靠 clearCache 生效）。
 - **`project_ai_message` 的索引是 2026-08 随项目概览页 A 期才补上的**：`idx_ai_message_project_created (project_id, created_at)` 与 `idx_ai_message_conversation_created (conversation_id, created_at)`，定义在实体的 `@Table(indexes = {...})` 上，由 `ProjectAiMessageIndexTest` 读 INFORMATION_SCHEMA 钉住。在此之前这张表零 `@Index`、线上只有主键索引，项目级会话汇总是全表扫描套全表扫描。四个 profile 全是 `ddl-auto: update`、无 flyway/liquibase、无 schema.sql，**索引被谁顺手删掉不会报错、只会悄悄变慢**——所以才用测试守着。（配套的「删项目清 AI 数据」级联清理仍属后续批次。）
 - **会话列表有两条通道，改一条前先确认改的是哪条**：user-scoped 的 `/api/ai/conversations`（裸数组、内存态 runStatus、AI 面板历史下拉在用）与 project-scoped 的 `/api/projects/{id}/conversations`（信封、表态 runStatus、复合游标、项目概览页在用）。两者的 SQL、鉴权口径、返回形状全都不同，**共用的只有 `ProjectAiMessageService` 那三个 private 清洗方法**。改清洗逻辑会同时影响两条，改 SQL/鉴权只影响一条。
+
+- **插件对话镜像与只读会话（dev-board#298，2026-08-30）**：`project_ai_message` 新增可空列
+  `sourceChannel`（office-word / wps-excel 等六值）与 `sourceMessageId`（云端消息 id，导入幂等键）。
+  云后端上，绑定项目（addin_project_link 有映射）的每条消息落库后经
+  `AddinConvSyncService.record` 进 outbox（挂在 `ProjectAiMessageService` 三个落库口的
+  `mirror()`，**可选 field 注入**，桌面端 link 表恒空零成本）；桌面端 `MobileRelayClientService.
+  pollConversationSync` 拉取并经 `importExternalMessage` 导入（幂等 upsert、content 空白/坏 role
+  拒收、**createdAt 严格递增钳制**——历史回放只按 created_at 排序无 tiebreaker）。
+  两条会话列表通道的 summary 都多了 `sourceChannel` 尾列（JPQL 各加一个标量子查询）。
+  **镜像会话在桌面端只读**：`/api/agent/chat` 对 `isMirroredConversation` 的会话回 409
+  （插件那头还在续写，双头写会交错）；续聊走 `POST /api/ai/conversation/{id}/fork`
+  （`forkConversation`：整条复制成 conv-毫秒 新会话，标题加「（分支）」、来源字段清空、
+  userId 改发起者、原始时间保留）。前端只读态在 ChatInterface 的 `externalReadOnly` prop
+  （值=来源文案，`utils/conversationSource.js` 是 sourceChannel→文案的唯一映射）。
+  `officeFamily`（office/wps）随 chat 请求上送，ClientCapabilityService 内存登记，
+  只用于镜像来源标注、不参与工具过滤。护栏：`ProjectAiMessageImportForkTest` /
+  `AddinConvSyncServiceTest` / `MobileRelayClientHttpTest` 的对话镜像组。
 
 ## 辅助模型、子 Agent 与身份作用域（2026-08 供应商三档改造）
 
@@ -225,10 +451,21 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，**13 组**）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）、cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）与 **cases-question**（反问停机：awaiting_input / 执行日志随停机落库 / 同轮工具+反问不递归 / 计划审批优先于反问）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
   - **地雷：`eval/RealToolBeans.instantiateAll()` 的清单必须与生产 `AgentToolComponent` 集合同步。** TodoTools 曾长期漏列，于是 `todo_write` 在整个回放评测里根本没注册——`offeredToolsInclude` 永远失败、`offeredToolsExclude` 永远通过，相关可见性断言全是空的（已补 TodoTools）。**目前仍缺 CheckpointTools 与 SlideEditTools**，补时要同时复核各用例的 offeredToolsExclude。
   - **跨类 `public static final` 常量在编译期内联**：只跑 `mvn test` 的增量编译会留下「源码一致、字节码不一致」的假失败，验证阶段一律 `mvn clean test`。
-  - **`mvn clean test` 里有 3 条 skip 是常态**（env 门控：AllowedModelsLiveContractTest 要 `RUN_LIVE_MODEL_CHECK=1`、RealLlmSmokeTest 要 `OPENROUTER_API_KEY`、CrossLanguageSignatureTest 要 python），不是回归。
+  - **`mvn clean test` 里有 14 条 skip 是常态**（2026-09-09 实测：Tests run 3410 / Skipped 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
   - **Mockito 陷阱（踩过）**：`String.valueOf(inv.getArgument(n))` 会被 Java 重载决议挑成 `String.valueOf(char[])`（泛型 `<T> T` 推成 `char[]`），运行时抛 ClassCastException；若该 mock 的调用方把异常吞掉只 log（如 `SubAgentService.sendProgress`），表现就是「队列永远空、断言说没收到事件」，看着像生产代码不发事件。写 `inv.getArgument(n, String.class)`。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
 - 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。
+- 并发轮次隔离：`mvn test -Dtest=AgentOrchestratorConcurrentTurnsTest`（五条：两轮并发各占一行消息、「停止后立刻再发」只停旧轮、两轮各自命中各自的 skill、旧轮次被取代后 `text_delta` / `reasoning_delta` / `doc_stream_data` 全部静默而新轮次照常、chat 返回后循环起跑前发来的 cancel 不落空；交错点全用 CountDownLatch 钉死，不靠 sleep 赌时序——最后一条用一个只在放行后才跑任务的假 executor 卡住「已提交未起跑」这个窗口）。
 - 状态持久化/启动回收：`mvn test -Dtest=AgentRunRecoveryServiceTest`（mark 写透、RUNNING→INTERRUPTED+补标记、幂等、续跑翻回 RUNNING）。
+- 工具空输出与崩溃轮落库：`mvn test -Dtest=AgentOrchestratorBlankToolOutputTest,ReadDocumentOfficeFormatTest`
+  （空串工具不掀翻整轮 + 按 FAILURE 回喂；onComplete 异常路径把执行日志与错误摘要落库、error 载荷带
+  `AI_INTERNAL_ERROR`；read_document 对真实 docx fixture 返回非空正文、空文档给可行动说明）。
 - 前端：`npm run check:emits`；标签协议编解码 `npm run test:tag-protocol`（node:test，零依赖）；UI 链路 `npm run test:app-e2e`。
 - Office 插件的标签解析：`node --test office-addin/taskpane/lib/sse.test.js`（零依赖，未进 CI）。
+
+- **工具参数太长会把模型输出撑到截断**（实测：一章起草里 4 次）。编排器检测到 `<tool_code>` 未闭合会回喂提示让模型重发，最多两轮；**两轮还截断就把原因写进最终正文**（「参数太长…没有执行完」），不再静默收尾。根治办法不是调 max_tokens，而是别让模型回抄大参数：让工具自己把内容写进文档（尽调插件 `dd_table`/`dd_phrases` 的 `docFileId` 就是这么做的）。截断守卫覆盖 `<tool_code>` / `<todo_write>` / `<final>` 三个「开了必须闭」的标签，且**开标签自己被切断也算**（实测最短一次只输出了 `<todo_write`）；只守 tool_code 的话模型在 todo 清单里被切断就静默收尾，一轮丢四个回合。回归用例 `cases-harness-recovery.json` 的 `truncated-tool-code-persists-tells-the-user` 与 `truncated-todo-write-also-corrected`。
+
+## 2026-09-07 实测回归（B4/B7）
+
+- 活跃文档提醒在中英两路明确要求新表整表 `doc_insert_table(rowsJson)` 一次提交，再做合并/格式，避免逐行写表耗尽 30 步；不放大全局步数限制。
+- 回答菜单「插入当前文档」复用 LOWA `stream_insert({text, complete:true})` 富文本路径，单命令冲出尾表；拒绝并行 Agent 写入，失败不显示成功。覆盖 `tests/project-home/ai-message-insert.test.mjs`；worker 契约见 ai-doc-bridge。

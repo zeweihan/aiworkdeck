@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Office.js 文档访问：宿主检测 + 读取当前文档内容，作为 activeContext 内联正文
  * 随对话请求上送。后端上限 200k 字符，客户端先行截断少传流量。
@@ -10,6 +12,8 @@ const MAX_BODY_CHARS = 200_000
 const MAX_EXCEL_ROWS = 2000
 // PPT 内容读取的页数上限
 const MAX_PPT_SLIDES = 100
+/** 内联正文的装饰说明（两个 PPT 宿主面同一份文案） */
+const PPT_INLINE_NOTE = '（以下由插件读取当前演示文稿生成。行首的「第N页：」与形状之间的「 | 」是插件加的分隔标记，不是文稿里的字；查找/替换/锚点请只用分隔标记之间的正文，不要把标记本身抄进去。）\n'
 
 export function officeAvailable() {
   return typeof Office !== 'undefined' && typeof Office.context !== 'undefined'
@@ -60,14 +64,26 @@ async function readExcelSheet() {
     const sheet = context.workbook.worksheets.getActiveWorksheet()
     sheet.load('name')
     const used = sheet.getUsedRangeOrNullObject(true)
-    used.load('values,address,isNullObject')
+    // **先只取尺寸，不取值**（dev-board#288）：既然只展示前 MAX_EXCEL_ROWS 行，
+    // 把整片已用区域的 values 编组过桥就是白搬——几万行的台账「一问就卡死几十秒」，
+    // 而且卡的是同步桥上的任务窗格。WPS 面（wpsDoc.readEtSheet）早就是「先 Resize
+    // 再取 Value2」，Office 面一直没跟。截断必须发生在过桥之前。
+    used.load('address,isNullObject,rowIndex,columnIndex,rowCount,columnCount')
     await context.sync()
     if (used.isNullObject) return `工作表「${sheet.name}」为空`
-    const rows = used.values.slice(0, MAX_EXCEL_ROWS)
+    const totalRows = used.rowCount
+    const shownRows = Math.min(totalRows, MAX_EXCEL_ROWS)
+    // getRangeByIndexes 是 ExcelApi 1.1，无版本门槛
+    const slice = shownRows < totalRows
+      ? sheet.getRangeByIndexes(used.rowIndex, used.columnIndex, shownRows, used.columnCount)
+      : used
+    slice.load('values')
+    await context.sync()
+    const rows = slice.values || []
     const lines = rows.map((row) => row.map((v) => (v == null ? '' : String(v))).join('\t'))
     let out = `工作表「${sheet.name}」（区域 ${used.address}）：\n` + lines.join('\n')
-    if (used.values.length > MAX_EXCEL_ROWS) {
-      out += `\n...（共 ${used.values.length} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
+    if (totalRows > MAX_EXCEL_ROWS) {
+      out += `\n...（共 ${totalRows} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
     }
     return out
   })
@@ -108,7 +124,8 @@ async function readPptSlides() {
         .filter(Boolean)
       return `第${i + 1}页：${texts.join(' | ') || '（无文本）'}`
     })
-    let out = lines.join('\n')
+    // 装饰文字必须交代清楚（dev-board#286），口径与 wpsDoc.readWppSlides 同源
+    let out = PPT_INLINE_NOTE + lines.join('\n')
     if (slides.items.length > MAX_PPT_SLIDES) {
       out += `\n...（共 ${slides.items.length} 页，仅附前 ${MAX_PPT_SLIDES} 页）`
     }
@@ -136,6 +153,20 @@ export async function hashContent(text) {
   } catch (e) {
     return ''
   }
+}
+
+/**
+ * 只取文档元信息（名字/类型），不读正文。给「不附带正文」场景用：
+ * activeContext 仍要上送壳（id/name/fileType），否则后端 ContextAssemblerService
+ * 的整段 office 工具指引都不注入，模型连「该操作当前文档」都不知道（dev-board#150）。
+ */
+export function readDocumentMeta() {
+  const host = detectHost()
+  if (!host) return null
+  const fallback = host === 'word' ? '当前 Word 文档'
+    : host === 'excel' ? '当前 Excel 工作簿' : '当前 PowerPoint 演示文稿'
+  const fileType = host === 'word' ? 'docx' : host === 'excel' ? 'xlsx' : 'pptx'
+  return { id: 'office-current-document', name: documentDisplayName(fallback), fileType }
 }
 
 export async function readActiveDocument() {

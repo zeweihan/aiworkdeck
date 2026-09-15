@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import org.junit.jupiter.api.DisplayName;
@@ -24,7 +27,7 @@ class AgentStreamWatchdogTest {
     private AgentStreamHandler handlerWithErrorSink(AtomicReference<Throwable> sink, CountDownLatch fired) {
         AgentStreamHandler handler = new AgentStreamHandler(
                 mock(SseEmitterService.class), "conv-watchdog-test",
-                mock(TokenUsageService.class), "1", 1L, "deepseek/deepseek-v4-flash");
+                mock(TokenUsageService.class), "1", 1L, "deepseek/deepseek-v4-flash", 0L);
         handler.setOnError(err -> {
             sink.set(err);
             fired.countDown();

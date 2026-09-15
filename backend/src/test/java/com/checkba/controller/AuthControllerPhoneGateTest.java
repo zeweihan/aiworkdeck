@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.config.PhoneLoginGuard;
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.AuthAbuseGuard;
@@ -61,7 +65,8 @@ class AuthControllerPhoneGateTest {
     private static PhoneLoginGuard guard(boolean required, String deadline) {
         SmsAuthService sms = new SmsAuthService(
                 List.of(new SmsService(OK_TRANSPORT, true, "ak", "sk", "sign", "tpl")),
-                new VerificationCodeStore(), mock(UserRepository.class), false);
+                new VerificationCodeStore(), mock(UserRepository.class), false,
+                ReviewAccountGate.disabled());
         return new PhoneLoginGuard(sms, required, false, deadline);
     }
 
@@ -76,7 +81,8 @@ class AuthControllerPhoneGateTest {
                                              MailAuthService mailAuthService) {
         return new AuthController(userService, null, null, deviceTokenService,
                 mock(AuthAbuseGuard.class), null, null, mailAuthService, null, sessions,
-                false, phoneLoginGuard);
+                false, phoneLoginGuard,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
     }
 
     private static UserSessionService sessions() {

@@ -1,0 +1,299 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+const test = require('node:test')
+const assert = require('node:assert')
+const fs = require('fs')
+const path = require('path')
+let yaml
+try {
+  yaml = require('js-yaml')
+} catch (e) {
+  // 明确报出来而不是让它变成一句看不懂的 MODULE_NOT_FOUND；也绝不改成静默跳过——
+  // 跳过等于把这道门禁变成摆设。js-yaml 是 electron-builder 的传递依赖，
+  // package-lock.json 里有顶层条目，npm ci 之后必然在位。
+  throw new Error('缺少 js-yaml：先在 desktop/ 下跑 npm ci')
+}
+
+// dev-board#74 稳定性审计：desktop-build.yml 的 build job 曾经在 matrix（每个
+// 平台一台独立 runner）里直接发布 GitHub Release。strategy.fail-fast:false 下，
+// 一条腿失败完全不妨碍另一条腿继续跑完，会独立调用 softprops/action-gh-release
+// 把 release 发出去——mac 腿在公证抖动处失败时，windows 腿会把只有 .exe、
+// 缺 .dmg 的半成品版本发布给用户。修复把发布步骤挪到一个 needs:[build] 的
+// 独立 job（不加 if:always()，天然要求 build 的所有矩阵腿都成功才跑），
+// 同构于 pack-release.yml 里 needs:[mac,win] 的 release job。
+//
+// 这里是纯静态检查：解析仓库里全部 workflow YAML，断言任何带 strategy.matrix
+// 的 job 都不能再直接包含 action-gh-release 步骤——防止以后哪次改动又把发布
+// 步骤挪回矩阵里而没人注意到。js-yaml 是 electron-builder 的既有传递依赖
+// （已经在 desktop/package-lock.json 里锁定），这里直接 require，没有为此
+// 新增任何 package.json 依赖。
+
+const workflowsDir = path.join(__dirname, '../../.github/workflows')
+
+function workflowFiles() {
+  return fs.readdirSync(workflowsDir).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'))
+}
+
+function loadWorkflow(file) {
+  return yaml.load(fs.readFileSync(path.join(workflowsDir, file), 'utf8'))
+}
+
+function stepsUseGhRelease(steps) {
+  return (steps || []).some((s) => typeof s.uses === 'string' && s.uses.startsWith('softprops/action-gh-release'))
+}
+
+test('前提：workflows 目录真的存在且非空（防止路径写错导致下面的用例全部空跑通过）', () => {
+  const files = workflowFiles()
+  assert.ok(files.includes('desktop-build.yml'), 'desktop-build.yml 应该在 .github/workflows 下')
+  assert.ok(files.length > 0)
+})
+
+test('任何带 strategy.matrix 的 job 都不能直接发布 GitHub Release', () => {
+  const offenders = []
+  for (const file of workflowFiles()) {
+    const doc = loadWorkflow(file)
+    const jobs = (doc && doc.jobs) || {}
+    for (const [jobId, job] of Object.entries(jobs)) {
+      const hasMatrix = Boolean(job && job.strategy && job.strategy.matrix)
+      if (hasMatrix && stepsUseGhRelease(job.steps)) {
+        offenders.push(`${file}:${jobId}`)
+      }
+    }
+  }
+  assert.deepStrictEqual(offenders, [], '这些 job 是 matrix 且直接发布 release，会重犯半成品发布的问题: ' + offenders.join(', '))
+})
+
+test('desktop-build.yml：发布已收口到独立 release job，且被 needs 正确门控', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const buildJob = doc.jobs.build
+  assert.ok(Boolean(buildJob.strategy && buildJob.strategy.matrix), 'build 应该仍然是 matrix job（本用例的前提）')
+  assert.ok(!stepsUseGhRelease(buildJob.steps), 'build（matrix job）不应该再包含 action-gh-release 步骤')
+
+  const releaseJob = doc.jobs.release
+  assert.ok(releaseJob, '应该存在一个独立的 release job')
+  assert.ok(!(releaseJob.strategy && releaseJob.strategy.matrix), 'release job 本身不应该是 matrix')
+  assert.ok(stepsUseGhRelease(releaseJob.steps), 'release job 应该包含 action-gh-release 步骤')
+
+  const needs = Array.isArray(releaseJob.needs) ? releaseJob.needs : [releaseJob.needs]
+  assert.ok(needs.includes('build'), 'release job 必须 needs: build——默认语义下 build 任一矩阵腿失败它就不会跑')
+
+  // 不能用 if: always() 之类的条件放行失败腿——否则又把「必须全部成功」这道
+  // 门禁架空，等于走了一遍手续但没有实际效果。
+  const ifCond = String(releaseJob.if || '')
+  assert.ok(!/always\s*\(\s*\)/.test(ifCond), 'release job 的 if 条件不应该用 always() 绕开 needs 的全部成功前提')
+})
+
+test('desktop-build.yml：镜像同步必须排在 release 之后（它是从 GitHub Release 拉资产的）', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const sync = doc.jobs['sync-mirror']
+  assert.ok(sync, '应该存在 sync-mirror job')
+  const needs = Array.isArray(sync.needs) ? sync.needs : [sync.needs]
+  // 发布从 matrix 里挪走之后，sync-mirror 若仍只 needs:[build] 就会与 release
+  // 并行：服务器脚本从 GitHub Release 拉资产，Release 还没建出来就拉空，
+  // latest.json 停在上一版，本 job 末尾的校验必挂。
+  assert.ok(needs.includes('release'),
+    'sync-mirror 必须 needs: release，否则会和发布并行、拉不到 Release 资产')
+})
+
+// 0.38.0 起四个 Python 服务改走 native pack（设计 §3）：安装包链路里不再装 pip
+// 依赖、不再打 pysvc.tar.gz。dev-board#74 那条「缓存 key 必须覆盖各服务源码」的
+// 门禁随之作废——被它守着的步骤已经整体不在这条 workflow 里了。
+test('desktop-build.yml：安装包链路里不再有任何 pysvc 痕迹（四个服务改走 native pack）', () => {
+  const yml = fs.readFileSync(path.join(workflowsDir, 'desktop-build.yml'), 'utf8')
+  for (const sym of ['pysvc', 'pack-pysvc.js']) {
+    assert.ok(!yml.includes(sym), `desktop-build.yml 仍引用 ${sym}`)
+  }
+})
+
+test('desktop-build.yml：python 运行时仍随包（litviz 与 pack 里的服务共用它）', () => {
+  const yml = fs.readFileSync(path.join(workflowsDir, 'desktop-build.yml'), 'utf8')
+  assert.match(yml, /bundled\/mac-arm64\/python/)
+  assert.match(yml, /--runtime-only/, '运行时仍要由 prepare-python-service.js 烙进去')
+})
+
+// v0.23.0 发版实测：sync-mirror job 转红、官网下载页停在 0.22.0 直到人工介入。
+// 时间线——CI 16:15 开始推安装包，服务器 cron 16:17 起来（那一刻 exe 还没推完，
+// 它的 skip-exists 判据当时确实成立不了），抢到 flock 后从 GitHub 慢拉 1.59GB；
+// CI 推完回头等锁，1200s 超时，update-mirror-sync.sh 从没跑过，latest.json 停在
+// 上一版，最后那条校验 exit 1。v0.17.0 已经踩过一次同款（当时的处置只是加了
+// CI 侧的 flock 等待，没挡住「推送途中新起的 cron」）。
+//
+// 治法是让路发生在**抢锁之前**：推送前落 marker，cron 见到新鲜 marker 就退出。
+// 下面三条各钉住这条链的一环，任何一环被摘掉都会让那个窗口重新打开。
+test('desktop-build.yml：推安装包之前必须落 release-push marker，否则途中起来的 cron 会抢锁慢拉', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const step = doc.jobs['sync-mirror'].steps.find((s) => /rsync/.test(String(s.run || '')))
+  assert.ok(step, 'sync-mirror 里应该有那个 rsync 推送步骤（本用例的前提）')
+  const run = String(step.run)
+  const markerAt = run.indexOf('touch /var/lock/awd-release-push-in-progress')
+  const rsyncAt = run.indexOf('rsync ')
+  assert.ok(markerAt !== -1, '推送步骤里没有落 marker：cron 会在推送途中抢锁重拉同一批包')
+  assert.ok(markerAt < rsyncAt,
+    'marker 必须落在 rsync 之前——落在后面等于把那 20 多分钟的窗口原样留着')
+})
+
+test('desktop-build.yml：CI 回头跑同步脚本必须带 FORCE=1，否则被自己刚落的 marker 拦下', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const step = doc.jobs['sync-mirror'].steps.find((s) => /update-mirror-sync\.sh/.test(String(s.run || '')))
+  assert.ok(step, '应该有调用 update-mirror-sync.sh 的步骤（本用例的前提）')
+  assert.match(String(step.run), /FORCE=1\s+bash update-mirror-sync\.sh/,
+    'CI 自己调用同步脚本时没带 FORCE=1：会被自己刚落下的 marker 挡住，latest.json 永远不翻')
+})
+
+test('desktop-build.yml：marker 必须有 always() 的清理步骤，否则失败一次会让 cron 白让路', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const cleanup = doc.jobs['sync-mirror'].steps.find((s) =>
+    /rm -f \/var\/lock\/awd-release-push-in-progress/.test(String(s.run || '')))
+  assert.ok(cleanup, '没有清理 marker 的步骤：推送失败后 marker 残留，接下来的 cron 全部让路')
+  assert.equal(String(cleanup.if || '').trim(), 'always()',
+    '清理步骤必须 if: always()——只在成功时清等于「失败那次留下的残留最坏」')
+})
+
+// drawio-server 测试在 Windows runner 上被 Defender 锁临时文件、清理钩子报 EPERM，
+// 已经拦过 v0.25.1 / #609 / v0.26.0 / v0.27.5 / v0.28.0 五次发版（dev-board#146）。
+// PR 上靠「没碰 drawio 就跳过」绕开，而 tag 发版永远全量跑——所以它专挑发版咬。
+// 治本的一手是给 runner 的 Temp 目录加 Defender 排除项，且必须排在跑测试之前。
+test('desktop-build.yml：Windows 腿必须在跑单元测试之前给 Temp 加 Defender 排除项', () => {
+  const doc = loadWorkflow('desktop-build.yml')
+  const build = doc.jobs && doc.jobs.build
+  assert.ok(build, 'build job 应存在')
+  const steps = build.steps || []
+  const exclusionIdx = steps.findIndex((s) =>
+    typeof s.name === 'string' && /Defender/i.test(s.name))
+  const testIdx = steps.findIndex((s) =>
+    typeof s.name === 'string' && /Desktop unit tests/i.test(s.name))
+
+  assert.ok(exclusionIdx >= 0, '缺少 Defender 排除项步骤——它是 Windows EPERM 拦发版的治本手')
+  assert.ok(testIdx >= 0, '找不到 Desktop unit tests 步骤')
+  assert.ok(exclusionIdx < testIdx,
+    `Defender 排除项必须排在单元测试之前（实际 ${exclusionIdx} vs ${testIdx}）`)
+
+  const step = steps[exclusionIdx]
+  assert.match(String(step.if || ''), /runner\.os\s*==\s*'Windows'/,
+    'Defender 排除项只该在 Windows 腿跑')
+  // 加排除项失败不许拦构建：部分 runner 镜像禁用了 Defender 或不给加，
+  // 那种情况下退回测试侧的 EPERM 兜底即可，不该因此把发版拦了。
+  assert.equal(step['continue-on-error'], true,
+    'Defender 排除项失败不许中断构建（continue-on-error 必须为 true）')
+})
+
+// 执行真实打包步骤的 shell，仅替换系统签名和打包命令，避免测试接触真实密钥。
+for (const [signed, unlockFails] of [[true, false], [false, false], [true, true]]) {
+  test(`macOS packaging keychain (credentials: ${signed}, unlock failure: ${unlockFails})`, () => {
+    const step = loadWorkflow('desktop-build.yml').jobs.build.steps.find((s) =>
+      s.name === 'Package installers (macOS, signed & notarized)')
+    const harness = `
+      sudo() { :; }
+      ulimit() { printf '1024\\n'; }
+      security() {
+        if [ "$UNLOCK_FAILS" = true ]; then return 75; fi
+        [ "$1" = unlock-keychain ] && [ "$2" = -p ] &&
+        [ "$3" = awd-tmp-keychain ] && [ "$4" = "$RUNNER_TEMP/awd-sign.keychain-db" ] || return 71
+        export UNLOCKED_KEYCHAIN="$4"
+      }
+      npx() {
+        [ "$1" = electron-builder ] || return 72
+        if [ "$EXPECT_SIGNED" = true ]; then
+          [ -z "\${CSC_LINK:-}" ] &&
+          [ "\${CSC_KEYCHAIN:-}" = "$RUNNER_TEMP/awd-sign.keychain-db" ] &&
+          [ "\${UNLOCKED_KEYCHAIN:-}" = "$CSC_KEYCHAIN" ] || return 73
+        else
+          [ -z "\${CSC_KEYCHAIN:-}" ] && [ -z "\${CSC_LINK:-}" ] || return 74
+        fi
+      }
+    `
+    const result = require('child_process').spawnSync('bash', ['-e', '-c', harness + step.run], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: '/tmp/release keychain test',
+        CSC_LINK: signed ? 'fixture-p12-base64' : '',
+        CSC_KEY_PASSWORD: 'fixture-p12-password',
+        APPLE_API_KEY_B64: '',
+        EXPECT_SIGNED: String(signed),
+        UNLOCK_FAILS: String(unlockFails),
+      },
+    })
+    assert.equal(result.status, unlockFails ? 75 : 0, result.stderr || result.stdout)
+  })
+}
+
+// ---- pack-release.yml：四个 Python 运行时 pack 的双平台矩阵（dev-board#529）----
+// 这一组是纯静态检查：本机跑不了 GitHub Actions，只能把「一改就出事」的几条
+// 契约钉在文本与解析结果上。
+
+const PACK_RELEASE = fs.readFileSync(path.join(workflowsDir, 'pack-release.yml'), 'utf8')
+const PACK_RELEASE_DOC = yaml.load(PACK_RELEASE)
+
+test('pack-release.yml：pack_id 是显式枚举，四个 runtime pack 都在其中', () => {
+  const options = PACK_RELEASE_DOC.on.workflow_dispatch.inputs.pack_id.options
+  assert.deepStrictEqual(
+    [...options].sort(),
+    ['asr-runtime', 'kokoro-runtime', 'litigation-visual', 'mineru-runtime', 'pptx-runtime']
+  )
+})
+
+test('pack-release.yml：app 组件只在 mac 腿产一次（两台机各产一份同名 tar.gz 会让 sha256 对不上）', () => {
+  assert.match(PACK_RELEASE, /COMPONENTS=lib,app/)
+  const plats = PACK_RELEASE_DOC.jobs.runtime.strategy.matrix.include.map((e) => e.plat)
+  assert.deepStrictEqual([...plats].sort(), ['mac-arm64', 'win-x64'])
+})
+
+test('pack-release.yml：release 必须标 prerelease（否则顶掉仓库级 releases/latest，污染镜像同步）', () => {
+  const step = PACK_RELEASE_DOC.jobs.release.steps.find(
+    (s) => typeof s.uses === 'string' && s.uses.startsWith('softprops/action-gh-release')
+  )
+  assert.ok(step, 'release job 应当有 action-gh-release 步骤')
+  assert.strictEqual(step.with.prerelease, true)
+})
+
+test('pack-release.yml：runtime 腿必须真起一次服务打 /health，不能只打包不验', () => {
+  const names = PACK_RELEASE_DOC.jobs.runtime.steps.map((s) => s.name || '')
+  assert.ok(names.includes('Smoke test from pack layout'), '缺少从 pack 布局起服务的冒烟步骤')
+  assert.match(PACK_RELEASE, /\/health|\/docs/)
+})
+
+// 执行实际冒烟准备代码：GNU tar 要 POSIX 路径，原生 Python 的环境变量要 Windows 路径。
+// 本机没有 cygpath，仅替换这个平台边界与文件系统写操作；服务启动仍由真实双平台 CI 验证。
+for (const plat of ['win-x64', 'mac-arm64']) {
+  test(`pack smoke paths reach tar and native Python in their platform format (${plat})`, () => {
+    const step = PACK_RELEASE_DOC.jobs.runtime.steps.find((s) => s.name === 'Smoke test from pack layout')
+    const setup = step.run.slice(0, step.run.indexOf('BODY_GREP='))
+      .replace(/\$\{\{ matrix.plat \}\}/g, plat)
+      .replace(/\$\{\{ steps.svc.outputs.name \}\}/g, 'asr-service')
+    const result = require('child_process').spawnSync('bash', ['-e', '-c', `
+      rm() { :; }; mkdir() { :; }; cp() { :; }
+      cygpath() {
+        case "$1:$2" in
+          '-u:D:\\a\\runner temp/packroot') printf '%s' '/d/a/runner temp/packroot' ;;
+          '-w:/d/a/runner temp/packroot/lib') printf '%s' 'D:\\a\\runner temp\\packroot\\lib' ;;
+          *) return 71 ;;
+        esac
+      }
+      ${setup}
+      printf '%s\\n' "$ROOT" "$PYTHONPATH"
+    `], {
+      cwd: require('os').tmpdir(), encoding: 'utf8',
+      env: { PATH: process.env.PATH, RUNNER_TEMP: plat === 'win-x64' ? 'D:\\a\\runner temp' : '/tmp/runner temp' },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepStrictEqual(result.stdout.trim().split('\n'), plat === 'win-x64'
+      ? ['/d/a/runner temp/packroot', 'D:\\a\\runner temp\\packroot\\lib']
+      : ['/tmp/runner temp/packroot', '/tmp/runner temp/packroot/lib'])
+  })
+}
+
+test('pack-release.yml：不缓存 pysvc（pack 产物必须每次从 requirements.lock 真装一遍）', () => {
+  assert.doesNotMatch(PACK_RELEASE, /actions\/cache@[^\n]*\n[\s\S]{0,400}?pysvc/)
+})
+
+test('pack-release.yml：两条老腿只在 litigation-visual 时跑，runtime 腿只在四个 runtime pack 时跑', () => {
+  for (const job of ['mac', 'win']) {
+    assert.strictEqual(PACK_RELEASE_DOC.jobs[job].if, "inputs.pack_id == 'litigation-visual'", job)
+  }
+  assert.strictEqual(PACK_RELEASE_DOC.jobs.runtime.if, "inputs.pack_id != 'litigation-visual'")
+  // 三条腿里必有两条被 if 跳过（skipped），release 的门控不能用「全成功」写法，
+  // 否则永远不跑；但也不能宽到 always()——那样任一腿失败照发半成品。
+  assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /!cancelled\(\)/)
+  assert.match(String(PACK_RELEASE_DOC.jobs.release.if), /failure/)
+})

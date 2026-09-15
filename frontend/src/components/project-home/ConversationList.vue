@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="conversation-list">
     <view v-if="loading && !conversations.length" class="conv-hint">{{ $t('projects.conversationsLoadingHint') }}</view>
@@ -16,6 +18,8 @@
       >
         <view class="conv-card-head">
           <text class="conv-title">{{ c.title }}</text>
+          <!-- 插件镜像会话来源角标（dev-board#298）：sourceChannel 非空才渲染 -->
+          <text v-if="c.sourceChannel" class="conv-source-chip">{{ sourceLabel(c.sourceChannel) }}</text>
           <text v-if="statusLabel(c.runStatus)" class="conv-status" :class="dotClass(c.runStatus)">
             {{ statusLabel(c.runStatus) }}
           </text>
@@ -23,7 +27,9 @@
         <text v-if="hasPreview(c)" class="conv-preview">{{ c.lastMessage }}</text>
         <text class="conv-meta">{{ metaOf(c) }}</text>
       </view>
-      <view v-if="hasMore" class="conv-more" @tap="$emit('load-more')">{{ $t('projects.loadMoreConversations') }}</view>
+      <view v-if="hasMore" class="conv-more" :class="{ 'conv-more-busy': loading }" @tap="onLoadMore">
+        {{ loading ? $t('projects.conversationsLoadingHint') : $t('projects.loadMoreConversations') }}
+      </view>
     </template>
   </view>
 </template>
@@ -38,6 +44,7 @@
 // 两个已知展示坑的兜底：lastMessage 可能是空串（不留空行）；title 可能是字面量
 // 「新对话」（清洗兜底与 LLM 生成失败同文案，无法区分，照常显示不特判）。
 import { formatDateTime, runStatusLabel, runStatusDotClass, hasConversationPreview } from '@/utils/projectHomeFormat.js'
+import { sourceChannelLabel } from '@/utils/conversationSource.js'
 
 export default {
   name: 'ConversationList',
@@ -57,8 +64,18 @@ export default {
     dotClass(status) {
       return runStatusDotClass(status)
     },
+    sourceLabel(sourceChannel) {
+      return sourceChannelLabel(sourceChannel)
+    },
     metaOf(c) {
       return [c.ownerName, formatDateTime(c.updatedAt)].filter(Boolean).join(' · ')
+    },
+    // 翻页游标要等响应回来才更新，连点两下会用同一份游标取回同一页拼进列表，
+    // 于是同一个 conversationId 出现两次，v-for 的 :key 撞车、卡片重复渲染。
+    // 请求在飞时不再派发，行本身改成加载中文案（不隐藏，免得内容跳位）。
+    onLoadMore() {
+      if (this.loading) return
+      this.$emit('load-more')
     },
   },
 }
@@ -67,14 +84,14 @@ export default {
 <style scoped>
 .conv-hint {
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-guide-title {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .conv-guide-desc {
@@ -82,20 +99,20 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   line-height: 19px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-card {
   padding: 10px 12px;
   margin-bottom: 8px;
-  background: #F8F9FA;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 4px;
   cursor: pointer;
 }
 
 .conv-card:hover {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .conv-card-head {
@@ -109,7 +126,7 @@ export default {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -118,19 +135,30 @@ export default {
 .conv-status {
   flex: none;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
+}
+
+/* 插件镜像会话来源角标（dev-board#298），与工作台历史抽屉的 .conv-source-chip 同形 */
+.conv-source-chip {
+  flex: none;
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 .conv-status.dot-running {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .conv-status.dot-attention {
-  color: #8A6D1D;
+  color: var(--awd-warning-text);
 }
 
 .conv-status.dot-error {
-  color: #E74C3C;
+  color: var(--awd-danger-text);
 }
 
 .conv-preview {
@@ -138,21 +166,46 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   line-height: 18px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .conv-meta {
   display: block;
   margin-top: 4px;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 .conv-more {
   padding: 8px 0;
   text-align: center;
   font-size: 12px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
+}
+
+.conv-more-busy {
+  color: var(--awd-text-2);
+  cursor: default;
+}
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度，见 project-home-pane.scss 的注释 */
+@container home-pane (max-width: 359px) {
+  .conv-card {
+    padding: 8px 10px;
+  }
+
+  .conv-title {
+    font-size: 12px;
+  }
+
+  .conv-preview {
+    font-size: 11px;
+  }
+
+  .conv-meta,
+  .conv-status {
+    font-size: 10px;
+  }
 }
 </style>

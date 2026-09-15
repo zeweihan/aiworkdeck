@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.evidence;
 
 import com.checkba.service.ai.mcp.McpClientService;
@@ -31,17 +34,35 @@ public class McpEvidenceRetriever implements EvidenceRetriever {
     private final String server;
     private final String tool;
     private final McpClientService mcpClientService;
+    /** 非空 = 插件声明的临时服务器配置（规范 v2.8 P3），不查 mcp.servers 静态表 */
+    private final com.checkba.service.ai.mcp.McpProperties.ServerConfig adHocServer;
+    /** true = sourceId 原样返回（插件来源已带 <pluginId>. 前缀，不再加 mcp:） */
+    private final boolean literalSourceId;
 
     public McpEvidenceRetriever(String sourceId, String server, String tool, McpClientService mcpClientService) {
         this.sourceId = sourceId;
         this.server = server;
         this.tool = tool;
         this.mcpClientService = mcpClientService;
+        this.adHocServer = null;
+        this.literalSourceId = false;
+    }
+
+    /** 插件 manifest 声明的远程 MCP 来源（规范 v2.8 P3）：自带 ServerConfig，sourceId 原样使用 */
+    public McpEvidenceRetriever(String literalSourceId,
+                                com.checkba.service.ai.mcp.McpProperties.ServerConfig adHocServer,
+                                String tool, McpClientService mcpClientService) {
+        this.sourceId = literalSourceId;
+        this.server = adHocServer.getName();
+        this.tool = tool;
+        this.mcpClientService = mcpClientService;
+        this.adHocServer = adHocServer;
+        this.literalSourceId = true;
     }
 
     @Override
     public String sourceId() {
-        return "mcp:" + sourceId;
+        return literalSourceId ? sourceId : "mcp:" + sourceId;
     }
 
     @Override
@@ -60,7 +81,9 @@ public class McpEvidenceRetriever implements EvidenceRetriever {
         }
         args.put("limit", query.limit());
 
-        String raw = mcpClientService.callTool(server, tool, args);
+        String raw = adHocServer != null
+                ? mcpClientService.callTool(adHocServer, tool, args)
+                : mcpClientService.callTool(server, tool, args);
         if (raw == null || raw.startsWith("Error:")) {
             log.warn("evidence.retrieve.v1[{}]: MCP 来源不可用: {}", sourceId(), raw);
             return List.of();

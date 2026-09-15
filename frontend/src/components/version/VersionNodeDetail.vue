@@ -1,6 +1,8 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="awd-mask" @tap.self="$emit('close')">
-    <view class="awd-dialog">
+    <view class="awd-dialog detail-dialog">
       <view class="awd-header">
         <text class="awd-title">{{ version.note || version.message }}</text>
       </view>
@@ -66,7 +68,13 @@
 </template>
 
 <script>
-import { getVersionChanges, revertToVersion, markVersionMilestone, createDraft } from '@/services/api.js'
+import { getVersionChanges } from '@/services/api.js'
+import { createVersionActions } from '@/composables/useVersionActions.js'
+
+// uni.showModal / showToast 的层级修正（<uni-modal>/<uni-toast> 恒为 z-index 999，
+// 会被本仓 9999 的弹窗遮罩挡住）已搬到 App.vue 的 <script> 模块级——
+// InviteMemberDialog 在项目列表页也要用，那一页不加载 version 组件链。
+// 本组件的「退回到这一版」二次确认（confirmRevert）依赖那段修正才点得到。
 
 export default {
   name: 'VersionNodeDetail',
@@ -92,6 +100,17 @@ export default {
         time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
       })
     },
+  },
+  created() {
+    // 四件事的实现搬到了 composables/useVersionActions.js（与中栏「提交历史」标签页共用）。
+    // 这里只留一份宿主绑定：busy 重入守卫仍是本组件自己的状态。
+    this._actions = createVersionActions({
+      projectId: () => this.projectId,
+      t: (k, p) => this.$t(k, p),
+      isBusy: () => this.busy,
+      setBusy: (v) => { this.busy = v },
+      emit: (name, payload) => this.$emit(name, payload),
+    })
   },
   mounted() {
     this.load()
@@ -119,71 +138,29 @@ export default {
     // 对比结果开在编辑区的标签页里，弹窗留着只会挡住它（也让「弹窗上的按钮文字」
     // 被误当成对比结果渲染出来了）——上抛之后立刻关掉自己。
     compareFile(path) {
-      this.$emit('compare-file', { path, sha: this.version.sha })
+      this._actions.compareWithPrevious(this.version.sha, path)
       this.$emit('close')
     },
     confirmRevert() {
-      uni.showModal({
-        title: this.$t('version.revertToVersion'),
-        content: this.$t('version.revertConfirmContent'),
-        success: async (r) => {
-          if (!r.confirm) return
-          try {
-            const res = await revertToVersion(this.projectId, this.version.sha)
-            const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
-            this.$emit('reload-files', affectedFileIds)
-          } catch (e) {
-            uni.showToast({ title: (e && e.message) || this.$t('version.revertFailed'), icon: 'none' })
-          }
-        },
-      })
+      // busy 重入守卫在 useVersionActions 里（本文件另两个写操作也靠它）：确认框关掉之后
+      // 按钮和弹窗都还能再点一次，在第一个 revertToVersion 请求飞着时能打出第二个。
+      this._actions.confirmRevert(this.version.sha)
     },
     openMilestoneNaming() {
       this.milestoneName = this.version.milestone || ''
       this.milestoneNaming = true
     },
     async submitMilestone() {
-      if (this.busy) return
-      const name = (this.milestoneName || '').trim()
-      if (!name) {
-        uni.showToast({ title: this.$t('version.milestoneNameRequired'), icon: 'none' })
-        return
-      }
-      this.busy = true
-      try {
-        await markVersionMilestone(this.projectId, this.version.sha, name)
-        this.milestoneNaming = false
-        uni.showToast({ title: this.$t('version.markedMilestone'), icon: 'none' })
-        this.$emit('milestoned')
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.markMilestoneFailed'), icon: 'none' })
-      } finally {
-        this.busy = false
-      }
+      const ok = await this._actions.markMilestone(this.version.sha, this.milestoneName)
+      if (ok) this.milestoneNaming = false
     },
     openDraftNaming() {
       this.draftName = ''
       this.draftNaming = true
     },
     async submitDraftCreate() {
-      if (this.busy) return
-      const name = (this.draftName || '').trim()
-      if (!name) {
-        uni.showToast({ title: this.$t('version.draftNameRequired'), icon: 'none' })
-        return
-      }
-      this.busy = true
-      try {
-        const res = await createDraft(this.projectId, this.version.sha, name)
-        const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
-        this.draftNaming = false
-        uni.showToast({ title: this.$t('version.draftCreatedSwitching', { name }), icon: 'none' })
-        this.$emit('draft-created', affectedFileIds)
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('version.createDraftFailed'), icon: 'none' })
-      } finally {
-        this.busy = false
-      }
+      const ok = await this._actions.createDraftFrom(this.version.sha, this.draftName)
+      if (ok) this.draftNaming = false
     },
   },
 }
@@ -191,31 +168,46 @@ export default {
 
 <style lang="scss" scoped>
 .awd-mask {
-  position: fixed; inset: 0; background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center; z-index: 999;
+  position: fixed; inset: 0; background: var(--awd-overlay);
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
-.awd-dialog { width: 640rpx; max-height: 70vh; background: #fff; border-radius: 12rpx; display: flex; flex-direction: column; }
-.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
-.awd-title { font-size: 30rpx; font-weight: 600; }
-.awd-body { padding: 24rpx; overflow-y: auto; flex: 1; }
-.detail-meta { font-size: 24rpx; color: #999; margin-bottom: 16rpx; }
-.detail-empty { font-size: 26rpx; color: #999; }
-.detail-error { display: flex; align-items: center; gap: 16rpx; }
-.detail-error-desc { font-size: 26rpx; color: #b23; }
-.detail-error-retry { font-size: 26rpx; color: #12344D; text-decoration: underline; }
-.detail-change { display: flex; gap: 12rpx; padding: 8rpx 0; }
-.change-type { font-size: 23rpx; flex-shrink: 0; }
-.type-ADD { color: #2a7; }
-.type-MODIFY { color: #C8A45D; }
-.type-DELETE { color: #b23; }
-.type-RENAME { color: #666; }
-.change-path { font-size: 25rpx; color: #333; word-break: break-all; }
-.change-compare-btn { flex-shrink: 0; padding: 6rpx 14rpx; font-size: 22rpx; }
+.awd-dialog {
+  width: 380px; max-width: 90vw; max-height: 76vh;
+  display: flex; flex-direction: column; background: var(--awd-surface);
+  border-radius: 12px; overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
+}
+.awd-dialog.detail-dialog { width: 460px; }
+.awd-header { padding: 18px 24px; border-bottom: 1px solid var(--awd-border-subtle); }
+.awd-title { font-size: 16px; font-weight: 600; color: var(--awd-text); }
+.awd-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.detail-meta { font-size: 12.5px; color: var(--awd-text-3); margin-bottom: 14px; }
+.detail-empty { font-size: 13.5px; color: var(--awd-text-3); }
+.detail-error { display: flex; align-items: center; gap: 12px; }
+.detail-error-desc { font-size: 13.5px; color: var(--awd-danger-text); }
+.detail-error-retry { font-size: 13.5px; color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; }
+.detail-change { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--awd-info-soft); }
+.change-type { font-size: 12px; font-weight: 500; flex-shrink: 0; }
+.type-ADD { color: var(--awd-accent-text); }
+.type-MODIFY { color: var(--awd-warning-text); }
+.type-DELETE { color: var(--awd-danger-text); }
+.type-RENAME { color: var(--awd-text-2); }
+.change-path { font-size: 13px; color: var(--awd-text); word-break: break-all; flex: 1; }
+.change-compare-btn { flex-shrink: 0; padding: 5px 12px; font-size: 12px; }
 .awd-footer {
-  display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+  display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap;
+  padding: 14px 24px; border-top: 1px solid var(--awd-border-subtle); background: var(--awd-bg);
 }
-.awd-btn { padding: 12rpx 24rpx; border-radius: 6rpx; font-size: 25rpx; }
-.awd-btn-primary { background: #12344D; color: #fff; }
-.awd-btn-secondary { background: #f0f0f0; color: #333; }
+.awd-btn {
+  padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.awd-btn-primary { background: var(--awd-accent); color: var(--awd-text-on-accent); }
+.awd-btn-primary:hover { background: var(--awd-accent-hover); }
+.awd-btn-secondary { background: var(--awd-surface); color: var(--awd-text-2); border: 1px solid var(--awd-border-strong); }
+.awd-btn-secondary:hover { background: var(--awd-surface-2); }
+.awd-input {
+  width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--awd-border-strong);
+  border-radius: 6px; font-size: 14px; color: var(--awd-text); box-sizing: border-box;
+}
 </style>

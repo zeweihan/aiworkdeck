@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.skill;
 
 import com.checkba.service.ai.PluginService;
@@ -98,6 +101,17 @@ class SkillRegistryTest {
         assertFalse(registry.isEnabled("authored-skill"), "enabled_by_default:false 首次扫描即默认禁用");
     }
 
+    @Test
+    @DisplayName("解析 requires_pack（原生资源包依赖，可选字段）")
+    void parsesRequiresPack() throws IOException {
+        writeSkill(tempDir.resolve("packed-skill"), "packed-skill", "requires_pack: litigation-visual\n");
+        writeSkill(tempDir.resolve("plain-skill"), "plain-skill", null);
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+
+        assertEquals("litigation-visual", registry.getSkill("packed-skill").orElseThrow().getRequiresPack());
+        assertNull(registry.getSkill("plain-skill").orElseThrow().getRequiresPack(), "缺省即不依赖资源包");
+    }
+
     /**
      * 极简内存版 SystemSettingService：只覆盖 get/set，用来验证禁用/种子名单能跨"重启"
      * （新的 SkillRegistry 实例、同一份存储）持久化。父类真正依赖的仓储用不到，传 null。
@@ -143,6 +157,48 @@ class SkillRegistryTest {
     }
 
     @Test
+    @DisplayName("「语音」合并插件状态收敛：任一成员启用即全部启用；全关保持全关；缺成员不收敛")
+    void convergesVoiceMergedSkillPair() throws IOException {
+        // 存量分裂态：语音合成启用、会议录音被用户/旧默认关了 → 收敛为都启用
+        writeSkill(tempDir.resolve("text-to-speech"), "text-to-speech", null);
+        writeSkill(tempDir.resolve("meeting-recorder"), "meeting-recorder", null);
+        InMemorySystemSettingService settings = new InMemorySystemSettingService();
+        settings.set(SkillRegistry.DISABLED_KEY, "[\"meeting-recorder\"]");
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(tempDir.toString());
+        SkillRegistry registry = new SkillRegistry(props, settings, new PluginService(), null);
+        registry.init();
+        assertTrue(registry.isEnabled("text-to-speech"));
+        assertTrue(registry.isEnabled("meeting-recorder"), "任一成员启用即全部启用（启停一体）");
+
+        // 用户把两个都关掉（前端开关一次翻两个成员）：重启后保持全关，不被收敛翻回来
+        registry.setEnabled("text-to-speech", false);
+        registry.setEnabled("meeting-recorder", false);
+        SkillProperties props2 = new SkillProperties();
+        props2.setDir(tempDir.toString());
+        SkillRegistry registry2 = new SkillRegistry(props2, settings, new PluginService(), null);
+        registry2.init();
+        assertFalse(registry2.isEnabled("text-to-speech"), "全关是用户的明确选择，收敛不该打回去");
+        assertFalse(registry2.isEnabled("meeting-recorder"));
+    }
+
+    @Test
+    @DisplayName("「语音」收敛只在两个成员都在场时生效：缺一个就不动禁用名单")
+    void voiceConvergenceRequiresBothMembersPresent() throws IOException {
+        writeSkill(tempDir.resolve("text-to-speech"), "text-to-speech", null);
+        InMemorySystemSettingService settings = new InMemorySystemSettingService();
+        settings.set(SkillRegistry.DISABLED_KEY, "[\"meeting-recorder\"]");
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(tempDir.toString());
+        SkillRegistry registry = new SkillRegistry(props, settings, new PluginService(), null);
+        registry.init();
+        assertEquals("[\"meeting-recorder\"]", settings.get(SkillRegistry.DISABLED_KEY, ""),
+                "meeting-recorder 目录不在场时不该动持久化的禁用名单");
+    }
+
+    @Test
     @DisplayName("坏 skill 跳过不阻断：YAML 语法错误 / 缺 id / 缺 prompt 文件 / 缺 triggers")
     void skipsBrokenSkillsWithoutBlocking() throws IOException {
         // 好的 skill
@@ -175,6 +231,46 @@ class SkillRegistryTest {
     }
 
     @Test
+    @DisplayName("修复：skill.yml 编码错误时，getLoadErrors() 要能看出「解析出错」而不是「没有这个 skill」")
+    void encodingFailureIsDistinguishableFromMissingSkill() throws IOException {
+        writeSkill(tempDir.resolve("good-skill"), "good-skill", null);
+
+        // 非 UTF-8 字节（GBK 编码的中文）：Files.readString(..., UTF_8) 会抛 MalformedInputException
+        Path badEncoding = tempDir.resolve("bad-encoding");
+        Files.createDirectories(badEncoding);
+        Files.write(badEncoding.resolve("skill.yml"),
+                "id: bad-encoding\nname: 中文技能名\ntriggers: [x]\nprompt: prompt.md\n"
+                        .getBytes(java.nio.charset.Charset.forName("GBK")));
+        Files.writeString(badEncoding.resolve("prompt.md"), "p");
+
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+
+        // 与"坏 skill 跳过不阻断"一致：解析失败的 skill 不出现在结果里，好 skill 不受影响
+        assertEquals(1, registry.getSkills().size());
+        assertTrue(registry.getSkill("bad-encoding").isEmpty(), "编码错误的 skill 不应该注册成功");
+
+        // 新增的区分信号：loadErrors 里要能查到这个目录，且原因点明是编码问题
+        assertTrue(registry.getLoadErrors().containsKey("bad-encoding"),
+                "解析失败必须在 loadErrors 里留痕，不能和「压根没有这个目录」一样悄无声息");
+        assertTrue(registry.getLoadErrors().get("bad-encoding").contains("编码"),
+                "原因应该点明是编码问题，而不是一句笼统的失败: " + registry.getLoadErrors().get("bad-encoding"));
+        // 正常注册成功的目录不应该出现在 loadErrors 里
+        assertFalse(registry.getLoadErrors().containsKey("good-skill"));
+    }
+
+    @Test
+    @DisplayName("修复：enabled_by_default 写成带引号的真值（\"yes\"）不能被静默当成 false")
+    void quotedTruthyEnabledByDefaultIsNotCoercedToFalse() throws IOException {
+        writeSkill(tempDir.resolve("quoted-yes"), "quoted-yes", "enabled_by_default: \"yes\"\n");
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+
+        SkillDefinition skill = registry.getSkill("quoted-yes").orElseThrow();
+        assertTrue(skill.isEnabledByDefault(),
+                "带引号的真值 \"yes\" 应该被识别为启用，不能被 Boolean.parseBoolean 悄悄当成 false");
+        assertTrue(registry.isEnabled("quoted-yes"), "不该被首次扫描的种子逻辑默认关闭");
+    }
+
+    @Test
     @DisplayName("插件携带 skill（manifest.skills）：经 PluginService 收集后注册，带 sourcePluginId")
     void registersPluginCarriedSkills() throws IOException {
         Path pluginsDir = tempDir.resolve("plugins");
@@ -201,6 +297,45 @@ class SkillRegistryTest {
         pluginService.setEnabled("my-plugin", false);
         assertFalse(registry.isAvailable(skill));
         assertTrue(registry.getSkill("plugin-skill").isPresent());
+    }
+
+    /**
+     * 真机复现（2026-08-23，尽调插件上架当天）：插件携带的 skill 写着 enabled_by_default:false
+     * （为的是插件没装前别出现），用户在广场装好插件、点了启用，工具注册上了，但 skill 仍是禁用态
+     * ——对话里说「尽调报告」永远不命中。用户视角是第三个看不见的开关。
+     * 规则：启用插件 = 启用它携带的全部 skill；别的插件 / 内置 skill 一个都不碰。
+     */
+    @Test
+    @DisplayName("修复：enableSkillsFromPlugin 只把该插件携带的 skill 翻成启用")
+    void enablingPluginEnablesItsCarriedSkills() throws IOException {
+        Path pluginsDir = tempDir.resolve("plugins");
+        Path pluginDir = pluginsDir.resolve("my-plugin");
+        Path otherDir = pluginsDir.resolve("other-plugin");
+        Files.createDirectories(pluginDir);
+        Files.createDirectories(otherDir);
+        Files.writeString(pluginDir.resolve("manifest.json"), """
+                { "id": "my-plugin", "name": "带技能的插件", "version": "1.0.0", "skills": ["my-skill"] }
+                """);
+        Files.writeString(otherDir.resolve("manifest.json"), """
+                { "id": "other-plugin", "name": "别的插件", "version": "1.0.0", "skills": ["other-skill"] }
+                """);
+        writeSkill(pluginDir.resolve("my-skill"), "plugin-skill", "enabled_by_default: false\n");
+        writeSkill(otherDir.resolve("other-skill"), "other-skill", "enabled_by_default: false\n");
+        writeSkill(tempDir.resolve("builtin-off"), "builtin-off", "enabled_by_default: false\n");
+
+        PluginService pluginService = new PluginService(null, pluginsDir.toString());
+        pluginService.init();
+        SkillRegistry registry = newRegistry(tempDir, pluginService);
+        assertFalse(registry.isEnabled("plugin-skill"), "种子化后默认禁用");
+
+        List<String> flipped = registry.enableSkillsFromPlugin("my-plugin");
+
+        assertEquals(List.of("plugin-skill"), flipped);
+        assertTrue(registry.isEnabled("plugin-skill"));
+        assertFalse(registry.isEnabled("other-skill"), "别的插件的 skill 不动");
+        assertFalse(registry.isEnabled("builtin-off"), "内置 skill 不动");
+        assertEquals(List.of(), registry.enableSkillsFromPlugin("my-plugin"), "已启用的不重复报告");
+        assertEquals(List.of(), registry.enableSkillsFromPlugin("no-such-plugin"));
     }
 
     @Test
@@ -357,5 +492,60 @@ class SkillRegistryTest {
         SkillRegistry registry = newRegistry(dir, tempDir.resolve("nope"), new PluginService());
 
         assertEquals(1, registry.getSkills().size());
+    }
+
+    /**
+     * 读 DISABLED_KEY 时可以卡住的设置服务：用来把 loadDisabledState 停在
+     * 「名单还没读回来」的那一瞬间，验证并发的无锁读方不会读到空名单。
+     */
+    private static class GatedSystemSettingService extends InMemorySystemSettingService {
+        final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        @Override
+        public String get(String key, String defaultValue) {
+            if (SkillRegistry.DISABLED_KEY.equals(key) && armed.compareAndSet(true, false)) {
+                entered.countDown();
+                try {
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return super.get(key, defaultValue);
+        }
+    }
+
+    @Test
+    @DisplayName("并发：重载启停名单期间，无锁读方不该读到空名单（被停用的 skill 短暂变成启用）")
+    void disabledStateIsNotTornWhileReloading() throws Exception {
+        writeSkill(tempDir.resolve("test-skill"), "test-skill", null);
+        GatedSystemSettingService settings = new GatedSystemSettingService();
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(tempDir.toString());
+        props.setDisabledCacheTtlMs(600_000); // 读方 TTL 不到期，走的就是无锁快路径
+        SkillRegistry registry = new SkillRegistry(props, settings, new PluginService(), null);
+        registry.init();
+        registry.setEnabled("test-skill", false);
+        assertFalse(registry.isEnabled("test-skill"));
+
+        settings.armed.set(true);
+        Thread reloader = new Thread(registry::rescan, "skill-rescan");
+        reloader.start();
+        try {
+            assertTrue(settings.entered.await(10, java.util.concurrent.TimeUnit.SECONDS),
+                    "重载线程应停在读禁用名单这一步");
+            org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+                    java.time.Duration.ofSeconds(5),
+                    () -> assertFalse(registry.isEnabled("test-skill"),
+                            "重载途中被停用的 skill 不该被读成启用"));
+        } finally {
+            settings.release.countDown();
+            reloader.join(10_000);
+        }
+
+        assertFalse(registry.isEnabled("test-skill"), "重载结束后仍是停用");
     }
 }

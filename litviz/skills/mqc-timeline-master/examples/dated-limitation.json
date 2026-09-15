@@ -1,0 +1,143 @@
+{
+  "_note": "脱敏示例。甲方为投资方，乙方为原股东，丙公司为目标公司，丁公司为丙公司的控股主体。选用日期型的理由：五个时点全部有精确日期、彼此分得开，而补充协议至起诉之间近三年的沉默明显长于其余各段，这段间隔本身关系到诉讼时效的起算与经过，是本图要讲的事。",
+  "schema_version": 2,
+  "diagram_type": "timeline",
+  "layout": "dated_point_timeline",
+  "medium": "a4_landscape",
+  "title_text": "股权投资对赌纠纷 · 协议签署与权利主张时间轴",
+  "axis": {
+    "mode": "proportional_year",
+    "unit": "year"
+  },
+  "events": [
+    {
+      "id": "1",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2015年8月1日",
+        "date": "2015/8/1",
+        "date_text": "2015.08.01"
+      },
+      "head": "甲方与乙方签署投资协议",
+      "body": "约定乙方将丙公司百分之百股权转让给甲方或其指定主体，价款1500万元并附丁公司百分之十股份；乙方就丙公司2015至2017三个年度的税后净利润作出业绩承诺，未达标的按差额的1.4倍以现金补偿。",
+      "source": {
+        "file": "判决书.pdf",
+        "at": "para:31",
+        "medium": "text_layer",
+        "quote": "2015年8月1日，乙方、丙自然人作为现有股东，甲方作为投资方"
+      }
+    },
+    {
+      "id": "2",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2016年5月26日",
+        "date": "2016/5/26",
+        "date_text": "2016.05.26"
+      },
+      "head": "双方签订股权代持协议",
+      "body": "约定丁公司已发行股份中的十股由乙方实际持有、委托甲方代为持有并行使股东权利，代持期间至乙方将相关权益转出之日止。",
+      "source": {
+        "file": "判决书.pdf",
+        "at": "para:33",
+        "medium": "text_layer",
+        "quote": "2016年5月26日，乙方作为委托方，甲方作为受托方签订《股权代持协议》"
+      }
+    },
+    {
+      "id": "3",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "sign",
+        "raw": "2017年11月2日",
+        "date": "2017/11/2",
+        "date_text": "2017.11.02"
+      },
+      "head": "双方签订补充协议调整业绩承诺",
+      "body": "业绩承诺调整为2015与2016两个年度累计税后净利润1260万元，2017年度不再承担利润保证；乙方所持丁公司股份由百分之十下调为百分之六。",
+      "emphasis": true,
+      "source": {
+        "file": "判决书.pdf",
+        "at": "para:34",
+        "medium": "text_layer",
+        "quote": "2017年11月2日，乙方、甲方签订《补充协议》"
+      }
+    },
+    {
+      "id": "4",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "occur",
+        "raw": "2020年10月21日",
+        "date": "2020/10/21",
+        "date_text": "2020.10.21"
+      },
+      "head": "法院受理甲方提起的本诉",
+      "body": "甲方以乙方未完成调整后的业绩承诺为由，请求判令支付业绩补偿款及违约金。",
+      "source": {
+        "file": "判决书.pdf",
+        "at": "para:12",
+        "medium": "text_layer",
+        "quote": "由原受理法院于2020年10月21日受理"
+      }
+    },
+    {
+      "id": "5",
+      "unit_type": "event",
+      "quote_depth": 0,
+      "time": {
+        "certainty": "exact",
+        "origin": "extracted",
+        "kind": "record",
+        "raw": "2021年9月13日",
+        "date": "2021/9/13",
+        "date_text": "2021.09.13"
+      },
+      "head": "受托机构出具司法鉴定报告",
+      "body": "鉴定结论为丙公司2015与2016两个年度净利润合计10696983.37元，低于补充协议约定的1260万元。",
+      "source": {
+        "file": "判决书.pdf",
+        "at": "para:36",
+        "medium": "text_layer",
+        "quote": "受托鉴定机构于2021年9月13日出具司法鉴定报告"
+      }
+    }
+  ],
+  "residuals": [
+    {
+      "file": "判决书.pdf",
+      "at": "para:37",
+      "raw": "2015年12月",
+      "reason": "仅载明年月，无法在按比例的轴上定位，未入本图"
+    },
+    {
+      "file": "判决书.pdf",
+      "at": "para:14",
+      "raw": "2021年10月11日",
+      "reason": "开庭与判决两个时点相隔七日，在本图尺度上与鉴定报告重合，未入本图"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim-condensed",
+    "note": "本图取自判决书的本院查明部分。补充协议至起诉之间相隔1084天，明显长于其余各段（平均383天）。"
+  },
+  "checkpoint": {
+    "confirmed": false,
+    "extraction_confirmed": false,
+    "emphasis_source": "user"
+  }
+}

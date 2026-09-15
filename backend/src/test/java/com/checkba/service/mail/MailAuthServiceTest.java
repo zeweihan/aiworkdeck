@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.mail;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.UserService;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,13 +57,74 @@ class MailAuthServiceTest {
         RecordingGateway gw = new RecordingGateway();
         UserRepository repo = mock(UserRepository.class);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        UserService users = mock(UserService.class);
+        // 建号那步默认回落到「按已验证邮箱查到的那个人」，这样老用例不必每个都去 stub；
+        // 真要验建号行为的用例自己另建 fixture。
+        when(users.findOrCreateByEmail(anyString())).thenAnswer(inv -> {
+            String addr = inv.getArgument(0);
+            User u = repo.findByVerifiedEmail(addr).orElseGet(() -> user(0, addr));
+            return new UserService.EmailAccount(u, false);
+        });
         MailAuthService svc = new MailAuthService(
-                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, localMode, passwordless);
+                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, localMode, passwordless,
+                ReviewAccountGate.disabled(), users);
         return new Fixture(svc, gw, repo);
     }
 
     private static Fixture fixture() {
         return fixture(false, true);
+    }
+
+    @Test
+    @DisplayName("注册登录合一：未注册邮箱也发码，验过即建号")
+    void unknownEmailGetsCodeAndAccountIsCreated() {
+        RecordingGateway gw = new RecordingGateway();
+        UserRepository repo = mock(UserRepository.class);
+        UserService users = mock(UserService.class);
+        User fresh = new User();
+        fresh.setId(777L);
+        when(users.findOrCreateByEmail("newcomer@example.com"))
+                .thenReturn(new UserService.EmailAccount(fresh, true));
+
+        VerificationCodeStore store = new VerificationCodeStore();
+        MailAuthService svc = new MailAuthService(
+                store, new MailRouter(List.of(gw)), repo, false, true,
+                ReviewAccountGate.disabled(), users);
+
+        // 未注册地址也该真的发出一封信（旧行为是静默不发）
+        svc.sendSigninCode("newcomer@example.com");
+        assertFalse(gw.sent.isEmpty(), "未注册邮箱也应收到验证码");
+
+        // 拿到的码验过之后，账号被建出来
+        String code = gw.lastCode();
+        assertSame(fresh, svc.verifySigninCode("newcomer@example.com", code));
+        verify(users).findOrCreateByEmail("newcomer@example.com");
+    }
+
+    @Test
+    @DisplayName("审核账号：固定码放行并落到专用账号，不经验证码 store")
+    void reviewAccountBypassesCodeStoreAndLandsOnItsOwnAccount() {
+        MailGateway gw = new RecordingGateway();
+        UserRepository repo = mock(UserRepository.class);
+        UserService users = mock(UserService.class);
+        User reviewer = new User();
+        reviewer.setId(999L);
+        reviewer.setUsername("appreview");
+        when(users.findOrCreateReviewAccount("appreview@example.com")).thenReturn(reviewer);
+
+        MailAuthService svc = new MailAuthService(
+                new VerificationCodeStore(), new MailRouter(List.of(gw)), repo, false, true,
+                new ReviewAccountGate("appreview@example.com", "246813"), users);
+
+        // 没发过任何码，直接用固定码换账号
+        assertSame(reviewer, svc.verifySigninCode("appreview@example.com", "246813"));
+
+        // 码错就不该放行，也不该退化成「查已验证邮箱」
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.verifySigninCode("appreview@example.com", "000000"));
+        // 别的地址即使拿到那把码也不放行
+        assertThrows(IllegalArgumentException.class,
+                () -> svc.verifySigninCode("someoneelse@example.com", "246813"));
     }
 
     @Test
@@ -69,7 +135,8 @@ class MailAuthServiceTest {
 
         MailRouter empty = new MailRouter(List.of());
         assertFalse(new MailAuthService(new VerificationCodeStore(), empty,
-                mock(UserRepository.class), false, true).active(), "没有通道就不算启用");
+                mock(UserRepository.class), false, true,
+                ReviewAccountGate.disabled(), mock(UserService.class)).active(), "没有通道就不算启用");
     }
 
     @Test
@@ -158,18 +225,26 @@ class MailAuthServiceTest {
     }
 
     @Test
-    @DisplayName("免密登录：未注册的邮箱不发信但照常返回，不泄露该邮箱是否是用户")
+    @DisplayName("免密登录：已注册与未注册的表现完全一致，读不出该邮箱是不是用户")
     void signinDoesNotLeakRegistrationStatus() {
-        Fixture f = fixture();
-        when(f.repo().findByVerifiedEmail("stranger@gmail.com")).thenReturn(Optional.empty());
+        // 反枚举的不变量变了：以前靠「未注册不发信」，那反而是枚举器——对方从
+        // 收没收到信就能读出结论。现在两者都发码、都能验过，真正没有差别可读。
+        Fixture known = fixture();
+        when(known.repo().findByVerifiedEmail("dave@gmail.com"))
+                .thenReturn(Optional.of(user(5, "dave@gmail.com")));
+        Fixture unknown = fixture();
+        when(unknown.repo().findByVerifiedEmail(anyString())).thenReturn(Optional.empty());
 
-        assertDoesNotThrow(() -> f.svc().sendSigninCode("stranger@gmail.com"));
-        assertTrue(f.gw().sent.isEmpty(), "未注册就不该真发信");
+        known.svc().sendSigninCode("dave@gmail.com");
+        unknown.svc().sendSigninCode("stranger@gmail.com");
+        assertEquals(known.gw().sent.size(), unknown.gw().sent.size(), "发信与否不能有差别");
 
-        // 错码与查无此人给同一句话
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> f.svc().verifySigninCode("stranger@gmail.com", "123456"));
-        assertEquals("验证码错误或已过期", e.getMessage());
+        // 错码在两边给同一句话
+        for (Fixture f : List.of(known, unknown)) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> f.svc().verifySigninCode("whoever@gmail.com", "123456"));
+            assertEquals("验证码错误或已过期", e.getMessage());
+        }
     }
 
     @Test

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller.ai;
 
 import com.checkba.controller.AuthController;
@@ -5,6 +8,8 @@ import com.checkba.repository.UserRepository;
 import com.checkba.service.AdminAccessService;
 import com.checkba.service.LangText;
 import com.checkba.service.ai.PluginService;
+import com.checkba.service.ai.ToolRegistry;
+import com.checkba.service.ai.tools.ToolContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -43,6 +48,15 @@ public class PluginController {
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final ToolRegistry toolRegistry;
+    private final com.checkba.service.ProjectMemberService projectMemberService;
+    /** 声明式贡献点（规范 v2.9 P4）：模板/画像/设置 */
+    private final com.checkba.service.ai.PluginContributionService contributionService;
+    // 以下四个只服务 aiComplete（规范 v2.7 P2 桥 ai.request 的服务端落点）
+    private final com.checkba.service.plugin.PluginHostFactory pluginHostFactory;
+    private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
+    private final com.checkba.service.ai.AuxModelResolver auxModelResolver;
+    private final com.checkba.service.ai.TokenUsageService tokenUsageService;
 
     @lombok.Data
     public static class PluginView {
@@ -58,8 +72,18 @@ public class PluginController {
         private List<PluginService.PluginToolInfo> tools;
         private int toolCount;
         private boolean enabled;
+        /** 上手引导（manifest.guide，规范 v2.5）；null 时前端按描述/工具清单兜底 */
+        private PluginService.PluginGuide guide;
         /** 被平台封禁时的原因；非空表示该插件已下架，界面应标红并禁止启用 */
         private String revokedReason;
+        /** manifest.minHostVersion（规范 v2.7 P0）；null = 不限 */
+        private String minHostVersion;
+        /** 宿主版本低于 minHostVersion 时的原因文案；非空表示插件不生效，界面应提示升级客户端 */
+        private String incompatibleReason;
+        /** 是否本机 dev 免签直装（.awd-dev 标记）；实验 API（x- 前缀桥方法）只对它开放 */
+        private boolean devInstalled;
+        /** manifest.contributes（规范 v2.8 起）：广场展示与审查用，null = 无贡献内容 */
+        private PluginService.Contributes contributes;
     }
 
     @GetMapping("/list")
@@ -185,6 +209,242 @@ public class PluginController {
         return ResponseEntity.ok(ok());
     }
 
+    /**
+     * Web 面板直调本插件工具（规范 v2.5）：绕过模型，不绕过任何安全闸——
+     * 登录会话 + 项目写权限 + 工具必须是该插件 manifest 声明的；
+     * 之后走与 AI 链路同一个 {@link com.checkba.service.ai.ToolRegistry#execute}，
+     * manifest 权限校验、宿主 SPI 配额、projectId/userId 以服务端为准的规则全部照旧。
+     * 请求体：{"projectId": 123, "args": {...}}；args 里与 ToolContext 同名的参数会被服务端值覆盖。
+     */
+    @PostMapping("/{id}/tools/{tool}")
+    public ResponseEntity<Map<String, Object>> invokeTool(
+            @PathVariable("id") String pluginId,
+            @PathVariable("tool") String toolName,
+            @org.springframework.web.bind.annotation.RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        PluginService.PluginMetadata meta = pluginService.getPlugin(pluginId);
+        if (meta == null || !pluginService.isEnabled(pluginId) || pluginService.revokedReason(pluginId) != null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在或未启用: ", "Plugin not found or disabled: ") + pluginId));
+        }
+        boolean declared = meta.getTools() != null && meta.getTools().stream()
+                .anyMatch(t -> toolName.equals(t.getName()));
+        if (!declared) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("该插件未声明此工具: ", "Tool not declared by this plugin: ") + toolName));
+        }
+        Object pidRaw = body == null ? null : body.get("projectId");
+        Long projectId = pidRaw instanceof Number n ? n.longValue() : null;
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("无权限访问该项目", "No access to this project")));
+        }
+        Object args = body.get("args");
+        String argsJson;
+        try {
+            argsJson = args == null ? "{}" : new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(args);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(error(LangText.of("args 不是合法 JSON 对象", "args is not a valid JSON object")));
+        }
+        ToolRegistry.ToolResult result = toolRegistry.execute(toolName,
+                argsJson, new ToolContext(projectId, null, userId, null));
+        Map<String, Object> out = new HashMap<>();
+        out.put("code", result.found() ? 0 : 1);
+        out.put("output", result.output());
+        return ResponseEntity.ok(out);
+    }
+
+    /** ai.request 的 prompt+system 合计上限（字符）：面板内一次性辅助推理，不是对话通道 */
+    static final int AI_REQUEST_MAX_CHARS = 16000;
+
+    /**
+     * Web 插件桥 ai.request 的服务端落点（规范 v2.7 P2）：插件经平台 Credits 通道调辅助模型，
+     * 免带 Key——计费/配额/审计全在宿主。安全闸自上而下对齐 invokeTool：
+     * 登录会话 → 插件启用未封禁 → manifest 声明 {@code ai} 权限（服务端是权威）→ 项目写权限
+     * → 长度上限 → 每插件 10 次/分钟频控 → PlatformAiUserScope 里调辅助模型并记账。
+     * 响应恒 200：{@code {code:0, text, modelId}} 或 {@code {code:1, error}}。
+     */
+    @PostMapping("/{id}/ai/complete")
+    public ResponseEntity<Map<String, Object>> aiComplete(
+            @PathVariable("id") String pluginId,
+            @org.springframework.web.bind.annotation.RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        PluginService.PluginMetadata meta = pluginService.getPlugin(pluginId);
+        if (meta == null || !pluginService.isEnabled(pluginId) || pluginService.revokedReason(pluginId) != null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在或未启用: ", "Plugin not found or disabled: ") + pluginId));
+        }
+        if (meta.getPermissions() == null || !meta.getPermissions().contains("ai")) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(error(LangText.of("插件未声明 ai 权限", "Plugin does not declare the 'ai' permission")));
+        }
+        Object pidRaw = body == null ? null : body.get("projectId");
+        Long projectId = pidRaw instanceof Number n ? n.longValue() : null;
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("无权限访问该项目", "No access to this project")));
+        }
+        String prompt = body.get("prompt") instanceof String s ? s : null;
+        String system = body.get("system") instanceof String s ? s : null;
+        String purpose = body.get("purpose") instanceof String s ? s : "";
+        if (prompt == null || prompt.isBlank()) {
+            return ResponseEntity.ok(errorCoded("invalid_params", LangText.of("prompt 不能为空", "prompt is required")));
+        }
+        int total = prompt.length() + (system == null ? 0 : system.length());
+        if (total > AI_REQUEST_MAX_CHARS) {
+            return ResponseEntity.ok(errorCoded("quota_exceeded",
+                    LangText.of("prompt+system 超过 " + AI_REQUEST_MAX_CHARS + " 字符上限",
+                            "prompt+system exceeds the " + AI_REQUEST_MAX_CHARS + " character limit")));
+        }
+        try {
+            pluginHostFactory.acquireAiQuota(pluginId);
+        } catch (com.checkba.plugin.api.HostQuotaException e) {
+            return ResponseEntity.ok(errorCoded("quota_exceeded", e.getMessage()));
+        }
+        try {
+            String modelId = auxModelResolver.auxModelId();
+            java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
+            if (system != null && !system.isBlank()) {
+                messages.add(dev.langchain4j.data.message.SystemMessage.from(system));
+            }
+            messages.add(dev.langchain4j.data.message.UserMessage.from(prompt));
+            dev.langchain4j.model.output.Response<dev.langchain4j.data.message.AiMessage> r =
+                    com.checkba.service.ai.PlatformAiUserScope.call(userId,
+                            () -> chatModelFactory.getAuxChatModel().generate(messages));
+            try {
+                if (r.tokenUsage() != null) {
+                    tokenUsageService.recordUsage(projectId, userId, modelId, r.tokenUsage(), null);
+                }
+            } catch (Exception e) {
+                org.slf4j.LoggerFactory.getLogger(PluginController.class)
+                        .warn("plugin {} ai.request usage record failed: {}", pluginId, e.getMessage());
+            }
+            org.slf4j.LoggerFactory.getLogger(PluginController.class)
+                    .info("plugin {} ai.request purpose={} model={} tokens={}", pluginId, purpose, modelId, r.tokenUsage());
+            Map<String, Object> out = ok();
+            out.put("text", r.content() == null ? "" : r.content().text());
+            out.put("modelId", modelId);
+            return ResponseEntity.ok(out);
+        } catch (Exception e) {
+            return ResponseEntity.ok(errorCoded("ai_failed", e.getMessage()));
+        }
+    }
+
+    private static Map<String, Object> errorCoded(String errorCode, String message) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 1);
+        result.put("errorCode", errorCode);
+        result.put("message", message);
+        return result;
+    }
+
+    // ==================== 声明式贡献点（规范 v2.9 P4）====================
+
+    /** 全部已启用插件贡献的文书模板（新建入口与 AI 工具面共用这份清单） */
+    @GetMapping("/contributed/templates")
+    public ResponseEntity<Map<String, Object>> listContributedTemplates(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        Map<String, Object> result = ok();
+        result.put("templates", contributionService.listTemplates());
+        return ResponseEntity.ok(result);
+    }
+
+    /** 从贡献模板创建项目文件：登录 + 项目写权限（与 invokeTool 同档） */
+    @PostMapping("/contributed/templates/create")
+    public ResponseEntity<Map<String, Object>> createFromTemplate(
+            @org.springframework.web.bind.annotation.RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        Object pidRaw = body.get("projectId");
+        Long projectId = pidRaw instanceof Number n ? n.longValue() : null;
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("无权限访问该项目", "No access to this project")));
+        }
+        Object parentRaw = body.get("parentId");
+        Long parentId = parentRaw instanceof Number n ? n.longValue() : null;
+        try {
+            var file = contributionService.createFromTemplate(projectId, userId,
+                    String.valueOf(body.get("pluginId")), String.valueOf(body.get("templateId")),
+                    parentId, body.get("name") == null ? null : String.valueOf(body.get("name")));
+            Map<String, Object> result = ok();
+            result.put("fileId", file.getId());
+            result.put("name", file.getName());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    /** 已启用插件贡献的样式画像清单 + 当前选中项 */
+    @GetMapping("/contributed/style-profiles")
+    public ResponseEntity<Map<String, Object>> listContributedStyleProfiles(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        Map<String, Object> result = ok();
+        result.put("profiles", contributionService.listStyleProfiles());
+        return ResponseEntity.ok(result);
+    }
+
+    /** 选定/清除全局默认画像（admin，与启停同口径）；ref 形如 "<pluginId>:<profileId>"，空 = 清除 */
+    @PostMapping("/contributed/style-profiles/select")
+    public ResponseEntity<Map<String, Object>> selectContributedStyleProfile(
+            @org.springframework.web.bind.annotation.RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
+        }
+        try {
+            contributionService.selectStyleProfile(body == null ? null : body.get("ref"));
+            return ResponseEntity.ok(ok());
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    /** 插件设置：声明 + 当前值（secret 只回显尾 4 位） */
+    @GetMapping("/{id}/settings")
+    public ResponseEntity<Map<String, Object>> getPluginSettings(
+            @PathVariable("id") String pluginId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(LangText.of("请先登录", "Please sign in first")));
+        }
+        if (pluginService.getPlugin(pluginId) == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在: ", "Plugin not found: ") + pluginId));
+        }
+        Map<String, Object> result = ok();
+        result.put("settings", contributionService.settingsView(pluginId));
+        return ResponseEntity.ok(result);
+    }
+
+    /** 保存插件设置（admin，与启停同口径；按声明校验类型，未声明的键拒绝） */
+    @PostMapping("/{id}/settings")
+    public ResponseEntity<Map<String, Object>> savePluginSettings(
+            @PathVariable("id") String pluginId,
+            @org.springframework.web.bind.annotation.RequestBody Map<String, Object> values,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
+        }
+        try {
+            contributionService.saveSettings(pluginId, values);
+            return ResponseEntity.ok(ok());
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
     private PluginView toView(PluginService.PluginMetadata meta) {
         PluginView view = new PluginView();
         view.setId(meta.getId());
@@ -198,8 +458,13 @@ public class PluginController {
         view.setPermissions(meta.getPermissions() == null ? List.of() : meta.getPermissions());
         view.setTools(meta.getTools() == null ? List.of() : meta.getTools());
         view.setToolCount(view.getTools().size());
+        view.setGuide(meta.getGuide());
         view.setEnabled(pluginService.isEnabled(meta.getId()));
         view.setRevokedReason(pluginService.revokedReason(meta.getId()));
+        view.setMinHostVersion(meta.getMinHostVersion());
+        view.setIncompatibleReason(pluginService.incompatibleReason(meta.getId()));
+        view.setDevInstalled(pluginService.isDevInstalled(meta.getId()));
+        view.setContributes(meta.getContributes());
         return view;
     }
 

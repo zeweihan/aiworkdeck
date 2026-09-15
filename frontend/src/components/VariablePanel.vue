@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <div class="variable-panel">
     <div class="variable-layout">
@@ -86,6 +88,7 @@ import {
   saveUserVariable,
   deleteUserVariable
 } from '@/services/api.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
   props: {
@@ -112,7 +115,12 @@ export default {
       docFields: [],
       showCreateModal: false,
       createForm: { name: '' },
-      confirmDeleteKey: null
+      confirmDeleteKey: null,
+      // 每个数据源各自的请求代次：三者都被 refresh() 之外的写操作
+      //（confirmDelete/insertVariable 等）单独调用，只在 refresh() 层面挡是不够的。
+      _projectVarsSeq: 0,
+      _userVarsSeq: 0,
+      _docFieldsSeq: 0
     }
   },
   computed: {
@@ -212,37 +220,52 @@ export default {
       }
     },
 
+    // 三个 fetch* 不止被 refresh() 调用，scope 切换连点、或切换紧跟着一次
+    // confirmDelete/insertVariable 触发的单独刷新，都会让同一数据源的两次请求
+    // 并发在飞。网络到达顺序不保证跟发出顺序一致，先发的（陈旧）响应若后回，
+    // 会把已经生效的新数据覆盖回去——比如刚删掉的变量又冒出来，或刚改的值
+    // 被打回旧值。三者各自独立的请求代次，只认"此刻最新一次"发出的那份。
     async fetchProjectVars() {
+      const seq = ++this._projectVarsSeq
       if (!this.projectId) {
-        this.projectVars = []
+        if (shouldAcceptResponse(seq, this._projectVarsSeq)) this.projectVars = []
         return
       }
       try {
         const res = await getProjectVariables(this.projectId)
+        if (!shouldAcceptResponse(seq, this._projectVarsSeq)) return
         this.projectVars = Array.isArray(res) ? res : (res.data || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._projectVarsSeq)) return
         this.projectVars = []
       }
     },
 
     async fetchUserVars() {
+      const seq = ++this._userVarsSeq
       try {
         const res = await getUserVariables()
+        if (!shouldAcceptResponse(seq, this._userVarsSeq)) return
         this.userVars = Array.isArray(res) ? res : (res.data || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._userVarsSeq)) return
         this.userVars = []
       }
     },
 
     async fetchDocFields() {
+      const seq = ++this._docFieldsSeq
       const editor = this.getEditor ? this.getEditor() : null
       if (!editor || typeof editor.listVariableFields !== 'function') {
-        this.docFields = []
+        if (shouldAcceptResponse(seq, this._docFieldsSeq)) this.docFields = []
         return
       }
       try {
-        this.docFields = await editor.listVariableFields()
+        const fields = await editor.listVariableFields()
+        if (!shouldAcceptResponse(seq, this._docFieldsSeq)) return
+        this.docFields = fields
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._docFieldsSeq)) return
         this.docFields = []
       }
     },
@@ -477,21 +500,11 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* Color Config - AI WorkDeck Palette */
-$color-primary: #1A5336; // Forest Green
-$color-accent: #5BD197; // Mint Green
-$color-accent-pale: #E6F9F0;
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
-
 .variable-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: $bg-pale;
+  background: var(--awd-bg);
 }
 
 .variable-layout {
@@ -512,8 +525,8 @@ $bg-white: #FFFFFF;
 .scope-rail {
   width: 100px;
   flex-shrink: 0;
-  border-left: 1px solid $color-border;
-  background: $bg-white;
+  border-left: 1px solid var(--awd-border);
+  background: var(--awd-surface);
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -525,20 +538,20 @@ $bg-white: #FFFFFF;
   padding: 8px 10px;
   border-radius: 6px;
   font-size: 12px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   text-align: left;
   transition: all 0.2s;
   font-weight: 500;
   
   &:hover {
-    background: $bg-pale;
-    color: $color-text-main;
+    background: var(--awd-bg);
+    color: var(--awd-text);
   }
   
   &.active {
-    background: $color-accent-pale; // Mint Lightest
-    color: $color-primary; // Forest Green
+    background: var(--awd-accent-soft); // Mint Lightest
+    color: var(--awd-accent-text); // Forest Green
     font-weight: 600;
   }
 }
@@ -549,8 +562,8 @@ $bg-white: #FFFFFF;
   align-items: center;
   justify-content: flex-start;
   padding: 0 16px;
-  border-bottom: 1px solid $color-border;
-  background: $bg-white;
+  border-bottom: 1px solid var(--awd-border);
+  background: var(--awd-surface);
   flex-shrink: 0;
   gap: 12px;
 }
@@ -567,10 +580,10 @@ $bg-white: #FFFFFF;
   line-height: 30px; /* Center vertical alignment */
   padding: 0 12px;
   border-radius: 6px;
-  border: 1px solid $color-border;
-  background: $bg-white;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
   font-size: 13px;
-  color: $color-text-main;
+  color: var(--awd-text);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -579,19 +592,19 @@ $bg-white: #FFFFFF;
   font-weight: 500;
 
   &:hover {
-    border-color: $color-accent;
-    color: $color-primary;
-    background: $color-accent-pale;
+    border-color: var(--awd-mint);
+    color: var(--awd-accent-text);
+    background: var(--awd-accent-soft);
   }
   
   &.ghost {
     border-color: transparent;
     background: transparent;
-    color: $color-text-light;
+    color: var(--awd-text-2);
     
     &:hover {
-      background: $bg-pale;
-      color: $color-text-main;
+      background: var(--awd-bg);
+      color: var(--awd-text);
     }
   }
 }
@@ -600,12 +613,12 @@ $bg-white: #FFFFFF;
   flex: 1;
   overflow: hidden;
   padding: 0;
-  background: $bg-pale; 
+  background: var(--awd-bg); 
 }
 
 .loading, .empty {
   text-align: center;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   padding: 48px 20px;
   font-size: 13px;
 }
@@ -629,8 +642,8 @@ $bg-white: #FFFFFF;
 }
 
 .var-card {
-  background: $bg-white;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 12px;
   display: flex;
@@ -647,7 +660,7 @@ $bg-white: #FFFFFF;
 }
 
 .var-card:hover {
-  border-color: $color-accent;
+  border-color: var(--awd-mint);
   box-shadow: 0 8px 24px rgba(91, 209, 151, 0.15); /* Mint shadow */
   transform: translateY(-2px);
 }
@@ -671,7 +684,7 @@ $bg-white: #FFFFFF;
 .var-name {
   font-size: 14px;
   font-weight: 600;
-  color: $color-text-main;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -679,7 +692,7 @@ $bg-white: #FFFFFF;
 
 .var-creator {
   font-size: 12px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -687,7 +700,7 @@ $bg-white: #FFFFFF;
 
 .var-time-top {
   font-size: 11px;
-  color: #9aa5b1; 
+  color: var(--awd-text-3); 
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -712,27 +725,27 @@ $bg-white: #FFFFFF;
   border-radius: 4px;
   background: transparent;
   border: 1px solid transparent; 
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   font-size: 13px;
   padding: 0;
   transition: all 0.2s;
   
   &:hover {
-    background: $color-accent-pale;
-    color: $color-primary;
+    background: var(--awd-accent-soft);
+    color: var(--awd-accent-text);
   }
   
   &.danger:hover {
-    background: #FEF2F2;
-    color: #DC2626;
+    background: var(--awd-danger-soft);
+    color: var(--awd-danger-text);
   }
 }
 
 .var-value {
   font-size: 13px;
-  color: $color-text-main;
-  background: #f1f5f9;
+  color: var(--awd-text);
+  background: var(--awd-surface-2);
   padding: 10px;
   border-radius: 6px;
   flex: 1;
@@ -754,7 +767,7 @@ $bg-white: #FFFFFF;
 .modal-mask {
   position: fixed;
   left: 0; top: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.5); /* Darker mask */
+  background: var(--awd-overlay); /* Darker mask */
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -764,7 +777,7 @@ $bg-white: #FFFFFF;
 
 .modal {
   width: 360px;
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 12px; /* More rounded */
   padding: 24px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
@@ -773,20 +786,20 @@ $bg-white: #FFFFFF;
 .modal-title { 
   font-weight: 600; 
   font-size: 16px; 
-  color: $color-text-main;
+  color: var(--awd-text);
   margin-bottom: 8px; 
 }
 
 .modal-subtitle { 
   font-size: 13px; 
-  color: $color-text-light; 
+  color: var(--awd-text-2); 
   margin-bottom: 16px; 
 }
 
 .modal-input {
   width: 100%; 
   height: 40px;
-  border: 1px solid $color-border;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 0 12px; 
   font-size: 14px;
@@ -794,7 +807,7 @@ $bg-white: #FFFFFF;
   transition: border-color 0.2s;
   
   &:focus {
-    border-color: $color-accent;
+    border-color: var(--awd-mint);
     outline: none;
     box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.2);
   }
@@ -812,13 +825,13 @@ $bg-white: #FFFFFF;
   border-radius: 6px; 
   font-size: 13px; 
   cursor: pointer;
-  border: 1px solid $color-border; 
-  background: #fff;
-  color: $color-text-main;
+  border: 1px solid var(--awd-border); 
+  background: var(--awd-surface);
+  color: var(--awd-text);
   transition: all 0.2s;
   
   &:hover {
-    background: $bg-pale;
+    background: var(--awd-bg);
   }
 }
 
@@ -828,8 +841,8 @@ $bg-white: #FFFFFF;
   top: 100%;
   right: 0;
   margin-top: 8px;
-  background: #fff;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 8px;
@@ -852,15 +865,15 @@ $bg-white: #FFFFFF;
   right: 10px;
   width: 8px;
   height: 8px;
-  background: #fff;
-  border-top: 1px solid $color-border;
-  border-left: 1px solid $color-border;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
+  border-left: 1px solid var(--awd-border);
   transform: rotate(45deg);
 }
 
 .pop-text {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   text-align: center;
   font-weight: 500;
 }
@@ -878,32 +891,32 @@ $bg-white: #FFFFFF;
   text-align: center;
   border-radius: 4px;
   cursor: pointer;
-  background: $bg-pale;
-  color: $color-text-light;
+  background: var(--awd-bg);
+  color: var(--awd-text-2);
   transition: all 0.2s;
   
   &:hover {
-    background: #e2e8f0;
-    color: $color-text-main;
+    background: var(--awd-surface-3);
+    color: var(--awd-text);
   }
 }
 
 .pop-btn.danger {
-  background: #FEF2F2;
-  color: #DC2626;
+  background: var(--awd-danger-soft);
+  color: var(--awd-danger-text);
   
   &:hover {
-    background: #FEE2E2;
+    background: var(--awd-danger-soft);
   }
 }
 
 .modal-btn.primary { 
-  background: $color-primary; 
-  color: #fff; 
+  background: var(--awd-accent); 
+  color: var(--awd-text-on-accent); 
   border-color: transparent; 
   
   &:hover {
-    background: mix($color-primary, #000, 90%);
+    background: var(--awd-accent-hover);
   }
   
   &:disabled {

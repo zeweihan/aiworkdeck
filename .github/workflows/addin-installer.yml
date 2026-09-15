@@ -1,0 +1,60 @@
+# Office/WPS 插件的 Windows 安装器（.exe）在 Windows runner 上构建。
+#
+# 为什么要有这条：安装器的 NSIS 一键 UI 引擎（desktop/build/win/awd-oneclick-ui.nsh）
+# 与桌面端共用，引擎一改插件 exe 就得重出；而**维护者 Mac 上的 makensis 是坏的**
+# （Homebrew 3.12 与 electron-builder 缓存的 3.04 都一样，纯 ASCII 脚本走到写产物时
+# std::bad_alloc，2026-09-01 实测，见 .claude/agents/eng-infra.md 6.5.1），
+# 本机 `npm run build:installers` 出不了 Windows 那一半。没有这条工作流，
+# 插件端的安装器修复就只能烂在仓库里（dev-board#356 发版时实际撞上）。
+#
+# mac 那一半（.dmg，swiftc + 签名 + 公证）仍然只能在维护者 Mac 上跑：
+# `cd office-addin && npm run build:installers -- --skip-win`。
+#
+# 版本号取 desktop/package.json（单一来源），产物两份：国内站与国际站各一份
+#（托管地址焙进包内 manifest，不是「与站点无关」的通用包）。
+name: addin-installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  win:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Ensure NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            Add-Content $env:GITHUB_PATH 'C:\Program Files (x86)\NSIS'
+          }
+
+      # 位图由 render-oneclick-art.mjs 现场渲染（Chrome + ImageMagick，runner 自带），
+      # 产物不入库；build-installers.mjs 内部会调它，这里不用单独跑。
+      - name: Build Windows installers (both site variants)
+        shell: pwsh
+        run: |
+          node office-addin/installer/build-installers.mjs --skip-mac `
+            --url https://addin.aiworkdeck.com/office-addin --dist office-addin/installer/dist-cn
+          if ($LASTEXITCODE -ne 0) { throw 'cn installer build failed' }
+          node office-addin/installer/build-installers.mjs --skip-mac `
+            --url https://addin.workdeck.ai/office-addin --dist office-addin/installer/dist-intl
+          if ($LASTEXITCODE -ne 0) { throw 'intl installer build failed' }
+          Get-ChildItem -Recurse office-addin/installer/dist-cn, office-addin/installer/dist-intl |
+            Select-Object FullName, Length | Format-Table -AutoSize
+
+      # 两份产物文件名相同（下载地址靠 host 区分），所以必须分目录上传，
+      # 否则合并到一个 artifact 里后构建的那份会静默覆盖前一份。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addin-installer-exe
+          path: |
+            office-addin/installer/dist-cn/*.exe
+            office-addin/installer/dist-intl/*.exe
+          if-no-files-found: error

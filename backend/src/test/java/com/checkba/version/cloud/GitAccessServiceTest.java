@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version.cloud;
 
 import com.checkba.service.DeviceTokenService;
@@ -44,10 +47,13 @@ class GitAccessServiceTest {
 
     @Test
     void memberCanReadNonMemberCannot() {
-        when(tokens.resolveUserId("awdt_x")).thenReturn(42L);
+        when(tokens.resolve("awdt_x")).thenReturn(new DeviceTokenService.ResolvedToken(42L, 9L));
         when(members.hasReadPermission(7L, 42L)).thenReturn(true);
         when(members.isClient(7L, 42L)).thenReturn(false);
-        assertEquals(42L, svc.authorize(reqWith("u", "awdt_x"), 7L, false));
+        // 设备维度必须一路带到调用方（协作事件靠它分「你在另一台电脑」与「同事」）
+        DeviceTokenService.ResolvedToken who = svc.authorize(reqWith("u", "awdt_x"), 7L, false);
+        assertEquals(42L, who.userId());
+        assertEquals(9L, who.tokenId());
 
         when(members.hasReadPermission(7L, 42L)).thenReturn(false);
         assertEquals(403, assertThrows(GitAccessDeniedException.class,
@@ -56,7 +62,7 @@ class GitAccessServiceTest {
 
     @Test
     void clientIsAlwaysDeniedAndReadOnlyCannotWrite() {
-        when(tokens.resolveUserId("awdt_x")).thenReturn(42L);
+        when(tokens.resolve("awdt_x")).thenReturn(new DeviceTokenService.ResolvedToken(42L, 9L));
         when(members.hasReadPermission(7L, 42L)).thenReturn(true);
         when(members.isClient(7L, 42L)).thenReturn(true);
         assertEquals(403, assertThrows(GitAccessDeniedException.class,

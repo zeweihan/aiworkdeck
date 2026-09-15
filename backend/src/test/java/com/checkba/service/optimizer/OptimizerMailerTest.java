@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.optimizer;
 
 import com.checkba.model.entity.FeedbackAttachment;
@@ -110,6 +113,32 @@ class OptimizerMailerTest {
         assertTrue(body.contains("回信不会被系统读取"));
     }
 
+    /**
+     * 病灶（dev-board#151）：邮件里只有裸附件 API 地址，维护者在浏览器里点开是 403 死胡同。
+     * 修法：来源能给出浏览器入口（云端反馈控制台）时，正文必须带上直达链接。
+     */
+    @Test
+    @DisplayName("云端来源的邮件带反馈控制台直达链接")
+    void bodyCarriesConsoleLinkWhenSourceHasOne() {
+        OptimizerFeedbackSource s = sourceRef("https://addin.example/api/feedback/12/attachment/3");
+        when(s.consoleRef(any())).thenReturn("https://addin.example/feedback-console/?fb=12");
+
+        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), s, "");
+        String body = capturedBody();
+        assertTrue(body.contains("https://addin.example/feedback-console/?fb=12"),
+                "正文要有控制台直达链接：" + body);
+        assertTrue(body.contains("听语音"));
+    }
+
+    @Test
+    @DisplayName("本地来源没有浏览器入口，正文不出现控制台一节")
+    void bodyOmitsConsoleLineForLocalSource() {
+        // mock 未打桩的 default 方法返回 null，正好等价于 LocalFeedbackSource 的行为
+        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION),
+                List.of(), sourceRef(""), "");
+        assertFalse(capturedBody().contains("在浏览器里看这条反馈"));
+    }
+
     @Test
     void unclearVerdictAsksForADecision() {
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_UNCLEAR),
@@ -137,5 +166,41 @@ class OptimizerMailerTest {
         props.getMail().setTo("a@qq.com,, ,b@gmail.com");
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
         verify(router, times(2)).send(any(), any(), any());
+    }
+
+    /**
+     * 病灶：多收件人分属不同通道，其中一条通道故障时，send() 对第二个收件人的调用
+     * 会抛异常冒泡出去；OptimizerAgentService.notifyOrFail 接住后把这条反馈判 FAILED/
+     * 转 NEW 重试。没有任何 (feedbackId, 收件人) 维度的"已发送"记录——下一轮定时任务
+     * 重跑，会把已经收到过的第一个收件人再发一封，故障通道修好之前每天都重复。
+     *
+     * <p>修法：进程内存记一份"这条反馈已经成功发给过谁"，不落库（optimizer.mail.to
+     * 是维护者自己的邮箱，重发一次不是数据丢失，不值得为它加表/加列；进程重启会清空
+     * 这份记忆，届时最多再重发一轮，可接受）。同时把"一个收件人失败就不再尝试后面的
+     * 收件人"这条连带问题一起改掉：循环内 catch，全部收件人都试一遍，最后才把失败的
+     * 那些聚合成一个异常抛出去（触发外层重试，但只重试真正没发成功的那些人）。
+     */
+    @Test
+    @DisplayName("重试不会给已经成功收到过的收件人重复发信")
+    void retryDoesNotResendToAlreadyMailedRecipient() {
+        props.getMail().setTo("a@domestic.example,b@global.example");
+        doThrow(new RuntimeException("b 通道故障")).when(router)
+                .send(eq("b@global.example"), any(), any());
+
+        UserFeedback fb = feedback();
+        // 第一轮：a 成功，b 故障——整体应该仍然报失败（触发外层重试机制）
+        assertThrows(RuntimeException.class, () -> mailer.send(fb,
+                triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), ""));
+        verify(router, times(1)).send(eq("a@domestic.example"), any(), any());
+        verify(router, times(1)).send(eq("b@global.example"), any(), any());
+
+        // b 通道修好了，下一轮定时任务重跑（同一个 fb，同一批收件人）
+        reset(router);
+        when(router.active()).thenReturn(true);
+        mailer.send(fb, triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
+
+        // a 已经收到过，这一轮不该再发；b 之前没发成功，这一轮该补上
+        verify(router, never()).send(eq("a@domestic.example"), any(), any());
+        verify(router, times(1)).send(eq("b@global.example"), any(), any());
     }
 }

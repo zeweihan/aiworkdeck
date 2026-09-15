@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Sign Mach-O binaries that Apple notarization inspects but electron-builder
 # does not reach (Epic #18 T2):
 #   1. the jlink-trimmed JRE in <bundle-dir>/jre

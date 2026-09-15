@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // IDE 化：最近项目记录（启动直达 + 顶栏最近项目切换器共用）。
 // 只存 id（LAST_KEY 一个数字 + RECENT_KEY 一个 id 数组，**不存时间戳**，顺序即最近度）；
 // 名称一律从 getMyProjects 实时解析，避免改名后显示陈旧。

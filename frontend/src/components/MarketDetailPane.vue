@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <scroll-view scroll-y class="mdp">
     <view class="mdp-inner">
@@ -40,6 +42,12 @@
               </view>
             </template>
 
+            <template v-if="isBuiltinRedaction">
+              <text class="mdp-action-hint">{{ $t('market.redactionEngineUpdateNotice') }}</text>
+              <view class="mdp-btn primary" @tap="goToBuiltinUpdates">
+                <text>{{ $t('market.redactionEngineUpdateButton') }}</text>
+              </view>
+            </template>
             <!-- Skill：安装 / 更新 / 卸载 + 生效方式三档 -->
             <template v-if="spec.kind === 'skill'">
               <view
@@ -51,7 +59,7 @@
                 <text>{{ busy ? $t('market.installingEllipsis') : $t('market.install') }}</text>
               </view>
               <view
-                v-else-if="marketInfo && installedInfo"
+                v-else-if="marketInfo && installedInfo && !isBuiltinRedaction"
                 class="mdp-btn"
                 :class="{ busy }"
                 @tap="doInstallSkill"
@@ -60,11 +68,38 @@
               </view>
               <!-- 面板型 skill（背后挂着左栏面板）按插件呈现：只有启用/停用。
                    「生效方式三档」是对话型 skill 的概念，对面板讲不通——设成 manual
-                   会让面板里的 kick-off 按钮点了没反应。判据见 leftSidebarPlugins.js。 -->
-              <view v-if="installedInfo && !installedInfo.sourcePluginId && isPanel" class="mdp-switch-row">
-                <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
-                <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
-              </view>
+                   会让面板里的 kick-off 按钮点了没反应。判据见 leftSidebarPlugins.js。
+                   挂着原生资源包（packId 非空）的再加一层：包没就绪前不给开关，
+                   见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3/§7.1。 -->
+              <template v-if="installedInfo && !installedInfo.sourcePluginId && isPanel">
+                <text v-if="packRevokedState" class="mdp-pack-revoked">{{ $t('market.packRevokedNotice') }}</text>
+                <view v-else-if="packId && packDownloading" class="mdp-pack-progress">
+                  <text>{{ packProgressText }}</text>
+                </view>
+                <template v-else-if="packId && packFailed">
+                  <text class="mdp-pack-error">{{ (packStatusInfo && packStatusInfo.error) || $t('market.packInstallFailedShort') }}</text>
+                  <view class="mdp-btn" :class="{ busy: packBusy }" @tap="doInstallPack">
+                    <text>{{ $t('common.retry') }}</text>
+                  </view>
+                </template>
+                <view v-else-if="packId && !packReady" class="mdp-btn primary" :class="{ busy: packBusy }" @tap="doInstallPack">
+                  <text>{{ packBusy ? $t('market.installingEllipsis') : packInstallLabel }}</text>
+                </view>
+                <template v-else>
+                  <view class="mdp-switch-row">
+                    <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
+                    <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
+                  </view>
+                  <!-- 资源包追新（dev-board#499）：应用更新不等于资源包更新，
+                       后台每天自动追一次，这里给的是手动的那条路 -->
+                  <template v-if="packUpdateAvailable">
+                    <text class="mdp-pack-update">{{ $t('market.packUpdateAvailable', { version: packLatestVersion }) }}</text>
+                    <view class="mdp-btn primary" :class="{ busy: packBusy }" @tap="doUpgradePack">
+                      <text>{{ packBusy ? $t('market.packUpgradingEllipsis') : $t('market.packUpgradeBtn') }}</text>
+                    </view>
+                  </template>
+                </template>
+              </template>
               <AwdSelect
                 v-else-if="installedInfo && !installedInfo.sourcePluginId"
                 :range="ACTIVATION_LABELS"
@@ -81,6 +116,14 @@
                 class="mdp-btn danger"
                 :class="{ busy }"
                 @tap="doUninstallSkill"
+              >
+                <text>{{ $t('market.uninstallBtn') }}</text>
+              </view>
+              <view
+                v-else-if="installedInfo && packId && !installedInfo.sourcePluginId"
+                class="mdp-btn danger"
+                :class="{ busy }"
+                @tap="doUninstallPack"
               >
                 <text>{{ $t('market.uninstallBtn') }}</text>
               </view>
@@ -142,6 +185,53 @@
           <text class="mdp-sec-note">{{ $t('market.pluginPermissionNote') }}</text>
         </view>
 
+        <!-- 插件设置（规范 v2.9 P4）：manifest.settings 声明的配置项，写入只经这张表单 -->
+        <view v-if="spec.kind === 'plugin' && installedInfo && pluginSettings.length" class="mdp-section">
+          <text class="mdp-sec-title">{{ $t('market.pluginSettingsTitle') }}</text>
+          <view v-for="s in pluginSettings" :key="s.key" class="mdp-set-row">
+            <view class="mdp-set-head">
+              <text class="mdp-set-label">{{ s.label || s.key }}</text>
+              <AwdSwitch
+                v-if="s.type === 'boolean'"
+                :checked="settingsDraft[s.key] === 'true'"
+                @change="v => { settingsDraft[s.key] = v ? 'true' : 'false' }"
+              />
+            </view>
+            <view v-if="s.type === 'select'" class="mdp-set-options">
+              <text
+                v-for="o in (s.options || [])"
+                :key="o"
+                class="mdp-set-opt"
+                :class="{ on: settingsDraft[s.key] === o }"
+                @tap="settingsDraft[s.key] = o"
+              >{{ o }}</text>
+            </view>
+            <input
+              v-else-if="s.type !== 'boolean'"
+              class="mdp-set-input"
+              :password="!!s.secret"
+              v-model="settingsDraft[s.key]"
+              :placeholder="s.description || ''"
+            />
+            <text v-if="s.description && (s.type === 'boolean' || s.type === 'select')" class="mdp-sec-note">{{ s.description }}</text>
+          </view>
+          <view class="mdp-btn primary mdp-set-save" :class="{ busy: settingsBusy }" @tap="doSaveSettings">
+            <text>{{ settingsBusy ? $t('market.savingEllipsis') : $t('market.saveSettings') }}</text>
+          </view>
+        </view>
+
+        <!-- 样式画像（规范 v2.9 P4）：插件贡献的画像可设为全局默认（写端导出走它） -->
+        <view v-if="spec.kind === 'plugin' && installedInfo && ownStyleProfiles.length" class="mdp-section">
+          <text class="mdp-sec-title">{{ $t('market.styleProfilesTitle') }}</text>
+          <view v-for="p in ownStyleProfiles" :key="p.id" class="mdp-kv-row">
+            <text class="mdp-k">{{ p.name || p.id }}</text>
+            <text class="mdp-v mdp-link" @tap="toggleStyleProfile(p)">
+              {{ p.selected ? $t('market.profileSelected') : $t('market.profileSelect') }}
+            </text>
+          </view>
+          <text class="mdp-sec-note">{{ $t('market.styleProfileNote') }}</text>
+        </view>
+
         <!-- 详细信息：工具权限压缩为一行人话摘要，不再枚举内部工具名 -->
         <view class="mdp-section">
           <text class="mdp-sec-title">{{ $t('market.detailInfo') }}</text>
@@ -177,9 +267,9 @@
 // 插件广场详情 tab（VS Code 扩展详情页形态）。spec = { kind: 'skill'|'plugin', id, name }
 // 由左栏 MarketSidebarPanel 点行打开。自行拉取市场与已安装两份数据合成视图，
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
-import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation } from '@/services/api.js'
+import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUpgrade, packUninstall, getPluginSettings, savePluginSettings, getContributedStyleProfiles, selectContributedStyleProfile } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
-import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
+import { isPanelSkill, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
@@ -214,6 +304,22 @@ const PERMISSION_LABELS = {
   editor: t('market.permEditor'),
 }
 
+/**
+ * 三段版本号比较（与后端 NativePackService.compareSemver 同口径）：
+ * 只比 major.minor.patch，段里的非数字后缀截掉。用来判「资源包有没有新版」。
+ */
+function compareVersions(a, b) {
+  const parse = (v) => String(v || '0').split('.')
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < 3; i++) {
+    const na = parseInt(pa[i], 10) || 0
+    const nb = parseInt(pb[i], 10) || 0
+    if (na !== nb) return na > nb ? 1 : -1
+  }
+  return 0
+}
+
 const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
 const ACTIVATION_LABELS = [t('market.activationAuto'), t('market.activationManual'), t('market.activationDisabled')]
 
@@ -227,6 +333,8 @@ export default {
     },
   },
   emits: ['open-url'],
+  // 工作台 provide 的设置标签入口；宿主不是工作台时为 null
+  inject: { openSettingsTab: { default: null } },
   data() {
     return {
       loading: true,
@@ -236,6 +344,16 @@ export default {
       busy: false,
       // 是否已连接官网账户；随广场列表响应下发（付费未购项据此在「购买」与「需连接账户」之间选）
       accountConnected: false,
+      // 原生资源包（native pack）状态，见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3
+      packMeta: null,       // packInfo() 结果 {latestVersion, totalSize}，懒加载
+      packStatusInfo: null, // packStatus() 结果 {state, bytesDownloaded, bytesTotal, error}
+      packBusy: false,
+      packTimer: null,
+      // 声明式贡献点（规范 v2.9 P4）
+      pluginSettings: [],   // manifest.settings 声明 + 当前值（secret 已掩码）
+      settingsDraft: {},    // 表单草稿；secret 项只保存被用户改过的（掩码值原样 = 未改）
+      settingsBusy: false,
+      ownStyleProfiles: [], // 本插件贡献的样式画像 + 是否被选为全局默认
     }
   },
   computed: {
@@ -277,6 +395,10 @@ export default {
       const cat = (this.marketInfo?.category || this.installedInfo?.category) || 'other'
       return CATEGORY_GLYPHS[cat] || CATEGORY_GLYPHS.other
     },
+    isBuiltinRedaction() {
+      return this.spec.kind === 'skill' && this.spec.id === 'desensitize'
+        && !!this.installedInfo && !this.installedInfo.sourcePluginId
+    },
     display() {
       const m = this.marketInfo || {}
       const i = this.installedInfo || {}
@@ -284,9 +406,9 @@ export default {
       const cat = m.category || i.category
       return {
         name: m.name || i.name || this.spec.name || this.spec.id,
-        description: m.description || i.description || '',
+        description: (this.isBuiltinRedaction ? i.description : m.description) || i.description || '',
         author: m.authorDisplayName || m.author || i.author || '',
-        version: m.version || i.version || '',
+        version: (this.isBuiltinRedaction ? i.version : m.version) || i.version || '',
         license: m.license || i.license || '',
         // credits（第三方引擎署名）目前只有本机 skill 会带；官网 registry 契约暂未收录该字段
         credits: i.credits || m.credits || [],
@@ -342,9 +464,71 @@ export default {
       const idx = ACTIVATION_MODES.indexOf(mode)
       return idx >= 0 ? idx : 0
     },
-    /** 背后挂着左栏面板的 skill：详情页也按插件呈现（开关，而不是生效方式三档） */
+    /** 背后挂着左栏面板的 skill：详情页也按插件呈现（开关，而不是生效方式三档）。
+        「语音」合并插件条目（spec.group）同理——它就是一个面板。 */
     isPanel() {
-      return this.spec && this.spec.kind === 'skill' && isPanelSkill(this.spec.id)
+      return this.spec && this.spec.kind === 'skill' && (this.spec.group || isPanelSkill(this.spec.id))
+    },
+    /** 该 skill 挂着的原生资源包 id；来自 /api/skills/list 的 packId 字段，没有就是普通 skill */
+    packId() {
+      return (this.installedInfo && this.installedInfo.packId) || (this.marketInfo && this.marketInfo.packId) || null
+    },
+    packReady() {
+      return !!(this.installedInfo && this.installedInfo.packReady)
+    },
+    packDownloading() {
+      const state = this.packStatusInfo && this.packStatusInfo.state
+      return state === 'downloading' || state === 'verifying' || state === 'installing'
+    },
+    packFailed() {
+      return !!this.packStatusInfo && this.packStatusInfo.state === 'failed'
+    },
+    packRevokedState() {
+      return !!this.packStatusInfo && this.packStatusInfo.state === 'revoked'
+    },
+    /** registry 上的最新版本号：优先用懒加载的 packInfo（实时拉的），退回 status 里的内存快照 */
+    packLatestVersion() {
+      return (this.packMeta && this.packMeta.latestVersion)
+        || (this.packStatusInfo && this.packStatusInfo.latestVersion)
+        || ''
+    },
+    /**
+     * 本机装的这版落后于 registry。两个版本号都拿到才判——拿不到就什么都不显示
+     * （「不知道」不等于「已是最新」，更不等于「有更新」）。
+     */
+    packUpdateAvailable() {
+      if (!this.packId || !this.packReady || this.packDownloading || this.packRevokedState) return false
+      const installed = this.packStatusInfo && this.packStatusInfo.installedVersion
+      if (!installed || !this.packLatestVersion) return false
+      return compareVersions(this.packLatestVersion, installed) > 0
+    },
+    /** 资源包体积（MB，一位小数），来自懒加载的 packInfo 或已有的 status 快照；两边都没有就留空 */
+    packSizeMB() {
+      const bytes = (this.packMeta && this.packMeta.totalSize) || (this.packStatusInfo && this.packStatusInfo.bytesTotal) || 0
+      if (!bytes) return ''
+      return (bytes / (1024 * 1024)).toFixed(1)
+    },
+    packInstallLabel() {
+      return this.packSizeMB
+        ? this.$t('market.installNeedsPackSized', { size: this.packSizeMB })
+        : this.$t('market.installNeedsPackNoSize')
+    },
+    packProgressText() {
+      const s = this.packStatusInfo
+      if (!s) return ''
+      const total = s.bytesTotal || 0
+      if (total > 0) {
+        return this.$t('market.packDownloadingProgress', {
+          downloaded: ((s.bytesDownloaded || 0) / (1024 * 1024)).toFixed(1),
+          total: (total / (1024 * 1024)).toFixed(1),
+        })
+      }
+      return this.$t('market.packDownloadingEllipsis')
+    },
+    uninstallPackHint() {
+      return this.packSizeMB
+        ? this.$t('market.uninstallPackConfirmSized', { size: this.packSizeMB })
+        : this.$t('market.uninstallPackConfirmPlain')
     },
     sourceText() {
       if (this.installedInfo?.sourcePluginId) return this.$t('market.sourceBuiltinPlugin', { id: this.installedInfo.sourcePluginId })
@@ -358,6 +542,7 @@ export default {
   },
   beforeUnmount() {
     uni.$off('awd:market-changed-from-sidebar', this.reload)
+    this.stopPackPoll()
   },
   methods: {
     async reload() {
@@ -368,7 +553,15 @@ export default {
       let marketError = null
       const keepMarketError = (e) => { marketError = e; return null }
       try {
-        if (this.spec.kind === 'skill') {
+        if (this.spec.group) {
+          // 「语音」合并插件（dev-board#66）：本机成员 skill 合成一个视图。
+          // 'voice' 不是 registry 条目，不去在线广场查——marketInfo 恒空，
+          // 动作区因此只剩启停开关（没有安装/卸载，内置插件本就不可卸载）。
+          const iRes = await getSkills().catch(() => null)
+          const installedList = Array.isArray(iRes) ? iRes : (iRes?.data || [])
+          this.marketInfo = null
+          this.installedInfo = buildVoiceGroupSkill(installedList)
+        } else if (this.spec.kind === 'skill') {
           const [mRes, iRes] = await Promise.all([
             getSkillMarket().catch(keepMarketError),
             getSkills().catch(() => null),
@@ -399,15 +592,213 @@ export default {
       } finally {
         this.loading = false
       }
+      // 声明式贡献点（规范 v2.9）：设置表单与画像清单随详情一起拉
+      await this.loadContribution()
+      // 挂着资源包的面板型 skill：拉一次现状——可能是用户上次没装完，也可能是
+      // 老版本升级后端自动补下载中，两种都要接着轮询而不是回到「安装」按钮
+      if (this.packId) {
+        await this.refreshPackStatus()
+        const state = this.packStatusInfo && this.packStatusInfo.state
+        if (state === 'downloading' || state === 'verifying' || state === 'installing') {
+          this.packBusy = true
+          this.startPackPoll()
+        } else if (state !== 'revoked' && !this.packMeta) {
+          // 已就绪的包也拉：latestVersion 是「有没有新版」的唯一判据（dev-board#499）
+          this.loadPackMetaLazy()
+        }
+      } else {
+        this.stopPackPoll()
+      }
     },
     notifyChanged() {
       uni.$emit('awd:market-changed')
+    },
+
+    // ---- 声明式贡献点（规范 v2.9 P4）：设置表单 + 样式画像 ----
+
+    async loadContribution() {
+      if (this.spec.kind !== 'plugin' || !this.installedInfo) {
+        this.pluginSettings = []
+        this.ownStyleProfiles = []
+        return
+      }
+      try {
+        const res = await getPluginSettings(this.spec.id)
+        const body = res && res.settings !== undefined ? res : (res && res.data) || {}
+        this.pluginSettings = Array.isArray(body.settings) ? body.settings : []
+        const draft = {}
+        this.pluginSettings.forEach(s => { draft[s.key] = s.value == null ? '' : String(s.value) })
+        this.settingsDraft = draft
+      } catch (e) {
+        this.pluginSettings = []
+      }
+      try {
+        const res = await getContributedStyleProfiles()
+        const body = res && res.profiles !== undefined ? res : (res && res.data) || {}
+        const all = Array.isArray(body.profiles) ? body.profiles : []
+        this.ownStyleProfiles = all.filter(p => p.pluginId === this.spec.id)
+      } catch (e) {
+        this.ownStyleProfiles = []
+      }
+    },
+
+    async doSaveSettings() {
+      if (this.settingsBusy) return
+      this.settingsBusy = true
+      try {
+        const values = {}
+        this.pluginSettings.forEach(s => {
+          const v = this.settingsDraft[s.key]
+          // secret 项的掩码回显（****xxxx）原样未动 = 用户没改，不回写
+          if (s.secret && v === s.value) return
+          values[s.key] = v == null ? '' : String(v)
+        })
+        const res = await savePluginSettings(this.spec.id, values)
+        const body = res && res.code !== undefined ? res : (res && res.data) || {}
+        if (body.code !== 0) throw new Error(body.message || this.$t('market.saveFailed'))
+        uni.showToast({ title: this.$t('market.settingsSaved'), icon: 'none' })
+        // 通知打开中的插件面板（PluginPane 只转发给设置所属的插件）
+        uni.$emit('awd:plugin-settings-changed', { pluginId: this.spec.id })
+        await this.loadContribution()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('market.saveFailed'), icon: 'none' })
+      } finally {
+        this.settingsBusy = false
+      }
+    },
+
+    async toggleStyleProfile(p) {
+      try {
+        const ref = p.selected ? '' : (p.pluginId + ':' + p.id)
+        const res = await selectContributedStyleProfile(ref)
+        const body = res && res.code !== undefined ? res : (res && res.data) || {}
+        if (body.code !== 0) throw new Error(body.message || this.$t('market.saveFailed'))
+        await this.loadContribution()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('market.saveFailed'), icon: 'none' })
+      }
+    },
+    // ---- 原生资源包（native pack）：见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3 ----
+    async loadPackMetaLazy() {
+      if (this.packMeta || !this.packId) return
+      try {
+        const res = await packInfo(this.packId)
+        if (res) this.packMeta = res
+      } catch (e) {
+        // 静默失败：安装按钮文案退化为不带大小的版本
+      }
+    },
+    async refreshPackStatus() {
+      if (!this.packId) return
+      try {
+        const res = await packStatus(this.packId)
+        this.packStatusInfo = (res && res.status) || null
+      } catch (e) {
+        // 轮询途中网络抖动很常见，不中止——下一拍再试
+        return
+      }
+      const state = this.packStatusInfo && this.packStatusInfo.state
+      if (state === 'ready') {
+        this.stopPackPoll()
+        this.packBusy = false
+        if (this.installedInfo) this.installedInfo.packReady = true
+        // 到 ready 才走现有 enable 流程；已经启用（如老版本升级自动补下载）则不重复调用
+        if (this.installedInfo && !this.installedInfo.enabled) {
+          await this.onPanelSkillToggle(true)
+        }
+      } else if (state === 'failed' || state === 'revoked') {
+        this.stopPackPoll()
+        this.packBusy = false
+      }
+    },
+    startPackPoll() {
+      this.stopPackPoll()
+      this.packTimer = setInterval(() => { this.refreshPackStatus() }, 1000)
+    },
+    stopPackPoll() {
+      if (this.packTimer) { clearInterval(this.packTimer); this.packTimer = null }
+    },
+    async doInstallPack() {
+      if (this.packBusy || !this.packId) return
+      this.packBusy = true
+      this.packStatusInfo = null
+      try {
+        await packInstall(this.packId)
+        await this.refreshPackStatus()
+        const state = this.packStatusInfo && this.packStatusInfo.state
+        if (state && state !== 'ready' && state !== 'failed') this.startPackPoll()
+      } catch (e) {
+        this.packBusy = false
+        console.error('安装资源包失败:', e)
+        uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
+      }
+    },
+    /**
+     * 手动追新。后端同步查一次 registry：真有新版才开始下载并回 upgrading:true，
+     * 这时才摆忙态并轮询；已是最新就直接告诉用户，不留一个空转的按钮。
+     */
+    async doUpgradePack() {
+      if (this.packBusy || !this.packId) return
+      this.packBusy = true
+      try {
+        const res = await packUpgrade(this.packId)
+        if (res && res.upgrading) {
+          await this.refreshPackStatus()
+          this.startPackPoll()
+        } else {
+          this.packBusy = false
+          if (res && res.latestVersion) this.packMeta = { ...(this.packMeta || {}), latestVersion: res.latestVersion }
+          uni.showToast({ title: this.$t('market.packAlreadyLatest'), icon: 'none' })
+        }
+      } catch (e) {
+        this.packBusy = false
+        console.error('资源包追新失败:', e)
+        uni.showToast({ title: e?.message || this.$t('market.packUpgradeFailed'), icon: 'none' })
+      }
+    },
+    async doUninstallPack() {
+      if (this.busy || !this.packId) return
+      if (!this.packMeta) await this.loadPackMetaLazy()
+      const ok = await new Promise(resolve => {
+        uni.showModal({
+          title: this.$t('market.confirmUninstallPackTitle'),
+          content: this.uninstallPackHint,
+          confirmText: this.$t('market.uninstallBtn'),
+          cancelText: this.$t('market.cancelBtn'),
+          success: r => resolve(r.confirm),
+          fail: () => resolve(false),
+        })
+      })
+      if (!ok) return
+      this.busy = true
+      try {
+        // 先走现有停用流程，再删资源包目录（§6：卸载 = 停用 + 删 packs/<id>/）
+        await setSkillActivation(this.spec.id, 'disabled')
+        await packUninstall(this.packId)
+        this.stopPackPoll()
+        this.packStatusInfo = null
+        uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
+        await this.reload()
+        this.notifyChanged()
+      } catch (e) {
+        console.error('卸载资源包失败:', e)
+        uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
+      } finally {
+        this.busy = false
+      }
     },
     // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
     openPurchase() {
       openExternalUrl(purchaseUrl(this.spec.kind, this.spec.id))
     },
+    goToBuiltinUpdates() {
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'updates' })
+      if (this.leaveWorkbench) return this.leaveWorkbench('/pages/admin/admin?nav=updates')
+      uni.navigateTo({ url: '/pages/admin/admin?nav=updates' })
+    },
     goToAccountSettings() {
+      // 工作台里设置是标签，不跳页（dev-board#582）
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'account' })
       uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
     },
     /**
@@ -524,11 +915,15 @@ export default {
       }
     },
     // AwdSelect 直接抛下标
-    // 面板型：开 = auto（面板 kick-off prompt 要靠触发词命中），关 = disabled
+    // 面板型：开 = auto（面板 kick-off prompt 要靠触发词命中），关 = disabled。
+    // 「语音」合并插件一次作用于全部成员 skill（启停一体，dev-board#66）。
     async onPanelSkillToggle(enabled) {
       const mode = enabled ? 'auto' : 'disabled'
+      const ids = (this.installedInfo && this.installedInfo.groupMemberIds) || [this.spec.id]
       try {
-        await setSkillActivation(this.spec.id, mode)
+        for (const id of ids) {
+          await setSkillActivation(id, mode)
+        }
         if (this.installedInfo) {
           this.installedInfo.activationMode = mode
           this.installedInfo.enabled = enabled
@@ -564,7 +959,7 @@ export default {
 .mdp {
   width: 100%;
   height: 100%;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .mdp-inner {
@@ -583,11 +978,11 @@ export default {
   height: 72px;
   flex-shrink: 0;
   border-radius: 14px;
-  background: #E8F3ED;
+  background: var(--awd-accent-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 
   svg {
     width: 34px;
@@ -596,8 +991,8 @@ export default {
 
   /* 插件 = 可执行扩展：深底，与 Skill（浅底）一眼区分（同左栏列表约定） */
   &.is-plugin {
-    background: #123A26;
-    color: #fff;
+    background: var(--awd-accent-hover);
+    color: var(--awd-text-on-accent);
   }
 }
 
@@ -617,15 +1012,15 @@ export default {
   font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif;
   font-size: 22px;
   font-weight: 700;
-  color: #123A26;
+  color: var(--awd-text);
   line-height: 1.25;
 }
 
 .mdp-kind-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #1A5336;
-  background: #E8F3ED;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -633,8 +1028,8 @@ export default {
 .mdp-installed-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #fff;
-  background: #1A5336;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -643,14 +1038,14 @@ export default {
 .mdp-price-badge {
   font-size: 10px;
   font-weight: 600;
-  color: #868E96;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   border-radius: 4px;
   padding: 1px 6px;
 
   &.paid {
-    color: #8A6D2F;
-    background: #FDF7EC;
+    color: var(--awd-warning-text);
+    background: var(--awd-bg);
   }
 }
 
@@ -659,7 +1054,7 @@ export default {
   margin-top: 8px;
   font-size: 11px;
   line-height: 17px;
-  color: #8A6D2F;
+  color: var(--awd-warning-text);
 }
 
 .mdp-byline {
@@ -672,17 +1067,17 @@ export default {
 
 .mdp-byline-item {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 
   & + .mdp-byline-item::before {
     content: '·';
     margin-right: 6px;
-    color: #CED4DA;
+    color: var(--awd-text-3);
   }
 }
 
 .mdp-author {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -691,7 +1086,7 @@ export default {
   margin-top: 6px;
   font-size: 11px;
   line-height: 16px;
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .mdp-summary {
@@ -699,7 +1094,7 @@ export default {
   margin-top: 8px;
   font-size: 13px;
   line-height: 20px;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .mdp-scenario {
@@ -709,7 +1104,7 @@ export default {
 .mdp-scenario-lead {
   display: block;
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   margin-bottom: 6px;
 }
 
@@ -726,46 +1121,46 @@ export default {
   line-height: 26px;
   padding: 0 14px;
   border-radius: 6px;
-  border: 1px solid #CED4DA;
-  background: #fff;
+  border: 1px solid var(--awd-border-strong);
+  background: var(--awd-surface);
   cursor: pointer;
 
   text {
     font-size: 12px;
     font-weight: 600;
-    color: #2C3338;
+    color: var(--awd-text);
   }
 
   &:hover {
-    border-color: #1A5336;
+    border-color: var(--awd-accent);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
     }
   }
 
   &.primary {
-    background: #1A5336;
-    border-color: #1A5336;
+    background: var(--awd-accent);
+    border-color: var(--awd-accent);
 
     text {
-      color: #fff;
+      color: var(--awd-text-on-accent);
     }
 
     &:hover {
-      background: #123A26;
+      background: var(--awd-accent-hover);
 
       text {
-        color: #fff;
+        color: var(--awd-text-on-accent);
       }
     }
   }
 
   &.danger:hover {
-    border-color: #C0392B;
+    border-color: var(--awd-danger);
 
     text {
-      color: #C0392B;
+      color: var(--awd-danger-text);
     }
   }
 
@@ -783,24 +1178,51 @@ export default {
 
 .mdp-switch-label {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .mdp-action-hint {
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
+}
+
+/* 原生资源包状态：下架标红、下载中用中性进度条、失败态错误文案 + 重试按钮 */
+.mdp-pack-revoked {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--awd-danger-text);
+}
+
+.mdp-pack-progress {
+  height: 28px;
+  line-height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: var(--awd-surface-2);
+  font-size: 12px;
+  color: var(--awd-text-2);
+}
+
+.mdp-pack-error {
+  font-size: 12px;
+  color: var(--awd-danger-text);
+}
+
+.mdp-pack-update {
+  font-size: 12px;
+  color: var(--awd-text-2);
 }
 
 .mdp-divider {
   height: 1px;
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
   margin: 22px 0 18px;
 }
 
 .mdp-loading {
   padding: 24px 0;
   font-size: 13px;
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .mdp-section {
@@ -811,7 +1233,7 @@ export default {
   display: block;
   font-size: 13px;
   font-weight: 700;
-  color: #123A26;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
@@ -819,7 +1241,57 @@ export default {
   display: block;
   font-size: 13px;
   line-height: 20px;
-  color: #2C3338;
+  color: var(--awd-text);
+}
+
+/* 插件设置表单（规范 v2.9 P4） */
+.mdp-set-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--awd-border-subtle);
+}
+.mdp-set-row:last-of-type { border-bottom: 0; }
+.mdp-set-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mdp-set-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+.mdp-set-input {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 6px;
+  background: var(--awd-surface);
+  color: var(--awd-text);
+}
+.mdp-set-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mdp-set-opt {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 999px;
+  color: var(--awd-text-2);
+  cursor: pointer;
+}
+.mdp-set-opt.on {
+  border-color: var(--awd-accent);
+  color: var(--awd-accent-text);
+  font-weight: 600;
+}
+.mdp-set-save {
+  margin-top: 10px;
+  align-self: flex-start;
 }
 
 .mdp-sec-note {
@@ -827,7 +1299,7 @@ export default {
   margin-top: 6px;
   font-size: 11px;
   line-height: 17px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 }
 
 .mdp-triggers {
@@ -838,7 +1310,7 @@ export default {
 
 .mdp-trigger {
   font-size: 13px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .mdp-kv {
@@ -856,12 +1328,12 @@ export default {
   width: 56px;
   flex-shrink: 0;
   font-size: 12px;
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .mdp-v {
   font-size: 12px;
-  color: #2C3338;
+  color: var(--awd-text);
   word-break: break-all;
 
   &.mono {
@@ -870,7 +1342,7 @@ export default {
 }
 
 .mdp-link {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   text-decoration: underline;
   cursor: pointer;
 }

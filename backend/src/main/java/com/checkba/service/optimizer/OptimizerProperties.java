@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.optimizer;
 
 import lombok.Getter;
@@ -72,6 +75,13 @@ public class OptimizerProperties {
         private String baseUrl = "";
         /** 与收件箱 feedback.optimizer-token 相同的共享密钥 */
         private String token = "";
+        /**
+         * 通知正文里「在浏览器里看这条反馈」的地址模板，{id} 会被替换成反馈 id。
+         * 留空用默认的云端反馈控制台（baseUrl + /feedback-console/?fb={id}）；
+         * 官网 admin 并入反馈看板后可指到那里，如
+         * https://www.aiworkdeck.com/zh/admin?tab=feedback&fb={id}
+         */
+        private String consoleUrl = "";
     }
 
     @Getter

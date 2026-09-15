@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.config.GlobalExceptionHandler;
@@ -9,11 +12,13 @@ import com.checkba.service.LangText;
 import com.checkba.service.UserService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -23,11 +28,18 @@ public class AuthController {
     private final com.checkba.service.AdminAccessService adminAccessService;
     private final com.checkba.service.DeviceTokenService deviceTokenService;
     private final com.checkba.service.AuthAbuseGuard authAbuseGuard;
+    private final com.checkba.service.account.AccountDeletionService accountDeletionService;
     private final com.checkba.service.account.AwdkLoginService awdkLoginService;
     private final com.checkba.service.sms.SmsAuthService smsAuthService;
     private final com.checkba.service.mail.MailAuthService mailAuthService;
     private final com.checkba.service.auth.SecondFactorService secondFactorService;
     private final com.checkba.service.UserSessionService userSessionService;
+    /**
+     * 微信手机号一键登录（dev-board#534）用的内部记账口客户端。与统一账户余额/充值共用
+     * 同一套 {@code mobile.billing.base-url/secret}——官网那边也是同一条
+     * {@code /api/internal/account}，只是多了一个 {@code wx-phone} 动作。
+     */
+    private final com.checkba.service.mobile.MobileBillingClient mobileBillingClient;
     /** 单机免登模式。设备令牌的会话签发路径只在这一模式下存在（见 issueLocalDeviceToken）。 */
     private final boolean localMode;
     /** 存量账号补绑手机号的三态闸；未接线的调用方传 null 表示不设闸。 */
@@ -69,6 +81,14 @@ public class AuthController {
      */
     private static final String ACCOUNT_LOGIN_RATE_KEY = "::account-login";
 
+    /**
+     * 微信一键登录的限速维度（dev-board#534），同上带冒号避开真实用户名空间。
+     *
+     * <p>不按手机号分桶：手机号是这条路的<b>产出</b>而不是入参，请求进来时还不知道是谁。
+     * 按 IP 计的这一档护的是「拿一堆伪造 code 猛打官网换号口」。
+     */
+    private static final String WX_PHONE_LOGIN_RATE_KEY = "::wx-phone-login";
+
     private static UserService staticUserService;
     private static com.checkba.service.DeviceTokenService staticDeviceTokenService;
     private static com.checkba.service.LocalIdentityService staticLocalIdentityService;
@@ -100,12 +120,15 @@ public class AuthController {
                           com.checkba.service.UserSessionService userSessionService,
                           @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
                           boolean localMode,
-                          PhoneLoginGuard phoneLoginGuard) {
+                          PhoneLoginGuard phoneLoginGuard,
+                          com.checkba.service.account.AccountDeletionService accountDeletionService,
+                          com.checkba.service.mobile.MobileBillingClient mobileBillingClient) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
         this.deviceTokenService = deviceTokenService;
         this.authAbuseGuard = authAbuseGuard;
+        this.accountDeletionService = accountDeletionService;
         this.awdkLoginService = awdkLoginService;
         this.smsAuthService = smsAuthService;
         this.mailAuthService = mailAuthService;
@@ -113,6 +136,7 @@ public class AuthController {
         this.userSessionService = userSessionService;
         this.localMode = localMode;
         this.phoneLoginGuard = phoneLoginGuard;
+        this.mobileBillingClient = mobileBillingClient;
         staticUserService = userService;
     }
 
@@ -292,13 +316,24 @@ public class AuthController {
             return result;
         }
         try {
-            var session = awdkLoginService.login(body == null ? null : body.get("key"));
+            // deviceName 可选：桌面端连官方案件库时传本机主机名，协作事件行据此说
+            // 「你在另一台电脑交了稿（{设备名}）」。不传仍是「账户桥接」，老客户端不受影响。
+            var session = awdkLoginService.login(
+                    body == null ? null : body.get("key"),
+                    body == null ? null : body.get("deviceName"));
             authAbuseGuard.recordLoginSuccess(ip, AWDK_BRIDGE_RATE_KEY);
             result.put("code", 0);
-            result.put("data", Map.of(
-                    "token", session.token(),
-                    "userId", session.userId(),
-                    "username", session.username()));
+            // tokenId 让调用方（桌面端官方案件库连接）在断开时撤得掉这枚长期凭据；
+            // displayName 供成员列表与合并署名。用 HashMap 而不是 Map.of：tokenId
+            // 缺失时要**整个不下发**，回落成 0 会让调用方存下一个不存在的令牌行 id。
+            Map<String, Object> data = new HashMap<>();
+            data.put("token", session.token());
+            data.put("userId", session.userId());
+            data.put("username", session.username());
+            data.put("displayName",
+                    session.displayName() == null ? session.username() : session.displayName());
+            if (session.tokenId() != null) data.put("tokenId", session.tokenId());
+            result.put("data", data);
         } catch (com.checkba.service.account.AccountException e) {
             // 只有官网明确拒绝（Key 无效）才计失败；网络不可达不该消耗尝试次数
             if (e.getKind() == com.checkba.service.account.AccountException.Kind.UNAUTHORIZED) {
@@ -327,6 +362,25 @@ public class AuthController {
      * 且<b>把尝试记在出站之前</b>——只记成功的话，拿一串无效手机号刷本服务器
      * 就能免费换来等量的对官网出站请求，IP 额度永远不会耗尽。
      */
+    /**
+     * 官网人机验证的公开配置（匿名），供 Office 插件在发码前渲染控件用。只有公开参数，没有密钥。
+     *
+     * <p><b>为什么不能复用 {@code /api/account/captcha-config}</b>：那条开头是
+     * {@code requireUser(sessionId)}。桌面端 local-mode 会把任何请求解析成本机用户所以没事，
+     * 云后端 {@code local-mode=false} 下插件用户此刻还没登录——「取控件参数得先有会话、
+     * 有会话得先登录、登录得先过控件」是死循环。与 {@code /account-login} 不复用
+     * {@code /api/account/login} 是同一个理由。
+     *
+     * <p>未启用时官网回 {@code {"provider": null}}，调用方据此跳过控件直接发码。
+     */
+    @GetMapping("/account-login/captcha-config")
+    public Map<String, Object> accountLoginCaptchaConfig() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 0);
+        result.put("data", awdkLoginService.captchaConfig());
+        return result;
+    }
+
     @PostMapping("/account-login/send-code")
     public Map<String, Object> accountLoginSendCode(@RequestBody(required = false) Map<String, String> body,
                                                     jakarta.servlet.http.HttpServletRequest http) {
@@ -380,10 +434,17 @@ public class AuthController {
                             body == null ? null : body.get("password"));
             authAbuseGuard.recordLoginSuccess(ip, ACCOUNT_LOGIN_RATE_KEY);
             result.put("code", 0);
-            result.put("data", Map.of(
-                    "token", session.token(),
-                    "userId", session.userId(),
-                    "username", session.username()));
+            // tokenId 让调用方（桌面端官方案件库连接）在断开时撤得掉这枚长期凭据；
+            // displayName 供成员列表与合并署名。用 HashMap 而不是 Map.of：tokenId
+            // 缺失时要**整个不下发**，回落成 0 会让调用方存下一个不存在的令牌行 id。
+            Map<String, Object> data = new HashMap<>();
+            data.put("token", session.token());
+            data.put("userId", session.userId());
+            data.put("username", session.username());
+            data.put("displayName",
+                    session.displayName() == null ? session.username() : session.displayName());
+            if (session.tokenId() != null) data.put("tokenId", session.tokenId());
+            result.put("data", data);
         } catch (com.checkba.service.account.AccountException e) {
             // 只有官网明确拒绝凭据（验证码错/口令错）才计失败。网络不可达不该消耗尝试次数；
             // CONFLICT（补绑期已过）也不该——那个用户的凭据本来就是对的，锁他没有意义。
@@ -454,6 +515,34 @@ public class AuthController {
      * 开始绑定认证器（需已登录）：返回手工录入的密钥与扫码用的 otpauth URI。
      * 此时尚未启用，必须再调 activate 验一次码才生效。
      */
+    /**
+     * 注销账号：删掉当前会话对应的用户及其云端全部数据。
+     *
+     * <p>App Store 审核指南 5.1.1(v) 要求支持注册的 App 必须在 App 内提供删除账号
+     * （2026-09-02 两端因 Guideline 2.1 被退回时点名）。删除范围与「不碰手机本地影像」
+     * 的取舍见 {@link com.checkba.service.account.AccountDeletionService}。
+     *
+     * <p>要求已登录；删完会话即失效，客户端拿到 code 0 后直接回登录页。
+     * 幂等：重复调用第二次会因为查不到用户而回 code 1，不会 500。
+     */
+    @PostMapping("/account/delete")
+    public Map<String, Object> deleteAccount(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        }
+        try {
+            var r = accountDeletionService.deleteAccount(userId);
+            return Map.of("code", 0,
+                    "message", LangText.of("账号已注销", "Account deleted"),
+                    "data", Map.of("media", r.media(), "projects", r.projects(),
+                            "devices", r.devices(), "transfers", r.transfers()));
+        } catch (IllegalArgumentException e) {
+            return Map.of("code", 1, "message", e.getMessage());
+        }
+    }
+
     @PostMapping("/totp/setup")
     public Map<String, Object> totpSetup(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
@@ -759,6 +848,68 @@ public class AuthController {
     }
 
     /**
+     * 微信手机号一键登录（dev-board#534，spec
+     * {@code aiworkdeck_mobile/docs/specs/2026-09-09-miniprogram-entry-and-wx-login.md} §2）。
+     *
+     * <p>小程序 {@code button open-type="getPhoneNumber"} 拿到的一次性 code 上来，经官网内部
+     * 记账口的 {@code wx-phone} 动作换成<b>已验证的</b>手机号，之后与 {@link #smsLoginVerify}
+     * 逐字同一条路：{@code findOrCreateByPhone} → {@code issue} → 同形的 LoginResult。
+     * 微信侧的号码验证与短信验证码是同一等级的控制权证明，所以这里同样注册登录合一。
+     *
+     * <p>云后端<b>不持有</b>小程序 AppSecret，也不碰 session_key：换号那一步全在官网，
+     * 本端只是管道（与虚拟支付 dev-board#427 同一立场）。
+     *
+     * <p>失败一律 code 1 + 可读 message（无 kind，与 sms-login 那条同形）：文案由
+     * {@code HttpMobileBillingClient.wxPhone} 按官网 error 串翻好，这里原样回显——
+     * 小程序据此 toast 并展开短信登录表单。
+     */
+    @PostMapping("/wx-phone-login")
+    public Map<String, Object> wxPhoneLogin(@RequestBody WxPhoneLoginRequest request,
+                                            jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, WX_PHONE_LOGIN_RATE_KEY);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        String phone;
+        try {
+            phone = mobileBillingClient.wxPhone(request.getCode());
+        } catch (com.checkba.service.mobile.MobileBillingClient.MobileBillingException e) {
+            // 只有「官网拒了这张 code」才计失败：未开通/上游故障是服务器的事，
+            // 拿它把这台机器上的一键登录锁十分钟，等于故障期间再踹用户一脚。
+            if (e.getKind() == com.checkba.service.mobile.MobileBillingKind.REJECTED) {
+                authAbuseGuard.recordLoginFailure(ip, WX_PHONE_LOGIN_RATE_KEY);
+            }
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        UserService.PhoneAccount account = userService.findOrCreateByPhone(phone);
+        User user = account.user();
+        authAbuseGuard.recordLoginSuccess(ip, WX_PHONE_LOGIN_RATE_KEY);
+        String newSessionId = userSessionService.issue(user.getId());
+        result.put("code", 0);
+        result.put("message", LangText.of("登录成功", "Signed in successfully"));
+        result.put("data", Map.of(
+                "sessionId", newSessionId,
+                "isNewUser", account.created(),
+                "user", Map.of(
+                        "id", user.getId(),
+                        "username", user.getUsername(),
+                        "displayName", user.getDisplayName(),
+                        "avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : "",
+                        "role", user.getRole(),
+                        "subscriptionType", user.getSubscriptionType()
+                )
+        ));
+        return result;
+    }
+
+    /**
      * 客户登录（使用访问码）
      */
     @PostMapping("/client-login")
@@ -831,7 +982,10 @@ public class AuthController {
         result.put("data", Map.ofEntries(
                 Map.entry("id", user.getId()),
                 Map.entry("username", user.getUsername()),
-                Map.entry("displayName", user.getDisplayName()),
+                // local-mode 免登下 displayName 可能是库里的中文哨兵值（LocalIdentityService.
+                // LOCAL_DISPLAY_NAME），经 displayNameOf 按界面语言本地化，不动库里存的值
+                // ——顶栏「Lead:」、设置页个人区（AdminPane.vue）都读这个字段。
+                Map.entry("displayName", com.checkba.service.LocalIdentityService.displayNameOf(user.getDisplayName())),
                 Map.entry("avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : ""),
                 Map.entry("role", user.getRole()),
                 Map.entry("subscriptionType", user.getSubscriptionType()),
@@ -904,7 +1058,11 @@ public class AuthController {
                 User user = staticUserService.getUserById(userId);
                 return user != null ? user.getDisplayName() : null; // Use DisplayName as creator name
             } catch (Exception e) {
-                 return null;
+                // 只补日志、不改行为：这里吞掉的异常与"用户真的不存在"返回同一个 null，
+                // 调用方（署名归属等）区分不出"这次查询失败"和"查无此人"，但改成向上
+                // 抛/返回错误码会动到所有调用方的既有语义，代价大于收益——先把故障留痕。
+                log.warn("getUsernameFromSession: getUserById({}) 失败，按 null 处理: {}", userId, e.toString());
+                return null;
             }
         }
         return null;
@@ -1102,6 +1260,14 @@ public class AuthController {
 
         public String getPhone() { return phone; }
         public void setPhone(String phone) { this.phone = phone; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
+    }
+
+    /** 微信手机号一键登录：只有 {@code getPhoneNumber} 回调里那张一次性 code。 */
+    static class WxPhoneLoginRequest {
+        private String code;
+
         public String getCode() { return code; }
         public void setCode(String code) { this.code = code; }
     }

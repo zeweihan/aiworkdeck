@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="login-page" @mousemove="handleMouseMove">
     <!-- Background Elements -->
@@ -7,7 +9,7 @@
     <!-- Top Navigation -->
     <view class="top-nav">
       <view class="nav-left">
-        <image class="nav-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+        <image class="nav-logo awd-brand-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       </view>
       <view class="nav-right">
         <text class="nav-item">{{ $t('account.guideNav') }}</text>
@@ -126,7 +128,7 @@
                </view>
                <text class="link-text">{{ $t('account.forgotPassword') }}</text>
             </view>
-            <button class="action-btn" :loading="loginLoading" @tap="handleLogin">{{ $t('account.loginBtn') }}</button>
+            <button class="action-btn" :disabled="loginLoading" :loading="loginLoading" @tap="handleLogin">{{ $t('account.loginBtn') }}</button>
           </view>
 
           <!-- Second Factor Step（登录二次验证：认证器 / 邮箱 / 短信） -->
@@ -144,7 +146,7 @@
                 {{ smsCountdown > 0 ? $t('account.resendCountdown', { count: smsCountdown }) : $t('account.resendCode') }}
               </text>
             </view>
-            <button class="action-btn" :loading="loginLoading" @tap="handleSmsLogin">{{ $t('account.verifyAndLoginBtn') }}</button>
+            <button class="action-btn" :disabled="loginLoading" :loading="loginLoading" @tap="handleSmsLogin">{{ $t('account.verifyAndLoginBtn') }}</button>
           </view>
 
           <!-- Register Form -->
@@ -165,7 +167,7 @@
               <text class="label">{{ $t('account.confirmPasswordLabel') }}</text>
               <input class="glass-input" type="password" v-model="registerForm.passwordConfirm" @confirm="handleRegister" :placeholder="$t('account.confirmPasswordPlaceholder')" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="registerLoading" @tap="handleRegister">{{ $t('account.registerBtn') }}</button>
+            <button class="action-btn" :disabled="registerLoading" :loading="registerLoading" @tap="handleRegister">{{ $t('account.registerBtn') }}</button>
           </view>
 
           <!-- Client Form -->
@@ -174,7 +176,7 @@
               <text class="label">{{ $t('account.caseAccessCodeLabel') }}</text>
               <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" :placeholder="$t('account.caseAccessCodePlaceholder')" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="clientLoginLoading" @tap="handleClientLogin">{{ $t('account.enterCaseBtn') }}</button>
+            <button class="action-btn" :disabled="clientLoginLoading" :loading="clientLoginLoading" @tap="handleClientLogin">{{ $t('account.enterCaseBtn') }}</button>
           </view>
 
           <view class="card-footer">
@@ -187,27 +189,16 @@
 </template>
 
 <script>
-import { login, register, clientLogin, getWizardStatus, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
+import { login, register, clientLogin, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
 
 export default {
   name: 'Login',
   onLoad() {
-    // 首次运行（未初始化）时跳转设置向导（Epic #18 T4）；
-    // 已初始化或后端不可达则正常停留在登录页
-    getWizardStatus()
-      .then((res) => {
-        if (res && res.initialized === false) {
-          uni.reLaunch({ url: '/pages/wizard/wizard' })
-        } else {
-          // IDE 化启动直达：存储会话仍有效则跳过登录，直接回到上次的工作现场
-          this.tryAutoResume()
-        }
-      })
-      .catch((e) => {
-        console.warn('查询向导状态失败（忽略）:', e)
-      })
+    // 首启向导已下线（2026-08-27）：初始化由桌面解锁页承担，浏览器/团队服务器
+    // 场景直接尝试恢复会话回到上次的工作现场
+    this.tryAutoResume()
   },
   data() {
     return {
@@ -366,6 +357,10 @@ export default {
       }
     },
     async handleSmsLogin() {
+      // <button loading> 只画个转圈图标，不会自己拦第二次 tap；模板已经补了
+      // :disabled="loginLoading"，这里在方法体里再挡一道，防止事件在响应式
+      // 状态生效前抢跑发出第二个请求。
+      if (this.loginLoading) return;
       if (!this.smsCodeInput || this.smsCodeInput.length < 6) {
         uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' });
         return;
@@ -395,6 +390,7 @@ export default {
       }, 300);
     },
     async handleClientLogin() {
+      if (this.clientLoginLoading) return;
       if (!this.clientForm.accessCode) {
         uni.showToast({ title: this.$t('account.caseAccessCodePlaceholder'), icon: 'none' });
         return;
@@ -419,6 +415,7 @@ export default {
       }
     },
     async handleLogin() {
+      if (this.loginLoading) return;
       if (!this.loginForm.username || !this.loginForm.password) {
         uni.showToast({ title: this.$t('account.enterUsernamePassword'), icon: 'none' });
         return;
@@ -448,6 +445,7 @@ export default {
       }
     },
     async handleRegister() {
+      if (this.registerLoading) return;
       if (!this.registerForm.username || !this.registerForm.password) {
         uni.showToast({ title: this.$t('account.enterUsernamePassword'), icon: 'none' });
         return;
@@ -489,20 +487,16 @@ export default {
 
 <style lang="scss" scoped>
 /* Color Config */
-$color-primary: #1A5336; // Forest Green
-$color-accent: #5BD197; // Mint Green
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$bg-dark: #212629;
-$glass-white: rgba(255, 255, 255, 0.75);
-$glass-border: rgba(255, 255, 255, 0.5);
+// 毛玻璃走令牌：深色下要变成半透明深底，写死白色在深色页面上会糊成一块灰
+$glass-white: var(--awd-glass);
+$glass-border: var(--awd-glass-border);
 
 .login-page {
   width: 100vw;
   height: 100vh;
   position: relative;
   overflow: hidden;
-  background-color: #F8F9FA;
+  background-color: var(--awd-bg);
   display: flex;
   flex-direction: column;
 }
@@ -510,8 +504,8 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .bg-gradient {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: radial-gradient(circle at 10% 20%, rgba(91, 209, 151, 0.15) 0%, transparent 40%),
-              radial-gradient(circle at 90% 80%, rgba(26, 83, 54, 0.1) 0%, transparent 40%);
+  background: radial-gradient(circle at 10% 20%, var(--awd-accent-soft) 0%, transparent 40%),
+              radial-gradient(circle at 90% 80%, var(--awd-accent-soft) 0%, transparent 40%);
   z-index: 0;
 }
 
@@ -519,8 +513,8 @@ $glass-border: rgba(255, 255, 255, 0.5);
   position: absolute;
   inset: 0;
   // Subtle mesh pattern
-  background-image: linear-gradient(rgba(26, 83, 54, 0.03) 1px, transparent 1px),
-  linear-gradient(90deg, rgba(26, 83, 54, 0.03) 1px, transparent 1px);
+  background-image: linear-gradient(var(--awd-accent-wash) 1px, transparent 1px),
+  linear-gradient(90deg, var(--awd-accent-wash) 1px, transparent 1px);
   background-size: 40px 40px;
   z-index: 0;
 }
@@ -545,10 +539,10 @@ $glass-border: rgba(255, 255, 255, 0.5);
 }
 .nav-item {
   font-size: 14px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: color 0.3s;
-  &:hover { color: $color-primary; }
+  &:hover { color: var(--awd-accent-text); }
 }
 
 .main-layout {
@@ -620,13 +614,13 @@ $glass-border: rgba(255, 255, 255, 0.5);
   gap: 6px;
   margin-right: 16px;
   .control { width: 10px; height: 10px; border-radius: 50%; }
-  .red { background: #ff5f56; }
-  .yellow { background: #ffbd2e; }
-  .green { background: #27c93f; }
+  .red { background: var(--awd-danger); }
+  .yellow { background: var(--awd-warning); }
+  .green { background: var(--awd-accent); }
 }
 
 .window-title {
-  color: #999;
+  color: var(--awd-text-3);
   font-size: 12px;
 }
 
@@ -645,7 +639,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   gap: 15px;
   .sidebar-icon {
     width: 24px; height: 24px; background: #666; border-radius: 4px;
-    &.active { background: $color-accent; }
+    &.active { background: var(--awd-mint); }
   }
 }
 
@@ -655,9 +649,9 @@ $glass-border: rgba(255, 255, 255, 0.5);
   border-right: 1px solid #333;
   padding: 10px;
   .explorer-item {
-    color: #ccc; font-size: 12px; line-height: 24px;
+    color: var(--awd-text-3); font-size: 12px; line-height: 24px;
     &.indent { padding-left: 15px; }
-    &.active { background: #37373d; color: #fff; }
+    &.active { background: #37373d; color: var(--awd-text-on-accent); }
   }
 }
 
@@ -675,18 +669,18 @@ $glass-border: rgba(255, 255, 255, 0.5);
   display: flex;
   .tab {
     padding: 0 15px;
-    font-size: 12px; color: #999;
+    font-size: 12px; color: var(--awd-text-3);
     display: flex; align-items: center;
     background: #2d2d2d;
-    &.active { background: #1e1e1e; color: #fff; border-top: 2px solid $color-accent; }
+    &.active { background: #1e1e1e; color: var(--awd-text-on-accent); border-top: 2px solid var(--awd-mint); }
   }
 }
 
 .doc-area {
   padding: 30px 40px;
-  background: #fff; /* White paper background for doc view */
+  background: var(--awd-surface); /* White paper background for doc view */
   flex: 1;
-  color: #333;
+  color: var(--awd-text);
   font-family: 'Times New Roman', serif; /* Serif for legal docs */
   overflow: hidden;
   position: relative;
@@ -697,12 +691,12 @@ $glass-border: rgba(255, 255, 255, 0.5);
   font-weight: bold;
   text-align: center;
   margin-bottom: 20px;
-  color: #000;
+  color: var(--awd-text);
 }
 
 .doc-meta {
   font-size: 10px;
-  color: #666;
+  color: var(--awd-text-2);
   margin-bottom: 24px;
   display: flex;
   justify-content: flex-end;
@@ -717,13 +711,13 @@ $glass-border: rgba(255, 255, 255, 0.5);
   &.text-body {
     font-weight: normal;
     text-indent: 2em;
-    color: #444;
+    color: var(--awd-text);
   }
 }
 
 .skeleton-line {
   height: 8px;
-  background: #f0f0f0;
+  background: var(--awd-bg);
   margin-bottom: 12px;
   border-radius: 2px;
 }
@@ -799,19 +793,19 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .product-name {
   font-size: 24px;
   font-weight: 700;
-  color: $color-primary;
+  color: var(--awd-accent-text);
   letter-spacing: -0.5px;
 }
 .product-subtitle {
   font-size: 13px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   letter-spacing: 0.5px;
 }
 
 .auth-tabs {
   display: flex;
   position: relative;
-  border-bottom: 2px solid rgba(0,0,0,0.05);
+  border-bottom: 2px solid var(--awd-border-subtle);
   margin-bottom: 28px;
 }
 .tab-btn {
@@ -819,10 +813,10 @@ $glass-border: rgba(255, 255, 255, 0.5);
   text-align: center;
   padding: 12px 0;
   font-size: 15px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   &.active {
-    color: $color-primary;
+    color: var(--awd-accent-text);
     font-weight: 600;
   }
 }
@@ -831,7 +825,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   bottom: -2px;
   width: 33.33%;
   height: 2px;
-  background: $color-accent;
+  background: var(--awd-mint);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -843,25 +837,25 @@ $glass-border: rgba(255, 255, 255, 0.5);
 }
 .label {
   font-size: 13px;
-  color: $color-text-main;
+  color: var(--awd-text);
   font-weight: 500;
 }
 .glass-input {
   height: 48px;
-  background: rgba(255,255,255,0.6);
-  border: 1px solid rgba(0,0,0,0.1);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 0 16px;
   font-size: 15px;
   transition: all 0.2s;
   &:focus {
-    background: #fff;
-    border-color: $color-accent;
+    background: var(--awd-surface);
+    border-color: var(--awd-mint);
     box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.2);
   }
 }
 .placeholder-style {
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 .form-options {
@@ -870,14 +864,14 @@ $glass-border: rgba(255, 255, 255, 0.5);
   align-items: center;
   margin-bottom: 24px;
   font-size: 13px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
 }
 .remember-me {
   display: flex;
   align-items: center;
 }
 .link-text {
-  color: $color-primary;
+  color: var(--awd-accent-text);
   cursor: pointer;
 
   &.disabled {
@@ -889,15 +883,15 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .sms-hint {
   display: block;
   font-size: 12px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   margin-bottom: 6px;
 }
 
 .action-btn {
   width: 100%;
   height: 50px;
-  background: $color-primary;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   border-radius: 8px;
   font-size: 16px;
   font-weight: 500;
@@ -908,7 +902,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   cursor: pointer;
   transition: background 0.2s;
   &:active {
-    background: darken($color-primary, 5%);
+    background: var(--awd-accent-hover);
   }
   &::after { border: none; } // uni-app button reset
 }
@@ -917,7 +911,7 @@ $glass-border: rgba(255, 255, 255, 0.5);
   margin-top: 32px;
   text-align: center;
   font-size: 12px;
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 /* Animations */

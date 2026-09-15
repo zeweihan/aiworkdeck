@@ -157,15 +157,15 @@ export const ReferenceFileCard: React.FC<ReferenceFileCardProps> = ({
   };
 
   return (
-    <div 
-      className={`flex items-center gap-3 p-3 bg-white dark:bg-background-secondary border border-gray-200 dark:border-border-primary rounded-lg hover:shadow-sm transition-shadow ${
+    <div
+      className={`flex items-center gap-2 px-3 py-2 w-72 bg-white dark:bg-background-secondary border border-gray-200 dark:border-border-primary rounded-lg hover:shadow-sm transition-shadow ${
         onClick ? 'cursor-pointer' : ''
       }`}
       onClick={onClick}
     >
       <div className="flex-shrink-0">
-        <div className="w-10 h-10 bg-blue-50 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
-          <FileText className="w-5 h-5 text-blue-600" />
+        <div className="w-8 h-8 bg-blue-50 dark:bg-blue-900/30 rounded-md flex items-center justify-center">
+          <FileText className="w-4 h-4 text-blue-600" />
         </div>
       </div>
 

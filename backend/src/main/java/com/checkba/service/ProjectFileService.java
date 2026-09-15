@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.ProjectFile;
@@ -33,6 +36,8 @@ public class ProjectFileService {
     private final UserService userService;
     private final com.checkba.service.quota.StageQuotaService stageQuotaService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    /** 彻底删除时级联清 evidence_link_target（单向依赖：EvidenceLinkService 不注入本类）。 */
+    private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
@@ -41,7 +46,9 @@ public class ProjectFileService {
                               WorkSessionService workSessionService,
                               UserService userService,
                               com.checkba.service.quota.StageQuotaService stageQuotaService,
-                              com.checkba.service.telemetry.TelemetryService telemetryService) {
+                              com.checkba.service.telemetry.TelemetryService telemetryService,
+                              com.checkba.service.evidence.EvidenceLinkService evidenceLinkService) {
+        this.evidenceLinkService = evidenceLinkService;
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
@@ -79,6 +86,7 @@ public class ProjectFileService {
         if (projectId == null) {
             throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
+        parentId = resolveParentId(projectId, parentId);
         if (!StringUtils.hasText(name)) {
             throw new IllegalArgumentException(LangText.of("文件夹名称不能为空", "Folder name must not be empty"));
         }
@@ -92,19 +100,15 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件夹: ", "A folder with this name already exists: ") + name);
         }
 
-        // 获取当前父文件夹下的最大排序序号
-        List<ProjectFile> siblings = projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, parentId);
-        int maxSortOrder = siblings.stream()
-                .mapToInt(ProjectFile::getSortOrder)
-                .max()
-                .orElse(-1);
+        // 获取当前父文件夹下的最大排序序号（单条聚合查询，见 ProjectFileRepository.maxSortOrder）
+        Integer maxSortOrder = projectFileRepository.maxSortOrder(projectId, parentId);
 
         ProjectFile folder = new ProjectFile();
         folder.setProjectId(projectId);
         folder.setParentId(parentId);
         folder.setIsFolder(true);
         folder.setName(name.trim());
-        folder.setSortOrder(maxSortOrder + 1);
+        folder.setSortOrder((maxSortOrder == null ? -1 : maxSortOrder) + 1);
         folder.setUserId(userId);
         folder.setCreatedAt(LocalDateTime.now());
         folder.setUpdatedAt(LocalDateTime.now());
@@ -112,6 +116,41 @@ public class ProjectFileService {
         ProjectFile savedFolder = projectFileRepository.save(folder);
         signalChange(projectId, userId);
         return savedFolder;
+    }
+
+    /**
+     * 归一并校验父节点 ID：{@code null} 与 {@code 0} 都是「项目根」，其余必须是本项目里
+     * 一个活着的文件夹，否则当场报错。
+     *
+     * <p>为什么必须放在服务层（dev-board#457）：同样的检查此前只长在
+     * {@code ProjectFileController.checkParentFolder} 上，AI 工具、插件宿主、内部落盘服务
+     * 都不经过 HTTP 那一层。Agent 的 {@code create_folder} 把「放根目录」写成
+     * {@code parentFolderId=0}（LLM 的惯用写法），库里并没有 id=0 这一行，于是：
+     * 前端 {@code normalizeParentId} 把 0 当根画出来，看着是一个普通的根文件夹；
+     * 后端的同名查重 {@code (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId)}
+     * 却把 0 与 NULL 当两个不同的父节点，根下同名的那个不算冲突。本地文件夹对账器
+     * 随后按 {@code rowKey("root/名字")} 找不到这条 parent_id=0 的行，就再建一条真正的根行
+     * ——资源管理器顶部于是多出一个重复节点，刷新重启都在（孤儿那条的物理路径在断链处
+     * 落回根目录，目录确实存在，删除同步就判它「还在」，永不清理）。
+     *
+     * <p>0 归一成 null 而不是报错：它表达的意思本来就是「根」，报错只会让模型再猜一轮。
+     * 不存在/别的项目/不是文件夹/已删除的父节点则一律拒绝——那些落库之后都是谁也点不开
+     * 的孤儿行。
+     */
+    public Long resolveParentId(Long projectId, Long parentId) {
+        if (parentId == null || parentId == 0L) {
+            return null;
+        }
+        ProjectFile parent = projectFileRepository.findById(parentId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        LangText.of("目标文件夹不存在或已被删除: ", "Target folder does not exist or has been deleted: ") + parentId));
+        if (!Objects.equals(projectId, parent.getProjectId())
+                || !Boolean.TRUE.equals(parent.getIsFolder())
+                || Boolean.TRUE.equals(parent.getIsDeleted())) {
+            throw new IllegalArgumentException(
+                    LangText.of("目标文件夹不存在或已被删除: ", "Target folder does not exist or has been deleted: ") + parentId);
+        }
+        return parentId;
     }
 
     /**
@@ -204,15 +243,34 @@ public class ProjectFileService {
         }
     }
 
+    /** 新建文件遇到同名时的处置策略。 */
+    public enum ConflictPolicy {
+        /** 同名直接抛异常（既有行为，前端 REST 路径走这条，不改语义）。 */
+        FAIL,
+        /** 同名自动改名 "name (n).ext" 直到不冲突（后端内部落盘调用点，如导出/OCR 批量保存）。 */
+        RENAME
+    }
+
     /**
-     * 创建文件
+     * 创建文件（同名报错，既有行为不变）
      */
     @Transactional
-    public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType, 
+    public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType,
                                   Long fileSize, String filePath, String wpsFileId, Long userId) {
+        return createFile(projectId, parentId, name, fileType, fileSize, filePath, wpsFileId, userId, ConflictPolicy.FAIL);
+    }
+
+    /**
+     * 创建文件，可选同名冲突策略：FAIL（默认，同名报错）或 RENAME（自动加 "(n)" 直到不冲突）。
+     */
+    @Transactional
+    public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType,
+                                  Long fileSize, String filePath, String wpsFileId, Long userId,
+                                  ConflictPolicy policy) {
         if (projectId == null) {
             throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
+        parentId = resolveParentId(projectId, parentId);
         if (!StringUtils.hasText(name)) {
             throw new IllegalArgumentException(LangText.of("文件名不能为空", "File name must not be empty"));
         }
@@ -220,21 +278,20 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
 
-        // 检查同名文件是否存在
-        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
-            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + name);
+        String finalName = name.trim();
+        if (policy == ConflictPolicy.RENAME) {
+            finalName = resolveConflictingName(projectId, parentId, finalName);
+        } else if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, finalName, -1L)) {
+            // 检查同名文件是否存在（与 RENAME 对称：按 trim 后的名字查，落库的也是 trim 后的名字）
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + finalName);
         }
 
-        // 获取当前父文件夹下的最大排序序号
-        List<ProjectFile> siblings = projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, parentId);
-        int maxSortOrder = siblings.stream()
-                .mapToInt(ProjectFile::getSortOrder)
-                .max()
-                .orElse(-1);
+        // 获取当前父文件夹下的最大排序序号（单条聚合查询，见 ProjectFileRepository.maxSortOrder）
+        Integer maxSortOrder = projectFileRepository.maxSortOrder(projectId, parentId);
 
         // 如果未提供 filePath，则自动构建
         if (!StringUtils.hasText(filePath)) {
-            filePath = buildPhysicalPath(projectId, parentId, name);
+            filePath = buildPhysicalPath(projectId, parentId, finalName);
         }
         filePath = requireProjectScopedPath(projectId, filePath);
 
@@ -242,28 +299,312 @@ public class ProjectFileService {
         file.setProjectId(projectId);
         file.setParentId(parentId);
         file.setIsFolder(false);
-        file.setName(name.trim());
+        file.setName(finalName.trim());
         file.setFileType(fileType);
         file.setFileSize(fileSize);
         file.setFilePath(filePath);
         file.setWpsFileId(wpsFileId);
-        file.setSortOrder(maxSortOrder + 1);
+        file.setSortOrder((maxSortOrder == null ? -1 : maxSortOrder) + 1);
         file.setUserId(userId);
         file.setCreatedAt(LocalDateTime.now());
         file.setUpdatedAt(LocalDateTime.now());
 
         ProjectFile savedFile = projectFileRepository.save(file);
-        
-        // 尝试创建物理文件（从模板复制）
+
+        // 从模板物化物理文件。此前这里调的是 load()——靠「读不到就造一个」的副作用来建文件，
+        // 于是读路径也被迫保留那个副作用，任何一份正文丢失的文档都会被静默读成空白模板。
+        // 建与读拆开后，这里明确表达「创建」，load() 得以回归纯读（文件不存在就报错）。
         try {
-            storageServiceFactory.getStorageService().load(filePath);
+            storageServiceFactory.getStorageService().createFromTemplate(filePath);
             log.info("物理文件创建成功: {}", filePath);
         } catch (Exception e) {
-            log.warn("物理文件创建可能失败 (如果是第一次访问会自动创建): {}", filePath, e);
+            log.warn("物理文件创建失败（首次保存时会重新写入）: {}", filePath, e);
         }
 
         signalChange(projectId, userId);
         return savedFile;
+    }
+
+    /** 单个项目的文件总量上限，与 FileController.uploadFile 那道闸同一个数（20GB）。 */
+    private static final long PROJECT_TOTAL_SIZE_LIMIT = 20L * 1024 * 1024 * 1024;
+
+    /**
+     * 从本机绝对路径复制一份进项目目录（dev-board#409：桌面端「拖入 = 复制进来」）。
+     *
+     * <p>为什么不走 HTTP 上传：桌面端项目就是本机的一个文件夹，而微信/Finder 拖过来的
+     * File 对象指向的是那一次拖拽的临时目录——等 createFile 那一趟往返回来，blob 常常
+     * 已经失效（Chromium 报 ERR_UPLOAD_FILE_CHANGED，xhr 只给一句 Network Error），
+     * 于是三次重试全挂，而 createFile 已经按模板物化出的空白 docx 就那么留在用户目录里。
+     * 同一台机器上把字节 copy 过去既没有这个窗口，也不必让 5GB 的证据包在本机绕一圈 HTTP。
+     *
+     * <p>除了字节来源，其余一律与「一次传完的上传」等同：行由 {@link #createFile} 建
+     * （filePath 服务端生成、同名仍是 FAIL、signalChange 照发），随后覆盖模板落盘并回写
+     * 大小与修改时间。落盘失败时把模板文件删掉再抛——事务回滚掉数据库行，用户目录里
+     * 也不留空白占位。
+     */
+    @Transactional
+    public ProjectFile importLocalFile(Long projectId, Long parentId, String sourcePath, Long userId) {
+        java.nio.file.Path source = resolveImportSource(projectId, userId, sourcePath);
+        if (!java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            // 目录与不存在的路径都落在这里：这个入口一次只收一个普通文件（目录走 importLocalPath）
+            throw new IllegalArgumentException(LangText.of("源文件不存在或不是普通文件: ", "Source file does not exist or is not a regular file: ") + sourcePath);
+        }
+        long size;
+        try {
+            size = java.nio.file.Files.size(source);
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException(LangText.of("无法读取源文件: ", "Cannot read source file: ") + sourcePath);
+        }
+        Long total = projectFileRepository.sumSizeByProjectId(projectId);
+        if (total != null && total + size > PROJECT_TOTAL_SIZE_LIMIT) {
+            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
+        }
+
+        String name = source.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String ext = dot > 0 ? name.substring(dot + 1).toLowerCase() : "";
+        // wpsFileId 的形状与前端上传通道生成的一致（project_{pid}_doc_{ts}_{rand}），
+        // 编辑器/上传接口的双查逻辑对两条路径没有区别
+        String wpsFileId = "project_" + projectId + "_doc_" + System.currentTimeMillis()
+                + "_" + UUID.randomUUID().toString().substring(0, 7);
+
+        ProjectFile created = createFile(projectId, parentId, name, ext, size, null, wpsFileId, userId);
+
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(source)) {
+            storageServiceFactory.getStorageService().save(created.getFilePath(), in);
+        } catch (Exception e) {
+            log.warn("导入本机文件失败，回滚: source={}, target={}", sourcePath, created.getFilePath(), e);
+            try {
+                storageServiceFactory.getStorageService().delete(created.getFilePath());
+            } catch (Exception ignored) {
+                // 删不掉不影响「这次导入失败」这个结论
+            }
+            throw new IllegalArgumentException(LangText.of("复制文件失败: ", "Failed to copy file: ") + name);
+        }
+
+        created.setFileSize(size);
+        created.setUpdatedAt(LocalDateTime.now());
+        return projectFileRepository.save(created);
+    }
+
+    /**
+     * import-local 两条路（单个文件 / 整个目录）共用的入口校验：项目与用户非空、路径可解析、
+     * 必须是绝对路径、末段不是符号链接。「是不是普通文件」留给各自的调用点判断。
+     */
+    private java.nio.file.Path resolveImportSource(Long projectId, Long userId, String sourcePath) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
+        }
+        if (userId == null) {
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
+        }
+        if (!StringUtils.hasText(sourcePath)) {
+            throw new IllegalArgumentException(LangText.of("源文件路径不能为空", "Source path must not be empty"));
+        }
+        java.nio.file.Path source;
+        try {
+            source = java.nio.file.Paths.get(sourcePath).normalize();
+        } catch (Exception e) {
+            throw new IllegalArgumentException(LangText.of("源文件路径非法: ", "Invalid source path: ") + sourcePath);
+        }
+        if (!source.isAbsolute()) {
+            throw new IllegalArgumentException(LangText.of("源文件路径必须是绝对路径: ", "Source path must be absolute: ") + sourcePath);
+        }
+        // 符号链接不跟随：跟随了就等于允许调用方拿一个链接把项目目录外的任意文件复制进来。
+        // 只看末段——祖先目录是链接是常态（macOS 的 /var -> /private/var 就是），拿
+        // toRealPath 去比会把正常的临时目录路径一并误伤。
+        if (java.nio.file.Files.isSymbolicLink(source)) {
+            throw new IllegalArgumentException(LangText.of("不支持导入符号链接: ", "Symbolic links are not supported: ") + sourcePath);
+        }
+        return source;
+    }
+
+    /** 一次 import-local 的产物：顶层行（文件或文件夹）、真正落盘的文件行、被跳过的条目数。 */
+    public static class ImportLocalResult {
+        private final ProjectFile root;
+        private final List<ProjectFile> importedFiles;
+        private final int skippedCount;
+
+        public ImportLocalResult(ProjectFile root, List<ProjectFile> importedFiles, int skippedCount) {
+            this.root = root;
+            this.importedFiles = importedFiles;
+            this.skippedCount = skippedCount;
+        }
+
+        /** 顶层创建出来的行：导入单个文件时是文件行，导入目录时是那个文件夹行。 */
+        public ProjectFile getRoot() {
+            return root;
+        }
+
+        /** 本次真正复制进来的文件行（不含文件夹），后置钩子按它逐个跑。 */
+        public List<ProjectFile> getImportedFiles() {
+            return importedFiles;
+        }
+
+        /** 树里被跳过的条目数：符号链接、设备/管道等特殊文件、读不到的条目。 */
+        public int getSkippedCount() {
+            return skippedCount;
+        }
+    }
+
+    /**
+     * 从本机绝对路径导入：普通文件复制一份进来（{@link #importLocalFile}），
+     * 目录则把整棵树复制进来——资源管理器现在也收整个文件夹的拖入。
+     *
+     * <p>入口校验（绝对路径、不跟随符号链接、单机模式与归属由控制器把）一律不变，
+     * 只把原来那条「必须是普通文件」的拒绝换成分流：普通文件走老路，目录走
+     * {@link #importLocalDirectory}，其余形态（不存在、设备/管道等）照旧拒绝。
+     */
+    @Transactional
+    public ImportLocalResult importLocalPath(Long projectId, Long parentId, String sourcePath, Long userId) {
+        java.nio.file.Path source = resolveImportSource(projectId, userId, sourcePath);
+        if (java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            ProjectFile created = importLocalFile(projectId, parentId, sourcePath, userId);
+            return new ImportLocalResult(created, List.of(created), 0);
+        }
+        if (java.nio.file.Files.isDirectory(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return importLocalDirectory(projectId, parentId, source, userId);
+        }
+        throw new IllegalArgumentException(LangText.of("源文件不存在或不是普通文件: ", "Source file does not exist or is not a regular file: ") + sourcePath);
+    }
+
+    /**
+     * 把整个目录复制进项目：顶层建一个同名文件夹行，子目录建文件夹行，普通文件逐个走
+     * {@link #importLocalFile}（复制逻辑只有那一份）。
+     *
+     * <p>三条与单文件路径对齐的规矩：
+     * <ul>
+     * <li><b>顶层同名报错</b>——用的就是 {@link #createFolder} 那道同名查重，不改名不覆盖；</li>
+     * <li><b>额度先算后拷</b>——先摊平整棵树、把普通文件的字节加总，与
+     *     {@code sumSizeByProjectId} 一起过 20GB 那道闸，拦住时一行不建、一个字节不落盘；</li>
+     * <li><b>跳过而不是报错</b>——树里的符号链接（跟随了等于把项目目录外的文件复制进来）、
+     *     设备/管道等特殊文件、读不到的条目只计数；点开头的目录与 {@code ~$} 锁文件
+     *     按磁盘扫描同一条规则（{@link LocalProjectService#isIgnoredEntryName}）静默略过，
+     *     {@code .awd}/{@code .git} 这些项目自己的元数据目录都在里面。</li>
+     * </ul>
+     *
+     * <p>版本变更信号不额外发：createFolder/createFile 各自已经 signalChange，与逐个文件
+     * 拖进来时的行为一致。
+     */
+    private ImportLocalResult importLocalDirectory(Long projectId, Long parentId,
+                                                   java.nio.file.Path source, Long userId) {
+        java.nio.file.Path topName = source.getFileName();
+        if (topName == null) {
+            throw new IllegalArgumentException(LangText.of("源文件路径非法: ", "Invalid source path: ") + source);
+        }
+
+        // 先摊平成一张有序计划（父目录一定排在孩子前面），再动手：额度必须在复制之前判定
+        java.util.LinkedHashMap<java.nio.file.Path, Boolean> plan = new java.util.LinkedHashMap<>();
+        final long[] totalBytes = {0L};
+        final int[] skipped = {0};
+        try {
+            java.nio.file.Files.walkFileTree(source, java.util.Collections.emptySet(), Integer.MAX_VALUE,
+                    new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                @Override
+                public java.nio.file.FileVisitResult preVisitDirectory(
+                        java.nio.file.Path dir, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (dir.equals(source)) {
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                    if (dir.getFileName().toString().startsWith(".")) {
+                        return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+                    }
+                    plan.put(dir, Boolean.TRUE);
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFile(
+                        java.nio.file.Path file, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (LocalProjectService.isIgnoredEntryName(file.getFileName().toString())) {
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                    if (attrs.isSymbolicLink() || !attrs.isRegularFile()) {
+                        skipped[0]++;
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                    plan.put(file, Boolean.FALSE);
+                    totalBytes[0] += attrs.size();
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFileFailed(
+                        java.nio.file.Path file, java.io.IOException exc) {
+                    log.warn("导入目录时无法访问，跳过: {} ({})", file, exc.getMessage());
+                    skipped[0]++;
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException(LangText.of("无法读取源目录: ", "Cannot read source directory: ") + source);
+        }
+
+        Long total = projectFileRepository.sumSizeByProjectId(projectId);
+        if (total != null && total + totalBytes[0] > PROJECT_TOTAL_SIZE_LIMIT) {
+            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
+        }
+
+        ProjectFile rootFolder = createFolder(projectId, parentId, topName.toString(), userId);
+        java.util.Map<java.nio.file.Path, Long> dirIds = new java.util.HashMap<>();
+        dirIds.put(source, rootFolder.getId());
+        List<ProjectFile> imported = new ArrayList<>();
+        for (java.util.Map.Entry<java.nio.file.Path, Boolean> entry : plan.entrySet()) {
+            java.nio.file.Path path = entry.getKey();
+            Long dirId = dirIds.get(path.getParent());
+            if (dirId == null) {
+                continue; // 父目录被跳过，整条分支一起放弃
+            }
+            if (Boolean.TRUE.equals(entry.getValue())) {
+                ProjectFile folder = createFolder(projectId, dirId, path.getFileName().toString(), userId);
+                dirIds.put(path, folder.getId());
+            } else {
+                imported.add(importLocalFile(projectId, dirId, path.toString(), userId));
+            }
+        }
+        return new ImportLocalResult(rootFolder, imported, skipped[0]);
+    }
+
+    /**
+     * RENAME 策略：同名时在扩展名前插入 " (n)" 直到不冲突，上限 1000 次尝试
+     * （超出后大概率是查询本身有问题，抛错比死循环/无限重试更安全）。
+     *
+     * <p>「冲突」同时看两处，任一命中都继续加序号：
+     * <ul>
+     * <li>数据库里<b>含回收站</b>的同名行（{@code existsByProjectIdAndParentIdAndNameIncludingDeleted}，
+     *     不过滤 isDeleted；常规查重的 {@code existsByProjectIdAndParentIdAndNameAndIdNot} 只看活着的行）。
+     *     软删除只翻 isDeleted 不动磁盘，回收站里那份「a.pdf」的字节仍躺在按名字算出的 filePath 上；
+     *     若只查活着的行就把「a.pdf」判为可用，调用方随后 save/move(REPLACE_EXISTING) 会把回收站文件盖掉，
+     *     律师一还原拿到的是新文件的内容。</li>
+     * <li>物理目标路径已存在（行被彻底删了但文件残留、或外部写入）。</li>
+     * </ul>
+     */
+    private String resolveConflictingName(Long projectId, Long parentId, String name) {
+        if (!conflictingNameTaken(projectId, parentId, name)) {
+            return name;
+        }
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && dot < name.length() - 1) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+        for (int i = 1; i <= 1000; i++) {
+            String candidate = base + " (" + i + ")" + ext;
+            if (!conflictingNameTaken(projectId, parentId, candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalArgumentException(LangText.of("该文件夹下同名文件过多，请手动改名: ", "Too many files with this name in this folder; please rename manually: ") + name);
+    }
+
+    private boolean conflictingNameTaken(Long projectId, Long parentId, String candidate) {
+        if (projectFileRepository.existsByProjectIdAndParentIdAndNameIncludingDeleted(projectId, parentId, candidate)) {
+            return true;
+        }
+        String physicalPath = buildPhysicalPath(projectId, parentId, candidate);
+        return storageServiceFactory.getStorageService().exists(physicalPath);
     }
 
     /**
@@ -283,12 +624,6 @@ public class ProjectFileService {
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
-
-        // 检查同名文件是否存在
-        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
-                file.getProjectId(), file.getParentId(), newName.trim(), fileId)) {
-            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件/文件夹: ", "A file or folder with this name already exists: ") + newName);
-        }
 
         String oldName = file.getName();
         String oldFilePath = file.getFilePath();
@@ -313,7 +648,14 @@ public class ProjectFileService {
                 finalNewName = finalNewName + "." + file.getFileType();
             }
         }
-        
+
+        // 检查同名文件是否存在。必须用补完后缀的最终名字来查——用户只填主名时后缀会被自动补回，
+        // 拿裸名字查重会放过与既有同后缀文件的碰撞，物理路径又由名字派生，会覆盖掉对方的内容。
+        if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
+                file.getProjectId(), file.getParentId(), finalNewName, fileId)) {
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件/文件夹: ", "A file or folder with this name already exists: ") + finalNewName);
+        }
+
         // 更新文件名
         file.setName(finalNewName);
         file.setUpdatedAt(LocalDateTime.now());
@@ -420,9 +762,12 @@ public class ProjectFileService {
             }
         }
         
+        // 证据链接级联：删该文件的 target，target 清空的 link 标 orphan（软删不走这里，面板灰显即可）
+        evidenceLinkService.onFilePurged(file.getProjectId(), fileId);
+
         // 删除数据库记录
         projectFileRepository.deleteById(fileId);
-        
+
         // 触发向量库增量刷新（文件删除）
         if (file.getProjectId() != null && filePath != null) {
             projectRagService.refreshProjectKnowledgeIncremental(
@@ -489,6 +834,15 @@ public class ProjectFileService {
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
+
+        // 目标父节点归一并校验（0/null 都是根）。要取到 file 才知道项目 ID，所以不在方法首行，
+        // 但必须早于下面每一处用到 newParentId 的地方——额度闸、同名查重、落库都读它。
+        newParentId = resolveParentId(file.getProjectId(), newParentId);
+
+        // 文件缓存区免费额度：单文件移入同样要过闸。此前额度只挂在 batchMove 上，
+        // 而这条路径也能把文件移进 __staging_area__——一次拖一个就能无限塞，
+        // 付费闸等于没有。目标不是缓存区时 checkAdmission 直接放行，其它移动不受影响。
+        stageQuotaService.checkAdmission(newParentId, java.util.List.of(fileId));
 
         // 检查不能移动到自己的子文件夹中
         if (file.getIsFolder() && newParentId != null) {
@@ -602,6 +956,11 @@ public class ProjectFileService {
             // 防御性校验
             throw new IllegalArgumentException(LangText.of("projectId 不能为空", "projectId must not be empty"));
         }
+        // 复制这条路径自己拼行、不经过 createFolder/createFile，父节点归一得在这里做一次
+        // （dev-board#457）。顺带修掉一个连带问题：targetParentId=0 时下面那句
+        // Objects.equals(source.getParentId(), targetParentId) 对根下的源文件恒为 false，
+        // 「【副本】」前缀不会加，复制出来的就是一个同名行。
+        Long targetParentId = resolveParentId(projectId, request.getTargetParentId());
         List<ProjectFile> createdRoots = new ArrayList<>();
         for (Long id : request.getFileIds()) {
             if (id == null) continue;
@@ -610,7 +969,7 @@ public class ProjectFileService {
             if (!Objects.equals(source.getProjectId(), projectId)) {
                 throw new IllegalArgumentException(LangText.of("跨项目复制不支持", "Cross-project copy is not supported"));
             }
-            createdRoots.add(copyRecursive(projectId, source, request.getTargetParentId(), userId));
+            createdRoots.add(copyRecursive(projectId, source, targetParentId, userId));
         }
         signalChange(projectId, userId);
         return createdRoots;
@@ -900,6 +1259,43 @@ public class ProjectFileService {
             return folderOpt.get();
         }
         return createFolder(projectId, parentId, name, userId);
+    }
+
+    /**
+     * 从项目根起逐级确保文件夹存在（"a/b/c" → 三段），返回最深一级。
+     * 空白段跳过；某段已存在但是文件而不是文件夹时抛 IllegalArgumentException（不会把文件当目录往下钻）。
+     * 插件宿主 Files.createFolderPath、AI 工具 move_file 的目标目录补建、会议录音目录都走这里，
+     * 同名查找口径（未删除、同父、同名）只在这一处。
+     */
+    @Transactional
+    public ProjectFile ensureFolderPath(Long projectId, Long userId, List<String> segments) {
+        if (projectId == null) {
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
+        }
+        ProjectFile current = null;
+        Long parentId = null;
+        if (segments != null) {
+            for (String raw : segments) {
+                String seg = raw == null ? "" : raw.trim();
+                if (seg.isEmpty()) continue;
+                Optional<ProjectFile> existing = projectFileRepository
+                        .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, seg);
+                if (existing.isPresent()) {
+                    if (!Boolean.TRUE.equals(existing.get().getIsFolder())) {
+                        throw new IllegalArgumentException(LangText.of(
+                                "路径段已存在但不是文件夹: ", "Path segment exists but is not a folder: ") + seg);
+                    }
+                    current = existing.get();
+                } else {
+                    current = createFolder(projectId, parentId, seg, userId);
+                }
+                parentId = current.getId();
+            }
+        }
+        if (current == null) {
+            throw new IllegalArgumentException(LangText.of("文件夹路径不能为空", "Folder path must not be empty"));
+        }
+        return current;
     }
 
     private ProjectFile ensureConversationFolder(Long projectId, Long parentId, String conversationId, Long userId) {
@@ -1208,8 +1604,8 @@ public class ProjectFileService {
     private String resolveUserName(Long userId) {
         if (userId == null) return LangText.of("用户", "User");
         try {
-            var u = userService.getUserById(userId);
-            if (u != null && u.getUsername() != null) return u.getUsername();
+            String name = UserService.signatureName(userService.getUserById(userId));
+            if (name != null) return name;
         } catch (Exception e) {
             log.warn("解析用户名失败: userId={}", userId, e);
         }

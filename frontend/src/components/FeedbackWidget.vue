@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   常驻反馈浮窗（右下角）。
 
@@ -185,6 +187,8 @@ import { getRecentErrors, recentErrorCount } from '@/utils/errorBuffer.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { t as t$ } from '@/i18n'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import { KEEP_CLEAR_ATTR, resolveLauncherTop } from '@/utils/keepClear.js'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
@@ -249,6 +253,9 @@ export default {
       dragging: false,
       // 入口按钮的位置。null = 没挪过，走 CSS 里的右下角默认值
       launcherPos: null,
+      // 让路后的 top（null = 没压住任何 data-awd-keep-clear 区域，按原位显示）。
+      // 只是显示层的偏移，不写回 launcherPos、不持久化：主操作区挪走后按钮就回原位
+      keepClearTop: null,
       moving: false,
       showContext: false,
       status: '',
@@ -259,6 +266,7 @@ export default {
       mineList: [],
       mineLoading: false,
       mineError: '',
+      _mineRequestSeq: 0, // 请求代次：只接受"此刻最新一次" openMine 发出的响应
     }
   },
   computed: {
@@ -286,11 +294,15 @@ export default {
       return this.$t('feedback.headDefaultTitle')
     },
     launcherStyle() {
-      if (!this.launcherPos) return {}
+      const top = this.keepClearTop
+      if (!this.launcherPos) {
+        // 默认位（CSS 的 right/bottom）只在让路时改竖直坐标，水平仍贴右缘
+        return top == null ? {} : { top: top + 'px', bottom: 'auto' }
+      }
       // 挪过之后改成左上角定位，得把 CSS 里的 right/bottom 显式解掉
       return {
         left: this.launcherPos.left + 'px',
-        top: this.launcherPos.top + 'px',
+        top: (top == null ? this.launcherPos.top : top) + 'px',
         right: 'auto',
         bottom: 'auto',
       }
@@ -318,12 +330,21 @@ export default {
     try { uni.$on('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
     this.restoreLauncherPos()
     // 窗口缩小后旧坐标可能整个落到视口外，缩一次窗就再也点不到那个按钮了
-    this._onWinResize = () => { if (this.launcherPos) this.launcherPos = this.clampPos(this.launcherPos) }
+    this._onWinResize = () => {
+      if (this.launcherPos) this.launcherPos = this.clampPos(this.launcherPos)
+      this.updateKeepClear()
+    }
     try { window.addEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
+    // 主操作区的位置随页面状态变（空会话输入卡垂直居中 → 有消息后沉底、切面板、
+    // 文案折行），没有能统一订阅的事件，所以低频轮询：每次只是一个 querySelectorAll
+    // 加几次 getBoundingClientRect，代价可以忽略。
+    this.$nextTick(() => this.updateKeepClear())
+    this._keepClearTimer = setInterval(() => this.updateKeepClear(), 800)
   },
   beforeUnmount() {
     try { uni.$off('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
     try { window.removeEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
+    clearInterval(this._keepClearTimer)
     this.detachLauncherDrag()
     this.stopRecording(true)
     this.stopPlay()
@@ -346,6 +367,22 @@ export default {
         left: Math.min(Math.max(pos.left, M), Math.max(M, vw - w - M)),
         top: Math.min(Math.max(pos.top, M), Math.max(M, vh - h - M)),
       }
+    },
+    // 浮钮不许压住主操作区（dev-board#574）：任何固定坐标都会在某种布局下压住别人的
+    // 发送键，所以由主操作区自己打 data-awd-keep-clear 声明，这里每次落位前避开。
+    // 只算竖直方向——水平挪动会让贴边的按钮跑进内容区中间。
+    updateKeepClear() {
+      if (this.open || this.moving || typeof document === 'undefined') return
+      const vw = window.innerWidth || 1280
+      const vh = window.innerHeight || 800
+      const { w, h } = this.launcherSize()
+      // 没挪过时的原位由 CSS 决定（right:16px; bottom:40vh），这里按同一公式换算
+      const base = this.launcherPos || { left: vw - 16 - w, top: vh - vh * 0.4 - h }
+      const obstacles = [...document.querySelectorAll('[' + KEEP_CLEAR_ATTR + ']')]
+        .map((el) => el.getBoundingClientRect())
+      const top = resolveLauncherTop({ left: base.left, top: base.top, width: w, height: h }, obstacles, vh)
+      const next = top === base.top ? null : top
+      if (next !== this.keepClearTop) this.keepClearTop = next
     },
     restoreLauncherPos() {
       try {
@@ -384,6 +421,8 @@ export default {
         && Math.abs(e.clientY - this._drag.y0) < 4) return
       this._drag.moved = true
       this.moving = true
+      // 拖动中按钮必须跟手，让路偏移先撤掉；松手后再重新判一次
+      this.keepClearTop = null
       this.launcherPos = this.clampPos({
         left: e.clientX - this._drag.dx,
         top: e.clientY - this._drag.dy,
@@ -398,6 +437,7 @@ export default {
         return
       }
       try { uni.setStorageSync(LAUNCHER_POS_KEY, this.launcherPos) } catch (e) { /* ignore */ }
+      this.updateKeepClear()
     },
     detachLauncherDrag() {
       if (this._onLauncherMove) window.removeEventListener('pointermove', this._onLauncherMove)
@@ -430,19 +470,24 @@ export default {
       this.view = 'form'
     },
     // 「我的反馈」视图：每次打开都重新拉一遍，状态会随后台优化者的处理进度变化，
-    // 缓存旧列表只会让用户看到过期的「待发送」。
+    // 缓存旧列表只会让用户看到过期的「待发送」。back 不取消在途请求，快速
+    // myFeedback->back->myFeedback 会并发出两个请求；用请求代次只认最后一次发出的响应，
+    // 防止先发的（陈旧）响应后回来把已经渲染好的新列表盖掉。
     async openMine() {
       this.view = 'mine'
       this.mineLoading = true
       this.mineError = ''
+      const seq = ++this._mineRequestSeq
       try {
         const res = await getMyFeedback()
+        if (!shouldAcceptResponse(seq, this._mineRequestSeq)) return
         const items = (res && res.data && res.data.items) || []
         this.mineList = items.map(formatMineItem)
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._mineRequestSeq)) return
         this.mineError = (e && e.message) || this.$t('feedback.loadFailed')
       } finally {
-        this.mineLoading = false
+        if (shouldAcceptResponse(seq, this._mineRequestSeq)) this.mineLoading = false
       }
     },
     // PR 链接必须走系统浏览器/新标签页：桌面端主进程会拦截渲染层的 window.open，
@@ -559,6 +604,12 @@ export default {
         this.setStatus(this.$t('feedback.recordingUnsupported'), true)
         return
       }
+      // getUserMedia 在飞（权限弹窗展示期间）this.recording 还是 false，二次点击会
+      // 重入整段 try、开出第二路 getUserMedia/MediaRecorder，互相踩踏 this._recorder/
+      // this._stream/this._recordTimer。用独立的启动中标志挡住重入，不能复用 recording
+      // ——它要等 await 之后才置真。
+      if (this._startingRecording) return
+      this._startingRecording = true
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         const mimeType = pickAudioMime()
@@ -596,6 +647,8 @@ export default {
         }, 1000)
       } catch (e) {
         this.setStatus(this.$t('feedback.micPermissionDenied', { message: (e && e.message) || e }), true)
+      } finally {
+        this._startingRecording = false
       }
     },
     /** @returns {Promise<void>} 录音真正落成 File 之后才 resolve。 */
@@ -782,17 +835,20 @@ function pickAudioMime() {
 .awdfb-launcher {
   position: fixed;
   right: 16px;
-  bottom: 34px;
+  /* 默认停在右缘约 60% 高度处：右下角（bottom:34px）正好压在 AI 面板 composer
+     的模型选择器/发送键上（dev-board#213）。挪过的用户走 launcherStyle 的
+     left/top 持久化坐标，不受这个默认值影响。 */
+  bottom: 40vh;
   z-index: 99998;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 28px;
   padding: 0 11px;
-  border: 1px solid #DDE3E0;
+  border: 1px solid var(--awd-border);
   border-radius: 14px;
-  background: #FFFFFF;
-  color: #1A5336;
+  background: var(--awd-surface);
+  color: var(--awd-accent-text);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
@@ -806,7 +862,7 @@ function pickAudioMime() {
 }
 
 .awdfb-launcher:hover {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
   box-shadow: 0 4px 16px rgba(26, 83, 54, 0.18);
 }
 
@@ -814,7 +870,7 @@ function pickAudioMime() {
 .awdfb-launcher.is-moving {
   cursor: grabbing;
   transition: none;
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
   box-shadow: 0 8px 22px rgba(26, 83, 54, 0.26);
 }
 
@@ -834,15 +890,15 @@ function pickAudioMime() {
   max-height: 78vh;
   display: flex;
   flex-direction: column;
-  background: #FFFFFF;
-  border: 1px solid #E3E8E5;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   box-shadow: 0 16px 44px rgba(18, 52, 77, 0.2);
   overflow: hidden;
 }
 
 .awdfb-panel.is-dragging {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .awdfb-head {
@@ -850,13 +906,13 @@ function pickAudioMime() {
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
-  border-bottom: 1px solid #EEF1EF;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .awdfb-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .awdfb-head-right {
@@ -866,18 +922,18 @@ function pickAudioMime() {
 }
 
 .awdfb-link {
-  color: #6C757D;
+  color: var(--awd-text-2);
   font-size: 12px;
   cursor: pointer;
   user-select: none;
 }
 
 .awdfb-link:hover {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .awdfb-x {
-  color: #8A9691;
+  color: var(--awd-text-2);
   font-size: 13px;
   cursor: pointer;
   padding: 2px 4px;
@@ -885,7 +941,7 @@ function pickAudioMime() {
 }
 
 .awdfb-x:hover {
-  color: #12344D;
+  color: var(--awd-text);
 }
 
 .awdfb-body {
@@ -896,15 +952,15 @@ function pickAudioMime() {
 
 .awdfb-kinds {
   display: inline-flex;
-  border: 1px solid #E3E8E5;
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 10px;
 }
 
 .awdfb-kind {
-  background: #FFFFFF;
-  color: #6C757D;
+  background: var(--awd-surface);
+  color: var(--awd-text-2);
   font-size: 12px;
   padding: 5px 16px;
   cursor: pointer;
@@ -912,8 +968,8 @@ function pickAudioMime() {
 }
 
 .awdfb-kind.active {
-  background: #1A5336;
-  color: #FFFFFF;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
 }
 
 .awdfb-text {
@@ -922,18 +978,18 @@ function pickAudioMime() {
   box-sizing: border-box;
   resize: vertical;
   padding: 9px 10px;
-  border: 1px solid #E3E8E5;
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.6;
-  color: #12344D;
+  color: var(--awd-text);
   outline: none;
   font-family: inherit;
-  background: #FFFFFF;
+  background: var(--awd-surface);
 }
 
 .awdfb-text:focus {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .awdfb-tools {
@@ -944,19 +1000,19 @@ function pickAudioMime() {
 }
 
 .awdfb-tool {
-  border: 1px solid #E3E8E5;
-  background: #F8F9FA;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-bg);
   border-radius: 7px;
   padding: 5px 11px;
   font-size: 12px;
-  color: #12344D;
+  color: var(--awd-text);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
 
 .awdfb-tool:hover {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .awdfb-tool.disabled {
@@ -965,8 +1021,8 @@ function pickAudioMime() {
 }
 
 .awdfb-tool.recording {
-  border-color: #C0392B;
-  color: #C0392B;
+  border-color: var(--awd-danger);
+  color: var(--awd-danger-text);
 }
 
 .awdfb-shots {
@@ -980,10 +1036,10 @@ function pickAudioMime() {
   position: relative;
   width: 76px;
   height: 56px;
-  border: 1px solid #E3E8E5;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   overflow: hidden;
-  background: #F8F9FA;
+  background: var(--awd-bg);
 }
 
 .awdfb-shot img {
@@ -1000,8 +1056,8 @@ function pickAudioMime() {
   width: 16px;
   height: 16px;
   border-radius: 8px;
-  background: rgba(18, 52, 77, 0.65);
-  color: #FFFFFF;
+  background: var(--awd-info);
+  color: var(--awd-text-on-accent);
   font-size: 10px;
   line-height: 16px;
   text-align: center;
@@ -1018,43 +1074,43 @@ function pickAudioMime() {
 
 .awdfb-audio-label {
   font-size: 12px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   white-space: nowrap;
 }
 
 .awdfb-hint {
   margin-top: 6px;
   font-size: 11px;
-  color: #8A9691;
+  color: var(--awd-text-2);
 }
 
 .awdfb-hint.err {
-  color: #C0392B;
+  color: var(--awd-danger-text);
 }
 
 .awdfb-ctx-toggle {
   margin-top: 12px;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   cursor: pointer;
   user-select: none;
 }
 
 .awdfb-ctx-toggle:hover {
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .awdfb-ctx {
   margin: 6px 0 0;
   max-height: 160px;
   overflow: auto;
-  background: #F8F9FA;
-  border: 1px solid #EEF1EF;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 8px;
   font-size: 10px;
   line-height: 1.5;
-  color: #6C757D;
+  color: var(--awd-text-2);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -1066,12 +1122,12 @@ function pickAudioMime() {
 
 .awdfb-result-msg {
   font-size: 14px;
-  color: #12344D;
+  color: var(--awd-text);
   line-height: 1.6;
 }
 
 .awdfb-result.err .awdfb-result-msg {
-  color: #C0392B;
+  color: var(--awd-danger-text);
 }
 
 .awdfb-result-actions {
@@ -1087,7 +1143,7 @@ function pickAudioMime() {
 }
 
 .awdfb-mine-item {
-  border: 1px solid #E3E8E5;
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 9px 11px;
 }
@@ -1100,14 +1156,14 @@ function pickAudioMime() {
 
 .awdfb-mine-time {
   font-size: 11px;
-  color: #8A9691;
+  color: var(--awd-text-2);
 }
 
 .awdfb-mine-text {
   margin-top: 6px;
   font-size: 12px;
   line-height: 1.5;
-  color: #12344D;
+  color: var(--awd-text);
   word-break: break-all;
 }
 
@@ -1117,11 +1173,11 @@ function pickAudioMime() {
   align-items: center;
   justify-content: space-between;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .awdfb-mine-pr {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
   user-select: none;
 }
@@ -1139,13 +1195,13 @@ function pickAudioMime() {
 }
 
 .awdfb-badge.bug {
-  background: #FDEDEC;
-  color: #C0392B;
+  background: var(--awd-bg);
+  color: var(--awd-danger-text);
 }
 
 .awdfb-badge.idea {
-  background: #EAF6EF;
-  color: #1A5336;
+  background: var(--awd-bg);
+  color: var(--awd-accent-text);
 }
 
 .awdfb-foot {
@@ -1154,26 +1210,26 @@ function pickAudioMime() {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 14px;
-  border-top: 1px solid #EEF1EF;
-  background: #FCFDFC;
+  border-top: 1px solid var(--awd-border);
+  background: var(--awd-surface);
 }
 
 .awdfb-status {
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   flex: 1;
   min-width: 0;
   word-break: break-all;
 }
 
 .awdfb-status.err {
-  color: #C0392B;
+  color: var(--awd-danger-text);
 }
 
 .awdfb-submit {
   border-radius: 8px;
-  background: #1A5336;
-  color: #FFFFFF;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   font-size: 13px;
   padding: 7px 20px;
   cursor: pointer;

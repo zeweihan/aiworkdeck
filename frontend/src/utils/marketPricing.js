@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 广场付费项的展示口径（商业化改造 PR-D）。
 // 左栏列表 MarketSidebarPanel 与中栏详情 MarketDetailPane 两处共用，避免状态判定与文案各写一套。
 //

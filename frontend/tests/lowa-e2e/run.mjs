@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // LOWA 编辑器"真人模拟"端到端回归 / human-simulation e2e for the LibreOffice
 // WASM editor. Boots the REAL engine headlessly and drives the REAL overlay
 // keyboard path (CDP key events + IME composition), asserting document/cursor/
@@ -22,35 +24,106 @@
 // Test-only worker actions (debug_*) are injected IN-MEMORY by the server into
 // the served office_thread.js / editor bundle — source and dist stay clean.
 
-import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const here = path.dirname(fileURLToPath(import.meta.url))
-const distDir = path.resolve(here, '../../dist/zetaoffice')
-const engineDir = process.env.LOWA_ENGINE_DIR || path.join(distDir, 'lowa')
-const PORT = Number(process.env.LOWA_E2E_PORT || 8901)
-const ORIGIN = 'http://127.0.0.1:' + PORT
-const CHROME = process.env.PUPPETEER_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+// server / puppeteer 启动件与 big-doc.mjs（大文档基线组）共用，抽在 _boot.mjs。
+import { here, preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
+// 审阅面板的纯函数层（宿主侧）。组 33 拿真引擎回传的 RedlineType / 坐标直接喂它，
+// 证明「引擎给的串 → 面板显示的类型」「引擎给的坐标 → 批注挂到哪条修订」这两段
+// 映射在真数据上成立——单测里用的是手写夹具，只有这里能验夹具本身没编错。
+import { revisionTypeKey, linkCommentsToRevisions } from '../../src/utils/reviewGrouping.js'
+// B4：宿主保存路径给导出件打的产品标识（可溯源性设计规范附录 B4）。这里用真引擎的
+// 导出字节喂真函数，再让引擎把打完标的文件重新打开——纯函数的单测在
+// tests/lowa-unit/docxAppProps.test.mjs，这里补的是「真产物 + 真引擎回读」那一段。
+import { stampApplication } from '../../src/utils/docxAppProps.js'
+// 组 34：三方合并夹具（base/main/other 三份同源 docx + 后端本该算出的 plan/baseUnits）。
+// 产物不入库——这里在内存里现造，见 fixtures/merge/gen.mjs 顶部说明。
+import { generateMergeFixtures } from './fixtures/merge/gen.mjs'
 
 // ---------- preflight ----------
-for (const [what, p] of [
-  ['dist/zetaoffice (npm run build:zetaoffice)', path.join(distDir, 'editor.html')],
-  ['LOWA engine (fetch-lowa-assets.js or LOWA_ENGINE_DIR)', path.join(engineDir, 'soffice.js')],
-  ['Chrome (PUPPETEER_EXECUTABLE_PATH)', CHROME],
-]) {
-  if (!fs.existsSync(p)) { console.error('缺少 ' + what + ': ' + p); process.exit(2) }
-}
-let puppeteer
-try { puppeteer = (await import('puppeteer-core')).default }
-catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer-core'); process.exit(2) }
+preflight()
+const puppeteer = await loadPuppeteer()
 
 // ---------- test-only worker actions, injected in-memory ----------
 const DEBUG_ACTIONS = `
+  // 组 28：锁是否平衡（取消路径解锁两次不能下溢）+ modified 是否仍会触发
+  debug_lock_state() {
+    // isActionLocked 在 zetajs 包装上不可调（XActionLockable 没暴露），只看控制器锁 + 计数。
+    // inflightKeys 含本探针自己（=1 即无残留）。
+    let ctl = null;
+    try { ctl = xModel.hasControllersLocked(); } catch (e) { ctl = 'err:' + e; }
+    return { success: true, controllersLocked: ctl, modifySuspended: modifySuspended, lockDepth: modelLockDepth, cancelledKeys: Object.keys(CANCELLED).length, inflightKeys: Object.keys(INFLIGHT).length };
+  },
+  debug_modified_count() { return { success: true, count: MOD_COUNT }; },
+  // 组 29 探针：页脚文本与页码域计数（PageNumber / PageCount 文本域各几枚）
+  debug_footer_info() {
+    const out = { success: true, text: '', pageNumberFields: 0, pageCountFields: 0 };
+    try {
+      const ps = currentPageStyle();
+      if (ps.error) return ps;
+      out.text = String(ps.pageStyle.getPropertyValue('FooterText').getString() || '');
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.PageNumber')) out.pageNumberFields++;
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.PageCount')) out.pageCountFields++;
+      }
+    } catch (e) { out.err = errStr(e); }
+    return out;
+  },
+  // 组 29 探针：段落样式定义的字号/粗细/对齐（apply_style_profile 改的是定义，不是某段）
+  debug_para_style_info(p) {
+    try {
+      const st = xModel.getStyleFamilies().getByName('ParagraphStyles').getByName(String(p.name));
+      return { success: true, sizePt: st.getPropertyValue('CharHeight'), bold: st.getPropertyValue('CharWeight') > 100,
+        fontAsian: st.getPropertyValue('CharFontNameAsian'), fontWestern: st.getPropertyValue('CharFontName'),
+        centered: enumEq(st.getPropertyValue('ParaAdjust'), css.style.ParagraphAdjust.CENTER),
+        firstLineIndentMm: st.getPropertyValue('ParaFirstLineIndent') };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
   debug_set_record_changes(p) {
     xModel.setPropertyValue('RecordChanges', !!p.on);
     return { success: true, recordChanges: xModel.getPropertyValue('RecordChanges') };
+  },
+  // 组 30 探针：读回当前配色方案的 AppBackground（set_app_theme 的落点）
+  debug_app_bg() {
+    try {
+      const provider = context.getServiceManager().createInstanceWithContext(
+        'com.sun.star.configuration.ConfigurationProvider', context);
+      let name = 'LibreOffice';
+      try {
+        const cur = provider.createInstanceWithArguments(
+          'com.sun.star.configuration.ConfigurationAccess',
+          [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme')]);
+        name = String(cur.getByName('CurrentColorScheme') || name);
+      } catch (e) {}
+      const schemes = provider.createInstanceWithArguments(
+        'com.sun.star.configuration.ConfigurationAccess',
+        [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme/ColorSchemes')]);
+      const c = schemes.getByName(name).getByName('AppBackground').getByName('Color');
+      return { success: true, scheme: name, color: Number(c) };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  // 组 31 探针：绕开 set_revision_view 自己直读两个引擎开关（不让断言变成
+  // 「原语说什么就信什么」的自证），外加正文文字与 redline 条数。
+  debug_revision_view_raw() {
+    const out = { success: true };
+    try { out.showChanges = xModel.getPropertyValue('ShowChanges'); } catch (e) { out.showChangesErr = errStr(e); }
+    try { out.inMargin = ctrl.getViewSettings().getPropertyValue('ShowChangesInMargin'); } catch (e) { out.inMarginErr = errStr(e); }
+    // rdt 只作诊断：写 NONE(0) 后引擎归一成 INSERTED(1)，不能当判据。
+    try { out.rdt = unoEnumVal(xModel.getPropertyValue('RedlineDisplayType')); } catch (e) {}
+    try { out.body = xModel.getText().getString(); } catch (e) { out.bodyErr = errStr(e); }
+    try { out.redlines = xModel.getRedlines().getCount(); } catch (e) { out.redlineErr = errStr(e); }
+    return out;
+  },
+  // 组 31 探针：锁住「ShowChanges 属性写不进去」这条真机结论——它是 worker 绕道
+  // RedlineDisplayType 的全部理由。将来引擎修好了这条会红，提醒把实现简化回去。
+  debug_try_write_show_changes(p) {
+    const out = { success: true };
+    try { out.before = xModel.getPropertyValue('ShowChanges'); } catch (e) { out.beforeErr = errStr(e); }
+    try { xModel.setPropertyValue('ShowChanges', !!p.on); } catch (e) { out.setErr = errStr(e); }
+    try { out.after = xModel.getPropertyValue('ShowChanges'); } catch (e) { out.afterErr = errStr(e); }
+    return out;
   },
   debug_char_prop(p) {
     const vc = ctrl.getViewCursor();
@@ -77,15 +150,22 @@ const DEBUG_ACTIONS = `
     try {
       // p.visible：批注删除要走引擎的注释窗口（.uno:DeleteComment 按 Id 找的是
       // 活动批注窗口），Hidden 文档里根本没有——组 18 因此要一份可见文档。
+      const prev = xModel;
       const loaded = desktop.loadComponentFromURL('private:factory/swriter', '_blank', 0,
         (p && p.visible) ? [] : [mkProp('Hidden', true)]);
       if (!loaded) return { success: false, message: 'loadComponentFromURL returned null' };
       xModel = loaded;
       ctrl = loaded.getCurrentController();
+      // 顺手关掉上一份文档：整跑要开二十来份，一份都不关地攒在 WASM 堆里没有好处。
+      // （注：这不是组 23 那次崩溃的原因——那次是导出包装去问 Impress 模型要
+      // Writer 专属属性，见 office_thread.js 的 withInlineMarkupForExport。）
+      // setModified(false) 是为了不让 close 被「有未保存修改」否掉；失败就算了，
+      // 别拖累用例本身。
+      try { if (prev && prev !== loaded) { try { prev.setModified(false); } catch (e) {} prev.close(true); } } catch (e) {}
       try { xModel.setPropertyValue('RecordChanges', false); } catch (e) {}
-      // 生产的 retarget（load_document）会重置这个视图设置——探针换文档也要跟着
-      // 做，否则后续断言跑在行内显示语义下，与真实产品形态不符。
-      showDeletionsInMargin();
+      // These legacy fixtures exercise final-text edits in margin mode. The
+      // production load_document default is covered by word-review.mjs.
+      applyRevisionView('margin');
       return { success: true };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
@@ -99,6 +179,10 @@ const DEBUG_ACTIONS = `
     const out = { success: true, count: ts.getCount() };
     try { out.rows = t.getRows().getCount(); out.cols = t.getColumns().getCount(); } catch (e) {}
     try { out.borderWidth = t.getPropertyValue('TableBorder2').TopLine.LineWidth; } catch (e) { out.borderErr = errStr(e); }
+    // 组 29：内框线宽 / 外框线型与颜色 / 重复表头 / 表头底纹
+    try { const tb = t.getPropertyValue('TableBorder2'); out.innerWidth = tb.HorizontalLine.LineWidth; out.borderStyle = unoEnumVal(tb.TopLine.LineStyle); out.borderColor = tb.TopLine.Color; } catch (e) {}
+    try { out.repeatHeadline = !!t.getPropertyValue('RepeatHeadline'); } catch (e) {}
+    try { out.a1Fill = t.getCellByName('A1').getPropertyValue('BackColor'); } catch (e) {}
     try {
       const a1 = t.getCellByName('A1');
       out.a1Text = a1.getString();
@@ -254,46 +338,25 @@ function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
     const s = content.toString('utf8')
     if (!s.includes('const EXEC = {')) throw new Error('office_thread.js: EXEC anchor missing')
-    return Buffer.from(s.replace('const EXEC = {', 'const EXEC = {\n' + DEBUG_ACTIONS), 'utf8')
+    for (const anchor of ['function installModifyListener(model) {', "if (model.isModified()) post('modified');"]) {
+      if (!s.includes(anchor)) throw new Error('office_thread.js: anchor missing: ' + anchor)
+    }
+    return Buffer.from(s.replace('const EXEC = {', 'const EXEC = {\n' + DEBUG_ACTIONS)
+      .replace('function installModifyListener(model) {', 'let MOD_COUNT = 0;\nfunction installModifyListener(model) {')
+      .replace("if (model.isModified()) post('modified');", "if (model.isModified()) { MOD_COUNT++; post('modified'); }"), 'utf8')
   }
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info','debug_app_bg','debug_revision_view_raw','debug_try_write_show_changes'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info","debug_app_bg","debug_revision_view_raw","debug_try_write_show_changes"'),
       'utf8')
   }
   return content
 }
 
 // ---------- COOP/COEP static server ----------
-const encPath = path.join(engineDir, '.encodings.json')
-const encodings = fs.existsSync(encPath) ? JSON.parse(fs.readFileSync(encPath, 'utf8')) : {}
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
-  '.data': 'application/octet-stream', '.json': 'application/json',
-  '.ttc': 'font/collection', '.ttf': 'font/ttf', '.otf': 'font/otf',
-}
-const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent(req.url.split('?')[0])
-  const fromEngine = urlPath.startsWith('/lowa/')
-  const fp = fromEngine
-    ? path.join(engineDir, urlPath.slice('/lowa/'.length))
-    : path.join(distDir, urlPath === '/' ? 'editor.html' : urlPath)
-  if (!fs.existsSync(fp) || fs.statSync(fp).isDirectory()) { res.writeHead(404); res.end(); return }
-  const headers = {
-    'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cross-Origin-Embedder-Policy': 'require-corp',
-    'Cache-Control': 'no-store',
-    'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream',
-  }
-  if (fromEngine && encodings[path.basename(fp)]) headers['Content-Encoding'] = encodings[path.basename(fp)]
-  const body = patchServed(urlPath, fs.readFileSync(fp))
-  res.writeHead(200, headers)
-  res.end(body)
-})
-await new Promise((r) => server.listen(PORT, r))
-console.log('serving ' + distDir + ' (engine: ' + engineDir + ') on ' + ORIGIN)
+const server = await startServer({ patchServed })
 
 // ---------- assertions ----------
 let passed = 0, failed = 0
@@ -304,14 +367,10 @@ function check(label, cond, detail) {
 
 // ---------- drive ----------
 const META = 4, SHIFT = 8, ALT = 1
-const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'] })
+const browser = await launchBrowser(puppeteer)
 try {
-  await browser.defaultBrowserContext().overridePermissions(ORIGIN, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'])
-  const page = await browser.newPage()
-  await page.goto(ORIGIN + '/editor.html?verify=1&lowa=/lowa/', { waitUntil: 'domcontentloaded' })
-  console.log('booting engine (~90s)...')
-  await page.waitForFunction('!!window.__loExecutor', { timeout: 240000 })
-  await page.evaluate(() => { window.__overlayInput = document.querySelector('input[aria-hidden]') })
+  const page = await openEditor(browser)
+  await page.evaluate(() => { window.__overlayInput = document.querySelector('input[data-lo-ime]') })
 
   const cdp = await page.createCDPSession()
   const key = async (k, code, vk, modifiers = 0) => {
@@ -320,7 +379,7 @@ try {
     await new Promise((r) => setTimeout(r, 350))
   }
   const exec = (a, p) => page.evaluate((a2, p2) => window.__loExecutor.executeCommand(a2, p2 || {}), a, p)
-  const doc = async () => (await exec('get_document_text')).paragraphs.map((x) => x.text).join('|')
+  const doc = async () => (await exec('get_document_text', { __agent: true })).paragraphs.map((x) => x.text).join('|')
   const cursor = async () => { const r = await exec('get_cursor_context'); return { b: r.before || '', a: r.after || '' } }
   const focus = () => page.evaluate(() => window.__overlayInput.focus())
   // hard reset: revisions off so leftovers (incl. redline remnants) truly vanish
@@ -338,6 +397,8 @@ try {
   // the true page margin (stock LO painted them over the neighboring cell).
   // Deletions leave the inline text, so the cursor context no longer contains
   // the struck-through originals.
+  check('新文档默认正文删除线', (await exec('set_revision_view', {})).mode === 'all')
+  await exec('set_revision_view', { mode: 'margin' }) // retained legacy margin-mode keyboard coverage
   console.log('== 1) Backspace over pre-existing text (revision-mode jam regression #164) ==')
   await reset('合同条款abc') // inserted with rc OFF -> "original" text; rc back ON
   for (let i = 0; i < 3; i++) await key('Backspace', 'Backspace', 8)
@@ -470,6 +531,52 @@ try {
     rv11.success && delTexts(rv11).includes('三') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
   check('两处插入各自成修订（六 / 全部）', mine(rv11).filter((r) => r.type === 'Insert').length === 2, JSON.stringify(mine(rv11)))
   check('改后段落实文正确', (await doc()) === '甲方应于六十日内向乙方支付全部服务费。', await doc())
+  // dev-board#365：整段删除重写的两条来路——
+  // (a) find_replace 全部替换默认走引擎原生 replaceAll，它只会把「掐掉公共前后缀的中段」
+  //     整块替换：一句里两处散点改动会把两处之间没改的字一起删了重打；
+  // (b) 长段落（> 500 字）首尾各改一字，旧 LCS DP 超上限直接整段一块替换。
+  const noBlock = (rv2) => delTexts(rv2).every((t2) => (t2 || '').length === 1)
+  await reset('甲方应于三日内向乙方支付服务费。', true)
+  const fr3 = await exec('find_replace', { findText: '甲方应于三日内向乙方', replaceText: '买方应于五日内向卖方', replaceAll: true })
+  rv11 = await exec('debug_revisions')
+  check('find_replace replaceAll 一句三处散点改动：只删「甲/三/乙」各一字，不整块重打',
+    fr3.success && fr3.replaced === 1 && ['甲', '三', '乙'].every((t2) => delTexts(rv11).includes(t2)) && noBlock(rv11), JSON.stringify(rv11))
+  check('三处插入各自成修订（买 / 五 / 卖）', mine(rv11).filter((r) => r.type === 'Insert').length === 3, JSON.stringify(mine(rv11)))
+  check('改后正文正确', (await doc()) === '买方应于五日内向卖方支付服务费。', await doc())
+  const longBody = '乙方应当按照本合同约定的时间、地点和方式向甲方交付货物，并保证所交付货物的品种、规格、数量、质量符合本合同附件一的要求；'.repeat(12)
+  await reset('甲方' + longBody + '三十日内付清。', true)
+  await exec('modify_paragraph', { index: 0, newText: '买方' + longBody + '六十日内付清。' })
+  rv11 = await exec('debug_revisions')
+  check('modify_paragraph 长段落（' + (longBody.length + 9) + ' 字）首尾各改一字：只删「甲/三」，不整段重写',
+    ['甲', '三'].every((t2) => delTexts(rv11).includes(t2)) && noBlock(rv11), JSON.stringify(mine(rv11).map((r) => [r.type, (r.text || '').length])))
+  check('长段落改后正文正确', (await doc()) === '买方' + longBody + '六十日内付清。', (await doc()).slice(-20))
+  // (c) 在已带修订的同一段上再改一处（模型常见：同一条款多轮微调）——偏移不能被前一轮的
+  //     修订对象带歪，仍只删一字。
+  const fr4 = await exec('find_replace', { findText: '六十日内付清', replaceText: '六十日内结清', replaceAll: false })
+  rv11 = await exec('debug_revisions')
+  check('同段第二轮改动仍只删「付」插「结」', fr4.success && fr4.replaced === 1 && delTexts(rv11).includes('付') && noBlock(rv11), JSON.stringify(mine(rv11).map((r) => [r.type, r.text])))
+  check('两轮改动后正文正确', (await doc()) === '买方' + longBody + '六十日内结清。', (await doc()).slice(-20))
+  // worker 侧 matchIndex 契约钉住：replace_nth_match / delete_match 与 worker 其它整数定位一样
+  // **0 基**（matchIndex:1 = 第二个匹配）。模型面的「第 N 处（从 1 开始）」由后端下发前减 1
+  // 归一（MatchIndexBaseTest）；两端合起来才是「模型说第 2 处，改的就是第二个」。
+  await reset('甲方一、甲方二、甲方三。', true)
+  const nth = await exec('replace_nth_match', { findText: '甲方', replaceText: '买方', matchIndex: 1 })
+  check('worker replace_nth_match matchIndex:1 命中第二个匹配（0 基）', nth.success && (await doc()) === '甲方一、买方二、甲方三。', JSON.stringify(nth) + ' ' + (await doc()))
+  await reset('甲方一、甲方二、甲方三。', true)
+  const dm = await exec('delete_match', { findText: '甲方', matchIndex: 1 })
+  check('worker delete_match matchIndex:1 删的是第二个匹配（0 基）', dm.success && (await doc()) === '甲方一、二、甲方三。', JSON.stringify(dm) + ' ' + (await doc()))
+  // dev-board#369 补钉三件事，都是后端「下发减一 / 回传加一」赖以成立的 worker 事实：
+  // (a) 0 基边界：matchIndex = 命中数-1 是最后一处、= 命中数 越界且不动文档；
+  // (b) find_text_locations 返回的 matchIndex 也是 0 起（后端 doc_find_text 回给模型前加 1）；
+  // (c) 「只计可见匹配」靠页边模式成立：上一步删掉的第二处已成删除型修订、不在正文流，再找只剩两处，
+  //     replace_nth_match 的计数也跟着只数可见的——关掉 ShowChangesInMargin 这条就不再成立。
+  const ftn = await exec('find_text_locations', { keyword: '甲方' })
+  check('find_text_locations 只计可见匹配（删除型修订不计）', ftn.success && ftn.count === 2, JSON.stringify(ftn))
+  check('find_text_locations 的 matchIndex 0 起（0,1），由后端回传时加 1', ftn.success && (ftn.matches || []).map((m) => m.matchIndex).join(',') === '0,1', JSON.stringify((ftn.matches || []).map((m) => m.matchIndex)))
+  const nmLast = await exec('replace_nth_match', { findText: '甲方', replaceText: '丙方', matchIndex: 1 })
+  check('replace_nth_match 按可见匹配计数：0 基的 1 = 原第三处', nmLast.success && (await doc()) === '甲方一、二、丙方三。', JSON.stringify(nmLast) + ' ' + (await doc()))
+  const nmOver = await exec('replace_nth_match', { findText: '甲方', replaceText: '丁方', matchIndex: 1 })
+  check('matchIndex = 可见命中数 越界：拒绝且不动文档', !nmOver.success && (await doc()) === '甲方一、二、丙方三。', JSON.stringify(nmOver) + ' ' + (await doc()))
 
   console.log('== 12) add_comment 批注：解释文字挂批注、不进正文 ==')
   await reset('本合同自签署之日起生效。', true)
@@ -518,9 +625,14 @@ try {
 
     // 当前文档载入"新版本"，再与"旧版本"比较
     await exec('load_document', { bytes: newBytes, name: 'v2.docx', authorName: '测试用户' })
+    // 版本对比标签页同样不是 LibreOfficeEditor，没人替它调 set_chrome（dev-board#631）。
+    // 先把 chrome 全开，断言才不是沿用上一组的状态。
+    await exec('set_chrome', { all: true, menubar: true, statusbar: true, toolbars: true, rulers: true })
     const cmp = await exec('compare_document', { baseBytes: oldBytes })
     check('compare_document 成功且产出修订', cmp && cmp.success === true && cmp.redlineCount > 0,
       JSON.stringify(cmp))
+    check('compare_document 之后 LO 原生 chrome 已藏起（否则原生「管理修订」对话框压在对比稿上）',
+      (await exec('set_chrome', {})).visible.all === false, JSON.stringify((await exec('set_chrome', {})).visible))
 
     const rev = await exec('debug_revisions')
     const cmpRedlines = (rev.redlines || []).filter((r) => r.author === '版本对比')
@@ -803,6 +915,8 @@ try {
     lr = await exec('list_revisions')
     const delIdx = lr.revisions.findIndex((r) => r.type === 'Delete')
     const rej = await exec('resolve_revision', { index: delIdx, action: 'reject' })
+    // 摆位按显示模式分支（dev-board#368）：页边默认态下删除型塌陷到区间起点；
+    // 内联态下删除文字在正文流里，必须跨选整段区间。见 selectRedlineRange。
     check('resolve_revision 拒绝删除型（条数真的减少）', rej.success === true && rej.remaining === lr.count - 1, JSON.stringify(rej))
     check('拒绝删除后原字「三」回到正文', (await doc()).includes('三'), await doc())
 
@@ -996,7 +1110,8 @@ try {
     const rlTexts = (rlAfter.redlines || []).map((x) => x.text || '').join('/')
     check('修订只覆盖差异字符（不含整格旧值 12000）', !/12000/.test(rlTexts), rlTexts)
     rd = await exec('table_read', { tableIndex: 0 })
-    check('正文读回新值 13000', rd.cells[1][1] === '13000', JSON.stringify(rd.cells))
+    const finalCells = await exec('table_read', { tableIndex: 0, __agent: true })
+    check('正文读回新值 13000', finalCells.cells[1][1] === '13000', JSON.stringify(finalCells.cells))
 
     // 修订模式下删行：真删或落成删除修订都算生效，返回值要说清是哪种
     const drRc = await exec('table_delete_row', { tableIndex: 0, position: 3 })
@@ -1529,6 +1644,14 @@ try {
     await exec('select_paragraph', {})
     const lk = await exec('set_selection_hyperlink', { url: 'https://www.aiworkdeck.com' })
     check('选区加超链接成功', lk.success === true && lk.url === 'https://www.aiworkdeck.com', JSON.stringify(lk).slice(0, 140))
+    // insert_link_with_bookmark 的 scheme 校验（P1 复核 F3）：http(s)/checkba 放行，其它双字段拒绝
+    await exec('goto', { type: 'end' })
+    const lbOk = await exec('insert_link_with_bookmark', { text: '底稿', url: 'https://checkba-internal.local/open?u=checkba%3A%2F%2Ffilelink%3Fk%3Dlk_p1', bookmarkName: 'LK_P1' })
+    check('insert_link_with_bookmark 放行 https 包装链接', lbOk.success === true && lbOk.bookmarkName === 'LK_P1', JSON.stringify(lbOk).slice(0, 160))
+    const lbBare = await exec('insert_link_with_bookmark', { text: '裸', url: 'checkba://filelink?k=lk_p1b', bookmarkName: 'LK_P1B' })
+    check('insert_link_with_bookmark 放行裸 checkba://', lbBare.success === true, JSON.stringify(lbBare).slice(0, 160))
+    const lbBad = await exec('insert_link_with_bookmark', { text: '坏', url: 'javascript:alert(1)' })
+    check('insert_link_with_bookmark 拒绝 javascript: 且 error+message 双字段', lbBad.success === false && !!lbBad.error && !!lbBad.message, JSON.stringify(lbBad).slice(0, 160))
 
     // 查找导航：全程 findFirst/findNext，**不留书签**（书签会跟着存进 docx）
     await exec('debug_fresh_document')
@@ -1648,6 +1771,846 @@ try {
     const off = await exec('set_chrome', {})
     check('再次隐藏仍然生效', off.visible.menubar === false, JSON.stringify(off.visible.menubar))
     await exec('set_chrome', { menubar: true, statusbar: true, toolbars: true, rulers: true })
+  }
+
+  // ---------- 组 27：EvidenceLink 证据锚点——书签原语五件套（dev-board#103）----------
+  // 书签名 = linkKey：bookmark_selection / get_bookmark_context / check_link_anchors /
+  // adopt_legacy_links / goto_bookmark。每条事实必有底稿，底稿挂在书签上跟着文字走。
+  console.log('\n[27] EvidenceLink 证据锚点：书签五原语')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '一、主体资格\n根据《营业执照》，收购人成立于2020年。\n（一）基本情况\n收购人注册资本1000万元。' })
+    await exec('select_paragraph', { index: 0 })
+    await exec('set_paragraph_format', { headingLevel: 1 })
+    await exec('select_paragraph', { index: 2 })
+    await exec('set_paragraph_format', { headingLevel: 2 })
+    const ol = await exec('get_outline')
+    check('标题层级就位（1 级 + 2 级）', ol.count === 2 && ol.outline[0].level === 1 && ol.outline[1].level === 2, JSON.stringify(ol))
+    const selectText = async (kw) => {
+      const ft = await exec('find_text_locations', { keyword: kw })
+      if (!ft.success || ft.count < 1) return ft
+      return exec('set_selection', { anchor: ft.matches[0].anchorId })
+    }
+
+    // 2. 选区套书签；重名精确拒绝（linkKey 不许悄悄加 _n 后缀）
+    await selectText('收购人成立于2020年')
+    const b1 = await exec('bookmark_selection', { name: 'EVID_TEST1' })
+    check('bookmark_selection 成功且回显文字', b1.success === true && b1.name === 'EVID_TEST1' && b1.text === '收购人成立于2020年', JSON.stringify(b1))
+    const dup = await exec('bookmark_selection', { name: 'EVID_TEST1' })
+    check('同名书签被拒绝（error 含 exists，双字段）', dup.success === false && /exists/.test(dup.error || '') && dup.message === dup.error, JSON.stringify(dup))
+    const badName = await exec('bookmark_selection', { name: 'bad-name!' })
+    check('非法书签名被拒绝', badName.success === false && !!badName.error, JSON.stringify(badName))
+
+    // 3. 上下文：标题链 + 段落索引（0 基）
+    const c1 = await exec('get_bookmark_context', { name: 'EVID_TEST1' })
+    check('get_bookmark_context 命中且文字前缀正确', c1.success === true && c1.exists === true && c1.text.indexOf('收购人成立于') === 0, JSON.stringify(c1))
+    check('sectionPath 为一级标题', c1.sectionPath === '一、主体资格' && c1.sectionTitle === '一、主体资格', JSON.stringify(c1))
+    check('paragraphIndex 为 1（0 基）', c1.paragraphIndex === 1, JSON.stringify(c1.paragraphIndex))
+    const cNone = await exec('get_bookmark_context', { name: 'EVID_NOPE' })
+    check('不存在的书签 exists=false 且 success', cNone.success === true && cNone.exists === false && cNone.paragraphIndex === -1, JSON.stringify(cNone))
+
+    // 4. 二级标题下的选区：标题链两级拼接
+    await exec('select_paragraph', { index: 3 })
+    const b2 = await exec('bookmark_selection', { name: 'EVID_TEST2' })
+    check('第二个书签成功', b2.success === true && b2.text === '收购人注册资本1000万元。', JSON.stringify(b2))
+    const c2 = await exec('get_bookmark_context', { name: 'EVID_TEST2' })
+    check('sectionPath 两级拼接', c2.exists === true && c2.sectionPath === '一、主体资格/（一）基本情况' && c2.sectionTitle === '（一）基本情况' && c2.paragraphIndex === 3, JSON.stringify(c2))
+
+    // 5. 书签内部插字：书签随文字扩张，别的书签不动。光标先收到书签末端再左移
+    // 一格（落在书签内部——正好在末端插入不会扩张书签）。
+    await exec('goto_bookmark', { name: 'EVID_TEST1' })
+    await exec('collapse_selection', { to: 'end' })
+    await exec('move_cursor', { dir: 'left' })
+    await exec('insert_at_cursor', { text: '（有限合伙）' })
+    const ck1 = await exec('check_link_anchors', { names: ['EVID_TEST1', 'EVID_TEST2'] })
+    const it1 = (ck1.items || []).find((x) => x.name === 'EVID_TEST1') || {}
+    const it2 = (ck1.items || []).find((x) => x.name === 'EVID_TEST2') || {}
+    check('check_link_anchors 返回两条', ck1.success === true && (ck1.items || []).length === 2, JSON.stringify(ck1))
+    check('书签内插字后 TEST1.text 含新字', it1.exists === true && it1.text.indexOf('（有限合伙）') >= 0, JSON.stringify(it1))
+    check('TEST2 不受影响', it2.exists === true && it2.text === '收购人注册资本1000万元。', JSON.stringify(it2))
+
+    // 6. 整段文字删除：书签成孤儿。真机实测（2026-08-21）：LO 把书签连同文字一起
+    // 删掉，exists:false（不是留空点书签）。宿主侧仍以「!exists || text===''」判
+    // orphan（见 .claude/agents/doc-editor.md「EvidenceLink 书签原语」）。
+    await exec('select_paragraph', { index: 3 })
+    await focus()
+    await key('Backspace', 'Backspace', 8)
+    const ck2 = await exec('check_link_anchors', { names: ['EVID_TEST2'] })
+    const gone = (ck2.items || [])[0] || {}
+    check('整段删除后 TEST2 书签随之消失（exists=false）', gone.name === 'EVID_TEST2' && gone.exists === false && gone.text === '', JSON.stringify(ck2))
+    check('整段删除后正文不再含原句', (await doc()).indexOf('注册资本1000万元') < 0, await doc())
+
+    // 7. 旧式超链接（filelink?k=）收编为书签
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '收购人注册资本1000万元。' })
+    await selectText('注册资本')
+    const hl = await exec('set_selection_hyperlink', { url: 'https://checkba-internal.local/open?u=checkba%3A%2F%2Ffilelink%3Fk%3Dlk_old_1' })
+    check('旧式超链接已设置', hl.success === true && hl.text === '注册资本', JSON.stringify(hl))
+    const ad1 = await exec('adopt_legacy_links', {})
+    check('adopt_legacy_links 收编 lk_old_1', ad1.success === true && (ad1.adopted || []).indexOf('lk_old_1') >= 0, JSON.stringify(ad1))
+    const ad2 = await exec('adopt_legacy_links', {})
+    check('再次收编幂等（adopted 空、skipped>=1）', ad2.success === true && (ad2.adopted || []).length === 0 && ad2.skipped >= 1, JSON.stringify(ad2))
+    const cOld = await exec('get_bookmark_context', { name: 'lk_old_1' })
+    check('收编后的书签文字 = 链接文字', cOld.exists === true && cOld.text === '注册资本', JSON.stringify(cOld))
+    // 7b. 生产 URL 形态：整体 encodeURIComponent、带 &projectId=——key 必须恰等于原 key，
+    // 不许把 %26projectId%3D42 吞进去改写成 lk_123_abc_projectId_42
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '\n经营范围为软件开发。' })
+    await selectText('经营范围')
+    const prodUrl = 'https://checkba-internal.local/open?u=' + encodeURIComponent('checkba://filelink?k=lk_123_abc&projectId=42')
+    await exec('set_selection_hyperlink', { url: prodUrl })
+    const ad3 = await exec('adopt_legacy_links', {})
+    check('生产 URL 形态收编 key 恰等于 lk_123_abc', ad3.success === true && JSON.stringify(ad3.adopted) === '["lk_123_abc"]', JSON.stringify(ad3))
+    check('收编后书签文字 = 经营范围', (await exec('get_bookmark_context', { name: 'lk_123_abc' })).text === '经营范围')
+    // 7c. 非法 key（后端兜底 lk_<UUID> 带 -）：跳过并计入 skippedInvalid，不静默改写
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '\n法定代表人为张三。' })
+    await selectText('法定代表人')
+    await exec('set_selection_hyperlink', { url: 'https://checkba-internal.local/open?u=' + encodeURIComponent('checkba://filelink?k=lk_a-b&projectId=42') })
+    const ad4 = await exec('adopt_legacy_links', {})
+    check('带 - 的 key 进 skippedInvalid 且不收编', ad4.success === true && ad4.skippedInvalid === 1 && (ad4.adopted || []).length === 0, JSON.stringify(ad4))
+    const ck4 = await exec('check_link_anchors', { names: ['lk_a-b', 'lk_a_b'] })
+    check('非法 key 没被改写成别名落成书签', ck4.items.every((x) => x.exists === false) && ck4.truncated === false, JSON.stringify(ck4))
+
+    // 8. docx 往返：书签经 export/load 存活
+    await exec('clear_anchors', {})
+    const evBytes = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', { name: 'evidence.docx' })
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('导出字节非空', !!evBytes && evBytes.length > 0)
+    const ld = await exec('load_document', { bytes: evBytes, name: 'evidence-roundtrip.docx', authorName: '测试用户' })
+    check('重新载入成功', ld.success === true, JSON.stringify(ld).slice(0, 160))
+    const ck3 = await exec('check_link_anchors', { names: ['EVID_TEST1', 'lk_old_1'] })
+    check('往返后两枚书签都在', ck3.success === true && (ck3.items || []).length === 2 && ck3.items.every((x) => x.exists === true), JSON.stringify(ck3))
+    check('往返后 TEST1 文字仍含插入字', ((ck3.items || [])[0] || {}).text.indexOf('（有限合伙）') >= 0, JSON.stringify(ck3))
+
+    // 9. 跳转：选中书签范围；不存在的书签明确拒绝
+    const g1 = await exec('goto_bookmark', { name: 'EVID_TEST1' })
+    check('goto_bookmark 成功', g1.success === true, JSON.stringify(g1))
+    check('跳转后选区即书签文字', ((await exec('get_selection')).text || '').indexOf('收购人成立于') === 0, JSON.stringify(await exec('get_selection')))
+    const g0 = await exec('goto_bookmark', { name: 'NOPE' })
+    check('不存在的书签跳转被拒绝（双字段）', g0.success === false && !!g0.error && g0.message === g0.error, JSON.stringify(g0))
+  }
+
+  console.log('== 28) 批量命令分批 / 进度 / 取消：取消后锁平衡、文档仍可编辑、modified 仍触发（dev-board#108 复核） ==')
+  {
+    // 纯插入型替换（甲乙→甲丙乙，零宽匹配引擎不认）走逐命中分批路径：150 命中 > 50，
+    // 按 30 一批，批间发 progress / 查 cancel。第一帧 progress 到达就喊停，
+    // 命令应在后面的某个批间检查点停下。
+    const lines = []
+    for (let i = 0; i < 150; i++) lines.push('甲乙。')
+    await reset(lines.join('\n'), true)
+    const st0 = await exec('debug_lock_state')
+    check('起跑时锁全空', st0.controllersLocked === false && st0.lockDepth === 0 && st0.modifySuspended === 0, JSON.stringify(st0))
+    const bt = await page.evaluate(async () => {
+      const prog = []
+      let issued = null, cancelSent = false, cancelRes = null
+      const res = await window.__loExecutor.executeCommand('find_replace', { findText: '甲乙', replaceText: '甲丙乙', replaceAll: true, __agent: true }, {
+        onIssued: (id) => { issued = id },
+        onProgress: (p) => {
+          prog.push({ done: p.done, total: p.total })
+          if (!cancelSent && issued) {
+            cancelSent = true
+            window.__loExecutor.executeCommand('cancel', { reqId: issued }).then((r) => { cancelRes = r })
+          }
+        },
+      })
+      await new Promise((r) => setTimeout(r, 200))
+      return { res, prog, cancelRes }
+    })
+    check('progress 帧至少两帧且 done 单调递增、total=150',
+      bt.prog.length >= 2 && bt.prog.every((p) => p.total === 150) && bt.prog.every((p, i) => i === 0 || p.done > bt.prog[i - 1].done), JSON.stringify(bt.prog))
+    check('cancel 对在飞命令生效（非 stale）', bt.cancelRes && bt.cancelRes.success === true && !bt.cancelRes.stale, JSON.stringify(bt.cancelRes))
+    check('中途取消：cancelled=true 且 30 <= done < total', bt.res.success === true && bt.res.cancelled === true && bt.res.done >= 30 && bt.res.done < bt.res.total && bt.res.total === 150, JSON.stringify(bt.res))
+    const txt = await doc()
+    check('文档已改一部分（既有 甲丙乙 也有未改的 甲乙）', txt.indexOf('甲丙乙') !== -1 && /(^|\|)甲乙。/.test(txt), txt.slice(0, 80))
+    const st1 = await exec('debug_lock_state')
+    check('取消后锁平衡：控制器/动作锁都解开、监听器已装回、无残留 reqId',
+      st1.controllersLocked === false && st1.lockDepth === 0 && st1.modifySuspended === 0 && st1.cancelledKeys === 0 && st1.inflightKeys === 1, JSON.stringify(st1))
+    // 对已结束的 reqId 再喊停：stale，不在 CANCELLED 留痕
+    const stale = await exec('cancel', { reqId: 'lo_finished_0' })
+    check('对已结束 reqId 的 cancel 返回 stale 且不留痕', stale.success === true && stale.stale === true && (await exec('debug_lock_state')).cancelledKeys === 0, JSON.stringify(stale))
+    // 取消后文档仍可编辑，且 modified 仍会触发（监听器确已装回）
+    const m0 = (await exec('debug_modified_count')).count
+    await exec('goto', { type: 'end' })
+    const ins = await exec('insert_at_cursor', { text: '取消后继续编辑。' })
+    const m1 = (await exec('debug_modified_count')).count
+    check('取消后 insert_at_cursor 成功', ins.success === true, JSON.stringify(ins).slice(0, 120))
+    check('取消后编辑仍触发 modified（自动保存链路未断）', m1 > m0, 'before=' + m0 + ' after=' + m1)
+    check('取消后正文含新插入文字', (await doc()).indexOf('取消后继续编辑。') !== -1)
+    // 不取消跑完：所有命中处理完，progress 末帧 done=total
+    await reset(lines.join('\n'), true)
+    const full = await page.evaluate(async () => {
+      const prog = []
+      const res = await window.__loExecutor.executeCommand('find_replace', { findText: '甲乙', replaceText: '甲丙乙', replaceAll: true, __agent: true }, { onProgress: (p) => prog.push(p.done) })
+      return { res, prog }
+    })
+    check('不取消：replaced=150 且末帧 done=150', full.res.success === true && full.res.replaced === 150 && !full.res.cancelled && full.prog[full.prog.length - 1] === 150, JSON.stringify(full.res) + ' ' + JSON.stringify(full.prog))
+    const st2 = await exec('debug_lock_state')
+    check('跑完后锁平衡', st2.controllersLocked === false && st2.lockDepth === 0 && st2.modifySuspended === 0 && st2.inflightKeys === 1, JSON.stringify(st2))
+  }
+
+  // ---------- 组 29：样式画像（set/apply_style_profile / insert_toc / set_page_setup / 页码域）----------
+  console.log('\n[29] 样式画像：换画像后流式落字与建表按画像 / 样式定义 / 目录 / 纸张 / 页码域（dev-board#111）')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    // 测试画像：楷体 12 / 西文 Times New Roman / 无首行缩进 / 段后 18；一级标题 12 磅粗两端对齐；
+    // 表格 9 号字、0.75 磅边框。与 house-default 逐项不同，读回能分辨"按了谁的"。
+    const profile = {
+      schemaVersion: 1, name: '测试画像',
+      body: { font: { eastAsia: '楷体_GB2312', western: 'Times New Roman' }, size: { value: 12, unit: 'pt' }, alignment: 'justify',
+        firstLineIndent: { value: 0, unit: 'pt' }, spaceBefore: { value: 0, unit: 'pt' }, spaceAfter: { value: 18, unit: 'pt' },
+        lineSpacing: { rule: 'atLeast', value: 16, unit: 'pt' } },
+      headings: [{ level: 1, size: { value: 12, unit: 'pt' }, bold: true, alignment: 'justify', firstLineIndent: { value: 0, unit: 'pt' } }],
+      table: { cell: { size: { value: 9, unit: 'pt' } },
+        borders: { outside: { style: 'single', width: { value: 0.75, unit: 'pt' }, color: '#000000' }, insideH: { style: 'single', width: { value: 0.75, unit: 'pt' }, color: '#000000' }, insideV: { style: 'single', width: { value: 0.75, unit: 'pt' }, color: '#000000' } } },
+    }
+    const bad = await exec('set_style_profile', { profile: { schemaVersion: 2 } })
+    check('schemaVersion 2 被拒绝', bad.success === false && /schemaVersion/.test(bad.message || ''), JSON.stringify(bad))
+    const sp = await exec('set_style_profile', { profile })
+    check('set_style_profile 成功且 merge 到默认之上（西文改、中文沿用默认）',
+      sp.success === true && sp.body.fontWestern === 'Times New Roman' && sp.body.fontAsian === '楷体_GB2312'
+      && Math.abs(sp.body.firstLineIndentPt) < 0.2 && Math.abs(sp.body.spaceAfterPt - 18) < 0.2 && sp.headingLevels.length === 6, JSON.stringify(sp))
+    // 流式落字 + markdown 建表按画像
+    await exec('stream_insert', { text: '# 画像标题\n正文段落内容。\n| 项目 | 金额 |\n| --- | --- |\n| 咨询费 | 10000 |\n' })
+    await exec('stream_flush', {})
+    await exec('select_paragraph', { index: 0 })
+    let fm = await exec('get_formatting')
+    check('主标题按画像一级：12 磅粗、两端对齐（不再 16 磅居中）', fm.character.bold === true && Math.abs(fm.character.sizePt - 12) < 0.2 && fm.paragraph.alignment === 'justify', JSON.stringify({ c: fm.character, p: fm.paragraph.alignment }))
+    await exec('select_paragraph', { index: 1 })
+    fm = await exec('get_formatting')
+    check('正文按画像：Times New Roman / 楷体 / 无首行缩进 / 段后 18',
+      fm.character.fontWestern === 'Times New Roman' && fm.character.fontAsian === '楷体_GB2312'
+      && Math.abs(fm.paragraph.firstLineIndentPt) < 0.2 && Math.abs(fm.paragraph.spaceAfterPt - 18) < 0.2, JSON.stringify({ c: fm.character, p: fm.paragraph }))
+    let ti = await exec('debug_table_info', {})
+    check('流式建表按画像：0.75 磅边框（26/100mm）、9 号字、表头仍加粗居中', ti.success && Math.abs((ti.borderWidth || 0) - 26) <= 1 && Math.abs(ti.a1SizePt - 9) < 0.2 && ti.a1Bold === true && ti.a1Centered === true, JSON.stringify(ti))
+    // insert_table 同样按画像
+    await exec('goto', { type: 'end' })
+    const it = await exec('insert_table', { rows: [['a', 'b'], ['c', '1']], headerRow: true })
+    ti = await exec('debug_table_info', { index: 1 })
+    check('insert_table 按画像 9 号字 + 0.75 磅边框', it.success === true && Math.abs(ti.a1SizePt - 9) < 0.2 && Math.abs((ti.borderWidth || 0) - 26) <= 1, JSON.stringify(ti))
+    // apply_style_profile：先造一个 Heading 1 段并打上 20 磅直接格式，套用后应回到画像的 12 磅粗
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '第一章 总则' })
+    const t29 = await exec('get_document_text')
+    const lastIdx = t29.paragraphs.length - 1
+    await exec('select_paragraph', { index: lastIdx })
+    await exec('set_paragraph_format', { headingLevel: 1 })
+    await exec('format_selection', { fontSize: 20, bold: false })
+    const ap = await exec('apply_style_profile', { scope: 'document' })
+    check('apply_style_profile 成功、truncated=false、改到 Standard/Heading 1/Table Contents 定义',
+      ap.success === true && ap.truncated === false && ap.paragraphs >= 3 && ap.tables === 2
+      && ['Standard', 'Heading 1', 'Table Contents', 'Table Heading'].every((n) => (ap.styles || []).includes(n)), JSON.stringify(ap).slice(0, 300))
+    await exec('select_paragraph', { index: lastIdx })
+    fm = await exec('get_formatting')
+    check('套用后 Heading 1 段 12 磅且粗（直接格式 20 磅被画像覆盖）', Math.abs(fm.character.sizePt - 12) < 0.2 && fm.character.bold === true && fm.paragraph.styleName === 'Heading 1', JSON.stringify({ c: fm.character, s: fm.paragraph.styleName }))
+    const sd = await exec('debug_para_style_info', { name: 'Standard' })
+    const hd = await exec('debug_para_style_info', { name: 'Heading 1' })
+    check('样式定义已改：Standard 12 磅 Times New Roman 无缩进；Heading 1 12 磅粗', sd.success && Math.abs(sd.sizePt - 12) < 0.2 && sd.fontWestern === 'Times New Roman' && sd.firstLineIndentMm === 0
+      && hd.success && Math.abs(hd.sizePt - 12) < 0.2 && hd.bold === true, JSON.stringify({ sd, hd }))
+    const so = await exec('apply_style_profile', { scope: 'styles-only' })
+    check('styles-only 不碰正文（paragraphs=0）', so.success === true && so.paragraphs === 0 && so.tables === 0, JSON.stringify(so).slice(0, 200))
+    const bs = await exec('apply_style_profile', { scope: 'nope' })
+    check('非法 scope 被拒绝', bs.success === false, JSON.stringify(bs))
+    const st29 = await exec('debug_lock_state')
+    check('apply_style_profile 后锁平衡', st29.controllersLocked === false && st29.lockDepth === 0 && st29.modifySuspended === 0, JSON.stringify(st29))
+    // insert_toc：文首插目录，大纲里的两个标题应进目录，正文前出现「目录」
+    const toc = await exec('insert_toc', { levels: 2, title: '目录', position: 'start' })
+    // 主标题（流式 # 首段）不带大纲级别，不进目录；Heading 1 段进
+    check('insert_toc 成功且收进 Heading 1 段', toc.success === true && toc.entries >= 1 && /第一章 总则/.test(toc.text), JSON.stringify(toc))
+    const d29 = await doc()
+    check('目录出现在正文之前', d29.indexOf('目录') !== -1 && d29.indexOf('目录') < d29.indexOf('正文段落内容'), d29.slice(0, 120))
+    // 页码域：页脚「第 {PAGE} 页 共 {NUMPAGES} 页」
+    const hf = await exec('edit_header_footer', { target: 'footer', pageNumberPattern: '第 {PAGE} 页 共 {NUMPAGES} 页', align: 'center', fontSize: 9 })
+    check('页脚页码域写入（2 枚域）', hf.success === true && hf.fields === 2, JSON.stringify(hf))
+    const fi = await exec('debug_footer_info')
+    check('页脚文本含数字且两种域各一枚', fi.success && /第 \d+ 页 共 \d+ 页/.test(fi.text) && fi.pageNumberFields === 1 && fi.pageCountFields === 1, JSON.stringify(fi))
+    const hfBad = await exec('edit_header_footer', { target: 'header' })
+    check('既无 text 也无 pageNumberPattern 被拒绝', hfBad.success === false, JSON.stringify(hfBad))
+    // set_page_setup：横向 + 上边距 20mm，再改回 A4 纵向
+    const pg = await exec('set_page_setup', { orientation: 'landscape', margins: { top: 20 } })
+    check('横向后宽 > 高且上边距 20mm', pg.success === true && pg.page.landscape === true && pg.page.width > pg.page.height && Math.abs(pg.page.margins.top - 20) < 0.05, JSON.stringify(pg))
+    const pg2 = await exec('set_page_setup', { width: 210, height: 297, orientation: 'portrait' })
+    check('改回 A4 纵向', pg2.success === true && pg2.page.landscape === false && Math.abs(pg2.page.width - 210) < 0.05 && Math.abs(pg2.page.height - 297) < 0.05, JSON.stringify(pg2))
+    check('无参数 set_page_setup 被拒绝', (await exec('set_page_setup', {})).success === false)
+    // format_table 新参：双线红框 1.5/0.5 磅、表头底纹、重复表头、厘米列宽
+    const ft = await exec('format_table', { tableIndex: 0, borderStyle: 'double', borderColor: '#FF0000', outsideBorderWidthPt: 1.5, insideBorderWidthPt: 0.5, headerFill: '#DDDDDD', repeatHeader: true })
+    ti = await exec('debug_table_info', { index: 0 })
+    check('format_table 新参落地：外 53 内 18、红色、双线、底纹、重复表头', ft.success === true && Math.abs(ti.borderWidth - 53) <= 1 && Math.abs(ti.innerWidth - 18) <= 1 && ti.borderColor === 0xFF0000 && ti.borderStyle === 3 && ti.a1Fill === 0xDDDDDD && ti.repeatHeadline === true, JSON.stringify({ ft, ti }))
+    check('非法 borderStyle 被拒绝', (await exec('format_table', { tableIndex: 0, borderStyle: 'wavy' })).success === false)
+    // 列宽：本引擎的 WASM 桥没注册 TableColumnSeparator（new 与读回再设回都抛 unregistered UNO type），
+    // 锁住「明确拒绝且说明原因」；将来引擎支持了这条会红，提醒把工具描述里的能力加回去。
+    const cw = await exec('format_table', { tableIndex: 0, columnWidthsCm: '3,5' })
+    check('列宽被明确拒绝且说明引擎原因', cw.success === false && /不支持按列设宽/.test(cw.message || ''), JSON.stringify(cw))
+    // format_selection.fontNameAsian 只改中文字体
+    const body29 = await exec('find_text_locations', { keyword: '正文段落内容' })
+    await exec('set_selection', { anchor: body29.matches[0].anchorId })
+    const fs29 = await exec('format_selection', { fontNameAsian: '宋体' })
+    fm = await exec('get_formatting')
+    check('fontNameAsian 只改中文字体', fs29.success === true && fm.character.fontAsian === '宋体' && fm.character.fontWestern === 'Times New Roman', JSON.stringify(fm.character))
+    // 复位画像，后续（以及下次复用本 worker 的组）回到 house-default
+    const rs = await exec('set_style_profile', { reset: true })
+    check('reset 回到 house-default（Arial / 首行 24 磅）', rs.success === true && rs.reset === true && rs.body.fontWestern === 'Arial' && Math.abs(rs.body.firstLineIndentPt - 24) < 1, JSON.stringify(rs))
+  }
+
+  // ---- 组 30：set_app_theme（深浅主题的纸外工作区配色，dev-board#273）------
+  // 断言两层：配置真的写进 ColorScheme（debug_app_bg 读回），且引擎真的重绘
+  // （左缘中部像素亮度深浅两态拉开——那里是纸外工作区，不是纸）。
+  //
+  // 「真的重绘了」这一层原来靠**定点取样**（画布左缘中部一小块，认定那里是纸外
+  // 工作区）。取样点落在哪，取决于纸在画布里的位置——缩放、页面设置、显示模式
+  // 都会挪动它：dev-board#368 把默认显示态从页边改成内联之后，页边不再占那条边，
+  // 纸铺到了左缘，那一小块变成纸白，深浅两态都是 255，断言必红（跟主题毫无关系）。
+  // 现在改成**整幅前后对比**：同一块画布在深/浅两态各截一张，逐像素比亮度，
+  // 只要有足够比例的像素明显变暗，就说明纸外那片区域真的被重绘了——纸和文字
+  // 在两态下不变，天然不参与计数，也就不用再猜纸在哪。
+  {
+    console.log('\n== 组 30：set_app_theme 应用配色 ==')
+    const { PNG } = await import('pngjs')
+    const shotOf = async () => {
+      const vp = page.viewport() || { width: 1280, height: 800 }
+      const buf = await page.screenshot({ clip: { x: 0, y: 0, width: vp.width, height: vp.height } })
+      return PNG.sync.read(Buffer.from(buf))
+    }
+    // 变暗像素占比：深色态相对浅色态亮度掉 80 以上的像素比例。
+    // 阈值 0.02 是量出来的，不是拍的（2026-09-02 发 v0.32.0 时标定）：无头视口 800x600，
+    // A4 在 100% 缩放下约 794px 宽，纸几乎铺满整幅，能变暗的只有标尺/侧栏/左右两条窄
+    // 纸外带——干净树上稳定 0.044（换过引擎、换过 #708 前后的 glue 都是这个数）。
+    // 反向对照：两张都截浅色态时是 0.0008。所以 0.02 把「真重绘」与「压根没重绘」
+    // 分得很开，而原来的 0.05 卡在正常值上方，clean checkout 必红。
+    const darkenedRatio = (a, b) => {
+      const n = Math.min(a.data.length, b.data.length) / 4
+      let hit = 0
+      for (let i = 0; i < n; i++) {
+        const o = i * 4
+        const la = (a.data[o] + a.data[o + 1] + a.data[o + 2]) / 3
+        const lb = (b.data[o] + b.data[o + 1] + b.data[o + 2]) / 3
+        if (lb - la > 80) hit++
+      }
+      return hit / n
+    }
+    const dark = await exec('set_app_theme', { mode: 'dark' })
+    check('set_app_theme dark 成功', dark.success === true && dark.mode === 'dark', JSON.stringify(dark))
+    const bgDark = await exec('debug_app_bg')
+    check('AppBackground 配置写入 0x101214', bgDark.success === true && bgDark.color === 0x101214, JSON.stringify(bgDark))
+    await new Promise((r) => setTimeout(r, 900))
+    const shotDark = await shotOf()
+    const light = await exec('set_app_theme', { mode: 'light' })
+    check('set_app_theme light 成功', light.success === true && light.mode === 'light', JSON.stringify(light))
+    const bgLight = await exec('debug_app_bg')
+    check('AppBackground 配置回到 0xF1F3F5', bgLight.success === true && bgLight.color === 0xF1F3F5, JSON.stringify(bgLight))
+    await new Promise((r) => setTimeout(r, 900))
+    const shotLight = await shotOf()
+    const ratio = darkenedRatio(shotDark, shotLight)
+    check('纸外区域真的重绘（深色态有成片像素明显变暗）', ratio > 0.02, '变暗像素占比 ' + ratio.toFixed(3))
+  }
+
+  // ---------- 组 31：页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）----------
+  // 真机探针（2026-09-02）实锤三件事：① ShowChangesInMargin 开着时 export_document
+  // 把字符级替换导出成「新字被删、旧字消失」（多段文档还会把别处的插入标成删除），
+  // 重新打开 / Word 里修订全是错的——export 现在导出期间临时关页边 + refresh；
+  // ② RecordChanges 开着时 .uno:InsertAnnotation 多记一条空插入修订（「已添加批注」），
+  // Word 里是一条作者 AI WorkDeck、正文为空的幽灵气泡；③ stream_insert 按 __agent 署名。
+  console.log('\n[31] 页边模式导出保真 / 批注不记修订 / 流式署名（dev-board#367）')
+  {
+    const fresh30 = await exec('debug_fresh_document', { visible: true })
+    check('换新文档成功', fresh30 && fresh30.success === true, JSON.stringify(fresh30))
+    // 默认显示态已改成内联（dev-board#368），而本组测的就是**页边模式**下的导出
+    // 保真——显式切过去，换文档/重新装载后都要再切一次（retarget 会复位到默认）。
+    await exec('set_revision_view', { mode: 'margin' })
+    const setText30 = async (t) => {
+      await exec('debug_set_record_changes', { on: false })
+      await exec('ui_command', { name: 'select_all' })
+      await exec('replace_selection', { text: t })
+      await exec('goto', { type: 'end' })
+      await exec('debug_set_record_changes', { on: true })
+    }
+    const sig = (rv) => (rv.redlines || []).map((r) => String(r.type)[0] + ':' + r.text).sort().join(' ')
+    const docText = async () => (await exec('get_document_text')).paragraphs.map((x) => x.text)
+    await setText30('第一条 甲方应于三十日内付款。\n第二条 乙方应当按期交付货物。')
+    const a30 = await exec('find_text_locations', { keyword: '三十' })
+    await exec('replace_at_position', { anchor: a30.matches[0].anchorId, newText: '四十五', __agent: true })
+    const b30 = await exec('find_text_locations', { keyword: '按期交付货物' })
+    await exec('replace_at_position', { anchor: b30.matches[0].anchorId, newText: '按期交付全部货物', __agent: true })
+    const before30 = sig(await exec('debug_revisions'))
+    check('改前修订：删「三十」/ 插「四十五」/ 插「全部」', before30 === ['D:三十', 'I:四十五', 'I:全部'].sort().join(' '), before30)
+    const bytes30 = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', {})
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('页边模式下导出成功', Array.isArray(bytes30) && bytes30.length > 0)
+    const docAfterExport = await docText()
+    check('导出后正文仍按页边语义（不含被删的「三十」）', docAfterExport[0] === '第一条 甲方应于四十五日内付款。', JSON.stringify(docAfterExport))
+    await exec('debug_fresh_document', { visible: true })
+    const ld30 = await exec('load_document', { bytes: bytes30, name: 'margin-roundtrip.docx', authorName: '测试用户' })
+    check('导出件可重新打开', ld30.success === true, JSON.stringify(ld30))
+    await exec('set_revision_view', { mode: 'margin' })   // load_document 的 retarget 复位到了默认
+    const after30 = sig(await exec('debug_revisions'))
+    check('重新打开后修订与改前一致（页边模式导出不再错位）', after30 === before30, after30 + ' vs ' + before30)
+    const docR = await docText()
+    check('重新打开后正文正确', docR[0] === '第一条 甲方应于四十五日内付款。' && docR[1] === '第二条 乙方应当按期交付全部货物。', JSON.stringify(docR))
+
+    await exec('set_revision_view', { mode: 'all' })   // 页边那一段测完，回到默认显示态
+
+    // ② 批注不记修订
+    const c30 = await exec('find_text_locations', { keyword: '付款' })
+    const nBefore = (await exec('debug_revisions')).redlines.length
+    const cm30 = await exec('add_comment', { anchor: c30.matches[0].anchorId, comment: '【修订理由】测试', __agent: true })
+    check('add_comment 成功', cm30.success === true, JSON.stringify(cm30))
+    const rvC = await exec('debug_revisions')
+    check('add_comment 不新增修订（无「已添加批注」幽灵插入）',
+      rvC.redlines.length === nBefore && !rvC.redlines.some((r) => r.comment === '已添加批注'), JSON.stringify(rvC.redlines))
+    check('修订记录开关在批注后恢复开启', (await exec('set_track_changes')).recordChanges === true)
+    const lc30 = await exec('list_comments')
+    check('批注本身正常（署名 / 内容 / 锚定区间）',
+      lc30.success && lc30.count === 1 && lc30.comments[0].author === 'AI WorkDeck'
+        && lc30.comments[0].content === '【修订理由】测试' && lc30.comments[0].anchorText === '付款', JSON.stringify(lc30))
+
+    // ③ 流式署名（宿主 flushDocStreamBuffer / handleDocStreamEnd 打 __agent，单测锁住；这里锁 worker 侧语义）
+    await exec('debug_fresh_document', { visible: true })
+    await exec('load_document', { authorName: '测试用户' })   // 只注入作者名
+    await setText30('署名。')
+    await exec('stream_insert', { text: '流式无标记\n' }); await exec('stream_flush', {})
+    await exec('stream_insert', { text: '流式带标记\n', __agent: true }); await exec('stream_flush', { __agent: true })
+    const rvS = await exec('debug_revisions')
+    const authorOf = (t) => ((rvS.redlines || []).find((r) => (r.text || '').includes(t)) || {}).author
+    check('stream_insert 带 __agent → 署名 AI WorkDeck', authorOf('流式带标记') === 'AI WorkDeck', JSON.stringify(rvS.redlines))
+    check('stream_insert 不带标记 → 署当前用户名', authorOf('流式无标记') === '测试用户', JSON.stringify(rvS.redlines))
+  }
+
+  // ---- 组 32：修订显示三态（dev-board#368）---------------------------------
+  // 全部修订 / 简洁标记（页边） / 最终稿。断言两层：两个引擎开关真的被写进去
+  // （debug_revision_view_raw 绕开原语自己读，不做自证），以及**正文文字真的跟着
+  // 变**——页边与最终稿都把删除文字移出正文流，全部修订留在正文里。
+  // 全程 redline 条数必须一条不少：这是显示切换，不是处置修订。
+  {
+    console.log('\n== 组 32：修订显示三态 ==')
+    await exec('debug_fresh_document', {})
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方乙方丙方' })
+    await exec('debug_set_record_changes', { on: true })
+    const del = await exec('find_replace', { findText: '乙方', replaceText: '', replaceAll: true })
+    const base = await exec('debug_revision_view_raw')
+    check('准备：删除「乙方」留下修订', del.success === true && base.redlines >= 1, JSON.stringify({ del, base }))
+
+    // 本引擎地雷：ShowChanges 属性读得回但**写不进去**（不抛异常的静默空写）。
+    // 这是 worker 绕道 RedlineDisplayType 的全部理由；引擎哪天修好了这条会红，
+    // 提醒把实现简化回属性直写。
+    const rw = await exec('debug_try_write_show_changes', { on: false })
+    check('ShowChanges 属性是静默空写（写 false 后仍读回 true）',
+      rw.before === true && rw.after === true && rw.setErr === undefined, JSON.stringify(rw))
+
+    const seen = {}
+    for (const mode of ['all', 'margin', 'final', 'all']) {
+      const r = await exec('set_revision_view', { mode })
+      const raw = await exec('debug_revision_view_raw')
+      seen[mode] = { r, raw }
+      check(mode + '：原语回报的态 = 引擎读回的态', r.success === true && r.mode === mode
+        && r.showChanges === (mode !== 'final') && r.showChangesInMargin === (mode === 'margin'),
+      JSON.stringify(r))
+      check(mode + '：两个引擎开关真的写进去了', raw.showChanges === (mode !== 'final') && raw.inMargin === (mode === 'margin'),
+        JSON.stringify(raw))
+      check(mode + '：redline 一条没少（显示切换不处置修订）', raw.redlines === base.redlines,
+        JSON.stringify({ now: raw.redlines, was: base.redlines }))
+    }
+    check('全部修订：删除的「乙方」留在正文流里（内联删除线）', seen.all.raw.body.indexOf('乙方') >= 0, JSON.stringify(seen.all.raw.body))
+    check('简洁标记：删除文字移出正文（挪到页边）', seen.margin.raw.body.indexOf('乙方') < 0, JSON.stringify(seen.margin.raw.body))
+    check('最终稿：正文即结果，删除文字不在', seen.final.raw.body.indexOf('乙方') < 0, JSON.stringify(seen.final.raw.body))
+
+    // get_ui_state 是工具栏的唯一数据来源——三态必须能从这里读到真值
+    await exec('set_revision_view', { mode: 'final' })
+    const ui = await exec('get_ui_state')
+    check('get_ui_state 带回真实三态', ui.view.revisionView === 'final' && ui.view.showChanges === false
+      && ui.view.revisionMarginSupported === true, JSON.stringify(ui.view))
+    check('非法 mode 被明确拒绝', (await exec('set_revision_view', { mode: 'balloon' })).success === false)
+    const q = await exec('set_revision_view', {})
+    check('不带 mode = 只读查询，不改状态', q.success === true && q.mode === 'final' && q.requested === undefined, JSON.stringify(q))
+
+    // 换文档必须复位：上一份停在「最终稿」，下一份打开不许还是隐着的
+    await exec('debug_fresh_document', {})
+    const after = await exec('debug_revision_view_raw')
+    check('换文档复位到默认（页边显示、修订可见）',
+      after.showChanges === true && after.inMargin === true, JSON.stringify(after))
+
+    // ---- 第 3 项：内联默认态下审阅面板的处置摆位 ----------------------------
+    // doc-editor.md 的硬约束原本是按**页边模式**逐个试出来的（删除型必须塌陷到区间
+    // 起点、插入型必须跨选）。默认改成内联之后，删除文字回到了正文流里，摆位是否
+    // 还命中必须实测。摆错不报错——dispatch 静默失效甚至凭空多一条空插入修订，
+    // 所以一律用 redline 条数变化复核，不信 dispatch 的返回。
+    await exec('debug_fresh_document', {})
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方乙方丙方' })
+    await exec('debug_set_record_changes', { on: true })
+    await exec('find_replace', { findText: '乙方', replaceText: '', replaceAll: true })  // 删除型
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '（补充）' })                                   // 插入型
+    await exec('set_revision_view', { mode: 'all' })   // 用户把视图切成内联
+    const viewR = await exec('debug_revision_view_raw')
+    check('处置摆位测试跑在内联态上', viewR.showChanges === true && viewR.inMargin === false, JSON.stringify(viewR))
+    const lr = await exec('list_revisions')
+    const iDel = (lr.revisions || []).findIndex((r) => String(r.type) === 'Delete')
+    const iIns0 = (lr.revisions || []).findIndex((r) => String(r.type) === 'Insert')
+    check('内联态下删除型 / 插入型修订各就位', iDel >= 0 && iIns0 >= 0, JSON.stringify(lr.revisions))
+    const totalR = lr.count
+    const rDel = await exec('resolve_revision', { index: iDel, action: 'accept' })
+    check('内联态：删除型 accept 真命中（redline 条数 -1）',
+      rDel.success === true && rDel.remaining === totalR - 1, JSON.stringify(rDel))
+    const lr2 = await exec('list_revisions')
+    const iIns = (lr2.revisions || []).findIndex((r) => String(r.type) === 'Insert')
+    const rIns = await exec('resolve_revision', { index: iIns, action: 'accept' })
+    check('内联态：插入型 accept 真命中（redline 条数 -1）',
+      rIns.success === true && rIns.remaining === totalR - 2, JSON.stringify(rIns))
+    const bodyR = (await exec('get_document_text')).paragraphs.map((x) => x.text).join('|')
+    check('两条都接受后正文 = 最终结果', bodyR === '甲方丙方（补充）', bodyR)
+    await exec('set_revision_view', { mode: 'margin' })   // 回默认
+
+    // ---- AI 工具面守卫：用户切成内联时，__agent 命令仍按页边语义执行 ----------
+    // WHY：AI 多轮改稿依赖「正文 = 改后的样子」与「只数可见匹配」（dev-board#369）。
+    // 用户把视图切成内联后，正文里混着被删的旧字——不兜住的话 AI 读到的就是错的。
+    // 断言四件事：正文不含被删的字、find_text_locations 只计可见匹配、matchIndex 仍 0 起、
+    // 命令跑完视图**还是用户选的内联**（守卫用完即还原，不许偷改用户的显示态）。
+    await exec('debug_fresh_document', {})
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方一、甲方二、甲方三。' })
+    await exec('debug_set_record_changes', { on: true })
+    const dmA = await exec('delete_match', { findText: '甲方', matchIndex: 1, __agent: true })
+    check('准备：以 __agent 删掉第二处「甲方」', dmA.success === true, JSON.stringify(dmA))
+    await exec('set_revision_view', { mode: 'all' })     // 用户切成内联
+    const rawInline = await exec('debug_revision_view_raw')
+    check('守卫用例起点：视图是内联，正文里确实混着被删的字',
+      rawInline.showChanges === true && rawInline.inMargin === false && rawInline.body.indexOf('甲方二') >= 0,
+      JSON.stringify({ mode: rawInline, body: rawInline.body }))
+    const gdA = await exec('get_document_text', { __agent: true })
+    const bodyA = (gdA.paragraphs || []).map((x) => x.text).join('|')
+    check('内联态下 __agent 读正文：不含被删的字（按页边语义）', bodyA === '甲方一、二、甲方三。', bodyA)
+    const ftA = await exec('find_text_locations', { keyword: '甲方', __agent: true })
+    check('内联态下 __agent 查找：只计可见匹配（2 处，不是 3 处）', ftA.success === true && ftA.count === 2, JSON.stringify(ftA))
+    check('内联态下 __agent 查找：matchIndex 仍 0 起',
+      (ftA.matches || []).map((m) => m.matchIndex).join(',') === '0,1', JSON.stringify((ftA.matches || []).map((m) => m.matchIndex)))
+    const uiA = await exec('get_ui_state')
+    check('守卫用完即还原：视图仍是用户选的内联', uiA.view.revisionView === 'all', JSON.stringify(uiA.view))
+    const gdU = await exec('get_document_text')
+    check('对照：不带 __agent 的读取按用户所选的内联语义（正文含被删的字）',
+      ((gdU.paragraphs || []).map((x) => x.text).join('|')).indexOf('甲方二') >= 0,
+      (gdU.paragraphs || []).map((x) => x.text).join('|'))
+    await exec('set_revision_view', { mode: 'margin' })   // 回默认
+
+    // ---- 第 4 项：最终稿模式下导出，修订不许少、隐藏态不许写进文件 ----------
+    // export_document 的 withInlineMarkupForExport 会在导出期间临时切回内联全显。
+    // 断言两件事：① 最终稿导出件里的 w:ins/w:del 与内联导出件**一模一样**（一条不少）；
+    // ② settings.xml 里没有 w:revisionView（否则别人在 Word 里打开就看不见修订）。
+    await exec('debug_fresh_document', { visible: true })
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '第一条 甲方应于三十日内付款。' })
+    await exec('debug_set_record_changes', { on: true })
+    const aF = await exec('find_text_locations', { keyword: '三十' })
+    await exec('replace_at_position', { anchor: aF.matches[0].anchorId, newText: '四十五', __agent: true })
+    const exportBytes = () => page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', {})
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    const { default: JSZip } = await import('jszip')
+    const countMarks = async (bytes) => {
+      const zip = await JSZip.loadAsync(Buffer.from(bytes.map((b) => b & 0xff)))
+      const docXml = await zip.file('word/document.xml').async('string')
+      const setFile = zip.file('word/settings.xml')
+      return {
+        ins: (docXml.match(/<w:ins[ >]/g) || []).length,
+        del: (docXml.match(/<w:del[ >]/g) || []).length,
+        settings: setFile ? await setFile.async('string') : '',
+      }
+    }
+    const bytesAll = await exportBytes()
+    const marksAll = await countMarks(bytesAll)
+    check('内联态导出件里有修订标记（基线）', marksAll.ins >= 1 && marksAll.del >= 1, JSON.stringify(marksAll).slice(0, 200))
+    await exec('set_revision_view', { mode: 'final' })
+    const bytesFinal = await exportBytes()
+    check('最终稿模式下导出成功', Array.isArray(bytesFinal) && bytesFinal.length > 0)
+    const keptFinal = await exec('debug_revision_view_raw')
+    check('导出后仍是用户选的最终稿（导出包装用完即还原）',
+      keptFinal.showChanges === false, JSON.stringify(keptFinal))
+    const marksFinal = await countMarks(bytesFinal)
+    check('最终稿导出件里 w:ins/w:del 与内联导出一条不少',
+      marksFinal.ins === marksAll.ins && marksFinal.del === marksAll.del,
+      JSON.stringify({ marksAll: { ins: marksAll.ins, del: marksAll.del }, marksFinal: { ins: marksFinal.ins, del: marksFinal.del } }))
+    check('最终稿导出件的 settings.xml 里没有 w:revisionView',
+      marksFinal.settings.indexOf('revisionView') < 0, marksFinal.settings.slice(0, 300))
+    await exec('set_revision_view', { mode: 'all' })
+
+    // ---- 第 5 项：B4 产品标识（真引擎导出件 → 真 stampApplication → 引擎回读）----
+    // 覆盖边界：lowa-e2e 跑的是 dist/zetaoffice 的 editor-main.js（客体页），打标发生在
+    // Vue 宿主 LibreOfficeEditor.saveDocument 里，这条链路经不过来。所以这里断言的是
+    //「真引擎导出的字节喂给真函数之后，app.xml 对了、引擎还能原样打开」；
+    // 宿主的接线由 tests/project-home/libre-save-generator-stamp.test.mjs 守。
+    await exec('debug_fresh_document', { visible: true })
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '产品标识回读用的正文。' })
+    const rawExport = await exportBytes()
+    const rawU8 = Uint8Array.from(rawExport.map((b) => b & 0xff))
+    const rawZip = await JSZip.loadAsync(Buffer.from(rawU8))
+    const rawApp = await rawZip.file('docProps/app.xml').async('string')
+    check('基线：引擎自己写的 Application 是 ZetaOffice/LibreOffice',
+      /<Application>[^<]*(ZetaOffice|LibreOffice)[^<]*<\/Application>/.test(rawApp), rawApp.slice(0, 300))
+
+    const APP_STR = 'AI WorkDeck 0.0.0-e2e'
+    const stampedU8 = await stampApplication(rawU8, APP_STR)
+    check('stampApplication 产出了新字节', stampedU8 !== rawU8 && stampedU8.length > 0)
+    const stampedZip = await JSZip.loadAsync(Buffer.from(stampedU8), { checkCRC32: true })
+    const stampedApp = await stampedZip.file('docProps/app.xml').async('string')
+    check('打标后 app.xml 的 Application 是 AI WorkDeck',
+      stampedApp.indexOf('<Application>' + APP_STR + '</Application>') >= 0, stampedApp.slice(0, 300))
+    check('打标只动 app.xml：word/document.xml 逐字节不变',
+      Buffer.compare(
+        await rawZip.file('word/document.xml').async('nodebuffer'),
+        await stampedZip.file('word/document.xml').async('nodebuffer')) === 0)
+
+    const reload = await exec('load_document',
+      { bytes: Array.from(stampedU8), name: 'stamped.docx', authorName: '测试用户' })
+    check('引擎能重新打开打过标的 docx', reload && reload.success === true, JSON.stringify(reload))
+    const stampedBody = (await exec('get_document_text')).paragraphs.map((x) => x.text).join('|')
+    check('打标后正文一字不差', stampedBody === '产品标识回读用的正文。', stampedBody)
+  }
+
+  // ---- 组 33：审阅窗格的作者/类型/理由三维度（dev-board#377）----------------
+  // 面板要能回答律师的三个问题：这条是谁改的、改的是什么（插入/删除/格式）、
+  // 为什么这么改。前两个靠 list_revisions 如实回传 RedlineAuthor / RedlineType，
+  // 第三个靠「批注锚区与修订区间重叠或相接」——坐标由 worker 回传，判定在宿主
+  // 纯函数里（本组直接调那个真函数，不另写一份判定）。
+  {
+    console.log('\n== 组 33：审阅窗格 作者/类型/理由 ==')
+    check('换回 Writer 可见文档', (await exec('debug_fresh_document', { visible: true })).success === true)
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方应于三十日内向乙方支付服务费。' })
+    await exec('collapse_selection', { to: 'end' })
+    await exec('insert_at_cursor', { text: '\n乙方应在验收后交付全部成果。' })
+    check('准备：两段正文', (await doc()) === '甲方应于三十日内向乙方支付服务费。|乙方应在验收后交付全部成果。', await doc())
+    await exec('load_document', { authorName: '韩律师' })      // 只注入作者名
+    await exec('debug_set_record_changes', { on: true })
+
+    // (1) 作者：AI 的改动署 AI WorkDeck，用户自己的署当前用户名——面板的作者
+    //     筛选完全建立在这两个串上，署错了整个筛选就是错的。
+    await exec('find_replace', { findText: '三十日', replaceText: '六十日', replaceAll: true, __agent: true })
+    await exec('find_replace', { findText: '全部成果', replaceText: '全部工作成果', replaceAll: true })
+    let lr = await exec('list_revisions')
+    const authors = new Set((lr.revisions || []).map((r) => r.author))
+    check('list_revisions 同时带回 AI 与用户两个作者',
+      authors.has('AI WorkDeck') && authors.has('韩律师'), JSON.stringify([...authors]))
+
+    // (2) 坐标：每条修订都能定位到正文段落（paraKey >= 0）且带区间偏移；
+    //     两段里的修订必须落在不同的 paraKey，否则关联判定形同虚设。
+    check('每条修订都带可比坐标（paraKey/start/end）',
+      (lr.revisions || []).length >= 2 && lr.revisions.every((r) => r.paraKey >= 0 && Number.isFinite(r.start) && Number.isFinite(r.end)),
+      JSON.stringify(lr.revisions.map((r) => ({ t: r.type, k: r.paraKey, s: r.start, e: r.end }))))
+    const aiParas = new Set(lr.revisions.filter((r) => r.author === 'AI WorkDeck').map((r) => r.paraKey))
+    const myParas = new Set(lr.revisions.filter((r) => r.author === '韩律师').map((r) => r.paraKey))
+    check('两段的修订落在不同段落键上',
+      aiParas.size === 1 && myParas.size === 1 && [...aiParas][0] !== [...myParas][0],
+      JSON.stringify({ ai: [...aiParas], me: [...myParas] }))
+
+    // (3) 类型：格式类修订不许再被当成插入。这里做的是纯字符格式改动（加粗），
+    //     引擎按 RedlineType 记成 Format 一族；断言走宿主的真映射函数。
+    const before = lr.count
+    const loc = await exec('find_text_locations', { keyword: '服务费' })
+    await exec('set_selection', { anchor: loc.matches[0].anchorId })
+    await exec('format_selection', { bold: true })
+    lr = await exec('list_revisions')
+    const fmt = (lr.revisions || []).filter((r) => r.type !== 'Insert' && r.type !== 'Delete')
+    check('加粗产生了非插入/删除型的修订（引擎按格式类记录）',
+      lr.count > before && fmt.length >= 1,
+      JSON.stringify({ before, after: lr.count, types: lr.revisions.map((r) => r.type) }))
+    // 严到「映射成格式类」而不只是「不是插入」：认不出的类型会落 'other'、面板
+    // 原样显示引擎串，那是兜底不是正确标注。引擎哪天改了 RedlineType 的取值，
+    // 这条会红并把真串打出来，提醒同步 utils/reviewGrouping.js 的 TYPE_KEYS。
+    check('格式类修订经宿主映射后标成「格式 / 段落格式」（不是插入、也不是兜底）',
+      fmt.length >= 1 && fmt.every((r) => ['format', 'paraFormat'].includes(revisionTypeKey(r.type))),
+      JSON.stringify(fmt.map((r) => ({ type: r.type, key: revisionTypeKey(r.type), desc: r.description }))))
+
+    // (4) 理由：把 AI 的修订理由挂成批注，坐标喂进宿主的关联函数——批注必须挂到
+    //     第一段那几条 AI 修订上，不能挂到第二段用户改的那条上。
+    const ftc = await exec('find_text_locations', { keyword: '六十日' })
+    await exec('add_comment', { anchor: ftc.matches[0].anchorId, comment: '【修訂理由】账期与主协议不一致', __agent: true })
+    lr = await exec('list_revisions')
+    const lc = await exec('list_comments')
+    check('list_comments 也带回同一坐标系的 paraKey/start/end',
+      lc.count >= 1 && lc.comments.every((c) => c.paraKey >= 0 && Number.isFinite(c.start) && Number.isFinite(c.end)),
+      JSON.stringify(lc.comments.map((c) => ({ k: c.paraKey, s: c.start, e: c.end }))))
+    const { reasons, linked } = linkCommentsToRevisions(lr.revisions, lc.comments)
+    const cmt = lc.comments.find((c) => (c.content || '').includes('修訂理由'))
+    const hit = (linked.get(cmt.index) || []).map((i) => lr.revisions[i])
+    check('理由批注挂到了第一段的 AI 修订上',
+      hit.length >= 1 && hit.every((r) => r.author === 'AI WorkDeck'),
+      JSON.stringify({ hit: hit.map((r) => ({ t: r.type, a: r.author, k: r.paraKey })), all: lr.revisions.map((r) => ({ t: r.type, a: r.author, k: r.paraKey, s: r.start, e: r.end })), cmt: { k: cmt.paraKey, s: cmt.start, e: cmt.end } }))
+    const mine = lr.revisions.filter((r) => r.author === '韩律师')
+    check('第二段（用户自己改的）没有被误挂上这条理由',
+      mine.length >= 1 && mine.every((r) => !reasons.has(r.index)),
+      JSON.stringify(mine.map((r) => ({ t: r.type, k: r.paraKey, s: r.start, e: r.end }))))
+
+    // (5) 处置联动的引擎侧前提：批注按 id 标记已解决后仍留在清单里（面板只标记、
+    //     不删除——删掉就再也读不到「当初为什么这么改」）。
+    const setR = await exec('set_comment_resolved', { id: cmt.id, resolved: true })
+    const lc2 = await exec('list_comments')
+    check('按 id 标记已解决后批注仍在清单里（标记不是删除）',
+      setR.resolved === true && lc2.count === lc.count &&
+      (lc2.comments.find((c) => c.id === cmt.id) || {}).resolved === true,
+      JSON.stringify({ setR, count: lc2.count }))
+  }
+
+  console.log('\n== 组 34：三方合并（build_merge_draft / merge_take_other / 活动单元格与当前页）==')
+  {
+    // 律师版三方合并的引擎半边（spec 2026-09-14-docx-three-way-merge-design §5.1）。
+    // 夹具三份同源 docx 由 fixtures/merge/gen.mjs 现造（420 段 + 2 表 + 3 批注），
+    // plan/baseUnits 就是后端 ThreeWayAnalyzer 本该算出来的那一份——生成脚本知道
+    // 自己造了哪些编辑，所以坐标与新文本是已知量，不必在测试里再算一遍。
+    const fx = generateMergeFixtures()
+    const MAIN_AUTHOR = '韩律师'
+    const OTHER_AUTHOR = '律师乙'
+    const bytesOf = (buf) => Array.from(buf)
+    const mergeArgs = (over = {}) => Object.assign({
+      baseBytes: bytesOf(fx.base), mainBytes: bytesOf(fx.main), otherBytes: bytesOf(fx.other),
+      mainAuthor: MAIN_AUTHOR, otherAuthor: OTHER_AUTHOR,
+      plan: fx.plan, baseUnits: fx.baseUnits, name: '合同.docx',
+    }, over)
+    // 420 段超过 get_document_text 的单次字符预算，必须翻页取全。
+    const allParas = async () => {
+      const out = []
+      let start = 0
+      for (;;) {
+        const r = await exec('get_document_text', { startParagraph: start, maxParagraphs: 500 })
+        if (!r || !r.success || !r.paragraphs.length) break
+        r.paragraphs.forEach((x) => out.push(x.text))
+        if (!r.truncated) break
+        start = r.nextStartParagraph
+      }
+      return out
+    }
+    const indexOfToken = (paras, token) => paras.findIndex((t) => t.indexOf(token) >= 0)
+
+    check('起点：换一份干净的 Writer 文档', (await exec('debug_fresh_document')).success === true)
+    // chrome 先全开，才能证明「是 build_merge_draft 自己把它藏掉的」，而不是沿用
+    // 上一组留下的状态（dev-board#631：合并比对稿标签页不是 LibreOfficeEditor，
+    // 没有 EditorToolbar 去调 set_chrome，原生菜单栏/工具栏/「管理修订」对话框
+    // 全露着，压住正文还吃掉点击）。
+    await exec('set_chrome', { all: true, menubar: true, statusbar: true, toolbars: true, rulers: true })
+    check('前置：LO 原生 chrome 是开着的', (await exec('set_chrome', {})).visible.all === true)
+
+    const built = await exec('build_merge_draft', mergeArgs())
+    check('build_merge_draft 成功', built && built.success === true, JSON.stringify({ success: built && built.success, stage: built && built.stage, message: built && built.message }))
+    console.log('  elapsedMs: ' + JSON.stringify(built && built.elapsedMs))
+    // dev-board#631：合并比对稿上不许露出 LO 自己的外壳。内部三次 load_document 会
+    // 把 chrome 一次次拉回来，所以藏的时机钉在「派发 .uno:CompareDocuments 之前」
+    // （compareWithBytes → hideNativeChrome），那也正是原生「管理修订」对话框的出生地。
+    // 摘掉 hideNativeChrome() 这一条就转红。
+    {
+      const vis = (await exec('set_chrome', {})).visible
+      check('build_merge_draft 之后 LO 原生 chrome 已藏起（顺带压掉「管理修订」对话框）',
+        vis.all === false, JSON.stringify(vis))
+      // 标尺不归 LayoutManager 管，setVisible(false) 藏不掉它——真机上会在合并比对稿
+      // 顶上剩一条孤零零的标尺，所以 hideNativeChrome 另外写了 ViewSettings。
+      check('标尺也一起藏了（ViewSettings，不归 LayoutManager 管）',
+        vis.rulers && vis.rulers.ShowHoriRuler === false && vis.rulers.ShowVertRuler === false, JSON.stringify(vis.rulers))
+    }
+
+    // (1) 两位作者的修订：主线侧来自原生比较，另一侧来自逐段重放，两边都必须署对人。
+    const byAuthor = {}
+    ;((built && built.revisions) || []).forEach((r) => { byAuthor[r.author] = (byAuthor[r.author] || 0) + 1 })
+    check('修订只署这两位律师（没有「版本对比」「本地用户」之类的漏网）',
+      Object.keys(byAuthor).sort().join(',') === [MAIN_AUTHOR, OTHER_AUTHOR].sort().join(','), JSON.stringify(byAuthor))
+    check('主线侧修订数 ≥ 夹具的 6 处改动（5 段 + 同段冲突那段）',
+      (byAuthor[MAIN_AUTHOR] || 0) >= fx.expected.mainEditCount, JSON.stringify(byAuthor))
+    check('另一侧重放出的修订数 ≥ 夹具的 7 处改动（4 段 + 表格单元 + 插入 + 删除）',
+      (byAuthor[OTHER_AUTHOR] || 0) >= fx.expected.otherReplayCount, JSON.stringify(byAuthor))
+    check('mainCount / otherCount 与按作者分组一致',
+      built.mainCount === (byAuthor[MAIN_AUTHOR] || 0) && built.otherCount === (byAuthor[OTHER_AUTHOR] || 0),
+      JSON.stringify({ mainCount: built.mainCount, otherCount: built.otherCount, byAuthor }))
+
+    // (2)(3) 同一段两边都改了：只报冲突，不重放——正文里必须只有主线侧那版文字。
+    check('conflicts 恰为同段冲突的那一个键', JSON.stringify(built.conflicts) === JSON.stringify(fx.conflicts),
+      JSON.stringify(built.conflicts))
+    let paras = await allParas()
+    const conflictIdx = indexOfToken(paras, '【P' + fx.expected.conflictParaKey + '】')
+    check('冲突段能定位到', conflictIdx >= 0, String(conflictIdx))
+    // 「全部修订」视图下这一段同时显示主线侧插入的「十五」与基线被删的「三十」；
+    // 判据取另一侧独有的「四十五」：它出现就说明冲突段被错误重放了。
+    check('冲突段没有被重放（正文里有主线侧的「十五」、没有另一侧的「四十五」）',
+      conflictIdx >= 0 && paras[conflictIdx].indexOf('十五') >= 0 && paras[conflictIdx].indexOf('四十五') < 0,
+      paras[conflictIdx])
+
+    // (6) 另一侧只改了格式（加粗）的段：文字重放带不过来，必须列进 formatOnly 交给律师。
+    const fmtHit = (built.formatOnly || []).filter((x) => String(x.preview || '').indexOf('【P' + fx.expected.formatOnlyParaKey + '】') >= 0)
+    check('另一侧只改格式的那一段落进 formatOnly',
+      fmtHit.length === 1 && Number.isFinite(fmtHit[0].paraKey), JSON.stringify(built.formatOnly))
+    check('formatOnly 不含另一侧已重放文字的段',
+      !(built.formatOnly || []).some((x) => /【P(20|60|130|260)】/.test(String(x.preview || ''))), JSON.stringify(built.formatOnly))
+
+    // (5) 全部接受之后，正文逐段等于预期合并文本（表格单元另测）。
+    const accepted = await exec('resolve_all_revisions', { action: 'accept' })
+    check('resolve_all_revisions(accept) 成功', accepted.success === true && accepted.remaining === 0, JSON.stringify({ resolved: accepted.resolved, remaining: accepted.remaining }))
+    paras = await allParas()
+    check('合并后段数 = 预期（原 420 段 − 另一侧删 1 段 + 另一侧新增 1 段）',
+      paras.length === fx.expected.paragraphCount, paras.length + ' vs ' + fx.expected.paragraphCount)
+    const firstDiff = paras.findIndex((t, i) => t !== fx.expected.paragraphs[i])
+    check('合并后正文逐段等于预期合并文本', firstDiff < 0,
+      firstDiff < 0 ? '' : ('第 ' + firstDiff + ' 段: 实际「' + paras[firstDiff] + '」 期望「' + fx.expected.paragraphs[firstDiff] + '」'))
+
+    // (7) 表格单元的改动也要被重放（docx 的单元序列里表格格子与段落混在一起）。
+    const tr = await exec('table_read', { tableIndex: fx.expected.tableCell.table })
+    const cellText = tr.success && tr.cells ? String((tr.cells[fx.expected.tableCell.row] || [])[fx.expected.tableCell.col] || '') : ''
+    check('另一侧改的表格单元被重放', cellText === fx.expected.tableCell.text, JSON.stringify({ cellText, want: fx.expected.tableCell.text, ok: tr.success }))
+
+    // (8) 同一个实例里第二次合并：备胎实例是复用的，退化就等于每份文件要一个新实例。
+    const built2 = await exec('build_merge_draft', mergeArgs())
+    check('同实例第二次 build_merge_draft 仍成功', built2 && built2.success === true,
+      JSON.stringify({ success: built2 && built2.success, stage: built2 && built2.stage, message: built2 && built2.message }))
+    console.log('  第二次 elapsedMs: ' + JSON.stringify(built2 && built2.elapsedMs))
+
+    // (4) 同段冲突「用律师乙的」：拒掉主线侧那处、以对方作者写入对方文字并接受。
+    paras = await allParas()
+    const conflictIdx2 = indexOfToken(paras, '【P' + fx.expected.conflictParaKey + '】')
+    const took = await exec('merge_take_other', {
+      paraKey: conflictIdx2, text: fx.expected.conflictOtherText, author: OTHER_AUTHOR,
+    })
+    check('merge_take_other 成功', took && took.success === true, JSON.stringify(took))
+    const paraAfter = await exec('select_paragraph', { index: conflictIdx2 })
+    check('「用律师乙的」之后该段文字 = 另一侧那版',
+      paraAfter.success === true && paraAfter.text === fx.expected.conflictOtherText,
+      JSON.stringify({ got: paraAfter.text, want: fx.expected.conflictOtherText }))
+    const lrAfter = await exec('list_revisions', { limit: 500 })
+    check('「用律师乙的」之后该段没有留下未处理的修订',
+      took && took.success === true && lrAfter.success === true && !(lrAfter.revisions || []).some((r) => r.paraKey === conflictIdx2),
+      JSON.stringify((lrAfter.revisions || []).filter((r) => r.paraKey === conflictIdx2).map((r) => ({ t: r.type, a: r.author, k: r.paraKey }))))
+
+    // (9) 对齐核对：baseUnits 与当前文档对不上就必须失败退回，不许糊着往下重放。
+    const tampered = JSON.parse(JSON.stringify(fx.baseUnits))
+    const victim = tampered.findIndex((u) => u.key === 'p200')
+    tampered[victim].norm = tampered[victim].norm + '（被篡改）'
+    const misaligned = await exec('build_merge_draft', mergeArgs({ baseUnits: tampered }))
+    check('baseUnits 对不上时返回 stage:align', misaligned && misaligned.success === false && misaligned.stage === 'align',
+      JSON.stringify({ success: misaligned && misaligned.success, stage: misaligned && misaligned.stage, message: misaligned && misaligned.message }))
+
+    // (10) 溯源光标条在表格 / 演示文稿上的取数原语。
+    check('换新 Calc 文档', (await exec('debug_fresh_calc')).success === true)
+    await exec('sheet_write_cells', { startCell: 'A1', rows: [['甲', '乙'], ['丙', '丁']] })
+    await exec('sheet_select_range', { range: 'B7' })
+    const cell = await exec('sheet_get_active_cell')
+    check('sheet_get_active_cell 回报活动工作表与地址',
+      cell.success === true && cell.address === 'B7' && typeof cell.sheet === 'string' && cell.sheet.length > 0,
+      JSON.stringify(cell))
+
+    const pptxBytes = Array.from(fs.readFileSync(path.join(here, 'fixtures/impress-smoke.pptx')))
+    check('打开 pptx', (await exec('load_document', { bytes: pptxBytes, name: 'impress-smoke.pptx' })).success === true)
+    await exec('slide_goto', { slideNumber: 2 })
+    const cur = await exec('slide_get_current')
+    check('slide_get_current 回报当前页码（1 基）', cur.success === true && cur.slideNumber === 2, JSON.stringify(cur))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

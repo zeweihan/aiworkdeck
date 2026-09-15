@@ -1,0 +1,13 @@
+{
+  "id": "hello-web-plugin",
+  "name": "Hello Web 插件",
+  "version": "1.0.0",
+  "description": "纯前端插件的最小示例：握手上下文、项目文件、toast、插件级存储、文档读写、事件订阅、AI 请求各演示一次。",
+  "author": "AI WorkDeck",
+  "homepage": "https://github.com/zeweihan/checkba_cloud",
+  "permissions": ["file_read", "editor", "ai"],
+  "minHostVersion": "0.27.4",
+  "frontendEntry": "web/index.html",
+  "tools": [],
+  "backendJars": []
+}

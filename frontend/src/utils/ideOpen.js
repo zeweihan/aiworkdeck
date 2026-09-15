@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // IDE 化「打开文件夹 / 打开文件」共用流程：系统对话框 → open-local API → reLaunch 进项目。
 // newproject 页与应用菜单（App.vue 的 menu-action 处理器）共用，两处只差 busy UI。
 
@@ -9,14 +11,32 @@ export function desktopFsApi() {
   return (host.fs && host.fs.showOpenDialog) ? host.fs : null
 }
 
+/** 同一个 projectId 每个会话（标签页/窗口存活期间）只弹一次截断提示，避免每次重开文件夹都再吵一遍。 */
+function shouldWarnTruncatedOnce(projectId) {
+  try {
+    if (typeof window === 'undefined' || !window.sessionStorage) return true
+    const key = `awd_import_truncated_warned_${projectId}`
+    if (window.sessionStorage.getItem(key)) return false
+    window.sessionStorage.setItem(key, '1')
+    return true
+  } catch (e) {
+    return true
+  }
+}
+
 async function launchProject(payload) {
   const r = await openLocalProject(payload)
   const d = (r && r.data) || {}
   if (!d.projectId) {
     throw new Error(t('common.openProjectFailed'))
   }
-  if (d.truncated) {
-    uni.showToast({ title: t('common.folderImportTruncated'), icon: 'none' })
+  if (d.truncated && shouldWarnTruncatedOnce(d.projectId)) {
+    uni.showModal({
+      title: t('common.folderImportTruncatedTitle'),
+      content: t(d.truncatedCountCapped ? 'common.folderImportTruncatedCapped' : 'common.folderImportTruncated',
+        { count: d.truncatedCount || 0 }),
+      showCancel: false,
+    })
   }
   const query = `id=${d.projectId}` + (d.openFileId ? `&openFileId=${d.openFileId}` : '')
   // reLaunch：避免页面栈里堆叠多个 project-overview 实例（全局监听多实例地雷）

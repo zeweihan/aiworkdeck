@@ -1,7 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import dev.langchain4j.model.output.Response;
-import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.data.message.AiMessage;
 
 import java.util.UUID;
@@ -10,7 +12,7 @@ import java.util.UUID;
  * 负责将 LLM 的流式回调转换为前端 SSE 协议事件。
  * 并收集最终完整的回复用于存储和计费。
  */
-public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
+public class AgentStreamHandler implements ReasoningStreamingHandler {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentStreamHandler.class);
 
@@ -20,6 +22,22 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
     private final String projectId;
     private final Long userId;
     private final String modelId;
+    // 调用方在本轮开始时记下的 SSE 连接代次，close() 收尾时原样带回
+    // （见 SseEmitterService.close 的注释：防止误杀期间重连建立的新连接）
+    private final long connectionEpoch;
+    /**
+     * 本轮是否仍是该会话的当前轮次（dev-board#533）。
+     *
+     * <p>一个 conversationId 只有一条 SseEmitter，而被新一轮取代的旧轮次<b>还在继续跑</b>
+     *（工具副作用已经发生，强杀不比跑完安全）。编排器那一侧的终态事件早已由
+     * {@code isCurrentRun} 把关，但流式增量是本类直发的：不加这道闸，旧轮次的
+     * text_delta / reasoning_delta / bubble_start 会一个字一个字地混进新一轮的气泡里。
+     *
+     * <p>闸只管<b>往 emitter 上发什么</b>：本轮的内容累积、看门狗、终态幂等、
+     * 回调（onToken / onEditorStream / onComplete / onError）一概不受影响——
+     * 旧轮次照常跑到自己的终态、落自己的库，只是对 SSE 完全静默。
+     */
+    private final java.util.function.BooleanSupplier currentRunGate;
 
     private final StringBuilder fullContentBuilder = new StringBuilder();
     private boolean isBubbleStarted = false;
@@ -35,7 +53,12 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
             new java.util.concurrent.atomic.AtomicBoolean(false);
     // 是否已有 token 流出（重试决策依据：零 token 的失败轮可安全重放，不会给用户看重复内容）
     private volatile boolean streamedAnyToken = false;
-    // 最近一次流活动时间（onNext 刷新），看门狗据此判定"流停滞"
+    // 是否已有思考增量流出（思考型模型）。刻意与 streamedAnyToken 分开：
+    //  - 看门狗选时限时两者任一为真都算「流已开始」，改用停滞时限（思考几分钟是正常的）；
+    //  - 编排器判「可安全重放」仍只看 streamedAnyToken——思考文本重放一遍用户只是再看一次
+    //    思考卡，正文重放才会出现重复内容。
+    private volatile boolean streamedAnyReasoning = false;
+    // 最近一次流活动时间（onNext / onReasoning / onKeepAlive 刷新），看门狗据此判定"流停滞"
     private volatile long lastActivityNanos = System.nanoTime();
     private volatile java.util.concurrent.ScheduledFuture<?> watchdogFuture;
 
@@ -72,7 +95,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         watchdogFuture = WATCHDOG.scheduleWithFixedDelay(() -> {
             if (terminated.get()) return;
             long idleSec = (System.nanoTime() - lastActivityNanos) / 1_000_000_000L;
-            boolean started = streamedAnyToken;
+            boolean started = streamedAnyToken || streamedAnyReasoning;
             int limitSec = started ? inactivitySeconds : firstTokenSeconds;
             if (idleSec >= limitSec) {
                 log.warn("Stream {} for {}s (limit {}s) for {}, terminating round via watchdog",
@@ -93,13 +116,31 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         if (f != null) f.cancel(false);
     }
 
-    public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId) {
+    /**
+     * 无轮次概念的调用方（单次响应、各单元测试）用这个：闸恒开，行为与加闸之前完全一致。
+     * 编排器<b>必须</b>走带闸的那个重载，否则旧轮次的增量会打到新一轮的气泡上。
+     */
+    public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId, long connectionEpoch) {
+        this(sseEmitterService, conversationId, tokenUsageService, projectId, userId, modelId, connectionEpoch,
+                () -> true);
+    }
+
+    public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId, long connectionEpoch,
+                              java.util.function.BooleanSupplier currentRunGate) {
         this.sseEmitterService = sseEmitterService;
         this.conversationId = conversationId;
         this.tokenUsageService = tokenUsageService;
         this.projectId = projectId;
         this.userId = userId;
         this.modelId = modelId;
+        this.connectionEpoch = connectionEpoch;
+        this.currentRunGate = currentRunGate;
+    }
+
+    /** 本轮所有会话级 SSE 事件的唯一出口：不是当前轮次就静默丢弃。 */
+    private void sendSse(String eventName, Object payload) {
+        if (!currentRunGate.getAsBoolean()) return;
+        sseEmitterService.send(conversationId, eventName, payload);
     }
 
     // Callback for each token generated (for real-time tracking)
@@ -134,6 +175,45 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         }
     }
     
+    /**
+     * 思考增量（dev-board#364）：原样转发成 SSE {@code reasoning_delta}，前端实时渲染进思考卡。
+     *
+     * <p>刻意不进 {@link #fullContentBuilder}、不进编辑器流、不过标签解析：思考文本不是模型正文，
+     * 不落库、不回喂模型（契约 D：模型只看 content），也不该被写进文档。
+     */
+    @Override
+    public void onReasoning(String reasoningDelta) {
+        if (terminated.get() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
+        lastActivityNanos = System.nanoTime();
+        streamedAnyReasoning = true;
+        sendSse("reasoning_delta", "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
+    }
+
+    /** 传输层保活注释：只刷新看门狗，不产生任何事件。 */
+    @Override
+    public void onKeepAlive() {
+        if (terminated.get()) return;
+        lastActivityNanos = System.nanoTime();
+    }
+
+    /**
+     * 提示缓存命中情况：只打一条 info 日志，<b>不参与计费</b>。
+     *
+     * <p>BYOK 的成本估算仍按 {@link AllowedModels} 的单价表算全价，命中缓存的轮次会偏高
+     * （已知偏差，见 {@code TokenUsageService.calculateCost} 的注释）；平台通道走真实扣费对账，
+     * 天然精确。把缓存读价建模进单价表是另一张卡，这里只提供「到底有没有命中」的判据——
+     * 没有它，system prompt 里任何一个每轮变化的字节都会让缓存永久不命中而无人知晓。
+     */
+    @Override
+    public void onCacheUsage(int promptTokens, int cachedTokens, int cacheWriteTokens) {
+        log.info("Prompt cache conv={} model={} promptTokens={} cachedTokens={} cacheWriteTokens={}",
+                conversationId, modelId, promptTokens, cachedTokens, cacheWriteTokens);
+    }
+
+    public boolean hasStreamedReasoning() {
+        return streamedAnyReasoning;
+    }
+
     // ==================== Editor Stream Filtering Logic（过滤后实时写入编辑器文档；SSE 事件名双轨 doc_stream_data/wps_stream_data，见 AgentOrchestrator） ====================
     
     // Buffer for editor stream parser to handle split tags
@@ -389,7 +469,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                       "{\"operation\":\"create\", \"id\":\"%s\", \"type\":\"%s\", \"status\":\"draft\", \"data\":{\"content\":\"%s\"}}",
                       artifactId, type, jsonContent
                   );
-                  sseEmitterService.send(conversationId, "artifact", artifactEvent);
+                  sendSse("artifact", artifactEvent);
                   
                   // Flush text before artifact
                   if (start > 0) emitText(content.substring(0, start));
@@ -470,7 +550,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
 
     private void emitText(String text) {
         if (text == null || text.isEmpty()) return;
-        sseEmitterService.send(conversationId, "text_delta", "{\"content\":\"" + escapeJson(text) + "\"}");
+        sendSse("text_delta", "{\"content\":\"" + escapeJson(text) + "\"}");
     }
 
     @Override
@@ -503,7 +583,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                 "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d}",
                 promptTokens, completionTokens, totalTokens
             );
-            sseEmitterService.send(conversationId, "token_usage", usageJson);
+            sendSse("token_usage", usageJson);
         }
         
         // Record Usage
@@ -521,7 +601,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
             onCompleteCallback.accept(response);
         } else {
             // 没有回调，说明是简单的单次响应，发送 bubble_end
-            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
+            sendSse("bubble_end", "{\"status\":\"finished\"}");
         }
     }
     
@@ -550,8 +630,10 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         } else {
             // 无回调（单次响应）：保持旧行为——发 error 并关流，
             // 否则 SSE 连接会挂到 30 分钟超时、前端永久显示加载态。
-            sseEmitterService.send(conversationId, "error", "Stream Error: " + error.getMessage());
-            sseEmitterService.close(conversationId);
+            sendSse("error", "Stream Error: " + error.getMessage());
+            if (currentRunGate.getAsBoolean()) {
+                sseEmitterService.close(conversationId, connectionEpoch);
+            }
         }
     }
     
@@ -559,11 +641,39 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         this.isBubbleStarted = true;
         this.currentBubbleId = UUID.randomUUID().toString();
         // Send bubble_start
-        sseEmitterService.send(conversationId, "bubble_start", "{\"bubbleId\":\"" + currentBubbleId + "\", \"type\":\"" + type + "\"}");
+        sendSse("bubble_start", "{\"bubbleId\":\"" + currentBubbleId + "\", \"type\":\"" + type + "\"}");
     }
     
-    private String escapeJson(String raw) {
+    /**
+     * SSE 载荷是手工拼的 JSON 串，这里必须把 JSON 规范要求的字符全转义掉。
+     *
+     * <p>此前只处理了 {@code \ " \n \r}：模型正文里出现一个真制表符（写 Makefile /
+     * Go / 缩进代码块时是常态）就会拼出非法 JSON，前端 text_delta 解析失败后回落成
+     * 「把整段 {"content":"..."} 信封当正文渲染」，artifact 事件则被整条丢弃。
+     * U+0000..U+001F 全区间都要转义，规范如此。
+     */
+    static String escapeJson(String raw) {
         if (raw == null) return "";
-        return raw.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+        StringBuilder sb = new StringBuilder(raw.length() + 16);
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            switch (c) {
+                case '\\' -> sb.append("\\\\");
+                case '"' -> sb.append("\\\"");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        return sb.toString();
     }
 }

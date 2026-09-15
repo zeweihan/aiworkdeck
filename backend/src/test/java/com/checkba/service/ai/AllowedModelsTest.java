@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import org.junit.jupiter.api.DisplayName;
@@ -106,6 +109,30 @@ class AllowedModelsTest {
         List<AllowedModels> international = AllowedModels.availableIn(AllowedModels.Region.INTERNATIONAL);
         assertEquals(14, international.size(), "国际网络应能用全部白名单模型");
         assertEquals(AllowedModels.values().length, international.size());
+    }
+
+    // ==================== 视觉能力 ====================
+
+    @Test
+    @DisplayName("境内至少要有一个支持视觉的模型，否则「图片直送」这个功能在境内等于没做")
+    void domesticUsersHaveAtLeastOneVisionModel() {
+        List<AllowedModels> domesticVision = AllowedModels.visionCapableIn(AllowedModels.Region.GLOBAL);
+        assertFalse(domesticVision.isEmpty(),
+                "境内可用清单里一个视觉模型都没有：产品目标「模型支持视觉就直接看图」在境内完全落空，"
+                        + "而 UI 上只会表现为「所有模型都提示不支持读图」，很难归因");
+        assertTrue(domesticVision.stream().allMatch(m -> m.getRegion() == AllowedModels.Region.GLOBAL));
+    }
+
+    @Test
+    @DisplayName("supportsVision 对未知模型 id 返回 false 而不是抛异常")
+    void supportsVisionIsTotalOnUnknownIds() {
+        // 本地 Ollama 档的模型 id（llama3 之类）根本不在白名单里，
+        // fromId 返回 null——写成 fromId(id).isVision() 会 NPE
+        assertFalse(AllowedModels.supportsVision("llama3"));
+        assertFalse(AllowedModels.supportsVision(null));
+        assertFalse(AllowedModels.supportsVision(""));
+        assertTrue(AllowedModels.supportsVision("moonshotai/kimi-k3"));
+        assertFalse(AllowedModels.supportsVision("deepseek/deepseek-v4-flash"));
     }
 
     // ==================== fromId / isAllowed ====================

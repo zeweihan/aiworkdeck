@@ -57,6 +57,13 @@
 			}
 		},
 		{
+			"path": "pages/calendar/calendar",
+			"style": {
+				"navigationBarTitleText": "日历",
+				"navigationStyle": "custom"
+			}
+		},
+		{
 			"path": "pages/variable-library/variable-library",
 			"style": {
 				"navigationBarTitleText": "变量库管理",
@@ -66,7 +73,7 @@
 		{
 			"path": "pages/userprofile/userprofile",
 			"style": {
-				"navigationBarTitleText": "个人中心",
+				"navigationBarTitleText": "设置",
 				"navigationStyle": "custom"
 			}
 		},
@@ -81,13 +88,6 @@
 			"path": "pages/plugin-market/plugin-market",
 			"style": {
 				"navigationBarTitleText": "插件广场",
-				"navigationStyle": "custom"
-			}
-		},
-		{
-			"path": "pages/wizard/wizard",
-			"style": {
-				"navigationBarTitleText": "首次运行设置",
 				"navigationStyle": "custom"
 			}
 		}

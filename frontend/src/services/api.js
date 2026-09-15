@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 统一的 API 封装层
 // 说明：
 // - 所有网络请求都应通过这里发起，组件内禁止直接写 URL。
@@ -182,7 +184,7 @@ function request(options) {
     url: url,
     baseUrl: baseUrl,
     originalUrl: options.url,
-    data: options.data
+    data: options.logBody === false ? '[document content omitted]' : options.data
   })
 
   // 获取认证头
@@ -219,10 +221,13 @@ function request(options) {
           console.error('HTTP 状态码错误:', {
             statusCode: status,
             message: message,
-            data: res.data,
+            data: options.logBody === false ? '[document content omitted]' : res.data,
             header: res.header
           })
-          reject(new Error(message));
+          const httpError = new Error(message);
+          httpError.status = status;
+          httpError.data = res.data;
+          reject(httpError);
           return;
         }
 
@@ -242,8 +247,8 @@ function request(options) {
 
         // 统一处理后端返回的 { code: 0, data: ... } 或 { code: 1, message: ... } 格式
         if (res.data && typeof res.data.code !== 'undefined') {
-          if (res.data.code === 0) {
-            // 成功：code=0
+          if (res.data.code === 0 || res.data.code === 200) {
+            // 成功：既有接口用 code=0，AI Markdown memory 契约用 code=200
             resolve(res.data);
           } else if (res.data.code === 4005) {
             // 密码已对但还差短信验证码（登录二次验证）：reject 时带 smsRequired 标记，
@@ -278,8 +283,8 @@ function request(options) {
             console.error('业务错误:', {
               code: res.data.code,
               message: errorMessage,
-              data: res.data.data,
-              fullResponse: res.data
+              data: options.logBody === false ? undefined : res.data.data,
+              fullResponse: options.logBody === false ? undefined : res.data
             })
 
             // 特殊处理：未登录错误（PR4-0：后端统一回 code=4010，只认 code 不再做
@@ -329,6 +334,12 @@ function request(options) {
             // 不再对 err.message 做中文子串匹配
             const bizErr = new Error(errorMessage);
             bizErr.code = res.data.code;
+            // 账户 SKU 购买失败的机器可读原因（already_owned / insufficient_credits /
+            // invalid_sku）：「余额不足」要多摆一个「去充值」按钮，双语 message 子串
+            // 判不住，reason 才是判据（后端 AccountController.handleSkuPurchaseException）。
+            if (res.data.reason) {
+              bizErr.reason = res.data.reason;
+            }
             // 平台服务网关的失败分类。**必须原样带上来**：三类故障（未开放 / 上游挂了 /
             // 我们挂了）在用户眼里长得一模一样，下一步却完全不同，而 canUseOwnKey 决定
             // 要不要摆「改用自己的 Key」这个逃生门。丢在这一层等于后端白分了类。
@@ -441,6 +452,18 @@ export function getConversationMetadata(conversationId) {
 }
 
 /**
+ * 把一条插件镜像会话（sourceChannel 非空，只读）整体复制成一条可写的本地会话
+ * （dev-board#298）。后端返回 {code:0, data:{conversationId}}，这里剥掉信封
+ * 直接给 {conversationId}。
+ */
+export function forkAiConversation(conversationId) {
+  return request({
+    url: `/api/ai/conversation/${conversationId}/fork`,
+    method: 'POST'
+  }).then(unwrapEnvelope);
+}
+
+/**
  * 执行 PPT 生成
  * payload: { topic, projectId, parentId, fileName, style, language, modelId, conversationId, exportEditable }
  */
@@ -476,6 +499,31 @@ export function cancelBackgroundTask(conversationId, taskId) {
   });
 }
 
+// ===================== 插件后台任务（插件规范 v2.4 §11 Jobs） =====================
+// 与上面的 Agent 后台任务是两套簿记：这套按项目归属、id 是 ULID、由 PluginJobService 驱动，
+// 进度经 SSE client_action `plugin_job_progress` 推送；这三个封装给列表/详情/取消用。
+export function listPluginJobs(projectId) {
+  return request({
+    url: `/api/plugin-jobs?projectId=${encodeURIComponent(projectId)}`,
+    method: 'GET',
+  });
+}
+
+export function getPluginJob(jobId) {
+  return request({
+    url: `/api/plugin-jobs/${encodeURIComponent(jobId)}`,
+    method: 'GET',
+  });
+}
+
+// 取消只翻标记 + 中断任务线程；任务体要在 checkCancelled 处配合才会真正停下，文案只许说「正在停止」
+export function cancelPluginJob(jobId) {
+  return request({
+    url: `/api/plugin-jobs/${encodeURIComponent(jobId)}/cancel`,
+    method: 'POST',
+  });
+}
+
 // 获取 AI 公共配置（如默认供应商）
 export function getAiConfig() {
   return request({
@@ -492,9 +540,13 @@ export function getAiConfig() {
  * 用户看不到、前端写的 id 被工厂静默回落成默认模型」。唯一事实来源是后端白名单。
  *
  * 响应：{ networkRegion, networkRegionMode, networkRegionBasis, defaultModel,
- *        models: [{ id, name, vendor, region, contextLength,
+ *        models: [{ id, name, vendor, region, contextLength, vision,
  *                   inputPricePerM, outputPricePerM, tiered }] }
  * models 只含当前网络区域实测可用的模型（境内拿不到国际档，OpenRouter 会返 403 region）。
+ *
+ * vision（boolean）= 该模型能否直接读图。不支持时后端自动把图片降级成 OCR 转写文本，
+ * 前端不需要拦截，但必须在选模型的那一刻就把降级说清楚。**缺字段要当「未知」处理**：
+ * 旧后端与拉取失败都会让它是 undefined，当成 false 会对所有模型误报「不支持读图」。
  */
 export function fetchAiModels() {
   return request({
@@ -544,14 +596,6 @@ export function probeLocalAsr() {
   });
 }
 
-// 获取可用 AI 助手列表
-export function getAssistants() {
-  return request({
-    url: '/api/ai/assistants',
-    method: 'GET'
-  });
-}
-
 // 获取插件列表
 export function getPlugins() {
   return request({
@@ -596,12 +640,181 @@ export function uninstallMarketPlugin(pluginId) {
   });
 }
 
+// Web 面板直调本插件的 JAR 工具（规范 v2.5）：登录会话 + 项目写权限 + 工具须为该插件声明；
+// 返回 { code, output }，output 是工具的原始字符串输出（通常是 JSON 或 "Error: ..."）
+export function invokePluginTool(pluginId, toolName, projectId, args) {
+  return request({
+    url: `/api/plugins/${pluginId}/tools/${toolName}`,
+    method: 'POST',
+    data: { projectId, args: args || {} },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// Web 插件桥 ai.request 的服务端落点（规范 v2.7 P2）：插件经平台 Credits 通道调辅助模型。
+// 返回 { code, text, modelId } 或 { code:1, errorCode, message }
+export function pluginAiComplete(pluginId, projectId, payload) {
+  return request({
+    url: `/api/plugins/${pluginId}/ai/complete`,
+    method: 'POST',
+    data: Object.assign({ projectId }, payload || {}),
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// ==== 声明式贡献点（规范 v2.9 P4）====
+
+// 已启用插件贡献的文书模板清单 -> { code, templates: [{pluginId, id, name, genre, description, fileExt}] }
+export function getContributedTemplates() {
+  return request({ url: '/api/plugins/contributed/templates', method: 'GET' });
+}
+
+// 从贡献模板创建项目文件（登录 + 项目写权限）-> { code, fileId, name }
+export function createFileFromContributedTemplate(pluginId, templateId, projectId, parentId, name) {
+  return request({
+    url: '/api/plugins/contributed/templates/create',
+    method: 'POST',
+    data: { pluginId, templateId, projectId, parentId, name },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件设置：声明 + 当前值（secret 只回显尾 4 位）-> { code, settings: [...] }
+export function getPluginSettings(pluginId) {
+  return request({ url: `/api/plugins/${pluginId}/settings`, method: 'GET' });
+}
+
+// 保存插件设置（仅管理员；按声明校验类型）
+export function savePluginSettings(pluginId, values) {
+  return request({
+    url: `/api/plugins/${pluginId}/settings`,
+    method: 'POST',
+    data: values,
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件贡献的样式画像清单 -> { code, profiles: [{pluginId, id, name, selected}] }
+export function getContributedStyleProfiles() {
+  return request({ url: '/api/plugins/contributed/style-profiles', method: 'GET' });
+}
+
+// 选定/清除全局默认画像（仅管理员）；ref 形如 "<pluginId>:<profileId>"，空 = 清除
+export function selectContributedStyleProfile(ref) {
+  return request({
+    url: '/api/plugins/contributed/style-profiles/select',
+    method: 'POST',
+    data: { ref: ref || '' },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 // 重新扫描 plugins/ 目录（仅管理员）
 export function rescanPlugins() {
   return request({
     url: '/api/plugins/rescan',
     method: 'POST'
   });
+}
+
+// 插件开发：在项目「插件开发/<id>/」目录下创建骨架（manifest.json + web/index.html + web/awd-plugin-sdk.js）
+export function pluginDevScaffold(projectId, id, name) {
+  return request({
+    url: '/api/plugins/dev/scaffold',
+    method: 'POST',
+    data: { projectId, id, name },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件开发：列出该项目「插件开发」目录下的插件项目及本机安装状态
+export function pluginDevStatus(projectId) {
+  return request({
+    url: '/api/plugins/dev/status',
+    method: 'GET',
+    params: { projectId },
+  });
+}
+
+// 插件开发：把某个插件项目装进本机 plugins/ 并热重扫，装完即启用
+export function pluginDevInstall(projectId, folderId) {
+  return request({
+    url: '/api/plugins/dev/install',
+    method: 'POST',
+    data: { projectId, folderId },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 插件开发：卸载本机安装（仅限 dev 来源），不动项目里的源码文件夹
+export function pluginDevUninstall(id) {
+  return request({
+    url: '/api/plugins/dev/uninstall',
+    method: 'POST',
+    data: { id },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// ==================== 能力槽与能力包（设计稿 2026-09-07-capability-slots-self-upgrade-design） ====================
+// 一个「能力槽」= 一项可替换的能力（首期只有诉讼可视化出图引擎）。以下六个接口一律 admin。
+
+// 槽列表 + 候选实现 + 当前选择 + 开发者模式开关状态
+export function getCapabilities() {
+  return request({
+    url: '/api/capabilities',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 切换某个槽的实现；ref 用候选里的原文（builtin / pack:<id> / plugin:<插件id>:<实现id>）
+export function selectCapability(slot, ref) {
+  return request({
+    url: `/api/capabilities/${encodeURIComponent(slot)}/select`,
+    method: 'POST',
+    data: { ref },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 回到上一次选择（再点一次又切回来）
+export function rollbackCapability(slot) {
+  return request({
+    url: `/api/capabilities/${encodeURIComponent(slot)}/rollback`,
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 只拉取与校验，返回安装计划（不落盘）。真正安装要再调 applyCapabilityPlan
+export function planCapabilityInstall(url) {
+  return request({
+    url: '/api/capabilities/plan',
+    method: 'POST',
+    data: { url },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 按 planId 落盘并安装
+export function applyCapabilityPlan(planId) {
+  return request({
+    url: '/api/capabilities/apply',
+    method: 'POST',
+    data: { planId },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 开发者模式：打开后才允许安装未签名的 process 型能力包（默认关）
+export function setCapabilityDevMode(enabled) {
+  return request({
+    url: '/api/capabilities/dev-mode',
+    method: 'PUT',
+    data: { enabled },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
 }
 
 // 获取 Skill 列表（规范见 docs/SKILL_SPEC.md）
@@ -669,6 +882,59 @@ export function uninstallMarketSkill(skillId) {
     header: {
       'Content-Type': 'application/json',
     },
+  });
+}
+
+// 原生资源包（native pack）：重资源功能的运行时下载安装，规范见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3
+
+// 四个可选组件的一次性快照（后端 PackController.optionalComponents）。
+// 这条端点**不发网络请求**（体积取内存/落盘快照，0 = 未知），首次登录面板可以放心在
+// 登录后立刻调它；要精确体积再按需打 packInfo。
+export function optionalComponents() {
+  return request({
+    url: '/api/packs/optional-components',
+    method: 'GET'
+  });
+}
+
+// 查询安装状态（登录即可）：{state, installedVersion, bytesDownloaded, bytesTotal, error}
+export function packStatus(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/status`,
+    method: 'GET'
+  });
+}
+
+// 查询最新版本与总体积（登录即可）：{latestVersion, totalSize}，装前的大小提示用
+export function packInfo(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/info`,
+    method: 'GET'
+  });
+}
+
+// 安装（仅管理员）：后端异步启动下载，已在装则幂等返回当前进度，前端轮询 packStatus 展示
+export function packInstall(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/install`,
+    method: 'POST'
+  });
+}
+
+// 追新（仅管理员）：后端同步查一次 registry，有新版才开始异步下载
+// 返回 {upgrading: bool, latestVersion}；upgrading=true 时前端照安装那样轮询 packStatus
+export function packUpgrade(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/upgrade`,
+    method: 'POST'
+  });
+}
+
+// 卸载（仅管理员）：删除本机已下载的资源包目录
+export function packUninstall(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/uninstall`,
+    method: 'POST'
   });
 }
 
@@ -742,7 +1008,20 @@ export function getAdminUsers() {
   });
 }
 
-// 查询首次运行向导状态（Epic #18 T4）：{ code, initialized }
+// 记录《服务条款》《隐私政策》的同意版本（登录页勾选后调用，只记录不设闸）
+export function acceptLegalAgreement(version) {
+  return request({
+    url: '/api/license/agreement',
+    method: 'POST',
+    data: { version },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 查询首启初始化状态：{ code, initialized }。向导页已下线（2026-08-27），
+// 这条现在由解锁页在登录成功后查询，决定要不要做一次性初始化提交
 export function getWizardStatus() {
   return request({
     url: '/api/admin/wizard',
@@ -750,15 +1029,8 @@ export function getWizardStatus() {
   });
 }
 
-// 重置首次运行向导（仅管理员）：completed 置 false，之后可重新走一遍向导
-export function resetWizard() {
-  return request({
-    url: '/api/admin/wizard/reset',
-    method: 'POST',
-  });
-}
-
-// 提交首次运行向导（仅未初始化时可调用，payload 结构同 saveAdminConfig）
+// 提交首启初始化（仅未初始化时可调用，payload 结构同 saveAdminConfig；
+// 向导页下线后由解锁页在登录成功后调用；后端 /api/admin/wizard/reset 保留但前端已无入口）
 export function submitWizard(payload) {
   return request({
     url: '/api/admin/wizard',
@@ -785,7 +1057,7 @@ export function createProject(payload) {
 
 // IDE 化本地文件夹项目：打开/新建本地文件夹作为项目
 // payload: { localRoot, createFolder, name, openFileName }
-// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated } }
+// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated, truncatedCount } }
 export function openLocalProject(payload) {
   return request({
     url: '/api/projects/open-local',
@@ -1024,6 +1296,81 @@ export function disconnectAccount() {
   }).then(unwrapEnvelope);
 }
 
+// ---------- 账户资料：展示名与头像（Spec §5，dev-board#564–#567） ----------
+//
+// 官网是展示名与头像的**唯一权威源**。本机后端把官网那三个写端点收敛成下面四个
+// 本机端点（Key 与 Bearer 都留在后端），前端一律只跟本机后端说话。
+// 只在 local-mode 且已连接账户时可用——两条判定见 utils/identityProfile.js
+// 的 resolveProfileSource；自建服务器仍走 uploadAvatar() 那条本机上传。
+
+// { accountId, displayName, avatarUrl|null, displayNameIsDefault }
+// 刻意**不回 username**：用户名按 uid 处理，任何界面不再当名字显示。
+// 未连接账户时后端回 code:1（request 层转 reject），调用方按「不可编辑」降级即可。
+export function getAccountProfile() {
+  return request({
+    url: '/api/account/profile',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 改展示名 → 官网 PATCH /api/account/profile。
+// 本机这一层用 PUT 而不是 PATCH：uni.request 没有 PATCH（团队接口先例）。
+export function updateAccountProfile(displayName) {
+  return request({
+    url: '/api/account/profile',
+    method: 'PUT',
+    data: { displayName },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 传头像 → 官网 POST /api/account/avatar。multipart 字段名 file，与 uploadAvatar() 同形。
+export function uploadAccountAvatar(filePath) {
+  const baseUrl = getApiBaseUrl()
+  const url = `${baseUrl}/api/account/avatar`
+  const sessionId = getSessionId()
+
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: url,
+      filePath: filePath,
+      name: 'file',
+      header: {
+        'X-Session-Id': sessionId
+      },
+      success: (uploadFileRes) => {
+        if (uploadFileRes.statusCode === 200) {
+          try {
+            const data = JSON.parse(uploadFileRes.data)
+            if (data.code === 0) {
+              resolve(unwrapEnvelope(data))
+            } else {
+              reject(new Error(data.message || t('common.uploadFailed')))
+            }
+          } catch (e) {
+            reject(new Error(t('common.parseResponseFailed')))
+          }
+        } else {
+          reject(new Error('HTTP Error ' + uploadFileRes.statusCode))
+        }
+      },
+      fail: (err) => {
+        reject(err)
+      }
+    })
+  })
+}
+
+// 删头像 → 官网 DELETE /api/account/avatar
+export function deleteAccountAvatar() {
+  return request({
+    url: '/api/account/avatar',
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
 // 用量：两套口径分开返回（Spec §3），前端不做合并。
 // {
 //   local:    { records, promptTokens, completionTokens, totalTokens,
@@ -1039,6 +1386,67 @@ export function getAccountUsage() {
   return request({
     url: '/api/account/usage',
     method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// ===================== 余额 / 会员 / 充值（dev-board#183/#184/#187）=====================
+
+// 顶栏 Credits chip 的轻端点（后端带 TTL 缓存，可随 onShow 高频调）：
+// { connected, balanceCents, plan, membership: { level, key, nameZh, nameEn } | null }
+// 未连接 { connected: false }；已连接但官网不可达 { connected: true, available: false }。
+export function getAccountBalance() {
+  return request({
+    url: '/api/account/balance',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 会员等级/成长值全量（官网透传，不缓存）：
+// { growthPoints, topupCents, spendCents,
+//   tier: { key, level, nameZh, nameEn, bonusPermille },
+//   nextTier: { ..., threshold, remainingPoints } | null,
+//   tiers: [7 档全表，含 threshold/bonusPermille] }
+export function getAccountMembership() {
+  return request({
+    url: '/api/account/membership',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 发起充值：amountCents 单位「分」。响应
+// { success, present: 'qrcode' | 'redirect', outTradeNo, codeUrl?, qrCode?, redirectUrl?, amount }
+// 微信站二维码 / Stripe 站跳转，两种形状由 RechargeDialog 分叉。
+export function createAccountRecharge(amountCents) {
+  return request({
+    url: '/api/account/recharge',
+    method: 'POST',
+    data: { amountCents },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 查询充值订单状态（轮询用）。已支付形如 { success: true, order: { ..., status: 'paid' } }，
+// 未付 order.status 为 pending 等，字段以官网为准。
+export function getRechargeStatus(outTradeNo) {
+  return request({
+    url: '/api/account/recharge/status?outTradeNo=' + encodeURIComponent(outTradeNo || ''),
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 应用内购买本地 SKU（白名单只有 feature:clipboard.unlimited / feature:stage.unlimited）。
+// 成功 { ok, feature, balanceCents }，后端已同步刷新权益并作废余额缓存；
+// 失败 reject 的 Error 上带 reason（already_owned / insufficient_credits / invalid_sku）。
+export function purchaseFeatureSku(skuId) {
+  return request({
+    url: '/api/account/purchase-sku',
+    method: 'POST',
+    data: { skuId },
+    header: {
+      'Content-Type': 'application/json',
+    },
   }).then(unwrapEnvelope);
 }
 
@@ -1449,6 +1857,22 @@ export function createFile(projectId, parentId, name, fileType, fileSize, filePa
   });
 }
 
+// 从本机绝对路径复制一个文件进项目目录（桌面端拖入资源管理器，dev-board#409）。
+// 只有单机模式的后端接受它；浏览器端拿不到路径，走 createFile + /upload 那条老路。
+export function importLocalFile(projectId, sourcePath, parentId) {
+  return request({
+    url: `/api/projects/${projectId}/files/import-local`,
+    method: 'POST',
+    data: {
+      sourcePath,
+      parentId,
+    },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 重命名文件或文件夹
 export function renameFile(projectId, fileId, name) {
   return request({
@@ -1578,6 +2002,14 @@ export function desensitizeFile(payload) {
   });
 }
 
+export function previewSensitiveFile(payload) {
+  return request({ url: '/api/sensitive/preview', method: 'POST', data: payload, timeout: 300000 });
+}
+
+export function restoreSensitiveFile(payload) {
+  return request({ url: '/api/sensitive/restore', method: 'POST', data: payload, timeout: 300000 });
+}
+
 // 获取文件详情
 export function getFileDetail(projectId, fileId) {
   return request({
@@ -1596,6 +2028,24 @@ export function getFileDownloadUrl(fileId) {
 export function getFileUploadUrl(fileId) {
   const baseUrl = getApiBaseUrl()
   return `${baseUrl}/api/files/${fileId}/upload`
+}
+
+// Web 插件面板入口 URL（插件规范 v2.3）。
+// - 绝对 http(s) URL：旧形态，原样返回，宿主 iframe 直接打开外部页面（行为不变）
+// - web/ 之下的相对路径：映射到后端静态服务 <apiBase>/api/plugin-web/<id>/<entry>
+// apiBase 走 getApiBaseUrl()（桌面壳注入优先），生产同源时它是空串，返回相对路径同样可用。
+export function resolvePluginEntryUrl(pluginId, entry) {
+  if (!entry) return ''
+  const raw = String(entry)
+  if (/^https?:\/\//i.test(raw)) return raw
+  const baseUrl = getApiBaseUrl() || ''
+  // /api/plugin-web/<id>/ 的 URL 空间直接映射 plugins/<id>/web/ 的内容
+  // （PluginWebController 的 subPath 是相对 web/ 的），而 manifest.frontendEntry
+  // 带着 web/ 前缀——不剥掉会拼出 web/web/ 双前缀，服务端 404
+  const rel = raw.replace(/^\/+/, '').replace(/^web\//, '')
+    .split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  if (!rel) return ''
+  return `${baseUrl.replace(/\/$/, '')}/api/plugin-web/${encodeURIComponent(pluginId)}/${rel}`
 }
 
 // 获取文件文本内容
@@ -1667,23 +2117,86 @@ export function createProjectFavorite(projectId, payload) {
   })
 }
 
-// 文档-文件关联（WPS 选区超链接）
-export function createDocFileLink(projectId, payload) {
-  return request({
-    url: `/api/projects/${projectId}/doc-links`,
-    method: 'POST',
-    data: payload,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  })
+// 证据链接 EvidenceLink（报告文字 <-> 底稿文件关联事实表，spec §2.2）。
+// 旧 /doc-links POST 已 410，一律走这组。linkKey 只含 [A-Za-z0-9_]。
+export function createEvidenceLink(projectId, body) {
+  return request({ url: `/api/projects/${projectId}/evidence-links`, method: 'POST', data: body })
+}
+export function getEvidenceLink(projectId, linkKey) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`, method: 'GET' })
+}
+// query 里 null/undefined 的键剔掉（PluginPane 会传 {status: undefined}），免得序列化成 "undefined"
+export function listEvidenceLinks(projectId, query = {}) {
+  const data = {}
+  for (const k of Object.keys(query || {})) if (query[k] != null && query[k] !== '') data[k] = query[k]
+  return request({ url: `/api/projects/${projectId}/evidence-links`, method: 'GET', data })
+}
+export function addEvidenceTargets(projectId, linkKey, targets) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/targets`, method: 'POST', data: targets })
+}
+export function updateEvidenceTarget(projectId, targetId, patch) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/targets/${targetId}`, method: 'PATCH', data: patch })
+}
+export function removeEvidenceTarget(projectId, targetId) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/targets/${targetId}`, method: 'DELETE' })
+}
+export function deleteEvidenceLink(projectId, linkKey) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}`, method: 'DELETE' })
+}
+export function reportEvidenceAnchors(projectId, docFileId, reports) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/anchors/report`, method: 'POST', data: { docFileId, reports } })
+}
+export function keepEvidenceAnchor(projectId, linkKey, text) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/keep`, method: 'POST', data: { text } })
+}
+export function rebindEvidenceLink(projectId, linkKey, body) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/${encodeURIComponent(linkKey)}/rebind`, method: 'POST', data: body })
+}
+export function evidenceRefCounts(projectId, fileIds) {
+  return request({ url: `/api/projects/${projectId}/evidence-links/ref-counts`, method: 'GET', data: { fileIds: (fileIds || []).join(',') } })
 }
 
-export function getDocFileLink(projectId, linkKey) {
-  return request({
-    url: `/api/projects/${projectId}/doc-links/${encodeURIComponent(linkKey)}`,
-    method: 'GET',
-  })
+// 文档解析 /「依据」窗格（dev-board#181/#182）。契约见 .claude/agents/doc-insight.md。
+// 四个端点全在 /api/projects/{pid}/insight 之下；未登录一律 200 + {code:4010}，
+// 由 request() 的统一信封处理（这里不另做分支）。
+/** 发起解析（异步）。返回时 run 已落库为 RUNNING，调用方立刻可以轮询 getInsight。 */
+export function reviewDocInsight(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/insight/review`, method: 'POST', data, logBody: false, timeout: data.deep ? 120000 : 30000 })
+}
+export function parseDocInsight(projectId, docFileId) {
+  return request({ url: `/api/projects/${projectId}/insight/parse`, method: 'POST', data: { docFileId } })
+}
+/** 最近一次解析结果：run + 实体（列表里不带检索详情）+ 全部发现（含 detail）。run=null = 没解析过。 */
+export function getDocInsight(projectId, docFileId) {
+  return request({ url: `/api/projects/${projectId}/insight`, method: 'GET', data: { docFileId } })
+}
+/** 单个实体的检索详情（列表刻意瘦身，展开时才拉）。 */
+export function getDocInsightEntity(projectId, entityId) {
+  return request({ url: `/api/projects/${projectId}/insight/entities/${entityId}`, method: 'GET' })
+}
+/** 重新检索一个实体（绕过 7 天缓存，花外部库额度，要写权限）。 */
+export function refreshDocInsightEntity(projectId, entityId) {
+  return request({ url: `/api/projects/${projectId}/insight/entities/${entityId}/refresh`, method: 'POST' })
+}
+
+// Local writing vocabulary. Only lookupWritingSelection performs external retrieval.
+export function listWritingCompletions(projectId) {
+  return request({ url: `/api/projects/${projectId}/completion`, method: 'GET' })
+}
+export function getWritingCompletionDetail(projectId, id) {
+  return request({ url: `/api/projects/${projectId}/completion/entries/${encodeURIComponent(id)}`, method: 'GET' })
+}
+export function learnWritingCompletions(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/completion/learn`, method: 'POST', data })
+}
+export function deleteWritingCompletion(projectId, id) {
+  return request({ url: `/api/projects/${projectId}/completion/entries/${encodeURIComponent(id)}`, method: 'DELETE' })
+}
+export function clearWritingCompletions(projectId, scope) {
+  return request({ url: `/api/projects/${projectId}/completion/learned?scope=${encodeURIComponent(scope)}`, method: 'DELETE' })
+}
+export function lookupWritingSelection(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/completion/lookup`, method: 'POST', data, timeout: 90000 })
 }
 
 export function deleteFavorite(favoriteId) {
@@ -1924,6 +2437,17 @@ export function getProjectMembers(projectId) {
   })
 }
 
+// 本机轨的「先查人」。与云端轨的 lookupCloudMember 同一张卡片契约：
+// {found, displayName, avatarUrl, maskedContact, alreadyMember, currentRole, message}，
+// found=false 也是 code=0 的正常回包（message 是「让对方先登录一次再加」那句话），
+// 界面就地显示即可，不要弹成故障提示。
+export function lookupProjectMember(projectId, identifier) {
+  return request({
+    url: `/api/projects/${projectId}/members/lookup?identifier=${encodeURIComponent(identifier || '')}`,
+    method: 'GET'
+  })
+}
+
 export function addProjectMember(projectId, username, role) {
   return request({
     url: `/api/projects/${projectId}/members`,
@@ -1965,7 +2489,7 @@ export function deleteFileVariable(id) {
 }
 
 // ===================== 用户活动日志 =====================
-export function logActivity(actionType, targetId, targetName, duration, metaInfo) {
+export function logActivity(actionType, targetId, targetName, duration, metaInfo, projectId) {
   return request({
     url: '/api/activity/log',
     method: 'POST',
@@ -1974,7 +2498,8 @@ export function logActivity(actionType, targetId, targetName, duration, metaInfo
       targetId,
       targetName,
       duration,
-      metaInfo
+      metaInfo,
+      projectId
     },
     header: { 'Content-Type': 'application/json' }
   })
@@ -2015,6 +2540,193 @@ export function saveAppLanguageRemote(language) {
   })
 }
 
+// ===================== 团队（dev-board#496） =====================
+//
+// 全部经本地后端 /api/account/team* 透传到官网（Bearer awdk_ 在后端加），
+// 前端从不直连官网。信封与全站一致：request() 解出 {code,data}，unwrapEnvelope 取 data。
+//
+// 动词说明：本机这一层用 GET/POST/PUT/DELETE，没有 PATCH——uni.request 的 method
+// 枚举里根本没有它。出站到官网那一跳仍是 PATCH（后端 AccountService 负责）。
+
+// 我的团队。无团队时回 { team: null, invites: [...] }（我手机号收到的邀请）。
+export function getTeam() {
+  return request({ url: '/api/account/team', method: 'GET' }).then(unwrapEnvelope);
+}
+
+export function createTeam(name) {
+  return request({
+    url: '/api/account/team',
+    method: 'POST',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 只传要改的字段：整表回传会把没碰过的开关一起改掉（后端也会拒空 patch）。
+export function updateTeam(patch) {
+  return request({
+    url: '/api/account/team',
+    method: 'PUT',
+    data: patch,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function createTeamInvite(phone, role) {
+  return request({
+    url: '/api/account/team/invites',
+    method: 'POST',
+    data: { phone, role },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function revokeTeamInvite(inviteId) {
+  return request({
+    url: `/api/account/team/invites/${encodeURIComponent(inviteId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+export function acceptTeamInvite(inviteId) {
+  return request({
+    url: `/api/account/team/invites/${encodeURIComponent(inviteId)}/accept`,
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function updateTeamMemberRole(accountId, role) {
+  return request({
+    url: `/api/account/team/members/${encodeURIComponent(accountId)}`,
+    method: 'PUT',
+    data: { role },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 移除成员，或本人退出团队（OWNER 不可退出，后端/官网会拒）。
+export function removeTeamMember(accountId) {
+  return request({
+    url: `/api/account/team/members/${encodeURIComponent(accountId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+// range 只有 7 / 30 / 90 三档，scope 只有 team / firm，其余值后端会归一。
+// scope=firm 能不能看由官网按角色判，前端只负责把用户选的视角带上去。
+export function getTeamSummary(range = 7, scope = 'team') {
+  return request({
+    url: `/api/account/team/summary?range=${range}&scope=${encodeURIComponent(scope)}`,
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// ---- 层级与加入流程（设计 §10.3）----
+
+// 用 8 位团队邀请码加入。已有团队时官网回 409，走业务信封。
+export function joinTeam(code) {
+  return request({
+    url: '/api/account/team/join',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 重置团队邀请码：旧码立刻失效，已加入的成员不受影响。
+export function regenerateTeamJoinCode() {
+  return request({
+    url: '/api/account/team/join-code/regenerate',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 创建律所，本团队成为总部团队。
+export function createFirm(name) {
+  return request({
+    url: '/api/account/team/firm',
+    method: 'POST',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 本团队按律所邀请码并入律所。
+export function joinFirm(code) {
+  return request({
+    url: '/api/account/team/firm/join',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 改律所名。本机这一跳是 PUT，出站到官网仍是 PATCH（后端负责）。
+export function updateFirm(name) {
+  return request({
+    url: '/api/account/team/firm',
+    method: 'PUT',
+    data: { name },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+export function regenerateFirmJoinCode() {
+  return request({
+    url: '/api/account/team/firm/join-code/regenerate',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 把某个团队移出律所，或本团队自己退出律所（总部团队不可退出，官网会拒）。
+export function removeFirmTeam(teamId) {
+  return request({
+    url: `/api/account/team/firm/teams/${encodeURIComponent(teamId)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope);
+}
+
+// 给项目短码起别名。空串表示清掉别名，退回显示短码。
+export function setTeamProjectAlias(projectKey, label) {
+  return request({
+    url: `/api/account/team/projects/${encodeURIComponent(projectKey)}/alias`,
+    method: 'PUT',
+    data: { label },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 本机的「向团队共享使用统计」开关（默认关）+ 上次上报时间。纯本机状态，不打官网。
+export function getTeamUsageSharing() {
+  return request({ url: '/api/account/team/usage-sharing', method: 'GET' }).then(unwrapEnvelope);
+}
+
+export function setTeamUsageSharing(enabled) {
+  return request({
+    url: '/api/account/team/usage-sharing',
+    method: 'PUT',
+    data: { enabled },
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
+// 立即上报。回 { uploaded, skipped, reason?, lastUploadAt }——skipped 时 reason 是
+// 机器可读的跳过原因（disabled / not_local_mode / not_connected / no_team）。
+export function uploadTeamUsageNow() {
+  return request({
+    url: '/api/account/team/usage-sharing/upload-now',
+    method: 'POST',
+    data: {},
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope);
+}
+
 export function getTelemetrySettings() {
   return request({
     url: '/api/telemetry/settings',
@@ -2026,6 +2738,24 @@ export function updateTelemetrySettings(payload) {
   return request({
     url: '/api/telemetry/settings',
     method: 'POST',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+// 文档 Generator 元数据开关（可溯源性设计规范附录 B4）。GET 同时下发 application——
+// 要写进 docProps/app.xml 的那个串由后端从 ProductIdentity 派生，前端不许自己拼版本号。
+export function getDocumentGeneratorSettings() {
+  return request({
+    url: '/api/document/generator/settings',
+    method: 'GET'
+  })
+}
+
+export function updateDocumentGeneratorSettings(payload) {
+  return request({
+    url: '/api/document/generator/settings',
+    method: 'PUT',
     data: payload,
     header: { 'Content-Type': 'application/json' }
   })
@@ -2229,6 +2959,17 @@ export function transcribeMeetingRecording(meetingId) {
   })
 }
 
+// 资源管理器右键转写：把项目里已有的音频文件注册成会议记录并（凭证已配时）自动提交转写。
+// 返回 { meeting, configured, submitted }（dev-board#227）
+export function registerMeetingFromFile(projectId, fileId) {
+  return request({
+    url: `/api/meetings/projects/${projectId}/register-file`,
+    method: 'POST',
+    data: { fileId },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
 export function updateMeetingRecording(meetingId, payload) {
   return request({
     url: `/api/meetings/${meetingId}`,
@@ -2365,6 +3106,7 @@ export default {
   getProjectFiles,
   createFolder,
   createFile,
+  importLocalFile,
   renameFile,
   deleteFile,
   moveFile,
@@ -2387,6 +3129,7 @@ export default {
   saveUserVariable,
   deleteUserVariable,
   getProjectMembers,
+  lookupProjectMember,
   addProjectMember,
   removeProjectMember,
   getFileVariables,
@@ -2531,11 +3274,47 @@ export function getProjectConversations(projectId, options = {}) {
   });
 }
 
-/** A 期恒返回 {code:0,data:{tasks:[]}}；B 期接任务系统时本函数一行不改。 */
+/** B 期（日历/任务系统）起返回真实任务列表，响应形状 {code:0,data:{tasks:[...]}} 不变。 */
 export function getProjectTasks(projectId) {
   return request({
     url: `/api/projects/${projectId}/tasks`,
     method: 'GET'
+  });
+}
+
+// ==================== 日历/任务（B 期，spec: docs/superpowers/specs/2026-08-20-calendar-view-design.md） ====================
+
+/** data: {projectId, fileId?, title, dueDate(ISO 日期), dueTime?(HH:mm)}，source 由后端定为 user。 */
+export function createTask(data) {
+  return request({
+    url: '/api/tasks',
+    method: 'POST',
+    data
+  });
+}
+
+/** data 可含 title/dueDate/dueTime/status(OPEN|DONE) 的任意子集；dueTime 传 null 表示清空。 */
+export function updateTask(taskId, data) {
+  return request({
+    url: `/api/tasks/${taskId}`,
+    method: 'PUT',
+    data
+  });
+}
+
+export function deleteTask(taskId) {
+  return request({
+    url: `/api/tasks/${taskId}`,
+    method: 'DELETE'
+  });
+}
+
+/** 跨项目全盘日历。from/to 为 ISO 日期（含端点），返回 {code:0,data:{tasks:[...含 projectName]}}。 */
+export function getCalendarTasks(from, to) {
+  return request({
+    url: '/api/calendar',
+    method: 'GET',
+    params: { from, to }
   });
 }
 
@@ -2556,6 +3335,14 @@ export function enableVersionControl(projectId) {
   });
 }
 
+// 关闭版本记录并删除全部历史（dev-board#438）。只有项目负责人能调；工作区里的文件一个不动。
+export function disableVersionControl(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/disable`,
+    method: 'POST'
+  });
+}
+
 export function getVersionTimeline(projectId, limit = 50, fileId) {
   let url = `/api/projects/${projectId}/version/timeline?limit=${limit}`
   if (fileId) url += `&fileId=${fileId}`
@@ -2568,6 +3355,49 @@ export function getVersionTimeline(projectId, limit = 50, fileId) {
 export function getVersionChanges(projectId, sha) {
   return request({
     url: `/api/projects/${projectId}/version/versions/${encodeURIComponent(sha)}/changes`,
+    method: 'GET'
+  });
+}
+
+// 统一历史（dev-board#624）：主线 + 各进行中稿 + origin/master 的 `--all` 视图，游标分页。
+// opts: {limit, cursor, author, fileId, q, from, to, includeAuto}
+// 回 {head, ahead, behind, remoteAheadAuthors, remoteAheadBySelf, entries[], nextCursor}。
+export function getVersionHistory(projectId, opts = {}) {
+  const qs = []
+  const put = (k, v) => {
+    if (v === undefined || v === null || v === '') return
+    qs.push(`${k}=${encodeURIComponent(v)}`)
+  }
+  put('limit', opts.limit || 100)
+  put('cursor', opts.cursor)
+  put('author', opts.author)
+  put('fileId', opts.fileId)
+  put('q', opts.q)
+  put('from', opts.from)
+  put('to', opts.to)
+  if (opts.includeAuto) qs.push('includeAuto=true')
+  return request({
+    url: `/api/projects/${projectId}/version/history?${qs.join('&')}`,
+    method: 'GET'
+  });
+}
+
+// 逐段溯源（dev-board#632）：这份文件的每一段/每一格/每一页，最后是哪一版改的。
+// 回 {ref, kind, units:[{key, textHash, sha, shortId, authorName, self, when, title, type}],
+//     truncated, computing}。computing=true 表示后端还在算，前端 3 秒后重试。
+export function getProvenance(projectId, fileId, ref) {
+  const qs = [`fileId=${encodeURIComponent(fileId)}`]
+  if (ref) qs.push(`ref=${encodeURIComponent(ref)}`)
+  return request({
+    url: `/api/projects/${projectId}/version/provenance?${qs.join('&')}`,
+    method: 'GET'
+  });
+}
+
+// 任意两版之间的文件增删改清单（「对比这两版」）。from/to 是 ref（sha 即可）。
+export function getVersionCompare(projectId, from, to) {
+  return request({
+    url: `/api/projects/${projectId}/version/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     method: 'GET'
   });
 }
@@ -2699,9 +3529,85 @@ export function abandonDraft(projectId, draftId) {
   });
 }
 
+// ---- 三方合并：结构化分析、逐份落盘（spec 2026-09-14-docx-three-way-merge-design §4.3–4.5）----
+// 三个裁决语境（采纳 / 取回 / 结束工作撞车）共用这三个端点：后端按 MERGE_HEAD 反查语境，
+// 不信客户端传的 ctx（ctx 只用来校验一致）。
+
+// 某一份冲突文件的完整三方分析：overlaps 的三栏文字、重放计划、基线单元。
+// /status 里的 documentMerges 只有计数，逐处裁决界面要靠这个端点拿正文。
+export function getMergeAnalysis(projectId, path) {
+  return request({
+    url: `/api/projects/${projectId}/version/merge/analysis?path=${encodeURIComponent(path)}`,
+    method: 'GET'
+  });
+}
+
+// 合并后的字节 + 逐处决定清单落盘（multipart）。
+// 走裸 XHR 而不是上面的 request()：uni.request 那层不传 FormData，而合并结果是整份
+// docx 字节（几 MB），塞进 JSON 里 base64 一圈既慢又白占内存（saveClipboardFile /
+// submitFeedback 已是同样的写法）。
+// bytes：Uint8Array（引擎 export_document 的出参）；decisions：Decision[] 数组，
+// 元素 {key, side: 'M'|'T'|'', action: 'A'|'R'|'X'|'F'}，mode=auto 时允许为空。
+export function postMergeResolveFile(projectId, { path, mode, decisions, bytes, name, ctx }) {
+  const baseUrl = getApiBaseUrl()
+  const sessionId = getSessionId()
+  const form = new FormData()
+  form.append('path', path)
+  form.append('mode', mode || 'manual')
+  form.append('decisions', JSON.stringify(decisions || []))
+  if (ctx) form.append('ctx', ctx)
+  if (bytes) {
+    const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: 'application/octet-stream' })
+    form.append('file', blob, name || (String(path).split('/').pop() || 'merged.bin'))
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/api/projects/${projectId}/version/merge/resolve-file`)
+    if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
+    xhr.onload = () => {
+      if (xhr.status !== 200) {
+        reject(new Error(t('common.submitFailedWithStatus', { status: xhr.status })))
+        return
+      }
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (data.code === 0) resolve(data)
+        else reject(new Error(data.message || t('common.submitFailed')))
+      } catch (e) {
+        reject(new Error(t('common.parseResponseFailed')))
+      }
+    }
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.send(form)
+  })
+}
+
+// xlsx / pptx：合并文件由后端 POI 按 decisions 拼，前端只送决定，不送字节。
+// decisions 为空数组 = 自动模式（把另一侧独有的改动全部合入）。
+export function postMergeResolveStructured(projectId, { path, decisions }) {
+  return request({
+    url: `/api/projects/${projectId}/version/merge/resolve-structured`,
+    method: 'POST',
+    data: { path, decisions: decisions || [] }
+  });
+}
+
+// 某一份进行中稿自己的时间线（VersionTimeline 的分叉线用，Phase B）。响应形状与
+// /timeline 一致（含 parents），后端并行开发中——调用方需自行处理 404/失败降级，
+// 不要假设这个端点一定存在。
+export function getDraftTimeline(projectId, draftId, limit = 50) {
+  return request({
+    url: `/api/projects/${projectId}/version/drafts/${draftId}/timeline?limit=${limit}`,
+    method: 'GET'
+  });
+}
+
 // ==================== 云端协作（v2）====================
 // 术语：push=上传到云端 pull=从云端更新 clone=从云端接一个项目。界面零 Git 术语。
 
+// 账号口令连一个案件库。dev-board#440 起**界面上没有调用方**了：普通用户一律连官方
+// 案件库，自建部署把 cloud.collab.base-url 指到自己的服务器。端点本身保留（自建用户
+// 可直接调，app-e2e J11 也走它连测试用的团队服务器），所以这个包装一并留着，别当死代码清掉。
 export function cloudConnect(serverUrl, username, password, deviceName) {
   return request({ url: '/api/cloud/connect', method: 'POST',
     data: { serverUrl, username, password, deviceName } })
@@ -2711,6 +3617,8 @@ export function listCloudConnections() {
   return request({ url: '/api/cloud/connections', method: 'GET' })
 }
 
+// 同 cloudConnect：dev-board#440 撤掉「退出这个案件库」按钮后界面上没有调用方，
+// 端点保留给自建用户与 e2e 清场（run.mjs 的 finally）。
 export function disconnectCloudConnection(connectionId) {
   return request({ url: `/api/cloud/connections/${connectionId}/disconnect`, method: 'POST' })
 }
@@ -2719,9 +3627,23 @@ export function listRemoteProjects(connectionId) {
   return request({ url: `/api/cloud/connections/${connectionId}/remote-projects`, method: 'GET' })
 }
 
+// connectionId 可省：不传就由后端连官方案件库再共享（零配置直连）。
+// 显式传 undefined/null 时不要把这个键发上去——后端按「有没有这个键」分流。
 export function shareProjectToCloud(projectId, connectionId) {
-  return request({ url: `/api/cloud/projects/${projectId}/share`, method: 'POST',
-    data: { connectionId } })
+  const data = {}
+  if (connectionId !== undefined && connectionId !== null) data.connectionId = connectionId
+  return request({ url: `/api/cloud/projects/${projectId}/share`, method: 'POST', data })
+}
+
+// 官方团队案件库：{available, connected, serverUrl, username}。界面只读 available 这一位
+// （地址不给律师看）：为假表示本站暂不提供（国际站），此时界面上就没有可放进去的案件库。
+export function getOfficialCloud() {
+  return request({ url: '/api/cloud/official', method: 'GET' })
+}
+
+// 用本机的官网账户一键连上官方案件库（幂等，重复调不会多建连接）。
+export function connectOfficialCloud() {
+  return request({ url: '/api/cloud/connect-official', method: 'POST' })
 }
 
 export function acceptCloudProject(connectionId, remoteProjectId) {
@@ -2769,14 +3691,36 @@ export function getCloudMembers(projectId) {
   return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'GET' })
 }
 
-export function addCloudMember(projectId, username, role) {
-  return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'POST',
-    data: { username, role } })
+// 案件库那边的协作事件（谁交了稿 / 谁签出 / 谁取回 / 谁加了人），桌面端经本机后端代理。
+// 回 {selfUserId, selfTokenId, events:[...]}——前两个字段用来把事件行说成「你」还是同事。
+export function getCloudEvents(projectId, opts = {}) {
+  const qs = [`limit=${opts.limit || 100}`]
+  if (opts.before) qs.push(`before=${encodeURIComponent(opts.before)}`)
+  return request({ url: `/api/cloud/projects/${projectId}/events?${qs.join('&')}`, method: 'GET' })
 }
 
-// ==================== 记忆同步（Phase A 桌面配置 UI）====================
+// 先查人：回 {found, displayName, avatarUrl, maskedContact, alreadyMember, currentRole, message}。
+// found=false 也是 code=0 的正常回包（message 里是「让对方先登录一次再加」那句话），
+// 界面就地显示即可，不要弹成故障提示。
+export function lookupCloudMember(projectId, identifier) {
+  return request({
+    url: `/api/cloud/projects/${projectId}/members/lookup?identifier=${encodeURIComponent(identifier || '')}`,
+    method: 'GET',
+  })
+}
+
+// identifier：同事的手机号或邮箱（律师不知道对方在案件库里的账号名，那是桥接自动生成的）。
+// 用户名仍可传，服务端把它当兜底。
+export function addCloudMember(projectId, identifier, role) {
+  return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'POST',
+    data: { identifier, role } })
+}
+
+// ==================== 记忆同步 ====================
 // repoKey：user-{userId}-memory / project-{projectId}-memory。
 // 凭据只写不读：status 只回打码后的 secretMasked；保存时 secret 留空表示沿用已存令牌。
+// dev-board#440 起 admin 里的「记忆同步」分区（自填 Git 地址/账号/令牌）已撤，这四个
+// 包装暂时没有界面调用方；后端 MemorySyncController 一字未动，自建用户直接调端点配置。
 
 export function getMemorySyncStatus(repoKey) {
   return request({ url: `/api/memory-sync/${repoKey}/status`, method: 'GET' })
@@ -2795,6 +3739,84 @@ export function syncMemoryNow(repoKey) {
   return request({ url: `/api/memory-sync/${repoKey}/sync`, method: 'POST' })
 }
 
+// ==================== Agent inbox / mid-run steering ====================
+
+export function getAgentInbox(conversationId) {
+  return request({
+    url: `/api/agent/inbox/${encodeURIComponent(conversationId)}`,
+    method: 'GET',
+  }).then(unwrapEnvelope)
+}
+
+export function updateAgentInboxItem(conversationId, messageId, patch) {
+  return request({
+    url: `/api/agent/inbox/${encodeURIComponent(conversationId)}/${encodeURIComponent(messageId)}`,
+    method: 'PATCH',
+    data: patch,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope)
+}
+
+export function deleteAgentInboxItem(conversationId, messageId, expectedRevision) {
+  return request({
+    url: `/api/agent/inbox/${encodeURIComponent(conversationId)}/${encodeURIComponent(messageId)}?expectedRevision=${encodeURIComponent(expectedRevision)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope)
+}
+
+// ==================== Canonical Markdown memory ====================
+
+export function getMemorySpaces(projectId) {
+  return request({
+    url: '/api/ai/memory/spaces',
+    method: 'GET',
+    params: projectId ? { projectId } : {},
+  }).then(unwrapEnvelope)
+}
+
+export function getMemoryFiles(spaceId) {
+  return request({
+    url: '/api/ai/memory/files',
+    method: 'GET',
+    params: { spaceId },
+  }).then(unwrapEnvelope)
+}
+
+export function getMemoryFile(spaceId, path) {
+  return request({
+    url: '/api/ai/memory/file',
+    method: 'GET',
+    params: { spaceId, path },
+  }).then(unwrapEnvelope)
+}
+
+export function saveMemoryFile({ spaceId, path, content, expectedRevision }) {
+  return request({
+    url: '/api/ai/memory/file',
+    method: 'PUT',
+    data: { spaceId, path, content, expectedRevision },
+    logBody: false,
+    header: { 'Content-Type': 'application/json' },
+  }).then(unwrapEnvelope)
+}
+
+export function deleteMemoryFile(spaceId, path, expectedRevision) {
+  return request({
+    url: `/api/ai/memory/file?spaceId=${encodeURIComponent(spaceId)}&path=${encodeURIComponent(path)}&expectedRevision=${encodeURIComponent(expectedRevision)}`,
+    method: 'DELETE',
+  }).then(unwrapEnvelope)
+}
+
+export function downloadMemoryFile(spaceId, path) {
+  return request({
+    url: '/api/ai/memory/download',
+    method: 'GET',
+    params: { spaceId, path },
+    responseType: 'arraybuffer',
+    logBody: false,
+  })
+}
+
 
 // ==================== 诉讼可视化（litviz） ====================
 
@@ -2808,12 +3830,12 @@ export function getLitigationDiagrams(projectId) {
   return request({ url: `/api/litigation-visual/projects/${projectId}/diagrams`, method: 'GET' })
 }
 
-/** 换视觉模式重画。用存下来的语义地图，内容一个字不会变。 */
-export function restyleLitigationDiagram(projectId, folderId, mode) {
+/** 根据保存的语义地图重画；调用方必须先确认覆盖当前手工修改。 */
+export function restyleLitigationDiagram(projectId, folderId, mode, confirmOverwrite = false) {
   return request({
     url: `/api/litigation-visual/projects/${projectId}/restyle`,
     method: 'POST',
-    data: { folderId, mode },
+    data: { folderId, mode, confirmOverwrite },
     header: { 'Content-Type': 'application/json' }
   })
 }
@@ -2841,3 +3863,4 @@ export function saveDrawioDiagram(projectId, fileId, payload) {
     header: { 'Content-Type': 'application/json' }
   })
 }
+

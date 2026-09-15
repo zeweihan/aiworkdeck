@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
 import com.checkba.model.entity.CloudConnection;
@@ -187,14 +190,21 @@ class CloudSyncUpdateTest {
                 return cannedHttpGetResponse;
             }
         };
+        // 三方合并（spec 2026-09-14 §4.4）：云端裁决也走同一条 MERGED 链路，
+        // 待决记录与分析服务在这里手工补上（生产路径是 Spring 字段注入）。
+        pendingStore = new com.checkba.version.merge.PendingMergeStore(repoSvc);
+        mergeAnalysis = new com.checkba.version.merge.MergeAnalysisService(repoSvc, pendingStore);
+        svc.setPendingMergeStoreForTest(pendingStore);
+        cloud.setMergeServicesForTest(mergeAnalysis, pendingStore);
     }
+
+    com.checkba.version.merge.PendingMergeStore pendingStore;
+    com.checkba.version.merge.MergeAnalysisService mergeAnalysis;
 
     // ---- helpers ------------------------------------------------------
 
     private String bareRemote(Path dir) throws Exception {
-        Git.init().setBare(true).setDirectory(dir.toFile())
-                .setInitialBranch("master").call().close();
-        return dir.toUri().toString();
+        return BareHub.init(dir);
     }
 
     /** 建一个 file:// 裸仓当云端 + CloudConnection/ProjectRemote 行，setRemoteOrigin 指过去。 */
@@ -343,6 +353,72 @@ class CloudSyncUpdateTest {
         assertTrue(Files.list(root.resolve("projects/7")).map(p -> p.getFileName().toString())
                 .anyMatch(n -> n.contains("来自：团队案件库")));
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare()); // 裁决后重推
+        // 裁决结果落进提交尾注（spec 2026-09-14 §2.2）
+        assertEquals(java.util.List.of(new VersionEntry.Resolution("合同.txt", "BOTH")),
+                repoSvc.log(7L, "master", 1).get(0).resolutions());
+    }
+
+    /**
+     * 三方合并（spec 2026-09-14 §4.4/§4.6）：云端取回撞车时逐处合好的文件走 {@code MERGED}
+     * 收尾——不再写任何一侧的原字节，而是认下工作区里那份合并结果，并把
+     * 「这一次是在云端语境里裁的」与「这份文件是逐处合的」两条记进提交尾注。
+     *
+     * <p>语境那一行是整条链的判别力所在：尾注里只有裸的 MAIN/DRAFT、M/T，
+     * 同一个标签在三语境里指向的物理侧完全不同（方向表见 version-control.md），
+     * 没有它，提交历史只能把「留了你这边」猜着写。
+     */
+    @Test
+    void cloudCompletesWithMergesTrailer() throws Exception {
+        openConflictWindow();
+
+        // resolve-file 的服务端效果：合并结果写回工作区 + 留一条待决记录
+        Files.writeString(root.resolve("projects/7/合同.txt"), "两边都收进来的第三稿");
+        pendingStore.put(7L, new com.checkba.version.merge.MergeRecord(
+                "合同.txt", "manual",
+                java.util.List.of(new com.checkba.version.merge.Decision("p3", "M", "A"),
+                        new com.checkba.version.merge.Decision("p7", "T", "A")),
+                0, 0));
+
+        CloudSyncService.UpdateResult done = cloud.resolveCloudMerge(7L,
+                Map.of("合同.txt", WorkSessionService.Resolution.MERGED), 1L, "韩泽伟");
+
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, done.status());
+        assertEquals("两边都收进来的第三稿", Files.readString(root.resolve("projects/7/合同.txt")),
+                "MERGED 一档一个字节都不许覆盖——写下去就是拿合并前的原文盖掉律师的成果");
+        VersionEntry head = repoSvc.log(7L, "master", 1).get(0);
+        assertEquals("cloud", head.mergeContext());
+        assertEquals(java.util.List.of(new VersionEntry.Resolution("合同.txt", "MERGED")),
+                head.resolutions());
+        assertEquals(java.util.List.of(new VersionEntry.MergeSummary("合同.txt", "manual",
+                        java.util.List.of(new com.checkba.version.merge.Decision("p3", "M", "A"),
+                                new com.checkba.version.merge.Decision("p7", "T", "A")), 0, 0)),
+                head.merges());
+        assertTrue(pendingStore.all(7L).isEmpty(), "收尾后待决记录清空");
+    }
+
+    /** 没有待决记录还报 MERGED：拒绝（工作区里躺着的还是带冲突标记的半成品）。 */
+    @Test
+    void cloudMergedWithoutPendingIsRejected() throws Exception {
+        openConflictWindow();
+
+        VersionException e = assertThrows(VersionException.class, () -> cloud.resolveCloudMerge(7L,
+                Map.of("合同.txt", WorkSessionService.Resolution.MERGED), 1L, "韩泽伟"));
+
+        assertTrue(e.isUserFacing());
+        assertTrue(repoSvc.repositoryMerging(7L), "被拒之后窗口仍开着，两边分毫无损");
+    }
+
+    /** 中止一次取回：待决记录跟着窗口一起清掉，下一次窗口读不到上一次的记录。 */
+    @Test
+    void abortCloudMergeClearsPending() throws Exception {
+        openConflictWindow();
+        pendingStore.put(7L, new com.checkba.version.merge.MergeRecord(
+                "合同.txt", "auto", java.util.List.of(), 2, 3));
+
+        cloud.abortCloudMerge(7L);
+
+        assertTrue(pendingStore.all(7L).isEmpty());
+        assertFalse(repoSvc.repositoryMerging(7L));
     }
 
     /**
@@ -534,7 +610,7 @@ class CloudSyncUpdateTest {
     private Path bareCloudRemote(long remoteProjectId, Path cloudRoot) throws Exception {
         Path bareRepoDir = cloudRoot.resolve("git").resolve(remoteProjectId + ".git");
         Files.createDirectories(bareRepoDir.getParent());
-        Git.init().setBare(true).setDirectory(bareRepoDir.toFile()).setInitialBranch("master").call().close();
+        BareHub.init(bareRepoDir);
         return bareRepoDir;
     }
 

@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
+import com.checkba.service.LangText;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +49,100 @@ public class PythonTools implements AgentToolComponent {
     private final com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
 
     private static final String DOCKER_IMAGE = "python:3.9-slim";
+
+    /** Docker 探测的等待上限。跑在 ToolRegistry 的 @PostConstruct 上，不能让后端启动卡在这里。 */
+    private static final long DOCKER_PROBE_TIMEOUT_SECONDS = 3;
+
+    /** 测试注入的探测结果，非 null 时优先于真实探测。 */
+    private volatile Boolean dockerAvailable;
+
+    /**
+     * 本机 Docker 是否可用。null = 还没探测过。
+     *
+     * <p>缓存到进程结束、且是<b>进程级</b>而不是每个实例一份：Docker 装没装是机器的属性，
+     * 而 fork 一个 docker 子进程有实打实的代价（Docker Desktop 装了没开的机器上
+     * {@code docker version} 要等上一两秒）。用户中途装上 Docker 的话重启后端即可。
+     */
+    private static volatile Boolean dockerProbeResult;
+
+    /**
+     * 没有 Docker 就不要把 run_python 摆到模型面前。
+     *
+     * <p>病灶（dev-board#396）：用户让 AI 读项目里的一张 jpg，模型抽不到文字后把 run_python
+     * 当成"另找一条 OCR 路子"，拿到的是 "Cannot run program docker"，于是它自己下结论
+     * 「OCR 环境（docker）不可用」并这样告诉用户——而图片其实一直能读（read_file /
+     * extract_file_text 自动走云端 OCR）。模型看不见这个工具，就不会走上这条死路。
+     */
+    @Override
+    public boolean isAvailable() {
+        return dockerReady();
+    }
+
+    /** 探测结果（带缓存）。绝不抛异常：调用方在启动路径上。 */
+    boolean dockerReady() {
+        Boolean override = dockerAvailable;
+        if (override != null) {
+            return override;
+        }
+        Boolean cached = dockerProbeResult;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (PythonTools.class) {
+            if (dockerProbeResult == null) {
+                dockerProbeResult = probeDocker();
+                log.info("Docker probe: {}",
+                        dockerProbeResult ? "available" : "unavailable (run_python is hidden)");
+            }
+            return dockerProbeResult;
+        }
+    }
+
+    /** 供测试直接注入探测结果，生产路径不调用（真实探测在 probeDocker）。 */
+    void overrideDockerAvailable(boolean available) {
+        this.dockerAvailable = available;
+    }
+
+    /**
+     * 判据是「docker 可执行文件在 且 docker version 成功」——只判可执行文件存在不够：
+     * Docker Desktop 装了没开的机器上 CLI 在、守护进程不在，run 一样起不来。
+     *
+     * <p>输出直接丢弃（不接管道）：接了管道又不读，输出撑满 OS 缓冲区时子进程会阻塞在 write 上，
+     * 探测就永远等不到退出。
+     */
+    private static boolean probeDocker() {
+        Process process = null;
+        try {
+            process = new ProcessBuilder("docker", "version")
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+            if (!process.waitFor(DOCKER_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return false;
+            }
+            return process.exitValue() == 0;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception e) {
+            // 找不到 docker 可执行文件时 start() 抛 IOException，这就是绝大多数用户机器的情形
+            return false;
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
+    /**
+     * stdout/stderr 排空缓冲区的字符数上限。本类自己定的默认值（非产品要求）：
+     * 病灶是子进程输出无上限地堆进 JVM 堆里的 StringBuilder——AI 脚本一次
+     * read_document 一份大文档再 print 出来，或死循环脚本在 120 秒超时前疯狂
+     * 打印，都可能把并发跑着的多个 run_python 共同挤爆后端堆，殃及其它请求。
+     * 2MB 字符足够容纳绝大多数正常调试/分析输出的可读部分。
+     */
+    static final int MAX_OUTPUT_CHARS = 2 * 1024 * 1024;
 
     // Python helper code that provides the default_api object
     private static final String PYTHON_API_BRIDGE = """
@@ -127,6 +225,20 @@ default_api = _ToolAPI()
         if (code == null || code.isBlank()) {
             return "Error: code is required.";
         }
+        if (!dockerReady()) {
+            // 这句话会被原样转述给用户，所以必须把边界划清楚：缺的只是"跑脚本的沙箱"。
+            // 不写最后一句的话，模型会把它推广成「这台机器的 OCR/文件读取不可用」（#396 的原病灶）。
+            return LangText.of(
+                    "Error: 本机没有可用的 Docker，Python 沙箱跑不起来，run_python 这条路走不通。"
+                            + "这只影响执行脚本，不影响读文件：项目里的图片和扫描件用 read_file 或 "
+                            + "extract_file_text 就能读，会自动走云端 OCR；企业工商信息用 qichacha_query、"
+                            + "财务数据用 tushare_query，都不需要脚本。",
+                    "Error: Docker is not available on this machine, so the Python sandbox cannot run and "
+                            + "run_python is not an option here. This only affects running scripts, not reading files: "
+                            + "images and scanned PDFs in the project are readable via read_file or extract_file_text "
+                            + "(cloud OCR runs automatically); company registry data via qichacha_query and financial "
+                            + "data via tushare_query need no script.");
+        }
         log.info("Tool: run_python called. Code length={}", code.length());
 
         // 只打**真正会注入**的那几项：平台代采档下一个都不注入，
@@ -207,31 +319,32 @@ default_api = _ToolAPI()
             
             long startTime = System.currentTimeMillis();
             long timeout = 120_000; // 2 minutes total
-            
+            // TOCTOU 修复（见 pollForToolRequest 注释）：Java 处理完一条请求后，
+            // 要等 Python 把 requestReadyPath 清理掉一次，才认下一次"exists"是新请求。
+            boolean awaitingPythonCleanup = false;
+
             while (process.isAlive()) {
                 // Check timeout
                 if (System.currentTimeMillis() - startTime > timeout) {
                     process.destroyForcibly();
                     return "Error: Python execution timed out (120s limit).";
                 }
-                
-                // Check for tool call request
-                if (Files.exists(requestReadyPath)) {
+
+                awaitingPythonCleanup = pollForToolRequest(requestReadyPath, awaitingPythonCleanup, () -> {
                     log.info("Detected tool call request from Python");
-                    
                     try {
                         // Read request
                         String requestJson = Files.readString(requestPath);
                         cn.hutool.json.JSONObject request = cn.hutool.json.JSONUtil.parseObj(requestJson);
-                        
+
                         String toolName = request.getStr("tool");
                         cn.hutool.json.JSONObject args = request.getJSONObject("args");
-                        
+
                         log.info("Python requesting tool: {} with args: {}", toolName, args);
-                        
+
                         // Execute tool
                         String result = executeToolForPython(toolName, args);
-                        
+
                         // Write result
                         cn.hutool.json.JSONObject resultObj = new cn.hutool.json.JSONObject();
                         if (result.startsWith("Error")) {
@@ -240,12 +353,12 @@ default_api = _ToolAPI()
                             resultObj.set("content", result);
                         }
                         Files.writeString(resultPath, resultObj.toString(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                        
+
                         // Signal result ready
                         Files.writeString(resultReadyPath, "1", StandardOpenOption.CREATE);
-                        
+
                         log.info("Tool result written for Python, length: {}", result.length());
-                        
+
                     } catch (Exception e) {
                         log.error("Error processing Python tool request", e);
                         cn.hutool.json.JSONObject errorResult = new cn.hutool.json.JSONObject();
@@ -253,8 +366,8 @@ default_api = _ToolAPI()
                         Files.writeString(resultPath, errorResult.toString(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
                         Files.writeString(resultReadyPath, "1", StandardOpenOption.CREATE);
                     }
-                }
-                
+                });
+
                 // Sleep briefly to avoid busy-waiting
                 Thread.sleep(100);
             }
@@ -276,7 +389,12 @@ default_api = _ToolAPI()
 
         } catch (Exception e) {
             log.error("Docker Python Error", e);
-            return "System Error executing Python in Docker: " + e.getMessage();
+            // 前缀必须是 "Error"：ToolResult.success() 只认前缀，"System Error ..." 会被判成成功，
+            // 失败熔断计数被清零、过程卡打绿勾（见 ToolFailureClassificationTest）
+            return LangText.of("Error: Python 沙箱执行失败（依赖本机 Docker）: ",
+                    "Error: Python sandbox failed (it depends on local Docker): ") + e.getMessage()
+                    + LangText.of("。这只影响执行脚本，不影响读文件与 OCR。",
+                    ". This only affects running scripts, not reading files or OCR.");
         } finally {
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();
@@ -293,7 +411,47 @@ default_api = _ToolAPI()
             }
         }
     }
-    
+
+    @FunctionalInterface
+    interface ThrowingRunnable {
+        void run() throws java.io.IOException;
+    }
+
+    /**
+     * 单次 IPC 轮询：检测/处理一条 Python 侧的工具调用请求，返回下一轮该带着的
+     * "还在等 Python 清理上一条标记" 状态。
+     *
+     * <p><b>TOCTOU 修复</b>（审计条目 "TOCTOU race on _request_ready marker can replay a
+     * stale tool request or cross-deliver results"）：Java 处理完一条请求、写完结果并置位
+     * resultReadyPath 后，此前会在下一轮（仅 100ms 之后）立刻又检查一次 requestReadyPath——
+     * 但 Python 侧按同样的 100ms 节奏独立轮询、双方没有加锁，它移除 requestReadyPath 的
+     * 清理动作不保证已经跑完（尤其是 Docker bind mount，文件可见性可能再抖上几十到几百毫秒）。
+     * 一旦 Java 在 Python 清理之前就又看见 requestReadyPath 存在，会把同一条 request.json
+     * 当成新请求重新处理一遍，或是与 Python 刚发出的下一条新请求交叉错配结果。
+     *
+     * <p>做法：处理完一条请求后记 {@code awaitingCleanup=true}；只要标记还在，就认定"还是刚才
+     * 那条、Python 还没清理"，不重新处理；等它消失过一次才重新开始把"exists"当成新请求。
+     * 包内可见（不是 private）：供测试直接驱动真实文件系统里的临时目录验证这个状态机，
+     * 不需要起 Docker 容器。
+     *
+     * @param handler 处理一条请求的完整逻辑（读 requestPath、执行工具、写 resultPath+resultReadyPath）
+     * @return 下一轮应带着的 awaitingCleanup 状态
+     */
+    static boolean pollForToolRequest(Path requestReadyPath, boolean awaitingCleanup, ThrowingRunnable handler)
+            throws java.io.IOException {
+        if (awaitingCleanup) {
+            if (Files.exists(requestReadyPath)) {
+                return true; // 仍是同一条标记，Python 还没清理，跳过，不重复处理
+            }
+            awaitingCleanup = false; // Python 已经清理过一次，这一条彻底翻篇
+        }
+        if (Files.exists(requestReadyPath)) {
+            handler.run();
+            return true;
+        }
+        return false;
+    }
+
     /**
      * 注入 Python 子进程的外部服务凭证（环境变量名 -> 值）。
      *
@@ -318,14 +476,27 @@ default_api = _ToolAPI()
 
     /**
      * 后台守护线程持续读取进程输出流到缓冲，防止管道写阻塞导致子进程挂死。
+     *
+     * <p>缓冲区有上限（{@link #MAX_OUTPUT_CHARS}）：超出后不再追加，但仍继续把流读空
+     * ——子进程输出超过 OS 管道缓冲（~64KB）就会阻塞在 write，停止读取会让进程
+     * 永远退不出去，只是把已经不需要的多余内容原地丢弃即可。
      */
-    private Thread pumpStream(java.io.InputStream in, StringBuilder sink) {
+    Thread pumpStream(java.io.InputStream in, StringBuilder sink) {
         Thread t = new Thread(() -> {
             try (BufferedReader r = new BufferedReader(
                     new InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
                 String line;
+                boolean truncated = false;
                 while ((line = r.readLine()) != null) {
-                    synchronized (sink) { sink.append(line).append('\n'); }
+                    synchronized (sink) {
+                        if (sink.length() < MAX_OUTPUT_CHARS) {
+                            sink.append(line).append('\n');
+                        } else if (!truncated) {
+                            sink.append("\n... [输出超过 ").append(MAX_OUTPUT_CHARS / (1024 * 1024))
+                                    .append("MB 上限，已截断] ...\n");
+                            truncated = true;
+                        }
+                    }
                 }
             } catch (java.io.IOException ignored) {
                 // 进程结束/流关闭时正常退出

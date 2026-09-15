@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.optimizer;
 
 import com.checkba.model.entity.FeedbackAttachment;
@@ -101,6 +104,20 @@ class RemoteFeedbackSourceTest {
         FeedbackAttachment a = new FeedbackAttachment();
         a.setId(3L);
         assertEquals(base + "/api/feedback/12/attachment/3", src.attachmentRef(fb, a));
+    }
+
+    /** 官网 admin 并入反馈看板后（dev-board#152），邮件直达地址可用模板改指官网。 */
+    @Test
+    void consoleRefUsesTemplateWhenConfigured() {
+        UserFeedback fb = new UserFeedback();
+        fb.setId(12L);
+        // 默认：云端反馈控制台
+        assertEquals(base + "/feedback-console/?fb=12",
+                new RemoteFeedbackSource(base, "tok").consoleRef(fb));
+        // 配了模板：{id} 被替换
+        RemoteFeedbackSource custom = new RemoteFeedbackSource(base, "tok",
+                "https://www.aiworkdeck.com/zh/admin?tab=feedback&fb={id}");
+        assertEquals("https://www.aiworkdeck.com/zh/admin?tab=feedback&fb=12", custom.consoleRef(fb));
     }
 
     @Test

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // COI service worker：给静态托管（加不了响应头的场景）兜底注入 COOP/COEP，
 // 让探针页拿到 crossOriginIsolated。仅探针使用；正式部署用 nginx 头。
 // 思路同社区通用的 coi-serviceworker（MIT）。

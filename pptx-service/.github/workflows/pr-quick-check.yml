@@ -92,6 +92,7 @@ jobs:
       
       - name: Start backend and test
         run: |
+          cp .env.example .env
           cd backend
           # Start in background
           uv run python app.py &

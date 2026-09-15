@@ -1,0 +1,220 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package com.checkba.controller;
+
+import com.checkba.exception.UnauthorizedException;
+import com.checkba.model.entity.MobileMediaInbox;
+import com.checkba.service.LangText;
+import com.checkba.service.mobile.MobileRelayStoreService;
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 手机端云中转（spec：aiworkdeck_mobile docs/specs/2026-08-20-project-sync-relay.md）。
+ *
+ * <p>鉴权一律 {@code X-Session-Id}：手机端带登录会话，桌面端带 awdt_ 设备令牌，
+ * {@link AuthController#getUserIdFromSession} 两种都解析。响应风格与
+ * {@code /api/projects/my} 一致（裸数组/裸对象，不带 code 信封）。
+ */
+@RestController
+@RequestMapping("/api/mobile")
+@Slf4j
+public class MobileRelayController {
+
+    private final MobileRelayStoreService store;
+
+    public MobileRelayController(MobileRelayStoreService store) {
+        this.store = store;
+    }
+
+    @Data
+    public static class DirectoryRequest {
+        private String deviceId;
+        private String deviceName;
+        private List<Entry> projects;
+
+        @Data
+        public static class Entry {
+            private String key;
+            private String name;
+        }
+    }
+
+    /** 桌面端：项目目录全量替换（按 userId + deviceId）。 */
+    @PutMapping("/projects")
+    public Map<String, Object> replaceDirectory(
+            @RequestBody DirectoryRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireUser(sessionId);
+        // deviceName 顺带写进心跳行：目录行为 0 的设备（空清单守卫保下来的形态）在
+        // listDevices 里也要有名字可用
+        store.touchDevice(userId, request.getDeviceId(), request.getDeviceName());
+        List<MobileRelayStoreService.DirEntry> entries = new ArrayList<>();
+        if (request.getProjects() != null) {
+            for (DirectoryRequest.Entry e : request.getProjects()) {
+                if (e != null) entries.add(new MobileRelayStoreService.DirEntry(e.getKey(), e.getName()));
+            }
+        }
+        MobileRelayStoreService.DirectoryReplaceResult result =
+                store.replaceDirectory(userId, request.getDeviceId(), request.getDeviceName(), entries);
+        // truncated/totalCount 明确带回（尽调 P3#5）：桌面端据此判断本轮推送有没有被截断，
+        // 不能只看 HTTP 2xx 就当成"全部同步成功"。
+        return Map.of("code", 0, "count", result.storedCount(),
+                "totalCount", result.totalCount(), "truncated", result.truncated());
+    }
+
+    /** 手机端：该账号全部设备的项目目录并集（裸数组）。 */
+    @GetMapping("/projects")
+    public List<Map<String, Object>> listDirectory(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return store.listDirectory(requireUser(sessionId));
+    }
+
+    /**
+     * 插件端（dev-board#250）：该账号全部设备清单，每台设备带在线态与其项目列表。
+     * 裸数组，鉴权同组。
+     */
+    @GetMapping("/devices")
+    public List<Map<String, Object>> listDevices(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return store.listDevices(requireUser(sessionId));
+    }
+
+    /** 手机端：上传一件现场影像到中转区（幂等键 clientMediaId）。 */
+    @PostMapping("/media")
+    public Map<String, Object> uploadMedia(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam("deviceId") String deviceId,
+            @RequestParam("projectKey") String projectKey,
+            @RequestParam("clientMediaId") String clientMediaId,
+            @RequestParam("fileName") String fileName,
+            @RequestParam("mediaType") String mediaType,
+            @RequestParam(value = "capturedAt", required = false) String capturedAt,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireUser(sessionId);
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException(LangText.of("未找到文件", "No file provided"));
+        }
+        LocalDateTime captured = parseCapturedAt(capturedAt);
+        try (InputStream in = file.getInputStream()) {
+            MobileMediaInbox item = store.storeMedia(
+                    userId, deviceId, projectKey, clientMediaId, fileName, mediaType, captured,
+                    file.getSize(), in);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("code", 0);
+            out.put("id", item.getId());
+            out.put("clientMediaId", item.getClientMediaId());
+            out.put("delivered", item.getDeliveredAt() != null);
+            return out;
+        } catch (IOException e) {
+            throw new IllegalStateException(LangText.of("影像暂存失败", "Failed to store media"), e);
+        }
+    }
+
+    /** 手机端：中转区用量与配额（裸对象，dev-board#226）。 */
+    @GetMapping("/media/usage")
+    public Map<String, Object> mediaUsage(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        return store.usage(requireUser(sessionId));
+    }
+
+    /** 手机端：查询影像投递状态（裸数组）。 */
+    @GetMapping("/media/status")
+    public List<Map<String, Object>> mediaStatus(
+            @RequestParam("clientMediaIds") String clientMediaIds,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireUser(sessionId);
+        List<String> ids = new ArrayList<>();
+        for (String id : clientMediaIds.split(",")) {
+            if (!id.isBlank()) ids.add(id.trim());
+        }
+        return store.status(userId, ids);
+    }
+
+    /** 桌面端：本设备待取件（元数据，裸数组）。 */
+    @GetMapping("/inbox")
+    public List<Map<String, Object>> inbox(
+            @RequestParam("deviceId") String deviceId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireUser(sessionId);
+        // 真心跳（dev-board#250）：桌面端 60 秒轮询这个端点，据此判定设备在线态。
+        store.touchDevice(userId, deviceId);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (MobileMediaInbox item : store.pendingForDevice(userId, deviceId)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", item.getId());
+            m.put("projectKey", item.getProjectKey());
+            m.put("clientMediaId", item.getClientMediaId());
+            m.put("fileName", item.getFileName());
+            m.put("mediaType", item.getMediaType());
+            m.put("fileSize", item.getFileSize());
+            m.put("capturedAt", item.getCapturedAt() != null ? item.getCapturedAt().toString() : null);
+            m.put("createdAt", item.getCreatedAt().toString());
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * 桌面端：取件字节流。契约红线（MobileRelayClientService 硬校验）：成功必须是
+     * 2xx + Content-Type application/octet-stream + 裸字节，不许 302 到签名 URL。
+     */
+    @GetMapping("/inbox/{id}/content")
+    public ResponseEntity<InputStreamResource> content(
+            @PathVariable("id") Long id,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireUser(sessionId);
+        MobileRelayStoreService.ContentBlob blob = store.openContent(userId, id);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_OCTET_STREAM_VALUE)
+                .contentLength(blob.length())
+                .body(new InputStreamResource(blob.stream()));
+    }
+
+    /** 桌面端：确认落盘。置 deliveredAt 并立即删除 blob。 */
+    @PostMapping("/inbox/{id}/ack")
+    public Map<String, Object> ack(
+            @PathVariable("id") Long id,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        store.ack(requireUser(sessionId), id);
+        return Map.of("code", 0);
+    }
+
+    private Long requireUser(String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        return userId;
+    }
+
+    private static LocalDateTime parseCapturedAt(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            // 手机端发 ISO-8601；带时区偏移的转成服务器本地时间，裸的按原样收
+            if (value.contains("+") || value.endsWith("Z")) {
+                return java.time.OffsetDateTime.parse(value)
+                        .atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDateTime();
+            }
+            return LocalDateTime.parse(value);
+        } catch (DateTimeParseException e) {
+            return null; // 拍摄时间是元数据，格式不对不该挡住上传
+        }
+    }
+}

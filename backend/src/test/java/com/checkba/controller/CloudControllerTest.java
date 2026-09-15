@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.CloudConnection;
@@ -31,6 +34,8 @@ class CloudControllerTest {
 
     @Mock
     private CloudSyncService cloudSyncService;
+    @Mock
+    private com.checkba.version.OfficialCloudService officialCloudService;
     @Mock
     private ProjectMemberService projectMemberService;
     @Mock
@@ -80,7 +85,7 @@ class CloudControllerTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.share(PROJECT_ID, Map.of("connectionId", 3), "sess"));
-            verify(cloudSyncService, never()).shareToCloud(anyLong(), anyLong(), any());
+            verify(officialCloudService, never()).shareProject(anyLong(), any(), any());
         }
     }
 
@@ -92,7 +97,7 @@ class CloudControllerTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.status(PROJECT_ID, "sess"));
-            verify(cloudSyncService, never()).cloudStatus(anyLong());
+            verify(cloudSyncService, never()).cloudStatus(anyLong(), any());
         }
     }
 
@@ -132,14 +137,15 @@ class CloudControllerTest {
                 IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, w);
                 assertEquals("无权修改该项目", ex.getMessage());
             }
-            verify(cloudSyncService, never()).shareToCloud(anyLong(), anyLong(), any());
+            verify(officialCloudService, never()).shareProject(anyLong(), any(), any());
             verify(cloudSyncService, never()).uploadToCloud(anyLong(), anyBoolean());
             verify(cloudSyncService, never()).updateFromCloud(anyLong(), any(), any());
             verify(cloudSyncService, never()).resolveCloudMerge(anyLong(), any(), any(), any());
             verify(cloudSyncService, never()).abortCloudMerge(anyLong());
             verify(cloudSyncService, never()).proxyMembers(anyLong(), any(), any());
 
-            when(cloudSyncService.cloudStatus(PROJECT_ID)).thenReturn(Map.of("linked", false));
+            // userId 一起传进去（spec 2026-09-14 §2.5：状态要说得出「是不是我自己交的」）
+            when(cloudSyncService.cloudStatus(PROJECT_ID, USER_ID)).thenReturn(Map.of("linked", false));
             when(cloudSyncService.proxyMembers(PROJECT_ID)).thenReturn(List.of());
             assertEquals(0, controller.status(PROJECT_ID, "sess").getBody().get("code"));
             assertEquals(0, controller.members(PROJECT_ID, "sess").getBody().get("code"));
@@ -267,6 +273,28 @@ class CloudControllerTest {
         }
     }
 
+    /** 整合落下的合并提交署名：展示名优先（spec 2026-09-10 §4），与 VersionController 同一口径。 */
+    @Test
+    void updateSignsWithTheDisplayNameRatherThanTheUsername() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            var user = new com.checkba.model.entity.User();
+            user.setUsername("awd_upoxwcdtg");
+            user.setDisplayName("韩律师");
+            when(userService.getUserById(USER_ID)).thenReturn(user);
+            when(cloudSyncService.updateFromCloud(anyLong(), any(), any()))
+                    .thenReturn(new CloudSyncService.UpdateResult(
+                            CloudSyncService.UpdateStatus.UPDATED, List.of(), null));
+
+            controller.update(PROJECT_ID, "sess");
+
+            verify(cloudSyncService).updateFromCloud(PROJECT_ID, USER_ID, "韩律师");
+        }
+    }
+
     @Test
     void resolveParsesValidResolutionsAndForwards() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
@@ -390,5 +418,164 @@ class CloudControllerTest {
 
         assertEquals(1, response.getBody().get("code"));
         assertEquals("请先把这份案卷放进团队案件库", response.getBody().get("message"));
+    }
+
+    // ---- 请求体缺字段：要报「参数不对」，不是 NPE / ClassCastException ----
+
+    /**
+     * 这几个端点直接把 body 里的值往下传或强转：
+     * connect 把 null 交给 {@code serverUrl.replaceAll(...)} 与 {@code Map.of(...)}（Map.of 不收 null），
+     * accept/share 是 {@code ((Number) body.get("connectionId")).longValue()}。
+     * 缺字段就 NPE、传字符串就 ClassCastException，用户看到的是「服务器内部错误」，
+     * 而真正的原因是请求少写了一个字段——两头都不知道该改什么。
+     */
+    @Test
+    void connectRejectsMissingFieldsWithUserFacingError() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.connect(Map.of("serverUrl", "https://x"), "s"),
+                    "缺 username/password 要明确报出来");
+            verify(cloudSyncService, never()).connect(any(), any(), any(), any(), any());
+        }
+    }
+
+    @Test
+    void acceptRejectsMissingOrNonNumericIds() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.accept(Map.of("remoteProjectId", 3), "s"), "缺 connectionId");
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.accept(Map.of("connectionId", "abc", "remoteProjectId", 3), "s"),
+                    "connectionId 不是数字");
+            verify(cloudSyncService, never()).cloneFromCloud(anyLong(), anyLong(), anyLong());
+        }
+    }
+
+    /**
+     * dev-board#439：缺 connectionId 不再是「参数错误」，而是「放进官方案件库」——
+     * 律师根本不知道自己连的是哪个库，一键放进去是主路径。指名了就照它来。
+     */
+    @Test
+    void shareWithoutAConnectionIdGoesToTheOfficialCaseLibrary() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(officialCloudService.shareProject(anyLong(), any(), any())).thenReturn(Map.of());
+
+            controller.share(PROJECT_ID, Map.of(), "s");
+            verify(officialCloudService).shareProject(PROJECT_ID, USER_ID, null);
+
+            controller.share(PROJECT_ID, Map.of("connectionId", 3), "s");
+            verify(officialCloudService).shareProject(PROJECT_ID, USER_ID, 3L);
+
+            // 「写了但不是数字」不等于「没写」：静默按缺省处理会把案卷送去调用方
+            // 根本没指定的地方（官方案件库）。
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.share(PROJECT_ID, Map.of("connectionId", "abc"), "s"));
+            // 上面缺省那次已经调过一次 null，这里断言坏值没有再促成第二次
+            verify(officialCloudService, times(1)).shareProject(PROJECT_ID, USER_ID, null);
+        }
+    }
+
+    /** 官方案件库状态与一键连接都是连接级端点：只要求登录，匿名一律拒。 */
+    @Test
+    void anonymousCannotUseTheOfficialCaseLibraryEndpoints() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession(null)).thenReturn(null);
+
+            assertThrows(IllegalArgumentException.class, () -> controller.official(null));
+            assertThrows(IllegalArgumentException.class, () -> controller.connectOfficial(null));
+            verify(officialCloudService, never()).connectOfficial(any());
+        }
+    }
+
+    /** 一键连接的回包绝不能带设备令牌（同 connectionListItem 的纪律）。 */
+    @Test
+    void connectOfficialResponseNeverCarriesTheDeviceToken() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+            CloudConnection conn = new CloudConnection();
+            conn.setId(3L);
+            conn.setServerUrl("https://case.aiworkdeck.com");
+            conn.setUsername("awd_hanzewei");
+            conn.setDeviceToken("awdt_secret");
+            when(officialCloudService.connectOfficial(USER_ID)).thenReturn(conn);
+
+            var resp = controller.connectOfficial("s");
+
+            assertFalse(String.valueOf(resp.getBody()).contains("awdt_secret"));
+        }
+    }
+
+    /** 律师输入的是手机号，控制层只透传，不做任何形态判断（解析在服务端）。 */
+    @Test
+    void addMemberForwardsAPhoneNumberUntouched() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+
+            controller.addMember(PROJECT_ID, Map.of("identifier", "13800138000"), "sess");
+
+            verify(cloudSyncService).proxyMembers(PROJECT_ID, "13800138000", "PARTICIPANT");
+        }
+    }
+
+    @Test
+    void addMemberRejectsMissingUsername() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.addMember(PROJECT_ID, Map.of("role", "PARTICIPANT"), "s"));
+            verify(cloudSyncService, never()).proxyMembers(anyLong(), any(), any());
+        }
+    }
+
+    /** 查人也是纯转发：identifier 原样带过去，回包原样带回来（found:false 不是错误）。 */
+    @Test
+    void lookupMemberForwardsTheIdentifierAndReturnsTheCardAsIs() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(cloudSyncService.proxyMemberLookup(PROJECT_ID, "13800138000"))
+                    .thenReturn(Map.of("found", true, "displayName", "李思",
+                            "maskedContact", "138****8000"));
+
+            var resp = controller.lookupMember(PROJECT_ID, "13800138000", "sess");
+
+            assertEquals(0, resp.getBody().get("code"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) resp.getBody().get("data");
+            assertEquals("李思", data.get("displayName"));
+            assertEquals("138****8000", data.get("maskedContact"));
+        }
+    }
+
+    /** 只读成员不能查人——查人本身是能力泄漏，谁不能加人谁就不该能查。 */
+    @Test
+    void readOnlyMemberCannotLookupPeople() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(false);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.lookupMember(PROJECT_ID, "13800138000", "sess"));
+            verify(cloudSyncService, never()).proxyMemberLookup(anyLong(), any());
+        }
     }
 }

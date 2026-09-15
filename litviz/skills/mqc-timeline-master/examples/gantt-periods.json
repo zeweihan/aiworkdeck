@@ -1,0 +1,113 @@
+{
+  "_note": "脱敏示例。甲方为投资方，乙方为原股东，丙公司为目标公司。本图比对约定的业绩考核窗口与实际发生的履行、迟延及权利主张期间，争点是案涉业务的利润应计入哪一考核年度，以及权利主张是否在时效内。约定期间以浅色画出，深红只标已发生且构成争点的那一段。",
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "layout": "proportional_gantt",
+  "title_text": "业绩考核窗口与履行、迟延及权利主张期间比对图",
+  "medium": "a4_landscape",
+  "axis": {
+    "mode": "proportional_year",
+    "start": "2015/01/01",
+    "end": "2021/12/31"
+  },
+  "spans": [
+    {
+      "id": "s1",
+      "unit_type": "stipulated",
+      "label_text": "2015年度业绩考核窗口（不低于600万元）",
+      "from": "2015/01/01",
+      "to": "2015/12/31"
+    },
+    {
+      "id": "s2",
+      "unit_type": "stipulated",
+      "label_text": "2016年度业绩考核窗口（不低于750万元）",
+      "from": "2016/01/01",
+      "to": "2016/12/31"
+    },
+    {
+      "id": "s3",
+      "unit_type": "stipulated",
+      "label_text": "补充协议调整后的累计考核窗口（两年合计不低于1260万元）",
+      "from": "2015/01/01",
+      "to": "2016/12/31"
+    },
+    {
+      "id": "s4",
+      "unit_type": "stipulated",
+      "label_text": "股权代持存续期间（至权益转出之日止）",
+      "from": "2016/05/26",
+      "to": "2020/10/21"
+    },
+    {
+      "id": "s5",
+      "unit_type": "period",
+      "label_text": "案涉业务约定履行期间（签约后三个月内交付）",
+      "from": "2016/03/03",
+      "to": "2016/06/03"
+    },
+    {
+      "id": "s6",
+      "unit_type": "period",
+      "label_text": "逾期未交付期间",
+      "from": "2016/06/03",
+      "to": "2017/01/20",
+      "emphasis": true
+    },
+    {
+      "id": "s7",
+      "unit_type": "period",
+      "label_text": "补充协议签订至起诉的沉默期间",
+      "from": "2017/11/02",
+      "to": "2020/10/21"
+    },
+    {
+      "id": "s8",
+      "unit_type": "period",
+      "label_text": "本案审理期间（受理至鉴定报告出具）",
+      "from": "2020/10/21",
+      "to": "2021/09/13"
+    }
+  ],
+  "points": [
+    {
+      "id": "p1",
+      "date": "2015/08/01",
+      "label_text": "签署投资协议",
+      "date_text": "2015.08.01"
+    },
+    {
+      "id": "p2",
+      "date": "2016/03/03",
+      "label_text": "签署采购合同",
+      "date_text": "2016.03.03"
+    },
+    {
+      "id": "p3",
+      "date": "2017/01/20",
+      "label_text": "设备安装完成",
+      "date_text": "2017.01.20"
+    },
+    {
+      "id": "p4",
+      "date": "2017/11/02",
+      "label_text": "签订补充协议",
+      "date_text": "2017.11.02"
+    },
+    {
+      "id": "p5",
+      "date": "2021/09/13",
+      "label_text": "出具司法鉴定报告",
+      "date_text": "2021.09.13"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim-condensed",
+    "note": "约定期间与事实期间以深浅区分；深红仅一处，标在构成争点的逾期未交付期间上。"
+  },
+  "checkpoint": {
+    "confirmed": false,
+    "extraction_confirmed": false,
+    "emphasis_source": "user"
+  }
+}

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.evidence;
 
 import com.checkba.service.ai.mcp.McpClientService;
@@ -12,6 +15,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -48,7 +52,7 @@ class McpEvidenceRetrieverTest {
 
     @Test
     void requestCarriesAllContractFields() {
-        when(mcp.callTool(any(), any(), any())).thenReturn("{\"items\":[]}");
+        when(mcp.callTool(anyString(), anyString(), any())).thenReturn("{\"items\":[]}");
 
         retriever.retrieve(query());
 
@@ -66,7 +70,7 @@ class McpEvidenceRetrieverTest {
 
     @Test
     void wellFormedResponseIsParsed() {
-        when(mcp.callTool(any(), any(), any())).thenReturn(VALID_RESPONSE);
+        when(mcp.callTool(anyString(), anyString(), any())).thenReturn(VALID_RESPONSE);
 
         List<EvidenceItem> items = retriever.retrieve(query());
 
@@ -82,7 +86,7 @@ class McpEvidenceRetrieverTest {
 
     @Test
     void missingLocator_itemIsDroppedNotFabricated() {
-        when(mcp.callTool(any(), any(), any())).thenReturn("""
+        when(mcp.callTool(anyString(), anyString(), any())).thenReturn("""
                 {"items":[
                   {"evidence_id":"no-locator","source_uri":"https://x","excerpt":"没有定位符"},
                   {"evidence_id":"ok","source_uri":"https://y","locator":"p3","excerpt":"完整"}
@@ -96,19 +100,19 @@ class McpEvidenceRetrieverTest {
 
     @Test
     void revokedAccess_errorResponseDegradesToEmpty() {
-        when(mcp.callTool(any(), any(), any())).thenReturn("Error: MCP server is disabled: law-server");
+        when(mcp.callTool(anyString(), anyString(), any())).thenReturn("Error: MCP server is disabled: law-server");
         assertTrue(retriever.retrieve(query()).isEmpty());
     }
 
     @Test
     void malformedJsonDegradesToEmpty() {
-        when(mcp.callTool(any(), any(), any())).thenReturn("<html>gateway timeout</html>");
+        when(mcp.callTool(anyString(), anyString(), any())).thenReturn("<html>gateway timeout</html>");
         assertTrue(retriever.retrieve(query()).isEmpty());
     }
 
     @Test
     void idempotentReplay_sameIdsAndHashes() {
-        when(mcp.callTool(any(), any(), any())).thenReturn(VALID_RESPONSE);
+        when(mcp.callTool(anyString(), anyString(), any())).thenReturn(VALID_RESPONSE);
 
         List<EvidenceItem> first = retriever.retrieve(query());
         List<EvidenceItem> second = retriever.retrieve(query());

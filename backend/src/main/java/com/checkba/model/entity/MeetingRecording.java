@@ -1,9 +1,16 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.model.entity;
 
+import com.checkba.model.dto.MeetingTranscriptionProgress;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.persistence.*;
 import lombok.Data;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -16,12 +23,17 @@ import java.time.LocalDateTime;
 @Table(name = "meeting_recording")
 public class MeetingRecording {
 
-    /** 状态流转（只前进不回退，FAILED 可经 transcribe 重回 TRANSCRIBING） */
+    /**
+     * 状态流转（只前进不回退，FAILED/EMPTY 均可经 transcribe 重回 TRANSCRIBING）。
+     * EMPTY 与 FAILED 同级终态：任务本身跑完了，但没识别到人声（无人说话/录音过短），
+     * 不是失败——听悟对这类音频的合法返回就是空 segments。
+     */
     public static final String STATUS_RECORDING = "RECORDING";
     public static final String STATUS_RECORDED = "RECORDED";
     public static final String STATUS_TRANSCRIBING = "TRANSCRIBING";
     public static final String STATUS_TRANSCRIBED = "TRANSCRIBED";
     public static final String STATUS_FAILED = "FAILED";
+    public static final String STATUS_EMPTY = "EMPTY";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -39,6 +51,13 @@ public class MeetingRecording {
 
     /** 录音音频在项目文件树里的 ProjectFile ID */
     private Long audioFileId;
+
+    /**
+     * 本记录是否「代管」音频文件（dev-board#227）。面板录音流程自建的占位文件归本记录管，
+     * 删除记录连带删文件；资源管理器右键转写注册的是用户已有的文件，删除记录时绝不能
+     * 动它。null（存量行）一律视同 true——存量行全部来自面板流程。
+     */
+    private Boolean ownsAudioFile;
 
     /** 录音时长（毫秒），结束录音时由前端回报 */
     private Long durationMs;
@@ -63,12 +82,25 @@ public class MeetingRecording {
     private LocalDateTime lastPolledAt;
 
     /**
+     * 进入 TRANSCRIBING 的时刻（dev-board#532）。卡死判定与界面「已用时」的<b>唯一锚点</b>。
+     *
+     * <p>刻意不复用 {@code updatedAt}：poll-on-read 每 10 秒就把 lastPolledAt 落一次库，
+     * updatedAt 因此永远是「刚刚」，拿它算已用时会让超时判定形同虚设。
+     * 也不复用 {@code createdAt}：那是建档时刻，早于真正开始转写（中间还隔着整场录音），
+     * 拿它算会高估已用时，可能把刚提交不久的健康任务判死。
+     */
+    private LocalDateTime transcribingStartedAt;
+
+    /**
      * 转写结果（压缩后的段落 JSON 数组）：
      * [{"speaker":"1","start":毫秒,"end":毫秒,"text":"..."}]
      * speaker 是听悟的说话人编号字符串，展示名经 speakerNames 映射。
+     *
+     * <p>长文本不用 @Lob：PG 方言下 @Lob String 走 large-object（oid）读写会炸，
+     * LONGVARCHAR + TEXT 在 H2（MODE=PostgreSQL）与 PG 双方言通吃（summaryJson 同理）。
      */
-    @Lob
-    @Column(columnDefinition = "CLOB")
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(columnDefinition = "TEXT")
     private String transcriptJson;
 
     /** 说话人改名映射 JSON：{"1":"张律师","2":"对方代理人"}，未改名的用默认「说话人N」 */
@@ -79,8 +111,8 @@ public class MeetingRecording {
      * 听悟增值结果 JSON：{"chapters":[...],"summary":"...","todos":[...],"keywords":[...]}
      * 作为纪要生成的素材，缺失不影响主流程。
      */
-    @Lob
-    @Column(columnDefinition = "CLOB")
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(columnDefinition = "TEXT")
     private String summaryJson;
 
     /** 最近一次失败原因（FAILED 态展示与排障用） */
@@ -96,4 +128,14 @@ public class MeetingRecording {
 
     @UpdateTimestamp
     private LocalDateTime updatedAt;
+
+    /**
+     * 「转写中」的进度提示（dev-board#532），<b>不入库</b>：由
+     * {@code MeetingTranscriptionService.attachProgress} 在出接口前算好挂上，
+     * 随本实体一起序列化给前端。非 TRANSCRIBING 时为 null 且不出现在 JSON 里，
+     * 既有字段一个都没动。
+     */
+    @Transient
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private MeetingTranscriptionProgress progress;
 }

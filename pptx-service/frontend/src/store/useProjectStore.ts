@@ -23,7 +23,7 @@ interface ProjectState {
   setError: (error: string | null) => void;
   
   // 项目操作
-  initializeProject: (type: 'idea' | 'outline' | 'description', content: string, templateImage?: File, templateStyle?: string, referenceFileIds?: string[]) => Promise<void>;
+  initializeProject: (type: 'idea' | 'outline' | 'description', content: string, templateImage?: File, templateStyle?: string, referenceFileIds?: string[], aspectRatio?: string) => Promise<void>;
   syncProject: (projectId?: string) => Promise<void>;
   
   // 页面操作
@@ -37,12 +37,13 @@ interface ProjectState {
   startAsyncTask: (apiCall: () => Promise<any>) => Promise<void>;
   pollTask: (taskId: string) => Promise<void>;
   pollImageTask: (taskId: string, pageIds: string[]) => void;
-  
+
   // 生成操作
   generateOutline: () => Promise<void>;
   generateFromDescription: () => Promise<void>;
   generateDescriptions: () => Promise<void>;
   generatePageDescription: (pageId: string) => Promise<void>;
+  regenerateRenovationPage: (pageId: string, keepLayout?: boolean) => Promise<void>;
   generateImages: (pageIds?: string[]) => Promise<void>;
   editPageImage: (
     pageId: string,
@@ -120,7 +121,7 @@ const debouncedUpdatePage = debounce(
   setError: (error) => set({ error }),
 
   // 初始化项目
-  initializeProject: async (type, content, templateImage, templateStyle, referenceFileIds) => {
+  initializeProject: async (type, content, templateImage, templateStyle, referenceFileIds, aspectRatio) => {
     set({ isGlobalLoading: true, error: null });
     try {
       const request: any = {};
@@ -136,6 +137,11 @@ const debouncedUpdatePage = debounce(
       // 添加风格描述（如果有）
       if (templateStyle && templateStyle.trim()) {
         request.template_style = templateStyle.trim();
+      }
+
+      // 添加画面比例（如果有）
+      if (aspectRatio) {
+        request.image_aspect_ratio = aspectRatio;
       }
 
       // 1. 创建项目
@@ -714,6 +720,59 @@ const debouncedUpdatePage = debounce(
     }
   },
 
+  // 重新生成 PPT 翻新项目的单页（重新解析原 PDF 并提取内容）
+  regenerateRenovationPage: async (pageId: string, keepLayout: boolean = false) => {
+    const { currentProject, pageDescriptionGeneratingTasks } = get();
+    if (!currentProject) return;
+
+    // 如果该页面正在生成，不重复提交
+    if (pageDescriptionGeneratingTasks[pageId]) {
+      console.log(`[PPT翻新] 页面 ${pageId} 正在生成中，跳过重复请求`);
+      return;
+    }
+
+    set({ error: null });
+
+    // 标记为生成中
+    set({
+      pageDescriptionGeneratingTasks: {
+        ...pageDescriptionGeneratingTasks,
+        [pageId]: true,
+      },
+    });
+
+    try {
+      const response = await api.regenerateRenovationPage(currentProject.id, pageId, keepLayout);
+
+      // 使用 API 返回的页面数据直接更新 store
+      if (response.data) {
+        const updatedPageData = response.data;
+        const { currentProject: latestProject } = get();
+        if (latestProject) {
+          const updatedPages = latestProject.pages.map((page) =>
+            page.id === pageId ? { ...page, ...updatedPageData } : page
+          );
+          set({
+            currentProject: {
+              ...latestProject,
+              pages: updatedPages,
+            },
+          });
+          console.log(`[PPT翻新] 页面 ${pageId} 大纲和描述已更新`);
+        }
+      }
+    } catch (error: any) {
+      set({ error: normalizeErrorMessage(error.message || '重新生成失败') });
+      throw error;
+    } finally {
+      // 清除生成状态
+      const { pageDescriptionGeneratingTasks: currentTasks } = get();
+      const newTasks = { ...currentTasks };
+      delete newTasks[pageId];
+      set({ pageDescriptionGeneratingTasks: newTasks });
+    }
+  },
+
   // 生成图片（非阻塞，每个页面显示生成状态）
   generateImages: async (pageIds?: string[]) => {
     const { currentProject, pageGeneratingTasks } = get();
@@ -863,6 +922,25 @@ const debouncedUpdatePage = debounce(
           // 继续轮询，同时同步项目数据以更新页面状态
           console.log(`[批量轮询] Task ${taskId} 处理中，同步项目数据...`);
           await get().syncProject();
+
+          // 逐个释放已完成的页面，让缩略图立刻显示
+          const { currentProject: proj, pageGeneratingTasks: pgt } = get();
+          if (proj) {
+            const updated = { ...pgt };
+            let changed = false;
+            pageIds.forEach(id => {
+              if (updated[id] === taskId) {
+                const page = proj.pages.find(p => p.id === id);
+                // 后端完成后 status 从 GENERATING → COMPLETED
+                if (page && page.status !== 'GENERATING') {
+                  delete updated[id];
+                  changed = true;
+                }
+              }
+            });
+            if (changed) set({ pageGeneratingTasks: updated });
+          }
+
           console.log(`[批量轮询] Task ${taskId} 处理中，2秒后继续轮询...`);
           setTimeout(poll, 2000);
         } else {

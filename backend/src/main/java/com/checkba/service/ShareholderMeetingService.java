@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.ProjectFile;
@@ -10,7 +13,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
@@ -22,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 股东大会核查会话管理：建档、材料关联。
@@ -51,6 +59,23 @@ public class ShareholderMeetingService {
     private final StorageServiceFactory storageServiceFactory;
     private final CninfoAnnouncementService cninfoService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * 本 bean 的懒加载自身代理，只为让 {@link #ensureFolderTx} 经 Spring 的事务代理真正开出
+     * 独立新事务——写法与 {@link ProjectProfileService#self}、{@link DdService#self} 同一套，
+     * 三处 ensureFolder 是同一形状的 check-then-create 竞态、同一套修法。
+     */
+    @Autowired
+    @Lazy
+    ShareholderMeetingService self;
+
+    /**
+     * ensureFolder 按 (projectId, parentId, name) 序列化"查是否已有 + 没有就建"这段临界区，
+     * 理由与 {@link DdService#ensureFolderLocks} 完全一致：project_file 不加唯一约束，
+     * 没有"插入撞约束后重查"的退路，只能靠进程内锁 + REQUIRES_NEW 子事务把"查+建"钉死成
+     * 一个原子操作——锁必须包住子事务的提交，不能只包住方法调用本身。
+     */
+    private final ConcurrentHashMap<String, Object> ensureFolderLocks = new ConcurrentHashMap<>();
 
     public List<ShareholderMeetingCheck> list(Long projectId) {
         return checkRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
@@ -145,6 +170,15 @@ public class ShareholderMeetingService {
      * 幂等确保文件夹存在（同名已存在则直接返回）。
      */
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {
+        String key = projectId + "/" + parentId + "/" + name;
+        Object lock = ensureFolderLocks.computeIfAbsent(key, k -> new Object());
+        synchronized (lock) {
+            return self.ensureFolderTx(projectId, parentId, name, userId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ProjectFile ensureFolderTx(Long projectId, Long parentId, String name, Long userId) {
         Optional<ProjectFile> existing = projectFileRepository
                 .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, name);
         if (existing.isPresent() && Boolean.TRUE.equals(existing.get().getIsFolder())) {
@@ -154,25 +188,47 @@ public class ShareholderMeetingService {
     }
 
     /**
+     * 同一 checkId 的底稿夹装配互斥用的分条锁。
+     *
+     * <p>ensureFolder 是「查不到就建」，查和建之间没有锁；start()/fetchFromCninfo() 都会
+     * 调 ensureWorkpaperFolders，双击「开始核查」或前端网络重试都可能并发命中。这条链路
+     * 里 ensureWorkpaperFolders/ensureFolder 本身都不是 @Transactional，真正的提交只发生
+     * 在 projectFileService.createFolder() 这个独立代理调用内部、同步完成——所以把锁包在
+     * 这整段外层能如实盖住提交，不是「锁在 @Transactional 方法里、提交前就放了」那种假修。
+     *
+     * <p>用固定条数的锁数组而不是按 id 建锁的 Map：写法与 ProjectMemoryExtractor 的
+     * PROJECT_LOCKS 同款，避免锁随 check 数量无界增长。单实例基线，多实例部署需要外置锁。
+     */
+
+
+    /**
      * 确保底稿夹五级子目录就绪，回写 workpaperFolderId。
      * 返回 slot 子文件夹名 → 文件夹 ID 的映射。
      */
+    /**
+     * 这里不再自己加锁：真正需要互斥的是「同名文件夹的查了再建」，而那道闸已经在
+     * {@link #ensureFolder} 里按 (projectId, parentId, name) 加了，并且配了 REQUIRES_NEW
+     * 让它盖住那次独立提交。在外面再包一层按 checkId 的锁是同一件事的第二套机制，
+     * 保护范围更粗、还容易让下一个人不知道该看哪一个。
+     */
     public Map<String, Long> ensureWorkpaperFolders(ShareholderMeetingCheck check, Long userId) {
-        Long projectId = check.getProjectId();
-        ProjectFile root = ensureFolder(projectId, null, WORKPAPER_ROOT, userId);
-        String checkFolderName = sanitizeName(check.getCompanyName() + "_" + check.getMeetingName());
-        ProjectFile checkFolder = ensureFolder(projectId, root.getId(), checkFolderName, userId);
+        {
+            Long projectId = check.getProjectId();
+            ProjectFile root = ensureFolder(projectId, null, WORKPAPER_ROOT, userId);
+            String checkFolderName = sanitizeName(check.getCompanyName() + "_" + check.getMeetingName());
+            ProjectFile checkFolder = ensureFolder(projectId, root.getId(), checkFolderName, userId);
 
-        Map<String, Long> folders = new LinkedHashMap<>();
-        for (String sub : List.of(FOLDER_NOTICE, FOLDER_RESOLUTION, FOLDER_VOTE, FOLDER_WORKPAPER, FOLDER_OPINION)) {
-            folders.put(sub, ensureFolder(projectId, checkFolder.getId(), sub, userId).getId());
-        }
+            Map<String, Long> folders = new LinkedHashMap<>();
+            for (String sub : List.of(FOLDER_NOTICE, FOLDER_RESOLUTION, FOLDER_VOTE, FOLDER_WORKPAPER, FOLDER_OPINION)) {
+                folders.put(sub, ensureFolder(projectId, checkFolder.getId(), sub, userId).getId());
+            }
 
-        if (!checkFolder.getId().equals(check.getWorkpaperFolderId())) {
-            check.setWorkpaperFolderId(checkFolder.getId());
-            checkRepository.save(check);
+            if (!checkFolder.getId().equals(check.getWorkpaperFolderId())) {
+                check.setWorkpaperFolderId(checkFolder.getId());
+                checkRepository.save(check);
+            }
+            return folders;
         }
-        return folders;
     }
 
     /** 文件夹/文件名清洗：剥掉路径分隔符等非法字符（validateNodeName 会拒绝） */
@@ -182,17 +238,38 @@ public class ShareholderMeetingService {
 
     /**
      * 把字节流保存为项目文件（幂等：同名同目录则覆盖更新）。
+     *
+     * createOrUpdateFile 自带 @Transactional，是独立于本类的一次提交；写字节失败时
+     * 行已经落库，不补偿就会在文件树里留一条有名有大小、内容不存在的僵尸文件。
+     * 只清理"这次新建的"行——如果 createOrUpdateFile 命中的是已有行（重复抓取覆盖
+     * 更新），那条行在写字节失败前还指向一份能打开的旧内容，删掉反而比"元数据先一步
+     * 被改成新值"更糟，所以只在确认是新建时才删除。
      */
     private ProjectFile saveBytesAsProjectFile(Long projectId, Long parentId, String fileName,
                                                String fileType, byte[] bytes, Long userId) {
+        String cleanName = sanitizeName(fileName);
+        boolean isNewFile = projectFileRepository
+                .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, cleanName)
+                .isEmpty();
         ProjectFile file = projectFileService.createOrUpdateFile(
-                projectId, parentId, sanitizeName(fileName), fileType, (long) bytes.length, null, null, userId);
-        String savedPath = storageServiceFactory.getStorageService()
-                .save(file.getFilePath(), new ByteArrayInputStream(bytes));
-        file.setFilePath(savedPath);
-        file.setFileSize((long) bytes.length);
-        file.setUpdatedAt(LocalDateTime.now());
-        return projectFileRepository.save(file);
+                projectId, parentId, cleanName, fileType, (long) bytes.length, null, null, userId);
+        try {
+            String savedPath = storageServiceFactory.getStorageService()
+                    .save(file.getFilePath(), new ByteArrayInputStream(bytes));
+            file.setFilePath(savedPath);
+            file.setFileSize((long) bytes.length);
+            file.setUpdatedAt(LocalDateTime.now());
+            return projectFileRepository.save(file);
+        } catch (RuntimeException e) {
+            if (isNewFile) {
+                try {
+                    projectFileRepository.deleteById(file.getId());
+                } catch (Exception cleanupEx) {
+                    log.warn("写盘失败后清理孤儿文件行也失败: fileId={}", file.getId(), cleanupEx);
+                }
+            }
+            throw e;
+        }
     }
 
     // ==================== 巨潮拉取 ====================
@@ -301,10 +378,21 @@ public class ShareholderMeetingService {
         return id == null ? List.of() : List.of(id);
     }
 
-    private List<ProjectFile> findFiles(List<Long> ids) {
+    /**
+     * 按 id 取材料文件，**排除回收站里的**。
+     *
+     * <p>裸 findById 不过滤 isDeleted，而 ProjectFileService 完全不知道股东大会核查这回事、
+     * 文件被删时从不解绑材料槽。于是材料被丢进回收站之后，kick-off prompt 仍把它列成
+     * 一份在场的材料、也不进「缺失材料」告警——与这段代码为 null 槽位精心实现的
+     * 缺失提示自相矛盾；若文件已被彻底删除，后续复制或 AI 读取还会失败，
+     * 而清单从没提醒过它没了。
+     */
+    List<ProjectFile> findFiles(List<Long> ids) {
         List<ProjectFile> files = new ArrayList<>();
         for (Long id : ids) {
-            projectFileRepository.findById(id).ifPresent(files::add);
+            projectFileRepository.findById(id)
+                    .filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
+                    .ifPresent(files::add);
         }
         return files;
     }

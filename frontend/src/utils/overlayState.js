@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 页面之外的全屏浮层开关（当前只有反馈浮窗用）。
 //
 // 为什么要有这么一个模块级 ref：桌面端的 BrowserView 是原生层，永远盖在 DOM 上面，

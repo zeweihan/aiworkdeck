@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
 import com.checkba.config.AiModelProperties;
@@ -11,6 +14,8 @@ import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiChannel;
 import com.checkba.service.ai.PptxServiceClient;
 import com.checkba.service.ai.EditorBridgeService;
+import com.checkba.service.pack.NativePackService;
+import com.checkba.service.pack.OptionalComponents;
 import com.checkba.storage.StorageServiceFactory;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -60,6 +65,9 @@ public class PptxTools implements AgentToolComponent {
     private final PlatformAiChannel platformAiChannel;
 
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    // pptx-service 从 0.38.0 起不随安装包分发，改由 pptx-runtime 这个可选组件按需下载
+    private final NativePackService packService;
+
     private static final Long AGENT_USER_ID = 10001L;
 
     // ==================== 文件管理工具 ====================
@@ -215,20 +223,60 @@ public class PptxTools implements AgentToolComponent {
 
     // ==================== 服务检查工具 ====================
 
+    /**
+     * 服务打不通时分两种情况处置：
+     * - runtime pack 没装（0.38.0 起新装机器的常态）→ 发 component_required 引导下载，
+     *   返回给模型的文本明说「已请用户确认下载」，模型不该再喊「稍后重试」；
+     * - pack 装了只是进程没起 → 维持原状（重试是有意义的）。
+     *
+     * @return 已发提示则返回给模型的说明文本；不该发提示时返回 null
+     */
+    private String promptComponentIfMissing(String trigger) {
+        OptionalComponents.Entry e = OptionalComponents.byService("pptx-service");
+        if (packService.isReady(e.packId())) return null;
+        long sizeMb = packService.knownSizes(e.packId()).downloadBytes() / (1024 * 1024);
+        editorBridgeService.sendComponentRequiredAction(
+                e.packId(), e.service(), e.modelId(), sizeMb, e.featureKeys(), trigger);
+        // 文案里刻意不出现「稍后重试」四个字（含在「不要说稍后重试」这类否定句里也不行）：
+        // 模型抄工具返回文本是常态，出现即会被原样转述给用户，而组件没装时等下去毫无意义。
+        return "本机的「PPT 生成与 PDF 转 Word」还没安装，已请用户确认下载（界面上已经弹出提示）。"
+                + "用户确认后组件会自动装好并重新执行这一步，你现在不需要重复调用本工具，"
+                + "也不要让用户等一会儿再试一次。这只影响 PPT 生成与 PDF 版式级转换，不影响读文件。";
+    }
+
+    /**
+     * 可编辑导出额外依赖 mineru-runtime：版面分析（文字/表格的 bbox）由 pptx-service 转发给
+     * 本机 MinerU 引擎做，pack 没装就必然失败。与 pptx 那份同一套处置：发 component_required
+     * 引导下载，文案里不出现「稍后重试」。
+     *
+     * @return 已发提示则返回给模型的说明文本；不该发提示时返回 null
+     */
+    private String promptMineruIfMissing(String trigger) {
+        OptionalComponents.Entry e = OptionalComponents.byService("mineru-service");
+        if (packService.isReady(e.packId())) return null;
+        long sizeMb = packService.knownSizes(e.packId()).downloadBytes() / (1024 * 1024);
+        editorBridgeService.sendComponentRequiredAction(
+                e.packId(), e.service(), e.modelId(), sizeMb, e.featureKeys(), trigger);
+        return "本机的「扫描件 OCR 引擎（MinerU）」还没安装，可编辑导出要靠它做版面分析（认出文字块与表格），"
+                + "已请用户确认下载（界面上已经弹出提示，含模型）。用户确认后组件会自动装好并重新执行这一步，"
+                + "你现在不需要重复调用本工具，也不要让用户等一会儿再试一次。"
+                + "在此之前只能导出纯图片版 PPT。";
+    }
+
     @ToolMeta(displayName = "检查PPT服务", category = "pptx")
     @Tool("检查 PPTX 生成服务是否可用。在生成 PPT 之前应先调用此工具确认服务状态。")
     public String pptx_check_service() {
         log.info("Tool: pptx_check_service called");
         try {
-            boolean healthy = pptxServiceClient.isHealthy();
-            if (healthy) {
+            if (pptxServiceClient.isHealthy()) {
                 return "PPTX 生成服务运行正常，可以开始生成 PPT。";
-            } else {
-                return "PPTX 生成服务不可用。请确保已启动 Docker 服务：docker-compose up -d pptx-service";
             }
+            String prompt = promptComponentIfMissing("pptx_check_service");
+            if (prompt != null) return prompt;
+            return "PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
         } catch (Exception e) {
             log.error("Failed to check PPTX service", e);
-            return "检查服务状态失败: " + e.getMessage() + "。请确保 Docker 服务已启动。";
+            return "检查服务状态失败: " + e.getMessage() + "。这只影响 PPT 生成，不影响读文件与 OCR。";
         }
     }
 
@@ -254,7 +302,11 @@ public class PptxTools implements AgentToolComponent {
                                 String fileName, String style, String language, String modelId) {
         
         log.info("Tool: pptx_generate called (UI Interceptor), topic={}", topic);
-        
+
+        // 组件没装就不要先弹生成配置弹窗：用户填完一堆选项才发现没引擎是最糟的顺序
+        String prompt = promptComponentIfMissing("pptx_generate");
+        if (prompt != null) return prompt;
+
         // 构造参数 Map
         java.util.Map<String, Object> params = new java.util.HashMap<>();
         params.put("topic", topic);
@@ -303,11 +355,15 @@ public class PptxTools implements AgentToolComponent {
                                           String modelId, String conversationId, Long userId,
                                           boolean exportEditable) {
         log.info("Info: pptx_generate_internal start, topic={}, editable={}", topic, exportEditable);
-        
+
+        // 提到外层 try 之外声明：下面两条异常路径（DB 注册失败的内层 catch、方法级的外层 catch）
+        // 都要在失败时把这个任务标成 failTask，否则 registerTask 登记的这条 RUNNING 永远留在
+        // BackgroundTaskService 的三张表里——hasActiveTasks 恒为 true，前端进度卡永远转下去。
+        String taskId = null;
         try {
             // 检查服务
             if (!pptxServiceClient.isHealthy()) {
-                return "错误：PPTX 生成服务不可用。请先启动 Docker 服务：docker-compose up -d pptx-service";
+                return "错误：PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
             }
             
             // 验证父文件夹存在（如果指定）
@@ -352,8 +408,7 @@ public class PptxTools implements AgentToolComponent {
             log.info("Starting PPTX generation to: {}, using model: {}, exportEditable: {}", localPath, modelId, exportEditable);
             PptxServiceClient.PptxGenerationResult result;
             
-            // 如果有 conversationId，使用带进度回调的版本
-            String taskId = null;
+            // 如果有 conversationId，使用带进度回调的版本（taskId 已提到外层 try 之外声明）
             if (conversationId != null && userId != null) {
                 // 注册后台任务
                 taskId = backgroundTaskService.registerTask(
@@ -457,8 +512,12 @@ public class PptxTools implements AgentToolComponent {
                 return successMsg.toString();
                 
             } catch (Exception e) {
-                // 文件已生成但注册失败
+                // 文件已生成但注册失败：任务对用户而言并未真正完成（文件不在项目文件树里可用），
+                // 之前这里直接 return，taskId 那条 RUNNING 记录永远留在 BackgroundTaskService 里。
                 log.warn("PPTX file created but DB registration failed", e);
+                if (taskId != null) {
+                    backgroundTaskService.failTask(taskId, "PPTX 已生成但注册到数据库失败: " + e.getMessage());
+                }
                 return String.format(
                         "PPTX 已生成但注册到数据库失败。\n" +
                         "- 文件名: %s\n" +
@@ -468,9 +527,15 @@ public class PptxTools implements AgentToolComponent {
                         finalFileName, result.getPagesCount(), localPath.toString(), e.getMessage()
                 );
             }
-            
+
         } catch (Exception e) {
+            // 同上：这条外层 catch 覆盖服务不可用/网络失败等更早期的异常，taskId 若已注册
+            // 同样必须标失败，否则这条 RUNNING 记录永远回收不了（本条是 dev-board#74 的触发场景：
+            // AI 调 pptx_generate、pptx-service 网络失败）。
             log.error("PPTX generation failed", e);
+            if (taskId != null) {
+                backgroundTaskService.failTask(taskId, e.getMessage());
+            }
             return "PPTX 生成过程中出错: " + e.getMessage();
         }
     }
@@ -495,7 +560,7 @@ public class PptxTools implements AgentToolComponent {
         try {
             // 检查服务
             if (!pptxServiceClient.isHealthy()) {
-                return "错误：PPTX 生成服务不可用。请先启动 Docker 服务。";
+                return "错误：PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试。";
             }
             
             // 创建项目
@@ -799,7 +864,11 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @Tool("导出可编辑的 PPTX 文件。与普通导出不同，此功能会智能提取文字和表格，生成真正可编辑的 PPT（而非纯图片）。这是 beta 功能，使用 MinerU 进行智能解析。")
+    @Tool("导出可编辑的 PPTX 文件。与普通导出（整页图片）不同，此功能会对每页做版面分析，"
+          + "把标题与正文还原成可编辑文本框，表格与图片按原位置作为独立元素放回（纯本机识别时表格通常仍是图块）。"
+          + "需要本机两个组件都已就绪：「PPT 生成与 PDF 转 Word」负责导出，「扫描件 OCR 引擎（MinerU）」负责版面分析——"
+          + "全程在本机跑，内容不出这台电脑，不需要任何云端账号或 token；组件缺失时本工具会引导用户下载。"
+          + "这是 beta 功能：版面复杂的页面可能提取不全，导出后提示用户核对。")
     public String pptx_export_editable(
             @P("PPTX 服务中的项目 ID") String serviceProjectId,
             @P("导出文件名（不含扩展名，可选）") String filename,
@@ -807,7 +876,14 @@ public class PptxTools implements AgentToolComponent {
     ) {
         log.info("Tool: pptx_export_editable called, projectId={}, filename={}, modelId={}", 
                 serviceProjectId, filename, modelId);
-        
+
+        // 两个组件缺任一都走不通：先 pptx（导出的宿主服务），再 mineru（版面分析）。
+        // 缺组件时不要先去调服务再报错——那条路以前就是「静默降级纯图片」的来源。
+        String prompt = promptComponentIfMissing("pptx_export_editable");
+        if (prompt != null) return prompt;
+        prompt = promptMineruIfMissing("pptx_export_editable");
+        if (prompt != null) return prompt;
+
         try {
             // 构建模型配置（用于生成干净背景图）
             PptxServiceClient.ModelConfig modelConfig = buildModelConfig(modelId);

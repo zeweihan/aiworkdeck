@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version.cloud;
 
 import com.checkba.service.DeviceTokenService;
@@ -44,14 +47,14 @@ class MemoryRepoAccessTest {
 
     @Test
     void ownerCanReadAndWriteOwnUserMemoryRepo() {
-        when(tokens.resolveUserId("awdt_x")).thenReturn(42L);
-        assertEquals(42L, svc.authorizeUserMemory(reqWith("u", "awdt_x"), 42L, false));
-        assertEquals(42L, svc.authorizeUserMemory(reqWith("u", "awdt_x"), 42L, true));
+        when(tokens.resolve("awdt_x")).thenReturn(new DeviceTokenService.ResolvedToken(42L, 9L));
+        assertEquals(42L, svc.authorizeUserMemory(reqWith("u", "awdt_x"), 42L, false).userId());
+        assertEquals(42L, svc.authorizeUserMemory(reqWith("u", "awdt_x"), 42L, true).userId());
     }
 
     @Test
     void nonOwnerIsRejectedEvenWithValidToken() {
-        when(tokens.resolveUserId("awdt_x")).thenReturn(42L);
+        when(tokens.resolve("awdt_x")).thenReturn(new DeviceTokenService.ResolvedToken(42L, 9L));
         assertEquals(403, assertThrows(GitAccessDeniedException.class,
                 () -> svc.authorizeUserMemory(reqWith("u", "awdt_x"), 7L, false)).statusCode());
         assertEquals(403, assertThrows(GitAccessDeniedException.class,
@@ -64,7 +67,7 @@ class MemoryRepoAccessTest {
     void missingOrBadCredentialsIs401() {
         assertEquals(401, assertThrows(GitAccessDeniedException.class,
                 () -> svc.authorizeUserMemory(reqWith(null, null), 42L, false)).statusCode());
-        when(tokens.resolveUserId("bad")).thenReturn(null);
+        when(tokens.resolve("bad")).thenReturn(null);
         assertEquals(401, assertThrows(GitAccessDeniedException.class,
                 () -> svc.authorizeUserMemory(reqWith("u", "bad"), 42L, false)).statusCode());
     }

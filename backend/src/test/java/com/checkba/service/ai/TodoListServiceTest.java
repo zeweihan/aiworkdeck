@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.model.entity.AgentTodoList;
 import com.checkba.repository.AgentTodoListRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -120,9 +124,37 @@ class TodoListServiceTest {
         assertNull(service.reminder("conv-unknown"));
     }
 
+    // ==== failed 项的防走神提醒（审计条目）====
+    // 背景：reminder() 此前只认 completed 算"done"，failed 项永远不会自己变成 completed，
+    // 于是 done < todos.size() 恒成立，提醒永远关不掉；且正文只列 in_progress/pending，
+    // 完全不提 failed 项，模型看不出到底卡在哪一项。
+
+    @Test
+    @DisplayName("修复：全部项要么完成要么失败时，提醒应该停止（不能因为有 failed 项就永远关不掉）")
+    void reminder_completedAndFailed_returnsNull() {
+        service.update(CONV, "[{\"content\":\"A\",\"status\":\"completed\"},"
+                + "{\"content\":\"B\",\"status\":\"failed\"}]");
+
+        assertNull(service.reminder(CONV), "全部项都已是终态（完成或失败），不该再继续催");
+    }
+
+    @Test
+    @DisplayName("修复：还有未完成项时，提醒正文要点名失败的那一项，不能只字不提")
+    void reminder_withFailedAndPending_mentionsFailedItem() {
+        service.update(CONV, "[{\"content\":\"A\",\"status\":\"failed\"},"
+                + "{\"content\":\"B\",\"status\":\"pending\"}]");
+
+        String reminder = service.reminder(CONV);
+
+        assertNotNull(reminder, "还有 pending 项没解决，提醒不该消失");
+        assertTrue(reminder.contains("已失败：A"), "正文应点名失败项，不能只字不提: " + reminder);
+        assertTrue(reminder.contains("待办：B"));
+    }
+
     @Test
     void update_invalidStatus_fallsBackToPending() {
-        service.update(CONV, "[{\"content\":\"A\",\"status\":\"doing\"}]");
+        // "doing" 自 dev-board#393 起是 in_progress 的同义词，这里换一个真正认不出的值
+        service.update(CONV, "[{\"content\":\"A\",\"status\":\"whatever\"}]");
         String reminder = service.reminder(CONV);
         assertNotNull(reminder);
         assertTrue(reminder.contains("待办：A"));
@@ -227,5 +259,21 @@ class TodoListServiceTest {
     void purge_dbFailureDoesNotThrow() {
         doThrow(new RuntimeException("db down")).when(repository).findByUpdatedAtBefore(any(LocalDateTime.class));
         assertDoesNotThrow(() -> service.purgeStaleLists());
+    }
+
+    // dev-board#393：模型偶尔把数组包一层 {"todos":[...]}，或用 done/已完成 这类同义状态。
+    // 这些都不是「不合法」，拒掉只会让它再试一轮、再错一轮。
+    @Test
+    @DisplayName("容错：{\"todos\":[...]} 包装与状态同义词都能落库")
+    void acceptsWrappedObjectAndStatusSynonyms() {
+        String result = service.update(CONV,
+                "{\"todos\":[{\"content\":\"A\",\"status\":\"done\"},{\"content\":\"B\",\"status\":\"进行中\"},{\"content\":\"C\",\"status\":\"todo\"}]}");
+        assertFalse(result.startsWith("Error"), result);
+        AgentTodoList row = table.get(CONV);
+        assertNotNull(row);
+        cn.hutool.json.JSONArray arr = cn.hutool.json.JSONUtil.parseArray(row.getTodosJson());
+        assertEquals("completed", arr.getJSONObject(0).getStr("status"));
+        assertEquals("in_progress", arr.getJSONObject(1).getStr("status"));
+        assertEquals("pending", arr.getJSONObject(2).getStr("status"));
     }
 }

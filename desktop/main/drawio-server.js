@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // drawio-server.js — 内嵌 draw.io 编辑器的本地静态服务。
 //
 // 「诉讼可视化」出的 .drawio 是唯一的可继续编辑版；这个 server 让它在应用内直接
@@ -16,7 +18,9 @@
 // 实例 / dev 与打包版并存）就退回随机端口，功能不受影响，只是少了跨启动的缓存复用。
 
 const path = require('path')
+const os = require('node:os')
 const http = require('node:http')
+const fs = require('node:fs')
 const { stat } = require('node:fs/promises')
 const { createReadStream } = require('node:fs')
 
@@ -27,6 +31,38 @@ const FIXED_PORT = 47614 // zetaoffice 用 47613，挨着放便于排查
 function electronApp() {
   try {
     return require('electron').app
+  } catch (e) {
+    return null
+  }
+}
+
+// native pack（docs/NATIVE_PACK_DISTRIBUTION.md）：诉讼可视化的 draw.io 资源摘出
+// 安装包之后，广场下载安装到 <home>/.aiworkdeck/packs/litigation-visual/<version>/drawio。
+const PACK_ID = 'litigation-visual'
+const PACK_COMPONENT = 'drawio'
+
+// packs 根目录：AIWORKDECK_PACKS_DIR 覆盖仅供单测/开发指向临时目录，
+// 与 AIWORKDECK_DRAWIO_DIR 是同一套「显式覆盖」思路，正常运行时走
+// <home>/.aiworkdeck/packs（与 overlay.js 的 dataDir 同一个 home 惯例）。
+function packsBaseDir() {
+  if (process.env.AIWORKDECK_PACKS_DIR) return process.env.AIWORKDECK_PACKS_DIR
+  const app = electronApp()
+  const home = (app && app.getPath('home')) || os.homedir()
+  return path.join(home, '.aiworkdeck', 'packs')
+}
+
+// pack 根惰性解析：每次调用都现读 current.json，装完即生效、Electron 不需要重启
+// （NATIVE_PACK_DISTRIBUTION.md §4.4）。fs 开销可忽略，不做任何缓存。
+// 三种情况判定该根不参与：current.json 缺失/不是合法 JSON、revoked:true、
+// 指向的版本目录没有 .pack-complete 完成标记。
+function packRoot() {
+  try {
+    const packDir = path.join(packsBaseDir(), PACK_ID)
+    const cur = JSON.parse(fs.readFileSync(path.join(packDir, 'current.json'), 'utf8'))
+    if (!cur || typeof cur.version !== 'string' || cur.revoked === true) return null
+    const versionDir = path.join(packDir, cur.version)
+    if (!fs.existsSync(path.join(versionDir, '.pack-complete'))) return null
+    return path.join(versionDir, PACK_COMPONENT)
   } catch (e) {
     return null
   }
@@ -52,9 +88,11 @@ const TYPES = {
 
 let serverPromise = null
 
-// AIWORKDECK_DRAWIO_DIR 覆盖资源目录：dev 时指向自己解出来的 draw.io，
-// 单测里指向临时目录。与后端那侧注入 LITVIZ_DIR / AWD_PYTHON_HOME 同一套思路。
-function drawioRoot() {
+// 单根解析（内置资源）：AIWORKDECK_DRAWIO_DIR 覆盖优先——dev 时指向自己解出来的
+// draw.io，单测里指向临时目录（与后端那侧注入 LITVIZ_DIR / AWD_PYTHON_HOME 同一套
+// 思路）；否则打包态取 Resources/frontend/dist/drawio，dev 态取源树里的
+// frontend/dist/drawio（跑过 fetch-drawio-assets.js 才有）。
+function builtinRoot() {
   if (process.env.AIWORKDECK_DRAWIO_DIR) return process.env.AIWORKDECK_DRAWIO_DIR
   const app = electronApp()
   return app && app.isPackaged
@@ -62,14 +100,30 @@ function drawioRoot() {
     : path.join(__dirname, '../../frontend/dist/drawio')
 }
 
-/** draw.io 资源是否已烙进本次构建。dev 树上没跑过 fetch 脚本时为 false。 */
+// 请求时按序命中的根列表（NATIVE_PACK_DISTRIBUTION.md §4.4，照抄
+// zetaoffice-server.js editorRoots() 的双根手法，这里是两根）：
+//   1. 内置根（builtinRoot，含 AIWORKDECK_DRAWIO_DIR 覆盖）——只有目录里真的有
+//      index.html 才算一根，不存在就跳过（老版本随包资源仍在时优先用它，
+//      不强迫改吃 pack）。
+//   2. pack 当前版本目录——惰性解析，见 packRoot()。
+function drawioRoots() {
+  const roots = []
+  const builtin = builtinRoot()
+  if (fs.existsSync(path.join(builtin, 'index.html'))) roots.push(builtin)
+  const pr = packRoot()
+  if (pr) roots.push(pr)
+  return roots
+}
+
+/** draw.io 资源是否在任一根就位（内置或 pack 皆可）。 */
 async function isAvailable() {
-  try {
-    const st = await stat(path.join(drawioRoot(), 'index.html'))
-    return st.isFile()
-  } catch (e) {
-    return false
+  for (const root of drawioRoots()) {
+    try {
+      const st = await stat(path.join(root, 'index.html'))
+      if (st.isFile()) return true
+    } catch (e) { /* 该根没有，试下一根 */ }
   }
+  return false
 }
 
 /**
@@ -78,20 +132,28 @@ async function isAvailable() {
  */
 function startDrawioServer() {
   if (serverPromise) return serverPromise
-  const root = drawioRoot()
   serverPromise = new Promise((resolve, reject) => {
     const s = http.createServer(async (req, res) => {
       try {
         let urlPath = decodeURIComponent((req.url || '/').split('?')[0])
         if (urlPath === '/') urlPath = '/index.html'
-        const filePath = path.normalize(path.join(root, urlPath))
-        // 路径穿越防护：URL 是不可信输入，normalize 之后必须仍在根下。
-        if (filePath !== root && !filePath.startsWith(root + path.sep)) {
-          res.writeHead(403).end('forbidden')
-          return
+        // 根列表每次请求现读（pack 装完即生效，不用重启 Electron）。
+        const roots = drawioRoots()
+        let hit = null
+        for (const root of roots) {
+          const filePath = path.normalize(path.join(root, urlPath))
+          // 路径穿越防护：URL 是不可信输入，normalize 之后必须仍在根下。
+          if (filePath !== root && !filePath.startsWith(root + path.sep)) {
+            res.writeHead(403).end('forbidden')
+            return
+          }
+          try {
+            const st = await stat(filePath)
+            if (st.isFile()) { hit = { filePath, st }; break }
+          } catch (e) { /* 该根没有此文件，试下一根 */ }
         }
-        const st = await stat(filePath)
-        if (!st.isFile()) throw new Error('not a file')
+        if (!hit) throw new Error('not found in any root')
+        const { filePath, st } = hit
         // ETag + no-cache：draw.io 升级后文件名多数不变（app.min.js 等），
         // 必须让浏览器回源校验；本地 304 只要 1ms，命中后仍复用已缓存的正文。
         const etag = '"' + st.size + '-' + Math.round(st.mtimeMs) + '"'
@@ -106,7 +168,18 @@ function startDrawioServer() {
           'Content-Length': st.size,
           ...cacheHeaders,
         })
-        createReadStream(filePath).pipe(res)
+        // ReadStream 的 'error' 必须自己收着：它是 EventEmitter，没人听时 Node 会
+        // 直接抛，而这一抛发生在 try/catch 之外的事件循环里、主进程又没有
+        // uncaughtException 兜底——结果不是这一个请求 404，是整个 Electron 应用
+        // 无提示消失。stat 到读完之间随时可能出错：pack 根每次请求现读（装完即
+        // 生效），广场正好在传输途中更新/撤销这一版就会把目录换掉；外接盘被拔、
+        // 杀毒锁文件、磁盘读错误同理。
+        // 200 的响应头（含按 st.size 算的 Content-Length）在上面已经落定，改不回
+        // 500 了；只能掐断连接，让浏览器把它当成一次传输失败，而不是拿到一个长度
+        // 对不上的半截文件。
+        const stream = createReadStream(filePath)
+        stream.on('error', () => { res.destroy() })
+        stream.pipe(res)
       } catch (e) {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found')
       }
@@ -153,8 +226,18 @@ async function stopDrawioServer() {
   serverPromise = null
   try {
     const s = await p.then((r) => r.server)
-    if (s) await new Promise((resolve) => s.close(resolve))
+    if (s) {
+      // server.close() 只停止接受新连接，已建立的 keep-alive 连接（哪怕已经
+      // 处理完上一个请求、正闲置着）不会被它主动断开——callback 会等这些连接
+      // 自然结束才触发。单测里连续起停多个服务、且客户端复用了 keep-alive 连接时，
+      // 这条空档会让「close() 已 resolve」与「端口真的空出来」脱节：下一个服务
+      // 一样绑同一个 FIXED_PORT，客户端的连接池却仍拿着指向旧 server 的那个
+      // socket，一复用就是 ECONNRESET/socket hang up。closeAllConnections()
+      // 强制切断，保证 stop 完成时端口与连接都真正清干净。
+      if (typeof s.closeAllConnections === 'function') s.closeAllConnections()
+      await new Promise((resolve) => s.close(resolve))
+    }
   } catch (e) { /* 起都没起来，无需关闭 */ }
 }
 
-module.exports = { startDrawioServer, stopDrawioServer, drawioUrl, isAvailable }
+module.exports = { startDrawioServer, stopDrawioServer, drawioUrl, isAvailable, PACK_ID }

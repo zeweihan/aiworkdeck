@@ -1,6 +1,10 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="market-pane">
-    <!-- Hero：深林绿编辑排版，与官网 /skills 同一套语言（见 aiworkdeckweb/DESIGN.md） -->
+  <view class="market-pane" :class="{ 'is-embedded': !standalone }">
+    <!-- Hero：深林绿编辑排版，与官网 /skills 同一套语言（见 aiworkdeckweb/DESIGN.md）。
+         嵌入设置页时（standalone=false）由 .is-embedded 样式收成与其余设置分区一致的
+         浅色页头，见 <style> 末尾「嵌入态」覆盖块。 -->
     <view class="hero">
       <view class="hero-grain"></view>
       <text class="hero-watermark">{{ $t('market.heroWatermark') }}</text>
@@ -264,6 +268,10 @@
               </view>
 
               <text class="card-desc">{{ p.description || $t('market.noDescription') }}</text>
+              <!-- 治理提示（规范 v2.7 P0）：平台封禁与宿主版本不兼容都在这里说清原因，
+                   否则用户只看到一个翻不动的开关 -->
+              <text v-if="p.revokedReason" class="card-blocked">{{ $t('market.revokedPrefix') }}{{ p.revokedReason }}</text>
+              <text v-else-if="p.incompatibleReason" class="card-blocked">{{ p.incompatibleReason }}</text>
               <text class="card-caps">{{ capabilityLine(p) }}</text>
 
               <view class="tool-list" v-if="p.tools && p.tools.length">
@@ -362,7 +370,7 @@ import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivat
 import { paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { ICONS } from '@/config/icons.js'
-import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
+import { isPanelSkill, isVoiceGroupMember, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { t } from '@/i18n'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -452,10 +460,26 @@ export default {
     ICONS() {
       return ICONS
     },
-    /** 面板型（长在左栏 rail 上）：广场里按插件呈现 */
+    /** 面板型（长在左栏 rail 上）：广场里按插件呈现。
+        「语音」的两个成员 skill 合成一张卡（左栏一个图标 = 一个插件，dev-board#66），
+        开关一次作用于全部成员（onPanelSkillToggle）。 */
     panelSkills() {
       // 插件携带的 skill 跟随插件启停，不在这里单列
-      return this.skills.filter((s) => isPanelSkill(s.id) && !s.sourcePluginId)
+      const rows = []
+      const voiceGroup = buildVoiceGroupSkill(this.skills)
+      let voiceEmitted = false
+      for (const s of this.skills) {
+        if (!isPanelSkill(s.id) || s.sourcePluginId) continue
+        if (voiceGroup && isVoiceGroupMember(s.id)) {
+          if (!voiceEmitted) {
+            voiceEmitted = true
+            rows.push(voiceGroup)
+          }
+          continue
+        }
+        rows.push(s)
+      }
+      return rows
     },
     /** 对话型：在对话里被触发词命中的那一类，才有「生效方式三档」 */
     conversationSkills() {
@@ -599,6 +623,7 @@ export default {
         uni.showToast({ title: this.$t('market.installedEnableHint'), icon: 'none' })
         await this.loadPlugins()
         await this.loadPluginMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('安装插件失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
@@ -614,6 +639,7 @@ export default {
         uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
         await this.loadPlugins()
         await this.loadPluginMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('卸载插件失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
@@ -644,6 +670,7 @@ export default {
         await setPluginEnabled(plugin.id, enabled)
         plugin.enabled = enabled
         uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('切换插件状态失败:', e)
         // 回滚开关显示
@@ -669,7 +696,21 @@ export default {
       const mode = enabled ? 'auto' : 'disabled'
       this.switching = true
       try {
-        await setSkillActivation(skill.id, mode)
+        // 「语音」合并插件：一次作用于全部成员 skill（启停一体，dev-board#66）
+        const ids = skill.groupMemberIds || [skill.id]
+        for (const id of ids) {
+          await setSkillActivation(id, mode)
+        }
+        if (skill.groupMemberIds) {
+          // 合并卡是 computed 里合成的非响应式对象，乐观更新要写回底层成员
+          // （this.skills 的元素）才会触发重算重渲染
+          for (const s of this.skills) {
+            if (ids.includes(s.id)) {
+              s.activationMode = mode
+              s.enabled = enabled
+            }
+          }
+        }
         skill.activationMode = mode
         skill.enabled = enabled
         uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })
@@ -681,7 +722,9 @@ export default {
         this.switching = false
       }
     },
-    // 面板型 skill 的启停直接决定左栏有没有那个图标，必须立刻通知工作台重算。
+    // 装/卸/启停改的是全局安装状态：面板型 skill 的启停决定左栏有没有那个图标，
+    // 装卸决定左栏广场面板那一行是「安装」还是「已安装」——都必须立刻通知外部重算，
+    // 否则同屏的 MarketSidebarPanel 会一直停在旧状态（本页嵌在设置 tab 里时两者共存）。
     // 两个事件都发：广场有两个宿主（左栏列表面板、中栏详情 tab），工作台两个都订。
     notifyMarketChanged() {
       uni.$emit('awd:market-changed')
@@ -743,6 +786,7 @@ export default {
         uni.showToast({ title: skill.installed ? this.$t('market.updatedToast') : this.$t('market.genericInstalledToast'), icon: 'none' })
         await this.loadSkills()
         await this.loadMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('安装 Skill 失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
@@ -758,6 +802,7 @@ export default {
         uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
         await this.loadSkills()
         await this.loadMarket()
+        this.notifyMarketChanged()
       } catch (e) {
         console.error('卸载 Skill 失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
@@ -799,16 +844,10 @@ export default {
 <style lang="scss" scoped>
 /* 视觉规范：aiworkdeckweb/DESIGN.md（法律刊物式编辑排版）。
    色值与官网 globals.css 的 CSS 变量一一对应，改这里先去改官网。 */
-$forest: #1A5336;
-$forest-darker: #123A26;
-$forest-lightest: #E8F3ED;
-$mint: #5BD197;
 
-$dark-bg: #212629;
 $gray-dark: #2C3338;
 $gray-medium: #6C757D;
 $gray-light: #E9ECEF;
-$gray-pale: #F8F9FA;
 
 /* 展示级衬线：大标题 / 区块题名 / 卡片题名 / 统计数字。
    桌面端不打包 Noto Serif SC，回落到系统宋体栈（与官网 .font-display 同一条链） */
@@ -824,7 +863,7 @@ $gray-pale: #F8F9FA;
 .market-pane {
   height: 100%;
   min-height: 0;
-  background: $gray-pale;
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -836,7 +875,7 @@ $gray-pale: #F8F9FA;
   position: relative;
   overflow: hidden;
   flex-shrink: 0;
-  background: linear-gradient(135deg, $forest-darker 0%, #16452D 55%, $forest-darker 100%);
+  background: linear-gradient(135deg, var(--awd-accent-hover) 0%, var(--awd-accent-hover) 55%, var(--awd-accent-hover) 100%);
 }
 
 /* 细颗粒噪点，压住大面积色块的塑料感 */
@@ -898,14 +937,14 @@ $gray-pale: #F8F9FA;
 .eyebrow-line {
   width: 32px;
   height: 1px;
-  background: rgba(91, 209, 151, 0.5);
+  background: var(--awd-mint);
 }
 
 .eyebrow-text {
   font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: rgba(91, 209, 151, 0.8);
+  color: var(--awd-accent-text);
 }
 
 .hero-title {
@@ -914,14 +953,14 @@ $gray-pale: #F8F9FA;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.01em;
-  color: #fff;
+  color: var(--awd-text-on-accent);
   margin-bottom: 10px;
 }
 
 .hero-sub {
   font-size: 14px;
   line-height: 1.7;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--awd-text-on-accent);
   max-width: 560px;
 }
 
@@ -944,12 +983,12 @@ $gray-pale: #F8F9FA;
   @include display-serif;
   font-size: 24px;
   font-weight: 700;
-  color: #fff;
+  color: var(--awd-text-on-accent);
 }
 
 .stat-label {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--awd-text-on-accent);
 }
 
 .stat-sep {
@@ -989,23 +1028,23 @@ $gray-pale: #F8F9FA;
 }
 
 .btn-ghost {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--awd-text-on-accent);
   border: 1px solid rgba(255, 255, 255, 0.22);
 
   &:hover {
-    color: #fff;
+    color: var(--awd-text-on-accent);
     border-color: rgba(255, 255, 255, 0.45);
     background: rgba(255, 255, 255, 0.06);
   }
 }
 
 .btn-light {
-  color: $forest-darker;
-  background: #fff;
-  border: 1px solid #fff;
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-surface);
   font-weight: 600;
 
-  &:hover { background: #F1F5F2; }
+  &:hover { background: var(--awd-accent-soft); }
 
   &.is-busy {
     opacity: 0.6;
@@ -1016,9 +1055,9 @@ $gray-pale: #F8F9FA;
 /* ---------- 主页签：编辑式下划线 ---------- */
 .tab-bar {
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--awd-surface);
   backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(233, 236, 239, 0.8);
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .tab-inner {
@@ -1039,7 +1078,7 @@ $gray-pale: #F8F9FA;
   align-items: baseline;
   gap: 6px;
   font-size: 14px;
-  color: $gray-medium;
+  color: var(--awd-text-2);
   padding: 14px 0;
   margin-bottom: -1px;
   border-bottom: 2px solid transparent;
@@ -1047,12 +1086,12 @@ $gray-pale: #F8F9FA;
   transition: color 0.2s;
   white-space: nowrap;
 
-  &:hover { color: $dark-bg; }
+  &:hover { color: var(--awd-text); }
 
   &.active {
-    color: $forest;
+    color: var(--awd-accent-text);
     font-weight: 600;
-    border-bottom-color: $forest;
+    border-bottom-color: var(--awd-accent);
   }
 }
 
@@ -1084,7 +1123,7 @@ $gray-pale: #F8F9FA;
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 24px;
-  border-bottom: 1px solid rgba(233, 236, 239, 0.9);
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .cat-nav {
@@ -1102,7 +1141,7 @@ $gray-pale: #F8F9FA;
   align-items: baseline;
   gap: 5px;
   font-size: 13px;
-  color: $gray-medium;
+  color: var(--awd-text-2);
   padding: 8px 0 11px;
   margin-bottom: -1px;
   border-bottom: 2px solid transparent;
@@ -1110,12 +1149,12 @@ $gray-pale: #F8F9FA;
   transition: color 0.2s;
   white-space: nowrap;
 
-  &:hover { color: $dark-bg; }
+  &:hover { color: var(--awd-text); }
 
   &.active {
-    color: $forest;
+    color: var(--awd-accent-text);
     font-weight: 600;
-    border-bottom-color: $forest;
+    border-bottom-color: var(--awd-accent);
   }
 }
 
@@ -1132,18 +1171,18 @@ $gray-pale: #F8F9FA;
   gap: 8px;
   flex-shrink: 0;
   width: 240px;
-  background: #fff;
-  border: 1px solid $gray-light;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 7px 12px;
   margin-bottom: 8px;
   transition: border-color 0.2s, box-shadow 0.2s;
 
-  &:hover { border-color: #D3DAD8; }
+  &:hover { border-color: var(--awd-border); }
 
   &:focus-within {
-    border-color: $mint;
-    box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.15);
+    border-color: var(--awd-mint);
+    box-shadow: 0 0 0 3px var(--awd-accent-soft);
   }
 }
 
@@ -1151,12 +1190,12 @@ $gray-pale: #F8F9FA;
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  color: $gray-medium;
+  color: var(--awd-text-2);
 }
 
 .search-input {
   font-size: 13px;
-  color: $gray-dark;
+  color: var(--awd-text);
   flex: 1;
   min-width: 0;
 }
@@ -1169,7 +1208,7 @@ $gray-pale: #F8F9FA;
   gap: 12px;
   padding-bottom: 12px;
   margin-bottom: 20px;
-  border-bottom: 1px solid rgba(233, 236, 239, 0.9);
+  border-bottom: 1px solid var(--awd-border);
 
   &:not(:first-child) { margin-top: 36px; }
 }
@@ -1178,12 +1217,12 @@ $gray-pale: #F8F9FA;
   @include display-serif;
   font-size: 22px;
   font-weight: 700;
-  color: $dark-bg;
+  color: var(--awd-text);
 }
 
 .section-sub {
   font-size: 13px;
-  color: $gray-medium;
+  color: var(--awd-text-2);
 }
 
 /* ---------- 卡片 ---------- */
@@ -1201,9 +1240,9 @@ $gray-pale: #F8F9FA;
   box-sizing: border-box;
   padding: 22px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--awd-surface);
   backdrop-filter: blur(20px);
-  border: 1px solid rgba(233, 236, 239, 0.9);
+  border: 1px solid var(--awd-border);
   transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 
   /* hover 时顶部浮起一条品牌色细线 */
@@ -1214,14 +1253,14 @@ $gray-pale: #F8F9FA;
     right: 0;
     top: 0;
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(26, 83, 54, 0.6), transparent);
+    background: linear-gradient(90deg, transparent, var(--awd-accent), transparent);
     opacity: 0;
     transition: opacity 0.3s ease;
   }
 
   &:hover {
     transform: translateY(-4px);
-    border-color: rgba(26, 83, 54, 0.25);
+    border-color: var(--awd-accent-soft);
     box-shadow: 0 18px 40px -18px rgba(18, 58, 38, 0.25);
 
     &::before { opacity: 1; }
@@ -1233,7 +1272,7 @@ $gray-pale: #F8F9FA;
     &:hover {
       transform: none;
       box-shadow: none;
-      border-color: rgba(233, 236, 239, 0.9);
+      border-color: var(--awd-border);
 
       &::before { opacity: 0; }
     }
@@ -1265,29 +1304,38 @@ $gray-pale: #F8F9FA;
   margin-bottom: 8px;
   font-size: 11px;
   letter-spacing: 0.14em;
-  color: $gray-medium;
+  color: var(--awd-text-2);
 }
 
 .kicker-icon {
   width: 13px;
   height: 13px;
-  color: rgba(26, 83, 54, 0.7);
+  color: var(--awd-accent-text);
   flex-shrink: 0;
 }
 
 .kicker-sep {
   width: 1px;
   height: 11px;
-  background: $gray-light;
+  background: var(--awd-surface-3);
 }
 
 .kicker-on {
-  color: $forest;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 .kicker-off {
-  color: #A0A8AD;
+  color: var(--awd-text-3);
+}
+
+/* 治理提示（规范 v2.7 P0）：封禁/版本不兼容的原因行 */
+.card-blocked {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--awd-danger, #b3261e);
 }
 
 .card-title {
@@ -1295,7 +1343,7 @@ $gray-pale: #F8F9FA;
   font-size: 19px;
   font-weight: 700;
   line-height: 1.35;
-  color: $dark-bg;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1304,7 +1352,7 @@ $gray-pale: #F8F9FA;
 .card-id {
   @include mono;
   font-size: 11px;
-  color: rgba(108, 117, 125, 0.8);
+  color: var(--awd-text-2);
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1314,7 +1362,7 @@ $gray-pale: #F8F9FA;
 /* 中文说明句：与 card-id 同位同色，但不用等宽 */
 .card-note {
   font-size: 12px;
-  color: rgba(108, 117, 125, 0.9);
+  color: var(--awd-text-2);
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1333,15 +1381,15 @@ $gray-pale: #F8F9FA;
   font-size: 12px;
   font-weight: 600;
   text-align: center;
-  color: #fff;
-  background: $forest;
-  border: 1px solid $forest;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
+  border: 1px solid var(--awd-accent);
   border-radius: 6px;
   padding: 5px 16px;
   cursor: pointer;
   transition: background 0.2s;
 
-  &:hover { background: $forest-darker; }
+  &:hover { background: var(--awd-accent-hover); }
 
   &.is-busy {
     opacity: 0.5;
@@ -1352,23 +1400,23 @@ $gray-pale: #F8F9FA;
 .act-remove {
   font-size: 12px;
   text-align: center;
-  color: $gray-medium;
-  border: 1px solid $gray-light;
+  color: var(--awd-text-2);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 5px 16px;
   cursor: pointer;
   transition: all 0.2s;
 
   &:hover {
-    color: #C0392B;
-    border-color: rgba(192, 57, 43, 0.4);
+    color: var(--awd-danger-text);
+    border-color: var(--awd-danger);
   }
 }
 
 .card-desc {
   font-size: 13px;
   line-height: 1.7;
-  color: $gray-medium;
+  color: var(--awd-text-2);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1380,7 +1428,7 @@ $gray-pale: #F8F9FA;
 .card-triggers {
   font-size: 13px;
   line-height: 1.7;
-  color: rgba(26, 83, 54, 0.8);
+  color: var(--awd-accent-text);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1392,7 +1440,7 @@ $gray-pale: #F8F9FA;
 .card-caps {
   font-size: 12px;
   line-height: 1.6;
-  color: rgba(108, 117, 125, 0.9);
+  color: var(--awd-text-2);
   margin-bottom: 18px;
 }
 
@@ -1404,9 +1452,9 @@ $gray-pale: #F8F9FA;
   gap: 12px;
   margin-top: auto;
   padding-top: 14px;
-  border-top: 1px solid rgba(233, 236, 239, 0.7);
+  border-top: 1px solid var(--awd-border);
   font-size: 12px;
-  color: $gray-medium;
+  color: var(--awd-text-2);
 }
 
 .foot-author {
@@ -1441,7 +1489,7 @@ $gray-pale: #F8F9FA;
 
 /* 工具清单 */
 .tool-list {
-  border-top: 1px solid rgba(233, 236, 239, 0.7);
+  border-top: 1px solid var(--awd-border);
   padding-top: 12px;
   margin-top: auto;
   display: flex;
@@ -1459,13 +1507,13 @@ $gray-pale: #F8F9FA;
 .tool-name {
   @include mono;
   font-size: 11px;
-  color: $forest;
+  color: var(--awd-accent-text);
   flex-shrink: 0;
 }
 
 .tool-desc {
   font-size: 12px;
-  color: $gray-medium;
+  color: var(--awd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1484,7 +1532,7 @@ $gray-pale: #F8F9FA;
 .empty-icon {
   width: 38px;
   height: 38px;
-  color: rgba(108, 117, 125, 0.45);
+  color: var(--awd-text-3);
   margin-bottom: 10px;
 }
 
@@ -1492,13 +1540,13 @@ $gray-pale: #F8F9FA;
   @include display-serif;
   font-size: 17px;
   font-weight: 700;
-  color: $dark-bg;
+  color: var(--awd-text);
 }
 
 .empty-hint {
   font-size: 13px;
   line-height: 1.7;
-  color: $gray-medium;
+  color: var(--awd-text-2);
   max-width: 460px;
 }
 
@@ -1510,7 +1558,7 @@ $gray-pale: #F8F9FA;
   gap: 10px;
   margin-top: 28px;
   padding-top: 18px;
-  border-top: 1px solid rgba(233, 236, 239, 0.9);
+  border-top: 1px solid var(--awd-border);
 }
 
 .note-icon {
@@ -1518,13 +1566,13 @@ $gray-pale: #F8F9FA;
   height: 15px;
   flex-shrink: 0;
   margin-top: 2px;
-  color: #B47D2B;
+  color: var(--awd-warning-text);
 }
 
 .note-text {
   font-size: 12px;
   line-height: 1.8;
-  color: $gray-medium;
+  color: var(--awd-text-2);
   max-width: 760px;
 }
 
@@ -1555,5 +1603,93 @@ $gray-pale: #F8F9FA;
   .card-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---------- 嵌入态（standalone=false）：收掉独立页的大 hero/超宽版式，
+   与 AdminPane.vue 其余设置分区（.section-card/.section-header/.section-title）
+   的卡片式、浅色、统一留白语言对齐。standalone=true 的独立页（/pages/plugin-market）
+   不带 .is-embedded，一字不变。色值对照：$gray-dark(#2C3338) = admin 的 $text-main，
+   $gray-medium(#6C757D) = admin 的 $text-secondary，$gray-light(#E9ECEF) = admin 的
+   $border-color，写法不同是因为两个组件的 scss 变量各自 scoped，数值特意保持一致。 */
+.market-pane.is-embedded {
+  background: transparent;
+}
+
+/* 大 hero 收成与 .section-header 同尺寸的浅色页头：去掉深色渐变、噪点纹理、
+   巨型衬线水印与超宽 1140px 版式 */
+.market-pane.is-embedded .hero {
+  background: var(--awd-surface);
+  border-bottom: 1px solid var(--awd-border);
+}
+
+.market-pane.is-embedded .hero-grain,
+.market-pane.is-embedded .hero-watermark {
+  display: none;
+}
+
+.market-pane.is-embedded .hero-inner {
+  max-width: none;
+  padding: 24px 24px 16px;
+  align-items: center;
+}
+
+.market-pane.is-embedded .hero-title {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--awd-text);
+  margin-bottom: 4px;
+}
+
+.market-pane.is-embedded .hero-sub {
+  font-size: 13px;
+  color: var(--awd-text-2);
+  max-width: none;
+}
+
+.market-pane.is-embedded .hero-stats {
+  margin-top: 10px;
+  gap: 16px;
+}
+
+.market-pane.is-embedded .stat-num {
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+
+.market-pane.is-embedded .stat-sep {
+  background: var(--awd-surface-3);
+}
+
+.market-pane.is-embedded .btn-light {
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+
+  &:hover { background: var(--awd-bg); }
+}
+
+/* 主页签条与内容区：去掉与 hero 呼应的 1140px 超宽版式，改为跟随嵌入容器的实际宽度，
+   内边距对齐 .section-body(24px) */
+.market-pane.is-embedded .tab-inner,
+.market-pane.is-embedded .content-inner {
+  max-width: none;
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+.market-pane.is-embedded .content-inner {
+  padding-top: 20px;
+  padding-bottom: 32px;
+}
+
+/* 「已安装」子页签内的区块标题：22px 展示衬线收成与 admin 分区小标题同级 */
+.market-pane.is-embedded .section-title {
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--awd-text);
 }
 </style>

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
 import com.checkba.service.ai.OfficeBridgeService;
@@ -30,14 +33,21 @@ class OfficeEditToolsTest {
 
     private com.checkba.repository.ProjectFileRepository projectFileRepository;
     private com.checkba.storage.StorageServiceFactory storageServiceFactory;
+    private com.checkba.service.ai.InlineContentCache inlineContentCache;
+    private com.checkba.service.ai.OfficePassStateStore passStateStore;
+    private com.checkba.service.ai.SseEmitterService sseEmitterService;
 
     @BeforeEach
     void setUp() {
         bridge = mock(OfficeBridgeService.class);
         projectFileRepository = mock(com.checkba.repository.ProjectFileRepository.class);
         storageServiceFactory = mock(com.checkba.storage.StorageServiceFactory.class);
+        inlineContentCache = new com.checkba.service.ai.InlineContentCache();
+        passStateStore = new com.checkba.service.ai.OfficePassStateStore();
+        sseEmitterService = mock(com.checkba.service.ai.SseEmitterService.class);
         tools = new OfficeEditTools(bridge, new com.fasterxml.jackson.databind.ObjectMapper(),
-                projectFileRepository, storageServiceFactory);
+                projectFileRepository, storageServiceFactory,
+                inlineContentCache, passStateStore, sseEmitterService);
     }
 
     @Test
@@ -55,6 +65,61 @@ class OfficeEditToolsTest {
         assertEquals("甲方", args.getValue().get("searchText"));
         assertEquals("买受人", args.getValue().get("replaceText"));
         assertEquals(false, args.getValue().get("replaceAll"));
+    }
+
+    @Test
+    @DisplayName("office_replace_batch：整批下发 replace_batch，条目原样透传（dev-board#419）")
+    void replaceBatchDispatches() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"replaced\":2,\"failed\":[]}");
+
+        String json = "[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"},"
+                + "{\"searchText\":\"帐户\",\"replaceText\":\"账户\"}]";
+        String result = tools.office_replace_batch("conv-1", json);
+
+        assertEquals("{\"replaced\":2,\"failed\":[]}", result);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("replace_batch"), args.capture());
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> items =
+                (java.util.List<Map<String, Object>>) args.getValue().get("items");
+        assertEquals(2, items.size());
+        assertEquals("违约责仁", items.get(0).get("searchText"));
+        assertEquals("账户", items.get(1).get("replaceText"));
+    }
+
+    @Test
+    @DisplayName("office_replace_batch：非法入参一律后端拦下，不产生一次空等的过桥（dev-board#419）")
+    void replaceBatchValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_replace_batch("conv-1", null).startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1", "不是 JSON").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1", "[]").startsWith("Error"));
+        // searchText 为空 / 缺 replaceText / 超 255 字 / 跨段 / 重复
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"\",\"replaceText\":\"x\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"甲方\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"" + "长".repeat(256) + "\",\"replaceText\":\"x\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"甲\\n乙\",\"replaceText\":\"x\"}]").startsWith("Error"));
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"甲方\",\"replaceText\":\"x\"},{\"searchText\":\"甲方\",\"replaceText\":\"y\"}]")
+                .startsWith("Error"));
+        // 一条 searchText 是另一条的子串：两处命中必然重叠，落笔两遍
+        assertTrue(tools.office_replace_batch("conv-1",
+                "[{\"searchText\":\"承担违约责仁。\",\"replaceText\":\"承担违约责任。\"},"
+                        + "{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]").startsWith("Error"));
+        // 超过一批上限
+        StringBuilder tooMany = new StringBuilder("[");
+        for (int i = 0; i < 51; i++) {
+            if (i > 0) tooMany.append(',');
+            tooMany.append("{\"searchText\":\"第").append(i).append("条\",\"replaceText\":\"x\"}");
+        }
+        tooMany.append(']');
+        assertTrue(tools.office_replace_batch("conv-1", tooMany.toString()).startsWith("Error"));
+        verifyNoInteractions(bridge);
     }
 
     @Test
@@ -220,6 +285,18 @@ class OfficeEditToolsTest {
         assertEquals(true, sent.get("headerBold"));
         assertFalse(sent.containsKey("autoFit"), "未给出的格式字段不应下发");
         assertFalse(sent.containsKey("fontSize"));
+    }
+
+    @Test
+    @DisplayName("修复：只传 borderColor + headerBold（不传 borders）不能悄悄丢弃 borderColor")
+    void formatTableRejectsBorderModifiersWithoutBordersEvenWithOtherParams() {
+        // 此前的"至少给一个格式参数"guard 只看 bordersValue/alignmentValue/headerBold/autoFit/
+        // fontSize，headerBold 非空就满足了，于是直接派发成功——borderColor 被静默丢弃，
+        // 响应里没有任何字样提示。修复后必须在派发前就报错，且不触碰桥。
+        String result = tools.office_format_table("conv-1", 0, null, "#FF0000", null, null, true, null, null);
+
+        assertTrue(result.startsWith("Error"), "borders 缺省时 borderColor 不该被静默丢弃: " + result);
+        verifyNoInteractions(bridge);
     }
 
     @Test
@@ -1223,5 +1300,199 @@ class OfficeEditToolsTest {
         assertTrue(tools.office_ppt_set_hyperlink("conv-1", 1, "", "https://example.com").startsWith("Error"));
         assertTrue(tools.office_ppt_set_hyperlink("conv-1", 1, "文本", "ftp://example.com").startsWith("Error"));
         verifyNoInteractions(bridge);
+    }
+
+    // ==================== office_pass_step：整篇过卷（dev-board#422） ====================
+
+    /** 30 段正文，每段 200 字：按 2500 字目标切出好几块。 */
+    private static String passDoc() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= 30; i++) {
+            if (i > 1) sb.append('\n');
+            sb.append("第").append(i).append("条 ").append("约".repeat(200));
+        }
+        return sb.toString();
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode parse(String json) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        } catch (Exception e) {
+            throw new AssertionError("返回值不是合法 JSON：" + json, e);
+        }
+    }
+
+    @Test
+    @DisplayName("office_pass_step：首次调用切块建态，返回第 1 块与总块数（dev-board#422）")
+    void passStepFirstCallReturnsFirstChunk() {
+        inlineContentCache.put("conv-1", passDoc());
+
+        com.fasterxml.jackson.databind.JsonNode r = parse(tools.office_pass_step("conv-1", "[]", null));
+
+        assertEquals(1, r.path("pass").path("chunk").asInt());
+        assertTrue(r.path("pass").path("total").asInt() > 1, "30 段 6000 字应切出多块");
+        assertFalse(r.path("pass").path("done").asBoolean());
+        assertTrue(r.path("applied").isNull(), "首次调用没有可落笔的清单，applied 应为 null");
+        assertTrue(r.path("paragraphs").size() > 0, "必须把本块段落交给模型");
+        assertEquals(1, r.path("paragraphs").get(0).path("no").asInt(), "第 1 块从第 1 段起");
+        assertFalse(r.path("hint").asText().isBlank(), "必须告诉模型下一步怎么做");
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("office_pass_step：没有内联正文时明确报错，不建状态（dev-board#422）")
+    void passStepWithoutInlineContentFails() {
+        assertTrue(tools.office_pass_step("conv-1", "[]", null).startsWith("Error"));
+        assertEquals(0, passStateStore.totalChunks("conv-1"));
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("office_pass_step：中间调用先按 replace_batch 落笔，再返回下一块（dev-board#422）")
+    void passStepAppliesEditsThenAdvances() {
+        inlineContentCache.put("conv-1", passDoc());
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"replaced\":2,\"requested\":2,\"failed\":[]}");
+
+        tools.office_pass_step("conv-1", "[]", null); // 第 1 块
+        String json = "[{\"searchText\":\"第1条\",\"replaceText\":\"第一条\"},"
+                + "{\"searchText\":\"第2条\",\"replaceText\":\"第二条\"}]";
+        com.fasterxml.jackson.databind.JsonNode r = parse(tools.office_pass_step("conv-1", json, null));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("replace_batch"), args.capture());
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> items =
+                (java.util.List<Map<String, Object>>) args.getValue().get("items");
+        assertEquals(2, items.size(), "清单原样过桥，不做任何改写");
+        assertEquals("第1条", items.get(0).get("searchText"));
+
+        assertEquals(2, r.path("pass").path("chunk").asInt(), "落笔后游标前进到第 2 块");
+        assertEquals(2, r.path("applied").path("replaced").asInt());
+        assertEquals(2, r.path("applied").path("requested").asInt());
+    }
+
+    @Test
+    @DisplayName("office_pass_step：清单校验失败返回 Error 且游标不前进（dev-board#422）")
+    void passStepValidationFailureKeepsCursor() {
+        inlineContentCache.put("conv-1", passDoc());
+        tools.office_pass_step("conv-1", "[]", null); // 停在第 1 块
+        int before = passStateStore.get("conv-1").cursor();
+
+        // 两条 searchText 互相包含 → 与 office_replace_batch 同一套校验，整批拒绝
+        String bad = "[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"},"
+                + "{\"searchText\":\"承担违约责仁。\",\"replaceText\":\"承担违约责任。\"}]";
+        assertTrue(tools.office_pass_step("conv-1", bad, null).startsWith("Error"));
+        assertEquals(before, passStateStore.get("conv-1").cursor(), "校验失败绝不能吃掉一块");
+        verifyNoInteractions(bridge);
+
+        // 修正后照常推进
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"replaced\":1,\"requested\":1,\"failed\":[]}");
+        com.fasterxml.jackson.databind.JsonNode ok = parse(tools.office_pass_step("conv-1",
+                "[{\"searchText\":\"违约责仁\",\"replaceText\":\"违约责任\"}]", null));
+        assertEquals(before + 2, ok.path("pass").path("chunk").asInt());
+    }
+
+    @Test
+    @DisplayName("office_pass_step：末块 done=true，summary 全程累计并清状态（dev-board#422）")
+    void passStepFinishesWithSummary() {
+        inlineContentCache.put("conv-1", passDoc());
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"replaced\":2,\"requested\":3,\"failed\":[{\"index\":3,\"searchText\":\"找不到\",\"error\":\"未找到锚点\"}]}");
+
+        String edits = "[{\"searchText\":\"第1条\",\"replaceText\":\"第一条\"}]";
+        com.fasterxml.jackson.databind.JsonNode r = parse(tools.office_pass_step("conv-1", "[]", null));
+        int total = r.path("pass").path("total").asInt();
+        for (int i = 1; i < total; i++) {
+            r = parse(tools.office_pass_step("conv-1", edits, null));
+        }
+        // 末块处理完后再调一次：越过最后一块即收尾
+        r = parse(tools.office_pass_step("conv-1", edits, null));
+
+        assertTrue(r.path("pass").path("done").asBoolean(), "越过末块必须 done");
+        assertEquals(0, r.path("paragraphs").size(), "收尾不再给块");
+        assertEquals(total, r.path("summary").path("chunks").asInt());
+        assertEquals(2 * total, r.path("summary").path("replaced").asInt(), "replaced 全程累计");
+        assertEquals(total, r.path("summary").path("failed").size(), "失败条目全程累计");
+        assertEquals(0, passStateStore.totalChunks("conv-1"), "收尾必须清状态");
+    }
+
+    @Test
+    @DisplayName("office_pass_step：stop=true 提前收尾，非空清单仍先落笔（dev-board#422）")
+    void passStepStopsEarly() {
+        inlineContentCache.put("conv-1", passDoc());
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"replaced\":1,\"requested\":1,\"failed\":[]}");
+
+        tools.office_pass_step("conv-1", "[]", null);
+        com.fasterxml.jackson.databind.JsonNode r = parse(tools.office_pass_step("conv-1",
+                "[{\"searchText\":\"第1条\",\"replaceText\":\"第一条\"}]", true));
+
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap());
+        assertTrue(r.path("pass").path("done").asBoolean());
+        assertEquals(1, r.path("summary").path("replaced").asInt());
+        assertEquals(0, passStateStore.totalChunks("conv-1"), "stop 后必须清状态");
+    }
+
+    @Test
+    @DisplayName("office_pass_step：文档中途被换（内联正文哈希变了）即终止并清状态（dev-board#422）")
+    void passStepAbortsWhenDocumentChanged() {
+        inlineContentCache.put("conv-1", passDoc());
+        tools.office_pass_step("conv-1", "[]", null);
+
+        inlineContentCache.put("conv-1", "换了一份完全不同的文档。");
+        String out = tools.office_pass_step("conv-1", "[]", null);
+
+        assertTrue(out.startsWith("Error"), "文档换了必须终止，不能拿旧块号继续");
+        assertTrue(out.contains("变化"));
+        assertEquals(0, passStateStore.totalChunks("conv-1"));
+    }
+
+    @Test
+    @DisplayName("office_pass_step：每次返回都往会话 SSE 推一条 pass_progress（dev-board#422）")
+    void passStepEmitsProgress() {
+        inlineContentCache.put("conv-1", passDoc());
+        tools.office_pass_step("conv-1", "[]", null);
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(sseEmitterService).send(eq("conv-1"), eq("pass_progress"), payload.capture());
+        com.fasterxml.jackson.databind.JsonNode d = parse(payload.getValue());
+        assertEquals(1, d.path("chunk").asInt());
+        assertTrue(d.path("total").asInt() > 1);
+        assertEquals(0, d.path("replaced").asInt());
+        assertFalse(d.path("done").asBoolean());
+    }
+
+    @Test
+    @DisplayName("office_pass_step 只对 Word 宿主可见（Excel/PPT 会话看不到）（dev-board#422）")
+    void passStepIsWordOnly() {
+        com.checkba.service.ai.ClientCapabilityService caps = new com.checkba.service.ai.ClientCapabilityService();
+        caps.record("conv-w", "office", "word");
+        caps.record("conv-e", "office", "excel");
+        caps.record("conv-p", "office", "powerpoint");
+        caps.record("conv-l", "lowa", null);
+
+        assertTrue(caps.isToolVisible("office_pass_step", "conv-w"));
+        assertFalse(caps.isToolVisible("office_pass_step", "conv-e"));
+        assertFalse(caps.isToolVisible("office_pass_step", "conv-p"));
+        assertFalse(caps.isToolVisible("office_pass_step", "conv-l"));
+    }
+
+    @Test
+    @DisplayName("office_pass_step：桥失败时原样回报且游标不前进（超时不等于没做）（dev-board#422）")
+    void passStepBridgeFailureKeepsCursor() {
+        inlineContentCache.put("conv-1", passDoc());
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("replace_batch"), anyMap()))
+                .thenReturn("{\"error\":\"操作超时：插件未在 120 秒内返回结果。\"}");
+
+        tools.office_pass_step("conv-1", "[]", null);
+        int before = passStateStore.get("conv-1").cursor();
+        String out = tools.office_pass_step("conv-1",
+                "[{\"searchText\":\"第1条\",\"replaceText\":\"第一条\"}]", null);
+
+        assertTrue(out.contains("超时"), "桥的原始错误必须原样交给模型");
+        assertEquals(before, passStateStore.get("conv-1").cursor(), "落笔没成功就不能吃掉一块");
     }
 }

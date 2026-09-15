@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // zetaOfficeBoot.js — framework-agnostic ZetaOffice (LibreOffice WASM) boot core.
 //
 // Epic #43. Extracted verbatim (parameterized) from the proven Phase 0 spike
@@ -41,6 +43,9 @@ const DEFAULT_SOFFICE_BASE_URL = 'https://cdn.zetaoffice.net/zetaoffice_latest/'
  * @param {string}   [options.sofficeBaseUrl] LOWA runtime base URL.
  * @param {string}   [options.zetaJsUrl='./zeta.js'] vendored zetajs bridge URL.
  * @param {string}   [options.workerScriptUrl='./office_thread.js'] office worker URL.
+ * @param {string}   [options.houseProfileUrl='./house-default.js'] HOUSE 画像包装脚本
+ *   （scripts/sync-house-profile.mjs 从后端 house-default.json 生成，留下
+ *   self.HOUSE_DEFAULT_JSON），必须先于 worker 载入。
  * @param {string}   [options.fontUrl] optional same-origin CJK font to inject.
  * @param {string[]} [options.fontUrls] optional same-origin CJK fonts (one per
  *        typeface category: sans/serif/kai/fangsong); merged with fontUrl.
@@ -56,6 +61,7 @@ export function bootZetaOffice(options = {}) {
     sofficeBaseUrl = DEFAULT_SOFFICE_BASE_URL,
     zetaJsUrl = './zeta.js',
     workerScriptUrl = './office_thread.js',
+    houseProfileUrl = './house-default.js',
     fontUrl,
     fontUrls,
     // UI language for the LibreOffice chrome (issue #66 follow-up). The engine
@@ -80,7 +86,23 @@ export function bootZetaOffice(options = {}) {
       '(spike: node serve.mjs; product: Electron onHeadersReceived).'))
   }
 
-  return new Promise(async (resolve, reject) => {
+  // HIGH（审计 dev-board#74）：the executor below used to be `async (resolve, reject) => {...}`
+  // passed directly to `new Promise(...)`. An async function handed to the Promise
+  // constructor only gets its SYNCHRONOUS PREFIX covered by the constructor's implicit
+  // try/catch — once it suspends at the first `await` (a few lines down, fetching CJK
+  // fonts), any later throw becomes an unhandled rejection of the executor's own
+  // DISCARDED return promise, never a call to `reject`. Same problem for `s.onload`
+  // below: it's a plain (non-async) DOM callback, so a synchronous throw inside it
+  // (e.g. `Module.uno_main` missing) never reaches `reject` either. Either failure mode
+  // left this promise (and the caller's loading overlay) hung forever with no error
+  // surfaced. Fix: keep the Promise executor itself synchronous and non-throwing (it
+  // only wires up an inner async IIFE + a plain onload handler), and explicitly funnel
+  // every exception — from any point in the async body, or from the onload callback —
+  // into `reject`.
+  return new Promise((resolve, reject) => {
+    let dispose = () => {}
+    const rejectWithError = (e) => { dispose(); reject(e instanceof Error ? e : new Error(String(e))) }
+    ;(async () => {
     // Files to write into the LOWA MEMFS before main() (CJK font). Each
     // { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
     // preRun runs synchronously; written there because /instdir merge-mounts only
@@ -189,7 +211,7 @@ export function bootZetaOffice(options = {}) {
     // The globals `canvas` and `Module` must exist before soffice.js loads.
     const Module = {
       canvas,
-      uno_scripts: [zetaJsUrl, workerScriptUrl],
+      uno_scripts: [zetaJsUrl, houseProfileUrl, workerScriptUrl],
       locateFile: function (path, prefix) { return (prefix || sofficeBaseUrl) + path },
       // ALWAYS an array: LOWA's soffice.js prologue does `if(!("preRun" in
       // Module))Module["preRun"]=[]; Module.preRun.push(...)` — a present-but-
@@ -247,6 +269,18 @@ export function bootZetaOffice(options = {}) {
     }
     globalThis.Module = Module
 
+    let ready = false, disposed = false, lastWidth = 0, lastHeight = 0
+    function resizeCanvas(force = false) {
+      if (disposed || !ready) return
+      const width = canvas.clientWidth, height = canvas.clientHeight
+      const changed = width !== lastWidth || height !== lastHeight
+      lastWidth = width
+      lastHeight = height
+      if (width > 0 && height > 0 && (force || changed)) {
+        try { globalThis.dispatchEvent(new Event('resize')) } catch (e) { /* ignore */ }
+      }
+    }
+
     function onMessage(e) {
       const d = (e && e.data) || {}
       if (d.cmd === 'log') log(d.msg)
@@ -255,19 +289,21 @@ export function bootZetaOffice(options = {}) {
         // blank/garbage surface) and kick one repaint. The spike's page did this
         // in its own ui_ready handler; the boot-module extraction (#46) must own
         // it so every consumer gets a visible, painted canvas.
-        try { canvas.style.visibility = 'visible'; globalThis.dispatchEvent(new Event('resize')) } catch (err) { /* ignore */ }
+        canvas.style.visibility = 'visible'
+        ready = true
+        resizeCanvas(true)
         log('UI ready')
         if (onReady) onReady()
       }
       if (onWorkerMessage) onWorkerMessage(d)
     }
 
-    // Keep the embedded Qt window sized to the canvas.
-    const resizeTimer = setInterval(function () {
-      try { globalThis.dispatchEvent(new Event('resize')) } catch (e) { /* ignore */ }
-    }, 1000)
+    // Qt needs a resize when the pane changes, not a periodic callback into
+    // native windows that may be closing during document replacement.
+    const resizeObserver = new ResizeObserver(() => resizeCanvas())
+    resizeObserver.observe(canvas)
 
-    const dispose = () => { clearInterval(resizeTimer) }
+    dispose = () => { if (disposed) return; disposed = true; resizeObserver.disconnect() }
 
     const s = document.createElement('script')
     s.src = sofficeBaseUrl + 'soffice.js'
@@ -277,13 +313,22 @@ export function bootZetaOffice(options = {}) {
     // only after soffice.js has run — so wire it in onload. (Verified against the
     // allotropia/zetajs web-office example.)
     s.onload = function () {
-      log('soffice.js loaded — initializing office thread…')
-      Module.uno_main.then(function (port) {
-        port.onmessage = onMessage
-        log('thread port ready')
-        resolve({ port, dispose })
-      }, function (err) { dispose(); reject(new Error('uno_main rejected: ' + err)) })
+      // s.onload is a plain DOM callback (not async): a synchronous throw here
+      // (e.g. Module.uno_main being missing/undefined) would otherwise vanish —
+      // nothing upstream catches it, so the boot promise would hang forever.
+      try {
+        log('soffice.js loaded — initializing office thread…')
+        Module.uno_main.then(function (port) {
+          port.onmessage = onMessage
+          log('thread port ready')
+          resolve({ port, dispose })
+        }, function (err) { dispose(); reject(new Error('uno_main rejected: ' + err)) })
+      } catch (e) {
+        dispose()
+        rejectWithError(e)
+      }
     }
     document.body.appendChild(s)
+    })().catch(rejectWithError)
   })
 }

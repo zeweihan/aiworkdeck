@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.storage;
 
 import org.springframework.core.io.Resource;
@@ -27,21 +30,55 @@ public interface StorageService {
     String save(String fileId, InputStream inputStream) throws StorageException;
 
     /**
-     * 读取文件
-     * 
+     * 读取文件。
+     *
+     * <p><b>纯读操作：文件不存在必须抛 {@link StorageException}，绝不允许就地造一个出来。</b>
+     * 本地实现曾在此处「文件不存在就从模板复制一份」，于是一份正文丢失的合同被读成一份
+     * 空白模板，用户打开看到的是空文档、AI 读到的是模板内容，全程没有任何报错；
+     * 自动保存再把这份空白盖回去，原件就真的没了。新建文档要物化模板请走
+     * {@link #createFromTemplate(String)}——建和读是两件事，别再合用一个方法。
+     *
      * @param fileId 文件ID
      * @return 文件资源
-     * @throws StorageException 存储异常
+     * @throws StorageException 文件不存在或读取失败
      */
     Resource load(String fileId) throws StorageException;
 
     /**
+     * 新建文档时物化一个初始文件（本地实现从 docs/template.docx 复制，缺模板则建空文件）。
+     *
+     * <p>只有「创建」路径可以调用；已存在则原样不动（幂等）。
+     * 默认空实现：对象存储此前根本没有这条路（{@code load} 直接抛，调用方 catch 掉记一行日志），
+     * 保持这个既有行为，不在本次修复里给 OSS 新增一次上传。
+     */
+    default void createFromTemplate(String fileId) throws StorageException {
+        // no-op：见 javadoc
+    }
+
+    /**
      * 删除文件
-     * 
+     *
      * @param fileId 文件ID
      * @throws StorageException 存储异常
      */
     void delete(String fileId) throws StorageException;
+
+    /**
+     * 把 fromId 的内容挪到 toId（目标已存在则覆盖），成功后 fromId 不复存在。
+     *
+     * <p>「先写临时 key、再 move 顶替」是覆盖式落盘的原子化手段（插件文档镜像，
+     * dev-board#299）：直接 save 到最终 key 中途失败会留半截文件。本地实现用
+     * {@code Files.move}（同卷原子）；默认实现退化为 load→save→delete 流拷贝
+     * （对象存储没有原子 move，覆盖窗口收窄到对象存储自身的 put 原子性）。
+     */
+    default void move(String fromId, String toId) throws StorageException {
+        try (InputStream in = load(fromId).getInputStream()) {
+            save(toId, in);
+        } catch (java.io.IOException e) {
+            throw new StorageException("文件移动失败: " + e.getMessage(), e);
+        }
+        delete(fromId);
+    }
 
     /**
      * 检查文件是否存在

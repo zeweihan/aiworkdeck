@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import org.junit.jupiter.api.DisplayName;
@@ -210,5 +213,87 @@ class LlmErrorClassifierTest {
                 new RuntimeException("status code: 503 - service unavailable"));
 
         assertEquals(LlmErrorClassifier.Kind.TRANSIENT, LlmErrorClassifier.classify(err));
+    }
+
+    @Test
+    @DisplayName("断网：传输类失败的终态载荷带 AI_NETWORK_UNREACHABLE，前端才能说「网络连接异常」（dev-board#602）")
+    void networkUnreachableIsTaggedForTheFrontend() {
+        // 断网现场的四种形态（桌面端 POST /chat 打的是本机后端，失败发生在后端去连模型网关这一跳）
+        Throwable[] offline = {
+                new java.net.UnknownHostException("openrouter.ai"),
+                new java.net.ConnectException("Connection refused"),
+                new javax.net.ssl.SSLHandshakeException("Remote host terminated the handshake"),
+                new java.net.SocketTimeoutException("connect timed out"),
+                // 包装过一层同样要认出来：上游原文常被 langchain4j 包成「Error while streaming response」
+                new RuntimeException("Error while streaming response", new java.net.UnknownHostException("openrouter.ai")),
+                // 出站 HTTP 的自家包装（CloudSyncService 等）
+                new IllegalStateException("云端不可达: openrouter.ai"),
+        };
+        for (Throwable err : offline) {
+            assertTrue(LlmErrorClassifier.isNetworkUnreachable(err),
+                    "应当认出传输类失败：" + err);
+            String tagged = LlmErrorClassifier.taggedErrorMessage(LlmErrorClassifier.classify(err), err);
+            assertTrue(("Stream Error: " + tagged).contains(LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER),
+                    "终态载荷必须带标记，否则用户只看到一句英文主机名：" + tagged);
+        }
+    }
+
+    @Test
+    @DisplayName("传输类标记不误伤：限流/配额/地域/普通服务端错误都不带它")
+    void networkMarkerDoesNotLeakIntoOtherFailures() {
+        Throwable rateLimited = new RuntimeException("status code: 429 - rate limit exceeded");
+        assertFalse(LlmErrorClassifier.isNetworkUnreachable(rateLimited));
+        assertFalse(LlmErrorClassifier.taggedErrorMessage(LlmErrorClassifier.classify(rateLimited), rateLimited)
+                .contains(LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER));
+
+        Throwable region = new RuntimeException("status code: 403 - This model is not available in your region");
+        String regionTagged = LlmErrorClassifier.taggedErrorMessage(LlmErrorClassifier.classify(region), region);
+        assertTrue(regionTagged.contains(LlmErrorClassifier.REGION_BLOCKED_MARKER));
+        assertFalse(regionTagged.contains(LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER),
+                "一个载荷上不能同时挂两个标记，前端的 includes 链会按顺序命中错的那条");
+
+        Throwable serverError = new RuntimeException("status code: 502 - bad gateway");
+        assertFalse(LlmErrorClassifier.isNetworkUnreachable(serverError),
+                "5xx 是服务端自己的错，网络是通的，说「检查网络」会把用户带偏");
+    }
+
+    @Test
+    @DisplayName("本机连不上对端（DNS/连接/路由）单列为 NETWORK_UNREACHABLE：只重试 1 次、不换模型")
+    void unreachableHostIsItsOwnKind() {
+        for (Throwable err : new Throwable[]{
+                new java.net.UnknownHostException("openrouter.ai"),
+                new java.net.ConnectException("Connection refused"),
+                // macOS 上 ConnectException 的 message 常常就是这句：文本匹配会把它当成瞬时超时，
+                // 所以判据必须落在异常类型上而不是 message
+                new java.net.ConnectException("Operation timed out"),
+                new java.net.NoRouteToHostException("No route to host"),
+                new RuntimeException("Error while streaming response",
+                        new java.net.UnknownHostException("openrouter.ai")),
+        }) {
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
+            assertEquals(LlmErrorClassifier.Kind.NETWORK_UNREACHABLE, kind, "应判为本机不可达：" + err);
+            assertEquals(1, kind.maxRetries(), "给网络一次回来的机会就够，不烧 8/16/32 三轮");
+            assertEquals(2, kind.retryDelaySeconds(1));
+            assertFalse(kind.failoverable(),
+                    "本机 DNS/连接都不通，换哪个模型都是同一条死路——转移只会把用户再拖一轮");
+            assertTrue(LlmErrorClassifier.taggedErrorMessage(kind, err)
+                    .contains(LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER));
+        }
+    }
+
+    @Test
+    @DisplayName("握手中断与读超时维持 TRANSIENT：慢模型也会超时，误判成终局代价更高")
+    void handshakeAndTimeoutStayTransient() {
+        for (Throwable err : new Throwable[]{
+                new javax.net.ssl.SSLHandshakeException("Remote host terminated the handshake"),
+                new java.net.SocketTimeoutException("timeout"),
+        }) {
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
+            assertEquals(LlmErrorClassifier.Kind.TRANSIENT, kind, "不许收进终局分类：" + err);
+            assertEquals(3, kind.maxRetries());
+            // 但终态载荷仍然要带标记：重试与转移都跑完还是这个形态，就是网络的锅
+            assertTrue(LlmErrorClassifier.taggedErrorMessage(kind, err)
+                    .contains(LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER));
+        }
     }
 }

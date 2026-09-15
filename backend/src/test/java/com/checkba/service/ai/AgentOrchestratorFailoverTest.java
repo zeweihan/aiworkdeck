@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import org.junit.jupiter.api.DisplayName;
@@ -82,6 +85,40 @@ class AgentOrchestratorFailoverTest {
         // 收窄后跳过所有 INTERNATIONAL 候选
         assertEquals(AllowedModels.DEEPSEEK_V4_FLASH.getModelId(),
                 AgentOrchestrator.nextFailoverModel(mixedChain, "anthropic/claude-sonnet-5", Set.of(), true));
+    }
+
+    @Test
+    @DisplayName("带图的一轮：候选收窄成支持视觉的模型——切给读不了图的模型是一个必然的 400")
+    void visionFilterSkipsTextOnlyCandidates() {
+        // 生产默认链就是这个形状：第一条不支持视觉、第二条支持
+        List<String> defaultChain = List.of(
+                AllowedModels.DEEPSEEK_V4_FLASH.getModelId(), // 纯文本
+                AllowedModels.QWEN_3_7_FLASH.getModelId());   // 支持视觉
+
+        // 不收窄时按顺序取第一个（不带图的轮次仍走这条，行为不变）
+        assertEquals(AllowedModels.DEEPSEEK_V4_FLASH.getModelId(),
+                AgentOrchestrator.nextFailoverModel(defaultChain, "z-ai/glm-5.2", Set.of(), false, false));
+
+        // 栈里有图时跳过纯文本候选
+        assertEquals(AllowedModels.QWEN_3_7_FLASH.getModelId(),
+                AgentOrchestrator.nextFailoverModel(defaultChain, "z-ai/glm-5.2", Set.of(), false, true));
+    }
+
+    @Test
+    @DisplayName("带图的一轮：链里没有视觉候选时返回 null——宁可终态，也不要把图丢给瞎子模型")
+    void visionFilterMayExhaustChain() {
+        assertNull(AgentOrchestrator.nextFailoverModel(
+                List.of(AllowedModels.DEEPSEEK_V4_FLASH.getModelId(), AllowedModels.GLM_5_2.getModelId()),
+                "moonshotai/kimi-k3", Set.of(), false, true));
+    }
+
+    @Test
+    @DisplayName("四参重载不做视觉收窄：既有的地域收窄调用点行为一字不变")
+    void fourArgOverloadDoesNotFilterByVision() {
+        assertEquals(AllowedModels.DEEPSEEK_V4_FLASH.getModelId(),
+                AgentOrchestrator.nextFailoverModel(
+                        List.of(AllowedModels.DEEPSEEK_V4_FLASH.getModelId()),
+                        "z-ai/glm-5.2", Set.of(), true));
     }
 
     @Test

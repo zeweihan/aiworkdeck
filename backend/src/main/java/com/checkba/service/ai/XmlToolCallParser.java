@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import lombok.RequiredArgsConstructor;
@@ -78,9 +81,96 @@ public class XmlToolCallParser {
             if (code.isEmpty()) {
                 continue;
             }
-            calls.add(parseSingle(code));
+            for (String statement : splitStatements(code)) {
+                if (!statement.isBlank()) {
+                    calls.add(parseSingle(statement));
+                }
+            }
         }
         return calls;
+    }
+
+    /**
+     * 把一个 tool_code 块拆成若干条顶层调用。
+     *
+     * <p>协议是「一个块放一个调用，要批量就连续输出多个块」（system_prompt.md）。
+     * 模型偶尔会把两条塞进同一个块，而此前每个块只产出一个 ParsedCall、
+     * extractStringArg 又只取每个参数名的第一次出现——第二条调用连痕迹都不留：
+     * 没有 ParsedCall、没有报错、没有日志，模型看到第一条成功就当整件事做完了，
+     * 用户要求的第二处修改根本没发生。
+     *
+     * <p><b>只有完全看得明白时才拆</b>：括号全程配平、引号成对、最后一条之后没有残留、
+     * 每一条都是「工具名(...)」的形状。任何一处不确定就原样返回单条，行为与从前一致——
+     * 拆错了会凭空多执行一个调用，比少执行一个更糟。
+     */
+    static List<String> splitStatements(String code) {
+        List<String> single = List.of(code);
+        // run_python 的 code 参数里什么都可能有；ctrl46 定界符格式压根不带括号
+        if (code.startsWith("run_python(") || code.contains("run_python(code=")) return single;
+        if (code.contains("<ctrl46>")) return single;
+
+        final String tripleDouble = "\"\"\"";
+        final String tripleSingle = "'''";
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        int i = 0;
+        boolean seenOpen = false;
+        while (i < code.length()) {
+            char c = code.charAt(i);
+            if (code.startsWith(tripleDouble, i) || code.startsWith(tripleSingle, i)) {
+                String marker = code.startsWith(tripleDouble, i) ? tripleDouble : tripleSingle;
+                int end = code.indexOf(marker, i + 3);
+                if (end < 0) return single;
+                i = end + 3;
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                char quote = c;
+                i++;
+                boolean closed = false;
+                while (i < code.length()) {
+                    char q = code.charAt(i);
+                    if (q == '\\') { i += 2; continue; }
+                    if (q == quote) { i++; closed = true; break; }
+                    i++;
+                }
+                if (!closed) return single;
+                continue;
+            }
+            if (c == '(') {
+                depth++;
+                seenOpen = true;
+                i++;
+                continue;
+            }
+            if (c == ')') {
+                depth--;
+                if (depth < 0) return single;
+                i++;
+                if (depth == 0 && seenOpen) {
+                    parts.add(code.substring(start, i).trim());
+                    while (i < code.length()
+                            && (Character.isWhitespace(code.charAt(i)) || code.charAt(i) == ';')) {
+                        i++;
+                    }
+                    start = i;
+                    seenOpen = false;
+                }
+                continue;
+            }
+            i++;
+        }
+        if (depth != 0) return single;
+        if (start < code.length() && !code.substring(start).isBlank()) return single;
+        if (parts.size() < 2) return single;
+        for (String part : parts) {
+            int paren = part.indexOf('(');
+            if (paren <= 0 || !TOOL_NAME_HEAD.matcher(part.substring(0, paren).strip()).matches()) {
+                return single;
+            }
+        }
+        return parts;
     }
 
     ParsedCall parseSingle(String code) {
@@ -298,20 +388,71 @@ public class XmlToolCallParser {
     }
 
     /**
-     * JSON 风格调用：tool({...}) → 直接返回 {...}；不是该风格返回 null。
+     * JSON 风格调用：{@code tool({...})} → 直接返回 {@code {...}}；不是该风格返回 null。
+     *
+     * <p>必须锚定到「工具名紧跟左括号」「右花括号收在调用末尾」这个形状。此前用
+     * {@code indexOf("({")} / {@code lastIndexOf("})")} 在整段文本里找，参数值里
+     * 只要出现一对 {@code ({ ... })}——正文引用代码、字典字面量、一句
+     * 「helper({k: 1})」都算——就会被整体当成参数对象返回，真正的命名参数全部丢失。
+     * 而 hutool 的 JSON 解析对无引号键很宽容，所以连兜底 catch 都不会兜住，
+     * 工具拿着一组凭空捏造的参数照常执行，全程零报错。
      */
     private String tryExtractJsonObjectArgs(String code) {
-        int jsonStart = code.indexOf("({");
-        int jsonEnd = code.lastIndexOf("})");
-        if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart) {
-            return null;
+        String trimmed = code.strip();
+        // 允许末尾的分号（模型偶尔按 JS 习惯加）
+        while (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1).strip();
         }
-        String jsonStr = code.substring(jsonStart + 1, jsonEnd + 1);
+        if (!trimmed.endsWith(")")) return null;
+        int paren = trimmed.indexOf('(');
+        if (paren <= 0) return null;
+        // 左括号之前必须整段都是工具名（允许 xx.yy 前缀），中间不许夹别的东西
+        String head = trimmed.substring(0, paren).strip();
+        if (!TOOL_NAME_HEAD.matcher(head).matches()) return null;
+        String inner = trimmed.substring(paren + 1, trimmed.length() - 1).strip();
+        if (!inner.startsWith("{") || !inner.endsWith("}")) return null;
         try {
-            return cn.hutool.json.JSONUtil.parseObj(jsonStr).toString();
+            return cn.hutool.json.JSONUtil.parseObj(inner).toString();
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static final java.util.regex.Pattern TOOL_NAME_HEAD =
+            java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_.]*");
+
+    /**
+     * 从 start（指向 '[' 或 '{'）起按括号深度扫到配对的闭括号，返回闭括号之后的下标；
+     * 引号内的内容（含转义）不参与计数。找不到配对时返回 -1，由调用方退回旧规则。
+     */
+    static int findJsonLiteralEnd(String code, int start) {
+        int depth = 0;
+        char quote = 0;
+        boolean escaped = false;
+        for (int i = start; i < code.length(); i++) {
+            char c = code.charAt(i);
+            if (quote != 0) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '[' || c == '{') {
+                depth++;
+            } else if (c == ']' || c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i + 1;
+                }
+            }
+        }
+        return -1;
     }
 
     /**
@@ -365,6 +506,17 @@ public class XmlToolCallParser {
                     int valueStart = unquotedStart + key.length() + 1;
                     if (valueStart < code.length()) {
                         char firstChar = code.charAt(valueStart);
+                        // 裸 JSON 字面量：key=[{...},{...}] / key={...}（dev-board#393）。
+                        // Kimi K3 会在「带引号转义」与「裸数组」两种写法间随机切换，
+                        // 后者若按下面的标量规则扫到第一个逗号就截断，todo_write 拿到
+                        // 半截 JSON、模型收到「传参格式错误」再试一轮再错一轮。
+                        // 这里按括号深度取到配对的闭括号（字符串内的逗号/括号不算）。
+                        if (firstChar == '[' || firstChar == '{') {
+                            int literalEnd = findJsonLiteralEnd(code, valueStart);
+                            if (literalEnd > valueStart) {
+                                return code.substring(valueStart, literalEnd);
+                            }
+                        }
                         if (firstChar != '"' && firstChar != '\'') {
                             int valueEnd = valueStart;
                             while (valueEnd < code.length()) {

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view 
     v-if="visible" 
@@ -36,6 +38,7 @@
       v-if="quotaTight"
       class="staging-unlock-hint"
       :text="$t('files.quotaTightHint')"
+      sku-id="feature:stage.unlimited"
     />
 
     <!-- Contrast Button (Visible when exactly 2 DOC/DOCX files are selected) -->
@@ -107,6 +110,7 @@
 
 <script>
 import { ICONS } from '@/config/icons.js'
+import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 export default {
   name: 'FileStagingArea',
@@ -174,7 +178,8 @@ export default {
 
   },
   mounted() {
-      // Marquee listeners removed
+      // 预加载拖拽 ghost 小徽标（与 FileTree 同一份，见 utils/dragImage.js）
+      warmDragImage()
   },
   beforeUnmount() {
       // Marquee listeners removed
@@ -236,6 +241,8 @@ export default {
       // Standard data format for internal file drag
       if (event.dataTransfer) {
           event.dataTransfer.effectAllowed = 'copy'
+          // 小徽标拖拽影像：不设的话是整行元素快照（含 × 删除钮）浮在正文上
+          applyDragImage(event)
           // Use the same format as FileTree to handle drop in editors
           event.dataTransfer.setData('application/json', JSON.stringify(file))
           // Also text/plain for general use
@@ -298,7 +305,12 @@ export default {
                   // Note: text/plain might be just an index if from FileTree, so we need validation
                   if (rawData.startsWith('{')) {
                       const data = JSON.parse(rawData)
-                      if (data.fileId) {
+                      // 文件夹没有守卫会被当成普通文件收进暂存区：FileTree.vue 的拖拽对
+                      // 文件/文件夹一视同仁（handleDragStart 里 fileType 写的是
+                      // item.isFolder ? 'folder' : item.fileType），暂存区消费端是给 AI
+                      // 读内容用的，读一个文件夹只会拿到空/报错，且这里的容错只打日志，
+                      // 用户看不出区别——直接在源头拒绝。
+                      if (data.fileId && data.fileType !== 'folder') {
                           files.push({
                               id: data.fileId,
                               name: data.name,
@@ -316,7 +328,8 @@ export default {
       // 2. Fallback: Check global variable (for environments where dataTransfer is restricted/cleared)
       if (files.length === 0 && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
           const data = document.__checkbaDraggedFile
-          if (data.fileId) {
+          // 同上：这条全局兜底走的是同一份 {fileId, fileType} 形状，文件夹要挡在这里
+          if (data.fileId && data.fileType !== 'folder') {
              files.push({
                 id: data.fileId,
                 name: data.name,
@@ -329,7 +342,24 @@ export default {
       }
 
       if (files.length > 0) {
-          this.$emit('drop', files) 
+          this.$emit('drop', files)
+          return
+      }
+
+      // 3. 真实的 OS 文件拖拽（Finder/Explorer/桌面）：面板对任意拖拽都会亮起
+      //    "松手暂存文件" 遮罩（见 onDragEnter/onDragOver），但上面两步只认得
+      //    "项目里已有文件"的内部格式（应用内 JSON / 全局兜底变量）。拖一个真实
+      //    磁盘文件进来时两步都取不出数据，以前到这里就直接什么都不做——遮罩
+      //    消失、用户以为暂存了，其实什么也没发生。dataTransfer.files 是浏览器
+      //    给的原生 File 列表，交给宿主走真正的上传通道。
+      //    地雷（dev-board#363）：uni-h5 重建 <view> 上的事件对象时 drag 系事件的
+      //    dataTransfer 会丢，这里必须回落到正在派发的原生事件 window.event 上取。
+      const nativeDt = (e && e.dataTransfer)
+        || (typeof window !== 'undefined' && window.event && window.event.dataTransfer)
+        || null
+      const osFiles = nativeDt && nativeDt.files
+      if (osFiles && osFiles.length > 0) {
+          this.$emit('drop-files', Array.from(osFiles))
       }
     },
     
@@ -360,15 +390,15 @@ export default {
   display: flex;
   flex-direction: column;
   
-  background: #f8fafc;
-  border-top: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05);
   transition: all 0.2s ease;
 }
 
 .drop-zone-container.is-dragging {
-    background: #eff6ff;
-    border-color: #3b82f6;
+    background: var(--awd-info-soft);
+    border-color: var(--awd-info);
 }
 
 .staging-header {
@@ -377,8 +407,8 @@ export default {
     align-items: center;
     justify-content: space-between;
     padding: 0 8px 0 12px;
-    background: #f1f5f9;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--awd-surface-2);
+    border-bottom: 1px solid var(--awd-border);
 }
 
 .header-left {
@@ -390,7 +420,7 @@ export default {
 .staging-title {
     font-size: 12px;
     font-weight: 600;
-    color: #475569;
+    color: var(--awd-text-2);
 }
 
 .collapse-btn {
@@ -400,13 +430,13 @@ export default {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     border-radius: 4px;
 }
 
 .collapse-btn:hover {
-    background: #e2e8f0;
-    color: #64748b;
+    background: var(--awd-surface-3);
+    color: var(--awd-text-2);
 }
 
 .collapse-icon {
@@ -417,11 +447,11 @@ export default {
 
 .clear-btn {
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     cursor: pointer;
 }
 .clear-btn:hover {
-    color: #ef4444;
+    color: var(--awd-danger-text);
 }
 
 /* 用量条：常态是灰细线，克制到几乎看不见；接近上限才转暖色 */
@@ -430,37 +460,37 @@ export default {
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
-    background: #fff;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--awd-surface);
+    border-bottom: 1px solid var(--awd-border);
 }
 
 .quota-bar {
     flex: 1;
     height: 3px;
     border-radius: 2px;
-    background: #e2e8f0;
+    background: var(--awd-surface-3);
     overflow: hidden;
 }
 
 .quota-fill {
     height: 100%;
-    background: #cbd5e1;
+    background: var(--awd-surface-3);
     border-radius: 2px;
     transition: width 0.2s ease, background 0.2s ease;
 }
 
 .quota-text {
     font-size: 11px;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     flex-shrink: 0;
 }
 
 .staging-quota.is-tight .quota-fill {
-    background: #d9a441;
+    background: var(--awd-warning);
 }
 
 .staging-quota.is-tight .quota-text {
-    color: #8a6d2f;
+    color: var(--awd-warning-text);
 }
 
 .staging-unlock-hint {
@@ -472,9 +502,9 @@ export default {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     font-size: 12px;
-    border: 2px dashed #e2e8f0;
+    border: 2px dashed var(--awd-border);
     margin: 8px;
     border-radius: 6px;
 }
@@ -515,33 +545,33 @@ export default {
 .custom-checkbox {
     width: 14px;
     height: 14px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--awd-border-strong);
     border-radius: 3px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #fff;
+    background: var(--awd-surface);
     transition: all 0.2s;
 }
 
 .custom-checkbox.checked {
-    background: #3b82f6;
-    border-color: #3b82f6;
+    background: var(--awd-info);
+    border-color: var(--awd-info);
 }
 
 .check-mark {
-    color: #fff;
+    color: var(--awd-text-on-accent);
     font-size: 10px;
     font-weight: bold;
     line-height: 1;
 }
 
 .staging-item:hover {
-    background: #f1f5f9;
+    background: var(--awd-surface-2);
 }
 .staging-item.selected {
-    background: #e0f2fe;
-    border-color: #bae6fd;
+    background: var(--awd-info-soft);
+    border-color: var(--awd-info);
 }
 
 .file-icon {
@@ -553,7 +583,7 @@ export default {
 
 .file-name {
     font-size: 12px;
-    color: #334155;
+    color: var(--awd-text);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
@@ -562,26 +592,26 @@ export default {
 
 .remove-btn {
     margin-left: 8px;
-    color: #94a3b8;
+    color: var(--awd-text-3);
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
     padding: 4px;
 }
 .remove-btn:hover {
-    color: #ef4444;
+    color: var(--awd-danger-text);
 }
 
 .compare-btn-wrapper {
     padding: 8px;
-    background: #fff;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--awd-surface);
+    border-bottom: 1px solid var(--awd-border);
     display: flex;
     justify-content: center;
 }
 
 .btn-compare {
-    background: #3b82f6;
+    background: var(--awd-info);
     color: white;
     border: none;
     border-radius: 4px;
@@ -594,7 +624,7 @@ export default {
     line-height: 1.5;
 }
 .btn-compare:hover {
-    background: #2563eb;
+    background: var(--awd-info);
 }
 
 .drop-overlay {
@@ -604,11 +634,11 @@ export default {
     right: 0;
     bottom: 0;
     background: rgba(59, 130, 246, 0.1);
-    border: 2px dashed #3b82f6;
+    border: 2px dashed var(--awd-info);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #2563eb;
+    color: var(--awd-info-text);
     font-weight: 600;
     pointer-events: none; /* Let drag events pass through to layer below if needed, but here overlay is top */
     z-index: 101;
@@ -623,7 +653,7 @@ export default {
 .marquee-box {
     position: absolute;
     background: rgba(59, 130, 246, 0.2);
-    border: 1px solid #3b82f6;
+    border: 1px solid var(--awd-info);
     pointer-events: none;
     z-index: 1000;
 }

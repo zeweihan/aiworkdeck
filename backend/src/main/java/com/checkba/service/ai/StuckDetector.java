@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import java.util.ArrayDeque;
@@ -41,7 +44,17 @@ public class StuckDetector {
      * @return OK / INTERVENE / CIRCUIT_BREAK
      */
     public Verdict record(String toolName, String argsJson) {
-        String signature = toolName + "|" + (argsJson == null ? "" : argsJson);
+        return record(toolName, argsJson, "", false);
+    }
+
+    /**
+     * Record the observation as well as the call. Polling the same endpoint with changing results
+     * is progress and must remain legal; only an unchanged call/result cycle is considered stuck.
+     */
+    public Verdict record(String toolName, String argsJson, String output, boolean success) {
+        String observed = output == null ? "" : output;
+        String signature = toolName + "|" + (argsJson == null ? "" : argsJson)
+                + "|" + (success ? "S" : "F") + "|" + observed.length() + ":" + observed.hashCode();
         if (window.size() >= WINDOW_SIZE) {
             window.removeFirst();
         }

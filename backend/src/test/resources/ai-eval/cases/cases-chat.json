@@ -19,8 +19,8 @@
     }
   },
   {
-    "id": "ask-mode-consultation-no-tools",
-    "title": "ASK 模式纯咨询：不向 LLM 提供工具规格",
+    "id": "ask-mode-consultation-read-only-memory",
+    "title": "ASK 模式纯咨询：只提供只读记忆工具",
     "category": "chat",
     "protocol": "xml",
     "mode": "ASK",
@@ -34,7 +34,9 @@
       "toolCalls": [],
       "structureContains": ["<final>"],
       "bubbleEndStatus": "finished",
-      "toolsOffered": false
+      "toolsOffered": true,
+      "offeredToolsInclude": ["memory_list", "memory_read", "memory_search"],
+      "offeredToolsExclude": ["memory_write", "memory_edit", "memory_delete", "write_file", "save_memory"]
     }
   },
   {

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <div
     class="process-card"
@@ -33,8 +35,8 @@
 
     <div class="process-body" v-if="isExpanded || isHeadless">
       <!-- Items List -->
-      <div class="items-list" v-if="process.items && process.items.length > 0">
-        <div v-for="(item, idx) in process.items" :key="idx" class="process-item">
+      <div class="items-list" v-if="renderItems.length > 0">
+        <div v-for="(item, idx) in renderItems" :key="idx" class="process-item">
 
             <!-- CASE 1: Normal Step or File Attachment -->
             <div v-if="item.type === 'step'" class="step-container">
@@ -107,7 +109,9 @@
                     <!-- 子任务结果单独渲染：dispatch_subtask 的输出是 SubAgentResult 的 JSON，
                          裸 JSON 对律师毫无意义。解析不出预期结构就退回纯文本（下方分支）。 -->
                     <SubtaskResultCard v-if="subtaskResult(item)" :result="subtaskResult(item)" />
-                    <div v-else class="output-text">{{ outputText(item) }}</div>
+                    <!-- 原始 JSON 对律师是一段「代码」（dev-board#178）：能解析的一律
+                         渲染成缩进键值文本（空字段/语法噪音剥掉），解析不了的才按原文展示。 -->
+                    <div v-else class="output-text">{{ humanOutput(item) }}</div>
                     <!-- 截断标记由后端 SSE 侧加（AgentOrchestrator.toolOutputDisplayLimit 按
                          工具分档：结果型工具 16000，其余 4000），必须明示：模型看到的是全文，
                          这里没有。刻意不写具体字数——上限是分档的，写死数字就会说谎。 -->
@@ -140,6 +144,7 @@ import ThinkingCard from './ThinkingCard.vue'
 import SubtaskResultCard from './SubtaskResultCard.vue'
 import FileTypeIcon from '../FileTypeIcon.vue'
 import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
+import { humanizeToolOutput } from '@/utils/toolOutputHumanize.js'
 import { isEnglish } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 
@@ -216,6 +221,18 @@ const hasOutput = (item) => !!(item && item.output && String(item.output).trim()
 
 const outputText = (item) => String((item && item.output) || '').trim()
 
+// 可读化缓存：与 subtaskCache 同理，流式中 output 每个 token 都在变。
+const humanCache = new Map()
+const humanOutput = (item) => {
+    const raw = outputText(item)
+    if (humanCache.has(raw)) return humanCache.get(raw)
+    const human = humanizeToolOutput(raw)
+    const shown = human != null ? human : raw
+    if (humanCache.size > 16) humanCache.clear()
+    humanCache.set(raw, shown)
+    return shown
+}
+
 const isOutputOpen = (idx) => !!openOutputs.value[idx]
 
 const toggleOutput = (idx) => {
@@ -272,11 +289,71 @@ const isSecondaryContent = (text) => {
     if (!text) return false
     return text.includes('主要内容') || text.includes('摘要')
 }
+
+// ---- 单子项去重折叠（对齐 Claude 桌面端：一行工具调用 + 一条轻量思考折叠） ----
+// 步骤展开后经常还有一层：一行「进度文案」（type: step，模型边做边述的过程文字）
+// 复述的内容跟 process 自己的标题（如「读取材料并查阅规范」）大意相同（如「查阅制图
+// 规范」）。这层子列表不提供标题之外的新信息，默认折叠掉，只留步骤行（本卡头部）+
+// 思考过程折叠入口。纯展示层判定，不改 process.items 数据结构本身。
+
+// 状态尾缀（已完成/成功/进行中…）与「正在/已」前缀只是噪声，参与语义比较前先剥掉
+const STATUS_SUFFIX_RE = /[-—–:：]?\s*(已完成|已核对|完成|已就绪|成功|进行中|处理中|done|success|completed|finished|in progress)[。.]?\s*$/i
+const normalizeLabel = (text) => {
+    if (!text) return ''
+    let s = String(text).trim()
+    s = s.replace(STATUS_SUFFIX_RE, '')
+    s = s.replace(/[。.…]+\s*$/, '')
+    s = s.replace(/^(正在|开始|已|正)/, '')
+    return s.trim()
+}
+
+const charBigrams = (s) => {
+    const grams = new Set()
+    if (!s) return grams
+    if (s.length < 2) { grams.add(s); return grams }
+    for (let i = 0; i < s.length - 1; i++) grams.add(s.substr(i, 2))
+    return grams
+}
+
+// 字符级二元组 Jaccard 相似度（对中文短语比分词简单可靠）+ 互相包含的强信号兜底。
+// 阈值 0.34 是经验值——「查阅制图规范」与「读取材料并查阅规范」的重叠度在这附近。
+// 纯展示层判定，误判代价只是多显示/少显示一行文字，不影响数据。
+const labelsSimilar = (a, b) => {
+    const na = normalizeLabel(a)
+    const nb = normalizeLabel(b)
+    if (!na || !nb) return false
+    if (na === nb || na.includes(nb) || nb.includes(na)) return true
+    const A = charBigrams(na)
+    const B = charBigrams(nb)
+    let inter = 0
+    A.forEach(g => { if (B.has(g)) inter++ })
+    const union = A.size + B.size - inter
+    return union > 0 && (inter / union) >= 0.34
+}
+
+// 折叠命中条件：process.items 里除 thinking 外只剩一条内容条目，且它是纯文字的
+// 「进度文案」（type: step）。type: tool 永远不参与折叠——那是用户点开核验
+// 参数/输出的唯一入口，绝不能因为语义撞了标题就被藏起来。出错条目、文件附件
+// 卡片同样永不折叠（前者要求永远可见，后者是有信息量的独立展示，不是文字复述）。
+const shouldCollapseSoleItem = computed(() => {
+    const contentItems = (props.process.items || []).filter(i => i.type === 'step' || i.type === 'tool')
+    if (contentItems.length !== 1) return false
+    const only = contentItems[0]
+    if (only.type !== 'step' || only.status === 'error' || detectFile(only.text)) return false
+    return labelsSimilar(only.text, processTitle.value)
+})
+
+// 折叠命中时只保留 thinking 条目（思考过程的展开入口不受影响）；未命中原样返回
+// process.items 本身的引用与下标，不打乱「items 只追加不重排、按下标记开合」的既有契约。
+const renderItems = computed(() => {
+    if (!shouldCollapseSoleItem.value) return props.process.items || []
+    return (props.process.items || []).filter(i => i.type === 'thinking')
+})
 </script>
 
 <style scoped>
 .process-card {
-  background: #ffffff;
+  background: var(--awd-surface);
   border-radius: 12px 12px 0 0;
   /* border-bottom: 1px solid #1A5336; */
   /* box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1); */
@@ -297,12 +374,12 @@ const isSecondaryContent = (text) => {
   align-items: center;
   padding: 7px 12px;
   cursor: pointer;
-  background: #ffffff;
+  background: var(--awd-surface);
   transition: background 0.15s;
 }
 
 .process-header:hover {
-  background: #F8F9FA; /* Gray-Pale */
+  background: var(--awd-bg); /* Gray-Pale */
 }
 
 .left {
@@ -312,7 +389,7 @@ const isSecondaryContent = (text) => {
 }
 
 .header-icon-wrapper {
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -321,7 +398,7 @@ const isSecondaryContent = (text) => {
 .title {
   font-size: 13px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .right {
@@ -338,22 +415,22 @@ const isSecondaryContent = (text) => {
 }
 
 .status-badge.success {
-  background: #E6F9F0; /* Mint Lightest */
-  color: #1A5336; /* Forest Green */
+  background: var(--awd-accent-soft); /* Mint Lightest */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .status-badge.processing {
-  background: #E9ECEF; /* Gray-Light */
-  color: #6C757D; /* Gray-Medium */
+  background: var(--awd-surface-3); /* Gray-Light */
+  color: var(--awd-text-2); /* Gray-Medium */
 }
 
 .status-badge.error {
-  background: #FDEDEC;
-  color: #C0392B;
+  background: var(--awd-bg);
+  color: var(--awd-danger-text);
 }
 
 .chevron-wrapper {
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   transition: transform 0.2s ease;
 }
 
@@ -385,23 +462,23 @@ const isSecondaryContent = (text) => {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
   margin-top: 6px;
   flex-shrink: 0;
 }
 
 .step-dot.done {
-    background: #5BD197; /* Mint Green */
+    background: var(--awd-mint); /* Mint Green */
 }
 
 .step-text {
   font-size: 12px;
-  color: #2C3338; /* Gray-Dark */
+  color: var(--awd-text); /* Gray-Dark */
   line-height: 1.45;
 }
 
 .step-text.is-meta {
-    color: #6C757D; /* Gray-Medium */
+    color: var(--awd-text-2); /* Gray-Medium */
     font-size: 11px;
 }
 
@@ -409,8 +486,8 @@ const isSecondaryContent = (text) => {
 .file-attachment-card {
     display: flex;
     align-items: center;
-    background: #F8F9FA; /* Gray-Pale */
-    border: 1px solid #E9ECEF; /* Gray-Light */
+    background: var(--awd-bg); /* Gray-Pale */
+    border: 1px solid var(--awd-border); /* Gray-Light */
     border-radius: 8px;
     padding: 7px 10px;
     gap: 10px;
@@ -429,7 +506,7 @@ const isSecondaryContent = (text) => {
 .file-name {
     font-size: 13px;
     font-weight: 600;
-    color: #2C3338;
+    color: var(--awd-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -437,7 +514,7 @@ const isSecondaryContent = (text) => {
 
 .file-meta {
     font-size: 11px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     margin-top: 1px;
 }
 
@@ -453,14 +530,14 @@ const isSecondaryContent = (text) => {
     align-items: center;
     justify-content: center;
     border-radius: 6px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .action-btn:hover {
-    background: #E9ECEF;
-    color: #1A5336;
+    background: var(--awd-surface-3);
+    color: var(--awd-accent-text);
 }
 
 /* Tool Row */
@@ -473,7 +550,7 @@ const isSecondaryContent = (text) => {
   align-items: center;
   justify-content: space-between;
   padding: 3px 8px;
-  background: #F8F9FA;
+  background: var(--awd-bg);
   border-radius: 5px;
   margin-left: 0;
 }
@@ -483,7 +560,7 @@ const isSecondaryContent = (text) => {
 }
 
 .tool-row.is-clickable:hover {
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
 }
 
 .tool-right {
@@ -494,7 +571,7 @@ const isSecondaryContent = (text) => {
 }
 
 .output-chevron {
-    color: #ADB5BD;
+    color: var(--awd-text-3);
     display: flex;
     align-items: center;
     transition: transform 0.2s ease;
@@ -507,9 +584,9 @@ const isSecondaryContent = (text) => {
 /* 工具返回结果折叠区 */
 .tool-output {
     margin: 3px 0 5px 0;
-    border: 1px solid #E9ECEF;
+    border: 1px solid var(--awd-border);
     border-radius: 6px;
-    background: #ffffff;
+    background: var(--awd-surface);
     overflow: hidden;
 }
 
@@ -518,7 +595,7 @@ const isSecondaryContent = (text) => {
     font-family: 'SF Mono', Menlo, Consolas, monospace;
     font-size: 11px;
     line-height: 1.5;
-    color: #2C3338;
+    color: var(--awd-text);
     white-space: pre-wrap;
     word-break: break-word;
     /* 长输出自己滚，不把气泡撑爆 */
@@ -529,10 +606,10 @@ const isSecondaryContent = (text) => {
 
 .output-truncated {
     padding: 4px 8px;
-    border-top: 1px solid #F1F3F5;
-    background: #F8F9FA;
+    border-top: 1px solid var(--awd-border-subtle);
+    background: var(--awd-bg);
     font-size: 10px;
-    color: #6C757D;
+    color: var(--awd-text-2);
 }
 
 .tool-content {
@@ -544,7 +621,7 @@ const isSecondaryContent = (text) => {
 
 .tool-name {
     font-size: 12px;
-    color: #1A5336;
+    color: var(--awd-accent-text);
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -557,9 +634,9 @@ const isSecondaryContent = (text) => {
     flex-shrink: 0;
 }
 
-.status-loading { color: #6C757D; }
-.status-success { color: #5BD197; }
-.status-error { color: #E74C3C; }
+.status-loading { color: var(--awd-text-2); }
+.status-success { color: var(--awd-mint); }
+.status-error { color: var(--awd-danger-text); }
 
 /* Thinking Row */
 .thinking-row {

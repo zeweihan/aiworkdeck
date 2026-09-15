@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # patch-gate.sh — 小版本发布纪律的机器强制（增量更新设计 §2.3）。
 #
 # tag v0.X.Y（Y>0）时校验：与同大版本上一个 tag 相比，
@@ -67,10 +69,11 @@ if [ -n "$engine_diff" ] || [ -n "$fetch_changed" ]; then
   violations+=("LOWA 引擎来源有改动（引擎只随大版本走）")
 fi
 
-# 4) Python 服务依赖（requirements.lock）——pysvc-src 补丁只发源码，pip 依赖随大版本
+# 4) Python 服务依赖（requirements.lock）——服务运行时已搬 native pack，
+#    lock 改动走 pack 发版（build-pack + pack-release + publish-pack.sh），不进小版本补丁
 req_changed=$(git diff --name-only "$PREV..$TAG" -- '*requirements.lock' || true)
 if [ -n "$req_changed" ]; then
-  violations+=("requirements.lock 有改动（Python 依赖只随大版本走）：$req_changed")
+  violations+=("requirements.lock 有改动（lock 改动走 pack 发版，不进补丁）：$req_changed")
 fi
 
 if [ ${#violations[@]} -gt 0 ]; then
@@ -79,7 +82,7 @@ if [ ${#violations[@]} -gt 0 ]; then
   for v in "${violations[@]}"; do echo "  - $v"; done
   echo ""
   echo "  处理：删 tag（git push origin :refs/tags/$TAG），把版本号升为大版本 0.$((X + 1)).0 后重新打 tag。"
-  echo "  依据：docs/INCREMENTAL_UPDATE_DESIGN.md §2.2（补丁只含 backend-app / frontend-h5 / zetaoffice-wrapper / pysvc-src）。"
+  echo "  依据：docs/INCREMENTAL_UPDATE_DESIGN.md §2.2（补丁只含 backend-app / frontend-h5 / zetaoffice-wrapper）。"
   exit 1
 fi
 

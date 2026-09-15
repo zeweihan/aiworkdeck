@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // agentStream：AI 对话 SSE 流（useAgentStream.js）的用户可见提示文案。
 // SSE 事件名/状态字面量（awaiting_input 等）与 AI_REGION_BLOCKED 判据是契约，不在此列。
 export default {
@@ -6,9 +8,10 @@ export default {
   taskStarting: '任务开始...',
   taskCompleted: '任务完成',
   taskFailed: '任务失败',
-  // 流式连接与停止标记（拼进气泡 content 的 markdown 片段）
+  // 流式连接标记（拼进气泡 content 的 markdown 片段）
   connectionInterrupted: '*[连接中断]*',
-  stopping: '*[正在停止]*',
+  // 停止提示（走 bubble.stopNotice 独立字段渲染，纯文本不是 markdown）
+  stopRequested: '已发送停止指令',
   // 发送防重入 toast
   alreadyStreamingToast: 'AI 正在执行中，请等待完成或点击停止',
   // 错误提示
@@ -18,11 +21,22 @@ export default {
   regionBlockedNotice: '> **该模型在当前网络环境不可用**：境外模型在境内网络会被服务商按地域拒绝。可在设置中改用 AI WorkDeck 云端通道，或换成标注「境内外均可用」的模型后重新发送。',
   quotaExhaustedNotice: '> **AI 服务额度不足**：当前通道的余额或配额已用完。使用自备 Key 时请到服务商（如 OpenRouter）充值；使用 AI WorkDeck 云端通道时请到官网账户页检查额度分配。',
   contextOverflowNotice: '> **对话上下文超出模型窗口**：已尝试自动压缩仍超限。建议开启新对话继续，或减少一次携带的文件数量与长度。',
+  networkUnreachableNotice: '> **网络连接异常**：本机连不上 AI 服务（可能是断网、DNS 解析失败或代理不通）。请检查网络后重新发送这条消息。',
+  interruptedRunEndedNotice: '> **连接曾中断**：断线期间这一轮已在后台结束，上面显示的内容可能不完整。刷新页面或重新打开这个会话可查看完整记录。',
+  internalErrorNotice: '> **本轮执行被内部错误中断**：已完成的操作与工具执行过程都已保存，可在历史里查看。请再发一次消息继续；如果反复出现，请通过右下角反馈把这段对话发给我们。',
   // 子任务进度行
   subtaskStarted: '子任务开始',
   subtaskEnded: '子任务结束',
   // 文档流式写入占位
   docStreamingPlaceholder: '*（正在向文档流式写入内容…）*',
+  // 流式写入失败：宁可把失败摆出来，也不能停在上面那句「正在写入」（dev-board#465）
+  docStreamFailedNotice: '> **内容没能写进文档**：{reason}。文件已经建好但可能是空的，请打开确认；需要的话让我重写一次。',
+  docStreamReasonEditorNotReady: '文档编辑器尚未就绪',
+  docStreamReasonWrongTarget: '编辑器当前打开的不是本次写入的目标文档',
+  docStreamReasonInsertFailed: 'stream_insert 失败',
+  docStreamReasonBlocked: '内容没能写进文档',
+  docStreamReasonNoBody: '模型没有向文档输出任何正文',
+  docStreamReasonNothingReceived: '文档没有收到任何内容',
   // 过程卡兜底标题（ProcessCard.vue 按此串识别系统卡，勿改措辞）
   systemOperation: '系统操作',
   // artifact 兜底文件名

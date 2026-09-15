@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="favorites-panel">
     <scroll-view class="favorites-body" scroll-x :show-scrollbar="true" :scroll-into-view="scrollIntoView" scroll-with-animation>
@@ -67,6 +69,7 @@
 import { getProjectFavorites, deleteFavorite, getFavoriteImageUrl } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { isDesktopHost } from '@/services/host.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
 
@@ -93,6 +96,7 @@ export default {
       scrollIntoView: '',
       highlightId: null,
       _lastRefreshAt: 0,
+      _refreshSeq: 0,
       confirmDeleteId: null
     }
   },
@@ -173,22 +177,29 @@ export default {
         return String(v)
       }
     },
-    async refresh() {
+    async refresh(force = false) {
       const now = Date.now()
-      // query 变化时绕过时间节流（否则搜索框改了结果却不刷新、停留在旧关键字）；仅对相同 query 的高频刷新节流
-      if (this._lastRefreshAt && now - this._lastRefreshAt < 1200 && this.query === this._lastRefreshQuery) return
+      // query 变化时绕过时间节流（否则搜索框改了结果却不刷新、停留在旧关键字）；仅对相同 query 的高频刷新节流。
+      // force：刚新增了收藏、必须立刻把新卡片刷出来（高亮定位依赖它在列表里）
+      if (!force && this._lastRefreshAt && now - this._lastRefreshAt < 1200 && this.query === this._lastRefreshQuery) return
       this._lastRefreshAt = now
       this._lastRefreshQuery = this.query
+      // query 绑的是父级搜索框、没有去抖，每敲一下键就发一次请求；不同关键字的
+      // 响应到达顺序不保证跟敲键顺序一致。先敲的（陈旧）关键字若后回，会把
+      // 已经渲染好的最新搜索结果盖掉。只认"此刻最新一次"发出的那份。
+      const seq = ++this._refreshSeq
       this.loading = true
       try {
         const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         const list = await getProjectFavorites(pid, this.query, 80)
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         this.items = Array.isArray(list) ? list : (list?.data || [])
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         console.error('加载项目收藏失败:', e)
         uni.showToast({ title: this.$t('panels.pfLoadFailed'), icon: 'none' })
       } finally {
-        this.loading = false
+        if (shouldAcceptResponse(seq, this._refreshSeq)) this.loading = false
       }
     },
     requestDelete(id) {
@@ -214,7 +225,10 @@ export default {
       this.cancelDelete()
       try {
         await deleteFavorite(id)
-        await this.refresh()
+        // 必须 force：refresh() 默认带 1.2s 节流，删除后的刷新落在节流窗口内会被整个
+        // 吞掉——列表不更新但成功提示照弹，用户再点一次删除时后端已无此 id，
+        // 弹出的失败提示与刚才的成功提示直接矛盾。
+        await this.refresh(true)
         uni.showToast({ title: this.$t('panels.pfDeleteSuccess'), icon: 'success' })
       } catch (e) {
         console.error('删除收藏失败:', e)
@@ -227,20 +241,12 @@ export default {
 
 <style lang="scss" scoped>
 /* Unified AI WorkDeck Palette */
-$color-primary: #1A5336;
-$color-accent: #5BD197;
-$color-accent-pale: #E6F9F0;
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
 
 .favorites-panel {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: $bg-pale;
+  background: var(--awd-bg);
 }
 
 .favorites-body {
@@ -259,8 +265,8 @@ $bg-white: #FFFFFF;
 }
 
 .fav-card {
-  background: $bg-white;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 0; 
   display: flex;
@@ -275,13 +281,13 @@ $bg-white: #FFFFFF;
 }
 
 .fav-card:hover {
-  border-color: $color-accent;
+  border-color: var(--awd-mint);
   box-shadow: 0 8px 24px rgba(91, 209, 151, 0.15);
   transform: translateY(-2px);
 }
 
 .fav-card.card--highlight {
-  border-color: $color-accent;
+  border-color: var(--awd-mint);
   box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.3);
 }
 
@@ -290,8 +296,8 @@ $bg-white: #FFFFFF;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  border-bottom: 1px solid #F1F5F9; 
-  background: #fff;
+  border-bottom: 1px solid var(--awd-border-subtle); 
+  background: var(--awd-surface);
   z-index: 2; /* Ensure header stays above content if needed */
 }
 
@@ -307,13 +313,13 @@ $bg-white: #FFFFFF;
   display: inline-block;
 }
 
-.type-web { color: #10B981; } /* Emerald */
-.type-image { color: #F59E0B; } /* Amber */
-.type-text { color: #64748B; } /* Slate */
+.type-web { color: var(--awd-accent-text); } /* Emerald */
+.type-image { color: var(--awd-warning-text); } /* Amber */
+.type-text { color: var(--awd-text-2); } /* Slate */
 
 .card-time {
   font-size: 11px;
-  color: #94A3B8;
+  color: var(--awd-text-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
@@ -333,7 +339,7 @@ $bg-white: #FFFFFF;
 .card-cover {
   width: 100%;
   height: 100%;
-  background: #f1f5f9;
+  background: var(--awd-surface-2);
 }
 
 .cover-img {
@@ -350,7 +356,7 @@ $bg-white: #FFFFFF;
 
 .content-text {
   font-size: 13px;
-  color: $color-text-main;
+  color: var(--awd-text);
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 5;
@@ -363,11 +369,11 @@ $bg-white: #FFFFFF;
   position: absolute;
   bottom: 8px;
   right: 8px;
-  background: rgba(255,255,255,0.9);
+  background: var(--awd-surface);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 10px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   max-width: 80%;
   overflow: hidden;
   white-space: nowrap;
@@ -384,7 +390,7 @@ $bg-white: #FFFFFF;
   border-radius: 4px;
   background: transparent;
   border: 1px solid transparent;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: all 0.2s;
   
@@ -396,20 +402,20 @@ $bg-white: #FFFFFF;
   }
 
   &:hover {
-    background: $color-accent-pale;
-    color: $color-primary;
+    background: var(--awd-accent-soft);
+    color: var(--awd-accent-text);
   }
 }
 
 .favo-btn.danger:hover {
-  background: #FEF2F2;
-  color: #DC2626;
+  background: var(--awd-danger-soft);
+  color: var(--awd-danger-text);
 }
 
 .loading, .empty {
   padding: 20px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--awd-text-3);
   font-size: 13px;
 }
 
@@ -419,8 +425,8 @@ $bg-white: #FFFFFF;
   top: 100%;
   right: 0;
   margin-top: 8px;
-  background: #fff;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 8px;
@@ -443,15 +449,15 @@ $bg-white: #FFFFFF;
   right: 8px; /* Slightly adjusted to align with small button */
   width: 8px;
   height: 8px;
-  background: #fff;
-  border-top: 1px solid $color-border;
-  border-left: 1px solid $color-border;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
+  border-left: 1px solid var(--awd-border);
   transform: rotate(45deg);
 }
 
 .pop-text {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   text-align: center;
   font-weight: 500;
   display: block;
@@ -470,22 +476,22 @@ $bg-white: #FFFFFF;
   text-align: center;
   border-radius: 4px;
   cursor: pointer;
-  background: $bg-pale;
-  color: $color-text-light;
+  background: var(--awd-bg);
+  color: var(--awd-text-2);
   transition: all 0.2s;
   
   &:hover {
-    background: #e2e8f0;
-    color: $color-text-main;
+    background: var(--awd-surface-3);
+    color: var(--awd-text);
   }
 }
 
 .pop-btn.danger {
-  background: #FEF2F2;
-  color: #DC2626;
+  background: var(--awd-danger-soft);
+  color: var(--awd-danger-text);
   
   &:hover {
-    background: #FEE2E2;
+    background: var(--awd-danger-soft);
   }
 }
 </style>

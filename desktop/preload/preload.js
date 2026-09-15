@@ -1,12 +1,18 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const { contextBridge, ipcRenderer } = require('electron')
 
 // 主进程经 additionalArguments 注入的后端地址（端口是启动时实际分配的，
 // 打包态默认 5269，冲突自动降级）。同步可读，供渲染层 api.js 首选。
 const apiBaseArg = process.argv.find((a) => a.startsWith('--checkba-api-base='))
 const apiBaseUrl = apiBaseArg ? apiBaseArg.slice('--checkba-api-base='.length) : null
+// ARM 版 Windows（Mac 虚拟机）转译运行：主进程看门狗超时已放宽 8 倍（dev-board#340），
+// 渲染层的等待死线要同步放宽，否则会在后端仍在正常预热时判超时（dev-board#341）
+const winEmulated = process.argv.includes('--checkba-win-emulated=1')
 
 contextBridge.exposeInMainWorld('checkbaDesktop', {
   apiBaseUrl,
+  winEmulated,
   // 窗口外壳：无边框窗口下渲染层要自己让出交通灯/窗口控件的位置，
   // 得知道跑在哪个平台、以及此刻是不是全屏（全屏时交通灯隐藏）。
   chrome: {
@@ -134,6 +140,11 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   services: {
     ensure: (name) => ipcRenderer.invoke('checkba:service-ensure', { name })
   },
+  // 本机偏好（落 ~/.aiworkdeck/prefs.json）。只做 KV 转发，键名与语义在渲染层。
+  prefs: {
+    get: (key) => ipcRenderer.invoke('checkba:prefs-get', { key }),
+    set: (key, value) => ipcRenderer.invoke('checkba:prefs-set', { key, value })
+  },
   // 应用内增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：小版本补丁自动下载、
   // 重启生效；大版本引导官网下载全量包。onEvent 返回退订函数——页面栈多实例
   // 场景务必用活跃实例指针消费（见剪贴板去重地雷，PR#151）。
@@ -165,6 +176,9 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options),
     // 在 Finder/资源管理器里高亮一个已有路径（IDE 化项目「在 Finder 中显示」）
     showItemInFolder: (path) => ipcRenderer.invoke('fs:showItemInFolder', { path }),
+    // 「发送…」：macOS 唤起系统分享面板（微信/邮件/隔空投送），Windows 退化为剪贴板粘贴
+    // （dev-board#382）。返回 { ok, mode: 'share-sheet' | 'clipboard', reason? }。
+    shareFile: (path) => ipcRenderer.invoke('fs:shareFile', { path }),
     // 拖放的 File 对象 → 绝对路径（Electron 32 起 File.path 移除，webUtils 是正途）
     getPathForFile: (file) => {
       try {
@@ -190,6 +204,12 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   // （菜单/原生对话框文案随之重建，见 desktop/main/app-language.js）。
   appLanguage: {
     set: (lang) => ipcRenderer.send('checkba:app-language', lang)
+  },
+  // 外观主题（light/dark/system）：渲染层是权威源，推给主进程去设 nativeTheme，
+  // 原生标题栏/交通灯/右键菜单随之一致（dev-board#218/#223）。
+  // 回执带上系统当前是否深色——system 态下渲染层的 matchMedia 可能还没同步。
+  theme: {
+    set: (mode) => ipcRenderer.invoke('checkba:set-theme', mode)
   },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
   // { url, preload, partition } for the host to mount the webview.

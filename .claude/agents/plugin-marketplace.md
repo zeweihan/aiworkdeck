@@ -10,17 +10,20 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 ## 关键文件
 
 **前端（2026-08 二改：VS Code 扩展栏形态，主入口）**
-- `frontend/src/components/MarketSidebarPanel.vue` — **左栏列表面板**（rail 广场按钮 → `toggleLeftPane('market')` 打开）：顶部搜索（过滤全部分组）+ 三个折叠分组「已安装（含重扫按钮）/ Skill 广场 / 插件广场」的紧凑行（分类图标+名称+一行描述+版本·下载·分类，行内快捷安装钮）。点行 emit `open-detail`。
+- `frontend/src/components/MarketSidebarPanel.vue` — **左栏列表面板**（rail 广场按钮 → `toggleLeftPane('market')` 打开）：顶部搜索（过滤全部分组）+ 两个折叠分组「已安装（含重扫按钮）/ Marketplace」（dev-board#67 起在线 Skill 广场与插件广场收进同一个「Marketplace」组）。**每个分组内部是横向标签**（`.msb-tabs` 胶囊）：已安装 = [插件 | Skill]（`installedTab`，插件在前 = 面板型 skill ∪ JAR/Web 插件，Skill = 纯对话型，判据仍是 `isPanelSkill`）；Marketplace = [Skill | 插件]（`marketTab`）。竖着叠分组会把后一组推出视口，是当初被用户打回的形态，别改回去。行内布局：分类图标+名称+一行描述+版本·下载·分类，行内快捷安装钮，点行 emit `open-detail`；面板型深底图标（`.msb-row-glyph.is-plugin`）。标签标题复用 `sectionPluginTitle`/`sectionSkillTitle` 词条，与 `MarketPane.vue` 整页版「已安装」tab 的分区一致。
+- **「语音」合并插件（dev-board#66）**：概念模型是**左栏一个图标 = 一个插件，skill 只在 AI 对话生效**。语音合成（text-to-speech）与会议录音（meeting-recorder）共占 rail 'voice' 一个面板位，广场三处（左栏列表 / 整页已安装 / 详情页）都必须显示**一个**「语音」条目——分组定义 `VOICE_PLUGIN_GROUP` 与合成视图 `buildVoiceGroupSkill()` 在 `leftSidebarPlugins.js`，detail 的 spec 带 `group:true`（'voice' 不是 registry 条目，详情页不去在线广场查它）。启停一体：开关一次翻全部成员，后端 `SkillRegistry` 每次扫描后还做状态收敛（任一启用 → 全部启用），防「tab 可见但 kick-off 命不中 skill」的静默断裂。新增面板内多 tab 的合并插件时照这套（分组定义 + 三处 UI + 后端收敛名单）。
 - `frontend/src/components/MarketDetailPane.vue` — **中栏详情 tab**（overview `openMarketDetail(spec)` 打开，`tabType:'market-detail'`、id=`market-detail_{kind}_{id}`、单例、isTabVisible 常显）：头部图标+衬线标题+作者/版本/下载+动作区（Skill：安装/更新/卸载/生效方式三档；插件：安装带权限确认/启停 switch/卸载），正文触发词「」排版、能力、详细信息（标识/来源/主页，主页 emit open-url 走浏览器 tab）。
 - 两件通过 `uni.$emit('awd:market-changed')`（详情→列表）与 `'awd:market-changed-from-sidebar'`（列表→详情）互相刷新；组件卸载时 $off，不涉页面栈多实例地雷。
-- `frontend/src/components/MarketPane.vue` — 原整页版（深绿 hero 三 tab），现有两个宿主：admin 页内嵌
-  （`admin.vue` 的 `activeNav==='plugins'` 分支，`<MarketPane :standalone="false">`，与其余设置项一致的页内切换）
-  与 `frontend/src/pages/plugin-market/plugin-market.vue` 薄壳独立页（`:standalone="true"`，仅保留给直链）。
+- `frontend/src/components/MarketPane.vue` — 原整页版（深绿 hero 三 tab），现只剩一个宿主：
+  `frontend/src/pages/plugin-market/plugin-market.vue` 薄壳独立页（`:standalone="true"`，仅保留给直链，
+  app-e2e J7 直接 goto 这个路由）。**设置页的「插件广场」导航项 2026-08-27（dev-board#206）已删**
+  ——入口统一收敛到左 rail 的插件中心，AdminPane 不再 import MarketPane。
   **视觉规范以官网 `aiworkdeckweb/DESIGN.md` 为准**；新两件是浅色工作台密度形态（VS Code 扩展栏/详情页结构 + 产品浅色绿系）。
 - `frontend/src/config/icons.js` — `catContract/catLitigation/catCompliance/catResearch/catCorporate/catOffice/catOther` 七枚分类图标，**与官网 `components/skills/CategoryIcon.tsx` 的映射一一对应**，改一边必须同步另一边，否则同一个 Skill 在官网与桌面端长相不同。
 - `frontend/src/services/api.js` :407-485 — plugins、skills、skills/market 三组 HTTP 封装。
-- 入口：`frontend/src/pages/admin/admin.vue` 系统管理侧边栏项 `{key:'plugins', label:'插件广场'}`——2026-08 起**页内切换**
-  （onNavTap 不再 navigateTo，内容区内嵌 MarketPane；`?nav=plugins` 深链同样可达）。**leftSidebarPlugins.js 不含市场入口**（那是 IDE 左栏业务插件位）。
+- 入口：**左 rail 插件中心（`leftSidebarPlugins.js` 的 `key:'market'`）是唯一常规入口**；
+  设置页导航项与 `?nav=plugins` 深链 2026-08-27 已撤（dev-board#206），直链兜底走
+  `/pages/plugin-market/plugin-market` 独立页。
 
 **后端**
 - `backend/src/main/java/com/checkba/controller/ai/SkillController.java` — /api/skills：list、{id}/enable|disable、rescan、market/list|install|uninstall。
@@ -48,6 +51,40 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - 官网侧实现在 aiworkdeckweb：`lib/plugins-store.ts`（受理检查）、
   `lib/plugin-signing.ts`（签名）、`lib/plugin-scan.ts`（常量池扫描 + permissions 交叉验证）、
   `app/[lang]/plugins/submit`（提交页）、`app/[lang]/admin/PluginReview.tsx`（审核台）。
+
+### 三方 Web 插件（Phase B，2026-08-19）
+
+提交包新增 `web/` 目录，`manifest.frontendEntry` 指向其中（`web/index.html`）。
+**纯 web 插件可以没有 JAR**——不进 JVM，风险量级低一档；`web/` 下的文件与 JAR 一样进
+`files` 哈希表、被同一个签名覆盖。JS 没有常量池，自动扫描降级为「外联 URL 字面量提取 +
+权限交叉验证」，以人工审核为主。
+
+客户端侧：`controller/ai/PluginWebController`（`GET /api/plugin-web/{id}/**`，服务
+`plugins/<id>/web/`，只服务已启用插件，CSP 按 manifest `network` 权限放开
+`connect-src`）+ `PluginPane.vue` 的 sandbox iframe 与 postMessage 桥。
+形态、协议与 SDK 契约见 `docs/PLUGIN_SPEC.md` §8 与 `.claude/agents/plugin-system.md`。
+
+`manifest.packs: ["<packId>"]`：`PluginMarketService.install` 成功后逐个
+`NativePackService.installAsync`；**装不上不回滚插件只记 WARN**——pack 有自己的状态机与重试面，
+一次网络抖动不该吃掉刚装好的插件。三方插件要带重资源走这条路，不撑大 registry 的 20 MB 受理线。
+
+## 原生资源包（native pack）分发（2026-08）
+
+**规范：`docs/NATIVE_PACK_DISTRIBUTION.md`（第四种分发形态的权威定义）。**
+
+- 后端 `service/pack/NativePackService` + `controller/PackController`（/api/packs：list、{id}/status、{id}/info、{id}/install、{id}/upgrade、{id}/uninstall）。签名沿用插件 registry 密钥对（`ai.plugins.registry-public-key`，未配置即拒装），但盖在 manifest **原始字节**上（旁挂 .sig），不走 canonical JSON。
+- 下载**不经官网应用层**：镜像静态直出 `https://{www.aiworkdeck.com|workdeck.ai}/plugin-packs/<id>/…`（`ai.packs.base-urls`），断点续传（.part + Range）+ 压缩包哈希 + 包内 `contents.sha256` 逐文件复核 + 原子指针切换。
+- 前端：MarketSidebarPanel / MarketDetailPane 对 `packId` 非空且 `packReady:false` 的面板 skill 显示「需下载资源包」与字节级进度；LitigationVisualPanel 顶部有下载状态条。
+  已就绪且 registry 版本更高时，MarketDetailPane 多一行「有新版本 x.y.z」+「立即升级」（`packUpgrade`）。
+- **版本追新**（dev-board#499，规范 §5.1）：`service/pack/PackUpdater` 启动后 45s + 每 24h
+  对「已装好且未被封禁、且不是所有引用它的 skill 都被停用」的 pack 比对 registry 版本，
+  有新版就走完整安装事务换上（失败静默 WARN 保持旧版），开关 `ai.packs.auto-upgrade`（默认 true）。
+  **两个地雷**：① `latestVersion` / `updateAvailable` 是内存快照，list/status 端点
+  绝不为它发网络请求（镜像挂了会把广场列表拖死 20s×2），没人拉过就是 null=未知，
+  前端此时不显示任何升级提示；② 升级后本地保留 current + 上一版（回滚用），
+  与规范早期「只留一版」的写法不同，改 `pruneOtherVersions` 前先看 §4.2-5。
+- 三方 pack 提交/审核/签名在官网仓（`lib/packs-store.ts`、admin PackReview、`GET /api/registry/packs/revoked`），发布件出到 outbox 后由服务器侧脚本上架静态目录，新加坡镜像 SG 侧拉取。
+- pack 发布链：`.github/workflows/pack-release.yml`（tag `pack-<id>-v<ver>`）出未签名产物，`deploy/publish-pack.sh` 负责服务器侧签名（私钥不离开官网机）、双机上架与指针切换。
 
 ## 官网 registry 契约
 
@@ -123,6 +160,9 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - 分类筛选依赖后端 `MarketSkillView.category`，该字段 #198 才加。**跑在旧后端（≤ v0.8.0）上时分类会全归「其他」，这是后端版本旧，不是前端 bug**；排查前先 `curl /api/skills/market/list` 看响应里有没有 category。
 - 桌面端 9696 是真实后端端口，测试市场功能别 mock 错对象。
 - bundle files 白名单意味着官网新增文件类型（如图标文件）需要同时改 BUNDLE_FILES 和官网打包端。
+- **Web 插件的 SDK 有四份副本**：源头 `sdk/plugin-sdk/awd-plugin-sdk.js`、官网模板 `lib/plugin-template.ts` 的 `WEB_SDK_JS`、示例 `examples/hello-web-plugin/web/awd-plugin-sdk.js`、后端 plugin-dev 骨架 `backend/src/main/resources/plugin-dev/awd-plugin-sdk.js`，必须逐字节一致（仓内三份由 `npm run test:plugin-sdk` + `PluginDevSdkParityTest` 守，官网那份靠同批 PR）；桥协议还有宿主端实现（`PluginPane.vue`）与官网模板的宿主模拟器。改协议是全部同批次的事，单改一处的表现是插件卡在「等待宿主握手」或方法回 `unknown_method`。SDK 源码**不能含反引号与 `${`**——官网把它内联进模板字符串。
+- `evidence.link/list/locate`（dev-board#106）：宿主端纯函数在 `frontend/src/utils/pluginEvidence.js`（`npm run test:evidence`）；PluginPane 经 `getActiveEditor` prop 从 project-overview 拿 `{executor, fileId}`（fileId 从 executor 反查，不信 activeFile）；`evidence.locate` 带 targetId 走 `uni.$emit('awd:open-evidence-target')` 由工作台 `openFileLinkTarget` 打开。权限映射 list→`file_read`、link/locate→`editor`，不新增权限名。
+- **本仓 `skills/<id>/skill.yml` 里的 `category` 字段，和这里说的 `MarketSkillView.category`（contract/litigation/compliance/… 七类 + icons.js/CategoryIcon.tsx 图标映射）是两套完全不同的东西，只是字段名撞了**：前者是 `SkillDefinition.category`，取值来自 `MatterCategory` 枚举的中文 display（如「合规监管」「争议解决」），只在命中触发词时喂 `matter.classified` 埋点用（见 `SkillRouter.java`），`SkillController.SkillView` 压根不把它序列化进 `/api/skills/list` 响应；后者是**在线 registry**（网站提交时选的 category）才有的字段，只出现在 `GET /api/skills/market/list` 的 `MarketSkillView` 里。随包本地内置的 skill（诉讼可视化、会议录音、脱敏这类，从未经过官网提交流程）在市场面板「已安装」列表里的图标走的是 `isPanelSkill` 判定出的 `ICONS.panelLeft`，根本不读 `category`——本地 skill.yml 的 `category` 值不需要、也不应该对着 icons.js 的七个英文 key 去选，对着 `MatterCategory.java` 的中文枚举值选就对了（2026-08-19 脱敏改造踩过这个概念混淆，核实后确认两者无关联）。
 
 ## 验证
 

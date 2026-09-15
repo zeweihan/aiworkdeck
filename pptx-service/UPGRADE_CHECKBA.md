@@ -1,7 +1,25 @@
 # pptx-service (banana-slides) 升级与兼容验证说明（checkba 侧）
 
-本目录是**上游 [banana-slides](https://github.com/Anionex/banana-slides) 的 vendored 源码**（当前 v0.4.0，2026-07-09 re-vendor）。
+本目录是**上游 [banana-slides](https://github.com/Anionex/banana-slides) 的 vendored 源码**。
 我们通过 `backend/.../service/ai/PptxServiceClient.java` 以 HTTP 契约调用它（默认 `http://localhost:5001`）。
+
+## 当前 vendor 基线：上游提交 `a9a5c3638d059fd8d1cf704baf0cf5e88ae51444`（2026-02-17，2026-09-09 re-vendor）
+
+**re-vendor 一律按提交号，不按 tag。** 理由是上游改证：
+
+- `a9a5c36`「chore: change license to AGPL-3.0」把 `LICENSE` 从 **CC BY-NC-SA 4.0** 整体换成
+  **AGPL-3.0** 全文（+645/-36），配套 PR #225 重写了未签 CLA 的贡献者代码。
+- 而 **`v0.4.0` tag（2026-02-09）打在改证之前**——`git merge-base --is-ancestor a9a5c36 v0.4.0` 为否。
+  按 tag 取版本会取回 CC BY-NC-SA 的快照，NC 条款禁止的正是「装进收费产品分发」这种用法。
+  2026-07-09 那次 re-vendor（PR#129/#132）就是这么取错的。
+- 所以本目录的许可现在是 **AGPL-3.0**，与我们社区版一致；`pptx-service/LICENSE` 应当是 AGPL-3.0 全文，
+  升级后请确认这一点。决策与法律分析见 `docs/UPSTREAM_LICENSE_MEMO_2026-09-09.md`（第 1.3、1.7、1.8 节）。
+- `a9a5c36` 与 `v0.4.0` 相差 32 个提交。下次升级同样**先查目标提交的 LICENSE 是什么**，再决定取哪个点。
+
+**上游原文文件（不是我们写的，保留但别当成本项目的规则）**：`CLA.md`、`CONTRIBUTING.md`、
+`CODE_OF_CONDUCT.md` 都是 banana-slides 的文档，逐字节 vendored（`CODE_OF_CONDUCT.md` 是
+a9a5c36 这一版新进来的）。本项目自己的 CLA 在 `legal/CLA.md`、治理规则在仓根 `GOVERNANCE.md`、
+行为准则在仓根 `CODE_OF_CONDUCT.md`——给外部贡献者指路时别指到这里来。
 
 ## checkba 侧定制清单（re-vendor 时必须重新套用，代码内均有 `[checkba]` 标记）
 | 文件 | 定制内容 |
@@ -9,26 +27,37 @@
 | `backend/services/ai_service_manager.py` + `backend/controllers/project_controller.py` + `backend/controllers/export_controller.py` | **模型配置 model_config 消费端**（见下方专节，2026-08-08 补回）：主后端在每个生成请求体里下发供应商/密钥/模型，本服务据此建 AIService，而不是用自己的 `GOOGLE_API_KEY` |
 | `backend/services/file_parser_service.py` | 本地 MinerU 优先逻辑：`_truthy`/`_should_force_cloud`/`_get_local_mineru_url` 辅助函数、`__init__` 的 `mineru_local_url` 参数（缺省自动读 Flask config/env，调用点无需改动）、`_check_local_service`/`_parse_with_local_service`/`_save_local_mineru_result` 三个方法、`parse_file` 里"本地优先→云端兜底→无 token 报错"路由 |
 | `backend/config.py` | `MINERU_LOCAL_URL`（默认 `http://mineru-service:8000`）与 `MINERU_FORCE_CLOUD`（默认 `'1'`，桌面端 spawn 时会传 env=0 放开本地优先） |
-| `backend/app.py` | `PPTX_DATA_DIR` 数据目录外置（桌面打包态 resources 只读，DB/uploads 必须写到注入目录）；配套测试 `backend/tests/test_data_dir.py`。**v0.7.0 tag 首次构建就是因 re-vendor 漏掉此项+下面端口语义变化而红** |
-| `.env.example` | MinerU 本地服务段 + `BACKEND_PORT=5001` |
+| `backend/app.py` | 四项：① `PPTX_DATA_DIR` 数据目录外置（桌面打包态 resources 只读，DB/uploads 必须写到注入目录）；配套测试 `backend/tests/test_data_dir.py`。**v0.7.0 tag 首次构建就是因 re-vendor 漏掉此项+下面端口语义变化而红**；② 注册 `pptx_edit_bp` / `pdf_convert_bp` 两个自有蓝图（见下方对应行）；③ `create_app()` 末尾调 `task_manager.reconcile_orphaned_tasks()` 做启动对账（见 task_manager 行）；④ 两处安全加固——`debug` 改成只认显式 `FLASK_ENV=development`（上游默认值就是 `development`，漏配等于开着 Werkzeug 交互式控制台），`app.run` 的 host 改成 `os.getenv('PPTX_BIND_HOST', '127.0.0.1')`（上游硬编码 `0.0.0.0`，本服务端点不做鉴权，桌面版绑 0.0.0.0 等于把按路径读写文件的能力开放给同一局域网；容器内由 compose 显式设 `PPTX_BIND_HOST=0.0.0.0`） |
+| `.env.example` | MinerU 本地服务段（`MINERU_LOCAL_URL` / `MINERU_FORCE_CLOUD=0`）+ `BACKEND_PORT=5001` + `MINERU_TOKEN` 默认置空（上游是占位串 `your-mineru-token`，非空会让「本地优先→云端兜底」的兜底分支拿着假 token 去打云端） |
 | `docker-compose.yml` / `docker-compose.prod.yml` | 宿主机端口默认 `5001:5000`（对齐 PptxServiceClient 默认 base-url） |
 | `requirements.lock` | 桌面打包/CI 用（`desktop/scripts/prepare-python-service.js`、`.github/workflows/desktop-build.yml`）。再生成：`uv export --no-dev --no-hashes --no-emit-project -o requirements.lock` |
+| `uv.lock` | 上游文件，但要随 `pyproject.toml` 多出的 `pdf2docx` 重新解析。**不要手改**，`uv lock` / `uv export` 会顺带更新它 |
 | `compat_smoke_test.sh` / 本文件 | checkba 侧新增，上游没有 |
 | `backend/utils/text_sanitizer.py` | **checkba 新增**：markdown 治理（行内标记转真格式、列表前缀转 bullet 语义、纯剥离），落字防线 |
 | `backend/utils/pptx_format_utils.py` | **checkba 新增**：run/段落格式读写（东亚字体 `<a:ea>`、删除线、高亮、buChar/buAutoNum 的 oxml 补齐；HOUSE 字体常量 楷体_GB2312/Arial，env `PPTX_HOUSE_EA_FONT`/`PPTX_HOUSE_LATIN_FONT` 可覆盖） |
 | `backend/utils/pptx_builder.py` | **checkba 改造**：`add_text_element`/`add_table_element` 落字走 sanitizer（markdown → 真格式）、写 HOUSE 字体、多行文本逐行成段修复只有首段吃到样式的缺陷、列表行写真实项目符号；`_set_core_properties` 去掉必抛的 `last_printed=None` |
 | `backend/services/pptx_format_service.py` + `backend/controllers/pptx_edit_controller.py` | **checkba 新增**：存量 pptx 格式识别与操作端点 `POST /api/pptx/inspect`、`POST /api/pptx/format`（六种 op：run 格式/段落格式/替换文本/整框重写/单元格文本/单元格格式），注册见 `app.py`、`controllers/__init__.py` 的 `[checkba]` 标记 |
 | `backend/services/pdf_convert_service.py` + `backend/controllers/pdf_convert_controller.py` | **checkba 新增**：PDF 转换端点 `POST /api/pdf/to-docx`（pdf2docx 版式级转 Word，限文本型）、`POST /api/pdf/ocr-markdown`（扫描件经 FileParserService 走本地 MinerU 优先/云端兜底出 markdown，不引入第三方云 OCR）。依赖 `pdf2docx`（连带 pymupdf/opencv-headless，desktop 包体积 +~130MB）已进 pyproject 与 requirements.lock |
+| `backend/controllers/settings_controller.py` | **checkba 改动（PR#241）**：新增 `_reject_without_settings_token()`——`PPTX_SETTINGS_TOKEN` 未配置即 403 关闭写入面（而不是默认放开），配置了则用 `hmac.compare_digest` 比 `X-Settings-Token` 头。三个调用点：`update_settings`（PUT /api/settings/）、`reset_settings`（POST /api/settings/reset）、`run_settings_test`（POST /api/settings/tests/<name>，它能用请求体的 `api_base_url` 覆盖出网地址却沿用已存的真实 key，等于一次不落库的凭据外泄，所以与写设置同级把关）。**全仓从不设置这个变量，所以这三个端点在产品里恒 403**——这正是 model_config 必须由主后端按请求下发的原因 |
+| `backend/tests/unit/test_api_settings_provider.py` | **上游用例，checkba 打了补丁**：上游 a9a5c36 新增的 `test_update_settings_accepts_lazyllm_provider` 裸调 `update_settings()`，撞上上一行那道 403 闸。补丁给它塞 `PPTX_SETTINGS_TOKEN` 环境变量与 `X-Settings-Token` 请求头，用例仍测「lazyllm 是合法取值」。**下次 re-vendor 若这条用例又红成 `assert 403 == 200`，就是这处补丁没跟上** |
+| `backend/services/task_manager.py` | **checkba 新增（PR#526）**：`TaskManager.reconcile_orphaned_tasks()` 静态方法——进程重启后数据库里残留的 `PENDING`/`PROCESSING` 任务一律判 `FAILED`（`active_tasks` 是进程内字典，执行器早没了，前端会永远轮询转圈）。由 `app.py` 的 `create_app()` 在 app context 里调用。回归用例 `backend/tests/unit/test_task_reconcile.py` |
+| `pyproject.toml` | **checkba 新增依赖**：`pdf2docx>=0.5.13`（`/api/pdf/to-docx` 用，连带 pymupdf / opencv-python-headless / python-docx / fonttools / fire / termcolor）。改完必须重跑 `uv lock` 与 `uv export` |
+| `backend/server.log` / `backend/server_running.log` | **上游误入库的运行日志，我们删掉**（每次 re-vendor 都会随上游整包回来，记得再删一次） |
 | `backend/services/prompts.py` | **checkba 改动**：大纲生成 prompt 增加禁 markdown 指令（`Do NOT use markdown formatting symbols ...`） |
-| `backend/tests/unit/test_text_sanitizer.py` / `test_pptx_formatting.py` | **checkba 新增**：上述能力的回归测试（re-vendor 后跑它们即可验证定制是否套全） |
+| `backend/tests/unit/test_text_sanitizer.py` / `test_pptx_formatting.py` / `test_task_reconcile.py` / `test_pdf_convert.py` + `backend/tests/test_data_dir.py` | **checkba 新增**：上述能力的回归测试共五个文件（re-vendor 后跑它们即可验证定制是否套全）。跑法：`cd pptx-service && uv run --with pytest pytest backend/tests/unit backend/tests/test_data_dir.py -q` |
 
 > 注：0.4.0 上游把「可编辑 PPTX 导出」改为 image_editability 混合抽取器（MinerU 云端 + 可选百度高精 OCR，
 > 见 `BAIDU_OCR_API_KEY`）。该链路的 FileParserService 未显式传 `mineru_local_url`，但由于缺省会
 > 自动读 config/env，本地优先逻辑同样生效。
 >
-> **端口语义变化（0.4.0）**：应用监听端口从读 `PORT` 改为读 `BACKEND_PORT`（`IN_DOCKER=1` 时固定 5000）。
+> **端口语义变化（0.4.0 起）**：应用监听端口从读 `PORT` 改为读 `BACKEND_PORT`（`IN_DOCKER=1` 时固定 5000）。
 > 桌面 spawn（desktop/main/services/pptx-service.js）与 CI 冒烟（desktop-build.yml）已两个变量都传，
 > 升降级均兼容——再升级时留意上游是否又改此语义。
+>
+> **a9a5c36 又改了兜底分支**：`BACKEND_PORT` 未设时不再固定 5000，而是
+> `_compute_worktree_port(5000)`——按项目根目录名的 MD5 算一个 5000-5499 的端口。
+> 我们的两条链路都显式传 `BACKEND_PORT`，所以不受影响；但**如果哪天有调用点漏传，
+> 症状会是「服务起在一个看不出来的随机端口上」而不是「端口冲突」**，排查时留意。
 
 ## model_config：模型与密钥由主后端下发（最容易在 re-vendor 时丢的一项）
 
@@ -103,8 +132,10 @@
 - 因此不在通用代码体检里自动做，需按下面步骤在真机验证后再合并。
 
 ## 升级步骤
-1. 取上游 v0.4.0 源码，替换本目录内容（保留我们自定义的 `.env`、`docker-compose.yml` 端口映射 5001:5000、
-   以及 `MINERU_LOCAL_URL` 等集成配置）。
+1. 取上游**目标提交**（不是 tag，见顶部「当前 vendor 基线」一节）的源码，替换本目录内容：
+   先把上表里 14 个 checkba 新增文件与 `.env`（若有）拷出来，`git archive <commit> | tar -x` 铺上游全量，
+   删掉上游误入库的 `backend/server.log` / `server_running.log`，再把拷出来的文件放回去，
+   最后按上表逐项重新套用对上游文件的 15 处改动。
 2. `cd pptx-service && docker compose build && docker compose up -d`（或桌面打包链路）。
 3. **跑契约兼容测试**（关键）：
    ```bash

@@ -38,8 +38,8 @@
 | 插件 | Plugin | |
 | 技能 | Skill | |
 | 组件管理 | Components | 模型/组件下载 |
-| 系统设置 | Settings | admin 页 |
-| 个人中心 | Profile | |
+| 设置 | Settings | 统一设置页（2026-08-20 个人中心并入，侧栏分「个人 / 系统」两组）|
+| 账户与安全 | Account & Security | 个人组里原「个人中心 → 设置」那一栏 |
 | 工作记录 | Activity Log | |
 | 代办/待办 | To-dos | |
 | 向导 | Setup Wizard | |
@@ -82,6 +82,24 @@
 | 采纳（稿） | Adopt | 采纳-放弃-冲突三选一：Adopt / Discard / Resolve Conflict |
 | 交稿 | Submit Draft | 协作 |
 | 取回最新稿 | Pull Latest | 协作 |
+| 交稿引导 | Submit-draft guide | dev-board#645；交稿前那张三步清单，界面上不出现这个词组本身 |
+| 待做 / 进行中 / 已完成 | To do / Next / Done | 交稿引导的步骤标记；「进行中」= 轮到你做这一步，不是「正在跑」 |
+| 稍后再说 | Later | 交稿引导的退出按钮；与「取消 Cancel」区分——什么都没做，不是撤销 |
+| 这套协作怎么用 | How collaboration works | 协作抽屉里常驻的说明入口 |
+| 提交历史 | History | 中栏标签页（dev-board#624）；标签名短，「完整历史」入口 → Full History |
+| 完整历史 | Full History | 版本面板顶部与协作抽屉里通往提交历史标签页的入口 |
+| 泳道图 | Lane graph | 提交历史左侧那张图；对外不出现「分支图 / branch graph」 |
+| 版（量词） | version | 「领先 2 版」→ ahead by 2；不写 commit |
+| 签出（一份案卷） | Check out | 事件行「{谁} 签出了一份」→ {who} checked out a copy |
+| 本机 | This Computer | 提交历史里的标签；与「案件库 Case Library」对举 |
+| 裁决（冲突三选一的结果） | Resolution | 「留了你这边 / 留了同事那边 / 两边都留」→ kept your side / kept your colleague's side / kept both sides |
+| 参与人（筛选项） | Person | 提交历史工具栏的筛选下拉；名单语境仍是 Case Members |
+| 合并比对稿 | Merge review | 同一份稿里同时看到两位律师相对「共同的上一版」的修订（dev-board#630）；标签名 Merge review: {name} |
+| 自动合并 | Combined automatically | 两边改动段落不重叠时静默合并（dev-board#631）；「自动合并了同事的改动」→ your colleague's changes were combined automatically |
+| 共同的上一版 | Common earlier version | 两位律师分头修改前的那一版；对外不出现 merge-base |
+| 同一段两边都改了 | Changed on both sides | 只有这种情况才打扰律师逐处裁决 |
+| 逐处裁决（接受 / 拒绝 / 用你的 / 用同事的 / 自己改） | Resolve each change (Accept / Reject / Keep yours / Take theirs / Edit myself) | 合并比对稿右栏 |
+| 溯源 | Origin | 每段最后改动它的版本 / 作者 / 时间（dev-board#632）；侧栏标签 Origin，光标条「{谁} · {日期} · {版本标题}」 |
 | 脱敏 | Redaction | 动词 redact |
 | 套红/公文格式 | House Style Formatting | |
 | 书签 | Bookmark | |

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // editor-main.js — entry for the embedded LibreOffice editor page that runs
 // INSIDE the isolated <webview>. Epic #43.
 //
@@ -14,8 +16,17 @@
 // iframe it falls back to window.parent.postMessage, so the Phase 0 spike (and a
 // browser) can drive it the same way the host will.
 
+import { attachReviewBalloons } from '../composables/zetaOfficeReviewBalloons.js'
+let reviewBalloons = null
+
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
+import { attachDocumentLinkClicks } from '../composables/zetaOfficeLinkClick.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
+import { attachWritingAssistance } from '../composables/zetaOfficeCompletion.js'
+import { attachInlineReview } from '../composables/zetaOfficeInlineReview.js'
+// 光标邻域半径的单一出处：宿主侧 matchEntityAt 用同一个默认值做窗口截取，
+// 两边不一致会让「实体名明明就在光标上却匹配不到」（纯数据模块，不带 Vue/uni）。
+import { CURSOR_RADIUS } from '../utils/insightMatch.js'
 
 // Electron renderer require is a runtime property access (NOT a static import),
 // so the bundler leaves it alone and the browser fallback path stays clean.
@@ -73,6 +84,21 @@ function pickTransport() {
 // against the CDN LOWA in dev and a self-hosted bundle in the packaged app.
 const q = new URLSearchParams(location.search)
 const VERIFY = q.get('verify') === '1'
+
+// ---- 深浅主题（dev-board#273）----------------------------------------------
+// 初值来自 ?theme=（editor.html 头部内联脚本已抢先挂了 class，防白闪）；宿主
+// 切换主题时经 lo-relay 推 {type:'set-theme'}。页面底色走 class，引擎的
+// AppBackground 走 set_app_theme 命令——executor 就绪前先记账，ready 后补一发。
+let currentTheme = q.get('theme') === 'dark' ? 'dark' : 'light'
+let themeExecutor = null
+function applyTheme(theme) {
+  currentTheme = theme === 'dark' ? 'dark' : 'light'
+  try { document.documentElement.classList.toggle('theme-dark', currentTheme === 'dark') } catch (e) { /* ignore */ }
+  if (themeExecutor) {
+    themeExecutor.executeCommand('set_app_theme', { mode: currentTheme })
+      .catch((e) => console.warn('[zeta-editor] set_app_theme failed:', e))
+  }
+}
 
 // Standalone verification panel (?verify=1): a few buttons + an IME field that
 // drive the booted executor DIRECTLY (no host), so the editor can be exercised
@@ -167,14 +193,47 @@ try {
   }
 } catch (e) { console.error('[zeta-editor] window.open hook failed:', e) }
 
+// (dev-board#171) 拖拽建链：原生拖拽的命中目标是本客体页（Electron 的 guest view
+// 在原生 DnD 命中测试里先于宿主 DOM），宿主的 .libre-evidence-drop 对真实鼠标
+// 拖拽永远收不到 dragover/drop——那条路只有合成事件能走到。本页过去没有任何
+// 拖拽处理，drop 被浏览器默认拒绝：用户把文件拖到画布上松手，什么都不发生。
+// 这里代收：dragover 放行（否则光标一直是「禁止」）、drop 把载荷经 lo-relay
+// 转发给宿主。锚点语义不变——锚点=文档内已选中的文字，与松手位置无关。
+try {
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'link' } catch (err) { /* ignore */ }
+  }, true)
+  document.addEventListener('drop', (e) => {
+    e.preventDefault()
+    let payload = ''
+    try {
+      const dt = e.dataTransfer
+      payload = dt ? (dt.getData('application/x-checkba-file') || dt.getData('text/checkba-file-json') || '') : ''
+    } catch (err) { payload = '' }
+    try { hostTransport.send({ __lo: 'lo-relay', type: 'evidence-drop', payload }) }
+    catch (err) { console.error('[zeta-editor] evidence-drop relay failed:', err) }
+  }, true)
+} catch (e) { console.error('[zeta-editor] drop hook failed:', e) }
+
 // (autosave) The worker posts one 'modified' per document change (typed / IME /
 // AI command — see installModifyListener in office_thread.js). The host only
 // needs an edge to debounce-save on, so throttle the relay to 1/500ms.
+let inlineReview = null
 let lastModifiedRelay = 0
+function relayCommentRequest(documentSeq) {
+  try {
+    hostTransport.send({ __lo: 'lo-relay', type: 'comment-request',
+      ...(documentSeq != null ? { documentSeq } : {}) })
+  } catch (e) { /* ignore */ }
+}
 function relayModified(d) {
   if (!d || !d.cmd) return
+  if (d.cmd === 'comment-request') { relayCommentRequest(d.documentSeq); return }
   if (d.cmd === 'sel_changed') { relaySelection(); return }
   if (d.cmd !== 'modified') return
+  reviewBalloons?.documentChanged()
+  inlineReview?.documentChanged()
   const now = Date.now()
   if (now - lastModifiedRelay < 500) return
   lastModifiedRelay = now
@@ -188,6 +247,7 @@ function relayModified(d) {
 let lastSelectionRelay = 0
 let selectionTimer = 0
 function relaySelection() {
+  reviewBalloons?.cursorMoved()
   const now = Date.now()
   const since = now - lastSelectionRelay
   if (since < 150) {
@@ -197,6 +257,60 @@ function relaySelection() {
   }
   lastSelectionRelay = now
   try { hostTransport.send({ __lo: 'lo-relay', type: 'selection' }) } catch (e) { /* ignore */ }
+  relayCursorContext(null)
+}
+
+// (依据窗格, dev-board#182) 光标邻域上报。**默认不开**：宿主只有在「依据」窗格
+// 真绑在这份文档上时才下发 {type:'insight-sub', enabled:true}，此前一次
+// get_cursor_context 都不打——没开窗格的用户完全不受影响。
+//
+// 两个触发点：画布单击落定后（下面那段 link-click seam 里，带修饰键）与选区/光标
+// 变化（relaySelection 里，不带修饰键）。后者再节流一层到 ≥400ms：光标移动比
+// 工具栏激活态刷新贵得多（要过一次 worker 往返）。
+let insightSub = false
+let insightExecutor = null
+let lastCursorRelay = 0
+let cursorInFlight = false
+
+try {
+  hostTransport.subscribe((msg) => {
+    if (!msg || msg.__lo !== 'lo-relay') return
+    if (msg.type === 'set-theme') { applyTheme(msg.theme); return }
+    if (msg.type !== 'insight-sub') return
+    insightSub = !!msg.enabled
+  })
+} catch (e) { console.error('[zeta-editor] insight-sub subscribe failed:', e) }
+
+function relayCursorContext(meta) {
+  if (!insightSub || !insightExecutor) return
+  // 点击那一路必须送到（用户刚点的就是它），光标移动那一路节流
+  if (!meta) {
+    const now = Date.now()
+    if (now - lastCursorRelay < 400) return
+    lastCursorRelay = now
+  } else {
+    lastCursorRelay = Date.now()
+  }
+  // 上一发还没回来时丢掉光标移动那一路（别把 worker 排满）；**点击那一路不丢**——
+  // 用户刚点的就是它，丢了就是「Cmd+点击没反应」。
+  if (cursorInFlight && !meta) return
+  cursorInFlight = true
+  insightExecutor.executeCommand('get_cursor_context', { radius: CURSOR_RADIUS })
+    .then((r) => {
+      if (!r || !r.success) return
+      hostTransport.send({
+        __lo: 'lo-relay',
+        type: 'cursor-context',
+        payload: {
+          before: r.before || '', after: r.after || '', paragraph: r.paragraph || '',
+          selectedText: r.selectedText || '', hasSelection: !!r.hasSelection,
+          meta: meta || { metaKey: false, ctrlKey: false, clientX: null, clientY: null },
+          at: Date.now(),
+        },
+      })
+    })
+    .catch(() => { /* 只读查询失败不打扰 */ })
+    .then(() => { cursorInFlight = false }, () => { cursorInFlight = false })
 }
 
 startEditorEndpoint({
@@ -206,6 +320,7 @@ startEditorEndpoint({
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
+  houseProfileUrl: q.get('house') || './house-default.js',
   // Default to the CJK fonts served next to the page — one per Chinese typeface
   // category (黑体类 sans / 宋体类 serif / 楷体 / 仿宋), baked by
   // desktop/scripts/fetch-lowa-assets.js. bootZetaOffice skips any that 404
@@ -234,39 +349,27 @@ startEditorEndpoint({
     try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-log', msg: String(m) }) } catch (e) { /* ignore */ }
   },
 }).then((endpoint) => {
+  reviewBalloons = attachReviewBalloons({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), transport: hostTransport, locale: q.get('uilang') || 'zh' })
+  // A layout result can arrive while the host has already started another UNO
+  // command. Never resize the Qt canvas during import/export or an edit.
+  const executeWithReview = endpoint.executor.executeCommand.bind(endpoint.executor)
+  endpoint.executor.executeCommand = async (action, params, callOpts) => {
+    if (/^(get_|list_)/.test(action) || action === 'set_review_balloons' || (action === 'set_revision_view' && !params?.mode)) return executeWithReview(action, params, callOpts)
+    reviewBalloons.suspend(action)
+    try { return await executeWithReview(action, params, callOpts) }
+    finally { reviewBalloons.resume() }
+  }
+
   console.log('[zeta-editor] endpoint ready — serving host over transport')
-  // (#79 click-to-open) LO WASM never calls window.open on hyperlink clicks
-  // (real-machine verified on v0.7.1) — the hook above only covers hypothetical
-  // engine-initiated opens. The working seam: a plain positioning click moves
-  // the LO cursor; ask the worker what link the cursor landed in and forward it.
-  // Guards: primary button only, no drag-selection (>5px move), 800ms cooldown,
-  // and the worker returns '' for non-collapsed cursors (double-click selection).
-  try {
-    const canvas = document.getElementById('qtcanvas')
-    let downAt = null
-    let lastOpen = 0
-    canvas.addEventListener('mousedown', (ev) => {
-      downAt = ev.button === 0 ? { x: ev.clientX, y: ev.clientY } : null
-    }, true)
-    canvas.addEventListener('mouseup', (ev) => {
-      const d = downAt
-      downAt = null
-      if (!d || ev.button !== 0 || ev.shiftKey) return
-      if (Math.abs(ev.clientX - d.x) > 5 || Math.abs(ev.clientY - d.y) > 5) return // drag-selection
-      // let Qt process the click and move the LO cursor first
-      setTimeout(async () => {
-        try {
-          const r = await endpoint.executor.executeCommand('get_hyperlink_at_cursor', {})
-          if (r && r.success && r.url) {
-            const now = Date.now()
-            if (now - lastOpen < 800) return
-            lastOpen = now
-            hostTransport.send({ __lo: 'lo-relay', type: 'open-url', url: String(r.url) })
-          }
-        } catch (e) { /* ignore */ }
-      }, 150)
-    }, true)
-  } catch (e) { console.error('[zeta-editor] link-click seam failed:', e) }
+  insightExecutor = endpoint.executor
+  themeExecutor = endpoint.executor
+  applyTheme(currentTheme)
+  attachDocumentLinkClicks({
+    canvas: document.getElementById('qtcanvas'),
+    execute: (action, params) => endpoint.executor.executeCommand(action, params),
+    send: message => hostTransport.send(message),
+    cursorContext: meta => relayCursorContext(meta),
+  })
   // Tell the host the office endpoint is booted and serving (serveExecutor is now
   // subscribed). The host (createRelayExecutor onReady) waits for this before
   // pushing load_document — sending it earlier would drop it (no subscriber yet,
@@ -277,10 +380,12 @@ startEditorEndpoint({
   // via the same verified path as agent commands. Attached in BOTH webview and
   // verify modes — local typing is a real-user need, not just a verification one.
   let overlay = null
+  let writingAssistance = null
   try {
     overlay = attachImeOverlay({
       canvas: document.getElementById('qtcanvas'),
       commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text }),
+      getCursorRaw: () => endpoint.executor.executeCommand('get_cursor_rect', {}),
       // Control keys: the overlay swallows keystrokes (it IS the focused input),
       // so Enter/Backspace/arrows must be forwarded to the worker explicitly.
       // The worker actions (insert_paragraph/delete_backward/move_cursor) have
@@ -289,9 +394,20 @@ startEditorEndpoint({
       onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
-      onCursorMoved: relaySelection,
+      onCursorMoved: () => { relaySelection(); writingAssistance?.cursorMoved(); inlineReview?.cursorMoved() },
+      onCommitted: (text) => { writingAssistance?.committed(text); inlineReview?.committed(text) },
+      onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
+      onCommentRequested: () => relayCommentRequest(),
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
+    writingAssistance = attachWritingAssistance({
+      canvas: document.getElementById('qtcanvas'), input: overlay.element,
+      execute: (action, params) => endpoint.executor.executeCommand(action, params),
+      transport: hostTransport, focus: overlay.focus, language: q.get('uilang') || 'zh-CN',
+    })
+    inlineReview = attachInlineReview({ canvas: document.getElementById('qtcanvas'), input: overlay.element,
+      execute: (action, params) => endpoint.executor.executeCommand(action, params), transport: hostTransport, language: q.get('uilang') || 'zh-CN' })
+    window.addEventListener('pagehide', () => { writingAssistance.destroy(); inlineReview.destroy(); reviewBalloons?.destroy() }, { once: true })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
   // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且
@@ -338,6 +454,10 @@ startEditorEndpoint({
     window.__loExecutor = endpoint.executor
   }
 }).catch((e) => {
+  const reason = e && e.message ? e.message : String(e)
   console.error('[zeta-editor] boot failed:', e)
-  if (VERIFY) vlog('boot failed: ' + (e && e.message ? e.message : e))
+  if (VERIFY) vlog('boot failed: ' + reason)
+  // boot 挂了（WASM/CDN 拉不到、防火墙拦截、字体加载失败）必须告诉宿主：
+  // 否则 'ready' 永远不来，宿主的进度条会一直走下去，用户看不到任何原因。
+  try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-failed', message: reason }) } catch (err) { /* ignore */ }
 })

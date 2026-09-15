@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.eval;
 
 import com.checkba.controller.ai.AiAgentController;
@@ -158,7 +161,7 @@ public final class EvalHarness {
         TokenUsageService tokenUsage = mock(TokenUsageService.class);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> new ArrayList<>(List.of(
                         SystemMessage.from("[eval] system prompt placeholder"),
                         UserMessage.from(c.userInput))));
@@ -204,7 +207,8 @@ public final class EvalHarness {
                         mock(com.checkba.repository.AgentRunRecordRepository.class), turnTracker),
                 workSessionService, failoverProperties, runLoopCompactor,
                 telemetry, turnTracker,
-                mock(com.checkba.service.telemetry.MatterClassifierService.class));
+                mock(com.checkba.service.telemetry.MatterClassifierService.class),
+                new com.checkba.service.ai.OfficePassStateStore());
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);

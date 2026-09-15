@@ -1,13 +1,17 @@
 # 插件云后端部署（addin.aiworkdeck.com）
 
-官方托管的后端实例：Office 插件经 awdk_ 桥接连接；同域名同时提供浏览器 Web 客户端
-（h5 + LOWA 编辑器）。部署形态与决策记录（2026-08-07，维护者拍板）：
+官方托管的后端实例：Office 插件经 awdk_ 桥接连接。**浏览器 Web 客户端（h5 + LOWA 编辑器）
+已于 2026-08-19 退役**（维护者拍板：裸露登录页令人困惑）——根路径 index.html 现在是一个
+跳转 aiworkdeck.com 的静态页（原件备份为 `index.html.h5-retired-20260819`），
+**更新部署时不要再铺 build:h5 / build:zetaoffice 产物**；`web/` 下的 assets/static/zetaoffice
+是退役残留，留在原地无害，不要顺手清理（清理与否待单独拍板）。
+部署形态与决策记录（2026-08-07，维护者拍板）：
 
 | 决策项 | 结论 |
 |---|---|
 | 机器/域名 | 北京 ECS 8.152.169.44 / addin.aiworkdeck.com（certbot 独立签，不进新加坡续期主控） |
 | 数据库 | 既有 PostgreSQL 14 新建独立库 aiworkdeck_cloud + 源码编译 pgvector |
-| 部署范围 | 后端 + h5 前端 + LOWA 编辑器；不带 Python 附属服务（pptx/mineru/kokoro 云端不可用） |
+| 部署范围 | 后端 + 插件任务窗格静态页；h5 前端与 LOWA 编辑器 2026-08-19 起不再部署；不带 Python 附属服务（pptx/mineru/kokoro 云端不可用） |
 | 进程管理 | systemd（aiworkdeck-cloud.service），专用系统账号 aiworkdeck |
 | 会话存储 | 已改 DB 落库（UserSession，7 天滑动过期），重启不掉线 |
 
@@ -24,8 +28,12 @@
   data/template.docx   <- 新建文档模板（repo docs/template.docx）
   home/                <- 服务账号 HOME（~/.aiworkdeck 状态文件落这里）
   acme/                <- certbot webroot
-  web/                 <- frontend/dist/build/h5/*
-  web/zetaoffice/      <- frontend/dist/zetaoffice/*（含 lowa/ 引擎与 CJK 字体）
+  web/                 <- index.html 为跳官网的静态重定向页（h5 已退役，见上）
+  web/office-addin/    <- Office 插件任务窗格（office-addin 构建产物，见 office-addin.md）
+  （/feedback-console/ 不在 web/ 下：维护者反馈控制台由 backend.jar 的
+   classpath:/static/ 直接托管，nginx 有一条 location 反代给后端——
+   更新它 = 正常更新后端 jar，见 nginx-addin.conf.example）
+  web/zetaoffice/      <- 退役残留（原 h5 的 LOWA 引擎载荷），留置不清理
 ```
 
 ## 首次部署步骤（2026-08-07 实录见 PR 描述）
@@ -33,8 +41,7 @@
 1. 本地构建（worktree 内，JDK 21）：
    ```bash
    cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -B -DskipTests package
-   cd frontend && npm run build:h5 && npm run build:zetaoffice
-   node desktop/scripts/fetch-lowa-assets.js
+   #（历史步骤，2026-08-19 起不再执行：build:h5 / build:zetaoffice / fetch-lowa-assets）
    ```
 2. 服务器准备（root）：
    - `useradd -r -m -d /opt/aiworkdeck/cloud/home aiworkdeck`
@@ -74,6 +81,29 @@
 
 - 日志：`journalctl -u aiworkdeck-cloud -f`
 - 更新后端：本地重新 package → scp 覆盖 backend.jar → `systemctl restart aiworkdeck-cloud`
+
+  **package 必须带 `-Djavacpp.platform=linux-x86_64`**：
+  ```bash
+  cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) \
+    mvn -B -DskipTests -Djavacpp.platform=linux-x86_64 package
+  ```
+  `javacv-platform` 不加这个属性会把**所有**平台的 natives 都打进去
+  （windows / macosx / ios / ppc64le…），产物从 424 MB 涨到 1.04 GB。
+  多出来的 600 MB 在 Linux 上一行都用不到，纯粹白传白占盘。
+  产物大小可以当校验：和线上那份差不多（±1 MB）才对。
+
+## 手机影像云中转的 OSS 存储（dev-board#236）
+
+- blob 不再落 ECS 本地盘，走平台私有桶：北京 `awd-mobile-relay`（cn-beijing），
+  国际站 `awd-mobile-relay-intl`（ap-southeast-1，国际站账号）。桶生命周期 35 天
+  过期 + 7 天清失败分片，只是兜底——主删除机制仍是桌面端 ACK 即删（代码 TTL 30 天次之）。
+- RAM 子用户 `awd-mobile-relay`：仅该桶 Get/Put/Delete/List/HeadObject + GetBucketStat，
+  secret 位置见 EXTERNAL_SERVICES.md §1.1。
+- 开关与凭证 = env 里的 `MOBILE_RELAY_OSS_*` 五项（见 env.example）；不配即回落本地盘
+  （desktop/团队服务器形态）。enabled=true 而配置不全会拒绝启动，属刻意设计。
+- 存量本地 blob 无需搬迁：storagePath 以 `/` 开头的旧行走双读兼容，最迟 30 天被
+  ACK/TTL 消化。
   （会话已 DB 落库，重启不掉浏览器登录态）
-- 更新前端：重新 build:h5 / build:zetaoffice → rsync 覆盖 web/
+- 更新插件任务窗格：office-addin `npm run build:deploy -- --url https://addin.aiworkdeck.com/office-addin`
+  → 覆盖 web/office-addin/（**不要**动 web/ 根下的重定向 index.html，也不要再铺 h5）
 - DB 备份：`sudo -u postgres pg_dump aiworkdeck_cloud | gzip > /root/backup/...`（建议进 cron）

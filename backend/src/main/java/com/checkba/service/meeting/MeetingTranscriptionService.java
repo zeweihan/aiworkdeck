@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.meeting;
 
+import com.checkba.model.dto.MeetingTranscriptionProgress;
 import com.checkba.model.entity.MeetingRecording;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.MeetingRecordingRepository;
@@ -28,8 +32,12 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 转写编排。三档，<b>分档发生在这一层</b>：
@@ -80,6 +88,44 @@ public class MeetingTranscriptionService {
     private static final int SUBMIT_TIMEOUT_SECONDS = 30;
     private static final int TASK_TIMEOUT_SECONDS = 15;
 
+    /**
+     * 转码超时默认值。<b>音频转码是廉价操作</b>：16kHz 单声道 mp3 编码，即使一场两小时的会
+     * （本类顶部注释里的常态时长），在正常机器上也是分钟级；真正命中这个超时的只有
+     * "卡住不动"的情形——多半是崩溃产生的截断 webm（{@link MeetingAudioTranscoder}
+     * 类注释已承认这是常态）让原生解码器永久等待更多数据、Java 层的 interrupt 又叫不醒它。
+     * 20 分钟相对"分钟级"的正常耗时留了数量级的安全余量，同时把"卡死一次、单线程执行器
+     * 上后续所有会议全部永久排队"这个此前无界的窗口，收敛到人能感知、任务能自愈的范围。
+     * 包可见（不加 private）供测试用短超时构造服务，见 {@link #transcodeWithTimeout}。
+     */
+    static final Duration DEFAULT_TRANSCODE_TIMEOUT = Duration.ofMinutes(20);
+
+    /**
+     * 「转写中」卡死判定的阈值：{@code max(STUCK_FLOOR, 音频时长 × STUCK_FACTOR)}（dev-board#532）。
+     *
+     * <p>为什么需要它：会议进入 TRANSCRIBING 之后，只有上游给出终态才会离开这个状态
+     * （{@link #refreshViaTingwu} / {@link #refreshViaPlatform} 都刻意不把查询失败当成转写失败，
+     * 那是对的——网络抖动不该终结一个还在跑的任务）。但上游<b>永远</b>不给终态的情形是存在的：
+     * 听悟侧任务被清理、网关侧任务被回收、提交成功而任务实际没跑起来。此前这类会议
+     * 会永远停在「转写中」，而 {@link #startTranscription} 对该状态是幂等返回，
+     * 用户连「重试转写」都点不动，录音就此作废。
+     *
+     * <p>阈值取「音频时长 × 3、且不低于 30 分钟」（维护者 2026-09-09 拍板）：三倍相对
+     * 听悟/本机的实际耗时（都快于实时）留了数量级余量，30 分钟的下限则挡住「三分钟的
+     * 短录音九分钟就被判死」这种误杀。
+     */
+    static final Duration STUCK_FLOOR = Duration.ofMinutes(30);
+    static final int STUCK_FACTOR = 3;
+
+    /**
+     * 进度提示里「预计总时长」的取法：与录音本身差不多长，最少一分钟。
+     *
+     * <p><b>刻意高估</b>：听悟与本机 whisper 都快于实时（本机实测约 0.64 倍实时），
+     * 按 1 倍报出去，实际总是提前走完。反过来低估的话进度条会长时间钉在 99%，
+     * 那比没有进度更让人焦虑。这个值只用于界面提示，不参与任何判定。
+     */
+    private static final long PROGRESS_ESTIMATE_FACTOR = 1;
+    private static final long PROGRESS_ESTIMATE_FLOOR_SEC = 60;
+
     /** 结果文件下载的接缝（测试桩用） */
     public interface UrlFetcher {
         String fetch(String url) throws Exception;
@@ -105,6 +151,7 @@ public class MeetingTranscriptionService {
     private final LocalAsrClient localAsrClient;
     private final UrlFetcher urlFetcher;
     private final BinaryUploader uploader;
+    private final Duration transcodeTimeout;
     private final String defaultAccessKeyId;
     private final String defaultAccessKeySecret;
     private final String defaultAppKey;
@@ -128,6 +175,19 @@ public class MeetingTranscriptionService {
      */
     private final java.util.Set<Long> inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * 按会议维度的可重入互斥，包住 {@link #refreshIfNeeded} 的节流判断与实际刷新——
+     * 本服务是单实例基线（没有多副本部署），进程内锁即可，不需要分布式锁。
+     * ReentrantLock 而非 synchronized(meetingId)：装箱的 Long 相同数值不保证是同一对象
+     * （超出 -128~127 缓存范围就不是），拿它当锁语义不可靠，写法与理由同
+     * {@code WorkSessionService.repoLock}。
+     */
+    private final Map<Long, ReentrantLock> refreshLocks = new ConcurrentHashMap<>();
+
+    private ReentrantLock refreshLock(Long meetingId) {
+        return refreshLocks.computeIfAbsent(meetingId, id -> new ReentrantLock());
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public MeetingTranscriptionService(
             MeetingRecordingRepository meetingRepository,
@@ -147,7 +207,7 @@ public class MeetingTranscriptionService {
             @Value("${meeting.oss.endpoint:}") String defaultOssEndpoint) {
         this(meetingRepository, projectFileRepository, storageResolver, systemSettingService,
                 transcoder, tingwuClient, ossClient, externalProviderResolver, platformGatewayClient,
-                localAsrClient, defaultUrlFetcher(), defaultUploader(),
+                localAsrClient, defaultUrlFetcher(), defaultUploader(), DEFAULT_TRANSCODE_TIMEOUT,
                 defaultAccessKeyId, defaultAccessKeySecret, defaultAppKey, defaultOssBucket, defaultOssEndpoint);
     }
 
@@ -164,6 +224,7 @@ public class MeetingTranscriptionService {
             LocalAsrClient localAsrClient,
             UrlFetcher urlFetcher,
             BinaryUploader uploader,
+            Duration transcodeTimeout,
             String defaultAccessKeyId,
             String defaultAccessKeySecret,
             String defaultAppKey,
@@ -181,6 +242,7 @@ public class MeetingTranscriptionService {
         this.localAsrClient = localAsrClient;
         this.urlFetcher = urlFetcher;
         this.uploader = uploader;
+        this.transcodeTimeout = transcodeTimeout;
         this.defaultAccessKeyId = defaultAccessKeyId;
         this.defaultAccessKeySecret = defaultAccessKeySecret;
         this.defaultAppKey = defaultAppKey;
@@ -286,8 +348,25 @@ public class MeetingTranscriptionService {
     /**
      * 提交转写。同步只做状态置位（TRANSCRIBING），耗时步骤进后台执行器。
      * RECORDED / FAILED 可提交；TRANSCRIBING/TRANSCRIBED 幂等返回。
+     *
+     * <p>方法开头的状态判定与真正落库的 {@code setStatus(TRANSCRIBING) + save()} 之间
+     * 隔着一整段校验逻辑，此前中间完全没有互斥：自动结束时触发一次 + 客户端超时重试
+     * 一次，或"重新提交转写"连点两下，都可能各自通过判定、各自提交一次——BYOK 档是
+     * 两次真实的听悟建任务调用，platform 档是两次网关提交（对同一次转写扣两次费）。
+     * 复用 {@link #refreshLock}：与 {@link #refreshIfNeeded} 共享同一把按会议维度的锁，
+     * 这两个方法本就在读改写同一个 status 字段，理应互斥。
      */
     public MeetingRecording startTranscription(Long meetingId) {
+        ReentrantLock lock = refreshLock(meetingId);
+        lock.lock();
+        try {
+            return doStartTranscription(meetingId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private MeetingRecording doStartTranscription(Long meetingId) {
         MeetingRecording meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         LangText.of("会议不存在: ", "Meeting not found: ") + meetingId));
@@ -339,6 +418,8 @@ public class MeetingTranscriptionService {
         meeting.setError(null);
         meeting.setTingwuTaskId(null);
         meeting.setGatewayTaskId(null);
+        // 卡死判定与界面「已用时」的锚点，必须与状态同一次写入（dev-board#532）
+        meeting.setTranscribingStartedAt(LocalDateTime.now());
         // 先登记再落库：中间那一瞬前端刚好来轮询的话，没有这一步会被判成「上次被打断」
         inFlight.add(meetingId);
         MeetingRecording saved = meetingRepository.save(meeting);
@@ -351,6 +432,20 @@ public class MeetingTranscriptionService {
         return saved;
     }
 
+    /**
+     * 上报给上游的音频格式：取 prepared 文件的真实扩展名。prepared 要么是转码产物（.mp3），
+     * 要么是转码失败时回退的原始文件——旧实现硬编码「非 mp3 即 webm」，那个假设只在
+     * 音频全部来自前端 MediaRecorder（webm）的时代成立；右键转写与手机录音进来后
+     * 原始文件可能是 m4a/wav 等任意格式，把 m4a 字节当 webm 上报会让听悟拒识或识别乱码
+     * （dev-board#227）。无扩展名时仍回落 webm（历史占位文件的形态）。
+     */
+    static String audioFormat(File prepared) {
+        String n = prepared.getName();
+        int dot = n.lastIndexOf('.');
+        String ext = dot >= 0 && dot < n.length() - 1 ? n.substring(dot + 1).toLowerCase() : "";
+        return ext.isEmpty() ? "webm" : ext;
+    }
+
     /** 音频本体的定位与非空校验，两档共用。 */
     private Path resolveAudioPath(MeetingRecording meeting) throws Exception {
         ProjectFile audio = projectFileRepository.findById(meeting.getAudioFileId())
@@ -360,6 +455,42 @@ public class MeetingTranscriptionService {
             throw new IllegalStateException("音频文件为空，无法转写");
         }
         return audioPath;
+    }
+
+    /**
+     * 转码套上超时，三档提交（{@link #submitViaPlatform}/{@link #submitToTingwu}/
+     * {@link #transcribeLocally}）共用。
+     *
+     * <p><b>转码不能直接跑在调用线程上。</b>三档提交全部挤在同一个单线程 {@link #executor}
+     * 里（见类顶注释），{@link MeetingAudioTranscoder#toMp3} 底层是原生 FFmpeg 调用，
+     * 一旦卡住（截断的 webm 最常见，见该类注释里"崩溃恢复"的说明）就会把这唯一一根
+     * 转写线程永久堵死——之后<b>所有</b>会议不分档位都会无限期排队，界面上没有任何
+     * 报错或超时提示。这里把转码另起一个一次性的单线程池去跑，本方法只等待最多
+     * {@link #transcodeTimeout}；超时就放弃等待并抛出异常，交给调用方既有的
+     * catch→failMeeting/failFromResults 落一个可见的失败终态，{@link #executor}
+     * 那根线程随即能去处理下一个排队的会议。卡住的那个原生调用线程不强杀
+     * （原生调用一般不响应 Java interrupt，也没有子进程可以 destroyForcibly）、
+     * 留给 JVM 自己回收——极端情况下泄漏一个线程，换来的是这一次超时不会拖累后续所有会议。
+     */
+    private File transcodeWithTimeout(File input, Path workDir) throws Exception {
+        ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "meeting-transcode-worker");
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            return worker.submit(() -> transcoder.toMp3(input, workDir))
+                    .get(transcodeTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            log.warn("音频转码超时（超过 {} 未完成，判定为卡死）: {}", transcodeTimeout, input.getName());
+            throw new IllegalStateException(
+                    "音频转码超时（超过 " + transcodeTimeout.toMinutes() + " 分钟未完成，判定为卡死）");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("音频转码被中断", e);
+        } finally {
+            worker.shutdownNow();
+        }
     }
 
     /**
@@ -377,8 +508,8 @@ public class MeetingTranscriptionService {
             Path audioPath = resolveAudioPath(meeting);
 
             workDir = Files.createTempDirectory("awd-meeting-");
-            File prepared = transcoder.toMp3(audioPath.toFile(), workDir);
-            String format = prepared.getName().endsWith(".mp3") ? "mp3" : "webm";
+            File prepared = transcodeWithTimeout(audioPath.toFile(), workDir);
+            String format = audioFormat(prepared);
             long durationSec = estimateDurationSec(meeting, prepared);
 
             // ① 凭证：余额闸在这一步就生效，用户不会白传两小时录音才被拒
@@ -439,7 +570,7 @@ public class MeetingTranscriptionService {
             Path audioPath = resolveAudioPath(meeting);
 
             workDir = Files.createTempDirectory("awd-meeting-");
-            File prepared = transcoder.toMp3(audioPath.toFile(), workDir);
+            File prepared = transcodeWithTimeout(audioPath.toFile(), workDir);
             String raw = localAsrClient.transcribe(prepared);
 
             MeetingRecording fresh = meetingRepository.findById(meetingId).orElse(null);
@@ -496,8 +627,8 @@ public class MeetingTranscriptionService {
             Path audioPath = resolveAudioPath(meeting);
 
             workDir = Files.createTempDirectory("awd-meeting-");
-            File prepared = transcoder.toMp3(audioPath.toFile(), workDir);
-            String ext = prepared.getName().endsWith(".mp3") ? "mp3" : "webm";
+            File prepared = transcodeWithTimeout(audioPath.toFile(), workDir);
+            String ext = audioFormat(prepared);
             String objectKey = ossObjectKey(meeting, ext);
 
             String signedUrl = ossClient.uploadAndSign(settings, objectKey, prepared, URL_TTL);
@@ -537,14 +668,41 @@ public class MeetingTranscriptionService {
         if (!viaPlatform && meeting.getTingwuTaskId() == null) {
             return interruptedOrPending(meeting);
         }
-        LocalDateTime last = meeting.getLastPolledAt();
-        if (last != null && last.isAfter(LocalDateTime.now().minusSeconds(POLL_THROTTLE_SECONDS))) {
-            return meeting;
-        }
-        meeting.setLastPolledAt(LocalDateTime.now());
-        meetingRepository.save(meeting);
 
-        return viaPlatform ? refreshViaPlatform(meeting) : refreshViaTingwu(meeting);
+        ReentrantLock lock = refreshLock(meeting.getId());
+        lock.lock();
+        try {
+            // check-then-act 必须在锁内用"库里现在的样子"重判——锁外传入的 meeting 可能是
+            // 拿到锁之前、并发的另一个请求各自 findById 出来的旧快照。两个并发 GET 各自
+            // 持一份 lastPolledAt 为 null（或同样陈旧）的快照，若只信这份快照做节流判断，
+            // 会各自通过节流、各跑一遍下游下载+落库——platform 档下还会各自触发一次结算，
+            // 用户被扣两次 Credits。锁本身不够：必须在锁内重新问一次库，才能看到"对方刚刚
+            // 已经处理过"这件事；找不到（测试里没有为这个 id 打桩 findById）时退回传入值，
+            // 行为与修复前一致。
+            MeetingRecording fresh = meetingRepository.findById(meeting.getId()).orElse(meeting);
+
+            // 卡死判定与下面的节流是同一类 check-then-act，必须在锁内、对库里最新的那一份做。
+            // 放到锁外用传入的旧快照做过一版，被 concurrentRefreshIsSerializedPerMeeting 逮住：
+            // 它给存量行补盖时间戳时会 save 那份旧快照，把并发的另一个请求刚写进去的
+            // lastPolledAt 一起抹掉，节流窗口随即失效、两个请求各问一遍上游
+            // （platform 档下就是各触发一次结算）。
+            MeetingRecording checked = failIfStuck(fresh);
+            if (MeetingRecording.STATUS_FAILED.equals(checked.getStatus())) {
+                return checked;
+            }
+            fresh = checked;
+
+            LocalDateTime last = fresh.getLastPolledAt();
+            if (last != null && last.isAfter(LocalDateTime.now().minusSeconds(POLL_THROTTLE_SECONDS))) {
+                return fresh;
+            }
+            fresh.setLastPolledAt(LocalDateTime.now());
+            meetingRepository.save(fresh);
+
+            return viaPlatform ? refreshViaPlatform(fresh) : refreshViaTingwu(fresh);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -560,6 +718,134 @@ public class MeetingTranscriptionService {
                 "转写在上次运行中被中断，重新提交即可（录音本身完好）",
                 "Transcription was interrupted by a previous shutdown; submit it again (the recording itself is intact)"));
         return meetingRepository.save(meeting);
+    }
+
+    // ==================== 卡死判定（dev-board#532） ====================
+
+    /** 卡死阈值：{@code max(30 分钟, 音频时长 × 3)}。包可见供测试直接对拍。 */
+    static Duration stuckThreshold(long audioSeconds) {
+        Duration byAudio = Duration.ofSeconds(Math.max(0, audioSeconds) * STUCK_FACTOR);
+        return byAudio.compareTo(STUCK_FLOOR) > 0 ? byAudio : STUCK_FLOOR;
+    }
+
+    /**
+     * 「转写中」停太久就判为卡死：置 FAILED + 写下原因，界面既有的「重试转写」按钮
+     * 随 FAILED 出现，用户一键即可重来（{@link #startTranscription} 对 FAILED 是可提交态）。
+     *
+     * <p><b>本进程正在跑的（{@link #inFlight}）一律跳过。</b>那几步各自都已经有界的超时
+     * （转码 {@link #transcodeTimeout}、直传 30 分钟、本机转写 4 小时），不需要再判一次；
+     * 更要紧的是 platform 档在这个窗口里可能刚刚完成预扣，判死会让用户去点重试，
+     * 结果对同一次转写扣第二笔 Credits。
+     *
+     * <p>存量行（{@code transcribingStartedAt} 为 null，升级前就停在转写中的）
+     * <b>第一次被看到时补盖当前时间，不当场判死</b>。理由：
+     * {@code updatedAt} 被 poll-on-read 每 10 秒的 lastPolledAt 落库刷新，永远是「刚刚」，
+     * 拿它当锚点判定形同虚设；{@code createdAt} 又早于真正开始转写的时刻（中间隔着整场录音），
+     * 拿它算已用时会高估，可能把刚提交不久的健康任务判死。补盖的代价只是存量卡死行
+     * 最多再多等一个阈值，换来的是绝不误杀——而这些行本来已经卡了不知多久，多等一次无妨。
+     */
+    private MeetingRecording failIfStuck(MeetingRecording meeting) {
+        if (inFlight.contains(meeting.getId())) {
+            return meeting;
+        }
+        LocalDateTime startedAt = meeting.getTranscribingStartedAt();
+        if (startedAt == null) {
+            meeting.setTranscribingStartedAt(LocalDateTime.now());
+            return meetingRepository.save(meeting);
+        }
+        Duration threshold = stuckThreshold(audioSeconds(meeting));
+        if (Duration.between(startedAt, LocalDateTime.now()).compareTo(threshold) <= 0) {
+            return meeting;
+        }
+        long minutes = threshold.toMinutes();
+        log.warn("会议转写判定为卡死: meetingId={}, 已超过 {} 分钟", meeting.getId(), minutes);
+        meeting.setStatus(MeetingRecording.STATUS_FAILED);
+        meeting.setError(LangText.of(
+                "转写超时：已超过 " + minutes + " 分钟仍未返回结果，判定为卡死。原始录音完好，可重试转写。",
+                "Transcription timed out: no result after " + minutes + " minutes, so it is treated as stuck. "
+                        + "The original recording is intact - you can retry."));
+        return meetingRepository.save(meeting);
+    }
+
+    /**
+     * 音频时长（秒），卡死阈值与进度预计值共用。0 表示未知。
+     *
+     * <p>{@code durationMs} 是前端结束录音时回报的，右键转写注册进来的已有文件
+     * （dev-board#227）没有这个值。此时按音频文件的字节数除以转码码率反推——
+     * 与 {@link #estimateDurationSec} 同一套算法。<b>误差偏大的方向是安全的</b>：
+     * 原始录音的码率通常高于我们转码用的 {@link MeetingAudioTranscoder#BITRATE}，
+     * 反推出来的时长偏长，阈值跟着变长，只会更保守、不会误杀。
+     * 文件取不到（记录已删、路径失效、测试桩）时回 0，阈值退到 30 分钟下限。
+     */
+    private long audioSeconds(MeetingRecording meeting) {
+        Long ms = meeting.getDurationMs();
+        if (ms != null && ms > 0) {
+            return Math.max(1, ms / 1000);
+        }
+        try {
+            if (meeting.getAudioFileId() == null || storageResolver == null) return 0;
+            ProjectFile audio = projectFileRepository.findById(meeting.getAudioFileId()).orElse(null);
+            if (audio == null) return 0;
+            Path path = storageResolver.resolve(audio.getFilePath());
+            if (!Files.exists(path)) return 0;
+            return Math.max(0, Files.size(path) * 8 / MeetingAudioTranscoder.BITRATE);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    // ==================== 进度提示（dev-board#532） ====================
+
+    /**
+     * 给「转写中」的会议挂上进度提示，出接口前调用（列表与详情两条路都调，
+     * 面板上的卡片就是列表里的行）。非 TRANSCRIBING 的一律不挂，响应形态不变。
+     *
+     * <p>档位只解析一次（{@link #tier()} 每次都要过一遍 resolver），列表里几十场会议
+     * 不必各问一遍。
+     */
+    public void attachProgress(List<MeetingRecording> meetings) {
+        if (meetings == null || meetings.isEmpty()) return;
+        boolean anyTranscribing = meetings.stream()
+                .anyMatch(m -> MeetingRecording.STATUS_TRANSCRIBING.equals(m.getStatus()));
+        if (!anyTranscribing) return;
+        ExternalServiceProvider tier = tier();
+        for (MeetingRecording m : meetings) {
+            m.setProgress(buildProgress(m, tier));
+        }
+    }
+
+    /** 单条（详情端点）。 */
+    public MeetingRecording attachProgress(MeetingRecording meeting) {
+        if (meeting != null) attachProgress(List.of(meeting));
+        return meeting;
+    }
+
+    /**
+     * 阶段由「有没有上游任务号」定，不由当前档位设置定——理由同 {@link #refreshIfNeeded}：
+     * 任务归属在提交那一刻就定死了，用户中途切档不该让界面改口。只有「还没有任务号」
+     * 这一种情形才需要看当前档位，用来把 local 档的<b>本机转写</b>与云端档的<b>转码上传</b>
+     * 分开——本机档一个字节都不出网，界面上绝不能出现「上传」。
+     */
+    private MeetingTranscriptionProgress buildProgress(MeetingRecording m, ExternalServiceProvider tier) {
+        if (!MeetingRecording.STATUS_TRANSCRIBING.equals(m.getStatus())) return null;
+        String stage;
+        if (m.getTingwuTaskId() != null || m.getGatewayTaskId() != null) {
+            stage = MeetingTranscriptionProgress.STAGE_UPSTREAM;
+        } else {
+            stage = tier == ExternalServiceProvider.LOCAL
+                    ? MeetingTranscriptionProgress.STAGE_LOCAL
+                    : MeetingTranscriptionProgress.STAGE_PREPARING;
+        }
+        LocalDateTime startedAt = m.getTranscribingStartedAt();
+        long elapsedSec = startedAt == null ? 0
+                : Math.max(0, Duration.between(startedAt, LocalDateTime.now()).toSeconds());
+        long audioSec = audioSeconds(m);
+        Long estimatedSec = audioSec <= 0 ? null
+                : Math.max(PROGRESS_ESTIMATE_FLOOR_SEC, audioSec * PROGRESS_ESTIMATE_FACTOR);
+        Integer percent = estimatedSec == null ? null
+                : (int) Math.min(99, elapsedSec * 100 / estimatedSec);
+        // estimated 恒 true：三条路的上游都给不出百分比，见 MeetingTranscriptionProgress 注释
+        return new MeetingTranscriptionProgress(stage, elapsedSec, estimatedSec, percent, true);
     }
 
     /**
@@ -668,16 +954,16 @@ public class MeetingTranscriptionService {
                 MeetingTranscriptParser.buildSummaryJson(chapters, summarization, assistance));
     }
 
-    /** 落库，三档共用。转写正文为空一律当失败——不能让空稿冒充成功。 */
+    /**
+     * 落库，三档共用。转写正文为空不是失败——听悟对无人声/极短音频的合法返回就是空
+     * segments，落 STATUS_EMPTY（与 TRANSCRIBED 同级终态），而不是当异常抛出。
+     */
     private MeetingRecording storeSegments(MeetingRecording meeting,
                                            List<MeetingTranscriptParser.Segment> segments,
                                            String summaryJson) {
-        if (segments.isEmpty()) {
-            throw new IllegalStateException("转写结果为空");
-        }
         meeting.setTranscriptJson(MeetingTranscriptParser.segmentsToJson(segments));
         meeting.setSummaryJson(summaryJson);
-        meeting.setStatus(MeetingRecording.STATUS_TRANSCRIBED);
+        meeting.setStatus(segments.isEmpty() ? MeetingRecording.STATUS_EMPTY : MeetingRecording.STATUS_TRANSCRIBED);
         meeting.setError(null);
         return meetingRepository.save(meeting);
     }
@@ -685,7 +971,9 @@ public class MeetingTranscriptionService {
     private MeetingRecording failFromResults(MeetingRecording meeting, Exception e) {
         log.warn("转写结果落库失败: meetingId={}", meeting.getId(), e);
         meeting.setStatus(MeetingRecording.STATUS_FAILED);
-        meeting.setError("转写结果处理失败: " + brief(e));
+        meeting.setError(LangText.of(
+                "未能读取转写结果，请稍后重试。原始录音仍然保留。",
+                "The transcript could not be read. Try again later; the original recording is still saved."));
         return meetingRepository.save(meeting);
     }
 

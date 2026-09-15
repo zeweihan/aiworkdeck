@@ -1,14 +1,22 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // config/ directory strings (sidebar plugins / tools / file actions / OCR actions / project types / member roles / clipboard / variable library)
 export default {
   sidebar: {
+    projectHome: 'Project Overview',
     files: 'Explorer',
     ddFiles: 'Due Diligence Files',
+    market: 'Extensions',
+    dev: 'Plugin Development',
+    // "Voice" merges text-to-speech and meeting recording; the two below are its tabs
+    voice: 'Voice',
     meetingRecorder: 'Meeting Recording',
     litigationVisual: 'Litigation Visualization',
     search: 'Search',
     tts: 'Text to Speech',
     desensitize: 'File Redaction',
     version: 'Version History',
+    calendar: 'Calendar',
   },
   tools: {
     variables: 'Variable Library',
@@ -23,7 +31,6 @@ export default {
     cancel: 'Cancel',
     newFile: 'New File',
     newFolder: 'New Folder',
-    uploadFile: 'Upload File',
     sort: 'Sort',
   },
   ocr: {

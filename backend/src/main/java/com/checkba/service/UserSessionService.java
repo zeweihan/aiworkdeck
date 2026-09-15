@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.controller.AuthController;
@@ -5,6 +8,7 @@ import com.checkba.model.entity.UserSession;
 import com.checkba.repository.UserSessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -28,8 +32,15 @@ public class UserSessionService {
 
     public static final String SESSION_PREFIX = "session_";
 
-    /** 滑动过期：距最后一次使用超过该时长即失效。 */
-    static final Duration IDLE_TTL = Duration.ofDays(7);
+    /**
+     * 滑动过期天数的代码默认值：一年，即「常驻」语义（桌面端与团队服务器用）。
+     * 官方云后端 addin.aiworkdeck.com 的「7 天滑动过期」是已上线契约，
+     * 由 application-cloud.yml 显式配 security.session-idle-days: 7 钉住，绝不跟默认值漂移。
+     */
+    static final long DEFAULT_IDLE_DAYS = 365;
+
+    /** 滑动过期：距最后一次使用超过该时长即失效。天数来自 security.session-idle-days。 */
+    private final Duration idleTtl;
 
     /** lastUsedAt 写回节流：一分钟内的重复请求不再落盘（每请求一写没有意义）。 */
     static final Duration TOUCH_INTERVAL = Duration.ofMinutes(1);
@@ -43,8 +54,10 @@ public class UserSessionService {
 
     private final UserSessionRepository repository;
 
-    public UserSessionService(UserSessionRepository repository) {
+    public UserSessionService(UserSessionRepository repository,
+                              @Value("${security.session-idle-days:365}") long sessionIdleDays) {
         this.repository = repository;
+        this.idleTtl = Duration.ofDays(sessionIdleDays);
         AuthController.registerUserSessionService(this);
     }
 
@@ -70,7 +83,7 @@ public class UserSessionService {
         return repository.findByTokenHash(sha256(plaintext))
                 .map(s -> {
                     LocalDateTime now = LocalDateTime.now();
-                    if (s.getLastUsedAt().plus(IDLE_TTL).isBefore(now)) {
+                    if (s.getLastUsedAt().plus(idleTtl).isBefore(now)) {
                         repository.delete(s);
                         return null;
                     }
@@ -89,10 +102,29 @@ public class UserSessionService {
         repository.deleteByTokenHash(sha256(plaintext));
     }
 
+    /**
+     * 作废某个用户的全部登录会话。
+     *
+     * <p>用在「手机号被转移到另一个账号」之后：老账号已经不再拥有这个号码，可它手上的
+     * 会话仍然有效，手机端会继续以老账号的身份请求——而老账号名下什么都没有，
+     * 于是项目列表恒为空且没有任何提示（用户看到的就是「一个项目都读不到」）。
+     * 作废之后手机端被迫重新登录，短信验证会把它落到归一后的账号上。
+     *
+     * @return 实际作废的会话条数
+     */
+    public long revokeAllForUser(Long userId) {
+        if (userId == null) return 0;
+        long removed = repository.deleteByUserId(userId);
+        if (removed > 0) {
+            log.info("作废用户 {} 的全部登录会话 {} 条（手机号已转移到其它账号）", userId, removed);
+        }
+        return removed;
+    }
+
     /** 每日清理过期会话（滑动过期在读路径已兜住，这里只是让表不积灰）。 */
     @Scheduled(fixedDelay = 24 * 60 * 60 * 1000, initialDelay = 10 * 60 * 1000)
     public void purgeExpired() {
-        long removed = repository.deleteByLastUsedAtBefore(LocalDateTime.now().minus(IDLE_TTL));
+        long removed = repository.deleteByLastUsedAtBefore(LocalDateTime.now().minus(idleTtl));
         if (removed > 0) {
             log.info("清理过期登录会话 {} 条", removed);
         }

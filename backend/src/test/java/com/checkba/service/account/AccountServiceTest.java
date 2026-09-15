@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.account;
 
 import org.junit.jupiter.api.Assumptions;
@@ -58,6 +61,21 @@ class AccountServiceTest {
             }
             return replies.poll();
         }
+
+        /** 最近一次 multipart 出站的那一份，供头像上传的形状断言用。 */
+        Multipart lastPart;
+
+        @Override
+        public Reply sendMultipart(String method, String url, String bearerKey, Multipart part) {
+            calls.add(method + " " + url);
+            bodies.add("");
+            lastBearer = bearerKey;
+            lastPart = part;
+            if (replies.isEmpty()) {
+                throw new AssertionError("桩没有为 " + method + " " + url + " 准备响应");
+            }
+            return replies.poll();
+        }
     }
 
     private StubTransport transport;
@@ -70,7 +88,8 @@ class AccountServiceTest {
 
     private AccountService connected() {
         transport = new StubTransport().enqueue(200,
-                "{\"username\":\"hanzewei\",\"displayName\":\"韩泽伟\",\"balanceCents\":1980,\"plan\":\"paid\"}");
+                "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"韩泽伟\","
+                        + "\"balanceCents\":1980,\"plan\":\"paid\"}");
         AccountService service = service();
         service.connect(KEY);
         return service;
@@ -169,6 +188,27 @@ class AccountServiceTest {
         assertFalse(result.toString().contains(KEY), "返回体不允许出现 Key 明文: " + result);
         assertTrue(Files.exists(tempDir.resolve("account.json")));
         assertTrue(service.isConnected());
+    }
+
+    @Test
+    @DisplayName("换 Key 请求带上设备名：官网账户页「已连接的设备」靠它显示")
+    void exchangeKeyRequestIncludesDeviceName() {
+        transport = new StubTransport()
+                .enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true}")
+                .enqueue(200, ME);
+        service().loginWithPhone("13800138000", "123456");
+        assertTrue(transport.bodies.get(0).contains("\"deviceName\""), transport.bodies.get(0));
+    }
+
+    @Test
+    @DisplayName("deviceName()：非空、不超 64 字符、带 os 标签")
+    void deviceNameIsWellFormed() {
+        String name = AccountService.deviceName();
+        assertNotNull(name);
+        assertFalse(name.isBlank());
+        assertTrue(name.length() <= 64, name);
+        assertTrue(name.contains("Mac") || name.contains("Windows") || name.contains("Linux") || name.contains("Desktop"),
+                name);
     }
 
     @Test
@@ -386,6 +426,31 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("官网 4xx 带业务机器码时按 REJECTED 透传，不折叠成 Key 无效（dev-board#496 裁决 4）")
+    void businessRejectionIsNotFoldedIntoUnauthorized() {
+        AccountService service = connected();
+        transport.enqueue(403, "{\"error\":\"phone_required\"}");
+        AccountException e = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.REJECTED, e.getKind());
+        assertEquals("phone_required", e.getReason());
+        assertTrue(e.getMessage().contains("绑定手机号"), e.getMessage());
+        for (String banned : new String[] {"登录", "未授权", "请先"}) {
+            assertFalse(e.getMessage().contains(banned), "文案红线：" + banned);
+        }
+
+        // 403 但没有业务机器码：仍是凭据失效
+        transport.enqueue(403, "{\"error\":\"unauthorized\"}");
+        AccountException plain = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.UNAUTHORIZED, plain.getKind());
+
+        // 409 already_in_team 同样带码回来
+        transport.enqueue(409, "{\"error\":\"already_in_team\"}");
+        AccountException conflict = assertThrows(AccountException.class, service::fetchTeam);
+        assertEquals(AccountException.Kind.REJECTED, conflict.getKind());
+        assertEquals("already_in_team", conflict.getReason());
+    }
+
+    @Test
     @DisplayName("账户类信封不许带 4010，否则前端会误清会话/跳登录页")
     void accountMessagesDoNotLookLikeAuthErrors() {
         // PR4-0 起 frontend/src/services/api.js 只认 code === 4010 判定未登录（清 session，
@@ -398,7 +463,7 @@ class AccountServiceTest {
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
         AccountException noAllocationEx = assertThrows(AccountException.class, service::fetchAiKey);
 
-        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null);
+        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null, null, null, null, null, null);
         var keyController = new com.checkba.controller.PlatformAiKeyController(null, null);
         for (AccountException e : new AccountException[] {notConnectedEx, noAllocationEx}) {
             assertEquals(1, accountController.handleAccountException(e).getBody().get("code"),
@@ -449,6 +514,253 @@ class AccountServiceTest {
         assertEquals(AccountException.Kind.MALFORMED, e.getKind());
     }
 
+    // ==================== 会员与充值（dev-board#183/#184） ====================
+
+    @Test
+    @DisplayName("membership：全量转发 GET /api/account/membership")
+    void fetchMembershipForwards() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"growthPoints\":10,\"topupCents\":2000,\"spendCents\":500,"
+                + "\"tier\":{\"key\":\"silver\",\"level\":2,\"nameZh\":\"白银\",\"nameEn\":\"Silver\",\"bonusPermille\":10},"
+                + "\"nextTier\":null,\"tiers\":[]}");
+        Map<String, Object> body = service.fetchMembership();
+        assertEquals("GET https://www.aiworkdeck.com/api/account/membership",
+                transport.calls.get(transport.calls.size() - 1));
+        assertEquals(10, body.get("growthPoints"));
+        assertNull(body.get("nextTier"));
+    }
+
+    @Test
+    @DisplayName("membership：官网 401 只归 UNAUTHORIZED，不触碰 LicenseService——只有 connect() 才写解锁票据")
+    void fetchMembershipUnauthorizedDoesNotTouchLicense() {
+        com.checkba.service.LicenseService license =
+                org.mockito.Mockito.mock(com.checkba.service.LicenseService.class);
+        transport = new StubTransport()
+                .enqueue(200, ME) // connect() 的 /api/account/me
+                .enqueue(401, "{\"error\":\"unauthorized\"}"); // membership
+        AccountService service = new AccountService(
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                tempDir.toString(), transport, license);
+        service.connect(KEY);
+        org.mockito.Mockito.reset(license); // connect() 已经合法地碰过一次，只关心 membership 之后
+
+        AccountException e = assertThrows(AccountException.class, service::fetchMembership);
+        assertEquals(AccountException.Kind.UNAUTHORIZED, e.getKind());
+        org.mockito.Mockito.verifyNoInteractions(license);
+    }
+
+    @Test
+    @DisplayName("recharge：POST /api/payment/create 带 amount/kind/idempotencyKey，微信站 present:qrcode 原样透传")
+    void createRechargeForwardsWechatShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"success\":true,\"present\":\"qrcode\",\"outTradeNo\":\"T1\","
+                + "\"codeUrl\":\"weixin://wxpay/bizpayurl?pr=abc\",\"qrCode\":\"data:image/png;base64,xx\",\"amount\":1000}");
+        Map<String, Object> body = service.createRecharge(1000, "idem-key-1");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/payment/create",
+                transport.calls.get(transport.calls.size() - 1));
+        String reqBody = transport.bodies.get(transport.bodies.size() - 1);
+        assertTrue(reqBody.contains("\"amount\":1000"), reqBody);
+        assertTrue(reqBody.contains("\"kind\":\"recharge\""), reqBody);
+        assertTrue(reqBody.contains("idem-key-1"), reqBody);
+        assertEquals(KEY, transport.lastBearer);
+        assertEquals("qrcode", body.get("present"));
+        assertEquals("T1", body.get("outTradeNo"));
+    }
+
+    @Test
+    @DisplayName("recharge：Stripe 站 present:redirect 形状原样透传，桌面端不分叉")
+    void createRechargeForwardsStripeShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"success\":true,\"present\":\"redirect\",\"outTradeNo\":\"T2\","
+                + "\"amount\":1000,\"redirectUrl\":\"https://checkout.stripe.com/xyz\"}");
+        Map<String, Object> body = service.createRecharge(1000, "idem-key-2");
+        assertEquals("redirect", body.get("present"));
+        assertEquals("https://checkout.stripe.com/xyz", body.get("redirectUrl"));
+    }
+
+    @Test
+    @DisplayName("recharge：未连接账户直接 NOT_CONNECTED，一个请求都不发")
+    void createRechargeNotConnectedShortCircuits() {
+        transport = new StubTransport();
+        AccountException e = assertThrows(AccountException.class, () -> service().createRecharge(1000, "idem"));
+        assertEquals(AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("recharge/status：转发 GET /api/payment/query?outTradeNo=xxx，字段原样透传")
+    void queryRechargeForwards() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"outTradeNo\":\"T1\",\"status\":\"paid\"}");
+        Map<String, Object> body = service.queryRecharge("T1");
+        assertEquals("GET https://www.aiworkdeck.com/api/payment/query?outTradeNo=T1",
+                transport.calls.get(transport.calls.size() - 1));
+        assertEquals("paid", body.get("status"));
+    }
+
+    @Test
+    @DisplayName("recharge/status：查到 order.status=paid 时作废余额缓存，chip 刷新读到的必须是新余额")
+    void queryRechargePaidInvalidatesBalanceCache() {
+        AccountService service = connected();
+        // 先把 profile 缓存喂热（balanceSnapshot 会拉 profile + membership）
+        transport.enqueue(200, "{\"balanceCents\":100,\"plan\":\"paid\"}");
+        transport.enqueue(200, "{\"tier\":null}");
+        service.balanceSnapshot();
+        // 查询到已支付
+        transport.enqueue(200, "{\"success\":true,\"order\":{\"outTradeNo\":\"T1\",\"status\":\"paid\"}}");
+        service.queryRecharge("T1");
+        // 再取余额必须重新出站（缓存已作废），拿到充值后的新值
+        transport.enqueue(200, "{\"balanceCents\":10100,\"plan\":\"paid\"}");
+        transport.enqueue(200, "{\"tier\":null}");
+        Map<String, Object> snapshot = service.balanceSnapshot();
+        assertEquals(10100, snapshot.get("balanceCents"));
+    }
+
+    // ==================== SKU 购买（dev-board#187） ====================
+
+    @Test
+    @DisplayName("purchase-sku：POST /api/account/purchase 带 skuId，成功响应原样透传")
+    void purchaseSkuForwards() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"ok\":true,\"feature\":\"clipboard.unlimited\","
+                + "\"priceCents\":1990,\"balanceCents\":8010,\"orderId\":\"o-1\"}");
+        Map<String, Object> body = service.purchaseSku("feature:clipboard.unlimited");
+        assertEquals("POST https://www.aiworkdeck.com/api/account/purchase",
+                transport.calls.get(transport.calls.size() - 1));
+        assertTrue(transport.bodies.get(transport.bodies.size() - 1)
+                .contains("\"skuId\":\"feature:clipboard.unlimited\""));
+        assertEquals(KEY, transport.lastBearer);
+        assertEquals("clipboard.unlimited", body.get("feature"));
+        assertEquals(8010, body.get("balanceCents"));
+    }
+
+    @Test
+    @DisplayName("purchase-sku：409 insufficient_credits 映射成带 reason 的业务异常，文案不像掉线")
+    void purchaseSkuInsufficientCredits() {
+        AccountService service = connected();
+        transport.enqueue(409, "{\"error\":\"insufficient_credits\"}");
+        SkuPurchaseException e = assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited"));
+        assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+        assertEquals("insufficient_credits", e.getReason());
+        assertFalse(e.getMessage().contains("登录"), e.getMessage());
+        assertFalse(e.getMessage().contains("未授权"), e.getMessage());
+        assertFalse(e.getMessage().contains("请先"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("purchase-sku：409 already_owned 与 400 invalid_sku/not_purchasable 各有可区分的 reason")
+    void purchaseSkuOtherFailures() {
+        AccountService service = connected();
+        transport.enqueue(409, "{\"error\":\"already_owned\"}");
+        assertEquals("already_owned", assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited")).getReason());
+        transport.enqueue(400, "{\"error\":\"invalid_sku\"}");
+        assertEquals("invalid_sku", assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited")).getReason());
+        transport.enqueue(400, "{\"error\":\"not_purchasable\"}");
+        assertEquals("invalid_sku", assertThrows(SkuPurchaseException.class,
+                () -> service.purchaseSku("feature:stage.unlimited")).getReason());
+    }
+
+    @Test
+    @DisplayName("purchase-sku：未连接账户直接 NOT_CONNECTED，一个请求都不发")
+    void purchaseSkuNotConnectedShortCircuits() {
+        transport = new StubTransport();
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().purchaseSku("feature:stage.unlimited"));
+        assertEquals(AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("balance：未连接账户返回 {connected:false}，一个请求都不发")
+    void balanceSnapshotNotConnected() {
+        transport = new StubTransport();
+        Map<String, Object> result = service().balanceSnapshot();
+        assertEquals(false, result.get("connected"));
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("balance：已连接时装配 profile + membership 摘要（只取四个展示字段）")
+    void balanceSnapshotAssemblesProfileAndMembership() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"silver\",\"level\":2,\"nameZh\":\"白银\",\"nameEn\":\"Silver\",\"bonusPermille\":10}}");
+
+        Map<String, Object> result = service.balanceSnapshot();
+
+        assertEquals(true, result.get("connected"));
+        assertEquals(500, result.get("balanceCents"));
+        assertEquals("free", result.get("plan"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> membership = (Map<String, Object>) result.get("membership");
+        assertNotNull(membership);
+        assertEquals("silver", membership.get("key"));
+        assertEquals(2, membership.get("level"));
+        assertFalse(membership.containsKey("bonusPermille"), "balance 只挑四个展示字段，摘要不是全量转发");
+    }
+
+    @Test
+    @DisplayName("balance：TTL 窗口内重复调用不再打官网——profile 60 秒、membership 10 分钟")
+    void balanceSnapshotCachesWithinTtl() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"silver\"}}");
+        service.balanceSnapshot();
+        int callsAfterFirst = transport.calls.size();
+
+        service.balanceSnapshot();
+        service.balanceSnapshot();
+
+        assertEquals(callsAfterFirst, transport.calls.size(), "TTL 窗口内不该再发官网请求");
+    }
+
+    @Test
+    @DisplayName("balance：换账户后 clearBalanceCache 令缓存整体作废，下一次调用重新拉取新数据")
+    void balanceSnapshotInvalidatedAfterClear() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"silver\"}}");
+        service.balanceSnapshot();
+        int callsBefore = transport.calls.size();
+
+        service.clearBalanceCache();
+        transport.enqueue(200, "{\"balanceCents\":900,\"plan\":\"paid\"}");
+        transport.enqueue(200, "{\"tier\":{\"key\":\"gold\"}}");
+        Map<String, Object> result = service.balanceSnapshot();
+
+        assertTrue(transport.calls.size() > callsBefore, "清缓存之后必须重新发请求，不能继续吃旧值");
+        assertEquals(900, result.get("balanceCents"),
+                "换账户没清缓存的话，新账户会在 TTL 到期前一直看到上一个账户的余额");
+    }
+
+    @Test
+    @DisplayName("balance：官网不可达时降级为 {connected:true, available:false}，同 usage 端点的口径")
+    void balanceSnapshotDegradesWhenUnreachable() {
+        AccountService service = connected();
+        transport.enqueueNetworkFailure();
+        Map<String, Object> result = service.balanceSnapshot();
+        assertEquals(true, result.get("connected"));
+        assertEquals(false, result.get("available"));
+        assertNull(result.get("balanceCents"), "降级态不该带一个假的余额数字");
+    }
+
+    @Test
+    @DisplayName("balance：membership 拉取失败单独降级为 null，不拖垮已经拿到的余额")
+    void balanceSnapshotMembershipDegradesIndependently() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"balanceCents\":500,\"plan\":\"free\"}");
+        transport.enqueueNetworkFailure(); // membership 这一路失败
+        Map<String, Object> result = service.balanceSnapshot();
+        assertEquals(true, result.get("connected"));
+        assertEquals(500, result.get("balanceCents"), "余额段不该被 membership 的失败一起拖垮");
+        assertTrue(result.containsKey("membership"), "字段形状必须稳定：即使拿不到也要有这个键");
+        assertNull(result.get("membership"));
+    }
+
     // ==================== 配置红线 ====================
 
     @Test
@@ -481,6 +793,254 @@ class AccountServiceTest {
     void loopbackHttpAllowed() {
         assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://localhost:3000"), tempDir.toString(), new StubTransport(), null));
         assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://127.0.0.1:3000"), tempDir.toString(), new StubTransport(), null));
+    }
+
+    // ==================== 团队层级的出站形状（设计 §10.3） ====================
+
+    @Test
+    @DisplayName("层级动作的方法与路径逐条对齐官网契约；改律所名出站必须仍是 PATCH")
+    void teamHierarchyOutboundShape() {
+        AccountService service = connected();
+        for (int i = 0; i < 7; i++) transport.enqueue(200, "{\"ok\":true}");
+
+        service.joinTeam(" ABCD1234 ");
+        service.regenerateTeamJoinCode();
+        service.createFirm("某某律师事务所");
+        service.joinFirm("FIRMCODE");
+        service.updateFirm("改了名的所");
+        service.regenerateFirmJoinCode();
+        service.removeFirmTeam("t 7");
+
+        String base = "https://www.aiworkdeck.com/api/account/team";
+        assertEquals("POST " + base + "/join", transport.calls.get(1));
+        assertTrue(transport.bodies.get(1).contains("ABCD1234"), transport.bodies.get(1));
+        assertFalse(transport.bodies.get(1).contains(" ABCD1234"), "邀请码要去掉首尾空白，粘贴常带空格");
+        assertEquals("POST " + base + "/join-code/regenerate", transport.calls.get(2));
+        assertEquals("POST " + base + "/firm", transport.calls.get(3));
+        assertEquals("POST " + base + "/firm/join", transport.calls.get(4));
+        assertEquals("PATCH " + base + "/firm", transport.calls.get(5),
+                "本机那一跳是 PUT（uni.request 没有 PATCH），出站到官网必须仍是 PATCH");
+        assertEquals("POST " + base + "/firm/join-code/regenerate", transport.calls.get(6));
+        assertEquals("DELETE " + base + "/firm/teams/t+7", transport.calls.get(7),
+                "路径段必须编码：带 ../ 或 ? 的 teamId 会改写请求的目标端点");
+    }
+
+    @Test
+    @DisplayName("summary 带上 scope；老签名默认 team，不静默变成全所")
+    void teamSummaryCarriesScope() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"range\":7}").enqueue(200, "{\"range\":30}");
+
+        service.fetchTeamSummary(7);
+        service.fetchTeamSummary(30, "firm");
+
+        assertEquals("GET https://www.aiworkdeck.com/api/account/team/summary?range=7&scope=team",
+                transport.calls.get(1));
+        assertEquals("GET https://www.aiworkdeck.com/api/account/team/summary?range=30&scope=firm",
+                transport.calls.get(2));
+    }
+
+    /** 文案红线：不得含「登录」「未授权」「请先」——api.js 用这三个子串判掉线并清会话。 */
+    private static void assertNotMistakenForLogout(String message) {
+        assertNotNull(message);
+        assertFalse(message.contains("登录"), "文案不得含「登录」: " + message);
+        assertFalse(message.contains("未授权"), "文案不得含「未授权」: " + message);
+        assertFalse(message.contains("请先"), "文案不得含「请先」: " + message);
+    }
+
+    // ==================== 个人档案与头像（spec 2026-09-10 §5） ====================
+
+    private static final String PROFILE_ME =
+            "{\"accountId\":\"acc_9f3a\",\"username\":\"upoxwcdtg\",\"displayName\":\"185****5325\","
+                    + "\"avatarUpdatedAt\":\"2026-09-10T03:04:05.000Z\",\"displayNameIsDefault\":true}";
+
+    @Test
+    @DisplayName("身份视图：一次 GET /me 拉齐，avatarUrl 按 accountId + 版本拼，**不回 username**")
+    void profileIdentityShape() {
+        AccountService service = connected();
+        transport.enqueue(200, PROFILE_ME);
+
+        Map<String, Object> view = service.profileIdentity();
+
+        assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(1));
+        assertEquals("acc_9f3a", view.get("accountId"));
+        assertEquals("185****5325", view.get("displayName"));
+        assertEquals("https://www.aiworkdeck.com/api/avatar/acc_9f3a?v=2026-09-10T03%3A04%3A05.000Z",
+                view.get("avatarUrl"));
+        assertEquals(Boolean.TRUE, view.get("displayNameIsDefault"));
+        assertFalse(view.containsKey("username"),
+                "用户名退成内部标识，身份视图里一个字都不回（spec 2026-09-10 §2 裁决 5）");
+    }
+
+    @Test
+    @DisplayName("没传过头像：avatarUpdatedAt 为 null → avatarUrl 为 null，不拼一个必然 404 的地址")
+    void profileIdentityWithoutAvatar() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"accountId\":\"acc_9f3a\",\"displayName\":\"韩泽伟\",\"avatarUpdatedAt\":null}");
+
+        Map<String, Object> view = service.profileIdentity();
+
+        assertNull(view.get("avatarUrl"));
+        assertEquals(Boolean.FALSE, view.get("displayNameIsDefault"), "缺字段按 false，不当成默认名去骚扰用户");
+    }
+
+    @Test
+    @DisplayName("改昵称：本机 PUT，出站到官网必须是 PATCH /api/account/profile（uni.request 没有 PATCH）")
+    void updateDisplayNameOutboundShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"displayName\":\"韩泽伟\",\"bio\":null}");
+
+        Map<String, Object> res = service.updateDisplayName("  韩泽伟  ");
+
+        assertEquals("PATCH https://www.aiworkdeck.com/api/account/profile", transport.calls.get(1));
+        assertTrue(transport.bodies.get(1).contains("韩泽伟"), transport.bodies.get(1));
+        assertFalse(transport.bodies.get(1).contains("  韩泽伟"), "首尾空白要去掉");
+        assertEquals("韩泽伟", res.get("displayName"));
+        assertEquals("韩泽伟", service.status().get("displayName"), "account.json 里那份也要跟着刷新");
+    }
+
+    @Test
+    @DisplayName("昵称不合规：官网 400 invalid_display_name 要说人话，别折叠成「Key 无效」")
+    void invalidDisplayNameIsABusinessRejection() {
+        AccountService service = connected();
+        transport.enqueue(400, "{\"error\":\"invalid_display_name\"}");
+
+        AccountException e = assertThrows(AccountException.class, () -> service.updateDisplayName("x".repeat(99)));
+
+        assertEquals(AccountException.Kind.REJECTED, e.getKind());
+        assertEquals("invalid_display_name", e.getReason());
+        assertTrue(e.getMessage().contains("昵称"), e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("传头像：multipart 字段名固定 file，出站带 Bearer，回包给出新的 avatarUrl")
+    void uploadAvatarOutboundShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"avatarUpdatedAt\":\"2026-09-10T09:00:00.000Z\"}");
+
+        Map<String, Object> res = service.uploadAvatar("PNGDATA".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "me.png", "image/png");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/account/avatar", transport.calls.get(1));
+        assertEquals(KEY, transport.lastBearer);
+        assertEquals("file", transport.lastPart.fieldName(), "官网收的字段名就是 file");
+        assertEquals("me.png", transport.lastPart.filename());
+        assertEquals("image/png", transport.lastPart.contentType());
+        assertEquals("2026-09-10T09:00:00.000Z", res.get("avatarUpdatedAt"));
+        assertEquals("https://www.aiworkdeck.com/api/avatar/acc_9f3a?v=2026-09-10T09%3A00%3A00.000Z",
+                res.get("avatarUrl"));
+    }
+
+    @Test
+    @DisplayName("传头像之后：60 秒 profile 缓存里的 avatarUpdatedAt 要跟着新值走，否则下一次身份同步把刚写好的头像回滚")
+    void uploadAvatarKeepsProfileCacheFresh() {
+        AccountService service = connected();
+        // ① 上传前打开一次设置页：把「这个账户还没传过头像」那一份烤进 60 秒缓存
+        transport.enqueue(200, "{\"accountId\":\"acc_9f3a\",\"displayName\":\"韩泽伟\",\"avatarUpdatedAt\":null}");
+        assertNull(service.profileIdentity().get("avatarUrl"));
+
+        // ② 传头像成功，官网回了新的版本号
+        transport.enqueue(200, "{\"avatarUpdatedAt\":\"2026-09-13T12:25:08.001Z\"}");
+        Map<String, Object> uploaded = service.uploadAvatar(new byte[]{1}, "me.png", "image/png");
+
+        // ③ 紧接着的一次身份视图（GET /api/account/status 与 /api/account/profile 都走这里）
+        //    必须已经是新头像：AccountIdentitySync.refresh() 拿这份去回写本机 User 行，
+        //    它要是还捧着上传前那个 null，刚写好的头像当场被清空。
+        assertEquals(uploaded.get("avatarUrl"), service.profileIdentity().get("avatarUrl"),
+                "缓存里那份 avatarUpdatedAt 还停在上传前，身份同步会把本机头像回滚成空");
+    }
+
+    @Test
+    @DisplayName("删头像之后：缓存里那份 avatarUpdatedAt 也要跟着清，否则删掉的头像过一会儿自己回来")
+    void deleteAvatarKeepsProfileCacheFresh() {
+        AccountService service = connected();
+        transport.enqueue(200, PROFILE_ME);
+        assertNotNull(service.profileIdentity().get("avatarUrl"));
+
+        transport.enqueue(200, "{\"avatarUpdatedAt\":null}");
+        service.deleteAvatar();
+
+        assertNull(service.profileIdentity().get("avatarUrl"),
+                "缓存里还留着删之前的版本号，身份同步会把本机头像又写回去");
+    }
+
+    @Test
+    @DisplayName("官网回包缺 avatarUpdatedAt：算失败，不能回一个「成功但没有头像」让本机行被清空")
+    void uploadAvatarWithoutVersionIsNotASuccess() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"ok\":true}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service.uploadAvatar(new byte[]{1}, "me.png", "image/png"));
+
+        assertEquals(AccountException.Kind.MALFORMED, e.getKind());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("老 account.json 里没有 accountId：补拉一次 /me，不把头像地址拼成半截")
+    void uploadAvatarBackfillsAccountIdForLegacyState() {
+        // 本次改造之前落的盘只有 key/username/displayName
+        transport = new StubTransport().enqueue(200, "{\"username\":\"hanzewei\",\"displayName\":\"韩泽伟\"}");
+        AccountService service = service();
+        service.connect(KEY);
+        transport.enqueue(200, "{\"avatarUpdatedAt\":\"2026-09-10T09:00:00.000Z\"}")
+                .enqueue(200, PROFILE_ME);
+
+        Map<String, Object> res = service.uploadAvatar(new byte[]{1}, "me.png", "image/png");
+
+        assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(2));
+        assertEquals("https://www.aiworkdeck.com/api/avatar/acc_9f3a?v=2026-09-10T09%3A00%3A00.000Z",
+                res.get("avatarUrl"));
+        assertEquals("acc_9f3a", service.status().get("accountId"), "补拉到的 accountId 要落盘，下次不用再问");
+    }
+
+    @Test
+    @DisplayName("图片太大：官网 413 too_large 也要说人话")
+    void oversizedAvatarIsABusinessRejection() {
+        AccountService service = connected();
+        transport.enqueue(413, "{\"error\":\"too_large\"}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service.uploadAvatar(new byte[]{1}, "big.png", "image/png"));
+
+        assertEquals(AccountException.Kind.REJECTED, e.getKind());
+        assertEquals("too_large", e.getReason());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("删头像：DELETE 到官网，回 avatarUpdatedAt=null / avatarUrl=null")
+    void deleteAvatarOutboundShape() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"avatarUpdatedAt\":null}");
+
+        Map<String, Object> res = service.deleteAvatar();
+
+        assertEquals("DELETE https://www.aiworkdeck.com/api/account/avatar", transport.calls.get(1));
+        assertTrue(res.containsKey("avatarUpdatedAt"));
+        assertNull(res.get("avatarUpdatedAt"));
+        assertTrue(res.containsKey("avatarUrl"));
+        assertNull(res.get("avatarUrl"));
+    }
+
+    @Test
+    @DisplayName("未连接账户：四个动作一律 NOT_CONNECTED，一次出站都不发")
+    void profileActionsRequireAConnectedAccount() {
+        transport = new StubTransport();
+        AccountService service = service();
+
+        assertEquals(AccountException.Kind.NOT_CONNECTED,
+                assertThrows(AccountException.class, service::profileIdentity).getKind());
+        assertEquals(AccountException.Kind.NOT_CONNECTED,
+                assertThrows(AccountException.class, () -> service.updateDisplayName("张三")).getKind());
+        assertEquals(AccountException.Kind.NOT_CONNECTED,
+                assertThrows(AccountException.class,
+                        () -> service.uploadAvatar(new byte[]{1}, "a.png", "image/png")).getKind());
+        assertEquals(AccountException.Kind.NOT_CONNECTED,
+                assertThrows(AccountException.class, service::deleteAvatar).getKind());
+        assertTrue(transport.calls.isEmpty(), "未连接时不该有任何出站: " + transport.calls);
     }
 
     @Test

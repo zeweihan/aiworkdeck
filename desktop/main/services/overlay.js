@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const path = require('path')
 const fs = require('fs')
 
@@ -14,7 +16,6 @@ const fs = require('fs')
  *     backend-app/0.11.2/app.jar
  *     frontend-h5/0.11.2/...
  *     zetaoffice-wrapper/0.11.1/...
- *     pysvc-src/0.11.2/...
  *     staging/                      下载与校验中的临时区
  *
  * current.json 契约：

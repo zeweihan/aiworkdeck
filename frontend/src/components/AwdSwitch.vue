@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   AwdSwitch — 桌面形制的开关。
 
@@ -44,13 +46,13 @@ export default {
   width: 38px;
   height: 22px;
   border-radius: 11px;
-  background: #D8DEDB;
+  background: var(--awd-surface-3);
   cursor: pointer;
   transition: background 0.18s ease;
 }
 
 .awd-switch.is-on {
-  background: #1A5336;
+  background: var(--awd-accent);
 }
 
 .awd-switch.is-disabled {
@@ -65,7 +67,7 @@ export default {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--awd-surface);
   box-shadow: 0 1px 3px rgba(18, 52, 77, 0.28);
   transition: transform 0.18s ease;
 }

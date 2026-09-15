@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.optimizer;
 
 import com.checkba.repository.UserFeedbackRepository;
@@ -36,6 +39,6 @@ public class OptimizerSourceConfig {
             throw new IllegalStateException("optimizer.remote.base-url 必须是 https（本机回环除外）");
         }
         log.info("[optimizer] 反馈来源 = 云端收件箱 {}", base);
-        return new RemoteFeedbackSource(base, token);
+        return new RemoteFeedbackSource(base, token, props.getRemote().getConsoleUrl());
     }
 }

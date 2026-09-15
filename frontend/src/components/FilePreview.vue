@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="file-preview">
     <view v-if="!file" class="preview-placeholder">
@@ -9,7 +11,7 @@
         <view class="preview-title-row">
           <text class="preview-title">{{ file.name }}</text>
           <button
-            v-if="canEdit"
+            v-if="canEdit && showEditBtn"
             class="btn-edit"
             type="primary"
             size="mini"
@@ -52,11 +54,30 @@
         <!-- PDF 预览：本地 blob 由浏览器/Electron 内置 PDF 引擎原生渲染，数据不出本机（#36） -->
         <view v-else-if="isPdf" class="preview-pdf">
           <!-- #ifdef H5 -->
-          <iframe v-if="blobUrl" :src="blobUrl" class="preview-iframe" frameborder="0"></iframe>
+          <iframe v-if="blobUrl" :src="pdfSrc" class="preview-iframe" frameborder="0"></iframe>
           <!-- #endif -->
           <!-- #ifndef H5 -->
-          <web-view v-if="blobUrl" :src="blobUrl" />
+          <web-view v-if="blobUrl" :src="pdfSrc" />
           <!-- #endif -->
+
+          <!-- EvidenceLink 引文定位卡（P3）：跳页由 pdfSrc 的 #page= 完成，这张卡负责
+               「引文在本页哪儿」。有 rects 就按归一化坐标画在页位图上；没有 rects 就
+               如实说未能定位，只给引文原文与复制按钮（让用户在阅读器里自己 Ctrl+F）。 -->
+          <view v-if="pdfLocate && pdfLocateVisible" class="evidence-locate-card">
+            <view class="elc-head">
+              <text class="elc-title">{{ pdfLocate.page ? $t('files.locate.pdfPage', { page: pdfLocate.page }) : $t('files.locate.pdfNoPage') }}</text>
+              <view class="elc-close" :title="$t('files.locate.close')" @tap="closePdfLocate"><text>×</text></view>
+            </view>
+            <template v-if="pdfLocate.rects.length">
+              <text class="elc-sub">{{ $t('files.locate.rectsTitle') }}</text>
+              <view class="elc-map">
+                <view v-for="(r, i) in pdfLocate.rects" :key="i" class="elc-map-rect" :style="pdfMapRectStyle(r)"></view>
+              </view>
+            </template>
+            <text v-else-if="pdfLocate.quote" class="elc-miss">{{ $t('files.locate.quoteNotFound') }}</text>
+            <text v-if="pdfLocate.quote" class="elc-quote">{{ pdfLocate.quote }}</text>
+            <view v-if="pdfLocate.quote" class="elc-copy" @tap="copyPdfQuote"><text>{{ $t('files.locate.copyQuote') }}</text></view>
+          </view>
         </view>
 
         <!-- 图片/SVG 预览：缩放平移查看器。用原生 img 配 CSS transform 而不是 uni 的
@@ -81,6 +102,16 @@
             @load="handleImageLoad"
             @error="handleImageError"
           />
+          <!-- EvidenceLink 图片定位框（P3）：locator.rect 是 0..1 归一化坐标，按当前
+               缩放/平移/旋转换算（imageRectBox）。框本身常驻——用户要缩放、旋转之后
+               核对它还罩不罩得住那块内容；只有压暗周边的遮罩 3s 后淡掉。 -->
+          <view
+            v-if="evidenceRectStyle"
+            class="evidence-rect"
+            :class="{ 'is-undimmed': evidenceRectUndimmed }"
+            :style="evidenceRectStyle"
+            @click.stop="hideEvidenceRect"
+          ></view>
           <view v-if="imageReady" class="image-toolbar" @mousedown.stop>
             <button class="img-tool-btn" size="mini" @tap="imageZoomOutBtn">−</button>
             <text class="img-zoom-pct">{{ imageZoomPercentText }}</text>
@@ -88,25 +119,44 @@
             <view class="img-tool-sep"></view>
             <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomActual">1:1</button>
             <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomFit">{{ $t('files.fitWindow') }}</button>
+            <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageRotate">{{ $t('files.rotate') }}</button>
+            <template v-if="hasImageLocatorRect">
+              <view class="img-tool-sep"></view>
+              <button
+                class="img-tool-btn img-tool-btn-text"
+                :class="{ 'is-on': evidenceRectVisible }"
+                size="mini"
+                @tap="toggleEvidenceRect"
+              >{{ $t('files.locate.imageRect') }}</button>
+            </template>
           </view>
         </view>
 
         <!-- 视频预览：与图片/音频一致走带鉴权的 blob——直链 <video src> 不带
              X-Session-Id，后端 401，表现为 MEDIA_ERR_SRC_NOT_SUPPORTED（真机证实） -->
         <view v-else-if="isVideo" class="preview-video">
+          <!-- autoplay 只在「没有定位时刻」时开：带 media locator 打开的目的是看那一帧，
+               自动播下去等于当场把定位冲掉（P3） -->
           <video
             v-if="blobUrl"
             ref="videoPlayer"
             :src="blobUrl"
             controls
-            autoplay
+            :autoplay="mediaLocatorSec == null"
             class="preview-video-player"
             @error="handleVideoError"
             @loadeddata="onVideoLoaded"
+            @loadedmetadata="onVideoLoaded"
           >
             {{ $t('files.videoNotSupported') }}
           </video>
           <view v-else class="loading-video"><text>{{ $t('files.videoLoading') }}</text></view>
+          <!-- EvidenceLink 时间标记：定位到的时刻 + 一键继续播放 -->
+          <view v-if="mediaLocatorSec != null && mediaMarkVisible" class="evidence-media-mark">
+            <text class="emm-label">{{ $t('files.locate.mediaMark', { time: formatClock(mediaLocatorSec) }) }}</text>
+            <view class="emm-btn" @tap="playFromMark"><text>{{ $t('files.locate.playFromMark') }}</text></view>
+            <view class="emm-close" :title="$t('files.locate.close')" @tap="mediaMarkVisible = false"><text>×</text></view>
+          </view>
         </view>
 
         <!-- 音频预览：自绘播放器。
@@ -134,12 +184,20 @@
               >
                 <view class="audio-track-rail"></view>
                 <view class="audio-track-fill" :style="{ width: audioProgressPct + '%' }"></view>
+                <!-- EvidenceLink 时间标记：定位时刻在轨道上的刻度（P3） -->
+                <view v-if="mediaMarkPct != null" class="audio-track-mark" :style="{ left: mediaMarkPct + '%' }"></view>
                 <view class="audio-track-knob" :style="{ left: audioProgressPct + '%' }"></view>
               </view>
 
               <view class="audio-times">
                 <text class="audio-time">{{ formatClock(audioCurrent) }}</text>
                 <text class="audio-time">{{ formatClock(audioDuration) }}</text>
+              </view>
+
+              <view v-if="mediaLocatorSec != null && mediaMarkVisible" class="evidence-media-mark is-inline">
+                <text class="emm-label">{{ $t('files.locate.mediaMark', { time: formatClock(mediaLocatorSec) }) }}</text>
+                <view class="emm-btn" @tap="playFromMark"><text>{{ $t('files.locate.playFromMark') }}</text></view>
+                <view class="emm-close" :title="$t('files.locate.close')" @tap="mediaMarkVisible = false"><text>×</text></view>
               </view>
 
               <view class="audio-controls">
@@ -222,6 +280,11 @@
 import { getFileDownloadUrl, getArchiveEntries, extractArchive } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import {
+  parsePdfLocator, parseImageRect, parseMediaStartSec,
+  imageTransform, imageRectBox, rotatedDisplaySize, normalizeRotation,
+} from '@/utils/evidenceLocator.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
@@ -245,6 +308,16 @@ export default {
     baseUrl: {
       type: String,
       default: ''
+    },
+    // EvidenceLink 定位符（spec §1.4）：pdf → #page；image → 画框；media → 起播时刻
+    locator: {
+      type: Object,
+      default: null
+    },
+    // 调用点若不接 @edit 就传 false 藏掉编辑按钮，否则会渲染一个点了没反应的死按钮
+    showEditBtn: {
+      type: Boolean,
+      default: true
     }
   },
   data() {
@@ -277,6 +350,9 @@ export default {
       imagePanStartY: 0,
       imagePanStartTx: 0,
       imagePanStartTy: 0,
+      // 旋转（0/90/180/270，顺时针）：扫描件、手机拍的现场照常常是躺着的，
+      // 定位框要跟着一起转（换算在 utils/evidenceLocator.js 的 imageRectBox）
+      imageRotation: 0,
       // 自绘音频播放器。实例本身（window.Audio）不进 data——它不需要响应式，
       // 塞进 data 会被 Vue 代理一层，媒体元素被 Proxy 包住后行为不可预期。
       audioPlaying: false,
@@ -284,7 +360,15 @@ export default {
       audioDuration: 0,
       audioVolume: 1,
       audioMuted: false,
-      audioRate: 1
+      audioRate: 1,
+      // EvidenceLink 定位：locator prop 的本地副本 + 三类可见态。
+      // 图片画框常驻（点框或工具栏按钮收起），只有压暗周边的遮罩 3s 后淡掉；
+      // pdf 引文卡与音视频时间标记都由用户显式关闭。
+      appliedLocator: null,
+      evidenceRectVisible: false,
+      evidenceRectUndimmed: false,
+      pdfLocateVisible: false,
+      mediaMarkVisible: false
     }
   },
   computed: {
@@ -359,9 +443,56 @@ export default {
     imageZoomPercentText() {
       return Math.round(this.imageScale * 100) + '%'
     },
-    imageTransformStyle() {
+    // 缩放平移旋转共用一套口径：imageTx/imageTy 是「旋转后外接框」的左上角，
+    // 换算全在 utils/evidenceLocator.js（画框要跟它逐像素对齐，别在这儿另写一份）
+    imageView() {
       return {
-        transform: `translate(${this.imageTx}px, ${this.imageTy}px) scale(${this.imageScale})`
+        natW: this.imageNaturalWidth,
+        natH: this.imageNaturalHeight,
+        scale: this.imageScale,
+        tx: this.imageTx,
+        ty: this.imageTy,
+        rotation: this.imageRotation,
+      }
+    },
+    imageTransformStyle() {
+      return { transform: imageTransform(this.imageView) }
+    },
+    // 定位用的是 appliedLocator（prop 的本地副本）：宿主收到 locator-consumed 会把 prop 清空，
+    // 直接读 prop 的话 pdf 的 #page= 会跟着掉、iframe 重载回第 1 页。
+    pdfSrc() {
+      const loc = this.pdfLocate
+      return this.blobUrl + (loc && loc.page ? '#page=' + loc.page : '')
+    },
+    // {page, quote, rects}；缺字段的 locator（OCR 常见）在这里就退化成 null
+    pdfLocate() {
+      return parsePdfLocator(this.appliedLocator)
+    },
+    imageLocatorRect() {
+      return parseImageRect(this.appliedLocator)
+    },
+    hasImageLocatorRect() {
+      return !!this.imageLocatorRect
+    },
+    mediaLocatorSec() {
+      return parseMediaStartSec(this.appliedLocator)
+    },
+    // 音频轨道上的定位刻度（百分比）；时长未知或定位超出时长就不画
+    mediaMarkPct() {
+      const sec = this.mediaLocatorSec
+      if (sec == null || !this.mediaMarkVisible || !(this.audioDuration > 0)) return null
+      if (sec > this.audioDuration) return null
+      return (sec / this.audioDuration) * 100
+    },
+    evidenceRectStyle() {
+      if (!this.evidenceRectVisible || !this.imageReady) return null
+      const box = imageRectBox(this.imageLocatorRect, this.imageView)
+      if (!box) return null
+      return {
+        left: box.left + 'px',
+        top: box.top + 'px',
+        width: box.width + 'px',
+        height: box.height + 'px'
       }
     }
   },
@@ -377,7 +508,22 @@ export default {
     // 播放器实例只能等 blobUrl 落地再建。换文件时 reloadPreview 会先清空它。
     blobUrl(url) {
       this.teardownAudio()
+      this.teardownVideoLocator()
       if (url && this.isAudio) this.setupAudio(url)
+      // 视频的 seek 不能只指望模板上的 @loadeddata/@loadedmetadata：uni 在各端把
+      // <video> 编译成自家组件，事件名与 e.target 都不保证是原生那一套。元素一挂出来
+      // 就直接在真的 <video> 上挂一次原生监听，定位才不会静默落空。
+      if (url && this.isVideo) this.$nextTick(() => this.attachVideoLocator())
+    },
+    // 宿主 openFile(file, {locator}) 落到 tab.pendingLocator → 这里的 prop。收到即拷贝成
+    // appliedLocator（pdf/image/media 三类都按它渲染），然后通知宿主 locator-consumed 清空
+    // pendingLocator，避免切回标签重复跳转。同一文件再次被链接点中（换了时刻/页）走同一条路。
+    locator: {
+      immediate: true,
+      handler(loc) {
+        if (!loc) return
+        this.applyLocator(loc)
+      }
     },
     // AI 修改文件后（pdf_highlight/pdf_redact 等）后端会更新 wpsFileId 并发 reload_file，
     // reload 处理是对既有 file 对象 Object.assign 原地更新——对象引用不变，上面的
@@ -391,6 +537,8 @@ export default {
   },
   beforeUnmount() {
     this.teardownAudio()
+    this.teardownVideoLocator()
+    this.clearEvidenceRectTimers()
     if (this.blobUrl) {
       URL.revokeObjectURL(this.blobUrl)
     }
@@ -409,7 +557,7 @@ export default {
         a.preload = 'metadata'
         a.volume = this.audioVolume
         a.playbackRate = this.audioRate
-        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0 })
+        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0; this.seekToLocator() })
         a.addEventListener('timeupdate', () => { this.audioCurrent = a.currentTime || 0 })
         a.addEventListener('play', () => { this.audioPlaying = true })
         a.addEventListener('pause', () => { this.audioPlaying = false })
@@ -497,6 +645,15 @@ export default {
 
     // file watch 与 wpsFileId watch 共用的加载分发（原 file watch handler 逻辑原样抽出）
     reloadPreview(newFile) {
+      // 换文件：定位副本随之作废（新文件的 locator 会经 prop watch 重新 apply）
+      this.clearEvidenceRectTimers()
+      this.appliedLocator = null
+      this.evidenceRectVisible = false
+      this.evidenceRectUndimmed = false
+      this.pdfLocateVisible = false
+      this.mediaMarkVisible = false
+      this.teardownVideoLocator()
+      this._videoEl = null
       // 清理旧的 blobUrl
       if (this.blobUrl) {
         URL.revokeObjectURL(this.blobUrl)
@@ -531,6 +688,7 @@ export default {
       this.imageFitScale = 1
       this.imageNaturalWidth = 0
       this.imageNaturalHeight = 0
+      this.imageRotation = 0
     },
     async loadTextContent() {
       if (!this.file || !this.fileUrl) return
@@ -542,6 +700,15 @@ export default {
           method: 'GET',
           header: getAuthHeaders()
         })
+        // uni.request 对 4xx/5xx 不会 reject，走的是 success 回调。不看 statusCode
+        // 就把 response.data 当正文，用户会在「文本预览」里读到后端的错误信封
+        // （{"code":4010,...} 之类），还以为那就是文件内容。
+        const status = Number(response.statusCode || 0)
+        if (status && (status < 200 || status >= 300)) {
+          console.warn('[FilePreview] 文本预览请求失败 status=', status)
+          this.textContent = this.$t('files.loadFailed')
+          return
+        }
         this.textContent = response.data || ''
       } catch (error) {
         console.error('加载文本内容失败:', error)
@@ -715,13 +882,22 @@ export default {
       this.archiveLoading = true
       this.archiveError = ''
       this.archiveEntries = []
+      // 竞态防护：与 loadMediaResource 同一类毛病——快速切换 zip/rar/7z 文件时，
+      // reloadPreview 会为新文件再调一次本方法，旧请求若后回来会用旧文件的条目
+      // 覆盖新文件已经显示的列表。用请求代次判定"这份响应是否还对得上最新一次
+      // 调用"；同时把 file 摘成局部变量，不在 await 之后再读 this.file（那时可能
+      // 已经换成别的文件了）。
+      const seq = (this._archiveReqSeq = (this._archiveReqSeq || 0) + 1)
+      const file = this.file
       try {
-        const res = await getArchiveEntries(this.file.projectId, this.file.id)
+        const res = await getArchiveEntries(file.projectId, file.id)
+        if (!shouldAcceptResponse(seq, this._archiveReqSeq)) return
         this.archiveEntries = (res && res.entries) || []
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._archiveReqSeq)) return
         this.archiveError = (e && e.message) || this.$t('files.archiveReadFailed')
       } finally {
-        this.archiveLoading = false
+        if (shouldAcceptResponse(seq, this._archiveReqSeq)) this.archiveLoading = false
       }
     },
     // 解压到压缩包所在目录下的新文件夹；成功后通知宿主刷新资源管理器
@@ -738,15 +914,118 @@ export default {
         this.extracting = false
       }
     },
-    onVideoLoaded(e) {
-      console.log('视频加载成功，可以播放')
-      if (e.target) {
-        console.log('视频信息:', {
-          duration: e.target.duration,
-          videoWidth: e.target.videoWidth,
-          videoHeight: e.target.videoHeight
-        })
+    // EvidenceLink 定位入口（P3）：pdf 跳页 + 引文卡、image 画框、media seek 并停在那一帧。
+    // 三类都可能缺字段（OCR 出来的坐标尤其），缺就什么都不做——退化成「只打开文件」。
+    applyLocator(loc) {
+      this.appliedLocator = loc
+      this.clearEvidenceRectTimers()
+      this.evidenceRectVisible = false
+      this.evidenceRectUndimmed = false
+      this.pdfLocateVisible = !!this.pdfLocate
+      this.mediaMarkVisible = this.mediaLocatorSec != null
+      if (this.imageLocatorRect) {
+        // 框常驻（用户要缩放、旋转之后核对它还罩不罩得住那块内容），
+        // 只有压暗周边的遮罩 3s 后淡掉
+        this.evidenceRectVisible = true
+        this._rectFadeTimer = setTimeout(() => { this.evidenceRectUndimmed = true }, 3000)
       }
+      this.seekToLocator()
+      const f = this.file
+      if (f && f.id != null) this.$nextTick(() => this.$emit('locator-consumed', f.id))
+    },
+    hideEvidenceRect() {
+      this.clearEvidenceRectTimers()
+      this.evidenceRectVisible = false
+    },
+    toggleEvidenceRect() {
+      if (this.evidenceRectVisible) { this.hideEvidenceRect(); return }
+      // 重新亮出来时不再压暗周边：用户是主动要看框，不需要再引一次注意力
+      this.clearEvidenceRectTimers()
+      this.evidenceRectUndimmed = true
+      this.evidenceRectVisible = true
+    },
+    clearEvidenceRectTimers() {
+      if (this._rectFadeTimer) { clearTimeout(this._rectFadeTimer); this._rectFadeTimer = null }
+    },
+    closePdfLocate() {
+      this.pdfLocateVisible = false
+    },
+    // 引文在页位图上的位置：归一化坐标直接落成百分比，不掺任何猜测
+    pdfMapRectStyle(r) {
+      return {
+        left: (r.x * 100) + '%',
+        top: (r.y * 100) + '%',
+        width: Math.max(1.5, r.w * 100) + '%',
+        height: Math.max(1.5, r.h * 100) + '%'
+      }
+    },
+    // 复制引文：内置 PDF 引擎没有可编程的查找接口，复制出去让用户自己在阅读器里查找
+    copyPdfQuote() {
+      const q = this.pdfLocate && this.pdfLocate.quote
+      if (!q) return
+      uni.setClipboardData({
+        data: q,
+        success: () => { uni.showToast({ title: this.$t('files.locate.quoteCopied'), icon: 'none' }) },
+        fail: () => { uni.showToast({ title: this.$t('files.locate.quoteCopyFailed'), icon: 'none' }) }
+      })
+    },
+    // uni 的 <video> 在不同平台的编译产物不同：ref 拿到的可能是组件实例、也可能已经是
+    // 原生元素，两种都要能落到真正的 <video> 上，否则 seek 会静默失效。
+    getVideoEl() {
+      if (this._videoEl) return this._videoEl
+      const ref = this.$refs.videoPlayer
+      const el = ref && (ref.$el || ref)
+      if (!el) return null
+      if (el.tagName === 'VIDEO') return el
+      return el.querySelector ? el.querySelector('video') : null
+    },
+    // 在真的 <video> 上挂原生 loadedmetadata/loadeddata，元数据一就绪就把定位落下去
+    attachVideoLocator() {
+      const el = this.getVideoEl()
+      if (!el || el === this._videoBound) return
+      this.teardownVideoLocator()
+      this._videoBound = el
+      this._videoEl = el
+      const onReady = () => this.seekToLocator()
+      el.addEventListener('loadedmetadata', onReady)
+      el.addEventListener('loadeddata', onReady)
+      this._videoOff = () => {
+        el.removeEventListener('loadedmetadata', onReady)
+        el.removeEventListener('loadeddata', onReady)
+      }
+      this.seekToLocator()
+    },
+    teardownVideoLocator() {
+      if (this._videoOff) this._videoOff()
+      this._videoOff = null
+      this._videoBound = null
+    },
+    // media 定位：seek 到 startMs 并**停在那一帧**——自动播下去等于当场把定位冲掉。
+    // 元数据没就绪时 currentTime 写不进去，loadedmetadata/loadeddata 会再调一次。
+    seekToLocator() {
+      const sec = this.mediaLocatorSec
+      if (sec == null) return
+      const el = this.isAudio ? this._audio : this.getVideoEl()
+      if (!el) return
+      try {
+        el.currentTime = sec
+        if (typeof el.pause === 'function') el.pause()
+      } catch (e) { /* metadata 未就绪，等下一次事件回调 */ }
+    },
+    // 时间标记上的「从这里播放」
+    playFromMark() {
+      const sec = this.mediaLocatorSec
+      const el = this.isAudio ? this._audio : this.getVideoEl()
+      if (!el) return
+      try {
+        if (sec != null && Math.abs((el.currentTime || 0) - sec) > 0.5) el.currentTime = sec
+        const p = el.play()
+        if (p && typeof p.catch === 'function') p.catch(() => {})
+      } catch (e) { /* 播放失败交给原生控件的报错，不再弹框打断 */ }
+    },
+    onVideoLoaded(e) {
+      if (e && e.target) this._videoEl = e.target
+      this.seekToLocator()
     },
     // uni 的 <view> 在 H5 端 $refs 拿到的有时是组件实例（带 $el），有时已经是原生
     // DOM 节点，取决于具体编译产物——renderPptx/renderDocx 已经踩过这个坑，同款兜底。
@@ -766,18 +1045,25 @@ export default {
     },
     // 摆到「适应窗口」或「100%」，两种都居中显示——工具栏点这两个按钮时不保留
     // 旧的平移量，语义上就是"重新摆一次"，而不是在当前位置基础上微调。
+    // 旋转后按「外接框」算适配与居中（横过来的扫描件宽高要对调）。
     applyImageView(mode) {
       const el = this.getImageViewportEl()
       if (!el || !this.imageNaturalWidth || !this.imageNaturalHeight) return
       const vw = el.clientWidth
       const vh = el.clientHeight
-      this.imageFitScale = this.clampImageScale(
-        Math.min(vw / this.imageNaturalWidth, vh / this.imageNaturalHeight)
-      )
+      const unit = rotatedDisplaySize(this.imageNaturalWidth, this.imageNaturalHeight, 1, this.imageRotation)
+      if (!unit) return
+      this.imageFitScale = this.clampImageScale(Math.min(vw / unit.w, vh / unit.h))
       const scale = mode === 'fit' ? this.imageFitScale : this.clampImageScale(1)
       this.imageScale = scale
-      this.imageTx = (vw - this.imageNaturalWidth * scale) / 2
-      this.imageTy = (vh - this.imageNaturalHeight * scale) / 2
+      this.imageTx = (vw - unit.w * scale) / 2
+      this.imageTy = (vh - unit.h * scale) / 2
+    },
+    // 顺时针 90°，转完重新「适应窗口」——转过之后原来的缩放平移已经没有参照意义了
+    imageRotate() {
+      if (!this.imageNaturalWidth) return
+      this.imageRotation = normalizeRotation(this.imageRotation + 90)
+      this.applyImageView('fit')
     },
     // 以容器坐标 (anchorX, anchorY) 为锚点缩放到 targetScale：锚点在屏幕上的像素位置
     // 缩放前后保持不动。滚轮缩放的手感全靠这个——以中心缩放会让光标指的地方跑掉。
@@ -937,7 +1223,7 @@ export default {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
 }
 
 .preview-placeholder {
@@ -945,7 +1231,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   font-size: 28rpx;
 }
 
@@ -958,8 +1244,8 @@ export default {
 
 .preview-header {
   padding: 24rpx;
-  border-bottom: 1rpx solid #e5e7eb;
-  background-color: #ffffff;
+  border-bottom: 1rpx solid var(--awd-border);
+  background-color: var(--awd-surface);
 }
 
 .preview-title-row {
@@ -972,7 +1258,7 @@ export default {
 .preview-title {
   font-size: 32rpx;
   font-weight: 500;
-  color: #1f2430;
+  color: var(--awd-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -990,7 +1276,7 @@ export default {
 
 .meta-item {
   font-size: 24rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .preview-body {
@@ -1005,12 +1291,178 @@ export default {
   height: 100%;
 }
 
+.preview-pdf {
+  position: relative;
+}
+
+/* EvidenceLink 引文定位卡（P3）：浮在原生 PDF 视图右上角。
+   刻意不去猜内置 PDF 引擎的排版几何——它是不透明插件，页面的实际像素位置读不到，
+   照着猜画出来的高亮会偏到别的行上，那是假高亮。这里只画能算准的两样：
+   跳到了第几页（阅读器自己完成）、引文在页面上的归一化位置（页位图）。 */
+.evidence-locate-card {
+  position: absolute;
+  top: 16rpx;
+  right: 16rpx;
+  z-index: 5;
+  width: 380rpx;
+  box-sizing: border-box;
+  padding: 16rpx;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border);
+  border-left: 6rpx solid var(--awd-accent);
+  border-radius: 10rpx;
+  box-shadow: 0 6rpx 20rpx rgba(15, 23, 42, 0.16);
+}
+
+.elc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8rpx;
+}
+
+.elc-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--awd-accent-text);
+}
+
+.elc-close {
+  padding: 0 8rpx;
+  font-size: 28rpx;
+  line-height: 1;
+  color: var(--awd-text-3);
+  cursor: pointer;
+}
+
+.elc-close:hover {
+  color: var(--awd-text);
+}
+
+.elc-sub {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 20rpx;
+  color: var(--awd-text-2);
+}
+
+/* 页位图：A4 竖版比例的纸面示意，框按归一化坐标落百分比 */
+.elc-map {
+  position: relative;
+  width: 180rpx;
+  height: 254rpx;
+  margin: 8rpx 0;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border-strong);
+}
+
+.elc-map-rect {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--awd-accent);
+  border: 1rpx solid var(--awd-accent);
+}
+
+.elc-miss {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: var(--awd-danger-text);
+}
+
+.elc-quote {
+  display: block;
+  margin-top: 8rpx;
+  padding: 8rpx 10rpx;
+  max-height: 160rpx;
+  overflow: hidden;
+  background: var(--awd-bg);
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: var(--awd-text);
+  word-break: break-all;
+}
+
+.elc-copy {
+  display: inline-block;
+  margin-top: 10rpx;
+  padding: 6rpx 16rpx;
+  border: 1rpx solid var(--awd-border-strong);
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  color: var(--awd-text);
+  cursor: pointer;
+}
+
+.elc-copy:hover {
+  background: var(--awd-surface-2);
+}
+
+/* EvidenceLink 音视频时间标记（P3）：视频浮在画面上，音频跟在时间行下面 */
+.evidence-media-mark {
+  position: absolute;
+  top: 16rpx;
+  right: 16rpx;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 8rpx 12rpx;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border);
+  border-left: 6rpx solid var(--awd-accent);
+  border-radius: 8rpx;
+  box-shadow: 0 4rpx 14rpx rgba(15, 23, 42, 0.16);
+}
+
+/* 音频卡片一律 px（见「自绘音频播放器」注释），内联那份跟着换单位 */
+.evidence-media-mark.is-inline {
+  position: static;
+  margin-top: 12px;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.emm-label {
+  font-size: 22rpx;
+  color: var(--awd-accent-text);
+  font-weight: 600;
+}
+
+.emm-btn {
+  padding: 4rpx 14rpx;
+  border: 1rpx solid var(--awd-border-strong);
+  border-radius: 6rpx;
+  font-size: 22rpx;
+  color: var(--awd-text);
+  cursor: pointer;
+}
+
+.emm-btn:hover {
+  background: var(--awd-surface-2);
+}
+
+.emm-close {
+  padding: 0 6rpx;
+  font-size: 26rpx;
+  line-height: 1;
+  color: var(--awd-text-3);
+  cursor: pointer;
+}
+
+.emm-close:hover {
+  color: var(--awd-text);
+}
+
 /* Word 文档零配置只读渲染容器（docx-preview） */
 .preview-docx {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background-color: #f3f4f6;
+  background-color: var(--awd-surface-2);
 }
 
 /* PPTX 零配置只读渲染容器（pptx-preview） */
@@ -1018,7 +1470,7 @@ export default {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background-color: #f3f4f6;
+  background-color: var(--awd-surface-2);
 }
 
 .pptx-host {
@@ -1035,7 +1487,7 @@ export default {
 .docx-loading {
   padding: 32rpx;
   text-align: center;
-  color: #6b7280;
+  color: var(--awd-text-2);
   font-size: 28rpx;
 }
 
@@ -1048,7 +1500,7 @@ export default {
 .preview-hint {
   display: block;
   font-size: 24rpx;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   margin-top: 8rpx;
 }
 
@@ -1064,6 +1516,21 @@ export default {
 
 .preview-image.is-panning {
   cursor: grabbing;
+}
+
+/* EvidenceLink 图片定位框：跟随 img 的平移缩放旋转。框常驻，只有压暗周边的
+   遮罩（那圈超大 box-shadow）3s 后撤掉——长时间压暗会让整张底稿没法看。 */
+.evidence-rect {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--awd-accent);
+  background: var(--awd-surface-2);
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.18);
+  cursor: pointer;
+  transition: box-shadow 0.4s ease;
+}
+.evidence-rect.is-undimmed {
+  box-shadow: none;
 }
 
 /* 缩放平移由 JS 算出的 transform 控制，图片本身按原始像素尺寸渲染 */
@@ -1085,8 +1552,8 @@ export default {
   align-items: center;
   gap: 4rpx;
   padding: 8rpx 12rpx;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1rpx solid #e5e7eb;
+  background: var(--awd-surface);
+  border: 1rpx solid var(--awd-border);
   border-radius: 10rpx;
   box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.18);
   /* 容器背景的 cursor:grab 会被子元素继承，工具栏不是可拖拽画布，这里截断 */
@@ -1103,12 +1570,12 @@ export default {
   border: none;
   border-radius: 6rpx;
   font-size: 26rpx;
-  color: #374151;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .img-tool-btn:hover {
-  background: #f3f4f6;
+  background: var(--awd-surface-2);
 }
 
 .img-tool-btn-text {
@@ -1116,17 +1583,23 @@ export default {
   padding: 0 12rpx;
 }
 
+/* 定位框开关的按下态 */
+.img-tool-btn.is-on {
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
+}
+
 .img-zoom-pct {
   min-width: 76rpx;
   text-align: center;
   font-size: 22rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .img-tool-sep {
   width: 1rpx;
   height: 28rpx;
-  background: #e5e7eb;
+  background: var(--awd-surface-3);
   margin: 0 4rpx;
 }
 
@@ -1138,7 +1611,7 @@ export default {
 
 .text-content {
   font-size: 28rpx;
-  color: #1f2430;
+  color: var(--awd-text);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1151,11 +1624,12 @@ export default {
   align-items: center;
   justify-content: center;
   gap: 24rpx;
-  color: #9ca3af;
+  color: var(--awd-text-3);
   font-size: 28rpx;
 }
 
 .preview-video {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
@@ -1175,7 +1649,7 @@ export default {
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #ffffff;
+  color: var(--awd-text-on-accent);
   font-size: 28rpx;
 }
 
@@ -1187,7 +1661,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: #f8f9fa;
+  background-color: var(--awd-bg);
 }
 
 .audio-card {
@@ -1195,8 +1669,8 @@ export default {
   max-width: 460px;
   padding: 24px;
   box-sizing: border-box;
-  background: #ffffff;
-  border: 1px solid #E6EAE8;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   box-shadow: 0 6px 24px rgba(18, 52, 77, 0.06);
 }
@@ -1212,14 +1686,14 @@ export default {
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .audio-name {
   flex: 1;
   min-width: 0;
   font-size: 14px;
-  color: #334155;
+  color: var(--awd-text);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1229,7 +1703,7 @@ export default {
 .audio-loading {
   padding: 12px 0;
   font-size: 12px;
-  color: #9aa5a0;
+  color: var(--awd-text-3);
   text-align: center;
 }
 
@@ -1251,11 +1725,23 @@ export default {
 
 .audio-track-rail {
   right: 0;
-  background: #E6EAE8;
+  background: var(--awd-surface-2);
 }
 
 .audio-track-fill {
-  background: #1A5336;
+  background: var(--awd-accent);
+}
+
+/* EvidenceLink 定位刻度：告诉用户「证据在这条录音的哪一处」，比进度旋钮矮一档，
+   不吃鼠标（点它要落到轨道上去 seek） */
+.audio-track-mark {
+  position: absolute;
+  top: 2px;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  background: var(--awd-danger);
+  pointer-events: none;
 }
 
 .audio-track-knob {
@@ -1265,7 +1751,7 @@ export default {
   height: 10px;
   margin-left: -5px;
   border-radius: 50%;
-  background: #1A5336;
+  background: var(--awd-accent);
   box-shadow: 0 1px 4px rgba(26, 83, 54, 0.4);
 }
 
@@ -1277,7 +1763,7 @@ export default {
 
 .audio-time {
   font-size: 11px;
-  color: #8b9691;
+  color: var(--awd-text-2);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1296,14 +1782,14 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: #1A5336;
-  color: #ffffff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .audio-play:hover {
-  background: #22694A;
+  background: var(--awd-accent-hover);
 }
 
 .audio-play-glyph {
@@ -1320,18 +1806,18 @@ export default {
 .audio-rate {
   min-width: 40px;
   padding: 4px 8px;
-  border: 1px solid #E6EAE8;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   font-size: 12px;
-  color: #4a5751;
+  color: var(--awd-text);
   text-align: center;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
 
 .audio-rate:hover {
-  border-color: #5BD197;
-  color: #1A5336;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
 }
 
 .audio-vol {
@@ -1343,7 +1829,7 @@ export default {
 .audio-vol-btn {
   width: 20px;
   height: 20px;
-  color: #4a5751;
+  color: var(--awd-text);
   cursor: pointer;
 }
 
@@ -1370,11 +1856,11 @@ export default {
 
 .audio-vol-rail {
   right: 0;
-  background: #E6EAE8;
+  background: var(--awd-surface-2);
 }
 
 .audio-vol-fill {
-  background: #5BD197;
+  background: var(--awd-mint);
 }
 
 .btn-download {
@@ -1393,23 +1879,23 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 16rpx 24rpx;
-  border-bottom: 1rpx solid #e5e7eb;
+  border-bottom: 1rpx solid var(--awd-border);
 }
 
 .archive-count {
   font-size: 24rpx;
-  color: #6b7280;
+  color: var(--awd-text-2);
 }
 
 .archive-status {
   padding: 32rpx;
   text-align: center;
-  color: #6b7280;
+  color: var(--awd-text-2);
   font-size: 28rpx;
 }
 
 .archive-error {
-  color: #b91c1c;
+  color: var(--awd-danger-text);
 }
 
 .archive-list {
@@ -1422,7 +1908,7 @@ export default {
   align-items: center;
   gap: 12rpx;
   padding: 12rpx 24rpx;
-  border-bottom: 1rpx solid #f3f4f6;
+  border-bottom: 1rpx solid var(--awd-border-subtle);
 }
 
 .entry-icon {
@@ -1435,7 +1921,7 @@ export default {
 .entry-path {
   flex: 1;
   font-size: 26rpx;
-  color: #1f2430;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1443,7 +1929,7 @@ export default {
 
 .entry-size {
   font-size: 24rpx;
-  color: #9ca3af;
+  color: var(--awd-text-3);
 }
 </style>
 

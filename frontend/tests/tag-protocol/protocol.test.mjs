@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 工具载荷中和的前端一侧：解析不串位 + 折叠区拿到原文。零依赖，用 Node 自带的 node:test 跑：
  *   cd frontend && npm run test:tag-protocol

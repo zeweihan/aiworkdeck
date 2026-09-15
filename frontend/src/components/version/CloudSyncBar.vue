@@ -1,9 +1,14 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="cloud-bar">
     <template v-if="!linked">
       <text class="cloud-text cloud-unlinked">{{ unlinkedText }}</text>
-      <text class="cloud-open-link" @tap="open(hasConnection ? 'casefile' : 'library')">
-        {{ hasConnection ? $t('version.addToLibrary') : $t('version.connectLibrary') }}
+      <!-- hasConnection 为假 = 本站没有官方案件库、本机也没有连接（国际站）。此时没有
+           任何可点的下一步：手填服务器地址的入口已经撤掉，自建部署改由部署配置
+           cloud.collab.base-url 指过来，界面上不给一个走不通的链接。 -->
+      <text v-if="hasConnection" class="cloud-open-link" @tap="open('casefile')">
+        {{ $t('version.addToLibrary') }}
       </text>
     </template>
     <template v-else>
@@ -26,6 +31,8 @@
  * `.cloud-bar` / `.cloud-dot` 是 app-e2e J11 的稳定断言锚点，改 UI 形态时要保留
  * （或成对更新 frontend/tests/app-e2e/run.mjs）。
  */
+import { remoteAheadText } from '@/utils/collabWording.js'
+
 export default {
   name: 'CloudSyncBar',
   props: {
@@ -50,7 +57,11 @@ export default {
     stateText() {
       if (this.conflictPending) return this.$t('version.pendingChoice')
       if (this.cloud.offline) return this.$t('version.libraryUnreachable')
-      if (this.cloud.remoteAhead) return this.$t('version.colleagueSubmittedNew')
+      // 「同事交了新稿」四处同源（utils/collabWording.js）：说得出作者就说清楚
+      // 是本人的另一台电脑还是哪位同事、几版，说不出才落回这句老文案。
+      if (this.cloud.remoteAhead) {
+        return remoteAheadText((k, p) => this.$t(k, p), this.cloud, { fallbackKey: 'version.colleagueSubmittedNew' })
+      }
       if (this.cloud.pendingUpload || this.working) return this.$t('version.hasUnsubmittedChanges')
       return this.$t('version.inSyncWithTeam')
     },
@@ -74,18 +85,18 @@ export default {
    被别的内容盖住，真实点击落空）。 */
 .cloud-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx;
-  padding: 16rpx 20rpx; border-bottom: 1px solid #eee;
+  padding: 16rpx 20rpx; border-bottom: 1px solid var(--awd-border);
 }
-.cloud-text { font-size: 26rpx; color: #333; flex: 1; min-width: 200rpx; }
-.cloud-unlinked { color: #666; }
+.cloud-text { font-size: 26rpx; color: var(--awd-text); flex: 1; min-width: 200rpx; }
+.cloud-unlinked { color: var(--awd-text-2); }
 .cloud-open-link {
-  font-size: 23rpx; color: #12344D; text-decoration: underline; flex-shrink: 0;
+  font-size: 23rpx; color: var(--awd-text); text-decoration: underline; flex-shrink: 0;
 }
 
 .cloud-dot {
-  width: 14rpx; height: 14rpx; border-radius: 50%; background: #C8A45D; flex-shrink: 0;
+  width: 14rpx; height: 14rpx; border-radius: 50%; background: var(--awd-warning); flex-shrink: 0;
 }
-.cloud-dot-yellow { background: #C8A45D; }
-.cloud-dot-blue { background: #3E7CB1; }
-.cloud-dot-green { background: #4C9A6A; }
+.cloud-dot-yellow { background: var(--awd-warning); }
+.cloud-dot-blue { background: var(--awd-info); }
+.cloud-dot-green { background: var(--awd-accent); }
 </style>

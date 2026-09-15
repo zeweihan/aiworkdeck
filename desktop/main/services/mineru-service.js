@@ -1,7 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const path = require('path')
 const fs = require('fs')
 const { findFreePort } = require('./service-manager')
-const { pysvcPath } = require('./pysvc-runtime')
+const { resolveServiceRoot, libDirFor } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -10,7 +12,7 @@ function pyBin(ctx) {
 }
 
 function libDir(ctx) {
-  return pysvcPath(ctx, 'mineru-service', 'lib')
+  return libDirFor(ctx, 'mineru-service')
 }
 
 function modelsDir(ctx) {
@@ -40,7 +42,9 @@ function createMineruDescriptor(modelManager) {
     name: 'mineru-service',
     eager: true,
     logName: 'mineru-service',
-    enabled: (ctx) => !ctx.packaged || modelManager.isInstalled('mineru-models'),
+    // 运行时 pack 与模型两个门都要过：模型在但 lib 不在，spawn 出去只会 ModuleNotFoundError
+    enabled: (ctx) => !ctx.packaged
+      || (!!resolveServiceRoot(ctx, 'mineru-service') && modelManager.isInstalled('mineru-models')),
     port: async (ctx) => {
       if (process.env.CHECKBA_MINERU_PORT) return Number(process.env.CHECKBA_MINERU_PORT)
       // dev 态固定 8001（对齐 docker-compose 映射）；打包态动态挑空闲端口

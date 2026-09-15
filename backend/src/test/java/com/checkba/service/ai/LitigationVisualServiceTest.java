@@ -1,23 +1,34 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
+import com.checkba.service.pack.NativePackService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * 诉讼可视化的进程边界测试——真起 Python、真跑引擎、真落盘。
@@ -45,7 +56,7 @@ class LitigationVisualServiceTest {
 
         LitigationVisualService.Runtime rt = svc.runtime();
         if (rt.litvizDir() != null) {
-            examples = rt.litvizDir().resolve("engine").resolve("examples");
+            examples = rt.litvizDir().resolve("skills").resolve("mqc-litigation-visual-redraw").resolve("examples");
         }
     }
 
@@ -90,7 +101,200 @@ class LitigationVisualServiceTest {
         }
     }
 
+    /**
+     * 修复：resolved 此前只算一次且全仓没有任何生产调用点会碰 invalidate()——用户在广场
+     * 装完 litigation-visual 资源包（live 安装，不重启后端）后，runtime() 会一直返回
+     * 装包前缓存的旧结果。
+     *
+     * <p>不依赖"litviz 目录一开始必须完全解析不到"（cwd 相对路径的兜底可能会在这台机器上
+     * 真的找到仓库里的 litviz/，环境不同结果不同）：只断言"configuredDir 刚落盘 cli.py 后，
+     * 不失效缓存则 runtime() 还是原来那个缓存实例；失效后才会重新解析并优先命中 configuredDir"
+     * ——这条钉住的是缓存本身会不会刷新，与这台机器上到底有没有真实 litviz/ 无关。
+     */
+    @Test
+    @DisplayName("修复：invalidate() 后重新探测，pack 装完不必重启后端就能生效")
+    void invalidateForcesReResolutionAfterCliPyAppears(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        LitigationVisualService fresh = new LitigationVisualService();
+        ReflectionTestUtils.setField(fresh, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(fresh, "configuredPython", "");
+        ReflectionTestUtils.setField(fresh, "configuredGraphvizDir", "");
+
+        Path tempDirNormalized = tempDir.toAbsolutePath().normalize();
+        // tempDir 里还没有 cli.py：resolveLitvizDir 跳过它，缓存下当时能解析到的结果
+        LitigationVisualService.Runtime before = fresh.runtime();
+        assertFalse(tempDirNormalized.equals(before.litvizDir()), "cli.py 还没落盘，不应解析到 tempDir");
+
+        // 模拟"用户在广场装完 litigation-visual 资源包"：cli.py 落盘到 configuredDir
+        Files.writeString(tempDir.resolve("cli.py"), "# fake cli\n", StandardCharsets.UTF_8);
+
+        // 不失效缓存的话，runtime() 应仍返回失效前缓存的同一个实例——钉住修复前的故障现象
+        assertSame(before, fresh.runtime(), "不失效缓存时应仍返回同一个缓存实例（钉住修复前的行为）");
+
+        fresh.invalidate();
+
+        LitigationVisualService.Runtime after = fresh.runtime();
+        assertEquals(tempDirNormalized, after.litvizDir(),
+                "失效后应重新解析；configuredDir 优先级最高，应命中刚落盘的 cli.py");
+    }
+
+    /**
+     * 上一条测的是"invalidate() 本身管不管用"——这条测的是修复真正加的那一行：
+     * registerPackProbe 有没有把 invalidate 注册给 packService，pack 状态变化时
+     * 是不是真的会调用到它。两条缺一都不能证明生产环境里这条链路是通的。
+     */
+    @Test
+    @DisplayName("修复：registerPackProbe 把 invalidate 登记进 packService.onPackChanged，回调触发时真的会重新解析")
+    void registerPackProbeWiresInvalidateToPackService(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        LitigationVisualService fresh = new LitigationVisualService();
+        ReflectionTestUtils.setField(fresh, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(fresh, "configuredPython", "");
+        ReflectionTestUtils.setField(fresh, "configuredGraphvizDir", "");
+
+        NativePackService packService = mock(NativePackService.class);
+        ReflectionTestUtils.setField(fresh, "packService", packService);
+
+        fresh.registerPackProbe(); // 模拟 Spring 的 @PostConstruct
+
+        ArgumentCaptor<Runnable> captor = ArgumentCaptor.forClass(Runnable.class);
+        verify(packService).onPackChanged(eq(LitigationVisualService.PACK_ID), captor.capture());
+
+        Path tempDirNormalized = tempDir.toAbsolutePath().normalize();
+        LitigationVisualService.Runtime before = fresh.runtime();
+        assertFalse(tempDirNormalized.equals(before.litvizDir()));
+
+        Files.writeString(tempDir.resolve("cli.py"), "# fake cli\n", StandardCharsets.UTF_8);
+        assertSame(before, fresh.runtime(), "登记的回调触发前不该重新解析");
+
+        // 模拟 NativePackService 在 install()/uninstall()/syncRevoked() 里调用注册的回调
+        captor.getValue().run();
+
+        assertEquals(tempDirNormalized, fresh.runtime().litvizDir(),
+                "packService 触发注册的回调后应该重新解析并命中刚落盘的 cli.py");
+    }
+
+    /**
+     * 能力槽（规范 v2.10 §15）：用户在设置页把出图引擎换成某个能力包之后，
+     * 那份实现必须优先于全部内置档（显式配置 / 环境变量 / cwd 爬升 / pack）。
+     *
+     * <p>刻意把 configuredDir 也指到一个有 cli.py 的目录上——只有这样才能证明
+     * 「槽赢过了原有链的第一档」，而不是靠原有链解析不出来才碰巧走到槽。
+     */
+    @Test
+    @DisplayName("能力槽选中的实现目录优先于显式配置与 cwd 爬升")
+    void slotSelectionWinsOverBuiltinChain(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        Path configured = tempDir.resolve("configured");
+        Path slotImpl = tempDir.resolve("slot-impl");
+        Files.createDirectories(configured);
+        Files.createDirectories(slotImpl);
+        Files.writeString(configured.resolve("cli.py"), "# configured\n", StandardCharsets.UTF_8);
+        Files.writeString(slotImpl.resolve("cli.py"), "# slot\n", StandardCharsets.UTF_8);
+
+        LitigationVisualService svcWithSlot = new LitigationVisualService();
+        ReflectionTestUtils.setField(svcWithSlot, "configuredDir", configured.toString());
+        ReflectionTestUtils.setField(svcWithSlot, "configuredPython", "");
+        ReflectionTestUtils.setField(svcWithSlot, "configuredGraphvizDir", "");
+
+        var slotRegistry = mock(com.checkba.service.capability.CapabilitySlotRegistry.class);
+        org.mockito.Mockito.when(slotRegistry.resolve(
+                        eq(com.checkba.service.capability.CapabilitySlotRegistry.SLOT_LITIGATION_DIAGRAM),
+                        org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(java.util.Optional.of(slotImpl));
+        ReflectionTestUtils.setField(svcWithSlot, "slotRegistry", slotRegistry);
+
+        assertEquals(slotImpl.toAbsolutePath().normalize(),
+                svcWithSlot.runtime().litvizDir().toAbsolutePath().normalize(),
+                "能力槽选中的实现应赢过 litviz.dir 配置");
+
+        // 槽没选（resolve 返回 empty）时退回原有链的第一档
+        org.mockito.Mockito.when(slotRegistry.resolve(
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(java.util.Optional.empty());
+        svcWithSlot.invalidate();
+        assertEquals(configured.toAbsolutePath().normalize(),
+                svcWithSlot.runtime().litvizDir().toAbsolutePath().normalize(),
+                "槽未选中时应退回 litviz.dir 配置");
+    }
+
+    /**
+     * dev-board#499：pack 有了自动追新之后，「cwd 目录爬升」这一档必须让位——否则本机
+     * 恰好存在一个 {@code <cwd>/litviz} 或 {@code <cwd>/../litviz}（dev 态一定有；打包态
+     * 用户家目录里也可能有）就会把刚追新好的、签过名的资源包整个盖掉，而且毫无提示。
+     *
+     * <p>这条同时钉住另一半：{@code includePack=false}（isEngineAvailableWithoutPack）
+     * 的语义不变——它问的始终是「把 pack 拿掉还剩什么」，不受顺序调整影响。
+     */
+    @Test
+    @DisplayName("pack 目录优先于 cwd 爬升找到的 litviz（显式 litviz.dir / LITVIZ_DIR 仍最高）")
+    void packDirWinsOverCwdAscent(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        LitigationVisualService fresh = new LitigationVisualService();
+        ReflectionTestUtils.setField(fresh, "configuredDir", "");
+        ReflectionTestUtils.setField(fresh, "configuredPython", "");
+        ReflectionTestUtils.setField(fresh, "configuredGraphvizDir", "");
+        assumeTrue(System.getenv("LITVIZ_DIR") == null, "跳过：环境里显式指定了 LITVIZ_DIR，那一档优先级更高");
+        // 竞争者必须真实存在，否则这条用例在「顺序被改回去」时会假绿
+        assumeTrue(fresh.isEngineAvailableWithoutPack(), "跳过：本机 cwd 爬升找不到 litviz，构造不出竞争场景");
+        Path cwdCandidate = fresh.runtime().litvizDir();
+
+        Path packDir = tempDir.resolve("pack-litviz");
+        Files.createDirectories(packDir);
+        Files.writeString(packDir.resolve("cli.py"), "# pack cli\n", StandardCharsets.UTF_8);
+        NativePackService packService = mock(NativePackService.class);
+        org.mockito.Mockito.when(packService.componentDir(LitigationVisualService.PACK_ID, "litviz"))
+                .thenReturn(java.util.Optional.of(packDir));
+        ReflectionTestUtils.setField(fresh, "packService", packService);
+        fresh.invalidate();
+
+        assertEquals(packDir, fresh.runtime().litvizDir(),
+                "装了 pack 时应优先用 pack 里的引擎，而不是 cwd 爬升找到的 " + cwdCandidate);
+        assertTrue(fresh.isEngineAvailableWithoutPack(),
+                "includePack=false 的语义不变：不看 pack，仍能靠 cwd 爬升找到引擎");
+    }
+
     // ==== 出图 ====
+
+    @Test
+    @DisplayName("旧资源包缺少时间轴模块时提前指明升级，语义地图能力仍可用")
+    void oldPackDoesNotAdvertiseTimeline(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        requireRuntime();
+        Files.writeString(tempDir.resolve("cli.py"), "import sys\nsys.exit(2)\n");
+        LitigationVisualService old = new LitigationVisualService();
+        ReflectionTestUtils.setField(old, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(old, "configuredPython", svc.runtime().python());
+
+        assertNull(old.unavailableReason(), "旧包的语义地图仍可用，不能整包禁用");
+        assertTrue(old.timelineUnavailableReason().contains("更新"));
+        var english = org.mockito.Mockito.mock(com.checkba.service.AppLanguageService.class);
+        org.mockito.Mockito.when(english.isEnglish()).thenReturn(true);
+        com.checkba.service.LangText.register(english);
+        try {
+            assertTrue(old.timelineUnavailableReason().contains("Update the resource pack"));
+        } finally {
+            com.checkba.service.LangText.reset();
+        }
+        LitigationVisualService.Result result = old.timeline(tempDir, "read", java.util.List.of("x.txt"), null);
+        assertFalse(result.ok());
+        assertTrue(result.error().contains("litigation_checkpoint"), result.error());
+        assertTrue(result.error().contains("litigation_render"), result.error());
+    }
+
+    @Test
+    @DisplayName("解释器只回 stderr 时保留退出码与诊断，但不回传无界日志")
+    void emptyStdoutIncludesBoundedStderr(@org.junit.jupiter.api.io.TempDir Path tempDir) throws Exception {
+        requireRuntime();
+        Files.writeString(tempDir.resolve("cli.py"), "import sys\n"
+                + "sys.stderr.write('x' * 4000 + '\\nlitviz: invalid choice: timeline\\n')\n"
+                + "sys.exit(2)\n");
+        LitigationVisualService broken = new LitigationVisualService();
+        ReflectionTestUtils.setField(broken, "configuredDir", tempDir.toString());
+        ReflectionTestUtils.setField(broken, "configuredPython", svc.runtime().python());
+
+        LitigationVisualService.Result result = broken.doctor();
+        assertFalse(result.ok());
+        assertTrue(result.error().contains("退出码 2"), result.error());
+        assertTrue(result.error().contains("invalid choice: timeline"), result.error());
+        assertTrue(result.error().length() < 1000, "对话中只透传诊断摘要");
+    }
 
     @Test
     @DisplayName("时间轴：矢量与可编辑源文件必出，PNG 视机器有无光栅器而定")
@@ -270,6 +474,52 @@ class LitigationVisualServiceTest {
         assertNull(svc.readReference("../cli.py"), "穿越出 engine/ 应被挡");
         assertNull(svc.readReference("/etc/passwd"), "绝对路径应被挡");
         assertNull(svc.readReference("references/../../PATCHES.md"), "绕回上层应被挡");
+    }
+
+    // ==== 并发安全 ====
+
+    /**
+     * 修复：超时分支读 stderr 用的是裸 {@code err.toString()}，没有跟排空线程写
+     * 用的同一把锁（{@code synchronized(sink)}）同步——StringBuilder 本身不是
+     * 线程安全的，toString() 与 append() 并发时可能读到半写的内容，极端情况下
+     * 还可能因为内部数组扩容中途而抛异常，被外层 catch 吞掉后把「出图超时」这个
+     * 清楚的提示换成一个看起来像引擎崩溃的困惑消息。
+     *
+     * <p>不依赖自然产生的竞态窗口（那样测试会时红时绿）：用两个 CountDownLatch
+     * 把交错顺序摆死——写线程先拿到锁、追加一半内容后卡住不放锁，主线程这时去读。
+     * 若读跟写线程用的是同一把锁，读必须被挡住，直到写线程把剩下内容追加完、
+     * 释放锁之后，读到的才是完整值；若读没有同步，会立刻读到「半写」的内容。
+     */
+    @Test
+    @DisplayName("修复：超时分支读 stderr 必须与排空线程的写用同一把锁，不能读到半写的内容")
+    void timeoutPathReadsStderrUnderTheSameLockTheWriterUses() throws Exception {
+        StringBuilder sink = new StringBuilder();
+        CountDownLatch writerHoldingLock = new CountDownLatch(1);
+        CountDownLatch releaseWriter = new CountDownLatch(1);
+        Thread writer = new Thread(() -> {
+            synchronized (sink) {
+                sink.append("partial");
+                writerHoldingLock.countDown();
+                try {
+                    // 最多卡 1 秒——即便主线程的读没有被挡住（说明有 bug），测试也不会真的卡死。
+                    releaseWriter.await(1, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
+                sink.append("-done");
+            }
+        });
+        writer.start();
+        assertTrue(writerHoldingLock.await(2, TimeUnit.SECONDS), "写线程应先拿到锁并追加了一半内容");
+
+        long startNanos = System.nanoTime();
+        String observed = LitigationVisualService.readSink(sink);
+        long blockedMillis = (System.nanoTime() - startNanos) / 1_000_000;
+        writer.join(2000);
+
+        assertEquals("partial-done", observed,
+                "读必须等写线程把完整内容追加完才能拿到——读到 \"" + observed + "\" 说明没有跟写用同一把锁同步");
+        assertTrue(blockedMillis >= 800,
+                "同步读应该被写线程持锁的那段时间（约 1 秒）挡住，实际只等了 " + blockedMillis + "ms");
     }
 
     // ==== doctor ====

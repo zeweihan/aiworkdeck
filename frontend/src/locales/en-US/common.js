@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Shared vocabulary reused across pages. Page-specific copy lives in its own namespace.
 export default {
   confirm: 'OK',
@@ -33,7 +35,9 @@ export default {
   readVersionFileFailed: 'Failed to read version file',
   // ---- utils/ideOpen.js ----
   openProjectFailed: 'Failed to open the project. Please try again later',
-  folderImportTruncated: 'The folder has too many items; only the first 3,000 were imported',
+  folderImportTruncatedTitle: 'Import truncated',
+  folderImportTruncated: 'This import was truncated, about {count} item(s) were not included: the folder exceeds 30,000 items, please split the project',
+  folderImportTruncatedCapped: 'This import was truncated, more than {count} items were not included: the folder exceeds 30,000 items, please split the project',
   openFolder: 'Open Folder',
   openFile: 'Open File',
   open: 'Open',
@@ -50,4 +54,12 @@ export default {
   statusError: 'Error',
   hintFromCreationTime: 'Based on the project creation date',
   hintAiInferred: 'Inferred by AI from your files; please verify',
+  // Source badge for add-in mirrored conversations (dev-board#298); mapping in utils/conversationSource.js
+  sourceChannelOfficeWord: 'Word add-in',
+  sourceChannelOfficeExcel: 'Excel add-in',
+  sourceChannelOfficePowerpoint: 'PowerPoint add-in',
+  sourceChannelWpsWord: 'WPS Writer',
+  sourceChannelWpsExcel: 'WPS Spreadsheets',
+  sourceChannelWpsPowerpoint: 'WPS Presentation',
+  sourceChannelPlugin: 'Add-in',
 }

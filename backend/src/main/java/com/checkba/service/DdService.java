@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.*;
@@ -5,7 +8,10 @@ import com.checkba.repository.*;
 import com.checkba.storage.StorageServiceFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -16,12 +22,16 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class DdService {
+
+    /** 尽调清单的父子链深度上限：既是环检测的步数保护，也挡住异常深的层级。 */
+    private static final int MAX_DD_TREE_DEPTH = 100;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DdService.class);
 
@@ -31,6 +41,28 @@ public class DdService {
     private final ProjectFileRepository projectFileRepository;
     private final ProjectFileService projectFileService;
     private final StorageServiceFactory storageServiceFactory;
+
+    /**
+     * 本 bean 的懒加载自身代理，只为让 {@link #ensureFolderTx} 经 Spring 的事务代理真正开出
+     * 独立新事务——写法与 {@link ProjectProfileService#self} 同一套。
+     */
+    @Autowired
+    @Lazy
+    DdService self;
+
+    /**
+     * ensureFolder 按 (projectId, parentId, name) 序列化「查是否已有 + 没有就建」这段临界区。
+     * uploadFile 本身带 @Transactional，如果只在这个既有事务里加一把进程内锁——锁在方法
+     * 返回时就释放，而 createFolder 的插入要到 uploadFile 整个方法返回、AOP 代理提交时才
+     * 真正落库；第二个线程拿到锁后即使重新查库，看到的仍是第一个线程未提交的旧状态，
+     * 照样会插出重复文件夹。project_file 表按团队约定不加 (project_id, parent_id, name)
+     * 唯一约束（ddl-auto: update + 可能已有重复数据，风险大于收益），所以也没有「插入撞约束
+     * 后重查」这条退路可用。于是锁必须包住一个自己独立提交的新事务：ensureFolder 只做
+     * 加锁与转发，真正的查+建放进 {@link #ensureFolderTx}（REQUIRES_NEW，挂起
+     * uploadFile 的外层事务、自己开一个物理事务并在方法返回时提交），锁直到这个子事务
+     * 提交之后才释放，下一个等锁的线程进来时数据库里已经是提交后的真实状态。
+     */
+    private final ConcurrentHashMap<String, Object> ensureFolderLocks = new ConcurrentHashMap<>();
 
     /**
      * 获取项目的尽调请求列表
@@ -229,36 +261,79 @@ public class DdService {
         String fileName = System.currentTimeMillis() + "_" + rawName;
 
         String storagePath = "projects/" + projectId + "/client_uploads/" + fileName;
-        
+
+        // 展示名同样要落进 ProjectFile.name 的 256 字符列宽以内：此前这里直接用未清洗的
+        // originalFilename，客户端传一个超长文件名就在落库时炸出
+        // DataIntegrityViolationException——而这一步已经排在物理写盘之后，事务回滚也
+        // 救不回已经落盘的字节，孤儿对象永久留在存储里（存储 key 带时间戳，永不覆盖，
+        // 重试一次多漏一个）。
+        String displayName = truncateToColumnWidth(originalFilename, 256);
+
         // Physical Save
         storageServiceFactory.getStorageService().save(storagePath, file.getInputStream());
 
-        // 6. Create ProjectFile record in the target folder
-        ProjectFile projectFile = new ProjectFile();
-        projectFile.setProjectId(projectId);
-        projectFile.setParentId(targetFolder.getId());
-        projectFile.setIsFolder(false);
-        projectFile.setName(originalFilename); // Display name
-        projectFile.setFileType(extension);
-        projectFile.setFileSize(file.getSize());
-        projectFile.setFilePath(storagePath);
-        projectFile.setWpsFileId(generateWpsFileId(projectId));
-        projectFile.setSortOrder(0);
-        projectFile.setUserId(userId);
-        projectFile.setCreatedAt(LocalDateTime.now());
-        projectFile.setUpdatedAt(LocalDateTime.now());
-        projectFile = projectFileRepository.save(projectFile);
+        try {
+            // 6. Create ProjectFile record in the target folder
+            ProjectFile projectFile = new ProjectFile();
+            projectFile.setProjectId(projectId);
+            projectFile.setParentId(targetFolder.getId());
+            projectFile.setIsFolder(false);
+            projectFile.setName(displayName); // Display name
+            projectFile.setFileType(extension);
+            projectFile.setFileSize(file.getSize());
+            projectFile.setFilePath(storagePath);
+            projectFile.setWpsFileId(generateWpsFileId(projectId));
+            projectFile.setSortOrder(0);
+            projectFile.setUserId(userId);
+            projectFile.setCreatedAt(LocalDateTime.now());
+            projectFile.setUpdatedAt(LocalDateTime.now());
+            projectFile = projectFileRepository.save(projectFile);
 
-        // 7. Update DdItem
-        item.setUploadedFileId(projectFile.getId());
-        item.setUploadedAt(LocalDateTime.now());
-        item.setUploadedBy(userId);
-        item.setStatus("UPLOADED");
-        
-        return ddItemRepository.save(item);
+            // 7. Update DdItem
+            item.setUploadedFileId(projectFile.getId());
+            item.setUploadedAt(LocalDateTime.now());
+            item.setUploadedBy(userId);
+            item.setStatus("UPLOADED");
+
+            return ddItemRepository.save(item);
+        } catch (RuntimeException e) {
+            // 落库失败（列宽超限之外的原因也算，比如瞬时 DB 故障）：物理对象已经写盘，
+            // 必须补偿删除，否则每次重试都在存储里多留一个孤儿。
+            try {
+                storageServiceFactory.getStorageService().delete(storagePath);
+            } catch (Exception cleanupEx) {
+                log.warn("落库失败后清理孤儿存储对象也失败: path={}", storagePath, cleanupEx);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * 展示名截到列宽以内，尽量保留扩展名（用户认得文件类型的部分）。
+     */
+    private static String truncateToColumnWidth(String name, int maxLength) {
+        if (name == null || name.length() <= maxLength) {
+            return name;
+        }
+        int dot = name.lastIndexOf('.');
+        // 扩展名本身占了列宽的大部分（异常情况）就不特殊处理，直接截断
+        if (dot > 0 && name.length() - dot <= 32) {
+            String ext = name.substring(dot);
+            return name.substring(0, maxLength - ext.length()) + ext;
+        }
+        return name.substring(0, maxLength);
     }
 
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {
+        String key = projectId + "/" + parentId + "/" + name;
+        Object lock = ensureFolderLocks.computeIfAbsent(key, k -> new Object());
+        synchronized (lock) {
+            return self.ensureFolderTx(projectId, parentId, name, userId);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ProjectFile ensureFolderTx(Long projectId, Long parentId, String name, Long userId) {
         Optional<ProjectFile> folderOpt = projectFileRepository.findByProjectIdAndParentIdAndName(projectId, parentId, name);
         if (folderOpt.isPresent()) {
             return folderOpt.get();
@@ -352,8 +427,12 @@ public class DdService {
         if (newParentId != null) {
             // Check loop
             if (itemId.equals(newParentId)) throw new IllegalArgumentException("不能移动到自己下面");
-            // TODO: check deeper loops if needed
-            
+            // 深层环检测（原来是一句 TODO）：只挡「移到自己身上」挡不住「移到自己的子孙身上」。
+            // 一旦成环（A.parent=B 且 B 在 A 的子树里），凡是顺着父子关系走的代码都会打转——
+            // deleteItem 的递归删子项会直接 StackOverflowError，前端建树也拼不出来，
+            // 而且这条坏数据**存进库里就再也移不回来**（每次操作都先撞上死循环）。
+            rejectIfDescendant(itemId, newParentId);
+
             DdItem newParent = ddItemRepository.findById(newParentId).orElseThrow(() -> new IllegalArgumentException("父项不存在"));
             item.setParentId(newParentId);
             item.setLevel(newParent.getLevel() + 1);
@@ -365,6 +444,28 @@ public class DdService {
         return ddItemRepository.save(item);
     }
 
+
+    /**
+     * 目标父节点是不是自己的子孙——是就拒绝，否则会在树里成环。
+     *
+     * <p>从目标父节点顺着 parentId 往上爬到根：路上遇到 itemId 说明它在 itemId 的子树里。
+     * 同时带一个步数上限，万一库里已经有历史坏数据（成环），这里也不会跟着一起打转。
+     */
+    private void rejectIfDescendant(Long itemId, Long newParentId) {
+        Long cursor = newParentId;
+        int guard = 0;
+        while (cursor != null && guard++ < MAX_DD_TREE_DEPTH) {
+            if (cursor.equals(itemId)) {
+                throw new IllegalArgumentException("不能移动到自己的子项下面");
+            }
+            DdItem node = ddItemRepository.findById(cursor).orElse(null);
+            if (node == null) break;
+            cursor = node.getParentId();
+        }
+        if (guard >= MAX_DD_TREE_DEPTH) {
+            throw new IllegalArgumentException("清单层级异常（疑似已有循环引用），请刷新后重试");
+        }
+    }
 
     /**
      * 删除项

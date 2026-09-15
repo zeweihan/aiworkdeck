@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="doc-diff-viewer">
     <!-- 工具栏 -->
@@ -40,7 +42,10 @@
     <!-- Monaco Diff Editor 容器 -->
     <!-- #ifdef H5 -->
     <view class="diff-container" ref="diffContainer">
-      <div id="monaco-diff-container" class="monaco-container"></div>
+      <!-- 容器只能用模板 ref 取，不能挂全局 id：分栏模式下左右两个窗格会同时挂载
+           两个 DocDiffViewer，硬编码 id 会让两边都拿到 DOM 里靠前的那一个容器，
+           后挂载的实例把 Monaco 建进了别人的窗格。 -->
+      <div ref="monacoContainer" class="monaco-container"></div>
     </view>
     <!-- #endif -->
     
@@ -202,7 +207,7 @@ export default {
         // 动态加载 Monaco Editor
         const monaco = await this.loadMonaco()
         
-        const container = document.getElementById('monaco-diff-container')
+        const container = this.$refs.monacoContainer
         if (!container) {
           throw new Error(this.$t('editor.diff.containerMissing'))
         }
@@ -368,7 +373,7 @@ export default {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #fff;
+  background: var(--awd-surface);
   position: relative;
 }
 
@@ -377,8 +382,8 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border-bottom: 1px solid var(--awd-border);
   flex-shrink: 0;
 }
 
@@ -391,12 +396,12 @@ export default {
 .toolbar-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--awd-text);
 }
 
 .toolbar-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .toolbar-right {
@@ -416,18 +421,18 @@ export default {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 4px;
   font-size: 12px;
-  color: #475569;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .nav-btn:hover:not(:disabled) {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
+  background: var(--awd-surface-2);
+  border-color: var(--awd-border-strong);
 }
 
 .nav-btn:disabled {
@@ -441,39 +446,39 @@ export default {
 
 .diff-count {
   font-size: 12px;
-  color: #64748b;
+  color: var(--awd-text-2);
   min-width: 60px;
   text-align: center;
 }
 
 .view-toggle {
   display: flex;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--awd-border);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .toggle-btn {
   padding: 4px 12px;
-  background: #fff;
+  background: var(--awd-surface);
   border: none;
   font-size: 12px;
-  color: #64748b;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .toggle-btn:first-child {
-  border-right: 1px solid #e2e8f0;
+  border-right: 1px solid var(--awd-border);
 }
 
 .toggle-btn.active {
-  background: #3b82f6;
-  color: #fff;
+  background: var(--awd-info);
+  color: var(--awd-text-on-accent);
 }
 
 .toggle-btn:hover:not(.active) {
-  background: #f1f5f9;
+  background: var(--awd-surface-2);
 }
 
 .diff-container {
@@ -506,7 +511,7 @@ export default {
   gap: 20px;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .fallback-label {
@@ -515,11 +520,11 @@ export default {
 }
 
 .source-label {
-  color: #dc2626;
+  color: var(--awd-danger-text);
 }
 
 .target-label {
-  color: #16a34a;
+  color: var(--awd-accent-text);
 }
 
 .diff-line {
@@ -532,17 +537,17 @@ export default {
 
 .diff-line.unchanged {
   background: transparent;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .diff-line.removed {
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--awd-danger-soft);
+  color: var(--awd-danger-text);
 }
 
 .diff-line.added {
-  background: #f0fdf4;
-  color: #16a34a;
+  background: var(--awd-bg);
+  color: var(--awd-accent-text);
 }
 
 .line-prefix {
@@ -568,15 +573,15 @@ export default {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--awd-surface);
   z-index: 100;
 }
 
 .loading-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #e2e8f0;
-  border-top-color: #3b82f6;
+  border: 3px solid var(--awd-border);
+  border-top-color: var(--awd-info);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -588,7 +593,7 @@ export default {
 .loading-text {
   margin-top: 16px;
   font-size: 14px;
-  color: #64748b;
+  color: var(--awd-text-2);
 }
 
 .error-icon {
@@ -601,14 +606,14 @@ export default {
 
 .error-text {
   font-size: 14px;
-  color: #dc2626;
+  color: var(--awd-danger-text);
   margin-bottom: 16px;
 }
 
 .retry-btn {
   padding: 8px 20px;
-  background: #3b82f6;
-  color: #fff;
+  background: var(--awd-info);
+  color: var(--awd-text-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 14px;
@@ -616,7 +621,7 @@ export default {
 }
 
 .retry-btn:hover {
-  background: #2563eb;
+  background: var(--awd-info);
 }
 </style>
 

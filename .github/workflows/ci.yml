@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  spdx-check:
+    name: SPDX header check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # check-spdx.mjs 用 origin/master 做 diff base，要能看到该分支的完整历史。
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check new files carry SPDX headers
+        run: node scripts/check-spdx.mjs
+
   backend:
     name: Backend (mvn test)
     runs-on: ubuntu-latest
@@ -16,6 +30,10 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Install plugin-api (host SPI, local artifact)
+        # backend 以普通依赖引用 com.checkba:plugin-api，它是 backend/plugin-api 独立工程，
+        # 不在任何远端仓库，必须先 install 进本机 ~/.m2 再跑 backend 的 Maven。
+        run: mvn -B -q -f backend/plugin-api/pom.xml install
       - name: Test
         working-directory: backend
         # forkNode 走 TCP 而不是默认的 stdout 管道：套件里有测试进程往 native stdout
@@ -49,7 +67,11 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci || npm install
+        # 原来是 npm ci || npm install：lockfile 真漂了的话 npm install 会悄悄改写
+        # package-lock.json 并让构建照样通过，等于没有任何 lockfile 漂移守卫（同文件
+        # desktop job 一直是干净的 npm ci）。本地验证过 frontend/ 的 lockfile 与
+        # package.json 一致（npm ci 能正常跑通），收紧成单纯 npm ci。
+        run: npm ci
       - name: Check emit/binding contracts
         working-directory: frontend
         run: npm run check:emits
@@ -59,12 +81,73 @@ jobs:
       - name: Check navigation contracts
         working-directory: frontend
         run: npm run check:nav:full
+      - name: Test AI inbox, submission and memory state
+        working-directory: frontend
+        run: node --test tests/ai-alignment/*.test.mjs
       - name: Test project-home page
         working-directory: frontend
         run: npm run test:project-home
+      - name: Test EvidenceLink pure functions (anchor hash 双端对拍 / locator / 拖放建链)
+        working-directory: frontend
+        run: npm run test:evidence
       - name: Test command registry (加速键归属与 when 求值)
         working-directory: frontend
         run: npm run test:commands
+      - name: Tab visibility contract (dev-board#394)
+        working-directory: frontend
+        run: npm run test:tab-visibility
+      - name: Clipboard capture gate + delete chain (dev-board#455)
+        working-directory: frontend
+        run: npm run test:clipboard
+      - name: OCR overlay style contract (dev-board#474)
+        working-directory: frontend
+        run: npm run test:ocr-overlay
+      - name: Capability slots settings section contract (dev-board#497)
+        working-directory: frontend
+        run: npm run test:capabilities
+      - name: Team panel + locale contracts (dev-board#496)
+        working-directory: frontend
+        run: npm run test:team
+      - name: Member invite lookup + case-library share rules
+        working-directory: frontend
+        run: npm run test:member-invite
+      - name: Display-name-only identity contract (dev-board#564–#567)
+        working-directory: frontend
+        run: npm run test:identity
+      - name: Commit history tab, lane graph, member dedupe, collab wording (dev-board#623–#625)
+        working-directory: frontend
+        run: npm run test:version-history
+      - name: Three-way merge unit tests (merge rows, auto-merge flow, provenance align, history merges, dev-board#630–#632)
+        working-directory: frontend
+        run: npm run test:version-merge
+      - name: Desensitize pane custom-words entry (dev-board#531)
+        working-directory: frontend
+        run: npm run test:desensitize
+      - name: Plugin SDK contracts (副本一致 + 握手信封 awd:1，dev-board#506)
+        working-directory: frontend
+        run: npm run test:plugin-sdk
+      - name: LOWA worker pure-function + 命名前缀契约 (dev-board#506)
+        working-directory: frontend
+        run: npm run test:lowa-unit
+      - name: Writing assistance contracts (dev-board#538)
+        working-directory: frontend
+        run: npm run test:completion
+
+      - name: Document insight and link preview tests
+        working-directory: frontend
+        run: npm run test:insight
+      - name: Inline review contracts (dev-board#547)
+        working-directory: frontend
+        run: npm run test:inline-review
+      - name: "Revision view / IME overlay contracts (dev-board#587 #606)"
+        working-directory: frontend
+        run: npm run test:revision-view
+      - name: Optional components prompts (dev-board#530)
+        working-directory: frontend
+        run: npm run test:optional-components
+      - name: Test local redaction panel
+        working-directory: frontend
+        run: node --test tests/desensitize/*.test.mjs
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

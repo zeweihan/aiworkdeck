@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.service.UserActivityLogService;
@@ -34,7 +37,8 @@ public class ActivityLogController {
                 request.getTargetId(),
                 request.getTargetName(),
                 request.getDuration(),
-                request.getMetaInfo()
+                request.getMetaInfo(),
+                request.getProjectId()
         );
 
         Map<String, Object> result = new HashMap<>();
@@ -66,6 +70,7 @@ public class ActivityLogController {
         private String targetName;
         private Long duration;
         private String metaInfo;
+        private Long projectId;
 
         public String getActionType() { return actionType; }
         public void setActionType(String actionType) { this.actionType = actionType; }
@@ -77,5 +82,7 @@ public class ActivityLogController {
         public void setDuration(Long duration) { this.duration = duration; }
         public String getMetaInfo() { return metaInfo; }
         public void setMetaInfo(String metaInfo) { this.metaInfo = metaInfo; }
+        public Long getProjectId() { return projectId; }
+        public void setProjectId(Long projectId) { this.projectId = projectId; }
     }
 }

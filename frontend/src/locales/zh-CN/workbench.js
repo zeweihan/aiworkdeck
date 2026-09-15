@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 工作台（pages/project-overview/project-overview.vue）文案。
 export default {
+  resizePanel: '拖动调整面板宽度',
+  waitForDocumentWrite: '请等待当前 AI 任务与文档写入完成后再插入。',
   // 菜单栏 / 命令面板
   menuNeedsDoc: '请先打开一个 Word 文档',
   menuSelectTextFirst: '请先选中要批注的文字',
@@ -13,6 +17,7 @@ export default {
   switchRecentProject: '切换到最近项目',
   recentProjects: '最近项目',
   noOtherRecentProjects: '没有其他最近项目',
+  recentProjectsLoadFailed: '加载失败，点此重试',
   projectHome: '项目概览',
   allProjects: '全部项目…',
   statusInProgress: '进行中',
@@ -24,6 +29,12 @@ export default {
   // 顶栏右侧
   accountUsage: '账户与用量',
   accountConnected: '已连接账户',
+  appearance: '外观',
+  appearanceLight: '浅色',
+  appearanceDark: '深色',
+  appearanceSystem: '跟随系统',
+  walletChipTitle: 'Credits 余额与会员等级，点击打开账户设置',
+  walletMenuLabel: '账户与用量',
   trialInfo: '试用版说明',
   // 宽限预警 chip 与说明弹窗（2026-08 官方版必须账户登录）
   trialCountdown: '试用版 · 剩 {n} 天',
@@ -38,6 +49,11 @@ export default {
   collapseSidebar: '收起左侧栏',
   toolsPanel: '常用工具',
   aiAssistant: 'AI 助手',
+  // 面板停靠（dev-board#180）：右键菜单与拖拽投放层共用这三条
+  dockToLeft: '移到左侧栏',
+  dockToRight: '移到右侧面板',
+  dockToBottom: '移到底部面板',
+  dockCurrent: '当前',
   openSplit: '开启分屏',
   closeSplit: '关闭分屏',
   ocrCapture: '截图摘录（OCR）',
@@ -50,20 +66,17 @@ export default {
   systemSettings: '系统设置（AI 提供商 / API Key）',
   clientInitial: '客',
   addMember: '加人',
-  profile: '个人中心',
-  // 助手配置弹窗
-  configAssistant: '配置助手',
-  assistantNameLabel: '助手名称 (System)',
-  presetPromptLabel: '预设 Prompt (System)',
-  userPromptLabel: '用户自定义 Prompt',
-  userPromptPlaceholder: '输入自定义指令...',
-  userPromptHint: '注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。',
+  // 顶栏右上角头像的 title（2026-08-19 从 rail 底部搬上来；2026-08-21 起点击直接开设置标签，下拉已撤）
+  accountMenu: '设置',
+  settingsTabName: '设置',
+  // 「语音」面板内部的两个 tab
+  voiceTts: '语音合成',
+  voiceRecorder: '会议录音',
   // 左栏文件树工具行
   selectAll: '选择全部',
   newDoc: '新建文档',
   newFolder: '新建文件夹',
   batchSelect: '批量选择',
-  uploadFile: '上传文件',
   batchDownload: '批量下载',
   sort: '排序',
   batchCopy: '批量复制',
@@ -74,6 +87,9 @@ export default {
   // 标签栏与编辑区
   newOrCopy: '新建/复制',
   emptyWorkspace: '选择文件开始工作',
+  emptyWorkspaceHint: '从左侧资源管理器打开文件，或新建一份文档',
+  railEditEnter: '整理侧栏（拖动排序或停靠）',
+  railEditDone: '完成整理',
   leftPaneIdle: '左侧空闲',
   rightPaneIdle: '右侧空闲',
   // 底部工具面板
@@ -91,6 +107,7 @@ export default {
   newConversation: '新对话',
   loadHistoryFailed: '加载历史失败',
   loadConversationFailed: '加载对话失败',
+  forkConversationFailed: '另起分支失败',
   statusRunning: '运行中',
   statusPaused: '待继续',
   statusInterrupted: '已中断',
@@ -139,6 +156,8 @@ export default {
   webMarkInserted: '已插入网核标记',
   // 采纳等待处理固定条
   adoptPendingText: '有文件等你做选择',
+  // 知道有几份时说得更具体（能自动合的已经合好了，这条说的是真要律师动手的那几份）
+  adoptPendingCount: '有 {count} 份文件等你裁决',
   goHandle: '去处理',
   // 试用版说明弹窗
   trialInfoBody: '当前为试用版，全部功能均可正常使用。升级正式版可连接 AI WorkDeck 账户，同步已购内容并使用平台 AI 通道。',
@@ -168,12 +187,13 @@ export default {
   removed: '已移出',
   removeFailed: '没能移出',
   aiPanelNotReady: 'AI 面板未就绪，请稍后重试',
+  // 插件开发面板「让 AI 开发」的 kick-off prompt：必须以「插件开发」开头才能命中 skill 注入
+  pluginDevAiPrompt: '插件开发：请继续开发本项目「插件开发/{id}/」目录下的插件「{name}」（文件夹 ID {folderId}）。先读取该目录下的 manifest.json 与 web/ 源码了解现状，然后按我的需求迭代；改完用 plugin_dev_install 安装到本机让我测试。',
   projectNameEmpty: '项目名称不能为空',
   renameSuccess: '重命名成功',
   renameFailed: '重命名失败',
   renameSyncFailed: '重命名同步失败',
   openDocFirst: '请先打开一个文档',
-  highlightTextFirst: '请先在文档中高亮一段文本（蓝色选区）',
   setHyperlinkFailed: '设置超链接失败',
   docNotReady: '文档未就绪',
   linkCreated: '已建立关联',
@@ -181,6 +201,9 @@ export default {
   fileMissing: '文件不存在',
   fileNotOnDisk: '磁盘上没有这份文件',
   revealFailed: '无法在访达中显示',
+  shareFailed: '无法发送这份文件',
+  shareUnsupported: '当前系统不支持发送',
+  shareClipboardHint: '文件已复制，切到微信选好对话后按 Ctrl+V 即可发送',
   copyFailedNoNewFile: '复制失败：未返回新文件',
   copyFailed: '复制失败',
   recordingStarted: '开始录制工作',
@@ -209,9 +232,31 @@ export default {
   folderTooManyFiles: '文件夹含{count}个文件(超出10个限制)，请减少数量',
   fileAdded: '已添加: {name}',
   noDragData: '未获取到拖拽数据',
-  defaultAssistantName: '默认助手',
-  defaultAssistantPrompt: '你是一个专业的助手。',
-  assistantSwitchedToast: '已切换为：{name}',
-  assistantSwitchedMsg: '助手切换为：{name}',
-  configSaved: '配置已保存',
+  // EvidenceLink：拖到编辑器建链 / method 小条 / 链接定位（evidenceLinkActions.js、EvidenceMethodBar.vue、LibreOfficeEditor.vue）
+  evidence: {
+    selectFirst: '先选中要关联的文字',
+    failedTitle: '《{name}》未关联上',
+    retryHint: '；重新拖拽到同一段文字即可重试',
+    selfLink: '不能把文档关联到自己',
+    bookmarkFailed: '建立书签失败，请重新选中文字后再试',
+    linked: '已关联《{name}》',
+    methodLabel: '方法：',
+    dropHint: '松开即关联到选中文字',
+    method: {
+      written_review: '书面审查',
+      written_statement: '书面说明',
+      web_check: '网络核查',
+      third_party: '第三方材料',
+      interview: '访谈',
+    },
+    loc: {
+      wholeFile: '整个文件',
+      page: '第 {page} 页',
+      quote: '“{quote}”',
+      region: '图中框选区域',
+      time: '{time} 起',
+      web: '{host}',
+      cell: '{sheet}!{cell}',
+    },
+  },
 }

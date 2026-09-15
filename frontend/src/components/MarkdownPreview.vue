@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="markdown-preview">
     <view v-if="loading" class="markdown-loading">
@@ -27,14 +29,19 @@ export default {
     }
   },
   data() {
+    const md = new MarkdownIt({
+      // 渲染结果直接进 v-html，而内容来自他人上传的 .md 与模型输出，
+      // 放行原始 HTML 等于存储型 XSS，故禁用
+      html: false,
+      linkify: true,
+      typographer: true
+    })
+    // 裸 <table> 没有滚动容器，宽表格会被上游面板的 overflow:hidden 直接裁掉且不出滚动条，
+    // 这里包一层可横向滚动的 div（dev-board#467）
+    md.renderer.rules.table_open = () => '<div class="md-table-scroll"><table>'
+    md.renderer.rules.table_close = () => '</table></div>'
     return {
-      md: new MarkdownIt({
-        // 渲染结果直接进 v-html，而内容来自他人上传的 .md 与模型输出，
-        // 放行原始 HTML 等于存储型 XSS，故禁用
-        html: false,
-        linkify: true,
-        typographer: true
-      }),
+      md,
       loadedContent: '',
       loading: false
     }
@@ -88,7 +95,7 @@ export default {
 <style scoped>
 .markdown-preview {
   padding: 16px;
-  background: #fff;
+  background: var(--awd-surface);
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden; /* Prevent horizontal overflow */
@@ -101,14 +108,14 @@ export default {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #666;
+  color: var(--awd-text-2);
   font-size: 14px;
 }
 
 .markdown-body {
   font-size: 14px;
   line-height: 1.7;
-  color: #2c2c2c;
+  color: var(--awd-text);
   word-wrap: break-word;
   overflow-wrap: break-word;
   user-select: text; /* Allow text selection for copying */
@@ -121,12 +128,12 @@ export default {
   margin-top: 16px;
   margin-bottom: 8px;
   font-weight: 600;
-  color: #1a5336;
+  color: var(--awd-accent-text);
 }
 
 .markdown-body :deep(h1) {
   font-size: 20px;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--awd-border);
   padding-bottom: 8px;
 }
 
@@ -153,7 +160,7 @@ export default {
 }
 
 .markdown-body :deep(code) {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: 'Menlo', 'Monaco', monospace;
@@ -161,7 +168,7 @@ export default {
 }
 
 .markdown-body :deep(pre) {
-  background: #f9f9f9;
+  background: var(--awd-surface);
   padding: 12px;
   border-radius: 6px;
   overflow-x: auto;
@@ -174,11 +181,25 @@ export default {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid #1a5336;
+  border-left: 3px solid var(--awd-accent);
   padding-left: 12px;
   margin: 12px 0;
-  color: #666;
+  color: var(--awd-text-2);
   font-style: italic;
+}
+
+.markdown-body :deep(.md-table-scroll) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown-body :deep(.md-table-scroll)::-webkit-scrollbar {
+  height: 8px;
+}
+
+.markdown-body :deep(.md-table-scroll)::-webkit-scrollbar-thumb {
+  background: var(--awd-border);
+  border-radius: 4px;
 }
 
 .markdown-body :deep(table) {
@@ -189,13 +210,13 @@ export default {
 
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--awd-border);
   padding: 8px 12px;
   text-align: left;
 }
 
 .markdown-body :deep(th) {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
   font-weight: 600;
 }
 

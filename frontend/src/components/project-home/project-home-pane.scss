@@ -1,24 +1,31 @@
+/* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* 项目概览内容本体的容器样式（一页纸卷轴）。子组件各自的样式在各自 scoped 块里。
    外壳浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。 */
-$color-primary: #1A5336;
-$color-accent: #5BD197;
-$color-text-main: #2C3338;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
 
 .project-home-pane {
+  container-type: inline-size;
+  container-name: home-pane;
   padding: 24px;
   box-sizing: border-box;
-  background: $bg-pale;
-  color: $color-text-main;
+  background: var(--awd-bg);
+  color: var(--awd-text);
 }
 
-/* 嵌在工作台中栏的标签里：铺满标签内容区并自己滚动
-   （独立页那边由 body 滚，不需要这一条） */
-.project-home-pane.is-embedded {
+/* 嵌在工作台**左栏**里：铺满并自己滚动（独立页那边由 body 滚，不需要这一条）。
+   这里只留「与实际渲染宽度无关」的宿主结构性差异——密度/列数一律交给下面
+   的 @container 断点，不许再在这里按 compact 布尔值无条件收窄。 */
+.project-home-pane.is-compact {
   height: 100%;
+  padding: 0;
   overflow-y: auto;
+  background: var(--awd-surface);
+}
+
+.project-home-pane.is-compact .home-column {
+  /* 独立页要居中卷轴（max-width:880 + auto margin）；嵌在左栏里则要铺满，
+     不然拖宽左栏后两侧会空出大段留白。与宽度无关，纯粹是「哪个宿主」的差异。 */
+  max-width: none;
 }
 
 /* 一页纸卷轴：单列纵向 */
@@ -31,25 +38,100 @@ $bg-white: #FFFFFF;
 }
 
 .home-section {
-  background: $bg-white;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 16px 18px;
+}
+
+// 「已学习模板」一行：档案头下方的一句话状态，不是卡片，弱化成说明文字
+.home-template-line {
+  padding: 0 4px;
+}
+
+.home-template-line-text {
+  font-size: 12px;
+  color: var(--awd-text-2);
+  line-height: 1.6;
 }
 
 .home-section-title {
   display: block;
   margin-bottom: 12px;
   padding: 0 0 8px 8px;
-  border-left: 3px solid $color-accent;
-  border-bottom: 1px solid $color-border;
+  border-left: 3px solid var(--awd-mint);
+  border-bottom: 1px solid var(--awd-border);
   font-size: 13px;
   font-weight: 600;
-  color: $color-primary;
+  color: var(--awd-accent-text);
 }
 
 @media (max-width: 720px) {
   .project-home-pane {
     padding: 16px 12px;
   }
+}
+
+/* ---- 响应真实渲染宽度的三档密度（左栏可拖 160px~75vw，compact 早先是静态布尔值，
+   摁死单列不管实际拖出来多宽）。断点按 .project-home-pane 自身容器宽度算，两个
+   宿主（左栏 / 独立页）共用同一套：独立页正常宽度下天然落在「常规」档，不需要
+   额外样式。子组件自己的密度（档案字段、统计卡等）在各自 scoped 样式里跟着同一个
+   home-pane 容器写，见 ProfileHeader.vue / OverviewStatsBar.vue。 */
+
+/* 微窄：单列、最紧凑密度 */
+@container home-pane (max-width: 359px) {
+  .home-column {
+    gap: 10px;
+  }
+
+  .home-section {
+    padding: 10px 12px;
+  }
+
+  .home-section-title {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    font-size: 11px;
+  }
+}
+
+/* 窄中：两列起步，字号/间距升一档——拖左栏最常落的区间，重点打磨 */
+@container home-pane (min-width: 360px) and (max-width: 559px) {
+  .home-column {
+    gap: 14px;
+  }
+
+  .home-section {
+    padding: 12px 14px;
+  }
+
+  .home-section-title {
+    margin-bottom: 10px;
+    padding-bottom: 7px;
+    font-size: 12px;
+  }
+}
+
+/* 常规（>560px）：不写规则，落回上面已有的宽松默认样式 */
+
+/* Sidebar sections use the same edge and density as Explorer and Marketplace.
+   Container queries cannot select their own query container; host padding belongs here. */
+.project-home-pane.is-compact {
+  padding: 0;
+  .home-column { gap: 0; }
+  .home-section {
+    padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+    border: 0;
+    border-top: 1px solid var(--awd-panel-border);
+    border-radius: 0;
+  }
+  .home-section-title {
+    padding: 0;
+    margin: 0 0 var(--awd-panel-gap);
+    border: 0;
+    line-height: var(--awd-panel-sec-h);
+    font-size: var(--awd-panel-fs-sec);
+    color: var(--awd-panel-text-2);
+  }
+  .home-template-line { padding: var(--awd-panel-gap) var(--awd-panel-pad-x); }
 }

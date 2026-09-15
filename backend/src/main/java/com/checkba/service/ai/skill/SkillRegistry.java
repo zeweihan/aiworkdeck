@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.skill;
 
 import com.checkba.service.SystemSettingService;
@@ -66,14 +69,29 @@ public class SkillRegistry {
     /** id -> skill（保持扫描顺序，内置目录优先于插件） */
     private final Map<String, SkillDefinition> skills = new LinkedHashMap<>();
 
-    /** 被禁用 skill id 集合（内存缓存，与 system_setting 同步） */
-    private final Set<String> disabledSkillIds = ConcurrentHashMap.newKeySet();
+    /**
+     * 最近一次扫描里，因异常（最典型是 skill.yml/prompt 文件不是 UTF-8 编码）而没能注册成功的
+     * 目录名 -> 错误摘要。register() 的 catch 此前只 log.error 一行——getSkills() 结果里
+     * "解析出错"与"这个目录压根没有 skill.yml"两种情况完全看不出区别，管理页/排障者除了翻
+     * 后端日志没有别的办法。每次 {@link #scan()} 开头清空重建，只反映最近一次扫描的状态。
+     */
+    private final Map<String, String> loadErrors = new ConcurrentHashMap<>();
+
+    /**
+     * 被禁用 skill id 集合（内存缓存，与 system_setting 同步）。
+     *
+     * volatile 而非 final：重载（{@link #loadDisabledState}）走"读完新名单再整体换引用"，
+     * 不在原集合上先 clear 再 addAll——{@link #isEnabled} 在 TTL 未到期时是无锁读，
+     * 会在重载的 DB 往返期间读到空名单，把管理员明确停用的 skill 短暂判成启用。
+     * 三个集合的所有写入（增删与换引用）都在 this monitor 下，读方看到的永远是完整的一版。
+     */
+    private volatile Set<String> disabledSkillIds = ConcurrentHashMap.newKeySet();
 
     /** "仅手动"skill id 集合：不参与触发词自动匹配，只能由用户在对话中钉选生效 */
-    private final Set<String> manualSkillIds = ConcurrentHashMap.newKeySet();
+    private volatile Set<String> manualSkillIds = ConcurrentHashMap.newKeySet();
 
     /** 已做过默认启停初始化的 skill id 集合（见 {@link #SEEDED_KEY}） */
-    private final Set<String> seededSkillIds = ConcurrentHashMap.newKeySet();
+    private volatile Set<String> seededSkillIds = ConcurrentHashMap.newKeySet();
 
     private volatile long disabledStateRefreshedAt = 0L;
 
@@ -88,10 +106,21 @@ public class SkillRegistry {
         this.appLanguageService = appLanguageService;
     }
 
+    /**
+     * 「语音」合并插件的成员 skill（语音合成 + 会议录音，dev-board#66）。
+     * 概念模型是「左栏一个图标 = 一个插件」：两者共占 rail 'voice' 一个面板位，
+     * 广场里是一个条目、启停一体。前端开关一次翻全部成员；这里在每次扫描后
+     * 再做一次状态收敛（任一启用 → 全部启用），把存量安装里「语音合成开、
+     * 会议录音关」这类分裂态归一——否则会出现面板 tab 可见、但「生成纪要」的
+     * kick-off prompt 永远命不中 meeting-recorder skill 的静默断裂。
+     */
+    static final List<String> VOICE_MERGED_SKILL_IDS = List.of("text-to-speech", "meeting-recorder");
+
     @PostConstruct
     public void init() {
         loadDisabledState();
         scan();
+        convergeVoiceMergedSkills();
         log.info("SkillRegistry initialized: {} skills from dir '{}' (+plugins)",
                 skills.size(), properties.getDir());
     }
@@ -101,12 +130,36 @@ public class SkillRegistry {
         skills.clear();
         loadDisabledState();
         scan();
+        convergeVoiceMergedSkills();
         log.info("Skill rescan done: {} skills", skills.size());
+    }
+
+    /** 见 {@link #VOICE_MERGED_SKILL_IDS}：任一成员启用即全部启用；全关保持全关。 */
+    private void convergeVoiceMergedSkills() {
+        if (!skills.keySet().containsAll(VOICE_MERGED_SKILL_IDS)) {
+            return; // 部署形态里缺成员目录时不收敛，别把半套安装的状态改来改去
+        }
+        boolean anyEnabled = VOICE_MERGED_SKILL_IDS.stream().anyMatch(id -> !disabledSkillIds.contains(id));
+        if (!anyEnabled) {
+            return;
+        }
+        if (disabledSkillIds.removeAll(VOICE_MERGED_SKILL_IDS)) {
+            persist(DISABLED_KEY, disabledSkillIds);
+            log.info("Voice merged skills converged to enabled: {}", VOICE_MERGED_SKILL_IDS);
+        }
     }
 
     /** 全部已注册 skill（含被禁用的，供管理页展示） */
     public synchronized List<SkillDefinition> getSkills() {
         return new ArrayList<>(skills.values());
+    }
+
+    /**
+     * 最近一次扫描里加载失败的目录名 -> 错误摘要，让"解析出错"与"没有这个 skill"能区分开
+     * （见 {@link #loadErrors} 字段注释）。目录名不是 skill id——解析失败时往往连 id 都没读出来。
+     */
+    public Map<String, String> getLoadErrors() {
+        return java.util.Collections.unmodifiableMap(loadErrors);
     }
 
     public synchronized Optional<SkillDefinition> getSkill(String id) {
@@ -234,6 +287,32 @@ public class SkillRegistry {
         log.info("Skill {} {}", skillId, enabled ? "enabled" : "disabled");
     }
 
+    /**
+     * 把某插件携带的全部 skill 翻成启用，返回真正被翻动的 id（已启用的不算）。
+     *
+     * <p>插件携带的 skill 惯例写 {@code enabled_by_default: false}（插件没装前别出现），
+     * 于是用户在广场装好插件、点了启用之后，工具注册上了、skill 仍是禁用态——对话里说触发词
+     * 永远不命中，用户视角是第三个看不见的开关（2026-08-23 尽调插件上架当天真机复现）。
+     * 规则：启用插件 = 启用它携带的 skill；禁用插件不需要反向操作，{@link #isAvailable} 已按
+     * 所属插件判据兜住。
+     */
+    public synchronized List<String> enableSkillsFromPlugin(String pluginId) {
+        if (pluginId == null || pluginId.isBlank()) {
+            return List.of();
+        }
+        List<String> flipped = new ArrayList<>();
+        for (SkillDefinition skill : skills.values()) {
+            if (pluginId.equals(skill.getSourcePluginId()) && disabledSkillIds.remove(skill.getId())) {
+                flipped.add(skill.getId());
+            }
+        }
+        if (!flipped.isEmpty()) {
+            persist(DISABLED_KEY, disabledSkillIds);
+            log.info("Skills {} enabled along with plugin {}", flipped, pluginId);
+        }
+        return flipped;
+    }
+
     private void persist(String key, Set<String> ids) {
         if (systemSettingService != null) {
             systemSettingService.set(key, cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(ids)));
@@ -243,6 +322,8 @@ public class SkillRegistry {
     // ==================== 扫描与解析 ====================
 
     private void scan() {
+        // 只反映"最近一次扫描"的状态：上一轮的加载失败如果这次已经修好，不该继续挂着。
+        loadErrors.clear();
         // 1. 可写目录（广场安装落点）。**先扫它**：id 去重是"先扫到优先"，
         //    这样广场装的同 id skill 能覆盖随发行版分发的那份——内置 skill 出了问题
         //    可以走广场热修，不必等下一个客户端版本。被盖住的会打日志。
@@ -303,8 +384,20 @@ public class SkillRegistry {
                         sourcePluginId != null ? ", from plugin " + sourcePluginId : "");
             }
         } catch (Exception e) {
+            // "出错"与"本来就没有"要能分得开：不只 log，同时把原因记进 loadErrors——
+            // getSkills() 结果里少了这个 skill 时，管理页/排障者能查到具体是哪个目录、为什么。
+            String reason = isEncodingFailure(e)
+                    ? "文件编码不是 UTF-8，无法解析: " + e.getMessage()
+                    : String.valueOf(e.getMessage());
+            loadErrors.put(skillDir.getName(), reason);
             log.error("Failed to load skill dir {}, skip: {}", skillDir, e.getMessage());
         }
+    }
+
+    /** {@code Files.readString} 对非 UTF-8 字节抛的 {@code MalformedInputException} 是它的子类。 */
+    private static boolean isEncodingFailure(Throwable e) {
+        return e instanceof java.nio.charset.CharacterCodingException
+                || e.getCause() instanceof java.nio.charset.CharacterCodingException;
     }
 
     /**
@@ -363,6 +456,8 @@ public class SkillRegistry {
         skill.setVersion(asString(raw.get("version")));
         skill.setLicense(asString(raw.get("license")));
         skill.setCredits(asStringList(raw.get("credits")));
+        // 依赖的原生资源包（规范 docs/NATIVE_PACK_DISTRIBUTION.md §7.1，可选）
+        skill.setRequiresPack(asString(raw.get("requires_pack")));
         // 应用语言相关的可选字段（EN 版 PR5）：缺省时全部为空，语义 = 只在 zh-CN 可用
         skill.setLanguages(asStringList(raw.get("languages")));
         skill.setNameEn(asString(raw.get("name_en")));
@@ -407,11 +502,29 @@ public class SkillRegistry {
         return v == null ? null : String.valueOf(v);
     }
 
-    /** SnakeYAML 对 true/false 字面量已经解析成 Boolean；容错处理字符串写法 ("false"/"true") */
+    /**
+     * SnakeYAML 对裸 true/false 字面量已经解析成 Boolean；这里容错处理"带引号写成字符串"的写法。
+     *
+     * <p>{@code Boolean.parseBoolean} 对除大小写不敏感的 "true" 之外的任何字符串都返回 false——
+     * 作者写 {@code enabled_by_default: "yes"} 这种带引号的真值会被悄悄当成假值，
+     * 於是这个 skill 在第一次扫描时就被 {@link #seedDefaultDisabledIfNeeded} 默认关闭，
+     * 且没有任何警告（审计条目）。这里显式识别常见真/假值写法；认不出的字符串既不当真也不当假，
+     * 返回 null 让调用方保留 {@link SkillDefinition#isEnabledByDefault()} 的安全默认值 true，
+     * 而不是被一个没人预期的假值静默改写，同时打一条 WARN 留痕。
+     */
     private static Boolean asBoolean(Object v) {
         if (v == null) return null;
         if (v instanceof Boolean b) return b;
-        return Boolean.parseBoolean(String.valueOf(v));
+        String s = String.valueOf(v).trim().toLowerCase();
+        return switch (s) {
+            case "true", "yes", "on", "1" -> Boolean.TRUE;
+            case "false", "no", "off", "0" -> Boolean.FALSE;
+            default -> {
+                log.warn("skill.yml 的 enabled_by_default 值 '{}' 无法识别为布尔值，"
+                        + "按未设置处理（保留默认 true），不要静默当成 false", v);
+                yield null;
+            }
+        };
     }
 
     private static List<String> asStringList(Object v) {
@@ -444,21 +557,35 @@ public class SkillRegistry {
     }
 
     private void loadDisabledState() {
-        disabledSkillIds.clear();
-        manualSkillIds.clear();
-        seededSkillIds.clear();
         if (systemSettingService == null) {
+            disabledSkillIds = ConcurrentHashMap.newKeySet();
+            manualSkillIds = ConcurrentHashMap.newKeySet();
+            seededSkillIds = ConcurrentHashMap.newKeySet();
             return;
         }
         try {
-            disabledSkillIds.addAll(readIdSet(DISABLED_KEY));
-            manualSkillIds.addAll(readIdSet(MANUAL_KEY));
-            seededSkillIds.addAll(readIdSet(SEEDED_KEY));
+            // 三份名单全部读回来之后再换引用：中间隔着几次 DB 往返，
+            // 先 clear 的写法会让并发的无锁读方（isEnabled/isManual）在这段窗口里读到空名单。
+            Set<String> disabled = newIdSet(readIdSet(DISABLED_KEY));
+            Set<String> manual = newIdSet(readIdSet(MANUAL_KEY));
+            Set<String> seeded = newIdSet(readIdSet(SEEDED_KEY));
+            disabledSkillIds = disabled;
+            manualSkillIds = manual;
+            seededSkillIds = seeded;
         } catch (Exception e) {
             log.error("Failed to load skill activation state, default to all auto", e);
+            disabledSkillIds = ConcurrentHashMap.newKeySet();
+            manualSkillIds = ConcurrentHashMap.newKeySet();
+            seededSkillIds = ConcurrentHashMap.newKeySet();
         } finally {
             disabledStateRefreshedAt = System.currentTimeMillis();
         }
+    }
+
+    private static Set<String> newIdSet(List<String> ids) {
+        Set<String> set = ConcurrentHashMap.newKeySet();
+        set.addAll(ids);
+        return set;
     }
 
     private List<String> readIdSet(String key) {

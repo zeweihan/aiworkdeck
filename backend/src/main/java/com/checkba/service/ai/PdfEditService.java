@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import cn.hutool.json.JSONArray;
@@ -81,10 +84,13 @@ public class PdfEditService {
     public static class RedactResult {
         public final int matchCount;
         public final List<Integer> rasterizedPages;
+        /** 传入但在文档里一个匹配都没找到的文本（常见于 AI 猜错人名/证件号）；空列表 = 全部命中。 */
+        public final List<String> missing;
 
-        RedactResult(int matchCount, List<Integer> rasterizedPages) {
+        RedactResult(int matchCount, List<Integer> rasterizedPages, List<String> missing) {
             this.matchCount = matchCount;
             this.rasterizedPages = rasterizedPages;
+            this.missing = missing;
         }
     }
 
@@ -133,8 +139,33 @@ public class PdfEditService {
         }
     }
 
-    /** 全文提取为 markdown（转 Word 用）。返回 null 表示无文本层（扫描件）。 */
-    public String extractMarkdown(Path pdfPath) {
+    /**
+     * 提取结果：正文 markdown，以及「这份 PDF 看起来是扫描件」的判断。
+     *
+     * <p>两者分开返回而不是用 null 表示扫描件：判成扫描件时上游会去走 OCR，
+     * 而 OCR 可能失败（组件没装/服务没起）。手里同时留着已经提取到的文本层，
+     * OCR 失败还能回退过去，不至于把一份本来能转的文档变成一句「请去装 MinerU」。
+     */
+    public record ExtractedText(String markdown, boolean looksScanned) {}
+
+    /** 单页字符数低于它就按扫描件处理，见 {@link #extractMarkdown} 的判据说明。 */
+    static final int MIN_CHARS_PER_PAGE = 100;
+
+    /**
+     * 全文提取为 markdown（转 Word 用）。
+     *
+     * <p>「是不是扫描件」的判据从「全文不足 20 字」改成**按页密度**：
+     * 一份几十页的扫描件，每页盖一个 Bates 章或印一行页眉，全文轻松过 20 字，
+     * 于是被判成文本件走结构化转换——产出的 Word 里只有那些章和页眉，
+     * 正文（图像）一个字都没有，而用户看到的是「转换成功」。
+     * 中文法律文书正文一页在 700-1500 字量级，只剩页眉页码的页在 10-40 字量级，
+     * 100 字/页落在中间且偏向 OCR 一侧。
+     *
+     * <p>刻意偏向 OCR：判错方向的代价不对称——扫描件被当文本件是**内容静默丢光**，
+     * 文本件被当扫描件最多是慢一点（OCR 照样读得出渲染后的字），
+     * 而且 OCR 失败时上游还会回退到这里提取到的文本。
+     */
+    public ExtractedText extractMarkdown(Path pdfPath) {
         try (PDDocument doc = load(pdfPath)) {
             StringBuilder md = new StringBuilder();
             int totalChars = 0;
@@ -149,8 +180,9 @@ public class PdfEditService {
                 if (md.length() > 0) md.append("\n\n");
                 md.append(linesToMarkdown(text));
             }
-            if (totalChars < 20) return null;
-            return md.toString();
+            int pages = Math.max(1, doc.getNumberOfPages());
+            boolean looksScanned = totalChars < 20 || totalChars < MIN_CHARS_PER_PAGE * pages;
+            return new ExtractedText(md.toString(), looksScanned);
         } catch (IOException e) {
             throw new PdfEditException("读取 PDF 失败: " + e.getMessage());
         }
@@ -335,12 +367,13 @@ public class PdfEditService {
 
             doc.save(pdfPath.toFile());
             List<Integer> pages = new ArrayList<>(affected);
-            if (!missing.isEmpty()) {
-                throw new PdfEditException(String.format(
-                        "部分完成：%d 处已脱敏（第 %s 页已转为图片页），但以下文本未找到: %s",
-                        all.size(), pages, missing));
-            }
-            return new RedactResult(all.size(), pages);
+            // 部分命中不算失败：上面这行 doc.save 已经把打码+光栅化后的字节不可逆地写回了
+            // pdfPath——磁盘已经变了。此前这里在写盘之后才抛异常，调用方 PdfTools.pdf_redact
+            // 的 finishModification（轮换 wpsFileId、更新 fileSize/updatedAt、发 reload）
+            // 被异常跳过，磁盘已改、DB 与预览还停在旧版本，两者从此不一致。
+            // 缺失目标（常见于 AI 猜错人名/证件号）如实带回 missing 字段，让调用方据此照实
+            // 报告，而不是把一次真实生效的脱敏说成一次失败。
+            return new RedactResult(all.size(), pages, missing);
         } catch (IOException e) {
             throw new PdfEditException("脱敏失败: " + e.getMessage());
         }

@@ -1,0 +1,41 @@
+{
+  "_demo_notice": "演示数据，人物公司均属虚构，仅供产品发布视频使用",
+  "Name": "星澜科技（上海）有限公司",
+  "No": "91310115MA1GN8XQ4X",
+  "OperName": "陈曦",
+  "RegistCapi": "5000万元人民币",
+  "StartDate": "2015-06-12",
+  "Address": "上海市浦东新区蓝天路588号星澜大厦12层",
+  "Scope": "计算机软件开发、软件外包服务、信息技术咨询服务、企业管理咨询、市场营销策划等",
+  "Status": "存续",
+  "Partners": [
+    {
+      "StockName": "星澜控股集团有限公司",
+      "StockPercent": "100%",
+      "ShouldCapi": "5000万元人民币"
+    }
+  ],
+  "PenetratedShareholders": [
+    { "Name": "沈某某", "Percent": "70%", "Type": "自然人（穿透）" },
+    { "Name": "黄敏", "Percent": "30%", "Type": "自然人（穿透）" }
+  ],
+  "Employees": [
+    { "Name": "陈曦", "Job": "法定代表人、执行董事" }
+  ],
+  "ZhiXing": [
+    {
+      "Casecode": "(2026)沪01执12345号",
+      "Court": "上海市第一中级人民法院",
+      "Money": "860000.00",
+      "Liananrq": "2026-03-17",
+      "Status": "执行中"
+    },
+    {
+      "Casecode": "(2025)沪0115执8967号",
+      "Court": "上海市浦东新区人民法院",
+      "Money": "213600.00",
+      "Liananrq": "2025-09-02",
+      "Status": "执行中"
+    }
+  ]
+}

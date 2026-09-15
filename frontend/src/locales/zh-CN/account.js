@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 账号域：个人中心（userprofile.vue）、登录/注册/客户登录（login.vue）、
 // 新建/打开项目页（newproject/index.vue）。三个页面共用一个命名空间，跨页面完全同字
 // 的文案（如「标准用户」「返回项目列表」）只留一个键。
@@ -10,11 +12,10 @@ export default {
   createBtn: '创建',
   projectNameLabel: '项目名称',
 
-  // ---- userprofile.vue：导航 tab ----
+  // ---- 统一「设置」页「个人」组的三个栏目名（2026-08-20 由个人中心并入）----
   tabWorkLog: '工作记录',
   tabFavorites: '我的收藏',
   tabTodos: '我的代办',
-  systemSettingsTab: '系统设置',
 
   // ---- userprofile.vue：工作记录 ----
   defaultUserName: '用户',
@@ -31,6 +32,8 @@ export default {
   loadingEllipsis: '加载中...',
   noRecords: '无记录',
   minutesSuffix: '{count}分',
+  allProjectsOption: '全部项目',
+  unassociatedProjectOption: '未关联项目',
 
   // ---- userprofile.vue：我的收藏 / 我的代办占位 ----
   emptyFavoritesDesc: '暂无收藏内容',
@@ -49,6 +52,17 @@ export default {
   uploadingTitle: '上传中...',
   avatarUpdateSuccess: '头像更新成功',
   avatarUploadFailed: '上传失败: {message}',
+  avatarRemoveAction: '删除头像',
+  avatarRemoveSuccess: '头像已删除',
+  avatarRemoveFailed: '删除失败: {message}',
+  nicknamePlaceholder: '填写你的姓名',
+  nicknameSaving: '保存中...',
+  nicknameSaveFailed: '保存失败: {message}',
+  nicknameTooLong: '姓名最多 24 个字',
+  // 姓名引导（Spec §6）：手机号注册的默认展示名是打码手机号，同事在案卷里看到的就是它
+  nameNudgeText: '填写你的姓名，同事在案卷里看到的就是它',
+  nameNudgeTitle: '填写你的姓名',
+  nameNudgeConfirm: '去填写',
 
   // ---- userprofile.vue：设置 - 账号安全（认证器/手机/邮箱） ----
   accountSecurityGroupTitle: '账号安全',
@@ -94,6 +108,7 @@ export default {
   paidEdition: '正式版',
   trialEdition: '试用版',
   activatedAtLabel: '激活时间',
+  deactivateHint: '只清除本机的解锁票据、回到启动解锁页，不影响账户本身。想换账号登录用「退出登录」即可，一般不需要点这里。',
   deactivateBtn: '解除授权',
   deactivateContent: '解除后应用将回到解锁页，需要重新输入试用码或账户 Key 才能继续使用。确定解除吗？',
   confirmDeactivateBtn: '确认解除',
@@ -130,6 +145,12 @@ export default {
   logoutNothingTitle: '当前没有登录账户',
   logoutNothingContent: '本机是用试用码解锁的，还没有连接 AI WorkDeck 账户，没有可退出的登录。要回到未解锁状态，用下面「授权」里的「解除授权」。',
   logoutFailed: '退出登录失败，请重试',
+  // 文档 Generator 元数据开关（可溯源性设计规范附录 B4）
+  docGeneratorGroupTitle: '文档属性',
+  docGeneratorLabel: '在保存的文档里写入产品标识',
+  docGeneratorHint: '开启后，保存或导出的文档在「属性 - 应用程序」里显示 AI WorkDeck 与版本号。这是 Word 与 WPS 都会写的标准字段，不含任何个人信息（不写作者、单位、机器名）。如果交付前需要清除文档元数据，可以关掉。',
+  docGeneratorCurrent: '当前写入：{application}',
+  docGeneratorSaveFailed: '设置保存失败，请稍后重试',
   logoutGroupTitle: '登录',
   logoutGroupHint: '退出后回到登录页，可换一个账户登录。本机的项目与文件保留在原处。',
 

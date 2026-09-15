@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * office_command 执行器（Phase C 工具桥）：
  * 后端 OfficeBridgeService 经 SSE client_action 下发 {tool:'office_command',
@@ -24,6 +26,13 @@
 
 import { officeAvailable, detectHost } from './wordDoc.js'
 import { minimalEdits } from './minimalEdit.js'
+import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
+import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
+import { t } from './i18n.js'
+// 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json 的字节副本，
+// 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
+// houseProfile.test.js 断言与后端源 sha256 一致。
+import houseProfile from './house-default.json' with { type: 'json' }
 
 // 与后端 ContextAssemblerService.MAX_INLINE_CONTENT_CHARS 一致的截断上限
 const MAX_TEXT_CHARS = 200_000
@@ -135,12 +144,190 @@ async function withTracking(context, fn) {
   }
 }
 
-/** body.search 定位锚点，返回命中 Range 数组（未命中返回空数组） */
-async function searchRanges(context, needle, matchCase) {
+/** body.search 一次，返回命中 Range 数组（未命中返回空数组）。不做任何降级。 */
+async function searchExact(context, needle, matchCase) {
   const results = context.document.body.search(needle, { matchCase: !!matchCase })
   results.load('items')
   await context.sync()
   return results.items
+}
+
+/**
+ * 定位锚点，返回命中 Range 数组（未命中返回空数组）。
+ *
+ * 两级（dev-board#286）：
+ *  1. 宿主原生 `body.search` 精确找；
+ *  2. 找不到时**归一化重定位**——把正文与锚点都按 textMatch.js 的规则归一
+ *     （全角半角、弯直引号、NBSP/零宽字符、连续空白、各式连字符、大小写），
+ *     在归一化文本上命中后，取命中处的**文档原文**再问一次宿主的 search。
+ *
+ * 为什么第二步还要绕回宿主 search：Office.js 没有「按字符下标取 Range」的 API，
+ * 而我们**绝不自己造坐标**——归一化只负责把模型给的串换成「文档里真实存在的串」，
+ * 取 Range 仍旧由宿主完成。这样归一化最坏只是找不到，不会把「找不到」变成「改错地方」。
+ * （WPS 面 dev-board#264 用的是同一条纪律：兜底必须可验证。）
+ */
+async function searchRanges(context, needle, matchCase) {
+  const direct = await searchExact(context, needle, matchCase)
+  if (direct.length) return direct
+  const relocated = await relocateByNormalization(context, needle)
+  return relocated ? relocated.items : []
+}
+
+/**
+ * 归一化重定位。返回 { items, matchedText } 或 null。
+ * 命中处的原文若跨段（含 \r/\n，Word 的 search 不跨段），退而取其中最长的一段
+ * ——仍旧是文档里逐字存在的串，宿主照样能定位。
+ */
+async function relocateByNormalization(context, needle) {
+  const raw = String(needle || '')
+  if (!raw.trim()) return null
+  let bodyText = ''
+  try {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    bodyText = body.text || ''
+  } catch (e) {
+    return null
+  }
+  if (!bodyText) return null
+  const hits = findAllNormalized(bodyText, raw)
+  for (const hit of hits) {
+    for (const candidate of searchableVariants(hit.text)) {
+      const items = await searchExact(context, candidate, true)
+      if (items.length) return { items, matchedText: hit.text }
+    }
+  }
+  return null
+}
+
+/**
+ * 把一段文档原文拆成「宿主 search 吃得下」的候选串：整串优先，
+ * 跨段时退到最长的单段。`searchable()` 已经挡掉超长、含 ^、码元不完整三种情况。
+ */
+function searchableVariants(text) {
+  const out = []
+  const whole = String(text || '')
+  if (searchable(whole)) out.push(whole)
+  if (/[\r\n]/.test(whole)) {
+    const longest = whole.split(/\r\n|\n|\r/)
+      .map((x) => x.trim())
+      .filter((x) => x.length >= ANCHOR_FALLBACK_MIN_CHARS)
+      .reduce((a, b) => (b.length > a.length ? b : a), '')
+    if (longest && searchable(longest)) out.push(longest)
+  }
+  return out
+}
+
+/**
+ * 定位失败时的报错：**带证据**。
+ * 只回一句「请确认 anchorText 与文档内容精确一致」对模型毫无信息量——它只会把锚点
+ * 越猜越短，越短越容易命中多处，最后越改越乱（dev-board#286 用户实况）。
+ * 这里把文档里最接近的一段原文摆出来，让模型能一次改对。
+ */
+async function anchorNotFound(context, kind, needle) {
+  let bodyText = ''
+  try {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    bodyText = body.text || ''
+  } catch (e) { /* 读不到正文就退回不带证据的说明 */ }
+  if (!bodyText) {
+    return new Error(`${kind}：在文档中未找到该文本，请先用读取类工具确认文档当前内容。`)
+  }
+  return new Error(describeAnchorFailure(kind, needle, bodyText))
+}
+
+/** 降级选段时要求的最短长度：太短容易在全文里误命中别处（dev-board#149） */
+const ANCHOR_FALLBACK_MIN_CHARS = 4
+
+/* ==================== 批量改写（replace_batch）的入参与定位辅助 ==================== */
+
+/** 读一次正文（读不到返回空串——它只用于把报错说清楚，不该再抛） */
+async function readBodyText(context) {
+  try {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    return body.text || ''
+  } catch (e) {
+    return ''
+  }
+}
+
+/**
+ * 归一化重定位的**首个**候选串（批量路径专用）。
+ * 与 relocateByNormalization 同一条纪律——归一化只负责把模型给的串换成「文档里
+ * 逐字存在的串」，取 Range 仍旧交给宿主 search，绝不自造坐标。差别只在这里只取
+ * 第一个候选：批量路径要把所有漏网条目的重试排进同一次 sync，不能逐个候选试。
+ */
+function firstRelocateCandidate(bodyText, needle) {
+  const hits = findAllNormalized(bodyText, needle)
+  for (const hit of hits) {
+    for (const candidate of searchableVariants(hit.text)) return candidate
+  }
+  return ''
+}
+
+/** 定位失败说明：有正文就带证据，没有就退回一句可执行的提示 */
+function anchorFailureText(kind, needle, bodyText) {
+  if (!bodyText) return `${kind}：在文档中未找到该文本，请先用读取类工具确认文档当前内容。`
+  return describeAnchorFailure(kind, needle, bodyText)
+}
+
+
+/**
+ * 锚点跨段（含 \n/\r）时 body.search 匹配不到——search 不跨段落，模型从内联正文
+ * 摘的 anchorText/target 若跨段会首次必然报「未找到」，此前只能靠模型换短锚点
+ * 重试（dev-board#149）。这里把该重试动作自动化：按 \r\n/\n/\r 拆段，挑一段再
+ * search 一次。
+ *   position 为 null（replace_text，锚点本身就是要被替换/定位的目标，无方向语义）
+ *     → 取最长的一段，最大化命中概率；
+ *   position 为 'after'/'before'（insert_text，锚点表达的是「插在这段文字之后/
+ *   之前」，有方向语义）→ 取靠插入方向的那一段（after 取最后一段、before 取第
+ *   一段），保住「插在哪一侧」的原始意图。
+ * 拆出的段 trim 后需 ≥4 字符才可用；没有可用段时返回 null。
+ */
+export function pickAnchorFallback(anchor, position) {
+  const segments = String(anchor || '')
+    .split(/\r\n|\n|\r/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= ANCHOR_FALLBACK_MIN_CHARS)
+  if (!segments.length) return null
+  if (position === 'after') return segments[segments.length - 1]
+  if (position === 'before') return segments[0]
+  return segments.reduce((longest, s) => (s.length > longest.length ? s : longest))
+}
+
+/** search 串超过 Word 的 255 字符上限会直接抛异常，降级段落也要守住这条线 */
+export function boundForSearch(s) {
+  return s.length > WORD_SEARCH_MAX_CHARS ? s.slice(0, WORD_SEARCH_MAX_CHARS) : s
+}
+
+/**
+ * 客户端直连的「定位到原文」（dev-board#150 引用定位）：AI 回答里引用的原文片段，
+ * 点击即在文档里选中并滚动到位。不走 office_command 协议（无需模型往返）。
+ * 仅 Word 宿主；未命中返回 {found:false}，调用方给轻提示即可。
+ */
+export async function locateInDocument(text) {
+  const needle = String(text || '').trim()
+  if (!needle || typeof Word === 'undefined') return { found: false }
+  try {
+    return await Word.run(async (context) => {
+      let items = await searchRanges(context, boundForSearch(needle), false)
+      if (!items.length && /[\r\n]/.test(needle)) {
+        const fallback = pickAnchorFallback(needle, null)
+        if (fallback) items = await searchRanges(context, boundForSearch(fallback), false)
+      }
+      if (!items.length) return { found: false }
+      items[0].select()
+      await context.sync()
+      return { found: true, count: items.length }
+    })
+  } catch (e) {
+    return { found: false, error: (e && e.message) || String(e) }
+  }
 }
 
 /* ==================== Word 最小修订（minimal redline） ====================
@@ -228,14 +415,17 @@ function buildLocator(rangeText, edit) {
 }
 
 /**
- * 把 newText 以字符级最小修订写入命中 Range。
- * @returns {Promise<number|null>} 实际落笔的编辑段数（0 = 新旧文一致，不留痕迹）；
- *   null = 无法最小化，调用方回退整段 insertText(replace)。返回 null 时保证
- *   一个字都还没写。
+ * 最小修订的**纯 JS 规划阶段**（不碰 Office.js，不排队任何请求）。
+ * 拆出来是为了让批量改写（replace_batch）能把 N 处的定位排进同一次
+ * `context.sync()`——单处路径 applyMinimalRedline 的行为一字未变。
+ *
+ * @returns {{plans:Array}|{plans:[],edits:0}|null}
+ *   null = 无法最小化，调用方回退整段 insertText(replace)；
+ *   plans 为空数组 = 新旧文一致，不必落笔。
  */
-async function applyMinimalRedline(context, range, rangeText, newText) {
+function planMinimalRedline(rangeText, newText) {
   const edits = minimalEdits(rangeText, newText)
-  if (!edits.length) return 0
+  if (!edits.length) return { plans: [] }
   // 差异覆盖整段：没有比整段替换更细的写法了
   if (edits.length === 1 && edits[0].start === 0 && edits[0].end === rangeText.length) return null
 
@@ -245,33 +435,46 @@ async function applyMinimalRedline(context, range, rangeText, newText) {
     if (!loc) return null
     plans.push({ edit, loc })
   }
+  return { plans }
+}
 
-  // 第一轮定位：direct/纯插入的锚串，window 模式的外层窗口
+/** 第一轮定位：把 direct/纯插入的锚串与 window 模式的外层窗口排进请求队列（不 sync） */
+function queuePrimaryLocate(range, plans) {
   for (const plan of plans) {
     plan.primary = range.search(plan.loc.mode === 'window' ? plan.loc.window : plan.loc.needle, { matchCase: true })
     plan.primary.load('items')
   }
-  await context.sync()
+}
+
+/** 第一轮结果检查。返回 false = 定位不唯一（此时一个字都还没写） */
+function resolvePrimaryLocate(plans) {
   for (const plan of plans) {
-    if (plan.primary.items.length !== 1) return null
+    if (plan.primary.items.length !== 1) return false
     plan.target = plan.primary.items[0]
   }
+  return true
+}
 
-  // 第二轮定位：window 模式在唯一窗口内再切出差异段
+/** 第二轮定位：window 模式在唯一窗口内再切出差异段（不 sync） */
+function queueWindowLocate(plans) {
   const windowed = plans.filter((plan) => plan.loc.mode === 'window')
-  if (windowed.length) {
-    for (const plan of windowed) {
-      plan.inner = plan.target.search(plan.loc.needle, { matchCase: true })
-      plan.inner.load('items')
-    }
-    await context.sync()
-    for (const plan of windowed) {
-      if (plan.inner.items.length !== 1) return null
-      plan.target = plan.inner.items[0]
-    }
+  for (const plan of windowed) {
+    plan.inner = plan.target.search(plan.loc.needle, { matchCase: true })
+    plan.inner.load('items')
   }
+  return windowed
+}
 
-  // 应用：从右到左。左侧编辑的定位不会被右侧的写入推移（与 LOWA 同理由）。
+function resolveWindowLocate(windowed) {
+  for (const plan of windowed) {
+    if (plan.inner.items.length !== 1) return false
+    plan.target = plan.inner.items[0]
+  }
+  return true
+}
+
+/** 落笔（不 sync）。从右到左：左侧编辑的定位不会被右侧的写入推移（与 LOWA 同理由）。 */
+function queueRedlineWrites(plans) {
   for (let i = plans.length - 1; i >= 0; i--) {
     const { edit, loc, target } = plans[i]
     if (loc.mode === 'insertAfter') target.insertText(edit.newText, Word.InsertLocation.after)
@@ -279,8 +482,33 @@ async function applyMinimalRedline(context, range, rangeText, newText) {
     else if (edit.newText) target.insertText(edit.newText, Word.InsertLocation.replace)
     else target.delete()
   }
+}
+
+/**
+ * 把 newText 以字符级最小修订写入命中 Range。
+ * @returns {Promise<number|null>} 实际落笔的编辑段数（0 = 新旧文一致，不留痕迹）；
+ *   null = 无法最小化，调用方回退整段 insertText(replace)。返回 null 时保证
+ *   一个字都还没写。
+ */
+async function applyMinimalRedline(context, range, rangeText, newText) {
+  const planned = planMinimalRedline(rangeText, newText)
+  if (planned == null) return null
+  const plans = planned.plans
+  if (!plans.length) return 0
+
+  queuePrimaryLocate(range, plans)
   await context.sync()
-  return edits.length
+  if (!resolvePrimaryLocate(plans)) return null
+
+  const windowed = queueWindowLocate(plans)
+  if (windowed.length) {
+    await context.sync()
+    if (!resolveWindowLocate(windowed)) return null
+  }
+
+  queueRedlineWrites(plans)
+  await context.sync()
+  return plans.length
 }
 
 /* ==================== Word 格式（字符面 + 段落面） ====================
@@ -379,20 +607,44 @@ function parseCellRef(ref) {
 /* ---- 律所标准格式 ---- */
 
 /**
- * 律所标准格式常量。**三处同源**：桌面端 LOWA 的 office_thread.js `HOUSE`、
- * 后端 `DocxStyleHelper`（write_docx / AiDocxExportService 两条生成路径）、这里。
- * 数值必须逐字一致，改规范要三处一起改。
+ * 律所标准格式常量，从 house-default.json（后端 style-profiles 的副本）派生——三处写端
+ * （后端 DocxStyleHelper / LOWA worker / 这里）同一份源，改规范只改那一个 JSON。
+ * Office.js 只有固定磅值行距，画像的「最小值 16 磅」在这里落成 exact 16（见 lineSpacingMode）；
+ * 首行缩进「2 字符」按正文字号折磅。
  */
-const HOUSE = {
-  fontAsian: '楷体_GB2312',
-  fontWestern: 'Arial',
-  bodyPt: 12,
-  titlePt: 16,
-  spaceAfterPt: 18,
-  lineSpacingPt: 16,      // LOWA 侧是「最小值 16 磅」；Office.js 只有固定磅值行距（见下方 lineSpacingMode）
-  firstLineIndentPt: 24,  // 首行缩进 2 字符 = 2 × 12 磅
-  tablePt: 10
+export function houseFromProfile(p) {
+  const d = (p && p.defaults) || {}
+  const body = (p && p.body) || {}
+  const h1 = ((p && p.headings) || []).find((h) => h && Number(h.level) === 1) || {}
+  const cell = ((p && p.table) || {}).cell || {}
+  const pt = (len, fontPt, fallback) => {
+    if (!len || len.value == null) return fallback
+    const v = Number(len.value)
+    if (!isFinite(v)) return fallback
+    switch (len.unit || 'pt') {
+      case 'pt': return v
+      case 'chars': return v * fontPt
+      case 'lines': return v * fontPt * 1.2
+      case 'mm': return v * 72 / 25.4
+      case 'cm': return v * 720 / 25.4
+      case 'twips': return v / 20
+      default: return fallback
+    }
+  }
+  const bodyPt = pt(body.size, 12, pt(d.size, 12, 12))
+  const ls = body.lineSpacing || {}
+  return {
+    fontAsian: (body.font && body.font.eastAsia) || (d.font && d.font.eastAsia) || '楷体_GB2312',
+    fontWestern: (body.font && body.font.western) || (d.font && d.font.western) || 'Arial',
+    bodyPt,
+    titlePt: pt(h1.size, bodyPt, 16),
+    spaceAfterPt: pt(body.spaceAfter, bodyPt, 18),
+    lineSpacingPt: ls.rule === 'atLeast' || ls.rule === 'exactly' ? pt({ value: ls.value, unit: ls.unit || 'pt' }, bodyPt, 16) : 16,
+    firstLineIndentPt: pt(body.firstLineIndent, bodyPt, 2 * bodyPt),
+    tablePt: pt(cell.size, 10, 10)
+  }
 }
+const HOUSE = houseFromProfile(houseProfile)
 
 /**
  * 小标题启发式：第X条/章/节/款/项、「一、」「（一）」「1.」这类序号开头且不长的段落。
@@ -522,9 +774,16 @@ const HANDLERS = {
     if (!searchText) throw new Error('查找文本不能为空')
     return Word.run(async (context) => {
       return withTracking(context, async () => {
+        // 跨段 searchText 不做静默降级（有意区别于 insert_text）：降级只会命中其中
+        // 一段，却要把完整的多段 replaceText 塞进去——旧的其余段落原地不动，结果是
+        // 内容重复/错位。这里快速失败并把改法说清楚，让模型一次重试就改对（dev-board#149）。
+        if (/[\r\n]/.test(searchText)) {
+          throw new Error('searchText 跨段落（含换行），Word 的查找不支持跨段匹配。'
+            + '请逐段替换：每次以单段内的文本为 searchText，并只提供该段的替换文本')
+        }
         const items = await searchRanges(context, searchText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 searchText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '替换文本', searchText)
         }
         const targets = replaceAll ? items : [items[0]]
         for (const range of targets) range.load('text')
@@ -563,6 +822,144 @@ const HANDLERS = {
     })
   },
 
+  /**
+   * 批量改写（dev-board#419）：一次调用改 N 处，语义等同于连续 N 次 replace_text
+   * 的「只改第一处」分支，但过桥量与 N 无关。
+   *
+   * 为什么必须有它：整篇校对/整篇润色是「一处一处改」的工作负载，一份合同几十到
+   * 上百处。逐处走 replace_text 的代价是每处一整轮 LLM + 一次 SSE 下发 + 一个
+   * Word.run + 七次 context.sync()（其中四次只为把修订开关开了又关），后端
+   * MAX_LOOP_DEPTH=30 又把一轮的步数封死在 30——整篇校对结构上跑不完，用户看到
+   * 的就是「正在操作文档」几分钟不回来。
+   *
+   * 阶段划分即安全不变式：**所有定位都在任何一次写入之前完成**。任何一条定位不到，
+   * 只有它自己被记为失败并逐条回报（模型只需重试失败的那几条），已定位的其余条目
+   * 照常落笔——绝不会出现「改了一半又抛异常」的半成品文档。
+   */
+  async replace_batch(args) {
+    const items = normalizeBatchItems(args)
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        // 阶段 A：N 次查找排进同一次 sync（现状是 N 次往返）
+        const collections = items.map((it) => {
+          const c = context.document.body.search(it.searchText, { matchCase: true })
+          c.load('items')
+          return c
+        })
+        await context.sync()
+
+        const located = []
+        const missing = []
+        items.forEach((it, i) => {
+          const hits = collections[i].items
+          if (hits.length) located.push({ ...it, range: hits[0], totalMatches: hits.length })
+          else missing.push(it)
+        })
+
+        // 阶段 B：漏网的一起做归一化重定位——正文只读一次（现状是每条漏网各读两次）
+        let bodyText = ''
+        const failed = []
+        if (missing.length) {
+          bodyText = await readBodyText(context)
+          const retries = []
+          for (const it of missing) {
+            const candidate = bodyText ? firstRelocateCandidate(bodyText, it.searchText) : ''
+            if (!candidate) {
+              failed.push({ index: it.index, searchText: it.searchText, error: anchorFailureText('批量替换', it.searchText, bodyText) })
+              continue
+            }
+            const c = context.document.body.search(candidate, { matchCase: true })
+            c.load('items')
+            retries.push({ it, collection: c })
+          }
+          if (retries.length) {
+            await context.sync()
+            for (const { it, collection } of retries) {
+              if (collection.items.length) located.push({ ...it, range: collection.items[0], totalMatches: collection.items.length })
+              else failed.push({ index: it.index, searchText: it.searchText, error: anchorFailureText('批量替换', it.searchText, bodyText) })
+            }
+          }
+        }
+
+        if (!located.length) {
+          return { replaced: 0, failed: sortByIndex(failed), edits: 0, via: 'none' }
+        }
+
+        // 阶段 C：命中区间的原文一起 load（最小修订要按原文算差分）
+        for (const entry of located) entry.range.load('text')
+        await context.sync()
+
+        // 阶段 D：所有条目的最小修订定位排进同一次 sync
+        for (const entry of located) {
+          const rangeText = entry.range.text == null ? '' : String(entry.range.text)
+          entry.rangeText = rangeText
+          const multiline = /[\r\n]/.test(entry.searchText) || /[\r\n]/.test(entry.replaceText)
+          const planned = multiline || !rangeText ? null : planMinimalRedline(rangeText, entry.replaceText)
+          if (planned == null) { entry.mode = 'full'; continue }
+          if (!planned.plans.length) { entry.mode = 'noop'; continue }
+          entry.mode = 'minimal'
+          entry.plans = planned.plans
+          queuePrimaryLocate(entry.range, entry.plans)
+        }
+        const minimalEntries = located.filter((e) => e.mode === 'minimal')
+        if (minimalEntries.length) {
+          await context.sync()
+          for (const entry of minimalEntries) {
+            if (!resolvePrimaryLocate(entry.plans)) entry.mode = 'full'
+          }
+          // 阶段 E：window 模式的第二轮定位，同样合并成一次 sync
+          const windowedByEntry = []
+          for (const entry of minimalEntries) {
+            if (entry.mode !== 'minimal') continue
+            const windowed = queueWindowLocate(entry.plans)
+            if (windowed.length) windowedByEntry.push({ entry, windowed })
+          }
+          if (windowedByEntry.length) {
+            await context.sync()
+            for (const { entry, windowed } of windowedByEntry) {
+              if (!resolveWindowLocate(windowed)) entry.mode = 'full'
+            }
+          }
+        }
+
+        // 阶段 F：全部落笔排进同一次 sync。定位到此为止已全部完成——这就是
+        // 「不留半成品」的保证所在。
+        let minimal = 0
+        let fallbacks = 0
+        let editSegments = 0
+        let unchanged = 0
+        for (const entry of located) {
+          if (entry.mode === 'noop') { unchanged++; continue }
+          if (entry.mode === 'minimal') {
+            queueRedlineWrites(entry.plans)
+            minimal++
+            editSegments += entry.plans.length
+          } else {
+            entry.range.insertText(entry.replaceText, Word.InsertLocation.replace)
+            fallbacks++
+          }
+        }
+        await context.sync()
+
+        const result = {
+          replaced: located.length,
+          requested: items.length,
+          edits: editSegments,
+          via: fallbacks === 0 ? 'minimalRedline' : (minimal === 0 ? 'fullReplace' : 'mixed')
+        }
+        if (fallbacks) result.fallbacks = fallbacks
+        if (unchanged) result.unchanged = unchanged
+        result.failed = sortByIndex(failed)
+        const ambiguous = located.filter((e) => e.totalMatches > 1)
+        if (ambiguous.length) {
+          result.note = `其中 ${ambiguous.length} 条的 searchText 在文档中命中多处，已按第 1 处处理；`
+            + '若不是你要的位置，请换成在全文唯一的原文重试。'
+        }
+        return result
+      })
+    })
+  },
+
   async insert_text(args) {
     const text = String(args.text || '')
     const anchorText = String(args.anchorText || '')
@@ -571,18 +968,44 @@ const HANDLERS = {
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         if (anchorText) {
-          const items = await searchRanges(context, anchorText, true)
+          let items = await searchRanges(context, anchorText, true)
+          if (!items.length && /[\r\n]/.test(anchorText)) {
+            // 锚点跨段：降级为按插入方向取一段再试一次（after 取最后一段、before
+            // 取第一段，保住「插在哪一侧」的原意，dev-board#149）
+            const fallback = pickAnchorFallback(anchorText, position)
+            if (fallback) items = await searchRanges(context, boundForSearch(fallback), true)
+          }
           if (!items.length) {
-            throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+            throw await anchorNotFound(context, '插入文本（修订）', anchorText)
           }
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           items[0].insertText(text, location)
-        } else {
-          // 无锚点：落在用户当前光标/选区处（选区被替换，与光标插入语义一致）
-          context.document.getSelection().insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+          // 锚点命中多处时**如实交代用了第一处**（dev-board#286）：此前是静默取 items[0]，
+          // 模型以为插在了自己想的那一条，实际可能落在了另一条同名条款后面，
+          // 而返回值一个字都不提——这类"静默改到别处"比报错难查得多。
+          const out = { inserted: true, anchored: true, position }
+          if (items.length > 1) {
+            out.totalMatches = items.length
+            out.note = `锚点在文档中命中 ${items.length} 处，已插入到第 1 处之${position === 'before' ? '前' : '后'}；`
+              + '若不是你要的位置，请换一段在全文唯一的锚点重试。'
+          }
+          return out
         }
+        // 无锚点：落在用户当前光标/选区处。**选区会被替换**——用户正选着一段文字时，
+        // 这一下就是把他选中的内容删掉换成新文本，所以返回值要说清楚（dev-board#286）。
+        const selection = context.document.getSelection()
+        selection.load('text')
         await context.sync()
-        return { inserted: true, anchored: !!anchorText, position: anchorText ? position : 'selection' }
+        const replacedText = String(selection.text || '')
+        selection.insertText(text, Word.InsertLocation.replace)
+        await context.sync()
+        const out = { inserted: true, anchored: false, position: 'selection' }
+        if (replacedText.trim()) {
+          out.replacedSelection = replacedText.length > 80 ? replacedText.slice(0, 80) + '…' : replacedText
+          out.note = '未提供 anchorText，内容插入在用户当前选区处，并替换掉了原本选中的文字（见 replacedSelection）。'
+        }
+        return out
       })
     })
   },
@@ -599,7 +1022,7 @@ const HANDLERS = {
     return Word.run(async (context) => {
       const items = await searchRanges(context, anchorText, true)
       if (!items.length) {
-        throw new Error('未找到批注目标文本，请确认 anchorText 与文档内容精确一致')
+        throw await anchorNotFound(context, '插入批注', anchorText)
       }
       items[0].insertComment(comment)
       await context.sync()
@@ -620,7 +1043,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         const targets = args.applyToAll ? items : [items[0]]
         for (const range of targets) applyProps(range.font, font)
@@ -647,7 +1070,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         const targets = args.applyToAll ? items : [items[0]]
         const paragraphs = targets.map((range) => range.paragraphs.getFirst())
@@ -673,7 +1096,7 @@ const HANDLERS = {
       if (anchorText) {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         range = items[0]
       } else {
@@ -740,7 +1163,7 @@ const HANDLERS = {
         const items = paragraphs.items
         const start = items.findIndex((p) => String(p.text || '').includes(anchorText))
         if (start < 0) {
-          throw new Error('未找到锚点段落，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位段落', anchorText)
         }
         const targets = items.slice(start, start + count)
 
@@ -932,7 +1355,7 @@ const HANDLERS = {
         let table
         if (anchorText) {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           table = items[0].insertTable(rowCount, colCount, location, rows)
         } else {
@@ -1165,7 +1588,7 @@ const HANDLERS = {
         const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
         if (anchorText) {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           items[0].insertBreak(breakType, location)
         } else {
           context.document.getSelection().insertBreak(breakType, location)
@@ -1186,7 +1609,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         items[0].hyperlink = url
         await context.sync()
@@ -1197,16 +1620,25 @@ const HANDLERS = {
 
   async edit_header_footer(args) {
     const part = args.part === 'footer' ? 'footer' : 'header'
-    const text = args.text == null ? '' : String(args.text)
+    // **没给 text 就不许动文字**（dev-board#288）：旧写法无条件整替，
+    // 模型只想改对齐方式（不传 text）时，text 兜底成空串，一调用就把用户的页眉清空，
+    // 返回值还报成功。显式传空串仍然是「清空」这个合法意图，两者必须分开。
+    const hasText = args.text != null
+    const text = hasText ? String(args.text) : ''
     const alignment = args.alignment == null ? null : toEnumValue(ALIGNMENTS, args.alignment, 'alignment')
+    if (!hasText && !alignment) {
+      throw new Error('edit_header_footer 需要至少给 text（要写入的文字，传空串表示清空）或 alignment 之一')
+    }
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const section = context.document.sections.getFirst()
         const body = part === 'footer'
           ? section.getFooter(Word.HeaderFooterType.primary)
           : section.getHeader(Word.HeaderFooterType.primary)
-        body.insertText(text, Word.InsertLocation.replace)
-        await context.sync()
+        if (hasText) {
+          body.insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+        }
         if (alignment) {
           const paragraphs = body.paragraphs
           paragraphs.load('items')
@@ -1214,7 +1646,12 @@ const HANDLERS = {
           paragraphs.items.forEach((p) => { p.alignment = alignment })
           await context.sync()
         }
-        return { part, textLength: text.length, alignment: args.alignment || null }
+        return {
+          part,
+          textUpdated: hasText,
+          textLength: hasText ? text.length : null,
+          alignment: args.alignment || null
+        }
       })
     })
   },
@@ -1378,7 +1815,7 @@ const HANDLERS = {
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
-        if (!items.length) throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致')
+        if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
         items[0].insertFootnote(text)
         await context.sync()
         return { inserted: true }
@@ -1395,7 +1832,7 @@ const HANDLERS = {
     return Word.run(async (context) => {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
-        if (!items.length) throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致')
+        if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
         items[0].insertEndnote(text)
         await context.sync()
         return { inserted: true }
@@ -1415,7 +1852,7 @@ const HANDLERS = {
         let picture
         if (anchorText) {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
           picture = items[0].insertInlinePictureFromBase64(base64, location)
         } else {
@@ -1442,7 +1879,7 @@ const HANDLERS = {
       return withTracking(context, async () => {
         const items = await searchRanges(context, anchorText, true)
         if (!items.length) {
-          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+          throw await anchorNotFound(context, '定位锚点', anchorText)
         }
         const targets = args.applyToAll ? items : [items[0]]
         const paragraphs = targets.map((range) => range.paragraphs.getFirst())
@@ -1465,7 +1902,7 @@ const HANDLERS = {
         if (!anchorText) throw new Error('insert 需要 anchorText')
         return withTracking(context, async () => {
           const items = await searchRanges(context, anchorText, true)
-          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          if (!items.length) throw await anchorNotFound(context, '定位锚点', anchorText)
           // 包裹整段（Paragraph.insertContentControl，比 Range 级更明确支持），锚点定位所在段落
           const paragraph = items[0].paragraphs.getFirst()
           const cc = paragraph.insertContentControl()
@@ -1533,23 +1970,28 @@ const HANDLERS = {
       const range = rangeAddress
         ? sheet.getRange(rangeAddress)
         : sheet.getUsedRangeOrNullObject(true)
-      range.load('values,address,rowCount,columnCount,isNullObject')
+      // **先只取尺寸，值等截断之后再取**（dev-board#288）：返回值最多给
+      // MAX_EXCEL_RESULT_ROWS 行，把整片区域的 values 编组过桥就是白搬。
+      // 几万行的台账上，这一趟能让任务窗格无响应几十秒。与 wordDoc.readExcelSheet
+      // 同一条纪律：截断必须发生在过桥之前。
+      range.load('address,rowCount,columnCount,isNullObject,rowIndex,columnIndex')
       await context.sync()
       if (range.isNullObject) {
         return { sheet: sheet.name, address: '', rows: 0, cols: 0, values: [], note: '工作表为空' }
       }
-      let values = range.values
-      let truncated = false
-      if (values.length > MAX_EXCEL_RESULT_ROWS) {
-        values = values.slice(0, MAX_EXCEL_RESULT_ROWS)
-        truncated = true
-      }
+      const totalRows = range.rowCount
+      const truncated = totalRows > MAX_EXCEL_RESULT_ROWS
+      const target = truncated
+        ? sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, MAX_EXCEL_RESULT_ROWS, range.columnCount)
+        : range
+      target.load('values')
+      await context.sync()
       return {
         sheet: sheet.name,
         address: range.address,
-        rows: range.rowCount,
+        rows: totalRows,
         cols: range.columnCount,
-        values,
+        values: target.values || [],
         truncated
       }
     })
@@ -2184,13 +2626,27 @@ const HANDLERS = {
     if (action !== 'protect' && action !== 'unprotect') throw new Error(`action 值非法：${args.action}（合法值：protect/unprotect）`)
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
+      // **密码是 ExcelApi 1.7 那一档**（dev-board#288）：旧宿主上第二个参数会被
+      // 直接忽略——工作表照样被保护，但**没有密码**，返回值还报成功。
+      // 安全动作不许半途而废：要么真的加上密码，要么明说做不到，绝不静默降级。
+      if (action === 'protect' && password !== undefined && !excelApiSupported('1.7')) {
+        throw new Error('当前 Excel 版本不支持给工作表保护设置密码（需要 ExcelApi 1.7）。'
+          + '不带密码的保护仍然可用——去掉 password 参数重试即可，'
+          + '但必须明确告诉用户这层保护是没有密码的。')
+      }
       if (action === 'protect') {
         sheet.protection.protect(undefined, password)
       } else {
         sheet.protection.unprotect(password)
       }
+      // 回读真实状态，别只报"我发过这条命令"
+      sheet.protection.load('protected')
       await context.sync()
-      return { action }
+      return {
+        action,
+        protected: sheet.protection.protected,
+        passwordApplied: action === 'protect' && password !== undefined
+      }
     })
   },
 
@@ -2232,21 +2688,46 @@ const HANDLERS = {
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
       const source = sheet.getRange(sourceRangeAddress)
-      const destination = sheet.getRange(destinationCellAddress)
+      // **目标地址允许跨表**（dev-board#288）：工具描述一直承诺可以把透视表放到另一张
+      // 工作表，代码却把 "报表!A1" 整个丢给源表的 getRange，跨表落点根本到不了。
+      const dest = splitSheetQualifiedAddress(destinationCellAddress)
+      const destSheet = dest.sheetName ? resolveSheet(context, dest.sheetName) : sheet
+      const destination = destSheet.getRange(dest.address)
       const name = args.pivotName ? String(args.pivotName) : `PivotTable_${Date.now()}`
       const pivot = sheet.pivotTables.add(name, source, destination)
       pivot.load('name')
+      // 字段名要在**落笔之前**校验完（dev-board#288）：旧写法先建表、再逐个
+      // hierarchies.getItem(字段)，字段名拼错时抛的是英文 ItemNotFound，
+      // 而那张空透视表已经留在用户的工作表上了。层级名只有建表后才拿得到，
+      // 所以改成「建表 → 读层级名 → 全部对得上才继续，对不上就把表删掉再报错」。
+      pivot.hierarchies.load('items/name')
       await context.sync()
+      const available = (pivot.hierarchies.items || []).map((h) => String(h.name))
+      const wanted = rowFields.concat(valueFields).map(String)
+      const missing = wanted.filter((f) => !available.includes(f))
+      if (missing.length) {
+        try {
+          pivot.delete()
+          await context.sync()
+        } catch (e) { /* 删不掉也要把错误说清楚，不能吞掉 */ }
+        throw new Error(`透视表字段不存在：${missing.join('、')}。`
+          + `源区域 ${sourceRangeAddress} 可用字段：${available.join('、') || '（无——请确认源区域第一行是标题行）'}。`
+          + '请用其中之一重试；已自动清除刚建出的空透视表。')
+      }
       for (const field of rowFields) {
-        const hierarchy = pivot.hierarchies.getItem(String(field))
-        pivot.rowHierarchies.add(hierarchy)
+        pivot.rowHierarchies.add(pivot.hierarchies.getItem(String(field)))
       }
       for (const field of valueFields) {
-        const hierarchy = pivot.hierarchies.getItem(String(field))
-        pivot.dataHierarchies.add(hierarchy)
+        pivot.dataHierarchies.add(pivot.hierarchies.getItem(String(field)))
       }
       await context.sync()
-      return { added: true, name: pivot.name, rowFields, valueFields }
+      return {
+        added: true,
+        name: pivot.name,
+        rowFields,
+        valueFields,
+        destinationSheet: dest.sheetName || sheet.name
+      }
     })
   },
 
@@ -2281,9 +2762,22 @@ const HANDLERS = {
         for (const tf of slideFrames) {
           if (tf.isNullObject || !tf.hasText) continue
           const text = tf.textRange.text || ''
-          if (!text.includes(searchText)) continue
-          replaced += text.split(searchText).length - 1
-          tf.textRange.text = text.split(searchText).join(replaceText)
+          // 归一化定位（dev-board#286）：命中区间是原文坐标
+          const hits = findAllNormalized(text, searchText)
+          if (!hits.length) continue
+          // **只改命中的那一段，不整框回写**（dev-board#288）：
+          // 旧写法 `tf.textRange.text = 整段新文本` 会把这个文本框里所有分段字符格式
+          // （加粗、字号、颜色）与超链接一并抹平，然后报成功——用户看到的是"改是改了，
+          // 但这一页的排版全没了"。TextRange.text 可写、getSubstring 都是 PowerPointApi 1.4
+          // （官方文档核实），与本命令既有的版本门槛同档，不需要额外守卫。
+          //
+          // **从右到左应用**：所有 getSubstring 的偏移都是按原文算的，右边先改不会推移
+          // 左边的坐标；反过来则第二处起全部错位（与 Word 面 replace_text 同一条纪律）。
+          for (let k = hits.length - 1; k >= 0; k--) {
+            const h = hits[k]
+            tf.textRange.getSubstring(h.start, h.end - h.start).text = replaceText
+          }
+          replaced += hits.length
           slideTouched = true
         }
         if (slideTouched) touchedSlides.push(i + 1)
@@ -2292,7 +2786,8 @@ const HANDLERS = {
         throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 ppt_get_slides 核对）')
       }
       await context.sync()
-      return { replaced, slides: touchedSlides }
+      // via 交底用的是哪条路：substring 表示只改了命中段、框内其余格式与超链接保持原样
+      return { replaced, slides: touchedSlides, via: 'substring' }
     })
   },
 
@@ -2320,12 +2815,9 @@ const HANDLERS = {
         for (const tf of slideFrames) {
           if (tf.isNullObject || !tf.hasText) continue
           const text = tf.textRange.text || ''
-          let from = 0
-          while (true) {
-            const idx = text.indexOf(searchText, from)
-            if (idx === -1) break
-            targets.push({ tf, start: idx, len: searchText.length })
-            from = idx + searchText.length
+          // 归一化定位（dev-board#286）：命中区间是原文坐标，长度按命中原文算
+          for (const h of findAllNormalized(text, searchText)) {
+            targets.push({ tf, start: h.start, len: h.end - h.start })
             if (!args.applyToAll) break outer
           }
         }
@@ -2681,9 +3173,9 @@ const HANDLERS = {
       for (const tf of frames) {
         if (tf.isNullObject || !tf.hasText) continue
         const text = tf.textRange.text || ''
-        const idx = text.indexOf(searchText)
-        if (idx === -1) continue
-        const sub = tf.textRange.getSubstring(idx, searchText.length)
+        const hit = findAllNormalized(text, searchText)[0]
+        if (!hit) continue
+        const sub = tf.textRange.getSubstring(hit.start, hit.end - hit.start)
         sub.setHyperlink({ address: url })
         await context.sync()
         return { slideNumber, linked: true, url }
@@ -2695,6 +3187,19 @@ const HANDLERS = {
 
 /** excel_get_range 返回值的行数上限（防超长工具输出撑爆模型上下文） */
 const MAX_EXCEL_RESULT_ROWS = 500
+
+/**
+ * 拆 "工作表!地址" 形式的限定地址。没有 `!` 时 sheetName 为空（表示用当前表）。
+ * 支持 Excel 对含空格表名的单引号包裹（'我的 表'!A1）。
+ */
+function splitSheetQualifiedAddress(raw) {
+  const text = String(raw || '')
+  const at = text.lastIndexOf('!')
+  if (at === -1) return { sheetName: '', address: text }
+  let name = text.slice(0, at)
+  if (name.startsWith("'") && name.endsWith("'")) name = name.slice(1, -1).replace(/''/g, "'")
+  return { sheetName: name, address: text.slice(at + 1) }
+}
 
 /** 按名取工作表；名为空取活动工作表 */
 function resolveSheet(context, sheetName) {
@@ -2866,14 +3371,64 @@ function getSlideOrThrow(slides, slideNumber) {
 }
 
 /** 载入全部幻灯片各形状的 TextFrame（含 hasText 与 textRange.text），返回按页分组的数组 */
+/** 组合形状递归的深度上限（每一层多一次 sync，与 WPS 面同口径） */
+const PPT_GROUP_MAX_DEPTH = 4
+
+/**
+ * 逐页收集**所有承载文字的 TextFrame**，含组合形状（group）里的子形状。
+ *
+ * 为什么要递归（dev-board#288）：演示稿里图示+标注、SmartArt 转出来的内容都是组合形状，
+ * 文字在子形状上；只看顶层 `getTextFrameOrNullObject()` 的话，这些字既读不到也改不了——
+ * 用户看着满屏字，AI 说这页没这段内容。WPS 面（wpsWppHandlers.textBearingShapes）已经
+ * 按「表格 → 组合递归 → 普通文本框」三条路收，Office 面此前只有第三条。
+ *
+ * 版本门槛：`Shape.group` / `ShapeGroup.shapes` 是 **PowerPointApi 1.8**（官方文档核实，
+ * 与本文件表格三件套同档）；`ShapeType.group` 本身是 1.4。**1.8 不支持时不报错**，
+ * 退化成「只收顶层」——与改造前逐字一致，不该因为想多读一点就把老宿主整条打死。
+ *
+ * 表格文字不在这里收：Office 面有 ppt_table_read / ppt_table_set_cell 专门通道
+ * （WPS 面没有那条通道，所以它把表格并进了遍历）。
+ */
 async function loadPptTextFrames(context) {
   const slides = context.presentation.slides
   slides.load('items')
   await context.sync()
-  slides.items.forEach((slide) => slide.shapes.load('items'))
+  slides.items.forEach((slide) => slide.shapes.load('items/type'))
   await context.sync()
-  const frames = slides.items.map((slide) =>
-    slide.shapes.items.map((shape) => {
+
+  const perSlide = slides.items.map((slide) => slide.shapes.items.slice())
+  if (pptApiSupported('1.8')) {
+    // 逐层展开组合：只在这一层真的有组合时才多花一次 sync
+    for (let depth = 0; depth < PPT_GROUP_MAX_DEPTH; depth++) {
+      const pending = []
+      perSlide.forEach((shapes, si) => {
+        shapes.forEach((shape) => {
+          if (String(shape.type) !== 'Group') return
+          try {
+            const inner = shape.group.shapes
+            inner.load('items/type')
+            pending.push({ si, inner })
+          } catch (e) { /* 个别形状取不到子集合，跳过它 */ }
+        })
+      })
+      if (!pending.length) break
+      await context.sync()
+      // 展开后的子形状替换掉本层的组合壳（组合壳自身没有文字）
+      const nextLevel = perSlide.map(() => [])
+      pending.forEach(({ si, inner }) => {
+        try {
+          for (const child of inner.items) nextLevel[si].push(child)
+        } catch (e) { /* 子集合读失败只丢这一个组合 */ }
+      })
+      perSlide.forEach((shapes, si) => {
+        const kept = shapes.filter((sp) => String(sp.type) !== 'Group')
+        perSlide[si] = kept.concat(nextLevel[si])
+      })
+    }
+  }
+
+  const frames = perSlide.map((shapes) =>
+    shapes.map((shape) => {
       const tf = shape.getTextFrameOrNullObject()
       tf.load('hasText,isNullObject')
       tf.textRange.load('text')
@@ -2883,82 +3438,84 @@ async function loadPptTextFrames(context) {
   return frames
 }
 
-/** 每个 command 的固定中文名（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐） */
+/** 每个 command 的固定显示名（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐）
+ *  按语言取字典（dev-board#150）：值来自 lib/i18n.js 的 cmd* key，随 currentLang 定死一次。 */
 export const COMMAND_DISPLAY_NAMES = {
-  get_text: '读取文档',
-  get_selection: '读取选区',
-  search: '查找文本',
-  replace_text: '替换文本（修订）',
-  insert_text: '插入文本（修订）',
-  add_comment: '插入批注',
-  format_text: '设置文字格式',
-  set_paragraph_format: '设置段落格式',
-  get_formatting: '读取格式',
-  set_numbering: '设置自动编号',
-  format_table: '设置表格格式',
-  apply_standard_format: '套用标准格式',
-  insert_table: '插入表格',
-  table_read: '读取表格',
-  table_set_cell: '修改单元格',
-  table_add_row: '插入表格行',
-  table_delete_row: '删除表格行',
-  table_add_col: '插入表格列',
-  table_delete_col: '删除表格列',
-  insert_break: '插入分页符',
-  set_hyperlink: '设置超链接',
-  edit_header_footer: '编辑页眉页脚',
-  get_comments: '读取批注',
-  reply_comment: '回复批注',
-  resolve_comment: '解决批注',
-  get_revisions: '读取修订',
-  accept_revision: '接受修订',
-  reject_revision: '拒绝修订',
-  insert_footnote: '插入脚注',
-  insert_endnote: '插入尾注',
-  insert_image: '插入图片',
-  apply_style: '应用样式',
-  manage_content_control: '管理内容控件',
-  set_document_properties: '设置文档属性',
-  excel_get_range: '读取区域',
-  excel_set_values: '写入区域',
-  excel_search: '查找单元格',
-  excel_format_cells: '设置单元格格式',
-  excel_set_borders: '设置边框',
-  excel_edit_rows_cols: '编辑行列',
-  excel_merge_cells: '合并单元格',
-  excel_sort_range: '排序',
-  excel_manage_sheets: '管理工作表',
-  excel_freeze_panes: '冻结窗格',
-  excel_set_formulas: '写入公式',
-  excel_get_overview: '读取总览',
-  excel_select_range: '选中区域',
-  excel_set_autofilter: '设置自动筛选',
-  excel_conditional_format: '设置条件格式',
-  excel_add_comment: '添加批注',
-  excel_get_comments: '读取批注',
-  excel_reply_comment: '回复批注',
-  excel_resolve_comment: '解决批注',
-  excel_delete_comment: '删除批注',
-  excel_set_data_validation: '设置数据验证',
-  excel_add_chart: '插入图表',
-  excel_define_name: '管理命名区域',
-  excel_protect_sheet: '保护工作表',
-  excel_group_rows_cols: '分组行列',
-  excel_add_pivot_table: '创建透视表',
-  ppt_get_slides: '读取幻灯片',
-  ppt_replace_text: '替换幻灯片文本',
-  ppt_format_text: '设置幻灯片文字格式',
-  ppt_add_slide: '新增幻灯片',
-  ppt_delete_slide: '删除幻灯片',
-  ppt_add_text_box: '插入文本框',
-  ppt_move_slide: '移动幻灯片',
-  ppt_add_shape: '插入形状',
-  ppt_get_slide_details: '读取幻灯片明细',
-  ppt_delete_shape: '删除形状',
-  ppt_add_table: '插入表格',
-  ppt_table_read: '读取表格',
-  ppt_table_set_cell: '修改表格单元格',
-  ppt_set_hyperlink: '设置超链接'
+  get_text: t('cmdGetText'),
+  get_selection: t('cmdGetSelection'),
+  search: t('cmdSearch'),
+  replace_text: t('cmdReplaceText'),
+  replace_batch: t('cmdReplaceBatch'),
+  insert_text: t('cmdInsertText'),
+  add_comment: t('cmdAddComment'),
+  format_text: t('cmdFormatText'),
+  set_paragraph_format: t('cmdSetParagraphFormat'),
+  get_formatting: t('cmdGetFormatting'),
+  set_numbering: t('cmdSetNumbering'),
+  format_table: t('cmdFormatTable'),
+  apply_standard_format: t('cmdApplyStandardFormat'),
+  insert_table: t('cmdInsertTable'),
+  table_read: t('cmdTableRead'),
+  table_set_cell: t('cmdTableSetCell'),
+  table_add_row: t('cmdTableAddRow'),
+  table_delete_row: t('cmdTableDeleteRow'),
+  table_add_col: t('cmdTableAddCol'),
+  table_delete_col: t('cmdTableDeleteCol'),
+  insert_break: t('cmdInsertBreak'),
+  set_hyperlink: t('cmdSetHyperlink'),
+  edit_header_footer: t('cmdEditHeaderFooter'),
+  get_comments: t('cmdGetComments'),
+  reply_comment: t('cmdReplyComment'),
+  resolve_comment: t('cmdResolveComment'),
+  get_revisions: t('cmdGetRevisions'),
+  accept_revision: t('cmdAcceptRevision'),
+  reject_revision: t('cmdRejectRevision'),
+  insert_footnote: t('cmdInsertFootnote'),
+  insert_endnote: t('cmdInsertEndnote'),
+  insert_image: t('cmdInsertImage'),
+  apply_style: t('cmdApplyStyle'),
+  manage_content_control: t('cmdManageContentControl'),
+  set_document_properties: t('cmdSetDocumentProperties'),
+  excel_get_range: t('cmdExcelGetRange'),
+  excel_set_values: t('cmdExcelSetValues'),
+  excel_search: t('cmdExcelSearch'),
+  excel_format_cells: t('cmdExcelFormatCells'),
+  excel_set_borders: t('cmdExcelSetBorders'),
+  excel_edit_rows_cols: t('cmdExcelEditRowsCols'),
+  excel_merge_cells: t('cmdExcelMergeCells'),
+  excel_sort_range: t('cmdExcelSortRange'),
+  excel_manage_sheets: t('cmdExcelManageSheets'),
+  excel_freeze_panes: t('cmdExcelFreezePanes'),
+  excel_set_formulas: t('cmdExcelSetFormulas'),
+  excel_get_overview: t('cmdExcelGetOverview'),
+  excel_select_range: t('cmdExcelSelectRange'),
+  excel_set_autofilter: t('cmdExcelSetAutofilter'),
+  excel_conditional_format: t('cmdExcelConditionalFormat'),
+  excel_add_comment: t('cmdExcelAddComment'),
+  excel_get_comments: t('cmdExcelGetComments'),
+  excel_reply_comment: t('cmdExcelReplyComment'),
+  excel_resolve_comment: t('cmdExcelResolveComment'),
+  excel_delete_comment: t('cmdExcelDeleteComment'),
+  excel_set_data_validation: t('cmdExcelSetDataValidation'),
+  excel_add_chart: t('cmdExcelAddChart'),
+  excel_define_name: t('cmdExcelDefineName'),
+  excel_protect_sheet: t('cmdExcelProtectSheet'),
+  excel_group_rows_cols: t('cmdExcelGroupRowsCols'),
+  excel_add_pivot_table: t('cmdExcelAddPivotTable'),
+  ppt_get_slides: t('cmdPptGetSlides'),
+  ppt_replace_text: t('cmdPptReplaceText'),
+  ppt_format_text: t('cmdPptFormatText'),
+  ppt_add_slide: t('cmdPptAddSlide'),
+  ppt_delete_slide: t('cmdPptDeleteSlide'),
+  ppt_add_text_box: t('cmdPptAddTextBox'),
+  ppt_move_slide: t('cmdPptMoveSlide'),
+  ppt_add_shape: t('cmdPptAddShape'),
+  ppt_get_slide_details: t('cmdPptGetSlideDetails'),
+  ppt_delete_shape: t('cmdPptDeleteShape'),
+  ppt_add_table: t('cmdPptAddTable'),
+  ppt_table_read: t('cmdPptTableRead'),
+  ppt_table_set_cell: t('cmdPptTableSetCell'),
+  ppt_set_hyperlink: t('cmdPptSetHyperlink')
 }
 
 /** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
@@ -2967,6 +3524,7 @@ const COMMAND_HOSTS = {
   get_selection: 'word',
   search: 'word',
   replace_text: 'word',
+  replace_batch: 'word',
   insert_text: 'word',
   add_comment: 'word',
   format_text: 'word',
@@ -3042,7 +3600,7 @@ const COMMAND_HOSTS = {
 const HOST_LABELS = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint' }
 
 export function commandDisplayName(command) {
-  return COMMAND_DISPLAY_NAMES[command] || `文档操作（${command}）`
+  return COMMAND_DISPLAY_NAMES[command] || t('cmdFallback', { command })
 }
 
 /**
@@ -3068,8 +3626,48 @@ export async function executeOfficeCommand(command, args) {
     const data = await handler(args || {})
     return { ok: true, data: data == null ? {} : data }
   } catch (e) {
-    const message = (e && e.message) || String(e)
     console.warn('[Addin] office_command 执行失败', command, e)
-    return { ok: false, error: message }
+    return { ok: false, error: await describeExecutionError(e, command, args || {}) }
+  }
+}
+
+/**
+ * 把宿主原生异常翻成模型能据以自纠的说明（dev-board#288）。
+ *
+ * 两件事：
+ * 1. **别丢 code 与 errorLocation**。Office.js 的 OfficeExtension.Error 上带
+ *    `code`（如 ItemNotFound / InvalidArgument）与 `debugInfo.errorLocation`
+ *    （出错的那一句 API 调用），只透传 message 等于把最有用的两条线索扔掉。
+ * 2. **工作表名写错要报出实际有哪些表**。26 个 excel_* 命令共用同一个 resolveSheet，
+ *    名字打错时抛的是一句英文 ItemNotFound，模型只能瞎猜；把工作簿里真实的表名列出来，
+ *    它一次就能改对。
+ */
+async function describeExecutionError(e, command, args) {
+  let message = (e && e.message) || String(e)
+  const code = e && e.code ? String(e.code) : ''
+  const where = e && e.debugInfo && e.debugInfo.errorLocation ? String(e.debugInfo.errorLocation) : ''
+  if (code === 'ItemNotFound' && command.startsWith('excel_') && args.sheetName) {
+    const names = await listWorksheetNames()
+    if (names.length) {
+      return `未找到名为「${args.sheetName}」的工作表。本工作簿现有工作表：${names.join('、')}。`
+        + '请用其中之一重试（名称区分空格与全角半角），或留空 sheetName 表示活动工作表。'
+    }
+  }
+  if (code) message += `（宿主错误码 ${code}${where ? '，出错位置 ' + where : ''}）`
+  else if (where) message += `（出错位置 ${where}）`
+  return message
+}
+
+/** 工作簿里现有的工作表名；取不到就返回空数组（只用于把报错说清楚，失败不该再抛） */
+async function listWorksheetNames() {
+  try {
+    return await Excel.run(async (context) => {
+      const sheets = context.workbook.worksheets
+      sheets.load('items/name')
+      await context.sync()
+      return sheets.items.map((w) => w.name)
+    })
+  } catch (err) {
+    return []
   }
 }

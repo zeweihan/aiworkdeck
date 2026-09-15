@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.mcp;
 
 import com.checkba.service.SystemSettingService;
@@ -60,6 +63,23 @@ public class McpClientService {
             return "Error: Unsupported MCP transport: " + server.getTransport();
         }
 
+        return provider.callTool(server, resolveToken(server), toolName, args);
+    }
+
+    /**
+     * 用调用方自带的服务器配置调工具（规范 v2.8 P3：插件 manifest 声明的远程 MCP
+     * 证据来源不在 mcp.servers 静态表里，宿主按声明现构 ServerConfig 走这里）。
+     * token 解析与 provider 分发与静态表路径完全一致。
+     */
+    public String callTool(McpProperties.ServerConfig server, String toolName, Map<String, Object> args) {
+        log.info("MCP callTool (ad-hoc): server={}, tool={}", server.getName(), toolName);
+        if (!server.isEnabled()) {
+            return "Error: MCP server is disabled: " + server.getName();
+        }
+        McpProvider provider = providersByTransport.get(server.getTransport());
+        if (provider == null) {
+            return "Error: Unsupported MCP transport: " + server.getTransport();
+        }
         return provider.callTool(server, resolveToken(server), toolName, args);
     }
 

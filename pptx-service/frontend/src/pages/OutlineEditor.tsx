@@ -20,14 +20,14 @@ const outlineI18n = {
       aiPlaceholder: "例如：增加一页关于XXX的内容、删除第3页、合并前两页... · Ctrl+Enter提交",
       aiPlaceholderShort: "例如：增加/删除页面... · Ctrl+Enter",
       contextLabels: { idea: "PPT构想", outline: "大纲", description: "描述" },
-      inputLabel: { idea: "PPT 构想", outline: "原始大纲", description: "页面描述" },
-      inputPlaceholder: { idea: "输入你的 PPT 构想...", outline: "输入大纲内容...", description: "输入页面描述..." },
+      inputLabel: { idea: "PPT 构想", outline: "原始大纲", description: "页面描述", ppt_renovation: "原始 PPT 内容" },
+      inputPlaceholder: { idea: "输入你的 PPT 构想...", outline: "输入大纲内容...", description: "输入页面描述...", ppt_renovation: "已从 PDF 中提取内容" },
       messages: {
         outlineEmpty: "大纲不能为空", generateSuccess: "描述生成完成", generateFailed: "生成描述失败",
         confirmRegenerate: "已有大纲内容，重新生成将覆盖现有内容，确定继续吗？",
         confirmRegenerateTitle: "确认重新生成", refineSuccess: "大纲修改成功",
         refineFailed: "修改失败，请稍后重试", exportSuccess: "导出成功",
-        loadingProject: "加载项目中...", generatingOutline: "生成大纲中..."
+        loadingProject: "加载项目中...", generatingOutline: "生成大纲中...",
       }
     }
   },
@@ -46,14 +46,14 @@ const outlineI18n = {
       aiPlaceholder: "e.g., Add a page about XXX, delete page 3, merge first two pages... · Ctrl+Enter to submit",
       aiPlaceholderShort: "e.g., Add/delete pages... · Ctrl+Enter",
       contextLabels: { idea: "PPT Idea", outline: "Outline", description: "Description" },
-      inputLabel: { idea: "PPT Idea", outline: "Original Outline", description: "Page Descriptions" },
-      inputPlaceholder: { idea: "Enter your PPT idea...", outline: "Enter outline content...", description: "Enter page descriptions..." },
+      inputLabel: { idea: "PPT Idea", outline: "Original Outline", description: "Page Descriptions", ppt_renovation: "Original PPT Content" },
+      inputPlaceholder: { idea: "Enter your PPT idea...", outline: "Enter outline content...", description: "Enter page descriptions...", ppt_renovation: "Content extracted from PDF" },
       messages: {
         outlineEmpty: "Outline cannot be empty", generateSuccess: "Descriptions generated successfully", generateFailed: "Failed to generate descriptions",
         confirmRegenerate: "Existing outline will be overwritten. Continue?",
         confirmRegenerateTitle: "Confirm Regenerate", refineSuccess: "Outline modified successfully",
         refineFailed: "Modification failed, please try again", exportSuccess: "Export successful",
-        loadingProject: "Loading project...", generatingOutline: "Generating outline..."
+        loadingProject: "Loading project...", generatingOutline: "Generating outline...",
       }
     }
   }
@@ -75,7 +75,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Button, Loading, useConfirm, useToast, AiRefineInput, FilePreviewModal } from '@/components/shared';
+import { Button, Loading, useConfirm, useToast, AiRefineInput, FilePreviewModal, ReferenceFileList } from '@/components/shared';
 import { MarkdownTextarea, type MarkdownTextareaRef } from '@/components/shared/MarkdownTextarea';
 import { OutlineCard } from '@/components/outline/OutlineCard';
 import { useProjectStore } from '@/store/useProjectStore';
@@ -138,11 +138,13 @@ export const OutlineEditor: React.FC = () => {
   const { confirm, ConfirmDialog } = useConfirm();
   const { show, ToastContainer } = useToast();
 
-  // 左侧可编辑文本区域
-  const textareaRef = useRef<MarkdownTextareaRef>(null);
+  // 左侧可编辑文本区域 — desktop and mobile use separate refs to avoid
+  // the shared-ref bug where insertAtCursor targets the wrong (hidden) instance.
+  const desktopTextareaRef = useRef<MarkdownTextareaRef>(null);
+  const mobileTextareaRef = useRef<MarkdownTextareaRef>(null);
   const getInputText = useCallback((project: typeof currentProject) => {
     if (!project) return '';
-    if (project.creation_type === 'outline') return project.outline_text || project.idea_prompt || '';
+    if (project.creation_type === 'outline' || project.creation_type === 'ppt_renovation') return project.outline_text || project.idea_prompt || '';
     if (project.creation_type === 'descriptions') return project.description_text || project.idea_prompt || '';
     return project.idea_prompt || '';
   }, []);
@@ -151,6 +153,7 @@ export const OutlineEditor: React.FC = () => {
   const [isInputDirty, setIsInputDirty] = useState(false);
   const [isSavingInput, setIsSavingInput] = useState(false);
 
+  // 项目切换时：强制加载文本
   useEffect(() => {
     if (currentProject) {
       setInputText(getInputText(currentProject));
@@ -185,7 +188,9 @@ export const OutlineEditor: React.FC = () => {
   }, []);
 
   const insertAtCursor = useCallback((markdown: string) => {
-    textareaRef.current?.insertAtCursor(markdown);
+    // Prefer the desktop ref (visible at md+), fall back to mobile
+    const ref = desktopTextareaRef.current || mobileTextareaRef.current;
+    ref?.insertAtCursor(markdown);
   }, []);
 
   const { handlePaste: handleImagePaste, handleFiles: handleImageFiles, isUploading: _isUploadingImage } = useImagePaste({
@@ -476,7 +481,7 @@ export const OutlineEditor: React.FC = () => {
                 </div>
               </div>
               <MarkdownTextarea
-                ref={textareaRef}
+                ref={desktopTextareaRef}
                 value={inputText}
                 onChange={handleInputChange}
                 onPaste={handleImagePaste}
@@ -486,6 +491,11 @@ export const OutlineEditor: React.FC = () => {
                 className="border-0 rounded-none shadow-none"
               />
             </div>
+            <ReferenceFileList
+              projectId={projectId}
+              onFileClick={setPreviewFileId}
+              className="mt-3"
+            />
           </div>
         </div>
 
@@ -519,7 +529,7 @@ export const OutlineEditor: React.FC = () => {
               </button>
             </div>
             <MarkdownTextarea
-              ref={textareaRef}
+              ref={mobileTextareaRef}
               value={inputText}
               onChange={handleInputChange}
               onPaste={handleImagePaste}
@@ -529,6 +539,11 @@ export const OutlineEditor: React.FC = () => {
               className="border-0 rounded-none shadow-none"
             />
           </div>
+          <ReferenceFileList
+            projectId={projectId}
+            onFileClick={setPreviewFileId}
+            className="mt-3"
+          />
         </div>
 
         {/* 右侧：大纲列表 */}
@@ -578,7 +593,6 @@ export const OutlineEditor: React.FC = () => {
       </main>
       {ConfirmDialog}
       <ToastContainer />
-
       <FilePreviewModal fileId={previewFileId} onClose={() => setPreviewFileId(null)} />
     </div>
   );

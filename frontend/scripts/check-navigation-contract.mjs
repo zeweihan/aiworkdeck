@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * 导航契约静态护栏（项目列表页 → 工作台；概览是工作台里的一个标签）。
  *
@@ -95,6 +97,9 @@ const findDarkChromeBackground = (css) => {
   return null
 }
 
+// 标签可见性纯函数（dev-board#394），供下面「系统设置是中栏标签」那条直接询问
+const { isTabVisibleInPane } = await import('../src/pages/project-overview/tabVisibility.js')
+
 const failures = []
 const check = (name, fn) => {
   let msg
@@ -157,11 +162,14 @@ const hasSelector = (css, sel) =>
 
 check('project-list.scss 搬齐了必需的样式块', () => {
   const css = readFrontend('src/pages/project-list/project-list.scss')
+  // .btn-primary-small 已被 .awd-btn/.awd-btn-primary 取代（命名弹窗按钮改走 awd-* 视觉语言）；
+  // .card-deco-header 已随卡片重设计删除（不再用顶部 4px 色条区分项目类型，见「Card 重设计」提交）——
+  // 两处都是有意的设计变更，不是搬迁遗漏，从必需清单里去掉。
   const need = [
     '.page-project-list', '.project-list-container', '.main-content',
-    '.content-header', '.header-actions', '.btn-primary-small', '.btn-secondary-small',
+    '.content-header', '.header-actions', '.awd-btn', '.awd-btn-primary', '.btn-secondary-small',
     '.cloud-accept-entry', '.projects-stats-row', '.stat-card',
-    '.project-grid', '.project-item-card', '.card-deco-header', '.action-btn-icon',
+    '.project-grid', '.project-item-card', '.action-btn-icon',
     '.project-title-new', '.card-footer-new', '.member-avatar-new', '.add-member-btn-new',
     '.enter-btn-arrow', '.empty-state-dashed', '.dashed-icon',
     '.project-role-badge', '.role-owner', '.role-text',
@@ -244,18 +252,26 @@ check('项目列表页删掉了写死 0 的两张统计卡', () => {
   return cards === 1 ? null : '统计条应当只剩「全部项目」一张卡，实际 ' + cards + ' 张'
 })
 
-check('项目列表页带全 CloudAcceptDialog 的两个入口', () => {
+check('项目列表页「从团队案件库取一份案卷」入口开放（官方案件库 dev-board#439/#440），仍经 SHOW_CLOUD_ACCEPT 门控', () => {
+  // 曾因自建案件库令人困惑而收起（用户反馈 5，SHOW_CLOUD_ACCEPT=false）；官方案件库零配置直连后
+  // 它是被邀请方取回案卷的唯一入口（#444 邀请话术第 2 步指的就是它），必须开着。
   const src = readVue('src/pages/project-list/project-list.vue')
   if (!src.includes('<CloudAcceptDialog')) return '弹窗组件没搬过来'
-  // 1 处 method 定义 + 2 处入口绑定（有项目态顶部按钮 / 空项目态入口）
+  if (!/const\s+SHOW_CLOUD_ACCEPT\s*=\s*true/.test(src)) {
+    return '两个入口应当经 SHOW_CLOUD_ACCEPT 门控且为 true——被邀请的同事没有别的取回入口'
+  }
+  // 1 处 method 定义 + 2 处入口绑定（有项目态顶部按钮 / 空项目态入口）；门控只加在
+  // 各自的 v-if 上，openCloudAccept 这个方法名出现的次数不会因此减少
   const entries = (src.match(/openCloudAccept/g) || []).length
-  return entries >= 3 ? null : 'openCloudAccept 只出现 ' + entries + ' 次，两个入口缺一个'
+  return entries >= 3 ? null : 'openCloudAccept 只出现 ' + entries + ' 次，方法定义或两个入口绑定被删掉了'
 })
 
 check('项目列表页对 CLIENT 收起写操作入口', () => {
   const src = readVue('src/pages/project-list/project-list.vue')
   if (!/isClientUser\s*\(\)/.test(src)) return '缺 isClientUser computed'
-  if (!src.includes('!isClientUser && projects.length > 0')) return '顶部两个动作按钮没有对 CLIENT 隐藏'
+  if (!src.includes('v-if="!isClientUser" class="create-section"')) {
+    return '页头下方的新建操作行没有对 CLIENT 隐藏'
+  }
   if (!src.includes('canManageMembers')) return '成员增删没有对 CLIENT 收起'
   return null
 })
@@ -268,46 +284,104 @@ check('项目列表页别把裸数组当信封解', () => {
   return null
 })
 
-// ==================== 个人中心瘦身 ====================
+// ==================== 个人中心并入统一「设置」页 ====================
+// 2026-08-20：个人中心不再是独立面板，它是 components/admin/AdminPane.vue 里
+// 「个人」组的四个栏目（内容各自成组件，放在 components/userprofile/ 下）。
+// 下面这几条接着守原来那五条的东西：默认不落空白页、项目那摊没被带回来、
+// 该留的没被搬丢；外加两条新不变式（旧实体已消失、定时器仍在清）。
 
-check('个人中心默认 tab 不再是被搬走的 projects', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
-  if (!/activeTab:\s*'work_log'/.test(src)) return "activeTab 默认值必须是 'work_log'"
-  if (/key:\s*'projects'/.test(src)) return 'tabs 数组里还留着 projects 项'
+const PERSONAL_PANELS = [
+  'src/components/userprofile/PersonalWorkLogPanel.vue',
+  'src/components/userprofile/PersonalFavoritesPanel.vue',
+  'src/components/userprofile/PersonalTodosPanel.vue',
+  'src/components/userprofile/PersonalSettingsPanel.vue',
+]
+
+check('统一设置页有完整的「个人」组，且没把搬走的 projects 带回来', () => {
+  const src = readVue('src/components/admin/AdminPane.vue')
+  const missing = ['work_log', 'favorites', 'todos', 'personal_settings']
+    .filter((k) => !new RegExp("key: '" + k + "'[^\\n]*group: 'personal'").test(src))
+  if (missing.length) return '个人组缺: ' + missing.join(', ')
+  if (/key:\s*'projects'/.test(src)) return "navItems 里冒出了 projects——那一栏 2026-08 搬去项目列表页了"
+  if (!src.includes("group: 'system'")) return '系统组的 group 标记没了，两组会挤成一堆'
   return null
 })
 
-check('个人中心默认 tab 有人给它加载数据', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
-  // 工作记录是懒加载的（只在 switchTab 里触发），默认落它就必须在 onLoad 里补一次
-  const onLoad = src.slice(src.indexOf('onLoad()'), src.indexOf('methods:'))
-  return onLoad.includes('this.loadActivityLogs()')
-    ? null
-    : 'onLoad 里没有 loadActivityLogs()，默认 tab 会永远空白'
+check('统一设置页的默认落点是可见的面板', () => {
+  const src = readVue('src/components/admin/AdminPane.vue')
+  // 非管理员看不见「系统」组，默认值还写死 'ai' 的话他进来就是一张空白页
+  if (!src.includes("activeNav: cachedIsAdmin() ? 'ai' : 'work_log'")) {
+    return "activeNav 默认值要按 cachedIsAdmin() 分流（管理员 'ai'，其余 'work_log'）"
+  }
+  if (!src.includes("if (n.group === 'system' && !this.isAdminUser) return false")) {
+    return 'visibleNavItems 没有把系统组按 isAdmin 收起（原个人中心 checkAdminTab 那条规则）'
+  }
+  return null
 })
 
-check('个人中心已清空项目相关的模板与方法', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
-  const left = [
-    'project-item-card', 'panel-projects', 'projects-stats-row',
-    'loadProjects', 'goToProject', 'handleDeleteProject', 'confirmRename',
-    'CloudAcceptDialog', 'InviteMemberDialog', 'getRoleLabel',
-  ].filter((s) => src.includes(s))
+check('个人组四栏各自有人给它加载数据', () => {
+  // 四段内容只在被选中时渲染，加载时机就是各自的 mounted。少一处就是一张永远空白的栏目。
+  const log = readVue('src/components/userprofile/PersonalWorkLogPanel.vue')
+  if (!extractMethodBody(log, 'mounted()').includes('this.loadActivityLogs()')) {
+    return '工作记录的 mounted 里没有 loadActivityLogs()'
+  }
+  const fav = readVue('src/components/userprofile/PersonalFavoritesPanel.vue')
+  if (!extractMethodBody(fav, 'mounted()').includes('this.loadFavorites()')) {
+    return '我的收藏的 mounted 里没有 loadFavorites()'
+  }
+  const set = readVue('src/components/userprofile/PersonalSettingsPanel.vue')
+  if (!extractMethodBody(set, 'mounted()').includes('this.loadUserInfo()')) {
+    return '账户与安全的 mounted 里没有 loadUserInfo()'
+  }
+  return null
+})
+
+check('个人组没把项目那摊带回来', () => {
+  const left = []
+  for (const f of PERSONAL_PANELS) {
+    const src = readVue(f)
+    for (const s of ['project-item-card', 'panel-projects', 'loadProjects', 'goToProject',
+      'handleDeleteProject', 'CloudAcceptDialog', 'InviteMemberDialog', 'getRoleLabel',
+      'getMyProjects', 'deleteProject', 'renameProject', 'getProjectMembers', 'getProjectTypeLabel']) {
+      if (src.includes(s)) left.push(f.split('/').pop() + ':' + s)
+    }
+  }
   return left.length ? '还残留: ' + left.join(', ') : null
 })
 
-check('个人中心已摘掉被搬迁搞成孤儿的导入', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
-  const orphan = ['getMyProjects', 'deleteProject', 'renameProject', 'getProjectMembers', 'removeProjectMember', 'getProjectTypeLabel']
-    .filter((s) => src.includes(s))
-  return orphan.length ? '孤儿导入: ' + orphan.join(', ') : null
+check('个人组保住了不该删的东西', () => {
+  const log = readVue('src/components/userprofile/PersonalWorkLogPanel.vue')
+  const gone = ['formatTime(', 'formatDateTime(', 'loadActivityLogs', 'exportLogsToExcel']
+    .filter((s) => !log.includes(s))
+  const fav = readVue('src/components/userprofile/PersonalFavoritesPanel.vue')
+  gone.push(...['loadFavorites', 'deleteFavorite', 'getFavoriteImageUrl'].filter((s) => !fav.includes(s)))
+  const set = readVue('src/components/userprofile/PersonalSettingsPanel.vue')
+  gone.push(...['totpSetup', 'bindPhone', 'bindEmail', 'listDeviceTokens', 'getLicenseStatus',
+    'setAppLanguage', 'signOut'].filter((s) => !set.includes(s)))
+  return gone.length ? '误删: ' + gone.join(', ') : null
 })
 
-check('个人中心保住了不该删的东西', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
-  const gone = ['formatTime(', 'formatDateTime(', '.role-text', '.empty-icon', 'loadActivityLogs', 'loadFavorites', 'addProjectMember', 'inviteClient']
-    .filter((s) => !src.includes(s))
-  return gone.length ? '误删: ' + gone.join(', ') : null
+check('账户与安全仍然清那两个验证码倒计时', () => {
+  // 统一设置页是常驻工作台的标签，不会随导航销毁重建；不清定时器会跨标签泄漏。
+  // 这是修过的坑（PR#424），搬家时最容易掉的就是它。
+  const src = readVue('src/components/userprofile/PersonalSettingsPanel.vue')
+  const body = extractMethodBody(src, 'beforeUnmount()')
+  if (!body) return '缺 beforeUnmount()'
+  for (const t of ['bindCountdownTimer', 'bindEmailCountdownTimer']) {
+    if (!body.includes('clearInterval(this.' + t + ')')) return '没清 ' + t
+  }
+  return null
+})
+
+check('旧的个人中心实体已经不在了', () => {
+  if (hasFile('src/components/userprofile/UserProfilePane.vue')) {
+    return 'UserProfilePane.vue 还在——两个设置入口的根因就是它，内容已并进 AdminPane'
+  }
+  for (const f of ['src/pages/userprofile/userprofile.vue', 'src/pages/project-overview/project-overview.vue',
+    'src/components/admin/AdminPane.vue']) {
+    if (readVue(f).includes('UserProfilePane')) return f + ' 还引用着 UserProfilePane'
+  }
+  return null
 })
 
 // ==================== 导航入口与出口 ====================
@@ -367,23 +441,59 @@ check('newproject 按钮文案与跳转目标一致（不许挂着"个人中心"
   return null
 })
 
-check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
+check('工作台「全部项目」用 reLaunch 去项目列表页，且离开前先落盘', () => {
   const src = readVue('src/pages/project-overview/project-overview.vue')
   const body = extractMethodBody(src, 'goAllProjects()')
   if (!body) return '找不到 goAllProjects'
   if (!body.includes('/pages/project-list/project-list')) return 'goAllProjects 没有指向项目列表页'
-  if (!body.includes('uni.reLaunch')) return '工作台参与的跳转一律 reLaunch，不能用 navigateTo'
   if (body.includes('uni.navigateTo')) return '工作台参与的跳转一律 reLaunch，检测到误用 navigateTo'
+
+  // 跳转本身可以直接 reLaunch，也可以走统一出口 leaveWorkbench()——后者在 reLaunch 之前
+  // 先 flush 未落盘的编辑器内容（自动保存是防抖的，reLaunch 直接销毁组件树，
+  // LibreOfficeEditor 的 beforeUnmount 已经来不及导出）。两种写法都算合规，
+  // 但走 leaveWorkbench 时必须确认那个出口自己是 reLaunch + 落盘。
+  if (!body.includes('uni.reLaunch')) {
+    if (!body.includes('this.leaveWorkbench(')) {
+      return '工作台参与的跳转一律 reLaunch，不能用 navigateTo'
+    }
+    const exit = extractMethodBody(src, 'async leaveWorkbench(url)')
+    if (!exit) return 'goAllProjects 走了 leaveWorkbench，但找不到这个统一出口'
+    if (!exit.includes('uni.reLaunch')) return 'leaveWorkbench 必须用 reLaunch（工作台参与的跳转一律 reLaunch）'
+    if (exit.includes('uni.navigateTo')) return 'leaveWorkbench 里检测到误用 navigateTo'
+    if (!exit.includes('flushDirtyEditors')) {
+      return '离开工作台前必须先落盘：否则自动保存防抖窗口内的改动会被 reLaunch 静默丢掉'
+    }
+  }
   return null
 })
 
-check('工作台 rail 头像仍 navigateTo 个人中心（不许顺手改）', () => {
+check('顶栏头像下拉恰好两项：设置 + 退出登录（2026-08-27，dev-board#205）', () => {
+  // 沿革：2026-08-20 个人中心并进设置后下拉只剩一项，2026-08-21（dev-board#96）撤下拉、
+  // 点头像直开设置；2026-08-27（dev-board#205）「退出登录」要有一级入口，下拉恢复成
+  // 两项——恢复的判据正是当年撤它的判据（不止一项了）。个人中心标签那套仍然是死代码。
   const src = readVue('src/pages/project-overview/project-overview.vue')
-  const body = extractMethodBody(src, 'goToUserProfile()')
-  if (!body) return '找不到 goToUserProfile'
-  if (!body.includes(USERPROFILE_ROUTE) || !body.includes('navigateTo')) {
-    return '它依赖页面栈保留实例以便 onShow 回流刷新，本次不改'
+  for (const dead of ['openUserProfileTab', 'goToUserProfile', "workbench.profile", "'user-profile'"]) {
+    if (src.includes(dead)) return '还残留个人中心标签那一套: ' + dead
   }
+  const i = src.indexOf('class="avatar-btn"')
+  if (i < 0) return '找不到 .avatar-btn'
+  const btn = src.slice(i, i + 200)
+  if (!btn.includes('avatarMenuOpen')) return '头像没有开下拉（avatarMenuOpen）'
+  const menuIdx = src.indexOf('class="avatar-menu"')
+  if (menuIdx < 0) return '找不到 .avatar-menu 下拉'
+  // 2026-08-27（dev-board#225）：顶栏余额 chip 并进下拉，菜单顶部多了一块账户抬头。
+  // 判据因此从「字符窗口里找得到两个动作」改成「动作项恰好两项」——抬头不是动作项，
+  // 不占这两项的名额，但也不许再多出第三个动作把退出登录挤下去。
+  const menu = src.slice(menuIdx, menuIdx + 1800)
+  const actions = menu.match(/class="avatar-menu-item/g) || []
+  if (actions.length !== 2) return `下拉动作项应恰好两项，实际 ${actions.length} 项`
+  if (!menu.includes('onAvatarMenuSettings')) return '下拉里没有「设置」项（onAvatarMenuSettings）'
+  if (!menu.includes('onAvatarMenuSignOut')) return '下拉里没有「退出登录」项（onAvatarMenuSignOut）'
+  // 退出必须走唯一编排，不许在页面里自拼 disconnect/deactivate
+  if (!src.includes("from '@/utils/signOut.js'")) return '退出登录没有走 utils/signOut.js 唯一编排'
+  // 客户也要进得去：个人组的工作记录/账号安全对他一样成立，收系统组是面板自己的事
+  const block = src.slice(src.indexOf('class="header-account"'), i + 600)
+  if (block.includes('isClientView')) return '设置入口不该按 isClientView 藏起来（客户也有自己的个人组）'
   return null
 })
 
@@ -400,15 +510,65 @@ check('四条直达工作台的出口一条都没动', () => {
 })
 
 check('admin 切换本机工作区仍清最近项目', () => {
-  const src = readVue('src/pages/admin/admin.vue')
+  // 设置的实体 2026-08-19 搬进 components/admin/AdminPane.vue（pages/admin 退成薄壳），
+  // 断言跟着搬。
+  const src = readVue('src/components/admin/AdminPane.vue')
   return src.includes("removeStorageSync('checkba_last_project_id')")
     ? null
     : '删了这行会让切身份之后仍直达上一个身份的项目'
 })
 
+check('系统设置在工作台里是中栏标签，不是跳页', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const body = extractMethodBody(src, 'goToSystemSettings(opts)')
+  if (!body) return '找不到 goToSystemSettings'
+  if (body.includes('/pages/admin/admin')) {
+    return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）换成一页设置'
+  }
+  if (!body.includes('openSettingsTab')) return '应当调 openSettingsTab() 开中栏标签'
+  const tab = extractMethodBody(src, 'openSettingsTab(opts)')
+  if (!tab) return '缺 openSettingsTab()'
+  if (!tab.includes("tabType: 'admin-settings'")) return '标签没有带 tabType: admin-settings'
+  // 深链（nav / service）在 tab 形态下要有等价物：网关错误提示的逃生门指着它
+  if (!tab.includes('opts.nav') || !tab.includes('opts.service')) {
+    return 'openSettingsTab 没有接 nav/service，?nav=platform&service=ocr 的逃生门在工作台里就断了'
+  }
+  // 标签可见性 2026-09-02 起收敛成纯函数 tabVisibility.js（dev-board#394：标签常驻、
+  // 与左栏面板解耦）。这里直接问那个函数，而不是 grep 组件里的分支——分支已经没了。
+  const vis = extractMethodBody(src, 'isTabVisible(file) {')
+  if (!vis || !vis.includes('isTabVisibleInPane(')) {
+    return 'isTabVisible 不再委托 tabVisibility.js 的 isTabVisibleInPane，可见性契约失去单测覆盖'
+  }
+  for (const pane of ['files', 'home', 'market', 'version']) {
+    if (!isTabVisibleInPane({ id: 'admin', tabType: 'admin-settings' }, pane)) {
+      return `isTabVisibleInPane 在左栏 ${pane} 面板下藏了 admin-settings 标签，点菜单会开一个被 v-show 藏死的标签`
+    }
+  }
+  return null
+})
+
+check('pages/admin 薄壳页仍在，且把 query 透给 AdminPane', () => {
+  const src = readVue('src/pages/admin/admin.vue')
+  if (!src.includes('<AdminPane')) return '薄壳页没有挂 AdminPane'
+  if (!src.includes('query.nav') || !src.includes('query.service')) {
+    return '薄壳页没有透传 ?nav= / ?service=，仓里十来处深链会全部落在默认面板上'
+  }
+  return null
+})
+
+check('pages/userprofile 薄壳页仍在，且挂的是统一设置面板', () => {
+  // 选项 A：路由与仓里既有的 navigateTo '/pages/userprofile/userprofile'
+  //（应用菜单「账户」、项目列表页按钮）一条都不动，只把落地内容换成统一设置页，
+  // 初始落在个人组第一栏——与老页面进来看到的东西一致。
+  const src = readVue('src/pages/userprofile/userprofile.vue')
+  if (!src.includes('<AdminPane')) return '薄壳页没有挂 AdminPane'
+  if (!src.includes('initial-nav="work_log"')) return '薄壳页没有落在个人组的「工作记录」'
+  return null
+})
+
 // ==================== 工作台通往概览页的入口 ====================
 
-check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
+check('工作台里「项目概览」是开左栏面板，不是跳页也不是中栏标签', () => {
   const src = readVue('src/pages/project-overview/project-overview.vue')
   if (!src.includes('switcher-home')) return '模板里缺 .switcher-home 一项'
   const body = extractMethodBody(src, 'goProjectHome()')
@@ -416,10 +576,11 @@ check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
   if (body.includes('/pages/project-home/project-home')) {
     return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）拆掉换成一页只读卷轴'
   }
-  if (!body.includes('openProjectHomeTab')) return '应当调 openProjectHomeTab() 开中栏标签'
-  const tab = extractMethodBody(src, 'openProjectHomeTab()')
-  if (!tab) return '缺 openProjectHomeTab()'
-  if (!tab.includes("tabType: 'project-home'")) return '标签没有带 tabType: project-home'
+  // 2026-08-19：概览从中栏标签改成左栏面板——rail 上的按钮点了应该开左栏，
+  // 这是 rail 其余每一项的语义，概览不该例外。
+  if (!body.includes("toggleLeftPane('home')")) {
+    return "应当调 toggleLeftPane('home') 打开左栏概览面板"
+  }
   // 「项目概览」必须排在「全部项目…」之前（两者的首次出现都在模板里）
   if (src.indexOf('switcher-home') > src.indexOf('switcher-all')) {
     return '「项目概览」应当排在「全部项目…」之前'
@@ -427,18 +588,34 @@ check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
   return null
 })
 
-check('工作台 rail 上有项目概览入口，且该标签不被左栏模式藏死', () => {
+check('rail 第一项是项目概览，左栏渲染 ProjectHomePane', () => {
+  const rail = readFrontend('src/config/leftSidebarPlugins.js')
+  const i = rail.indexOf('LEFT_SIDEBAR_PLUGINS = [')
+  if (i < 0) return '找不到 LEFT_SIDEBAR_PLUGINS'
+  const firstKey = rail.slice(i).match(/key:\s*'([^']+)'/)
+  if (!firstKey || firstKey[1] !== 'home') {
+    return 'rail 第一项应当是项目概览（key: home），实际是 ' + (firstKey ? firstKey[1] : '空')
+  }
   const src = readVue('src/pages/project-overview/project-overview.vue')
-  if (!src.includes('@tap="openProjectHomeTab"')) return 'rail 上没有项目概览按钮'
-  if (!src.includes('<ProjectHomePane')) return '中栏没有渲染 ProjectHomePane'
-  // marker 带上左花括号：模板里 v-show="isTabVisible(file)" 会先命中，
-  // 从那里往后找第一个 { 会切出一大段模板而不是方法体
-  const vis = extractMethodBody(src, 'isTabVisible(file) {')
-  if (!vis) return '找不到 isTabVisible'
-  if (!vis.includes("file.tabType === 'project-home'")) {
-    return "isTabVisible 没放行 project-home 标签，点 rail 会开一个被 v-show 藏死的标签"
+  if (!src.includes('<ProjectHomePane')) return '左栏没有渲染 ProjectHomePane'
+  if (!src.includes("leftPaneKey === 'home'")) {
+    return "左栏没有 leftPaneKey === 'home' 这条分支，点 rail 会落到「加载中…」占位符"
   }
   return null
+})
+
+check('leftPaneKey 存量值有迁移兜底', () => {
+  const cfg = readFrontend('src/config/leftSidebarPlugins.js')
+  if (!cfg.includes('migrateLeftPaneKey')) return '缺 migrateLeftPaneKey'
+  // 语音两项合并（easyvoice / meeting-recorder → voice）后，存量 storage 里的
+  // 旧 key 必须映射得到；不映射就会落在一个没有面板分支命中的 key 上
+  for (const k of ['easyvoice', 'meeting-recorder']) {
+    if (!cfg.includes(`'${k}'`) && !cfg.includes(`${k}:`)) return '迁移表里没有 ' + k
+  }
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  return src.includes('migrateLeftPaneKey(savedKey)')
+    ? null
+    : '工作台恢复 leftPaneKey 时没有过迁移表'
 })
 
 check('switcher-home 有对应样式', () => {
@@ -612,6 +789,77 @@ checkFull('app-e2e 走三级跳而不是把个人中心当必经之路', () => {
     return '解锁后的落点断言还没放行项目列表页'
   }
   return null
+})
+
+// 工作台里渲染的组件自己跳页，同样是「离开工作台」（2026-09-10，走查抓到 CollabDialog
+// 「去团队设置」直接 reLaunch）：上面几条只看 project-overview.vue 自己的方法，组件里的
+// 跳转从来没人管，防抖窗口里没落盘的文档改动就这么随组件树一起销毁。
+// 规则：project-overview 把 leaveWorkbench provide 出去；它直接 import 的组件里，
+// 凡是出现 uni.reLaunch / navigateTo / redirectTo 的方法，要么同一个方法里优先走注入的
+// this.leaveWorkbench(...)（直调只作为「宿主不是工作台」时的回落），要么进下面的名单并写明理由。
+// 目的地是设置页的，同一个方法里优先走注入的 this.openSettingsTab(...)（工作台里设置是标签，
+// 根本不该离开，dev-board#582）也算合规。
+const WORKBENCH_NAV_ALLOWLIST = {
+  // 以下两处早于本条护栏，行为（navigateTo 保留工作台在栈里 / 切身份整站重走启动链）
+  // 各有产品含义，改动要单独评估，先记名在此不许再新增。
+  'components/ChatInterface.vue#goToSkillManagement': '预存在：技能下拉跳插件广场，待单独评估',
+  'components/admin/AdminPane.vue#onSwitchIdentity': '预存在：切换本机身份后整站回启动链重建',
+}
+
+check('工作台 provide 出 leaveWorkbench，给里面的组件用', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const provide = extractMethodBody(src, 'provide()')
+  if (!provide) return 'project-overview 没有 provide()'
+  if (!provide.includes('leaveWorkbench')) return 'provide() 里没有 leaveWorkbench'
+  if (!provide.includes('openSettingsTab')) return 'provide() 里没有 openSettingsTab'
+  return null
+})
+
+check('工作台里「去团队设置 / 去账户」开设置标签，不跳出独立设置页（dev-board#582）', () => {
+  const sites = [
+    ['src/components/InviteMemberDialog.vue', 'goTeamSettings()'],
+    ['src/components/collab/CollabDialog.vue', 'goTeamSettings()'],
+    ['src/components/MarketSidebarPanel.vue', 'goToAccountSettings()'],
+    ['src/components/MarketDetailPane.vue', 'goToAccountSettings()'],
+  ]
+  const bad = []
+  for (const [rel, marker] of sites) {
+    const src = readVue(rel)
+    const body = extractMethodBody(src, marker)
+    if (!body || !body.includes('this.openSettingsTab(') || !/openSettingsTab:\s*\{\s*default:\s*null/.test(src)) {
+      bad.push(rel + '#' + marker)
+    }
+  }
+  return bad.length ? '没走注入的 openSettingsTab: ' + bad.join(', ') : null
+})
+
+check('工作台里渲染的组件跳出工作台必须走 leaveWorkbench（先落盘）', () => {
+  const host = readVue('src/pages/project-overview/project-overview.vue')
+  const imported = [...host.matchAll(/from '@\/(components\/[^']+\.vue)'/g)].map((m) => m[1])
+  const NAV = /uni\.(reLaunch|navigateTo|redirectTo)\(/g
+  // 方法头：选项式 `  name(...) {` / `  async name(...) {`，组合式 `const name = (...) => {`
+  const HEADER = /^\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{|^\s*const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{/
+  const bad = []
+  for (const rel of [...new Set(imported)]) {
+    const src = readVueOrNull('src/' + rel)
+    if (!src) continue
+    const lines = src.split('\n')
+    let m
+    while ((m = NAV.exec(src))) {
+      const lineNo = src.slice(0, m.index).split('\n').length - 1
+      let name = null
+      for (let i = lineNo; i >= 0 && !name; i--) {
+        const h = lines[i].match(HEADER)
+        if (h && !/^\s*(if|for|while|switch|catch|function)\b/.test(lines[i])) name = h[1] || h[2]
+      }
+      const key = rel + '#' + name
+      if (WORKBENCH_NAV_ALLOWLIST[key]) continue
+      const body = name ? extractMethodBody(src, name + '(') : null
+      if (body && (body.includes('this.leaveWorkbench(') || body.includes('this.openSettingsTab('))) continue
+      bad.push(key)
+    }
+  }
+  return bad.length ? '直接跳页、没走注入的 leaveWorkbench: ' + [...new Set(bad)].join(', ') : null
 })
 
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----

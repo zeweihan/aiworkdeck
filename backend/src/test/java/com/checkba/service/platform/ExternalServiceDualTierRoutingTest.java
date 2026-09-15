@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.platform;
 
 import com.checkba.service.OcrService;
@@ -187,6 +190,44 @@ class ExternalServiceDualTierRoutingTest {
                     () -> service(ExternalServiceProvider.PLATFORM, gateway).searchCompany("某某有限公司", "TARGET"));
             assertEquals(GatewayException.Kind.SERVICE_DISABLED, e.getKind());
         }
+
+        // ---- 知识产权类（dev-board#179）：op = MCP 工具名，网关回 {raw:...}，
+        // 解析与法宝共用 McpResponseParser ----
+
+        @Test
+        @DisplayName("IPR 平台档：走网关的 qichacha/get_trademark_info，SSE 信封解析出正文")
+        void iprPlatformCallsGatewayAndParsesSse() {
+            String sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"商标 3 条\"}]}}\n";
+            PlatformGatewayClient gateway = gatewayReturning(
+                    "{\"raw\":" + cn.hutool.json.JSONUtil.quote(sse) + "}");
+
+            String text = service(ExternalServiceProvider.PLATFORM, gateway)
+                    .queryIprJson("get_trademark_info", "某某有限公司");
+
+            assertEquals("商标 3 条", text);
+            verify(gateway).call(eq("qichacha"), eq("get_trademark_info"), anyMap(), anyInt());
+        }
+
+        @Test
+        @DisplayName("IPR 非平台档：不打网关，抛可读的「仅官方版提供」")
+        void iprNonPlatformRefusesWithoutGateway() {
+            PlatformGatewayClient gateway = mock(PlatformGatewayClient.class);
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> service(ExternalServiceProvider.BYOK, gateway)
+                            .queryIprJson("get_trademark_info", "某某有限公司"));
+            assertTrue(e.getMessage().contains("仅官方版平台通道"));
+            verifyNoInteractions(gateway);
+        }
+
+        @Test
+        @DisplayName("IPR 平台档失败：kind 活着到调用方")
+        void iprPlatformFailureKeepsKind() {
+            PlatformGatewayClient gateway = gatewayFailing(GatewayException.Kind.NO_CREDITS);
+            GatewayException e = assertThrows(GatewayException.class,
+                    () -> service(ExternalServiceProvider.PLATFORM, gateway)
+                            .queryIprJson("get_patent_info", "某某有限公司"));
+            assertEquals(GatewayException.Kind.NO_CREDITS, e.getKind());
+        }
     }
 
     // =======================================================================
@@ -248,8 +289,10 @@ class ExternalServiceDualTierRoutingTest {
 
         private LegalTools tools(ExternalServiceProvider tier, PlatformGatewayClient gateway,
                                  McpClientService mcp) {
-            return new LegalTools(null, mcp, null,
-                    resolverWith(ExternalServiceProvider.PKULAW, tier), gateway);
+            return new LegalTools(null,
+                    new com.checkba.service.legal.PkulawChannel(
+                            mcp, resolverWith(ExternalServiceProvider.PKULAW, tier), gateway),
+                    null, null);
         }
 
         @Test

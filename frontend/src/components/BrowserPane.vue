@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="browser-pane">
     <view class="browser-toolbar">
@@ -21,6 +23,21 @@
         <text class="btn-icon">↵</text>
       </view>
 
+      <!-- 收藏本页：已收藏时星形实心（再点只提示，不重复入库；删除仍去收藏面板坞位） -->
+      <view
+        class="browser-btn"
+        :class="{ on: isCurrentFavorited, disabled: !canFavorite }"
+        @tap="favoriteCurrentPage"
+        :title="isCurrentFavorited ? $t('panels.bpFavorited') : $t('panels.bpAddFavorite')"
+      >
+        <svg class="btn-icon-svg" viewBox="0 0 24 24" :fill="isCurrentFavorited ? 'currentColor' : 'none'" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.star" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </view>
+
+      <!-- 收藏夹/快捷方式抽屉开关 -->
+      <view class="browser-btn" :class="{ on: shelfOpen }" @tap="toggleShelf" :title="$t('panels.bpShelf')">
+        <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bookmark" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </view>
+
       <view class="browser-btn" @tap="openInAppNewTab" :title="$t('panels.bpNewTab')">
         <text class="btn-icon">⧉</text>
       </view>
@@ -30,9 +47,66 @@
       </view>
     </view>
 
+    <!-- 收藏夹/快捷方式抽屉（shelf）。第一红线：必须参与文档流、挤压 .browser-body
+         （从而挤压 .browser-desktop-mount）的高度——桌面端 BrowserView 是原生层，
+         恒盖住所有 DOM，absolute 浮层会被整个盖住（toast 事故先例）。参与布局后
+         mount 高度变化由 ResizeObserver 触发 syncDesktopBounds，BrowserView 自动让位。 -->
+    <view v-if="shelfOpen" class="browser-shelf">
+      <view class="shelf-section">
+        <view class="shelf-head">
+          <text class="shelf-title">{{ $t('panels.bpShortcuts') }}</text>
+          <view class="shelf-action" :class="{ disabled: !canPin }" @tap="pinCurrentPage" :title="$t('panels.bpPinCurrent')">
+            <svg class="shelf-action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.plus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            <text>{{ $t('panels.bpPinCurrent') }}</text>
+          </view>
+        </view>
+        <view v-if="shortcuts.length === 0" class="shelf-empty">
+          <text>{{ $t('panels.bpShortcutsEmpty') }}</text>
+        </view>
+        <view v-else class="shelf-items">
+          <view v-for="(sc, si) in shortcuts" :key="'sc-' + si" class="shelf-card" @tap="openShelfUrl(sc.url)">
+            <view class="shelf-card-main">
+              <text class="shelf-card-title">{{ sc.title || hostOf(sc.url) || sc.url }}</text>
+              <text class="shelf-card-host">{{ hostOf(sc.url) }}</text>
+            </view>
+            <view class="shelf-card-x" :title="$t('panels.bpUnpin')" @tap.stop="removeShortcut(si)">
+              <text>✕</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <view class="shelf-section">
+        <view class="shelf-head">
+          <text class="shelf-title">{{ $t('panels.bpShelfFavorites') }}</text>
+        </view>
+        <view v-if="favLoading && shelfFavorites.length === 0" class="shelf-empty">
+          <text>{{ $t('panels.pfLoading') }}</text>
+        </view>
+        <view v-else-if="shelfFavorites.length === 0" class="shelf-empty">
+          <text>{{ $t('panels.bpShelfFavEmpty') }}</text>
+        </view>
+        <view v-else class="shelf-items">
+          <view v-for="fav in shelfFavorites" :key="'fv-' + fav.id" class="shelf-card" @tap="openShelfUrl(fav.sourceUrl)">
+            <view class="shelf-card-main">
+              <text class="shelf-card-title">{{ fav.title || fav.sourceHost || fav.sourceUrl }}</text>
+              <text class="shelf-card-host">{{ fav.sourceHost || hostOf(fav.sourceUrl) }}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+
     <view class="browser-body">
       <!-- Desktop(Electron): 使用 BrowserView（不在 DOM 内渲染，这里仅作为占位与计算 bounds） -->
       <view v-if="isDesktopBrowser" ref="desktopMount" class="browser-desktop-mount"></view>
+      <!-- BrowserView 创建失败时主进程没有对应 view（僵尸 tab）：面板会一直空白、
+           截图按 viewId 查表报 view not found。原生层不存在时这层 DOM 提示才可见 -->
+      <view v-if="isDesktopBrowser && desktopCreateError" class="browser-create-error">
+        <text class="bce-text">{{ $t('panels.bpCreateFailed') }}</text>
+        <text class="bce-detail">{{ desktopCreateError }}</text>
+        <view class="bce-retry" @tap="retryDesktopCreate"><text>{{ $t('panels.bpRetry') }}</text></view>
+      </view>
 
       <!-- H5: 使用 iframe 做最小可用网页展示 -->
       <!-- #ifdef H5 -->
@@ -59,9 +133,12 @@
 </template>
 
 <script>
-import { getApiBaseUrl } from '@/services/api.js'
+import { getApiBaseUrl, createProjectFavorite, getProjectFavorites, getMyFavorites } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { host } from '@/services/host.js'
+
+// 快捷方式存本机（uni 本地存储，全局共享、不分项目）：桌面单机形态够用
+const SHORTCUTS_STORAGE_KEY = 'awd_browser_shortcuts'
 
 export default {
   name: 'BrowserPane',
@@ -73,6 +150,11 @@ export default {
     tabId: {
       type: String,
       default: ''
+    },
+    // 收藏落库的目标项目；缺席时星形按钮禁用（收藏是项目维度的）
+    projectId: {
+      type: [Number, String],
+      default: null
     }
   },
   data() {
@@ -98,7 +180,19 @@ export default {
       _desktopReady: false,
       viewCanGoBack: false,
       viewCanGoForward: false,
-      isMobileMode: false
+      isMobileMode: false,
+      desktopCreateError: '',
+      // 当前页面标题（桌面端由主进程 title-updated / adoptViewState 喂进来；
+      // H5 代理只回报 URL_CHANGED，拿不到标题，收藏时退回域名）
+      pageTitle: '',
+      // 收藏夹/快捷方式抽屉
+      shelfOpen: false,
+      shortcuts: [],
+      favorites: [],
+      favLoading: false,
+      // 本次会话里刚收藏成功的 URL（乐观记账，列表刷新前星形就要实心）
+      localFavUrls: [],
+      _favSaving: false
     }
   },
   computed: {
@@ -133,6 +227,33 @@ export default {
         return `${base}/api/browser/proxy?url=${encodeURIComponent(raw)}&token=${encodeURIComponent(this.iframeToken)}`
       }
       return 'about:blank'
+    },
+    canFavorite() {
+      return !!this.projectId && /^https?:\/\//.test(this.currentUrl || '')
+    },
+    canPin() {
+      // 快捷方式只存本机，不需要项目
+      return /^https?:\/\//.test(this.currentUrl || '')
+    },
+    isCurrentFavorited() {
+      const key = this.favUrlKey(this.currentUrl)
+      if (!key) return false
+      if (this.localFavUrls.includes(key)) return true
+      return this.favorites.some(f => f && this.favUrlKey(f.sourceUrl) === key)
+    },
+    // 抽屉里的「收藏的页面」：只要 webmark 类（有 sourceUrl），并按 URL 去重
+    // （同一页的多条文字摘录只显示一张卡）
+    shelfFavorites() {
+      const seen = new Set()
+      const out = []
+      for (const f of this.favorites) {
+        if (!f || !f.sourceUrl) continue
+        const key = this.favUrlKey(f.sourceUrl)
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        out.push(f)
+      }
+      return out
     }
   },
   watch: {
@@ -153,6 +274,9 @@ export default {
     }
   },
   mounted() {
+    this.loadShortcuts()
+    // 星形按钮的实心态要在抽屉从未打开过时也正确，进来先拉一次收藏列表（轻量端点）
+    this.loadFavorites()
     if (this.isDesktopBrowser) {
       this._desktopViewId = (this.tabId || this.iframeToken || '').toString()
       this.setupDesktopBrowser()
@@ -202,6 +326,28 @@ export default {
     this._messageBound = false
   },
   methods: {
+    // BrowserView 创建失败此前只 console.warn 一声：tab 留在前端列表里但主进程
+    // 注册表查无此 view（僵尸 tab）——面板空白、截图报 view not found，且当次
+    // 会话内无任何自愈手段（用户反馈14）。失败必须落成可见错误态并给重试。
+    async createDesktopView() {
+      const api = host.browser
+      if (!api) return
+      try {
+        const res = await api.create({ id: this._desktopViewId, url: this.normalizeUrl(this.currentUrl || this.url) })
+        this.adoptViewState(res)
+        this.desktopCreateError = ''
+      } catch (e) {
+        this.desktopCreateError = (e && e.message) ? String(e.message) : String(e || 'create failed')
+        // eslint-disable-next-line no-console
+        console.warn('desktop browser create failed', e)
+      }
+    },
+    async retryDesktopCreate() {
+      await this.createDesktopView()
+      if (!this.desktopCreateError) {
+        this.$nextTick(() => requestAnimationFrame(() => this.syncDesktopBounds()))
+      }
+    },
     async setupDesktopBrowser() {
       const api = host.browser
       if (!api) return
@@ -220,7 +366,11 @@ export default {
           if (!data) return
           if (data.id && String(data.id) !== String(this._desktopViewId)) return
           const title = data.title ? String(data.title) : ''
-          if (title) this.$emit('title-change', title)
+          if (title) {
+            // 组件自己也留一份：收藏本页/钉快捷方式要用当前标题
+            this.pageTitle = title
+            this.$emit('title-change', title)
+          }
         } catch (e) {
           // ignore
         }
@@ -235,13 +385,7 @@ export default {
       }) : null
 
       // 创建（已有同 id 的保活 view 时是复用，主进程不会重新加载）
-      try {
-        const res = await api.create({ id: this._desktopViewId, url: this.normalizeUrl(this.currentUrl || this.url) })
-        this.adoptViewState(res)
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('desktop browser create failed', e)
-      }
+      await this.createDesktopView()
       this._desktopReady = true
 
       // 绑定尺寸变化：把 DOM 的 rect 传给主进程作为 BrowserView bounds
@@ -317,12 +461,17 @@ export default {
       if (url && url !== 'about:blank' && url !== this.currentUrl) {
         this.currentUrl = url
         this.inputUrl = url
+        // 换了页，旧标题作废（真标题随下面的 state.title 或 title-updated 补回来）
+        this.pageTitle = ''
         this.$emit('url-change', url)
       }
       // url-change 会把标签名退成域名（父级按 host 命名），标题随后补回来。
       // 复用旧 view 不会重新加载，等不到 page-title-updated，所以这里要主动带上。
       const title = state.title ? String(state.title) : ''
-      if (title) this.$emit('title-change', title)
+      if (title) {
+        this.pageTitle = title
+        this.$emit('title-change', title)
+      }
     },
     // H5：iframe 里的文档换了一页（点链接 / 站点自己重定向）。只更新"显示与记账"那一侧，
     // 绝不回写 iframeUrl —— 那会让已经站在新页上的 iframe 再加载一次。
@@ -335,6 +484,7 @@ export default {
       }
       this.currentUrl = next
       this.inputUrl = next
+      this.pageTitle = ''
       if (this._pendingNav && this.index >= 0) {
         // 我们刚要求加载的那一页被站点重定向走了：替换栈顶而不是新增一条，
         // 否则「后退」会回到那个只会再跳一次的地址，按钮看着能用其实在原地打转
@@ -376,6 +526,7 @@ export default {
       const next = this.normalizeUrl(u)
       this.currentUrl = next
       this.inputUrl = next === 'about:blank' ? '' : next
+      this.pageTitle = ''
 
       // Desktop：直接导航 BrowserView。历史由 view 自己维护（见 goBack/goForward），
       // 组件里那份 history 数组只服务 H5 的 iframe 模式。
@@ -470,6 +621,122 @@ export default {
     onIframeLoad(e) {
       // 由后端 proxy 注入脚本统一处理 _blank / window.open；这里无需再做同源注入
     },
+
+    // ===== 收藏本页 / 收藏夹与快捷方式抽屉 =====
+    // URL 判同的口径：忽略末尾斜杠（http://a.com 与 http://a.com/ 是同一页）
+    favUrlKey(u) {
+      const raw = String(u || '').trim()
+      if (!raw || !/^https?:\/\//.test(raw)) return ''
+      return raw.replace(/\/$/, '')
+    },
+    hostOf(u) {
+      try {
+        return u ? new URL(String(u)).host : ''
+      } catch (e) {
+        return ''
+      }
+    },
+    toggleShelf() {
+      this.shelfOpen = !this.shelfOpen
+      // 每次展开都重读一遍：快捷方式可能在别的浏览器标签实例里刚钉过（保活池里
+      // 每个标签一个组件实例、各持一份内存态），收藏也随时会从别的入口新增
+      if (this.shelfOpen) {
+        this.loadShortcuts()
+        this.loadFavorites()
+      }
+    },
+    async loadFavorites() {
+      if (this.favLoading) return
+      this.favLoading = true
+      try {
+        const pid = this.projectId ? (typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId) : null
+        const list = pid ? await getProjectFavorites(pid, '', 80) : await getMyFavorites()
+        const arr = Array.isArray(list) ? list : ((list && list.data) || [])
+        this.favorites = arr.filter(f => f && f.sourceUrl)
+      } catch (e) {
+        // 列表拉不到只影响星形态与抽屉展示，静默（抽屉里显示空态）
+      } finally {
+        this.favLoading = false
+      }
+    },
+    async favoriteCurrentPage() {
+      if (!this.canFavorite || this._favSaving) return
+      if (this.isCurrentFavorited) {
+        // 取「提示已收藏」而不是「再点取消收藏」：星形态来自按 URL 去重的列表，
+        // 同一页可能有多条文字摘录收藏，一键反删会连用户手工摘的内容一起删掉
+        uni.showToast({ title: this.$t('panels.bpAlreadyFavorited'), icon: 'none' })
+        return
+      }
+      this._favSaving = true
+      const url = this.currentUrl
+      try {
+        const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+        const h = this.hostOf(url)
+        const title = (this.pageTitle || '').trim() || h || url
+        const created = await createProjectFavorite(pid, {
+          title,
+          sourceUrl: url,
+          content: title,
+          imageBase64: '',
+          // 卡片右下角的来源域名读的是 meta.sourceHost，不写就永远空白（与 onWebMark 同口径）
+          meta: JSON.stringify({ kind: 'webmark', capturedAt: new Date().toISOString(), sourceUrl: url, title, sourceHost: h })
+        })
+        const favId = created && created.id ? created.id : (created && created.data && created.data.id ? created.data.id : null)
+        const key = this.favUrlKey(url)
+        if (key && !this.localFavUrls.includes(key)) this.localFavUrls.push(key)
+        this.loadFavorites()
+        // 可见反馈交给父级：打开收藏面板并高亮新卡片（toast 在桌面端会被原生
+        // BrowserView 盖住，星形变实心 + 面板高亮才是真实可见的反馈）
+        this.$emit('favorite-added', { id: favId, url, title })
+      } catch (e) {
+        // 失败提示同 onWebMark：桌面端走不被 BrowserView 遮挡的原生弹窗
+        if (host.app && host.app.confirm) {
+          host.app.confirm({ title: this.$t('panels.bpFavoriteFailed'), content: (e && e.message) || '' }).catch(() => {})
+        } else {
+          uni.showToast({ title: (e && e.message) || this.$t('panels.bpFavoriteFailed'), icon: 'none' })
+        }
+      } finally {
+        this._favSaving = false
+      }
+    },
+    loadShortcuts() {
+      try {
+        const raw = uni.getStorageSync(SHORTCUTS_STORAGE_KEY)
+        const arr = typeof raw === 'string' && raw ? JSON.parse(raw) : raw
+        this.shortcuts = Array.isArray(arr) ? arr.filter(s => s && s.url) : []
+      } catch (e) {
+        this.shortcuts = []
+      }
+    },
+    saveShortcuts() {
+      try {
+        uni.setStorageSync(SHORTCUTS_STORAGE_KEY, this.shortcuts)
+      } catch (e) {
+        // ignore
+      }
+    },
+    pinCurrentPage() {
+      if (!this.canPin) return
+      const url = this.currentUrl
+      const key = this.favUrlKey(url)
+      if (!key) return
+      if (this.shortcuts.some(s => this.favUrlKey(s.url) === key)) {
+        uni.showToast({ title: this.$t('panels.bpAlreadyPinned'), icon: 'none' })
+        return
+      }
+      const title = (this.pageTitle || '').trim() || this.hostOf(url) || url
+      this.shortcuts.push({ url, title })
+      this.saveShortcuts()
+    },
+    removeShortcut(index) {
+      this.shortcuts.splice(index, 1)
+      this.saveShortcuts()
+    },
+    openShelfUrl(url) {
+      if (!url) return
+      this.shelfOpen = false
+      this.navigate(url)
+    },
     async toggleMobileMode() {
       if (!this.isDesktopBrowser) return
       this.isMobileMode = !this.isMobileMode
@@ -501,7 +768,7 @@ export default {
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: #ffffff;
+  background: var(--awd-surface);
 }
 
 .browser-toolbar {
@@ -511,8 +778,8 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #ffffff;
+  border-bottom: 1px solid var(--awd-border);
+  background: var(--awd-surface);
 }
 
 .browser-btn {
@@ -523,20 +790,27 @@ export default {
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(148, 163, 184, 0.35);
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--awd-surface);
+  color: var(--awd-text);
   cursor: pointer;
 }
 
 .browser-btn.primary {
-  background: #12344D;
-  color: #fff;
+  background: var(--awd-info);
+  color: var(--awd-text-on-accent);
   border-color: transparent;
 }
 
 .browser-btn.disabled {
   opacity: 0.45;
   pointer-events: none;
+}
+
+/* 星形已收藏 / 抽屉展开：森林绿点缀，保持克制 */
+.browser-btn.on {
+  color: var(--awd-accent-text);
+  border-color: var(--awd-accent);
+  background: var(--awd-accent-soft);
 }
 
 .btn-icon {
@@ -551,32 +825,212 @@ export default {
   border: 1px solid rgba(148, 163, 184, 0.35);
   padding: 0 10px;
   font-size: 13px;
-  background: #fff;
+  background: var(--awd-surface);
+}
+
+/* 收藏夹/快捷方式抽屉：普通文档流元素（flex 列的一段），展开即挤压下方
+   .browser-body 的高度——绝不能 absolute 浮层（会被原生 BrowserView 盖住）。
+   flex-basis 240px、允许收缩：面板很矮时抽屉与 body 一起让步。 */
+.browser-shelf {
+  flex: 0 1 240px;
+  min-height: 96px;
+  overflow-y: auto;
+  padding: 10px 12px 12px;
+  background: var(--awd-bg);
+  border-bottom: 1px solid var(--awd-border);
+}
+
+.shelf-section + .shelf-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.shelf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.shelf-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--awd-text-2);
+  letter-spacing: 0.02em;
+}
+
+.shelf-action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--awd-accent);
+  border-radius: 999px;
+  color: var(--awd-accent-text);
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--awd-surface);
+}
+
+.shelf-action:hover {
+  background: var(--awd-accent-soft);
+  border-color: var(--awd-accent);
+}
+
+.shelf-action.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.shelf-action-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.shelf-empty {
+  font-size: 12px;
+  color: var(--awd-text-3);
+  padding: 6px 2px;
+}
+
+.shelf-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shelf-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 190px;
+  padding: 7px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: var(--awd-surface);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.shelf-card:hover {
+  border-color: var(--awd-accent);
+  box-shadow: 0 1px 4px rgba(26, 83, 54, 0.12);
+}
+
+.shelf-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.shelf-card-title {
+  font-size: 12px;
+  color: var(--awd-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelf-card-host {
+  font-size: 11px;
+  color: var(--awd-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelf-card-x {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--awd-text-3);
+  font-size: 11px;
+  visibility: hidden;
+}
+
+.shelf-card:hover .shelf-card-x {
+  visibility: visible;
+}
+
+.shelf-card-x:hover {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--awd-text-2);
 }
 
 .browser-body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* 供 .browser-create-error 绝对定位铺满 */
+  position: relative;
 }
 
 .browser-iframe {
   width: 100%;
   height: 100%;
   border: none;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .browser-desktop-mount {
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .browser-fallback {
   padding: 16px;
-  color: #666666;
+  color: var(--awd-text-2);
+}
+
+.browser-create-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--awd-surface);
+  padding: 24px;
+  text-align: center;
+}
+
+.bce-text {
+  font-size: 14px;
+  color: var(--awd-text-2);
+}
+
+.bce-detail {
+  font-size: 12px;
+  color: var(--awd-text-3);
+  word-break: break-all;
+  max-width: 420px;
+}
+
+.bce-retry {
+  margin-top: 4px;
+  padding: 7px 18px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 8px;
+  background: var(--awd-surface);
+  color: var(--awd-accent-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bce-retry:hover {
+  border-color: var(--awd-accent);
+  background: var(--awd-accent-soft);
 }
 
 .btn-icon-svg {

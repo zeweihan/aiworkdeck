@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const test = require('node:test')
 const assert = require('node:assert')
 const path = require('path')
@@ -26,13 +28,16 @@ function fakeDescriptor(overrides) {
   }, overrides)
 }
 
-function makeManager() {
-  return createServiceManager({
+function makeManager(t) {
+  const mgr = createServiceManager({
     packaged: false,
     resourcesPath: null,
     dataDir: require('os').tmpdir(),
     projectRoot: path.join(__dirname, '..')
   })
+  // 断言失败时也要关闭子服务，否则测试报告失败后仍会挂到 CI 超时。
+  t.after(() => mgr.stopAll())
+  return mgr
 }
 
 test('findFreePort returns a usable port', async () => {
@@ -41,25 +46,29 @@ test('findFreePort returns a usable port', async () => {
   assert.strictEqual(await isPortOpen(port), false)
 })
 
-test('start/stop lifecycle: spawns, waits for port, stops', async () => {
-  const mgr = makeManager()
+test('start/stop lifecycle: spawns, waits for port, stops', async (t) => {
+  const mgr = makeManager(t)
   mgr.register(fakeDescriptor())
   await mgr.allocatePorts()
   const res = await mgr.start('fake')
   assert.strictEqual(res.ok, true)
   assert.strictEqual(res.reused, false)
-  assert.strictEqual(await isPortOpen(mgr.ports.fake), true)
+  const response = await fetch(`http://127.0.0.1:${mgr.ports.fake}`, {
+    signal: AbortSignal.timeout(3000)
+  })
+  assert.strictEqual(response.status, 200)
+  assert.strictEqual(await response.text(), 'ok')
   await mgr.stop('fake')
   assert.strictEqual(await isPortOpen(mgr.ports.fake), false)
 })
 
-test('reuses already-open port without spawning', async () => {
+test('reuses already-open port without spawning', async (t) => {
   const http = require('http')
   const server = http.createServer((req, res) => res.end('ok'))
   const port = await findFreePort()
   await new Promise((r) => server.listen(port, '127.0.0.1', r))
   try {
-    const mgr = makeManager()
+    const mgr = makeManager(t)
     mgr.register(fakeDescriptor({ port: async () => port }))
     await mgr.allocatePorts()
     const res = await mgr.start('fake')
@@ -69,14 +78,14 @@ test('reuses already-open port without spawning', async () => {
   }
 })
 
-test('verifyReuse=false triggers reallocatePort instead of reusing foreign process', async () => {
+test('verifyReuse=false triggers reallocatePort instead of reusing foreign process', async (t) => {
   const http = require('http')
   // 陌生进程占着首选端口
   const foreign = http.createServer((req, res) => res.end('not ours'))
   const occupied = await findFreePort()
   await new Promise((r) => foreign.listen(occupied, '127.0.0.1', r))
   try {
-    const mgr = makeManager()
+    const mgr = makeManager(t)
     mgr.register(fakeDescriptor({
       port: async () => occupied,
       verifyReuse: async () => false,
@@ -93,13 +102,13 @@ test('verifyReuse=false triggers reallocatePort instead of reusing foreign proce
   }
 })
 
-test('verifyReuse=true keeps old reuse semantics', async () => {
+test('verifyReuse=true keeps old reuse semantics', async (t) => {
   const http = require('http')
   const server = http.createServer((req, res) => res.end('ok'))
   const port = await findFreePort()
   await new Promise((r) => server.listen(port, '127.0.0.1', r))
   try {
-    const mgr = makeManager()
+    const mgr = makeManager(t)
     mgr.register(fakeDescriptor({ port: async () => port, verifyReuse: async () => true }))
     await mgr.allocatePorts()
     const res = await mgr.start('fake')
@@ -109,32 +118,72 @@ test('verifyReuse=true keeps old reuse semantics', async () => {
   }
 })
 
-test('backend allocator walks the 5269/5369/5169 chain past a foreign listener', async () => {
-  // 直接驱动 allocateBackendPort 的探测逻辑：占住 5269（若本机空闲），期望分配落到 5369
+test('backend allocator walks the 5269/5369/5169 chain past a foreign listener', async (t) => {
+  // 直接驱动 allocateBackendPort 的探测逻辑：占住 5269（若本机空闲），期望分配落到 5369（或
+  // 5169，如果 5369 恰好也被本机其它真实进程占用）。
+  //
+  // 原实现两处 `|| port > 1024` 让断言恒真——findFreePort() 兜底本来就保证 >1024，
+  // 这个析取分支把"分配器真的按 5269→5369→5169 顺序走链"这条断言完全架空，标题写的
+  // 场景从未被验证过。删掉之后断言收紧为「必须落在链上的下一跳」；当本机环境没法
+  // 建立受控前提（5269/5369/5169 已经被别的真实进程占着，不知道分配器该落在哪）时，
+  // 用 t.skip 如实说明，而不是继续放宽断言假装测过。
   const net = require('net')
   const { createBackendDescriptor } = require('../main/services/backend-service')
   const d = createBackendDescriptor()
   const holder = net.createServer()
   const first = await new Promise((resolve) => {
-    holder.once('error', () => resolve(null)) // 5269 本机已被真实占用：跳过该断言前提
+    holder.once('error', () => resolve(null)) // 5269 本机已被真实占用：没法建立受控前提
     holder.listen(5269, '127.0.0.1', () => resolve(5269))
   })
+  if (!first) {
+    t.skip('port 5269 already in use on this machine; cannot set up the controlled precondition')
+    return
+  }
   try {
-    const port = await d.port({ packaged: true })
-    if (first) {
-      // 5269 被占且不是我们的后端（无 /api/admin/wizard 响应）→ 应降级到 5369（或更后）
-      assert.notStrictEqual(port, 5269)
-      assert.ok([5369, 5169].includes(port) || port > 1024)
-    } else {
-      assert.ok([5269, 5369, 5169].includes(port) || port > 1024)
+    // 5369/5169 也必须是真空闲的，断言才有意义；否则分配器合理地会继续下探甚至
+    // 退到 findFreePort() 的随机端口——那是本机环境凑巧全占用，不是代码坏了。
+    if ((await isPortOpen(5369)) || (await isPortOpen(5169))) {
+      t.skip('port 5369 or 5169 already in use on this machine; chain would legitimately fall through further')
+      return
     }
+    const port = await d.port({ packaged: true })
+    // 5269 被占且不是我们的后端（无 /api/admin/wizard 响应）→ 应降级到 5369（或 5169）
+    assert.notStrictEqual(port, 5269)
+    assert.ok([5369, 5169].includes(port))
   } finally {
     holder.close()
   }
 })
 
-test('falls through failed candidate to next command', async () => {
-  const mgr = makeManager()
+test('spawned backend env.SERVER_PORT always follows ctx.ports.backend, not an inherited SERVER_PORT', () => {
+  // 原实现是 `if (!env.SERVER_PORT) env.SERVER_PORT = String(ctx.ports.backend)`——
+  // 宿主 shell/环境如果恰好已经设过 SERVER_PORT（不少框架的常见变量名），这个判断
+  // 会让继承值赢，JVM 绑到一个 ServiceManager 根本不知道的端口上；waitStartOrExit
+  // 还在死等 ctx.ports.backend 那个端口开放，永远等不到，把明明健康的 JVM 当启动
+  // 失败杀掉重试。ctx.ports.backend 是 allocateBackendPort() 已经选定、渲染层也据此
+  // 注入 apiBaseUrl 的唯一真源，必须无条件赢过任何继承值。
+  const { createBackendDescriptor } = require('../main/services/backend-service')
+  const d = createBackendDescriptor()
+  const prevServerPort = process.env.SERVER_PORT
+  process.env.SERVER_PORT = '6001' // 模拟宿主环境已经设过这个变量，且与分配到的端口不同
+  try {
+    const ctx = {
+      packaged: false,
+      resourcesPath: null,
+      dataDir: require('os').tmpdir(),
+      projectRoot: path.join(__dirname, '..'),
+      ports: { backend: 5269 }
+    }
+    const cmds = d.commands(ctx)
+    assert.strictEqual(cmds[0].env.SERVER_PORT, '5269')
+  } finally {
+    if (prevServerPort === undefined) delete process.env.SERVER_PORT
+    else process.env.SERVER_PORT = prevServerPort
+  }
+})
+
+test('falls through failed candidate to next command', async (t) => {
+  const mgr = makeManager(t)
   mgr.register(fakeDescriptor({
     commands: (ctx) => [
       // 第一个候选立刻退出（崩溃路径）

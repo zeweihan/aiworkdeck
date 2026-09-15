@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.Project;
@@ -47,6 +50,7 @@ class LocalProjectServiceTest {
     @Autowired private ProjectRepository projectRepository;
     @Autowired private ProjectMemberRepository projectMemberRepository;
     @Autowired private ProjectFileRepository projectFileRepository;
+    @Autowired private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     private LocalProjectService svc;
     private ProjectFileService projectFileService;
@@ -70,7 +74,8 @@ class LocalProjectServiceTest {
                 mock(com.checkba.version.WorkSessionService.class),
                 mock(UserService.class),
                 mock(com.checkba.service.quota.StageQuotaService.class),
-                mock(com.checkba.service.telemetry.TelemetryService.class));
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                mock(com.checkba.service.evidence.EvidenceLinkService.class));
 
         ProjectMemberService memberService = mock(ProjectMemberService.class);
         when(memberService.hasReadPermission(anyLong(), anyLong())).thenReturn(true);
@@ -78,7 +83,8 @@ class LocalProjectServiceTest {
         svc = new LocalProjectService(projectRepository, projectMemberRepository,
                 projectFileRepository, projectFileService, memberService, resolver,
                 mock(org.springframework.context.ApplicationEventPublisher.class),
-                mock(com.checkba.service.telemetry.TelemetryService.class));
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                transactionManager);
     }
 
     private Path userFolder(@TempDir Path tmp) {
@@ -113,6 +119,37 @@ class LocalProjectServiceTest {
         ProjectFile memo = rows.stream().filter(f -> f.getName().equals("备忘录.txt")).findFirst().orElseThrow();
         assertEquals(sub.getId(), memo.getParentId());
         assertEquals("projects/" + r.project().getId() + "/sub/备忘录.txt", memo.getFilePath());
+    }
+
+
+    /**
+     * Word/WPS 打开 .docx 时会在同目录落一个 `~$合同.docx` 锁文件（dev-board#463）。
+     * 它不以点开头，旧的隐藏项规则拦不住，于是：进资源管理器 → Word 关闭删掉它 →
+     * 对账把它软删进回收站，一次开关文档就留一个幽灵，还顺带触发一次版本记录空转。
+     * 这里两半都要断：首次导入不进库，watcher 驱动的 reconcile 也不进库。
+     */
+    @Test
+    void skipsOfficeLockFilesOnImportAndReconcile(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "x");
+        Files.writeString(folder.resolve("~$合同.docx"), "lock");
+
+        LocalProjectService.OpenLocalResult r = svc.openLocalFolder(
+                folder.toString(), false, null, "合同.docx", 1L);
+        Long pid = r.project().getId();
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertTrue(rows.stream().noneMatch(f -> f.getName().startsWith("~$")),
+                "Office 锁文件不得进库: " + rows);
+        assertEquals(1, rows.size(), "只有 合同.docx 一行: " + rows);
+
+        // watcher 路径：Word 再开一次文档，对账不能把新的锁文件收进来
+        Files.writeString(folder.resolve("~$备忘录.docx"), "lock2");
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> after = projectFileRepository.findByProjectId(pid);
+        assertTrue(after.stream().noneMatch(f -> f.getName().startsWith("~$")),
+                "对账同样不得把 Office 锁文件收进来: " + after);
+        assertEquals(1, after.size(), "对账后仍只有 合同.docx 一行: " + after);
     }
 
     @Test
@@ -229,6 +266,90 @@ class LocalProjectServiceTest {
     }
 
     /**
+     * importFolder 在扫描条目数达到 MAX_IMPORT_ENTRIES 上限时会置位 ImportStats.truncated，
+     * 但 reconcileProject 此前只读 stats.changed，truncated 被整个丢弃——ReconcileResult
+     * 没有字段承载它，watcher 触发的后台对账因此全静默：超出上限的文件永远不进文件树，
+     * 无日志无 API 信号。openLocalFolder/OpenLocalResult 早就正确处理了同一个 stats.truncated
+     * （见 reconcileImportsNewAndSoftDeletesVanished 之外的 openLocalFolder 路径），
+     * 这里补上 reconcileProject 这一侧。
+     */
+    @Test
+    void reconcileReportsTruncationWhenImportHitsTheCap(@TempDir Path folder) throws Exception {
+        // 上限覆盖成一个小值：真实生产上限是 30000，为了触发截断真建这么多文件
+        // 会是几十分钟、几万个 inode 的测试，不能进 CI（dev-board#107 单元 F1 复核）。
+        svc.setMaxImportEntriesForTest(50);
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        int overCap = 55;
+        for (int i = 0; i < overCap; i++) {
+            Files.writeString(folder.resolve("f" + i + ".txt"), "x");
+        }
+
+        LocalProjectService.ReconcileResult r = svc.reconcileProject(projectId);
+        assertTrue(r.truncated(), "扫描条目数超过上限时，对账结果必须报出截断，否则超限文件永远静默不进文件树");
+        assertEquals(5, r.truncatedCount(), "55 项超出上限 50，未纳入的应正好是 5 项");
+    }
+
+    /**
+     * Files.walkFileTree 的 maxDepth 参数在深度封顶时是"静默"的：preVisitDirectory/visitFile
+     * 对超出 MAX_IMPORT_DEPTH 的目录/文件根本不会被调用，没有任何一次遍历回调会执行到"置位
+     * truncated"这行代码——与 MAX_IMPORT_ENTRIES 上限不同，那个上限的判断天然长在每次回调
+     * 内部，有机会置位。深层文件因此永远静默不进文件树，无日志无 API 信号。
+     */
+    @Test
+    void reportsTruncationWhenNestingExceedsMaxDepth(@TempDir Path folder) throws Exception {
+        Path deepest = folder;
+        for (int i = 1; i <= LocalProjectService.MAX_IMPORT_DEPTH + 1; i++) {
+            deepest = deepest.resolve("d" + i);
+        }
+        Files.createDirectories(deepest);
+        Files.writeString(deepest.resolve("leaf.txt"), "x");
+
+        LocalProjectService.OpenLocalResult r = svc.openLocalFolder(folder.toString(), false, null, null, 1L);
+
+        assertTrue(r.truncated(),
+                "深度超过 MAX_IMPORT_DEPTH 时必须报出截断，否则深层文件永远静默不进文件树且无任何信号");
+    }
+
+    /**
+     * macOS 默认的 APFS/HFS+ 等大小写不敏感、大小写保留的文件系统上，仅改大小写的重命名
+     * （"Docs" -> "docs"）之后：importFolder 的 rowKey 按大小写敏感比对，识别不出这是同一个
+     * 物理目录，会为新大小写建一个新行；而删除同步那一侧，旧行的 Files.exists(root.resolve("Docs"))
+     * 在大小写不敏感文件系统上依然为 true（不敏感匹配命中了同一个物理目录），永远不会被判定
+     * 为缺失——旧行从此成为再也清不掉的永久幽灵行。
+     *
+     * 只在真正大小写不敏感、大小写保留的文件系统上才能复现，用探测式 Assumption 而不是按
+     * 操作系统名称猜测（CI 若跑在大小写敏感的文件系统上，用例据此跳过，不制造假红/假绿）。
+     */
+    @Test
+    void caseOnlyRenameOnCaseInsensitiveFsRetiresStaleGhostRow(@TempDir Path folder) throws Exception {
+        Files.createDirectories(folder.resolve("Docs"));
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        boolean caseInsensitiveAndPreserving = Files.exists(folder.resolve("docs"));
+        org.junit.jupiter.api.Assumptions.assumeTrue(caseInsensitiveAndPreserving,
+                "当前文件系统大小写敏感，跳过（此缺陷只在大小写不敏感盘上出现）");
+
+        // 大小写重命名不能直接 Files.move("Docs", "docs")：在 APFS 这类大小写不敏感盘上，
+        // rename(2) 系统调用发现新旧路径解析到同一个物理目录时按 POSIX 语义直接判定"无事可做"，
+        // 连显示大小写都不会更新（实测：mv 走 Finder/shell 的两步改名会真的生效，
+        // 直接单步 Files.move 则是空操作）——这里用同样的"先改到临时名、再改成目标名"
+        // 两步手法，制造出与真实 Finder 改名完全相同的终态：磁盘上的真实大小写已经是 "docs"。
+        Path tmp = folder.resolve("Docs__awd_test_tmp__");
+        Files.move(folder.resolve("Docs"), tmp);
+        Files.move(tmp, folder.resolve("docs"));
+
+        svc.reconcileProject(projectId);
+
+        List<ProjectFile> aliveFolders = projectFileRepository.findByProjectId(projectId).stream()
+                .filter(f -> Boolean.TRUE.equals(f.getIsFolder()) && !Boolean.TRUE.equals(f.getIsDeleted()))
+                .toList();
+        assertEquals(1, aliveFolders.size(),
+                "改大小写重命名后应只剩一个存活的文件夹行，旧大小写那行必须被对账清掉: " + aliveFolders);
+        assertEquals("docs", aliveFolders.get(0).getName(), "存活的应该是新大小写那一行");
+    }
+
+    /**
      * 全链路冒烟：文件系统事件 → 防抖 → reconcileProject → 落库。
      * NOT_SUPPORTED：默认测试事务不提交，watcher 线程的新事务看不见项目行，链路必假。
      *
@@ -288,6 +409,32 @@ class LocalProjectServiceTest {
         } finally {
             watch.shutdown();
         }
+    }
+
+    /**
+     * dev-board#457：Agent 的 create_folder 把「放项目根目录」写成 parentFolderId=0，
+     * 库里没有 id=0 这一行。前端 normalizeParentId 把 0 当根画出来，后端的查重却把
+     * 0 当成另一个父节点——文件一落进磁盘上那个目录，对账按 rowKey("root/名字") 找不到
+     * 这条 parent_id=0 的行，就再建一条真正的根行，资源管理器顶部于是多出一个重复节点，
+     * 刷新/重启都在（孤儿那条的物理路径解析在缺失的父节点处断链，正好落回根，
+     * 目录存在 → 删除同步判它「还在」→ 永不清理）。
+     */
+    @Test
+    void zeroParentFolderDoesNotSpawnDuplicateRootRow(@TempDir Path folder) throws Exception {
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        projectFileService.createFolder(projectId, 0L, "01-主体资格与章程", 1L);
+        Files.createDirectories(folder.resolve("01-主体资格与章程"));
+        Files.writeString(folder.resolve("01-主体资格与章程/公司章程.docx"), "x");
+
+        svc.reconcileProject(projectId);
+
+        List<ProjectFile> live = projectFileRepository.findByProjectId(projectId).stream()
+                .filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
+                .filter(f -> "01-主体资格与章程".equals(f.getName()))
+                .toList();
+        assertEquals(1, live.size(), "同一个文件夹在资源管理器里只能有一个节点: " + live);
+        assertNull(live.get(0).getParentId(), "它就该是一条普通的根行，parent_id 必须是 null");
     }
 
     @Test

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const test = require('node:test')
 const assert = require('node:assert')
 const fs = require('fs')
@@ -7,7 +9,7 @@ const http = require('http')
 const crypto = require('crypto')
 const { spawnSync } = require('child_process')
 const overlay = require('../main/services/overlay')
-const { createUpdateService } = require('../main/services/update-service')
+const { createUpdateService, fetchUrl } = require('../main/services/update-service')
 
 // 端到端（本地 HTTP 伪造更新服务器）：manifest 验签 → 组件下载 → sha256 →
 // 解压 → 激活 → 状态机；以及验签失败 / 哈希不符 / 降级拒绝三条失败路径。
@@ -208,6 +210,60 @@ test('大版本：latestMajor 更高时给出全量下载引导，不下补丁',
   assert.strictEqual(overlay.readCurrent(ctx), null)
 })
 
+test('多镜像回退：组件首个 URL 失败时 fetchFirst 落到第二个 URL，流程仍走完', async (t) => {
+  // dev-board#74 稳定性审计：fetchFirst 按 urls 顺序回退的逻辑写了但从没被测过——
+  // 全文件所有用例的 urls 都是单元素数组，把 fetchFirst 改成直接
+  // `return fetchUrl(urls[0], opts)`（砍掉回退），既有六个用例照样全绿。
+  // 这里给组件配两个 url：第一个是必死地址（127.0.0.1:1，特权端口，本机不可能有
+  // 监听，会立刻 ECONNREFUSED 而不是超时挂起），第二个是真正的测试服务器，
+  // 断言整条「验签+下载+校验+激活」事件序仍然正确完成——证明用的是回退后的
+  // 第二个 URL，不是第一个失败就直接放弃。
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const ctx = { packaged: true, dataDir: root, appVersion: '0.11.0' }
+
+  const jarTar = makeTarGz({ 'app.jar': 'patched-jar-bytes' }, root)
+  const { server, origin } = await serve({})
+  t.after(() => server.close())
+  server.removeAllListeners('request')
+  const manifest = {
+    schema: 1,
+    channels: {
+      '0.11': {
+        latest: '0.11.2',
+        components: [
+          {
+            name: 'backend-app',
+            version: '0.11.2',
+            sha256: crypto.createHash('sha256').update(jarTar).digest('hex'),
+            size: jarTar.length,
+            urls: ['http://127.0.0.1:1/dead', origin + '/backend.tar.gz']
+          }
+        ]
+      }
+    }
+  }
+  const routes = signedManifestRoutes(manifest, { '/backend.tar.gz': jarTar })
+  server.on('request', (req, res) => {
+    const body = routes[req.url]
+    if (body === undefined) return void res.writeHead(404).end()
+    res.writeHead(200).end(typeof body === 'function' ? body() : body)
+  })
+
+  testEnv(t, origin, pubPem)
+  const events = []
+  const svc = createUpdateService(ctx, { extractTar, onEvent: (e) => events.push(e.type) })
+  const state = await svc.check()
+
+  assert.strictEqual(state.phase, 'ready')
+  assert.deepStrictEqual(state.available, { version: '0.11.2' })
+  assert.strictEqual(overlay.effectiveVersion(ctx), '0.11.2')
+  const jarDir = overlay.componentDir(ctx, 'backend-app')
+  assert.strictEqual(fs.readFileSync(path.join(jarDir, 'app.jar'), 'utf8'), 'patched-jar-bytes')
+  assert.ok(events.includes('checking') && events.includes('downloading') && events.includes('ready'))
+  assert.ok(!fs.existsSync(overlay.stagingDir(ctx)))
+})
+
 test('组件级去重：本机已有同版本组件时跳过下载仍推进指针', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -233,4 +289,71 @@ test('组件级去重：本机已有同版本组件时跳过下载仍推进指�
   assert.strictEqual(state.phase, 'ready')
   assert.strictEqual(overlay.effectiveVersion(ctx), '0.11.2')
   assert.strictEqual(overlay.readCurrent(ctx).components['backend-app'].version, '0.11.1')
+})
+
+// dev-board#74 稳定性审计：fetchUrl 在任何失败路径上都不关闭已创建的 WriteStream。
+// 中途断连 / 超时 / 超过 maxBytes 三条路都只 reject(e) 或 req.destroy(e)，
+// out 的 fd 一直挂着；而 fetchFirst 失败后会用同一个 toFile 换下个镜像重试，
+// 于是每次镜像回退、每个 6 小时检查周期都漏一个 fd。
+// 口径：失败时必须 out.destroy()，断言点是 WriteStream 真的 emit 了 'close'（fd 已关）。
+function waitClosed(stream, ms = 2000) {
+  return new Promise((resolve, reject) => {
+    if (stream.closed) return resolve()
+    const t = setTimeout(() => reject(new Error('WriteStream 未在超时内 close，fd 泄漏')), ms)
+    stream.once('close', () => { clearTimeout(t); resolve() })
+  })
+}
+
+// 把 fs.createWriteStream 换成会记账的版本，拿到 fetchUrl 内部创建的那个流
+function spyWriteStreams(t) {
+  const created = []
+  const orig = fs.createWriteStream
+  fs.createWriteStream = function (...args) {
+    const s = orig.apply(fs, args)
+    created.push(s)
+    return s
+  }
+  t.after(() => { fs.createWriteStream = orig })
+  return created
+}
+
+test('下载中途断连：WriteStream 被销毁，不泄漏文件描述符', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-fd-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  // 先发头 + 半截 body，再直接掐 socket
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Length': '10000' })
+    res.write('partial-body')
+    setTimeout(() => res.socket.destroy(), 20)
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  t.after(() => server.close())
+  const url = `http://127.0.0.1:${server.address().port}/x.tar.gz`
+
+  const created = spyWriteStreams(t)
+  await assert.rejects(() => fetchUrl(url, { toFile: path.join(root, 'x.tar.gz'), timeoutMs: 5000 }))
+  assert.strictEqual(created.length, 1, 'fetchUrl 应当只建了一个 WriteStream')
+  await waitClosed(created[0])
+})
+
+test('超过 maxBytes 上限：WriteStream 被销毁，不泄漏文件描述符', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-fd-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const big = Buffer.alloc(64 * 1024, 0x41)
+  const server = http.createServer((req, res) => {
+    res.writeHead(200)
+    const tick = setInterval(() => { if (!res.write(big)) { /* 背压交给 res */ } }, 5)
+    res.on('close', () => clearInterval(tick))
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  t.after(() => server.close())
+  const url = `http://127.0.0.1:${server.address().port}/huge.tar.gz`
+
+  const created = spyWriteStreams(t)
+  await assert.rejects(
+    () => fetchUrl(url, { toFile: path.join(root, 'huge.tar.gz'), maxBytes: 32 * 1024, timeoutMs: 5000 }),
+    /大小上限/
+  )
+  assert.strictEqual(created.length, 1)
+  await waitClosed(created[0])
 })

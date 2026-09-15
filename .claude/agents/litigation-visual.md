@@ -19,21 +19,38 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 ## 关键文件
 
 **引擎（vendor，别手改）**
-- `litviz/engine/` — 上游 mqc-litigation-visual-redraw v1.0.2（作者缪奇川，MIT）原样拷贝。
+- `litviz/skills/mqc-litigation-visual-redraw/` — 重画引擎 v1.0.2（作者缪奇川，MIT）原样拷贝，
+  2026-08-25 前叫 `litviz/engine/`。上游已并入 monorepo
+  MiaoQichuan/new-litigation-visualization。
+- `litviz/skills/mqc-timeline-master/` — 时间轴大师 v2.0.1（同一上游、同作者）：从原始卷宗
+  直接出案件时间轴的确定性管线（多泳道/双方对读/纵向分页/忠实性子序列校验）。
+  **两个目录名必须保持上游原名**：时间轴脚本与测试有十几处
+  `../../mqc-litigation-visual-redraw/scripts` 兄弟目录硬引用（共享内核机制），
+  保持原名即原生成立，升级零补丁。
 - `litviz/UPSTREAM.md` — vendor 来源、commit、升级步骤。
 - `litviz/PATCHES.md` — 三条本地补丁（代码里搜 `[AWD-PATCH n]`）。升级时逐条复核。
 - `litviz/README.md` — 分工、命令、依赖矩阵。
 
 **我们写的**
 - `litviz/cli.py` — **机器契约层，后端唯一入口**。stdout 恰好一行 JSON，引擎的人类
-  输出全转 stderr。子命令 doctor / validate / checkpoint / render。
-- `litviz/tests/test_cli.py` — 契约测试 + 连带跑上游 149 项回归。
+  输出全转 stderr。子命令 doctor / validate / checkpoint / render / **timeline**
+  （驱动时间轴大师分段管线：--workdir 状态目录 + --stage 阶段白名单，
+  render 阶段代建输出目录并收产物清单，mark 支持 --emphasis-source）。
+- `litviz/tests/test_cli.py` — 契约测试（含时间轴管线端到端）+ 连带跑上游两套回归。
 
 **后端**
 - `service/ai/LitigationVisualService.java` — 进程边界：定位 Python 与 litviz 目录、
   跑 cli.py、解 JSON。含参考文档读取（带路径穿越防护）。
 - `service/ai/tools/LitigationVisualTools.java` — 三个 @Tool：`litigation_reference`
   （渐进披露读规范）、`litigation_checkpoint`（三问）、`litigation_render`（出图）。
+- `service/ai/tools/LitigationTimelineTools.java` — 时间轴大师的三个 @Tool：
+  `litigation_timeline_start`（读材料、回逐句编号清单）、`litigation_timeline_step`
+  （逐阶段推进，五轮勾选走 `<question>` 协议）、`litigation_timeline_render`。
+  一个会话一个 workdir（LRU 32 挤出即删）；模型产出（verdicts/parts/skeleton/items）
+  一律经 modelFilesJson 参数提交，由 Java 写进 workdir；材料由 Java 用 Tika 预转成
+  UTF-8 文本再进管线（上游 read_source 只认 UTF-8 文本与 python-docx，后者打包
+  运行时没有）；溯源索引由服务端按管线落的 `-trace.json` 用 POI 出 Word 三线表
+  （上游的 node 路线桌面端不可用）。守卫：`LitigationTimelineFlowTest`。
 - `service/ai/LitigationPngService.java` — SVG→PNG（Batik，纯 Java）。位图是插进文书
   的那一环，见「已知地雷」里 PNG 那条。
 - `service/LitigationVisualPanelService.java` — 面板后端：图廊、换风格、拼 kickoff prompt。
@@ -54,7 +71,7 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 
 **前端**
 - `components/LitigationVisualPanel.vue` — 左栏面板：选材料 → 开始出图 → 图廊 →
-  打开 / 编辑（进 draw.io）/ 换风格。
+  打开（整行点开＝进 draw.io 的可编辑版）/ 看母版（.svg）/ 换风格。
   **面板自己不画标题**（由外壳 `.sidebar-header` 统一出，2026-08-17 起；此前同屏出现两次），
   刷新按钮挪进「本项目的图」分组头的右侧。图廊是**行式列表不是卡片**：整行点开＝打开，
   「编辑」与「换风格」在悬停时才浮出来，换风格是三选一的分段控件而不是三个并列按钮——
@@ -64,21 +81,76 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 - `pages/project-overview/project-overview.vue` — 面板分支 + 三个 handler
   （`handleLitigationStart` / `handleLitigationOpenFile` / `handleLitigationScopeSelect`）。
 
-**打包**
-- `desktop/scripts/prepare-graphviz.js` — 烙最小 graphviz（约 4MB）。
-- `desktop/package.json` extraResources — `graphviz` / `skills` / `litviz` 三项。
-- `desktop/main/services/backend-service.js` — 打包态注入 `LITVIZ_DIR` /
-  `AWD_PYTHON_HOME` / `LITVIZ_GRAPHVIZ_DIR` / `AI_SKILLS_BUILTIN_DIR`。
+**打包与分发（2026-08 起转原生资源包，规范 docs/NATIVE_PACK_DISTRIBUTION.md）**
+- litviz / graphviz / drawio 三类重资源改走 native pack 运行时下载
+  （`~/.aiworkdeck/packs/litigation-visual/`），skill.yml 声明
+  `requires_pack: litigation-visual`。资源解析优先级（2026-09 起）：显式 config
+  `litviz.dir` → env `LITVIZ_DIR`（打包态的随包内置就走这一档）→ **pack current 目录**
+  → dev 目录爬升。老版本随包资源仍优先于 pack，不强迫重下。
+  extraResources 摘除在 pack 上架双镜像验证后单独出 PR（随 v0.21.0）。
+- `desktop/scripts/prepare-graphviz.js` — 烙最小 graphviz（约 4MB）；现服务于
+  pack 构建（`desktop/scripts/build-pack.js`，workflow `pack-release.yml`）。
+- `desktop/package.json` extraResources — 摘除前仍含 `graphviz` / `skills` /
+  `litviz` 三项（`skills` 永久保留，文本很小）。
+- `desktop/main/services/backend-service.js` — 打包态注入 `LITVIZ_DIR`（有
+  existsSync 守卫，目录不在不注入）/ `AWD_PYTHON_HOME` / `LITVIZ_GRAPHVIZ_DIR` /
+  `AI_SKILLS_BUILTIN_DIR`。python 运行时不进 pack（pysvc 还要用，永远随包）。
+- `desktop/main/drawio-server.js` — 多根查找：env 覆盖 → 内置 Resources →
+  pack current（读 current.json，revoked / 无 .pack-complete 不参与），
+  装完即生效不重启。
 
 ## 核心契约
 
 **semantic-map.json**：`layout` + `title_text` + 各布局的数据字段 + `provenance` +
-`checkpoint`。schema 在 `litviz/engine/schemas/semantic-map.schema.json`，
+`checkpoint`。schema 在 `litviz/skills/mqc-litigation-visual-redraw/schemas/semantic-map.schema.json`，
 字段说明在 `references/semantic-map-schema.md`。
 
 **七种布局**：`numbered_point_timeline`（安全默认）/ `dated_point_timeline` /
 `proportional_gantt` / `graphviz_flow` / `graphviz_relation` / `relation_tree` /
 `comparison_table`。
+
+**语义地图是内联参数，不落文件**：`litigation_checkpoint` / `litigation_render` 的第一个
+参数就是那段 JSON 字符串。模型不该用 `write_file`/`read_file` 中转（真机上走过这条岔路，
+`read_file` 报 "File does not exist."）。落盘只发生在 render 成功之后，由引擎存成
+`<图名>.map.json`。禁令写在**三处**：prompt.md/prompt.en.md、两个工具的 `@Tool` 描述、
+`LitigationVisualPanelService.buildKickoffPrompt`。
+
+**流程引导挂在工具返回文本里，不能只写 prompt**：skill 是**按轮**生效的
+（`SkillRouter.activateForTurn` 每条用户消息重算）。用户那句「确认，就这样」里没有触发词，
+于是**恰好在「回填 checkpoint 然后出图」这一步，整份诉讼可视化指引从上下文里消失**——
+真机三个症状（改用 write_file 存地图、忘了调 `litigation_render` 就说图好了、连着渲染两次）
+都是这一个根因。工具结果留在对话历史里、不随 skill 失活而消失，所以「下一步做什么」
+写在 `litigation_checkpoint` 返回文本的分隔线之下（明确标注「不要发给用户」，三问仍原样在上）
+以及 `buildDeliveryNote` 的收尾句里。这是仓内「约束要挂消息末位」的同一条经验。
+**改 skill/工具时别把这两段话当文案删掉，它们是契约**，由
+`backend/src/test/java/com/checkba/service/ai/tools/LitigationVisualFlowTest.java` 钉住。
+
+**kickoff prompt 的两条形状约束**（`LitigationVisualPanelService.buildKickoffPrompt`，
+dev-board#456）：真机上点「股权结构」，模型读完材料在对话里给了一张 markdown 表格就收工，
+一个 `litigation_*` 都没调，追问才补出图。两个成因都在这段 prompt 的形状里：
+- **第一步必须落在工具上**。原来写的是「通读材料做抽取，在心里/回复里写出语义地图 JSON」——
+  按它自己的措辞，把抽取结果写进回复就算做完了第一步。现在改成
+  「用 extract_file_text / search_project_files 通读材料……不要把它写进回复；
+  材料摘要、来源对照表也不是本轮的交付物」，与时间轴分支的第 1 步同构。
+- **完成判据挂末位**。每次工具成功后编排器都在消息末位喊「任务完成就立刻输出 `<final>`」
+  （`AgentOrchestrator` 的 XML 兜底分支），而这段 prompt 原来的最后一句是 write_file 禁令，
+  「必须出图」埋在中间。现在两条分支的最后一段都是完成判据常量
+  （`COMPLETION_CRITERION_MAP` / `COMPLETION_CRITERION_TIMELINE`）。
+  **判据必须写成「两种合法结束方式」**：`litigation_checkpoint` 三问后停下等用户，
+  或 render 成功返回。写成「不出图不许结束」会把人工确认那一停也禁掉，逼出
+  「未经确认直接出草稿图」——草稿闸与红色授权制都挂在 checkpoint 上，那比少一张图更糟。
+  口径与 `LitigationVisualTools.CHECKPOINT_NEXT_STEPS` 第 1 条、prompt.md §3 一致。
+  由 `backend/src/test/java/com/checkba/service/LitigationKickoffPromptTest.java` 钉住
+  （连带钉住 write_file/read_file 禁令没被这轮改写顺手删掉）。
+  注意这仍是概率性的：`ContextAssemblerService` 会在用户消息后追加「当前已打开文档」提醒，
+  所以 prompt 的末位不等于整条用户消息的末位。确定性兜底仍然缺位——面板侧「本轮没出图」
+  的提示按钮做不了，因为 `sendExternalPrompt` 在 POST ack 就返回（真正的流走另一条 SSE），
+  面板拿不到「这一轮结束了、调了哪些工具」的信号。
+
+**会话级幂等**：`LitigationVisualTools.TURN_STATES`（conversationId → TurnState，LRU 封顶 200）。
+同一份地图重复调 checkpoint 不重跑脚本、返回同一份三问并计次提示；同一指纹
+（地图+图名+落点+模式+格式）重复调 render 直接回上次的交付说明、不重复出图。
+render 成功后清掉 pending checkpoint（下一张图重新走三问）。
 
 **草稿闸**：`checkpoint.confirmed` 不为 true → 产物一律 `*-draft.*`。这是上游的安全
 设计（未经确认的读法不许当终稿归档），**包装层不许抹平**。
@@ -90,7 +162,27 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 （语义地图，留着才能「换风格」不重新问模型）。曾经默认还出 pptx/vsdx，PR 用户
 反馈「版本太多、留一个可编辑的就行」后收窄（`LitigationVisualTools.DEFAULT_FORMATS`）；
 引擎本身仍支持这两种格式，只是产品不再默认交付。身份靠 `wpsFileId` 前缀
-`project_litviz_` / `project_litvizmap_`。
+`project_litviz_` / `project_litvizmap_`，**必须走 `LitigationVisualTools.newMarker()`**
+（见「已知地雷」里撞号那条）。
+
+**默认打开可编辑版（.drawio）**：出图后自动打开的是 `.drawio`（`sendOpenFileAction`，
+没出 drawio 才退回 svg），面板图廊整行点开也是 `.drawio`（`openDiagram`），
+`.svg` 退成悬停里的「看母版」（`openMaster`）。理由是律师拿到图后的下一个动作多半是
+「这里挪一下」，落在只读预览上就得自己去文件树翻可编辑版。改这条要同步四处：
+`LitigationVisualTools`（自动打开 + 交付说明）、`LitigationVisualPanel.vue`、
+skill.yml 的 `output`/`output_en`、两份 prompt。
+
+**时间轴大师上游三坑（契约盘点结论，dev-board#164；Java 层已各有对策+测试钉住）**
+- `style` 空参在上游 CLI 默认成 **2（歸藏风）**，与它文档承诺的「不回 = 奇川风」相悖
+  → `litigation_timeline_step` 对空参显式传 "1"。
+- `mark` 空参在上游直接 exit 1，「模型代挑」语义在 CLI 上不可达 → Java 空参转 "0"；
+  模型代挑时传 emphasisSource=model，cli 在 mark 成功后补写 state.json 的
+  emphasis_source（如实记录是谁挑的红，上游的诚实原则）。
+- **不要把管线产物再过 `validate_map.py`/jsonschema**：三处泳道上限互相矛盾
+  （schema 3 / validate_map 2 / 渲染器 6），且管线会写 schema 外字段 `lane.side`，
+  多泳道图必红。管线主路径本来就不调 validate_map。
+- 另：管线是 **cwd 固定文件名**状态机，一个案件一个 workdir 是硬约束；
+  `render` 不自建输出目录（cli 已代建）。
 
 ## 依赖矩阵（实测，别凭名字猜）
 
@@ -106,6 +198,42 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，已由 PATCH 2 抹平。
 
 ## 已知地雷
+
+- **出图引擎目录的解析链最前面多了一档「能力槽」**（v2.10 §15，dev-board#497）：
+  `LitigationVisualService.resolveLitvizDir(includePack)` 现在先问
+  `CapabilitySlotRegistry.resolve("litigation.diagram", includePack)`——用户在设置页
+  「能力升级」里选了某个能力包的实现时，那个目录赢过显式配置/环境变量/cwd 爬升/pack 全部四档。
+  原有四档整体搬进 `resolveBuiltinLitvizDir(includePack)`，它同时是槽登记给注册表的
+  builtin 探针（`registerPackProbe()` 里一并登记）。三条纪律：
+  ① `slotRegistry` 与 `packService` 一样是 `@Autowired(required=false)` **字段注入**——
+  本类在单测与 EvalHarness 里是直接 `new` 的，改成构造器注入会让那些场景整片红；
+  ② 探针必须指向 `resolveBuiltinLitvizDir` 而不是 `resolveLitvizDir`，否则「内置候选」
+  会指向当前选中的能力包，候选表自己咬自己；
+  ③ `resolved` 是只算一次的缓存，所以 `registerPackProbe()` 里除了登记探针还登记了
+  `slotRegistry.onSlotChanged(slot, this::invalidate)`——切槽是不重启后端的 live 操作，
+  不失效缓存的话「切换即生效」就是假的（pack 那条路 2026-08 已经踩过同一个坑）。
+- **能力包必须自带完整目录结构**：litviz 的两个 vendor 目录名不能改（时间轴脚本有十几处
+  兄弟目录硬引用，见上文「关键文件」），第三方替换引擎只换 `render.py` 是跑不起来的；
+  槽的可用性判据只查 entry 目录下有没有 `cli.py`，查不出这一类缺失。
+
+- **解析顺序 2026-09 变过：pack 现在压过「dev 目录爬升」**（dev-board#499，
+  `LitigationVisualService.resolveLitvizDir`）。理由是 pack 有了自动追新，让爬升压过
+  一个签过名、有版本号、会自更新的资源包是错的（打包态 cwd 是用户数据目录，一个
+  `~/litviz` 就能无声盖掉刚追新好的包）。**代价直接落在开发机上**：本机装了 pack 之后，
+  仓库里的 `litviz/` 不再自动生效，改引擎源码调试必须显式设 `LITVIZ_DIR` 或
+  `litviz.dir`（这两档仍是最高优先级）。改回旧顺序会让
+  `LitigationVisualServiceTest#packDirWinsOverCwdAscent` 立刻转红。
+- **应用更新不等于 native pack 更新**（dev-board#477，v0.35.0 实测）：本机仍装着
+  2026-08-20 的 1.0.1，只有旧 `engine/` 和四个 CLI 子命令，没有 `timeline`，所有材料
+  都在 argparse 处 exit 2。发布新增引擎能力必须同步发 `pack-release.yml` 并签名上架。
+  `timelineUnavailableReason()` 在读材料前检查时间轴模块，`status` 分别返回
+  `available` / `timelineAvailable` / `timelineReason`；旧包不能禁掉仍可用的语义地图回退。
+  面板可主动更新 ready 的旧包，安装完成后重查能力；引擎无 JSON 的错误必须带退出码与
+  有界 stderr 摘要，工具层不能一见 error 字段非空就丢掉 stderr。
+  **2026-09（dev-board#499）起这条有了系统性兜底**：`service/pack/PackUpdater` 在启动后
+  45s + 每 24h 对已装且启用的 pack 自动追新（开关 `ai.packs.auto-upgrade`，默认开），
+  广场详情页另有「有新版本 x.y.z / 立即升级」。**但发布端的义务没变**：新增引擎能力
+  仍必须发 `pack-release.yml` 并签名上架双镜像，客户端追新只能追到镜像上真有的版本。
 
 - **GVBINDIR 必须运行时显式设**。graphviz 把插件目录**编译期焊死**在 libgvc 里，
   指向构建机的安装路径。构建机上那个路径真的存在，所以自检会假绿；用户机器上
@@ -142,6 +270,23 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   绕过去标题在干净的 Windows 上就是方块——与下面 PNG 那条是同一个坑。
 - **`stealth=1` 是红线不是可选参数**：删了它 draw.io 会开始往外发请求，功能却完全正常，
   没有测试就没人会发现。`desktop/tests/drawio-server.test.js` 钉住了它。
+- **挂 draw.io 的 iframe 之前必须先探那个 URL**（`DrawioEditor.probeEditor`）。宿主的
+  `getEditor()` 只回答「资源目录里有 index.html」，回答不了「这个 origin 现在真的在服务它」：
+  dev 树没跑过 fetch 脚本、Web 部署没放 `dist/drawio`、端口被别的进程占住，任何一种都会让
+  **浏览器的裸 404 页占满整个编辑区**（真机报过 "Error: Not Found"）。探测用 GET 不用 HEAD
+  （静态服务未必实现 HEAD），并且**要认内容**——Web 常见的 SPA 兜底 `try_files … /index.html`
+  对任何不存在的路径都回 200 + 本应用首页，只看状态码会在 iframe 里套一个自己。
+  认的标记是 draw.io index.html 的 `geEditor`（body class），`fetch-drawio-assets.js`
+  解包后有一条对应断言，上游改了标记先在那里红。
+- **产物 `wpsFileId` 不能只用毫秒时间戳**：一次出图的四五个文件在同一个循环里登记，
+  毫秒撞得上；`/api/files/{id}/download` 在按数字主键查不到时会退回
+  `findByWpsFileId(...).findFirst()`，撞号就意味着「打开 .drawio」可能取到同一张图的 `.svg`。
+  统一走 `LitigationVisualTools.newMarker()`（时间戳 + 进程内单调序号），
+  前端 `DrawioEditor.fileRef()` 也改成优先用数字主键。
+- **对话里的文件卡按「基名」兜底**：`@ToolMeta(fileArg = "diagramName")` 报给
+  `file_change` 的是**图名**（也是文件夹名），项目里真正存在的是 `<图名>.drawio` 等。
+  `fileOpenTabs.handleOpenFileFromChat` 精确名找不到时再按 `图名.` 前缀找一轮，
+  并按 drawio > svg > png 排序；没有这条兜底，对话里的文件卡点了只会弹「文件不存在」。
 - **手工改过的图再「换风格」会被语义地图覆盖**。判据是 `.drawio` 比 `.map.json` 新
   （`DiagramView.handEdited`），面板据此先弹确认框。
 - **触发词必须原样出现在 prompt 正文里**才命中 skill 注入（pinnedSkillId 只裁工具
@@ -156,12 +301,22 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 - 上游 `doctor.py` 自称「Python ≥ 3.9」与实际不符（见 PATCHES.md PATCH 2）；
   `schemas/` 的 layout 枚举曾漏 `comparison_table`（PATCH 3）。**升级引擎后
   重跑 `litviz/tests/test_cli.py`，别信上游的自述。**
+- **`.drawio` 打不开不能只说「没有编辑器」就完事**：v0.21.0 摘除随包 drawio 资源后，
+  `checkba:drawio-editor`（`desktop/main/main.js`）在 `isAvailable()` 为假时除了
+  `available:false` 还要带上 `packId:'litigation-visual'`（`drawio-server.js` 导出的
+  `PACK_ID` 常量），`DrawioEditor.vue` 桌面态下才能在 unavailable 分支画出「安装图形
+  编辑器组件」主按钮——复用 `packInfo`/`packInstall`/`packStatus`（`services/api.js`）
+  与 `LitigationVisualPanel.vue` 同一套轮询模式，`state:'ready'` 后自动重新 `boot()`
+  挂载编辑器，不用用户再点一次。Web 部署没有这条路（`host.js` 的 Web 能力表 `getEditor()`
+  从不带 `packId`），仍是「下载文件」兜底。这条不是给 draw.io 专属加的特权——任何后续
+  「资源摘出安装包、改走 native pack」的功能点想做到「打不开时能当场装」，都是这个形状：
+  IPC/接口把 `packId` 带出来，前端拿它去连 packInstall/packStatus。
 
 ## 验证
 
 ```bash
 python3 litviz/tests/test_cli.py                       # 契约 + 上游 149 项（预期 146/149）
-cd backend && mvn test -Dtest='Litigation*,BuiltinSkillsTest,SkillRegistryTest'
+cd backend && mvn test -Dtest='Litigation*,BuiltinSkillsTest,SkillRegistryTest,SkillRouterTest'
 node desktop/scripts/prepare-graphviz.js --from "$(brew --prefix graphviz)" --out /tmp/gv
 node desktop/scripts/fetch-drawio-assets.js            # 幂等；已就位会跳过
 cd desktop && npm test                                 # 含 drawio-server 的 stealth 与穿越守卫

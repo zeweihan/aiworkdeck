@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.subagent;
 
 import com.checkba.service.ai.AllowedModels;
@@ -160,19 +163,21 @@ class SubAgentServiceTest {
     }
 
     @Test
-    @DisplayName("轮数上限：耗尽后返回明确失败结果")
-    void maxRoundsExceeded() {
-        props.setMaxRounds(2);
-        when(model.generate(anyList(), anyList()))
-                .thenReturn(toolCallTurn("search_web", "{\"query\":\"a\"}"))
-                .thenReturn(toolCallTurn("search_web", "{\"query\":\"b\"}"));
+    @DisplayName("子 Agent 没有 6 轮硬停止，可完成超过 100 个生产性轮次")
+    void productiveRoundsAreUnlimited() {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(model.generate(anyList(), anyList())).thenAnswer(inv -> {
+            int n = calls.incrementAndGet();
+            return n <= 101
+                    ? toolCallTurn("search_web", "{\"query\":\"" + n + "\"}")
+                    : textTurn("最终结论");
+        });
 
-        SubAgentResult result = newService().dispatch("查不完的任务", null, List.of("search_web"), PARENT_CTX);
+        SubAgentResult result = newService().dispatch("长任务", null, List.of("search_web"), PARENT_CTX);
 
-        assertFalse(result.success());
-        assertTrue(result.error().contains("max rounds"), "错误信息应说明轮数耗尽: " + result.error());
-        assertEquals(2, result.rounds());
-        assertEquals(List.of("search_web", "search_web"), result.toolsUsed());
+        assertTrue(result.success(), result.toJson());
+        assertEquals(102, result.rounds());
+        assertEquals(101, result.toolsUsed().size());
     }
 
     @Test
@@ -202,6 +207,27 @@ class SubAgentServiceTest {
 
         assertFalse(result.success());
         assertTrue(result.error().contains("timed out"), "错误信息应说明超时: " + result.error());
+    }
+
+    @Test
+    @DisplayName("修复：超时前已经真实跑完的轮次与工具调用，不能被超时结果抹成空列表/0")
+    void timeoutPreservesRealPartialProgress() {
+        props.setTimeoutSeconds(1);
+        // 第一轮：正常调用一次工具（真实执行，有副作用）；第二轮：模型调用直接卡住触发超时
+        when(model.generate(anyList(), anyList()))
+                .thenReturn(toolCallTurn("search_web", "{\"query\":\"x\"}"))
+                .thenAnswer(inv -> {
+                    Thread.sleep(10_000);
+                    return textTurn("太迟了");
+                });
+
+        SubAgentResult result = newService().dispatch("慢任务", null, List.of("search_web"), PARENT_CTX);
+
+        assertFalse(result.success());
+        assertTrue(result.error().contains("timed out"), "错误信息应说明超时: " + result.error());
+        assertEquals(List.of("search_web"), result.toolsUsed(),
+                "第一轮已经真实调用过 search_web，超时结果不该把它抹成空列表");
+        assertEquals(1, result.rounds(), "第一轮已完整跑完，rounds 不该恒为 0");
     }
 
     @Test

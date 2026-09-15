@@ -1,0 +1,13 @@
+{
+  "name": "launch-video-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI WorkDeck 产品发布视频自动化录屏流水线（dev-board #59，链路验证 + 样片）",
+  "scripts": {
+    "record:sample": "node run.mjs sample"
+  },
+  "dependencies": {
+    "puppeteer-core": "^22.15.0"
+  }
+}

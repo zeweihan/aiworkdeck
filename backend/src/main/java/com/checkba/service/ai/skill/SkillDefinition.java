@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.skill;
 
 import java.util.ArrayList;
@@ -40,6 +43,15 @@ public class SkillDefinition {
 
     /** 来源插件 id（插件携带的 skill）；内置 skill 为 null */
     private String sourcePluginId;
+
+    /**
+     * 依赖的原生资源包 id（skill.yml: requires_pack，可选）。
+     *
+     * <p>声明了它就意味着「功能要用的重资源不随安装包分发」，广场安装时先下 pack
+     * 再启用 skill；旧版本应用忽略未知字段，向前兼容。规范见
+     * docs/NATIVE_PACK_DISTRIBUTION.md §7.1。
+     */
+    private String requiresPack;
 
     /**
      * 法律事项类别（可选，用于匿名统计的事项类型分布，枚举值见
@@ -113,6 +125,8 @@ public class SkillDefinition {
     public void setRequires(List<String> requires) { this.requires = requires; }
     public String getSourcePluginId() { return sourcePluginId; }
     public void setSourcePluginId(String sourcePluginId) { this.sourcePluginId = sourcePluginId; }
+    public String getRequiresPack() { return requiresPack; }
+    public void setRequiresPack(String requiresPack) { this.requiresPack = requiresPack; }
     public String getCategory() { return category; }
     public void setCategory(String category) { this.category = category; }
     public boolean isEnabledByDefault() { return enabledByDefault; }

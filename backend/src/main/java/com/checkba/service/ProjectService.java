@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import cn.hutool.json.JSONUtil;
@@ -16,7 +19,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -36,6 +43,36 @@ public class ProjectService {
     private final TushareService tushareService;
     private final ProjectVariableService projectVariableService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    private final com.checkba.version.ProjectRepoService projectRepoService;
+    private final com.checkba.version.memory.MemoryRepoService memoryRepoService;
+    private final com.checkba.repository.MemoryRemoteRepository memoryRemoteRepository;
+    private final com.checkba.repository.CompletionEntryRepository completionEntryRepository;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProjectService.class);
+
+    /**
+     * 删项目时必须一并清掉的项目级实体。
+     *
+     * 这些表全部只存一个裸 Long 的 projectId（没有 JPA 关联），而各 profile 都是
+     * hibernate ddl-auto=update——裸 Long 列不会生成外键，数据库层也就没有
+     * ON DELETE CASCADE。级联只能在这里手写，漏一张表就是一批永久孤儿行。
+     * 新增项目级实体时同步往这里加一条。
+     */
+    private static final List<String> PROJECT_SCOPED_ENTITIES = List.of(
+            "ProjectMember", "ProjectFile", "ProjectVariable", "ProjectProfileField",
+            "ProjectMemory", "ProjectInvitation", "ProjectRemote", "ProjectTask",
+            "ProjectAiMessage", "EvidenceLink", "WorkSession");
+
+    /**
+     * 项目建好了（dev-board#438）。{@code VersionLifecycleService} 监听它自动开启版本记录——
+     * 事务提交之后再异步开，绝不占用建项目这次请求的线程。
+     */
+    public record ProjectCreatedEvent(long projectId, Long userId) {}
 
     @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
@@ -115,6 +152,7 @@ public class ProjectService {
             }
         }
 
+        eventPublisher.publishEvent(new ProjectCreatedEvent(savedProject.getId(), userId));
         return savedProject;
     }
 
@@ -216,7 +254,9 @@ public class ProjectService {
             // Owner is the manager
             userRepository.findById(p.getUserId()).ifPresent(u -> {
                 dto.setManagerId(u.getId());
-                dto.setManagerName(u.getDisplayName());
+                // local-mode 下 owner 可能是库里存了中文哨兵值的本机用户，按界面语言本地化
+                // （项目列表页「Lead: {name}」提示读的就是这个字段）
+                dto.setManagerName(LocalIdentityService.displayNameOf(u.getDisplayName()));
                 dto.setManagerAvatarUrl(u.getAvatarUrl());
             });
 
@@ -230,12 +270,68 @@ public class ProjectService {
     }
 
     /**
-     * 删除项目
+     * 删除项目：连带清掉项目级的库行与磁盘目录。
+     *
+     * 「删除项目」对律师意味着这个项目的材料不再留存，所以文档目录、版本记录仓库、
+     * 记忆仓库（裸库 + 物化工作树）都要一并抹掉，不能只删 project 行。
      */
+    @Transactional
     public void deleteProject(Long id) {
-        if (!projectRepository.existsById(id)) {
+        Project project = entityManager.find(Project.class, id, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (project == null) {
             throw new IllegalArgumentException(LangText.of("项目不存在: ", "Project not found: ") + id);
         }
+
+        // 物理路径必须在删行之前算：localRoot 存在 Project 行上，行没了就解析不出来。
+        // IDE 化本地文件夹项目的目录是用户自己的文件夹，只解绑不删。
+        Path projectDir = storageResolver.hasLocalRoot(id) ? null : storageResolver.projectRoot(id);
+        Path gitDir = projectRepoService.gitDir(id);
+        // 记忆仓库是独立于文档仓库的第二套目录（裸库 + 可弃的物化工作树），
+        // 既不在 projectDir 下也不在 gitDir 下，得单独算、单独删。
+        String memoryRepoKey = com.checkba.version.memory.MemoryRealm.project(id).repoKey();
+        Path memoryGitDir = memoryRepoService.gitDir(memoryRepoKey);
+        Path memoryWorkTree = memoryRepoService.workTree(memoryRepoKey);
+
+        // evidence_link_target 没有 project_id 列，只能先按 link id 级联，再删 evidence_link 本身。
+        entityManager.createQuery(
+                        "delete from EvidenceLinkTarget t where t.linkId in (select l.id from EvidenceLink l where l.projectId = :pid)")
+                .setParameter("pid", id)
+                .executeUpdate();
+        for (String entity : PROJECT_SCOPED_ENTITIES) {
+            entityManager.createQuery("delete from " + entity + " e where e.projectId = :pid")
+                    .setParameter("pid", id)
+                    .executeUpdate();
+        }
+        // memory_remote 按 repoKey 建索引、没有 projectId 列，上面那套
+        // 「delete from E where e.projectId = :pid」批量语句吃不到它。
+        memoryRemoteRepository.findByRepoKey(memoryRepoKey).ifPresent(memoryRemoteRepository::delete);
+        completionEntryRepository.deleteByScopeKey("p:" + id);
         projectRepository.deleteById(id);
+        storageResolver.invalidate(id);
+
+        // 磁盘清理失败不回滚：库里已经删干净了，剩下的目录是可再清的垃圾，
+        // 为它报错反而会让用户以为项目没删掉。
+        deleteDirectoryQuietly(projectDir);
+        deleteDirectoryQuietly(gitDir);
+        deleteDirectoryQuietly(memoryGitDir);
+        deleteDirectoryQuietly(memoryWorkTree);
+    }
+
+    /** 递归删目录，失败只记日志。 */
+    private void deleteDirectoryQuietly(Path dir) {
+        if (dir == null || !Files.isDirectory(dir)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    log.warn("删除项目文件失败: {}", p, e);
+                }
+            });
+        } catch (IOException e) {
+            log.warn("删除项目目录失败: {}", dir, e);
+        }
     }
 }

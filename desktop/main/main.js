@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const path = require('path')
-const { app, BrowserWindow, BrowserView, ipcMain, shell, desktopCapturer, screen, clipboard, Menu, globalShortcut } = require('electron')
+const { app, BrowserWindow, BrowserView, ipcMain, shell, desktopCapturer, screen, clipboard, Menu, globalShortcut, nativeTheme } = require('electron')
 const { createServiceManager } = require('./services/service-manager')
 const { createBackendDescriptor } = require('./services/backend-service')
 const { createPptxDescriptor } = require('./services/pptx-service')
@@ -10,9 +12,68 @@ const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 const { createBrowserViewRegistry } = require('./browser-views')
 
+// 单实例锁：必须在文件最开头、任何 app.whenReady()/服务拉起逻辑之前拿。
+//
+// 没有这把锁时，双击启动两次会各自独立走到 whenReady() 之后的
+// services.allocatePorts() → services.startEager()，两个进程都对着同一个
+// ~/.aiworkdeck 数据目录（H2 单机库）各起一套 Java 后端——真正撞上这条路径的不是
+// "端口已被占用"那么简单（后面 backend-service.js 的端口链 + isOurBackend 复用探测
+// 本来就处理得了这种情况），而是两种更窄的时序竞态：① 首启瞬间两个进程的
+// allocateBackendPort() 几乎同时跑，各自 canBind() 探测到同一个端口"当下空闲"就都
+// 选中它，等真正 spawn 时后一个才会撞见占用；② isOurBackend() 探测自家后端时用的
+// 1.5s 超时，在 JVM 刚起、Spring 还在做上下文刷新、响应不过来的窗口期会被误判成
+// "陌生进程占用"，进而降级到端口链下一档另起一套全新后端。requestSingleInstanceLock
+// 直接把第二个进程在此拦停、退出，让它永远走不到 whenReady()，上面两种竞态都无从
+// 发生——不修 allocateBackendPort/isOurBackend 本身（那是复用逻辑，另一类问题）。
+const singleInstanceLock = app.requestSingleInstanceLock()
+if (!singleInstanceLock) {
+  app.quit()
+  return
+}
+app.on('second-instance', () => {
+  // 用户又点了一次图标/关联文件：把已经在跑的这个实例的窗口拉到前台，
+  // 而不是让第二次点击悄无声息地什么都不发生
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+})
 
 const DEV_SERVER_URL = process.env.CHECKBA_DEV_SERVER_URL || 'http://localhost:5173'
 const IS_DEV = process.env.AIWORKDECK_DESKTOP_DEV === '1'
+
+// 主进程自己的事件日志：~/.aiworkdeck/logs/desktop.log，JSONL 一行一条
+// （格式与路径都与 update-service 的 update.log 同源，不另起一套日志体系）。
+// 存在的理由是 dev-board#602：应用整体消失时，主进程这一侧一个字都没留下，
+// 事后只能去翻 macOS 统一日志反推。
+function logDesktopEvent(type, data) {
+  const evt = { ts: new Date().toISOString(), type, ...data }
+  try {
+    const dir = path.join(app.getPath('home'), '.aiworkdeck', 'logs')
+    require('fs').mkdirSync(dir, { recursive: true })
+    require('fs').appendFileSync(path.join(dir, 'desktop.log'), JSON.stringify(evt) + '\n')
+  } catch (e) { /* 日志失败不阻断任何流程 */ }
+}
+
+// 主进程的全局兜底（dev-board#602）。此前 desktop/main 与 desktop/preload 全树没有任何
+// uncaughtException/unhandledRejection 处理器——drawio-server.js 的注释早就自证过这条路径
+// 会让整个应用无提示消失，断网时更是凭空多出大量异步错误源（更新检查、账户同步等）。
+// 纪律：只记账 + console.error，**明确不退出、不弹 dialog**——断网时这类错误成片出现，
+// 弹框会连环弹，退出则正是本卡要消灭的那个症状。
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException', err)
+  logDesktopEvent('uncaught-exception', {
+    message: String((err && err.message) || err),
+    stack: String((err && err.stack) || '')
+  })
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandledRejection', reason)
+  logDesktopEvent('unhandled-rejection', {
+    message: String((reason && reason.message) || reason),
+    stack: String((reason && reason.stack) || '')
+  })
+})
 
 function escapeHtml(s) {
   return String(s || '')
@@ -25,9 +86,15 @@ function escapeHtml(s) {
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null
+// mac activate 可能早于异步服务启动完成；首窗统一由启动链创建。
+let mainWindowStartupReady = false
 let services = null
 let modelManager = null
 let updateService = null
+// 首启进度窗的引用。0.38.0 起首启不再解压 pysvc（四个 Python 服务改走 native pack），
+// 这里只剩「等本机服务起来」这一段的兜底；当前没有创建它的路径，保留是为了
+// retireFirstLaunchSplash 的调用点不必跟着分支。
+let firstLaunchSplash = null
 
 // 增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：overlay 上下文——三个 seam
 // （backend jar / h5 / zetaoffice 壳层）与 update-service 共用
@@ -279,15 +346,76 @@ function attachCopyListener(webContents, sourceLabel) {
   })
 }
 
+// 官网头像（GET {官网}/api/avatar/{accountId}?v=...）的响应带
+// `Cross-Origin-Resource-Policy: same-site`。主窗口是 loadFile 出来的 file:// 页面，
+// 与 www.aiworkdeck.com 永远不可能同站，于是 Chromium 在网络层就把这张图拦掉
+// （net::ERR_BLOCKED_BY_RESPONSE.NotSameSite），渲染层拿到的是一次**静默失败**：
+// <image> 什么都不画，顶栏那颗头像只剩 --awd-accent 的纯色圆——连首字母都没有，
+// 因为 avatarUrl 是真值，v-else 的首字母分支根本不渲染（dev-board#603 的症状原样）。
+// webPreferences.webSecurity:false 关不掉这一条（已实测：Chrome 带 --disable-web-security
+// 同样拦），所以只能在响应头这一层解，与 zetaoffice-session 给 webview 分区装 COOP/COEP
+// 是同一个手法。作用面收到「路径是 /api/avatar/ 的响应」这一条，且只动 CORP 这一个头。
+// 正解在官网侧——那个端点本来就是匿名公开的，应当发 cross-origin；官网改好后这段可撤。
+function attachAvatarCorpRelaxation(ses) {
+  if (!ses || ses.__checkbaAvatarCorpBound) return
+  ses.__checkbaAvatarCorpBound = true
+  ses.webRequest.onHeadersReceived({ urls: ['*://*/api/avatar/*'] }, (details, callback) => {
+    const headers = Object.assign({}, details.responseHeaders)
+    // 大小写不定（nginx 回的是全小写），先把已有的那一份摘掉再写规范名，避免两条并存
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === 'cross-origin-resource-policy') delete headers[name]
+    }
+    headers['Cross-Origin-Resource-Policy'] = ['cross-origin']
+    callback({ responseHeaders: headers })
+  })
+}
+
+// 下载弹「另存为」对话框的监听器：挂在 session 上，跟 attachCopyListener 一样用
+// 一个标记位去重。macOS 下关主窗口不退出应用（见下方 window-all-closed），用户可以
+// 反复点 Dock 图标触发 createMainWindow() 重开窗口——mainWindow.webContents.session
+// 默认走的是共享的 session.defaultSession，不去重的话每 reopen 一次就多挂一个
+// will-download 监听器，永久累积、从不释放，重开够多次会打出
+// MaxListenersExceededWarning，且以后每次下载都会把已经死掉的旧回调重复触发一遍。
+function attachDownloadListener(session) {
+  if (!session || session.__checkbaDownloadBound) return
+  session.__checkbaDownloadBound = true
+  session.on('will-download', (event, item, webContents) => {
+    // Set options for the save dialog
+    item.setSaveDialogOptions({
+      title: require('./app-language').t({ zh: '保存文件', en: 'Save File' }),
+      defaultPath: item.getFilename() // Use the default filename suggestion
+    })
+    // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog
+    // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
+    // To strictly FORCE it, we would need to check existing configuration, but usually this is enough.
+  })
+}
+
+// 原生外观：把渲染层的主题 mode 写进 nativeTheme。
+// 'system' 必须原样传下去而不是自己解析成 light/dark——themeSource 一旦被设成
+// 非 'system'，Electron 会把**所有渲染进程**的 prefers-color-scheme 钉死成那个
+// 值，渲染层的 matchMedia 就永远读不到真实系统设置了（appTheme.js 依赖它）。
+function applyNativeTheme(mode) {
+  const m = ['light', 'dark', 'system'].includes(mode) ? mode : 'light'
+  try { nativeTheme.themeSource = m } catch (e) { /* ignore */ }
+  try { return { systemDark: !!nativeTheme.shouldUseDarkColors } } catch (e) { return { systemDark: false } }
+}
+
 function createMainWindow() {
+  // 启动链、Dock 激活共用此入口，不能覆盖仍在使用的主窗引用（#455）。
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow
   // 后端实际端口（打包态默认 5269，冲突自动降级，见 backend-service.js 端口链）。
   // 经 additionalArguments 同步注入 preload → window.checkbaDesktop.apiBaseUrl，
   // 渲染层 api.js 优先读它，取代原先写死的 9696。
   const backendPort = (services && services.ports && services.ports.backend)
     || Number(process.env.CHECKBA_BACKEND_PORT || (app.isPackaged ? 5269 : 9696))
+  // 出生尺寸夹在显示器工作区内（dev-board#459）：工作区窄于 1400x900 的屏上，
+  // 裸常量会让窗口一出生就比屏幕大，只能靠「窗口 → 缩放」救回来。
+  // workAreaSize 已经扣掉菜单栏/Dock，不要再自行减。
+  const workArea = screen.getPrimaryDisplay().workAreaSize
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: Math.min(1400, workArea.width),
+    height: Math.min(900, workArea.height),
     icon: path.join(__dirname, '../../frontend/src/static/icon.png'),
     // 无边框：窗口控件并进渲染层已有的 .project-header（42px），系统标题栏不再单占
     // 一条。设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md。
@@ -301,7 +429,12 @@ function createMainWindow() {
       : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
-      additionalArguments: ['--checkba-api-base=http://127.0.0.1:' + backendPort],
+      additionalArguments: [
+        '--checkba-api-base=http://127.0.0.1:' + backendPort,
+        // ARM 版 Windows（Mac 虚拟机）转译运行时启动看门狗已放宽 8 倍（dev-board#340），
+        // 渲染层的等待死线要跟着放大，否则前端仍按 90 秒判超时（dev-board#341）
+        ...(require('./services/win-arch').isWinArmEmulated() ? ['--checkba-win-emulated=1'] : [])
+      ],
       contextIsolation: true,
       nodeIntegration: false,
       // 允许跨域 Cookie（历史：为第三方在线编辑器 SameSite Cookie 而设；行为保留以兼容其它跨域资源）
@@ -312,10 +445,15 @@ function createMainWindow() {
     }
   })
 
+  // 官网头像的 CORP 放行（dev-board#603）。必须赶在第一次 load 之前挂上，
+  // 否则首屏那次头像请求会漏在拦截器外面。只挂一次（函数内自带去重标记）。
+  attachAvatarCorpRelaxation(mainWindow.webContents.session)
+
   // UI：直接复用现有 frontend（开发态用 dev server）
   if (IS_DEV) {
     mainWindow.loadURL(DEV_SERVER_URL)
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
+    // 截图走查时那扇分离的 DevTools 窗恒在应用窗之上，正文区域拍不到；给个开关关掉它。
+    if (!process.env.AIWORKDECK_DEV_NO_DEVTOOLS) mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     // Production Mode: Load from dist
     // (packaged builds carry the frontend via electron-builder extraResources)
@@ -390,8 +528,10 @@ function createMainWindow() {
     // ignore
   }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null
+  const createdWindow = mainWindow
+  createdWindow.on('closed', () => {
+    // 旧窗迟到的 closed 不能断开新窗的剪贴板、菜单和原生弹窗。
+    if (mainWindow === createdWindow) mainWindow = null
   })
 
   mainWindow.on('resize', () => views.layoutAll())
@@ -415,17 +555,13 @@ function createMainWindow() {
   // 监听渲染层内的 copy/cut（编辑器/页面内复制等），统一推送给前端入库
   attachCopyListener(mainWindow.webContents, 'renderer')
 
+  // ⌘R 在 Writer 里是「右对齐」，整页重载会把工作台所有标签连同未落盘的改动一起
+  // 关掉（dev-board#628）。菜单那一侧已经摘掉了 role 自带的加速键，这里是兜底；
+  // 只挂顶层，编辑器 <webview> 的按键不经过它，理由见 reload-guard.js。
+  require('./reload-guard').attachReloadGuard(mainWindow.webContents, { packaged: app.isPackaged })
+
   // Handle file downloads: ensure "Safe As" dialog appears
-  mainWindow.webContents.session.on('will-download', (event, item, webContents) => {
-    // Set options for the save dialog
-    item.setSaveDialogOptions({
-      title: require('./app-language').t({ zh: '保存文件', en: 'Save File' }),
-      defaultPath: item.getFilename() // Use the default filename suggestion
-    })
-    // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog 
-    // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
-    // To strictly FORCE it, we would need to check existing configuration, but usually this is enough.
-  })
+  attachDownloadListener(mainWindow.webContents.session)
 
   startClipboardWatcher()
 }
@@ -1287,93 +1423,31 @@ const COMPONENT_SERVICE = {
   'asr-models': 'asr-service'
 }
 
-// 打包态 pysvc 不再随 .app 携带目录，而是 Resources/pysvc.tar.gz 首启解压到
-// 用户数据目录（见 services/pysvc-runtime.js 顶部说明）。返回解压产物里的
-// pysvc 根目录；dev 态或旧布局（无 tar 包，pysvc 目录直接在 Resources）返回 null，
-// 服务代码经 pysvcPath() 回退到 resourcesPath/pysvc。
-function resolvePysvcRoot() {
-  if (!app.isPackaged) return null
-  const fs = require('fs')
-  if (!fs.existsSync(path.join(process.resourcesPath, 'pysvc.tar.gz'))) return null
-  return path.join(app.getPath('userData'), 'pysvc-' + app.getVersion(), 'pysvc')
-}
-
-// 首启/升级后的 pysvc 解压（幂等）。带一个极简进度窗——mineru lib 解压要数十秒，
-// 无提示会被当成"点了没反应"。失败不阻塞主流程：弹框告知后照常开窗，
-// 相关 Python 服务会各自启动失败并落日志。
-async function ensurePysvcReady() {
-  const root = resolvePysvcRoot()
-  if (!root) return
-  const { ensurePysvcExtracted, MARKER } = require('./services/pysvc-runtime')
-  const fs = require('fs')
-  const versionDir = path.dirname(root)
-  if (fs.existsSync(path.join(versionDir, MARKER))) return // 常规启动零开销快路径
-
-  let splash = null
-  const setProgress = (percent) => {
-    if (!splash || splash.isDestroyed()) return
-    const p = typeof percent === 'number' ? percent : -1
-    splash.webContents.executeJavaScript(`window.__setP && window.__setP(${p})`).catch(() => {})
-  }
-  try {
-    splash = new BrowserWindow({
-      width: 420,
-      height: 160,
-      frame: false,
-      resizable: false,
-      show: false,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    })
-    const html = `<!doctype html><meta charset="utf-8">
-      <body style="margin:0;font:14px -apple-system,'Segoe UI',sans-serif;background:#1e1f24;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh;user-select:none">
-        <div style="width:320px;text-align:center">
-          <div style="margin-bottom:6px">正在准备本地组件…</div>
-          <div style="font-size:12px;color:#9a9aa2;margin-bottom:14px">首次启动或版本更新后需解压，约一分钟</div>
-          <div style="background:#33343c;border-radius:4px;height:8px;overflow:hidden">
-            <div id="bar" style="background:#4f8cff;height:100%;width:0%;transition:width .4s"></div>
-          </div>
-          <div id="pct" style="font-size:12px;color:#9a9aa2;margin-top:8px">&nbsp;</div>
-        </div>
-        <script>window.__setP=function(p){if(p>=0){document.getElementById('bar').style.width=p+'%';document.getElementById('pct').textContent=p+'%'}}</script>
-      </body>`
-    splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-    splash.once('ready-to-show', () => { try { splash.show() } catch (e) { /* ignore */ } })
-  } catch (e) {
-    splash = null // 无窗口也照样解压
-  }
-
-  const result = await ensurePysvcExtracted({
-    archive: path.join(process.resourcesPath, 'pysvc.tar.gz'),
-    metaFile: path.join(process.resourcesPath, 'pysvc.meta.json'),
-    versionDir,
-    onProgress: ({ percent }) => setProgress(percent)
-  })
-  try { if (splash && !splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ }
-  if (!result.ok) {
-    console.error('[pysvc] extract failed:', result.message)
-    try {
-      const { dialog } = require('electron')
-      dialog.showErrorBox(
-        require('./app-language').t({ zh: '本地组件解压失败', en: 'Local Component Extraction Failed' }),
-        require('./app-language').t({
-          zh: `部分本地功能（文档解析/PPT/语音）将不可用：\n${result.message || ''}`,
-          en: `Some local features (document parsing/slides/voice) will be unavailable:\n${result.message || ''}`,
-        })
-      )
-    } catch (e) { /* ignore */ }
+// firstLaunchSplash 收尾：绑到主窗口 ready-to-show，避免进度窗与主窗口两个
+// 窗口叠加闪烁；兜个超时兜底，防止极端情况下 ready-to-show 迟迟不来把它卡住。
+function retireFirstLaunchSplash() {
+  const splash = firstLaunchSplash
+  firstLaunchSplash = null
+  if (!splash || splash.isDestroyed()) return
+  const destroy = () => { try { if (!splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ } }
+  if (mainWindow) {
+    mainWindow.once('ready-to-show', destroy)
+    setTimeout(destroy, 5000)
+  } else {
+    destroy()
   }
 }
 
 function createServices() {
   // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck；
-  // pysvc 落用户数据目录（首启解压，见 ensurePysvcReady）
+  // 四个 Python 服务的 lib/app 落 ~/.aiworkdeck/packs/<service>-runtime/<version>/（设计 §3.2）
   const dataDir = path.join(app.getPath('home'), '.aiworkdeck')
-  const pysvcRoot = resolvePysvcRoot()
+  const projectRoot = path.join(__dirname, '..', '..')
   if (!modelManager) {
     modelManager = createModelManager({
       dataDir,
       resourcesPath: process.resourcesPath,
-      pysvcRoot,
+      projectRoot,
       packaged: app.isPackaged,
       onProgress: (evt) => {
         try {
@@ -1388,11 +1462,13 @@ function createServices() {
     })
   }
   const mgr = createServiceManager({
-    projectRoot: path.join(__dirname, '..', '..'),
+    projectRoot,
     packaged: app.isPackaged,
+    appVersion: app.getVersion(),
     resourcesPath: process.resourcesPath,
-    pysvcRoot,
-    dataDir
+    dataDir,
+    // ARM 版 Windows（Mac 虚拟机）上 x64 转译运行，服务启动看门狗要放宽（dev-board#340）
+    winEmulated: require('./services/win-arch').isWinArmEmulated()
   })
   mgr.register(createBackendDescriptor())
   mgr.register(createPptxDescriptor())
@@ -1439,6 +1515,31 @@ ipcMain.handle('checkba:service-ensure', async (_evt, payload) => {
   try {
     const res = await services.start(payload && payload.name)
     return { ok: !!res.ok, ...res }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
+  }
+})
+
+// 本机偏好（~/.aiworkdeck/prefs.json）。目前只有「可选组件面板提示过没有」一个键，
+// 键名与取值由渲染层决定，主进程只负责落盘。
+let prefs = null
+function getPrefs() {
+  if (!prefs) {
+    prefs = require('./services/prefs').createPrefs({ dataDir: path.join(app.getPath('home'), '.aiworkdeck') })
+  }
+  return prefs
+}
+ipcMain.handle('checkba:prefs-get', async (_evt, payload) => {
+  try {
+    return { ok: true, value: getPrefs().get(payload && payload.key, null) }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
+  }
+})
+ipcMain.handle('checkba:prefs-set', async (_evt, payload) => {
+  try {
+    getPrefs().set(payload && payload.key, payload && payload.value)
+    return { ok: true }
   } catch (e) {
     return { ok: false, message: String(e && e.message ? e.message : e) }
   }
@@ -1500,8 +1601,10 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
 // 资源没烙进这次构建时返回 { available:false }，渲染层据此退回「下载后用其他程序打开」，
 // 而不是挂一个永远转圈的 iframe。
 ipcMain.handle('checkba:drawio-editor', async () => {
-  const { startDrawioServer, drawioUrl, isAvailable } = require('./drawio-server')
-  if (!(await isAvailable())) return { available: false }
+  const { startDrawioServer, drawioUrl, isAvailable, PACK_ID } = require('./drawio-server')
+  // packId 供渲染层在 unavailable 分支引导安装原生资源包（广场「litigation-visual」）；
+  // 不改变 available:false 本身的既有语义，desktop/tests/drawio-server.test.js 钉着它。
+  if (!(await isAvailable())) return { available: false, packId: PACK_ID }
   const { origin } = await startDrawioServer()
   return { available: true, kind: 'iframe', origin, url: drawioUrl(origin) }
 })
@@ -1511,6 +1614,10 @@ ipcMain.handle('checkba:drawio-editor', async () => {
 ipcMain.on('checkba:app-language', (_evt, lang) => {
   try { require('./app-language').setAppLanguage(String(lang || '')) } catch (e) { /* ignore */ }
 })
+
+// 外观主题：渲染层是权威源，这里只把它写进 nativeTheme 并回报系统当前深浅
+// （system 态下渲染层拿不准——见 applyNativeTheme 的注释）。
+ipcMain.handle('checkba:set-theme', (_evt, mode) => applyNativeTheme(String(mode || 'light')))
 
 // IDE 化：Finder「打开方式」/ 拖到 Dock 图标进来的路径（macOS open-file 事件，
 // 可能早于窗口创建，先存后发；目录/文件在主进程判好再交渲染层走 open-path 流程）
@@ -1535,6 +1642,12 @@ app.on('open-file', (event, p) => {
 })
 
 app.whenReady().then(() => {
+  // 原生外观必须与应用主题一致（dev-board#218 → #223）。
+  // 不显式设的话原生层跟随系统：系统开深色而应用是浅色时，窗口失焦后 macOS
+  // 按深色规则绘制交通灯，落在浅色顶栏上等于隐形（实测失活态偏离背景像素数
+  // 为 0，整组按钮凭空消失）。启动先按浅色（渲染层未上报前的安全默认，也是
+  // 主题设置的出厂值），随后由渲染层经 checkba:set-theme 推来真实主题。
+  applyNativeTheme('light')
   initLocalFileService()
   // IDE 化应用菜单（File 全套 + 最近打开；动作发回渲染层处理）
   try {
@@ -1556,23 +1669,11 @@ app.whenReady().then(() => {
   } catch (e) { /* ignore */ }
   // 增量更新：清理非本大版本的 overlay 残留（全量升级后安装器不会替我们清）
   try { require('./services/overlay').cleanupStaleMajors(overlayCtx()) } catch (e) { console.error('[overlay]', e) }
-  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）；
-  // 打包态先确保 pysvc 已解压（首启/升级后带进度窗，常规启动是零开销快路径）
-  ensurePysvcReady()
-    .catch((e) => console.error('[pysvc]', e))
+  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 已装 runtime pack 的 Python 服务）。
+  // 0.38.0 起没有 pysvc 解压这一步：四个 Python 服务的 descriptor 各自判 pack 在不在场，
+  // 不在场就不启动（用户在「可选组件」面板下载后 host.services.ensure 拉起）。
+  Promise.resolve()
     .then(() => {
-      // P3：pysvc 源码层补丁与 overlay 对齐（无补丁时自动还原备份）
-      try {
-        const root = resolvePysvcRoot()
-        if (root) {
-          const overlay = require('./services/overlay')
-          const ctx = overlayCtx()
-          const dir = overlay.componentDir(ctx, 'pysvc-src')
-          const cur = overlay.readCurrent(ctx)
-          const ver = dir && cur && cur.components['pysvc-src'] ? cur.components['pysvc-src'].version : null
-          require('./services/pysvc-runtime').syncSrcPatch(root, dir, ver)
-        }
-      } catch (e) { console.error('[pysvc-src-patch]', e) }
       services = createServices()
       return services.allocatePorts()
     })
@@ -1595,7 +1696,9 @@ app.whenReady().then(() => {
           }
         }
       } catch (e) { console.error('[overlay]', e) }
+      mainWindowStartupReady = true
       createMainWindow()
+      retireFirstLaunchSplash()
       // 应用内更新检查（P1）：启动 2 分钟后静默首查，之后每 6 小时一次
       try {
         const { createUpdateService } = require('./services/update-service')
@@ -1658,7 +1761,9 @@ app.whenReady().then(() => {
     .catch((err) => {
       // 端口分配/启动链失败也要建出主窗口并提示，避免 app 起来却无窗口无提示（静默失败）
       console.error('[startup] service init failed', err)
+      mainWindowStartupReady = true
       try { createMainWindow() } catch (e) { /* ignore */ }
+      retireFirstLaunchSplash()
       try {
         if (mainWindow) mainWindow.webContents.send('checkba:backend-status', { ok: false, message: String(err && err.message ? err.message : err) })
       } catch (e) { /* ignore */ }
@@ -1670,22 +1775,50 @@ app.on('window-all-closed', () => {
 })
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+  if (mainWindowStartupReady && BrowserWindow.getAllWindows().length === 0) createMainWindow()
 })
+
+// 退出时等服务停干净的总墙钟上限。stopAll 里每个服务各有 3s 的 SIGTERM→SIGKILL 兜底，
+// 并行之后正常就是一次 3s 上下；这里给一个略宽的硬上限，任何一个服务卡在 kill 之外的
+// 地方都不至于让应用「既没有窗口也不退出」（dev-board#602）。
+const QUIT_STOP_TIMEOUT_MS = 4000
+
+function hideAllWindowsForQuit() {
+  try {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (!w.isDestroyed()) w.hide() } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* ignore */ }
+}
 
 app.on('before-quit', async (e) => {
   // 尽量在退出时停止我们启动的本地服务进程
   if (services) {
+    const quitStartedAt = Date.now()
     try {
       e.preventDefault()
+      // ① 先记账：下次再出现「应用自己消失了」，能直接从 desktop.log 读出退出起点与耗时，
+      //    不用再去反推 macOS 统一日志（dev-board#602 那次就是这么查的）。
+      logDesktopEvent('quit-begin', { pid: process.pid })
+      // ② 立刻把窗口藏掉。preventDefault 之后停服务要好几秒，原来这段时间里窗口
+      //    完全可用、还能建 SSE 发新请求，然后整个应用在同一瞬间消失——用户看到的
+      //    就是「闪退」。先 hide 才是 Mac 应用按 ⌘Q 的正常观感：窗口立刻消失，
+      //    收尾在后台进行。
+      hideAllWindowsForQuit()
       // 先终止进行中的模型下载子进程，否则退出时它们会变孤儿继续占用资源
       if (modelManager) modelManager.killAllActive()
-      await services.stopAll()
+      // ③ 停服务带总墙钟上限：到点就走，不再无限等
+      await Promise.race([
+        services.stopAll(),
+        new Promise((r) => setTimeout(r, QUIT_STOP_TIMEOUT_MS))
+      ])
     } catch (err) {
       // ignore
     }
+    logDesktopEvent('quit-stopped', { elapsedMs: Date.now() - quitStartedAt })
     services = null
     stopClipboardWatcher()
+    logDesktopEvent('quit-end', { elapsedMs: Date.now() - quitStartedAt })
     app.exit(0)
   }
 })

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.Project;
@@ -63,7 +66,7 @@ class ProjectControllerOpenLocalGateTest {
             p.setId(7L);
             p.setName("案卷");
             when(localProjectService.openLocalFolder("/Users/me/案卷", false, null, null, 1L))
-                    .thenReturn(new LocalProjectService.OpenLocalResult(p, false, null, 3, false));
+                    .thenReturn(new LocalProjectService.OpenLocalResult(p, false, null, 3, false, 0, false));
 
             Map<String, Object> result = controller.openLocalFolder(
                     Map.of("localRoot", "/Users/me/案卷"), "sess");
@@ -71,6 +74,31 @@ class ProjectControllerOpenLocalGateTest {
             @SuppressWarnings("unchecked")
             Map<String, Object> data = (Map<String, Object>) result.get("data");
             assertEquals(7L, data.get("projectId"));
+        }
+    }
+
+    /**
+     * truncatedCount 是前端截断提示（「本次导入已截断，N 项未纳入」）的数据来源，
+     * 必须原样透传到响应体，不能只有 truncated 布尔值（dev-board#107 单元 F1 复核）。
+     */
+    @Test
+    void truncatedImportSurfacesTruncatedCountInResponse() {
+        ReflectionTestUtils.setField(controller, "localFolderProjectsEnabled", true);
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            Project p = new Project();
+            p.setId(9L);
+            p.setName("大项目");
+            when(localProjectService.openLocalFolder("/Users/me/大项目", false, null, null, 1L))
+                    .thenReturn(new LocalProjectService.OpenLocalResult(p, false, null, 50, true, 7, false));
+
+            Map<String, Object> result = controller.openLocalFolder(
+                    Map.of("localRoot", "/Users/me/大项目"), "sess");
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) result.get("data");
+            assertEquals(true, data.get("truncated"));
+            assertEquals(7, data.get("truncatedCount"));
         }
     }
 }

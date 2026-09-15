@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- Vue 3 多根节点：与 ShareholderMeetingPanel 同构 -->
 
@@ -34,10 +36,13 @@
       <text class="mr-tier-desc">{{ localGate.nextStep }}</text>
       <view class="mr-tier-gate-actions">
         <template v-if="modelDownloading">
-          <text class="mr-tier-desc">{{ $t('meeting.modelDownloading', { percent: modelPercent }) }}</text>
+          <text class="mr-tier-desc">{{ $t('meeting.modelDownloading', { percent: installPercent }) }}</text>
           <view class="mr-btn secondary" @tap="onCancelAsrModel">{{ $t('meeting.cancelDownload') }}</view>
         </template>
         <template v-else>
+          <view class="mr-btn primary" v-if="canInstallRuntime" @tap="onInstallAsrRuntime">
+            {{ $t('meeting.downloadRuntime', { size: asrRuntimeSizeHint }) }}
+          </view>
           <view class="mr-btn primary" v-if="canDownloadModel" @tap="onDownloadAsrModel">
             {{ $t('meeting.downloadModel', { size: modelSizeHint }) }}
           </view>
@@ -81,6 +86,10 @@
   <!-- 录音区：开会点一下就开录，录前零表单 -->
   <view class="mr-record-zone">
     <template v-if="!recordingActive">
+      <view class="mr-device-picker" v-if="audioDevices.length > 1">
+        <text class="mr-device-picker-label">{{ $t('meeting.micDeviceLabel') }}</text>
+        <AwdSelect :range="deviceLabels" :value="selectedDeviceIndex" @change="onDeviceChange" />
+      </view>
       <view class="mr-record-btn" @tap="onStartRecording">
         <view class="mr-record-dot"></view>
         <text class="mr-record-text">{{ $t('meeting.startRecording') }}</text>
@@ -88,11 +97,22 @@
       <text class="mr-record-hint">{{ $t('meeting.startHint') }}</text>
     </template>
     <template v-else-if="recordingHere">
-      <view class="mr-recording-live">
+      <!-- getUserMedia + createMeetingRecording 两个 await 还没走完：秒数/电平/
+           暂停·停止按钮此刻都没有意义（mediaRecorder 尚未建立），单独给一句
+           "正在连接麦克风" 而不是渲染半成品的实时录音面板。 -->
+      <view v-if="recState.status === 'starting'" class="mr-recording-live mr-recording-starting">
+        <view class="mr-live-row">
+          <view class="mr-live-dot"></view>
+          <text class="mr-live-label">{{ $t('meeting.connectingMic') }}</text>
+        </view>
+        <text class="mr-record-hint">{{ $t('meeting.backgroundHint') }}</text>
+        <text class="mr-record-error" v-if="recState.error">{{ recState.error }}</text>
+      </view>
+      <view v-else class="mr-recording-live">
         <view class="mr-live-row">
           <view class="mr-live-dot" :class="{ paused: recState.status === 'paused' }"></view>
           <text class="mr-live-time">{{ formatSeconds(recState.seconds) }}</text>
-          <text class="mr-live-label">{{ recState.status === 'paused' ? $t('meeting.paused') : $t('meeting.recording') }}</text>
+          <text class="mr-live-label">{{ recState.status === 'interrupted' ? $t('meeting.interrupted') : (recState.status === 'paused' ? $t('meeting.paused') : $t('meeting.recording')) }}</text>
         </view>
         <view class="mr-level-track">
           <view class="mr-level-bar" :style="{ width: Math.round(recState.level * 100) + '%' }"></view>
@@ -130,13 +150,19 @@
           <text class="mr-item-meta">{{ metaLine(m) }}</text>
         </view>
         <text class="mr-status" :class="m.status.toLowerCase()">{{ statusText(m.status) }}</text>
+        <view class="mr-item-delete" :title="$t('meeting.delete')" @tap.stop="confirmDelete(m)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </view>
       </view>
 
       <!-- 详情 -->
       <view class="mr-detail" v-if="expandedId === m.id">
         <!-- 标题改名 -->
         <view class="mr-title-edit" v-if="editingTitleId === m.id">
-          <input class="mr-input" v-model="editingTitle" :placeholder="$t('meeting.titlePlaceholder')" />
+          <input class="mr-input" v-model="editingTitle" @confirm="saveTitle(m)" :placeholder="$t('meeting.titlePlaceholder')" />
           <view class="mr-btn secondary small" @tap="editingTitleId = null">{{ $t('meeting.cancel') }}</view>
           <view class="mr-btn primary small" @tap="saveTitle(m)">{{ $t('meeting.save') }}</view>
         </view>
@@ -158,11 +184,25 @@
             <view class="mr-spinner"></view>
             <text class="mr-hint">{{ $t('meeting.transcribingHint') }}</text>
           </view>
+          <!-- 进度提示（dev-board#532）：阶段 + 已用时 / 预计时长，预计值明确标注为估算 -->
+          <template v-if="m.progress">
+            <text class="mr-hint">{{ progressText(m) }}</text>
+            <view class="mr-progress-bar" v-if="m.progress.percent !== null && m.progress.percent !== undefined">
+              <view class="mr-progress-fill" :style="{ width: m.progress.percent + '%' }"></view>
+            </view>
+          </template>
         </view>
 
         <!-- 失败 -->
         <view v-if="m.status === 'FAILED'" class="mr-section">
-          <text class="mr-error">{{ m.error || $t('meeting.transcribeFailed') }}</text>
+          <text class="mr-error">{{ transcriptionError(m) }}</text>
+          <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
+        </view>
+
+        <!-- 未识别到人声：不是失败，用中性提示而非报错样式 -->
+        <view v-if="m.status === 'EMPTY'" class="mr-section">
+          <text class="mr-hint">{{ $t('meeting.emptyTranscriptHint') }}</text>
+          <text v-if="m.gatewayTaskId" class="mr-hint">{{ $t('meeting.emptyTranscriptBillingHint') }}</text>
           <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
         </view>
 
@@ -182,7 +222,7 @@
               </view>
             </view>
             <view class="mr-title-edit" v-if="editingSpeakerId !== null">
-              <input class="mr-input" v-model="editingSpeakerName" :placeholder="$t('meeting.speakerNamePlaceholder', { n: editingSpeakerId })" />
+              <input class="mr-input" v-model="editingSpeakerName" @confirm="saveSpeakerName(m)" :placeholder="$t('meeting.speakerNamePlaceholder', { n: editingSpeakerId })" />
               <view class="mr-btn secondary small" @tap="editingSpeakerId = null">{{ $t('meeting.cancel') }}</view>
               <view class="mr-btn primary small" @tap="saveSpeakerName(m)">{{ $t('meeting.save') }}</view>
             </view>
@@ -262,13 +302,15 @@ import {
 import { getAuthHeaders } from '@/utils/auth.js'
 import {
   recorderState, startRecording, stopRecording, pauseRecording, resumeRecording,
-  isRecordingActive, formatSeconds
+  isRecordingActive, formatSeconds, listAudioInputDevices
 } from '@/utils/meetingRecorder.js'
 import {
   localTierReady, localAsrProbeResult, refreshLocalAsrReadiness
 } from '@/config/platformServices.js'
 import { host } from '@/services/host.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
+import AwdSelect from '@/components/AwdSelect.vue'
 
 const POLL_INTERVAL_MS = 8000
 
@@ -296,7 +338,7 @@ const NOTICE_COPY = {
 
 export default {
   name: 'MeetingRecordingPanel',
-  components: { AwdSwitch },
+  components: { AwdSwitch, AwdSelect },
   props: {
     projectId: {
       type: [String, Number],
@@ -305,9 +347,20 @@ export default {
     currentUser: {
       type: Object,
       default: null
+    },
+    // 资源管理器右键转写后要定位/展开的会议 id（dev-board#227）。
+    // 面板可能因转写而被切出来（v-if 重新挂载），所以 mounted 与 watch 两头都处理。
+    focusMeetingId: {
+      type: [String, Number],
+      default: null
     }
   },
   emits: ['generate-minutes'],
+  watch: {
+    focusMeetingId() {
+      this.applyFocus()
+    }
+  },
   data() {
     return {
       meetings: [],
@@ -323,6 +376,10 @@ export default {
       showDeleteDialog: false,
       deletingMeeting: null,
       playingId: null,
+      // 麦克风选择（反馈8）。只有多于 1 个输入设备时下拉才出现——单设备的机器没有可选的意义。
+      audioDevices: [],
+      selectedDeviceIndex: 0,
+      _onDeviceChange: null,
       // 转写档位（GET /api/platform-services 的 asr 那一项）。
       // null = 还没读到 / 读不到（server 模式下非 admin 就会读不到），此时整块不渲染——
       // 摆一个「未知」比不摆更让人不安。
@@ -350,6 +407,11 @@ export default {
       // 用户点过「录音不出本机」但没成——下面那块引导只在这之后出现，
       // 平台档用户不该每次开面板都看见一块「模型没下载」
       localGateOpen: false,
+      // asr-runtime 这一条组件（运行时 + 1.5GB 模型），与首次登录面板同一份编排。
+      asrItem: null,
+      installingRuntime: false,
+      // 应用级下载单例（dev-board#581）：别的入口正在下的，这里接上同一份进度
+      controller: componentDownloads,
       _modelProgressUnsub: null,
       _player: null,
       _audioUrl: null,
@@ -363,6 +425,9 @@ export default {
     },
     recordingHere() {
       return this.recordingActive && String(this.recState.projectId) === String(this.projectId)
+    },
+    deviceLabels() {
+      return this.audioDevices.map(d => d.label)
     },
     tierKnown() {
       return this.asrProvider !== null
@@ -399,12 +464,29 @@ export default {
       const r = localAsrProbeResult()
       return r && r.status !== 'READY' ? r : null
     },
+    /**
+     * 运行时组件没装：下一步是下组件（模型下载器本身跑在它的 venv 里，必须先装它）。
+     * 与 canDownloadModel 互斥——同时摆两个下载按钮，用户点哪个都可能是错的那个。
+     */
+    canInstallRuntime() {
+      return !!host.model && !!this.localGate && this.localGate.status === 'RUNTIME_MISSING'
+    },
     canDownloadModel() {
       // 服务没起时给下载按钮是错的指路：模型下完了照样没人来跑它
-      return !!host.model && this.localGate && this.localGate.status === 'MODEL_MISSING'
+      return !!host.model && !!this.localGate && this.localGate.status === 'MODEL_MISSING'
     },
     modelDownloading() {
-      return this.modelState === 'downloading'
+      return this.installingRuntime || this.modelState === 'downloading'
+    },
+    /** 运行时段的进度写在 item 上，模型段来自主进程事件流 */
+    installPercent() {
+      if (this.installingRuntime && this.asrItem) return this.asrItem.percent || 0
+      return this.modelPercent
+    },
+    asrRuntimeSizeHint() {
+      const mb = Math.round((((this.asrItem && this.asrItem.downloadBytes) || 0)
+        + ((this.asrItem && this.asrItem.modelBytes) || 0)) / (1024 * 1024))
+      return mb ? mb + ' MB' : this.modelSizeHint
     },
     tierText() {
       if (this.asrProvider === 'local') return this.$t('meeting.tierLocal')
@@ -436,12 +518,19 @@ export default {
     }
   },
   mounted() {
-    this.loadMeetings()
+    this.loadMeetings().then(() => this.applyFocus())
     this.loadAsrTier()
     this.loadAsrNotice()
+    this.loadAudioDevices()
+    // 设备插拔（外接麦克风/耳机）实时刷新列表；未授权时 label 也可能借这个事件补上
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      this._onDeviceChange = () => this.loadAudioDevices()
+      navigator.mediaDevices.addEventListener('devicechange', this._onDeviceChange)
+    }
     // 装载时就探一次：面板要在**按下录音键之前**说清这段录音会不会出本机（设计 §6.2.1）
     refreshLocalAsrReadiness()
     this.loadModelState()
+    this.loadAsrComponent()
     this._pollTimer = setInterval(() => this.pollTranscribing(), POLL_INTERVAL_MS)
     // 从顶部胶囊停止录音时刷新列表
     this._onStopped = () => this.loadMeetings()
@@ -463,8 +552,15 @@ export default {
     }
   },
   beforeUnmount() {
+    this._unmounted = true
+    // 在途的组件下载不停，只是不再由本面板交代结果
+    if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
     if (this._pollTimer) clearInterval(this._pollTimer)
     try { if (this._onStopped) uni.$off('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
+    if (this._onDeviceChange && navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+      navigator.mediaDevices.removeEventListener('devicechange', this._onDeviceChange)
+    }
+    this._onDeviceChange = null
     if (this._modelProgressUnsub) {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
@@ -567,6 +663,44 @@ export default {
         console.warn('读取本机转写模型状态失败', e)
       }
     },
+    /** 一次装完运行时 + 1.5GB 模型，然后拉起服务并重新探测——用户点一次就够 */
+    async onInstallAsrRuntime() {
+      if (this.installingRuntime) return
+      if (!this.asrItem) await this.loadAsrComponent()
+      if (!this.asrItem) return
+      await this.followAsrInstall()
+    },
+    /** 发起或接上应用级下载管理里的同一个任务（在途时 installOne 返回同一个 Promise）。 */
+    async followAsrInstall() {
+      this.installingRuntime = true
+      // 面板开着就由它交代结果；切走面板时释放（beforeUnmount），结果交给全局提示
+      this._releaseClaim = this.controller.claim('asr-runtime')
+      try {
+        const ok = await this.controller.installOne(this.asrItem)
+        if (!ok && !this._unmounted) {
+          uni.showToast({ title: this.$t('components.stateFailed', { msg: this.asrItem.error || '' }), icon: 'none' })
+        }
+      } finally {
+        if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
+        this.installingRuntime = false
+        await refreshLocalAsrReadiness()
+        await this.loadModelState()
+      }
+    },
+    async loadAsrComponent() {
+      try {
+        await this.controller.load()
+        const item = this.controller.state.items.find(i => i.packId === 'asr-runtime')
+        if (item) {
+          await this.controller.fillSizes(item)
+          this.asrItem = item
+          // 别的入口（首次登录面板、组件管理）正在装这个组件：接上同一个任务
+          if (this.controller.isInstalling('asr-runtime') && !this.installingRuntime) this.followAsrInstall()
+        }
+      } catch (e) {
+        console.warn('[MeetingRecordingPanel] 读取本机转写组件状态失败', e)
+      }
+    },
     async onDownloadAsrModel() {
       if (!host.model) return
       try {
@@ -602,12 +736,38 @@ export default {
       for (const m of inflight) {
         try {
           const fresh = await getMeetingRecording(m.id)
-          if (fresh && fresh.status !== m.status) {
+          if (!fresh) continue
+          if (fresh.status !== m.status) {
             await this.loadMeetings()
             return
           }
+          // 状态没变也要把这一份换上：进度提示（已用时/预计时长/百分比）就在里面，
+          // 只在状态跳变时刷新的话，「转写中」那块数字会一直停在打开面板的那一刻。
+          const idx = this.meetings.findIndex(x => x.id === m.id)
+          if (idx >= 0) this.meetings.splice(idx, 1, fresh)
         } catch (e) { /* 下轮再试 */ }
       }
+    },
+
+    // ==================== 麦克风设备（反馈8） ====================
+    // 未授权过麦克风时浏览器把 device.label 恒置空字符串，只能用「麦克风 N」占位；
+    // startRecording 成功后（此时必然已拿到授权）会再调一次本方法把真实 label 换上来。
+    async loadAudioDevices() {
+      const list = await listAudioInputDevices()
+      // 初开跟随系统默认设备；热插拔只保留本次仍在线的选择，不恢复历史 iPhone。
+      const selectedId = this.audioDevices[this.selectedDeviceIndex]?.deviceId
+      this.audioDevices = list.map((d, i) => ({
+        deviceId: d.deviceId,
+        label: (d.label && d.label.trim())
+          ? d.label
+          : this.$t('meeting.micDeviceFallbackName', { n: i + 1 })
+      }))
+      const idx = selectedId ? this.audioDevices.findIndex(d => d.deviceId === selectedId) : -1
+      const defaultIdx = this.audioDevices.findIndex(d => d.deviceId === 'default')
+      this.selectedDeviceIndex = idx >= 0 ? idx : Math.max(defaultIdx, 0)
+    },
+    onDeviceChange(i) {
+      this.selectedDeviceIndex = i
     },
 
     // ==================== 录音 ====================
@@ -620,8 +780,11 @@ export default {
         return
       }
       try {
-        await startRecording(this.projectId)
+        const device = this.audioDevices[this.selectedDeviceIndex]
+        await startRecording(this.projectId, device && device.deviceId)
         if (recorderState.configured !== null) this.configured = recorderState.configured
+        // 权限刚拿到手：重新枚举一次，把「麦克风 N」占位换成浏览器现在肯给的真实 label
+        await this.loadAudioDevices()
         await this.loadMeetings()
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('meeting.cannotStartRecording'), icon: 'none' })
@@ -636,6 +799,17 @@ export default {
       const meeting = await stopRecording()
       await this.loadMeetings()
       if (meeting && meeting.id) this.expandedId = meeting.id
+    },
+
+    // 右键转写入口的定位：把 focusMeetingId 指到的会议展开并立刻刷新一次进度（dev-board#227）
+    async applyFocus() {
+      if (this.focusMeetingId == null) return
+      await this.loadMeetings()
+      const id = Number(this.focusMeetingId)
+      if (this.meetings.some(m => Number(m.id) === id)) {
+        this.expandedId = id
+        this.refreshOne(id)
+      }
     },
 
     // ==================== 详情 ====================
@@ -662,11 +836,35 @@ export default {
         RECORDED: this.$t('meeting.statusRecorded'),
         TRANSCRIBING: this.$t('meeting.statusTranscribing'),
         TRANSCRIBED: this.$t('meeting.statusTranscribed'),
+        EMPTY: this.$t('meeting.statusEmpty'),
         FAILED: this.$t('meeting.statusFailed')
       }[status] || status
     },
     formatMs(ms) {
       return formatSeconds(Math.floor((ms || 0) / 1000))
+    },
+    // 转写中的进度一行（dev-board#532）。阶段枚举来自后端，文案在这边取——
+    // 后端不下发中文串（英文版下会原样漏出去）。预计时长与百分比都是按音频时长
+    // 估算的：三条上游（听悟 / 平台网关 / 本机 asr-service）都给不出真实百分比，
+    // 所以 progress.estimated 为真时必须把「估算」两个字标出来，不能装成真值。
+    progressText(m) {
+      const p = m.progress
+      if (!p) return ''
+      const stage = {
+        PREPARING: this.$t('meeting.transcribingStagePreparing'),
+        LOCAL: this.$t('meeting.transcribingStageLocal'),
+        UPSTREAM: this.$t('meeting.transcribingStageUpstream')
+      }[p.stage] || p.stage
+      const elapsed = formatSeconds(p.elapsedSec || 0)
+      if (!p.estimatedSec) {
+        return this.$t('meeting.transcribingProgressNoEstimate', { stage, elapsed })
+      }
+      return this.$t('meeting.transcribingProgress', {
+        stage,
+        elapsed,
+        estimated: formatSeconds(p.estimatedSec),
+        mark: p.estimated ? this.$t('meeting.transcribingEstimatedMark') : ''
+      })
     },
 
     // ==================== 转写与纪要 ====================
@@ -727,6 +925,11 @@ export default {
       } catch (e) {
         uni.showToast({ title: this.$t('meeting.saveFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
+    },
+    transcriptionError(m) {
+      // 旧版本已落库的失败信息可能附带整段上游 JSON，升级后也不能继续回显。
+      if ((m.error || '').startsWith('转写结果处理失败:')) return this.$t('meeting.resultUnreadable')
+      return m.error || this.$t('meeting.transcribeFailed')
     },
     segmentsOf(m) {
       if (!m.transcriptJson) return []
@@ -849,10 +1052,6 @@ export default {
 </script>
 
 <style scoped lang="scss">
-$mr-primary: #1A5336;
-$mr-danger: #E5484D;
-$mr-border: #E5E7EB;
-$mr-muted: #6B7280;
 
 /* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场）。此前这个面板在 260px
    宽的左栏里堆了三张 12px 外边距的卡片，一屏只装得下「提示 + 一个按钮」。 */
@@ -893,21 +1092,20 @@ $mr-muted: #6B7280;
 .mr-config-hint {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
   padding: 6px 8px;
-  background: #FFF8E6;
-  border: 1px solid #F2E3B3;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
   border-radius: var(--awd-panel-radius);
   font-size: var(--awd-panel-fs-meta);
-  color: #8A6D1D;
+  color: var(--awd-warning-text);
   line-height: 1.55;
 }
 
 /* ---- 转写档位（录音开始前就摆出来）---- */
 .mr-tier {
-  margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
-  padding: 8px;
-  border: 1px solid $mr-border;
-  border-radius: var(--awd-panel-radius);
-  background: #FAFBFC;
+  margin: 0;
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  border-bottom: 1px solid var(--awd-panel-border);
+  background: var(--awd-surface);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -924,7 +1122,7 @@ $mr-muted: #6B7280;
   align-items: flex-start;
   margin-top: 4px;
   padding-top: 8px;
-  border-top: 1px solid $mr-border;
+  border-top: 1px solid var(--awd-border);
 }
 
 .mr-tier-switch-info {
@@ -938,7 +1136,7 @@ $mr-muted: #6B7280;
 .mr-tier-label {
   font-size: 12px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-tier-value {
@@ -946,23 +1144,23 @@ $mr-muted: #6B7280;
   font-size: 11px;
   padding: 2px 9px;
   border-radius: 999px;
-  color: #4B5563;
-  background: #EEF1F0;
+  color: var(--awd-text-2);
+  background: var(--awd-bg);
 }
 
 .mr-tier-value.tier-platform {
-  color: #1A5336;
-  background: #DEF3E7;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface-2);
 }
 
 .mr-tier-value.tier-local {
-  color: #1D4ED8;
-  background: #DBEAFE;
+  color: var(--awd-info-text);
+  background: var(--awd-surface);
 }
 
 .mr-tier-desc {
   font-size: 11px;
-  color: #6B7280;
+  color: var(--awd-text-2);
   line-height: 1.5;
 }
 
@@ -971,7 +1169,7 @@ $mr-muted: #6B7280;
   margin-top: 4px;
   padding: 8px;
   border-radius: var(--awd-panel-radius);
-  background: #FFF7ED;
+  background: var(--awd-warning-soft);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -979,7 +1177,7 @@ $mr-muted: #6B7280;
 
 .mr-tier-gate-msg {
   font-size: var(--awd-panel-fs-meta);
-  color: #9A3412;
+  color: var(--awd-danger-text);
   line-height: 1.5;
 }
 
@@ -991,15 +1189,15 @@ $mr-muted: #6B7280;
 }
 
 /* ---- 平台档转写的单独告知（录音开始之前）----
-   跟随 #389 定的面板密度令牌（与上面的 .mr-tier 同形），不自带一套 12px 的边距：
-   这块就摆在档位卡下面，两者用不同的节奏会让 260px 宽的左栏更挤。
-   唯一不跟的是正文行高——它是一段要读完的告知，不是一行状态。 */
+   视觉对齐 components/collab/CollabDialog.vue 的浅色语言（Slate 色阶、12px 圆角、
+   克制的边框底色）——原先的浅绿卡片与面板其余部分的中性灰不是一套语言（反馈15）。
+   横向节奏仍跟随 #389 定的面板密度令牌，只换配色与圆角，不动布局。 */
 .mr-notice {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
-  padding: 8px;
-  border: 1px solid #D6E4DC;
+  padding: 10px;
+  border: 1px solid var(--awd-border);
   border-radius: var(--awd-panel-radius);
-  background: #F4F9F6;
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1008,12 +1206,12 @@ $mr-muted: #6B7280;
 .mr-notice-title {
   font-size: 12px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-notice-body {
   font-size: var(--awd-panel-fs-meta);
-  color: #4B5563;
+  color: var(--awd-text-2);
   line-height: 1.7;
 }
 
@@ -1029,19 +1227,19 @@ $mr-muted: #6B7280;
   width: 13px;
   height: 13px;
   flex: none;
-  border: 1px solid #9CA3AF;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 3px;
-  background: #FFFFFF;
+  background: var(--awd-surface);
 
   &.checked {
-    border-color: $mr-primary;
-    background: $mr-primary;
+    border-color: var(--awd-accent);
+    background: var(--awd-accent);
   }
 }
 
 .mr-notice-check-label {
   font-size: var(--awd-panel-fs-meta);
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .mr-notice-actions {
@@ -1054,15 +1252,26 @@ $mr-muted: #6B7280;
    这里刻意不跟着整体收紧：「开始录音」是这个面板唯一的主动作，把它压成
    一行 28px 的普通按钮会让面板失去焦点。收的是它周围的边距，不是按钮本身。 */
 .mr-record-zone {
-  margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
-  padding: 10px;
-  border: 1px solid $mr-border;
-  border-radius: var(--awd-panel-radius);
-  background: #FAFBFC;
+  margin: 0;
+  padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x);
+  border-bottom: 1px solid var(--awd-panel-border);
+  background: var(--awd-surface);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
+}
+
+.mr-device-picker {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mr-device-picker-label {
+  font-size: 11px;
+  color: var(--awd-text-2);
 }
 
 .mr-record-btn {
@@ -1073,37 +1282,37 @@ $mr-muted: #6B7280;
   width: 100%;
   height: 34px;
   border-radius: var(--awd-panel-radius);
-  background: $mr-primary;
+  background: var(--awd-accent);
   cursor: pointer;
 
-  &:hover { background: #17452E; }
+  &:hover { background: var(--awd-accent-hover); }
 }
 
 .mr-record-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #FFFFFF;
+  background: var(--awd-surface);
   border: 2px solid rgba(255, 255, 255, 0.45);
   box-sizing: content-box;
 }
 
 .mr-record-text {
-  color: #FFFFFF;
+  color: var(--awd-text-on-accent);
   font-size: 13px;
   font-weight: 600;
 }
 
 .mr-record-hint {
   font-size: 10px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
   text-align: center;
   line-height: 1.5;
 }
 
 .mr-record-error {
   font-size: 11px;
-  color: $mr-danger;
+  color: var(--awd-danger-text);
 }
 
 .mr-recording-live {
@@ -1124,7 +1333,7 @@ $mr-muted: #6B7280;
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: $mr-danger;
+  background: var(--awd-danger);
   animation: mr-pulse 1.2s ease-in-out infinite;
 
   &.paused {
@@ -1142,26 +1351,26 @@ $mr-muted: #6B7280;
   font-size: 20px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-live-label {
   font-size: 12px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
 }
 
 .mr-level-track {
   width: 80%;
   height: 4px;
   border-radius: 2px;
-  background: #E9ECEF;
+  background: var(--awd-surface-3);
   overflow: hidden;
 }
 
 .mr-level-bar {
   height: 100%;
   border-radius: 2px;
-  background: #5BD197;
+  background: var(--awd-mint);
   transition: width 0.15s linear;
 }
 
@@ -1182,23 +1391,23 @@ $mr-muted: #6B7280;
   user-select: none;
 
   &.primary {
-    background: $mr-primary;
-    color: #FFFFFF;
-    &:hover { background: #17452E; }
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
+    &:hover { background: var(--awd-accent-hover); }
   }
 
   &.secondary {
-    background: #FFFFFF;
-    border: 1px solid #D1D5DB;
-    color: #374151;
-    &:hover { background: #F3F4F6; }
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border-strong);
+    color: var(--awd-text);
+    &:hover { background: var(--awd-surface-2); }
   }
 
   &.danger {
-    background: #FFFFFF;
-    border: 1px solid $mr-danger;
-    color: $mr-danger;
-    &:hover { background: #FDF2F2; }
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-danger);
+    color: var(--awd-danger-text);
+    &:hover { background: var(--awd-danger-soft); }
   }
 
   &.small {
@@ -1220,8 +1429,8 @@ $mr-muted: #6B7280;
 /* 一条录音一行，不再一条一张带描边的卡片：卡片在 260px 宽里只会制造
    「边框套边框」，展开的详情才是需要视觉分区的那一层。 */
 .mr-item {
-  border-bottom: 1px solid #F0F1F3;
-  background: #FFFFFF;
+  border-bottom: 1px solid var(--awd-border-subtle);
+  background: var(--awd-surface);
 }
 
 .mr-item-head {
@@ -1245,7 +1454,7 @@ $mr-muted: #6B7280;
 .mr-item-title {
   font-size: 12px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1253,7 +1462,7 @@ $mr-muted: #6B7280;
 
 .mr-item-meta {
   font-size: 10px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
 }
 
 .mr-status {
@@ -1262,20 +1471,48 @@ $mr-muted: #6B7280;
   padding: 0 6px;
   line-height: 15px;
   border-radius: 999px;
-  background: #F3F4F6;
-  color: $mr-muted;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-2);
 
-  &.recording { background: #FDF2F2; color: $mr-danger; }
-  &.transcribing { background: #EBF5FF; color: #1D6FC2; }
-  &.transcribed { background: #EAF7F0; color: $mr-primary; }
-  &.failed { background: #FDF2F2; color: $mr-danger; }
+  &.recording { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+  &.transcribing { background: var(--awd-info-soft); color: var(--awd-info-text); }
+  &.transcribed { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+  &.failed { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+}
+
+/* 收起行的删除入口（反馈10）：常驻显示会跟状态徽标抢视线，收起时只在 hover 时露出，
+   与 FileTree 的 .tree-item-actions 同一套显隐节奏 */
+.mr-item-delete {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--awd-text-2);
+  opacity: 0;
+  /* 不显示时不能吃点击：opacity 不影响命中测试，漏了这行的话，行右侧那块看不见的
+     区域仍会响应点击，弹出删除确认框却查不出缘由 */
+  pointer-events: none;
+  transition: opacity 0.15s;
+
+  &:hover {
+    background: var(--awd-surface);
+    color: var(--awd-danger-text);
+  }
+}
+
+.mr-item-head:hover .mr-item-delete {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ---- 详情 ---- */
 .mr-detail {
-  border-top: 1px solid #F0F1F3;
+  border-top: 1px solid var(--awd-border-subtle);
   padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
-  background: #FCFCFD;
+  background: var(--awd-bg);
   display: flex;
   flex-direction: column;
   gap: var(--awd-panel-gap);
@@ -1287,11 +1524,11 @@ $mr-muted: #6B7280;
 }
 
 .mr-link {
-  font-size: 11px;
-  color: #1D6FC2;
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-accent-text);
   cursor: pointer;
 
-  &.danger { color: $mr-danger; }
+  &.danger { color: var(--awd-danger-text); }
   &:hover { text-decoration: underline; }
 }
 
@@ -1304,11 +1541,11 @@ $mr-muted: #6B7280;
 .mr-input {
   flex: 1;
   min-width: 0;
-  border: 1px solid #D1D5DB;
+  border: 1px solid var(--awd-border-strong);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
-  background: #FFFFFF;
+  background: var(--awd-surface);
 }
 
 .mr-section {
@@ -1320,19 +1557,23 @@ $mr-muted: #6B7280;
 .mr-section-title {
   font-size: 11px;
   font-weight: 600;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .mr-hint {
   font-size: 11px;
-  color: $mr-muted;
+  color: var(--awd-text-2);
   line-height: 1.5;
 }
 
 .mr-error {
-  font-size: 11px;
-  color: $mr-danger;
+  padding: 8px;
+  border-radius: var(--awd-panel-radius);
+  background: var(--awd-danger-soft);
+  font-size: var(--awd-panel-fs);
+  color: var(--awd-danger-text);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .mr-progress-row {
@@ -1345,14 +1586,27 @@ $mr-muted: #6B7280;
   width: 12px;
   height: 12px;
   flex-shrink: 0;
-  border: 2px solid #D1D5DB;
-  border-top-color: $mr-primary;
+  border: 2px solid var(--awd-border-strong);
+  border-top-color: var(--awd-accent);
   border-radius: 50%;
   animation: mr-spin 0.9s linear infinite;
 }
 
 @keyframes mr-spin {
   to { transform: rotate(360deg); }
+}
+
+.mr-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--awd-border);
+  overflow: hidden;
+}
+
+.mr-progress-fill {
+  height: 100%;
+  background: var(--awd-accent);
+  transition: width 0.4s ease;
 }
 
 .mr-actions {
@@ -1375,16 +1629,16 @@ $mr-muted: #6B7280;
   cursor: pointer;
   border: 1px solid transparent;
 
-  &:hover { border-color: #B7BCC3; }
+  &:hover { border-color: var(--awd-border-strong); }
 }
 
 /* 六色循环：同一说话人在图例与转写稿里颜色一致 */
-.sp-0 { background: #EAF7F0; color: #1A5336; }
-.sp-1 { background: #EBF5FF; color: #1D6FC2; }
-.sp-2 { background: #FFF4E6; color: #B25E09; }
+.sp-0 { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+.sp-1 { background: var(--awd-info-soft); color: var(--awd-info-text); }
+.sp-2 { background: var(--awd-warning-soft); color: var(--awd-warning-text); }
 .sp-3 { background: #F5EBFF; color: #7A3FBF; }
-.sp-4 { background: #FDF0F4; color: #C13A6B; }
-.sp-5 { background: #EDF6F7; color: #0F7A8A; }
+.sp-4 { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+.sp-5 { background: var(--awd-info-soft); color: var(--awd-info-text); }
 
 /* ---- 摘要 ---- */
 .mr-fold-head {
@@ -1408,12 +1662,12 @@ $mr-muted: #6B7280;
 .mr-summary-strong {
   font-size: 11px;
   font-weight: 600;
-  color: #374151;
+  color: var(--awd-text);
 }
 
 .mr-summary-text {
   font-size: 11px;
-  color: #4B5563;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
@@ -1424,10 +1678,10 @@ $mr-muted: #6B7280;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid #F0F1F3;
+  border: 1px solid var(--awd-border-subtle);
   border-radius: 6px;
   padding: 8px;
-  background: #FAFBFC;
+  background: var(--awd-bg);
 }
 
 .mr-seg {
@@ -1451,13 +1705,13 @@ $mr-muted: #6B7280;
 
 .mr-seg-time {
   font-size: 10px;
-  color: #9CA3AF;
+  color: var(--awd-text-3);
   font-variant-numeric: tabular-nums;
 }
 
 .mr-seg-text {
   font-size: 12px;
-  color: #1F2328;
+  color: var(--awd-text);
   line-height: 1.6;
   word-break: break-word;
 }
@@ -1466,7 +1720,7 @@ $mr-muted: #6B7280;
 .mr-dialog-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--awd-overlay);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -1475,7 +1729,7 @@ $mr-muted: #6B7280;
 
 .mr-dialog-content {
   width: 300px;
-  background: #FFFFFF;
+  background: var(--awd-surface);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
@@ -1488,19 +1742,19 @@ $mr-muted: #6B7280;
 .mr-dialog-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1F2328;
+  color: var(--awd-text);
 }
 
 .mr-dialog-body {
   padding: 10px 16px 16px;
   font-size: 12px;
-  color: #4B5563;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
 .mr-dialog-footer {
   display: flex;
-  border-top: 1px solid #F0F1F3;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .mr-dialog-btn {
@@ -1510,8 +1764,8 @@ $mr-muted: #6B7280;
   font-size: 13px;
   cursor: pointer;
 
-  &.cancel { color: $mr-muted; }
-  &.confirm { color: $mr-danger; font-weight: 600; }
-  &:hover { background: #F8F9FA; }
+  &.cancel { color: var(--awd-text-2); }
+  &.confirm { color: var(--awd-danger-text); font-weight: 600; }
+  &:hover { background: var(--awd-bg); }
 }
 </style>

@@ -1,4 +1,7 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { normalizeBaseUrl } from './settings.js'
+import { t } from './i18n.js'
 
 /**
  * 后端 REST 访问。鉴权统一走 X-Session-Id 请求头携带 awdt_ 设备令牌
@@ -19,18 +22,18 @@ function headers(token) {
  */
 export async function fetchMyProjects({ serverUrl, token }) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}/api/projects/my`, { headers: headers(token) })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (!resp.ok) {
-    throw new Error(`连接失败（HTTP ${resp.status}）：令牌无效或后端拒绝了请求`)
+    throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
   }
   const data = await resp.json()
-  if (!Array.isArray(data)) throw new Error('后端响应格式异常')
+  if (!Array.isArray(data)) throw new Error(t('apiBadResponseFormat'))
   return data
 }
 
@@ -60,6 +63,356 @@ export async function ensureAddinDefaultProject({ serverUrl, token }) {
 }
 
 /**
+ * 新建项目（POST /api/projects，dev-board#196）。插件端只建 BLANK 类型——
+ * 尽调等结构化项目类型要填公司信息，那是桌面端向导的事。
+ * 返回 {id, name}；失败抛错由界面提示（新建是显式动作，不静默吞）。
+ */
+export async function createProject({ serverUrl, token }, name) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/projects`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ projectType: 'BLANK', name: (name || '').trim() })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
+  const data = await resp.json()
+  if (data && data.id != null) return { id: data.id, name: data.name }
+  throw new Error(t('apiBadResponseFormat'))
+}
+
+/**
+ * 我在本项目的历史会话列表（GET /api/ai/conversations?projectId=，user-scoped 裸数组）。
+ * 每条：{conversationId, title, lastMessage, updatedAt, runStatus}（title 是 LLM 生成的，
+ * 可能为空）。失败静默回空数组——历史列表拿不到不该打断当前对话（dev-board#148）。
+ */
+export async function fetchConversations({ serverUrl, token }, projectId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !projectId) return []
+  try {
+    const resp = await fetch(
+      `${base}/api/ai/conversations?projectId=${encodeURIComponent(projectId)}`,
+      { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 可用模型清单（GET /api/ai/models → {models:[{id,name,vendor,vision,...}], defaultModel}）。
+ * 失败回 null：模型选择器隐藏，发消息不带 model 字段走后端默认，不影响主链路。
+ *
+ * models 元素原样透传，字段随后端演进；界面用到的三个：
+ *   - id / name：选择器的值与显示名；
+ *   - vision（boolean）：该模型支不支持视觉输入（直接看图）。支持则图片附件作为
+ *     image 内容块直送模型，不支持则后端自动降级走 OCR 抽文本——降级全自动，
+ *     插件端不拦截任何东西，只负责让用户在选模型那一刻就知道。
+ *     **字段缺失（旧后端）要与 false 区分开**：当成 false 会对所有模型误报
+ *     「不支持读图」，未知时什么都别提示（判定见 chatSession.activeModelVision）。
+ * defaultModel 是 selectedModel='' 时实际生效的模型 id。
+ */
+/**
+ * 归档绑定（dev-board#297）：选中远程设备分组的桌面项目时 find-or-create 云端影子容器项目。
+ * 返回 {projectId, deviceId, projectKey}；旧后端 404 或任何失败抛错（调用方给可读提示）。
+ */
+export async function ensureAddinLink({ serverUrl, token }, { deviceId, projectKey, name }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/projects/ensure-addin-link`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ deviceId, projectKey, name })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) throw new Error(t('archiveLinkUnsupported'))
+  const data = await resp.json()
+  if (!data || data.projectId == null) throw new Error(t('archiveLinkUnsupported'))
+  return data
+}
+
+/** 当前用户全部归档绑定（服务端权威清单；旧后端/失败返回空数组静默降级）。 */
+export async function fetchAddinLinks({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return []
+  try {
+    const resp = await fetch(`${base}/api/projects/addin-links`, { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 文档镜像上传（dev-board#299）：当前文档原始字节送云端中转区（mediaType=document），
+ * 桌面端落「插件文档/<原名>」固定路径覆盖。复用手机影像中转端点与 3GB 共池配额。
+ */
+export async function uploadRelayDocument({ serverUrl, token }, { bytes, fileName, deviceId, projectKey, clientMediaId }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  const form = new FormData()
+  form.append('file', new Blob([bytes], { type: 'application/octet-stream' }), fileName)
+  form.append('deviceId', deviceId)
+  form.append('projectKey', projectKey)
+  form.append('clientMediaId', clientMediaId)
+  form.append('fileName', fileName)
+  form.append('mediaType', 'document')
+  const resp = await fetch(`${base}/api/mobile/media`, {
+    method: 'POST',
+    // multipart 边界由浏览器生成，不能手写 Content-Type
+    headers: { 'X-Session-Id': token || '' },
+    body: form
+  })
+  if (!resp.ok) throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
+  const data = await resp.json()
+  if (!data || data.code !== 0) throw new Error((data && data.message) || t('apiBadResponseFormat'))
+  return data
+}
+
+export async function fetchModels({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return null
+  try {
+    const resp = await fetch(`${base}/api/ai/models`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (data && Array.isArray(data.models)) {
+      return { models: data.models, defaultModel: data.defaultModel || '' }
+    }
+  } catch (e) {
+    // 静默降级
+  }
+  return null
+}
+
+/**
+ * Skill 清单（GET /api/skills/list，登录即可，裸数组）。只取已启用的给斜杠菜单用；
+ * 失败回空数组——skill 菜单隐藏，不影响主链路（dev-board#150）。
+ */
+export async function fetchSkills({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return []
+  try {
+    const resp = await fetch(`${base}/api/skills/list`, { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 删除整个会话（DELETE /api/ai/conversation/{id}）。会话进行中时后端回 409。
+ * 失败抛错（带后端文案），由界面提示——删除是显式动作，不静默吞。
+ */
+export async function deleteConversation({ serverUrl, token }, conversationId) {
+  const base = normalizeBaseUrl(serverUrl)
+  const resp = await fetch(`${base}/api/ai/conversation/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE',
+    headers: headers(token)
+  })
+  if (!resp.ok) {
+    // 守卫类错误（403/409/400）后端回的是纯文本文案（LangText 解析后的字符串），透传给用户
+    let msg = t('apiDeleteFailedHttp', { status: resp.status })
+    try { const serverText = (await resp.text()).trim(); if (serverText && serverText.length < 200 && !serverText.startsWith('<')) msg = serverText.replace(/^"|"$/g, '') } catch (e) { /* 保底文案 */ }
+    throw new Error(msg)
+  }
+}
+
+/**
+ * 重命名会话（POST /api/ai/conversation/{id}/title {title}，1-60 字符）。
+ */
+export async function renameConversation({ serverUrl, token }, conversationId, title) {
+  const base = normalizeBaseUrl(serverUrl)
+  const resp = await fetch(`${base}/api/ai/conversation/${encodeURIComponent(conversationId)}/title`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({ title })
+  })
+  if (!resp.ok) {
+    let msg = t('apiRenameFailedHttp', { status: resp.status })
+    try { const serverText = (await resp.text()).trim(); if (serverText && serverText.length < 200 && !serverText.startsWith('<')) msg = serverText.replace(/^"|"$/g, '') } catch (e) { /* 保底文案 */ }
+    throw new Error(msg)
+  }
+}
+
+/**
+ * 项目文件清单（GET /api/projects/{pid}/files?tree=true），给附件选择器用。
+ * 返回拍平后的文件数组（滤掉文件夹）；失败回空数组静默降级。
+ */
+export async function fetchProjectFiles({ serverUrl, token }, projectId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !projectId) return []
+  try {
+    const resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/files?tree=true`, {
+      headers: headers(token)
+    })
+    if (!resp.ok) return []
+    let data = await resp.json()
+    if (data && typeof data === 'object' && 'data' in data) data = data.data
+    const flat = []
+    const walk = (nodes) => {
+      for (const n of (Array.isArray(nodes) ? nodes : [])) {
+        if (!n) continue
+        const isDir = n.isFolder || n.isDir || n.fileType === 'folder'
+        if (!isDir && n.id != null) flat.push({ id: n.id, name: n.name || String(n.id), fileType: n.fileType || '' })
+        if (Array.isArray(n.children)) walk(n.children)
+      }
+    }
+    walk(data)
+    return flat
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 创建项目文件记录（POST /api/projects/{pid}/files/file，本地附件上传第一步，dev-board#262）。
+ * 参数对齐桌面端 createFile（frontend/src/services/api.js）：body 是
+ * {parentId, name, fileType, fileSize, wpsFileId}，存储键由服务端生成（filePath 不上送）。
+ * 服务端直接返回 ProjectFile 对象本体（无 {code,data} 信封）；失败抛错由界面提示。
+ */
+export async function createProjectFile({ serverUrl, token }, projectId, { name, fileType, size, wpsFileId }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/files/file`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ parentId: null, name, fileType, fileSize: size, wpsFileId })
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) throw new Error(t('apiCreateFileFailedHttp', { status: resp.status }))
+  let data = null
+  try { data = await resp.json() } catch (e) { throw new Error(t('apiBadResponseFormat')) }
+  if (data && data.id != null) return data
+  throw new Error(t('apiBadResponseFormat'))
+}
+
+/**
+ * 上传文件字节（POST /api/files/{fileId}/upload，本地附件上传第二步）。
+ * 与桌面端 uploadFileContent（ChatInterface.vue）同一套头：裸 octet-stream 单块，
+ * X-File-Offset:0 + X-File-Total-Size + X-Session-Id（三个头都在后端 CORS 白名单里）。
+ * fileId 用数字 id 或 wpsFileId 均可（后端 resolveProjectFileForUpload 双查）。
+ * 失败抛错：后端守卫类错误（403/400/404）带 {code:-1,message} 可读文案，透传给用户。
+ */
+export async function uploadFileBytes({ serverUrl, token }, fileId, blob, totalSize) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  let resp
+  try {
+    resp = await fetch(`${base}/api/files/${encodeURIComponent(fileId)}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Session-Id': token || '',
+        'X-File-Offset': '0',
+        'X-File-Total-Size': String(totalSize)
+      },
+      body: blob
+    })
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  if (!resp.ok) {
+    let msg = t('apiUploadFailedHttp', { status: resp.status })
+    try {
+      const data = await resp.json()
+      if (data && data.message) msg = String(data.message)
+    } catch (e) { /* 保底文案 */ }
+    throw new Error(msg)
+  }
+}
+
+/**
+ * 该账号全部设备清单（GET /api/mobile/devices，dev-board#250）。每台设备带在线态
+ * 与其在该机上的项目列表，供项目下拉渲染远程设备分组。旧后端没有该端点（404）
+ * 或任何失败/非数组响应一律返回 null，由调用方隐藏这组下拉项，不影响主链路。
+ */
+export async function fetchMobileDevices({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return null
+  try {
+    const resp = await fetch(`${base}/api/mobile/devices`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    return Array.isArray(data) ? data : null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 语音听写（POST /api/voice/dictate，dev-board#153）。失败抛错（透传服务端文案）。
+ */
+export async function postDictate({ serverUrl, token }, { audioBase64, format, durationMs }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  const resp = await fetch(`${base}/api/voice/dictate`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({ audioBase64, format, durationMs })
+  })
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`
+    try { const serverText = (await resp.text()).trim(); if (serverText && serverText.length < 300 && !serverText.startsWith('<')) msg = serverText.replace(/^"|"$/g, '') } catch (e) { /* 保底 */ }
+    throw new Error(msg)
+  }
+  const data = await resp.json()
+  return data && typeof data.text === 'string' ? data.text : ''
+}
+
+/**
+ * 当前登录用户信息（GET /api/auth/me，dev-board#176 头像）。
+ * 返回 {id, username, displayName, avatarUrl, ...}；未登录/失败一律 null 静默降级——
+ * 头像取不到就显示首字母，不该打断使用。
+ */
+export async function fetchMe({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return null
+  try {
+    const resp = await fetch(`${base}/api/auth/me`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (data && data.code === 0 && data.data) return data.data
+  } catch (e) {
+    // 静默降级
+  }
+  return null
+}
+
+/**
+ * 退出登录（POST /api/auth/logout，尽力而为）。设备令牌的本地清除才是真正的退出，
+ * 服务端调用失败不阻塞也不报错。
+ */
+export async function postLogout({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return
+  try {
+    await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: headers(token) })
+  } catch (e) {
+    // 尽力而为
+  }
+}
+
+/**
  * 拉某个会话的历史消息（GET /api/ai/history?conversationId=...）。
  * 任务窗格重建后据此把上一场对话回灌到界面。
  * 403/404/网络失败一律返回空数组静默降级——历史拿不到不该打断用户开新的对话。
@@ -81,11 +434,44 @@ export async function fetchConversationHistory({ serverUrl, token }, conversatio
 }
 
 /**
+ * 人机验证的公开配置（匿名端点 GET /api/auth/account-login/captcha-config）。
+ *
+ * **刻意不用 `/api/account/captcha-config`**：那条要 `X-Session-Id`，而云后端
+ * （local-mode=false）下插件用户此刻还没登录——「取控件参数得先有会话、有会话得先登录、
+ * 登录得先过控件」是死循环。
+ *
+ * 静默降级成「未启用」：拿不到配置时返回 `{provider: null}`，调用方跳过控件直接发码，
+ * 官网若确实开着闸会在发码那步给出可读的报错，比在这里把登录整个卡死强。
+ */
+export async function getAccountLoginCaptchaConfig({ serverUrl }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return { provider: null }
+  try {
+    const resp = await fetch(base + '/api/auth/account-login/captcha-config', {
+      headers: { Accept: 'application/json' },
+    })
+    if (!resp.ok) return { provider: null }
+    const data = await resp.json()
+    if (data && data.code === 0 && data.data) return data.data
+  } catch (e) {
+    // 静默降级：老版本云后端没有这个端点，当作未启用
+  }
+  return { provider: null }
+}
+
+/**
  * 账户登录：给手机号发验证码（匿名端点 POST /api/auth/account-login/send-code）。
  * 后端只是转发官网，真正的冷却与日配额在官网侧。
+ *
+ * `captchaToken` 必须一路带到官网：官网 send-code 把 `verifyCaptcha` 排在发短信之前，
+ * 不带就是 403「请先完成安全验证后再试」。插件端曾经整条链都没有这个参数，
+ * 表现成「点获取验证码永远弹不出滑块」（dev-board#88）。
  */
-export async function postAccountLoginSendCode({ serverUrl }, phone) {
-  await postAnonymous(serverUrl, '/api/auth/account-login/send-code', { phone: (phone || '').trim() })
+export async function postAccountLoginSendCode({ serverUrl }, phone, captchaToken) {
+  await postAnonymous(serverUrl, '/api/auth/account-login/send-code', {
+    phone: (phone || '').trim(),
+    captchaToken: (captchaToken || '').trim(),
+  })
 }
 
 /**
@@ -98,7 +484,7 @@ export async function postAccountLoginSendCode({ serverUrl }, phone) {
 export async function postAccountLogin({ serverUrl }, credentials) {
   const data = await postAnonymous(serverUrl, '/api/auth/account-login', credentials || {})
   if (data && data.data && data.data.token) return data.data.token
-  throw new Error('账户校验未通过，请重试')
+  throw new Error(t('apiAccountVerifyFailed'))
 }
 
 /**
@@ -111,7 +497,7 @@ export async function postAccountLogin({ serverUrl }, credentials) {
  */
 async function postAnonymous(serverUrl, path, body) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}${path}`, {
@@ -120,25 +506,26 @@ async function postAnonymous(serverUrl, path, body) {
       body: JSON.stringify(body)
     })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (resp.status === 404) {
     // 旧版本后端没有这两个端点
-    throw new Error('该服务器不支持账户直接连接，请在「高级设置」中改用 API Key 或设备令牌')
+    throw new Error(t('apiAccountLoginUnsupported'))
   }
-  if (!resp.ok) throw new Error(`账户连接失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiAccountConnectFailedHttp', { status: resp.status }))
   let data
   try {
     data = await resp.json()
   } catch (e) {
-    throw new Error('后端响应格式异常')
+    throw new Error(t('apiBadResponseFormat'))
   }
   if (data && data.code === 0) return data
   const message = data && data.message ? String(data.message) : ''
   if (message.includes('未开启账户桥接')) {
-    throw new Error('该服务器未开启账户直连，请在「高级设置」中改用 API Key 或设备令牌')
+    throw new Error(t('apiAccountBridgeDisabled'))
   }
-  throw new Error(message || '账户连接失败，请稍后重试')
+  // message 是服务端文案，必须透传（见文件头注释），只有拿不到 message 时才用客户端兜底文案
+  throw new Error(message || t('apiAccountConnectFailedRetry'))
 }
 
 /**
@@ -149,7 +536,7 @@ async function postAnonymous(serverUrl, path, body) {
  */
 export async function postAwdkLogin({ serverUrl }, key) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}/api/auth/awdk-login`, {
@@ -158,27 +545,27 @@ export async function postAwdkLogin({ serverUrl }, key) {
       body: JSON.stringify({ key: (key || '').trim() })
     })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (resp.status === 404) {
     // 旧版本后端没有该端点
-    throw new Error('该服务器未开启账户直连，请改用设备令牌')
+    throw new Error(t('apiAwdkBridgeDisabled'))
   }
-  if (!resp.ok) throw new Error(`账户直连失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiAwdkConnectFailedHttp', { status: resp.status }))
   let data
   try {
     data = await resp.json()
   } catch (e) {
-    throw new Error('后端响应格式异常')
+    throw new Error(t('apiBadResponseFormat'))
   }
   if (data && data.code === 0 && data.data && data.data.token) {
     return data.data.token
   }
   const message = data && data.message ? String(data.message) : ''
   if (message.includes('未开启') || message.includes('桥接')) {
-    throw new Error('该服务器未开启账户直连，请改用设备令牌')
+    throw new Error(t('apiAwdkBridgeDisabled'))
   }
-  throw new Error('账户 Key 校验未通过：请确认 Key 正确且未过期，或改用设备令牌')
+  throw new Error(t('apiAwdkVerifyFailed'))
 }
 
 /**
@@ -207,7 +594,7 @@ export async function fetchPlatformAiStatus({ serverUrl, token }) {
  */
 export async function refreshPlatformAiKey({ serverUrl, token }, key) {
   const base = normalizeBaseUrl(serverUrl)
-  if (!base) throw new Error('连接未就绪：后端地址为空')
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
   try {
     resp = await fetch(`${base}/api/platform-ai/key/refresh`, {
@@ -216,20 +603,20 @@ export async function refreshPlatformAiKey({ serverUrl, token }, key) {
       body: JSON.stringify({ key: (key || '').trim() })
     })
   } catch (e) {
-    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+    throw new Error(t('apiBackendUnreachable'))
   }
   if (resp.status === 404) {
-    throw new Error('该服务器不支持按账号的 AI 额度刷新')
+    throw new Error(t('apiAiRefreshUnsupported'))
   }
-  if (!resp.ok) throw new Error(`额度刷新失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiAiRefreshFailedHttp', { status: resp.status }))
   let data
   try {
     data = await resp.json()
   } catch (e) {
-    throw new Error('后端响应格式异常')
+    throw new Error(t('apiBadResponseFormat'))
   }
   if (data && data.code === 0 && data.data) return data.data
-  throw new Error('额度刷新未通过：请确认这枚 Key 属于本账号且未过期')
+  throw new Error(t('apiAiRefreshVerifyFailed'))
 }
 
 /**
@@ -239,19 +626,29 @@ export async function refreshPlatformAiKey({ serverUrl, token }, key) {
  */
 export async function createConversation({ serverUrl, token }, projectId) {
   const base = normalizeBaseUrl(serverUrl)
+  let resp
   try {
-    const resp = await fetch(`${base}/api/agent/conversations`, {
+    resp = await fetch(`${base}/api/agent/conversations`, {
       method: 'POST',
       headers: headers(token),
       body: JSON.stringify({ projectId })
     })
-    if (!resp.ok) return null
-    const data = await resp.json()
-    if (data && typeof data.conversationId === 'string' && data.conversationId) {
-      return data.conversationId
-    }
   } catch (e) {
-    // 静默降级：会话 ID 回退客户端生成
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  // 只有 404（旧后端没有签发端点）允许回退客户端自造 ID——那种后端也不校验签发。
+  // 403/5xx 一律抛出：强制签发的云后端上，自造 ID 生来就是死的，落盘等于把用户锁死
+  // （2026-08-24 mac 插件「SSE 403」事故的根因之一）。
+  if (resp.status === 404) return null
+  if (!resp.ok) {
+    const err = new Error(t('apiConversationIssueFailedHttp', { status: resp.status }))
+    err.status = resp.status
+    throw err
+  }
+  let data = null
+  try { data = await resp.json() } catch (e) { return null }
+  if (data && typeof data.conversationId === 'string' && data.conversationId) {
+    return data.conversationId
   }
   return null
 }
@@ -269,9 +666,9 @@ export async function postChat({ serverUrl, token }, payload) {
       body: JSON.stringify(payload)
     })
   } catch (e) {
-    throw new Error('后端不可达：消息未送出')
+    throw new Error(t('apiChatUnreachable'))
   }
-  if (!resp.ok) throw new Error(`对话请求失败（HTTP ${resp.status}）`)
+  if (!resp.ok) throw new Error(t('apiChatFailedHttp', { status: resp.status }))
 }
 
 /**

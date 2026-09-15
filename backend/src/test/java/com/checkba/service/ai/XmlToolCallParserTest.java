@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
@@ -48,6 +51,11 @@ class XmlToolCallParserTest {
 
         @Tool("gen ppt outline")
         public String pptx_generate_outline(@P("topic") String topic, @P("lang") String language) {
+            return "";
+        }
+
+        @Tool("todo write")
+        public String todo_write(@P("todos") String todos) {
             return "";
         }
     }
@@ -107,6 +115,60 @@ class XmlToolCallParserTest {
         cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
         assertEquals("甲方", args.getStr("findText"));
         assertEquals("乙方", args.getStr("replaceText"));
+    }
+
+    /**
+     * 参数值里出现一对 {@code ({ ... })} 是常态（正文里引用代码、字典字面量、
+     * 甚至一句「helper({k: 1})」）。此前 tryExtractJsonObjectArgs 用
+     * indexOf("({") / lastIndexOf("})") 在整段文本里找，命中即把中间那段当成
+     * 整体参数对象返回，真正的命名参数全部丢失——工具拿到一组凭空捏造的参数
+     * 却照常执行，而且不报错。
+     */
+    @Test
+    @DisplayName("参数值里的 ({...}) 不得被当成 JSON 风格整体参数")
+    void codeLikeArgumentIsNotMistakenForJsonStyleCall() {
+        XmlToolCallParser.ParsedCall call = single(
+                "<tool_code>doc_find_replace(findText=\"甲方\", replaceText=\"见 helper({k: 1}) 的返回\")</tool_code>");
+        assertEquals("doc_find_replace", call.toolName());
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("甲方", args.getStr("findText"), "真实参数不该被 ({...}) 顶掉: " + call.argsJson());
+        assertTrue(args.getStr("replaceText") != null && args.getStr("replaceText").contains("helper("),
+                "replaceText 应保留原文: " + call.argsJson());
+    }
+
+    /**
+     * 协议是「一个 tool_code 块放一个调用，要批量就连续输出多个块」
+     * （system_prompt.md「无需中间判断的调用必须在同一轮批量输出」）。
+     * 模型偶尔会把两条塞进同一个块，而 parse() 每个块只产出一个 ParsedCall、
+     * extractStringArg 又只取每个参数名的第一次出现——第二条调用连痕迹都不留：
+     * 没有 ParsedCall、没有报错、没有日志，模型看到第一条成功就当整件事做完了，
+     * 用户要求的第二处修改根本没发生。
+     */
+    @Test
+    @DisplayName("同一个 tool_code 块里的两条调用都要被解析出来")
+    void twoStatementsInOneBlockAreBothParsed() {
+        List<XmlToolCallParser.ParsedCall> calls = parser.parse(
+                "<tool_code>doc_find_replace(findText=\"甲\", replaceText=\"乙\")\n"
+                        + "doc_find_replace(findText=\"丙\", replaceText=\"丁\")</tool_code>");
+        assertEquals(2, calls.size(), "第二条调用被静默丢掉了: " + calls);
+        assertEquals("甲", cn.hutool.json.JSONUtil.parseObj(calls.get(0).argsJson()).getStr("findText"));
+        assertEquals("丙", cn.hutool.json.JSONUtil.parseObj(calls.get(1).argsJson()).getStr("findText"));
+    }
+
+    /** 护栏：看不明白就别拆——拆错了会凭空多执行一个调用，比少执行一个更糟。 */
+    @Test
+    @DisplayName("括号不配平/引号没闭合/尾部有残留时一律退回单条解析")
+    void ambiguousBlocksFallBackToSingleParse() {
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "doc_find_replace(findText=\"甲\") doc_find_replace(findText=\"丙\"").size(), "引号没闭合");
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "doc_find_replace(findText=\"甲\") 然后再来一次 doc_find_replace(findText=\"丙\") 说明文字").size(),
+                "最后一条之后还有残留文字");
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "run_python(code=\"foo()\nbar()\")").size(), "run_python 的 code 参数一律不拆");
+        // 单条调用（含参数值里的括号）保持不拆
+        assertEquals(1, XmlToolCallParser.splitStatements(
+                "doc_find_replace(findText=\"甲\", replaceText=\"见 helper({k: 1}) 的返回\")").size());
     }
 
     @Test
@@ -213,5 +275,44 @@ class XmlToolCallParserTest {
         assertTrue(parser.containsToolCall("<code>x()</code>"));
         assertFalse(parser.containsToolCall("纯文本回答"));
         assertFalse(parser.containsToolCall(null));
+    }
+
+    // dev-board#393：Kimi K3 在同一会话里两种写法随机切换——
+    //   todos="[{\"content\":...}]"（带引号转义）能过，
+    //   todos=[{"content":...},{...}]（裸 JSON 字面量）走到「无引号值」分支，
+    // 扫到第一个逗号就截断，TodoListService 拿到半截 JSON 报「传参格式错误」。
+    // 下面的载荷逐字取自 2026-09-02 18:18 backend.log（催款函三处修订那一轮）。
+    @Test
+    @DisplayName("裸 JSON 数组字面量参数：todos=[{...},{...}] 整段取回")
+    void unquotedJsonArrayLiteralIsTakenWhole() {
+        String payload = "<tool_code>todo_write(todos=[{\"content\":\"付款期限15日改为10日\",\"activeForm\":\"正在修改付款期限\",\"status\":\"in_progress\"},"
+                + "{\"content\":\"补充逾期利息条款\",\"activeForm\":\"正在补充利息条款\",\"status\":\"pending\"},"
+                + "{\"content\":\"落款日期改为11月12日\",\"activeForm\":\"正在改落款日期\",\"status\":\"pending\"}])</tool_code>";
+        XmlToolCallParser.ParsedCall call = single(payload);
+        assertEquals("todo_write", call.toolName());
+        String todos = cn.hutool.json.JSONUtil.parseObj(call.argsJson()).getStr("todos");
+        cn.hutool.json.JSONArray arr = cn.hutool.json.JSONUtil.parseArray(todos);
+        assertEquals(3, arr.size(), "数组被截断: " + todos);
+        assertEquals("落款日期改为11月12日", arr.getJSONObject(2).getStr("content"));
+    }
+
+    @Test
+    @DisplayName("裸 JSON 对象字面量参数：值里含逗号、右括号与转义引号都不截断")
+    void unquotedJsonObjectLiteralHandlesNestedDelimiters() {
+        String payload = "<tool_code>todo_write(todos=[{\"content\":\"a) 第一步, 含\\\"引号\\\"\",\"status\":\"pending\"}])</tool_code>";
+        XmlToolCallParser.ParsedCall call = single(payload);
+        String todos = cn.hutool.json.JSONUtil.parseObj(call.argsJson()).getStr("todos");
+        cn.hutool.json.JSONArray arr = cn.hutool.json.JSONUtil.parseArray(todos);
+        assertEquals(1, arr.size());
+        assertEquals("a) 第一步, 含\"引号\"", arr.getJSONObject(0).getStr("content"));
+    }
+
+    @Test
+    @DisplayName("无引号标量值仍按旧规则截断：key=123, other=true")
+    void unquotedScalarStillStopsAtComma() {
+        XmlToolCallParser.ParsedCall call = single("<tool_code>doc_find_replace(findText=甲方, replaceText=乙方, replaceAll=true)</tool_code>");
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("甲方", args.getStr("findText"));
+        assertEquals("乙方", args.getStr("replaceText"));
     }
 }

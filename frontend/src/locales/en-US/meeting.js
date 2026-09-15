@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // All meeting-recording copy: the panel (components/MeetingRecordingPanel.vue) and the
 // recording engine (utils/meetingRecorder.js), whose errors render inside that panel.
 //
@@ -19,7 +21,7 @@ export default {
   tierDescByok: 'Transcribed with your own Alibaba Cloud Tingwu account; the audio passes through your own OSS bucket.',
   tierDescNoPlatform: 'This deployment uses your own key. Enter the Tingwu credentials under System settings - Platform Services.',
   tierDescNotConnected: 'Connect your AI WorkDeck account and transcription works right away, with no Tingwu account of your own.',
-  tierDescPlatform: 'AI WorkDeck transcribes for you and bills Credits from your account balance by duration. The audio passes through our object storage and is deleted as soon as transcription finishes, with a 24-hour sweep as a backstop.',
+  tierDescPlatform: 'AI WorkDeck transcribes for you and bills Credits from your account balance by duration; processing may still be charged when no speech is detected. The audio passes through our object storage and is deleted as soon as transcription finishes, with a 24-hour sweep as a backstop.',
   localSwitchLabel: 'Keep recordings on this device',
   localSwitchNoteOn: 'Audio is not uploaded and transcription runs on this device; slower than the cloud tier, with no speaker separation.',
   localSwitchNoteReady: 'Once on, audio is not uploaded and transcription runs on this device (slower than the cloud tier, with no speaker separation).',
@@ -31,6 +33,7 @@ export default {
   cancelDownload: 'Cancel Download',
   // The "~" belongs here, not in {size}: {size} is model-manager's sizeHint (like "1.5 GB",
   // language-neutral) and the same value also feeds the admin confirm copy.
+  downloadRuntime: 'Download on-device speech recognition (about {size})',
   downloadModel: 'Download Model (~{size})',
   recheck: 'Check Again',
   downloadStartFailed: 'Could not start the download. Try again later.',
@@ -40,10 +43,15 @@ export default {
   notConfiguredByok: 'No transcription service configured: recordings are still saved to project files, but cannot be turned into text. An administrator can enter Alibaba Cloud Tingwu credentials under System settings - Platform Services - Meeting Transcription, or switch to platform-sourced.',
 
   // ---- Recording ----
+  micDeviceLabel: 'Microphone',
+  micDeviceFallbackName: 'Microphone {n}',
+  micDeviceFallback: 'The selected microphone is unavailable; switched to the default device',
   startRecording: 'Start Recording',
   startHint: 'Tap to start. Speakers are separated automatically, and transcription runs once you stop.',
   recording: 'Recording',
+  connectingMic: 'Connecting to microphone…',
   paused: 'Paused',
+  interrupted: 'Interrupted',
   pause: 'Pause',
   resume: 'Resume',
   stopRecording: 'Stop Recording',
@@ -58,6 +66,7 @@ export default {
   micPermissionDenied: 'Could not get microphone permission. Allow this app to use the microphone in your system settings.',
   finishWriteBackFailed: 'The recording was saved, but its status could not be written back: {message}',
   uploadStalled: 'Upload stalled, retrying (attempt {attempt})',
+  deviceInterrupted: 'The recording device was disconnected or its permission was revoked. Recording has stopped — click Stop to save what was captured.',
 
   // ---- List and status badges ----
   sectionTitle: 'Recordings',
@@ -66,6 +75,7 @@ export default {
   statusRecorded: 'Not transcribed',
   statusTranscribing: 'Transcribing',
   statusTranscribed: 'Transcribed',
+  statusEmpty: 'No speech detected',
   statusFailed: 'Transcription failed',
 
   // ---- Detail actions ----
@@ -85,8 +95,18 @@ export default {
   transcribe: 'Start Transcription',
   retryTranscribe: 'Retry Transcription',
   transcribingHint: 'Transcription and speaker separation are running. This usually takes a few minutes, and you can leave this page.',
+  // Progress hint (dev-board#532): stage comes from the backend progress.stage enum
+  transcribingStagePreparing: 'Preparing audio (transcoding and upload)',
+  transcribingStageLocal: 'Transcribing on this machine',
+  transcribingStageUpstream: 'Transcription and speaker separation',
+  transcribingProgress: '{stage} - {elapsed} elapsed / about {estimated} expected{mark}',
+  transcribingProgressNoEstimate: '{stage} - {elapsed} elapsed',
+  transcribingEstimatedMark: ' (estimated)',
   transcribeFailed: 'Transcription failed',
   submitTranscribeFailed: 'Could not submit for transcription: {message}',
+  resultUnreadable: 'The transcript could not be read. Try again later; the original recording is still saved.',
+  emptyTranscriptBillingHint: 'Platform transcription may still charge Credits for processing time. Retrying submits a new task and may incur another charge.',
+  emptyTranscriptHint: "No speech was detected. Check the selected microphone, input volume and connection, then play the recording to check for sound. If it contains conversation, you can retry transcription.",
 
   // ---- Speakers ----
   speakersTitle: 'Speakers (tap to rename)',

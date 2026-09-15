@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
 import com.checkba.service.QichachaService;
@@ -6,9 +9,13 @@ import com.checkba.service.platform.GatewayException;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -43,6 +50,10 @@ public class EnterpriseDataTools implements AgentToolComponent {
     private final QichachaService qichachaService;
     private final TushareService tushareService;
 
+    /** 发布视频演示桩目录，见 ai.tools.enterprise-demo-fixtures。留空 = 关闭，走原逻辑。 */
+    @Value("${ai.tools.enterprise-demo-fixtures:}")
+    private String enterpriseDemoFixturesDir;
+
     @ToolMeta(displayName = "查询企业工商信息", category = "data")
     @Tool("Look up a Chinese company's business registration record (legal name, registered capital, address, shareholders, executives) by company name or unified social credit code. Returns the raw record as JSON.")
     public String qichacha_query(String companyName) {
@@ -50,13 +61,58 @@ public class EnterpriseDataTools implements AgentToolComponent {
         if (!StringUtils.hasText(companyName)) {
             return "Error: companyName is required.";
         }
+        String demoFixture = readEnterpriseDemoFixture(companyName);
+        if (demoFixture != null) {
+            log.info("Tool: qichacha_query 命中演示 fixture '{}'", companyName);
+            return demoFixture;
+        }
         try {
             return qichachaService.queryEciInfoJson(companyName);
         } catch (GatewayException e) {
-            return unavailable("企业工商信息查询", "企业数据", e);
+            return unavailable("企业工商信息查询", e);
         } catch (Exception e) {
             log.warn("企业工商信息查询失败: {}", e.toString());
-            return "企业工商信息查询失败：" + e.getMessage()
+            // 「错误：」前缀是本仓的失败标记（ToolResult.success 认前缀）——没有它，
+            // 这条真失败会被判成 SUCCESS：过程卡打绿勾、连续失败纠正回路不计数
+            return "错误：企业工商信息查询失败：" + e.getMessage()
+                    + " 本次已跳过该查询，请基于已有信息继续完成任务。";
+        }
+    }
+
+    /** kind → 企查查智能体数据平台 ipr 服务器的工具名。白名单：模型只能挑档，不能自由拼名。 */
+    private static final Map<String, String> IPR_KINDS = Map.of(
+            "trademark", "get_trademark_info",
+            "patent", "get_patent_info",
+            "intl_patent", "get_international_patent",
+            "software_copyright", "get_software_copyright_info",
+            "work_copyright", "get_copyright_work_info",
+            "icp", "get_internet_service_info",
+            "ipr_pledge", "get_ipr_pledge");
+
+    @ToolMeta(displayName = "查询企业知识产权", category = "data")
+    @Tool("Look up a Chinese company's intellectual-property records by company name or unified social credit code. "
+            + "kind must be one of: trademark (商标), patent (专利), intl_patent (国际专利), "
+            + "software_copyright (软件著作权), work_copyright (作品著作权), "
+            + "icp (网站域名 ICP 备案与小程序备案), ipr_pledge (知识产权出质). "
+            + "Call once per kind needed. Returns readable text.")
+    public String qichacha_ipr(String companyName, String kind) {
+        log.info("Tool: qichacha_ipr called for '{}' kind='{}'", companyName, kind);
+        if (!StringUtils.hasText(companyName)) {
+            return "Error: companyName is required.";
+        }
+        String mcpTool = IPR_KINDS.get(kind == null ? "" : kind.trim());
+        if (mcpTool == null) {
+            return "Error: kind 必须是 " + String.join("/", IPR_KINDS.keySet()) + " 之一。收到的是：" + kind;
+        }
+        try {
+            String text = qichachaService.queryIprJson(mcpTool, companyName);
+            return StringUtils.hasText(text) ? text : "该企业暂无对应的知识产权记录。";
+        } catch (GatewayException e) {
+            return unavailable("企业知识产权查询", e);
+        } catch (Exception e) {
+            log.warn("企业知识产权查询失败: {}", e.toString());
+            // 同 qichacha_query：失败标记不能少，否则判据听不见
+            return "错误：企业知识产权查询失败：" + e.getMessage()
                     + " 本次已跳过该查询，请基于已有信息继续完成任务。";
         }
     }
@@ -84,21 +140,39 @@ public class EnterpriseDataTools implements AgentToolComponent {
             String json = tushareService.queryJson(apiName, params, fields == null ? "" : fields);
             return StringUtils.hasText(json) ? json : "金融数据接口未返回结果（可能是参数不匹配或该接口无权限）。";
         } catch (GatewayException e) {
-            return unavailable("金融数据查询", "金融数据", e);
+            return unavailable("金融数据查询", e);
         } catch (Exception e) {
             log.warn("金融数据查询失败: {}", e.toString());
-            return "金融数据查询失败：" + e.getMessage()
+            // 同上：失败标记不能少，否则判据听不见
+            return "错误：金融数据查询失败：" + e.getMessage()
                     + " 本次已跳过该查询，请基于已有信息继续完成任务。";
         }
     }
 
-    /** 网关失败的统一说明文本。带上「改用自己的 Key」这条真出路，但不替用户做决定。 */
-    private String unavailable(String action, String panelName, GatewayException e) {
+    /**
+     * 发布视频演示桩：目录未配置时永远返回 null（不影响任何现有行为）；
+     * 配置了但命中不了这个公司名时也返回 null，交回原逻辑走真实网关。
+     */
+    private String readEnterpriseDemoFixture(String companyName) {
+        if (!StringUtils.hasText(enterpriseDemoFixturesDir)) {
+            return null;
+        }
+        File file = new File(enterpriseDemoFixturesDir, companyName.trim() + ".json");
+        if (!file.isFile()) {
+            return null;
+        }
+        try {
+            return Files.readString(file.toPath());
+        } catch (IOException e) {
+            log.warn("演示 fixture 读取失败，回落真实查询: {}", e.toString());
+            return null;
+        }
+    }
+
+    /** 网关失败的统一说明文本。官方版没有自备 Key 入口（#533），只指真实存在的出路。 */
+    private String unavailable(String action, GatewayException e) {
         log.warn("{}走平台通道失败 kind={}: {}", action, e.getKind(), e.getMessage());
-        String hint = e.suggestsByok()
-                ? "如需继续使用，可在「系统管理 → 平台服务」把" + panelName + "改为自备 Key。"
-                : "";
-        return action + "本次不可用：" + e.getMessage() + hint
+        return action + "本次不可用：" + e.getMessage() + e.userHint()
                 + " 本次已跳过该查询，请基于已有信息继续完成任务。";
     }
 }

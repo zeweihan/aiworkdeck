@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // build-patch-assets.js — 小版本补丁产物 + 签名 manifest（增量更新设计 §5/§9）。
 //
 // 在 tag 构建末尾（单个 runner）跑一次，产出：
@@ -13,7 +15,7 @@
 // Usage:
 //   node scripts/build-patch-assets.js --version 0.11.2 \
 //     --backend <app.jar> --h5 <h5 dist dir> --zeta <zetaoffice dist dir> \
-//     --out <out dir> [--pysvc <bundled pysvc dir>] \
+//     --out <out dir> \
 //     [--prev <上一版 manifest 的 URL 或本地路径>]
 //
 // 签名私钥经 env UPDATE_SIGNING_KEY（PEM 文本，CI secret）传入；
@@ -35,10 +37,6 @@ const DOWNLOAD_PAGE = 'https://www.aiworkdeck.com'
 // 字体必须按前缀排，不能只列 cjk.ttc——cjk-kai.ttf(23.6MB)/cjk-serif.otf(11.1MB)/
 // cjk-fangsong.ttf(8.4MB) 曾漏网，让 v0.11.0 的壳层补丁涨到 26.9MB（业务代码仅 0.3MB）。
 const zetaExcluded = (name) => name === 'lowa' || /^cjk[.-]/.test(name)
-
-// pysvc-src 排除项：字节码缓存（客户端 Python 会自行重建）与随服务烙入的字体
-// 资产（app/fonts/NotoSansSC-Regular.ttf 15.7MB）——同理只随大版本走。
-const PYSVC_SRC_EXCLUDE_DIRS = new Set(['__pycache__', 'fonts'])
 
 function parseArgs(argv) {
   const args = {}
@@ -107,7 +105,8 @@ function fetchText(url) {
       }
       if (res.statusCode !== 200) {
         res.resume()
-        return reject(new Error(`HTTP ${res.statusCode}: ${url}`))
+        // 带上 statusCode：调用方要靠它区分"确实没有上一版"(404) 与"这次没拿到"(其余)
+        return reject(Object.assign(new Error(`HTTP ${res.statusCode}: ${url}`), { statusCode: res.statusCode }))
       }
       let body = ''
       res.on('data', (c) => { body += c })
@@ -119,16 +118,37 @@ function fetchText(url) {
   })
 }
 
-async function loadPrevManifest(prev) {
+// 拉取上一版 manifest。**只有"确实不存在"才允许返回 null**（URL 404 / 本地文件缺失
+// ——即首个补丁版本）；网络抖动、超时、5xx、WAF 返回的 HTML、schema 不符一律重试后炸掉
+// 构建。原因：prev 为 null 时下面的 channels 会退成 {}，latestMajor/majorDownloadPage/
+// telemetryUrl 也全部回落默认值，生成的 manifest 只剩当前大版本一条通道；
+// deploy/update-mirror-sync.sh 会把它原子替换到线上，已发布的其它大版本通道就此被
+// 静默抹掉（无报错、无告警、无备份），停在旧大版本的用户从此收不到增量补丁。
+// 宁可让 tag 构建红着重跑，也不能悄悄发一份残缺清单。
+async function loadPrevManifest(prev, { attempts = 3, retryDelayMs = 2000 } = {}) {
   if (!prev) return null
-  try {
-    const text = /^https?:/.test(prev) ? await fetchText(prev) : fs.readFileSync(prev, 'utf8')
-    const m = JSON.parse(text)
-    return m && m.schema === 1 ? m : null
-  } catch (e) {
-    console.warn(`[build-patch-assets] 上一版 manifest 不可用（首个补丁版本属正常）: ${e.message}`)
-    return null
+  const isUrl = /^https?:/.test(prev)
+  let lastErr = null
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const text = isUrl ? await fetchText(prev) : fs.readFileSync(prev, 'utf8')
+      const m = JSON.parse(text)
+      if (!m || m.schema !== 1) {
+        throw Object.assign(new Error(`上一版 manifest schema 不是 1（拿到 ${m && m.schema}）: ${prev}`), { fatal: true })
+      }
+      return m
+    } catch (e) {
+      if (e.statusCode === 404 || e.code === 'ENOENT') {
+        console.warn(`[build-patch-assets] 上一版 manifest 不存在（首个补丁版本属正常）: ${prev}`)
+        return null
+      }
+      if (e.fatal) throw e
+      lastErr = e
+      console.warn(`[build-patch-assets] 上一版 manifest 拉取失败（第 ${i}/${attempts} 次）: ${e.message}`)
+      if (i < attempts) await new Promise((r) => setTimeout(r, retryDelayMs * i))
+    }
   }
+  throw new Error(`上一版 manifest 拉取失败，已重试 ${attempts} 次: ${prev} — ${lastErr && lastErr.message}`)
 }
 
 async function main() {
@@ -171,22 +191,6 @@ async function main() {
     fs.cpSync(path.join(args.zeta, en.name), path.join(stage['zetaoffice-wrapper'], en.name), { recursive: true })
   }
 
-  // pysvc-src（P3）：Python 服务源码层（各服务 app/ 目录，不含 pip 依赖 lib/）。
-  // 客户端由 pysvc-runtime.syncSrcPatch 覆盖进解压树（带备份可回滚）。
-  if (args.pysvc && fs.existsSync(args.pysvc)) {
-    stage['pysvc-src'] = path.join(work, 'pysvc-src')
-    fs.mkdirSync(stage['pysvc-src'], { recursive: true })
-    for (const en of fs.readdirSync(args.pysvc, { withFileTypes: true })) {
-      const appDir = path.join(args.pysvc, en.name, 'app')
-      if (en.isDirectory() && fs.existsSync(appDir)) {
-        fs.cpSync(appDir, path.join(stage['pysvc-src'], en.name, 'app'), {
-          recursive: true,
-          filter: (src) => !PYSVC_SRC_EXCLUDE_DIRS.has(path.basename(src))
-        })
-      }
-    }
-  }
-
   // --- 与上一版 manifest 做内容级去重 ---------------------------------------
   const prev = await loadPrevManifest(args.prev)
   const prevComponents = new Map()
@@ -222,8 +226,8 @@ async function main() {
   }
 
   // --- 体积自检 --------------------------------------------------------------
-  // 补丁的全部意义就是小。任何一次"大文件漏进排除规则"（v0.11.0 的 CJK 字体与
-  // pysvc 字体）都会静默把补丁涨成几十 MB，用户侧只会表现为"更新有点慢"而不会
+  // 补丁的全部意义就是小。任何一次"大文件漏进排除规则"（v0.11.0 的 LOWA 引擎与
+  // CJK 字体）都会静默把补丁涨成几十 MB，用户侧只会表现为"更新有点慢"而不会
   // 报错——所以在产出时就炸，别等用户发现。
   const MAX_COMPONENT_MB = 8
   const oversized = components.filter((c) => c.size > MAX_COMPONENT_MB * 1048576)
@@ -262,4 +266,9 @@ async function main() {
   console.log(`[build-patch-assets] done: ${outDir}`)
 }
 
-main().catch((e) => fail(e.stack || String(e)))
+// CLI 入口只在直接执行本文件时跑；被 require() 当模块用时（单测）只取函数。
+if (require.main === module) {
+  main().catch((e) => fail(e.stack || String(e)))
+}
+
+module.exports = { loadPrevManifest, fetchText }

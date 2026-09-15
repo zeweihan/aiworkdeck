@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // zetaOfficeImeOverlay.js — transparent IME overlay for the LibreOffice WASM
 // canvas (Epic #43, Phase A+B). DORMANT until a page calls attachImeOverlay().
 //
@@ -20,29 +22,15 @@
 // cursor.
 //
 // 组合中的文字（"输入过程"）由一个独立的不透明预览条显示，贴在光标框上方——
-// 输入框本身必须全透明（它压在画布上，显字会与正文叠印），而预览条不依赖光标
-// 映射，Phase A 下照样可见。
+// 输入框本身必须 opacity 0（它压在画布上，任何绘制都会叠在正文上：字靠 color
+// transparent，输入法给组合文字画的下划线只有 opacity 管得住），而预览条不依赖
+// 光标映射，Phase A 下照样可见。
 //
-//   MAPPING — doc 1/100 mm -> canvas CSS px is affine: px = origin + scale*(doc - scroll).
-//   * scale is STABLE: 96/2540 CSS px per 1/100 mm at 100% zoom (CSS defines
-//     96 px/in; 2540 (1/100 mm)/in), times ZoomValue%. Verified exact against a
-//     real LibreOffice (click-correspondence calibration).
-//   * scroll is the SCROLLED view origin (VisibleTop/Left from get_cursor_rect's
-//     viewData). getPosition() is in document coords (from the page top), so once
-//     the view scrolls the cursor's doc Y jumps while its pixel stays in view.
-//     Subtracting `scroll` makes the mapping track the cursor through scroll
-//     WITHOUT re-clicking — the fix for the "anchor goes stale after auto-scroll"
-//     limitation. Absent viewData (older LOWA) -> scroll=0 -> identical to the
-//     pre-scroll-aware behavior. Unit (1/100 mm vs twips) is baked once on a real
-//     device via CURSOR_MAP.viewDataToMm.
-//   * origin is the canvas pixel of the visible-area top-left — VIEW-STATE-
-//     DEPENDENT (window size, LO chrome) but STABLE under scroll. We derive it
-//     LIVE from each canvas click: the click gives both the click pixel AND
-//     (after Qt positions the cursor) the cursor's doc coords + scroll, so
-//     origin = clickPx - scale*(docPos - scroll). The normal flow is "click to
-//     place the cursor, then type", so the anchor is always fresh. Before the
-//     first click we have no anchor, so the overlay stays full-cover (Phase A)
-//     and the candidate box sits top-left until the first click.
+// Native mapping uses the live Writer controller caret/visible-area twips and
+// the native editing window origin. It follows scrolling, zoom, keyboard moves
+// and Qt snapping a margin click to text without calibrating against that click.
+// Older guests without native geometry retain the click-derived fallback below;
+// model viewData is only a saved snapshot and cannot track live scrolling.
 //
 // Control keys (Phase B, when sendCommand is supplied): Enter inserts a paragraph
 // break via onEnter; Backspace/Delete delete around the cursor; arrow keys move
@@ -100,6 +88,19 @@ export function cursorRectToPixels(raw, offset) {
   }
 }
 
+/** Native window geometry stays correct when a margin click snaps to text,
+ * and when scrolling/zooming changes the document's visible origin. */
+export function nativeCursorRectToPixels(raw, surface) {
+  const caret = raw?.nativeCaret
+  if (!caret || !surface || ![caret.x, caret.y, caret.height, caret.frameWidth, caret.frameHeight, surface.width, surface.height].every(Number.isFinite)
+    || caret.frameWidth <= 0 || caret.frameHeight <= 0 || surface.width <= 0) return null
+  const scale = surface.width / caret.frameWidth
+  // Qt's frame client excludes its menu bar; the canvas includes it.
+  const menuHeight = Math.max(0, surface.height - caret.frameHeight * scale)
+  return { left: (surface.left || 0) + caret.x * scale,
+    top: (surface.top || 0) + menuHeight + caret.y * scale, height: caret.height * scale }
+}
+
 /**
  * Attach a transparent IME overlay to a LibreOffice WASM canvas.
  *
@@ -123,15 +124,18 @@ export function cursorRectToPixels(raw, offset) {
  * @param {()=>void} [options.onCursorMoved] OPTIONAL. Fired after every action
  *        that moves the LO cursor (commit / control key / arrow / canvas click).
  *        宿主用它刷新工具栏激活态——引擎的选区监听盖不住纯光标移动。
+ * @param {()=>void} [options.onCommentRequested] Opens the host's comment form
+ *        for Ctrl/Cmd+Alt+C without creating an empty native annotation.
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
  * @returns {{element, focus, reposition, computeRect, destroy}}
  */
-export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onLog } = {}) {
+export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onCommitted, onAssistanceKey, onCommentRequested, onLog } = {}) {
   if (!canvas) throw new Error('attachImeOverlay: canvas is required')
   if (typeof commit !== 'function') throw new Error('attachImeOverlay: commit(text) is required')
   const log = (m) => { if (onLog) onLog(m) }
 
   const phaseB = typeof getCursorRaw === 'function'
+  let positionSequence = 0, disposed = false
   let mapOk = phaseB     // flips false (-> Phase A) if a raw read ever throws
   let anchor = null      // {x,y} live origin offset in host px, set on canvas click
   let lastClick = null   // 最近一次画布点击（host 相对 px）——没有光标映射时的摆位依据
@@ -139,11 +143,18 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
 
   const input = document.createElement('input')
   input.setAttribute('autocomplete', 'off')
+  input.setAttribute('data-lo-ime', '')
   input.setAttribute('aria-hidden', 'true')
   Object.assign(input.style, {
     position: 'absolute', top: '0', left: '0',
     margin: '0', padding: '0', border: '0', outline: '0',
     background: 'transparent', color: 'transparent', caretColor: 'transparent',
+    // opacity 0 才是真的什么都不画。字设成 transparent 只管字：浏览器给组合中的
+    // 文字画的输入法标记（真机上是输入法指定颜色的下划线）用的不是 color，于是
+    // 正文光标后面凭空多出一根线（dev-board#606）。opacity 不动布局，输入框照旧
+    // 持有焦点、几何照旧贴着光标，系统候选窗按它定位不受影响——不能改用
+    // visibility/display 藏，那会连焦点和 IME 一起掐掉。
+    opacity: '0',
     font: 'inherit', lineHeight: '1',
     pointerEvents: 'none', // clicks fall through to the canvas (Qt positions cursor)
     zIndex: '5',
@@ -238,13 +249,15 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     }
   }
 
-  // Compute the current cursor rect in host px (null until anchored). Exported via
+  // Compute the current cursor rect in host px (native geometry needs no click). Exported via
   // the return for the spike's debug box.
   async function computeRect() {
-    if (!phaseB || !mapOk || !anchor) return null
+    if (!phaseB || !mapOk) return null
     try {
       const raw = await getCursorRaw()
-      return cursorRectToPixels(raw, anchor)
+      const surface = canvas.getBoundingClientRect(), parent = host.getBoundingClientRect()
+      return nativeCursorRectToPixels(raw, { left: surface.left - parent.left, top: surface.top - parent.top, width: surface.width, height: surface.height })
+        || cursorRectToPixels(raw, anchor)
     } catch (e) { mapOk = false; return null }
   }
 
@@ -252,7 +265,10 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // 失败）退回**最后一次点击处**而不是全覆盖：系统候选窗跟着输入框走，落在用户
   // 刚点的地方总比钉在画布左上角强。一次都没点过才全覆盖。
   async function reposition() {
+    if (disposed) return
+    const sequence = ++positionSequence
     const rect = await computeRect()
+    if (disposed || sequence !== positionSequence) return
     if (rect) applyCursorBox(rect)
     else if (lastClick) applyCursorBox({ left: lastClick.x, top: Math.max(0, lastClick.y - 9), height: 18 })
     else applyCover()
@@ -262,47 +278,86 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     if (typeof onCursorMoved === 'function') { try { onCursorMoved() } catch (e) { /* ignore */ } }
   }
 
-  // Commit logic: identical to the verified toolbar bridge. dedup the input event
-  // that trails compositionend so a committed phrase isn't inserted twice.
+  // The browser may report a final input before compositionend. Use that
+  // explicit confirmation immediately; never infer it from Space/digit keys.
+  // A later end/input pair may repeat the same text, so deduplicate only that
+  // committed phrase, without swallowing cancellation or following punctuation.
   //
-  // 这个闩曾经是「中文标点要按两次」的根因：compositionend 后无条件置位，指望
-  // 紧跟着一定有一个 input 事件来把它消费掉。可**不是每次都有**——中文态下标点
-  // 直接上屏、组合被取消等情形都不补发，闩就一直挂着，把用户随后敲的第一个字符
-  // 吃掉，于是"按两次才过去"。两道保险：
-  //   1) 有 inputType 时只吞组合产物（insertCompositionText/insertFromComposition），
-  //      普通字符（直接上屏的标点走 insertText）一律照常上屏；
-  //   2) 无论如何都在下一个宏任务里自动解闩——尾随 input 与 compositionend 由浏览器
-  //      在同一个任务里连发，解闩排在它之后，闩绝不跨事件循环存活。
-  let composing = false, skipNextInput = false
-  const armSkip = () => {
-    skipNextInput = true
-    setTimeout(() => { skipNextInput = false }, 0)
+  // `composing` means ONE thing: the browser composition is open (start..end).
+  // An early confirmation must NOT clear it — the system IME (macOS marked text)
+  // keeps its session alive past that confirmation, and a flag that disagrees
+  // lets the rest of the composition fall through as plain typing: raw pinyin in
+  // the document, control keys stolen from the candidate window (dev-board#606).
+  let composing = false, compositionCommitted = false, committedText = '', trailingCommit = null
+  let trailingTimer = null
+  const armTrailingCommit = (text) => {
+    clearTimeout(trailingTimer)
+    trailingCommit = text || null
+    trailingTimer = trailingCommit ? setTimeout(() => { trailingCommit = null }, 0) : null
   }
-  const isCompositionInput = (e) => e.inputType === 'insertCompositionText' || e.inputType === 'insertFromComposition'
   const doCommit = (t) => {
-    input.value = ''
+    // Emptying the box while the browser composition is open tears the DOM
+    // buffer away from the IME's marked-text session (the preedit stops being
+    // painted and the candidate window stays at the old anchor). compositionend
+    // clears it instead.
+    if (!composing) input.value = ''
     if (!t) return
     log('IME 覆盖层 → 上屏「' + t + '」')
-    try { Promise.resolve(commit(t)).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
+    try { Promise.resolve(commit(t)).then(async (result) => {
+      // Read the caret after insertion has completed, so suggestions follow the
+      // new glyph/line instead of the position before the committed phrase.
+      await reposition()
+      if (result?.success !== false && typeof onCommitted === 'function') onCommitted(t)
+    }).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }
   }
-  input.addEventListener('compositionstart', () => { composing = true })
+  input.addEventListener('compositionstart', () => {
+    composing = true; compositionCommitted = false; committedText = ''; armTrailingCommit(null)
+  })
   input.addEventListener('compositionupdate', (e) => showPreview(e.data || ''))
   input.addEventListener('compositionend', (e) => {
-    composing = false; armSkip()
+    composing = false
     hidePreview()
-    doCommit(e.data)
-    reposition() // cursor advanced past the committed text
+    // An early confirmation already typed its phrase. The end event repeats that
+    // phrase on the IMEs that confirm first (#600), so type only what the IME
+    // added after it — never the confirmed prefix twice, never nothing when the
+    // composition went on to produce more text.
+    const data = e.data || ''
+    const pending = compositionCommitted && data.startsWith(committedText) ? data.slice(committedText.length) : data
+    if (!compositionCommitted || pending) doCommit(pending)
+    compositionCommitted = false; committedText = ''
+    input.value = ''
+    armTrailingCommit(data)
   })
   input.addEventListener('input', (e) => {
-    if (composing) { showPreview(input.value); return }    // mid-composition: wait for end
-    if (skipNextInput) {
-      skipNextInput = false
-      // 只吞组合产物；直接上屏的标点带 insertText，必须放行（见 armSkip 注释）
-      if (!e.inputType || isCompositionInput(e)) return
+    const text = e.data != null ? e.data : input.value
+    // Deletions and history edits only reshape the transparent box; committing
+    // its leftover value would type raw preedit into the document.
+    const inserts = !e.inputType || /^insert/.test(e.inputType)
+    if (composing) {
+      // Only a nonempty final insert confirms early, and only the first one.
+      // Cleanup deletes, an empty input, and everything after that confirmation
+      // must stay with the composition until its real compositionend.
+      if (compositionCommitted || !inserts || !text
+        || (e.isComposing !== false && e.inputType !== 'insertFromComposition')) {
+        if (compositionCommitted) hidePreview()
+        else showPreview(input.value)
+        return
+      }
+      // Type the confirmed phrase now (#600), but leave the composition state as
+      // the browser reports it — compositionend owns `composing` and the box.
+      compositionCommitted = true; committedText = text
+      hidePreview()
+      doCommit(text)
+      return
     }
-    doCommit(e.data != null ? e.data : input.value)
-    reposition()
+    if (!inserts) { input.value = ''; return }
+    if (trailingCommit !== null) {
+      const duplicate = text === trailingCommit
+      armTrailingCommit(null)
+      if (duplicate) { input.value = ''; return }
+    }
+    doCommit(text)
   })
 
   // Forward a worker UI command, then move the box to the (now-moved) cursor.
@@ -346,7 +401,19 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // onEnter; Backspace/arrows route through sendCommand (skipped if not supplied,
   // letting them fall through to the harmless empty input).
   input.addEventListener('keydown', (e) => {
-    if (composing || e.isComposing) return
+    if (composing || e.isComposing || e.keyCode === 229) return
+    // A real keystroke starts its own input; only an IME echo may repeat the commit.
+    armTrailingCommit(null)
+    // Option can change e.key to a printable symbol on macOS; code retains C.
+    if ((e.metaKey || e.ctrlKey) && e.altKey && !e.shiftKey
+      && (e.code === 'KeyC' || String(e.key).toLowerCase() === 'c')
+      && typeof onCommentRequested === 'function') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!e.repeat) onCommentRequested()
+      return
+    }
+    if (typeof onAssistanceKey === 'function' && onAssistanceKey(e)) return
     if (e.key === 'Enter') {
       e.preventDefault()
       // Shift+Enter = soft line break (same paragraph), like the desktop app.
@@ -425,9 +492,11 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       return
     }
     if (e.key === 'Tab') {
-      // 制表符入文档（浏览器默认的焦点切换在画布上无意义）
+      // 浏览器默认的焦点切换在画布上无意义，一律吃掉。Word/Writer 语义下 Tab 是
+      // 两件事：表格里跳下一格（Shift+Tab 上一格）、正文里插制表符。光标属于哪个
+      // story 只有引擎知道，所以两边都交给 worker 的 tab_key 一条动作裁决。
       e.preventDefault()
-      forward('insert_at_cursor', { text: '\t' }, 'Tab 制表符 / tab')
+      forward('tab_key', { shift: e.shiftKey }, e.shiftKey ? 'Shift+Tab 上一格 / 制表符' : 'Tab 下一格 / 制表符')
       return
     }
     if (e.key === 'Backspace') {
@@ -448,8 +517,12 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // (mouseup), and at the same time re-anchor the live offset + move the box to
   // the freshly-set cursor so the candidate window shows up there.
   const onMouseUp = (e) => {
+    // A secondary click opens a menu without moving the document caret. Taking
+    // focus or reporting a cursor move here closes that menu on button release.
+    if (e.button !== 0 || (isMac && e.ctrlKey)) return
     const cx = e.clientX, cy = e.clientY
     setTimeout(() => {
+      if (disposed) return
       try { input.focus() } catch (err) {}
       // 光标映射不可用时就靠它摆输入框/预览条——所以每次点击都记，不看 phaseB。
       const r = host.getBoundingClientRect()
@@ -472,6 +545,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     reposition,
     computeRect,
     destroy() {
+      disposed = true; positionSequence++; clearTimeout(trailingTimer)
       canvas.removeEventListener('mouseup', onMouseUp)
       input.remove()
       preview.remove()

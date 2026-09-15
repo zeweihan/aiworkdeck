@@ -1,5 +1,7 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="libre-editor-wrapper">
+  <view class="libre-editor-wrapper" :class="{ 'evidence-drop-armed': evidenceDropArmed }">
     <!-- NO full-width bar — it read as alien chrome on top of the document
          (user feedback). Status floats over the editor's top-right corner;
          the pill only appears while something is happening (saving/failure)
@@ -33,7 +35,14 @@
           <text class="libre-loading-pct">{{ Math.round(bootPct) }}%</text>
         </view>
         <text v-if="dlText" class="libre-loading-dl">{{ dlText }}</text>
-        <text class="libre-loading-hint">{{ $t('editor.firstOpenHint') }}</text>
+        <text v-if="!stuck" class="libre-loading-hint">{{ $t('editor.firstOpenHint') }}</text>
+        <!-- 引擎 boot 失败：说清楚原因，否则用户只看得到一根不动的进度条。 -->
+        <text v-if="bootFailReason" class="libre-loading-error">{{ $t('editor.bootFailedHint', { reason: bootFailReason }) }}</text>
+        <!-- 同一阶段长时间无进展（大概率是下载/装载卡住）：给出可点的出路，
+             而不是让用户对着一根不动的进度条干等。 -->
+        <view v-if="stuck" class="libre-loading-retry" @click="retryLoad">
+          <text>{{ $t('editor.retryLoad') }}</text>
+        </view>
       </view>
     </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
@@ -51,21 +60,61 @@
       :executor="executor"
       :refresh-key="uiRefreshKey"
       :review-open="reviewOpen"
+      :insight-open="insightOpen"
       @toggle-review="reviewOpen = !reviewOpen"
+      @toggle-insight="onToggleInsight"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
-    <view class="libre-body">
+    <!-- 溯源光标条（dev-board#632）：光标停在哪一段，这里就说这一段最后是谁、
+         哪一版、什么时候改的。点一下跳到提交历史并高亮那一行。
+         画布是 webview/iframe，里面没有逐段 DOM，做不了 Word 那种悬停提示——
+         产品口径因此是「光标条 + 侧栏」，不是悬停（设计稿 §5.5）。 -->
+    <view v-if="provenanceBarVisible" class="libre-prov-bar">
+      <text v-if="provScopeLabel" class="libre-prov-scope">{{ provScopeLabel }}</text>
+      <text
+        class="libre-prov-text"
+        :class="{ clickable: !!provSha }"
+        @tap="openProvenanceHistory"
+      >{{ provText }}</text>
+    </view>
+    <!-- review-overview-open：审阅概览现在浮在画布右侧（不挤宽画布），画布上的
+         宿主浮层据此让出面板宽度，见样式 .libre-review-overview 之后那一段。 -->
+    <view class="libre-body" :class="{ 'review-overview-open': reviewOverviewShown }">
       <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
            外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
       <view class="libre-canvas-wrap">
         <view :id="hostId" class="libre-host"></view>
+        <!-- 改字 stale 提示条：绝对定位叠在画布顶部，非阻塞；不依赖审阅面板开着 -->
+        <EvidenceStaleBar
+          class="libre-stale-bar"
+          :items="staleItems"
+          @keep="onStaleKeep"
+          @locate="onEvidenceLocate"
+          @ignore="onStaleIgnore"
+        />
+        <!-- 证据关联投放层（EvidenceLink）：画布是 webview/iframe，HTML5 拖放事件落在它
+             的文档里而不是宿主，外层容器直接绑 @drop 收不到。所以文件树/暂存区一开始
+             拖（uni 事件 file-drag-start）就在画布上铺一层透明接收层，drop 落在这层上。
+             选区在拖之前已经选好，接收层挡住画布不影响建链。 -->
+        <view
+          v-if="evidenceDropArmed && ready && file"
+          class="libre-evidence-drop"
+          :class="{ over: evidenceDropOver }"
+          @dragenter.prevent="onEvidenceDragOver"
+          @dragover.prevent="onEvidenceDragOver"
+          @dragleave="onEvidenceDragLeave"
+          @drop.prevent="onEvidenceDrop"
+        >
+          <text class="libre-evidence-hint">{{ $t('workbench.evidence.dropHint') }}</text>
+        </view>
         <view class="libre-float">
           <!-- No manual save button: edits auto-save (modify listener → debounced
                saveDocument). 保存状态只在「慢」和「失败」时出声——见 saveDocument。 -->
           <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
             <view v-if="!isError && !ready" class="libre-spin"></view>
             <text>{{ displayStatus }}</text>
+            <text v-if="statusKey === 'saveFailed' && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
           </view>
           <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
                Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。
@@ -76,12 +125,20 @@
         </view>
       </view>
       <ReviewPanel
-        v-if="reviewOpen && ready && showsReview"
+        class="libre-review-overview"
+        v-if="reviewOverviewShown"
         ref="review"
         :executor="executor"
         :refresh-key="reviewRefreshKey"
+        :document-location="reviewLocation"
+        :project-id="projectId"
+        :doc-file-id="file && file.id"
+        :self-author="selfAuthor"
+        :provenance="provenanceForPanel"
+        @open-history="openProvenanceHistory"
         @close="reviewOpen = false"
         @changed="onReviewChanged"
+        @locate="onEvidenceLocate"
       />
     </view>
   </view>
@@ -100,37 +157,86 @@
 // （原 ⌘⇧O 实验覆盖层与探针工具栏已移除）.
 
 import { webviewTransport, iframeTransport } from '@/composables/useZetaOfficeWebview.js'
-import { createRelayExecutor } from '@/composables/zetaOfficeRelay.js'
+import { createRelayExecutor, PROBE_ACTION, PROBE_BUDGET_MS } from '@/composables/zetaOfficeRelay.js'
+import { classifyLoadFailure, shouldSelfHealLoadFailure } from '@/utils/editorLoadFailure.js'
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
-import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
+import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
+import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
+import { anchorHash } from '@/utils/anchorHash.js'
+import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
+import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceAnchors.js'
+import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
+import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
+import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
+import { stampApplication } from '@/utils/docxAppProps.js'
+import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
+import { createInlineReviewHost } from '@/composables/inlineReviewHost.js'
+import { createWritingAssistanceHost } from '@/composables/writingAssistanceHost.js'
+import { getProvenance, reviewDocInsight, listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
+import { guestPointToHost } from '@/utils/insightPopup.js'
+import { alignProvenance, provenanceLabel, provenanceSummary } from '@/utils/provenanceAlign.js'
 
 let seq = 0
 
+// 当前用户的展示名。两个地方要用同一个串：随 load_document 传给引擎（用户本人的
+// 修订以此署名）与审阅面板的「我」这一桶（dev-board#377）。抽成一处，免得哪天
+// 一边加了兜底另一边没加，用户自己的修订被归成「其他人」。
+// **不许回落 username**（Spec §6）：手机号注册的用户名是 `u`+随机串，落进批注与修订
+// 就是永久的——历史条目不回填。取不到名字宁可给空串，让引擎用它自己的默认作者。
+function currentAuthorName() {
+  const u = getCurrentUser() || {}
+  return String(u.displayName || u.nickname || u.name || '')
+}
+
 export default {
   name: 'LibreOfficeEditor',
-  components: { ReviewPanel, EditorToolbar },
-  emits: ['close', 'ready', 'open-url', 'menu-state'],
+  components: { ReviewPanel, EditorToolbar, EvidenceStaleBar },
+  // command-progress：批量命令（find_replace >50 命中 / apply_house_style）的
+  // 「第 x/y 处」进度，{reqId, done, total}；reqId 可用 executeCommand('cancel', {reqId}) 喊停。
+  // open-insight：行内写作提示 → 宿主打开「依据」窗格；不自动调用 AI 或外部库。
+  // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
+  //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
+  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context', 'open-history'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
     // REAL document once the office endpoint is ready.
     // （原 'experimental' ⌘⇧O 探针工具栏变体已移除：产品只有内联编辑器一种形态。）
     file: { type: Object, default: null },
+    // EvidenceLink（底稿页 / 改字 stale 核对）要按项目查询；宿主工作台传入。
+    projectId: { type: [Number, String], default: null },
+    // 当前用户对该项目有没有写权限（只读成员 / 客户 = false）。adopt_legacy_links 会改文档并触发
+    // 自动保存，只读成员不该跑；核对回写（/anchors/report）只需读权限，不受此影响。
+    canWrite: { type: Boolean, default: true },
+    // 「依据」窗格此刻是不是绑在这份文档上（dev-board#182）。
+    // insightOpen 只管工具栏按钮的按下态；insightSubscribed 会往客体页下发订阅开关——
+    // **不订阅时客体页一次 get_cursor_context 都不打**，常态零开销。
+    insightOpen: { type: Boolean, default: false },
+    insightSubscribed: { type: Boolean, default: false },
   },
   data() {
     return {
       hostId: 'libre-host-' + (++seq),
       ready: false,
+      // EvidenceLink 拖放：armed = 项目内有文件正在被拖（uni file-drag-start/end），
+      // over = 指针正悬在本画布的接收层上（描边高亮）。
+      evidenceDropArmed: false,
+      evidenceDropOver: false,
       // 当前文档内核类型（writer/calc/impress/unknown），worker load_document 返回值
       // 里带回；boot 出来的空白文档恒为 writer，装真文档前保持这个默认值不算错。
       // 审阅按钮/ReviewPanel 按它隐藏——Calc/Impress 都没有修订机制。
       docKind: 'writer',
       // 审阅面板（修订/批注）开关与刷新信号
       reviewOpen: false,
+      reviewLocation: {},
       reviewRefreshKey: 0,
+      // 当前登录用户名。审阅面板的「我」这一桶按它归类作者（dev-board#377），
+      // 与下面 load_document 传给引擎的 authorName 同源（currentAuthorName），
+      // 两处必须是同一个字符串——否则用户自己的修订会被归成「其他人」。
+      selfAuthor: currentAuthorName(),
       // 自建工具栏的激活态刷新信号。由「选区/光标动了」和「文档改了」驱动——
       // 没有轮询：编辑器页把 worker 的选区监听与 IME 覆盖层的光标移动合流成
       // 一个 selection 事件送过来，覆盖了用户能让光标动起来的所有途径。
@@ -162,6 +268,24 @@ export default {
       // overlay 从进度卡片切换为可滚动阅读的文档 + 顶部细进度条。
       previewReady: false,
       previewFailed: false,
+      // 同一 bootStageKey 停留超过约 30s（下载挂起等场景）时置位，露出重试按钮。
+      stuck: false,
+      // 客体页 boot 失败时的原因串（lo-relay 'boot-failed'），显示在加载面板上。
+      bootFailReason: '',
+      // 改字 stale 提示条当前展示的条目 [{linkKey, text, link}]（合并规则见 StaleQueue）
+      staleItems: [],
+      // 逐段溯源（dev-board#632）。provUnits 是后端按历史算好的「每个单元最后是哪一版
+      // 改的」，provRows 是它对到画布此刻段序之后的结果（对齐在 utils/provenanceAlign.js）。
+      // 没开版本记录 / 老服务端 / 拉失败时 provLoaded 恒为 false，整条界面静默不出现——
+      // 溯源是锦上添花，不该在编辑器里弹错。
+      provLoaded: false,
+      provLoading: false,
+      provUnits: [],
+      provTruncated: false,
+      provRows: [],
+      provUnit: null,
+      // 光标不在正文段落上（表格里、页眉里）时说不出这一段归谁，整条收起来
+      provInBody: true,
     }
   },
   computed: {
@@ -178,6 +302,11 @@ export default {
     showsReview() {
       return this.docKind !== 'calc' && this.docKind !== 'impress'
     },
+    // 审阅概览此刻是否渲染。v-if 与 .libre-body 的让位 class 共用这一个判据，
+    // 两处不许各写一份——面板不在时浮层白白让出 288px，面板在时又压住浮层。
+    reviewOverviewShown() {
+      return this.reviewOpen && this.ready && this.showsReview
+    },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
       return this.statusKey === 'ready' ? '' : this.$t('editor.status.' + this.statusKey)
@@ -185,8 +314,36 @@ export default {
     bootStageText() {
       return this.$t('editor.boot.' + this.bootStageKey)
     },
+    // ---- 溯源 ----
+    provenanceBarVisible() {
+      return !!(this.ready && this.file && !this.loadingOverlayVisible && this.provLoaded && this.provInBody)
+    },
+    provScopeLabel() {
+      if (this.docKind === 'calc') return this.$t('version.provenanceCellLabel')
+      if (this.docKind === 'impress') return this.$t('version.provenanceSlideLabel')
+      return ''
+    },
+    provText() {
+      if (this.provLoading && !this.provUnit) return this.$t('version.provenanceLoading')
+      return provenanceLabel((k, p) => this.$t(k, p), this.provUnit)
+    },
+    provSha() {
+      return (this.provUnit && this.provUnit.sha) || ''
+    },
+    // 侧栏「溯源」标签的数据。null = 这份文件没有溯源可看，标签整个不出现。
+    provenanceForPanel() {
+      if (!this.provLoaded) return null
+      return {
+        rows: this.provRows,
+        summary: provenanceSummary((k, p) => this.$t(k, p), this.provRows),
+        truncated: this.provTruncated,
+        loading: this.provLoading,
+      }
+    },
     loadingOverlayVisible() {
-      // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板
+      // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板。
+      // boot 失败是唯一保留面板的失败态：原因与重试按钮都只有这块地方能放。
+      if (this.statusKey === 'bootFailed') return !this.ready
       return !this.ready && !this.isError && this.statusKey !== 'desktopOnly'
     },
     loadingTitle() {
@@ -206,6 +363,7 @@ export default {
     // onEndpointReady 会照常装载。file→file 换文档不支持（池按实例=文档）。
     file(newFile, oldFile) {
       if (!newFile || oldFile) return
+      this._adoptedSpare = true
       this.prefetchBytes()
       if (!this._endpointUp) return
       this.ready = false
@@ -214,16 +372,38 @@ export default {
       this.bootPct = 75
       this.bootCap = 95
       this.bootStageKey = 'openingDoc'
+      this._stageChangedAt = Date.now()
+      this.stuck = false
       this.startBootTrickle()
-      this.finishDocLoad()
+      this.adoptAndLoad()
     },
     // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
     // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
     reviewOpen() { this.$emit('menu-state') },
-    ready() { this.$emit('menu-state') },
-    docKind() { this.$emit('menu-state') },
+    ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub(); this.pushTheme(); this.loadProvenance() } },
+    // 「依据」窗格开合 → 客体页的光标上报订阅（dev-board#182）
+    insightSubscribed() { this.pushInsightSub() },
+    docKind() { this.$emit('menu-state'); this.initWritingAssistance() },
+    canWrite() { this.initWritingAssistance() },
+    // 宿主 openFile(file, {locator}) 把定位符挂在 tab 对象上；已打开的标签再次被
+    // 链接点中时是原地换对象，靠这个路径 watch 触发。
+    'file.pendingLocator'(loc) { if (loc) this.consumeLocator() },
   },
   async mounted() {
+    this._onEvidenceDragStart = () => { this.evidenceDropArmed = true }
+    // _dragEndedAt：客体代收的 drop 经 IPC 转发到达时，dragend 往往已经先一步把
+    // armed 翻回 false（drop 与 dragend 之间只差几百毫秒，IPC 又要过一跳）。
+    // 记下拖拽结束时刻，给转发的 drop 留一个宽限窗（见 onGuestEvidenceDrop）。
+    this._onEvidenceDragEnd = () => { this.evidenceDropArmed = false; this.evidenceDropOver = false; this._dragEndedAt = Date.now() }
+    uni.$on('file-drag-start', this._onEvidenceDragStart)
+    uni.$on('file-drag-end', this._onEvidenceDragEnd)
+    this._onThemeChanged = () => this.pushTheme()
+    uni.$on(APP_THEME_EVENT, this._onThemeChanged)
+    // AI 写完一笔的无损通知（dev-board#460）：引擎的 modified 边沿是有损的
+    // （500ms 前沿节流、无尾随），一批写入的最后一次常被丢弃，面板就端着写入
+    // 之前的清单。宿主在命令返回时补这一发，面板不必再依赖那条边沿。
+    this._onDocMutated = (p) => this.onDocMutatedEvent(p)
+    uni.$on(DOC_MUTATED_EVENT, this._onDocMutated)
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
@@ -245,12 +425,27 @@ export default {
     }
   },
   beforeUnmount() {
+    clearTimeout(this._provCursorTimer)
+    clearTimeout(this._provReloadTimer)
+    clearTimeout(this._provRetryTimer)
+    this._provSeq = (this._provSeq || 0) + 1
+    if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+    if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+    uni.$off('file-drag-start', this._onEvidenceDragStart)
+    uni.$off('file-drag-end', this._onEvidenceDragEnd)
+    if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
+    if (this._onDocMutated) { uni.$off(DOC_MUTATED_EVENT, this._onDocMutated); this._onDocMutated = null }
     // Autosave timers die with the instance. Any still-dirty edits were flushed
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
     clearTimeout(this._saveTimer)
     clearTimeout(this._slowSaveTimer)
+    clearTimeout(this._reviewRefreshTimer)
     clearInterval(this._bootTimer)
+    try { if (this._anchorChecker) this._anchorChecker.dispose() } catch (e) { /* ignore */ }
+    this._anchorChecker = null
+    try { if (this._evidenceUnsub) this._evidenceUnsub() } catch (e) { /* ignore */ }
+    this._evidenceUnsub = null
     // Tell the host this editor (and its executor) is going away — so it can
     // stop routing AI commands to a disposed executor when the document tab is
     // closed or switched. The executor ref lets the host ignore stale closes.
@@ -265,6 +460,78 @@ export default {
     this.executor = null
   },
   methods: {
+    // ---- EvidenceLink：拖放接收层 ----
+    onEvidenceDragOver(e) {
+      this.evidenceDropOver = true
+      try { if (e && e.dataTransfer) e.dataTransfer.dropEffect = 'link' } catch (err) { /* ignore */ }
+    },
+    onEvidenceDragLeave() {
+      this.evidenceDropOver = false
+    },
+    onEvidenceDrop(e) {
+      this.evidenceDropOver = false
+      this.evidenceDropArmed = false
+      let file = null
+      try {
+        const raw = e && e.dataTransfer ? e.dataTransfer.getData('application/x-checkba-file') : ''
+        if (raw) file = JSON.parse(raw)
+      } catch (err) { file = null }
+      if (!file) {
+        try {
+          const raw2 = e && e.dataTransfer ? e.dataTransfer.getData('text/checkba-file-json') : ''
+          if (raw2) file = JSON.parse(raw2)
+        } catch (err) { file = null }
+      }
+      // webview 环境下 dataTransfer 可能被清空：退回 FileTree/暂存区留在 document 上的全局兜底
+      if (!file && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
+        file = { ...document.__checkbaDraggedFile }
+        document.__checkbaDraggedFile = null // 消费即清，免得下一次落空的 drop 捡到陈文件
+      }
+      if (!file || file.fileType === 'folder' || file.isFolder) return
+      const id = file.id != null ? file.id : file.fileId
+      if (!id) return
+      this.$emit('evidence-drop', { file: { ...file, id } })
+    },
+    // 客体（webview/iframe 内页）代收的 drop 从 lo-relay 转发到这里（dev-board#171）：
+    // Electron 的原生 DnD 命中测试把拖拽路由进 guest 的 WebContents，宿主 DOM 的
+    // .libre-evidence-drop 对真实鼠标拖拽永远收不到 drop——那条 overlay 路径只有
+    // 合成事件（单测/e2e dispatchEvent）能走到。两条入口共用 onEvidenceDrop 下游。
+    onGuestEvidenceDrop(payload) {
+      // 只认「产品内文件拖拽」：进行中（armed），或刚结束不到 2 秒（drop 的 IPC
+      // 转发常晚于 dragend 到达）。其余一律忽略——用户从系统里拖文件进来不该
+      // 借道全局兜底建出链接。
+      const recentlyEnded = Date.now() - (this._dragEndedAt || 0) < 2000
+      if (!this.evidenceDropArmed && !recentlyEnded) return
+      const raw = payload ? String(payload) : ''
+      this.onEvidenceDrop({ dataTransfer: { getData: (type) => (type === 'application/x-checkba-file' ? raw : '') } })
+    },
+    // ---- EvidenceLink：消费 pendingLocator（docx：书签优先，其次 quote 查找）----
+    async consumeLocator() {
+      const f = this.file
+      const loc = f && f.pendingLocator
+      if (!loc || !this.ready || !this.executor || this._consumingLocator) return
+      this._consumingLocator = true
+      const exec = (action, params) => this.executor.executeCommand(action, params)
+      try {
+        let done = false
+        if (loc.bookmark) {
+          try {
+            const r = await exec('goto_bookmark', { name: String(loc.bookmark) })
+            done = !!(r && r.success)
+          } catch (e) { done = false }
+        }
+        if (!done && loc.quote) {
+          const found = await exec('find_text_locations', { keyword: String(loc.quote).slice(0, 200) })
+          const first = found && Array.isArray(found.matches) && found.matches[0]
+          if (first && first.anchorId) await exec('set_selection', { anchor: first.anchorId })
+        }
+      } catch (e) {
+        this.appendLog('locator failed: ' + (e && e.message ? e.message : e))
+      } finally {
+        this._consumingLocator = false
+        this.$emit('locator-consumed', f.id)
+      }
+    },
     // ---- 菜单栏命令入口 ----------------------------------------------------
     // 「文档」菜单经 appMenuBridge → project-overview 的活跃编辑器 → 这里。
     // 一律薄转发到工具栏/审阅面板已有的方法，不在这层复制业务逻辑——
@@ -287,6 +554,49 @@ export default {
     menuToggleReviewPanel() {
       this.reviewOpen = !this.reviewOpen
     },
+    /**
+     * 工具栏「解析」（dev-board#182）。窗格在工作台一级（可停右栏也可停左栏），
+     * 编辑器只把意图连同自己是哪份文档一起上抛，开哪个 dock、要不要 POST /parse
+     * 由宿主决定。
+     */
+    onToggleInsight() {
+      this.$emit('open-insight', { fileId: this.file && this.file.id })
+    },
+    /**
+     * 把「依据」窗格的订阅开关下发给客体页。不订阅时客体页一条 cursor-context 都不发，
+     * 也就一次 get_cursor_context 都不打——没开窗格的用户完全不受影响。
+     * ready 时补发一次：webview 重建/换文档后客体页的状态是全新的。
+     */
+    /**
+     * 客体页的点击坐标（客体视口）换算成宿主页面坐标，供「依据」浮窗贴着点击点弹出
+     * （dev-board#541）。rect **每次现取**：分屏拖动/左栏收放/底栏开合都会挪动画布，
+     * 缓存下来的 rect 会让浮窗弹到上一次的位置。拿不到坐标时不写 hostX/hostY，
+     * 宿主据此退回「不弹浮窗」而不是弹到屏幕角落。
+     */
+    withHostPoint(meta) {
+      const m = meta && typeof meta === 'object' ? meta : {}
+      let rect = null
+      try { rect = this.webviewEl ? this.webviewEl.getBoundingClientRect() : null } catch (e) { rect = null }
+      const pt = guestPointToHost(rect, m.clientX, m.clientY)
+      return pt ? Object.assign({}, m, { hostX: pt.x, hostY: pt.y }) : m
+    },
+    pushInsightSub() {
+      if (!this._transportSend) return
+      try {
+        this._transportSend({ __lo: 'lo-relay', type: 'insight-sub', enabled: !!this.insightSubscribed })
+      } catch (e) { /* 通道没起来：ready 时还会补发一次 */ }
+    },
+    /**
+     * 深浅主题下发（dev-board#273）：客体页收到后切页面底色并调引擎的
+     * AppBackground。ready 时补发一次覆盖保活池过继（预热实例的 URL 参数
+     * 可能是旧主题）。
+     */
+    pushTheme() {
+      if (!this._transportSend) return
+      try {
+        this._transportSend({ __lo: 'lo-relay', type: 'set-theme', theme: getResolvedTheme() })
+      } catch (e) { /* 通道没起来：ready 时还会补发一次 */ }
+    },
     menuOpenFind() {
       const tb = this.$refs.toolbar
       if (tb && !tb.findOpen) return tb.toggleFind()
@@ -300,9 +610,40 @@ export default {
       const tb = this.$refs.toolbar
       if (!tb) return { ok: false, reason: 'not-ready' }
       if (tb.noSelection) return { ok: false, reason: 'no-selection' }
+      tb.capturePopPos('insert')
       tb.menu = 'insert'
-      tb.startComment()
+      if (tb.insertMode !== 'comment') tb.startComment()
+      this.$nextTick(() => {
+        if (this.$refs.toolbar !== tb || tb.menu !== 'insert' || tb.insertMode !== 'comment') return
+        const input = tb.$el && tb.$el.querySelector('.etb-form textarea')
+        if (input) input.focus()
+      })
       return { ok: true }
+    },
+    async onCommentRequest(msg = {}) {
+      const tb = this.$refs.toolbar, executor = this.executor
+      if (!this.ready || !tb || !executor || this._commentRequestPending) return
+      const fileId = this.file && this.file.id, loadGen = this._loadGen
+      const request = {}
+      this._commentRequestPending = request
+      const isCurrent = () => this.ready && this.executor === executor && this.$refs.toolbar === tb
+        && (this.file && this.file.id) === fileId && this._loadGen === loadGen
+      try {
+        // Selection notifications are throttled; the shortcut needs the live state.
+        const state = await executor.executeCommand('get_ui_state', {})
+        if (!isCurrent()) return
+        if (!state || state.success !== true) throw new Error('comment selection unavailable')
+        if (msg.documentSeq != null && state.documentSeq !== msg.documentSeq) return
+        tb.state = state
+        const result = this.menuInsertComment()
+        if (result.reason === 'no-selection') {
+          uni.showToast({ title: this.$t('workbench.menuSelectTextFirst'), icon: 'none' })
+        }
+      } catch (e) {
+        if (isCurrent()) uni.showToast({ title: this.$t('editor.toolbar.opFailed'), icon: 'none' })
+      } finally {
+        if (this._commentRequestPending === request) this._commentRequestPending = null
+      }
     },
     menuClearFormatting() {
       const tb = this.$refs.toolbar
@@ -327,16 +668,84 @@ export default {
     // 排版）看起来像卡死；真正的阶段跳变由 boot-log 里程碑驱动。
     startBootTrickle() {
       clearInterval(this._bootTimer)
+      if (!this._stageChangedAt) this._stageChangedAt = Date.now()
       this._bootTimer = setInterval(() => {
         if (this.ready || this.isError) { clearInterval(this._bootTimer); return }
         if (this.bootPct < this.bootCap) this.bootPct = Math.min(this.bootCap, this.bootPct + 0.6)
+        // 同一阶段停了太久（典型是文档下载挂起）：亮出重试按钮，别让用户对着
+        // 一根不动的进度条干等——超时/下载失败已有 fetchArrayBuffer 的 reject
+        // 路径兜底，这里是给"没有报错、就是卡住"的情形一个出路。
+        if (!this.stuck && Date.now() - this._stageChangedAt > 30000) this.stuck = true
       }, 400)
     },
     bootMilestone(base, cap, stageKey) {
       if (this.ready) return
       this.bootPct = Math.max(this.bootPct, base)
       this.bootCap = Math.max(this.bootCap, cap)
-      if (stageKey) this.bootStageKey = stageKey
+      if (stageKey && stageKey !== this.bootStageKey) {
+        this.bootStageKey = stageKey
+        this._stageChangedAt = Date.now()
+        this.stuck = false
+      }
+    },
+    // 手动重试：引擎已就绪的话就是文档下载/装载卡住了，重新走一次装载路径
+    // （与备胎过继 watch:file 那条路同形制）；引擎自己还没起来则没有可重放的
+    // 下载动作，只重置计时器继续等待，30s 后按钮会再次出现。
+    // 例外是 boot 已经明确失败（'boot-failed'）：等下去不会有结果，整个承载
+    // 引擎的元素重建一次才是真的重试。
+    retryLoad() {
+      this.stuck = false
+      this._stageChangedAt = Date.now()
+      if (!this._endpointUp && this.statusKey === 'bootFailed') {
+        this.remountEditor()
+        return
+      }
+      if (this._endpointUp) {
+        this.appendLog('用户点击重试 / retry requested')
+        this._bytesPromise = null
+        this.dlLoaded = 0
+        this.dlTotal = 0
+        this.statusKey = this.file ? 'loadingDoc' : 'booting'
+        this.bootStageKey = this.file ? 'openingDoc' : 'almostReady'
+        this.bootCap = Math.max(this.bootCap, 95)
+        this.startBootTrickle()
+        this.finishDocLoad()
+      } else {
+        this.startBootTrickle()
+      }
+    },
+    // 引擎重启：拆掉 boot 失败的那个 webview/iframe，重新走一遍 mounted 里的
+    // 建元素流程。文档字节的预取结果仍然有效（失败的是引擎不是下载），留着。
+    async remountEditor() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
+      try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
+      this._eventUnsub = null
+      this._transportSend = null
+      try { if (this.executor && typeof this.executor.dispose === 'function') this.executor.dispose() } catch (e) { /* ignore */ }
+      this.executor = null
+      try { if (this.webviewEl && this.webviewEl.remove) this.webviewEl.remove() } catch (e) { /* ignore */ }
+      this.webviewEl = null
+      this.bootFailReason = ''
+      // 承载引擎的元素刚被拆掉：endpoint 与 ready 都不再成立。旧的唯一调用方
+      // （boot 失败后的重试）本来这两位就是 false，写在这里对它是恒等操作；
+      // 崩溃自愈与 relay 超时自愈则必须靠它把加载面板重新亮出来。
+      this._endpointUp = false
+      this.ready = false
+      this.statusKey = 'booting'
+      this.bootPct = 3
+      this.bootCap = 12
+      this.bootStageKey = 'engineStarting'
+      this._stageChangedAt = Date.now()
+      this.startBootTrickle()
+      try {
+        const info = await host.zetaoffice.getEditor()
+        this.mountEditor(info)
+      } catch (e) {
+        this.statusKey = 'initFailed'
+        this.appendLog('init failed: ' + (e && e.message ? e.message : e))
+      }
     },
     // 注意：这里匹配的是引擎 boot-log 的原始消息（含中文），是引擎侧判据，
     // 不随界面语言变化——匹配串一个字都不能动。
@@ -351,6 +760,19 @@ export default {
         this.bootMilestone(96, 99, 'rendering')
       }
     },
+    // 客体页 boot 失败（引擎/字体拉不下来、跨源隔离缺失…）。没有这条信号时
+    // 'ready' 永远不来，进度条会一直空转——这里落成一个明确的失败态。
+    // 引擎已经就绪之后到达的（.catch 也兜 then 体里的异常）一概不理会：
+    // 已经能编辑的实例不该被推回失败态。
+    onBootFailed(reason) {
+      if (this._endpointUp || this.ready) return
+      this.bootFailReason = reason
+      this.statusKey = 'bootFailed'
+      clearInterval(this._bootTimer)
+      // 失败态下重试按钮就是唯一出路，不必再等 30s 的 stuck 判据
+      this.stuck = true
+      this.appendLog('boot failed: ' + reason)
+    },
     appendLog(m) {
       // Mirror to devtools so the product variant (overlay hidden) stays diagnosable.
       console.log('[libre-editor]', m)
@@ -362,6 +784,15 @@ export default {
     mountEditor(info) {
       const mountEl = document.getElementById(this.hostId)
       if (!mountEl) { this.appendLog('host element missing'); return }
+      // 深浅主题初值随 URL 进客体页（editor.html 据此防白闪）；后续切换走
+      // pushTheme 的 lo-relay 推送
+      try {
+        if (info && info.url) {
+          info = Object.assign({}, info, {
+            url: info.url + (info.url.indexOf('?') >= 0 ? '&' : '?') + 'theme=' + getResolvedTheme()
+          })
+        }
+      } catch (e) { /* ignore */ }
       const el = info.kind === 'iframe' ? this.createIframe(info) : this.createWebview(info)
       el.style.width = '100%'
       el.style.height = '100%'
@@ -374,7 +805,12 @@ export default {
       wv.setAttribute('partition', info.partition)
       if (info.preload) wv.setAttribute('preload', info.preload)
       // contextIsolation ON (the preload uses contextBridge), nodeIntegration OFF.
-      wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no')
+      // backgroundThrottling=no（dev-board#539）：guest 一旦被 Chromium 判为
+      // 不可见/失焦，定时器降到 1/min、rAF 停摆，LOWA 的 Emscripten/Qt 事件
+      // 循环跟着冻住——久置回来打开文档就撞 relay 的 180s 墙钟预算，画布上留
+      // 一个 boot 出来的空白原型 + 红胶囊「文档加载失败」。这里的引擎是**计算
+      // 进程**不是页面，节流对它只有害处。
+      wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,backgroundThrottling=no')
       const transport = webviewTransport(wv)
       // 事件订阅必须在建元素时就挂上，绝不能推迟到 dom-ready：boot-log 里程碑
       // 从引擎启动第一刻就在发，modified 是自动保存的唯一触发信号——晚挂一步
@@ -386,6 +822,16 @@ export default {
         this.wireExecutor(transport, 'webview dom-ready')
       })
       wv.addEventListener('did-fail-load', (e) => this.appendLog('did-fail-load: ' + (e.errorDescription || e.errorCode)))
+      // 渲染进程没了（久置被系统回收 / OOM / 崩溃）：此前全仓没有任何处理，
+      // 表现就是「界面还在，命令全部石沉大海」——下一次装载撞 180s 超时，
+      // 用户看到空白页。这里立刻重启引擎并重装当前文档。
+      wv.addEventListener('render-process-gone', (e) => {
+        const d = (e && e.details) || {}
+        this.onGuestProcessGone(String(d.reason || (e && e.reason) || 'unknown'))
+      })
+      // 卡住但没死：只记日志——引擎在跑大文档排版时本来就会长时间不响应，
+      // 一律重启会把正常的重活当成故障杀掉。
+      wv.addEventListener('unresponsive', () => this.appendLog('webview unresponsive（引擎线程忙或卡住，未做处置）'))
       wv.addEventListener('console-message', (e) => { if (e.level >= 2) this.appendLog('[webview] ' + e.message) })
       wv.setAttribute('src', info.url)
       return wv
@@ -411,17 +857,48 @@ export default {
     subscribeHostEvents(transport) {
       this._eventUnsub = transport.subscribe((msg) => {
         if (!msg || msg.__lo !== 'lo-relay') return
-        if (msg.type === 'open-url' && msg.url) {
-          this.$emit('open-url', String(msg.url))
+        if (msg.type === 'inline-review-request') {
+          if (this._inlineReviewHost) this._inlineReviewHost.handle(msg)
+        } else if (msg.type === 'writing-request') {
+          if (this._writingHost) this._writingHost.handle(msg)
+        } else if (msg.type === 'open-url' && msg.url) {
+          this.$emit('open-url', { url: String(msg.url), target: msg.target || null,
+            fileId: this.file && this.file.id, meta: this.withHostPoint(msg.meta) })
         } else if (msg.type === 'modified') {
           this.onDocModified()
+        } else if (msg.type === 'comment-request') {
+          this.onCommentRequest(msg)
+        } else if (msg.type === 'review-overview') {
+          this.reviewOpen = true
+        } else if (msg.type === 'review-focus') {
+          this.reviewLocation = msg.payload || {}
         } else if (msg.type === 'selection') {
           // 光标/选区动了：工具栏重读激活态。不标脏——移动光标不是修改文档。
-          if (this.ready) this.uiRefreshKey++
+          if (this.ready) {
+            this.uiRefreshKey++
+            // 插件事件通道（规范 v2.7）：PluginPane 按订阅转发 selection.changed（自带节流）。
+            // payload 只给 fileId——选区内容由插件经 doc.exec get_selection 按 editor 权限拉取
+            uni.$emit('awd:selection-changed', { fileId: this.file && this.file.id })
+            // 溯源光标条跟着光标走（设计稿 §5.5）。节流：光标条是只读的一句话，
+            // 没必要跟每一次方向键抢 office 线程。
+            this.scheduleProvenanceCursor()
+          }
+        } else if (msg.type === 'evidence-drop') {
+          this.onGuestEvidenceDrop(msg.payload)
+        } else if (msg.type === 'cursor-context') {
+          // 「依据」窗格的正文联动（dev-board#182）：客体页只在被订阅时才发这条。
+          // 纯只读（get_cursor_context），不标脏、不刷工具栏。
+          const ctx = Object.assign({ fileId: this.file && this.file.id }, msg.payload || {})
+          ctx.meta = this.withHostPoint(ctx.meta)
+          this.$emit('cursor-context', ctx)
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
+        } else if (msg.type === 'boot-failed') {
+          this.onBootFailed(String(msg.message || ''))
         }
       })
+      // 下行通道：relay executor 只发命令，订阅开关这类「非命令」消息要自己送。
+      this._transportSend = transport.send
     },
     // 命令通道：把 {send, subscribe} 传输接成 executor。两种容器共用。
     wireExecutor(transport, whence) {
@@ -432,17 +909,19 @@ export default {
           send: transport.send,
           subscribe: transport.subscribe,
           onReady: () => this.onEndpointReady(),
+          onLateResult: (action, result) => this.onLateLoadResult(action, result),
+          onProgress: (reqId, p) => this.$emit('command-progress', { reqId, done: p.done, total: p.total }),
         })
         // 命令繁忙跟踪：AI 命令与用户输入都走这同一个 executor。autoSave 据此
         // 避开活跃期（export_document 会冻结 office 线程上的 Qt 事件循环）。
         this._cmdBusy = 0
         this._lastCmdAt = 0
         const innerExec = this.executor.executeCommand.bind(this.executor)
-        this.executor.executeCommand = async (action, params) => {
-          if (action === 'export_document') return innerExec(action, params) // 保存自身不算「活跃编辑」
+        this.executor.executeCommand = async (action, params, callOpts) => {
+          if (action === 'export_document') return innerExec(action, params, callOpts) // 保存自身不算「活跃编辑」
           this._cmdBusy++
           this._lastCmdAt = Date.now()
-          try { return await innerExec(action, params) }
+          try { return await innerExec(action, params, callOpts) }
           finally { this._cmdBusy--; this._lastCmdAt = Date.now() }
         }
         this.statusKey = this.file ? 'loadingDoc' : 'booting'
@@ -459,20 +938,142 @@ export default {
       this._endpointUp = true
       await this.finishDocLoad()
     },
+    // 迟到结果：load_document 的 180s relay 超时只是「host 端不再等」，worker 里
+    // 的 loadComponentFromURL 打不断，常常在超时之后仍然真的装载成功。旧行为
+    // 是静默丢弃这条迟到的成功消息——用户看到「文档加载失败」的红胶囊，画布上
+    // 其实已经换成了真文档；更严重的是 docLoadFailed 同时是自动保存闸，误判
+    // 期间的编辑会静默不落盘。
+    // 只在「当前仍显示着这次失败」且「没有更晚的装载尝试发生过」（世代号相符）
+    // 时才撤回失败态——世代号不符说明文档已切换/已重试/组件已卸载后订阅已断开
+    // （dispose() 会取消订阅，届时这个回调根本不会再被触发），这些情形一律
+    // 按兵不动，不能让一个作废的迟到结果去污染当前状态。
+    onLateLoadResult(action, result) {
+      if (action !== 'load_document') return
+      if (!this.docLoadFailed) return
+      if (this._loadGen !== this._loadGenAtFailure) return
+      if (result && result.success) {
+        this.docLoadFailed = false
+        this.statusKey = 'ready'
+        this.initWritingAssistance()
+        this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
+      }
+    },
+    // 预热备胎过继（dev-board#539）：备胎可能已经在后台空转好几个小时，其间
+    // guest 被系统回收 / 渲染进程崩掉 / 被冻死都不会有任何信号——_endpointUp
+    // 只是一个「历史上握过手」的布尔，不代表现在还活着。拿它直接 finishDocLoad
+    // 就是撞 180s 超时的那条路。先花几毫秒探一声活，死了就丢掉备胎走冷启动。
+    async adoptAndLoad() {
+      if (await this.probeGuestAlive()) { this.finishDocLoad(); return }
+      this.appendLog('备胎探活失败 → 丢弃并冷启动 / spare probe failed, cold boot instead')
+      await this.remountEditor() // onEndpointReady 会接着装载当前文档
+    },
+    // 最便宜的只读探活：命中就是 6ms 级；guest 死了/冻住就在 3s 预算上失败，
+    // 不拖着用户等 relay 的默认预算。
+    async probeGuestAlive() {
+      if (!this.executor) return false
+      try {
+        const r = await this.executor.executeCommand(PROBE_ACTION, {}, { timeoutMs: PROBE_BUDGET_MS })
+        return !!(r && r.success)
+      } catch (e) {
+        return false
+      }
+    },
+    // webview 的渲染进程没了（被系统回收 / OOM / 崩溃）。引擎连同文档一起消失，
+    // 界面上却什么都看不出来——不重启的话下一条命令要等到 relay 超时才报错。
+    // 重启引擎并重装当前文件（未保存的编辑随进程一起没了，重装拿到的是后端
+    // 最后一次落盘的内容，这已是能做到的最好结果）。
+    async onGuestProcessGone(reason) {
+      // 崩溃风暴防抖：起不来的引擎会连着 gone 好几次，别陷进重启循环。
+      if (this._guestGoneAt && Date.now() - this._guestGoneAt < 10000) {
+        this.appendLog('render-process-gone 再次发生（10s 内），不再重启：' + reason)
+        return
+      }
+      this._guestGoneAt = Date.now()
+      this.appendLog('render-process-gone（' + reason + '）→ 重启引擎并重装当前文档')
+      // 进程里的文档已经没了：脏标记与预取字节都作废，保存闸等重装结果说话。
+      this.dirty = false
+      this.docLoadFailed = false
+      this._bytesPromise = null
+      this.dlLoaded = 0
+      this.dlTotal = 0
+      this._loadSelfHealed = false
+      await this.remountEditor()
+    },
+    // 诊断落盘（dev-board#539 要求 7）：桌面壳目前**没有**渲染层→主进程的日志
+    // 通道（~/.aiworkdeck/logs 只有主进程自己在写，checkba:reveal-logs 只负责
+    // 揭示目录），所以这里只往 devtools 打一行结构化记录，不新增任何出站请求。
+    // 有了日志 IPC 之后把这一行改成经它落盘即可，字段已经齐了。
+    logLoadFailure(msg, seq) {
+      const f = this.file || {}
+      try {
+        console.log('[libre-editor] doc-load-failed', JSON.stringify({
+          fileId: f.id != null ? f.id : null,
+          fileType: f.fileType || null,
+          fileSize: f.fileSize != null ? f.fileSize : null,
+          reason: classifyLoadFailure(msg),
+          message: String(msg).slice(0, 300),
+          elapsedMs: this._loadStartedAt ? Date.now() - this._loadStartedAt : null,
+          retried: !!this._loadSelfHealed,
+          adopted: !!this._adoptedSpare,
+          attempt: seq,
+        }))
+      } catch (e) { /* 诊断不许拖垮装载路径 */ }
+    },
     // 装载 + 发布就绪。两个入口：onEndpointReady（常规：mount 时就有 file，或
     // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
     async finishDocLoad() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      // 重入闸：卡住 30s 露出的「重试」按钮会在原来那次装载**仍在途**时（弱网/挂起
+      // 代理下 XHR 的 60s 超时还没到）再起一条链路，两条各自 dispatch 一次
+      // load_document，且后完成的那条按最后写者赢覆盖 ready/statusKey/docKind——
+      // 迟到的失败能把重试的成功盖成 loadFailed（连带关掉保存闸），迟到的成功能把
+      // 重试装好的文档连同其间的编辑整个换掉。世代号让被取代的那条在每个 await
+      // 之后自行退场：只有最新一次尝试有权推命令、改状态、发 ready。
+      const seq = this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      this._loadStartedAt = Date.now()
       if (this.file) {
         try {
           await this.loadDocument()
+          if (seq !== this._docLoadSeq) return
+          // 装载成功 = 画布上是后端真文档：撤回上一次失败留下的保存闸，
+          // 否则重试/自愈装好了，autosave 却永久拒绝（用户的编辑不落盘）。
+          this.docLoadFailed = false
+          this._loadSelfHealed = false
         } catch (e) {
+          if (seq !== this._docLoadSeq) return
+          const msg = (e && e.message) ? e.message : String(e)
+          this.logLoadFailure(msg, seq)
+          // relay 超时自愈（dev-board#539）：worker 侧事件循环冻住/失联时
+          // load_document 撞 180s 墙钟预算，画布上留的是 boot 出来的空白原型
+          // ——正是用户看到的空白页。重启引擎重装一次，只自愈一次。
+          // 与 onLateLoadResult 不冲突：这条路径不置 docLoadFailed（那个回调
+          // 第一件事就是判它），且 remountEditor 会 dispose 掉旧 executor、
+          // 连同 relay 的订阅一起断开，旧的迟到结果根本不会再回调进来。
+          if (shouldSelfHealLoadFailure(msg, this._loadSelfHealed)) {
+            this._loadSelfHealed = true
+            this.appendLog('relay 超时 → 重启引擎重装一次 / relay timeout, remounting engine once')
+            this.dirty = false
+            this._bytesPromise = null
+            this.dlLoaded = 0
+            this.dlTotal = 0
+            await this.remountEditor()
+            return // onEndpointReady 会接着重走 finishDocLoad；此处不落失败态也不发 ready
+          }
           // Load failed → the seeded prototype is still showing. Surface it; the
           // editor stays usable (AI/IME act on whatever is shown) but the content
           // is wrong, so this is loud, not silent. docLoadFailed 关保存闸——
           // 空白画布上的任何编辑都不得回传覆盖后端真文件。
           this.docLoadFailed = true
-          this.statusKey = 'loadFailed'
-          this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
+          // 失败原因分流（dev-board#539）：404 = 文件已不在磁盘上（重试无意义）、
+          // 下载超时/网络错 = 请检查网络、其余（含引擎装载失败与 relay 超时）
+          // 沿用 loadFailed。三个 key 都以 'Failed' 结尾，既有判据不必改。
+          this.statusKey = classifyLoadFailure(msg)
+          // 记下这次失败时的世代号——迟到的 load_document 结果（见
+          // onLateLoadResult）只在世代仍相符（没有更晚的装载尝试发生过）时
+          // 才允许撤回这个失败态，防止串到后来的重试/换文档头上。
+          this._loadGenAtFailure = this._loadGen
+          this.appendLog('load_document failed: ' + msg)
         }
       }
       this.bootPct = 100
@@ -480,12 +1081,38 @@ export default {
       this.ready = true
       if (!this.statusKey.endsWith('Failed')) this.statusKey = 'ready'
       this.$emit('ready', this.executor)
+      // EvidenceLink 首轮：拉缓存 → 旧式链接收编书签（仅 writer）→ 核对锚点。
+      // 不 await：核对是后台事，不能拖住 ready 之后的任何链路。
+      this.initEvidence()
+      this.initWritingAssistance()
       // 装载期间后端把这份文件改掉了（版本退回 / 检查点恢复），刚装进来的是
       // 预取到的旧字节——不 await，让宿主先拿到 ready 再补一次真重载。
       if (this._reloadPending) {
         this._reloadPending = false
         this.reloadFromBackend()
       }
+    },
+    initWritingAssistance() {
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      if (!this.ready || this._reloading || this.docLoadFailed || this.docKind !== 'writer' || !this.file?.id || !this.projectId || !this._transportSend) return
+      this._writingHost = createWritingAssistanceHost({
+        projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
+        execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
+        writable: this.canWrite,
+        storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
+        api: { list: listWritingCompletions, learn: learnWritingCompletions, remove: deleteWritingCompletion,
+          clear: clearWritingCompletions, lookup: lookupWritingSelection, detail: getDocInsightEntity, learnedDetail: getWritingCompletionDetail },
+      })
+      this._writingHost.start()
+      this._inlineReviewHost = createInlineReviewHost({
+        projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
+        execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
+        writable: this.canWrite, review: reviewDocInsight,
+        storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
+        openInsight: () => this.onToggleInsight(),
+      })
+      this._inlineReviewHost.start()
     },
     // Kick off the (authed) document download without waiting for the engine.
     // loadDocument() awaits this promise; on failure it falls back to a fresh
@@ -540,9 +1167,26 @@ export default {
       const f = this.file
       const fileId = f.wpsFileId || f.id
       if (!fileId) throw new Error('file has no id/wpsFileId')
+      // 每次真正尝试装载都记一个新世代号——onLateLoadResult 靠它辨认一个迟到的
+      // load_document 结果是否还对着「当前显示着的那次失败」，而不是被后来的
+      // 重试/换文档盖过之后依然生效。
+      this._loadGen = (this._loadGen || 0) + 1
+      // 本次装载所属的 finishDocLoad 世代（见那里的重入闸）；下载回来后若已被
+      // 更晚的一次尝试取代，就不能再把命令推给 worker。
+      const seq = this._docLoadSeq || 0
       const url = getFileDownloadUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
-      if (!buf) buf = await this.fetchArrayBuffer(url)
+      if (!buf) {
+        try {
+          buf = await this.fetchArrayBuffer(url)
+        } catch (e) {
+          // 下载失败自动重试一次（弱网/瞬时超时很常见），仍失败就让异常照常
+          // 抛出——finishDocLoad 的 catch 会置 docLoadFailed + statusKey='loadFailed'，
+          // 走既有的失败可见路径，不静默卡住。
+          this.appendLog('下载失败，重试一次 / download failed, retrying once: ' + (e && e.message ? e.message : e))
+          buf = await this.fetchArrayBuffer(url)
+        }
+      }
       const bytes = new Uint8Array(buf || new ArrayBuffer(0))
       const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
       // Empty body = a brand-new / unsaved document — the backend streams HTTP
@@ -556,17 +1200,26 @@ export default {
         this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
         return false
       }
+      // office 是单线程消息循环，两条 load_document 会按到达顺序依次执行，后到的
+      // 那条把先装好的文档整个换掉——被取代的这次到此为止，不再发命令。
+      if (seq !== (this._docLoadSeq || 0)) throw new Error('装载已被更晚的一次尝试取代 / load superseded')
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       this.bootMilestone(86, 95, 'openingDoc')
       // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，
       // AI 命令产生的修订署名 AI WorkDeck（worker execCommand 按 __agent 切换）。
-      const u = getCurrentUser() || {}
-      const authorName = String(u.name || u.nickname || u.username || '')
+      const authorName = currentAuthorName()
       const t0 = Date.now()
       const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
       if (res.kind) this.docKind = res.kind
+      // 换文档后工具栏必须重读一次激活态：worker 的 retarget 会把修订显示方式
+      // 复位到默认（上一份文档设过「最终稿」就在这一步被打回来），工具栏若还
+      // 端着上一份的读数，显示的态就跟画布对不上。
+      this.uiRefreshKey++
+      // 审阅面板同理（dev-board#460）：版本退回 / 检查点恢复 / AI 直改文件都经
+      // reloadFromBackend → loadDocument 换文档，面板不刷就端着上一份的修订清单。
+      if (this.reviewOpen) this.reviewRefreshKey++
       return true
     },
     // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
@@ -600,6 +1253,8 @@ export default {
       // saveDocument 在 upload 前直接放弃。重载语义本来就是丢弃编辑器里的本地改动
       // （后端内容是权威），丢掉这一笔是语义本身，不是数据损失。
       this._reloading = true
+      if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
+      if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       const cancelAutoSave = () => {
         clearTimeout(this._saveTimer)
         this._saveTimer = null
@@ -632,10 +1287,16 @@ export default {
         // 会用旧内容覆盖后端刚改好的文件。
         this.docLoadFailed = true
         this.statusKey = 'reloadFailed'
+        this._loadGenAtFailure = this._loadGen
         this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
         this._reloading = false
+        this.initWritingAssistance()
+        // 换进来的是另一个版本的文档，锚点要重新结账
+        this.scheduleAnchorCheck()
+        // 溯源同理：画布上已经是另一版了，旧的段落归属一条都不作数
+        this.loadProvenance()
       }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
@@ -646,6 +1307,10 @@ export default {
         const xhr = new XMLHttpRequest()
         xhr.open('GET', url, true)
         xhr.responseType = 'arraybuffer'
+        // 无超时的话，请求挂起（代理/网络中间层吞掉响应，不触发 onerror）会让
+        // loadDocument 里的 await 永远不返回——加载面板卡在某个百分比，既不报
+        // 错也不重试。60s 覆盖正常大文档下载，挂起的连接会被主动打断。
+        xhr.timeout = 60000
         Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]))
         if (onProgress) {
           xhr.onprogress = (ev) => {
@@ -654,6 +1319,7 @@ export default {
         }
         xhr.onload = () => (xhr.status === 200 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
+        xhr.ontimeout = () => reject(new Error('下载超时 / download timed out'))
         xhr.send()
       })
     },
@@ -665,27 +1331,167 @@ export default {
     onReviewChanged() {
       this.onDocModified()
     },
+
+    // ---- EvidenceLink：改字 stale 核对（spec §4.4，dev-board#105） --------------
+    // 状态机在 composables/useEvidenceAnchors.js（判定 / 回写 / 调度 / 重入 defer），
+    // 这里只接线：缓存 _evidenceCache、executor、REST、StaleQueue 与提示条。
+    evidenceIds() {
+      const pid = Number(this.projectId) || null
+      const did = this.file && Number(this.file.id) || null
+      return pid && did ? { pid, did } : null
+    },
+    ensureAnchorChecker() {
+      if (this._anchorChecker) return this._anchorChecker
+      if (!this._staleQueue) this._staleQueue = new StaleQueue()
+      this._anchorChecker = createAnchorChecker({
+        getCache: () => this._evidenceCache,
+        exec: (action, params) => this.executor.executeCommand(action, params),
+        report: (reports) => { const ids = this.evidenceIds(); return reportEvidenceAnchors(ids.pid, ids.did, reports) },
+        hash: anchorHash,
+        isBusy: () => this._cmdBusy > 0,
+        canRun: () => !!(this.executor && this.ready && !this.docLoadFailed && !this._reloading && this.evidenceIds()),
+        onStale: (hits) => this.onAnchorStale(hits),
+        onChanged: () => { const ids = this.evidenceIds(); if (ids) { try { uni.$emit(EVIDENCE_CHANGED_EVENT, { docFileId: ids.did, source: 'editor' }) } catch (e) { /* ignore */ } } },
+        log: (m) => this.appendLog(m),
+      })
+      return this._anchorChecker
+    },
+    async initEvidence() {
+      const ids = this.evidenceIds()
+      if (!ids) return
+      this.ensureAnchorChecker()
+      if (!this._evidenceUnsub) {
+        const handler = (p) => {
+          if (!p || p.source === 'editor') return
+          const cur = this.evidenceIds()
+          if (cur && (!p.docFileId || Number(p.docFileId) === cur.did)) this.loadEvidenceCache()
+        }
+        try { uni.$on(EVIDENCE_CHANGED_EVENT, handler) } catch (e) { /* ignore */ }
+        this._evidenceUnsub = () => { try { uni.$off(EVIDENCE_CHANGED_EVENT, handler) } catch (e) { /* ignore */ } }
+      }
+      await this.loadEvidenceCache()
+      if (!this._evidenceCache || !this._evidenceCache.length) return
+      if (this.docKind === 'writer' && this.executor && !this.docLoadFailed && this.canWrite) {
+        try {
+          const r = await this.executor.executeCommand('adopt_legacy_links', {})
+          if (r && r.success && Array.isArray(r.adopted) && r.adopted.length) {
+            this.appendLog('adopt_legacy_links: ' + r.adopted.length + ' adopted, ' + (r.skipped || 0) + ' skipped')
+            this.onDocModified() // 套了书签 = 文档改了，要落盘
+          }
+        } catch (e) { this.appendLog('adopt_legacy_links failed: ' + (e && e.message ? e.message : e)) }
+      }
+      await this._anchorChecker.run()
+    },
+    async loadEvidenceCache() {
+      const ids = this.evidenceIds()
+      if (!ids) { this._evidenceCache = []; return }
+      try {
+        const r = await listEvidenceLinks(ids.pid, { docFileId: ids.did })
+        const list = Array.isArray(r) ? r : (r && Array.isArray(r.data) ? r.data : [])
+        // 只有还是同一份文档时才采信（await 期间可能换了文件）
+        const now = this.evidenceIds()
+        if (now && now.did === ids.did) this._evidenceCache = list
+      } catch (e) {
+        this.appendLog('evidence cache load failed: ' + (e && e.message ? e.message : e))
+      }
+    },
+    scheduleAnchorCheck() {
+      if (this._anchorChecker) this._anchorChecker.schedule()
+    },
+    // 核对判出新的 stale：经 StaleQueue 合并（同 key 3s 一次、忽略过的不弹）后进提示条
+    onAnchorStale(hits) {
+      for (const s of hits) this._staleQueue.offer(s.linkKey, s.text)
+      const flushed = this._staleQueue.flush()
+      if (!flushed.length) return
+      const byKey = new Map((this._evidenceCache || []).map((l) => [l.linkKey, l]))
+      const merged = new Map(this.staleItems.map((x) => [x.linkKey, x]))
+      for (const f of flushed) merged.set(f.linkKey, { linkKey: f.linkKey, text: f.text, link: byKey.get(f.linkKey) })
+      this.staleItems = [...merged.values()]
+    },
+    // 提示条「保留关联」：先向 worker 要文档里现在的文字，要不到才用弹条时记下的（F2）
+    async onStaleKeep(linkKeys) {
+      const ids = this.evidenceIds()
+      if (!ids) return
+      const keys = Array.isArray(linkKeys) ? linkKeys : [linkKeys]
+      let any = false
+      for (const key of keys) {
+        const item = this.staleItems.find((x) => x.linkKey === key)
+        try {
+          const cur = this.executor
+            ? await resolveKeepText((a, p) => this.executor.executeCommand(a, p), key, item ? item.text : null)
+            : { text: item ? item.text : null, gone: false }
+          if (cur.gone) {
+            // 文字已经没了：不能 keep 成 active，交给下一轮核对转 orphan，面板里再「重新指定」
+            uni.showToast({ title: this.$t('evidence.keepGone'), icon: 'none' })
+            this.staleItems = this.staleItems.filter((x) => x.linkKey !== key)
+            this.scheduleAnchorCheck()
+            continue
+          }
+          const updated = await keepEvidenceAnchor(ids.pid, key, cur.text)
+          if (updated && this._evidenceCache) {
+            this._evidenceCache = this._evidenceCache.map((l) => (l.linkKey === key ? updated : l))
+          }
+          any = true
+        } catch (e) {
+          this.appendLog('keep anchor failed: ' + (e && e.message ? e.message : e))
+        }
+        this.staleItems = this.staleItems.filter((x) => x.linkKey !== key)
+      }
+      if (any) { try { uni.$emit(EVIDENCE_CHANGED_EVENT, { docFileId: ids.did, source: 'editor' }) } catch (e) { /* ignore */ } }
+    },
+    // 提示条「忽略」：本会话不再为这些 linkKey 弹；状态仍是 stale，面板照常亮黄
+    onStaleIgnore(linkKeys) {
+      const keys = Array.isArray(linkKeys) ? linkKeys : [linkKeys]
+      for (const key of keys) { if (this._staleQueue) this._staleQueue.ignore(key) }
+      this.staleItems = this.staleItems.filter((x) => !keys.includes(x.linkKey))
+    },
+    // 底稿页 / 提示条「查看底稿」→ 宿主打开并定位 {fileId, locator, linkKey, targetId}
+    onEvidenceLocate(payload) {
+      if (!payload || !payload.fileId) return
+      this.$emit('open-evidence-target', payload)
+    },
+    // 宿主广播「这份文档刚被 AI 写过一笔」（dev-board#460）。只刷自己这一份：
+    // 保活池里同时挂着好几个编辑器实例，别的实例跟着重读纯属浪费 office 线程。
+    // 面板是 v-if，没开就没有要刷的东西。
+    onDocMutatedEvent(payload) {
+      if (!this.file) return
+      const fid = payload && payload.fileId
+      if (fid != null && String(fid) !== String(this.file.id)) return
+      // 这里只接 AI 写入完成通知，不接人工补全的 modified，避免关闭它自己的资料提示。
+      if (this._transportSend) this._transportSend({ __lo: 'lo-relay', type: 'writing-invalidate' })
+      if (this.reviewOpen) this.reviewRefreshKey++
+    },
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件
       if (!this.ready || !this.file || this.docLoadFailed) return
       // 重载窗口期（版本退回 / 检查点恢复正在换文档）里的 modified 一律丢弃：
       // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
-      if (this._reloading) return
+      if (this._reloading || this._saveDiscarded) return
       this.dirty = true
+      this._writingHost?.modified()
+      this._inlineReviewHost?.modified()
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
-      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单
-      if (this.reviewOpen) this.reviewRefreshKey++
+      this.scheduleAnchorCheck()
+      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单。
+      // 停笔后再刷：整份修订/批注清单要在 office 线程上逐条读，每敲一下就读会让
+      // 下一个字（含中文确认）排在它后面才上屏。AI 写入另走 onDocMutatedEvent。
+      if (this.reviewOpen) {
+        clearTimeout(this._reviewRefreshTimer)
+        this._reviewRefreshTimer = setTimeout(() => { if (this.reviewOpen) this.reviewRefreshKey++ }, 1000)
+      }
       // 工具栏激活态也可能变了（AI 改了格式、用户敲了字）
       this.uiRefreshKey++
     },
     scheduleAutoSave() {
       clearTimeout(this._saveTimer)
+      if (this._savePaused || this._saveDiscarded || this._flushPromise) return
       const elapsed = Date.now() - this._dirtySince
       const delay = Math.max(200, Math.min(2500, 15000 - elapsed))
       this._saveTimer = setTimeout(() => this.autoSave(), delay)
     },
     async autoSave() {
+      if (!this.dirty || this._savePaused || this._saveDiscarded || this._flushPromise) return
       if (this.saving) { this.scheduleAutoSave(); return } // a save is in flight — retry after it
       // 假死根因修复：export_document 是全文档同步序列化，跑在 office 线程上会把
       // Qt 事件循环（滚动/输入/重绘）整段冻住。AI 修订风暴期间 modify 不断，旧的
@@ -702,34 +1508,175 @@ export default {
       this.dirty = false
       this._dirtySince = 0
       const ok = await this.saveDocument()
-      if (this.dirty) { this.scheduleAutoSave(); return } // edits arrived mid-save
-      if (!ok) {
-        // Transient failure (offline / backend hiccup): the edits are still
-        // unsaved — keep them marked dirty and retry on a slow cadence.
+      if (!ok && !this._saveDiscarded) {
+        // 引擎超时只代表宿主停止等待，后台可能仍在导出。暂停自动重试，
+        // 否则每 15 秒再排一笔，文档永远在「保存中 / 保存失败」间循环。
         this.dirty = true
-        this._dirtySince = Date.now()
-        clearTimeout(this._saveTimer)
-        this._saveTimer = setTimeout(() => this.autoSave(), 15000)
+        this._savePaused = true
       }
+      if (this.dirty) this.scheduleAutoSave()
     },
-    // Flush before unmount (tab close / LRU evict): export needs the live
-    // webview, so the closer awaits this BEFORE removing the instance.
-    async flushSave() {
+    async retrySave() {
+      if (this.saving || this._saveDiscarded) return false
+      this._savePaused = false
+      return this.flushSave()
+    },
+    // 用户明确放弃后关闭上传闸；迟到的导出不能把已关闭的旧副本写回磁盘。
+    discardPendingSave() {
+      this._saveDiscarded = true
+      this._savePaused = true
       clearTimeout(this._saveTimer)
-      while (this.saving) await new Promise((r) => setTimeout(r, 100))
-      if (this.dirty) {
-        this.dirty = false
-        this._dirtySince = 0
-        await this.saveDocument()
+      if (this._saveXhr) this._saveXhr.abort()
+    },
+    // Flush before unmount. 关闭方可给等待预算；超时返回 false，不自动丢文档。
+    async flushSave({ timeoutMs } = {}) {
+      clearTimeout(this._saveTimer)
+      if (!this._flushPromise) {
+        this._flushPromise = (async () => {
+          while (this.saving && !this._saveDiscarded) await new Promise((r) => setTimeout(r, 100))
+          if (this._saveDiscarded) return false
+          if (this._anchorChecker) { try { await this._anchorChecker.flush() } catch (e) { /* 结账失败不拦保存 */ } }
+          if (this._saveDiscarded) return false
+          if (this.dirty) {
+            this.dirty = false
+            this._dirtySince = 0
+            const ok = await this.saveDocument()
+            if (!ok && !this._saveDiscarded) { this.dirty = true; this._savePaused = true }
+            return ok && !this.dirty
+          }
+          return !this._saveDiscarded
+        })().finally(() => {
+          this._flushPromise = null
+          // flush 等待期间的新输入曾被闸挡住排程；保留标签后必须补排。
+          if (this.dirty) this.scheduleAutoSave()
+        })
+      }
+      if (!(timeoutMs > 0)) return this._flushPromise
+      let timer
+      try {
+        return await Promise.race([
+          this._flushPromise,
+          new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs) }),
+        ])
+      } finally { clearTimeout(timer) }
+    },
+    // ================= 逐段溯源（dev-board#632） =================
+    // 数据流：后端按历史算好「每个单元最后是哪一版改的」→ 这里对到画布此刻的段序
+    // → 光标条与侧栏「溯源」标签。对齐必须做：后端的段序是**落版那一刻**的，律师
+    // 手上还没保存的插入/删除会把它推着漂，按 key 硬对会把名字贴到邻段头上。
+
+    /** 只读命令的薄封装：溯源整条是锦上添花，任何失败都只让它静默，不打扰编辑。 */
+    async provRun(action, params) {
+      if (!this.executor) return null
+      try {
+        const r = await this.executor.executeCommand(action, params || {})
+        return (r && r.success === false) ? null : r
+      } catch (e) { return null }
+    },
+    async loadProvenance() {
+      const f = this.file
+      if (!this.ready || !f || !f.id || !this.projectId || this.docLoadFailed) return
+      this._provSeq = (this._provSeq || 0) + 1
+      const seq = this._provSeq
+      this.provLoading = true
+      try {
+        const res = await getProvenance(this.projectId, f.id)
+        if (seq !== this._provSeq) return
+        const d = (res && res.data) || {}
+        // 后端还在算（首次对着老文件回溯几百版）：3 秒后再问一次，界面先说「正在查」。
+        if (d.computing) {
+          clearTimeout(this._provRetryTimer)
+          this._provRetryTimer = setTimeout(() => { if (seq === this._provSeq) this.loadProvenance() }, 3000)
+          return
+        }
+        this.provUnits = Array.isArray(d.units) ? d.units : []
+        this.provTruncated = !!d.truncated
+        this.provLoaded = true
+        await this.alignProvenanceRows(seq)
+      } catch (e) {
+        if (seq !== this._provSeq) return
+        // 没开版本记录 / 老服务端 / 这份文件还没进过版本：整条静默收起，不弹错。
+        this.provLoaded = false
+        this.provUnits = []
+        this.provRows = []
+        this.provUnit = null
+      } finally {
+        if (seq === this._provSeq) this.provLoading = false
       }
     },
+    /** 落版之后重拉（保存成功 / 宿主重载）。防抖：连着敲字会连着保存好几笔。 */
+    scheduleProvenanceReload() {
+      if (!this.projectId) return
+      clearTimeout(this._provReloadTimer)
+      this._provReloadTimer = setTimeout(() => this.loadProvenance(), 5000)
+    },
+    /** 引擎那一侧的全量正文段落（get_document_text 有 500 段 / 15000 字两道预算，要翻页）。 */
+    async fetchAllParagraphs() {
+      const out = []
+      let start = 0
+      for (let guard = 0; guard < 40; guard++) {
+        const r = await this.provRun('get_document_text', { startParagraph: start, maxParagraphs: 500 })
+        if (!r) break
+        for (const para of r.paragraphs || []) out.push({ index: para.index, text: para.text })
+        const next = Number(r.nextStartParagraph)
+        if (!r.truncated || !Number.isFinite(next) || next <= start) break
+        start = next
+      }
+      return out
+    },
+    async alignProvenanceRows(seq) {
+      if (this.docKind !== 'writer') { this._provMap = null; this.provRows = []; await this.updateProvenanceCursor(); return }
+      const paragraphs = await this.fetchAllParagraphs()
+      if (seq != null && seq !== this._provSeq) return
+      const map = alignProvenance(this.provUnits, paragraphs)
+      this._provMap = map
+      this.provRows = paragraphs.map((para) => ({
+        index: para.index, text: para.text, unit: map.get(para.index) || null,
+      }))
+      await this.updateProvenanceCursor()
+    },
+    scheduleProvenanceCursor() {
+      if (!this.provLoaded) return
+      clearTimeout(this._provCursorTimer)
+      this._provCursorTimer = setTimeout(() => this.updateProvenanceCursor(), 250)
+    },
+    /** 光标停在哪个单元上 → 那个单元的出处。表格/演示各有各的问法（设计稿 §5.5）。 */
+    async updateProvenanceCursor() {
+      if (!this.provLoaded || !this.executor) return
+      if (this.docKind === 'calc') {
+        const r = await this.provRun('sheet_get_active_cell')
+        const key = r && r.address ? `${r.sheet || ''}!${r.address}` : ''
+        this.provInBody = !!key
+        this.provUnit = key ? (this.provUnits.find((u) => u && u.key === key) || null) : null
+        return
+      }
+      if (this.docKind === 'impress') {
+        const n = Number((await this.provRun('slide_get_current') || {}).slideNumber)
+        this.provInBody = Number.isFinite(n) && n > 0
+        this.provUnit = this.provInBody ? (this.provUnits.find((u) => u && u.key === 's' + n) || null) : null
+        return
+      }
+      const ctx = await this.provRun('get_review_context')
+      const idx = Number(ctx && ctx.paragraphIndex)
+      // paraKey 为负 = 光标不在正文段落里（表格内、页眉页脚）。这时候说不出这一段
+      // 归谁，整条收起来——比说一句「本机未保存的改动」诚实。
+      this.provInBody = Number.isFinite(idx) && idx >= 0
+      this.provUnit = (this.provInBody && this._provMap) ? (this._provMap.get(idx) || null) : null
+    },
+    /** 点光标条 / 侧栏里的某一版 → 提交历史标签页定位到那一行。 */
+    openProvenanceHistory(payload) {
+      const sha = (payload && payload.sha) || this.provSha
+      if (!sha) return
+      this.$emit('open-history', { sha, fileId: this.file && this.file.id })
+    },
+
     // Track E: save — export the edited document from the worker (storeToURL →
     // bytes) and persist via the backend upload endpoint (same fileId contract
     // as the download the document was loaded from). Autosave calls this;
     // returns true on success so autoSave can schedule failure retries.
     async saveDocument() {
       const f = this.file
-      if (!f || !this.executor || this.saving) return false
+      if (!f || !this.executor || this.saving || this._saveDiscarded) return false
       // 最后一道闸（onDocModified 之外的调用方也拦住）：文档没成功加载，
       // 导出的只会是空白 boot 文档——拒绝覆盖后端真文件。
       if (this.docLoadFailed) { this.appendLog('save blocked: 文档未成功加载，拒绝用空白文档覆盖后端文件'); return false }
@@ -767,13 +1714,18 @@ export default {
         // 重载闸（版本退回 / 检查点恢复）：export 是在换文档之前启动的，导出的这份
         // 字节就是「后端已被改写掉的那个旧版本 + 用户的在途编辑」。上传出去就等于
         // 把律师刚做的退回覆盖回去——这是数据事故，不是体验问题。丢弃这一笔。
-        if (this._reloading) {
+        if (this._reloading || this._saveDiscarded) {
           this.appendLog('save aborted: 正在重载后端最新内容，丢弃这一笔在途导出')
           return false
         }
+        u8 = await this.stampGeneratorMetadata(u8)
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
+        this._savePaused = false
+        this.statusKey = prevStatusKey
+        // 这一笔落到后端之后才会被防抖的 commitNow 收成一版——溯源等它一会儿再重拉。
+        this.scheduleProvenanceReload()
         return true
       } catch (e) {
         this.statusKey = 'saveFailed'
@@ -786,6 +1738,24 @@ export default {
         if (this.statusKey === 'saving') this.statusKey = prevStatusKey
       }
     },
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：把导出件 docProps/app.xml 的
+    // <Application> 换成「AI WorkDeck <版本>」。引擎 API 改不到这个字段（oox 导出器硬写
+    // GetGeneratorString()，真机探针实证），只能在拿到字节之后打补丁——细节见 docxAppProps.js。
+    //
+    // 这条链路上任何异常都不许影响保存：开关读不到、字节不是 zip、补丁自检不过，
+    // 一律拿回原样的字节继续上传。
+    async stampGeneratorMetadata(u8) {
+      try {
+        const application = await documentStampApplication()
+        if (!application) return u8
+        const stamped = await stampApplication(u8, application)
+        if (stamped !== u8) this.appendLog('  ← stamped Application=' + application)
+        return stamped && stamped.length ? stamped : u8
+      } catch (e) {
+        this.appendLog('stamp skipped: ' + (e && e.message ? e.message : e))
+        return u8
+      }
+    },
     // Authed multipart POST — the upload twin of fetchArrayBuffer (backend
     // contract: POST /api/files/{fileId}/upload, part name "file").
     uploadBytes(url, u8, filename) {
@@ -794,10 +1764,15 @@ export default {
         const form = new FormData()
         form.append('file', new Blob([u8]), filename)
         const xhr = new XMLHttpRequest()
+        this._saveXhr = xhr
         xhr.open('POST', url, true)
+        xhr.timeout = 60000
         Object.keys(headers).forEach((k) => { if (k.toLowerCase() !== 'content-type') xhr.setRequestHeader(k, headers[k]) })
         xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
+        xhr.ontimeout = () => reject(new Error(this.$t('editor.saveTimeout')))
+        xhr.onabort = () => reject(new Error(this.$t('editor.saveCancelled')))
+        xhr.onloadend = () => { if (this._saveXhr === xhr) this._saveXhr = null }
         xhr.send(form)
       })
     },
@@ -806,59 +1781,93 @@ export default {
 </script>
 
 <style scoped>
-.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
+.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: var(--awd-surface); }
 /* Floating status pill, pinned over the CANVAS's top-right corner (not the
    wrapper's — the review panel sits to the right and would be covered). No
    layout height is reserved — the document canvas gets the full pane. */
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
-  background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
-.libre-pill.error { background: rgba(153, 27, 27, 0.9); color: #fecaca; }
-.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: #e5e7eb;
+  background: var(--awd-info); color: var(--awd-info-text); font-size: 12px; backdrop-filter: blur(4px); }
+.libre-save-retry { cursor: pointer; text-decoration: underline; }
+.libre-pill.error { background: var(--awd-danger); color: var(--awd-danger-text); }
+.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: var(--awd-border);
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
-.libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
+.libre-body { position: relative; flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
 .libre-canvas-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
 .libre-host { width: 100%; height: 100%; }
-.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
-  color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
-.libre-review-btn.on { background: #E6F9F0; color: #1A5336; }
+/* Explicit review overview overlays the native gutter without shrinking the canvas. */
+.libre-review-overview { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30; max-width: 100%; box-shadow: -8px 0 24px #00000018; }
+/* 溯源光标条：工具栏下面一条细带，右对齐一句「谁 · 哪天 · 哪一版」。
+   浅色外壳，不抢戏；能点的时候才给下划线与手型。 */
+.libre-prov-bar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  height: 22px; flex-shrink: 0; padding: 0 10px; box-sizing: border-box;
+  background: var(--awd-bg); border-bottom: 1px solid var(--awd-border-subtle);
+}
+.libre-prov-scope { font-size: 11px; color: var(--awd-text-3); flex-shrink: 0; }
+.libre-prov-text {
+  font-size: 11px; color: var(--awd-text-2); min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.libre-prov-text.clickable { color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; }
+
+/* 概览打开时，画布上的宿主浮层让出面板那 288px（= ReviewPanel .rp 的宽度），画布本身
+   不挤宽。不让的话：保存失败的「重试」、改字 stale 条右侧的 保留/打开/忽略、拖拽关联
+   投放框的右半边与居中提示都被压在面板底下，看不见也点不到。 */
+.libre-body.review-overview-open .libre-float { right: calc(288px + 16px); }
+.libre-body.review-overview-open .libre-stale-bar,
+.libre-body.review-overview-open .libre-evidence-drop { right: 288px; }
+/* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
+.libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
+.libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 28px; background: rgba(230, 249, 240, 0.25); border: 2px dashed var(--awd-accent); box-sizing: border-box; }
+.libre-evidence-drop.over { background: var(--awd-accent-soft); border-color: var(--awd-accent); border-style: solid; }
+.libre-evidence-hint { padding: 6px 14px; border-radius: 999px; background: var(--awd-surface); border: 1px solid var(--awd-accent); color: var(--awd-accent-text);
+  font-size: 12px; pointer-events: none; }
+.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: var(--awd-info);
+  color: var(--awd-text-on-accent); font-size: 12px; backdrop-filter: blur(4px); }
+.libre-review-btn.on { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 /* ---- 加载进度面板 ---- */
 .libre-loading { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
-  background: #F8F9FA; }
+  background: var(--awd-bg); }
 .libre-loading-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 320px; max-width: 80%; }
-.libre-doc-icon { position: relative; width: 44px; height: 56px; background: #fff; border: 1.5px solid #DEE2E6;
+.libre-doc-icon { position: relative; width: 44px; height: 56px; background: var(--awd-surface); border: 1.5px solid var(--awd-border);
   border-radius: 5px; margin-bottom: 4px; overflow: hidden; }
 .doc-fold { position: absolute; top: -1px; right: -1px; width: 14px; height: 14px;
-  background: #F8F9FA; border-left: 1.5px solid #DEE2E6; border-bottom: 1.5px solid #DEE2E6; border-radius: 0 0 0 5px; }
-.doc-line { position: absolute; left: 8px; height: 4px; border-radius: 2px; background: #E6F9F0;
+  background: var(--awd-bg); border-left: 1.5px solid var(--awd-border); border-bottom: 1.5px solid var(--awd-border); border-radius: 0 0 0 5px; }
+.doc-line { position: absolute; left: 8px; height: 4px; border-radius: 2px; background: var(--awd-accent-soft);
   animation: doc-line-pulse 1.6s ease-in-out infinite; }
 .doc-line.l1 { top: 20px; width: 26px; animation-delay: 0s; }
 .doc-line.l2 { top: 30px; width: 20px; animation-delay: 0.25s; }
 .doc-line.l3 { top: 40px; width: 24px; animation-delay: 0.5s; }
-@keyframes doc-line-pulse { 0%, 100% { background: #E9ECEF; } 50% { background: #5BD197; } }
-.libre-loading-name { font-size: 14px; font-weight: 600; color: #2C3338; max-width: 100%;
+@keyframes doc-line-pulse { 0%, 100% { background: var(--awd-surface-3); } 50% { background: var(--awd-mint); } }
+.libre-loading-name { font-size: 14px; font-weight: 600; color: var(--awd-text); max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.libre-progress-track { width: 100%; height: 6px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
-.libre-progress-fill { position: relative; height: 100%; background: #5BD197; border-radius: 999px;
+.libre-progress-track { width: 100%; height: 6px; background: var(--awd-surface-3); border-radius: 999px; overflow: hidden; }
+.libre-progress-fill { position: relative; height: 100%; background: var(--awd-mint); border-radius: 999px;
   transition: width 0.5s ease; overflow: hidden; }
 .libre-progress-shimmer { position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  background: linear-gradient(90deg, transparent, var(--awd-surface), transparent);
   animation: libre-shimmer 1.4s linear infinite; }
 @keyframes libre-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 .libre-loading-meta { display: flex; justify-content: space-between; width: 100%; }
-.libre-loading-stage { font-size: 12px; color: #495057; }
-.libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
-.libre-loading-dl { font-size: 11px; color: #868E96; }
-.libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
+.libre-loading-stage { font-size: 12px; color: var(--awd-text-2); }
+.libre-loading-pct { font-size: 12px; color: var(--awd-accent-text); font-weight: 600; }
+.libre-loading-dl { font-size: 11px; color: var(--awd-text-2); }
+.libre-loading-hint { font-size: 11px; color: var(--awd-text-3); margin-top: 6px; }
+.libre-loading-error { font-size: 11px; color: var(--awd-danger); margin-top: 6px; text-align: center; }
+.libre-loading-retry { margin-top: 8px; padding: 6px 16px; border-radius: 999px; background: var(--awd-accent);
+  color: var(--awd-text-on-accent); font-size: 12px; cursor: pointer; }
+.libre-loading-retry:hover { background: var(--awd-accent-hover); }
 /* ---- 只读预览接力 ---- */
 .libre-preview-strip { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; flex-direction: column;
-  gap: 4px; padding: 6px 14px 8px; background: rgba(248, 249, 250, 0.95); border-bottom: 1px solid #E9ECEF;
+  gap: 4px; padding: 6px 14px 8px; background: var(--awd-info-soft); border-bottom: 1px solid var(--awd-border);
   backdrop-filter: blur(4px); }
-.libre-strip-track { width: 100%; height: 3px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
-.libre-strip-fill { height: 100%; background: #5BD197; border-radius: 999px; transition: width 0.5s ease; }
-.libre-strip-text { font-size: 11px; color: #868E96; }
-.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: #F1F3F5; }
+.libre-strip-track { width: 100%; height: 3px; background: var(--awd-surface-3); border-radius: 999px; overflow: hidden; }
+.libre-strip-fill { height: 100%; background: var(--awd-mint); border-radius: 999px; transition: width 0.5s ease; }
+.libre-strip-text { font-size: 11px; color: var(--awd-text-2); }
+.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: var(--awd-surface-2); }
 /* docx-preview 生成的页面居中呈现（deep：内容是运行时注入的非 scoped DOM） */
 .libre-preview-host :deep(.docx-wrapper) { background: transparent; padding: 16px 0; }
 </style>

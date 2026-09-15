@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的文件打开与标签页生命周期：从文件树/搜索/AI 对话打开文件、
 // 标签激活与 FileTree 选中同步、关闭（Office 文档出池前先落盘）、可打开性判定与文档对比标签。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
@@ -5,6 +7,31 @@
 import { getProjectFiles } from '@/services/api.js'
 import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
+import { fileKindClass } from './fileKind.js'
+
+// 轻量文本编辑器（PlainTextEditor.vue）承接的扩展名（dev-board#37）。
+// dev-board#61 插件开发形态起收纳代码文件（js/json/html/css 等），供律师直改插件源码。
+// 必须与后端 TextFileEditTools.PLAIN_TEXT_TYPES 完全一致，改这里要同步改那边。
+const PLAIN_TEXT_TYPES = ['txt', 'md', 'markdown', 'json', 'js', 'mjs', 'css', 'html', 'htm', 'yml', 'yaml']
+
+// 取鼠标事件的键位。uni-app H5 会把 <view> 上的原生事件重新包装成普通对象
+// （uni-h5 的 createNativeEvent），只给 click / mouse 系 / touch / keyboard 几类补字段，
+// 补的也只是坐标，`button` 一类都没有；`auxclick` 连"补字段"这一步都不走，
+// 回调拿到的只有 { type, timeStamp, target, currentTarget, detail }。
+// 所以中键判定不能只看回调里的事件对象，要回退到当前正在派发的原生事件。
+function mouseButtonOf(e) {
+  if (e && typeof e.button === 'number') return e.button
+  const native = typeof window !== 'undefined' ? window.event : null
+  return native && typeof native.button === 'number' ? native.button : -1
+}
+
+// 标签在 DOM 里的 id：uni <scroll-view> 的 scroll-into-view 用它定位要滚到的元素，
+// 而它对 id 的形状有硬要求（/^[_a-zA-Z][-_a-zA-Z0-9:]*$/，不合就 console.error 后
+// 什么都不做）。标签 id 五花八门（数字主键、`vcmp-<sha>-<ts>`、`diff-a-b-ts`、
+// 浏览器/设置这类虚拟标签），非法字符统一换成下划线。
+function tabDomId(pane, fileId) {
+  return 'tab-' + pane + '-' + String(fileId == null ? '' : fileId).replace(/[^A-Za-z0-9_-]/g, '_')
+}
 
 export const fileOpenTabsMethods = {
     handleFileTreeSelect(file) {
@@ -35,10 +62,16 @@ export const fileOpenTabsMethods = {
         if (target) {
           this.openFile(target)
         } else {
+          // 新建项目流程带 openFileId 直接落地工作台，用户期待那份刚建好的文件
+          // 已经打开——找不到时以前只 console.warn，界面上什么反应都没有，用户
+          // 分不清"文件确实不存在"还是"后端还没写完/网络抖了一下"。同名方法
+          // handleOpenFileFromChat 找不到文件时已经会弹这句提示，这里补齐同款。
           console.warn('[project-overview] openPendingLocalFile: file not found', fileId)
+          uni.showToast({ title: this.$t('workbenchOps.fileNotFound'), icon: 'none' })
         }
       } catch (e) {
         console.warn('[project-overview] openPendingLocalFile failed', e)
+        uni.showToast({ title: this.$t('workbenchOps.fetchFileListFailed'), icon: 'none' })
       }
     },
 
@@ -55,11 +88,31 @@ export const fileOpenTabsMethods = {
         console.log('[project-overview] Got files for search:', files.length)
 
         // Find file by name (case-insensitive, match basename)
-        const targetFile = files.find(f => {
+        let targetFile = files.find(f => {
           if (f.isFolder) return false
           // Match exact name or name without extension
           return f.name === name || f.name.toLowerCase() === name.toLowerCase()
         })
+
+        // 精确名找不到时按「基名 + 扩展名」再找一轮。
+        // 有些工具报上来的"变更文件名"其实是一组产物的基名而不是某一个文件：
+        // 诉讼可视化的 file_change 带的是图名（litigation_render 的 diagramName），
+        // 项目里真正存在的是同名文件夹下的 <图名>.drawio / .svg / .png。
+        // 没有这条兜底，对话里的文件卡点了只会弹"文件不存在"——一个死掉的入口。
+        // 也认 -draft：语义地图未确认时引擎按设计给产物加这个后缀（草稿闸），
+        // 而工具报上来的名字里没有它——第一次出图必然走这一支。
+        if (!targetFile) {
+          const bases = [name.toLowerCase() + '.', name.toLowerCase() + '-draft.']
+          const candidates = files.filter(f =>
+            !f.isFolder && bases.some(b => f.name.toLowerCase().startsWith(b)))
+          // 一组产物里优先给可继续编辑的那份，其次是能看的母版。
+          const rank = ['drawio', 'svg', 'png']
+          targetFile = candidates.sort((a, b) => {
+            const ra = rank.indexOf((a.fileType || '').toLowerCase())
+            const rb = rank.indexOf((b.fileType || '').toLowerCase())
+            return (ra < 0 ? rank.length : ra) - (rb < 0 ? rank.length : rb)
+          })[0]
+        }
 
         if (targetFile) {
           console.log('[project-overview] Found file:', targetFile.id, targetFile.name)
@@ -74,7 +127,9 @@ export const fileOpenTabsMethods = {
       }
     },
 
-    openFile(file) {
+    // opts.locator：EvidenceLink 定位符（spec §1.4），挂在 tab 对象的 pendingLocator 上，
+    // 由 LibreOfficeEditor（书签/quote）或 FilePreview（pdf 页码/图片框/媒体时刻）消费。
+    openFile(file, opts = {}) {
       // 检查文件类型是否支持打开
       if (!this.isFileTypeSupported(file)) {
         uni.showModal({
@@ -96,33 +151,76 @@ export const fileOpenTabsMethods = {
 
       const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
       // Start session tracking for this file
-      activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+      activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
 
-      // 1. 如果已经在某个 pane 打开，则聚焦该 pane
-      const existingLeft = this.leftFiles.find(f => f.id === file.id)
-      // - 如果当前聚焦窗格未打开该文件，则在当前窗格打开
-      // - 若当前窗格已打开，则仅激活
-      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      // 普通打开先找两侧已有标签；显式拖拽分屏仍由 tabDragSplit 管理。
+      // 保留已有 id 的类型，避免数字/字符串来源差异重建编辑器实例。
+      const sameFile = tab => tab.id != null && file.id != null
+        && String(tab.id) === String(file.id) && (tab.tabType || '') === (file.tabType || '')
+      const preferredPane = this.splitMode ? this.focusedPane : 'left'
+      const otherPane = preferredPane === 'left' ? 'right' : 'left'
+      const preferredList = preferredPane === 'left' ? this.leftFiles : this.rightFiles
+      const otherList = otherPane === 'left' ? this.leftFiles : this.rightFiles
+      const existing = preferredList.find(sameFile) || otherList.find(sameFile)
+      const targetPane = existing && otherList.includes(existing) ? otherPane : preferredPane
       const targetList = targetPane === 'left' ? this.leftFiles : this.rightFiles
       const targetIdProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
-
-      const existing = targetList.find(f => f.id === file.id)
+      const tabId = existing ? existing.id : file.id
+      if (targetPane === 'right' && !this.splitMode) this.splitMode = true
+      this.focusedPane = targetPane
       if (existing) {
-        Object.assign(existing, file)
-        this[targetIdProp] = file.id
-        this.focusedPane = targetPane
+        Object.assign(existing, file, { id: tabId })
+        if (opts.locator) existing.pendingLocator = opts.locator
       } else {
-        targetList.push({ ...file })
-        this[targetIdProp] = file.id
+        targetList.push({ ...file, pendingLocator: opts.locator || null })
       }
+      this[targetIdProp] = tabId
 
-      // Persist active ID for current mode
       const mode = this.leftPaneKey || 'files'
-      this.lastActiveIdsByMode[targetPane][mode] = file.id
+      this.lastActiveIdsByMode[targetPane][mode] = tabId
       this.saveActiveIdsByMode()
 
       // 打开/激活后，给 WPS 一个机会刷新（避免容器尺寸/激活状态不对）
       this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+
+    /** 模板里给每个 .tab-item 打 id 用（scroll-into-view 的锚点） */
+    tabDomId(pane, fileId) {
+      return tabDomId(pane, fileId)
+    },
+
+    // 活动标签滚入视野（dev-board#543）。挂在 activeFileId* 的 watcher 上而不是
+    // activateTab 里：openFile 是自己直接写 activeFileId* 的（不走 activateTab），
+    // moveTabTo、closeFile 的相邻接管、按模式恢复也都是，watcher 才是唯一入口。
+    ensureActiveTabVisible(pane) {
+      const prop = pane === 'left' ? 'tabsScrollIntoViewLeft' : 'tabsScrollIntoViewRight'
+      const activeId = pane === 'left' ? this.activeFileIdLeft : this.activeFileIdRight
+      // 先清空：同一个 id 再次激活时属性值不变，uni 那个 watch 不会重新触发。
+      this[prop] = ''
+      if (!activeId) return
+      const domId = tabDomId(pane, activeId)
+      this.$nextTick(() => {
+        // 本来就整条看得见就不动。scroll-into-view 是把元素对齐到容器最左，
+        // 点一个眼前的标签也会把整条标签栏抽一下。
+        if (this.isTabFullyVisible(domId)) return
+        this[prop] = domId
+      })
+    },
+
+    isTabFullyVisible(domId) {
+      if (typeof document === 'undefined') return false
+      const el = document.getElementById(domId)
+      if (!el || typeof el.getBoundingClientRect !== 'function') return false
+      // 只在这条标签栏内部往上找，别一路找到页面级的横向滚动容器上去。
+      let scroller = el.parentElement
+      while (scroller && !(scroller.scrollWidth > scroller.clientWidth + 1)) {
+        if (scroller.tagName === 'UNI-SCROLL-VIEW') { scroller = null; break }
+        scroller = scroller.parentElement
+      }
+      if (!scroller) return true // 没有溢出，谈不上要滚
+      const box = scroller.getBoundingClientRect()
+      const rect = el.getBoundingClientRect()
+      return rect.left >= box.left - 1 && rect.right <= box.right + 1
     },
 
     activateTab(file, pane) {
@@ -142,15 +240,7 @@ export const fileOpenTabsMethods = {
       // 同步更新 FileTree 的选中状态
       // 如果是文件类型（非浏览器标签、非特殊标签类型），需要更新资源管理器的选中状态
       if (!this.isBrowserTab(file) && file.id && !file.tabType) {
-        // 展开侧边栏并切换到文件模式
-        if (this.sidebarCollapsed) {
-          this.sidebarCollapsed = false
-        }
-        if (this.leftPaneKey !== 'files') {
-          this.leftPaneKey = 'files'
-        }
-
-        // 确保在下一个 tick 中执行，此时 FileTree 组件已经更新
+        // 只同步当前已挂载的文件树；文档标签不改变左侧功能区或折叠状态。
         this.$nextTick(() => {
           if (this.$refs.fileTree) {
             // 使用 revealFile 方法来定位并选中文件（会展开父目录并滚动到文件）
@@ -179,10 +269,10 @@ export const fileOpenTabsMethods = {
           const url = file.url || ''
           const title = file.name || ''
           const fullMeta = meta + (title ? `. Title: ${title}` : '')
-          activityTracker.trackActivePage('OPEN_URL', 0, url, fullMeta)
+          activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, fullMeta)
       } else {
           // File
-          activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+          activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
       }
     },
 
@@ -208,6 +298,22 @@ export const fileOpenTabsMethods = {
       }
     },
 
+    /**
+     * 标签条的鼠标中键（dev-board#97）：中键单击 = 点 ×，走同一条 closeFile
+     * （含 Office/文本脏改动先落盘、浏览器标签销毁 BrowserView 等既有闸门）。
+     * 中键在 Linux/Windows 上 mousedown 会起「自动滚动」光标，auxclick 前就得拦，
+     * 所以 mousedown 与 auxclick 两处都 preventDefault；左/右键一律放行
+     * （左键是 @tap 激活，右键没有菜单）。标签没有「固定」概念，全部可关。
+     */
+    onTabMouseDown(e) {
+      if (mouseButtonOf(e) === 1 && e && e.preventDefault) e.preventDefault()
+    },
+    onTabAuxClick(e, file, pane) {
+      if (!e || !file || mouseButtonOf(e) !== 1) return
+      if (e.preventDefault) e.preventDefault()
+      if (e.stopPropagation) e.stopPropagation()
+      this.closeFile(file.id, pane)
+    },
     async closeFile(fileId, pane) {
       const list = pane === 'left' ? this.leftFiles : this.rightFiles
       const idProp = pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
@@ -222,16 +328,45 @@ export const fileOpenTabsMethods = {
       // （画布是空白原型，保存会覆盖真文件，同 evictLibreInstance）。
       if (file && this.useLibreEditor(file)) {
         const inst = (this._libreRefs || {})[pane + ':' + fileId]
-        if (inst && inst.ready && !inst.isError && inst.file && (inst.dirty || inst.saving)) {
-          try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] close flush-save failed:', e) }
+        if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)) {
+          let saved = false
+          try { saved = (await inst.flushSave({ timeoutMs: 10000 })) !== false } catch (e) { console.warn('[ProjectOverview] close flush-save failed:', e) }
+          if (!saved) {
+            const discard = await new Promise((resolve) => uni.showModal({
+              title: this.$t('editor.unsavedCloseTitle'),
+              content: this.$t('editor.unsavedCloseBody'),
+              confirmText: this.$t('editor.discardAndClose'),
+              cancelText: this.$t('editor.keepEditing'),
+              success: (res) => resolve(!!res.confirm),
+              fail: () => resolve(false),
+            }))
+            if (!discard) return
+            inst.discardPendingSave()
+          }
         }
         // 落盘期间列表可能已变（并发关闭）——重新定位，已被移除则到此为止
         idx = list.findIndex(f => f.id === fileId)
         if (idx === -1) return
       }
+      // 文本标签（PlainTextEditor）的平行分支：v-if 单实例，只有"正激活显示"的
+      // 标签才有组件实例；非激活标签在切走时已由组件 beforeUnmount 兜底落盘。
+      else if (file && this.isPlainTextFile(file)) {
+        const inst = (this._plainTextRefs || {})[pane]
+        if (inst && inst.file && inst.file.id === fileId && (inst.dirty || inst.saving)) {
+          let saved = false
+          try { saved = (await inst.flushSave()) !== false && !inst.dirty && !inst.saving } catch (e) { console.warn('[ProjectOverview] close flush-save (text) failed:', e) }
+          if (!saved) {
+            uni.showToast({ title: this.$t('editor.plainText.saveFailedRetry'), icon: 'none' })
+            return
+          }
+        }
+        idx = list.findIndex(f => f.id === fileId)
+        if (idx === -1) return
+      }
       // 浏览器标签：BrowserPane 卸载时只把 BrowserView 摘下（保活，为的是切标签
       // 不丢网页内容），真正销毁只发生在标签关闭——也就是这里，以及页面卸载。
-      // 跨窗格拖拽是「在另一侧也打开同一个标签」（同 id 双开，见 tabDragSplit），
+      // 按住 Alt/Option 跨窗格拖拽是「在另一侧也打开同一个标签」（同 id 双开，
+      // 见 tabDragSplit；普通拖拽是移动，不会造出第二份），
       // 所以另一侧还开着的时候不能销毁——那是把人家正看着的网页拔掉。
       if (this.isBrowserTab(file) && !this.isOpenInOtherPane(fileId, pane)) {
         this.destroyBrowserView(file.id)
@@ -267,8 +402,16 @@ export const fileOpenTabsMethods = {
     getFileIconPaths(type, tabType) {
       if (tabType === 'web') return GLYPHS.web
       if (tabType === 'market-detail') return GLYPHS.blocks
-      if (tabType === 'project-home') return GLYPHS.landmark
+      // 项目概览 2026-08-19 起在左栏展示，不再有 project-home 标签
+      // 个人中心 2026-08-20 并进了「设置」标签，不再有 user-profile 标签
+      if (tabType === 'admin-settings') return GLYPHS.settings
+      if (tabType === 'commit-history') return GLYPHS.history
       return fileGlyph(type)
+    },
+
+    /** 标签页的文件类型色 class（dev-board#504）：映射表在 fileKind.js，样式在 .tab-item.kind-* */
+    tabKindClass(file) {
+      return file ? fileKindClass(file.fileType, file.tabType) : ''
     },
     isFileTypeSupported(file) {
       if (!file || file.isFolder) return true
@@ -325,8 +468,10 @@ export const fileOpenTabsMethods = {
       const externalSourceTypes = ['drawio', 'vsdx', 'vsd']
       if (externalSourceTypes.includes(type)) return false
 
-      // 2. 排除 Markdown 文件，使用专门的 Markdown 预览组件
-      if (type === 'md' || type === 'markdown') return false
+      // 2. 纯文本走轻量文本编辑器（PlainTextEditor.vue，dev-board#37），不进 LOWA。
+      // 必须排在下面 wpsFileId 兜底之前——上传的 txt 都被 FileTree 合成了 wpsFileId，
+      // 不拦就会被兜底分支判成"可编辑"送进 150MB 的 WASM 引擎。
+      if (PLAIN_TEXT_TYPES.includes(type)) return false
 
       // 3. Office 文档格式 —— 仅限自建 LOWA 引擎真正编入的模块（probe_modules
       // 实测：r3 起仅 Writer + Calc；Impress/Draw 随 r4 引擎补齐——见
@@ -345,8 +490,8 @@ export const fileOpenTabsMethods = {
           'pptx', 'ppt', 'pptm', 'potx', 'odp'
       ]
 
-      // Office 类型或带文件 ID（非媒体/markdown）即视为文档编辑器可打开
-      return wpsFormats.includes(type) || (file.wpsFileId && !mediaTypes.includes(type) && type !== 'md' && type !== 'markdown')
+      // Office 类型或带文件 ID（非媒体，纯文本已在上面拦下）即视为文档编辑器可打开
+      return wpsFormats.includes(type) || (file.wpsFileId && !mediaTypes.includes(type))
     },
 
     // Epic #43 Track B / #79: should this Office file open in the embedded
@@ -357,6 +502,43 @@ export const fileOpenTabsMethods = {
       return this.libreOfficePreferred && this.isEditorOpenableFile(file)
     },
 
+    // 纯文本文件（txt/md/markdown）走轻量文本编辑器（PlainTextEditor.vue，dev-board#37）。
+    // tabType 有值的都是虚拟标签（web/markdown/diff…），不归这里。
+    isPlainTextFile(file) {
+      if (!file || file.tabType || file.isFolder || !file.fileType) return false
+      return PLAIN_TEXT_TYPES.includes(file.fileType.toLowerCase())
+    },
+
+    // PlainTextEditor 实例登记（v-if 单实例，每窗格至多一个；对齐 _libreRefs 的
+    // 非响应式口径）。closeFile 落盘、版本重载、AI text_reload_file 都从这里取实例。
+    setPlainTextRef(pane, el) {
+      if (!this._plainTextRefs) this._plainTextRefs = {}
+      if (el) this._plainTextRefs[pane] = el
+      else delete this._plainTextRefs[pane]
+    },
+
+    /**
+     * 让正在显示 fileId 的文本编辑器实例就地重载（版本退回 / AI text_* 直改后调用）。
+     * 未激活的文本标签没有组件实例（v-if 单实例，切走即销毁），下次激活时挂载
+     * 自然拉取新内容，无需处理。返回是否全部成功（没有命中的实例也算成功）。
+     */
+    async reloadPlainTextInstances(fileId) {
+      let ok = true
+      for (const pane of ['left', 'right']) {
+        const inst = (this._plainTextRefs || {})[pane]
+        if (inst && inst.file && inst.file.id === fileId) {
+          try {
+            const r = await inst.reloadFromBackend()
+            if (!r) ok = false
+          } catch (e) {
+            console.warn('[ProjectOverview] plain text reload failed:', e)
+            ok = false
+          }
+        }
+      }
+      return ok
+    },
+
     // .drawio 走内嵌 draw.io 编辑器（DrawioEditor.vue）。诉讼可视化出的四份产物里
     // 它是唯一的「可继续编辑版」——没有这条分支它就会落进 FilePreview 的
     // 「暂不支持预览」兜底，等于这个格式白出了。
@@ -365,14 +547,10 @@ export const fileOpenTabsMethods = {
       return file.fileType.toLowerCase() === 'drawio'
     },
 
-    // Check if file is a markdown tab (for AI artifacts or real .md files)
+    // AI 虚拟 markdown 产物标签（tabType='markdown'，无真实 fileId）才走只读
+    // MarkdownPreview；真正的 .md 文件自 dev-board#37 起走 PlainTextEditor（可编辑）。
     isMarkdownTab(file) {
-      if (!file) return false
-      // 1. AI 创建的虚拟 markdown 标签
-      if (file.tabType === 'markdown') return true
-      // 2. 真正的 .md 文件（从文件树打开）
-      if (file.fileType && (file.fileType.toLowerCase() === 'md' || file.fileType.toLowerCase() === 'markdown')) return true
-      return false
+      return !!(file && file.tabType === 'markdown')
     },
 
     isDiffTab(file) {
@@ -381,6 +559,110 @@ export const fileOpenTabsMethods = {
 
     isVersionCompareTab(file) {
       return file && file.tabType === 'version-compare'
+    },
+
+    isMergeReviewTab(file) {
+      return !!(file && file.tabType === 'merge-review')
+    },
+
+    /**
+     * 「合并比对稿」标签（dev-board#630）：同一段两边都改了的那几处交给律师逐处裁决。
+     *
+     * 单例到「一个项目的一条路径」（id 里带 path）：裁决总览那一行的按钮常被连点，
+     * 重开一次等于把已经处理过的那几处裁决、已经接受/拒绝的修订全部丢掉重来——
+     * 而那份合并稿只在引擎实例里，关掉就没了。已经开着时只激活。
+     *
+     * @param spec {{projectId, path, name, ctx, mergeBase, mainRef, otherRef,
+     *              sides: {main:{authorName, when, title, self}, other:{…}},
+     *              readonly?, fileId?}}
+     */
+    openMergeReviewTab(spec = {}) {
+      const projectId = spec.projectId || this.projectId
+      const tabId = `merge-review_${projectId}_${spec.path}`
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find((f) => f.id === tabId)
+        if (existing) {
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      list.push({
+        id: tabId,
+        tabType: 'merge-review',
+        fileType: 'merge-review',
+        name: this.$t('version.mergeTabName', { name: spec.name }),
+        mergeSpec: {
+          projectId, path: spec.path, name: spec.name, ctx: spec.ctx,
+          mergeBase: spec.mergeBase, mainRef: spec.mainRef, otherRef: spec.otherRef,
+          sides: spec.sides || {}, readonly: !!spec.readonly, fileId: spec.fileId || null,
+        },
+        createdAt: Date.now(),
+      })
+      this[idProp] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+
+    /** 合并比对稿里的「先不处理 / 关闭」——只关标签页，不动后端的待决记录。 */
+    closeMergeReviewTab(file) {
+      if (!file) return
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        if (list.some((f) => f.id === file.id)) this.closeFile(file.id, pane)
+      }
+    },
+
+    /**
+     * 「提交历史」标签（dev-board#624）：主线 + 各进行中稿 + 案件库最新稿的统一历史。
+     *
+     * 单例（一个项目一个标签，两个窗格一起查）：重开一次等于把筛选、滚动位置、
+     * 选中的那一版全抹掉，而三个入口（顶栏协作 chip / 协作抽屉 / 版本面板）
+     * 常常被同一个人在几秒内连点。已经开着时只激活并更新 focus——
+     * 从顶栏「同事交了新稿」进来的那次要定位到第一条还没取回的版本。
+     *
+     * 标签直接 push 进列表（绕过 isFileTypeSupported），同 openMarketDetail 的形制。
+     */
+    openCommitHistoryTab(spec = {}) {
+      const projectId = spec.projectId || this.projectId
+      const tabId = `commit-history_${projectId}`
+      const focus = spec.focus || ''
+      // 溯源光标条点进来时带的那一版 sha（dev-board#632）
+      const focusSha = spec.focusSha || ''
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find((f) => f.id === tabId)
+        if (existing) {
+          existing.historyFocus = focus
+          existing.historyFocusSha = focusSha
+          // focusToken 让已经挂载的标签页知道「又被点了一次」：focus 值没变时
+          // props 不变，组件不会重新定位，用户会以为按钮坏了。
+          existing.historyFocusToken = (existing.historyFocusToken || 0) + 1
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      list.push({
+        id: tabId,
+        tabType: 'commit-history',
+        name: this.$t('version.historyTabName'),
+        historyFocus: focus,
+        historyFocusSha: focusSha,
+        historyFocusToken: 1,
+      })
+      this[idProp] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
     // 版本对比标签：{projectId, path, name, newRef, oldRef}
@@ -530,6 +812,15 @@ export const fileOpenTabsMethods = {
       // 失败的那几份各自已经报过（静音只吞成功提示），这里只汇报成功的份数。
       if (many && ok) {
         uni.showToast({ title: this.$t('workbenchOps.updatedOpenFiles', { count: ok }), icon: 'success' })
+      }
+
+      // 文本标签（PlainTextEditor）的平行分支：正在显示的实例必须就地重载并丢弃
+      // 本地未保存态（版本操作以后端为准），否则画面不变、下一次自动保存还会把
+      // 退回前的旧内容写回去——与上面 forceActive 是同一类数据事故。未激活的文本
+      // 标签没有实例（v-if 单实例），下次激活挂载即拉新内容。失败时组件自己转入
+      // 错误相位并封死保存，这里不再叠加提示。
+      for (const fileId of idSet) {
+        await this.reloadPlainTextInstances(fileId)
       }
     },
 }

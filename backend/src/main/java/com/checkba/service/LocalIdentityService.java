@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.controller.AuthController;
@@ -60,6 +63,19 @@ import java.util.Optional;
 public class LocalIdentityService {
 
     public static final String LOCAL_DISPLAY_NAME = "本机用户";
+
+    /**
+     * 读取/展示出口：库里恒存中文哨兵值 {@link #LOCAL_DISPLAY_NAME}（见 {@link #commit}/
+     * {@link #createLocalUser}），但界面语言切到英文后不能让用户看到「本机用户」四个字。
+     * 只在 stored 恰好等于哨兵值时才按当前界面语言替换，真实用户（含云端多用户场景）的
+     * displayName 一个字都不动，null 也原样返回——不动库里存的值，只在输出时本地化。
+     */
+    public static String displayNameOf(String stored) {
+        if (!LOCAL_DISPLAY_NAME.equals(stored)) {
+            return stored;
+        }
+        return LangText.of("本机用户", "Local user");
+    }
 
     /** 已选定本机身份的持久化键。 */
     static final String SELECTED_KEY = "local.identity.selectedUserId";

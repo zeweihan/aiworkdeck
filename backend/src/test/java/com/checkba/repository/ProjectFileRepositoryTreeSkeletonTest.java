@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.repository;
 
 import com.checkba.model.entity.ProjectFile;
@@ -45,6 +48,11 @@ class ProjectFileRepositoryTreeSkeletonTest {
         return repository.save(f);
     }
 
+    private void typed(ProjectFile f, String fileType) {
+        f.setFileType(fileType);
+        repository.save(f);
+    }
+
     @Test
     void returnsFourColumnSkeletonOfLivingRowsOfOneProjectOnly() {
         ProjectFile folder = row(7L, null, true, "合同", false);
@@ -71,5 +79,27 @@ class ProjectFileRepositoryTreeSkeletonTest {
                 .orElseThrow();
         assertEquals(null, root[1]);
         assertEquals(Boolean.TRUE, root[2]);
+    }
+
+    /**
+     * MediaFileTypeReconciler（dev-board#417）靠这条派生查询捞存量脏行。派生查询的方法名
+     * 是否真能被 Spring Data 解析、isFolder/isDeleted 两个布尔条件是否真的生效，
+     * mock 出来的 repository 一个字都证明不了——必须对着真 H2 跑一遍。
+     */
+    @Test
+    void findsFilesByFileTypeExcludingFoldersAndDeletedRows() {
+        typed(row(9L, null, false, "现场影像-20260902-191122-D160-d16044f3.jpg", false), "image");
+        typed(row(9L, null, false, "现场影像-20260817-173704.mov", false), "video");
+        typed(row(9L, null, false, "已删.jpg", true), "image");
+        typed(row(9L, null, true, "现场影像", false), "image");
+        typed(row(9L, null, false, "正常.jpg", false), "jpg");
+
+        List<ProjectFile> dirty = repository
+                .findByFileTypeInAndIsFolderFalseAndIsDeletedFalse(List.of("image", "video", "audio"));
+
+        assertEquals(2, dirty.size(), "只该捞到未删除的两个文件行，实际: "
+                + dirty.stream().map(ProjectFile::getName).toList());
+        assertEquals(List.of("现场影像-20260817-173704.mov", "现场影像-20260902-191122-D160-d16044f3.jpg"),
+                dirty.stream().map(ProjectFile::getName).sorted().toList());
     }
 }

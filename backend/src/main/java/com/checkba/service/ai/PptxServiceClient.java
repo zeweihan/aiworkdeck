@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import cn.hutool.http.HttpRequest;
@@ -43,6 +46,16 @@ public class PptxServiceClient {
 
     @Value("${external.pptx-service.timeout:120}")
     private int timeoutSeconds;
+
+    /** 供测试把 baseUrl 指向本地 stub HTTP server（生产环境走上面的 @Value 注入）。 */
+    void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
+    /** 供测试设置超时（默认构造不经 Spring @Value 注入时 timeoutSeconds 恒为 0）。 */
+    void setTimeoutSeconds(int timeoutSeconds) {
+        this.timeoutSeconds = timeoutSeconds;
+    }
 
     private static final int POLL_INTERVAL_MS = 2000; // 轮询间隔 2 秒
     private static final int MAX_POLL_ATTEMPTS = 300;  // 最大轮询次数 (10 分钟)
@@ -245,12 +258,30 @@ public class PptxServiceClient {
         return JSONUtil.parseObj(resp.body()).getJSONObject("data");
     }
 
+    /** waitForTask* 系列的 status 是否为 FAILED（区别于「无结构化信息」的 null）。 */
+    private static boolean isTaskFailed(JSONObject status) {
+        return status != null && "FAILED".equals(status.getStr("status"));
+    }
+
+    /**
+     * 从一次 waitForTask* 的返回中提取可读的失败原因。status 为 null（轮询被中断/超时/
+     * COMPLETED 但零成功项）时没有结构化信息可给，返回 null；FAILED 时取 error_message，
+     * 缺失或空白同样返回 null——调用方据此决定要不要在拼出的错误文案里附上详情。
+     */
+    private static String taskFailureDetail(JSONObject status) {
+        if (status == null) return null;
+        String error = status.getStr("error_message");
+        return (error != null && !error.isBlank()) ? error : null;
+    }
+
     /**
      * 等待任务完成
-     * 
+     *
      * @param projectId 项目 ID
      * @param taskId 任务 ID
-     * @return 任务最终状态对象 (JSON)，如果失败或超时返回 null
+     * @return 任务最终状态对象 (JSON)；成功或 FAILED（带 error_message，供调用方读出真实失败
+     *         原因）都会返回该对象；轮询被中断/超时/COMPLETED 但零成功项这类无结构化信息可给的
+     *         情形仍返回 null，调用方需用 {@link #isTaskFailed(JSONObject)} 判定失败态。
      */
     public JSONObject waitForTask(String projectId, String taskId) {
         log.info("Waiting for task {} to complete...", taskId);
@@ -263,9 +294,20 @@ public class PptxServiceClient {
                 return null;
             }
             
-            JSONObject status = getTaskStatus(projectId, taskId);
+            JSONObject status;
+            try {
+                status = getTaskStatus(projectId, taskId);
+            } catch (Exception e) {
+                // 单次瞬时网络错误（连接被断/一次 502/503）不该直接掀翻整条正在跑的多阶段生成——
+                // 底层任务在 pptx-service 那边可能还在正常继续，只是这一次轮询请求本身失败了。
+                // 跳过这一轮，POLL_INTERVAL_MS 后再试；连续失败到耗尽 MAX_POLL_ATTEMPTS
+                // 会走既有的超时兜底（return null），不会无限重试（审计条目）。
+                log.warn("Task {} status poll failed transiently (attempt {}/{}), will retry: {}",
+                        taskId, i + 1, MAX_POLL_ATTEMPTS, e.getMessage());
+                continue;
+            }
             String taskStatus = status.getStr("status");
-            
+
             if ("COMPLETED".equals(taskStatus)) {
                 // 额外验证：检查是否有实际完成的项目
                 JSONObject progress = status.getJSONObject("progress");
@@ -287,9 +329,13 @@ public class PptxServiceClient {
             } else if ("FAILED".equals(taskStatus)) {
                 String error = status.getStr("error_message");
                 log.error("Task {} failed: {}", taskId, error);
-                return null;
+                // 此前这里返回 null，error_message 只进日志——调用方拿到 null 就只能硬编码
+                // "Description generation failed" / "Image generation failed" 这类通用文案，
+                // "api key 无效" "配额用尽" "模型 id 写错" 在用户眼里全长一个样，无从自救。
+                // 返回 status（带着 error_message）而不是 null，让调用方能把真实原因拼进去。
+                return status;
             }
-            
+
             // 打印进度
             JSONObject progress = status.getJSONObject("progress");
             if (progress != null) {
@@ -340,8 +386,17 @@ public class PptxServiceClient {
      * @return 保存的文件路径
      */
     public String downloadPptx(String downloadUrl, String localPath) {
+        if (downloadUrl == null || downloadUrl.isBlank()) {
+            // 调用方从任务状态的 progress 对象里读 download_url——那个对象存在（不会走
+            // null-progress 兜底分支）但恰好没带这个字段时，此前会直接拼出
+            // baseUrl + "null" 去请求，真正发生的是 404，报出来的是
+            // "Failed to download PPTX: HTTP 404"，看着像路由/网络问题，
+            // 实际是响应压根没给 download_url（审计条目）。在真正发请求之前单独识别出来。
+            throw new RuntimeException("Failed to download PPTX: task response is missing download_url "
+                    + "(the export/conversion task may not have finished writing its result yet)");
+        }
         log.info("Downloading PPTX from {} to {}", downloadUrl, localPath);
-        
+
         String fullUrl = baseUrl + downloadUrl;
         
         HttpResponse resp = HttpRequest.get(fullUrl)
@@ -351,20 +406,41 @@ public class PptxServiceClient {
         if (resp.getStatus() != 200) {
             throw new RuntimeException("Failed to download PPTX: HTTP " + resp.getStatus());
         }
-        
+
+        byte[] bytes = resp.bodyBytes();
+        // 只校验 HTTP 200 远远不够：pptx-service 偶发返回空 body 或一段 JSON 错误信息，
+        // 此前这里无条件写盘、无条件返回成功路径——上游据此 setSuccess(true)，PptxTools
+        // 把可能是 0 字节甚至根本不是 PPTX 的文件注册进项目文件库，回给用户"PPTX 生成成功！"，
+        // 全链路没有一处会发现文件是空的。PPTX 是 ZIP 容器，魔数恒为 PK\x03\x04，一并校验。
+        if (bytes == null || bytes.length == 0) {
+            throw new RuntimeException("Failed to download PPTX: empty response body");
+        }
+        if (!isPptxMagic(bytes)) {
+            throw new RuntimeException("Failed to download PPTX: response is not a valid PPTX file (bad magic number)");
+        }
+
         try {
             Path path = Paths.get(localPath);
             Files.createDirectories(path.getParent());
-            
+
             try (FileOutputStream fos = new FileOutputStream(localPath)) {
-                fos.write(resp.bodyBytes());
+                fos.write(bytes);
             }
-            
+
             log.info("PPTX downloaded to: {}", localPath);
             return localPath;
         } catch (Exception e) {
             throw new RuntimeException("Failed to save PPTX: " + e.getMessage(), e);
         }
+    }
+
+    /** PPTX（Office Open XML）本质是 ZIP 容器，前 4 字节魔数恒为 PK\x03\x04。 */
+    private static boolean isPptxMagic(byte[] bytes) {
+        return bytes.length >= 4
+                && bytes[0] == 0x50 // 'P'
+                && bytes[1] == 0x4B // 'K'
+                && bytes[2] == 0x03
+                && bytes[3] == 0x04;
     }
 
     /**
@@ -435,18 +511,20 @@ public class PptxServiceClient {
             // 3. 生成描述（传递模型配置）
             String descTaskId = startGenerateDescriptions(projectId, language, modelConfig);
             JSONObject descTaskResult = waitForTask(projectId, descTaskId);
-            if (descTaskResult == null) {
+            if (descTaskResult == null || isTaskFailed(descTaskResult)) {
                 result.setSuccess(false);
-                result.setError("Description generation failed");
+                String detail = taskFailureDetail(descTaskResult);
+                result.setError(detail != null ? "Description generation failed: " + detail : "Description generation failed");
                 return result;
             }
-            
+
             // 4. 生成图片（传递模型配置）
             String imgTaskId = startGenerateImages(projectId, language, templateStyle, modelConfig);
             JSONObject imgTaskResult = waitForTask(projectId, imgTaskId);
-            if (imgTaskResult == null) {
+            if (imgTaskResult == null || isTaskFailed(imgTaskResult)) {
                 result.setSuccess(false);
-                result.setError("Image generation failed");
+                String detail = taskFailureDetail(imgTaskResult);
+                result.setError(detail != null ? "Image generation failed: " + detail : "Image generation failed");
                 return result;
             }
             
@@ -472,8 +550,8 @@ public class PptxServiceClient {
                 try {
                     String editableTaskId = startExportEditable(projectId, filename, modelConfig);
                     JSONObject editableTaskResult = waitForTask(projectId, editableTaskId);
-                    
-                    if (editableTaskResult != null) {
+
+                    if (editableTaskResult != null && !isTaskFailed(editableTaskResult)) {
                         JSONObject editableProgress = editableTaskResult.getJSONObject("progress");
                         if (editableProgress != null) {
                             downloadUrl = editableProgress.getStr("download_url");
@@ -490,8 +568,12 @@ public class PptxServiceClient {
                             result.setEditable(false);
                         }
                     } else {
-                        // 可编辑导出失败，回退到纯图片版本
-                        log.warn("Editable export failed, falling back to image-only export");
+                        // 可编辑导出失败，回退到纯图片版本（这是软失败，不设 result.setError——
+                        // 整体仍按纯图片版本成功收尾；detail 非空时把真实原因写进日志，方便排查
+                        // 为什么好端端的可编辑版本又回退了，而不是让用户和支持一起去猜）
+                        String detail = taskFailureDetail(editableTaskResult);
+                        log.warn("Editable export failed{}, falling back to image-only export",
+                                detail != null ? ": " + detail : "");
                         downloadUrl = exportPptx(projectId, filename);
                         result.setEditable(false);
                     }
@@ -594,24 +676,26 @@ public class PptxServiceClient {
             JSONObject descTaskResult = waitForTaskWithProgress(projectId, descTaskId, 10, 25, 
                     "generating_descriptions",
                     LangText.of("正在生成页面描述", "Generating page descriptions"), progressCallback);
-            if (descTaskResult == null) {
+            if (descTaskResult == null || isTaskFailed(descTaskResult)) {
                 result.setSuccess(false);
-                result.setError("Description generation failed");
+                String detail = taskFailureDetail(descTaskResult);
+                result.setError(detail != null ? "Description generation failed: " + detail : "Description generation failed");
                 return result;
             }
             reportProgress.accept(25, new String[]{"generating_descriptions",
                     LangText.of("页面描述生成完成", "Page descriptions generated")});
-            
+
             // 4. 生成图片 (25% -> 70%)
             reportProgress.accept(27, new String[]{"generating_images",
                     LangText.of("正在生成幻灯片图片...", "Generating slide images...")});
             String imgTaskId = startGenerateImages(projectId, language, templateStyle, modelConfig);
-            JSONObject imgTaskResult = waitForTaskWithProgress(projectId, imgTaskId, 25, 70, 
+            JSONObject imgTaskResult = waitForTaskWithProgress(projectId, imgTaskId, 25, 70,
                     "generating_images",
                     LangText.of("正在生成幻灯片图片", "Generating slide images"), progressCallback);
-            if (imgTaskResult == null) {
+            if (imgTaskResult == null || isTaskFailed(imgTaskResult)) {
                 result.setSuccess(false);
-                result.setError("Image generation failed");
+                String detail = taskFailureDetail(imgTaskResult);
+                result.setError(detail != null ? "Image generation failed: " + detail : "Image generation failed");
                 return result;
             }
             
@@ -643,7 +727,7 @@ public class PptxServiceClient {
                             "exporting_pptx",
                             LangText.of("正在导出可编辑版本", "Exporting the editable version"), progressCallback);
                     
-                    if (editableTaskResult != null) {
+                    if (editableTaskResult != null && !isTaskFailed(editableTaskResult)) {
                         JSONObject editableProgress = editableTaskResult.getJSONObject("progress");
                         if (editableProgress != null) {
                             downloadUrl = editableProgress.getStr("download_url");
@@ -658,7 +742,9 @@ public class PptxServiceClient {
                             result.setEditable(false);
                         }
                     } else {
-                        log.warn("Editable export failed, falling back to image-only export");
+                        String detail = taskFailureDetail(editableTaskResult);
+                        log.warn("Editable export failed{}, falling back to image-only export",
+                                detail != null ? ": " + detail : "");
                         downloadUrl = exportPptx(projectId, filename);
                         result.setEditable(false);
                     }
@@ -708,9 +794,10 @@ public class PptxServiceClient {
      * @param stage 阶段标识
      * @param baseMessage 基础消息
      * @param progressCallback 进度回调（可选）
-     * @return 任务最终状态
+     * @return 任务最终状态；成功或 FAILED（带 error_message）都返回该对象，
+     *         语义同 {@link #waitForTask(String, String)}
      */
-    private JSONObject waitForTaskWithProgress(String projectId, String taskId, 
+    private JSONObject waitForTaskWithProgress(String projectId, String taskId,
                                                 int startProgress, int endProgress,
                                                 String stage, String baseMessage,
                                                 ProgressCallback progressCallback) {
@@ -724,9 +811,17 @@ public class PptxServiceClient {
                 return null;
             }
             
-            JSONObject status = getTaskStatus(projectId, taskId);
+            JSONObject status;
+            try {
+                status = getTaskStatus(projectId, taskId);
+            } catch (Exception e) {
+                // 同 waitForTask：单次瞬时网络错误不该掀翻整条多阶段生成，跳过这一轮再试。
+                log.warn("Task {} status poll failed transiently (attempt {}/{}), will retry: {}",
+                        taskId, i + 1, MAX_POLL_ATTEMPTS, e.getMessage());
+                continue;
+            }
             String taskStatus = status.getStr("status");
-            
+
             // 计算并报告进度
             JSONObject taskProgress = status.getJSONObject("progress");
             if (taskProgress != null && progressCallback != null) {
@@ -760,7 +855,8 @@ public class PptxServiceClient {
             } else if ("FAILED".equals(taskStatus)) {
                 String error = status.getStr("error_message");
                 log.error("Task {} failed: {}", taskId, error);
-                return null;
+                // 同 waitForTask：返回 status 而不是 null，让调用方能读到 error_message
+                return status;
             }
         }
         

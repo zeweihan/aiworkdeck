@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.CloudConnection;
@@ -32,15 +35,18 @@ public class CloudController {
             org.slf4j.LoggerFactory.getLogger(CloudController.class);
 
     private final CloudSyncService cloudSyncService;
+    private final com.checkba.version.OfficialCloudService officialCloudService;
     private final ProjectMemberService projectMemberService;
     private final UserService userService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     public CloudController(CloudSyncService cloudSyncService,
+                            com.checkba.version.OfficialCloudService officialCloudService,
                             ProjectMemberService projectMemberService,
                             UserService userService,
                             com.checkba.service.telemetry.TelemetryService telemetryService) {
         this.cloudSyncService = cloudSyncService;
+        this.officialCloudService = officialCloudService;
         this.projectMemberService = projectMemberService;
         this.userService = userService;
         this.telemetryService = telemetryService;
@@ -54,7 +60,33 @@ public class CloudController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireLogin(sessionId);
         CloudConnection conn = cloudSyncService.connect(
-                body.get("serverUrl"), body.get("username"), body.get("password"), body.get("deviceName"), userId);
+                requireText(body, "serverUrl"), requireText(body, "username"), requireText(body, "password"),
+                optionalText(body, "deviceName", LangText.of("本机", "This device")), userId);
+        Map<String, Object> data = new HashMap<>();
+        data.put("connectionId", conn.getId());
+        data.put("username", conn.getUsername());
+        data.put("displayName", conn.getDisplayName());
+        data.put("serverUrl", conn.getServerUrl());
+        return ok(data);
+    }
+
+    /**
+     * 官方团队案件库的状态：{@code {available, connected, serverUrl, username}}。
+     * 界面据此决定「放进案件库」是直接可点（一键即连），还是要先让律师去连一个自建的。
+     */
+    @GetMapping("/official")
+    public ResponseEntity<Map<String, Object>> official(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireLogin(sessionId);
+        return ok(officialCloudService.status(userId));
+    }
+
+    /** 用本机的官网账户一键连上官方案件库（幂等，见 OfficialCloudService.connectOfficial）。 */
+    @PostMapping("/connect-official")
+    public ResponseEntity<Map<String, Object>> connectOfficial(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireLogin(sessionId);
+        CloudConnection conn = officialCloudService.connectOfficial(userId);
         Map<String, Object> data = new HashMap<>();
         data.put("connectionId", conn.getId());
         data.put("username", conn.getUsername());
@@ -95,8 +127,8 @@ public class CloudController {
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireLogin(sessionId);
-        long connectionId = ((Number) body.get("connectionId")).longValue();
-        long remoteProjectId = ((Number) body.get("remoteProjectId")).longValue();
+        long connectionId = requireLong(body, "connectionId");
+        long remoteProjectId = requireLong(body, "remoteProjectId");
         Map<String, Object> cloned = cloudSyncService.cloneFromCloud(connectionId, remoteProjectId, userId);
         telemetryService.record("project.created",
                 Map.of("kind", "cloud", "reused", false, "importedCount", 0));
@@ -121,24 +153,26 @@ public class CloudController {
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireWriteMember(projectId, sessionId);
-        long connectionId = ((Number) body.get("connectionId")).longValue();
-        return ok(cloudSyncService.shareToCloud(projectId, connectionId, userId));
+        // connectionId 可缺省：没指定就自动连官方案件库再共享（零配置直连，dev-board#439）。
+        // 共享本身的守卫（未共享过 / 已开版本记录 / 不在合并窗口）仍在 CloudSyncService 里。
+        return ok(officialCloudService.shareProject(projectId, userId, optionalLong(body, "connectionId")));
     }
 
     @GetMapping("/projects/{projectId}/status")
     public ResponseEntity<Map<String, Object>> status(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
-        return ok(cloudSyncService.cloudStatus(projectId));
+        Long userId = requireMemberNonClient(projectId, sessionId);
+        // userId 用于「这几版新稿是不是我在另一台电脑上交的」（spec 2026-09-14 §2.5）
+        return ok(cloudSyncService.cloudStatus(projectId, userId));
     }
 
     @PostMapping("/projects/{projectId}/check")
     public ResponseEntity<Map<String, Object>> check(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
-        return ok(cloudSyncService.checkCloud(projectId));
+        Long userId = requireMemberNonClient(projectId, sessionId);
+        return ok(cloudSyncService.checkCloud(projectId, userId));
     }
 
     @PostMapping("/projects/{projectId}/upload")
@@ -192,14 +226,46 @@ public class CloudController {
         return ok(Map.of("members", cloudSyncService.proxyMembers(projectId)));
     }
 
+    /**
+     * 案件库那边的协作事件（谁交了稿 / 谁签出 / 谁取回 / 谁加了人，spec 2026-09-14 §2.3）。
+     * 权限同参与人列表：成员可读、CLIENT 拒绝。
+     */
+    @GetMapping("/projects/{projectId}/events")
+    public ResponseEntity<Map<String, Object>> events(
+            @PathVariable Long projectId,
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestParam(value = "before", required = false) Long before,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberNonClient(projectId, sessionId);
+        return ok(cloudSyncService.proxyCollabEvents(projectId, limit == null ? 100 : limit, before));
+    }
+
+    /**
+     * 查人（dev-board#444）：律师输手机号/邮箱，先回一张展示名 + 头像 + 打码联系方式的
+     * 卡片，确认了才走加人。纯转发——解析、打码、限频都在案件库那一侧。
+     */
+    @GetMapping("/projects/{projectId}/members/lookup")
+    public ResponseEntity<Map<String, Object>> lookupMember(
+            @PathVariable Long projectId,
+            @RequestParam(value = "identifier", required = false) String identifier,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriteMember(projectId, sessionId);
+        return ok(cloudSyncService.proxyMemberLookup(projectId, identifier));
+    }
+
     @PostMapping("/projects/{projectId}/members")
     public ResponseEntity<Map<String, Object>> addMember(
             @PathVariable Long projectId,
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireWriteMember(projectId, sessionId);
-        String role = body == null || body.get("role") == null ? "PARTICIPANT" : body.get("role");
-        cloudSyncService.proxyMembers(projectId, body == null ? null : body.get("username"), role);
+        String role = optionalText(body, "role", "PARTICIPANT");
+        // 律师输入的是同事的手机号或邮箱（他不知道对方在案件库里的账号名——那是 awdk
+        // 桥自动生成的 awd_ 前缀串）。解析在服务端 ProjectMemberService.resolveMemberUser，
+        // 这里只透传。仍收 username 键是为了兼容老客户端。
+        String identifier = body != null && body.get("identifier") != null
+                ? requireText(body, "identifier") : requireText(body, "username");
+        cloudSyncService.proxyMembers(projectId, identifier, role);
         return ok(Map.of());
     }
 
@@ -243,6 +309,65 @@ public class CloudController {
     }
 
     /** 只校验登录，不校验项目成员/角色——连接级端点用。 */
+    /**
+     * 请求体里的必填数字。
+     *
+     * <p>此前是 {@code ((Number) body.get(key)).longValue()}：缺字段就 NPE、传字符串就
+     * ClassCastException，两者都被兜成「服务器内部错误」——用户与调用方都不知道
+     * 真正的原因只是请求少写了一个字段。数字串也一并收下，客户端把 id 序列化成字符串很常见。
+     */
+    private static long requireLong(Map<String, Object> body, String key) {
+        Object v = body == null ? null : body.get(key);
+        if (v instanceof Number n) return n.longValue();
+        if (v instanceof String str && !str.isBlank()) {
+            try {
+                return Long.parseLong(str.trim());
+            } catch (NumberFormatException ignore) {
+                // 落到下面统一报错
+            }
+        }
+        throw new IllegalArgumentException(LangText.of(
+                "参数 " + key + " 缺失或不是数字", "Parameter " + key + " is missing or not a number"));
+    }
+
+    /**
+     * 请求体里的可选数字：**缺失或空白**才返回 null，写了但不是数字仍然报错。
+     *
+     * <p>不能把「写错了」也当成「没写」：share 的 connectionId 缺省语义是「放进官方
+     * 案件库」，把一个拼错的 id 静默当成缺省，等于把案卷送去了调用方根本没指定的地方。
+     */
+    private static Long optionalLong(Map<String, Object> body, String key) {
+        Object v = body == null ? null : body.get(key);
+        if (v == null) return null;
+        if (v instanceof Number n) return n.longValue();
+        if (v instanceof String str) {
+            if (str.isBlank()) return null;
+            try {
+                return Long.parseLong(str.trim());
+            } catch (NumberFormatException ignore) {
+                // 落到下面统一报错
+            }
+        }
+        throw new IllegalArgumentException(LangText.of(
+                "参数 " + key + " 不是数字", "Parameter " + key + " is not a number"));
+    }
+
+    /** 请求体里的必填文本。空串与纯空白按缺失处理。 */
+    private static String requireText(Map<String, String> body, String key) {
+        String v = body == null ? null : body.get(key);
+        if (v == null || v.isBlank()) {
+            throw new IllegalArgumentException(LangText.of(
+                    "参数 " + key + " 不能为空", "Parameter " + key + " must not be empty"));
+        }
+        return v.trim();
+    }
+
+    /** 可选文本，缺失时用默认值（下游 Map.of 不收 null，给个默认比放行 null 安全）。 */
+    private static String optionalText(Map<String, String> body, String key, String fallback) {
+        String v = body == null ? null : body.get(key);
+        return v == null || v.isBlank() ? fallback : v.trim();
+    }
+
     private Long requireLogin(String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
@@ -277,8 +402,8 @@ public class CloudController {
 
     private String userName(Long userId) {
         try {
-            var u = userService.getUserById(userId);
-            if (u != null && u.getUsername() != null) return u.getUsername();
+            String name = UserService.signatureName(userService.getUserById(userId));
+            if (name != null) return name;
         } catch (Exception e) {
             log.warn("取用户名失败: userId={}", userId, e);
         }

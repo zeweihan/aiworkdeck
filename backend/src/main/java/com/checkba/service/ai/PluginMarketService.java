@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import cn.hutool.core.io.FileUtil;
@@ -12,7 +15,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -61,6 +67,22 @@ public class PluginMarketService {
     private final String pluginsDir;
     private final PluginService pluginService;
     private final MarketPurchaseGate purchaseGate;
+
+    /** 宿主版本（规范 v2.7 P0：安装前 minHostVersion 闸的比较基准；dev 态 "dev" 非 semver 时跳过） */
+    @org.springframework.beans.factory.annotation.Value("${telemetry.app-version:${AWD_APP_VERSION:dev}}")
+    String appVersion = "dev";
+
+    /**
+     * 插件 manifest 声明的 pack 依赖由它去装。setter 注入而非构造器参数：
+     * pack 联动是安装后的可选副作用，缺了它安装链路必须照常工作（既有单测直接
+     * {@code new PluginMarketService(...)}，不该被迫编造一个 pack 服务）。
+     */
+    private com.checkba.service.pack.NativePackService nativePackService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setNativePackService(com.checkba.service.pack.NativePackService nativePackService) {
+        this.nativePackService = nativePackService;
+    }
 
     public PluginMarketService(
             @Value("${ai.plugins.registry-url:https://www.aiworkdeck.com/api/registry/plugins}") String registryUrl,
@@ -117,6 +139,7 @@ public class PluginMarketService {
         } catch (Exception e) {
             throw new IllegalStateException(LangText.of("注册表返回内容无法解析: ", "Failed to parse registry response: ") + e.getMessage());
         }
+        list.removeIf(view -> PluginService.isRetired(view.getId()));
         for (MarketPluginView view : list) {
             view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
             if (view.getPricingModel() == null || view.getPricingModel().isBlank()) {
@@ -152,6 +175,9 @@ public class PluginMarketService {
      */
     public synchronized String install(String id) {
         requireValidId(id);
+        if (PluginService.isRetired(id)) {
+            throw new IllegalStateException(LangText.of("该插件已下架，无法安装", "This plugin has been retired and cannot be installed"));
+        }
         if (publicKeyPem == null || publicKeyPem.isBlank()) {
             throw new IllegalStateException(LangText.of(
                     "未配置插件注册表公钥（ai.plugins.registry-public-key），拒绝安装",
@@ -225,16 +251,13 @@ public class PluginMarketService {
                 Files.write(dest, data);
             }
 
+            // minHostVersion 闸（规范 v2.7 P0）：staging 落齐后、上位前校验——宁可装不上，不可装成半残
+            checkMinHostVersion(staging);
+
             File target = new File(pluginsDir, id);
             FileUtil.del(target);
             Files.createDirectories(target.toPath().getParent());
-            try {
-                Files.move(staging, target.toPath(), StandardCopyOption.ATOMIC_MOVE);
-            } catch (Exception atomicFailed) {
-                // 跨文件系统时原子移动不可用，退化为拷贝
-                FileUtil.copyContent(staging.toFile(), target, true);
-                FileUtil.del(staging.toFile());
-            }
+            moveStagingToTarget(staging, target);
         } catch (RuntimeException e) {
             FileUtil.del(staging.toFile());
             throw e;
@@ -247,7 +270,62 @@ public class PluginMarketService {
         pluginService.markDisabledBeforeLoad(id);
         pluginService.rescan();
         log.info("Installed market plugin '{}' v{} (disabled until user confirms)", id, version);
+        installDeclaredPacks(id);
         return id;
+    }
+
+    /**
+     * 把校验通过的 staging 目录整体落到插件目录：优先原子 move，跨文件系统时退化为拷贝。
+     *
+     * <p>抽成独立方法只为了可测——install() 本身要走网络下载与验签，太重，不好在单测里
+     * 单独触发"拷贝兜底也失败"这条分支。
+     *
+     * <p>不变式：任一步失败都不留半成品。拷贝兜底失败时 target 可能已经是半成品（拷贝到
+     * 一半就断了），必须把它一并清掉再把异常抛给调用方——调用方（install()）只清理
+     * staging，且这条异常在 markDisabledBeforeLoad/rescan 之前抛出，PluginService
+     * 账上根本没有这个插件 id，残缺目录不清掉就会永久留在盘上、谁也不认领。
+     */
+    void moveStagingToTarget(Path staging, File target) throws java.io.IOException {
+        try {
+            Files.move(staging, target.toPath(), StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception atomicFailed) {
+            // 跨文件系统时原子移动不可用，退化为拷贝
+            try {
+                FileUtil.copyContent(staging.toFile(), target, true);
+            } catch (Exception copyFailed) {
+                FileUtil.del(target);
+                throw copyFailed;
+            }
+            FileUtil.del(staging.toFile());
+        }
+    }
+
+    /**
+     * 装完插件后补装它声明的原生资源包（manifest.packs，见
+     * docs/NATIVE_PACK_DISTRIBUTION.md §11.4）。
+     *
+     * <p>刻意**不回滚插件**：pack 是独立分发物，有自己的状态机、进度条与重试面
+     * （{@code /api/packs/{id}/status}）。这里下不动网就把插件也删掉，等于让一次
+     * 网络抖动吃掉用户刚装好的插件——记 WARN，把重试留给 pack 自己那套。
+     */
+    private void installDeclaredPacks(String pluginId) {
+        if (nativePackService == null) {
+            return;
+        }
+        PluginService.PluginMetadata meta = pluginService.getPlugin(pluginId);
+        List<String> packs = meta == null ? null : meta.getPacks();
+        if (packs == null || packs.isEmpty()) {
+            return;
+        }
+        for (String packId : packs) {
+            try {
+                nativePackService.installAsync(packId);
+                log.info("Plugin {} declares pack '{}', install queued", pluginId, packId);
+            } catch (Exception e) {
+                log.warn("Plugin {} declares pack '{}' but queuing its install failed: {}",
+                        pluginId, packId, e.getMessage());
+            }
+        }
     }
 
     /** 卸载：删除 plugins/<id>/ 并 rescan */
@@ -351,6 +429,36 @@ public class PluginMarketService {
             if (seg.equals("..") || seg.equals(".") || seg.isBlank()) return false;
         }
         return true;
+    }
+
+    /**
+     * 安装前的 minHostVersion 闸（规范 v2.7 P0）：读 staging 里的 manifest.json，
+     * 宿主低于要求时抛异常中止安装（staging 由调用方清理）。manifest 缺失/解析失败
+     * 不在这里拦——那是既有验签与 rescan 链路的职责。
+     */
+    void checkMinHostVersion(java.nio.file.Path staging) {
+        java.nio.file.Path manifestPath = staging.resolve("manifest.json");
+        if (!Files.isRegularFile(manifestPath)) {
+            return;
+        }
+        String min;
+        try {
+            min = cn.hutool.json.JSONUtil.parseObj(Files.readString(manifestPath)).getStr("minHostVersion", null);
+        } catch (Exception e) {
+            return;
+        }
+        if (min == null || min.isBlank() || !com.checkba.util.Semver.isSemver(min)) {
+            return;
+        }
+        if (!com.checkba.util.Semver.isSemver(appVersion)) {
+            log.warn("Host version '{}' is not semver, skip minHostVersion install gate", appVersion);
+            return;
+        }
+        if (com.checkba.util.Semver.compare(appVersion, min) < 0) {
+            throw new IllegalStateException(LangText.of(
+                    "插件需要宿主版本 ≥ " + min + "（当前 " + appVersion + "），请先升级客户端再安装",
+                    "Plugin requires host >= " + min + " (current " + appVersion + "); upgrade the app first"));
+        }
     }
 
     static int compareSemver(String a, String b) {
@@ -465,16 +573,45 @@ public class PluginMarketService {
      * @param bearer 非空时带 {@code Authorization: Bearer}；付费项 file 端点需要
      */
     protected RegistryReply httpGetBytes(String url, String bearer) {
-        HttpResponse resp;
+        HttpResponse resp = null;
         try {
             HttpRequest req = HttpRequest.get(url).setConnectionTimeout(5000).setReadTimeout(60000);
             if (bearer != null && !bearer.isBlank()) {
                 req.header("Authorization", "Bearer " + bearer);
             }
             resp = req.execute();
+            // 病灶：原来是 resp.bodyBytes() 把整份响应先吃进内存，MAX_FILE_BYTES 只在
+            // readBinary() 里事后判 data.length——恶意/异常大响应（被拒绝之前）已经把
+            // 堆占满了，注释里"防御恶意注册表打爆内存"的说法名不副实。改成边读边计数，
+            // 超限立即掐断连接，不等整份读完。
+            return new RegistryReply(resp.getStatus(), readCapped(resp.bodyStream()));
+        } catch (IllegalStateException e) {
+            throw e; // 50MB 上限异常：原样透传，message 已经是最终提示
         } catch (Exception e) {
             throw new IllegalStateException(LangText.of("下载失败: ", "Download failed: ") + e.getMessage());
+        } finally {
+            if (resp != null) {
+                resp.close();
+            }
         }
-        return new RegistryReply(resp.getStatus(), resp.bodyBytes());
+    }
+
+    /**
+     * 流式读取并边读边计数，超过 MAX_FILE_BYTES 立即掐断——不像 resp.bodyBytes() 那样
+     * 先把整份响应吃进内存再判长度。包可见：供测试直接驱动，不依赖真实网络/50MB 数据。
+     */
+    static byte[] readCapped(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        long total = 0;
+        int n;
+        while ((n = in.read(chunk)) != -1) {
+            total += n;
+            if (total > MAX_FILE_BYTES) {
+                throw new IllegalStateException(LangText.of("文件超过 50 MB 上限", "File exceeds the 50 MB limit"));
+            }
+            buf.write(chunk, 0, n);
+        }
+        return buf.toByteArray();
     }
 }

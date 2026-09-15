@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.skill;
 
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -21,6 +24,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *   b) 本轮 LLM 可见工具集裁剪为 allowed_tools ∪ 基础工具集 ∪ 编排类工具（{@link #visibleTools}，
  *   复用 Phase 3A 的可见性出口：对 ToolRegistry.getAllSpecifications() 的结果做白名单过滤）。
  * - 未命中任何 skill 时行为与现状完全一致（不注入、不裁剪）。
+ *
+ * 本轮生效集合 = 用户手动选择（{@code POST /api/agent/chat} 的 skillIds，含旧字段 pinnedSkillId）
+ * ∪ 触发词自动命中（至多一个）。自动匹配仍是"多命中取最长关键词"的单选；能同时生效多个
+ * 只是因为手动选择可以有多枚。prompt 注入与工具白名单都按整个集合做并集，
+ * 见 {@link #activateForTurn(String, String, String, String, java.util.Collection)}。
  *
  * 注意：裁剪只影响"可见性"（LLM 看不到即不会调用），不拦截分发——与插件启停的
  * 可见性语义保持一致，也保证老对话历史里的工具调用仍可回放。
@@ -58,12 +66,67 @@ public class SkillRouter {
     @org.springframework.lang.Nullable
     private final com.checkba.service.AppLanguageService appLanguageService;
 
+    /** 来源：触发词自动命中 */
+    public static final String SOURCE_AUTO = "auto";
+    /** 来源：用户在对话面板里主动选择（含旧字段 pinnedSkillId） */
+    public static final String SOURCE_MANUAL = "manual";
+
     /**
-     * 本轮命中的 skill：conversationId -> skillId。
-     * 每次用户消息（handleUserMessage）刷新一次；未命中即移除。
-     * 条目只是两个短字符串，会话量级下的常驻内存可忽略。
+     * 本轮生效的一个 skill。
+     *
+     * @param definition  skill 定义（工具裁剪与 prompt 注入用）
+     * @param displayName 按当前应用语言解析好的展示名（zh 用 name、en 优先 name_en）——
+     *                    解析放在本类是因为只有这里持有 AppLanguageService，
+     *                    调用方（编排器）不必为了发一个事件多注入一个服务
+     * @param source      {@link #SOURCE_AUTO} / {@link #SOURCE_MANUAL}
      */
-    private final Map<String, String> activeSkillByConversation = new ConcurrentHashMap<>();
+    public record ActiveSkill(SkillDefinition definition, String displayName, String source) {
+    }
+
+    /**
+     * 本轮生效的 skill：<b>runId</b> -> [(skillId, source)]，手动选择在前、自动命中在后。
+     * 每次用户消息（handleUserMessage）开一个新 runId 写一条；一个都不生效即不写。
+     *
+     * <p><b>键是 runId 不是 conversationId（dev-board#533）</b>：同一会话的两个并发轮次
+     * （双击发送 / 两个标签页 / 客户端重试 / 手机端镜像）此前会互相覆盖这张表——
+     * 后起一轮的 skill 会把先起那一轮<b>正在跑的循环</b>的工具白名单换掉，
+     * 于是第一轮注入的是 A 技能的 prompt、第二轮起可见工具却成了 B 技能的
+     * （审计「留给维护者拍板」第 4 条）。轮次标识由编排器的 RunGuard 生成并一路传进来，
+     * 本类不再持有任何 conversationId 级的可变状态。conversationId 只用于埋点归属。
+     *
+     * <p><b>顺序是契约</b>：{@link #activeSkill} 取第一个，于是"用户明确选的"永远压过
+     * "关键词猜的"——这条语义从单选时代（pinnedSkillId 优先于触发词匹配）延续下来。
+     *
+     * <p>只存 id 不存定义：registry 可能在两轮之间 rescan，存定义会拿到已经不存在的旧对象。
+     *
+     * <p><b>无界增长</b>：正常路径由编排器在轮次终态调 {@link #clearRun} 摘除；
+     * 进程被杀等异常路径摘不掉，value 额外带上激活时刻，配 {@link #purgeStaleActivations()}
+     * 做惰性过期；24 小时对齐本仓库同类"内存登记簿"的既有先例
+     *（{@code ConversationIssuanceService} 24h 过期）。
+     */
+    private final Map<String, ActivationRecord> activeByRun = new ConcurrentHashMap<>();
+
+    /** 过期窗口：见 {@link #activeByRun} 字段注释。 */
+    private static final long STALE_ACTIVATION_MILLIS = 24L * 60 * 60 * 1000;
+
+    /** 时间源，测试可注入固定值以避免真实等待 24 小时。 */
+    private java.util.function.LongSupplier clockMillis = System::currentTimeMillis;
+
+    void setClockMillis(java.util.function.LongSupplier clockMillis) {
+        this.clockMillis = clockMillis;
+    }
+
+    /** 供测试断言登记簿大小（不下沉成生产代码路径）。 */
+    int activeRunCount() {
+        return activeByRun.size();
+    }
+
+    private record ActiveEntry(String skillId, String source) {
+    }
+
+    /** {@link #activeByRun} 的 value：本轮生效集合 + 激活时刻，供惰性过期判断。 */
+    private record ActivationRecord(List<ActiveEntry> entries, long activatedAtMillis) {
+    }
 
     /**
      * 触发匹配（无状态）：在所有可用 skill 中找命中关键词的；
@@ -98,60 +161,159 @@ public class SkillRouter {
 
     /**
      * 为本轮对话做一次触发匹配并记录结果（编排器在每条用户消息入口调用一次）。
-     * 未命中时清除该会话的旧记录，保证行为回到"与现状完全一致"。
+     * 未命中时不留记录，保证行为回到"与现状完全一致"。
      */
-    public void activateForTurn(String conversationId, String userInput) {
-        activateForTurn(conversationId, userInput, null);
+    public void activateForTurn(String conversationId, String runId, String userInput) {
+        activateForTurn(conversationId, runId, userInput, null);
     }
 
     /**
-     * 同上，但用户可钉选一个 skill 强制本轮生效。
-     *
-     * 钉选优先于触发词匹配：用户明确指定的意图不该被关键词猜测覆盖。
-     * 钉选 id 不存在或不可用（已停用 / 所属插件已停用）时退回自动匹配，
-     * 避免前端状态过期把本轮变成"无 skill 也无提示"。
+     * 同上，但用户可钉选一个 skill 强制本轮生效（旧的单选字段 pinnedSkillId）。
+     * 语义等价于把它当作只有一项的手动选择列表，见
+     * {@link #activateForTurn(String, String, String, String, java.util.Collection)}。
      */
-    public void activateForTurn(String conversationId, String userInput, String pinnedSkillId) {
+    public void activateForTurn(String conversationId, String runId, String userInput, String pinnedSkillId) {
+        activateForTurn(conversationId, runId, userInput, pinnedSkillId, null);
+    }
+
+    /**
+     * 本轮生效集合 = <b>用户手动选择 ∪ 触发词自动命中</b>（每条用户消息刷新一次）。
+     *
+     * <p>手动选择由前端每次请求携带（{@code POST /api/agent/chat} 的 {@code skillIds}），
+     * 后端不持久化——用户在面板上勾掉一个 skill，下一条消息就该真的不带它。
+     * 旧的单选字段 {@code pinnedSkillId} 收编成"手动列表里的一项"，语义完全一致。
+     *
+     * <p><b>并集而不是覆盖</b>：手动选择表达的是"这轮务必带上它"，不是"只准用它"。
+     * 用户勾了「诉讼可视化」又在句子里写了别的技能的触发词时，两个都该生效——
+     * 强行二选一只会让另一半能力静默消失。集合内的顺序把手动放在前面，
+     * 于是 {@link #activeSkill}（单值出口，事项分类等旧调用方在用）仍返回用户明确选的那个。
+     *
+     * <p>无效 id（不存在 / 已停用 / 所属插件已停用 / 当前应用语言下不可用）静默忽略：
+     * 前端状态过期不该让整轮报错，只是那个 skill 这轮不生效——而 SSE {@code skill_update}
+     * 下发的是真正生效的清单，用户看得见它没被点亮。
+     */
+    public void activateForTurn(String conversationId, String runId, String userInput, String pinnedSkillId,
+                                java.util.Collection<String> manualSkillIds) {
+        java.util.LinkedHashMap<String, String> active = new java.util.LinkedHashMap<>();
+
+        List<String> manual = new java.util.ArrayList<>();
         if (pinnedSkillId != null && !pinnedSkillId.isBlank()) {
-            Optional<SkillDefinition> pinned = skillRegistry.getSkill(pinnedSkillId)
-                    .filter(skillRegistry::isAvailable);
-            if (pinned.isPresent()) {
-                activeSkillByConversation.put(conversationId, pinned.get().getId());
-                log.info("Skill '{}' activated for conversation {} (pinned by user)",
-                        pinned.get().getId(), conversationId);
-                recordActivation(conversationId, pinned.get(), "pinned");
-                return;
+            manual.add(pinnedSkillId);
+        }
+        if (manualSkillIds != null) {
+            manual.addAll(manualSkillIds);
+        }
+        for (String id : manual) {
+            if (id == null || id.isBlank()) {
+                continue;
             }
-            log.warn("Pinned skill '{}' not found or unavailable, fall back to trigger matching", pinnedSkillId);
+            Optional<SkillDefinition> picked = skillRegistry.getSkill(id).filter(skillRegistry::isAvailable);
+            if (picked.isEmpty()) {
+                log.warn("Manually selected skill '{}' not found or unavailable, ignored", id);
+                continue;
+            }
+            active.putIfAbsent(picked.get().getId(), SOURCE_MANUAL);
         }
-        Optional<SkillDefinition> matched = match(userInput);
-        if (matched.isPresent()) {
-            activeSkillByConversation.put(conversationId, matched.get().getId());
-            log.info("Skill '{}' activated for conversation {} (trigger matched)",
-                    matched.get().getId(), conversationId);
-            recordActivation(conversationId, matched.get(), "matched");
-        } else {
-            activeSkillByConversation.remove(conversationId);
+
+        // 手动选过的 skill 即便同时命中触发词也仍标 manual：用户看到的应该是"我选的"，
+        // 而不是"碰巧也被关键词猜中了"。
+        match(userInput).ifPresent(matched -> active.putIfAbsent(matched.getId(), SOURCE_AUTO));
+
+        if (active.isEmpty()) {
+            activeByRun.remove(runId);
+            return;
+        }
+        List<ActiveEntry> entries = active.entrySet().stream()
+                .map(e -> new ActiveEntry(e.getKey(), e.getValue()))
+                .toList();
+        activeByRun.put(runId, new ActivationRecord(entries, clockMillis.getAsLong()));
+        log.info("Skills activated for conversation {} (run {}): {}", conversationId, runId, active);
+        recordActivation(conversationId, activeSkills(runId));
+    }
+
+    /**
+     * 轮次结束时摘掉它的生效记录（编排器在每条终态路径上调一次）。
+     * 摘不掉的异常路径（进程被杀）由 {@link #purgeStaleActivations()} 兜底。
+     */
+    public void clearRun(String runId) {
+        if (runId != null) {
+            activeByRun.remove(runId);
         }
     }
 
-    /** 埋点：skill 激活即事项类型信号（skill 带 category 时同步产出 matter.classified） */
-    private void recordActivation(String conversationId, SkillDefinition skill, String how) {
-        telemetryService.recordConv("skill.activated", conversationId,
-                Map.of("skillId", skill.getId(), "how", how));
-        if (skill.getCategory() != null && !skill.getCategory().isBlank()) {
-            telemetryService.recordConv("matter.classified", conversationId,
-                    Map.of("category", skill.getCategory(), "source", "skill"));
+    /**
+     * 清理超过 {@link #STALE_ACTIVATION_MILLIS} 未再激活的轮次条目——见
+     * {@link #activeByRun} 字段注释的无界增长问题。与 {@code TodoListService.purgeStaleLists}
+     * 同款节奏（每日一次 + 15 分钟初始延迟错峰）。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 24L * 60 * 60 * 1000,
+            initialDelay = 15L * 60 * 1000)
+    public void purgeStaleActivations() {
+        try {
+            long cutoff = clockMillis.getAsLong() - STALE_ACTIVATION_MILLIS;
+            int before = activeByRun.size();
+            activeByRun.entrySet().removeIf(e -> e.getValue().activatedAtMillis() < cutoff);
+            int removed = before - activeByRun.size();
+            if (removed > 0) {
+                log.info("清理冷 skill 激活记录 {} 条", removed);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to purge stale skill activations", e);
         }
     }
 
-    /** 本轮命中的 skill（未命中或已被禁用返回 empty） */
-    public Optional<SkillDefinition> activeSkill(String conversationId) {
-        String skillId = activeSkillByConversation.get(conversationId);
-        if (skillId == null) {
-            return Optional.empty();
+    /**
+     * 埋点：skill 激活即事项类型信号（skill 带 category 时同步产出 matter.classified）。
+     * skill.activated 每个生效的 skill 各记一条；matter.classified 只取首个（= 用户选的，
+     * 否则是自动命中的那个）——一轮对话只能有一个事项类型，多记会把分布统计打歪。
+     */
+    private void recordActivation(String conversationId, List<ActiveSkill> active) {
+        boolean matterRecorded = false;
+        for (ActiveSkill entry : active) {
+            SkillDefinition skill = entry.definition();
+            telemetryService.recordConv("skill.activated", conversationId,
+                    Map.of("skillId", skill.getId(),
+                            // 埋点取值沿用旧字面量（pinned/matched），别改成 manual/auto——
+                            // 官网账本里已有历史数据按这两个值分组
+                            "how", SOURCE_MANUAL.equals(entry.source()) ? "pinned" : "matched"));
+            if (!matterRecorded && skill.getCategory() != null && !skill.getCategory().isBlank()) {
+                telemetryService.recordConv("matter.classified", conversationId,
+                        Map.of("category", skill.getCategory(), "source", "skill"));
+                matterRecorded = true;
+            }
         }
-        return skillRegistry.getSkill(skillId).filter(skillRegistry::isAvailable);
+    }
+
+    /**
+     * 本轮生效的全部 skill（手动在前、自动在后；一个都没有时返回空列表）。
+     * 注入前复查可用性——两轮之间可能被管理员停用。
+     */
+    public List<ActiveSkill> activeSkills(String runId) {
+        ActivationRecord record = activeByRun.get(runId);
+        List<ActiveEntry> entries = record == null ? null : record.entries();
+        if (entries == null || entries.isEmpty()) {
+            return List.of();
+        }
+        return entries.stream()
+                .map(entry -> skillRegistry.getSkill(entry.skillId())
+                        .filter(skillRegistry::isAvailable)
+                        .map(def -> new ActiveSkill(def, displayName(def), entry.source()))
+                        .orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    /** 本轮生效的首个 skill（手动优先；一个都没有返回 empty）。单值出口，供只关心"有没有"的旧调用方。 */
+    public Optional<SkillDefinition> activeSkill(String runId) {
+        return activeSkills(runId).stream().findFirst().map(ActiveSkill::definition);
+    }
+
+    /** 按当前应用语言解析展示名：en-US 优先 name_en，缺省回退 name，再缺回退 id。 */
+    public String displayName(SkillDefinition skill) {
+        if (isEnglish() && skill.getNameEn() != null && !skill.getNameEn().isBlank()) {
+            return skill.getNameEn();
+        }
+        return skill.getName() != null && !skill.getName().isBlank() ? skill.getName() : skill.getId();
     }
 
     /**
@@ -162,13 +324,18 @@ public class SkillRouter {
      * 白名单过滤结果为空（allowed_tools 全部拼错等误配置）时回退为不裁剪并告警，
      * 避免把 Agent 裁成"无工具可用"。
      */
-    public List<ToolSpecification> visibleTools(String conversationId, List<ToolSpecification> all) {
-        Optional<SkillDefinition> active = activeSkill(conversationId);
+    public List<ToolSpecification> visibleTools(String runId, List<ToolSpecification> all) {
+        List<ActiveSkill> active = activeSkills(runId);
         if (active.isEmpty()) {
             return all;
         }
-        SkillDefinition skill = active.get();
-        Set<String> whitelist = new HashSet<>(skill.getAllowedTools());
+        // 多个 skill 同时生效时取白名单并集：手动选了 A 又自动命中 B，两边的能力都得在。
+        Set<String> whitelist = new HashSet<>();
+        List<String> activeIds = new java.util.ArrayList<>();
+        for (ActiveSkill entry : active) {
+            whitelist.addAll(entry.definition().getAllowedTools());
+            activeIds.add(entry.definition().getId());
+        }
         whitelist.addAll(properties.getBaseTools());
         whitelist.addAll(ORCHESTRATION_TOOLS);
         List<ToolSpecification> filtered = all.stream()
@@ -179,11 +346,11 @@ public class SkillRouter {
         // 原来的回退保护就被本次改动悄悄废掉，skill 会被裁成只剩写清单/派子任务。
         // （空集合下 allMatch 恒为真，所以这一个判断同时覆盖 filtered 为空的情况。）
         if (filtered.stream().allMatch(spec -> ORCHESTRATION_TOOLS.contains(spec.name()))) {
-            log.warn("Skill '{}' whitelist matched no business tools ({}), fall back to full tool set",
-                    skill.getId(), whitelist);
+            log.warn("Skills {} whitelist matched no business tools ({}), fall back to full tool set",
+                    activeIds, whitelist);
             return all;
         }
-        log.info("Skill '{}' trimmed visible tools: {} -> {}", skill.getId(), all.size(), filtered.size());
+        log.info("Skills {} trimmed visible tools: {} -> {}", activeIds, all.size(), filtered.size());
         return filtered;
     }
 

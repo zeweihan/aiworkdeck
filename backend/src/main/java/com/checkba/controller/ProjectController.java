@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.dto.ProjectCardDTO;
@@ -27,6 +30,13 @@ public class ProjectController {
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
 
     /**
+     * 插件归档绑定（dev-board#297）。可选注入而非构造器参数：既有测试手工 new 本控制器时不受牵连，
+     * null 即绑定功能整体关闭（/my 不过滤、ensure-addin-link 报未开放）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.addin.AddinProjectLinkService addinProjectLinkService;
+
+    /**
      * 「把本机文件夹挂成项目」只在单机桌面版成立——那里的「服务器」就是用户自己的电脑，
      * 读自己的磁盘正是这个功能的意义。共享/云端部署里它等于把任意绝对路径交给任意租户当项目根
      * （/etc、别家事务所的数据目录、应用自身的配置与 plugins 目录），故默认关闭，
@@ -34,6 +44,16 @@ public class ProjectController {
      */
     @Value("${security.local-folder-projects.enabled:false}")
     private boolean localFolderProjectsEnabled;
+
+    /**
+     * 协作事件（spec 2026-09-14 §2.3）：案件库侧「案卷被放进来了」那一条。可选注入，
+     * 理由同上面的 addinProjectLinkService——既有测试手工 new 本控制器，null 即不记事件。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.cloud.CollabEventService collabEventService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.DeviceTokenService deviceTokenService;
 
     public ProjectController(ProjectService projectService, ProjectMemberService projectMemberService,
                              com.checkba.service.LocalProjectService localProjectService,
@@ -52,7 +72,29 @@ public class ProjectController {
         if (userId == null) {
             throw new IllegalArgumentException("请先登录");
         }
-        return projectService.createProject(request, userId);
+        Project project = projectService.createProject(request, userId);
+        recordSharedIfFromDesktop(project, sessionId, userId);
+        return project;
+    }
+
+    /**
+     * 「{谁} 把案卷放进了案件库」。
+     *
+     * <p>判据是<b>这次建项目用的是设备令牌</b>：案件库侧的项目只有一条来路——桌面端
+     * {@code CloudSyncService.shareToCloud} 带着设备令牌调本端点。刻意不挂在
+     * {@code prepare-remote} 上（那条看着更像「共享」）：{@code cloneFromCloud} 也调它，
+     * 每有一位同事取回一份，历史里就会多出一条「他把案卷放进了案件库」。
+     */
+    private void recordSharedIfFromDesktop(Project project, String sessionId, Long userId) {
+        if (collabEventService == null || deviceTokenService == null || project == null) return;
+        if (sessionId == null
+                || !sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX)) {
+            return;
+        }
+        var who = deviceTokenService.resolve(sessionId);
+        collabEventService.record(com.checkba.version.cloud.CollabEvent.Kind.SHARED,
+                project.getId(), userId, who == null ? null : who.tokenId(),
+                project.getName() == null ? null : Map.of("name", project.getName()));
     }
 
     /**
@@ -75,7 +117,8 @@ public class ProjectController {
             throw new IllegalArgumentException("请先登录");
         }
         Map<String, Object> result = new HashMap<>();
-        if (!projectService.getUserProjectCardDTOs(userId).isEmpty()) {
+        // 影子项目（归档绑定的容器）不算「已有项目」：只剩绑定的用户仍给一个可自由使用的临时项目
+        if (!filterLinkedShadows(projectService.getUserProjectCardDTOs(userId), userId).isEmpty()) {
             result.put("created", false);
             result.put("project", null);
             return result;
@@ -121,6 +164,8 @@ public class ProjectController {
         data.put("openFileId", r.openFileId());
         data.put("importedCount", r.importedCount());
         data.put("truncated", r.truncated());
+        data.put("truncatedCount", r.truncatedCount());
+        data.put("truncatedCountCapped", r.truncatedCountCapped());
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("data", data);
@@ -197,7 +242,71 @@ public class ProjectController {
         if (userId == null) {
             throw new IllegalArgumentException("请先登录");
         }
-        return projectService.getUserProjectCardDTOs(userId);
+        // 归档绑定的影子项目滤掉（dev-board#297）：界面上这份工作显示为「选中了那个桌面项目」，
+        // 不在「我的项目」里重复出现一个同名云项目。桌面端 link 表恒空，无副作用。
+        return filterLinkedShadows(projectService.getUserProjectCardDTOs(userId), userId);
+    }
+
+    private List<ProjectCardDTO> filterLinkedShadows(List<ProjectCardDTO> cards, Long userId) {
+        if (addinProjectLinkService == null || cards.isEmpty()) {
+            return cards;
+        }
+        java.util.Set<Long> linked = addinProjectLinkService.linkedCloudProjectIds(userId);
+        if (linked.isEmpty()) {
+            return cards;
+        }
+        return cards.stream().filter(c -> !linked.contains(c.getId()))
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * 插件归档绑定（dev-board#297）：选中远程设备分组的桌面项目 = find-or-create 云端影子
+     * 容器项目并建立映射。body {deviceId, projectKey, name}；返回该映射（含影子项目 id）。
+     */
+    @PostMapping("/ensure-addin-link")
+    public Map<String, Object> ensureAddinLink(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new IllegalArgumentException("请先登录");
+        }
+        if (addinProjectLinkService == null) {
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "当前部署未开放插件归档绑定", "This deployment does not support add-in archive binding"));
+        }
+        com.checkba.model.entity.AddinProjectLink link = addinProjectLinkService.ensureLink(
+                userId, body.get("deviceId"), body.get("projectKey"), body.get("name"));
+        Map<String, Object> result = new HashMap<>();
+        result.put("projectId", link.getCloudProjectId());
+        result.put("deviceId", link.getDeviceId());
+        result.put("projectKey", link.getProjectKey());
+        return result;
+    }
+
+    /**
+     * 当前用户的全部归档绑定（裸数组）：插件端重建本地「影子项目 ↔ 桌面项目」映射用
+     * （Office 清 webview 缓存后 localStorage 会丢，映射的权威源在服务端）。
+     */
+    @GetMapping("/addin-links")
+    public List<Map<String, Object>> listAddinLinks(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new IllegalArgumentException("请先登录");
+        }
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        if (addinProjectLinkService == null) {
+            return out;
+        }
+        for (com.checkba.model.entity.AddinProjectLink link : addinProjectLinkService.listLinks(userId)) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("projectId", link.getCloudProjectId());
+            m.put("deviceId", link.getDeviceId());
+            m.put("projectKey", link.getProjectKey());
+            out.add(m);
+        }
+        return out;
     }
 
     /**

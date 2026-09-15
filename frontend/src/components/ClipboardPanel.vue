@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="clip-panel">
     <!-- 免费额度提示：只在确实有记录被挡住时出现。没超额时一个字都不显示，不打扰。 -->
@@ -5,8 +7,9 @@
       v-if="hiddenCount > 0"
       class="clip-unlock-hint"
       :text="$t('panels.cpUnlockHint', { count: hiddenCount })"
+      sku-id="feature:clipboard.unlimited"
     />
-    <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" show-scrollbar="false">
+    <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" :show-scrollbar="false">
       <view v-if="loading" class="loading">{{ $t('panels.cpLoading') }}</view>
       <view v-else-if="items.length === 0" class="empty">{{ $t('panels.cpEmpty') }}</view>
       <view v-else class="list-grid">
@@ -75,6 +78,8 @@ import { getClipboardTypeMeta } from '@/config/clipboard.js'
 import { getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
 import UnlockHint from '@/components/UnlockHint.vue'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import { host } from '@/services/host.js'
 
 export default {
 
@@ -98,11 +103,22 @@ export default {
       items: [],
       // 免费额度下被隐藏（注意：不是被删除）的历史记录条数。解锁后这些记录会原样回来。
       hiddenCount: 0,
-      confirmDeleteId: null
+      confirmDeleteId: null,
+      _refreshSeq: 0
     }
   },
   mounted() {
     this.refresh()
+    // 解锁购买成功（UnlockHint 广播）后重拉列表：hiddenCount 是后端算的，
+    // 不重拉的话横幅会停在购买前的旧值上（dev-board#201）
+    this._onEntitlementsChanged = () => this.refresh()
+    uni.$on('awd:entitlements-changed', this._onEntitlementsChanged)
+  },
+  beforeUnmount() {
+    if (this._onEntitlementsChanged) {
+      uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
+      this._onEntitlementsChanged = null
+    }
   },
   watch: {
     query() {
@@ -116,10 +132,16 @@ export default {
     formatTypeLabel(type) {
       return (getClipboardTypeMeta(type)?.label || String(type || ''))
     },
+    // query 同样绑的是父级搜索框、没有去抖（连 ProjectFavoritesPanel 那种同关键字
+    // 节流都没有），每敲一下键就发一次 listClipboard。响应到达顺序不保证跟敲键顺序
+    // 一致，先敲的（陈旧）关键字若后回，会把已经渲染好的最新结果和「N 条被免费额度
+    // 隐藏」提示一起盖成陈旧值。只认"此刻最新一次"发出的那份。
     async refresh() {
+      const seq = ++this._refreshSeq
       this.loading = true
       try {
         const res = await listClipboard(this.query, 80)
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         // PR-C 起后端返回 { items, limited, hiddenCount, ... }；
         // 数组分支保留给旧后端（桌面壳可能连着未升级的 backend），此时按无额度处理。
         if (Array.isArray(res)) {
@@ -130,10 +152,11 @@ export default {
           this.hiddenCount = res?.limited ? (res.hiddenCount || 0) : 0
         }
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         console.error('加载剪贴板失败:', e)
         uni.showToast({ title: this.$t('panels.cpLoadFailed'), icon: 'none' })
       } finally {
-        this.loading = false
+        if (shouldAcceptResponse(seq, this._refreshSeq)) this.loading = false
       }
     },
     preview(it) {
@@ -178,23 +201,20 @@ export default {
       uni.setClipboardData({ data: t })
       // #endif
     },
+    // 确认态刻意不自动收起：原先 5 秒后自己清空 confirmDeleteId，超时之后用户点
+    // 「确定」，点到的是卡片本身的 @tap="copy(it.text)"——表现正是「卡片仍在、
+    // 什么也没发生」（dev-board#455）。取消靠再点一次 ×、点「取消」，
+    // 或者点另一张卡片的 ×（confirmDeleteId 只认一个 id）。
     requestDelete(id) {
       if (this.confirmDeleteId === id) {
         this.confirmDeleteId = null
         return
       }
       this.confirmDeleteId = id
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-      this._deleteTimer = setTimeout(() => {
-        if (this.confirmDeleteId === id) {
-          this.confirmDeleteId = null
-        }
-      }, 5000)
     },
-    
+
     cancelDelete() {
       this.confirmDeleteId = null
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
     },
 
     async confirmDelete(id) {
@@ -203,7 +223,13 @@ export default {
         await deleteClipboardItem(id)
         await this.refresh()
       } catch (e) {
-        uni.showToast({ title: this.$t('panels.cpDeleteFailed'), icon: 'none' })
+        // 失败提示走原生弹窗：工作台里开着浏览器标签时，toast 在 DOM 层、被原生
+        // BrowserView 整个盖住，删除失败等于毫无反馈（同 BrowserPane 收藏失败的修法）
+        if (host.app && host.app.confirm) {
+          host.app.confirm({ title: this.$t('panels.cpDeleteFailed'), content: (e && e.message) || '' }).catch(() => {})
+        } else {
+          uni.showToast({ title: (e && e.message) || this.$t('panels.cpDeleteFailed'), icon: 'none' })
+        }
       }
     },
     getImageUrl(it) {
@@ -257,21 +283,13 @@ export default {
 
 <style lang="scss" scoped>
 /* Unified AI WorkDeck Palette */
-$color-primary: #1A5336;
-$color-accent: #5BD197;
-$color-accent-pale: #E6F9F0;
-$color-text-main: #2C3338;
-$color-text-light: #6C757D;
-$color-border: #E9ECEF;
-$bg-pale: #F8F9FA;
-$bg-white: #FFFFFF;
 
 .clip-panel {
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: $bg-pale;
+  background: var(--awd-bg);
 }
 
 /* 额度提示贴在列表上方，不占据滚动区，避免翻到底才看到 */
@@ -296,8 +314,8 @@ $bg-white: #FFFFFF;
 }
 
 .clip-card {
-  background: $bg-white;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 12px;
   display: flex;
@@ -315,7 +333,7 @@ $bg-white: #FFFFFF;
 }
 
 .clip-card:hover {
-  border-color: $color-accent;
+  border-color: var(--awd-mint);
   box-shadow: 0 8px 16px rgba(91, 209, 151, 0.12);
   transform: translateY(-2px);
 }
@@ -346,12 +364,12 @@ $bg-white: #FFFFFF;
 .badge-text {
   font-size: 12px;
   font-weight: 600;
-  color: $color-text-main;
+  color: var(--awd-text);
 }
 
 .clip-source {
   font-size: 11px;
-  color: $color-text-light;
+  color: var(--awd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -359,7 +377,7 @@ $bg-white: #FFFFFF;
 
 .time-label {
   font-size: 11px;
-  color: #9aa5b1;
+  color: var(--awd-text-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -393,25 +411,25 @@ $bg-white: #FFFFFF;
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-    color: $color-text-light;
+    color: var(--awd-text-2);
   }
 
   &:hover {
-    background: $color-accent-pale;
+    background: var(--awd-accent-soft);
     border-color: transparent;
-    .icon { color: $color-primary; }
+    .icon { color: var(--awd-accent-text); }
   }
 }
 
 .cli-btn.danger:hover {
-  background: #FEF2F2;
-  .icon { color: #DC2626; }
+  background: var(--awd-danger-soft);
+  .icon { color: var(--awd-danger-text); }
 }
 
 .card-content {
   flex: 1;
   min-height: 0;
-  background: #f1f5f9;
+  background: var(--awd-surface-2);
   border-radius: 6px;
   padding: 8px;
   overflow: hidden;
@@ -422,7 +440,7 @@ $bg-white: #FFFFFF;
 /* Content Types */
 .content-text {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   line-height: 1.5;
   
   /* Top-Left No Scroll Ellipsis */
@@ -463,8 +481,8 @@ $bg-white: #FFFFFF;
   top: 100%;
   right: 0;
   margin-top: 8px;
-  background: #fff;
-  border: 1px solid $color-border;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 8px;
@@ -487,15 +505,15 @@ $bg-white: #FFFFFF;
   right: 10px;
   width: 8px;
   height: 8px;
-  background: #fff;
-  border-top: 1px solid $color-border;
-  border-left: 1px solid $color-border;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
+  border-left: 1px solid var(--awd-border);
   transform: rotate(45deg);
 }
 
 .pop-text {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   text-align: center;
   font-weight: 500;
   display: block;
@@ -514,28 +532,28 @@ $bg-white: #FFFFFF;
   text-align: center;
   border-radius: 4px;
   cursor: pointer;
-  background: $bg-pale;
-  color: $color-text-light;
+  background: var(--awd-bg);
+  color: var(--awd-text-2);
   transition: all 0.2s;
   
   &:hover {
-    background: #e2e8f0;
-    color: $color-text-main;
+    background: var(--awd-surface-3);
+    color: var(--awd-text);
   }
 }
 
 .pop-btn.danger {
-  background: #FEF2F2;
-  color: #DC2626;
+  background: var(--awd-danger-soft);
+  color: var(--awd-danger-text);
   
   &:hover {
-    background: #FEE2E2;
+    background: var(--awd-danger-soft);
   }
 }
 
 .file-name {
   font-size: 12px;
-  color: $color-text-main;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

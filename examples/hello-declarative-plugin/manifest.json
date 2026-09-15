@@ -1,0 +1,26 @@
+{
+  "id": "hello-declarative-plugin",
+  "name": "%name%",
+  "version": "1.0.0",
+  "description": "%desc%",
+  "author": "AI WorkDeck",
+  "minHostVersion": "0.28.0",
+  "contributes": {
+    "templates": [
+      {
+        "id": "poa",
+        "name": "%tpl.poa%",
+        "genre": "letter",
+        "file": "templates/power-of-attorney.md",
+        "description": "民事诉讼一般授权委托书骨架，【　】为填写位"
+      }
+    ],
+    "styleProfiles": [
+      { "id": "compact", "name": "%profile.compact%", "file": "profiles/compact.json" }
+    ]
+  },
+  "settings": [
+    { "key": "firmName", "type": "string", "label": "%set.firm%", "default": "" },
+    { "key": "autoNumber", "type": "boolean", "label": "%set.autoNumber%", "default": "true" }
+  ]
+}

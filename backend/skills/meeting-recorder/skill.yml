@@ -12,9 +12,11 @@ author_url: https://www.aiworkdeck.com
 version: 1.0.0
 license: MIT
 
-# 默认不安装：转写依赖用户自己的阿里云凭证，装了才在左栏出现（requiresSkill 过滤）；
-# 用户在插件广场手动启用（= 安装），见 SkillRegistry/SkillMarketService。
-enabled_by_default: false
+# 默认启用（2026-08-20，dev-board#66）：会议录音与语音合成合并为「语音」一个插件，
+# 启停一体（前端开关一次翻两个成员，SkillRegistry 每次扫描后还会做状态收敛：
+# 任一启用即全部启用）。语音合成一直默认启用，所以本 skill 也默认启用。
+# 转写凭证未配置时录音存档照常可用、转写降级提示，不构成默认关闭的理由。
+enabled_by_default: true
 
 # 法律事项类别（匿名统计用，枚举见 MatterCategory）
 category: 其他法律事务

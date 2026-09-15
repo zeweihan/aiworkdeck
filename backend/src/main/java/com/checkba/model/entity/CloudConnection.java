@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.model.entity;
 
 import jakarta.persistence.*;
@@ -41,6 +44,25 @@ public class CloudConnection {
     /** 服务端设备令牌行的 id（用于 disconnect 撤销），旧行可能为空。 */
     @Column
     private Long tokenId;
+
+    /**
+     * 我在**案件库那一侧**的 userId（不是本机的）。协作事件行靠它判「这条是不是我干的」：
+     * 事件表记的全是案件库侧的 userId，本机 userId 与它毫无关系。
+     *
+     * <p>本列上线前建的连接为空——不必断开重连，{@code CloudSyncService.ensureRemoteUserId}
+     * 会在第一次打开「提交历史」时按官网账户 id 从案件库参与人列表里自动补上。
+     */
+    @Column
+    private Long remoteUserId;
+
+    /**
+     * 签发这条连接的官网账户指纹（{@code AccountService.accountFingerprintOrNull}）。
+     * 只有官方案件库这条零配置直连路径会写：设备令牌是替某个官网账户换来的，
+     * 换了账号必须重桥换令牌，否则新账号会顶着上一个账号的身份往案件库里交稿。
+     * 手工填地址账号密码连的那条路上恒为空（那里的身份不是从官网账户派生的）。
+     */
+    @Column(length = 64)
+    private String accountFingerprint;
 
     @Column(nullable = false)
     private LocalDateTime createdAt;

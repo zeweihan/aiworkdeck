@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 通用词汇：跨页面复用的动词/状态。页面专有文案放各自命名空间，不要都堆到这里。
 export default {
   confirm: '确定',
@@ -33,7 +35,9 @@ export default {
   readVersionFileFailed: '读取版本文件失败',
   // ---- utils/ideOpen.js ----
   openProjectFailed: '打开项目失败，请稍后重试',
-  folderImportTruncated: '文件夹内容过多，仅导入了前 3000 项',
+  folderImportTruncatedTitle: '导入已截断',
+  folderImportTruncated: '本次导入已截断，约 {count} 项未纳入：目录超过 30000 项，请拆分项目',
+  folderImportTruncatedCapped: '本次导入已截断，超过 {count} 项未纳入：目录超过 30000 项，请拆分项目',
   openFolder: '打开文件夹',
   openFile: '打开文件',
   open: '打开',
@@ -50,4 +54,12 @@ export default {
   statusError: '出错',
   hintFromCreationTime: '取自建档时间',
   hintAiInferred: 'AI 读文件得出，请核对',
+  // 插件镜像会话的来源角标（dev-board#298），映射在 utils/conversationSource.js
+  sourceChannelOfficeWord: 'Word 插件',
+  sourceChannelOfficeExcel: 'Excel 插件',
+  sourceChannelOfficePowerpoint: 'PowerPoint 插件',
+  sourceChannelWpsWord: 'WPS 文字',
+  sourceChannelWpsExcel: 'WPS 表格',
+  sourceChannelWpsPowerpoint: 'WPS 演示',
+  sourceChannelPlugin: '插件',
 }

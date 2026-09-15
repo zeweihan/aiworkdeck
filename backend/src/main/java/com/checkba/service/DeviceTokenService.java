@@ -1,13 +1,19 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.controller.AuthController;
 import com.checkba.model.entity.DeviceToken;
 import com.checkba.repository.DeviceTokenRepository;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -16,7 +22,17 @@ import java.util.List;
 @Service
 public class DeviceTokenService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DeviceTokenService.class);
+
     public static final String TOKEN_PREFIX = "awdt_";
+
+    /**
+     * lastUsedAt 写回节流：一分钟内的重复请求不再落盘。
+     * 修复病灶：resolveUserId 原来对每一次设备令牌请求都无条件 SELECT+UPDATE，
+     * 云端协作客户端任何一次轮询/只读请求都会被打成一次写库，放大 DB 写负载与行锁竞争。
+     * 与同一文件夹下 UserSessionService 的 TOUCH_INTERVAL 是同一手法，数值也保持一致。
+     */
+    static final Duration TOUCH_INTERVAL = Duration.ofMinutes(1);
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -44,14 +60,33 @@ public class DeviceTokenService {
         return new IssuedToken(t.getId(), plaintext);
     }
 
+    /**
+     * 解析结果：这枚令牌是谁的（{@code userId}）、是哪一台设备（{@code tokenId}）。
+     *
+     * <p>设备维度是协作事件区分「你在另一台电脑」与「同事」的唯一依据——同一个官网
+     * 账号在两台机器上桥接落到**同一行** app_users，光有 userId 分不出是哪台机器。
+     */
+    public record ResolvedToken(Long userId, Long tokenId) {}
+
     /** 未命中返回 null——调用方（静态鉴权入口）把 null 当未登录处理。 */
     public Long resolveUserId(String plaintext) {
+        ResolvedToken resolved = resolve(plaintext);
+        return resolved == null ? null : resolved.userId();
+    }
+
+    /** 解析本体，未命中返回 null。顺带按节流窗口补一次 lastUsedAt。 */
+    public ResolvedToken resolve(String plaintext) {
         if (plaintext == null || !plaintext.startsWith(TOKEN_PREFIX)) return null;
         return repository.findByTokenHash(sha256(plaintext))
                 .map(t -> {
-                    t.setLastUsedAt(LocalDateTime.now());
-                    repository.save(t);
-                    return t.getUserId();
+                    LocalDateTime now = LocalDateTime.now();
+                    // 节流：lastUsedAt 从未写过，或已超过节流窗口，才补一次写；
+                    // 窗口内的重复请求（同一设备的高频轮询）不再逐请求落库。
+                    if (t.getLastUsedAt() == null || t.getLastUsedAt().plus(TOUCH_INTERVAL).isBefore(now)) {
+                        t.setLastUsedAt(now);
+                        repository.save(t);
+                    }
+                    return new ResolvedToken(t.getUserId(), t.getId());
                 })
                 .orElse(null);
     }
@@ -64,6 +99,21 @@ public class DeviceTokenService {
 
     public List<DeviceToken> listMine(Long userId) {
         return repository.findByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    private static final long IDLE_EXPIRY_DAYS = 365;
+
+    @Scheduled(fixedDelay = 24 * 60 * 60 * 1000L, initialDelay = 90 * 60 * 1000L)
+    @Transactional
+    public void purgeIdleTokens() {
+        try {
+            int removed = repository.deleteIdleBefore(LocalDateTime.now().minusDays(IDLE_EXPIRY_DAYS));
+            if (removed > 0) {
+                log.info("清理空转设备令牌 {} 条（>{} 天未用）", removed, IDLE_EXPIRY_DAYS);
+            }
+        } catch (Exception e) {
+            log.warn("空转设备令牌清理失败: {}", e.toString());
+        }
     }
 
     private static String sha256(String s) {

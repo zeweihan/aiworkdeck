@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.User;
@@ -30,7 +33,7 @@ class AuthControllerHardeningTest {
     /** DB 会话服务（repository 打桩）：注册/登录成功路径要经它签发 sessionId。 */
     private static com.checkba.service.UserSessionService sessions() {
         return new com.checkba.service.UserSessionService(
-                mock(com.checkba.repository.UserSessionRepository.class));
+                mock(com.checkba.repository.UserSessionRepository.class), 365);
     }
 
     private static MockHttpServletRequest http() {
@@ -60,7 +63,8 @@ class AuthControllerHardeningTest {
     void closedRegistrationShortCircuits() {
         UserService userService = mock(UserService.class);
         AuthController controller = new AuthController(
-                userService, null, null, null, serverGuard("closed"), null, null, null, null, sessions(), false, null);
+                userService, null, null, null, serverGuard("closed"), null, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -76,7 +80,8 @@ class AuthControllerHardeningTest {
         when(userService.register(anyString(), anyString(), anyString()))
                 .thenReturn(user(1L, "alice"));
         AuthController controller = new AuthController(
-                userService, null, null, null, serverGuard("open"), null, null, null, null, sessions(), false, null);
+                userService, null, null, null, serverGuard("open"), null, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -91,7 +96,8 @@ class AuthControllerHardeningTest {
                 .thenReturn(user(1L, "alice"));
         AuthAbuseGuard localGuard = new AuthAbuseGuard(true, "closed");
         AuthController controller = new AuthController(
-                userService, null, null, null, localGuard, null, null, null, null, sessions(), false, null);
+                userService, null, null, null, localGuard, null, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -105,7 +111,8 @@ class AuthControllerHardeningTest {
         when(userService.login(anyString(), anyString()))
                 .thenThrow(new IllegalArgumentException("用户名或密码错误"));
         AuthController controller = new AuthController(
-                userService, null, null, null, serverGuard("open"), null, null, null, null, sessions(), false, null);
+                userService, null, null, null, serverGuard("open"), null, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         AuthController.LoginRequest request = new AuthController.LoginRequest();
         request.setUsername("alice");
@@ -122,13 +129,14 @@ class AuthControllerHardeningTest {
     }
 
     @Test
-    @DisplayName("awdk-login 成功：返回 token/userId/username 信封")
+    @DisplayName("awdk-login 成功：返回 token/userId/username/displayName/tokenId 信封")
     void awdkLoginSuccessEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(anyString()))
-                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei"));
+        when(awdkLoginService.login(anyString(), any()))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", "韩泽伟", 31L));
         AuthController controller = new AuthController(
-                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null);
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -138,16 +146,40 @@ class AuthControllerHardeningTest {
         assertEquals("awdt_x", data.get("token"));
         assertEquals(7L, data.get("userId"));
         assertEquals("awd_hanzewei", data.get("username"));
+        // 桌面端把这条桥的结果存成一条团队案件库连接：没有 tokenId 就撤不掉远端那枚
+        // 长期设备令牌，「退出这个案件库」只会做成本地断开，凭据留在服务器上继续有效。
+        assertEquals(31L, data.get("tokenId"));
+        assertEquals("韩泽伟", data.get("displayName"));
+    }
+
+    /** tokenId 缺失时**整个键不下发**——回落成 0 会让调用方存下一个不存在的令牌行 id。 */
+    @Test
+    @DisplayName("awdk-login：没有 tokenId 就不下发这个键，绝不回落 0")
+    void awdkLoginOmitsTokenIdWhenAbsent() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.login(anyString(), any()))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", null, null));
+        AuthController controller = new AuthController(
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
+
+        Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertFalse(data.containsKey("tokenId"));
+        assertEquals("awd_hanzewei", data.get("displayName"), "displayName 缺失时回落用户名");
     }
 
     @Test
     @DisplayName("awdk-login 开关关闭：业务错误信封，不像掉线")
     void awdkLoginDisabledEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(any()))
+        when(awdkLoginService.login(any(), any()))
                 .thenThrow(new IllegalArgumentException("本服务器未开启账户桥接功能"));
         AuthController controller = new AuthController(
-                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null);
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -163,10 +195,11 @@ class AuthControllerHardeningTest {
     @DisplayName("awdk-login 无效 Key 连续 5 次后锁定：第 6 次不再出站")
     void awdkLoginLockoutAfterRepeatedInvalidKeys() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
-        when(awdkLoginService.login(anyString())).thenThrow(new AccountException(
+        when(awdkLoginService.login(anyString(), any())).thenThrow(new AccountException(
                 AccountException.Kind.UNAUTHORIZED, "账户 Key 无效或已被撤销，请到官网账户页重新生成"));
         AuthController controller = new AuthController(
-                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null);
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
 
         for (int i = 0; i < 5; i++) {
             assertEquals(1, controller.awdkLogin(Map.of("key", "awdk_bad"), http()).get("code"));
@@ -174,7 +207,7 @@ class AuthControllerHardeningTest {
         Map<String, Object> locked = controller.awdkLogin(Map.of("key", "awdk_bad"), http());
         assertEquals(1, locked.get("code"));
         assertTrue(String.valueOf(locked.get("message")).contains("临时锁定"));
-        verify(awdkLoginService, times(5)).login(anyString());
+        verify(awdkLoginService, times(5)).login(anyString(), any());
     }
 
     // ==================== 账户登录（手机号/邮箱，匿名端点） ====================
@@ -182,7 +215,8 @@ class AuthControllerHardeningTest {
     /** phoneLoginGuard 传 null：手机号补绑闸只管密码/邮箱那三条入口，账户登录不走它。 */
     private static AuthController controller(AwdkLoginService awdkLoginService, AuthAbuseGuard guard) {
         return new AuthController(
-                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false, null);
+                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
     }
 
     @Test
@@ -190,7 +224,7 @@ class AuthControllerHardeningTest {
     void accountLoginPhoneSuccessEnvelope() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
         when(awdkLoginService.loginWithPhone("13800138000", "123456"))
-                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei"));
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei", "韩泽伟", 31L));
         AuthController controller = controller(awdkLoginService, serverGuard("open"));
 
         Map<String, Object> result = controller.accountLogin(
@@ -210,7 +244,7 @@ class AuthControllerHardeningTest {
     void accountLoginFallsBackToPasswordBranch() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
         when(awdkLoginService.loginWithPassword("hi@example.com", "pw12345678"))
-                .thenReturn(new AwdkLoginService.BridgeSession("awdt_y", 8L, "awd_hi"));
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_y", 8L, "awd_hi", "Hi", 32L));
         AuthController controller = controller(awdkLoginService, serverGuard("open"));
 
         Map<String, Object> result = controller.accountLogin(
@@ -296,5 +330,49 @@ class AuthControllerHardeningTest {
 
         assertEquals(0, result.get("code"));
         verify(awdkLoginService).sendLoginCode("13800138000", null);
+    }
+
+    @Test
+    @DisplayName("发验证码：人机验证 token 原样透传——不传官网就是 403，插件端的滑块等于白滑")
+    void accountLoginSendCodeForwardsCaptchaToken() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginSendCode(
+                Map.of("phone", "13800138000", "captchaToken", "verify-param-from-widget"), http());
+
+        assertEquals(0, result.get("code"));
+        verify(awdkLoginService).sendLoginCode("13800138000", "verify-param-from-widget");
+    }
+
+    @Test
+    @DisplayName("控件参数端点是匿名的——云后端登录前没有会话，要会话就成了死循环")
+    void accountLoginCaptchaConfigNeedsNoSession() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.captchaConfig())
+                .thenReturn(Map.of("provider", "aliyun", "sceneId", "scene-1", "prefix", "px1"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginCaptchaConfig();
+
+        assertEquals(0, result.get("code"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertEquals("aliyun", data.get("provider"));
+        assertEquals("scene-1", data.get("sceneId"));
+    }
+
+    @Test
+    @DisplayName("官网未启用人机验证时 provider 为空，调用方据此跳过控件直接发码")
+    void accountLoginCaptchaConfigPassesThroughDisabled() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        Map<String, Object> off = new java.util.HashMap<>();
+        off.put("provider", null);
+        when(awdkLoginService.captchaConfig()).thenReturn(off);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) controller.accountLoginCaptchaConfig().get("data");
+        assertNull(data.get("provider"));
     }
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectFile;
@@ -324,37 +327,6 @@ public class FileController {
         return storagePath;
     }
 
-    @GetMapping("/{fileId}/upload-status")
-    public ResponseEntity<Map<String, Object>> getUploadStatus(@PathVariable("fileId") String fileId,
-            @RequestParam(value = "token", required = false) String token,
-            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
-        try {
-            // 与上传同一套路径解析——此前直接 getSize(裸 fileId) 读的是孤儿路径，
-            // 断点续传的 offset 永远对不上真实文件
-            Optional<ProjectFile> pfOpt = projectFileRepository.findByWpsFileId(fileId).stream().findFirst();
-            // 鉴权与同类接口对齐：此前完全匿名，可按 fileId 枚举文件是否存在及其大小；
-            // 找不到记录时不再回落到裸 fileId 当存储路径探测
-            if (pfOpt.isEmpty()) {
-                return ResponseEntity.status(404).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("文件不存在", "File not found")));
-            }
-            if (!isAuthorizedForProject(token, sessionHeader, pfOpt.get().getProjectId())) {
-                return ResponseEntity.status(403).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("无权访问该文件", "You do not have access to this file")));
-            }
-            String path = pfOpt.map(ProjectFile::getFilePath).filter(StringUtils::hasText).orElse(fileId);
-            long size = getStorageService().getSize(path);
-            Map<String, Object> data = new HashMap<>();
-            data.put("uploadedSize", size);
-            
-            Map<String, Object> result = new HashMap<>();
-            result.put("code", 0);
-            result.put("data", data);
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            log.error("获取上传状态失败: fileId={}", fileId, e);
-            return ResponseEntity.status(500).build();
-        }
-    }
-
     /**
      * 上传接口
      * ...
@@ -407,6 +379,26 @@ public class FileController {
                 }
                 inputStream = multipartFile.getInputStream();
             } else {
+                // 裸 octet-stream 分支（分片上传/桌面端三个真实调用点全走这条路）此前没有
+                // 任何空校验：客户端自己在 X-File-Total-Size 里声明了非零总大小却送来空
+                // body，是客户端自相矛盾，必须在写盘前拒绝——否则 save()/append() 的
+                // REPLACE_EXISTING 语义会把已有的非空文件截成 0 字节，还照常回 code:0。
+                // 头缺失或显式为 0 时不拦，保存一个空文件是合法场景。
+                String declaredTotalSizeStr = request.getHeader("X-File-Total-Size");
+                if (StringUtils.hasText(declaredTotalSizeStr)) {
+                    try {
+                        long declaredTotalSize = Long.parseLong(declaredTotalSizeStr);
+                        // 只认「显式声明为 0」。长度未知时是 -1（分块传输，例如反向代理
+                        // 关掉 proxy_request_buffering 后转发的请求），那种情况一律放行——
+                        // 把「不知道多长」当成「空」会误拒正常上传，比漏拦更糟。
+                        if (declaredTotalSize > 0 && request.getContentLengthLong() == 0) {
+                            return ResponseEntity.status(400).body(Map.of("code", -1, "message",
+                                    com.checkba.service.LangText.of("上传内容为空，与声明的文件大小不符", "Uploaded content is empty but a non-zero file size was declared")));
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // 头解析不了不是这里要处理的问题，交给后续既有逻辑
+                    }
+                }
                 inputStream = request.getInputStream();
             }
 

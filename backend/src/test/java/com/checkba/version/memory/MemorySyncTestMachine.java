@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version.memory;
 
 import com.checkba.model.entity.MemoryEntry;
@@ -7,6 +10,7 @@ import com.checkba.repository.MemoryRemoteRepository;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.ai.memory.MemoryManager;
+import com.checkba.service.ai.memory.document.MemoryDocumentService;
 import com.checkba.storage.ProjectStorageResolver;
 import com.checkba.storage.StorageProperties;
 import org.springframework.scheduling.TaskScheduler;
@@ -36,6 +40,7 @@ class MemorySyncTestMachine {
     final MemorySyncService sync;
     final MemoryEntryRepository entries;
     final MemoryRemoteRepository remotes;
+    final MemoryDocumentService documents;
     MemoryRemote cfg;
     private long nextId = 1;
 
@@ -109,6 +114,13 @@ class MemorySyncTestMachine {
 
         sync = new MemorySyncService(repo, entries, remotes, manager, files, users,
                 mock(TaskScheduler.class));
+        documents = mock(MemoryDocumentService.class);
+        doAnswer(invocation -> {
+            MemoryEntry entry = byUid(invocation.getArgument(0));
+            if (entry != null) entries.delete(entry);
+            return null;
+        }).when(documents).tombstoneSourceAndDeleteLegacy(any());
+        sync.setMemoryDocumentServiceForTest(documents);
 
         if (remoteUrl != null) {
             cfg = new MemoryRemote();

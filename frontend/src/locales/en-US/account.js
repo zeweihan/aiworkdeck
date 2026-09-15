@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Account domain: Profile (userprofile.vue), login/register/client login (login.vue),
 // New/Open Project (newproject/index.vue). One shared namespace across the three pages;
 // text that is byte-identical across pages (e.g. "Standard User", "Back to Projects")
@@ -11,11 +13,10 @@ export default {
   createBtn: 'Create',
   projectNameLabel: 'Project Name',
 
-  // ---- userprofile.vue: nav tabs ----
+  // ---- Personal group entries in the unified Settings page (merged 2026-08-20) ----
   tabWorkLog: 'Activity Log',
   tabFavorites: 'My Favorites',
   tabTodos: 'My To-dos',
-  systemSettingsTab: 'System Settings',
 
   // ---- userprofile.vue: activity log ----
   defaultUserName: 'User',
@@ -32,6 +33,8 @@ export default {
   loadingEllipsis: 'Loading…',
   noRecords: 'No records',
   minutesSuffix: '{count} min',
+  allProjectsOption: 'All Projects',
+  unassociatedProjectOption: 'No Project',
 
   // ---- userprofile.vue: favorites / to-dos placeholder ----
   emptyFavoritesDesc: 'No favorites yet',
@@ -50,6 +53,17 @@ export default {
   uploadingTitle: 'Uploading…',
   avatarUpdateSuccess: 'Avatar updated',
   avatarUploadFailed: 'Upload failed: {message}',
+  avatarRemoveAction: 'Remove Avatar',
+  avatarRemoveSuccess: 'Avatar removed',
+  avatarRemoveFailed: 'Remove failed: {message}',
+  nicknamePlaceholder: 'Enter your name',
+  nicknameSaving: 'Saving…',
+  nicknameSaveFailed: 'Save failed: {message}',
+  nicknameTooLong: 'A name can be at most 24 characters',
+  // Name nudge (Spec §6): phone sign-ups default to a masked phone number as the display name
+  nameNudgeText: 'Add your name — it is what colleagues see on a case file',
+  nameNudgeTitle: 'Add Your Name',
+  nameNudgeConfirm: 'Add It Now',
 
   // ---- userprofile.vue: settings - account security (authenticator/phone/email) ----
   accountSecurityGroupTitle: 'Account Security',
@@ -95,6 +109,7 @@ export default {
   paidEdition: 'Full Edition',
   trialEdition: 'Trial Edition',
   activatedAtLabel: 'Activated At',
+  deactivateHint: 'Only clears the unlock ticket on this machine and returns to the activation screen; your account is unaffected. To switch accounts, use "Log Out" instead — you rarely need this.',
   deactivateBtn: 'Deactivate License',
   deactivateContent: 'After deactivation, the app returns to the unlock screen and you will need to re-enter a trial code or account key to continue. Deactivate?',
   confirmDeactivateBtn: 'Confirm Deactivation',
@@ -129,6 +144,12 @@ export default {
   logoutNothingTitle: 'Not signed in',
   logoutNothingContent: 'This machine is unlocked by a trial code and is not connected to an AI WorkDeck account, so there is no sign-in to leave. To return to the locked state, use "Deactivate License" under License below.',
   logoutFailed: 'Log out failed, please try again',
+  // 文档 Generator 元数据开关（可溯源性设计规范附录 B4）
+  docGeneratorGroupTitle: 'Document properties',
+  docGeneratorLabel: 'Write the product name into saved documents',
+  docGeneratorHint: 'When on, documents you save or export show AI WorkDeck and its version under Properties - Application. This is the standard field Word and WPS also write; it carries no personal information (no author, organisation or machine name). Turn it off if you need to strip document metadata before delivery.',
+  docGeneratorCurrent: 'Currently written: {application}',
+  docGeneratorSaveFailed: 'Could not save the setting, please try again',
   logoutGroupTitle: 'Sign-in',
   logoutGroupHint: 'Returns to the sign-in screen so you can use a different account. Your local projects and files stay where they are.',
 

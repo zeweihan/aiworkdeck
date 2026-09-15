@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 工作台交互文案与内部协议集中维护（禁止在组件中硬编码）
 
 import { t } from '@/i18n'

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 工作台操作簇（project-overview 的 mixin 模块）：文件打开/标签页、AI 指令路由、
 // OCR 截图与识别、暂存区、剪贴板捕获的 toast/modal/错误文案。
 export default {
@@ -67,4 +69,13 @@ export default {
   // clipboardBridge.js
   imageCaptured: '已捕获图片',
   fileCaptured: '已捕获文件',
+  imageCaptureFailed: '图片记录失败',
+  clipboardRecordFailed: '剪贴板记录失败',
+  fileCaptureFailed: '文件记录失败',
+
+  // FileTree.vue 拖拽移动：后端回滚失败的移动会照常返回成功响应（数据库与磁盘保持一致，
+  // 见 ProjectFileService.moveSingleFileWithPhysical），前端靠比对返回的 parentId 识别
+  // 是否真的移动成功（常见于 Windows 上文件被占用）。
+  fileMoveOccupied: '该文件可能正被占用，未能移动',
+  filesMoveOccupiedCount: '有 {count} 个文件可能正被占用，未能移动',
 }

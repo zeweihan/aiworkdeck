@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 应用语言（zh-CN / en-US）在主进程侧的持久化与订阅。
 // 权威源是渲染层的语言设置（uni storage + 后端 system_setting），这里只是主进程的
 // 本地镜像：菜单/系统通知/原生对话框在渲染层就绪之前就要用到语言，所以落一份

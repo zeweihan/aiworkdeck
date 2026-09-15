@@ -1,171 +1,252 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <scroll-view scroll-y class="desensitize-pane">
     <view class="section">
+      <view class="actions-row operation-tabs">
+        <button class="mini-btn" :class="{ active: operation === 'redact' }" :disabled="processing" @tap="chooseOperation('redact')">{{ $t('panels.deRedactTab') }}</button>
+        <button class="mini-btn" :class="{ active: operation === 'restore' }" :disabled="processing" @tap="chooseOperation('restore')">{{ $t('panels.deRestoreTab') }}</button>
+      </view>
+      <text class="help-text">{{ $t('panels.deLocalNotice') }}</text>
+      <view class="workflow" v-if="operation === 'redact'" aria-live="polite">
+        <text :class="{ current: !fileId }">{{ $t('panels.deStepSelect') }}</text>
+        <text :class="{ current: fileId && !preview && !result }">{{ $t('panels.deStepReview') }}</text>
+        <text :class="{ current: preview || result }">{{ $t('panels.deStepCreate') }}</text>
+      </view>
       <view class="section-title">{{ $t('panels.deSectionFileSelect') }}</view>
-      <view class="file-input-wrapper">
-         <view class="path-display" :class="{ empty: !filePath }" @tap="triggerFileSelect">
-            {{ filePath ? filePath : $t('panels.deFilePlaceholder') }}
-         </view>
-         <view class="actions-row">
-            <view class="mini-btn" @tap="importFromActiveTab" :title="$t('panels.deImportFromTabTitle')">
-               <text>{{ $t('panels.deImportCurrent') }}</text>
-            </view>
-            <view class="mini-btn" @tap="triggerFileSelect" :title="$t('panels.deBrowseTitle')">
-               <text>{{ $t('panels.deBrowse') }}</text>
-            </view>
-         </view>
+      <view class="path-display" :class="{ empty: !filePath }" @tap="triggerFileSelect">{{ fileName || $t('panels.deFilePlaceholder') }}</view>
+      <view class="actions-row">
+        <button class="mini-btn" :disabled="processing" @tap="importFromActiveTab">{{ $t('panels.deImportCurrent') }}</button>
+        <button class="mini-btn" :disabled="processing" @tap="triggerFileSelect">{{ $t('panels.deBrowse') }}</button>
       </view>
+      <text class="help-text">{{ $t('panels.deFormats') }}</text>
     </view>
 
-    <view class="section">
-      <view class="section-title">{{ $t('panels.deStrategiesTitle') }}</view>
-      <view class="strategies-list">
-        <label
-          v-for="s in availableStrategies"
-          :key="s.value"
-          class="strategy-item"
-          @tap="toggleStrategy(s.value)"
-        >
-          <view class="checkbox" :class="{ checked: selectedStrategies.includes(s.value) }">
-             <text v-if="selectedStrategies.includes(s.value)" class="check-mark">✓</text>
-          </view>
-          <text class="strategy-label">{{ s.label }}</text>
-        </label>
+    <view v-if="error" class="section error-text" role="alert">{{ error }}</view>
+    <view v-if="processing" class="section processing-text" role="status">{{ $t('panels.deProcessing') }}</view>
+
+    <template v-if="operation === 'redact'">
+      <view class="section">
+        <button class="settings-toggle custom-words-toggle" :aria-expanded="customWordsOpen" :disabled="processing" @tap="customWordsOpen = !customWordsOpen">
+          <text>{{ $t('panels.deCustomWordsTitle') }}</text>
+          <text class="settings-summary">{{ customWordsOpen ? '−' : '+' }}</text>
+        </button>
+        <view v-show="customWordsOpen" class="custom-words-content">
+          <textarea v-model="customTerms" :disabled="processing" class="text-input custom-words-input" :maxlength="100000" :placeholder="$t('panels.deCustomPlaceholder')" />
+          <text class="help-text">{{ $t('panels.deCustomWordsHint') }}</text>
+        </view>
       </view>
+      <view class="section">
+        <view class="section-title">{{ $t('panels.deModeTitle') }}</view>
+        <view v-if="!isPdf" class="actions-row">
+          <button class="mini-btn" :class="{ active: mode === 'TOKEN' }" :disabled="processing" @tap="mode = 'TOKEN'">{{ $t('panels.deTokenMode') }}</button>
+          <button class="mini-btn" :class="{ active: mode === 'MASK' }" :disabled="processing" @tap="mode = 'MASK'">{{ $t('panels.deMaskMode') }}</button>
+        </view>
+        <text class="help-text">{{ $t(isPdf ? 'panels.dePdfNotice' : effectiveMode === 'TOKEN' ? 'panels.deTokenNotice' : 'panels.deMaskNotice') }}</text>
+      </view>
+      <view class="section settings-section">
+        <button class="settings-toggle" :aria-expanded="settingsOpen" :disabled="processing" @tap="settingsOpen = !settingsOpen">
+          <text>{{ $t('panels.deStrategiesTitle') }}</text>
+          <text class="settings-summary">{{ $t('panels.deSelectedStrategies', { count: selectedStrategies.length }) }} {{ settingsOpen ? '−' : '+' }}</text>
+        </button>
+        <view v-show="settingsOpen" class="settings-content">
+        <view class="strategies-list">
+          <label v-for="s in availableStrategies" :key="s.value" class="strategy-item" @tap="toggleStrategy(s.value)">
+            <view class="checkbox" :class="{ checked: selectedStrategies.includes(s.value) }"><text v-if="selectedStrategies.includes(s.value)" class="check-mark">✓</text></view>
+            <text class="strategy-label">{{ s.label }}</text>
+          </label>
+        </view>
+        <view class="section-title">{{ $t('panels.deExcludedTerms') }}</view>
+        <textarea v-model="excludedTerms" :disabled="processing" class="text-input" :maxlength="100000" :placeholder="$t('panels.deExcludedPlaceholder')" />
+        </view>
+      </view>
+      <view class="section">
+        <button class="workdeck-btn full-width" :class="{ 'workdeck-btn-primary': !preview }" :disabled="processing || !fileId || (!selectedStrategies.length && !customTerms.trim())" @tap="handlePreview">{{ $t('panels.dePreview') }}</button>
+        <view v-if="preview" class="preview-text">{{ preview.text }}</view>
+        <template v-if="preview">
+        <text class="help-text">{{ $t('panels.deReviewNotice') }}</text>
+        <template v-if="effectiveMode === 'TOKEN'">
+          <view class="section-title">{{ $t('panels.dePassword') }}</view>
+          <input v-model="password" :disabled="processing" class="text-input password-input" password :maxlength="1024" :placeholder="$t('panels.dePasswordHint')" />
+        </template>
+        <button class="workdeck-btn workdeck-btn-primary full-width" :loading="processing" :disabled="processing || !preview || (effectiveMode === 'TOKEN' && password.length < 10)" @tap="handleGenerate">{{ $t('panels.deGenerate') }}</button>
+        </template>
+      </view>
+    </template>
+
+    <view v-else class="section">
+      <text class="help-text">{{ $t('panels.deRestoreNotice') }}</text>
+      <button class="workdeck-btn full-width" :disabled="processing" @tap="importKit">{{ kitName || $t('panels.deImportKit') }}</button>
+      <view class="section-title">{{ $t('panels.dePassword') }}</view>
+      <input v-model="password" :disabled="processing" class="text-input password-input" password :maxlength="1024" :placeholder="$t('panels.dePasswordHint')" />
+      <button class="workdeck-btn workdeck-btn-primary full-width" :loading="processing" :disabled="processing || !fileId || isPdf || !recoveryKit || password.length < 10" @tap="handleRestore">{{ $t('panels.deRestoreGenerate') }}</button>
     </view>
 
-    <view class="action-area">
-      <button
-        class="workdeck-btn workdeck-btn-primary full-width"
-        @tap="handleGenerate"
-        :disabled="processing || !filePath || selectedStrategies.length === 0"
-        :loading="processing"
-      >
-        {{ processing ? $t('panels.deProcessing') : $t('panels.deGenerate') }}
-      </button>
+    <view v-if="preview || result" class="section">
+      <text class="help-text">{{ $t('panels.deMatchCount', { count: totalMatches }) }}</text>
+      <text v-for="(warning, i) in (result?.warnings || preview?.warnings || [])" :key="i" class="help-text">{{ warning }}</text>
     </view>
-
-    <view class="info-tip" v-if="filePath">
-       <text>{{ $t('panels.deWillGenerate', { fileName }) }}</text>
+    <view v-if="result?.file && operation === 'redact'" class="section">
+      <text class="help-text">{{ $t(isPdf ? 'panels.dePdfResult' : 'panels.deResultEditing') }}</text>
+      <button v-if="exportedKit" class="workdeck-btn full-width" :disabled="processing" @tap="chooseOperation('restore')">{{ $t('panels.deRestoreResult') }}</button>
+      <text class="help-text">{{ $t('panels.deAiWorkflowNotice') }}</text>
+    </view>
+    <view v-if="exportedKit" class="section">
+      <button class="workdeck-btn full-width" @tap="downloadKit">{{ $t('panels.deDownloadKit') }}</button>
+      <text class="help-text">{{ $t('panels.deSaveKitNotice') }}</text>
     </view>
   </scroll-view>
 </template>
 
 <script>
-import { desensitizeFile, getSensitiveOptions } from '@/services/api.js'
+import { desensitizeFile, getSensitiveOptions, previewSensitiveFile, restoreSensitiveFile } from '@/services/api.js'
 
 export default {
   name: 'DesensitizePane',
+  emits: ['request-file-select', 'request-active-file', 'open-file'],
   props: {
-    projectId: {
-        type: [String, Number],
-        required: true
-    }
+    projectId: { type: [String, Number], required: true },
+    prepareFile: { type: Function, required: true },
   },
   data() {
     return {
-      filePath: '',
-      fileName: '',
-      fileId: null, // Add fileId
-      availableStrategies: [], // Fetch from backend
-      selectedStrategies: [],
-      processing: false
+      operation: 'redact', mode: 'TOKEN', filePath: '', fileName: '', fileId: null,
+      availableStrategies: [], selectedStrategies: [], customTerms: '', excludedTerms: '',
+      password: '', recoveryKit: '', kitName: '', exportedKit: '', processing: false,
+      preview: null, result: null, error: '', lastRedaction: null, settingsOpen: false, customWordsOpen: false,
     }
   },
-  mounted() {
-      this.fetchOptions()
+  computed: {
+    isPdf() { return this.fileName.toLowerCase().endsWith('.pdf') },
+    effectiveMode() { return this.isPdf ? 'MASK' : this.mode },
+    requestSignature() {
+      return JSON.stringify([this.fileId, this.selectedStrategies, this.customTerms, this.excludedTerms, this.effectiveMode])
+    },
+    totalMatches() { return Object.values(this.result?.counts || this.preview?.counts || {}).reduce((a, b) => a + b, 0) },
   },
+  watch: {
+    requestSignature() { this.preview = null; this.result = null; this.error = '' },
+    operation() { this.result = null; this.error = '' },
+    projectId() {
+      this.fileId = null; this.filePath = ''; this.fileName = ''; this.password = ''
+      this.recoveryKit = ''; this.exportedKit = ''; this.kitName = ''; this.preview = null; this.result = null
+      this.customTerms = ''; this.excludedTerms = ''; this.lastRedaction = null
+    },
+  },
+  mounted() { this.fetchOptions() },
   methods: {
     async fetchOptions() {
-        try {
-            const res = await getSensitiveOptions()
-             // API wrapper returns data directly (if code===0) or array directly depending on backend.
-             // Controller returns ResponseEntity<List<Map>>, which usually results in just the list in JSON.
-             // api.js request wrapper resolves with res.data.
-             // Backend SensitiveController values:
-             // return ResponseEntity.ok(options); -> This is a direct list.
-             // api.js: if (res.data && typeof res.data.code !== 'undefined') ... else resolve(res.data)
-             // So if the backend returns a raw list, it should be in res.data (the list).
-             
-             if (Array.isArray(res)) {
-                 this.availableStrategies = res
-             } else if (res && res.data && Array.isArray(res.data)) {
-                 // in case it's wrapped
-                 this.availableStrategies = res.data
-             }
-             
-             // Select default ones
-             this.selectedStrategies = this.availableStrategies
-                 .filter(s => ['PHONE', 'ID_CARD'].includes(s.value))
-                 .map(s => s.value)
-        } catch (e) {
-            console.error('Failed to fetch strategies', e)
-            uni.showToast({ title: this.$t('panels.deFetchStrategiesFailed'), icon: 'none' })
-        }
+      try {
+        const res = await getSensitiveOptions()
+        this.availableStrategies = Array.isArray(res) ? res : res?.data || []
+        this.selectedStrategies = this.availableStrategies.filter(s => ['COMPANY', 'CHINESE_NAME', 'PHONE', 'ID_CARD', 'EMAIL', 'BANK_CARD'].includes(s.value)).map(s => s.value)
+      } catch (e) { this.error = this.$t('panels.deFetchStrategiesFailed') }
     },
-    toggleStrategy(val) {
-        const idx = this.selectedStrategies.indexOf(val)
-        if (idx > -1) {
-            this.selectedStrategies.splice(idx, 1)
-        } else {
-            this.selectedStrategies.push(val)
-        }
+    chooseOperation(operation) {
+      if (this.processing || this.operation === operation) return
+      this.operation = operation
+      this.preview = null; this.result = null; this.error = ''; this.password = ''
+      if (operation === 'restore' && this.lastRedaction?.kit) {
+        this.selectFile(this.lastRedaction.file)
+        this.recoveryKit = this.lastRedaction.kit
+        this.kitName = this.$t('panels.deCurrentKit')
+      } else if (operation === 'redact' && this.lastRedaction?.source) {
+        this.selectFile(this.lastRedaction.source)
+      }
+    },
+    toggleStrategy(value) {
+      if (this.processing) return
+      this.selectedStrategies = this.selectedStrategies.includes(value)
+        ? this.selectedStrategies.filter(s => s !== value) : [...this.selectedStrategies, value]
+    },
+    selectFile(file) {
+      if (this.processing) return
+      if (!file?.id || !(file.filePath || file.path)) {
+        this.error = this.$t('panels.deSelectValidFile'); return
+      }
+      this.preview = null; this.result = null; this.error = ''
+      this.filePath = file.filePath || file.path; this.fileName = file.name; this.fileId = file.id
     },
     triggerFileSelect() {
-        // Request parent to pick file
-        // Callback will be handled by listening to an event or prop update if implemented differently
-        // Here we emit an event hoping parent handles it
-        this.$emit('request-file-select', (file) => {
-            if (file) {
-               this.filePath = file.filePath || file.path // Adapt to file object structure
-               this.fileName = file.name
-               this.fileId = file.id // Store fileId
-            }
-        })
+      if (!this.processing) this.$emit('request-file-select', file => { if (file) this.selectFile(file) })
     },
     importFromActiveTab() {
-        // Request parent for active file
-        this.$emit('request-active-file', (file) => {
-             if (file) {
-                 if (!file.filePath) {
-                     uni.showToast({ title: this.$t('panels.deNoPathCurrentFile'), icon: 'none' })
-                     return
-                 }
-                 this.filePath = file.filePath
-                 this.fileName = file.name
-                 this.fileId = file.id // Store fileId
-                 uni.showToast({ title: this.$t('panels.deSelectedCurrentFile'), icon: 'success' })
-             } else {
-                 uni.showToast({ title: this.$t('panels.deNoOpenFile'), icon: 'none' })
-             }
-        })
+      if (!this.processing) this.$emit('request-active-file', file => this.selectFile(file))
+    },
+    payload() {
+      const lines = value => value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+      return { fileId: this.fileId, strategies: this.selectedStrategies, mode: this.effectiveMode,
+        customTerms: lines(this.customTerms), excludedTerms: lines(this.excludedTerms) }
+    },
+    async handlePreview() {
+      if (this.processing || !this.fileId) return
+      this.processing = true; this.error = ''; this.result = null
+      try {
+        await this.prepareFile(this.fileId)
+        this.preview = await previewSensitiveFile(this.payload())
+      }
+      catch (e) { this.error = e.message; this.preview = null }
+      finally { this.processing = false }
     },
     async handleGenerate() {
-        if (!this.fileId || this.selectedStrategies.length === 0) {
-             if (!this.fileId) uni.showToast({ title: this.$t('panels.deSelectValidFile'), icon: 'none' })
-             return
+      if (this.processing || !this.preview || !this.fileId) return
+      this.processing = true; this.error = ''
+      try {
+        const changed = await this.prepareFile(this.fileId)
+        if (changed) {
+          this.preview = null
+          throw new Error(this.$t('panels.dePreviewChanged'))
         }
-        this.processing = true
+        const source = { id: this.fileId, name: this.fileName, filePath: this.filePath }
+        const res = await desensitizeFile({ ...this.payload(), password: this.password })
+        this.result = res
+        this.exportedKit = res.recoveryKit || ''; this.preview = null
+        this.lastRedaction = res.recoveryKit ? { source, file: res.file, kit: res.recoveryKit } : null
+        if (this.exportedKit) {
+          try { this.downloadKit() }
+          catch (e) { this.error = this.$t('panels.deDownloadRetry') }
+        }
+        this.password = ''
+        if (res.file?.id) this.$emit('open-file', res.file)
+      } catch (e) { this.error = e.message }
+      finally { this.processing = false }
+    },
+    downloadKit() {
+      if (!this.exportedKit) return
+      const url = URL.createObjectURL(new Blob([this.exportedKit], { type: 'application/octet-stream' }))
+      const link = document.createElement('a')
+      link.href = url; link.download = `recovery-${Date.now()}.awd-recovery`
+      document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    },
+    importKit() {
+      if (this.processing) return
+      const input = document.createElement('input')
+      input.type = 'file'; input.accept = '.awd-recovery'
+      input.onchange = async () => {
+        const file = input.files?.[0]
+        if (!file) return
+        if (file.size > 8000000) { this.error = this.$t('panels.deKitInvalid'); return }
         try {
-            const res = await desensitizeFile({
-                fileId: this.fileId, // Send fileId
-                strategies: this.selectedStrategies
-            })
-
-            // Backend now returns the full ProjectFile object
-            if (res && res.id) {
-                uni.showToast({ title: this.$t('panels.deSuccess'), icon: 'success' })
-                // Open the new file (pass the full object)
-                this.$emit('open-file', res)
-            }
-        } catch (e) {
-            console.error('Desensitization failed', e)
-            uni.showToast({ title: this.$t('panels.deProcessFailed', { msg: e.message }), icon: 'none' })
-        } finally {
-            this.processing = false
-        }
-    }
-  }
+          const kit = (await file.text()).trim()
+          if (!kit.startsWith('AWD-RECOVERY-1:')) throw new Error(this.$t('panels.deKitInvalid'))
+          this.recoveryKit = kit; this.kitName = file.name; this.error = ''
+        } catch (e) { this.error = e.message }
+      }
+      input.click()
+    },
+    async handleRestore() {
+      if (this.processing || !this.fileId || !this.recoveryKit) return
+      this.processing = true; this.error = ''; this.result = null
+      try {
+        await this.prepareFile(this.fileId)
+        const res = await restoreSensitiveFile({ fileId: this.fileId, recoveryKit: this.recoveryKit, password: this.password })
+        this.result = res; this.password = ''
+        if (res.file?.id) this.$emit('open-file', res.file)
+      } catch (e) { this.error = e.message }
+      finally { this.processing = false }
+    },
+  },
 }
 </script>
 
@@ -175,13 +256,13 @@ export default {
    实际可用宽度只剩 196px。 */
 .desensitize-pane {
   height: 100%;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   box-sizing: border-box;
 }
 
 .section {
   padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .section-title {
@@ -194,16 +275,11 @@ export default {
   color: var(--awd-panel-text-2);
 }
 
-.file-input-wrapper {
-    display: flex;
-    flex-direction: column;
-    gap: var(--awd-panel-gap);
-}
 
 .path-display {
     padding: 6px 8px;
-    background: #F8F9FA;
-    border: 1px dashed #D1D5DB;
+    background: var(--awd-bg);
+    border: 1px dashed var(--awd-border-strong);
     border-radius: var(--awd-panel-radius);
     font-size: var(--awd-panel-fs);
     color: var(--awd-panel-text);
@@ -215,7 +291,7 @@ export default {
     cursor: pointer;
 }
 .path-display.empty {
-    color: #9ca3af;
+    color: var(--awd-text-3);
     justify-content: center;
 }
 
@@ -229,17 +305,17 @@ export default {
     height: 24px;
     line-height: 22px;
     text-align: center;
-    background: #fff;
+    background: var(--awd-surface);
     border: 1px solid var(--awd-panel-border);
     border-radius: 4px;
     font-size: var(--awd-panel-fs-meta);
-    color: #4b5563;
+    color: var(--awd-text-2);
     cursor: pointer;
     transition: all 0.2s;
 }
 .mini-btn:hover {
-    background: #f9fafb;
-    border-color: #d1d5db;
+    background: var(--awd-bg);
+    border-color: var(--awd-border-strong);
 }
 
 .strategies-list {
@@ -260,7 +336,7 @@ export default {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--awd-border-strong);
     border-radius: 3px;
     margin-right: 6px;
     display: flex;
@@ -269,11 +345,11 @@ export default {
     transition: all 0.2s;
 }
 .checkbox.checked {
-    background-color: #1A5336;
-    border-color: #1A5336;
+    background-color: var(--awd-accent);
+    border-color: var(--awd-accent);
 }
 .check-mark {
-    color: #fff;
+    color: var(--awd-text-on-accent);
     font-size: 10px;
 }
 
@@ -282,9 +358,6 @@ export default {
     color: var(--awd-panel-text);
 }
 
-.action-area {
-  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
-}
 
 .workdeck-btn {
   display: flex;
@@ -295,9 +368,9 @@ export default {
   font-size: var(--awd-panel-fs);
   font-weight: 600;
   cursor: pointer;
-  border: none;
-  background-color: #1A5336;
-  color: #fff;
+  border: 1px solid var(--awd-panel-border);
+  background-color: var(--awd-surface);
+  color: var(--awd-panel-text);
   transition: opacity 0.2s;
 }
 .workdeck-btn:disabled {
@@ -305,11 +378,25 @@ export default {
     cursor: not-allowed;
 }
 
-.info-tip {
-    margin-top: 6px;
-    font-size: 10px;
-    line-height: 1.5;
-    color: #6b7280;
-    text-align: center;
-}
+.help-text { display: block; color: var(--awd-text-2); font-size: 12px; line-height: 1.6; margin: 8px 0; }
+.text-input { width: 100%; box-sizing: border-box; min-height: 64px; height: 76px; border: 1px solid var(--awd-border); border-radius: 4px; padding: 8px; color: var(--awd-text); background: var(--awd-surface); font-size: 12px; }
+.password-input { min-height: 36px; height: 36px; margin-bottom: 12px; }
+.preview-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; padding: 8px; margin: 8px 0; border: 1px solid var(--awd-border); font-size: 12px; line-height: 1.7; user-select: text; }
+.mini-btn.active { color: var(--awd-accent-text); border-color: currentColor; }
+button.mini-btn { min-height: 28px; height: auto; padding: 4px 6px; line-height: 1.5; margin: 0; white-space: normal; }
+.workdeck-btn-primary { border-color: var(--awd-accent); background: var(--awd-accent); color: var(--awd-text-on-accent); }
+.full-width { width: 100%; box-sizing: border-box; margin: 0; }
+.operation-tabs { padding-top: var(--awd-panel-gap); }
+.workflow { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--awd-panel-fs-meta); color: var(--awd-text-3); padding: 4px 0; }
+.workflow .current { color: var(--awd-accent-text); font-weight: 600; }
+.settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; margin: 0; padding: 6px 0; background: transparent; color: var(--awd-panel-text-2); font-size: var(--awd-panel-fs-sec); font-weight: 600; line-height: 1.5; text-align: left; border: none; border-radius: 0; }
+.settings-toggle::after { border: none; }
+.settings-summary { font-size: var(--awd-panel-fs-meta); font-weight: 400; flex-shrink: 0; }
+.settings-section { border-top: 1px solid var(--awd-panel-border); }
+.strategies-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(94px, 1fr)); }
+.settings-content { padding-top: 4px; }
+.error-text, .processing-text { margin: 0 var(--awd-panel-pad-x) var(--awd-panel-gap); padding: 8px; font-size: var(--awd-panel-fs); line-height: 1.5; border-radius: var(--awd-panel-radius); overflow-wrap: anywhere; }
+.error-text { color: var(--awd-danger-text); background: var(--awd-danger-soft); }
+.processing-text { color: var(--awd-accent-text); background: var(--awd-accent-wash); }
+button:focus-visible { outline: 2px solid var(--awd-accent); outline-offset: 2px; }
 </style>

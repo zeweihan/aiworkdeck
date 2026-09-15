@@ -1,14 +1,22 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // config/ 目录（左栏插件位/底部工具/文件操作/OCR 动作/项目类型/成员角色/剪贴板/变量库）文案
 export default {
   sidebar: {
+    projectHome: '项目概览',
     files: '资源管理器',
     ddFiles: '尽调文件',
+    market: '插件中心',
+    dev: '插件开发',
+    // 「语音」是语音合成 + 会议录音的合并入口；下面两条是面板内部两个 tab 的名字
+    voice: '语音',
     meetingRecorder: '会议录音',
     litigationVisual: '诉讼可视化',
     search: '搜索',
     tts: '语音合成',
     desensitize: '文件脱敏',
     version: '版本',
+    calendar: '日历',
   },
   tools: {
     variables: '变量库',
@@ -23,7 +31,6 @@ export default {
     cancel: '取消',
     newFile: '新建文件',
     newFolder: '新建文件夹',
-    uploadFile: '上传文件',
     sort: '排序',
   },
   ocr: {

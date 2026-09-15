@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.config.AiContextProperties;
@@ -7,6 +10,7 @@ import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ai.context.ContextCompressor;
 import com.checkba.service.ai.context.FileContextLoader;
 import com.checkba.service.ai.memory.MemoryManager;
+import com.checkba.service.ai.memory.document.MemoryDocumentService;
 import com.checkba.service.ai.skill.SkillRouter;
 import com.checkba.service.ai.tools.LegalTools;
 import dev.langchain4j.data.message.ChatMessage;
@@ -19,6 +23,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -42,6 +47,9 @@ class ContextAssemblerServiceTest {
     private ClientCapabilityService capabilityService;
     private InlineContentCache inlineContentCache;
     private com.checkba.service.AppLanguageService appLanguageService;
+    private ChatModelFactory chatModelFactory;
+    private com.checkba.service.ProjectFileService projectFileService;
+    private MemoryDocumentService memoryDocumentService;
 
     @BeforeEach
     void setUp() {
@@ -63,15 +71,21 @@ class ContextAssemblerServiceTest {
         inlineContentCache = new InlineContentCache();
         // 应用语言：mock 默认 isEnglish()=false，即 zh-CN——既有断言全部走中文路径（行为保持）
         appLanguageService = mock(com.checkba.service.AppLanguageService.class);
+        // 视觉能力默认关：既有断言全部走「模型不支持视觉」这条既有行为路径，行为保持
+        chatModelFactory = mockedChatModelFactory();
+        projectFileService = mock(com.checkba.service.ProjectFileService.class);
         assembler = new ContextAssemblerService(
                 legalTools, messageService, fileContextLoader,
                 new AiContextProperties(), skillRouter, capabilityService, inlineContentCache,
-                memoryManager, contextCompressor, appLanguageService);
+                memoryManager, contextCompressor, appLanguageService,
+                chatModelFactory, projectFileService);
+        memoryDocumentService = mock(MemoryDocumentService.class);
+        assembler.setMemoryDocumentServiceForTest(memoryDocumentService);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
         return assembler.assemble(
-                "conv-1", "帮我修订一下", null, activeContext,
+                "conv-1", "run-1", "帮我修订一下", null, activeContext,
                 null, null, "88", AgentMode.AGENT, 1L, null);
     }
 
@@ -79,10 +93,39 @@ class ContextAssemblerServiceTest {
         return ((SystemMessage) assembleMessages(activeContext).get(0)).text();
     }
 
+    @Test
+    void markdownMemoryIndexesAreInjectedWithConfiguredTokenBudget() {
+        when(memoryDocumentService.contextIndexes(1L, 88L, 10_000))
+                .thenReturn("## 个人记忆 [user]\n- [行文](topics/style.md)");
+
+        String systemText = assembleSystemText(null);
+
+        assertTrue(systemText.contains("# Markdown 记忆索引"));
+        assertTrue(systemText.contains("topics/style.md"));
+    }
+
+    @Test
+    void askModeAllowsOnlyReadOnlyMarkdownMemoryToolsInBothLanguages() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            List<ChatMessage> messages = assembler.assemble(
+                    "conv-1", "run-1", "此前偏好是什么", null, null,
+                    null, null, "88", AgentMode.ASK, 1L, null);
+            String systemText = ((SystemMessage) messages.get(0)).text();
+            assertTrue(systemText.contains("memory_list"));
+            assertTrue(systemText.contains("memory_read"));
+            assertTrue(systemText.contains("memory_search"));
+            assertTrue(systemText.contains("memory_write"));
+            assertTrue(systemText.contains(english ? "prohibited" : "禁止"));
+        }
+    }
+
     /** 末位消息（用户消息）的文本——注意力最高的位置。 */
     private String assembleLastUserText(AiAgentController.ContextItem activeContext) {
         List<ChatMessage> messages = assembleMessages(activeContext);
-        return ((dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1)).singleText();
+        // 不能用 singleText()：本轮消息带图片时它会抛异常，测试挂掉的形态会长得像
+        // 「改坏了别的东西」而不是「断言失败」。取文本一律走同一个口径。
+        return com.checkba.service.ai.context.ChatMessageText.of(messages.get(messages.size() - 1));
     }
 
     private static AiAgentController.ContextItem activeDoc() {
@@ -147,6 +190,47 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("末位提醒要说清输出目标：核查/分析类报告不写进当前文档（dev-board#464）")
+    void reportStyleTasksAreNotTargetedAtTheActiveDocument() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+
+        String lastUser = assembleLastUserText(activeDoc());
+
+        assertTrue(lastUser.contains("核查"), "要点名核查这类以报告为交付物的任务");
+        assertTrue(lastUser.contains("write_docx"), "要给出新建文件的出口");
+        assertTrue(lastUser.contains("不要"), "要明确禁止把报告写进当前文档");
+        assertTrue(lastUser.contains("合同审查"), "命中审查类技能时以技能指引为准，不能与它打架");
+        assertTrue(lastUser.contains("doc_link_evidence"), "底稿关联那句必须原样保留");
+    }
+
+    @Test
+    void newTablesAreInsertedAsOneBatchInBothLanguages() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            String reminder = assembleLastUserText(activeDoc());
+            assertTrue(reminder.contains("doc_insert_table"));
+            assertTrue(reminder.contains("rowsJson"));
+            assertTrue(reminder.contains(english ? "one call" : "一次调用"));
+        }
+    }
+
+    @Test
+    @DisplayName("英文模式下同一条输出目标规则也在（zh/en 必须同步）")
+    void englishReminderCarriesTheSameOutputTargetRule() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        when(legalTools.read_document("123")).thenReturn("Article 1 Scope of Cooperation...");
+
+        String lastUser = assembleLastUserText(activeDoc());
+
+        assertTrue(lastUser.contains("[System reminder]"), "英文口径");
+        assertTrue(lastUser.contains("write_docx"), "英文版也要给出新建文件的出口");
+        assertTrue(lastUser.contains("Contract Review"), "英文版也要给审查类技能让路");
+        assertTrue(lastUser.contains("not a write target"), "英文版要点明被引用的材料是输入不是写入目标");
+        assertTrue(lastUser.contains("doc_link_evidence"), "底稿关联那句必须原样保留");
+    }
+
+    @Test
     @DisplayName("正文读取失败也要挂末位提醒——模型至少知道该操作哪个文档")
     void reminderPresentEvenWhenContentUnreadable() {
         when(legalTools.read_document("123")).thenReturn(null);
@@ -205,11 +289,12 @@ class ContextAssemblerServiceTest {
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
                 props, mockedSkillRouter(), new ClientCapabilityService(), new InlineContentCache(),
                 mockedMemoryManager(), mockedCompressor(),
-                mock(com.checkba.service.AppLanguageService.class));
+                mock(com.checkba.service.AppLanguageService.class),
+                mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
 
         String huge = "甲".repeat(200_001);
         List<ChatMessage> messages = bigLimitAssembler.assemble(
-                "conv-1", "帮我修订一下", null, officeDoc(huge),
+                "conv-1", "run-1", "帮我修订一下", null, officeDoc(huge),
                 null, null, "88", AgentMode.AGENT, 1L, null);
         String systemText = ((SystemMessage) messages.get(0)).text();
 
@@ -226,6 +311,95 @@ class ContextAssemblerServiceTest {
         assertTrue(lastUser.contains("[系统提醒]"), "内联正文路径也应有末位提醒");
         assertTrue(lastUser.contains("劳动合同.docx"), "提醒里应点名当前文档");
         assertTrue(lastUser.contains("doc_list_project_files"), "应点名禁用 doc_list_project_files");
+    }
+
+    // ==== Skill 注入（手动选择 / 自动命中）====
+    // 守的是"工具裁剪与 prompt 注入必须同源"：这里改成读 SkillRouter 登记的生效集合之前，
+    // 组装器是自己重新 match(userPrompt) 的，于是用户手动选的 skill 被裁了工具却拿不到 prompt。
+
+    /** 建一个带真实 SkillRouter（temp skills 目录）的组装器，返回 [assembler, router] */
+    private Object[] assemblerWithRealSkills(java.nio.file.Path skillsDir) throws java.io.IOException {
+        java.nio.file.Path dir = skillsDir.resolve("manual-skill");
+        java.nio.file.Files.createDirectories(dir);
+        java.nio.file.Files.writeString(dir.resolve("skill.yml"),
+                "id: manual-skill\nname: 手动技能\ntriggers: [绝不会出现的触发词]\nallowed_tools: [law_search]\n");
+        java.nio.file.Files.writeString(dir.resolve("prompt.md"), "手动技能模板正文MANUAL");
+
+        java.nio.file.Path autoDir = skillsDir.resolve("auto-skill");
+        java.nio.file.Files.createDirectories(autoDir);
+        java.nio.file.Files.writeString(autoDir.resolve("skill.yml"),
+                "id: auto-skill\nname: 自动技能\ntriggers: [修订]\nallowed_tools: [law_search]\n");
+        java.nio.file.Files.writeString(autoDir.resolve("prompt.md"), "自动技能模板正文AUTO");
+
+        com.checkba.service.ai.skill.SkillProperties skillProps =
+                new com.checkba.service.ai.skill.SkillProperties();
+        skillProps.setDir(skillsDir.toString());
+        com.checkba.service.ai.skill.SkillRegistry registry =
+                new com.checkba.service.ai.skill.SkillRegistry(
+                        skillProps, null, new com.checkba.service.ai.PluginService(), null);
+        registry.init();
+        SkillRouter realRouter = new SkillRouter(registry, skillProps,
+                mock(com.checkba.service.telemetry.TelemetryService.class), null);
+        ContextAssemblerService realAssembler = new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), realRouter, new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class),
+                mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
+        return new Object[]{realAssembler, realRouter};
+    }
+
+    @Test
+    @DisplayName("手动选择的 skill 必须注入 prompt（不能只裁工具——旧 pinnedSkillId 的静默 bug）")
+    void manuallySelectedSkillIsInjectedIntoPrompt(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws java.io.IOException {
+        Object[] parts = assemblerWithRealSkills(tmp);
+        ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
+        SkillRouter realRouter = (SkillRouter) parts[1];
+
+        // 用户这句话不含 manual-skill 的任何触发词，纯靠手动勾选
+        realRouter.activateForTurn("conv-skill", "run-skill", "帮我看看这个", null, List.of("manual-skill"));
+        String systemText = ((SystemMessage) realAssembler.assemble(
+                "conv-skill", "run-skill", "帮我看看这个", null, null, null, null, "88",
+                AgentMode.AGENT, 1L, null).get(0)).text();
+
+        assertTrue(systemText.contains("手动技能模板正文MANUAL"),
+                "手动选择的 skill 必须真的注入 prompt");
+    }
+
+    @Test
+    @DisplayName("手动 + 自动同时生效：两段 prompt 都注入")
+    void manualAndAutoSkillsBothInjected(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws java.io.IOException {
+        Object[] parts = assemblerWithRealSkills(tmp);
+        ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
+        SkillRouter realRouter = (SkillRouter) parts[1];
+
+        // "帮我修订一下" 命中 auto-skill 的触发词「修订」，同时手动勾了 manual-skill
+        realRouter.activateForTurn("conv-both", "run-both", "帮我修订一下", null, List.of("manual-skill"));
+        String systemText = ((SystemMessage) realAssembler.assemble(
+                "conv-both", "run-both", "帮我修订一下", null, null, null, null, "88",
+                AgentMode.AGENT, 1L, null).get(0)).text();
+
+        assertTrue(systemText.contains("手动技能模板正文MANUAL"), "手动选择的 skill 应注入");
+        assertTrue(systemText.contains("自动技能模板正文AUTO"), "自动命中的 skill 也应注入");
+    }
+
+    @Test
+    @DisplayName("ASK 模式跳过 skill 注入（含手动选择——该模式本来就不传工具）")
+    void askModeSkipsSkillInjection(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws java.io.IOException {
+        Object[] parts = assemblerWithRealSkills(tmp);
+        ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
+        SkillRouter realRouter = (SkillRouter) parts[1];
+
+        realRouter.activateForTurn("conv-ask", "run-ask", "帮我修订一下", null, List.of("manual-skill"));
+        String systemText = ((SystemMessage) realAssembler.assemble(
+                "conv-ask", "run-ask", "帮我修订一下", null, null, null, null, "88",
+                AgentMode.ASK, 1L, null).get(0)).text();
+
+        assertFalse(systemText.contains("手动技能模板正文MANUAL"));
+        assertFalse(systemText.contains("自动技能模板正文AUTO"));
     }
 
     // ==== 正文省传（inlineContentHash + InlineContentCache）====
@@ -313,6 +487,83 @@ class ContextAssemblerServiceTest {
         // 基底 system_prompt.md 里仍有 doc_* 工具表（会话工具过滤才是硬闸门），
         // 这里只断言活跃文档段自身的 LOWA 口径语句没有出现
         assertFalse(systemText.contains("**无需也不要**调用"), "活跃文档段不应再是 doc_* 口径");
+    }
+
+    @Test
+    @DisplayName("office+word 会话：多处修改必须成批（office_replace_batch），且只对 Word 宿主说（dev-board#419）")
+    void wordSessionIsToldToBatchMultiEdits() {
+        capabilityService.record("conv-1", "office", "word");
+
+        String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责仁……"));
+        assertTrue(systemText.contains("office_replace_batch"), "Word 面活跃文档段应点名批量改写工具");
+        assertTrue(systemText.contains("不要逐处调用 office_replace_text"),
+                "必须明说逐处调用会撞上步数上限——这正是「正在操作文档卡住」的成因");
+        assertTrue(systemText.contains("绝不要整批重发"), "必须明说失败条目单独重试，否则成功的会被改第二遍");
+
+        // Excel / PPT 宿主没有这个工具，不能对它们说
+        capabilityService.record("conv-1", "office", "excel");
+        assertFalse(assembleSystemText(officeDoc("名称\t金额")).contains("office_replace_batch"),
+                "excel 会话不应点名 Word 面的批量改写工具");
+        capabilityService.record("conv-1", "office", "powerpoint");
+        assertFalse(assembleSystemText(officeDoc("第1页：项目介绍")).contains("office_replace_batch"),
+                "powerpoint 会话不应点名 Word 面的批量改写工具");
+    }
+
+    @Test
+    @DisplayName("office+word 会话：整篇任务被要求走分段过卷 office_pass_step（dev-board#422）")
+    void wordSessionIsToldToUsePassStepForWholeDocumentWork() {
+        capabilityService.record("conv-1", "office", "word");
+
+        String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责仁……"));
+        assertTrue(systemText.contains("office_pass_step"), "Word 面应点名分段过卷工具");
+        assertTrue(systemText.indexOf("必须用 office_pass_step 分块推进") > systemText.indexOf("绝不要整批重发"),
+                "过卷指引挂在 #419 那段之后（约束要挂末位）");
+
+        // Excel / PPT 宿主没有这个工具，不能对它们说
+        capabilityService.record("conv-1", "office", "excel");
+        assertFalse(assembleSystemText(officeDoc("名称\t金额")).contains("office_pass_step"),
+                "excel 会话不应点名 Word 面的过卷工具");
+        capabilityService.record("conv-1", "office", "powerpoint");
+        assertFalse(assembleSystemText(officeDoc("第1页：项目介绍")).contains("office_pass_step"),
+                "powerpoint 会话不应点名 Word 面的过卷工具");
+    }
+
+    @Test
+    @DisplayName("整理文件类任务：稳定段末位强制 move_files_batch 一次提交（dev-board#466）")
+    void fileOrganisingIsToldToBatchMoves() {
+        // 无活跃文档的普通桌面会话（整理文件树的典型形态）
+        String systemText = assembleSystemText(null);
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        int at = systemText.indexOf(sep);
+        assertTrue(at >= 0, "system 必须带易变段分隔标记");
+        String stable = systemText.substring(0, at);
+
+        // 注意：system_prompt.md 的 §5 工具表里也有 move_files_batch（那是工具目录），
+        // 这里要断言的是**注入在稳定段末位**的那段强制指引
+        assertTrue(stable.contains("文件整理了一半停住了"), "稳定段末位应有文件整理的批量指引");
+        assertTrue(stable.contains("不要逐个调用"),
+                "必须明说逐个调用会撞上步数上限——这正是「整理到一半停住」的成因");
+        int guidance = stable.indexOf("文件整理了一半停住了");
+        assertTrue(guidance > stable.indexOf("# CORE PROTOCOL"),
+                "批量指引要挂在稳定段末位，不能只埋在 system_prompt.md 的工具表中间（约束要挂末位）");
+        assertTrue(stable.length() - guidance < 1200,
+                "批量指引应贴着稳定段末尾，后面不该再压一大段别的指令");
+    }
+
+    @Test
+    @DisplayName("office 会话不发文件整理指引：Word 面的 #419/#422 末位块不能被挤走")
+    void officeSessionKeepsItsOwnLastPositionBlock() {
+        capabilityService.record("conv-1", "office", "word");
+
+        String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责仁……"));
+        assertFalse(systemText.contains("文件整理了一半停住了"),
+                "任务窗格会话只编辑当前这一份文档，不该再注入项目文件整理指引");
+        // Word 面的 #419/#422 末位块靠「排在最后」生效：在它后面压别的指引等于把它挤走
+        assertTrue(systemText.contains("office_pass_step"), "Word 面自己的末位块要原样保留");
+        assertTrue(systemText.lastIndexOf("必须用 office_pass_step 分块推进")
+                        > systemText.lastIndexOf("move_files_batch"),
+                "Word 面的末位块必须仍排在（基底 prompt 工具表里的）文件工具之后");
     }
 
     @Test
@@ -438,7 +689,275 @@ class ContextAssemblerServiceTest {
         assertFalse(systemText.contains("ENGLISH ONLY"), "中文模式不应出现英文 Language 行");
     }
 
+    // ==== 历史回放容错：一条空白 content 的历史消息不许掀翻整轮 assemble ====
+    // 背景：POST /chat 此前没挡住 message="" 落库；ContextAssemblerService 回放历史时
+    // langchain4j 的 UserMessage.from(text) 对空白文本一律抛 IllegalArgumentException，
+    // 存量脏数据一旦落库，该 conversationId 此后每一轮都会在这里抛异常、永久报废。
+
+    @Test
+    @DisplayName("修复：历史里一条空白 content 的消息被跳过，不再让整轮 assemble 抛异常")
+    void blankHistoryMessageIsSkippedNotThrown() {
+        com.checkba.model.entity.ProjectAiMessage blank = new com.checkba.model.entity.ProjectAiMessage();
+        blank.setId(1L);
+        blank.setRole("USER");
+        blank.setContent(""); // 存量脏数据：曾经落库的空白 message
+
+        com.checkba.model.entity.ProjectAiMessage ok = new com.checkba.model.entity.ProjectAiMessage();
+        ok.setId(2L);
+        ok.setRole("USER");
+        ok.setContent("这是一条正常的历史消息");
+
+        ProjectAiMessageService msgSvc = mock(ProjectAiMessageService.class);
+        when(msgSvc.listByConversationId("conv-1")).thenReturn(List.of(blank, ok));
+
+        ContextAssemblerService withBlankHistory = new ContextAssemblerService(
+                legalTools, msgSvc, mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class),
+                mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
+
+        List<ChatMessage> messages = assertDoesNotThrow(() -> withBlankHistory.assemble(
+                "conv-1", "run-1", "帮我修订一下", null, null, null, null, "88", AgentMode.AGENT, 1L, null),
+                "空白历史消息不应掀翻整轮上下文组装");
+
+        boolean hasValidHistoryText = messages.stream()
+                .filter(m -> m instanceof dev.langchain4j.data.message.UserMessage)
+                .map(com.checkba.service.ai.context.ChatMessageText::of)
+                .anyMatch("这是一条正常的历史消息"::equals);
+        assertTrue(hasValidHistoryText, "跳过坏数据的同时，同一批次里有效的历史消息应正常保留");
+    }
+
+    // ---- UTF-16 代理对截断（审计条目：char-based truncation can split a surrogate pair）----
+
+    @Test
+    @DisplayName("修复：截断点恰好落在代理对中间时，整个代理对一起舍弃，不留孤立的高代理项")
+    void truncateAtCharBoundaryDoesNotSplitSurrogatePair() {
+        // "𠮷"（U+20BB7，罕见 CJK 扩展 B 人名字）在 UTF-16 里是高/低两个 char 的代理对
+        String surrogatePair = "𠮷";
+        String content = "A".repeat(10) + surrogatePair + "B".repeat(10);
+        // 高代理项在下标 10，低代理项在下标 11——截断点选在两者中间
+        int splitInsideSurrogate = 11;
+
+        String truncated = ContextAssemblerService.truncateAtCharBoundary(content, splitInsideSurrogate);
+
+        assertEquals(10, truncated.length(), "应回退到代理对开始之前，不能截出一个孤立代理项");
+        assertEquals("A".repeat(10), truncated);
+        assertFalse(Character.isSurrogate(truncated.charAt(truncated.length() - 1)),
+                "结尾不该是孤立的代理项: " + truncated);
+    }
+
+    @Test
+    @DisplayName("截断点不落在代理对中间时，行为与普通 substring 完全一致")
+    void truncateAtCharBoundaryMatchesSubstringWhenNoSurrogateSplit() {
+        String surrogatePair = "𠮷";
+        String content = "A".repeat(10) + surrogatePair + "B".repeat(10);
+
+        // 截断点在代理对之前：与 substring 一致
+        assertEquals(content.substring(0, 5), ContextAssemblerService.truncateAtCharBoundary(content, 5));
+        // 截断点在代理对之后（含完整代理对）：与 substring 一致
+        assertEquals(content.substring(0, 12), ContextAssemblerService.truncateAtCharBoundary(content, 12));
+        // 截断点等于原文长度（不截断）：与 substring 一致
+        assertEquals(content, ContextAssemblerService.truncateAtCharBoundary(content, content.length()));
+    }
+
     // ---- 供自建 assembler 的 mock 工厂（与 setUp 同配方）----
+
+    // ==================== 项目上下文的设置时机 ====================
+
+    @Test
+    @DisplayName("项目上下文必须在任何一次读文件之前设置——否则附件正文被替换成 fail-closed 的报错串")
+    void projectContextIsSetBeforeAnyFileRead() {
+        // 病灶：ProjectContextHolder 的三行 set 原来排在附件注入与活跃文档注入之后。
+        // 它是 ThreadLocal，而 ToolFileGuard.rejectIfOutsideProject 的项目归属就从它取，
+        // 于是 read_document 在编排器的 @Async 线程上要么拿到 null（fail closed，返回
+        // "Error: no project context ..."，这句话被原样当成文件正文注进 <file> CDATA），
+        // 要么拿到上一轮遗留的**别的项目**的 id（taskExecutor 是池化复用的，assemble 从不 clear）。
+        // 两种坏法都不报错，用户看到的是「AI 说读不了我的附件」。
+        //
+        // 生产代码里 LegalTools 是真的、会去查 holder；单测里它是 mock，所以这个顺序错误
+        // 在单测中完全不可见——只能像这样把「调用发生时 holder 里是什么」直接钉住。
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>("<never called>");
+        when(legalTools.read_document(anyString())).thenAnswer(inv -> {
+            seen.set(com.checkba.service.ai.context.ProjectContextHolder.getProjectId());
+            return "附件正文";
+        });
+
+        // 干净线程起跑，排除「上一个用例刚好留了个值」这种伪绿
+        com.checkba.service.ai.context.ProjectContextHolder.clear();
+
+        AiAgentController.ContextItem attachment = new AiAgentController.ContextItem();
+        attachment.setId("777");
+        attachment.setName("补充协议.docx");
+        attachment.setFileType("docx");
+
+        assembler.assemble("conv-1", "run-1", "看看这份补充协议", List.of(attachment), null,
+                null, null, "88", AgentMode.AGENT, 1L, null);
+
+        assertEquals("88", seen.get(),
+                "读附件时 ProjectContextHolder 里必须已经是本轮的 projectId；"
+                        + "为 null 说明 set 排在了读文件之后（ToolFileGuard 会 fail closed）");
+    }
+
+    // ==================== 图片：视觉直送 vs OCR 降级 ====================
+
+    private static AiAgentController.ContextItem imageItem(String id, String name) {
+        AiAgentController.ContextItem item = new AiAgentController.ContextItem();
+        item.setId(id);
+        item.setName(name);
+        item.setFileType("image");
+        return item;
+    }
+
+    /** 装一个「模型支持视觉、图片字节读得到」的组装器。 */
+    private ContextAssemblerService visionAssembler(byte[] bytes) throws Exception {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(true);
+        com.checkba.service.ProjectFileService fileService = mock(com.checkba.service.ProjectFileService.class);
+        com.checkba.model.entity.ProjectFile file = new com.checkba.model.entity.ProjectFile();
+        file.setId(555L);
+        file.setProjectId(88L);
+        file.setName("现场照片.png");
+        when(fileService.getFile(555L)).thenReturn(file);
+        when(fileService.getFileBytes(555L)).thenReturn(bytes);
+        return new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class), factory, fileService);
+    }
+
+    @Test
+    @DisplayName("模型支持视觉：图片进末位用户消息的 ImageContent，且不再走 OCR")
+    void visionCapableModelGetsImageContentInsteadOfOcr() throws Exception {
+        ContextAssemblerService a = visionAssembler(new byte[]{1, 2, 3, 4});
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "这张照片里写了什么",
+                List.of(imageItem("555", "现场照片.png")), null,
+                null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
+
+        dev.langchain4j.data.message.UserMessage last =
+                (dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1);
+        assertEquals(1, com.checkba.service.ai.context.ChatMessageText.imageCountOf(last),
+                "图片应作为 ImageContent 挂在末位用户消息上");
+        assertTrue(com.checkba.service.ai.context.ChatMessageText.of(last).startsWith("这张照片里写了什么"),
+                "文本内容块必须排在图片之前——末位提醒的注意力位置是既有结论");
+
+        // 同一张图绝不能既进视觉又进 OCR：那会既付图像 token 又付 OCR 的钱
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+
+        String systemText = ((SystemMessage) messages.get(0)).text();
+        assertTrue(systemText.contains("<image id=\"555\""),
+                "system 里应留一条图片标识，让模型知道这张图随消息发了、不要再调读取工具");
+    }
+
+    @Test
+    @DisplayName("模型不支持视觉：走既有 OCR 路径，且必须在上下文里明写降级原因")
+    void textOnlyModelFallsBackToOcrWithExplicitNotice() {
+        when(legalTools.read_document("555")).thenReturn("识别出来的文字");
+
+        String systemText = assembleSystemTextWith(List.of(imageItem("555", "现场照片.png")));
+
+        assertTrue(systemText.contains("识别出来的文字"), "应保留既有 OCR 正文注入");
+        assertTrue(systemText.contains("当前模型不支持视觉输入"),
+                "必须明写降级原因——不写的话模型会把 OCR 的识别误差当成原文事实");
+        assertTrue(systemText.contains("source=\"ocr\""), "应标出正文来源是 OCR");
+    }
+
+    @Test
+    @DisplayName("EN 应用语言下降级说明也必须是英文——协议面 zh/en 逐条一致是硬约束")
+    void ocrFallbackNoticeFollowsAppLanguage() {
+        when(legalTools.read_document("555")).thenReturn("recognized text");
+        com.checkba.service.AppLanguageService en = mock(com.checkba.service.AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        ContextAssemblerService english = new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                en, mockedChatModelFactory(), mock(com.checkba.service.ProjectFileService.class));
+
+        String systemText = ((SystemMessage) english.assemble("conv-1", "run-1", "read it",
+                List.of(imageItem("555", "photo.png")), null,
+                null, null, "88", AgentMode.AGENT, 1L, "deepseek/deepseek-v4-flash").get(0)).text();
+
+        assertTrue(systemText.contains("does not accept image input"), "英文界面下降级原因应是英文");
+        assertFalse(systemText.contains("当前模型不支持视觉输入"), "英文界面下不该冒出中文说明");
+    }
+
+    @Test
+    @DisplayName("超过单张体积上限的图片降级走 OCR，不是静默丢弃")
+    void oversizedImageFallsBackToOcr() throws Exception {
+        when(legalTools.read_document("555")).thenReturn("识别出来的文字");
+        AiContextProperties props = new AiContextProperties();
+        props.getVision().setMaxImageBytes(2);
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(true);
+        com.checkba.service.ProjectFileService fileService = mock(com.checkba.service.ProjectFileService.class);
+        com.checkba.model.entity.ProjectFile file = new com.checkba.model.entity.ProjectFile();
+        file.setId(555L);
+        file.setProjectId(88L);
+        when(fileService.getFile(555L)).thenReturn(file);
+        when(fileService.getFileBytes(555L)).thenReturn(new byte[]{1, 2, 3, 4, 5});
+
+        ContextAssemblerService a = new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                props, mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class), factory, fileService);
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "看图",
+                List.of(imageItem("555", "现场照片.png")), null,
+                null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
+
+        assertEquals(0, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)), "超限的图不应直送");
+        assertTrue(((SystemMessage) messages.get(0)).text().contains("识别出来的文字"),
+                "超限应降级到 OCR，而不是把这张图整个丢掉");
+    }
+
+    @Test
+    @DisplayName("PDF 永远不走视觉直送——open-ai 0.36 只认 Text/Image 两种内容块")
+    void pdfNeverGoesThroughVisionChannel() throws Exception {
+        when(legalTools.read_document("555")).thenReturn("PDF 文字层");
+        ContextAssemblerService a = visionAssembler(new byte[]{1, 2, 3, 4});
+
+        AiAgentController.ContextItem pdf = new AiAgentController.ContextItem();
+        pdf.setId("555");
+        pdf.setName("判决书.pdf");
+        pdf.setFileType("pdf");
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "看这份判决", List.of(pdf), null,
+                null, null, "88", AgentMode.AGENT, 1L, "moonshotai/kimi-k3");
+
+        assertEquals(0, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)), "PDF 不许当图片直送");
+        assertTrue(((SystemMessage) messages.get(0)).text().contains("PDF 文字层"),
+                "PDF 应继续走既有抽取/OCR 路径");
+    }
+
+    @Test
+    @DisplayName("没有图片时用户消息保持纯文本构造，不退化成单元素内容块列表")
+    void noImagesKeepsPlainTextUserMessage() {
+        List<ChatMessage> messages = assembler.assemble("conv-1", "run-1", "帮我修订一下", null, null,
+                null, null, "88", AgentMode.AGENT, 1L, null);
+        dev.langchain4j.data.message.UserMessage last =
+                (dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1);
+        assertEquals("帮我修订一下", last.singleText(),
+                "无图片时必须仍是单文本消息——全仓还有一批 singleText() 调用点靠这条");
+    }
+
+    private String assembleSystemTextWith(List<AiAgentController.ContextItem> items) {
+        List<ChatMessage> messages = assembler.assemble("conv-1", "run-1", "看图", items, null,
+                null, null, "88", AgentMode.AGENT, 1L, "deepseek/deepseek-v4-flash");
+        return ((SystemMessage) messages.get(0)).text();
+    }
+
+    /** 默认「不支持视觉」的工厂桩：既有用例全部走既有的 OCR 路径，行为保持不变。 */
+    private static ChatModelFactory mockedChatModelFactory() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(false);
+        return factory;
+    }
 
     private static ProjectAiMessageService mockedMessageService() {
         ProjectAiMessageService svc = mock(ProjectAiMessageService.class);
@@ -465,5 +984,50 @@ class ContextAssemblerServiceTest {
         ContextCompressor cc = mock(ContextCompressor.class);
         when(cc.needsCompression(any(), any())).thenReturn(false);
         return cc;
+    }
+
+    // ==== 易变段分隔标记（提示缓存跨轮次命中的前提） ====
+    // 通道层按这个标记把 system 拆成两个 content block，只给第一块打 cache_control。
+    // 标记之前的一切必须逐字节稳定，否则 Anthropic/Qwen 的缓存永远不命中——
+    // 而这件事不会报错、只会静默多花钱，所以由测试钉住。
+
+    @Test
+    @DisplayName("system 恰好带一个易变段分隔标记，每轮变化的字段全在标记之后")
+    void volatileFieldsLiveAfterTheSeparator() {
+        String systemText = assembleSystemText(activeDoc());
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        int at = systemText.indexOf(sep);
+        assertTrue(at >= 0, "system 必须带易变段分隔标记");
+        assertEquals(at, systemText.lastIndexOf(sep), "分隔标记只许出现一次，否则通道层拆错位置");
+
+        String stable = systemText.substring(0, at);
+        String volatilePart = systemText.substring(at + sep.length());
+
+        assertFalse(stable.contains("Current System Time"), "秒级时间戳留在稳定块 = 缓存永不命中");
+        assertFalse(stable.contains("Current Phase:"), "阶段状态每轮可变，必须在标记之后");
+        assertFalse(stable.contains("## Phase Instructions"), "阶段指引跟随 Current Phase 一起走");
+
+        assertTrue(volatilePart.contains("Current System Time"), "时间戳应落在易变块");
+        assertTrue(volatilePart.contains("Current Phase:"), "阶段状态应落在易变块");
+        assertTrue(volatilePart.contains("## Phase Instructions"), "阶段指引应落在易变块");
+
+        // 稳定块仍然装着真正值得缓存的东西：指令主体 + 内联正文
+        assertTrue(stable.contains("<active_document id=\"123\""), "内联正文必须留在被缓存的那一半");
+    }
+
+    @Test
+    @DisplayName("同一会话连续两次组装：标记之前的字节完全相同（缓存命中的充分条件）")
+    void stablePrefixIsByteIdenticalAcrossTurns() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        String first = assembleSystemText(activeDoc());
+        String second = assembleSystemText(activeDoc());
+
+        String stableFirst = first.substring(0, first.indexOf(sep));
+        String stableSecond = second.substring(0, second.indexOf(sep));
+        assertEquals(stableFirst, stableSecond,
+                "标记之前只要差一个字节，Anthropic/Qwen 就整段重新写缓存");
     }
 }

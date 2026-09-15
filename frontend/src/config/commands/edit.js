@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「编辑」菜单的**业务补充项**。
 //
 // 撤销/重做/剪切/复制/粘贴/全选那一段是 Electron 的 editMenu roles，由主进程

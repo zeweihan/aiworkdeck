@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.User;
@@ -15,6 +18,12 @@ import java.util.Optional;
 public class UserService {
 
     private final UserRepository userRepository;
+    /**
+     * 手机号转移后要作废原持有者的会话。用 @Lazy 打断 UserSessionService ->
+     * AuthController.registerUserSessionService -> ... 这条启动期的相互引用。
+     */
+    @org.springframework.context.annotation.Lazy
+    private final UserSessionService userSessionService;
 
     /** BCrypt 无状态、线程安全，可静态复用。 */
     private static final BCryptPasswordEncoder PW_ENCODER = new BCryptPasswordEncoder();
@@ -116,7 +125,105 @@ public class UserService {
         return new PhoneAccount(userRepository.save(user), true);
     }
 
+    /**
+     * App 审核账号：按已验证邮箱找，没有就建一个**专用空账号**。
+     *
+     * <p>只给 {@link com.checkba.config.ReviewAccountGate} 那条路调用。
+     *
+     * <p>为什么要建号而不是要求事先绑好：{@code verified_email} 全仓只有
+     * {@code MailAuthService.confirmBind} 一处写入，而它要求先登录——也就是说
+     * 「事先绑好」等于把审核邮箱绑到某个真人账号上，那个固定验证码就成了进
+     * 真人账号的钥匙。单独建一个空账号，那把码就只开得了这一个空房间。
+     *
+     * <p>手机号那条不需要这个方法：{@link #findOrCreateByPhone} 本来就建号。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public User findOrCreateReviewAccount(String verifiedEmail) {
+        return userRepository.findByVerifiedEmail(verifiedEmail).orElseGet(() -> {
+            User user = registerExternal(allocatePhoneUsername(), "App Review");
+            user.setEmail(verifiedEmail);
+            user.setVerifiedEmail(verifiedEmail);
+            user.setUpdatedAt(LocalDateTime.now());
+            return userRepository.save(user);
+        });
+    }
+
+    /**
+     * 邮箱免密登录/注册：按已验证邮箱找，没有就建号。
+     *
+     * <p>与 {@link #findOrCreateByPhone} 同一口径——验证码验过就是对该邮箱的控制权
+     * 证明，和短信那条没有本质区别。国际版只有邮箱这一条路能走（境外收不到中国
+     * 短信），如果邮箱只登录不建号，境外用户就**没有任何**注册入口。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public EmailAccount findOrCreateByEmail(String verifiedEmail) {
+        java.util.Optional<User> existing = userRepository.findByVerifiedEmail(verifiedEmail);
+        if (existing.isPresent()) {
+            return new EmailAccount(existing.get(), false);
+        }
+        User user = registerExternal(allocatePhoneUsername(),
+                com.checkba.service.mail.MailAuthService.maskEmail(verifiedEmail));
+        user.setEmail(verifiedEmail);
+        user.setVerifiedEmail(verifiedEmail);
+        user.setUpdatedAt(LocalDateTime.now());
+        return new EmailAccount(userRepository.save(user), true);
+    }
+
+    public record EmailAccount(User user, boolean created) {}
+
     public record PhoneAccount(User user, boolean created) {}
+
+    private static final org.slf4j.Logger claimLog = org.slf4j.LoggerFactory.getLogger(UserService.class);
+
+    /**
+     * 桥接认领手机号（手机端账号归一，dev-board#30）：官网账户带着经短信验证的手机号
+     * 来桥接时，把该号写到桥接用户名下——此后手机端 sms-login 的
+     * {@link #findOrCreateByPhone} 自然解析到同一个账号，不再另建孤号。
+     *
+     * <p>号码正被别的用户占用时<b>转移</b>：占用方是经 sms-login 对同一手机号
+     * 验证过控制权的账号，与官网账户持有人是同一个人，归一正是本方法的目的。
+     * 桥接用户已绑了<b>另一个</b>号码时不覆盖（只记日志）——覆盖会悄悄改变
+     * 一个已工作的登录入口。
+     *
+     * <p>永不抛出：认领是桥接的顺手动作，失败不影响桥接本身。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void claimPhoneFromWebsite(User user, String phone) {
+        try {
+            if (user == null || phone == null || !phone.matches("^1\\d{10}$")) return;
+            if (phone.equals(user.getPhone())) return;
+            if (StringUtils.hasText(user.getPhone())) {
+                claimLog.info("桥接用户 {} 已绑 {}，不用官网号码覆盖",
+                        user.getId(), com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone()));
+                return;
+            }
+            Optional<User> holder = userRepository.findByPhone(phone);
+            if (holder.isPresent() && !holder.get().getId().equals(user.getId())) {
+                User h = holder.get();
+                h.setPhone(null);
+                h.setUpdatedAt(LocalDateTime.now());
+                userRepository.save(h);
+                claimLog.info("手机号 {} 从用户 {} 转移到桥接用户 {}（账号归一）",
+                        com.checkba.service.sms.SmsAuthService.maskPhone(phone), h.getId(), user.getId());
+                // 转移完必须把原持有者的会话一并作废。否则手机端手上那张老会话仍然有效，
+                // 它会继续以老账号的身份请求 /api/mobile/projects——而目录镜像挂在归一后的
+                // 账号名下，老账号名下空空如也，返回的是合法的空数组：**没有报错、没有提示，
+                // 用户看到的就是「一个项目都读不到」，而且怎么重进都一样**（会话不过期就永远不会自愈）。
+                // 作废后手机端被迫重新走短信登录，落到归一后的账号上。
+                // 同一个人：占用方本就是用这个号码验证过控制权的账号。
+                try {
+                    userSessionService.revokeAllForUser(h.getId());
+                } catch (Exception e) {
+                    claimLog.warn("作废原持有者 {} 的会话失败（手机号已转移，用户需手动重新登录）", h.getId(), e);
+                }
+            }
+            user.setPhone(phone);
+            user.setUpdatedAt(LocalDateTime.now());
+            userRepository.save(user);
+        } catch (Exception e) {
+            claimLog.warn("桥接认领手机号失败（不影响桥接）: user={}", user == null ? null : user.getId(), e);
+        }
+    }
 
     /** 随机短用户名，撞了重试。10 次都撞说明随机源坏了，宁可报错也不静默降级。 */
     private String allocatePhoneUsername() {
@@ -185,6 +292,41 @@ public class UserService {
      */
     public Optional<User> getUserByUsername(String username) {
         return userRepository.findByUsername(username);
+    }
+
+    /**
+     * 版本署名用的名字（spec 2026-09-10 §4）：展示名优先，空才回落用户名，两样都没有回 null，
+     * 兜底写「用户」还是「AI WorkDeck」由调用方决定。
+     *
+     * <p>写进 Git 提交对象的作者名全部走这里——手动开启、自动开启、自动存档、AI 改文本、
+     * 云端整合，以前五处各写一份、只改了一处，时间线上就一半是「韩律师」一半是 {@code admin}。
+     */
+    public static String signatureName(User user) {
+        if (user == null) return null;
+        String display = user.getDisplayName();
+        if (display != null && !display.isBlank()) return display.trim();
+        String username = user.getUsername();
+        return username == null || username.isBlank() ? null : username;
+    }
+
+    /**
+     * 展示名随官网刷新（spec 2026-09-10 §4/§5：官网的展示名是唯一权威源）。
+     *
+     * <p>只在官网给了非空值、且与本地这行不同时才写；<b>username 一个字都不动</b>——
+     * 它是内部标识，改名会断掉 {@code /u/用户名} 与 Skill 归属链接。
+     * 官网给空（老账户还没填名字）时保留本地已有的那份，不清成空白。
+     *
+     * <p>这条与 {@code LocalIdentityService.commit} 的「真实账号的 displayName 不动」不冲突：
+     * 那条禁的是本机按 admin 心智替用户改名，这里是随权威源刷新。
+     */
+    public User refreshDisplayNameFromWebsite(User user, String websiteDisplayName) {
+        if (user == null) return null;
+        String next = websiteDisplayName == null ? "" : websiteDisplayName.trim();
+        if (next.isEmpty() || next.equals(user.getDisplayName())) return user;
+        if (next.length() > 128) next = next.substring(0, 128);  // 列宽 128
+        user.setDisplayName(next);
+        user.setUpdatedAt(LocalDateTime.now());
+        return userRepository.save(user);
     }
 
     /**

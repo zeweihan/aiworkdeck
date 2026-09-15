@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 桌面宿主链路 e2e / desktop host-chain e2e (Electron + CDP).
 //
 // 覆盖浏览器目标够不到的三处：
@@ -52,6 +54,7 @@ const pickFreePort = (from) => {
   throw new Error(from + '-' + (from + 59) + ' 全被占，挑不出空闲端口')
 }
 const MARKER = 'QA_SAVE_MARKER_' + Date.now()
+const CLIP_MARKER = 'QA_CLIPBOARD_455_' + Date.now()
 
 let puppeteer
 try { puppeteer = (await import('puppeteer-core')).default }
@@ -60,7 +63,11 @@ catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer
 // ---- preflight ----
 for (const [what, ok] of [
   ['dev server ' + DEVURL, await fetch(DEVURL).then(() => true).catch(() => false)],
-  ['后端 ' + BACKEND, await fetch(BACKEND + '/api/skills/market/list').then(() => true).catch(() => false)],
+  // r.ok 而不是"能拿到响应就算活"：fetch() 对 4xx/5xx 照样 resolve，只有网络层失败
+  // 才会走 catch。以前这里只要连得上端口就判 OK，后端 500（比如 skill 注册表坏了）
+  // 会被判成健康，前置检查形同虚设，失败要等 ~10 分钟后在无关步骤里以一堆看不懂的
+  // 报错冒出来，而不是这里干脆利落的"前置缺失"提示。
+  ['后端 ' + BACKEND, await fetch(BACKEND + '/api/skills/market/list').then((r) => r.ok).catch(() => false)],
   ['引擎 dist/zetaoffice/lowa', fs.existsSync(path.join(frontendDir, 'dist/zetaoffice/lowa/soffice.js'))],
   ['desktop/node_modules', fs.existsSync(path.join(desktopDir, 'node_modules'))],
 ]) { if (!ok) { console.error('前置缺失: ' + what); process.exit(2) } }
@@ -73,7 +80,12 @@ async function api(ep, opts = {}) {
     headers: { 'Content-Type': 'application/json', ...(QA.sid ? { 'X-Session-Id': QA.sid } : {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   })
-  return r.json().catch(() => null)
+  const body = await r.json().catch(() => null)
+  // 4xx/5xx 以前直接把响应体（甚至 null）当正常结果原样返回，调用方看到的只是
+  // "字段缺失/数组为空"这类下游症状，真实原因（后端拒绝了这次请求）被吞掉、没人
+  // 打印出来。这里改成一律抛出，让每个调用点原有的 throw/catch 逻辑接住真实原因。
+  if (!r.ok) throw new Error('API ' + (opts.method || 'GET') + ' ' + ep + ' -> ' + r.status + ': ' + JSON.stringify(body))
+  return body
 }
 {
   // 冷启动后端可能还锁着/未过向导：解锁门与向导分流由 app-e2e J1 专门覆盖，
@@ -92,6 +104,13 @@ async function api(ep, opts = {}) {
   console.log('本机用户（免登）/ 项目 #' + QA.projectId)
 }
 
+async function cleanupClipboardFixture() {
+  const result = await api('/api/clipboard?q=' + encodeURIComponent(CLIP_MARKER) + '&limit=80')
+  for (const item of (Array.isArray(result) ? result : result.items || [])) {
+    if (item.text === CLIP_MARKER) await api('/api/clipboard/' + item.id, { method: 'DELETE' })
+  }
+}
+
 // ---- launch dev Electron with CDP ----
 console.log('启动 dev Electron（屏幕会出现窗口，结束自动关闭）...')
 const { elec, killTree } = spawnElectron({
@@ -103,7 +122,7 @@ const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'desktop-e2e-electro
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const ws = await waitForCdpWs(CDP_PORT)
+const ws = await waitForCdpWs(CDP_PORT, 60, elec)
 if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
 
 {
@@ -120,6 +139,10 @@ const step = async (name, fn) => {
 }
 
 const browser = await puppeteer.connect({ browserWSEndpoint: ws, defaultViewport: null })
+// 本地测试站点（浏览器面板那组用），下面 finally 里要兜底关掉它。
+// 声明必须留在 try 外面：try 块里的 let 对同级 finally 不可见，写在里面 finally 只会抛
+// ReferenceError，再被那行自己的空 catch 吞掉——兜底就成了永不生效的死代码。
+let site = null
 try {
   // main renderer page = the dev URL
   let page = null
@@ -149,7 +172,13 @@ try {
       const x = r.x + r.width / 2, y = r.y + r.height / 2
       const hit = document.elementFromPoint(x, y)
       if (hit && el.contains(hit)) return { x, y }
-      let who = hit ? hit.tagName.toLowerCase() : '(空白)'
+      // 点在视口外时 elementFromPoint 直接返回 null，跟"被浮层盖住"是两种病，
+      // 只报一句 (空白) 分不出来——把当时的矩形与视口一起带上。
+      let who = hit ? hit.tagName.toLowerCase()
+        : ('(空白) rect=' + Math.round(r.x) + ',' + Math.round(r.y) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)
+           + ' 视口=' + window.innerWidth + 'x' + window.innerHeight
+           + ' 文档高=' + Math.round(document.scrollingElement.scrollHeight)
+           + ' 滚动=' + Math.round(document.scrollingElement.scrollTop))
       try { if (hit && hit.shadowRoot) who += ': ' + hit.shadowRoot.textContent.replace(/\\s+/g, ' ').trim().slice(0, 200) } catch (e) {}
       return { x, y, blockedBy: who }
     }`
@@ -308,6 +337,99 @@ try {
   const pageErrs = []
   page.on('pageerror', (e) => pageErrs.push(String(e).slice(0, 160)))
 
+  // ---- 真系统剪贴板 → Electron IPC → 入库/显示 → 鼠标确认删除（#455） ----
+  await step('重启后的系统复制可见，确认删除后界面与数据库都消失', async () => {
+    await reassertFocusEmulation(page)
+    await browser.defaultBrowserContext().overridePermissions(new URL(DEVURL).origin,
+      ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write'])
+    let restorePending = false
+    let panelOpened = false
+    try {
+      // 快照只存在本轮渲染页内存，不输出原内容。保留浏览器支持的全部 MIME 类型，
+      // 不能只 readText/writeText 把用户的图片/富文本剪贴板变成纯文本。
+      await page.evaluate(async () => {
+        const items = await navigator.clipboard.read()
+        window.__qaClipboardBackup = await Promise.all(items.map(async item => {
+          const types = await Promise.all(item.types.map(async type => [type, await item.getType(type)]))
+          return new ClipboardItem(Object.fromEntries(types))
+        }))
+      })
+      restorePending = true
+      if (!(await page.$('.clip-panel'))) {
+        await mouseClickText('剪贴板')
+        panelOpened = true
+      }
+      await page.waitForSelector('.clip-panel', { visible: true, timeout: 10000 })
+      // 临时输入框只提供合成文本；按键走真实 Electron 输入通道，不调用采集桥或 POST。
+      await page.evaluate(marker => {
+        const input = document.createElement('textarea')
+        input.id = 'qa-clipboard-copy-source'
+        input.value = marker
+        input.style.cssText = 'position:fixed;left:100px;top:80px;width:240px;height:40px;z-index:99999'
+        document.body.appendChild(input)
+      }, CLIP_MARKER)
+      await mouseClickSel('#qa-clipboard-copy-source')
+      const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+      await page.keyboard.down(modifier)
+      // CDP修饰键事件不会自动执行macOS原生编辑菜单；显式附带真实编辑命令。
+      try {
+        await page.keyboard.press('KeyA', { commands: ['selectAll'] })
+        await page.keyboard.press('KeyC', { commands: ['copy'] })
+      }
+      finally { await page.keyboard.up(modifier) }
+      await page.waitForFunction(marker => [...document.querySelectorAll('.clip-card')]
+        .some(el => el.innerText.includes(marker)), { timeout: 15000 }, CLIP_MARKER)
+      await page.evaluate(() => document.querySelector('#qa-clipboard-copy-source')?.remove())
+      const list = await api('/api/clipboard?q=' + encodeURIComponent(CLIP_MARKER) + '&limit=80')
+      const rows = Array.isArray(list) ? list : list.items || []
+      const matches = rows.filter(row => row.text === CLIP_MARKER)
+      if (matches.length !== 1) throw new Error('一次系统复制应入库一条，实际 ' + matches.length)
+      const id = matches[0].id
+      const clickClipboardAction = async selector => {
+        const box = await page.evaluate((check, marker, sel) => {
+          const card = [...document.querySelectorAll('.clip-card')].find(el => el.innerText.includes(marker))
+          const el = card?.querySelector(sel)
+          if (!el) return null
+          return eval(check + '; hitCheck(el)')
+        }, HIT_CHECK, CLIP_MARKER, selector)
+        await clickAt(box, '剪贴板 ' + selector)
+      }
+      await clickClipboardAction('.del-wrapper .cli-btn')
+      await page.waitForSelector('.clip-card .delete-popover', { visible: true, timeout: 5000 })
+      await clickClipboardAction('.delete-popover .pop-btn.danger')
+      await page.waitForFunction(marker => ![...document.querySelectorAll('.clip-card')]
+        .some(el => el.innerText.includes(marker)), { timeout: 10000 }, CLIP_MARKER)
+      const after = await api('/api/clipboard?q=' + encodeURIComponent(CLIP_MARKER) + '&limit=80')
+      if ((Array.isArray(after) ? after : after.items || []).some(row => row.id === id || row.text === CLIP_MARKER)) {
+        throw new Error('确认删除后后端仍返回合成记录 #' + id)
+      }
+    } finally {
+      await page.evaluate(() => document.querySelector('#qa-clipboard-copy-source')?.remove()).catch(() => {})
+      if (restorePending) {
+        // 如果用户在测试途中复制了别的内容，保留那次更新。恢复时暂时解绑测试页面，
+        // 等系统轮询记住原指纹再重绑，避免把用户原内容写进隔离测试库。
+        await page.evaluate(async marker => {
+          const vm = window.__checkbaActiveOverviewVm
+          try {
+            if (await navigator.clipboard.readText() === marker) {
+              vm?.unbindClipboardListener()
+              try {
+                const items = window.__qaClipboardBackup || []
+                if (items.length) await navigator.clipboard.write(items)
+                else await navigator.clipboard.writeText('')
+                await new Promise(resolve => setTimeout(resolve, 1200))
+              } finally { vm?.bindClipboardListener() }
+            }
+          } finally { delete window.__qaClipboardBackup }
+        }, CLIP_MARKER)
+      }
+      if (panelOpened && await page.$('.status-bar .status-tool.active')) {
+        await mouseClickSel('.status-bar .status-tool.active')
+      }
+      await cleanupClipboardFixture()
+    }
+  })
+
   // ---- 浏览器面板：切走标签再切回来必须还是原来那一页 ----
   // 修复前的行为：BrowserPane 一卸载就 destroy 掉 BrowserView（切个标签就把整个网页
   // 连根拔掉），而渲染层记的 tab.url 又从不跟随页内跳转（点链接/搜索主进程知道、
@@ -317,7 +439,7 @@ try {
   // 用本机起的两页小站而不是真网站：断言不能挂在外网可达性上。
   const SITE_PORT = pickFreePort(8811)
   const SITE = 'http://127.0.0.1:' + SITE_PORT
-  let site = null
+  site = null
   const clickTabAt = async (idx) => {
     const box = await page.evaluate((check, i) => {
       const el = document.querySelectorAll('.tabs-pane-left .tab-item')[i]
@@ -804,6 +926,59 @@ try {
     console.log('      加粗: ' + r.beforeBold + ' → ' + r.afterBold + '，按钮已高亮')
   })
 
+  await step('工具栏下拉真的能打开并选中（dev-board#245 回归）', async () => {
+    // 病灶形态：样式/字体/颜色下拉曾被工具栏横向 scroll-view 的竖向 overflow +
+    // 窗格一串 overflow:hidden 裁死——菜单状态开了、DOM 也在，画面上一条都看不
+    // 见，用户看到的就是「点了打不开」。修法是打开时 fixed 定位逃出裁剪上下文。
+    // 断言三件事：① 真实鼠标点开；② 菜单中心 hit-test 命中菜单自己（没被裁剪/
+    // 遮挡，还原病灶这里立刻转红）；③ 点「标题 1」后引擎里的段落样式真的变了。
+    const box = await page.evaluate(() => {
+      const el = document.querySelector('.etb-field.w110')
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    })
+    if (!box) throw new Error('找不到段落样式下拉触发器')
+    await page.mouse.click(box.x, box.y)
+    await sleep(600)
+    const st = await page.evaluate(() => {
+      const el = document.querySelector('.etb-menu')
+      if (!el) return { present: false }
+      const r = el.getBoundingClientRect()
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(r.height / 2, 40))
+      return { present: true, covered: top ? !(el === top || el.contains(top)) : true,
+        topEl: top ? top.tagName + '.' + String(top.className).slice(0, 50) : 'none',
+        rect: { y: Math.round(r.y), h: Math.round(r.height) } }
+    })
+    if (!st.present) throw new Error('点了下拉但 .etb-menu 没出现')
+    if (st.covered) throw new Error('下拉菜单被裁剪/遮挡（hit-test 未命中菜单）: ' + JSON.stringify(st))
+    const item = await page.evaluate(() => {
+      for (const it of document.querySelectorAll('.etb-menu .etb-item')) {
+        const t = it.querySelector('.etb-item-t')
+        if (t && /标题 1|Heading 1/.test(t.textContent)) {
+          const r = it.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }
+      }
+      return null
+    })
+    if (!item) throw new Error('样式清单里找不到「标题 1」')
+    await page.mouse.click(item.x, item.y)
+    await sleep(900)
+    const after = await page.evaluate(async (finder) => {
+      const ed = eval(finder + '; findEditor()')
+      const ui = await ed.executor.executeCommand('get_ui_state', {})
+      return ui && ui.paragraph ? ui.paragraph.styleName : null
+    }, FIND_EDITOR)
+    if (!/Heading 1|标题 1/.test(String(after))) throw new Error('点了「标题 1」但引擎样式还是: ' + after)
+    // 换回正文，别让后面的保存链路步骤带着标题样式跑
+    await page.evaluate(async (finder) => {
+      const ed = eval(finder + '; findEditor()')
+      await ed.executor.executeCommand('set_style', { name: 'Standard' })
+    }, FIND_EDITOR)
+    console.log('      下拉可开可选：段落样式 → ' + after)
+  })
+
   await step('宿主执行器插入标记文本', async () => {
     const r = await page.evaluate(async (finder, marker) => {
       const ed = eval(finder + '; findEditor()')
@@ -832,6 +1007,64 @@ try {
     throw new Error('自动保存未确认(超时)；最后状态=' + JSON.stringify(last))
   })
 
+  // 拖拽建链（dev-board#171）：Electron 原生 DnD 把拖拽路由进 <webview> 客体，
+  // 宿主的 .libre-evidence-drop 对真实鼠标拖拽收不到 drop——修法是客体页
+  //（editor-main.js）代收并经 lo-relay 转发。这一步走的就是那条真 webview 链路：
+  // 选区（真 LOWA）→ 产品级 arming → **打进 webview 客体的 drop**（真 bundle 里的
+  // 代收 handler）→ sendToHost → 宿主建链（书签+超链接真写进引擎）→ POST → 回执条。
+  // 唯一合成的环节是 drop 事件本身（CDP 驱动不了 OS 级拖拽），事件之后的每一环
+  // 都与真实手势完全同路。
+  await step('拖拽建链：webview 客体代收转发全链路', async () => {
+    const src = await api('/api/projects/' + QA.projectId + '/files/file', {
+      method: 'POST',
+      body: { parentId: null, name: '拖拽建链源.txt', fileType: 'txt', fileSize: 8 },
+    })
+    // 真 LOWA 选区：锚定刚插入的标记文本
+    const sel = await page.evaluate(async (finder, marker) => {
+      const ed = eval(finder + '; findEditor()')
+      if (!ed) return { err: 'editor component not found' }
+      const ft = await ed.executor.executeCommand('find_text_locations', { keyword: marker })
+      if (!ft || !ft.matches || !ft.matches.length) return { err: 'find_text_locations 未命中' }
+      return await ed.executor.executeCommand('set_selection', { anchor: ft.matches[0].anchorId })
+    }, FIND_EDITOR, MARKER)
+    if (!sel || sel.success !== true) throw new Error('选区失败: ' + JSON.stringify(sel).slice(0, 150))
+    // 产品级 arming：与 FileTree.handleDragStart 同一副作用（uni 事件 + 全局兜底）
+    await page.evaluate((file) => {
+      document.__checkbaDraggedFile = { fileId: file.id, name: file.name, fileType: file.fileType }
+      uni.$emit('file-drag-start')
+    }, src)
+    await sleep(300)
+    // drop 打进 webview 客体（真实手势的命中目标就是它）；备胎 webview 没有宿主
+    // 订阅者，一并派发无害
+    const guests = browser.targets().filter((t) => t.type() === 'webview')
+    if (!guests.length) throw new Error('找不到 webview target')
+    for (const gt of guests) {
+      const gp = await gt.page()
+      await gp.evaluate(() => {
+        document.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+      }).catch(() => {})
+    }
+    // 回执条 + 后端落库双确认
+    let bar = null
+    for (let i = 0; i < 20; i++) {
+      await sleep(500)
+      bar = await page.evaluate(() => {
+        const el = document.querySelector('.evidence-bar')
+        return el ? { text: (el.innerText || '').slice(0, 120), isError: el.className.includes('is-error') } : null
+      })
+      if (bar) break
+    }
+    await page.evaluate(() => uni.$emit('file-drag-end'))
+    if (!bar) throw new Error('回执条未出现（客体代收转发断了）')
+    if (bar.isError) throw new Error('建链失败回执: ' + bar.text)
+    const files = await api('/api/projects/' + QA.projectId + '/files')
+    const docRow = (Array.isArray(files) ? files : []).find((f) => f.fileType === 'docx')
+    const links = await api('/api/projects/' + QA.projectId + '/evidence-links?docFileId=' + (docRow ? docRow.id : 0))
+    const arr = Array.isArray(links) ? links : (links && links.links) || (links && links.data) || []
+    if (!arr.length) throw new Error('后端无 evidence link 记录；links=' + JSON.stringify(links).slice(0, 200))
+    console.log('    回执=' + bar.text.split('\n')[0] + '；后端链接 ' + arr.length + ' 条')
+  })
+
   await step('API 下载 docx 验证内容落盘', async () => {
     const files = await api('/api/projects/' + QA.projectId + '/files')
     const list = Array.isArray(files) ? files : (files && files.data) || []
@@ -847,8 +1080,14 @@ try {
     console.log('    docx ' + buf.length + ' 字节，标记命中')
   })
 } finally {
+  try { await cleanupClipboardFixture() }
+  catch (e) { failed++; console.error('清理合成剪贴板记录失败：' + e.message) }
   try { if (site) site.close() } catch {}
-  try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
+  // 以前这里是空 catch：清理失败（后端瞬时不可达/DELETE 4xx 等）完全无声无息，
+  // QA_<timestamp> 项目连同真实生成的 docx 永久留在项目列表里，没有任何输出能
+  // 告诉维护者为什么、需要手动去清。至少打一行，让残留有迹可查。
+  try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) }
+  catch (e) { console.error('⚠️ 清理测试项目失败（' + QA.project + ' #' + QA.projectId + '）：' + e.message + '；需要手动去项目列表删除') }
   try { browser.disconnect() } catch {}
   killTree()
   await sleep(1500)

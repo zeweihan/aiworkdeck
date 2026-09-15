@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* 项目列表页样式。
  *
  * 来源：2026-08-08 从 pages/userprofile/userprofile.vue 的「我的项目」tab 整块搬出。
@@ -15,26 +17,17 @@
  * 配色守浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。
  */
 /* 品牌配色变量 - Updated to AI WorkDeck Palette */
-$brand-primary: #1A5336; /* Forest Green */
-$brand-accent: #5BD197;  /* Mint Green */
 $brand-dark: #212629;    /* Dark BG */
-$brand-bg: #F8F9FA;      /* Gray-Pale */
-$brand-white: #FFFFFF;
-$text-main: #2C3338;     /* Gray-Dark */
-$text-secondary: #6C757D;/* Gray-Medium */
-$text-light: #ADB5BD;
-$border-color: #E9ECEF;  /* Gray-Light */
-$danger-color: #E74C3C;
 
 
 /* 页面外壳。原 .page-userprofile（:1311-1327）与 .main-content（:1509-1515）改写：
    本页没有左侧个人信息栏，容器由两列改成单列，因此 .workbench-container 不搬。 */
 .page-project-list {
   min-height: 100vh;
-  background: linear-gradient(135deg, #F8F9FA 0%, #E8F3ED 100%);
+  background: linear-gradient(135deg, var(--awd-bg) 0%, var(--awd-halo-page) 100%);
   padding: 40px 24px;
   box-sizing: border-box;
-  color: $text-main;
+  color: var(--awd-text);
 }
 
 .project-list-container {
@@ -56,7 +49,7 @@ $danger-color: #E74C3C;
 /* .role-text：卡片角色徽章与原页面的个人信息卡共用，这里是复制，userprofile 那份别删 */
 .role-text {
   font-size: 12px;
-  color: $brand-primary;
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
@@ -67,14 +60,14 @@ $danger-color: #E74C3C;
     gap: 20px;
     align-items: center !important;
     margin-bottom: 24px;
-    border-bottom: 1px solid $border-color;
+    border-bottom: 1px solid var(--awd-border);
     padding-bottom: 16px;
 }
 
 .header-title {
     font-size: 20px;
     font-weight: 600;
-    color: $text-main;
+    color: var(--awd-text);
     flex: 0 0 auto;
 }
 
@@ -85,40 +78,21 @@ $danger-color: #E74C3C;
     margin-left: auto;
 }
 
-.btn-primary-small {
-    background: rgba(26, 83, 54, 0.08); /* Soft Green Background */
-    color: $brand-primary;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid rgba(26, 83, 54, 0.1);
-    cursor: pointer;
-    line-height: 1.5;
-    transition: all 0.2s;
-
-    &:hover {
-        background: $brand-primary;
-        color: white;
-        border-color: $brand-primary;
-    }
-}
-
 .btn-secondary-small {
-    background: #fff;
-    color: $text-light;
+    background: var(--awd-surface);
+    color: var(--awd-text-3);
     font-size: 13px;
     font-weight: 500;
     padding: 6px 12px;
     border-radius: 6px;
-    border: 1px solid $border-color;
+    border: 1px solid var(--awd-border);
     cursor: pointer;
     line-height: 1.5;
     transition: all 0.2s;
 
     &:hover {
-        border-color: $brand-primary;
-        color: $brand-primary;
+        border-color: var(--awd-accent);
+        color: var(--awd-accent-text);
     }
 }
 
@@ -130,12 +104,12 @@ $danger-color: #E74C3C;
 
 .cloud-accept-entry-text {
     font-size: 13px;
-    color: $text-light;
+    color: var(--awd-text-3);
     text-decoration: underline;
 }
 
 .cloud-accept-entry:hover .cloud-accept-entry-text {
-    color: $brand-primary;
+    color: var(--awd-accent-text);
 }
 
 /* 概览统计 */
@@ -148,27 +122,27 @@ $danger-color: #E74C3C;
 
 .stat-card {
   flex: 1;
-  background: $brand-white;
+  background: var(--awd-surface);
   border-radius: 12px;
   padding: 16px 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Softer shadow */
+  box-shadow: var(--awd-shadow-sm);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  border: 1px solid $border-color;
+  border: 1px solid var(--awd-border);
 }
 
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: $brand-primary;
+  color: var(--awd-accent-text);
   margin-bottom: 4px;
   font-family: 'Inter', sans-serif;
 }
 
 .stat-label {
   font-size: 13px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
 }
 
 /* 项目列表 Grid */
@@ -178,65 +152,57 @@ $danger-color: #E74C3C;
   gap: 24px;
 }
 
-/* Card Base Style */
+/* Card Base Style：白底、干净描边、悬停轻抬 + 柔和阴影（不做顶部色条、不做深色底） */
 .project-item-card {
-  background: $brand-white;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(18, 52, 77, 0.04);
+  background: var(--awd-surface);
+  border-radius: 12px;
+  box-shadow: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: all 0.2s ease;
-  border: 1px solid rgba(0,0,0,0.02);
+  transition: all 0.15s ease;
+  border: 1px solid var(--awd-border);
   position: relative;
   min-height: 200px;
 
   &:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 30px rgba(18, 52, 77, 0.1);
+    transform: translateY(-2px);
+    box-shadow: var(--awd-shadow-md);
+    border-color: var(--awd-border-strong);
   }
 }
 
-/* Card Variants */
+/* Card Variants：差异只落在类型徽章的浅色 tint 上，不再用顶部色条区分 */
 .card-style-restructuring {
-  border-top: 4px solid $brand-dark;
-  
-  .card-deco-header {
-      background: linear-gradient(90deg, rgba($brand-dark, 0.05), transparent);
-  }
   .project-type-badge-new {
-      background: rgba($brand-dark, 0.1);
-      color: $brand-dark;
+      background: var(--awd-surface-3);
+      color: var(--awd-text);
   }
   .info-val-new.highlight {
-      color: $brand-dark;
+      color: var(--awd-text);
       font-weight: 600;
   }
 }
 
 .card-style-refinancing {
-  border-top: 4px solid #2ecc71; /* Green for growth/money */
-
   .project-type-badge-new {
-      background: rgba(46, 204, 113, 0.1);
-      color: #27ae60;
+      background: var(--awd-accent-soft);
+      color: var(--awd-accent-text);
   }
   .info-val-new.highlight {
-      color: #27ae60;
+      color: var(--awd-accent-text);
       font-weight: 600;
   }
 }
 
 .card-style-blank {
-  border-top: 4px solid #e0e0e0;
-  
   .project-type-badge-new {
-      background: #f5f5f5;
-      color: #999;
+      background: var(--awd-surface-2);
+      color: var(--awd-text-3);
   }
   .project-title-new {
       font-weight: 500;
-      color: #666;
+      color: var(--awd-text-2);
   }
 }
 
@@ -245,14 +211,15 @@ $danger-color: #E74C3C;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    padding: 16px 20px 0;
+    padding: 16px 16px 0;
 }
 
+/* 卡头小号浅色 tinted 徽章 */
 .project-type-badge-new {
-    padding: 4px 10px;
+    padding: 3px 8px;
     border-radius: 6px;
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 600;
     display: inline-block;
 }
 
@@ -275,32 +242,32 @@ $danger-color: #E74C3C;
     
     &:hover {
         opacity: 1;
-        background: #f0f0f0;
+        background: var(--awd-bg);
     }
     
     &.danger:hover {
-        background: #fff5f5;
+        background: var(--awd-bg);
         color: red;
     }
 }
 
-/* Card Content */
+/* Card Content：间距体系 16/12/8 */
 .card-main-content {
-    padding: 16px 20px;
+    padding: 12px 16px 16px;
     flex: 1;
     display: flex;
     flex-direction: column;
 }
 
 .project-title-area {
-    margin-bottom: 16px;
-    min-height: 48px; /* Ensure alignment */
+    margin-bottom: 12px;
+    min-height: 44px; /* Ensure alignment */
 }
 
 .project-title-new {
-    font-size: 18px;
-    font-weight: 700;
-    color: $text-main;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--awd-text);
     line-height: 1.4;
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -308,16 +275,16 @@ $danger-color: #E74C3C;
     line-clamp: 2;
     overflow: hidden;
     cursor: pointer;
-    
+
     &:hover {
-        color: $brand-primary;
+        color: var(--awd-accent-text);
     }
 }
 
 .company-info-area {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
 }
 
 .info-row-new {
@@ -327,27 +294,29 @@ $danger-color: #E74C3C;
 }
 
 .info-label-new {
-    color: $text-light;
-    width: 70px;
+    color: var(--awd-text-2);
+    font-size: 12px;
+    width: 68px;
     flex-shrink: 0;
 }
 
 .info-val-new {
-    color: $text-secondary;
+    color: var(--awd-text);
+    font-size: 13px;
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-/* Footer */
+/* Footer：细分隔线隔开正文与卡脚 */
 .card-footer-new {
-    padding: 12px 20px;
-    border-top: 1px solid #f5f5f5;
+    padding: 12px 16px;
+    border-top: 1px solid var(--awd-border-subtle);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #fafbfc;
+    background: var(--awd-surface);
 }
 
 .members-area-new {
@@ -378,7 +347,7 @@ $danger-color: #E74C3C;
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    border: 1px solid #fff;
+    border: 1px solid var(--awd-surface);
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
@@ -386,13 +355,13 @@ $danger-color: #E74C3C;
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    background: #eef2f5;
-    color: #666;
+    background: var(--awd-bg);
+    color: var(--awd-text-2);
     font-size: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #fff;
+    border: 1px solid var(--awd-surface);
 }
 
 .member-remove-overlay {
@@ -401,7 +370,7 @@ $danger-color: #E74C3C;
     right: -2px;
     width: 12px;
     height: 12px;
-    background: #ff4d4f;
+    background: var(--awd-danger);
     color: white;
     border-radius: 50%;
     font-size: 10px;
@@ -420,8 +389,8 @@ $danger-color: #E74C3C;
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    border: 1px dashed #ccc;
-    color: #999;
+    border: 1px dashed var(--awd-border-strong);
+    color: var(--awd-text-3);
     font-size: 16px;
     display: flex;
     align-items: center;
@@ -429,8 +398,8 @@ $danger-color: #E74C3C;
     cursor: pointer;
     
     &:hover {
-        border-color: $brand-primary;
-        color: $brand-primary;
+        border-color: var(--awd-accent);
+        color: var(--awd-accent-text);
     }
 }
 
@@ -442,14 +411,14 @@ $danger-color: #E74C3C;
 
 .time-text-new {
     font-size: 12px;
-    color: #bbb;
+    color: var(--awd-text-3);
 }
 
 .enter-btn-arrow {
     width: 24px;
     height: 24px;
     background: $brand-dark;
-    color: #fff;
+    color: var(--awd-text-on-accent);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -468,19 +437,19 @@ $danger-color: #E74C3C;
 /* Dashed Empty State */
 .empty-state-dashed {
     height: 180px;
-    border: 2px dashed $border-color;
+    border: 2px dashed var(--awd-border);
     border-radius: 12px;
     display: flex;
     justify-content: center;
     align-items: center;
     cursor: pointer;
     transition: all 0.2s;
-    background: #fff;
+    background: var(--awd-surface);
 }
 
 .empty-state-dashed:hover {
-    border-color: $brand-accent;
-    background: rgba(91, 209, 151, 0.03);
+    border-color: var(--awd-mint);
+    background: var(--awd-accent-wash);
 }
 
 .dashed-content {
@@ -491,43 +460,39 @@ $danger-color: #E74C3C;
 
 .dashed-icon {
     font-size: 32px;
-    color: $text-light;
+    color: var(--awd-text-3);
     font-weight: 300;
 }
 
 .dashed-text {
     margin-top: 8px;
     font-size: 15px;
-    color: $text-secondary;
+    color: var(--awd-text-2);
 }
 
-/* Project Role Badge */
+/* Project Role Badge：弱化成浅色小 chip，不再描边 */
 .project-role-badge {
     margin-left: 8px;
-    padding: 2px 8px;
+    padding: 1px 7px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
 }
 .role-owner {
-    background: #e6f7ff;
-    color: #1890ff;
-    border: 1px solid #91d5ff;
+    background: var(--awd-bg);
+    color: var(--awd-info-text);
 }
 .role-admin {
-    background: #f6ffed;
-    color: #52c41a;
-    border: 1px solid #b7eb8f;
+    background: var(--awd-bg);
+    color: var(--awd-accent-text);
 }
 .role-client {
-    background: #fff0f6;
+    background: var(--awd-surface);
     color: #eb2f96;
-    border: 1px solid #ffadd2;
 }
 .role-member {
-    background: #f0f5ff;
-    color: #2f54eb;
-    border: 1px solid #adc6ff;
+    background: var(--awd-bg);
+    color: var(--awd-info-text);
 }
 
 /* Manager Avatar */
@@ -542,22 +507,22 @@ $danger-color: #E74C3C;
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    border: 1px solid #ffd700; /* Gold border for manager */
+    border: 1px solid var(--awd-warning); /* Gold border for manager */
 }
 .manager-avatar-img {
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    border: 1px solid #ffd700; /* Gold border for manager */
+    border: 1px solid var(--awd-warning); /* Gold border for manager */
     display: block; /* Eliminate font-size gap */
 }
 .manager-avatar-placeholder {
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    background: #fffbe6;
-    color: #faad14;
-    border: 1px solid #ffd700;
+    background: var(--awd-bg);
+    color: var(--awd-warning-text);
+    border: 1px solid var(--awd-warning);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -574,7 +539,7 @@ $danger-color: #E74C3C;
 .members-divider {
     width: 1px;
     height: 16px;
-    background: #e8e8e8;
+    background: var(--awd-surface-2);
     margin: 0 10px; /* Increased margin for better spacing */
     flex-shrink: 0; /* Prevent shrinking */
 }
@@ -599,20 +564,20 @@ $danger-color: #E74C3C;
 .members-vertical-divider {
     width: 1px;
     height: 18px;
-    background: #e8e8e8;
+    background: var(--awd-surface-2);
     margin: 0 12px;
 }
 
 .clients-group {
-    background: #fafafa;
+    background: var(--awd-bg);
     border-radius: 20px;
     padding: 2px 8px 2px 6px;
-    border: 1px dashed #e8e8e8;
+    border: 1px dashed var(--awd-border);
 }
 
 .client-group-label {
     font-size: 10px;
-    color: #999;
+    color: var(--awd-text-3);
     margin-right: 4px;
     font-weight: 500;
 }
@@ -623,9 +588,9 @@ $danger-color: #E74C3C;
 }
 
 .client-placeholder {
-    background: #fff0f6;
+    background: var(--awd-danger-soft);
     color: #eb2f96;
-    border-color: #ffadd2;
+    border-color: var(--awd-danger);
 }
 
 
@@ -655,7 +620,7 @@ $danger-color: #E74C3C;
 
 .loading-text {
   font-size: 14px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
 }
 
 /* CLIENT 的空态：没有「新建项目」可点，虚线框只作说明用，不做 hover 抬升 */
@@ -663,7 +628,7 @@ $danger-color: #E74C3C;
   cursor: default;
 
   &:hover {
-    border-color: $border-color;
+    border-color: var(--awd-border);
     background: transparent;
   }
 }
@@ -680,93 +645,91 @@ $danger-color: #E74C3C;
   }
 }
 
-/* ================= 新建区（列表下方） =================
-   2026-08 从 pages/newproject/index.vue 搬来的两个入口。放在列表下方而不是页头，
-   是维护者定的形制：先看见自己有哪些案卷，再谈新建。
+/* ================= 新建区（页头下方紧凑操作行） =================
+   2026-08 从 pages/newproject/index.vue 搬来的两个入口，此前落在列表最下方、
+   还是两张大灰卡；现在紧跟页头，一条紧凑的水平按钮行——「已经有一堆案卷、想再开
+   一个」与「零项目新用户」共用同一个入口，不必先扫完整页才看得见。
    「单独打开一个文件」那条已去掉——它造出的是个没有归属的临时项目。 */
 
 .create-section {
-    margin-top: 32px;
-    padding-top: 24px;
-    border-top: 1px solid $border-color;
-}
-
-.create-section-title {
-    display: block;
-    margin-bottom: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    color: $text-main;
+    margin-bottom: 20px;
 }
 
 .create-row {
     display: flex;
     flex-direction: row;
-    gap: 16px;
+    gap: 10px;
     flex-wrap: wrap;
 }
 
 .create-card {
-    flex: 1 1 260px;
-    min-width: 0;
     display: flex;
     flex-direction: row;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 18px 20px;
-    background: $brand-white;
-    /* 实线绿描边 + 淡绿底：这两张卡是这一页除了「打开某个案卷」之外最重的动作，
-       原先与页面其它容器同灰度，扫过去根本不像可以点的东西 */
-    border: 1px solid rgba(26, 83, 54, 0.22);
-    background: linear-gradient(180deg, rgba(91, 209, 151, 0.05) 0%, $brand-white 60%);
-    border-radius: 10px;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 9px;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s;
-
-    &:hover {
-        border-color: $brand-primary;
-        box-shadow: 0 6px 20px rgba(26, 83, 54, 0.12);
-        transform: translateY(-2px);
-    }
+    box-sizing: border-box;
+    transition: all 0.15s;
 
     &.is-busy {
         opacity: 0.55;
         cursor: default;
+        pointer-events: none;
+    }
+}
+
+/* 主操作：新建项目文件夹——实底强调，这是最常见的落点 */
+.create-card-primary {
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
+    border: 1px solid var(--awd-accent);
+
+    .create-glyph { color: var(--awd-text-on-accent); }
+
+    &:hover {
+        background: var(--awd-accent-hover);
+        border-color: var(--awd-accent);
+        transform: translateY(-1px);
+    }
+}
+
+/* 次操作：打开已有文件夹——白底描边 */
+.create-card-secondary {
+    background: var(--awd-surface);
+    color: var(--awd-text);
+    border: 1px solid var(--awd-border);
+
+    .create-glyph { color: var(--awd-accent-text); }
+
+    &:hover {
+        border-color: var(--awd-accent);
+        color: var(--awd-accent-text);
+        transform: translateY(-1px);
     }
 }
 
 .create-glyph {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
     flex-shrink: 0;
-    margin-top: 2px;
-    color: $brand-primary;
-}
-
-.create-text {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
 }
 
 .create-title {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
-    color: $text-main;
-}
-
-.create-desc {
-    font-size: 12px;
-    color: $text-secondary;
-    line-height: 1.5;
+    white-space: nowrap;
 }
 
 .create-busy-hint {
     display: block;
-    margin-top: 12px;
+    margin-top: 8px;
     font-size: 12px;
-    color: $text-secondary;
+    color: var(--awd-text-2);
 }
 
 /* 新建项目文件夹的命名弹窗（随流程一起从 newproject 页搬来） */
@@ -784,7 +747,7 @@ $danger-color: #E74C3C;
     width: 420px;
     max-width: calc(100vw - 48px);
     padding: 20px;
-    background: $brand-white;
+    background: var(--awd-surface);
     border-radius: 10px;
     box-shadow: 0 16px 44px rgba(18, 52, 77, 0.2);
     display: flex;
@@ -795,22 +758,22 @@ $danger-color: #E74C3C;
 .naming-title {
     font-size: 15px;
     font-weight: 600;
-    color: $text-main;
+    color: var(--awd-text);
 }
 
 .naming-location {
     font-size: 12px;
-    color: $text-secondary;
+    color: var(--awd-text-2);
     word-break: break-all;
 }
 
 .naming-input {
     height: 36px;
     padding: 0 12px;
-    border: 1px solid $border-color;
+    border: 1px solid var(--awd-border);
     border-radius: 6px;
     font-size: 13px;
-    color: $text-main;
+    color: var(--awd-text);
     box-sizing: border-box;
 }
 
@@ -819,6 +782,48 @@ $danger-color: #E74C3C;
     flex-direction: row;
     justify-content: flex-end;
     gap: 10px;
+}
+
+/* awd-btn：与 CloudAcceptDialog 同一套视觉语言，本页按自己的 px 单位约定复制一份
+   （awd-* 全站没有集中定义，各组件各自 scoped 一份是既有约定）。 */
+.awd-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+}
+
+.awd-btn-secondary {
+    background: var(--awd-surface);
+    color: var(--awd-text);
+    border-color: var(--awd-border);
+
+    &:hover {
+        border-color: var(--awd-accent);
+        color: var(--awd-accent-text);
+    }
+}
+
+.awd-btn-primary {
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
+    border-color: var(--awd-accent);
+
+    &:hover {
+        background: var(--awd-accent-hover);
+        border-color: var(--awd-accent);
+    }
+
+    &[disabled] {
+        opacity: 0.5;
+        cursor: default;
+    }
 }
 
 /* ===================== 视图切换与列表视图（2026-08-18） =====================
@@ -831,8 +836,8 @@ $danger-color: #E74C3C;
     align-items: center;
     gap: 2px;
     padding: 2px;
-    background: $brand-bg;
-    border: 1px solid $border-color;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
     border-radius: 8px;
 }
 
@@ -844,14 +849,14 @@ $danger-color: #E74C3C;
     justify-content: center;
     border-radius: 6px;
     cursor: pointer;
-    color: $text-light;
+    color: var(--awd-text-3);
     transition: all 0.15s;
 
-    &:hover { color: $brand-primary; }
+    &:hover { color: var(--awd-accent-text); }
 
     &.active {
-        background: $brand-white;
-        color: $brand-primary;
+        background: var(--awd-surface);
+        color: var(--awd-accent-text);
         box-shadow: 0 1px 2px rgba(18, 52, 77, 0.08);
     }
 }
@@ -861,41 +866,6 @@ $danger-color: #E74C3C;
     height: 16px;
 }
 
-/* 新建：唯一的实心主按钮。此前这一页最重的动作藏在列表底部两张同灰度的卡里，
-   页头只有两个同款次要按钮，「从哪儿开一个新案卷」得先找一遍。 */
-.btn-create-primary {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    background: $brand-primary;
-    color: $brand-white;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 7px 16px;
-    border-radius: 6px;
-    border: 1px solid $brand-primary;
-    cursor: pointer;
-    line-height: 1.5;
-    transition: all 0.2s;
-
-    &:hover {
-        background: #14432b;
-        border-color: #14432b;
-    }
-
-    &[disabled] {
-        opacity: 0.6;
-        cursor: default;
-    }
-}
-
-.btn-create-plus {
-    font-size: 14px;
-    font-weight: 600;
-    line-height: 1;
-}
-
 /* 卡片顶行：BLANK 项目不再渲染类型标签，留一个占位把删除键顶到右边 */
 .card-top-spacer {
     flex: 1;
@@ -903,8 +873,8 @@ $danger-color: #E74C3C;
 
 /* ---- 列表视图 ---- */
 .project-table {
-    background: $brand-white;
-    border: 1px solid $border-color;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 1px 3px rgba(18, 52, 77, 0.04);
@@ -921,11 +891,11 @@ $danger-color: #E74C3C;
 
 .ptable-head {
     height: 38px;
-    background: $brand-bg;
-    border-bottom: 1px solid $border-color;
+    background: var(--awd-bg);
+    border-bottom: 1px solid var(--awd-border);
 }
 
-/* 边框与悬停已上提到 .ptable-item（主行 + 详情行要连成一体），这里只管高度 */
+/* 边框与悬停挂在外层 .ptable-item 上，这里只管高度 */
 .ptable-row {
     min-height: 56px;
     cursor: pointer;
@@ -938,13 +908,13 @@ $danger-color: #E74C3C;
     gap: 8px;
     min-width: 0;
     font-size: 13px;
-    color: $text-main;
+    color: var(--awd-text);
 }
 
 .ptable-head .ptable-col {
     font-size: 12px;
     font-weight: 600;
-    color: $text-secondary;
+    color: var(--awd-text-2);
 }
 
 .col-name { flex: 2.2 1 0; }
@@ -961,7 +931,7 @@ $danger-color: #E74C3C;
 }
 
 .ptable-sub {
-    color: $text-secondary;
+    color: var(--awd-text-2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -996,93 +966,25 @@ $danger-color: #E74C3C;
 /* 客户列：档案里没填时显示的是推断值（客户成员 / 上市公司），得看得出区别，
    否则律师会以为那是自己填过的。填过的那份是普通样式，不加任何标记。 */
 .ptable-sub.is-inferred {
-    color: $text-light;
+    color: var(--awd-text-3);
 }
 
 .inferred-tag {
     flex-shrink: 0;
     padding: 1px 6px;
-    border: 1px solid $border-color;
+    border: 1px solid var(--awd-border);
     border-radius: 999px;
     font-size: 10px;
     line-height: 1.6;
-    color: $text-light;
+    color: var(--awd-text-3);
 }
 
-/* ---- 「详情」：档案里其余四项 ---- */
-.detail-toggle {
-    display: flex;
-    align-items: center;
-    height: 30px;
-    padding: 0 12px;
-    border: 1px solid $border-color;
-    border-radius: 8px;
-    background: $brand-white;
-    cursor: pointer;
-    transition: all 0.15s;
-
-    &:hover { border-color: $brand-primary; }
-
-    &.active {
-        border-color: $brand-primary;
-        background: rgba(26, 83, 54, 0.06);
-    }
-}
-
-.detail-toggle-text {
-    font-size: 13px;
-    font-weight: 500;
-    color: $text-secondary;
-}
-
-.detail-toggle.active .detail-toggle-text {
-    color: $brand-primary;
-}
-
-/* 一行案卷 = 主行 + 可选详情行；边框与悬停挂在外层，两行才连成一体 */
+/* 一行案卷 = 主行；边框与悬停挂在外层 .ptable-item 上 */
 .ptable-item {
-    border-bottom: 1px solid #F4F6F5;
+    border-bottom: 1px solid var(--awd-border-subtle);
     cursor: pointer;
     transition: background 0.15s;
 
     &:last-child { border-bottom: none; }
-    &:hover { background: rgba(26, 83, 54, 0.03); }
-}
-
-.ptable-detail {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 18px;
-    padding: 0 20px 12px;
-    /* 与主行的名称列左缘对齐：扫读时详情是「这一行的补充」，不是新的一列 */
-    margin-top: -4px;
-}
-
-.detail-chip {
-    display: flex;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 6px;
-    min-width: 0;
-}
-
-.detail-chip-label {
-    flex-shrink: 0;
-    font-size: 11px;
-    color: $text-light;
-}
-
-.detail-chip-value {
-    font-size: 12px;
-    color: $text-secondary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* 「下一步」常常是一整句话：让它吃掉整行剩余宽度，别把前面几项挤没 */
-.detail-chip:last-child .detail-chip-value {
-    max-width: 520px;
+    &:hover { background: var(--awd-accent-wash); }
 }

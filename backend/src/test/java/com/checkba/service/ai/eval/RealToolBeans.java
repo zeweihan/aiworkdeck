@@ -1,21 +1,35 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.eval;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
+import com.checkba.service.ai.tools.DdExportTools;
+import com.checkba.service.ai.tools.DocumentAuditTools;
 import com.checkba.service.ai.tools.DocumentEditTools;
 import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
 import com.checkba.service.ai.tools.EnterpriseDataTools;
 import com.checkba.service.ai.tools.LegalTools;
+import com.checkba.service.ai.tools.LitigationTimelineTools;
 import com.checkba.service.ai.tools.LitigationVisualTools;
 import com.checkba.service.ai.tools.MeetingTools;
 import com.checkba.service.ai.tools.MemoryTools;
 import com.checkba.service.ai.tools.OfficeEditTools;
+import com.checkba.service.ai.tools.ContributedTemplateTools;
 import com.checkba.service.ai.tools.PdfTools;
+import com.checkba.service.ai.tools.CapabilityTools;
+import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
+import com.checkba.service.ai.tools.TagTools;
+import com.checkba.service.ai.tools.TaskTools;
+import com.checkba.service.ai.tools.TemplateTools;
+import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
 import com.checkba.service.ai.tools.WebTools;
+import com.checkba.service.ai.tools.WebVerifyTools;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
@@ -40,25 +54,36 @@ final class RealToolBeans {
     /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
+                CapabilityTools.class,
+                ContributedTemplateTools.class,
+                DdExportTools.class,
+                DocumentAuditTools.class,
                 DocumentEditTools.class,
                 EnterpriseDataTools.class,
                 EvidenceTools.class,
                 FileTools.class,
                 LegalTools.class,
+                LitigationTimelineTools.class,
                 LitigationVisualTools.class,
                 MeetingTools.class,
                 MemoryTools.class,
                 OfficeEditTools.class,
                 PdfTools.class,
+                PluginDevTools.class,
                 PptxTools.class,
                 PythonTools.class,
                 SubAgentTools.class,
+                TextFileEditTools.class,
                 // TodoTools 长期漏列：todo_write 在整个回放评测里根本没注册，
                 // 于是「skill 命中时清单工具是否可见」这类断言写了也是空的（工具名不存在，
                 // offeredToolsInclude 永远失败、offeredToolsExclude 永远通过）。
                 // 补进来后 skill-orchestration-tools-not-trimmed 才真正有意义。
                 TodoTools.class,
-                WebTools.class);
+                TagTools.class,
+                TaskTools.class,
+                TemplateTools.class,
+                WebTools.class,
+                WebVerifyTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();
         for (Class<? extends AgentToolComponent> type : toolClasses) {
             beans.add(instantiate(type));

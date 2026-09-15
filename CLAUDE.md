@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Spring 后端（backend/）+ uni-app/Vue3 前端（frontend/）+ Electron 桌面壳（desktop/），文档编辑器为 LibreOffice WASM（代号 LOWA/zetaoffice），另有 pptx/mineru/kokoro/easyvoice 附属服务。
+AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Spring 后端（backend/）+ uni-app/Vue3 前端（frontend/）+ Electron 桌面壳（desktop/），文档编辑器为 LibreOffice WASM（代号 LOWA/zetaoffice），另有 pptx/mineru/kokoro 附属服务。
 
 ## 领域文档路由表（先读文档，再动代码）
 
@@ -10,6 +10,7 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 |---|---|
 | AI 对话、编排器、工具注册、记忆、SSE 流、评测 | `.claude/agents/ai-chat.md` |
 | doc_* 编辑原语、AI 改文档、修订（redline）、检查点、EDITOR_ACTIONS | `.claude/agents/ai-doc-bridge.md` |
+| 文档「解析」、依据窗格、实体抽取与外部库检索（企查查/法宝）、文档内部一致性校验 | `.claude/agents/doc-insight.md` |
 | LOWA/zetaoffice 编辑器、字体、IME、保活、自动保存、.uno: 命令 | `.claude/agents/doc-editor.md` |
 | 浏览器面板、截图、剪贴板、收藏夹、搜索、下载、语音、文件预览/插入、OCR | `.claude/agents/utility-tools.md` |
 | 左侧栏、工作台布局、页面路由、面板切换、设置入口、project-overview.vue 结构 | `.claude/agents/sidebar-shell.md` |
@@ -21,6 +22,7 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 | 构建、发版、CI、测试体系、本地开发启动 | `.claude/agents/eng-infra.md` |
 | 版本记录、工作段、时间线、退回、Git 仓库 | `.claude/agents/version-control.md` |
 | 反馈浮窗、反馈落库、优化者（分诊/开 PR/发邮件）、后台反馈看板 | `.claude/agents/feedback-optimizer.md` |
+| 手机端同步：项目目录镜像、现场影像云中转（/api/mobile/*）、桥接认领手机号、iOS/小程序客户端 | `.claude/agents/mobile-sync.md` |
 
 这些文件同时是可派遣的 sub-agent 定义：需要并行探查或委托领域内工作时，可直接用对应 agent 类型派子任务。
 
@@ -36,4 +38,21 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 - 本机跑 `mvn` 必须 JDK 21（系统默认 25 会 SIGBUS）。
 - 前端包管理用 npm（不是 pnpm）。
 - 版本号单一来源是 `desktop/package.json`。
+- **能切分的活派出去并行做，按档位选模型**：探查、审计、批量改造、跨文件盘点这类
+  能拆成独立单点的工作，默认派 subagent / Workflow 并行，别一条线从头读到尾。
+  派的时候**逐个 agent 评档**：
+  - 机械且可被机器校验兜底的（读文件、grep、按模板改、清单盘点、翻译搬运）→
+    显式传 `model: 'sonnet'` + 低 effort，不要默认继承主会话模型；
+  - **本身是校验层或裁决层的**（对抗式复核、质量裁决、改模型行为的 prompt 工作、
+    带契约地雷的高风险文件）→ 才用主模型。
+  省钱不许省到质量上——**复现问题、「还原病灶即转红」的空断言校验、最终定稿**
+  这三步永远自己做，不外包给弱模型：误报改坏正常代码比漏修更贵。
+  并发也要压着点：2026-08-20 那轮五个 workflow 同时跑撞了服务端限流，
+  约 120 个子 agent 白跑。
 - **三个 project-\* 路由同名不同物**：`pages/project-overview/project-overview` 在代码里指**工作台**（四列干活界面，刻意不改名）；产品语言里的「项目概览」现在是工作台里的一个标签（内容组件 `components/project-home/ProjectHomePane.vue`），`pages/project-home/project-home` 退成只服务直链的薄壳页；「项目列表页」是 `pages/project-list/project-list`，也是启动的唯一落点。写代码以路由为准，写文案以本条为准。导航总规则：凡是工作台参与的跳转一律 `reLaunch`，工作台之外的页面之间用 `navigateTo`（同级页面如设置⇄个人中心用 `redirectTo`，压栈会互相弹成死循环）。详见 `.claude/agents/sidebar-shell.md` 的术语表。
+- **溯源与许可声明（dev-board#505，规范见 `docs/superpowers/specs/2026-09-09-provenance-license-compliance-design.md`）**：
+  新建的一方源文件一律带 SPDX 双行头（`SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors` + `SPDX-License-Identifier: AGPL-3.0-or-later`），CI 的 `scripts/check-spdx.mjs` 只查新增文件。
+  引入第三方代码同一个 PR 里补 `UPSTREAM.md`，上游许可头一字不改。
+  **不要提议「统一命名 / 清理历史前缀」**：`com.checkba.*` 包根、`--awd-` 令牌、`checkba://` scheme、`X-AWD-*` 提交尾注、插件握手 `awd: 1`、桌面端口链 `[5269, 5369, 5169]`、文档锚点 `__ai_anchor_` 都是写进用户产物或第三方插件的公开契约，有字面量断言测试守着，看不懂的常量先问再动。
+  设置页 / Office 与 WPS 任务窗格 / 桌面 About 的许可告示与后端 `X-Source-Code` 响应头是 AGPL 要求的告示，不许删、不许做成强制 logo。
+  硬红线：不新增任何未在 `legal/PRIVACY.md` 声明的出站请求，不做隐蔽回传、混淆、魔数水印、故意 bug 陷阱。

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const path = require('path')
 const net = require('net')
 const fs = require('fs')
@@ -53,7 +55,7 @@ function findFreePort() {
  *   commands: (ctx) => [{cmd, args, env, cwd}]           // 候选命令，按序轮试
  *   moreCommandsAfterFailure?: (ctx) => [{...}]          // 首个候选失败后追加（系统 JDK 回退）
  * }
- * ctx = { packaged, resourcesPath, dataDir, projectRoot, ports }
+ * ctx = { packaged, appVersion, resourcesPath, dataDir, projectRoot, ports }
  */
 class ServiceManager {
   constructor(ctx) {
@@ -120,7 +122,11 @@ class ServiceManager {
     if (postPrepare === 'foreign') throw new Error(`${name} port ${port} 被未知进程占用`)
     if (this.procs.get(name)) await this.stop(name)
 
-    const timeoutMs = d.startTimeoutMs(this.ctx)
+    let timeoutMs = d.startTimeoutMs(this.ctx)
+    // Windows-on-ARM 转译环境（Mac 虚拟机等）：x64 JVM/Python 首启慢一个数量级，
+    // 60 秒级看门狗会把还在预热的进程杀在半路进入杀-重试死循环（dev-board#340）。
+    // 统一放大等待窗口，而不是各服务自己猜。
+    if (this.ctx.winEmulated) timeoutMs *= 8
     // 关闭上一次 start 遗留的日志流，避免每次重启/崩溃-重启累积文件描述符泄漏
     const prevStream = this.logStreams.get(name)
     if (prevStream) { try { prevStream.end() } catch (e) { /* ignore */ } this.logStreams.delete(name) }
@@ -189,17 +195,20 @@ class ServiceManager {
     })
   }
 
+  // 并行拉起所有 eager 服务。端口已在 allocatePorts 统一分配好，服务之间没有
+  // "谁先监听"的启动时序依赖（pptx 只是把 mineru 端口写进环境变量，不要求 mineru
+  // 已经监听），逐个 await 纯粹是白白把首启时间叠加起来。单个服务失败互不影响，
+  // 语义与原来串行版本一致：results 里每个 name 各自 {ok, error}。
   async startEager() {
     const results = {}
-    for (const d of this.descriptors.values()) {
-      if (!d.eager) continue
+    const eagerNames = [...this.descriptors.values()].filter((d) => d.eager).map((d) => d.name)
+    await Promise.all(eagerNames.map(async (name) => {
       try {
-        // eslint-disable-next-line no-await-in-loop
-        results[d.name] = await this.start(d.name)
+        results[name] = await this.start(name)
       } catch (e) {
-        results[d.name] = { ok: false, error: String(e && e.message ? e.message : e) }
+        results[name] = { ok: false, error: String(e && e.message ? e.message : e) }
       }
-    }
+    }))
     return results
   }
 
@@ -209,26 +218,32 @@ class ServiceManager {
     this.procs.delete(name)
     return new Promise((resolve) => {
       let finished = false
+      let killTimer = null
       const done = () => {
         if (finished) return
         finished = true
+        // 进程已经退了就把强杀定时器撤掉：原来这个 setTimeout 从不取消，每停一次服务
+        // 就留一个 3 秒的悬挂句柄（退出路径上还会把事件循环多吊住 3 秒）
+        if (killTimer) { clearTimeout(killTimer); killTimer = null }
         resolve({ ok: true })
       }
       p.once('exit', () => done())
       try { p.kill('SIGTERM') } catch (e) { done(); return }
-      // 兜底：3s 后强杀
-      setTimeout(() => {
+      // 兜底：3s 后强杀。这个窗口刻意不缩小——后端的 H2 库就落在 ~/.aiworkdeck/local.mv.db，
+      // 缩窗只会提高硬杀概率，而后端关闭的真实阻塞点至今没定位（dev-board#602）。
+      killTimer = setTimeout(() => {
         try { p.kill('SIGKILL') } catch (e) { /* ignore */ }
         done()
       }, 3000)
     })
   }
 
+  // 并行停所有服务。各服务之间没有停止顺序依赖（端口、数据目录都各管各的），
+  // 逐个 await 只是把每个服务最坏 3 秒的强杀兜底线性叠加起来：退出时后端一个人
+  // 装死就够让「⌘Q 到应用消失」拖成 6 秒，用户看着一个还能点的窗口，最后整个应用
+  // 在同一瞬间消失——观感与闪退不可区分（dev-board#602）。
   async stopAll() {
-    for (const name of [...this.procs.keys()]) {
-      // eslint-disable-next-line no-await-in-loop
-      await this.stop(name)
-    }
+    await Promise.all([...this.procs.keys()].map((name) => this.stop(name)))
     // 退出/全停时关闭所有日志流，释放 fd
     for (const [, s] of this.logStreams) { try { s.end() } catch (e) { /* ignore */ } }
     this.logStreams.clear()

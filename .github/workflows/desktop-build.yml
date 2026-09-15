@@ -17,6 +17,10 @@ on:
       # Without this, the first-run wizard (PR #25, frontend-only) shipped to
       # v0.2.0 having never been validated inside an installer. See issue #27.
       - 'frontend/**'
+      # pptx-service 的源码由 prepare-python-service.js 原样打进安装包，
+      # requirements.lock 决定它的依赖闭包——改这里不跑桌面打包冒烟，
+      # re-vendor 之类的整包替换就没有任何 CI 覆盖。
+      - 'pptx-service/**'
 
 # The "Attach to GitHub Release" step (softprops/action-gh-release) creates the
 # release for a v* tag, which needs write access to repository contents. The
@@ -56,6 +60,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 全量历史：Detect drawio changes 需要拿 PR base / push before 做 diff
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -80,7 +87,7 @@ jobs:
           # tooltips + FS/callMain exports. Hosted on the project site (versioned,
           # immutable; wasm/data served brotli so the installer stays small).
           # Unset -> upstream CDN (English UI). Build recipe: desktop/lowa-build/.
-          LOWA_BASE_URL: https://www.aiworkdeck.com/lowa-engine/24.2.8-zhcn-r4/
+          LOWA_BASE_URL: https://www.aiworkdeck.com/lowa-engine/24.2.8-zhcn-r5/
         run: |
           # Track A (Epic #43): download the LibreOffice WASM runtime (soffice.*)
           # into dist/zetaoffice/lowa and an OFL-licensed CJK font (Noto Sans SC)
@@ -91,205 +98,155 @@ jobs:
           # first and falls back to the CDN only for anything not bundled.
           node desktop/scripts/fetch-lowa-assets.js
           ls -la frontend/dist/zetaoffice/lowa frontend/dist/zetaoffice/cjk.ttc
-      - name: Bake draw.io editor into the frontend bundle (offline)
-        shell: bash
-        run: |
-          # 诉讼可视化出的 .drawio 是唯一可继续编辑的版本；内嵌 draw.io 让它在应用内
-          # 直接打开，而不是变成必须装别的软件才能用的死文件。官方只发 draw.war
-          # （53 MB / 解开 151 MB），脚本裁到主编辑器 + 默认图形 + 中英文案，约
-          # 40 MB 落盘。运行期完全离线（stealth=1），案件材料不出网。
-          node desktop/scripts/fetch-drawio-assets.js
-          ls -la frontend/dist/drawio/index.html frontend/dist/drawio/js/app.min.js
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
+      - name: Detect drawio changes (skip drawio tests when untouched)
+        shell: bash
+        run: |
+          # drawio-server 测试要真起 HTTP 服务 + 真读写 Temp 目录，是 Windows
+          # runner 上 Defender 锁文件 EPERM（hookFailed）与步骤卡死的主要来源
+          #（dev-board#146；v0.25.1/#609/v0.26.0 三个发版 run 都被咬过）。
+          # 本区间没碰 drawio 服务/测试/资源脚本就整套跳过（测试文件内识别
+          # SKIP_DRAWIO_TESTS=1）；tag 发版与手动触发永远全量跑。
+          SKIP=0
+          if [[ "$GITHUB_REF" == refs/tags/* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "tag/manual trigger: full suite"
+          else
+            BASE=""
+            [ "$GITHUB_EVENT_NAME" = "pull_request" ] && BASE="${{ github.event.pull_request.base.sha }}"
+            [ "$GITHUB_EVENT_NAME" = "push" ] && BASE="${{ github.event.before }}"
+            if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              CHANGED=$(git diff --name-only "$BASE...$GITHUB_SHA" -- \
+                desktop/main/drawio-server.js \
+                desktop/tests/drawio-server.test.js \
+                desktop/scripts/fetch-drawio-assets.js)
+              if [ -z "$CHANGED" ]; then
+                echo "drawio untouched since $BASE — skipping drawio-server tests"
+                SKIP=1
+              else
+                echo "drawio files changed:"; echo "$CHANGED"
+              fi
+            else
+              echo "no usable base commit ($BASE) — full suite"
+            fi
+          fi
+          [ "$SKIP" = "1" ] && echo "SKIP_DRAWIO_TESTS=1" >> "$GITHUB_ENV"
+          echo "drawio tests: $([ "$SKIP" = "1" ] && echo SKIPPED || echo FULL)"
+      # Windows runner 上 Defender 实时扫描会给刚落盘的临时文件加排他句柄，
+      # drawio-server 测试的 t.after 删临时目录时报 EPERM（hookFailed），
+      # 断言全过、只有清理失败，却把整个发版拦下——v0.25.1/#609/v0.26.0/v0.27.5/v0.28.0
+      # 都被咬过（dev-board#146）。PR 上靠「没碰 drawio 就跳过」绕开了，
+      # 而 tag 发版永远全量跑，于是这个坑专挑发版咬。
+      #
+      # 这一步直接治病根：把 runner 的 Temp 目录加进 Defender 排除项。
+      # **失败不许中断构建**（|| true）：部分 runner 镜像本来就禁用了 Defender，
+      # 或者不给加排除项——那种情况下退回测试侧的 EPERM 兜底（drawio-server.test.js
+      # 的 rmrf），不该因为"加排除项没成功"就把发版拦了。
+      - name: Exclude runner Temp from Defender (Windows EPERM guard)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction Stop
+            Add-MpPreference -ExclusionPath $env:TEMP -ErrorAction Stop
+            Write-Host "Defender exclusions added: $env:RUNNER_TEMP ; $env:TEMP"
+          } catch {
+            Write-Host "Defender exclusion not applied (harmless): $($_.Exception.Message)"
+          }
       - name: Desktop unit tests
         working-directory: desktop
+        # drawio 测试曾在 Windows 上锁死 110 分钟不退出（v0.26.0 首发 run）：
+        # 正常全量 ≤5 分钟，给 3 倍预算快挂，别再拖到 job 默认 6 小时上限。
+        timeout-minutes: 15
         run: npm test
       - name: Bundle backend (macOS arm64)
         if: runner.os == 'macOS'
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.path }}
         run: |
+          # 插件宿主 SPI 是本仓独立工程，不在远端仓库：先 install 再打 backend
+          mvn -B -q -f backend/plugin-api/pom.xml install
           # Apple Silicon only（2026-07-03 决策放弃 Intel Mac）：单 arm64 jar + arm64 JRE
           mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/mac-arm64
       # ──────────────────────────────────────────────────────────────
-      # Python 运行时 / 各 pysvc / graphviz 的缓存。
+      # Python 运行时 / graphviz 的缓存。
       #
-      # 这几样只由 requirements.lock 与打包脚本决定，与本次提交的代码无关，
-      # 但过去每个 PR 都从零重装一遍（实测 Windows 上 mineru 111s + kokoro 98s +
-      # pptx 60s + asr 22s + graphviz 43s ≈ 5.6 分钟纯浪费）。
+      # 0.38.0 起四个 Python 服务的 lib/app 不再进安装包（设计 §3）：它们由
+      # pack-release.yml 各自打成 native pack，这里只烙一份 CPython 解释器——
+      # litviz 与四个 runtime pack 共用它。缓存内容随之只剩 python/ 与 graphviz/。
       #
       # **必须放在「Bundle backend」之后**：prepare-backend.js 会
       # `rmSync(outDir, {recursive:true})` 清空整个 bundled/<plat>，
       # 放在它之前恢复的缓存会被当场抹掉。
       #
       # key 里带打包脚本自身的哈希：脚本改了（比如换 Python 版本）就该重装。
+      # 各服务源码与 requirements.lock 不再进 key——它们已经不影响这里的产物了
+      #（dev-board#74 那条门禁随被守护的步骤一起作废，见 workflow-release-gating 用例）。
       # 开头的 v1 是人工盐——graphviz 来自 choco/brew，上游版本不体现在任何文件哈希里，
       # 想强制取新版就把它 +1。
       # ──────────────────────────────────────────────────────────────
-      - name: Cache python runtime / pysvc / graphviz (mac-arm64)
+      - name: Cache python runtime / graphviz (mac-arm64)
         id: cache-pybundle-mac
         if: runner.os == 'macOS'
         uses: actions/cache@v4
         with:
           path: |
             desktop/bundled/mac-arm64/python
-            desktop/bundled/mac-arm64/pysvc
             desktop/bundled/mac-arm64/graphviz
-          key: v1-mac-arm64-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
+          key: v1-mac-arm64-pybundle-${{ hashFiles('desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
 
-      - name: Bundle pptx-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+      - name: Bundle CPython runtime (macOS arm64)
+        # 运行时随包（litviz 与四个 runtime pack 共用它，设计 §3.1）；服务的 lib/app 不再进包。
         if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service pptx-service \
-            --src pptx-service/backend \
-            --requirements pptx-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-      - name: Bundle mineru-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 纯 pip 包服务（无 --src）；模型不进包，首启在「组件管理」下载
-          node desktop/scripts/prepare-python-service.js \
-            --service mineru-service \
-            --requirements mineru-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-          du -sh desktop/bundled/mac-arm64/pysvc/mineru-service/lib
-      - name: Bundle kokoro-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 本地 TTS 包装层（Phase 3）：模型不进包，首启在「组件管理」下载
-          node desktop/scripts/prepare-python-service.js \
-            --service kokoro-service \
-            --src kokoro-service \
-            --requirements kokoro-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-          du -sh desktop/bundled/mac-arm64/pysvc/kokoro-service/lib
-      - name: Bundle asr-service (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 本地 ASR 包装层（P3）：模型不进包（1.5GB），首启在「组件管理」下载
-          node desktop/scripts/prepare-python-service.js \
-            --service asr-service \
-            --src asr-service \
-            --requirements asr-service/requirements.lock \
-            --out desktop/bundled/mac-arm64
-          du -sh desktop/bundled/mac-arm64/pysvc/asr-service/lib
-      - name: Bundle graphviz (macOS arm64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
-        run: |
-          # 诉讼可视化的流程图布局要 graphviz 的 dot（其余六种布局零原生依赖）。
-          # 只带布局引擎、不带任何渲染后端（我们只用 -Tplain），闭包约 4 MB。
-          brew install graphviz
-          # 不传 --from：脚本从 PATH 上找 dot 反推安装根，省得写死安装目录
-          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/mac-arm64
+        run: node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/mac-arm64
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.path }}
         run: |
+          mvn -B -q -f backend/plugin-api/pom.xml install
           mvn -B -q -DskipTests -Djavacpp.platform=windows-x86_64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/win-x64
       # ──────────────────────────────────────────────────────────────
-      # Python 运行时 / 各 pysvc / graphviz 的缓存。
+      # Python 运行时 / graphviz 的缓存。
       #
-      # 这几样只由 requirements.lock 与打包脚本决定，与本次提交的代码无关，
-      # 但过去每个 PR 都从零重装一遍（实测 Windows 上 mineru 111s + kokoro 98s +
-      # pptx 60s + asr 22s + graphviz 43s ≈ 5.6 分钟纯浪费）。
+      # 0.38.0 起四个 Python 服务的 lib/app 不再进安装包（设计 §3）：它们由
+      # pack-release.yml 各自打成 native pack，这里只烙一份 CPython 解释器——
+      # litviz 与四个 runtime pack 共用它。缓存内容随之只剩 python/ 与 graphviz/。
       #
       # **必须放在「Bundle backend」之后**：prepare-backend.js 会
       # `rmSync(outDir, {recursive:true})` 清空整个 bundled/<plat>，
       # 放在它之前恢复的缓存会被当场抹掉。
       #
       # key 里带打包脚本自身的哈希：脚本改了（比如换 Python 版本）就该重装。
+      # 各服务源码与 requirements.lock 不再进 key——它们已经不影响这里的产物了
+      #（dev-board#74 那条门禁随被守护的步骤一起作废，见 workflow-release-gating 用例）。
       # 开头的 v1 是人工盐——graphviz 来自 choco/brew，上游版本不体现在任何文件哈希里，
       # 想强制取新版就把它 +1。
       # ──────────────────────────────────────────────────────────────
-      - name: Cache python runtime / pysvc / graphviz (win-x64)
+      - name: Cache python runtime / graphviz (win-x64)
         id: cache-pybundle-win
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
           path: |
             desktop/bundled/win-x64/python
-            desktop/bundled/win-x64/pysvc
             desktop/bundled/win-x64/graphviz
-          key: v1-win-x64-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
+          key: v1-win-x64-pybundle-${{ hashFiles('desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
 
-      - name: Bundle pptx-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+      - name: Bundle CPython runtime (Windows x64)
+        # 运行时随包（litviz 与四个 runtime pack 共用它，设计 §3.1）；服务的 lib/app 不再进包。
         if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service pptx-service \
-            --src pptx-service/backend \
-            --requirements pptx-service/requirements.lock \
-            --out desktop/bundled/win-x64
-      - name: Bundle mineru-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service mineru-service \
-            --requirements mineru-service/requirements.lock \
-            --out desktop/bundled/win-x64
-          du -sh desktop/bundled/win-x64/pysvc/mineru-service/lib
-      - name: Bundle kokoro-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service kokoro-service \
-            --src kokoro-service \
-            --requirements kokoro-service/requirements.lock \
-            --out desktop/bundled/win-x64
-          du -sh desktop/bundled/win-x64/pysvc/kokoro-service/lib
-      - name: Bundle asr-service (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          node desktop/scripts/prepare-python-service.js \
-            --service asr-service \
-            --src asr-service \
-            --requirements asr-service/requirements.lock \
-            --out desktop/bundled/win-x64
-          du -sh desktop/bundled/win-x64/pysvc/asr-service/lib
-      - name: Bundle graphviz (Windows x64)
-        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
-        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          # 同 macOS 那步。Windows 上 DLL 在 exe 同目录解析，不需要重定位，
-          # 整份 bin/ 拷走即可（约几 MB）。
-          # chocolatey 社区源对 CI runner 限流严重（v0.15.0 发版 PR 连续两次 503），
-          # 带退避重试，五次全 503 才算真挂。
-          for attempt in 1 2 3 4 5; do
-            choco install graphviz --no-progress -y && break
-            [ "$attempt" = "5" ] && { echo "choco 重试耗尽"; exit 1; }
-            echo "choco install 第 $attempt 次失败（多半是社区源 503），$((attempt * 30))s 后重试"
-            sleep $((attempt * 30))
-          done
-          # choco 装完不会刷新当前 shell 的 PATH，手动补上再让脚本从 PATH 找 dot。
-          # 不写 "/c/Program Files/..." 是因为这步跑在 bash 里，而脚本是 Node：
-          # Node 在 Windows 上不认 git-bash 风格路径，会解成 C:\c\Program Files\...
-          export PATH="/c/Program Files/Graphviz/bin:$PATH"
-          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/win-x64
+        run: node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/win-x64
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
         env:
@@ -352,115 +309,19 @@ jobs:
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
           exit 1
-      - name: Smoke test bundled pptx-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 用烙好的运行时按打包态同款方式拉起：先 alembic 迁移，后起服务，验 /health
-          export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"
-          mkdir -p "$PPTX_DATA_DIR"
-          APP="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/app"
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/lib"
-          (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
-          PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
-          PPTX_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf http://127.0.0.1:5099/health; then
-              echo; echo "pptx-service up after ~$((i*2))s"
-              kill $PPTX_PID
-              exit 0
-            fi
-          done
-          echo "pptx-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/pptx-smoke.log"
-          kill $PPTX_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled mineru-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 无模型拉起（模型解析时懒加载，/docs 不依赖模型——本地实测约 4s 就绪）
-          export MDIR="$RUNNER_TEMP/mineru-data"
-          mkdir -p "$MDIR"
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/mineru-service/lib"
-          MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope \
-            MODELSCOPE_CACHE="$MDIR" HF_HOME="$MDIR/hf" MINERU_TOOLS_CONFIG_JSON="$MDIR/mineru.json" \
-            "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/mineru-smoke.log" 2>&1 &
-          MINERU_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf -o /dev/null http://127.0.0.1:8098/docs; then
-              echo "mineru-service up after ~$((i*2))s"
-              kill $MINERU_PID
-              exit 0
-            fi
-          done
-          echo "mineru-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/mineru-smoke.log"
-          kill $MINERU_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled kokoro-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 无模型拉起（模型懒加载，/health 与 voices 不依赖模型）
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          APP="$PWD/desktop/bundled/mac-arm64/pysvc/kokoro-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/kokoro-service/lib"
-          PORT=8881 "$PY" "$APP/app.py" > "$RUNNER_TEMP/kokoro-smoke.log" 2>&1 &
-          KOKORO_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8881/health && curl -sf http://127.0.0.1:8881/v1/audio/voices | grep -q zf_001; then
-              echo; echo "kokoro-service up after ~$((i*2))s"
-              kill $KOKORO_PID
-              exit 0
-            fi
-          done
-          echo "kokoro-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
-          kill $KOKORO_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled asr-service (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 无模型拉起。/health 断言 modelReady=false 是这条冒烟的重点：
-          # 「服务起着但模型没下」必须是一个能被观测到的状态，界面的下载引导全靠它
-          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
-          APP="$PWD/desktop/bundled/mac-arm64/pysvc/asr-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/asr-service/lib"
-          export HF_HOME="$RUNNER_TEMP/asr-empty-home"
-          PORT=8891 "$PY" "$APP/app.py" > "$RUNNER_TEMP/asr-smoke.log" 2>&1 &
-          ASR_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8891/health | grep -q '"modelReady":false'; then
-              echo; echo "asr-service up after ~$((i*2))s"
-              kill $ASR_PID
-              exit 0
-            fi
-          done
-          echo "asr-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/asr-smoke.log"
-          kill $ASR_PID 2>/dev/null || true
-          exit 1
-      - name: Pack pysvc archive (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # 上万个 Python 小文件不再直接进 .app：签名（sign-mac-natives.sh 已给
-          # 每个 Mach-O 打 Developer ID + 时间戳——公证会扫嵌套压缩包，未签名照拒）
-          # 与冒烟测试之后整体打成单个 pysvc.tar.gz，electron-builder 的签名/公证
-          # 阶段从上万文件降到一个文件，消除时间戳服务抖动。首启由主进程解压。
-          node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/mac-arm64
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # 公证走 App Store Connect API Key（境内主体 8WKHZVR2W8 起，dev-board#447），
+          # 不再用 Apple ID + App 专用密码。electron-builder / @electron/notarize 认
+          # APPLE_API_KEY（.p8 的**文件路径**）/ APPLE_API_KEY_ID / APPLE_API_ISSUER，
+          # 路径没法在 env: 里拼 $RUNNER_TEMP，所以 secret 存 base64、下面解码落盘再 export。
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           # GitHub never exposes secrets to fork PRs, so CSC_LINK is empty
           # there — and force-signing with an empty CSC_LINK makes
           # electron-builder fail ("not a file"). Only force signing when the
@@ -468,6 +329,24 @@ jobs:
           # electron-builder's default unsigned PR build.
           CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
         run: |
+          # 复用前一步正确导入的钥匙串：electron-builder 24.13.3 的导入链
+          # 错把 P12 口令传给 set-key-partition-list，导致 SecKeychainUnlock。
+          if [ -n "$CSC_LINK" ]; then
+            export CSC_KEYCHAIN="$RUNNER_TEMP/awd-sign.keychain-db"
+            security unlock-keychain -p "awd-tmp-keychain" "$CSC_KEYCHAIN"
+            unset CSC_LINK
+          fi
+          # 公证凭据：三个环境变量要么全有要么全无——electron-builder 只要见到其中
+          # 任意一个非空就要求三个都在，否则抛 InvalidConfigurationError；三个全空
+          # 才会静默跳过公证（fork PR 走的就是这条路）。
+          if [ -n "$APPLE_API_KEY_B64" ]; then
+            printf '%s' "$APPLE_API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+            chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+            export APPLE_API_KEY="$RUNNER_TEMP/AuthKey.p8"
+          else
+            echo "No ASC API key (fork PR) — notarization will be skipped"
+            unset APPLE_API_KEY_ID APPLE_API_ISSUER
+          fi
           # mineru lib（transformers 等）有数万个小文件，macOS 默认 fd 上限 256 会让
           # electron-builder 在打包/装订阶段 EMFILE。65536 实测仍复现——内核级
           # kern.maxfilesperproc（默认 61440）同样要抬，三层一起调并打印生效值
@@ -479,23 +358,33 @@ jobs:
       - name: Notarization failure log (macOS)
         if: failure() && runner.os == 'macOS'
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          # NOT the APPLE_TEAM_ID secret: notarytool history rejects it with
-          # 403 (it works for submission but not for the history API); the
-          # team id is public anyway (package.json mac.notarize.teamId)
-          TEAM_ID: X9B97KVA84
+          # 与打包步骤同一把 ASC API Key（境内主体 8WKHZVR2W8）。API Key 认证不接
+          # --team-id（团队由 issuer 唯一确定）；旧写法用 Apple ID + App 专用密码时
+          # 才需要它，且当时必须写死 team id——APPLE_TEAM_ID secret 会让 history API
+          # 报 403。API Key 模式下团队由 issuer 唯一确定：package.json 的 mac.notarize 必须是 true，
+          # 不能带 teamId——@electron/notarize 把 teamId 归为密码凭据，与 API Key 并存直接报
+          # "Cannot use password credentials, API key credentials ... at once"（v0.34.0 首次 tag 构建实证）。
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           # Surface Apple's per-file rejection reasons; without this the build
           # log only says "Invalid"
-          HISTORY=$(xcrun notarytool history --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$TEAM_ID" \
+          if [ -z "$APPLE_API_KEY_B64" ]; then
+            echo "No ASC API key (fork PR) — cannot query notarization history"
+            exit 0
+          fi
+          KEY="$RUNNER_TEMP/AuthKey-notarylog.p8"
+          printf '%s' "$APPLE_API_KEY_B64" | base64 --decode > "$KEY"
+          chmod 600 "$KEY"
+          HISTORY=$(xcrun notarytool history --key "$KEY" \
+            --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
             --output-format json || true)
           echo "$HISTORY" | head -c 2000; echo
           for SUB_ID in $(echo "$HISTORY" | jq -r '.history[0:2][].id // empty'); do
             echo "=== notarization log for $SUB_ID"
-            xcrun notarytool log "$SUB_ID" --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$TEAM_ID" \
+            xcrun notarytool log "$SUB_ID" --key "$KEY" \
+              --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
               "$RUNNER_TEMP/notary-log-$SUB_ID.json" || true
             cat "$RUNNER_TEMP/notary-log-$SUB_ID.json" || true
             echo
@@ -531,103 +420,31 @@ jobs:
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
           exit 1
-      - name: Smoke test bundled pptx-service (Windows)
+      - name: Build arm64 Electron shell overlay (Windows)
+        # Windows 单包双架构（dev-board#341）：产出纯 arm64 壳目录供 NSIS
+        # customInstall 覆盖用。app.asar 无原生依赖双架构通用，剪掉 resources/
+        #（几 GB 的 x64 重资源）后只剩 Electron 运行时约 120MB。
         if: runner.os == 'Windows'
-        shell: bash
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        shell: pwsh
         run: |
-          export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"
-          mkdir -p "$PPTX_DATA_DIR"
-          APP="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/app"
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/lib"
-          (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
-          PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
-          PPTX_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf http://127.0.0.1:5099/health; then
-              echo; echo "pptx-service up after ~$((i*2))s"
-              kill $PPTX_PID
-              exit 0
-            fi
-          done
-          echo "pptx-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/pptx-smoke.log"
-          kill $PPTX_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled mineru-service (Windows)
+          npx electron-builder --dir --arm64
+          if (-not (Test-Path 'release\win-arm64-unpacked\AI WorkDeck.exe')) { throw 'arm64 unpacked dir missing' }
+          Remove-Item -Recurse -Force 'release\win-arm64-unpacked\resources'
+          New-Item -ItemType Directory -Force 'build\win\arm64-shell' | Out-Null
+          Move-Item 'release\win-arm64-unpacked\*' 'build\win\arm64-shell\'
+          Remove-Item -Recurse -Force 'release\win-arm64-unpacked'
+          "arm64 shell files: $((Get-ChildItem -Recurse 'build\win\arm64-shell' | Measure-Object Length -Sum).Sum / 1MB) MB"
+      - name: Render one-click installer art (Windows)
+        # 一键安装 UI（awd-oneclick-ui.nsh，dev-board#339）的位图构建现场渲染、
+        # 不入库；缺了这步 NSIS 编译会因 File 找不到 generated/*.bmp 直接失败
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          export MDIR="$RUNNER_TEMP/mineru-data"
-          mkdir -p "$MDIR"
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/mineru-service/lib"
-          MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope \
-            MODELSCOPE_CACHE="$MDIR" HF_HOME="$MDIR/hf" MINERU_TOOLS_CONFIG_JSON="$MDIR/mineru.json" \
-            "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/mineru-smoke.log" 2>&1 &
-          MINERU_PID=$!
-          for i in $(seq 1 30); do
-            sleep 2
-            if curl -sf -o /dev/null http://127.0.0.1:8098/docs; then
-              echo "mineru-service up after ~$((i*2))s"
-              kill $MINERU_PID
-              exit 0
-            fi
-          done
-          echo "mineru-service failed to start within 60s"
-          tail -80 "$RUNNER_TEMP/mineru-smoke.log"
-          kill $MINERU_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled kokoro-service (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          APP="$PWD/desktop/bundled/win-x64/pysvc/kokoro-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/kokoro-service/lib"
-          PORT=8881 "$PY" "$APP/app.py" > "$RUNNER_TEMP/kokoro-smoke.log" 2>&1 &
-          KOKORO_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8881/health && curl -sf http://127.0.0.1:8881/v1/audio/voices | grep -q zf_001; then
-              echo; echo "kokoro-service up after ~$((i*2))s"
-              kill $KOKORO_PID
-              exit 0
-            fi
-          done
-          echo "kokoro-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
-          kill $KOKORO_PID 2>/dev/null || true
-          exit 1
-      - name: Smoke test bundled asr-service (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
-          APP="$PWD/desktop/bundled/win-x64/pysvc/asr-service/app"
-          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/asr-service/lib"
-          export HF_HOME="$RUNNER_TEMP/asr-empty-home"
-          PORT=8891 "$PY" "$APP/app.py" > "$RUNNER_TEMP/asr-smoke.log" 2>&1 &
-          ASR_PID=$!
-          for i in $(seq 1 20); do
-            sleep 2
-            if curl -sf http://127.0.0.1:8891/health | grep -q '"modelReady":false'; then
-              echo; echo "asr-service up after ~$((i*2))s"
-              kill $ASR_PID
-              exit 0
-            fi
-          done
-          echo "asr-service failed to start within 40s"
-          tail -60 "$RUNNER_TEMP/asr-smoke.log"
-          kill $ASR_PID 2>/dev/null || true
-          exit 1
-      - name: Pack pysvc archive (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          # 与 macOS 同构：安装包只带一个 pysvc.tar.gz（文件数大降、安装更快），首启解压
-          node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/win-x64
+          $v = node -p "require('./desktop/package.json').version"
+          node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated --version $v
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop
@@ -649,7 +466,6 @@ jobs:
             --backend desktop/bundled/win-x64/backend/app.jar \
             --h5 frontend/dist/build/h5 \
             --zeta frontend/dist/zetaoffice \
-            --pysvc desktop/bundled/win-x64/pysvc \
             --prev https://www.aiworkdeck.com/update/desktop/manifest.json \
             --out desktop/release/patch
           ls -la desktop/release/patch
@@ -659,17 +475,38 @@ jobs:
           path: |
             desktop/release/*.dmg
             desktop/release/*.exe
+            desktop/release/patch/*
           if-no-files-found: error
+
+  # 发布收口：GitHub Release 在这一个单点 job 里创建，不放在上面的 matrix job
+  # 里（dev-board#74 稳定性审计）。build 用 fail-fast:false，mac 腿在公证抖动
+  # 处失败时 windows 腿仍会跑完；发布步骤若留在 matrix 里，windows 腿会独自把
+  # release 发出去——用户看到的是只有 .exe、缺 .dmg 的半成品版本。
+  # needs:[build] 不加 if:always()，默认语义就是「build 的所有矩阵腿都成功才
+  # 跑」，天然挡住这种半成品发布；同构于 pack-release.yml 的 release job
+  # （needs:[mac,win] 单点发布）。
+  # patch/* 现在随 aiworkdeck-windows-latest 这个 artifact 一起上传（见上面
+  # upload-artifact 的 path，仅 windows 腿会真的产出这些文件，mac 腿这条 glob
+  # 落空不影响该 step——if-no-files-found 看的是全部 path 的汇总匹配）。
+  # 下面用 merge-multiple 把 mac/windows 两份 artifact 拍平进同一目录再一起发布。
+  release:
+    name: Create GitHub Release
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: aiworkdeck-*
+          merge-multiple: true
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          # patch/*：小版本补丁产物 + 签名 manifest（仅 windows job 生成，mac job
-          # 的 glob 落空属正常——softprops 默认不因 unmatched 失败）
           files: |
-            desktop/release/*.dmg
-            desktop/release/*.exe
-            desktop/release/patch/*
+            artifacts/*.dmg
+            artifacts/*.exe
+            artifacts/patch/*
           # Auto-generate a "What's Changed" changelog from merged PRs since the
           # last tag, appended below the bilingual body template. Without this a
           # tag build creates a Release with EMPTY notes (had to `gh release edit`
@@ -687,7 +524,7 @@ jobs:
             - **macOS · Apple Silicon (M 系列)** — `AI WorkDeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
             - **Windows · x64** — `AI WorkDeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
 
-            > 自本版本起不再提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件）。/ Intel mac builds are discontinued as of this release.
+            > 不提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件，2026-07-03 起）。/ No Intel Mac build (upstream dependencies no longer ship x86_64 binaries; since 2026-07-03).
 
             官网 / Website: https://www.aiworkdeck.com
 
@@ -702,9 +539,14 @@ jobs:
   # 下载再 rsync 上去才补上）。runner 在境外，上行不受这条限制。
   #
   # cron 那条链路保留不动：它仍负责补丁包与 manifest，也是这条推送失败时的兜底。
+  # needs 必须是 release 而不是 build：这一步会在服务器上跑 update-mirror-sync.sh，
+  # 而那个脚本是**从 GitHub Release 拉资产**的（上面文件名要换成 Release 资产名
+  # 就是为了对上它的 skip 判据），最后还要校验 latest.json 已指向本次 tag。
+  # 发布收口成独立 job 之后，若这里仍写 needs:[build]，它会与 release 并行——
+  # Release 还没建出来，脚本拉不到资产、latest.json 停在上一版，校验步骤必挂。
   sync-mirror:
     name: Sync installers to mirror
-    needs: [build]
+    needs: [release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -732,6 +574,13 @@ jobs:
           ls -la artifacts
           DEST=/www/wwwroot/update/desktop/installers
           SSH_OPTS="-i $HOME/.ssh/mirror_key -o IdentitiesOnly=yes -o ServerAliveInterval=20"
+
+          # **推送之前先落 marker**：服务器上的 cron 每小时一发，看到新鲜 marker 就
+          # 直接让路（deploy/update-mirror-sync.sh 顶部的判断）。不落这个的话，推送
+          # 途中起来的那一发 cron 会先抢到 flock、再花一小时从 GitHub 重拉同一批包，
+          # 把下面的收尾步骤卡到超时——latest.json 停在上一版、本 job 转红、官网
+          # 下载页继续发旧版（v0.17.0 与 v0.23.0 各踩一次，后者靠人工介入才补上）。
+          ssh $SSH_OPTS "root@$MIRROR_HOST" 'touch /var/lock/awd-release-push-in-progress'
           # --partial --append-verify：这条链路断过（scp 传到 694MB/1437MB 掉线），
           # 断点续传比重传整包可靠。
           for f in artifacts/*.dmg artifacts/*.exe; do
@@ -757,12 +606,32 @@ jobs:
           # 安装包已就位，跑一次同步脚本让它补 latest.json 与补丁包（会 skip exists）。
           # **先等锁再跑**：脚本自带 `flock -n`，撞上 cron 那一发就静默 exit 0，
           # latest.json 停在上一版、下面的校验必挂（v0.17.0 实测）。
-          # `flock -w 1200 ... true` 只是「等到锁空出来就立刻放手」，随后由脚本
+          # `flock -w 3600 ... true` 只是「等到锁空出来就立刻放手」，随后由脚本
           # 自己去加锁。两步之间的窗口极小，真撞上了下面的校验也会报出来。
+          # 上面的 marker 已经挡住「推送途中新起的 cron」；这里的等待是为了另一种
+          # 情形——推送开始之前就已经在跑的那一发，它拉完 GitHub 才会放手，
+          # 1200s 不够（v0.23.0 实测超时），放宽到一小时。
+          # FORCE=1：让脚本无视自己刚落下的 marker。
           ssh $SSH_OPTS "root@$MIRROR_HOST" \
-            'flock -w 1200 /var/lock/awd-update-mirror-sync.lock true \
-             && cd /www/wwwroot/update/desktop && bash update-mirror-sync.sh' | tail -8
+            'flock -w 3600 /var/lock/awd-update-mirror-sync.lock true \
+             && cd /www/wwwroot/update/desktop && FORCE=1 bash update-mirror-sync.sh' | tail -8
 
+          # marker 的清理在下面独立的 always() 步骤里做——这里失败也要清掉，
+          # 否则残留 marker 会让 cron 白白让路（有 90 分钟过期兜底，但那是最后一道）。
           echo "校验 latest.json 指向 ${GITHUB_REF_NAME}"
           curl -fsS --max-time 20 https://www.aiworkdeck.com/update/desktop/installers/latest.json | tee /tmp/latest.json
           grep -q "\"${GITHUB_REF_NAME}\"" /tmp/latest.json || { echo "::error::latest.json 未指向 ${GITHUB_REF_NAME}"; exit 1; }
+
+      - name: Clear release-push marker
+        # 必须 always()：推送失败/校验失败时同样要清，否则 marker 留在服务器上，
+        # 接下来 90 分钟的 cron 全部让路，镜像反而更新不了。
+        if: always()
+        env:
+          MIRROR_HOST: ${{ secrets.MIRROR_HOST }}
+        run: |
+          set -uo pipefail
+          [ -n "${MIRROR_HOST:-}" ] || exit 0
+          [ -f ~/.ssh/mirror_key ] || exit 0
+          ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes "root@$MIRROR_HOST" \
+            'rm -f /var/lock/awd-release-push-in-progress' || \
+            echo "::warning::marker 清理失败，90 分钟后自动过期"

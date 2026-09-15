@@ -1,5 +1,10 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 文件预览/选择/暂存/下载/搜索/标签组件文案
 export default {
+  // FileTree.vue：根级 _模板 文件夹（dev-board#112）
+  templateFolderHint: '模板文件夹：放入你所的报告模板，AI 学习后按它的字体、编号与表格样式起草',
+
   // FilePreview.vue
   selectFilePrompt: '请从左侧选择文件进行预览',
   edit: '编辑',
@@ -27,6 +32,21 @@ export default {
   fileTypeHint: '文件类型: {type}',
   fileIdHint: '文件ID: {id}',
   fitWindow: '适应窗口',
+  rotate: '旋转',
+  // EvidenceLink 底稿定位增强（P3）：pdf 引文卡 / 图片定位框 / 音视频时间标记
+  locate: {
+    pdfPage: '已定位到第 {page} 页',
+    pdfNoPage: '底稿引文',
+    rectsTitle: '引文在本页的位置',
+    quoteNotFound: '未能在本页定位到引文',
+    copyQuote: '复制引文',
+    quoteCopied: '引文已复制，可在阅读器里查找',
+    quoteCopyFailed: '复制失败',
+    imageRect: '定位框',
+    mediaMark: '定位 {time}',
+    playFromMark: '从这里播放',
+    close: '关闭',
+  },
   loadFailed: '加载失败',
   resourceLoadFailedStatus: '资源加载失败: {status}',
   networkErrorResource: '网络错误，资源加载失败',
@@ -44,11 +64,6 @@ export default {
   selectedFolderLabel: '已选择文件夹：',
   confirmImport: '确定导入',
   onlyTypesSupported: '仅支持 {types} 文件',
-  // FileLinkDropZone.vue
-  dropToLink: '拖到这里松手：关联到当前高亮文本',
-  currentFileLabel: '当前文件：{name}',
-  linkToLeftDoc: '关联到左侧文档',
-  linkToRightDoc: '关联到右侧文档',
   // FileStagingArea.vue
   stagingTitle: '文件暂存区',
   clear: '清空',
@@ -108,6 +123,15 @@ export default {
   deleteTagTitle: '删除标签',
   deleteTagConfirm: '确定要删除标签 "{name}" 吗？',
   deleteFailed: '删除失败',
+  // 标签类型维度（dev-board#63）：TagSelector/TagManager/SearchPanel 共用
+  tagTypeNormal: '普通',
+  tagTypeParty: '当事人',
+  tagTypeIssue: '争议焦点',
+  tagTypeLabel: '类型',
+  tagGroupParty: '当事人',
+  tagGroupIssue: '争议焦点',
+  tagGroupNormal: '标签',
+  tagGroupOther: '其他标签',
   // MarkdownPreview.vue
   loadingDots: '正在加载...',
   loadFailedWithReason: '加载失败: {reason}',

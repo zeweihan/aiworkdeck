@@ -1,0 +1,25 @@
+{
+  "_demo_notice": "演示数据，人物公司均属虚构，仅供产品发布视频使用",
+  "Name": "星澜网络科技有限公司",
+  "No": "91310104MA1HK3YB2M",
+  "OperName": "黄敏",
+  "RegistCapi": "1000万元人民币",
+  "StartDate": "2020-09-08",
+  "Address": "上海市徐汇区漕溪北路288号5层",
+  "Scope": "网络技术开发、技术服务、劳务派遣、企业管理咨询等",
+  "Status": "存续",
+  "Partners": [
+    {
+      "StockName": "上海澜屿企业管理咨询合伙企业（有限合伙）",
+      "StockPercent": "100%",
+      "ShouldCapi": "1000万元人民币"
+    }
+  ],
+  "PenetratedShareholders": [
+    { "Name": "沈某某", "Percent": "100%", "Type": "自然人（通过持股平台间接持有）" }
+  ],
+  "Employees": [
+    { "Name": "黄敏", "Job": "法定代表人、执行董事" }
+  ],
+  "ZhiXing": []
+}

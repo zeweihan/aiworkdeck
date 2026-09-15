@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.service.ai.context.ProjectContextHolder;
@@ -39,6 +42,12 @@ class ToolRegistryTest {
         @Tool("Write a docx file (alias binding test)")
         public String write_docx(@P("file name") String fileName, @P("markdown") String markdownContent, Long projectId) {
             return fileName + "::" + markdownContent + "::" + projectId;
+        }
+
+        @Tool("Create a folder (alias binding test)")
+        public String create_folder(@P("folder name") String folderName, Long projectId,
+                                    @P("parent") Long parentFolderId) {
+            return folderName + "::" + projectId + "::" + parentFolderId;
         }
 
         @Tool("Numeric conversion test")
@@ -85,7 +94,7 @@ class ToolRegistryTest {
     @Test
     @DisplayName("注册：@Tool 方法全部进入规格列表")
     void registersAllTools() {
-        assertEquals(8, registry.getAllSpecifications().size());
+        assertEquals(9, registry.getAllSpecifications().size());
         assertTrue(registry.hasTool("echo"));
         assertTrue(registry.hasTool("doc_find_replace"));
         assertFalse(registry.hasTool("nonexistent"));
@@ -115,6 +124,16 @@ class ToolRegistryTest {
         ToolRegistry.ToolResult r = registry.execute("write_docx",
                 "{\"name\":\"a.docx\",\"markdown_content\":\"# 标题\"}", ctx);
         assertEquals("a.docx::# 标题::5", r.output());
+    }
+
+    @Test
+    @DisplayName("兼容：create_folder 参数别名 name→folderName, parentId→parentFolderId（dev-board#466）")
+    void bindsCreateFolderAliasedArgs() {
+        // 真机实况：模型第一次就按 name/parentId 调 create_folder，被判缺参后重试才对上，
+        // 白烧两个执行步——而整理文件的任务本来就卡在 30 步预算上
+        ToolRegistry.ToolResult r = registry.execute("create_folder",
+                "{\"name\":\"01 诉讼文书\",\"parentId\":88}", ctx);
+        assertEquals("01 诉讼文书::5::88", r.output());
     }
 
     @Test
@@ -286,5 +305,48 @@ class ToolRegistryTest {
         ToolRegistry reg2 = new ToolRegistry(List.of(new FakeTools()), legacy, new ClientCapabilityService());
         reg2.init();
         assertEquals("plugin:ok", reg2.execute("plugin_echo", "{\"text\":\"ok\"}", ctx).output());
+    }
+
+    // ==== 插件工具缓存失效（pluginToolCache 从不失效的修复） ====
+
+    /** 插件工具「v1」：与 FakePluginToolsV2 故意同名（plugin_versioned），模拟插件更新前后的两个 bean */
+    static class FakePluginToolsV1 {
+        @Tool("versioned v1")
+        public String plugin_versioned(@P("x") String x) {
+            return "v1:" + x;
+        }
+    }
+
+    /** 插件工具「v2」：同名不同实现，模拟插件更新后新 JAR 加载出的 bean */
+    static class FakePluginToolsV2 {
+        @Tool("versioned v2")
+        public String plugin_versioned(@P("x") String x) {
+            return "v2:" + x;
+        }
+    }
+
+    @Test
+    @DisplayName("修复：pluginToolCache 不失效会一直分发旧 bean；invalidatePluginToolCache 后拿到新 bean")
+    void invalidatePluginToolCacheDropsStaleBean() {
+        PluginService ps = new PluginService();
+        ps.registerToolObject(new FakePluginToolsV1(), "my-plugin");
+        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps, new ClientCapabilityService());
+        reg.init();
+
+        // 首次 resolve 命中 v1，并把它塞进 pluginToolCache
+        assertEquals("v1:hi", reg.execute("plugin_versioned", "{\"x\":\"hi\"}", ctx).output());
+
+        // 模拟插件更新：PluginService.rescan() 会用新 URLClassLoader 加载出新 bean 覆盖同名 key
+        ps.registerToolObject(new FakePluginToolsV2(), "my-plugin");
+
+        // 不失效缓存的话，resolve() 命中缓存直接返回旧 RegisteredTool，永远看不到 v2
+        // ——这一行钉住修复前的真实故障：插件已经换了新版本，AI 调用的还是旧版工具。
+        assertEquals("v1:hi", reg.execute("plugin_versioned", "{\"x\":\"hi\"}", ctx).output(),
+                "换 bean 但未失效缓存时应仍拿到旧版（钉住修复前的故障现象）");
+
+        reg.invalidatePluginToolCache();
+
+        assertEquals("v2:hi", reg.execute("plugin_versioned", "{\"x\":\"hi\"}", ctx).output(),
+                "失效后应重新从 PluginService 解析，拿到插件更新后的新 bean");
     }
 }

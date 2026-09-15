@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的菜单栏接线：状态上报 + wb:* 命令执行。
 // 经展开进组件 methods（与同目录其它模块同法），`this` 即工作台页面实例。
 //
@@ -44,7 +46,6 @@ export const menuCommandsMethods = {
       sidebarOpen: !this.sidebarCollapsed,
       toolsPanelOpen: !!this.showToolsPanel,
       aiPanelOpen: !!this.showAiPanel,
-      toolVariables: !!this.showToolsPanel && this.activeToolKey === 'variables',
       toolFavorites: !!this.showToolsPanel && this.activeToolKey === 'favorites',
       toolClipboard: !!this.showToolsPanel && this.activeToolKey === 'clipboard',
       recording: !!this.isRecording,
@@ -65,7 +66,12 @@ export const menuCommandsMethods = {
       role: this.isClientView ? 'CLIENT' : 'LAWYER',
       projectId: (this.project && this.project.id) || null,
       activeView: this.sidebarCollapsed ? null : this.leftPaneKey,
-      views: (this.LEFT_SIDEBAR_PLUGINS || []).map((p) => ({ key: p.key, label: p.label })),
+      // 版本记录 2026-08-19 挪出 LEFT_SIDEBAR_PLUGINS 数组、独立渲染在 rail 底部
+      // （config/leftSidebarPlugins.js 的 VERSION_PLUGIN），命令面板「跳转到面板」
+      // 要手动把它补回来，否则版本记录会从这份清单里消失。
+      views: (this.LEFT_SIDEBAR_PLUGINS || [])
+        .map((p) => ({ key: p.key, label: p.label }))
+        .concat(this.VERSION_PLUGIN ? [{ key: this.VERSION_PLUGIN.key, label: this.VERSION_PLUGIN.label }] : []),
       flags: this.buildMenuFlags(),
     })
     // Windows 自绘菜单栏读的是同一份快照，状态推完让它重建一次。
@@ -130,12 +136,13 @@ export const menuCommandsMethods = {
       case 'toggleAiPanel': this.toggleAiPanel(); break
       case 'toggleSplit': this.toggleSplitMode(); break
       case 'openView': this.toggleLeftPane(arg); break
-      case 'openTool':
-        if (!this.showToolsPanel) this.toggleToolsPanel()
-        this.activeToolKey = arg
-        break
+      // 工具面板可以被停靠到左/右/底任一处（dev-board#180），菜单命令不该假定它在底栏
+      case 'openTool': this.openPanelInItsDock(arg); break
       case 'openVersionPanel': this.toggleLeftPane('version'); break
       case 'openPluginMarket': this.goToPluginMarket(); break
+      // 应用菜单的「设置…」（⌘,）：在工作台里开中栏标签，不跳页。
+      // 桥那边按 state.page 分流，工作台之外仍走 pages/admin 薄壳页。
+      case 'openSettings': this.openSettingsTab(); break
 
       // —— 文件 / 标签
       case 'closeTab':
@@ -146,6 +153,7 @@ export const menuCommandsMethods = {
       case 'prevTab': this.cycleTab(-1); break
       case 'importFiles': this.toggleLeftPane('files'); this.menuToast(this.$t('workbench.menuImportHint')); break
       case 'revealInFinder': await this.menuRevealProject(); break
+      case 'shareFile': await this.menuShareFile(); break
 
       // —— 导航
       case 'quickOpen': this.quickOpenVisible = true; break
@@ -215,5 +223,12 @@ export const menuCommandsMethods = {
     const f = this.activeFileLeft
     if (f && !f.isFolder) return this.onRevealFile(f)
     return this.onRevealFile({ isFolder: true })
+  },
+
+  /** 「文件 > 发送…」：把当前活跃标签的文件交给系统分享（复用文件树右键那条 onShareFile）。 */
+  async menuShareFile() {
+    const f = this.activeFileLeft
+    if (!f || f.isFolder) { this.menuToast(this.$t('workbench.openDocFirst')); return }
+    return this.onShareFile(f)
   },
 }

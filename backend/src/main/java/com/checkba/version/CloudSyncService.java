@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
+import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checkba.model.entity.CloudConnection;
@@ -25,8 +29,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -48,6 +54,49 @@ public class CloudSyncService {
     private final CloudConnectionRepository connectionRepository;
     private final ProjectRemoteRepository remoteRepository;
     private final ProjectRepository projectRepository;
+
+    /**
+     * 提交署名解析（spec 2026-09-14 §2.1）。**字段注入不是构造器参数**：本类的构造器被
+     * 五个单测手工 new，加参数是纯 churn。required=false，authorEmail 自带回落。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VersionAuthorResolver authorResolver;
+
+    /** 单测用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    void setAuthorResolverForTest(VersionAuthorResolver resolver) {
+        this.authorResolver = resolver;
+    }
+
+    /**
+     * 本机连着的官网账户（{@link #ensureRemoteUserId} 回填 remoteUserId 要用它做判据）。
+     * 同样字段注入，理由同上；required=false，自建服务器上没有官网账户也照常跑。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.account.AccountService accountService;
+
+    /** 单测用：同上。 */
+    void setAccountServiceForTest(com.checkba.service.account.AccountService service) {
+        this.accountService = service;
+    }
+
+    /**
+     * 三方合并（spec 2026-09-14 §4.3/§4.4）：冲突窗口 payload 里的
+     * {@code mergeBase}/{@code documentMerges}/{@code sides} 由分析服务统一拼，
+     * 逐处合好的文件由待决记录佐证。同样字段注入、{@code required=false}——
+     * 手工 new 出本服务的那几个单测不关心这一档，缺席时冲突窗口就是 v2 的老形状。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.MergeAnalysisService mergeAnalysisService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
+
+    /** 单测/跨包装配用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    public void setMergeServicesForTest(com.checkba.version.merge.MergeAnalysisService analysis,
+                                        com.checkba.version.merge.PendingMergeStore store) {
+        this.mergeAnalysisService = analysis;
+        this.pendingMergeStore = store;
+    }
 
     public CloudSyncService(ProjectRepoService repoService,
                              WorkSessionService sessionService,
@@ -77,8 +126,19 @@ public class CloudSyncService {
 
     public enum UpdateStatus { UP_TO_DATE, UPDATED, CONFLICT, OFFLINE, NOT_LINKED }
 
+    /**
+     * landedOnCloud：这次整合的结果是不是已经到了云端。真合并路径要看
+     * {@link #completeCloudMerge} 的重推有没有落地；快进/已最新两条路径压根不用推
+     * （本地本就是云端的祖先），天然为真——所以缺省构造器给 true，别拿
+     * ProjectRemote.pendingUpload 的历史值反推，会把本就同步的项目误判成失败。
+     */
     public record UpdateResult(UpdateStatus status, List<Long> affectedFileIds,
-                               Map<String, Object> conflict) {}
+                               Map<String, Object> conflict, boolean landedOnCloud) {
+        public UpdateResult(UpdateStatus status, List<Long> affectedFileIds,
+                            Map<String, Object> conflict) {
+            this(status, affectedFileIds, conflict, true);
+        }
+    }
 
     private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
     private static String cloudMergeTitle() {
@@ -109,6 +169,8 @@ public class CloudSyncService {
         conn.setDisplayName(data.getStr("displayName"));
         conn.setDeviceToken(data.getStr("token"));
         conn.setTokenId(data.getLong("tokenId", null));
+        // 案件库那一侧的 userId：协作事件行判「这条是不是我干的」只能靠它
+        conn.setRemoteUserId(data.getLong("userId", null));
         conn.setCreatedAt(LocalDateTime.now());
         return connectionRepository.save(conn);
     }
@@ -116,22 +178,28 @@ public class CloudSyncService {
     /** 断开一个云端连接：尽力撤远端令牌 + 删本地连接与所有关联的项目绑定。 */
     public void disconnect(long connectionId, Long userId) {
         connectionRepository.findById(connectionId).filter(c -> ownedBy(c, userId)).ifPresent(conn -> {
-            if (conn.getTokenId() != null) {
-                try {
-                    JSONObject resp = JSONUtil.parseObj(httpPost(
-                            conn.getServerUrl() + "/api/auth/device-token/" + conn.getTokenId() + "/revoke",
-                            "{}", conn.getDeviceToken()));
-                    if (resp.getInt("code", 1) != 0) {
-                        log.warn("远端撤销设备令牌未成功: connection={}, message={}",
-                                connectionId, resp.getStr("message"));
-                    }
-                } catch (Exception e) {
-                    log.warn("远端撤销设备令牌失败，仅做本地断开: connection={}", connectionId, e);
-                }
-            }
+            revokeRemoteToken(conn.getServerUrl(), conn.getTokenId(), conn.getDeviceToken());
             remoteRepository.findByConnectionId(connectionId).forEach(remoteRepository::delete);
             connectionRepository.delete(conn);
         });
+    }
+
+    /**
+     * 尽力撤掉远端一枚长期设备令牌：断开连接、官方连接重桥换令牌之后共用。失败只记日志——
+     * 撤不掉最多是远端多一枚不再有人用的令牌，不值得为它让断开或改名失败。
+     */
+    void revokeRemoteToken(String serverUrl, Long tokenId, String sessionToken) {
+        if (tokenId == null) return;
+        try {
+            JSONObject resp = JSONUtil.parseObj(httpPost(
+                    serverUrl + "/api/auth/device-token/" + tokenId + "/revoke", "{}", sessionToken));
+            if (resp.getInt("code", 1) != 0) {
+                log.warn("远端撤销设备令牌未成功: server={}, tokenId={}, message={}",
+                        serverUrl, tokenId, resp.getStr("message"));
+            }
+        } catch (Exception e) {
+            log.warn("远端撤销设备令牌失败: server={}, tokenId={}", serverUrl, tokenId, e);
+        }
     }
 
     public java.util.List<CloudConnection> listConnections(Long userId) {
@@ -247,6 +315,17 @@ public class CloudSyncService {
     public Map<String, Object> cloneFromCloud(long connectionId, long remoteProjectId, Long localUserId) {
         CloudConnection conn = ownedConnection(connectionId, localUserId);
 
+        // 换机器取回的查重：这份案卷本机已经有了就把既有的本机 id 还回去，不再造第二个
+        // ——两份各带一个 origin 绑定，律师会在两个项目里各改一半而谁也不知道另一半的存在。
+        var alreadyHere = remoteRepository.findByConnectionIdAndRemoteProjectId(
+                connectionId, String.valueOf(remoteProjectId));
+        if (alreadyHere.isPresent()) {
+            Map<String, Object> existing = new HashMap<>();
+            existing.put("localProjectId", alreadyHere.get().getProjectId());
+            existing.put("alreadyLocal", true);
+            return existing;
+        }
+
         JSONObject prep = JSONUtil.parseObj(httpPost(
                 conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
                 "{}", conn.getDeviceToken()));
@@ -355,6 +434,9 @@ public class CloudSyncService {
             m.put("id", id);
             m.put("name", j.getStr("name"));
             m.put("projectType", j.getStr("projectType"));
+            // 「取一份案卷」的列表里显示我在这份案卷里是什么身份（ProjectCardDTO 现成字段）：
+            // 被邀请进来的人在取之前就该看得见自己是协作人还是只读。
+            m.put("myRole", j.getStr("myRole"));
             out.add(m);
         }
         if (skipped > 0) {
@@ -408,6 +490,16 @@ public class CloudSyncService {
                     UpdateResult integrated = integrateFromCloud(projectId, conn, null, authorName);
                     if (integrated.status() == UpdateStatus.UPDATED
                             || integrated.status() == UpdateStatus.UP_TO_DATE) {
+                        if (!integrated.landedOnCloud()) {
+                            // 合并在本地落地了，回传却没到云端（重推又被拒/网络断）：报
+                            // UPLOADED 就是把真失败说成成功——界面显示「已交稿」，而同事
+                            // 永远看不到这份合并。黄灯已由 completeCloudMerge 置上，这里
+                            // 只说实话；affectedFileIds 照常带回，整合改写过的磁盘仍要走
+                            // 重载链。
+                            return new UploadResult(UploadStatus.OFFLINE_PENDING,
+                                    LangText.of("这次没能交稿，改动已经记下，稍后还可以再交", "This submission didn't go through — your changes are saved and you can submit again later"),
+                                    integrated.affectedFileIds());
+                        }
                         return new UploadResult(UploadStatus.UPLOADED, null,
                                 integrated.affectedFileIds());
                     }
@@ -444,8 +536,16 @@ public class CloudSyncService {
         return sessionService.activeSession(projectId).isEmpty() && !sessionService.onDraftBranch(projectId);
     }
 
-    /** 不联网的云端状态快照（/status 与云端状态区吃它）。 */
-    public Map<String, Object> cloudStatus(long projectId) {
+    /**
+     * 不联网的云端状态快照（/status 与云端状态区吃它）。
+     *
+     * <p>{@code userId} 只用来回答「这几版新稿是不是我自己在另一台电脑上交的」
+     * （spec 2026-09-14 §2.5）：同一个官网账号在两台机器上桥接案件库落到**同一行**
+     * app_users，远端提交的署名与本机一模一样，光靠 ref 比较得出的
+     * {@code remoteAhead} 只能说出「有新稿」，说不出是谁的——界面于是对着自己
+     * 昨晚在办公室交的稿说「同事交了新稿」。传 null 就退化成原来那份纯 ref 快照。
+     */
+    public Map<String, Object> cloudStatus(long projectId, Long userId) {
         var remoteOpt = remoteRepository.findByProjectId(projectId);
         if (remoteOpt.isEmpty()) {
             return Map.of("linked", false);
@@ -462,7 +562,153 @@ public class CloudSyncService {
         m.put("remoteProjectId", remote.getRemoteProjectId());
         m.put("pendingUpload", Boolean.TRUE.equals(remote.getPendingUpload()));
         m.put("remoteAhead", remoteAhead);
+        if (remoteAhead) {
+            describeRemoteAhead(projectId, userId, m);
+        }
         return m;
+    }
+
+    /** 单参版本（userId 未知时的纯 ref 快照）。 */
+    public Map<String, Object> cloudStatus(long projectId) {
+        return cloudStatus(projectId, null);
+    }
+
+    // ========== 案件库展示名缓存（把 git 署名换成案件库账户的名字） ==========
+
+    /**
+     * 一个项目的「案件库账号名 → 展示名」快照。{@code expiresAt} 到点即失效；
+     * **空表也会被缓存**——案件库连不上时不能让每一次 120 秒轮询都去重试一趟。
+     */
+    private record RemoteNames(Map<String, String> byUsername, long expiresAt) {}
+
+    /** 缓存有效期。参与人改名是低频事件，十分钟内看到旧名字完全可以接受。 */
+    static final long REMOTE_NAME_TTL_MS = 10 * 60 * 1000L;
+
+    private final Map<Long, RemoteNames> remoteNameCache = new ConcurrentHashMap<>();
+
+    /**
+     * 案件库那边的「账号名 → 展示名」。版本行的 git 署名是**对方那台机器的本机展示名**
+     * （单机模式下人人都叫「本机用户」），而事件行取的是案件库账户的展示名——
+     * 同一屏里两种叫法。这张表就是把前者翻译成后者的字典。
+     *
+     * @param allowFetch 缓存里没有时允不允许打一趟请求。只有「案件库确实领先了、
+     *                   此刻非说清是谁不可」的那条路传 true（{@link #describeRemoteAhead}）；
+     *                   读历史/时间线一律传 false——列表渲染不该因为一个名字去联网。
+     * @return 永不为 null；没有绑定案件库、取不到、或不许联网时是空表（调用方保持 git 署名）
+     */
+    public Map<String, String> remoteDisplayNames(long projectId, boolean allowFetch) {
+        RemoteNames cached = remoteNameCache.get(projectId);
+        if (cached != null && cached.expiresAt() > System.currentTimeMillis()) {
+            return cached.byUsername();
+        }
+        if (!allowFetch) return Map.of();
+        return refreshRemoteDisplayNames(projectId);
+    }
+
+    /**
+     * 真去案件库取一次参与人表并落缓存。整段吞异常：翻译不出名字只是让界面继续显示
+     * git 署名（本列上线前的既有行为），不值得为它把云端状态或提交历史打成错误。
+     */
+    private Map<String, String> refreshRemoteDisplayNames(long projectId) {
+        Map<String, String> names = Map.of();
+        try {
+            ProjectRemote remote = remoteRepository.findByProjectId(projectId).orElse(null);
+            if (remote != null) {
+                CloudConnection conn = connectionOf(remote);
+                JSONObject resp = JSONUtil.parseObj(httpGet(
+                        conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
+                        conn.getDeviceToken()));
+                if (resp.getInt("code", 1) == 0) {
+                    names = namesFrom(resp.getJSONArray("data"));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取案件库参与人展示名失败（历史照常显示 git 署名）: project={}", projectId, e);
+        }
+        remoteNameCache.put(projectId,
+                new RemoteNames(names, System.currentTimeMillis() + REMOTE_NAME_TTL_MS));
+        return names;
+    }
+
+    /** 已经拿到手的参与人表顺手落进缓存（proxyMembers / ensureRemoteUserId 各调一次）。 */
+    private void cacheRemoteDisplayNames(long projectId, JSONArray rows) {
+        Map<String, String> names = namesFrom(rows);
+        if (names.isEmpty()) return; // 空表只在「真去取了一趟」时才值得缓存，见 refresh
+        remoteNameCache.put(projectId,
+                new RemoteNames(names, System.currentTimeMillis() + REMOTE_NAME_TTL_MS));
+    }
+
+    private static Map<String, String> namesFrom(JSONArray rows) {
+        if (rows == null) return Map.of();
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Object o : rows) {
+            if (!(o instanceof JSONObject row)) continue;
+            String username = row.getStr("username");
+            String display = row.getStr("displayName");
+            if (username == null || username.isBlank()) continue;
+            if (display == null || display.isBlank()) continue;
+            out.put(username, display);
+        }
+        return out;
+    }
+
+    /** {@code master..origin/master} 最多走这么多版：状态条只需要计数与前三个名字。 */
+    static final int REMOTE_AHEAD_WALK_CAP = 200;
+
+    /** 状态条放得下的名字个数；总人数另走 {@code remoteAheadAuthorCount}。 */
+    static final int REMOTE_AHEAD_NAME_CAP = 3;
+
+    /** 作者去重时「本人」那一格的键。不用名字当键，免得同名的同事被并进来。 */
+    private static final String SELF_AUTHOR_KEY = "\u0000self";
+
+    /**
+     * 往状态里补 {@code remoteAheadCount} / {@code remoteAheadAuthors} /
+     * {@code remoteAheadAuthorCount} / {@code remoteAheadBySelf}。
+     *
+     * <p>名字最多给 {@value #REMOTE_AHEAD_NAME_CAP} 个（状态条只放得下这么多），但
+     * {@code remoteAheadAuthorCount} 是**去重后的作者总数**——「张三等 N 人」里的 N
+     * 要是拿名单长度算，四个人以上就永远说成 3 人。两个数字的量纲都受
+     * {@link #REMOTE_AHEAD_WALK_CAP} 这一趟 walk 的上限约束。
+     *
+     * <p>算不出来只记日志、不抛也不填字段——这是一个**常驻的状态指示**，为了一句
+     * 更准的话把整个云端状态接口打成 500，比显示那句笼统的「同事交了新稿」糟得多。
+     */
+    private void describeRemoteAhead(long projectId, Long userId, Map<String, Object> m) {
+        try {
+            List<VersionEntry> ahead = repoService.commitsBetween(
+                    projectId, repoService.mainBranch(), ORIGIN_MASTER, REMOTE_AHEAD_WALK_CAP);
+            if (ahead.isEmpty()) return;
+            m.put("remoteAheadCount", ahead.size());
+            // 案件库确实领先了、这句话非说清是谁不可——只有这条路允许为一个名字联网一次
+            Map<String, String> remoteNames = remoteDisplayNames(projectId, true);
+            // 「我是谁」整趟循环只算一次（这一趟最多 200 版）
+            VersionAuthorResolver.SelfIdentity me = authorResolver != null && userId != null
+                    ? authorResolver.selfIdentity(projectId, userId) : null;
+            // 去重键 → 显示名。本人历史上用过几个署名都只占 SELF_AUTHOR_KEY 这一格（dev-board#647：
+            // 旧实现按 git 署名去重，同一个人的三个年代的旧署名被数成三个同事）；哨兵键与
+            // 真名分开，恰好与我同名的同事也不会被并进「本人」那一格。
+            LinkedHashMap<String, String> distinct = new LinkedHashMap<>();
+            boolean allSelf = me != null;
+            for (VersionEntry e : ahead) {
+                boolean self = me != null && authorResolver.isSelf(e, me);
+                if (!self) allSelf = false;
+                String name = VersionAuthorResolver.preferredAuthorName(
+                        e, remoteNames, self ? me.displayName() : null);
+                if (name == null || name.isBlank()) continue;
+                distinct.putIfAbsent(self ? SELF_AUTHOR_KEY : name, name);
+            }
+            List<String> authors = new ArrayList<>();
+            for (String name : distinct.values()) {
+                if (authors.size() >= REMOTE_AHEAD_NAME_CAP) break;
+                authors.add(name);
+            }
+            m.put("remoteAheadAuthors", authors);
+            m.put("remoteAheadAuthorCount", distinct.size());
+            // 「全部都是我」才算本人——只要掺进一版同事的，界面就该说同事的名字。
+            m.put("remoteAheadBySelf", allSelf);
+        } catch (Exception e) {
+            log.warn("统计远端新稿的作者失败（状态照常给）: project={}", projectId, e);
+        }
     }
 
     /**
@@ -470,7 +716,7 @@ public class CloudSyncService {
      * fetch 后的结果）。云端不可达是正常场景（黄灯态本就允许离线）——绝不抛，只在结果里
      * 多带一个 offline:true，cloudStatus 原有字段照常给（沿用 fetch 之前已知的状态）。
      */
-    public Map<String, Object> checkCloud(long projectId) {
+    public Map<String, Object> checkCloud(long projectId, Long userId) {
         var remoteOpt = remoteRepository.findByProjectId(projectId);
         if (remoteOpt.isEmpty()) {
             return Map.of("linked", false);
@@ -483,7 +729,7 @@ public class CloudSyncService {
             // 就把开着的冲突窗口孤儿化（三语境都对不上号，弹窗消失、裁决端点全拒）。
             // 状态照常给本地快照，多带 merging:true。
             if (repoService.repositoryMerging(projectId)) {
-                Map<String, Object> m = new HashMap<>(cloudStatus(projectId));
+                Map<String, Object> m = new HashMap<>(cloudStatus(projectId, userId));
                 m.put("merging", true);
                 return m;
             }
@@ -492,14 +738,19 @@ public class CloudSyncService {
                 repoService.fetchFromOrigin(projectId, conn.getUsername(), conn.getDeviceToken());
             } catch (Exception e) {
                 log.warn("云端状态检查 fetch 失败，仅回退为离线态: project={}", projectId, e);
-                Map<String, Object> m = new HashMap<>(cloudStatus(projectId));
+                Map<String, Object> m = new HashMap<>(cloudStatus(projectId, userId));
                 m.put("offline", true);
                 return m;
             }
-            return cloudStatus(projectId);
+            return cloudStatus(projectId, userId);
         } finally {
             lock.unlock();
         }
+    }
+
+    /** 单参版本（userId 未知时的纯 ref 检查）。 */
+    public Map<String, Object> checkCloud(long projectId) {
+        return checkCloud(projectId, null);
     }
 
     // ==================== 成员桌面代理（spec 第六节） ====================
@@ -508,6 +759,35 @@ public class CloudSyncService {
     private ProjectRemote requireRemoteBinding(long projectId) {
         return remoteRepository.findByProjectId(projectId)
                 .orElseThrow(() -> VersionException.userFacing(LangText.of("请先把这份案卷放进团队案件库", "Please add this case file to the Team Case Library first")));
+    }
+
+    /**
+     * 把 hutool 的 JSON 结构翻译成纯 Java 结构，供两个成员代理端点的返回值用。
+     *
+     * <p>hutool 把 JSON null 解析成 {@link cn.hutool.json.JSONNull} 单例，而 Jackson
+     * 没有它的序列化器——原样当控制器返回值的话，只要上游某个字段是 null，整条响应
+     * 就会 500（{@code No serializer found for class cn.hutool.json.JSONNull}）。
+     * 而 {@code avatarUrl} 为 null 正是没绑官网/没传头像的默认状态，即绝大多数账号。
+     */
+    private static Object toPlain(Object v) {
+        if (JSONUtil.isNull(v)) {
+            return null;
+        }
+        if (v instanceof JSONObject o) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            for (String k : o.keySet()) {
+                m.put(k, toPlain(o.get(k)));
+            }
+            return m;
+        }
+        if (v instanceof JSONArray a) {
+            List<Object> out = new ArrayList<>(a.size());
+            for (Object item : a) {
+                out.add(toPlain(item));
+            }
+            return out;
+        }
+        return v;
     }
 
     /** 透传服务端 {@code GET /api/projects/{rid}/members}——{id, userId, role, joinedAt, username, displayName, avatarUrl} 原样带回。 */
@@ -523,10 +803,135 @@ public class CloudSyncService {
                     "Failed to load case members: " + resp.getStr("message", "please try again")));
         }
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Object o : resp.getJSONArray("data")) {
-            out.add((JSONObject) o);
+        JSONArray data = resp.getJSONArray("data");
+        cacheRemoteDisplayNames(projectId, data);
+        if (data != null) {
+            for (Object o : data) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> plain = (Map<String, Object>) toPlain(o);
+                if (plain != null) {
+                    out.add(plain);
+                }
+            }
         }
         return out;
+    }
+
+    /**
+     * 透传服务端查人端点（dev-board#444）：回 {@code {found, displayName, avatarUrl,
+     * maskedContact, alreadyMember, currentRole, message}}。
+     *
+     * <p>{@code found:false} 是**正常结果**（服务端 code 仍是 0），原样带回给界面显示，
+     * 不在这里翻译成异常——那会让「这个号还没人用过」弹成一个像故障的提示。
+     */
+    public Map<String, Object> proxyMemberLookup(long projectId, String identifier) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        String url = conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
+                + "/members/lookup?identifier="
+                + java.net.URLEncoder.encode(identifier == null ? "" : identifier,
+                        java.nio.charset.StandardCharsets.UTF_8);
+        JSONObject resp = JSONUtil.parseObj(httpGet(url, conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing(LangText.of(
+                    "没能找到这位同事：" + resp.getStr("message", "请重试"),
+                    "Couldn't look up that colleague: " + resp.getStr("message", "please try again")));
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toPlain(resp.getJSONObject("data"));
+        return data == null ? Map.of("found", false) : data;
+    }
+
+    /**
+     * 透传案件库的协作事件（spec 2026-09-14 §2.3），外层补两个「我是谁」的字段：
+     * {@code selfUserId} 是**案件库那一侧**的 userId（本机 userId 与事件表毫无关系），
+     * {@code selfTokenId} 是本机这枚设备令牌——界面据此把事件行说成「你」「你（某台电脑）」
+     * 还是同事的名字。本列上线前建的连接为空——{@link #ensureRemoteUserId} 在这里
+     * 自动补一次（不必断开重连）；实在对不上才留 null，界面一律按「他人」渲染。
+     */
+    public Map<String, Object> proxyCollabEvents(long projectId, int limit, Long before) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        ensureRemoteUserId(conn, remote);
+        String url = conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
+                + "/collab-events?limit=" + limit + (before == null ? "" : "&before=" + before);
+        JSONObject resp = JSONUtil.parseObj(httpGet(url, conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing(LangText.of(
+                    "读取协作记录失败：" + resp.getStr("message", "请重试"),
+                    "Failed to load collaboration records: " + resp.getStr("message", "please try again")));
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) toPlain(resp.getJSONObject("data"));
+        Object events = data == null ? null : data.get("events");
+        Map<String, Object> out = new HashMap<>();
+        out.put("events", events instanceof List<?> list ? list : List.of());
+        out.put("selfUserId", conn.getRemoteUserId());
+        out.put("selfTokenId", conn.getTokenId());
+        return out;
+    }
+
+    /**
+     * 存量连接的 {@code remoteUserId} 自动回填（spec 2026-09-14 §2.3 收尾）。
+     *
+     * <p>这一列是本设计才加的，本列之前建的连接全是空——而事件表记的是**案件库那一侧**的
+     * userId，空了就没法把「我自己干的那几行」认出来，律师会在提交历史里看到自己被当成同事。
+     * 让他去断开重连太荒唐（重连要重桥、重发设备令牌），所以这里自动补：
+     * 两侧 members 现在都带 {@code accountId}（官网账户 id，spec §2.6），拿本机连着的
+     * 那个账户去案件库参与人列表里对一下就知道我是谁。
+     *
+     * <p>只挂在**协作事件代理**这一条路上，不挂 {@code cloudStatus}/{@code checkCloud}：
+     * 那两个 120 秒轮询一次，为一件一次性的补写每两分钟多打一趟成员请求不值当。
+     * 回填成功后 {@code remoteUserId} 非空，这个方法此后直接返回。
+     *
+     * <p>整段吞异常：认不出「我是谁」只是让事件行一律按他人渲染（本列上线前的既有行为），
+     * 不值得为它把整个「提交历史」标签页打不开。
+     */
+    private void ensureRemoteUserId(CloudConnection conn, ProjectRemote remote) {
+        if (conn.getRemoteUserId() != null || accountService == null) return;
+        try {
+            String myAccountId = accountService.currentAccountIdOrNull();
+            if (myAccountId == null || myAccountId.isBlank()) return;
+            JSONObject resp = JSONUtil.parseObj(httpGet(
+                    conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
+                    conn.getDeviceToken()));
+            if (resp.getInt("code", 1) != 0) return;
+            JSONArray rows = resp.getJSONArray("data");
+            cacheRemoteDisplayNames(remote.getProjectId(), rows);
+            if (rows == null) return;
+            for (Object o : rows) {
+                if (!(o instanceof JSONObject row)) continue;
+                if (!myAccountId.equals(row.getStr("accountId"))) continue;
+                Long userId = row.getLong("userId", null);
+                if (userId == null) continue;
+                conn.setRemoteUserId(userId);
+                connectionRepository.save(conn);
+                log.info("已回填案件库侧的 userId: connection={} remoteUserId={}", conn.getId(), userId);
+                return;
+            }
+            log.info("案件库参与人里没有与本机账户对得上的行，事件行仍按他人渲染: connection={}", conn.getId());
+        } catch (Exception e) {
+            log.warn("回填案件库侧 userId 失败（已吞）: connection={}", conn.getId(), e);
+        }
+    }
+
+    /**
+     * 上报「我取回了最新稿」。这件事只有客户端知道——服务端那一侧就是一次普通的
+     * upload-pack，和日常轮询分不开。失败只记日志：少一行旁白而已，绝不能让一次
+     * 已经落地的取回报错。
+     */
+    private void reportPulled(long projectId, CloudConnection conn) {
+        try {
+            ProjectRemote remote = remoteRepository.findByProjectId(projectId).orElse(null);
+            if (remote == null || conn == null) return;
+            Map<String, Object> body = new HashMap<>();
+            body.put("kind", "PULLED");
+            body.put("toSha", repoService.resolveRef(projectId, repoService.mainBranch()));
+            httpPost(conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId()
+                    + "/collab-events", JSONUtil.toJsonStr(body), conn.getDeviceToken());
+        } catch (Exception e) {
+            log.warn("上报取回记录失败（已吞）: project={}", projectId, e);
+        }
     }
 
     /** 透传服务端加成员端点，role 缺省 PARTICIPANT（由调用方决定，这里只透传）。 */
@@ -610,11 +1015,12 @@ public class CloudSyncService {
             repoService.fastForwardMainline(projectId, ORIGIN_MASTER);
             var manifest = manifestService.readAtRef(projectId, "HEAD");
             if (manifest != null) manifestService.applyToDatabase(projectId, manifest);
+            reportPulled(projectId, conn);
             return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null);
         }
         // 真合并：两条已分叉的线
         MergeOutcome outcome = repoService.mergeNoCommit(projectId, ORIGIN_MASTER,
-                cloudMergeTitle(), userName, authorEmail(userId, userName));
+                cloudMergeTitle(), userName, authorEmail(projectId, userId, userName));
         if (outcome.mergeSha() != null) {
             // ALREADY_UP_TO_DATE：上面两次 isAncestor 判断之间仓库状态变化的边界情况，
             // 没有待提交的合并（mergeNoCommit 的契约，见其 Javadoc）。
@@ -627,11 +1033,12 @@ public class CloudSyncService {
                 // 互不相干）。律师不认识这个文件、也无从选择，清单并集本来就要按并集
                 // 规则重写它——自己裁决掉，别弹窗打扰他（同 WorkSessionService.adoptDraft
                 // 的同款自愈，理由见地雷 #21）。
-                return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName);
+                // 自裁的清单冲突不是律师做的选择，不记裁决尾注。
+                return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName, Map.of());
             }
-            return new UpdateResult(UpdateStatus.CONFLICT, List.of(), cloudConflictPayload(projectId));
+            return new UpdateResult(UpdateStatus.CONFLICT, List.of(), cloudConflictPayload(projectId, userId));
         }
-        return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName);
+        return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName, Map.of());
     }
 
     /** 冲突裁决：逐文件三选一，choices 必须覆盖全部待选文件，随后与干净路径走同一条收尾。 */
@@ -657,13 +1064,15 @@ public class CloudSyncService {
             for (String path : conflicts) {
                 if (choices.get(path) == null) throw VersionException.userFacing(LangText.of("还有文件没选留哪一份", "There are still files where you haven't picked which version to keep"));
             }
+            requireMergedHasPendingRecord(projectId, choices, conflicts);
             for (String path : conflicts) {
                 sessionService.applyResolution(projectId, path, choices.get(path),
                         mainTip, cloudTip, cloudSideLabel());
             }
             var remote = remoteRepository.findByProjectId(projectId).orElseThrow();
             return completeCloudMerge(projectId, mainTip, cloudTip,
-                    connectionOf(remote), userId, userName);
+                    connectionOf(remote), userId, userName,
+                    WorkSessionService.resolutionNames(choices, conflicts));
         } finally {
             lock.unlock();
         }
@@ -683,6 +1092,8 @@ public class CloudSyncService {
             }
             requireCloudMergeWindow(projectId, repoService.mergeHeadRef(projectId));
             repoService.abortMerge(projectId);
+            // 待决记录与合并窗口同寿（同 WorkSessionService.abortAdopt）
+            if (pendingMergeStore != null) pendingMergeStore.clear(projectId);
             return LangText.of("这次没有取回，你的内容分毫未动", "Nothing was pulled — your content is untouched");
         } finally {
             lock.unlock();
@@ -695,23 +1106,31 @@ public class CloudSyncService {
      * {@link ProjectTreeManifestService#unionApply(long, TreeManifest, TreeManifest)}——
      * 基线是合并前本地 tip 与云端 tip 的合并基线，只有云端那一侧相对基线真的做过复活
      * 动作才会复活本方亲手软删的文件）→ 提交 → 自动重推。
-     * 重推失败（网络问题）不回滚——合并已经落地，只是回传没成，转入待上传，绝不丢改动。
+     * 重推失败（网络问题）不回滚——合并已经落地，只是回传没成，转入待上传，绝不丢改动；
+     * 落没落地随 {@link UpdateResult#landedOnCloud()} 回给调用方（上传路径据此不报成功交稿）。
      */
     private UpdateResult completeCloudMerge(long projectId, String tipBefore, String cloudTip,
-                                            CloudConnection conn, Long userId, String userName) {
+                                            CloudConnection conn, Long userId, String userName,
+                                            Map<String, String> resolutions) {
         var cloudManifest = manifestService.readAtRef(projectId, cloudTip);
         String baseSha = repoService.mergeBase(projectId, tipBefore, cloudTip);
         TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
         if (cloudManifest != null) manifestService.unionApply(projectId, cloudManifest, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-        repoService.commitMergeResolution(projectId, cloudMergeTitle(),
-                userName, authorEmail(userId, userName));
+        repoService.commitMergeResolution(projectId, cloudMergeTitle(), resolutions,
+                pendingMergeStore == null ? List.of() : pendingMergeStore.all(projectId),
+                ProjectRepoService.MERGE_CONTEXT_CLOUD,
+                userName, authorEmail(projectId, userId, userName));
+        // 提交成功之后才清：提交失败时记录还在，律师重试一次照样能收尾。
+        if (pendingMergeStore != null) pendingMergeStore.clear(projectId);
+        boolean landed = false;
         try {
             // 重推被拒是返回值不是异常（裁决窗口期间远端又被同事推进了一版）：不接住的话
             // 会绿灯假同步——pendingUpload=false + lastSyncSha=本地 sha，界面显示「已与云端
             // 同步」而云端根本没有这份裁决结果（v2 终审 I1）。
             ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
                     projectId, conn.getUsername(), conn.getDeviceToken());
+            landed = out.pushed();
             remoteRepository.findByProjectId(projectId).ifPresent(remote -> {
                 if (out.pushed()) {
                     remote.setPendingUpload(false);
@@ -730,7 +1149,8 @@ public class CloudSyncService {
                 remoteRepository.save(remote);
             });
         }
-        return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null);
+        reportPulled(projectId, conn);
+        return new UpdateResult(UpdateStatus.UPDATED, affectedSince(projectId, tipBefore), null, landed);
     }
 
     /** 受影响文件 id：口径同 revertTo，动作前后的 HEAD 差异反向传给 diffNameStatus。 */
@@ -784,13 +1204,50 @@ public class CloudSyncService {
     }
 
     /** 冲突窗口 payload，形状同 VersionController.cloudConflictStatus——两处独立反查，不共享代码是故意的（一个在写入时机知道，一个在 /status 轮询时反查）。 */
-    private Map<String, Object> cloudConflictPayload(long projectId) {
+    private Map<String, Object> cloudConflictPayload(long projectId, Long userId) {
         Map<String, Object> m = new HashMap<>();
         m.put("conflictingPaths", WorkSessionService.userVisibleConflicts(
                 repoService.conflictingPaths(projectId)));
         m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
         m.put("cloudTip", repoService.mergeHeadRef(projectId));
+        // 三方合并那三个字段（spec 2026-09-14 §4.3）由分析服务统一拼——**不许在这里
+        // 复制一份**：/status 的 cloudConflictStatus 与这里给的是同一个冲突窗口，
+        // 两份独立实现走散之后前端会按同一套代码渲染出两种形状。
+        m.putAll(mergeExtras(projectId, userId));
         return m;
+    }
+
+    /**
+     * {@code MERGED} 的护栏，口径与 {@code WorkSessionService.requireMergedHasPendingRecord}
+     * 逐字相同（那边是采纳/结束工作两个语境，这里是云端取回）：没有待决记录就说明
+     * 工作区里躺着的还是带冲突标记的半成品，认下去等于把它提交进主线并推给同事。
+     */
+    private void requireMergedHasPendingRecord(long projectId,
+                                               Map<String, WorkSessionService.Resolution> choices,
+                                               List<String> conflicts) {
+        for (String path : conflicts) {
+            if (choices.get(path) != WorkSessionService.Resolution.MERGED) continue;
+            if (pendingMergeStore == null || pendingMergeStore.get(projectId, path).isEmpty()) {
+                throw VersionException.userFacing(LangText.of(
+                        "这份文件还没有合并好的结果，请重新处理一遍",
+                        "This file has no merged result yet — please work through it again"));
+            }
+        }
+    }
+
+    /**
+     * 冲突窗口里那三个三方合并字段。分析服务缺席（手工 new 出本服务的单测）时回空表——
+     * 冲突窗口退回 v2 的老形状，前端的 {@code documentMerges} 为空即全部整份三选一。
+     */
+    private Map<String, Object> mergeExtras(long projectId, Long userId) {
+        if (mergeAnalysisService == null) return Map.of();
+        try {
+            return mergeAnalysisService.conflictExtras(projectId, userId,
+                    remoteDisplayNames(projectId, false));
+        } catch (Exception e) {
+            log.warn("拼装三方合并字段失败，这次冲突窗口按整份三选一给: project={}", projectId, e);
+            return Map.of();
+        }
     }
 
     private CloudConnection connectionOf(ProjectRemote remote) {
@@ -798,11 +1255,15 @@ public class CloudSyncService {
                 .orElseThrow(() -> new VersionException("云端连接不存在: " + remote.getConnectionId()));
     }
 
-    /** 合并提交的作者邮箱。userId 为 null（uploadToCloud 的自动整合无用户上下文）时退化为账号名。 */
-    private String authorEmail(Long userId, String userName) {
-        return userId != null
-                ? "user-" + userId + "@aiworkdeck.local"
-                : userName + "@aiworkdeck.local";
+    /**
+     * 合并提交的作者邮箱，规则集中在 {@link VersionAuthorResolver}（spec 2026-09-14 §2.1）。
+     * userId 为 null（uploadToCloud 的自动整合无用户上下文）时由 resolver 退化为账号名——
+     * 不过这条路径上项目必然已经绑定案件库，拿到的是账户级的 collab 邮箱。
+     */
+    private String authorEmail(long projectId, Long userId, String userName) {
+        return authorResolver != null
+                ? authorResolver.email(projectId, userId, userName)
+                : VersionAuthorResolver.localEmail(userName);
     }
 
     /** 无需认证头的调用，委托三参版本。 */

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import cn.hutool.core.util.StrUtil;
@@ -136,8 +139,14 @@ public class TushareService {
             Set<String> executives = new LinkedHashSet<>();
 
             for (Map<String, String> mgr : managers) {
-                String name = mgr.get("name");
-                String title = mgr.get("job"); // mapped to 'job' in helper
+                // 上游 stk_managers 允许 name/title 缺失（原始公告没披露职务是常态）。
+                // 这里不做兜底的话，一行坏数据 NPE 出去，上层 catch 会把这次已经采到的
+                // 基本信息、股东、管理层三组变量一起丢掉，用户还看不到任何报错。
+                String name = StrUtil.nullToEmpty(mgr.get("name"));
+                String title = StrUtil.nullToEmpty(mgr.get("job")); // mapped to 'job' in helper
+                if (StrUtil.isBlank(name)) {
+                    continue;
+                }
                 if (title.contains("独立董事")) {
                     directors.add(name + "(独董)");
                 } else if (title.contains("董事")) {
@@ -295,6 +304,13 @@ public class TushareService {
 
         String token = systemSettingService.get("external.tushare.token", defaultTushareToken);
         String apiUrl = systemSettingService.get("external.tushare.baseUrl", defaultTushareApiUrl);
+
+        // 未配置时给出可读提示（dev-board#69，与 search_web/企查查同口径）：
+        // 空 token 打上游只会换来一条看不出原因的失败。
+        if (token == null || token.isBlank()) {
+            throw new IllegalStateException(
+                    "金融数据查询未配置：当前部署未提供 Tushare token（环境变量 TUSHARE_TOKEN）。请基于已有信息继续完成任务。");
+        }
 
         JSONObject body = new JSONObject();
         body.put("api_name", apiName);

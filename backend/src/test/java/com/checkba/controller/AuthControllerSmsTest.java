@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.User;
@@ -57,9 +60,10 @@ class AuthControllerSmsTest {
                 smsAuthService, mock(UserRepository.class));
         // DB 会话服务（repository 打桩）：登录成功路径要经它签发 sessionId
         com.checkba.service.UserSessionService sessions = new com.checkba.service.UserSessionService(
-                mock(com.checkba.repository.UserSessionRepository.class));
+                mock(com.checkba.repository.UserSessionRepository.class), 365);
         return new AuthController(userService, null, null, null, guard, null, smsAuthService,
-                mock(com.checkba.service.mail.MailAuthService.class), secondFactor, sessions, false, null);
+                mock(com.checkba.service.mail.MailAuthService.class), secondFactor, sessions, false, null,
+                mock(com.checkba.service.account.AccountDeletionService.class), null);
     }
 
     @Test

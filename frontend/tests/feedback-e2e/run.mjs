@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 反馈浮窗端到端 / feedback widget e2e (Electron + CDP)。
 //
 // 覆盖浏览器目标够不到的整条链：右下角浮窗 → 打字 → **真的走一次主进程框选截图**
@@ -80,7 +82,7 @@ const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'feedback-e2e-electr
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const ws = await waitForCdpWs(CDP_PORT)
+const ws = await waitForCdpWs(CDP_PORT, 60, elec)
 if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
 {
   const bad = cdpOwnershipError(CDP_PORT, elec)

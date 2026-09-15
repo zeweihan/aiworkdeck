@@ -1,14 +1,48 @@
 <!DOCTYPE html>
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI WorkDeck</title>
   <!-- office.js 必须从微软官方 CDN 以 script 标签引入，不打包进 bundle -->
-  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <!-- CDN 加载失败/挂起时任务窗格会永久白屏：onerror + 超时兜底渲染一段静态双语提示。
+       此处早于 i18n 模块初始化，不能依赖 t()，文案直接内联。 -->
+  <script>
+    (function () {
+      var shown = false
+      function showOfficeLoadFailure() {
+        if (shown) return
+        shown = true
+        var app = document.getElementById('app')
+        if (!app) return
+        app.innerHTML = '<div style="padding:24px;font-family:-apple-system,\'Segoe UI\',sans-serif;font-size:13px;line-height:1.6;color:#333;">'
+          + '<p>Office 组件加载失败，请检查网络或代理设置后重新打开任务窗格。</p>'
+          + '<p>Failed to load the Office component. Check your network or proxy settings, then reopen the task pane.</p>'
+          + '</div>'
+      }
+      window.__awdOfficeLoadFailed = showOfficeLoadFailure
+      window.setTimeout(function () {
+        if (typeof window.Office === 'undefined') showOfficeLoadFailure()
+      }, 8000)
+    })()
+  </script>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" onerror="window.__awdOfficeLoadFailed && window.__awdOfficeLoadFailed()"></script>
 </head>
 <body>
   <div id="app"></div>
+  <!-- AGPL §0 Appropriate Legal Notices：许可与商标告示。
+       刻意放在 #app 之外的静态 HTML 里，而不是 Vue 树内：Office/WPS 宿主里 JS 挂载失败
+       （office.js CDN 挂了、宿主注入延迟）时告示仍在。此处早于 i18n 模块，
+       文案与工作台设置页的「关于」区块同源，任务窗格空间紧，只留中文。 -->
+  <footer class="legal-notice">
+    <div>AI WorkDeck · 版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者</div>
+    <div>依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得用作产品名。</div>
+    <div><a href="https://github.com/zeweihan/aiworkdeck" target="_blank" rel="noopener noreferrer">源代码</a>
+      · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">许可证全文</a>
+      · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md" target="_blank" rel="noopener noreferrer">商标说明</a></div>
+  </footer>
   <script type="module" src="/taskpane/main.js"></script>
 </body>
 </html>

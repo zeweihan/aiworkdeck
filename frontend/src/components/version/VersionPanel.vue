@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="version-panel">
     <view v-if="loading" class="version-empty">{{ $t('version.loadingHistory') }}</view>
@@ -16,6 +18,12 @@
     </view>
 
     <template v-else>
+      <!-- 「完整历史」：侧栏这条时间线只看得到主线最近 50 条，中栏那个标签页才是
+           `git log --graph --all` 的等价物（各稿 + 案件库最新稿 + 事件 + 筛选 + 任选两版对比）。
+           没连案件库的案卷同样有用（本机历史本来就在），所以不收进协作状态行。 -->
+      <view class="version-history-row">
+        <text class="version-history-link" @tap="$emit('open-history')">{{ $t('version.openFullHistory') }}</text>
+      </view>
       <WorkSessionBar
         :working="working"
         :changed-count="changedCount"
@@ -47,11 +55,16 @@
       <VersionTimeline
         :project-id="projectId"
         :file-filter="fileFilter"
+        :drafts="drafts"
         :key="timelineKey"
         @reload-files="onReload"
         @compare-file="$emit('compare-file', $event)"
         @draft-created="onReload"
       />
+      <view class="version-footer">
+        <text class="version-footer-size">{{ $t('version.repoSize', { size: repoSizeText }) }}</text>
+        <text class="version-footer-off" @tap="confirmDisable">{{ $t('version.disable') }}</text>
+      </view>
       <!-- 三语境冲突弹窗：/status 判定链 sessionEndConflict > cloudConflict > adoptConflict，
            互斥挂载（后端保证命中前两者中任一个时第三个必为 null，前端按同序取。含崩溃后
            重开面板的场景。 -->
@@ -64,9 +77,14 @@
         :conflicting-paths="sessionEndConflict.conflictingPaths"
         :mainline-tip="sessionEndConflict.mainlineTip"
         :draft-tip="sessionEndConflict.sessionTip"
+        :document-merges="sessionEndConflict.documentMerges || []"
+        :sides="sessionEndConflict.sides || {}"
+        :merge-base="sessionEndConflict.mergeBase"
         @resolved="onReload"
         @aborted="refresh"
         @compare-file="$emit('compare-file', $event)"
+        @open-merge-review="$emit('open-merge-review', $event)"
+        @retry-merge="$emit('retry-merge', $event)"
       />
       <AdoptConflictDialog
         v-else-if="cloudConflict"
@@ -75,9 +93,14 @@
         :conflicting-paths="cloudConflict.conflictingPaths"
         :mainline-tip="cloudConflict.mainlineTip"
         :draft-tip="cloudConflict.cloudTip"
+        :document-merges="cloudConflict.documentMerges || []"
+        :sides="cloudConflict.sides || {}"
+        :merge-base="cloudConflict.mergeBase"
         @resolved="onReload"
         @aborted="refresh"
         @compare-file="$emit('compare-file', $event)"
+        @open-merge-review="$emit('open-merge-review', $event)"
+        @retry-merge="$emit('retry-merge', $event)"
       />
       <AdoptConflictDialog
         v-else-if="adoptConflict"
@@ -87,9 +110,14 @@
         :conflicting-paths="adoptConflict.conflictingPaths"
         :mainline-tip="adoptConflict.mainlineTip"
         :draft-tip="adoptConflict.draftTip"
+        :document-merges="adoptConflict.documentMerges || []"
+        :sides="adoptConflict.sides || {}"
+        :merge-base="adoptConflict.mergeBase"
         @resolved="onReload"
         @aborted="onReload"
         @compare-file="$emit('compare-file', $event)"
+        @open-merge-review="$emit('open-merge-review', $event)"
+        @retry-merge="$emit('retry-merge', $event)"
       />
     </template>
   </view>
@@ -97,9 +125,10 @@
 
 <script>
 import {
-  getVersionStatus, enableVersionControl, listDrafts,
-  getCloudStatus, checkCloud, listCloudConnections,
+  getVersionStatus, enableVersionControl, disableVersionControl, listDrafts,
+  getCloudStatus, checkCloud, listCloudConnections, getOfficialCloud,
 } from '@/services/api.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import WorkSessionBar from './WorkSessionBar.vue'
 import VersionTimeline from './VersionTimeline.vue'
 import DraftList from './DraftList.vue'
@@ -119,7 +148,12 @@ export default {
   // adopt-conflict：把「有没有采纳等待处理」同步给页面。本面板一关（切去资源管理器
   // 等），三选一弹窗随组件卸载消失，而后端仍停在待裁决状态、版本捕获整体关闭——
   // 页面据此在面板之外挂一条固定提示条（project-overview.vue 的 .adopt-pending-bar）。
-  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab'],
+  // status-changed：面板内的结束工作/丢弃/回主线/采纳/放弃等操作都只更新面板自己的
+  // 状态，不会通知页面级的顶栏/底部工作状态 chip（它们各自轮询/事件驱动，互不相通）。
+  // refresh()/onReload() 每次拉完 /status 都发一次，页面据此重新拉一次自己的状态点。
+  // open-merge-review / retry-merge：裁决总览里那两个按钮（「打开合并比对稿」「重试
+  // 自动合并」）的出口。标签页与隐藏引擎实例都归页面管，本面板只负责往上传。
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'open-history', 'status-changed', 'open-merge-review', 'retry-merge'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -137,9 +171,22 @@ export default {
       sessionEndConflict: null,
       cloud: null,
       hasConnection: false,
+      repoSizeBytes: 0,
       timelineKey: 0,
       busy: false,
+      refreshSeq: 0,
     }
+  },
+  computed: {
+    // 仓里没有公共的字节格式化工具（FilePreview/FileStagingArea/MarketPane 各写各的），
+    // 这里照 FileStagingArea.formatSize 的口径写一份，不为一处新造公共模块。
+    repoSizeText() {
+      const n = Number(this.repoSizeBytes) || 0
+      if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(1) + 'GB'
+      if (n >= 1024 * 1024) return Math.round(n / 1024 / 1024) + 'MB'
+      if (n >= 1024) return Math.round(n / 1024) + 'KB'
+      return n + 'B'
+    },
   },
   watch: {
     collabRefreshToken() {
@@ -155,19 +202,28 @@ export default {
     }).catch(() => {})
   },
   methods: {
+    // refresh() 的触发源很多（mounted/collabRefreshToken watcher/onReload，onReload 又被
+    // WorkSessionBar 结束工作段、三选一冲突弹窗 resolved/aborted 等一堆事件各自触发），
+    // 互相之间可能重叠。没有请求代次的话，先发的那次 getVersionStatus 若后回，会把
+    // 后发的那次已经渲染好的更新状态覆盖回旧值——工作段/稿态/采纳冲突全部倒退，
+    // 且没有任何错误提示。只认"此刻最新一次" refresh 发出的响应。
     async refresh() {
+      const seq = ++this.refreshSeq
       this.loading = true
       try {
         const res = await getVersionStatus(this.projectId)
+        if (!shouldAcceptResponse(seq, this.refreshSeq)) return
         const d = (res && res.data) || {}
         this.enabled = !!d.enabled
         this.working = !!d.working
         this.changedCount = d.changedCount || 0
+        this.repoSizeBytes = d.repoSizeBytes || 0
         this.onDraft = d.onDraft || null
         this.adoptConflict = d.adoptConflict || null
         this.cloudConflict = d.cloudConflict || null
         this.sessionEndConflict = d.sessionEndConflict || null
         this.$emit('adopt-conflict', !!(this.adoptConflict || this.cloudConflict || this.sessionEndConflict))
+        this.$emit('status-changed', { enabled: this.enabled, working: this.working, changedCount: this.changedCount, onDraft: this.onDraft })
         this.timelineKey += 1
         this.loadError = false
         if (this.enabled) {
@@ -179,13 +235,14 @@ export default {
           this.hasConnection = false
         }
       } catch (e) {
+        if (!shouldAcceptResponse(seq, this.refreshSeq)) return
         // 读取失败绝不能落到"未开启"引导页——那会让律师误以为从没开过版本记录，
         // 去重复点开启。宁可显示可区分的错误态，保留 enabled 的上一次已知值。
         console.warn('[Version] 读取状态失败', e)
         this.loadError = true
         uni.showToast({ title: this.$t('version.loadFailedToast'), icon: 'none' })
       } finally {
-        this.loading = false
+        if (shouldAcceptResponse(seq, this.refreshSeq)) this.loading = false
       }
     },
     async fetchDrafts() {
@@ -211,7 +268,16 @@ export default {
       try {
         const res = await listCloudConnections()
         const list = (res && res.data && res.data.connections) || []
-        this.hasConnection = list.length > 0
+        // 官方案件库一键即连（本机已连 AI WorkDeck 账户就够了），所以「设不设得出
+        // 共享入口」的判据不只是"已经有连接"——本站提供官方案件库时同样算有。
+        let officialAvailable = false
+        try {
+          const off = await getOfficialCloud()
+          officialAvailable = !!(off && off.data && off.data.available)
+        } catch (e) {
+          console.warn('[Version] 读取官方案件库状态失败', e)
+        }
+        this.hasConnection = list.length > 0 || officialAvailable
       } catch (e) {
         console.warn('[Version] 读取云端连接失败', e)
         this.hasConnection = false
@@ -223,6 +289,29 @@ export default {
     onReload(affectedFileIds) {
       this.refresh()
       this.$emit('reload-files', affectedFileIds || [])
+    },
+    // 二次确认照 VersionNodeDetail「退回到这一版」的写法（uni.showModal）。
+    // 这一步不可撤销，且会把整条时间线一次性删掉，措辞要把后果说全。
+    confirmDisable() {
+      if (this.busy) return
+      uni.showModal({
+        title: this.$t('version.disable'),
+        content: this.$t('version.disableConfirmContent'),
+        confirmText: this.$t('version.disableConfirmOk'),
+        success: async (r) => {
+          if (!r.confirm) return
+          this.busy = true
+          try {
+            await disableVersionControl(this.projectId)
+            uni.showToast({ title: this.$t('version.disabled'), icon: 'none' })
+            await this.refresh()
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || this.$t('version.disableFailed'), icon: 'none' })
+          } finally {
+            this.busy = false
+          }
+        },
+      })
     },
     async enable() {
       if (this.busy) return
@@ -242,23 +331,34 @@ export default {
 
 <style lang="scss" scoped>
 .version-panel { display: flex; flex-direction: column; height: 100%; }
-.version-empty { padding: 24rpx; color: #888; font-size: 26rpx; }
+.version-empty { padding: 24rpx; color: var(--awd-text-3); font-size: 26rpx; }
 .version-intro { padding: 32rpx 24rpx; }
 .version-intro-title { font-size: 30rpx; font-weight: 600; margin-bottom: 12rpx; }
-.version-intro-desc { font-size: 26rpx; color: #666; line-height: 1.6; margin-bottom: 24rpx; }
+.version-intro-desc { font-size: 26rpx; color: var(--awd-text-2); line-height: 1.6; margin-bottom: 24rpx; }
 .version-error { padding: 32rpx 24rpx; }
-.version-error-desc { font-size: 26rpx; color: #b23; line-height: 1.6; margin-bottom: 24rpx; }
+.version-error-desc { font-size: 26rpx; color: var(--awd-danger-text); line-height: 1.6; margin-bottom: 24rpx; }
 .version-file-filter {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12rpx 24rpx; background: #F3F6F5; border-bottom: 1px solid #E9ECEF;
-  font-size: 24rpx; color: #666;
+  padding: 12rpx 24rpx; background: var(--awd-accent-soft); border-bottom: 1px solid var(--awd-border);
+  font-size: 24rpx; color: var(--awd-text-2);
 }
-.version-file-filter-clear { color: #12344D; text-decoration: underline; }
+.version-file-filter-clear { color: var(--awd-text); text-decoration: underline; }
+.version-history-row {
+  display: flex; justify-content: flex-end;
+  padding: 8rpx 24rpx; border-bottom: 1px solid var(--awd-border);
+}
+.version-history-link { font-size: 23rpx; color: var(--awd-text); text-decoration: underline; }
+.version-footer {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8rpx;
+  padding: 12rpx 24rpx; border-top: 1px solid var(--awd-border);
+  font-size: 22rpx; color: var(--awd-text-3);
+}
+.version-footer-off { color: var(--awd-text-3); text-decoration: underline; flex-shrink: 0; }
 
 /* awd-* 没有集中定义，各组件 scoped 内各自定义 */
 .awd-btn {
   display: inline-block; padding: 14rpx 28rpx; border-radius: 8rpx;
   font-size: 26rpx; text-align: center;
 }
-.awd-btn-primary { background: #12344D; color: #fff; }
+.awd-btn-primary { background: var(--awd-info); color: var(--awd-text-on-accent); }
 </style>

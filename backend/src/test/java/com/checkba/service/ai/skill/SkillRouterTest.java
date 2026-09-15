@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.skill;
 
 import com.checkba.service.ai.PluginService;
@@ -98,11 +101,11 @@ class SkillRouterTest {
     @Test
     @DisplayName("工具裁剪：命中后可见工具 = allowed_tools ∪ 基础工具集（本例注册表里没有编排类工具）")
     void trimsToWhitelistPlusBaseTools() {
-        router.activateForTurn("conv-1", "公司考虑IPO");
+        router.activateForTurn("conv-1", "run-1", "公司考虑IPO");
         List<ToolSpecification> all = specs("law_search", "write_docx", "doc_open_file",
                 "pptx_generate", "read_document");
 
-        List<ToolSpecification> visible = router.visibleTools("conv-1", all);
+        List<ToolSpecification> visible = router.visibleTools("run-1", all);
         List<String> names = visible.stream().map(ToolSpecification::name).toList();
         assertEquals(List.of("law_search", "write_docx", "read_document"), names);
     }
@@ -114,11 +117,11 @@ class SkillRouterTest {
         // base-tools 也只有 read_document。按"allowed_tools ∪ base-tools"的老口径，
         // todo_write 与 dispatch_subtask 会被静默裁掉（不报错不告警，只是模型不写清单/不派子任务）。
         // 这条断言是防"下一个新 skill 再踩一次"的唯一屏障，不要因为自带 skill 已显式声明就删掉它。
-        router.activateForTurn("conv-orch", "公司考虑IPO");
+        router.activateForTurn("conv-orch", "run-orch", "公司考虑IPO");
         List<ToolSpecification> all = specs("law_search", "write_docx", "doc_open_file",
                 "read_document", "todo_write", "dispatch_subtask");
 
-        List<String> names = router.visibleTools("conv-orch", all).stream()
+        List<String> names = router.visibleTools("run-orch", all).stream()
                 .map(ToolSpecification::name).toList();
         assertTrue(names.contains("todo_write"), "编排类工具 todo_write 必须恒定可见");
         assertTrue(names.contains("dispatch_subtask"), "编排类工具 dispatch_subtask 必须恒定可见");
@@ -132,28 +135,28 @@ class SkillRouterTest {
         writeSkill("skill-typo2", List.of("特殊触发词orch"), List.of("no_such_tool"));
         registry.rescan();
         props.setBaseTools(List.of());
-        router.activateForTurn("conv-orch2", "包含特殊触发词orch的请求");
+        router.activateForTurn("conv-orch2", "run-orch2", "包含特殊触发词orch的请求");
         // 若判据不排除恒定可见的编排类工具，这里会只剩那两个，skill 被裁成"只会写清单/派子任务"
         List<ToolSpecification> all = specs("law_search", "todo_write", "dispatch_subtask");
-        assertSame(all, router.visibleTools("conv-orch2", all));
+        assertSame(all, router.visibleTools("run-orch2", all));
     }
 
     @Test
     @DisplayName("未命中任何 skill：不裁剪，原样返回（行为保持）")
     void noMatchNoTrim() {
-        router.activateForTurn("conv-2", "帮我起草一份保密协议");
+        router.activateForTurn("conv-2", "run-2", "帮我起草一份保密协议");
         List<ToolSpecification> all = specs("law_search", "doc_open_file");
-        assertSame(all, router.visibleTools("conv-2", all));
-        assertEquals(Optional.empty(), router.activeSkill("conv-2"));
+        assertSame(all, router.visibleTools("run-2", all));
+        assertEquals(Optional.empty(), router.activeSkill("run-2"));
     }
 
     @Test
     @DisplayName("新一轮未命中会清掉上一轮的激活状态")
     void unmatchedTurnClearsActivation() {
-        router.activateForTurn("conv-3", "公司考虑IPO");
-        assertTrue(router.activeSkill("conv-3").isPresent());
-        router.activateForTurn("conv-3", "换个话题，帮我改一下合同措辞");
-        assertEquals(Optional.empty(), router.activeSkill("conv-3"));
+        router.activateForTurn("conv-3", "run-3", "公司考虑IPO");
+        assertTrue(router.activeSkill("run-3").isPresent());
+        router.activateForTurn("conv-3", "run-3", "换个话题，帮我改一下合同措辞");
+        assertEquals(Optional.empty(), router.activeSkill("run-3"));
     }
 
     @Test
@@ -162,9 +165,9 @@ class SkillRouterTest {
         writeSkill("skill-typo", List.of("特殊触发词xyz"), List.of("no_such_tool"));
         registry.rescan();
         props.setBaseTools(List.of());
-        router.activateForTurn("conv-4", "包含特殊触发词xyz的请求");
+        router.activateForTurn("conv-4", "run-4", "包含特殊触发词xyz的请求");
         List<ToolSpecification> all = specs("law_search", "doc_open_file");
-        assertSame(all, router.visibleTools("conv-4", all));
+        assertSame(all, router.visibleTools("run-4", all));
     }
 
     @Test
@@ -190,33 +193,114 @@ class SkillRouterTest {
 
         // 触发词命中也不自动激活；此处输入只含 skill-a 的触发词
         assertEquals(Optional.empty(), router.match("公司考虑IPO"));
-        router.activateForTurn("conv-m", "公司考虑IPO");
-        assertEquals(Optional.empty(), router.activeSkill("conv-m"));
+        router.activateForTurn("conv-m", "run-m", "公司考虑IPO");
+        assertEquals(Optional.empty(), router.activeSkill("run-m"));
 
         // 钉选后照常生效
-        router.activateForTurn("conv-m", "随便问点别的", "skill-a");
-        assertEquals("skill-a", router.activeSkill("conv-m").orElseThrow().getId());
+        router.activateForTurn("conv-m", "run-m", "随便问点别的", "skill-a");
+        assertEquals("skill-a", router.activeSkill("run-m").orElseThrow().getId());
     }
 
     @Test
     @DisplayName("钉选优先于触发词匹配")
     void pinnedBeatsTriggerMatch() {
-        router.activateForTurn("conv-p", "帮我分析上市路径", "skill-a");
-        assertEquals("skill-a", router.activeSkill("conv-p").orElseThrow().getId());
+        router.activateForTurn("conv-p", "run-p", "帮我分析上市路径", "skill-a");
+        assertEquals("skill-a", router.activeSkill("run-p").orElseThrow().getId());
         // 不钉选时同一句话命中的是触发词更长的 skill-b
-        router.activateForTurn("conv-p", "帮我分析上市路径");
-        assertEquals("skill-b", router.activeSkill("conv-p").orElseThrow().getId());
+        router.activateForTurn("conv-p", "run-p", "帮我分析上市路径");
+        assertEquals("skill-b", router.activeSkill("run-p").orElseThrow().getId());
     }
 
     @Test
     @DisplayName("钉选 id 不存在或已停用时退回自动匹配")
     void invalidPinFallsBackToAutoMatch() {
-        router.activateForTurn("conv-x", "帮我分析上市路径", "no-such-skill");
-        assertEquals("skill-b", router.activeSkill("conv-x").orElseThrow().getId());
+        router.activateForTurn("conv-x", "run-x", "帮我分析上市路径", "no-such-skill");
+        assertEquals("skill-b", router.activeSkill("run-x").orElseThrow().getId());
 
         registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
-        router.activateForTurn("conv-y", "公司考虑IPO", "skill-b");
-        assertEquals("skill-a", router.activeSkill("conv-y").orElseThrow().getId());
+        router.activateForTurn("conv-y", "run-y", "公司考虑IPO", "skill-b");
+        assertEquals("skill-a", router.activeSkill("run-y").orElseThrow().getId());
+    }
+
+    // ==== 手动选择（对话面板的 skill 选择器 / POST /chat 的 skillIds）====
+
+    @Test
+    @DisplayName("手动选择与自动命中取并集：两个 skill 同时生效，工具白名单也是并集")
+    void manualSelectionUnionsWithAutoMatch() {
+        // 输入只命中 skill-b（触发词「上市路径」），用户另外手动勾了 skill-a
+        router.activateForTurn("conv-union", "run-union", "帮我分析上市路径", null, List.of("skill-a"));
+
+        List<SkillRouter.ActiveSkill> active = router.activeSkills("run-union");
+        assertEquals(2, active.size(), "手动选的和自动命中的都要生效：" + active);
+        assertEquals("skill-a", active.get(0).definition().getId(), "手动选择排在前面");
+        assertEquals(SkillRouter.SOURCE_MANUAL, active.get(0).source());
+        assertEquals("skill-b", active.get(1).definition().getId());
+        assertEquals(SkillRouter.SOURCE_AUTO, active.get(1).source());
+
+        // 工具可见性必须同时含两边的白名单——只裁到其中一个 skill 的能力就等于
+        // 另一半静默消失（skill 漏工具是排查成本最高的一类 bug）
+        List<String> names = router.visibleTools("run-union",
+                        specs("law_search", "write_docx", "search_web", "doc_open_file", "read_document"))
+                .stream().map(ToolSpecification::name).toList();
+        assertTrue(names.contains("law_search"), "skill-a 的工具应可见");
+        assertTrue(names.contains("search_web"), "skill-b 的工具应可见");
+        assertFalse(names.contains("doc_open_file"), "两边白名单外的工具仍应被裁掉");
+    }
+
+    @Test
+    @DisplayName("手动选择多枚：全部生效且顺序稳定")
+    void multipleManualSelections() {
+        router.activateForTurn("conv-multi", "run-multi", "随便问点别的", null, List.of("skill-a", "skill-b"));
+
+        assertEquals(List.of("skill-a", "skill-b"),
+                router.activeSkills("run-multi").stream()
+                        .map(a -> a.definition().getId()).toList());
+        assertTrue(router.activeSkills("run-multi").stream()
+                .allMatch(a -> SkillRouter.SOURCE_MANUAL.equals(a.source())));
+    }
+
+    @Test
+    @DisplayName("无效的手动 id 静默忽略：不存在 / 已停用的都跳过，其余照常生效")
+    void invalidManualIdsAreIgnored() {
+        registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
+        router.activateForTurn("conv-bad", "run-bad", "随便问点别的", null,
+                java.util.Arrays.asList("no-such-skill", null, "  ", "skill-b", "skill-a"));
+
+        assertEquals(List.of("skill-a"),
+                router.activeSkills("run-bad").stream().map(a -> a.definition().getId()).toList(),
+                "无效 id 不该让整轮失败，也不该让停用的 skill 复活");
+    }
+
+    @Test
+    @DisplayName("「仅手动」的 skill 正是靠手动选择生效（自动匹配永远碰不到它）")
+    void manualOnlySkillActivatedBySelection() {
+        registry.setActivationMode("skill-a", SkillRegistry.ActivationMode.MANUAL);
+        router.activateForTurn("conv-manual-only", "run-manual-only", "公司考虑IPO", null, List.of("skill-a"));
+
+        assertEquals(List.of("skill-a"),
+                router.activeSkills("run-manual-only").stream()
+                        .map(a -> a.definition().getId()).toList());
+    }
+
+    @Test
+    @DisplayName("手动选择不持久化：下一轮不带 skillIds 就真的不带")
+    void manualSelectionIsPerTurn() {
+        router.activateForTurn("conv-turn", "run-turn", "随便问点别的", null, List.of("skill-a"));
+        assertEquals(1, router.activeSkills("run-turn").size());
+
+        router.activateForTurn("conv-turn", "run-turn", "随便问点别的", null, null);
+        assertTrue(router.activeSkills("run-turn").isEmpty(), "上一轮的手动选择不该粘住");
+    }
+
+    @Test
+    @DisplayName("同一个 skill 既被手动选中又命中触发词时只出现一次，且标记为 manual")
+    void manualWinsSourceLabelOnOverlap() {
+        router.activateForTurn("conv-dup", "run-dup", "公司考虑IPO", null, List.of("skill-a"));
+
+        List<SkillRouter.ActiveSkill> active = router.activeSkills("run-dup");
+        assertEquals(1, active.size(), "同一个 skill 不该在 chip 行里出现两次");
+        assertEquals(SkillRouter.SOURCE_MANUAL, active.get(0).source(),
+                "用户看到的应该是「我选的」，不是「碰巧被关键词猜中」");
     }
 
     // ==== 应用语言（EN 版 PR5）====
@@ -295,5 +379,69 @@ class SkillRouterTest {
         assertTrue(zhBlock.contains("用户本轮请求命中了技能「双语技能」"), "中文前缀保持原样");
         assertTrue(zhBlock.contains("中文模板正文"), "中文模式仍注入 prompt.md");
         assertTrue(zhBlock.contains("## 输出约定"), "中文输出约定标题保持原样");
+    }
+
+    @Test
+    @DisplayName("展示名按应用语言解析：en 优先 name_en，缺省回退 name / id（skill_update 载荷用的就是它）")
+    void displayNameFollowsAppLanguage() throws IOException {
+        writeBilingualSkill("skill-bi4");
+        registry.rescan();
+
+        assertEquals("双语技能", router.displayName(registry.getSkill("skill-bi4").orElseThrow()));
+        assertEquals("Bilingual Skill",
+                englishRouter().displayName(registry.getSkill("skill-bi4").orElseThrow()));
+        // skill-a 没有 name_en，英文下回退中文名（可用胜于空白，与注入块同口径）
+        assertEquals("skill-a", englishRouter().displayName(registry.getSkill("skill-a").orElseThrow()));
+    }
+
+    // ==== activeByConversation 的无界增长 ====
+    // 背景：只有"这一轮没有任何 skill 生效"才会从登记簿里 remove；一个会话只要最后一轮命中过
+    // skill，条目就永久留着，进程越久攒得越多。修法是给每条记录带上激活时刻，配一个每日一次的
+    // 惰性过期扫描（对齐 TodoListService.purgeStaleLists 的既有先例）。
+
+    @Test
+    @DisplayName("修复：超过过期窗口未再激活的会话，purgeStaleActivations 应把登记簿条目清掉")
+    void purgeStaleActivationsRemovesOldEntries() {
+        long[] now = {1_000_000L};
+        router.setClockMillis(() -> now[0]);
+
+        router.activateForTurn("conv-old", "run-old", "公司考虑IPO");
+        assertEquals(1, router.activeRunCount());
+
+        // 推进到超过 24 小时过期窗口之后
+        now[0] += java.time.Duration.ofHours(25).toMillis();
+        router.purgeStaleActivations();
+
+        assertEquals(0, router.activeRunCount(),
+                "超过过期窗口未再激活的会话条目应被清掉，不能无限期占着登记簿");
+        assertEquals(List.of(), router.activeSkills("run-old"), "过期后该会话不应再有生效 skill");
+    }
+
+    @Test
+    @DisplayName("未超过过期窗口的会话不受影响：purgeStaleActivations 不会误删刚激活的记录")
+    void purgeStaleActivationsKeepsFreshEntries() {
+        long[] now = {1_000_000L};
+        router.setClockMillis(() -> now[0]);
+
+        router.activateForTurn("conv-fresh", "run-fresh", "公司考虑IPO");
+
+        now[0] += java.time.Duration.ofHours(1).toMillis();
+        router.purgeStaleActivations();
+
+        assertEquals(1, router.activeRunCount(), "未超过过期窗口的记录不该被误删");
+        assertEquals(1, router.activeSkills("run-fresh").size());
+    }
+
+    @Test
+    @DisplayName("轮次结束即摘条目：登记簿按 runId 索引，不清理的话会变成一轮一条无限涨")
+    void clearRunEvictsTheTurnEntry() {
+        router.activateForTurn("conv-r", "run-r1", "公司考虑IPO");
+        router.activateForTurn("conv-r", "run-r2", "公司考虑IPO");
+        assertEquals(2, router.activeRunCount(), "两个并发轮次各占一条，互不覆盖");
+
+        router.clearRun("run-r1");
+        assertEquals(1, router.activeRunCount());
+        assertEquals(List.of(), router.activeSkills("run-r1"), "已结束的轮次不该还留着生效集合");
+        assertEquals(1, router.activeSkills("run-r2").size(), "另一轮不受影响");
     }
 }

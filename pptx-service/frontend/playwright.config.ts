@@ -18,8 +18,8 @@ export default defineConfig({
   // CI环境下失败立即停止
   forbidOnly: !!process.env.CI,
   
-  // 失败重试次数
-  retries: process.env.CI ? 2 : 0,
+  // 失败不重试
+  retries: 0,
   
   // 并行worker数量
   workers: process.env.CI ? 1 : undefined,

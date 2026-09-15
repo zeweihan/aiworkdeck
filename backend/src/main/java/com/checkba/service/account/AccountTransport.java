@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.account;
 
 /**
@@ -24,4 +27,17 @@ public interface AccountTransport {
      * @param jsonBody   请求体，null 表示无体
      */
     Reply send(String method, String url, String bearerKey, String jsonBody);
+
+    /** multipart 里的那一个文件部件（头像上传只有一个，没必要做成通用多部件）。 */
+    record Multipart(String fieldName, String filename, String contentType, byte[] content) {}
+
+    /**
+     * multipart/form-data 出站（当前只有头像上传一处）。
+     *
+     * <p>默认实现直接抛：绝大多数打桩 transport 只关心 JSON 那条路，给个默认值
+     * （比如返回 200）会让「桩根本没接这条路」在测试里表现成一次成功的上传。
+     */
+    default Reply sendMultipart(String method, String url, String bearerKey, Multipart part) {
+        throw new UnsupportedOperationException("本 transport 不支持 multipart 出站");
+    }
 }

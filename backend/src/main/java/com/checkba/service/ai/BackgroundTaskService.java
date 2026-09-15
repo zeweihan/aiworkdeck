@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import cn.hutool.json.JSONUtil;
@@ -11,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PreDestroy;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -58,8 +62,37 @@ public class BackgroundTaskService {
                 return t;
             });
 
+    /**
+     * RUNNING 任务卡死回收的时间源。生产环境走真实系统时钟；测试用 {@link #setClock} 换成
+     * 可控时钟——不这样做的话，"注册任务后不更新、等它被判定为卡死" 这条路径没法在单测里
+     * 用秒级等待验证（真要卡死回收阈值那么久，测试根本跑不完）。
+     */
+    private volatile Clock clock = Clock.systemUTC();
+
+    /**
+     * RUNNING 状态卡死回收阈值（分钟）：超过这个时长仍未更新进度/心跳的 RUNNING 任务视为卡死。
+     * 与下面"已终态任务保留多久供前端查询"的 30 分钟数值相同但语义不同，各自命名以免以后
+     * 需要分别调整时混在一起。
+     */
+    private static final long STALE_RUNNING_TIMEOUT_MINUTES = 30;
+
     public BackgroundTaskService(SseEmitterService sseEmitterService) {
         this.sseEmitterService = sseEmitterService;
+    }
+
+    /** 供测试注入可控时钟（生产环境走真实系统时钟，见 {@link #clock} 字段注释）。 */
+    void setClock(Clock clock) {
+        this.clock = clock;
+    }
+
+    /** 供测试断言 conversationTasks 外层 map 是否还留着某个 key（不下沉成生产代码路径）。 */
+    boolean hasConversationTaskMapEntry(String conversationId) {
+        return conversationTasks.containsKey(conversationId);
+    }
+
+    /** 供测试断言 userTasks 外层 map 是否还留着某个 key（不下沉成生产代码路径）。 */
+    boolean hasUserTaskMapEntry(Long userId) {
+        return userTasks.containsKey(userId);
     }
 
     @PreDestroy
@@ -83,8 +116,20 @@ public class BackgroundTaskService {
         activeTasks.put(taskId, taskInfo);
         // 内层用 CopyOnWriteArrayList：注册线程、清理线程、查询线程并发 add/remove/遍历，
         // 普通 ArrayList 会抛 ConcurrentModificationException 或脏读（ConcurrentHashMap 只保护外层 map）。
-        conversationTasks.computeIfAbsent(conversationId, k -> new CopyOnWriteArrayList<>()).add(taskId);
-        userTasks.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(taskId);
+        // 用 compute（而不是 computeIfAbsent(...).add(...) 两步）：注册与
+        // cleanupTaskReferences 的"清空后摘除 key"都要经过同一个按 key 加锁的原子操作，
+        // 否则会出现"cleanup 判定 list 为空、正要摘除 key 的同时，registerTask 恰好往同一个
+        // 已存在但即将被摘除的 list 里塞了新 taskId"，新任务在摘除后就从外层 map 里凭空消失。
+        conversationTasks.compute(conversationId, (k, list) -> {
+            List<String> l = list != null ? list : new CopyOnWriteArrayList<>();
+            l.add(taskId);
+            return l;
+        });
+        userTasks.compute(userId, (k, list) -> {
+            List<String> l = list != null ? list : new CopyOnWriteArrayList<>();
+            l.add(taskId);
+            return l;
+        });
         
         // Send background_task_start event
         BackgroundTaskEvent event = BackgroundTaskEvent.started(taskId, taskType.name(), conversationId, estimatedDurationSec);
@@ -312,8 +357,23 @@ public class BackgroundTaskService {
      */
     @Scheduled(fixedRate = 10 * 60 * 1000)
     public void cleanupOldTasks() {
-        Instant cutoff = Instant.now().minusSeconds(30 * 60); // 30 minutes
-        
+        Instant now = Instant.now(clock);
+        Instant cutoff = now.minusSeconds(30 * 60); // 30 minutes
+        Instant staleRunningCutoff = now.minusSeconds(STALE_RUNNING_TIMEOUT_MINUTES * 60);
+
+        // 卡死的 RUNNING 任务：外部服务挂掉 / 调用方异常路径漏调 complete/failTask（PptxTools
+        // 曾经就是这样——registerTask 之后两条异常分支直接 return，从不碰 taskId），此前下面的
+        // removeIf 只认"非活跃"，RUNNING 永远 isActive()==true，三张登记表永久留着一条，
+        // hasActiveTasks 恒为 true，前端进度卡永远转下去。转终态复用 failTask 的既有语义
+        // （发 SSE 通知前端、scheduleCleanup 延迟摘除条目），不在这里另起一套清理逻辑。
+        activeTasks.forEach((taskId, task) -> {
+            if (task.isActive() && task.getLastUpdatedAt().isBefore(staleRunningCutoff)) {
+                log.warn("Reclaiming stuck RUNNING task {} (type={}, no update since {})",
+                        taskId, task.getTaskType(), task.getLastUpdatedAt());
+                failTask(taskId, "任务长时间无响应，已自动终止");
+            }
+        });
+
         activeTasks.entrySet().removeIf(entry -> {
             TaskInfo task = entry.getValue();
             if (!task.isActive() && task.getLastUpdatedAt().isBefore(cutoff)) {
@@ -336,18 +396,28 @@ public class BackgroundTaskService {
         }, delayMs, TimeUnit.MILLISECONDS);
     }
     
+    /**
+     * 摘除任务在 conversationTasks/userTasks 里的引用。
+     *
+     * <p>此前只 {@code list.remove(taskId)} 摘空内层列表，外层的 conversationId/userId
+     * 这个 key 永远留着一个空 {@link CopyOnWriteArrayList}——每个"处理过至少一个后台任务的
+     * 会话/用户"都会在这两张表里永久占一条，进程不重启就一直涨（见审计条目）。
+     * 用 {@code computeIfPresent} 把"摘元素"与"空了就摘 key"收进同一个按 key 加锁的原子操作，
+     * 与 {@link #registerTask} 的 {@code compute} 互斥，避免"判定为空、正要摘 key"时
+     * 恰好有新任务塞进同一个 list 却被一并摘掉的竞态。
+     */
     private void cleanupTaskReferences(String taskId, TaskInfo task) {
         if (task.getConversationId() != null) {
-            List<String> convTasks = conversationTasks.get(task.getConversationId());
-            if (convTasks != null) {
-                convTasks.remove(taskId);
-            }
+            conversationTasks.computeIfPresent(task.getConversationId(), (id, list) -> {
+                list.remove(taskId);
+                return list.isEmpty() ? null : list;
+            });
         }
         if (task.getUserId() != null) {
-            List<String> uTasks = userTasks.get(task.getUserId());
-            if (uTasks != null) {
-                uTasks.remove(taskId);
-            }
+            userTasks.computeIfPresent(task.getUserId(), (id, list) -> {
+                list.remove(taskId);
+                return list.isEmpty() ? null : list;
+            });
         }
     }
 }

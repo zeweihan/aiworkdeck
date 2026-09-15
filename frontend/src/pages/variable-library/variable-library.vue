@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="page-variable-library">
     <!-- 顶部项目信息 -->
@@ -450,7 +452,7 @@ export default {
 }
 
 .variable-card {
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   border-radius: 12rpx;
   border-width: 1rpx;
   border-style: solid;
@@ -534,7 +536,7 @@ export default {
 .group-title {
   font-size: 28rpx;
   font-weight: 500;
-  color: #333;
+  color: var(--awd-text);
   padding-left: 12rpx;
   border-left: 4rpx solid $uni-color-primary;
 }

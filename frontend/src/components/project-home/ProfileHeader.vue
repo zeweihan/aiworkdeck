@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="profile-header">
     <text class="profile-project-name">{{ projectName }}</text>
@@ -150,8 +152,8 @@ export default {
 
 <style scoped>
 .profile-header {
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 18px 20px;
 }
@@ -160,15 +162,15 @@ export default {
   display: block;
   font-size: 20px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   line-height: 28px;
 }
 
 .profile-guide {
   margin-top: 12px;
   padding: 12px 14px;
-  background: #F8F9FA;
-  border-left: 3px solid #5BD197;
+  background: var(--awd-bg);
+  border-left: 3px solid var(--awd-mint);
   border-radius: 4px;
 }
 
@@ -176,22 +178,22 @@ export default {
   display: block;
   font-size: 12px;
   line-height: 19px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 .profile-guide-btn {
   display: inline-block;
   margin-top: 10px;
   padding: 5px 14px;
-  background: #1A5336;
-  color: #FFFFFF;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
 }
 
 .profile-guide-btn:hover {
-  background: #2D7A52;
+  background: var(--awd-accent-hover);
 }
 
 .profile-fields {
@@ -209,7 +211,7 @@ export default {
 .profile-field-label {
   display: block;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   line-height: 16px;
 }
 
@@ -218,18 +220,18 @@ export default {
   margin-top: 2px;
   font-size: 14px;
   line-height: 22px;
-  color: #2C3338;
+  color: var(--awd-text);
   cursor: pointer;
   word-break: break-word;
 }
 
 .profile-field-value.profile-field-empty {
-  color: #CED4DA;
+  color: var(--awd-text-3);
 }
 
 /* AI 猜的与建档时间派生的都弱化：律师不能把它们当成有人填过的事实 */
 .profile-field-value.profile-field-weak {
-  color: #868E96;
+  color: var(--awd-text-2);
 }
 
 .profile-field-input,
@@ -238,9 +240,9 @@ export default {
   padding: 3px 6px;
   font-size: 14px;
   line-height: 22px;
-  color: #2C3338;
-  background: #FFFFFF;
-  border: 1px solid #1A5336;
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-accent);
   border-radius: 3px;
   box-sizing: border-box;
   width: 100%;
@@ -250,6 +252,94 @@ export default {
   display: block;
   margin-top: 2px;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
+}
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度（container-name: home-pane，
+   定义在 project-home-pane.scss），不是靠 compact 布尔值。三档见该文件的注释。 */
+@container home-pane (max-width: 359px) {
+  .profile-header {
+    padding: 10px 12px;
+  }
+
+  .profile-project-name {
+    font-size: 15px;
+    line-height: 22px;
+  }
+
+  .profile-guide {
+    margin-top: 10px;
+    padding: 10px 12px;
+  }
+
+  .profile-fields {
+    gap: 8px 0;
+    margin-top: 10px;
+  }
+
+  /* 单列：min-width 是横向溢出的直接原因，必须归零 */
+  .profile-field {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .profile-field-label {
+    font-size: 10px;
+  }
+
+  .profile-field-value,
+  .profile-field-input,
+  .profile-field-picker {
+    font-size: 12px;
+    line-height: 18px;
+  }
+}
+
+@container home-pane (min-width: 360px) and (max-width: 559px) {
+  .profile-header {
+    padding: 14px 16px;
+  }
+
+  .profile-project-name {
+    font-size: 17px;
+    line-height: 24px;
+  }
+
+  .profile-fields {
+    gap: 10px 12px;
+    margin-top: 12px;
+  }
+
+  /* 两列：每格留一半 gap 的宽度 */
+  .profile-field {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 0;
+  }
+
+  .profile-field-value,
+  .profile-field-input,
+  .profile-field-picker {
+    font-size: 13px;
+    line-height: 20px;
+  }
+}
+/* The standalone page keeps its document layout; the sidebar uses flat rows. */
+.profile-header.is-sidebar {
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  border: 0;
+  border-radius: 0;
+}
+.is-sidebar .profile-project-name { font-size: 13px; line-height: 22px; color: var(--awd-panel-text); }
+.is-sidebar .profile-guide { margin-top: 8px; padding: 0; border: 0; background: transparent; }
+.is-sidebar .profile-guide-desc { font-size: var(--awd-panel-fs-meta); line-height: 1.5; }
+.is-sidebar .profile-guide-btn { margin-top: 6px; padding: 3px 10px; }
+.is-sidebar .profile-fields { display: grid; grid-template-columns: 1fr; gap: 0; margin-top: 8px; }
+.is-sidebar .profile-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: baseline; gap: 0 8px; min-width: 0; padding: 5px 0; border-bottom: 1px solid var(--awd-border-subtle); }
+.is-sidebar .profile-field:last-child { border-bottom: 0; }
+.is-sidebar .profile-field-label { font-size: var(--awd-panel-fs-meta); }
+.is-sidebar .profile-field-value, .is-sidebar .profile-field-input, .is-sidebar .profile-field-picker { font-size: var(--awd-panel-fs); line-height: 18px; margin-top: 0; }
+.is-sidebar .profile-field-hint { grid-column: 2; font-size: var(--awd-panel-fs-meta); }
+@container home-pane (min-width: 360px) {
+  .is-sidebar .profile-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
 }
 </style>

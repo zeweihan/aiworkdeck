@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.service.SystemSettingService;
@@ -10,9 +13,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
@@ -92,6 +98,50 @@ class PluginMarketServiceTest {
     private PluginMarketService service(String pubKey) {
         return new PluginMarketService("http://registry.test/plugins", pubKey, pluginsDir.toString(),
                 pluginService, gate);
+    }
+
+    @Test
+    void staleRegistryListingHidesOnlyRetiredPlugin() {
+        PluginMarketService svc = new PluginMarketService("http://registry.test/plugins", publicKeyPem,
+                pluginsDir.toString(), pluginService, gate) {
+            @Override protected String httpGet(String url) {
+                return "[{\"id\":\"hr-template-pack\"},{\"id\":\"hello-plugin\"}]";
+            }
+        };
+        var list = svc.listMarket();
+        assertEquals(1, list.size());
+        assertEquals("hello-plugin", list.get(0).getId());
+    }
+
+    @Test
+    void retiredPluginCannotBeDownloadedEvenWithAStaleRegistry() {
+        assertTrue(assertThrows(IllegalStateException.class,
+                () -> service(publicKeyPem).install("hr-template-pack")).getMessage().contains("下架"));
+        assertFalse(Files.exists(pluginsDir.resolve("hr-template-pack")));
+    }
+
+    @Test
+    @DisplayName("minHostVersion 安装闸（规范 v2.7 P0）：宿主达标放行、不达标抛异常、dev 态与无声明放行")
+    void minHostVersionInstallGate() throws Exception {
+        PluginMarketService svc = service("");
+        java.nio.file.Path staging = pluginsDir.resolve("staging-test");
+        java.nio.file.Files.createDirectories(staging);
+
+        // 无 manifest：不拦（既有验签链路的职责）
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> svc.checkMinHostVersion(staging));
+
+        java.nio.file.Files.writeString(staging.resolve("manifest.json"),
+                "{\"id\":\"x\",\"minHostVersion\":\"0.29.0\"}");
+        svc.appVersion = "0.28.0";
+        IllegalStateException e = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> svc.checkMinHostVersion(staging));
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("0.29.0"));
+
+        svc.appVersion = "0.29.0";
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> svc.checkMinHostVersion(staging));
+
+        svc.appVersion = "dev";
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> svc.checkMinHostVersion(staging));
     }
 
     @Test
@@ -196,6 +246,33 @@ class PluginMarketServiceTest {
     }
 
     @Test
+    @DisplayName("修复：兜底拷贝也失败时 target 一并清掉，不留半成品目录（要么装成，要么什么都不留）")
+    void moveStagingToTargetCleansUpTargetWhenFallbackCopyFails() throws Exception {
+        // 病灶复现三步：
+        // 1) 先让原子 move 失败——target 预置成非空目录，POSIX rename 语义下移动一个目录
+        //    到已存在的非空目录会失败（ENOTEMPTY），逼进兜底拷贝分支；
+        // 2) 兜底拷贝也失败——target 下预置一个与 staging 内嵌套路径同名的「文件」占位，
+        //    拷贝到该路径时因为要把文件当目录写入而抛异常；
+        // 3) 断言异常确实抛出，且 target 整个目录被清干净，不留半成品。
+        Path staging = Files.createTempDirectory("moveStagingToTargetTest-staging-");
+        Files.writeString(staging.resolve("a.txt"), "A", StandardCharsets.UTF_8);
+        Files.createDirectories(staging.resolve("sub"));
+        Files.writeString(staging.resolve("sub").resolve("b.txt"), "B", StandardCharsets.UTF_8);
+
+        java.io.File target = pluginsDir.resolve("demo").toFile();
+        Files.createDirectories(target.toPath());
+        Files.writeString(target.toPath().resolve("existing-junk.txt"), "占位，撑起非空目录", StandardCharsets.UTF_8);
+        // 与 staging/sub 同名但是文件——拷贝 sub/b.txt 时会因为「同名节点已是文件」而失败
+        Files.writeString(target.toPath().resolve("sub"), "我是文件不是目录", StandardCharsets.UTF_8);
+
+        PluginMarketService svc = service(publicKeyPem);
+        assertThrows(Exception.class, () -> svc.moveStagingToTarget(staging, target));
+
+        assertFalse(Files.exists(target.toPath()),
+                "兜底拷贝失败后 target 必须被清掉，不能留下拷贝到一半的半成品目录");
+    }
+
+    @Test
     @DisplayName("安装：签名无效时中止，不发起任何文件下载")
     void installAbortsOnBadSignature() throws Exception {
         Map<String, String> files = new TreeMap<>();
@@ -220,6 +297,71 @@ class PluginMarketServiceTest {
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
         assertTrue(e.getMessage().contains("签名验证失败"));
         assertFalse(downloaded[0], "验签失败必须在下载任何文件之前中止");
+    }
+
+    // ==== manifest.packs 联动（规范 v2.3 / NATIVE_PACK_DISTRIBUTION §11.4） ====
+
+    /** 装一个 manifest 声明了 packs 的插件，返回打桩过的 service（pack 服务由调用方注入） */
+    private PluginMarketService stubbedWithManifest(String manifest) throws Exception {
+        byte[] manifestBytes = manifest.getBytes(StandardCharsets.UTF_8);
+        Map<String, String> files = new TreeMap<>();
+        files.put("manifest.json", PluginMarketService.sha256Hex(manifestBytes));
+        String sig = sign(canonical("demo", "1.0.0", "2026-07-27T00:00:00Z", files));
+        return stubbed(publicKeyPem, files, sig, manifestBytes, null);
+    }
+
+    @Test
+    @DisplayName("安装成功后按 manifest.packs 逐个异步安装依赖的资源包")
+    void installQueuesDeclaredPacks() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\","
+                        + "\"packs\":[\"litviz-fonts\",\"demo-pack\"]}");
+        com.checkba.service.pack.NativePackService packs =
+                mock(com.checkba.service.pack.NativePackService.class);
+        svc.setNativePackService(packs);
+
+        assertEquals("demo", svc.install("demo"));
+
+        verify(packs).installAsync("litviz-fonts");
+        verify(packs).installAsync("demo-pack");
+        verifyNoMoreInteractions(packs);
+    }
+
+    @Test
+    @DisplayName("pack 排队失败不回滚插件——pack 有自己的状态机与重试面")
+    void packInstallFailureDoesNotRollbackPlugin() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\",\"packs\":[\"demo-pack\"]}");
+        com.checkba.service.pack.NativePackService packs =
+                mock(com.checkba.service.pack.NativePackService.class);
+        doThrow(new IllegalStateException("注册表不可达")).when(packs).installAsync(anyString());
+        svc.setNativePackService(packs);
+
+        assertEquals("demo", svc.install("demo"), "pack 装不上不该让插件安装失败");
+        assertTrue(Files.exists(pluginsDir.resolve("demo").resolve("manifest.json")));
+    }
+
+    @Test
+    @DisplayName("未声明 packs 的插件不触碰 pack 服务")
+    void installWithoutPacksDoesNotTouchPackService() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\"}");
+        com.checkba.service.pack.NativePackService packs =
+                mock(com.checkba.service.pack.NativePackService.class);
+        svc.setNativePackService(packs);
+
+        assertEquals("demo", svc.install("demo"));
+        verifyNoInteractions(packs);
+    }
+
+    @Test
+    @DisplayName("未注入 pack 服务时安装链路照常工作（单机/单测形态）")
+    void installWorksWithoutPackService() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\",\"packs\":[\"demo-pack\"]}");
+
+        assertEquals("demo", svc.install("demo"));
+        assertTrue(Files.exists(pluginsDir.resolve("demo").resolve("manifest.json")));
     }
 
     @Test
@@ -506,5 +648,40 @@ class PluginMarketServiceTest {
         var list = svc.listMarket();
         assertEquals(0, list.get(0).getPriceCents(), "负数按未知");
         assertEquals(0, list.get(1).getPriceCents(), "超上限只可能是畸形值，不能当真价展示");
+    }
+
+    // ==== 修复：50MB 单文件下载上限原来是在 resp.bodyBytes() 把整份响应吃进内存之后才判的，
+    // 恶意/异常大响应能在被拒绝之前先把堆占满。readCapped 必须边读边计数，超限立即掐断。
+
+    @Test
+    @DisplayName("修复：readCapped 边读边计数，超过 50MB 立即掐断，不必先把整份响应吃进内存")
+    void readCappedAbortsWithoutMaterializingOversizedResponse() {
+        // 永不返回 -1、也不预先分配任何内存的 InputStream：只有真正「边读边判」的实现
+        // 才能在有限时间内收敛——先读完整份再判长度的实现会一直读到 OOM/超时都不返回。
+        InputStream endless = new InputStream() {
+            @Override
+            public int read() {
+                return 'x';
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) {
+                java.util.Arrays.fill(b, off, off + len, (byte) 'x');
+                return len;
+            }
+        };
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> PluginMarketService.readCapped(endless));
+            assertTrue(e.getMessage().contains("50 MB"), e.getMessage());
+        });
+    }
+
+    @Test
+    @DisplayName("readCapped 对未超限的正常响应原样返回全部字节")
+    void readCappedReturnsFullDataWhenUnderLimit() throws Exception {
+        byte[] small = "hello world".getBytes(StandardCharsets.UTF_8);
+        byte[] result = PluginMarketService.readCapped(new ByteArrayInputStream(small));
+        assertArrayEquals(small, result);
     }
 }

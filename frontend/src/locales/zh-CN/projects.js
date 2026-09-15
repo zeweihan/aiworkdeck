@@ -1,14 +1,18 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 项目列表页 + 项目概览页（project-list.vue / project-home.vue 及其五个 project-home/* 子组件）
 export default {
   // project-list.vue：页头与空态
   myProjects: '我的项目',
   pullFromTeamLibrary: '从团队案件库取一份案卷',
-  personalCenter: '个人中心',
+  // 落点是统一「设置」页的「个人」组（2026-08-20 个人中心并入设置，键名不动免得动调用点）
+  personalCenter: '设置',
+  // 顶栏「日历」入口 → pages/calendar/calendar（全盘任务日历）
+  calendarEntry: '日历',
   allProjects: '全部项目',
   loading: '加载中...',
   clientEmptyHint: '律师把案卷分享给你之后，会出现在这里',
   newProject: '新建项目',
-  createSectionTitle: '新建',
   emptyHint: '还没有案卷。从下面开始：打开一个已有的文件夹，或者新建一个。',
   // project-list.vue：视图切换与列表视图列名
   gridView: '方块视图',
@@ -17,13 +21,6 @@ export default {
   clientColumn: '客户',
   // 档案里没填客户时，列表显示的是推断值（客户成员/上市公司），得让人看得出区别
   clientInferred: '推断',
-  // 「详情」开关：把档案里其余四项补出来（客户是一等列、常显，不在这里）
-  detailToggle: '详情',
-  detailToggleHint: '显示项目档案里的事项类型、对方、立项时间与下一步（在项目概览里填）',
-  matterTypeField: '事项类型',
-  counterpartyField: '对方',
-  openedAtField: '立项时间',
-  nextStepField: '下一步',
   createdColumn: '创建时间',
   updatedColumn: '最近修改',
   membersColumn: '成员',
@@ -62,6 +59,7 @@ export default {
   activitySectionTitle: '动态',
   taskSectionTitle: '日程与任务',
   conversationSectionTitle: 'AI 对话',
+  learnedTemplateLine: '已学习模板：{font} {size}pt / {levels} 级编号 / {tables} 类表格',
   missingProjectParam: '缺少项目参数',
   saveFailed: '保存失败',
 

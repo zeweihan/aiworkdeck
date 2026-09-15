@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.service.SystemSettingService;
@@ -33,9 +36,18 @@ public class PluginService {
     /** system_setting 中存放被禁用插件 id 列表（JSON 数组）的 key */
     public static final String DISABLED_KEY = "ai.plugins.disabled";
 
-    /** manifest 规范 v1 已定义的权限值，未知值仅告警不拒绝（向前兼容） */
+    /** Product retirement: hide legacy installs even while the registry is unreachable. */
+    public static boolean isRetired(String pluginId) {
+        return "hr-template-pack".equals(pluginId);
+    }
+
+    /** manifest 已定义的权限值（v1 四项 + v2.7 的 ai），未知值仅告警不拒绝（向前兼容） */
     private static final Set<String> KNOWN_PERMISSIONS =
-            Set.of("file_read", "file_write", "network", "editor");
+            Set.of("file_read", "file_write", "network", "editor", "ai");
+
+    /** manifest.packs 里的 pack id 规则，与 NativePackService / PluginMarketService 同一套 */
+    private static final java.util.regex.Pattern PACK_ID =
+            java.util.regex.Pattern.compile("^[a-z0-9][a-z0-9-]{1,49}$");
 
     // 并发安全：rescan() 会 clear()+重填这些集合，而 ToolRegistry 在高频请求线程上无同步地遍历读取，
     // 普通 ArrayList/HashMap 会抛 ConcurrentModificationException / 读到半空状态。
@@ -55,6 +67,22 @@ public class PluginService {
     private final Map<String, File> pluginDirById = new ConcurrentHashMap<>();
 
     /**
+     * 当前这一代已加载的插件 JAR ClassLoader。loadJar() 每次都 new 一个 URLClassLoader，
+     * 从来没有配对的 close()——rescan()/热重载/装卸插件反复调用，长期运行的服务器进程
+     * 上会不断攒 fd 与已加载类的元数据。
+     *
+     * <p>不在 loadJar() 里当场关：那会让刚加载出来的插件类立刻失效（工具对象若懒加载
+     * 同一 JAR 里此刻还没碰过的辅助类会失败——URLClassLoader.close() 不影响已加载的类，
+     * 但会让该 loader 之后再也读不到 jar 里的新类/资源）。改成在 rescan() 里统一处理：
+     * 新一代通过 loadPlugins() 完整重建、注册表已经整体换过、ToolRegistry 缓存也失效之后，
+     * 上一代不再可能被任何新请求经 pluginTools 查到，这时才安全关闭。
+     *
+     * <p>本字段的读写全部发生在 synchronized(this) 的方法里（rescan / setEnabled 都是），
+     * 不需要并发安全的集合类型。
+     */
+    private final List<URLClassLoader> loadedClassLoaders = new ArrayList<>();
+
+    /**
      * 被平台封禁的插件 id -> 原因（由 PluginRevocationService 从注册表同步）。
      * 命中者强制禁用且不允许用户重新启用，见 docs/PLUGIN_DISTRIBUTION.md §8。
      */
@@ -70,17 +98,139 @@ public class PluginService {
     @Value("${ai.plugins.disabled-cache-ttl-ms:5000}")
     long disabledCacheTtlMs = 5000;
 
+    /**
+     * 宿主版本（规范 v2.7 P0：manifest.minHostVersion 的比较基准）。
+     * 桌面壳经 AWD_APP_VERSION 注入，单一来源 desktop/package.json；
+     * dev 态落 "dev"（非 semver）——比较时跳过并 WARN，与 NativePackService.checkCompatibility 同口径。
+     */
+    @Value("${telemetry.app-version:${AWD_APP_VERSION:dev}}")
+    String appVersion = "dev";
+
+    /** pluginId -> 不兼容原因（宿主版本低于 manifest.minHostVersion）；rescan 时重算 */
+    private final Map<String, String> incompatiblePluginIds = new ConcurrentHashMap<>();
+
+    /** 本机 dev 免签直装（目录带 .awd-dev 标记）的插件 id；实验 API（x- 前缀桥方法）只对它们开放 */
+    private final Set<String> devInstalledPluginIds = ConcurrentHashMap.newKeySet();
+
     private volatile long disabledStateRefreshedAt = 0L;
 
     private final SystemSettingService systemSettingService;
 
     private final String pluginsDir;
 
+    /**
+     * 反向依赖 ToolRegistry，仅用于 rescan() 后使其插件工具缓存失效（见该字段注入点注释）。
+     * 字段注入 + {@code required=false}：ToolRegistry 的构造器已经依赖 PluginService，
+     * 若在这里改成构造器注入会形成启动死环（本仓 SubAgentTools 也用同一招 @Lazy 破环）；
+     * required=false 使大量 {@code new PluginService(...)} 直接构造的既有测试不受影响
+     * ——字段停留 null，rescan() 对 null 判空跳过即可，测试无需关心这层缓存失效。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private ToolRegistry toolRegistry;
+
+    /**
+     * 反向依赖 SkillRegistry，仅用于 rescan() 后让它把插件携带的 skill 重新拉一遍。
+     * 注入方式与上面的 ToolRegistry 同款（@Lazy + required=false）——SkillRegistry
+     * 的构造器依赖 PluginService，构造器注入会成环；直接 new PluginService(...) 的
+     * 既有测试则停留 null，rescan() 判空跳过。
+     *
+     * <p>为什么必须在这里连上：插件携带的 skill 目录是 loadPlugins() 扫出来的，
+     * SkillRegistry 只在自己 @PostConstruct 与 rescan() 时来拉一次。装完/启用完插件
+     * 只重扫了插件侧，skill 侧不动——工具注册上了、skill 却要等下次重启才出现，
+     * 用户看到的就是「广场装完、插件开了，但让它干活它不认」。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.skill.SkillRegistry skillRegistry;
+
+    /**
+     * 证据检索注册表（规范 v2.8 P3）：插件的 EvidenceProvider（SPI）与 manifest 声明的
+     * 远程 MCP 来源都经这里注册。注入方式与上面两个同款（@Lazy + required=false）：
+     * 直接 new PluginService(...) 的既有测试停留 null，注册逻辑判空跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.evidence.EvidenceRetrieverRegistry evidenceRetrieverRegistry;
+
+    /** manifest 声明的远程 MCP 证据来源要用它调远端（规范 v2.8 P3），同款可选注入 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.mcp.McpClientService mcpClientService;
+
+    /**
+     * 插件宿主 SPI（规范 v2.4 §4/§11）：实例化出的工具类若实现 HostAware，注入按插件 id 绑定的 PluginHost。
+     * 用 ObjectProvider 懒取——PluginHostFactory 背后挂着 EditorBridgeService/ProjectFileService 一串，
+     * 构造器注入会把本类拖进启动死环；required=false 让直接 new 的测试照旧。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.checkba.service.plugin.PluginHostFactory> pluginHostFactoryProvider;
+
+    /** 供测试直接装配。 */
+    void setPluginHostFactory(com.checkba.service.plugin.PluginHostFactory factory) {
+        this.pluginHostFactoryProvider = new org.springframework.beans.factory.ObjectProvider<>() {
+            @Override public com.checkba.service.plugin.PluginHostFactory getObject(Object... args) { return factory; }
+            @Override public com.checkba.service.plugin.PluginHostFactory getIfAvailable() { return factory; }
+            @Override public com.checkba.service.plugin.PluginHostFactory getIfUnique() { return factory; }
+            @Override public com.checkba.service.plugin.PluginHostFactory getObject() { return factory; }
+        };
+    }
+
+    /**
+     * 实例化后的钩子：实现了 {@link com.checkba.plugin.api.HostAware} 的工具类拿到宿主门面。
+     * 宿主工厂不可用（测试直接 new、或启动早期）时只记 WARN——插件照常注册，只是拿不到 host。
+     */
+    void injectHostIfAware(Object instance, String pluginId) {
+        if (!(instance instanceof com.checkba.plugin.api.HostAware aware)) {
+            return;
+        }
+        com.checkba.service.plugin.PluginHostFactory factory =
+                pluginHostFactoryProvider != null ? pluginHostFactoryProvider.getIfAvailable() : null;
+        if (factory == null) {
+            log.warn("Plugin {} tool {} implements HostAware but no PluginHostFactory is available; host not injected",
+                    pluginId, instance.getClass().getName());
+            return;
+        }
+        try {
+            aware.setHost(factory.forPlugin(pluginId));
+            log.info("Injected PluginHost into {} (plugin {})", instance.getClass().getName(), pluginId);
+        } catch (Throwable t) {
+            // 插件的 setHost 抛了：工具照常注册（没有 host 而已），别让一个插件的构造期错误吞掉整次扫描
+            log.warn("Plugin {} tool {} setHost failed, host not injected: {}",
+                    pluginId, instance.getClass().getName(), t.toString());
+        }
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public PluginService(SystemSettingService systemSettingService,
                          @Value("${ai.plugins.dir:plugins}") String pluginsDir) {
         this.systemSettingService = systemSettingService;
         this.pluginsDir = pluginsDir;
+    }
+
+    /** 供测试直接装配 ToolRegistry（生产环境由 Spring 按上面的 @Autowired 字段注入）。 */
+    void setToolRegistry(ToolRegistry toolRegistry) {
+        this.toolRegistry = toolRegistry;
+    }
+
+    /** 供测试直接装配 SkillRegistry（生产环境由 Spring 按上面的 @Autowired 字段注入）。 */
+    void setSkillRegistry(com.checkba.service.ai.skill.SkillRegistry skillRegistry) {
+        this.skillRegistry = skillRegistry;
+    }
+
+    /** 供测试直接装配证据注册表（规范 v2.8 P3；生产由 Spring 字段注入）。 */
+    void setEvidenceRetrieverRegistry(com.checkba.service.ai.evidence.EvidenceRetrieverRegistry registry) {
+        this.evidenceRetrieverRegistry = registry;
+    }
+
+    /** 供测试直接装配 MCP 客户端（规范 v2.8 P3；生产由 Spring 字段注入）。 */
+    void setMcpClientService(com.checkba.service.ai.mcp.McpClientService mcpClientService) {
+        this.mcpClientService = mcpClientService;
+    }
+
+    /** 供测试查看当前这一代插件 JAR ClassLoader 的快照。 */
+    List<URLClassLoader> loadedClassLoaders() {
+        return new ArrayList<>(loadedClassLoaders);
     }
 
     /** 兼容构造器：仅供既有单测直接 new 使用（无持久化，启停状态只存内存） */
@@ -97,14 +247,158 @@ public class PluginService {
         private String icon;
         private String author;
         private String homepage;
+        /**
+         * 前端入口（规范 v2.3 激活）：
+         * <ul>
+         *   <li>{@code web/index.html} 这样的相对路径 = Web 插件，由 PluginWebController 静态服务；
+         *       扫描时校验必须落在插件目录的 {@code web/} 之下且文件存在，否则置空并记 WARN。</li>
+         *   <li>{@code http(s)://} 绝对 URL = 旧形态，原样透传给前端 iframe（不校验、不改行为）。</li>
+         * </ul>
+         */
         private String frontendEntry;
+        /**
+         * 本插件需要的最低宿主版本（规范 v2.7 P0，可选）。缺省 = 不限；
+         * 非法格式解析时置空并 WARN。宿主低于此版本时插件登记但不生效（不加载 JAR、
+         * 不注册工具、不服务 web/），管理页经 incompatibleReason 提示升级。
+         */
+        private String minHostVersion;
         private List<String> backendJars;
+        /**
+         * 依赖的原生资源包 id 列表（规范 v2.3，见 docs/NATIVE_PACK_DISTRIBUTION.md §11.4）。
+         * 在线安装该插件成功后逐个异步安装；pack 自己有状态与重试面，装失败不回滚插件。
+         */
+        private List<String> packs;
         /** 声明需要的能力：file_read / file_write / network / editor */
         private List<String> permissions;
         /** 插件提供的工具清单（名称 + 中文描述） */
         private List<PluginToolInfo> tools;
         /** 插件携带的 skill 子目录名列表（规范 v2.1，见 docs/SKILL_SPEC.md） */
         private List<String> skills;
+        /**
+         * 上手引导（规范 v2.5，可选）：没有 {@code frontendEntry} 的纯工具/skill 插件装完之后
+         * 左栏打开的是宿主渲染的「启动面板」，内容就来自这里。缺省 null，前端按描述与工具清单兜底。
+         */
+        private PluginGuide guide;
+        /** 向宿主贡献的内容（规范 v2.8 起）：证据来源等，见各内部类 */
+        private Contributes contributes;
+        /**
+         * 用户可配置项声明（规范 v2.9 P4，可选，上限 20 条）：广场详情页渲染成表单，
+         * 值存 system_setting 的 {@code plugin.<id>.<key>}（与宿主 SPI Settings 同一命名空间，
+         * JAR 经 {@code host.settings().get(key)}、Web 经桥 {@code settings.get} 读取）。
+         * 写入只经宿主表单——配置权在用户手里。
+         */
+        private List<PluginSettingDecl> settings;
+    }
+
+    /** manifest.contributes：插件向宿主贡献的声明式内容（规范 v2.8 P3 起，只加不改） */
+    @lombok.Data
+    public static class Contributes {
+        /** 证据来源（evidence.retrieve.v1 公开协议，规范 v2.8）：SPI 实现的自述 + MCP 声明式接入 */
+        private List<EvidenceSourceDecl> evidenceSources;
+        /** 文书模板（规范 v2.9 P4）：docx/md 文件，宿主在「新建」入口与 AI 工具面列出 */
+        private List<TemplateDecl> templates;
+        /** 样式画像（规范 v2.9 P4）：styleProfile v1 JSON，可被选为全局默认画像 */
+        private List<StyleProfileDecl> styleProfiles;
+        /** 能力实现（规范 v2.10 §15）：把插件目录里的一份实现挂进宿主的某个能力槽 */
+        private List<CapabilityDecl> capabilities;
+    }
+
+    /**
+     * 一条能力实现声明（规范 v2.10 §15）。
+     *
+     * <p>{@code capability} 是宿主注册的槽 id（点分，如 {@code litigation.diagram}），
+     * {@code id} 是本插件内的实现 id（同一插件可为同一槽提供多个实现），
+     * 两者拼成候选引用 {@code plugin:<pluginId>:<id>}。{@code entry} 是插件目录内的
+     * 相对目录（{@code ../} 逃逸沿用 backendJars 那套拒绝），{@code protocol} 必须与
+     * 槽声明的协议逐字一致——这是能力包与槽之间唯一的契约点。
+     *
+     * <p>{@code kind} ∈ {@code web | data | process}，决定谁能装：process 型会在宿主机上
+     * 起进程执行 entry 下的脚本，风险等同 JAR，只有签名包或显式打开的开发者模式才放行。
+     */
+    @lombok.Data
+    public static class CapabilityDecl {
+        private String capability;
+        private String id;
+        private String kind;
+        private String entry;
+        private String protocol;
+        /** 运行时要求的自述（如 {@code python>=3.11}），宿主只展示不强制 */
+        private String runtime;
+    }
+
+    /** 一条文书模板声明（file 相对插件目录，读取时按 canonical path 校验不逃逸） */
+    @lombok.Data
+    public static class TemplateDecl {
+        private String id;
+        private String name;
+        /** 体裁：自由字符串（contract/pleading/opinion/report/letter…），宿主不做硬枚举 */
+        private String genre;
+        private String file;
+        private String description;
+        /** 适用应用语言（zh-CN / en-US），缺省不限 */
+        private String language;
+    }
+
+    /** 一条样式画像声明（file 指向插件目录内的 styleProfile v1 JSON） */
+    @lombok.Data
+    public static class StyleProfileDecl {
+        private String id;
+        private String name;
+        private String file;
+    }
+
+    /** 一条设置声明。type ∈ string/boolean/number/select；secret 的值只回显尾 4 位、不进插件桥 */
+    @lombok.Data
+    public static class PluginSettingDecl {
+        private String key;
+        private String type;
+        private String label;
+        private String description;
+        /** JSON 字段名是 default（Java 关键字），经 Hutool @Alias 映射；统一按字符串存取 */
+        @cn.hutool.core.annotation.Alias("default")
+        private Object defaultValue;
+        private List<String> options;
+        private Boolean secret;
+    }
+
+    /**
+     * 一条证据来源声明。{@code transport} 缺省 "spi"（JAR 实现 EvidenceProvider，声明用于
+     * 广场展示/审查，且必须与实现类 sourceId() 一致）；"mcp" = 远程 MCP 服务器
+     * （需 {@code server.url} + {@code tool}，本地命令型不受理——进程外插件形态另案）。
+     */
+    @lombok.Data
+    public static class EvidenceSourceDecl {
+        private String sourceId;
+        private String name;
+        private String description;
+        private String transport;
+        private McpServerRef server;
+        private String tool;
+    }
+
+    /** MCP 远程服务器引用（只收 http(s) URL；token 走 tokenSettingKey 时可在线覆盖） */
+    @lombok.Data
+    public static class McpServerRef {
+        private String url;
+        private String token;
+        private String tokenSettingKey;
+        private Integer timeoutSeconds;
+    }
+
+    /** manifest.guide：简介 + 步骤 + 一键动作（动作 = 把 prompt 以 AGENT 模式发进 AI 对话） */
+    @lombok.Data
+    public static class PluginGuide {
+        private String intro;
+        private List<String> steps;
+        private List<PluginQuickAction> quickActions;
+    }
+
+    @lombok.Data
+    public static class PluginQuickAction {
+        private String label;
+        private String prompt;
+        /** 按钮下方一句话提示（比如「先在文件树里选中底稿根文件夹」），可空 */
+        private String hint;
     }
 
     /** 插件携带的一个 skill 目录（交给 SkillRegistry 注册，见 docs/SKILL_SPEC.md） */
@@ -134,15 +428,46 @@ public class PluginService {
      * 注意：已由旧 ClassLoader 加载的类不会被卸载（MVP 可接受），重扫主要用于发现新装插件。
      */
     public synchronized void rescan() {
+        // 上一代 loader 留到新一代完整接管注册表之后才关，见 loadedClassLoaders 字段注释。
+        List<URLClassLoader> previousGeneration = new ArrayList<>(loadedClassLoaders);
+        loadedClassLoaders.clear();
+
         plugins.clear();
         pluginTools.clear();
         toolSpecifications.clear();
         toolToPluginId.clear();
         pluginSkillDirs.clear();
         pluginDirById.clear();
+        incompatiblePluginIds.clear();
+        devInstalledPluginIds.clear();
+        pluginL10n.clear();
+        // 插件证据来源整批清空重建（规范 v2.8 P3）；内置来源不动
+        if (evidenceRetrieverRegistry != null) {
+            evidenceRetrieverRegistry.clearExternal();
+        }
         loadDisabledState();
         loadPlugins();
+        // 插件更新/卸载后 loadPlugins() 可能已经把同名工具换成了新 bean，
+        // 必须让 ToolRegistry 那层懒加载缓存失效，否则旧 bean 会继续被分发执行。
+        if (toolRegistry != null) {
+            toolRegistry.invalidatePluginToolCache();
+        }
+        // 插件带来的 skill 也要跟着重来一遍——否则 skill 要等下次重启才出现（见字段注释）。
+        // SkillRegistry.rescan() 只读 getPluginSkillDirs()/isEnabled()，两者都不持本对象的锁，
+        // 在这里同步调用不会与 PluginService 形成锁序环。
+        if (skillRegistry != null) {
+            skillRegistry.rescan();
+        }
         log.info("Plugin rescan done: {} plugins, {} tools", plugins.size(), pluginTools.size());
+
+        // 新一代已经完整接管，上一代不可能再被任何请求经 pluginTools 查到，此时关闭安全。
+        for (URLClassLoader old : previousGeneration) {
+            try {
+                old.close();
+            } catch (IOException e) {
+                log.debug("关闭上一代插件 ClassLoader 失败（忽略）: {}", e.getMessage());
+            }
+        }
     }
 
     /**
@@ -150,8 +475,143 @@ public class PluginService {
      * 供 PluginController 与 ToolRegistry 查询；内存缓存超过 TTL 时从配置表重读。
      */
     public boolean isEnabled(String pluginId) {
+        // 不兼容 = 有效未启用（规范 v2.7 P0）：用户的启停意愿位不动，宿主升级后自然恢复。
+        // 既有全部消费点（ToolRegistry 三处 / PluginWebController / invokeTool / skill isAvailable）
+        // 都查这里，于是「不加载、不注册、不服务」免改自动成立。
+        if (isRetired(pluginId) || incompatiblePluginIds.containsKey(pluginId)) {
+            return false;
+        }
         maybeRefreshDisabledState();
         return !disabledPluginIds.contains(pluginId);
+    }
+
+    /** 宿主版本低于 manifest.minHostVersion 时的原因文案；兼容返回 null（供管理页提示升级） */
+    public String incompatibleReason(String pluginId) {
+        return incompatiblePluginIds.get(pluginId);
+    }
+
+    /** 该插件是否为本机 dev 免签直装（目录带 .awd-dev 标记）；实验 API 只对它们开放 */
+    public boolean isDevInstalled(String pluginId) {
+        return devInstalledPluginIds.contains(pluginId);
+    }
+
+    /** 相对路径守卫（模板/画像文件声明）：非空、不以 / 开头、不含 ..、不含反斜杠 */
+    private static boolean isSafeRelFile(String file) {
+        return file != null && !file.isBlank() && !file.startsWith("/") && !file.contains("..")
+                && !file.contains("\\");
+    }
+
+    /** 能力槽 id：点分小写段（如 litigation.diagram） */
+    private static final java.util.regex.Pattern CAPABILITY_SLOT_ID =
+            java.util.regex.Pattern.compile("^[a-z0-9]+(\\.[a-z0-9-]+)+$");
+
+    /** 能力实现的三档形态（规范 v2.10 §15）：谁能装由它决定 */
+    public static final Set<String> CAPABILITY_KINDS = Set.of("web", "data", "process");
+
+    /**
+     * 校验一条 {@code contributes.capabilities} 声明。
+     * @return 不合法时返回原因（给日志与安装计划复用），合法返回 null
+     */
+    public static String validateCapabilityDecl(CapabilityDecl c) {
+        if (c == null) {
+            return "empty declaration";
+        }
+        if (c.getCapability() == null || !CAPABILITY_SLOT_ID.matcher(c.getCapability()).matches()) {
+            return "invalid capability slot id: " + c.getCapability();
+        }
+        if (c.getId() == null || !PACK_ID.matcher(c.getId()).matches()) {
+            return "invalid implementation id: " + c.getId();
+        }
+        String kind = c.getKind() == null ? "" : c.getKind();
+        if (!CAPABILITY_KINDS.contains(kind)) {
+            return "kind must be one of web/data/process, got: " + kind;
+        }
+        if (!isSafeRelFile(c.getEntry())) {
+            return "entry must be a relative path inside the plugin directory: " + c.getEntry();
+        }
+        if (c.getProtocol() == null || c.getProtocol().isBlank()) {
+            return "protocol is required";
+        }
+        return null;
+    }
+
+    // ==== l10n 字符串表（规范 v2.9 P4）====
+
+    /** pluginId -> (lang -> (key -> 文案))；来自插件目录 l10n/<lang>.json，rescan 重建 */
+    private final Map<String, Map<String, Map<String, String>>> pluginL10n = new ConcurrentHashMap<>();
+
+    private static final Set<String> L10N_LANGS = Set.of("zh-CN", "en-US");
+    private static final long L10N_MAX_BYTES = 256 * 1024;
+
+    private void loadL10n(String pluginId, File pluginDir) {
+        File dir = new File(pluginDir, "l10n");
+        if (!dir.isDirectory()) {
+            return;
+        }
+        Map<String, Map<String, String>> tables = new HashMap<>();
+        for (String lang : L10N_LANGS) {
+            File f = new File(dir, lang + ".json");
+            if (!f.isFile() || f.length() > L10N_MAX_BYTES) {
+                continue;
+            }
+            try {
+                cn.hutool.json.JSONObject obj = cn.hutool.json.JSONUtil.parseObj(
+                        cn.hutool.core.io.FileUtil.readUtf8String(f));
+                Map<String, String> table = new HashMap<>();
+                for (String k : obj.keySet()) {
+                    Object v = obj.get(k);
+                    if (v instanceof String s) {
+                        table.put(k, s);
+                    }
+                }
+                tables.put(lang, table);
+            } catch (Exception e) {
+                log.warn("Plugin {} l10n/{}.json 解析失败，忽略: {}", pluginId, lang, e.getMessage());
+            }
+        }
+        if (!tables.isEmpty()) {
+            pluginL10n.put(pluginId, tables);
+        }
+    }
+
+    /**
+     * 解析 manifest 字符串里的 {@code %key%} 引用（规范 v2.9 P4，VS Code package.nls 机制）：
+     * 整值形如 %key% 才解析；按当前应用语言查表，缺键回退 zh-CN 表，再缺回退原文
+     * （保留 %key% 字面量让作者看见漏了哪个键）。
+     */
+    public String localize(String pluginId, String raw) {
+        if (raw == null || raw.length() < 3 || raw.charAt(0) != '%' || raw.charAt(raw.length() - 1) != '%') {
+            return raw;
+        }
+        Map<String, Map<String, String>> tables = pluginL10n.get(pluginId);
+        if (tables == null) {
+            return raw;
+        }
+        String key = raw.substring(1, raw.length() - 1);
+        String lang = com.checkba.service.LangText.isEnglish() ? "en-US" : "zh-CN";
+        String v = tables.getOrDefault(lang, Map.of()).get(key);
+        if (v == null) {
+            v = tables.getOrDefault("zh-CN", Map.of()).get(key);
+        }
+        return v != null ? v : raw;
+    }
+
+    /** minHostVersion 与宿主版本比对；不达标返回原因文案，达标/无声明/dev 态宿主返回 null */
+    private String computeIncompatibleReason(PluginMetadata meta) {
+        String min = meta.getMinHostVersion();
+        if (min == null || min.isBlank()) {
+            return null;
+        }
+        if (!com.checkba.util.Semver.isSemver(appVersion)) {
+            // dev 态（appVersion="dev"）放行，与 NativePackService.checkCompatibility 同口径
+            log.warn("Host version '{}' is not semver, skip minHostVersion check for plugin {}",
+                    appVersion, meta.getId());
+            return null;
+        }
+        if (com.checkba.util.Semver.compare(appVersion, min) < 0) {
+            return "需要宿主版本 ≥ " + min + "（当前 " + appVersion + "），请升级客户端";
+        }
+        return null;
     }
 
     private void maybeRefreshDisabledState() {
@@ -214,6 +674,10 @@ public class PluginService {
             throw new IllegalStateException(
                     "该插件已被平台下架：" + revokedPluginIds.get(pluginId) + "，无法启用，建议卸载");
         }
+        // 版本不兼容时拒绝启用：不能静默翻一个不生效的位（规范 v2.7 P0）
+        if (enabled && incompatiblePluginIds.containsKey(pluginId)) {
+            throw new IllegalStateException(incompatiblePluginIds.get(pluginId));
+        }
         if (enabled) {
             disabledPluginIds.remove(pluginId);
         } else {
@@ -227,6 +691,12 @@ public class PluginService {
         // 反向不成立——JVM 无法卸载已加载的类，禁用只能让工具不可见，要彻底停掉需重启。
         if (enabled) {
             loadJarsIfAbsent(pluginId);
+            // 启用插件 = 启用它携带的 skill（见 SkillRegistry.enableSkillsFromPlugin 的注释）。
+            // 先 rescan 让刚装的插件 skill 进注册表，再翻启用位；两步都只读本对象不持锁的字段。
+            if (skillRegistry != null) {
+                skillRegistry.rescan();
+                skillRegistry.enableSkillsFromPlugin(pluginId);
+            }
         }
         log.info("Plugin {} {}", pluginId, enabled ? "enabled" : "disabled");
     }
@@ -307,6 +777,98 @@ public class PluginService {
         return toolToPluginId.get(toolName);
     }
 
+    /** 已加载的插件元数据；未知 id 返回 null */
+    public PluginMetadata getPlugin(String pluginId) {
+        return plugins.stream()
+                .filter(p -> Objects.equals(p.getId(), pluginId))
+                .findFirst().orElse(null);
+    }
+
+    /** 插件所在目录；未知 id 返回 null（供 PluginWebController 定位 web/ 静态资源） */
+    public File getPluginDir(String pluginId) {
+        return pluginDirById.get(pluginId);
+    }
+
+    /**
+     * 该插件是否带 Web 前端（frontendEntry 为校验通过的 {@code web/} 内相对路径）。
+     * 绝对 URL 形态返回 false——那种插件不经 PluginWebController，也不走 postMessage 桥。
+     */
+    public boolean hasWebEntry(String pluginId) {
+        PluginMetadata meta = getPlugin(pluginId);
+        return meta != null && meta.getFrontendEntry() != null && !isAbsoluteUrl(meta.getFrontendEntry());
+    }
+
+    private static boolean isAbsoluteUrl(String entry) {
+        String lower = entry.toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
+    /**
+     * 校验 manifest.frontendEntry（规范 v2.3）。
+     *
+     * <p>绝对 http(s) URL 原样保留（旧形态，宿主直接 iframe 打开，本服务不介入）。
+     * 相对路径必须落在插件目录的 {@code web/} 之下且文件存在——否则**置空并记 WARN**，
+     * 当作没有前端入口：宁可这个插件在左栏显示空面板，也不能让一个指到
+     * {@code ../../} 的入口把插件目录之外的文件静态服务出去。
+     */
+    void validateFrontendEntry(File pluginDir, PluginMetadata meta) {
+        String entry = meta.getFrontendEntry();
+        if (entry == null || entry.isBlank()) {
+            meta.setFrontendEntry(null);
+            return;
+        }
+        entry = entry.trim();
+        if (isAbsoluteUrl(entry)) {
+            meta.setFrontendEntry(entry);
+            return;
+        }
+        String normalized = entry.replace('\\', '/');
+        while (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+        if (!normalized.startsWith("web/")) {
+            log.warn("Plugin {} declares frontendEntry '{}' outside web/, treated as no web entry",
+                    meta.getId(), entry);
+            meta.setFrontendEntry(null);
+            return;
+        }
+        File target = resolveWebFile(pluginDir, normalized.substring("web/".length()));
+        if (target == null) {
+            log.warn("Plugin {} declares frontendEntry '{}' but the file is missing or escapes web/, "
+                    + "treated as no web entry", meta.getId(), entry);
+            meta.setFrontendEntry(null);
+            return;
+        }
+        meta.setFrontendEntry(normalized);
+    }
+
+    /**
+     * 把 {@code web/} 之下的相对子路径解析成真实文件。
+     *
+     * <p>用 canonical path 判定目标必须位于 {@code <pluginDir>/web/} 正下方——同时挡掉
+     * {@code ../} 穿越与符号链接绕行。这是 Web 插件静态服务的唯一定位入口。
+     *
+     * @param subPath 相对 {@code web/} 的路径，如 {@code index.html}、{@code assets/app.js}
+     * @return 校验通过且存在的普通文件；非法 / 不存在 / 是目录时返回 null
+     */
+    public File resolveWebFile(File pluginDir, String subPath) {
+        if (pluginDir == null || subPath == null || subPath.isBlank()) {
+            return null;
+        }
+        try {
+            File webRoot = new File(pluginDir, "web");
+            File target = new File(webRoot, subPath);
+            String base = webRoot.getCanonicalPath() + File.separator;
+            if (!target.getCanonicalPath().startsWith(base)) {
+                return null;
+            }
+            return target.isFile() ? target : null;
+        } catch (IOException e) {
+            log.warn("Plugin web path check failed for '{}': {}", subPath, e.getMessage());
+            return null;
+        }
+    }
+
     private void loadDisabledState() {
         disabledPluginIds.clear();
         if (systemSettingService == null) {
@@ -350,13 +912,40 @@ public class PluginService {
                     log.error("Invalid manifest (missing id), skip plugin dir: {}", pluginDir.getName());
                     continue;
                 }
+                if (isRetired(meta.getId())) {
+                    log.info("Skip retired plugin {}", meta.getId());
+                    continue;
+                }
                 boolean duplicated = plugins.stream().anyMatch(p -> Objects.equals(p.getId(), meta.getId()));
                 if (duplicated) {
                     log.warn("Duplicate plugin id '{}', skip plugin dir: {}", meta.getId(), pluginDir.getName());
                     continue;
                 }
+                validateFrontendEntry(pluginDir, meta);
                 plugins.add(meta);
                 pluginDirById.put(meta.getId(), pluginDir);
+
+                // dev 免签直装标记（实验 API 只对这些插件开放，见规范 v2.7 §实验 API）
+                if (new File(pluginDir, ".awd-dev").exists()) {
+                    devInstalledPluginIds.add(meta.getId());
+                }
+
+                // l10n 字符串表（规范 v2.9 P4）
+                loadL10n(meta.getId(), pluginDir);
+
+                // minHostVersion 兼容闸（规范 v2.7 P0）：不达标的插件登记元数据但不生效。
+                // 必须在下面的 isEnabled 检查之前算好——isEnabled 会把不兼容视为未启用，
+                // 于是 JAR 加载 / 工具注册 / web 静态服务全部经既有消费点自动拦住。
+                String incompatible = computeIncompatibleReason(meta);
+                if (incompatible != null) {
+                    incompatiblePluginIds.put(meta.getId(), incompatible);
+                    log.warn("Plugin {} requires host >= {} (current {}), registered but inactive",
+                            meta.getId(), meta.getMinHostVersion(), appVersion);
+                } else {
+                    // MCP 声明式证据来源在元数据阶段注册（SPI 的随 JAR 加载注册，规范 v2.8 P3）；
+                    // 适配器自带启用位闸，禁用插件的来源静默返回空
+                    registerDeclaredMcpEvidenceSources(meta);
+                }
 
                 // 收集插件携带的 skill 目录（规范 v2.1）：交给 SkillRegistry 注册，本服务不解析 skill.yml
                 if (meta.getSkills() != null) {
@@ -418,7 +1007,16 @@ public class PluginService {
                         pluginId, jarName);
                 return null;
             }
-            return jarFile.isFile() ? jarFile : null;
+            if (!jarFile.isFile()) {
+                // manifest 声明了 backendJars 但文件不在——解压不全/被手删/打包漏了都会走到这里。
+                // 此前这条路径不打任何日志，调用方 `if (jarFile != null) loadJar(...)` 又没有
+                // else 分支：插件照常出现在列表里、启停可用，就是 0 个工具，日志里搜插件 id
+                // 与 jar 名全是空，排障无从下手。
+                log.warn("Plugin {} declares backendJar '{}' but file does not exist: {}",
+                        pluginId, jarName, jarFile);
+                return null;
+            }
+            return jarFile;
         } catch (IOException e) {
             log.error("Plugin {} backendJar '{}' path check failed: {}", pluginId, jarName, e.getMessage());
             return null;
@@ -442,11 +1040,146 @@ public class PluginService {
                 }
             }
         }
+        // minHostVersion（规范 v2.7 P0）：非法格式视为缺省（与 permissions 未知值同口径，只警不拒）
+        if (meta.getMinHostVersion() != null && !meta.getMinHostVersion().isBlank()
+                && !com.checkba.util.Semver.isSemver(meta.getMinHostVersion())) {
+            log.warn("Plugin {} declares invalid minHostVersion '{}', ignored", meta.getId(), meta.getMinHostVersion());
+            meta.setMinHostVersion(null);
+        }
+        // guide（规范 v2.5）：quickActions 里 label 与 prompt 缺一不可——没有 prompt 的按钮点了没反应，
+        // 没有 label 的按钮画不出来；直接丢弃而不是整个 guide 作废。
+        if (meta.getGuide() != null && meta.getGuide().getQuickActions() != null) {
+            List<PluginQuickAction> valid = new ArrayList<>();
+            for (PluginQuickAction a : meta.getGuide().getQuickActions()) {
+                if (a != null && a.getLabel() != null && !a.getLabel().isBlank()
+                        && a.getPrompt() != null && !a.getPrompt().isBlank()) {
+                    valid.add(a);
+                } else {
+                    log.warn("Plugin {} guide.quickActions has an entry without label/prompt, ignored", meta.getId());
+                }
+            }
+            meta.getGuide().setQuickActions(valid);
+        }
+        // contributes.evidenceSources（规范 v2.8 P3）：sourceId 必须是 <pluginId>.<后缀>；
+        // transport 缺省 spi；mcp 必须给 http(s) 的 server.url 与 tool（本地命令型不受理）。
+        // 非法条目丢弃并告警——声明是审查对象，必须真实可注册。
+        if (meta.getContributes() != null && meta.getContributes().getEvidenceSources() != null) {
+            List<EvidenceSourceDecl> valid = new ArrayList<>();
+            for (EvidenceSourceDecl d : meta.getContributes().getEvidenceSources()) {
+                if (d == null || d.getSourceId() == null
+                        || !d.getSourceId().matches(java.util.regex.Pattern.quote(meta.getId()) + "\\.[A-Za-z0-9][A-Za-z0-9_-]*")) {
+                    log.warn("Plugin {} evidence source with invalid sourceId '{}' (must be <pluginId>.<name>), dropped",
+                            meta.getId(), d == null ? null : d.getSourceId());
+                    continue;
+                }
+                String transport = (d.getTransport() == null || d.getTransport().isBlank()) ? "spi" : d.getTransport();
+                d.setTransport(transport);
+                if ("mcp".equals(transport)) {
+                    String url = d.getServer() == null ? null : d.getServer().getUrl();
+                    boolean urlOk = url != null && (url.startsWith("https://") || url.startsWith("http://"));
+                    if (!urlOk || d.getTool() == null || d.getTool().isBlank()) {
+                        log.warn("Plugin {} mcp evidence source '{}' needs server.url (http/https) and tool; "
+                                + "local command-style MCP is not accepted. Dropped", meta.getId(), d.getSourceId());
+                        continue;
+                    }
+                } else if (!"spi".equals(transport)) {
+                    log.warn("Plugin {} evidence source '{}' has unknown transport '{}', dropped",
+                            meta.getId(), d.getSourceId(), transport);
+                    continue;
+                }
+                valid.add(d);
+            }
+            meta.getContributes().setEvidenceSources(valid);
+        }
+        // contributes.templates / styleProfiles（规范 v2.9 P4）：id 过 kebab 正则、file 必须是
+        // 不逃逸的相对路径（读取时还有 canonical path 第二道闸）。非法条目丢弃并告警。
+        if (meta.getContributes() != null) {
+            if (meta.getContributes().getTemplates() != null) {
+                List<TemplateDecl> valid = new ArrayList<>();
+                for (TemplateDecl t : meta.getContributes().getTemplates()) {
+                    if (t == null || t.getId() == null || !PACK_ID.matcher(t.getId()).matches()
+                            || !isSafeRelFile(t.getFile())) {
+                        log.warn("Plugin {} template with invalid id/file ({}), dropped",
+                                meta.getId(), t == null ? null : t.getId());
+                        continue;
+                    }
+                    valid.add(t);
+                }
+                meta.getContributes().setTemplates(valid);
+            }
+            if (meta.getContributes().getStyleProfiles() != null) {
+                List<StyleProfileDecl> valid = new ArrayList<>();
+                for (StyleProfileDecl sp : meta.getContributes().getStyleProfiles()) {
+                    if (sp == null || sp.getId() == null || !PACK_ID.matcher(sp.getId()).matches()
+                            || !isSafeRelFile(sp.getFile())) {
+                        log.warn("Plugin {} styleProfile with invalid id/file ({}), dropped",
+                                meta.getId(), sp == null ? null : sp.getId());
+                        continue;
+                    }
+                    valid.add(sp);
+                }
+                meta.getContributes().setStyleProfiles(valid);
+            }
+            // contributes.capabilities（规范 v2.10 §15）：capability 槽 id 点分、id 过 kebab、
+            // kind 三选一、entry 是不逃逸的相对路径、protocol 必填。非法条目丢弃并告警——
+            // 声明是安装期的受理依据，必须真实可解析。
+            if (meta.getContributes().getCapabilities() != null) {
+                List<CapabilityDecl> valid = new ArrayList<>();
+                for (CapabilityDecl c : meta.getContributes().getCapabilities()) {
+                    String why = validateCapabilityDecl(c);
+                    if (why != null) {
+                        log.warn("Plugin {} capability declaration dropped ({}): {}",
+                                meta.getId(), why, c == null ? null : c.getId());
+                        continue;
+                    }
+                    valid.add(c);
+                }
+                meta.getContributes().setCapabilities(valid);
+            }
+        }
+        // settings（规范 v2.9 P4）：上限 20 条；key/type 校验；select 必须给 options。非法条目丢弃并告警。
+        if (meta.getSettings() != null) {
+            List<PluginSettingDecl> valid = new ArrayList<>();
+            for (PluginSettingDecl d : meta.getSettings()) {
+                if (valid.size() >= 20) {
+                    log.warn("Plugin {} declares more than 20 settings, extras dropped", meta.getId());
+                    break;
+                }
+                String type = d == null || d.getType() == null || d.getType().isBlank() ? "string" : d.getType();
+                boolean keyOk = d != null && d.getKey() != null
+                        && d.getKey().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
+                boolean typeOk = Set.of("string", "boolean", "number", "select").contains(type);
+                boolean selectOk = !"select".equals(type)
+                        || (d.getOptions() != null && !d.getOptions().isEmpty());
+                if (!keyOk || !typeOk || !selectOk) {
+                    log.warn("Plugin {} setting with invalid key/type/options ({}), dropped",
+                            meta.getId(), d == null ? null : d.getKey());
+                    continue;
+                }
+                d.setType(type);
+                valid.add(d);
+            }
+            meta.setSettings(valid);
+        }
+        // packs（规范 v2.3）：id 必须过与 pack / 插件同一套正则，非法项丢弃并告警——
+        // 这串字符会被拼进注册表 URL 与磁盘路径，不能放行任意输入。
+        if (meta.getPacks() != null) {
+            List<String> valid = new ArrayList<>();
+            for (String packId : meta.getPacks()) {
+                if (packId != null && PACK_ID.matcher(packId).matches()) {
+                    valid.add(packId);
+                } else {
+                    log.warn("Plugin {} declares invalid pack id '{}', ignored", meta.getId(), packId);
+                }
+            }
+            meta.setPacks(valid);
+        }
         return meta;
     }
 
     private void loadJar(File jar, String pluginId) throws IOException, ClassNotFoundException {
         URLClassLoader loader = new URLClassLoader(new URL[]{jar.toURI().toURL()}, this.getClass().getClassLoader());
+        loadedClassLoaders.add(loader);
 
         try (java.util.jar.JarFile jarFile = new java.util.jar.JarFile(jar)) {
             Enumeration<java.util.jar.JarEntry> entries = jarFile.entries();
@@ -462,12 +1195,25 @@ public class PluginService {
                         // Check if class has methods with @Tool annotation
                         boolean hasTools = Arrays.stream(cls.getDeclaredMethods())
                                 .anyMatch(m -> m.isAnnotationPresent(dev.langchain4j.agent.tool.Tool.class));
+                        // 证据 Provider（规范 v2.8 P3）：实现公开 SPI 的具体类也实例化并注册
+                        boolean isEvidenceProvider =
+                                com.checkba.plugin.api.evidence.EvidenceProvider.class.isAssignableFrom(cls)
+                                        && !cls.isInterface()
+                                        && !java.lang.reflect.Modifier.isAbstract(cls.getModifiers());
 
-                        if (hasTools) {
-                            log.info("Found tool class in plugin: {}", className);
-                            // Instantiate and register
+                        if (hasTools || isEvidenceProvider) {
+                            log.info("Found {} class in plugin: {}",
+                                    hasTools ? "tool" : "evidence-provider", className);
+                            // Instantiate and register（同一实例可同时是工具类与 Provider）
                             Object instance = cls.getDeclaredConstructor().newInstance();
-                            registerToolObject(instance, pluginId);
+                            injectHostIfAware(instance, pluginId);
+                            if (hasTools) {
+                                registerToolObject(instance, pluginId);
+                            }
+                            if (isEvidenceProvider) {
+                                registerEvidenceProvider(
+                                        (com.checkba.plugin.api.evidence.EvidenceProvider) instance, pluginId);
+                            }
                         }
                     } catch (Throwable e) {
                         // Skip classes that can't be loaded (e.g. missing dependencies)
@@ -477,6 +1223,84 @@ public class PluginService {
             }
         } catch (Exception e) {
             log.error("Error scanning JAR {}: {}", jar.getName(), e.getMessage());
+        }
+    }
+
+    /**
+     * JAR 里的 EvidenceProvider 实现 → 证据注册表（规范 v2.8 P3）。
+     * 双校验：sourceId 必须带 {@code <pluginId>.} 前缀，且与 manifest
+     * {@code contributes.evidenceSources}（transport=spi）的声明逐字一致——
+     * 任一不满足拒绝注册并记 ERROR（声明是审查对象，必须真实）。
+     */
+    void registerEvidenceProvider(com.checkba.plugin.api.evidence.EvidenceProvider provider,
+                                          String pluginId) {
+        if (evidenceRetrieverRegistry == null) {
+            log.warn("EvidenceRetrieverRegistry unavailable, evidence provider from plugin {} not registered", pluginId);
+            return;
+        }
+        String sourceId;
+        try {
+            sourceId = provider.sourceId();
+        } catch (Throwable t) {
+            log.error("Plugin {} evidence provider sourceId() threw, not registered: {}", pluginId, t.toString());
+            return;
+        }
+        if (sourceId == null || !sourceId.startsWith(pluginId + ".") || sourceId.length() <= pluginId.length() + 1) {
+            log.error("Plugin {} evidence provider sourceId '{}' must be '<pluginId>.<name>', not registered",
+                    pluginId, sourceId);
+            return;
+        }
+        PluginMetadata meta = getPlugin(pluginId);
+        final String sid = sourceId;
+        boolean declared = meta != null && meta.getContributes() != null
+                && meta.getContributes().getEvidenceSources() != null
+                && meta.getContributes().getEvidenceSources().stream()
+                        .anyMatch(d -> "spi".equals(d.getTransport()) && sid.equals(d.getSourceId()));
+        if (!declared) {
+            log.error("Plugin {} evidence provider '{}' not declared in manifest contributes.evidenceSources "
+                    + "(transport spi), not registered", pluginId, sourceId);
+            return;
+        }
+        evidenceRetrieverRegistry.registerExternal(new com.checkba.service.ai.evidence.PluginSpiEvidenceRetriever(
+                sourceId, provider, () -> isEnabled(pluginId)));
+    }
+
+    /** manifest 声明的远程 MCP 证据来源 → 证据注册表（规范 v2.8 P3）；transport=spi 的走 JAR 加载路径 */
+    void registerDeclaredMcpEvidenceSources(PluginMetadata meta) {
+        if (evidenceRetrieverRegistry == null || mcpClientService == null
+                || meta.getContributes() == null || meta.getContributes().getEvidenceSources() == null) {
+            return;
+        }
+        String pluginId = meta.getId();
+        for (EvidenceSourceDecl d : meta.getContributes().getEvidenceSources()) {
+            if (!"mcp".equals(d.getTransport())) {
+                continue;
+            }
+            com.checkba.service.ai.mcp.McpProperties.ServerConfig cfg =
+                    new com.checkba.service.ai.mcp.McpProperties.ServerConfig();
+            cfg.setName("plugin:" + pluginId + ":" + d.getSourceId());
+            cfg.setUrl(d.getServer().getUrl());
+            cfg.setToken(d.getServer().getToken());
+            cfg.setTokenSettingKey(d.getServer().getTokenSettingKey());
+            if (d.getServer().getTimeoutSeconds() != null) {
+                cfg.setTimeoutSeconds(d.getServer().getTimeoutSeconds());
+            }
+            com.checkba.service.ai.evidence.EvidenceRetriever inner =
+                    new com.checkba.service.ai.evidence.McpEvidenceRetriever(
+                            d.getSourceId(), cfg, d.getTool(), mcpClientService);
+            // 启用位闸：与 SPI 适配器同语义，禁用插件的来源静默返回空
+            evidenceRetrieverRegistry.registerExternal(new com.checkba.service.ai.evidence.EvidenceRetriever() {
+                @Override
+                public String sourceId() {
+                    return inner.sourceId();
+                }
+
+                @Override
+                public java.util.List<com.checkba.service.ai.evidence.EvidenceItem> retrieve(
+                        com.checkba.service.ai.evidence.EvidenceQuery query) {
+                    return isEnabled(pluginId) ? inner.retrieve(query) : java.util.List.of();
+                }
+            });
         }
     }
 

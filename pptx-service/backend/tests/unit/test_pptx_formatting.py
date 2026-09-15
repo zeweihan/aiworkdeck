@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 [checkba] PPTXBuilder 落字治理 + pptx_format_service 格式读写测试
 """

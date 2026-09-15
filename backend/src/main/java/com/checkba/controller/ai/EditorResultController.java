@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller.ai;
 
 import com.checkba.service.ai.EditorBridgeService;
@@ -42,13 +45,16 @@ public class EditorResultController {
         log.info("Received editor result: requestId={}, success={}", payload.getRequestId(), payload.isSuccess());
         
         try {
-            editorBridgeService.completeEditorAction(
+            boolean accepted = editorBridgeService.completeEditorAction(
                     payload.getRequestId(),
+                    payload.getConversationId(),
                     payload.isSuccess(),
                     payload.getData(),
                     payload.getError()
             );
-            
+            if (!accepted) {
+                return new EditorResultResponse(false, "无效的 requestId 或不属于该会话");
+            }
             return new EditorResultResponse(true, "Result received");
             
         } catch (Exception e) {

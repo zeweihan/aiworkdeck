@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
 // 从桌面首启解锁门（launch → unlock）开始，以真实鼠标点击
-// 走完核心用户旅程：项目列表页、个人中心四 tab、三级导航（列表→概览页→工作台，
-// 含概览页档案手填落库）、上传文件（含 >5MB 分片路径回归）、
+// 走完核心用户旅程：项目列表页、统一设置页的「个人」组、两级导航（列表→工作台，
+// 含概览页档案手填落库）、文件落进项目（含 >5MB 大文件回归）、
 // 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
 // 任何断言失败退出码非 0。
 //
@@ -12,6 +14,15 @@
 //       PR-A（商业化改造去登录）之后的 local-mode 桌面后端——默认 9696
 //       （打包版常驻即可）；冷启动联调可用新 jar 在 9797 顶班
 //       （SPRING_PROFILES_ACTIVE=desktop + 隔离 user.home/H2/cwd）。
+//
+//       **裸 jar 顶班时必须补两样内置资源，否则会打出两条像回归的假失败**
+//       （2026-08-29 发 v0.27.3 时踩到，排查了一轮才发现是跑法缺件）：
+//         AI_SKILLS_BUILTIN_DIR=<repo>/backend/skills   # 内置 skill（脱敏/语音合成/会议录音…）
+//         cp -R <repo>/backend/plugins <cwd>/plugins    # ai.plugins.dir 是相对 cwd 的
+//       这两样在打包态由安装包的 Resources/ 提供，裸 jar 不带。缺了的话
+//       `/api/skills/list` 返回 `[]`，于是「广场安装（启用）脱敏后入口出现」与
+//       「语音面板里是两个 tab」必然超时失败——**症状长得像 UI 回归，其实是环境缺件**。
+//       判断方法：先 `curl <backend>/api/skills/list`，空数组就是这个坑。
 //
 //       **冷启动的新后端必须先有解锁起点**（2026-08 官方版必须账户登录之后的新约束）：
 //       发版默认值关掉了试用码，全新 user.home 起来的后端是 mode=none，而本套件
@@ -62,6 +73,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import { startPackStub } from '../_lib/pack-stub.mjs'
 
 const BASE = process.env.APP_E2E_BASE || 'http://127.0.0.1:5174'
 const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
@@ -174,6 +186,9 @@ if (!fs.existsSync(bigFile) || fs.statSync(bigFile).size < 6_000_000) {
 fs.writeFileSync(versionFileA, 'QA 版本记录旅程测试文件 A\n')
 fs.writeFileSync(versionFileB, 'QA 版本记录旅程测试文件 B\n')
 fs.writeFileSync(versionFileC, 'QA 版本记录旅程测试文件（单文件历史/MODIFY 用）\n')
+// dev-board#438：关闭版本记录之后用来发一个真实变更信号，验证 opt-out 不会被自动开回来。
+const versionOptOutFile = path.join(OUT, 'qa-438关闭后改动.txt')
+fs.writeFileSync(versionOptOutFile, 'QA dev-board#438 关闭版本记录之后的改动信号\n')
 
 // ---------- issue collection ----------
 const issues = []
@@ -201,7 +216,10 @@ try {
     else if (r.status() === 404 && !/favicon|hot-update/.test(r.url())) note('asset404', r.url().slice(0, 150))
   })
 
+  // 截图只是诊断产物，不是断言：Chrome 偶发 captureScreenshot 超时（2026-08-20
+  // 实跑撞过一次，裸 await 直接把整套旅程打死），这里必须吞掉并记 note。
   const shot = (n) => page.screenshot({ path: path.join(OUT, n + '.png') })
+    .catch((e) => note('shotFail', n + ': ' + String((e && e.message) || e).slice(0, 120)))
   const textOf = () => page.evaluate(() => document.body.innerText.replace(/\n{2,}/g, '\n'))
   const waitText = async (t, ms = 15000) => {
     await page.waitForFunction((x) => document.body.innerText.includes(x), { timeout: ms }, t)
@@ -273,13 +291,13 @@ try {
   // 桌面（免登）语境。evaluateOnNewDocument 注册的最小桩对之后每个新文档生效，
   // 全程保持——这正是新基线（桌面=免登）的浏览器映射。
   console.log('== J1 首启解锁门 ==')
-  await page.evaluateOnNewDocument(() => {
-    window.checkbaDesktop = { shell: { openExternal: () => Promise.resolve() } }
+  await page.evaluateOnNewDocument((apiBase) => {
+    window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
     // 中文基线钉死：utils/appLanguage.js 首启会按 navigator.language 猜语言，
     // 全新 profile 在英文 locale 机器/CI 上会整套翻成英文导致中文断言全线假红。
     // 显式写语言键（uni h5 的 getStorageSync 兼容裸字符串）。
     try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ }
-  })
+  }, BACKEND)
 
   // 后端的解锁门形态。trialCodeEnabled=false 是发版默认值（官方版必须账户登录）；
   // 缺字段 = 旧后端，按 true 处理，与改动前行为一致。
@@ -309,38 +327,51 @@ try {
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
       await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
       if (!trialGateOpen) {
-        // 等 trialCodeEnabled 拉回来（异步），第二个标签从「试用码 / Key」换成「账户 Key」
-        await page.waitForFunction(() => {
-          const tabs = Array.from(document.querySelectorAll('.unlock-tab')).map((t) => t.textContent.trim())
-          return tabs.length === 2 && tabs[1].includes('账户 Key')
-        }, { timeout: 15000 })
+        // 等 trialCodeEnabled 拉回来（异步）：第三个页签（试用码 / Key）整条撤掉，只剩登录与注册
+        await page.waitForFunction(
+          () => document.querySelectorAll('.unlock-tab').length === 2,
+          { timeout: 15000 },
+        )
       }
       const tabs = await page.$$eval('.unlock-tab', (els) => els.map((e) => ({
         text: e.textContent.trim(), active: e.className.includes('is-active'),
       })))
-      // 这两条是 PR#408 的契约，与试用码开关无关：账户登录必须在、且是默认落点
-      if (!tabs[0].text.includes('账户登录')) throw new Error('第一个标签不是「账户登录」：' + tabs[0].text)
-      if (!tabs[0].active) throw new Error('「账户登录」必须是默认标签，否则新用户进来先看到的是一条走不通的路')
+      // PR#408 的契约（账户登录必须在、且是默认落点）在页签改成「登录 / 注册」之后照旧
+      if (tabs[0].text !== '登录') throw new Error('第一个标签不是「登录」：' + tabs[0].text)
+      if (!tabs[0].active) throw new Error('「登录」必须是默认标签，否则新用户进来先看到的是一条走不通的路')
+      // 注册必须在页面上：桌面端允许注册之后，没有这个入口的新用户在这里是死路
+      if (tabs[1].text !== '注册') throw new Error('第二个标签不是「注册」：' + tabs[1].text)
+      const t = await textOf()
+      // 账号密码那条路已从解锁门撤掉（官网验证码端点「不存在即注册」，口令是存量遗留）
+      if (t.includes('用账号密码登录')) throw new Error('解锁门仍留着「用账号密码登录」入口')
+      // 注册即正式版，「获取正式版」这条外链现在是错的指路
+      if (t.includes('获取正式版')) throw new Error('解锁门仍留着「获取正式版」外链')
       if (!trialGateOpen) {
-        if (tabs[1].text.includes('试用码')) throw new Error('试用码已关闭，标签不该还叫「试用码」：' + tabs[1].text)
+        for (const tab of tabs) {
+          if (tab.text.includes('试用码')) throw new Error('试用码已关闭，页签不该还叫「试用码」：' + tab.text)
+        }
         // 「获取试用码」外链指向 README 里已经撤掉的那枚码，必须一并消失
-        const t = await textOf()
         if (t.includes('获取试用码')) throw new Error('试用码已关闭，页面仍留着「获取试用码」外链')
       }
     })
 
-    if (!trialGateOpen) await step('粘试用码被拒且报错说清还剩哪条路', async () => {
+    // 试用码关掉之后，原先「粘试用码被后端拒掉」那一步已经没有落点可点
+    // （官方版整条 Key 页签都不渲染，PR#420）。换成钉住新增的注册页签：
+    // 切过去必须真的换成注册口径，否则「允许注册」只是一个改不动任何东西的装饰页签。
+    await step('注册页签换成注册口径', async () => {
       await mouseClickSel('.unlock-tab:nth-child(2)')
-      await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
-      await page.type('.unlock-input textarea', TRIAL_CODE.slice(0, 40))
-      await sleep(250); await page.type('.unlock-input textarea', TRIAL_CODE.slice(40)); await sleep(250)
-      await mouseClickSel('.unlock-btn')
       await page.waitForFunction(() => {
-        const el = document.querySelector('.unlock-error')
-        return !!el && el.textContent.includes('试用码已停用')
-      }, { timeout: 15000 })
-      const err = await page.$eval('.unlock-error', (e) => e.textContent)
-      if (!err.includes('awdk_')) throw new Error('拒绝文案没给出剩下那条路（awdk_ 账户 Key）：' + err)
+        const btn = document.querySelector('.unlock-btn')
+        return !!btn && btn.textContent.includes('注册')
+      }, { timeout: 10000 })
+      const t = await textOf()
+      if (!t.includes('未注册过的')) throw new Error('注册页签没有说清「未注册即创建账户」这件事')
+      // 切回登录页签，主按钮要变回登录口径（两边都得真的换，不能只单向生效）
+      await mouseClickSel('.unlock-tab:nth-child(1)')
+      await page.waitForFunction(() => {
+        const btn = document.querySelector('.unlock-btn')
+        return !!btn && btn.textContent.trim() === '登录'
+      }, { timeout: 10000 })
     })
 
     await step('后端授权状态未被 J1 改动', async () => {
@@ -366,11 +397,33 @@ try {
     }
   }
 
+  // 解锁门的默认落点是「登录」页签（PR#408 起），试用码在第三个页签上——
+  // 破坏性链路每次进页面都得先切过去，否则根本没有 .unlock-input 可打字。
+  const openTrialCodeTab = async () => {
+    await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
+    await mouseClickSel('.unlock-tab:nth-child(3)')
+    // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
+    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    await ensureConsentChecked()
+  }
+
+  // 2026-08-27 起解锁提交前有两枚同意勾选框（服务条款/隐私政策 + 跨境单独同意），
+  // 都不预勾选——不点上它们，任何解锁点击都会停在同意提示上
+  const ensureConsentChecked = async () => {
+    await page.waitForSelector('.consent-mark', { timeout: 10000 })
+    await page.evaluate(() => {
+      document.querySelectorAll('.consent-mark:not(.checked)').forEach((el) => el.click())
+    })
+    await page.waitForFunction(
+      () => document.querySelectorAll('.consent-mark:not(.checked)').length === 0,
+      { timeout: 5000 },
+    )
+  }
+
   await step('launch 未解锁分流到 unlock 页', async () => {
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
-    // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
-    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    await openTrialCodeTab()
   })
 
   await step('坏码走后端 400 内联报错', async () => {
@@ -391,43 +444,47 @@ try {
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
-    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    await openTrialCodeTab()
     // 模拟从邮件/网页复制来的粘贴形态：中间夹换行和空格，验证前端去空白
     const messy = TRIAL_CODE.slice(0, 30) + '\n ' + TRIAL_CODE.slice(30)
     await page.type('.unlock-input textarea', messy)
     await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
     await mouseClickSel('.unlock-btn')
-    // 解锁成功 → toast → reLaunch 回 launch 分流，两个合法落点：
-    //  - 向导未初始化 → wizard
-    //  - 已初始化 → 项目列表页（2026-08 起启动一律落列表，不再「有最近项目就直达工作台」）
-    await page.waitForFunction(() => {
-      const h = location.hash
-      return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
-    }, { timeout: 30000 })
+    // 解锁成功 → toast → reLaunch 回 launch 分流。向导页已下线（2026-08-27），
+    // 唯一合法落点是项目列表页（2026-08 起启动一律落列表，不再「有最近项目就直达工作台」）
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-list/project-list'),
+      { timeout: 30000 },
+    )
   })
 
-  await step('向导页无 admin/123 口令提示（未初始化时）', async () => {
-    if (!page.url().includes('pages/wizard/wizard')) return // 已初始化后端：此腿天然不出现
-    const t = await textOf()
-    if (t.includes('admin') && t.includes('123')) throw new Error('wizard 页仍含 admin/123 提示')
+  } // ---- J1 两条分支到此合流：下面各步在两种形态下都要成立 ----
 
-    // P5 配置面收敛：步骤 2 从「OCR / 语音 / 企业数据」三组共 9 个输入框，换成
-    // 「连接账户 + 平台服务总览」，并且默认展开（这一段的全部意义就是让用户看见
-    // 「其余七项不用你配」，收起来等于没做）。
-    // 钉死两件事：新形态在、旧的凭证字段不在——把 23 个字段搬回首启页是本批的核心回归。
-    if (!t.includes('平台服务')) throw new Error('wizard 步骤 2 未渲染「平台服务」总览')
-    for (const gone of ['AccessKey', '企查查 Key', 'Tushare Token', '北大法宝 Token']) {
-      if (t.includes(gone)) throw new Error('wizard 页仍含已撤走的第三方凭证字段：' + gone)
+  // 向导巡检 + API 置初始化挪到合流区（2026-08-19）：非破坏性分支（发版默认值，
+  // 试用码关）此前从不经过这一步——长驻后端早就初始化过所以看不出来，冷启动的
+  // 隔离后端 initialized=false，launch 分流永远落 wizard，「已解锁重启 → 落项目
+  // 列表页」在那种环境下必红。步骤自带「不在向导页就跳过」守卫，长驻后端零影响。
+  await step('向导已下线：分流不落向导页，未初始化走 API 补置', async () => {
+    // 向导页 2026-08-27 起整体删除：首启初始化（官方通道 + 跨境同意）由解锁页在
+    // 登录成功后一次性提交。这里钉两件事：① 分流唯一落点是项目列表页（决不能再
+    // 出现向导路由）；② 冷启动隔离后端 initialized=false 时用 API 出口补置——
+    // 后面「已解锁重启 → 落项目列表页」等步骤依赖一个初始化过的后端。
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-list/project-list'),
+      { timeout: 30000 },
+    )
+    if (page.url().includes('pages/wizard/wizard')) {
+      throw new Error('向导页已下线，分流不该再落 pages/wizard/wizard')
     }
-
-    // API 置初始化（与向导 UI 等价的后端出口；向导 UI 自身的交互不在本套件覆盖面）
-    // 供应商必须是收敛后的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
-    // 已下线的 gemini 现在会被 toSettingsUpdates 的枚举校验打成 400。
-    const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
-    if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
+    const wiz = await api('/api/admin/wizard')
+    if (wiz && wiz.initialized === false) {
+      // 供应商必须是后端仍认的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
+      // AWD_CLOUD 要跨境同意，套件用 OPENROUTER 走后端路径即可。
+      const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
+      if (!init || init.code !== 0) throw new Error('API 置初始化失败: ' + JSON.stringify(init).slice(0, 150))
+    }
   })
-
-  } // ---- J1 两条分支到此合流：下面两步在两种形态下都要成立 ----
 
   await step('已解锁重启 → 落项目列表页（即使有最近项目）', async () => {
     // uni h5 getStorageSync 兼容裸字符串
@@ -465,15 +522,13 @@ try {
     }
   })
 
-  // ============ J2 项目列表页 + 个人中心四 tab ============
-  // 三级导航改造后「我的项目」不再是个人中心的一个 tab，而是独立页面
-  // pages/project-list/project-list；个人中心的默认 tab 随之变成「工作记录」，
-  // tabs 数组里已无 projects 项。这里拆成两段独立断言：
+  // ============ J2 项目列表页 + 统一设置页的「个人」组 ============
   //  ① 项目列表页自己能加载出卡片（J3 的起点，必须先立住）
-  //  ② 个人中心剩下的四个 tab 仍能切、且默认 tab 不是空白页
-  // 不要再用「点『我的项目』tab 回到列表」这条老路径——那个 tab 已经不存在，
-  // mouseClickText 会抛「找不到文本」。
-  console.log('== J2 项目列表页 + 个人中心 ==')
+  //  ② 个人内容仍然到得了、四个栏目都不是空白页
+  // 2026-08-20：个人中心并进了统一「设置」页（AdminPane 的「个人」组），
+  // /pages/userprofile 薄壳页仍在、落点就是这一组，所以这一段的入口 URL 没变，
+  // 变的是页面结构（.page-admin 的侧栏分组，不再是 .nav-menu 那套 tab）。
+  console.log('== J2 项目列表页 + 个人设置 ==')
 
   await step('项目列表页加载出项目卡片', async () => {
     await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
@@ -486,34 +541,48 @@ try {
     const t = await textOf()
     const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
     if (m) throw new Error('页面文本可疑: ' + m[0])
-    // 空项目态与有项目态都必须渲染「从团队案件库取一份案卷」——它是协作的唯一
-    // 入口，且 CollabDialog.vue:271 的邀请话术第 1 步就指着它。搬迁时漏掉
-    // CloudAcceptDialog 的两个入口，这条断言会红。
+    // 官方案件库零配置直连（#439）后入口已恢复；验收与当前产品口径一致。
     if (!t.includes('从团队案件库取一份案卷')) {
-      throw new Error('项目列表页缺「从团队案件库取一份案卷」入口（CloudAcceptDialog 没搬全）')
+      throw new Error('项目列表缺少团队案件库取回入口')
     }
   })
 
   await shot('j2-project-list')
 
-  await step('个人中心不再有「我的项目」tab', async () => {
+  await step('/pages/userprofile 落在统一设置页的「个人」组', async () => {
     await page.goto(BASE + '/#/pages/userprofile/userprofile', { waitUntil: 'networkidle2' })
+    await page.waitForSelector('.page-admin', { timeout: 20000 })
     await waitText('工作记录', 20000)
-    // 只看 tab 栏本身（.nav-menu .nav-text），不看整页 innerText——
-    // 页面别处出现「我的项目」四个字不该让这条断言误红。
+    // 只看侧栏导航本身（.nav-list .nav-text），不看整页 innerText
     const labels = await page.evaluate(
-      () => [...document.querySelectorAll('.nav-menu .nav-text')].map((e) => e.innerText.trim()))
-    if (labels.includes('我的项目')) {
-      throw new Error('个人中心仍有「我的项目」tab（userprofile.vue:494 那行没删）: ' + JSON.stringify(labels))
+      () => [...document.querySelectorAll('.nav-list .nav-text')].map((e) => e.innerText.trim()))
+    for (const want of ['工作记录', '我的收藏', '我的代办', '账户与安全']) {
+      if (!labels.includes(want)) {
+        throw new Error('「个人」组缺栏目「' + want + '」: ' + JSON.stringify(labels))
+      }
     }
-    if (labels[0] !== '工作记录') {
-      throw new Error('个人中心首个 tab 不是「工作记录」（userprofile.vue:492 默认值没改）: ' + JSON.stringify(labels))
+    if (labels.includes('我的项目')) {
+      throw new Error('侧栏里冒出了「我的项目」（那一栏已搬去项目列表页）: ' + JSON.stringify(labels))
+    }
+    const active = await page.evaluate(() => {
+      const el = document.querySelector('.nav-item.active .nav-text')
+      return el ? el.innerText.trim() : ''
+    })
+    if (active !== '工作记录') {
+      throw new Error('薄壳页没有落在「工作记录」（initial-nav="work_log" 没接上）: ' + active)
     }
   })
 
-  for (const tab of ['工作记录', '我的收藏', '我的代办', '设置']) {
-    await step('tab ' + tab, async () => {
+  // 四个栏目依次点开，每个都要真渲染出自己的面板（不是一片空白）
+  for (const [tab, sel] of [
+    ['工作记录', '.panel-work-log'],
+    ['我的收藏', '.panel-favorites'],
+    ['我的代办', '.panel-placeholder'],
+    ['账户与安全', '.panel-settings'],
+  ]) {
+    await step('个人组栏目 ' + tab, async () => {
       await mouseClickText(tab)
+      await page.waitForSelector(sel, { timeout: 15000 })
       const t = await textOf()
       const m = t.match(/.{0,40}(undefined|NaN|\[object).{0,40}/)
       if (m) throw new Error('页面文本可疑: ' + m[0])
@@ -528,7 +597,10 @@ try {
   // 三个路由互不是子串，但同属 'project-' 前缀家族——一律写全路径判定。
   //
   // 2026-08 改动：概览不再是列表与工作台之间那一站独立页，而是工作台 rail 第一个
-  // 按钮开出来的中栏标签（内容本体 ProjectHomePane 两个宿主共用）。
+  // 按钮开出来的**左栏面板**（内容本体 ProjectHomePane 两个宿主共用）。
+  // 2026-08-19 又从「中栏标签」改成「左栏面板」——rail 按钮点了开左栏，与 rail
+  // 其余每一项同一个语义。锚点类名没变，但它现在会改 leftPaneKey 并被持久化，
+  // 所以后面回工作台必须先点回「资源管理器」（见「回到工作台继续后续旅程」）。
   console.log('== J3 两级导航 ==')
 
   await step('列表页点卡片 → 直达工作台', async () => {
@@ -567,7 +639,7 @@ try {
     await waitText('资源管理器', 30000)
   })
 
-  await step('rail「项目概览」开中栏标签，五个区块齐全', async () => {
+  await step('rail「项目概览」开左栏面板，五个区块齐全', async () => {
     await mouseClickSel('[title="项目概览"]')
     // 组件根类名即 e2e 稳定锚点（仓里既有惯例：.cloud-bar / .adopt-dialog / .clip-panel）。
     // 只等容器是不够的——子组件挂载失败时容器照样在。
@@ -640,28 +712,66 @@ try {
     await mouseClickSel('.project-item-card')
     await page.waitForFunction(
       () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 20000 })
-    await waitText('资源管理器', 30000)
+    // **这里不能用 waitText('资源管理器')**：上一步点过「项目概览」，leftPaneKey 已经
+    // 被持久化成 'home'，再进工作台左栏标题就是「项目概览」，那个词根本不出现。
+    // 等 rail 上的按钮（title 属性，与 leftPaneKey 无关）才是「工作台起来了」的判据。
+    await page.waitForSelector('[title="资源管理器"]', { timeout: 30000 })
+    // 概览是左栏的一个面板，点它会把 leftPaneKey 持久化成 'home'——再进工作台
+    // 就可能落在概览面板上，而后面整段都要资源管理器面板在场（uploadOne 靠收起/展开
+    // 它来刷新文件树）。显式确保停在文件树上。判据用「新建文件夹」这个面板头按钮：
+    // 它与「上传文件」同一排，而后者随 dev-board#513 一起撤了。
+    //
+    // **不能无脑点一下 rail**：toggleLeftPane 对**同一个 key** 是「收起/展开侧栏」，
+    // 已经在资源管理器上时点它等于把整条左栏收掉，面板头按钮跟着消失。
+    // 所以先探测，需要才点；点完仍没有就再点一次（上一次是收起，这一次是展开）。
+    for (let i = 0; i < 2; i++) {
+      if (await page.$('[title="新建文件夹"]')) break
+      await mouseClickSel('[title="资源管理器"]')
+    }
+    await page.waitForSelector('[title="新建文件夹"]', { timeout: 15000 })
   })
   await shot('j3-project')
 
-  // ============ J4 上传（小 + 大分片） ============
-  console.log('== J4 文件上传 ==')
+  // ============ J4 文件落进项目（小 + 大） ============
+  // dev-board#513 起资源管理器没有「上传文件」这条 UI 通道了（对话框、分片上传队列、
+  // 底栏进度全撤），剩下的入口是「从 Finder 拖进来 → import-local」——headless
+  // 浏览器驱动不了真实 OS 拖拽。所以这里改走裸 REST：createFile 建行 + POST
+  // /api/files/{id}/upload 写字节，与 J9 既有的 restOverwrite 同一条后端路径
+  // （同一段 signalChange），旅程语义（文件真落盘、版本记录看得见）不变。
+  // 文件树只在挂载时拉一次清单，所以写完靠「收起再展开左栏」强制重新挂载来刷新
+  // （与版本面板那几步同样的手法）。
+  console.log('== J4 文件落进项目 ==')
   const uploadOne = async (file, name) => {
-    await mouseClickSel('[title="上传文件"]')
-    await waitText('选择文件（支持多选）', 8000)
-    const [chooser] = await Promise.all([
-      page.waitForFileChooser({ timeout: 8000 }),
-      mouseClickText('选择文件（支持多选）', { contains: true }),
-    ])
-    await chooser.accept([file])
-    await sleep(500)
-    await mouseClickText('确定上传')
+    const fileName = path.basename(file)
+    const bytes = fs.readFileSync(file)
+    const created = await api('/api/projects/' + QA.projectId + '/files/file', {
+      method: 'POST',
+      body: {
+        parentId: null,
+        name: fileName,
+        fileType: (fileName.split('.').pop() || 'txt').toLowerCase(),
+        fileSize: bytes.length,
+      },
+    })
+    if (!created || !created.id) throw new Error('createFile 失败: ' + JSON.stringify(created).slice(0, 200))
+    const form = new FormData()
+    form.append('file', new Blob([bytes], { type: 'text/plain' }), fileName)
+    const r = await fetch(BACKEND + '/api/files/' + (created.wpsFileId || created.id) + '/upload', {
+      method: 'POST',
+      headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
+      body: form,
+    })
+    const j = await r.json()
+    if (!j || j.code !== 0) throw new Error('写字节失败: ' + JSON.stringify(j).slice(0, 200))
+    // 收起再展开 = FileTree 重新挂载 = 重新拉清单
+    await mouseClickSel('[title="资源管理器"]')
+    await mouseClickSel('[title="资源管理器"]')
   }
-  await step('上传小文件', async () => {
+  await step('落一个小文件', async () => {
     await uploadOne(smallFile, 'qa-small.txt')
     await waitText('qa-small', 20000)
   })
-  await step('上传 >5MB 大文件（分片回归 #156）', async () => {
+  await step('落一个 >5MB 大文件（#156 回归：大文件照样完整落盘）', async () => {
     await uploadOne(bigFile, 'qa-big.txt')
     await waitText('qa-big', 60000)
   })
@@ -675,15 +785,110 @@ try {
     await shot('j5-open')
   })
 
+  // dev-board#394：中栏标签常驻，与左栏面板解耦。此前 isTabVisible 是一张按
+  // leftPaneKey 放行的白名单，切到项目概览/插件中心等面板时全部文档标签被
+  // v-show 藏死、编辑区退成「左侧空闲」。断言标签有真实布局盒（display:none
+  // 祖先会让 getClientRects() 为空），而不是只看 leftFiles 里还有没有。
+  const assertTabsStayRendered = async (where) => {
+    const ok = await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('.tabs-pane-left .tab-item'))
+      if (!tabs.length) return 'no-tab'
+      if (tabs.some((t) => t.getClientRects().length === 0)) return 'hidden'
+      if (document.querySelector('.pane-empty')) return 'pane-empty'
+      return 'ok'
+    })
+    if (ok !== 'ok') throw new Error(`切到「${where}」后中栏标签状态异常: ${ok}`)
+  }
+  await step('切到项目概览、插件中心，中栏标签与文档都不许消失（dev-board#394）', async () => {
+    await mouseClickSel('[title="项目概览"]')
+    await sleep(600)
+    await assertTabsStayRendered('项目概览')
+    await mouseClickSel('[title="插件中心"]')
+    await sleep(600)
+    await assertTabsStayRendered('插件中心')
+    await mouseClickSel('[title="资源管理器"]')
+    await sleep(400)
+    await assertTabsStayRendered('资源管理器')
+  })
+
   // ============ J6 左栏功能区（title 定位图标） ============
   console.log('== J6 左栏功能区 ==')
   // 标题取自 config/leftSidebarPlugins.js 的 label（i18n 键 config.sidebar.*）——
-  // 改名会让这一步整条失配。「EasyVoice」在 #389 已改成「语音合成」，这里跟着改；
-  // 以后再改名，先看这一行。
-  for (const title of ['搜索', '文件脱敏', '语音合成', '文件暂存区', '资源管理器']) {
+  // 改名会让这一步整条失配。「EasyVoice」在 #389 已改成「语音合成」；2026-08-19
+  // 语音合成与会议录音合并成一个 rail 入口「语音」（合成成了面板内的一个 tab），
+  // rail 标题跟着改。以后再改名，先看这一行。
+  // 「文件脱敏」自 2026-08-19 起是门控面板（skill desensitize 默认不装），
+  // 不再常显，单独走下面的安装/卸载全周期断言。
+  for (const title of ['搜索', '语音', '文件暂存区', '资源管理器']) {
     await step('左栏 ' + title, () => mouseClickSel('[title="' + title + '"]'))
   }
+  await step('脱敏默认不装：rail 无入口', async () => {
+    if (await page.$('[title="文件脱敏"]')) {
+      throw new Error('desensitize 未启用时 rail 不该出现「文件脱敏」入口')
+    }
+  })
+  await step('广场安装（启用）脱敏后入口出现，卸载后消失', async () => {
+    // 与广场「安装」同一条后端路径；enabledSkillIds 是挂载时拉取的，翻转后整页刷新再断言
+    await api('/api/skills/desensitize/enable', { method: 'POST' })
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForSelector('[title="文件脱敏"]', { timeout: 15000 })
+      await mouseClickSel('[title="文件脱敏"]')
+    } finally {
+      // 还原到默认态（长驻后端不能被 e2e 改状态）
+      await api('/api/skills/desensitize/disable', { method: 'POST' })
+    }
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(
+      () => !document.querySelector('[title="文件脱敏"]'),
+      { timeout: 15000 },
+    )
+  })
+  await step('「语音」面板里是两个 tab 而不是两个 rail 入口', async () => {
+    await mouseClickSel('[title="语音"]')
+    await page.waitForSelector('.voice-tabs', { timeout: 10000 })
+    const t = await textOf()
+    if (!t.includes('语音合成')) throw new Error('语音面板里没有「语音合成」tab')
+    // dev-board#66 起语音合成与会议录音是**一个**合并插件（启停一体，后端
+    // SkillRegistry 收敛保证两个成员状态一致）：语音入口在，两个 tab 就都在。
+    if (!t.includes('会议录音')) throw new Error('语音面板里没有「会议录音」tab（合并插件启停一体后应恒在）')
+    await mouseClickSel('[title="资源管理器"]')
+  })
   await shot('j6-rails')
+
+  // ============ J6.3 顶栏头像 → 系统设置中栏标签 ============
+  // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像；
+  // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
+  // 2026-08-21（dev-board#96）：只剩一项时下拉撤掉、点头像直开设置。
+  // 2026-08-27（dev-board#205）：下拉恢复成两项（设置 / 退出登录）。
+  console.log('== J6.3 头像与设置标签 ==')
+  await step('点头像开两项下拉，点「设置」开中栏标签、不跳页', async () => {
+    await mouseClickSel('.avatar-btn')
+    await page.waitForSelector('.avatar-menu', { timeout: 8000 })
+    const items = await page.$$eval('.avatar-menu .avatar-menu-item', (els) => els.map((e) => e.textContent.trim()))
+    if (items.length !== 2) throw new Error('头像下拉应当恰好两项（设置/退出登录），实际: ' + JSON.stringify(items))
+    if (!items[0].includes('设置')) throw new Error('下拉第一项不是「设置」: ' + items[0])
+    if (!items[1].includes('退出登录')) throw new Error('下拉第二项不是「退出登录」: ' + items[1])
+    await mouseClickSel('.avatar-menu .avatar-menu-item')
+    await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
+    if (await page.$('.avatar-menu')) throw new Error('点完菜单项下拉没有收起')
+    const h = await page.evaluate(() => location.hash)
+    if (h.includes('pages/admin/admin')) throw new Error('设置又变回整页跳转了')
+    // 个人组与系统组都要在同一页里够得着
+    await waitText('工作记录', 10000)
+    await waitText('账户与安全', 10000)
+  })
+  await step('鼠标中键单击标签关闭它（dev-board#97）', async () => {
+    // 关掉设置标签，别把后面的旅程都压在设置页上——顺便覆盖中键关闭：
+    // 与点 × 同一条 closeFile 路径，mousedown/auxclick 都 preventDefault。
+    const box = await page.$eval('.tab-item.active', (el) => {
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })
+    await page.mouse.click(box.x, box.y, { button: 'middle' })
+    await page.waitForFunction(() => !document.querySelector('.page-admin.is-embedded'), { timeout: 8000 })
+  })
+  await shot('j6-settings-tab')
 
   // ============ J6.6 剪贴板面板 ============
   // 剪贴板簇长期没有端到端覆盖，而它重度依赖 document/window 全局监听
@@ -957,9 +1162,10 @@ try {
   for (const [name, route, expectText] of [
     ['插件广场', '/pages/plugin-market/plugin-market', '插件广场'],
     ['变量库', '/pages/variable-library/variable-library', '新增变量'],
-    // 「系统配置」分区 2026-08-18 已整体撤掉（OpenRouter 并入 AI 功能设置、
-    // 语言搬去个人中心），改断言左侧导航卡的标题——它不随分区增减变化
-    ['管理页(只读)', '/pages/admin/admin', '系统管理'],
+    // 侧栏标题 2026-08-20 从「系统管理」改成「设置」（个人中心并入这一页）；
+    // 「设置」两个字满页都是，所以断言「账户与安全」——个人组那一栏的名字，
+    // 不随分区增减变化（此前断言的是导航卡标题，同一个道理）
+    ['管理页(只读)', '/pages/admin/admin', '账户与安全'],
     // 新建项目页 2026-08 起不再是主入口（两个新建动作已内嵌在项目列表页下方），
     // 保留给浏览器降级与应用菜单的 ?auto=create-folder，所以仍然要能打开
     ['新建项目页', '/pages/newproject/index', '新建或打开项目'],
@@ -975,7 +1181,7 @@ try {
 
   // ============ J8 API 烟测 ============
   console.log('== J8 API 烟测 ==')
-  for (const ep of ['/api/projects/my', '/api/ai/assistants', '/api/ai/config', '/api/skills/list',
+  for (const ep of ['/api/projects/my', '/api/ai/config', '/api/skills/list',
     '/api/plugins/list', '/api/sensitive/options', '/api/variables/user', '/api/favorites/my', '/api/auth/me']) {
     await step('GET ' + ep, async () => {
       const r = await fetch(BACKEND + ep, { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })
@@ -985,11 +1191,11 @@ try {
 
   // ============ J9 版本记录 ============
   // 注：本 harness 跑浏览器目标，不驱动 LOWA 引擎，工作段不能靠"改文档"触发，
-  // 改用真实 UI 上传文件（走既有 uploadOne，与 J4 同一条链路，真正落盘到项目
-  // 工作区目录，git diff 才看得见）。上传前后要切回/切出资源管理器面板，
+  // 改用既有 uploadOne 往项目里真落一个文件（与 J4 同一条链路，真正落盘到项目
+  // 工作区目录，git diff 才看得见）。前后要切回/切出资源管理器面板，
   // 因为版本面板与文件树共用同一个侧栏挂载点（project-overview.vue 的
-  // sidebar-content 按 leftPaneKey 互斥渲染），版本面板打开时文件树（含
-  // "上传文件"按钮）不在 DOM 里。
+  // sidebar-content 按 leftPaneKey 互斥渲染），版本面板打开时文件树不在 DOM 里，
+  // uploadOne 结尾那两下「收起/展开」也就刷不到树。
   //
   // 旅程结构（task-15 报告定案后的修正版，需要两段工作）：
   // brief 原设计的"退回"点的是刚结束的那个工作段自己——单工作段场景下，退回
@@ -1001,16 +1207,98 @@ try {
     { waitUntil: 'networkidle2', timeout: 30000 })
   await sleep(1500)
 
-  await step('打开版本面板并看到未开启引导', async () => {
+  // ---- dev-board#438：版本记录默认开启 ----
+  // 旧基线是「打开面板看到未开启引导 → 点开启」。自动开启落地后那两步永远失败：
+  // 本套件的 QA 项目是启动时经 POST /api/projects 建出来的，ProjectCreatedEvent →
+  // VersionLifecycleService 在事务提交后异步开启，等 J1-J8 跑完这里，早已是开启态。
+  // 于是把这两步换成「默认已开启」的正断言，并把「关闭并删除历史 → opt-out 不被开回来
+  // → 手动再开」这条新增的拒绝链补成三步——手动开启这一步同时把旅程接回旧基线的
+  // 起点（已开启的空仓），后面 runWorkSession 那一串一个字都不用改。
+  await step('打开版本面板即已是开启态（默认开启，无需手动点开启）', async () => {
     await mouseClickSel('[title="版本"]')
-    await waitText('本项目还没有开启版本记录')
+    // 认已开启态的**结构**，不认「空闲/工作中」哪一种：VersionPanel 的 v-else 分支
+    // （WorkSessionBar + footer）只在 enabled 为真时渲染。这里刻意不断言 .session-idle
+    // ——默认开启之后，J4 那两次上传本身就是变更信号，会在这个项目上隐式开一段工作，
+    // 律师第一次点开版本面板看到的正常形态是「工作中」而不是空闲（这是 dev-board#438
+    // 带来的真实行为变化，不是缺陷；写死 .session-idle 会假红）。
+    await page.waitForSelector('.session-bar', { timeout: 15000 })
+    // 反面同样要立：未开启引导（含那颗「开启版本记录」按钮）必须不在 DOM 里，
+    // 否则「已开启」这条断言可能只是页面上恰好有别的元素。
+    const intro = await page.evaluate(() => !!document.querySelector('.version-intro'))
+    if (intro) throw new Error('已开启态下仍渲染了未开启引导 .version-intro')
+    // 自动开启会落一笔「初始版本」——时间线里看得见它，才算真开出了一个仓库。
+    await page.waitForFunction(() => [...document.querySelectorAll('.timeline-node .node-title')]
+      .some((e) => (e.innerText || '').includes('初始版本')), { timeout: 15000 })
   })
 
-  await step('开启版本记录后回到空闲态', async () => {
-    // brief 原断言是 waitText('主线')；实际 WorkSessionBar.vue 空闲态文案是
-    // "当前没有进行中的工作"，全仓没有"主线"这个用户可见文案（唯一命中是
-    // VersionTimeline.vue 里一行代码注释）。以实际组件模板为准改断言，不改产品文案。
+  await step('面板 footer 显示留底占用与关闭入口（窄侧栏不换行错位）', async () => {
+    const m = await page.evaluate(() => {
+      const f = document.querySelector('.version-footer')
+      if (!f) return { err: '没有 .version-footer' }
+      const size = f.querySelector('.version-footer-size')
+      const off = f.querySelector('.version-footer-off')
+      if (!size || !off) return { err: '.version-footer 里缺 size/off 子元素' }
+      const fr = f.getBoundingClientRect(), sr = size.getBoundingClientRect(), or = off.getBoundingClientRect()
+      return {
+        sizeText: size.innerText.trim(), offText: off.innerText.trim(),
+        footer: { x: fr.x, y: fr.y, w: fr.width, h: fr.height },
+        sameRow: Math.abs(sr.y - or.y) < 2,
+        // 溢出裁切（地雷 #23 的同款形态：窄侧栏里按钮行被切掉就点不着了）
+        overflowX: f.scrollWidth - f.clientWidth,
+        insideViewport: or.right <= document.documentElement.clientWidth && or.left >= 0,
+      }
+    })
+    if (m.err) throw new Error(m.err)
+    if (!/^留底占用 \d+(\.\d+)?(B|KB|MB|GB)$/.test(m.sizeText)) {
+      throw new Error('留底占用文案不对: ' + JSON.stringify(m.sizeText))
+    }
+    if (m.offText !== '关闭版本记录并删除历史') throw new Error('关闭入口文案不对: ' + m.offText)
+    if (m.overflowX > 1) throw new Error('footer 横向溢出被裁切: ' + m.overflowX + 'px')
+    if (!m.insideViewport) throw new Error('关闭入口跑出可视区，点不着')
+    // 截图存证：footer 及其上方一段（窄侧栏里的真实排布）。
+    const clip = {
+      x: Math.max(0, Math.floor(m.footer.x) - 4),
+      y: Math.max(0, Math.floor(m.footer.y) - 90),
+      width: Math.ceil(m.footer.w) + 8,
+      height: Math.ceil(m.footer.h) + 100,
+    }
+    await page.screenshot({ path: path.join(OUT, 'j9-version-footer.png'), clip })
+      .catch((e) => note('shotFail', 'j9-version-footer: ' + String(e.message || e).slice(0, 120)))
+    console.log('    footer: ' + m.sizeText + ' | ' + m.offText
+      + ' | sameRow=' + m.sameRow + ' | 截图 ' + path.join(OUT, 'j9-version-footer.png'))
+  })
+
+  await step('关闭版本记录并删除历史（二次确认）后回到未开启态', async () => {
+    await mouseClickSel('.version-footer-off')
+    // uni.showModal：confirmText 传的是「删除全部留底」；H5 裸浏览器下 uni 仍尊重
+    // confirmText，但 J9 既有步骤已经踩过「浏览器目标退回英文 OK」的坑，双试兜底。
+    try { await mouseClickText('删除全部留底') } catch { await mouseClickText('OK') }
+    await waitText('这个项目没有开启版本记录', 20000)
+    const st = await api('/api/projects/' + QA.projectId + '/version/status')
+    if (!st || !st.data || st.data.enabled !== false) {
+      throw new Error('/status 仍是已开启: ' + JSON.stringify(st).slice(0, 200))
+    }
+  })
+
+  await step('关掉之后的改动信号不会把它自动开回来（opt-out 生效）', async () => {
+    await mouseClickSel('[title="资源管理器"]')
+    await uploadOne(versionOptOutFile, 'qa-438关闭后改动')
+    await waitText('qa-438关闭后改动', 20000)
+    // 自动开启是异步的（taskExecutor），给它足够时间真跑一遍再判。
+    await sleep(5000)
+    const st = await api('/api/projects/' + QA.projectId + '/version/status')
+    if (!st || !st.data || st.data.enabled !== false) {
+      throw new Error('改动信号把已 opt-out 的项目又开回来了: ' + JSON.stringify(st).slice(0, 200))
+    }
+    // 面板只在挂载时读一次 /status，靠切出/切回侧栏挂载点强制重新挂载（既有手法）。
+    await mouseClickSel('[title="版本"]')
+    await waitText('这个项目没有开启版本记录', 15000)
+  })
+
+  await step('手动开启清掉 opt-out 后回到已开启空闲态', async () => {
     await mouseClickText('开启版本记录')
+    await page.waitForSelector('.session-bar .session-idle', { timeout: 15000 })
+    // 旧基线的文案断言原样保留（空闲态文案是「当前没有进行中的工作」）。
     await waitText('当前没有进行中的工作')
   })
 
@@ -1043,7 +1331,7 @@ try {
     await waitText('当前没有进行中的工作')
   }
 
-  await step('第一段工作：上传文件并命名结束', () =>
+  await step('第一段工作：落一个文件并命名结束', () =>
     runWorkSession(versionFileA, 'qa-版本测试A', '端到端测试稿一'))
 
   await step('时间线出现第一个工作段的命名节点', async () => {
@@ -1114,19 +1402,20 @@ try {
   // MODIFY；FileTree 右键菜单也没有"替换/重新上传"这类入口（同名上传会被后端
   // ProjectFileService.createFile 的同名校验拒绝），UI 上真做不出一次 MODIFY。
   // 改用与 J6.5/J8 一致的裸 REST 手段：先正常上传一份测试文件并结束（ADD 落进
-  // 历史），再直接 POST 到同一个 wpsFileId 的上传端点覆盖字节（FileController
-  // .uploadFile 对已存在 wpsFileId 的裸覆盖上传和 UI 上传走的是同一段
-  // signalChange 逻辑，产生的是同一种真实变更信号，不是伪造断言）。
+  // 历史），再直接 POST 到同一个文件的上传端点覆盖字节（wpsFileId 为空时用数字 id；
+  // createFile 新建的本机文件允许无 wpsFileId，与 J4 和真实编辑器的兜底一致）。FileController
+  // .uploadFile 对已存在文件的覆盖写入走的是同一段
+  // signalChange 逻辑，产生的是同一种真实变更信号，不是伪造断言。
   await step('追加工作：上传单文件历史/MODIFY 测试用文件', () =>
     runWorkSession(versionFileC, 'qa-版本测试', '端到端测试稿三'))
 
   await step('REST 直传覆盖同一文件产生 MODIFY 变更', async () => {
     const list = await api('/api/projects/' + QA.projectId + '/files')
     const f = (Array.isArray(list) ? list : []).find((x) => x.name === 'qa-版本测试.txt')
-    if (!f || !f.wpsFileId) throw new Error('找不到 qa-版本测试.txt 或其 wpsFileId: ' + JSON.stringify(list).slice(0, 200))
+    if (!f || !f.id) throw new Error('找不到 qa-版本测试.txt 或其 id: ' + JSON.stringify(list).slice(0, 200))
     const form = new FormData()
     form.append('file', new Blob(['QA 版本记录旅程测试文件（已修改，用于 MODIFY 断言）\n'], { type: 'text/plain' }), 'qa-版本测试.txt')
-    const r = await fetch(BACKEND + '/api/files/' + f.wpsFileId + '/upload', {
+    const r = await fetch(BACKEND + '/api/files/' + (f.wpsFileId || f.id) + '/upload', {
       method: 'POST',
       headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
@@ -1246,22 +1535,22 @@ try {
   fs.writeFileSync(j10Base, 'QA J10 垫底文件内容\n')
   fs.writeFileSync(j10DraftOnly, 'QA J10 稿专属文件（只应在稿上看到）\n')
 
-  // 裸 REST 覆盖同一 wpsFileId 的字节——与 J9 造 MODIFY 同一手段，这里用来在两条线
+  // 裸 REST 覆盖同一文件的字节（wpsFileId 为空则用数字 id）——与 J9 造 MODIFY 同一手段，在两条线
   // 上分别改同一个文件、制造一次真实的三方合并冲突（同一段文本两边改成不同内容）。
   const restOverwrite = async (fileName, content) => {
     const list = await api('/api/projects/' + QA.projectId + '/files')
     const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
-    if (!f || !f.wpsFileId) throw new Error('找不到 ' + fileName + ' 或其 wpsFileId: ' + JSON.stringify(list).slice(0, 200))
+    if (!f || !f.id) throw new Error('找不到 ' + fileName + ' 或其 id: ' + JSON.stringify(list).slice(0, 200))
     const form = new FormData()
     form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
-    const r = await fetch(BACKEND + '/api/files/' + f.wpsFileId + '/upload', {
+    const r = await fetch(BACKEND + '/api/files/' + (f.wpsFileId || f.id) + '/upload', {
       method: 'POST',
       headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
     })
     const j = await r.json()
     if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
-    return f.wpsFileId
+    return f.wpsFileId || f.id
   }
 
   // ---- 1. 开启版本记录（J9 已开）→ 一段命名工作垫底，给后面的另起一稿一个基点 ----
@@ -1487,6 +1776,52 @@ try {
   // 遇到真实内容冲突 → CONFLICT，这是 CloudSyncService.uploadToCloud 的 mode='cloud'
   // 语境（标签「用我这边的/用云端的」），不是 endSession 自身的 sessionEndConflict 语境
   // （那需要本机 git 收到过一次 receive-pack，这里 A/S/B 三个后端物理隔离，走不到那条路）。
+  //
+  // 这四样（两个裸 REST 身份、两个项目 id）与下面三个助手**必须活在 J11 的块外面**：
+  // J14（三方合并）跑在 J13 之后、复用同一套 A/S/B 拓扑（S、B 是 spawned 里的长驻
+  // 进程，活到整个套件的 finally），块内 const 声明的东西对它不可见。
+  let sApi = null
+  let bApi = null
+  let remoteProjectId = null
+  let bProjectId = null
+  const restOverwriteAt = async (apiFn, projectId, fileName, content) => {
+    const list = await apiFn('/api/projects/' + projectId + '/files')
+    const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
+    if (!f) throw new Error('找不到 ' + fileName + ': ' + JSON.stringify(list).slice(0, 200))
+    // 认 f.id（数据库主键，永远非空），不认 f.wpsFileId——跟 J9/J10 既有的
+    // restOverwrite 不同，这里的文件是清单同步（git clone）落库的，v2 清单只带
+    // uid/relPath，不携带 wpsFileId，走清单同步新建的行 wpsFileId 天然是 null。
+    // 现场调试实证：FileController.uploadFile 原来只认 wpsFileId，缺了数字 id 兜底，
+    // 撞上这类文件会把字节写进跟真文件不相干的孤儿路径且不触发版本信号——已经在
+    // FileController.resolveProjectFileForUpload 里补了跟 downloadFile 同款的双查
+    // 顺序（先按数据库 id 查，查不到再退回 wpsFileId），这里直接用 f.id 是对齐
+    // LibreOfficeEditor.vue 保存时 `f.wpsFileId || f.id` 的同一条兜底路径。
+    // content 可以是字符串，也可以是 Buffer / Uint8Array（J14 直传 docx/xlsx/pptx
+    // 原始字节）——后端不看 Content-Type，只读字节。
+    const form = new FormData()
+    form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
+    const r = await fetch(apiFn.base + '/api/files/' + f.id + '/upload', {
+      method: 'POST',
+      headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
+      body: form,
+    })
+    const j = await r.json()
+    if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
+  }
+  const endSessionAt = async (apiFn, projectId, title) => {
+    const r = await apiFn('/api/projects/' + projectId + '/version/session/end', { method: 'POST', body: { title } })
+    if (!r || r.code !== 0) throw new Error('结束工作失败: ' + JSON.stringify(r).slice(0, 200))
+    return r.data
+  }
+  const pollUntil = async (fn, timeoutMs, intervalMs = 1000) => {
+    const start = Date.now()
+    for (;;) {
+      if (await fn()) return true
+      if (Date.now() - start >= timeoutMs) return false
+      await sleep(intervalMs)
+    }
+  }
+
   if (!J11_JAR) {
     note('skip', 'J11 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过多人协作旅程')
   } else {
@@ -1497,53 +1832,24 @@ try {
     // B 是同事的桌面：保持 local-mode 免登（与真实拓扑一致），裸 REST 即本机用户。
     const S = await spawnBackend('server', 9701, ['--security.local-mode=false'])
     const B = await spawnBackend('desktopB', 9702)
-    const sApi = mkApi(S)
-    const bApi = mkApi(B)
-
-    const restOverwriteAt = async (apiFn, projectId, fileName, content) => {
-      const list = await apiFn('/api/projects/' + projectId + '/files')
-      const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
-      if (!f) throw new Error('找不到 ' + fileName + ': ' + JSON.stringify(list).slice(0, 200))
-      // 认 f.id（数据库主键，永远非空），不认 f.wpsFileId——跟 J9/J10 既有的
-      // restOverwrite 不同，这里的文件是清单同步（git clone）落库的，v2 清单只带
-      // uid/relPath，不携带 wpsFileId，走清单同步新建的行 wpsFileId 天然是 null。
-      // 现场调试实证：FileController.uploadFile 原来只认 wpsFileId，缺了数字 id 兜底，
-      // 撞上这类文件会把字节写进跟真文件不相干的孤儿路径且不触发版本信号——已经在
-      // FileController.resolveProjectFileForUpload 里补了跟 downloadFile 同款的双查
-      // 顺序（先按数据库 id 查，查不到再退回 wpsFileId），这里直接用 f.id 是对齐
-      // LibreOfficeEditor.vue 保存时 `f.wpsFileId || f.id` 的同一条兜底路径。
-      const form = new FormData()
-      form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
-      const r = await fetch(apiFn.base + '/api/files/' + f.id + '/upload', {
-        method: 'POST',
-        headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
-        body: form,
-      })
-      const j = await r.json()
-      if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
-    }
-    const endSessionAt = async (apiFn, projectId, title) => {
-      const r = await apiFn('/api/projects/' + projectId + '/version/session/end', { method: 'POST', body: { title } })
-      if (!r || r.code !== 0) throw new Error('结束工作失败: ' + JSON.stringify(r).slice(0, 200))
-      return r.data
-    }
-    const pollUntil = async (fn, timeoutMs, intervalMs = 1000) => {
-      const start = Date.now()
-      for (;;) {
-        if (await fn()) return true
-        if (Date.now() - start >= timeoutMs) return false
-        await sleep(intervalMs)
-      }
-    }
+    sApi = mkApi(S)
+    bApi = mkApi(B)
 
     const j11Base = path.join(OUT, 'qa-J11协作文件.txt')
     fs.writeFileSync(j11Base, 'QA J11 云端协作基线文件\n')
 
-    let remoteProjectId = null
+    // A 在案件库那一侧的账号名 = 'awd_' + A 的本机 username（dev-board#625）。
+    // 这不是随手取的名字，而是真实的桥接形状：同一个官网账户在本机叫 hanzewei、
+    // 在案件库那边叫 awd_hanzewei，成员去重的第三把键（mergeMembers.sameMember）认的
+    // 正是这个前缀。写死一个 lawyer_a 的话本机那条与云端那条永远对不上，
+    // 参与人会一直显示成 3 人，「同一个人不算两遍」这条就永远测不到。
+    const meA = await api('/api/auth/me')
+    const aLocalUsername = (meA && meA.data && meA.data.username) || ''
+    const A_CLOUD_USER = aLocalUsername ? 'awd_' + aLocalUsername : 'lawyer_a'
     await step('J11-服务器注册两个账号', async () => {
-      const regA = await sApi('/api/auth/register', { method: 'POST', body: { username: 'lawyer_a', password: 'PwLawyerA123', displayName: '律师甲' } })
-      if (!regA || regA.code !== 0) throw new Error('注册 lawyer_a 失败: ' + JSON.stringify(regA).slice(0, 200))
-      sApi.sid = regA.data.sessionId // 全程以 lawyer_a 身份留在 S 上（加成员/服务器侧断言都用它）
+      const regA = await sApi('/api/auth/register', { method: 'POST', body: { username: A_CLOUD_USER, password: 'PwLawyerA123', displayName: '律师甲' } })
+      if (!regA || regA.code !== 0) throw new Error('注册 ' + A_CLOUD_USER + ' 失败: ' + JSON.stringify(regA).slice(0, 200))
+      sApi.sid = regA.data.sessionId // 全程以律师甲身份留在 S 上（加成员/服务器侧断言都用它）
       const regB = await sApi('/api/auth/register', { method: 'POST', body: { username: 'lawyer_b', password: 'PwLawyerB123', displayName: '律师乙' } })
       if (!regB || regB.code !== 0) throw new Error('注册 lawyer_b 失败: ' + JSON.stringify(regB).slice(0, 200))
     })
@@ -1551,61 +1857,31 @@ try {
     await step('A：上传协作文件并结束一段命名工作（云端协作基线）', () =>
       runWorkSession(j11Base, 'qa-J11协作文件', 'J11 垫底工作'))
 
-    await step('A：设置页连接团队服务器 S（admin cloud 分区表单）', async () => {
-      // admin.vue 的「云端协作」nav item 是 desktopOnly（isDesktop 计算属性认
-      // window.checkbaDesktop.model 是否存在），浏览器目标不是 Electron，天然拿不到。
-      // 注入一个最小桩，只满足 mounted() 里 loadComponents()/onProgress 两处调用不抛异常
-      // （读过 admin.vue :711-743 确认过这两处是唯一用到 window.checkbaDesktop.model 的地方），
-      // 不影响其余断言——J11 是全套旅程最后一段，这个桩留到会话结束也无副作用。
-      // 两个坑都是现场调试实证抓到的，缺一步都进不去：
-      // ① evaluateOnNewDocument 只在「真的产生新 document」时才重放，project-overview
-      //   跳到 admin 走的是 uni-app 的 hash 路由，同一份 document 没重新加载，
-      //   单独注册不会生效；page.evaluate 直接对当前已加载的 document 写 window
-      //   属性能带过去，两处都注入才稳。
-      // ② uni-app 的 H5 页面栈是常驻的——J7 更早已经只读访问过一次 admin 页（那次还
-      //   没有这个桩），isDesktop 是没有响应式依赖的计算属性，那次挂载算出 false 后
-      //   就一直缓存，之后再怎么切 hash 回来都不会重算（单独跑这一步能过，接在 J7
-      //   后面跑就再也不出现「云端协作」）。唯一可靠办法是这里强制来一次真实整页
-      //   reload，把 uni-app 页面栈里那个旧 admin.vue 实例连着一起清空重来——reload
-      //   时 evaluateOnNewDocument 注册的桩会在新文档最早的脚本执行前就位，这次挂载
-      //   从第一次求值起就是 true。
-      const stubDesktop = () => {
-        // 合并进全局最小桩（shell.openExternal），不要整体覆盖——userprofile 等
-        // 页面靠 window.checkbaDesktop 存在性判定免登语境，J1 起全程依赖它。
-        window.checkbaDesktop = Object.assign({}, window.checkbaDesktop, {
-          model: {
-            status: async () => ({ components: [] }),
-            onProgress: () => () => {},
-          },
-        })
-      }
-      await page.evaluateOnNewDocument(stubDesktop)
-      await page.evaluate(stubDesktop)
-      await page.goto(BASE + '/#/pages/admin/admin', { waitUntil: 'networkidle2', timeout: 20000 })
-      await page.reload({ waitUntil: 'networkidle2', timeout: 20000 })
-      await waitText('团队案件库')
-      await mouseClickText('团队案件库')
-      await waitText('连接团队案件库')
-      await page.waitForSelector('.form-input .uni-input-input', { timeout: 8000 })
-      const inputs = await page.$$('.form-input .uni-input-input')
-      if (inputs.length < 3) throw new Error('团队案件库表单输入框数量不对: ' + inputs.length)
-      await inputs[0].click({ clickCount: 3 }); await inputs[0].type(S, { delay: 10 })
-      await inputs[1].click({ clickCount: 3 }); await inputs[1].type('lawyer_a', { delay: 10 })
-      await inputs[2].click({ clickCount: 3 }); await inputs[2].type('PwLawyerA123', { delay: 10 })
-      await sleep(300) // 同款 v-model 去抖定居延迟，见本文件其余命名弹窗的注释
-      await mouseClickText('连接')
-      await page.waitForSelector('.cloud-conn-header', { timeout: 15000 })
+    await step('A：连接团队服务器 S（POST /api/cloud/connect）', async () => {
+      // dev-board#440 起界面上没有「填服务器地址」的入口了（admin 的「团队案件库」
+      // 分区整块撤掉，协作抽屉的连库表单也撤掉）：普通用户一律连官方案件库，自建部署
+      // 靠 cloud.collab.base-url 把「官方」指到自己的服务器。A 是外部起好的长驻进程，
+      // 测试改不了它的环境变量，所以这里改走后端仍然保留的账号口令端点。
+      //
+      // 换掉的那一步原来是「注入 checkbaDesktop 桩 → 整页 reload admin → 填三个框」，
+      // 那套体操连同它的两个页面栈坑一起随分区消失；桩本身也不必留（J12 自己另注一份）。
+      const r = await api('/api/cloud/connect', { method: 'POST',
+        body: { serverUrl: S, username: A_CLOUD_USER, password: 'PwLawyerA123', deviceName: '桌面端' } })
+      if (!r || r.code !== 0) throw new Error('A 连接 S 失败: ' + JSON.stringify(r).slice(0, 200))
       // 记下这次连接的 id，finally 里断开——A 的桌面后端是长驻真实数据（不像 S/B 是
-      // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。这不只是
-      // 测试卫生问题：PR-E 之前 CloudSyncBar.onShare() 直接拿 listCloudConnections()
-      // 的 list[0]，累积的旧连接（服务器早已不在、设备令牌早已失效）一旦排在最前面，
-      // 「放进团队案件库」就会拿着死令牌去连一个死后端，POST /api/projects 应答里没有
-      // "id"，服务端侧 shareToCloud 对着空结果取 .getLong("id") 直接 NPE——现场调试
-      // 真踩过这个坑（连续跑几轮不清理，第二轮起必现），不是假设性风险。现在协作抽屉
-      // 让律师指名选哪一个案件库（多于一个时才渲染选择器），这条路径已经堵上。
+      // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。
       const connList = await api('/api/cloud/connections')
       const conns = (connList && connList.data && connList.data.connections) || []
       aConnectionId = conns.length ? conns[conns.length - 1].id : null
+      // 「放进团队案件库」现在不再让律师指名放进哪一个库：恰好一条连接时用那一条，
+      // 否则不传 connectionId、由后端连官方案件库（case.aiworkdeck.com）。A 上残留
+      // 别的连接时这一步之后的共享就会推去官方而不是 S，后面的断言会以看不懂的方式
+      // 崩掉——所以在这里把前提写成一条明确的失败信息，而不是让它静默走偏。
+      if (conns.length !== 1) {
+        throw new Error('A 上有 ' + conns.length + ' 条云端连接，J11 需要恰好 1 条（就是刚连上的 S）。'
+          + '先把残留的连接断开再重跑：'
+          + conns.map((c) => 'POST /api/cloud/connections/' + c.id + '/disconnect').join('；'))
+      }
     })
 
     await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
@@ -1656,11 +1932,58 @@ try {
       if (!hasBase) throw new Error('S 上未见到基线文件: ' + JSON.stringify(files).slice(0, 200))
     })
 
-    await step('服务器：lawyer_a 把 lawyer_b 加为项目参与者', async () => {
-      const r = await sApi('/api/projects/' + remoteProjectId + '/members', {
-        method: 'POST', body: { username: 'lawyer_b', role: 'PARTICIPANT' },
+    // dev-board#444：加人从「输账号名 → 点加进来」改成「输手机号/邮箱 → 查找 →
+    // 看人卡 → 确认加进来」两步。这一步因此从裸 REST 换成真实 UI 驱动——那张人卡
+    // 是整条加人链上唯一一个人工核对环节（打错一位就把陌生人加进客户案卷），只在
+    // 服务端 REST 上验证等于把新加的这半个界面完全放空。
+    // 这里输的是用户名 lawyer_b，走的是 resolveMemberUser 的用户名兜底分支：S 上两个
+    // 账号都是裸用户名注册的，没有手机号/邮箱可用（本套件不碰真实号码）。手机号/邮箱
+    // 两条主分支由后端单测 ProjectMemberLookupTest / ProjectMemberAddByContactTest 覆盖。
+    await step('A：协作抽屉里查出 lawyer_b 的人卡并确认加进案卷（UI 两步加人）', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      await page.waitForSelector('.cloud-dot', { timeout: 15000 })
+      await mouseClickText('打开协作')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('案件参与人')
+      await page.waitForSelector('.collab-add-row .uni-input-input', { timeout: 10000 })
+      const contact = await page.$('.collab-add-row .uni-input-input')
+      await contact.click(); await contact.type('lawyer_b', { delay: 15 })
+      await sleep(300) // v-model 去抖定居延迟，同本文件其余命名弹窗
+      await mouseClickText('查找')
+      await page.waitForSelector('.member-candidate', { timeout: 15000 })
+      const card = await page.evaluate(() => {
+        const el = document.querySelector('.member-candidate')
+        const nameEl = el.querySelector('.member-candidate-name')
+        const initial = el.querySelector('.member-candidate-initial')
+        return {
+          name: nameEl ? nameEl.innerText.trim() : '',
+          fallback: !!initial,
+          initial: initial ? initial.innerText.trim() : '',
+        }
       })
-      if (!r || r.code !== 0) throw new Error('加成员失败: ' + JSON.stringify(r).slice(0, 200))
+      if (card.name !== '律师乙') throw new Error('人卡展示名不对: ' + JSON.stringify(card))
+      // S 上的账号没传过头像、也没绑官网账户（avatarUrl 为 null），必须降级成首字母
+      // 方块而不是留一个碎图标——这是这张卡在真实测试账号上唯一会走到的形态。
+      if (!card.fallback || card.initial !== '律') {
+        throw new Error('人卡头像没有降级成首字母方块: ' + JSON.stringify(card))
+      }
+      await shot('j11-member-candidate')
+      await mouseClickText('协作人') // 角色单选：此刻案卷里还没有 PARTICIPANT，这个文案唯一
+      await mouseClickText('确认加进来')
+      await page.waitForFunction(() => {
+        const rows = [...document.querySelectorAll('.collab-member-row')]
+        return rows.some((r) => r.innerText.includes('律师乙') && r.innerText.includes('协作人'))
+      }, { timeout: 15000 })
+      await closeCollabDialog()
+    })
+
+    await step('服务器侧：lawyer_b 真的成了 PARTICIPANT（不只是界面上看着加上了）', async () => {
+      const r = await sApi('/api/projects/' + remoteProjectId + '/members')
+      const list = (r && r.data) || []
+      const b = (Array.isArray(list) ? list : []).find((m) => m.username === 'lawyer_b')
+      if (!b) throw new Error('S 上没有 lawyer_b: ' + JSON.stringify(list).slice(0, 300))
+      if (b.role !== 'PARTICIPANT') throw new Error('lawyer_b 角色不对: ' + b.role)
     })
 
     // B 的桌面后端是 local-mode 免登：不再注册本地账号（登录已不存在），
@@ -1672,7 +1995,6 @@ try {
       bConnectionId = r.data.connectionId
     })
 
-    let bProjectId = null
     await step('B：列出并接入云端项目', async () => {
       const remotes = await bApi('/api/cloud/connections/' + bConnectionId + '/remote-projects')
       const list = (remotes && remotes.data && remotes.data.projects) || []
@@ -1803,8 +2125,18 @@ try {
       if (!ok) throw new Error('等待超时：结束工作后 pendingUpload 没有被置上')
       await mouseClickSel('[title="资源管理器"]')
       await mouseClickSel('[title="版本"]')
-      const shown = await page.evaluate(() => document.body.innerText.includes('同事交了新稿'))
-      if (!shown) throw new Error('协作状态没有提示「同事交了新稿」')
+      // dev-board#623 之后这句话不再是写死的「同事交了新稿」：后端算得出作者与版数时
+      // 会说成「{谁}交了新稿 · N 版」（utils/collabWording.js 的三态），算不出来才落回老
+      // 那句。这里只断「说了有新稿」这件事本身——具体是哪一支由下面 J11-历史 那几步
+      // 逐条对账，在这里写死字面量只会让两边同时红。
+      const collabLine = await page.evaluate(() => {
+        const t = document.body.innerText
+        const m = t.match(/[^\n]*交了新稿[^\n]*/)
+        return m ? m[0].trim() : ''
+      })
+      if (!collabLine) {
+        throw new Error('协作状态没有提示有新稿（既不是「同事交了新稿」，也不是「{谁}交了新稿 · N 版」）')
+      }
       const dialogOpen = await page.evaluate(() => {
         const dlg = document.querySelector('.adopt-dialog')
         return !!dlg && dlg.getClientRects().length > 0
@@ -1888,6 +2220,453 @@ try {
         throw new Error('S 上文件列表没有同步裁决结果: ' + JSON.stringify(names))
       }
     })
+
+    // dev-board#439 第 5 环（换机器取回的查重）+ 取回列表的角色标签。
+    // 入口已恢复，使用真实鼠标打开取回弹窗，验证完整交互链。
+    await step('取回弹窗：列表带「我在这份案卷里的角色」，同一份案卷再取一次不造第二个项目', async () => {
+      const before = await api('/api/projects/my')
+      const beforeCount = (Array.isArray(before) ? before : []).length
+      await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.waitForSelector('.project-item-card', { timeout: 20000 })
+      await mouseClickText('从团队案件库取一份案卷')
+      await page.waitForSelector('.cloud-project-list', { timeout: 20000 })
+      const rows = await page.evaluate(() => [...document.querySelectorAll('.cloud-project-row')].map((r) => ({
+        name: ((r.querySelector('.cloud-project-name') || {}).innerText || '').trim(),
+        role: ((r.querySelector('.cloud-project-role') || {}).innerText || '').trim(),
+      })))
+      await shot('j11-cloud-accept-roles')
+      const mine = rows.find((r) => r.name === QA.project)
+      if (!mine) throw new Error('取回弹窗里没有这份案卷: ' + JSON.stringify(rows))
+      // A 是这份远端案卷的负责人（S 上的 lawyer_a 建的），列表要当场说清这一点
+      if (mine.role !== '负责人') throw new Error('取回弹窗没有显示我的角色: ' + JSON.stringify(rows))
+      // 再取一次：cloneFromCloud 认 (connectionId, remoteProjectId) 查重，应当回既有的
+      // 本机项目（就是 A 自己那个），而不是造出第二个同名项目。判据取两条：
+      // ① 弹窗回调 goToProject 落到的就是 QA.projectId；② 本机项目数一个没多。
+      await mouseClickText('取到本机')
+      await page.waitForFunction((pid) => location.hash.includes('id=' + pid),
+        { timeout: 20000 }, String(QA.projectId))
+      const after = await api('/api/projects/my')
+      const afterCount = (Array.isArray(after) ? after : []).length
+      if (afterCount !== beforeCount) {
+        throw new Error('同一份案卷第二次取回造出了新项目: ' + beforeCount + ' -> ' + afterCount)
+      }
+      // 契约字段本身也断一次（界面不显示它，但桌面端/换机器路径靠它判断"已经在本机了"）
+      const acc = await api('/api/cloud/accept', { method: 'POST', body: { connectionId: aConnectionId, remoteProjectId } })
+      if (!acc || acc.code !== 0 || !acc.data || acc.data.alreadyLocal !== true
+          || String(acc.data.localProjectId) !== String(QA.projectId)) {
+        throw new Error('查重没有回既有项目: ' + JSON.stringify(acc).slice(0, 200))
+      }
+    })
+
+    // ==================== 协作历史（dev-board#623/#624/#625） ====================
+    // spec: docs/superpowers/specs/2026-09-14-collab-history-git-parity-design.md §3/§4。
+    // 上面那一段把「共享 → 接入 → 双向同步 → 冲突三选一」跑完了；这一段接着验
+    // 「这份案卷被谁动过」那条旁白链：顶栏那句话的三态、中栏「提交历史」标签页里的
+    // 版本行与事件行、裁决尾注的回显、同账号双设备的识别、参与人去重。
+    //
+    // 拓扑补一台 C = 律师甲的第二台电脑（spawnBackend 9704，9703 被 J13 占着）：
+    // 与 A 用**同一个案件库账号**连 S，区别只在设备令牌——「你在另一台电脑交了新稿」
+    // 与事件行的「你（某台电脑）」两句话唯一的真实来源就是这个差别，桩不出来。
+    //
+    // 事件行里凡是 actor 就是 A 自己的（放进案件库、加人、A 那台机器的签出/取回），
+    // 界面按 selfUserId/selfTokenId 说成「你」——这是 historyRows.actorKind 的契约，
+    // 不是「漏了名字」。只有别人（律师乙）和 A 的另一台电脑才带名字/设备名。
+    const cloudEventTexts = () => page.evaluate(() =>
+      [...document.querySelectorAll('.ch-event-text')].map((e) => (e.innerText || '').trim()))
+    const countEventText = (list, text) => list.filter((t) => t === text).length
+    // 列表行：先把行滚进视野再按 .ch-title（版本行标题）的矩形真实鼠标点击——
+    // 直接点整行中点会撞上第二行右侧的「自动存档 N 次」（它自带 @tap.stop，
+    // 点中了只展开自动存档、选不中这一版，且不报错，是一种静默失败）。
+    const clickHistoryRow = async (titlePart, nth = 0) => {
+      const box = await page.evaluate((part, n) => {
+        const rows = [...document.querySelectorAll('.ch-row')].filter((r) => {
+          const t = r.querySelector('.ch-title')
+          return t && (t.innerText || '').includes(part)
+        })
+        const row = rows[n]
+        if (!row) return null
+        row.scrollIntoView({ block: 'center' })
+        const t = row.querySelector('.ch-title')
+        const r = t.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, total: rows.length }
+      }, titlePart, nth)
+      if (!box) return 0
+      await page.mouse.click(box.x, box.y)
+      await sleep(600)
+      return box.total
+    }
+    // 工具栏按钮按 .commit-history 作用域点，不用全局 mouseClickText——「取回最新稿」
+    // 这几个字在协作抽屉里也有一份（此刻虽关着，但它是模态层，哪天顺序变了就会先命中它）。
+    const clickHistoryBtn = async (label) => {
+      const box = await page.evaluate((lbl) => {
+        const el = [...document.querySelectorAll('.commit-history .ch-btn')]
+          .find((b) => (b.innerText || '').trim() === lbl)
+        if (!el) return null
+        el.scrollIntoView({ block: 'center' })
+        const r = el.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      }, label)
+      if (!box) throw new Error('提交历史工具栏里没有按钮: ' + label)
+      await page.mouse.click(box.x, box.y)
+      await sleep(700)
+    }
+    const openHistoryTabByChip = async () => {
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      await mouseClickSel('.collab-chip')
+      await page.waitForSelector('.commit-history', { timeout: 20000 })
+      // 列表首屏是两串网络请求（/version/history + /cloud/.../events），等 loading 文案消失
+      await page.waitForFunction(() => {
+        const root = document.querySelector('.commit-history')
+        return !!root && !!root.querySelector('.ch-row')
+      }, { timeout: 20000 })
+    }
+
+    await step('J11-历史：B 先取回裁决结果，再交第三稿（造一条 A 还没取回的新版）', async () => {
+      const up = await bApi('/api/cloud/projects/' + bProjectId + '/update', { method: 'POST' })
+      if (!up || up.code !== 0) throw new Error('B 取回失败: ' + JSON.stringify(up).slice(0, 200))
+      if (up.data && up.data.status === 'CONFLICT') {
+        throw new Error('B 取回裁决结果时不该撞冲突（A 的裁决已包含 B 那一侧）: ' + JSON.stringify(up.data).slice(0, 200))
+      }
+      await restOverwriteAt(bApi, bProjectId, 'qa-J11协作文件.txt', 'QA J11 来自 B 的第三次修改（提交历史用）\n')
+      await endSessionAt(bApi, bProjectId, 'B 第三次修改（提交历史用）')
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('B 第三次修改'))
+      }, 40000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线始终没有出现 B 第三次修改的节点')
+    })
+
+    await step('J11-历史：A 顶栏协作 chip 说清「谁交的 · 几版」（不是笼统的「同事交了新稿」）', async () => {
+      // 整页重载会走一次 onLoad → fetchCollabState({online:true})（真 fetch origin），
+      // 这是 chip 拿到新 remoteAhead 的唯一时机（否则要等 120 秒轮询）。
+      // **goto 之后必须再 reload 一次**：page.goto 到一模一样的 URL（连 hash 都相同）
+      // 是同文档导航，不产生新 document、onLoad 一次都不跑——现场实证过一次，
+      // 界面停在上一次的「和大家的稿一致」，看着像 remoteAhead 没算出来，
+      // 其实是这一页压根没重新加载（同本文件顶部「切语言必须整页 reload」同一个坑）。
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+        { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      const ok = await pollUntil(async () => {
+        const t = await page.evaluate(() => {
+          const el = document.querySelector('.collab-chip-text')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        return /交了新稿 · \d+ 版$/.test(t)
+      }, 30000, 1000)
+      const chipText = await page.evaluate(() => {
+        const el = document.querySelector('.collab-chip-text')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (!ok) throw new Error('顶栏 chip 没有变成「{谁}交了新稿 · N 版」，实际是: ' + JSON.stringify(chipText))
+      // 与后端给的四个键逐个对账——文案是纯函数 collabWording.remoteAheadText 算出来的，
+      // 这里断的是「后端算得出作者与版数 + 前端走了带名字那一支」，不是某个写死的字符串。
+      const st = await api('/api/cloud/projects/' + QA.projectId + '/status')
+      const d = (st && st.data) || {}
+      if (!d.remoteAhead) throw new Error('后端没有报 remoteAhead: ' + JSON.stringify(d).slice(0, 300))
+      if (!(Number(d.remoteAheadCount) > 0)) throw new Error('remoteAheadCount 不是正数: ' + JSON.stringify(d).slice(0, 300))
+      if (d.remoteAheadBySelf) throw new Error('这几版是律师乙交的，remoteAheadBySelf 不该为真: ' + JSON.stringify(d).slice(0, 300))
+      const authors = Array.isArray(d.remoteAheadAuthors) ? d.remoteAheadAuthors : []
+      if (!authors.length) throw new Error('后端没给 remoteAheadAuthors: ' + JSON.stringify(d).slice(0, 300))
+      // 名字必须是**案件库账户**的展示名（律师乙），不是对方那台机器的 git 署名。
+      // 版本行的署名是推稿那台电脑的本机展示名（单机模式下人人都叫「本机用户」），
+      // CloudSyncService.remoteDisplayNames 负责把它翻成案件库那边的名字；
+      // 这条断言红成「本机用户」就说明那张字典没拿到——查 describeRemoteAhead
+      // 那条 allowFetch=true 的路（只有它允许现取一趟参与人表）。
+      if (authors[0] !== '律师乙') {
+        throw new Error('chip 里的作者名不是案件库账户展示名「律师乙」，而是 ' + JSON.stringify(authors[0])
+          + '——remoteDisplayNames 没把 git 署名翻过来（查 describeRemoteAhead 的 allowFetch 那条路）。'
+          + ' 云端状态=' + JSON.stringify(d).slice(0, 300))
+      }
+      const expect = authors.length > 1 || Number(d.remoteAheadAuthorCount) > 1
+        ? authors[0] + '等 ' + (Number(d.remoteAheadAuthorCount) || authors.length) + ' 人交了新稿 · ' + d.remoteAheadCount + ' 版'
+        : authors[0] + '交了新稿 · ' + d.remoteAheadCount + ' 版'
+      if (chipText !== expect) {
+        throw new Error('chip 文案与云端状态对不上。界面=' + JSON.stringify(chipText)
+          + ' 期望=' + JSON.stringify(expect) + ' 状态=' + JSON.stringify(d).slice(0, 300))
+      }
+      if (chipText === '同事交了新稿') throw new Error('chip 仍是笼统的老文案，作者/版数没生效')
+      await shot('J11-history-chip-colleague')
+    })
+
+    await step('J11-历史：点 chip 打开中栏「提交历史」标签且它是激活标签', async () => {
+      await openHistoryTabByChip()
+      const tab = await page.evaluate(() => {
+        const el = document.querySelector('.tab-item.active .tab-name')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (tab !== '提交历史') throw new Error('激活标签不是「提交历史」，实际是: ' + JSON.stringify(tab))
+      await shot('J11-history-tab-open')
+    })
+
+    await step('J11-历史：列表里有「案件库」标签的 remote 版本行 + 「律师乙 交了稿」事件行 + 工具栏「案件库领先 N 版」', async () => {
+      await page.waitForSelector('.ch-row.is-remote', { timeout: 20000 })
+      const remoteRows = await page.evaluate(() =>
+        [...document.querySelectorAll('.ch-row.is-remote')].map((r) => ({
+          refs: [...r.querySelectorAll('.ch-ref-remote')].map((e) => (e.innerText || '').trim()),
+          author: ((r.querySelector('.ch-author') || {}).innerText || '').trim(),
+          title: ((r.querySelector('.ch-title') || {}).innerText || '').trim(),
+        })))
+      if (!remoteRows.some((r) => r.refs.includes('案件库'))) {
+        throw new Error('remote 行上没有「案件库」标签，实际: ' + JSON.stringify(remoteRows))
+      }
+      // 版本行的署名也要是案件库账户展示名——事件行说「律师乙 交了稿」、版本行却说
+      // 「本机用户」的话，同一屏里同一个人有两种叫法（dev-board#623 收口那一条）。
+      if (!remoteRows.every((r) => r.author === '律师乙')) {
+        throw new Error('remote 版本行的署名不是案件库账户展示名「律师乙」: ' + JSON.stringify(remoteRows)
+          + '——查 VersionController 那条 remoteDisplayNames(projectId, false) 的缓存是否为空')
+      }
+      const events = await cloudEventTexts()
+      const pushed = events.filter((t) => /^律师乙 交了稿( · \d+ 版)?$/.test(t))
+      if (!pushed.length) {
+        throw new Error('事件行里没有「律师乙 交了稿 · N 版」，现有事件行: ' + JSON.stringify(events))
+      }
+      if (!pushed.some((t) => /· \d+ 版$/.test(t))) {
+        throw new Error('「律师乙 交了稿」没有带版数（commitCount 没上报或为 0）: ' + JSON.stringify(pushed))
+      }
+      const counts = await page.evaluate(() => {
+        const el = document.querySelector('.ch-counts')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (!/案件库领先 \d+ 版/.test(counts)) {
+        throw new Error('工具栏没有显示「案件库领先 N 版」，实际是: ' + JSON.stringify(counts))
+      }
+      await shot('J11-history-remote-row')
+    })
+
+    // ---- 交稿引导（dev-board#645）----
+    // 此刻案件库已经领先（上一步刚断言完 remoteAhead 与「案件库领先 N 版」），再给 A
+    // 造一段没收尾的活，就凑齐了「两步都欠」这个最能说明问题的时刻：以前点「交稿」
+    // 只会得到后端一句 REMOTE_AHEAD，律师读不出下一步该点哪里。
+    //
+    // 拦下来这一步的判据是页面手上的缓存快照（remoteAhead 一条就够），而清单上那两个
+    // 勾是弹窗自己开窗后重读出来的——所以「还差两步」这个标题恰好同时钉住了两件事：
+    // 拦截生效 + 弹窗的自刷新生效（页面那份 working 此刻还是旧的 false）。
+    //
+    // 收尾必须把这段活丢弃：下一步要在干净的 A 上点「取回最新稿」，留着一段没收尾的
+    // 工作会让那次取回变成三方合并，把后面几步全带偏。丢弃会把工作区还原成主线内容，
+    // 文件字节一并复原。
+    await step('J11-引导：手头有活 + 案件库领先时点「交稿」，先摆一张三步清单', async () => {
+      await restOverwrite('qa-J11协作文件.txt', 'QA J11 交稿引导：改了但没结束工作\n')
+      const before = await api('/api/projects/' + QA.projectId + '/version/status')
+      if (!(before && before.data && before.data.working)) {
+        throw new Error('裸 REST 改文件之后 A 没有进入「工作中」，引导的前提不成立: '
+          + JSON.stringify(before && before.data).slice(0, 300))
+      }
+
+      await clickHistoryBtn('交稿')
+      await page.waitForSelector('.submit-guide', { timeout: 15000 })
+      // 标题按「还欠几步」算（utils/submitGuide.js）。弹窗开窗时页面递过来的 working
+      // 还是 false，只有它自己重读过 /version/status 才会变成「两步」——所以这里轮询。
+      const okTitle = await pollUntil(async () => {
+        const t = await page.evaluate(() => {
+          const el = document.querySelector('.submit-guide .awd-title')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        return t === '交稿前还差两步'
+      }, 20000, 800)
+      const title = await page.evaluate(() => {
+        const el = document.querySelector('.submit-guide .awd-title')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      if (!okTitle) throw new Error('引导标题不是「交稿前还差两步」，实际是: ' + JSON.stringify(title))
+
+      // 第 ③ 步（交稿）在前两步做完之前不可点——可点的话律师照样会撞上那句后端错误，
+      // 这张清单就白摆了。判据是类名而不是「点下去没反应」：后者分不清「禁用了」与
+      // 「点歪了」（J10 那条按钮被裁切成不可点的地雷）。
+      const steps = await page.evaluate(() =>
+        [...document.querySelectorAll('.submit-guide .sg-step')].map((el) => {
+          const btn = el.querySelector('.sg-step-btn')
+          return {
+            id: [...el.classList].find((c) => c.startsWith('sg-step-')) || '',
+            state: ['sg-todo', 'sg-active', 'sg-done'].find((c) => el.classList.contains(c)) || '',
+            btnDisabled: !!btn && btn.classList.contains('awd-btn-disabled'),
+          }
+        }))
+      if (steps.length !== 3) throw new Error('引导上不是三步: ' + JSON.stringify(steps))
+      const submitStep = steps.find((s) => s.id === 'sg-step-submit')
+      if (!submitStep) throw new Error('引导上没有「交稿」那一步: ' + JSON.stringify(steps))
+      if (!submitStep.btnDisabled) {
+        throw new Error('前两步没做完，第 ③ 步「交稿」却是可点的: ' + JSON.stringify(steps))
+      }
+      // 顺序解锁：只有第一步是「进行中」，后两步都还是「待做」
+      if (steps[0].state !== 'sg-active' || steps[1].state !== 'sg-todo' || steps[2].state !== 'sg-todo') {
+        throw new Error('三步没有按顺序解锁: ' + JSON.stringify(steps))
+      }
+      await shot('J11-submit-guide-two-left')
+
+      // 「稍后再说」= 什么都没做地退出，不是撤销
+      const later = await page.evaluate(() => {
+        const el = document.querySelector('.submit-guide .sg-later')
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      if (!later) throw new Error('引导上没有「稍后再说」按钮')
+      await page.mouse.click(later.x, later.y)
+      await sleep(600)
+      const stillOpen = await page.evaluate(() => !!document.querySelector('.submit-guide'))
+      if (stillOpen) throw new Error('点了「稍后再说」引导没关掉')
+
+      // 收尾：丢弃这段活，把 A 还原成干净的主线状态，交给下一步去取回
+      const dis = await api('/api/projects/' + QA.projectId + '/version/session/discard', { method: 'POST' })
+      if (!dis || dis.code !== 0) throw new Error('丢弃引导用的那段工作失败: ' + JSON.stringify(dis).slice(0, 200))
+      const after = await api('/api/projects/' + QA.projectId + '/version/status')
+      if (after && after.data && after.data.working) {
+        throw new Error('丢弃之后 A 仍是「工作中」，后面几步会被带偏: '
+          + JSON.stringify(after.data).slice(0, 300))
+      }
+    })
+
+    await step('J11-历史：在标签页里点「取回最新稿」后出现「你 取回了最新稿」事件行、remote 行消失', async () => {
+      const before = countEventText(await cloudEventTexts(), '你 取回了最新稿')
+      await clickHistoryBtn('取回最新稿')
+      const ok = await pollUntil(async () => {
+        const list = await cloudEventTexts()
+        return countEventText(list, '你 取回了最新稿') > before
+      }, 30000, 1500)
+      if (!ok) {
+        const list = await cloudEventTexts()
+        throw new Error('取回之后没有多出一条「你 取回了最新稿」（取回前 ' + before + ' 条）: ' + JSON.stringify(list))
+      }
+      const stillRemote = await page.evaluate(() => document.querySelectorAll('.ch-row.is-remote').length)
+      if (stillRemote !== 0) throw new Error('取回之后还剩 ' + stillRemote + ' 条 remote 行，说明 remote 位没有随取回消解')
+      await shot('J11-history-after-pull')
+    })
+
+    await step('J11-历史：裁决过的那一版，详情里显示裁决结果（X-AWD-Resolutions 尾注）', async () => {
+      const total = await clickHistoryRow('取回最新稿', 0)
+      if (!total) throw new Error('列表里没有标题含「取回最新稿」的版本行')
+      let lines = []
+      for (let i = 0; i < total; i++) {
+        await clickHistoryRow('取回最新稿', i)
+        lines = await page.evaluate(() =>
+          [...document.querySelectorAll('.ch-resolution')].map((e) => (e.innerText || '').trim()))
+        if (lines.length) break
+      }
+      if (!lines.length) {
+        throw new Error('' + total + ' 条「取回最新稿」版本行里，没有一条在详情里显示裁决结果')
+      }
+      if (!lines.some((l) => l.includes('qa-J11协作文件.txt') && l.includes('两边都留'))) {
+        throw new Error('裁决结果不是当初选的「两份都留着」: ' + JSON.stringify(lines))
+      }
+      await shot('J11-history-resolutions')
+    })
+
+    // ---- 同账号双设备：C = 律师甲的第二台电脑 ----
+    let cProjectId = null
+    await step('J11-历史：律师甲的第二台电脑（C）接入同一份案卷并交稿', async () => {
+      const C = await spawnBackend('desktopC', 9704)
+      const cApi = mkApi(C)
+      const conn = await cApi('/api/cloud/connect', { method: 'POST',
+        body: { serverUrl: S, username: A_CLOUD_USER, password: 'PwLawyerA123', deviceName: '律师甲的另一台电脑' } })
+      if (!conn || conn.code !== 0) throw new Error('C 连接云端失败: ' + JSON.stringify(conn).slice(0, 200))
+      const remotes = await cApi('/api/cloud/connections/' + conn.data.connectionId + '/remote-projects')
+      const list = (remotes && remotes.data && remotes.data.projects) || []
+      const proj = list.find((p) => p.name === QA.project)
+      if (!proj) throw new Error('C 在远端项目列表里没看到这份案卷: ' + JSON.stringify(list).slice(0, 200))
+      const acc = await cApi('/api/cloud/accept', { method: 'POST',
+        body: { connectionId: conn.data.connectionId, remoteProjectId: proj.id } })
+      if (!acc || acc.code !== 0) throw new Error('C 接入失败: ' + JSON.stringify(acc).slice(0, 200))
+      cProjectId = acc.data.localProjectId
+      await restOverwriteAt(cApi, cProjectId, 'qa-J11协作文件.txt', 'QA J11 甲在另一台电脑上的修改\n')
+      await endSessionAt(cApi, cProjectId, '甲在另一台电脑上的修改')
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('甲在另一台电脑上的修改'))
+      }, 40000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线没有出现 C 交的那一版')
+    })
+
+    await step('J11-历史：A 顶栏变成「你在另一台电脑交了新稿 · N 版」（不再说成同事）', async () => {
+      // 同上一处：这一页此刻就停在这个 URL 上，只 goto 不 reload 等于什么都没做。
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+        { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      const ok = await pollUntil(async () => {
+        const t = await page.evaluate(() => {
+          const el = document.querySelector('.collab-chip-text')
+          return el ? (el.innerText || '').trim() : ''
+        })
+        return /^你在另一台电脑交了新稿 · \d+ 版$/.test(t)
+      }, 30000, 1000)
+      const chipText = await page.evaluate(() => {
+        const el = document.querySelector('.collab-chip-text')
+        return el ? (el.innerText || '').trim() : ''
+      })
+      const st = await api('/api/cloud/projects/' + QA.projectId + '/status')
+      const d = (st && st.data) || {}
+      if (!ok) {
+        throw new Error('顶栏没有说成「你在另一台电脑交了新稿 · N 版」，实际是: ' + JSON.stringify(chipText)
+          + ' 云端状态=' + JSON.stringify(d).slice(0, 300))
+      }
+      if (d.remoteAheadBySelf !== true) {
+        throw new Error('remoteAheadBySelf 该为真（这几版都是同一个案件库账号交的）: ' + JSON.stringify(d).slice(0, 300))
+      }
+      await shot('J11-history-chip-self-other-device')
+    })
+
+    await step('J11-历史：事件行「你（律师甲的另一台电脑） 交了稿」', async () => {
+      await openHistoryTabByChip()
+      const ok = await pollUntil(async () => {
+        const list = await cloudEventTexts()
+        return list.some((t) => /^你（律师甲的另一台电脑） 交了稿( · \d+ 版)?$/.test(t))
+      }, 20000, 1500)
+      if (!ok) {
+        const list = await cloudEventTexts()
+        throw new Error('没有「你（律师甲的另一台电脑） 交了稿」这一行——同账号双设备没被认出来: '
+          + JSON.stringify(list))
+      }
+      await shot('J11-history-event-self-device')
+    })
+
+    await step('J11-历史：签出/放进案件库/加人三类事件行各出现一次（CHECKOUT 按设备去重）', async () => {
+      const list = await cloudEventTexts()
+      const expectOnce = [
+        '你 把案卷放进了案件库',      // SHARED：A 建的远端项目，只该有一条
+        '你 把 律师乙 加进了案卷',     // MEMBER_ADDED
+        '你 签出了一份',              // CHECKOUT：A 这台机器的令牌，日常 fetch 不该重复记
+        '律师乙 签出了一份',           // CHECKOUT：B 那台机器
+        '你（律师甲的另一台电脑） 签出了一份', // CHECKOUT：C 那台机器
+      ]
+      const wrong = expectOnce
+        .map((t) => ({ t, n: countEventText(list, t) }))
+        .filter((x) => x.n !== 1)
+      if (wrong.length) {
+        throw new Error('事件行条数不对: ' + JSON.stringify(wrong)
+          + '（1 = 恰好一条）。现有事件行: ' + JSON.stringify(list))
+      }
+      await shot('J11-history-events')
+    })
+
+    await step('J11-历史：顶栏参与人人数等于案件库成员数（同一个人不算两遍）', async () => {
+      const cm = await api('/api/cloud/projects/' + QA.projectId + '/members')
+      const cloudMembers = (cm && cm.data && cm.data.members) || []
+      if (cloudMembers.length !== 2) {
+        throw new Error('案件库成员数不是 2（甲乙）: ' + JSON.stringify(cloudMembers).slice(0, 300))
+      }
+      // 名单是两趟请求合出来的（本机 /members + 案件库 /cloud/.../members），
+      // 整页重载之后先到的是本机那一趟，云端那一趟回来才合并——直接读一次会读到中间态。
+      const readGrid = () => page.evaluate(() => ({
+        // 堆叠最多画 3 个头像，完整名单在展开面板里（hover 才可见，但一直在 DOM 上）
+        grid: [...document.querySelectorAll('.rail-members-container .member-grid-item')]
+          .map((e) => (e.getAttribute('title') || '').trim()),
+        stack: document.querySelectorAll('.rail-members-container .stack-avatar-mini').length,
+      }))
+      await pollUntil(async () => (await readGrid()).grid.length === cloudMembers.length, 20000, 1000)
+      const shown = await readGrid()
+      if (shown.grid.length !== cloudMembers.length) {
+        throw new Error('参与人 ' + shown.grid.length + ' 人，案件库只有 ' + cloudMembers.length
+          + ' 人——同一个人被算了两遍（mergeMembers 的三把键都没命中）: ' + JSON.stringify(shown.grid))
+      }
+      if (shown.grid.filter((n) => n === '律师乙').length !== 1) {
+        throw new Error('参与人名单里「律师乙」不是恰好一条: ' + JSON.stringify(shown.grid))
+      }
+      await shot('J11-history-members')
+    })
   }
 
   // ============ J12 英文走查（EN 发版门） ============
@@ -1968,10 +2747,39 @@ try {
       await shot('j12-en-ai-panel')
     })
 
-    await step('J12 英文指令过程卡工具名不含中文', async () => {
+    // 「点不中发送键」与「模型没选工具」必须分开判（dev-board#574）：以前发送键被右下角
+    // 反馈浮钮盖住时，这里的点击落在浮钮上（点开的是反馈面板），消息根本没发出去，
+    // 下一步照样等满 120s 记成「模型未产出工具调用」的 skip——发版门形同虚设。
+    // 现在：按钮中心被别的元素盖住 / 点了没发出去 → 判红；发出去了但模型这一轮
+    // 没调工具 → 照旧 skip。
+    const J12_PROMPT = 'List the files in this project, then reply with just: E2E OK'
+    const j12Sent = await step('J12 发送按钮未被遮挡且点击确实发出消息', async () => {
       await mouseClickSel('.chat-input-rich')
-      await page.keyboard.type('List the files in this project, then reply with just: E2E OK', { delay: 10 })
-      await mouseClickSel('.send-btn')
+      await page.keyboard.type(J12_PROMPT, { delay: 10 })
+      const hit = await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('.send-btn')].find((b) => b.getBoundingClientRect().width > 0)
+        if (!btn) return { ok: false, top: '（没有可见的 .send-btn）' }
+        const r = btn.getBoundingClientRect()
+        const x = r.x + r.width / 2
+        const y = r.y + r.height / 2
+        const top = document.elementFromPoint(x, y)
+        const desc = top
+          ? top.tagName + '.' + String(top.className || '').trim().replace(/\s+/g, '.') + ' "' + (top.innerText || '').trim().slice(0, 30) + '"'
+          : 'null'
+        return { ok: !!top && (top === btn || btn.contains(top)), x, y, top: desc }
+      })
+      if (!hit.ok) throw new Error('发送按钮中心被遮挡，elementFromPoint 命中 ' + hit.top)
+      await page.mouse.click(hit.x, hit.y)
+      // 发出去的判据：进入流式（发送键变停止键），或输入框已清空且提问落进了消息区
+      await page.waitForFunction((p) => {
+        if (document.querySelector('.send-btn.stopping')) return true
+        const input = document.querySelector('.chat-input-rich')
+        const inputEmpty = !input || !(input.innerText || '').trim()
+        return inputEmpty && (document.body.innerText || '').includes(p)
+      }, { timeout: 20000, polling: 250 }, J12_PROMPT)
+    })
+
+    if (j12Sent) await step('J12 英文指令过程卡工具名不含中文', async () => {
       // 工具名是否出现取决于模型这一轮选不选工具——这是 LLM 不确定性，不该让发版门
       // 因此变红。所以这一步是「出现了就必须英文」：等到有工具名就断言无 CJK；
       // 一直没有则记 skip 信号（人工按信号复看），不判失败。
@@ -1979,20 +2787,65 @@ try {
       // 下带工具定义的流式请求会零字节停滞 180s 直到 watchdog 兜底（后端日志伴随
       // OkHttp "Cannot invoke Response.code() because response is null" 的 NPE）。
       // 中文模式发同样需要调工具的指令一样会停滞——语言不是变量。
-      let names = []
-      try {
-        await page.waitForFunction(() => {
-          const n = [...document.querySelectorAll('.process-card .tool-name')]
-            .map((e) => (e.innerText || '').trim()).filter(Boolean)
-          return n.length >= 1
-        }, { timeout: 120000 })
-        names = await page.evaluate(() =>
-          [...document.querySelectorAll('.process-card .tool-name')]
-            .map((e) => (e.innerText || '').trim()).filter(Boolean))
-      } catch (e) {
-        note('skip', 'J12 本轮模型未产出工具调用（' + (e && e.message ? e.message.split('\n')[0] : e) + '），过程卡工具名断言未执行')
+      //
+      // PR#809 之后过程卡不再渲染在消息流里，只在 TurnActivityPanel 的 processes 页里出现，
+      // 且面板默认收起——以前「等 .process-card 出现、等不到就 skip」在新 UI 下恒走 skip，
+      // 发版门静默失效。现在：等这一轮跑完 → 点 J12 这一轮自己的 .turn-activity-link
+      // （openTurn(turn.key)，直接落在 processes 页）→ 核对面板停在 J12 这一轮。
+      // skip 只认面板自己报的「这一轮 0 条动作」；面板打不开、不在 J12 这一轮、
+      // 有动作却找不到工具名，一律判红，UI 再改也只会响亮地红，不会悄悄 skip。
+      // 「跑完」以面板状态条为准（刚发出的这一轮就是最新一轮，状态条默认显示它）；
+      // 240s 覆盖上面那个 180s watchdog。还在跑时面板里 0 条动作不代表模型没调工具。
+      const ended = await page.waitForFunction(() => {
+        const s = document.querySelector('.turn-activity .turn-status')
+        return !!s && !/status-(running|queued)\b/.test(String(s.className))
+      }, { timeout: 240000, polling: 500 }).catch(() => null)
+      if (!ended) throw new Error('J12 这一轮 240s 后仍未结束（.turn-activity .turn-status 仍是 running/queued 或不存在）')
+      const linkSel = await page.waitForFunction((p) => {
+        const turns = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+          const u = t.querySelector('.user-bubble-content')
+          return u && (u.innerText || '').includes(p)
+        })
+        const a = turns.length && turns[turns.length - 1].querySelector('.turn-activity-link')
+        if (!a) return false
+        a.scrollIntoView({ block: 'center' })
+        return true
+      }, { timeout: 30000, polling: 500 }, J12_PROMPT).catch(() => null)
+      if (!linkSel) throw new Error('找不到 J12 这一轮的 .turn-activity-link（这一轮没有助手回复，或活动面板入口已改）')
+      await sleep(500)
+      const link = await page.evaluate((p) => {
+        const turns = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+          const u = t.querySelector('.user-bubble-content')
+          return u && (u.innerText || '').includes(p)
+        })
+        const a = turns[turns.length - 1].querySelector('.turn-activity-link')
+        const r = a.getBoundingClientRect()
+        const x = r.x + r.width / 2
+        const y = r.y + r.height / 2
+        const top = document.elementFromPoint(x, y)
+        return { ok: !!top && (top === a || a.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
+      }, J12_PROMPT)
+      if (!link.ok) throw new Error('J12 这一轮的 .turn-activity-link 中心被遮挡，elementFromPoint 命中 ' + link.top)
+      await page.mouse.click(link.x, link.y)
+      const state = await page.waitForFunction(() => {
+        const panel = document.querySelector('.turn-activity .activity-panel')
+        const tab = panel && panel.querySelector('[data-activity-tab="processes"]')
+        if (!tab || tab.getAttribute('aria-selected') !== 'true') return null
+        return {
+          title: (panel.querySelector('.panel-title')?.innerText || '').trim(),
+          status: String(document.querySelector('.turn-activity .turn-status')?.className || ''),
+          entries: panel.querySelectorAll('.process-entry').length,
+          names: [...panel.querySelectorAll('.process-card .tool-name')].map((e) => (e.innerText || '').trim()).filter(Boolean),
+        }
+      }, { timeout: 10000 }).then((h) => h.jsonValue()).catch(() => null)
+      if (!state) throw new Error('点了 J12 这一轮的 .turn-activity-link，活动面板没有停在 processes 页（[data-activity-tab="processes"][aria-selected="true"] 不出现）')
+      if (!state.title.includes(J12_PROMPT)) throw new Error('活动面板显示的不是 J12 这一轮: ' + JSON.stringify(state.title.slice(0, 80)))
+      if (state.entries === 0) {
+        note('skip', 'J12 本轮模型未产出工具调用（活动面板报这一轮 0 条动作，' + state.status + '），过程卡工具名断言未执行')
         return
       }
+      if (!state.names.length) throw new Error('活动面板报 ' + state.entries + ' 条动作，却找不到 .process-card .tool-name')
+      const names = state.names
       const bad = names.filter((t) => /[一-鿿]/.test(t))
       if (bad.length) throw new Error('en-US 下过程卡工具名仍含中文: ' + JSON.stringify(bad))
       await shot('j12-en-process-card')
@@ -2009,14 +2862,851 @@ try {
     await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
     await page.waitForSelector('[title="资源管理器"]', { timeout: 20000 })
   })
+
+  // ============ J13 广场安装带资源包的插件（诉讼可视化 + 桩 pack 源） ============
+  // 规范 docs/NATIVE_PACK_DISTRIBUTION.md §4/§7.1，契约在 NativePackService/PackController；
+  // UI 状态机在 MarketDetailPane.vue（packId/packReady/packDownloading 三态)。
+  //
+  // 为什么不能复用本文件全程驱动的主后端（BACKEND，默认 9696/9797）：
+  // 广场装 pack 要后端把 ai.packs.base-urls 指向一个真会应答签了名 manifest 的源、
+  // ai.plugins.registry-public-key 换成那把测试公钥——这两项在主后端启动时就已经
+  // 定死，run.mjs 没有任何手段事后改它。只能照 J11 的路子另起一个隔离后端，
+  // 命令行参数直传 Spring（`--ai.packs.base-urls[0]=...` 这类 index 写法本轮实测
+  // 走得通，见 pack-stub.mjs 头注释）。
+  //
+  // 隔离后端的 cwd 刻意不用仓库内任何路径：LitigationVisualService.resolveLitvizDir
+  // 会顺着 cwd 向上爬两级找 ../litviz 或 ../../litviz——J11 的 spawnBackend 沿用
+  // 「不以 backend 结尾即天然隔离」的写法凑巧把 cwd 放在系统临时目录，爬不到仓库
+  // 里的 litviz/，packReady 因此在装包前老实为 false，装包这条链路才有得测；
+  // 若 cwd 选在仓库树里，字面上会把「pack 已就绪」的场景测成了「安装=纯启用」——
+  // 两种场景哪个更像用户会遇到的，取决于爬升能不能命中，本轮实测走的是前者。
+  // ai.skills.dir 必须显式指向 backend/skills 的一份拷贝（不是原路径）：那个目录
+  // 本来靠 cwd=backend/ 的相对路径解析，隔离后端的 cwd 不是 backend/，不显式给
+  // 绝对路径会导致连诉讼可视化这个内置 skill 都加载不出来；拷贝而不是原样指是防
+  // 万一广场那侧动了写操作（如启停）反噬仓库里的真文件——虽然实测启停只写内存/DB，
+  // 不改 skill.yml，但拷贝的代价几乎为零，不值得赌这条不变式以后不会变。
+  console.log('== J13 广场安装带资源包的插件 ==')
+  if (!J11_JAR) {
+    note('skip', 'J13 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过资源包安装旅程')
+  } else {
+    const j13Home = path.join(OUT, 'j13-pack-' + ts)
+    const j13Cwd = path.join(j13Home, 'cwd')
+    fs.mkdirSync(j13Cwd, { recursive: true })
+    const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..')
+    const j13SkillsDir = path.join(j13Home, 'skills-copy')
+    fs.cpSync(path.join(repoRoot, 'backend/skills'), j13SkillsDir, { recursive: true })
+
+    const j13Stub = await startPackStub(path.join(j13Home, 'pack-src'), { id: 'litigation-visual', version: '9.9.9' })
+    const j13Port = 9703 // J11 占了 9701(S)/9702(B)，这里另取一个
+    const j13Backend = 'http://127.0.0.1:' + j13Port
+    const j13Args = [
+      '-Duser.home=' + j13Home, '-jar', J11_JAR,
+      '--server.port=' + j13Port,
+      '--spring.profiles.active=desktop',
+      '--spring.datasource.url=jdbc:h2:file:' + path.join(j13Home, 'db') + ';MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE',
+      '--ai.skills.dir=' + j13SkillsDir,
+      '--ai.packs.base-urls[0]=' + j13Stub.url,
+      '--ai.plugins.registry-public-key=' + j13Stub.publicKeyPem,
+    ]
+    const j13Child = spawn(process.env.JAVA_HOME + '/bin/java', j13Args, { cwd: j13Cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const j13LogFile = fs.createWriteStream(path.join(j13Home, 'stdout.log'))
+    j13Child.stdout.pipe(j13LogFile); j13Child.stderr.pipe(j13LogFile)
+    let j13Page = null
+    try {
+      let j13Ready = false
+      for (let i = 0; i < 90; i++) {
+        try { const r = await fetch(j13Backend + '/api/auth/me'); if (r.status === 200) { j13Ready = true; break } } catch (e) { /* 未就绪 */ }
+        await sleep(1000)
+      }
+      if (!j13Ready) {
+        note('skip', 'J13 隔离后端未在 90s 内就绪，日志见 ' + path.join(j13Home, 'stdout.log') + '，已跳过资源包安装旅程')
+      } else {
+        const j13Api = mkApi(j13Backend)
+        const j13Proj = await j13Api('/api/projects', { method: 'POST', body: { name: 'J13资源包安装', projectType: 'BLANK' } })
+        if (!j13Proj || !j13Proj.id) throw new Error('J13 隔离后端建项目失败: ' + JSON.stringify(j13Proj).slice(0, 200))
+        const j13ProjectId = j13Proj.id
+
+        j13Page = await browser.newPage()
+        // 桌面壳假冒 + apiBaseUrl 覆盖：host.js 的 getApiBaseUrl() 最先认
+        // window.checkbaDesktop.apiBaseUrl，借这条把这一页的全部 API 请求
+        // 定向到隔离后端，不需要另起一份 dev server（真实 Electron 壳换后端
+        // 端口就是这么注入的，同一套机制）。
+        await j13Page.evaluateOnNewDocument((apiBase) => {
+          window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
+          try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* 全新页面没有「已有痕迹」，不设置会按 navigator.language 猜成 en-US */ }
+        }, j13Backend)
+
+        const j13WaitText = async (t, ms = 15000) => j13Page.waitForFunction((x) => document.body.innerText.includes(x), { timeout: ms }, t)
+        // 限定容器的文本等待：「已启用」是市场列表里任何一个已启用 skill 都会挂的通用
+        // 状态标签（语音合成默认 enabled_by_default:true，广场列表随时挂着这句），
+        // 用 j13WaitText 查整页文本会在诉讼可视化真正装完、启用之前就被这个不相干的
+        // 标签撞上——2026-08-20 排查「J13 下载卡在固定字节」查到的真根因就是这里：
+        // 整页文本判定提前通过，紧接着立刻采的那个 /status 快照恰好落在下载早期，
+        // 看着像「进度冻结」，其实后端一直在正常往前走（桩服务器一侧、后端安装日志
+        // 都证实归档早已发完、install() 早已成功切到 ready）。限定到 .mdp（详情面板）
+        // 容器内才不会被别的 skill 的同名标签误伤。
+        const j13WaitTextIn = async (containerSel, t, ms = 15000) => j13Page.waitForFunction((sel, x) => {
+          const el = document.querySelector(sel)
+          return !!el && el.innerText.includes(x)
+        }, { timeout: ms }, containerSel, t)
+        const j13ClickSel = async (sel) => {
+          await j13Page.waitForSelector(sel, { timeout: 10000 })
+          const box = await j13Page.evaluate((s) => {
+            const el = document.querySelector(s); if (!el) return null
+            const r = el.getBoundingClientRect()
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+          }, sel)
+          if (!box) throw new Error('找不到选择器: ' + sel)
+          await j13Page.mouse.click(box.x, box.y)
+          await sleep(500)
+        }
+        // 限定容器的文本点击：左栏 Skill 广场里一堆未安装项也叫「安装」，
+        // 不加限定会点到同名的错误按钮（本轮调试实测踩过）。
+        const j13ClickTextIn = async (containerSel, label) => {
+          const box = await j13Page.evaluate((containerSel, lbl) => {
+            const container = document.querySelector(containerSel)
+            if (!container) return null
+            const el = [...container.querySelectorAll('*')].find((e) =>
+              e.children.length === 0 && e.offsetParent !== null && e.innerText && e.innerText.trim() === lbl)
+            if (!el) return null
+            const r = el.getBoundingClientRect()
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+          }, containerSel, label)
+          if (!box) throw new Error(`找不到文本(${containerSel} 内): ` + label)
+          await j13Page.mouse.click(box.x, box.y)
+          await sleep(500)
+        }
+        const step13 = async (name, fn) => {
+          try { await fn(); passed++; console.log('  ✓ ' + name); return true }
+          catch (e) {
+            stepFails++; note('step-fail', name + ': ' + String(e.message || e).slice(0, 180))
+            try { await j13Page.screenshot({ path: path.join(OUT, 'FAIL-' + name.replace(/[^\w一-龥]/g, '_') + '.png') }) } catch (e2) { /* ignore */ }
+            return false
+          }
+        }
+
+        await step13('J13 打开工作台', async () => {
+          // 同一个 BASE（dev:h5 前端）开新 tab，靠 apiBaseUrl 注入定向到隔离后端——
+          // 不需要另起一份 dev server。
+          await j13Page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + j13ProjectId,
+            { waitUntil: 'domcontentloaded', timeout: 30000 })
+          await j13WaitText('资源管理器', 30000)
+        })
+
+        await step13('J13 rail 点开插件中心，诉讼可视化显示待安装', async () => {
+          await j13ClickSel('[title="插件中心"]')
+          await j13WaitText('诉讼可视化', 15000)
+        })
+
+        await step13('J13 详情面板显示需下载资源包的安装按钮', async () => {
+          await j13ClickTextIn('.msb', '诉讼可视化')
+          await j13WaitText('需下载资源包', 15000)
+        })
+
+        await step13('J13 点安装后出现下载进度（bytesTotal>0）', async () => {
+          await j13ClickSel('.mdp .mdp-btn.primary')
+          let sawBytesTotal = false
+          for (let i = 0; i < 30; i++) {
+            const st = await j13Api('/api/packs/litigation-visual/status')
+            if (st && st.status && st.status.bytesTotal > 0) { sawBytesTotal = true; break }
+            if (st && st.status && st.status.state === 'ready') { sawBytesTotal = st.status.bytesTotal > 0; break }
+            await sleep(200)
+          }
+          if (!sawBytesTotal) throw new Error('未观察到 bytesTotal>0 的下载进度')
+        })
+
+        await step13('J13 轮询到 ready 且 skill 自动启用', async () => {
+          // 直接轮询后端状态（权威数据源），不靠 DOM 文本猜——UI 那句「已启用」见下面
+          // j13WaitTextIn 的注释，整页文本判定会被别的 skill 的同名标签撞上。
+          let st = null
+          for (let i = 0; i < 40; i++) {
+            st = await j13Api('/api/packs/litigation-visual/status')
+            if (st && st.status && (st.status.state === 'ready' || st.status.state === 'failed')) break
+            await sleep(500)
+          }
+          if (!st || !st.status || st.status.state !== 'ready') throw new Error('后端状态未到 ready: ' + JSON.stringify(st))
+          await j13WaitTextIn('.mdp', '已启用', 20000)
+        })
+
+        await step13('J13 左栏 rail 出现诉讼可视化入口', async () => {
+          await j13Page.waitForSelector('[title="诉讼可视化"]', { timeout: 15000 })
+        })
+
+        await step13('J13 卸载：确认框 + rail 入口消失', async () => {
+          await j13ClickTextIn('.msb', '诉讼可视化')
+          await j13WaitTextIn('.mdp', '已启用', 15000)
+          await j13ClickSel('.mdp .mdp-btn.danger')
+          // uni.showModal 在 H5 目标下渲染成 .uni-modal，确认按钮是 .uni-modal__btn_primary
+          // （不是文案「卸载」本身——那个词在卸载按钮与确认按钮上各出现一次，
+          // 覆盖态下用文本点击会点到底下被遮住的原按钮，本轮调试实测踩过）。
+          await j13ClickSel('.uni-modal__btn_primary')
+          let railGone = false
+          for (let i = 0; i < 15; i++) {
+            if (!(await j13Page.$('[title="诉讼可视化"]'))) { railGone = true; break }
+            await sleep(300)
+          }
+          if (!railGone) throw new Error('卸载后 rail 入口未消失')
+        })
+
+        await step13('J13 卸载后端状态回到 not_installed', async () => {
+          let st = null
+          for (let i = 0; i < 15; i++) {
+            st = await j13Api('/api/packs/litigation-visual/status')
+            if (st && st.status && st.status.state === 'not_installed') break
+            await sleep(300)
+          }
+          if (!st || !st.status || st.status.state !== 'not_installed') throw new Error('卸载后状态未回到 not_installed: ' + JSON.stringify(st))
+        })
+      }
+    } finally {
+      if (j13Page) { try { await j13Page.close() } catch (e) { /* ignore */ } }
+      try { j13Child.kill('SIGKILL') } catch (e) { /* ignore */ }
+      try { await j13Stub.close() } catch (e) { /* ignore */ }
+    }
+  }
+
+  // ============ J14 三方合并：不重叠自动合并 / 逐处裁决 / 逐段溯源 ============
+  // 规格 docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md §7 的 ①②③④。
+  // 复用 J11 建好的 A/S/B 拓扑（A = 9696 长驻桌面后端、UI 驱动；S = 团队服务器；
+  // B = 同事桌面，裸 REST），三份 docx / 两份表格 / 两份演示 / 一份 pdf 的字节由
+  // tests/lowa-e2e/fixtures/merge/gen.mjs 在内存里生成（产物不入库），走 J11 的
+  // restOverwriteAt 直传（Blob 里塞 Buffer，后端不看 Content-Type）。
+  //
+  // **覆盖边界（写在这里，免得下一个人以为这一段把引擎那一半也测了）**：
+  // app-e2e 的目标是浏览器（dev:h5 起在 5174，没有 COOP/COEP、也没有 dist/zetaoffice），
+  // LOWA 引擎在这里根本起不来（host.zetaoffice 对最小桩是 undefined，
+  // LibreOfficeEditor 直接判 'unsupported'）。所以 docx 那一半里**需要引擎执行**的两件事
+  //   ① decision=AUTO 的 docx 自动合并（隐藏实例比较 + 逐段重放）
+  //   ② 合并比对稿标签页 MergeReviewTab 的逐处接受/拒绝
+  // 在本套件里跑不了，由 lowa-e2e 组 34（build_merge_draft / merge_take_other）覆盖。
+  // 这里覆盖的是**接线**：后端三方分析的判定（docx 段落级 AUTO/MANUAL、pdf 整份）、
+  // 裁决总览的行态与按钮、xlsx/pptx 这两类**不经引擎**的自动合并与逐格/逐页裁决全链路、
+  // 尾注经 /history 的回显、逐段溯源出参。
+  console.log('== J14 三方合并 ==')
+  if (!J11_JAR || !bProjectId) {
+    note('skip', 'J14 需要 J11 建好的 A/S/B 拓扑（APP_E2E_JAR + J11 跑通），本轮已跳过三方合并旅程')
+  } else {
+    const { generateMergeFixtures, generateXlsxFixtures, generatePptxFixtures } =
+      await import('../lowa-e2e/fixtures/merge/gen.mjs')
+    const aApi = mkApi(BACKEND) // 与顶部的 api() 同一台后端，只是带 .base，好复用 restOverwriteAt
+    const DOCX_CLEAN = generateMergeFixtures({ conflict: false })   // 两边只改不同段 → 该判 AUTO
+    const DOCX_OVERLAP = generateMergeFixtures()                    // 另有一段两边都改了 → 该判 MANUAL
+    const XLSX_CLEAN = generateXlsxFixtures()
+    const XLSX_OVERLAP = generateXlsxFixtures({ conflict: true })
+    const PPTX_CLEAN = generatePptxFixtures()
+    const PPTX_OVERLAP = generatePptxFixtures({ conflict: true })
+    const pdfBytes = (tag) => Buffer.from('%PDF-1.4\n% J14 三方合并夹具 ' + tag
+      + '\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n', 'utf8')
+
+    // ---- 小助手 ----
+    const restCreateAt = async (apiFn, projectId, name, bytes) => {
+      const created = await apiFn('/api/projects/' + projectId + '/files/file', {
+        method: 'POST',
+        body: {
+          parentId: null, name,
+          fileType: (name.split('.').pop() || 'bin').toLowerCase(),
+          fileSize: bytes.length,
+        },
+      })
+      if (!created || !created.id) throw new Error('建文件行失败: ' + JSON.stringify(created).slice(0, 200))
+      const form = new FormData()
+      form.append('file', new Blob([bytes]), name)
+      const r = await fetch(apiFn.base + '/api/files/' + (created.wpsFileId || created.id) + '/upload', {
+        method: 'POST',
+        headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
+        body: form,
+      })
+      const j = await r.json()
+      if (!j || j.code !== 0) throw new Error('写字节失败: ' + JSON.stringify(j).slice(0, 200))
+      return created
+    }
+    // 结束工作会顺手做一次后台自动上传，紧接着再显式交一次有可能撞上它还在跑（同一把
+    // 仓库锁），回一句「这次没能交稿」。那不是回归，重试一次就过——真推不上去会连着三次
+    // 都失败，仍然如实报错。撞冲突则一次都不重试：那是断言目标本身。
+    const pushAt = async (apiFn, projectId, who) => {
+      let last = null
+      for (let i = 0; i < 3; i++) {
+        const r = await apiFn('/api/cloud/projects/' + projectId + '/upload', { method: 'POST' })
+        last = r
+        if (r && r.code === 0) {
+          if (r.data && r.data.status === 'CONFLICT') {
+            throw new Error(who + ' 交稿撞冲突，不该发生: ' + JSON.stringify(r.data).slice(0, 200))
+          }
+          return r.data
+        }
+        await sleep(2000)
+      }
+      throw new Error(who + ' 交稿失败: ' + String(JSON.stringify(last)).slice(0, 200))
+    }
+    const pullAt = async (apiFn, projectId, who) => {
+      const r = await apiFn('/api/cloud/projects/' + projectId + '/update', { method: 'POST' })
+      if (!r || r.code !== 0) throw new Error(who + ' 取回失败: ' + JSON.stringify(r).slice(0, 200))
+      return r.data
+    }
+    const versionStatusA = async () => {
+      const r = await api('/api/projects/' + QA.projectId + '/version/status')
+      return (r && r.data) || {}
+    }
+    const conflictA = async () => {
+      const d = await versionStatusA()
+      return d.sessionEndConflict || d.cloudConflict || d.adoptConflict || null
+    }
+    const mergeRowOf = (conflict, suffix) => ((conflict && conflict.documentMerges) || [])
+      .find((m) => String(m.path || '').endsWith(suffix)) || null
+    const historyEntries = async (limit = 20) => {
+      const r = await api('/api/projects/' + QA.projectId + '/version/history?limit=' + limit)
+      return (r && r.data && r.data.entries) || []
+    }
+    // 带 merges 的那一条版本记录（就是这次裁决/自动合并落成的那一版）
+    const latestMergeEntry = async () => {
+      const entries = await historyEntries()
+      return entries.find((e) => Array.isArray(e.merges) && e.merges.length) || null
+    }
+    const textAtHead = async (relPath) => {
+      const r = await api('/api/projects/' + QA.projectId
+        + '/version/versions/HEAD/file-text?path=' + encodeURIComponent(relPath))
+      return (r && r.data && r.data.text) || ''
+    }
+    // 「几何可见」：元素有矩形、在视口里、且中心点确实命中它自己（没被遮罩盖住）
+    const visibleTexts = (sel) => page.evaluate((s) => [...document.querySelectorAll(s)]
+      .filter((el) => {
+        const r = el.getBoundingClientRect()
+        if (r.width <= 0 || r.height <= 0) return false
+        if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) return false
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+        return !!hit && (hit === el || el.contains(hit) || hit.contains(el))
+      })
+      .map((el) => (el.innerText || '').trim()), sel)
+    // 裁决总览：版本面板重新挂载一次，顺带让页面的 checkAdoptConflict 再跑一遍
+    // （自动合并编排器挂在它上面，见 project-overview.vue 的 @status-changed）。
+    const remountVersionPanel = async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      await page.waitForSelector('.cloud-dot', { timeout: 20000 })
+    }
+    const pullViaUi = async () => {
+      // 进这一步时仓库必须是干净的。上一轮没收尾的话裁决弹窗还挂着，而它是全屏遮罩
+      // （.awd-mask）：下面点「打开协作」会点在遮罩上，症状是 .collab-dialog 十秒超时，
+      // 完全看不出真因。把前提写成一条明确的失败信息，别让它伪装成 UI 回归。
+      const stale = await conflictA()
+      if (stale) {
+        throw new Error('上一轮的合并还停在没收尾的状态，本轮取回无从谈起: '
+          + String(JSON.stringify(stale)).slice(0, 200))
+      }
+      await remountVersionPanel()
+      await mouseClickText('打开协作')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('取回最新稿')
+      await sleep(2500)
+      await closeCollabDialog()
+      // 协作抽屉回来时页面自己会调一次 checkAdoptConflict（onCollabChanged /
+      // onCollabConflict），自动合并编排器挂在它上面，所以不必再手工刷一次。
+      // **撞上冲突时更是绝不能再去点 rail 图标**：裁决弹窗是全屏遮罩（.awd-mask），
+      // 点击坐标全落在遮罩上，不报错、只让后面的断言静默超时（v1 地雷 #24 同款）。
+      // 没弹窗时才补一次侧栏重挂，给「后端还没来得及开窗」留一次重新拉 /status 的机会。
+      if (!(await page.$('.adopt-dialog'))) await remountVersionPanel()
+    }
+
+    const NAME = {
+      docxClean: 'J14合同甲.docx',
+      docxOverlap: 'J14合同乙.docx',
+      xlsxClean: 'J14付款表.xlsx',
+      xlsxOverlap: 'J14同格表.xlsx',
+      pptxClean: 'J14演示.pptx',
+      pptxOverlap: 'J14同页演示.pptx',
+      pdf: 'J14扫描件.pdf',
+    }
+
+    await step('J14-准备：回到工作台、A 先把 J11 留下的那一版取回来（起点两边一致）', async () => {
+      // J12 的英文走查与 J13 的隔离后端各自把主 page 带去过别处（J13 用的是另一个
+      // 标签页，但语言键与页面栈都被动过），这里显式整页重载回到这份案卷的工作台。
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+        { waitUntil: 'networkidle2', timeout: 30000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+      await waitText('资源管理器', 30000)
+      await pullAt(aApi, QA.projectId, 'A')
+      const c = await conflictA()
+      if (c) throw new Error('J14 起点不该停在冲突态: ' + JSON.stringify(c).slice(0, 200))
+    })
+
+    // ---------------- ① 不重叠自动合并（xlsx 不同格 + pptx 不同页） ----------------
+    // docx 的 AUTO 这一半要引擎，在本套件里跑不了（见段首覆盖边界）；xlsx/pptx 的合并
+    // 文件由后端 POI 拼，是这里能跑通的完整自动合并链：静默合好 + 自己收尾 + 不弹窗。
+    await step('J14-①-准备：A 落下表格与演示的共同上一版并交稿，B 取回', async () => {
+      await restCreateAt(aApi, QA.projectId, NAME.xlsxClean, XLSX_CLEAN.base)
+      await restCreateAt(aApi, QA.projectId, NAME.pptxClean, PPTX_CLEAN.base)
+      await endSessionAt(aApi, QA.projectId, 'J14 表格与演示的共同上一版')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      const files = await bApi('/api/projects/' + bProjectId + '/files')
+      const names = (Array.isArray(files) ? files : []).map((f) => f.name)
+      if (!names.includes(NAME.xlsxClean) || !names.includes(NAME.pptxClean)) {
+        throw new Error('B 没收到共同的上一版: ' + JSON.stringify(names))
+      }
+    })
+
+    // **顺序不能反**：结束工作会顺手做一次后台自动上传，案件库没领先时它会直接推上去。
+    // 所以必须让 B 先改先交（占住案件库那一侧），A 后改——A 的那次后台上传因此被拒、
+    // 只置待交稿标记（J11 已验过这条 I2 语义），两边的改动这才真的分头落在两条线上。
+    // 反过来先让 A 结束工作，A 的改动会被后台推上去，B 交稿时撞的是整份三选一，
+    // 根本走不到三方合并这条链（本轮实跑踩过一次）。
+    await step('J14-①-准备：B 先改一格一页并交稿，A 再改另一格另一页', async () => {
+      await restOverwriteAt(bApi, bProjectId, NAME.xlsxClean, XLSX_CLEAN.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.pptxClean, PPTX_CLEAN.other)
+      await endSessionAt(bApi, bProjectId, '乙改了尾款期限与第二页')
+      await pushAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(aApi, QA.projectId, NAME.xlsxClean, XLSX_CLEAN.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.pptxClean, PPTX_CLEAN.main)
+      await endSessionAt(aApi, QA.projectId, '甲改了付款期限与第一页')
+    })
+
+    let autoMergeSha = null
+    await step('J14-①：A 点「取回最新稿」→ 不弹裁决窗，两份都替他合好了', async () => {
+      await pullViaUi()
+      // 后端先开一次合并窗口（两边都动过同一批文件），编排器把两份都合好、按 MERGED 收尾。
+      const ok = await pollUntil(async () => {
+        const c = await conflictA()
+        if (c) return false
+        const entry = await latestMergeEntry()
+        return !!entry && entry.merges.length >= 2
+      }, 90000, 2000)
+      const entry = await latestMergeEntry()
+      if (!ok) {
+        throw new Error('等待超时：自动合并没有收尾（冲突态 ' + JSON.stringify(await conflictA()).slice(0, 200)
+          + '，带 merges 的版本 ' + JSON.stringify(entry).slice(0, 300) + '）')
+      }
+      autoMergeSha = entry.sha
+      const dialogOpen = await page.evaluate(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        return !!dlg && dlg.getClientRects().length > 0
+      })
+      if (dialogOpen) throw new Error('不重叠的改动不该惊动律师，却弹出了裁决窗')
+      await shot('J14-auto-merged')
+    })
+
+    await step('J14-①：历史那一行带 auto 合并记录与 cloud 语境', async () => {
+      const entry = await latestMergeEntry()
+      if (!entry) throw new Error('历史里没有带合并记录的版本')
+      if (entry.mergeContext !== 'cloud') {
+        throw new Error('mergeContext 不是 cloud: ' + JSON.stringify(entry).slice(0, 300))
+      }
+      for (const name of [NAME.xlsxClean, NAME.pptxClean]) {
+        const m = entry.merges.find((x) => String(x.path || '').endsWith(name))
+        if (!m) throw new Error('merges 里没有 ' + name + ': ' + JSON.stringify(entry.merges))
+        if (m.mode !== 'auto') throw new Error(name + ' 不是自动合并: ' + JSON.stringify(m))
+        if (!(Number(m.mainCount) > 0) || !(Number(m.otherCount) > 0)) {
+          throw new Error(name + ' 的两边处数不对（应当各合入至少一处）: ' + JSON.stringify(m))
+        }
+      }
+    })
+
+    await step('J14-①：合并后的正文真含两边的改动', async () => {
+      const xlsxText = await textAtHead(NAME.xlsxClean)
+      if (!xlsxText.includes(XLSX_CLEAN.expected.mainCellText)) {
+        throw new Error('表格里丢了甲改的那一格: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      if (!xlsxText.includes(XLSX_CLEAN.expected.otherCellText)) {
+        throw new Error('表格里丢了乙改的那一格（自动合并没把另一侧合进来）: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      const pptxText = await textAtHead(NAME.pptxClean)
+      if (!pptxText.includes(PPTX_CLEAN.expected.mainText) || !pptxText.includes(PPTX_CLEAN.expected.otherText)) {
+        throw new Error('演示里没有同时含两边改的页: ' + JSON.stringify(pptxText.slice(0, 300)))
+      }
+    })
+
+    await step('J14-①：退回到合并前那一版可用（回去看得到只有甲那一版，再回到合并版）', async () => {
+      const entries = await historyEntries(40)
+      const merged = entries.find((e) => e.sha === autoMergeSha)
+      const beforeSha = merged && Array.isArray(merged.parents) ? merged.parents[0] : null
+      if (!beforeSha) throw new Error('合并那一版没有第一父，退不回去: ' + String(JSON.stringify(merged)).slice(0, 300))
+      const back = await api('/api/projects/' + QA.projectId + '/version/revert', { method: 'POST', body: { ref: beforeSha } })
+      if (!back || back.code !== 0) throw new Error('退回合并前那一版失败: ' + JSON.stringify(back).slice(0, 200))
+      const beforeText = await textAtHead(NAME.xlsxClean)
+      if (!beforeText.includes(XLSX_CLEAN.expected.mainCellText)) {
+        throw new Error('退回之后甲自己那一版的改动也没了: ' + JSON.stringify(beforeText.slice(0, 300)))
+      }
+      if (beforeText.includes(XLSX_CLEAN.expected.otherCellText)) {
+        throw new Error('退回之后仍带着乙的改动，说明退回的不是合并前那一版: ' + JSON.stringify(beforeText.slice(0, 300)))
+      }
+      const fwd = await api('/api/projects/' + QA.projectId + '/version/revert', { method: 'POST', body: { ref: autoMergeSha } })
+      if (!fwd || fwd.code !== 0) throw new Error('回到合并那一版失败: ' + JSON.stringify(fwd).slice(0, 200))
+      const again = await textAtHead(NAME.xlsxClean)
+      if (!again.includes(XLSX_CLEAN.expected.otherCellText)) {
+        throw new Error('回到合并版之后内容没恢复: ' + JSON.stringify(again.slice(0, 300)))
+      }
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+    })
+
+    // ---------------- ② 逐处裁决（xlsx 逐格 + pptx 逐页，都在裁决总览里做完） ----------------
+    await step('J14-②-准备：B 先改同一格同一页并交稿，A 再改同一格同一页', async () => {
+      await restCreateAt(aApi, QA.projectId, NAME.xlsxOverlap, XLSX_OVERLAP.base)
+      await restCreateAt(aApi, QA.projectId, NAME.pptxOverlap, PPTX_OVERLAP.base)
+      await endSessionAt(aApi, QA.projectId, 'J14 同格表与同页演示的共同上一版')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(bApi, bProjectId, NAME.xlsxOverlap, XLSX_OVERLAP.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.pptxOverlap, PPTX_OVERLAP.other)
+      await endSessionAt(bApi, bProjectId, '乙也改了首付款金额与第一页')
+      await pushAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(aApi, QA.projectId, NAME.xlsxOverlap, XLSX_OVERLAP.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.pptxOverlap, PPTX_OVERLAP.main)
+      await endSessionAt(aApi, QA.projectId, '甲改了首付款金额与第一页')
+    })
+
+    await step('J14-②：取回后总览逐份说清「同一格/同一页两边都改了 · 1 处」', async () => {
+      await pullViaUi()
+      const ok = await pollUntil(async () => {
+        const c = await conflictA()
+        const x = mergeRowOf(c, NAME.xlsxOverlap)
+        const p = mergeRowOf(c, NAME.pptxOverlap)
+        return !!x && !!p && x.decision === 'MANUAL' && p.decision === 'MANUAL'
+      }, 60000, 2000)
+      const c = await conflictA()
+      if (!ok) throw new Error('后端没有把这两份判成逐处裁决: ' + JSON.stringify(c && c.documentMerges).slice(0, 400))
+      const x = mergeRowOf(c, NAME.xlsxOverlap)
+      const p = mergeRowOf(c, NAME.pptxOverlap)
+      if (x.kind !== 'XLSX' || x.reason !== 'OVERLAP' || Number(x.overlapCount) !== 1) {
+        throw new Error('表格那一行的判定不对: ' + JSON.stringify(x))
+      }
+      if (p.kind !== 'PPTX' || p.reason !== 'OVERLAP' || Number(p.overlapCount) !== 1) {
+        throw new Error('演示那一行的判定不对: ' + JSON.stringify(p))
+      }
+      await page.waitForSelector('.adopt-dialog', { timeout: 20000 })
+      const notes = await pollUntil(async () => {
+        const list = await visibleTexts('.adopt-dialog .adopt-row-note')
+        return list.includes('同一格两边都改了 · 1 处') && list.includes('同一页两边都改了 · 1 处')
+      }, 30000, 1000)
+      if (!notes) {
+        throw new Error('总览没有逐份说清两边都改了几处，实际可见文案: '
+          + JSON.stringify(await visibleTexts('.adopt-dialog .adopt-row-note')))
+      }
+      await shot('J14-manual-overview')
+    })
+
+    await step('J14-②：逐格裁决——留甲的那一格，确定这一份', async () => {
+      const keys = await pollUntil(async () => {
+        const list = await visibleTexts('.adopt-dialog .merge-cell-key')
+        return list.includes(XLSX_OVERLAP.expected.conflictCellKey)
+      }, 30000, 1000)
+      if (!keys) {
+        throw new Error('逐格清单里没有那一格（期望 ' + XLSX_OVERLAP.expected.conflictCellKey + '），实际: '
+          + JSON.stringify(await visibleTexts('.adopt-dialog .merge-cell-key')))
+      }
+      // 「你的」这一栏在表格那一行的第一个 .merge-cell-pick 上（sideLabel('main')，
+      // 甲就是本机这一侧），点它 = 这一格留甲的、拒绝乙的。
+      const clicked = await page.evaluate((cellKey) => {
+        const rows = [...document.querySelectorAll('.adopt-dialog .merge-cell-row')]
+        const row = rows.find((r) => {
+          const k = r.querySelector('.merge-cell-key')
+          return k && (k.innerText || '').trim() === cellKey
+        })
+        if (!row) return null
+        const pick = row.querySelectorAll('.merge-cell-pick')[0]
+        if (!pick) return null
+        const rect = pick.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, XLSX_OVERLAP.expected.conflictCellKey)
+      if (!clicked) throw new Error('找不到那一格的「你的」那一栏')
+      await page.mouse.click(clicked.x, clicked.y)
+      await sleep(500)
+      const confirmed = await page.evaluate((name) => {
+        const row = [...document.querySelectorAll('.adopt-dialog .adopt-row')].find((r) => {
+          const n = r.querySelector('.adopt-row-name')
+          return n && (n.innerText || '').trim() === name
+        })
+        if (!row) return null
+        const btn = row.querySelector('.merge-cell-confirm')
+        if (!btn || btn.className.includes('awd-btn-disabled')) return null
+        const rect = btn.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, NAME.xlsxOverlap)
+      if (!confirmed) throw new Error('「这份就这么定」没有变成可点（这一格还没选边？）')
+      await page.mouse.click(confirmed.x, confirmed.y)
+      const merged = await pollUntil(async () => {
+        const c = await conflictA()
+        const x = mergeRowOf(c, NAME.xlsxOverlap)
+        return !!x && String(x.state).toUpperCase() === 'MERGED'
+      }, 30000, 1000)
+      if (!merged) throw new Error('确定之后后端没有把这一份记成已合好')
+    })
+
+    await step('J14-②：逐页裁决——这一页用律师乙的，确定这一份', async () => {
+      const clicked = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.adopt-dialog .merge-cell-row')]
+        const row = rows.find((r) => {
+          const k = r.querySelector('.merge-cell-key')
+          return k && /^第 \d+ 页$/.test((k.innerText || '').trim())
+        })
+        if (!row) return null
+        const pick = row.querySelectorAll('.merge-cell-pick')[1] // 第二栏 = 另一侧（律师乙）
+        if (!pick) return null
+        const rect = pick.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, side: (pick.querySelector('.merge-cell-side') || {}).innerText }
+      })
+      if (!clicked) throw new Error('逐页清单里没有「第 N 页」那一行')
+      if (!String(clicked.side || '').includes('律师乙')) {
+        throw new Error('第二栏不是律师乙那一侧（两栏的抬头对不上）: ' + JSON.stringify(clicked.side))
+      }
+      await page.mouse.click(clicked.x, clicked.y)
+      await sleep(500)
+      const confirmed = await page.evaluate((name) => {
+        const row = [...document.querySelectorAll('.adopt-dialog .adopt-row')].find((r) => {
+          const n = r.querySelector('.adopt-row-name')
+          return n && (n.innerText || '').trim() === name
+        })
+        if (!row) return null
+        const btn = row.querySelector('.merge-cell-confirm')
+        if (!btn || btn.className.includes('awd-btn-disabled')) return null
+        const rect = btn.getBoundingClientRect()
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }, NAME.pptxOverlap)
+      if (!confirmed) throw new Error('演示那一份的「这份就这么定」没有变成可点')
+      await page.mouse.click(confirmed.x, confirmed.y)
+      const merged = await pollUntil(async () => {
+        const c = await conflictA()
+        const p = mergeRowOf(c, NAME.pptxOverlap)
+        return !!p && String(p.state).toUpperCase() === 'MERGED'
+      }, 30000, 1000)
+      if (!merged) throw new Error('确定之后后端没有把演示那一份记成已合好')
+      await shot('J14-manual-picked')
+    })
+
+    await step('J14-②：点「就按我选的来」收尾，冲突窗关闭', async () => {
+      await mouseClickText('就按我选的来')
+      const gone = await pollUntil(async () => !(await conflictA()), 40000, 1500)
+      if (!gone) throw new Error('确认之后仓库仍停在冲突态: ' + JSON.stringify(await conflictA()).slice(0, 300))
+      await page.waitForFunction(
+        () => !document.querySelector('.adopt-dialog') && !document.querySelector('.adopt-collapsed-bar'),
+        { timeout: 20000 },
+      )
+    })
+
+    await step('J14-②：历史里那一行是逐处裁决，逐处清单与律师选的一致', async () => {
+      const entry = await latestMergeEntry()
+      if (!entry) throw new Error('历史里没有带合并记录的版本')
+      const x = entry.merges.find((m) => String(m.path || '').endsWith(NAME.xlsxOverlap))
+      const p = entry.merges.find((m) => String(m.path || '').endsWith(NAME.pptxOverlap))
+      if (!x || !p) throw new Error('merges 里没有这两份: ' + JSON.stringify(entry.merges).slice(0, 400))
+      if (x.mode !== 'manual' || p.mode !== 'manual') {
+        throw new Error('不是逐处裁决: ' + JSON.stringify([x, p]).slice(0, 400))
+      }
+      const xd = (x.decisions || []).find((d) => d.key === XLSX_OVERLAP.expected.conflictCellKey)
+      if (!xd || xd.side !== 'M' || xd.action !== 'A') {
+        throw new Error('那一格记的不是「留了甲这边的」: ' + JSON.stringify(x.decisions))
+      }
+      const pd = (p.decisions || []).find((d) => d.key === PPTX_OVERLAP.expected.conflictSlideKey)
+      if (!pd || pd.side !== 'T' || pd.action !== 'A') {
+        throw new Error('那一页记的不是「用了律师乙的」: ' + JSON.stringify(p.decisions))
+      }
+    })
+
+    await step('J14-②：落盘内容与裁决一致（表格留甲的数、演示用乙的页）', async () => {
+      const xlsxText = await textAtHead(NAME.xlsxOverlap)
+      if (!xlsxText.includes(XLSX_OVERLAP.expected.conflictMainText)) {
+        throw new Error('表格那一格不是甲的数: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      if (xlsxText.includes(XLSX_OVERLAP.expected.conflictOtherText)) {
+        throw new Error('表格那一格还留着乙的数（裁决没生效）: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      // 没被问到的那两格（各自只有一边动过）仍要自动合入，不能因为进了裁决界面就丢
+      if (!xlsxText.includes(XLSX_OVERLAP.expected.otherCellText)) {
+        throw new Error('乙那一格只有他动过，不该被裁决界面吃掉: ' + JSON.stringify(xlsxText.slice(0, 300)))
+      }
+      const pptxText = await textAtHead(NAME.pptxOverlap)
+      if (!pptxText.includes(PPTX_OVERLAP.expected.otherText)) {
+        throw new Error('演示那一页不是乙的内容: ' + JSON.stringify(pptxText.slice(0, 300)))
+      }
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+    })
+
+    // ---------------- ③ 逐段溯源 ----------------
+    // 光标条与侧栏「溯源」标签要真引擎才显示得出来（见段首覆盖边界），这里验的是
+    // 它们读的那条数据：这一段最后是谁、哪一版改的。
+    await step('J14-③-准备：只有律师乙动过的一份合同，甲取回（不冲突）', async () => {
+      const proveName = 'J14溯源合同.docx'
+      await restCreateAt(aApi, QA.projectId, proveName, DOCX_CLEAN.base)
+      await endSessionAt(aApi, QA.projectId, '甲起草了溯源合同')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(bApi, bProjectId, proveName, DOCX_CLEAN.other)
+      await endSessionAt(bApi, bProjectId, '乙核对了溯源合同的期限条款')
+      await pushAt(bApi, bProjectId, 'B')
+      const pulled = await pullAt(aApi, QA.projectId, 'A')
+      if (pulled && pulled.status === 'CONFLICT') {
+        throw new Error('只有一边动过却撞了冲突: ' + JSON.stringify(pulled).slice(0, 200))
+      }
+      // 溯源出参读的是 CloudSyncService.remoteDisplayNames(projectId, **false**)——
+      // 只认缓存、绝不联网。那张字典由「真去案件库取一趟参与人表」的路径落缓存
+      // （proxyMembers 顺手 cacheRemoteDisplayNames），所以这里显式请一次参与人表预热。
+      // 拿 /cloud/status 预热是不可靠的：它只在 remoteAhead 为真时才走 allowFetch=true
+      // 那条路，A 刚取回完 remoteAhead 恰好是假。
+      const warm = await api('/api/cloud/projects/' + QA.projectId + '/members')
+      const warmed = (warm && warm.data && warm.data.members) || []
+      if (warmed.length < 2) {
+        throw new Error('没取到案件库参与人表，溯源署名无从翻译: ' + String(JSON.stringify(warm)).slice(0, 300))
+      }
+    })
+
+    await step('J14-③：溯源逐段给出「最后改这一段的是谁、哪一版」', async () => {
+      const files = await api('/api/projects/' + QA.projectId + '/files')
+      const f = (Array.isArray(files) ? files : []).find((x) => x.name === 'J14溯源合同.docx')
+      if (!f) throw new Error('找不到溯源用的那份合同')
+      let data = null
+      const ready = await pollUntil(async () => {
+        const r = await api('/api/projects/' + QA.projectId + '/version/provenance?fileId=' + f.id + '&ref=HEAD')
+        data = (r && r.data) || {}
+        return !data.computing && Array.isArray(data.units) && data.units.length > 0
+      }, 60000, 3000)
+      if (!ready) throw new Error('溯源没算出来: ' + JSON.stringify(data).slice(0, 300))
+      const byKey = {}
+      for (const u of data.units) byKey[u.key] = u
+      // p20 是乙改过的那一段（夹具 OTHER_EDITS 的第一条）
+      const changed = byKey.p20
+      if (!changed) throw new Error('溯源结果里没有第 20 段: ' + JSON.stringify(data.units.slice(0, 3)))
+      if (changed.self !== false) throw new Error('乙改的那一段被算成了本人: ' + JSON.stringify(changed))
+      if (changed.authorName !== '律师乙') {
+        throw new Error('乙改的那一段署名不是案件库展示名「律师乙」，而是 '
+          + JSON.stringify(changed.authorName) + '：' + JSON.stringify(changed))
+      }
+      // 标题**不写死成那段工作的名字**：改动信号先落成一条自动存档、还是被随后的结束工作
+      // 收进工作段提交，取决于防抖窗口有没有先到（本轮实测两种都出现过）。产品口径两种都对
+      // ——光标条在自动存档那一档就显示「自动存档」。所以这里断的是「挂上了一版真实的版本
+      // 记录」：标题非空、类型分类器给得出类型、而且这一版在历史里确实署着律师乙。
+      if (!String(changed.title || '').trim()) {
+        throw new Error('那一段没有挂上任何版本标题: ' + JSON.stringify(changed))
+      }
+      if (!String(changed.type || '').trim()) {
+        throw new Error('那一段没有版本类型（HistoryTypeClassifier 没跑）: ' + JSON.stringify(changed))
+      }
+      const hist = await api('/api/projects/' + QA.projectId + '/version/history?limit=60&includeAuto=true')
+      const rows = (hist && hist.data && hist.data.entries) || []
+      const attributed = rows.find((e) => e.sha === changed.sha)
+      if (!attributed) {
+        throw new Error('那一段挂的那一版不在提交历史里: ' + JSON.stringify(changed))
+      }
+      if (attributed.authorName !== '律师乙') {
+        throw new Error('那一版在提交历史里的署名不是律师乙: ' + JSON.stringify(attributed).slice(0, 300))
+      }
+      // 没人动过的段落仍归甲自己那一侧（标题同样不写死，理由见上一条）
+      const untouched = byKey.p0
+      if (!untouched || untouched.self !== true || !String(untouched.title || '').trim()) {
+        throw new Error('没被改过的段落没有继承甲自己那一版: ' + JSON.stringify(untouched))
+      }
+      if (changed.sha === untouched.sha) {
+        throw new Error('改过与没改过的两段挂到了同一版，溯源没有逐段区分: ' + JSON.stringify([changed, untouched]))
+      }
+      note('info', 'J14 溯源：第 20 段 → ' + changed.authorName + ' · ' + changed.title
+        + '（' + changed.type + ' ' + changed.shortId + '）；第 0 段 → '
+        + untouched.authorName + ' · ' + untouched.title + '（' + untouched.type + ' ' + untouched.shortId + '）')
+    })
+
+    // ---------------- ④ docx 段落级判定 + pdf 整份口径 ----------------
+    // 这一轮**刻意放在最后**：它以「先不取回」中止收场，A 会停在比案件库落后一版的
+    // 状态上，后面再有需要 A 交稿的轮次就会连带撞上这一轮造出来的冲突。
+    await step('J14-④-准备：两份 docx（只改不同段 / 改同一段）与一份 pdf', async () => {
+      await restCreateAt(aApi, QA.projectId, NAME.docxClean, DOCX_CLEAN.base)
+      await restCreateAt(aApi, QA.projectId, NAME.docxOverlap, DOCX_OVERLAP.base)
+      await restCreateAt(aApi, QA.projectId, NAME.pdf, pdfBytes('base'))
+      await endSessionAt(aApi, QA.projectId, 'J14 合同与扫描件的共同上一版')
+      await pushAt(aApi, QA.projectId, 'A')
+      await pullAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(bApi, bProjectId, NAME.docxClean, DOCX_CLEAN.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.docxOverlap, DOCX_OVERLAP.other)
+      await restOverwriteAt(bApi, bProjectId, NAME.pdf, pdfBytes('乙'))
+      await endSessionAt(bApi, bProjectId, '乙改了合同与扫描件')
+      await pushAt(bApi, bProjectId, 'B')
+      await restOverwriteAt(aApi, QA.projectId, NAME.docxClean, DOCX_CLEAN.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.docxOverlap, DOCX_OVERLAP.main)
+      await restOverwriteAt(aApi, QA.projectId, NAME.pdf, pdfBytes('甲'))
+      await endSessionAt(aApi, QA.projectId, '甲改了合同与扫描件')
+    })
+
+    await step('J14-④：段落级判定——只改不同段的判自动、改同一段的判逐处、pdf 只能整份', async () => {
+      await pullViaUi()
+      const ok = await pollUntil(async () => {
+        const c = await conflictA()
+        return !!mergeRowOf(c, NAME.docxOverlap) && !!mergeRowOf(c, NAME.pdf)
+      }, 60000, 2000)
+      const c = await conflictA()
+      if (!ok) throw new Error('取回之后没有拿到逐份分析: ' + JSON.stringify(c).slice(0, 400))
+      const clean = mergeRowOf(c, NAME.docxClean)
+      const overlap = mergeRowOf(c, NAME.docxOverlap)
+      const pdf = mergeRowOf(c, NAME.pdf)
+      if (!clean || clean.kind !== 'DOCX' || clean.decision !== 'AUTO' || clean.reason !== 'CLEAN') {
+        throw new Error('只改不同段的 docx 没被判成自动合并: ' + JSON.stringify(clean))
+      }
+      if (Number(clean.mainChanges) !== DOCX_CLEAN.expected.mainEditCount) {
+        throw new Error('甲改的处数不对（期望 ' + DOCX_CLEAN.expected.mainEditCount + '）: ' + JSON.stringify(clean))
+      }
+      if (!overlap || overlap.decision !== 'MANUAL' || overlap.reason !== 'OVERLAP'
+          || Number(overlap.overlapCount) !== 1) {
+        throw new Error('改同一段的 docx 没被判成逐处裁决 1 处: ' + JSON.stringify(overlap))
+      }
+      if (!pdf || pdf.kind !== 'WHOLE' || pdf.reason !== 'BINARY') {
+        throw new Error('pdf 没被判成整份二选一: ' + JSON.stringify(pdf))
+      }
+    })
+
+    await step('J14-④：「同一段两边都改了」那一处的三栏文字就是两位律师各自写的那句', async () => {
+      const r = await api('/api/projects/' + QA.projectId + '/version/merge/analysis?path='
+        + encodeURIComponent(NAME.docxOverlap))
+      const a = (r && r.data) || {}
+      const ov = (a.overlaps || [])[0]
+      if (!ov) throw new Error('分析里没有重叠那一处: ' + JSON.stringify(a).slice(0, 300))
+      if (ov.key !== 'p' + DOCX_OVERLAP.expected.conflictParaKey) {
+        throw new Error('重叠的不是夹具那一段: ' + JSON.stringify(ov).slice(0, 300))
+      }
+      if (ov.baseText !== DOCX_OVERLAP.expected.conflictBaseText
+          || ov.mainText !== DOCX_OVERLAP.expected.conflictMainText
+          || ov.otherText !== DOCX_OVERLAP.expected.conflictOtherText) {
+        throw new Error('三栏文字与夹具对不上: ' + JSON.stringify(ov).slice(0, 400))
+      }
+    })
+
+    await step('J14-④：总览上 docx 给「打开合并比对稿」、pdf 给整份选择的原因句', async () => {
+      await page.waitForSelector('.adopt-dialog', { timeout: 20000 })
+      const ok = await pollUntil(async () => {
+        const notes = await visibleTexts('.adopt-dialog .adopt-row-note')
+        return notes.includes('同一段两边都改了 · 1 处')
+          && notes.includes('PDF 与图片没有可比对的段落，只能整份选择')
+      }, 30000, 1000)
+      if (!ok) {
+        throw new Error('总览没有同时给出这两句，实际可见文案: '
+          + JSON.stringify(await visibleTexts('.adopt-dialog .adopt-row-note')))
+      }
+      const actions = await visibleTexts('.adopt-dialog .adopt-row-action')
+      if (!actions.includes('打开合并比对稿')) {
+        throw new Error('改同一段的 docx 没有给「打开合并比对稿」的入口: ' + JSON.stringify(actions))
+      }
+      // pdf 那一行仍然是原来的整份三选一（只有这类行才该有单选项）
+      const labels = await visibleTexts('.adopt-dialog .radio-label')
+      if (!labels.includes('留我这份') || !labels.includes('用同事那份')) {
+        throw new Error('pdf 那一行没有整份三选一: ' + JSON.stringify(labels))
+      }
+      await shot('J14-docx-and-pdf-rows')
+    })
+
+    await step('J14-④：点「先不取回」把这次合并整个中止，仓库回到干净态', async () => {
+      await mouseClickText('先不取回')
+      const gone = await pollUntil(async () => !(await conflictA()), 40000, 1500)
+      if (!gone) throw new Error('中止之后仓库仍停在冲突态: ' + JSON.stringify(await conflictA()).slice(0, 300))
+    })
+
+    note('skip', 'J14 未覆盖：docx 的自动合并执行与合并比对稿标签页逐处裁决——都要真 LOWA 引擎，'
+      + '浏览器目标（dev:h5，无 COOP/COEP、无 dist/zetaoffice）起不来，由 lowa-e2e 组 34 覆盖')
+  }
+
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
   // J11 在 A（长驻真实桌面后端，不像 S/B 是跑完就扔的进程）上建的 CloudConnection 同样
-  // 要清掉——不清理会跨多次运行累积死连接。PR-E 起「放进团队案件库」由协作抽屉让律师
-  // 指名选哪一个库（不再拿 list[0]），死连接不会再静默炸 NPE，但累积本身仍是测试卫生
-  // 问题（选择列表会越来越长）。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
+  // 要清掉——不清理会跨多次运行累积死连接。dev-board#440 之后这件事更要紧了：界面上
+  // 已经没有「放进哪个案件库」的选择器，onShare 只在**恰好一条**连接时用那一条，多于
+  // 一条就改推官方案件库；J11 连接那一步因此把「恰好一条」写成了硬前提，残留连接会让
+  // 下一次运行直接在那里失败。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
   // 时这里是无操作的空转。
   if (aConnectionId) {
     try { await api('/api/cloud/connections/' + aConnectionId + '/disconnect', { method: 'POST' }) } catch {}
@@ -2032,4 +3722,18 @@ fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2))
 console.log('\n===== 结果 =====')
 console.log('步骤: ' + passed + ' 通过, ' + stepFails + ' 失败; 异常信号 ' + issues.length + ' 条 (截图/报告: ' + OUT + ')')
 for (const i of issues) console.log('  - [' + i.sev + '] ' + i.what)
-process.exit(stepFails ? 1 : 0)
+
+// dev-board#349 的定点护栏。scroll-view 在卸载后仍被框架补写一次 scrollTop，曾经让
+// 产线控制台常驻两条（TypeError + 未处理的 Promise rejection，同一个根因），复现路径
+// 就是本套件走的「项目列表页 → 统一设置页」。修法是给 uni-h5 补空判
+//（frontend/scripts/patch-uni-h5-scrollview.mjs，npm postinstall 自动打）。
+// **控制台异常信号整体不判死**（历史噪音很多，一刀切会天天红），所以这一条单拎出来判死：
+// 补丁没打上（换了 uni-h5 版本、跳过了 postinstall）它立刻回来，不单独判死的话
+// 就只是报告里多两行没人看。
+const scrollTopRegression = issues.filter((i) => /setting 'scrollTop'/.test(i.what))
+if (scrollTopRegression.length) {
+  console.log('\n[dev-board#349] scroll-view 卸载后写 scrollTop 的异常又出现了 ' + scrollTopRegression.length + ' 条。')
+  console.log('  先确认 frontend/node_modules/@dcloudio/uni-h5 上的空判补丁是否还在：')
+  console.log('  cd frontend && node scripts/patch-uni-h5-scrollview.mjs')
+}
+process.exit(stepFails || scrollTopRegression.length ? 1 : 0)

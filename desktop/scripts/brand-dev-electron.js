@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // dev 态品牌名：把 node_modules 里那个 Electron.app 就地改名成 AI WorkDeck。
 //
 // 为什么必须改包而不是改代码：macOS 菜单栏最左边那个粗体应用名由 AppKit 从**当前运行的

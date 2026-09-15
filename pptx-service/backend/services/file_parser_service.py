@@ -9,10 +9,13 @@ import zipfile
 import io
 import base64
 import requests
+import tempfile
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 from markitdown import MarkItDown
+from services.ai_providers.lazyllm_env import ensure_lazyllm_namespace_key, get_lazyllm_api_key
+from services.ai_providers.text import strip_think_tags
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,45 @@ def _get_local_mineru_url() -> str:
     return os.getenv("MINERU_LOCAL_URL", "")
 
 
+def _mineru_storage_root():
+    """
+    [checkba] MinerU 解析产物（layout.json / *_content_list.json）的落盘根目录。
+
+    必须与读取侧同源：可编辑导出的提取器用的是 Flask config 的 UPLOAD_FOLDER
+    （见 image_editability/factories.py 的 ServiceConfig.from_defaults），而桌面打包态
+    注入 PPTX_DATA_DIR 后 UPLOAD_FOLDER 是 ~/.aiworkdeck/pptx/uploads，并不等于仓库里的
+    project_root/uploads——写在 project_root 下等于写进读不到的地方。
+    无 Flask 上下文时（脚本/单测）回退老路径。
+    """
+    from pathlib import Path
+    try:
+        from flask import current_app
+        if current_app and hasattr(current_app, "config"):
+            upload_folder = current_app.config.get("UPLOAD_FOLDER")
+            if upload_folder:
+                return Path(upload_folder) / "mineru_files"
+    except RuntimeError:
+        pass
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return project_root / "uploads" / "mineru_files"
+
+
+def _coerce_json_payload(raw):
+    """[checkba] 本地 MinerU 把 middle_json / content_list 以 JSON 字符串下发，统一解析成对象。"""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        import json as json_module
+        try:
+            return json_module.loads(raw)
+        except json_module.JSONDecodeError as e:
+            logger.warning(f"Failed to parse MinerU JSON payload: {e}")
+            return None
+    return None
+
+
 def _get_ai_provider_format(provider_format: str = None) -> str:
     """Get the configured AI provider format
     
@@ -94,12 +136,14 @@ class FileParserService:
                  google_api_key: str = "", google_api_base: str = "",
                  openai_api_key: str = "", openai_api_base: str = "",
                  image_caption_model: str = "gemini-3-flash-preview",
+                 lazyllm_image_caption_source: str = "", 
                  provider_format: str = None,
                  mineru_model_version: str = "vlm",
-                 mineru_local_url: str = None):
+                 mineru_local_url: str = None,
+                 ):
         """
         Initialize the file parser service
-
+        
         Args:
             mineru_token: MinerU API token (optional if using local service)
             mineru_api_base: MinerU API base URL
@@ -108,6 +152,7 @@ class FileParserService:
             openai_api_key: OpenAI API key for image captioning (used when AI_PROVIDER_FORMAT=openai)
             openai_api_base: OpenAI API base URL
             image_caption_model: Model to use for image captioning
+            lazyllm_image_caption_source: image caption model provider for lazyllm
             provider_format: AI provider format ('gemini' or 'openai'). If not provided, reads from environment variable.
             mineru_model_version: MinerU model version ('vlm' or 'pipeline'). Default is 'vlm'.
             mineru_local_url: [checkba] Local MinerU service URL (e.g., http://mineru-service:8000).
@@ -129,11 +174,13 @@ class FileParserService:
         self._google_api_base = google_api_base
         self._openai_api_key = openai_api_key
         self._openai_api_base = openai_api_base
-        self.image_caption_model = image_caption_model
+        self._image_caption_model = image_caption_model
+        self._lazyllm_image_caption_source = lazyllm_image_caption_source
         
         # Clients will be initialized lazily based on AI_PROVIDER_FORMAT
         self._gemini_client = None
         self._openai_client = None
+        self._lazyllm_client = None
         self._provider_format = _get_ai_provider_format(provider_format)
     
     def _get_gemini_client(self):
@@ -157,12 +204,31 @@ class FileParserService:
             )
         return self._openai_client
     
+    def _get_lazyllm_client(self):
+        """Lazily initialize LazyLLM client"""
+        if self._lazyllm_client is None:
+            import lazyllm
+            source = self._lazyllm_image_caption_source or "qwen"
+            model = self._image_caption_model or "qwen-vl-plus"
+            ensure_lazyllm_namespace_key(source, namespace='BANANA')
+
+            self._lazyllm_client = lazyllm.namespace('BANANA').OnlineModule(
+                source=source,
+                model=model,
+                type="vlm",
+            )
+        return self._lazyllm_client
+    
     def _can_generate_captions(self) -> bool:
         """Check if image caption generation is available"""
         if self._provider_format == 'openai':
             return bool(self._openai_api_key)
+        elif self._provider_format == 'lazyllm':
+            source = self._lazyllm_image_caption_source or "qwen"
+            return bool(get_lazyllm_api_key(source, namespace='BANANA'))
         else:
             return bool(self._google_api_key)
+
 
     def _check_local_service(self) -> bool:
         """[checkba] Check if local MinerU service is available (official mineru-api)"""
@@ -192,6 +258,17 @@ class FileParserService:
         self._use_local_service = False
         return False
 
+    def local_service_available(self) -> bool:
+        """
+        [checkba] 本机 MinerU 引擎是否可用（探测带缓存，与 parse_file 同一判据）。
+
+        强制云端开关打开时一律返回 False——那种配置下解析根本不会走本地服务。
+        供工厂层判断「无 token 能不能构造」，避免外部去摸私有方法。
+        """
+        if _should_force_cloud():
+            return False
+        return self._check_local_service()
+
     def _parse_with_local_service(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
         [checkba] Parse file using local MinerU service (official mineru-api)
@@ -214,6 +291,11 @@ class FileParserService:
                     'lang_list': 'ch',  # Chinese + English
                     'return_md': 'true',  # Return markdown in response
                     'return_content_list': 'true',  # Return content list for PPTX generation
+                    # [checkba] middle_json 就是云端 zip 里那份 layout.json：pdf_info[0] 的
+                    # para_blocks / discarded_blocks 带 bbox 与 page_size，是可编辑导出
+                    # （MinerUElementExtractor）唯一的元素来源。不要这份，本地路径解析得
+                    # 再好，导出也只拿到空元素表、静默退回纯图片版。
+                    'return_middle_json': 'true',
                 }
 
                 # Official mineru-api is synchronous and may take a long time
@@ -242,6 +324,7 @@ class FileParserService:
             # Official MinerU API format: {"backend": "...", "version": "...", "results": {filename: {...}}}
             markdown_content = None
             content_list = []
+            middle_json = None
 
             if 'results' in result and isinstance(result['results'], dict):
                 # New format: {"results": {filename: {"md_content": "...", "content_list": "..."}}}
@@ -250,27 +333,16 @@ class FileParserService:
                     # Get the first file's result
                     first_file = list(results.values())[0]
                     markdown_content = first_file.get('md_content', '')
-                    content_list_raw = first_file.get('content_list')
-
-                    # content_list may be a JSON string, need to parse
-                    if isinstance(content_list_raw, str):
-                        import json as json_module
-                        try:
-                            content_list = json_module.loads(content_list_raw)
-                        except json_module.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse content_list JSON: {e}")
-                            content_list = []
-                    elif isinstance(content_list_raw, list):
-                        content_list = content_list_raw
-                    else:
-                        content_list = []
+                    content_list = _coerce_json_payload(first_file.get('content_list')) or []
+                    middle_json = _coerce_json_payload(first_file.get('middle_json'))
 
                     logger.info(f"Parsed MinerU response: backend={result.get('backend')}, version={result.get('version')}")
             elif isinstance(result, list) and len(result) > 0:
                 # Legacy format fallback: [{"md_content": "...", "content_list": [...]}]
                 first_result = result[0]
                 markdown_content = first_result.get('md_content', '')
-                content_list = first_result.get('content_list', [])
+                content_list = _coerce_json_payload(first_result.get('content_list')) or []
+                middle_json = _coerce_json_payload(first_result.get('middle_json'))
 
             if not markdown_content:
                 error_msg = "No markdown content in local MinerU response"
@@ -281,11 +353,13 @@ class FileParserService:
             import uuid
             extract_id = str(uuid.uuid4())[:8]
 
-            # Save content_list to local storage for PPTX generation
-            if content_list:
-                self._save_local_mineru_result(extract_id, content_list)
+            # Save content_list + layout.json to local storage（PPTX 生成 / 可编辑导出都读它）
+            self._save_local_mineru_result(extract_id, content_list, middle_json)
 
-            logger.info(f"Local MinerU parsing completed, markdown length: {len(markdown_content)}, content_list items: {len(content_list)}")
+            logger.info(
+                f"Local MinerU parsing completed, markdown length: {len(markdown_content)}, "
+                f"content_list items: {len(content_list)}, layout.json: {'yes' if middle_json else 'no'}"
+            )
 
             # Enhance markdown with image captions
             if markdown_content and self._can_generate_captions():
@@ -304,29 +378,38 @@ class FileParserService:
             logger.error(error_msg, exc_info=True)
             return None, None, None, error_msg, 0
 
-    def _save_local_mineru_result(self, extract_id: str, content_list: list):
-        """[checkba] Save content_list to local storage for PPTX generation"""
+    def _save_local_mineru_result(self, extract_id: str, content_list: list, middle_json=None):
+        """
+        [checkba] Save content_list (+ layout.json) to local storage.
+
+        两个文件都是可编辑导出的硬依赖：`MinerUElementExtractor._extract_from_result`
+        要求同一目录里 layout.json 与 *_content_list.json 都在，缺任一就返回空元素表。
+        layout.json 的内容来自本地服务的 middle_json（与云端 zip 里的 layout.json 同构）。
+        """
         import json
-        from pathlib import Path
 
         try:
-            # Navigate to project root
-            current_file = Path(__file__).resolve()
-            backend_dir = current_file.parent.parent
-            project_root = backend_dir.parent
-
-            # Create directory for mineru results
-            mineru_storage = project_root / 'uploads' / 'mineru_files' / extract_id
+            mineru_storage = _mineru_storage_root() / extract_id
             mineru_storage.mkdir(parents=True, exist_ok=True)
 
-            # Save content_list as JSON
+            # content_list 即使为空也落盘：提取器按文件存在性把关
             content_list_file = mineru_storage / f'{extract_id}_content_list.json'
             with open(content_list_file, 'w', encoding='utf-8') as f:
-                json.dump(content_list, f, ensure_ascii=False, indent=2)
-
+                json.dump(content_list or [], f, ensure_ascii=False, indent=2)
             logger.info(f"Saved MinerU content_list to: {content_list_file}")
+
+            if middle_json:
+                layout_file = mineru_storage / 'layout.json'
+                with open(layout_file, 'w', encoding='utf-8') as f:
+                    json.dump(middle_json, f, ensure_ascii=False, indent=2)
+                logger.info(f"Saved MinerU layout.json to: {layout_file}")
+            else:
+                logger.warning(
+                    "本地 MinerU 未返回 middle_json，layout.json 缺失："
+                    "可编辑导出将拿不到版面元素（检查 return_middle_json 是否被服务端忽略）"
+                )
         except Exception as e:
-            logger.warning(f"Failed to save MinerU content_list: {e}")
+            logger.warning(f"Failed to save MinerU result files: {e}")
 
     def parse_file(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
@@ -414,7 +497,7 @@ class FileParserService:
                     logger.info("Markdown enhanced with image captions (all images succeeded).")
                 return batch_id, enhanced_content, extract_id, None, failed_count
             else:
-                logger.info("Skipping image caption enhancement (no Gemini client).")
+                logger.info("Skipping image caption enhancement (caption model unavailable).")
                 return batch_id, markdown_content, extract_id, None, 0
             
         except Exception as e:
@@ -629,18 +712,10 @@ class FileParserService:
             import uuid
             extract_id = str(uuid.uuid4())[:8]
             
-            # Get upload folder from Flask config (we'll need to pass this)
-            # For now, use a hardcoded path relative to project root
-            import os
-            from pathlib import Path
-            
-            # Navigate to project root (assuming this file is in backend/services/)
-            current_file = Path(__file__).resolve()
-            backend_dir = current_file.parent.parent
-            project_root = backend_dir.parent
-            
             # Create directory for mineru extracts
-            mineru_storage = project_root / 'uploads' / 'mineru_files' / extract_id
+            # [checkba] 与本地通路、页眉页脚读取共用 _mineru_storage_root()：三处必须同源，
+            # 否则打包态（PPTX_DATA_DIR 改写 UPLOAD_FOLDER）会写进读不到的地方
+            mineru_storage = _mineru_storage_root() / extract_id
             mineru_storage.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"Extracting ZIP to: {mineru_storage}")
@@ -690,6 +765,51 @@ class FileParserService:
             logger.error(error_msg)
             return None, None, error_msg
     
+    @staticmethod
+    def extract_header_footer_from_layout(extract_id: str) -> str:
+        """
+        从 MinerU layout.json 的 discarded_blocks 中提取页眉页脚文本。
+
+        Args:
+            extract_id: MinerU 解析结果的 extract_id
+
+        Returns:
+            提取到的页眉页脚文本，如无则返回空字符串
+        """
+        import json
+
+        # 与写入侧（_save_local_mineru_result / 云端 zip 解包）同一个根目录
+        mineru_dir = _mineru_storage_root() / extract_id
+        layout_file = mineru_dir / 'layout.json'
+
+        if not layout_file.exists():
+            return ''
+
+        try:
+            with open(layout_file, 'r', encoding='utf-8') as f:
+                layout_data = json.load(f)
+
+            if 'pdf_info' not in layout_data or not layout_data['pdf_info']:
+                return ''
+
+            texts = []
+            for page_info in layout_data['pdf_info']:
+                for block in page_info.get('discarded_blocks', []):
+                    block_type = block.get('type', '')
+                    if block_type not in ('header', 'footer'):
+                        continue
+                    for line in block.get('lines', []):
+                        for span in line.get('spans', []):
+                            if span.get('type') == 'text' and span.get('content', '').strip():
+                                content = span['content'].strip()
+                                if content != '#':
+                                    texts.append(content)
+
+            return '\n'.join(texts)
+        except Exception as e:
+            logger.warning(f"Failed to extract header/footer from layout.json: {e}")
+            return ''
+
     def _replace_image_paths(self, markdown_content: str, markdown_file_path: str, extract_id: str) -> str:
         """Replace relative image paths in markdown with local server URLs"""
         import os
@@ -901,7 +1021,7 @@ class FileParserService:
                 base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
                 
                 response = client.chat.completions.create(
-                    model=self.image_caption_model,
+                    model=self._image_caption_model,
                     messages=[
                         {
                             "role": "user",
@@ -914,6 +1034,19 @@ class FileParserService:
                     temperature=0.3
                 )
                 caption = response.choices[0].message.content.strip()
+            elif self._provider_format == 'lazyllm':
+                # Use LazyLLM format
+                client = self._get_lazyllm_client()
+                with tempfile.NamedTemporaryFile(prefix='lazyllm_ref_', suffix='.png', delete=False) as tmp:
+                    temp_path = tmp.name
+                try:
+                    image.save(temp_path)
+                    caption = client(prompt, lazyllm_files=[temp_path])
+                finally:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
             else:
                 # Use Gemini SDK format (default)
                 from google.genai import types
@@ -921,19 +1054,21 @@ class FileParserService:
                 if not client:
                     logger.warning("Gemini client not initialized, skipping caption generation")
                     return ""
-                
+
                 result = client.models.generate_content(
-                    model=self.image_caption_model,
+                    model=self._image_caption_model,
                     contents=[image, prompt],
                     config=types.GenerateContentConfig(
                         temperature=0.3,  # Lower temperature for more consistent captions
                     )
                 )
                 caption = result.text.strip()
-            
+
+            # Strip <think>...</think> tags from reasoning models
+            caption = strip_think_tags(caption)
+
             return caption
             
         except Exception as e:
             logger.warning(f"Failed to generate caption for {image_url}: {str(e)}")
             return ""  # Return empty string on failure
-

@@ -1,10 +1,12 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller.ai;
 
 import com.checkba.controller.AuthController;
 import com.checkba.service.LangText;
 import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ai.AiDocxExportService;
-import com.checkba.service.ai.AiAssistantService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.util.StringUtils;
@@ -12,7 +14,7 @@ import org.springframework.util.StringUtils;
 import java.util.Map;
 
 /**
- * AI Chat 周边 HTTP 接入层（历史会话、助手清单、公共配置、导出 Word）。
+ * AI Chat 周边 HTTP 接入层（历史会话、公共配置、导出 Word）。
  *
  * 只负责 HTTP 出入口、鉴权（session → userId）与 DTO 定义。
  *
@@ -21,6 +23,10 @@ import java.util.Map;
  * 换成 ChatInterface 组件后模板里已无任何绑定，且请求体还漏传了 contexts 与
  * assistantId——即双重死代码，本次供应商体系改造中一并移除，连带 AiChatService、
  * MultiModalContentService 与两个 Gemini 类。
+ *
+ * 「智慧助手」（GET /assistants，AiAssistantConfig/AiAssistantService）已于
+ * 2026-08-19 整体移除：assistantId 在前端组装 payload 时就被丢弃，后端从不消费，
+ * 生产库 ai.assistants 只有四条从未被真配置过的远古脚手架默认值。
  */
 @RestController
 @RequestMapping("/api/ai")
@@ -28,7 +34,6 @@ public class AiChatController {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiChatController.class);
 
-    private final AiAssistantService aiAssistantService;
     private final ProjectAiMessageService projectAiMessageService;
     private final AiDocxExportService aiDocxExportService;
     private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
@@ -38,7 +43,6 @@ public class AiChatController {
     private final com.checkba.service.ai.PlatformAiChannel platformAiChannel;
 
     public AiChatController(
-            AiAssistantService aiAssistantService,
             ProjectAiMessageService projectAiMessageService,
             AiDocxExportService aiDocxExportService,
             com.checkba.service.ai.ChatModelFactory chatModelFactory,
@@ -46,7 +50,6 @@ public class AiChatController {
             com.checkba.repository.TokenUsageRepository tokenUsageRepository,
             com.checkba.service.ai.AgentRunStateService agentRunStateService,
             com.checkba.service.ai.PlatformAiChannel platformAiChannel) {
-        this.aiAssistantService = aiAssistantService;
         this.projectAiMessageService = projectAiMessageService;
         this.aiDocxExportService = aiDocxExportService;
         this.chatModelFactory = chatModelFactory;
@@ -90,10 +93,7 @@ public class AiChatController {
 
     @GetMapping("/conversations")
     public java.util.List<Map<String, Object>> getConversations(@RequestParam Long projectId, @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
-        }
+        Long userId = AuthController.getUserIdFromSession(sessionId);
         java.util.List<Map<String, Object>> conversations = projectAiMessageService.listConversations(projectId, userId);
         // 合并 Agent 运行状态（RUNNING/PAUSED/AWAITING_APPROVAL/…，null=本进程内没跑过），
         // 历史列表的状态提示点靠它；在控制层合并，持久层不感知 AI 运行时。
@@ -102,6 +102,61 @@ public class AiChatController {
             conv.put("runStatus", cid == null ? null : agentRunStateService.statusName(cid.toString()));
         }
         return conversations;
+    }
+
+    /**
+     * 删除整个会话（dev-board#148，Office 插件历史面板）。归属校验同 history；
+     * 进行中的会话不许删——先停再删，否则编排器还在往一个不存在的会话里落库。
+     */
+    @DeleteMapping("/conversation/{conversationId}")
+    public ResponseEntity<?> deleteConversation(@PathVariable String conversationId,
+                                                @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        String status = agentRunStateService.statusName(conversationId);
+        if ("RUNNING".equals(status) || "PAUSED".equals(status)) {
+            return ResponseEntity.status(409).body(LangText.of("会话进行中，请先停止再删除", "Conversation is running; stop it before deleting"));
+        }
+        projectAiMessageService.deleteConversation(conversationId);
+        return ResponseEntity.ok(java.util.Map.of("code", 0));
+    }
+
+    /**
+     * 重命名会话（写首条消息的 conversationTitle，与 LLM 自动起名同一存储位）。
+     */
+    @PostMapping("/conversation/{conversationId}/title")
+    public ResponseEntity<?> renameConversation(@PathVariable String conversationId,
+                                                @RequestBody java.util.Map<String, String> body,
+                                                @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        String title = body == null ? null : body.get("title");
+        if (title == null || title.isBlank() || title.length() > 60) {
+            return ResponseEntity.badRequest().body(LangText.of("标题需为 1-60 个字符", "Title must be 1-60 characters"));
+        }
+        projectAiMessageService.updateConversationTitle(conversationId, title.trim());
+        return ResponseEntity.ok(java.util.Map.of("code", 0));
+    }
+
+    /**
+     * fork-from-here（dev-board#298）：整条会话复制成新的本地会话继续聊。
+     * 镜像导入的插件会话在桌面端只读，续聊走这条——分叉显式、原件不被污染。
+     * 归属校验同 history；返回 {code:0, data:{conversationId}}。
+     */
+    @PostMapping("/conversation/{conversationId}/fork")
+    public ResponseEntity<?> forkConversation(@PathVariable String conversationId,
+                                              @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        String newConversationId = projectAiMessageService.forkConversation(conversationId, userId);
+        return ResponseEntity.ok(java.util.Map.of("code", 0,
+                "data", java.util.Map.of("conversationId", newConversationId)));
     }
 
     /**
@@ -145,11 +200,6 @@ public class AiChatController {
             log.error("Failed to get conversation metadata", e);
             return ResponseEntity.status(500).body("Failed to get metadata: " + e.getMessage());
         }
-    }
-
-    @GetMapping("/assistants")
-    public java.util.Collection<com.checkba.model.ai.AiAssistantConfig> getAssistants() {
-        return aiAssistantService.loadAssistants().values();
     }
 
     /**

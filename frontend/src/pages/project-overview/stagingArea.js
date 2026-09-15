@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的文件暂存区：__staging_area__ 目录的懒建/加载、拖入与移出
 // （移出按 stagingOriginalParents 回原目录，原目录已删则退回根目录）、清空与折叠。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
@@ -153,6 +155,29 @@ export const stagingAreaMethods = {
         console.error('Failed to move files to staging:', e)
         uni.showToast({ title: this.$t('workbenchOps.addToStagingFailed'), icon: 'none' })
       }
+    },
+    // 真实 OS 文件拖拽（Finder/Explorer/桌面）落进暂存区（FileStagingArea.onDrop 的
+    // 第 3 分支：dataTransfer.files 是原生 File 列表，而不是"项目里已有文件"的引用）。
+    // 与 onStagingDrop（移动已有文件）不同——这些条目磁盘上有、项目里没有，得先导进来。
+    // 借 FileTree 的导入通道（importDroppedLocalFiles：顶层条目逐个 import-local，
+    // 目录由后端递归展开），与资源管理器里拖入同一条路，不另起一套（dev-board#513）。
+    // import-local 返回时字节已经在暂存目录里，所以刷一次列表就是最终形态，
+    // 不再需要旧上传队列时代的两次延时补拉。
+    async onStagingDropFiles(fileList) {
+      if (!fileList || fileList.length === 0) return
+      if (!this.stagingFolderId) await this.ensureStagingFolder()
+      if (!this.stagingFolderId) {
+        uni.showToast({ title: this.$t('workbenchOps.addToStagingFailed'), icon: 'none' })
+        return
+      }
+      const fileTree = this.$refs.fileTree
+      if (!fileTree || typeof fileTree.importDroppedLocalFiles !== 'function') {
+        console.warn('[ProjectOverview] onStagingDropFiles: fileTree ref not ready')
+        return
+      }
+      this.stagingPinned = true
+      await fileTree.importDroppedLocalFiles(Array.from(fileList), this.stagingFolderId)
+      await this.loadStagingFiles()
     },
     handleStagingClear() {
        // Optional: Move all back to root? Or just clear list (which creates orphans in .stagezone)?

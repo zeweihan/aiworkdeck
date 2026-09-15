@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.account;
 
 import com.checkba.service.LangText;
@@ -8,10 +11,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -69,6 +74,8 @@ public class AccountService {
     static class State {
         public String key;
         public String username;
+        /** 官网的稳定账户 id。头像地址 {@code /api/avatar/{accountId}} 要用，省得每次再拉一趟 /me。 */
+        public String accountId;
         public String displayName;
         public String connectedAt;
         public String lastSyncAt;
@@ -97,6 +104,7 @@ public class AccountService {
         State state = new State();
         state.key = key;
         state.username = str(me.get("username"));
+        state.accountId = str(me.get("accountId"));
         state.displayName = str(me.get("displayName"));
         state.connectedAt = Instant.now().toString();
         state.lastSyncAt = state.connectedAt;
@@ -132,6 +140,7 @@ public class AccountService {
         result.put("connected", connected);
         if (connected) {
             result.put("username", state.username);
+            result.put("accountId", state.accountId);
             result.put("displayName", state.displayName);
             result.put("connectedAt", state.connectedAt);
             result.put("lastSyncAt", state.lastSyncAt);
@@ -148,14 +157,43 @@ public class AccountService {
     /**
      * 已连接则返回账户 Key 明文，否则 null。
      *
-     * 仅供**需要自行向官网发带鉴权请求**的服务使用（当前只有 PR-D 的广场付费项下载：
-     * registry bundle/file 端点要求 {@code Authorization: Bearer awdk_}）。
+     * 仅供**需要自行向官网/官方服务发带鉴权请求**的服务使用。当前有三处：PR-D 的广场付费项
+     * 下载（registry bundle/file 端点要求 {@code Authorization: Bearer awdk_}）、
+     * {@code MobileRelayClientService} 的手机中转桥接、{@code OfficialCloudService} 的
+     * 官方团队案件库桥接（后两者都是 POST {base}/api/auth/awdk-login 换 awdt_ 设备令牌）。
      * 其余场景一律走本类的 fetchXxx 方法，不要把 Key 拿出去到处传；
      * 尤其**不得**回给前端——{@link #status()} 只暴露掩码。
      */
     public synchronized String currentKeyOrNull() {
         State state = loadState();
         return state.key == null || state.key.isBlank() ? null : state.key;
+    }
+
+    /**
+     * 已连接账户在官网侧的稳定账户 id（{@code account.json} 里的那一项）；未连接、
+     * 或者是老版本落的盘还没有这一项时返回 null。
+     *
+     * <p><b>纯本地读，绝不出网</b>——调用方是参与人列表这类每次打开界面都要走的路
+     * （spec 2026-09-14 §2.6 的去重键）。需要「没有就补拉一次 /me」的场景走
+     * {@link #profileIdentity()}。
+     */
+    public synchronized String currentAccountIdOrNull() {
+        State state = loadState();
+        if (state.key == null || state.key.isBlank()) return null;
+        return state.accountId == null || state.accountId.isBlank() ? null : state.accountId;
+    }
+
+    /**
+     * 已连接账户在官网侧的展示名；未连接、或官网还没给过名字时返回 null。
+     *
+     * <p><b>纯本地读，绝不出网</b>，口径同 {@link #currentAccountIdOrNull()}。调用方是
+     * {@code VersionAuthorResolver.isSelf}——存量历史里的提交署名可能正是这个名字
+     * （本机展示名与官网展示名不一定一样），认不出来就会把自己当成同事。
+     */
+    public synchronized String currentDisplayNameOrNull() {
+        State state = loadState();
+        if (state.key == null || state.key.isBlank()) return null;
+        return state.displayName == null || state.displayName.isBlank() ? null : state.displayName;
     }
 
     /**
@@ -286,6 +324,522 @@ public class AccountService {
         return body;
     }
 
+    // ==================== 个人档案与头像（spec 2026-09-10 §5） ====================
+    //
+    // 官网的展示名与头像是**唯一权威源**，桌面端只是它的一个编辑入口：本机不存第二份真相，
+    // 每一次写都直接打官网，写完把结果同步回本机 User 行（那一步在 AccountIdentitySync）。
+    // 本机 `POST /api/users/avatar` 留给自建服务器，local-mode 下前端不再调它。
+
+    /**
+     * GET /api/account/me 的**身份视图**：{@code {accountId, displayName, avatarUrl, displayNameIsDefault}}。
+     *
+     * <p><b>不含 username</b>：用户名退成内部标识，任何界面都不再当名字显示（spec §2 裁决 5）。
+     * 走 60 秒 profile 缓存（与顶栏余额端点同一份）——应用启动的 status 与个人设置页
+     * 打开的一瞬间会连着问好几次，没必要每次都出网。
+     */
+    public synchronized Map<String, Object> profileIdentity() {
+        String owner = accountFingerprintOrNull();
+        if (owner == null) {
+            // 未连接时 requireKey() 抛 NOT_CONNECTED；连着而指纹算不出来（SHA-256 不可用）时兜个哨兵
+            requireKey();
+            owner = "unknown";
+        }
+        Map<String, Object> me = cachedProfile(owner);
+        rememberIdentity(str(me.get("accountId")), str(me.get("displayName")));
+        return identityView(str(me.get("accountId")), str(me.get("displayName")),
+                str(me.get("avatarUpdatedAt")), Boolean.TRUE.equals(me.get("displayNameIsDefault")));
+    }
+
+    /**
+     * PATCH /api/account/profile —— 改昵称。
+     *
+     * <p>本机那一跳是 PUT（uni.request 的 method 枚举里没有 PATCH），出站到官网仍是 PATCH，
+     * 与团队那组同一处刻意偏差（护栏 {@code AccountServiceTest.teamHierarchyOutboundShape}）。
+     * 长度/字符的判据在官网（400 {@code invalid_display_name}），这里不抄一份。
+     */
+    public Map<String, Object> updateDisplayName(String displayName) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("displayName", displayName == null ? "" : displayName.trim());
+        Map<String, Object> res = sendJson("PATCH", "/api/account/profile", body);
+        String next = str(res.get("displayName"));
+        rememberIdentity(null, next);
+        // 缓存里那份 displayName 已经旧了；下一次 profileIdentity() 必须看到新名字
+        clearBalanceCache();
+        return res;
+    }
+
+    /**
+     * POST /api/account/avatar —— multipart 转发头像。
+     * 回 {@code {avatarUpdatedAt, avatarUrl}}：官网只回版本号，地址在这里按 accountId 拼好，
+     * 省得前端为了一个地址再拉一趟 /me。2MB 上限与格式判据都在官网（{@code too_large} 等）。
+     */
+    public Map<String, Object> uploadAvatar(byte[] content, String filename, String contentType) {
+        String key = requireKey();
+        AccountTransport.Reply reply = transport.sendMultipart(
+                "POST", baseUrl() + "/api/account/avatar", key,
+                new AccountTransport.Multipart("file", filename, contentType, content));
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        Map<String, Object> body = handle(reply);
+        String updatedAt = str(body.get("avatarUpdatedAt"));
+        String url = avatarUrl(accountIdOrFetch(), updatedAt);
+        if (url == null) {
+            // 地址拼不出来（官网回包缺 avatarUpdatedAt，或这台机器连 accountId 都解析不出来）。
+            // 「成功但 avatarUrl 为 null」是一条会咬人的路：AccountController 拿它去
+            // applyAvatarUrl(null) 把本机行清空，前端只看 code 照弹「上传成功」——
+            // 用户看到的就是「提示成功但头像没了」。宁可报错让人重试，也不要一次静默的清空。
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("官网没有返回头像版本号，头像可能没保存成功，请稍后重试",
+                            "The website returned no avatar version, the avatar may not have been saved; please retry shortly"));
+        }
+        seedAvatarVersion(updatedAt);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("avatarUpdatedAt", updatedAt);
+        result.put("avatarUrl", url);
+        return result;
+    }
+
+    /** DELETE /api/account/avatar —— 删头像，回 {@code {avatarUpdatedAt:null, avatarUrl:null}}。 */
+    public Map<String, Object> deleteAvatar() {
+        sendJson("DELETE", "/api/account/avatar", null);
+        seedAvatarVersion(null);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("avatarUpdatedAt", null);
+        result.put("avatarUrl", null);
+        return result;
+    }
+
+    /**
+     * 头像刚写完官网：把新的版本号就地塞进那份 60 秒 profile 缓存（删除时塞 null）。
+     *
+     * <p>不这么做的后果是确定的：{@link #profileIdentity()} 的 {@code avatarUpdatedAt} 来自这份缓存，
+     * 而 {@code GET /api/account/status} / {@code /api/account/profile} 都会走
+     * {@code AccountIdentitySync.refresh()} 拿它回写本机 {@code User} 行——缓存里还是上传前那份，
+     * 刚写好的头像当场被回滚（首次上传就是回滚成 null）。
+     *
+     * <p>为什么是 seed 而不是 {@link #clearBalanceCache()}（{@code updateDisplayName} 走的那条）：
+     * 作废之后下一次 {@code profileIdentity()} 要重新问官网 {@code /api/account/me}，
+     * 而刚 POST 完那一瞬间官网的读侧未必已经跟上，拿回来的还可能是旧版本号，照样回滚；
+     * 新版本号这一刻就在手里，直接写进去不依赖官网的读后写一致性，也不白白作废余额那半。
+     * 缓存不存在或归属账户对不上时退回作废——那时本来就没有陈旧值可用。
+     */
+    private synchronized void seedAvatarVersion(String avatarUpdatedAt) {
+        Cached<Map<String, Object>> cache = profileCache;
+        String owner = accountFingerprintOrNull();
+        if (cache == null || owner == null || !owner.equals(cache.owner())) {
+            clearBalanceCache();
+            return;
+        }
+        Map<String, Object> next = new LinkedHashMap<>(cache.value());
+        next.put("avatarUpdatedAt", avatarUpdatedAt);
+        // fetchedAt 保持原值：这次只让头像那一项跟上，余额该什么时候过期还什么时候过期
+        profileCache = new Cached<>(next, cache.fetchedAt(), owner);
+    }
+
+    /** 身份视图的唯一拼法，profileIdentity 与写入回包共用。 */
+    private Map<String, Object> identityView(String accountId, String displayName,
+                                             String avatarUpdatedAt, boolean displayNameIsDefault) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("accountId", accountId);
+        view.put("displayName", displayName);
+        view.put("avatarUrl", avatarUrl(accountId, avatarUpdatedAt));
+        view.put("displayNameIsDefault", displayNameIsDefault);
+        return view;
+    }
+
+    /**
+     * 官网公开头像地址。{@code avatarUpdatedAt} 为空表示这个账户根本没传过头像——
+     * 回 null 而不是一个必然 404 的地址（前端本来就有首字母降级）。
+     * {@code ?v=} 是缓存版本号，改了头像地址就变，浏览器不会拿旧的那张。
+     */
+    private String avatarUrl(String accountId, String avatarUpdatedAt) {
+        if (accountId == null || accountId.isBlank()) return null;
+        if (avatarUpdatedAt == null || avatarUpdatedAt.isBlank() || "null".equals(avatarUpdatedAt)) return null;
+        return baseUrl() + "/api/avatar/" + java.net.URLEncoder.encode(accountId, StandardCharsets.UTF_8)
+                + "?v=" + java.net.URLEncoder.encode(avatarUpdatedAt, StandardCharsets.UTF_8);
+    }
+
+    /** account.json 里的 accountId；老版本落的盘没有这一项时补拉一次 /me。 */
+    private String accountIdOrFetch() {
+        State state = loadState();
+        if (state.accountId != null && !state.accountId.isBlank()) return state.accountId;
+        Map<String, Object> me = fetchProfile();
+        String accountId = str(me.get("accountId"));
+        rememberIdentity(accountId, str(me.get("displayName")));
+        return accountId;
+    }
+
+    /**
+     * 把官网那份身份落回 account.json。null 表示这一项不动
+     * （改昵称只知道新名字，不该顺手把 accountId 清掉）。
+     */
+    private synchronized void rememberIdentity(String accountId, String displayName) {
+        State state = loadState();
+        if (state.key == null || state.key.isBlank()) return;
+        boolean changed = false;
+        if (accountId != null && !accountId.isBlank() && !accountId.equals(state.accountId)) {
+            state.accountId = accountId;
+            changed = true;
+        }
+        if (displayName != null && !displayName.isBlank() && !displayName.equals(state.displayName)) {
+            state.displayName = displayName;
+            changed = true;
+        }
+        if (changed) saveState(state);
+    }
+
+    // ==================== 会员与充值（dev-board#183/#184） ====================
+
+    /**
+     * GET /api/account/membership —— 会员等级、积分与充值/消费累计的全量转发。
+     * 契约 {@code {growthPoints, topupCents, spendCents, tier:{...}, nextTier:{...}|null, tiers:[...]}}。
+     * 全量端点不缓存（供设置页/会员卡片这类低频、要看最新数据的场景）；
+     * 高频轮询走 {@link #balanceSnapshot()}，那边有 TTL 缓存。
+     */
+    public Map<String, Object> fetchMembership() {
+        return getJson("/api/account/membership", requireKey());
+    }
+
+    /**
+     * POST /api/payment/create —— 发起一笔充值支付单。amountCents 单位「分」，参数校验
+     * （正整数、上限）在调用方（{@code AccountController.recharge}）做，这里只管转发。
+     *
+     * <p>微信站响应 {@code present:'qrcode'}（+codeUrl/qrCode），Stripe 站
+     * {@code present:'redirect'}（+redirectUrl）；两种形状原样透传，不在桌面端分叉。
+     */
+    public Map<String, Object> createRecharge(long amountCents, String idempotencyKey) {
+        String key = requireKey();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("amount", amountCents);
+        body.put("kind", "recharge");
+        body.put("idempotencyKey", idempotencyKey);
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e); // 入参都是基本类型/String，序列化不会失败
+        }
+        AccountTransport.Reply reply = transport.send("POST", baseUrl() + "/api/payment/create", key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /** GET /api/payment/query?outTradeNo=xxx —— 订单支付状态透传，字段以官网为准。 */
+    public Map<String, Object> queryRecharge(String outTradeNo) {
+        String encoded = java.net.URLEncoder.encode(outTradeNo, StandardCharsets.UTF_8);
+        Map<String, Object> body = getJson("/api/payment/query?outTradeNo=" + encoded, requireKey());
+        // 查到「已支付」就作废余额缓存：充值弹窗确认到账后立刻 emit wallet-refresh，
+        // 顶栏 chip / 会员卡随手重拉，不能让它们再吃 60 秒 TTL 里的旧余额。
+        if (body.get("order") instanceof Map<?, ?> order && "paid".equals(order.get("status"))) {
+            clearBalanceCache();
+        }
+        return body;
+    }
+
+    /**
+     * POST /api/account/purchase —— 用 Credits 余额购买一个应用内 SKU（dev-board#187）。
+     * 官网成功返回 {@code {ok, feature, priceCents, balanceCents, orderId}}；
+     * 失败 400（invalid_sku / not_purchasable）与 409（already_owned / insufficient_credits）
+     * 在这里映射成带 reason 的 {@link SkuPurchaseException}，绝不冒出 4xx/4010。
+     * skuId 白名单在调用方（AccountController）把关，这里只管转发与失败分类。
+     */
+    public Map<String, Object> purchaseSku(String skuId) {
+        String key = requireKey();
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(Map.of("skuId", skuId == null ? "" : skuId));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e); // 入参是 String，序列化不会失败
+        }
+        AccountTransport.Reply reply = transport.send("POST", baseUrl() + "/api/account/purchase", key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        if (reply.status() == 400 || reply.status() == 409) {
+            String code = str(parse(reply.body()).get("error"));
+            // 文案红线：不得含「登录」「未授权」「请先」——api.js 曾用这三个子串判掉线
+            if ("already_owned".equals(code)) {
+                throw new SkuPurchaseException(AccountException.Kind.CONFLICT, code,
+                        LangText.of("该功能已拥有，无需重复购买；刷新权益即可使用",
+                                "You already own this feature; refresh entitlements to use it"));
+            }
+            if ("insufficient_credits".equals(code)) {
+                throw new SkuPurchaseException(AccountException.Kind.CONFLICT, code,
+                        LangText.of("账户 Credits 余额不足，充值后再试",
+                                "Insufficient Credits balance; top up and try again"));
+            }
+            if ("invalid_sku".equals(code) || "not_purchasable".equals(code)) {
+                throw new SkuPurchaseException(AccountException.Kind.CONFLICT, "invalid_sku",
+                        LangText.of("无效商品：该功能不支持应用内购买",
+                                "Invalid item: this feature cannot be purchased in-app"));
+            }
+            throw new SkuPurchaseException(AccountException.Kind.CONFLICT, code,
+                    LangText.of("购买未完成（", "Purchase was not completed (")
+                            + (code == null ? LangText.of("未知原因", "unknown reason") : code)
+                            + LangText.of("），请稍后重试", "), please retry shortly"));
+        }
+        return handle(reply);
+    }
+
+    /** profile 缓存保鲜期：顶栏高频轮询用，够短到充值后很快看见新余额。 */
+    private static final long BALANCE_TTL_MS = 60_000L;
+    /** membership 摘要保鲜期：等级不常变，没必要跟余额同频。 */
+    private static final long MEMBERSHIP_SUMMARY_TTL_MS = 10 * 60_000L;
+
+    /** 内存缓存项：值 + 取到的时间 + 归属账户指纹。指纹对不上一律视为未命中，不需要显式失效也安全。 */
+    private record Cached<T>(T value, long fetchedAt, String owner) {
+        boolean fresh(String currentOwner, long ttlMs) {
+            return owner.equals(currentOwner) && System.currentTimeMillis() - fetchedAt < ttlMs;
+        }
+    }
+
+    private volatile Cached<Map<String, Object>> profileCache;
+    private volatile Cached<Map<String, Object>> membershipSummaryCache;
+
+    /**
+     * GET /api/account/balance 的数据源——顶栏高频轮询用的轻端点。
+     *
+     * <p>未连接账户返回 {@code {connected:false}}（业务正常态，不是错误）。
+     * 官网不可达时降级 {@code {connected:true, available:false}}（同 {@code /api/account/usage}
+     * 的降级口径，见地雷 6：权益/余额查不到不等于把人锁在外面）。
+     * {@code membership} 段拿不到时单独降级为 null，不拖垮余额这半（分开取、分开失败）。
+     */
+    public synchronized Map<String, Object> balanceSnapshot() {
+        if (!isConnected()) {
+            return Map.of("connected", false);
+        }
+        // accountFingerprintOrNull() 只在 SHA-256 不可用（不会真的发生）时才返回 null；
+        // 兜个哨兵值而不是让 Cached.fresh() 里的 owner.equals(null) 抛 NPE
+        String owner = accountFingerprintOrNull();
+        if (owner == null) owner = "unknown";
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("connected", true);
+        Map<String, Object> profile;
+        try {
+            profile = cachedProfile(owner);
+        } catch (AccountException e) {
+            result.put("available", false);
+            return result;
+        }
+        result.put("balanceCents", profile.get("balanceCents"));
+        result.put("plan", profile.get("plan"));
+        Map<String, Object> membership = null;
+        try {
+            membership = cachedMembershipSummary(owner);
+        } catch (AccountException e) {
+            log.debug("balance 端点：membership 摘要拿不到，本次降级为 null: {}", e.getMessage());
+        }
+        if (membership != null && membership.get("tier") instanceof Map<?, ?> tier) {
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("level", tier.get("level"));
+            summary.put("key", tier.get("key"));
+            summary.put("nameZh", tier.get("nameZh"));
+            summary.put("nameEn", tier.get("nameEn"));
+            result.put("membership", summary);
+        } else {
+            result.put("membership", null);
+        }
+        return result;
+    }
+
+    private Map<String, Object> cachedProfile(String owner) {
+        Cached<Map<String, Object>> cache = profileCache;
+        if (cache != null && cache.fresh(owner, BALANCE_TTL_MS)) {
+            return cache.value();
+        }
+        Map<String, Object> fresh = fetchProfile();
+        profileCache = new Cached<>(fresh, System.currentTimeMillis(), owner);
+        return fresh;
+    }
+
+    private Map<String, Object> cachedMembershipSummary(String owner) {
+        Cached<Map<String, Object>> cache = membershipSummaryCache;
+        if (cache != null && cache.fresh(owner, MEMBERSHIP_SUMMARY_TTL_MS)) {
+            return cache.value();
+        }
+        Map<String, Object> fresh = fetchMembership();
+        membershipSummaryCache = new Cached<>(fresh, System.currentTimeMillis(), owner);
+        return fresh;
+    }
+
+    /**
+     * 作废余额/等级缓存——机器级缓存装的是账户级内容。三类调用方：
+     * 换账户（{@link AccountSwitchCleanup} 的 afterConnect/afterDisconnect）、
+     * 充值确认到账（{@link #queryRecharge}）、SKU 购买成功（AccountController.purchaseSku）——
+     * 后两者刚花完钱，下一次读余额必须是新值。
+     */
+    public void clearBalanceCache() {
+        profileCache = null;
+        membershipSummaryCache = null;
+    }
+
+    // ==================== 团队（dev-board#496） ====================
+    //
+    // 全部走 Bearer awdk_，官网按 Key 解析 accountId。桌面前端从不直连官网，
+    // 这一层与 membership 一样是**原样转发**：字段以官网 doc/desktop-contract.md 为准，
+    // 不在这里裁剪，也不在这里编造默认值——官网加一个字段，桌面端立刻就能用。
+
+    /** GET /api/account/team —— 我的团队；无团队时官网回 {@code {team:null, invites:[...]}}。 */
+    public Map<String, Object> fetchTeam() {
+        return getJson("/api/account/team", requireKey());
+    }
+
+    /** POST /api/account/team —— 创建团队（已有团队时官网回 409）。 */
+    public Map<String, Object> createTeam(String name) {
+        return sendJson("POST", "/api/account/team", Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** PATCH /api/account/team —— 改团队名 / 「共享项目名」开关。只传要改的字段。 */
+    public Map<String, Object> updateTeam(Map<String, Object> patch) {
+        return sendJson("PATCH", "/api/account/team", patch == null ? Map.of() : patch);
+    }
+
+    /** POST /api/account/team/invites —— 按手机号邀请（被邀请人可以还没注册）。 */
+    public Map<String, Object> createTeamInvite(String phone, String role) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("phone", phone == null ? "" : phone.trim());
+        body.put("role", role == null || role.isBlank() ? "MEMBER" : role.trim());
+        return sendJson("POST", "/api/account/team/invites", body);
+    }
+
+    /** DELETE /api/account/team/invites/{id} —— 撤销尚未接受的邀请。 */
+    public Map<String, Object> revokeTeamInvite(String inviteId) {
+        return sendJson("DELETE", "/api/account/team/invites/" + segment(inviteId), null);
+    }
+
+    /** POST /api/account/team/invites/{id}/accept —— 被邀请手机号本人接受邀请。 */
+    public Map<String, Object> acceptTeamInvite(String inviteId) {
+        return sendJson("POST", "/api/account/team/invites/" + segment(inviteId) + "/accept", Map.of());
+    }
+
+    /** PATCH /api/account/team/members/{accountId} —— 改成员角色。 */
+    public Map<String, Object> updateTeamMember(String accountId, String role) {
+        return sendJson("PATCH", "/api/account/team/members/" + segment(accountId),
+                Map.of("role", role == null ? "" : role.trim()));
+    }
+
+    /** DELETE /api/account/team/members/{accountId} —— 移除成员，或本人退出（OWNER 不可退出）。 */
+    public Map<String, Object> removeTeamMember(String accountId) {
+        return sendJson("DELETE", "/api/account/team/members/" + segment(accountId), null);
+    }
+
+    /** GET /api/account/team/summary?range=7|30|90 —— 团队看板取数（本团队视角）。 */
+    public Map<String, Object> fetchTeamSummary(int range) {
+        return fetchTeamSummary(range, "team");
+    }
+
+    /**
+     * GET /api/account/team/summary?range=&scope=team|firm —— 看板取数。
+     * scope=firm 只对已并入律所的团队有意义；**能不能看全所由官网按角色裁决**，
+     * 这一层不判——把角色判定抄到桌面端等于给了「改本机一个值就看全所」的机会。
+     */
+    public Map<String, Object> fetchTeamSummary(int range, String scope) {
+        String s = (scope == null || scope.isBlank()) ? "team" : scope.trim();
+        return getJson("/api/account/team/summary?range=" + range + "&scope=" + s, requireKey());
+    }
+
+    // ---- 层级与加入流程（设计 §10.3） ----
+
+    /** POST /api/account/team/join —— 用 8 位团队邀请码加入（已有团队时官网回 409）。 */
+    public Map<String, Object> joinTeam(String code) {
+        return sendJson("POST", "/api/account/team/join",
+                Map.of("code", code == null ? "" : code.trim()));
+    }
+
+    /** POST /api/account/team/join-code/regenerate —— 重置团队邀请码，旧码立刻失效。 */
+    public Map<String, Object> regenerateTeamJoinCode() {
+        return sendJson("POST", "/api/account/team/join-code/regenerate", Map.of());
+    }
+
+    /** POST /api/account/team/firm —— 创建律所，本团队成为总部团队。 */
+    public Map<String, Object> createFirm(String name) {
+        return sendJson("POST", "/api/account/team/firm",
+                Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** POST /api/account/team/firm/join —— 本团队按律所邀请码并入律所。 */
+    public Map<String, Object> joinFirm(String code) {
+        return sendJson("POST", "/api/account/team/firm/join",
+                Map.of("code", code == null ? "" : code.trim()));
+    }
+
+    /** PATCH /api/account/team/firm —— 改律所名（总部 OWNER/ADMIN）。 */
+    public Map<String, Object> updateFirm(String name) {
+        return sendJson("PATCH", "/api/account/team/firm",
+                Map.of("name", name == null ? "" : name.trim()));
+    }
+
+    /** POST /api/account/team/firm/join-code/regenerate —— 重置律所邀请码。 */
+    public Map<String, Object> regenerateFirmJoinCode() {
+        return sendJson("POST", "/api/account/team/firm/join-code/regenerate", Map.of());
+    }
+
+    /** DELETE /api/account/team/firm/teams/{teamId} —— 移出团队，或该团队自己退出律所。 */
+    public Map<String, Object> removeFirmTeam(String teamId) {
+        return sendJson("DELETE", "/api/account/team/firm/teams/" + segment(teamId), null);
+    }
+
+    /** PUT /api/account/team/projects/{projectKey}/alias —— 管理者给项目短码起别名。 */
+    public Map<String, Object> setTeamProjectAlias(String projectKey, String label) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("label", label == null ? "" : label);
+        return sendJson("PUT", "/api/account/team/projects/" + segment(projectKey) + "/alias", body);
+    }
+
+    /**
+     * POST /api/account/team/usage —— 上报一天的使用日聚合。
+     *
+     * <p>入参是**已经序列化好的 JSON 串**，不是 Map：payload 由
+     * {@code TeamUsageRollupService} 组装，那里才是「什么字段可以出本机」的唯一裁决点。
+     * 让它把成品交过来，这一层就没有再往里塞字段的机会。
+     */
+    public Map<String, Object> uploadTeamUsage(String payloadJson) {
+        String key = requireKey();
+        AccountTransport.Reply reply = transport.send(
+                "POST", baseUrl() + "/api/account/team/usage", key, payloadJson);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /**
+     * 带 Key 的 POST/PATCH/PUT/DELETE 统一出口（GET 走 {@link #getJson}）。
+     * body 为 null 表示无请求体——DELETE 带体在部分反代上会被丢掉，不值得冒这个险。
+     */
+    private Map<String, Object> sendJson(String method, String path, Map<String, Object> body) {
+        String key = requireKey();
+        String json = null;
+        if (body != null) {
+            try {
+                json = objectMapper.writeValueAsString(body);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new IllegalStateException(e); // 入参都是 String/Boolean，序列化不会失败
+            }
+        }
+        AccountTransport.Reply reply = transport.send(method, baseUrl() + path, key, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        return handle(reply);
+    }
+
+    /**
+     * 路径段编码。accountId / inviteId / projectKey 都来自前端传参，直接拼进 URL
+     * 会让一个带 {@code ../} 或 {@code ?} 的值改写请求的目标端点。
+     */
+    private static String segment(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("缺少必要的标识参数", "A required identifier is missing"));
+        }
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
     // ==================== 内部 ====================
 
     /**
@@ -386,6 +940,7 @@ public class AccountService {
     }
 
     private Map<String, Object> exchangeAndConnect(Map<String, Object> credentials) {
+        credentials.put("deviceName", deviceName());
         Map<String, Object> payload = postLogin("/api/auth/exchange-key", credentials);
         String key = str(payload.get("key"));
         if (key == null || key.isBlank()) {
@@ -425,10 +980,70 @@ public class AccountService {
      * 状态码分类。5xx 归入 NETWORK（服务器故障不等于凭据失效，不能据此清除本地连接），
      * 401/403 才是明确的鉴权失败——与 PR-A LicenseService 的判定同源。
      */
+    /** 官网鉴权层的机器码：这些仍按凭据失效处理。 */
+    private static final java.util.Set<String> AUTH_ERROR_CODES = java.util.Set.of("unauthorized", "forbidden", "invalid_key", "key_revoked");
+
+    /** 从 4xx 响应体里取 {"error":"xxx"} 的机器码；不是这个形状就返回 null。 */
+    private static final ObjectMapper CODE_MAPPER = new ObjectMapper();
+
+    static String businessErrorCode(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            Map<String, Object> m = CODE_MAPPER.readValue(body, new TypeReference<Map<String, Object>>() {});
+            Object err = m.get("error");
+            if (err instanceof String str && !str.isBlank() && str.length() <= 64 && str.matches("[a-z0-9_]+")) {
+                return str;
+            }
+        } catch (Exception ignore) {
+            // 非 JSON 或形状不对：交回状态码分支
+        }
+        return null;
+    }
+
+    /**
+     * 业务机器码的人话（团队端点契约见官网 doc/desktop-contract.md「团队」节）。
+     * 文案红线同 {@link #unauthorizedMessage()}：不得含「登录」「未授权」「请先」。
+     */
+    public static String rejectedMessage(String code) {
+        return switch (code) {
+            case "phone_required" -> LangText.of("当前连接的账户没有绑定手机号，不能创建或加入团队。到官网账户页绑定即可；如果这个手机号已经注册过另一个账户，请断开当前账户，改用手机号验证码重新连接", "The connected account has no phone number bound, so it cannot create or join a team. Bind one on the website account page; if that phone number already belongs to another account, disconnect and reconnect with a phone verification code instead");
+            case "already_in_team" -> LangText.of("这个账户已经在一个团队里了", "This account already belongs to a team");
+            case "already_in_firm" -> LangText.of("这个团队已经在一家律所里了", "This team already belongs to a firm");
+            case "bad_code" -> LangText.of("邀请码不存在或已失效", "That invite code does not exist or has expired");
+            case "invite_accepted" -> LangText.of("这条邀请已经被接受过了", "That invite has already been accepted");
+            case "no_team" -> LangText.of("这个账户还没有团队", "This account has no team yet");
+            case "no_firm" -> LangText.of("这个团队还没有加入律所", "This team has not joined a firm");
+            case "owner_cannot_leave" -> LangText.of("团队负责人不能退出团队", "The team owner cannot leave the team");
+            case "head_cannot_leave" -> LangText.of("总部团队不能退出律所", "The head team cannot leave the firm");
+            case "bad_phone" -> LangText.of("手机号格式不对", "That phone number is not valid");
+            case "bad_role" -> LangText.of("角色不合法", "That role is not allowed");
+            case "bad_name" -> LangText.of("名称不能为空", "The name cannot be empty");
+            case "rate_limited" -> LangText.of("操作太频繁，稍后再试", "Too many requests, try again shortly");
+            // 个人档案与头像（spec 2026-09-10 §5，官网 /api/account/profile 与 /api/account/avatar）
+            case "invalid_display_name" -> LangText.of("昵称不合规，换一个（1-24 个字）", "That display name is not allowed; try another one (1-24 characters)");
+            case "too_large" -> LangText.of("图片太大，换一张 2MB 以内的", "That image is too large; pick one under 2MB");
+            case "invalid_image" -> LangText.of("这不是一张能识别的图片", "That file is not a readable image");
+            case "unsupported_format" -> LangText.of("图片格式不支持，用 JPG / PNG / WebP", "That image format is not supported; use JPG, PNG or WebP");
+            case "payload_too_large" -> LangText.of("上报数据过大", "The upload is too large");
+            default -> LangText.of("官网拒绝了这次操作（", "The website rejected this request (") + code + LangText.of("）", ")");
+        };
+    }
+
     private Map<String, Object> handle(AccountTransport.Reply reply) {
         int status = reply.status();
-        if (status == 401 || status == 403) {
+        if (status == 401) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
+        }
+        if (status == 403 || status == 404 || status == 409 || status == 400 || status == 413 || status == 429) {
+            String code = businessErrorCode(reply.body());
+            if (code != null && !AUTH_ERROR_CODES.contains(code)) {
+                // 团队等业务端点：凭据没问题，是规则不许（dev-board#496 裁决 4 的 phone_required 等）。
+                // 折叠成「Key 无效」会让用户去官网重生成一把好 Key，还把真正的原因吞掉。
+                throw new AccountException(AccountException.Kind.REJECTED, rejectedMessage(code), code);
+            }
+            if (status == 403) {
+                throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
+            }
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
@@ -562,5 +1177,20 @@ public class AccountService {
 
     private static String str(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    /** 登录换 Key 时上报的设备名，官网账户页「已连接的设备」按它显示，形如「Zeweis-MacBook-Pro (Mac)」。 */
+    static String deviceName() {
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        String osLabel = os.contains("mac") ? "Mac" : os.contains("win") ? "Windows" : os.contains("linux") ? "Linux" : "Desktop";
+        String host = "";
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception ignored) {
+        }
+        if (host == null) host = "";
+        host = host.replaceAll("\\.local$", "").trim();
+        String name = host.isEmpty() ? osLabel : host + " (" + osLabel + ")";
+        return name.length() > 64 ? name.substring(0, 64) : name;
     }
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
 import com.checkba.model.entity.ProjectFile;
@@ -6,6 +9,8 @@ import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.AiDocxExportService;
 import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.service.ai.PdfEditService;
+import com.checkba.service.pack.NativePackService;
+import com.checkba.service.pack.OptionalComponents;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +48,8 @@ public class PdfTools implements AgentToolComponent {
     private final AiDocxExportService aiDocxExportService;
     private final com.checkba.service.ai.PptxServiceClient pptxServiceClient;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    // mineru-service / pptx-service 从 0.38.0 起是按需下载的可选组件（设计 §3.2）
+    private final NativePackService packService;
 
     private static final Long AGENT_USER_ID = 10001L;
     private static final int INSPECT_MAX_CHARS_PER_PAGE = 3000;
@@ -172,8 +179,12 @@ public class PdfTools implements AgentToolComponent {
             Path localPath = resolveExisting(file);
             PdfEditService.RedactResult result = pdfEditService.redact(localPath, texts, pageIndex);
             finishModification(file, localPath);
-            return String.format("脱敏完成：共 %d 处，涉及页面 %s（这些页已转为图片页，文字层已彻底移除，其余页不受影响）。预览将自动刷新。",
-                    result.matchCount, result.rasterizedPages);
+            // 部分命中不算失败：已经真实生效的脱敏必须走 finishModification（否则磁盘已改、
+            // DB 与预览还停在旧版本），缺失目标如实报告，别把已经生效的操作说成失败。
+            String missingNote = result.missing.isEmpty() ? ""
+                    : String.format("；以下文本未找到，未被脱敏（请核对原文是否逐字一致）: %s", result.missing);
+            return String.format("脱敏完成：共 %d 处，涉及页面 %s（这些页已转为图片页，文字层已彻底移除，其余页不受影响）。预览将自动刷新。%s",
+                    result.matchCount, result.rasterizedPages, missingNote);
         } catch (Exception e) {
             return errorOf("脱敏失败", e);
         }
@@ -229,18 +240,40 @@ public class PdfTools implements AgentToolComponent {
             Path localPath = resolveExisting(file);
             String docxName = file.getName().replaceAll("(?i)\\.pdf$", "") + ".docx";
 
-            String markdown = pdfEditService.extractMarkdown(localPath);
+            PdfEditService.ExtractedText extracted = pdfEditService.extractMarkdown(localPath);
+            String markdown = extracted.markdown();
 
-            if (markdown == null) {
+            if (extracted.looksScanned()) {
                 // 扫描件：本地 MinerU OCR（pptx-service 路由本地优先/云端兜底）
                 String ocrMarkdown;
                 try {
                     ocrMarkdown = pptxServiceClient.ocrPdfToMarkdown(localPath.toString());
                 } catch (Exception e) {
                     log.warn("MinerU OCR failed for scanned PDF", e);
-                    return "Error: 该 PDF 是扫描件（无文本层），已尝试本地 MinerU OCR 但失败：" + e.getMessage() +
-                            "\n请确认桌面端 MinerU 组件已下载并启动（设置-组件管理），或稍后重试。";
+                    if (markdown != null && !markdown.isBlank()) {
+                        // 手里还有已经提取到的文本层（页眉页码那种稀薄内容，也可能是一份
+                        // 本来就很短的文本件）。OCR 失败就回退用它，别把一份能转的文档
+                        // 变成一句「请去装 MinerU」——判据偏向 OCR 的前提就是有这条兜底。
+                        log.warn("OCR 不可用，回退到已提取的稀薄文本层: {}", file.getName());
+                    } else {
+                        OptionalComponents.Entry me = OptionalComponents.byService("mineru-service");
+                        if (!packService.isReady(me.packId())) {
+                            long sizeMb = packService.knownSizes(me.packId()).downloadBytes() / (1024 * 1024);
+                            editorBridgeService.sendComponentRequiredAction(
+                                    me.packId(), me.service(), me.modelId(), sizeMb, me.featureKeys(), "pdf_to_word");
+                            // 同 PptxTools：文案里不出现「稍后重试」，模型会原样转述
+                            return "该 PDF 是扫描件（无文本层），本机的「扫描件 OCR 引擎」组件还没安装，"
+                                    + "已请用户确认下载（界面上已经弹出提示，含 3GB 模型）。"
+                                    + "用户确认后会自动装好并重新执行这一步，不要让用户等一会儿再试一次。";
+                        }
+                        return "Error: 该 PDF 是扫描件（无文本层），已尝试本地 MinerU OCR 但失败：" + e.getMessage() +
+                                "\n请确认桌面端 MinerU 组件已下载并启动（设置-组件管理），或稍后重试。";
+                    }
+                    ocrMarkdown = null;
                 }
+                if (ocrMarkdown == null) {
+                    // 走下面的文本型分支，用已提取的文本层继续
+                } else {
                 ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
                         file.getProjectId(), parentId, AGENT_USER_ID, docxName, ocrMarkdown);
                 editorBridgeService.sendRefreshFilesAction();
@@ -249,6 +282,7 @@ public class PdfTools implements AgentToolComponent {
                         "说明：这是 OCR 内容级转换（识别文字并保留段落结构，不保留原版式；识别结果建议人工核对）。\n" +
                         "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
                         file.getName(), docx.getName(), docx.getId());
+                }
             }
 
             // 文本型：版式级优先（pdf2docx），失败回退结构级
@@ -263,7 +297,7 @@ public class PdfTools implements AgentToolComponent {
                             file.getProjectId(), parentId, docxName, "docx",
                             Files.size(tempOut), null,
                             "project_" + file.getProjectId() + "_ai_" + System.currentTimeMillis(),
-                            AGENT_USER_ID);
+                            AGENT_USER_ID, ProjectFileService.ConflictPolicy.RENAME);
                     Path target = storageResolver.resolve(docx.getFilePath());
                     Files.createDirectories(target.getParent());
                     Files.move(tempOut, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -281,6 +315,9 @@ public class PdfTools implements AgentToolComponent {
                 }
             } catch (Exception e) {
                 log.warn("Layout-level pdf2docx conversion failed, falling back to structural extraction", e);
+                // 组件没装才提示下载；提示只是提示——下面的结构级降级照常做完，
+                // 不能因为发提示把一份本来能转出来的 docx 弄丢（设计 §4.2）。
+                promptPptxComponentIfMissing("pdf_to_word");
             }
 
             ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
@@ -297,6 +334,23 @@ public class PdfTools implements AgentToolComponent {
     }
 
     // ==================== 辅助 ====================
+
+    /**
+     * 版式级转换（pdf2docx，跑在 pptx-service 里）打不通且 pptx-runtime 没装时，
+     * 发一次 component_required 引导下载。只发提示、不改变返回值：
+     * 结构级降级转换仍然照常完成。
+     */
+    private void promptPptxComponentIfMissing(String trigger) {
+        try {
+            OptionalComponents.Entry pe = OptionalComponents.byService("pptx-service");
+            if (packService.isReady(pe.packId())) return;
+            long sizeMb = packService.knownSizes(pe.packId()).downloadBytes() / (1024 * 1024);
+            editorBridgeService.sendComponentRequiredAction(
+                    pe.packId(), pe.service(), pe.modelId(), sizeMb, pe.featureKeys(), trigger);
+        } catch (Exception ignored) {
+            // 提示失败不该影响降级转换
+        }
+    }
 
     private ProjectFile getPdfFile(Long fileId) {
         ProjectFile file = projectFileService.getFile(fileId);

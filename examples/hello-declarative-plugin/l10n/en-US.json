@@ -1,0 +1,8 @@
+{
+  "name": "Hello Declarative Plugin",
+  "desc": "Zero-code plugin sample: one template, one style profile, two settings, one l10n table (spec v2.9).",
+  "tpl.poa": "Power of Attorney (general)",
+  "profile.compact": "Compact layout",
+  "set.firm": "Firm name",
+  "set.autoNumber": "Auto numbering"
+}

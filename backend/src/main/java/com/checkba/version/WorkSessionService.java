@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
@@ -13,9 +16,12 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
@@ -62,6 +68,19 @@ public class WorkSessionService {
     private final Map<Long, PendingActor> actors = new ConcurrentHashMap<>();
 
     /**
+     * 防抖自动存档的连续失败计数（成功一轮就清零，不出现在这个表里）。修复前撞异常
+     * 只 log.warn 一句就吞掉——不上抛、不重试、不告警，此后每一轮防抖都同样静默失败
+     * （比如崩溃残留的 .git/index.lock，issue 6/7 已经让 commitAll 能自愈陈旧锁，
+     * 但磁盘满/权限错误这类其它持续性故障依然会一直失败），版本记录从那一刻起
+     * 永久停摆、界面上没有任何线索。跨过 {@link #AUTOSAVE_FAILURE_ALERT_THRESHOLD}
+     * 后把日志从 WARN 升级到 ERROR，给运维一个能被日志监控发现的信号。
+     */
+    private final Map<Long, Integer> autosaveFailureStreak = new ConcurrentHashMap<>();
+
+    /** 连续失败到这个次数才升级成 ERROR——避免单次网络抖动之类的偶发失败就报警噪声。 */
+    private static final int AUTOSAVE_FAILURE_ALERT_THRESHOLD = 3;
+
+    /**
      * 按项目维度的可重入互斥，包住所有会改仓库状态的路径（切分支/提交/合并/删分支）。
      * 必须可重入：endSession/revertTo 内部都会再调 commitNow，同一线程二次进入
      * 同一把锁不能死锁。ReentrantLock 而非 synchronized(projectId) ——
@@ -80,8 +99,76 @@ public class WorkSessionService {
     /** 结束工作把工作段并回主线成功后发布，供 CloudSyncService（同包）监听触发自动上传。 */
     public record MainlineMergedEvent(long projectId) {}
 
+    /**
+     * 还没开版本记录的项目收到了第一个变更信号（dev-board#438）。由
+     * {@code VersionLifecycleService} 监听：判 opt-out、判大文件夹护栏、异步开启。
+     *
+     * <p>为什么用事件而不是直接注入那个服务：它要调 {@link #enableVersionRecording}，
+     * 反过来注入进来就是一圈构造器循环依赖。事件把方向捋直了——本服务只管发信号，
+     * 谁去开、开不开由那边裁决。
+     */
+    public record AutoEnableRequest(long projectId, Long userId, String userName) {}
+
     ReentrantLock repoLock(long projectId) {
         return repoLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
+    }
+
+    /**
+     * 提交署名解析（spec 2026-09-14 §2.1）。**字段注入不是构造器参数**：本类的构造器
+     * 被十来个单测手工 new，加参数是纯 churn（同 ProjectRepoService.maxTrackedFileSizeBytes
+     * 的先例）。required=false 让那些手工构造的实例照常能跑，email() 自带回落。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private VersionAuthorResolver authorResolver;
+
+    /** 单测用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    void setAuthorResolverForTest(VersionAuthorResolver resolver) {
+        this.authorResolver = resolver;
+    }
+
+    /**
+     * 逐处合并的待决记录（spec 2026-09-14 §4.4）。字段注入、{@code required=false}，
+     * 理由同 {@link #authorResolver}：本类的构造器被十来个单测手工 new。
+     * 缺席时 {@link Resolution#MERGED} 一律判为「没有记录」——宁可让律师重裁一遍，
+     * 也不能在没有记录的情况下认下「这份已经合好了」（那会把半成品提交进主线）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
+
+    /** 单测/跨包装配用：走字段注入，手工 new 出来的实例得有地方补上。 */
+    public void setPendingMergeStoreForTest(com.checkba.version.merge.PendingMergeStore store) {
+        this.pendingMergeStore = store;
+    }
+
+    /**
+     * 这次裁决里被标成「已经逐处合好」的那些文件（按路径排序）。收尾时写进
+     * {@code X-AWD-Merges} 尾注，提交成功后由调用方 {@link #clearPendingMerges} 清掉。
+     */
+    private List<com.checkba.version.merge.MergeRecord> pendingMerges(long projectId) {
+        return pendingMergeStore == null ? List.of() : pendingMergeStore.all(projectId);
+    }
+
+    private void clearPendingMerges(long projectId) {
+        if (pendingMergeStore != null) pendingMergeStore.clear(projectId);
+    }
+
+    /**
+     * {@link Resolution#MERGED} 的护栏：这个值的意思是「这份文件的最终字节已经在工作区里了」，
+     * 而那份字节是 {@code POST /version/merge/resolve-file} 写下去的、同时留下了待决记录。
+     * 没有记录就说明工作区里躺着的还是带冲突标记的半成品（或者合并前的旧内容），
+     * 认下去 = 把半成品提交进主线，历史永不重写，不可逆。
+     */
+    private void requireMergedHasPendingRecord(long projectId, Map<String, Resolution> choices,
+                                               List<String> conflicts) {
+        for (String path : conflicts) {
+            if (choices.get(path) != Resolution.MERGED) continue;
+            if (pendingMergeStore == null
+                    || pendingMergeStore.get(projectId, path).isEmpty()) {
+                throw VersionException.userFacing(LangText.of(
+                        "这份文件还没有合并好的结果，请重新处理一遍",
+                        "This file has no merged result yet — please work through it again"));
+            }
+        }
     }
 
     public WorkSessionService(ProjectRepoService repoService,
@@ -118,6 +205,162 @@ public class WorkSessionService {
             repoService.init(projectId, authorName, authorEmail);
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 发一个自动开启请求，绝不让它影响调用方（改动信号是主流程的旁路，见类注释）。 */
+    private void requestAutoEnable(long projectId, Long userId, String userName) {
+        try {
+            eventPublisher.publishEvent(new AutoEnableRequest(projectId, userId, userName));
+        } catch (Exception e) {
+            log.debug("发起自动开启版本记录失败（已忽略）: project={}", projectId, e);
+        }
+    }
+
+    /**
+     * 关闭版本记录并删除全部历史（dev-board#438）。默认开启之后必须有一条能拒绝它的路。
+     *
+     * <p>做四件事，一件不多：取消防抖/空闲定时器与内存待办、删掉本项目的
+     * work_session 行（进行中的工作段与稿一并作废）、删掉整个版本库目录、
+     * 删掉我们自己写进工作区的 {@code .awd/} 清单。
+     *
+     * <p><b>绝不动工作区里的用户文件</b>：不 checkout、不还原、不删除。律师此刻在
+     * 磁盘上看到的那一份就是他要留下的那一份——哪怕他正站在某一稿上。
+     *
+     * <p>裁决窗口（MERGING）期间拒绝：那时工作区是三选一的现场，删掉仓库等于把
+     * 「等你做选择」的两边一起抹掉，而律师只按了「关闭版本记录」。
+     */
+    public void disableVersionRecording(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (repoService.isInitialized(projectId) && repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing(LangText.of(
+                        "有文件正等你做选择，请先处理完再关闭",
+                        "Some files are waiting on your choice — please finish that first"));
+            }
+            cancelPending(projectId);
+            pendingIngestBase.remove(projectId);
+            autosaveFailureStreak.remove(projectId);
+            List<WorkSession> rows = sessionRepository.findByProjectIdOrderByStartedAtDesc(projectId);
+            if (!rows.isEmpty()) sessionRepository.deleteAll(rows);
+            repoService.deleteRepository(projectId);
+            deleteManifestDirQuietly(projectId);
+            log.info("已关闭版本记录并删除历史: project={}", projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 删掉工作区里的 .awd/（我们自己写的清单，不是律师的文件）。失败只记日志。 */
+    private void deleteManifestDirQuietly(long projectId) {
+        try {
+            Path awd = repoService.workTree(projectId).resolve(".awd");
+            if (!Files.isDirectory(awd)) return;
+            try (java.util.stream.Stream<Path> walk = Files.walk(awd)) {
+                walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (Exception e) {
+                        log.warn("删除文件树清单失败: {}", p, e);
+                    }
+                });
+            }
+        } catch (Exception e) {
+            log.warn("删除文件树清单目录失败: project={}", projectId, e);
+        }
+    }
+
+    /**
+     * 团队服务器侧 {@code prepare-remote} 的仓库侧动作（{@code VersionController.prepareRemote}
+     * 唯一的实现），返回 true 表示留下的是「等待首推的空仓」。
+     *
+     * <p><b>整段必须与自动开启（{@link VersionLifecycleService#autoEnableNow}）互斥</b>，
+     * 所以它整个跑在本项目的 {@code repoLock} 内、连「有没有初始化过」这个判断也在锁里：
+     * {@code shareToCloud} 先在服务器上 POST 建项目（于是被自动开启，异步建仓 + 落初始版本），
+     * 紧接着就打 prepare-remote，两条路径并发建同一个 JGit 仓库、互相踩 refs 目录。
+     * 判断与动作分开在锁外做同样不行——中间落地一次自动开启，就会走成「未初始化 →
+     * initEmptyForReceive 幂等 no-op」，留下一个带着孤立「初始版本」的仓库，首推照样被拒。
+     *
+     * <p>未初始化这一支同样要清掉工作区里的 {@code .awd/}：留着的话
+     * {@link #dockDirtyMainlineForReceive} 会在 pre-receive 里把它当脏区提交成一个根提交，
+     * 首推被拒（错误码从 REJECTED_NONFASTFORWARD 变成 REJECTED_OTHER_REASON，同一个病）。
+     * 「等待首推的空仓」这个状态必须与「从没开过版本记录」逐字相同，两条分支都要守。
+     */
+    public boolean prepareRemoteRepository(long projectId, Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (!repoService.isInitialized(projectId)) {
+                deleteManifestDirQuietly(projectId);
+                repoService.initEmptyForReceive(projectId);
+                return true;
+            }
+            // 自动开启（dev-board#438）会给刚在服务器上建出来的项目落一笔空的「初始版本」，
+            // 而共享方紧接着要带着完整历史首推；两段历史没有共同祖先，push 被整体拒绝。
+            // 这种从没真正用过的仓库换成等待首推的空仓（详见方法注释）。
+            if (resetToReceiveReadyIfNeverUsed(projectId)) return true;
+            // 老项目补开云端协作：清单还是 v1 就落一笔升级提交——capture 出来的清单
+            // 已经是 v2，任一次提交都会把 HEAD 清单升到 v2。
+            TreeManifest head = readHeadManifestSafely(projectId);
+            if (head != null && head.version() < 2) {
+                commitNow(projectId, userId, userName,
+                        LangText.of("升级版本记录格式", "Upgraded version history format"));
+            }
+            return false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** readAtRef(HEAD) 的容错包装：异常回 null，不让一次读取失败挡住 prepare-remote 的整体成功。 */
+    private TreeManifest readHeadManifestSafely(long projectId) {
+        try {
+            return manifestService.readAtRef(projectId, "HEAD");
+        } catch (Exception e) {
+            log.warn("读取云端准备前的清单失败: project={}", projectId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 团队服务器侧 {@code prepare-remote} 专用：这个仓库「建出来就没真正用过」的话，
+     * 把它整个换成等待首推的空仓，返回 true；否则什么都不做，返回 false。
+     *
+     * <p>为什么需要它：自动开启（dev-board#438）会给刚在服务器上建出来的项目落一笔
+     * 空的「初始版本」，而共享方紧接着要带着完整历史首推——两段历史没有共同祖先，
+     * push 被整体拒绝，律师看到的是「没能放进团队案件库」。
+     *
+     * <p>「没真正用过」的判据：HEAD 上除了我们自己写的 {@code .awd/} 清单什么都没有，
+     * 且一条工作段/稿都没有。这种仓库里没有任何东西可丢，换掉之后的状态与
+     * 「从没开过版本记录」逐字相同（连工作区里的 {@code .awd/} 也一并清掉，
+     * 否则 {@link #dockDirtyMainlineForReceive} 会把它当脏区提交出一个根提交，
+     * 首推照样被拒）。判断失败一律按「用过」处理——宁可不动，也不能误删真有历史的仓库。
+     */
+    public boolean resetToReceiveReadyIfNeverUsed(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (!repositoryNeverUsed(projectId)) return false;
+            repoService.deleteRepository(projectId);
+            deleteManifestDirQuietly(projectId);
+            repoService.initEmptyForReceive(projectId);
+            log.info("服务器上这个项目的版本库从没用过，已换成等待首推的空仓: project={}", projectId);
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private boolean repositoryNeverUsed(long projectId) {
+        try {
+            if (!repoService.isInitialized(projectId)) return false;
+            if (!sessionRepository.findByProjectIdOrderByStartedAtDesc(projectId).isEmpty()) return false;
+            return repoService.listPaths(projectId, "HEAD").stream()
+                    .allMatch(path -> path.startsWith(".awd/"));
+        } catch (Exception e) {
+            log.warn("判断仓库是否从未使用过失败，按「用过」处理: project={}", projectId, e);
+            return false;
         }
     }
 
@@ -201,7 +444,14 @@ public class WorkSessionService {
      * 自动结束）。防抖自动存档仍然照排，稿上的改动也需要落盘存档。
      */
     public void onChangeSignal(long projectId, Long userId, String userName) {
-        if (!repoService.isInitialized(projectId)) return;
+        if (!repoService.isInitialized(projectId)) {
+            // 存量项目/还没开过版本记录：请求一次自动开启（dev-board#438）。
+            // 判定与开启都在监听方的异步线程上做（含遍历工作区估体积的护栏），
+            // 这里只发一个信号——改动信号这条路上绝不允许变慢，更不允许抛。
+            // 本次信号不追补：开启本身落的那笔「初始版本」就是此刻的状态。
+            requestAutoEnable(projectId, userId, userName);
+            return;
+        }
         // 采纳裁决期间连信号都不接：既不开段，也不排自动存档（见 awaitingAdoptResolution）。
         if (awaitingAdoptResolution(projectId)) return;
 
@@ -238,8 +488,15 @@ public class WorkSessionService {
                     if (a == null) return;
                     try {
                         commitNow(projectId, a.userId(), a.userName(), null);
+                        autosaveFailureStreak.remove(projectId);
                     } catch (Exception e) {
-                        log.warn("自动存档失败: project={}", projectId, e);
+                        int streak = autosaveFailureStreak.merge(projectId, 1, Integer::sum);
+                        if (streak >= AUTOSAVE_FAILURE_ALERT_THRESHOLD) {
+                            log.error("自动存档连续失败 {} 次，版本记录可能已经停止更新: project={}",
+                                    streak, projectId, e);
+                        } else {
+                            log.warn("自动存档失败: project={}", projectId, e);
+                        }
                     }
                 },
                 Instant.now().plusMillis(debounceMillis));
@@ -312,6 +569,33 @@ public class WorkSessionService {
      * 工作会一直挂着「工作中」。已存在 ACTIVE 段时直接复用，不重新武装——
      * 那种情况下定时器该不该动由调用方自己的重排逻辑负责（见 onChangeSignal）。
      */
+    /**
+     * 合并抛异常时把律师放回他自己的工作段。endSession 是**先 checkout 主线、再合并**的，
+     * 合并「返回值失败」（冲突）那两条路径本来就会切回工作分支，唯独「直接抛异常」那条
+     * 没人管——mergeCore 会把任何 IO/JGit 故障（磁盘写满、.git/index.lock 被并发的 GC 或
+     * push 接收端占着、Windows 上 LOWA 还攥着文件句柄）包成 VersionException 抛出，异常
+     * 一路逃逸出 endSession，留下「段还挂着 ACTIVE、HEAD 却已经停在主线」的残局。
+     *
+     * 那个残局是要命的：之后每一次自动存档都会经 ensureSession 复用这个段（它只看有没有
+     * ACTIVE 段，不看 HEAD 在哪儿），再 commitAll 到当前 HEAD——也就是把律师后续的每一笔
+     * 修改直接提交进主线，绕开整个工作段隔离模型。历史永不重写，落进去就永久污染。
+     *
+     * 尽力而为：还原本身再失败也不能盖掉原始异常，挂到 suppressed 上一起交出去。
+     * abortMerge 在非 MERGING 态是真 no-op、可以盲调（v2 路径抛异常时可能停在 MERGING）。
+     */
+    private void restoreSessionCheckout(long projectId, WorkSession s, RuntimeException cause) {
+        try {
+            repoService.abortMerge(projectId);
+            if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
+                repoService.checkoutBranch(projectId, s.getBranchName());
+            }
+        } catch (Exception restoreFailure) {
+            cause.addSuppressed(restoreFailure);
+            log.error("合并失败后没能把工作段切回来: project={}, branch={}",
+                    projectId, s.getBranchName(), restoreFailure);
+        }
+    }
+
     private WorkSession ensureSession(long projectId, Long userId, String userName) {
         Optional<WorkSession> existing = activeSession(projectId);
         if (existing.isPresent()) return existing.get();
@@ -368,6 +652,71 @@ public class WorkSessionService {
                 return;
             }
             repoService.gc(projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 回收存量的、已经并进主线的工作分支（dev-board#443）。
+     *
+     * {@link #deleteMergedBranchQuietly} 让今后每次结束工作都顺手删掉自己那条分支，
+     * 但此前攒下的残留没人清——本机 project-228.git 实测残留 22 条 refs/heads/work/*，
+     * 全部已合并进 master，活跃项目每月还在增长十余条。每日维护顺手扫一遍。
+     *
+     * 三条判据同时成立才删，缺一不可：
+     * 1. 分支名是 {@code work/} 前缀——稿分支（{@code draft/}）是律师留着以后再决定的
+     *    平行方案，没有任何自动回收的语义；master 更不能碰。
+     * 2. 分支 tip 已经是 master 的祖先——保证删的是引用不是历史（地雷 #1）：这条分支
+     *    上的每一笔提交都仍从主线可达。
+     * 3. 库里按分支名反查到的工作段状态已经是 MERGED。只判前缀会误伤崩溃后没收尾的
+     *    ACTIVE 工作段——那条分支是律师这段改动的唯一容器；只判祖先会误伤「刚合并完、
+     *    状态还没落库」的那一瞬间。<b>查不到对应行一律不删</b>（宁可留着）。
+     *    只认 MERGED 不认 DISCARDED：丢弃工作/放弃一稿/空工作段收尾三条路径都是当场
+     *    删分支再落状态，DISCARDED 根本不会残留分支；而 DISCARDED 分支的提交本就
+     *    没打算并进主线，凭状态位去删它没有任何收益，风险却是真的。
+     *
+     * 与 {@link #gcLocked} 同样整段在按项目的可重入锁内，也同样在裁决窗口里整个跳过——
+     * 那期间仓库是律师还没做完选择的现场，每日维护晚跑一天毫无代价。
+     * 单条删除失败只记 WARN、继续下一条，不阻断后面的 GC。
+     *
+     * @return 这次真正删掉的分支条数
+     */
+    public int reclaimMergedWorkBranches(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (awaitingAdoptResolution(projectId)) {
+                log.info("裁决进行中，跳过这次工作分支回收: project={}", projectId);
+                return 0;
+            }
+
+            // 同名分支在库里只要有一行不是 MERGED，就当它还活着，不删（宁可留着）。
+            Set<String> merged = new HashSet<>();
+            Set<String> alive = new HashSet<>();
+            for (WorkSession s : sessionRepository.findByProjectIdOrderByStartedAtDesc(projectId)) {
+                (s.getStatus() == WorkSession.Status.MERGED ? merged : alive)
+                        .add(s.getBranchName());
+            }
+
+            String main = repoService.mainBranch();
+            int removed = 0;
+            for (String branch : repoService.listBranches(projectId)) {
+                if (!branch.startsWith("work/")) continue;                       // 判据 1
+                if (!merged.contains(branch) || alive.contains(branch)) continue; // 判据 3
+                if (!repoService.isAncestor(projectId, branch, main)) continue;   // 判据 2
+                try {
+                    repoService.deleteBranch(projectId, branch, true);
+                    removed++;
+                } catch (Exception e) {
+                    log.warn("回收已合并的工作分支失败（不阻断）: project={}, branch={}",
+                            projectId, branch, e);
+                }
+            }
+            if (removed > 0) {
+                log.info("回收已合并的工作分支: project={}, 共 {} 条", projectId, removed);
+            }
+            return removed;
         } finally {
             lock.unlock();
         }
@@ -476,7 +825,7 @@ public class WorkSessionService {
             }
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = message != null ? message : describePendingChanges(projectId);
-            return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+            return repoService.commitAll(projectId, msg, "auto", null, userName, email(projectId, userId, userName));
         } finally {
             lock.unlock();
         }
@@ -584,8 +933,14 @@ public class WorkSessionService {
             if (!mainAdvanced) {
                 // v1 原路径一字不改：单人场景主线没动过，merge() 的 NO_FF 语义与
                 // 既有护栏（ProjectRepoBranchTest）全部照旧。
-                MergeOutcome outcome = repoService.merge(
-                        projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                MergeOutcome outcome;
+                try {
+                    outcome = repoService.merge(
+                            projectId, s.getBranchName(), finalTitle, userName, email(projectId, userId, userName));
+                } catch (RuntimeException e) {
+                    restoreSessionCheckout(projectId, s, e);
+                    throw e;
+                }
                 if (!outcome.success()) {
                     // 合并没成，把用户放回他的工作段，改动一个都不能丢
                     repoService.checkoutBranch(projectId, s.getBranchName());
@@ -595,6 +950,7 @@ public class WorkSessionService {
                 s.setEndedAt(LocalDateTime.now());
                 s.setTitle(finalTitle);
                 sessionRepository.save(s);
+                deleteMergedBranchQuietly(projectId, s.getBranchName());
                 log.info("结束一段工作: project={}, branch={}, title={}",
                         projectId, s.getBranchName(), finalTitle);
                 retryPendingIngest(projectId);
@@ -606,8 +962,14 @@ public class WorkSessionService {
             // 干净也不自动提交——清单要按数据库重算后与内容进同一个双亲提交（地雷 #21）。
             s.setTitle(finalTitle);
             sessionRepository.save(s);
-            MergeOutcome outcome = repoService.mergeNoCommit(
-                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            MergeOutcome outcome;
+            try {
+                outcome = repoService.mergeNoCommit(
+                        projectId, s.getBranchName(), finalTitle, userName, email(projectId, userId, userName));
+            } catch (RuntimeException e) {
+                restoreSessionCheckout(projectId, s, e);
+                throw e;
+            }
             if (outcome.mergeSha() != null) {
                 // ALREADY_UP_TO_DATE：理论不可达（空段已在上面筛掉），防御性收尾
                 return closeMergedSession(projectId, s, outcome.mergeSha());
@@ -621,7 +983,8 @@ public class WorkSessionService {
                         userVisibleConflicts(repoService.conflictingPaths(projectId)),
                         mainTipNow, branchTip));
             }
-            return completeSessionMerge(projectId, s, mainTipNow, userName);
+            // 干净的真合并：没有任何裁决，不带 X-AWD-Resolutions 尾注。
+            return completeSessionMerge(projectId, s, mainTipNow, userId, userName, Map.of());
         } finally {
             lock.unlock();
         }
@@ -635,14 +998,18 @@ public class WorkSessionService {
      * 单一双亲提交。
      */
     private SessionEndResult completeSessionMerge(long projectId, WorkSession s,
-                                                   String mainTipBefore, String userName) {
+                                                   String mainTipBefore, Long userId, String userName,
+                                                   Map<String, String> resolutions) {
         TreeManifest theirs = manifestService.readAtRef(projectId, mainTipBefore);
         String baseSha = repoService.mergeBase(projectId, mainTipBefore, s.getBranchName());
         TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
         if (theirs != null) manifestService.unionApply(projectId, theirs, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-        String sha = repoService.commitMergeResolution(projectId, s.getTitle(),
-                userName, email(userName));
+        String sha = repoService.commitMergeResolution(projectId, s.getTitle(), resolutions,
+                pendingMerges(projectId), ProjectRepoService.MERGE_CONTEXT_SESSION_END,
+                userName, email(projectId, userId, userName));
+        // 提交成功之后才清：提交失败时记录还在，律师重试一次照样能收尾。
+        clearPendingMerges(projectId);
         return closeMergedSession(projectId, s, sha);
     }
 
@@ -650,11 +1017,30 @@ public class WorkSessionService {
         s.setStatus(WorkSession.Status.MERGED);
         s.setEndedAt(LocalDateTime.now());
         sessionRepository.save(s);
-        repoService.deleteBranch(projectId, s.getBranchName(), true);
+        deleteMergedBranchQuietly(projectId, s.getBranchName());
         retryPendingIngest(projectId);
         log.info("结束一段工作（真合并）: project={}, title={}", projectId, s.getTitle());
         publishMainlineMerged(projectId);
         return new SessionEndResult(sha, null, null);
+    }
+
+    /**
+     * 删掉已经并进主线的工作分支。删的是引用不是历史：NO_FF 合并让这段工作的每一笔
+     * 提交都从 master 可达，分支名对律师本来也不可见，留着只会年复一年地攒
+     * refs/heads/work/*（本机 project-228.git 实测残留 22 条，全部已合并进 master）。
+     *
+     * 删失败只记日志、不阻断：合并已经成功、工作段状态也已落库，为一条没清掉的引用
+     * 抛异常，律师看到的是「结束失败」而后台其实已经结束了——同一条纪律见
+     * {@link #publishMainlineMerged}，以及 {@link SessionEndResult} 的类注释
+     * 「改了状态还要报信的路径一律用返回值，不用异常」。残留的引用不影响任何行为，
+     * 下次还能再删。
+     */
+    private void deleteMergedBranchQuietly(long projectId, String branchName) {
+        try {
+            repoService.deleteBranch(projectId, branchName, true);
+        } catch (Exception e) {
+            log.warn("删除已合并的工作分支失败（不阻断）: project={}, branch={}", projectId, branchName, e);
+        }
     }
 
     /** 发布失败不阻断结束工作——版本记录是保险，不是主流程（同一条纪律见类注释）。 */
@@ -703,11 +1089,13 @@ public class WorkSessionService {
                     throw VersionException.userFacing(LangText.of("还有文件没选留哪一份", "There are still files where you haven't picked which version to keep"));
                 }
             }
+            requireMergedHasPendingRecord(projectId, choices, conflicts);
             for (String path : conflicts) {
                 applyResolution(projectId, path, choices.get(path),
                         mainTip, sessionTip, s.getTitle());
             }
-            return completeSessionMerge(projectId, s, mainTip, userName);
+            return completeSessionMerge(projectId, s, mainTip, userId, userName,
+                    resolutionNames(choices, conflicts));
         } finally {
             lock.unlock();
         }
@@ -721,6 +1109,7 @@ public class WorkSessionService {
             WorkSession s = activeSession(projectId)
                     .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有进行中的工作", "No work session in progress")));
             repoService.abortMerge(projectId);
+            clearPendingMerges(projectId);   // 理由同 abortAdopt：记录与合并窗口同寿
             if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
                 repoService.checkoutBranch(projectId, s.getBranchName());
             }
@@ -822,7 +1211,7 @@ public class WorkSessionService {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
 
             String sha = repoService.commitAll(projectId,
-                    LangText.of("退回到早先的版本", "Reverted to an earlier version"), "session", null, userName, email(userName));
+                    LangText.of("退回到早先的版本", "Reverted to an earlier version"), "session", null, userName, email(projectId, userId, userName));
             log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
 
             List<Long> affectedFileIds = sha == null
@@ -976,8 +1365,13 @@ public class WorkSessionService {
                                List<String> conflictingPaths, List<Long> affectedFileIds,
                                String notice) {}
 
-    /** 逐文件三选一：用主线的 / 用这一稿的 / 两份都留。 */
-    public enum Resolution { MAIN, DRAFT, BOTH }
+    /**
+     * 逐文件三选一：用主线的 / 用这一稿的 / 两份都留，外加三方合并那一档
+     * {@code MERGED}——「这份文件已经逐处合好、字节就在工作区里」（spec 2026-09-14 §4.4）。
+     * {@code MERGED} 不写任何字节，只要求有一条待决记录佐证
+     * （见 {@link #requireMergedHasPendingRecord}）。
+     */
+    public enum Resolution { MAIN, DRAFT, BOTH, MERGED }
 
     /**
      * 中止采纳后要告诉律师的那句话（spec 第七节原句）。
@@ -1025,7 +1419,7 @@ public class WorkSessionService {
             // 干净路径也不让 JGit 自己提交（mergeNoCommit）：两条路都要以数据库为源
             // 写清单、清单必须进同一个采纳提交，见 completeAdopt。
             MergeOutcome outcome = repoService.mergeNoCommit(projectId,
-                    draft.getBranchName(), adoptMessage(draft), userName, email(userName));
+                    draft.getBranchName(), adoptMessage(draft), userName, email(projectId, userId, userName));
 
             if (outcome.success()) {
                 if (outcome.mergeSha() != null) {
@@ -1042,7 +1436,7 @@ public class WorkSessionService {
                 // MERGED_NOT_COMMITTED：合并有实质内容，交给 completeAdopt 补齐
                 // 清单并落成采纳提交。
                 return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                        null, back.affectedFileIds(), userName);
+                        null, back.affectedFileIds(), userId, userName, Map.of());
             }
 
             List<String> conflicts = userVisibleConflicts(outcome.conflictingPaths());
@@ -1058,7 +1452,7 @@ public class WorkSessionService {
                 // 只有内部的文件树清单冲突。律师不认识这个文件、也无从选择，
                 // 而清单并集本来就要按并集规则重写它——自己裁决掉，别去打扰他。
                 return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                        null, back.affectedFileIds(), userName);
+                        null, back.affectedFileIds(), userId, userName, Map.of());
             }
             log.info("采纳一稿遇到冲突，停在待裁决: project={}, branch={}, files={}",
                     projectId, draft.getBranchName(), conflicts.size());
@@ -1118,13 +1512,14 @@ public class WorkSessionService {
                 }
             }
 
+            requireMergedHasPendingRecord(projectId, choices, conflicts);
             for (String path : conflicts) {
                 applyResolution(projectId, path, choices.get(path),
                         mainTipBefore, draftTip, draft.getTitle());
             }
 
             return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                    null, List.of(), userName);
+                    null, List.of(), userId, userName, resolutionNames(choices, conflicts));
         } finally {
             lock.unlock();
         }
@@ -1140,6 +1535,9 @@ public class WorkSessionService {
         lock.lock();
         try {
             repoService.abortMerge(projectId);
+            // 待决记录与合并窗口同寿：留到下一次窗口，那条记录指的是别的一版的字节，
+            // 会让下一次裁决把「这份已经合好了」认在一份没合过的文件上。
+            clearPendingMerges(projectId);
             log.info("中止一次采纳: project={}", projectId);
         } finally {
             lock.unlock();
@@ -1201,7 +1599,8 @@ public class WorkSessionService {
      */
     private AdoptOutcome completeAdopt(long projectId, WorkSession draft, String draftTip,
                                        String mainTipBefore, String committedSha,
-                                       List<Long> extraAffected, String userName) {
+                                       List<Long> extraAffected, Long userId, String userName,
+                                       Map<String, String> resolutions) {
         TreeManifest draftManifest = manifestService.readAtRef(projectId, draftTip);
         String baseSha = repoService.mergeBase(projectId, mainTipBefore, draftTip);
         TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
@@ -1210,8 +1609,11 @@ public class WorkSessionService {
         String sha = committedSha;
         if (sha == null) {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-            sha = repoService.commitMergeResolution(projectId, adoptMessage(draft),
-                    userName, email(userName));
+            sha = repoService.commitMergeResolution(projectId, adoptMessage(draft), resolutions,
+                    pendingMerges(projectId), ProjectRepoService.MERGE_CONTEXT_ADOPT,
+                    userName, email(projectId, userId, userName));
+            // 提交成功之后才清：提交失败时记录还在，律师重试一次照样能收尾。
+            clearPendingMerges(projectId);
         }
 
         draft.setStatus(WorkSession.Status.MERGED);
@@ -1248,8 +1650,11 @@ public class WorkSessionService {
      * 这个文件，而它的正确内容由清单并集算出来、由 {@link #completeAdopt} 重写。
      * 排序只为了让前端拿到的顺序稳定。
      * 包内可见（Task 9）：CloudSyncService 的云端合并冲突裁决复用同一份过滤规则。
+     * 三方合并（spec 2026-09-14）之后 {@code com.checkba.version.merge} 也要照这份规则
+     * 挑待分析的路径，所以放宽到 public——**过滤规则只能有这一份**，复制一份出去
+     * 就等于给「内部清单文件不许出现在律师面前」这条铁律留了一个会走散的副本。
      */
-    static List<String> userVisibleConflicts(List<String> paths) {
+    public static List<String> userVisibleConflicts(List<String> paths) {
         return paths.stream().filter(p -> !p.startsWith(".awd/")).sorted().toList();
     }
 
@@ -1264,10 +1669,15 @@ public class WorkSessionService {
                                  String mainTip, String draftTip, String draftName) {
         String rel = safeRepoPath(path);
         Path work = repoService.workTree(projectId);
+        // 逐处合并的结果早就由 resolve-file 写在工作区那个路径上了（还留了待决记录，
+        // 见 requireMergedHasPendingRecord）。这一档一个字节都不许再写：写 = 用合并前
+        // 某一侧的原文把律师刚裁完的成果覆盖掉，而他不会收到任何提示。
+        if (choice == Resolution.MERGED) return;
         byte[] mainBytes = repoService.readBlobAtCommit(projectId, mainTip, rel);
         byte[] draftBytes = repoService.readBlobAtCommit(projectId, draftTip, rel);
 
         switch (choice) {
+            case MERGED -> { }   // 上面已经 return，这一支只为让 switch 保持穷尽
             case MAIN -> writeOrDelete(work.resolve(rel), mainBytes);
             case DRAFT -> writeOrDelete(work.resolve(rel), draftBytes);
             case BOTH -> {
@@ -1403,7 +1813,7 @@ public class WorkSessionService {
         } else if (!repoService.pendingChanges(projectId).isEmpty()) {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = describePendingChanges(projectId);
-            repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+            repoService.commitAll(projectId, msg, "auto", null, userName, email(projectId, userId, userName));
         }
     }
 
@@ -1618,7 +2028,28 @@ public class WorkSessionService {
         return t.format(TITLE_FMT) + half + "的工作";
     }
 
-    private String email(String userName) {
-        return (userName == null ? "user" : userName) + "@aiworkdeck.local";
+    /**
+     * 提交作者邮箱的唯一取法（spec 2026-09-14 §2.1）——规则与判读侧集中在
+     * {@link VersionAuthorResolver}，这里只是转发。{@code authorResolver} 为空只发生在
+     * 手工 {@code new} 出本服务的单测里，回落本机域保证域名格式一致。
+     */
+    private String email(long projectId, Long userId, String userName) {
+        return authorResolver != null
+                ? authorResolver.email(projectId, userId, userName)
+                : VersionAuthorResolver.localEmail(userName);
+    }
+
+    /**
+     * 裁决表 → 提交尾注要的 {@code path → 枚举名}。
+     * {@link ProjectRepoService} 只认识 Git 概念，不该反向依赖本类的枚举。
+     */
+    static Map<String, String> resolutionNames(Map<String, Resolution> choices, List<String> paths) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (choices == null || paths == null) return out;
+        for (String path : paths) {
+            Resolution r = choices.get(path);
+            if (r != null) out.put(path, r.name());
+        }
+        return out;
     }
 }

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 应用菜单桥：渲染层这一侧的唯一收口。
 //
 // 三件事：
@@ -123,6 +125,13 @@ async function runAppCommand(verb, arg) {
       uni.reLaunch({ url: '/pages/project-list/project-list' })
       return
     case 'openSettings':
+      // 工作台里「系统设置」是中栏的一个标签（2026-08-19），不再整页跳转——
+      // 跳页会把标签、编辑器、AI 会话整个换掉。工作台之外仍走薄壳页。
+      // 命令表不动（仍是 app:openSettings），只是这里按语境分流。
+      if (state.page === 'workbench') {
+        uni.$emit(COMMAND_EVENT, { verb: 'openSettings' })
+        return
+      }
       uni.navigateTo({ url: '/pages/admin/admin' })
       return
     case 'openAccount':

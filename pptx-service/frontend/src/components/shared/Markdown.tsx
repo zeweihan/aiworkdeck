@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
 import rehypeKatex from 'rehype-katex';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import 'katex/dist/katex.min.css';
 
 interface MarkdownProps {
@@ -12,12 +13,37 @@ interface MarkdownProps {
   className?: string;
 }
 
+/**
+ * Preprocess LaTeX delimiters that remark-math doesn't support natively.
+ * Converts \[...\] to $$...$$ and \(...\) to $...$
+ */
+function preprocessMath(content: string): string {
+  // Convert \[...\] block math to $$...$$
+  content = content.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `$$${math}$$`);
+  // Convert \(...\) inline math to $...$
+  content = content.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`);
+  return content;
+}
+
 export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) => {
+  const processedContent = useMemo(() => preprocessMath(children), [children]);
+
+  // Create sanitize schema that allows KaTeX classes and spans
+  const sanitizeSchema = useMemo(() => ({
+    ...defaultSchema,
+    attributes: {
+      ...defaultSchema.attributes,
+      span: [...(defaultSchema.attributes?.span || []), 'className', 'style'],
+      div: [...(defaultSchema.attributes?.div || []), 'className'],
+    },
+    tagNames: [...(defaultSchema.tagNames || []), 'math', 'semantics', 'mrow', 'msup', 'mi', 'mn', 'mo'],
+  }), []);
+
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-        rehypePlugins={[rehypeRaw, rehypeKatex]}
+        rehypePlugins={[rehypeKatex, rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
         components={{
         // 自定义渲染规则
         p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
@@ -75,7 +101,7 @@ export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) 
         ),
       }}
       >
-        {children}
+        {processedContent}
       </ReactMarkdown>
     </div>
   );

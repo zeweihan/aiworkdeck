@@ -20,6 +20,10 @@ external:
     base-url: https://api.qichacha.com
     key: ${QICHACHA_KEY:}
     secret: ${QICHACHA_SECRET:}
+    # 企查查还有第二把凭证：智能体数据平台的 MCP Bearer token，环境变量 QICHACHA_MCP_TOKEN。
+    # 它由 application.yml 的 mcp.servers[qichacha-company] 直接读取（本文件不重复定义
+    # mcp 列表——抄一份必然漂移），这里只作部署环境变量清单留痕。缺它时文档解析的
+    # 企业模糊搜索会静默降级为「只认工商全称」，不影响其余功能。
   tushare:
     base-url: http://api.tushare.pro
     token: ${TUSHARE_TOKEN:}

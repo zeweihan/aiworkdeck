@@ -43,7 +43,33 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
 - `controller/OptimizerController` — `/api/optimizer/run|status`（管理员，run 是异步）
 - 维护者机器上的常驻配方：`deploy/optimizer/`（run 脚本 + launchd plist + 搬机器步骤）
 
-**看板**：`frontend/src/pages/admin/admin.vue` 的 `activeNav === 'feedback'` 分区
+**看板**：`frontend/src/components/admin/AdminPane.vue` 的 `activeNav === 'feedback'` 分区
+（`pages/admin/admin.vue` 只是薄壳）——这是桌面端本地库的入口。
+**「优化者」卡 2026-08-27（dev-board#202）起 `v-if="optimizer.enabled"`**：桌面单机版
+人人 isAdmin，按管理员身份门控挡不住普通用户；真正的判据是「这台机器的后端配没配
+optimizer.*」——普通用户永远 enabled=false，只看得到下面的「反馈记录」卡。
+维护者机器配上 optimizer.* 后卡片自然出现。
+
+**反馈控制台（云端收件箱的浏览器入口，2026-08-25 dev-board#151）**
+- `backend/src/main/resources/static/feedback-console/index.html` — 自包含单页，
+  jar 的 classpath:/static/ 直接托管在 `/feedback-console/`；云端 nginx 有一条
+  location 反代给后端（`deploy/cloud/nginx-addin.conf.example`）。
+- 由来：h5 客户端（含 admin 看板）2026-08-19 从 addin.aiworkdeck.com 退役后，
+  云端收件箱在浏览器里没有任何入口，优化者邮件里的裸附件 API 地址点开是 403 死胡同。
+- 优化者通知里的直达链接来自 `OptimizerFeedbackSource.consoleRef(fb)`（default null）：
+  Remote 来源返回 `<baseUrl>/feedback-console/?fb=<id>`，Local 来源保持 null
+  （桌面端自带 admin 看板），正文里就不出现这一节。
+- 直达地址可用 `optimizer.remote.console-url`（env `OPTIMIZER_REMOTE_CONSOLE_URL`，
+  `{id}` 占位）改指官网 admin 的「用户反馈」分区（dev-board#152）：
+  `https://www.aiworkdeck.com/zh/admin?tab=feedback&fb={id}`——维护者只登录官网后台一处。
+- 官网侧（aiworkdeck_website 仓）：`app/[lang]/admin/FeedbackInbox.tsx` 分区 +
+  `/api/admin/feedback/*` 三条服务端代理（admin cookie 鉴权，取件密钥只在服务端）；
+  官网实例 env 需配 `AWD_FEEDBACK_INBOX_TOKEN`（= 收件箱 FEEDBACK_OPTIMIZER_TOKEN）。
+  为此 `GET /api/feedback` 列表/详情也认 X-Optimizer-Token（只读，密钥本就能取
+  全部待办与附件，未升格信任级；没配密钥恒拒绝）。
+- 页面安全约定：用户可控文本一律 textContent 渲染；附件用 fetch + `X-Session-Id`
+  头取 blob 再喂给 `<img>`/`<audio>`，凭据不进 URL（URL 里的 token 会落 nginx access log）。
+  登录支持 4005 二次验证（totp/sms/mail）。会话键与 h5 同名 `checkba_session_id`。
 
 ## 不变式（改之前先读）
 
@@ -82,6 +108,14 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
   而框选覆盖窗一定会抢焦点 → 条件等待集体假超时（现象是「截图没出来」，实际早就出来了）。
 - 多构造器的 Spring bean（`VoiceTranscriptionService`/`FeedbackTriageService`）
   必须给公开构造器打 `@Autowired`，否则整个上下文起不来。
+- **浮钮的「让路」契约 `data-awd-keep-clear`（dev-board#574）**：入口浮钮是 fixed 常驻层，
+  任何固定坐标都会在某种布局下压住别人的主操作（#213 压过沉底发送键，挪到右缘 60% 后又压住
+  英文空会话折行后的居中输入卡）。现在由主操作区容器自己打 `data-awd-keep-clear`，
+  `FeedbackWidget.updateKeepClear()` 每 800ms / resize / 拖动松手后只沿竖直方向避开
+  （几何在 `utils/keepClear.js`，`tests/feedback-widget/keep-clear.test.mjs` 覆盖）。
+  让路只是显示偏移，不写回 `launcherPos`、不持久化。**新面板的主操作按钮若贴右缘，
+  要自己加这个属性**，浮钮不会自动识别可点元素。app-e2e J12 在点发送前断言
+  `elementFromPoint` 命中按钮自身，被盖住直接判红（原来记 skip，门禁形同虚设）。
 
 ## 验证
 

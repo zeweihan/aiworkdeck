@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version.memory;
 
 import com.checkba.model.entity.MemoryEntry;
-import org.eclipse.jgit.api.Git;
+import com.checkba.version.BareHub;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,6 +13,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
  * 导出/回灌 round-trip（spec Phase A 验证标准第 1 条）：A 写记忆 → push →
@@ -28,8 +32,7 @@ class MemorySyncRoundTripTest {
     @BeforeEach
     void setUp() throws Exception {
         Path hub = tmp.resolve("hub.git");
-        Git.init().setBare(true).setDirectory(hub.toFile()).call().close();
-        hubUrl = hub.toUri().toString();
+        hubUrl = BareHub.init(hub);
         a = new MemorySyncTestMachine(tmp.resolve("machine-a"), hubUrl, MemoryRealm.project(1));
         b = new MemorySyncTestMachine(tmp.resolve("machine-b"), hubUrl, MemoryRealm.project(2));
     }
@@ -103,5 +106,46 @@ class MemorySyncRoundTripTest {
         assertNotNull(got);
         assertEquals(8L, got.getUserId()); // 归属换成本机 user 领域的 ownerId
         assertNull(got.getProjectId());
+    }
+
+    @Test
+    void deletionTombstonePropagatesAndCannotResurrectOnRepeatedSync() {
+        MemoryEntry original = a.addEntry("project", "删除结论", "这条应被删除");
+        a.syncNow();
+        b.syncNow();
+        String uid = original.getUid();
+
+        b.entries.delete(b.byUid(uid));
+        b.syncNow();
+        a.syncNow();
+
+        assertNull(a.byUid(uid));
+        assertNull(b.byUid(uid));
+        verify(a.documents).tombstoneSourceAndDeleteLegacy(uid);
+        a.syncNow();
+        b.syncNow();
+        assertNull(a.byUid(uid));
+        assertNull(b.byUid(uid));
+    }
+
+    @Test
+    void failedImportedTombstoneIsRetriedFromCanonicalGitTombstone() {
+        MemoryEntry original = a.addEntry("project", "删除重试", "这条应被删除");
+        a.syncNow();
+        b.syncNow();
+        String uid = original.getUid();
+        b.entries.delete(b.byUid(uid));
+        b.syncNow();
+        doThrow(new IllegalStateException("transient database failure"))
+                .doAnswer(invocation -> {
+                    a.entries.delete(a.byUid(uid));
+                    return null;
+                })
+                .when(a.documents).tombstoneSourceAndDeleteLegacy(uid);
+
+        a.syncNow();
+
+        assertNull(a.byUid(uid));
+        verify(a.documents, times(2)).tombstoneSourceAndDeleteLegacy(uid);
     }
 }

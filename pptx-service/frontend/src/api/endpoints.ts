@@ -22,6 +22,7 @@ export const createProject = async (data: CreateProjectRequest): Promise<ApiResp
     outline_text: data.outline_text,
     description_text: data.description_text,
     template_style: data.template_style,
+    image_aspect_ratio: data.image_aspect_ratio,
   });
   return response.data;
 };
@@ -161,6 +162,23 @@ export const generatePageDescription = async (
   const response = await apiClient.post<ApiResponse>(
     `/api/projects/${projectId}/pages/${pageId}/generate/description`,
     { force_regenerate: forceRegenerate , language: lang}
+  );
+  return response.data;
+};
+
+/**
+ * 重新生成 PPT 翻新项目的单页（重新解析原 PDF 并提取内容）
+ */
+export const regenerateRenovationPage = async (
+  projectId: string,
+  pageId: string,
+  keepLayout: boolean = false,
+  language?: OutputLanguage
+): Promise<ApiResponse> => {
+  const lang = language || await getStoredOutputLanguage();
+  const response = await apiClient.post<ApiResponse>(
+    `/api/projects/${projectId}/pages/${pageId}/regenerate-renovation`,
+    { keep_layout: keepLayout, language: lang }
   );
   return response.data;
 };
@@ -586,28 +604,26 @@ export const deleteMaterial = async (materialId: string): Promise<ApiResponse<{ 
 };
 
 /**
- * 批量下载素材（打包为zip）
- * @param materialIds 素材ID列表
+ * Download selected materials bundled as a zip archive.
  */
 export const downloadMaterialsZip = async (
   materialIds: string[]
 ): Promise<ApiResponse<{ download_url: string }>> => {
-  const response = await apiClient.post<Blob>(
+  const { data: blob } = await apiClient.post<Blob>(
     '/api/materials/download',
     { material_ids: materialIds },
-    { responseType: 'blob' }
+    { responseType: 'blob' },
   );
 
-  // 直接触发下载
-  const blob = response.data;
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'materials.zip';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  const href = URL.createObjectURL(blob);
+  const link = Object.assign(document.createElement('a'), {
+    href,
+    download: 'materials.zip',
+  });
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(href);
 
   return { success: true, data: { download_url: '' } };
 };
@@ -881,10 +897,11 @@ export interface TestSettingsOverride {
   text_model?: string;
   image_model?: string;
   image_caption_model?: string;
+  image_caption_model_source?: string;
   mineru_api_base?: string;
   mineru_token?: string;
   baidu_ocr_api_key?: string;
-  ai_provider_format?: 'openai' | 'gemini';
+  ai_provider_format?: 'openai' | 'gemini' | 'lazyllm';
   image_resolution?: string;
   enable_text_reasoning?: boolean;
   text_thinking_budget?: number;
@@ -964,5 +981,55 @@ export const getTestStatus = async (taskId: string): Promise<ApiResponse<{
   message?: string;
 }>> => {
   const response = await apiClient.get<ApiResponse<any>>(`/api/settings/tests/${taskId}/status`);
+  return response.data;
+};
+
+
+// ===== PPT 翻新相关 API =====
+
+/**
+ * 创建 PPT 翻新项目
+ * 上传 PDF/PPTX 文件，后端异步解析内容并填充大纲+描述
+ */
+export const createPptRenovationProject = async (
+  file: File,
+  options?: {
+    keepLayout?: boolean;
+    templateStyle?: string;
+    language?: string;
+  }
+): Promise<ApiResponse<{ project_id: string; task_id: string; page_count: number }>> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (options?.keepLayout) {
+    formData.append('keep_layout', 'true');
+  }
+  if (options?.templateStyle) {
+    formData.append('template_style', options.templateStyle);
+  }
+  if (options?.language) {
+    formData.append('language', options.language);
+  }
+
+  const response = await apiClient.post<ApiResponse<{ project_id: string; task_id: string; page_count: number }>>(
+    '/api/projects/renovation',
+    formData
+  );
+  return response.data;
+};
+
+/**
+ * 从图片提取风格描述（通用，不绑定项目）
+ */
+export const extractStyleFromImage = async (
+  imageFile: File
+): Promise<ApiResponse<{ style_description: string }>> => {
+  const formData = new FormData();
+  formData.append('image', imageFile);
+
+  const response = await apiClient.post<ApiResponse<{ style_description: string }>>(
+    '/api/extract-style',
+    formData
+  );
   return response.data;
 };

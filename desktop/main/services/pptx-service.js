@@ -1,8 +1,10 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 const path = require('path')
 const fs = require('fs')
-const { spawnSync } = require('child_process')
+const { spawn } = require('child_process')
 const { findFreePort } = require('./service-manager')
-const { pysvcPath } = require('./pysvc-runtime')
+const { resolveServiceRoot, libDirFor, appDirFor } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -11,11 +13,11 @@ function pyBin(ctx) {
 }
 
 function appDir(ctx) {
-  return pysvcPath(ctx, 'pptx-service', 'app')
+  return appDirFor(ctx, 'pptx-service')
 }
 
 function libDir(ctx) {
-  return pysvcPath(ctx, 'pptx-service', 'lib')
+  return libDirFor(ctx, 'pptx-service')
 }
 
 function dataDir(ctx) {
@@ -46,12 +48,35 @@ function spawnEnv(ctx) {
   return env
 }
 
+// alembic 迁移异步跑：spawnSync 会冻住 Electron 主进程（macOS 上系统据此判定应用
+// 无响应，首启弹「强制退出」），改成 spawn + Promise 等 exit，语义不变
+// （status!=0 报错、stderr 截断到 2000 字符）
+function runAlembicUpgrade(ctx) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(pyBin(ctx), ['-m', 'alembic', '-c', path.join(appDir(ctx), 'alembic.ini'), 'upgrade', 'head'], {
+      cwd: appDir(ctx),
+      env: spawnEnv(ctx),
+      stdio: ['ignore', 'ignore', 'pipe']
+    })
+    let stderr = ''
+    proc.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-2000) })
+    proc.once('error', reject)
+    proc.once('exit', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`pptx alembic migration failed: ${stderr}`))
+    })
+  })
+}
+
 function createPptxDescriptor() {
   return {
     name: 'pptx-service',
     // Phase 1 有意 eager（轻量 Flask；lazy 机制随 Phase 2 mineru 落地，见设计文档 §2.1）
     eager: true,
     logName: 'pptx-service',
+    // 0.38.0 起 pptx 也是可选组件（设计 §3）：runtime pack 没装就不启动，
+    // AI 侧的 pptx_* 工具会发 component_required 引导下载，而不是报「稍后重试」。
+    enabled: (ctx) => !ctx.packaged || !!resolveServiceRoot(ctx, 'pptx-service'),
     // dev 态不 spawn（commands 返回空）：沿用现状——docker compose 起在 5001，复用检测直接 reuse
     port: async (ctx) => {
       if (process.env.CHECKBA_PPTX_PORT) return Number(process.env.CHECKBA_PPTX_PORT)
@@ -64,15 +89,7 @@ function createPptxDescriptor() {
       fs.mkdirSync(dataDir(ctx), { recursive: true })
       // SQLite schema 迁移（alembic.ini/migrations 随 app 源码打包；env.py 经 create_app
       // 读 PPTX_DATA_DIR，迁移与运行落同一个库）
-      const r = spawnSync(pyBin(ctx), ['-m', 'alembic', '-c', path.join(appDir(ctx), 'alembic.ini'), 'upgrade', 'head'], {
-        cwd: appDir(ctx),
-        env: spawnEnv(ctx),
-        stdio: 'pipe',
-        encoding: 'utf8'
-      })
-      if (r.status !== 0) {
-        throw new Error(`pptx alembic migration failed: ${(r.stderr || '').slice(-2000)}`)
-      }
+      await runAlembicUpgrade(ctx)
     },
     commands: (ctx) => {
       if (!ctx.packaged) return [] // dev 态只做复用检测，不自行 spawn

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.service.AppLanguageService;
@@ -24,23 +27,6 @@ class AgentTextLanguageTest {
         AppLanguageService en = mock(AppLanguageService.class);
         when(en.isEnglish()).thenReturn(true);
         LangText.register(en);
-    }
-
-    @Test
-    void maxDepthNotice_chineseByDefault() {
-        assertEquals(
-                "\n\n> 本轮已达最大执行步数（30 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。",
-                AgentOrchestrator.maxDepthNotice(),
-                "zh 模式步数暂停 notice 必须与存量逐字节一致");
-    }
-
-    @Test
-    void maxDepthNotice_englishInEnglishMode() {
-        switchToEnglish();
-        String notice = AgentOrchestrator.maxDepthNotice();
-        assertTrue(notice.contains("maximum step budget"), "en 模式步数暂停 notice 要是英文: " + notice);
-        assertTrue(notice.contains("30 steps"));
-        assertFalse(notice.contains("步数"), "en 模式不该混入中文");
     }
 
     @Test

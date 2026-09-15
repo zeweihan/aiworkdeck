@@ -87,6 +87,91 @@ mcp:
       token-setting-key: external.pkulaw.token
       timeout-seconds: 60
       enabled: true
+    # 司法案例库（2026-08-27 实测可用，token 与法规三件套同一把）：
+    # 语义检索 search_case（参数 text，可带 case_type/doc_type 筛选）与
+    # 关键词检索 get_case_list（title/正文关键词）。insight.case-server 指向语义档。
+    - name: pkulaw-case-semantic
+      url: https://apim-gateway.pkulaw.com/mcp-case-search-service
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-case-keyword
+      url: https://apim-gateway.pkulaw.com/mcp-case
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    # 企查查智能体数据平台：模糊搜索（get_company_by_query），把文中的简称解析成
+    # 工商全称，再交给 REST 的 ECIInfoVerify/GetInfo（那条只认全称，非全称回 201 无结果）。
+    # 与 external.qichacha.key/secret 是两套凭证，别混用。
+    # 法宝其余五个 server（2026-08-27 维护者从官网控制台抄来完整清单，逐一实测可用；
+    # 与法规/案例五件套同一把 token）。工具面：
+    #   pkulaw-fatiao            get_law_item_content(title, tiao_num 数字)  按数字条号取法条
+    #   pkulaw-doc-link          get_linked_content(message)                为文本加法宝超链接
+    #   pkulaw-citation-validator adjust_provisions(userlaw/answerlaw/prompt) 引用校验与幻觉修正，返回权威原文
+    #   pkulaw-case-number       anhao_recognition(text)                    案号识别+标准化（带法院/判决书标题/法宝链接/GID）
+    #   pkulaw-agg               聚合 server：以 server.tool 命名空间挂全部 10 个工具（URL 带 /mcp 后缀，别掉）
+    - name: pkulaw-fatiao
+      url: https://apim-gateway.pkulaw.com/mcp-fatiao
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-doc-link
+      url: https://apim-gateway.pkulaw.com/add-doc-link
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-citation-validator
+      url: https://apim-gateway.pkulaw.com/pku_citation_validator
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-case-number
+      url: https://apim-gateway.pkulaw.com/case_number_recognition
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-agg
+      url: https://apim-gateway.pkulaw.com/mcp-law-agg/mcp
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: qichacha-company
+      url: https://agent.qcc.com/mcp/company/stream
+      token: ${QICHACHA_MCP_TOKEN:}
+      token-setting-key: external.qichacha.mcpToken
+      timeout-seconds: 30
+      enabled: true
+
+# 文档「解析」管线（dev-board#181/#182；对应 InsightProperties）
+insight:
+  # 判决书检索通道（2026-08-27 起默认接法宝司法案例语义检索）。换通道只改配置：
+  # 在上面的 mcp.servers 里加一条，把 server 名 / 工具名 / 查询参数名填到这三项即可，不改代码。
+  case-server: ${INSIGHT_CASE_SERVER:pkulaw-case-semantic}
+  case-tool: ${INSIGHT_CASE_TOOL:search_case}
+  case-arg: ${INSIGHT_CASE_ARG:text}
+  # 案号识别先导步（法宝 anhao_recognition，参数 text）：把文中案号标准化，并直接给出
+  # 法院 / 判决书标题 / 法宝链接；随后用标题去打上面的全文检索（比裸案号语义搜命中率高）。
+  # 留空 = 跳过这一步；识别失败一律静默走原路，绝不让 CASE 检索比没有它时更差。
+  case-number-server: ${INSIGHT_CASE_NUMBER_SERVER:pkulaw-case-number}
+  case-number-tool: ${INSIGHT_CASE_NUMBER_TOOL:anhao_recognition}
+  # 法条引用校验（法宝 adjust_provisions）：回填权威条文原文，并报「条号在法宝检索不到」
+  # 与「引用内容与条文不符」两类发现。留空 = 整步跳过。
+  citation-server: ${INSIGHT_CITATION_SERVER:pkulaw-citation-validator}
+  citation-tool: ${INSIGHT_CITATION_TOOL:adjust_provisions}
+  chunk-chars: 10000
+  chunk-overlap: 500
+  max-chars: 200000
+  cache-days: 7
+  max-entities: 200
+  max-mentions: 20
+  stale-minutes: 30
 
 # 登录短信验证（阿里云 dysmsapi；仅 server 模式生效，local-mode 免登无登录环节）。
 # AK/SK 一律环境变量注入（与 OSS_ACCESS_KEY_* 同一模式），绝不写进任何入库文件。
@@ -106,6 +191,16 @@ auth:
   # 格式非法会回落默认值而不是无限期放行——配错就静默延期是最难发现的失效。
   # **与官网 lib/phone-policy.ts 的 DEFAULT_BINDING_DEADLINE 同值，改一边就要改另一边。**
   phone-binding-deadline: ${AUTH_PHONE_BINDING_DEADLINE:2026-09-30}
+  # App 审核专用账号的固定验证码。见 config/ReviewAccountGate。
+  # 存在的理由：iOS 两个 App 的登录只有验证码一条路，Apple 审核员既没有中国
+  # 号码收短信、也打不开我们的邮箱，没有这条口子会卡在首屏被判 2.1。
+  # **这是认证旁路**：两项任一为空即全关；只对配置里那一个标识生效；只开在
+  # 免密登录上，绑定流程不走它；码不是 6 位数字直接拒绝启动。
+  # 审核账号里别放真实数据——那 6 位码是写在 ASC 审核备注里给外部人看的。
+  # 审核结束后把 identity 清空即可关闭。
+  review-account:
+    identity: ${AUTH_REVIEW_ACCOUNT_IDENTITY:}
+    code: ${AUTH_REVIEW_ACCOUNT_CODE:}
 
 sms:
   enabled: ${SMS_AUTH_ENABLED:false}
@@ -266,10 +361,20 @@ ai:
       chat-selection-max-chars: 1500
     # 支持 OCR 的文件扩展名
     ocr-extensions: [jpg, jpeg, png, gif, bmp, webp, pdf]
+    # 图片视觉直送（模型支持视觉输入时，图片作为 image 内容块直接给模型看，不再转 OCR 文本）。
+    # 模型是否支持视觉由 AllowedModels 的 vision 位决定，不支持时自动降级回 ocr-extensions 那条路。
+    vision:
+      # 可直送的图片扩展名。**刻意不含 pdf**：langchain4j-open-ai 0.36 只认 Text/Image 两种内容块，
+      # PdfFileContent 会抛 Unknown content type；PDF 继续走 PDFBox 逐页渲染 + OCR。
+      extensions: [jpg, jpeg, png, gif, bmp, webp]
+      # 单张图上限，与 files.max-file-size-bytes 的 OCR 闸对齐；超限的降级走 OCR 并明示
+      max-image-bytes: 10485760
+      # 单轮最多直送几张（base64 会把体积再放大约 1.33 倍）；多出来的降级走 OCR 并明示
+      max-images-per-turn: 4
+      # 压缩阈值判断时每张图折算的 token 数（估算只累加文本，不给值的话图片等于 0 token）
+      token-estimate-per-image: 1200
   # 子 Agent（dispatch_subtask 委派子任务）配置（对应 SubAgentProperties，以下均为默认值）
   subagent:
-    # 单个子任务的循环轮数上限
-    max-rounds: 6
     # 同时运行的子任务数上限（专用线程池大小）
     max-parallel: 3
     # 单个子任务超时（秒）。必须大于 ai.model.open-router.timeout（600s）：
@@ -305,6 +410,24 @@ ai:
       MCowBQYDK2VwAyEAjAbnyl44SiQF/CTyn59/uHAXCeRTEI0h0Bn5HEv7T4Y=
       -----END PUBLIC KEY-----
 
+  # 原生资源包（native pack）配置（对应 PackProperties，规范见 docs/NATIVE_PACK_DISTRIBUTION.md）
+  # 验签沿用上面 ai.plugins.registry-public-key 那把公钥（pack 与 JAR 插件同属
+  # 「广场分发的可执行内容」这一信任层级），公钥留空同样是拒绝一切安装。
+  packs:
+    # 资源包落盘目录（相对服务端工作目录，惯例同 ai.plugins.dir；打包态在 ~/.aiworkdeck/packs/）
+    dir: packs
+    # 下载源，按序降级。镜像必须排在 GitHub 之前：境内直连 GitHub 实测 12 KB/s。
+    base-urls:
+      - https://www.aiworkdeck.com/plugin-packs
+      - https://workdeck.ai/plugin-packs
+    # 总开关：false 时安装、自动补下载、封禁同步全部旁路（离线部署形态用）
+    enabled: true
+    # 自动追新：启动后延迟一次 + 每 24h 比对 registry 版本，有新版就自动换上
+    # （应用更新不等于资源包更新，见 docs/NATIVE_PACK_DISTRIBUTION.md §5.1）
+    auto-upgrade: true
+    # 平台封禁表（形制同插件封禁表）；端点不可达时静默跳过
+    revoked-url: https://www.aiworkdeck.com/api/registry/packs/revoked
+
   # Skill 体系配置（对应 SkillProperties，规范见 docs/SKILL_SPEC.md）
   skills:
     # 可写 skill 目录（相对服务端工作目录，做法同 ai.plugins.dir）。广场安装落这里。
@@ -328,6 +451,11 @@ ai:
     disabled-cache-ttl-ms: 5000
     # 在线 Skill 广场注册表地址（官网公共注册表，见 SkillMarketService）
     registry-url: https://www.aiworkdeck.com/api/registry/skills
+  tools:
+    # 演示桩：企查查工具命中固定公司名时返回预置 JSON，不打真实网关。
+    # 留空 = 关闭（默认），不影响任何现有行为。指向一个目录，
+    # 目录下 "<公司名>.json" 命中即返回，见 docs/marketing/launch-video/qcc-fixtures/。
+    enterprise-demo-fixtures: ${AI_TOOLS_ENTERPRISE_DEMO_FIXTURES:}
 
 # 匿名使用统计（设计见 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
 # 本地账本永远记录；出本机由 system_setting 的 telemetry.rollup.enabled（默认开）/
@@ -391,6 +519,10 @@ optimizer:
   remote:
     base-url: ${OPTIMIZER_REMOTE_URL:}
     token: ${OPTIMIZER_REMOTE_TOKEN:}
+    # 通知正文「在浏览器里看这条反馈」的地址模板（{id} 占位）；
+    # 留空 = 云端反馈控制台；官网 admin 并入反馈看板后可指到
+    # https://www.aiworkdeck.com/zh/admin?tab=feedback&fb={id}
+    console-url: ${OPTIMIZER_REMOTE_CONSOLE_URL:}
   repo:
     # 仓库工作副本的绝对路径（维护者机器上的一份 clone）
     path: ${OPTIMIZER_REPO_PATH:}
@@ -415,6 +547,72 @@ optimizer:
     # 发件人由通道决定，此处不设——两条通道发信域名不同，硬写 from 会让 SPF 判失败。
     to: ${OPTIMIZER_MAIL_TO:}
     subject-prefix: "[AI WorkDeck 优化者]"
+
+# 手机端云中转（/api/mobile/*）的 blob 存储（dev-board#236）。
+# 默认本地盘（storage.local.root-path/mobile-relay）；云后端配齐 MOBILE_RELAY_OSS_*
+# 环境变量即切 OSS 私有桶（中转是短生命周期暂存，与下方 storage.oss 的文档存储无关）。
+# 团队案件库（协作）。留空 = 官方案件库地址按 ai.account.base-url 所属站点派生
+# （大陆站 → https://case.aiworkdeck.com；国际站暂不提供，只留本地版本记录）。
+# 填了就原样用——自建与私有部署靠它把「官方案件库」指到自己的服务器上。
+# 必须 https（回环 http 例外供本地联调）：这条通道上跑的是长期设备令牌。
+# 派生规则的唯一出口是 com.checkba.version.OfficialCloudEndpoint。
+cloud:
+  collab:
+    base-url: ${CLOUD_COLLAB_BASE_URL:}
+
+mobile:
+  relay:
+    oss:
+      enabled: ${MOBILE_RELAY_OSS_ENABLED:false}
+      endpoint: ${MOBILE_RELAY_OSS_ENDPOINT:}
+      bucket: ${MOBILE_RELAY_OSS_BUCKET:}
+      access-key-id: ${MOBILE_RELAY_OSS_AK_ID:}
+      access-key-secret: ${MOBILE_RELAY_OSS_AK_SECRET:}
+      key-prefix: mobile-relay/
+  # 跨设备文件传输的计费口（dev-board#251）：base-url 默认空 = 本服务器未开通，
+  # 全组 /api/mobile/transfer/* 端点给可读 code:1「跨设备传输未在此服务器开通」。
+  transfer:
+    billing:
+      base-url: ${TRANSFER_BILLING_BASE_URL:}
+      secret: ${TRANSFER_BILLING_SECRET:}
+  # 手机端统一账户余额/充值的内部记账口（dev-board#425）：官网
+  # POST {base-url}/api/internal/account，头 X-Internal-Secret。两个键任一为空 = 本服务器
+  # 未开通，/api/mobile/billing/* 一律给可读 code:1「此服务器未开通统一账户充值」且不发请求。
+  # secret 与 TRANSFER_BILLING_SECRET 是两把不同的密钥，不要复用（官网侧
+  # AWD_MOBILE_BILLING_SECRET，只在服务器 env 里配，别入库）。
+  billing:
+    base-url: ${MOBILE_BILLING_BASE_URL:}
+    secret: ${MOBILE_BILLING_SECRET:}
+    # 充值下单/查单的总开关（dev-board#425 二轮复审 N1）。默认关。
+    # 理由：POST /api/mobile/billing/recharge 是全站唯一 create=true 的调用方——任何持有
+    # 有效 X-Session-Id 的人直接打它，就会在官网建出一行含明文手机号的真账户并发注册赠额；
+    # 这个账户必须删得掉，否则直接撞 App Store 5.1.1(v) 与个人信息保护法的删除权。
+    # Java 侧的注销传导已经落地（dev-board#434：AccountDeletionService 先调官网内部口
+    # delete-account 再删本地，官网不可达就不删），**打开这个开关前还要确认官网那侧的
+    # delete-account action 已经上线**，否则传导必然失败、用户反而注销不掉。
+    # 关时 /recharge 与 /recharge/status 在到达 create=true 之前短路成 kind=DISABLED，
+    # 不发任何上游请求；GET /balance 是只读的（create=false，永不建号），不受本开关影响。
+    recharge-enabled: ${MOBILE_BILLING_RECHARGE_ENABLED:false}
+
+# 协作加人的同事名录（dev-board#550 #551）：案件库本地查不到人时回官网按手机号/邮箱找账户，
+# 找到即按 accountId 预建桥接用户并允许加入。官网 POST {base-url}/api/internal/collab-directory，
+# 头 X-Internal-Secret（同机 127.0.0.1 直连 Next，公网 nginx `^~ /api/internal/` 恒 404 兜底）。
+# **只回名录事实（账户是否存在、展示名、手机号、团队/律所归属），不发任何凭据**——
+# 与官网早已否决的「凭 accountId 换任意用户 key」那类宽权限 S2S 主凭据不是一回事。
+# secret 与 TRANSFER_BILLING_SECRET / MOBILE_BILLING_SECRET 是三把不同的密钥，不要复用
+# （官网侧 AWD_COLLAB_DIRECTORY_SECRET，只在服务器 env 里配，别入库）。
+# 两个键任一为空 = 本服务器没开通名录，查人/加人一律只查本库、一次请求都不发（默认态）。
+collab:
+  directory:
+    base-url: ${COLLAB_DIRECTORY_BASE_URL:}
+    secret: ${COLLAB_DIRECTORY_SECRET:}
+  eligibility:
+    # 资格门，可整体替换的一层：firm-or-team（至少同一律所；没有律所的，同一团队）
+    # 或 open（只要官网名录里有这个人就允许）。默认 open——桌面单机与自建服务器上
+    # 根本没有律所/团队结构，按律所限制等于把加人这条路直接堵死。
+    # 官方案件库在 application-case.yml 里显式设成 firm-or-team。
+    # 写错值启动即失败（CollaborationPolicyConfig），不静默落回 open。
+    policy: ${COLLAB_ELIGIBILITY_POLICY:open}
 
 # 文件存储配置
 storage:
@@ -448,6 +646,12 @@ storage:
     cdn-domain:
 
 security:
+  # 登录会话空闲有效期（天，滑动过期：距最后一次使用超过该天数即失效）。
+  # 代码默认 365 = 「常驻」语义（滑动窗口一年，等效不掉线），给桌面端与团队服务器用——
+  # 短信/邮箱验证码登录每次都有真实成本，7 天一断线会逼用户反复走验证码。
+  # 官方云后端（application-cloud.yml）显式配 7，保持已上线的「7 天滑动过期」契约逐字不变。
+  # local-mode 免登与 awdt_ 设备令牌不走登录会话，不受本项影响。
+  session-idle-days: 365
   # conversationId 服务端签发强制开关（公网多租户/官方云置 true）：
   # 开启后（且非 local-mode），尚无消息的会话必须先经 POST /api/agent/conversations 签发，
   # 客户端自造的 conv-<毫秒> ID 会被拒绝；已有消息的会话仍按 DB 归属判定。

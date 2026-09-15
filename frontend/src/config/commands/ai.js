@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「AI」菜单。整条菜单对客户视图不可见（notClient）——这是安全边界不是排版偏好，
 // 见 spec §6.3：客户不该看到 AI、系统设置、插件广场这些入口的存在。
 //

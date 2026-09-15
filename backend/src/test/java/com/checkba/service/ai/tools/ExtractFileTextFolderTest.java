@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
 import com.checkba.model.entity.ProjectFile;
@@ -49,7 +52,7 @@ class ExtractFileTextFolderTest {
 
     /** 只接线本用例需要的两个依赖，其余传 null——这条分支在碰到它们之前就返回了。 */
     private static FileTools toolsWith(ProjectFileRepository repo) {
-        return new FileTools(null, repo, null, null, null, null, null);
+        return new FileTools(null, repo, null, null, null, null, null, null);
     }
 
     @Test

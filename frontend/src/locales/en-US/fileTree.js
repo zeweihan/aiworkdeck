@@ -1,4 +1,6 @@
-// File tree (FileTree.vue): context menu, batch actions, confirm dialogs, drag hints, upload progress
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// File tree (FileTree.vue): context menu, batch actions, confirm dialogs, drag hints, local import
 export default {
   // Delete confirmation dialog
   hardDeleteTitle: 'Delete Permanently',
@@ -17,16 +19,7 @@ export default {
   // New folder
   newFolder: 'New Folder',
   folderNamePlaceholder: 'Enter a folder name',
-  // Upload dialog
-  uploadFile: 'Upload Files',
-  uploadDialogSubtitle: 'Choose a destination and select documents to upload',
-  uploadLocation: 'Destination',
   rootDirectory: 'Root Directory',
-  uploadFolder: 'Upload Folder',
-  selectedFilesCount: '{count} files selected',
-  clickToSelectFolder: 'Click to select a folder...',
-  selectFilesPlaceholder: 'Select files (multiple allowed)',
-  confirmUploadBtn: 'Upload',
   // Tag management
   manageTags: 'Manage Tags',
   currentTags: 'Current Tags',
@@ -39,9 +32,14 @@ export default {
   // Context menu
   compareDocuments: 'Compare Documents',
   download: 'Download',
+  transcribe: 'Transcribe',
+  transcribeSubmitted: 'Transcription submitted. Check progress in the meeting recordings panel.',
+  transcribeRegistered: 'Added to the meeting recordings panel. Configure a transcription service to start.',
+  transcribeFailed: 'Failed to start transcription',
   rename: 'Rename',
   fileHistory: 'File History',
   revealInFinder: 'Reveal in Finder',
+  sendFile: 'Send…',
   delete: 'Delete',
   copy: 'Copy',
   // Recycle bin
@@ -62,15 +60,10 @@ export default {
   loading: 'Loading...',
   noFiles: 'No files yet',
   dropToRoot: 'Drop here to move to the root directory',
-  // Upload status area
-  uploadListCount: 'Upload List ({count})',
-  cancelAll: 'Cancel All',
-  interrupted: 'Interrupted',
-  resumeUploadTitle: 'Resume Upload',
-  cancelUploadTitle: 'Cancel Upload',
-  uploadingProgress: 'Uploading... ({done}/{total})',
-  etaAbout: 'about {time}',
-  etaDone: 'done',
+  dropFilesToRoot: 'Release to import into the project root',
+  // Windowed rendering + reference count badge (dev-board#107 unit F3)
+  loadMoreItems: 'Show more ({count} more items)',
+  referencedCount: 'Referenced {count}',
   // Document compare
   twoDocsSelected: '2 documents selected',
   compareDocsBtn: 'Compare Documents',
@@ -85,6 +78,8 @@ export default {
   projectIdMissingCreateFolder: 'Project ID not set, cannot create a folder',
   createSuccess: 'Created',
   createFailed: 'Failed to create',
+  blankDocOption: 'Blank document',
+  templateCreateFailed: 'Failed to create from template',
   projectIdMissingCreateFile: 'Project ID not set, cannot create a file',
   createFileFailedRetry: 'Failed to create the file, please try again',
   copiedAndDuplicated: 'Duplicate created',
@@ -103,6 +98,10 @@ export default {
   permDeleted: 'Permanently deleted',
   restored: 'Restored',
   restoreFailed: 'Failed to restore',
+  restoreBlockedTitle: 'Cannot Restore',
+  restoreBlockedContent: 'Its folder "{folderName}" is still in the recycle bin. Restore that folder first to see this file. Restore it now as well?',
+  restoreBlockedConfirm: 'Restore Folder Too',
+  permDeletePartialFail: '{failed} of {total} items failed to delete permanently; the rest were deleted',
   newFolderFailed: 'Failed to create folder',
   batchDownloadUnsupported: 'Batch download is not supported yet',
   downloadStarting: 'Starting download...',
@@ -111,22 +110,10 @@ export default {
   copySuccess: 'Copied',
   batchOpFailed: 'Batch operation failed',
   moveToRootSuccess: 'Moved to the root directory',
-  chooseFileFailed: 'Failed to select files',
-  selectFilesFirst: 'Please select files to upload',
-  uploadSuccessCount: '{count} files uploaded',
-  uploadFailCount: '{count} files failed to upload',
-  uploadPartialResult: '{success} succeeded, {fail} failed',
-  uploadFileFailedRetry: 'Failed to upload the file, please try again',
-  uploadFailed: 'Upload failed',
-  chunkUnsupportedNonH5: 'Chunked resumable upload is not supported on this platform',
-  uploadInterruptedRetry: 'Upload interrupted, please try again',
-  uploadCanceled: 'Upload canceled',
-  allUploadsCanceled: 'All uploads canceled',
-  reselectAfterRefresh: 'The page was refreshed, please reselect the original file',
-  resumeUnsupportedApp: 'Reselecting to resume is not supported in the app',
-  selectNamedFile: 'Please select the file: {name}',
-  fileSizeMismatch: 'File size does not match',
-  resumingUpload: 'Resuming upload...',
-  refreshInterrupted: 'Interrupted by page refresh',
+  importSuccessCount: 'Imported {count} item(s)',
+  importPartialResult: '{success} succeeded, {fail} failed',
+  importFileFailedRetry: 'Failed to import the file, please try again',
+  importFailed: 'Import failed',
+  importDesktopOnly: 'Drag-in import is desktop only',
   unknownFolder: 'Unknown folder',
 }

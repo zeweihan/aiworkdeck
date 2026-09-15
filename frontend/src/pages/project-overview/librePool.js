@@ -1,12 +1,29 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的内嵌 LibreOffice 保活池/活跃实例指针/LRU 淘汰与编辑器宿主事件。
 // 模式说明见 .claude/agents/sidebar-shell.md 与 PR#151/#159。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
 import { isDesktopHost } from '@/services/host.js'
 
-// 内嵌 LibreOffice 实例保活上限（每个 LOWA 实例数百 MB 内存）。超过后按
-// LRU 淘汰最久未激活的实例——淘汰前自动保存（见 evictLibreInstance）。
-const LIBRE_KEEPALIVE_MAX = 3
+// 内嵌 LibreOffice 保活池按文档体积计权（尽调模块 P3 稳定性余项 #2，
+// dev-board#100）：固定 LRU=3 与文档体积无关，三个 150 页/6.6MB 级大文档同时
+// 驻留会把页面内存吃到约 2.4GB（实测基线，见
+// docs/superpowers/specs/2026-08-21-due-diligence-module-proposal.md §3）。
+// 改成"总权重上限固定，大文档占更多权重"：LIBRE_SIZE_UNIT_BYTES 是 1 个权重单位
+// 的体积（保守值 2MB），LIBRE_WEIGHT_BUDGET 是总权重上限（保守值 6）。
+// 150 页/6.6MB 文档权重 = ceil(6.6MB / 2MB) = 4，两份这样的文档已经超预算，
+// 天然把更旧的实例挤出去；而普通几百 KB 的文档权重恒为 1，同时保活的数量
+// 不降反升（旧固定 3 → 最多可到 6）。体积信息缺失（未知/新建文件）按最小
+// 权重 1 处理，退化成旧的"按数量"语义，不会异常淘汰。
+const LIBRE_SIZE_UNIT_BYTES = 2 * 1024 * 1024
+const LIBRE_WEIGHT_BUDGET = 6
+
+function libreInstanceWeight(fileSizeBytes) {
+    const n = Number(fileSizeBytes)
+    if (!(n > 0)) return 1
+    return Math.max(1, Math.ceil(n / LIBRE_SIZE_UNIT_BYTES))
+}
 
 export const librePoolMethods = {
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
@@ -22,6 +39,18 @@ export const librePoolMethods = {
     // 同步；组件实例经函数 ref 存 _libreRefs，供 LRU 淘汰前自动保存。
     getLibreExecutorMap() {
         return this._libreExecMap || (this._libreExecMap = {})
+    },
+    // 反查某个 executor 此刻绑定的 fileId（按对象恒等，同 onLibreClose 的查法）。
+    // syncLibreExecutor 会把 libreOfficeExecutor 重指到"当前活动文件"——AI 流式
+    // 写入落字前必须核对这份 executor 现在到底服务哪个文件，见 agentClientActions.js
+    // 的 flushDocStreamBuffer。找不到（executor 已被换掉/未注册）返回 null。
+    resolveLibreExecutorFileId(executor) {
+        if (!executor) return null
+        const map = this.getLibreExecutorMap()
+        for (const k of Object.keys(map)) {
+            if (map[k] === executor) return k.slice(k.indexOf(':') + 1)
+        }
+        return null
     },
     setLibreRef(pane, fileId, el) {
         const refs = this._libreRefs || (this._libreRefs = {})
@@ -50,7 +79,7 @@ export const librePoolMethods = {
     onActiveOfficeFileChanged(pane, file) {
         if (file && this.useLibreEditor(file)) {
             if (pane === 'left') this.maybeAdoptLibreSpare(file)
-            this.touchLibreLru(pane, file.id)
+            this.touchLibreLru(pane, file.id, file.fileSize)
         }
         this.syncLibreExecutor()
     },
@@ -74,7 +103,7 @@ export const librePoolMethods = {
         // 备胎是常驻的空白 LOWA 实例（数百 MB 内存），只在桌面壳里预热：
         // Web 态没有保活语境（页面刷新即丢），不值这个内存。
         if (!isDesktopHost()) return
-        if (this.libreSpares.some(sp => !sp.file)) return // 已有空闲备胎
+        if (this.libreSpares.some(sp => !sp.file && !sp.hidden)) return // 已有空闲备胎
         this._libreSpareSeq = (this._libreSpareSeq || 0) + 1
         this.libreSpares.push({ key: this._libreSpareSeq, file: null })
         console.log('[ProjectOverview] LibreOffice spare booting (#' + this._libreSpareSeq + ')')
@@ -84,7 +113,9 @@ export const librePoolMethods = {
         const id = String(file.id)
         if (this.libreSpares.some(sp => sp.file && String(sp.file.id) === id)) return // 已是过继实例
         if (this.libreLruKeys.includes('left:' + file.id)) return // 常规池里已有活实例
-        const spare = this.libreSpares.find(sp => !sp.file)
+        // hidden = 三方合并借走的隐藏实例（acquireLibreHiddenInstance），它正端着
+        // 别人的文档字节，绝不能被过继成律师正在打开的那一份。
+        const spare = this.libreSpares.find(sp => !sp.file && !sp.hidden)
         if (!spare) return
         spare.file = file
         console.log('[ProjectOverview] LibreOffice spare adopted → left:' + id)
@@ -97,6 +128,12 @@ export const librePoolMethods = {
         if (sp.file) this.setLibreRef('left', sp.file.id, el)
     },
     onLibreSpareReady(sp, executor) {
+        // 隐藏实例（三方合并借用）不进常规记账，executor 只挂在条目上给借用方取。
+        sp.executor = executor
+        if (sp.hidden) {
+            console.log('[ProjectOverview] LibreOffice hidden instance ready (#' + sp.key + ')')
+            return
+        }
         if (sp.file) {
             this.onLibreReady(executor, 'left', sp.file.id)
             this.scheduleLibreSpare() // 过继完成、引擎空闲——补一个新备胎
@@ -104,6 +141,43 @@ export const librePoolMethods = {
             console.log('[ProjectOverview] LibreOffice spare warm (blank ready)')
         }
     },
+    // ---- 隐藏实例（三方合并借用，spec §5.2）----
+    // 「不绑定标签页的引擎实例」：自动合并要在后台把三份字节装进引擎跑一遍比较 +
+    // 重放，跑完就扔。形制照预热备胎（同一个 LibreOfficeEditor 组件、同一段模板、
+    // file 恒为 null 所以画布上是空白、standby 类隐藏），只多两条规矩：
+    //   1. hidden 标记，maybeAdoptLibreSpare 与 initLibreSpare 都跳过它——它端着
+    //      别人的文档，被过继成律师正在打开的那份就是数据事故；
+    //   2. 用完必须 release（条目删掉、组件卸载），否则每撞一次车就多一个常驻引擎。
+    // 非桌面端没有引擎，直接回 null，调用方据此把那份文件退回整份三选一。
+    async acquireLibreHiddenInstance({ timeoutMs = 180000 } = {}) {
+        if (!isDesktopHost()) return null
+        this._libreSpareSeq = (this._libreSpareSeq || 0) + 1
+        const sp = { key: this._libreSpareSeq, file: null, hidden: true, executor: null }
+        this.libreSpares.push(sp)
+        const deadline = Date.now() + timeoutMs
+        // 引擎冷启动实测 90 秒级（WASM 编译 + 排版），180 秒是留了余量的上限；
+        // 轮询而不是等事件，是因为 onLibreSpareReady 是模板上的回调，拿不到 Promise。
+        while (!sp.executor) {
+            if (Date.now() > deadline) {
+                this.releaseLibreHiddenInstance(sp)
+                console.warn('[ProjectOverview] LibreOffice hidden instance 启动超时')
+                return null
+            }
+            await new Promise((r) => setTimeout(r, 200))
+            // 页面切走/组件卸载时条目会被清掉，别在这里空转到超时
+            if (!this.libreSpares.includes(sp)) return null
+        }
+        return {
+            run: (action, payload) => sp.executor.executeCommand(action, payload),
+            _spare: sp,
+        }
+    },
+    releaseLibreHiddenInstance(handle) {
+        const sp = handle && (handle._spare || handle)
+        if (!sp) return
+        this.libreSpares = this.libreSpares.filter((x) => x !== sp)
+    },
+
     // 过继实例渲染自 libreSpares，出池必须同步删条目组件才会卸载。
     // key 形如 'left:fileId'（右窗格无备胎，非 left 键直接返回）。
     pruneLibreSpare(key) {
@@ -115,12 +189,28 @@ export const librePoolMethods = {
     pruneClosedLibreSpares() {
         this.libreSpares = this.libreSpares.filter(sp => !sp.file || this.isLibreKeyOpen('left:' + sp.file.id))
     },
-    touchLibreLru(pane, fileId) {
+    // fileSize 是"刚激活的这份文档"的体积（调用方 onActiveOfficeFileChanged 手头
+    // 就有，直接传入，不必等组件挂载完成才能取到）；池里其它 key 的体积从
+    // _libreRefs 已挂载实例的 file.fileSize 反查（libreWeightOf）。
+    touchLibreLru(pane, fileId, fileSize) {
         const key = pane + ':' + fileId
         // 触达置顶，顺带清掉已关闭文件的残留记账
         const keys = [key].concat(this.libreLruKeys.filter(k => k !== key && this.isLibreKeyOpen(k)))
         this.libreLruKeys = keys
-        keys.slice(LIBRE_KEEPALIVE_MAX).forEach(k => { this.evictLibreInstance(k) })
+        // 按体积累计权重：从最近使用往回数，累计权重一旦超预算，从那个 key 起
+        // （含它自己）全部是淘汰候选——与旧版"名次超过 LIBRE_KEEPALIVE_MAX 就淘汰"
+        // 同一个"从前往后数、超了就砍"的形状，只是计数单位从"个数"换成"权重"。
+        let acc = 0
+        for (const k of keys) {
+            acc += (k === key ? libreInstanceWeight(fileSize) : this.libreWeightOf(k))
+            if (acc > LIBRE_WEIGHT_BUDGET) this.evictLibreInstance(k)
+        }
+    },
+    // key 对应实例的体积权重：从已挂载的 _libreRefs 反查 file.fileSize；拿不到
+    // （未挂载/无体积信息）按最小权重 1 处理。
+    libreWeightOf(key) {
+        const inst = (this._libreRefs || {})[key]
+        return libreInstanceWeight(inst && inst.file ? inst.file.fileSize : null)
     },
     isLibreKeyOpen(key) {
         const sep = key.indexOf(':')
@@ -134,13 +224,18 @@ export const librePoolMethods = {
         const inst = (this._libreRefs || {})[key]
         // 未就绪/加载失败的实例跳过保存——画布上是空白原型，保存会覆盖真文件。
         // flushSave：等在途自动保存结束，仍有脏改动才再存（没改动就不空传）。
-        if (inst && inst.ready && !inst.isError && inst.file) {
-            try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
+        if (inst && inst.ready && !inst.docLoadFailed && inst.file) {
+            try { if ((await inst.flushSave({ timeoutMs: 10000 })) === false) return } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e); return }
         }
-        // 保存耗时期间可能又被激活/关闭：仍在上限内或已是活动文件则不淘汰
+        // 保存耗时期间可能又被激活/关闭：按此刻的名次重新核验，累计权重仍在预算内
+        // 或已是活动文件则不淘汰（与旧版"idx < LIBRE_KEEPALIVE_MAX"同一防线，只是
+        // 判据从"名次前 N"换成"从最近使用往回累计权重不超预算"）。
         const idx = this.libreLruKeys.indexOf(key)
-        if (idx === -1 || idx < LIBRE_KEEPALIVE_MAX) return
+        if (idx === -1) return
         if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
+        let acc = 0
+        for (let i = 0; i <= idx; i++) acc += this.libreWeightOf(this.libreLruKeys[i])
+        if (acc <= LIBRE_WEIGHT_BUDGET) return
         this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
         this.pruneLibreSpare(key)
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
@@ -178,22 +273,9 @@ export const librePoolMethods = {
         return allOk
     },
 
-    // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
-    // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
-    // 文件/网核定位，含解包），普通网页开工作区浏览器 tab。
-    onLibreOpenUrl(url) {
-      const u = String(url || '')
-      if (!u) return
-      const isWrapped = this.WPS_INTERNAL_HTTP_LINK_BASE && u.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)
-      if (isWrapped || u.startsWith('checkba:')) {
-        try {
-          if (typeof window !== 'undefined' && window.__checkbaHandleInternalLink) window.__checkbaHandleInternalLink(u)
-        } catch (e) {
-          console.error('内部链接处理失败:', e)
-        }
-        return
-      }
-      if (/^https?:\/\//i.test(u)) this.openBrowserTab(u)
+    // 正文 Cmd/Ctrl 点击统一预览；由用户在浮窗中明确选择分屏查看。
+    onLibreOpenUrl(payload) {
+      this.openDocumentLinkPreview(payload)
     },
     onLibreClose(executor) {
         // An inline pool editor unmount (tab close / LRU evict) emits its

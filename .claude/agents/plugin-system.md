@@ -7,35 +7,158 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 职责边界：各具体业务插件与插件/skill 运行机制。不含插件市场页与 registry 同步（plugin-marketplace 领域），不含左栏 UI 本身（sidebar-shell 领域）。
 
-## 三类插件形态
+## 四类插件形态
 
 1. **内置面板型**：前端组件直接内嵌 project-overview.vue 面板区，无启停开关，靠 `leftSidebarPlugins.js` 静态配置 + 角色过滤（`getPluginsForUser`，CLIENT 角色只见 dd-files）。
 2. **Skill 型**：后端 prompt 包（skill.yml + prompt.md），对话关键词触发。
 3. **动态 JAR 插件**：plugins/ 目录下 manifest.json + JAR，前端用 PluginPane iframe 承载。
+4. **原生资源包（native pack，2026-08 立项）**：重资源（脚本运行时/平台二进制/静态资产）的运行时下载分发，规范 `docs/NATIVE_PACK_DISTRIBUTION.md`。后端 `service/pack/NativePackService` + `/api/packs`；skill.yml 用 `requires_pack: <packId>` 声明依赖；落盘 `~/.aiworkdeck/packs/<id>/<version>/` + `current.json` 原子指针。首个对象是诉讼可视化（litviz+graphviz+drawio）。
+
+**「面板型插件在广场里启停」的体验对齐（2026-08-19，PR#433）与真下载分发的关系**：诉讼可视化、会议录音、脱敏这几个左栏面板靠 `enabled_by_default:false` + `requiresSkill` 门控在广场呈现「安装/卸载」。资源随包在场时，「安装」仍只是 `POST /api/skills/{id}/enable` 翻启用位（不联网）；skill 声明了 `requires_pack` 且资源不在场（新版本已从安装包摘除、或老用户升级后资源随 .app 替换消失）时，「安装」会先走 `/api/packs/{id}/install` 下载资源包（字节级进度）再启用，后端启动时对「已启用但资源缺失」的 skill 自动补下载。随包资源优先于 pack（老用户不强迫重下）。
 
 ## 现有插件清单
 
-**尽调（DD）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。
+**尽调（DD，旧）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。**与新的尽调报告模块（dev-board#100，EvidenceLink 驱动的底稿驱动起草）无关**——这是旧的面向客户协作的「尽调清单」插件，两者只是都译作「尽调/DD」，代码上零关联。新模块的交付件导出（底稿目录/查验计划/缺口清单，`service/DdExportService.java` + `controller/DdExportController.java` + `service/ai/tools/DdExportTools.java`）内置在主仓、不是插件，详见 `.claude/agents/ai-doc-bridge.md`「EvidenceLink 契约」节的「P2 交付件导出」小节；尽调插件本体（`dd_ingest`/句式库/表格模板/skill）仍按 P1 设计（`docs/superpowers/specs/2026-08-21-dd-p1-drafting-design.md`）规划在私有仓 `aiworkdeck-dd-plugin`，尚未落地。P3 的网核 zip 接入（`service/evidence/webverify/`，SPI `WebVerifyProvider` + 离线实现 `ManualWebVerifyProvider` + `WebVerifyImportService` + `controller/WebVerifyController.java` + `service/ai/tools/WebVerifyTools.java`）同样内置在主仓、不门控——原方案 §7 把「网核适配层」划给尽调插件，落地时按 EvidenceLink 的分层口径改为内置：它只是往 EvidenceLink 里塞 target 的又一个来源。**红线**：网核只留接口，不做自动爬取、不碰验证码与合规风险（维护者 2026-08-21 拍板），任何联网抓取的实现都不许进这个包，详见 `.claude/agents/ai-doc-bridge.md`「P3 网核 zip 接入」节。
 
-**脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDFBox PDFTextStripper 定位涂黑）+ OcrService 辅助。无 skill。
+**脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDF 走 PDFBox PDFTextStripper 定位坐标涂黑，Word 走 XWPFDocument 段落级文本遮蔽）+ OcrService 辅助。**skill 型门控（2026-08-19）**：`backend/skills/desensitize/`（`enabled_by_default:false`，广场启停），`leftSidebarPlugins.js` 的 `desensitize` 条目带 `requiresSkill: 'desensitize'`——照搬诉讼可视化那套模式，装了才在左栏出现。**这个 skill 背后没有 AI 编排注入的能力**（无 `allowed_tools`）：命中触发词「脱敏」时 prompt.md 只引导模型把用户指向面板手动操作，不假装能在对话里完成脱敏；面板本身仍是直连 `/api/sensitive` 的老路径，和 AI 编排无关。`languages` 只给 `zh-CN`——`DesensitizePane.vue` 本身已 i18n 化，但策略勾选项文案来自 `SensitiveType` 枚举（label/description 只有中文，`SensitiveController` 直接拼 `"label (example)"` 无语言分支），面板核心内容英文版下会露出中文，等 `SensitiveType` 补英文文案（需要改 `.java`）再解禁双语。
+
+**中文姓名自动识别（2026-09-11，dev-board#599，取代 #531 的手填唯一入口口径）**：用户明确要求“百家姓规则＋上下文规则”。`CHINESE_NAME` 恢复为自动类型并默认勾选；`ChineseNameRecognizer` 结合单姓/复姓、人物字段、称谓/动作、名单与独立姓名行，排除普通词、公司和地址。同文已识别姓名在其他段落复用，但公司/地址中的同名片段不跟着替换，即便这些类别未勾选。不要恢复任意 2–4 汉字全遮蔽。识别与预览、DOCX、PDF、文本处理共用 `SensitiveTextEngine`，全程本地规则，不调用模型。
+
+- “补充敏感词（可选）”保留首屏入口，与保留词一起纠正规则漏报/误报；不再要求逐个填写姓名。旧 `customWords` 请求兼容保留。
+- `SensitiveChineseNameRecognitionTest` 验证正例、普通正文误报、复姓、同文复用及复敏；原 `SensitiveChineseNameOfflineTest` 继续守住无姓名正文与 DOCX 不变。前端 `test:desensitize` 验证默认勾选与双语文案。
+- 规则不保证穷尽所有姓名，少见姓名、民族姓名、英文姓名与无上下文歧义词需人工复核。不得把合成样例通过率表述为真实材料准确率。
+
+**脱敏编辑流程（2026-09-10，dev-board#557/#558）**：生成后 `open-file` 打开副本，左栏保留面板；结果区「复敏这份结果」选择本次副本并复用内存中的加密映射，密码须重新输入，跨次使用可导入 `.awd-recovery`。切文档标签不自动改变面板处理目标，需「导入当前」明确选择。`prepareFile` 由工作台注入 `sensitiveWorkflow.saveSensitiveInput`，预览/生成/复敏前等待目标编辑器保存，错误或未就绪阻止处理；生成前刚保存了修改则要求重新预览。普通 AI 对话可能附带历史/项目上下文，面板提示其不是隔离会话，不自动触发 AI，也不把恢复密码/映射交给 AI。前端测试用 `node --test frontend/tests/desensitize/*.test.mjs`。
+
 
 **股东大会核查（已下线，2026-08-17）**：维护者决定不做了。`leftSidebarPlugins.js` 里的 rail 入口已移除、skill 改成 `enabled_by_default: false`，**其余三层代码一律保留**（面板组件、controller、service、实体、api.js 端点），想恢复只需把 rail 条目加回去。存量安装里 skill 仍是启用状态（`SkillRegistry` 的种子化只在首次见到该 id 时生效），要在插件广场手动停用。下面这段是它下线前的实现地图，恢复或翻旧账时照读。
 
-面板 + AI 编排混合型（三层齐备）。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
+面板 + AI 编排混合型（三层齐备）。**注**：下段那条「pinnedSkillId 只裁剪工具不注入 prompt」的地雷已在 2026-08 修掉（判据同源收敛到 `SkillRouter.activateForTurn`，见上文 skill 注入链路一节）；触发词必须在 prompt 文本里这条仍然成立——面板 kick-off 走的是自动匹配，不带 skillIds。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
 
 **上市路径选择（Skill 型）**：`backend/skills/listing-pathway/`（skill.yml + prompt.md）。无独立面板，对话触发。
+
+**合同审查（Skill 型，dev-board#375，2026-09-02）**：`backend/skills/contract-review/`（skill.yml + prompt.md + prompt.en.md，双语，`category: 合同审查起草`）。无独立面板，对话触发（「审查合同/审阅合同/合同审查/审查这份/帮我审/審查合約…」+ 英文 "review the contract/redline this"；**刻意不用单字「审查」「审阅」**——skill 命中会把可见工具裁成本清单，泛触发会把尽调等别的业务工具藏起来）。立项原因：同一份台湾认购合约工作台只报 6 项、Claude Code 报 24 处，差距在工作流不在模型——system prompt 第 7 节与「Precise Execution」教的是单点修改纪律（看→找→改、只做指定那一处），审查恰好相反。prompt 固定五步：先定立场与适用法域（推不出就一次 `<question>`）→ 通读全文 + `doc_audit_structure` 机械核对 → 六遍清单（法律用语与法源 / 立场保护 / 结构与遗留硬伤 / 数字与一致性 / 空白不代填 / 商业条款不越权）→ 成批修订+批注（每轮 6-10 处、说明只进批注、字形跟随原文）→ 分类交付。allowed_tools 同时列 doc_* 与 office_* 两族（ClientCapabilityService 按会话只放行一族），法源核实 law_*（仅内地法）+ search_web/browse_url。回放用例 `skill-contract-review-audit-and-comment-tools-visible`（cases-skill.json）钉住审计/批注/修订工具在可见集里、pptx/python/流式写入被裁掉。
 
 **诉讼可视化**：面板 + skill + 专用工具三层齐备，详见 `.claude/agents/litigation-visual.md`。skill 在 `backend/skills/litigation-visual/`。
 
 **会议录音**：面板 + skill + 专用工具三层齐备（2026-08-14）。前端 `frontend/src/components/MeetingRecordingPanel.vue`（一键录音/列表/转写稿/说话人改名/生成纪要）+ **模块级录音单例** `frontend/src/utils/meetingRecorder.js`（MediaRecorder 5s 分片边录边追加上传，页面跳转不断录）+ 跨页面浮动指示器 `utils/recordingIndicator.js`→`MeetingRecordingIndicator.vue`（body 级挂载，feedbackWidget 同模式）；后端 `controller/MeetingRecordingController.java`（/api/meetings）+ `service/meeting/`（MeetingRecordingService 生命周期、MeetingTranscriptionService 转写编排：JavaCV 转码 mp3 → OSS 签名 URL → 通义听悟 CreateTask（说话人分离 SpeakerCount=0 + 章节/摘要/待办）→ **poll-on-read** 收结果、TingwuClient/MeetingOssClient 接口+SDK 实现、MeetingTranscriptParser 纯函数解析）；工具 `service/ai/tools/MeetingTools.java`（meeting_list_recordings/meeting_get_transcript）；skill `backend/skills/meeting-recorder/`（`enabled_by_default:false`，广场启停，触发词「会议纪要」）。凭证五件套（AK/SK/听悟 AppKey/OSS bucket/endpoint）存 system_setting `meeting.asr.*`/`meeting.oss.*`，admin 页「会议转写」卡片可改（AdminConfigController TingwuConfig）；未配置时录音存档可用、转写降级提示。转写三档（`external.asr.provider` = platform | byok | local，分档在 `MeetingTranscriptionService` 编排层）：platform 走网关、byok 用自己的听悟凭证、**local 走本机 `asr-service`（faster-whisper，音频零出网，没有说话人分离）**，档位与就绪判定见 `.claude/agents/licensing-billing.md` 地雷 36-39。**地雷**：听悟只收公网 URL（必须 OSS 中转，转写完即删）；kick-off prompt 以「会议纪要」开头；录音单例绝不能搬进页面组件（reLaunch 即断录）；local 档全程没有 taskId，「转写中」的自愈判据是进程内 `inFlight` 集合而不是 taskId。
 
-**动态 JAR**：前端 `frontend/src/components/PluginPane.vue`（纯 iframe 壳：props url/pluginId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）。
+**语音合成**：前端 `frontend/src/components/EasyVoicePane.vue`，与会议录音同占 rail `voice` 位、面板内两个 tab（`project-overview.vue` 的 `effectiveVoiceTab` 计算属性解出实际渲染哪个）。skill `backend/skills/text-to-speech/`——**默认启用**（`enabled_by_default: true`：语音合成此前无门控，老用户升级后入口不能消失，装了广场里能停用即可）。和脱敏同配方：无 `allowed_tools`，命中触发词时 prompt 只引导去用面板，不假装能在对话里合成语音；模型下载走 desktop `modelManager`（约 300MB，本机离线引擎），与广场安装动作解耦——广场「安装」只是 `enable` 翻启用位。`leftSidebarPlugins.js` 的 `PANEL_SKILL_IDS` 里手工列了这个 id（和 `meeting-recorder` 一样，因为 `voice` rail 位本身没有 `requiresSkill` 字段，两个 tab 的门控都在面板内部做）。
+
+**「语音」合并插件（dev-board#66，2026-08-20）**：概念模型「左栏一个图标 = 一个插件，skill 只在 AI 对话生效」——text-to-speech 与 meeting-recorder 两个成员 skill 在广场三处 UI 里合并成**一个**「语音」条目（分组定义 `VOICE_PLUGIN_GROUP` + 合成视图 `buildVoiceGroupSkill()`，都在 `leftSidebarPlugins.js`），启停一体：前端开关一次翻全部成员，后端 `SkillRegistry.convergeVoiceMergedSkills()` 每次扫描后把分裂态收敛为「任一启用 → 全部启用」（防「tab 可见但生成纪要 kick-off 命不中 skill」的静默断裂）；meeting-recorder 的 `enabled_by_default` 因此也改为 true。两个 skill 文件本身、AI 对话行为、触发词都没动。
+
+**动态 JAR / Web 插件**：前端 `frontend/src/components/PluginPane.vue`（props url/pluginId/permissions/projectId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）+ `controller/ai/PluginWebController.java`（/api/plugin-web，见下）。
+
+**动态插件在左栏两种渲染，按有没有 `frontendEntry` 分（dev-board#132，2026-08-23）**：`project-overview.vue` 的 `activeDynamicPlugin` computed 拿到当前 rail 选中的插件后——
+- **有 `frontendEntry`**（Web 插件）→ `PluginPane` iframe；
+- **无 `frontendEntry`**（纯 JAR/skill 插件，如尽调报告）→ 宿主渲染的启动面板 `frontend/src/components/PluginGuidePane.vue`。它就是这类插件的「独立页面」：`manifest.guide`（`{intro, steps[], quickActions[{label,prompt,hint}]}`）渲染成「简介 + 快速开始 + 怎么用 + 该插件为 AI 提供的能力（工具清单）」；quickActions 的按钮点击 `emit('kickoff',{prompt})` → 页面 `onPluginQuickAction` → `resolveChatInterface().sendExternalPrompt`（与股东大会/诉讼可视化同一条 kick-off 路，prompt 里得含 skill 触发词才命中注入）。没写 guide 时用 `description` + 兜底提示 + 工具清单，仍比空面板强。
+  - **后端契约**：`PluginService.PluginMetadata.guide`（`PluginGuide`/`PluginQuickAction`）；`parseManifest` 丢弃 quickActions 里缺 label 或 prompt 的条目；`PluginController.PluginView` 透传 `guide`。测试 `PluginServiceTest.parsesGuideBlock/guideAbsentIsNull`、`frontend/tests/evidence/methodBarTimer.test.mjs` 无关，guide 面板前端无独立单测（真渲染走查配方见 [[ui-live-walkthrough-recipe]]，注入 `/api/plugins/list` 造 guide）。
+  - **地雷（都在 dev-board#132 修掉，别改回去）**：① `dynamicPlugins[].icon` 不要回退 `/static/plugin_default.png`——**那文件不存在**，会 404 成 HTML 破图；registry 的 `icon` 是 emoji（全站禁 emoji、不当图片渲染）。纯工具插件的 rail 图标由模板里 `v-else-if="p.isDynamic"` 的拼图 SVG 兜底。② `toggleLeftPane` **不再** `openFile({fileType:'plugin'})` 开中栏标签——`isFileTypeSupported` 没有 `'plugin'`，那条老路只会弹「无法打开文件」模态、从没渲染出东西；动态插件一律左栏面板渲染（「左栏一个图标 = 一个插件」）。中栏 `activeFileLeft.fileType==='plugin'` 的 PluginPane 分支现已是死代码，留着无害。③ `leftPaneTitle` 要先查 `activeDynamicPlugin.label`，否则动态插件标题掉进兜底显示成「资源管理器」。
+
+### 三方 Web 插件（规范 v2.5，docs/PLUGIN_SPEC.md §8）
+
+`manifest.frontendEntry` 从「预留」激活。两种形态在 PluginPane 里**行为刻意不同**：
+
+- **`web/` 相对路径** = Web 插件。后端 `GET /api/plugin-web/{id}/**` 静态服务 `plugins/<id>/web/`；PluginPane 给 iframe 加 `sandbox="allow-scripts allow-forms"`，与插件只走 postMessage 桥。
+- **`http(s)://` 绝对 URL** = 旧形态。不加 sandbox、不发握手、不响应桥调用——改它只会打断存量插件。判据是 URL 里有没有 `/api/plugin-web/`（`PluginPane.isWebPlugin`）。
+
+**绝不给 sandbox 加 `allow-same-origin`。** 同源的 iframe 能读 localStorage 里的 `X-Session-Id` 并打全部 `/api/*`，等于白送宿主权限。
+
+桥协议（`PluginPane.vue` 宿主端 / `sdk/plugin-sdk/awd-plugin-sdk.js` 插件端 / 官网模板与宿主模拟器，**三处同一份契约**）：`init` 握手 → `call{seq,method,params}` → `result{seq,ok,result|error}`；双向来源校验（宿主认 `event.source === iframe.contentWindow`，插件认 `window.parent`），targetOrigin 只能 `'*'`（opaque origin）。v1 方法：`context.get` / `files.list` / `files.read` / `ui.toast` / `storage.get` / `storage.set`；错误码 `permission_denied` / `unknown_method` / `quota_exceeded` / `not_found`。
+
+**v2.5 新增三方法**（`PluginPane.handleCall`，SDK 版本 `1.0.0`→`1.1.0`，老宿主对新方法一律回 `unknown_method`，插件要能降级）：`tools.invoke {name, args?}` -> `{output}`——经直调端点 `POST /api/plugins/{id}/tools/{tool}`（`PluginController.invokeTool`）调本插件自己的 JAR 工具，安全闸自上而下是登录会话 → 项目写权限（`ProjectMemberService.hasWritePermission`）→ 工具名必须是该插件 manifest `tools` 声明的 → 插件启用未封禁，再落到 `ToolRegistry.execute` 走 manifest permissions/宿主 SPI 配额/`ToolContext` 服务端定 projectId·userId 这套 AI 链路同款闸；`chat.send {prompt}`（≤4000 字）-> `{}`——把 prompt 当可见用户消息发进 AI 对话，与 PluginGuidePane quickActions 同一条 kickoff 路；`ui.openFile {path}` -> `{}`（需 `file_read`）——复用 `awd:open-evidence-target` 事件链把项目文件开到工作台中栏。新增错误码 `invalid_params` / `invoke_failed`。设计意图：Web 面板做结构化操作时直调自家工具绕过模型，但一步都不绕过安全闸。
+
+**v2.6 主题通道**（dev-board#274，SDK `1.1.0`→`1.2.0`，照 VS Code 给 webview 注入 `--vscode-*` 的机制）：`init.context` 新增 `themeTokens`（当前主题全部 `--awd-*` 令牌值，名单=宿主 `utils/appTheme.js` 的 `THEME_TOKEN_NAMES`）；宿主切主题时 `PluginPane.pushTheme()` 推 `{awd:1, type:'theme', theme, tokens}`。SDK 收到即自动挂 `data-theme`/body class 并把令牌写成 iframe 内 CSS 变量——插件写 `var(--awd-surface, #fff)` 即可跟随主题（fallback 兼容老宿主）；脚本联动用 `awd.theme.get()/onChange(cb)`。双向兼容：老 SDK 忽略未知 type，老宿主下新 SDK 停在握手快照（无 themeTokens 则只挂 data-theme）。
+
+**v2.7 生态路线 P0-P2（dev-board#280/281/282，宿主 0.27.4 起）**：设计定稿在 `docs/superpowers/specs/2026-08-29-plugin-p0/p1/p2` 三篇，总路线 `docs/PLUGIN_API_ROADMAP.md`。要点：
+- **P0 治理**：manifest `minHostVersion`（`PluginService.computeIncompatibleReason`，不兼容 = `isEnabled` 返回 false——既有全部消费点免改自动生效；enable/市场安装/dev 直装三处明确拒绝；宿主版本来自 `telemetry.app-version`←`AWD_APP_VERSION`，dev 态 `"dev"` 跳过）；实验 API `x-` 前缀（`PluginPane.handleCall` 只对 `devInstalled` 放行，`.awd-dev` 标记经 PluginView 透传）；只加不改章程与四处同步纪律 = PLUGIN_SPEC §12。semver 比较用新建的 `com.checkba.util.Semver`（另两份包私有旧拷贝不动）。
+- **P1 doc.\*+事件**：桥 `doc.exec`（白名单 `frontend/src/config/pluginDocActions.js` = `PluginHostImpl.DOC_ACTIONS` 同一份，`doc-actions-parity.test.mjs` 对拍；写入带 `__agent`）、`doc.active`；事件通道 `events.subscribe`/`type:'event'`（`PLUGIN_EVENTS` 表：files.changed 需 file_read/500ms、selection.changed 需 editor/300ms、project.switched；事件源 = `FileTree.loadFiles()` 发 `uni.$emit('awd:files-changed')`、`LibreOfficeEditor` selection 分支发 `awd:selection-changed`，PluginPane 按订阅转发，payload 刻意为空）。
+- **P2 ai.request**：桥 → `POST /api/plugins/{id}/ai/complete`（`PluginController.aiComplete`，闸序同 invokeTool + `ai` 权限 + 16000 字符 + `PluginHostQuota.acquireAi` 10 次/分钟）→ `PlatformAiUserScope` 里调辅助模型 + `TokenUsageService` 记账（pluginId 只进日志）。manifest 权限值新增 `ai`（KNOWN_PERMISSIONS 与 PluginDevService.ALLOWED_PERMISSIONS 两处都加了）。
+- SDK `1.3.0`；测试：`PluginServiceTest`（minHostVersion 五条+dev 标记）、`PluginControllerAiCompleteTest`、`PluginHostQuotaTest`、`events-channel.test.mjs`。
+
+**v2.8 生态路线 P3（dev-board#283，宿主 0.28 起）**：evidence.retrieve.v1 升格公开 Provider 协议（PLUGIN_SPEC §13）。要点：
+- **两条通道**：JAR 实现 `com.checkba.plugin.api.evidence.EvidenceProvider`（plugin-api 1.1.0→1.2.0 新增 evidence 包，`loadJar` 扫描 `isAssignableFrom` 检出并实例化）；manifest `contributes.evidenceSources` 声明远程 MCP（transport=mcp，只收 http(s) url——**本地命令型子进程不受理**，现有 MCP 设施也只有 streamable-http）。
+- **双校验**：`sourceId()` 必须 `<pluginId>.<name>` 且与 manifest 声明（transport=spi）逐字一致，否则拒注册记 ERROR（`PluginService.registerEvidenceProvider`）。
+- **适配层**：`PluginSpiEvidenceRetriever`（10s 超时+异常降级空列表+启用位闸——禁用插件的来源静默）；MCP 走 `McpEvidenceRetriever` 新增的 ad-hoc ServerConfig 构造器 + `McpClientService.callTool(ServerConfig,...)` 新重载。`EvidenceRetrieverRegistry` 新增 registerExternal/unregisterExternal/clearExternal（外部来源独立 ConcurrentHashMap，内置表不动；rescan 整批清空重建）。
+- conformance：`EvidenceProviderConformanceKit`（plugin-api 内零依赖执行器，返回空列表=通过）；示例 `examples/hello-evidence-plugin/`（SPI+conformance 全绿）。dev 免签直装**不收** evidenceSources（PluginDevService 校验直接报错）。
+- 地雷：插件别实现内部接口 `service.ai.evidence.EvidenceRetriever`（不是契约）；`registerDeclaredMcpEvidenceSources` 在元数据阶段注册（不兼容插件跳过）、SPI 的随 JAR 加载注册——两条路都吃 registry 判空（直接 new PluginService 的测试不受影响）。
+
+**v2.9 生态路线 P4（dev-board#284，宿主 0.28 起）**：声明式长尾四贡献点（PLUGIN_SPEC §14）。要点：
+- **落点**：`PluginContributionService`（模板清单/落地、画像选择与降级、设置校验与掩码、声明文件 canonical 逃逸闸）+ `PluginService.localize`（l10n %key%，表在 `pluginL10n`，rescan 重建）+ `StyleProfileResolver` 插档（可选注入，选中的插件画像在「项目画像」与「系统默认」之间）。
+- **模板**：`FileTree.handleCreateWord` 变成选择（空白永远第一项，actionsheet 只列前 5；老行为在 `createBlankWord`）；AI 工具 `ContributedTemplateTools`（list/create 两枚，已进 RealToolBeans 与 toolDisplayNames）。
+- **设置**：值直存 `plugin.<id>.<key>`（与 SPI Settings 同命名空间，JAR 免转接）；写入只经广场详情页表单（`MarketDetailPane.loadContribution/doSaveSettings`，admin 同启停口径）；保存后 `uni.$emit('awd:plugin-settings-changed')` → PluginPane 只转发给设置所属插件的 `settings.changed` 事件；**secret 不进桥**（桥 settings.get 回 permission_denied），表单里掩码值原样未动 = 不回写。
+- **地雷**：manifest `settings[].default` 是 Java 关键字，PluginSettingDecl 用 Hutool `@Alias("default")` 映射（`PluginContributionServiceTest.settingsRoundTrip` 钉着）；dev 直装仍要求 frontendEntry，纯声明插件走广场/手动安装。SDK `1.4.0`；示例 `examples/hello-declarative-plugin/`。
+
+**这是 manifest permissions 第一次成为真实边界**：缺 `file_read` 时 `files.*` 直接 `permission_denied`；`network` 决定 PluginWebController 下发的 CSP 是 `connect-src 'none'` 还是 `connect-src https:`。JAR 插件同 JVM 同权限，做不到这一点。
+
+插件级 KV 存宿主 `localStorage` 的 `awd_plugin_kv_<pluginId>`，总量 64 KB；`files.read` 文本上限 5 MB（超限截断且 `truncated:true`，不报错），扩展名不在可抽取文本白名单里的按二进制拒绝。
+
+`manifest.packs: ["<packId>"]`（v2.3）：在线安装成功后 `PluginMarketService` 逐个 `NativePackService.installAsync`，**装不上不回滚插件只记 WARN**。
+
+示例：`examples/hello-web-plugin/`；SDK 源头 `sdk/plugin-sdk/`（官网模板里那份是分发副本，必须逐字节一致）。
+
+### 能力槽与能力包（v2.10 §15，dev-board#497，2026-09-07）
+
+第六种扩展形态**不是新形态**：能力包就是带 `contributes.capabilities` 的普通插件包，复用插件 id、
+启停、封禁、rescan、签名全套设施。新的只有「槽」这层间接：`com.checkba.service.capability`
+（`CapabilitySlotRegistry` 槽表+候选+选择位+降级、`CapabilitySourceFetchService` 从 GitHub 拉源码、
+`CapabilityInstallService` plan/apply 两步）+ `controller/CapabilityController`（`/api/capabilities`，
+admin 同 PluginDevController 口径）+ `service/ai/tools/CapabilityTools`（四枚工具）+ 设置页
+`AdminPane.vue` 的 `capabilities` 分区。首期只注册一个槽 `litigation.diagram`（协议 `litviz-cli/1`）。
+
+- **槽的消费方接法**：`@PostConstruct` 里 `slotRegistry.registerBuiltin(slotId, () -> 自己的内置链)`，
+  再在自己的资源解析链**最前面**插 `slotRegistry.resolve(slotId, includePack)`。`resolve` 只回答
+  「有没有选中一个非内置实现」——选了 builtin / 没选 / 选中的实现坏了都返回 empty，消费方接着走原有链。
+  **内置定位逻辑因此只有一份**，别在槽里再抄一遍。`LitigationVisualService` 是唯一先例。
+- **注入必须是 `@Autowired(required=false)` 字段注入**：`LitigationVisualService` 在单测与 EvalHarness
+  里是直接 `new` 出来的，构造器注入会让那些场景整片红；同时 `CapabilitySlotRegistry` 构造器持有
+  `PluginService`，改成构造器注入还会成环。
+- **三档形态决定谁能装**：`web`/`data` AI 可自动装，`process`（宿主机起进程）默认拒绝，只有
+  `system_setting` 的 `capability.dev-mode=true` 时才以 `.awd-dev` 标记安装并在 UI 上永远标「未签名」。
+  `backendJars`/`tools`/`skills`/`packs` 任一非空仍一律拒装——免签路径不许绕过签名闸。
+- **`PluginDevService.validateManifest` 的 frontendEntry 限制已放宽**（只在「无 frontendEntry 且声明了
+  至少一项声明式贡献」时放行）。这条同时惠及纯模板/画像包。改这里要记得 `installFiles` 是
+  项目内 dev 直装与「从本地目录装」（能力包）的**唯一**共用实现，两条路的校验必须永远同一套。
+- **地雷**：① `capability_install` 只做 plan，绝不落盘；模型必须 `<question>` 停机等用户确认后才调
+  `capability_apply`。② 这四枚工具的登录+admin 闸写在 `CapabilityTools.requireAdmin()` 里，
+  **不能靠 skill 的 allowed_tools**（只裁可见性不拦分发）。③ `CapabilitySourceFetchService` 是全系统
+  唯一「从任意 URL 取代码到宿主机」的路径，URL 白名单/SsrfGuard/限额/解包安全闸四条缺一不可；
+  测试注入 `setDownloader` 用本地 tar.gz，**永远不上网**。④ 选择位 `capability.<slot>.selected` 写空串
+  与写 `builtin` 语义相同，`effectiveRef()` 是唯一判据——回滚历史里存的必须是 effective 值，
+  否则从初始态切走一次之后就永远回不去。
+
+### 插件开发形态（dev-board#61，2026-08-20）
+
+第五种信任路径：**本机用户自己写的插件免签直装**（区别于广场的审核+验签+装后默认禁用）。
+链路：项目根「插件开发/<id>/」文件夹是源码（manifest.json + web/，文件树可见、CodeMirror
+可编辑、进版本记录）→ `PluginDevService.install` 校验后拷进本机 `plugins/<id>/` + rescan +
+**启用**。装出的目录带 `.awd-dev` 标记（JSON：projectId/folderId/installedAt）——
+装机拒绝覆盖无标记（=广场装的）同名目录，`dev/uninstall` 也只认带标记的目录。
+
+- **安全红线：dev 安装只收纯 Web 插件**——manifest 的 backendJars / tools / skills / packs
+  任一非空一律拒装（JAR 与宿主同 JVM 同权限，免审路径会把签名闸变成摆设；沙箱 Web 插件
+  才配「写完直接跑」）。校验错误逐条拼在 IllegalArgumentException.message 里，
+  面板与 AI 工具都按原文展示/返回（AI 靠它自我修复迭代）。
+- 端点 `/api/plugins/dev/*`（scaffold/status/install/uninstall，PluginDevController，
+  写操作 admin 同市场口径）；AI 工具 `plugin_dev_scaffold` / `plugin_dev_install`
+  （PluginDevTools，新工具组件记得同步 RealToolBeans——已加）。
+- 内置 skill `backend/skills/plugin-dev/`（enabled_by_default:false，requiresSkill 门控
+  左栏「插件开发」面板 PluginDevPanel.vue，rail 排在 market 之后）。**prompt.md 是
+  Web 插件开发的权威 spec**（目录契约/manifest 规则/沙箱边界/SDK 桥 v1+v2.5 全量 API/迭代流程），
+  改桥协议或 manifest 规则时必须同步它，否则 AI 会按旧契约写插件。dev 安装的插件 manifest
+  `tools` 强制为空，所以 `tools.invoke` 在本机自测环境下永远只收 `invoke_failed`——
+  prompt.md 已加提醒，别让 AI 对用户承诺一个本机测不出效果的功能。
+- 骨架模板在 `backend/src/main/resources/plugin-dev/`（template-index.html +
+  awd-plugin-sdk.js 副本）。**SDK 至此有四份分发副本 + 宿主端实现**（原三份 + 本 classpath
+  副本），classpath 副本与源头的逐字节一致由 `PluginDevSdkParityTest` 守着。
+- 文本扩展名白名单已放宽到代码文件（json/js/mjs/css/html/htm/yml/yaml），前后端两张表
+  必须一致：`TextFileEditTools.PLAIN_TEXT_TYPES` 与 `fileOpenTabs.js` 的 `PLAIN_TEXT_TYPES`。
 
 ## 注册与加载链路
 
 1. 静态注册：`frontend/src/config/leftSidebarPlugins.js` 导出 LEFT_SIDEBAR_PLUGINS + `getPluginsForUser(role)`。
 2. project-overview.vue 计算属性（~:1581）合并静态列表与 dynamicPlugins。
-3. 动态插件：`loadDynamicPlugins()`（~:6261）调 `GET /api/plugins/list`，映射成 `{key:'plugin-<id>', label, icon, isDynamic, frontendEntry}`。
+3. 动态插件：`loadDynamicPlugins()`（~:6261）调 `GET /api/plugins/list`，映射成 `{key:'plugin-<id>', pluginId, label, icon, isDynamic, permissions, frontendEntry}`。`frontendEntry` 经 `api.js` 的 `resolvePluginEntryUrl(id, entry)`：相对路径 → `<apiBase>/api/plugin-web/<id>/<entry>`，绝对 URL 原样。**`key` 是 `plugin-<id>`，`pluginId` 才是原始 id**——桥的握手上下文与 KV 分区键用后者，混用会让插件存储串到别的键上。
 4. 面板分发（~:531-563）按 leftPaneKey：dd-files→DdFilesPanel、desensitize→DesensitizePane、easyvoice→EasyVoicePane、search→SearchPanel、files→文件树、动态→PluginPane、其余→占位符。
 5. 后端 PluginService：@PostConstruct 扫 `plugins/`（可配 `ai.plugins.dir`），读 manifest.json → PluginMetadata；有 backendJars 时独立 URLClassLoader 加载，扫 langchain4j @Tool 类注册进 ToolRegistry。`POST /api/plugins/rescan` 热重扫。
 
@@ -43,7 +166,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 目录式：`skills/<id>/skill.yml + prompt.md`。skill.yml 字段：`id`（必需，kebab-case，启停键）、`name`、`description`、`triggers`（必需，关键词数组，用户输入"包含"即命中）、`prompt`（默认 prompt.md）、`allowed_tools`（须为 ToolRegistry 真实工具名）、`output`、`requires`（如 evidence.retrieve.v1，v1 仅声明）。未知字段忽略；解析失败跳过不阻断。
 
-**应用语言字段（EN 版 PR5，全部可选）**：`languages`（数组，可用的应用语言；**缺省 = 只在 zh-CN 可用**——存量第三方 skill 没这个字段，英文版自动隐藏，方向安全）、`name_en` / `triggers_en` / `output_en`（英文侧文本；triggers_en 只在 en-US 参与匹配，zh-CN 匹配行为不变）、目录下可放 `prompt.en.md`（存在即加载，英文注入优先用它，缺省回退 prompt.md）。语言过滤收口在 `SkillRegistry.isAvailable`（match/钉选/注入三条路径共用，不会只滤列表不滤注入）；内置三 skill：股东大会核查与上市路径 `languages: [zh-CN]`（中国法深度绑定，且后者触发词含 IPO/SPAC/VIE 会命中英文输入，必须真隐藏），诉讼可视化双语（带 triggers_en + prompt.en.md）。守卫在 BuiltinSkillsTest / SkillRouterTest 的语言组测试。注意 `/api/skills/list` 与广场列表**不做**语言过滤（管理面照常展示，只是英文模式下 zh-only skill 永不注入）。
+**应用语言字段（EN 版 PR5，全部可选）**：`languages`（数组，可用的应用语言；**缺省 = 只在 zh-CN 可用**——存量第三方 skill 没这个字段，英文版自动隐藏，方向安全）、`name_en` / `triggers_en` / `output_en`（英文侧文本；triggers_en 只在 en-US 参与匹配，zh-CN 匹配行为不变）、目录下可放 `prompt.en.md`（存在即加载，英文注入优先用它，缺省回退 prompt.md）。语言过滤收口在 `SkillRegistry.isAvailable`（match/钉选/注入三条路径共用，不会只滤列表不滤注入）；内置三 skill：股东大会核查与上市路径 `languages: [zh-CN]`（中国法深度绑定，且后者触发词含 IPO/SPAC/VIE 会命中英文输入，必须真隐藏），诉讼可视化双语（带 triggers_en + prompt.en.md）。守卫在 BuiltinSkillsTest / SkillRouterTest 的语言组测试。注意 `/api/skills/list` 与广场列表**不做**语言过滤（管理面照常展示，只是英文模式下 zh-only skill 永不注入）。**因此该列表带了 `available` 字段（= `SkillRegistry.isAvailable`）与 `nameEn`**：对话面板那个「主动加载技能」选择器必须自己按 `available` 滤一道，否则英文界面下用户能勾中一个 zh-only skill，勾了永远不生效也没有提示。
 
 插件携带 skill：manifest.json `skills` 字段列子目录名，PluginService 只收集目录（`getPluginSkillDirs()`），解析/启停归 SkillRegistry，记 sourcePluginId。
 
@@ -52,8 +175,14 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 ## skill 注入对话链路（backend/src/main/java/com/checkba/service/ai/skill/）
 
 - `SkillRegistry.java` — 发现/加载：扫内置 skills/ 目录 + 插件携带目录，SnakeYAML 解析，id 去重（先扫到优先）；`isAvailable` = 自身启用 且 所属插件未禁用。
-- `SkillRouter.java` — `match(userInput)` 取最长命中关键词；`activateForTurn` 每条用户消息刷新命中态；`visibleTools` 命中时裁剪为 allowed_tools ∪ baseTools ∪ `ORCHESTRATION_TOOLS`（业务工具零命中则不裁剪）；`promptInjectionFor` 拼 prompt 注入。
-- 编排接入（纯旁路两处）：`AgentOrchestrator.java` activateForTurn（~:255）+ visibleTools（~:709）；`ContextAssemblerService.java` match→promptInjectionFor（~:146）。ASK 模式跳过注入。
+- `SkillRouter.java` — `match(userInput)` 取最长命中关键词（自动匹配仍是单选）；`activateForTurn(conv, input, pinnedSkillId, manualSkillIds)` 每条用户消息刷新一次**生效集合**；`activeSkills(conv)` 返回 `List<ActiveSkill(definition, displayName, source)>`（`activeSkill` 是它的单值出口）；`visibleTools` 按整个集合的 allowed_tools 并集 ∪ baseTools ∪ `ORCHESTRATION_TOOLS` 裁剪（业务工具零命中则不裁剪）；`promptInjectionFor(skill)` 拼一个 skill 的注入块；`displayName(skill)` 按应用语言解析展示名。
+- **生效集合 = 手动选择 ∪ 触发词自动命中**（2026-08 AI 面板 skill 可见性改造）：
+  - 手动选择来自 `POST /api/agent/chat` 的 `skillIds`（旧字段 `pinnedSkillId` 收编为「只有一项的手动列表」，已 `@Deprecated`）。**无状态**，前端每轮携带，后端不持久化。
+  - **并集而不是覆盖**：手动选择表达的是「这轮务必带上它」，不是「只准用它」。集合顺序把手动放在前面，于是 `activeSkill` 这个单值出口仍返回用户明确选的那个（旧的「钉选优先于触发词匹配」语义因此保持）。
+  - 同一个 skill 既被手动选中又命中触发词时只出现一次，source 标 `manual`。
+  - 埋点 `skill.activated` 每个生效的 skill 各一条（`how` 取值仍是旧字面量 pinned/matched，官网账本按它分组）；`matter.classified` 只取首个——一轮对话只能有一个事项类型。
+- 编排接入（纯旁路两处）：`AgentOrchestrator.java` activateForTurn + 发 SSE `skill_update`（~:430）+ visibleTools（~:1160）；`ContextAssemblerService.java` **activeSkills→promptInjectionFor 逐个注入**（~:165）。ASK 模式跳过注入，且手动选择在 ASK 下整体不参与激活。
+- **地雷已修（别改回去）**：`ContextAssemblerService` 原来在注入处自己 `match(userPrompt)` 重新匹配了一遍，判据与编排器裁工具用的那套不是同一个——于是 pinnedSkillId **只裁工具不注入 prompt**，`enabled_by_default` 之外最阴险的一类静默故障。现在两者同源读 `skillRouter.activeSkills(conversationId)`。**注入侧一律不许再 match 一次。**
 - 配置：`SkillProperties.java`（ai.skills.dir / base-tools / disabled-cache-ttl-ms / registry-url）。
 
 ### allowed_tools、base-tools 与编排类工具（写 skill 前必读）
@@ -95,6 +224,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - 存 `system_setting` 表（key/value 键值），值为禁用 id 的 JSON 数组，默认全启用，内存缓存 TTL 5s：插件 `ai.plugins.disabled`（PluginService），skill `ai.skills.disabled`（SkillRegistry）。
 - **插件工具的过滤在 ToolRegistry 而非 PluginService**（Phase 3A）：getAllSpecifications / toolNamesLongestFirst / resolve 三处消费点全部隐藏禁用插件的工具；分发前还有 `missingPermissionsForTool` 权限校验。
 - skill 过滤在 SkillRouter.match 的 isAvailable 检查。
+- **启用插件 = 启用它携带的 skill（dev-board#132，2026-08-23）**：插件携带的 skill 惯例写 `enabled_by_default:false`（插件没装前别出现），于是「装完插件、点了启用，工具注册上了但 skill 仍禁用、对话里触发词永不命中」是第三个看不见的开关。`PluginService.setEnabled(id,true)` 在 `loadJarsIfAbsent` 之后先 `skillRegistry.rescan()` 再 `enableSkillsFromPlugin(id)`（只翻本插件 `sourcePluginId` 命中的 skill，别的插件/内置 skill 不碰）。禁用插件不反向操作——`SkillRegistry.isAvailable` 已按所属插件的启用态兜住。护栏 `PluginServiceTest.enablingPluginEnablesCarriedSkills/disablingPluginLeavesSkillStateAlone`、`SkillRegistryTest.enablingPluginEnablesItsCarriedSkills`。
 
 ## 已知地雷
 
@@ -104,12 +234,53 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。**部分**写错更阴险：剩下的名字还能命中，裁剪照常生效，写错的那个工具就静默消失了。
 - `RealToolBeans.instantiateAll()`（评测用的工具 bean 清单）与生产的 `AgentToolComponent` 实现集**不是自动同步的**：`TodoTools` 就不在里面，所以 `todo_write` 在回放评测里根本没注册，评测断言不到它的可见性。新增工具组件时要顺手补进去。
 - 插件启停语义只影响可见性，不拦截历史工具调用回放。
+- **Web 插件的 `frontendEntry` 校验失败是静默降级**：指到 `web/` 之外或文件不存在时 `PluginService` 把它置空并记 WARN，前端表现为「未配置入口地址」的空面板——面板空白先查后端日志的这条 WARN，别去前端找。
+- **`/api/plugin-web` 不要加登录闸**：iframe 是 opaque origin，带不出凭据，加了只会让面板白屏；那里也没有用户数据。禁用/未安装/被封禁一律 404（不是 403，不泄露 id 存在性）。
 - 改 AgentOrchestrator 构造器（如注入新服务）必须同步 EvalHarness（踩过两次）。
 - **「先落中间态再 `executor.submit`」的服务（会议转写就是），测试里断中间态必须先卡住后台线程**：`save` mock 成原样返回入参时，方法返回的对象与测试持有的是同一个可变实例，后台那个瞬间返回的 mock 会抢先把它改成终态，断言成败取决于 runner 调度（#394 修的就是这个间歇红）。用 `CountDownLatch` 卡住后台调用的那个 mock，断完中间态再 `countDown` 放行。
 - SubAgentTools 曾因循环依赖断启动，用 @Lazy 解决（PR#98），插件/工具类注入编排器时注意。
+
+## 宿主 SPI（plugin-api，规范 v2.4，dev-board#109）
+
+JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.0 编译的插件照常加载，接口只增不改），源码 `backend/plugin-api/`
+（**独立 Maven 工程**，不是 backend 的子模块；backend 以普通依赖引用）。方法表与鉴权/配额规则在
+`docs/PLUGIN_SPEC.md` §11，这里只记落点与地雷。
+
+- **先 install 再构建 backend**：`mvn -q -f backend/plugin-api/pom.xml install`。它不在任何远端仓库，
+  新机器 / 新 worktree 上 `mvn` backend 报 `Could not resolve com.checkba:plugin-api` 就是漏了这步。
+  CI（`ci.yml`）与桌面打包（`desktop-build.yml` 两个平台）都已加这一步。
+- 宿主实现：`service/plugin/PluginHostFactory`（按插件 id 缓存 `PluginHost`、持有调用上下文 ThreadLocal、
+  集中注入全部宿主服务）、`PluginHostImpl`（八个子接口的内部类）、`PluginHostQuota`（工具线程 60 次/分钟/插件，后台任务线程 1200 次——`PluginHostFactory.bindJob` 标记的 JobContext 期间）、
+  `PluginJobService`（后台任务，每插件 2 线程池）+ `PluginJobController`（`/api/plugin-jobs`）+ 实体 `PluginJob`。
+- 注入链：`PluginService.loadJar` 实例化后 `injectHostIfAware` → `HostAware.setHost(factory.forPlugin(id))`。
+  `PluginService` 经 `ObjectProvider<PluginHostFactory>` 懒取（构造器注入会成启动死环）。
+- 调用上下文：`ToolRegistry.execute` 在 `tool.fromPlugin()` 分支 `pluginHostFactory.bindCall(ctx)`，
+  finally 里 `clear()`（与 `ToolContextHolder` 同一处）。字段注入 `required=false`——
+  `new ToolRegistry(...)` 的测试与 EvalHarness 不受影响；后台任务体由 `Jobs.start` 的包装重新绑定快照。
+- `ProjectFileService.ensureFolderPath(projectId, userId, segments)` 是「逐级确保文件夹」的单一出处：
+  插件 `Files.createFolderPath`、`FileTools.move_file` 目标目录补建、会议录音目录三处都走它。
+- `Settings.projectStyleProfileJson` 当前是 H 的过渡实现（项目 `_模板/画像.json` > SystemSetting
+  `dd.styleProfile.default` > classpath `house-default.json`）；单元 I 合并后改调 `StyleProfiles.resolveForProject`。
+- **地雷**：`Docs.*` 依赖 `EditorBridgeService` 自己的 ThreadLocal 会话——后台任务线程上是空的，
+  `PluginHostImpl` 按 `call().conversationId()` 临时绑定再还原，别绕开它直接调 bridge。
+  `Llm.complete` 的温度 / maxTokens 由通道侧模型配置决定（`ChatModelFactory` 给的是预建实例），
+  `LlmOptions` 里这两个字段目前是声明性的。
+- 测试：`PluginJobServiceTest`、`PluginHostImplTest`、`ProjectFileServiceEnsureFolderPathTest`。
+  示例：`examples/hello-plugin` 的 `helloListFiles`。
 
 ## 验证
 
 - 后端：`cd backend && mvn test`（JDK 21）。
 - skill 触发链路：起后端后对话输入触发词验证注入；skill 管理 API `/api/skills/list|{id}/enable|{id}/disable|rescan`（admin）。
 - 前端面板：`cd frontend && npm run test:app-e2e` 覆盖主要旅程。
+
+- **`Evidence.linkAtQuote(projectId, docFileId, anchorQuote, targets)`（SPI 1.1.0 新增）**：插件按引文建链的唯一正路。宿主内部走 `EvidenceAnchorService`（查引文必须恰好命中一次 → set_selection → bookmark_selection（书签名 = linkKey）→ 内部超链接 → get_bookmark_context → 落库），与 AI 工具 `doc_link_evidence` **同一份实现**。插件**不要**自己用 `Docs.exec` 拼这套原语——书签名规则、超链接 scheme、章节路径口径都是契约，两份实现必然漂移。
+
+**脱敏/复敏更新（2026-09-10，dev-board#552/#553/#554）**：`SensitiveType` + `service/sensitive/SensitiveTextEngine` 使用本地字段/后缀/号码规则与用户词表；`SensitiveDocx` 以 XML 段落遍历 Word 全部文字节点并保留未命中 run 的格式；PDF 继续不可逆黑框。`SensitiveController` 新增 `POST /preview`、`POST /restore`，`/desensitize` 带 mode 时回 `{file,recoveryKit,counts,warnings}`，未带 mode 的旧调用保留返回 ProjectFile。TOKEN 模式推荐，MASK 为旧星号模式。`SensitiveRecoveryKit` 仅在请求内存中生成/解密映射，密码派生 AES-GCM；加密 `.awd-recovery` 由面板另行下载，不注册进项目。三条端点都鉴权，写操作还需写权限。所有操作不调用 AI/OCR/embedding，skill prompt 明确禁止先把原文读给模型。限制与回归见 `docs/DESENSITIZATION_REVIEW_2026-09-10.md`；`mvn test -Dtest=Sensitive*Test` + `node --test frontend/tests/desensitize/pane.test.mjs`。原介绍中“Word 走 XWPF 段落遮蔽 + OcrService 辅助”已由上述离线 XML 路径替代。
+
+
+**历史发布整合（2026-09-10，dev-board#585；姓名口径已由 #599 更新）**：脱敏引擎 2.0.0 最终随完整桌面端 0.39.0 交付。当时沿用 #531 的姓名手填整词（每行一个，支持英文公司名里的空格/逗号），旧 customWords JSON 字段由 JsonAlias 兼容。SkillController 对内置 desensitize 返回实际 SensitiveService.VERSION/DESCRIPTION，防止只读 Resources/skills/1.0.0 将补丁引擎误报为旧版；用户自装插件不覆盖。详情页检查更新走工作台 updates 设置标签，不能用重装 skill 文本冒充引擎升级。
+
+## HR 用工模板包下架（2026-09-15，dev-board#649）
+
+`hr-template-pack` 已从三站注册表下架；`PluginService.isRetired` 在离线扫描与启用判定中拒绝该 ID，`PluginMarketService` 隐藏旧列表并拒绝直接安装。保留插件磁盘文件及用户已创建文书。其他通用插件机制不受影响。上线验证与回退备份位置见 `doc/hr-template-retirement.md`。

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.WebFavorite;
@@ -71,7 +74,13 @@ public class WebFavoriteService {
                 storageServiceFactory.getStorageService().save(path, new ByteArrayInputStream(bytes));
                 fav.setImagePath(path);
             } catch (Exception e) {
-                log.warn("保存收藏截图失败，忽略继续: userId={}", userId, e);
+                log.warn("保存收藏截图失败: userId={}", userId, e);
+                // 截图是唯一载荷时（网核关联、OCR 摘录收藏都传 content=""），存储一挂就什么都没剩下，
+                // 再吞掉就是落一条空收藏还回 200——用户以为证据存下了，其实根本不存在。
+                // 这时抛出让事务回滚并把失败回给前端；还有正文兜底的才允许降级为「丢截图、留文字」。
+                if (!StringUtils.hasText(content)) {
+                    throw new IllegalArgumentException(LangText.of("截图保存失败，请重试", "Failed to save the screenshot, please try again"));
+                }
             }
         }
 

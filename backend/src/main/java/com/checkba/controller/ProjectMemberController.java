@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
+import com.checkba.service.AuthAbuseGuard;
+import com.checkba.service.LocalIdentityService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ClientInvitationService;
 import lombok.Data;
@@ -20,6 +25,7 @@ public class ProjectMemberController {
 
     private final ProjectMemberService projectMemberService;
     private final ClientInvitationService clientInvitationService;
+    private final AuthAbuseGuard authAbuseGuard;
 
     @GetMapping("/{projectId}/members")
     public Map<String, Object> getMembers(
@@ -47,9 +53,16 @@ public class ProjectMemberController {
             map.put("role", member.getRole());
             map.put("joinedAt", member.getJoinedAt());
             if (user != null) {
+                // username 保留一版给老客户端，前端不再读它（spec 2026-09-10 §4/§5：
+                // 用户名退成内部标识，任何界面都不再当名字显示）
                 map.put("username", user.getUsername());
-                map.put("displayName", user.getDisplayName());
-                map.put("avatarUrl", user.getAvatarUrl());
+                // local-mode 下项目 owner/成员可能是库里存了中文哨兵值的本机用户，按界面语言本地化
+                map.put("displayName", LocalIdentityService.displayNameOf(user.getDisplayName()));
+                // 本机有就本机，否则官网 /api/avatar/{accountId}——与「加同事」确认卡同一个口径
+                map.put("avatarUrl", projectMemberService.avatarUrlFor(user));
+                // 官网账户 id：本机名单与案件库名单的唯一去重键（spec 2026-09-14 §2.6）。
+                // 不知道就是 null，前端退回按用户名比。
+                map.put("accountId", projectMemberService.accountIdFor(user, callerId));
             }
             return map;
         }).collect(Collectors.toList());
@@ -64,8 +77,9 @@ public class ProjectMemberController {
                 ownerMap.put("role", "ADMIN");
                 ownerMap.put("joinedAt", null);
                 ownerMap.put("username", owner.getUsername());
-                ownerMap.put("displayName", owner.getDisplayName());
-                ownerMap.put("avatarUrl", owner.getAvatarUrl());
+                ownerMap.put("displayName", LocalIdentityService.displayNameOf(owner.getDisplayName()));
+                ownerMap.put("avatarUrl", projectMemberService.avatarUrlFor(owner));
+                ownerMap.put("accountId", projectMemberService.accountIdFor(owner, callerId));
                 resultList.add(0, ownerMap); // Add to top
             }
         }
@@ -73,6 +87,52 @@ public class ProjectMemberController {
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("data", resultList);
+        return result;
+    }
+
+    /**
+     * 先查人再确认加入（dev-board#444）：回一张只带展示名 + 头像 + 打码联系方式的卡片。
+     *
+     * <p>查不到**不是错误**（{@code code=0} + {@code found:false} + 一句话），
+     * 界面就地显示那句话即可，不该弹一个像是出了故障的提示。
+     *
+     * <p>限频与加人共用一个计数（{@link AuthAbuseGuard#checkMemberLookupRate}）：
+     * 两个端点是同一个「这个手机号注册过没有」的探测面，分开计等于把额度翻倍。
+     */
+    @GetMapping("/{projectId}/members/lookup")
+    public Map<String, Object> lookupMember(
+            @PathVariable Long projectId,
+            @RequestParam(value = "identifier", required = false) String identifier,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new IllegalArgumentException("未登录");
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkMemberLookupRate(userId);
+            authAbuseGuard.recordMemberLookup(userId);
+            ProjectMemberService.MemberLookup lookup =
+                    projectMemberService.lookupMember(projectId, identifier, userId);
+            Map<String, Object> data = new HashMap<>();
+            data.put("found", lookup.found());
+            data.put("displayName", lookup.displayName());
+            data.put("avatarUrl", lookup.avatarUrl());
+            data.put("maskedContact", lookup.maskedContact());
+            data.put("alreadyMember", lookup.alreadyMember());
+            data.put("currentRole", lookup.currentRole());
+            data.put("message", lookup.message());
+            // 拒绝理由（Denial 名或 null）：桌面端据此把「未找到」块分三态，各给对的动作按钮。
+            // 老客户端没有这个键也照常显示 message，所以服务端可以先上线。
+            data.put("reason", lookup.reason());
+            result.put("code", 0);
+            result.put("data", data);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
         return result;
     }
 
@@ -90,6 +150,9 @@ public class ProjectMemberController {
         }
 
         try {
+            // 与 lookup 共用同一个计数：只挂在 lookup 上的话，交替调两个端点就能绕开限频
+            authAbuseGuard.checkMemberLookupRate(userId);
+            authAbuseGuard.recordMemberLookup(userId);
             projectMemberService.addMember(projectId, request.getUsername(), request.getRole(), userId);
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);

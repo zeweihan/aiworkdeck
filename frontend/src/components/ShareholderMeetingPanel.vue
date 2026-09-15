@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- Vue 3 多根节点：与 DdFilesPanel 同构 -->
 
@@ -361,12 +363,12 @@ export default {
   border-radius: 4px;
   cursor: pointer;
 
-  &:hover { background: #e8e8e8; }
+  &:hover { background: var(--awd-surface-2); }
 }
 
 .sm-add-icon {
   font-size: 15px;
-  color: #555;
+  color: var(--awd-text-2);
 }
 
 .sm-create-form {
@@ -374,15 +376,15 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-bottom: 1px solid #ececec;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .sm-input {
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--awd-border);
   border-radius: 5px;
   padding: 6px 8px;
   font-size: 12px;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 .sm-form-actions {
@@ -400,15 +402,15 @@ export default {
   text-align: center;
 
   &.primary {
-    background: #1A5336;
-    color: #fff;
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
     &:hover { opacity: 0.9; }
   }
   &.secondary {
-    background: #fff;
-    border: 1px solid #d1d5db;
-    color: #374151;
-    &:hover { background: #f5f5f5; }
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border-strong);
+    color: var(--awd-text);
+    &:hover { background: var(--awd-surface-2); }
   }
   &.disabled {
     opacity: 0.5;
@@ -422,7 +424,7 @@ export default {
 }
 
 .sm-check-item {
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .sm-check-head {
@@ -432,7 +434,7 @@ export default {
   padding: 9px 14px;
   cursor: pointer;
 
-  &:hover { background: #f5f5f5; }
+  &:hover { background: var(--awd-surface-2); }
 }
 
 .sm-check-info {
@@ -445,7 +447,7 @@ export default {
 .sm-check-name {
   font-size: 13px;
   font-weight: 500;
-  color: #333;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -453,7 +455,7 @@ export default {
 
 .sm-check-meeting {
   font-size: 11px;
-  color: #888;
+  color: var(--awd-text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -470,31 +472,31 @@ export default {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: 8px;
-  background: #f0f0f0;
-  color: #888;
+  background: var(--awd-bg);
+  color: var(--awd-text-3);
 
-  &.ready { background: #e6f0eb; color: #1A5336; }
-  &.running { background: #fff4e0; color: #b26a00; }
-  &.done { background: #e6f0eb; color: #1A5336; }
+  &.ready { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+  &.running { background: var(--awd-warning-soft); color: var(--awd-warning-text); }
+  &.done { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 }
 
 .sm-del-btn {
   font-size: 11px;
-  color: #bbb;
+  color: var(--awd-text-3);
   cursor: pointer;
   padding: 2px 4px;
 
-  &:hover { color: #c0392b; }
+  &:hover { color: var(--awd-danger-text); }
 }
 
 .sm-check-detail {
   padding: 4px 14px 12px;
-  background: #fafafa;
+  background: var(--awd-bg);
 }
 
 .sm-meta-line {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   padding: 2px 0 6px;
 }
 
@@ -510,13 +512,13 @@ export default {
 
 .sm-slot-label {
   font-size: 12px;
-  color: #555;
+  color: var(--awd-text-2);
   font-weight: 500;
 }
 
 .sm-slot-link {
   font-size: 11px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
 
   &:hover { text-decoration: underline; }
@@ -535,7 +537,7 @@ export default {
 
 .sm-file-name {
   font-size: 11px;
-  color: #333;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -544,17 +546,17 @@ export default {
 
 .sm-file-remove {
   font-size: 13px;
-  color: #bbb;
+  color: var(--awd-text-3);
   cursor: pointer;
   padding: 0 4px;
   flex-shrink: 0;
 
-  &:hover { color: #c0392b; }
+  &:hover { color: var(--awd-danger-text); }
 }
 
 .sm-slot-empty {
   font-size: 11px;
-  color: #bbb;
+  color: var(--awd-text-3);
 }
 
 .sm-actions {
@@ -567,7 +569,7 @@ export default {
 .sm-hint {
   margin-top: 6px;
   font-size: 11px;
-  color: #888;
+  color: var(--awd-text-3);
   line-height: 1.5;
 }
 
@@ -575,7 +577,7 @@ export default {
   padding: 30px 14px;
   text-align: center;
   font-size: 12px;
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 .sm-dialog-mask {
@@ -584,7 +586,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--awd-overlay);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -592,7 +594,7 @@ export default {
 }
 
 .sm-dialog-content {
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 10px;
   width: 320px;
   max-width: 85vw;
@@ -606,19 +608,19 @@ export default {
 .sm-dialog-title {
   font-size: 15px;
   font-weight: 600;
-  color: #111;
+  color: var(--awd-text);
 }
 
 .sm-dialog-body {
   padding: 10px 18px 16px;
   font-size: 13px;
-  color: #555;
+  color: var(--awd-text-2);
   line-height: 1.6;
 }
 
 .sm-dialog-footer {
   display: flex;
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--awd-border);
 }
 
 .sm-dialog-btn {
@@ -629,14 +631,14 @@ export default {
   cursor: pointer;
 
   &.cancel {
-    color: #666;
-    border-right: 1px solid #eee;
-    &:hover { background: #f7f7f7; }
+    color: var(--awd-text-2);
+    border-right: 1px solid var(--awd-border);
+    &:hover { background: var(--awd-bg); }
   }
   &.confirm {
-    color: #1A5336;
+    color: var(--awd-accent-text);
     font-weight: 600;
-    &:hover { background: #f0f7f3; }
+    &:hover { background: var(--awd-accent-soft); }
   }
 }
 </style>

@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Plugin Marketplace (MarketPane / MarketDetailPane / MarketSidebarPanel / plugin-market page / marketPricing util)
 export default {
+  redactionEngineUpdateNotice: 'Local rules automatically detect companies and Chinese names, with previews, tokens and restoration. The engine is updated through desktop patches; reinstalling skill instructions does not update it.',
+  redactionEngineUpdateButton: 'Check redaction engine updates',
   // ---- Hero ----
   heroWatermark: 'E',
   heroEyebrow: 'EXTENSIONS · Capability Expansion',
@@ -16,6 +20,8 @@ export default {
   tabSkillMarket: 'Skill Marketplace',
   tabPluginMarket: 'Plugin Marketplace',
   tabInstalled: 'Installed',
+  tabMarketplace: 'Marketplace',
+  voiceGroupDesc: 'Voice panel: read documents aloud with on-device text-to-speech; record meetings with one tap, auto-transcribe with speaker separation, and let AI draft structured minutes.',
 
   // ---- Categories ----
   catAll: 'All',
@@ -66,6 +72,16 @@ export default {
   loadingLocalPlugins: 'Reading local plugins',
   noLocalPlugins: 'No plugins installed locally yet',
   noLocalPluginsHint: 'Drop a plugin directory (with manifest.json) into the server\'s plugins/ folder, then click "Rescan"',
+  pluginSettingsTitle: 'Plugin settings',
+  saveSettings: 'Save settings',
+  savingEllipsis: 'Saving...',
+  settingsSaved: 'Settings saved',
+  saveFailed: 'Save failed',
+  styleProfilesTitle: 'Style profiles',
+  profileSelect: 'Set as default profile',
+  profileSelected: 'Current default (tap to clear)',
+  styleProfileNote: 'Exports and standard formatting follow the selected profile; a project-level _模板/画像.json still takes precedence.',
+  revokedPrefix: 'Removed by platform: ',
   enabledTag: 'Enabled',
   disabledTag: 'Disabled',
   sectionSkillSub: 'Prompt-based capabilities: take effect in conversation, with configurable activation',
@@ -196,4 +212,21 @@ export default {
   purchased: 'Purchased',
   onetimePurchase: ' (one-time purchase)',
   purchasedSuffix: ' · Purchased',
+
+  // ---- Native pack, see docs/NATIVE_PACK_DISTRIBUTION.md §4.3/§7.1 ----
+  installNeedsPackSized: 'Install (downloads a {size} MB resource pack)',
+  installNeedsPackNoSize: 'Install (downloads a resource pack)',
+  packDownloadingProgress: 'Downloading {downloaded} / {total} MB',
+  packDownloadingEllipsis: 'Downloading…',
+  packDownloadingShort: 'Downloading',
+  packInstallFailedShort: 'Resource pack download failed',
+  packRevokedNotice: 'This resource pack has been delisted by the platform',
+  packUpdateAvailable: 'Version {version} available',
+  packUpgradeBtn: 'Update now',
+  packUpgradingEllipsis: 'Updating…',
+  packAlreadyLatest: 'The resource pack is already up to date',
+  packUpgradeFailed: 'Resource pack update failed',
+  confirmUninstallPackTitle: 'Confirm Uninstall',
+  uninstallPackConfirmSized: 'This will disable the feature and delete the downloaded resource pack (about {size} MB). Continue?',
+  uninstallPackConfirmPlain: 'This will disable the feature and delete the downloaded resource pack. Continue?',
 }

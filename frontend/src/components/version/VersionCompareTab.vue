@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   版本对比只读标签页（第 2 期 Task 3）。
 
@@ -176,11 +178,11 @@ export default {
 .vcmp-status {
   position: absolute; inset: 0; z-index: 2;
   display: flex; align-items: center; justify-content: center;
-  background: #fff; color: #888; font-size: 26rpx;
+  background: var(--awd-surface); color: var(--awd-text-3); font-size: 26rpx;
 }
 .vcmp-host { flex: 1; min-height: 0; }
 .vcmp-banner {
-  padding: 10rpx 20rpx; background: #F7F5F0; border-top: 1px solid #eee;
-  font-size: 23rpx; color: #666;
+  padding: 10rpx 20rpx; background: var(--awd-warning-soft); border-top: 1px solid var(--awd-border);
+  font-size: 23rpx; color: var(--awd-text-2);
 }
 </style>

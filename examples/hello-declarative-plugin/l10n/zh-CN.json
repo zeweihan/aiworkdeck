@@ -1,0 +1,8 @@
+{
+  "name": "Hello 声明式插件",
+  "desc": "零代码插件示例：一份模板、一个画像、两条设置、一张 l10n 表（规范 v2.9）。",
+  "tpl.poa": "授权委托书（一般授权）",
+  "profile.compact": "紧凑排版",
+  "set.firm": "律所名称",
+  "set.autoNumber": "自动编号"
+}

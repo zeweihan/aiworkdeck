@@ -1,17 +1,18 @@
 {
   "name": "aiworkdeck-desktop",
   "private": true,
-  "version": "0.19.1",
+  "version": "0.43.1",
   "description": "AI WorkDeck desktop shell (Electron)",
   "author": "AI WorkDeck contributors",
   "main": "main/main.js",
   "scripts": {
+    "postinstall": "node scripts/patch-dmg-builder.js",
     "clean": "node scripts/clean.js",
     "predev": "node scripts/brand-dev-electron.js",
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
     "build": "electron-builder",
-    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js tests/pysvc-runtime.test.js tests/overlay.test.js tests/update-service.test.js tests/drawio-server.test.js tests/browser-views.test.js"
+    "test": "node --test tests/service-manager.test.js tests/quit-lifecycle.test.js tests/backend-reuse-gate.test.js tests/port-chain-contract.test.js tests/model-manager.test.js tests/service-pack-gate.test.js tests/pysvc-extract-removed.test.js tests/pysvc-runtime.pack-resolve.test.js tests/overlay.test.js tests/update-service.test.js tests/drawio-server.test.js tests/browser-views.test.js tests/native-theme-light.test.js tests/main-window-bounds.test.js tests/main-window-lifecycle.test.js tests/build-pack.test.js tests/fetch-lowa-assets.test.js tests/prepare-python-service.test.js tests/trim-driver-bundle.test.js tests/after-pack.test.js tests/workflow-release-gating.test.js tests/share-file.test.js tests/product-identity-ua.test.js tests/prefs.test.js tests/kokoro-offline-english.test.js tests/reload-shortcut.test.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -24,6 +25,7 @@
   "build": {
     "appId": "com.aiworkdeck.desktop",
     "productName": "AI WorkDeck",
+    "copyright": "Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors. Licensed under the GNU AGPL v3.0 or later. Source: https://github.com/zeweihan/aiworkdeck",
     "directories": {
       "output": "release"
     },
@@ -31,6 +33,11 @@
       "main/**",
       "preload/**"
     ],
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
+    "afterPack": "scripts/after-pack.js",
     "extraResources": [
       {
         "from": "../frontend/dist/build/h5",
@@ -39,10 +46,6 @@
       {
         "from": "../frontend/dist/zetaoffice",
         "to": "frontend/dist/zetaoffice"
-      },
-      {
-        "from": "../frontend/dist/drawio",
-        "to": "frontend/dist/drawio"
       },
       {
         "from": "bundled/${os}-${arch}/backend",
@@ -57,32 +60,11 @@
         "to": "python"
       },
       {
-        "from": "bundled/${os}-${arch}/pysvc.tar.gz",
-        "to": "pysvc.tar.gz"
-      },
-      {
-        "from": "bundled/${os}-${arch}/pysvc.meta.json",
-        "to": "pysvc.meta.json"
-      },
-      {
-        "from": "bundled/${os}-${arch}/graphviz",
-        "to": "graphviz"
-      },
-      {
         "from": "../backend/skills",
         "to": "skills",
         "filter": [
           "**/*",
           "!**/__pycache__/**"
-        ]
-      },
-      {
-        "from": "../litviz",
-        "to": "litviz",
-        "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc"
         ]
       }
     ],
@@ -103,13 +85,15 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "麦克风用于两件事：会议录音插件录制会议音频（保存到你的项目文件，用于转写与纪要），以及反馈浮窗“说一段”的语音留言。均为你主动点击才开始，不会在后台采集。 The microphone is used for the meeting-recording plugin (audio saved to your project for transcription and minutes) and for the in-app feedback voice note. Recording starts only when you click, never in the background."
       },
-      "notarize": {
-        "teamId": "X9B97KVA84"
-      }
+      "notarize": true
     },
     "dmg": {
       "title": "AI WorkDeck ${version}",
       "background": "build/background.png",
+      "window": {
+        "width": 660,
+        "height": 420
+      },
       "iconSize": 128,
       "iconTextSize": 13,
       "contents": [
@@ -134,6 +118,18 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "installerSidebar": "build/win/installerSidebar.bmp",
+      "uninstallerSidebar": "build/win/installerSidebar.bmp",
+      "installerHeader": "build/win/installerHeader.bmp",
+      "shortcutName": "AI WorkDeck",
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false
     }
   }
 }

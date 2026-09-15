@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 插件广场（MarketPane / MarketDetailPane / MarketSidebarPanel / plugin-market 页 / marketPricing 工具）
 export default {
+  redactionEngineUpdateNotice: '本地规则自动识别公司与中文姓名，支持预览、编号替换和复敏。实际功能随桌面端补丁升级，重新安装说明文件不会更新引擎。',
+  redactionEngineUpdateButton: '检查脱敏引擎更新',
   // ---- Hero ----
   heroWatermark: '技',
   heroEyebrow: 'EXTENSIONS · 能力扩展',
@@ -16,6 +20,10 @@ export default {
   tabSkillMarket: 'Skill 广场',
   tabPluginMarket: '插件广场',
   tabInstalled: '已安装',
+  // 左栏面板的在线广场分组：Skill 与插件收进同一个「Marketplace」组，组内横向双标签
+  tabMarketplace: 'Marketplace',
+  // 「语音」合并插件（语音合成 + 会议录音，见 leftSidebarPlugins.js 的 VOICE_PLUGIN_GROUP）
+  voiceGroupDesc: '语音面板：文本转语音朗读文档（本机离线合成）；开会一键录音、自动转写并区分说话人，AI 生成结构化会议纪要。',
 
   // ---- 分类 ----
   catAll: '全部',
@@ -66,6 +74,16 @@ export default {
   loadingLocalPlugins: '正在读取本机插件',
   noLocalPlugins: '本机还没有插件',
   noLocalPluginsHint: '把插件目录（含 manifest.json）放进服务端 plugins/ 后点「重新扫描」',
+  pluginSettingsTitle: '插件设置',
+  saveSettings: '保存设置',
+  savingEllipsis: '保存中…',
+  settingsSaved: '设置已保存',
+  saveFailed: '保存失败',
+  styleProfilesTitle: '样式画像',
+  profileSelect: '设为默认画像',
+  profileSelected: '当前默认（点击取消）',
+  styleProfileNote: '设为默认后，文档导出与标准格式化按该画像排版；项目里的 _模板/画像.json 优先级更高。',
+  revokedPrefix: '已被平台下架：',
   enabledTag: '已启用',
   disabledTag: '已停用',
   sectionSkillSub: '提示词能力：在对话中生效，可设置生效方式',
@@ -196,4 +214,21 @@ export default {
   purchased: '已购买',
   onetimePurchase: '（一次性买断）',
   purchasedSuffix: ' · 已购买',
+
+  // ---- 原生资源包（native pack），见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3/§7.1 ----
+  installNeedsPackSized: '安装（需下载资源包 {size} MB）',
+  installNeedsPackNoSize: '安装（需下载资源包）',
+  packDownloadingProgress: '下载中 {downloaded} / {total} MB',
+  packDownloadingEllipsis: '下载中…',
+  packDownloadingShort: '下载中',
+  packInstallFailedShort: '资源包下载失败',
+  packRevokedNotice: '该资源包已被平台下架',
+  packUpdateAvailable: '有新版本 {version}',
+  packUpgradeBtn: '立即升级',
+  packUpgradingEllipsis: '升级中…',
+  packAlreadyLatest: '资源包已是最新版本',
+  packUpgradeFailed: '资源包升级失败',
+  confirmUninstallPackTitle: '确认卸载',
+  uninstallPackConfirmSized: '停用后将删除已下载的资源包（约 {size} MB）。继续吗？',
+  uninstallPackConfirmPlain: '停用后将删除已下载的资源包。继续吗？',
 }

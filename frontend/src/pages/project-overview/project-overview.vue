@@ -1,5 +1,7 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="page-project-overview" :class="{ 'compact-mode': isCompactLayout, 'is-resizing': resizing && resizing.active }">
+  <view class="page-project-overview" :class="{ 'compact-mode': isCompactLayout, 'is-resizing': resizing && resizing.active, 'rail-edit-mode': railEditMode }">
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
@@ -39,7 +41,10 @@
               >
                 <text class="switcher-item-name">{{ p.name }}</text>
               </view>
-              <view v-if="!switcherProjects.length" class="switcher-item switcher-empty">
+              <view v-if="switcherLoadFailed" class="switcher-item switcher-error" @tap="loadSwitcherProjects">
+                <text>{{ $t('workbench.recentProjectsLoadFailed') }}</text>
+              </view>
+              <view v-else-if="!switcherProjects.length" class="switcher-item switcher-empty">
                 <text>{{ $t('workbench.noOtherRecentProjects') }}</text>
               </view>
               <view class="switcher-item switcher-home" @tap="goProjectHome">
@@ -55,24 +60,18 @@
             <view class="project-status-badge">
               <text class="status-text">{{ $t('workbench.statusInProgress') }}</text>
             </view>
-            <!-- IDE 化：常驻工作状态点（版本记录开着且有未收尾工作/稿时可见，点击直达版本面板） -->
-            <view
-              v-if="versionWorkStatus.enabled && (versionWorkStatus.working || versionWorkStatus.onDraft)"
-              class="work-status-chip"
-              @tap.stop="goHandleAdoptConflict"
-            >
-              <view class="work-status-dot"></view>
-              <text class="work-status-text">{{ versionWorkStatusLabel }}</text>
-            </view>
             <!-- 协作状态 chip：只在这份案卷真的放进过团队案件库时才渲染。
                  没连案件库的律师（绝大多数）在界面上看不到任何协作元素——
                  「以自己工作为主」的产品定位要求协作 UI 零打扰。 -->
+            <!-- 点它开的是中栏「提交历史」标签（dev-board#624）：这句话说的是
+                 「案件库那边发生了什么」，律师的下一步是去看发生了什么，不是去按交稿键。
+                 交稿/取回/加人仍在协作抽屉里（底部状态条的同一句话还开那个）。 -->
             <view
               v-if="collabLinked"
               class="collab-chip"
               :class="'collab-chip-' + collabTone"
-              @tap.stop="openCollab('casefile')"
-              :title="$t('workbench.collab')"
+              @tap.stop="openCommitHistoryTab({ focus: collabCloud && collabCloud.remoteAhead ? 'remote' : '' })"
+              :title="$t('version.historyTabName')"
             >
               <view class="collab-chip-dot"></view>
               <text class="collab-chip-text">{{ collabStateText }}</text>
@@ -96,13 +95,13 @@
 
       <!-- Center Logo -->
       <view class="header-center">
-         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo" />
+         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo awd-brand-logo" />
       </view>
 
       <view class="header-right">
-        <!-- 授权标识（低调 chip）。优先级：宽限预警 > 已连接账户 > 试用版。
-             预警排最前是因为它是三者里唯一「不处理就会被挡在门外」的一条；
-             另外两个都只是状态标注（试用码解锁后再连账户的用户该看到账户状态）。 -->
+        <!-- 授权标识（低调 chip）。优先级：宽限预警 > 试用版。
+             「已连接账户」chip 已删（dev-board#221）：手机号登录就是常态，无需状态标注；
+             预警仍排最前——它是唯一「不处理就会被挡在门外」的一条。 -->
         <view
           v-if="graceKind"
           class="trial-chip grace-chip"
@@ -112,23 +111,46 @@
           <text class="trial-chip-text">{{ graceChipText }}</text>
         </view>
         <view
-          v-else-if="accountConnected"
-          class="trial-chip account-chip"
-          @tap.stop="goToAccountPanel"
-          :title="$t('workbench.accountUsage')"
-        >
-          <text class="trial-chip-text">{{ $t('workbench.accountConnected') }}</text>
-        </view>
-        <view
-          v-else-if="licenseMode === 'trial'"
+          v-else-if="!accountConnected && licenseMode === 'trial'"
           class="trial-chip"
           @tap.stop="showTrialInfo = true"
           :title="$t('workbench.trialInfo')"
         >
           <text class="trial-chip-text">{{ $t('workbench.trialBadge') }}</text>
         </view>
-        <!-- 顶部工具区（IDE 风格）：分屏 / 浏览器 / 摘录 / AI / 工具 -->
+        <!-- 顶部工具区（IDE 风格）：整理 / 分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
+          <!-- 外观主题（dev-board#223）：浅色/深色/跟随系统三选一。
+               图标显示的是**当前生效**的外观（跟随系统时也显示解析后的那个）。 -->
+          <view class="top-bar-btn theme-btn" :class="{ active: themeMenuOpen }" @tap.stop="themeMenuOpen = !themeMenuOpen" :title="$t('workbench.appearance')">
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in (resolvedTheme === 'dark' ? GLYPHS.moon : GLYPHS.sun)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <view v-if="themeMenuOpen" class="theme-menu" @tap.stop>
+              <view
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                class="theme-menu-item"
+                :class="{ on: themeMode === opt.value }"
+                @tap="pickTheme(opt.value)"
+              >
+                <text class="theme-menu-text">{{ opt.label }}</text>
+              </view>
+            </view>
+          </view>
+          <view v-if="themeMenuOpen" class="theme-menu-mask" @tap="themeMenuOpen = false"></view>
+          <!-- rail 整理模式开关（dev-board#215/#221）：从 rail 挪到顶栏（原「已连接账户」chip 位），
+               开着时 rail 可拖项抖动+虚线框、点击不打开面板，再按一次退出 -->
+          <view
+            class="top-bar-btn"
+            :class="{ active: railEditMode }"
+            :title="railEditMode ? $t('workbench.railEditDone') : $t('workbench.railEditEnter')"
+            @tap="toggleRailEditMode"
+          >
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.sort" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </view>
           <!-- 1. Left Sidebar -->
           <view
             class="top-bar-btn"
@@ -141,8 +163,10 @@
             </svg>
           </view>
 
-          <!-- 2. Bottom Sidebar (Tools Panel) -->
+          <!-- 2. Bottom Sidebar (Tools Panel)
+               三个工具面板都被搬到左/右之后底栏没东西可显示，开关一并收起（dev-board#180） -->
           <view
+            v-if="bottomToolsList.length"
             class="top-bar-btn"
             :class="{ active: showToolsPanel }"
             @tap="toggleToolsPanel"
@@ -219,7 +243,54 @@
                </view>
             </view>
         </view>
-        <!-- User Avatar moved to Left Rail -->
+
+        <!-- Credits 余额（dev-board#187 → #223 合并）：余额与头像本是同一件事
+             （都是「我的账户」，点开都通向设置的「账户与用量」），并排两个 chip
+             是重复入口，已收进头像下拉。
+             **只有余额不足时仍在顶栏常显**——那是唯一「不处理就会卡住干活」的
+             信号，藏进下拉等于让用户在跑任务时才撞上。 -->
+        <view
+          v-if="walletChipVisible && walletLow"
+          class="trial-chip wallet-chip wallet-chip-low"
+          @tap.stop="goToAccountPanel"
+          :title="$t('workbench.walletChipTitle')"
+        >
+          <text class="trial-chip-text">{{ walletChipText }}</text>
+        </view>
+
+        <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
+             刻意放在 isClientView 分支之外：rail 上那个头像本来就对客户也渲染。
+
+             2026-08-20：个人中心并进了「设置」，下拉只剩这一项——两个入口各开一个
+             整面板、彼此还互相跳的形态是用户明确抱怨过的。客户同样要能进（个人组
+             的工作记录/账号安全对他一样成立），面板内的「系统」组自己按 isAdmin 收。
+             2026-08-21（dev-board#96）：只剩一项时下拉曾撤掉、点头像直开设置。
+             2026-08-27（dev-board#205）：「退出登录」要有一个找得到的一级入口，
+             下拉恢复成两项（设置 / 退出登录）——恢复的判据正是当年撤它的判据。
+             顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里。 -->
+        <view class="header-account">
+          <view class="avatar-btn" @tap.stop="avatarMenuOpen = !avatarMenuOpen" :title="$t('workbench.accountMenu')">
+            <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
+            <text v-else class="avatar-text">{{ getInitial(userDisplayName || currentUser?.displayName) || 'U' }}</text>
+          </view>
+          <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
+          <view v-if="avatarMenuOpen" class="avatar-menu">
+            <!-- 账户抬头：余额 + 等级。整块可点，去向与原余额 chip 一致 -->
+            <view v-if="walletChipVisible" class="avatar-menu-wallet" @tap.stop="onAvatarMenuAccount">
+              <view class="avatar-menu-wallet-row">
+                <text class="avatar-menu-balance" :class="{ low: walletLow }">{{ walletChipText }}</text>
+                <text v-if="walletTierName" class="avatar-menu-tier">{{ walletTierName }}</text>
+              </view>
+              <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
+            </view>
+            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
+              <text>{{ $t('workbench.settingsTabName') }}</text>
+            </view>
+            <view class="avatar-menu-item danger" @tap.stop="onAvatarMenuSignOut">
+              <text>{{ $t('account.logoutBtn') }}</text>
+            </view>
+          </view>
+        </view>
       </view>
     </view>
 
@@ -227,29 +298,22 @@
     <view class="main-layout" :class="{ 'is-compact': isCompactLayout }">
       <!-- Cursor 风格：最左常驻栏（Activity Bar） -->
       <view class="left-rail">
-        <!-- 项目概览：2026-08 起概览不再是列表与工作台之间那一跳独立页，
-             而是工作台里的一个中栏标签（一页纸宽 880px，塞进 260px 左栏会全部重排）。
-             放在 rail 第一位——它是「这个项目的门面」，在文件树之上。 -->
-        <view
-          class="rail-btn"
-          :class="{ active: isProjectHomeTabActive }"
-          :title="$t('projects.overviewPageTitle')"
-          @tap="openProjectHomeTab"
-        >
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in GLYPHS.landmark" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
-
+        <!-- rail 的顺序就是 config/leftSidebarPlugins.js 里数组的顺序（项目概览 →
+             资源管理器 → 搜索 → 插件中心 → 语音 → 脱敏 → 门控项）。
+             2026-08-19 起「项目概览」和「插件中心」也在这个数组里：它们走的都是
+             普通的 toggleLeftPane 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。 -->
         <view
           v-for="p in LEFT_SIDEBAR_PLUGINS"
           :key="p.key"
           class="rail-btn"
-          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned) }"
+          :class="{ active: (leftPaneKey === p.key && !sidebarCollapsed) || (p.key === 'staging' && stagingPinned), 'is-movable': isMovablePanel(p.key), 'is-sortable': !isClientView, 'rail-dragging': draggingRailKey === p.key }"
           :title="p.label"
-          @tap="toggleLeftPane(p.key)"
+          :draggable="!isClientView"
+          @tap="onRailBtnTap(p.key)"
+          @dragstart="onRailDragStart(p.key, $event)"
+          @dragover="onRailDragOver(p.key, $event)"
+          @dragend="onRailDragEnd"
+          @contextmenu="openDockMenu(p.key, $event)"
         >
           <view v-if="p.svgPaths" class="rail-icon-wrapper">
             <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -271,8 +335,18 @@
             class="rail-icon-img"
             mode="aspectFit"
           />
+          <!-- 动态插件（registry icon 是 emoji、不当图片渲染）用统一的拼图 SVG 兜底，
+               不再指向不存在的 /static/plugin_default.png（会 404 成破图）。 -->
+          <view v-else-if="p.isDynamic" class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14 4a2 2 0 1 1 4 0v2h1a2 2 0 0 1 2 2v3h-2a2 2 0 1 0 0 4h2v3a2 2 0 0 1-2 2h-3v-2a2 2 0 1 0-4 0v2H9a2 2 0 0 1-2-2v-3H5a2 2 0 1 1 0-4h2V8a2 2 0 0 1 2-2h1V4Z"
+                stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
           <text v-else class="rail-icon">{{ p.icon }}</text>
         </view>
+
+        <!-- 整理模式开关已挪到顶栏 header-tools（dev-board#221，原在 rail 上太显眼） -->
 
         <!-- Spacer -->
         <view style="flex: 1"></view>
@@ -291,30 +365,23 @@
           </view>
         </view>
 
-        <!-- 插件广场：IDE 扩展市场式直达入口（浏览/安装不该藏在系统设置两跳之下） -->
+        <!-- 插件中心与系统设置都不在 rail 底部了（2026-08-19）：前者升成 rail 数组
+             里的一项（排在搜索之后），后者收进顶栏右上角的头像下拉。
+             rail 底部现在是「暂存区」「版本记录」「成员堆叠（协作）」三件跟当前
+             案卷有关的东西——版本记录挪到这里（原先在 rail 数组里，见
+             config/leftSidebarPlugins.js 的 VERSION_PLUGIN），视觉上放在项目成员
+             与暂存区之间。 -->
+
+        <!-- Version History -->
         <view
           class="rail-btn"
-          :class="{ active: leftPaneKey === 'market' && !sidebarCollapsed }"
-          :title="$t('workbench.pluginMarket')"
-          @tap="goToPluginMarket"
+          :class="{ active: leftPaneKey === 'version' && !sidebarCollapsed }"
+          :title="VERSION_PLUGIN.label"
+          @tap="toggleLeftPane('version')"
         >
           <view class="rail-icon-wrapper">
             <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4 4h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M4 13h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M13 13h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M14.5 2.5h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
-
-        <!-- 系统设置：AI 提供商 / API Key 等随时可改（不再只藏在首次向导里）。
-             页面与接口仅管理员可用（后端 requireAdmin），入口对所有人可见便于发现。 -->
-        <view class="rail-btn" :title="$t('workbench.systemSettings')" @tap="goToSystemSettings">
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path v-for="(path, idx) in VERSION_PLUGIN.svgPaths" :key="idx" :d="path.d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
             </svg>
           </view>
         </view>
@@ -335,7 +402,7 @@
                       }"
                    >
                       <image v-if="member.avatarUrl" :src="member.avatarUrl" class="avatar-img" />
-                      <view v-else class="avatar-placeholder">{{ member.displayName?.charAt(0) || 'U' }}</view>
+                      <view v-else class="avatar-placeholder">{{ getInitial(member.displayName) || 'U' }}</view>
                    </view>
               </view>
 
@@ -350,7 +417,7 @@
                                    <view class="member-avatar-wrapper">
                                      <image v-if="member.avatarUrl" :src="member.avatarUrl" class="member-avatar-grid" />
                                      <view v-else class="member-avatar-placeholder-grid" :class="{ 'is-client': member.role === 'CLIENT' }">
-                                       {{ member.role === 'CLIENT' ? $t('workbench.clientInitial') : (member.displayName?.charAt(0) || 'U') }}
+                                       {{ member.role === 'CLIENT' ? $t('workbench.clientInitial') : (getInitial(member.displayName) || 'U') }}
                                      </view>
                                    </view>
                               </view>
@@ -373,14 +440,7 @@
            </view>
         </view>
 
-        <!-- User Avatar (Bottom) -->
-        <!-- User Avatar (Bottom) -->
-        <view class="rail-user-avatar" @tap="goToUserProfile" :title="$t('workbench.profile')">
-           <view class="rail-user-avatar-inner">
-               <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
-               <text v-else class="avatar-text">{{ (userDisplayName || currentUser?.displayName)?.charAt(0) || 'U' }}</text>
-           </view>
-        </view>
+        <!-- 用户头像已搬到顶栏右上角（「设置」的下拉入口）。 -->
       </view>
 
       <!-- File Picker Dialog (for EasyVoice Import) -->
@@ -391,6 +451,7 @@
         :project-id="projectId"
         :allow-folder="filePickerAllowFolder"
         @confirm="handleFilePickerConfirm"
+        @cancel="handleFilePickerCancel"
       />
 
       <!-- Invite Modal (Refactored to AI WorkDeck) -->
@@ -398,7 +459,10 @@
       <InviteMemberDialog
         v-model:visible="showInviteModal"
         :project-id="projectId"
-        @success="loadProjectMembers"
+        :cloud="collabCloud"
+        :project-name="project.name || ''"
+        :inviter-name="userDisplayName || (currentUser && currentUser.displayName) || ''"
+        @success="onInviteMemberSuccess"
       />
 
       <!-- 协作抽屉：顶栏 chip 与版本面板状态行共用的唯一动作入口 -->
@@ -414,6 +478,22 @@
         @changed="onCollabChanged"
         @reload-files="onVersionReloadFiles"
         @conflict="onCollabConflict"
+        @open-history="onOpenHistoryFromCollab"
+        @submit-guide="openSubmitGuide"
+        @collab-help="openCollabHelp"
+      />
+
+      <!-- 交稿引导（dev-board#645）：三处交稿入口共用这一个实例。三份各自判断必然
+           走散，而判错的后果是律师看到一句他读不懂的后端错误。 -->
+      <SubmitDraftGuide
+        v-model:visible="submitGuideVisible"
+        :project-id="projectId"
+        :working="!!versionWorkStatus.working"
+        :cloud="collabCloud"
+        :mode="submitGuideMode"
+        @changed="onCollabChanged"
+        @reload-files="onVersionReloadFiles"
+        @conflict="onCollabConflict"
       />
 
       <!-- 文档比较选择对话框 -->
@@ -426,37 +506,9 @@
 
     <!-- Custom Recording Toast -->
     <view class="recording-toast" :class="{ visible: showRecordingToast }">
+      <view v-if="isRecording" class="recording-toast-dot"></view>
       <text>{{ recordingToastMessage }}</text>
     </view>
-
-      <!-- Assistant Config Dialog Overlay (Moved to Root) -->
-      <view v-if="showAssistantConfigDialog" class="dialog-overlay" style="z-index: 9999;" @tap="closeAssistantConfigDialog">
-         <view class="config-dialog" @tap.stop>
-            <view class="dialog-header">
-               <text class="dialog-title">{{ $t('workbench.configAssistant') }}</text>
-               <text class="dialog-close" @tap="closeAssistantConfigDialog">×</text>
-            </view>
-            <view class="dialog-content">
-               <view class="form-item">
-                  <text class="label">{{ $t('workbench.assistantNameLabel') }}</text>
-                  <input class="input readonly" :value="editingAssistant.name" disabled />
-               </view>
-               <view class="form-item">
-                  <text class="label">{{ $t('workbench.presetPromptLabel') }}</text>
-                  <textarea class="textarea readonly" :value="editingAssistant.systemPrompt" disabled></textarea>
-               </view>
-               <view class="form-item">
-                  <text class="label">{{ $t('workbench.userPromptLabel') }}</text>
-                  <textarea class="textarea" v-model="editingAssistant.userPrompt" :placeholder="$t('workbench.userPromptPlaceholder')"></textarea>
-                  <text class="hint">{{ $t('workbench.userPromptHint') }}</text>
-               </view>
-            </view>
-            <view class="dialog-footer">
-               <button class="btn-cancel" @tap="closeAssistantConfigDialog">{{ $t('common.cancel') }}</button>
-               <button class="btn-save" @tap="saveAssistantConfig">{{ $t('common.save') }}</button>
-            </view>
-         </view>
-      </view>
 
       <!-- 左侧文件树（可收起） -->
       <view class="sidebar-left" ref="sidebarLeft" :class="{ collapsed: sidebarCollapsed }" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
@@ -514,18 +566,6 @@
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.checkSquare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </view>
-
-              <!-- 4. 上传 (普通模式) -->
-              <view
-                v-if="!fileBatchMode"
-                class="icon-btn mini"
-                @tap="onFileTreeQuickAction('upload')"
-                :title="$t('workbench.uploadFile')"
-              >
-                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path v-for="(d, gi) in GLYPHS.upload" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </view>
 
@@ -598,6 +638,9 @@
             @file-deleted="handleFileDeleted"
             @file-history="onFileHistory"
             @reveal-file="onRevealFile"
+            @share-file="onShareFile"
+            :transcribe-enabled="meetingRecorderEnabled"
+            @transcribe-audio="onTranscribeAudio"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -618,21 +661,60 @@
             @open-file="handleLitigationOpenFile"
             @request-scope-select="handleLitigationScopeSelect"
           />
-          <MeetingRecordingPanel
-            v-else-if="leftPaneKey === 'meeting-recorder'"
-            :project-id="projectId"
-            :current-user="currentUser"
-            @generate-minutes="handleMeetingMinutesStart"
+          <!-- 项目概览：2026-08-19 起在左栏展示（此前是中栏标签）。
+               同一个 ProjectHomePane，薄壳页那个宿主一行没改。 -->
+          <ProjectHomePane
+            v-else-if="leftPaneKey === 'home'"
+            :project-id="Number(projectId)"
+            compact
+            @open-conversation="openConversationInPanel"
           />
-          <EasyVoicePane
-             v-else-if="leftPaneKey === 'easyvoice'"
-             @request-doc-text="handleEasyVoiceDocRequest"
-             @highlight-sentence="handleTtsHighlight"
-             @clear-highlight="handleTtsClearHighlight"
-          />
+          <!-- 语音：语音合成 + 会议录音合并成一个入口，面板内部两个 tab。
+               两个组件本身一行没改，这里只做宿主（tab 条 + v-if）。
+               两个 tab 各自门控 text-to-speech / meeting-recorder skill 是否启用——
+               门控从 rail 位挪到了这里，判据仍是同一份 enabledSkillIds；
+               整个 rail 位在两者都停用时才隐藏，见 LEFT_SIDEBAR_PLUGINS 计算属性。
+               实际渲染哪个 tab 走 effectiveVoiceTab（voiceTab 记的是用户选择，
+               选的那个被停用时兜底落到唯一可用的那个）。 -->
+          <view v-else-if="leftPaneKey === 'voice'" class="voice-pane">
+            <view class="voice-tabs">
+              <view
+                v-if="ttsEnabled"
+                class="voice-tab"
+                :class="{ active: effectiveVoiceTab === 'tts' }"
+                @tap="voiceTab = 'tts'"
+              >
+                <text>{{ $t('workbench.voiceTts') }}</text>
+              </view>
+              <view
+                v-if="meetingRecorderEnabled"
+                class="voice-tab"
+                :class="{ active: effectiveVoiceTab === 'recorder' }"
+                @tap="voiceTab = 'recorder'"
+              >
+                <text>{{ $t('workbench.voiceRecorder') }}</text>
+              </view>
+            </view>
+            <view class="voice-tab-body">
+              <MeetingRecordingPanel
+                v-if="effectiveVoiceTab === 'recorder'"
+                :project-id="projectId"
+                :current-user="currentUser"
+                :focus-meeting-id="meetingFocusId"
+                @generate-minutes="handleMeetingMinutesStart"
+              />
+              <EasyVoicePane
+                v-else-if="effectiveVoiceTab === 'tts'"
+                @request-doc-text="handleEasyVoiceDocRequest"
+                @highlight-sentence="handleTtsHighlight"
+                @clear-highlight="handleTtsClearHighlight"
+              />
+            </view>
+          </view>
           <DesensitizePane
              v-else-if="leftPaneKey === 'desensitize'"
              :project-id="projectId"
+             :prepare-file="prepareSensitiveFile"
              @request-file-select="handleDesensitizeSelectFile"
              @request-active-file="handleDesensitizeActiveFile"
              @open-file="handleDesensitizeSuccess"
@@ -651,16 +733,108 @@
             @clear-file-filter="versionFileFilter = null"
             @reload-files="onVersionReloadFiles"
             @adopt-conflict="adoptConflictPending = $event"
+            @status-changed="checkAdoptConflict"
             @open-collab="openCollab"
+            @open-history="openCommitHistoryTab({})"
+            @open-merge-review="onOpenMergeReview"
+            @retry-merge="onRetryMerge"
           />
           <MarketSidebarPanel
             v-else-if="leftPaneKey === 'market'"
             @open-detail="openMarketDetail"
           />
+          <ProjectCalendarPane
+            v-else-if="leftPaneKey === 'calendar'"
+            :project-id="projectId"
+            @leave-workbench="leaveWorkbench"
+          />
+          <PluginDevPanel
+            v-else-if="leftPaneKey === 'dev'"
+            :project-id="projectId"
+            @refresh-plugins="loadDynamicPlugins"
+            @refresh-files="onArchiveExtracted"
+            @open-plugin="toggleLeftPane"
+            @ai-develop="onPluginDevAiDevelop"
+          />
+          <!-- 停靠到左栏的工具面板（dev-board#180）。三个面板组件本身一行没改，这里只做宿主：
+               一条紧凑搜索行（底栏那份的等价物——这三个面板的搜索早就外置给宿主了，
+               不给就等于没有搜索）+ 面板体。三个 dock 的 props/@event 逐个显式写，
+               **不改成 <component :is>**：check-emit-bindings.mjs 是静态扫描，动态绑定会静默失去覆盖。 -->
+          <view v-else-if="leftPaneKey === 'variables'" class="dock-tool-pane">
+            <view class="dock-tool-head">
+              <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchVariables')" confirm-type="search" />
+              <view class="dock-tool-btn" :title="$t('workbench.setAsVariable')" @tap="handleOpenCreateVariable"><text>＋</text></view>
+              <view class="dock-tool-btn" :title="$t('workbench.sync')" @tap="handleSyncVariable"><text>↻</text></view>
+            </view>
+            <view class="dock-tool-body">
+              <VariablePanel
+                ref="variablePanel"
+                :project-id="projectId"
+                :get-editor="getLibreVariableBridge"
+                :search-keyword="toolsSearchKeyword"
+              />
+            </view>
+          </view>
+          <view v-else-if="leftPaneKey === 'favorites'" class="dock-tool-pane">
+            <view class="dock-tool-head">
+              <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchFavorites')" confirm-type="search" />
+            </view>
+            <view class="dock-tool-body">
+              <ProjectFavoritesPanel
+                ref="favoritesPanel"
+                :project-id="projectId"
+                :query="toolsSearchKeyword"
+                @insert="insertPlainTextToWps"
+                @open-url="openBrowserTab($event)"
+              />
+            </view>
+          </view>
+          <view v-else-if="leftPaneKey === 'clipboard'" class="dock-tool-pane">
+            <view class="dock-tool-head">
+              <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchClipboard')" confirm-type="search" />
+            </view>
+            <view class="dock-tool-body">
+              <ClipboardPanel
+                ref="clipboardPanel"
+                :query="toolsSearchKeyword"
+                @insert="insertPlainTextToWps"
+                @preview-image="openImagePreview"
+              />
+            </view>
+          </view>
+          <!-- 依据被拖到左栏时（dev-board#182）。标题由外壳的 .sidebar-header 出，
+               面板自己不画标题；这里也不套 .dock-tool-pane 的搜索行——它自带头部。 -->
+          <InsightPane
+            v-else-if="leftPaneKey === 'insight'"
+            :project-id="projectId"
+            :doc-file-id="insightDocFileId"
+            :doc-name="insightDocName"
+            :get-executor="getInsightExecutor"
+            :can-write="canWriteProject"
+            :prepare-document="prepareInsightDocument"
+            :cursor-context="insightCursorContext"
+            @entities="onInsightEntities"
+            @open-hover="openInsightHoverCard($event)"
+            @open-url="openBrowserTab($event)"
+            @open-settings="openSettingsTab($event || {})"
+            @open-doc-file="openInsightDocFile($event)"
+          />
+          <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
+               启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
           <PluginPane
-            v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
-            :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
-            :plugin-id="leftPaneKey"
+            v-else-if="activeDynamicPlugin && activeDynamicPlugin.hasFrontend"
+            :url="activeDynamicPlugin.frontendEntry"
+            :plugin-id="activeDynamicPlugin.pluginId || ''"
+            :permissions="activeDynamicPlugin.permissions || []"
+            :project-id="projectId"
+            :get-active-editor="getPluginActiveEditor"
+            :dev-installed="!!activeDynamicPlugin.devInstalled"
+            @kickoff="onPluginQuickAction"
+          />
+          <PluginGuidePane
+            v-else-if="activeDynamicPlugin"
+            :plugin="activeDynamicPlugin"
+            @kickoff="onPluginQuickAction"
           />
           <view v-else class="sidebar-plugin-placeholder">
             <text class="placeholder-title">{{ leftPaneTitle }}</text>
@@ -670,21 +844,15 @@
 
         </view>
 
-          <!-- 文件拖拽关联：浮窗落点区域 (移至侧边栏底部) -->
-          <!-- 1. 关联区域 (Priority: Dragging + Word 文档已打开) -->
-          <FileLinkDropZone
-            :visible="showAssociationDropZone"
-            :file-name="fileLinkDrag.file ? fileLinkDrag.file.name : ''"
-            :split-mode="splitMode"
-            @drop="onFileLinkZoneDrop"
-          />
-
-          <!-- 2. 文件暂存区 (Visible if Staging has files OR Dragging without a Word doc open) -->
+          <!-- 文件拖拽关联（EvidenceLink）：投放区是编辑器画布本身（LibreOfficeEditor
+               的 evidence-drop），侧栏不再放落点区。 -->
+          <!-- 文件暂存区 (Visible if Staging has files OR Dragging) -->
           <FileStagingArea
             :visible="showStagingArea"
             :files="stagingFiles"
             :usage="stagingUsage"
             @drop="onStagingDrop"
+            @drop-files="onStagingDropFiles"
             @clear="handleStagingClear"
             @remove="handleStagingRemove"
             @open="handleStagingOpen"
@@ -695,7 +863,7 @@
         <!-- Sidebar Footer moved to Left Rail -->
 
         <!-- 拖拽手柄 -->
-        <view class="resize-handle" @touchstart="startResize('left', $event)" @mousedown="startResize('left', $event)"></view>
+        <view class="resize-handle" :title="$t('workbench.resizePanel')" @touchstart="startResize('left', $event)" @mousedown="startResize('left', $event)"></view>
       </view>
 
       <!-- IDE 工作台：中(编辑) + 右(AI) + 底(工具) -->
@@ -707,7 +875,8 @@
             <view class="tabs-bar">
               <!-- 左侧窗格的 Tabs -->
               <view class="tabs-pane tabs-pane-left" :class="{ 'half-width': splitMode }">
-                <scroll-view class="tabs-scroll" scroll-x show-scrollbar="false">
+                <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
+                  :scroll-into-view="tabsScrollIntoViewLeft">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('left')"
@@ -717,14 +886,17 @@
                       v-for="file in leftFiles"
                       :key="file.id"
                       v-show="isTabVisible(file)"
+                      :id="tabDomId('left', file.id)"
                       class="tab-item"
-                      :class="{
+                      :class="[tabKindClass(file), {
                         active: activeFileIdLeft === file.id,
                         'tab-drag-over': tabDragOver && tabDragOver.pane === 'left' && tabDragOver.fileId === file.id,
                         'tab-dual-open': isOpenInOtherPane(file.id, 'left')
-                      }"
+                      }]"
                       :draggable="true"
                       @tap="activateTab(file, 'left')"
+                      @mousedown="onTabMouseDown"
+                      @auxclick="onTabAuxClick($event, file, 'left')"
                       @dragstart="onTabDragStart($event, file, 'left')"
                       @dragover.prevent="onTabDragOver($event, file, 'left')"
                       @drop.prevent="onTabDropOnItem($event, file, 'left')"
@@ -745,7 +917,8 @@
 
               <!-- 右侧窗格的 Tabs (仅在分屏时显示) -->
               <view v-if="splitMode" class="tabs-pane tabs-pane-right">
-                <scroll-view class="tabs-scroll" scroll-x show-scrollbar="false">
+                <scroll-view class="tabs-scroll awd-hairline-scroll" scroll-x scroll-with-animation
+                  :scroll-into-view="tabsScrollIntoViewRight">
                   <view
                     class="tabs-list"
                     @dragover.prevent="onTabDropZoneDragOver('right')"
@@ -755,14 +928,17 @@
                       v-for="file in rightFiles"
                       :key="file.id"
                       v-show="isTabVisible(file)"
+                      :id="tabDomId('right', file.id)"
                       class="tab-item"
-                      :class="{
+                      :class="[tabKindClass(file), {
                         active: activeFileIdRight === file.id,
                         'tab-drag-over': tabDragOver && tabDragOver.pane === 'right' && tabDragOver.fileId === file.id,
                         'tab-dual-open': isOpenInOtherPane(file.id, 'right')
-                      }"
+                      }]"
                       :draggable="true"
                       @tap="activateTab(file, 'right')"
+                      @mousedown="onTabMouseDown"
+                      @auxclick="onTabAuxClick($event, file, 'right')"
                       @dragstart="onTabDragStart($event, file, 'right')"
                       @dragover.prevent="onTabDragOver($event, file, 'right')"
                       @drop.prevent="onTabDropOnItem($event, file, 'right')"
@@ -785,11 +961,33 @@
 
             <!-- 编辑器区域（会被底部工具面板压缩） -->
             <view class="editors-container">
+              <!-- 三方合并借走的隐藏引擎实例（librePool.acquireLibreHiddenInstance）必须挂在
+                   这里、v-if/v-else 之外：备胎那块 v-for 在下面的 .editors-grid 里，而
+                   .editors-grid 只在左栏开着文档时才渲染——律师在版本面板里点「取回最新稿」
+                   时左栏常常一份文档都没开，隐藏实例根本不会 mount，acquire 只能空转 180 秒
+                   后降级成整份三选一（2026-09-14 真机走查抓到的阻断缺陷）。
+                   .editors-container 本身 position:relative 且有尺寸，绝对定位的
+                   .libre-spare-standby 在这里照样有画布可 boot（display:none 不行，见 scss）。 -->
+              <view
+                v-for="sp in libreHiddenSpares"
+                :key="'libre-hidden-' + sp.key"
+                class="pane-content libre-spare-standby"
+              >
+                <LibreOfficeEditor
+                  :file="sp.file"
+                  @ready="onLibreSpareReady(sp, $event)"
+                  :project-id="projectId"
+                  :can-write="canWriteProject"
+                />
+              </view>
               <!-- 初始空状态 (仅当左侧也没有文件时) -->
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
-                  <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
-                  <text class="empty-text">{{ $t('workbench.emptyWorkspace') }}</text>
+                  <view class="empty-logo-tile">
+                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
+                  </view>
+                  <text class="empty-title">{{ $t('workbench.emptyWorkspace') }}</text>
+                  <text class="empty-sub">{{ $t('workbench.emptyWorkspaceHint') }}</text>
                 </view>
               </view>
 
@@ -805,25 +1003,54 @@
                   }"
                   @tap="focusPane('left')"
                 >
+                  <!-- EvidenceLink method 浮动小条：拖文件到编辑器建链成功后出现，钉在窗格底部 -->
+                  <EvidenceMethodBar
+                    v-if="evidenceMethodBar.side === 'left'"
+                    :visible="evidenceMethodBar.visible && isEvidenceBarOnActiveDoc(activeFileLeft)"
+                    :file-name="evidenceMethodBar.fileName"
+                    :method="evidenceMethodBar.method"
+                    :target-id="evidenceMethodBar.targetId"
+                    :status="evidenceMethodBar.status"
+                    :error-text="evidenceMethodBar.errorText"
+                    @change="onEvidenceMethodChange"
+                    @close="closeEvidenceMethodBar"
+                  />
                   <!-- Epic #43 Track B / #79: embedded LibreOffice is THE editor
                        for Office docs when available (desktop). Web/h5 falls
                        through to FilePreview (docx 本地只读渲染).
                        Keep-alive pool: one instance per open Office doc (active +
-                       LRU 保活，见 leftLibreFiles) hidden via v-show — switching
-                       tabs must NOT re-boot the LOWA WASM engine. -->
+                       LRU 保活，见 leftLibreFiles) — switching tabs must NOT
+                       re-boot the LOWA WASM engine.
+                       未激活的实例用 .libre-standby（绝对定位 + visibility:hidden）
+                       隐藏，**不能用 v-show**（dev-board#539）：display:none 会让
+                       Chromium 把 guest 判成不可见，定时器降到 1/min、rAF 停摆，
+                       LOWA 的 Emscripten/Qt 事件循环跟着冻住——久置切回来装载就撞
+                       relay 的 180s 墙钟预算，落成空白页 +「文档加载失败」。
+                       与备胎的 .libre-spare-standby 是同一套隐藏写法。 -->
                   <view
                     v-for="file in leftLibreFiles"
                     :key="'libre-left-' + file.id"
-                    v-show="activeFileLeft && activeFileLeft.id === file.id"
                     class="pane-content"
+                    :class="{ 'libre-standby': !(activeFileLeft && activeFileLeft.id === file.id) }"
                   >
                     <LibreOfficeEditor
                       :ref="el => setLibreRef('left', file.id, el)"
                       :file="file"
                       @ready="onLibreReady($event, 'left', file.id)"
                       @close="onLibreClose"
+                      :project-id="projectId"
+                      :can-write="canWriteProject"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
+                      @command-progress="onEditorCommandProgress"
+                      @evidence-drop="onEvidenceDrop($event, 'left')"
+                      @locator-consumed="onLocatorConsumed"
+                      :insight-open="insightPaneOpen && insightDocFileId === file.id"
+                      :insight-subscribed="insightSubscribedFor(file)"
+                      @open-insight="onOpenInsight($event, 'left')"
+                      @cursor-context="onEditorCursorContext"
+                      @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
                   </view>
                   <!-- 预热备胎实例（librePool.js）：file=null 时是后台预 boot 的
@@ -831,7 +1058,7 @@
                        冷启动。未激活时用绝对定位 + visibility 隐藏而非 v-show：
                        display:none 下 boot 引擎画布无尺寸，风险未验证。 -->
                   <view
-                    v-for="sp in libreSpares"
+                    v-for="sp in libreVisibleSpares"
                     :key="'libre-spare-' + sp.key"
                     class="pane-content"
                     :class="{ 'libre-spare-standby': !(sp.file && activeFileLeft && activeFileLeft.id === sp.file.id) }"
@@ -841,8 +1068,19 @@
                       :file="sp.file"
                       @ready="onLibreSpareReady(sp, $event)"
                       @close="onLibreClose"
+                      :project-id="projectId"
+                      :can-write="canWriteProject"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
+                      @command-progress="onEditorCommandProgress"
+                      @evidence-drop="onEvidenceDrop($event, 'left')"
+                      @locator-consumed="onLocatorConsumed"
+                      :insight-open="!!(sp.file && insightPaneOpen && insightDocFileId === sp.file.id)"
+                      :insight-subscribed="insightSubscribedFor(sp.file)"
+                      @open-insight="onOpenInsight($event, 'left')"
+                      @cursor-context="onEditorCursorContext"
+                      @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
                   </view>
                   <!-- 网页标签保活池（Web/H5）：与上面的编辑器保活池同形制——按标签建实例、
@@ -859,9 +1097,11 @@
                     <BrowserPane
                       :tab-id="tab.id"
                       :url="tab.url"
+                      :project-id="projectId"
                       @url-change="onBrowserUrlChange('left', tab.id, $event)"
                       @title-change="onBrowserTitleChange('left', tab.id, $event)"
                       @open-new-tab="openBrowserTab($event)"
+                      @favorite-added="onBrowserFavoriteAdded"
                     />
                   </view>
                   <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft) && !isBrowserTab(activeFileLeft)" class="pane-content">
@@ -870,8 +1110,22 @@
                       :content="activeFileLeft.content"
                       :file="activeFileLeft"
                     />
+                    <!-- 纯文本（txt/md/markdown）：轻量文本编辑器，不进 LOWA
+                         （dev-board#37）。v-if 单实例，切标签销毁重建，无保活池。 -->
+                    <PlainTextEditor
+                      v-else-if="isPlainTextFile(activeFileLeft)"
+                      :key="'ptx-left-' + activeFileLeft.id"
+                      :ref="el => setPlainTextRef('left', el)"
+                      :file="activeFileLeft"
+                      :project-id="projectId"
+                    />
+                    <!-- key 不能省：两个对比标签命中同一个 v-else-if 分支，没有 key
+                         Vue 会就地复用同一个组件实例，而 DocDiffViewer 只在 mounted()
+                         里取一次文档、对 sourceId/targetId 没有 watch——标题换成了新的
+                         两份文档，Monaco 里画的还是上一对（右窗格同理）。 -->
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
                       :source-id="activeFileLeft.diffSource.id"
                       :target-id="activeFileLeft.diffTarget.id"
                       :source-name="activeFileLeft.diffSource.name"
@@ -881,6 +1135,16 @@
                       v-else-if="isVersionCompareTab(activeFileLeft)"
                       :key="activeFileLeft.id"
                       :compare-spec="activeFileLeft.compareSpec"
+                    />
+                    <!-- 合并比对稿（dev-board#630）：同一段两边都改了的那几处逐处裁决。
+                         key 同 VersionCompareTab——两份不同路径的合并稿命中同一个分支，
+                         没有 key 会被就地复用，引擎里还是上一份稿。 -->
+                    <MergeReviewTab
+                      v-else-if="isMergeReviewTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
+                      :merge-spec="activeFileLeft.mergeSpec"
+                      @close-tab="closeMergeReviewTab(activeFileLeft)"
+                      @open-version-compare="onVersionCompareFile($event)"
                     />
                     <DocDiffViewer
                       v-else-if="isVersionTextDiffTab(activeFileLeft)"
@@ -897,20 +1161,55 @@
                       :spec="activeFileLeft.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
-                    <!-- 项目概览标签：与独立页共用同一个 ProjectHomePane。
-                         这里的「打开某条对话」是就地切会话（已经在工作台里了），
-                         不像独立页那样 reLaunch。 -->
-                    <ProjectHomePane
-                      v-else-if="activeFileLeft.tabType === 'project-home'"
+                    <!-- 实体详情标签（dev-board#541）：浮窗上「在新标签页打开」的落点。
+                         照 market-detail 那套 tab 形制（单例 id、直接 push 进列表）。 -->
+                    <InsightEntityDetailPane
+                      v-else-if="activeFileLeft.tabType === 'insight-entity'"
+                      :key="activeFileLeft.id"
+                      :spec="activeFileLeft.entitySpec"
+                      :project-id="projectId"
+                      @open-url="openBrowserTab($event)"
+                      @open-doc-file="openInsightDocFile($event)"
+                    />
+                    <!-- 「提交历史」标签（dev-board#624）：主线 + 各稿 + 案件库最新稿的统一历史。
+                         三个入口（顶栏协作 chip / 协作抽屉 / 版本面板「完整历史」）共用同一个单例标签。 -->
+                    <CommitHistoryTab
+                      v-else-if="activeFileLeft.tabType === 'commit-history'"
                       :key="activeFileLeft.id"
                       :project-id="projectId"
+                      :focus="activeFileLeft.historyFocus || ''"
+                      :focus-sha="activeFileLeft.historyFocusSha || ''"
+                      :focus-token="activeFileLeft.historyFocusToken || 0"
+                      :cloud-linked="collabLinked"
+                      :refresh-token="collabRefreshToken"
+                      :cloud="collabCloud"
+                      :working="!!versionWorkStatus.working"
+                      @compare-file="onVersionCompareFile"
+                      @reload-files="onVersionReloadFiles"
+                      @changed="onCollabChanged"
+                      @conflict="onCollabConflict"
+                      @submit-guide="openSubmitGuide"
+                    />
+                    <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
+                         （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
+                         并进了它的「个人」组，工作台里不再有第二个设置类标签。 -->
+                    <AdminPane
+                      v-else-if="activeFileLeft.tabType === 'admin-settings'"
+                      :key="activeFileLeft.id"
                       embedded
-                      @open-conversation="openConversationInPanel"
+                      :project-id="projectId"
+                      :initial-nav="activeFileLeft.adminNav || ''"
+                      :initial-service="activeFileLeft.adminService || ''"
+                      @ai-prompt="onPluginQuickAction"
                     />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
                       :url="activeFileLeft.frontendEntry"
-                      :plugin-id="activeFileLeft.id"
+                      :plugin-id="activeFileLeft.pluginId || ''"
+                      :permissions="activeFileLeft.permissions || []"
+                      :project-id="projectId"
+                      :get-active-editor="getPluginActiveEditor"
+                      :dev-installed="!!activeFileLeft.devInstalled"
                     />
                     <!-- .drawio：诉讼可视化四份产物里唯一的可继续编辑版，走内嵌
                          draw.io。没有这条分支它会落进 FilePreview 的「暂不支持
@@ -924,8 +1223,10 @@
                     <FilePreview
                       v-else
                       :file="activeFileLeft"
+                      :locator="activeFileLeft.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
+                      @locator-consumed="onLocatorConsumed"
                     />
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
@@ -941,21 +1242,43 @@
                   :class="{ focused: focusedPane === 'right' }"
                   @tap="focusPane('right')"
                 >
+                  <EvidenceMethodBar
+                    v-if="evidenceMethodBar.side === 'right'"
+                    :visible="evidenceMethodBar.visible && isEvidenceBarOnActiveDoc(activeFileRight)"
+                    :file-name="evidenceMethodBar.fileName"
+                    :method="evidenceMethodBar.method"
+                    :target-id="evidenceMethodBar.targetId"
+                    :status="evidenceMethodBar.status"
+                    :error-text="evidenceMethodBar.errorText"
+                    @change="onEvidenceMethodChange"
+                    @close="closeEvidenceMethodBar"
+                  />
                   <!-- Epic #43 Track B / #79: embedded LibreOffice keep-alive pool
-                       (see left pane). -->
+                       （隐藏方式与左窗格同——见那边的 .libre-standby 注释）。 -->
                   <view
                     v-for="file in rightLibreFiles"
                     :key="'libre-right-' + file.id"
-                    v-show="activeFileRight && activeFileRight.id === file.id"
                     class="pane-content"
+                    :class="{ 'libre-standby': !(activeFileRight && activeFileRight.id === file.id) }"
                   >
                     <LibreOfficeEditor
                       :ref="el => setLibreRef('right', file.id, el)"
                       :file="file"
                       @ready="onLibreReady($event, 'right', file.id)"
                       @close="onLibreClose"
+                      :project-id="projectId"
+                      :can-write="canWriteProject"
                       @open-url="onLibreOpenUrl"
+                      @open-evidence-target="onOpenEvidenceTarget"
                       @menu-state="pushMenuState"
+                      @command-progress="onEditorCommandProgress"
+                      @evidence-drop="onEvidenceDrop($event, 'right')"
+                      @locator-consumed="onLocatorConsumed"
+                      :insight-open="insightPaneOpen && insightDocFileId === file.id"
+                      :insight-subscribed="insightSubscribedFor(file)"
+                      @open-insight="onOpenInsight($event, 'right')"
+                      @cursor-context="onEditorCursorContext"
+                      @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
                   </view>
                   <!-- 网页标签保活池（见左窗格同名注释）。跨窗格拖拽是"在另一侧也打开同一
@@ -970,9 +1293,11 @@
                     <BrowserPane
                       :tab-id="tab.id"
                       :url="tab.url"
+                      :project-id="projectId"
                       @url-change="onBrowserUrlChange('right', tab.id, $event)"
                       @title-change="onBrowserTitleChange('right', tab.id, $event)"
                       @open-new-tab="openBrowserTab($event)"
+                      @favorite-added="onBrowserFavoriteAdded"
                     />
                   </view>
                   <view v-if="activeFileRight && !useLibreEditor(activeFileRight) && !isBrowserTab(activeFileRight)" class="pane-content">
@@ -981,8 +1306,17 @@
                       :content="activeFileRight.content"
                       :file="activeFileRight"
                     />
+                    <!-- 纯文本轻量编辑器：见左窗格同名注释 -->
+                    <PlainTextEditor
+                      v-else-if="isPlainTextFile(activeFileRight)"
+                      :key="'ptx-right-' + activeFileRight.id"
+                      :ref="el => setPlainTextRef('right', el)"
+                      :file="activeFileRight"
+                      :project-id="projectId"
+                    />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileRight)"
+                      :key="activeFileRight.id"
                       :source-id="activeFileRight.diffSource.id"
                       :target-id="activeFileRight.diffTarget.id"
                       :source-name="activeFileRight.diffSource.name"
@@ -992,6 +1326,13 @@
                       v-else-if="isVersionCompareTab(activeFileRight)"
                       :key="activeFileRight.id"
                       :compare-spec="activeFileRight.compareSpec"
+                    />
+                    <MergeReviewTab
+                      v-else-if="isMergeReviewTab(activeFileRight)"
+                      :key="activeFileRight.id"
+                      :merge-spec="activeFileRight.mergeSpec"
+                      @close-tab="closeMergeReviewTab(activeFileRight)"
+                      @open-version-compare="onVersionCompareFile($event)"
                     />
                     <DocDiffViewer
                       v-else-if="isVersionTextDiffTab(activeFileRight)"
@@ -1008,20 +1349,52 @@
                       :spec="activeFileRight.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
-                    <!-- 项目概览标签：与独立页共用同一个 ProjectHomePane。
-                         这里的「打开某条对话」是就地切会话（已经在工作台里了），
-                         不像独立页那样 reLaunch。 -->
-                    <ProjectHomePane
-                      v-else-if="activeFileRight.tabType === 'project-home'"
+                    <!-- 实体详情标签（dev-board#541）：浮窗上「在新标签页打开」的落点。
+                         照 market-detail 那套 tab 形制（单例 id、直接 push 进列表）。 -->
+                    <InsightEntityDetailPane
+                      v-else-if="activeFileRight.tabType === 'insight-entity'"
+                      :key="activeFileRight.id"
+                      :spec="activeFileRight.entitySpec"
+                      :project-id="projectId"
+                      @open-url="openBrowserTab($event)"
+                      @open-doc-file="openInsightDocFile($event)"
+                    />
+                    <!-- 「提交历史」标签：见左窗格同名注释 -->
+                    <CommitHistoryTab
+                      v-else-if="activeFileRight.tabType === 'commit-history'"
                       :key="activeFileRight.id"
                       :project-id="projectId"
+                      :focus="activeFileRight.historyFocus || ''"
+                      :focus-sha="activeFileRight.historyFocusSha || ''"
+                      :focus-token="activeFileRight.historyFocusToken || 0"
+                      :cloud-linked="collabLinked"
+                      :refresh-token="collabRefreshToken"
+                      :cloud="collabCloud"
+                      :working="!!versionWorkStatus.working"
+                      @compare-file="onVersionCompareFile"
+                      @reload-files="onVersionReloadFiles"
+                      @changed="onCollabChanged"
+                      @conflict="onCollabConflict"
+                      @submit-guide="openSubmitGuide"
+                    />
+                    <!-- 「设置」标签：见左窗格同名注释 -->
+                    <AdminPane
+                      v-else-if="activeFileRight.tabType === 'admin-settings'"
+                      :key="activeFileRight.id"
                       embedded
-                      @open-conversation="openConversationInPanel"
+                      :project-id="projectId"
+                      :initial-nav="activeFileRight.adminNav || ''"
+                      :initial-service="activeFileRight.adminService || ''"
+                      @ai-prompt="onPluginQuickAction"
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
                       :url="activeFileRight.frontendEntry"
-                      :plugin-id="activeFileRight.id"
+                      :plugin-id="activeFileRight.pluginId || ''"
+                      :permissions="activeFileRight.permissions || []"
+                      :project-id="projectId"
+                      :get-active-editor="getPluginActiveEditor"
+                      :dev-installed="!!activeFileRight.devInstalled"
                     />
                     <DrawioEditor
                       v-else-if="isDrawioFile(activeFileRight)"
@@ -1032,8 +1405,10 @@
                     <FilePreview
                       v-else
                       :file="activeFileRight"
+                      :locator="activeFileRight.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
+                      @locator-consumed="onLocatorConsumed"
                     />
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">
@@ -1046,18 +1421,23 @@
             </view>
 
             <!-- 底部常用工具面板（仅占中间工作区宽度；右侧 AI 面板优先完整显示） -->
-            <view v-if="showToolsPanel" class="bottom-panel" ref="bottomPanel" :style="{ height: toolsPanelHeight + 'px' }">
+            <view v-if="showToolsPanel && bottomToolsList.length" class="bottom-panel" ref="bottomPanel" :style="{ height: toolsPanelHeight + 'px' }">
               <view class="bottom-resize-handle" @touchstart="startResize('bottom', $event)" @mousedown="startResize('bottom', $event)"></view>
               <view class="panel-header panel-header-tools">
                 <!-- Group: Tabs + Specific Actions -->
                 <view class="header-content-left">
                   <view class="panel-tabs awd-style">
+                    <!-- tab 可拖到左/右侧栏投放，也可右键选「移到…」（dev-board#180） -->
                     <view
-                      v-for="t in toolsList"
+                      v-for="t in bottomToolsList"
                       :key="t.key"
-                      class="panel-tab"
+                      class="panel-tab is-movable"
                       :class="{ active: activeToolKey === t.key }"
+                      :draggable="true"
                       @tap="switchToolTab(t.key)"
+                      @dragstart="onPanelDragStart(t.key, $event)"
+                      @dragend="onPanelDragEnd"
+                      @contextmenu.prevent.stop="openDockMenu(t.key, $event)"
                     >
                       <text class="panel-tab-label">{{ t.label }}</text>
                       <view class="tab-indicator" v-if="activeToolKey === t.key"></view>
@@ -1136,32 +1516,158 @@
             @dragleave="handleAiDragLeave"
             @drop="handleAiDrop"
           >
+            <!-- 右侧 dock 的 tab 条（dev-board#180）：只有真有面板被停到右侧时才渲染，
+                 平时右侧仍然只有 AI 对话本体，零视觉回归。 -->
+            <view v-if="rightDockPanels.length" class="right-dock-tabs">
+              <view
+                class="right-dock-tab"
+                :class="{ active: rightPaneKey === 'ai' }"
+                @tap="switchRightPane('ai')"
+              >
+                <text>{{ $t('workbench.aiAssistant') }}</text>
+              </view>
+              <view
+                v-for="p in rightDockPanels"
+                :key="p.key"
+                class="right-dock-tab is-movable"
+                :class="{ active: rightPaneKey === p.key }"
+                :draggable="true"
+                @tap="switchRightPane(p.key)"
+                @dragstart="onPanelDragStart(p.key, $event)"
+                @dragend="onPanelDragEnd"
+                @contextmenu.prevent.stop="openDockMenu(p.key, $event)"
+              >
+                <text>{{ p.label }}</text>
+              </view>
+            </view>
+
             <!-- ChatInterface Integration -->
             <!-- Note: We leverage ChatInterface for the entire panel content. -->
             <!-- Resize handle is still here in the outer container scope -->
+            <!-- v-show 不是 v-if：AI 面板挂在 v-if 上时切走一次会丢掉整段会话状态，
+                 $refs.chatInterface 也会消失（resolveChatInterface 靠它）。 -->
+            <view class="right-dock-body" v-show="rightPaneKey === 'ai'">
+              <ChatInterface
+                ref="chatInterface"
+                :project-id="String(projectId)"
+                :project-name="project.name"
+                :recent-history="chatHistoryList.slice(0, 3)"
+                :history-badge="historyBadge"
+                :active-tab="currentActiveTab"
+                :active-tab-pane="focusedPane"
+                :external-read-only="pluginReadOnlyLabel"
+                @fork-conversation="forkPluginConversation"
+                @close="toggleAiPanel"
+                @toggle-history="toggleHistoryDrawer"
+                @new-chat="startNewChat"
+                @load-history="loadHistoryChat"
+                @message-action="handleChatInterfaceAction"
+                @client-action="handleClientAction"
+                @refresh-history="fetchChatHistory"
+                @menu-state="pushMenuState"
+                @artifact-open-tab="handleArtifactOpenTab"
+                @open-file="handleOpenFileFromChat"
+              />
+            </view>
 
-            <ChatInterface
-              ref="chatInterface"
-              :project-id="String(projectId)"
-              :project-name="project.name"
-              :recent-history="chatHistoryList.slice(0, 3)"
-              :history-badge="historyBadge"
-              :assistants="assistants"
-              v-model:current-assistant-id="currentAssistantId"
-              :active-tab="currentActiveTab"
-              :active-tab-pane="focusedPane"
-              @close="toggleAiPanel"
-              @toggle-history="toggleHistoryDrawer"
-              @new-chat="startNewChat"
-              @load-history="loadHistoryChat"
-              @message-action="handleChatInterfaceAction"
-              @config-assistant="openAssistantConfig"
-              @client-action="handleClientAction"
-              @refresh-history="fetchChatHistory"
-              @menu-state="pushMenuState"
-              @artifact-open-tab="handleArtifactOpenTab"
-              @open-file="handleOpenFileFromChat"
-            />
+            <!-- 停靠到右侧的面板：一个 key 一条显式分支（加新面板照此加一条，
+                 见 config/panelRegistry.js 顶部的步骤清单）。
+                 链头是 v-if 而不是接着上面那块的 v-else-if——上面那块挂的是 v-show，
+                 v-else-if 挨着它会得到「v-else/v-else-if has no adjacent v-if」编译错。 -->
+            <view v-if="rightPaneKey === 'voice'" class="right-dock-body voice-pane">
+              <view class="voice-tabs">
+                <view
+                  v-if="ttsEnabled"
+                  class="voice-tab"
+                  :class="{ active: effectiveVoiceTab === 'tts' }"
+                  @tap="voiceTab = 'tts'"
+                >
+                  <text>{{ $t('workbench.voiceTts') }}</text>
+                </view>
+                <view
+                  v-if="meetingRecorderEnabled"
+                  class="voice-tab"
+                  :class="{ active: effectiveVoiceTab === 'recorder' }"
+                  @tap="voiceTab = 'recorder'"
+                >
+                  <text>{{ $t('workbench.voiceRecorder') }}</text>
+                </view>
+              </view>
+              <view class="voice-tab-body">
+                <MeetingRecordingPanel
+                  v-if="effectiveVoiceTab === 'recorder'"
+                  :project-id="projectId"
+                  :current-user="currentUser"
+                  :focus-meeting-id="meetingFocusId"
+                  @generate-minutes="handleMeetingMinutesStart"
+                />
+                <EasyVoicePane
+                  v-else-if="effectiveVoiceTab === 'tts'"
+                  @request-doc-text="handleEasyVoiceDocRequest"
+                  @highlight-sentence="handleTtsHighlight"
+                  @clear-highlight="handleTtsClearHighlight"
+                />
+              </view>
+            </view>
+            <view v-else-if="rightPaneKey === 'variables'" class="right-dock-body dock-tool-pane">
+              <view class="dock-tool-head">
+                <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchVariables')" confirm-type="search" />
+                <view class="dock-tool-btn" :title="$t('workbench.setAsVariable')" @tap="handleOpenCreateVariable"><text>＋</text></view>
+                <view class="dock-tool-btn" :title="$t('workbench.sync')" @tap="handleSyncVariable"><text>↻</text></view>
+              </view>
+              <view class="dock-tool-body">
+                <VariablePanel
+                  ref="variablePanel"
+                  :project-id="projectId"
+                  :get-editor="getLibreVariableBridge"
+                  :search-keyword="toolsSearchKeyword"
+                />
+              </view>
+            </view>
+            <view v-else-if="rightPaneKey === 'favorites'" class="right-dock-body dock-tool-pane">
+              <view class="dock-tool-head">
+                <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchFavorites')" confirm-type="search" />
+              </view>
+              <view class="dock-tool-body">
+                <ProjectFavoritesPanel
+                  ref="favoritesPanel"
+                  :project-id="projectId"
+                  :query="toolsSearchKeyword"
+                  @insert="insertPlainTextToWps"
+                  @open-url="openBrowserTab($event)"
+                />
+              </view>
+            </view>
+            <view v-else-if="rightPaneKey === 'clipboard'" class="right-dock-body dock-tool-pane">
+              <view class="dock-tool-head">
+                <input class="dock-tool-search" v-model="toolsSearchKeyword" :placeholder="$t('workbench.searchClipboard')" confirm-type="search" />
+              </view>
+              <view class="dock-tool-body">
+                <ClipboardPanel
+                  ref="clipboardPanel"
+                  :query="toolsSearchKeyword"
+                  @insert="insertPlainTextToWps"
+                  @preview-image="openImagePreview"
+                />
+              </view>
+            </view>
+            <!-- 依据（dev-board#182）：默认就停在右侧——它要和正文并排看。 -->
+            <view v-else-if="rightPaneKey === 'insight'" class="right-dock-body">
+              <InsightPane
+                :project-id="projectId"
+                :doc-file-id="insightDocFileId"
+                :doc-name="insightDocName"
+                :get-executor="getInsightExecutor"
+                :can-write="canWriteProject"
+                :prepare-document="prepareInsightDocument"
+                :cursor-context="insightCursorContext"
+                @entities="onInsightEntities"
+                @open-hover="openInsightHoverCard($event)"
+                @open-url="openBrowserTab($event)"
+                @open-settings="openSettingsTab($event || {})"
+                @open-doc-file="openInsightDocFile($event)"
+              />
+            </view>
 
             <view class="side-resize-handle" @touchstart="startResize('right', $event)" @mousedown="startResize('right', $event)"></view>
 
@@ -1178,16 +1684,20 @@
             <view v-if="showHistoryDrawer" class="ai-dropdown-panel" @tap.stop style="top: 36px; border-radius: 0 0 8px 8px;">
                 <view class="menu-item header">{{ $t('workbench.historyConversations') }}</view>
                 <scroll-view scroll-y class="drawer-list" style="max-height: 350px;">
-                    <view v-if="loadingHistory" class="menu-item" style="color:#999;">{{ $t('workbench.loadingText') }}</view>
-                    <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:#999;">{{ $t('workbench.noHistory') }}</view>
+                    <view v-if="loadingHistory" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.loadingText') }}</view>
+                    <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.noHistory') }}</view>
                     <view v-else v-for="chat in chatHistoryList" :key="chat.id" class="menu-item" @tap="loadHistoryChat(chat)">
                         <view v-if="convDotClass(chat)" class="conv-dot" :class="convDotClass(chat)"></view>
                         <view style="flex:1; overflow:hidden;">
-                            <text class="item-title" style="display:block; font-size:13px; color:#333; margin-bottom:2px;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
-                            <text class="item-preview" style="display:block; font-size:11px; color:#999; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
+                            <view style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
+                                <text class="item-title" style="font-size:13px; color:var(--awd-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
+                                <!-- 插件镜像会话来源角标（dev-board#298） -->
+                                <text v-if="chat.sourceChannel" class="conv-source-chip">{{ convSourceLabel(chat) }}</text>
+                            </view>
+                            <text class="item-preview" style="display:block; font-size:11px; color:var(--awd-text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
                         </view>
                         <view style="display:flex; flex-direction:column; align-items:flex-end; margin-left:8px; flex-shrink:0;">
-                            <text class="item-time" style="font-size:10px; color:#ccc;">{{ formatTime(chat.updatedAt) }}</text>
+                            <text class="item-time" style="font-size:10px; color:var(--awd-text-3);">{{ formatTime(chat.updatedAt) }}</text>
                             <text v-if="convStatusLabel(chat)" class="conv-status-label" :class="convDotClass(chat)">{{ convStatusLabel(chat) }}</text>
                         </view>
                     </view>
@@ -1394,30 +1904,36 @@
 
 
 
-      <!-- 文件关联选择弹窗：一个文本关联多个文件时，点击超链接弹出选择 -->
-      <view v-if="fileLinkPicker.visible" class="upload-mask" @tap="closeFileLinkPicker">
-        <view class="folder-modal" @tap.stop>
-          <view class="upload-header">
-            <text class="upload-title">{{ $t('workbench.chooseFileToOpen') }}</text>
+      <!-- 文件关联选择弹窗：一个锚点挂了多条底稿位置（EvidenceLink target）且链接不带 t
+           时，点击超链接弹出选择：文件名 + 核查方法 + 定位摘要。
+           独立一套 filelink-* 类，不复用下面导出/截图对话框共用的 upload-mask/
+           folder-modal（那组被三处对话框复用，风险面太大，见样式区注释）。 -->
+      <view v-if="fileLinkPicker.visible" class="filelink-mask" @tap="closeFileLinkPicker">
+        <view class="filelink-dialog" @tap.stop>
+          <view class="filelink-header">
+            <text class="filelink-title">{{ $t('workbench.chooseFileToOpen') }}</text>
           </view>
-          <view class="folder-body">
+          <view class="filelink-body">
             <view
-              v-for="f in fileLinkPicker.files"
-              :key="f.id"
-              class="folder-item"
-              @tap="openFileLinkTarget(f.id)"
+              v-for="tg in fileLinkPicker.targets"
+              :key="tg.id"
+              class="filelink-item"
+              @tap="openFileLinkTarget(tg)"
             >
-              <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path v-for="(d, gi) in (f.isFolder ? GLYPHS.folder : GLYPHS.doc)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              <svg class="filelink-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in GLYPHS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              <text class="folder-name">{{ f.name }}</text>
+              <view class="filelink-item-text">
+                <text class="filelink-name">{{ tg.file && tg.file.name ? tg.file.name : ('#' + tg.fileId) }}</text>
+                <text class="filelink-meta">{{ [evidenceMethodLabel(tg.method), evidenceTargetSummary(tg)].filter(Boolean).join(' · ') }}</text>
+              </view>
             </view>
-            <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="empty-tip">
+            <view v-if="!fileLinkPicker.targets || fileLinkPicker.targets.length === 0" class="filelink-empty">
               <text>{{ $t('workbench.noLinkedFiles') }}</text>
             </view>
           </view>
-          <view class="upload-footer">
-            <view class="upload-btn upload-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
+          <view class="filelink-footer">
+            <view class="filelink-btn filelink-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
           </view>
         </view>
       </view>
@@ -1442,7 +1958,7 @@
         v-if="adoptConflictPending && leftPaneKey !== 'version'"
         class="adopt-pending-bar"
       >
-        <text class="adopt-pending-text">{{ $t('workbench.adoptPendingText') }}</text>
+        <text class="adopt-pending-text">{{ adoptPendingBarText }}</text>
         <text class="adopt-pending-go" @tap="goHandleAdoptConflict">{{ $t('workbench.goHandle') }}</text>
       </view>
 
@@ -1479,10 +1995,68 @@
 
     </view>
 
+    <!-- 面板停靠：右键「移到…」小菜单（保底路径，拖拽只是增强）。dev-board#180 -->
+    <view v-if="dockMenu.visible" class="dock-menu-mask" @tap="closeDockMenu" @contextmenu.prevent="closeDockMenu"></view>
+    <view
+      v-if="dockMenu.visible"
+      class="dock-menu"
+      :style="{ left: dockMenu.x + 'px', top: dockMenu.y + 'px' }"
+      @tap.stop
+    >
+      <view class="dock-menu-title">{{ dockMenuTitle }}</view>
+      <view
+        v-for="opt in dockMenuOptions"
+        :key="opt.dock"
+        class="dock-menu-item"
+        :class="{ disabled: opt.disabled }"
+        @tap="opt.disabled ? null : movePanelToDock(dockMenu.panelKey, opt.dock)"
+      >
+        <text>{{ opt.label }}</text>
+        <text v-if="opt.disabled" class="dock-menu-cur">{{ $t('workbench.dockCurrent') }}</text>
+      </view>
+    </view>
+
+    <!-- 面板停靠：拖拽投放高亮层。只在拖拽期间存在，只铺三个 dock 自身的区域
+         （编辑器画布是 webview，拖进去根本不会有事件，不用管）。 -->
+    <view v-if="draggingPanelKey" class="dock-drop-layer">
+      <view
+        v-for="z in dockDropZones"
+        :key="z.dock"
+        class="dock-drop-zone"
+        :class="['zone-' + z.dock, { 'is-over': dockDragOver === z.dock }]"
+        :style="dockZoneStyle(z.dock)"
+        @dragover.prevent="onDockZoneDragOver(z.dock)"
+        @dragenter.prevent="onDockZoneDragOver(z.dock)"
+        @dragleave="onDockZoneDragLeave(z.dock)"
+        @drop.prevent="onDockZoneDrop(z.dock)"
+      >
+        <text class="dock-drop-label">{{ z.label }}</text>
+      </view>
+    </view>
+
+    <!-- 「依据」实体浮窗（dev-board#541）：正文里 Cmd/Ctrl 点中实体后贴着点击处弹出。
+         挂在页面根节点（不在面板里）——编辑器画布是独立合成层的 <webview>，
+         浮层只有在根级 + 高 z-index 才压得住，同 FileTree 的右键菜单。 -->
+    <DocumentLinkPreview v-if="documentLinkPreview" :preview="documentLinkPreview"
+      @close="closeDocumentLinkPreview" @open="openDocumentLinkAside" />
+    <InsightHoverCard
+      v-if="insightHover"
+      :key="insightHover.key"
+      :entity="insightHover.entity"
+      :x="insightHover.x"
+      :y="insightHover.y"
+      :project-id="projectId"
+      :initial-detail="insightHover.detail || null"
+      @close="closeInsightHoverCard"
+      @open-tab="openInsightEntityTab($event)"
+      @open-url="openBrowserTab($event)"
+      @open-doc-file="openInsightDocFile($event)"
+    />
+
     <!-- 底部状态条（IDE 化：常驻工具入口 + 真实状态信号，等宽字体） -->
     <view class="status-bar" v-if="!isClientView">
       <view
-        v-for="t in toolsList"
+        v-for="t in bottomToolsList"
         :key="'sb-' + t.key"
         class="status-tool"
         :class="{ active: showToolsPanel && activeToolKey === t.key }"
@@ -1520,6 +2094,10 @@
 </template>
 
 <script>
+import { defineAsyncComponent } from 'vue'
+import { flushDirtyEditors } from './flushDirtyEditors.js'
+import { isTabVisibleInPane } from './tabVisibility.js'
+import { saveSensitiveInput } from './sensitiveWorkflow.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
@@ -1530,26 +2108,41 @@ import AppMenuBar from '@/components/AppMenuBar.vue'
 import FilePreview from '@/components/FilePreview.vue'
 import VariablePanel from '@/components/VariablePanel.vue'
 import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
-import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
+import EvidenceMethodBar from '@/components/EvidenceMethodBar.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
+import PluginGuidePane from '@/components/PluginGuidePane.vue'
+import PluginDevPanel from '@/components/PluginDevPanel.vue'
 import DrawioEditor from '@/components/DrawioEditor.vue'
+import PlainTextEditor from '@/components/PlainTextEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
 import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
 import ProjectHomePane from '@/components/project-home/ProjectHomePane.vue'
+import AdminPane from '@/components/admin/AdminPane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
+import InsightPane from '@/components/InsightPane.vue'
+// 正文 Cmd/Ctrl 点中实体后的浮窗 + 它的「在新标签页打开」落点（dev-board#541）。
+// 浮窗必须挂在页面根节点才叠得上编辑器 <webview>，所以宿主持有它而不是面板。
+import InsightHoverCard from '@/components/InsightHoverCard.vue'
+import InsightEntityDetailPane from '@/components/InsightEntityDetailPane.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
+import CommitHistoryTab from '@/components/version/CommitHistoryTab.vue'
+// 异步组件：ProjectCalendarPane 静态 import 会把 FullCalendar 整包拖进工作台主
+// chunk（工作台是全应用最热路由），懒加载让只有真点开「日历」面板的会话付这个成本。
+const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
+import SubmitDraftGuide from '@/components/collab/SubmitDraftGuide.vue'
 import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
 import { globalOverlayActive } from '@/utils/overlayState.js'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
 import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
+import MergeReviewTab from '@/components/version/MergeReviewTab.vue'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import FilePickerDialog from '@/components/FilePickerDialog.vue'
 
@@ -1559,8 +2152,6 @@ import {
   getFileDetail,
   renameFile,
   createProjectFavorite,
-  createDocFileLink,
-  getDocFileLink,
   saveClipboardText,
   saveProjectVariable,
   getProjectVariables,
@@ -1574,8 +2165,9 @@ import {
   getAiHistory,
 
   getAiConversations,
-  getAssistants, // Added
+  forkAiConversation, // 插件镜像会话「另起分支继续」（dev-board#298）
   getPlugins, // Added
+  resolvePluginEntryUrl,
   getSkills,
   getFileText,
   getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
@@ -1585,22 +2177,51 @@ import {
   getMyProjects, // 最近项目切换器
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
   getLicenseStatus, // 试用版/正式版标识（含 accountConnected 组合口径）
+  getAccountBalance, // Credits 余额 chip（dev-board#187，后端带 TTL 缓存的轻端点）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
-  checkCloud // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
+  checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
+  getCloudMembers, // 成员堆栈：案卷放进案件库后，同事在库那边的名单本机 /members 里没有
+  getCurrentUser as getCurrentUserApi, // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
+  registerMeetingFromFile, // 右键转写：音频文件注册进会议录音面板（dev-board#227）
+  getDocInsight, // 「依据」实体索引预取：窗格关着也要能 Cmd 点正文（dev-board#541）
+  // 三方合并：逐份落盘 + 三语境收尾（useDocumentMerge 的依赖，spec §5.2）
+  postMergeResolveFile,
+  postMergeResolveStructured,
+  resolveAdopt,
+  resolveCloudMerge,
+  resolveSessionEnd
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
-import { loadSiteLinks, siteBaseUrl } from '@/utils/siteLinks.js'
+import { signOut } from '@/utils/signOut.js'
+import { loadSiteLinks, siteBaseUrl, siteLinks } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { mergeMembers } from '@/utils/mergeMembers.js'
+import { remoteAheadText } from '@/utils/collabWording.js'
+import { getInitial } from '@/utils/textInitial.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
+import { sourceChannelLabel } from '@/utils/conversationSource.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
-import { WORKBENCH_TOOLS } from '@/config/tools.js'
+import {
+  DOCKS,
+  getMovablePanel,
+  isDockAllowed,
+  isMovablePanel,
+  resolveDock,
+  resolveDocks
+} from '@/config/panelRegistry.js'
 import { OCR_ACTION_LABELS, INTERNAL_LINK_SCHEMES, WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
+import { matchEntityAt } from '@/utils/insightMatch.js'
+// 「依据」窗格只对 Writer 能开的文本文档生效（dev-board#182）：解析的是正文段落，
+// 表格/演示/PDF 没有可通读的正文。这份清单是 fileOpenTabs.js 里 wpsFormats 的 Writer 子集。
+const INSIGHT_DOC_TYPES = ['doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt', 'wps', 'wpt']
 import {
   LEFT_SIDEBAR_PLUGINS,
+  VERSION_PLUGIN,
   filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
-  getPluginsForUser
+  getPluginsForUser,
+  migrateLeftPaneKey
 } from '@/config/leftSidebarPlugins.js'
 
 import { activityTracker } from '@/utils/activityTracker.js'
@@ -1617,11 +2238,21 @@ import { menuCommandsMethods } from './menuCommands.js'
 import { agentClientActionMethods } from './agentClientActions.js'
 import { librePoolMethods } from './librePool.js'
 import { stagingAreaMethods } from './stagingArea.js'
+import { evidenceLinkData, evidenceLinkMethods } from './evidenceLinkActions.js'
 import { tabDragSplitMethods } from './tabDragSplit.js'
+import { fitPanelWidths } from './panelWidthLimits.js'
+import { panelDockingData, panelDockingMethods } from './panelDocking.js'
+import { railSortData, railSortMethods } from './railSort.js'
+import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
+import { useDocumentMerge } from '@/composables/useDocumentMerge.js'
+import { fetchMergeInputs, buildMergeDraft } from '@/services/mergeDraft.js'
 import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
+import { insightEntityTabMethods } from './insightEntityTab.js'
+import { documentLinkPreviewMethods } from './documentLinkPreview.js'
+import DocumentLinkPreview from '@/components/DocumentLinkPreview.vue'
 
 // 网页标签保活上限（只在 Web/H5 生效，桌面端保活是 BrowserView 的活，见 leftWebTabs）。
 // 为什么要有上限、而桌面端可以不要：从窗口摘下的 BrowserView 会被 Chromium 冻住渲染进程，
@@ -1631,6 +2262,15 @@ import { ocrCaptureMethods } from './ocrCapture.js'
 const WEB_KEEPALIVE_MAX = 5
 
 export default {
+  // 工作台里渲染的组件（协作抽屉、加人弹窗……）要跳出工作台时，也得走同一个出口：
+  // 先落盘再 reLaunch。组件拿不到页面实例，只能靠注入（check:nav 钉着）。
+  // 要去的是设置页时不用离开：工作台里设置是一个标签（dev-board#582），组件走 openSettingsTab。
+  provide() {
+    return {
+      leaveWorkbench: (url) => this.leaveWorkbench(url),
+      openSettingsTab: (opts) => this.openSettingsTab(opts || {}),
+    }
+  },
   components: {
     LibreOfficeEditor,
     BrowserPane,
@@ -1641,9 +2281,13 @@ export default {
     FilePreview,
     VariablePanel,
     ProjectFavoritesPanel,
-    FileLinkDropZone,
+    EvidenceMethodBar,
     FileStagingArea,
     ClipboardPanel,
+    InsightPane,
+    InsightHoverCard,
+    DocumentLinkPreview,
+    InsightEntityDetailPane,
     DdFilesPanel,
     ShareholderMeetingPanel,
     MeetingRecordingPanel,
@@ -1651,21 +2295,29 @@ export default {
     DdRequestEditor,
     InviteMemberDialog,
     CollabDialog,
+    SubmitDraftGuide,
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
+    PluginGuidePane,
+    PluginDevPanel,
     DrawioEditor,
+    PlainTextEditor,
     MarketSidebarPanel,
     MarketDetailPane,
     ProjectHomePane,
+    AdminPane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
+    MergeReviewTab,
     EasyVoicePane,
     DesensitizePane,
     FilePickerDialog,
     SearchPanel,
-    VersionPanel
+    VersionPanel,
+    CommitHistoryTab,
+    ProjectCalendarPane
   },
   data() {
     return {
@@ -1695,22 +2347,41 @@ export default {
       // 授权状态（试用版标识，商业化解锁门）
       licenseMode: '',
       showTrialInfo: false,
-      // 账户连接状态（商业化 PR-B）：已连接时 chip 改显「已连接账户」
+      // 账户连接状态（商业化 PR-B）：已连接时不再显示任何 chip（「已连接账户」标注已删，dev-board#221），
+      // 仍用于压掉「试用版」chip
       accountConnected: false,
       // 宽限预警（2026-08 官方版必须账户登录）：'legacyTrial' | 'offlineReverify' | ''
       graceKind: '',
       graceDays: 0,
+      // Credits 余额 chip（dev-board#187）。loaded=false 或 connected=false 时不渲染，
+      // 绝不显示 0 冒充余额；available=false（官网不可达）时余额位显示「—」。
+      wallet: { loaded: false, connected: false, available: true, balanceCents: null, membership: null },
 
       // 布局状态
       sidebarWidth: 260, // 侧边栏宽度
       sidebarCollapsed: false,
       isCompactLayout: false,
       leftPaneKey: null, // Initialize to null to prevent premature loading
+      // 「语音」面板内部的 tab（语音合成 / 会议录音）。刻意不持久化：
+      // 会议录音那个 tab 是 skill 门控的，记住它会让停用 skill 之后再进来落在
+      // 一个不渲染的 tab 上（v-else 兜底能救，但 tab 条上没有高亮项，看着像坏了）。
+      voiceTab: 'tts',
+      // 顶栏右上角头像下拉（设置 / 退出登录，dev-board#205）
+      avatarMenuOpen: false,
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
+      // 右键转写后要在会议录音面板里定位/展开的会议 id（dev-board#227）
+      meetingFocusId: null,
       // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
       // 见模板里的 .adopt-pending-bar。版本面板打开时由它的 /status 拉取实时同步。
       adoptConflictPending: false,
+      // 真要律师动手的份数（能自动合的已经合好了，不算在内）。算不出来时为 0，
+      // 固定条退回不带数字的老文案。
+      adoptPendingCount: 0,
+      // useDocumentMerge 的状态容器（{rows, running, ctx, sides}）。必须在这里声明，
+      // 组合函数是 Object.assign 到这个对象上的，换成 created 里现造的裸对象就不是响应式了。
+      documentMergeState: { rows: [], running: false, ctx: null, sides: {} },
+      mergeElapsedTick: 0,
       // 文件树批量选择模式（由页面控制开关）
       fileBatchMode: false,
       checkedFileIds: [],
@@ -1768,15 +2439,14 @@ export default {
       loadingHistory: false,
       chatHistoryList: [],
       currentConversationId: null, // Added for tracking current session
+      // 插件镜像会话只读态（dev-board#298）：当前会话的 sourceChannel（null=本地可写）。
+      // 状态跟着会话走：loadHistoryChat/startNewChat 都会重设，不做全局粘住。
+      pluginReadOnlySource: null,
+      forkingConversation: false, // fork 请求在飞时防连点
       // 后台任务状态点：上次轮询的 {conversationId: runStatus} 快照 + 跑完未读集合
       convStatusSnapshot: {},
       unreadConversations: [],
       convStatusPollTimer: null,
-      showAssistantMenu: false,
-      currentAssistantId: 'default',
-      showAssistantConfigDialog: false,
-      editingAssistant: null,
-      assistants: [], // Dynamic now
       selectedContextNode: null, // Picker 中临时选中的节点
       // AI 导出 Word 相关（后端生成 docx）
       showExportDialog: false,
@@ -1829,13 +2499,18 @@ export default {
         file: null, // { id, name, fileType, wpsFileId }
         hoverSide: null // 'left' | 'right' | null
       },
+      // 链接点击多 target 选择弹窗：targets = EvidenceLink TargetView[]
       fileLinkPicker: {
         visible: false,
         side: 'left',
-        files: [],
-        files: [],
+        targets: [],
         linkKey: ''
       },
+      ...evidenceLinkData(),
+      // 面板停靠（dev-board#180）：panelDockOverrides / rightPaneKey / 拖拽与右键菜单状态
+      ...panelDockingData(),
+      ...railSortData(),
+      ...themeSwitchData(),
       // Desensitize Callback
       desensitizeFileSelectCallback: null,
       // 诉讼可视化面板的材料范围选择回调（复用同一个 FilePickerDialog）
@@ -1852,13 +2527,28 @@ export default {
       menuBarRefreshKey: 0, // Windows 自绘菜单栏的重建信号（跟着 pushMenuState 走）
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
-      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
+      switcherLoadFailed: false, // 拉取最近项目失败：与"确实没有其他最近项目"的空态区分开，不能吞成同一句文案
+      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 底部状态栏工作状态点（顶栏胶囊已去掉）
       // 协作（团队案件库）状态：{linked, serverUrl, pendingUpload, remoteAhead, offline}
       collabCloud: null,
       collabDialogVisible: false,
       collabInitialTab: 'casefile',
+      // 交稿引导（dev-board#645）：'guide' = 从「交稿」拦下来的三步清单，'help' = 只看说明
+      submitGuideVisible: false,
+      submitGuideMode: 'guide',
       collabRefreshToken: 0, // 自增一次 = 让版本面板重拉自己的那份状态
       focusedPane: 'left', // 'left' | 'right'
+
+      // 「依据」窗格（dev-board#182）。窗格是工作台级的（停右栏或左栏），绑「当前活跃的
+      // writer 文档」；光标邻域与实体索引只读同步，打开窗格不发起在线核验。
+      // 实体索引在 _insightIndex（非响应式，同 _libreRefs 口径）——它只在事件处理里被读。
+      insightCursorContext: null,
+      // 正文 Cmd/Ctrl 点中实体后的浮窗（dev-board#541）：{entity, x, y, detail}，null = 不显示。
+      insightHover: null,
+      documentLinkPreview: null,
+      // 每份文档抽出了几个实体。_insightIndex 是非响应式的，模板要用（决定要不要
+      // 给客体页开光标订阅）就得有个响应式镜像。
+      insightEntityCounts: {},
 
       // 文件状态 - 分两组管理
       leftFiles: [], // 左侧文件列表
@@ -1871,8 +2561,12 @@ export default {
       pageEnterTime: 0,
 
       // Tabs 拖拽状态
-      draggingTab: null, // { fileId, fromPane }
+      draggingTab: null, // { fileId, fromPane, copy }
       tabDragOver: null, // { fileId, pane }
+      // 活动标签滚入视野（dev-board#543）：uni <scroll-view> 的 scroll-into-view 认
+      // 元素 id，赋值即滚。两个窗格各一份，由 activeFileId* 的 watcher 统一驱动。
+      tabsScrollIntoViewLeft: '',
+      tabsScrollIntoViewRight: '',
 
       // Epic #43: embedded LibreOffice editor. When active, backend AI commands
       // route to it (handleEditorCommand).
@@ -1930,8 +2624,17 @@ export default {
     }
   },
   computed: {
+    // 备胎分两桶渲染：可见桶（预热备胎 / 过继后的文档实例）留在左窗格里；隐藏桶
+    // （三方合并借用）挂在 .editors-container 直下，不受「左栏有没有开文档」影响。
+    libreVisibleSpares() { return this.libreSpares.filter((sp) => !sp.hidden) },
+    libreHiddenSpares() { return this.libreSpares.filter((sp) => sp.hidden) },
+    ...themeSwitchComputed,
     GLYPHS() {
       return GLYPHS
+    },
+    /** 当前会话是插件镜像时的来源文案（如「Word 插件」），空串 = 可写本地会话。 */
+    pluginReadOnlyLabel() {
+      return sourceChannelLabel(this.pluginReadOnlySource)
     },
     /**
      * 顶栏宽限 chip 与说明弹窗的文案。两种宽限共用一个壳，只有文案与主按钮不同：
@@ -1964,10 +2667,63 @@ export default {
       if (this.graceKind === 'offlineReverify') return this.$t('workbench.openAccountPanel')
       return this.$t('workbench.learnFullVersion')
     },
-    /** rail 上「项目概览」按钮的高亮态：该标签是当前活跃窗格的活跃标签 */
-    isProjectHomeTabActive() {
-      const active = this.focusedPane === 'right' ? this.activeFileIdRight : this.activeFileIdLeft
-      return active === 'project-home'
+    // ---------- Credits 余额 chip（dev-board#187） ----------
+    walletChipVisible() {
+      return this.wallet.loaded && this.wallet.connected
+    },
+    walletChipText() {
+      // 官网不可达：余额未知，显示「—」而不是 0
+      if (this.wallet.available === false) return '—'
+      const cents = Number(this.wallet.balanceCents)
+      const symbol = siteLinks().current === 'cn' ? '¥' : '$'
+      return symbol + ((Number.isFinite(cents) ? cents : 0) / 100).toFixed(2)
+    },
+    // 余额不足：低于 20 元（2000 分）视为要提醒。官网不可达（余额未知）不算——
+    // 那是连接问题不是钱的问题，用「—」表达就够了，不该冒充告急。
+    walletLow() {
+      if (this.wallet.available === false) return false
+      const cents = Number(this.wallet.balanceCents)
+      return Number.isFinite(cents) && cents < 2000
+    },
+    // 等级名小徽章：level>=2 才显示（律师助理档只显示余额），按语言取 nameZh/nameEn
+    walletTierName() {
+      const m = this.wallet.membership
+      if (!m || !(Number(m.level) >= 2)) return ''
+      const en = this.$i18n && this.$i18n.locale === 'en-US'
+      return (en ? m.nameEn : m.nameZh) || m.nameZh || m.nameEn || ''
+    },
+    /**
+     * 「语音」面板里的「会议录音」tab 显不显示。语音两项合并后门控从 rail 位挪到
+     * 了这里，判据仍是同一份 enabledSkillIds——**null（还没拉到）按启用处理**，
+     * 与 LEFT_SIDEBAR_PLUGINS 那处同一个口径：宁可多显示一瞬，也不要让用户
+     * 以为功能没了。
+     */
+    meetingRecorderEnabled() {
+      // enabledSkillIds 是**数组**（loadEnabledSkills 里 .map 出来的），不是 Set
+      if (this.enabledSkillIds === null) return true
+      return this.enabledSkillIds.includes('meeting-recorder')
+    },
+    /**
+     * 「语音」面板里的「语音合成」tab 显不显示，判据同 meetingRecorderEnabled：
+     * text-to-speech skill 默认启用（老用户升级后入口不消失），可在广场停用。
+     */
+    ttsEnabled() {
+      if (this.enabledSkillIds === null) return true
+      return this.enabledSkillIds.includes('text-to-speech')
+    },
+    /**
+     * voiceTab 记的是用户上一次点的 tab，与「当前哪个 tab 真的可用」是两回事——
+     * 默认值是 'tts'，如果 text-to-speech 被停用而 meeting-recorder 还启用，
+     * 直接按 voiceTab 渲染会两个面板都不出现。这里做一次兜底折算：优先尊重用户
+     * 选择，选的那个不可用时落到唯一可用的那个，两个都不可用时（rail 位本应已
+     * 隐藏）返回 null。
+     */
+    effectiveVoiceTab() {
+      if (this.voiceTab === 'recorder' && this.meetingRecorderEnabled) return 'recorder'
+      if (this.voiceTab === 'tts' && this.ttsEnabled) return 'tts'
+      if (this.ttsEnabled) return 'tts'
+      if (this.meetingRecorderEnabled) return 'recorder'
+      return null
     },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
@@ -1986,14 +2742,19 @@ export default {
         // 页面树之外的浮层（反馈浮窗）也要能压住 BrowserView：它自己不调
         // setViewsVisible，只置这个全局 ref，避免和下面这一处 watcher 互相打架
         globalOverlayActive.value ||
+        // 面板拖拽期间也要藏：BrowserView 是原生层，光标滑进去父窗口就收不到
+        // mousemove，拖拽会冻住（iframe/webview 由 is-resizing 的 CSS 放行）
+        (this.resizing && this.resizing.active) ||
         this.showOcrOverlay ||
         this.showScreenshotSaveDialog ||
         this.showExportDialog ||
-        this.showAssistantConfigDialog ||
         this.showCompareDialog ||
         this.showFilePicker ||
         this.showInviteModal ||
         !!this.imagePreviewUrl ||
+        // 「依据」实体浮窗（dev-board#541）：另一侧开着浏览器标签时，BrowserView 是
+        // 原生层，会把浮窗盖住——同图片预览那条，弹出期间先把 BrowserView 藏掉
+        !!this.insightHover || !!this.documentLinkPreview ||
         (this.fileLinkPicker && this.fileLinkPicker.visible)
       )
     },
@@ -2008,8 +2769,23 @@ export default {
       // null = 还没拉到启用列表，此时不过滤。**不能当成空集合**——那会把已装的
       // 功能在每次刚进页面时先从左栏抹掉再冒出来，接口挂了更是永远不见。
       // 宁可多显示一瞬，也不要让用户以为功能没了。
-      if (this.enabledSkillIds === null) return base
-      return filterPluginsByEnabledSkills(base, this.enabledSkillIds)
+      // applyPanelDocks：把搬去别的 dock 的面板（语音移到右侧）从 rail 摘掉，
+      // 把搬到左侧的工具面板（变量库/收藏夹/剪贴板）追加在数组之后（dev-board#180）
+      // applyRailOrder：最外层再套用户拖出来的顺序（dev-board#204），
+      // 排序只改先后、不增删项，所以套在所有过滤/停靠之后
+      if (this.enabledSkillIds === null) return this.applyRailOrder(this.applyPanelDocks(base))
+      const filtered = filterPluginsByEnabledSkills(base, this.enabledSkillIds)
+      // 「语音」rail 位本身没有 requiresSkill（门控在面板内部按两个 tab 分别做），
+      // 两个 tab 都停用时才整个位隐藏，判据复用同一份 ttsEnabled/meetingRecorderEnabled。
+      if (!this.ttsEnabled && !this.meetingRecorderEnabled) {
+        return this.applyRailOrder(this.applyPanelDocks(filtered.filter(p => p.key !== 'voice')))
+      }
+      return this.applyRailOrder(this.applyPanelDocks(filtered))
+    },
+    // 版本记录 2026-08-19 挪出 rail 数组、独立渲染在「项目成员」与「暂存区」之间，
+    // 模板拿不到裸导入的 VERSION_PLUGIN，包一层 computed 才能在模板里用它的 svgPaths。
+    VERSION_PLUGIN() {
+      return VERSION_PLUGIN
     },
     toolsSearchPlaceholder() {
       if (this.activeToolKey === 'variables') return this.$t('workbench.searchVariables')
@@ -2026,11 +2802,22 @@ export default {
     WPS_INTERNAL_HTTP_LINK_BASE() {
       return WPS_INTERNAL_HTTP_LINK_BASE
     },
+    // 当前用户对项目有没有写权限，与后端 ProjectMemberService.hasWritePermission 同口径
+    // （项目所有者 / ADMIN / PARTICIPANT 可写，READ_ONLY / CLIENT 只读）。成员表没加载到
+    // 或找不到自己时按可写处理——桌面单机没有成员概念，这里只挡「确知是只读」的情况。
+    canWriteProject() {
+      const uid = this.currentUser && this.currentUser.id
+      if (!uid) return true
+      if (this.project && Number(this.project.userId) === Number(uid)) return true
+      const me = (this.projectMembers || []).find(m => Number(m.userId) === Number(uid))
+      if (!me || !me.role) return true
+      return me.role === 'ADMIN' || me.role === 'PARTICIPANT'
+    },
     FILE_BATCH_ACTIONS() {
       return FILE_BATCH_ACTIONS
     },
     // 是否为“仅尽调”视图（客户）
-    // IDE 化顶栏工作状态点文案
+    // 底部状态栏工作状态点文案（顶栏胶囊已去掉，见 .adopt-pending-bar 与 status-item 的用法）
     versionWorkStatusLabel() {
       const s = this.versionWorkStatus
       if (s.onDraft && s.onDraft.name) return this.$t('workbench.workingOnDraft', { name: s.onDraft.name })
@@ -2054,15 +2841,37 @@ export default {
      * 律师改了半天文件还没结束本次工作时 chip 会显示「和大家的稿一致」——技术上没错
      * （还没落成版本，确实没什么可交），律师读起来却是假绿灯。
      */
+    // 面板之外那条固定提示条的字。知道份数就说份数——不重叠的那些文件早就静默合好了，
+    // 这里剩下的是真要律师动手的那几份，说清楚几份他才知道要花多少功夫。
+    adoptPendingBarText() {
+      if (this.adoptPendingCount > 0) return this.$t('workbench.adoptPendingCount', { count: this.adoptPendingCount })
+      return this.$t('workbench.adoptPendingText')
+    },
     collabStateText() {
+      // 自动合并进行中排在最前：这几秒里 adoptConflictPending 也是真的，但那时说
+      // 「有文件等你做选择」是假的——还没轮到律师，正在替他合。
+      if (this.documentMergeState.running) {
+        // 一份 32 页的合同整链要二十多秒（引擎冷启动更久），一句不动的文案会让律师以为卡死；
+        // 把已等秒数带上，秒数走 mergeElapsedTick（只在 running 期间每秒推一次）。
+        const started = Number(this.documentMergeState.startedAt) || 0
+        const seconds = started ? Math.max(0, Math.floor((this.mergeElapsedTick - started) / 1000)) : 0
+        return seconds >= 5
+          ? this.$t('version.mergeAutoRunningElapsed', { seconds })
+          : this.$t('version.mergeAutoRunning')
+      }
       if (this.adoptConflictPending) return this.$t('workbench.adoptPendingText')
       const c = this.collabCloud || {}
       if (c.offline) return this.$t('workbench.collabOffline')
-      if (c.remoteAhead) return this.$t('workbench.collabRemoteAhead')
+      // 「同事交了新稿」四处同源（utils/collabWording.js）：后端给得出作者时说清楚是
+      // 本人的另一台电脑还是哪位同事、几版；给不出（老服务端）才落回这句老文案。
+      if (c.remoteAhead) {
+        return remoteAheadText((k, params) => this.$t(k, params), c, { fallbackKey: 'workbench.collabRemoteAhead' })
+      }
       if (c.pendingUpload || this.versionWorkStatus.working) return this.$t('workbench.collabPendingUpload')
       return this.$t('workbench.collabInSync')
     },
     collabTone() {
+      if (this.documentMergeState.running) return 'blue'
       if (this.adoptConflictPending) return 'amber'
       const c = this.collabCloud || {}
       if (c.offline) return 'amber'
@@ -2075,8 +2884,20 @@ export default {
       // Simplified: Admin or owner (backend checks too)
       return user && user.role !== 'CLIENT'
     },
+    // 当前左栏选中的动态插件（rail key = plugin-<id>）；决定走 iframe 还是启动面板
+    activeDynamicPlugin() {
+      if (!this.leftPaneKey) return null
+      return this.dynamicPlugins.find(p => p.key === this.leftPaneKey) || null
+    },
     leftPaneTitle() {
       if (this.leftPaneKey === 'market') return this.$t('workbench.pluginMarket')
+      // 停靠到左栏的工具面板（变量库/收藏夹/剪贴板）在 leftSidebarPlugins 里查不到，
+      // 会掉进兜底显示成「资源管理器」——从注册表取它的 labelKey（dev-board#180）
+      const movable = getMovablePanel(this.leftPaneKey)
+      if (movable) return this.$t(movable.labelKey)
+      // 动态插件的标题在 getLeftSidebarPlugin（只认静态 + OFF_RAIL）里查不到，
+      // 会掉进兜底显示成「资源管理器」——从 dynamicPlugins 直接取它的 label。
+      if (this.activeDynamicPlugin) return this.activeDynamicPlugin.label || this.$t('workbench.explorerFallback')
       try {
         return getLeftSidebarPlugin(this.leftPaneKey)?.label || this.$t('workbench.explorerFallback')
       } catch (e) {
@@ -2115,6 +2936,24 @@ export default {
       if (file && !this.isTabVisible(file)) return null
       return file
     },
+    // ——「依据」窗格（dev-board#182）——
+    // 窗格开着没有（不管它停在右栏还是被拖去了左栏）。
+    insightPaneOpen() {
+      if (this.showAiPanel && this.rightPaneKey === 'insight') return true
+      return this.leftPaneKey === 'insight' && !this.sidebarCollapsed
+    },
+    // 窗格绑哪份文档：聚焦那一侧的活跃 writer 文档，聚焦侧没有就看另一侧。
+    // 只认 Writer——解析的是正文，表格/演示文稿没有可通读的段落。
+    insightDocFile() {
+      const order = this.focusedPane === 'right'
+        ? [this.activeFileRight, this.activeFileLeft]
+        : [this.activeFileLeft, this.activeFileRight]
+      for (const f of order) if (this.isInsightDoc(f)) return f
+      return null
+    },
+    insightDocFileId() { return this.insightDocFile ? this.insightDocFile.id : null },
+    insightDocName() { return this.insightDocFile ? (this.insightDocFile.name || '') : '' },
+
     // 内嵌 LibreOffice 保活池（每 pane 一组常驻实例）：当前激活的 Office 文件
     // 必进池（即使 LRU 记账未跟上），其余按 libreLruKeys 保活。文件关闭
     // （出 leftFiles/rightFiles）时自然出池 → 组件卸载走现有 close 流程。
@@ -2169,25 +3008,10 @@ export default {
       const target = this.getActiveAiTargetFile()
       return target && target.name ? target.name : ''
     },
-    // New Computed for Staging Area Logic
-    hasOpenWpsWord() {
-       // Helper to check if a file is a Word doc (not PPT/Excel)
-       const isWord = (f) => {
-          if (!f || !f.name) return false;
-          const n = f.name.toLowerCase();
-          return n.endsWith('.doc') || n.endsWith('.docx') || n.endsWith('.wps');
-       };
-       return isWord(this.activeFileLeft) || (this.splitMode && isWord(this.activeFileRight));
-    },
-    showAssociationDropZone() {
-       // "When and only when right (active loop) has open WPS... show association"
-       // We use hasOpenWpsWord (Left or Right) as proxy for "Open WPS Document"
-       return this.fileLinkDrag.active && this.hasOpenWpsWord;
-    },
     // Staging Area Visibility:
     // 1. If files exist in staging -> Resident.
-    // 2. If Dragging AND Association Zone is NOT shown -> Show Staging Drop.
-    // 3. User Requirement: "In absence of open WPS... position should be a staging area".
+    // 2. If Dragging -> Show Staging Drop（文件关联的落点已改为编辑器画布本身，
+    //    侧栏不再有关联区抢位）.
     showStagingArea() {
        // 1. User explicitly collapsed - respect their choice
        if (this.stagingManuallyCollapsed) return false;
@@ -2197,9 +3021,6 @@ export default {
 
        // 3. If staging area has files, show it (resident behavior)
        if (this.stagingFiles && this.stagingFiles.length > 0) return true;
-
-       // 4. If dragging AND Association not overriding (Auto-expand)
-       if (this.showAssociationDropZone) return false;
 
        return this.fileLinkDrag.active;
     },
@@ -2247,8 +3068,48 @@ export default {
       }
     }
     ,
-    toolsList() {
-      return WORKBENCH_TOOLS
+    // ——— 面板停靠（dev-board#180）———
+    // 三个 dock 的分配，唯一出处是 config/panelRegistry.js 的纯函数 resolveDocks
+    panelDocks() {
+      return resolveDocks(this.panelDockOverrides)
+    },
+    // 底部抽屉的 tab 列表（原 WORKBENCH_TOOLS）。底栏 tab 条与状态条工具入口同源消费，
+    // 面板被搬到左/右之后这里自动少一项，两处一起变。
+    bottomToolsList() {
+      return this.panelDocks.bottom.map(p => ({ key: p.key, label: this.$t(p.labelKey) }))
+    },
+    // 停靠到右侧面板的面板（非空时右栏才长出 tab 条；平时右侧只有 AI 对话，零视觉回归）
+    rightDockPanels() {
+      return this.panelDocks.right.map(p => ({ key: p.key, label: this.$t(p.labelKey) }))
+    },
+    // 右键「移到…」菜单的选项：只列这个面板允许的 dock，当前所在的那一档置灰
+    dockMenuOptions() {
+      const key = this.dockMenu.panelKey
+      if (!key) return []
+      const cur = resolveDock(key, this.panelDockOverrides)
+      return DOCKS
+        .filter(d => isDockAllowed(key, d))
+        .map(d => ({
+          dock: d,
+          label: this.$t('workbench.dockTo' + d.charAt(0).toUpperCase() + d.slice(1)),
+          disabled: d === cur
+        }))
+    },
+    dockMenuTitle() {
+      const p = getMovablePanel(this.dockMenu.panelKey)
+      return p ? this.$t(p.labelKey) : ''
+    },
+    // 拖拽中的面板允许落到哪几个 dock（决定投放高亮层渲染哪几块）
+    dockDropZones() {
+      const key = this.draggingPanelKey
+      if (!key) return []
+      return DOCKS.filter(d => isDockAllowed(key, d)).map(d => ({
+        dock: d,
+        label: this.$t('workbench.dockTo' + d.charAt(0).toUpperCase() + d.slice(1))
+      }))
+    },
+    isMovablePanel() {
+      return isMovablePanel
     }
     ,
     isDesktopApp() {
@@ -2267,6 +3128,10 @@ export default {
     }
   },
   beforeUnmount() {
+    clearInterval(this._mergeElapsedTimer)
+    this.closeDocumentLinkPreview()
+    this.disposeThemeSwitch()
+    this.unbindTabsWheel()
     // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
@@ -2281,7 +3146,25 @@ export default {
     if (this._onMarketChanged) {
       uni.$off('awd:market-changed', this._onMarketChanged)
       uni.$off('awd:market-changed-from-sidebar', this._onMarketChanged)
+      uni.$off('awd:open-evidence-target', this._onOpenEvidenceTarget)
       this._onMarketChanged = null
+    }
+    // 余额刷新 / 打开设置 订阅（mounted 挂的，按引用摘）
+    if (this._onWalletRefresh) {
+      uni.$off('awd:wallet-refresh', this._onWalletRefresh)
+      this._onWalletRefresh = null
+    }
+    if (this._onIdentityUpdated) {
+      uni.$off('awd:identity-updated', this._onIdentityUpdated)
+      this._onIdentityUpdated = null
+    }
+    if (this._onOpenSettings) {
+      uni.$off('awd:open-settings', this._onOpenSettings)
+      this._onOpenSettings = null
+    }
+    if (this._onEntitlementsChanged) {
+      uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
+      this._onEntitlementsChanged = null
     }
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
     if (typeof window !== 'undefined' && this._localFocusRefresh) {
@@ -2314,6 +3197,16 @@ export default {
     // OCR 全局监听清理（防止残留导致无法点击/拖拽）
     try {
       this.unbindOcrGlobalListeners()
+    } catch (e) {
+      // ignore
+    }
+    // OCR 屏幕共享 stream 释放：startOcrCapture 里"授权一次后保持 stream"是刻意设计
+    // （同一页内反复截图不用每次都弹系统的"选择要共享的窗口"选择器），所以 closeOcrOverlay
+    // 关闭浮层时不停轨道；但这意味着必须在离开这个页面实例时兜底停掉，否则浏览器
+    // 「正在共享屏幕」指示条会一直挂着，且产品内没有任何操作能关闭它。stopOcrCapture
+    // 就是干这件事的，此前全仓没有调用点。
+    try {
+      this.stopOcrCapture()
     } catch (e) {
       // ignore
     }
@@ -2395,6 +3288,7 @@ export default {
   onLoad(query) {
     this.pageEnterTime = Date.now()
     this.loadLicenseMode()
+    this.loadWalletBalance()
     // 官网链接预热：本页有两处「跳官网」（试用 chip、缓存区满弹窗），都是同步取地址。
     // 不预热的话第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
     loadSiteLinks()
@@ -2437,22 +3331,44 @@ export default {
 
     const user = getCurrentUser()
     if (user) {
-      this.userDisplayName = user.displayName || user.username
+      this.userDisplayName = user.displayName || this.userDisplayName
       this.currentUser = user
     }
+    // 本地缓存只是首屏兜底：local-mode 免登下 checkba_user 永远为空，头像会
+    // 一直停在首字母占位符。照 project-list.vue 的 loadUserInfo 写法补一次真实接口，
+    // 失败静默回退本地缓存，不阻塞首屏。
+    this.loadRealUserInfo()
 
     // 面板初始化不能挂在登录态上：桌面免登（PR-A 去登录）后本地存储里没有
     // checkba_user，user 为 null——原先整段包在 if (user) 里，进项目左栏永远停在
     // 占位符（app-e2e J4 抓到：文件树/工具行不渲染，直到手动点一次左栏图标）。
     // CLIENT 角色默认 dd-files 的分支只对浏览器登录态（客户访问码）有意义，保留。
+    // 面板停靠位（dev-board#180）是本机习惯、不分项目，必须在恢复 leftPaneKey 之前读，
+    // 下面的 normalizeDockSelections 才知道存量的 leftPaneKey 还在不在左栏。
+    this.loadPanelDocks()
+    // rail 图标顺序（dev-board#204）：同为本机习惯，跟停靠位一起在首帧前恢复
+    this.loadRailOrder()
+    this.initThemeSwitch()
+
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
-    if (savedKey) {
+    if (savedKey && user && user.role === 'CLIENT') {
+        // CLIENT 只有 dd-files 这一个面板，存量值原样用（migrate 会把它映射成
+        // files，那对客户是错的——他看不到资源管理器）
         this.leftPaneKey = savedKey
+    } else if (savedKey) {
+        // 存量值可能指向已经不存在的 key（语音合并前的 easyvoice /
+        // meeting-recorder、已下线的 shareholder-meeting、对律师隐藏的 dd-files）。
+        // 不映射就会落在一个没有面板分支命中的 key 上：左栏是「加载中…」占位符、
+        // rail 上一个高亮的按钮都没有，看上去就是坏了。
+        this.leftPaneKey = migrateLeftPaneKey(savedKey)
     } else if (user && user.role === 'CLIENT') {
         this.leftPaneKey = 'dd-files'
     } else {
         this.leftPaneKey = 'files'
     }
+    // 存量 leftPaneKey 可能指向一个已经被搬去右侧/底部的面板（语音），
+    // 那样左栏会渲染成「加载中…」占位符——按停靠分配校一遍，不在左栏就回落资源管理器。
+    this.normalizeDockSelections()
 
     // Restore active tabs for this project/mode
     const savedActiveTabs = uni.getStorageSync(`project_${this.projectId}_activeTabsByMode`)
@@ -2465,7 +3381,6 @@ export default {
     // 登录态下启用剪贴板记录（仅记录本应用能感知到的 paste / 复制按钮）
     this.bindClipboardListener()
 
-    this.loadAssistants() // Fetch assistants
     this.loadDynamicPlugins() // Fetch dynamic plugins
     this.loadEnabledSkills() // 左栏插件位按 skill 启停过滤（诉讼可视化默认不安装）
 
@@ -2475,6 +3390,11 @@ export default {
     this._onMarketChanged = () => this.loadEnabledSkills()
     uni.$on('awd:market-changed', this._onMarketChanged)
     uni.$on('awd:market-changed-from-sidebar', this._onMarketChanged)
+    // Web 插件 evidence.locate（PluginPane）要打开底稿：整个 payload（{fileId, locator, linkKey}）
+    // 交给 onOpenEvidenceTarget → openFileLinkTarget(target, side)。后者读 target.fileId，
+    // 只传裸 fileId 会变成 Number(undefined) 静默返回（复核 F1）。
+    this._onOpenEvidenceTarget = (p) => this.onOpenEvidenceTarget(p)
+    uni.$on('awd:open-evidence-target', this._onOpenEvidenceTarget)
   },
   onShow() {
     // 多实例守卫：本实例重新可见（如从个人中心返回）时接管全局事件与 WPS 内链处理，
@@ -2490,6 +3410,8 @@ export default {
 
     // 从设置页返回时刷新授权/账户 chip（用户可能刚连接或断开账户）
     this.loadLicenseMode()
+    // 余额 chip 同一时机刷新（可能刚充值/购买过；后端带 TTL 缓存，不怕频繁）
+    this.loadWalletBalance()
 
     // Sync UI state
     this.isRecording = activityTracker.getRecordingState()
@@ -2530,6 +3452,7 @@ export default {
     }
   },
   onUnload() {
+    this.closeDocumentLinkPreview()
     // Replace simple page view log with ActivityTracker stop
     this.stopActivityTracking()
 
@@ -2547,6 +3470,66 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
+    // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
+    this.$nextTick(() => this.rebindTabsWheel())
+    // 三方合并的编排器（spec §5.2）。依赖全部在这里注入：引擎实例从保活池借、
+    // api 与文案从本页取——组合函数自己不 import 任何东西，好让它能被 node --test 直接跑。
+    this._documentMerge = useDocumentMerge({
+      projectId: this.projectId,
+      state: this.documentMergeState,
+      isDesktop: () => isDesktopHost(),
+      t: (key, params) => this.$t(key, params),
+      toast: (title) => uni.showToast({ title, icon: 'none' }),
+      getExecutorForHiddenInstance: () => this.acquireLibreHiddenInstance(),
+      releaseHiddenInstance: (handle) => this.releaseLibreHiddenInstance(handle),
+      fetchMergeInputs,
+      buildMergeDraft,
+      api: { postMergeResolveFile, postMergeResolveStructured, resolveAdopt, resolveCloudMerge, resolveSessionEnd },
+      reloadFiles: (ids) => {
+        this.onVersionReloadFiles(ids || [])
+        // 自动合并收尾之后必须把版本面板也刷一次。撞冲突时 onCollabConflict 已经把人送到
+        // 了版本面板（裁决弹窗随它那一次 /status 弹出来），而合并是在那之后几秒才完成的——
+        // 不刷的话面板一直端着合并前那份 /status，律师面对一个说着「已合并」、点「就按我
+        // 选的来」只会报错的裁决窗。collabRefreshToken 的 watcher 就是 VersionPanel 的
+        // refresh()（见 VersionPanel.vue :192），这一条也是三语境通用的。
+        // app-e2e J14 实测：不重叠的 xlsx+pptx 已经静默合好并落成一版，弹窗却还在。
+        this.collabRefreshToken += 1
+        // 顶栏协作 chip 读的是本页的 collabCloud 快照，不随 VersionPanel 的 refresh 变；
+        // 不补这一趟，自动合并收尾后 chip 会继续说「同事交了新稿 · N 版」直到 120 秒轮询
+        // （真机走查截图：toast 已出、面板已「和大家的稿一致」、chip 仍是旧话）。
+        this.fetchCollabState({ online: false }).catch(() => {})
+      },
+      openOverview: () => this.goHandleAdoptConflict(),
+    })
+    // 余额刷新事件（充值弹窗 / SKU 购买成功后 emit）。页面栈多实例地雷：mounted 挂、
+    // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
+    this._onWalletRefresh = () => this.loadWalletBalance()
+    uni.$on('awd:wallet-refresh', this._onWalletRefresh)
+    // SKU 解锁成功（UnlockHint 广播）：暂存区用量条的 limited 是后端算的，重拉一次
+    // 才会摘掉「立即解锁」横幅（与剪贴板同病，dev-board#201）
+    this._onEntitlementsChanged = () => {
+      if (!this.isActiveOverviewInstance()) return
+      if (this.stagingFolderId) this.loadStagingUsage()
+    }
+    uni.$on('awd:entitlements-changed', this._onEntitlementsChanged)
+    // 设置页/侧栏用户卡改了头像或昵称（dev-board#603）：顶栏那颗头像与参与人堆叠
+    // 都是本页在画，本页不订阅就只能等下次重开工作台才跟上——用户看到的是
+    // 「提示上传成功，但桌面端不显示」。刻意不加 isActiveOverviewInstance 守卫：
+    // 这里只是各实例把自己那份 currentUser 拉新（幂等本地 GET，无跨实例副作用），
+    // 加了守卫反而让页面栈里的旧实例一直挂着旧头像。
+    this._onIdentityUpdated = () => {
+      this.loadRealUserInfo()
+      if (this.projectId) this.loadProjectMembers()
+    }
+    uni.$on('awd:identity-updated', this._onIdentityUpdated)
+    // UnlockHint 应用内化（dev-board#187）：解锁引导不再外跳官网，改为打开设置
+    // 「账户与用量」标签。只让活跃实例响应——openSettingsTab 会动本实例的标签列表。
+    this._onOpenSettings = (opts) => {
+      if (!this.isActiveOverviewInstance()) return
+      this.openSettingsTab(opts || {})
+    }
+    uni.$on('awd:open-settings', this._onOpenSettings)
     this.setupResponsiveListener()
     // IDE 化：窗口重新聚焦时刷新文件树——外部改动（Finder 增删改）都发生在
     // 用户切出去的时候，后端 watcher 已把数据库对齐，聚焦拉一次即可见。
@@ -2609,20 +3592,40 @@ export default {
               const imageBase64 = payload && payload.imageDataUrl ? String(payload.imageDataUrl) : ''
               if (!text || !this.projectId) return
               const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-              await createProjectFavorite(pid, {
-                title: title || (url ? (() => { try { return new URL(url).host } catch (e) { return this.$t('workbench.webMark') } })() : this.$t('workbench.webMark')),
+              const host2 = (() => { try { return url ? new URL(url).host : '' } catch (e) { return '' } })()
+              const created = await createProjectFavorite(pid, {
+                title: title || host2 || this.$t('workbench.webMark'),
                 sourceUrl: url,
                 content: text,
-                imageBase64: imageBase64 || ''
+                imageBase64: imageBase64 || '',
+                // 卡片右下角的来源域名读的是 meta.sourceHost（与 OCR 摘录路径同口径），不写就永远空白
+                meta: JSON.stringify({ kind: 'webmark', capturedAt: new Date().toISOString(), sourceUrl: url, title, sourceHost: host2 })
               })
-              // 立即刷新网核中心面板（如果可见）
-              if (this.$refs.favoritesPanel && typeof this.$refs.favoritesPanel.refresh === 'function') {
-                this.$refs.favoritesPanel.refresh()
-              }
+              // 可见反馈不能只靠 toast：用户此刻正在浏览器标签里，toast 弹在 DOM 层、
+              // 被原生 BrowserView 整个盖住（实测 toast 中心恒落在 view 区域内），看起来
+              // 就是「点了没反应」。照 OCR 摘录收藏（ocrDoFavorite）的模式：打开收藏面板
+              // 并高亮新卡片——面板参与布局，BrowserView 会让位，反馈真实可见。
+              const favId = created && created.id ? created.id : (created && created.data && created.data.id ? created.data.id : null)
+              this.showToolsPanel = true
+              this.activeToolKey = 'favorites'
+              this.$nextTick(async () => {
+                try {
+                  const panel = this.$refs.favoritesPanel
+                  if (panel && typeof panel.refresh === 'function') await panel.refresh(true)
+                  if (favId && panel && typeof panel.focusFavorite === 'function') panel.focusFavorite(Number(favId))
+                } catch (e) {
+                  // ignore
+                }
+              })
               uni.showToast({ title: this.$t('workbench.webMarkFavAdded'), icon: 'success' })
             } catch (e) {
               console.error('保存网核收藏失败:', e)
-              uni.showToast({ title: e.message || this.$t('workbench.saveFailed'), icon: 'none' })
+              // 失败也一样被 BrowserView 盖住 = 静默失败；桌面端走不被遮挡的原生确认弹窗
+              if (host.app && host.app.confirm) {
+                host.app.confirm({ title: this.$t('workbench.saveFailed'), content: e.message || '' }).catch(() => {})
+              } else {
+                uni.showToast({ title: e.message || this.$t('workbench.saveFailed'), icon: 'none' })
+              }
             }
           })
         }
@@ -2710,28 +3713,9 @@ export default {
                 return
               }
 
-              // 2) filelink：打开关联文件（多文件先弹窗）
+              // 2) filelink：打开关联底稿（EvidenceLink；t 命中/单 target 直开，多 target 弹窗）
               if (raw.startsWith(this.INTERNAL_LINK_SCHEMES.fileLink)) {
-                const linkKey = params.get('k') || ''
-                if (!linkKey || !this.projectId) return
-                const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-                getDocFileLink(pid, linkKey)
-                  .then((resp) => {
-                    const files = resp && resp.files ? resp.files : (resp && resp.data && resp.data.files ? resp.data.files : [])
-                    const list = Array.isArray(files) ? files : []
-                    if (list.length <= 0) {
-                      uni.showToast({ title: this.$t('workbench.linkedFileMissing'), icon: 'none' })
-                      return
-                    }
-                    if (list.length === 1) {
-                      this.openFileLinkTarget(list[0].id, this.focusedPane || 'left')
-                      return
-                    }
-                    this.fileLinkPicker = { visible: true, side: this.focusedPane === 'right' && this.splitMode ? 'right' : 'left', files: list, linkKey }
-                  })
-                  .catch((e) => {
-                    uni.showToast({ title: (e && e.message) ? e.message : this.$t('workbench.openFailed'), icon: 'none' })
-                  })
+                this.handleFileLinkClick(raw)
                 return
               }
             } catch (e) {
@@ -2788,26 +3772,7 @@ export default {
             }
 
             if (raw.startsWith(this.INTERNAL_LINK_SCHEMES.fileLink)) {
-              const linkKey = params.get('k') || ''
-              if (!linkKey || !this.projectId) return
-              const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-              getDocFileLink(pid, linkKey)
-                .then((resp) => {
-                  const files = resp && resp.files ? resp.files : (resp && resp.data && resp.data.files ? resp.data.files : [])
-                  const list = Array.isArray(files) ? files : []
-                  if (list.length <= 0) {
-                    uni.showToast({ title: this.$t('workbench.linkedFileMissing'), icon: 'none' })
-                    return
-                  }
-                  if (list.length === 1) {
-                    this.openFileLinkTarget(list[0].id, this.focusedPane || 'left')
-                    return
-                  }
-                  this.fileLinkPicker = { visible: true, side: this.focusedPane === 'right' && this.splitMode ? 'right' : 'left', files: list, linkKey }
-                })
-                .catch((e) => {
-                  uni.showToast({ title: (e && e.message) ? e.message : this.$t('workbench.openFailed'), icon: 'none' })
-                })
+              this.handleFileLinkClick(raw)
               return
             }
           } catch (e) {
@@ -2838,18 +3803,28 @@ export default {
     }
   },
   watch: {
+    // 自动合并进行中每秒推一次时钟，让顶栏那句「正在合并…」带上已等秒数；结束即停。
+    'documentMergeState.running'(running) {
+      clearInterval(this._mergeElapsedTimer)
+      this._mergeElapsedTimer = null
+      if (!running) return
+      this.mergeElapsedTick = Date.now()
+      this._mergeElapsedTimer = setInterval(() => { this.mergeElapsedTick = Date.now() }, 1000)
+    },
     // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
-    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
+    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState(); this.ensureActiveTabVisible('left') },
     // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
     // 事件（见对应组件），这里只管工作台自己的。桥那边有浅比较+去抖，
     // 这些 watcher 只管「叫一声」，不必自己节流。
     'project.id'() { this.pushMenuState() },
-    activeFileIdRight() { this.pushMenuState() },
+    activeFileIdRight() { this.pushMenuState(); this.ensureActiveTabVisible('right') },
     sidebarCollapsed() { this.pushMenuState() },
     showToolsPanel() { this.pushMenuState() },
     showAiPanel() { this.pushMenuState() },
-    splitMode() { this.pushMenuState() },
+    // 分屏开关会把右侧那条标签栏整个建/拆，滚轮横滚是原生挂上去的，得跟着重挂
+    // （幂等，见 tabDragSplit.rebindTabsWheel）。
+    splitMode() { this.pushMenuState(); this.$nextTick(() => this.rebindTabsWheel()) },
     activeToolKey() { this.pushMenuState() },
     leftPaneKey() { this.pushMenuState() },
     isRecording() { this.pushMenuState() },
@@ -2872,15 +3847,41 @@ export default {
     // 内嵌 LibreOffice 多实例保活：激活的 Office 标签记入 LRU（超上限触发
     // 淘汰），并把 AI 指令路由指针同步到当前活动实例（活跃实例指针，同
     // PR#151 WPS 编辑器模式）。
-    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f); this.touchWebKeepAlive('left', f) },
-    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f); this.touchWebKeepAlive('right', f) },
+    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f); this.touchWebKeepAlive('left', f); this.prefetchInsightIndex(f) },
+    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f); this.touchWebKeepAlive('right', f); this.prefetchInsightIndex(f) },
     focusedPane() { this.syncLibreExecutor() },
     // 关闭 tab 后清掉文件已不在左列表的过继备胎条目（closeFile 已 flush）
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
+    // 批量命令（find_replace 逐命中路径 / apply_house_style）的「第 x/y 处」进度
+    // （dev-board#108）。AI 过程卡没有工具内进度位，先用 toast 降级显示；一批一帧
+    // （30 命中 / 500 元素），不会刷屏。total=0 表示命令不预知总数。
+    onEditorCommandProgress(p) {
+      if (!p || typeof p.done !== 'number') return
+      const title = p.total > 0 ? ('处理中 ' + p.done + '/' + p.total) : ('已处理 ' + p.done + ' 处')
+      try { uni.showToast({ title, icon: 'none', duration: 1500 }) } catch (e) { /* ignore */ }
+    },
+    // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
+    getInitial,
+    // 顶栏头像：本地缓存（getCurrentUser，utils/auth.js）只是首屏兜底，
+    // local-mode 免登下 checkba_user 永远为空。照 project-list.vue:477-490
+    // loadUserInfo 的写法补一次真实接口，成功后与本地缓存合并（接口字段更全），
+    // 失败静默回退本地缓存那份，绝不阻塞首屏、绝不 toast 报错。
+    async loadRealUserInfo() {
+      try {
+        const res = await getCurrentUserApi()
+        if (res && res.code === 0 && res.data) {
+          this.currentUser = { ...this.currentUser, ...res.data }
+          this.userDisplayName = this.currentUser.displayName || this.userDisplayName
+        }
+      } catch (e) {
+        // 拿不到就用本地缓存那份，不拦路
+        console.error('获取用户信息失败:', e)
+      }
+    },
     // 授权标识：桌面端查授权模式与账户连接状态
-    // （已连接账户 → 「已连接账户」chip；否则 mode=trial → 「试用版」chip）
+    // （已连接账户 → 不显示 chip；未连接且 mode=trial → 「试用版」chip；dev-board#221）
     async loadLicenseMode() {
       if (!isDesktopHost()) return
       try {
@@ -2899,6 +3900,29 @@ export default {
         this.graceKind = ''
       }
     },
+    // Credits 余额 chip 数据（dev-board#187）。轻端点（后端 TTL 缓存），随 onShow /
+    // awd:wallet-refresh 拉取。connected:false 或失败时置 loaded=false 让 chip 整个消失，
+    // 绝不摆一个「¥0.00」冒充余额。
+    async loadWalletBalance() {
+      if (!isDesktopHost()) return
+      try {
+        const data = await getAccountBalance()
+        if (data && data.connected) {
+          this.wallet = {
+            loaded: true,
+            connected: true,
+            available: data.available !== false,
+            balanceCents: data.balanceCents,
+            membership: data.membership || null,
+          }
+        } else {
+          this.wallet = { loaded: false, connected: false, available: true, balanceCents: null, membership: null }
+        }
+      } catch (e) {
+        // 旧后端没有该端点 / 请求失败：chip 不渲染
+        this.wallet = { loaded: false, connected: false, available: true, balanceCents: null, membership: null }
+      }
+    },
     /** 宽限弹窗的主按钮：联网复验那条去账户设置，其余去官网。 */
     graceAction() {
       if (this.graceKind === 'offlineReverify') {
@@ -2908,9 +3932,10 @@ export default {
       }
       this.openUpgradeSite()
     },
-    // chip 点击直达设置页「账户与用量」面板
+    // chip 点击直达设置「账户与用量」面板。设置在工作台里是中栏标签，
+    // 深链等价物就是 openSettingsTab 的 nav 参数。
     goToAccountPanel() {
-      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+      this.openSettingsTab({ nav: 'account' })
     },
     openUpgradeSite() {
       this.showTrialInfo = false
@@ -2923,18 +3948,45 @@ export default {
     ...librePoolMethods,
     // Phase 2 外置的方法组
     ...stagingAreaMethods,
+    ...evidenceLinkMethods,
     ...tabDragSplitMethods,
     ...fileOpenTabsMethods,
+    // 面板停靠（dev-board#180）
+    ...panelDockingMethods,
+    ...railSortMethods,
+    ...themeSwitchMethods,
     // Phase 3a 外置的方法组
     ...clipboardBridgeMethods,
     // Phase 3b 外置的方法组
     ...ocrActionMethods,
     // Phase 3c 外置的方法组
     ...ocrCaptureMethods,
+    // 「依据」实体详情标签（dev-board#541）
+    ...insightEntityTabMethods,
+    ...documentLinkPreviewMethods,
     // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 右键「转写」：注册成会议记录（凭证已配则后端顺手提交转写），跳会议录音面板定位到它
+    // （dev-board#227）。菜单项本身已按 meetingRecorderEnabled 门控，这里不再重复判。
+    async onTranscribeAudio(file) {
+      try {
+        const res = await registerMeetingFromFile(this.projectId, file.id)
+        this.meetingFocusId = res && res.meeting ? res.meeting.id : null
+        this.voiceTab = 'recorder'
+        if (this.leftPaneKey !== 'voice') this.toggleLeftPane('voice')
+        uni.showToast({
+          title: res && res.submitted
+            ? this.$t('fileTree.transcribeSubmitted')
+            : this.$t('fileTree.transcribeRegistered'),
+          icon: 'none'
+        })
+      } catch (error) {
+        console.error('转写发起失败:', error)
+        uni.showToast({ title: (error && error.message) || this.$t('fileTree.transcribeFailed'), icon: 'none' })
+      }
     },
     // IDE 化窗口标题
     updateWindowTitle() {
@@ -2952,6 +4004,13 @@ export default {
     async toggleProjectSwitcher() {
       this.projectSwitcherOpen = !this.projectSwitcherOpen
       if (!this.projectSwitcherOpen) return
+      await this.loadSwitcherProjects()
+    },
+    // 拉取失败时不能显示"没有其他最近项目"——那是把请求失败静默吞成了真实的
+    // 空态。改成独立的失败态 + 可点重试；这里单独抽出方法是因为菜单里的重试
+    // 项要能重新拉取而不去动 projectSwitcherOpen（它已经是 true）。
+    async loadSwitcherProjects() {
+      this.switcherLoadFailed = false
       try {
         const projects = await getMyProjects()
         const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
@@ -2962,43 +4021,25 @@ export default {
           .filter(Boolean)
           .slice(0, 8)
       } catch (e) {
+        console.warn('[project-overview] failed to load recent projects for switcher', e)
         this.switcherProjects = []
+        this.switcherLoadFailed = true
       }
     },
     switchToProject(p) {
       this.projectSwitcherOpen = false
       if (!p || Number(p.id) === Number(this.projectId)) return
-      // reLaunch：切项目不叠页面栈（多实例地雷）
-      uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
+      this.leaveWorkbench(`/pages/project-overview/project-overview?id=${p.id}`)
     },
-    // 工作台通往项目概览页的唯一入口。工作台参与的跳转一律 reLaunch。
-    // 顶栏切换器里的「项目概览」：与 rail 按钮同一个动作。
-    // 2026-08 之前这里 reLaunch 到 pages/project-home 独立页——那等于把整个工作台
-    // （标签、编辑器、AI 会话）拆掉换成一页只读卷轴，回来还要重开一遍文件。
+    // 工作台里的「项目概览」= 打开左栏的 home 面板。
+    // 顶栏切换器里那一项与 rail 第一个按钮是同一个动作。
+    //
+    // 沿革：最早这里 reLaunch 到 pages/project-home 独立页（等于把整个工作台
+    // 拆掉换成一页只读卷轴）；2026-08 改成中栏标签；2026-08-19 再改成左栏面板——
+    // rail 上的按钮点了应该开左栏，这是 rail 其余每一项的语义，概览不该例外。
     goProjectHome() {
       this.projectSwitcherOpen = false
-      this.openProjectHomeTab()
-    },
-    /** 中栏开「项目概览」标签（单例；任一窗格已开则激活） */
-    openProjectHomeTab() {
-      if (!this.projectId) return
-      const tabId = 'project-home'
-      for (const pane of ['left', 'right']) {
-        const list = pane === 'left' ? this.leftFiles : this.rightFiles
-        const existing = list.find(f => f.id === tabId)
-        if (existing) {
-          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
-          this.focusedPane = pane
-          this.$nextTick(() => this.triggerWorkbenchResize())
-          return
-        }
-      }
-      const targetPane = this.splitMode ? this.focusedPane : 'left'
-      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
-      list.push({ id: tabId, tabType: 'project-home', name: this.$t('projects.overviewPageTitle') })
-      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
-      this.focusedPane = targetPane
-      this.$nextTick(() => this.triggerWorkbenchResize())
+      this.toggleLeftPane('home')
     },
     /** 概览标签里点某条历史对话：已经在工作台里了，就地切会话，不跳页 */
     openConversationInPanel(conversationId) {
@@ -3012,11 +4053,35 @@ export default {
         else setTimeout(() => this.loadHistoryChat({ conversationId }), 600)
       })
     },
+    // 离开工作台的唯一出口。
+    //
+    // 两件事必须在这里一起做，缺一件都出过问题：
+    // 1) **先把还没落盘的编辑器内容存下来**。自动保存是防抖的，敲完最后一个字到真正
+    //    落盘之间有一段窗口；reLaunch 直接销毁页面组件树，LibreOfficeEditor 的
+    //    beforeUnmount 自己写着「export 需要活的 webview，从这里保存已经太晚」——
+    //    于是那几秒的改动静默丢失，连个提示都没有。
+    // 2) 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
+    //    从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）。
+    //
+    // 逐个保存；只要仍有未落盘的改动就留在工作台，让用户重试或先关闭该文档处理。
+    async leaveWorkbench(url) {
+      try {
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
+      } catch (e) {
+        console.warn('[project-overview] flush before leaving failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
+      }
+      uni.reLaunch({ url })
+    },
     goAllProjects() {
       this.projectSwitcherOpen = false
-      // 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
-      // 从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）
-      uni.reLaunch({ url: '/pages/project-list/project-list' })
+      this.leaveWorkbench('/pages/project-list/project-list')
     },
     // Cmd+P 快速打开面板选中文件
     onQuickOpenFile(file) {
@@ -3057,21 +4122,76 @@ export default {
         uni.showToast({ title: (e && e.message) || this.$t('workbench.revealFailed'), icon: 'none' })
       }
     },
+    // 文件树右键「发送…」/ 菜单「文件 > 发送…」（dev-board#382）：后端解析物理路径，
+    // 桌面壳分平台处理——macOS 弹系统分享面板（微信在里面，选中后微信自己弹对话选择），
+    // Windows 只能把文件放进剪贴板再提示去微信里粘贴。
+    async onShareFile(file) {
+      if (!file || file.isFolder) return
+      const shareApi = host.fs && host.fs.shareFile
+      if (!shareApi) return
+      try {
+        const r = await getFileLocalPath(file.id)
+        const path = r && r.data && r.data.path
+        if (!(r && r.data && r.data.exists) || !path) {
+          uni.showToast({ title: this.$t('workbench.fileNotOnDisk'), icon: 'none' })
+          return
+        }
+        const res = await host.fs.shareFile(path)
+        if (!res || !res.ok) {
+          const key = res && res.reason === 'unsupported' ? 'workbench.shareUnsupported' : 'workbench.shareFailed'
+          uni.showToast({ title: this.$t(key), icon: 'none' })
+          return
+        }
+        if (res.mode === 'clipboard') {
+          uni.showToast({ title: this.$t('workbench.shareClipboardHint'), icon: 'none', duration: 4000 })
+        }
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('workbench.shareFailed'), icon: 'none' })
+      }
+    },
     // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随
     // 面板的 /status 自动弹出（它本来就是这么起来的，含崩溃后重开的场景）。
     goHandleAdoptConflict() {
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
     },
+    // 裁决清单里「打开合并比对稿」/「查看合并稿」：标签页由 fileOpenTabs 开
+    // （openMergeReviewTab 是同一批任务里另一件产出，并行开发期间可能还没到位——
+    // 没有就退回原来的整份对比标签，不让按钮点了没反应）。
+    onOpenMergeReview(spec) {
+      if (typeof this.openMergeReviewTab === 'function') { this.openMergeReviewTab(spec); return }
+      this.onVersionCompareFile({
+        path: spec.path, name: spec.name, newRef: spec.otherRef, oldRef: spec.mainRef,
+      })
+    },
+    // 「重试自动合并」：清掉这份文件的失败记账，再拉一次 /status 让编排器重跑它
+    onRetryMerge({ path }) {
+      if (this._documentMerge) this._documentMerge.retry(path)
+      this.checkAdoptConflict()
+    },
     // 进页面时问一次「有没有停在待裁决的采纳」：版本面板可能整个会话都没被打开过
     // （比如上次崩在裁决窗口里、这次进来直接停在资源管理器），那样就没有任何东西
-    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管。
+    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管；
+    // 面板内部的结束工作/丢弃/回主线/采纳/放弃等操作完成后也会经 status-changed
+    // 事件再调一次这里，否则底部状态栏会停在操作之前的样子（同步滞后 bug）。
     async checkAdoptConflict() {
       if (!this.projectId) return
       try {
         const res = await getVersionStatus(this.projectId)
         const d = (res && res.data) || {}
         this.adoptConflictPending = !!(d.adoptConflict || d.cloudConflict || d.sessionEndConflict)
-        // IDE 化顶栏工作状态点（同一次 /status，不多打接口）
+        // 三语境判定链的优先级由后端保证互斥（sessionEnd > cloud > adopt），这里照同序取。
+        const conflict = d.sessionEndConflict || d.cloudConflict || d.adoptConflict || null
+        const ctx = d.sessionEndConflict ? 'session-end' : (d.cloudConflict ? 'cloud' : 'adopt')
+        this.adoptPendingCount = conflict ? (conflict.conflictingPaths || []).length : 0
+        // 不重叠的那些文件在这里被静默合掉（docx 走隐藏引擎实例，xlsx/pptx 走后端 POI），
+        // 全部合成功就自己收尾，不打扰律师；有一份要他动手才把人带到裁决清单。
+        // 组合函数内部按 (另一侧 tip, path) 幂等，这条每 120 秒轮询一次也不会重放。
+        if (this._documentMerge) {
+          this._documentMerge.onConflictStatus(conflict, ctx).catch((e) => {
+            console.warn('[DocumentMerge] 自动合并编排失败', e)
+          })
+        }
+        // 底部状态栏工作状态点（同一次 /status，不多打接口）
         this.versionWorkStatus = {
           enabled: !!d.enabled,
           working: !!d.working,
@@ -3115,6 +4235,22 @@ export default {
       this.collabInitialTab = typeof tab === 'string' ? tab : 'casefile'
       this.collabDialogVisible = true
     },
+    // 交稿引导（dev-board#645）。页面这边只管开窗：弹窗打开后自己走一次联网的状态
+    // 重读（三步清单上的勾选直接决定律师下一步点哪个按钮，用一份几分钟没刷新的快照
+    // 渲染它是在骗人），读完再经 changed 事件把页面这份也带新。
+    openSubmitGuide() {
+      this.submitGuideMode = 'guide'
+      this.submitGuideVisible = true
+    },
+    openCollabHelp() {
+      this.submitGuideMode = 'help'
+      this.submitGuideVisible = true
+    },
+    // 协作抽屉里的「查看提交历史」：抽屉是模态的，开完标签还挂在上面就把它挡住了。
+    onOpenHistoryFromCollab() {
+      this.collabDialogVisible = false
+      this.openCommitHistoryTab({})
+    },
     // 抽屉里做完动作：页面自己的状态、版本面板那份状态、以及「有没有等着做选择的
     // 文件」三处都要跟着走一遍。
     //
@@ -3146,6 +4282,9 @@ export default {
     },
 
     // ==================== Desensitize Handlers ====================
+    prepareSensitiveFile(fileId) {
+        return saveSensitiveInput(fileId, this._libreRefs, this._plainTextRefs)
+    },
     handleDesensitizeSelectFile(callback) {
         this.desensitizeFileSelectCallback = callback
         this.filePickerAllowFolder = false
@@ -3168,6 +4307,16 @@ export default {
         // Open the file directly
         // The backend returns the full ProjectFile object now
         this.openFile(file)
+    },
+
+    // 三个面板（脱敏 / 诉讼可视化 / EasyVoice）共用这一个选择器，各自把 resume 回调
+    // 暂存在页面字段上。用户点取消（含点遮罩、点 ×）时不清，残留的旧回调会在下一次
+    // 别的面板开选择器时抢先命中 handleFilePickerConfirm 的分支——新面板的回调永远不
+    // 会被调用，用户选了文件却什么都没发生。
+    handleFilePickerCancel() {
+        this.desensitizeFileSelectCallback = null
+        this.litigationScopeCallback = null
+        this.easyVoiceImportCallback = null
     },
 
     async handleFilePickerConfirm(file) {
@@ -3336,14 +4485,41 @@ export default {
       }
       this.openFile(file)
     },
+    /**
+     * 左栏面板要往 AI 面板发一句 kick-off prompt 时的统一前置。
+     *
+     * 此前三个面板（股东大会核查 / 会议纪要 / 诉讼可视化）各自写
+     * `if (!$refs.chatInterface) toast('AI 面板未就绪')` —— 而 AI 面板默认是收起的，
+     * 于是律师在面板里点「开始核查」，绝大多数情况下拿到的就是这句 toast，
+     * 而且它不告诉人该怎么办。面板收着就先替他打开：
+     *   1. showAiPanel 为 false 时走既有的 toggleAiPanel()（它顺带刷 AI 上下文 +
+     *      拉历史，不能绕过去直接改标志位）；
+     *   2. 有界轮询等 ChatInterface 挂上并暴露 sendExternalPrompt（$refs 要等一次
+     *      渲染，组件内部还要初始化，$nextTick 一拍不够——实测这条路径上
+     *      openConversationInPanel 用的是 600ms 的固定等待）；
+     *   3. 真等不到才 toast 兜底。
+     *
+     * 上限 ~3s（30 × 100ms）：比固定 600ms 宽容，又不会在真出问题时把人挂住。
+     */
+    async resolveChatInterface() {
+      if (!this.showAiPanel) this.toggleAiPanel()
+      // 右侧面板可能停着别的面板（dev-board#180）：要发 prompt 就得先切回对话 tab，
+      // 否则消息发出去了、用户看着的还是变量库
+      this.rightPaneKey = 'ai'
+      for (let i = 0; i < 30; i++) {
+        await this.$nextTick()
+        const chat = this.$refs.chatInterface
+        if (chat && chat.sendExternalPrompt) return chat
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
+      return null
+    },
     // 股东大会核查「开始核查」：把 kick-off prompt 交给 AI 面板以 AGENT 模式发送，
     // 并把返回的会话 ID 绑定回核查会话（面板据此展示 RUNNING 状态）
     async handleShareholderMeetingStart({ check, prompt }) {
-      const chat = this.$refs.chatInterface
-      if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
-        return
-      }
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       const conversationId = await chat.sendExternalPrompt(prompt)
       if (conversationId && check && check.id) {
         try {
@@ -3357,11 +4533,8 @@ export default {
     // 会议录音「生成纪要」：prompt 由服务端拼好（触发词「会议纪要」开头才命中 skill 注入），
     // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
     async handleMeetingMinutesStart({ prompt }) {
-      const chat = this.$refs.chatInterface
-      if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
-        return
-      }
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       await chat.sendExternalPrompt(prompt)
     },
 
@@ -3370,11 +4543,28 @@ export default {
     // 出图那句话由服务端拼好（触发词必须原样在正文里才命中 skill 注入），
     // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
     async handleLitigationStart({ prompt }) {
-      const chat = this.$refs.chatInterface
-      if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
-        return
-      }
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
+      await chat.sendExternalPrompt(prompt)
+    },
+
+    // 插件开发面板「让 AI 开发」：kick-off prompt 必须以触发词「插件开发」开头才能
+    // 命中 skill 注入，与股东大会核查同一条路——resolveChatInterface 负责在 AI
+    // 面板收起时先打开它。
+    async onPluginDevAiDevelop({ id, name, folderId }) {
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
+      const prompt = this.$t('workbench.pluginDevAiPrompt', { id, name, folderId })
+      await chat.sendExternalPrompt(prompt)
+    },
+
+    // 插件启动面板（PluginGuidePane）的一键动作：把 manifest.guide.quickActions 里那句
+    // prompt 以 AGENT 模式发进 AI 对话——与股东大会/诉讼可视化同一条 resolveChatInterface 路。
+    // prompt 里含 skill 触发词才会命中注入（由插件作者在 manifest 里写对），这里只负责发出去。
+    async onPluginQuickAction({ prompt }) {
+      if (!prompt) return
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       await chat.sendExternalPrompt(prompt)
     },
 
@@ -3397,41 +4587,23 @@ export default {
       this.showFilePicker = true
     },
 
+    /**
+     * method 小条钉在建链的那份文档上。小条不再自动收起（dev-board#138），
+     * 所以必须有这一条：换标签、关文档之后，它不能还挂在别的文档上说「已关联」。
+     * 用渲染期判断而不是 watch —— watch 漏一个入口（关标签/分屏挪动/退出项目）
+     * 就是一条挂错文档的回执，判断放在渲染期漏不掉。
+     */
+    isEvidenceBarOnActiveDoc(activeFile) {
+      const pinned = this.evidenceMethodBar && this.evidenceMethodBar.docFileId
+      if (pinned == null) return true // 旧状态/测试桩没带 docFileId 时不收
+      // Number() 出 NaN（非数值 id 文档）按未钉处理：NaN === NaN 恒 false 会让小条永久隐藏
+      const pinnedNum = Number(pinned)
+      if (!Number.isFinite(pinnedNum)) return true
+      return !!activeFile && Number(activeFile.id) === pinnedNum
+    },
     isTabVisible(file) {
-      if (!file) return false
-      // dd-request 或者 fileType 为 dd 的属于尽调清单类标签
-      const isDd = file.type === 'dd-request' || file.fileType === 'dd'
-      if (isDd) {
-        return this.leftPaneKey === 'dd-files'
-      }
-      // 其他文件标签（资源管理器打开的文件、浏览器标签等）仅在资源管理器模式下显示
-      // 插件标签也只在插件模式下显示
-      const isPlugin = file.fileType === 'plugin'
-      if (isPlugin) {
-        return this.leftPaneKey === file.id // Assuming plugin ID is its key
-      }
-      // 版本对比标签（修订稿 / 文本降级两种）：唯一入口是版本面板里的「和上一版
-      // 对比」，所以必须在 version 面板下可见——否则点开的标签被 v-show 藏死，
-      // 编辑区显示空闲态，功能等于不存在。同时也在资源管理器面板下保持可见：
-      // 它展示的是项目文档的衍生视图，律师切回文件树不该让对比凭空消失。
-      if (file.tabType === 'version-compare' || file.tabType === 'version-text-diff') {
-        return this.leftPaneKey === 'version' || this.leftPaneKey === 'files'
-      }
-      // 插件广场详情 tab：与左栏模式无关，常显（VS Code 扩展详情页语义）
-      if (file.tabType === 'market-detail') {
-        return true
-      }
-      // 项目概览 tab：同理常显。它的入口是 rail 上的按钮，不属于任何左栏模式，
-      // 被 v-show 藏死的话点了 rail 什么也不会发生。
-      if (file.tabType === 'project-home') {
-        return true
-      }
-      // 普通文件在资源管理器、搜索或EasyVoice模式下都可见。
-      // 诉讼可视化面板也要放行：图廊的「打开」是那个面板唯一的出图入口，
-      // 不放行的话点了之后标签被 v-show 藏死、编辑区显示空闲态，功能等于不存在
-      // （与上面版本对比标签同一类问题）。
-      return this.leftPaneKey === 'files' || this.leftPaneKey === 'search'
-        || this.leftPaneKey === 'easyvoice' || this.leftPaneKey === 'litigation-visual'
+      // 标签常驻，与左栏面板解耦（dev-board#394），契约与理由见 tabVisibility.js
+      return isTabVisibleInPane(file, this.leftPaneKey)
     },
     startRenameProject() {
       this.renameProjectName = this.project.name || ''
@@ -3442,13 +4614,18 @@ export default {
       this.startRenameProject()
     },
     async confirmRenameProject() {
-      if (!this.renameProjectName || !this.renameProjectName.trim()) {
+      // 名字必须在 await 之前取下来存成局部变量。uni-app H5 的 input 在派发 @confirm
+      // 之后会立刻 input.blur()（confirm-hold 默认 false），模板上 @blur 绑的正是
+      // cancelRenameProject——它同步把 renameProjectName 清成 ''。await 回来再读这个
+      // 字段，写进标题的就是空串（显示成「未命名项目」），而服务端存的其实是对的。
+      const newName = (this.renameProjectName || '').trim()
+      if (!newName) {
         uni.showToast({ title: this.$t('workbench.projectNameEmpty'), icon: 'none' })
         return
       }
       try {
-        await renameProject(this.projectId, this.renameProjectName.trim())
-        this.project.name = this.renameProjectName.trim()
+        await renameProject(this.projectId, newName)
+        this.project.name = newName
         this.isRenamingProject = false
         uni.showToast({ title: this.$t('workbench.renameSuccess'), icon: 'success' })
       } catch (e) {
@@ -3463,7 +4640,21 @@ export default {
     toggleFileMoreMenu() {
       this.showFileMoreMenu = !this.showFileMoreMenu
     },
-    handleLogout() {
+    async handleLogout() {
+      // 落盘必须排在 clearSession 之前：会话一清，保存请求就是未授权，
+      // 用户「退出登录」等于顺手丢掉最后几秒的修改。
+      try {
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
+      } catch (e) {
+        console.warn('[project-overview] flush before logout failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
+      }
       try {
          clearSession()
       } catch (e) {}
@@ -3478,10 +4669,6 @@ export default {
       }
       if (actionKey === 'newFile' && typeof tree.handleCreateWord === 'function') {
         tree.handleCreateWord()
-        return
-      }
-      if (actionKey === 'upload' && typeof tree.handleUploadFile === 'function') {
-        tree.handleUploadFile()
         return
       }
       if (actionKey === 'recycleBin') {
@@ -3526,7 +4713,7 @@ export default {
     },
     // === 文件拖拽到文档选区建立关联（超链接）===
     // #79 债已还：原 WPS 实例能力（选区轮询 + setHyperlinkAtRange）现由 LibreOffice
-    // 执行器原语实现（get/set_selection_hyperlink，见 createWpsSelectionFileLink）。
+    // 执行器原语实现（get/set_selection_hyperlink，见 evidenceLinkActions.js）。
     onFileLinkDragStart(file) {
       if (!file || !file.id) return
       this.fileLinkDrag.active = true
@@ -3535,7 +4722,6 @@ export default {
       console.log('onFileLinkDragStart:', file)
     },
 
-    // bindNativeDropEvents 已移除，逻辑迁移至 FileLinkDropZone 组件
 
     onFileLinkDragEnd() {
       console.log('onFileLinkDragEnd')
@@ -3544,129 +4730,16 @@ export default {
       this.fileLinkDrag.hoverSide = null
     },
 
-    async onFileLinkZoneDrop({ side }) {
-      console.log('onFileLinkZoneDrop triggered:', side)
-      let file = this.fileLinkDrag.file
-
-      // 这里的 file 应该是从 state 中获取的，因为 drop 主要是为了触发 action，
-      // 如果需要从 DataTransfer 恢复 (跨组件丢失 state)，组件内部其实拿不到 DataTransfer 数据 (dropzone 一般只暴露 event)，
-      // 但因为我们是同页面拖拽，state 应该是保持的。
-
-      if (!file || !file.id) {
-        console.warn('onFileLinkZoneDrop: no file in state')
-        // 尝试兜底？组件可以传回更多信息吗？
-        // 暂时先这样，因为 FileTree 就在同一个页面，state 不会丢
-      }
-
-      // 先关闭浮窗
-      this.onFileLinkDragEnd()
-
-      if (!file || !file.id) return
-      await this.createWpsSelectionFileLink(side, file)
-    },
-    closeFileLinkPicker() {
-      this.fileLinkPicker.visible = false
-      this.fileLinkPicker.files = []
-      this.fileLinkPicker.linkKey = ''
-    },
-    async createWpsSelectionFileLink(side, file) {
-      // #79 债已还：经 LibreOffice 执行器实现（get_selection_hyperlink 复用已有
-      // linkKey + set_selection_hyperlink 写入），后端 DocFileLink 契约不变。
-      console.log('createWpsSelectionFileLink start:', { side, fileId: file && file.id })
-      if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-        uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
-        return
-      }
-      const exec = (action, params) => this.libreOfficeExecutor.executeCommand(action, params)
-
-      // 1) 读选区（顺带取选区上已有的超链接，用于复用 linkKey）
-      let selText = ''
-      let existingUrl = ''
-      try {
-        const cur = await exec('get_selection_hyperlink', {})
-        if (cur && cur.success) {
-          selText = String(cur.text || '').trim()
-          existingUrl = cur.url ? String(cur.url) : ''
-        }
-      } catch (e) {
-        console.warn('get_selection_hyperlink failed:', e)
-      }
-      if (!selText) {
-        uni.showToast({ title: this.$t('workbench.highlightTextFirst'), icon: 'none' })
-        return
-      }
-
-      // 2) 生成/复用 linkKey：选区已带内部链接时从中解析（裸 checkba:// 或包装 https 均兼容）
-      let linkKey = ''
-      try {
-        let raw = existingUrl
-        if (raw && this.WPS_INTERNAL_HTTP_LINK_BASE && raw.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)) {
-          const q0 = raw.includes('?') ? raw.split('?')[1] : ''
-          const p0 = new URLSearchParams(q0)
-          raw = p0.get('u') ? decodeURIComponent(String(p0.get('u'))) : ''
-        }
-        if (raw && raw.startsWith(this.INTERNAL_LINK_SCHEMES.fileLink)) {
-          const q = raw.includes('?') ? raw.split('?')[1] : ''
-          linkKey = new URLSearchParams(q).get('k') || ''
-        }
-      } catch (e) {
-        // ignore
-      }
-      if (!linkKey) {
-        linkKey = `lk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        // 与 WPS 时代同款“包装后的 https 链接”：点击经编辑器 open-url 事件回宿主解包，
-        // 文档导出到真实 Word 时也仍是合法链接
-        const inner = `${this.INTERNAL_LINK_SCHEMES.fileLink}?k=${encodeURIComponent(linkKey)}&projectId=${encodeURIComponent(String(this.projectId || ''))}`
-        const url = this.wrapWpsInternalLink(inner)
-        const r = await exec('set_selection_hyperlink', { url })
-        if (!r || !r.success) {
-          console.error('设置超链接失败:', r && r.message)
-          uni.showToast({ title: this.$t('workbench.setHyperlinkFailed'), icon: 'none' })
-          return
-        }
-      }
-
-      // 3) 入库：按 fileId 关联（文件移动/重命名不影响打开）
-      try {
-        const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-        const doc = side === 'right' ? this.activeFileRight : this.activeFileLeft
-        const docWpsFileId = doc && this.isEditorOpenableFile(doc) ? (doc.wpsFileId || '') : ''
-        if (!docWpsFileId) throw new Error(this.$t('workbench.docNotReady'))
-        const payload = await createDocFileLink(pid, {
-          linkKey,
-          docWpsFileId,
-          anchorText: selText || '',
-          // LibreOffice 路径没有整数偏移（§0.2 锚点语义）；后端字段可空
-          rangeStart: null,
-          rangeEnd: null,
-          fileIds: [Number(file.id)]
-        })
-        if (payload && payload.linkKey) linkKey = payload.linkKey
-        uni.showToast({ title: this.$t('workbench.linkCreated'), icon: 'success' })
-      } catch (e) {
-        uni.showToast({ title: e.message || this.$t('workbench.linkFailed'), icon: 'none' })
-      }
-    },
+    // 拖到编辑器建链 / 链接点击解包 / 多 target 弹窗 / method 小条 → ./evidenceLinkActions.js
 
     // === Staging Area Methods ===
     // 文件暂存区方法组已外置 → ./stagingArea.js（Phase 2）
 
-    async openFileLinkTarget(fileId, sideOverride = null) {
-      const fid = Number(fileId)
-      if (!fid || !this.projectId) return
-      const side = sideOverride || this.fileLinkPicker.side || 'left'
-      this.closeFileLinkPicker()
-      try {
-        const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-        const file = await getFileDetail(pid, fid)
-        if (!file) throw new Error(this.$t('workbench.fileMissing'))
-        const old = this.focusedPane
-        this.focusedPane = side === 'right' && this.splitMode ? 'right' : 'left'
-        this.openFile(file)
-        this.focusedPane = old
-      } catch (e) {
-        uni.showToast({ title: e.message || this.$t('workbench.openFailed'), icon: 'none' })
-      }
+    // 审阅面板「证据」页 / 改字提示条的「查看底稿」：payload = {fileId, locator, linkKey, targetId}，
+    // 形状与 TargetView 兼容，直接交给 evidenceLinkActions.js 的 openFileLinkTarget(target) 打开并定位。
+    onOpenEvidenceTarget(payload) {
+      if (!payload || !payload.fileId) return
+      this.openFileLinkTarget(payload, this.focusedPane || 'left')
     },
     // OCR 采集与浮层生命周期方法组已外置（Phase 3c） → ./ocrCapture.js
     getActiveWebTab() {
@@ -3752,7 +4825,15 @@ export default {
       const viewportWidth = window.innerWidth || 1920
       const compact = viewportWidth <= 1360
       this.isCompactLayout = compact
-      // 按 Cursor 体验：不在窄屏时强行限制面板宽度（遮挡就遮挡），只切换样式密度
+      if (this.resizing?.active) return
+      const sidebar = this.$refs.sidebarLeft?.$el || this.$refs.sidebarLeft
+      const layout = sidebar?.parentElement
+      if (!layout?.clientWidth) return
+      const rail = layout.querySelector('.left-rail')
+      const fit = fitPanelWidths(layout.clientWidth, rail?.offsetWidth || 0,
+        this.sidebarCollapsed ? 0 : this.sidebarWidth, this.showAiPanel ? this.aiPanelWidth : 0)
+      if (!this.sidebarCollapsed) this.sidebarWidth = fit.left
+      if (this.showAiPanel) this.aiPanelWidth = fit.right
     },
     // 左栏面板切换方法组已外置 → ./panelSwitching.js（Phase 1）
     // OCR 采集与浮层生命周期方法组已外置（Phase 3c） → ./ocrCapture.js
@@ -3808,7 +4889,7 @@ export default {
       if (!this.isActiveBrowserTab(pane, tabId)) return
       // Track URL Session (flush previous, start new)
       const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
-      activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+      activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, meta)
     },
     onBrowserTitleChange(pane, tabId, title) {
       const active = this.findBrowserTab(pane, tabId)
@@ -3827,12 +4908,31 @@ export default {
       // 同 onBrowserUrlChange：后台标签换标题不算浏览行为
       if (url && this.isActiveBrowserTab(pane, tabId)) {
           // Restart session to capture title in the new segment
-          activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+          activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, meta)
       }
 
       // 避免过长：保留前 18 字符
       active.name = t.length > 18 ? (t.slice(0, 18) + '…') : t
       this.$forceUpdate()
+    },
+    // 浏览器工具栏「收藏本页」入库成功后的可见反馈：打开收藏面板并高亮新卡片。
+    // 不能只靠 toast——桌面端 toast 在 DOM 层、被原生 BrowserView 整个盖住
+    // （同 onWebMark 的教训）。落库由 BrowserPane 自己做（它要维护星形实心态），
+    // 这里只负责面板侧反馈。
+    onBrowserFavoriteAdded(payload) {
+      const favId = payload && payload.id ? Number(payload.id) : null
+      this.showToolsPanel = true
+      this.activeToolKey = 'favorites'
+      this.$nextTick(async () => {
+        try {
+          const panel = this.$refs.favoritesPanel
+          // force=true 绕过 1.2s 节流，否则新卡片可能刷不出来、高亮落空
+          if (panel && typeof panel.refresh === 'function') await panel.refresh(true)
+          if (favId && panel && typeof panel.focusFavorite === 'function') panel.focusFavorite(favId)
+        } catch (e) {
+          // ignore
+        }
+      })
     },
     // 激活的网页标签变化：记进保活 LRU（超上限的尾巴直接出池 = 组件卸载 = iframe 收掉，
     // 不像编辑器那样需要先落盘，网页没有我们负责保存的状态）。顺带清掉已关标签的残留记账。
@@ -3914,9 +5014,9 @@ export default {
                      const url = file.url || ''
                      const title = file.name || ''
                      const fullMeta = meta + (title ? `. Title: ${title}` : '')
-                     activityTracker.trackActivePage('OPEN_URL', 0, url, fullMeta)
+                     activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, fullMeta)
                  } else {
-                     activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+                     activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
                  }
              }
         } else {
@@ -4147,23 +5247,124 @@ export default {
         console.error('加载项目详情失败', e)
       }
     },
+    /**
+     * 成员堆栈的名单。
+     *
+     * 本机 /members 与团队案件库那边的成员是**两张表**：案卷放进案件库之后，加同事走的
+     * 是云端那张（CollabDialog 的「案件参与人」、加人弹窗的云端轨），本机表一个字不变。
+     * 只读本机表的话，律师刚在库里加完人、回头看堆栈毫无变化，会第二次以为「没生效」。
+     *
+     * 合并纪律（实现与单测在 utils/mergeMembers.js，dev-board#625）：
+     * · 去重键按可靠度试三把：accountId → username → 云端 `awd_` + 本机 username。
+     *   只比 username 的老写法会让同一个官网账户（本机 hanzewei / 案件库 awd_hanzewei）
+     *   显示成两个人；
+     * · 合并后保留本机条目（它带得动本机 userId 与权限语义），role/joinedAt 以案件库为准；
+     * · 云端独有条目的 id 加前缀，避免与本机 id 撞 :key；
+     * · **云端条目的 userId 一律抹成 null**——它来自案件库服务器的用户表，和本机
+     *   user.id 是两个 id 空间，撞上同一个数字会让 canWriteProject / canRemoveMember
+     *   把别人的角色当成「我的角色」，把有写权限的人判成只读；
+     * · 云端读取失败静默回落到本机名单，不让工作台因此报错。
+     */
     async loadProjectMembers() {
         if (!this.projectId) return
+        let local = []
         try {
             const res = await getProjectMembers(this.projectId)
-            this.projectMembers = res.data || []
+            local = res.data || []
         } catch (e) {
             console.error('Failed to load project members', e)
+            return
         }
+        // 本机名单先落地再去问案件库：getCloudMembers 是**走网络**的代理调用，
+        // 库连不上时它会一直等到超时，等在这里的话堆栈整段时间都是空的。
+        this.projectMembers = local
+        if (!(this.collabCloud && this.collabCloud.linked)) return
+        try {
+            const res = await getCloudMembers(this.projectId)
+            const cloudMembers = (res && res.data && res.data.members) || []
+            // 去重键（accountId → username → 云端 awd_ 前缀）与合并规则在
+            // utils/mergeMembers.js，配单测；同一个官网账户在两张表里叫两个名字
+            // （本机 hanzewei / 案件库 awd_hanzewei）曾让一个人显示成两个人（#625）。
+            this.projectMembers = mergeMembers(local, cloudMembers)
+        } catch (e) {
+            console.warn('[Collab] 读取案件库参与人失败，只显示本机名单', e)
+        }
+    },
+    // 加人弹窗可能刚把案卷放进了案件库、也可能在库那边加了人：两边状态都要重取，
+    // 只重取成员名单的话协作状态还停在「没放进去」，云端名单也就并不进来。
+    async onInviteMemberSuccess() {
+        await this.fetchCollabState()
+        this.loadProjectMembers()
     },
     goBack() {
       uni.navigateBack()
     },
-    goToUserProfile() {
-      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+    /**
+     * 设置：中栏开标签，不再整页跳转（2026-08-19）。
+     * 整页跳转会把工作台（标签、编辑器、AI 会话）整个换掉，改个 API Key 的代价
+     * 是回来重开一遍文件——照插件广场详情 tab 那套形制改成标签。
+     * pages/admin 薄壳页仍在，直链与浏览器端走那条。
+     */
+    goToSystemSettings(opts) {
+      this.openSettingsTab(opts)
     },
-    goToSystemSettings() {
-      uni.navigateTo({ url: '/pages/admin/admin' })
+    /**
+     * 中栏开「系统设置」标签（单例；任一窗格已开则激活）。
+     * opts.nav / opts.service 等价于薄壳页的 ?nav=xxx&service=yyy 深链——
+     * 网关错误提示的逃生门指着它，tab 形态下必须一样能一步定位到那一项。
+     * 已开着的标签再带深链进来时就地改 props（key 不变，组件不重建）。
+     */
+    openSettingsTab(opts) {
+      const nav = (opts && opts.nav) || ''
+      const service = (opts && opts.service) || ''
+      const tabId = 'admin-settings'
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find(f => f.id === tabId)
+        if (existing) {
+          if (nav && existing.adminNav === nav) {
+            // 同值写回不触发 AdminPane 的 initialNav watcher：用户手动切到别的分区后再点
+            // 「去团队设置」会停在原地（dev-board#582 走查实锤）。先清空、下一拍再写回。
+            existing.adminNav = ''
+            this.$nextTick(() => { existing.adminNav = nav })
+          } else if (nav) {
+            existing.adminNav = nav
+          }
+          if (service) existing.adminService = service
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      list.push({
+        id: tabId,
+        tabType: 'admin-settings',
+        name: this.$t('workbench.settingsTabName'),
+        adminNav: nav,
+        adminService: service,
+      })
+      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+    // 头像下拉两项（dev-board#205）。退出走 utils/signOut.js 唯一编排，确认弹窗与
+    // 状态判定都在它里面，这里只负责收起菜单。注意位置：不能插在 goToSystemSettings
+    // 与 openSettingsTab 之间——check-navigation-contract 的方法提取按
+    // 「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
+    onAvatarMenuAccount() {
+      this.avatarMenuOpen = false
+      this.goToAccountPanel()
+    },
+    onAvatarMenuSettings() {
+      this.avatarMenuOpen = false
+      this.goToSystemSettings()
+    },
+    async onAvatarMenuSignOut() {
+      this.avatarMenuOpen = false
+      await signOut()
     },
     goToPluginMarket() {
       // VS Code 扩展栏形态：rail 按钮开左栏列表面板（保留标签页与编辑区），
@@ -4241,20 +5442,21 @@ export default {
     },
 
     toggleToolsPanel() {
+      // 三个工具面板都被搬到左/右之后底部抽屉里没东西可显示，开关也就不该有反应
+      // （顶栏那个按钮同样按 bottomToolsList 收起，见模板）
+      if (!this.showToolsPanel && !this.bottomToolsList.length) return
       this.showToolsPanel = !this.showToolsPanel
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
-    // 底部状态条工具入口：点当前已打开的 tab 则收起抽屉，否则切换/打开到该 tab
+    // 底部状态条工具入口：点当前已打开的 tab 则收起抽屉，否则打开到该 tab。
+    // 状态条只列停在底栏的面板，所以这里的 key 一定是底栏的（dev-board#180）。
     openToolFromStatusBar(key) {
       if (this.showToolsPanel && this.activeToolKey === key) {
         this.toggleToolsPanel()
         return
       }
-      this.switchToolTab(key)
-      if (!this.showToolsPanel) {
-        this.toggleToolsPanel()
-      }
+      this.openPanelInItsDock(key)
     },
 
     triggerWorkbenchResize() {
@@ -4409,6 +5611,12 @@ export default {
         candidate = this.activeFileLeft || this.activeFileRight || null
       }
       if (!candidate) return null
+      // 纯文本标签（PlainTextEditor）也是合法的 AI 目标：后端按 fileType 走
+      // text_* 工具口径（dev-board#37）。不放行的话，用户盯着一份 txt 问 AI，
+      // 上下文里却没有这份文件。
+      if (typeof this.isPlainTextFile === 'function' && this.isPlainTextFile(candidate)) {
+        return candidate
+      }
       if (typeof this.isEditorOpenableFile === 'function' && !this.isEditorOpenableFile(candidate)) {
         return null
       }
@@ -4505,7 +5713,20 @@ export default {
              }
         }
 
-        if (useEditor && this.libreOfficeActive && this.libreOfficeExecutor) {
+        // 纯文本标签：正文/选区直接从 CodeMirror 实例取（拿到的是含未保存输入的
+        // 活内容）。不能落进下面的 LOWA 分支——executor 指着的是别的文档，会把
+        // 那份 docx 的正文错标成这份 txt 的内容。
+        if (useEditor && this.isPlainTextFile(file)) {
+            for (const pane of ['left', 'right']) {
+                const inst = (this._plainTextRefs || {})[pane]
+                if (inst && inst.file && inst.file.id === (file.id || file.fileId)) {
+                    context.selectionText = this.normalizeContextText(inst.getSelectionText(), 1500)
+                    context.documentText = this.normalizeContextText(inst.getText(), 8000)
+                    break
+                }
+            }
+        }
+        else if (useEditor && this.useLibreEditor(file) && this.libreOfficeActive && this.libreOfficeExecutor) {
             try {
                  const sel = await this.libreOfficeExecutor.executeCommand('get_selection', {})
                  context.selectionText = this.normalizeContextText((sel && sel.text) || '', 1500)
@@ -4603,6 +5824,166 @@ export default {
       }
     },
 
+    // Web 插件桥（PluginPane）的 evidence.link / evidence.locate 要在「当前聚焦的
+    // Word 文档」上打书签、跳书签：给它 { executor(action, params), fileId }。
+    // fileId 必须从 executor 反查（resolveLibreExecutorFileId），不能信 activeFile——
+    // 指针同步与标签切换之间有窗口，落错文档的代价是锚点进了别的文件。
+    getPluginActiveEditor() {
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) return null
+      const ex = this.libreOfficeExecutor
+      const fileId = this.resolveLibreExecutorFileId(ex)
+      if (!fileId) return null
+      return {
+        fileId: Number(fileId),
+        executor: (action, params) => ex.executeCommand(action, params || {})
+      }
+    },
+
+    // ————————————————— 「依据」窗格（dev-board#182） —————————————————
+    /**
+     * 这份文件能不能解析：必须走内嵌编辑器，且是 Writer 能开的文本文档。
+     * 表格/演示/PDF 都不进——解析的是正文段落，没有可通读的正文就没有实体可抽。
+     */
+    isInsightDoc(file) {
+      if (!file || !file.fileType || !this.useLibreEditor(file)) return false
+      return INSIGHT_DOC_TYPES.includes(String(file.fileType).toLowerCase())
+    },
+    /**
+     * 交给 InsightPane 的 executor 取值器：**按窗格绑定的那份文档取**，不用
+     * libreOfficeExecutor 那个"活跃指针"——指针同步与标签切换之间有窗口，
+     * 落错文档的代价是把查找替换打在别人身上。
+     */
+    getInsightEditorKey() {
+      const id = Number(this.insightDocFileId)
+      if (!id) return null
+      const sides = this.focusedPane === 'right' ? ['right', 'left'] : ['left', 'right']
+      for (const side of sides) {
+        const file = side === 'right' ? this.activeFileRight : this.activeFileLeft
+        if (file && Number(file.id) === id) return side + ':' + id
+      }
+      return null
+    },
+    getInsightExecutor() {
+      const key = this.getInsightEditorKey()
+      const ex = key && this.getLibreExecutorMap()[key]
+      if (!ex) return null
+      return (action, params) => ex.executeCommand(action, params || {})
+    },
+    /** 在线核验只读落盘文件，因此仅在该按钮点击后保存当前绑定的编辑器。 */
+    async prepareInsightDocument(docFileId) {
+      const forDoc = Number(docFileId), forProject = String(this.projectId)
+      const key = this.getInsightEditorKey()
+      const inst = key && (this._libreRefs || {})[key]
+      const usable = () => inst && inst.ready && !inst.docLoadFailed && !inst._reloading && inst.canWrite !== false && Number(inst.file && inst.file.id) === forDoc
+      if (!forDoc || forDoc !== Number(this.insightDocFileId) || !usable() || typeof inst.flushSave !== 'function') return false
+      try {
+        const saved = await inst.flushSave({ timeoutMs: 10000 })
+        return saved !== false && String(this.projectId) === forProject && Number(this.insightDocFileId) === forDoc
+          && this.getInsightEditorKey() === key && (this._libreRefs || {})[key] === inst
+          && usable() && !inst.dirty && !inst.saving
+      } catch (e) {
+        return false
+      }
+    },
+    /** 写作辅助打开既有资料；全文在线核验由面板中的显式按钮单独触发。 */
+    onOpenInsight(payload, pane) {
+      const fileId = payload && payload.fileId
+      if (pane && this.focusedPane !== pane) this.focusedPane = pane
+      const target = this.insightDocFileId
+      if (!target || (fileId && Number(fileId) !== Number(target))) return
+      this.openPanelInItsDock('insight')
+    },
+    /** 窗格把实体清单同步上来（宿主据此在正文点击时做匹配）。 */
+    onInsightEntities(payload) {
+      const id = payload && payload.docFileId
+      if (!id) return
+      this.setInsightIndex(id, Array.isArray(payload.entities) ? payload.entities : [])
+    },
+    /** 索引 + 它的响应式计数镜像的唯一写入点。 */
+    setInsightIndex(docFileId, list) {
+      const idx = this._insightIndex || (this._insightIndex = {})
+      idx[docFileId] = list
+      this.insightEntityCounts = { ...this.insightEntityCounts, [docFileId]: list.length }
+    },
+    /**
+     * 这份文档要不要给客体页开光标订阅（dev-board#541）。
+     * 原判据只有「窗格开着且绑在它上面」，于是窗格一关，正文里 Cmd 点击就没反应了。
+     * 现在多一条：**已经解析出实体**的文档也订阅——没解析过的文档仍然一次
+     * get_cursor_context 都不打，「没开窗格的用户零开销」那条口径对它们没变。
+     */
+    insightSubscribedFor(file) {
+      if (!file || !file.id) return false
+      if (this.insightPaneOpen && Number(this.insightDocFileId) === Number(file.id)) return true
+      return !!this.insightEntityCounts[file.id]
+    },
+    /**
+     * 文档标签激活时预取一次实体清单（dev-board#541）。窗格是 v-if 挂载的，
+     * 关着时没人拉过 GET /insight，_insightIndex 就是空的——Cmd 点击匹配不到任何东西。
+     * 一份文档只拉一次；失败不写缓存，下次激活会重试。非 writer 文档一次也不拉。
+     */
+    prefetchInsightIndex(file) {
+      if (!file || !this.projectId || !this.isInsightDoc(file)) return
+      const id = Number(file.id)
+      if (!id) return
+      if ((this._insightIndex || {})[id] !== undefined) return
+      const inflight = this._insightPrefetch || (this._insightPrefetch = {})
+      if (inflight[id]) return
+      inflight[id] = true
+      const done = () => { delete inflight[id] }
+      getDocInsight(this.projectId, id)
+        .then((resp) => {
+          const v = (resp && typeof resp === 'object' && 'data' in resp ? resp.data : resp) || {}
+          // 与窗格 emit 的索引同形：匹配用的名字 + 浮窗抬头的短标量，出处不进索引
+          const list = (Array.isArray(v.entities) ? v.entities : []).map((e) => ({
+            id: e.id, kind: e.kind, name: e.name, normKey: e.normKey,
+            retrievalStatus: e.retrievalStatus, retrievalSource: e.retrievalSource,
+            retrievalNote: e.retrievalNote, hasDetail: e.hasDetail,
+          }))
+          this.setInsightIndex(id, list)
+        })
+        .catch(() => { /* 还没解析过 / 拉不到：不写缓存，下次激活再试 */ })
+        .then(done, done)
+    },
+    /**
+     * 客体页回传的光标邻域。宿主先自己匹配一遍（索引在宿主手里，窗格可能根本没挂）：
+     *   窗格开着且绑着这份文档 → 原样推给窗格（它决定被动高亮，还是上抛 open-hover）；
+     *   窗格没开             → 只处理 Cmd/Ctrl 那一支，直接弹浮窗。
+     * 没命中的光标移动一律不推，免得窗格每次移动都白跑一遍。
+     */
+    onEditorCursorContext(ctx) {
+      if (!ctx) return
+      const fileId = Number(ctx.fileId) || null
+      if (!fileId) return
+      const list = (this._insightIndex || {})[fileId] || []
+      if (!list.length) return
+      const hit = matchEntityAt(ctx, list)
+      if (!hit) return
+      if (this.insightPaneOpen && Number(this.insightDocFileId) === fileId) {
+        this.insightCursorContext = ctx
+        return
+      }
+      const meta = ctx.meta || {}
+      if (meta.metaKey || meta.ctrlKey) {
+        this.openInsightHoverCard({ entity: hit, x: meta.hostX, y: meta.hostY })
+      }
+    },
+    /**
+     * 弹实体浮窗（dev-board#541）。坐标是 LibreOfficeEditor 换算好的页面坐标；
+     * 换算不出来（拿不到画布 rect、或客体页没带坐标）就**不弹**——
+     * 弹到屏幕角落比不弹更糟，用户会以为自己点错了地方。
+     */
+    openInsightHoverCard(payload) {
+      const entity = payload && payload.entity
+      const x = Number(payload && payload.x)
+      const y = Number(payload && payload.y)
+      if (!entity || !entity.id) return
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return
+      // key 带时间戳：连点两个不同实体时强制重建（详情/定位都要重来一遍）
+      this.closeDocumentLinkPreview()
+      this.insightHover = { entity, x, y, detail: (payload && payload.detail) || null, key: entity.id + '@' + Date.now() }
+    },
+    closeInsightHoverCard() { this.insightHover = null },
+
     // #104: getEditor() adapter for VariablePanel — the five document-field
     // methods it expects, implemented over the LibreOffice executor's var_*
     // commands. Returns null while no editor is active so the panel keeps its
@@ -4650,10 +6031,33 @@ export default {
 
     // --- 文件选择/上传 ---
 
-    insertAiMessageToDoc(message) {
+    async insertAiMessageToDoc(message) {
       if (!message || !message.content) return
-      // AI 回复是 Markdown，纯文本原语会把 **、# 原样落字——先剥离标记
-      this.insertPlainTextToWps(markdownToPlainText(message.content))
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+        uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
+        return
+      }
+      if (this._aiMessageInsertBusy) return
+      if (this._docStreamBusy || this._docStreamBuffer || this._docStreamTimer ||
+          this.$refs?.chatInterface?.menuState?.().aiRunning) {
+        uni.showToast({ title: this.$t('workbench.waitForDocumentWrite'), icon: 'none' })
+        return
+      }
+      this._aiMessageInsertBusy = true
+      const executor = this.libreOfficeExecutor
+      try {
+        // 一条命令内写正文并冲出尾表，避免两次调用之间混入另一轮 Agent 流。
+        const result = await executor.executeCommand('stream_insert', { text: message.content, complete: true })
+        if (!result || result.success === false) {
+          throw new Error(result?.error || result?.message || this.$t('workbench.insertFailed'))
+        }
+        this.notifyDocMutated()
+        uni.showToast({ title: this.$t('workbench.insertedToDoc'), icon: 'success' })
+      } catch (e) {
+        uni.showToast({ title: e.message || this.$t('workbench.insertFailed'), icon: 'none' })
+      } finally {
+        this._aiMessageInsertBusy = false
+      }
     },
     async applyAiMessageToSelection(message) {
       if (!message || !message.content) return
@@ -4687,6 +6091,10 @@ export default {
     handleAiDrop(e) {
         if (e && e.preventDefault) e.preventDefault()
         this.dragOverAiPanel = false
+
+        // rail 排序 / 面板停靠的拖拽松在对话区属于误落，静默忽略——
+        // 否则会被当成「拖文件进对话」而弹「未获取到拖拽数据」（dev-board#220）
+        if (this.draggingRailKey || this.draggingPanelKey) return
 
         let fileData = null
         try {
@@ -4883,37 +6291,44 @@ export default {
        }
        this.pastedImages = [] // Clear images too
     },
-    async loadAssistants() {
-      try {
-          const list = await getAssistants()
-          if (Array.isArray(list) && list.length > 0) {
-              this.assistants = list
-          } else {
-              // Fallback default if needed, or keep empty
-              this.assistants = [
-                  { id: 'default', name: this.$t('workbench.defaultAssistantName'), systemPrompt: this.$t('workbench.defaultAssistantPrompt') }
-              ]
-          }
-      } catch (e) {
-          console.error('Failed to load assistants', e)
-          this.assistants = [
-              { id: 'default', name: this.$t('workbench.defaultAssistantName'), systemPrompt: this.$t('workbench.defaultAssistantPrompt') }
-          ]
-      }
-  },
     async loadDynamicPlugins() {
       try {
         const res = await getPlugins()
-        if (res && res.data) {
+        // /api/plugins/list 裸返回数组（无 {code,data} 信封，request() 原样透传）；
+        // 只认 res.data 会让这里恒为空 = 装了的插件永远不出现在 rail 上，
+        // 与下面 loadEnabledSkills 修过的是同一个坑
+        const list = Array.isArray(res) ? res : ((res && res.data) || null)
+        if (list) {
           // Map backend PluginMetadata to frontend plugin structure
-          this.dynamicPlugins = res.data.map(p => ({
-            key: `plugin-${p.id}`,
-            label: p.name,
-            icon: p.icon || '/static/plugin_default.png',
-            activeIcon: p.icon || '/static/plugin_default.png',
-            isDynamic: true,
-            frontendEntry: p.frontendEntry
-          }))
+          this.dynamicPlugins = list.map(p => {
+            const frontendEntry = resolvePluginEntryUrl(p.id, p.frontendEntry)
+            return {
+              key: `plugin-${p.id}`,
+              // 左栏面板 key 是 plugin-<id>，桥要的是原始 id（握手上下文 + KV 分区键），
+              // 两者别混用
+              pluginId: p.id,
+              label: p.name,
+              // registry 的 icon 字段是 emoji（全站禁 emoji，一律不当图片渲染），
+              // 且 /static/plugin_default.png 并不存在（会 404 成 HTML=破图）。所以
+              // 纯工具/skill 插件不给位图，改由 rail 用统一的 SVG 兜底（见模板 svgFallback）。
+              icon: null,
+              activeIcon: null,
+              isDynamic: true,
+              // 有真正的前端入口才走 iframe（PluginPane）；纯工具/skill 插件走宿主渲染的
+              // 启动面板（PluginGuidePane）——否则点开只有一句「未配置入口地址」。
+              hasFrontend: !!frontendEntry,
+              description: p.description || '',
+              tools: Array.isArray(p.tools) ? p.tools : [],
+              guide: p.guide || null,
+              triggers: Array.isArray(p.triggers) ? p.triggers : [],
+              // manifest.permissions：PluginPane 的桥按它逐调用裁剪能力
+              permissions: p.permissions || [],
+              // 本机 dev 免签直装标记（规范 v2.7）：实验 API（x- 前缀桥方法）只对它开放
+              devInstalled: !!p.devInstalled,
+              // web/ 相对路径映射成后端静态服务地址；绝对 URL 原样保留（旧形态）
+              frontendEntry
+            }
+          })
           console.log('Dynamic plugins loaded:', this.dynamicPlugins)
         }
       } catch (e) {
@@ -5113,6 +6528,7 @@ export default {
     startNewChat() {
       this.aiMessages = []
       this.currentConversationId = null
+      this.pluginReadOnlySource = null // 新对话必然可写，清掉插件只读态
       this.scrollToBottom()
       this.aiContextPreview = null
       // Retain current assistant/model settings? Yes.
@@ -5154,8 +6570,16 @@ export default {
               lastMessage: item.lastMessage ? item.lastMessage.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').substring(0, 60) + (item.lastMessage.length > 60 ? '...' : '') : '',
               conversationId: item.conversationId,
               runStatus: item.runStatus || null,
+              // 插件镜像会话来源（dev-board#298）：null=本地会话，非空=office-word 等通道值
+              sourceChannel: item.sourceChannel || null,
               unread: this.unreadConversations.includes(item.conversationId)
           }))
+          // 只读态跟列表刷新对齐：深链/onLoad 会先 loadHistoryChat 后拿到列表，
+          // 那时查不到 sourceChannel，这里补上（不在列表里的会话不动，避免误清）
+          if (this.currentConversationId) {
+              const cur = this.chatHistoryList.find(c => c.conversationId === this.currentConversationId)
+              if (cur) this.pluginReadOnlySource = cur.sourceChannel || null
+          }
       } catch (e) {
         console.error('Fetch history failed', e)
         if (!quiet) uni.showToast({ title: this.$t('workbench.loadHistoryFailed'), icon: 'none' })
@@ -5167,6 +6591,11 @@ export default {
     async loadHistoryChat(chat) {
         if (!chat || !chat.conversationId) return
         this.currentConversationId = chat.conversationId
+        // 插件镜像会话只读态（dev-board#298）：跟着会话走。深链只带 conversationId
+        // 时从历史列表补查；两处都查不到按可写处理，fetchChatHistory 回来会再对齐。
+        this.pluginReadOnlySource = chat.sourceChannel !== undefined
+            ? (chat.sourceChannel || null)
+            : (((this.chatHistoryList || []).find(c => c.conversationId === chat.conversationId) || {}).sourceChannel || null)
         // 点开即视为已读：清掉「后台跑完未读」蓝点
         const unreadIdx = this.unreadConversations.indexOf(chat.conversationId)
         if (unreadIdx >= 0) this.unreadConversations.splice(unreadIdx, 1)
@@ -5202,6 +6631,35 @@ export default {
             this.loadingHistory = false
         }
     },
+    /** 历史抽屉里的来源角标文案（映射唯一出处：utils/conversationSource.js）。 */
+    convSourceLabel(chat) {
+        return sourceChannelLabel(chat && chat.sourceChannel)
+    },
+    /**
+     * 插件镜像会话「另起分支继续」（dev-board#298）：把当前只读会话复制成一条
+     * 可写本地会话，切过去并解除只读。ChatInterface 的 readonly-bar 按钮触发。
+     */
+    async forkPluginConversation() {
+        const sourceId = this.currentConversationId
+        if (!sourceId || this.forkingConversation) return
+        this.forkingConversation = true
+        try {
+            const data = await forkAiConversation(sourceId)
+            const newId = data && data.conversationId
+            if (!newId) throw new Error(this.$t('workbench.forkConversationFailed'))
+            // 先刷历史列表（quiet），loadHistoryChat 会从列表查新会话的
+            // sourceChannel（本地分支为 null）从而解除只读
+            await this.fetchChatHistory(true)
+            // 用户等 fork 的间隙切走了会话就不抢占（同 loadHistoryChat 的竞态口径）
+            if (this.currentConversationId !== sourceId) return
+            await this.loadHistoryChat({ conversationId: newId })
+        } catch (e) {
+            console.error('Fork conversation failed', e)
+            uni.showToast({ title: (e && e.message) || this.$t('workbench.forkConversationFailed'), icon: 'none' })
+        } finally {
+            this.forkingConversation = false
+        }
+    },
     // 会话状态 → 状态点样式类。黄=等用户（暂停/待审批）、蓝=后台跑完未读、
     // 动画绿=运行中、红=出错；无任务/已读完成不打点。
     convDotClass(chat) {
@@ -5226,50 +6684,6 @@ export default {
         if (chat.runStatus === 'ERROR') return this.$t('workbench.statusError')
         if (chat.unread) return this.$t('workbench.statusDone')
         return ''
-    },
-    toggleAssistantMenu() {
-        this.showAssistantMenu = !this.showAssistantMenu
-    },
-    switchAssistant(id) {
-        this.currentAssistantId = id
-        this.showAssistantMenu = false
-        const ast = this.assistants.find(a => a.id === id)
-        if (ast) {
-             uni.showToast({ title: this.$t('workbench.assistantSwitchedToast', { name: ast.name }), icon: 'none' })
-             // Inject system prompt notification (hidden or visible)
-             this.aiMessages.push({
-                 id: Date.now(),
-                 role: 'system', // Display as special notice
-                 content: this.$t('workbench.assistantSwitchedMsg', { name: ast.name })
-             })
-        }
-    },
-    // Helper for icons
-    getAssistantIcon(id) {
-        // User requested to remove emoji icons
-        return ''
-    },
-    openAssistantConfig(assistant) {
-        if (!assistant) return
-        this.editingAssistant = JSON.parse(JSON.stringify(assistant)) // Deep copy
-        this.showAssistantMenu = false // Close menu when opening dialog
-        this.showAssistantConfigDialog = true
-    },
-    closeAssistantConfigDialog() {
-        this.showAssistantConfigDialog = false
-        this.editingAssistant = null
-    },
-    saveAssistantConfig() {
-        if (!this.editingAssistant) return
-
-        // Update local list
-        const idx = this.assistants.findIndex(a => a.id === this.editingAssistant.id)
-        if (idx !== -1) {
-             this.assistants.splice(idx, 1, this.editingAssistant)
-             // Sync to backend would happen here
-             uni.showToast({ title: this.$t('workbench.configSaved'), icon: 'success' })
-        }
-        this.closeAssistantConfigDialog()
     },
   }
 }

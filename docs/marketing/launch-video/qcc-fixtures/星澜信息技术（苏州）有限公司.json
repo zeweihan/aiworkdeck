@@ -1,0 +1,26 @@
+{
+  "_demo_notice": "演示数据，人物公司均属虚构，仅供产品发布视频使用",
+  "Name": "星澜信息技术（苏州）有限公司",
+  "No": "91320594MA1YQ7F63P",
+  "OperName": "沈某某",
+  "RegistCapi": "2000万元人民币",
+  "StartDate": "2018-01-20",
+  "Address": "江苏省苏州市工业园区星湖街328号创意产业园A座3层",
+  "Scope": "信息技术咨询服务、人力资源服务（不含职业中介活动及劳务派遣业务）、企业管理咨询等",
+  "Status": "存续",
+  "Partners": [
+    {
+      "StockName": "星澜科技（上海）有限公司",
+      "StockPercent": "100%",
+      "ShouldCapi": "2000万元人民币"
+    }
+  ],
+  "PenetratedShareholders": [
+    { "Name": "沈某某", "Percent": "70%", "Type": "自然人（穿透，经星澜科技（上海）有限公司）" },
+    { "Name": "黄敏", "Percent": "30%", "Type": "自然人（穿透，经星澜科技（上海）有限公司）" }
+  ],
+  "Employees": [
+    { "Name": "沈某某", "Job": "法定代表人、执行董事" }
+  ],
+  "ZhiXing": []
+}

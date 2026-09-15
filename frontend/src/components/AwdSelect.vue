@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   AwdSelect — 桌面形制的下拉选择器。
 
@@ -107,7 +109,16 @@ export default {
         : { left: r.left + 'px', top: (r.bottom + 4) + 'px', minWidth: r.width + 'px' }
     },
     attachDismiss() {
-      this._dismiss = () => this.close()
+      this._dismiss = (e) => {
+        // 下拉菜单自己超过 280px 就会出现内部滚动条（见组件头注释）。滚动事件不
+        // 冒泡，但这里用的是捕获段（第三参 true），会连菜单自己内部的滚动也一起
+        // 收到——不加这道判断，用户在菜单里往下滚一下，菜单立刻把自己关掉，列表
+        // 长一点根本没法用。只有目标不在菜单内部（真正可能让触发器坐标失效的
+        // 外部容器滚动）时才按原逻辑关闭。
+        const menuEl = this.$el && this.$el.querySelector('.awd-select-menu')
+        if (menuEl && e && e.target && menuEl.contains(e.target)) return
+        this.close()
+      }
       // 捕获段：调用点大多在 scroll-view 里，滚动事件不冒泡到 window
       window.addEventListener('scroll', this._dismiss, true)
       window.addEventListener('resize', this._dismiss)
@@ -146,18 +157,18 @@ export default {
   gap: 8px;
   height: 36px;
   padding: 0 12px;
-  border: 1px solid #E6EAE8;
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   font-size: 13px;
-  color: #212629;
+  color: var(--awd-text);
   box-sizing: border-box;
   transition: border-color 0.15s ease;
 }
 
 .awd-select-value:hover,
 .awd-select.is-open .awd-select-value {
-  border-color: #5BD197;
+  border-color: var(--awd-mint);
 }
 
 .awd-select-text {
@@ -168,7 +179,7 @@ export default {
 
 .awd-select-caret {
   flex: none;
-  color: #8b9691;
+  color: var(--awd-text-2);
   font-size: 12px;
   transition: transform 0.15s ease;
 }
@@ -189,8 +200,8 @@ export default {
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
-  background: #fff;
-  border: 1px solid #E6EAE8;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 8px 28px rgba(18, 52, 77, 0.16);
 }
@@ -203,23 +214,23 @@ export default {
   padding: 7px 10px;
   border-radius: 5px;
   font-size: 13px;
-  color: #212629;
+  color: var(--awd-text);
   cursor: pointer;
   white-space: nowrap;
 }
 
 .awd-select-item:hover {
-  background: #F1F7F4;
+  background: var(--awd-bg);
 }
 
 .awd-select-item.is-active {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 .awd-select-check {
   flex: none;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-size: 12px;
 }
 </style>

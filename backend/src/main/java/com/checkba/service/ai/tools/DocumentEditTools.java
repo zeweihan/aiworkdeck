@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.tools;
 
 import com.checkba.model.entity.ProjectFile;
@@ -34,10 +37,25 @@ import java.util.stream.Collectors;
 @Slf4j
 public class DocumentEditTools implements AgentToolComponent {
 
+    // 文档 Generator 元数据（可溯源性设计规范附录 B4）：只写 docProps/app.xml 的
+    // Application，不含任何用户身份。required = false 是给手工 new 出来的单测留的口子。
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.document.DocumentGeneratorSettings documentGeneratorSettings;
+
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
     private final EditorBridgeService editorBridgeService;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    // 构造器加参：手工 new 的测试（ParagraphIndexBaseTest / DocumentEditToolsEvidenceTest）要同步；
+    // RealToolBeans 走反射取最长构造器，自动跟上
+    private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
+    /** 建链核心（引文→书签→超链接→落库）唯一实现，AI 工具与插件宿主共用。 */
+    private final com.checkba.service.evidence.EvidenceAnchorService evidenceAnchorService;
+    // doc_link_evidence 在动编辑器之前预校验写权限：worker 写完再被 Service 拒，文档里会留孤儿书签
+    private final com.checkba.service.ProjectMemberService projectMemberService;
+    // 样式画像解析（dev-board#111）：doc_apply_style_profile / doc_start_stream 按 §3.4 顺序取项目画像；
+    // 为 null（手工 new 的测试 / RealToolBeans）时一律视为 house-default
+    private final com.checkba.service.ai.StyleProfileResolver styleProfileResolver;
 
     // ==================== 文件管理工具 ====================
 
@@ -89,6 +107,12 @@ public class DocumentEditTools implements AgentToolComponent {
             if (denied != null) return denied;
 
             if (!isEditableDocument(file.getName())) {
+                // 纯文本不进文档编辑器（dev-board#37 起走轻量文本编辑器），给模型指对路
+                if (TextFileEditTools.isPlainText(file)) {
+                    return "Error: " + file.getName() + " 是纯文本文件，不在文档编辑器中打开。"
+                            + "读取用 extract_file_text，修改用 text_write_file / text_find_replace"
+                            + "（改动会自动同步到用户已打开的文本标签）。";
+                }
                 return "Error: 该文件不是可编辑的文档格式: " + file.getName();
             }
             
@@ -104,20 +128,120 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    /**
+     * 修订颗粒度约束（dev-board#365），挂在每个替换类工具描述的<b>末尾</b>：
+     * 字符级最小 diff 在编辑器 worker 里做（office_thread.js minimalEdits），只把真正变化的字落成修订；
+     * 但模型顺手润色/改标点会让 diff 无路可走，整句呈现为删除重写。回归 RedlineGranularityContractTest。
+     */
+    static final String REDLINE_GRANULARITY_NOTE =
+            "修订颗粒度：引擎按字符做最小 diff，只把真正变化的字落成修订痕迹；新文本里未改动的部分必须逐字照抄原文"
+            + "（标点、空格、数字写法都不要顺手改），否则会呈现为整句删除重写。";
+
     // ==================== 流式写入 ====================
 
     private static final Long AGENT_USER_ID = 10001L;
 
+    /** {@link #createAgentFile} 的落盘回调：拿到最终物理路径后把字节写出去。 */
+    @FunctionalInterface
+    interface FileBytesWriter {
+        void write(java.nio.file.Path target) throws Exception;
+    }
+
+    /**
+     * AI 新建项目文件的唯一落点（dev-board#465）：doc_start_stream 与 sheet_create_file 共用。
+     *
+     * <p>病灶：这两个工具此前各自手拼 {@code "projects/" + projectId + "/" + fileName} 并把
+     * parentId 写死成 null，用户说的「放进 08-尽调清单与工作底稿」在结构上就无法表达，
+     * 文件必然落在项目根目录、且没有任何报错。
+     *
+     * <p>统一后只有一条规则：parentId 由 {@link #resolveParentFolderId} 解析（可为 null =
+     * 项目根目录），行由 {@link ProjectFileService#createFile} 建（filePath 由它按文件夹层级
+     * 生成，同名走 ConflictPolicy.RENAME 自动加 " (n)"），物理路径由 storageResolver 反解，
+     * <b>路径穿越围栏保留</b>：最终物理路径必须仍在项目根目录内。
+     */
+    private ProjectFile createAgentFile(Long projectId, Long parentFolderId, String fileName,
+                                        String fileType, String wpsIdPrefix, FileBytesWriter writer) throws Exception {
+        Long parentId = resolveParentFolderId(projectId, parentFolderId);
+
+        // fileName 由 LLM 填写：名字里带路径分隔符会被 buildPhysicalPath 逐级拼进物理路径，
+        // "../42/补充协议.docx" 就把伪造文档落进别家项目的目录
+        String trimmed = fileName == null ? "" : fileName.trim();
+        if (trimmed.contains("/") || trimmed.contains("\\") || ".".equals(trimmed) || "..".equals(trimmed)) {
+            throw new IllegalArgumentException("非法文件名，路径越出项目目录: " + fileName);
+        }
+
+        String wpsId = wpsIdPrefix + "_" + System.currentTimeMillis()
+                + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        ProjectFile file = projectFileService.createFile(
+                projectId, parentId, trimmed, fileType, null, null, wpsId, AGENT_USER_ID,
+                ProjectFileService.ConflictPolicy.RENAME);
+
+        java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId).normalize();
+        java.nio.file.Path targetPath = storageResolver.resolve(file.getFilePath()).normalize();
+        if (!targetPath.startsWith(projectDataDir)) {
+            throw new IllegalArgumentException("非法文件名，路径越出项目目录: " + file.getFilePath());
+        }
+        if (targetPath.getParent() != null) {
+            java.nio.file.Files.createDirectories(targetPath.getParent());
+        }
+        writer.write(targetPath);
+
+        // createFile 建行时还没有字节，大小在这里补回（否则文件树显示 0 字节）
+        try {
+            file.setFileSize(targetPath.toFile().length());
+            ProjectFile persisted = projectFileRepository.save(file);
+            if (persisted != null) file = persisted;
+        } catch (Exception e) {
+            log.warn("回写新建文件大小失败: fileId={}", file.getId(), e);
+        }
+        return file;
+    }
+
+    /**
+     * 目标文件夹 ID 校验（dev-board#465）：解析不出来就明确报错，<b>绝不静默落回根目录</b>——
+     * 那正是这张卡的症状（用户指名了文件夹，文件却出现在根目录且无任何提示）。也不自动建文件夹：
+     * 名字对不上时该问用户，而不是凭模型的猜测在项目里多长出一层目录。
+     *
+     * <p>0 与负数按「项目根目录」处理（与 dev-board#457 将在 ProjectFileService 落地的
+     * resolveParentId 同口径，合并时以那边为准）。
+     */
+    private Long resolveParentFolderId(Long projectId, Long parentFolderId) {
+        if (parentFolderId == null || parentFolderId <= 0) {
+            return null;
+        }
+        ProjectFile folder = projectFileRepository.findById(parentFolderId).orElse(null);
+        if (folder == null || Boolean.TRUE.equals(folder.getIsDeleted())) {
+            throw new IllegalArgumentException("目标文件夹不存在：parentFolderId=" + parentFolderId
+                    + "。请调用 list_project_folders 取正确的文件夹 ID；确实没有这个文件夹就问用户，不要凭空填。");
+        }
+        if (!Boolean.TRUE.equals(folder.getIsFolder())) {
+            throw new IllegalArgumentException("parentFolderId=" + parentFolderId
+                    + " 指向的是文件而不是文件夹：" + folder.getName()
+                    + "。文件夹 ID 用 list_project_folders 取。");
+        }
+        if (projectId != null && !projectId.equals(folder.getProjectId())) {
+            throw new IllegalArgumentException("目标文件夹 " + parentFolderId
+                    + " 不属于项目 " + projectId + "，拒绝在跨项目的文件夹里建文件。");
+        }
+        return folder.getId();
+    }
+
     @Tool("开始实时流式写入文档。使用此工具后，模型生成的后续内容将直接写入打开的文档中。" +
           "**重要：创建新文件时必须提供 fileName 和 projectId 参数。** " +
+          "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID，再作为 parentFolderId 传进来；" +
+          "不传就落在项目根目录——不要在用户指定了文件夹时省略它。" +
           "调用此工具后，你必须立即开始生成文档内容，并且必须使用严格的 Markdown 格式（Markdown Heading #, ##, ### 等）。" +
-          "不要在调用此工具后输出任何非文档内容的闲聊，直接开始输出文档标题和正文。")
+          "不要在调用此工具后输出任何非文档内容的闲聊，也不要把正文包进 <artifact>/<process>/<thinking> 等协议标签"
+          + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。")
     public String doc_start_stream(
             @P("要打开的文件ID (如果是新建文件则传 null)") Long fileId,
             @P("新建文件名 (如 '法律意见书.docx')，仅当 fileId=null 时必填") String fileName,
-            @P("项目ID，仅当 fileId=null 时必填") Long projectId
+            @P("项目ID，仅当 fileId=null 时必填") Long projectId,
+            @P(value = "目标文件夹ID（可选，不填则放项目根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
+               required = false) Long parentFolderId
     ) {
-        log.info("Tool: doc_start_stream called fileId={}, fileName={}, projectId={}", fileId, fileName, projectId);
+        log.info("Tool: doc_start_stream called fileId={}, fileName={}, projectId={}, parentFolderId={}",
+                fileId, fileName, projectId, parentFolderId);
         try {
             String conversationId = editorBridgeService.getCurrentConversationId();
             if (conversationId == null) {
@@ -140,55 +264,19 @@ public class DocumentEditTools implements AgentToolComponent {
                     fileName = fileName + ".docx";
                 }
 
-                // 创建空白 docx 文件（localRoot 感知；旧实现无条件 getParent() 在打包态
-                // cwd=~/.aiworkdeck 下会错误解析到 ~/data/projects/）
-                java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId);
-                if (!java.nio.file.Files.exists(projectDataDir)) {
-                    java.nio.file.Files.createDirectories(projectDataDir);
-                }
-                // fileName 由 LLM 填写：不做归一化围栏的话，"../42/补充协议.docx"
-                // 会把伪造文档直接落进别家项目的目录
-                java.nio.file.Path targetPath = projectDataDir.resolve(fileName).normalize();
-                if (!targetPath.startsWith(projectDataDir.normalize())) {
-                    return "Error: 非法文件名，路径越出项目目录";
-                }
+                // 建行 + 落盘走 createAgentFile 这一条路（dev-board#465）：parentFolderId
+                // 为空即根目录，非空即该文件夹，规则完全一致，不按参数是否为空分叉。
+                file = createAgentFile(projectId, parentFolderId, fileName, "docx", "stream", target -> {
+                    // 空白 Word 文档：保持 docx4j 裸 createPackage()，不要改走 flexmark 渲染——
+                    // worker 的 streamEnsureActive 靠「文档接近空」判定首个 # 是主标题
+                    org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc =
+                            org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
+                    com.checkba.util.DocxStyleHelper.setModernCompatibility(wordDoc);
+                    wordDoc.save(target.toFile());
+                });
 
-                // 检查文件是否已存在，如果存在则自动重命名
-                String originalFileName = fileName;
-                String baseName = originalFileName;
-                String extension = ".docx";
-                if (originalFileName.toLowerCase().endsWith(".docx")) {
-                    baseName = originalFileName.substring(0, originalFileName.length() - 5);
-                }
-
-                int counter = 1;
-                while (java.nio.file.Files.exists(targetPath)) {
-                    fileName = baseName + " (" + counter + ")" + extension;
-                    targetPath = projectDataDir.resolve(fileName);
-                    counter++;
-                }
-                
-                if (counter > 1) {
-                    log.info("File '{}' already exists. Renamed to '{}'", originalFileName, fileName);
-                    // Update fileName argument effectively for the rest of the method? 
-                    // No, 'fileName' variable is used below, so we are good.
-                }
-
-                // 创建空白 Word 文档
-                org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc = 
-                        org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
-                wordDoc.save(targetPath.toFile());
-
-                // 注册到数据库
-                String wpsId = "stream_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
-                String storageRelativePath = "projects/" + projectId + "/" + fileName;
-                
-                file = projectFileService.createOrUpdateFile(
-                        projectId, null, fileName, "docx", targetPath.toFile().length(),
-                        storageRelativePath, wpsId, AGENT_USER_ID
-                );
-                
-                log.info("Created new docx file for streaming: id={}, name={}", file.getId(), file.getName());
+                log.info("Created new docx file for streaming: id={}, name={}, parentId={}",
+                        file.getId(), file.getName(), file.getParentId());
                 
                 // 通知前端刷新文件列表
                 editorBridgeService.sendRefreshFilesAction();
@@ -202,13 +290,18 @@ public class DocumentEditTools implements AgentToolComponent {
             }
 
             // 2. 同步打开文件 (Wait for Ready)
-            String resultJson = editorBridgeService.executeEditorCommand("doc_open_file_sync", java.util.Map.of(
-                    "fileId", file.getId(),
-                    "fileName", file.getName(),
-                    "fileType", file.getFileType(),
-                    "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "",
-                    "trackRevisions", false  // 流式写入不需要修订模式
-            ));
+            java.util.Map<String, Object> openParams = new java.util.HashMap<>();
+            openParams.put("fileId", file.getId());
+            openParams.put("fileName", file.getName());
+            openParams.put("fileType", file.getFileType());
+            openParams.put("wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "");
+            openParams.put("trackRevisions", false);  // 流式写入不需要修订模式
+            // 项目有模板画像（非 house-default）时随打开指令带下去：前端编辑器就绪后先
+            // set_style_profile 再开始流式落字，stream_insert 就按项目画像排版（dev-board#111）
+            java.util.Map<String, Object> profileMap = EditorBridgeService.nonHouseProfileMap(
+                    resolveStyleProfile(file.getProjectId()));
+            if (profileMap != null) openParams.put("styleProfile", profileMap);
+            String resultJson = editorBridgeService.executeEditorCommand("doc_open_file_sync", openParams);
             
             if (resultJson.contains("\"error\"")) {
                 return "Error opening file: " + resultJson;
@@ -241,10 +334,14 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @Tool("移动文档的光标到指定位置。")
+    // 只宣告编辑器真的实现了的两种：office_thread.js 的 goto() 只处理 start/end，
+    // paragraph/bookmark/line 一律返回 "goto type not supported yet"。
+    // 描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算。
+    @Tool("把光标移到文档开头或结尾。只支持 start/end；要定位到某一段用 doc_select_paragraph，"
+          + "要定位到某处文本用 doc_find_text 拿 anchorId 再 doc_select_anchor。")
     public String doc_goto(
-            @P("定位类型: paragraph(段落)/bookmark(书签)/start(文档开头)/end(文档结尾)/line(行号)") String type,
-            @P("目标值: 段落号、书签名、行号等。对于 start/end 类型可以为空。") String target
+            @P("定位类型：start(文档开头) 或 end(文档结尾)") String type,
+            @P("保留参数，start/end 用不到，传空即可") String target
     ) {
         log.info("Tool: doc_goto called type={}, target={}", type, target);
         try {
@@ -273,7 +370,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 查找和替换 ====================
 
-    @Tool("【找】在文档中查找文本。每个匹配返回：anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始，可直接作为 doc_replace_nth_match / doc_delete_match 的 matchIndex）、anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(
@@ -283,16 +380,43 @@ public class DocumentEditTools implements AgentToolComponent {
         log.info("Tool: doc_find_text called keyword={}", keyword);
         try {
             // Updated to call 'find_text_locations' which returns detailed positions
-            return editorBridgeService.executeEditorCommand("find_text_locations", 
+            String raw = editorBridgeService.executeEditorCommand("find_text_locations", 
                     java.util.Map.of("keyword", keyword, "matchCase", matchCase != null ? matchCase : false));
+            return oneBasedMatchIndexes(raw);
         } catch (Exception e) {
             log.error("Failed to find text", e);
             return "Error: " + e.getMessage();
         }
     }
 
+    /**
+     * worker 的 find_text_locations 返回 matchIndex: i（0 起）；模型面的 matchIndex 一律 1 基
+     * （doc_replace_nth_match / doc_delete_match 下发前减 1）。回给模型前加 1，模型从这里看到的
+     * 序号才能原样喂给 doc_replace_nth_match——否则「第二个匹配 matchIndex=1」传过去减一改的是第一个。
+     * 解析失败（error / 非 JSON）原样透传。
+     */
+    static String oneBasedMatchIndexes(String raw) {
+        if (raw == null || !raw.contains("\"matchIndex\"")) return raw;
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = EVIDENCE_JSON.readTree(raw);
+            com.fasterxml.jackson.databind.JsonNode matches = root.get("matches");
+            if (matches == null || !matches.isArray()) return raw;
+            for (com.fasterxml.jackson.databind.JsonNode m : matches) {
+                if (m instanceof com.fasterxml.jackson.databind.node.ObjectNode obj && obj.has("matchIndex") && obj.get("matchIndex").isInt()) {
+                    obj.put("matchIndex", obj.get("matchIndex").asInt() + 1);
+                }
+            }
+            return EVIDENCE_JSON.writeValueAsString(root);
+        } catch (Exception e) {
+            return raw;
+        }
+    }
+
     @ToolMeta(displayName = "查找替换", category = "document", fileEffect = "MODIFIED")
-    @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。")
+    @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
+          "全文替换一次调用即可完成（大量命中也很快；纯插入型替换会分批处理并回传进度），不要因为耗时较长而重复调用；" +
+          "返回 replaced（已替换数）与 total（命中数），cancelled=true 表示用户中途取消、done 为已完成数。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_find_replace(
             @P("要查找的文本") String findText,
             @P("替换为的文本") String replaceText,
@@ -317,7 +441,8 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @Tool("将文档中第 N 个可见匹配项替换为新文本。" +
           "索引从 1 开始，只计算用户可见的匹配（排除修订模式下被删除的内容）。" +
-          "如果要删除文本，将 replaceText 设置为空字符串即可。")
+          "如果要删除文本，将 replaceText 设置为空字符串即可。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_replace_nth_match(
             @P("要查找的文本") String findText,
             @P("替换为的文本") String replaceText,
@@ -328,11 +453,14 @@ public class DocumentEditTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return editorBridgeService.executeEditorCommand("replace_nth_match", 
+            // 模型面 1 基（描述/prompt/LEGACY_DEFAULTS 一致），worker 的 replace_nth_match 与它的
+            // 其它整数定位一样 0 基，且插件经 PluginHostImpl.DOC_ACTIONS 直接按 worker 契约调用——
+            // 归一只能落在这里：下发前减 1（MatchIndexBaseTest 钉着）。
+            return editorBridgeService.executeEditorCommand("replace_nth_match",
                     java.util.Map.of(
-                            "findText", findText, 
-                            "replaceText", replaceText, 
-                            "matchIndex", matchIndex
+                            "findText", findText,
+                            "replaceText", replaceText,
+                            "matchIndex", matchIndex - 1
                     ));
         } catch (Exception e) {
             log.error("Failed to replace nth match", e);
@@ -350,10 +478,11 @@ public class DocumentEditTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return editorBridgeService.executeEditorCommand("delete_match", 
+            // 同 doc_replace_nth_match：模型面 1 基 → worker 0 基，下发前减 1。
+            return editorBridgeService.executeEditorCommand("delete_match",
                     java.util.Map.of(
-                            "findText", findText, 
-                            "matchIndex", matchIndex
+                            "findText", findText,
+                            "matchIndex", matchIndex - 1
                     ));
         } catch (Exception e) {
             log.error("Failed to delete match", e);
@@ -379,7 +508,8 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @Tool("替换当前选区（或光标位置）的文本内容。如果选区非空，则替换选区；如果只是光标，则插入文本。")
+    @Tool("替换当前选区（或光标位置）的文本内容。如果选区非空，则替换选区；如果只是光标，则插入文本。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_replace_selection(
             @P("用于替换的文本内容") String text
     ) {
@@ -409,11 +539,36 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    /**
+     * 段落号校验。
+     *
+     * <p><b>编辑器侧一律 0 基</b>：{@code office_thread.js} 的 get_paragraph /
+     * modify_paragraph / select_paragraph 都是从 {@code i = 0} 起数、{@code i === idx} 命中，
+     * {@code get_document_text} 返回的也是 {@code index: i}（0 起）。
+     * 而 doc_get_paragraph / doc_modify_paragraph 的参数说明曾写「从 1 开始」——
+     * 照着描述办事的模型会整体差一段，在修订模式下**改错条款**，用户还可能直接接受。
+     *
+     * <p>缺参同样不能放行：编辑器的 {@code Number(p.index) || 0} 会把 null／非数字
+     * 静默当成第 0 段，于是「没给段落号」变成「改第一段」，无人察觉。
+     */
+    private static String rejectBadParagraphIndex(Integer paragraphIndex) {
+        if (paragraphIndex == null) {
+            return "Error: paragraphIndex is required. It is 0-based — use the `index` values returned by "
+                    + "doc_get_document_text / doc_read_paragraphs.";
+        }
+        if (paragraphIndex < 0) {
+            return "Error: paragraphIndex must be >= 0 (0-based). Received: " + paragraphIndex;
+        }
+        return null;
+    }
+
     @Tool("获取文档中指定段落的文本内容。")
     public String doc_get_paragraph(
-            @P("段落索引，从 1 开始") Integer paragraphIndex
+            @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex
     ) {
         log.info("Tool: doc_get_paragraph called index={}", paragraphIndex);
+        String rejected = rejectBadParagraphIndex(paragraphIndex);
+        if (rejected != null) return rejected;
         try {
             return editorBridgeService.executeEditorCommand("get_paragraph", 
                     java.util.Map.of("index", paragraphIndex));
@@ -424,12 +579,19 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "修改段落", category = "document", fileEffect = "MODIFIED")
-    @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。")
+    @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_modify_paragraph(
-            @P("段落索引，从 1 开始") Integer paragraphIndex,
+            @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex,
             @P("新的段落文本") String newText
     ) {
-        log.info("Tool: doc_modify_paragraph called index={}, new text length={}", paragraphIndex, newText.length());
+        log.info("Tool: doc_modify_paragraph called index={}, new text length={}",
+                paragraphIndex, newText == null ? -1 : newText.length());
+        String rejected = rejectBadParagraphIndex(paragraphIndex);
+        if (rejected != null) return rejected;
+        if (newText == null) {
+            return "Error: newText is required. To delete a paragraph's content pass an empty string explicitly.";
+        }
         try {
             return editorBridgeService.executeEditorCommand("modify_paragraph", 
                     java.util.Map.of("index", paragraphIndex, "newText", newText));
@@ -614,7 +776,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。会自动把编辑器视图滚动到该处；返回改动后所在段落的实际文本，核对该返回值即完成验证——不需要先 doc_select_anchor，也不需要改后再读文档。" +
-          "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。")
+          "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。" +
+          REDLINE_GRANULARITY_NOTE)
     public String doc_replace_at_anchor(
             @P("doc_find_text 返回的 anchorId") String anchorId,
             @P("新文本") String newText
@@ -652,7 +815,8 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("高亮颜色：yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB，不改则不传") String highlight,
             @P("文字颜色：#RRGGBB 或 auto，不改则不传") String color,
             @P("字号（磅），不改则不传") Double fontSize,
-            @P("字体名，不改则不传") String fontName
+            @P("字体名（中西文一起改），不改则不传") String fontName,
+            @P("中文字体名（只改中文，如 楷体_GB2312；与 fontName 同给时以它为准），不改则不传") String fontNameAsian
     ) {
         log.info("Tool: doc_format_selection called");
         try {
@@ -665,6 +829,7 @@ public class DocumentEditTools implements AgentToolComponent {
             if (color != null && !color.isEmpty()) params.put("color", color);
             if (fontSize != null) params.put("fontSize", fontSize);
             if (fontName != null && !fontName.isEmpty()) params.put("fontName", fontName);
+            if (fontNameAsian != null && !fontNameAsian.isEmpty()) params.put("fontNameAsian", fontNameAsian);
             return editorBridgeService.executeEditorCommand("format_selection", params);
         } catch (Exception e) {
             log.error("Failed to format selection", e);
@@ -709,7 +874,9 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置编号", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】给当前选区所在段落设置自动编号或项目符号（先选中段落，可跨多段）。" +
-          "preset: bullet(•)/decimal(1. 2. 3.)/chinese(一、二、)/multilevel(多级编号 1. → 1.1 → 1.1.1)/none(去掉编号)。" +
+          "preset: bullet(•)/decimal(1. 2. 3.)/chinese(一、二、)/multilevel(多级编号 1. → 1.1 → 1.1.1)/none(清除自动编号和项目符号)。" +
+          "用户要求普通段落或去掉项目符号时用 none；只改字号、居中或 headingLevel=0 不会清除列表。" +
+          "完成后用 doc_get_formatting 读回 paragraph.isNumbered=false 核验，不得只凭命令已发送就宣称完成。" +
           "level: 编号层级 1-9，默认 1；multilevel 配合不同 level 形成 1.1、1.1.1 结构。")
     public String doc_set_numbering(
             @P("编号类型：bullet/decimal/chinese/multilevel/none") String preset,
@@ -732,7 +899,9 @@ public class DocumentEditTools implements AgentToolComponent {
           "applyStandard=true 一键套标准表格式（Grid 实线 1.5 磅边框、10 号字、首行加粗居中、单元格垂直居中、数字居右）。" +
           "也可单独设：borderWidthPt 边框磅数、fontSizePt 表格字号、firstRowBold 首行加粗、" +
           "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、columnWidthsPercent 列宽百分比（逗号分隔，如 '20,50,30'，个数=列数）、" +
-          "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。")
+          "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。" +
+          "边框细分：borderColor(#RRGGBB) / borderStyle(single/double/dashed) / outsideBorderWidthPt 外框 / insideBorderWidthPt 内框；" +
+          "headerFill 表头底纹(#RRGGBB 或 none)、repeatHeader 跨页重复表头、columnWidthsCm 列宽厘米（逗号分隔，个数=列数，按比例折算）。")
     public String doc_format_table(
             @P("一键套标准表格式 true/false") Boolean applyStandard,
             @P("边框线宽（磅，如 1.5），不改则不传") Double borderWidthPt,
@@ -742,7 +911,14 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("列宽百分比，逗号分隔如 '20,50,30'，不改则不传") String columnWidthsPercent,
             @P("行高（磅），不改则不传") Double rowHeightPt,
             @P("行高规则：min(最小值,默认)/exact(固定值)") String rowHeightRule,
-            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("边框颜色 #RRGGBB，不改则不传") String borderColor,
+            @P("边框线型：single/double/dashed，不改则不传") String borderStyle,
+            @P("外框线宽（磅），不改则不传") Double outsideBorderWidthPt,
+            @P("内框线宽（磅），不改则不传") Double insideBorderWidthPt,
+            @P("表头底纹：#RRGGBB 或 none 清除，不改则不传") String headerFill,
+            @P("跨页重复表头 true/false，不改则不传") Boolean repeatHeader,
+            @P("列宽厘米，逗号分隔如 '3,5,4'（个数=列数，按比例折算），不改则不传") String columnWidthsCm
     ) {
         log.info("Tool: doc_format_table called standard={}, border={}, tableIndex={}", applyStandard, borderWidthPt, tableIndex);
         try {
@@ -756,6 +932,13 @@ public class DocumentEditTools implements AgentToolComponent {
             if (rowHeightPt != null) params.put("rowHeightPt", rowHeightPt);
             if (rowHeightRule != null && !rowHeightRule.isEmpty()) params.put("rowHeightRule", rowHeightRule);
             if (tableIndex != null) params.put("tableIndex", tableIndex);
+            if (borderColor != null && !borderColor.isEmpty()) params.put("borderColor", borderColor);
+            if (borderStyle != null && !borderStyle.isEmpty()) params.put("borderStyle", borderStyle);
+            if (outsideBorderWidthPt != null) params.put("outsideBorderWidthPt", outsideBorderWidthPt);
+            if (insideBorderWidthPt != null) params.put("insideBorderWidthPt", insideBorderWidthPt);
+            if (headerFill != null && !headerFill.isEmpty()) params.put("headerFill", headerFill);
+            if (repeatHeader != null) params.put("repeatHeader", repeatHeader);
+            if (columnWidthsCm != null && !columnWidthsCm.isEmpty()) params.put("columnWidthsCm", columnWidthsCm);
             return editorBridgeService.executeEditorCommand("format_table", params);
         } catch (Exception e) {
             log.error("Failed to format table", e);
@@ -946,13 +1129,109 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("【格式】对整篇文档应用律所标准格式：正文楷体_GB2312/西文 Arial 12 号黑色、两端对齐、段前 0 段后 18 磅、" +
           "行距最小值 16 磅、首行缩进 2 字符；首段短文本视为主标题（16 号加粗居中）；标题段整段加粗；" +
           "表格套 Grid 1.5 磅边框、10 号字、首行加粗居中、数字居右；表格后首段段前 18 磅。" +
-          "用户要求'规范格式/按标准排版'时用本工具，正文中既有的加粗强调不会被抹掉。")
+          "用户要求'规范格式/按标准排版'时用本工具，正文中既有的加粗强调不会被抹掉。" +
+          "长文档会分批处理并回传进度（最长约 2 分钟），一次调用即可完成，不要重复调用；返回 truncated=false 表示全文已处理。")
     public String doc_apply_standard_format() {
         log.info("Tool: doc_apply_standard_format called");
         try {
             return editorBridgeService.executeEditorCommand("apply_house_style", null);
         } catch (Exception e) {
             log.error("Failed to apply standard format", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== 样式画像（dev-board#111） ====================
+
+    /** 当前项目的画像（解析顺序见 StyleProfileResolver）；没有解析器时退到 house-default。 */
+    private com.checkba.util.style.StyleProfile resolveStyleProfile(Long projectId) {
+        if (styleProfileResolver == null) return com.checkba.util.style.StyleProfiles.houseDefault();
+        return styleProfileResolver.resolve(projectId, null);
+    }
+
+    /** 画像转成 editor_command 的 params 载荷（Map 树；写端 worker 按 schemaVersion 1 解析）。 */
+    @SuppressWarnings("unchecked")
+    static java.util.Map<String, Object> profileAsMap(com.checkba.util.style.StyleProfile profile) {
+        return com.checkba.util.style.StyleProfiles.mapper().convertValue(profile.root(), java.util.Map.class);
+    }
+
+    @ToolMeta(displayName = "套用模板画像", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】按项目的模板画像（_模板/画像.json；没有则用律所标准格式）给当前文档套格式：先改 Standard/Heading 1-6/表格样式定义，" +
+          "再按 scope 做最小直接格式。scope: document=全文（默认）/ selection=只改选区内段落 / styles-only=只改样式定义不碰正文。" +
+          "项目有模板画像时，用户要求'按模板/按所里格式排版'用本工具而不是 doc_apply_standard_format。" +
+          "长文档分批处理并回传进度，一次调用即可，truncated=false 表示全文已处理。")
+    public String doc_apply_style_profile(
+            @P("document=全文（默认）/ selection=选区 / styles-only=只改样式定义") String scope
+    ) {
+        log.info("Tool: doc_apply_style_profile called scope={}", scope);
+        try {
+            Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+            com.checkba.util.style.StyleProfile profile = resolveStyleProfile(projectId);
+            String set = editorBridgeService.executeEditorCommand("set_style_profile",
+                    java.util.Map.of("profile", profileAsMap(profile)));
+            if (set != null && set.contains("\"error\"")) {
+                return "Error: 画像下发失败: " + set;
+            }
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("scope", scope != null && !scope.isBlank() ? scope : "document");
+            return editorBridgeService.executeEditorCommand("apply_style_profile", params);
+        } catch (Exception e) {
+            log.error("Failed to apply style profile", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入目录", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】在光标处（position=start 时在文首）插入由标题级别自动生成的目录（真正的目录域，可更新）。" +
+          "levels 收几级标题（默认 3），title 目录标题（默认 '目录'）。文档里的标题要先用 doc_set_paragraph_format 的 headingLevel 标好级别，否则目录为空。")
+    public String doc_insert_toc(
+            @P("收入目录的标题级数 1-10，默认 3") Integer levels,
+            @P("目录标题文本，默认 '目录'") String title,
+            @P("插入位置：cursor=光标处（默认）/ start=文首") String position
+    ) {
+        log.info("Tool: doc_insert_toc called levels={}, title={}", levels, title);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (levels != null) params.put("levels", levels);
+            if (title != null && !title.isBlank()) params.put("title", title);
+            if (position != null && !position.isBlank()) params.put("position", position);
+            return editorBridgeService.executeEditorCommand("insert_toc", params);
+        } catch (Exception e) {
+            log.error("Failed to insert toc", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "页面设置", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】设置纸张与页边距（单位毫米）：widthMm/heightMm 纸张尺寸（A4 为 210x297）、orientation portrait/landscape、" +
+          "marginTopMm/marginBottomMm/marginLeftMm/marginRightMm 页边距。只传需要改的参数；只给 orientation 时按当前纸张旋转。")
+    public String doc_set_page_setup(
+            @P("纸张宽（毫米），不改则不传") Double widthMm,
+            @P("纸张高（毫米），不改则不传") Double heightMm,
+            @P("方向：portrait/landscape，不改则不传") String orientation,
+            @P("上边距（毫米），不改则不传") Double marginTopMm,
+            @P("下边距（毫米），不改则不传") Double marginBottomMm,
+            @P("左边距（毫米），不改则不传") Double marginLeftMm,
+            @P("右边距（毫米），不改则不传") Double marginRightMm
+    ) {
+        log.info("Tool: doc_set_page_setup called w={}, h={}, orientation={}", widthMm, heightMm, orientation);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (widthMm != null) params.put("width", widthMm);
+            if (heightMm != null) params.put("height", heightMm);
+            if (orientation != null && !orientation.isBlank()) params.put("orientation", orientation);
+            java.util.Map<String, Object> margins = new java.util.HashMap<>();
+            if (marginTopMm != null) margins.put("top", marginTopMm);
+            if (marginBottomMm != null) margins.put("bottom", marginBottomMm);
+            if (marginLeftMm != null) margins.put("left", marginLeftMm);
+            if (marginRightMm != null) margins.put("right", marginRightMm);
+            if (!margins.isEmpty()) params.put("margins", margins);
+            if (params.isEmpty()) {
+                return "Error: 没有给任何页面参数（widthMm/heightMm/orientation/margin*Mm 至少一个）";
+            }
+            return editorBridgeService.executeEditorCommand("set_page_setup", params);
+        } catch (Exception e) {
+            log.error("Failed to set page setup", e);
             return "Error: " + e.getMessage();
         }
     }
@@ -1156,21 +1435,29 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置页眉页脚", category = "document", fileEffect = "MODIFIED")
     @Tool("【结构】设置文档首节的页眉或页脚文本（只处理第一个页面样式，法律文件极少按节区分页眉页脚）。" +
-          "target: header/footer；align 可选：left/center/right/justify，不传保持原对齐。")
+          "target: header/footer；align 可选：left/center/right/justify，不传保持原对齐。" +
+          "页码用 pageNumberPattern（如 '第 {PAGE} 页 共 {NUMPAGES} 页'，{PAGE}/{NUMPAGES} 落成真正的页码域，接在 text 之后，此时 text 可省略）；" +
+          "fontName/fontSize 设页眉页脚的字体字号。")
     public String doc_edit_header_footer(
             @P("header=页眉，footer=页脚") String target,
-            @P("页眉/页脚文本") String text,
-            @P("对齐：left/center/right/justify，不改则不传") String align
+            @P("页眉/页脚文本（只放页码时可不传）") String text,
+            @P("对齐：left/center/right/justify，不改则不传") String align,
+            @P("页码模板，{PAGE}=当前页 {NUMPAGES}=总页数，如 '第 {PAGE} 页 共 {NUMPAGES} 页'；不要页码则不传") String pageNumberPattern,
+            @P("字体名，不改则不传") String fontName,
+            @P("字号（磅），不改则不传") Double fontSize
     ) {
         log.info("Tool: doc_edit_header_footer called target={}", target);
-        if (text == null) {
-            return "Error: 缺少 text 参数（页眉/页脚文本，清空传空字符串）";
+        if (text == null && (pageNumberPattern == null || pageNumberPattern.isBlank())) {
+            return "Error: 缺少 text 参数（页眉/页脚文本，清空传空字符串；只放页码可改传 pageNumberPattern）";
         }
         try {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             params.put("target", target != null && !target.isBlank() ? target : "header");
-            params.put("text", text);
+            if (text != null) params.put("text", text);
             if (align != null && !align.isBlank()) params.put("align", align);
+            if (pageNumberPattern != null && !pageNumberPattern.isBlank()) params.put("pageNumberPattern", pageNumberPattern);
+            if (fontName != null && !fontName.isBlank()) params.put("fontName", fontName);
+            if (fontSize != null) params.put("fontSize", fontSize);
             return editorBridgeService.executeEditorCommand("edit_header_footer", params);
         } catch (Exception e) {
             log.error("Failed to edit header/footer", e);
@@ -1234,10 +1521,10 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置超链接", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】给指定锚点处的文本设置超链接。先 doc_find_text 拿到目标文本的 anchorId，再对它设链接；" +
-          "url 仅支持 http/https。")
+          "url 仅支持 http/https（证据链接用包装形式 https://checkba-internal.local/open?u=checkba://filelink?k=<linkKey>&projectId=<pid>，同样放行）。")
     public String doc_set_hyperlink(
             @P("doc_find_text 返回的 anchorId（要加链接的目标文本）") String anchorId,
-            @P("链接地址，http:// 或 https:// 开头") String url
+            @P("链接地址，http:// 或 https:// 开头（证据链接用 https://checkba-internal.local/open?u=checkba://filelink 包装）") String url
     ) {
         log.info("Tool: doc_set_hyperlink called anchor={}, url={}", anchorId, url);
         if (anchorId == null || anchorId.isBlank()) {
@@ -1257,9 +1544,289 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    // ==================== 证据链接（EvidenceLink，dev-board#112） ====================
+
+    /** 文档内超链接的 web 包装前缀，与前端 workbenchActions.WPS_INTERNAL_HTTP_LINK_BASE / evidenceLocator.buildFileLinkUrl 同形。 */
+    /** 单一来源在 EvidenceAnchorService；这里保留别名，历史引用不改。 */
+    static final String INTERNAL_LINK_BASE = com.checkba.service.evidence.EvidenceAnchorService.INTERNAL_LINK_BASE;
+    private static final java.util.Set<String> EVIDENCE_METHODS = com.checkba.model.entity.EvidenceLinkTarget.METHODS;
+    private static final java.util.Set<String> EVIDENCE_RELATIONS = com.checkba.model.entity.EvidenceLinkTarget.RELATIONS;
+    /** 报告只能是 Writer 文档：书签/超链接原语只在 Writer 里有意义。 */
+    private static final java.util.Set<String> WRITER_EXTS = java.util.Set.of("docx", "doc", "wps", "odt", "rtf");
+    private static final int LIST_EVIDENCE_DEFAULT_LIMIT = 100;
+    private static final int LIST_EVIDENCE_MAX_LIMIT = 500;
+    private static final int LIST_EVIDENCE_ANCHOR_MAX = 120;
+    private static final com.fasterxml.jackson.databind.ObjectMapper EVIDENCE_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    @ToolMeta(displayName = "关联底稿", category = "document", fileEffect = "MODIFIED")
+    @Tool("【证据】把报告里的一句事实陈述与它的底稿文件关联起来（EvidenceLink）：在该文字上套书签 + 超链接，并登记底稿位置。" +
+          "写完任何可核对的事实（数字、日期、主体、权属）后立即调用。定位二选一：anchorQuote（原文片段，必须在文档中恰好出现一次，" +
+          "0 或多处命中都会拒绝——换更长的片段或改用 anchorId）或 anchorId（doc_find_text 返回的锚点）。" +
+          "targetsJson 是 JSON 数组，每条 {fileId 或 path, locator?, relation?, method?, note?}：path 是文件树相对路径如 \"底稿/营业执照.pdf\"；" +
+          "locator 按类型 {type:\"pdf\",page,quote?} / {type:\"docx\",quote?,paragraphIndex?} / {type:\"sheet\",sheet,cell} / {type:\"image\",rect} / {type:\"media\",startMs,endMs} / {type:\"web\",url,capturedAt}，不传表示整个文件。" +
+          "AI 建的链状态为 unverified，待用户核对。返回 {linkKey, targetIds, sectionPath, status}。")
+    public String doc_link_evidence(
+            @P("当前打开的报告文件 ID（系统提醒里的 id=）") Long docFileId,
+            @P("报告原文片段，必须在文档中恰好出现一次；与 anchorId 二选一") String anchorQuote,
+            @P("doc_find_text 返回的 anchorId；给了就不再按 anchorQuote 查找") String anchorId,
+            @P("底稿清单 JSON 数组：[{fileId 或 path, locator?, relation?, method?, note?}]") String targetsJson,
+            @P("默认核查方式 written_review/written_statement/web_check/third_party/interview（单条 target 可覆盖），可不传") String method,
+            @P("默认关系 supports（默认）/contradicts/partial（单条 target 可覆盖）") String relation,
+            @P("默认备注，可不传") String note
+    ) {
+        log.info("Tool: doc_link_evidence called docFileId={}, anchorId={}, quote={}", docFileId, anchorId, anchorQuote);
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        Long userId = com.checkba.service.ai.context.ProjectContextHolder.getUserId();
+        if (projectId == null || userId == null) {
+            return "Error: 缺少项目或用户上下文，无法建立证据链接";
+        }
+        if (docFileId == null) {
+            return "Error: 缺少 docFileId 参数（当前打开报告的文件 ID，见系统提醒里的 id=）";
+        }
+        boolean hasAnchor = anchorId != null && !anchorId.isBlank();
+        boolean hasQuote = anchorQuote != null && !anchorQuote.isBlank();
+        if (!hasAnchor && !hasQuote) {
+            return "Error: anchorQuote 与 anchorId 必须给一个";
+        }
+        if (relation != null && !relation.isBlank() && !EVIDENCE_RELATIONS.contains(relation.trim())) {
+            return "Error: relation 只能是 supports/contradicts/partial";
+        }
+        if (method != null && !method.isBlank() && !EVIDENCE_METHODS.contains(method.trim())) {
+            return "Error: method 只能是 written_review/written_statement/web_check/third_party/interview";
+        }
+
+        // 一切 worker 写操作之前先把权限与归属校验完：书签与超链接一旦写进文档，
+        // 后面 Service 再拒绝就只剩一个孤儿 EVID_* 书签和一条死链接
+        if (projectMemberService == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            return "Error: 无权限修改该项目，未建链";
+        }
+        String docDenied = rejectDocFile(projectId, docFileId);
+        if (docDenied != null) return docDenied;
+
+        List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> targets;
+        try {
+            targets = parseEvidenceTargets(projectId, targetsJson, relation, method, note);
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (targets.isEmpty()) {
+            return "Error: targetsJson 至少要有一条底稿";
+        }
+
+        try {
+            com.checkba.service.evidence.EvidenceLinkViews.LinkView view = evidenceAnchorService.linkAtQuote(
+                    userId, projectId, docFileId, anchorQuote, anchorId, targets,
+                    com.checkba.model.entity.EvidenceLink.KIND_AI);
+
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("linkKey", view.linkKey());
+            out.put("targetIds", view.targets().stream().map(com.checkba.service.evidence.EvidenceLinkViews.TargetView::id).toList());
+            out.put("sectionPath", view.sectionPath() == null ? "" : view.sectionPath());
+            out.put("status", view.status());
+            return EVIDENCE_JSON.writeValueAsString(out);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return "Error: " + e.getMessage();
+        } catch (Exception e) {
+            log.error("Failed to link evidence", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "查看底稿关联", category = "document")
+    @Tool("【证据】列出报告里已建立的底稿关联（EvidenceLink）：每条含 linkKey、锚定文字、所在章节 sectionPath、状态" +
+          "（active 已核对 / unverified 待核对 / stale 文字已变 / orphan 锚点丢失）与底稿 targets。" +
+          "用它自查「哪些段落还没有底稿」或「这份底稿被哪些地方引用」：传 docFileId 按报告列，传 fileId 按底稿反查（优先），" +
+          "sectionPath 按章节前缀过滤，status 按状态过滤。")
+    public String doc_list_evidence(
+            @P("报告文件 ID（系统提醒里的 id=）；与 fileId 二选一") Long docFileId,
+            @P("底稿文件 ID：反查它被哪些锚点引用；给了就忽略 docFileId 之外的过滤") Long fileId,
+            @P("章节前缀过滤，如 \"一/（二）\"，可不传") String sectionPath,
+            @P("状态过滤 active/unverified/stale/orphan，可不传") String status,
+            @P("最多返回多少条，默认 100，上限 500；超出时 truncated=true，用 sectionPath/status 缩小范围") Integer limit
+    ) {
+        log.info("Tool: doc_list_evidence called docFileId={}, fileId={}, sectionPath={}, status={}, limit={}", docFileId, fileId, sectionPath, status, limit);
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        Long userId = com.checkba.service.ai.context.ProjectContextHolder.getUserId();
+        if (projectId == null || userId == null) {
+            return "Error: 缺少项目或用户上下文";
+        }
+        if (fileId == null && docFileId == null) {
+            return "Error: docFileId 与 fileId 至少给一个";
+        }
+        try {
+            List<com.checkba.service.evidence.EvidenceLinkViews.LinkView> views = fileId != null
+                    ? evidenceLinkService.listByFile(userId, projectId, fileId)
+                    : evidenceLinkService.listByDoc(userId, projectId, docFileId,
+                            status == null || status.isBlank() ? null : status.trim(),
+                            sectionPath == null || sectionPath.isBlank() ? null : sectionPath.trim());
+            int cap = limit == null || limit <= 0 ? LIST_EVIDENCE_DEFAULT_LIMIT : Math.min(limit, LIST_EVIDENCE_MAX_LIMIT);
+            boolean truncated = views.size() > cap;
+            List<java.util.Map<String, Object>> links = new java.util.ArrayList<>();
+            for (com.checkba.service.evidence.EvidenceLinkViews.LinkView v : views.subList(0, Math.min(cap, views.size()))) {
+                java.util.Map<String, Object> l = new java.util.LinkedHashMap<>();
+                l.put("linkKey", v.linkKey());
+                String at = v.anchorText() == null ? "" : v.anchorText();
+                l.put("anchorText", at.length() > LIST_EVIDENCE_ANCHOR_MAX ? at.substring(0, LIST_EVIDENCE_ANCHOR_MAX) + "…" : at);
+                l.put("sectionPath", v.sectionPath() == null ? "" : v.sectionPath());
+                l.put("status", v.status());
+                List<java.util.Map<String, Object>> ts = new java.util.ArrayList<>();
+                for (com.checkba.service.evidence.EvidenceLinkViews.TargetView t : v.targets()) {
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("targetId", t.id());
+                    m.put("fileId", t.fileId());
+                    m.put("fileName", t.file() == null ? null : t.file().name());
+                    m.put("locator", t.locator());
+                    m.put("relation", t.relation());
+                    m.put("method", t.method());
+                    ts.add(m);
+                }
+                l.put("targets", ts);
+                links.add(l);
+            }
+            java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("count", links.size());
+            out.put("total", views.size());
+            out.put("truncated", truncated);
+            out.put("links", links);
+            return ToolFileGuard.capToolText("evidence-links", EVIDENCE_JSON.writeValueAsString(out));
+        } catch (Exception e) {
+            log.error("Failed to list evidence links", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /** 报告文件预校验：存在、属于本项目、未删除、不是文件夹、是 Writer 文档。不通过返回给模型的错误串。 */
+    private String rejectDocFile(Long projectId, Long docFileId) {
+        ProjectFile doc = projectFileRepository.findById(docFileId).orElse(null);
+        if (doc == null || Boolean.TRUE.equals(doc.getIsDeleted())) {
+            return "Error: 报告文件不存在，docFileId=" + docFileId;
+        }
+        if (!projectId.equals(doc.getProjectId())) {
+            return "Error: 报告文件不属于当前项目，docFileId=" + docFileId;
+        }
+        if (Boolean.TRUE.equals(doc.getIsFolder())) {
+            return "Error: docFileId 指向的是文件夹，不是报告文档";
+        }
+        String name = doc.getName() == null ? "" : doc.getName().toLowerCase(java.util.Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        String ext = dot >= 0 ? name.substring(dot + 1) : "";
+        if (!WRITER_EXTS.contains(ext)) {
+            return "Error: 报告文件不是 Word 文档（docx/doc/wps/odt/rtf），不能建证据链接: " + doc.getName();
+        }
+        return null;
+    }
+
+    /** 查找留下的锚点标记清理；失败无妨（只是视图残留），不影响建链结果。 */
+    private void clearAnchorsQuietly() {
+        try {
+            editorBridgeService.executeEditorCommand("clear_anchors", java.util.Map.of());
+        } catch (Exception e) {
+            log.debug("clear_anchors failed: {}", e.getMessage());
+        }
+    }
+
+    /** 解析 targetsJson：fileId 直用（须属于本项目且非文件夹），path 经文件树路径索引（FileTools.dbPathIndex）映射；工具级 relation/method/note 作缺省。 */
+    private List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> parseEvidenceTargets(
+            Long projectId, String targetsJson, String defRelation, String defMethod, String defNote) {
+        if (targetsJson == null || targetsJson.isBlank()) {
+            throw new IllegalArgumentException("缺少 targetsJson 参数（底稿清单）");
+        }
+        com.fasterxml.jackson.databind.JsonNode arr;
+        try {
+            arr = EVIDENCE_JSON.readTree(targetsJson);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("targetsJson 不是合法 JSON：" + e.getMessage());
+        }
+        if (arr == null || !arr.isArray()) {
+            throw new IllegalArgumentException("targetsJson 必须是 JSON 数组");
+        }
+        java.util.Map<String, ProjectFile> pathIndex = null;
+        List<com.checkba.service.evidence.EvidenceLinkViews.TargetInput> out = new java.util.ArrayList<>();
+        for (com.fasterxml.jackson.databind.JsonNode t : arr) {
+            Long fid = t.hasNonNull("fileId") && t.get("fileId").canConvertToLong() ? t.get("fileId").asLong() : null;
+            if (fid != null) {
+                ProjectFile pf = projectFileRepository.findById(fid).orElse(null);
+                if (pf == null || Boolean.TRUE.equals(pf.getIsDeleted()) || !projectId.equals(pf.getProjectId())) {
+                    throw new IllegalArgumentException("底稿文件不存在或不属于当前项目，fileId=" + fid);
+                }
+                if (Boolean.TRUE.equals(pf.getIsFolder())) {
+                    throw new IllegalArgumentException("底稿 fileId 指向的是文件夹，fileId=" + fid);
+                }
+            } else {
+                String path = t.path("path").asText("").trim().replace('\\', '/');
+                while (path.startsWith("/") || path.startsWith("./")) path = path.startsWith("/") ? path.substring(1) : path.substring(2);
+                if (path.isEmpty()) {
+                    throw new IllegalArgumentException("每条 target 必须有 fileId 或 path");
+                }
+                if (pathIndex == null) pathIndex = FileTools.dbPathIndex(projectFileRepository, projectId);
+                ProjectFile pf = pathIndex.get(path);
+                if (pf == null || Boolean.TRUE.equals(pf.getIsFolder())) {
+                    throw new IllegalArgumentException("底稿路径在项目文件树中找不到：" + path + "（用 list_files 核对路径，或改传 fileId）");
+                }
+                fid = pf.getId();
+            }
+            String locator = null;
+            com.fasterxml.jackson.databind.JsonNode loc = t.get("locator");
+            if (loc != null && !loc.isNull()) {
+                if (!loc.isObject()) {
+                    throw new IllegalArgumentException("locator 必须是 JSON 对象");
+                }
+                locator = loc.toString();
+            }
+            String rel = firstNonBlank(t.path("relation").asText(null), defRelation, "supports").trim();
+            if (!EVIDENCE_RELATIONS.contains(rel)) {
+                throw new IllegalArgumentException("relation 只能是 supports/contradicts/partial：" + rel);
+            }
+            String m = firstNonBlank(t.path("method").asText(null), defMethod);
+            if (m != null && !EVIDENCE_METHODS.contains(m.trim())) {
+                throw new IllegalArgumentException("method 只能是 written_review/written_statement/web_check/third_party/interview：" + m);
+            }
+            String n = firstNonBlank(t.path("note").asText(null), defNote);
+            out.add(new com.checkba.service.evidence.EvidenceLinkViews.TargetInput(
+                    fid, locator, rel, m == null ? null : m.trim(), null, n));
+        }
+        return out;
+    }
+
+    /** worker 回执统一判错：{"error":...} 或 success:false 都抛 IllegalStateException（消息给模型看）。 */
+    private static com.fasterxml.jackson.databind.JsonNode workerJson(String raw) {
+        com.fasterxml.jackson.databind.JsonNode node;
+        try {
+            node = EVIDENCE_JSON.readTree(raw == null ? "" : raw);
+        } catch (Exception e) {
+            throw new IllegalStateException("编辑器返回了无法解析的结果：" + raw);
+        }
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            throw new IllegalStateException("编辑器没有返回结果");
+        }
+        if (node.hasNonNull("error") && !node.path("error").asText("").isBlank()) {
+            throw new IllegalStateException(node.path("error").asText());
+        }
+        if (node.has("success") && !node.path("success").asBoolean(true)) {
+            throw new IllegalStateException(node.path("message").asText("编辑器操作失败"));
+        }
+        return node;
+    }
+
+    private static String firstNonBlank(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) return c;
+        }
+        return null;
+    }
+
+    /** 图片插入的体积上限（尽调模块 P3 稳定性余项 #4，dev-board#100）：默认 2MB。 */
+    static final long DEFAULT_MAX_IMAGE_BYTES = 2L * 1024 * 1024;
+    private long maxImageBytes = DEFAULT_MAX_IMAGE_BYTES;
+
+    /** 仅供测试覆盖图片体积上限（包内可见）。生产路径永远走 DEFAULT_MAX_IMAGE_BYTES。 */
+    void setMaxImageBytesForTest(long bytes) {
+        this.maxImageBytes = bytes;
+    }
+
     @ToolMeta(displayName = "插入图片", category = "document", fileEffect = "MODIFIED")
     @Tool("【插入】在光标处插入一张图片。fileId 是项目文件树里图片文件（jpg/jpeg/png/gif/bmp/webp）的文件 ID，" +
-          "上限 2MB，超限会报错——先用 doc_list_project_files 之外的方式确认体积，或让用户换一张更小的图。")
+          "上限 2MB；超限会先等比压缩再插入，压缩后仍超限或文件本身无法解析才会报错。")
     public String doc_insert_image(
             @P("项目文件树中图片文件的文件 ID") Long fileId
     ) {
@@ -1282,11 +1849,29 @@ public class DocumentEditTools implements AgentToolComponent {
                 return "Error: 图片文件在磁盘上不存在: " + file.getName();
             }
             long size = java.nio.file.Files.size(path);
-            final long maxBytes = 2L * 1024 * 1024;
-            if (size > maxBytes) {
-                return "Error: 图片过大（" + (size / 1024) + "KB，上限 2MB）: " + file.getName();
+            byte[] bytes;
+            if (size <= maxImageBytes) {
+                bytes = java.nio.file.Files.readAllBytes(path);
+            } else {
+                // 超限先等比压缩（JDK 自带 ImageIO/BufferedImage，不引新库），压不下去再报错——
+                // 图片格式由字节内容自解码，不依赖原始扩展名，压缩产物统一按 JPEG 重新编码。
+                java.awt.image.BufferedImage image;
+                try {
+                    image = javax.imageio.ImageIO.read(path.toFile());
+                } catch (java.io.IOException e) {
+                    image = null;
+                }
+                if (image == null) {
+                    return "Error: 图片过大（实际 " + size + " 字节，上限 " + maxImageBytes
+                        + " 字节）且无法解析用于压缩: " + file.getName();
+                }
+                bytes = compressImageToLimit(image, maxImageBytes);
+                if (bytes == null) {
+                    return "Error: 图片过大（原始 " + size + " 字节，上限 " + maxImageBytes
+                        + " 字节），等比压缩后仍超限，请换一张更小的图: " + file.getName();
+                }
+                log.info("Tool: doc_insert_image 压缩 {} 从 {} 字节到 {} 字节", file.getName(), size, bytes.length);
             }
-            byte[] bytes = java.nio.file.Files.readAllBytes(path);
             String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
             return editorBridgeService.executeEditorCommand("insert_image", java.util.Map.of("base64", base64));
         } catch (Exception e) {
@@ -1508,12 +2093,17 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "新建表格文件", category = "document", fileEffect = "ADDED")
     @Tool("【表格·建】在项目中新建一个空白 Excel 表格文件（.xlsx）并在编辑器中打开。" +
-          "创建后用 sheet_write_cells 写入数据、sheet_format_cells 等做格式。重名会自动加序号。")
+          "创建后用 sheet_write_cells 写入数据、sheet_format_cells 等做格式。重名会自动加序号。" +
+          "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID 再传 parentFolderId；" +
+          "不传就落在项目根目录。")
     public String sheet_create_file(
             @P("文件名，如 '费用明细表.xlsx'（.xlsx 后缀可省略）") String fileName,
-            @P("项目ID") Long projectId
+            @P("项目ID") Long projectId,
+            @P(value = "目标文件夹ID（可选，不填则放项目根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
+               required = false) Long parentFolderId
     ) {
-        log.info("Tool: sheet_create_file called fileName={}, projectId={}", fileName, projectId);
+        log.info("Tool: sheet_create_file called fileName={}, projectId={}, parentFolderId={}",
+                fileName, projectId, parentFolderId);
         if (fileName == null || fileName.isBlank()) {
             return "Error: 缺少 fileName 参数";
         }
@@ -1524,34 +2114,18 @@ public class DocumentEditTools implements AgentToolComponent {
             if (!fileName.toLowerCase().endsWith(".xlsx")) {
                 fileName = fileName + ".xlsx";
             }
-            java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId);
-            if (!java.nio.file.Files.exists(projectDataDir)) {
-                java.nio.file.Files.createDirectories(projectDataDir);
-            }
-            // 重名自动加序号（与 doc_start_stream 的新建 docx 同一策略）
-            String baseName = fileName.substring(0, fileName.length() - 5);
-            java.nio.file.Path targetPath = projectDataDir.resolve(fileName);
-            int counter = 1;
-            while (java.nio.file.Files.exists(targetPath)) {
-                fileName = baseName + " (" + counter + ").xlsx";
-                targetPath = projectDataDir.resolve(fileName);
-                counter++;
-            }
-
-            // POI 生成最小空白工作簿（引擎按 .xlsx 扩展名自动选 Calc 过滤器加载）
-            try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
-                 java.io.OutputStream os = java.nio.file.Files.newOutputStream(targetPath)) {
-                wb.createSheet("Sheet1");
-                wb.write(os);
-            }
-
-            String wpsId = "sheet_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
-            String storageRelativePath = "projects/" + projectId + "/" + fileName;
-            ProjectFile file = projectFileService.createOrUpdateFile(
-                    projectId, null, fileName, "xlsx", targetPath.toFile().length(),
-                    storageRelativePath, wpsId, AGENT_USER_ID
-            );
-            log.info("Created new xlsx file: id={}, name={}", file.getId(), file.getName());
+            // 建行 + 落盘与 doc_start_stream 共用同一条路（dev-board#465）
+            ProjectFile file = createAgentFile(projectId, parentFolderId, fileName, "xlsx", "sheet", target -> {
+                // POI 生成最小空白工作簿（引擎按 .xlsx 扩展名自动选 Calc 过滤器加载）
+                try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+                     java.io.OutputStream os = java.nio.file.Files.newOutputStream(target)) {
+                    wb.createSheet("Sheet1");
+                    com.checkba.util.DocumentGeneratorStamp.apply(wb, documentGeneratorSettings);
+                    wb.write(os);
+                }
+            });
+            log.info("Created new xlsx file: id={}, name={}, parentId={}",
+                    file.getId(), file.getName(), file.getParentId());
 
             editorBridgeService.sendRefreshFilesAction();
             editorBridgeService.sendOpenFileAction(file);
@@ -2042,6 +2616,66 @@ public class DocumentEditTools implements AgentToolComponent {
         String lower = fileName.toLowerCase();
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
                 || lower.endsWith(".gif") || lower.endsWith(".bmp") || lower.endsWith(".webp");
+    }
+
+    /**
+     * doc_insert_image 超限时的等比压缩（尽调模块 P3 稳定性余项 #4，dev-board#100）。
+     * 逐档降质量、降尺寸重新编码成 JPEG（worker 侧 insert_image 靠 GraphicProvider 按字节
+     * 内容自解码，不依赖原始扩展名，压缩产物统一用 JPEG 不影响插入）；每一档缩放同时把
+     * 图铺到白底再画——JPEG 不支持透明通道，PNG/GIF 若带透明区域直接转码会变黑底，铺白底
+     * 是文档配图场景更合理的默认（等同大多数转换工具对"透明转不透明"的处理方式）。
+     * 找到第一档能落在 limitBytes 以内的立即返回；全部档位都压不下去返回 null，
+     * 调用方据此报错而不是把超限文件硬插进去。包内可见，供单测直接驱动边界情况
+     * （用一个不可能达到的极小 limitBytes 逼真实压缩循环走"压不下去"分支）。
+     */
+    static byte[] compressImageToLimit(java.awt.image.BufferedImage img, long limitBytes) {
+        double[] scales = {1.0, 0.75, 0.5, 0.35, 0.25};
+        float[] qualities = {0.85f, 0.7f, 0.5f, 0.35f, 0.2f};
+        for (double scale : scales) {
+            java.awt.image.BufferedImage flat = flattenAndScale(img, scale);
+            for (float q : qualities) {
+                byte[] out;
+                try {
+                    out = encodeJpeg(flat, q);
+                } catch (java.io.IOException e) {
+                    continue;
+                }
+                if (out.length <= limitBytes) return out;
+            }
+        }
+        return null;
+    }
+
+    /** 按 scale 等比缩放（1.0 = 不缩尺寸）并铺白底展平透明通道，供 JPEG 编码前调用。 */
+    private static java.awt.image.BufferedImage flattenAndScale(java.awt.image.BufferedImage src, double scale) {
+        int w = Math.max(1, (int) Math.round(src.getWidth() * scale));
+        int h = Math.max(1, (int) Math.round(src.getHeight() * scale));
+        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = out.createGraphics();
+        try {
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.setColor(java.awt.Color.WHITE);
+            g.fillRect(0, 0, w, h);
+            g.drawImage(src, 0, 0, w, h, null);
+        } finally {
+            g.dispose();
+        }
+        return out;
+    }
+
+    private static byte[] encodeJpeg(java.awt.image.BufferedImage img, float quality) throws java.io.IOException {
+        javax.imageio.ImageWriter writer = javax.imageio.ImageIO.getImageWritersByFormatName("jpg").next();
+        javax.imageio.ImageWriteParam param = writer.getDefaultWriteParam();
+        param.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
+        param.setCompressionQuality(quality);
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        try (javax.imageio.stream.ImageOutputStream ios = javax.imageio.ImageIO.createImageOutputStream(baos)) {
+            writer.setOutput(ios);
+            writer.write(null, new javax.imageio.IIOImage(img, null, null), param);
+        } finally {
+            writer.dispose();
+        }
+        return baos.toByteArray();
     }
 }
 

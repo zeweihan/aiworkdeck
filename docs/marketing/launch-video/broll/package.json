@@ -1,0 +1,14 @@
+{
+  "name": "broll-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "发布视频 AI 空镜（B-roll）批量生成工具，调用火山方舟 Seedance 视频生成 API。dev-board #59。",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {}
+}

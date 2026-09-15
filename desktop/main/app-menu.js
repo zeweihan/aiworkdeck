@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 应用菜单：主进程这一侧只做「把渲染层下发的 JSON 变成 NSMenu」，不决定菜单长什么样。
 //
 // 为什么数据源在渲染层：菜单的 enabled/checked 本来就必须由页面状态驱动（修订模式
@@ -14,8 +16,9 @@
 //
 // 设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md。
 
-const { Menu, ipcMain } = require('electron')
+const { app, Menu, ipcMain, dialog } = require('electron')
 const { t, onAppLanguageChange } = require('./app-language')
+const { isReloadLocked } = require('./reload-guard')
 
 // 菜单里的应用名写死，**不要用 app.name**：desktop/package.json 没有顶层 productName，
 // Electron 于是拿 name 字段当 app.name，菜单会显示「关于 aiworkdeck-desktop」。
@@ -75,6 +78,49 @@ function optionalMenu(menuId, fallbackLabel) {
   return { label: pushedLabel(menuId, fallbackLabel), submenu: items }
 }
 
+/**
+ * 「重新加载」菜单项（dev-board#628）。
+ *
+ * 开发态照旧 `role: 'reload'`——⌘R 顺手，dev 页面重载也丢不了什么。
+ * 打包态**不能用 role**：role 自带默认加速键 ⌘R（Electron 30.5.1 的 roles 表里写死），
+ * 而 ⌘R 在 Writer 里是「右对齐」，用户在正文里按到它就会整页重载、工作台所有标签
+ * 全关。普通 click 项没有默认加速键，只能从菜单点进来——这条自救入口因此还在，
+ * 白屏时照样点得到，只是点了要先确认。
+ */
+function reloadMenuItem() {
+  const label = t({ zh: '重新加载', en: 'Reload' })
+  if (!isReloadLocked({ packaged: app.isPackaged })) return { role: 'reload', label }
+  return { label, click: () => confirmAndReload() }
+}
+
+/**
+ * 确认后才重载。主进程这一侧看不到工作台开着几个标签（菜单下发的载荷里只有菜单项），
+ * 所以不分情况一律问一次——重载的代价是「所有标签 + 防抖窗口里未落盘的改动」，
+ * 问一句比猜错便宜。用原生对话框而不是让渲染层弹：白屏时渲染层正是不可用的那一侧。
+ */
+function confirmAndReload() {
+  const win = getWindow()
+  if (!win || win.isDestroyed()) return
+  let choice = 0
+  try {
+    choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: [t({ zh: '取消', en: 'Cancel' }), t({ zh: '重新加载', en: 'Reload' })],
+      defaultId: 0,
+      cancelId: 0,
+      message: t({ zh: '要重新加载界面吗？', en: 'Reload the interface?' }),
+      detail: t({
+        zh: '重新加载会关闭所有已打开的标签页，最近几秒还没保存的改动可能丢失。界面卡住或白屏时再用它。',
+        en: 'Reloading closes every open tab; edits from the last few seconds may not have been saved yet. Use it only when the interface is stuck or blank.',
+      }),
+    })
+  } catch (e) {
+    // 弹不出来就什么都不做——宁可不重载，也不能在没问过用户的情况下关掉他所有标签
+    return
+  }
+  if (choice === 1) win.webContents.reload()
+}
+
 function buildTemplate() {
   const template = []
 
@@ -128,7 +174,7 @@ function buildTemplate() {
     submenu: [
       ...pushedItems('view'),
       ...(pushedItems('view').length ? [{ type: 'separator' }] : []),
-      { role: 'reload', label: t({ zh: '重新加载', en: 'Reload' }) },
+      reloadMenuItem(),
       { role: 'toggleDevTools', label: t({ zh: '开发者工具', en: 'Developer Tools' }) },
       { type: 'separator' },
       { role: 'resetZoom', label: t({ zh: '实际大小', en: 'Actual Size' }) },
@@ -166,8 +212,48 @@ function rebuild() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate()))
 }
 
+/**
+ * 原生「关于」面板的版权与许可行（AGPL §0 Appropriate Legal Notices）。
+ *
+ * macOS 的 { role: 'about' } 打开的是系统面板，内容取自 .app 的 Info.plist；
+ * setAboutPanelOptions 可以在运行期覆盖，且 Windows/Linux 上 Electron 会用同一份
+ * 数据自绘一个面板。credits 只在 macOS 生效，Windows/Linux 靠 applicationVersion
+ * 那行带出许可信息，两边都不落空。
+ *
+ * 版本号取 app.getVersion()（打包态 = desktop/package.json 的 version，单一来源）。
+ */
+function applyAboutPanel() {
+  const copyright = [
+    '版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者',
+    'Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors',
+    '',
+    '本软件依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。',
+    'Released under the GNU AGPL v3.0 or later, with ABSOLUTELY NO WARRANTY.',
+    '',
+    '源代码 / Source code: https://github.com/zeweihan/aiworkdeck',
+    '许可证全文 / Full license: https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE',
+    '商标说明 / Trademark notice: https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md',
+    '',
+    '「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得使用该名称作为产品名。',
+  ].join('\n')
+  try {
+    app.setAboutPanelOptions({
+      applicationName: APP_DISPLAY_NAME,
+      applicationVersion: app.getVersion(),
+      version: app.getVersion(),
+      copyright,
+      credits: copyright,
+      website: 'https://github.com/zeweihan/aiworkdeck',
+    })
+  } catch (e) {
+    // 面板文案不是功能，拿不到就算了，绝不让它挡住菜单初始化
+    console.warn('[app-menu] setAboutPanelOptions 失败:', e && e.message)
+  }
+}
+
 function initAppMenu(mainWindowGetter) {
   getWindow = mainWindowGetter
+  applyAboutPanel()
   rebuild()
   // 语言切换只影响骨架文案；业务菜单的文案由渲染层重新下发（它自己也在换 i18n）。
   onAppLanguageChange(() => rebuild())
@@ -178,4 +264,4 @@ function initAppMenu(mainWindowGetter) {
   })
 }
 
-module.exports = { initAppMenu }
+module.exports = { initAppMenu, applyAboutPanel }

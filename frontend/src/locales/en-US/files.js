@@ -1,5 +1,10 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // File preview / picker / staging / download / search / tag component copy
 export default {
+  // FileTree.vue: root-level _模板 folder (dev-board#112)
+  templateFolderHint: 'Template folder: drop your firm\'s report templates here; once learned, AI drafts with their fonts, numbering and table styles',
+
   // FilePreview.vue
   selectFilePrompt: 'Select a file on the left to preview',
   edit: 'Edit',
@@ -27,6 +32,21 @@ export default {
   fileTypeHint: 'File type: {type}',
   fileIdHint: 'File ID: {id}',
   fitWindow: 'Fit to Window',
+  rotate: 'Rotate',
+  // EvidenceLink source-document locating (P3): PDF quote card / image box / media time mark
+  locate: {
+    pdfPage: 'Jumped to page {page}',
+    pdfNoPage: 'Quoted passage',
+    rectsTitle: 'Where the quote sits on this page',
+    quoteNotFound: 'Could not locate the quote on this page',
+    copyQuote: 'Copy quote',
+    quoteCopied: 'Quote copied. Use the reader\'s find box.',
+    quoteCopyFailed: 'Copy failed',
+    imageRect: 'Locator box',
+    mediaMark: 'Mark {time}',
+    playFromMark: 'Play from here',
+    close: 'Close',
+  },
   loadFailed: 'Failed to load',
   resourceLoadFailedStatus: 'Failed to load resource: {status}',
   networkErrorResource: 'Network error. Failed to load resource.',
@@ -44,11 +64,6 @@ export default {
   selectedFolderLabel: 'Selected folder:',
   confirmImport: 'Import',
   onlyTypesSupported: 'Only {types} files are supported',
-  // FileLinkDropZone.vue
-  dropToLink: 'Drop here to link to the highlighted text',
-  currentFileLabel: 'Current file: {name}',
-  linkToLeftDoc: 'Link to Left Document',
-  linkToRightDoc: 'Link to Right Document',
   // FileStagingArea.vue
   stagingTitle: 'File Staging Area',
   clear: 'Clear',
@@ -108,6 +123,15 @@ export default {
   deleteTagTitle: 'Delete Tag',
   deleteTagConfirm: 'Delete tag "{name}"?',
   deleteFailed: 'Failed to delete',
+  // Tag type dimension (dev-board#63): shared by TagSelector/TagManager/SearchPanel
+  tagTypeNormal: 'General',
+  tagTypeParty: 'Party',
+  tagTypeIssue: 'Issue',
+  tagTypeLabel: 'Type',
+  tagGroupParty: 'Party',
+  tagGroupIssue: 'Issue',
+  tagGroupNormal: 'Tags',
+  tagGroupOther: 'Other Tags',
   // MarkdownPreview.vue
   loadingDots: 'Loading...',
   loadFailedWithReason: 'Failed to load: {reason}',

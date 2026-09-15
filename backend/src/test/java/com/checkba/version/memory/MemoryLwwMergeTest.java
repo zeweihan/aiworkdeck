@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version.memory;
 
 import com.checkba.model.entity.MemoryEntry;
-import org.eclipse.jgit.api.Git;
+import com.checkba.version.BareHub;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,8 +35,7 @@ class MemoryLwwMergeTest {
     @BeforeEach
     void setUp() throws Exception {
         Path hub = tmp.resolve("hub.git");
-        Git.init().setBare(true).setDirectory(hub.toFile()).call().close();
-        String hubUrl = hub.toUri().toString();
+        String hubUrl = BareHub.init(hub);
         a = new MemorySyncTestMachine(tmp.resolve("machine-a"), hubUrl, MemoryRealm.project(1));
         b = new MemorySyncTestMachine(tmp.resolve("machine-b"), hubUrl, MemoryRealm.project(2));
     }

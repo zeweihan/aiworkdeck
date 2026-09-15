@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.account;
 
 import com.checkba.model.entity.AccountBinding;
@@ -81,6 +84,7 @@ class AwdkLoginServiceTest {
 
     private StubTransport transport;
     private UserService userService;
+    private com.checkba.service.UserSessionService sessionService;
     private DeviceTokenService deviceTokenService;
     private AccountBindingRepository bindingRepository;
     private com.checkba.service.ai.PlatformAiKeyService platformAiKeyService;
@@ -106,6 +110,10 @@ class AwdkLoginServiceTest {
                 .thenAnswer(inv -> Optional.ofNullable(usersByName.get(inv.getArgument(0, String.class))));
         when(userRepository.findById(anyLong()))
                 .thenAnswer(inv -> Optional.ofNullable(usersById.get(inv.getArgument(0, Long.class))));
+        when(userRepository.findByPhone(anyString()))
+                .thenAnswer(inv -> usersById.values().stream()
+                        .filter(u -> inv.getArgument(0, String.class).equals(u.getPhone()))
+                        .findFirst());
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             if (u.getId() == null) u.setId(userSeq.getAndIncrement());
@@ -113,7 +121,8 @@ class AwdkLoginServiceTest {
             usersById.put(u.getId(), u);
             return u;
         });
-        userService = new UserService(userRepository);
+        sessionService = mock(com.checkba.service.UserSessionService.class);
+        userService = new UserService(userRepository, sessionService);
 
         DeviceTokenRepository tokenRepository = mock(DeviceTokenRepository.class);
         when(tokenRepository.save(any(DeviceToken.class))).thenAnswer(inv -> {
@@ -277,6 +286,54 @@ class AwdkLoginServiceTest {
         assertEquals(second.userId(), bindingsByAccountId.get("acc_9f3a").getUserId());
     }
 
+    // ==================== 展示名随官网刷新（spec 2026-09-10 §4） ====================
+
+    @Test
+    @DisplayName("再次桥接：官网改过的展示名刷到本机行，username 不动")
+    void repeatLoginRefreshesDisplayNameFromWebsite() {
+        transport.enqueue(200, ME_OK)
+                .enqueue(200, "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"韩律师\"}");
+        AwdkLoginService svc = service(true);
+
+        AwdkLoginService.BridgeSession first = svc.login(KEY);
+        assertEquals("韩泽伟", usersById.get(first.userId()).getDisplayName());
+
+        AwdkLoginService.BridgeSession second = svc.login(KEY);
+
+        assertEquals(first.userId(), second.userId(), "还是同一行，不许因为改名另建一个人");
+        assertEquals("韩律师", usersById.get(second.userId()).getDisplayName());
+        assertEquals("韩律师", second.displayName(), "回包里也得是新名字");
+        assertEquals("awd_hanzewei", usersById.get(second.userId()).getUsername(),
+                "username 是内部标识，改名会断 /u/用户名 与 Skill 归属链接");
+    }
+
+    @Test
+    @DisplayName("官网展示名为空：保留本机已有的那份，不清成空白")
+    void blankWebsiteDisplayNameNeverClobbersLocal() {
+        transport.enqueue(200, ME_OK)
+                .enqueue(200, "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"  \"}");
+        AwdkLoginService svc = service(true);
+
+        AwdkLoginService.BridgeSession first = svc.login(KEY);
+        AwdkLoginService.BridgeSession second = svc.login(KEY);
+
+        assertEquals(first.userId(), second.userId());
+        assertEquals("韩泽伟", usersById.get(second.userId()).getDisplayName());
+    }
+
+    @Test
+    @DisplayName("ensureBridgedUser 同享这条刷新：名录回来的展示名也要落到已有的那行")
+    void ensureBridgedUserRefreshesDisplayName() {
+        transport.enqueue(200, ME_OK);
+        AwdkLoginService svc = service(true);
+        AwdkLoginService.BridgeSession first = svc.login(KEY);
+
+        User again = svc.ensureBridgedUser("acc_9f3a", "hanzewei", "韩律师", null);
+
+        assertEquals(first.userId(), again.getId());
+        assertEquals("韩律师", usersById.get(first.userId()).getDisplayName());
+    }
+
     // ==================== per-user 平台 AI key（2026-08-07） ====================
 
     @Test
@@ -319,6 +376,16 @@ class AwdkLoginServiceTest {
         assertEquals(session.userId(), deviceTokenService.resolveUserId(session.token()));
         assertEquals("awd_hanzewei", session.username());
         assertNotNull(bindingsByAccountId.get("acc_9f3a"));
+    }
+
+    @Test
+    @DisplayName("换 Key 请求带上设备名，固定为「Office 插件」（默认站点 aiworkdeck.com）")
+    void exchangeKeyRequestIncludesFixedDeviceName() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true}").enqueue(200, ME_OK);
+
+        service(true).loginWithPhone("13800138000", "123456");
+
+        assertTrue(transport.bodies.get(0).contains("\"deviceName\":\"Office 插件\""), transport.bodies.get(0));
     }
 
     @Test
@@ -421,5 +488,56 @@ class AwdkLoginServiceTest {
         AccountException e = assertThrows(AccountException.class,
                 () -> service(true).sendLoginCode("13800138000", null));
         assertEquals(AccountException.Kind.NETWORK, e.getKind());
+    }
+
+    // ==================== 桥接认领手机号（手机端账号归一，dev-board#30） ====================
+
+    private static final String ME_WITH_PHONE =
+            "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"韩泽伟\","
+                    + "\"phone\":\"18610211590\",\"balanceCents\":1980,\"plan\":\"paid\"}";
+
+    @Test
+    @DisplayName("认领：官网 me 带 phone 时写到桥接用户名下（sms-login 由此解析到同一账号）")
+    void bridgeClaimsWebsitePhone() {
+        transport.enqueue(200, ME_WITH_PHONE);
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+        assertEquals("18610211590", usersById.get(session.userId()).getPhone());
+    }
+
+    @Test
+    @DisplayName("认领转移：号码正被手机号免密建号的孤立用户占用时，转移到桥接用户（同一个人）")
+    void bridgeClaimTransfersPhoneFromStandaloneUser() {
+        User orphan = userService.findOrCreateByPhone("18610211590").user();
+        assertEquals("18610211590", orphan.getPhone());
+
+        transport.enqueue(200, ME_WITH_PHONE);
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+
+        assertEquals("18610211590", usersById.get(session.userId()).getPhone());
+        assertNull(usersById.get(orphan.getId()).getPhone(), "孤立用户的号码应被转移走");
+    }
+
+    @Test
+    @DisplayName("认领不覆盖：桥接用户已绑了另一个号码时保持不动")
+    void bridgeClaimNeverOverwritesDifferentPhone() {
+        transport.enqueue(200, ME_OK);
+        AwdkLoginService.BridgeSession first = service(true).login(KEY);
+        User bridged = usersById.get(first.userId());
+        bridged.setPhone("13900000000");
+
+        transport.enqueue(200, ME_WITH_PHONE);
+        service(true).login(KEY);
+        assertEquals("13900000000", usersById.get(first.userId()).getPhone());
+    }
+
+    @Test
+    @DisplayName("认领容错：me 无 phone / phone 形态不对都不影响桥接")
+    void bridgeClaimToleratesMissingOrMalformedPhone() {
+        transport.enqueue(200, ME_OK);
+        assertDoesNotThrow(() -> service(true).login(KEY));
+
+        transport.enqueue(200, ME_OK.replace("\"plan\":\"paid\"", "\"plan\":\"paid\",\"phone\":\"+86 186\""));
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+        assertNull(usersById.get(session.userId()).getPhone());
     }
 }

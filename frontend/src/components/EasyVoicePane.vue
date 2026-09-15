@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <scroll-view scroll-y class="easy-voice-pane">
     <!-- Text Input Section -->
@@ -36,12 +38,12 @@
         <text class="ev-gate-msg">{{ gateMessage }}</text>
         <view class="ev-gate-actions">
           <template v-if="modelDownloading">
-            <text class="ev-gate-hint">{{ $t('panels.evModelDownloading', { percent: modelPercent }) }}</text>
+            <text class="ev-gate-hint">{{ $t('panels.evModelDownloading', { percent: installPercent }) }}</text>
             <view class="ev-gate-btn secondary" @tap="onCancelModel">{{ $t('panels.evCancelDownload') }}</view>
           </template>
           <template v-else>
             <view class="ev-gate-btn primary" v-if="canDownloadModel" @tap="onDownloadModel">
-              {{ $t('panels.evDownloadModel', { size: modelSizeHint }) }}
+              {{ downloadButtonText }}
             </view>
             <view class="ev-gate-btn secondary" :class="{ disabled: rechecking }" @tap="onRecheck">
               {{ rechecking ? $t('panels.evRechecking') : $t('panels.evRecheck') }}
@@ -112,9 +114,9 @@
           max="150"
           step="5"
           block-size="12"
-          activeColor="#1A5336"
-          backgroundColor="#e5e7eb"
-          block-color="#1A5336"
+          activeColor="var(--awd-accent)"
+          backgroundColor="var(--awd-border)"
+          block-color="var(--awd-accent)"
         />
       </view>
     </view>
@@ -156,10 +158,14 @@
 import { getTtsVoices, generateTtsAudio, promptFeatureNotConfigured } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { host } from '@/services/host.js'
+import { componentDownloads } from '@/services/componentDownloads.js'
 
-// 本机语音引擎的模型组件 id（desktop/main/services/model-manager.js）。
-// kokoro-service 的 descriptor 把 enabled 门在这个组件上——模型没下，服务根本不启动，
+// 本机语音引擎 = 运行时 pack + 模型两件事（设计 §3.1）。0.38.0 起运行时也是按需下载的，
+// 面板上仍然只是一个按钮，底层顺序执行两条通道（pack → 模型 → ensure，顺序不能换：
+// 模型下载器本身跑在 pack 的 venv 里）。
+// kokoro-service 的 descriptor 把 enabled 门在模型上——模型没下，服务根本不启动，
 // 于是 /api/tts/voices 恒返回空数组。
+const TTS_PACK_ID = 'kokoro-runtime'
 const TTS_MODEL_ID = 'kokoro-models'
 
 export default {
@@ -178,6 +184,12 @@ export default {
       modelPercent: 0,
       modelSizeHint: '300 MB',
       rechecking: false,
+      // 运行时 pack 的状态。初值 true：没问过之前不要先喊「组件没装」
+      runtimeInstalled: true,
+      componentItem: null,
+      installing: false,
+      // 应用级下载单例（dev-board#581）：别的入口正在下的，这里接上同一份进度
+      controller: componentDownloads,
       // 语速以「百分之几倍」存（100 = 原速），下发时除以 100 变成 Kokoro 的 speed
       rate: 100,
       generating: false,
@@ -188,7 +200,8 @@ export default {
       sentences: [],
       currentSentenceIndex: -1,
       sentenceDurations: [],
-      audioDuration: 0
+      audioDuration: 0,
+      _unmounted: false // 卸载判据：generateTtsAudio 的响应可能在切走面板之后才回来
     }
   },
   computed: {
@@ -200,19 +213,37 @@ export default {
     },
     /** 浏览器态没有 host.model，下载入口整块不出现（那儿也没有本机引擎可言）。 */
     canDownloadModel() {
-      return !!host.model && this.modelState !== 'installed'
+      return !!host.model && !(this.runtimeInstalled && this.modelState === 'installed')
     },
     modelDownloading() {
-      return this.modelState === 'downloading'
+      return this.installing || this.modelState === 'downloading'
+    },
+    /** 运行时段的进度来自控制器写在 item 上的数字，模型段来自主进程事件流。 */
+    installPercent() {
+      if (this.installing && this.componentItem) return this.componentItem.percent || 0
+      return this.modelPercent
     },
     /**
-     * 「模型没下」与「模型下好了但服务没起」是两回事，下一步完全不同
-     *（前者下 300MB，后者点一下重新检测就够），不能合并成一句「不可用」让用户猜。
+     * 三件事三种下一步，不能合并：
+     * - 运行时没装：下运行时组件（模型下载器本身就跑在它的 venv 里，必须先装它）
+     * - 运行时装了、模型没下：下 300MB 模型
+     * - 都装了：点「重新检测」把服务拉起来
      */
     gateMessage() {
       if (!host.model) return this.$t('panels.evNoVoicesNoticeWeb')
+      if (!this.runtimeInstalled) return this.$t('panels.evRuntimeMissing')
       if (this.modelState === 'installed') return this.$t('panels.evEngineNotRunning')
       return this.$t('panels.evModelMissing')
+    },
+    downloadButtonText() {
+      return this.runtimeInstalled
+        ? this.$t('panels.evDownloadModel', { size: this.modelSizeHint })
+        : this.$t('panels.evDownloadComponent', { size: this.componentSizeHint })
+    },
+    componentSizeHint() {
+      const mb = Math.round((((this.componentItem && this.componentItem.downloadBytes) || 0)
+        + ((this.componentItem && this.componentItem.modelBytes) || 0)) / (1024 * 1024))
+      return mb ? mb + ' MB' : this.modelSizeHint
     },
     selectedVoiceLabel() {
         const v = this.voices.find(v => v.voiceId === this.selectedVoiceId)
@@ -248,7 +279,16 @@ export default {
     }
   },
   beforeUnmount() {
+    this._unmounted = true
+    // 在途的组件下载不停，只是不再由本面板交代结果
+    if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
     this.stopAudio()
+    // 卸载时手上可能还攥着一个已经生成好、但还没播的 blob URL，必须一并释放，
+    // 否则每次"生成完切走面板"都会泄漏一个 blob。
+    if (this.audioUrl) {
+      URL.revokeObjectURL(this.audioUrl)
+      this.audioUrl = ''
+    }
     if (this._modelProgressUnsub) {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
@@ -418,21 +458,55 @@ export default {
       try {
         const res = await host.model.status()
         const comp = ((res && res.components) || []).find(c => c.id === TTS_MODEL_ID)
-        if (!comp) return
-        this.modelState = comp.state
-        if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
+        if (comp) {
+          this.modelState = comp.state
+          if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
+        }
+        await this.controller.load()
+        const item = this.controller.state.items.find(i => i.packId === TTS_PACK_ID)
+        if (item) {
+          await this.controller.fillSizes(item)
+          this.componentItem = item
+          this.runtimeInstalled = !!item.installed
+          // 别的入口（首次登录面板、组件管理）正在装这个组件：接上同一个任务
+          if (this.controller.isInstalling(TTS_PACK_ID) && !this.installing) this.followInstall()
+        }
       } catch (e) {
-        console.warn('[EasyVoicePane] 读取语音模型状态失败', e)
+        console.warn('[EasyVoicePane] 读取语音组件状态失败', e)
       }
     },
+    /**
+     * 一个按钮，两条通道：pack → 模型 → ensure（顺序不能换，模型下载器跑在 pack 的 venv 里）。
+     * 装完直接刷新音色列表，用户不用再点一次「重新检测」。
+     */
     async onDownloadModel() {
-      if (!host.model) return
-      try {
-        await host.model.download(TTS_MODEL_ID)
-        this.modelState = 'downloading'
-        this.modelPercent = 0
-      } catch (e) {
+      if (!host.model || this.installing) return
+      if (!this.componentItem) await this.loadModelState()
+      if (!this.componentItem) {
         uni.showToast({ title: this.$t('panels.evDownloadStartFailed'), icon: 'none' })
+        return
+      }
+      await this.followInstall()
+    },
+    /** 发起或接上应用级下载管理里的同一个任务（在途时 installOne 返回同一个 Promise）。 */
+    async followInstall() {
+      this.installing = true
+      // 面板开着就由它交代结果；切走面板时释放（beforeUnmount），结果交给全局提示
+      this._releaseClaim = this.controller.claim(TTS_PACK_ID)
+      try {
+        const ok = await this.controller.installOne(this.componentItem)
+        if (this._unmounted) return
+        this.runtimeInstalled = !!this.componentItem.installed
+        if (!ok) {
+          uni.showToast({ title: this.$t('components.stateFailed', { msg: this.componentItem.error || '' }), icon: 'none' })
+          return
+        }
+        this.modelState = 'installed'
+        await this.fetchVoices()
+      } finally {
+        if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
+        this.installing = false
+        if (!this._unmounted) await this.loadModelState()
       }
     },
     async onCancelModel() {
@@ -475,9 +549,12 @@ export default {
         const callback = (content) => {
             if (content) {
                 this.text = content;
-                // Split into sentences for karaoke highlighting
-                this.sentences = this.splitTextToSentences(content)
-                console.log('[EasyVoice] Split into', this.sentences.length, 'sentences')
+                // sentences 是「当前这段音频的时间轴」，不是「文本框里现在有什么」，
+                // 所以导入时不能顺手把它换掉：旧音频还在播的话，ontimeupdate 会按旧音频
+                // 的时长算出下标、去新文档的句子数组里取字符串 emit 出去——而导入路径
+                // （project-overview 的 handleEasyVoiceDocRequest）随后就 openFile 打开了
+                // 新文档，那些句子在新文档里真能被 find 到，选区于是跟着旧音频乱跳。
+                // handleGenerate 在每次合成前都会按当前正文重算，这里不需要提前拆句。
                 uni.showToast({ title: this.$t('panels.evImportedDocSuccess'), icon: 'success' })
             } else {
                  uni.showToast({ title: this.$t('panels.evCannotGetDocContent'), icon: 'none' })
@@ -513,18 +590,25 @@ export default {
         console.log('[EasyVoicePane] Generating with payload:', payload)
         const audioBuffer = await generateTtsAudio(payload)
         console.log('[EasyVoicePane] Generated audio buffer size:', audioBuffer.byteLength)
-        
+
+        // 卸载判据：await 期间用户可能已经切走了这个面板（切左栏面板/切到会议录音
+        // tab 都会销毁组件）。此时没有任何播放控件能停下接下来 togglePlay() 会起播
+        // 的音频，必须在这里拦住，不落地播放。
+        if (this._unmounted) return
+
         const blob = new Blob([audioBuffer], { type: 'audio/mpeg' })
         if (this.audioUrl) {
             URL.revokeObjectURL(this.audioUrl)
         }
         this.audioUrl = URL.createObjectURL(blob)
-        
+
         this.$nextTick(() => {
+             if (this._unmounted) return
              this.togglePlay()
         })
 
       } catch (e) {
+        if (this._unmounted) return
         console.error('[EasyVoicePane] Generation failed', e)
         if (e && e.featureNotConfigured) {
           // TTS 未配置：引导去设置而非报"生成失败"（#18 T7）
@@ -555,13 +639,13 @@ export default {
    一屏只装得下文本框和半个音色选择器。 */
 .easy-voice-pane {
   height: 100%;
-  background-color: #fff;
+  background-color: var(--awd-surface);
   box-sizing: border-box;
 }
 
 .section {
   padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 /* 分组头：与插件广场同形（26px / 11px-700） */
@@ -592,7 +676,7 @@ export default {
     justify-content: center;
     height: 18px;
     padding: 0 6px;
-    background: #fff;
+    background: var(--awd-surface);
     border: 1px solid var(--awd-panel-border);
     border-radius: 4px;
     font-size: 10px;
@@ -602,7 +686,7 @@ export default {
 .mini-btn.icon { width: 20px; padding: 0; }
 .mini-btn:hover {
     background: var(--awd-panel-hover);
-    border-color: #D1D5DB;
+    border-color: var(--awd-border-strong);
 }
 .btn-glyph { width: 11px; height: 11px; }
 
@@ -611,7 +695,7 @@ export default {
     margin-bottom: var(--awd-panel-gap);
     padding: 8px;
     border-radius: var(--awd-panel-radius);
-    background: #FFF7ED;
+    background: var(--awd-warning-soft);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -619,13 +703,13 @@ export default {
 
 .ev-gate-msg {
     font-size: var(--awd-panel-fs-meta);
-    color: #9A3412;
+    color: var(--awd-danger-text);
     line-height: 1.55;
 }
 
 .ev-gate-hint {
     font-size: var(--awd-panel-fs-meta);
-    color: #8A6D1D;
+    color: var(--awd-warning-text);
     font-variant-numeric: tabular-nums;
 }
 
@@ -650,14 +734,14 @@ export default {
 
 .ev-gate-btn.primary {
     background: var(--awd-panel-accent);
-    color: #fff;
+    color: var(--awd-text-on-accent);
     font-weight: 500;
 }
-.ev-gate-btn.primary:hover { background: #16482E; }
+.ev-gate-btn.primary:hover { background: var(--awd-accent-hover); }
 
 .ev-gate-btn.secondary {
-    background: #fff;
-    border: 1px solid #D1D5DB;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border-strong);
     color: var(--awd-panel-text-2);
 }
 .ev-gate-btn.secondary:hover { background: var(--awd-panel-hover); }
@@ -673,7 +757,7 @@ export default {
   font-size: var(--awd-panel-fs);
   line-height: 1.6;
   box-sizing: border-box;
-  background: #ffffff;
+  background: var(--awd-surface);
   resize: none;
   transition: border-color 0.2s;
 }
@@ -703,7 +787,7 @@ export default {
     height: var(--awd-panel-row-h);
     border: 1px solid var(--awd-panel-border);
     border-radius: var(--awd-panel-radius);
-    background: #fff;
+    background: var(--awd-surface);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -713,7 +797,7 @@ export default {
     transition: all 0.2s;
 }
 .voice-select-trigger:active {
-    border-color: #1A5336;
+    border-color: var(--awd-accent);
 }
 .selected-text {
     font-size: var(--awd-panel-fs);
@@ -723,11 +807,11 @@ export default {
     white-space: nowrap;
 }
 .selected-text .placeholder {
-    color: #9ca3af;
+    color: var(--awd-text-3);
 }
 .select-arrow {
     font-size: 10px;
-    color: #6b7280;
+    color: var(--awd-text-2);
 }
 
 /* Dropdown Drawer */
@@ -736,8 +820,8 @@ export default {
     top: 100%;
     left: 0;
     width: 100%;
-    background: #fff;
-    border: 1px solid #e5e7eb;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.1);
     z-index: 100;
@@ -758,13 +842,13 @@ export default {
 
 .voice-search-box {
     padding: 8px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid var(--awd-border-subtle);
 }
 .voice-search-input {
     width: 100%;
     height: 32px;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
     border-radius: 4px;
     padding: 0 8px;
     font-size: 13px;
@@ -777,7 +861,7 @@ export default {
 
 .voice-option {
     padding: 5px 8px;
-    border-bottom: 1px solid #f9fafb;
+    border-bottom: 1px solid var(--awd-border-subtle);
     cursor: pointer;
     transition: background 0.15s;
 }
@@ -785,13 +869,13 @@ export default {
     border-bottom: none;
 }
 .voice-option:hover {
-    background: #f3f4f6;
+    background: var(--awd-surface-2);
 }
 .voice-option.active {
-    background: #effdf6;
+    background: var(--awd-bg);
 }
 .voice-option.active .voice-name-text {
-    color: #1A5336;
+    color: var(--awd-accent-text);
     font-weight: 600;
 }
 
@@ -807,20 +891,20 @@ export default {
 }
 .voice-gender-tag {
     font-size: 10px;
-    background: #f3f4f6;
+    background: var(--awd-surface-2);
     padding: 1px 4px;
     border-radius: 4px;
-    color: #6b7280;
+    color: var(--awd-text-2);
 }
 .voice-locale-text {
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--awd-text-3);
 }
 .empty-tip {
     padding: 16px;
     text-align: center;
     font-size: 12px;
-    color: #9ca3af;
+    color: var(--awd-text-3);
 }
 
 
@@ -859,11 +943,11 @@ export default {
 }
 
 .workdeck-btn-primary {
-  background-color: #1A5336;
-  color: #fff;
+  background-color: var(--awd-accent);
+  color: var(--awd-text-on-accent);
 }
 .workdeck-btn-primary:active {
-  background-color: #14402a;
+  background-color: var(--awd-accent-hover);
   transform: translateY(1px);
 }
 .workdeck-btn:disabled {
@@ -902,20 +986,20 @@ export default {
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(91, 209, 151, 0.08);
+    background: var(--awd-accent-wash);
     padding: 6px 8px;
     border-radius: var(--awd-panel-radius);
-    border: 1px solid rgba(91, 209, 151, 0.35);
+    border: 1px solid var(--awd-mint);
 }
 .play-btn {
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    background: #1A5336;
+    background: var(--awd-accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: var(--awd-text-on-accent);
     cursor: pointer;
     transition: transform 0.2s;
     font-size: 14px;
@@ -928,7 +1012,7 @@ export default {
 }
 .player-status {
     font-size: 13px;
-    color: #374151;
+    color: var(--awd-text);
 }
 
 .btn-glyph {

@@ -1,12 +1,14 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <div class="todo-progress-card" v-if="todos && todos.length > 0">
+  <div class="todo-progress-card" :class="{ 'is-snapshot': !live }" v-if="todos && todos.length > 0">
     <div class="todo-header" @click="isCollapsed = !isCollapsed">
       <div class="todo-header-left">
         <span class="todo-title">{{ $t('chat.taskProgress') }}</span>
         <span class="todo-counter">{{ completedCount }}/{{ todos.length }}</span>
       </div>
       <div class="todo-header-right">
-        <span v-if="currentTodo" class="todo-current-hint">{{ currentTodo.activeForm || currentTodo.content }}</span>
+        <span v-if="currentTodo && live" class="todo-current-hint">{{ currentTodo.activeForm || currentTodo.content }}</span>
         <div class="chevron" :class="{ collapsed: isCollapsed }">
           <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"></polyline>
@@ -22,7 +24,7 @@
           <svg v-else-if="todo.status === 'failed'" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           <span v-else class="marker-dot"></span>
         </span>
-        <span class="todo-text">{{ todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content }}</span>
+        <span class="todo-text">{{ todo.status === 'in_progress' && live ? (todo.activeForm || todo.content) : todo.content }}</span>
       </div>
     </div>
   </div>
@@ -32,7 +34,8 @@
 import { computed, ref } from 'vue'
 
 const props = defineProps({
-  todos: { type: Array, default: () => [] }
+  todos: { type: Array, default: () => [] },
+  live: { type: Boolean, default: true }
 })
 
 const isCollapsed = ref(false)
@@ -42,9 +45,10 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 </script>
 
 <style scoped>
+.is-snapshot .marker-spinner { animation: none; }
 .todo-progress-card {
-  background: #ffffff;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   margin: 0 0 6px 0;
   overflow: hidden;
@@ -56,7 +60,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
   align-items: center;
   padding: 5px 10px;
   cursor: pointer;
-  background: #F8F9FA;
+  background: var(--awd-bg);
 }
 
 .todo-header-left {
@@ -69,14 +73,14 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 .todo-title {
   font-size: 11px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 .todo-counter {
   font-size: 10px;
   font-weight: 600;
-  color: #1A5336;
-  background: #E6F9F0; /* Mint Lightest */
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft); /* Mint Lightest */
   padding: 0 6px;
   border-radius: 99px;
 }
@@ -90,7 +94,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 
 .todo-current-hint {
   font-size: 10px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -98,7 +102,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 }
 
 .chevron {
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   display: flex;
   transition: transform 0.2s ease;
 }
@@ -130,20 +134,20 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
   margin-top: 2px;
 }
 
-.todo-row.completed .todo-marker { color: #5BD197; }
-.todo-row.failed .todo-marker { color: #E74C3C; }
+.todo-row.completed .todo-marker { color: var(--awd-mint); }
+.todo-row.failed .todo-marker { color: var(--awd-danger-text); }
 
 .marker-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #DEE2E6;
+  background: var(--awd-surface-3);
 }
 
 .marker-spinner {
   width: 8px;
   height: 8px;
-  border: 1.5px solid #5BD197;
+  border: 1.5px solid var(--awd-mint);
   border-top-color: transparent;
   border-radius: 50%;
   animation: todo-spin 0.8s linear infinite;
@@ -156,20 +160,20 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 .todo-text {
   font-size: 11px;
   line-height: 1.45;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 
 .todo-row.completed .todo-text {
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   text-decoration: line-through;
 }
 
 .todo-row.in_progress .todo-text {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
 .todo-row.failed .todo-text {
-  color: #C0392B;
+  color: var(--awd-danger-text);
 }
 </style>

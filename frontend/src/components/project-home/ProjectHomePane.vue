@@ -1,10 +1,15 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   项目概览的内容本体（一页纸卷轴：档案头 / 统计条 / 动态 / 日程 / 对话）。
 
   从 pages/project-home/project-home.vue 整体抽出来，为的是**同一份内容有两个宿主**：
-   · 工作台中栏的「项目概览」标签（主用法，rail 上的入口，照插件广场 market-detail
-     那套 tab 形制）；
+   · 工作台**左栏**的「项目概览」面板（主用法，rail 第一个按钮；2026-08-19 之前
+     是中栏标签，维护者认为「rail 点了开中栏标签」与其余 rail 项语义不一致）；
    · pages/project-home 独立页（只留给直链与深链，产品流程里不再经过）。
+
+  左栏那个宿主传 compact：260px 起步的窄栏，一页纸的两列布局在那里全会折行，
+  统一收成单列并压掉一档字号与间距（样式在 project-home-pane.scss）。
 
   取数与轮询纪律原样搬来，一条没改：只在挂载与宿主显式调 refresh() 时各刷一次，
   不起定时器；**绝不调 /version/status** —— 它在 enabled 时会一路跑两次 git add，
@@ -14,10 +19,11 @@
   就地切会话。组件只 emit，宿主自己接。
 -->
 <template>
-  <view class="project-home-pane" :class="{ 'is-embedded': embedded }">
+  <view class="project-home-pane" :class="{ 'is-compact': compact }">
     <view class="home-column">
       <ProfileHeader
         ref="profileHeader"
+        :class="{ 'is-sidebar': compact }"
         :project-id="projectId"
         :project-name="projectName"
         :fields="profileFields"
@@ -25,7 +31,11 @@
         @save="onProfileSave"
       />
 
-      <OverviewStatsBar :stats="stats" :loading="statsLoading" />
+      <view v-if="templateLine" class="home-template-line">
+        <text class="home-template-line-text">{{ templateLine }}</text>
+      </view>
+
+      <OverviewStatsBar :class="{ 'is-sidebar': compact }" :stats="stats" :loading="statsLoading" />
 
       <view class="home-section">
         <text class="home-section-title">{{ $t('projects.activitySectionTitle') }}</text>
@@ -39,7 +49,12 @@
 
       <view class="home-section">
         <text class="home-section-title">{{ $t('projects.taskSectionTitle') }}</text>
-        <TaskSchedule :tasks="tasks" :loading="tasksLoading" />
+        <TaskSchedule
+          :tasks="tasks"
+          :loading="tasksLoading"
+          @toggle="onTaskToggle"
+          @quick-create="onTaskQuickCreate"
+        />
       </view>
 
       <view class="home-section">
@@ -69,17 +84,25 @@ import {
   saveProjectProfileField,
   getProjectConversations,
   getProjectTasks,
+  createTask,
+  updateTask,
   getVersionTimeline,
+  getProjectFiles,
+  getFileText,
 } from '@/services/api.js'
-import { canEditProfile } from '@/utils/projectHomeFormat.js'
+import { canEditProfile, summarizeTemplateProfile, templateProfileLine } from '@/utils/projectHomeFormat.js'
+
+/** 模板画像的权威存放处（spec 2026-08-21-dd-p1-drafting-design §3.3）：根级 `_模板/画像.json`。 */
+const TEMPLATE_FOLDER_NAME = '_模板'
+const TEMPLATE_PROFILE_FILE = '画像.json'
 
 export default {
   name: 'ProjectHomePane',
   components: { ProfileHeader, OverviewStatsBar, ActivityFeed, TaskSchedule, ConversationList },
   props: {
     projectId: { type: Number, required: true },
-    /** true = 嵌在工作台中栏的标签里（去掉整页的外边距，跟着 tab 内容区铺满） */
-    embedded: { type: Boolean, default: false },
+    /** true = 嵌在工作台左栏里（窄栏形态：铺满并自己滚动，内容收成单列） */
+    compact: { type: Boolean, default: false },
   },
   emits: ['open-conversation'],
   data() {
@@ -98,6 +121,8 @@ export default {
       conversationsLoading: true,
       nextBefore: null,
       nextBeforeId: null,
+      // `_模板/画像.json` 的四个数（summarizeTemplateProfile 的返回）；没学过模板 = null，整行不渲染
+      templateProfile: null,
       // 请求代：每轮 loadAll() 自增一次。挡的是同一实例内两轮 loadAll() 之间的乱序——
       // 弱网下第一轮的慢请求可能在第二轮已经刷新完之后才姗姗来迟地 resolve，
       // 用旧数据覆盖刚刷新的新数据。各 loadX 进方法体第一行记下当时的代号，
@@ -108,6 +133,9 @@ export default {
   computed: {
     backgroundRuns() {
       return Array.isArray(this.stats.backgroundRuns) ? this.stats.backgroundRuns : []
+    },
+    templateLine() {
+      return templateProfileLine(this.templateProfile)
     },
   },
   watch: {
@@ -134,6 +162,36 @@ export default {
       this.loadActivity()
       this.loadTasks()
       this.loadConversations({ reset: true })
+      this.loadTemplateProfile()
+    },
+    /**
+     * 「已学习模板」一行：根级 `_模板` 文件夹下的 `画像.json`。两级目录列表 + 文本接口三次请求；
+     * 任何一步失败（没有该文件夹 / 没有该文件 / 不是合法 JSON / 无权限）都静默——
+     * 没学过模板是新项目的常态，不是错误，不 toast、不 warn。
+     */
+    async loadTemplateProfile() {
+      const gen = this.loadGeneration
+      let summary = null
+      try {
+        // GET /api/projects/{id}/files 返回裸数组（与 FileTree 的用法一致）
+        const root = await getProjectFiles(this.projectId)
+        const folder = (Array.isArray(root) ? root : []).find(
+          (f) => f && f.isFolder && f.name === TEMPLATE_FOLDER_NAME && f.parentId == null)
+        if (folder) {
+          const children = await getProjectFiles(this.projectId, folder.id)
+          const file = (Array.isArray(children) ? children : []).find(
+            (f) => f && !f.isFolder && f.name === TEMPLATE_PROFILE_FILE)
+          if (file) {
+            const res = await getFileText(file.id)
+            const text = res && typeof res.data === 'string' ? res.data : ''
+            summary = summarizeTemplateProfile(JSON.parse(text))
+          }
+        }
+      } catch (e) {
+        summary = null
+      }
+      if (gen !== this.loadGeneration) return
+      this.templateProfile = summary
     },
     async loadProjectCard() {
       const gen = this.loadGeneration
@@ -237,6 +295,27 @@ export default {
         this.nextBeforeId = null
       } finally {
         this.conversationsLoading = false
+      }
+    },
+    /** 行内勾选框标记完成/恢复未完成：乐观更新，失败回滚（跟 onProfileSave 同一个套路）。 */
+    async onTaskToggle(task) {
+      const prevStatus = task.status
+      const nextStatus = String(prevStatus || '').toUpperCase() === 'DONE' ? 'OPEN' : 'DONE'
+      task.status = nextStatus
+      try {
+        await updateTask(task.id, { status: nextStatus })
+      } catch (e) {
+        task.status = prevStatus
+        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
+      }
+    },
+    /** 顶部「添加」快捷创建：项目级事项，不带 fileId。创建后整轮重取，拿到后端生成的 id/uid。 */
+    async onTaskQuickCreate(payload) {
+      try {
+        await createTask({ projectId: this.projectId, title: payload.title, dueDate: payload.dueDate })
+        this.loadTasks()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
       }
     },
     onLoadMoreConversations() {

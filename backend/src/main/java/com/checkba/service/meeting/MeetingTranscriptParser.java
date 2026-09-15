@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.meeting;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,15 +29,37 @@ public final class MeetingTranscriptParser {
     }
 
     /**
+     * 结果 JSON 结构本身不对——不是"转写出来确实没人说话"的合法空结果，是形状根本
+     * 不对（比如听悟侧下发的是 {"error":"..."} 这样的异常信封、或压根不是合法 JSON）。
+     * 与"正文段落解析失败被当成合法空结果直接决定终态"这条缺陷绑定——调用方要能靠这个
+     * 异常把"出错了"与"确实没人说话"分成两种终态，不要再被 parseSegments 悄悄吞掉。
+     */
+    public static final class UnparseableTranscriptException extends RuntimeException {
+        public UnparseableTranscriptException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * 解析听悟 Transcription 结果：Transcription.Paragraphs[].{SpeakerId, Words[].{Start,End,Text}}。
      * 相邻同说话人段落不合并——听悟的分段本身就带语义停顿，保留它对纪要引用更友好。
+     *
+     * <p>空/null 输入（上游压根没给结果地址）按"没有可解析的内容"处理，返回空列表——这与
+     * "给了内容但形状不对"是两回事，前者继续算合法空结果。非空输入一旦不是合法 JSON、
+     * 或者没有 Transcription.Paragraphs 数组且不符合静音结果的音频元数据形状，抛
+     * {@link UnparseableTranscriptException}，不再悄悄吞成空列表。<b>段落内部的字段级缺失
+     * 仍然宽松</b>（缺 SpeakerId 退化成"1"、空 Words 跳过该段落）——宽松的是听悟结果里
+     * 随版本演进的次要字段，不是"这份结果到底是不是一次转写"这件事。
      */
     public static List<Segment> parseSegments(String transcriptionJson) {
         List<Segment> segments = new ArrayList<>();
+        if (transcriptionJson == null || transcriptionJson.isBlank()) return segments;
         JsonNode root = readTree(transcriptionJson);
-        if (root == null) return segments;
-        JsonNode paragraphs = root.path("Transcription").path("Paragraphs");
-        if (!paragraphs.isArray()) return segments;
+        JsonNode paragraphs = root == null ? null : root.path("Transcription").path("Paragraphs");
+        if (root == null || !paragraphs.isArray()) {
+            if (isSilentAudioResult(root)) return segments;
+            throw new UnparseableTranscriptException("未能读取转写结果，请稍后重试。原始录音仍然保留。");
+        }
         for (JsonNode p : paragraphs) {
             String speaker = p.path("SpeakerId").asText("");
             if (speaker.isEmpty()) speaker = "1";
@@ -55,6 +80,19 @@ public final class MeetingTranscriptParser {
             segments.add(new Segment(speaker, start == Long.MAX_VALUE ? 0 : start, end, t));
         }
         return segments;
+    }
+
+    /** 听悟静音结果会只保留 TaskId/AudioInfo；不能把错误信封或损坏的段落字段吞成空稿。 */
+    private static boolean isSilentAudioResult(JsonNode root) {
+        if (root == null || !root.isObject() || !root.path("TaskId").isTextual()
+                || root.path("TaskId").asText("").isBlank()
+                || root.has("error") || root.has("Error") || root.has("ErrorCode") || root.has("Code")) return false;
+        JsonNode transcription = root.path("Transcription");
+        if (!transcription.isMissingNode() && !(transcription.isObject() && transcription.isEmpty())) return false;
+        JsonNode audio = root.path("AudioInfo");
+        return audio.isObject() && audio.path("Duration").isNumber() && audio.path("Duration").asLong() > 0
+                && audio.path("Size").isNumber() && audio.path("Size").asLong() > 0
+                && audio.path("SampleRate").isNumber() && audio.path("SampleRate").asLong() > 0;
     }
 
     /**

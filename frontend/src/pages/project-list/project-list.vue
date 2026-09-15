@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="page-project-list">
     <view class="project-list-container">
@@ -6,7 +8,7 @@
           <text class="header-title">{{ $t('projects.myProjects') }}</text>
           <!-- header-actions 本身不受角色/项目数门控：CLIENT 或零项目新用户否则在本页
                找不到任何通往个人中心的入口（登出/设置/解除授权全部不可达）。
-               门控只收窄到「新建项目/取案卷」这两个写操作按钮上。 -->
+               门控只收窄到「取一份案卷」这个写操作按钮上。 -->
           <view class="header-actions">
             <!-- 视图切换：方块 / 列表。案卷多起来之后方块视图一屏放不下几个，
                  也塞不进客户与时间；列表视图是「一眼扫完」的形态。选择记在本机。 -->
@@ -32,28 +34,46 @@
                 </svg>
               </view>
             </view>
-            <!-- 「详情」：把档案里其余四项补出来。做成开关而不是逐行展开，是为了
-                 让每一行等高、整列能对齐扫读——逐行展开的表格扫起来最费眼。 -->
-            <view
-              v-if="projects.length > 0"
-              class="detail-toggle"
-              :class="{ active: showDetail }"
-              :title="$t('projects.detailToggleHint')"
-              @tap="setShowDetail(!showDetail)"
-            >
-              <text class="detail-toggle-text">{{ $t('projects.detailToggle') }}</text>
-            </view>
-            <!-- 新建：页头一个主按钮（桌面端弹「打开文件夹 / 新建项目文件夹」两选一），
-                 列表下方那两张卡片保留——那里是零项目新用户的落点，页头这个是
-                 「已经有一堆案卷、想再开一个」的人的落点，两处服务的不是同一刻。 -->
-            <button v-if="!isClientUser" class="btn-create-primary" :disabled="busy" @tap="onCreateProject">
-              <text class="btn-create-plus">＋</text>{{ $t('projects.newProject') }}
-            </button>
-            <template v-if="!isClientUser && projects.length > 0">
+            <!-- 「从团队案件库取一份案卷」：被邀请的同事取回案卷的唯一入口（dev-board#444 邀请话术第 2 步指的就是它）。
+                 曾因自建案件库令人困惑而收起（SHOW_CLOUD_ACCEPT=false），官方案件库零配置直连（#439）后重新给出。 -->
+            <template v-if="SHOW_CLOUD_ACCEPT && !isClientUser && projects.length > 0">
               <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
             </template>
+            <button class="btn-secondary-small" @tap="goToCalendar">{{ $t('projects.calendarEntry') }}</button>
             <button class="btn-secondary-small" @tap="goToUserProfile">{{ $t('projects.personalCenter') }}</button>
           </view>
+        </view>
+
+        <!-- 新建：紧凑操作行，紧跟在页头下方——「已经有一堆案卷、想再开一个」与
+             「零项目新用户」共用同一个入口，不必等滚到列表底部才看得见。
+             桌面端就是「打开一个已有文件夹」与「新建一个项目文件夹」两件事——本产品的
+             项目 == 磁盘上的一个文件夹（localRoot），「单独打开一个文件」已去掉：它造出的是
+             个没有归属的临时项目，律师下次找不到它在哪。浏览器版没有系统文件夹对话框，
+             降级为托管空白项目。 -->
+        <view v-if="!isClientUser" class="create-section">
+          <view class="create-row">
+            <template v-if="isDesktop">
+              <view class="create-card create-card-primary" :class="{ 'is-busy': busy }" @tap="onCreateFolder">
+                <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in ICONS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <text class="create-title">{{ $t('account.createFolderTitle') }}</text>
+              </view>
+              <view class="create-card create-card-secondary" :class="{ 'is-busy': busy }" @tap="onOpenFolder">
+                <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in ICONS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <text class="create-title">{{ $t('account.openFolderTitle') }}</text>
+              </view>
+            </template>
+            <view v-else class="create-card create-card-primary" @tap="goToNewProject">
+              <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in ICONS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <text class="create-title">{{ $t('projects.newProject') }}</text>
+            </view>
+          </view>
+          <text v-if="busy" class="create-busy-hint">{{ busyText }}</text>
         </view>
 
         <view class="panel-projects">
@@ -85,8 +105,9 @@
                   <text class="dashed-text">{{ $t('projects.emptyHint') }}</text>
                 </view>
               </view>
-              <!-- 协作的唯一入口。CollabDialog 的邀请话术写死指向这里，别删 -->
-              <view class="cloud-accept-entry" @tap="openCloudAccept">
+              <!-- 协作的唯一入口，暂时收起（同上）。CollabDialog 的邀请话术写死指向
+                   这里，方法与组件别删 -->
+              <view v-if="SHOW_CLOUD_ACCEPT" class="cloud-accept-entry" @tap="openCloudAccept">
                 <text class="cloud-accept-entry-text">{{ $t('projects.pullFromTeamLibrary') }}</text>
               </view>
             </template>
@@ -100,8 +121,6 @@
               :class="getProjectCardClass(project.projectType)"
               @tap="goToProject(project.id)"
             >
-              <view class="card-deco-header"></view>
-
               <view class="card-top-row">
                 <!-- 「空白项目」这个标签不再渲染：绝大多数案卷都是 BLANK，一屏
                      全是同一个词，占着卡片最显眼的一行却什么也没说。非 BLANK 的
@@ -152,11 +171,6 @@
                   <view class="info-row-new">
                     <text class="info-label-new">{{ $t('projects.updatedColumn') }}</text>
                     <text class="info-val-new">{{ formatTime(project.lastActivityAt) || '—' }}</text>
-                  </view>
-                  <!-- 档案其余四项：开了「详情」且这一项真填过才出现 -->
-                  <view v-if="showDetail" v-for="f in detailFields(project)" :key="f.key" class="info-row-new">
-                    <text class="info-label-new">{{ f.label }}</text>
-                    <text class="info-val-new">{{ f.value }}</text>
                   </view>
                 </view>
               </view>
@@ -214,8 +228,7 @@
               <text class="ptable-col col-members">{{ $t('projects.membersColumn') }}</text>
               <text class="ptable-col col-ops"></text>
             </view>
-            <!-- 一行案卷 = 主行（常显字段）+ 可选的详情行。v-for 挂在外层 .ptable-item
-                 上而不是主行上，两行才能共用同一次悬停与同一条下边框。 -->
+            <!-- 外层 .ptable-item 挂悬停与下边框，.ptable-row 只管一行内容的排布 -->
             <view
               v-for="project in projects"
               :key="project.id"
@@ -275,59 +288,7 @@
                 </view>
               </view>
             </view>
-            <!-- 详情行：开了开关、且这份案卷的档案里真有东西才出现。
-                 一项没填的案卷不留空行——那只会让列表高低不齐还什么都没说。 -->
-            <view
-              v-if="showDetail && detailFields(project).length"
-              class="ptable-detail"
-              @tap="goToProject(project.id)"
-            >
-              <view v-for="f in detailFields(project)" :key="f.key" class="detail-chip">
-                <text class="detail-chip-label">{{ f.label }}</text>
-                <text class="detail-chip-value">{{ f.value }}</text>
-              </view>
             </view>
-            </view>
-          </view>
-
-          <!-- 新建：放在列表下方。桌面端就是「打开一个已有文件夹」与「新建一个项目
-               文件夹」两件事——本产品的项目 == 磁盘上的一个文件夹（localRoot），
-               所以「单独打开一个文件」那条已经去掉：它造出的是个没有归属的临时项目，
-               律师下次找不到它在哪。浏览器版没有系统文件夹对话框，降级为托管空白项目。 -->
-          <view v-if="!isClientUser" class="create-section">
-            <text class="create-section-title">{{ $t('projects.createSectionTitle') }}</text>
-            <view class="create-row">
-              <template v-if="isDesktop">
-                <view class="create-card" :class="{ 'is-busy': busy }" @tap="onOpenFolder">
-                  <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                  <view class="create-text">
-                    <text class="create-title">{{ $t('account.openFolderTitle') }}</text>
-                    <text class="create-desc">{{ $t('account.openFolderDesc') }}</text>
-                  </view>
-                </view>
-                <view class="create-card" :class="{ 'is-busy': busy }" @tap="onCreateFolder">
-                  <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                  <view class="create-text">
-                    <text class="create-title">{{ $t('account.createFolderTitle') }}</text>
-                    <text class="create-desc">{{ $t('account.createFolderDesc') }}</text>
-                  </view>
-                </view>
-              </template>
-              <view v-else class="create-card" @tap="goToNewProject">
-                <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path v-for="(d, gi) in ICONS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                <view class="create-text">
-                  <text class="create-title">{{ $t('projects.newProject') }}</text>
-                  <text class="create-desc">{{ $t('account.webHint') }}</text>
-                </view>
-              </view>
-            </view>
-            <text v-if="busy" class="create-busy-hint">{{ busyText }}</text>
           </view>
         </view>
       </view>
@@ -348,8 +309,8 @@
           @confirm="confirmCreateFolder"
         />
         <view class="naming-actions">
-          <button class="btn-secondary-small" @tap="namingVisible = false">{{ $t('common.cancel') }}</button>
-          <button class="btn-primary-small" :disabled="!namingNameValid || busy" @tap="confirmCreateFolder">{{ $t('account.createBtn') }}</button>
+          <button class="awd-btn awd-btn-secondary" @tap="namingVisible = false">{{ $t('common.cancel') }}</button>
+          <button class="awd-btn awd-btn-primary" :disabled="!namingNameValid || busy" @tap="confirmCreateFolder">{{ $t('account.createBtn') }}</button>
         </view>
       </view>
     </view>
@@ -364,6 +325,12 @@
     <CloudAcceptDialog
       v-model:visible="showCloudAccept"
       @accepted="onCloudAccepted"
+    />
+
+    <OptionalComponentsDialog
+      v-if="showOptionalComponents"
+      :app-version="appVersion"
+      @close="showOptionalComponents = false"
     />
   </view>
 </template>
@@ -382,6 +349,7 @@
  * 兜底在工作台的 onHide/onUnload（admin / plugin-market / variable-library 都没做）。
  */
 import { getMyProjects, deleteProject, renameProject, getProjectMembers, removeProjectMember, getCurrentUser as getCurrentUserApi } from '@/services/api.js'
+import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
 import { roleLabel, ROLE_LABELS } from '@/config/memberRoles.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
@@ -390,19 +358,29 @@ import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { ICONS } from '@/config/icons.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
+import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
+import { optionalComponents } from '@/services/api.js'
+import { shouldPromptOptionalComponents, PROMPTED_PREF_KEY } from '@/composables/useOptionalComponents.js'
 
 const VIEW_MODE_KEY = 'checkba_project_list_view'
-const DETAIL_KEY = 'checkba_project_list_detail'
+
+// 「从团队案件库取一份案卷」入口暂时收起（用户反馈 5）。方法 openCloudAccept 与
+// 「从团队案件库取一份案卷」入口开关：官方案件库上线后必须为 true（被邀请方没有别的取回入口）。
+const SHOW_CLOUD_ACCEPT = true
 
 export default {
   name: 'ProjectList',
   components: {
     InviteMemberDialog,
     CloudAcceptDialog,
+    OptionalComponentsDialog,
   },
   computed: {
     ICONS() {
       return ICONS
+    },
+    SHOW_CLOUD_ACCEPT() {
+      return SHOW_CLOUD_ACCEPT
     },
     isDesktop() {
       // 判据是「有没有系统文件夹对话框」而不是「是不是桌面壳」：新建入口用的正是它，
@@ -443,23 +421,25 @@ export default {
       // 选择记在本机，不进后端——它是这台机器上这个人的习惯，不是账户设置。
       viewMode: 'grid',
 
-      // 「详情」：把档案里其余四项（事项类型/对方/立项时间/下一步）补出来。
-      // 默认关——绝大多数案卷这四项是空的，常显只会让列表变松散；
-      // 两个视图共用这一个开关，同样记本机。
-      showDetail: false,
-
       // 新建项目文件夹（原 newproject 页的流程，随新建入口一起搬过来）
       busy: false,
       busyText: '',
       namingVisible: false,
       namingParentDir: '',
       namingName: '',
+
+      loadProjectsSeq: 0,
+
+      // 首次登录后的「可选组件」面板（设计 §4.1）
+      showOptionalComponents: false,
+      appVersion: '',
     }
   },
   onLoad() {
     if (!this.ensureLoggedIn()) return
     this.restoreViewMode()
     this.loadUserInfo()
+    this.maybePromptOptionalComponents()
   },
   onShow() {
     // 从概览页 navigateBack、从新建项目页回来都要看到最新结果（改名/删除都在这一页做）
@@ -473,6 +453,30 @@ export default {
       if (getSessionId() && getCurrentUser()) return true
       uni.reLaunch({ url: '/pages/login/login' })
       return false
+    },
+    /**
+     * 首次登录后的「可选组件」面板（设计 §4.1）。挂在 onLoad 而不是 onShow：
+     * 从项目页返回列表页会反复触发 onShow，那会变成每次返回都弹一次。
+     */
+    async maybePromptOptionalComponents() {
+      if (!isDesktopHost() || !host.prefs) return
+      try {
+        const [res, prompted, status] = await Promise.all([
+          optionalComponents(),
+          host.prefs.get(PROMPTED_PREF_KEY),
+          host.update ? host.update.status() : Promise.resolve(null),
+        ])
+        this.appVersion = (status && status.appVersion) || ''
+        this.showOptionalComponents = shouldPromptOptionalComponents({
+          items: (res && res.components) || [],
+          promptedVersion: prompted && prompted.value !== undefined ? prompted.value : prompted,
+          appVersion: this.appVersion,
+          isDesktop: true,
+        })
+      } catch (e) {
+        // 后端还没起来 / 离线部署关了 ai.packs：不打扰，用户仍可从设置进组件管理
+        console.warn('[project-list] 可选组件检查跳过', e)
+      }
     },
     async loadUserInfo() {
       const user = getCurrentUser()
@@ -488,7 +492,13 @@ export default {
         console.error('获取用户信息失败:', e)
       }
     },
+    // 触发源不止一处（onShow 每次页面重新可见都会跑一次，删除/移出成员/邀请成功
+    // 各自还会再补跑一次），互相之间没有取消机制。每个都要等 N+1 的成员查询
+    // fan-out 落地，谁的 Promise.all 后落地就覆盖 this.projects——旧的那次快照
+    // 若在新的一次（比如删除后的刷新）之后才落地，会把刚删掉的项目重新摆回列表。
+    // 用请求代次只认"此刻最新一次"发出的那份快照。
     async loadProjects() {
+      const seq = ++this.loadProjectsSeq
       this.projectsLoading = true
       try {
         // getMyProjects 返回的是裸数组（ProjectController 直接返 List<ProjectCardDTO>，
@@ -514,8 +524,10 @@ export default {
             return { ...p, members: [] }
           }
         }))
+        if (!shouldAcceptResponse(seq, this.loadProjectsSeq)) return
         this.projects = projectsWithMembers
       } catch (error) {
+        if (!shouldAcceptResponse(seq, this.loadProjectsSeq)) return
         console.error('加载项目列表失败:', error)
         // 桌面端免登：绝不跳 login（launch 分流已保证桌面不进登录页，这里若跳就是死胡同），
         // 只提示错误。浏览器端保留原「登录失效回登录页」兜底。
@@ -529,7 +541,7 @@ export default {
           })
         }
       } finally {
-        this.projectsLoading = false
+        if (shouldAcceptResponse(seq, this.loadProjectsSeq)) this.projectsLoading = false
       }
     },
 
@@ -538,7 +550,6 @@ export default {
       try {
         const saved = uni.getStorageSync(VIEW_MODE_KEY)
         if (saved === 'grid' || saved === 'list') this.viewMode = saved
-        this.showDetail = uni.getStorageSync(DETAIL_KEY) === '1'
       } catch (e) { /* 存储不可用就用默认值，不拦路 */ }
     },
     setViewMode(mode) {
@@ -639,34 +650,12 @@ export default {
       const p = project && project.profile
       return ((p && p[key]) || '').trim()
     },
-    /**
-     * 「详情」开关打开时补充显示的档案字段。客户不在这里——它是一等列，常显。
-     *
-     * 顺序不照搬后端的 FIELD_KEYS：那是档案头的排版顺序。列表里按「扫一眼要什么」
-     * 排——先认事项与对方（这是哪一类活、跟谁打），再看立项时间，最后是下一步
-     * （可能是一整句话，放末位才不会把前面几项挤没）。
-     * 未填的键整条不渲染：一行「下一步 —」除了占地方什么也没说。
-     */
-    detailFields(project) {
-      return [
-        ['matterType', this.$t('projects.matterTypeField')],
-        ['counterparty', this.$t('projects.counterpartyField')],
-        ['openedAt', this.$t('projects.openedAtField')],
-        ['nextStep', this.$t('projects.nextStepField')],
-      ]
-        .map(([key, label]) => ({ key, label, value: this.profileValue(project, key) }))
-        .filter((f) => !!f.value)
-    },
-    setShowDetail(v) {
-      this.showDetail = !!v
-      try { uni.setStorageSync(DETAIL_KEY, this.showDetail ? '1' : '0') } catch (e) { /* ignore */ }
-    },
     clientText(project) {
       // 权威来源是档案的 client 字段（下同）
       const filled = this.profileValue(project, 'client')
       if (filled) return filled
       const names = this.getClientMembers(project)
-        .map((m) => m.displayName || m.username)
+        .map((m) => m.displayName)
         .filter(Boolean)
       if (names.length) return names.join('、')
       const listed = project.listedCompanyName
@@ -756,26 +745,6 @@ export default {
         },
       })
     },
-    /**
-     * 页头「＋ 新建项目」。桌面端的「新建」本来就是两件事（打开一个已有文件夹 /
-     * 新建一个项目文件夹），所以主按钮弹一次两选一，而不是替用户猜一个。
-     * 浏览器端没有系统文件夹对话框，直接走托管空白项目表单。
-     */
-    onCreateProject() {
-      if (this.busy) return
-      if (!this.isDesktop) {
-        this.goToNewProject()
-        return
-      }
-      uni.showActionSheet({
-        itemList: [this.$t('account.openFolderTitle'), this.$t('account.createFolderTitle')],
-        success: (res) => {
-          if (res.tapIndex === 0) this.onOpenFolder()
-          else if (res.tapIndex === 1) this.onCreateFolder()
-        },
-        fail: () => { /* 用户取消 */ },
-      })
-    },
     // 浏览器降级路径：没有系统文件夹对话框，仍走 newproject 页的托管空白项目表单
     goToNewProject() {
       uni.navigateTo({ url: '/pages/newproject/index' })
@@ -820,6 +789,10 @@ export default {
     goToUserProfile() {
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
     },
+    // 日历页同样不是工作台，同一模式
+    goToCalendar() {
+      uni.navigateTo({ url: '/pages/calendar/calendar' })
+    },
     startRename(project) {
       if (this.isClientUser) return
       this.renamingProjectId = project.id
@@ -830,14 +803,24 @@ export default {
         uni.showToast({ title: this.$t('projects.projectNameEmpty'), icon: 'none' })
         return
       }
+      // 输入框同时绑了 @confirm="confirmRename" 和 @blur="cancelRename"：请求飞着时
+      // 点别处会触发 blur，同步把 renamingProjectId/renameValue 清空。续写要是等
+      // await 回来才去读 this.renamingProjectId 就已经是 null 了，find 恒失配，
+      // 卡片名字更新不到本地状态。提前把 id/name 存成局部变量，不再依赖会被
+      // 并发清掉的响应式状态；success 之后也只在仍是本次这轮 rename 时才去关输入框，
+      // 避免误关掉期间用户又对另一个项目开的新一轮改名。
+      const id = this.renamingProjectId
+      const name = this.renameValue.trim()
       try {
-        await renameProject(this.renamingProjectId, this.renameValue.trim())
-        const project = this.projects.find((p) => p.id === this.renamingProjectId)
+        await renameProject(id, name)
+        const project = this.projects.find((p) => p.id === id)
         if (project) {
-          project.name = this.renameValue.trim()
+          project.name = name
         }
-        this.renamingProjectId = null
-        this.renameValue = ''
+        if (this.renamingProjectId === id) {
+          this.renamingProjectId = null
+          this.renameValue = ''
+        }
         uni.showToast({ title: this.$t('projects.renameSuccess'), icon: 'success' })
       } catch (e) {
         console.error('重命名失败', e)

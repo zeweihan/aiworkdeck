@@ -47,18 +47,36 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/config/LocalModeAccessFilter.java` — 免登模式的每请求准入闸（回环校验 + 反代痕迹拒绝 + 跨站 Origin 硬拦截）。
 - `backend/src/main/java/com/checkba/config/LocalModeLoopbackGuard.java` — 启动强不变式：local-mode 必须绑回环地址，否则拒绝启动。
 - `AuthController.getUserIdFromSession()` 在 local-mode 下把任何请求解析为本机用户（90 余处调用方一行未改）。
+- **`LocalIdentityService` 从不给真实账号改名，但展示名会随官网刷新**（spec 2026-09-10 §5）：
+  `commit()` 那处改名只收窄到 `username=admin`（系统默认账号，「管理员」不是用户自己起的名字）；
+  真实账号的 `displayName` 由 `AccountIdentitySync` 按**官网这个唯一权威源**刷新，
+  不是「一个字都不动」而是「不被本机改名，只随权威源刷新」。两者不冲突：一个是本机替用户做主，一个是随权威源同步。
+- **「本机用户」是库里恒存的中文哨兵，界面语言只在读出来时替换**（`LocalIdentityService.displayNameOf`，
+  v0.30.0 + dev-board#351）。库里存的值一个字都不动——改写入侧会让同一个人在中英文界面下留下两种身份。
+  出口全集（新增读出口要跟着补，别再漏）：`/api/auth/me`、`/api/local-identity/{status,candidates}`、
+  项目成员与 owner（`ProjectMemberController`）、项目列表 `managerName`（`ProjectService`）、
+  变量库创建者（`ProjectVariableController.VariableView`）、版本时间线署名（`ProjectRepoService.toEntry`）。
+  后两处是**快照**——名字被抄进了 project_variables / Git 提交对象，读时本地化是唯一够得着的修法。
+  **不许就地改实体的 `creatorName`**：实体在 OSIV 会话里受管，一旦被脏检查刷回库，库里就成了
+  「Local user」，中文界面反过来看到英文，且不可逆——所以那条路走的是只读视图 `VariableView`。
 
 **账户连接（PR-B）**
 - `backend/src/main/java/com/checkba/service/account/AccountService.java` — 与官网账户的唯一连接方式是 `awdk_` Key。
-  `~/.aiworkdeck/account.json`（0600）；`connect/disconnect/status/fetchProfile/fetchEntitlements/fetchLedger/fetchAiUsage/fetchAiKey/currentKeyOrNull`。
+  `~/.aiworkdeck/account.json`（0600，字段 `key/username/accountId/displayName/connectedAt/lastSyncAt`）；
+  `connect/disconnect/status/fetchProfile/fetchEntitlements/fetchLedger/fetchAiUsage/fetchAiKey/currentKeyOrNull`，
+  以及个人档案那一组 `profileIdentity/updateDisplayName/uploadAvatar/deleteAvatar`（见下方「身份展示」一节）。
 - `service/account/AccountTransport.java` + `HttpAccountTransport.java` — 出站 HTTP 缝（单测打桩不依赖网络）；固定 HTTP/1.1。
+  `sendMultipart(method,url,bearer,Multipart)` 是头像上传那条路，**默认实现直接抛**——
+  给个默认返回值会让「桩根本没接这条路」在测试里表现成一次成功的上传。
 - `service/account/AccountEndpoint.java` — 授权服务器地址的协议校验（https，回环 http 例外），`LicenseService` 与 `AccountService` 共用。
 - `service/account/AccountException.java` — `Kind`：NETWORK / UNAUTHORIZED / CONFLICT / NOT_CONNECTED / MALFORMED。
-- `backend/src/main/java/com/checkba/controller/AccountController.java` — `/api/account/{status,connect,disconnect,usage}`。
+- `backend/src/main/java/com/checkba/controller/AccountController.java` — `/api/account/{status,connect,disconnect,usage}`
+  以及个人档案 `/api/account/profile`（GET/PUT）与 `/api/account/avatar`（POST multipart/DELETE）。
 - `service/account/AccountSwitchCleanup.java` — **换账户后作废动作的唯一出口**（`afterConnect` / `afterDisconnect`）：
   权益缓存 + 平台 AI 密钥缓存 + 余额判定 + 用量基线四样一起清，disconnect 还要 `demotePlatformProvider()`。
   连接账户有**两个**入口（设置页 `AccountController.connect`、解锁页 `LicenseController.activate` 粘 `awdk_`），
   动作抄两份必然漏（见地雷 22）。新增第三条连接路径时接这里。
+- **`currentKeyOrNull()` 的消费方现在有三处，不再是「只有广场付费项下载」**（dev-board#439）：广场付费项下载（`Authorization: Bearer awdk_` 直发官网）、`MobileRelayClientService` 的手机中转桥接、`com.checkba.version.OfficialCloudService` 的官方团队案件库桥接。后两者形状完全相同——拿 Key POST `{base}/api/auth/awdk-login` 换一枚 awdt_ 长期设备令牌存在本机，用 `accountFingerprintOrNull()` 判「还是不是同一个账户」，换了人就重桥。新增第四条这类通道时照抄这个形状，别自己发明一套令牌缓存。
 - `AccountService.accountFingerprintOrNull()` — 账户指纹（Key 的 SHA-256 前 12 位）的**唯一定义**。
   机器级缓存都是账户级内容，换账号必须作废；指纹单向、可比对可进日志，不受「别把 Key 拿出去传」的限制。
 - 前端：`frontend/src/pages/admin/admin.vue` 的「账户与用量」分区（连接/断开、余额、AI 额度、最近用量、
@@ -95,8 +113,20 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   - `pages/wizard/wizard.vue` 的 `providerOptions`——`AWD_CLOUD` **恒可选**，选中就地展开连接块把条件补齐，
     闸门挪到 `handleSubmit`（见下方地雷 15：向导里的每一条「下一步」都必须能在向导里做完）。
     向导刻意不预选任何供应商，见下方地雷 14。
+    **2026-08-21 起向导也收敛成官方版形态（dev-board#98）**：`providerOptions` / OLLAMA 探测 /
+    OpenRouter Key 输入整体删除，步骤 1 改成「连接账户」直述（沿用原 AWD_CLOUD 选中后展开的连接块
+    + 跨境同意框），`buildPayload` 固定 `ai.activeProvider='AWD_CLOUD'`，只带 `crossBorderConsent`，
+    **不带 `external` / `ollama*` 字段**（`toSettingsUpdates` 对 null 一律跳过，存量 key 不被清空）。
+    `handleSubmit` 三道闸原样保留：未连账户 / Credits 为 0 / 未勾同意都拦提交。
+    `probeOllama` 的 api.js 封装与后端 `/api/ai/ollama/probe` 端点保留，前端已无调用方。
 - 供应商自 2026-08 收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`
-  （本地，离线实验档，只支持 ASK）。`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
+  （本地，离线实验档，只支持 ASK）。**2026-08-21 起产品只有官方版（dev-board#98）：桌面端设置页
+  前端不露 BYOK——供应商单选、OpenRouter Key、Ollama 字段、平台服务的 21 个 BYOK 凭证表单全部从
+  `AdminPane.vue` 删掉，`form` 不再回传 `external` / `ollama*`（`toSettingsUpdates` 跳过 null，
+  存量 key 不被清空）；后端三档枚举、设置键、`ExternalProviderBackfill` 等分支一律保留。
+  老用户库里 `ai.activeProvider` 仍是 OLLAMA/OPENROUTER 时，AI 面板顶部给「当前仍在使用旧的
+  供应商设置」+「切换到官方通道」一键切回（走既有保存路径，跨境同意闸照旧把关）。本地部署版
+  另开发，不在主线。下面提到「admin 页的 aiProviderOptions」之处都是这次之前的形态。**`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
   Gemini 系列模型经 OpenRouter 的 `google/*` 仍可用）。两个入口的取值合法性由
   `AdminConfigController.toSettingsUpdates` 统一校验（非三档枚举直接 400），
   存量 DB 里的 `ai.activeProvider=GEMINI` 由 `ChatModelFactory` 的启动期迁移改写成 `OLLAMA`。
@@ -116,17 +146,23 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - 前端 `frontend/src/utils/marketPricing.js` — 价格展示与状态判定的唯一出口。
 
 **server 模式加固（插件云后端，2026-08-06）**
-- `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。
+- `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）+ **成员查询限频**（dev-board#444：按发起的项目管理员，10 分钟 30 次；`GET /api/projects/{id}/members/lookup` 与 `POST .../members` **共用这一个计数**——两者是同一个「这个手机号注册过没有」的探测面，分开计等于把额度翻倍，交替调两个端点即可绕开）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。新增维度记得同步 `purgeIfOversized`（否则伪造维度能把内存撑爆）。
 - `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — 官网账户 → server 会话桥。核心一段：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，官网侧已实施并进了权威契约与 contract-check）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_ → **顺手为该用户取一把 per-user 平台 AI key**（`PlatformAiKeyService.tryProvision`，失败绝不拖垮桥接）。
   Key 有两种来源，桥接之后完全相同：**账户登录**（`loginWithPhone`/`loginWithPassword`，先调官网 `/api/auth/exchange-key` 换出 Key，用户看不见它；配套 `sendLoginCode`）与**手工粘贴**（`login(key)`，私有部署与团队服务器）。两者共用开关 `security.awdk-login-enabled`（默认 false）——同一条桥的两个入口，**刻意不拆成两个开关**，否则会出现「登录能用但桥是关的」这种自相矛盾的配置。
   端点全在 `AuthController`，全部匿名：`POST /api/auth/awdk-login`、`POST /api/auth/account-login`、`POST /api/auth/account-login/send-code`。
+  **`/awdk-login` 的回包是跨端契约**（Office 插件云后端与桌面端的官方案件库直连都吃它）：`{token, userId, username, displayName, tokenId}`，`displayName`/`tokenId` 是 dev-board#439 加的（`BridgeSession` 同步加了两个分量）——桌面端存下 `tokenId` 才撤得掉远端那枚长期设备令牌，否则「退出这个案件库」只做成本地断开、凭据留在服务器上继续有效。**`tokenId` 缺失时整个键不下发**，回落成 0 会让调用方存下一个不存在的令牌行 id。
   与官网的出站在 `AccountLoginExchange`（桌面 `AccountService` 与云端 `AwdkLoginService` 共用一份 error code 表——`invalid_code`/`invalid_credentials`/`sms_not_supported_on_site`/`phone_binding_required` 等是与官网仓约定的字面量，写两份必漂）。
+  换 Key 请求随凭据带可选 `deviceName`（2026-08-19，官网 PR#77/桌面 PR#429）：桌面端上报「主机名 (Mac/Windows)」（`AccountService.deviceName()`，截 64 字符），云端桥固定「Office 插件 / Office Add-in（按 baseUrl 分站）」；官网存进 `api_keys.label`，账户页「已连接的设备」按它显示。字段可选，不带时行为不变。
   **云侧不能复用 `/api/account/login`**：那条开头就 `requireUser(sessionId)`，local-mode 会自动解析成本机用户所以桌面端没事，`local-mode=false` 下「登录前得先有会话」是死循环。
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
 - `service/UserSessionService.java` + `model/entity/UserSession.java` — 浏览器登录会话 DB 落库（2026-08-07，
-  替代 AuthController 进程内 SESSION_STORE）：哈希落库、7 天滑动过期、lastUsedAt 写回节流（1 分钟）、
+  替代 AuthController 进程内 SESSION_STORE）：哈希落库、滑动过期、lastUsedAt 写回节流（1 分钟）、
   每日定时清理；重启不掉线。awdt_ 设备令牌与 local-mode 免登不走这条路，行为一字未变。
+  滑动过期天数自 2026-08-19 起可配（`security.session-idle-days`）：**代码默认 365 天**（「常驻」语义——
+  短信/邮箱验证码登录每条有真实成本，7 天一断线逼用户反复走验证码），
+  **官方云后端在 `application-cloud.yml` 显式配 7**，已上线的「7 天滑动过期」契约逐字不变；
+  改默认值或动 cloud 配置前先看 `UserSessionServiceTest.cloudProfilePinsSevenDays`。
 
 **per-user 平台 AI key（2026-08-07，多租户计费隔离）**
 - 设计文档 `docs/superpowers/specs/2026-08-07-per-user-platform-ai-key.md`（含三方案的安全边界比较与已确认决策）。
@@ -286,6 +322,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
+- `cloud.collab.base-url`（`CLOUD_COLLAB_BASE_URL`，默认空）——团队案件库地址。留空时按 `ai.account.base-url` 所属站点派生官方案件库（大陆站 `https://case.aiworkdeck.com`，国际站不提供）；派生与校验的唯一出口是 `com.checkba.version.OfficialCloudEndpoint`，机制见 version-control 领域文档。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
 - **官方托管实例已上线**（2026-08-07）：addin.aiworkdeck.com，北京 ECS 与官网共机；专用 profile
   `application-cloud.yml`（PG + pgvector、RemoteIpValve——不开的话反代后按 IP 的失败锁定退化成全站一把锁）；
@@ -302,8 +339,18 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 桌面端此前**全应用没有登出入口**：个人中心那个按钮写着 `v-if="!isDesktop"`，桌面端不渲染；
 能找到的两个近亲各只做一半，且都藏在设置页深处——「系统设置 → 账户与用量 → 断开连接」
-只摘账户，「个人中心 → 设置 → 授权 → 解除授权」只清授权票据。现在收成一个动作，
-入口两处：**个人中心 → 设置 →「登录」组**，以及**应用菜单 `app.logout`（`app:logout`）**。
+只摘账户，「个人中心 → 设置 → 授权 → 解除授权」只清授权票据。现在收成一个动作。
+**2026-08-27（dev-board#205）「断开连接」按钮已废**：AdminPane 账户卡那颗改成
+「退出登录」（`onSignOut` → `signOut()`），入口共三处：**顶栏头像下拉**、
+**账户与用量 → 账户卡**、**账户与安全 →「登录」组**（外加应用菜单 `app.logout`）。
+用户可见文案里只有「退出登录」一个词；「解除授权」保留为账户与安全里的高级动作
+（只清本机解锁票据），配了说明文案。别再新增自拼 disconnect/deactivate 的入口。
+
+**SKU 解锁的前端刷新契约（dev-board#201，2026-08-27）**：`UnlockHint` 购买成功
+（含 already_owned）后除 `awd:wallet-refresh` 外还广播 **`awd:entitlements-changed`**
+（payload `{skuId}`）。被额度挡内容的面板必须订它重拉列表——`hiddenCount`/`limited`
+都是后端算的，只刷权益单例不重拉列表，横幅会停在购买前的旧值（剪贴板与暂存区
+都踩过）。现有订阅方：`ClipboardPanel`（refresh）、project-overview（loadStagingUsage）。
 
 两层必须分开判，合成一刀会把人关在自己数据外面：
 
@@ -409,7 +456,11 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 | 端点 | 鉴权 | 桌面调用点 |
 |---|---|---|
 | `POST /api/license/verify-key` → `{valid, plan}` | 匿名 | `LicenseService.callVerifyKey` |
-| `GET /api/account/me` → `{username, displayName, balanceCents, plan, createdAt}` | Bearer | `connect()` 校验 Key、`fetchProfile()` 取余额 |
+| `GET /api/account/me` → `{accountId, username, displayName, balanceCents, plan, createdAt, avatarUpdatedAt, displayNameIsDefault}` | Bearer | `connect()` 校验 Key、`fetchProfile()` 取余额、`profileIdentity()` 取身份视图 |
+| `PATCH /api/account/profile` `{displayName?, bio?}` → `{displayName, bio}` | Cookie 或 Bearer | `updateDisplayName()`；400 `invalid_display_name` |
+| `POST /api/account/avatar` multipart `file` → `{avatarUpdatedAt}` | Cookie 或 Bearer | `uploadAvatar()`；4xx `too_large`/`invalid_image`/`unsupported_format` |
+| `DELETE /api/account/avatar` → `{avatarUpdatedAt:null}` | Cookie 或 Bearer | `deleteAvatar()` |
+| `GET /api/avatar/{accountId}?v=` | 匿名 | 头像地址由桌面端按 `accountId` + `avatarUpdatedAt` 拼好下发 |
 | `GET /api/account/entitlements` → `{entitlements:[{feature, purchasedAt, orderId}]}` | Bearer | `fetchEntitlements()` |
 | `GET /api/account/ledger?limit=50` → `{entries:[...]}` | Bearer | `fetchLedger()`，桌面只挑 `kind=ai_alloc` 显示 |
 | `GET /api/account/ai-usage`(*) → `{configured, hasKey, limitUsd, usageUsd, remainingUsd, keyMasked}` | Bearer | `fetchAiUsage()` |
@@ -486,7 +537,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
    选择结果存 `SystemSetting` 而不是 `~/.aiworkdeck/identity.json`：存的是指向同一个库里 user 表的外键，
    放进被指向的库才能与数据同生共死（还原旧库时指针跟着回退）；license/account 描述的是机器授权，独立于库是刻意的。
    测试账号前缀白名单（`qa_bot_` / `claude-e2e` / `e2e_keepalive`）**保守到只排除脚手架自造账号**，
-   真实账号一个都不许被误排。`displayName` 改名收窄到 `username=admin`——改真实账号的名字会让用户在选择页里认不出自己。
+   真实账号一个都不许被误排。`displayName` 改名收窄到 `username=admin`——本机替用户改名会让他在选择页里认不出自己。
+   注意口径（2026-09-10 改写）：真实账号的展示名**不被 `LocalIdentityService` 改名，但会随官网刷新**
+   （`AccountIdentitySync`，官网是唯一权威源）。这条不是「一个字都不动」。
 5. **免费额度只隐藏、不删数据**。这是本领域最硬的一条红线：剪贴板是**查询侧过滤**（超出的行留在库里，
    解锁后原样可见），缓存区是**移入时拒绝**（区内已有文件一个都不动，移出方向永不拦截）。
    全 diff 里没有任何 delete/purge 路径被额度逻辑触发，任何「顺手清理超额记录」的改动都是回归。
@@ -530,14 +583,16 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     `account-login/send-code` 还把「尝试」记在出站之前（与 `/sms/send-code?scene=login` 相反——
     那条身后有用户名口令挡着），否则一串无效手机号就能免费换来等量对官网出站，IP 额度永远耗不尽。
 
-14. **首启向导不预选 AI 供应商**。曾经预选「本地 Ollama」，没装 Ollama 的用户一路点「完成设置」，
+14. **首启向导不预选 AI 供应商**（2026-08-21 起向导已无供应商单选，本条只剩后端 `WizardController`
+    拒空 `activeProvider` 那一道仍在生效；历史如下）。曾经预选「本地 Ollama」，没装 Ollama 的用户一路点「完成设置」，
     要到发第一条消息才收到 Connection refused（`ChatModelFactory` 只在 OPENROUTER 下防回退 Ollama，
     反向没有保护）。现在 `activeProvider` 初值是空串、由用户显式选，唯一的例外是「已连接账户且已分配额度」
     时自动预选平台通道——用账户 Key 解锁的人买的就是这条通道，不该再被引导去配别家的 Key。
     向导提交前的空值拦截在 `handleSubmit`，后端 `WizardController` 也拒空 `activeProvider`（两道都在才算数）。
     取值本身的合法性（三档枚举）在 `AdminConfigController.toSettingsUpdates`，两个入口共用。
 
-15. **向导里每一条「下一步」都必须能在向导里做完**。平台通道曾经在未连接账户时置灰 +
+15. **向导里每一条「下一步」都必须能在向导里做完**（规则仍然有效；下文的 Ollama 探测实例
+    已随 2026-08-21 官方版收敛从向导里删除，只留作此规则的历史例证）。平台通道曾经在未连接账户时置灰 +
     提示「进入产品后在系统管理粘贴 Key」——那是死路：试用码解锁的用户在向导里无论如何都点不亮它，
     只能先随便选一家凑合。现在 `AWD_CLOUD` 恒可选，选中就地展开连接块（`handleConnectAccount` 调
     `POST /api/account/connect`，与 admin 页 `onConnectAccount` 同链路：连接 → 重取状态 →
@@ -699,11 +754,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   后端多出的服务以 key 原样显示，不静默漏掉。`LOCAL_TIER_READY.asr=false` 是**本地 ASR 未随包
   发出**的唯一开关，P3 落地时连同「切换时就地探一次 + 下载模型」一起翻牌。
 - `frontend/src/locales/{zh-CN,en-US}/platform.js` — 新命名空间，向导与 admin 面板共用。
-- `frontend/src/pages/admin/admin.vue` 的 `platform` 面板 — 七行档位 + 每行的
-  「使用自己的 Key（高级）」折叠区（**21 个 BYOK 字段从「系统配置」搬到了这里**，
-  `config` 面板只剩 OpenRouter 那两个）。深链 `?nav=platform&service=<key>` 就地展开某一项。
+- `frontend/src/components/admin/AdminPane.vue` 的 `platform` 面板 — 七行档位（platform / local 两档）。
+  **2026-08-21 起前端不露 BYOK**：「使用自己的 Key（高级）」折叠区与 21 个凭证字段已删，
+  生效值为 byok 时只在下拉里如实显示。深链 `?nav=platform&service=<key>` 只落到面板本身。
 - `frontend/src/pages/wizard/wizard.vue` 步骤 2 — 从三组共 9 个输入框换成「平台服务总览 +
-  就地连账户」，默认展开，**不拦提交**（向导只拦 AI 供应商那一项）。
+  就地连账户」，默认展开，**不拦提交**（向导只拦步骤 1 的账户/同意那几项）。
+  2026-08-21 起步骤 2 不再渲染第二个连接块（步骤 1 的连接块现在恒常在），未连账户时只指一句
+  「在上方连接账户」；「使用自己的 Key（高级）」指路文案与 `servicesAdvancedHint` 键一并删除。
 - `frontend/src/components/MeetingRecordingPanel.vue` — 录音开始**之前**显示档位与就绪状态，
   「录音不出本机」开关在本地引擎就绪前一律置灰（理由见地雷 33）。
 - `frontend/src/services/api.js` 的 `getPlatformServices` / `setPlatformServiceProvider`。
@@ -723,6 +780,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   一个查 `/api/gateway/asr/task/{id}`，一个查听悟 OpenAPI。**轮询走哪条路由由这两列决定，
   不由当前档位设置决定**：用户转写途中切档，按设置分派就会拿网关的 taskId 去问听悟，
   结果是永远查不到的任务 + 永远结不了的预扣。
+- **静音不等于免扣（dev-board#478）**：听悟完成但无有效语音时客户端落 `EMPTY`，
+  结算仍在官网、取不到词尾时间时可能回落预扣估算。录前文案与 EMPTY 状态必须提示
+  仍可能计费、重试可能再次计费；不许客户端擅自承诺退款。EMPTY 的平台计费提示看
+  `gatewayTaskId`，不看用户此刻的档位设置。
 - `isConfigured()` 按档分：platform 档「已连账户」即算配好，byok 档仍要那 5 个凭证。
 - 直传是**普通 HTTP PUT**（`BinaryUploader` 接缝），OSS SDK 不引到这条路上：签名官网签好，
   客户端只负责发字节。`Content-Type` 进了 OSS 签名，必须逐字用 ticket 下发的那个值。
@@ -919,12 +980,244 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，
     他的下一步是来问账是不是没记上。
 
+43. **测 `startTranscription` 时，先把后台线程卡住再断言状态**。`save` 桩原样返回入参，
+    返回值与测试持有的实体是**同一个可变实例**；提交后 `executor` 里的 submit 第一步
+    `findById` 拿到同一实例，紧接着因桩里没有音频文件走 `failMeeting` 写成 FAILED，
+    与断言抢跑。本机断言总是先做完永远复现不出，CI 上已经三次翻红（08-30 / 09-03 /
+    09-09，三条不同用例，每次都是 expected TRANSCRIBING but was FAILED）。生产没有
+    这个竞态（JPA 给后台线程另一份实例），所以修在测试：在 `findById` 桩里按线程身份
+    把非调用线程 `await` 在一把 latch 上，断言做完 `finally` 放行——
+    `MeetingTranscriptionTimeoutTest.startTranscriptionStampsAnchor` 与
+    `MeetingTranscriptionServiceTest.concurrentStartTranscriptionOnlySubmitsOnce` 是现成写法。
+    要「还原病灶」就在断言前插 200ms 睡眠，必红。
+
+## 团队通道（2026-09-07，dev-board#496）
+
+律所管理者在 IDE 内看全所使用统计。设计 `docs/superpowers/specs/2026-09-07-law-firm-team-usage-design.md`
+（**与实现有出入以代码为准**；本节记的是桌面侧，官网侧的表与端点在官网仓）。
+
+**红线一条，先背下来：团队通道与匿名 telemetry 物理分离，永不合并。**
+`legal/PRIVACY.md`、README 两版、官网 `lib/db.ts` 的建表注释三处都公开承诺了
+「随机安装标识与设备、账户、个人身份无关」。团队统计恰恰相反——它带 `Bearer awdk_`、
+按 accountId 落库。两条通道的**端点、表、开关、上报体全部独立**：
+- 匿名：`telemetry.ingest-url` + `POST /rollup`，无鉴权，开关 `telemetry.rollup.enabled`（默认开）；
+- 团队：`POST {site}/api/account/team/usage`，Bearer，开关 `team.usage.enabled`（**默认关**）。
+给 `telemetry_event` 加 userId/projectId 来「省事」是这条红线最典型的破法——加了就毁掉匿名承诺，
+所以团队侧宁可重算一遍六个计数（见 `TeamUsageRollupService` 的类注释）。
+
+**文件**
+- `service/team/TeamUsageSettings.java` — 本机开关 + 上报台账（`team.usage.enabled` /
+  `.lastUploadAt` / `.uploadedDates`，都在 `system_setting`）。**刻意不复用 `TelemetrySettings`**。
+- `service/team/TeamUsageRollupService.java` — `rollupFor(date, userId)` 出日聚合 payload。
+  纯读、不写库、不发网络。数据源三处：`work_session`（投入时长，按 **startedAt 落日**，
+  排除 DRAFT 与 ACTIVE，总数与每个项目行都封顶 16 小时）、本机 `telemetry_event` 当日计数
+  （六个，派生口径与 `TelemetryRollupService` 逐条对齐，改那边要跟着改）、`token_usage`
+  （按 costSource 分 platform/estimate 两桶，**不得合并**）。
+- `service/team/TeamUsageUploadService.java` — 启动 + 24h，静默失败；`uploadNow()` 给设置页按钮用，
+  **如实回传跳过原因**（disabled / not_local_mode / not_connected / no_team）。
+- `service/team/TeamSettingsCache.java` — 本机只读缓存「共享项目名」，读不到一律 false。
+- `WorkSessionRepository.findByUserIdAndStartedAtBetween` — 新增 finder；状态与段类型的过滤
+  **刻意留在聚合层**，那是统计口径的一部分。
+- `InstallIdentityService.projectKey(projectId)` — `HMAC-SHA256(install-secret, "project:"+id)` 前 16 hex。
+- `AccountController` 的 `/team*` 一组透传（照 membership 模板）+ `AccountService` 的对应方法
+  （`sendJson` 是 POST/PUT/PATCH/DELETE 的统一出口，HTTP 缝仍是 `AccountTransport`）。
+- 前端 `components/admin/TeamPanel.vue`（设置页 personal 组的 `team` 分区，接在 `AdminPane`
+  `activeNav` 链尾）、`services/api.js` 的 13 个团队函数、`locales/{zh-CN,en-US}/team.js`。
+
+**上报四道闸，缺一不发**（`TeamUsageUploadService.run()`，顺序即判定顺序）：
+开关开 → **local-mode** → 账户已连接 → 确实在某个团队里。
+第二道最容易被当成多余：server 模式（团队案件库 / 插件云实例）下账户是**机器级**状态，
+而使用数据是**每个租户各自的**，照发等于把全服所有人的活动记在管理员账户名下。
+同理 `GET /api/account/team/usage-sharing` 回的 `available` 由后端下发，前端不许靠
+「有没有桌面壳」猜——猜错就是给用户一个永远不生效的开关。
+
+**换账户要清团队台账**（同地雷 22）：`AccountSwitchCleanup.invalidateAll()` 里加了
+`teamUsageSettings.resetLedger()` + `teamSettingsCache.clear()`。「哪些天传过了」记的是
+「传给**那个**账户」，换了人必须从头传；「共享项目名」是上一个团队的设置，留着会让
+下一个团队的日聚合按旧团队口径带上项目名。
+
+**动词的一处刻意偏差**：官网侧「改团队设置」「改成员角色」是 PATCH，本机透传层用 PUT。
+前端只有 `uni.request` 一个出口，它的 method 枚举里根本没有 PATCH。出站到官网那一跳仍是 PATCH。
+
+**已知口径缺口（写在代码注释里，不要当 bug 修掉）**：
+1. `telemetry_event` 没有 userId/projectId，所以六个计数是**整机口径**，一机多人时全记在当前本机用户名下；
+2. 项目行的 `editActions` 恒为 0（编辑动作只在匿名表里，那张表没有 projectId）；
+3. 项目行的 `aiTurns` 用当日该项目的 `token_usage` **行数**近似（一行 = 一次 LLM 调用），
+   带工具循环的一轮对话会产生多行，所以它偏大且各项目之和 ≠ 顶层 aiTurns。相对比较可信，绝对值不可信；
+4. 项目短码是 `HMAC(install-secret, localProjectId)`，**跨机器不可关联**——版本记录模块
+   今天没有远端仓标识（全仓 grep 零命中），所以同一个案件在两位律师机器上是两个短码。
+   将来有了远端标识改成 `HMAC(teamId, remoteId)` 即可聚成一行；
+5. 「节约时间」是带系数的估算，公式由**服务端下发**（`savedMinutesFormula`），
+   前端只负责把它印在脚注上。**绝不在前端写死系数**，也绝不把它做成一个看起来精确的数字。
+
+**待官网补的契约字段**：「退出团队」需要知道自己的 accountId，而设计 §6 的 `GET /api/account/team`
+只写了 `{team, myRole, members[], pendingInvites[]}`。前端读 `data.myAccountId`，
+**取不到就不显示这个动作**——绝不自己编一个 `me` 之类的 id 去打 DELETE，猜错会把别人踢出团队。
+
+### 三层结构与加入流程（设计 §10）
+
+```
+个人（官网注册） → 团队 team（一人一团队；OWNER/ADMIN/MEMBER） → 律所 firm（多团队并入，由总部团队管理）
+```
+
+律所**没有独立人员名单**：管理者就是总部团队的 OWNER/ADMIN，这样不破坏「一人一团队」。
+桌面侧新增的透传端点（`AccountController` + `AccountService`，一律只转发）：
+`POST /team/join`、`POST /team/join-code/regenerate`、`POST /team/firm`、`POST /team/firm/join`、
+`PUT /team/firm`（**出站 PATCH**，同上面那处动词偏差）、`POST /team/firm/join-code/regenerate`、
+`DELETE /team/firm/teams/{teamId}`；`GET /team/summary` 多收一个 `scope=team|firm`。
+
+**归一化不是鉴权。** `range`（7/30/90）与 `scope`（team/firm）在桌面端只做「值在枚举内」的
+归一，**能不能看全所由官网按角色判**。把角色判定抄一份到桌面端，等于给了「改本机一个布尔值
+就看全所」的机会，而真正的闸本来就在服务端——`TeamPanel` 的 `canManage` / `canManageFirm`
+同理，只决定按钮显不显示。「是不是总部团队」读服务端下发的 `firm.isHead`，
+不拿 `firm.headTeamId === team.id` 自己推（两个字段哪个缺了都会推错）。
+
+**「退出律所」与「移出团队」是同一个端点**（`DELETE /team/firm/teams/{teamId}`），
+本团队退出时拿的是自己的 `team.id`——**取不到就不发**，猜一个 id 出去会把别人的团队踢出律所
+（同上面 `myAccountId` 那条）。
+
+### 入口地图（验收清单，缺一项算没做完；设计 §10.4）
+
+尽调插件的教训：核心能力做好了、UI 上没入口，用户不知道怎么用，只能重新发版。六条都有源码级护栏
+（`frontend/tests/team/team-panel-source.test.mjs`）：
+
+1. 设置导航「团队」**常显**——`navItems` 里那一项不挂 `desktopOnly`、落 `personal` 组
+   （`system` 组对非管理员整组收起，落进去等于对普通成员隐身）。
+2. 设置页「账户与用量」的账户卡里一行「团队：未加入 / 团队名 · 律所名」+「前往团队」，
+   点了在 `AdminPane` 内部 `onNavTap({key:'team'})` 切分区。**问不到时整行不渲染**
+   （`teamLine.loaded`），不拿「未加入」去顶「没问出来」。
+3. 官网账户页「我的团队」页签——官网侧，不在本仓。
+4. 无团队态三条路**并排**（`.join-paths` 是 flex）：创建团队 / 输入 8 位邀请码 / 收到的邀请。
+   竖着叠三张卡等于把第三条藏在一屏之外。
+5. 团队看板「律所」区**常显**：未入所给「创建律所」「输入律所邀请码并入」（仅 OWNER 可操作，
+   其余人看到的是「只有负责人可以」的说明，而不是这一层整个消失），入所后给律所名、团队列表
+   （总部标记 + 人数）、总部管理者可见律所邀请码与「移出团队」、子团队 OWNER 可「退出律所」；
+   看板顶部「本团队 / 全所」切换**只在入所后出现**（没律所时「全所」不是真实存在的视角），
+   退出律所时 `scope` 要复位回 `team`，否则会一直打必然被拒的请求。
+6. 数据共享开关与「立即上报」在看板**顶部**，不在最底下——它决定「这个团队有没有数据可看」，
+   压在底下等于让用户滚过两张空表才发现自己一直没开。
+
+团队邀请码在**成员区顶部**（邀请人的第一动作就是把码发出去），仅 OWNER/ADMIN 可见——
+码等于一张入场券。
+
+### 界面口径（走查 2026-09-07 修的一批，改 TeamPanel 前对一遍）
+
+- **KPI 磁贴用 `grid-template-columns: repeat(5, minmax(0, 1fr))`**，两种更「聪明」的写法实测都不行：
+  `flex: 1 1 140px`（改前的写法）在 1440 窗口下裂成 4+1，`auto-fit + minmax(120px,1fr)` 只是把
+  这个断点挪到容器 600px 附近——对应 1280 宽的窗口，最常见的笔记本尺寸，照样 4+1。
+  固定五列实测容器 600px 以上五块同排且文字零裁切。`minmax` 的下界必须是 `0`（`auto` 下界
+  等于内容宽，长文案会把列撑开又变回换行）。这一页整个没有 `@media`，别为这一处开先例：
+  容器宽 ≈ 窗口宽 − 628px 是量出来的经验值，不是契约。
+- **KPI 第一块叫「使用人数」不叫「本周使用人数」**：档位可切 7/30/90，写死「本周」在另外两档上是错的；
+  「几人里有几人」走 caption（`kpiActiveMembersCaption`），**分母取不到时整行不显示**，
+  不拿活跃数顶成分母。
+- **`.team-btn` 必须 `inline-flex` + `align-self: flex-start` + `width: auto`**：`.section-body`
+  是竖向 flex，块级按钮会被拉满整张卡。
+- **开关行不许把上面那行标题原样念第二遍**（`sharingSwitchDesc` 是说明不是标题）：同一张卡上
+  出现两遍同一句话，用户会以为这是两个不同的开关。
+- **服务端没给的值不编**：邀请到期时间取不到就说「以官网为准」（绝不自己按「7 天」算一个日期），
+  律所各团队合计只在 `summary.teams` 存在时才渲染（`firm.teams` 只有名册没有统计数字）。
+- 项目**已有别名时**按钮说「改别名」；待接受邀请行里「撤销」与角色标签至少隔 16px。
+- `.team-pane` 留 `padding-bottom: 72px`：右下角反馈浮窗是全局元素、不改，但要给它让出高度，
+  保证面板最后一行仍可点。
+
+## 跨设备传输的内部记账口（2026-08-28，dev-board#251）
+
+云后端对已桥接用户没有任何 awdk_（明文不落库），官网也否决过「凭 accountId 换 key」的
+S2S 主凭据——跨设备文件传输的扣费因此走**窄权限内部记账口**：官网
+`POST /api/internal/transfer`（quote/charge/refund，只能按 accountId 对 transfer/relay
+一种计价项扣/退 `service_spend`，金额由服务端按 service_pricing 现算），鉴权 =
+env `AWD_TRANSFER_BILLING_SECRET` 恒定时间比较（未配恒 404）+ nginx `^~ /api/internal/`
+return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
+`service/mobile/TransferBillingClient`（DISABLED/UNAVAILABLE/NO_CREDITS 三 Kind，
+失败绝不免费放行）。**没有新增 ledger kind**（service_spend + meta.service=transfer）。
+细节见 mobile-sync.md「跨设备文件传输」节与官网仓 DEPLOY.md §7.4。
+
+## 身份展示：展示名与头像以官网为唯一权威源（2026-09-10，dev-board#564-#567）
+
+设计 `docs/superpowers/specs/2026-09-10-identity-display-source-design.md`。治的是这个病：
+手机号注册的官网账户自动生成用户名 `u`+随机串、展示名打码手机号，而桌面端 `account.json` 与案件库
+`awd_` 用户在连接/桥接那一刻抄一份展示名之后**永不刷新**，头像各存各的。
+
+**唯一权威源是官网**，本机与案件库都只读、随官网刷新；用户名退成内部标识（**不改名**、任何界面不当名字显示）。
+
+桌面侧（local-mode）四个端点，一律转发官网 + 把结果同步回本机 `User` 行：
+
+| 方法 | 本机路径 | 出站 | 回什么 |
+|---|---|---|---|
+| GET | `/api/account/profile` | `GET /api/account/me` | `{accountId, displayName, avatarUrl, displayNameIsDefault}`，**不回 username** |
+| PUT | `/api/account/profile` | `PATCH /api/account/profile` | 官网回包 `{displayName, bio}` 原样透传 |
+| POST | `/api/account/avatar` | `POST /api/account/avatar`（multipart `file`） | `{avatarUpdatedAt, avatarUrl}` |
+| DELETE | `/api/account/avatar` | `DELETE /api/account/avatar` | `{avatarUpdatedAt:null, avatarUrl:null}` |
+
+要点：
+
+- **本机 PUT / 出站 PATCH** 是刻意偏差，与团队那组同源（uni.request 的 method 枚举里没有 PATCH）。
+- `avatarUrl` 由桌面端按 `accountId` + `avatarUpdatedAt` 拼成 `{base}/api/avatar/{accountId}?v=...`，
+  **没传过头像（`avatarUpdatedAt` 为 null）就回 null**——硬拼一个必然 404 的地址只会让界面白等一次网络请求。
+  `accountId` 连接时落进 `account.json`，老盘没有这一项时补拉一次 `/me` 回填。
+- **地雷（dev-board#603）：官网 `GET /api/avatar/{accountId}` 的响应带
+  `Cross-Origin-Resource-Policy: same-site`，而桌面主窗口是 `loadFile` 出来的 `file://` 页面，
+  与 `www.aiworkdeck.com` 永远不可能同站** —— Chromium 在网络层就把图拦掉
+  （`net::ERR_BLOCKED_BY_RESPONSE.NotSameSite`），渲染层是一次静默失败：`<image>` 什么都不画，
+  首字母分支又因为 `avatarUrl` 是真值而不渲染，屏幕上只剩一颗 `--awd-accent` 纯色圆。
+  `webPreferences.webSecurity:false` **关不掉这一条**（实测 Chrome 带 `--disable-web-security` 照样拦）。
+  桌面侧的解法在 `desktop/main/main.js` 的 `attachAvatarCorpRelaxation()`：按路径
+  `*://*/api/avatar/*` 挂 `onHeadersReceived`，只把 CORP 改写成 `cross-origin`，
+  且必须赶在第一次 `load` 之前挂。**正解在官网侧**（这个端点本来就是匿名公开的，应当发
+  `cross-origin`）；官网改好之后桌面这段可以撤。护栏 `frontend/tests/identity/avatar-refresh.test.mjs`。
+- **写完头像要 seed 那份 60 秒 `profileCache`，不是作废**（`AccountService.seedAvatarVersion`，dev-board#603）：
+  `profileIdentity()` 的 `avatarUpdatedAt` 来自这份缓存，而 `AccountIdentitySync.refresh()`
+  恒以 `touchAvatar=true` 回写本机 `User` 行——缓存里还是上传前那份的话，接下来任何一次
+  `/api/account/status|profile` 都会把刚写好的头像回滚（首传即回滚成 null）。
+  只作废不够：下一次要重新问官网 `/me`，刚 POST 完那一瞬间读侧未必跟上，拿回旧版本号照样回滚；
+  新版本号这一刻就在手里，直接写进缓存。**不要给 `AccountIdentitySync.refresh()` 加时间戳比较**——
+  那是引入第二份真相。
+- **上传拼不出 `avatarUrl` 一律按失败抛 MALFORMED**：回一个「成功但 `avatarUrl` 为 null」会让
+  `AccountController` 反手 `applyAvatarUrl(null)` 清空本机行，而 `api.js` 只看 `code` 照弹「上传成功」。
+- 界面跟上靠 `uni.$emit('awd:identity-updated')`：发的一端是 `PersonalSettingsPanel`
+  （改名/传/删三处）与 `AdminPane.triggerAvatarUpload`，收的一端是 `AdminPane` 与
+  `project-overview`（顶栏头像 + 参与人堆叠）。`project-overview` 是 `navigateTo` 反复进入的多实例页，
+  `uni.$on` 必须在 `beforeUnmount` 里按引用 `uni.$off`。
+- **同步唯一出口是 `service/account/AccountIdentitySync`**（`refresh` / `refreshQuietly` /
+  `applyDisplayName` / `applyAvatarUrl`），落点四处：连接账户时、每次 `GET /api/account/status`
+  （应用启动会拉）、`GET /api/account/profile`、三个写动作之后。
+  两条红线：**未连接 / 官网不可达时不动本机行也不报错**；**非 local-mode 整条短路**
+  （团队案件库与插件云上账户是机器级状态，按它改某一个租户的 `User` 行是张冠李戴，同 `TeamUsageUploadService` 第二道闸）。
+- `LocalIdentityService` 那条「真实账号 displayName 不动」的纪律**改写为**：不被本机改名，
+  但随官网这个权威源刷新（见「关键文件地图」与地雷 4）。
+- 既有 `POST /api/users/avatar`（本机上传落本机表）**保留给自建服务器**，local-mode 下前端不再调它。
+- `GET /api/account/status` 的回包多一个 `accountId`（就是公开头像地址里的那个 id，不是凭据）。
+- 案件库侧（server，profile `case`）四处一并改：`AwdkLoginService.resolveUser` 每次桥接刷新展示名、
+  `CollaboratorAdmission` 名录回查时刷新、`ProjectMemberController.getMembers` 的头像改走
+  `ProjectMemberService.avatarUrlFor`、`VersionController.userName` 改用展示名（见 version-control.md）。
+  `UserService.refreshDisplayNameFromWebsite` 是这三处共用的唯一写入点：**非空且不同才写，username 一个字不动**。
+- 官网侧的 `displayNameIsDefault` 只用于引导「填写你的姓名」，桌面端不据它做任何拦截。
+
+## 窄权限内部口第三条：同事名录（2026-09-10，dev-board#550 #551）
+
+官网内部口现在有**三条**，形状完全一致（同机 127.0.0.1 直连 Next、头 `X-Internal-Secret`、
+各自一把专用密钥、未配置或不匹配一律裸 404、公网 nginx `location ^~ /api/internal/ { return 404; }` 兜底），
+**三把密钥互不复用**：
+
+| 口 | 官网 env | 本仓出口 | 本仓属性 | 回什么 |
+|---|---|---|---|---|
+| `POST /api/internal/transfer` | `AWD_TRANSFER_BILLING_SECRET` | `service/mobile/TransferBillingClient` | `mobile.transfer.billing.*` | 跨设备传输的报价/扣费/退费 |
+| `POST /api/internal/account` | `AWD_MOBILE_BILLING_SECRET` | `service/mobile/MobileBillingClient` | `mobile.billing.*` | 手机端账户解析/余额/充值/注销 |
+| `POST /api/internal/collab-directory` | `AWD_COLLAB_DIRECTORY_SECRET` | `service/collab/AccountDirectoryClient` | `collab.directory.*` | 加同事时的账户是否存在 + 展示名/手机号 + 双方团队律所归属 |
+
+第三条**同样不违反**「per-user 平台 AI key」那条裁决（doc/desktop-contract.md）：它回的是名录事实，
+**不发任何凭据**——拿到它的答复也换不出任何用户的 key、令牌或会话，泄露的上界是「某个手机号在官网注册过、
+展示名是什么、和谁同团队」，而这几样正是发起查询的律师本来就要看到的东西。用途单一、密钥单一，
+撤销就是把官网那一个 env 拿掉。案件库侧的消费者是 `CollaboratorAdmission`（见 version-control.md「加同事」）。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
   `service/LicenseServiceTest`、`service/TrialCodeVerifierTest`、`service/LocalIdentityServiceTest`、
   `service/LocalIdentityRealShapeIntegrationTest`（真机形态种子库跑选择链路）、
   `service/account/AccountServiceTest`、`service/account/AccountEndpointTest`、
+  `service/account/AccountIdentitySyncTest`、`controller/AccountControllerProfileTest`（身份展示那一组），
   `service/entitlement/EntitlementServiceTest`、`service/entitlement/FeatureCatalogTest`、
   `service/quota/StageQuotaServiceTest`、`service/storage/StorageLocationServiceTest`、
   `service/ClipboardQuotaTest`、`service/ai/PlatformUsageAccountantTest`、`service/ai/ChatModelFactoryTest`、
@@ -953,11 +1246,23 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   （byok 档行为不变的基线）、`service/meeting/MeetingRecordingNoticeTest`（告知默认未确认 /
   版本作废 / 正文说全四件事 / 三个掉线子串与 emoji）、
   `controller/PlatformServiceControllerTest`（另含用量 null≠0、两个阈值的往返与拒非法、
-  告知端点缺字段不算确认）、`controller/ExternalControllerEnvelopeTest`
+  告知端点缺字段不算确认）；
+  团队通道：`service/team/TeamUsageRollupServiceTest`（DRAFT/ACTIVE 排除、16h 上限、
+  短码稳定且不泄露原 id、共享项目名默认关、六个计数的派生口径、token 分桶）、
+  `service/team/TeamUsageUploadServiceTest`（四道闸 + 补传窗口 + 今天永不传）、
+  `controller/AccountControllerTeamTest`（透传不裁字段、range/scope 归一、scope 归一不是鉴权、
+  层级七个动作原样转发、参数校验回业务信封、usage-sharing 不打官网）、
+  `service/account/AccountServiceTest`（层级动作的方法与路径逐条对齐官网契约、改律所名出站仍是
+  PATCH、路径段编码、summary 带 scope 且老签名默认 team）、
+  `service/account/AccountSwitchCleanupTest`（换账户清团队台账）；
+  `controller/ExternalControllerEnvelopeTest`
   （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
-- 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
+- 前端：`cd frontend && npm run check:emits` + `npm run build:h5`；
+  团队分区另跑 `npm run test:team`（已进 ci.yml frontend job）：文案红线（两语言键对拍、禁 emoji、
+  中文不含三个掉线子串、「估算」二字）+ 源码级契约（三态分支、入口地图六条、KPI 布局规则、
+  `.team-btn` 不撑满、邀请行显示角色与到期、scope 传参）。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
   `cd frontend && npm run test:desktop-e2e` 的 provision 会自动用试用码解锁并置向导。改解锁门/启动链必跑这两套。

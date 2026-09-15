@@ -1,8 +1,18 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="etb-wrap">
   <view class="etb" @tap="closeMenus">
-    <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去） -->
-    <scroll-view class="etb-scroll" scroll-x>
+    <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去）。
+         原生横向滚动条有 15px 高，会把这一段撑到 41px、在 38px 的行里被
+         align-items:center 顶得比右侧常驻区高半格（dev-board#502），但整条藏掉
+         又等于把「这里还能往右滚」从界面上抹掉（dev-board#543）——所以改成 4px
+         悬浮细滑轨（.awd-hairline-scroll，定义在 App.vue 全局样式里）。
+         滚轮转横滚**不能写成这里的 @wheel**：uni 会把事件重建成普通对象，
+         currentTarget 不是 DOM、连 delta 都没有，整条是死的（dev-board#543 复发的
+         正是这一步）——改在 mounted 里用原生 addEventListener 挂，见
+         utils/horizontalWheel.js 与本组件的 bindToolbarWheel。 -->
+    <scroll-view class="etb-scroll awd-hairline-scroll" scroll-x>
       <view class="etb-row">
         <!-- 撤销 / 重做 -->
         <view class="etb-btn" :class="{ off: undoDisabled }" :title="$t('editor.toolbar.undo')" @tap.stop="run('undo')">
@@ -15,11 +25,11 @@
 
         <!-- 段落样式 -->
         <view class="etb-drop" :class="{ open: menu === 'style' }">
-          <view class="etb-field w110" :title="$t('editor.toolbar.paraStyle')" @tap.stop="toggleMenu('style')">
+          <view ref="trig_style" class="etb-field w110" :title="$t('editor.toolbar.paraStyle')" @tap.stop="toggleMenu('style')">
             <text class="etb-field-t">{{ styleLabel }}</text>
             <text class="etb-caret">⌄</text>
           </view>
-          <scroll-view v-if="menu === 'style'" class="etb-menu w160" scroll-y @tap.stop>
+          <scroll-view v-if="menu === 'style'" class="etb-menu w160" :style="popStyle(160)" scroll-y @tap.stop>
             <view v-for="s in styleOptions" :key="s.name" class="etb-item"
                   :class="{ on: s.name === state.paragraph.styleName }" @tap.stop="applyStyle(s.name)">
               <text class="etb-item-t">{{ s.label }}</text>
@@ -29,11 +39,11 @@
 
         <!-- 字体 -->
         <view class="etb-drop" :class="{ open: menu === 'font' }">
-          <view class="etb-field w110" :title="$t('editor.toolbar.font')" @tap.stop="toggleMenu('font')">
+          <view ref="trig_font" class="etb-field w110" :title="$t('editor.toolbar.font')" @tap.stop="toggleMenu('font')">
             <text class="etb-field-t">{{ fontLabel }}</text>
             <text class="etb-caret">⌄</text>
           </view>
-          <scroll-view v-if="menu === 'font'" class="etb-menu w180" scroll-y @tap.stop>
+          <scroll-view v-if="menu === 'font'" class="etb-menu w180" :style="popStyle(180)" scroll-y @tap.stop>
             <view v-for="f in fontOptions" :key="f" class="etb-item"
                   :class="{ on: f === state.character.font }" @tap.stop="applyFont(f)">
               <text class="etb-item-t">{{ f }}</text>
@@ -59,21 +69,21 @@
 
         <!-- 字色 / 高亮 -->
         <view class="etb-drop" :class="{ open: menu === 'color' }">
-          <view class="etb-btn" :title="$t('editor.toolbar.textColor')" @tap.stop="toggleMenu('color')">
+          <view ref="trig_color" class="etb-btn" :title="$t('editor.toolbar.textColor')" @tap.stop="toggleMenu('color')">
             <text class="etb-tx">A</text>
             <view class="etb-swatch" :style="{ background: state.character.color === 'auto' ? '#2C3338' : state.character.color }"></view>
           </view>
-          <view v-if="menu === 'color'" class="etb-palette" @tap.stop>
+          <view v-if="menu === 'color'" class="etb-palette" :style="popStyle(128)" @tap.stop>
             <view v-for="c in TEXT_COLORS" :key="c.v" class="etb-chip" :style="{ background: c.v === 'auto' ? '#2C3338' : c.v }"
                   :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('color', c.v)"></view>
           </view>
         </view>
         <view class="etb-drop" :class="{ open: menu === 'hl' }">
-          <view class="etb-btn" :title="$t('editor.toolbar.highlight')" @tap.stop="toggleMenu('hl')">
+          <view ref="trig_hl" class="etb-btn" :title="$t('editor.toolbar.highlight')" @tap.stop="toggleMenu('hl')">
             <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.marker" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <view class="etb-swatch" :style="{ background: state.character.highlight === 'none' ? 'transparent' : state.character.highlight }"></view>
           </view>
-          <view v-if="menu === 'hl'" class="etb-palette" @tap.stop>
+          <view v-if="menu === 'hl'" class="etb-palette" :style="popStyle(128)" @tap.stop>
             <view v-for="c in HL_COLORS" :key="c.v" class="etb-chip" :class="{ none: c.v === 'none' }"
                   :style="{ background: c.v === 'none' ? '#fff' : c.v }" :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('highlight', c.v)"></view>
           </view>
@@ -104,11 +114,11 @@
 
         <!-- 插入 -->
         <view class="etb-drop" :class="{ open: menu === 'insert' }">
-          <view class="etb-field w72" :title="$t('editor.toolbar.insert')" @tap.stop="openInsert">
+          <view ref="trig_insert" class="etb-field w72" :title="$t('editor.toolbar.insert')" @tap.stop="openInsert">
             <text class="etb-field-t">{{ $t('editor.toolbar.insert') }}</text>
             <text class="etb-caret">⌄</text>
           </view>
-          <view v-if="menu === 'insert'" class="etb-menu w200 pad" @tap.stop>
+          <view v-if="menu === 'insert'" class="etb-menu w200 pad" :style="popStyle(200)" @tap.stop>
             <!-- 一级清单 -->
             <template v-if="!insertMode">
               <view class="etb-item" @tap.stop="insertMode = 'table'"><text class="etb-item-t">{{ $t('editor.toolbar.insertTable') }}</text></view>
@@ -215,6 +225,20 @@
       <view class="etb-btn wide" :class="{ on: state.view.recordChanges }" :title="$t('editor.toolbar.trackChanges')" @tap.stop="toggleTrack">
         <text class="etb-tx sm">{{ $t('editor.toolbar.trackChangesShort') }}</text>
       </view>
+      <!-- 修订显示方式三态（dev-board#368）。当前态取自 get_ui_state 的真实读回，
+           不是本地记的；引擎不支持页边显示时中间项自动消失（退成两态）。 -->
+      <view v-if="state.view.revisionView" class="etb-drop" :class="{ open: menu === 'revview' }">
+        <view ref="trig_revview" class="etb-field w96" :title="$t('editor.toolbar.revisionView')" @tap.stop="toggleMenu('revview')">
+          <text class="etb-field-t">{{ revisionViewLabel }}</text>
+          <text class="etb-caret">⌄</text>
+        </view>
+        <view v-if="menu === 'revview'" class="etb-menu w150" :style="popStyle(150)" @tap.stop>
+          <view v-for="o in revisionViewOptions" :key="o.k" class="etb-item"
+                :class="{ on: o.k === state.view.revisionView }" @tap.stop="pickRevisionView(o.k)">
+            <text class="etb-item-t">{{ $t('editor.toolbar.' + o.t) }}</text>
+          </view>
+        </view>
+      </view>
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
@@ -227,8 +251,15 @@
   </view>
 
   <!-- 查找替换：自建面板，不走 LO 的 .uno:SearchDialog——真机审计实证那个对话框
-       弹得出来但**键盘关不掉**（画布聚焦时按 Esc 同样无效），挂上去就是个坑。 -->
-  <view v-if="findOpen" class="etb-find">
+       弹得出来但**键盘关不掉**（画布聚焦时按 Esc 同样无效），挂上去就是个坑。
+       **绝对定位浮在画布上，不占布局高度**（dev-board#503）：这一条留在文档流里
+       时，开关查找会让工具栏一高一矮，下面的 <webview> 跟着改尺寸，Electron 的
+       客体合成面在新尺寸那一帧到达前被整块画成黑色——用户看到的就是"点查找整个
+       编辑区黑一下"。给画布容器或 webview 元素铺底色都拦不住（客体面盖在上面，
+       真机探针实测过）；唯一有效的是根本不改 webview 尺寸。
+       钉法与 EvidenceStaleBar/状态胶囊同规矩（浮在画布上，不进流）。 -->
+  <view v-if="findOpen" class="etb-find-layer">
+  <view class="etb-find">
     <input class="etb-input fi" v-model="findText" :placeholder="$t('editor.toolbar.findPlaceholder')" @input="onFindInput" @confirm="findNext" />
     <text class="etb-find-n">{{ findStatus }}</text>
     <text class="etb-find-b" :title="$t('editor.toolbar.prevMatch')" @tap.stop="findPrev">{{ $t('editor.toolbar.prevMatch') }}</text>
@@ -239,7 +270,8 @@
     <text class="etb-find-b" :class="{ on: matchCase }" :title="$t('editor.toolbar.matchCase')" @tap.stop="toggleCase">Aa</text>
     <text class="etb-find-x" @tap.stop="toggleFind">{{ $t('editor.toolbar.close') }}</text>
   </view>
-  <text v-if="findOpen && findErr" class="etb-err bar">{{ findErr }}</text>
+  <text v-if="findErr" class="etb-err bar">{{ findErr }}</text>
+  </view>
   </view>
 </template>
 
@@ -264,6 +296,8 @@
 //   2) IME 覆盖层的 onCursorMoved（纯光标移动/画布点击——上面那条盖不住）
 //   3) 本组件自己发完命令之后
 // 没有轮询：以上三路已经覆盖了用户能让光标动起来的所有途径。
+
+import { bindHorizontalWheel } from '@/utils/horizontalWheel.js'
 
 const ICONS = {
   undo: ['M9 14 4 9l5-5', 'M4 9h10a6 6 0 0 1 0 12h-3'],
@@ -316,6 +350,12 @@ const TEXT_FORMS = {
   header: { title: 'headerTitle', ph: 'headerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'header' } },
   footer: { title: 'footerTitle', ph: 'footerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'footer' } },
 }
+// 用户选择正文内修订、纸外批注框或最终稿；旧 native margin 仅供内部兼容。
+const REVISION_VIEWS = [
+  { k: 'all', t: 'revisionViewAll' },
+  { k: 'balloons', t: 'revisionViewMargin' },
+  { k: 'final', t: 'revisionViewFinal' },
+]
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
 // 插入表格的网格选择器：8 行 × 8 列够覆盖手工建表的绝大多数情形，再大的表
 // 律师是从 Excel 粘过来或让 AI 生成的，不是在这里点出来的。
@@ -327,17 +367,19 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-insight', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
     // 宿主在「选区/光标动了」「文档改了」时自增，驱动激活态刷新。
     refreshKey: { type: Number, default: 0 },
     reviewOpen: { type: Boolean, default: false },
+    // 「依据」窗格（dev-board#182）此刻开着没有——按钮的按下态跟着它。
+    insightOpen: { type: Boolean, default: false },
   },
   data() {
     return {
-      state: EMPTY(), styleList: [], fontList: [], menu: '', formattingMarks: false,
+      state: EMPTY(), styleList: [], fontList: [], menu: '', popPos: null, formattingMarks: false,
       // 插入菜单：'' | 'table' | 'link' | 'comment'
       insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', formText: '', selText: '',
       // 查找替换
@@ -353,6 +395,17 @@ export default {
     TEXT_COLORS: () => TEXT_COLORS, HL_COLORS: () => HL_COLORS, GRID_CELLS: () => GRID_CELLS,
     TEXT_FORMS: () => TEXT_FORMS,
     inTable() { return this.state.selection.inTable === true },
+    // 页边显示要引擎支持（LO 7.1+ 且我们的 r3 表格补丁）。worker 读不到那个视图
+    // 设置时回 revisionMarginSupported:false，这里把中间项摘掉——不放做不到的选项。
+    revisionViewOptions() {
+      const balloonsOk = this.state.view.revisionBalloonsSupported !== false
+      return REVISION_VIEWS.filter((o) => o.k !== 'balloons' || balloonsOk)
+    },
+    revisionViewLabel() {
+      const cur = this.state.view.revisionView
+      const hit = REVISION_VIEWS.find((o) => o.k === cur)
+      return hit ? this.$t('editor.toolbar.' + hit.t) : this.$t('editor.toolbar.revisionView')
+    },
     // 单元格名如 "B2" → {row:2, col:'B'}。table_* 原语收 1 起的行号与列字母。
     cellPos() {
       const m = /^([A-Z]+)(\d+)$/.exec(String(this.state.selection.cellName || ''))
@@ -404,6 +457,16 @@ export default {
     executor: { handler() { this.bootstrap() }, immediate: true },
     refreshKey() { this.refresh() },
   },
+  mounted() {
+    // 滚轮横滚只能在真实 DOM 上挂（见 methods.bindToolbarWheel）。工具栏自己不会
+    // 重建 .etb-scroll，挂一次即可；组件被父级 v-if 掉时走 beforeUnmount 摘掉。
+    this.$nextTick(() => this.bindToolbarWheel())
+  },
+
+  beforeUnmount() {
+    if (this._toolbarWheelOff) { this._toolbarWheelOff(); this._toolbarWheelOff = null }
+  },
+
   methods: {
     async call(action, params) {
       if (!this.executor) return null
@@ -436,14 +499,45 @@ export default {
     },
     ui(name) { this.closeMenus(); return this.call('ui_command', { name }).then((r) => this.after(r)) },
     run(action) { this.closeMenus(); return this.call(action, {}).then((r) => this.after(r)) },
-    toggleMenu(name) { this.menu = this.menu === name ? '' : name },
+    toggleMenu(name) {
+      const opening = this.menu !== name
+      this.menu = opening ? name : ''
+      if (opening) this.capturePopPos(name)
+    },
+    // 弹层不能留在文档流里定位：工具栏行是横向 scroll-view（overflow 竖向 hidden），
+    // 外面还套着 pane/workbench 一串 overflow:hidden，绝对定位的菜单会被裁得只剩
+    // 顶边一条、看起来就是「点了打不开」（dev-board#245）。打开瞬间取触发器视口
+    // 坐标，用 fixed 逃出所有裁剪上下文；z 序压在弹窗遮罩（1000+）之下、窗格与
+    // 编辑器 webview 之上。
+    capturePopPos(name) {
+      const ref = this.$refs['trig_' + name]
+      const el = ref && (ref.$el || ref)
+      const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null
+      this.popPos = rect ? { left: rect.left, top: rect.bottom + 4 } : null
+    },
+    popStyle(width) {
+      if (!this.popPos) return {}
+      const vw = (typeof window !== 'undefined' && window.innerWidth) || 0
+      const left = vw ? Math.min(this.popPos.left, Math.max(8, vw - width - 8)) : this.popPos.left
+      return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
+    },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
+    // 纵向滚轮映射成横向滚动，否则窄窗口下右半截命令只能靠拖那条 4px 细滑轨
+    // （dev-board#502 / #543，与标签栏 rebindTabsWheel 同一实现）。必须用原生
+    // addEventListener 挂在 uni 渲染出的真实元素上——模板上的 @wheel 收到的是
+    // uni 重建过的普通对象，第一道守卫就 return（理由写在 horizontalWheel.js）。
+    bindToolbarWheel() {
+      const root = this.$el
+      const el = root && typeof root.querySelector === 'function' ? root.querySelector('.etb-scroll') : null
+      if (el) this._toolbarWheelOff = bindHorizontalWheel(el)
+    },
 
     // ---- 插入菜单 ----
     openInsert() {
       const opening = this.menu !== 'insert'
       this.insertMode = ''; this.insertErr = ''; this.grid = { r: 0, c: 0 }
       this.menu = opening ? 'insert' : ''
+      if (opening) this.capturePopPos('insert')
       // 选区文字要现读：菜单里要显示「给『xxx』加链接」，而 get_ui_state 只回
       // collapsed 布尔值。顺带刷新一次状态，免得按上一次的选区判空。
       if (opening) {
@@ -574,6 +668,12 @@ export default {
       const next = !this.state.view.recordChanges
       return this.call('set_track_changes', { on: next }).then((r) => this.after(r, false))
     },
+    // 修订显示方式。changed=false：一个字节都没改，别把文档标脏触发自动保存。
+    // 高亮不在这里本地置位——after() 会重跑 get_ui_state，按引擎读回的真实态刷新。
+    pickRevisionView(mode) {
+      this.closeMenus()
+      return this.call('set_revision_view', { mode }).then((r) => this.after(r, false))
+    },
     // LO chrome 开关。hideElement 的返回值不可信，原语内部用 isElementVisible
     // 复核后回报，这里只按结果记状态。
     async applyChrome(hide) {
@@ -647,32 +747,55 @@ export default {
 </script>
 
 <style scoped>
-.etb-wrap { display: flex; flex-direction: column; flex-shrink: 0; }
+/* position:relative 只为给下面那条浮起来的查找栏当定位参照；不设 z-index，
+   免得凭空造出一个会把 popStyle 的 fixed 弹层框住的层叠上下文。 */
+.etb-wrap { position: relative; display: flex; flex-direction: column; flex-shrink: 0; }
 .etb { display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 8px; flex-shrink: 0;
-  background: #FBFCFD; border-bottom: 1px solid #E9ECEF; }
-/* 查找替换条：工具栏下面单独一行，开着才占高度 */
+  background: var(--awd-bg); border-bottom: 1px solid var(--awd-border); }
+/* 查找替换条：浮在画布顶上，**不占布局高度**（dev-board#503）。占高度的话开关
+   查找就会改 webview 尺寸，客体合成面会整块黑一帧。z 40 压过画布上的既有浮层
+   （状态胶囊 20 / 证据投放层 25 / 改字提示条 30）。 */
+/* 宽度只包住内容、靠左：工具栏横跨画布与审阅面板，铺满整行会把面板顶部那排
+   修订/批注/底稿 tab 盖住；查找栏本身不到 600px，靠左浮着基本只压画布。 */
+.etb-find-layer { position: absolute; top: 100%; left: 0; width: max-content; max-width: 100%; z-index: 40; }
 .etb-find { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; flex-shrink: 0;
-  background: #fff; border-bottom: 1px solid #E9ECEF; }
+  background: var(--awd-surface); border: 1px solid var(--awd-border); border-top: none;
+  border-radius: 0 0 8px 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08); }
 .etb-input.fi { width: 148px; height: 26px; flex-shrink: 0; }
-.etb-find-n { min-width: 62px; font-size: 11px; color: #868E96; }
-.etb-find-b { padding: 3px 9px; border: 1px solid #DEE2E6; border-radius: 5px; font-size: 12px;
-  color: #495057; flex-shrink: 0; }
-.etb-find-b:hover { border-color: #ADB5BD; }
-.etb-find-b.on { background: #E6F9F0; border-color: #5BD197; color: #1A5336; }
-.etb-find-x { margin-left: auto; padding: 3px 9px; font-size: 12px; color: #868E96; flex-shrink: 0; }
+.etb-find-n { min-width: 62px; font-size: 11px; color: var(--awd-text-2); }
+.etb-find-b { padding: 3px 9px; border: 1px solid var(--awd-border); border-radius: 5px; font-size: 12px;
+  color: var(--awd-text-2); flex-shrink: 0; }
+.etb-find-b:hover { border-color: var(--awd-border-strong); }
+.etb-find-b.on { background: var(--awd-accent-soft); border-color: var(--awd-mint); color: var(--awd-accent-text); }
+.etb-find-x { margin-left: auto; padding: 3px 9px; font-size: 12px; color: var(--awd-text-2); flex-shrink: 0; }
 .etb-err.bar { margin: 0; border-radius: 0; padding: 4px 10px; }
-.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; }
+/* 4px 悬浮细滑轨：样式本体在 .awd-hairline-scroll（App.vue 全局），这里只处理
+   它占的那 4px 高度。滑轨是从内容盒里扣掉的，不补偿的话主命令区会长到 26+4=30px，
+   被 .etb 的 align-items:center 一居中，左半边按钮就比右侧常驻区高 2px——正是
+   dev-board#502 修的那种错位。
+
+   两个数按「行高 38、行内内容 26、滑轨 4」算，改任何一个都要重算：
+   边框盒 = 26 + 4 = 30px（写成 calc(100% - 8px)，跟着 .etb 那 38px 走），
+   margin-bottom:-4px 让外边距盒回到 26px，align-items:center 之后边框盒从 y6 起，
+   内容盒恰好 y6..32，与右侧常驻区严丝合缝——**溢出与否都一样**。不定高的话
+   （内容多高就多高）只在有滑轨时对得上，命令放得下时又会反向偏。
+   行内最高的是 26px 的 .etb-btn/.etb-field/.etb-stepper（后两者靠 box-sizing:
+   border-box 把 1px 边框收进 26 里，否则它们 28px 会把整行连同按钮顶低 1px，
+   dev-board#543 走查实测）。
+   这里刻意不设 z-index：会造出层叠上下文，把工具栏下拉那些 fixed 弹层框住（同
+   .etb-wrap 那条）。 */
+.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; height: calc(100% - 8px); margin-bottom: -4px; }
 .etb-row { display: flex; align-items: center; gap: 2px; }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
-  border-left: 1px solid #E9ECEF; }
-.etb-group-t { flex-shrink: 0; padding: 0 4px; font-size: 11px; color: #ADB5BD; }
-.etb-sep { width: 1px; height: 18px; background: #E9ECEF; margin: 0 5px; flex-shrink: 0; }
+  border-left: 1px solid var(--awd-border); }
+.etb-group-t { flex-shrink: 0; padding: 0 4px; font-size: 11px; color: var(--awd-text-3); }
+.etb-sep { width: 1px; height: 18px; background: var(--awd-surface-3); margin: 0 5px; flex-shrink: 0; }
 
 .etb-btn { position: relative; display: flex; align-items: center; justify-content: center; gap: 3px;
-  min-width: 26px; height: 26px; padding: 0 5px; border-radius: 5px; color: #495057; flex-shrink: 0; }
-.etb-btn:hover { background: #F1F3F5; }
-.etb-btn.on { background: #E6F9F0; color: #1A5336; }
-.etb-btn.off { color: #CED4DA; }
+  min-width: 26px; height: 26px; padding: 0 5px; border-radius: 5px; color: var(--awd-text-2); flex-shrink: 0; }
+.etb-btn:hover { background: var(--awd-surface-2); }
+.etb-btn.on { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+.etb-btn.off { color: var(--awd-text-3); }
 .etb-btn.wide { padding: 0 9px; }
 .etb-ico { width: 16px; height: 16px; display: block; }
 .etb-tx { font-size: 14px; line-height: 1; }
@@ -684,17 +807,22 @@ export default {
 .etb-swatch { position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px; border-radius: 2px;
   border: 1px solid rgba(0, 0, 0, 0.08); }
 
+/* box-sizing:border-box：没有它，1px 边框会让边框盒变成 28px，.etb-row 跟着变 28，
+   26px 的按钮在里面一居中就比右侧常驻区低 1px（dev-board#543 走查实测）。 */
 .etb-field { display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 26px;
-  padding: 0 6px; border: 1px solid #DEE2E6; border-radius: 5px; background: #fff; }
-.etb-field:hover { border-color: #ADB5BD; }
-.etb-field-t { font-size: 12px; color: #2C3338; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.etb-caret { font-size: 11px; color: #ADB5BD; }
+  box-sizing: border-box;
+  padding: 0 6px; border: 1px solid var(--awd-border); border-radius: 5px; background: var(--awd-surface); }
+.etb-field:hover { border-color: var(--awd-border-strong); }
+.etb-field-t { font-size: 12px; color: var(--awd-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.etb-caret { font-size: 11px; color: var(--awd-text-3); }
 .w110 { width: 110px; }
+.w96 { width: 96px; }
 
 .etb-drop { position: relative; flex-shrink: 0; }
 .etb-menu { position: absolute; top: 30px; left: 0; z-index: 40; max-height: 280px;
-  padding: 4px; background: #fff; border: 1px solid #E9ECEF; border-radius: 8px;
+  padding: 4px; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 8px;
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12); }
+.w150 { width: 150px; }
 .w160 { width: 160px; }
 .w180 { width: 180px; }
 .w200 { width: 200px; }
@@ -702,38 +830,41 @@ export default {
 .etb-menu.pad { padding: 6px; }
 .etb-item { display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
   padding: 5px 8px; border-radius: 5px; }
-.etb-item:hover { background: #F1F3F5; }
-.etb-item.on { background: #E6F9F0; }
-.etb-item.dim .etb-item-t { color: #ADB5BD; }
-.etb-item-t { font-size: 12px; color: #2C3338; }
-.etb-hint { font-size: 10px; color: #ADB5BD; }
+.etb-item:hover { background: var(--awd-surface-2); }
+.etb-item.on { background: var(--awd-accent-soft); }
+.etb-item.dim .etb-item-t { color: var(--awd-text-3); }
+.etb-item-t { font-size: 12px; color: var(--awd-text); }
+.etb-hint { font-size: 10px; color: var(--awd-text-3); }
 
 .etb-form { display: flex; flex-direction: column; gap: 7px; padding: 3px 4px 1px; }
-.etb-form-t { font-size: 12px; color: #495057; }
+.etb-form-t { font-size: 12px; color: var(--awd-text-2); }
 .etb-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
-.etb-cell { height: 15px; border: 1px solid #DEE2E6; border-radius: 2px; background: #fff; }
-.etb-cell.hot { background: #E6F9F0; border-color: #5BD197; }
+.etb-cell { height: 15px; border: 1px solid var(--awd-border); border-radius: 2px; background: var(--awd-surface); }
+.etb-cell.hot { background: var(--awd-accent-soft); border-color: var(--awd-mint); }
 .etb-input { width: 100%; height: 28px; padding: 0 7px; box-sizing: border-box; font-size: 12px;
-  color: #2C3338; border: 1px solid #DEE2E6; border-radius: 5px; background: #fff; }
+  color: var(--awd-text); border: 1px solid var(--awd-border); border-radius: 5px; background: var(--awd-surface); }
 .etb-input.ta { height: 58px; padding: 5px 7px; line-height: 1.45; }
 .etb-form-acts { display: flex; justify-content: flex-end; gap: 6px; }
-.etb-form-b { padding: 3px 11px; border: 1px solid #DEE2E6; border-radius: 5px; font-size: 12px; color: #495057; }
-.etb-form-b.ok { border-color: #5BD197; color: #1A5336; background: #E6F9F0; }
+.etb-form-b { padding: 3px 11px; border: 1px solid var(--awd-border); border-radius: 5px; font-size: 12px; color: var(--awd-text-2); }
+.etb-form-b.ok { border-color: var(--awd-mint); color: var(--awd-accent-text); background: var(--awd-accent-soft); }
 .etb-err { display: block; margin-top: 6px; padding: 4px 7px; border-radius: 5px;
-  background: #FEF2F2; color: #991B1B; font-size: 11px; line-height: 1.4; }
+  background: var(--awd-danger-soft); color: var(--awd-danger-text); font-size: 11px; line-height: 1.4; }
 
 .etb-palette { position: absolute; top: 30px; left: 0; z-index: 40; display: flex; flex-wrap: wrap; gap: 5px;
-  width: 128px; padding: 7px; background: #fff; border: 1px solid #E9ECEF; border-radius: 8px;
+  width: 128px; padding: 7px; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 8px;
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12); }
 .etb-chip { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.12); }
 .etb-chip.none { position: relative; }
 .etb-chip.none::after { content: ''; position: absolute; left: 1px; right: 1px; top: 8px; height: 1px;
-  background: #C0392B; transform: rotate(-45deg); }
+  background: var(--awd-danger); transform: rotate(-45deg); }
 
-.etb-stepper { display: flex; align-items: center; height: 26px; border: 1px solid #DEE2E6; border-radius: 5px;
-  background: #fff; flex-shrink: 0; }
-.etb-step-b { width: 20px; text-align: center; font-size: 14px; color: #868E96; line-height: 24px; }
-.etb-step-b:hover { color: #1A5336; background: #F1F3F5; }
-.etb-step-v { min-width: 34px; text-align: center; font-size: 12px; color: #2C3338; }
+/* box-sizing 同 .etb-field：26px + 1px 边框 = 28px 的边框盒会成为 .etb-row 里最高的
+   一件，把整行连同 26px 的按钮顶低 1px（dev-board#543 走查实测的那 1px）。 */
+.etb-stepper { display: flex; align-items: center; height: 26px; box-sizing: border-box;
+  border: 1px solid var(--awd-border); border-radius: 5px;
+  background: var(--awd-surface); flex-shrink: 0; }
+.etb-step-b { width: 20px; text-align: center; font-size: 14px; color: var(--awd-text-2); line-height: 24px; }
+.etb-step-b:hover { color: var(--awd-accent-text); background: var(--awd-surface-2); }
+.etb-step-v { min-width: 34px; text-align: center; font-size: 12px; color: var(--awd-text); }
 .etb-step-v.z { min-width: 42px; }
 </style>

@@ -1,0 +1,21 @@
+{
+  "id": "hello-evidence-plugin",
+  "name": "Hello 证据来源插件",
+  "version": "1.0.0",
+  "description": "evidence.retrieve.v1 公开 Provider 协议（规范 v2.8）的最小示例：一个内存假数据来源。",
+  "author": "AI WorkDeck",
+  "homepage": "https://github.com/zeweihan/checkba_cloud",
+  "permissions": [],
+  "minHostVersion": "0.28.0",
+  "backendJars": ["hello-evidence-plugin-1.0.0.jar"],
+  "contributes": {
+    "evidenceSources": [
+      {
+        "sourceId": "hello-evidence-plugin.demo-registry",
+        "name": "演示工商登记库",
+        "description": "内存假数据：演示 SPI 实现、conformance 自测与注册链路",
+        "transport": "spi"
+      }
+    ]
+  }
+}

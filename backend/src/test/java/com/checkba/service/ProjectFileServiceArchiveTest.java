@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.ProjectFile;
@@ -19,6 +22,7 @@ import org.springframework.core.io.ByteArrayResource;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +60,13 @@ class ProjectFileServiceArchiveTest {
 
     private static final long ARCHIVE_ID = 10L;
     private static final long PROJECT_ID = 1L;
+
+    /**
+     * 假的「库里现有的行」。解压建出来的文件夹要能被 findById 查到——
+     * 真库里 save 完当然查得到，父节点校验（ProjectFileService.resolveParentId，
+     * dev-board#457）与 buildPhysicalPath 都要走这一步。
+     */
+    private final Map<Long, ProjectFile> rows = new HashMap<>();
 
     // ---- fixtures -----------------------------------------------------------
 
@@ -125,7 +136,9 @@ class ProjectFileServiceArchiveTest {
         pf.setFileType(type);
         pf.setFileSize((long) bytes.length);
         pf.setFilePath("projects/1/" + name);
-        when(projectFileRepository.findById(ARCHIVE_ID)).thenReturn(Optional.of(pf));
+        rows.put(ARCHIVE_ID, pf);
+        when(projectFileRepository.findById(anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(rows.get(inv.<Long>getArgument(0))));
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         try {
             when(storageService.load("projects/1/" + name)).thenReturn(new ByteArrayResource(bytes));
@@ -212,6 +225,7 @@ class ProjectFileServiceArchiveTest {
             ProjectFile f = inv.getArgument(0);
             if (f.getId() == null) f.setId(ids.incrementAndGet());
             saved.add(f);
+            rows.put(f.getId(), f);
             return f;
         });
         // createFile 里的 load（模板物化）与解压时的 save 都打到 mock 上
@@ -234,5 +248,40 @@ class ProjectFileServiceArchiveTest {
         assertEquals("txt", contract.getFileType());
         assertEquals("hello 合同".getBytes(StandardCharsets.UTF_8).length, contract.getFileSize());
         assertNotNull(contract.getWpsFileId());
+    }
+
+    @Test
+    void extractZipWithImplodedEntryDecodesContent() throws Exception {
+        // 老 PKZIP 的 Implode(方法 6) 条目：解码走 commons-compress 的 BinaryTree，
+        // 其内部调用 commons-lang3 的 ArrayFill(3.14 才有)。Spring Boot BOM 若把
+        // lang3 钉回 3.13 会 NoClassDefFoundError（Error 不进 catch(Exception)，
+        // 直接裸奔成 500）。样本取自 commons-compress 官方测试资源。
+        byte[] zip;
+        try (java.io.InputStream in = getClass().getResourceAsStream("/imploding-8Kdict-3trees.zip")) {
+            zip = in.readAllBytes();
+        }
+        stubArchive("legacy.zip", "zip", zip);
+
+        AtomicLong ids = new AtomicLong(100);
+        List<ProjectFile> saved = new ArrayList<>();
+        when(projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(anyLong(), any(), any(), anyLong()))
+                .thenReturn(false);
+        when(projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(anyLong(), any()))
+                .thenReturn(List.of());
+        when(projectFileRepository.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(anyLong(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(projectFileRepository.save(any(ProjectFile.class))).thenAnswer(inv -> {
+            ProjectFile f = inv.getArgument(0);
+            if (f.getId() == null) f.setId(ids.incrementAndGet());
+            saved.add(f);
+            rows.put(f.getId(), f);
+            return f;
+        });
+        lenient().when(storageService.save(any(), any(java.io.InputStream.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        projectFileService.extractArchive(PROJECT_ID, ARCHIVE_ID, 42L);
+
+        ProjectFile license = saved.stream().filter(f -> "LICENSE.TXT".equals(f.getName())).findFirst().orElseThrow();
+        assertEquals(11560L, license.getFileSize(), "imploded 条目应完整解码");
     }
 }

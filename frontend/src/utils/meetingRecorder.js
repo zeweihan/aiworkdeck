@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 会议录音引擎：模块级单例，挂在页面树之外。
 //
 // 为什么不放面板组件里：录音要横跨页面跳转（navigateTo 去别处、reLaunch 切项目）
@@ -13,10 +15,13 @@ import { getAuthHeaders } from '@/utils/auth.js'
 // 报错直接显示在会议录音面板里（recorderState.error 与 throw 出去的 message 都是），
 // 所以文案与面板同一个命名空间。非组件模块的翻译入口是 t()，且只能在函数体内取值。
 import { t } from '@/i18n'
+import { resolveTrackEndedStatus } from '@/utils/meetingRecorderStatus.js'
 
 const CHUNK_TIMESLICE_MS = 5000
 const UPLOAD_TIMEOUT_MS = 60000
 const LEVEL_INTERVAL_MS = 200
+// 收尾阶段单块上传的重试上限（录音进行中仍然无限重试，见 uploadChunkWithRetry）
+const STOP_UPLOAD_MAX_ATTEMPTS = 5
 
 export const recorderState = reactive({
   status: 'idle', // idle | starting | recording | paused | stopping
@@ -43,6 +48,8 @@ let uploadQueue = []
 let uploadOffset = 0
 let uploading = false
 let recordingDone = false
+// 收尾阶段重试封顶后放弃上传：余下的块直接丢弃，不再拖住 stopRecording
+let uploadAbandoned = false
 // 本模块最近写进 recorderState.error 的那条「上传受阻」原文，传通之后据此清理。
 // 原先比的是文案前缀，文案进了 i18n 就不能这么判（英文版永远匹配不上）；
 // 而清空又必须只认自己写的那条，不能顺手抹掉别处的报错——留原文比对是两者兼顾的写法。
@@ -61,14 +68,58 @@ function pickAudioMime() {
 export function isRecordingActive() {
   return recorderState.status === 'recording' || recorderState.status === 'paused'
     || recorderState.status === 'starting' || recorderState.status === 'stopping'
+    || recorderState.status === 'interrupted'
+}
+
+// 麦克风轨道被系统/设备中途结束（拔设备、权限被系统收回）：浏览器只让 track 的
+// readyState 变 ended，既不报错也不会让 MediaRecorder 自己更新我们的状态机，计时器
+// 仍按 status==='recording' 无限自增——界面照常画「录音中」，用户毫无察觉，停止时
+// 写进会议记录的时长（seconds*1000）也就跟着虚增。注意：调用 track.stop() 按规范
+// 不会触发 ended 事件，所以这里不需要区分"自己主动停"和"外部中断"。
+function handleTrackEnded() {
+  const next = resolveTrackEndedStatus(recorderState.status)
+  if (!next) return
+  recorderState.status = next
+  recorderState.level = 0
+  recorderState.error = t('meeting.deviceInterrupted')
+}
+
+/**
+ * 枚举可用的麦克风输入设备。
+ * 未授权过麦克风时浏览器把 label 恒置空（隐私考量）——面板据此判断要不要显示
+ * 「麦克风 N」占位名，并在 startRecording 拿到一次授权后重新调用本函数刷新真实 label。
+ */
+export async function listAudioInputDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return []
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    return devices.filter((d) => d.kind === 'audioinput')
+  } catch (e) {
+    return []
+  }
+}
+
+// 拿指定设备的麦克风流；deviceId 不可用时（多半是设备被拔了）回退默认设备重试一次，
+// 不让用户因为选中的设备消失而彻底开不了录。
+async function acquireMicStream(deviceId) {
+  if (!deviceId) return navigator.mediaDevices.getUserMedia({ audio: true })
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } })
+  } catch (e) {
+    if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) throw e
+    recorderState.error = t('meeting.micDeviceFallback')
+    return navigator.mediaDevices.getUserMedia({ audio: true })
+  }
 }
 
 /**
  * 开始录音：建会议档 → 拿麦克风 → 开录。
  * 全局同一时刻只允许一场；重复调用直接抛。
+ * @param {string|number} projectId
+ * @param {string} [deviceId] 指定的麦克风 deviceId；不传则用浏览器默认设备
  * @returns {Promise<object>} 后端返回的 meeting
  */
-export async function startRecording(projectId) {
+export async function startRecording(projectId, deviceId) {
   if (isRecordingActive()) {
     throw new Error(t('meeting.alreadyRecording'))
   }
@@ -77,12 +128,17 @@ export async function startRecording(projectId) {
   }
   recorderState.status = 'starting'
   recorderState.error = ''
+  // projectId 必须与 status='starting' 同步写入，不能等 getUserMedia/建档两个
+  // await 都过了才赋值：面板的 recordingHere 计算属性同时判 isRecordingActive()
+  // 与 recState.projectId === this.projectId，projectId 还是 null 的这段窗口期
+  // 会被误判成"别的项目在录音"（新机首次要等系统麦克风授权弹窗，窗口被拉到必现）。
+  recorderState.projectId = projectId
   try {
     // 先拿麦克风再建档：权限被拒时不留空会议记录
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    mediaStream = await acquireMicStream(deviceId)
+    mediaStream.getTracks().forEach((track) => { track.onended = handleTrackEnded })
     const res = await createMeetingRecording(projectId)
     const meeting = res.meeting || res
-    recorderState.projectId = projectId
     recorderState.meetingId = meeting.id
     recorderState.audioFileId = meeting.audioFileId
     recorderState.configured = res.configured !== undefined ? !!res.configured : null
@@ -92,6 +148,7 @@ export async function startRecording(projectId) {
     uploadOffset = 0
     uploading = false
     recordingDone = false
+    uploadAbandoned = false
     uploadStalledNotice = ''
 
     const mimeType = pickAudioMime()
@@ -183,6 +240,7 @@ async function drainUploadQueue() {
   uploading = true
   try {
     while (uploadQueue.length > 0) {
+      if (uploadAbandoned) { uploadQueue = []; break }
       const blob = uploadQueue[0]
       const isLast = recordingDone && uploadQueue.length === 1
       await uploadChunkWithRetry(blob, uploadOffset, isLast)
@@ -190,6 +248,13 @@ async function drainUploadQueue() {
       recorderState.uploadedBytes = uploadOffset
       uploadQueue.shift()
     }
+  } catch (e) {
+    // 收尾阶段重试封顶后抛到这里：丢掉余下的块，让下面的 resolve 能触发，
+    // 否则 stopRecording 的 await stopped 永远不返回（status 钉死在 stopping）。
+    uploadAbandoned = true
+    uploadQueue = []
+    uploadStalledNotice = ''
+    recorderState.error = t('common.uploadFailed')
   } finally {
     uploading = false
   }
@@ -203,6 +268,7 @@ async function drainUploadQueue() {
 
 async function uploadChunkWithRetry(blob, offset, isLast) {
   let attempt = 0
+  let stopAttempt = 0
   // 录音进行期间无限重试（指数退避封顶 10s）：块顺序不能乱，丢一块整段音频作废
   for (;;) {
     try {
@@ -214,6 +280,11 @@ async function uploadChunkWithRetry(blob, offset, isLast) {
       return
     } catch (e) {
       attempt += 1
+      // 收尾阶段另算一份重试次数并封顶：stopRecording 的 await stopped 挂在这个循环上，
+      // 永久性失败（鉴权过期、后台把文件删了）会把 status 钉死在 'stopping'，
+      // 面板与顶部胶囊的停止按钮跟着永远禁用，用户只能强杀应用。
+      // 单独计数是为了不把录音期间已经攒下的失败次数算进来——那些多半是断网这类瞬时故障。
+      if (recorderState.status === 'stopping' && (stopAttempt += 1) >= STOP_UPLOAD_MAX_ATTEMPTS) throw e
       uploadStalledNotice = t('meeting.uploadStalled', { attempt })
       recorderState.error = uploadStalledNotice
       await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 10000)))

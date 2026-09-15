@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import java.util.Locale;
@@ -31,6 +34,31 @@ public final class LlmErrorClassifier {
     /** 上下文超窗的稳定标记（契约同上；只在强制压缩重试也失败的终态才会出现在 error 载荷里）。 */
     public static final String CONTEXT_OVERFLOW_MARKER = "AI_CONTEXT_OVERFLOW";
 
+    /**
+     * 传输不可达的稳定标记（契约同上）：本机连不上模型网关（dev-board#602）。
+     * 断网时上游给的原文往往只有一个主机名（UnknownHostException 的 getMessage() 就是
+     * "openrouter.ai"），原样拼给用户等于没有信息。
+     *
+     * <p>两条进入路径，覆盖面不同，刻意不合并：
+     * <ul>
+     *   <li>{@link Kind#NETWORK_UNREACHABLE}（DNS/连接/路由三种决定性形态）——分类即带标记；</li>
+     *   <li>{@link #isNetworkUnreachable}（再加上握手中断、读超时）——这两类仍按
+     *       {@link Kind#TRANSIENT} 正常退避重试与故障转移（慢模型也会超时，误判成终局更贵），
+     *       只在**终态载荷**上补标记：跑完整条链还是这个形态，那就是网络的锅。</li>
+     * </ul>
+     */
+    public static final String NETWORK_UNREACHABLE_MARKER = "AI_NETWORK_UNREACHABLE";
+
+    /**
+     * 编排器内部一致性错误的稳定标记（契约同上）。
+     *
+     * <p>与上面三个不同，它不是 LLM 调用的错误分类——{@link #classify} 永远不会产出它，
+     * 由 AgentOrchestrator 在 onComplete 回调的 catch 里直接拼上。存在的理由是那条路径
+     * 原来把裸 Java 异常文本发给前端（「Callback Error: text cannot be null or blank」），
+     * 用户既看不懂也无从处理。
+     */
+    public static final String INTERNAL_ERROR_MARKER = "AI_INTERNAL_ERROR";
+
     private LlmErrorClassifier() {
     }
 
@@ -55,6 +83,15 @@ public final class LlmErrorClassifier {
          * 编排器对它有专用恢复通道——强制压缩消息栈、确实缩小了才同 depth 重放一次（对标 dsh context-overflow）。
          */
         CONTEXT_OVERFLOW(0, 0),
+        /**
+         * 本机连不上模型网关（DNS 解析不了 / 连接被拒 / 没有路由）：断网的决定性形态。
+         *
+         * <p>给 1 次 2 秒的重试，是因为网络可能下一秒就回来（切 Wi-Fi、VPN 重连）；
+         * 不给三轮 8/16/32——没网的时候那只是让用户对着转圈等一分钟。
+         * 不走故障转移：本机的 DNS/连接都不通，换哪个模型都是同一条死路，转移只会把用户
+         * 再拖一轮（dev-board#602）。
+         */
+        NETWORK_UNREACHABLE(1, 2),
         /** 参数/鉴权错误等：重放也不会好，且可能重复扣费探测 */
         FATAL(0, 0);
 
@@ -83,10 +120,12 @@ public final class LlmErrorClassifier {
 
         /**
          * 允许换模型继续。FATAL 不换（未知错误保守处理）；配额耗尽不换（同一账户换模型照样没钱，
-         * 换了只是多一次必败的扣费探测）；上下文超窗不换（走专用的压缩重试通道，不走故障转移链）。
+         * 换了只是多一次必败的扣费探测）；上下文超窗不换（走专用的压缩重试通道，不走故障转移链）；
+         * 本机不可达不换（DNS/连接都不通，换模型只是换一个同样连不上的主机名）。
          */
         public boolean failoverable() {
-            return this != FATAL && this != QUOTA_EXHAUSTED && this != CONTEXT_OVERFLOW;
+            return this != FATAL && this != QUOTA_EXHAUSTED && this != CONTEXT_OVERFLOW
+                    && this != NETWORK_UNREACHABLE;
         }
 
         /**
@@ -115,6 +154,8 @@ public final class LlmErrorClassifier {
                         "ran out of account credit");
                 case CONTEXT_OVERFLOW -> com.checkba.service.LangText.of("上下文超出模型窗口",
                         "exceeded the model's context window");
+                case NETWORK_UNREACHABLE -> com.checkba.service.LangText.of(
+                        "在本机连不上（网络不通）", "could not be reached from this machine (the network is down)");
                 case TRANSIENT -> com.checkba.service.LangText.of("连续多次响应失败",
                         "failed to respond several times in a row");
                 case FATAL -> com.checkba.service.LangText.of("调用失败", "failed to be called");
@@ -134,8 +175,57 @@ public final class LlmErrorClassifier {
             case REGION_BLOCKED -> REGION_BLOCKED_MARKER + ": " + body;
             case QUOTA_EXHAUSTED -> QUOTA_EXHAUSTED_MARKER + ": " + body;
             case CONTEXT_OVERFLOW -> CONTEXT_OVERFLOW_MARKER + ": " + body;
+            case NETWORK_UNREACHABLE -> NETWORK_UNREACHABLE_MARKER + ": " + body;
             default -> body;
         };
+    }
+
+    /**
+     * 带异常链的载荷标记（生产路径用这一个）。在 {@link #taggedErrorMessage(Kind, String)}
+     * 之外多做一件事：地域/配额/超窗之外的失败，若异常链看着是「本机根本没连上模型网关」，
+     * 补上 {@link #NETWORK_UNREACHABLE_MARKER}。
+     *
+     * <p>为什么要吃 Throwable 而不是 message：断网的判据在异常**类型**上
+     * （UnknownHostException 的 getMessage() 只有一个主机名），只看字符串认不出来。
+     *
+     * @param kind 可为 null（取消分支等拿不到分类的路径），此时只做传输类判定
+     */
+    public static String taggedErrorMessage(Kind kind, Throwable err) {
+        String raw = err == null || err.getMessage() == null ? "" : err.getMessage();
+        if (kind != null) {
+            String tagged = taggedErrorMessage(kind, raw);
+            // 已经挂了标记的（地域/配额/超窗）不再叠第二个：前端是一条 includes 链，
+            // 两个标记同时在会命中靠前的那条，把更准的原因盖掉
+            if (!tagged.equals(raw)) return tagged;
+        }
+        return isNetworkUnreachable(err) ? NETWORK_UNREACHABLE_MARKER + ": " + raw : raw;
+    }
+
+    /**
+     * 异常链里是否有「本机连不上对端」的证据（dev-board#602 断网现场的形态）。
+     *
+     * <p>收进来的四个类型：解析不了域名（UnknownHostException）、连接被拒/没有路由
+     * （ConnectException / NoRouteToHostException）、TLS 握手被中途掐断
+     * （SSLHandshakeException，断网时死代理的典型回声）、连接超时（SocketTimeoutException）。
+     * 外加自家出站 HTTP 包装的「云端不可达」。
+     *
+     * <p>刻意不收 5xx 与限流：那些说明网络是通的、是对端在报错，让用户去「检查网络」是误导。
+     * SocketTimeoutException 是这里最宽的一条（模型很慢也会超时），可接受的理由是这个标记
+     * 只作用于**终态**载荷——走到那里说明退避重试与故障转移链都已经跑完还是不行。
+     */
+    public static boolean isNetworkUnreachable(Throwable err) {
+        for (Throwable t = err; t != null; t = (t.getCause() == t ? null : t.getCause())) {
+            if (t instanceof java.net.UnknownHostException
+                    || t instanceof java.net.ConnectException
+                    || t instanceof java.net.NoRouteToHostException
+                    || t instanceof javax.net.ssl.SSLHandshakeException
+                    || t instanceof java.net.SocketTimeoutException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null && msg.contains("云端不可达")) return true;
+        }
+        return false;
     }
 
     /**
@@ -148,6 +238,15 @@ public final class LlmErrorClassifier {
             if (t instanceof dev.ai4j.openai4j.OpenAiHttpException http) {
                 // 带上响应体：403 要靠体内的地域语义才能和 key 失效/额度禁用区分开
                 return classifyStatusCode(http.code(), http.getMessage());
+            }
+            // 本机根本没连上对端：判据落在异常**类型**上，不能落在 message——macOS 上
+            // ConnectException 的 message 常常就是 "Operation timed out"，交给文本匹配会被
+            // 当成瞬时超时、白退避三轮（dev-board#602）。握手中断与读超时不收进来：
+            // 慢模型也会超时，误判成终局比多重试两轮贵。
+            if (t instanceof java.net.UnknownHostException
+                    || t instanceof java.net.ConnectException
+                    || t instanceof java.net.NoRouteToHostException) {
+                return Kind.NETWORK_UNREACHABLE;
             }
             String msg = t.getMessage();
             if (msg != null) {

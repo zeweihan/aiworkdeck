@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="msb">
     <!-- 搜索：过滤全部分组（VS Code 扩展栏语义） -->
@@ -23,16 +25,31 @@
         </view>
       </view>
       <view v-if="sections.installed">
-        <view v-if="!installedRows.length" class="msb-empty">
+        <!-- 「已安装」的插件/Skill 两类改为**横向标签并排**（dev-board#67）：
+             竖着叠两个子分组时后一组常被推出视口，"看不全"。标签标题即类型，
+             行内不再重复"面板插件/Skill"小字标签。顺序插件在前，与整页版一致。 -->
+        <view class="msb-tabs">
+          <view
+            v-for="group in installedGroups"
+            :key="group.key"
+            class="msb-tab"
+            :class="{ active: installedTab === group.key }"
+            @tap="installedTab = group.key"
+          >
+            <text>{{ group.title }}</text>
+            <text class="msb-tab-count">{{ group.rows.length }}</text>
+          </view>
+        </view>
+        <view v-if="!activeInstalledRows.length" class="msb-empty">
           <text>{{ searchText ? $t('market.noMatchingInstalled') : $t('market.noInstalledYet') }}</text>
         </view>
         <view
-          v-for="row in installedRows"
+          v-for="row in activeInstalledRows"
           :key="'ins-' + row.kind + '-' + row.id"
           class="msb-row"
           @tap="openDetail(row)"
         >
-          <view class="msb-row-glyph" :class="{ 'is-plugin': row.kind === 'plugin' }">
+          <view class="msb-row-glyph" :class="{ 'is-plugin': row.kind === 'plugin' || row.panel }">
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -48,100 +65,108 @@
         </view>
       </view>
 
-      <!-- ===== Skill 广场 ===== -->
-      <view class="msb-sec-head" @tap="toggleSection('skill')">
-        <text class="msb-sec-chevron" :class="{ open: sections.skill }">›</text>
-        <text class="msb-sec-title">{{ $t('market.tabSkillMarket') }}</text>
-        <text class="msb-sec-count">{{ skillRows.length }}</text>
+      <!-- ===== Marketplace：在线 Skill 与插件收进同一个分组，组内横向双标签
+           （左 Skill 右插件，dev-board#67）===== -->
+      <view class="msb-sec-head" @tap="toggleSection('market')">
+        <text class="msb-sec-chevron" :class="{ open: sections.market }">›</text>
+        <text class="msb-sec-title">{{ $t('market.tabMarketplace') }}</text>
+        <text class="msb-sec-count">{{ skillRows.length + pluginRows.length }}</text>
       </view>
-      <view v-if="sections.skill">
-        <view v-if="marketLoading" class="msb-empty"><text>{{ $t('market.loadingEllipsis') }}</text></view>
-        <view v-else-if="marketError" class="msb-empty msb-error">
-          <text>{{ $t('market.marketUnavailablePrefixed', { error: marketError }) }}</text>
-        </view>
-        <view v-else-if="!skillRows.length" class="msb-empty">
-          <text>{{ searchText ? $t('market.noMatchingSkill') : $t('market.marketEmptySkillShort') }}</text>
-        </view>
-        <view
-          v-for="row in skillRows"
-          :key="'mkt-s-' + row.id"
-          class="msb-row"
-          @tap="openDetail(row)"
-        >
-          <view class="msb-row-glyph">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+      <view v-if="sections.market">
+        <view class="msb-tabs">
+          <view class="msb-tab" :class="{ active: marketTab === 'skill' }" @tap="marketTab = 'skill'">
+            <text>{{ $t('market.sectionSkillTitle') }}</text>
+            <text class="msb-tab-count">{{ skillRows.length }}</text>
           </view>
-          <view class="msb-row-main">
-            <text class="msb-row-name">{{ row.name }}</text>
-            <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
-            <text class="msb-row-meta">{{ row.meta }}</text>
-          </view>
-          <view v-if="row.installed" class="msb-row-state ok"><text>{{ $t('market.installedShort') }}</text></view>
-          <view
-            v-else-if="row.canInstall"
-            class="msb-row-install"
-            :class="{ busy: marketBusyId === row.id }"
-            @tap.stop="installSkillRow(row)"
-          >
-            <text>{{ marketBusyId === row.id ? '…' : $t('market.install') }}</text>
-          </view>
-          <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
-            <text>{{ $t('market.buy') }}</text>
-          </view>
-          <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
-            <text>{{ $t('market.needAccount') }}</text>
+          <view class="msb-tab" :class="{ active: marketTab === 'plugin' }" @tap="marketTab = 'plugin'">
+            <text>{{ $t('market.sectionPluginTitle') }}</text>
+            <text class="msb-tab-count">{{ pluginRows.length }}</text>
           </view>
         </view>
-      </view>
 
-      <!-- ===== 插件广场 ===== -->
-      <view class="msb-sec-head" @tap="toggleSection('plugin')">
-        <text class="msb-sec-chevron" :class="{ open: sections.plugin }">›</text>
-        <text class="msb-sec-title">{{ $t('market.tabPluginMarket') }}</text>
-        <text class="msb-sec-count">{{ pluginRows.length }}</text>
-      </view>
-      <view v-if="sections.plugin">
-        <view v-if="marketPluginLoading" class="msb-empty"><text>{{ $t('market.loadingEllipsis') }}</text></view>
-        <view v-else-if="marketPluginError" class="msb-empty msb-error">
-          <text>{{ $t('market.marketUnavailablePrefixed', { error: marketPluginError }) }}</text>
-        </view>
-        <view v-else-if="!pluginRows.length" class="msb-empty">
-          <text>{{ searchText ? $t('market.noMatchingPlugin') : $t('market.marketEmptyPlugin') }}</text>
-        </view>
-        <view
-          v-for="row in pluginRows"
-          :key="'mkt-p-' + row.id"
-          class="msb-row"
-          @tap="openDetail(row)"
-        >
-          <view class="msb-row-glyph is-plugin">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+        <template v-if="marketTab === 'skill'">
+          <view v-if="marketLoading" class="msb-empty"><text>{{ $t('market.loadingEllipsis') }}</text></view>
+          <view v-else-if="marketError" class="msb-empty msb-error">
+            <text>{{ $t('market.marketUnavailablePrefixed', { error: marketError }) }}</text>
           </view>
-          <view class="msb-row-main">
-            <text class="msb-row-name">{{ row.name }}</text>
-            <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
-            <text class="msb-row-meta">{{ row.meta }}</text>
+          <view v-else-if="!skillRows.length" class="msb-empty">
+            <text>{{ searchText ? $t('market.noMatchingSkill') : $t('market.marketEmptySkillShort') }}</text>
           </view>
-          <view v-if="row.installed" class="msb-row-state ok"><text>{{ $t('market.installedShort') }}</text></view>
           <view
-            v-else-if="row.canInstall"
-            class="msb-row-install"
-            :class="{ busy: pluginBusyId === row.id }"
-            @tap.stop="installPluginRow(row)"
+            v-for="row in skillRows"
+            :key="'mkt-s-' + row.id"
+            class="msb-row"
+            @tap="openDetail(row)"
           >
-            <text>{{ pluginBusyId === row.id ? '…' : $t('market.install') }}</text>
+            <view class="msb-row-glyph">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </view>
+            <view class="msb-row-main">
+              <text class="msb-row-name">{{ row.name }}</text>
+              <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
+              <text class="msb-row-meta">{{ row.meta }}</text>
+            </view>
+            <view v-if="row.installed" class="msb-row-state ok"><text>{{ $t('market.installedShort') }}</text></view>
+            <view
+              v-else-if="row.canInstall"
+              class="msb-row-install"
+              :class="{ busy: marketBusyId === row.id }"
+              @tap.stop="installSkillRow(row)"
+            >
+              <text>{{ marketBusyId === row.id ? '…' : $t('market.install') }}</text>
+            </view>
+            <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
+              <text>{{ $t('market.buy') }}</text>
+            </view>
+            <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
+              <text>{{ $t('market.needAccount') }}</text>
+            </view>
           </view>
-          <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
-            <text>{{ $t('market.buy') }}</text>
+        </template>
+
+        <template v-else>
+          <view v-if="marketPluginLoading" class="msb-empty"><text>{{ $t('market.loadingEllipsis') }}</text></view>
+          <view v-else-if="marketPluginError" class="msb-empty msb-error">
+            <text>{{ $t('market.marketUnavailablePrefixed', { error: marketPluginError }) }}</text>
           </view>
-          <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
-            <text>{{ $t('market.needAccount') }}</text>
+          <view v-else-if="!pluginRows.length" class="msb-empty">
+            <text>{{ searchText ? $t('market.noMatchingPlugin') : $t('market.marketEmptyPlugin') }}</text>
           </view>
-        </view>
+          <view
+            v-for="row in pluginRows"
+            :key="'mkt-p-' + row.id"
+            class="msb-row"
+            @tap="openDetail(row)"
+          >
+            <view class="msb-row-glyph is-plugin">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </view>
+            <view class="msb-row-main">
+              <text class="msb-row-name">{{ row.name }}</text>
+              <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
+              <text class="msb-row-meta">{{ row.meta }}</text>
+            </view>
+            <view v-if="row.installed" class="msb-row-state ok"><text>{{ $t('market.installedShort') }}</text></view>
+            <view
+              v-else-if="row.canInstall"
+              class="msb-row-install"
+              :class="{ busy: pluginBusyId === row.id }"
+              @tap.stop="installPluginRow(row)"
+            >
+              <text>{{ pluginBusyId === row.id ? '…' : $t('market.install') }}</text>
+            </view>
+            <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
+              <text>{{ $t('market.buy') }}</text>
+            </view>
+            <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
+              <text>{{ $t('market.needAccount') }}</text>
+            </view>
+          </view>
+        </template>
       </view>
     </scroll-view>
   </view>
@@ -153,7 +178,7 @@
 // 数据与安装链路复用 MarketPane 同一组 services/api.js 封装。
 import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, installMarketPlugin, rescanPlugins, rescanSkills } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
-import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
+import { isPanelSkill, isVoiceGroupMember, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { canInstall, paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { t } from '@/i18n'
@@ -194,10 +219,15 @@ function fmtDownloads(n) {
 export default {
   name: 'MarketSidebarPanel',
   emits: ['open-detail'],
+  // 工作台 provide 的设置标签入口；宿主不是工作台时为 null
+  inject: { openSettingsTab: { default: null } },
   data() {
     return {
       searchText: '',
-      sections: { installed: true, skill: true, plugin: true },
+      sections: { installed: true, market: true },
+      // 「已安装」与 Marketplace 组内的横向标签（dev-board#67）
+      installedTab: 'plugin',
+      marketTab: 'skill',
       plugins: [],
       skills: [],
       marketSkills: [],
@@ -220,15 +250,49 @@ export default {
     installedRows() {
       const kw = this.searchText.trim().toLowerCase()
       const rows = []
+      // 「语音」合并插件（dev-board#66）：左栏一个图标 = 一个插件。语音合成与
+      // 会议录音两个成员 skill 不单列，在首个成员的位置合成一行；启停在详情页
+      // 一次作用于全部成员。
+      const voiceGroup = buildVoiceGroupSkill(this.skills)
+      let voiceEmitted = false
       for (const s of this.skills) {
+        if (voiceGroup && isVoiceGroupMember(s.id) && !s.sourcePluginId) {
+          if (!voiceEmitted) {
+            voiceEmitted = true
+            const metaParts = []
+            if (voiceGroup.version) metaParts.push('v' + voiceGroup.version)
+            if (voiceGroup.author) metaParts.push(voiceGroup.author)
+            rows.push({
+              kind: 'skill',
+              id: voiceGroup.id,
+              group: true,
+              name: voiceGroup.name,
+              desc: voiceGroup.description,
+              glyph: ICONS.panelLeft,
+              meta: metaParts.join(' · '),
+              panel: true,
+              stateLabel: voiceGroup.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'),
+              stateClass: voiceGroup.enabled ? 'ok' : 'off',
+              raw: voiceGroup,
+            })
+          }
+          continue
+        }
         const mode = s.activationMode || (s.enabled ? 'auto' : 'disabled')
         // 面板型（背后挂着左栏面板）在列表里也按插件标注：用户看到的是一个面板，
         // 说它是「Skill · 自动触发」只会让人对不上号。判据见 leftSidebarPlugins.js。
         const panel = isPanelSkill(s.id) && !s.sourcePluginId
-        const metaParts = [panel ? this.$t('market.panelPluginLabel') : this.$t('market.skillWord')]
+        // 「面板插件/Skill」标签不再在行内重复——子分组标题（installedGroups）已经
+        // 表明了这一行属于哪一类，见下方 installedSkillRows/installedPluginRows。
+        const metaParts = []
         if (s.version) metaParts.push('v' + s.version)
         if (s.author) metaParts.push(s.author)
         if (s.sourcePluginId) metaParts.push(this.$t('market.fromPluginTag'))
+        // 挂着原生资源包的面板型 skill：已启用但包还没就绪（老版本升级后端自动
+        // 补下载的过渡态，见 docs/NATIVE_PACK_DISTRIBUTION.md §5）——如实标「下载中」，
+        // 不能显示「已启用」误导用户以为功能已经能用。装未装的初始态不受影响，
+        // 那条走 MarketDetailPane 的安装按钮，本行列表不加轮询。
+        const packPending = panel && s.packId && s.enabled && s.packReady === false
         rows.push({
           kind: 'skill',
           id: s.id,
@@ -236,10 +300,14 @@ export default {
           desc: s.description || '',
           glyph: panel ? ICONS.panelLeft : (CATEGORY_GLYPHS[s.category] || ICONS.skill),
           meta: metaParts.join(' · '),
-          stateLabel: panel
-            ? (s.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'))
-            : (ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto')),
-          stateClass: mode === 'disabled' ? 'off' : 'ok',
+          // 子分组归属：面板型进「插件」组，其余进「Skill」组。见 installedGroups。
+          panel,
+          stateLabel: packPending
+            ? this.$t('market.packDownloadingShort')
+            : panel
+              ? (s.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'))
+              : (ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto')),
+          stateClass: packPending ? 'downloading' : (mode === 'disabled' ? 'off' : 'ok'),
           raw: s,
         })
       }
@@ -250,13 +318,30 @@ export default {
           name: p.name || p.id,
           desc: p.description || '',
           glyph: ICONS.blocks,
-          meta: this.$t('market.pluginLabel') + (p.version ? ' · v' + p.version : ''),
+          meta: p.version ? ('v' + p.version) : '',
           stateLabel: p.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'),
           stateClass: p.enabled ? 'ok' : 'off',
           raw: p,
         })
       }
       return kw ? rows.filter(r => (r.name + ' ' + r.id + ' ' + r.desc).toLowerCase().includes(kw)) : rows
+    },
+    /** 「已安装」子分组：插件 = 面板型 skill + JAR/Web 插件；Skill = 纯对话型。 */
+    installedPluginRows() {
+      return this.installedRows.filter(r => r.kind === 'plugin' || r.panel)
+    },
+    installedSkillRows() {
+      return this.installedRows.filter(r => r.kind === 'skill' && !r.panel)
+    },
+    /** 标签顺序：插件在前、Skill 在后，与 MarketPane.vue 已安装 tab 一致。 */
+    installedGroups() {
+      return [
+        { key: 'plugin', title: this.$t('market.sectionPluginTitle'), rows: this.installedPluginRows },
+        { key: 'skill', title: this.$t('market.sectionSkillTitle'), rows: this.installedSkillRows },
+      ]
+    },
+    activeInstalledRows() {
+      return this.installedTab === 'skill' ? this.installedSkillRows : this.installedPluginRows
     },
     skillRows() {
       const kw = this.searchText.trim().toLowerCase()
@@ -328,7 +413,9 @@ export default {
       this.sections[key] = !this.sections[key]
     },
     openDetail(row) {
-      this.$emit('open-detail', { kind: row.kind, id: row.id, name: row.name })
+      // group: 「语音」合并插件条目——详情页据此按本机成员 skill 合成视图，
+      // 不去在线广场按这个 id 查（'voice' 不是 registry 里的条目）
+      this.$emit('open-detail', { kind: row.kind, id: row.id, name: row.name, group: !!row.group })
     },
     // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
     openPurchase(row) {
@@ -336,6 +423,8 @@ export default {
       uni.showToast({ title: this.$t('market.openedPurchasePage'), icon: 'none' })
     },
     goToAccountSettings() {
+      // 工作台里设置是标签，不跳页（dev-board#582）
+      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'account' })
       uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
     },
     async reloadAll() {
@@ -468,12 +557,12 @@ export default {
   margin: 8px 10px 6px;
   height: 28px;
   padding: 0 8px;
-  background: #fff;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
 
   &:focus-within {
-    border-color: #5BD197;
+    border-color: var(--awd-mint);
     box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.15);
   }
 }
@@ -481,7 +570,7 @@ export default {
 .msb-search-icon {
   width: 13px;
   height: 13px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   flex-shrink: 0;
 }
 
@@ -489,7 +578,7 @@ export default {
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: #2C3338;
+  color: var(--awd-text);
   background: transparent;
   border: none;
   outline: none;
@@ -503,13 +592,13 @@ export default {
   line-height: 15px;
   text-align: center;
   border-radius: 4px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   font-size: 13px;
   cursor: pointer;
 
   &:hover {
-    background: #F1F3F5;
-    color: #2C3338;
+    background: var(--awd-surface-2);
+    color: var(--awd-text);
   }
 }
 
@@ -529,14 +618,14 @@ export default {
   user-select: none;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.04);
+    background: var(--awd-accent-wash);
   }
 }
 
 .msb-sec-chevron {
   width: 12px;
   font-size: 12px;
-  color: #868E96;
+  color: var(--awd-text-2);
   transition: transform 0.12s ease;
   transform-origin: center;
 
@@ -549,13 +638,13 @@ export default {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #495057;
+  color: var(--awd-text-2);
 }
 
 .msb-sec-count {
   font-size: 10px;
-  color: #868E96;
-  background: #F1F3F5;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
   border-radius: 999px;
   padding: 0 6px;
   line-height: 14px;
@@ -573,12 +662,12 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  color: #868E96;
+  color: var(--awd-text-2);
   cursor: pointer;
 
   &:hover {
-    background: #E8F3ED;
-    color: #1A5336;
+    background: var(--awd-accent-soft);
+    color: var(--awd-accent-text);
   }
 }
 
@@ -595,13 +684,62 @@ export default {
   to { transform: rotate(360deg); }
 }
 
+/* 组内横向标签（已安装的插件/Skill、Marketplace 的 Skill/插件）：并排小胶囊，
+   竖着叠分组会把后一组推出视口（dev-board#67）。 */
+.msb-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px 22px;
+}
+
+.msb-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  background: transparent;
+
+  text {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--awd-text-2);
+  }
+
+  &:hover {
+    background: var(--awd-accent-wash);
+  }
+
+  &.active {
+    background: var(--awd-accent-soft);
+
+    text {
+      color: var(--awd-accent-text);
+    }
+  }
+}
+
+.msb-tab-count {
+  font-size: 9.5px;
+  color: var(--awd-text-3);
+}
+
+.msb-tab.active .msb-tab-count {
+  color: var(--awd-accent-text);
+  opacity: 0.7;
+}
+
 .msb-empty {
   padding: 8px 12px 10px 22px;
   font-size: 11px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
 
   &.msb-error {
-    color: #B4552D;
+    color: var(--awd-danger-text);
   }
 }
 
@@ -614,7 +752,7 @@ export default {
   cursor: pointer;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.05);
+    background: var(--awd-accent-wash);
   }
 }
 
@@ -624,11 +762,11 @@ export default {
   flex-shrink: 0;
   margin-top: 1px;
   border-radius: 6px;
-  background: #E8F3ED;
+  background: var(--awd-accent-soft);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 
   svg {
     width: 14px;
@@ -637,8 +775,8 @@ export default {
 
   /* 插件 = 可执行扩展：深底图标与 Skill（浅底）一眼区分 */
   &.is-plugin {
-    background: #123A26;
-    color: #fff;
+    background: var(--awd-accent-hover);
+    color: var(--awd-text-on-accent);
   }
 }
 
@@ -653,7 +791,7 @@ export default {
 .msb-row-name {
   font-size: 12.5px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -662,7 +800,7 @@ export default {
 .msb-row-desc {
   font-size: 11px;
   line-height: 15px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -670,7 +808,7 @@ export default {
 
 .msb-row-meta {
   font-size: 10px;
-  color: #ADB5BD;
+  color: var(--awd-text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -683,18 +821,18 @@ export default {
   line-height: 18px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #1A5336;
-  border: 1px solid #1A5336;
+  background: var(--awd-accent);
+  border: 1px solid var(--awd-accent);
   cursor: pointer;
 
   text {
     font-size: 10px;
     font-weight: 600;
-    color: #fff;
+    color: var(--awd-text-on-accent);
   }
 
   &:hover {
-    background: #123A26;
+    background: var(--awd-accent-hover);
   }
 
   &.busy {
@@ -704,15 +842,15 @@ export default {
 
   /* 付费未购：描边而非实心，与「安装」区分开——点它去的是官网，不是本机动作 */
   &.buy {
-    background: #fff;
-    border-color: #1A5336;
+    background: var(--awd-surface);
+    border-color: var(--awd-accent);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
     }
 
     &:hover {
-      background: #E8F3ED;
+      background: var(--awd-accent-soft);
     }
   }
 }
@@ -725,35 +863,45 @@ export default {
   border-radius: 999px;
 
   &.ok {
-    background: #E8F3ED;
+    background: var(--awd-accent-soft);
 
     text {
-      color: #1A5336;
+      color: var(--awd-accent-text);
       font-size: 10px;
     }
   }
 
   &.off {
-    background: #F1F3F5;
+    background: var(--awd-surface-2);
 
     text {
-      color: #868E96;
+      color: var(--awd-text-2);
       font-size: 10px;
     }
   }
 
   /* 未连接账户：与顶栏「试用版」chip 同一族暖色，是引导不是报错 */
   &.need {
-    background: #FDF7EC;
+    background: var(--awd-bg);
     cursor: pointer;
 
     text {
-      color: #8A6D2F;
+      color: var(--awd-warning-text);
       font-size: 10px;
     }
 
     &:hover {
-      background: #F7EBD5;
+      background: var(--awd-bg);
+    }
+  }
+
+  /* 资源包下载中：与 .need 同一族暖色（都是「还没就绪」），不可点 */
+  &.downloading {
+    background: var(--awd-warning-soft);
+
+    text {
+      color: var(--awd-warning-text);
+      font-size: 10px;
     }
   }
 }

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Patch static/CustomTarget_emscripten_fs_image.mk to pack zh-CN into soffice.data.
 # Run AFTER the first full make (instdir must exist for the $(wildcard) to hit).
 import sys

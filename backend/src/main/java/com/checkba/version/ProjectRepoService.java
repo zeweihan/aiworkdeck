@@ -1,6 +1,12 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
+import com.checkba.service.LocalIdentityService;
 import com.checkba.storage.ProjectStorageResolver;
+import com.checkba.version.merge.Decision;
+import com.checkba.version.merge.MergeRecord;
 import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.DiffCommand;
 import org.eclipse.jgit.api.Git;
@@ -17,7 +23,9 @@ import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevFlag;
 import org.eclipse.jgit.revwalk.RevObject;
+import org.eclipse.jgit.revwalk.RevSort;
 import org.eclipse.jgit.revwalk.RevTag;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
@@ -27,19 +35,30 @@ import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.treewalk.filter.PathFilter;
 import org.eclipse.jgit.treewalk.filter.TreeFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 每项目一个 Git 仓库的薄封装。只认识 Git 概念，不认识「工作段」——
@@ -58,7 +77,54 @@ public class ProjectRepoService {
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(ProjectRepoService.class);
 
+    /**
+     * 单个历史版本文件读入内存的体积闸（{@link #blobAt}）。可达性不需要特殊操作：
+     * workTree 就是项目存储根目录，commitAll 把工作区里没被 gitignore 挡掉的文件整体
+     * 入库——会议录音的 webm/mp3、手机端回传的现场影像视频、扫描件全都会进版本历史。
+     * 写侧后来加了体积过滤（{@link #maxTrackedFileSizeBytes}），但它只拦**这次新增/
+     * 修改**的超限文件，管不到过滤上线之前就已经在库里的大文件，读侧这道闸因此照样
+     * 必须存在。云端/团队服务器部署的堆上限只有 1.5GB
+     * （deploy/cloud/aiworkdeck-cloud.service 的 {@code -Xmx1536m}），blobAt 原来整份
+     * 读进 ByteArrayOutputStream 没有任何体积闸，几个并发请求各读一份大文件就能把堆打爆。
+     * 50MB 是这个闸的取值：普通法律文档（docx/pdf/xlsx，含内嵌高清扫描件）几乎不会到这个
+     * 量级，真正会撞上它的正是会议录音/现场影像这类本不该走这条内存缓冲路径的媒体文件；
+     * 50MB × 十几个并发请求仍在 1.5GB 堆的安全余量内。
+     */
+    private static final long MAX_BLOB_SIZE_BYTES = 50L * 1024 * 1024;
+
+    /**
+     * 单个新增/修改文件入版本库的体积上限（尽调模块 P3 稳定性余项 #3，dev-board#100，
+     * 可配置，默认 50MB——与上面读侧的 {@link #MAX_BLOB_SIZE_BYTES} 同一个保守量级）。
+     * {@link #commitAll} 里超过这个阈值的文件这一轮不 {@code git add}，只在提交说明里
+     * 追加一行指纹记录（路径 + 体积 + sha256），不静默吞掉。**只影响这次新增/修改**：
+     * 已经在库里的旧版本不受影响——未被 add 的路径不会被当成删除处理（"文件被删除"
+     * 走单独一条只看"磁盘上已经不存在的已跟踪路径"的分支，与体积无关，见 commitAll）。
+     * 字段级 {@code @Value}（不是构造器参数）：ProjectRepoService 的单参构造器被约
+     * 20 处测试手工 {@code new}，改构造器签名要挨个改，字段注入零改动、精确复刻
+     * SystemProxyRefresher.autoRefresh 的既有写法——手工 new 的测试用不到 Spring
+     * 容器，字段就停留在这里声明的默认值。
+     */
+    @Value("${version.max-tracked-file-size-bytes:52428800}")
+    private long maxTrackedFileSizeBytes = DEFAULT_MAX_TRACKED_FILE_SIZE_BYTES;
+
+    static final long DEFAULT_MAX_TRACKED_FILE_SIZE_BYTES = 50L * 1024 * 1024;
+
+    /** 仅供测试覆盖体积阈值（包内可见）。生产路径永远走 Spring 注入/上面的默认值。 */
+    void setMaxTrackedFileSizeBytesForTest(long bytes) {
+        this.maxTrackedFileSizeBytes = bytes;
+    }
+
     private final ProjectStorageResolver storageResolver;
+
+    /**
+     * 逐段溯源的预算钩子（spec 2026-09-14 §4.7）。{@code ObjectProvider} 而不是直接注入：
+     * {@code ProvenanceService} 反过来依赖本类，直接注入就成了构造期的循环依赖；
+     * 用惰性取用把这个环拆开，本类照旧只依赖 {@code ProjectStorageResolver} 一个东西。
+     * 取不到（手工 new 的测试）时预算整条静默跳过——溯源算不算得出来，与提交成不成功无关。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.checkba.version.merge.ProvenanceService>
+            provenanceServiceProvider;
 
     public ProjectRepoService(ProjectStorageResolver storageResolver) {
         this.storageResolver = storageResolver;
@@ -76,7 +142,59 @@ public class ProjectRepoService {
         return Files.isDirectory(gitDir(projectId).resolve("objects"));
     }
 
+    /**
+     * 版本历史在磁盘上占了多少（gitDir 递归求和；仓库不存在或读不动一律回 0）。
+     * 只给 /status 展示用——律师要能看见"留底占了多少地方"才敢放心让它默认开着。
+     * 不做缓存：/status 本身已经在跑两次 {@code git add "."}（见 pendingChanges），
+     * 相比之下走一遍 gitDir 的目录项可以忽略。
+     */
+    public long repoSizeBytes(long projectId) {
+        Path dir = gitDir(projectId);
+        if (!Files.isDirectory(dir)) return 0L;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            return walk.filter(Files::isRegularFile).mapToLong(p -> {
+                try {
+                    return Files.size(p);
+                } catch (IOException e) {
+                    return 0L;
+                }
+            }).sum();
+        } catch (IOException e) {
+            log.warn("统计版本记录占用失败: project={}", projectId, e);
+            return 0L;
+        }
+    }
+
+    /**
+     * 删掉整个版本库目录（关闭版本记录用，dev-board#438）。
+     *
+     * <p><b>只动 gitDir，绝不碰工作区</b>——工作区里是律师自己的文件，关闭版本记录
+     * 不该改动其中任何一个字节（也包括不做"切回主线"这类还原：律师此刻磁盘上看到的
+     * 就是他要留下的那一份）。这是本方法与「历史永不重写」那条铁律唯一的例外口子：
+     * 律师显式要求把留底整个删掉，删的是整座仓库，不是改写其中某段历史。
+     */
+    public void deleteRepository(long projectId) {
+        Path dir = gitDir(projectId);
+        if (!Files.isDirectory(dir)) return;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    log.warn("删除版本库文件失败: {}", p, e);
+                }
+            });
+        } catch (IOException e) {
+            throw new VersionException("删除版本库失败: project=" + projectId, e);
+        }
+        if (Files.exists(dir)) {
+            throw new VersionException("删除版本库失败（目录仍在）: project=" + projectId);
+        }
+        log.info("版本记录已关闭，历史已删除: project={}", projectId);
+    }
+
     public Repository open(long projectId) {
+        ensureExcludes(projectId);
         try {
             return new FileRepositoryBuilder()
                     .setGitDir(gitDir(projectId).toFile())
@@ -85,6 +203,51 @@ public class ProjectRepoService {
                     .build();
         } catch (IOException e) {
             throw new VersionException("打开版本记录失败: project=" + projectId, e);
+        }
+    }
+
+    /** Office（Word/WPS）打开文档时落在同目录的锁文件，绝不该进版本历史（dev-board#463）。 */
+    private static final String EXCLUDE_RULE_OFFICE_LOCK = "~$*";
+
+    /**
+     * 幂等地把排除规则写进 {@code $GIT_DIR/info/exclude}（dev-board#463）。
+     *
+     * <p>写在 gitDir 而不是工作区的 .gitignore：gitDir 恒在
+     * {@code {globalRoot}/repos/project-{id}.git}，律师自己的文件夹里不会多出一个
+     * 他没写过的文件，而且与他自带的 .gitignore 叠加生效、互不覆盖
+     * （JGitAddBehaviorProbeTest.probeInfoExcludeInsteadOfWritingGitignoreIntoUserFolder
+     * 已经把这条 JGit 行为钉死）。
+     *
+     * <p>落点选在 {@link #open} 与 {@link #init} 两处：建仓有三条入口
+     * （{@link #init}/{@link #initEmptyForReceive}/{@link #cloneFromRemote}），
+     * prepare-remote 还会删掉整个 gitDir 重建，而一切读写又都汇进 {@code open}，
+     * 只有它能覆盖已经存在的老仓库与另外两条建仓路径。init 里额外调一次是因为
+     * 它自己不走 open，规则必须早于那笔 {@code add(".")}。
+     *
+     * <p>只补这一条规则，不动文件里已有的其它行；写失败只记日志——版本记录是保险，
+     * 不能因为一条排除规则写不下去就让开仓/提交整个失败。
+     */
+    private void ensureExcludes(long projectId) {
+        Path gitDir = gitDir(projectId);
+        if (!Files.isDirectory(gitDir)) return; // 仓库还不存在，交给调用方原本的错误路径
+        Path exclude = gitDir.resolve("info").resolve("exclude");
+        try {
+            if (Files.exists(exclude)) {
+                String current = Files.readString(exclude);
+                boolean present = current.lines()
+                        .anyMatch(l -> l.trim().equals(EXCLUDE_RULE_OFFICE_LOCK));
+                if (present) return;
+                String sep = current.isEmpty() || current.endsWith("\n") ? "" : "\n";
+                Files.writeString(exclude, sep + EXCLUDE_RULE_OFFICE_LOCK + "\n",
+                        java.nio.file.StandardOpenOption.APPEND);
+            } else {
+                Files.createDirectories(exclude.getParent());
+                Files.writeString(exclude,
+                        "# AI WorkDeck: Office 打开文档时的锁文件不进版本记录\n"
+                                + EXCLUDE_RULE_OFFICE_LOCK + "\n");
+            }
+        } catch (IOException e) {
+            log.warn("写入版本库排除规则失败: project={} ({})", projectId, e.getMessage());
         }
     }
 
@@ -99,6 +262,7 @@ public class ProjectRepoService {
                     .setWorkTree(workTree(projectId).toFile())
                     .build()) {
                 repo.create(true);
+                ensureExcludes(projectId);
                 try (Git git = new Git(repo)) {
                     git.add().addFilepattern(".").call();
                     git.commit()
@@ -116,31 +280,195 @@ public class ProjectRepoService {
 
     private static final String KIND_TRAILER = "X-AWD-Kind: ";
     private static final String NOTE_TRAILER = "X-AWD-Note: ";
+    /** 体积过滤跳过的文件清单（尽调 P3#3）：commitAll 里超限文件不入库，指纹落这一行。 */
+    private static final String SKIPPED_TRAILER = "X-AWD-Skipped-Large-Files: ";
+    /**
+     * 冲突裁决结果（spec 2026-09-14 §2.2）：{@code <path>=<MAIN|DRAFT|BOTH>; ...}。
+     * 三个裁决合并调用点（结束工作裁决 / 采纳裁决 / 取回最新稿裁决）共用这一行；
+     * 干净合并不带这条尾注。path 里的 {@code % ; =} 与换行走 URL 编码，见
+     * {@link #encodeResolutionPath}。
+     */
+    private static final String RESOLUTIONS_TRAILER = "X-AWD-Resolutions: ";
+    /**
+     * 这一次裁决的语境（spec 2026-09-14 §4.6）：{@code adopt|cloud|session-end}。
+     * 所有裁决提交都写（**含只有整份三选一、一处逐段合并都没有的**）：裁决尾注里只有裸的
+     * MAIN/DRAFT，同一个标签在三语境里指向的物理侧完全不同，没有这一行，提交历史就只能
+     * 把「留了你这边」猜着写，结束工作撞车那一档会把话说反。
+     */
+    private static final String MERGE_CONTEXT_TRAILER = "X-AWD-Merge-Context: ";
+    /**
+     * 三方合并的逐文件记录（spec 2026-09-14 §4.6）：
+     * {@code <path>=<mode>:<list>; ...}，按路径排序；{@code mode} ∈ {@code auto|manual}，
+     * {@code auto} 的 list 是 {@code M<n>,T<m>}（两边各合入几处），
+     * {@code manual} 的 list 是逐处 {@code <key><side><action>} 用 {@code ,} 连接
+     * （{@code X}/{@code F} 没有 side，写成 {@code p9X}、{@code p20F}）。
+     * 只有整份三选一的裁决不带这条尾注。
+     */
+    private static final String MERGES_TRAILER = "X-AWD-Merges: ";
+
+    /**
+     * {@code .git/index.lock} 陈旧锁的判定阈值。commitAll/commitNow 等一切改仓库状态的
+     * 路径统一经 {@code WorkSessionService.repoLock(projectId)} 这把进程内可重入锁串行化，
+     * 也就是说走到这里、真正要执行 {@code git.add()}/{@code git.commit()} 的线程，
+     * 在本进程范围内已经是唯一一个——此刻磁盘上如果还留着 index.lock，只可能是上一次
+     * 进程崩溃/被强杀时没来得及删掉的残留，不会是本进程内的另一个线程正持有
+     * （那不可能，锁已经在我们手上）。mtime 阈值是防唯一的理论例外：另一个独立进程
+     * 这一刻真的在写同一个仓库（不应该发生——见 gitDir/workTree 契约与红线——但万一
+     * 发生，新鲜的 index.lock 不该被当场删掉抢别人的锁）。5 分钟远超一次提交应该花的时间
+     * （提交的是律师项目里的文档，不是会议录音那类大文件——issue 6 已经把单文件读取
+     * 体积闸在 50MB，写入路径这边正常文档提交是秒级操作）。
+     */
+    private static final Duration STALE_INDEX_LOCK_AGE = Duration.ofMinutes(5);
+
+    /**
+     * 清理陈旧的 index.lock——不清理的话，JGit 的 DirCache 撞上残留锁必抛
+     * LockFailedException，此后每一次提交都会同样失败，而进程内的可重入锁对磁盘上的
+     * 残留文件毫无作用，版本记录会从崩溃那一刻起永久静默停摆，直到有人手工删文件。
+     * 探测/清理本身失败不阻断——让后续真实的 git 操作把原因（多半还是
+     * LockFailedException）抛给外层，不在这里吞掉或伪造成功。
+     */
+    private void clearStaleIndexLock(long projectId) {
+        Path lockFile = gitDir(projectId).resolve("index.lock");
+        try {
+            if (!Files.exists(lockFile)) return;
+            FileTime mtime = Files.getLastModifiedTime(lockFile);
+            if (mtime.toInstant().isBefore(Instant.now().minus(STALE_INDEX_LOCK_AGE))) {
+                Files.delete(lockFile);
+                log.warn("清理陈旧的 .git/index.lock（mtime={}）: project={}", mtime, projectId);
+            }
+        } catch (IOException e) {
+            log.warn("陈旧 index.lock 探测/清理失败: project={}", projectId, e);
+        }
+    }
 
     /**
      * 把工作区当前状态整体提交。无任何变更时返回 null（不产生空提交）。
      * kind 写入提交消息尾注，供时间线区分「自动存档」与「工作段」。
+     *
+     * <p>体积过滤（尽调模块 P3 稳定性余项 #3，dev-board#100）：新增/修改文件超过
+     * {@link #maxTrackedFileSizeBytes} 的这一轮不 add，只记指纹——**只影响新增/修改**：
+     * <ul>
+     *   <li>新增（未跟踪）超限 → 不 add，保持未跟踪，指纹进提交说明；</li>
+     *   <li>已跟踪文件被改动、改动后仍超限 → 不 add 这次改动，文件在最新提交里保持
+     *       旧版本内容，不会被误判成"删除"；</li>
+     *   <li>已跟踪文件在磁盘上被删除 → 正常入库这次删除，不受体积过滤影响（磁盘上
+     *       已经没有这个文件了，谈不上"超限"，这也是"已经在库里的大文件不能被这次
+     *       改动删掉"这条红线的关键：本方法从不对任何路径做"未 add 就视为删除"的
+     *       反向推断）；</li>
+     *   <li>合并冲突路径（getConflicting）不做体积过滤——`git add` 在合并窗口里等于
+     *       "这个冲突我解决了"（见类头 #20 条注释），跳过会让合并卡死在
+     *       MERGING，比让一份大文件多留一版历史严重得多。</li>
+     * </ul>
+     * 被跳过的文件即使这一轮没有其它变更也要落一笔提交（{@code setAllowEmpty(true)}），
+     * 否则"出现过一份超限文件"这件事会连指纹记录都没有、彻底无痕迹——与"不静默丢
+     * 东西"的要求矛盾。
      */
     public String commitAll(long projectId, String message, String kind, String note,
                             String authorName, String authorEmail) {
+        clearStaleIndexLock(projectId);
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
-            git.add().addFilepattern(".").call();
-            git.add().addFilepattern(".").setUpdate(true).call();
+            Path workTree = repo.getWorkTree().toPath();
+            Status pre = git.status().call();
+
+            List<String> skipped = new ArrayList<>();
+            List<String> okNew = new ArrayList<>(pre.getConflicting());
+            for (String path : pre.getUntracked()) {
+                String fp = oversizedFingerprint(workTree, path);
+                if (fp != null) skipped.add(fp); else okNew.add(path);
+            }
+            List<String> okTracked = new ArrayList<>(pre.getMissing()); // 删除不受体积过滤影响
+            for (String path : pre.getModified()) {
+                String fp = oversizedFingerprint(workTree, path);
+                if (fp != null) skipped.add(fp); else okTracked.add(path);
+            }
+
+            if (!okNew.isEmpty()) {
+                var add = git.add();
+                okNew.forEach(add::addFilepattern);
+                add.call();
+            }
+            if (!okTracked.isEmpty()) {
+                var add = git.add().setUpdate(true);
+                okTracked.forEach(add::addFilepattern);
+                add.call();
+            }
+
             Status status = git.status().call();
-            if (status.isClean()) return null;
+            if (status.isClean() && skipped.isEmpty()) return null;
 
             StringBuilder msg = new StringBuilder(message).append("\n\n")
                     .append(KIND_TRAILER).append(kind);
             if (note != null && !note.isBlank()) {
                 msg.append('\n').append(NOTE_TRAILER).append(note);
             }
+            if (!skipped.isEmpty()) {
+                msg.append('\n').append(SKIPPED_TRAILER).append(String.join("; ", skipped));
+            }
             RevCommit c = git.commit()
                     .setMessage(msg.toString())
+                    .setAllowEmpty(true) // 体积过滤可能导致"这一轮只有跳过记录、树没变化"，仍要落一笔可追溯的提交
                     .setAuthor(authorName, authorEmail)
                     .call();
+            List<String> touched = new ArrayList<>(okNew);
+            touched.addAll(okTracked);
+            precomputeProvenance(projectId, c.getName(), touched);
             return c.getName();
         } catch (Exception e) {
             throw new VersionException("提交失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 这一版落定之后，把本次动过的文档的逐段溯源在后台先算好（spec 2026-09-14 §4.7）。
+     *
+     * <p>整段包在 try/catch 里，而且只在提交**已经成功**之后调：裁决窗口是数据安全窗口，
+     * 一个只为侧栏提速的旁路绝不能把律师刚刚裁决完的提交推回去。
+     */
+    private void precomputeProvenance(long projectId, String sha, Collection<String> relPaths) {
+        try {
+            if (provenanceServiceProvider == null || sha == null || relPaths == null || relPaths.isEmpty()) {
+                return;
+            }
+            com.checkba.version.merge.ProvenanceService provenance = provenanceServiceProvider.getIfAvailable();
+            if (provenance == null) return;
+            provenance.precomputeAsync(projectId, sha, new ArrayList<>(new LinkedHashSet<>(relPaths)));
+        } catch (Exception e) {
+            log.debug("预算逐段溯源失败（不影响提交）: project={} sha={}", projectId, sha, e);
+        }
+    }
+
+    /**
+     * 判断该（未跟踪/已修改）路径是否超过体积阈值；不超限返回 null，超限返回一段
+     * 可读的"指纹"文本（相对路径 + 体积 + sha256），供写进提交说明。只在真的超限
+     * 时才流式计算 sha256（不整份读进内存），不影响正常大小文件的提交路径。
+     */
+    private String oversizedFingerprint(Path workTree, String relPath) {
+        Path p = workTree.resolve(relPath);
+        long size;
+        try {
+            size = Files.size(p);
+        } catch (IOException e) {
+            return null; // 读不到大小（竞态删除等）当正常处理，交给后续 add 自然处理
+        }
+        if (size <= maxTrackedFileSizeBytes) return null;
+        String fingerprint;
+        try {
+            fingerprint = sha256Hex(p);
+        } catch (IOException e) {
+            fingerprint = "unavailable";
+        }
+        return relPath + " (" + size + " bytes, sha256:" + fingerprint + ")";
+    }
+
+    private static String sha256Hex(Path p) throws IOException {
+        try (InputStream in = Files.newInputStream(p)) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+            return HexFormat.of().formatHex(md.digest());
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e); // JVM 标配算法，不会真的发生
         }
     }
 
@@ -156,6 +484,32 @@ public class ProjectRepoService {
             return out;
         } catch (Exception e) {
             throw new VersionException("读取历史失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * {@code fromRef..toRef} 之间的提交（可达 to、不可达 from），最多 {@code cap} 条，
+     * 新的在前。任一 ref 解析不出就回空列表——「算不出来」不是错误（口径同
+     * {@link #resolveRef}/{@link #mergeBase}），调用方自己决定怎么退化。
+     *
+     * <p>当前唯一用途：云端状态里的「同事交了新稿 · N 版」要数一数
+     * {@code master..origin/master} 有几版、都是谁提交的（spec 2026-09-14 §2.5）。
+     */
+    public List<VersionEntry> commitsBetween(long projectId, String fromRef, String toRef, int cap) {
+        List<VersionEntry> out = new ArrayList<>();
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            ObjectId from = repo.resolve(fromRef);
+            ObjectId to = repo.resolve(toRef);
+            if (to == null) return out;
+            Map<String, String> milestones = milestonesIn(repo);
+            var cmd = git.log().add(to).setMaxCount(cap);
+            if (from != null) cmd = cmd.not(from);
+            for (RevCommit c : cmd.call()) {
+                out.add(toEntry(c, milestones));
+            }
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取区间历史失败: project=" + projectId, e);
         }
     }
 
@@ -195,6 +549,240 @@ public class ProjectRepoService {
         }
     }
 
+    // ==================== 统一历史（spec 2026-09-14 §2.4） ====================
+
+    /**
+     * 一条参与这次 walk 的引用。{@code type} 只有 {@code "remote"} 有特殊语义
+     * （它决定这条引用算「案件库那一侧」还是「本机这一侧」，进而决定每一行的
+     * {@code remote} 位）；其余取值（mainline / draft / local）只作为标签原样带出去。
+     * {@code name} 是给律师看的那个词，由调用方给——本类不认识「稿」这种业务概念。
+     */
+    public record HistoryRoot(String ref, String type, String name) {}
+
+    /** 打在某一版上的引用标签（这一版正是某条线的尖端）。 */
+    public record RefLabel(String type, String name) {}
+
+    /** 相对第一父提交的 name-status 计数（已滤掉 {@code .awd/}）。 */
+    public record ChangeCounts(int added, int modified, int deleted, int renamed) {}
+
+    /**
+     * 历史里的一行。{@code remote} = 只有案件库那条线能走到它、本机主线与各稿都走不到
+     * （也就是「同事交了、我还没取回」的那几版）。
+     * {@code autoCount} 是折叠进这一行的自动存档数（{@code includeAuto=false} 时）——
+     * 只含**属于这一段工作**的那几笔（历史结构决定，与筛选条件无关）。
+     */
+    public record HistoryRow(VersionEntry entry, List<RefLabel> refs, boolean remote,
+                             int autoCount, ChangeCounts changes) {}
+
+    /** 一页历史。{@code nextCursor} 为 null 表示没有更多了。 */
+    public record HistoryPage(List<HistoryRow> rows, String nextCursor) {}
+
+    /**
+     * 筛选条件。全部可空/可缺省：
+     * {@code cursor} 是上一页最后一行的 sha（从它**之后**继续）；
+     * {@code relPath} 非空时只留触及该文件的版本（口径同 {@link #logForPath}）；
+     * {@code author} 匹配作者邮箱或展示名（都按整串比，不做模糊）；
+     * {@code q} 是标题/完整消息的子串（不区分大小写）；
+     * {@code from}/{@code to} 含端。
+     */
+    public record HistoryQuery(int limit, String cursor, String author, String relPath,
+                               String q, Instant from, Instant to, boolean includeAuto) {}
+
+    /**
+     * 一次 walk 最多看这么多提交（只数游标之后的）。防的是「筛选条件把所有行都排除掉」
+     * 时把整部历史走穿——那种情况下多走几万条也变不出一行来。
+     */
+    static final int HISTORY_MAX_SCAN = 20000;
+
+    /**
+     * 主线 + 各稿 + 案件库最新稿的合并历史，也就是 {@code git log --graph --all} 那一份
+     * （spec 2026-09-14 §2.4）。按提交时间倒序，同时要求拓扑有序——
+     * {@link RevSort#TOPO} 保证每个父提交一定排在它全部子提交之后，
+     * 这既是泳道图能连得上线的前提，也是下面那两个 {@link RevFlag} 能正确传播的前提。
+     *
+     * <p>{@code remote} 位用 JGit 的旗标传播算：案件库那条线的尖端点上 REMOTE，
+     * 本机各条线的尖端点上 LOCAL，{@link RevWalk#carry} 让旗标顺着父边一路带下去；
+     * 一条提交拿到 REMOTE 却没拿到 LOCAL，就是本机还走不到的那种。
+     * 这比「先把本机历史整个 walk 一遍收进 Set 再比对」便宜一趟完整历史。
+     */
+    public HistoryPage history(long projectId, List<HistoryRoot> roots, HistoryQuery query) {
+        int limit = Math.max(1, query.limit());
+        List<MutableRow> picked = new ArrayList<>();
+        String nextCursor = null;
+
+        try (Repository repo = open(projectId); Git git = new Git(repo);
+             RevWalk walk = new RevWalk(repo); RevWalk diffWalk = new RevWalk(repo)) {
+            walk.sort(RevSort.COMMIT_TIME_DESC);
+            walk.sort(RevSort.TOPO, true);
+            RevFlag localSide = walk.newFlag("AWD_LOCAL");
+            RevFlag remoteSide = walk.newFlag("AWD_REMOTE");
+            walk.carry(localSide);
+            walk.carry(remoteSide);
+
+            Map<String, List<RefLabel>> tips = new LinkedHashMap<>();
+            boolean anyRoot = false;
+            for (HistoryRoot r : roots == null ? List.<HistoryRoot>of() : roots) {
+                if (r == null || r.ref() == null || r.ref().isBlank()) continue;
+                ObjectId id = repo.resolve(r.ref());
+                if (id == null) continue;
+                RevCommit tip;
+                try {
+                    tip = walk.parseCommit(id);
+                } catch (Exception e) {
+                    continue; // 引用指向的不是提交（理论上不会有）——跳过而不是让整页失败
+                }
+                tip.add("remote".equals(r.type()) ? remoteSide : localSide);
+                walk.markStart(tip);
+                anyRoot = true;
+                tips.computeIfAbsent(tip.getName(), k -> new ArrayList<>())
+                        .add(new RefLabel(r.type(), r.name()));
+            }
+            if (!anyRoot) return new HistoryPage(List.of(), null);
+
+            Map<String, String> milestones = milestonesIn(repo);
+            TreeFilter pathFilter = query.relPath() == null || query.relPath().isBlank()
+                    ? null : PathFilter.create(query.relPath());
+
+            boolean cursorPending = query.cursor() != null && !query.cursor().isBlank();
+            int scanned = 0;
+
+            // 自动存档的归属：walk 是新→旧，一段工作的几笔自动存档紧跟在这段工作那条
+            // 提交的**后面**，所以「归谁」就是「往上数最近的那条非自动提交」。三条纪律：
+            //  · 归属只看历史结构，**与筛选条件无关**——折叠态的自动存档一律不过筛子，
+            //    否则关键词一变，同一段工作的「自动存档 N 次」就跟着变（手工走查 2026-09-14）；
+            //  · 归属的那条提交要是**没有进这一页**（被筛掉了、或者它是上一页的最后一行），
+            //    它名下的自动存档一并不计——绝不能顺延到下一条命中的行上；
+            //  · 顶上那几笔（还没收尾的这段工作）没有更旧的归属可言，只能归给紧随其后的
+            //    第一条非自动提交；那一条也被筛掉的话，同样一并不计。
+            MutableRow autoOwner = null;     // 归属行，且它确实进了这一页
+            boolean autoOwnerSeen = false;   // 是否已经遇到过一条非自动提交
+            int leadingAutos = 0;
+
+            for (RevCommit c : walk) {
+                if (cursorPending) {
+                    if (c.getName().equals(query.cursor())) {
+                        cursorPending = false;
+                        // 游标那一行是上一页的最后一行，它已经把自己名下的自动存档数过了——
+                        // 这一页认它作归属但不计数，否则同一笔会在两页里各算一次。
+                        autoOwnerSeen = true;
+                    }
+                    continue;
+                }
+                if (++scanned > HISTORY_MAX_SCAN) {
+                    log.warn("历史扫描超过上限，提前收尾: project={}, scanned={}", projectId, scanned);
+                    break;
+                }
+                VersionEntry entry = toEntry(c, milestones);
+                boolean isAuto = "auto".equals(entry.kind());
+
+                if (isAuto && !query.includeAuto()) {
+                    if (autoOwner != null) autoOwner.autoCount++;
+                    else if (!autoOwnerSeen) leadingAutos++;
+                    continue;
+                }
+
+                // 走到这里就是一条候选行：从它起，后面那批自动存档改归它。
+                int carried = autoOwnerSeen ? 0 : leadingAutos;
+                leadingAutos = 0;
+                autoOwnerSeen = true;
+                autoOwner = null;            // 先当它进不了这一页，真进了再认回来
+
+                if (!matchesFilters(entry, query)) continue;
+                if (pathFilter != null && !touchesPath(repo, git, diffWalk, c, pathFilter)) continue;
+
+                if (picked.size() >= limit) {
+                    // 这一页满了，而后面还有实打实的一行——留下游标，下一页从它之后接着走
+                    nextCursor = picked.get(picked.size() - 1).entry.sha();
+                    break;
+                }
+                MutableRow row = new MutableRow();
+                row.entry = entry;
+                row.id = c.getId();
+                row.firstParent = c.getParentCount() == 0 ? null : c.getParent(0).getId();
+                row.refs = tips.getOrDefault(c.getName(), List.of());
+                row.remote = c.has(remoteSide) && !c.has(localSide);
+                row.autoCount = carried;
+                picked.add(row);
+                autoOwner = row;
+            }
+
+            List<HistoryRow> rows = new ArrayList<>(picked.size());
+            for (MutableRow r : picked) {
+                rows.add(new HistoryRow(r.entry, r.refs, r.remote, r.autoCount,
+                        countChanges(repo, git, diffWalk, r.firstParent, r.id)));
+            }
+            return new HistoryPage(rows, nextCursor);
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("读取统一历史失败: project=" + projectId, e);
+        }
+    }
+
+    /** history() 的中间态：记录挑中的行，等走完整趟 walk 再算变更计数。 */
+    private static final class MutableRow {
+        VersionEntry entry;
+        ObjectId id;
+        ObjectId firstParent;
+        List<RefLabel> refs = List.of();
+        boolean remote;
+        int autoCount;
+    }
+
+    /** 作者 / 关键词 / 日期三道便宜的筛子（路径那道贵，放在后面单独做）。 */
+    private static boolean matchesFilters(VersionEntry e, HistoryQuery q) {
+        if (q.from() != null && e.when() != null && e.when().isBefore(q.from())) return false;
+        if (q.to() != null && e.when() != null && e.when().isAfter(q.to())) return false;
+        if (q.author() != null && !q.author().isBlank()) {
+            String a = q.author().trim();
+            boolean hit = a.equalsIgnoreCase(e.authorEmail()) || a.equalsIgnoreCase(e.authorName());
+            if (!hit) return false;
+        }
+        if (q.q() != null && !q.q().isBlank()) {
+            String needle = q.q().trim().toLowerCase(Locale.ROOT);
+            String title = e.message() == null ? "" : e.message().toLowerCase(Locale.ROOT);
+            String note = e.note() == null ? "" : e.note().toLowerCase(Locale.ROOT);
+            if (!title.contains(needle) && !note.contains(needle)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 这一版有没有动过这个文件。口径与 {@link #logForPath} 一致：比的是**相对第一父提交**
+     * 的 diff（根提交与空树比），合并节点拿到的正是这段工作对该文件的净变化。
+     * 算不出来时保守地留下这一行——宁可多显示一行，也不要因为一次读取失败让某一版
+     * 从单文件历史里凭空消失。
+     */
+    private boolean touchesPath(Repository repo, Git git, RevWalk walk, RevCommit c, TreeFilter filter) {
+        try {
+            ObjectId firstParent = c.getParentCount() == 0 ? null : c.getParent(0).getId();
+            return !diffEntries(repo, git, walk, firstParent, c.getId(), filter).isEmpty();
+        } catch (Exception e) {
+            log.warn("按文件筛历史时读取变更失败，保留该版: sha={}", c.getName(), e);
+            return true;
+        }
+    }
+
+    /** 相对第一父提交的增删改名计数。算不出来给全 0（一行的计数不值得让整页失败）。 */
+    private ChangeCounts countChanges(Repository repo, Git git, RevWalk walk,
+                                      ObjectId firstParent, ObjectId id) {
+        int added = 0, modified = 0, deleted = 0, renamed = 0;
+        try {
+            for (FileChange fc : diffEntries(repo, git, walk, firstParent, id, null)) {
+                if (fc.path() == null || fc.path().startsWith(".awd/")) continue;
+                switch (fc.type()) {
+                    case ADD -> added++;
+                    case MODIFY -> modified++;
+                    case DELETE -> deleted++;
+                    case RENAME -> renamed++;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("统计某一版的变更计数失败: sha={}", id == null ? null : id.getName(), e);
+        }
+        return new ChangeCounts(added, modified, deleted, renamed);
+    }
+
     private VersionEntry toEntry(RevCommit c, Map<String, String> milestones) {
         String full = c.getFullMessage();
         String kind = extractTrailer(full, KIND_TRAILER);
@@ -204,12 +792,24 @@ public class ProjectRepoService {
         return new VersionEntry(
                 c.getName(),
                 c.getShortMessage(),
-                c.getAuthorIdent().getName(),
+                // 提交作者名是**写进 Git 历史的快照**，读时本地化只能落在出参上：历史永不
+                // 重写，作者名还派生了提交邮箱（WorkSessionService.email），改写入侧等于同一个
+                // 人在中英文界面下留下两种署名，把版本库里的身份劈成两半。单机模式下作者名
+                // 就是库里那个中文哨兵「本机用户」，英文界面的时间线会照原样显示中文
+                // （dev-board#351）；这里按当前界面语言替换后再交给 UI，真实用户名（含云端
+                // 协作方的署名）一个字都不动，Git 对象一字节都没碰。
+                LocalIdentityService.displayNameOf(c.getAuthorIdent().getName()),
+                // 邮箱是账户级身份的唯一可靠线索（见 VersionAuthorResolver），原值直出：
+                // 它不是给人看的字符串，不做本地化、不做任何改写。
+                c.getAuthorIdent().getEmailAddress(),
                 Instant.ofEpochSecond(c.getCommitTime()),
                 kind == null ? "auto" : kind,
                 note,
                 parents,
-                milestones.get(c.getName()));
+                milestones.get(c.getName()),
+                parseResolutions(extractTrailer(full, RESOLUTIONS_TRAILER)),
+                extractTrailer(full, MERGE_CONTEXT_TRAILER),
+                parseMerges(extractTrailer(full, MERGES_TRAILER)));
     }
 
     private String extractTrailer(String fullMessage, String prefix) {
@@ -218,6 +818,228 @@ public class ProjectRepoService {
             if (t.startsWith(prefix)) return t.substring(prefix.length()).trim();
         }
         return null;
+    }
+
+    // ==================== 裁决尾注（spec 2026-09-14 §2.2） ====================
+
+    /**
+     * {@code <path>=<KEPT>; ...} 尾注文本。空/全 null 的裁决表回 null（干净合并不带这条）。
+     * 顺序按路径排序：同一次裁决在任何机器上生成同一行文本，diff 与人眼比对都稳定。
+     */
+    static String resolutionsTrailerValue(Map<String, String> resolutions) {
+        if (resolutions == null || resolutions.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (String path : new java.util.TreeSet<>(resolutions.keySet())) {
+            String kept = resolutions.get(path);
+            if (path == null || kept == null || kept.isBlank()) continue;
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(encodeResolutionPath(path)).append('=').append(kept);
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /**
+     * 只编码会破坏这一行格式的五个字符（{@code %} 必须第一个换，否则会二次编码）：
+     * 分隔符 {@code ;} {@code =}、转义符本身 {@code %}，以及会把尾注截成两行的换行。
+     * 中文文件名原样留着——尾注是人也要读的（律师把仓库 clone 出去用 git log 看）。
+     */
+    static String encodeResolutionPath(String path) {
+        return path.replace("%", "%25")
+                .replace(";", "%3B")
+                .replace("=", "%3D")
+                .replace("\r", "%0D")
+                .replace("\n", "%0A");
+    }
+
+    /** {@link #encodeResolutionPath} 的逆运算，接受任意 %XX。 */
+    static String decodeResolutionPath(String encoded) {
+        StringBuilder sb = new StringBuilder(encoded.length());
+        for (int i = 0; i < encoded.length(); i++) {
+            char c = encoded.charAt(i);
+            if (c == '%' && i + 2 < encoded.length()) {
+                try {
+                    sb.append((char) Integer.parseInt(encoded.substring(i + 1, i + 3), 16));
+                    i += 2;
+                    continue;
+                } catch (NumberFormatException ignored) {
+                    // 不是合法的 %XX：原样留着那个 %，别把用户的文件名吃掉
+                }
+            }
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    /** 尾注文本 → 裁决清单；没有这条尾注（干净合并/普通存档）回空列表。 */
+    static List<VersionEntry.Resolution> parseResolutions(String trailerValue) {
+        if (trailerValue == null || trailerValue.isBlank()) return List.of();
+        List<VersionEntry.Resolution> out = new ArrayList<>();
+        for (String part : trailerValue.split(";")) {
+            String item = part.trim();
+            if (item.isEmpty()) continue;
+            int at = item.lastIndexOf('=');
+            if (at <= 0 || at == item.length() - 1) continue;
+            out.add(new VersionEntry.Resolution(
+                    decodeResolutionPath(item.substring(0, at)),
+                    item.substring(at + 1).trim()));
+        }
+        return out;
+    }
+
+    // ==================== 三方合并尾注（spec 2026-09-14 §4.6） ====================
+
+    /**
+     * 逐处裁决清单的条数上限。提交说明是每次 {@code git log} 都要整条读出来的东西，
+     * 一份 800 段的长文书逐处记下去能把一条说明撑到几十 KB；超出的部分记个总数
+     * （{@code +N}）就够——这一行是给律师看的说明，不是可回放的操作日志。
+     */
+    static final int MERGES_TRAILER_MAX_ITEMS = 500;
+
+    private static final Set<String> MERGE_MODES = Set.of("auto", "manual");
+    /**
+     * 三个裁决语境的字面量（spec 2026-09-14 §4.6）。写进用户产物的提交尾注，
+     * 三个调用点（采纳 / 云端取回 / 结束工作）各拿一个，别再各自写字符串。
+     */
+    public static final String MERGE_CONTEXT_ADOPT = "adopt";
+    public static final String MERGE_CONTEXT_CLOUD = "cloud";
+    public static final String MERGE_CONTEXT_SESSION_END = "session-end";
+
+    private static final Set<String> MERGE_CONTEXTS =
+            Set.of(MERGE_CONTEXT_ADOPT, MERGE_CONTEXT_CLOUD, MERGE_CONTEXT_SESSION_END);
+    private static final Set<String> DECISION_ACTIONS = Set.of("A", "R", "X", "F");
+    private static final Set<String> DECISION_SIDES = Set.of("M", "T");
+
+    /**
+     * {@code <path>=<mode>:<list>; ...} 尾注文本，空表/全是脏数据回 null
+     * （只有整份三选一的裁决不带这条）。顺序按路径排序，与
+     * {@link #resolutionsTrailerValue} 同一个理由：同一次合并在任何机器上生成同一行文本。
+     */
+    static String mergesTrailerValue(List<MergeRecord> merges) {
+        if (merges == null || merges.isEmpty()) return null;
+        List<MergeRecord> sorted = merges.stream()
+                .filter(m -> m != null && m.path() != null && !m.path().isBlank()
+                        && m.mode() != null && MERGE_MODES.contains(m.mode()))
+                .sorted(Comparator.comparing(MergeRecord::path))
+                .toList();
+        StringBuilder sb = new StringBuilder();
+        for (MergeRecord m : sorted) {
+            String list = "auto".equals(m.mode())
+                    ? "M" + Math.max(0, m.mainCount()) + ",T" + Math.max(0, m.otherCount())
+                    : manualDecisionList(m.decisions());
+            if (sb.length() > 0) sb.append("; ");
+            sb.append(encodeResolutionPath(m.path())).append('=')
+              .append(m.mode()).append(':').append(list);
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /** 逐处裁决：{@code p3MA,p7TA,p9X,p20F}，超过上限截断并追加 {@code +N}。 */
+    private static String manualDecisionList(List<Decision> decisions) {
+        if (decisions == null || decisions.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        int written = 0;
+        int skipped = 0;
+        for (Decision d : decisions) {
+            String one = decisionItem(d);
+            if (one == null) continue;              // 脏数据不写进用户产物
+            if (written >= MERGES_TRAILER_MAX_ITEMS) { skipped++; continue; }
+            if (sb.length() > 0) sb.append(',');
+            sb.append(one);
+            written++;
+        }
+        if (skipped > 0) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append('+').append(skipped);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 一处裁决的写法：{@code <key><side><action>}。{@code X}（律师自己改的）与
+     * {@code F}（另一边只改了格式）没有侧别。side/action 不合法的条目回 null 被丢掉——
+     * 写进去的是用户产物，宁可少记一条，也不能留一条解不回来的。
+     */
+    private static String decisionItem(Decision d) {
+        if (d == null || d.key() == null || d.key().isBlank()) return null;
+        String action = d.action() == null ? "" : d.action().trim();
+        if (!DECISION_ACTIONS.contains(action)) return null;
+        String side = d.side() == null ? "" : d.side().trim();
+        if ("A".equals(action) || "R".equals(action)) {
+            if (!DECISION_SIDES.contains(side)) return null;
+        } else {
+            side = "";
+        }
+        return encodeMergeKey(d.key()) + side + action;
+    }
+
+    /**
+     * 单元键的编码：路径那五个字符之外再加一个 {@code ,}（逐处清单的分隔符）。
+     * 正常的键（{@code p12}/{@code t1.2.3}/{@code s3}/{@code Sheet1!B7}）一个字符都不会变，
+     * 这层只是防工作表名里带分隔符时把一行截成几条假记录。逆运算与路径共用
+     * {@link #decodeResolutionPath}（{@code %2C} 也是合法的 %XX）。
+     */
+    private static String encodeMergeKey(String key) {
+        return encodeResolutionPath(key).replace(",", "%2C");
+    }
+
+    /** 尾注文本 → 逐文件合并记录；没有这条尾注（只有整份三选一/普通存档）回空列表。 */
+    static List<VersionEntry.MergeSummary> parseMerges(String trailerValue) {
+        if (trailerValue == null || trailerValue.isBlank()) return List.of();
+        List<VersionEntry.MergeSummary> out = new ArrayList<>();
+        for (String part : trailerValue.split(";")) {
+            String item = part.trim();
+            if (item.isEmpty()) continue;
+            // 路径里的 = 已经编码成 %3D，所以第一个 = 就是分隔符；mode 到第一个 : 为止
+            int at = item.indexOf('=');
+            if (at <= 0 || at == item.length() - 1) continue;
+            String path = decodeResolutionPath(item.substring(0, at));
+            String rest = item.substring(at + 1);
+            int colon = rest.indexOf(':');
+            if (colon <= 0) continue;
+            String mode = rest.substring(0, colon).trim();
+            String list = rest.substring(colon + 1).trim();
+            if ("auto".equals(mode)) {
+                int mainCount = 0;
+                int otherCount = 0;
+                for (String tok : list.split(",")) {
+                    String t = tok.trim();
+                    if (t.length() < 2) continue;
+                    try {
+                        int n = Integer.parseInt(t.substring(1));
+                        if (t.charAt(0) == 'M') mainCount = n;
+                        else if (t.charAt(0) == 'T') otherCount = n;
+                    } catch (NumberFormatException ignored) {
+                        // 手工改花了的尾注：这一项不算数，别让整条历史读不出来
+                    }
+                }
+                out.add(new VersionEntry.MergeSummary(path, "auto", List.of(), mainCount, otherCount));
+            } else if ("manual".equals(mode)) {
+                List<Decision> decisions = new ArrayList<>();
+                for (String tok : list.split(",")) {
+                    Decision d = parseDecisionItem(tok.trim());
+                    if (d != null) decisions.add(d);
+                }
+                out.add(new VersionEntry.MergeSummary(path, "manual", List.copyOf(decisions), 0, 0));
+            }
+        }
+        return out;
+    }
+
+    /** {@link #decisionItem} 的逆运算；{@code +7}（截断计数）不是一处裁决，回 null。 */
+    private static Decision parseDecisionItem(String item) {
+        if (item.isEmpty() || item.charAt(0) == '+') return null;
+        String action = item.substring(item.length() - 1);
+        if (!DECISION_ACTIONS.contains(action)) return null;
+        String head = item.substring(0, item.length() - 1);
+        String side = "";
+        if ("A".equals(action) || "R".equals(action)) {
+            if (head.isEmpty()) return null;
+            side = head.substring(head.length() - 1);
+            if (!DECISION_SIDES.contains(side)) return null;
+            head = head.substring(0, head.length() - 1);
+        }
+        if (head.isEmpty()) return null;
+        return new Decision(decodeResolutionPath(head), side, action);
     }
 
     /**
@@ -310,6 +1132,8 @@ public class ProjectRepoService {
         try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
             ObjectId commitId = repo.resolve(ref);
             return blobAt(repo, walk, commitId, relPath);
+        } catch (VersionException e) {
+            throw e;
         } catch (Exception e) {
             throw new VersionException("读取历史文件失败: project=" + projectId, e);
         }
@@ -323,6 +1147,12 @@ public class ProjectRepoService {
         try (TreeWalk tw = TreeWalk.forPath(repo, relPath, commit.getTree())) {
             if (tw == null) return null;
             ObjectLoader loader = repo.open(tw.getObjectId(0));
+            if (loader.getSize() > MAX_BLOB_SIZE_BYTES) {
+                throw VersionException.userFacing(com.checkba.service.LangText.of(
+                        "这份文件超过 " + (MAX_BLOB_SIZE_BYTES / (1024 * 1024)) + "MB，暂不支持在版本记录里读取或对比",
+                        "This file exceeds " + (MAX_BLOB_SIZE_BYTES / (1024 * 1024))
+                                + "MB and can't be read or compared from version history"));
+            }
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             loader.copyTo(bos);
             return bos.toByteArray();
@@ -340,6 +1170,33 @@ public class ProjectRepoService {
             return id == null ? null : id.getName();
         } catch (Exception e) {
             throw new VersionException("解析版本失败: project=" + projectId + " ref=" + ref, e);
+        }
+    }
+
+    /**
+     * 这个引用/sha 是不是真的指向本仓库里存在的一次提交。
+     *
+     * <p>为什么不能用 {@link #resolveRef} 代替：JGit 的 {@code Repository.resolve} 对一个
+     * **格式合法但库里根本没有**的完整 sha 会原样把 ObjectId 还给你（它只做解析，
+     * 不做存在性检查），要等到拿它去 diff 才炸成技术档异常。所以「这一版在不在」
+     * 必须单独问一次——「对比这两版」的两个入参是律师自己选的，
+     * 找不到就该说人话，不能掉进通用的「操作失败」。
+     *
+     * <p>缺对象/类型不对一律回 false；其余异常照常上抛（那是仓库本身出问题，
+     * 不该被说成「找不到这一版」）。
+     */
+    public boolean commitExists(long projectId, String ref) {
+        if (ref == null || ref.isBlank()) return false;
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            ObjectId id = repo.resolve(ref);
+            if (id == null) return false;
+            walk.parseCommit(id);
+            return true;
+        } catch (org.eclipse.jgit.errors.MissingObjectException
+                 | org.eclipse.jgit.errors.IncorrectObjectTypeException e) {
+            return false;
+        } catch (Exception e) {
+            throw new VersionException("检查版本是否存在失败: project=" + projectId + " ref=" + ref, e);
         }
     }
 
@@ -606,19 +1463,80 @@ public class ProjectRepoService {
      */
     public String commitMergeResolution(long projectId, String message,
                                         String authorName, String authorEmail) {
+        return commitMergeResolution(projectId, message, null, authorName, authorEmail);
+    }
+
+    /**
+     * 带裁决清单的版本（spec 2026-09-14 §2.2）：{@code resolutions} 是
+     * {@code path → MAIN|DRAFT|BOTH}，非空时追加 {@link #RESOLUTIONS_TRAILER} 尾注。
+     * 值用字符串而不是 {@code WorkSessionService.Resolution}：本类只认识 Git 概念，
+     * 反向依赖业务层会把两个类缠成一个环。
+     */
+    public String commitMergeResolution(long projectId, String message,
+                                        Map<String, String> resolutions,
+                                        String authorName, String authorEmail) {
+        return commitMergeResolution(projectId, message, resolutions, null, null,
+                authorName, authorEmail);
+    }
+
+    /**
+     * 三方合并那一档（spec 2026-09-14 §4.6）：在裁决清单之外再记下
+     * <b>这一次是在哪个语境里裁决的</b>（{@code mergeContext} ∈ {@code adopt|cloud|session-end}）
+     * 与 <b>哪些文件是逐处合并的</b>（{@code merges}）。
+     *
+     * <p>语境这一行是所有裁决提交都写的，包括这一版只有整份三选一的：裁决尾注里只有裸的
+     * MAIN/DRAFT，同一个标签在三语境里指向的物理侧完全不同（方向表见 version-control.md），
+     * 没有它，提交历史只能把「留了你这边」猜着写，结束工作撞车那一档会把话说反。
+     * 语境值不在三个之内时只记一条 warn 并跳过这一行——**不为一行说明把律师的裁决提交打回去**，
+     * 裁决窗口里提交失败的代价比少一行尾注大得多。
+     */
+    public String commitMergeResolution(long projectId, String message,
+                                        Map<String, String> resolutions,
+                                        List<MergeRecord> merges, String mergeContext,
+                                        String authorName, String authorEmail) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             RepositoryState st = repo.getRepositoryState();
             if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) {
                 throw new VersionException("当前不在合并冲突状态: project=" + projectId);
             }
+            // 这一次裁决动了哪些路径——要在 add 之前问，add 完索引就干净了。
+            // 只为后面的溯源预算用；读不到就算了，不为一个旁路让裁决提交多一条失败路径。
+            Set<String> touched = new LinkedHashSet<>();
+            try {
+                Status before = git.status().call();
+                touched.addAll(before.getConflicting());
+                touched.addAll(before.getModified());
+                touched.addAll(before.getChanged());
+                touched.addAll(before.getUntracked());
+                touched.addAll(before.getAdded());
+            } catch (Exception e) {
+                log.debug("裁决提交前读工作区状态失败（只影响溯源预算）: project={}", projectId, e);
+            }
+
             git.add().addFilepattern(".").call();
             git.add().addFilepattern(".").setUpdate(true).call();
 
             String fullMessage = message + "\n\n" + KIND_TRAILER + "session";
+            String resolutionLine = resolutionsTrailerValue(resolutions);
+            if (resolutionLine != null) {
+                fullMessage = fullMessage + "\n" + RESOLUTIONS_TRAILER + resolutionLine;
+            }
+            if (mergeContext != null && !mergeContext.isBlank()) {
+                if (MERGE_CONTEXTS.contains(mergeContext.trim())) {
+                    fullMessage = fullMessage + "\n" + MERGE_CONTEXT_TRAILER + mergeContext.trim();
+                } else {
+                    log.warn("未知的裁决语境，这一版不写语境尾注: project={} ctx={}", projectId, mergeContext);
+                }
+            }
+            String mergesLine = mergesTrailerValue(merges);
+            if (mergesLine != null) {
+                fullMessage = fullMessage + "\n" + MERGES_TRAILER + mergesLine;
+            }
             RevCommit c = git.commit()
                     .setMessage(fullMessage)
                     .setAuthor(authorName, authorEmail)
                     .call();
+            precomputeProvenance(projectId, c.getName(), touched);
             return c.getName();
         } catch (VersionException e) {
             throw e;
@@ -657,6 +1575,32 @@ public class ProjectRepoService {
         }
     }
 
+    /**
+     * 按 sha 成批取版本记录（一次开仓库读完）。逐段溯源要把几十个 sha 翻成
+     * 「谁 · 哪一天 · 那一版叫什么」，一个 sha 开一次仓库不合算。
+     * 解析不出来的 sha 直接不进结果表，不抛异常——溯源是只读的锦上添花。
+     */
+    public Map<String, VersionEntry> entriesByShas(long projectId, Collection<String> shas) {
+        Map<String, VersionEntry> out = new LinkedHashMap<>();
+        if (shas == null || shas.isEmpty()) return out;
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            Map<String, String> milestones = milestonesIn(repo);
+            for (String sha : shas) {
+                if (sha == null || sha.isBlank()) continue;
+                try {
+                    ObjectId id = repo.resolve(sha);
+                    if (id == null) continue;
+                    out.put(sha, toEntry(walk.parseCommit(id), milestones));
+                } catch (Exception e) {
+                    log.warn("读取版本记录失败: project={} sha={}", projectId, sha, e);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("成批读取版本记录失败: project={}", projectId, e);
+        }
+        return out;
+    }
+
     /** log() 与 listMilestones() 共用的读取逻辑，接收已打开的 Repository，避免重复开仓库。 */
     private Map<String, String> milestonesIn(Repository repo) throws IOException {
         Map<String, String> out = new HashMap<>();
@@ -679,6 +1623,13 @@ public class ProjectRepoService {
 
     private static final String ORIGIN = "origin";
     private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
+
+    /**
+     * 案件库那条线在本机的引用名。对外暴露是因为「本机领先 N 版」要拿它当
+     * {@link #commitsBetween} 的起点（spec 2026-09-14 §2.4），常量本身不改名——
+     * 它在本类里还有十几处内部用法。
+     */
+    public String originMasterRef() { return ORIGIN_MASTER; }
     private static final String MILESTONE_SPEC =
             "+refs/tags/awd/milestone/*:refs/tags/awd/milestone/*";
 

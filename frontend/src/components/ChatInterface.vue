@@ -1,5 +1,9 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="chat-interface" :class="{ 'is-empty': bubbles.length === 0 && !isStreaming }">
+
+    <MemoryBrowser :open="showMemoryBrowser" :project-id="projectId" @close="showMemoryBrowser = false" />
 
     <!-- Upload File Modal (reused from FileTree pattern) -->
     <view v-if="showUploadDialog" class="awd-dialog-mask" @tap="cancelUpload">
@@ -223,10 +227,7 @@
           <text class="project-name-display">{{ projectName }}</text>
        </view>
        <view class="header-actions">
-          <view class="icon-btn" @tap="toggleAssistantMenu" :class="{ active: showAssistantMenu }" title="Assistants">
-             <image class="btn-icon default" src="/static/assistant.png" />
-             <image class="btn-icon hover" src="/static/assistant_hover.png" />
-          </view>
+          <view class="memory-header-btn" @tap="showMemoryBrowser = true">{{ $t('chat.memoryButton') }}</view>
           <view class="icon-btn" @tap="$emit('toggle-history')" title="History">
              <image class="btn-icon default" src="/static/history.png" />
              <image class="btn-icon hover" src="/static/history_hover.png" />
@@ -243,37 +244,19 @@
        </view>
     </view>
 
-    <!-- Assistant Dropdown Panel - positioned relative to chat-interface like history drawer -->
-    <view v-if="showAssistantMenu" class="assistant-dropdown-panel" @tap.stop>
-       <view class="assistant-menu-header">{{ $t('chat.assistantMenuHeader') }}</view>
-       <view
-         v-for="ast in assistants"
-         :key="ast.id"
-         class="assistant-menu-item"
-         :class="{ active: currentAssistantId === ast.id }"
-         @tap="selectAssistant(ast)"
-       >
-          <text class="assistant-item-name">{{ ast.name }}</text>
-          <view class="setting-icon-wrapper" @tap.stop="$emit('config-assistant', ast)">
-             <image class="setting-icon default" src="/static/setting.png" mode="aspectFit" />
-             <image class="setting-icon hover" src="/static/setting_hoving.png" mode="aspectFit" />
-          </view>
-       </view>
-    </view>
-    <view v-if="showAssistantMenu" class="dropdown-mask" @tap="showAssistantMenu = false"></view>
-
-    <!-- 2. Message List (Single Source of Truth: bubbles) -->
-    <scroll-view
+    <!-- Thinking, tools and replies stay in chronological order in the transcript. -->
+    <div
       v-if="bubbles.length > 0 || isStreaming"
       class="message-list"
-      scroll-y
-      :scroll-top="scrollTop"
-      :scroll-with-animation="true"
+      ref="messageList"
+      @scroll="handleMessageScroll"
     >
-      <view class="message-list-content">
+      <view ref="messageContent" class="message-list-content">
+        <view v-for="turn in chatTurns" :key="turn.key" class="conversation-turn">
         <view
-          v-for="(msg, index) in bubbles"
+          v-for="{ bubble: msg, index } in (turn.user ? [turn.user, ...turn.assistants] : turn.assistants)"
           :key="msg.id || index"
+          :data-message-index="index"
           class="message-row"
           :class="msg.role.toLowerCase()"
         >
@@ -320,7 +303,11 @@
           </div>
         </view>
       </view>
-    </scroll-view>
+      </view>
+    </div>
+    <view v-if="bubbles.length && !followLatest" class="return-to-latest">
+      <button @click="scrollToBottom">{{ $t('chat.activityBackToLatest') }} ↓</button>
+    </view>
 
     <!-- 3. Integrated Empty & Input Layout -->
     <view v-if="bubbles.length === 0 && !isStreaming" class="empty-flow-container">
@@ -332,16 +319,19 @@
 
        <!-- Center: Input -->
        <view class="empty-middle-section">
-          <view class="input-card centered-style">
+          <!-- data-awd-keep-clear：右下角反馈浮钮会主动避开这块（utils/keepClear.js，dev-board#574） -->
+          <view class="input-card centered-style" data-awd-keep-clear>
               <view v-if="isDragging" class="drop-overlay">
                  <text>Drop files here</text>
               </view>
                <!-- Image Thumbnails Preview (top-left) -->
                <view v-if="pastedImages.length > 0" class="input-images-preview">
                   <view v-for="(img, index) in pastedImages" :key="index" class="preview-image-item">
-                     <image :src="img.path" mode="aspectFill" class="preview-thumb" />
+                     <image v-if="img.path" :src="img.path" mode="aspectFill" class="preview-thumb" />
                      <text class="preview-remove" @tap="removePastedImage(index)">×</text>
                   </view>
+                  <!-- 能力未知时不出这行：只有明确 vision===false 才说会降级 -->
+                  <text v-if="currentModelVision === false" class="input-images-note">{{ $t('chat.imageOcrFallbackNote') }}</text>
                </view>
               <div
                 ref="richInput"
@@ -354,11 +344,20 @@
                 :data-placeholder="$t('chat.inputPlaceholderEmpty')"
               ></div>
               <!-- Note: Context files are now shown as inline tags inside the rich input -->
+              <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
+              <view v-if="skillChips.length" class="skill-chip-row">
+                 <view v-for="chip in skillChips" :key="chip.id"
+                       class="skill-chip"
+                       :class="{ auto: chip.source === 'auto', flash: chip.justActivated }">
+                    <text class="skill-chip-name">{{ chip.name }}</text>
+                    <text v-if="chip.source === 'manual'" class="skill-chip-remove"
+                          @tap.stop="removeSelectedSkill(chip.id)">×</text>
+                 </view>
+              </view>
               <view class="input-footer">
                  <view class="action-bar-left">
                     <view class="icon-btn mini file-add-btn" @tap="triggerFileSelect" title="Add File">
-                   <image class="btn-icon default" src="/static/plus.png" />
-                   <image class="btn-icon hover" src="/static/plus_hover.png" />
+                   <svg class="plus-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                  </view>
                     <!-- Agent Mode Selector -->
                     <view class="mode-selector" @tap="toggleModeDropdown">
@@ -396,6 +395,8 @@
                                 <view class="model-option-head">
                                    <text class="model-option-name">{{ m.name }}</text>
                                    <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
+                                   <!-- 严格判 false：vision 缺字段是「未知」，标出来等于造谣 -->
+                                   <text v-if="m.vision === false" class="model-novision-tag">{{ $t('chat.noVisionTag') }}</text>
                                 </view>
                                 <text class="model-option-price">{{ priceLabel(m) }}</text>
                              </view>
@@ -404,37 +405,45 @@
                           <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
                        </view>
                     </view>
-                    <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
-                    <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? $t('chat.skillPinnedTitle', { name: skillChipLabel }) : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
-                       <text class="skill-glyph">◲</text>
+                    <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
+                    <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
+                       <svg class="skill-glyph-svg" viewBox="0 0 24 24" fill="none">
+                          <path v-for="(d, gi) in ICONS.skill" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                       </svg>
+                       <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
                        <view v-if="showSkillDropdown" class="skill-dropdown down">
-                          <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
-                             <view class="skill-option-text">
-                                <text class="skill-option-name">{{ $t('chat.skillAutoMatch') }}</text>
-                                <text class="skill-option-desc">{{ $t('chat.skillAutoMatchDesc') }}</text>
-                             </view>
+                          <view class="skill-dropdown-head">
+                             <text class="skill-dropdown-title">{{ $t('chat.skillPickerTitle') }}</text>
+                             <text class="skill-dropdown-hint">{{ skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillPickerHint') }}</text>
                           </view>
                           <view v-if="availableSkills.length" class="skill-divider"></view>
                           <view v-for="s in availableSkills" :key="s.id"
                                 class="skill-option"
-                                :class="{ active: pinnedSkillId === s.id }"
-                                @tap.stop="selectSkill(s.id)">
+                                :class="{ active: selectedSkillIds.includes(s.id), muted: skillDisabledByMode }"
+                                @tap.stop="skillDisabledByMode ? null : toggleSkillSelection(s.id)">
+                             <text class="skill-check">{{ selectedSkillIds.includes(s.id) ? '✓' : '' }}</text>
                              <view class="skill-option-text">
-                                <text class="skill-option-name">{{ s.name || s.id }}</text>
+                                <text class="skill-option-name">{{ skillDisplayName(s) }}</text>
                                 <text class="skill-option-desc">{{ s.activationMode === 'manual' ? $t('chat.skillManualOnly') : (s.triggers || []).join(' / ') || $t('chat.skillNoTriggers') }}</text>
                              </view>
                           </view>
+                          <view v-if="!availableSkills.length" class="skill-empty">{{ $t('chat.skillNoneInstalled') }}</view>
                           <view class="skill-divider"></view>
                           <view class="skill-manage" @tap.stop="goToSkillManagement">{{ $t('chat.skillManage') }}</view>
                        </view>
                     </view>
                  </view>
-                 <view
-                    class="send-btn"
-                    :class="{ disabled: !inputPrompt.trim() && !isStreaming, stopping: isStreaming }"
-                    @tap="isStreaming ? handleAbort() : handleSubmit()"
-                 >
-                    <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
+                 <view class="composer-actions">
+                    <view v-if="isStreaming" class="follow-mode" @tap="toggleFollowUpMode">
+                       {{ followUpMode === 'steer' ? $t('chat.followUpSteer') : $t('chat.followUpQueue') }}
+                    </view>
+                    <view v-if="isStreaming" class="alternate-send" @tap="handleSubmit(followUpMode === 'steer' ? 'queue' : 'steer')">
+                       {{ followUpMode === 'steer' ? $t('chat.queueInstead') : $t('chat.steerInstead') }}
+                    </view>
+                    <view v-if="isStreaming" class="stop-btn" @tap="handleAbort"><text>■</text></view>
+                    <view class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" @tap="handleSubmit(followUpMode)">
+                       <text class="send-icon">↑</text>
+                    </view>
                  </view>
               </view>
           </view>
@@ -452,7 +461,7 @@
              </view>
           </view>
           <view v-else class="history-empty-placeholder">
-             <text>Your recent chats will appear here</text>
+             <text>{{ $t('chat.recentChatsEmpty') }}</text>
           </view>
           <view class="history-disclaimer">{{ $t('chat.aiDisclaimer') }}</view>
        </view>
@@ -460,12 +469,24 @@
 
     <!-- 4. Regular Bottom Input -->
     <view v-else class="input-area-wrapper">
+       <!-- 插件镜像会话只读（dev-board#298）：输入区整体换成说明条，
+            唯一动作是「另起分支继续」（fork 后由宿主切到新会话并解除只读） -->
+       <view v-if="externalReadOnly" class="readonly-bar">
+          <text class="readonly-text">{{ $t('chat.pluginReadOnlyNotice', { source: externalReadOnly }) }}</text>
+          <view class="readonly-fork-btn" @tap="$emit('fork-conversation')">{{ $t('chat.forkToContinue') }}</view>
+       </view>
+       <template v-else>
        <!-- 任务清单进度卡已随消息流内联展示（RootBubble），不再常驻输入框上方，
             避免与气泡内的步骤分组重复（用户反馈：线性时序结构） -->
        <!-- 步数超限暂停 / 上次进程被杀：一键继续，免得用户手动输入「继续」 -->
        <view v-if="agentPaused && !isStreaming" class="continue-bar">
           <text class="continue-hint">{{ continueHint }}</text>
           <view class="continue-btn" @tap="handleContinue">{{ $t('chat.continueRun') }}</view>
+       </view>
+       <!-- SSE 断连提示（dev-board#364）：心跳 45s 没到或流意外结束时后台在自动重连；
+            之前只写 console.warn，用户看到的是思考计时器一直走、分不清模型在想还是连接死了 -->
+       <view v-if="linkStatus && linkStatus.state === 'reconnecting'" class="link-bar">
+          <text class="link-hint">{{ $t('chat.linkReconnecting', { attempt: linkStatus.attempt }) }}</text>
        </view>
        <!-- 长任务可控：进度条在浮窗里（BackgroundTaskIndicator），控制放在输入框上方——
             用户想停的时候手在输入区，不该先去浮窗里找按钮。
@@ -521,16 +542,25 @@
                <text class="token-detail">({{ tokenUsage.promptTokens.toLocaleString() }} / {{ tokenUsage.completionTokens.toLocaleString() }})</text>
            </view> -->
        </view>
-       <view class="input-card">
+       <AgentInbox
+         :items="pendingInbox"
+         @edit="handleInboxEdit"
+         @delete="handleInboxDelete"
+         @move="handleInboxMove"
+         @send-now="handleInboxSendNow"
+       />
+       <view class="input-card" data-awd-keep-clear>
           <view v-if="isDragging" class="drop-overlay">
              <text>Drop files here</text>
           </view>
            <!-- Image Thumbnails Preview (top-left) -->
            <view v-if="pastedImages.length > 0" class="input-images-preview">
               <view v-for="(img, index) in pastedImages" :key="index" class="preview-image-item">
-                 <image :src="img.path" mode="aspectFill" class="preview-thumb" />
+                 <image v-if="img.path" :src="img.path" mode="aspectFill" class="preview-thumb" />
                  <text class="preview-remove" @tap="removePastedImage(index)">×</text>
               </view>
+              <!-- 能力未知时不出这行：只有明确 vision===false 才说会降级 -->
+              <text v-if="currentModelVision === false" class="input-images-note">{{ $t('chat.imageOcrFallbackNote') }}</text>
            </view>
           <div
             ref="richInput"
@@ -540,14 +570,23 @@
             @paste="handlePaste"
             @keydown.enter="handleEnterKey"
             @click="handleInputClick"
-            data-placeholder="Ask anything..."
+            :data-placeholder="$t('chat.inputPlaceholder')"
           ></div>
           <!-- Note: Context files are now shown as inline tags inside the rich input -->
+          <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
+          <view v-if="skillChips.length" class="skill-chip-row">
+             <view v-for="chip in skillChips" :key="chip.id"
+                   class="skill-chip"
+                   :class="{ auto: chip.source === 'auto', flash: chip.justActivated }">
+                <text class="skill-chip-name">{{ chip.name }}</text>
+                <text v-if="chip.source === 'manual'" class="skill-chip-remove"
+                      @tap.stop="removeSelectedSkill(chip.id)">×</text>
+             </view>
+          </view>
           <view class="input-footer">
              <view class="action-bar-left">
                 <view class="icon-btn mini" @tap="triggerFileSelect" title="Add File">
-                   <image class="btn-icon default" src="/static/plus.png" />
-                   <image class="btn-icon hover" src="/static/plus_hover.png" />
+                   <svg class="plus-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 </view>
                 <!-- Agent Mode Selector -->
                 <view class="mode-selector" @tap="toggleModeDropdown">
@@ -585,6 +624,8 @@
                             <view class="model-option-head">
                                <text class="model-option-name">{{ m.name }}</text>
                                <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
+                               <!-- 严格判 false：vision 缺字段是「未知」，标出来等于造谣 -->
+                               <text v-if="m.vision === false" class="model-novision-tag">{{ $t('chat.noVisionTag') }}</text>
                             </view>
                             <text class="model-option-price">{{ priceLabel(m) }}</text>
                          </view>
@@ -593,41 +634,50 @@
                       <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
                    </view>
                 </view>
-                <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
-                <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? $t('chat.skillPinnedTitle', { name: skillChipLabel }) : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
-                   <text class="skill-glyph">◲</text>
+                <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
+                <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
+                   <svg class="skill-glyph-svg" viewBox="0 0 24 24" fill="none">
+                      <path v-for="(d, gi) in ICONS.skill" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                   </svg>
+                   <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
                    <view v-if="showSkillDropdown" class="skill-dropdown up">
-                      <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
-                         <view class="skill-option-text">
-                            <text class="skill-option-name">{{ $t('chat.skillAutoMatch') }}</text>
-                            <text class="skill-option-desc">{{ $t('chat.skillAutoMatchDesc') }}</text>
-                         </view>
+                      <view class="skill-dropdown-head">
+                         <text class="skill-dropdown-title">{{ $t('chat.skillPickerTitle') }}</text>
+                         <text class="skill-dropdown-hint">{{ skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillPickerHint') }}</text>
                       </view>
                       <view v-if="availableSkills.length" class="skill-divider"></view>
                       <view v-for="s in availableSkills" :key="s.id"
                             class="skill-option"
-                            :class="{ active: pinnedSkillId === s.id }"
-                            @tap.stop="selectSkill(s.id)">
+                            :class="{ active: selectedSkillIds.includes(s.id), muted: skillDisabledByMode }"
+                            @tap.stop="skillDisabledByMode ? null : toggleSkillSelection(s.id)">
+                         <text class="skill-check">{{ selectedSkillIds.includes(s.id) ? '✓' : '' }}</text>
                          <view class="skill-option-text">
-                            <text class="skill-option-name">{{ s.name || s.id }}</text>
+                            <text class="skill-option-name">{{ skillDisplayName(s) }}</text>
                             <text class="skill-option-desc">{{ s.activationMode === 'manual' ? $t('chat.skillManualOnly') : (s.triggers || []).join(' / ') || $t('chat.skillNoTriggers') }}</text>
                          </view>
                       </view>
+                      <view v-if="!availableSkills.length" class="skill-empty">{{ $t('chat.skillNoneInstalled') }}</view>
                       <view class="skill-divider"></view>
                       <view class="skill-manage" @tap.stop="goToSkillManagement">{{ $t('chat.skillManage') }}</view>
                    </view>
                 </view>
              </view>
-             <view
-                class="send-btn"
-                :class="{ disabled: !inputPrompt.trim() && !isStreaming, stopping: isStreaming }"
-                @tap="isStreaming ? handleAbort() : handleSubmit()"
-             >
-                <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
+             <view class="composer-actions">
+                <view v-if="isStreaming" class="follow-mode" @tap="toggleFollowUpMode">
+                   {{ followUpMode === 'steer' ? $t('chat.followUpSteer') : $t('chat.followUpQueue') }}
+                </view>
+                <view v-if="isStreaming" class="alternate-send" @tap="handleSubmit(followUpMode === 'steer' ? 'queue' : 'steer')">
+                   {{ followUpMode === 'steer' ? $t('chat.queueInstead') : $t('chat.steerInstead') }}
+                </view>
+                <view v-if="isStreaming" class="stop-btn" @tap="handleAbort"><text>■</text></view>
+                <view class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" @tap="handleSubmit(followUpMode)">
+                   <text class="send-icon">↑</text>
+                </view>
              </view>
           </view>
           <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
        </view>
+       </template>
     </view>
 
     <!-- Background Task Progress Indicator -->
@@ -637,22 +687,58 @@
       @dismiss="dismissBackgroundTask"
     />
 
+    <!-- 可选组件缺失（设计 §4.2）：确认前把体积、解锁什么、不装则什么不可用都说全，
+         确认后卡片就地跳进度，装完自动重发原消息。下载中可「后台下载」收起卡片继续用对话
+         （dev-board#581），装完是否重发见 useComponentRequired.shouldAutoResend。 -->
+    <view v-if="componentGateItem" class="chat-component-gate">
+      <view class="cg-panel">
+        <text class="cg-title">{{ $t('components.chatTitle') }}</text>
+        <OptionalComponentCard :item="componentGateItem" :selectable="false" :busy="true" />
+        <view v-if="componentGateResolved" class="cg-installing">
+          <text class="cg-installing-text">{{ $t('components.chatInstalling') }}</text>
+          <view class="cg-actions">
+            <view class="cg-btn cg-background" @tap="backgroundComponentGate">{{ $t('components.backgroundDownload') }}</view>
+          </view>
+        </view>
+        <view v-else class="cg-actions">
+          <view class="cg-btn primary" @tap="resolveComponentGate(true)">{{ $t('components.chatConfirm') }}</view>
+          <view class="cg-btn" @tap="resolveComponentGate(false)">{{ $t('components.chatCancel') }}</view>
+        </view>
+      </view>
+    </view>
+
   </view>
 </template>
 
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
+import { buildChatTurns, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
+import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
+import AgentInbox from './AgentInbox.vue'
+import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
-import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
-import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask } from '@/services/api.js'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
+import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
+import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
+import { ICONS } from '@/config/icons.js'
+import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
+import { componentDownloads } from '@/services/componentDownloads.js'
+import { createComponentRequiredHandler, shouldAutoResend } from '@/composables/useComponentRequired.js'
+import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
+import {
+  beginChatSubmission,
+  failChatSubmission,
+  receiptChatSubmission,
+  shouldClearChatDraft,
+  submitChatAttempt,
+} from '@/composables/chatSubmissionState.mjs'
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator },
+  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -665,11 +751,6 @@ export default {
       type: String,
       default: ''
     },
-    assistants: {
-        type: Array,
-        default: () => []
-    },
-    currentAssistantId: String,
     // NEW: Current active tab for auto-context injection
     activeTab: {
       type: Object,
@@ -678,6 +759,13 @@ export default {
     activeTabPane: {
       type: String,
       default: null // 'left' | 'right' | null
+    },
+    // 插件镜像会话只读态（dev-board#298）：非空 = 当前会话是插件同步过来的镜像，
+    // 值是来源文案（如「Word 插件」，由宿主用 utils/conversationSource.js 算好传入）。
+    // 输入区整体换成说明条 +「另起分支继续」按钮（emit 'fork-conversation'）。
+    externalReadOnly: {
+      type: String,
+      default: ''
     }
   },
   setup(props, { emit, expose }) {
@@ -688,20 +776,126 @@ export default {
       abort,
       setConversationId,
       clearBubbles,
+      parseAssistantHistory,
       onClientAction,
       onTitleUpdate,
       backgroundTasks,
       dismissBackgroundTask,
+      upsertPluginJob,
       lastHeartbeat,
       tokenUsage,
       fileChanges,
       agentPaused,
       agentRunStatus,
+      linkStatus,
+      activeSkills,
+      skillNotice,
       reattachSSE,
       rollbackToMessage,
       currentConversationId,
-      loadConversationMetadata
+      loadConversationMetadata,
+      inboxState,
+      updateInbox,
+      deleteInbox,
     } = useAgentStream()
+
+    // 可选组件缺失闸（设计 §4.2）。下载走应用级单例（dev-board#581）：与首次登录面板、
+    // 组件管理页同一份编排、同一份进度，顺序 pack → 模型 → ensure(service) 不能换。
+    const componentGateItem = ref(null)
+    const componentGateResolved = ref(false)
+    const componentGateResolve = ref(null)
+    // 前台认领：对话组件活着就由它交代结果（重发或提示可重试）；卸载时释放，交给全局提示
+    const componentClaims = new Map()
+    const backgroundedPacks = new Set()
+    let chatAlive = true
+    const userMessageCount = () =>
+      bubbles.value.filter((b) => b && String(b.role).toUpperCase() === 'USER').length
+    const releaseComponentClaim = (packId) => {
+      const release = componentClaims.get(packId)
+      if (release) release()
+      componentClaims.delete(packId)
+      backgroundedPacks.delete(packId)
+    }
+    /** 只收起属于这个 packId 的卡片：后台装完时卡片上可能已经换成了另一个组件 */
+    const closeComponentGate = (packId) => {
+      if (componentGateItem.value && componentGateItem.value.packId === packId) componentGateItem.value = null
+    }
+    const componentRequiredHandler = createComponentRequiredHandler({
+      adopt: (item) => componentDownloads.adopt(item),
+      isInstalling: (packId) => componentDownloads.isInstalling(packId),
+      // 别的入口已经在下这个组件：卡片直接进「下载中」，不再问一遍
+      attach: (item) => {
+        componentGateItem.value = item
+        componentGateResolved.value = true
+      },
+      installOne: (item) => {
+        if (!componentClaims.has(item.packId)) componentClaims.set(item.packId, componentDownloads.claim(item.packId))
+        return componentDownloads.installOne(item)
+      },
+      fillSizes: (item) => componentDownloads.fillSizes(item),
+      mark: () => userMessageCount(),
+      shouldResend: (mark, item) => shouldAutoResend({
+        alive: chatAlive,
+        backgrounded: backgroundedPacks.has(item.packId),
+        streaming: isStreaming.value,
+        userCountAtGate: mark,
+        userCountNow: userMessageCount(),
+      }),
+      readyNotice: (item) => {
+        closeComponentGate(item.packId)
+        if (chatAlive) uni.showToast({ title: t('components.chatReadyRetry'), icon: 'none', duration: 3500 })
+      },
+      // 弹窗确认：把 item 挂上去，等模板里的按钮 resolve
+      confirm: (item) => new Promise((resolve) => {
+        componentGateItem.value = item
+        componentGateResolved.value = false
+        componentGateResolve.value = resolve
+      }),
+      lastUserMessage: () => {
+        for (let i = bubbles.value.length - 1; i >= 0; i--) {
+          const b = bubbles.value[i]
+          if (b && String(b.role).toUpperCase() === 'USER') return b.content || ''
+        }
+        return ''
+      },
+      resend: async (text, item) => {
+        closeComponentGate(item.packId)
+        uni.showToast({ title: t('components.chatResending'), icon: 'none' })
+        await sendMessage({
+          prompt: text,
+          projectId: props.projectId,
+          modelId: currentModelId.value,
+          mode: currentModeId.value,
+          skillIds: currentSkillIds()
+        })
+        scrollToBottom()
+      },
+      toast: (msg, item) => {
+        closeComponentGate(item.packId)
+        // 已卸载时认领早已释放，失败由全局提示交代
+        if (chatAlive) uni.showToast({ title: t('components.stateFailed', { msg }), icon: 'none' })
+      },
+    })
+    /** 「后台下载」：收起卡片继续用对话；装完时按 shouldAutoResend 决定重发还是只提示 */
+    const backgroundComponentGate = () => {
+      const item = componentGateItem.value
+      if (!item) return
+      backgroundedPacks.add(item.packId)
+      componentGateItem.value = null
+      uni.showToast({ title: t('components.backgroundStarted'), icon: 'none', duration: 3000 })
+    }
+    onBeforeUnmount(() => {
+      chatAlive = false
+      for (const packId of [...componentClaims.keys()]) releaseComponentClaim(packId)
+    })
+    /** 确认走下载（弹窗留着，卡片就地跳进度）；取消则直接收起 */
+    const resolveComponentGate = (ok) => {
+      const resolve = componentGateResolve.value
+      componentGateResolve.value = null
+      componentGateResolved.value = !!ok
+      if (!ok) componentGateItem.value = null
+      if (resolve) resolve(ok)
+    }
 
     // Bridge Stream Events to Component Events
     onClientAction((action) => {
@@ -710,6 +904,14 @@ export default {
            pptConfigData.value = action
            pptExportEditable.value = false // Default to safe option
            showPptConfigDialog.value = true
+        } else if (action.action === 'component_required') {
+           // 可选组件缺失（设计 §4.2）：就地弹窗 → 装 → 自动重发原消息。
+           // 刻意不往下 emit：它不是编辑器命令，执行器只会回 Unknown action。
+           componentRequiredHandler.onAction(action).then((r) => {
+              if (r.duplicate) return
+              closeComponentGate(action.packId)
+              releaseComponentClaim(action.packId)
+           })
         } else {
            emit('client-action', action)
         }
@@ -722,7 +924,21 @@ export default {
     })
     const inputPrompt = ref('')
     const richInput = ref(null)
-    const scrollTop = ref(0)
+    const showMemoryBrowser = ref(false)
+    const submissionTracker = { failed: null, inflight: {} }
+    const followUpMode = ref('steer')
+    try {
+      followUpMode.value = uni.getStorageSync('awd_agent_follow_up_mode') === 'queue' ? 'queue' : 'steer'
+    } catch (e) { /* storage unavailable */ }
+    const pendingInbox = computed(() => pendingInboxItems(inboxState))
+    const messageList = ref(null)
+    const messageContent = ref(null)
+    const chatTurns = computed(() => buildChatTurns(bubbles.value, {
+      isStreaming: isStreaming.value, runStatus: agentRunStatus.value
+    }))
+    const { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage } = useChatReadingPosition(messageList, messageContent)
+    watch(currentConversationId, () => { followLatest.value = true })
+
     const isDragging = ref(false)
 
     // Context Files (for drag-drop file context)
@@ -730,6 +946,8 @@ export default {
 
     // Pasted Images (for paste/drop images)
     const pastedImages = ref([])
+    // 发送时把粘贴图片上传成项目文件的那一小段窗口（此时 isStreaming 还是 false）
+    const isUploadingPasted = ref(false)
 
     // Model Selection
     const showModelDropdown = ref(false)
@@ -803,11 +1021,29 @@ export default {
       currentModelName.value = hit ? hit.name : (id || t('chat.selectModel'))
     }
 
+    // 当前模型能不能直接读图。**三态**：true 支持 / false 不支持 / null 未知。
+    // 「未知」不许并到 false：拉不到模型目录时 availableModels 是空数组而 currentModelId
+    // 还留着上次的值，applyModelSelection 也允许选中清单外的旧 id——把 undefined 当不支持，
+    // 就会在这两种情况下对所有模型误报「不支持读图」。未知一律不提示。
+    const currentModelVision = computed(() => {
+      const hit = availableModels.value.find(m => m.id === currentModelId.value)
+      if (!hit || typeof hit.vision !== 'boolean') return null
+      return hit.vision
+    })
+
+    // 选中读不了图的模型时说一声：降级是后端自动做的，不说用户会以为模型看到了图
+    const noticeIfNoVision = (m) => {
+      if (!m || m.vision !== false) return
+      uni.showToast({ title: t('chat.modelNoVisionToast'), icon: 'none', duration: 3000 })
+    }
+
     const selectModel = (m) => {
       console.log('Switching model to:', m.name)
       applyModelSelection(m.id)
       persistModelId(m.id)
       showModelDropdown.value = false
+      // 只提示不换模型：静默改用户的计价对象是这个面板治理过一轮的老毛病
+      noticeIfNoVision(m)
     }
 
     const loadModelCatalog = async () => {
@@ -846,6 +1082,11 @@ export default {
             icon: 'none',
             duration: 3000
           })
+        } else {
+          // 用户从没手动选过，默认模型是自动落到他头上的——今天的默认档恰好读不了图，
+          // 「不支持看图」是常态而不是边缘情况，第一次落定就得说清楚。
+          // 与上面那条互斥：两条 toast 叠在一起，后一条会顶掉前一条。
+          noticeIfNoVision(list.find(m => m.id === fallbackId))
         }
       } catch (e) {
         // 拉不到目录不该让面板不可用：保留上次选择（可能为空），由发送时的后端校验兜底
@@ -911,23 +1152,56 @@ export default {
       }
     }
 
-    // Skill 选择（默认自动匹配触发词；钉选后本会话固定使用该 Skill）
+    // ---- Skill：本轮生效清单 + 主动选择 ----
+    // 两个来源刻意分开：
+    // - 手动选的（selectedSkillIds）是本地状态，勾上立刻可见、可以 × 掉，不必等发完消息；
+    // - 自动命中的（activeSkills 里 source==='auto'）只能由后端在轮次开始时告诉我们，
+    //   前端没有触发词表也不该有第二份（那是又一份会漂移的副本）。
+    // 后端 skill_update 里的 manual 条目只是回执，渲染仍以本地选择为准——否则第一条消息发出去
+    // 之前，用户勾了却什么都看不见。
     const showSkillDropdown = ref(false)
     const availableSkills = ref([])
-    const pinnedSkillId = ref('')
+    const selectedSkillIds = ref([])
 
-    const pinnedSkill = computed(() =>
-      availableSkills.value.find(s => s.id === pinnedSkillId.value) || null
+    // ASK 模式下 skill 整体不生效（不传工具、也不注入指引），选择器禁用并给出说明，
+    // 而不是让用户勾一堆东西然后什么都不发生。
+    const skillDisabledByMode = computed(() => currentModeId.value === 'ASK')
+
+    // 英文界面优先 name_en：/api/skills/list 不做语言过滤，展示名要自己按语言挑
+    const skillDisplayName = (s) => {
+      if (!s) return ''
+      return (getAppLanguage() === 'en-US' && s.nameEn) || s.name || s.id
+    }
+
+    const selectedSkills = computed(() =>
+      selectedSkillIds.value
+        .map(id => availableSkills.value.find(s => s.id === id) || { id, name: id })
+        .map(s => ({ id: s.id, name: skillDisplayName(s), source: 'manual', justActivated: false }))
     )
-    // 未钉选时只显示 "Skill"：AI 面板窄，默认态不该占掉模型选择器的位置
-    const skillChipLabel = computed(() => pinnedSkill.value ? pinnedSkill.value.name : 'Skill')
+    // 自动命中的技能：手动已选的不重复出条（后端也会把重叠的那枚标成 manual）
+    const autoSkills = computed(() =>
+      (activeSkills.value || []).filter(
+        s => s.source === 'auto' && !selectedSkillIds.value.includes(s.id)
+      )
+    )
+    // chip 行：手动在前（可移除），自动在后（新出现的会闪一下）
+    const skillChips = computed(() =>
+      skillDisabledByMode.value ? [] : [...selectedSkills.value, ...autoSkills.value]
+    )
 
-    // 已安装 Skill 为 0 时不显示选择器，避免输入区堆无用控件
+    // 已安装 Skill 为 0 时不显示选择器，避免输入区堆无用控件。
+    // available=false 的一律不列：那些在当前应用语言下永远不会生效，能勾但不生效比看不见更糟。
     const loadAvailableSkills = async () => {
       try {
         const res = await getSkills()
         const list = Array.isArray(res) ? res : (res?.data || [])
-        availableSkills.value = list.filter(s => s.activationMode !== 'disabled' && s.enabled !== false)
+        availableSkills.value = list.filter(
+          s => s.activationMode !== 'disabled' && s.enabled !== false && s.available !== false
+        )
+        // 列表变了（管理员停用/卸载）就把选不中的清掉，别留一个永远不生效的 chip
+        selectedSkillIds.value = selectedSkillIds.value.filter(
+          id => availableSkills.value.some(s => s.id === id)
+        )
       } catch (e) {
         // Skill 列表拉取失败不该影响对话，静默降级为"无可选 Skill"
         console.warn('[ChatInterface] 加载 Skill 列表失败:', e)
@@ -935,10 +1209,20 @@ export default {
       }
     }
 
-    const selectSkill = (skillId) => {
-      // 钉选状态跟随会话，切换 Skill 后下一条消息即生效
-      pinnedSkillId.value = pinnedSkillId.value === skillId ? '' : skillId
-      showSkillDropdown.value = false
+    // 每个 sendMessage 出口都要带上它。「继续」「按此推进」「点选项」都是同一件任务的后续轮次，
+    // 漏带的话用户选的技能会在这些路径上静默掉线（旧的 pinnedSkillId 就只有主发送路径带）。
+    const currentSkillIds = () => (skillDisabledByMode.value ? [] : [...selectedSkillIds.value])
+
+    const toggleSkillSelection = (skillId) => {
+      if (!skillId) return
+      const idx = selectedSkillIds.value.indexOf(skillId)
+      if (idx >= 0) selectedSkillIds.value.splice(idx, 1)
+      else selectedSkillIds.value.push(skillId)
+    }
+
+    const removeSelectedSkill = (skillId) => {
+      const idx = selectedSkillIds.value.indexOf(skillId)
+      if (idx >= 0) selectedSkillIds.value.splice(idx, 1)
     }
 
     const toggleSkillDropdown = () => {
@@ -950,6 +1234,17 @@ export default {
       }
     }
 
+    // 自动命中新技能时给一句轻提示：用户只是说了句话就被加载了一个技能，
+    // 不吭声就是黑箱（chip 上的闪现动画是同一件事的视觉表达）。
+    watch(skillNotice, (n) => {
+      if (!n) return
+      try {
+        if (typeof uni !== 'undefined' && uni.showToast) {
+          uni.showToast({ title: t('chat.skillAutoLoadedToast', { name: n.name }), icon: 'none', duration: 2500 })
+        }
+      } catch (e) { /* toast 失败不影响对话 */ }
+    })
+
     const goToSkillManagement = () => {
       showSkillDropdown.value = false
       uni.navigateTo({ url: '/pages/plugin-market/plugin-market' })
@@ -960,8 +1255,6 @@ export default {
     const rollbackTargetIndex = ref(-1)
     const rollbackTargetContent = ref('')
     const rollbackTargetId = ref(null)
-
-    const showAssistantMenu = ref(false)
 
     // Upload Dialog State
     const showUploadDialog = ref(false)
@@ -1079,24 +1372,26 @@ export default {
     onMounted(() => {
       loadModelCatalog()
       loadAiProvider()
+      restoreRunningPluginJobs()
     })
 
-    // Scroll to bottom when bubbles change
-    watch(() => bubbles.value.length, () => {
-       scrollToBottom()
-    })
-    // Deep watch active bubble changes (e.g. streaming content)
-    watch(bubbles, () => {
-       // Optional: throttle scroll?
-       // For now simple trigger
-    }, { deep: true })
-
-    const scrollToBottom = () => {
-       nextTick(() => {
-         scrollTop.value += 10000
-       })
+    // 插件后台任务跨页面/跨重连仍在跑：SSE 只在进度变化时推一次，刷新页面或切回工作台的用户
+    // 要等下一次 progress 才能看到它。挂载时按项目拉一次在跑的，接回浮窗。
+    const restoreRunningPluginJobs = async () => {
+      if (!props.projectId) return
+      try {
+        const list = await listPluginJobs(props.projectId)
+        if (!Array.isArray(list)) return
+        list.filter(j => j && (j.status === 'queued' || j.status === 'running')).forEach(upsertPluginJob)
+      } catch (e) {
+        console.warn('[ChatInterface] restore plugin jobs failed:', e)
+      }
     }
 
+    // Follow new messages only while the reader is already at the bottom.
+    watch(() => bubbles.value.length, () => {
+      if (followLatest.value) scrollToBottom()
+    })
 
     // --- PPT Config Logic ---
     const showPptConfigDialog = ref(false)
@@ -1108,8 +1403,20 @@ export default {
        pptConfigData.value = null
        // Optionally notify backend of cancellation? Not strictly needed as AI task handles timeout or just hangs.
        // Ideally we should tell user "Cancelled".
+       // 形状必须与 useAgentStream.createAssistantBubble 一致：RootBubble 对
+       // thinking.status / processes.length / artifacts.length 都是裸解引用，
+       // 少字段就在渲染时抛 TypeError，Vue 3 把这条气泡换成空注释节点——
+       // 用户根本看不到「已取消」。
        bubbles.value.push({
           role: 'ASSISTANT',
+          thinking: { status: 'done', content: '', duration: 0 },
+          title: '',
+          planTodos: [],
+          processes: [],
+          artifacts: [],
+          walkthrough: '',
+          question: null,
+          isStreaming: false,
           content: t('chat.pptCancelled'),
           timestamp: new Date().toLocaleTimeString()
        })
@@ -1132,8 +1439,17 @@ export default {
           await performPptGeneration(params)
 
           // Add a system bubble saying "Starting generation..."
+          // 同上：字段少了这条提示会被 Vue 的渲染错误兜底吞成空节点。
           bubbles.value.push({
              role: 'ASSISTANT',
+             thinking: { status: 'done', content: '', duration: 0 },
+             title: '',
+             planTodos: [],
+             processes: [],
+             artifacts: [],
+             walkthrough: '',
+             question: null,
+             isStreaming: false,
              content: t('chat.pptStarting', { variant: pptExportEditable.value ? t('chat.pptVariantEditable') : t('chat.pptVariantImage') }),
              timestamp: new Date().toLocaleTimeString()
           })
@@ -1204,15 +1520,19 @@ export default {
     }
 
     const startNewChat = () => {
+      // New conversation detaches this panel from the old SSE. The server run keeps working
+      // and remains visible from history; Stop is the explicit cancellation action.
       setConversationId(null)  // This now triggers resetSSE internally
       clearBubbles()           // Use composable method
+      selectedSkillIds.value = [] // 手动选的技能属于这一段对话，新会话从干净状态开始
       emit('new-chat')
     }
 
-    const handleSubmit = async () => {
-      // 流式进行中禁止再发送（回车路径不走发送按钮的 abort 分支）：
-      // 必须在清空输入框之前拦截，否则用户输入会被静默丢弃
-      if (isStreaming.value) return
+    const handleSubmit = async (requestedMode = 'steer') => {
+      // 插件镜像会话只读（dev-board#298）：输入区已换成说明条，这里再拦一道
+      // 兜住空态输入框等旁路（后端对镜像会话追加也会拒，这是省一次报错）
+      if (props.externalReadOnly) return
+      if (isUploadingPasted.value) return
       // Create a clone to safely manipulate and extract text without tags
       let text = ''
       let contentHtml = ''
@@ -1268,9 +1588,9 @@ export default {
         return
       }
 
-      // 只有图片、没有文字：产品没有原生图像输入通道（/api/agent/chat 的请求体里
-      // 根本没有图像字段），粘贴的图片只用于气泡展示，「图片进 AI」全靠 OCR 转文本。
-      // 这种消息发出去 prompt 是空串，用户看着自己的图片气泡等回答，模型收到一条空消息。
+      // 只有图片、没有文字：图片本身现在会随消息真的发出去（模型支持读图就直送、
+      // 不支持则降级 OCR），但 prompt 是空串——用户看着自己的图片气泡等回答，
+      // 模型收到的是一条没说要做什么的空消息。先问清楚要干嘛。
       if (!text && hasImages && typeof uni !== 'undefined') {
         uni.showModal({
           title: t('chat.imageNeedsCaptionTitle'),
@@ -1282,59 +1602,135 @@ export default {
       }
 
       const prompt = text
+      const submissionMode = isStreaming.value && requestedMode === 'queue' ? 'queue' : 'steer'
+      const editorHtml = richInput.value ? richInput.value.innerHTML : ''
+      const selectedSkillSnapshot = currentSkillIds()
+      const conversationId = currentConversationId.value || `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      if (!currentConversationId.value) setConversationId(conversationId)
 
-      if (richInput.value) richInput.value.innerHTML = ''
-      inputPrompt.value = ''
-
-      // Use context files as fileList
-      const fileListToSend = contextFiles.value.map(f => ({
-        id: f.id,  // useAgentStream.js uses f.id to extract fileIds
-        fileName: f.name,
-        fileType: f.fileType,
-        wpsFileId: f.wpsFileId,
-        isDir: f.isDir
-      }))
-
-      // Save images and context files for user bubble display
-      const imagesToShow = pastedImages.value.map(img => ({ path: img.path }))
-      const contextFilesToShow = contextFiles.value.map(f => ({
-        id: f.id,
-        name: f.name,
-        isDir: f.isDir
-      }))
-
-      // Clear context files and images after sending
-      contextFiles.value = []
-      pastedImages.value = []
-
-      // Build activeContext from props.activeTab (only if no manual context provided)
-      // Priority: manual contextFiles > activeContext
-      const activeContext = (fileListToSend.length === 0 && props.activeTab) ? {
+      // 先定住本次要带走的那几张，再去上传：上传要走网络，其间用户还可能继续粘贴，
+      // 拿 pastedImages 的实时值会一边漏掉新贴的、一边把它顺手清掉。
+      const pastedBatch = pastedImages.value.slice()
+      const activeContext = (!hasFiles && !hasImages && props.activeTab) ? {
         id: String(props.activeTab.id || props.activeTab.wpsFileId),
         name: props.activeTab.name,
         fileType: props.activeTab.fileType,
         wpsFileId: props.activeTab.wpsFileId,
         pane: props.activeTabPane
       } : null
+      const attempt = beginChatSubmission(submissionTracker, {
+        prompt,
+        contentHtml,
+        editorHtml,
+        fileIds: contextFiles.value.map((file) => file.id),
+        imageKeys: pastedBatch.map((image, index) => image.path || `image-${index}`),
+        submissionMode,
+        conversationId,
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: currentModeId.value,
+        skillIds: selectedSkillSnapshot,
+        activeContext,
+      }, () => {
+        try { return crypto.randomUUID() } catch (e) { return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+      })
+      let pastedFileList = Array.isArray(attempt.pastedFileList) ? attempt.pastedFileList : []
+      if (pastedBatch.length && !attempt.pastedPrepared) {
+        // 上传这段时间里 isStreaming 还是 false、输入框也还没清空，再按一次回车
+        // 会把同一批图重复上传、同一条消息发两遍——自己上一道闩。
+        // 上传结束到 sendMessage 之间只有同步代码，而 sendMessage 是同步置起
+        // isStreaming 的，所以这道闩到这里就可以撤。
+        isUploadingPasted.value = true
+        try {
+          const uploaded = await uploadPastedImages(pastedBatch)
+          pastedFileList = uploaded.files
+          if (uploaded.failed > 0) {
+            // 上传失败的不并入附件，这条提示是用户唯一能知道「模型没收到图」的地方
+            uni.showToast({
+              title: t('chat.pastedImageUploadFailed', { count: uploaded.failed }),
+              icon: 'none',
+              duration: 3000
+            })
+          }
+        } finally {
+          isUploadingPasted.value = false
+        }
+        attempt.pastedFileList = pastedFileList
+        attempt.pastedPrepared = true
+      }
+
+      // Use context files as fileList；粘贴的图片走同一条 contextItems 通道
+      const fileListToSend = contextFiles.value.map(f => ({
+        id: f.id,  // useAgentStream.js uses f.id to extract fileIds
+        fileName: f.name,
+        fileType: f.fileType,
+        wpsFileId: f.wpsFileId,
+        isDir: f.isDir
+      })).concat(pastedFileList.map(f => ({
+        id: f.id,
+        fileName: f.name,
+        fileType: f.fileType,
+        wpsFileId: f.wpsFileId,
+        isDir: false
+      })))
+
+      // Save images and context files for user bubble display
+      const imagesToShow = pastedBatch.map(img => ({ path: img.path }))
+      const contextFilesToShow = contextFiles.value.map(f => ({
+        id: f.id,
+        name: f.name,
+        isDir: f.isDir
+      }))
 
       if (activeContext) {
         console.log('[ChatInterface] Auto-attaching active context:', activeContext.name)
       }
 
-      await sendMessage({
+      const receipt = await submitChatAttempt(attempt, () => sendMessage({
         prompt,
         contentHtml, // Pass HTML with inline tags for bubble display
         fileList: fileListToSend,
         projectId: props.projectId,
-        modelId: currentModelId.value,
-        mode: currentModeId.value, // Agent 模式: ASK, PLAN, AGENT
-        assistantId: props.currentAssistantId,
-        activeContext, // NEW: Auto-detected active tab context
-        pinnedSkillId: pinnedSkillId.value,
+        modelId: attempt.modelId,
+        mode: attempt.mode, // Agent 模式: ASK, PLAN, AGENT
+        activeContext: attempt.activeContext, // NEW: Auto-detected active tab context
+        // ASK 模式下 skill 不生效，一律不带——省得后端与面板的状态各说各话
+        skillIds: attempt.skillIds,
+        submissionMode,
+        clientRequestId: attempt.clientRequestId,
         // Pass for user bubble display
         _userImages: imagesToShow,
         _userContextFiles: contextFilesToShow
-      })
+      }))
+
+      if (!receiptChatSubmission(submissionTracker, attempt, receipt)) {
+        failChatSubmission(submissionTracker, attempt)
+        uni.showToast({ title: t('chat.sendFailedDraftKept'), icon: 'none' })
+        return
+      }
+
+      // Receipt is the durability boundary. Only clear the exact draft and attachments that
+      // produced it; text/images added while the request was in flight stay for the next send.
+      const currentDraft = {
+        prompt,
+        contentHtml,
+        editorHtml: richInput.value ? richInput.value.innerHTML : '',
+        fileIds: contextFiles.value.map((file) => file.id),
+        imageKeys: pastedImages.value.map((image, index) => image.path || `image-${index}`),
+        submissionMode: attempt.submissionMode,
+        conversationId: currentConversationId.value,
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: currentModeId.value,
+        skillIds: currentSkillIds(),
+        activeContext: attempt.activeContext,
+      }
+      if (shouldClearChatDraft(attempt, currentDraft)) {
+        if (richInput.value) richInput.value.innerHTML = ''
+        inputPrompt.value = ''
+        contextFiles.value = contextFiles.value.filter((file) => !contextFilesToShow.some((sent) => sent.id === file.id))
+        pastedImages.value = pastedImages.value.filter((image) => !pastedBatch.includes(image))
+      }
 
       scrollToBottom()
     }
@@ -1353,6 +1749,26 @@ export default {
       abort()
     }
 
+    const toggleFollowUpMode = () => {
+      followUpMode.value = followUpMode.value === 'steer' ? 'queue' : 'steer'
+      try { uni.setStorageSync('awd_agent_follow_up_mode', followUpMode.value) } catch (e) { /* ignore */ }
+    }
+
+    const inboxAction = async (action) => {
+      try {
+        await action()
+      } catch (e) {
+        uni.showToast({ title: e.message || t('chat.inboxUpdateFailed'), icon: 'none' })
+      }
+    }
+    const handleInboxEdit = ({ item, message }) => inboxAction(() =>
+      updateInbox(item.id, { message, expectedRevision: item.revision }))
+    const handleInboxDelete = (item) => inboxAction(() => deleteInbox(item.id, item.revision))
+    const handleInboxMove = ({ item, position }) => inboxAction(() =>
+      updateInbox(item.id, { position, expectedRevision: item.revision }))
+    const handleInboxSendNow = (item) => inboxAction(() =>
+      updateInbox(item.id, { submissionMode: 'steer', expectedRevision: item.revision }))
+
     // 只列还在跑的：已完成/失败的条目留在浮窗里供用户核对结果，控制条不该再给停止按钮
     const runningTasks = computed(() =>
       Object.values(backgroundTasks.value || {}).filter(t => t && t.status === 'running')
@@ -1364,11 +1780,25 @@ export default {
       'PPTX_MODIFY': t('chat.taskPptModify'),
       'FILE_PROCESS': t('chat.taskFileProcess'),
       'WEB_FETCH': t('chat.taskWebFetch'),
-      'OTHER': t('chat.taskOther')
+      'OTHER': t('chat.taskOther'),
+      'PLUGIN_JOB': t('chat.taskPluginJob')
     })[type] || type || t('chat.taskBackgroundFallback')
 
     const handleCancelTask = async (task) => {
       if (!task || !task.taskId || stoppingTasks.value[task.taskId]) return
+      // 插件后台任务（PluginJobService）按 jobId 取消，归属校验是项目成员，不走会话那条路
+      if (task.type === 'PLUGIN_JOB') {
+        stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: true }
+        try {
+          await cancelPluginJob(task.taskId)
+          uni.showToast({ title: t('chat.stoppingTask'), icon: 'none' })
+        } catch (e) {
+          console.warn('[ChatInterface] 停止插件后台任务失败:', e)
+          uni.showToast({ title: t('chat.stopNotEffective'), icon: 'none' })
+          stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: false }
+        }
+        return
+      }
       // conversationId 优先取任务自己带的：后台任务跨会话切换仍在跑，
       // 拿当前会话去停别的会话的任务会被后端 403 挡掉
       const cid = task.conversationId || currentConversationId.value
@@ -1401,7 +1831,7 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: currentModeId.value,
-        assistantId: props.currentAssistantId
+        skillIds: currentSkillIds()
       })
       scrollToBottom()
     }
@@ -1411,6 +1841,7 @@ export default {
        console.log('[ChatInterface] Loading history...', loadedMsgs.length)
        setConversationId(conversationId)  // This triggers resetSSE internally
        clearBubbles()  // Clear existing using composable method
+       selectedSkillIds.value = [] // 切会话即重置手动选择：技能是按轮携带的，不该跨会话粘住
 
        loadedMsgs.forEach(msg => {
           const role = msg.role?.toUpperCase() || 'USER'
@@ -1428,182 +1859,15 @@ export default {
                   timestamp: formatTime(msg.createdAt)
               })
           } else {
-              // Convert Assistant Message to Root Bubble Structure
-              // 1. Check for XML tags
-              const content = msg.content || ''
-
-              // Simple Heuristic: If content has <thinking> or <title>, try to parse?
-              // Or just dump content into Walkthrough for legacy safety.
-              // IF we want to support old artifacts in history, we parse them.
-
-              // Create default bubble
-              const bubble = {
-                  id: msg.id,
-                  role: 'ASSISTANT',
-                  thinking: { status: 'done', content: '', duration: 0 },
-                  title: '',
-                  processes: [],
-                  artifacts: [],
-                  walkthrough: '',
-                  content: '', // Main Answer (from <final> tag)
-                  // 反问（<question>）解析结果，形状与 useAgentStream.createAssistantBubble 一致：
-                  // { text, options, answered } | null
-                  question: null,
-                  timestamp: formatTime(msg.createdAt)
+              const bubble = parseAssistantHistory(msg.content || '')
+              bubble.id = msg.id
+              bubble.timestamp = formatTime(msg.createdAt)
+              const recoveredTodos = recoverPlanTodos(bubble.processes)
+              if (recoveredTodos !== null) {
+                  bubble.planTodos = recoveredTodos
+                  const planIndex = bubble.timeline.findLastIndex(entry => entry.type === 'process' && entry.data.items.some(item => item.type === 'tool' && /todo_write\(/.test(item.code || '')))
+                  bubble.timeline.splice(planIndex + 1, 0, { type: 'plan', data: recoveredTodos })
               }
-
-              // Extract Artifacts
-              const artifactRegex = /<artifact\s+type="([^"]+)"(?:[^>]*)>([\s\S]*?)<\/artifact>/g
-              let remaining = content
-              let match
-              while ((match = artifactRegex.exec(content)) !== null) {
-                 const type = match[1]
-                 const artContent = match[2]
-                 bubble.artifacts.push({
-                     id: `hist-art-${Math.random()}`,
-                     type,
-                     status: 'draft',
-                     data: { content: artContent },
-                     fileName: type === 'task_list' ? 'Task List' : 'Plan'
-                 })
-                 remaining = remaining.replace(match[0], '')
-              }
-
-              // Extract thinking
-              const thinkingMatch = remaining.match(/<thinking>([\s\S]*?)<\/thinking>/)
-              if (thinkingMatch) {
-                  bubble.thinking.content = thinkingMatch[1]
-                  remaining = remaining.replace(thinkingMatch[0], '')
-              }
-
-              // Extract title
-              const titleMatch = remaining.match(/<title>([\s\S]*?)<\/title>/)
-              if (titleMatch) {
-                  bubble.title = titleMatch[1]
-                  remaining = remaining.replace(titleMatch[0], '')
-              }
-
-              // Extract <final> tag content -> bubble.content
-              const finalMatch = remaining.match(/<final>([\s\S]*?)<\/final>/)
-              if (finalMatch) {
-                  bubble.content = finalMatch[1].trim()
-                  remaining = remaining.replace(finalMatch[0], '')
-              }
-
-              // Extract <walkthrough> tag content
-              const walkthroughMatch = remaining.match(/<walkthrough>([\s\S]*?)<\/walkthrough>/)
-              if (walkthroughMatch) {
-                  bubble.walkthrough = walkthroughMatch[1].trim()
-                  remaining = remaining.replace(walkthroughMatch[0], '')
-              }
-
-              // Extract <process> tags and their content (steps, tool_code, tool_output)
-              const processRegex = /<process(?:\s+name="([^"]*)")?[^>]*>([\s\S]*?)<\/process>/g
-              let processMatch
-              while ((processMatch = processRegex.exec(remaining)) !== null) {
-                  const processName = processMatch[1] || 'Processing'
-                  const processContent = processMatch[2]
-
-                  const proc = {
-                      id: `hist-proc-${Date.now()}-${Math.random()}`,
-                      title: processName,
-                      isExpanded: false, // Collapse by default in history
-                      items: [],  // CHANGED: Use items array instead of steps for consistency
-                      steps: [],  // Keep for backward compatibility
-                      content: ''
-                  }
-
-                  // Extract <step> tags
-                  const stepRegex = /<step>([\s\S]*?)<\/step>/g
-                  let stepMatch
-                  while ((stepMatch = stepRegex.exec(processContent)) !== null) {
-                      proc.items.push({
-                          type: 'step',
-                          status: 'done',
-                          text: stepMatch[1].trim()
-                      })
-                  }
-
-                  // Extract <tool_code> and <tool_output> - create tool items
-                  // 解转义与标签清单都在 agentTagProtocol.mjs：落库正文里的工具载荷是中和过的
-                  // （否则输出里的 </tool_output>/</process> 会把这段解析整个带偏），此处还原成原文
-                  const toolBlock = parseToolBlock(processContent)
-
-                  if (toolBlock) {
-                      const code = toolBlock.code
-                      const outputAttrs = toolBlock.attrs
-                      const output = toolBlock.output
-
-                      // First: Try to parse status from attribute (new format)
-                      let status = 'success'
-                      const statusAttrMatch = outputAttrs.match(/status="([^"]*)"/)
-                      if (statusAttrMatch) {
-                          const statusAttr = statusAttrMatch[1]
-                          if (statusAttr === 'SUCCESS') {
-                              status = 'success'
-                          } else if (statusAttr === 'FAILURE') {
-                              status = 'error'
-                          }
-                      } else {
-                          // Fallback: Determine status from output content (legacy format)
-                          if (output.includes('Error') || output.includes('Exception') || output.includes('FAILURE')) {
-                              status = 'error'
-                          }
-                      }
-
-                      proc.items.push({
-                          type: 'tool',
-                          code: code,
-                          output: output,
-                          status: status
-                      })
-                  }
-
-                  bubble.processes.push(proc)
-              }
-
-              // Clean up process tags from remaining
-              remaining = remaining.replace(/<process[^>]*>[\s\S]*?<\/process>/g, '')
-
-              // 反问（<question>）回灌。此前全仓不解析这个标签：落库正文里带着原样标签，
-              // 重开会话时整段 <question>…</question> 作为「未标记文本」掉进 bubble.content
-              // ——用户看到的是一堆 XML，选项更是无从点起。
-              // 刻意放在 <process> 剥离之后：工具输出里出现过 <question> 字样（模型复述协议）
-              // 也不会被当成真的反问。
-              // **这里不写 answered 的最终值**：artifact 那边把历史里的计划卡一律硬写成
-              // status:'draft'（见上方 Extract Artifacts），同样的写法换到问题卡上就是
-              // 「重开会话后已回答过的问题又长出一排能点的按钮」；answered 在整轮回灌结束后
-              // 按「这条之后还有没有用户消息」统一判定。
-              const questionMatch = remaining.match(/<question(?:\s[^>]*)?>([\s\S]*?)<\/question>/i)
-              // 兜底：模型漏了 </question>（截断/笔误）时后端仍按「有问题」停机
-              // （AgentOrchestrator.containsQuestion 只认起始标签），前端也得认，
-              // 否则这条最需要提示的消息反而只剩裸标签。
-              const openQuestionMatch = questionMatch
-                  ? null
-                  : remaining.match(/<question(?:\s[^>]*)?>([\s\S]*)$/i)
-              const questionRaw = questionMatch ? questionMatch[1] : (openQuestionMatch ? openQuestionMatch[1] : null)
-              if (questionRaw !== null) {
-                  const options = []
-                  const optionRegex = /<option>([\s\S]*?)<\/option>/gi
-                  let optMatch
-                  while ((optMatch = optionRegex.exec(questionRaw)) !== null) {
-                      const opt = optMatch[1].trim()
-                      if (opt) options.push(opt)
-                  }
-                  bubble.question = {
-                      text: questionRaw.replace(/<option>[\s\S]*?<\/option>/gi, '').trim(),
-                      options,
-                      answered: false
-                  }
-                  remaining = remaining.replace(questionMatch ? questionMatch[0] : openQuestionMatch[0], '')
-              }
-
-              // Any remaining untagged text goes to content (fallback for legacy)
-              remaining = remaining.trim()
-              if (remaining && !bubble.content) {
-                  bubble.content = remaining
-              }
-
               bubbles.value.push(bubble)
           }
        })
@@ -1741,12 +2005,15 @@ export default {
             const file = items[i].getAsFile()
             if (file) {
               hasProcessedImage = true
+              // 同步先占位、再异步补 path：path 只用来画缩略图，真正要发出去的是 file 这份 blob。
+              // 原来整条 push 都压在 FileReader.onload 里，粘完立刻回车时 onload 还没触发，
+              // 这张图就整个丢了——以前丢的只是一张缩略图，现在丢的是要发给模型的附件。
+              pastedImages.value.push({ file: file, path: '' })
+              // 必须取回数组里那个响应式代理：直接改 push 进去的原对象不会触发视图更新
+              const entry = pastedImages.value[pastedImages.value.length - 1]
               const reader = new FileReader()
               reader.onload = (evt) => {
-                pastedImages.value.push({
-                  file: file,
-                  path: evt.target.result
-                })
+                entry.path = evt.target.result
               }
               reader.readAsDataURL(file)
             }
@@ -1767,10 +2034,16 @@ export default {
 
     // --- Handle Enter Key ---
     const handleEnterKey = (e) => {
+      // 输入法组合中按下的 Enter 是「上屏候选词」，不是「发送」。
+      // 中文/日文/韩文输入时浏览器照样派发 keydown（isComposing=true，部分浏览器 keyCode=229），
+      // 不挡住的话这一下会把还没上屏的拼音直接当成消息发出去——中文用户天天撞。
+      // 编辑器侧（zetaOfficeImeOverlay / editor-main）早就为同一类问题做了 composing 闩，
+      // 聊天输入框一直漏着。
+      if (e.isComposing || e.keyCode === 229) return
       if (!e.shiftKey) {
         // Plain Enter -> Send
         e.preventDefault()
-        handleSubmit()
+        handleSubmit(followUpMode.value)
       } else {
         // Shift+Enter -> New line (default behavior, do not prevent)
       }
@@ -2060,7 +2333,9 @@ export default {
         pdf: 'pdf',
         txt: 'txt',
         ppt: 'ppt', pptx: 'ppt',
-        jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
+        // bmp 是补的：后端的 ocr-extensions 与 vision.extensions 都含 bmp，
+        // 这里漏掉会让 .bmp 落成 'other'，与另外两处判图口径对不上
+        jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', bmp: 'image',
         md: 'markdown'
       }
       return typeMap[ext] || 'other'
@@ -2087,6 +2362,10 @@ export default {
       showUploadDialog.value = false
       uploadSelectedFiles.value = []
 
+      // 字节上传失败的文件名：这些不并入附件，收尾时要点名告诉用户
+      const failedUploads = []
+      let addedCount = 0
+
       try {
         for (const file of filesToUpload) {
           const fileType = getFileTypeFromName(file.name)
@@ -2111,7 +2390,14 @@ export default {
               try {
                 await uploadFileContent(createdFile.id, wpsFileId, file.fileObject, file.size)
               } catch (uploadErr) {
-                console.warn('[ChatInterface] File content upload failed, file record created:', uploadErr)
+                // 字节没传上去就**不并入附件**。原来这里只 console.warn 然后照样 addFile，
+                // 结果是 contextItems 里挂着一个服务器上没有内容的 id：模型收到的是
+                // 「文件在这儿但里面什么都没有」，只会回一句「我看不到这份文件」，
+                // 而用户以为自己已经把文件发过去了。图片接上视觉直送后这条更要命——
+                // 一张没有字节的图既走不了直送也走不了 OCR。
+                console.warn('[ChatInterface] File content upload failed, not attaching:', uploadErr)
+                failedUploads.push(file.name)
+                continue
               }
             }
 
@@ -2123,10 +2409,19 @@ export default {
               wpsFileId: createdFile.wpsFileId,
               isDir: false
             })
+            addedCount++
           }
         }
 
-        uni.showToast({ title: t('chat.filesAdded', { count: filesToUpload.length }), icon: 'success' })
+        if (failedUploads.length) {
+          uni.showToast({
+            title: t('chat.uploadContentFailed', { names: failedUploads.join('、') }),
+            icon: 'none',
+            duration: 3000
+          })
+        } else {
+          uni.showToast({ title: t('chat.filesAdded', { count: addedCount }), icon: 'success' })
+        }
       } catch (error) {
         console.error('[ChatInterface] Upload failed:', error)
         uni.showToast({ title: error.message || t('chat.uploadFailed'), icon: 'none' })
@@ -2167,6 +2462,63 @@ export default {
       })
     }
 
+    // 剪贴板 MIME → 扩展名。后端判「这是不是可直送的图」先看文件名后缀
+    // （ai.context.vision.extensions = jpg/jpeg/png/gif/bmp/webp），后看 fileType，
+    // 所以后缀必须与真实字节一致；认不出的 MIME 按 png 落名，不凭空造后缀。
+    const PASTED_IMAGE_EXT = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/gif': 'gif',
+      'image/bmp': 'bmp',
+      'image/webp': 'webp'
+    }
+
+    // 把粘贴进来的图片落成真实项目文件，返回 { files, failed }。
+    //
+    // 在此之前，粘贴的图片只有一份 dataURL 用来画气泡缩略图，blob 从没上过服务器：
+    // 既没进 contextItems，也就既没走视觉直送、也没走 OCR——模型其实什么都没收到。
+    // 这里让它走「+」上传的同一条链路（createFile + 字节直传），汇进同一份 fileList，
+    // 由后端按模型能力决定直送还是降级。
+    const uploadPastedImages = async (images) => {
+      const projectId = typeof props.projectId === 'string' ? Number(props.projectId) : props.projectId
+      if (!projectId) return { files: [], failed: images.length }
+
+      const d = new Date()
+      const p2 = (n) => String(n).padStart(2, '0')
+      const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
+
+      const files = []
+      let failed = 0
+      for (let i = 0; i < images.length; i++) {
+        const blob = images[i] && images[i].file
+        if (!blob) { failed++; continue }
+        const ext = PASTED_IMAGE_EXT[String(blob.type).toLowerCase()] || 'png'
+        // 同一秒里贴多张会重名，带上序号
+        const suffix = images.length > 1 ? `${stamp}-${i + 1}` : stamp
+        const name = `${t('chat.pastedImageName', { stamp: suffix })}.${ext}`
+        const wpsFileId = `project_${projectId}_doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+        try {
+          // 落在项目根目录：粘贴没有「选目标文件夹」这一步，不该替用户猜一个
+          const created = await createFile(projectId, null, name, getFileTypeFromName(name), blob.size, null, wpsFileId)
+          if (!created || !created.id) throw new Error('createFile returned no id')
+          // 字节没传上去就绝不并入附件：contextItems 里挂一个服务器上没有内容的 id，
+          // 模型只会回「我看不到这张图」，而用户以为自己已经把图发过去了。
+          await uploadFileContent(created.id, wpsFileId, blob, blob.size)
+          files.push({
+            id: created.id,
+            name: created.name,
+            fileType: created.fileType,
+            wpsFileId: created.wpsFileId,
+            isDir: false
+          })
+        } catch (e) {
+          console.warn('[ChatInterface] 粘贴图片上传失败:', e)
+          failed++
+        }
+      }
+      return { files, failed }
+    }
+
     // 外部面板（如股东大会核查）注入预设 prompt：强制 AGENT 模式发送
     // （skill 注入依赖 prompt 文本内的触发词；ASK 模式会跳过注入）。
     // 返回本次会话 ID，供调用方把业务对象绑定到该会话。
@@ -2181,7 +2533,7 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: 'AGENT',
-        assistantId: props.currentAssistantId
+        skillIds: currentSkillIds()
       })
       scrollToBottom()
       return currentConversationId.value
@@ -2224,14 +2576,29 @@ export default {
 
     return {
        bubbles,
+       currentConversationId,
        isStreaming,
+       componentGateItem,
+       componentGateResolved,
+       resolveComponentGate,
+       backgroundComponentGate,
        inputPrompt,
        richInput,
+       showMemoryBrowser,
+       followUpMode,
+       toggleFollowUpMode,
+       pendingInbox,
+       handleInboxEdit,
+       handleInboxDelete,
+       handleInboxMove,
+       handleInboxSendNow,
        tokenUsage,
-       scrollTop,
+       messageList, messageContent, chatTurns,
+       followLatest, handleMessageScroll, navigateToMessage, scrollToBottom,
        isDragging,
        contextFiles,
        pastedImages,
+       isUploadingPasted,
        handleSubmit,
        handleAbort,
        handleRichInput,
@@ -2245,6 +2612,7 @@ export default {
        cleanTitle,
        recentDotClass,
        agentRunStatus,
+       linkStatus,
        addFile,
        removeContextFile,
        removePastedImage,
@@ -2256,10 +2624,6 @@ export default {
        openRollbackDialog,
        cancelRollback,
        confirmRollback,
-       // Menu
-       showAssistantMenu,
-       toggleAssistantMenu: () => showAssistantMenu.value = !showAssistantMenu.value,
-       selectAssistant: (a) => emit('update:currentAssistantId', a.id),
        // Model
        currentModelId,
        currentModelName,
@@ -2272,6 +2636,7 @@ export default {
        modelGroups,
        priceLabel,
        networkRegionBasis,
+       currentModelVision,
        // Agent Mode
        currentModeId,
        currentModeName,
@@ -2281,13 +2646,17 @@ export default {
        showModeDropdown,
        availableModes,
        localModeNotice,
-       // Skill 选择
+       // Skill 选择与本轮生效清单
+       ICONS,
        showSkillDropdown,
        availableSkills,
-       pinnedSkillId,
-       skillChipLabel,
+       selectedSkillIds,
+       skillChips,
+       skillDisabledByMode,
+       skillDisplayName,
        toggleSkillDropdown,
-       selectSkill,
+       toggleSkillSelection,
+       removeSelectedSkill,
        goToSkillManagement,
        // Artifact
        handleArtifactOpenTab: (art) => emit('artifact-open-tab', art),
@@ -2309,7 +2678,7 @@ export default {
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: 'AGENT', // 审批后使用 Agent 模式执行
-             assistantId: props.currentAssistantId
+             skillIds: currentSkillIds()
           })
           scrollToBottom()
        },
@@ -2325,7 +2694,7 @@ export default {
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: currentModeId.value,
-             assistantId: props.currentAssistantId
+             skillIds: currentSkillIds()
           })
           scrollToBottom()
        },
@@ -2392,7 +2761,7 @@ export default {
   height: 100%;
   width: 100%;
   max-width: 100%;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   position: relative;
   overflow: hidden; /* Prevent children from overflowing */
   box-sizing: border-box;
@@ -2400,25 +2769,46 @@ export default {
 
 .chat-header {
   height: 36px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--awd-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0 16px;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   flex-shrink: 0;
 }
 
+.header-left {
+  flex: 1;
+  min-width: 0;
+  margin-right: 8px;
+}
+
 .header-left .project-name-display {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .header-actions {
   display: flex;
+  flex-shrink: 0;
   gap: 12px;
   position: relative;
 }
+.memory-header-btn {
+  align-self: center;
+  white-space: nowrap;
+  padding: 4px 7px;
+  border-radius: 5px;
+  color: var(--awd-text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.memory-header-btn:hover { background: var(--awd-surface); color: var(--awd-accent-text); }
 
 /* Wrapper for icon buttons that have dropdowns - prevents layout shift */
 .icon-btn-wrapper {
@@ -2431,7 +2821,7 @@ export default {
   cursor: pointer;
   padding: 6px;
   border-radius: 6px;
-  color: #666;
+  color: var(--awd-text-2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2448,7 +2838,7 @@ export default {
   display: none;
 }
 .icon-btn:hover {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-surface);
 }
 .icon-btn:hover .btn-icon.default {
   display: none;
@@ -2458,7 +2848,7 @@ export default {
 }
 /* Prevent layout shift when active */
 .icon-btn.active {
-  background: rgba(26, 83, 54, 0.12);
+  background: var(--awd-accent-soft);
   border-radius: 6px;
 }
 .icon-btn.active .btn-icon.default {
@@ -2474,18 +2864,35 @@ export default {
   width: 14px;
   height: 14px;
 }
+/* 加号用内联 SVG（描边风格与发送键一致），hover 走 currentColor 变绿，不再双位图切换 */
+.icon-btn .plus-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  color: var(--awd-text-2);
+  transition: color 0.15s ease;
+}
+.icon-btn.mini .plus-svg {
+  width: 14px;
+  height: 14px;
+}
+.icon-btn:hover .plus-svg {
+  color: var(--awd-accent-text);
+}
 /* File add button with border */
 .icon-btn.file-add-btn {
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  border: 1px solid var(--awd-border);
+  border-radius: 6px;
   padding: 3px;
 }
 .icon-btn.file-add-btn:hover {
-  border-color: rgba(26, 83, 54, 0.4);
+  border-color: var(--awd-accent);
 }
 
 .message-list {
   flex: 1;
+  min-height: 0;
+  overflow-anchor: none;
   overflow-y: auto;
   overflow-x: hidden; /* Prevent horizontal overflow */
   padding: 12px;
@@ -2503,6 +2910,25 @@ export default {
   overflow: hidden; /* Prevent children from overflowing */
 }
 
+.conversation-turn { margin-bottom: 18px; }
+.return-to-latest button::after { border: 0; }
+.return-to-latest { position: relative; flex-shrink: 0; height: 0; z-index: 5; }
+.return-to-latest button {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid var(--awd-border);
+  border-radius: 20px;
+  padding: 5px 14px;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .08);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+}
 .message-row {
   margin-bottom: 14px;
   display: flex;
@@ -2518,15 +2944,15 @@ export default {
 }
 
 .user-bubble {
-  background: #E8F3ED; /* AI WorkDeck品牌色 Lightest */
+  background: var(--awd-accent-soft); /* AI WorkDeck品牌色 Lightest */
   padding: 8px 12px;
   border-radius: 6px 6px 0 6px;
   max-width: 80%;
-  color: #2C3338; /* Gray-Dark for text */
+  color: var(--awd-text); /* Gray-Dark for text */
   font-size: 13px;
   line-height: 1.5;
   box-shadow: none;
-  border: 1px solid #d4e5dc;
+  border: 1px solid var(--awd-border);
   word-wrap: break-word;
   overflow-wrap: break-word;
   box-sizing: border-box;
@@ -2547,7 +2973,7 @@ export default {
 
 .bubble-timestamp {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   /* margin-top: 4px; */
 }
 .user-bubble .bubble-timestamp { text-align: right; }
@@ -2591,7 +3017,7 @@ export default {
 .welcome-text {
   font-size: 24px;
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
   margin-bottom: 8px;
   display: block;
 }
@@ -2599,26 +3025,32 @@ export default {
 .welcome-subtitle {
   font-size: 15px;
   font-weight: 400;
-  color: #666;
+  color: var(--awd-text-2);
   display: block;
 }
 
 .input-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 0px;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  border-radius: 12px;
   padding: 16px;
   width: 100%;
   box-sizing: border-box;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
   position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+/* 输入区获得焦点时整卡亮起：品牌绿描边 + mint 光晕（浅色，不做深色 chrome） */
+.input-card:focus-within {
+  border-color: var(--awd-accent);
+  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.16), 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
 }
 
 /* Recent History Section - 紧凑专业样式 */
 .recent-history-header {
   font-size: 12px;
   font-weight: 500;
-  color: #888;
+  color: var(--awd-text-3);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -2628,10 +3060,10 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 0; /* 无间距 */
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--awd-border);
   border-radius: 4px; /* 减小圆角 */
   overflow: hidden;
-  background: #fff;
+  background: var(--awd-surface);
 }
 
 /* 会话后台任务状态点（与宿主抽屉同一套视觉）：
@@ -2643,10 +3075,10 @@ export default {
   flex-shrink: 0;
   margin-right: 6px;
 }
-.conv-dot.dot-running { background: #5BD197; animation: conv-dot-pulse 1.2s ease-in-out infinite; }
-.conv-dot.dot-attention { background: #F5B60D; }
-.conv-dot.dot-unread { background: #3B82F6; }
-.conv-dot.dot-error { background: #E74C3C; }
+.conv-dot.dot-running { background: var(--awd-mint); animation: conv-dot-pulse 1.2s ease-in-out infinite; }
+.conv-dot.dot-attention { background: var(--awd-warning); }
+.conv-dot.dot-unread { background: var(--awd-info); }
+.conv-dot.dot-error { background: var(--awd-danger); }
 .conv-dot.header-dot {
   position: absolute;
   top: 2px;
@@ -2654,7 +3086,7 @@ export default {
   width: 7px;
   height: 7px;
   margin: 0;
-  border: 1px solid #ffffff;
+  border: 1px solid var(--awd-surface);
 }
 @keyframes conv-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -2666,8 +3098,8 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: #ffffff;
-  border-bottom: 1px solid #f0f0f0;
+  background: var(--awd-surface);
+  border-bottom: 1px solid var(--awd-border-subtle);
   border-radius: 0; /* 无圆角 */
   cursor: pointer;
   transition: background 0.15s ease;
@@ -2679,12 +3111,12 @@ export default {
 }
 
 .history-item:hover {
-  background: #f8faf9;
+  background: var(--awd-accent-soft);
 }
 
 .history-title {
   font-size: 13px;
-  color: #2c3e50;
+  color: var(--awd-text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2695,7 +3127,7 @@ export default {
 
 .history-time {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   margin-left: 12px;
   flex-shrink: 0;
   text-align: right;
@@ -2704,18 +3136,18 @@ export default {
 
 .history-empty-placeholder {
   font-size: 13px;
-  color: #999;
+  color: var(--awd-text-3);
   text-align: center;
   padding: 24px 0;
 }
 
 .history-disclaimer {
   font-size: 12px;
-  color: #aaa;
+  color: var(--awd-text-3);
   text-align: center;
   padding: 16px 0 0;
   margin-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .chat-input-rich {
@@ -2725,67 +3157,82 @@ export default {
   outline: none;
   font-size: 15px;
   line-height: 1.5;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .chat-input-rich:empty:before {
   content: attr(data-placeholder);
-  color: #aaa;
+  color: var(--awd-text-3);
 }
 
 .input-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 6px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .action-bar-left {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
+  flex: 1 1 140px;
   /* 允许整条工具栏收缩，避免钉选长名 Skill 时把发送按钮挤出面板 */
   min-width: 0;
 }
 
 .model-selector {
   font-size: 13px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
-  position: relative;
+  /* 定位基准挪给 .input-card（见 .model-dropdown 注释）——AI 面板最窄 240px，
+     锚在这个只有内容宽的选择器上，下拉框固定 min-width 无论往哪边对齐都会被
+     .chat-interface 的 overflow:hidden 裁掉一截。 */
+  position: static;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
-  border-radius: 2px;
-  transition: background 0.15s ease;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: background 0.15s ease, border-color 0.15s ease;
   white-space: nowrap;
 }
 .model-selector:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--awd-accent-wash);
+  border-color: var(--awd-accent-soft);
 }
 
 .dropdown-arrow {
   font-size: 8px;
-  color: #999;
+  color: var(--awd-text-3);
   transition: color 0.15s ease;
 }
 .model-selector:hover .dropdown-arrow {
-  color: #666;
+  color: var(--awd-text-2);
 }
 
 .model-dropdown {
   position: absolute;
+  /* 锚点是 .input-card（position:relative，见上方定义）而不是 .model-selector
+     自己——固定 268px 的 min-width 摆在只有内容宽的选择器上，AI 面板收到最窄
+     240px 时无论往哪边对齐都放不下，会被 .chat-interface 的 overflow:hidden
+     裁掉一截。改成跟随输入卡自身宽度（left/right 都钉到 0），永不溢出。 */
   left: 0;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  right: 0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   z-index: 1001;
-  /* 分组标题 + 单价标签比原来的纯模型名占位多，窄了会把价格挤成两行 */
-  min-width: 268px;
+  min-width: 0;
   max-height: 320px;
   overflow-y: auto;
   padding: 4px 0;
@@ -2804,21 +3251,27 @@ export default {
 /* ============= Mode Selector (Agent/Ask/Plan) ============= */
 .mode-selector {
   font-size: 13px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
-  position: relative;
+  /* 同 .model-selector：定位基准挪给 .input-card。实测在 240px 最窄面板下，
+     min-width:160px 的下拉锚在这个只有内容宽（约 60px）的选择器上，右边缘
+     恰好顶着 .chat-interface 的裁切边界、零余量——字体渲染或文案稍长一点
+     就会被裁掉一截。 */
+  position: static;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
-  border-radius: 2px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--awd-accent-wash);
+  border: 1px solid var(--awd-accent-soft);
   transition: all 0.15s ease;
 }
 .mode-selector:hover {
-  background: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.3);
+  background: var(--awd-accent-soft);
+  border-color: var(--awd-accent);
 }
 
 .mode-icon {
@@ -2827,18 +3280,19 @@ export default {
 
 .mode-name {
   font-weight: 500;
-  color: #3b82f6;
+  color: var(--awd-accent-text);
 }
 
 .mode-dropdown {
   position: absolute;
   left: 0;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  right: 0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   z-index: 1001;
-  min-width: 160px;
+  min-width: 0;
   padding: 6px 0;
 }
 
@@ -2859,13 +3313,13 @@ export default {
   transition: background 0.1s ease;
 }
 .mode-option:hover {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
 }
 .mode-option.active {
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--awd-accent-soft);
 }
 .mode-option.active .mode-option-name {
-  color: #3b82f6;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -2882,21 +3336,21 @@ export default {
 .mode-option-name {
   font-size: 13px;
   font-weight: 500;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .mode-option-desc {
   font-size: 11px;
-  color: #888;
+  color: var(--awd-text-3);
 }
 
 /* 本地供应商（Ollama）只剩 Ask 时的说明行 */
 .mode-note {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
   margin-top: 4px;
   padding: 6px 14px 2px;
   font-size: 10px;
-  color: #aaa;
+  color: var(--awd-text-3);
   line-height: 1.5;
   max-width: 200px;
 }
@@ -2905,74 +3359,14 @@ export default {
   position: absolute;
   top: 100%;
   right: 0;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
   z-index: 1000;
   min-width: 240px;
   padding: 8px 0;
   margin-top: 4px;
-}
-
-/* Assistant Dropdown Panel - matches history drawer positioning */
-.assistant-dropdown-panel {
-  position: absolute;
-  top: 36px; /* Exactly below header */
-  left: 0;
-  right: 0;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  z-index: 1001;
-  display: flex;
-  flex-direction: column;
-  max-height: 400px;
-  overflow-y: auto;
-  animation: slideDown 0.15s ease-out;
-  border-radius: 0 0 8px 8px;
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-5px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.assistant-menu-header {
-  padding: 6px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-  background: #f8f9fa;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-.assistant-menu-item {
-  display: flex;
-  align-items: center;
-  padding: 10px 12px;
-  font-size: 13px;
-  color: #334155;
-  cursor: pointer;
-  border-bottom: 1px solid #f8f9fa;
-  transition: all 0.15s ease;
-}
-
-.assistant-menu-item:hover {
-  background: #f1f5f9;
-}
-
-.assistant-menu-item.active {
-  background: rgba(26, 83, 54, 0.08);
-  color: #1A5336;
-  font-weight: 500;
-}
-
-.assistant-item-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 @keyframes dropdownFadeIn {
@@ -2990,9 +3384,9 @@ export default {
   padding: 6px 12px;
   font-size: 11px;
   font-weight: 600;
-  color: #64748b;
-  background: #f8f9fa;
-  border-bottom: 1px solid #f1f5f9;
+  color: var(--awd-text-2);
+  background: var(--awd-bg);
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .menu-item {
@@ -3002,17 +3396,17 @@ export default {
   justify-content: space-between;
   align-items: center;
   font-size: 13px;
-  color: #334155;
+  color: var(--awd-text);
   transition: all 0.15s ease;
-  border-bottom: 1px solid #f8f9fa;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 .menu-item:hover {
-  background: #f1f5f9;
-  color: #1A5336;
+  background: var(--awd-surface-2);
+  color: var(--awd-accent-text);
 }
 .menu-item.active {
-  background: rgba(26, 83, 54, 0.08);
-  color: #1A5336;
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
@@ -3022,41 +3416,6 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Setting icon wrapper with hover effect */
-.setting-icon-wrapper {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s ease;
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-
-.setting-icon-wrapper:hover {
-  background: rgba(26, 83, 54, 0.08);
-}
-
-.setting-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.setting-icon.hover {
-  display: none;
-}
-
-.setting-icon-wrapper:hover .setting-icon.default {
-  display: none;
-}
-
-.setting-icon-wrapper:hover .setting-icon.hover {
-  display: block;
 }
 
 .dropdown-mask {
@@ -3073,24 +3432,24 @@ export default {
   padding: 8px 14px;
   cursor: pointer;
   font-size: 13px;
-  color: #333;
+  color: var(--awd-text);
   transition: background 0.15s ease;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 .model-option:hover {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-accent-soft);
 }
 .model-option.active {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
-  background: rgba(26, 83, 54, 0.04);
+  background: var(--awd-accent-wash);
 }
 
 /* ===== 模型下拉：按厂商分组，国际档在后并标注需国际网络 ===== */
 .model-group + .model-group {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 .model-group-head {
   display: flex;
@@ -3100,13 +3459,13 @@ export default {
 }
 .model-group-vendor {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   letter-spacing: 0.5px;
 }
 .model-region-tag {
   font-size: 10px;
-  color: #b45309;
-  background: rgba(180, 83, 9, 0.1);
+  color: var(--awd-warning-text);
+  background: var(--awd-warning-soft);
   border-radius: 3px;
   padding: 1px 4px;
 }
@@ -3114,39 +3473,50 @@ export default {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 下拉现在跟随输入卡宽度，窄面板下模型名 + 单价 tag 放不下一行——允许换行，
+     不许把 tag 裁掉。 */
+  flex-wrap: wrap;
 }
 .model-option-name {
   font-size: 13px;
 }
 .model-tier-tag {
   font-size: 10px;
-  color: #64748b;
-  background: rgba(100, 116, 139, 0.1);
+  color: var(--awd-text-2);
+  background: var(--awd-surface-3);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+/* 与 tier tag 同一档中性灰，刻意不用告警色：读不了图会自动降级 OCR，是能力差异不是错误 */
+.model-novision-tag {
+  font-size: 10px;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-3);
   border-radius: 3px;
   padding: 1px 4px;
 }
 .model-option-price {
   font-size: 11px;
-  color: #888;
+  color: var(--awd-text-3);
   font-weight: 400;
 }
 .model-empty {
   padding: 10px 14px;
   font-size: 12px;
-  color: #888;
+  color: var(--awd-text-3);
 }
 .model-region-basis {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
   margin-top: 4px;
   padding: 6px 14px 2px;
   font-size: 10px;
-  color: #aaa;
+  color: var(--awd-text-3);
   line-height: 1.5;
 }
 
 .send-btn {
-  background: #1A5336;
-  color: #fff;
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -3157,22 +3527,32 @@ export default {
   transition: background 0.15s ease;
   flex-shrink: 0;
 }
+.composer-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: auto; max-width: 100%; }
+.centered-style .composer-actions {
+  flex-basis: calc(100% - 56px);
+  justify-content: flex-end;
+  margin-right: 56px;
+}
+.follow-mode,.alternate-send { padding: 4px 6px; border-radius: 5px; color: var(--awd-text-2); font-size: 10px; cursor: pointer; }
+.follow-mode { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+.alternate-send:hover { background: var(--awd-surface-2); }
+.stop-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--awd-danger); color: white; font-size: 11px; cursor: pointer; }
 .send-btn:hover {
-  background: #2D7A52;
+  background: var(--awd-accent-hover);
 }
 .send-btn.disabled {
-  background: #eee;
-  color: #aaa;
+  background: var(--awd-surface-3);
+  color: var(--awd-text-3);
   cursor: not-allowed;
 }
 .send-btn.disabled:hover {
-  background: #eee;
+  background: var(--awd-surface-3);
 }
 .send-btn.stopping {
-  background: #C53030;
+  background: var(--awd-danger);
 }
 .send-btn.stopping:hover {
-  background: #9B2C2C;
+  background: var(--awd-danger);
 }
 .send-icon {
   font-size: 16px;
@@ -3181,15 +3561,45 @@ export default {
 }
 
 .input-area-wrapper {
-  padding: 16px 24px;
-  background: #fff;
-  border-top: 1px solid #eee;
+  padding: 12px 16px 16px;
+  background: var(--awd-surface);
+  border-top: 1px solid var(--awd-border);
   display: flex;
   flex-direction: column;  /* Fix: Stack children vertically */
   align-items: stretch;    /* Fix: Make children full width */
   flex-shrink: 0;
   min-width: 0;
   box-sizing: border-box;
+}
+
+/* 插件镜像会话只读条（dev-board#298） */
+.readonly-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--awd-accent-wash);
+  border: 1px solid var(--awd-border);
+  border-radius: 8px;
+}
+.readonly-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--awd-text-2);
+}
+.readonly-fork-btn {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.readonly-fork-btn:hover {
+  background: var(--awd-accent-hover);
 }
 
 /* Context Files Styles */
@@ -3199,19 +3609,19 @@ export default {
   gap: 8px;
   margin: 8px 0;
   padding: 8px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .context-file-tag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #e8f4fd;
-  border: 1px solid #bce0fd;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-info);
   border-radius: 14px;
   padding: 4px 8px 4px 6px;
   font-size: 12px;
-  color: #1a73e8;
+  color: var(--awd-info-text);
 }
 
 .context-file-icon {
@@ -3227,14 +3637,14 @@ export default {
 
 .context-file-remove {
   margin-left: 4px;
-  color: #999;
+  color: var(--awd-text-3);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
 }
 
 .context-file-remove:hover {
-  color: #e53935;
+  color: var(--awd-danger-text);
 }
 
 /* =============================================
@@ -3246,6 +3656,15 @@ export default {
   gap: 8px;
   margin-bottom: 12px;
   padding-bottom: 8px;
+}
+
+/* flex-basis 100% 让它在缩略图行下面另起一行，紧贴着图走（预览区自己的
+   margin-bottom 在整块之外，说明与图之间只隔容器的 gap） */
+.input-images-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--awd-text-3);
 }
 
 .preview-image-item {
@@ -3269,8 +3688,8 @@ export default {
   right: -4px;
   width: 18px;
   height: 18px;
-  background: linear-gradient(135deg, #1A5336 0%, #2D7A52 100%);
-  color: #fff;
+  background: linear-gradient(135deg, var(--awd-accent) 0%, var(--awd-accent-hover) 100%);
+  color: var(--awd-text-on-accent);
   border-radius: 50%;
   font-size: 12px;
   text-align: center;
@@ -3281,7 +3700,7 @@ export default {
 }
 
 .preview-remove:hover {
-  background: linear-gradient(135deg, #2D7A52 0%, #1A5336 100%);
+  background: linear-gradient(135deg, var(--awd-accent-hover) 0%, var(--awd-accent) 100%);
   transform: scale(1.1);
 }
 
@@ -3294,7 +3713,7 @@ export default {
    align-items: center;
    gap: 3px;
    background: transparent;
-   color: #1A5336;
+   color: var(--awd-accent-text);
    padding: 3px 8px;
    border-radius: 4px;
    margin: 0 4px 2px 0;
@@ -3303,14 +3722,14 @@ export default {
    vertical-align: middle;
    user-select: none;
    max-width: 160px;
-   border: 1px solid rgba(26, 83, 54, 0.4);
+   border: 1px solid var(--awd-accent);
    transition: all 0.15s ease;
    position: relative;
  }
 
  :deep(.context-tag-inline:hover) {
-   background: rgba(26, 83, 54, 0.08);
-   border-color: rgba(26, 83, 54, 0.6);
+   background: var(--awd-accent-soft);
+   border-color: var(--awd-accent);
    padding-right: 22px; /* Make room for close button */
  }
 
@@ -3323,7 +3742,7 @@ export default {
  }
 
  :deep(.tag-at) {
-   color: #1A5336;
+   color: var(--awd-accent-text);
    font-weight: 600;
  }
 
@@ -3332,7 +3751,7 @@ export default {
    overflow: hidden;
    text-overflow: ellipsis;
    max-width: 100px;
-   color: #1A5336;
+   color: var(--awd-accent-text);
  }
 
  :deep(.tag-close) {
@@ -3343,8 +3762,8 @@ export default {
    transform: translateY(-50%);
    width: 14px;
    height: 14px;
-   background: rgba(26, 83, 54, 0.2);
-   color: #1A5336;
+   background: var(--awd-accent-soft);
+   color: var(--awd-accent-text);
    border-radius: 50%;
    align-items: center;
    justify-content: center;
@@ -3358,8 +3777,8 @@ export default {
  }
 
  :deep(.tag-close:hover) {
-   background: rgba(26, 83, 54, 0.4);
-   color: #fff;
+   background: var(--awd-accent);
+   color: var(--awd-text-on-accent);
  }
 
  /* =============================================
@@ -3371,7 +3790,7 @@ export default {
   align-items: center;
   gap: 3px;
   background: transparent;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   padding: 3px 8px;
   border-radius: 4px;
   margin: 0 4px 2px 0;
@@ -3380,7 +3799,7 @@ export default {
   vertical-align: middle;
   user-select: none;
   max-width: 160px;
-  border: 1px solid rgba(26, 83, 54, 0.4);
+  border: 1px solid var(--awd-accent);
   transition: all 0.15s ease;
 }
 
@@ -3394,7 +3813,7 @@ export default {
 }
 
 .user-bubble .tag-at {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
@@ -3403,7 +3822,7 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 /* =============================================
@@ -3434,49 +3853,131 @@ export default {
 }
 
 /* =============================================
-   Skill Selector（对话内钉选，默认自动匹配触发词）
+   Skill：本轮生效清单（chip 行）+ 主动选择（多选下拉）
    ============================================= */
+/* chip 行占一行、不换行、横向滚动——输入框的高度是稀缺资源，
+   装了六个技能也不该把输入区顶掉半屏 */
+.skill-chip-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  column-gap: 6px;
+  overflow-x: auto;
+  padding: 2px 2px 4px;
+  /* 滚动条在这一行里比内容还高，藏掉 */
+  scrollbar-width: none;
+}
+.skill-chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.skill-chip {
+  display: flex;
+  align-items: center;
+  column-gap: 4px;
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  background: var(--awd-accent-soft);
+  border: 1px solid var(--awd-accent-soft);
+}
+/* 自动命中的用描边 + 更浅的底：与"我自己选的"在一行里要能一眼分开 */
+.skill-chip.auto {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--awd-accent);
+}
+
+.skill-chip-name {
+  font-size: 11px;
+  color: var(--awd-accent-text);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.skill-chip-remove {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--awd-accent-text);
+  cursor: pointer;
+}
+.skill-chip-remove:hover {
+  color: var(--awd-accent-text);
+}
+
+/* 新自动命中的技能闪几秒：用户只是说了句话就被加载了一个技能，得让他看见 */
+.skill-chip.flash {
+  animation: skillChipFlash 1.1s ease-in-out 3;
+}
+@keyframes skillChipFlash {
+  0%, 100% {
+    background: transparent;
+    border-color: var(--awd-accent);
+    box-shadow: none;
+  }
+  50% {
+    background: var(--awd-accent-soft);
+    border-color: var(--awd-mint);
+    box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.18);
+  }
+}
+
 /* AI 面板窄，工具条已有模式/模型两个文字选择器，故 Skill 用定宽图标按钮，
-   当前钉选的 Skill 名靠高亮 + title + 下拉勾选表达，不占横向空间 */
+   已选数量用角标表达，生效清单在上方 chip 行，不占横向空间 */
 .skill-selector {
   cursor: pointer;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  column-gap: 2px;
+  min-width: 24px;
   height: 24px;
-  border-radius: 4px;
+  padding: 0 3px;
+  border-radius: 6px;
   transition: background 0.15s ease;
   flex-shrink: 0;
 }
 .skill-selector:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--awd-accent-wash);
 }
 
-/* 钉选态：绿色实心底，让"本轮固定用了某个 Skill"一眼可见 */
+/* 已选态：绿色实心底 + 计数，让"这轮我额外加载了 N 个技能"一眼可见 */
 .skill-selector.pinned {
-  background: rgba(91, 209, 151, 0.18);
+  background: var(--awd-accent-soft);
 }
-.skill-selector.pinned .skill-glyph {
-  color: #1A5336;
+.skill-selector.pinned .skill-glyph-svg {
+  color: var(--awd-accent-text);
+}
+/* ASK 模式下 skill 不生效，按钮压暗——下拉仍可打开，里面会说明为什么不能选 */
+.skill-selector.muted .skill-glyph-svg {
+  opacity: 0.45;
 }
 
-.skill-glyph {
-  font-size: 14px;
-  color: #999;
+.skill-count {
+  font-size: 10px;
   line-height: 1;
+  color: var(--awd-accent-text);
+  font-weight: 600;
 }
-.skill-selector:hover .skill-glyph {
-  color: #666;
+
+.skill-glyph-svg {
+  width: 16px;
+  height: 16px;
+  color: var(--awd-text-2);
+  flex-shrink: 0;
+}
+.skill-selector:hover .skill-glyph-svg {
+  color: var(--awd-text);
 }
 
 .skill-dropdown {
   position: absolute;
   /* 选择器位于工具条最右，向右展开会溢出 AI 面板，故右对齐 */
   right: 0;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   z-index: 1001;
@@ -3492,36 +3993,76 @@ export default {
   bottom: calc(100% + 4px);
 }
 
+.skill-dropdown-head {
+  padding: 7px 12px 5px;
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
+}
+.skill-dropdown-title {
+  font-size: 12px;
+  color: var(--awd-text);
+  font-weight: 500;
+}
+.skill-dropdown-hint {
+  font-size: 11px;
+  color: var(--awd-text-3);
+  white-space: normal;
+}
+
 .skill-option {
   padding: 7px 12px;
   cursor: pointer;
   transition: background 0.15s ease;
+  display: flex;
+  align-items: flex-start;
+  column-gap: 6px;
 }
 .skill-option:hover {
-  background: #f5f5f5;
+  background: var(--awd-surface-2);
 }
 .skill-option.active {
-  background: rgba(91, 209, 151, 0.12);
+  background: var(--awd-accent-soft);
+}
+.skill-option.muted {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 定宽勾选位：勾与不勾的行文字必须左对齐，否则勾一下整列会跳 */
+.skill-check {
+  width: 12px;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--awd-accent-text);
+}
+
+.skill-empty {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--awd-text-3);
 }
 
 .skill-option-text {
   display: flex;
   flex-direction: column;
   row-gap: 2px;
+  min-width: 0;
 }
 
 .skill-option-name {
   font-size: 13px;
-  color: #2C3338;
+  color: var(--awd-text);
 }
 .skill-option.active .skill-option-name {
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
 .skill-option-desc {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3530,20 +4071,20 @@ export default {
 
 .skill-divider {
   height: 1px;
-  background: #f0f0f0;
+  background: var(--awd-bg);
   margin: 4px 0;
 }
 
 .skill-manage {
   padding: 7px 12px;
   font-size: 12px;
-  color: #666;
+  color: var(--awd-text-2);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 .skill-manage:hover {
-  background: #f5f5f5;
-  color: #1A5336;
+  background: var(--awd-surface-2);
+  color: var(--awd-accent-text);
 }
 
 /* Model dropdown mask overlay */
@@ -3566,7 +4107,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.4);
+  background-color: var(--awd-overlay);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -3577,7 +4118,7 @@ export default {
 .awd-dialog {
   width: 618px; /* Golden Ratio-ish Width */
   max-width: 90vw;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   border-radius: 12px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   overflow: hidden;
@@ -3609,7 +4150,7 @@ export default {
 .awd-dialog-header {
   padding: 24px 24px 16px;
   flex-shrink: 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--awd-border-subtle);
 }
 
 .awd-dialog-header .header-row {
@@ -3630,7 +4171,7 @@ export default {
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
@@ -3638,7 +4179,7 @@ export default {
 }
 
 .new-folder-btn:hover {
-  background: rgba(26, 83, 54, 0.08);
+  background: var(--awd-accent-soft);
 }
 
 .new-folder-btn .btn-plus {
@@ -3650,7 +4191,7 @@ export default {
 .awd-dialog-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
   line-height: 1.4;
   display: block;
 }
@@ -3658,7 +4199,7 @@ export default {
 .awd-dialog-subtitle {
   margin-top: 6px;
   font-size: 13px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   line-height: 1.5;
   display: block;
 }
@@ -3685,7 +4226,7 @@ export default {
   padding: 24px;
   background-color: transparent;
   flex-shrink: 0;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--awd-border-subtle);
 }
 
 .awd-btn {
@@ -3708,27 +4249,27 @@ export default {
 }
 
 .awd-btn-primary {
-  background-color: #1A5336; /* Forest Green */
-  color: #ffffff;
+  background-color: var(--awd-accent); /* Forest Green */
+  color: var(--awd-text-on-accent);
 }
 .awd-btn-primary:hover {
-  background-color: #16452d;
+  background-color: var(--awd-accent-hover);
 }
 
 .awd-btn-primary.disabled {
   opacity: 0.5;
   pointer-events: none;
-  background-color: #1A5336; /* Maintain color but transparent */
+  background-color: var(--awd-accent); /* Maintain color but transparent */
 }
 
 .awd-btn-secondary {
-  background-color: #ffffff;
-  color: #2C3338;
-  border: 1px solid #E9ECEF;
+  background-color: var(--awd-surface);
+  color: var(--awd-text);
+  border: 1px solid var(--awd-border);
 }
 .awd-btn-secondary:hover {
-  background-color: #F8F9FA;
-  border-color: #DDE2E5;
+  background-color: var(--awd-bg);
+  border-color: var(--awd-border);
 }
 
 .form-group {
@@ -3742,13 +4283,13 @@ export default {
   display: block;
   font-size: 14px;
   font-weight: 500;
-  color: #2C3338;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
 .awd-field {
-  background-color: #F8F9FA;
-  border: 1px solid #E9ECEF;
+  background-color: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 12px 16px;
   display: flex;
@@ -3763,8 +4304,8 @@ export default {
 }
 
 .awd-field.clickable:hover {
-  background-color: #E6F9F0;
-  border-color: #5BD197;
+  background-color: var(--awd-accent-soft);
+  border-color: var(--awd-mint);
 }
 
 .awd-field .field-icon-img {
@@ -3775,12 +4316,12 @@ export default {
 
 .awd-field .field-value {
   font-size: 14px;
-  color: #111827;
+  color: var(--awd-text);
 }
 
 .awd-field .field-placeholder {
   font-size: 14px;
-  color: #9CA3AF;
+  color: var(--awd-text-3);
 }
 
 .selected-files-list {
@@ -3791,11 +4332,11 @@ export default {
 
 .selected-file-tag {
   font-size: 12px;
-  background: white;
+  background: var(--awd-surface);
   padding: 4px 8px;
   border-radius: 4px;
-  border: 1px solid #E5E7EB;
-  color: #374151;
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text);
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3814,12 +4355,12 @@ export default {
 }
 
 .folder-tree-item:hover {
-  background-color: #F3F4F6;
+  background-color: var(--awd-surface-2);
 }
 
 .folder-tree-item.active {
-  background-color: #E6F9F0;
-  color: #1A5336;
+  background-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
 }
 
 .folder-tree-item .indent {
@@ -3853,12 +4394,12 @@ export default {
 .folder-name {
   margin-left: 8px;
   font-size: 14px;
-  color: #333;
+  color: var(--awd-text);
 }
 
 .empty-tip {
   text-align: center;
-  color: #999;
+  color: var(--awd-text-3);
   font-size: 13px;
   padding: 20px 0;
 }
@@ -3870,9 +4411,9 @@ export default {
   gap: 8px;
   padding: 4px 12px;
   margin-bottom: 8px; /* Maintain margin */
-  background: linear-gradient(135deg, rgba(26, 83, 54, 0.05) 0%, rgba(91, 209, 151, 0.08) 100%);
+  background: linear-gradient(135deg, var(--awd-accent-wash) 0%, var(--awd-accent-wash) 100%);
   border-radius: 6px;
-  border: 1px solid rgba(91, 209, 151, 0.2);
+  border: 1px solid var(--awd-accent-soft);
   width: 100%; /* Fix: Full width */
   box-sizing: border-box; /* Fix: Include padding in width */
   height: 28px; /* Fix: Fixed low height */
@@ -3881,7 +4422,7 @@ export default {
 .token-usage-bar .token-label {
   font-size: 11px;
   font-weight: 600;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -3889,14 +4430,14 @@ export default {
 .token-usage-bar .token-value {
   font-size: 12px;
   font-weight: 600;
-  color: #5BD197;
+  color: var(--awd-mint);
   flex: 1; /* Allow value to take space if needed */
   margin-left: 4px;
 }
 
 .token-usage-bar .token-detail {
   font-size: 10px;
-  color: #6C757D;
+  color: var(--awd-text-2);
 }
 
 
@@ -3908,22 +4449,22 @@ export default {
   gap: 8px;
   margin: 0 12px 6px;
   padding: 6px 12px;
-  background: #FFF9E8;
-  border: 1px solid #F5DFA6;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
   border-radius: 8px;
 }
 
 .continue-hint {
   font-size: 11px;
-  color: #8A6D1D;
+  color: var(--awd-warning-text);
 }
 
 .continue-btn {
   flex-shrink: 0;
   font-size: 12px;
   font-weight: 600;
-  color: #FFFFFF;
-  background: #1A5336;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-accent);
   border-radius: 6px;
   padding: 4px 14px;
   cursor: pointer;
@@ -3931,7 +4472,23 @@ export default {
 }
 
 .continue-btn:hover {
-  background: #14402A;
+  background: var(--awd-accent-hover);
+}
+
+/* SSE 断连提示条：外形对齐 continue-bar，只有一行文字、没有按钮（重连是自动的） */
+.link-bar {
+  display: flex;
+  align-items: center;
+  margin: 0 12px 6px;
+  padding: 6px 12px;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
+  border-radius: 8px;
+}
+
+.link-hint {
+  font-size: 11px;
+  color: var(--awd-warning-text);
 }
 
 /* 后台任务控制条（停止）：外形对齐 continue-bar，但用中性底色——
@@ -3948,22 +4505,22 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 5px 12px;
-  background: #F8F9FA;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
 }
 
 .task-control-name {
   font-size: 11px;
   font-weight: 600;
-  color: #2C3338;
+  color: var(--awd-text);
   flex-shrink: 0;
 }
 
 .task-control-msg {
   flex: 1;
   font-size: 11px;
-  color: #6C757D;
+  color: var(--awd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3972,9 +4529,9 @@ export default {
 .task-control-btn {
   flex-shrink: 0;
   font-size: 11px;
-  color: #2C3338;
-  background: #FFFFFF;
-  border: 1px solid #E9ECEF;
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 6px;
   padding: 3px 12px;
   cursor: pointer;
@@ -3982,17 +4539,17 @@ export default {
 }
 
 .task-control-btn:hover {
-  border-color: #5BD197;
-  color: #1A5336;
-  background: #E6F9F0;
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 /* 已发出停止请求：按钮变成状态显示，不再可点（重复点只会多发无用请求） */
 .task-control-btn.pending {
   cursor: default;
-  color: #6C757D;
-  background: #F1F3F5;
-  border-color: #E9ECEF;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
+  border-color: var(--awd-border);
 }
 
 /* Status Bar Row (File Changes + Tokens) */
@@ -4001,7 +4558,8 @@ export default {
   flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  padding: 4px 12px;
+  /* 与下方输入卡对齐（卡自带描边），行距走 8 栅格 */
+  padding: 0 2px 8px;
   background-color: transparent;
   font-size: 11px;
   z-index: 10;
@@ -4035,12 +4593,12 @@ export default {
   align-items: center;
   padding: 4px 12px;
   border-radius: 6px;
-  background-color: #ffffff;
+  background-color: var(--awd-surface);
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
-  color: #6C757D; /* Gray-Medium */
-  border: 1px solid #E9ECEF; /* Gray-Light */
+  color: var(--awd-text-2); /* Gray-Medium */
+  border: 1px solid var(--awd-border); /* Gray-Light */
   transition: all 0.2s ease;
 }
 
@@ -4055,28 +4613,28 @@ export default {
 }
 
 .status-btn.modified {
-  border-color: rgba(26, 83, 54, 0.2);
-  color: #1A5336; /* Forest Green */
-  background-color: #E6F9F0; /* Mint Lightest */
+  border-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text); /* Forest Green */
+  background-color: var(--awd-accent-soft); /* Mint Lightest */
 }
 
 .status-btn.modified:hover {
   /* background-color: #5BD197; Mint Green */
-  background-color: #5BD197;
+  background-color: var(--awd-mint);
   /* color: #ffffff; */
   /* border-color: #1A5336; */
 }
 
 .status-btn.created {
-  border-color: rgba(91, 209, 151, 0.3);
-  color: #1A5336;
-  background-color: #E6F9F0;
+  border-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
+  background-color: var(--awd-accent-soft);
 }
 
 .status-btn.created:hover {
-  background-color: #5BD197;
+  background-color: var(--awd-mint);
   /* color: #ffffff; */
-  border-color: #1A5336;
+  border-color: var(--awd-accent);
 }
 
 /* Status Popup */
@@ -4086,12 +4644,12 @@ export default {
   left: 0;
   margin-bottom: 8px; /* Gap */
   width: 200px;
-  background: white;
+  background: var(--awd-surface);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   padding: 4px 0;
   z-index: 100;
-  border: 1px solid #eee;
+  border: 1px solid var(--awd-border);
   display: flex;
   flex-direction: column;
 }
@@ -4105,7 +4663,7 @@ export default {
 }
 
 .status-popup-item:hover {
-  background-color: #f5f5f5;
+  background-color: var(--awd-surface-2);
 }
 
 .file-icon-mini {
@@ -4117,7 +4675,7 @@ export default {
 
 .file-name-text {
   font-size: 13px;
-  color: #333;
+  color: var(--awd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4136,7 +4694,7 @@ export default {
 /* Reuse existing token styles */
 .token-label {
   font-weight: 500;
-  color: #666;
+  color: var(--awd-text-2);
 }
 .token-value {
   font-family: monospace;
@@ -4144,17 +4702,27 @@ export default {
 }
 .token-detail {
   font-size: 11px;
-  color: #999;
+  color: var(--awd-text-3);
 }
 
-/* Empty state for file change buttons */
+/* Empty state for file change buttons：0 项时收敛成幽灵标签——去底去框、灰字、
+   更窄的内边距。刻意不隐藏：用户要能发现「改动/新增」这个功能的存在 */
 .status-btn.empty {
-  opacity: 0.7;
+  opacity: 1;
   cursor: default;
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--awd-text-3);
+  font-weight: 500;
+  padding: 4px 6px;
+}
+.status-btn.empty .status-icon {
+  opacity: 0.65;
 }
 .status-btn.empty:hover {
   transform: none;
-  background-color: inherit;
+  background-color: transparent;
+  border-color: transparent;
 }
 
 /* Rollback UI */
@@ -4196,7 +4764,7 @@ export default {
   align-items: center;
   justify-content: center;
   margin-right: 4px;
-  color: #1A5336; /* Forest Green */
+  color: var(--awd-accent-text); /* Forest Green */
 }
 
 /* .rollback-btn:hover .rollback-icon-svg,
@@ -4206,17 +4774,17 @@ export default {
 
 .rollback-text {
   font-size: 11px;
-  color: #1A5336;
+  color: var(--awd-accent-text);
   font-weight: 600;
 }
 
 /* Warning Dialog */
 .warning-header {
-  border-bottom: 2px solid #FFED4D;
+  border-bottom: 2px solid var(--awd-warning);
 }
 
 .warning-title {
-  color: #B45309;
+  color: var(--awd-warning-text);
 }
 
 .rollback-warning-content {
@@ -4225,14 +4793,14 @@ export default {
 
 .warning-text {
   font-size: 14px;
-  color: #333;
+  color: var(--awd-text);
   margin-bottom: 12px;
   display: block;
 }
 
 .doc-tip-box {
-  background-color: #f0f9ff;
-  border: 1px solid #bae6fd;
+  background-color: var(--awd-surface);
+  border: 1px solid var(--awd-info);
   border-radius: 6px;
   padding: 10px;
   display: flex;
@@ -4245,12 +4813,12 @@ export default {
   height: 18px;
   margin-right: 10px;
   flex-shrink: 0;
-  color: #B8860B;
+  color: var(--awd-warning-text);
 }
 
 .doc-tip-text {
   font-size: 13px;
-  color: #0369a1;
+  color: var(--awd-info-text);
   display: flex;
   flex-direction: column;
 }
@@ -4261,32 +4829,32 @@ export default {
 }
 
 .rollback-preview {
-  background-color: #f5f5f5;
+  background-color: var(--awd-surface-2);
   padding: 8px;
   border-radius: 4px;
-  border-left: 3px solid #ccc;
+  border-left: 3px solid var(--awd-border-strong);
 }
 
 .preview-label {
   font-size: 12px;
-  color: #666;
+  color: var(--awd-text-2);
   margin-right: 4px;
 }
 
 .preview-content {
   font-size: 12px;
-  color: #333;
+  color: var(--awd-text);
   font-style: italic;
 }
 
 .awd-btn-danger {
-  background-color: #dc2626;
-  color: white;
+  background-color: var(--awd-danger);
+  color: var(--awd-text-on-accent);
   border: none;
 }
 
 .awd-btn-danger:hover {
-  background-color: #b91c1c;
+  background-color: var(--awd-danger);
 }
 /* PPT Config Styles */
 .ppt-config-section {
@@ -4295,29 +4863,29 @@ export default {
 
 .section-title {
   font-size: 14px;
-  color: #666;
+  color: var(--awd-text-2);
   margin-bottom: 12px;
   display: block;
 }
 
 .ppt-option-card {
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 12px;
   cursor: pointer;
   transition: all 0.2s;
-  background-color: #fff;
+  background-color: var(--awd-surface);
 }
 
 .ppt-option-card:hover {
-  border-color: #2196f3;
-  background-color: #f5f9ff;
+  border-color: var(--awd-info);
+  background-color: var(--awd-surface);
 }
 
 .ppt-option-card.active {
-  border-color: #2196f3;
-  background-color: #e3f2fd;
+  border-color: var(--awd-info);
+  background-color: var(--awd-info-soft);
   box-shadow: 0 2px 8px rgba(33, 150, 243, 0.15);
 }
 
@@ -4332,50 +4900,113 @@ export default {
   height: 20px;
   margin-right: 12px;
   flex-shrink: 0;
-  color: #1A5336;
+  color: var(--awd-accent-text);
 }
 
 .option-name {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--awd-text);
   flex: 1;
 }
 
 .check-mark {
-  color: #2196f3;
+  color: var(--awd-info-text);
   font-weight: bold;
   font-size: 16px;
 }
 
 .option-desc {
   font-size: 13px;
-  color: #666;
+  color: var(--awd-text-2);
   line-height: 1.5;
   padding-left: 32px; /* align with text start */
 }
 
 .warning-text {
-  color: #ff9800;
+  color: var(--awd-warning-text);
   font-weight: 500;
   display: block;
   margin-top: 4px;
 }
 
 .highlight-text {
-  color: #4caf50;
+  color: var(--awd-accent-text);
   font-weight: 500;
   display: block;
   margin-top: 4px;
 }
 
 .awd-btn-secondary {
-    background-color: #f5f5f5;
-    color: #333;
-    border: 1px solid #ddd;
+    background-color: var(--awd-surface-2);
+    color: var(--awd-text);
+    border: 1px solid var(--awd-border);
 }
 .awd-btn-secondary:hover {
-    background-color: #e0e0e0;
+    background-color: var(--awd-surface-3);
+}
+
+/* 可选组件缺失弹窗（设计 §4.2） */
+.chat-component-gate {
+    position: absolute;
+    inset: 0;
+    background: var(--awd-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.cg-panel {
+    width: 420px;
+    max-width: 88%;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
+    border-radius: 12px;
+    box-shadow: var(--awd-shadow-lg);
+    padding: 18px;
+}
+
+.cg-title {
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--awd-text);
+    margin-bottom: 10px;
+}
+
+.cg-installing-text {
+    font-size: 12px;
+    color: var(--awd-text-2);
+}
+
+.cg-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.cg-btn {
+    padding: 7px 14px;
+    border: 1px solid var(--awd-border-strong);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--awd-text);
+    cursor: pointer;
+}
+
+.cg-btn:hover {
+    background: var(--awd-surface-2);
+}
+
+.cg-btn.primary {
+    background: var(--awd-accent);
+    color: var(--awd-text-on-accent);
+    border-color: var(--awd-accent);
+}
+
+.cg-btn.primary:hover {
+    background: var(--awd-accent-hover);
 }
 
 </style>

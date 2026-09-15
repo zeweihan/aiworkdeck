@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
 import com.checkba.storage.StorageProperties;
@@ -23,9 +26,7 @@ class ProjectRepoRemoteTest {
     }
 
     private String bareRemote(Path dir) throws Exception {
-        Git.init().setBare(true).setDirectory(dir.toFile())
-                .setInitialBranch("master").call().close();
-        return dir.toUri().toString();
+        return BareHub.init(dir);
     }
 
     @Test

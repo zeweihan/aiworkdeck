@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Unattended end-to-end zh-CN LOWA rebuild (with tooltip-CJK fix), issue #66.
 # Encodes every fix debugged on the previous VM (see RECIPE.md). Ubuntu 22.04, 32C/123G.
 # Markers: PHASE_<n>_DONE / MEGA_FAILED / MEGA_ALL_DONE — poll with grep.
@@ -98,6 +100,7 @@ cat > autogen.input <<AUTOGEN
 --with-distro=LibreOfficeWASM32
 --with-package-format=emscripten
 --with-lang=en-US zh-CN
+--with-wasm-module=calc writer impress
 QT5DIR=$QT5DIR
 --enable-ccache
 --with-build-platform-configure-options=--enable-ccache

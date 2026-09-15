@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 「录音中」全局浮动指示器的挂载点。
 //
 // 与反馈浮窗（utils/feedbackWidget.js）同一模式：录音横跨页面跳转持续进行，

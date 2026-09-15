@@ -1,15 +1,18 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- 启动引导页：极简浅色 splash，只做路由分流，不承载任何业务 UI -->
   <view class="launch-page">
     <view class="launch-center">
-      <image class="launch-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+      <image class="launch-logo awd-brand-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       <view v-if="!failed" class="launch-loading">
         <view class="launch-spinner"></view>
         <text class="launch-status">{{ statusText }}</text>
       </view>
       <view v-else class="launch-error">
         <text class="launch-error-text">{{ errorText }}</text>
-        <button class="launch-retry-btn" @tap="boot">{{ $t('onboarding.launch.retry') }}</button>
+        <text v-if="backendDetail" class="launch-error-detail">{{ $t('onboarding.launch.detailLabel') }}{{ backendDetail }}</text>
+        <button class="launch-retry-btn" @tap="retry">{{ $t('onboarding.launch.retry') }}</button>
       </view>
     </view>
   </view>
@@ -19,11 +22,10 @@
 import {
   getLicenseStatus,
   getLocalIdentityStatus,
-  getWizardStatus,
   getMyProjects,
 } from '@/services/api.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
-import { isDesktopHost } from '@/services/host.js'
+import { isDesktopHost, host } from '@/services/host.js'
 
 export default {
   name: 'LaunchPage',
@@ -32,14 +34,35 @@ export default {
       failed: false,
       statusText: this.$t('onboarding.launch.starting'),
       errorText: this.$t('onboarding.launch.cannotConnect'),
+      // 后端启动失败的诊断信息（desktop 端 backend.onStatus 推送），浏览器态始终为空
+      backendDetail: '',
+      unsubscribeBackendStatus: null,
     }
   },
   onLoad() {
+    this.subscribeBackendStatus()
     this.boot()
+  },
+  beforeUnmount() {
+    if (this.unsubscribeBackendStatus) this.unsubscribeBackendStatus()
   },
   methods: {
     isDesktop() {
       return isDesktopHost()
+    },
+    // 订阅后端启动状态推送，失败态下作为诊断信息补充展示（dev-board#341）
+    subscribeBackendStatus() {
+      if (!this.isDesktop() || !(host.backend && host.backend.onStatus)) return
+      this.unsubscribeBackendStatus = host.backend.onStatus((data) => {
+        if (data && data.ok === false) this.backendDetail = data.message || ''
+      })
+    },
+    // 失败态重试：桌面端先让主进程重启后端服务，再重新走一遍启动分流
+    async retry() {
+      if (this.isDesktop() && host.backend && host.backend.restart) {
+        try { await host.backend.restart() } catch (e) { /* 忽略，照常重新轮询 */ }
+      }
+      this.boot()
     },
     async boot() {
       this.failed = false
@@ -75,17 +98,8 @@ export default {
         console.warn('查询本机工作区状态失败（忽略）:', e && e.message)
       }
 
-      // 已解锁：向导检查 + 直达上次项目（迁移自 login.vue tryAutoResume）
-      try {
-        const wiz = await getWizardStatus()
-        if (wiz && wiz.initialized === false) {
-          uni.reLaunch({ url: '/pages/wizard/wizard' })
-          return
-        }
-      } catch (e) {
-        // 向导状态查询失败不拦路，继续尝试直达
-        console.warn('查询向导状态失败（忽略）:', e && e.message)
-      }
+      // 首启向导已下线（2026-08-27）：初始化（官方通道 + 跨境同意）由解锁页在登录成功后
+      // 一次性提交，这里不再分流，直达上次项目
 
       try {
         // local-mode 免登录：不需要 session 探活，getMyProjects 探通即视为可用
@@ -105,16 +119,21 @@ export default {
         this.failed = true
       }
     },
-    // 打包版后端随应用启动需要几秒，轮询直到可达（上限 90 秒）
+    // 打包版后端随应用启动需要几秒，轮询直到可达（上限 90 秒）。
+    // ARM 版 Windows（Mac 虚拟机）转译运行时主进程看门狗已放宽 8 倍（dev-board#340），
+    // 这里同步放宽死线，否则后端还在正常预热就会被判超时（dev-board#341）
     async waitLicenseStatus() {
-      const deadline = Date.now() + 90000
+      const emulated = this.isDesktop() && !!host.winEmulated
+      const deadline = Date.now() + (emulated ? 90000 * 8 : 90000)
       let shownBooting = false
       while (Date.now() < deadline) {
         try {
           return await getLicenseStatus()
         } catch (e) {
           if (!shownBooting) {
-            this.statusText = this.$t('onboarding.launch.bootingLocal')
+            this.statusText = emulated
+              ? this.$t('onboarding.launch.bootingEmulated')
+              : this.$t('onboarding.launch.bootingLocal')
             shownBooting = true
           }
           await new Promise((resolve) => setTimeout(resolve, 1500))
@@ -130,7 +149,7 @@ export default {
 .launch-page {
   width: 100vw;
   height: 100vh;
-  background: #f8f9fa;
+  background: var(--awd-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -158,8 +177,8 @@ export default {
 .launch-spinner {
   width: 22px;
   height: 22px;
-  border: 2px solid #e2e8f0;
-  border-top-color: #1a5336;
+  border: 2px solid var(--awd-border);
+  border-top-color: var(--awd-accent);
   border-radius: 50%;
   animation: launch-spin 0.9s linear infinite;
 }
@@ -172,7 +191,7 @@ export default {
 
 .launch-status {
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--awd-text-3);
 }
 
 .launch-error {
@@ -185,7 +204,12 @@ export default {
 
 .launch-error-text {
   font-size: 13px;
-  color: #64748b;
+  color: var(--awd-text-2);
+}
+
+.launch-error-detail {
+  font-size: 12px;
+  color: var(--awd-text-3);
 }
 
 .launch-retry-btn {
@@ -193,15 +217,15 @@ export default {
   line-height: 34px;
   padding: 0 28px;
   font-size: 13px;
-  color: #1a5336;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  color: var(--awd-accent-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border-strong);
   border-radius: 8px;
   cursor: pointer;
 
   &:hover {
-    border-color: #1a5336;
-    background: #f1f5f9;
+    border-color: var(--awd-accent);
+    background: var(--awd-surface-2);
   }
 }
 </style>

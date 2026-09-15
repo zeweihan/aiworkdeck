@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // toolDisplayNames.js — 工具代号 → 人性化名称（按软件语言环境取 zh/en）。
 //
 // 卡片里的「search_web」「doc_open_file」对律师用户是噪音；这里维护一份与后端
@@ -14,6 +16,10 @@ const NAMES = {
   update_project_info: { zh: '更新项目信息', en: 'Update project info' },
   get_conversation_summary: { zh: '回顾会话记录', en: 'Recall conversation' },
   list_project_folders: { zh: '列出项目文件夹', en: 'List folders' },
+  // 日程/日历（dev-board #53）：项目级任务/里程碑，与上面 todo_write 的
+  // AI 单次工作步骤条是两个概念，不要合并成一个分组。
+  task_create: { zh: '创建日程任务', en: 'Create task' },
+  task_list: { zh: '查询日程任务', en: 'List tasks' },
   // 网络
   search_web: { zh: '网络搜索', en: 'Web search' },
   browse_url: { zh: '浏览网页', en: 'Browse page' },
@@ -23,6 +29,7 @@ const NAMES = {
   // platform 档下没有可注入的凭证，失败会表现成「查不到数据」而不是「未配置」）。
   // 文案与后端 @ToolMeta(displayName) 逐字对齐，两侧有护栏用例钉着，别改措辞。
   qichacha_query: { zh: '查询企业工商信息', en: 'Company registry lookup' },
+  qichacha_ipr: { zh: '查询企业知识产权', en: 'Company IP lookup' },
   tushare_query: { zh: '查询金融数据', en: 'Financial data lookup' },
   // 法律
   law_search: { zh: '语义搜索法规', en: 'Search regulations' },
@@ -35,15 +42,40 @@ const NAMES = {
   read_file: { zh: '读取文件', en: 'Read file' },
   extract_file_text: { zh: '提取文档全文', en: 'Extract document text' },
   list_files: { zh: '列出文件', en: 'List files' },
+  list_contributed_templates: { zh: '列出插件模板', en: 'List contributed templates' },
+  create_file_from_template: { zh: '从模板新建文件', en: 'Create file from template' },
   write_file: { zh: '写入文件', en: 'Write file' },
   write_docx: { zh: '生成Word文档', en: 'Create Word doc' },
+  // 模板画像（TemplateTools，dev-board#110）
+  docx_inspect_template: { zh: '学习模板格式', en: 'Learn template style' },
+  // 纯文本直读直写（TextFileEditTools，dev-board#37）
+  text_write_file: { zh: '写入文本文件', en: 'Write text file' },
+  text_find_replace: { zh: '文本查找替换', en: 'Text find and replace' },
+  // 插件开发形态（PluginDevTools，dev-board#61）
+  capability_list: { zh: '查看能力实现', en: 'List capabilities' },
+  capability_install: { zh: '准备能力升级', en: 'Prepare capability upgrade' },
+  capability_apply: { zh: '执行能力升级', en: 'Apply capability upgrade' },
+  capability_select: { zh: '切换能力实现', en: 'Switch capability' },
+  plugin_dev_scaffold: { zh: '创建插件骨架', en: 'Scaffold plugin' },
+  plugin_dev_install: { zh: '安装插件到本机', en: 'Install plugin locally' },
   scan_files: { zh: '扫描项目文件', en: 'Scan files' },
   delete_file: { zh: '删除文件', en: 'Delete file' },
   move_file: { zh: '移动文件', en: 'Move file' },
   create_folder: { zh: '新建文件夹', en: 'Create folder' },
   rename_project_file: { zh: '重命名文件', en: 'Rename file' },
   move_project_file: { zh: '移动文件', en: 'Move file' },
+  move_files_batch: { zh: '批量移动文件', en: 'Move files (batch)' },
+  // 标签（TagTools，标签类型维度 dev-board#63）
+  tag_list: { zh: '查看项目标签', en: 'List tags' },
+  tag_file: { zh: '给文件打标签', en: 'Tag file' },
+  tag_remove_from_file: { zh: '移除文件标签', en: 'Untag file' },
   // 记忆
+  memory_list: { zh: '查看记忆目录', en: 'List memories' },
+  memory_read: { zh: '读取记忆', en: 'Read memory' },
+  memory_search: { zh: '搜索记忆', en: 'Search memory' },
+  memory_write: { zh: '写入记忆', en: 'Write memory' },
+  memory_edit: { zh: '修改记忆', en: 'Edit memory' },
+  memory_delete: { zh: '删除记忆', en: 'Delete memory' },
   save_memory: { zh: '保存记忆', en: 'Save memory' },
   query_memory: { zh: '检索记忆', en: 'Query memory' },
   retrieve_evidence: { zh: '检索证据', en: 'Retrieve evidence' },
@@ -57,6 +89,7 @@ const NAMES = {
   doc_start_stream: { zh: '流式写入文档', en: 'Stream to document' },
   doc_get_document_text: { zh: '通读文档', en: 'Read document text' },
   doc_get_clauses: { zh: '识别合同条款', en: 'Map contract clauses' },
+  doc_audit_structure: { zh: '结构审计', en: 'Audit contract structure' },
   doc_get_outline: { zh: '获取文档大纲', en: 'Get outline' },
   doc_get_selection: { zh: '读取选区', en: 'Read selection' },
   doc_get_cursor_context: { zh: '查看光标位置', en: 'Inspect cursor' },
@@ -91,6 +124,9 @@ const NAMES = {
   doc_table_delete_col: { zh: '删除表格列', en: 'Delete table column' },
   doc_get_formatting: { zh: '读取格式', en: 'Read formatting' },
   doc_apply_standard_format: { zh: '应用标准格式', en: 'Apply standard format' },
+  doc_apply_style_profile: { zh: '套用模板画像', en: 'Apply style profile' },
+  doc_insert_toc: { zh: '插入目录', en: 'Insert table of contents' },
+  doc_set_page_setup: { zh: '页面设置', en: 'Page setup' },
   doc_undo: { zh: '撤销修改', en: 'Undo' },
   doc_redo: { zh: '重做修改', en: 'Redo' },
   doc_add_comment: { zh: '添加批注', en: 'Add comment' },
@@ -111,6 +147,11 @@ const NAMES = {
   doc_insert_footnote: { zh: '插入脚注', en: 'Insert footnote' },
   doc_insert_endnote: { zh: '插入尾注', en: 'Insert endnote' },
   doc_set_hyperlink: { zh: '设置超链接', en: 'Set hyperlink' },
+  doc_link_evidence: { zh: '关联底稿', en: 'Link evidence' },
+  doc_list_evidence: { zh: '查看底稿关联', en: 'List evidence links' },
+  dd_export: { zh: '导出尽调交付件', en: 'Export due-diligence deliverable' },
+  web_verify_import: { zh: '导入网核压缩包', en: 'Import web-verification archive' },
+  evidence_verify: { zh: '勾稽核查', en: 'Verify evidence' },
   doc_insert_image: { zh: '插入图片', en: 'Insert image' },
   doc_set_style: { zh: '应用样式', en: 'Apply style' },
   // 电子表格（Calc / xlsx）sheet_* 原语
@@ -170,6 +211,8 @@ const NAMES = {
   office_get_selection: { zh: '读取选区', en: 'Read selection' },
   office_search: { zh: '查找文本', en: 'Find in document' },
   office_replace_text: { zh: '替换文本（修订）', en: 'Replace text (tracked)' },
+  office_replace_batch: { zh: '批量替换（修订）', en: 'Batch replace (tracked)' },
+  office_pass_step: { zh: '分段过卷', en: 'Section-by-section pass' },
   office_insert_text: { zh: '插入文本（修订）', en: 'Insert text (tracked)' },
   office_add_comment: { zh: '插入批注', en: 'Add comment' },
   office_format_text: { zh: '设置文字格式', en: 'Format text' },
@@ -269,6 +312,9 @@ const NAMES = {
   litigation_reference: { zh: '查阅制图规范', en: 'Read diagram standard' },
   litigation_checkpoint: { zh: '出图前确认', en: 'Confirm before drawing' },
   litigation_render: { zh: '生成诉讼图', en: 'Draw litigation diagram' },
+  litigation_timeline_start: { zh: '读入时间轴材料', en: 'Read timeline materials' },
+  litigation_timeline_step: { zh: '推进时间轴管线', en: 'Advance timeline pipeline' },
+  litigation_timeline_render: { zh: '生成案件时间轴', en: 'Draw case timeline' },
   // 会议录音
   meeting_list_recordings: { zh: '列出会议录音', en: 'List meeting recordings' },
   meeting_get_transcript: { zh: '读取会议转写稿', en: 'Read meeting transcript' },

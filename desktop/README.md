@@ -37,30 +37,15 @@ node desktop/scripts/fetch-lowa-assets.js
 # 3. 后端 jar + 裁剪 JRE（需 JDK 21）
 mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
 node desktop/scripts/prepare-backend.js --jar backend/target/backend-0.0.1-SNAPSHOT.jar --out desktop/bundled/mac-arm64
-# 4. pptx-service（Python 运行时 + 依赖 + 源码）
-node desktop/scripts/prepare-python-service.js \
-  --service pptx-service --src pptx-service/backend \
-  --requirements pptx-service/requirements.lock --out desktop/bundled/mac-arm64
-# 5. mineru-service（纯 pip 包，无 --src；模型不进包，首启在「系统管理 → 组件管理」下载）
-node desktop/scripts/prepare-python-service.js \
-  --service mineru-service \
-  --requirements mineru-service/requirements.lock --out desktop/bundled/mac-arm64
-# 6. kokoro-service（本地 TTS 包装层；Kokoro 模型约 300MB 同样走组件管理下载）
-node desktop/scripts/prepare-python-service.js \
-  --service kokoro-service --src kokoro-service \
-  --requirements kokoro-service/requirements.lock --out desktop/bundled/mac-arm64
-# 7. asr-service（本地转写包装层，faster-whisper；模型约 1.5GB 走组件管理下载）
-node desktop/scripts/prepare-python-service.js \
-  --service asr-service --src asr-service \
-  --requirements asr-service/requirements.lock --out desktop/bundled/mac-arm64
-# 8. pysvc 打成单个 tar.gz（上万个小文件不直接进 .app——逐文件 codesign 的 Apple
-#    时间戳请求会抖动；首次启动由主进程解压到用户数据目录，见 main/services/pysvc-runtime.js）
-node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/mac-arm64
+# 4. CPython 运行时（只烙解释器；litviz 与四个 Python 服务的 runtime pack 共用它）
+#    0.38.0 起 pptx / mineru / kokoro / asr 的依赖与源码不再进安装包，改由四个
+#    native pack（<service 前缀>-runtime）按需下载，见 docs/NATIVE_PACK_DISTRIBUTION.md
+node desktop/scripts/prepare-python-service.js --runtime-only 1 --out desktop/bundled/mac-arm64
 # 出包（本地不签名）
 cd desktop && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never
 ```
 
-打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx / mineru / kokoro / asr 动态端口（`EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端、`MINERU_LOCAL_URL` 注入 pptx、`EXTERNAL_TTS_LOCAL_BASE_URL` 注入后端、`EXTERNAL_ASR_LOCAL_BASE_URL` 注入后端）。mineru / kokoro 为条件启动：模型未下载则跳过，在「系统管理 → 组件管理」下载（落 `~/.aiworkdeck/models/{mineru,kokoro}/`）后自动拉起；**asr 不设这个门**——「录音不出本机」开关的就绪探测必须能分清「服务没起」和「模型没下」，不起进程就只剩前一种结论。云端 MinerU 兜底默认关闭（`CHECKBA_MINERU_FORCE_CLOUD=1` 可放开）；kokoro / asr 运行时 `HF_HUB_OFFLINE=1` 零出网。数据落 `~/.aiworkdeck/`，日志落 `~/.aiworkdeck/logs/<service>.log`。
+打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx / mineru / kokoro / asr 动态端口（`EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端、`MINERU_LOCAL_URL` 注入 pptx、`EXTERNAL_TTS_LOCAL_BASE_URL` 注入后端、`EXTERNAL_ASR_LOCAL_BASE_URL` 注入后端）。四个服务都先判各自的 runtime pack 在不在场（`~/.aiworkdeck/packs/<service 前缀>-runtime/`，解析见 `main/services/pysvc-runtime.js` 的 `resolveServiceRoot`），没装就不启动；mineru / kokoro 还要再判模型已下载（落 `~/.aiworkdeck/models/{mineru,kokoro}/`），下完自动拉起；**asr 不设模型这道门**——「录音不出本机」开关的就绪探测必须能分清「服务没起」和「模型没下」，不起进程就只剩前一种结论。云端 MinerU 兜底默认关闭（`CHECKBA_MINERU_FORCE_CLOUD=1` 可放开）；kokoro / asr 运行时 `HF_HUB_OFFLINE=1` 零出网。数据落 `~/.aiworkdeck/`，日志落 `~/.aiworkdeck/logs/<service>.log`。
 
 ## Notes
 

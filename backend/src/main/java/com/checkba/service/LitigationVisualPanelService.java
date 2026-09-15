@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.entity.ProjectFile;
@@ -62,7 +65,7 @@ public class LitigationVisualPanelService {
             /**
              * 这张图在 draw.io 里被手工改过。判据是 .drawio 比 .map.json 新——
              * 语义地图只在出图/换风格时写，所以 .drawio 更新说明是人动的。
-             * 前端据此在「换风格」前提醒：重画会用语义地图覆盖手工改动。
+             * 仅供图廊提示；换风格一律确认，不能靠时间戳判断是否可以覆盖。
              */
             boolean handEdited,
             List<String> formats,
@@ -75,6 +78,9 @@ public class LitigationVisualPanelService {
         Map<String, Object> out = new HashMap<>();
         out.put("available", reason == null);
         out.put("reason", reason == null ? "" : reason);
+        String timelineReason = litviz.timelineUnavailableReason();
+        out.put("timelineAvailable", timelineReason == null);
+        out.put("timelineReason", timelineReason == null ? "" : timelineReason);
         out.put("python", rt.pythonVersion());
         // graphviz 只影响流程图一种布局。前端据此提示"这台机器画不了流程图"，
         // 而不是把整个功能说成不可用——六种布局照常能出。
@@ -176,10 +182,14 @@ public class LitigationVisualPanelService {
     /**
      * 用存下来的语义地图换一种视觉模式重画，原地替换同名产物。
      *
-     * <p>内容不会变——同一份地图、同一套几何，只有表层不同。这正是"换风格"应该
-     * 是一个按钮而不是一轮对话的原因。
+     * <p>地图不含 draw.io 的手工修改，因此必须明确确认覆盖当前图形。
      */
-    public Map<String, Object> restyle(Long projectId, Long folderId, String mode) {
+    public Map<String, Object> restyle(Long projectId, Long folderId, String mode, boolean confirmOverwrite) {
+        if (!confirmOverwrite) {
+            throw new IllegalArgumentException(LangText.of(
+                    "请先确认：换风格将根据语义地图重画并覆盖当前手工修改",
+                    "Confirm first: restyling redraws the semantic map and overwrites current manual edits."));
+        }
         String why = litviz.unavailableReason();
         if (why != null) throw new IllegalStateException(why);
 
@@ -222,6 +232,7 @@ public class LitigationVisualPanelService {
                 files.add(cn.hutool.json.JSONUtil.createObj().set("path", extra.toString()));
             }
             int replaced = 0;
+            var redrawnAt = java.time.LocalDateTime.now();
             for (int i = 0; i < files.size(); i++) {
                 Path src = Path.of(files.getJSONObject(i).getStr("path"));
                 String name = src.getFileName().toString();
@@ -231,19 +242,22 @@ public class LitigationVisualPanelService {
                     // 这次多出来的格式（比如上次只出了 svg），补登记
                     target = projectFileService.createFile(projectId, folderId, name,
                             extOf(name), Files.size(src), null,
-                            LitigationVisualTools.MARKER_ARTIFACT + projectId + "_" + System.currentTimeMillis(),
+                            LitigationVisualTools.newMarker(LitigationVisualTools.MARKER_ARTIFACT, projectId),
                             AGENT_USER_ID);
                 }
                 Path dest = storageResolver.resolve(target.getFilePath());
                 Files.createDirectories(dest.getParent());
                 Files.move(src, dest, StandardCopyOption.REPLACE_EXISTING);
                 target.setFileSize(Files.size(dest));
+                target.setUpdatedAt(redrawnAt);
                 projectFileRepository.save(target);
                 replaced++;
             }
 
             Map<String, Object> out = new HashMap<>();
             out.put("ok", true);
+            mapFile.setUpdatedAt(redrawnAt);
+            projectFileRepository.save(mapFile);
             out.put("mode", r.raw().getStr("mode", mode));
             out.put("replaced", replaced);
             return out;
@@ -291,6 +305,7 @@ public class LitigationVisualPanelService {
             Files.createDirectories(xmlPath.getParent());
             Files.writeString(xmlPath, xml, StandardCharsets.UTF_8);
             drawio.setFileSize(Files.size(xmlPath));
+            drawio.setUpdatedAt(java.time.LocalDateTime.now());
             projectFileRepository.save(drawio);
             out.put("drawioFileId", drawio.getId());
 
@@ -308,6 +323,7 @@ public class LitigationVisualPanelService {
             Path svgPath = storageResolver.resolve(svgFile.getFilePath());
             Files.writeString(svgPath, svg, StandardCharsets.UTF_8);
             svgFile.setFileSize(Files.size(svgPath));
+            svgFile.setUpdatedAt(java.time.LocalDateTime.now());
             projectFileRepository.save(svgFile);
             out.put("svgFileId", svgFile.getId());
 
@@ -321,7 +337,7 @@ public class LitigationVisualPanelService {
                 if (pngFile == null) {
                     pngFile = projectFileService.createFile(projectId, drawio.getParentId(), base + ".png",
                             "png", Files.size(png), null,
-                            LitigationVisualTools.MARKER_ARTIFACT + projectId + "_" + System.currentTimeMillis(),
+                            LitigationVisualTools.newMarker(LitigationVisualTools.MARKER_ARTIFACT, projectId),
                             AGENT_USER_ID);
                 }
                 Path dest = storageResolver.resolve(pngFile.getFilePath());
@@ -345,6 +361,32 @@ public class LitigationVisualPanelService {
     }
 
     /**
+     * 末位完成判据（dev-board#456）。
+     *
+     * <p>真机上模型读完材料就在对话里给了一张 markdown 表格收工，一个 litigation_* 工具
+     * 都没调——每次工具成功后编排器都会在消息末位喊「任务完成就立刻输出 &lt;final&gt;」，
+     * 而这段 prompt 原来的最后一句是 write_file 禁令，「必须出图」埋在中间。仓内的经验是
+     * 约束要挂末位，所以把「本轮怎样才算结束」补在最后。
+     *
+     * <p><b>口径必须与人工确认那一停一致</b>：本功能的确认轮本来就是「三问发给用户后停下」，
+     * 写成「不出图不许结束」会把它一起禁掉，反而逼出「未经确认直接出草稿图」——那比少一张图
+     * 更糟（草稿闸与红色授权制都挂在 checkpoint 上）。所以这里给的是两种合法结束方式，
+     * 与 LitigationVisualTools.CHECKPOINT_NEXT_STEPS 第 1 条、skill prompt.md §3 同一口径。
+     */
+    private static final String COMPLETION_CRITERION_MAP =
+            "\n\n本轮只有两种正确的结束方式：一是调用 litigation_checkpoint 之后，"
+                    + "把它返回的三个确认问题原样发给我、停下等我回复；"
+                    + "二是我确认之后 litigation_render 成功返回，你再交付说明。"
+                    + "除此之外不要用总结、表格或 <final> 结束本轮。";
+
+    /** 时间轴大师那条管线的同款判据：中途的勾选清单同样是合法的停下点。 */
+    private static final String COMPLETION_CRITERION_TIMELINE =
+            "\n\n本轮只有两种正确的结束方式：一是把工具列出的勾选清单用 <question>+<option> "
+                    + "原样发给我、停下等我回复；"
+                    + "二是 litigation_timeline_render 成功返回，你再交付说明。"
+                    + "除此之外不要用总结、表格或 <final> 结束本轮。";
+
+    /**
      * 拼「开始出图」那句话。
      *
      * <p><b>触发词必须原样出现在正文里</b>——skill 注入靠 SkillRouter 在用户消息里
@@ -361,9 +403,35 @@ public class LitigationVisualPanelService {
         }
         sb.append("材料范围：").append(
                 scopeDescription == null || scopeDescription.isBlank() ? "本项目全部材料" : scopeDescription.trim());
-        sb.append("\n\n请按流程来：先通读材料做抽取，写出语义地图；");
-        sb.append("然后调 litigation_checkpoint 把三个确认问题原样发给我，等我回复；");
-        sb.append("我确认后再出图。原文逐字保留，不要改动任何表述。");
+        // 从原始材料出时间轴走的是另一条管线（时间轴大师），工具链完全不同。
+        // 提示语与 skill prompt 的「先选路」一节同一口径。
+        if (diagramHint != null && diagramHint.contains("时间轴")) {
+            sb.append("\n\n这是「从原始材料出时间轴」的场景，请走时间轴大师管线，不要走语义地图：");
+            sb.append("\n1. 用 litigation_timeline_start 读入材料（文件 ID 从材料范围里来）。");
+            sb.append("\n2. 按它返回的指引用 litigation_timeline_step 逐阶段推进，");
+            sb.append("中途它列出的勾选清单要原样问我，等我回答。");
+            sb.append("\n3. 最后用 litigation_timeline_render 出图。");
+            sb.append("\n中间产物（verdicts/parts/skeleton/items）一律经工具参数提交，"
+                    + "不要用 write_file 存成项目文件。");
+            sb.append(COMPLETION_CRITERION_TIMELINE);
+            return sb.toString();
+        }
+        // 工具链写成确定性的四步。这里不是啰嗦：真机上模型走过
+        // 「write_file 存地图 → read_file 读回来（报文件不存在）」的岔路，
+        // 也出现过确认完只更新地图、忘了调 litigation_render 就说"图好了"。
+        // 语义地图本来就是两个工具的内联参数，用不着落文件。
+        sb.append("\n\n请按这条工具链来，不要改顺序：");
+        sb.append("\n1. 用 extract_file_text / search_project_files 通读材料做抽取，"
+                + "把语义地图 JSON 想清楚。它只作为下一步的工具参数存在，不要把它写进回复；"
+                + "材料摘要、来源对照表也不是本轮的交付物。");
+        sb.append("\n2. 调 litigation_checkpoint（语义地图作参数直接传进去），");
+        sb.append("把它返回的三个确认问题原样发给我，然后停下等我回复。");
+        sb.append("\n3. 我回复后，把答复回填进同一份 JSON 的 checkpoint 字段，");
+        sb.append("**必须再调用一次 litigation_render 出图**——没调这一步，项目里就没有图。");
+        sb.append("\n4. 出图成功后再向我交付说明。");
+        sb.append("\n\n语义地图全程作为工具参数内联传递：不要用 write_file 把它存成项目文件，");
+        sb.append("也不要用 read_file 读回来。原文逐字保留，不要改动任何表述。");
+        sb.append(COMPLETION_CRITERION_MAP);
         return sb.toString();
     }
 

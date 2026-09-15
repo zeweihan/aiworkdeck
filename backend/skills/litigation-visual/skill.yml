@@ -17,10 +17,15 @@ license: MIT
 # 版权行原样抄自 litviz/engine/LICENSE，改引擎版本时这里也要跟着改。
 credits:
   - "出图引擎 mqc-litigation-visual-redraw v1.0.2 —— Copyright (c) 2026 缪奇川 (Miao Qichuan)，MIT License"
+  - "时间轴管线 mqc-timeline-master v2.0.1 —— Copyright (c) 2026 缪奇川 (Miao Qichuan)，MIT License"
 
 # 默认不安装：出图引擎（Python + graphviz）体积较大，随安装包分发但默认关闭；
 # 用户在插件广场手动启用（= 安装），停用（= 卸载）不影响随包文件，见 SkillRegistry/SkillMarketService。
 enabled_by_default: false
+
+# 依赖的原生资源包（litviz 引擎 + graphviz + draw.io 静态资源，规范见
+# docs/NATIVE_PACK_DISTRIBUTION.md）。随包内置资源还在的老版本不会触发下载。
+requires_pack: litigation-visual
 
 # 法律事项类别（匿名统计用，枚举见 MatterCategory）
 category: 争议解决
@@ -96,6 +101,9 @@ allowed_tools:
   - litigation_reference
   - litigation_checkpoint
   - litigation_render
+  - litigation_timeline_start
+  - litigation_timeline_step
+  - litigation_timeline_render
   - extract_file_text
   - search_project_files
   - read_file
@@ -104,15 +112,20 @@ allowed_tools:
   - dispatch_subtask
 
 output: |
-  交付 = 项目里一个以图名命名的文件夹，内含 .svg（母版，自动在编辑器打开）、.png
-  （唯一能插进正在写的文书的格式）、.drawio（可继续编辑的源文件）。
+  交付 = 项目里一个以图名命名的文件夹，内含 .drawio（可继续编辑的源文件，出图后自动
+  在编辑器打开）、.svg（母版，看与打印）、.png（唯一能插进正在写的文书的格式）。
   回复里给一句审计摘要：用了哪种布局与视觉模式、深红标在哪一处（或"未标"）、
   有哪些没读准的地方。这些话只出现在回复里，绝不画进图上。
+  语义地图全程是工具参数，不要用 write_file/read_file 中转；用户确认后必须调用一次
+  litigation_render，那一步才真正出图。
 
 output_en: |
-  Deliverable = one folder in the project, named after the figure, containing the .svg
-  (master copy, opened in the editor automatically), the .png (the ONLY format that can be
-  inserted into a document being drafted), and the .drawio (editable source file).
+  Deliverable = one folder in the project, named after the figure, containing the .drawio
+  (editable source file, opened in the editor automatically), the .svg (master copy, for
+  viewing and printing), and the .png (the ONLY format that can be inserted into a document
+  being drafted).
   In the reply, give a one-line audit summary: which layout and visual mode were used,
   where the crimson accent was placed (or "none"), and anything that could not be read with
   confidence. These remarks go in the reply ONLY - never onto the figure itself.
+  The semantic map stays an inline tool argument - never stage it through write_file/read_file;
+  after the user confirms you MUST call litigation_render once, that is what renders the figure.

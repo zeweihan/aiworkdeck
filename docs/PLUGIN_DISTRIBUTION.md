@@ -51,11 +51,22 @@ AI provider 的 API key 后窃取、装 JVM 全局 TrustManager 关掉 TLS 校�
 ```
 （zip 根）
 ├── manifest.json          必需，规范见 PLUGIN_SPEC.md §2
-├── <name>.jar             manifest.backendJars 声明的 JAR
+├── <name>.jar             可选，manifest.backendJars 声明的 JAR
+├── web/                   可选，Web 插件的静态资源（frontendEntry 指向其中）
+│   ├── index.html
+│   └── awd-plugin-sdk.js
 └── <skill-dir>/           可选，manifest.skills 声明的 Skill 目录
     ├── skill.yml
     └── prompt.md
 ```
+
+**纯 Web 插件可以完全没有 JAR。** 只带 `web/` 的插件不进 JVM，跑在 opaque origin 的
+sandbox iframe 里、能力经 postMessage 桥按 manifest 权限裁剪——风险量级比 JAR 低一整档
+（形态与桥协议见 [PLUGIN_SPEC.md](PLUGIN_SPEC.md) §8）。`web/` 下的文件与 JAR 一样进
+`files` 哈希表、被同一个签名覆盖。
+
+审核上的差别：JS 没有常量池可扫，§4 的自动扫描对 `web/` 降级为「外联 URL 字面量提取 +
+权限交叉验证」，以人工审核为主；运行时的真实兜底是 sandbox 与 CSP，不是扫描。
 
 服务端受理时的硬性检查（任一不过直接拒收，不进审核队列）：
 
@@ -69,6 +80,9 @@ AI provider 的 API key 后窃取、装 JVM 全局 TrustManager 关掉 TLS 校�
 | id 归属 | 新 id 归提交者；已存在的 id 只有原作者能提交新版本 |
 | version | 必须严格大于该 id 已有的最高版本 |
 | backendJars | 声明的每个文件都必须在包内且落在包根之下 |
+| frontendEntry | 非空且非 `http(s)://` 时必须是 `web/` 之下的相对路径且文件在包内 |
+| 声明式内容 | `contributes.templates` / `styleProfiles` 声明的文件必须在包内（缺失即 `contributed_file_missing`） |
+| 载荷 | JAR、`frontendEntry`、声明式内容（templates/styleProfiles/settings/evidenceSources，规范 v2.9 §14）**至少其一**非空；全空 = `no_payload` 拒收。纯声明式插件（只有 manifest + 数据文件）自 v2.9 起是合法形态，走最轻审核档 |
 
 ## 4. 自动扫描（审核辅助，不做判定）
 
@@ -182,7 +196,12 @@ AI provider 的 API key 后窃取、装 JVM 全局 TrustManager 关掉 TLS 校�
 
 ## 9. 分期
 
-- **Phase 1**（当前）：官网提交 + 人工审核 + 自动扫描报告 + 签名 + registry 四个接口。
-- **Phase 2**：桌面端安装（验签 + 逐文件哈希校验 + 信任确认）+ 封禁拉取与强制禁用。
+- **Phase 1**：官网提交 + 人工审核 + 自动扫描报告 + 签名 + registry 四个接口。（已落地）
+- **Phase 2**：桌面端安装（验签 + 逐文件哈希校验 + 信任确认）+ 封禁拉取与强制禁用。（已落地）
+- **Phase 2.5（2026-08 立项）**：第四种分发形态「原生资源包（native pack）」——
+  重资源（脚本运行时 / 平台二进制 / 静态资产）不随安装包、不进 registry 应用层，
+  走签名 manifest + 静态镜像的运行时下载；含三方 pack 提交审核与三方 Web 插件 SDK。
+  规范整体在 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)，本文的
+  状态机 / 签名密钥 / 封禁语义被它沿用。
 - **Phase 3**（未排期）：进程外插件形态（MCP server），为不需要独立 UI 的插件提供
   真正的隔离边界；届时在线渠道优先推荐该形态，JAR 保留给必须有自己界面的插件。

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.config.AiModelProperties;
@@ -7,7 +10,6 @@ import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -74,7 +76,7 @@ class ChatModelFactoryTest {
                 "供应商切到 OPENROUTER 后空 modelId 不应回退本地 Ollama");
 
         StreamingChatLanguageModel streaming = factory.getStreamingChatModel(null);
-        assertInstanceOf(OpenAiStreamingChatModel.class, streaming);
+        assertInstanceOf(OpenRouterStreamingChatModel.class, streaming);
     }
 
     @Test
@@ -86,7 +88,7 @@ class ChatModelFactoryTest {
         assertInstanceOf(OpenAiChatModel.class, model);
 
         StreamingChatLanguageModel streaming = factory.getStreamingChatModel("vendor/some-unlisted-model");
-        assertInstanceOf(OpenAiStreamingChatModel.class, streaming);
+        assertInstanceOf(OpenRouterStreamingChatModel.class, streaming);
     }
 
     @Test
@@ -96,6 +98,33 @@ class ChatModelFactoryTest {
         ChatLanguageModel model = factory.getChatModel("deepseek/deepseek-v4-pro");
         assertInstanceOf(OpenAiChatModel.class, model,
                 "白名单内的模型必须走 OpenRouter，而不是落到本地 Ollama");
+    }
+
+    /**
+     * 选了本地 Ollama 就是在明确表达「不要把内容发出去」——法律文书场景下这是产品承诺，
+     * 不是偏好。而白名单短路判定排在供应商判定之前：只要 modelId 恰好在白名单里，
+     * 一律被拦去 OpenRouter。更要命的是辅助模型的默认 id（qwen/qwen3.7-flash）
+     * 本身就在白名单里，于是 OLLAMA 档下**每一次辅助调用都在走云端**。
+     */
+    @Test
+    @DisplayName("供应商=OLLAMA 时，白名单模型不得把流量拽去 OpenRouter")
+    void ollamaProviderKeepsAllowedModelsLocal() {
+        properties.setProvider(AiModelProperties.Provider.OLLAMA);
+        setDbProvider("OLLAMA");
+
+        ChatLanguageModel model = factory.getChatModel(AllowedModels.QWEN_3_7_FLASH.getModelId());
+        assertInstanceOf(OllamaChatModel.class, model,
+                "选了本地供应商却把内容发去 OpenRouter：" + model.getClass().getName());
+    }
+
+    @Test
+    @DisplayName("供应商=OLLAMA 时，辅助模型同样留在本地")
+    void ollamaProviderKeepsAuxModelLocal() {
+        properties.setProvider(AiModelProperties.Provider.OLLAMA);
+        setDbProvider("OLLAMA");
+
+        assertInstanceOf(OllamaChatModel.class, factory.getAuxChatModel(),
+                "辅助调用用户根本看不见也选不了，更不该越过本地供应商");
     }
 
     @Test
@@ -145,6 +174,63 @@ class ChatModelFactoryTest {
     // （改由 GET /api/ai/models 下发），那 8 个 id 里多数也已随本次白名单换代删掉，
     // 留着只会在每次换代时报假警。替代护栏在模型目录端点的测试里：
     // 它断言端点下发的清单等于 AllowedModels.availableIn(当前区域)，方向是双向的。
+
+    // ==================== 生效模型解析与视觉能力 ====================
+    //
+    // 这组的意义：请求里带的 modelId **不等于**实际发出去的模型（三条静默改写路径）。
+    // 视觉判定必须建立在「真正生效的那个 id」上，否则会把 image 内容块发给读不了图的模型。
+
+    @Test
+    @DisplayName("resolveEffectiveModelId：白名单模型原样生效")
+    void effectiveModelKeepsWhitelistedId() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertEquals("moonshotai/kimi-k3", factory.resolveEffectiveModelId("moonshotai/kimi-k3"));
+    }
+
+    @Test
+    @DisplayName("resolveEffectiveModelId：非白名单被回落成默认模型——这正是不能按请求 id 判能力的原因")
+    void effectiveModelReflectsSilentFallback() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        when(systemSettingService.get(eq("ai.defaultModel"), any())).thenReturn("deepseek/deepseek-v4-flash");
+
+        assertEquals("deepseek/deepseek-v4-flash", factory.resolveEffectiveModelId("some/unknown-vision-model"));
+        // 请求里那个名字听着像视觉模型，实际发出去的是纯文本的默认模型
+        assertFalse(factory.effectiveModelSupportsVision("some/unknown-vision-model"),
+                "按请求 id 判会判成支持视觉，按生效 id 判才是对的");
+    }
+
+    @Test
+    @DisplayName("effectiveModelSupportsVision：显式本地档恒 false——Ollama 走另一套图片编组，本次不接")
+    void localProviderNeverReportsVision() {
+        when(systemSettingService.get(eq("ai.activeProvider"), any())).thenReturn("OLLAMA");
+        // 请求的是支持视觉的云端模型，但显式本地档会忽略它、改用本机模型
+        assertFalse(factory.effectiveModelSupportsVision("moonshotai/kimi-k3"));
+        assertEquals(properties.getOllama().getModelName(),
+                factory.resolveEffectiveModelId("moonshotai/kimi-k3"));
+    }
+
+    @Test
+    @DisplayName("effectiveModelSupportsVision：白名单里的视觉/非视觉模型各自如实回答")
+    void visionCapabilityMatchesCatalog() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertTrue(factory.effectiveModelSupportsVision("moonshotai/kimi-k3"));
+        assertFalse(factory.effectiveModelSupportsVision("deepseek/deepseek-v4-flash"));
+    }
+
+    @Test
+    @DisplayName("resolveTarget 与 getStreamingChatModel 落到同一个通道——两份解析漂移会让同步路和流式路发给不同模型")
+    void resolveTargetAgreesWithStreamingDispatch() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertEquals(AiModelProperties.Provider.OPENROUTER,
+                factory.resolveTarget("moonshotai/kimi-k3", false).channel());
+        assertInstanceOf(OpenRouterStreamingChatModel.class, factory.getStreamingChatModel("moonshotai/kimi-k3"));
+
+        when(systemSettingService.get(eq("ai.activeProvider"), any())).thenReturn("OLLAMA");
+        factory.clearCache();
+        assertEquals(AiModelProperties.Provider.OLLAMA,
+                factory.resolveTarget("moonshotai/kimi-k3", false).channel());
+        assertInstanceOf(OllamaStreamingChatModel.class, factory.getStreamingChatModel("moonshotai/kimi-k3"));
+    }
 
     // ==================== 默认模型与辅助模型（本次改造新增） ====================
 
@@ -258,7 +344,7 @@ class ChatModelFactoryTest {
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
         assertInstanceOf(OpenAiChatModel.class, factory.getChatModel("anthropic/claude-sonnet-5"));
-        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("anthropic/claude-sonnet-5"));
+        assertInstanceOf(OpenRouterStreamingChatModel.class, factory.getStreamingChatModel("anthropic/claude-sonnet-5"));
         // 白名单短路分支绝不能先命中——那条路用的是 BYOK 的 key
         verify(platformAiChannel, atLeastOnce()).apiKey();
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
@@ -288,7 +374,7 @@ class ChatModelFactoryTest {
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
         // 编排器故障转移就是拿备选 modelId 再调一次工厂——通道由 provider 决定，与 modelId 无关
-        assertInstanceOf(OpenAiStreamingChatModel.class,
+        assertInstanceOf(OpenRouterStreamingChatModel.class,
                 factory.getStreamingChatModel("qwen/qwen3.7-flash"));
         verify(platformAiChannel, atLeastOnce()).apiKey();
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());

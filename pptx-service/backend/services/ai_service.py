@@ -21,7 +21,10 @@ from .prompts import (
     get_description_to_outline_prompt,
     get_description_split_prompt,
     get_outline_refinement_prompt,
-    get_descriptions_refinement_prompt
+    get_descriptions_refinement_prompt,
+    get_ppt_page_content_extraction_prompt,
+    get_layout_caption_prompt,
+    get_style_extraction_prompt
 )
 from .ai_providers import get_text_provider, get_image_provider, TextProvider, ImageProvider
 from config import get_config
@@ -653,10 +656,63 @@ class AIService:
             language=language
         )
         descriptions = self.generate_json(refinement_prompt, thinking_budget=1000)
-        
+
         # 确保返回的是字符串列表
         if isinstance(descriptions, list):
             return [str(desc) for desc in descriptions]
         else:
             raise ValueError("Expected a list of page descriptions, but got: " + str(type(descriptions)))
+
+    def extract_page_content(self, markdown_text: str, language: str = 'zh') -> Dict:
+        """
+        从 fileparser 解析出的 markdown 文本中提取页面结构化内容
+
+        Args:
+            markdown_text: 单页 PDF 解析出的 markdown 文本
+            language: 输出语言
+
+        Returns:
+            Dict with keys: title, points, description
+        """
+        prompt = get_ppt_page_content_extraction_prompt(markdown_text, language=language)
+        result = self.generate_json(prompt, thinking_budget=1000)
+
+        # Ensure required fields exist
+        if not isinstance(result, dict):
+            raise ValueError(f"Expected dict, got {type(result)}")
+
+        result.setdefault('title', '')
+        result.setdefault('points', [])
+        result.setdefault('description', '')
+
+        return result
+
+    def _generate_text_from_image(self, prompt: str, image_path: str) -> str:
+        """Helper to generate text from a prompt and an image."""
+        actual_budget = self._get_text_thinking_budget()
+
+        if hasattr(self.text_provider, 'generate_with_image'):
+            response_text = self.text_provider.generate_with_image(
+                prompt=prompt,
+                image_path=image_path,
+                thinking_budget=actual_budget
+            )
+        elif hasattr(self.text_provider, 'generate_text_with_images'):
+            response_text = self.text_provider.generate_text_with_images(
+                prompt=prompt,
+                images=[image_path],
+                thinking_budget=actual_budget
+            )
+        else:
+            raise ValueError("text_provider does not support image input")
+
+        return response_text.strip()
+
+    def generate_layout_caption(self, image_path: str) -> str:
+        """使用 caption model 描述 PPT 页面的排版布局"""
+        return self._generate_text_from_image(get_layout_caption_prompt(), image_path)
+
+    def extract_style_description(self, image_path: str) -> str:
+        """从图片中提取风格描述"""
+        return self._generate_text_from_image(get_style_extraction_prompt(), image_path)
 

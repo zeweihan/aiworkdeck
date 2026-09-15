@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.service.LangText;
@@ -60,14 +63,14 @@ public class LitigationVisualController {
         return panelService.listDiagrams(projectId);
     }
 
-    /** 换视觉模式重画。内容不变，只有表层变——所以是按钮，不是一轮对话。 */
+    /** 按语义地图重画；覆盖当前手工修改前必须明确确认。 */
     @PostMapping("/projects/{projectId}/restyle")
     public Map<String, Object> restyle(
             @PathVariable Long projectId,
             @RequestBody RestyleDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(sessionId, projectId);
-        return panelService.restyle(projectId, dto.getFolderId(), dto.getMode());
+        requireWriter(sessionId, projectId);
+        return panelService.restyle(projectId, dto.getFolderId(), dto.getMode(), dto.isConfirmOverwrite());
     }
 
     /**
@@ -101,6 +104,7 @@ public class LitigationVisualController {
     public static class RestyleDto {
         private Long folderId;
         private String mode;
+        private boolean confirmOverwrite;
     }
 
     @Data

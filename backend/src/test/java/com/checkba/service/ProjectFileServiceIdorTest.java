@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service;
 
 import com.checkba.model.dto.ProjectFileBatchRequest;
@@ -13,6 +16,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
 /**
@@ -59,5 +65,31 @@ class ProjectFileServiceIdorTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> projectFileService.batchMove(1L, req, 1L));
+    }
+
+    /**
+     * 缓存区免费额度此前只挂在 batchMove 上，单文件 move 这条同样能移进缓存区的路径
+     * 一个字节都不查——免费用户一次拖一个就能无限往里塞，付费闸形同虚设。
+     */
+    @Test
+    void singleMoveIntoStagingIsQuotaChecked() {
+        ProjectFile own = new ProjectFile();
+        own.setId(42L);
+        own.setProjectId(1L);
+        own.setIsFolder(false);
+        own.setName("a.docx");
+        when(projectFileRepository.findById(42L)).thenReturn(Optional.of(own));
+        // 目标缓存区文件夹得真在库里——移动前先过父节点校验（resolveParentId，dev-board#457）
+        ProjectFile staging = new ProjectFile();
+        staging.setId(9L);
+        staging.setProjectId(1L);
+        staging.setIsFolder(true);
+        staging.setName("__staging_area__");
+        when(projectFileRepository.findById(9L)).thenReturn(Optional.of(staging));
+        doThrow(new com.checkba.exception.StageQuotaExceededException("超额", 20, 0, 20, 1L))
+                .when(stageQuotaService).checkAdmission(eq(9L), anyList());
+
+        assertThrows(com.checkba.exception.StageQuotaExceededException.class,
+                () -> projectFileService.move(42L, 9L, null, 1L));
     }
 }

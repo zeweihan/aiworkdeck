@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.repository;
 
 import com.checkba.model.entity.ProjectFile;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
 
 import java.util.List;
 import java.util.Optional;
@@ -11,6 +16,16 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
      * 根据项目 ID 查询所有文件（包含已删除），用于文件树清单采集
      */
     List<ProjectFile> findByProjectId(Long projectId);
+
+    /**
+     * 悲观行锁读取（SELECT ... FOR UPDATE）。用于把「查当前用量 + 判断放行」钉进调用方
+     * 已经开着的那个事务里：行锁与事务同生命周期，提交/回滚前不释放——不像进程内锁那样
+     * 在方法返回时就提前释放，能正确堵住 check-then-act 竞态（见 StageQuotaService.checkAdmission
+     * 的用法与注释）。三个受支持的数据库（H2/PostgreSQL/MySQL）都支持 FOR UPDATE。
+     */
+    @Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT pf FROM ProjectFile pf WHERE pf.id = :id")
+    Optional<ProjectFile> lockById(Long id);
 
     /**
      * 根据项目 ID 和父文件夹 ID 查询文件列表（按排序序号排序，排除已删除）
@@ -59,10 +74,20 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
     boolean existsByProjectIdAndParentIdAndNameAndIdNot(Long projectId, Long parentId, String name, Long excludeId);
 
     /**
+     * 同名查重的「含回收站」变体：不过滤 isDeleted。RENAME 策略用它——软删只翻 isDeleted
+     * 不动磁盘，回收站那份同名文件的字节仍在按名字算出的物理路径上，必须算冲突。
+     */
+    @org.springframework.data.jpa.repository.Query("SELECT COUNT(pf) > 0 FROM ProjectFile pf WHERE pf.projectId = :projectId AND (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId) AND pf.name = :name")
+    boolean existsByProjectIdAndParentIdAndNameIncludingDeleted(Long projectId, Long parentId, String name);
+
+    /**
      * 根据 WPS 文件 ID 查询文件
      */
     List<ProjectFile> findByWpsFileId(String wpsFileId);
-    
+
+    /** doc_file_link 迁移用：按 (projectId, wpsFileId) 反查报告文件。 */
+    Optional<ProjectFile> findFirstByProjectIdAndWpsFileId(Long projectId, String wpsFileId);
+
     /**
      * 根据项目 ID、父文件夹 ID 和名称查询文件 (排除已删除)
      */
@@ -70,6 +95,15 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
     
     @org.springframework.data.jpa.repository.Query("SELECT pf FROM ProjectFile pf WHERE pf.projectId = :projectId AND (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId) AND pf.name = :name AND pf.isDeleted = false")
     Optional<ProjectFile> findByProjectIdAndParentIdAndName(Long projectId, Long parentId, String name);
+
+    /**
+     * 某父文件夹下当前最大排序序号（排除已删除），无子项时返回 null。
+     * 新建文件/文件夹此前靠拉整个同级列表在内存里求 max（每次新建都是一次 O(同级文件数)
+     * 的读取），同一文件夹下连续新建 N 个就是累计 O(N^2)——300 张截图落进同一目录时
+     * 累计读取达数万行。改成单条聚合查询后单次新建是一次索引扫描。
+     */
+    @org.springframework.data.jpa.repository.Query("SELECT MAX(pf.sortOrder) FROM ProjectFile pf WHERE pf.projectId = :projectId AND (:parentId IS NULL AND pf.parentId IS NULL OR pf.parentId = :parentId) AND pf.isDeleted = false")
+    Integer maxSortOrder(Long projectId, Long parentId);
 
     /**
      * 一批项目各自的「最近一次文件活动时间」（排除已删除），返回 [projectId, maxUpdatedAt]。
@@ -112,5 +146,39 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
             + "WHERE pf.projectId = :projectId AND pf.isDeleted = false")
     List<Object[]> findTreeSkeletonByProjectId(
             @org.springframework.data.repository.query.Param("projectId") Long projectId);
+
+    /**
+     * 按 fileType 精确取文件行（不含文件夹与软删除）。
+     *
+     * <p>只有一个用处：{@code MediaFileTypeReconciler} 修 dev-board#417 留下的存量脏行
+     * （file_type 被写成 image/video/audio 这类 mediaType 而不是扩展名）。
+     * fileType 是扩展名，正常值里不可能出现这三个词，所以按它取行既精确又不会误伤。
+     */
+    List<ProjectFile> findByFileTypeInAndIsFolderFalseAndIsDeletedFalse(List<String> fileTypes);
+
+    /**
+     * 按父节点 ID 取行（含软删除）。给 {@code OrphanParentReconciler} 用：
+     * 取 parent_id=0 的孤儿行（dev-board#457），以及取某个孤儿文件夹下的子项。
+     * 注意与上面那些 {@code (:parentId IS NULL AND ...)} 的查询不同，这里的
+     * parentId 必须是非 null 的具体值。
+     */
+    List<ProjectFile> findByParentId(Long parentId);
+
+    /**
+     * 同一项目内被多条存活文件行共用的物理路径，返回 [projectId, filePath]。
+     *
+     * <p>正常情况下路径由「父链 + 文件名」算出来，不可能撞；撞了就说明某条父链断了
+     * （dev-board#457 的 parent_id=0 孤儿就是这样：路径解析在缺失的父节点处断链、
+     * 落回项目根，与根下那条真行算出同一个路径），两条行从此指向同一份字节，
+     * 改名/删除任何一条都会影响另一条。用聚合查询挑出来，不整表 hydrate。
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT pf.projectId, pf.filePath FROM ProjectFile pf "
+            + "WHERE pf.isFolder = false AND pf.isDeleted = false AND pf.filePath IS NOT NULL "
+            + "GROUP BY pf.projectId, pf.filePath HAVING COUNT(pf.id) > 1")
+    List<Object[]> findDuplicateLiveFilePaths();
+
+    /** 上一条挑出来的路径对应的那几行（存活的文件行）。 */
+    List<ProjectFile> findByProjectIdAndFilePathAndIsDeletedFalse(Long projectId, String filePath);
 }
 

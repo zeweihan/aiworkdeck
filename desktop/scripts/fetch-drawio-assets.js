@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // fetch-drawio-assets.js — 把 draw.io 编辑器烙进前端产物，供「诉讼可视化」出的
 // .drawio 文件在应用内直接编辑（离线，不出网）。
 //
@@ -36,6 +38,11 @@ const https = require('https');
 const DRAWIO_VERSION = 'v31.1.8';
 const DEFAULT_WAR_URL =
   `https://github.com/jgraph/drawio/releases/download/${DRAWIO_VERSION}/draw.war`;
+
+// 出站 User-Agent。格式与后端 ProductIdentity.userAgent() 严格一致：
+// AIWorkDeck/<version> (<component>)。Node 脚本引不了 Java 常量，两边的一致性由
+// desktop/tests/product-identity-ua.test.js 守住。版本号单一来源是 desktop/package.json。
+const USER_AGENT = `AIWorkDeck/${require('../package.json').version} (build-script)`;
 
 const OUT_DIR = path.join(__dirname, '../../frontend/dist/drawio');
 const VERSION_FILE = path.join(OUT_DIR, '.drawio-version');
@@ -120,7 +127,7 @@ function download(url, redirects = 0) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('http:') ? http : https;
     mod
-      .get(url, { headers: { 'User-Agent': 'aiworkdeck-build' } }, (res) => {
+      .get(url, { headers: { 'User-Agent': USER_AGENT } }, (res) => {
         const sc = res.statusCode || 0;
         if (sc >= 300 && sc < 400 && res.headers.location && redirects < 5) {
           res.resume();
@@ -259,6 +266,17 @@ async function main() {
     throw new Error(
       '上游布局变了，这些必需文件没解出来：' + missing.join(', ') +
       '\n（升级 draw.io 后要重新核对 DIR_PREFIXES / EXACT_FILES / PATTERNS）'
+    );
+  }
+  // DrawioEditor.vue 在挂 iframe 之前会 GET 这个 index.html 并认 geEditor 这个标记，
+  // 用来把「draw.io 真的在这个 origin 上」与「Web 部署的 SPA 兜底对任何路径都回 200 +
+  // 本应用首页」区分开。上游哪天改了 body class，这里先红，好过运行期悄悄退回
+  // 「当前环境没有内置图形编辑器」。
+  const indexHtml = fs.readFileSync(path.join(OUT_DIR, 'index.html'), 'utf8');
+  if (!indexHtml.includes('geEditor')) {
+    throw new Error(
+      'index.html 里没有 geEditor 标记：渲染层的编辑器可达性探测认的就是它' +
+      '（DrawioEditor.vue probeEditor），上游改了标记就要同步改那一处'
     );
   }
   const size = dirSize(OUT_DIR);

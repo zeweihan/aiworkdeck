@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.context;
 
 import com.checkba.config.AiContextProperties;
@@ -32,7 +35,8 @@ class FileContextLoaderTest {
         extractor = mock(FileContentExtractorService.class);
         props = new AiContextProperties();
         loader = new FileContextLoader(projectFileService, extractor, props,
-                new com.checkba.storage.ProjectStorageResolver(new com.checkba.storage.StorageProperties(), null));
+                new com.checkba.storage.ProjectStorageResolver(new com.checkba.storage.StorageProperties(), null),
+                mock(com.checkba.service.DocumentTextService.class));
     }
 
     private static ProjectFile file(Long id, String name, boolean isFolder) {

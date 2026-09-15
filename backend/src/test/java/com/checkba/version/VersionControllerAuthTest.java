@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
 import com.checkba.controller.AuthController;
@@ -39,12 +42,28 @@ class VersionControllerAuthTest {
     @Mock
     private ProjectFileService projectFileService;
     @Mock
-    private ProjectTreeManifestService manifestService;
-    @Mock
     private com.checkba.service.telemetry.TelemetryService telemetryService;
+    @Mock
+    private VersionLifecycleService lifecycleService;
+
+    /**
+     * 三方合并的两个协作者走的是字段注入（见 VersionController 的注释），@InjectMocks
+     * 只做构造器注入，所以在这里手工补上——不补的话 merge/* 那三行的
+     * verifyNeverCalled 会落在一个永远是 null 的对象上，变成空断言。
+     */
+    @Mock
+    private com.checkba.version.merge.MergeAnalysisService mergeAnalysisService;
+    @Mock
+    private com.checkba.version.merge.PendingMergeStore pendingMergeStore;
 
     @InjectMocks
     private VersionController controller;
+
+    @org.junit.jupiter.api.BeforeEach
+    void wireMergeServices() {
+        controller.setMergeAnalysisServiceForTest(mergeAnalysisService);
+        controller.setPendingMergeStoreForTest(pendingMergeStore);
+    }
 
     @Test
     void clientRoleCannotSeeTimeline() {
@@ -152,7 +171,12 @@ class VersionControllerAuthTest {
     private enum Endpoint {
         STATUS, ENABLE, PREPARE_REMOTE, CHANGES, SESSION_END, SESSION_RESOLVE_END, SESSION_ABORT_END,
         SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE,
-        DRAFT_CREATE, DRAFT_LIST, DRAFT_SWITCH, SWITCH_MAINLINE, DRAFT_ADOPT, DRAFT_RESOLVE, DRAFT_ABORT_ADOPT, DRAFT_ABANDON
+        DRAFT_CREATE, DRAFT_LIST, DRAFT_SWITCH, SWITCH_MAINLINE, DRAFT_ADOPT, DRAFT_RESOLVE, DRAFT_ABORT_ADOPT, DRAFT_ABANDON,
+        DISABLE,
+        // 三方合并（spec 2026-09-14 §4.3–§4.5）：读一份文件的逐处分析 + 两个落盘端点。
+        // 两个落盘端点把字节写进项目工作区，随后会被 git add . 收进律师的历史，
+        // 所以它们必须和别的写端点一样，在动手之前就把 READ_ONLY/CLIENT/非成员挡住。
+        MERGE_ANALYSIS, MERGE_RESOLVE_FILE, MERGE_RESOLVE_STRUCTURED
     }
 
     /**
@@ -164,7 +188,8 @@ class VersionControllerAuthTest {
             Endpoint.SESSION_ABORT_END, Endpoint.SESSION_DISCARD, Endpoint.SESSION_RESUME,
             Endpoint.REVERT, Endpoint.MILESTONE, Endpoint.DRAFT_CREATE, Endpoint.DRAFT_SWITCH,
             Endpoint.SWITCH_MAINLINE, Endpoint.DRAFT_ADOPT, Endpoint.DRAFT_RESOLVE,
-            Endpoint.DRAFT_ABORT_ADOPT, Endpoint.DRAFT_ABANDON);
+            Endpoint.DRAFT_ABORT_ADOPT, Endpoint.DRAFT_ABANDON, Endpoint.DISABLE,
+            Endpoint.MERGE_RESOLVE_FILE, Endpoint.MERGE_RESOLVE_STRUCTURED);
 
     static java.util.Set<Endpoint> writeEndpoints() {
         return WRITE_ENDPOINTS;
@@ -194,6 +219,13 @@ class VersionControllerAuthTest {
             case DRAFT_RESOLVE -> controller.resolveAdopt(PROJECT_ID, 3L, Map.of("resolutions", Map.of("a.txt", "MAIN")), sessionId);
             case DRAFT_ABORT_ADOPT -> controller.abortAdopt(PROJECT_ID, 3L, sessionId);
             case DRAFT_ABANDON -> controller.abandonDraft(PROJECT_ID, 3L, sessionId);
+            case DISABLE -> controller.disable(PROJECT_ID, sessionId);
+            case MERGE_ANALYSIS -> controller.mergeAnalysis(PROJECT_ID, "a.docx", sessionId);
+            case MERGE_RESOLVE_FILE -> controller.mergeResolveFile(PROJECT_ID, "a.docx", "manual", "[]", null,
+                    new org.springframework.mock.web.MockMultipartFile("file", "a.docx", null, new byte[]{1}),
+                    sessionId);
+            case MERGE_RESOLVE_STRUCTURED -> controller.mergeResolveStructured(PROJECT_ID,
+                    Map.of("path", "a.xlsx", "decisions", java.util.List.of()), sessionId);
         }
     }
 
@@ -227,6 +259,10 @@ class VersionControllerAuthTest {
             case DRAFT_ABORT_ADOPT -> verify(sessionService, never()).abortAdopt(anyLong());
             case DRAFT_ABANDON -> verify(sessionService, never())
                     .abandonDraft(anyLong(), anyLong(), any(), anyString());
+            case DISABLE -> verify(lifecycleService, never()).disableVersionRecording(anyLong());
+            case MERGE_ANALYSIS -> verify(mergeAnalysisService, never()).analysisFor(anyLong(), anyString());
+            case MERGE_RESOLVE_FILE, MERGE_RESOLVE_STRUCTURED ->
+                    verify(pendingMergeStore, never()).put(anyLong(), any());
         }
     }
 
@@ -303,6 +339,41 @@ class VersionControllerAuthTest {
 
             org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> invoke(endpoint, "sess"));
             verify(projectMemberService, never()).hasWritePermission(anyLong(), anyLong());
+        }
+    }
+
+    // ---- 关闭版本记录只对项目负责人/管理员开放（dev-board#438）-----------------
+
+    /**
+     * 有写权限但不是负责人/管理员的成员（PARTICIPANT）也不能关闭版本记录：
+     * 那是把整个项目的留底一次性删掉且不可撤销，比任何一次写操作都重。
+     */
+    @Test
+    void writeMemberWhoIsNotTheLeadCannotDisableVersionRecording() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            doThrow(new IllegalArgumentException("权限不足：只有管理员可以执行此操作"))
+                    .when(projectMemberService).checkAdminPermission(PROJECT_ID, USER_ID);
+
+            assertThrows(IllegalArgumentException.class, () -> controller.disable(PROJECT_ID, "sess"));
+            verify(lifecycleService, never()).disableVersionRecording(anyLong());
+        }
+    }
+
+    @Test
+    void projectLeadCanDisableVersionRecording() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
+
+            controller.disable(PROJECT_ID, "sess");
+
+            verify(lifecycleService).disableVersionRecording(PROJECT_ID);
         }
     }
 

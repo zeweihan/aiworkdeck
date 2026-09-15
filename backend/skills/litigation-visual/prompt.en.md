@@ -20,7 +20,30 @@ pipeline divides the work:
 Under this division, output quality depends on whether the JSON is right - not on how
 clever you are with pixels.
 
-## Five steps
+## Pick the route first: timeline master, or semantic map
+
+This skill contains two rendering routes with different entry points - do not mix them:
+
+- **The user wants a case timeline built FROM raw materials** (judgment, complaint,
+  defence, contracts, evidence lists, statements, chat logs; "sort out the chronology",
+  "turn these materials into a timeline") -> use the **timeline-master pipeline**:
+  `litigation_timeline_start` (read materials) -> `litigation_timeline_step` (advance
+  stage by stage, with up to five rounds of user choices in between) ->
+  `litigation_timeline_render`. Each tool's return text tells you the next move -
+  follow it. Its fidelity check is stricter than you are: every card text must be a
+  pure-deletion subsequence of the source sentence; changing one word gets blocked
+  before drawing. Note the pipeline's own prompts and outputs are in Chinese - relay
+  the choice lists to the user in the conversation language.
+- **Everything else** - redrawing an existing figure, flowcharts, party-relationship
+  maps, hierarchy trees, A/B tables, or facts the user has already structured -> use
+  the **five-step semantic-map route** below (`litigation_checkpoint` +
+  `litigation_render`).
+- When unsure: only scattered materials in hand and the ask is "chronology/timeline" ->
+  timeline master; an existing figure or a non-timeline figure -> semantic map. Never
+  stage timeline intermediates (verdicts/parts/skeleton/items) through write_file -
+  they are submitted via tool parameters only.
+
+## Five steps (semantic-map route)
 
 **1. Read, decompose, understand.** This step decides success or failure. The source may
 be a judgment, evidence exhibits, a photographed hand sketch, a screenshot, someone
@@ -40,14 +63,26 @@ else's overdecorated chart, or a plain narrative of the facts.
 - When there is a lot of material, read the folder with `extract_file_text` /
   `search_project_files` before starting.
 
-**2. Write `semantic-map.json`.** If the fields are unfamiliar, first call
+**2. Write the semantic map (JSON).** If the fields are unfamiliar, first call
 `litigation_reference('schema')`; if unsure how to decompose the source, first call
 `litigation_reference('extraction')`. These documents are long and are not preloaded -
 **read them on demand**.
 
+"`semantic-map.json`" is the name of that JSON, not a file you have to create. **It is
+passed INLINE as a tool argument all the way through** - it is the first argument of both
+`litigation_checkpoint` and `litigation_render`. **Do NOT save it with `write_file` and do
+NOT read it back with `read_file`**: the round trip achieves nothing except losing track of
+it in the next step (on a real run `read_file` came back "File does not exist"). Once the
+render succeeds the engine stores the map next to the figure as `<name>.map.json` - that is
+when it belongs on disk.
+
 **3. A confirmation round is MANDATORY before rendering.** Call
-`litigation_checkpoint`, present the text it returns to the user **verbatim**, then wait
-for the reply.
+`litigation_checkpoint` (same JSON as the argument), present **the question block above the
+separator** to the user **verbatim** (everything below the separator is execution guidance
+for you - never relay it), then stop and wait for the reply.
+
+**Call this tool once per round.** The questions are generated deterministically; calling
+it again before the user has answered returns the same text and only burns steps.
 
 Do not compose those three questions yourself. They are generated deterministically by
 the script - their consequences (no unauthorized crimson accent; an unconfirmed figure
@@ -67,8 +102,12 @@ that is your legal judgment, not the user's, and it must not slip through unrema
 `"none"` (the user asked for no accent). If the field is missing or holds anything else,
 the engine paints no red at all.
 
-**4. Render.** Call `litigation_render` with the map, the figure name, and the
-projectId. By default one run delivers all output formats. Visual modes: `奇川风`
+**4. Render.** Once the answers are in and the `checkpoint` fields are filled, **you MUST
+call `litigation_render` once**, passing the same map JSON, the figure name, and the
+projectId. This is the step that actually puts the figure in the project - updating the map
+without calling it leaves the user with nothing (this happened on a real run; the user had
+to ask "where is the figure?"). Once it succeeds, do not call it a second time.
+By default one run delivers all output formats. Visual modes: `奇川风`
 ("Qichuan", the default - serif titles, grayscale, a single crimson accent; suitable for
 court submissions, client delivery, and internal case work), `歸藏风` ("Guicang" -
 Klein blue, sans-serif; for outreach and teaching materials), `白描` ("Baimiao" - pure
@@ -82,8 +121,9 @@ into the court file.
 
 When the user wants the figure inside the document being drafted, insert the **`.png`**
 with `doc_insert_image`. It accepts bitmaps only and **rejects `.svg`** - passing the
-svg will fail. The `.svg` is the master for the editor and for print; the `.drawio` is
-the source file for further editing (draw.io or compatible editors).
+svg will fail. The `.drawio` is the source file for further editing and is what the app
+opens automatically after a render (draw.io is embedded); the `.svg` is the master for
+print and for insertion.
 
 ## Choosing a layout
 
@@ -128,7 +168,7 @@ For choosing between the two relation layouts, see
 | Use blue, gray-blue, or any second accent color | Grayscale base + the one crimson `#991B1B` (at most two spots) |
 | Use diamonds for decision nodes | Use rounded hexagons (long labels do not fit in diamonds) |
 | Stuff argument, judicial reasoning, or "the court held" passages into nodes | Nodes carry facts and conclusions only; reasoning is not a node |
-| Tweak frozen values (colors, corner radii, font sizes, spacing) for looks | Do not. If they truly must change, change the spec files in `litviz/engine/` first |
+| Tweak frozen values (colors, corner radii, font sizes, spacing) for looks | Do not. If they truly must change, change the spec files in `litviz/skills/mqc-litigation-visual-redraw/` first |
 | Reorder events, merge or drop entries, or invent dates for looks | Verbatim, in time order; anything uncertain goes into `provenance.uncertainties` |
 | Invent new figure types, add legends, icons, or themes | These seven layouts and nothing else |
 | Draw the audit summary, counsel's name, dates, or slogans onto the figure | The title carries a neutral figure name only; everything else goes in the reply |
@@ -143,6 +183,7 @@ silently substitute a different layout**.
 
 ---
 
-**One last time, because this is the rule most often ignored**: do not hand-write SVG,
-do not alter one word of the source, and do not skip `litigation_checkpoint` before
-rendering.
+**One last time, because these are the rules most often ignored**: do not hand-write SVG,
+do not alter one word of the source, do not skip `litigation_checkpoint` before rendering,
+do not shuttle the semantic map through `write_file`/`read_file`, and after the user
+confirms **always call `litigation_render`** - without that step there is no figure.

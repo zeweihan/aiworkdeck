@@ -1,84 +1,92 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <div class="settings">
     <section class="card">
-      <h2>连接</h2>
+      <h2>{{ t('connectionTitle') }}</h2>
 
       <p v-if="token.trim()" class="summary">
-        已连接 {{ displayServerUrl }}
+        {{ t('connectedTo', { url: displayServerUrl }) }}
       </p>
 
       <p class="hint">
-        用 AI WorkDeck 账户登录即可连接，与桌面版是同一个账户。
+        {{ t('loginHint') }}
       </p>
 
       <!-- 手机号是大陆站主路径；国际站与存量账号走邮箱口令 -->
       <div class="tabs">
-        <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">手机号</button>
-        <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">邮箱</button>
+        <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">{{ t('tabPhone') }}</button>
+        <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">{{ t('tabEmail') }}</button>
       </div>
 
       <template v-if="mode === 'phone'">
         <label class="field">
-          <span class="label">手机号</span>
-          <input v-model="phone" type="tel" placeholder="11 位手机号" spellcheck="false" autocomplete="tel" />
+          <span class="label">{{ t('phoneLabel') }}</span>
+          <input v-model="phone" type="tel" :placeholder="t('phonePlaceholder')" spellcheck="false" autocomplete="tel" />
         </label>
 
         <!-- 不用 label 包住整行：label 的激活行为会把点在按钮上的一次点击转发给里面的 input -->
         <div class="field">
-          <span class="label">验证码</span>
+          <span class="label">{{ t('smsCodeLabel') }}</span>
           <div class="code-row">
-            <input v-model="smsCode" type="text" placeholder="6 位验证码" spellcheck="false" autocomplete="one-time-code" />
+            <input v-model="smsCode" type="text" :placeholder="t('smsCodePlaceholder')" spellcheck="false" autocomplete="one-time-code" />
             <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !phone.trim()" @click="sendCode">
               {{ codeBtnLabel }}
             </button>
           </div>
+          <!--
+            人机验证控件的落点。阿里云是 popup 模式，平时不占位；`-trigger` 是 SDK 要求的
+            触发元素，由 getToken() 代点，用户看不到它，所以藏起来但**必须留在文档里**
+            （display:none 的节点仍可被 click()，移出文档就取不到 token 了）。
+          -->
+          <div id="login-captcha" class="captcha-holder"></div>
+          <button id="login-captcha-trigger" type="button" class="captcha-trigger" aria-hidden="true" tabindex="-1"></button>
         </div>
       </template>
 
       <template v-else>
         <label class="field">
-          <span class="label">邮箱</span>
-          <input v-model="account" type="email" placeholder="注册时使用的邮箱" spellcheck="false" autocomplete="username" />
+          <span class="label">{{ t('emailLabel') }}</span>
+          <input v-model="account" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="username" />
         </label>
 
         <label class="field">
-          <span class="label">口令</span>
-          <input v-model="password" type="password" placeholder="账户口令" spellcheck="false" autocomplete="current-password" />
+          <span class="label">{{ t('passwordLabel') }}</span>
+          <input v-model="password" type="password" :placeholder="t('passwordPlaceholder')" spellcheck="false" autocomplete="current-password" />
         </label>
       </template>
 
       <div class="actions">
         <button class="btn primary" :disabled="connecting" @click="connectWithAccount">
-          {{ connecting ? '连接中...' : '登录并连接' }}
+          {{ connecting ? t('connecting') : t('loginAndConnect') }}
         </button>
       </div>
 
       <p v-if="loginStatus" class="status" :class="loginStatusKind">{{ loginStatus }}</p>
 
       <details class="advanced">
-        <summary>高级设置</summary>
+        <summary>{{ t('advancedSettings') }}</summary>
 
         <p class="hint">
-          私有部署与团队服务器场景：可填律所自建后端地址，或同机桌面版的 http://127.0.0.1:5269，
-          再用官网 API Key 或手工粘贴的设备令牌连接。
+          {{ t('advancedHint') }}
         </p>
 
         <label class="field">
-          <span class="label">后端地址</span>
+          <span class="label">{{ t('serverUrlLabel') }}</span>
           <input
             v-model="serverUrl"
             type="text"
-            placeholder="例如 https://ai.yourfirm.com 或 http://127.0.0.1:5269"
+            :placeholder="t('serverUrlPlaceholder')"
             spellcheck="false"
           />
         </label>
 
         <label class="field">
-          <span class="label">官网 API Key（awdk_ 开头）</span>
+          <span class="label">{{ t('awdkKeyLabel') }}</span>
           <input
             v-model="awdkKey"
             type="password"
-            placeholder="粘贴 awdk_ 开头的 API Key"
+            :placeholder="t('awdkKeyPlaceholder')"
             spellcheck="false"
             autocomplete="off"
           />
@@ -86,27 +94,27 @@
 
         <div class="actions">
           <button class="btn secondary" :disabled="connecting" @click="connectWithKey">
-            {{ connecting ? '连接中...' : '用 Key 连接' }}
+            {{ connecting ? t('connecting') : t('connectWithKeyButton') }}
           </button>
         </div>
 
         <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
 
         <label class="field">
-          <span class="label">设备令牌（awdt_ 开头）</span>
+          <span class="label">{{ t('deviceTokenLabel') }}</span>
           <textarea
             v-model="token"
             rows="3"
-            placeholder="粘贴 awdt_ 设备令牌。可在 AI WorkDeck 桌面版个人中心的「账号安全」中生成。"
+            :placeholder="t('deviceTokenPlaceholder')"
             spellcheck="false"
           ></textarea>
         </label>
 
         <div class="actions">
           <button class="btn secondary" :disabled="testing" @click="testConnection">
-            {{ testing ? '测试中...' : '测试连接' }}
+            {{ testing ? t('testing') : t('testConnectionButton') }}
           </button>
-          <button class="btn primary" @click="save">保存</button>
+          <button class="btn primary" @click="save">{{ t('save') }}</button>
         </div>
 
         <p v-if="status" class="status" :class="statusKind">{{ status }}</p>
@@ -117,14 +125,17 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   fetchMyProjects,
+  getAccountLoginCaptchaConfig,
   postAccountLogin,
   postAccountLoginSendCode,
   postAwdkLogin
 } from '../lib/api.js'
+import { setupCaptcha } from '../lib/captcha.js'
 import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
+import { t } from '../lib/i18n.js'
 
 const props = defineProps({
   initialServerUrl: { type: String, default: '' },
@@ -155,16 +166,41 @@ const loginStatusKind = ref('ok')
 
 let cooldownTimer = null
 
+// 人机验证控件。null = 官网未启用（或配置拿不到），此时跳过控件直接发码。
+let captcha = null
+let captchaReady = null
+
 /** 当前连接状态摘要：只读本地设置，不发请求 */
-const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || '（未设置地址）')
+const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || t('noAddressSet'))
 
 const codeBtnLabel = computed(() => {
-  if (cooldown.value > 0) return `${cooldown.value} 秒后重发`
-  return sendingCode.value ? '发送中...' : '获取验证码'
+  if (cooldown.value > 0) return t('resendCountdown', { seconds: cooldown.value })
+  return sendingCode.value ? t('sending') : t('getCode')
 })
 
-// 任务窗格切视图会卸载本组件，倒计时的定时器必须跟着停，否则回来时还在跑
-onBeforeUnmount(stopCooldown)
+// 任务窗格切视图会卸载本组件：倒计时的定时器必须跟着停（否则回来时还在跑），
+// 验证码控件也要拆掉（否则 SDK 还攥着已经不在文档里的节点）。
+onBeforeUnmount(() => {
+  stopCooldown()
+  if (captcha && captcha.destroy) captcha.destroy()
+  captcha = null
+})
+
+// 装控件要下载第三方脚本，放在挂载时预热；失败不打扰用户——真出问题会在发码那步
+// 由官网给出可读的报错（「请先完成安全验证后再试」）。
+onMounted(() => { captchaReady = ensureCaptcha() })
+
+async function ensureCaptcha() {
+  if (captcha) return captcha
+  try {
+    const config = await getAccountLoginCaptchaConfig({ serverUrl: serverUrl.value })
+    captcha = await setupCaptcha(config, 'login-captcha')
+  } catch (e) {
+    console.warn('[settings] 人机验证控件装配失败:', e)
+    captcha = null
+  }
+  return captcha
+}
 
 function stopCooldown() {
   if (cooldownTimer) {
@@ -191,18 +227,30 @@ async function sendCode() {
   loginStatus.value = ''
   if (!serverUrl.value.trim()) {
     loginStatusKind.value = 'error'
-    loginStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
+    loginStatus.value = t('serverUrlEmptyHint')
     return
   }
   sendingCode.value = true
   try {
-    await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value)
+    // 先过人机验证再发码：官网把 verifyCaptcha 排在发短信之前，不带 token 就是 403。
+    // 官网未启用时 ensureCaptcha() 给 null，token 留空，行为与从前一致。
+    const widget = await (captchaReady || ensureCaptcha())
+    let captchaToken = ''
+    if (widget) {
+      captchaToken = await widget.getToken()
+      if (!captchaToken) {
+        loginStatusKind.value = 'error'
+        loginStatus.value = t('captchaIncomplete')
+        return
+      }
+    }
+    await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value, captchaToken)
     loginStatusKind.value = 'ok'
-    loginStatus.value = '验证码已发送，请查收短信'
+    loginStatus.value = t('codeSent')
     startCooldown()
   } catch (e) {
     loginStatusKind.value = 'error'
-    loginStatus.value = e.message || '验证码发送失败'
+    loginStatus.value = e.message || t('codeSendFailed')
   } finally {
     sendingCode.value = false
   }
@@ -216,7 +264,7 @@ async function connectWithAccount() {
   loginStatus.value = ''
   if (!serverUrl.value.trim()) {
     loginStatusKind.value = 'error'
-    loginStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
+    loginStatus.value = t('serverUrlEmptyHint')
     return
   }
   const credentials = mode.value === 'phone'
@@ -227,7 +275,7 @@ async function connectWithAccount() {
     : credentials.account && credentials.password
   if (!filled) {
     loginStatusKind.value = 'error'
-    loginStatus.value = mode.value === 'phone' ? '请填写手机号与验证码' : '请填写邮箱与口令'
+    loginStatus.value = mode.value === 'phone' ? t('fillPhoneAndCode') : t('fillEmailAndPassword')
     return
   }
   connecting.value = true
@@ -237,10 +285,10 @@ async function connectWithAccount() {
     password.value = ''
     applyToken(awdtToken)
     loginStatusKind.value = 'ok'
-    loginStatus.value = '连接成功'
+    loginStatus.value = t('connectSuccess')
   } catch (e) {
     loginStatusKind.value = 'error'
-    loginStatus.value = e.message || '账户连接失败'
+    loginStatus.value = e.message || t('accountConnectFailed')
   } finally {
     connecting.value = false
   }
@@ -254,13 +302,13 @@ async function connectWithKey() {
   keyStatus.value = ''
   if (!serverUrl.value.trim()) {
     keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：后端地址为空'
+    keyStatus.value = t('serverUrlEmptySimple')
     return
   }
   const key = awdkKey.value.trim()
   if (!key) {
     keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：请粘贴 awdk_ 开头的 API Key'
+    keyStatus.value = t('awdkKeyEmpty')
     return
   }
   connecting.value = true
@@ -269,10 +317,10 @@ async function connectWithKey() {
     awdkKey.value = ''
     applyToken(awdtToken)
     keyStatusKind.value = 'ok'
-    keyStatus.value = '连接成功：已换取设备令牌'
+    keyStatus.value = t('connectSuccessWithToken')
   } catch (e) {
     keyStatusKind.value = 'error'
-    keyStatus.value = e.message || '账户直连失败'
+    keyStatus.value = e.message || t('directConnectFailed')
   } finally {
     connecting.value = false
   }
@@ -289,17 +337,17 @@ async function testConnection() {
   status.value = ''
   if (!serverUrl.value.trim() || !token.value.trim()) {
     statusKind.value = 'error'
-    status.value = '连接未就绪：请填写后端地址与设备令牌'
+    status.value = t('serverAndTokenEmpty')
     return
   }
   testing.value = true
   try {
     const projects = await fetchMyProjects({ serverUrl: serverUrl.value, token: token.value.trim() })
     statusKind.value = 'ok'
-    status.value = `连接成功：可访问 ${projects.length} 个项目`
+    status.value = t('connectSuccessWithProjects', { count: projects.length })
   } catch (e) {
     statusKind.value = 'error'
-    status.value = e.message || '连接失败'
+    status.value = e.message || t('connectFailed')
   } finally {
     testing.value = false
   }
@@ -308,7 +356,7 @@ async function testConnection() {
 function save() {
   if (!serverUrl.value.trim() || !token.value.trim()) {
     statusKind.value = 'error'
-    status.value = '连接未就绪：请填写后端地址与设备令牌'
+    status.value = t('serverAndTokenEmpty')
     return
   }
   saveSettings({ serverUrl: serverUrl.value, token: token.value })
@@ -325,7 +373,8 @@ function save() {
 .card {
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);
-  border-radius: 6px;
+  border-radius: var(--awd-radius-md);
+  box-shadow: var(--awd-shadow-soft);
   padding: 14px;
 }
 
@@ -368,6 +417,30 @@ function save() {
 .code-btn {
   flex: none;
   white-space: nowrap;
+}
+
+/*
+  阿里云是 popup 模式，控件本身不占位，这个 div 平时是空的（留 margin 只为
+  turnstile 那条分支——它会把控件渲染进来，需要一点与上方输入框的间距）。
+  **不要给它 display:none**：turnstile 渲染进不可见容器会拿不到尺寸而不出现。
+*/
+.captcha-holder:not(:empty) {
+  margin-top: 8px;
+}
+
+/*
+  SDK 要求的触发元素，由 getToken() 代点，用户不该看见也不该 Tab 到。
+  用 position:absolute + 0 尺寸而不是 display:none——两者都能被 click()，
+  但前者对个别 WebView 更保险（隐藏元素的合成点击在 WKWebView 上有过不触发的先例）。
+*/
+.captcha-trigger {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .advanced {
@@ -418,14 +491,16 @@ input, textarea {
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--awd-border);
-  border-radius: 4px;
+  border-radius: var(--awd-radius-sm);
   background: var(--awd-surface);
   resize: vertical;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 input:focus, textarea:focus {
   outline: none;
-  border-color: var(--awd-primary);
+  border-color: var(--awd-accent);
+  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
 }
 
 .actions {
@@ -435,9 +510,12 @@ input:focus, textarea:focus {
 
 .btn {
   padding: 6px 14px;
-  border-radius: 4px;
+  border-radius: var(--awd-radius-sm);
   border: 1px solid var(--awd-border);
+  transition: background 0.2s ease, transform 0.1s ease;
 }
+
+.btn:active { transform: translateY(1px); }
 
 .btn.primary {
   background: var(--awd-primary);
@@ -459,7 +537,7 @@ input:focus, textarea:focus {
   font-size: 12px;
 }
 
-.status.ok { color: #1d7a3e; }
+.status.ok { color: var(--awd-accent); }
 .status.error { color: var(--awd-danger); }
 .status.warn { color: var(--awd-text-secondary); }
 </style>

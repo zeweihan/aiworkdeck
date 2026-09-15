@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.skill;
 
 import com.checkba.service.ai.PluginService;
@@ -119,6 +122,8 @@ class BuiltinSkillsTest {
                 "出图三件套必须都在白名单里，缺一个模型就调不到：" + s.getAllowedTools());
         assertTrue(s.getAllowedTools().contains("extract_file_text"),
                 "抽取阶段要通读文件夹里的材料，缺了它就只能凭对话内容画");
+        assertEquals("litigation-visual", s.getRequiresPack(),
+                "出图资源（litviz/graphviz/drawio）走原生资源包分发，缺了这行广场就不会去下载");
         assertFalse(s.getPromptTemplate().isBlank(), "prompt.md 应有内容");
     }
 
@@ -133,7 +138,9 @@ class BuiltinSkillsTest {
         assertTrue(s.getAllowedTools().containsAll(
                         List.of("meeting_get_transcript", "meeting_list_recordings", "write_docx")),
                 "读稿两件套与 write_docx 必须都在白名单里：" + s.getAllowedTools());
-        assertFalse(s.isEnabledByDefault(), "默认不安装（广场装启停），别悄悄改成默认开");
+        assertTrue(s.isEnabledByDefault(),
+                "「语音」合并插件成员默认启用（dev-board#66：与 text-to-speech 启停一体，"
+                        + "SkillRegistry 收敛保证状态一致），别悄悄改回默认关");
         assertFalse(s.getPromptTemplate().isBlank(), "prompt.md 应有内容");
         assertTrue(s.getPromptTemplate().contains("meeting_get_transcript"),
                 "prompt 必须交代先读转写稿再写纪要");

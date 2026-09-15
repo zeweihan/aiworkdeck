@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.account;
 
 import com.checkba.model.entity.AccountBinding;
@@ -88,14 +91,32 @@ public class AwdkLoginService {
         this.platformAiKeyService = platformAiKeyService;
     }
 
-    /** 桥接结果：awdt_ 设备令牌 + 映射到的 server 用户。 */
-    public record BridgeSession(String token, Long userId, String username) {}
+    /**
+     * 桥接结果：awdt_ 设备令牌 + 映射到的 server 用户。
+     *
+     * <p>{@code tokenId} 是服务端设备令牌行的 id：调用方保存这条连接时一并存下来，
+     * 断开时才撤得掉远端那枚长期凭据（桌面端「退出这个案件库」走的正是这条路）。
+     * {@code displayName} 是这个账户在服务端的展示名，供成员列表与合并提交署名用。
+     */
+    public record BridgeSession(String token, Long userId, String username,
+                                 String displayName, Long tokenId) {}
 
     /**
      * @throws IllegalArgumentException 开关关闭（业务错误，非鉴权错误）
      * @throws AccountException UNAUTHORIZED（Key 无效/格式错）/ NETWORK / MALFORMED（缺 accountId 等）
      */
     public synchronized BridgeSession login(String rawKey) {
+        return login(rawKey, null);
+    }
+
+    /**
+     * 同上，另带一个设备名（{@code deviceName}）——桌面端连官方案件库时传本机主机名，
+     * 好让协作事件行分得清「你在另一台电脑交了稿」是哪一台。空则仍是「账户桥接」。
+     *
+     * @throws IllegalArgumentException 开关关闭（业务错误，非鉴权错误）
+     * @throws AccountException UNAUTHORIZED（Key 无效/格式错）/ NETWORK / MALFORMED（缺 accountId 等）
+     */
+    public synchronized BridgeSession login(String rawKey, String deviceName) {
         requireEnabled();
         String key = rawKey == null ? "" : rawKey.trim();
         if (key.isEmpty() || !key.startsWith(KEY_PREFIX)) {
@@ -112,13 +133,44 @@ public class AwdkLoginService {
         }
 
         User user = resolveUser(accountId, str(me.get("username")), str(me.get("displayName")));
+        // 手机端账号归一（dev-board#30）：官网账户带手机号时认领到桥接用户名下，
+        // 此后手机端 sms-login 解析到同一账号。方法自吞异常，不影响桥接。
+        userService.claimPhoneFromWebsite(user, str(me.get("phone")));
         // per-user 平台 AI key：此刻是 server 唯一合法持有该用户 awdk_ 的时机，顺手换一把
         // 属于他自己的 OpenRouter runtime key 存起来；awdk_ 本身用完即弃，仍然不落库。
         // 取不到（最常见是还没分配额度）绝不影响桥接——插件的绝大多数能力与 AI 额度无关。
         platformAiKeyService.tryProvision(user.getId(), key);
-        DeviceTokenService.IssuedToken issued =
-                deviceTokenService.issue(user.getId(), LangText.of("账户桥接", "Account bridging"));
-        return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername());
+        String device = deviceName == null || deviceName.isBlank()
+                ? LangText.of("账户桥接", "Account bridging") : deviceName.trim();
+        DeviceTokenService.IssuedToken issued = deviceTokenService.issue(user.getId(), device);
+        return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername(),
+                user.getDisplayName(), issued.id());
+    }
+
+    /**
+     * 按官网名录查到的账户预建（或复用）桥接用户——「加同事」用（spec 2026-09-10 §5）。
+     *
+     * <p>与 {@link #login} 走的是同一条建号/映射链路，落到**同一行** {@code account_binding}：
+     * 对方日后自己桥接时命中的就是这行，不会凭空多出第二个 server 用户。
+     *
+     * <p>刻意<b>不</b>签发令牌、<b>不</b>取平台 AI key：这里手上没有对方的 awdk_（也不该有），
+     * 只是替他把身份行准备好，好让他被加进案卷。
+     *
+     * @throws IllegalArgumentException 桥接开关关闭
+     * @throws AccountException MALFORMED（accountId 为空）
+     */
+    public synchronized User ensureBridgedUser(String accountId, String username,
+                                               String displayName, String phone) {
+        requireEnabled();
+        if (accountId == null || accountId.isBlank()) {
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("账户信息缺少 accountId 字段，无法在本服务器建立协作身份",
+                            "The account information is missing the accountId field; this server cannot create a collaboration identity"));
+        }
+        User user = resolveUser(accountId, username, displayName);
+        // 与桥接登录同款：官网账户带手机号时认领到这行名下，此后对方自己登录解析到同一账号。
+        userService.claimPhoneFromWebsite(user, phone);
+        return user;
     }
 
     // ==================== 账户登录（手机号/邮箱直登，用户不必人肉搬运 Key） ====================
@@ -185,6 +237,9 @@ public class AwdkLoginService {
      */
     private BridgeSession exchangeAndBridge(Map<String, Object> credentials) {
         requireEnabled();
+        // 这条服务本身就是「Office 插件」的桥接口，设备名固定为插件口径（不像桌面端那样按主机名取）；
+        // 按 baseUrl 分站，因为国际站账户页文案是英文。
+        credentials.put("deviceName", baseUrl.contains("workdeck.ai") ? "Office Add-in" : "Office 插件");
         Map<String, Object> payload =
                 AccountLoginExchange.post(transport, objectMapper, baseUrl, "/api/auth/exchange-key", credentials);
         String key = str(payload.get("key"));
@@ -242,6 +297,10 @@ public class AwdkLoginService {
             AccountBinding binding = existing.get();
             try {
                 User user = userService.getUserById(binding.getUserId());
+                // 展示名以官网为唯一权威源（spec 2026-09-10 §4）：桥接那一刻抄一份、
+                // 之后永不刷新，会让手机号注册的同事在参与人列表与时间线里一直挂着
+                // 官网早就改掉的打码手机号。username 不动——它是内部标识。
+                user = userService.refreshDisplayNameFromWebsite(user, displayName);
                 binding.setLastLoginAt(LocalDateTime.now());
                 bindingRepository.save(binding);
                 return user;

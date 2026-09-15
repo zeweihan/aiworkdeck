@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.context;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -113,6 +116,52 @@ class LegalInfoProtectorTest {
         // 验证压缩后仍包含关键信息
         assertTrue(result.getContent().contains("《公司法》") || 
                    result.getProtectedSegments().stream().anyMatch(s -> s.getContent().contains("《公司法》")));
+    }
+
+    /**
+     * 重叠片段合并时 end 取了并集、content 却留着第一个片段的原文，于是
+     * [content 长度, end) 那一截在 safeCompress 里被静默跳过。
+     * 「人民币500万元」正好同时命中「人民币+数字」和「数字+万元」两条模式，
+     * 合并后剩下「人民币500」——一份法律文书里的金额从五百万变成五百，
+     * 全程没有任何报错。
+     */
+    @Test
+    @DisplayName("重叠片段合并后必须覆盖整段原文，不能吃掉中间的字")
+    void mergedSegmentsMustCoverTheWholeSpan() {
+        String content = "本次交易对价为人民币500万元，由甲方于交割日一次性支付。";
+        for (LegalInfoProtector.ProtectedSegment s : protector.markProtectedInfo(content)) {
+            assertEquals(content.substring(s.getStart(), s.getEnd()), s.getContent(),
+                    "片段 [" + s.getStart() + "," + s.getEnd() + ") 的正文与原文对不上");
+        }
+    }
+
+    @Test
+    @DisplayName("压缩不得把金额的单位吃掉（人民币500万元 -> 人民币500）")
+    void compressionKeepsTheAmountUnit() {
+        String filler = "以下为与本条无关的背景说明文字，用于把正文撑到需要压缩的长度。".repeat(20);
+        String content = "本次交易对价为人民币500万元，由甲方于交割日一次性支付。\n" + filler;
+        LegalInfoProtector.CompressedResult result =
+                protector.safeCompress(content, content.length() / 2);
+        assertTrue(result.getContent().contains("人民币500万元"),
+                "压缩后金额被截断：" + result.getContent());
+    }
+
+    /**
+     * 分段循环结束后就直接返回，最后一个受保护片段之后的正文被无条件丢掉——
+     * 合同/裁判文书里引用与金额往往集中在前半段，后面几百字的约定、送达条款、
+     * 落款就这么没了，而且不像「无受保护片段」那条分支还会补个省略号，
+     * 这里连截断标记都没有：模型与用户都不知道后面还有东西。
+     */
+    @Test
+    @DisplayName("最后一个受保护片段之后的正文不能被无声丢掉")
+    void tailAfterLastProtectedSegmentIsNotSilentlyDropped() {
+        String tail = "本协议自双方签署之日起生效，一式两份，甲乙双方各执一份，具有同等法律效力。".repeat(6);
+        String content = "协议签署日期为2024年1月15日。" + tail;
+        LegalInfoProtector.CompressedResult result =
+                protector.safeCompress(content, content.length() - 20);
+        assertTrue(result.getContent().length() > "协议签署日期为2024年1月15日。".length() + 20,
+                "尾部正文被整段丢掉了：" + result.getContent());
+        assertTrue(result.getContent().contains("2024年1月15日"), "受保护片段仍要在");
     }
 
     @Test

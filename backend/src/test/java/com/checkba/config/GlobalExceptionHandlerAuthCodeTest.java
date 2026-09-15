@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.config;
 
 import com.checkba.exception.UnauthorizedException;
@@ -50,8 +53,8 @@ class GlobalExceptionHandlerAuthCodeTest {
     @Test
     @DisplayName("VersionException.userFacing 含「请先」的业务文案不带 4010")
     void versionUserFacingMessageNever4010() {
-        VersionController controller = new VersionController(null, null, null, null, null, null,
-                mock(com.checkba.service.telemetry.TelemetryService.class));
+        VersionController controller = new VersionController(null, null, null, null, null,
+                mock(com.checkba.service.telemetry.TelemetryService.class), null);
         Map<String, Object> body = controller.onVersionError(
                 VersionException.userFacing("请先结束当前工作段")).getBody();
         assertEquals(1, body.get("code"));

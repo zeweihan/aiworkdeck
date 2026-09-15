@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai.mcp;
 
 import java.util.Map;
@@ -9,6 +12,16 @@ import java.util.Map;
  * 新增一种传输协议 = 新增一个实现类并注册为 Spring Bean，无需改动调用方。
  */
 public interface McpProvider {
+
+    /**
+     * 「这台机器上没有这个 server 的凭证」的固定判据串（后面接 server 名）。
+     *
+     * <p>凭证为空时<b>一个字节都不发出去</b>：发一个空 Bearer 换回来的是上游的
+     * {@code 401 900902 Missing Credentials}，用户看到的是一句像故障的报错，
+     * 而真相是「这台机器本来就没配这项凭证」（打包态的桌面端恒如此）。
+     * 上层据此把提示写成「未配置」而不是「本次不可用」——dev-board#395。
+     */
+    String NO_CREDENTIAL_PREFIX = "Error: MCP server has no credential: ";
 
     /** 传输协议标识，与 {@link McpProperties.ServerConfig#getTransport()} 匹配 */
     String transport();

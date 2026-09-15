@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.account;
 
 import com.checkba.service.ai.ChatModelFactory;
@@ -18,7 +21,8 @@ import org.springframework.stereotype.Service;
  * 清理动作原先只写在前者里，后者只调了 {@code entitlementService.refreshAsync()}——
  * 于是从解锁页换成另一个账号时，上一个账号的<b>平台 AI 密钥、已购权益、用量基线</b>三样
  * 全部原封不动留着：新账号没充值也能接着花上一个账号的 OpenRouter 额度，
- * 也继承了上一个账号买过的付费项。
+ * 也继承了上一个账号买过的付费项。（2026-08 起同一道理再管一样：
+ * {@code /api/account/balance} 的 profile/membership TTL 缓存，同样是账户级内容。）
  *
  * <p>而解锁页恰恰是主入口——用账户 Key 解锁的人走的就是那条路。
  * 这是本仓反复踩到的同一个形状：<b>同一道闸有两个入口时，动作必须只有一处定义</b>，
@@ -33,11 +37,14 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class AccountSwitchCleanup {
 
+    private final AccountService accountService;
     private final EntitlementService entitlementService;
     private final PlatformAiChannel platformAiChannel;
     private final PlatformCreditsGate platformCreditsGate;
     private final PlatformUsageAccountant platformUsageAccountant;
     private final ChatModelFactory chatModelFactory;
+    private final com.checkba.service.team.TeamUsageSettings teamUsageSettings;
+    private final com.checkba.service.team.TeamSettingsCache teamSettingsCache;
 
     /** 刚连上一个（可能是不同的）账户：旧账户的一切当场作废，再异步拉新账户的权益。 */
     public void afterConnect() {
@@ -61,5 +68,13 @@ public class AccountSwitchCleanup {
         platformAiChannel.clearCache();
         platformCreditsGate.reset();
         platformUsageAccountant.resetBaseline();
+        // /api/account/balance 的 profile/membership TTL 缓存也是账户级内容（dev-board#183/#184）：
+        // 不清的话换一个没充值的新账号进来，顶栏会先展示上一个账号的余额/等级直到缓存自然过期
+        accountService.clearBalanceCache();
+        // 团队台账同理（dev-board#496）：「哪些天已经传过了」记的是「传给<b>那个</b>账户」，
+        // 换了人必须从头传；「共享项目名」是上一个团队的设置，留着会让下一个团队的
+        // 日聚合按旧团队的口径带上项目名
+        teamUsageSettings.resetLedger();
+        teamSettingsCache.clear();
     }
 }

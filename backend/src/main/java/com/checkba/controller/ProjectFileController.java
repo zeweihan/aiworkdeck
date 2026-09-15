@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectFile;
@@ -23,12 +26,23 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/projects/{projectId}/files")
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class ProjectFileController {
 
     private final ProjectFileService projectFileService;
     private final ProjectMemberService projectMemberService;
     private final FileTagService fileTagService;
     private final com.checkba.service.quota.StageQuotaService stageQuotaService;
+    /** 导入本机文件后的后置钩子，与 FileController.uploadFile 上传完成时同源。 */
+    private final com.checkba.service.ai.ProjectRagService projectRagService;
+    private final com.checkba.service.ai.AutoTaggingService autoTaggingService;
+
+    /**
+     * 单机模式判别位。import-local 让调用方指名服务器磁盘上的绝对路径，
+     * 只有「服务器就是用户这台电脑」时才成立，故仅 desktop profile 打开。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
 
     /**
      * 文件缓存区用量（前端顶部用量条的数据源）。
@@ -129,6 +143,26 @@ public class ProjectFileController {
     }
 
     /**
+     * 校验创建/移动时指定的父目录：必须是本项目内未删除的文件夹（parentId 为空表示根目录）。
+     * 此前 parentId 完全不校验：前端对话框/拖拽目标缓存的目录 id 若在提交前被另一端软删除，
+     * 新节点仍会以 isDeleted=false 挂到已删除的父目录下，接口返回 200 看着成功，
+     * 但 getFileTree/getFilesByParent 只取 isDeleted=false 的行，永远拼不出它的路径，
+     * 节点在所有树视图里凭空消失。跨项目 parentId 同理。
+     */
+    private void checkParentFolder(Long parentId, Long projectId) {
+        if (parentId == null) {
+            return;
+        }
+        ProjectFile parent = projectFileService.getFile(parentId); // 不存在会抛异常
+        if (!projectId.equals(parent.getProjectId())
+                || !Boolean.TRUE.equals(parent.getIsFolder())
+                || Boolean.TRUE.equals(parent.getIsDeleted())) {
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "目标文件夹不存在或已被删除", "The target folder does not exist or has been deleted"));
+        }
+    }
+
+    /**
      * 创建文件夹
      * POST /api/projects/{projectId}/files/folder
      */
@@ -142,6 +176,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileWriteAccess(projectId, userId);
+        checkParentFolder(request.getParentId(), projectId);
         return projectFileService.createFolder(projectId, request.getParentId(), request.getName(), userId);
     }
 
@@ -203,6 +238,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileWriteAccess(projectId, userId);
+        checkParentFolder(request.getParentId(), projectId);
         // 存储键一律由服务端按 projectId + 目录结构生成：请求体里的 filePath 曾被原样落库，
         // 可指向他人项目的文件，再借这条记录下载/覆盖对方的文档
         return projectFileService.createFile(
@@ -215,6 +251,76 @@ public class ProjectFileController {
                 request.getWpsFileId(),
                 userId
         );
+    }
+
+    /**
+     * 从本机绝对路径导入进项目（桌面端「拖入资源管理器 = 复制进项目目录」，dev-board#409）。
+     * POST /api/projects/{projectId}/files/import-local  body: { sourcePath, parentId }
+     *
+     * <p>只在单机模式（{@code security.local-mode=true}）开放。这条接口让调用方指名一个
+     * 服务器上的绝对路径去读，只有在「服务器就是用户自己这台电脑」时才成立——local-mode
+     * 由 {@code LocalModeLoopbackGuard} 强制绑回环、{@code LocalModeAccessFilter} 逐请求
+     * 校验来源，请求只可能来自本机。团队服务器上开着它，等于让任意成员把服务器磁盘上的
+     * 任意文件复制进自己的项目（同 open-local 那道闸的理由）。
+     *
+     * <p>{@code sourcePath} 可以是一个普通文件，也可以是一个目录（资源管理器收整个文件夹
+     * 的拖入）：目录会连同子目录整棵复制进来，树里的符号链接与特殊文件跳过并计数。
+     *
+     * <p>返回体：
+     * <pre>
+     * {
+     *   "data": &lt;ProjectFile&gt;,    // 顶层创建出来的行：导入文件时是文件行，导入目录时是那个文件夹行
+     *   "importedFileCount": int,  // 本次真正复制进来的文件数（不含文件夹）
+     *   "skippedCount": int        // 树里被跳过的条目数（符号链接、特殊文件、读不到的条目）
+     * }
+     * </pre>
+     *
+     * <p>后置钩子（RAG 增量索引 + 自动打标签）对<b>每一个</b>导入的文件各跑一次，与
+     * {@code FileController.uploadFile} 上传完成时完全一致。
+     */
+    @PostMapping("/import-local")
+    public Map<String, Object> importLocal(
+            @PathVariable Long projectId,
+            @RequestBody ImportLocalRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        if (!localMode) {
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "当前部署不支持从本机路径导入文件", "This deployment does not support importing files from a local path"));
+        }
+        checkFileWriteAccess(projectId, userId);
+        checkParentFolder(request.getParentId(), projectId);
+
+        ProjectFileService.ImportLocalResult result = projectFileService.importLocalPath(
+                projectId, request.getParentId(), request.getSourcePath(), userId);
+
+        // 与上传完成后同一套异步钩子（同步跑会把大文档的索引耗时挂在这次请求上）。
+        // 导入目录时一次可能进来几百个文件，用一条异步任务顺序跑完，不按文件数铺线程。
+        final List<ProjectFile> importedFiles = List.copyOf(result.getImportedFiles());
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            for (ProjectFile imported : importedFiles) {
+                String storagePath = imported.getFilePath();
+                try {
+                    projectRagService.refreshProjectKnowledgeIncremental(String.valueOf(projectId), storagePath);
+                } catch (Exception e) {
+                    log.error("导入本机文件后 RAG 索引失败: {}", storagePath, e);
+                }
+                try {
+                    autoTaggingService.autoTagFile(projectId, imported.getId(), storagePath, userId);
+                } catch (Exception e) {
+                    log.error("导入本机文件后自动打标签失败: {}", storagePath, e);
+                }
+            }
+        });
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("data", result.getRoot());
+        response.put("importedFileCount", importedFiles.size());
+        response.put("skippedCount", result.getSkippedCount());
+        return response;
     }
 
     /**
@@ -344,6 +450,7 @@ public class ProjectFileController {
         }
         checkFileWriteAccess(projectId, userId);
         checkFileInProject(fileId, projectId);
+        checkParentFolder(request.getParentId(), projectId);
         return projectFileService.move(fileId, request.getParentId(), request.getSortOrder(), userId);
     }
 
@@ -456,6 +563,16 @@ public class ProjectFileController {
         public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
         public String getWpsFileId() { return wpsFileId; }
         public void setWpsFileId(String wpsFileId) { this.wpsFileId = wpsFileId; }
+    }
+
+    static class ImportLocalRequest {
+        private String sourcePath;
+        private Long parentId;
+
+        public String getSourcePath() { return sourcePath; }
+        public void setSourcePath(String sourcePath) { this.sourcePath = sourcePath; }
+        public Long getParentId() { return parentId; }
+        public void setParentId(Long parentId) { this.parentId = parentId; }
     }
 
     static class RenameRequest {

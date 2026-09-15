@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.version;
 
 import com.checkba.controller.AuthController;
@@ -112,13 +115,12 @@ class VersionFileAccessTest {
     private UserService userService;
     @Mock
     private ProjectFileService projectFileService;
-    @Mock
-    private ProjectTreeManifestService manifestService;
 
     private VersionController newController() {
         return new VersionController(repoService, sessionService, projectMemberService, userService,
-                projectFileService, manifestService,
-                org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class));
+                projectFileService,
+                org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class),
+                org.mockito.Mockito.mock(VersionLifecycleService.class));
     }
 
     private static final long PROJECT_ID = 7L;

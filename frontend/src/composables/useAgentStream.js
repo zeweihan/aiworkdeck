@@ -1,8 +1,13 @@
-import { ref, reactive, nextTick } from 'vue'
-import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { ref, reactive, nextTick, onUnmounted, getCurrentInstance } from 'vue'
+import { deleteAgentInboxItem, getAgentInbox, getApiBaseUrl, getConversationMetadata, updateAgentInboxItem } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
 import { t } from '@/i18n'
+import { captureChatTimeline } from '@/components/AgentMessage/chatTimeline.mjs'
+import { nextBubbleId } from './bubbleId.js'
+import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
 // 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
@@ -27,8 +32,16 @@ export function useAgentStream() {
     const bubbles = ref([])
     const isConnected = ref(false)
     const isStreaming = ref(false)
+    // SSE 链路状态（dev-board#364）：'live' = 连接活着（心跳在跳，等模型是正常的）；
+    // 'reconnecting' = 心跳超时/流断了，正在退避重连（attempt 是第几次）。
+    // 之前断线重连只写 console.warn，用户看到的是计时器一直走、什么都不发生——
+    // 分不清「模型在想」和「连接死了」。这个状态给输入区一条明确的提示条。
+    const linkStatus = ref({ state: 'live', attempt: 0 })
     const error = ref(null)
     const currentConversationId = ref(null)
+    const inboxState = reactive(createInboxState())
+    let inboxConversationGeneration = 0
+    const appliedAssistantSegments = new Set()
     // STATE: Token Usage Tracking (Session Cumulative)
     // STATE: Token Usage Tracking (Session Cumulative)
     const tokenUsage = ref({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
@@ -42,6 +55,18 @@ export function useAgentStream() {
 
     // STATE: Agent 任务清单（todo_write 驱动的常驻进度卡），plan_update 事件整表覆写
     const planTodos = ref([]) // Array of { content, activeForm, status }
+
+    // STATE: 本轮生效的 Skill（skill_update 事件整表覆写）
+    // Array of { id, name, source: 'auto' | 'manual', justActivated: boolean }
+    // 后端每轮必发、空也发——整表覆写是刻意的，增量合并会让上一轮的技能一直挂着。
+    const activeSkills = ref([])
+    // 自动命中的新技能提示：{ id, name, at }。ChatInterface watch 它弹一句轻提示，
+    // 几秒后自己置空。用户按触发词说了句话就被加载了一个技能，不告诉他就是黑箱。
+    const skillNotice = ref(null)
+    let skillFlashTimer = null
+    const clearSkillFlash = () => {
+        if (skillFlashTimer) { clearTimeout(skillFlashTimer); skillFlashTimer = null }
+    }
 
     // STATE: 任务待续跑——步数超限暂停（bubble_end status=paused）或上次进程被杀
     // （run_state status=INTERRUPTED）。前端据此渲染一键「继续」按钮
@@ -64,6 +89,9 @@ export function useAgentStream() {
     // Abort Controllers
     let sseAbortController = null
     let messageAbortController = null
+    // 本实例最近一次挂上模块级单例的网络恢复回调（卸载时据此判断单例是不是自己的，
+    // 无条件置空会踩掉后挂载实例的重连入口）
+    let myNetworkRecoveryHook = null
 
     // --- 断线自动重连状态（F-05）---
     let reconnectAttempts = 0
@@ -71,6 +99,9 @@ export function useAgentStream() {
     let heartbeatMonitor = null
     let lastSseActivityAt = 0 // 任何 SSE 字节到达都刷新（后端心跳 15s 一跳兜底保活）
     const HEARTBEAT_STALE_MS = 45000 // 连续 3 个心跳周期无任何字节判定连接已死
+    // 被断线截断的助手气泡。正常收尾也不清 currentAssistantBubble 指针，
+    // 所以「这条是不是断线截断的」只能在断开那一刻记下来，不能事后推断。
+    let disconnectedBubble = null
 
     const stopHeartbeatMonitor = () => {
         if (heartbeatMonitor) { clearInterval(heartbeatMonitor); heartbeatMonitor = null }
@@ -96,6 +127,7 @@ export function useAgentStream() {
         if (!currentConversationId.value) return
         const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts))
         reconnectAttempts++
+        linkStatus.value = { state: 'reconnecting', attempt: reconnectAttempts }
         console.warn(`[AgentStream] SSE 断开（${reason}），${delay}ms 后自动重连（第 ${reconnectAttempts} 次）`)
         reconnectTimer = setTimeout(async () => {
             reconnectTimer = null
@@ -112,6 +144,7 @@ export function useAgentStream() {
     let parserBuffer = ''
     let activeTag = null
     let activeProcessId = null
+    let thinkingParentProcessId = null
     // 当前 <tool_output> 归属的 tool 条目：一轮多工具时后端按调用顺序补发多个
     // tool_output，必须 FIFO 归属到「第一个仍在 loading 的 tool」——按"最后一个
     // tool"归属会把所有结果都错挂到最后一个调用上。
@@ -122,14 +155,15 @@ export function useAgentStream() {
 
     // --- HELPER: Create a new Assistant Bubble Structure ---
     const createAssistantBubble = () => ({
-        id: `msg-${Date.now()}`,
+        id: nextBubbleId(),
         role: 'ASSISTANT',
         thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 },
         title: '',
         processes: [],
-        // 本轮的任务清单快照（plan_update 时写入）：计划卡随消息流内联展示，
-        // 历史消息也能保留自己那轮的计划（planTodos 全局值只代表最新一轮）。
-        planTodos: [],
+        timeline: [],
+        // 延续当前任务清单，后续 plan_update 覆写；固定进度面板按轮保留快照。
+        // TodoListService 约定跨轮保留直到下一次 todo_write，不能在“继续”时清空。
+        planTodos: [...planTodos.value],
         artifacts: [],
         walkthrough: '',
         content: '', // Main Answer (from <final> tag)
@@ -139,14 +173,18 @@ export function useAgentStream() {
         // 问题正文与选项要作为结构化数据交给问题卡（决策 D 的显示通道）。
         question: null,
         rawLog: '',
-        isStreaming: false
+        isStreaming: false,
+        // 用户点停止后的提示条文案。刻意不并进 content：content 是「模型正文」，
+        // 会触发 isReady/hasContent/「用到文档」操作 chip 的判定，系统提示写进去
+        // 会让一个空产出的回合长出可插入文档的操作项（dev-board#212）。
+        stopNotice: ''
     })
 
     // displayContent = 「显示内容 ≠ 发送内容」通道（契约 D）：content 永远是模型看到的原文，
     // displayContent 为空则回退 content。渲染侧一律 displayContent || content，
     // 与 GET /api/ai/history 返回体的同名字段口径一致（否则刷新页面文案会变）。
     const createUserBubble = (content, images = [], contextFiles = [], contentHtml = '', displayContent = '') => ({
-        id: `msg-${Date.now()}`,
+        id: nextBubbleId(),
         role: 'USER',
         content: content,
         displayContent: displayContent || '',
@@ -155,11 +193,23 @@ export function useAgentStream() {
         contextFiles: contextFiles
     })
 
+    const resetInboxState = () => {
+        inboxConversationGeneration += 1
+        inboxState.items.splice(0, inboxState.items.length)
+        inboxState.runId = null
+        inboxState.status = null
+        inboxState.eventEpoch = 0
+        inboxState.lastSequences = {}
+        inboxState.appliedMessageIds = {}
+        appliedAssistantSegments.clear()
+    }
+
     // --- RESET PARSER STATE ---
     const resetParser = () => {
         parserBuffer = ''
         activeTag = null
         activeProcessId = null
+        thinkingParentProcessId = null
         activeToolItem = null
     }
 
@@ -167,6 +217,8 @@ export function useAgentStream() {
     // Call this when switching conversations to ensure clean state
     const resetSSE = () => {
         console.log('[AgentStream] Resetting SSE state')
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+        stopHeartbeatMonitor()
         // Abort any existing connections
         if (sseAbortController) {
             try { sseAbortController.abort() } catch (e) { }
@@ -179,6 +231,7 @@ export function useAgentStream() {
         // Reset connection states
         isConnected.value = false
         isStreaming.value = false
+        linkStatus.value = { state: 'live', attempt: 0 }
         // Reset parser state
         resetParser()
         // Reset event parser state
@@ -190,6 +243,10 @@ export function useAgentStream() {
         tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
         // 切换会话时清空任务清单进度卡（重连后由后端 plan_update 恢复）
         planTodos.value = []
+        // Skill chip 同理：技能是按轮生效的，上一个会话的技能不该挂在新会话的输入区上
+        clearSkillFlash()
+        activeSkills.value = []
+        skillNotice.value = null
         agentPaused.value = null
         agentRunStatus.value = null
         agentAwaitingInput.value = false
@@ -201,6 +258,9 @@ export function useAgentStream() {
         })
         // Clear bubble pointer (will be set fresh on next send)
         currentAssistantBubble.value = null
+        // 切会话即丢弃断线截断指针：旧连接的终态 run_state 迟到时不许写到新会话的气泡上
+        disconnectedBubble = null
+        resetInboxState()
     }
 
     // --- CLEAR BUBBLES ---
@@ -271,6 +331,62 @@ export function useAgentStream() {
         }
     }
 
+    const captureInboxRequest = (conversationId) => ({
+        conversationId,
+        generation: inboxConversationGeneration,
+        eventEpoch: inboxState.eventEpoch,
+    })
+    const isCurrentInboxRequest = (request) => currentConversationId.value === request.conversationId
+        && inboxConversationGeneration === request.generation
+    const canApplyInboxResponse = (request) => isCurrentInboxRequest(request)
+        && inboxState.eventEpoch === request.eventEpoch
+
+    const restoreInbox = async (conversationId) => {
+        if (!conversationId || currentConversationId.value !== conversationId) return
+        const request = captureInboxRequest(conversationId)
+        try {
+            const snapshot = await getAgentInbox(conversationId)
+            if (canApplyInboxResponse(request)) applyInboxSnapshot(inboxState, snapshot || {})
+        } catch (e) {
+            console.warn('[AgentStream] Failed to restore inbox:', e)
+        }
+    }
+
+    // 插件后台任务 → backgroundTasks 条目。载荷来自 SSE `plugin_job_progress` 或 REST /api/plugin-jobs
+    // （字段同形：jobId/pluginId/kind/title/status/done/total/message/error/conversationId；REST 实体用 id）。
+    // 状态词映射到浮窗认识的四个：queued/running→running，done→completed，failed/cancelled 原样。
+    const upsertPluginJob = (d) => {
+        const jobId = d && (d.jobId || d.id)
+        if (!jobId) return
+        const status = d.status === 'done' ? 'completed'
+            : (d.status === 'failed' || d.status === 'cancelled') ? d.status
+            : 'running'
+        const total = Number(d.total) || 0
+        const done = Number(d.done) || 0
+        const progress = status === 'completed' ? 100 : (total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0)
+        const message = d.status === 'failed' ? (d.error || d.message || t('agentStream.taskFailed'))
+            : d.status === 'done' ? (d.message || t('agentStream.taskCompleted'))
+            : (d.message || d.title || t('agentStream.taskInProgress'))
+        const existing = backgroundTasks.value[jobId]
+        const entry = {
+            taskId: jobId,
+            type: 'PLUGIN_JOB',
+            pluginId: d.pluginId,
+            kind: d.kind,
+            title: d.title,
+            conversationId: d.conversationId || (existing && existing.conversationId) || null,
+            progress,
+            message,
+            stage: d.status,
+            status,
+            error: d.error,
+            startedAt: existing ? existing.startedAt : Date.now(),
+            lastUpdate: Date.now()
+        }
+        if (status !== 'running' && !(existing && existing.completedAt)) entry.completedAt = Date.now()
+        backgroundTasks.value[jobId] = existing ? Object.assign(existing, entry) : entry
+    }
+
     // --- SSE Connection ---
     const connectSSE = (conversationId) => {
         if (sseAbortController && isConnected.value) return Promise.resolve()
@@ -296,18 +412,21 @@ export function useAgentStream() {
 
                 isConnected.value = true
                 reconnectAttempts = 0
+                linkStatus.value = { state: 'live', attempt: 0 }
                 lastSseActivityAt = Date.now()
                 startHeartbeatMonitor()
                 // 网络恢复/回前台时经模块级单例回调触发本实例重连
-                activeNetworkRecoveryHook = (reason) => {
+                myNetworkRecoveryHook = (reason) => {
                     if (!isConnected.value && currentConversationId.value) scheduleReconnect(reason)
                 }
+                activeNetworkRecoveryHook = myNetworkRecoveryHook
                 resolve()
 
                 // 建连即补拉一次在跑的后台任务：background_task_start 只在任务起跑那一刻发一次，
                 // 断线重连或切回会话的用户此前完全看不到「PPT 还在生成」，进度条要等下一个
                 // task_progress 才可能出现（而 task_progress 只更新已存在的条目，永远等不到）。
                 restoreActiveTasks(conversationId)
+                restoreInbox(conversationId)
 
                 const reader = response.body.getReader()
                 const decoder = new TextDecoder('utf-8')
@@ -361,7 +480,12 @@ export function useAgentStream() {
                         // 仍在流式状态但连接已结束 = 意外断开。后台 @Async 循环并不依赖
                         // SSE，多半还在跑——自动重连续流（run_state/state_recovery 恢复气泡）。
                         console.warn('[AgentStream] SSE connection ended while still streaming, scheduling reconnect')
-                        if (currentAssistantBubble.value) currentAssistantBubble.value.isStreaming = false
+                        if (currentAssistantBubble.value) {
+                            currentAssistantBubble.value.isStreaming = false
+                            // 重连后若拿到的是终态 run_state（断线期间那一轮已跑完），
+                            // 终态事件早随旧连接丢了，靠这个指针把提示补到被截断的那条上
+                            disconnectedBubble = currentAssistantBubble.value
+                        }
                         isStreaming.value = false
                         scheduleReconnect('stream-ended')
                     }
@@ -373,45 +497,126 @@ export function useAgentStream() {
     // displayText（可选，契约 D）：模型收到 prompt，用户气泡里显示 displayText。
     // 用于「点一个按钮却要回喂一大段细节给模型」的场景（计划审批卡、反问选项）——
     // 缺省 null 时行为与此前完全一致。
-    const sendMessage = async ({ prompt, displayText = '', contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, pinnedSkillId = '', _userImages = [], _userContextFiles = [] }) => {
-        // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求。
-        // 必须给用户可见反馈——静默吞掉就是"点了发送什么都没发生"（F-07）
-        if (isStreaming.value) {
-            console.warn('[AgentStream] sendMessage ignored: already streaming')
-            try {
-                if (typeof uni !== 'undefined' && uni.showToast) {
-                    uni.showToast({ title: t('agentStream.alreadyStreamingToast'), icon: 'none' })
-                }
-            } catch (e) { /* ignore */ }
-            return
+    // skillIds（可选）：用户在面板里主动选择的 Skill，本轮强制生效（与触发词自动命中取并集）。
+    // 无状态——每次请求都要带，后端不持久化。
+    const createClientRequestId = () => {
+        try {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+        } catch (e) { /* fallback below */ }
+        return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+
+    const ensureInboxUserBubble = (entry, draft = {}) => {
+        let bubble = bubbles.value.find((candidate) =>
+            candidate.inboxMessageId === entry.id
+            || (entry.clientRequestId && candidate.clientRequestId === entry.clientRequestId))
+        if (!bubble) {
+            bubble = createUserBubble(
+                entry.message,
+                draft.images || [],
+                draft.contextFiles || [],
+                draft.contentHtml || '',
+                entry.displayText)
+            bubbles.value.push(bubble)
         }
-        // Clear file changes for new turn
-        fileChanges.value = []
-        // 新一轮开始即清除暂停态（无论是点「继续」还是发新消息）
-        agentPaused.value = null
-        agentRunStatus.value = 'RUNNING'
-        agentAwaitingInput.value = false
-        // 这一轮就是上一问的答案（点选项或自己打字都算）：封掉历史上所有未作答的问题卡，
-        // 只有最新一条助手消息上的反问可操作——与审批卡「仅最新一条可操作」同口径。
-        bubbles.value.forEach(b => {
-            if (b.role === 'ASSISTANT' && b.question && !b.question.answered) b.question.answered = true
-        })
+        bubble.inboxMessageId = entry.id
+        bubble.clientRequestId = entry.clientRequestId || bubble.clientRequestId || null
+        bubble.receiptState = entry.state
+        bubble.submissionMode = entry.submissionMode
+        bubble.content = entry.message
+        bubble.displayContent = entry.displayText || ''
+        return bubble
+    }
 
-        // 1. Add User Message with images and context files for display
-        bubbles.value.push(createUserBubble(prompt, _userImages, _userContextFiles, contentHtml, displayText))
+    const assistantHasOutput = (bubble) => Boolean(
+        bubble && (
+            bubble.content
+            || bubble.walkthrough
+            || bubble.title
+            || bubble.rawLog
+            || bubble.stopNotice
+            || bubble.question
+            || (bubble.thinking && bubble.thinking.content)
+            || (Array.isArray(bubble.processes) && bubble.processes.length)
+            || (Array.isArray(bubble.artifacts) && bubble.artifacts.length)
+        )
+    )
 
-        // 2. Prepare Assistant Bubble
-        const newBubble = createAssistantBubble()
-        newBubble.isStreaming = true
-        // 思考计时从「发送」那一刻起算（用户感知的等待包含网络/排队），而不是
-        // 等 <thinking> 标签到达才起算——否则经常显示 0 秒且卡顿期间不读秒。
-        newBubble.thinking.status = 'thinking'
-        newBubble.thinking.startTime = Date.now()
-        bubbles.value.push(newBubble)
-        currentAssistantBubble.value = newBubble
-
-        isStreaming.value = true
+    const beginAssistantSegmentAfterAppliedInput = (entry) => {
+        if (!entry || !entry.id || appliedAssistantSegments.has(entry.id)) return
+        appliedAssistantSegments.add(entry.id)
+        // An applied interjection can arrive before bubble_end: preserve pending text
+        // in its original segment before clearing the parser for the next one.
+        flushRemainingBuffer()
+        const previous = currentAssistantBubble.value
+        if (previous) {
+            if (!assistantHasOutput(previous)) {
+                const previousIndex = bubbles.value.indexOf(previous)
+                if (previousIndex >= 0) bubbles.value.splice(previousIndex, 1)
+            } else {
+                previous.isStreaming = false
+                if (previous.thinking && previous.thinking.status === 'thinking') {
+                    previous.thinking.status = 'done'
+                    previous.thinking.duration = previous.thinking.duration
+                        || (Date.now() - previous.thinking.startTime) / 1000
+                }
+                finalizeProcesses('success', previous)
+            }
+        }
         resetParser()
+        const next = createAssistantBubble()
+        next.isStreaming = true
+        next.thinking.status = 'thinking'
+        next.thinking.startTime = Date.now()
+        bubbles.value.push(next)
+        currentAssistantBubble.value = next
+        isStreaming.value = true
+    }
+
+    const acceptAppliedInput = (event, draft = {}) => {
+        const result = applyInputApplied(inboxState, event)
+        if (!result.accepted) return false
+        ensureInboxUserBubble(result.item, draft)
+        beginAssistantSegmentAfterAppliedInput(result.item)
+        return true
+    }
+
+    const sendMessage = async ({
+        prompt, displayText = '', contentHtml = '', fileList = [], projectId,
+        modelId = 'default', mode = 'AGENT', activeContext = null, skillIds = [],
+        submissionMode = 'steer', clientRequestId = '',
+        _userImages = [], _userContextFiles = []
+    }) => {
+        const continuingRun = isStreaming.value || agentRunStatus.value === 'RUNNING'
+        const requestId = clientRequestId || createClientRequestId()
+
+        if (!continuingRun) {
+            fileChanges.value = []
+            agentPaused.value = null
+            agentRunStatus.value = 'RUNNING'
+            agentAwaitingInput.value = false
+            disconnectedBubble = null
+            bubbles.value.forEach(b => {
+                if (b.role === 'ASSISTANT' && b.question && !b.question.answered) b.question.answered = true
+            })
+
+            let userBubble = bubbles.value.find((candidate) => candidate.clientRequestId === requestId)
+            if (!userBubble) {
+                userBubble = createUserBubble(prompt, _userImages, _userContextFiles, contentHtml, displayText)
+                userBubble.clientRequestId = requestId
+                bubbles.value.push(userBubble)
+            }
+
+            const newBubble = createAssistantBubble()
+            newBubble.isStreaming = true
+            newBubble.thinking.status = 'thinking'
+            newBubble.thinking.startTime = Date.now()
+            captureChatTimeline(newBubble)
+            bubbles.value.push(newBubble)
+            currentAssistantBubble.value = newBubble
+            isStreaming.value = true
+            resetParser()
+        }
 
         // 3. Ensure Conversation
         if (!currentConversationId.value) {
@@ -432,6 +637,8 @@ export function useAgentStream() {
                 displayText: displayText || null,
                 model: modelId,
                 mode: mode, // Agent 模式: ASK, PLAN, AGENT
+                submissionMode: continuingRun && submissionMode === 'queue' ? 'queue' : 'steer',
+                clientRequestId: requestId,
                 // Send full context metadata for folder support
                 contextItems: fileList.map(f => ({
                     id: String(f.id),
@@ -447,8 +654,8 @@ export function useAgentStream() {
                     fileType: activeContext.fileType || '',
                     wpsFileId: activeContext.wpsFileId || null
                 } : null,
-                // 用户钉选的 Skill；为空则后端走触发词自动匹配
-                pinnedSkillId: pinnedSkillId || null
+                // 用户主动选择的 Skill；为空则后端只走触发词自动匹配
+                skillIds: Array.isArray(skillIds) && skillIds.length ? skillIds : null
             }
 
             const chatResp = await fetch(`${getApiBaseUrl()}/api/agent/chat`, {
@@ -461,16 +668,61 @@ export function useAgentStream() {
             if (!chatResp.ok) {
                 throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
             }
+            const responseBody = await chatResp.json()
+            const receipt = responseBody && responseBody.data ? responseBody.data : responseBody
+            if (!receipt || receipt.status !== 'accepted' || !receipt.messageId) {
+                throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
+            }
+
+            // The request still belongs to the captured conversation even if the user opened
+            // another chat while HTTP was in flight. Return its receipt to the sender, but do
+            // not let that late completion repopulate the newly selected conversation.
+            if (currentConversationId.value !== conversationId) return receipt
+
+            const entry = applyInboxReceipt(inboxState, receipt, {
+                message: prompt,
+                displayText,
+                clientRequestId: requestId,
+            })
+            if (continuingRun) {
+                if (entry && entry.submissionMode === 'steer') {
+                    ensureInboxUserBubble(entry, {
+                        images: _userImages,
+                        contextFiles: _userContextFiles,
+                        contentHtml,
+                    })
+                }
+                if (entry && entry.state === 'applied') {
+                    acceptAppliedInput({
+                        messageId: entry.id,
+                        runId: entry.runId,
+                        sequence: entry.sequence,
+                        message: entry.message,
+                        displayText: entry.displayText,
+                    }, { images: _userImages, contextFiles: _userContextFiles, contentHtml })
+                }
+            } else {
+                const optimistic = bubbles.value.find((candidate) => candidate.clientRequestId === requestId)
+                if (optimistic) {
+                    optimistic.inboxMessageId = receipt.messageId
+                    optimistic.receiptState = receipt.state
+                    optimistic.submissionMode = receipt.submissionMode
+                }
+            }
+            return receipt
 
         } catch (err) {
             if (err.name !== 'AbortError') {
-                error.value = err.message
-                if (currentAssistantBubble.value) {
+                const stillCurrent = currentConversationId.value === conversationId
+                if (stillCurrent) error.value = err.message
+                if (stillCurrent && !continuingRun && currentAssistantBubble.value) {
                     currentAssistantBubble.value.content += '\n' + t('agentStream.errorWithMessage', { message: err.message })
                     currentAssistantBubble.value.isStreaming = false
+                    isStreaming.value = false
+                    agentRunStatus.value = 'ERROR'
                 }
-                isStreaming.value = false
             }
+            return null
         }
     }
 
@@ -497,12 +749,22 @@ export function useAgentStream() {
         isStreaming.value = false
         if (currentAssistantBubble.value) {
             currentAssistantBubble.value.isStreaming = false
+            // 顶层 thinking 归位：abort 在上面第 2 步已经掐断了本地 SSE，后端随后
+            // 发出的 cancelled 事件永远到不了前端，正常收尾路径里的这段归零逻辑
+            // 不会再有人执行——漏掉它计时器就永远读秒（dev-board#211）。
+            const thinking = currentAssistantBubble.value.thinking
+            if (thinking.status === 'thinking') {
+                thinking.status = 'done'
+                if (!thinking.duration || thinking.duration === 0) {
+                    thinking.duration = (Date.now() - thinking.startTime) / 1000
+                }
+            }
             // 终态收敛：停止后不允许卡片停留在"执行中"
             finalizeProcesses('error')
-            // 停止标记（必须写 content，walkthrough 当前未渲染）。措辞只说「正在停止」：
-            // 取消打不断已经发出去的 HTTP 读，在途的那一次调用还可能回一小段，
-            // 写「已停止」就是对用户说谎
-            currentAssistantBubble.value.content += '\n\n' + t('agentStream.stopping')
+            // 停止提示走独立字段，不写 content（见 createAssistantBubble 注释）。
+            // 措辞「已发送停止指令」：本地流已断开、不会再渲染新内容，但后端在途
+            // 的那一次调用可能仍在收尾，说「已停止」不完全诚实。
+            currentAssistantBubble.value.stopNotice = t('agentStream.stopRequested')
         }
     }
 
@@ -542,9 +804,68 @@ export function useAgentStream() {
                     const last = bubbles.value[bubbles.value.length - 1]
                     if (last && last.role === 'ASSISTANT') target = last
                 }
-                if (target) target.planTodos = [...planTodos.value]
+                if (target) {
+                    target.planTodos = [...planTodos.value]
+                    captureChatTimeline(target)
+                }
             } catch (e) {
                 console.error('Failed to parse plan_update', e)
+            }
+            return
+        }
+
+        // 本轮生效的 Skill：与 plan_update 同理放在气泡守卫之前——切回会话/重连时
+        // 气泡指针为 null，挂在守卫后面就再也收不到了。
+        if (evt === 'skill_update') {
+            try {
+                const d = JSON.parse(dataStr)
+                const incoming = Array.isArray(d.skills) ? d.skills : []
+                // 「新出现的自动命中技能」才闪：手动选的是用户自己点的，不需要提醒他自己；
+                // 连续几轮都命中同一个技能也不该每轮闪一次（那是噪音，不是信息）。
+                const knownAutoIds = new Set(
+                    activeSkills.value.filter(s => s.source === 'auto').map(s => s.id)
+                )
+                const freshAuto = incoming.filter(s => s.source === 'auto' && !knownAutoIds.has(s.id))
+                activeSkills.value = incoming.map(s => ({
+                    id: s.id,
+                    name: s.name || s.id,
+                    source: s.source === 'manual' ? 'manual' : 'auto',
+                    justActivated: freshAuto.some(f => f.id === s.id)
+                }))
+                if (freshAuto.length) {
+                    skillNotice.value = { id: freshAuto[0].id, name: freshAuto[0].name || freshAuto[0].id, at: Date.now() }
+                    clearSkillFlash()
+                    // 高亮只持续几秒：chip 本身留着（它这轮确实生效着），闪的只是"刚加载"这件事
+                    skillFlashTimer = setTimeout(() => {
+                        activeSkills.value = activeSkills.value.map(s => ({ ...s, justActivated: false }))
+                        skillNotice.value = null
+                        skillFlashTimer = null
+                    }, 4000)
+                }
+            } catch (e) {
+                console.error('Failed to parse skill_update', e)
+            }
+            return
+        }
+
+        if (evt === 'inbox_updated') {
+            try {
+                const snapshot = JSON.parse(dataStr)
+                markInboxEvent(inboxState)
+                applyInboxSnapshot(inboxState, snapshot || {})
+            } catch (e) {
+                console.error('Failed to parse inbox_updated', e)
+            }
+            return
+        }
+
+        if (evt === 'input_applied') {
+            try {
+                const applied = JSON.parse(dataStr)
+                markInboxEvent(inboxState)
+                acceptAppliedInput(applied)
+            } catch (e) {
+                console.error('Failed to parse input_applied', e)
             }
             return
         }
@@ -567,6 +888,28 @@ export function useAgentStream() {
                     // 模型反问后停机等答案：切回会话时要看得出「AI 在等你回答」。
                     // 不置 isStreaming——后台没有任何东西在跑，输入框必须可用。
                     agentAwaitingInput.value = true
+                } else if (d.status === 'FINISHED' || d.status === 'ERROR' || d.status === 'CANCELLED') {
+                    // 断线期间那一轮已在后台结束：bubble_end/error/cancelled 随旧连接一起丢了，
+                    // 重连后只剩这条 run_state。不认它的话，被截断的气泡永远停在断线那一刻的
+                    // 半截文字上——输入框已解锁看着像「说完了」，完整回复其实躺在库里。
+                    // 只补一条提示、不做历史回灌：历史的拉取与回灌整条链
+                    // （getAiHistory → ChatInterface.loadMessages）都在组件侧，本 composable
+                    // 够不着，而 loadMessages 末尾还会 reattachSSE，从这里回调会绕成重连环。
+                    if (disconnectedBubble) {
+                        // 顶层 thinking 与执行卡一并归位：这一轮的 bubble_end/error/cancelled
+                        // 随旧连接丢了，正常收尾里的归零逻辑没有人执行——漏掉它计时器就
+                        // 永远读秒、工具卡永远停在"执行中"（与 dev-board#211 同族病灶）。
+                        const th = disconnectedBubble.thinking
+                        if (th && th.status === 'thinking') {
+                            th.status = 'done'
+                            if (!th.duration || th.duration === 0) {
+                                th.duration = (Date.now() - th.startTime) / 1000
+                            }
+                        }
+                        finalizeProcesses(d.status === 'FINISHED' ? 'success' : 'error', disconnectedBubble)
+                        disconnectedBubble.content += '\n\n' + t('agentStream.interruptedRunEndedNotice') + '\n'
+                        disconnectedBubble = null
+                    }
                 }
             } catch (e) {
                 console.error('Failed to parse run_state', e)
@@ -691,7 +1034,17 @@ export function useAgentStream() {
             return
         }
 
-        if (evt === 'text_delta') {
+        if (evt === 'reasoning_delta') {
+            // 思考型模型的 reasoning 增量（dev-board#364）：后端按 OpenRouter 的 delta.reasoning
+            // 原样转发，这里直接写进思考卡，**不过标签解析器**——思考文本不是协议正文，
+            // 里面出现 <final>/<tool_code> 字样只是模型在自言自语，不能当成标签处理。
+            try {
+                const d = JSON.parse(dataStr)
+                appendReasoning(d.content || '')
+            } catch (e) {
+                appendReasoning(dataStr)
+            }
+        } else if (evt === 'text_delta') {
             try {
                 const d = JSON.parse(dataStr)
                 // 调试日志：显示 text_delta 内容
@@ -733,6 +1086,11 @@ export function useAgentStream() {
         } else if (evt === 'client_action') {
             try {
                 const d = JSON.parse(dataStr)
+                // 插件后台任务进度（PluginJobService，规范 v2.4 §11）：状态归 backgroundTasks，
+                // 与 PPT 生成等 Agent 后台任务同一张表、同一个浮窗；仍继续下发给页面级 handler。
+                if (d && d.action === 'plugin_job_progress') {
+                    upsertPluginJob(d)
+                }
                 // Trigger registered callbacks
                 if (clientActionHandler.value) {
                     clientActionHandler.value(d)
@@ -773,9 +1131,42 @@ export function useAgentStream() {
                 console.error('Failed to handle ' + evt, e)
             }
         } else if (evt === 'doc_stream_end') {
-            // 流式写入结束信号：让消费端冲缓冲并命令 worker 收尾（写尾行/建尾表/复位）
+            // 流式写入结束信号：让消费端冲缓冲并命令 worker 收尾（写尾行/建尾表/复位）。
+            // 消费端返回失败原因时必须摆到对话里——写入静默丢失（空白文档 + 气泡永远停在
+            // 「正在向文档流式写入内容…」+ 没有任何报错）正是 dev-board#465 的症状。
+            // payload.wrote === false 是后端侧的同一件事：这一轮一个字的正文都没送出去。
+            let streamEndPayload = {}
+            try { streamEndPayload = JSON.parse(dataStr) || {} } catch (e) { streamEndPayload = {} }
+            const streamBubble = currentAssistantBubble.value
+            let docStreamFailureShown = false
+            const surfaceDocStreamFailure = (reason) => {
+                if (!reason || !streamBubble || docStreamFailureShown) return
+                docStreamFailureShown = true
+                const notice = t('agentStream.docStreamFailedNotice', { reason: String(reason) })
+                // 占位符是"正在写入"的谎言，直接换掉；其余情况追加一行
+                if (streamBubble.content === t('agentStream.docStreamingPlaceholder')) {
+                    streamBubble.content = notice
+                } else {
+                    streamBubble.content = (streamBubble.content || '') + '\n\n' + notice
+                }
+                // 不清掉这个标记，后面的正文/提示会被 appendText 继续吞掉（见 bubble.isEditorStreaming）
+                streamBubble.isEditorStreaming = false
+            }
             if (clientActionHandler.value) {
-                clientActionHandler.value({ action: 'doc_stream_end' })
+                // report 回调而不是返回值：这条链路中间隔着 ChatInterface 的
+                // emit('client-action')，emit 恒返回 undefined，返回值传不回来
+                const ret = clientActionHandler.value({
+                    action: 'doc_stream_end', payload: streamEndPayload, report: surfaceDocStreamFailure,
+                })
+                if (ret && typeof ret.then === 'function') {
+                    ret.then(surfaceDocStreamFailure).catch(e => {
+                        console.error('[SSE] doc_stream_end handler failed', e)
+                        surfaceDocStreamFailure((e && e.message) || String(e))
+                    })
+                } else if (streamEndPayload.wrote === false) {
+                    // 消费端根本没接这条（旧实现）时，后端这一路仍然能报出"没写进去"
+                    surfaceDocStreamFailure(t('agentStream.docStreamReasonNoBody'))
+                }
             }
         } else if (evt === 'cancelled') {
             // 处理取消事件
@@ -790,7 +1181,7 @@ export function useAgentStream() {
                 }
             }
             finalizeProcesses('error')
-            // 不需要在这里添加 [正在停止] 标记，因为 abort 函数已经添加了
+            // 停止提示不在这里写：abort() 已经设置了 bubble.stopNotice
             isStreaming.value = false
         } else if (evt === 'bubble_end' || evt === 'error') {
             // Flush any remaining content in parserBuffer before ending
@@ -846,6 +1237,18 @@ export function useAgentStream() {
                     // 走到这里说明后端强制压缩后仍装不下（或压不动）
                     currentAssistantBubble.value.content +=
                         '\n\n' + t('agentStream.contextOverflowNotice') + '\n'
+                } else if (errMsg.includes('AI_NETWORK_UNREACHABLE')) {
+                    // 本机连不上模型网关（后端 LlmErrorClassifier.NETWORK_UNREACHABLE_MARKER）：
+                    // 断网/DNS 解析不了/TLS 握手被掐断。上游原文这时往往只有一个主机名
+                    // （UnknownHostException 的 getMessage()），甩给用户等于没有信息（dev-board#602）。
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('agentStream.networkUnreachableNotice') + '\n'
+                } else if (errMsg.includes('AI_INTERNAL_ERROR')) {
+                    // 编排器内部一致性错误（后端 LlmErrorClassifier.INTERNAL_ERROR_MARKER）：
+                    // 载荷后面拼着裸 Java 异常文本（如 "text cannot be null or blank"），
+                    // 对用户毫无意义。已生成的部分内容与工具过程后端都落了库，刷新看得到。
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('agentStream.internalErrorNotice') + '\n'
                 } else {
                     currentAssistantBubble.value.content += '\n\n' + t('agentStream.executionInterrupted', { message: errMsg }) + '\n'
                 }
@@ -897,6 +1300,7 @@ export function useAgentStream() {
                     bubble.content = ''
                     bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 }
                     bubble.processes = []
+                    bubble.timeline = []
                     bubble.artifacts = []
                     bubble.walkthrough = ''
                     // 快照会把 <question> 整块重放，这里必须一起清掉，否则旧问题卡与重建的并存
@@ -908,15 +1312,18 @@ export function useAgentStream() {
                 currentAssistantBubble.value = bubble
                 currentAssistantBubble.value.isStreaming = true
                 isStreaming.value = true
+                // 快照续流已把这条气泡整段重填，断线截断的账在这里一笔勾销
+                disconnectedBubble = null
 
                 // 2. Reset Parser State
                 resetParser()
 
                 // 3. Process the full snapshot
                 // Treat it like a huge chunk of text
+                // 与 text_delta 走同一个解析入口（此前调的 parseTags 从未定义，
+                // 切回运行中的会话就抛 ReferenceError，快照整段丢失）
                 if (d.content) {
-                    parserBuffer += d.content
-                    parseTags()
+                    processTextStream(d.content)
                 }
 
             } catch (e) {
@@ -944,6 +1351,7 @@ export function useAgentStream() {
         }
         if (!proc.items) proc.items = []
         proc.items.push({ type: 'step', status: isDone ? 'done' : 'doing', text })
+        captureChatTimeline(bubble)
     }
 
     // --- PARSER HELPERS ---
@@ -952,8 +1360,10 @@ export function useAgentStream() {
      * 终态收敛：流结束（正常/出错/取消）时，把所有仍处于进行中的条目落到终态。
      * finalToolStatus: 'success'（正常结束）| 'error'（出错/取消）
      */
-    const finalizeProcesses = (finalToolStatus) => {
-        const bubble = currentAssistantBubble.value
+    // targetBubble 缺省是当前气泡；重连后给「断线截断的那条」收敛时要显式传，
+    // 那时 currentAssistantBubble 已经是 null。
+    const finalizeProcesses = (finalToolStatus, targetBubble) => {
+        const bubble = targetBubble || currentAssistantBubble.value
         if (!bubble || !bubble.processes) return
         bubble.processes.forEach(proc => {
             const items = proc.items || []
@@ -978,6 +1388,7 @@ export function useAgentStream() {
             console.log('[AgentStream] Flushing remaining buffer:', parserBuffer.length, 'chars')
             flushContent(parserBuffer)
             parserBuffer = ''
+            captureChatTimeline(currentAssistantBubble.value)
         }
     }
 
@@ -991,7 +1402,35 @@ export function useAgentStream() {
                 data: evt.data,
                 fileName: evt.name ? evt.name : (evt.type === 'task_list' ? t('agentStream.taskListArtifact') : t('agentStream.planArtifact'))
             })
+            captureChatTimeline(currentAssistantBubble.value)
         }
+    }
+
+    // 思考增量的落点与 <thinking> 标签同一套：还没有过程卡时写顶层思考卡（ghost 态实时
+    // 滚动显示），已经有工具过程后（多轮工具循环中间的再思考）挂到最后一个过程卡的
+    // 思考条目上——与 flushContent 的 thinking 分支同口径，否则第二轮起的思考会被
+    // 记到首轮的顶层卡上、把首轮的时长越算越长。
+    const appendReasoning = (text) => {
+        const bubble = currentAssistantBubble.value
+        if (!bubble || !text) return
+        if (bubble.processes.length > 0) {
+            const lastProc = bubble.processes[bubble.processes.length - 1]
+            const lastItem = lastProc.items.length > 0 ? lastProc.items[lastProc.items.length - 1] : null
+            if (!lastItem || lastItem.type !== 'thinking' || lastItem.status === 'done') {
+                lastProc.items.push({ type: 'thinking', status: 'thinking', content: text, startTime: Date.now(), fromReasoning: true })
+            } else {
+                lastItem.content += text
+            }
+            captureChatTimeline(bubble)
+            return
+        }
+        if (bubble.thinking.status !== 'thinking') {
+            bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: Date.now() }
+            bubble.thinking.status = 'thinking'
+            if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
+        }
+        bubble.thinking.content += text
+        captureChatTimeline(bubble)
     }
 
     const flushContent = (text) => {
@@ -1118,6 +1557,18 @@ export function useAgentStream() {
             th.endTime = Date.now()
             th.duration = th.startTime ? (th.endTime - th.startTime) / 1000 : 0
         }
+        // reasoning_delta 在过程卡里建的思考条目没有 </thinking> 来收尾：正文/下一个标签
+        // 一到就算想完了，否则那张过程卡会一直显示「运行中」到整轮结束
+        const procs = bubble && bubble.processes
+        if (procs && procs.length > 0) {
+            const items = procs[procs.length - 1].items || []
+            const last = items[items.length - 1]
+            if (last && last.type === 'thinking' && last.status === 'thinking' && last.fromReasoning) {
+                last.status = 'done'
+                last.endTime = Date.now()
+                last.duration = last.startTime ? (last.endTime - last.startTime) / 1000 : 0
+            }
+        }
     }
 
     const handleTag = (tagName, isClose, attrs, fullTag) => {
@@ -1154,9 +1605,11 @@ export function useAgentStream() {
                     bubble.thinking.endTime = Date.now()
                     bubble.thinking.duration = (bubble.thinking.endTime - bubble.thinking.startTime) / 1000
                 }
-                activeTag = activeProcessId ? 'process' : null // Return to process scope or null
+                activeProcessId = thinkingParentProcessId
+                activeTag = activeProcessId ? 'process' : null // Return to the actual enclosing scope
             } else {
                 // Open thinking
+                thinkingParentProcessId = activeProcessId
                 if (activeProcessId) {
                     const proc = bubble.processes.find(p => p.id === activeProcessId)
                     if (proc) {
@@ -1182,7 +1635,8 @@ export function useAgentStream() {
                     activeProcessId = lastProc.id
                     activeTag = 'thinking'
                 } else {
-                    // Only root thinking if NO processes exist yet
+                    // Keep later thinking segments distinct in the transcript.
+                    if (bubble.thinking.status === 'done') bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: Date.now() }
                     bubble.thinking.status = 'thinking'
                     // 发送时已打过 startTime（读秒从发送起算），这里只兜底补齐
                     if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
@@ -1214,7 +1668,7 @@ export function useAgentStream() {
                 activeProcessId = null
             } else {
                 settleRootThinking(bubble)
-                const pid = `proc-${Date.now()}`
+                const pid = `proc-${Date.now()}-${bubble.processes.length}`
                 // 新任务开始 = 之前所有任务的文字步骤都已结束（兜底收敛，防止历史卡片停留"执行中"）
                 bubble.processes.forEach(p => p.items?.forEach(item => {
                     if (item.type === 'step' && item.status === 'doing') item.status = 'done'
@@ -1327,7 +1781,11 @@ export function useAgentStream() {
             else activeTag = 'walkthrough'
         } else if (tagName === 'final') {
             if (isClose) activeTag = null
-            else { settleRootThinking(bubble); activeTag = 'final' }
+            else {
+                settleRootThinking(bubble)
+                if (bubble.content && !bubble.content.endsWith('\n\n')) bubble.content += '\n\n'
+                activeTag = 'final'
+            }
         } else if (tagName === 'question') {
             if (isClose) {
                 // 收尾去掉正文两端空白：模型习惯在标签后换行，问题卡首行会多一个空行
@@ -1361,7 +1819,7 @@ export function useAgentStream() {
                 const name = attributes['name'] || null
                 activeTag = 'artifact'
 
-                const aid = `art-${Date.now()}`
+                const aid = `art-${Date.now()}-${bubble.artifacts.length}`
                 handleArtifactEvent({ operation: 'create', id: aid, type, name, status: 'draft', data: { content: '' } })
             } else {
                 activeTag = null
@@ -1370,7 +1828,7 @@ export function useAgentStream() {
     }
 
     // --- XML STREAM PROCESSOR ---
-    const processTextStream = (text) => {
+    const processTextStream = (text, history = false) => {
         // FILTER: Detect and strip orphaned JSON content artifacts (e.g. {"content":""} or {"content":"..."})
         // This mitigates the issue where the model echoes the hidden JSON protocol
         if (text.trim().startsWith('{"content":') && text.trim().endsWith('}')) {
@@ -1391,11 +1849,14 @@ export function useAgentStream() {
 
         parserBuffer += text
 
-        // FILTER: Strip markdown code block wrappers
-        parserBuffer = parserBuffer.replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
-        parserBuffer = parserBuffer.replace(/\n?```\s*$/gm, '')
-        parserBuffer = parserBuffer.replace(/```(?:xml|html|markdown)?\s*\n/g, '')
-        parserBuffer = parserBuffer.replace(/\n```/g, '')
+        if (!history) {
+            // FILTER: Strip markdown code block wrappers
+            parserBuffer = parserBuffer.replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
+            parserBuffer = parserBuffer.replace(/\n?```\s*$/gm, '')
+            parserBuffer = parserBuffer.replace(/```(?:xml|html|markdown)?\s*\n/g, '')
+            parserBuffer = parserBuffer.replace(/\n```/g, '')
+
+        }
 
         // 标签清单在 agentTagProtocol.mjs（与后端 AgentTagProtocol.TAGS 同一份）：
         // option 是 question 的子标签，不认它的话选项文字会当正文流出去，用户会看到裸的 <option> 源码；
@@ -1424,15 +1885,53 @@ export function useAgentStream() {
                 flushContent(parserBuffer.substring(0, index))
             }
 
+            captureChatTimeline(currentAssistantBubble.value)
             handleTag(tagName, isSlash === '/', null, fullTag)
+            captureChatTimeline(currentAssistantBubble.value)
 
             // Slice buffer
             parserBuffer = parserBuffer.substring(index + fullTag.length)
             tagRegex.lastIndex = 0
         }
+        const possibleTag = parserBuffer.lastIndexOf('<')
+        const tail = possibleTag >= 0 ? parserBuffer.slice(possibleTag) : ''
+        const keepTail = tail && !tail.includes('>')
+        const end = keepTail ? possibleTag : parserBuffer.length
+        if (end > 0) {
+            flushContent(parserBuffer.slice(0, end))
+            parserBuffer = parserBuffer.slice(end)
+            captureChatTimeline(currentAssistantBubble.value)
+        }
     }
 
 
+
+    const parseAssistantHistory = (content) => {
+        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, handler: clientActionHandler.value }
+        const bubble = createAssistantBubble()
+        bubble.planTodos = []
+        try {
+            currentAssistantBubble.value = bubble
+            clientActionHandler.value = null
+            resetParser()
+            processTextStream(content || '', true)
+            flushRemainingBuffer()
+            settleRootThinking(bubble)
+            finalizeProcesses('success')
+            for (const entry of bubble.timeline) {
+                if (entry.type === 'thinking') Object.assign(entry.data, { status: 'done', duration: 0, startTime: 0 })
+            }
+            return bubble
+        } finally {
+            currentAssistantBubble.value = saved.bubble
+            parserBuffer = saved.parserBuffer
+            activeTag = saved.activeTag
+            activeProcessId = saved.activeProcessId
+            thinkingParentProcessId = saved.thinkingParentProcessId
+            activeToolItem = saved.activeToolItem
+            clientActionHandler.value = saved.handler
+        }
+    }
 
     const clientActionHandler = ref(null)
     const titleUpdateHandler = ref(null)
@@ -1460,6 +1959,59 @@ export function useAgentStream() {
         return content
     }
 
+    // 组件卸载时收尾：SSE reader 循环、心跳 interval、待触发的重连定时器都活在闭包里，
+    // 页面被销毁（工作台的跳转一律 reLaunch，整个页面栈都拆掉）后它们不会自己停。
+    // 后果不只是白耗流量：僵尸实例还会 scheduleReconnect，与新挂载的实例轮流把对方
+    // 从同一会话的 SSE 上挤下去。activeNetworkRecoveryHook 是模块级单例，
+    // 只有它当前指向本实例时才置空，否则会踩掉后挂载实例的重连入口。
+    if (getCurrentInstance()) {
+        onUnmounted(() => {
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+            // 先清会话 id：scheduleReconnect 与重连回调都以它为准，置空即断掉续命链
+            currentConversationId.value = null
+            stopHeartbeatMonitor()
+            if (activeNetworkRecoveryHook === myNetworkRecoveryHook) activeNetworkRecoveryHook = null
+            myNetworkRecoveryHook = null
+            resetSSE()
+        })
+    }
+
+    const updateInbox = async (messageId, patch) => {
+        const conversationId = currentConversationId.value
+        if (!conversationId || !messageId) return null
+        const request = captureInboxRequest(conversationId)
+        // 「立即发送」（submissionMode=steer）会让停住的队列恢复执行。停止时本地 SSE 已经断开，
+        // 不重连的话后端跑完一整轮，前端既没有停止键也没有新气泡，已执行的条目还挂在待处理里。
+        // 必须先连上再发 PATCH：恢复那一轮的 input_applied 可能在 PATCH 返回前就发出，
+        // 前端不带 Last-Event-ID，连晚了就补不回来。
+        if (patch && patch.submissionMode === 'steer' && !isConnected.value) {
+            try { await connectSSE(conversationId) } catch (e) { console.warn('[AgentStream] reconnect before send-now failed', e) }
+        }
+        try {
+            const updated = await updateAgentInboxItem(conversationId, messageId, patch)
+            if (!canApplyInboxResponse(request)) return null
+            return replaceInboxItem(inboxState, updated)
+        } catch (e) {
+            if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
+            throw e
+        }
+    }
+
+    const deleteInbox = async (messageId, expectedRevision) => {
+        const conversationId = currentConversationId.value
+        if (!conversationId || !messageId) return
+        const request = captureInboxRequest(conversationId)
+        try {
+            const snapshot = await deleteAgentInboxItem(conversationId, messageId, expectedRevision)
+            if (!canApplyInboxResponse(request)) return
+            if (snapshot && Array.isArray(snapshot.items)) applyInboxSnapshot(inboxState, snapshot)
+            else removeInboxItem(inboxState, messageId)
+        } catch (e) {
+            if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
+            throw e
+        }
+    }
+
     return {
         bubbles,
         isStreaming,
@@ -1468,7 +2020,12 @@ export function useAgentStream() {
         setConversationId: setConversationIdWithReset,
         resetSSE,
         clearBubbles,
+        parseAssistantHistory,
         currentConversationId,
+        inboxState,
+        updateInbox,
+        deleteInbox,
+        restoreInbox: () => restoreInbox(currentConversationId.value),
         // Rollback support
         rollbackToMessage,
         // Background task tracking
@@ -1482,10 +2039,17 @@ export function useAgentStream() {
         agentPaused,
         agentRunStatus,
         agentAwaitingInput,
+        // SSE 链路状态：'live' / 'reconnecting'（含第几次），输入区据此显示断连提示条
+        linkStatus,
+        // 本轮生效的 Skill 与「刚自动加载了一个技能」的轻提示
+        activeSkills,
+        skillNotice,
         // 已结束的后台任务不再自动销毁（完成态要保留可查），供任务面板做「关闭」按钮
         dismissBackgroundTask: (taskId) => {
             if (taskId && backgroundTasks.value[taskId]) delete backgroundTasks.value[taskId]
         },
+        // 插件后台任务：SSE 之外的补种入口（ChatInterface 挂载时拉 /api/plugin-jobs 把在跑的接回浮窗）
+        upsertPluginJob,
         // 切回会话时重连 SSE：后端 connect 会推 run_state（运行中还会推 state_recovery 续流）。
         reattachSSE: async (conversationId) => {
             if (!conversationId) return

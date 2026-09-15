@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Workbench copy (pages/project-overview/project-overview.vue).
 export default {
+  resizePanel: 'Drag to resize panel',
+  waitForDocumentWrite: 'Wait for the current AI task and document write to finish before inserting.',
   // 菜单栏 / 命令面板
   menuNeedsDoc: 'Open a Word document first',
   menuSelectTextFirst: 'Select the text you want to comment on first',
@@ -13,6 +17,7 @@ export default {
   switchRecentProject: 'Switch to a recent project',
   recentProjects: 'Recent Projects',
   noOtherRecentProjects: 'No other recent projects',
+  recentProjectsLoadFailed: 'Failed to load — tap to retry',
   projectHome: 'Project Overview',
   allProjects: 'All Projects…',
   statusInProgress: 'In Progress',
@@ -24,6 +29,12 @@ export default {
   // Top bar right side
   accountUsage: 'Account & Usage',
   accountConnected: 'Account Connected',
+  appearance: 'Appearance',
+  appearanceLight: 'Light',
+  appearanceDark: 'Dark',
+  appearanceSystem: 'Follow system',
+  walletChipTitle: 'Credits balance and membership tier; click to open account settings',
+  walletMenuLabel: 'Account and usage',
   trialInfo: 'About the Trial',
   // Grace warning chip and dialog (2026-08: official builds require an account)
   trialCountdown: 'Trial - {n} days left',
@@ -38,6 +49,11 @@ export default {
   collapseSidebar: 'Collapse Sidebar',
   toolsPanel: 'Tools Panel',
   aiAssistant: 'AI Assistant',
+  // Panel docking (dev-board#180): shared by the context menu and the drop hints
+  dockToLeft: 'Move to left sidebar',
+  dockToRight: 'Move to right panel',
+  dockToBottom: 'Move to bottom panel',
+  dockCurrent: 'current',
   openSplit: 'Open Split View',
   closeSplit: 'Close Split View',
   ocrCapture: 'Screenshot Capture (OCR)',
@@ -50,20 +66,17 @@ export default {
   systemSettings: 'Settings (AI Provider / API Key)',
   clientInitial: 'C',
   addMember: 'Add Member',
-  profile: 'Profile',
-  // Assistant config dialog
-  configAssistant: 'Configure Assistant',
-  assistantNameLabel: 'Assistant Name (System)',
-  presetPromptLabel: 'Preset Prompt (System)',
-  userPromptLabel: 'Custom Prompt',
-  userPromptPlaceholder: 'Enter custom instructions...',
-  userPromptHint: 'Note: if a custom prompt is set, the preset prompt will be ignored (User Prompt Prevails).',
+  // Top-right avatar dropdown (2026-08-19 moved up from the rail bottom; a single entry since profile merged into settings, 2026-08-20)
+  accountMenu: 'Settings',
+  settingsTabName: 'Settings',
+  // The two tabs inside the "Voice" panel
+  voiceTts: 'Text to Speech',
+  voiceRecorder: 'Meeting Recording',
   // Sidebar file tree action row
   selectAll: 'Select All',
   newDoc: 'New Document',
   newFolder: 'New Folder',
   batchSelect: 'Batch Select',
-  uploadFile: 'Upload File',
   batchDownload: 'Batch Download',
   sort: 'Sort',
   batchCopy: 'Batch Copy',
@@ -74,6 +87,9 @@ export default {
   // Tabs bar and editor area
   newOrCopy: 'New / Duplicate',
   emptyWorkspace: 'Select a file to get started',
+  emptyWorkspaceHint: 'Open a file from the explorer on the left, or create a new document',
+  railEditEnter: 'Arrange sidebar (drag to reorder or dock)',
+  railEditDone: 'Done arranging',
   leftPaneIdle: 'Left pane idle',
   rightPaneIdle: 'Right pane idle',
   // Bottom tools panel
@@ -91,6 +107,7 @@ export default {
   newConversation: 'New Conversation',
   loadHistoryFailed: 'Failed to load history',
   loadConversationFailed: 'Failed to load conversation',
+  forkConversationFailed: 'Failed to fork conversation',
   statusRunning: 'Running',
   statusPaused: 'Paused',
   statusInterrupted: 'Interrupted',
@@ -139,6 +156,8 @@ export default {
   webMarkInserted: 'Web evidence mark inserted',
   // Adoption pending bar
   adoptPendingText: 'Files awaiting your decision',
+  // When the count is known, be specific (the ones that could be combined automatically already were)
+  adoptPendingCount: '{count} file(s) awaiting your decision',
   goHandle: 'Resolve',
   // Trial info dialog
   trialInfoBody: 'You are on the trial version and all features are fully available. Upgrade to the full version to connect an AI WorkDeck account, sync purchased content, and use the AI WorkDeck Cloud channel.',
@@ -168,12 +187,15 @@ export default {
   removed: 'Removed',
   removeFailed: 'Failed to remove',
   aiPanelNotReady: 'AI panel is not ready, please try again later',
+  // Kick-off prompt for the plugin dev panel's "Have AI develop it": must start with
+  // the literal Chinese trigger word "插件开发" to hit the skill match, so it stays
+  // untranslated here (same convention as litigation-visual's server-composed prompt).
+  pluginDevAiPrompt: '插件开发：请继续开发本项目「插件开发/{id}/」目录下的插件「{name}」（文件夹 ID {folderId}）。先读取该目录下的 manifest.json 与 web/ 源码了解现状，然后按我的需求迭代；改完用 plugin_dev_install 安装到本机让我测试。',
   projectNameEmpty: 'Project name cannot be empty',
   renameSuccess: 'Renamed',
   renameFailed: 'Rename failed',
   renameSyncFailed: 'Rename sync failed',
   openDocFirst: 'Open a document first',
-  highlightTextFirst: 'Highlight a passage in the document first (blue selection)',
   setHyperlinkFailed: 'Failed to set hyperlink',
   docNotReady: 'Document not ready',
   linkCreated: 'Link created',
@@ -181,6 +203,9 @@ export default {
   fileMissing: 'File not found',
   fileNotOnDisk: 'This file is not on disk',
   revealFailed: 'Cannot show in Finder',
+  shareFailed: 'Cannot send this file',
+  shareUnsupported: 'Sending is not supported on this system',
+  shareClipboardHint: 'File copied. Switch to WeChat, pick a chat and press Ctrl+V to send',
   copyFailedNoNewFile: 'Copy failed: no new file returned',
   copyFailed: 'Copy failed',
   recordingStarted: 'Recording started',
@@ -209,9 +234,31 @@ export default {
   folderTooManyFiles: 'Folder contains {count} files (over the 10-file limit), please remove some',
   fileAdded: 'Added: {name}',
   noDragData: 'No drag data received',
-  defaultAssistantName: 'Default Assistant',
-  defaultAssistantPrompt: 'You are a professional assistant.',
-  assistantSwitchedToast: 'Switched to: {name}',
-  assistantSwitchedMsg: 'Assistant switched to: {name}',
-  configSaved: 'Configuration saved',
+  // EvidenceLink: drop-to-link in the editor / method bar / link locating (evidenceLinkActions.js, EvidenceMethodBar.vue, LibreOfficeEditor.vue)
+  evidence: {
+    selectFirst: 'Select the text to link first',
+    failedTitle: '"{name}" was not linked',
+    retryHint: '; drag onto the same text again to retry',
+    selfLink: 'A document cannot be linked to itself',
+    bookmarkFailed: 'Could not create the bookmark, reselect the text and try again',
+    linked: 'Linked to "{name}"',
+    methodLabel: 'Method:',
+    dropHint: 'Release to link to the selected text',
+    method: {
+      written_review: 'Document review',
+      written_statement: 'Written statement',
+      web_check: 'Online check',
+      third_party: 'Third-party material',
+      interview: 'Interview',
+    },
+    loc: {
+      wholeFile: 'Whole file',
+      page: 'Page {page}',
+      quote: '"{quote}"',
+      region: 'Marked region',
+      time: 'From {time}',
+      web: '{host}',
+      cell: '{sheet}!{cell}',
+    },
+  },
 }

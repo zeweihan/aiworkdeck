@@ -1,0 +1,212 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// project-overview.vue 的证据链接（EvidenceLink）动作组：拖文件到编辑器即建链、
+// method 浮动小条、点击 filelink 链接解包定位。与 stagingArea.js 同款导出 `{ data(), methods }`，
+// 经展开进组件，`this` 即 project-overview 页面实例。
+//
+// 契约见 .claude/agents/ai-doc-bridge.md「EvidenceLink 契约」；书签名 = linkKey = `EVID_<ULID>`，
+// 超链接 URL 只是跳转用（`<base>?u=checkba://filelink?k=&projectId=[&t=]`）。
+
+import {
+  createEvidenceLink, addEvidenceTargets, updateEvidenceTarget, getEvidenceLink, getFileDetail,
+} from '@/services/api.js'
+import { parseFileLinkUrl, locatorSummary } from '@/utils/evidenceLocator.js'
+import { createEvidenceLinkForDrop, pickEvidenceTarget } from './evidenceLinkCore.js'
+
+export { createEvidenceLinkForDrop, pickEvidenceTarget }
+
+// request() 已把 {code:0,data} 整体 resolve 出来，这里统一剥一层。
+function unwrap(resp) {
+  if (resp && typeof resp === 'object' && 'code' in resp && 'data' in resp) return resp.data
+  return resp
+}
+
+export const evidenceLinkData = () => ({
+  // method 浮动小条：连续拖放只保留最后一条（对象整体替换）。
+  // docFileId 用于把小条钉在建链的那份文档上——换标签/关文档后它不该还挂着。
+  // status: 'success' | 'error'——失败回执也走小条（toast 会被编辑器 webview 遮挡，
+  // dev-board#133/#139：失败只弹 toast = 用户毫无感知的静默失败）。
+  evidenceMethodBar: {
+    visible: false, side: 'left', fileName: '', method: 'written_review',
+    targetId: null, linkKey: '', docFileId: null, status: 'success', errorText: '',
+  },
+})
+
+export const evidenceLinkMethods = {
+  // 编辑器 drop 事件：{ file: {fileId|id, name, fileType, wpsFileId} }，side = 'left' | 'right'
+  async onEvidenceDrop(payload, side) {
+    const raw = payload && payload.file
+    if (!raw) return
+    const file = { ...raw, id: Number(raw.id != null ? raw.id : raw.fileId) }
+    if (!file.id) return
+    if (file.fileType === 'folder' || raw.isFolder) return
+    const doc = side === 'right' ? this.activeFileRight : this.activeFileLeft
+    const exec0 = doc ? this.getLibreExecutorMap()[side + ':' + doc.id] : null
+    if (!doc || !exec0) {
+      uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
+      return
+    }
+    if (Number(file.id) === Number(doc.id)) {
+      this.showEvidenceMethodBarError({
+        side, fileName: file.name || '', docFileId: Number(doc.id),
+        message: this.$t('workbench.evidence.selfLink'),
+      })
+      return
+    }
+    const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+    const exec = (action, params) => exec0.executeCommand(action, params)
+    let res
+    try {
+      res = await createEvidenceLinkForDrop({
+        exec, api: { createEvidenceLink: (p, b) => createEvidenceLink(p, b).then(unwrap), addEvidenceTargets: (p, k, t) => addEvidenceTargets(p, k, t).then(unwrap) },
+        projectId: pid, docFileId: Number(doc.id), file, internalBase: this.WPS_INTERNAL_HTTP_LINK_BASE || '',
+      })
+    } catch (e) {
+      // API 入库失败：此时书签+超链接多半已写入文档（正文里文字已变成链接），
+      // 只弹 toast 会被 webview 遮挡成「看起来关联上了」的静默半成品——必须上小条。
+      // 重拖同一段文字会走 recovered 分支收编死锚点，提示里把这条路告诉用户。
+      this.showEvidenceMethodBarError({
+        side, fileName: file.name || '', docFileId: Number(doc.id),
+        message: ((e && e.message) || this.$t('workbench.linkFailed')) + this.$t('workbench.evidence.retryHint'),
+      })
+      return
+    }
+    if (!res.ok) {
+      const key = res.reason === 'no_selection' ? 'workbench.evidence.selectFirst'
+        : res.reason === 'bookmark_failed' ? 'workbench.evidence.bookmarkFailed' : 'workbench.setHyperlinkFailed'
+      this.showEvidenceMethodBarError({
+        side, fileName: file.name || '', docFileId: Number(doc.id), message: this.$t(key),
+      })
+      return
+    }
+    this.showEvidenceMethodBar({
+      side, fileName: file.name || '', targetId: res.targetId, linkKey: res.linkKey, docFileId: Number(doc.id),
+    })
+    uni.$emit('awd:evidence-changed', { docFileId: Number(doc.id), linkKey: res.linkKey })
+  },
+
+  /**
+   * 建链成功后的确认小条。**不自动收起**：它同时是「已经关联上了」的回执和
+   * 「这条底稿按什么方式核查」的提问，3 秒自动消失两件事都办不成——用户松手时
+   * 眼睛在正文的落点上，等看向窗格左下角，小条已经没了，于是「什么都没发生」
+   * （dev-board#138，维护者真机反馈；#135 修的是它压根不显示，这次修的是它留不住）。
+   * 收起只由用户动作驱动：点 ×、选了方法、又建了新的一条（整体替换）、
+   * 或者换到别的文档（模板里按 docFileId 收，见 project-overview.vue）。
+   */
+  showEvidenceMethodBar({ side, fileName, targetId, linkKey, docFileId }) {
+    this.evidenceMethodBar = {
+      visible: true, side, fileName, method: 'written_review', targetId, linkKey,
+      docFileId: docFileId == null ? null : Number(docFileId),
+      status: 'success', errorText: '',
+    }
+  },
+  /** 建链失败的回执小条（同一个位置、红描边）。toast 在编辑器场景会被 webview 遮挡，不许用。 */
+  showEvidenceMethodBarError({ side, fileName, docFileId, message }) {
+    this.evidenceMethodBar = {
+      visible: true, side, fileName, method: 'written_review', targetId: null, linkKey: '',
+      docFileId: docFileId == null ? null : Number(docFileId),
+      status: 'error', errorText: message || this.$t('workbench.linkFailed'),
+    }
+  },
+  closeEvidenceMethodBar() {
+    this.evidenceMethodBar.visible = false
+  },
+  async onEvidenceMethodChange({ targetId, method }) {
+    if (!targetId || !method) return
+    this.evidenceMethodBar.method = method
+    const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+    try {
+      await updateEvidenceTarget(pid, targetId, { method })
+      const doc = this.evidenceMethodBar.side === 'right' ? this.activeFileRight : this.activeFileLeft
+      uni.$emit('awd:evidence-changed', { docFileId: doc ? Number(doc.id) : null, linkKey: this.evidenceMethodBar.linkKey })
+    } catch (e) {
+      uni.showToast({ title: (e && e.message) || this.$t('workbench.linkFailed'), icon: 'none' })
+    }
+  },
+
+  // 文档里点击 filelink 链接（两条入口 onLibreOpenUrl / __checkbaHandleInternalLink 都汇到这里）
+  handleFileLinkClick(rawUrl, preview = null) {
+    const parsed = parseFileLinkUrl(rawUrl)
+    if (!parsed || !this.projectId) return false
+    if (!preview) {
+      this.openDocumentLinkPreview(rawUrl)
+      return true
+    }
+    const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+    preview.loading = true
+    getEvidenceLink(pid, parsed.linkKey)
+      .then((resp) => {
+        if (!this.isDocumentLinkPreviewCurrent(preview)) return
+        const view = unwrap(resp)
+        const targets = view && Array.isArray(view.targets) ? view.targets : []
+        const hit = pickEvidenceTarget(view, parsed.targetId)
+        preview.loading = false
+        preview.targets = hit ? [hit] : targets
+        if (!preview.targets.length) preview.error = this.$t('workbench.linkedFileMissing')
+      })
+      .catch((e) => {
+        if (!this.isDocumentLinkPreviewCurrent(preview)) return
+        preview.loading = false
+        preview.error = e?.message || this.$t('workbench.openFailed')
+      })
+    return true
+  },
+  closeFileLinkPicker() {
+    this.fileLinkPicker.visible = false
+    this.fileLinkPicker.targets = []
+    this.fileLinkPicker.linkKey = ''
+  },
+  evidenceTargetSummary(target) {
+    return locatorSummary(target && target.locator, (k, p) => this.$t('workbench.' + k, p))
+  },
+  evidenceMethodLabel(method) {
+    return method ? this.$t('workbench.evidence.method.' + method) : ''
+  },
+  // target = TargetView {id, fileId, file, locator, ...}
+  async openFileLinkTarget(target, sideOverride = null, { preview = null } = {}) {
+    const fid = Number(target && target.fileId)
+    if (!fid || !this.projectId) return
+    const side = sideOverride || this.fileLinkPicker.side || 'left'
+    if (preview && !this.isDocumentLinkPreviewCurrent(preview)) return
+    this.closeFileLinkPicker()
+    try {
+      if (target.file && target.file.isDeleted) throw new Error(this.$t('workbench.fileMissing'))
+      const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+      const file = await getFileDetail(pid, fid)
+      if (preview && !this.isDocumentLinkPreviewCurrent(preview)) return
+      if (!file) throw new Error(this.$t('workbench.fileMissing'))
+      if (preview) {
+        // openFile deduplicates toward the pane already holding B. Move that
+        // background tab first so it cannot reactivate B over source A.
+        const sourceList = preview.sourceSide === 'left' ? this.leftFiles : this.rightFiles
+        const existing = sourceList.find(f => Number(f.id) === fid)
+        if (existing) {
+          const saved = await this.flushTabBeforePaneMove(existing.id, preview.sourceSide)
+          if (!this.isDocumentLinkPreviewCurrent(preview)) return
+          if (!saved) throw new Error(this.$t('editor.moveTabSaveFailed'))
+        }
+        this.closeDocumentLinkPreview()
+        this.splitMode = true
+        if (existing && sourceList.includes(existing)) this.moveTabTo(existing.id, preview.sourceSide, side, null)
+      }
+      const old = this.focusedPane
+      this.focusedPane = side === 'right' && this.splitMode ? 'right' : 'left'
+      this.openFile(file, { locator: target.locator || null })
+      this.focusedPane = old
+    } catch (e) {
+      if (preview) {
+        if (this.isDocumentLinkPreviewCurrent(preview)) preview.error = e.message || this.$t('workbench.openFailed')
+        return
+      }
+      uni.showToast({ title: e.message || this.$t('workbench.openFailed'), icon: 'none' })
+    }
+  },
+  // 编辑器/预览消费完 pendingLocator 后回调清空，避免切回标签时重复跳转
+  onLocatorConsumed(fileId) {
+    const fid = Number(fileId)
+    for (const list of [this.leftFiles, this.rightFiles]) {
+      const tab = Array.isArray(list) ? list.find((f) => Number(f.id) === fid) : null
+      if (tab && tab.pendingLocator) tab.pendingLocator = null
+    }
+  },
+}

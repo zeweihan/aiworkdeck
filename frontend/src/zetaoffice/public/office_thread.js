@@ -1,18 +1,16 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 (Beijing Jingwei Ziyi Technology Co., Ltd.) and AI WorkDeck contributors
+ * SPDX-FileCopyrightText: allotropia software GmbH (portions derived from zetajs examples, MIT)
+ * SPDX-License-Identifier: AGPL-3.0-or-later AND MIT
  *
- * ZetaOffice spike — OFFICE WORKER thread (#39 Phase 0).
+ * 本文件主体是 AI WorkDeck 自研的 office 线程 UNO 原语实现，以 AGPL-3.0-or-later 发布。
+ * 早期骨架（worker 装载、消息分发、少量示例式片段）源自 allotropia/zetajs 的 MIT 示例
+ * （simple-examples + web-office），该部分继续以 MIT 提供。仓库根 LICENSE 是 AGPL-3.0，
+ * 见同目录 UPSTREAM.md 对上游 zeta.js 的溯源说明。
  *
+ * 技术说明（原头注释保留部分）：
  * This file is loaded INTO the LibreOffice WASM em-pthread worker via
  * Module.uno_scripts. Here `Module.zetajs` resolves to the zetajs UNO bridge
- * (on the MAIN thread it resolves to the thread *port* instead — see index.html).
- *
- * Patterns below are taken verbatim from allotropia/zetajs examples
- * (simple-examples + web-office). The four #39 acceptance probes are wired as
- * message handlers driven by buttons on the main thread.
- *
- * The deliverable of this spike is the VERDICT on the four probes, run on a real
- * device — not a green checkmark here. Lines marked VERIFY need a real run to
- * confirm against the current zetajs beta API.
+ * (on the MAIN thread it resolves to the thread *port* instead, see index.html).
  */
 'use strict';
 
@@ -92,13 +90,50 @@ function anchorBookmark(range) {
   const name = ANCHOR_PREFIX + (++anchorSeq);
   const bm = xModel.createInstance('com.sun.star.text.Bookmark');
   bm.setName(name);
-  xModel.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
+  // 与 insertTextAtCursor 同一条纪律（dev-board#627）：书签必须插进 range 自己所属的
+  // XText。正文 XText 只接受属于自己的区间，range 在表格单元格（或页眉/脚注等别的
+  // story）里时 body.insertTextContent(range,…) 抛 RuntimeException，find_text_locations
+  // 的 anchorId 就成了 null，AI 的 set_selection / replace_at_position 在表格里够不着。
+  range.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
   return name;
 }
 function anchorRange(name) {
   const bms = xModel.getBookmarks();
   if (!bms.hasByName(name)) return null;
   return bms.getByName(name).getAnchor(); // XTextRange
+}
+// ---- EvidenceLink 书签原语 helpers（dev-board#103）-----------------------------
+function bmFail(msg) { return { success: false, error: msg, message: msg }; }
+// 当前选区的第一个 range（无选区 → null）。
+function selectionRange() {
+  const sel = ctrl.getSelection();
+  let range = null;
+  try { if (sel && typeof sel.getByIndex === 'function' && sel.getCount() > 0) range = sel.getByIndex(0); } catch (e) {}
+  return range;
+}
+// 从 range 所在段落向前找标题链：OutlineLevel 1..6，每级只取最近的一个，直到
+// 遇到 1 级或文首。返回 {chain:[{level,text}], paragraphIndex}；定位不到（跨
+// story 比较抛异常、表格单元格等）时 chain 为空、paragraphIndex -1。
+function headingChainOf(range) {
+  const chain = [];
+  let seen = 99;
+  try {
+    const body = xModel.getText(); // XTextRangeCompare
+    const paras = [];
+    eachParagraph(function (el) { paras.push(el); return false; });
+    const start = range.getStart();
+    let idx = -1;
+    for (let i = 0; i < paras.length; i++) {
+      if (body.compareRegionStarts(paras[i].getStart(), start) >= 0 && body.compareRegionEnds(paras[i].getEnd(), start) <= 0) { idx = i; break; }
+    }
+    if (idx < 0) return { chain: [], paragraphIndex: -1 };
+    for (let i = idx; i >= 0 && seen > 1; i--) {
+      let lvl = 0;
+      try { lvl = Number(paras[i].getPropertyValue('OutlineLevel')) || 0; } catch (e) {}
+      if (lvl > 0 && lvl < seen) { chain.unshift({ level: lvl, text: (paras[i].getString() || '').trim().slice(0, 200) }); seen = lvl; }
+    }
+    return { chain: chain, paragraphIndex: idx };
+  } catch (e) { return { chain: [], paragraphIndex: -1 }; }
 }
 
 // #104 variable fields: a NAMED bookmark spanning the inserted value marks a
@@ -165,17 +200,63 @@ function paragraphTextOf(range) {
     return cur.getString();
   } catch (e) { return null; }
 }
-// Enumerate body paragraphs, calling fn(el, index); fn returns true to stop.
-function eachParagraph(fn) {
+// ---- 段落索引缓存（dev-board#108 G3）------------------------------------------
+// 每次 get_document_text / get_paragraph 都从头枚举 900+ 段是 O(n)（150 页实测
+// 2-5s/次，AI 逐页读一遍报告 = 每页付一次全扫）。这里一次枚举把每段的 XTextRange
+// （段落对象本身，引擎里是带标记的活对象，内容变了它跟着变）存进数组，之后按
+// 下标 O(1) 取。失效规则：(1) modified 监听器——任何文档改动都会触发，这是主闸；
+// (2) 索引绑定 xModel 引用，换文档（load_document / 测试探针直接换 xModel）自然
+// 重建；(3) 写原语末尾的 verifySnapshot 再补一刀。段落被删后旧对象会抛异常，
+// withParaIndex 捕到就重建一次再读，仍失败才冒泡。
+const paraIndex = { model: null, ranges: null, total: 0 };
+// 补全只保留一个内存快照；不把临时候选变成存进 docx 的书签。
+let completionSnapshot = null;
+let completionSeq = 0;
+// Session-local, monotonic content generation; read-only exports do not advance it.
+let reviewRevision = 0, reviewModel = null;
+let viewChangeInFlight = 0;
+function currentReviewRevision() {
+  if (reviewModel !== xModel) { reviewModel = xModel; reviewRevision++; }
+  return reviewRevision;
+}
+function invalidateParaIndex() {
+  paraIndex.ranges = null; paraIndex.total = 0; paraIndex.model = null;
+  // 导出同步切换修订显示并恢复 modified 标志，会触发只读的缓存失效；
+  // 此窗口不可能插入人工编辑，补全令牌保留，接受时仍完整核对模型/位置/原文。
+  if (!exportInFlight && !viewChangeInFlight) { completionSnapshot = null; reviewRevision++; }
+}
+function buildParaIndex() {
+  const ranges = [];
   const en = xModel.getText().createEnumeration();
-  let i = 0;
   while (en.hasMoreElements()) {
     const el = en.nextElement();
-    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-      if (fn(el, i)) return;
-      i++;
-    }
+    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) ranges.push(el);
   }
+  paraIndex.ranges = ranges; paraIndex.total = ranges.length; paraIndex.model = xModel;
+  return paraIndex;
+}
+function getParaIndex() { return (paraIndex.ranges && paraIndex.model === xModel) ? paraIndex : buildParaIndex(); }
+// fn(index) 只许做读操作——段落对象失效抛异常时会重建索引再调一次 fn。
+function withParaIndex(fn) {
+  try { return fn(getParaIndex()); }
+  catch (e) { invalidateParaIndex(); return fn(getParaIndex()); }
+}
+// 取第 idx（0 基）段，顺手 getString 验活；越界返回 null。写原语先用它拿段落，
+// 再在 withParaIndex 之外改，免得重试把副作用做两遍。
+function paraAt(idx) {
+  return withParaIndex(function (ix) {
+    const el = ix.ranges[idx];
+    if (!el) return null;
+    el.getString();
+    return el;
+  });
+}
+// Enumerate body paragraphs, calling fn(el, index); fn returns true to stop.
+// 走索引缓存：fn 里只做读（见 withParaIndex）。
+function eachParagraph(fn) {
+  withParaIndex(function (ix) {
+    for (let i = 0; i < ix.total; i++) { if (fn(ix.ranges[i], i)) return; }
+  });
 }
 // Select a range THE WAY A HUMAN WOULD: the view cursor jumps there (the view
 // scrolls to it) and the selection is visibly painted. gotoRange(range, false)
@@ -212,24 +293,208 @@ function rangeStartsEqual(a, b) {
   if (!a || !b) return false;
   try { return a.getText().compareRegionStarts(a, b) === 0; } catch (e) { return false; }
 }
-// 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。**两种修订
-// 类型要求相反的摆法**（真机探针逐一试出来的，别凭直觉改）：
-//   - 插入型：文本在正文流里，光标必须**跨选**整个区间才命中；
-//   - 删除型：页边模式下删除文本不在正文流，必须**塌陷**到区间起点；跨选
-//     反而落进那段隐藏文本、dispatch 打空。
+// ---- 批注↔修订的可比坐标（dev-board#377）-----------------------------------
+// 审阅面板要判「这条批注是不是在解释这条修订」。判定本身放在宿主的纯函数里做
+// （utils/reviewGrouping.js，好写单测），worker 只负责把两边可比的坐标如实回传：
+//   paraKey   正文段落枚举序（走 paraIndex 缓存二分定位，O(log n) 次区间比较）
+//   start/end 区间两端在该段落内的字符偏移
+// **不按批注正文的前缀识别**（「【修訂理由】」是模型自己写的，不固定），只按位置。
+// 表格单元格、页眉页脚里的区间跨 story，body.compareRegionStarts 会抛
+// IllegalArgumentException——那种情况回 null，宿主据此不做关联（宁可不挂，不猜）。
+function paraKeyOf(body, start) {
+  return withParaIndex(function (ix) {
+    if (!ix.total) return -1;
+    let lo = 0, hi = ix.total - 1;
+    // compareRegionStarts(A, B) === 1 表示 A 在 B 之前（与 headingChainOf 同口径）：
+    // 找「起点不晚于 start」的最后一段。
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (body.compareRegionStarts(ix.ranges[mid].getStart(), start) >= 0) lo = mid; else hi = mid - 1;
+    }
+    return body.compareRegionEnds(ix.ranges[lo].getEnd(), start) <= 0 ? lo : -1;
+  });
+}
+function rangeLocator(start, end) {
+  try {
+    const paraKey = paraKeyOf(xModel.getText(), start);
+    if (!(paraKey >= 0)) return null;
+    const txt = start.getText();
+    const head = txt.createTextCursorByRange(start);
+    head.gotoStartOfParagraph(true);
+    const off = String(head.getString() || '').length;
+    let len = 0;
+    // 正文流里的宽度。页边显示模式下删除型在流里是零宽（文本被移进 redline
+    // 对象），start === end 是正常结果，不是取失败。
+    try { const span = txt.createTextCursorByRange(start); span.gotoRange(end, true); len = String(span.getString() || '').length; } catch (e) {}
+    return { paraKey: paraKey, start: off, end: off + len };
+  } catch (e) { return null; }
+}
+function applyLocator(it, start, end) {
+  const loc = rangeLocator(start, end);
+  it.paraKey = loc ? loc.paraKey : -1;
+  if (loc) { it.start = loc.start; it.end = loc.end; }
+}
+// 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。摆法**跟着当前
+// 的修订显示模式走**（真机探针逐一试出来的，别凭直觉改）：
+//   - 插入型：文本一直在正文流里，光标必须**跨选**整个区间才命中；
+//   - 删除型 + 页边模式：删除文本被移出正文流，必须**塌陷**到区间起点，跨选
+//     反而落进那段隐藏文本、dispatch 打空；
+//   - 删除型 + 内联模式（默认，dev-board#368）：删除文本就在正文流里带删除线，
+//     和插入型一样必须跨选——内联态下沿用塌陷会「引擎未命中该条」（真机实证：
+//     resolve_revision 返回失败、redline 条数不减）。
 // 摆错不会报错——dispatch 静默不生效，甚至凭空多出一条空插入修订，所以调用
-// 方（resolve_revision）一律用条数变化复核。
+// 方（resolve_revision / resolve_revisions）用条数与原生修订层变化复核。
 function selectRedlineRange(r, forDispatch) {
   try {
     const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
     if (!rs || !re) return false;
     let isDelete = false;
     try { isDelete = String(r.getPropertyValue('RedlineType')) === 'Delete'; } catch (e) {}
+    const collapse = isDelete && (readShowChanges() === false || (forDispatch && readShowChangesInMargin() === true));
     const vc = ctrl.getViewCursor();
     vc.gotoRange(rs, false);
-    if (!(forDispatch && isDelete)) vc.gotoRange(re, true);
+    if (!collapse) vc.gotoRange(re, true);
     return true;
   } catch (e) { return false; }
+}
+// A redline can contain several authors' revision layers. Rejecting a deletion
+// over an earlier insertion restores the text and exposes that insertion, but
+// keeps both the redline's identity and the total count. Compare native layer
+// metadata as well as the count; never dispatch twice to make the count fall.
+function redlineLayerState(r) {
+  try {
+    return JSON.stringify(['RedlineType', 'RedlineAuthor', 'RedlineDateTime', 'RedlineComment', 'RedlineSuccessorData']
+      .map(function (name) { return r.getPropertyValue(name); }));
+  } catch (e) { return null; }
+}
+function redlineWasResolved(r, beforeCount, afterCount, beforeLayer) {
+  if (afterCount < beforeCount) return true;
+  const afterLayer = redlineLayerState(r);
+  return beforeLayer !== null && afterLayer !== null && beforeLayer !== afterLayer;
+}
+// ---- Resolution by native redline id (engines with AwdReviewGeometry) -----
+// In the review gutter deletions leave the body flow: two touching deletions
+// Writer does not group (other author or minute) collapse to one body position,
+// and the cursor path above can resolve the neighbour. .uno:AcceptTrackedChange
+// and .uno:RejectTrackedChange take an SfxUInt32Item named like the command,
+// matched against SwRangeRedline::GetId() (sw/source/uibase/uiview/view2.cxx).
+// Only AwdReviewGeometry exposes that id (revisions[].index -> id);
+// RedlineIdentifier is a pointer-derived string, not the id.
+// The cursor is still placed on the target: outside LibreOfficeKit the slot is
+// disabled unless the cursor is on a redline (uiview/viewstat.cxx) and a
+// disabled slot is dropped silently. The id then picks the redline. An unknown
+// id falls back to the cursor, so only ids read in this command are sent.
+function redlineTop(type, author, date, comment) {
+  const time = date ? Date.UTC(date.Year, date.Month - 1, date.Day, date.Hours, date.Minutes, date.Seconds)
+    + (Number(date.NanoSeconds) || 0) / 1e6 : NaN;
+  return { type: String(type), author: String(author), time: time, comment: String(comment || '') };
+}
+// All redlines in enumeration order. `layer` is exactly redlineLayerState();
+// top/below are the grouping fields of the first two native layers.
+function redlineSnapshot() {
+  const list = [], byId = new Map();
+  const en = xModel.getRedlines().createEnumeration();
+  while (en.hasMoreElements()) {
+    const r = en.nextElement();
+    const v = ['RedlineType', 'RedlineAuthor', 'RedlineDateTime', 'RedlineComment', 'RedlineSuccessorData']
+      .map(function (name) { return r.getPropertyValue(name); });
+    const next = {};
+    (Array.isArray(v[4]) ? v[4] : []).forEach(function (pv) { if (pv && pv.Name) next[pv.Name] = zetajs.fromAny(pv.Value); });
+    const s = { redline: r, identifier: String(r.getPropertyValue('RedlineIdentifier')), layer: JSON.stringify(v),
+      successor: JSON.stringify(v[4]), top: redlineTop(v[0], v[1], v[2], v[3]),
+      below: next.RedlineType == null ? null : redlineTop(next.RedlineType, next.RedlineAuthor, next.RedlineDateTime, next.RedlineComment) };
+    list.push(s);
+    byId.set(s.identifier, byId.has(s.identifier) ? null : s);
+  }
+  return { list: list, byId: byId };
+}
+// SwRedlineData::CanCombineForAcceptReject: same author, type and comment, at
+// most one minute apart (sw/source/core/doc/docredln.cxx).
+function sameRedlineFamily(a, b) {
+  return !!a && !!b && a.type === b.type && a.author === b.author && a.comment === b.comment
+    && Math.abs(a.time - b.time) <= 60000;
+}
+// Besides the target, Writer itself resolves the connected area of touching
+// redlines that combine with it, also one layer down (getConnectedArea), and
+// CompressRedlines() then merges a now-adjacent identical redline into its
+// predecessor (DocumentRedlineManager.cxx). Any other change to a redline that
+// existed before the dispatch means a wrong resolution: returns its identifier.
+function unexplainedRedlineChange(before, after, k, exempt) {
+  const changed = function (s) { const a = after.byId.get(s.identifier); return !a || a.layer !== s.layer; };
+  const target = before.list[k];
+  for (let i = 0; i < before.list.length; i++) {
+    const s = before.list[i];
+    if (i === k || exempt.has(s.identifier) || !changed(s)) continue;
+    let run = true;
+    for (let j = Math.min(i, k) + 1; j < Math.max(i, k); j++) if (!changed(before.list[j])) { run = false; break; }
+    if (run && (sameRedlineFamily(s.top, target.top) || sameRedlineFamily(s.below, target.top))) continue;
+    if (!after.byId.get(s.identifier)) {
+      let j = i - 1;
+      while (j >= 0 && !after.byId.get(before.list[j].identifier)) j--;
+      const into = j >= 0 ? after.byId.get(before.list[j].identifier) : null;
+      if (into && sameRedlineFamily(into.top, s.top) && into.successor === s.successor) continue;
+    }
+    return s.identifier;
+  }
+  return null;
+}
+// Native ids of the target enumeration indices, read in the same synchronous
+// command as `snapshot` (after matchRevisionSnapshot remapped the indices).
+// Each target must still carry an expected RedlineIdentifier; null otherwise.
+function nativeRedlineTargets(snapshot, indices, expected) {
+  const geometry = JSON.parse(ctrl.getPropertyValue('AwdReviewGeometry'));
+  if (!geometry || geometry.version !== 1 || !Array.isArray(geometry.revisions)) return null;
+  const ids = new Map(geometry.revisions.map(function (r) { return [r.index, r.id]; }));
+  const targets = [];
+  for (const raw of indices) {
+    const index = Number(raw), s = snapshot.list[index], id = ids.get(index);
+    if (!s || snapshot.byId.get(s.identifier) !== s || (expected && !expected.has(s.identifier))
+      || !Number.isInteger(id) || id < 0 || id > 0xFFFFFFFF) return null;
+    targets.push({ index: index, identifier: s.identifier, layer: s.layer, id: id });
+  }
+  return new Set(targets.map(function (t) { return t.identifier; })).size === targets.length ? targets : null;
+}
+function expectedRedlineIdentifiers(p) {
+  return p && Array.isArray(p.expectedRevisions) ? new Set(p.expectedRevisions.map(function (r) { return r && r.identifier; })) : null;
+}
+// Dispatch each target once by its native id and judge that target itself:
+// its identifier is gone or its layer changed (one reject of a deletion over an
+// older insertion only pops the top layer). Stops at the first failure and
+// never retries. Returns null on engines without the geometry contract, whose
+// callers keep the cursor path unchanged.
+function resolveRedlinesByNativeId(indices, expected, action) {
+  if (!isWriterDoc() || !supportsReviewGeometry()) return null;
+  let current, targets;
+  try { current = redlineSnapshot(); targets = nativeRedlineTargets(current, indices, expected); }
+  catch (e) { return { error: errStr(e) }; }
+  const missing = indices.findIndex(function (i) { return !current.list[Number(i)]; });
+  if (missing >= 0) return { error: 'no revision at index ' + indices[missing] };
+  if (!targets) return { error: '修订已变化，请刷新后重试' };
+  const command = action === 'accept' ? 'AcceptTrackedChange' : 'RejectTrackedChange';
+  const dispatcher = css.frame.DispatchHelper.create(context);
+  const results = [];
+  let stopped = false;
+  targets.sort(function (a, b) { return b.index - a.index; });
+  for (const t of targets) {
+    if (stopped) { results.push({ index: t.index, success: false }); continue; }
+    const k = current.list.findIndex(function (s) { return s.identifier === t.identifier; });
+    // Resolved together with an earlier target of this command.
+    if (k < 0 || current.list[k].layer !== t.layer) { results.push({ index: t.index, success: true }); continue; }
+    let ok = false;
+    try {
+      if (selectRedlineRange(current.list[k].redline, true)) {
+        dispatcher.executeDispatch(ctrl.getFrame(), '.uno:' + command, '', 0, [mkProp(command, uint32Any(t.id))]);
+        const after = redlineSnapshot(), mine = after.byId.get(t.identifier);
+        const others = new Set(targets.map(function (x) { return x.identifier; }));
+        others.delete(t.identifier);
+        ok = (!mine || mine.layer !== t.layer) && !unexplainedRedlineChange(current, after, k, others);
+        current = after;
+      }
+    } catch (e) { ok = false; }
+    results.push({ index: t.index, success: ok });
+    if (!ok) stopped = true;
+  }
+  return { results: results, remaining: current.list.length };
 }
 function countComments() {
   let n = 0;
@@ -243,17 +508,22 @@ function countComments() {
   return n;
 }
 // ref 接受两种形状：数字 index（枚举顺序，ReviewPanel 既有用法）或字符串 id
-// （批注的 Name 属性——AI 工具面用它替代 index，因为 index 在任何一条批注被
+// （批注的 Name，或尚无 Name 时的原生 ParaId——index 在任何一条批注被
 // 处置/删除后就会整体前移，同一会话里两次调用之间不可靠）。
 function commentAt(ref) {
-  if (typeof ref === 'string' && ref !== '' && !/^\d+$/.test(ref)) {
+  if (typeof ref === 'string' && ref !== '') {
     try {
       const en = xModel.getTextFields().createEnumeration();
+      let match = null;
       while (en.hasMoreElements()) {
         const f = en.nextElement();
         if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
-        try { if (String(f.getPropertyValue('Name')) === ref) return f; } catch (e) {}
+        if (commentIdOf(f) === ref) {
+          if (match) return null; // Ambiguous IDs must never target the wrong comment.
+          match = f;
+        }
       }
+      return match;
     } catch (e) {}
     return null;
   }
@@ -271,14 +541,26 @@ function commentAt(ref) {
   return null;
 }
 function commentIdOf(f) {
-  try { return String(f.getPropertyValue('Name') || ''); } catch (e) { return ''; }
+  try { const name = String(f.getPropertyValue('Name') || ''); if (name) return name; } catch (e) {}
+  // Writer ParaId is the native PostItId in hex, including freshly inserted
+  // point comments whose Name is still empty. Reading it does not edit the field.
+  try {
+    const id = String(f.getPropertyValue('ParaId') || '');
+    if (/^[0-9a-f]+$/i.test(id)) return 'postit:' + parseInt(id, 16);
+  } catch (e) {}
+  return '';
 }
 // Insert text at the view cursor, honoring '\n' as a PARAGRAPH BREAK.
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
 // real engine: a multi-line insert landed as ONE paragraph), so multi-paragraph
 // inserts must interleave insertControlCharacter(PARAGRAPH_BREAK).
+// 写入必须走**光标自己所属的 XText**（vc.getText()），不是 xModel.getText()。
+// 正文 XText 只接受属于自己的区间：光标在表格单元格（或页眉/脚注等别的 story）
+// 里时，body.insertString(vc,…) 抛 RuntimeException，IME 提交与粘贴就整条静默
+// 失败——「表格里打不进字」的病灶（dev-board#627）。insertInlineStyled 一直是
+// 这么写的，所以带 markdown 标记的插入在单元格里反而是好的。
 function insertTextAtCursor(vc, text) {
-  const xText = xModel.getText();
+  const xText = vc.getText();
   const parts = String(text).split('\n');
   for (let i = 0; i < parts.length; i++) {
     if (i > 0) xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
@@ -296,6 +578,64 @@ function insertTextAtCursor(vc, text) {
 // Returns [{start, delLen, insText}] in OLD-string coordinates, ordered
 // RIGHT-TO-LEFT (descending start) so applying them in order never shifts the
 // offsets of the edits still pending.
+//
+// 颗粒度契约（dev-board#365）：按字符（JS code unit）diff，中文不分词——分词/按行
+// 都会把「三十日→六十日」退化成整句。diff 用 Myers O((N+M)·D)，代价只随差异步数 D
+// 增长，段落再长、只改两个字也只产出两条片段（旧实现是 500x500 的 LCS DP，超过
+// 上限就整段一块替换，长条款首尾各改一字会呈现为「整段删除重写」——就是 #365 的病灶）。
+// 差异步数上限：Myers 的回溯快照约 D² 个整数。D 超过它说明整段已面目全非（几千字
+// 的改写），退化成「掐掉公共前后缀后整块替换」——那本来就是重写。
+const MINIMAL_EDITS_MAX_D = 2000;
+// Myers 差异（字符级）：返回 [{start, delLen, insText}]（a 的坐标、降序），相邻的
+// 删/插已并成一条替换型片段；差异步数超过 maxD 时返回 null。
+function myersEdits(a, b, maxD) {
+  const N = a.length, M = b.length;
+  const limit = Math.min(N + M, maxD);
+  const off = limit + 1;
+  const v = new Int32Array(2 * limit + 3);
+  const snaps = []; // 每一步 d 的 v 快照（k 从 -d-1 到 d+1，下标 = k + d + 1），回溯用
+  let D = -1;
+  v[off + 1] = 0;
+  for (let d = 0; d <= limit && D < 0; d++) {
+    for (let k = -d; k <= d; k += 2) {
+      let x;
+      if (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) x = v[off + k + 1];
+      else x = v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < N && y < M && a.charCodeAt(x) === b.charCodeAt(y)) { x++; y++; }
+      v[off + k] = x;
+      if (x >= N && y >= M) { D = d; break; }
+    }
+    snaps.push(v.slice(off - d - 1, off + d + 2));
+  }
+  if (D < 0) return null;
+  // 回溯：从终点沿快照往回走，产出降序的单字操作，顺手把相邻操作并成片段。
+  const edits = [];
+  let cur = null;
+  const pushDel = function (at) {
+    if (cur && cur.start === at + 1) { cur.start = at; cur.delLen++; }
+    else { if (cur) edits.push(cur); cur = { start: at, delLen: 1, insText: '' }; }
+  };
+  const pushIns = function (at, ch) {
+    if (cur && cur.start === at) cur.insText = ch + cur.insText;
+    else { if (cur) edits.push(cur); cur = { start: at, delLen: 0, insText: ch }; }
+  };
+  let x = N, y = M;
+  for (let d = D; d > 0; d--) {
+    const vp = snaps[d - 1], po = d; // 快照 d-1 的下标 = k + (d-1) + 1 = k + d
+    const k = x - y;
+    let prevK;
+    if (k === -d || (k !== d && vp[po + k - 1] < vp[po + k + 1])) prevK = k + 1; else prevK = k - 1;
+    const prevX = vp[po + prevK], prevY = prevX - prevK;
+    const down = prevK === k + 1; // down = 插入 b[prevY]；right = 删除 a[prevX]
+    const midX = down ? prevX : prevX + 1;
+    while (x > midX) { x--; y--; } // 对角线：相同字，不产出操作
+    if (down) pushIns(prevX, b.charAt(prevY)); else pushDel(prevX);
+    x = prevX; y = prevY;
+  }
+  if (cur) edits.push(cur);
+  return edits;
+}
 function minimalEdits(oldStr, newStr) {
   const oLen = oldStr.length, nLen = newStr.length;
   let p = 0;
@@ -305,38 +645,10 @@ function minimalEdits(oldStr, newStr) {
   while (s < maxP - p && oldStr.charCodeAt(oLen - 1 - s) === newStr.charCodeAt(nLen - 1 - s)) s++;
   const oMid = oldStr.slice(p, oLen - s), nMid = newStr.slice(p, nLen - s);
   if (!oMid && !nMid) return [];
-  // Pure insert/delete, or a middle too big for the DP (500x500 chars — far
-  // beyond any single clause edit): one contiguous replace of the trimmed
-  // middle is already minimal enough.
-  if (!oMid || !nMid || oMid.length * nMid.length > 250000) {
-    return [{ start: p, delLen: oMid.length, insText: nMid }];
-  }
-  // LCS DP over the trimmed middle (lengths <= 500, so Uint16 lengths are safe).
-  const m = oMid.length, n = nMid.length, W = n + 1;
-  const dp = new Uint16Array((m + 1) * W);
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i * W + j] = oMid.charCodeAt(i - 1) === nMid.charCodeAt(j - 1)
-        ? dp[(i - 1) * W + (j - 1)] + 1
-        : Math.max(dp[(i - 1) * W + j], dp[i * W + (j - 1)]);
-    }
-  }
-  // Backtrack from the end, coalescing adjacent del+ins into single replaces.
-  const edits = [];
-  let i = m, j = n, curDel = 0, curIns = '';
-  const flush = function (atOld) {
-    if (curDel || curIns) { edits.push({ start: p + atOld, delLen: curDel, insText: curIns }); curDel = 0; curIns = ''; }
-  };
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oMid.charCodeAt(i - 1) === nMid.charCodeAt(j - 1)) {
-      flush(i); i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i * W + (j - 1)] >= dp[(i - 1) * W + j])) {
-      curIns = nMid.charAt(j - 1) + curIns; j--;
-    } else {
-      curDel++; i--;
-    }
-  }
-  flush(0);
+  // 纯插入/纯删除本身就是一条片段；差异步数超上限（面目全非）也退化成整块替换。
+  const edits = (!oMid || !nMid) ? null : myersEdits(oMid, nMid, MINIMAL_EDITS_MAX_D);
+  if (!edits) return [{ start: p, delLen: oMid.length, insText: nMid }];
+  for (let k = 0; k < edits.length; k++) edits[k].start += p;
   // Cleanup: a SINGLE stray equal char sandwiched between two edits (LCS 在中文
   // 里常捞到巧合的"的/、"之类) makes choppy, confusing redlines — fold it into
   // one combined edit. edits is descending; [k+1] is the LEFT neighbor.
@@ -350,6 +662,12 @@ function minimalEdits(oldStr, newStr) {
     } else k++;
   }
   return edits;
+}
+// find_replace 全部替换的分流判据：原生 replaceAll 一次只能把「掐掉公共前后缀的中段」
+// 整块替换；差异不止一块（甲方→乙方 与 三日→五日 两处）时整块替换会把两处之间没改的
+// 字一起删了重打，必须走逐命中的 applyMinimalRedline 路径。
+function replaceAllIsSingleBlock(findText, replaceText) {
+  return minimalEdits(String(findText == null ? '' : findText), String(replaceText == null ? '' : replaceText)).length <= 1;
 }
 // Apply newText onto range as char-granular tracked edits. Returns true when
 // handled (caller must NOT also setString), false when the caller should fall
@@ -469,6 +787,7 @@ const UI_COMMANDS = {
 // Shared verification snapshot returned by mutating commands: where the cursor
 // is now + the paragraph as it reads AFTER the edit ("改完看一眼").
 function verifySnapshot() {
+  invalidateParaIndex(); // 写原语刚改过文档，段落索引不可信（modified 监听器之外再补一刀）
   try {
     const vc = ctrl.getViewCursor();
     return { paragraphAfterEdit: paragraphTextOf(vc), selectedText: vc.getString() };
@@ -518,51 +837,292 @@ function enumEq(a, b) { return unoEnumVal(a) === unoEnumVal(b); }
 // short 型属性（VertOrient/OutlineLevel 等）必须传带类型的 Any：裸 JS number 会被
 // 编组成 long，严格的 UNO setter（>>= sal_Int16）直接拒绝且被 try 吞掉。
 function shortAny(n) { return new zetajs.Any(zetajs.type.short, Number(n)); }
-const HOUSE = {
-  fontWestern: 'Arial', fontAsian: '楷体_GB2312',
-  bodyPt: 12, titlePt: 16,
-  spaceAfterMm: ptToMm100(18),       // 段后 18 磅
-  lineMinMm: ptToMm100(16),          // 行距最小值 16 磅
-  indentChars: 2,                    // 首行缩进 2 字符（按正文字号折算）
-  tablePt: 10,
-  tableParaSpaceMm: ptToMm100(2.4),  // 单元格段前后 0.2 行 ≈ 2.4 磅
-  tableLineMinMm: ptToMm100(12),     // 单元格行距最小值 12 磅
-  tableBorderMm: 53,                 // 1.5 磅 ≈ 0.53mm（BorderLine2.LineWidth 单位 1/100mm）
-  afterTableBeforeMm: ptToMm100(18), // 表格后首段段前 18 磅
-};
+// SfxUInt32Item dispatch arguments (the native redline id) likewise get an explicit type.
+function uint32Any(n) { return new zetajs.Any(zetajs.type.unsigned_long, Number(n)); }
+// ---- 样式画像（styleProfile v1，dev-board#111）----------------------------
+// HOUSE 的唯一出处是 backend/src/main/resources/style-profiles/house-default.json：
+// scripts/sync-house-profile.mjs 把它包装成 house-default.js（self.HOUSE_DEFAULT_JSON），
+// 经 Module.uno_scripts 先于本文件载入。set_style_profile 把项目画像 merge 到默认之上
+// 后重算 HOUSE（派生常量表）；流式落字 / 建表 / 全文格式化 / 样式定义都只读 HOUSE。
+// 单位：pt 直接换 1/100mm；chars 按所在块字号折（1 字符 = 1 em）；lines 按字号 x 1.2
+// （与后端 Units.LINE_FACTOR 同一口径）。
+function houseDefaultProfile() {
+  try { if (self.HOUSE_DEFAULT_JSON) return JSON.parse(self.HOUSE_DEFAULT_JSON); } catch (e) {}
+  return null;
+}
+function profileClone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
+function isPlainObj(v) { return v != null && typeof v === 'object' && !Array.isArray(v); }
+// 同后端 StyleProfile.mergeInto：对象递归合并，headings 数组按 level 合并，其余整体替换。
+function profileMergeInto(target, source) {
+  Object.keys(source || {}).forEach(function (key) {
+    const sv = source[key], tv = target[key];
+    if (key === 'headings' && Array.isArray(sv) && Array.isArray(tv)) {
+      const merged = tv.filter(isPlainObj).map(profileClone);
+      sv.forEach(function (o) {
+        if (!isPlainObj(o)) return;
+        const hit = merged.find(function (m) { return Number(m.level) === Number(o.level); });
+        if (hit) profileMergeInto(hit, o); else merged.push(profileClone(o));
+      });
+      merged.sort(function (a, b) { return (Number(a.level) || 0) - (Number(b.level) || 0); });
+      target[key] = merged;
+    } else if (isPlainObj(sv) && isPlainObj(tv)) {
+      profileMergeInto(tv, sv);
+    } else {
+      target[key] = profileClone(sv);
+    }
+  });
+  return target;
+}
+function profLenPt(len, fontPt) {
+  if (!isPlainObj(len) || len.value == null) return null;
+  const v = Number(len.value);
+  if (!isFinite(v)) return null;
+  switch (len.unit || 'pt') {
+    case 'pt': return v;
+    case 'chars': return v * fontPt;
+    case 'lines': return v * fontPt * 1.2;
+    case 'mm': return v * 72 / 25.4;
+    case 'cm': return v * 720 / 25.4;
+    case 'twips': return v / 20;
+    default: return null;
+  }
+}
+function profMm100(len, fontPt, fallbackMm) {
+  const pt = profLenPt(len, fontPt);
+  return pt == null ? fallbackMm : ptToMm100(pt);
+}
+function profSizePt(block, fallback) {
+  const pt = isPlainObj(block) ? profLenPt(block.size, fallback) : null;
+  return pt == null || pt <= 0 ? fallback : pt;
+}
+function profColorInt(hex, fallback) {
+  if (hex == null) return fallback;
+  const m = String(hex).trim().match(/^#?([0-9a-fA-F]{6})$/);
+  return m ? parseInt(m[1], 16) : fallback;
+}
+// 行距描述（不碰 css.*，HOUSE 在引擎起来前就要算好）：{mode:'min'|'fix'|'prop', mm|pct}
+function profLineSpec(ls, fontPt, fallback) {
+  if (!isPlainObj(ls) || ls.value == null) return fallback;
+  const rule = ls.rule || 'auto';
+  if (rule === 'atLeast' || rule === 'exactly') {
+    const pt = profLenPt({ value: ls.value, unit: ls.unit || 'pt' }, fontPt);
+    if (pt == null || pt <= 0) return fallback;
+    return { mode: rule === 'atLeast' ? 'min' : 'fix', mm: ptToMm100(pt) };
+  }
+  const mult = Number(ls.value);
+  if (!isFinite(mult) || mult <= 0) return fallback;
+  return { mode: 'prop', pct: Math.round(ls.unit === 'percent' ? mult : mult * 100) };
+}
+const PROFILE_ALIGN = { left: 'left', right: 'right', center: 'center', justify: 'justify', both: 'justify', distribute: 'justify', start: 'left', end: 'right' };
+function profAlign(v, fallback) { return (v != null && PROFILE_ALIGN[String(v).toLowerCase()]) || fallback; }
+function profParaSpec(blk, fontPt, dflt) {
+  blk = isPlainObj(blk) ? blk : {};
+  return {
+    align: profAlign(blk.alignment, dflt.align),
+    topMm: profMm100(blk.spaceBefore, fontPt, dflt.topMm),
+    bottomMm: profMm100(blk.spaceAfter, fontPt, dflt.bottomMm),
+    ls: profLineSpec(blk.lineSpacing, fontPt, dflt.ls),
+    indentMm: profMm100(blk.firstLineIndent, fontPt, dflt.indentMm),
+    leftMm: profMm100(blk.leftIndent, fontPt, 0),
+  };
+}
+function profBorder(b, fallback) {
+  if (!isPlainObj(b)) return fallback;
+  const pt = profLenPt(b.width, 12);
+  return {
+    mm: pt == null ? fallback.mm : ptToMm100(pt),
+    color: profColorInt(b.color, fallback.color),
+    style: b.style || fallback.style,
+  };
+}
+// 画像 → 写端常量表。任何叶子缺省都有硬兜底（house-default.js 没载入时也能跑，
+// 但那时已不是单源——bootDoc 会记一条日志）。
+function buildHouse(p) {
+  p = isPlainObj(p) ? p : {};
+  const d = isPlainObj(p.defaults) ? p.defaults : {}, b = isPlainObj(p.body) ? p.body : {};
+  const t = isPlainObj(p.table) ? p.table : {}, cell = isPlainObj(t.cell) ? t.cell : {}, hdr = isPlainObj(t.header) ? t.header : {};
+  const dFont = isPlainObj(d.font) ? d.font : {}, bFont = isPlainObj(b.font) ? b.font : {};
+  const bodyPt = profSizePt(b, profSizePt(d, 12));
+  const fontAsian = bFont.eastAsia || dFont.eastAsia || '楷体_GB2312';
+  const fontWestern = bFont.western || dFont.western || 'Arial';
+  const color = profColorInt(b.color != null ? b.color : d.color, 0x000000);
+  const bodySpec = profParaSpec(b, bodyPt, { align: 'justify', topMm: 0, bottomMm: ptToMm100(18), ls: { mode: 'min', mm: ptToMm100(16) }, indentMm: ptToMm100(2 * bodyPt) });
+  const headings = {};
+  (Array.isArray(p.headings) ? p.headings : []).forEach(function (h) {
+    if (!isPlainObj(h) || h.level == null) return;
+    const lvl = Number(h.level);
+    const pt = profSizePt(h, bodyPt);
+    const hf = isPlainObj(h.font) ? h.font : {};
+    headings[lvl] = Object.assign(profParaSpec(h, pt, {
+      align: lvl === 1 ? 'center' : bodySpec.align, topMm: bodySpec.topMm, bottomMm: bodySpec.bottomMm,
+      ls: bodySpec.ls, indentMm: lvl === 1 ? 0 : bodySpec.indentMm,
+    }), {
+      level: lvl, sizePt: pt, bold: h.bold !== false, color: profColorInt(h.color, color),
+      fontAsian: hf.eastAsia || fontAsian, fontWestern: hf.western || fontWestern,
+    });
+  });
+  const tablePt = profSizePt(cell, 10);
+  const cellSpec = profParaSpec(cell, tablePt, { align: 'left', topMm: ptToMm100(2.4), bottomMm: ptToMm100(2.4), ls: { mode: 'min', mm: ptToMm100(12) }, indentMm: 0 });
+  const borders = isPlainObj(t.borders) ? t.borders : {};
+  const outside = profBorder(borders.outside, { mm: 53, color: 0x000000, style: 'single' });
+  const inside = profBorder(borders.insideH || borders.insideV || borders.inside, outside);
+  const byType = isPlainObj(cell.byContentType) ? cell.byContentType : {};
+  const typeAlign = function (k, dflt) { return profAlign(isPlainObj(byType[k]) ? byType[k].alignment : null, dflt); };
+  const toc = isPlainObj(p.toc) ? p.toc : {};
+  const tocTitle = isPlainObj(toc.titleStyle) ? toc.titleStyle : {};
+  return {
+    name: p.name || null,
+    fontWestern: fontWestern, fontAsian: fontAsian, color: color,
+    bodyPt: bodyPt, bodyBold: b.bold === true, bodySpec: bodySpec,
+    titlePt: headings[1] ? headings[1].sizePt : 16,
+    headings: headings,
+    afterTableBeforeMm: profMm100(b.afterTableSpaceBefore, bodyPt, ptToMm100(18)),
+    tablePt: tablePt, cellSpec: cellSpec,
+    tableBorder: { outsideMm: outside.mm, insideMm: inside.mm, color: outside.color, style: outside.style },
+    tableBorderMm: outside.mm,
+    headerRows: hdr.rows != null ? Math.max(0, Number(hdr.rows) || 0) : 1,
+    headerBold: hdr.bold !== false,
+    headerAlign: profAlign(hdr.alignment, 'center'),
+    headerVAlign: hdr.verticalAlign || 'center',
+    headerFill: profColorInt(hdr.fill, null),
+    repeatHeader: hdr.repeatOnEachPage !== false,
+    cellVAlign: cell.verticalAlign || 'center',
+    textAlign: typeAlign('text', cellSpec.align),
+    numberAlign: typeAlign('number', 'right'),
+    tocLevels: toc.levels != null && isFinite(Number(toc.levels)) ? Number(toc.levels) : 3,
+    tocTitle: toc.title != null ? String(toc.title) : '目录',
+    tocTitleSpec: { sizePt: profSizePt(tocTitle, 16), bold: tocTitle.bold !== false, align: profAlign(tocTitle.alignment, 'center') },
+  };
+}
+const HOUSE_DEFAULT_PROFILE = houseDefaultProfile();
+let ACTIVE_PROFILE = profileClone(HOUSE_DEFAULT_PROFILE);
+let HOUSE = buildHouse(ACTIVE_PROFILE);
+// 标题规格：缺该级时退到最近的已定义级别（画像只学到两级时三级以下沿用二级），
+// 一级兜底 16 磅粗居中、其余兜底正文同款加粗。
+function headingSpec(level) {
+  const lvl = Math.max(1, Math.min(Number(level) || 1, 9));
+  if (HOUSE.headings[lvl]) return HOUSE.headings[lvl];
+  for (let l = lvl - 1; l >= 2; l--) if (HOUSE.headings[l]) return HOUSE.headings[l];
+  const bs = HOUSE.bodySpec;
+  return Object.assign({}, bs, lvl === 1
+    ? { level: 1, sizePt: 16, bold: true, align: 'center', indentMm: 0 }
+    : { level: lvl, sizePt: HOUSE.bodyPt, bold: true }, { color: HOUSE.color, fontAsian: HOUSE.fontAsian, fontWestern: HOUSE.fontWestern });
+}
+function adjustEnum(name) {
+  const A = css.style.ParagraphAdjust;
+  return name === 'center' ? A.CENTER : name === 'right' ? A.RIGHT : name === 'left' ? A.LEFT : A.BLOCK;
+}
+function lineSpacingUno(ls) {
+  const M = css.style.LineSpacingMode;
+  if (ls.mode === 'prop') return new css.style.LineSpacing({ Mode: M.PROP, Height: ls.pct });
+  return new css.style.LineSpacing({ Mode: ls.mode === 'fix' ? M.FIX : M.MINIMUM, Height: ls.mm });
+}
+function vertOrientEnum(name) {
+  const V = css.text.VertOrientation;
+  return name === 'top' ? V.TOP : name === 'bottom' ? V.BOTTOM : V.CENTER;
+}
 // 把标准字符属性设到一个 property set（视图光标/文本光标/段落/单元格文本）上。
 // 只动传入 opts 声明的维度；weight 每次都设（run 级粗体开关需要确定性）。
+// 一次 XMultiPropertySet.setPropertyValues 代替 N 次 setPropertyValue：全文格式化
+// 的成本就是 UNO 往返次数（920 段 x 十几个属性 + 30 表 x 60 格），批写把往返数砍到
+// 约 1/10。对象不支持或任一属性被拒就返回 false，调用方退回逐个写的老路径
+//（逐个写本身幂等，重复一遍不会改坏）。
+function setPropsBatch(ps, names, values) {
+  if (!ps || typeof ps.setPropertyValues !== 'function') return false;
+  try { ps.setPropertyValues(names, values); return true; } catch (e) { return false; }
+}
+// opts: sizePt / bold / keepWeight / fontAsian / fontWestern / color（缺省取 HOUSE 正文值）。
 function applyHouseChar(ps, opts) {
   const o = opts || {};
-  try { ps.setPropertyValue('CharFontName', HOUSE.fontWestern); } catch (e) {}
-  try { ps.setPropertyValue('CharFontNameAsian', HOUSE.fontAsian); } catch (e) {}
-  try { ps.setPropertyValue('CharFontNameComplex', HOUSE.fontWestern); } catch (e) {}
-  try { setCharProp(ps, 'CharHeight', o.sizePt || HOUSE.bodyPt); } catch (e) {}
+  const fw = o.fontWestern || HOUSE.fontWestern, fa = o.fontAsian || HOUSE.fontAsian;
+  const size = o.sizePt || HOUSE.bodyPt;
+  const color = o.color != null ? o.color : HOUSE.color;
+  const names = ['CharFontName', 'CharFontNameAsian', 'CharFontNameComplex',
+    'CharHeight', 'CharHeightAsian', 'CharHeightComplex', 'CharColor'];
+  const values = [fw, fa, fw, size, size, size, color];
+  if (!o.keepWeight) {
+    const w = o.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL;
+    names.push('CharWeight', 'CharWeightAsian', 'CharWeightComplex');
+    values.push(w, w, w);
+  }
+  if (setPropsBatch(ps, names, values)) return;
+  try { ps.setPropertyValue('CharFontName', fw); } catch (e) {}
+  try { ps.setPropertyValue('CharFontNameAsian', fa); } catch (e) {}
+  try { ps.setPropertyValue('CharFontNameComplex', fw); } catch (e) {}
+  try { setCharProp(ps, 'CharHeight', size); } catch (e) {}
   if (!o.keepWeight) {
     try { setCharProp(ps, 'CharWeight', o.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); } catch (e) {}
   }
-  try { ps.setPropertyValue('CharColor', 0x000000); } catch (e) {}
+  try { ps.setPropertyValue('CharColor', color); } catch (e) {}
 }
-// 标准段落属性。kind: 'title' | 'body' | 'heading' | 'list' | 'tableCell'。
-// heading 与 body 同款（规范：小标题与正文一样但加粗），title/list/tableCell 不缩进。
+// 段落规格按画像块取：title = 一级标题块；heading = opts.level 级标题块（缺省二级，
+// house-default 里二至六级与正文同款只加粗）；body / list（不缩进）= 正文块；
+// tableCell = 表格单元格块。opts.afterTable：紧跟表格的首段段前取 afterTableSpaceBefore。
+function houseParaSpec(kind, opts) {
+  const o = opts || {};
+  if (kind === 'title') return headingSpec(1);
+  if (kind === 'heading') return headingSpec(o.level != null ? o.level : 2);
+  if (kind === 'tableCell') return HOUSE.cellSpec;
+  if (kind === 'list') return Object.assign({}, HOUSE.bodySpec, { indentMm: 0 });
+  return HOUSE.bodySpec;
+}
 function applyHousePara(ps, kind, opts) {
   const o = opts || {};
-  const isTitle = kind === 'title';
   const isCell = kind === 'tableCell';
-  try { ps.setPropertyValue('ParaAdjust', isTitle ? css.style.ParagraphAdjust.CENTER : css.style.ParagraphAdjust.BLOCK); } catch (e) {}
-  try { ps.setPropertyValue('ParaTopMargin', isCell ? HOUSE.tableParaSpaceMm : (o.afterTable ? HOUSE.afterTableBeforeMm : 0)); } catch (e) {}
-  try { ps.setPropertyValue('ParaBottomMargin', isCell ? HOUSE.tableParaSpaceMm : HOUSE.spaceAfterMm); } catch (e) {}
-  try {
-    ps.setPropertyValue('ParaLineSpacing', new css.style.LineSpacing({
-      Mode: css.style.LineSpacingMode.MINIMUM,
-      Height: isCell ? HOUSE.tableLineMinMm : HOUSE.lineMinMm,
-    }));
-  } catch (e) {}
-  const indent = (isTitle || isCell || kind === 'list') ? 0 : ptToMm100(HOUSE.indentChars * HOUSE.bodyPt);
-  try { ps.setPropertyValue('ParaFirstLineIndent', indent); } catch (e) {}
-  if (!isCell) {
-    try { ps.setPropertyValue('ParaLeftMargin', 0); ps.setPropertyValue('ParaRightMargin', 0); } catch (e) {}
+  const spec = houseParaSpec(kind, o);
+  const top = (!isCell && o.afterTable) ? HOUSE.afterTableBeforeMm : spec.topMm;
+  {
+    const names = ['ParaAdjust', 'ParaTopMargin', 'ParaBottomMargin', 'ParaLineSpacing', 'ParaFirstLineIndent'];
+    const values = [adjustEnum(spec.align), top, spec.bottomMm, lineSpacingUno(spec.ls), spec.indentMm];
+    if (!isCell) { names.push('ParaLeftMargin', 'ParaRightMargin'); values.push(spec.leftMm, 0); }
+    if (setPropsBatch(ps, names, values)) return;
   }
+  try { ps.setPropertyValue('ParaAdjust', adjustEnum(spec.align)); } catch (e) {}
+  try { ps.setPropertyValue('ParaTopMargin', top); } catch (e) {}
+  try { ps.setPropertyValue('ParaBottomMargin', spec.bottomMm); } catch (e) {}
+  try { ps.setPropertyValue('ParaLineSpacing', lineSpacingUno(spec.ls)); } catch (e) {}
+  try { ps.setPropertyValue('ParaFirstLineIndent', spec.indentMm); } catch (e) {}
+  if (!isCell) {
+    try { ps.setPropertyValue('ParaLeftMargin', spec.leftMm); ps.setPropertyValue('ParaRightMargin', 0); } catch (e) {}
+  }
+}
+// 把画像写进段落样式定义（apply_style_profile 第一步）：Standard / Heading 1..6 /
+// Table Contents / Table Heading。改样式定义比逐段直接格式便宜得多，且新打的字
+// 自然继承；直接格式随后只做最小覆盖。返回改到的样式名。
+function applyProfileToStyles() {
+  const fam = xModel.getStyleFamilies().getByName('ParagraphStyles');
+  const out = [];
+  const setStyle = function (name, fn) {
+    let st;
+    try { if (!fam.hasByName(name)) return; st = fam.getByName(name); } catch (e) { return; }
+    try { fn(st); out.push(name); } catch (e) { log('样式定义写入失败 ' + name + ': ' + errStr(e)); }
+  };
+  setStyle('Standard', function (st) {
+    applyHouseChar(st, { sizePt: HOUSE.bodyPt, bold: HOUSE.bodyBold });
+    applyHousePara(st, 'body');
+  });
+  for (let l = 1; l <= 6; l++) {
+    setStyle('Heading ' + l, function (st) {
+      const hs = headingSpec(l);
+      applyHouseChar(st, { sizePt: hs.sizePt, bold: hs.bold, fontAsian: hs.fontAsian, fontWestern: hs.fontWestern, color: hs.color });
+      applyHousePara(st, 'heading', { level: l });
+    });
+  }
+  setStyle('Table Contents', function (st) {
+    applyHouseChar(st, { sizePt: HOUSE.tablePt, bold: false });
+    applyHousePara(st, 'tableCell');
+  });
+  setStyle('Table Heading', function (st) {
+    applyHouseChar(st, { sizePt: HOUSE.tablePt, bold: HOUSE.headerBold });
+    applyHousePara(st, 'tableCell');
+    try { st.setPropertyValue('ParaAdjust', adjustEnum(HOUSE.headerAlign)); } catch (e) {}
+  });
+  setStyle('Contents Heading', function (st) {
+    const ts = HOUSE.tocTitleSpec;
+    applyHouseChar(st, { sizePt: ts.sizePt, bold: ts.bold });
+    try { st.setPropertyValue('ParaAdjust', adjustEnum(ts.align)); } catch (e) {}
+  });
+  return out;
 }
 // markdown 行内标记 → 带样式 run 列表：**粗体**、*斜体*、`代码`（剥壳）、[文字](url)。
 // 下划线变体（_、__）在法律文本里误伤率高，故意不识别。
@@ -595,7 +1155,7 @@ function writeStyledRuns(vc, runs, kindOpts) {
     if (!run.text) continue;
     const cur = xText.createTextCursorByRange(vc.getEnd());
     xText.insertString(cur, run.text, true); // bAbsorb: cur 跨住刚插入的文本
-    applyHouseChar(cur, { sizePt: o.sizePt, bold: o.bold || !!run.bold });
+    applyHouseChar(cur, { sizePt: o.sizePt, bold: o.bold || !!run.bold, fontAsian: o.fontAsian, fontWestern: o.fontWestern, color: o.color });
     try { setCharProp(cur, 'CharPosture', run.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); } catch (e) {}
     if (run.url) { try { cur.setPropertyValue('HyperLinkURL', run.url); } catch (e) {} }
     try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
@@ -680,6 +1240,14 @@ function currentTextTable(p) {
   } catch (e) {}
   return null;
 }
+// 视图光标所在单元格名（如 "B1"）；不在表格里返回 ''。
+function viewCursorCellName() {
+  try {
+    const cell = ctrl.getViewCursor().getPropertyValue('Cell');
+    if (cell) return String(cell.getPropertyValue('CellName') || '');
+  } catch (e) {}
+  return '';
+}
 // 单元格名工具（A1..Z9、AA1..）：markdown 表格列数很小，两位字母够用。
 function cellName(col, row) {
   let name = '';
@@ -688,19 +1256,31 @@ function cellName(col, row) {
   return name + (row + 1);
 }
 const NUMERIC_CELL_RE = /^[-+（(]?[\d][\d,.，%．]*[%）)]?$/;
-// 给一张表设标准边框（Grid 实线，全部内外框线同宽）。widthMm 单位 1/100mm。
-function applyTableBorders(table, widthMm, color) {
-  const solid = (css.table.BorderLineStyle && css.table.BorderLineStyle.SOLID != null)
-    ? css.table.BorderLineStyle.SOLID : 0;
-  const bl = new css.table.BorderLine2({
-    Color: color == null ? 0x000000 : color,
-    InnerLineWidth: 0, OuterLineWidth: 0, LineDistance: 0,
-    LineStyle: solid,
-    LineWidth: widthMm,
-  });
+// 边框线型：画像/工具的 single|double|dashed → BorderLineStyle（常量缺席时用数值兜底）。
+function borderLineStyle(name) {
+  const S = css.table.BorderLineStyle || {};
+  const n = String(name || 'single').toLowerCase();
+  if (n === 'double') return S.DOUBLE != null ? S.DOUBLE : 3;
+  if (n === 'dashed') return S.DASHED != null ? S.DASHED : 2;
+  return S.SOLID != null ? S.SOLID : 0;
+}
+// 给一张表设边框。spec: {outsideMm, insideMm, color, style}（宽度单位 1/100mm；
+// 缺省取 HOUSE.tableBorder：Grid 实线、内外同宽）。
+function applyTableBorders(table, spec) {
+  const o = Object.assign({}, HOUSE.tableBorder, spec || {});
+  if (o.insideMm == null) o.insideMm = o.outsideMm;
+  const mk = function (mm) {
+    return new css.table.BorderLine2({
+      Color: o.color == null ? 0x000000 : o.color,
+      InnerLineWidth: 0, OuterLineWidth: 0, LineDistance: 0,
+      LineStyle: borderLineStyle(o.style),
+      LineWidth: mm,
+    });
+  };
+  const bl = mk(o.outsideMm), il = mk(o.insideMm);
   const tb = new css.table.TableBorder2({
     TopLine: bl, BottomLine: bl, LeftLine: bl, RightLine: bl,
-    HorizontalLine: bl, VerticalLine: bl,
+    HorizontalLine: il, VerticalLine: il,
     IsTopLineValid: true, IsBottomLineValid: true, IsLeftLineValid: true,
     IsRightLineValid: true, IsHorizontalLineValid: true, IsVerticalLineValid: true,
     Distance: 0, IsDistanceValid: false,
@@ -711,29 +1291,32 @@ function applyTableBorders(table, widthMm, color) {
 // keepWeight: 非首行不动原有粗体（apply_house_style 走这里，避免抹掉当事人加粗）。
 function styleTableStandard(table, opts) {
   const o = opts || {};
-  const headerRows = o.headerRows != null ? o.headerRows : 1;
-  try { applyTableBorders(table, HOUSE.tableBorderMm, 0x000000); } catch (e) { log('表格边框设置失败 / borders: ' + errStr(e)); }
+  const headerRows = o.headerRows != null ? o.headerRows : HOUSE.headerRows;
+  try { applyTableBorders(table, null); } catch (e) { log('表格边框设置失败 / borders: ' + errStr(e)); }
+  if (headerRows > 0 && HOUSE.repeatHeader) {
+    try { table.setPropertyValue('RepeatHeadline', true); table.setPropertyValue('HeaderRowCount', headerRows); } catch (e) {}
+  }
   const names = table.getCellNames();
   for (let i = 0; i < names.length; i++) {
     const cell = table.getCellByName(names[i]);
     const rowIdx = parseInt(String(names[i]).replace(/^[A-Z]+/, ''), 10) - 1;
     const isHeader = rowIdx < headerRows;
-    try { cell.setPropertyValue('VertOrient', shortAny(css.text.VertOrientation.CENTER)); } catch (e) {}
+    try { cell.setPropertyValue('VertOrient', shortAny(vertOrientEnum(isHeader ? HOUSE.headerVAlign : HOUSE.cellVAlign))); } catch (e) {}
+    if (isHeader && HOUSE.headerFill != null) { try { cell.setPropertyValue('BackColor', HOUSE.headerFill); } catch (e) {} }
     try {
       const ct = cell.createTextCursor();
       ct.gotoStart(false);
       ct.gotoEnd(true);
       applyHousePara(ct, 'tableCell');
-      applyHouseChar(ct, { sizePt: HOUSE.tablePt, bold: isHeader, keepWeight: !isHeader && o.keepWeight });
+      applyHouseChar(ct, { sizePt: HOUSE.tablePt, bold: isHeader && HOUSE.headerBold, keepWeight: !isHeader && o.keepWeight });
       const text = (cell.getString() || '').trim();
-      const adjust = isHeader ? css.style.ParagraphAdjust.CENTER
-        : (NUMERIC_CELL_RE.test(text) ? css.style.ParagraphAdjust.RIGHT : css.style.ParagraphAdjust.LEFT);
-      ct.setPropertyValue('ParaAdjust', adjust);
+      const adjust = isHeader ? HOUSE.headerAlign : (NUMERIC_CELL_RE.test(text) ? HOUSE.numberAlign : HOUSE.textAlign);
+      ct.setPropertyValue('ParaAdjust', adjustEnum(adjust));
     } catch (e) {}
   }
 }
 // 在视图光标处插入一张按标准格式排好的表。rows: string[][]。返回表对象。
-function insertStyledTable(rows, headerRows) {
+function insertStyledTable(rows, headerRows, plainText) {
   const nRows = rows.length;
   let nCols = 1;
   for (let i = 0; i < nRows; i++) nCols = Math.max(nCols, rows[i].length);
@@ -745,7 +1328,8 @@ function insertStyledTable(rows, headerRows) {
   for (let r = 0; r < nRows; r++) {
     for (let c = 0; c < nCols; c++) {
       const raw = rows[r][c] != null ? String(rows[r][c]) : '';
-      try { table.getCellByName(cellName(c, r)).setString(stripInlineMd(raw)); } catch (e) {}
+      if (plainText) table.getCellByName(cellName(c, r)).setString(raw);
+      else { try { table.getCellByName(cellName(c, r)).setString(stripInlineMd(raw)); } catch (e) {} }
     }
   }
   styleTableStandard(table, { headerRows: headerRows });
@@ -1285,6 +1869,80 @@ function resolveSlideTable(page, p) {
   return { table: table, shapeName: foundName };
 }
 
+// ---- 全文按画像格式化（apply_house_style / apply_style_profile 共用）--------------
+function styleProfileSummary() {
+  const bs = HOUSE.bodySpec;
+  return {
+    profileName: HOUSE.name,
+    body: {
+      fontAsian: HOUSE.fontAsian, fontWestern: HOUSE.fontWestern, sizePt: HOUSE.bodyPt, alignment: bs.align,
+      firstLineIndentPt: Math.round(bs.indentMm * 72 / 2540 * 10) / 10,
+      spaceBeforePt: Math.round(bs.topMm * 72 / 2540 * 10) / 10,
+      spaceAfterPt: Math.round(bs.bottomMm * 72 / 2540 * 10) / 10,
+    },
+    headingLevels: Object.keys(HOUSE.headings).map(Number),
+    tablePt: HOUSE.tablePt,
+  };
+}
+// 段落分类：首个非空短段（idx 0、<=60 字）为 title；OutlineLevel>0 或 Heading 样式为
+// heading（trueLevels 时取真实级别，否则一律二级 = 改造前"小标题=正文款加粗"）；其余 body。
+function paraKindOf(el, isFirst, trueLevels) {
+  let lvl = 0, style = '';
+  try { lvl = el.getPropertyValue('OutlineLevel') || 0; } catch (e) {}
+  try { style = el.getPropertyValue('ParaStyleName') || ''; } catch (e) {}
+  if (lvl > 0 || /^(Heading|标题)/.test(style)) {
+    let level = lvl;
+    if (!level) { const m = /(\d+)/.exec(style); level = m ? Number(m[1]) : 2; }
+    return { kind: 'heading', level: trueLevels ? level : 2 };
+  }
+  return { kind: 'body', level: null };
+}
+function charOptsFor(k) {
+  if (k.kind === 'body') return { sizePt: HOUSE.bodyPt, bold: HOUSE.bodyBold, keepWeight: true };
+  const hs = k.kind === 'title' ? headingSpec(1) : headingSpec(k.level);
+  return { sizePt: hs.sizePt, bold: hs.bold, fontAsian: hs.fontAsian, fontWestern: hs.fontWestern, color: hs.color };
+}
+async function applyHouseToDocument(p, opts) {
+  const trueLevels = !!(opts && opts.trueLevels);
+  // progress 的 total = 正文段数 + 表数（顶层元素数）；段数走索引缓存，表数一次 getCount。
+  let total = 0;
+  try { total = getParaIndex().total; } catch (e) {}
+  try { total += xModel.getTextTables().getCount(); } catch (e) {}
+  const en = xModel.getText().createEnumeration();
+  const BATCH = 500;
+  let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false, cancelled = false;
+  lockModel();
+  try {
+  while (en.hasMoreElements()) {
+    if (idx > 0 && idx % BATCH === 0) {
+      if (await batchBreak(p, idx, total)) { cancelled = true; break; }
+    }
+    const el = en.nextElement();
+    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+      const text = (el.getString() || '').trim();
+      let k = { kind: 'body', level: null };
+      if (!titled && text) {
+        titled = true;
+        if (idx === 0 && text.length <= 60) k = { kind: 'title', level: 1 };
+      }
+      if (k.kind !== 'title') k = paraKindOf(el, idx === 0, trueLevels);
+      applyHousePara(el, k.kind, { afterTable: prevWasTable, level: k.level });
+      applyHouseChar(el, charOptsFor(k));
+      prevWasTable = false;
+      paras++;
+    } else if (el.supportsService && el.supportsService('com.sun.star.text.TextTable')) {
+      try { styleTableStandard(el, { keepWeight: true }); tables++; } catch (e) {}
+      prevWasTable = true;
+    }
+    idx++;
+  }
+  } finally { unlockModel(); }
+  if (idx > BATCH && !cancelled) postProgress(p, idx, total);
+  const r = Object.assign({ success: true, paragraphs: paras, tables: tables, truncated: cancelled }, verifySnapshot());
+  if (cancelled) { r.cancelled = true; r.done = idx; }
+  return r;
+}
+
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
 // stream_insert 攒字节、按完整行消费；stream_flush 收尾（写掉尾行/尾表、复位）。
 // 状态在 worker 内（宿主只透传 token），文档换人/换流由宿主在 open_sync 时
@@ -1308,18 +1966,22 @@ function streamTableFlush() {
   const t = STREAM.table;
   STREAM.table = null;
   if (!t || !t.rows.length) return;
-  try { insertStyledTable(t.rows, t.sawSep ? 1 : 0); STREAM.afterTable = true; }
-  catch (e) { log('流式建表失败 / stream table: ' + errStr(e)); }
+  insertStyledTable(t.rows, t.sawSep ? 1 : 0);
+  STREAM.afterTable = true;
 }
 function streamParagraph(runs, kind, headingLevel) {
   const vc = ctrl.getViewCursor();
   vc.collapseToEnd();
   const xText = vc.getText();
-  applyHousePara(vc, kind, { afterTable: STREAM.afterTable });
+  // 续写场景的 #（非主标题）落为二级标题规格：主标题只有一个，其余 # 与 ## 同款
+  //（house-default 里二至六级与正文同款加粗，与改造前"小标题=正文款加粗"一致）。
+  const spec = kind === 'title' ? headingSpec(1) : kind === 'heading' ? headingSpec(Math.max(2, Number(headingLevel) || 2)) : null;
+  applyHousePara(vc, kind, { afterTable: STREAM.afterTable, level: spec ? spec.level : null });
   STREAM.afterTable = false;
   if (headingLevel != null) { try { vc.setPropertyValue('OutlineLevel', shortAny(headingLevel)); } catch (e) {} }
-  const sizePt = kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt;
-  writeStyledRuns(vc, runs, { sizePt: sizePt, bold: kind === 'title' || kind === 'heading' });
+  writeStyledRuns(vc, runs, spec
+    ? { sizePt: spec.sizePt, bold: spec.bold, fontAsian: spec.fontAsian, fontWestern: spec.fontWestern, color: spec.color }
+    : { sizePt: HOUSE.bodyPt, bold: HOUSE.bodyBold });
   xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
   vc.collapseToEnd();
   return vc;
@@ -1377,18 +2039,312 @@ function streamWriteLine(line) {
   streamParagraph(parseInlineRuns(trimmed), 'body', null);
 }
 
-// LO 7.1+ (tdf#34355): tracked DELETIONS render in the page margin next to the
-// changed-line mark instead of inline strikethrough — the body stays readable
-// (original text + colored insertions only). REQUIRES engine >= 24.2.8-zhcn-r3:
-// stock LO paints the margin text left of the anchor's frame, which inside a
-// table is the CELL — deleted text landed on the neighboring cell's content.
-// r3 carries our frmpaint.cxx patch anchoring at the table frame's left edge
-// (desktop/lowa-build/patches). This is a VIEW setting on the controller, not
-// the model, so it must be re-applied whenever the controller changes (boot
-// AND load_document retarget).
-function showDeletionsInMargin() {
-  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', true); }
-  catch (e) { log('ShowChangesInMargin 设置失败 / failed: ' + errStr(e)); }
+// ---- 修订显示三态（Word 式，dev-board#368）---------------------------------
+// all    全部修订：正文内联删除线/下划线   ShowChanges=true  ShowChangesInMargin=false
+// balloons 原生页外审阅区：正文保留插入标记，删除/格式修订与批注在页边展示
+// margin 旧页边方式：仅保留内部最终正文操作和兼容调用，不再出现在工具栏
+// final  最终稿：修订痕迹全隐             ShowChanges=false
+//
+// 三态**只改显示**：RecordChanges（还记不记修订）与 redline 数据本身一律不动，
+// 导出的 docx 里修订一条不少。两个开关分属不同层：
+//   ShowChanges         → 模型属性（跟着文档走）
+//   ShowChangesInMargin → 控制器的视图设置（跟着控制器走，换文档必须重设）
+// 所以 boot 与 load_document 的 retarget 都要 resetRevisionView()。
+//
+// 页边显示 (LO 7.1+, tdf#34355) REQUIRES engine >= 24.2.8-zhcn-r3：原生 LO 把
+// 页边文字画在锚点 frame 左侧，表格里 frame = 单元格，删除文字会叠到左邻格正文
+// 上；r3 焙入了 frmpaint.cxx 补丁（锚整表左缘，desktop/lowa-build/patches）。
+const REVISION_VIEWS = ['all', 'balloons', 'margin', 'final'];
+let balloonModel = null; // Native margin layout; its legacy deletion paint is replaced by page-gutter cards.
+// 默认完整标记：删除在正文内以删除线展示。AI 和写作助手的正文读取/定位
+// 仍走 runAgentCommandInMarginView 的最终文本语义，与用户看到的显示方式分离。
+const DEFAULT_REVISION_VIEW = 'all';
+
+function readShowChanges() {
+  try { return !!xModel.getPropertyValue('ShowChanges'); } catch (e) { return null; }
+}
+function readShowChangesInMargin() {
+  try { return !!ctrl.getViewSettings().getPropertyValue('ShowChangesInMargin'); } catch (e) { return null; }
+}
+// 两个布尔 → 三态名。读不回来（null）时不猜「隐了」，归到看得见的那一侧。
+function revisionModeOf(showChanges, inMargin) {
+  if (showChanges === false) return 'final';
+  if (inMargin === true) return 'margin';
+  return 'all';
+}
+function revisionViewState() {
+  const showChanges = readShowChanges();
+  const inMargin = readShowChangesInMargin();
+  return {
+    mode: balloonModel === xModel && inMargin === true ? 'balloons' : revisionModeOf(showChanges, inMargin),
+    showChanges: showChanges,
+    showChangesInMargin: inMargin,
+    // 属性在本构建上根本不存在时读会抛（→ null），宿主据此把中间项去掉退成两态。
+    marginSupported: inMargin !== null,
+    hideSupported: showChanges !== null,
+  };
+}
+// com.sun.star.document.RedlineDisplayType：0=NONE、1=INSERTED、2=INSERTED_AND_REMOVED。
+const REDLINE_DISPLAY_NONE = 0, REDLINE_DISPLAY_ALL = 2;
+// 显示/隐藏修订痕迹。**不能写 ShowChanges**——真机实证（本引擎 24.2.8-zhcn）
+// 那个属性读得回但写不进去：setPropertyValue('ShowChanges', false) 不抛异常也
+// 纹丝不动，是个静默空写。真正管用的是 RedlineDisplayType，且**必须带类型 Any**
+// （shortAny；裸 number 没验证过）。
+// 另一个坑：写 NONE(0) 之后读回来是 INSERTED(1)——插入的文字本来就必须留在版面
+// 里，引擎会自己归一。所以**不能拿 RedlineDisplayType 的读回值当判据**，一律用
+// ShowChanges 复核（它读回来是诚实的：rdt=2 → true，rdt=1 → false）。
+// 兜底才用 .uno:ShowTrackedChanges：它是**切换**语义，想设成确定状态必须先读再
+// 判；读不回来就不敢派发（那等于蒙着切），宁可如实报失败。
+function applyShowChanges(on) {
+  let err = null;
+  try { xModel.setPropertyValue('RedlineDisplayType', shortAny(on ? REDLINE_DISPLAY_ALL : REDLINE_DISPLAY_NONE)); }
+  catch (e) { err = errStr(e); }
+  if (readShowChanges() === !!on) return null;
+  if (readShowChanges() === null) return err || 'ShowChanges 不可读';
+  try { dispatchUno('.uno:ShowTrackedChanges'); } catch (e) { return errStr(e); }
+  return readShowChanges() === !!on ? null : (err || 'ShowChanges 未生效');
+}
+function applyShowChangesInMargin(on) {
+  const current = readShowChangesInMargin();
+  if (current === !!on || (current === null && !on)) return null;
+  if (current === null) return 'ShowChangesInMargin 不受支持';
+  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', !!on); }
+  catch (e) { return errStr(e); }
+  return readShowChangesInMargin() === !!on ? null : 'ShowChangesInMargin 未生效';
+}
+// 返回的是**读回来的真实状态**（另带 requested/warnings），不是把入参原样抄回去。
+// Pure display changes must not expire completion/review tokens or trigger autosave.
+function withViewOnlyChange(fn) {
+  const enabled = xModel.isSetModifiedEnabled();
+  if (enabled) xModel.disableSetModified();
+  viewChangeInFlight++;
+  try { return fn(); }
+  finally {
+    if (enabled) xModel.enableSetModified();
+    viewChangeInFlight--;
+  }
+}
+
+// ShowChangesInMargin (margin and balloons views) makes Writer's undo fragile:
+// undoing a rejected long deletion in that view hangs the engine for good, and
+// undoing an edit in a different view than it was recorded in hangs too
+// (both reproduced on r4 and r5, dev-board#587). Revision resolutions from the
+// margin views therefore run in the inline view (runRevisionResolution) and
+// their undo entries are remembered; undo/redo take the same inline detour
+// only while such an entry is on top. Every other entry undoes where it is.
+const inlineUndoEntries = { undo: null, redo: null };
+function topUndoEntry(um, kind) {
+  const titles = kind === 'undo' ? um.getAllUndoActionTitles() : um.getAllRedoActionTitles();
+  return { model: xModel, depth: titles.length, title: titles.length ? String(titles[0]) : '' };
+}
+function sameUndoEntry(a, b) { return !!a && !!b && a.model === b.model && a.depth === b.depth && a.title === b.title; }
+function rememberInlineUndo() {
+  try { inlineUndoEntries.undo = topUndoEntry(xModel.getUndoManager(), 'undo'); inlineUndoEntries.redo = null; } catch (e) {}
+}
+// One undo or redo step through `run` (the UndoManager, or Writer's own command).
+function undoStep(um, kind, run) {
+  const other = kind === 'undo' ? 'redo' : 'undo';
+  const detour = isWriterDoc() && readShowChangesInMargin() === true
+    && sameUndoEntry(inlineUndoEntries[kind], topUndoEntry(um, kind));
+  if (!detour) { run(); return; }
+  const before = revisionViewState().mode;
+  withViewOnlyChange(function () { applyRevisionView('all'); try { xModel.refresh(); } catch (e) {} });
+  try { run(); }
+  finally { withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} }); }
+  inlineUndoEntries[other] = topUndoEntry(um, other);
+  inlineUndoEntries[kind] = null;
+}
+
+// reserveGutter: only a user switch into balloons from another mode. Internal
+// switch-and-restore paths (export, revision resolution) leave the width alone:
+// no revision view writes it, so the restore keeps exactly the gutter the host
+// chose, including a released one (0), without a relayout and page jump.
+function applyRevisionView(mode, reserveGutter) {
+  return withViewOnlyChange(function () {
+    const want = REVISION_VIEWS.indexOf(mode) >= 0 ? mode : DEFAULT_REVISION_VIEW;
+    if (want === 'balloons' && !installReviewCommentInterceptor(ctrl)) {
+      return Object.assign(revisionViewState(), { requested: want, warnings: ['批注输入通道不可用，请重新打开文档后重试。'] });
+    }
+    const warnings = [];
+    // Reserve the native gutter before hiding deletions, so no frame paints the
+    // legacy left-margin text while the overlay is catching up.
+    if (want === 'balloons' && reserveGutter && supportsReviewGeometry()
+      && Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) !== 280) ctrl.setPropertyValue('AwdReviewSidebarWidth', 280);
+    const e1 = applyShowChangesInMargin(want === 'margin' || want === 'balloons');
+    if (e1) warnings.push('ShowChangesInMargin: ' + e1);
+    const e2 = applyShowChanges(want !== 'final');
+    balloonModel = want === 'balloons' && !e1 && !e2 ? xModel : null;
+    if (e2) warnings.push('ShowChanges: ' + e2);
+    // Hiding a whole deleted paragraph changes paragraph membership. View-only
+    // changes suppress modified events, so cached ranges must be dropped here.
+    invalidateParaIndex();
+    const st = revisionViewState();
+    st.requested = want;
+    if (warnings.length) st.warnings = warnings;
+    return st;
+  });
+}
+// 启动 / 换文档时复位。不只是把页边开关重新打开（视图设置跟着控制器走），更是
+// 把上一份文档可能留下的「最终稿」隐藏态显式打回来——保活池里同一个 worker 会
+// 连着开好几份文档，不复位就是「上一份设了最终稿、下一份打开修订痕迹默默不见」。
+function resetRevisionView() { return applyRevisionView(DEFAULT_REVISION_VIEW); }
+// 导出期间**强制切成「全部修订」内联视图**（dev-board#367 的 withMarginOff + #368 三态）。
+// 两种非默认显示态都会把 docx 导坏，而自动保存 / 版本记录 / 版本对比全走这条导出：
+//   页边（margin）——ShowChangesInMargin 开着时删除文本被并出版面，导出器却按并合后的
+//     正文套用修订区间：字符级替换（删「乙」插「丁」）导出成「丁」被删、「乙」消失，
+//     多段文档里更会把别处的插入标成删除（#367 真机探针）。**只关不重排仍错位**
+//     （探针 R2 实证），所以必须 refresh() 强制重排。
+//   最终稿（final）——RedlineDisplayType 处于隐藏态时导出，隐藏的显示态有可能随
+//     settings.xml（w:revisionView）写进 docx，别人在 Word 里打开就看不见修订了。
+// 导完恢复原来的显示态并再重排一次，让后续 get_document_text 等读取仍按用户所选
+// 的语义走。
+function withInlineMarkupForExport(fn) {
+  // **非 Writer 文档直接放行，一个属性都不许碰**：修订是 Writer 独有的机制，
+  // Calc/Impress 的模型上根本没有 ShowChanges。原来这里靠 try/catch 兜住那次
+  // 无谓的 getPropertyValue，代价是每次 Impress 导出都要在模型上问一个不存在的
+  // 属性——真机实证会把引擎搞坏：紧随其后的 pptx 重新打开要么超过 load_document
+  // 的 180s 预算，要么直接抛 emscripten 的「operation does not support unaligned
+  // accesses」，lowa-e2e 组 23 五次五中（换成页边默认同样中，改回本守卫后转绿）。
+  if (!isWriterDoc()) return fn();
+  const before = revisionViewState().mode;
+  if (before === 'all') return fn();
+  applyRevisionView('all');
+  try { xModel.refresh(); } catch (e) {}
+  try { return fn(); }
+  finally {
+    applyRevisionView(before);
+    try { xModel.refresh(); } catch (e) {}
+  }
+}
+// 批注插入不该被记成修订：RecordChanges 开着时 .uno:InsertAnnotation 会额外记一条
+// 空文本的插入修订（说明字段「已添加批注」），导出 docx 后成了包着批注标记的
+// <w:ins>——Word 里就是那条作者 AI WorkDeck、正文为空的幽灵气泡（dev-board#367
+// 第 6 项），审阅面板也会多一张「插入（空）」卡。派发期间关掉修订记录，完了恢复；
+// 批注本身（区间标记、作者、内容）不受影响，真机探针 Q5 实证。
+function withRecordChangesOff(fn) {
+  let was = false;
+  try { was = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+  if (was) { try { xModel.setPropertyValue('RecordChanges', false); } catch (e) { was = false; } }
+  try { return fn(); }
+  finally { if (was) { try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {} } }
+}
+
+// ---- Native comment requests ---------------------------------------------
+// Native InsertAnnotation without Text focuses its own editor. The external
+// gutter hides that editor, so open the existing host form BEFORE insertion.
+let reviewCommentInterceptor = null;
+function installReviewCommentInterceptor(controller) {
+  const previous = reviewCommentInterceptor;
+  if (previous && previous.controller === controller) return previous.ready;
+  if (previous) {
+    previous.ready = false;
+    try { previous.frame.releaseDispatchProviderInterceptor(previous.interceptor); } catch (e) {}
+  }
+  const state = { controller: controller, frame: null, interceptor: null, ready: false, slave: null, master: null };
+  reviewCommentInterceptor = state;
+  try {
+    state.frame = controller.getFrame();
+    const query = function (url, target, flags) {
+      const native = state.slave ? state.slave.queryDispatch(url, target, flags) : null;
+      // Writer's own Ctrl+Z (canvas focused) follows the worker's undo/redo rule
+      // (see undoStep): the inline detour only for a remembered resolution.
+      if (native && (url.Complete === '.uno:Undo' || url.Complete === '.uno:Redo')) {
+        return zetajs.unoObject([css.frame.XDispatch], {
+          dispatch(command, args) {
+            undoStep(xModel.getUndoManager(), url.Complete === '.uno:Undo' ? 'undo' : 'redo', function () { native.dispatch(command, args); });
+          },
+          addStatusListener(listener, command) { native.addStatusListener(listener, command); },
+          removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
+        });
+      }
+      if (!native || url.Complete !== '.uno:InsertAnnotation') return native;
+      return zetajs.unoObject([css.frame.XDispatch], {
+        dispatch(command, args) {
+          if (!state.ready || controller !== ctrl) return;
+          const hasText = Array.from(args || []).some(function (p) {
+            const value = zetajs.fromAny(p.Value);
+            return p.Name === 'Text' && value != null && String(value).length > 0;
+          });
+          // The host form exists whenever this Writer view has the external review
+          // surface, in every view mode and with the gutter released (width 0).
+          // Without readable support the previous width test still applies.
+          let external = false;
+          try { external = isWriterDoc() && supportsReviewGeometry(); } catch (e) {}
+          if (!external) { try { external = Number(controller.getPropertyValue('AwdReviewSidebarWidth')) > 0; } catch (e) {} }
+          if (external && !hasText) post('comment-request', { documentSeq: docSeq });
+          else native.dispatch(command, args);
+        },
+        addStatusListener(listener, command) { native.addStatusListener(listener, command); },
+        removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
+      });
+    };
+    state.interceptor = zetajs.unoObject([css.frame.XDispatchProviderInterceptor, css.frame.XInterceptorInfo], {
+      // Avoid a JS callback for every menu/toolbar command queried by Writer.
+      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo']; },
+      queryDispatch: query,
+      queryDispatches(requests) {
+        return requests.map(function (r) { return query(r.FeatureURL, r.FrameName, r.SearchFlags); });
+      },
+      getSlaveDispatchProvider() { return state.slave; },
+      setSlaveDispatchProvider(provider) { state.slave = provider; },
+      getMasterDispatchProvider() { return state.master; },
+      setMasterDispatchProvider(provider) { state.master = provider; },
+    });
+    state.frame.registerDispatchProviderInterceptor(state.interceptor);
+    state.ready = true;
+    return true;
+  } catch (e) {
+    try { if (state.frame && state.interceptor) state.frame.releaseDispatchProviderInterceptor(state.interceptor); } catch (ignored) {}
+    log('批注输入通道安装失败 / comment dispatch interception failed: ' + errStr(e));
+    return false;
+  }
+}
+
+// #601: a right-click on a short selection opens the host's HTML menu instead of
+// Writer's popup. Suppress that popup up front. Opening it and closing it with a
+// synthetic Escape left Qt's popup state behind: the next right press moved the
+// caret and dropped the selection. The host shows its menu only when this same
+// predicate held, so exactly one of the two menus opens.
+let hostContextMenu = { enabled: false, maxLength: 0 };
+let contextMenuInterceptor = null;
+function selectionTouchesDeletion(vc) {
+  const text = vc.getText(), start = vc.getStart(), end = vc.getEnd();
+  const e = xModel.getRedlines().createEnumeration();
+  while (e.hasMoreElements()) {
+    const r = e.nextElement();
+    try {
+      if (String(r.getPropertyValue('RedlineType')) !== 'Delete') continue;
+      // compareRegion*(a, b) > 0 means a is before b; ranges in other texts throw.
+      if (text.compareRegionStarts(r.getPropertyValue('RedlineStart'), end) > 0
+        && text.compareRegionStarts(start, r.getPropertyValue('RedlineEnd')) > 0) return true;
+    } catch (ignored) {}
+  }
+  return false;
+}
+function hostHandlesContextMenu() {
+  if (!hostContextMenu.enabled || !contextMenuInterceptor || contextMenuInterceptor.controller !== ctrl || !isWriterDoc()) return false;
+  try {
+    const vc = ctrl.getViewCursor();
+    const length = String(vc.getString() || '').length;
+    if (!length || length > hostContextMenu.maxLength) return false;
+    // Inline markup keeps deleted text in the selection while the host reads the
+    // final text; such a selection keeps Writer's accept/reject menu.
+    return revisionViewState().mode !== 'all' || !selectionTouchesDeletion(vc);
+  } catch (e) { return false; }
+}
+function installContextMenuInterceptor(controller) {
+  const previous = contextMenuInterceptor;
+  if (previous && previous.controller === controller) return;
+  contextMenuInterceptor = null;
+  if (previous) { try { previous.controller.releaseContextMenuInterceptor(previous.interceptor); } catch (e) {} }
+  try {
+    const action = css.ui.ContextMenuInterceptorAction;
+    const interceptor = zetajs.unoObject([css.ui.XContextMenuInterceptor], {
+      notifyContextMenuExecute() { return hostHandlesContextMenu() ? action.CANCELLED : action.IGNORED; },
+    });
+    controller.registerContextMenuInterceptor(interceptor);
+    contextMenuInterceptor = { controller: controller, interceptor: interceptor };
+  } catch (e) { log('右键菜单拦截安装失败 / context menu interception failed: ' + errStr(e)); }
 }
 
 // ---- boot: open a fresh BLANK Writer doc ----------------------------------
@@ -1402,16 +2358,19 @@ function bootDoc() {
   desktop = css.frame.Desktop.create(context);
   xModel = desktop.loadComponentFromURL('private:factory/swriter', '_default', 0, []);
   ctrl = xModel.getCurrentController();
+  installReviewCommentInterceptor(ctrl);
+  installContextMenuInterceptor(ctrl);
   try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
   // RFC v2: revisions default ON — every edit (AI or typed) lands as a tracked
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
   // of per-command, so no edit path can slip through untracked.
   try { xModel.setPropertyValue('RecordChanges', true); } catch {}
-  showDeletionsInMargin();
+  resetRevisionView();
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
   try { installSelectionListener(ctrl); } catch (e) { log('XSelectionChangeListener 安装失败 / install failed: ' + errStr(e)); }
+  if (!HOUSE_DEFAULT_PROFILE) log('house-default.js 未载入（Module.uno_scripts 缺项？）：样式画像退到 worker 内硬兜底值，不再是单源');
   post('ui_ready');
   log('空白文档就绪 swriter / blank doc ready');
   try { const loc = readConfigLocale(); log('UI locale 诊断 / config: ' + JSON.stringify(loc)); } catch (e) { log('UI locale 诊断失败: ' + errStr(e)); }
@@ -1440,17 +2399,38 @@ let exportInFlight = false;
 // that sees them all. The editor page throttles and relays the signal to the
 // host, which debounce-saves (LibreOfficeEditor.autoSave). isModified() filters
 // out the broadcast a later setModified(false) would emit.
+// 批量命令期间摘下/装回的把手（见 suspendModifyListener）。
+let modifyListener = null;
 function installModifyListener(model) {
   const listener = zetajs.unoObject([css.util.XModifyListener], {
     // exportInFlight：storeToURL 自己会把文档标成 modified（见 export_document）。
     // 不挡掉的话每次自动保存都会引出一次 modified，宿主据此再排一次保存——
     // 实测形成每 3 秒一轮的「保存→modified→保存」死循环，整份 docx 反复上传，
     // 且 export 是全文档同步序列化，会周期性冻住 Qt 事件循环。
-    modified() { try { if (exportInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
+    modified() { invalidateParaIndex(); try { if (exportInFlight || viewChangeInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
     disposing() {},
   });
   model.addModifyListener(listener);
+  modifyListener = listener;
   log('XModifyListener 已装 / installed — 文档修改将上报宿主触发自动保存');
+}
+// 真机实测（150 页夹具）：只要装着 JS 实现的 XModifyListener，引擎每次文档写入
+// （一条 setPropertyValue / 一条 setString）都要回调进 JS 一次，一次约 35ms——
+// 回调本身的成本，与回调体做什么无关（空函数体同样 35ms）；摘掉监听器后同一条
+// 写入 0.1ms。全文格式化 920 段 x 2 次批写 = 1840 次回调 = 60s+ 就是这么来的。
+// 批量命令（lockModel 期间）把监听器摘下，结束装回并补发一次 modified——宿主只
+// 需要「文档改过了」这一个信号，不需要逐条。计数嵌套：batchBreak 会解锁再上锁。
+let modifySuspended = 0;
+function suspendModifyListener() {
+  if (modifySuspended++ > 0 || !modifyListener) return;
+  try { xModel.removeModifyListener(modifyListener); } catch (e) {}
+}
+function resumeModifyListener() {
+  if (modifySuspended <= 0) { modifySuspended = 0; return; }
+  if (--modifySuspended > 0 || !modifyListener) return;
+  try { xModel.addModifyListener(modifyListener); } catch (e) {}
+  invalidateParaIndex();
+  try { if (!exportInFlight && xModel.isModified()) post('modified'); } catch (e) {}
 }
 
 // ---- 自建工具栏：选区变化上报 -------------------------------------------
@@ -1534,9 +2514,10 @@ function testPerf(pages) {
 function testInsertText(text) {
   try {
     const t = text || '中文渲染测试 中華人民共和國 ABC 123';
-    const xText = xModel.getText();
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch {}
+    // 写光标要用光标自己的 XText（dev-board#627）：正文 XText 写不了单元格里的光标。
+    const xText = vc ? vc.getText() : xModel.getText();
     if (vc) {
       // NOT setString(): that REPLACES the cursor's range and leaves the inserted
       // text SELECTED, so the next insert overwrites it (reported bug). Use
@@ -1597,8 +2578,610 @@ function insertFootnoteImpl(p, isEndnote) {
 // drive LibreOffice with the backend's existing commands. Each handler returns a
 // plain result object; the dispatcher posts {cmd:'result', reqId, result} back.
 // [verified] handlers use the Phase 0-proven primitives; [todo] are stubs.
+// ---- 长命令的分批 / 进度 / 取消（dev-board#108 G2）------------------------------
+// office 线程是单事件循环：一条 20s 的 find_replace 会把后面所有命令（自动保存的
+// export、IME 的 ui_command）全排队，宿主也只能干等。批量命令每处理一批就
+// post 一次 progress 并 await 一个宏任务，让排队的命令和宿主的 cancel 有机会
+// 插进来。取消是协作式的：宿主 executeCommand('cancel', {reqId}) 置位，批间检查。
+// 批间别的命令可能切换修订作者（用户 IME 输入署用户名），所以每批开头重新
+// 设回本命令的作者。
+const CANCELLED = Object.create(null);   // reqId -> true（命令结束时无条件删）
+const INFLIGHT = Object.create(null);    // reqId -> true（只对在飞命令置 cancel，已结束的不留痕）
+function yieldMacrotask() { return new Promise(function (r) { setTimeout(r, 0); }); }
+function postProgress(p, done, total) { if (p && p.__reqId) post('progress', { reqId: p.__reqId, done: done, total: total }); }
+// 批量改稿期间锁住控制器与动作锁：否则每一条修订 / 每一个属性写入都让 Writer
+// 重排版+重绘一次，150 命中实测每处 130-200ms 大头在这里，不在 LCS。锁在一批之内，
+// 批间解开让视图刷一次、让排队的 export 能正常序列化。
+// 锁之外更大的头是 XModifyListener 的逐条回调（每条写入 35ms，见
+// suspendModifyListener），一并摘下。
+// 深度计数：batchBreak 取消返回时已经解过一次锁，调用方的 finally 再解一次不能
+// 让 removeActionLock/unlockControllers 下溢（否则 hasControllersLocked 余生恒 true）。
+let modelLockDepth = 0;
+function lockModel() {
+  if (modelLockDepth++ > 0) return;
+  try { xModel.lockControllers(); } catch (e) {}
+  try { xModel.addActionLock(); } catch (e) {}
+  suspendModifyListener();
+}
+function unlockModel() {
+  if (modelLockDepth <= 0) { modelLockDepth = 0; return; }
+  if (--modelLockDepth > 0) return;
+  resumeModifyListener();
+  try { xModel.removeActionLock(); } catch (e) {}
+  try { xModel.unlockControllers(); } catch (e) {}
+}
+// ---- find_replace 的原生快路径 ------------------------------------------------
+// 逐命中 setString 在 150 页上每处 90-130ms（JS 往返 + 监听器回调），150 命中 15-20s；
+// 引擎自己的 XReplaceable.replaceAll 一次调用 150 命中 160ms，且 RecordChanges 开着
+// 时同样按命中各记一条删除+一条插入修订。为了保住 PR#188 的字符级颗粒度
+//（我爱你→我恨你 只删"爱"加"恨"），先把 findText/replaceText 的公共前后缀掐掉，
+// 用正则 (?<=前缀)中段(?=后缀) 只替换差异中段。引擎不接受零宽匹配（纯插入，
+// 如 验收后→验收合格后），这种回退到逐命中路径（分批 + 进度 + 取消）。
+// 差异不止一块（见 replaceAllIsSingleBlock）的调用方在进来之前就已分流到逐命中路径，
+// 这里只会收到「中段就是唯一差异」的替换。返回 {n} 或 null（= 走回退路径）。
+function regexEscape(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function replaceEscape(s) { return String(s).replace(/\\/g, '\\\\').replace(/&/g, '\\&').replace(/\$/g, '\\$'); }
+function nativeTrackedReplaceAll(findText, replaceText, matchCase) {
+  if (!findText || findText === replaceText) return null;
+  if (/[\r\n]/.test(findText) || /[\r\n]/.test(replaceText)) return null;
+  const oLen = findText.length, nLen = replaceText.length, maxP = Math.min(oLen, nLen);
+  let pre = 0;
+  while (pre < maxP && findText.charCodeAt(pre) === replaceText.charCodeAt(pre)) pre++;
+  let suf = 0;
+  while (suf < maxP - pre && findText.charCodeAt(oLen - 1 - suf) === replaceText.charCodeAt(nLen - 1 - suf)) suf++;
+  // 代理对不能从中间掐开
+  const bad = function (str, at) { const c = str.charCodeAt(at); return c >= 0xD800 && c <= 0xDFFF; };
+  if ((pre > 0 && (bad(findText, pre - 1) || bad(replaceText, pre - 1))) ||
+      (suf > 0 && (bad(findText, oLen - suf) || bad(replaceText, nLen - suf)))) { pre = 0; suf = 0; }
+  const oMid = findText.slice(pre, oLen - suf), nMid = replaceText.slice(pre, nLen - suf);
+  if (!oMid) return null; // 纯插入：零宽匹配引擎不认
+  let pattern = regexEscape(oMid);
+  if (pre > 0) pattern = '(?<=' + regexEscape(findText.slice(0, pre)) + ')' + pattern;
+  if (suf > 0) pattern = pattern + '(?=' + regexEscape(findText.slice(oLen - suf)) + ')';
+  try {
+    const rd = xModel.createReplaceDescriptor();
+    rd.setPropertyValue('SearchRegularExpression', true);
+    try { rd.setPropertyValue('SearchCaseSensitive', !!matchCase); } catch (e) {}
+    rd.setSearchString(pattern);
+    rd.setReplaceString(replaceEscape(nMid));
+    const n = xModel.replaceAll(rd);
+    // 拟人：结束时视图停在第一处改动（新中段非空时按新文本找；删除型改动找不到
+    // 就不动视图）
+    if (nMid) {
+      try {
+        const sd = xModel.createSearchDescriptor();
+        sd.setPropertyValue('SearchRegularExpression', true);
+        try { sd.setPropertyValue('SearchCaseSensitive', !!matchCase); } catch (e) {}
+        let look = regexEscape(nMid);
+        if (pre > 0) look = '(?<=' + regexEscape(findText.slice(0, pre)) + ')' + look;
+        if (suf > 0) look = look + '(?=' + regexEscape(findText.slice(oLen - suf)) + ')';
+        sd.setSearchString(look);
+        const first = xModel.findFirst(sd);
+        if (first !== null) selectVisibly(first);
+      } catch (e) {}
+    }
+    return { n: Number(n) || 0 };
+  } catch (e) {
+    log('find_replace 原生 replaceAll 失败，回退逐命中: ' + errStr(e));
+    return null;
+  }
+}
+// 批间让路：返回 true = 已被取消，调用方应停下并返回 {cancelled:true}。
+// 调用方在批内持有 lockModel()；这里先解锁再让路，回来再上锁。
+async function batchBreak(p, done, total) {
+  unlockModel();
+  postProgress(p, done, total);
+  await yieldMacrotask();
+  if (p && p.__reqId && CANCELLED[p.__reqId]) return true;
+  try { setRedlineAuthor(p && p.__agent ? AI_AUTHOR : humanAuthor); } catch (e) {}
+  lockModel();
+  return false;
+}
+
+// 文档首节页面样式（edit_header_footer / set_page_setup 共用取法：把视图光标挪到
+// 文档开头读 PageStyleName——内部名恒为英文如 'Standard'，不受 zh-CN 语言包影响）。
+function currentPageStyle() {
+  let styleName = '';
+  try {
+    const vc = ctrl.getViewCursor();
+    const savedRange = vc.getStart();
+    vc.gotoStart(false);
+    styleName = String(vc.getPropertyValue('PageStyleName') || '');
+    vc.gotoRange(savedRange, false);
+  } catch (e) { return tableFail('无法定位页面样式: ' + errStr(e)); }
+  if (!styleName) return tableFail('无法确定文档的页面样式');
+  try { return { pageStyle: xModel.getStyleFamilies().getByName('PageStyles').getByName(styleName), styleName: styleName }; }
+  catch (e) { return tableFail('读取页面样式失败: ' + errStr(e)); }
+}
+// 只刷指定的几个样式定义（insert_toc 只要 Contents Heading），失败不致命。
+function applyProfileToStylesSafe(names) {
+  try {
+    const fam = xModel.getStyleFamilies().getByName('ParagraphStyles');
+    names.forEach(function (name) {
+      if (!fam.hasByName(name)) return;
+      const st = fam.getByName(name);
+      if (name === 'Contents Heading') {
+        const ts = HOUSE.tocTitleSpec;
+        applyHouseChar(st, { sizePt: ts.sizePt, bold: ts.bold });
+        try { st.setPropertyValue('ParaAdjust', adjustEnum(ts.align)); } catch (e) {}
+      }
+    });
+  } catch (e) {}
+}
+
 // ==========================================================================
+// Writer's live controller view data contains the caret and visible area in
+// twips. Model.getViewData() is a saved snapshot and may lag typing/scrolling.
+// Locate the native editing child by its visible-area size, excluding rulers,
+// scrollbars and the sidebar; retain the short window path between reads.
+let caretWindowCache = null;
+function readNativeCaretRect(frame, live, charHeightPt) {
+  const values = typeof live === 'string' ? live.split(';').map(Number) : [];
+  if (values.length < 9 || values.slice(0, 7).some(function (v) { return !isFinite(v); }) || values[2] <= 0) return null;
+  const component = frame.getComponentWindow();
+  // VCL window rectangles are physical pixels on Retina. Query one inch in
+  // the same native window units instead of assuming a 96-dpi surface.
+  const inch = component.convertPointToPixel({ X: 2540, Y: 2540 }, css.util.MeasureUnit.MM_100TH);
+  if (!inch || !isFinite(inch.X) || inch.X <= 0) return null;
+  const dpi = inch.X, scale = dpi / 1440 * values[2] / 100;
+  const width = (values[5] - values[3]) * scale, height = (values[6] - values[4]) * scale;
+  if (width <= 0 || height <= 0) return null;
+  const matches = function (r) { return Math.abs(r.Width - width) <= 2 && Math.abs(r.Height - height) <= 2; };
+  let path = caretWindowCache && caretWindowCache.model === xModel ? caretWindowCache.path : null;
+  try { if (path && !matches(path[path.length - 1].getPosSize())) path = null; } catch (e) { path = null; }
+  if (!path) {
+    const queue = [{ window: component, path: [component] }];
+    for (let count = 0; queue.length && count < 64; count++) {
+      const node = queue.shift(), rect = node.window.getPosSize();
+      if (matches(rect)) { path = node.path; break; }
+      if (node.path.length >= 5) continue;
+      try { const children = node.window.getWindows();
+        for (let i = 0; i < children.length && queue.length < 64; i++) queue.push({ window: children[i], path: node.path.concat([children[i]]) });
+      } catch (e) { /* Leaf windows have no children. */ }
+    }
+    if (!path) return null;
+    caretWindowCache = { model: xModel, path: path };
+  }
+  let x = 0, y = 0;
+  for (let i = 0; i < path.length; i++) { const r = path[i].getPosSize(); x += r.X; y += r.Y; }
+  const container = frame.getContainerWindow().getPosSize();
+  return { x: x + (values[0] - values[3]) * scale, y: y + (values[1] - values[4]) * scale,
+    height: (Number(charHeightPt) || 12) * dpi / 72 * values[2] / 100,
+    frameWidth: container.Width, frameHeight: container.Height,
+    viewport: { x: x, y: y, width: width, height: height } };
+}
+
+function completionUnavailable(reason) {
+  return { success: false, available: false, reason: reason, error: reason, message: reason };
+}
+function completionGuard() {
+  if (!isWriterDoc()) return 'not-writer';
+  if (revisionViewState().mode === 'all') return 'inline-revisions';
+  return null;
+}
+function captureCompletion(radius) {
+  completionSnapshot = null;
+  const reason = completionGuard();
+  if (reason) return completionUnavailable(reason);
+  try {
+    const vc = ctrl.getViewCursor();
+    const selectedText = String(vc.getString() || '');
+    const n = Math.max(1, Math.min(Number(radius) || 120, 200));
+    const ctx = contextAround(vc, n);
+    if (ctx.ctxErr) return completionUnavailable('unavailable-context');
+    const paragraph = paragraphTextOf(vc);
+    if (paragraph == null) return completionUnavailable('unavailable-context');
+    const result = { success: true, available: !selectedText, before: ctx.before, after: ctx.after,
+      paragraph: paragraph.slice(0, 300), selectedText: selectedText, hasSelection: !!selectedText, token: null };
+    if (selectedText) result.reason = 'selection';
+    const range = vc.getText().createTextCursorByRange(vc.getStart());
+    range.gotoRange(vc.getEnd(), true);
+    const token = 'completion_' + (++completionSeq);
+    completionSnapshot = { token: token, model: xModel, range: range, radius: n,
+      before: ctx.before, after: ctx.after, paragraph: paragraph, selectedText: selectedText };
+    result.token = token;
+    return result;
+  } catch (e) { return completionUnavailable('unavailable-context'); }
+}
+// 校验与落字必须在同一条同步 worker 命令内完成。活 range + 原文双校验防止
+// 同名前缀在别处出现、继续输入、换文档或迟到结果把内容落错位置。
+function checkCompletion(token) {
+  const reason = completionGuard();
+  if (reason) return completionUnavailable(reason);
+  const snap = completionSnapshot;
+  if (!snap || !token || token !== snap.token || snap.model !== xModel) return completionUnavailable('stale');
+  try {
+    const vc = ctrl.getViewCursor();
+    if (String(vc.getString() || '') !== snap.selectedText || !rangeStartsEqual(vc, snap.range)
+      || !rangeStartsEqual(vc.getEnd(), snap.range.getEnd())) return completionUnavailable('stale');
+    const ctx = contextAround(vc, snap.radius);
+    if (ctx.ctxErr || ctx.before !== snap.before || ctx.after !== snap.after || paragraphTextOf(vc) !== snap.paragraph) {
+      return completionUnavailable('stale');
+    }
+    return { success: true, cursor: vc, snapshot: snap };
+  } catch (e) { return completionUnavailable('stale'); }
+}
+// Review findings carry coordinates only within a verified immutable paragraph.
+// These temporary ranges are never bookmarks and never enter the saved document.
+function checkReviewRange(p) {
+  const reason = completionGuard();
+  if (reason) return completionUnavailable(reason);
+  if (!p || p.revision !== currentReviewRevision()) return completionUnavailable('stale');
+  const index = p.paragraphIndex, start = p.start, end = p.end;
+  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(start) || !Number.isInteger(end)
+    || start < 0 || end <= start || typeof p.expectedParagraph !== 'string' || p.expectedParagraph.length > 15000
+    || typeof p.quote !== 'string' || !p.quote || end > p.expectedParagraph.length
+    || p.expectedParagraph.slice(start, end) !== p.quote) return completionUnavailable('invalid-range');
+  // UNO cursor movement counts Unicode characters, JS offsets count UTF-16 units.
+  if (/[\uD800-\uDFFF]/.test(p.expectedParagraph.slice(0, end))) return completionUnavailable('unsupported-unicode-range');
+  try {
+    const paragraph = paraAt(index);
+    if (!paragraph || p.revision !== currentReviewRevision() || paragraph.getString() !== p.expectedParagraph) return completionUnavailable('stale');
+    const range = paragraph.getText().createTextCursorByRange(paragraph.getStart());
+    if (start && !range.goRight(start, false)) return completionUnavailable('invalid-range');
+    if (!range.goRight(end - start, true) || range.getString() !== p.quote) return completionUnavailable('stale');
+    return { success: true, range: range, paragraph: paragraph };
+  } catch (e) { return completionUnavailable('stale'); }
+}
+// XUndoManager 把多段文本/表格的内部编辑收成一次人工操作；开组失败就不动文档。
+function completionEdit(title, edit) {
+  const um = xModel.getUndoManager();
+  const undoCount = um.getAllUndoActionTitles().length;
+  um.enterUndoContext(title);
+  completionSnapshot = null;
+  let failed = null, value;
+  lockModel();
+  try { value = edit(); } catch (e) { failed = e; }
+  finally { unlockModel(); um.leaveUndoContext(); }
+  if (failed) {
+    // 本组已有写入时撤回这一整组，避免表格写到半途残留。
+    try { if (um.getAllUndoActionTitles().length > undoCount && um.getCurrentUndoActionTitle() === title) um.undo(); } catch (e) {}
+    throw failed;
+  }
+  return Object.assign({}, captureCompletion(120), { success: true }, value || {});
+}
+
+// Geometry comes from Writer's existing layout. Never reverse-hit-test the
+// document or move its live cursor to position review cards.
+let reviewLayoutCache = null;
+let reviewGeometryController = null, reviewGeometrySupported = false;
+let comparisonModel = null;
+function isReviewWritable() { return comparisonModel !== xModel && !xModel.isReadonly(); }
+function supportsReviewGeometry() {
+  if (reviewGeometryController !== ctrl) {
+    reviewGeometryController = ctrl;
+    try {
+      const info = ctrl.getPropertySetInfo();
+      reviewGeometrySupported = info.hasPropertyByName('AwdReviewGeometry')
+        && info.hasPropertyByName('AwdReviewSidebarWidth');
+    } catch (e) { reviewGeometrySupported = false; }
+  }
+  return reviewGeometrySupported;
+}
+// Metadata costs several UNO round trips per item; typing must never wait for
+// it. Callers pass fresh:false for position-only refreshes: geometry is always
+// live, and metadata is reused by native identity (redline GetId, comment id)
+// until a fresh read. pending = known cards on pages not laid out yet (they keep
+// the gutter); unread = native items the cache has not read (refresh when idle).
+function reviewLayout(p) {
+  if (!isWriterDoc() || !supportsReviewGeometry()) {
+    reviewLayoutCache = null;
+    return { success: true, available: false, items: [], pages: [] };
+  }
+  const mode = revisionViewState().mode;
+  // Only balloons/margin render revision cards; other views need positions only.
+  const revisionCards = mode === 'balloons' || mode === 'margin';
+  const geometry = JSON.parse(ctrl.getPropertyValue('AwdReviewGeometry'));
+  if (geometry.version !== 1 || geometry.unit !== 'twip') return tableFail('Unsupported review geometry');
+  let cache = reviewLayoutCache;
+  const fresh = p && p.fresh;   // true: re-read; false: reuse even after edits; unset: re-read after edits
+  if (!cache || cache.docSeq !== docSeq || cache.mode !== mode || fresh === true
+    || (fresh !== false && cache.revisionAtRead !== currentReviewRevision())) {
+    const revisionAtRead = currentReviewRevision();
+    const comments = EXEC.list_comments({ limit: 500, locate: false });
+    const revisions = revisionCards ? EXEC.list_revisions({ limit: 500, locate: false }) : { success: true, count: 0, revisions: [] };
+    if (!revisions.success || !comments.success) return tableFail('Review list unavailable');
+    // Both enumerations walk the same redline table in the same synchronous call.
+    const nativeIds = new Map(geometry.revisions.map(r => [r.index, r.id]));
+    cache = reviewLayoutCache = { docSeq: docSeq, mode: mode, revisionAtRead: revisionAtRead,
+      revisions: new Map(), comments: new Map(), truncated: revisions.count >= 500 || comments.count >= 500 };
+    revisions.revisions.forEach(r => { if (nativeIds.has(r.index)) cache.revisions.set(nativeIds.get(r.index), r); });
+    comments.comments.forEach(c => cache.comments.set(String(c.id), c));
+  }
+  const live = ctrl.getViewData(), v = String(live).split(';').map(Number);
+  const rect = readNativeCaretRect(ctrl.getFrame(), live, 12);
+  if (!rect) return { success: false, message: 'Document viewport unavailable' };
+  const nativeComments = new Map();
+  geometry.comments.forEach(c => {
+    const id = String(c.name || ('postit:' + c.id));
+    nativeComments.set(id, nativeComments.has(id) ? null : c);
+  });
+  const items = [];
+  let missing = false, pending = 0, unread = 0;
+  function add(kind, data, native, key) {
+    if (!native?.anchor || native.available === false || native.page == null) {
+      // Laid-out-later pages still hold cards: the host keeps their gutter.
+      missing = true;
+      if (kind === 'comment' || (data && data.type !== 'Insert')) pending++;
+      return;
+    }
+    items.push({ key: key, kind: kind, data: data, x: native.anchor.x, y: native.anchor.y,
+      page: native.page, rects: native.rects || [] });
+  }
+  geometry.revisions.forEach(g => {
+    if (!revisionCards) { add('revision', { index: g.index }, g, 'r' + g.index); return; }
+    const meta = cache.revisions.get(g.id);
+    if (!meta) { missing = true; unread++; return; }
+    add('revision', Object.assign({}, meta, { index: g.index }), g, 'r' + g.index);
+  });
+  cache.comments.forEach(c => add('comment', c, nativeComments.get(String(c.id)), 'c' + c.id));
+  nativeComments.forEach((c, id) => { if (c && !cache.comments.has(id)) { missing = true; unread++; } });
+  return { success: true, available: true, items: items, pages: geometry.pages,
+    truncated: cache.truncated || missing, pending: pending, unread: unread,
+    stale: cache.revisionAtRead !== currentReviewRevision(),
+    sidebarWidth: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')),
+    revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
+      caretX: v[0], caretY: v[1], ...rect }, mode: mode };
+}
+
+// ---- 三方合并：比较内核与单元归一（spec 2026-09-14-docx-three-way-merge-design §5.1）----
+// 归一与后端 DocxUnitReader.normalize 同口径：trim + 连续空白折一个 + NFC。两边
+// 必须一字不差，否则 build_merge_draft 的对齐核对会把正常文档判成 stage:'align'。
+function mergeNormalize(s) {
+  const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  return t.normalize ? t.normalize('NFC') : t;
+}
+// 宿主送来的文档字节可能是 Uint8Array / ArrayBuffer / 普通数组（结构化克隆跨
+// relay 与 worker 两跳后形态不定）；统一成 zeta.js 能喂给 UNO 的 signed 数组。
+function toUnoByteSeq(raw) {
+  let u8 = null;
+  if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
+  else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength != null ? raw.byteLength : raw.length);
+  else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
+  if (!u8 || !u8.length) return null;
+  return Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
+}
+// LO 自己那套 chrome（菜单栏 / 两排工具栏 / 状态栏 / 标尺 / 右侧栏）一刀切藏掉。
+// 常规编辑器由 EditorToolbar.bootstrap() 调 set_chrome 藏；版本对比与合并比对稿
+// 两个标签页不是 LibreOfficeEditor、没有工具栏组件，谁都不会去藏（dev-board#631
+// 真机走查：合并比对稿上整套原生外壳都露着）。
+// **而且必须由引擎侧自己在派发 .uno:CompareDocuments 之前藏**，宿主事后补一刀
+// 不够：
+//   ① LayoutManager 可见时这条派发会弹 LO 原生的「管理修订」对话框（真机实证，
+//      2026-09-14：同一份夹具，派发前 set_chrome{all:false} 的那轮画布上干干净净，
+//      不藏的那轮对话框压在正文上）。`NoAcceptDialog` 属性本引擎不认——带上它
+//      对话框照弹，所以别再往那条路上走。
+//   ② load_document 会把藏好的 chrome 重新拉出来（真机实证：set_chrome{all:false}
+//      之后 load_document，isVisible 读回 true），而 build_merge_draft 内部连做三次
+//      load_document，宿主在命令之前藏是白藏。比较是这条链里最后一个会重建
+//      chrome 的动作，藏在它前面才立得住。
+function hideNativeChrome() {
+  try {
+    const lm = ctrl.getFrame().getPropertyValue('LayoutManager');
+    if (lm) lm.setVisible(false);
+  } catch (e) { /* 没有 LayoutManager 就没有 chrome 可藏 */ }
+  // 标尺不归 LayoutManager 管（是控制器的 ViewSettings），setVisible(false) 藏不掉它
+  // ——真机实测合并比对稿顶上会剩一条孤零零的标尺。与 set_chrome{rulers:false} 同口径。
+  try {
+    const vs = ctrl.getViewSettings();
+    vs.setPropertyValue('ShowHoriRuler', false);
+    vs.setPropertyValue('ShowVertRuler', false);
+  } catch (e) { /* 非 Writer 或没有这两个属性 */ }
+}
+// 把 bytes 写进 MEMFS 再派发 .uno:CompareDocuments。compare_document（版本对比
+// 标签页）与 build_merge_draft（合并比对稿）共用这一段；**修订署名必须由调用方
+// 在同一条 worker 命令里先设好**——execCommand 每条命令开头都会重置署名
+// （见 setRedlineAuthor 的说明），跨命令设作者必然失效。
+function compareWithBytes(raw, url) {
+  const bytes = toUnoByteSeq(raw);
+  if (!bytes) return { success: false, stage: 'input', message: 'compare bytes empty' };
+  try {
+    const sfa = css.ucb.SimpleFileAccess.create(context);
+    try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
+    const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
+    sfa.writeFile(url, stream);
+    try { stream.closeInput(); } catch (e) {}
+  } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+  // 顺序是硬的：先藏 chrome 再派发，否则弹原生「管理修订」对话框（见 hideNativeChrome）。
+  hideNativeChrome();
+  try {
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
+  } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
+  invalidateParaIndex();
+  return { success: true, redlineCount: countRedlines() };
+}
+// 正文顶层段落的当前文字（下标 = get_paragraph / select_paragraph 的下标）。
+function bodyParagraphStrings() {
+  const out = [];
+  eachParagraph(function (el) { out.push(String(el.getString() || '')); });
+  return out;
+}
+// 正文顶层段落的「归一文字 + 格式指纹」快照。三方合并靠它找出另一侧「只改了
+// 格式没改文字」的段——**不能靠 .uno:CompareDocuments**：真机实测（24.2.8-zhcn-r5）
+// 该命令只产出 Insert/Delete 两类修订，整段加粗这种纯格式改动一条都不报。
+// 字符属性必须**从跨整段的文字游标**上读：段落对象自己的 CharWeight 给的是段落
+// 默认值，整段加粗时读回来仍是 100（真机实测），只有游标读得到 150。
+const PARA_FORMAT_PROPS = ['ParaStyleName', 'ParaAdjust', 'ParaFirstLineIndent', 'ParaLeftMargin'];
+const RUN_FORMAT_PROPS = ['CharWeight', 'CharPosture', 'CharUnderline', 'CharHeight', 'CharColor',
+  'CharFontName', 'CharFontNameAsian'];
+function formatToken(v) {
+  const u = unoEnumVal(v);
+  if (u == null) return '';
+  if (typeof u === 'object') { try { return JSON.stringify(u); } catch (e) { return 'obj'; } }
+  return String(u);
+}
+function paragraphScan() {
+  const out = [];
+  eachParagraph(function (el) {
+    const parts = [];
+    for (let i = 0; i < PARA_FORMAT_PROPS.length; i++) {
+      let v;
+      try { v = el.getPropertyValue(PARA_FORMAT_PROPS[i]); } catch (e) { v = '?'; }
+      parts.push(formatToken(v));
+    }
+    let cur = null;
+    try { cur = el.getText().createTextCursorByRange(el); } catch (e) { cur = null; }
+    for (let i = 0; i < RUN_FORMAT_PROPS.length; i++) {
+      let v = '?';
+      if (cur) { try { v = cur.getPropertyValue(RUN_FORMAT_PROPS[i]); } catch (e) { v = '?'; } }
+      parts.push(formatToken(v));
+    }
+    let text = '';
+    try { text = String(el.getString() || ''); } catch (e) {}
+    out.push({ norm: mergeNormalize(text), fmt: parts.join('|') });
+  });
+  return out;
+}
+// 单元键 → 表格坐标。't1.2.3' = 第 1 张表（0 起）第 2 行第 3 列（都 0 起）。
+function parseCellUnitKey(key) {
+  const m = /^t(\d+)\.(\d+)\.(\d+)$/.exec(String(key || ''));
+  if (!m) return null;
+  return { table: Number(m[1]), row: Number(m[2]), col: Number(m[3]), name: colLetterOf(Number(m[3])) + (Number(m[2]) + 1) };
+}
+// 取表格单元的 XTextRange（整格），拿不到回 null。
+function tableCellRange(ref) {
+  try {
+    const tables = xModel.getTextTables();
+    if (!(ref.table >= 0) || ref.table >= tables.getCount()) return null;
+    const cell = tables.getByIndex(ref.table).getCellByName(ref.name);
+    if (!cell) return null;
+    const cur = cell.createTextCursor();
+    cur.gotoStart(false); cur.gotoEnd(true);
+    return cur;
+  } catch (e) { return null; }
+}
+// 把 newText 作为修订写进 range（字符级最小颗粒度，退化时整段替换）。
+function writeTrackedText(range, newText) {
+  const txt = String(newText == null ? '' : newText);
+  try {
+    if (applyMinimalRedline(range, txt)) return true;
+    range.setString(txt);
+    return true;
+  } catch (e) { return false; }
+}
+
 const EXEC = {
+  get_review_layout(p) { return reviewLayout(p); },
+  set_review_balloons(p) {
+    if (!isWriterDoc() || !supportsReviewGeometry()) return { success: true, available: false };
+    if (p.enabled && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
+    const width = p.enabled ? Math.max(180, Math.min(360, Math.round(Number(p.width) || 280))) : 0;
+    if (Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) !== width) {
+      withViewOnlyChange(function () { ctrl.setPropertyValue('AwdReviewSidebarWidth', width); });
+    }
+    return { success: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')) === width, available: true };
+  },
+
+  get_review_context() {
+    const reason = completionGuard();
+    if (reason) return Object.assign(completionUnavailable(reason), { revision: currentReviewRevision() });
+    try {
+      const vc = ctrl.getViewCursor();
+      const locator = rangeLocator(vc.getStart(), vc.getEnd());
+      if (!locator) return Object.assign(completionUnavailable('body-only'), { revision: currentReviewRevision() });
+      const text = paragraphTextOf(vc);
+      if (text == null) return Object.assign(completionUnavailable('unavailable-context'), { revision: currentReviewRevision() });
+      return { success: true, available: text.length <= 15000, revision: currentReviewRevision(),
+        paragraphIndex: locator.paraKey, text: text.slice(0, 15000), truncated: text.length > 15000,
+        offset: locator.start, selectedText: String(vc.getString() || '').slice(0, 15000), hasSelection: !vc.isCollapsed(),
+        cursorRectRaw: EXEC.get_cursor_rect(), scope: 'body-paragraphs' };
+    } catch (e) { return Object.assign(completionUnavailable('unavailable-context'), { revision: currentReviewRevision() }); }
+  },
+  goto_review_range(p) {
+    const checked = checkReviewRange(p);
+    if (!checked.success) return checked;
+    return selectVisibly(checked.range) ? { success: true, revision: currentReviewRevision() } : completionUnavailable('unavailable-context');
+  },
+  apply_review_edit(p) {
+    const checked = checkReviewRange(p);
+    if (!checked.success) return checked;
+    if (typeof p.replacement !== 'string' || p.replacement.length > 15000 || /[\r\n]/.test(p.replacement)) return completionUnavailable('invalid-replacement');
+    const expected = p.expectedParagraph.slice(0, p.start) + p.replacement + p.expectedParagraph.slice(p.end);
+    const um = xModel.getUndoManager();
+    const before = um.getAllUndoActionTitles().length;
+    const title = '采用审校建议';
+    um.enterUndoContext(title);
+    let error = null;
+    lockModel();
+    try {
+      xModel.setPropertyValue('RecordChanges', true);
+      if (!applyMinimalRedline(checked.range, p.replacement)) checked.range.setString(p.replacement);
+      if (checked.paragraph.getString() !== expected) throw new Error('review edit verification failed');
+    } catch (e) { error = e; }
+    finally { unlockModel(); um.leaveUndoContext(); }
+    if (error) {
+      try { if (um.getAllUndoActionTitles().length > before && um.getCurrentUndoActionTitle() === title) um.undo(); } catch (e) {}
+      return completionUnavailable('edit-failed');
+    }
+    invalidateParaIndex();
+    return { success: true, revision: currentReviewRevision() };
+  },
+  get_completion_context(p) { return captureCompletion(p && p.radius); },
+  set_host_context_menu(p) {
+    hostContextMenu = { enabled: !!(p && p.enabled), maxLength: Math.max(0, Number(p && p.maxLength) || 0) };
+    return { success: true };
+  },
+  // Same decision the context menu interceptor made for this right-click, then
+  // the final text through the FINAL_TEXT_ACTIONS view (see runAgentCommandInMarginView).
+  get_context_menu_context(p) {
+    if (!hostHandlesContextMenu()) return completionUnavailable('native-menu');
+    return runAgentCommandInMarginView('get_completion_context', function () { return captureCompletion(p && p.radius); });
+  },
+  accept_completion(p) {
+    const checked = checkCompletion(p.token);
+    if (!checked.success) return checked;
+    if (checked.snapshot.selectedText) return completionUnavailable('selection');
+    const prefix = p.prefix, text = p.text;
+    if (typeof prefix !== 'string' || !prefix || typeof text !== 'string'
+      || text.length <= prefix.length || text.indexOf(prefix) !== 0 || /[\r\n]/.test(text)
+      || !checked.snapshot.before.endsWith(prefix)) return completionUnavailable('invalid-completion');
+    const suffix = text.slice(prefix.length);
+    return completionEdit('补全文字', function () {
+      const vc = checked.cursor;
+      vc.getText().insertString(vc, suffix, false);
+      vc.collapseToEnd();
+      return { inserted: suffix, text: text };
+    });
+  },
+  insert_completion_content(p) {
+    const checked = checkCompletion(p.token);
+    if (!checked.success) return checked;
+    const text = p.text == null ? '' : p.text;
+    const rows = p.rows;
+    if (typeof text !== 'string' || (!text && !rows)) return completionUnavailable('invalid-content');
+    if (rows != null && (!Array.isArray(rows) || !rows.length || rows.length > 200
+      || rows.some(function (r) { return !Array.isArray(r) || !r.length || r.length > 20
+        || r.some(function (c) { return typeof c !== 'string'; }); }))) return completionUnavailable('invalid-table');
+    // 表后摆位依赖正文枚举；不允许在表格/脚注/页眉中偷偷插入嵌套表。
+    if (rows) {
+      try { if (paraKeyOf(xModel.getText(), checked.cursor.getStart()) < 0) return completionUnavailable('table-requires-body'); }
+      catch (e) { return completionUnavailable('table-requires-body'); }
+    }
+    return completionEdit('插入补全资料', function () {
+      const vc = checked.cursor;
+      vc.collapseToEnd(); // 右键外查的选区保留原文，资料追加在其后。
+      const story = vc.getText();
+      const lines = text.replace(/\r\n?/g, '\n').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i) story.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+        if (lines[i]) story.insertString(vc, lines[i], false);
+      }
+      vc.collapseToEnd();
+      let name = null;
+      if (rows) { const table = insertStyledTable(rows, 1, true); name = table.getName(); }
+      return { inserted: text, table: name };
+    });
+  },
+  // [取消] 宿主对一条在飞的批量命令喊停（reqId 来自 progress 消息）。只置位，
+  // 真正停下来要等那条命令跑到下一个批间检查点。
+  cancel(p) {
+    const id = String(p && p.reqId || '');
+    if (!id) return tableFail('cancel: reqId required');
+    if (!INFLIGHT[id]) return { success: true, reqId: id, stale: true }; // 已结束/不存在：不置位，免得 CANCELLED 泄漏
+    CANCELLED[id] = true;
+    return { success: true, reqId: id };
+  },
   // [verified] insert at the view cursor (append, not select) — see testInsertText.
   // 带 markdown 标记的文本走剥离转换（**→真粗体、行首 # 剥掉），字体沿用现场格式；
   // 纯文本走原路径不动。
@@ -1629,22 +3212,59 @@ const EXEC = {
     return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
   },
   // [verified] model-native search + redline (RFC §0.2: no integer offsets).
-  find_replace(p) {
+  // 全部替换走引擎原生 replaceAll（见 nativeTrackedReplaceAll：150 命中 0.2s）；
+  // 只替首处 / 纯插入走逐命中路径：先 findAll 收齐命中（都是活的 XTextRange，
+  // 改前面的不影响后面的），只在结束时滚到首处；命中 > 50 时按 30 一批，批间发
+  // progress / 检查 cancel（见 batchBreak）。
+  async find_replace(p) {
     xModel.setPropertyValue('RecordChanges', true);
+    const all = p.replaceAll !== false;
+    const replaceText = String(p.replaceText || '');
+    if (all) {
+      // 颗粒度门槛（dev-board#365）：findText→replaceText 的差异不止一块时，原生
+      // replaceAll 只能整块替换中段，会把两处改动之间没改的字一起删了重打；
+      // 这种改走下面的逐命中路径，每处 applyMinimalRedline 按字符落修订。
+      const fast = replaceAllIsSingleBlock(p.findText, replaceText)
+        ? nativeTrackedReplaceAll(String(p.findText || ''), replaceText, !!p.matchCase)
+        : null;
+      if (fast) {
+        invalidateParaIndex();
+        return { success: true, replaced: fast.n, total: fast.n, recordChanges: true };
+      }
+    }
     const sd = xModel.createSearchDescriptor();
     sd.setSearchString(String(p.findText || ''));
     // matchCase 是后加的可选项（自建查找替换面板要它）；不传时行为与从前一致。
     try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
-    const all = p.replaceAll !== false;
-    let hit = xModel.findFirst(sd), n = 0;
-    while (hit !== null) {
-      selectVisibly(hit); // 拟人：视图滚到正在修订的位置，用户看得见改在哪
-      if (!applyMinimalRedline(hit, String(p.replaceText || ''))) hit.setString(String(p.replaceText || ''));
-      n++;
-      if (!all) break;
-      hit = xModel.findNext(hit, sd);
+    const hits = [];
+    if (all) {
+      const found = xModel.findAll(sd);
+      const cnt = found ? found.getCount() : 0;
+      for (let i = 0; i < cnt; i++) hits.push(found.getByIndex(i));
+    } else {
+      const first = xModel.findFirst(sd);
+      if (first !== null) hits.push(first);
     }
-    return { success: true, replaced: n, recordChanges: true };
+    const total = hits.length;
+    const BATCH = 30, batched = total > 50;
+    let n = 0, cancelled = false;
+    lockModel();
+    try {
+      for (let i = 0; i < total; i++) {
+        if (batched && i > 0 && i % BATCH === 0) {
+          if (await batchBreak(p, n, total)) { cancelled = true; break; }
+        }
+        const hit = hits[i];
+        if (!applyMinimalRedline(hit, replaceText)) hit.setString(replaceText);
+        n++;
+      }
+    } finally { unlockModel(); }
+    if (batched && !cancelled) postProgress(p, n, total); // 取消时批间那帧已报过同一个 done
+    if (hits[0]) selectVisibly(hits[0]); // 拟人：结束时视图停在第一处改动
+    invalidateParaIndex();
+    const r = { success: true, replaced: n, total: total, recordChanges: true };
+    if (cancelled) { r.cancelled = true; r.done = n; }
+    return r;
   },
   // [verified] current selection text (anchor, not integer offset).
   get_selection() {
@@ -1743,35 +3363,21 @@ const EXEC = {
   // [verified-extend] read the Nth (0-based) paragraph's text.
   get_paragraph(p) {
     const idx = Number(p.index) || 0;
-    const en = xModel.getText().createEnumeration();
-    let i = 0;
-    while (en.hasMoreElements()) {
-      const el = en.nextElement();
-      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        if (i === idx) return { success: true, index: idx, text: el.getString() };
-        i++;
-      }
-    }
-    return { success: false, message: 'paragraph index out of range: ' + idx + ' (count ' + i + ')' };
+    const el = paraAt(idx);
+    if (!el) return { success: false, message: 'paragraph index out of range: ' + idx + ' (count ' + getParaIndex().total + ')' };
+    return { success: true, index: idx, text: el.getString() };
   },
   // [verified-extend] modify the Nth paragraph's text under RecordChanges.
   modify_paragraph(p) {
     xModel.setPropertyValue('RecordChanges', true);
     const idx = Number(p.index) || 0;
-    const en = xModel.getText().createEnumeration();
-    let i = 0;
-    while (en.hasMoreElements()) {
-      const el = en.nextElement();
-      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        if (i === idx) {
-          selectVisibly(el); // 拟人：先跳到目标段落
-          if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
-          return { success: true, index: idx, paragraphAfterEdit: el.getString().slice(0, 200) };
-        }
-        i++;
-      }
-    }
-    return { success: false, message: 'paragraph index out of range: ' + idx };
+    const el = paraAt(idx);
+    if (!el) return { success: false, message: 'paragraph index out of range: ' + idx };
+    selectVisibly(el); // 拟人：先跳到目标段落
+    if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
+    const after = el.getString().slice(0, 200);
+    invalidateParaIndex();
+    return { success: true, index: idx, paragraphAfterEdit: after };
   },
   // [verified-extend] outline = paragraphs carrying a heading style / outline level.
   get_outline() {
@@ -1875,9 +3481,9 @@ const EXEC = {
   // the IME overlay routes here — the overlay's single-line <input> can't make a
   // newline itself). Append, leave cursor collapsed after the break.
   insert_paragraph() {
-    const xText = xModel.getText();
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
+    const xText = vc.getText();   // 同 insertTextAtCursor：单元格里必须用光标自己的 XText
     xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
     vc.collapseToEnd();
     return { success: true };
@@ -1915,6 +3521,25 @@ const EXEC = {
   delete_forward() {
     dispatchUno('.uno:Delete');
     return { success: true };
+  },
+  // Tab / Shift+Tab（IME 覆盖层转发的唯一 Tab 动作）。Word/Writer 语义：光标在
+  // 表格里 = 跳到下一格/上一格，正文里才插制表符。判定必须在 worker 做——宿主
+  // 拿不到光标属于哪个 story（dev-board#627 的次生问题：#627 之前覆盖层无条件
+  // 插制表符，在单元格里因 RuntimeException 静默失败＝看着像没反应；改用
+  // vc.getText() 之后它会真插进去，修订态下还多一条修订）。
+  tab_key(p) {
+    const shift = !!(p && p.shift);
+    const vc = ctrl.getViewCursor();
+    let cell = null;
+    try { cell = vc.getPropertyValue('Cell'); } catch (e) {}
+    if (!cell) {
+      vc.collapseToEnd();
+      insertTextAtCursor(vc, '\t');
+      vc.collapseToEnd();
+      return Object.assign({ success: true, inTable: false, inserted: '\t' }, verifySnapshot());
+    }
+    dispatchUno(shift ? '.uno:JumpToPrevCell' : '.uno:JumpToNextCell');
+    return { success: true, inTable: true, shift: shift, cell: viewCursorCellName() };
   },
   // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
   ui_command(p) {
@@ -1993,12 +3618,41 @@ const EXEC = {
     try { applied = Number(vs.getPropertyValue('ZoomValue')) || next; } catch (e) {}
     return { success: true, zoom: applied };
   },
+  // ---- [主题] 纸外工作区配色（dev-board#273）------------------------------
+  // 宿主深浅主题切换时把 LO 的 AppBackground（纸张周围的工作区底色）跟着切；
+  // DocColor（纸张本身）刻意不动——文档以打印观感为准，深色下纸仍是纸白。
+  // 配置项运行时可写（与 setRedlineAuthor 同一机制）；色值与宿主 --awd-canvas
+  // 令牌同源（light #F1F3F5 / dark #101214），两边不一致会在 iframe 底与画布
+  // 之间露出一圈异色缝。
+  set_app_theme(p) {
+    const mode = p && p.mode === 'dark' ? 'dark' : 'light';
+    const color = mode === 'dark' ? 0x101214 : 0xF1F3F5;
+    try {
+      const provider = context.getServiceManager().createInstanceWithContext(
+        'com.sun.star.configuration.ConfigurationProvider', context);
+      let schemeName = 'LibreOffice';
+      try {
+        const cur = provider.createInstanceWithArguments(
+          'com.sun.star.configuration.ConfigurationAccess',
+          [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme')]);
+        const n = cur.getByName('CurrentColorScheme');
+        if (n) schemeName = String(n);
+      } catch (e) { /* 读不到就用默认方案名 */ }
+      const root = provider.createInstanceWithArguments(
+        'com.sun.star.configuration.ConfigurationUpdateAccess',
+        [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme/ColorSchemes')]);
+      const scheme = root.getByName(schemeName);
+      scheme.getByName('AppBackground').replaceByName('Color', color);
+      root.commitChanges();
+      return { success: true, mode, scheme: schemeName };
+    } catch (e) { return { success: false, message: 'set_app_theme 失败: ' + errStr(e) }; }
+  },
   // ---- [P1 自建工具栏] 状态回读 / 样式清单 / chrome 开关 -------------------
   // 工具栏的激活态（B 是否高亮、当前字体字号样式对齐、能不能撤销）一次拿全。
   // 高频调用（选区事件 + 400ms 聚焦轮询），实测整套读一遍约 6ms——每个字段各自
   // try/catch，缺一个不影响其余，绝不因为某个属性在当前上下文不存在就整体失败。
   get_ui_state() {
-    const out = { success: true };
+    const out = { success: true, documentSeq: docSeq };
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch (e) { return { success: false, message: errStr(e) }; }
     const ch = {};
@@ -2045,6 +3699,18 @@ const EXEC = {
     const view = {};
     try { view.zoom = ctrl.getViewSettings().getPropertyValue('ZoomValue'); } catch (e) {}
     try { view.recordChanges = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+    // 修订显示三态（dev-board#368）。工具栏的当前态读的就是这里——真实读回引擎，
+    // 不给宿主留本地猜测的余地。Calc/Impress 没有修订机制，字段整个不给。
+    if (isWriterDoc()) {
+      try {
+        const rv = revisionViewState();
+        view.revisionView = rv.mode;
+        view.showChanges = rv.showChanges;
+        view.showChangesInMargin = rv.showChangesInMargin;
+        view.revisionMarginSupported = rv.marginSupported;
+        view.revisionBalloonsSupported = rv.hideSupported && supportsReviewGeometry() && installReviewCommentInterceptor(ctrl);
+      } catch (e) {}
+    }
     out.view = view;
     const sel = {};
     try { sel.collapsed = (vc.getString() || '').length === 0; } catch (e) {}
@@ -2177,6 +3843,28 @@ const EXEC = {
     try { on = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
     return { success: true, recordChanges: on };
   },
+  // 修订显示三态（Word 的「所有标记 / 简洁标记 / 无标记」，dev-board#368）。
+  // **只切显示**：不改一个字节的内容、不动 RecordChanges、不处置任何 redline。
+  // 不带 mode = 只读回当前真实状态（宿主据此高亮，不许本地猜）。
+  set_revision_view(p) {
+    if (!isWriterDoc()) {
+      return tableFail('当前打开的不是 Word 文档：修订显示方式仅对 doc/docx 生效（表格与演示文稿没有修订机制）。');
+    }
+    if (p && p.mode != null && String(p.mode) !== '') {
+      const mode = String(p.mode);
+      if (REVISION_VIEWS.indexOf(mode) < 0) {
+        return tableFail('未知的修订显示方式: ' + mode + '（可选 ' + REVISION_VIEWS.join(' / ') + '）');
+      }
+      if (mode === 'balloons' && !supportsReviewGeometry()) return tableFail('当前编辑器引擎不支持批注框修订，请更新编辑器后使用。');
+      if (mode === 'balloons' && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
+      const applied = applyRevisionView(mode, mode === 'balloons' && revisionViewState().mode !== 'balloons');
+      applied.success = true;
+      return applied;
+    }
+    const cur = revisionViewState();
+    cur.success = true;
+    return cur;
+  },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
   // mm->px formula can be calibrated on the JS side without restarting LOWA.
@@ -2188,6 +3876,8 @@ const EXEC = {
   //   - winPx: the Qt component window rect (px) — the canvas surface bounds.
   // Each field is independently try/caught so a missing API degrades, not throws.
   get_cursor_rect() {
+    // The IME/caret timer can outlive a Writer document during a tab switch.
+    if (!isWriterDoc()) return completionUnavailable('not-writer');
     const out = { success: true };
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch (e) { out.vcErr = errStr(e); }
@@ -2201,13 +3891,8 @@ const EXEC = {
       const r = ctrl.getFrame().getComponentWindow().getPosSize();
       out.winPx = { X: r.X, Y: r.Y, W: r.Width, H: r.Height };
     } catch (e) { out.winErr = errStr(e); }
-    // SCROLL-AWARE origin (Phase B): getPosition() is in document coords (from the
-    // page top), so after the view scrolls the click-derived offset goes stale.
-    // The view data carries the scrolled origin — VisibleLeft/Top (or ViewLeft/Top)
-    // — so the overlay can subtract it and follow the cursor WITHOUT re-clicking.
-    // We return the whole bag verbatim: which field tracks scroll AND its unit
-    // (1/100 mm vs twips) is the open question to confirm on a real device, then
-    // bake CURSOR_MAP.viewDataToMm accordingly.
+    // Saved model view data remains for older consumers. It is not a live
+    // scroll/caret source; nativeCaret below reads the current controller.
     try {
       const vd = xModel.getViewData && xModel.getViewData();
       if (vd && typeof vd.getByIndex === 'function' && vd.getCount() > 0) {
@@ -2215,11 +3900,16 @@ const EXEC = {
         const view = {};
         if (seq && seq.length) for (let i = 0; i < seq.length; i++) {
           const pv = seq[i];
-          if (pv && pv.Name != null) view[pv.Name] = pv.Value;
+          if (pv && pv.Name != null) {
+            const value = typeof pv.Value === 'bigint' ? Number(pv.Value) : pv.Value;
+            if (['number', 'string', 'boolean'].indexOf(typeof value) >= 0) view[pv.Name] = value;
+          }
         }
         out.viewData = view;
       }
     } catch (e) { out.viewDataErr = errStr(e); }
+    try { out.nativeCaret = readNativeCaretRect(ctrl.getFrame(), ctrl.getViewData(), out.charHeightPt); }
+    catch (e) { /* Older engines retain the click-calibrated fallback. */ }
     return out;
   },
   // [spike] probe 4b: LOAD performance of a 50-page docx (#56 余项). The existing
@@ -2259,6 +3949,8 @@ const EXEC = {
       // so subsequent commands act on what's actually displayed.
       xModel = loaded;
       ctrl = loaded.getCurrentController();
+      installReviewCommentInterceptor(ctrl);
+      installContextMenuInterceptor(ctrl);
       try { const vc = ctrl.getViewCursor(); vc.gotoEnd(false); r.pageCount = vc.getPage(); }
       catch (e) { r.pageErr = errStr(e); }
     } catch (e) { r.success = false; r.message = errStr(e); }
@@ -2301,6 +3993,8 @@ const EXEC = {
     const retarget = (loaded) => {
       xModel = loaded;
       ctrl = loaded.getCurrentController();
+      installReviewCommentInterceptor(ctrl);
+      installContextMenuInterceptor(ctrl);
       try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
@@ -2313,7 +4007,7 @@ const EXEC = {
       if (isWriterDoc()) {
         // Revisions default ON for the real document too (same as bootDoc).
         try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
-        showDeletionsInMargin();
+        resetRevisionView();
       }
     };
 
@@ -2370,7 +4064,8 @@ const EXEC = {
     const name = String(p && p.name || 'document.docx');
     const m = name.match(/\.([A-Za-z0-9]+)$/);
     const ext = (m ? m[1] : 'docx').toLowerCase();
-    const filter = IMPORT_FILTERS[ext];
+    // Word 2007 导出会将 compatibilityMode 15 降为 12；现代过滤器保留旧文档的较低模式。
+    const filter = ext === 'docx' ? 'Office Open XML Text' : IMPORT_FILTERS[ext];
 
     // Stream the store STRAIGHT INTO JS via a UNO XOutputStream implemented
     // here. Do NOT storeToURL a MEMFS file and read it back with Module.FS:
@@ -2400,10 +4095,10 @@ const EXEC = {
     const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
     exportInFlight = true;
     try {
-      xModel.storeToURL('private:stream', props);
+      withInlineMarkupForExport(function () { xModel.storeToURL('private:stream', props); });
     } finally {
-      exportInFlight = false;
       try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
+      exportInFlight = false;
     }
     saveSeq++;
     if (total === 0) return { success: false, message: 'export_document: store produced 0 bytes' };
@@ -2448,28 +4143,29 @@ const EXEC = {
   // [感知] read the document as numbered paragraphs — the AI's "eyes". Windowed
   // (startParagraph + maxParagraphs, plus a char budget) so a 200-page contract
   // can be read in passes without blowing the tool-result size.
+  // 走段落索引缓存：O(窗口) 而非 O(全文)，total 直接取索引长度。
   get_document_text(p) {
     const start = Math.max(0, Number(p && p.startParagraph) || 0);
     const maxParas = Math.max(1, Math.min(Number(p && p.maxParagraphs) || 200, 500));
     const charBudget = 15000;
-    const paragraphs = [];
-    let total = 0, chars = 0, truncated = false;
-    eachParagraph(function (el, i) {
-      total = i + 1;
-      if (i < start || paragraphs.length >= maxParas || chars >= charBudget) return false;
-      const item = { index: i, text: el.getString() };
-      try {
-        const lvl = el.getPropertyValue('OutlineLevel') || 0;
-        if (lvl > 0) { item.headingLevel = lvl; item.style = el.getPropertyValue('ParaStyleName') || ''; }
-      } catch (e) {}
-      chars += item.text.length;
-      paragraphs.push(item);
-      return false;
+    return withParaIndex(function (ix) {
+      const total = ix.total;
+      const paragraphs = [];
+      let chars = 0;
+      for (let i = start; i < total && paragraphs.length < maxParas && chars < charBudget; i++) {
+        const el = ix.ranges[i];
+        const item = { index: i, text: el.getString() };
+        try {
+          const lvl = el.getPropertyValue('OutlineLevel') || 0;
+          if (lvl > 0) { item.headingLevel = lvl; item.style = el.getPropertyValue('ParaStyleName') || ''; }
+        } catch (e) {}
+        chars += item.text.length;
+        paragraphs.push(item);
+      }
+      const r = { success: true, revision: currentReviewRevision(), scope: 'body-paragraphs', totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
+      if (start + paragraphs.length < total) { r.truncated = true; r.nextStartParagraph = start + paragraphs.length; }
+      return r;
     });
-    if (start + paragraphs.length < total) truncated = true;
-    const r = { success: true, totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
-    if (truncated) { r.truncated = true; r.nextStartParagraph = start + paragraphs.length; }
-    return r;
   },
   // [感知] what's around the cursor right now — selection, chars before/after,
   // and the enclosing paragraph ("看一眼手边").
@@ -2484,8 +4180,7 @@ const EXEC = {
   // [定位] select the Nth (0-based) body paragraph, visibly (view scrolls to it).
   select_paragraph(p) {
     const idx = Number(p.index) || 0;
-    let found = null;
-    eachParagraph(function (el, i) { if (i === idx) { found = el; return true; } return false; });
+    const found = paraAt(idx);
     if (!found) return { success: false, message: 'paragraph index out of range: ' + idx };
     if (!selectVisibly(found)) return { success: false, message: 'could not select paragraph ' + idx };
     return { success: true, index: idx, text: found.getString() };
@@ -2530,6 +4225,8 @@ const EXEC = {
     }
     if (p.fontSize != null) { setCharProp(vc, 'CharHeight', Number(p.fontSize)); applied.fontSize = Number(p.fontSize); }
     if (p.fontName != null) { setCharProp(vc, 'CharFontName', String(p.fontName)); applied.fontName = String(p.fontName); }
+    // 中文字体单独设（fontName 已把西文/中文/复杂文种三项一起设成同一字体；中西文分设时后设中文）
+    if (p.fontNameAsian != null) { vc.setPropertyValue('CharFontNameAsian', String(p.fontNameAsian)); applied.fontNameAsian = String(p.fontNameAsian); }
     if (Object.keys(applied).length === 0) return { success: false, message: 'no format params given' };
     return { success: true, applied: applied, selectedText: vc.getString().slice(0, 100) };
   },
@@ -2540,11 +4237,11 @@ const EXEC = {
   set_paragraph_format(p) {
     const vc = ctrl.getViewCursor();
     const applied = {};
+    let alignment = null;
     if (p.alignment != null) {
       const m = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
-      const v = m[String(p.alignment).toLowerCase()];
-      if (v == null) return { success: false, message: 'bad alignment: ' + p.alignment + ' (left/right/center/justify)' };
-      vc.setPropertyValue('ParaAdjust', v); applied.alignment = String(p.alignment);
+      alignment = m[String(p.alignment).toLowerCase()];
+      if (alignment == null) return { success: false, message: 'bad alignment: ' + p.alignment + ' (left/right/center/justify)' };
     }
     let styleName = p.styleName != null ? String(p.styleName) : null;
     if (p.headingLevel != null) {
@@ -2552,6 +4249,8 @@ const EXEC = {
       styleName = lvl >= 1 && lvl <= 9 ? 'Heading ' + lvl : 'Standard';
     }
     if (styleName != null) { vc.setPropertyValue('ParaStyleName', styleName); applied.styleName = styleName; }
+    // 切换段落样式会重置对齐；用户同次明确给出的格式必须在样式之后应用。
+    if (alignment != null) { vc.setPropertyValue('ParaAdjust', alignment); applied.alignment = String(p.alignment); }
     // 行距：single / 1.5 / double（固定倍数），proportional（百分比），
     // atLeast（最小值，磅），exactly（固定值，磅）
     if (p.lineSpacingMode != null) {
@@ -2590,7 +4289,13 @@ const EXEC = {
   // chinese（一、二、）/ multilevel（1. → 1.1 → 1.1.1）/ none（去掉编号）。
   set_numbering(p) {
     const preset = String(p.preset || 'decimal');
-    if (preset === 'none') { dispatchUno('.uno:RemoveBullets'); return Object.assign({ success: true, preset: 'none' }, verifySnapshot()); }
+    if (preset === 'none') {
+      dispatchUno('.uno:RemoveBullets');
+      // UNO 派发可能不抛错却没有生效；去列表必须用真实状态判定，不能只回显 preset。
+      const isNumbered = ctrl.getViewCursor().getPropertyValue('NumberingIsNumber');
+      if (isNumbered !== false) return tableFail('项目符号或编号尚未清除，请重新选中目标段落后重试，并用 doc_get_formatting 核验');
+      return Object.assign({ success: true, preset: 'none', isNumbered: false }, verifySnapshot());
+    }
     const lvl = Math.max(1, Math.min(Number(p.level) || 1, 9)) - 1;
     let rules = null;
     try { rules = makeNumberingRules(preset); } catch (e) {
@@ -2615,12 +4320,41 @@ const EXEC = {
       styleTableStandard(table, { headerRows: p.firstRowBold === false ? 0 : 1 });
       applied.standard = true;
     }
-    if (p.borderWidthPt != null) {
-      const color = p.borderColor != null ? parseColor(p.borderColor, { black: 0 }) : 0;
-      try { applyTableBorders(table, ptToMm100(p.borderWidthPt), color == null ? 0 : color); applied.borderWidthPt = Number(p.borderWidthPt); }
+    // 边框：borderWidthPt 内外同宽；outsideBorderWidthPt / insideBorderWidthPt 分设；
+    // borderColor / borderStyle(single|double|dashed) 单独给时宽度沿用画像值。
+    if (p.borderWidthPt != null || p.outsideBorderWidthPt != null || p.insideBorderWidthPt != null || p.borderColor != null || p.borderStyle != null) {
+      const color = p.borderColor != null ? parseColor(p.borderColor, { black: 0 }) : HOUSE.tableBorder.color;
+      if (color == null) return { success: false, message: 'bad borderColor: ' + p.borderColor + ' (use #RRGGBB)' };
+      const style = p.borderStyle != null ? String(p.borderStyle).toLowerCase() : HOUSE.tableBorder.style;
+      if (['single', 'double', 'dashed'].indexOf(style) < 0) return { success: false, message: 'bad borderStyle: ' + p.borderStyle + ' (single/double/dashed)' };
+      const outsideMm = p.outsideBorderWidthPt != null ? ptToMm100(p.outsideBorderWidthPt) : p.borderWidthPt != null ? ptToMm100(p.borderWidthPt) : HOUSE.tableBorder.outsideMm;
+      const insideMm = p.insideBorderWidthPt != null ? ptToMm100(p.insideBorderWidthPt) : p.borderWidthPt != null ? ptToMm100(p.borderWidthPt) : outsideMm;
+      try { applyTableBorders(table, { outsideMm: outsideMm, insideMm: insideMm, color: color, style: style }); }
       catch (e) { return { success: false, message: '边框设置失败: ' + errStr(e) }; }
+      if (p.borderWidthPt != null) applied.borderWidthPt = Number(p.borderWidthPt);
+      if (p.outsideBorderWidthPt != null) applied.outsideBorderWidthPt = Number(p.outsideBorderWidthPt);
+      if (p.insideBorderWidthPt != null) applied.insideBorderWidthPt = Number(p.insideBorderWidthPt);
+      if (p.borderColor != null) applied.borderColor = String(p.borderColor);
+      if (p.borderStyle != null) applied.borderStyle = style;
     }
     const names = table.getCellNames();
+    // 表头底纹（首行；'none' 清除）与跨页重复表头
+    if (p.headerFill != null) {
+      const fill = String(p.headerFill).toLowerCase() === 'none' ? -1 : parseColor(p.headerFill, {});
+      if (fill == null) return { success: false, message: 'bad headerFill: ' + p.headerFill + ' (use #RRGGBB or none)' };
+      for (let i = 0; i < names.length; i++) {
+        if (parseInt(String(names[i]).replace(/^[A-Z]+/, ''), 10) !== 1) continue;
+        try { table.getCellByName(names[i]).setPropertyValue('BackColor', fill); } catch (e) {}
+      }
+      applied.headerFill = String(p.headerFill);
+    }
+    if (p.repeatHeader != null) {
+      try {
+        table.setPropertyValue('RepeatHeadline', !!p.repeatHeader);
+        if (p.repeatHeader) table.setPropertyValue('HeaderRowCount', 1);
+        applied.repeatHeader = !!p.repeatHeader;
+      } catch (e) { return { success: false, message: '重复表头设置失败: ' + errStr(e) }; }
+    }
     if (p.fontSizePt != null || p.cellVerticalAlign != null || p.firstRowBold != null) {
       const vmap = { top: css.text.VertOrientation.TOP, center: css.text.VertOrientation.CENTER, bottom: css.text.VertOrientation.BOTTOM };
       for (let i = 0; i < names.length; i++) {
@@ -2642,24 +4376,35 @@ const EXEC = {
       if (p.cellVerticalAlign != null) applied.cellVerticalAlign = String(p.cellVerticalAlign);
       if (p.firstRowBold != null) applied.firstRowBold = !!p.firstRowBold;
     }
-    // 列宽（百分比数组，如 [20,50,30]，个数必须等于列数）
-    if (p.columnWidthsPercent != null) {
+    // 列宽：百分比数组（如 [20,50,30]）或厘米数组（按比例折算，表宽不变），个数必须等于列数
+    const widthsRaw = p.columnWidthsPercent != null ? p.columnWidthsPercent : p.columnWidthsCm;
+    if (widthsRaw != null) {
       try {
-        const pct = Array.isArray(p.columnWidthsPercent) ? p.columnWidthsPercent.map(Number) : String(p.columnWidthsPercent).split(/[,，\s]+/).filter(Boolean).map(Number);
+        const pct = Array.isArray(widthsRaw) ? widthsRaw.map(Number) : String(widthsRaw).split(/[,，\s]+/).filter(Boolean).map(Number);
+        if (pct.some(function (v) { return !(v > 0); })) return { success: false, message: '列宽必须是正数: ' + JSON.stringify(widthsRaw) };
         const seps = table.getPropertyValue('TableColumnSeparators');
         const nCols = (seps ? seps.length : 0) + 1;
         if (pct.length !== nCols) return { success: false, message: '列宽个数(' + pct.length + ')与表格列数(' + nCols + ')不符' };
         const relSum = table.getPropertyValue('TableColumnRelativeSum');
-        const out = [];
+        // 不 new css.text.TableColumnSeparator（zetajs 报 unregistered UNO type，e2e 组 29 实锤）：
+        // 改写读回的分隔符数组再原样设回，个数不变只动 Position。
         let acc = 0;
         const total = pct.reduce(function (a, b) { return a + b; }, 0);
         for (let i = 0; i < pct.length - 1; i++) {
           acc += pct[i];
-          out.push(new css.text.TableColumnSeparator({ Position: Math.round(relSum * acc / total), IsVisible: true }));
+          seps[i].Position = Math.round(relSum * acc / total);
+          seps[i].IsVisible = true;
         }
-        table.setPropertyValue('TableColumnSeparators', out);
-        applied.columnWidthsPercent = pct;
-      } catch (e) { return { success: false, message: '列宽设置失败: ' + errStr(e) }; }
+        table.setPropertyValue('TableColumnSeparators', seps);
+        if (p.columnWidthsPercent != null) applied.columnWidthsPercent = pct; else applied.columnWidthsCm = pct;
+      } catch (e) {
+        // 本引擎（zh-CN r4）的 WASM 桥没注册 TableColumnSeparator 结构，读回再设回也抛
+        // "unregistered UNO type"（e2e 组 29 实锤）——说人话拒绝，别让模型反复撞。
+        const msg = errStr(e);
+        return { success: false, message: /unregistered UNO type/.test(msg)
+          ? '当前编辑器引擎不支持按列设宽（TableColumnSeparator 未在 WASM 桥注册），请改用 Word 打开后手工调整列宽'
+          : '列宽设置失败: ' + msg };
+      }
     }
     // 行高（磅）。rowHeightRule: 'min'（最小值，默认）| 'exact'（固定值）
     if (p.rowHeightPt != null) {
@@ -2943,40 +4688,69 @@ const EXEC = {
   // 段距/行距/首行缩进；首段短文本视为主标题（16 磅粗居中）；标题段（OutlineLevel
   // 或 Heading 样式）整段加粗；表格套标准表格式；表格后首段段前 18 磅。
   // 正文段落不动既有加粗/斜体（当事人名称等手工强调不能被抹掉）。
-  apply_house_style() {
-    const en = xModel.getText().createEnumeration();
-    let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false;
-    while (en.hasMoreElements() && idx < 5000) {
-      const el = en.nextElement();
-      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        const text = (el.getString() || '').trim();
-        let kind = 'body';
-        if (!titled && text) {
-          titled = true;
-          if (idx === 0 && text.length <= 60) kind = 'title';
-        }
-        if (kind !== 'title') {
-          try {
-            const lvl = el.getPropertyValue('OutlineLevel') || 0;
-            const style = el.getPropertyValue('ParaStyleName') || '';
-            if (lvl > 0 || /^(Heading|标题)/.test(style)) kind = 'heading';
-          } catch (e) {}
-        }
-        applyHousePara(el, kind, { afterTable: prevWasTable });
-        applyHouseChar(el, {
-          sizePt: kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt,
-          bold: kind === 'title' || kind === 'heading',
-          keepWeight: kind === 'body',
-        });
-        prevWasTable = false;
-        paras++;
-      } else if (el.supportsService && el.supportsService('com.sun.star.text.TextTable')) {
-        try { styleTableStandard(el, { headerRows: 1, keepWeight: true }); tables++; } catch (e) {}
-        prevWasTable = true;
-      }
-      idx++;
+  // 150 页实测 >30s：按 500 个顶层元素一批，批间 await 一个宏任务（自动保存的
+  // export / 宿主的 cancel 有机会插进来），不再有 5000 元素硬顶；truncated 永远
+  // 返回（只有被取消时才为 true）。
+  async apply_house_style(p) {
+    return applyHouseToDocument(p, { trueLevels: false });
+  },
+  // [样式画像] 换用项目画像：{profile} 校验 schemaVersion 后 merge 到 house-default 之上，
+  // 重算 HOUSE；此后流式落字 / 建表 / 全文格式化都按它。{profile:null} 或 {reset:true}
+  // 回到默认。只改 worker 状态，不碰文档——要落到文档走 apply_style_profile。
+  set_style_profile(p) {
+    let prof = p && p.profile;
+    if (prof == null || (p && p.reset)) {
+      ACTIVE_PROFILE = profileClone(HOUSE_DEFAULT_PROFILE);
+      HOUSE = buildHouse(ACTIVE_PROFILE);
+      return Object.assign({ success: true, reset: true }, styleProfileSummary());
     }
-    return Object.assign({ success: true, paragraphs: paras, tables: tables }, verifySnapshot());
+    if (typeof prof === 'string') { try { prof = JSON.parse(prof); } catch (e) { return tableFail('profile 不是合法 JSON: ' + (e && e.message)); } }
+    if (!isPlainObj(prof)) return tableFail('profile must be a JSON object');
+    if (prof.schemaVersion != null && Number(prof.schemaVersion) !== 1) {
+      return tableFail('unsupported schemaVersion: ' + prof.schemaVersion + ' (expected 1)');
+    }
+    const merged = profileMergeInto(profileClone(HOUSE_DEFAULT_PROFILE) || {}, prof);
+    ACTIVE_PROFILE = merged;
+    HOUSE = buildHouse(merged);
+    return Object.assign({ success: true, reset: false }, styleProfileSummary());
+  },
+  // [样式画像] 把当前画像落到文档。scope: document（样式定义 + 全文最小直接格式）/
+  // selection（样式定义 + 选区内段落）/ styles-only（只改样式定义）。分批 500 +
+  // progress + 协作式取消，truncated 只在被取消时为 true。
+  async apply_style_profile(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const scope = String((p && p.scope) || 'document').toLowerCase();
+    if (scope !== 'document' && scope !== 'selection' && scope !== 'styles-only') {
+      return tableFail("scope must be 'document' | 'selection' | 'styles-only'");
+    }
+    let styles = [];
+    lockModel();
+    try { styles = applyProfileToStyles(); } finally { unlockModel(); }
+    if (scope === 'styles-only') {
+      return Object.assign({ success: true, scope: scope, styles: styles, paragraphs: 0, tables: 0, truncated: false }, styleProfileSummary());
+    }
+    if (scope === 'selection') {
+      const vc = ctrl.getViewCursor();
+      let paras = 0;
+      lockModel();
+      try {
+        const cur = vc.getText().createTextCursorByRange(vc);
+        const en = cur.createEnumeration();
+        while (en.hasMoreElements()) {
+          const el = en.nextElement();
+          if (!(el.supportsService && el.supportsService('com.sun.star.text.Paragraph'))) continue;
+          const k = paraKindOf(el, false, true);
+          applyHousePara(el, k.kind, { level: k.level });
+          applyHouseChar(el, charOptsFor(k));
+          paras++;
+        }
+      } finally { unlockModel(); }
+      return Object.assign({ success: true, scope: scope, styles: styles, paragraphs: paras, tables: 0, truncated: false }, verifySnapshot());
+    }
+    const r = await applyHouseToDocument(p, { trueLevels: true });
+    r.scope = scope;
+    r.styles = styles;
+    return r;
   },
   // [流式] markdown 剥离 + 标准格式落字（doc_start_stream 管线的落字端）。
   // 攒到完整行才消费；尾部残行等 stream_flush。HOUSE 是 Writer 排版语义
@@ -2984,6 +4758,37 @@ const EXEC = {
   // 直接报错，让模型改走 slide_*/sheet_*，不悄悄把 markdown 正文糊进错误的文档模型。
   stream_insert(p) {
     if (!isWriterDoc()) return tableFail('doc_start_stream 仅支持 Word 文档：当前文档不是 Writer 文档。电子表格请用 sheet_* 原语，演示文稿请用 slide_* 原语逐处编辑。');
+    if (p.complete) {
+      // 回答「插入当前文档」在一次 worker 命令里完成，不能与 Agent 的半张表串流。
+      if (STREAM.active) return tableFail('文档正在流式写入，请等待写入完成后再插入回答');
+      if (!String(p.text || '').trim()) return { success: true, idle: true };
+      try {
+        // 完整回复是一个独立段落块。先隔开已有文字，不能把其所在段落一起套回复格式。
+        const vc = ctrl.getViewCursor();
+        vc.collapseToEnd();
+        const text = vc.getText();
+        const before = text.createTextCursorByRange(vc.getStart());
+        before.gotoStartOfParagraph(true);
+        const after = text.createTextCursorByRange(vc.getStart());
+        after.gotoEndOfParagraph(true);
+        const hasBefore = (before.getString() || '').length > 0;
+        const hasAfter = (after.getString() || '').length > 0;
+        if (hasBefore) {
+          text.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+          vc.collapseToEnd();
+        }
+        if (hasAfter) {
+          text.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+          vc.collapseToEnd();
+          const insertion = text.createTextCursorByRange(vc.getStart());
+          insertion.gotoPreviousParagraph(false);
+          insertion.gotoStartOfParagraph(false);
+          vc.gotoRange(insertion, false);
+        }
+        EXEC.stream_insert({ text: p.text });
+        return EXEC.stream_flush({});
+      } finally { streamReset(false); }
+    }
     streamEnsureActive();
     STREAM.buf += String(p.text || '');
     const nl = STREAM.buf.lastIndexOf('\n');
@@ -2997,12 +4802,13 @@ const EXEC = {
   stream_flush(p) {
     if (p && p.discard) { streamReset(true); return { success: true, discarded: true }; }
     if (!STREAM.active) return { success: true, idle: true };
-    const tail = STREAM.buf;
-    STREAM.buf = '';
-    if (tail.trim() || STREAM.table) streamWriteLine(tail);
-    if (STREAM.table) streamTableFlush();
-    streamReset(false);
-    return Object.assign({ success: true }, verifySnapshot());
+    try {
+      const tail = STREAM.buf;
+      STREAM.buf = '';
+      if (tail.trim() || STREAM.table) streamWriteLine(tail);
+      if (STREAM.table) streamTableFlush();
+      return Object.assign({ success: true }, verifySnapshot());
+    } finally { streamReset(false); }
   },
   // [插入] 在指定标题段落下方插入内容（后端 doc_insert_under_heading 一直派发此
   // action，此前 worker 未实现、白名单未收录，静默失败——本次补齐）。内容走
@@ -3035,8 +4841,9 @@ const EXEC = {
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
     for (; done < want; done++) {
-      try { um.undo(); } catch (e) { break; } // empty stack ends the loop
+      try { undoStep(um, 'undo', function () { um.undo(); }); } catch (e) { break; } // empty stack ends the loop
     }
+    invalidateParaIndex();
     return Object.assign({ success: done > 0, undone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to undo' });
   },
   redo(p) {
@@ -3044,8 +4851,9 @@ const EXEC = {
     const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
     let done = 0;
     for (; done < want; done++) {
-      try { um.redo(); } catch (e) { break; }
+      try { undoStep(um, 'redo', function () { um.redo(); }); } catch (e) { break; }
     }
+    invalidateParaIndex();
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
   },
   // ---- #104 文档变量域原语（VariablePanel via the getEditor adapter) ------------
@@ -3126,6 +4934,13 @@ const EXEC = {
   set_selection_hyperlink(p) {
     const url = String(p.url || '');
     if (!url) return { success: false, message: 'set_selection_hyperlink requires {url}' };
+    // 与 set_hyperlink_at_anchor 同款 scheme 校验：http/https 与内部协议 checkba://（EvidenceLink
+    // 包装形态 https://checkba-internal.local/open?u=checkba://... 走 https 分支）。JAR 插件经
+    // PluginHostImpl.DOC_ACTIONS 能直接调到这里，file:/javascript: 不能进导出的 docx。
+    if (!/^(https?:\/\/|checkba:\/\/)/i.test(url)) {
+      const msg = 'url 仅支持 http/https/checkba: ' + url;
+      return { success: false, error: msg, message: msg };
+    }
     const sel = ctrl.getSelection();
     let range = null;
     try {
@@ -3169,6 +4984,13 @@ const EXEC = {
     if (!text) return { success: false, message: 'insert_link_with_bookmark requires {text}' };
     const requested = String(p.bookmarkName || 'MARK_' + Date.now()).replace(/[^A-Za-z0-9_]/g, '_');
     const url = String(p.url || '');
+    // scheme 校验（P1 复核 F3）：插件宿主把这条原语开放给签名插件，裸透传会让
+    // file:/// javascript: smb:// 之类写进用户文档。放行 http(s) 与 checkba://（正则与
+    // set_selection_hyperlink 同款，#562）
+    //（证据链接的包装形态 https://checkba-internal.local/... 本身就是 https）。
+    if (url && !/^(https?:\/\/|checkba:\/\/)/i.test(url)) {
+      return { success: false, error: 'url 仅支持 http/https/checkba: ' + url, message: 'url 仅支持 http/https/checkba: ' + url };
+    }
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
     const xText = vc.getText();
@@ -3184,32 +5006,195 @@ const EXEC = {
     try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
     return Object.assign({ success: true, bookmarkName: name, text: text, url: url }, verifySnapshot());
   },
-  // read the hyperlink URL at the (collapsed) view cursor — the click-to-open
-  // seam: LO WASM does NOT surface hyperlink activation (no window.open, real-
-  // machine verified on v0.7.1), so the editor page listens for canvas clicks
-  // and asks the worker what link the cursor landed in. Non-collapsed cursor
-  // (drag-selection / double-click) returns '' on purpose — only a plain
-  // positioning click opens a link.
-  get_hyperlink_at_cursor() {
-    const vc = ctrl.getViewCursor();
-    try { if ((vc.getString() || '').length > 0) return { success: true, url: '' }; } catch (e) {}
-    let url = '';
+  // ---- EvidenceLink 锚点原语（dev-board#103）：书签名 = linkKey ----------------
+  // 尽调报告里「每条事实必有底稿」：底稿与正文的关联落在命名书签上，书签随
+  // 文字走、经 docx 往返存活。与 insert_link_with_bookmark 不同，这里给的是
+  // **当前选区**套书签，且重名精确拒绝（linkKey 必须一一对应，不许加 _n 后缀）。
+  // 失败返回同时写 error 与 message（宿主只回传 result.error 的已知地雷）。
+  bookmark_selection(p) {
+    if (!isWriterDoc()) return bmFail(NOT_TEXT_DOC_MSG);
+    const name = String((p && p.name) || '');
+    if (!/^[A-Za-z0-9_]{1,64}$/.test(name)) return bmFail('bookmark name must match [A-Za-z0-9_]{1,64}: ' + name);
+    const range = selectionRange();
+    // 形状/图片选区不是 XTextRange（没有 getString），不能落到外层 dispatcher 只带 message
+    if (!range || typeof range.getString !== 'function') return bmFail('no text selection to bookmark');
+    const text = range.getString() || '';
+    if (!text.length) return bmFail('no selection to bookmark');
+    const bms = xModel.getBookmarks();
+    if (bms.hasByName(name)) return bmFail('bookmark exists: ' + name);
     try {
-      const v = vc.getPropertyValue('HyperLinkURL');
-      if (typeof v === 'string') url = v;
-    } catch (e) {}
-    if (!url) {
-      // cursor may sit at the run boundary: peek one char to the right
+      const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+      bm.setName(name);
+      range.getText().insertTextContent(range, bm, true); // bAbsorb: 书签覆盖整个选区
+    } catch (e) { return bmFail('bookmark_selection failed: ' + errStr(e)); }
+    return { success: true, name: name, text: text };
+  },
+  // 书签所在位置的上下文：文字 + 标题链（OutlineLevel>0 的段落，与 get_outline
+  // 同判据）+ 段落索引（0 基）。不存在 → exists:false（不是失败）。表格单元格内
+  // 的书签跨 story 比较会抛，sectionPath 为空、paragraphIndex -1（P0 接受）。
+  get_bookmark_context(p) {
+    const name = String((p && p.name) || '');
+    const range = anchorRange(name);
+    if (!range) return { success: true, exists: false, text: '', sectionPath: '', sectionTitle: '', paragraphIndex: -1 };
+    const h = headingChainOf(range);
+    return {
+      success: true, exists: true, text: range.getString() || '',
+      sectionPath: h.chain.map(function (c) { return c.text; }).join('/'),
+      sectionTitle: h.chain.length ? h.chain[h.chain.length - 1].text : '',
+      paragraphIndex: h.paragraphIndex,
+    };
+  },
+  // 批量核对：单次最多 200 个（宿主分批、批间让路 autosave）。真机实测（lowa-e2e
+  // 组 27）：书签覆盖的文字被整段删除后 LO 连书签一起删掉，exists:false；宿主以
+  // 「!exists || text===''」判 orphan（text 为空是防御口径，正常路径不会出现）。
+  check_link_anchors(p) {
+    const names = Array.isArray(p && p.names) ? p.names.slice(0, 200) : [];
+    let bms = null;
+    try { bms = xModel.getBookmarks(); } catch (e) { return bmFail('check_link_anchors failed: ' + errStr(e)); }
+    const items = [];
+    for (let i = 0; i < names.length; i++) {
+      const n = String(names[i]);
+      let exists = false, text = '';
+      try { if (bms.hasByName(n)) { exists = true; text = bms.getByName(n).getAnchor().getString() || ''; } } catch (e) {}
+      items.push({ name: n, exists: exists, text: text });
+    }
+    const total = Array.isArray(p && p.names) ? p.names.length : 0;
+    return { success: true, items: items, truncated: total > 200 };
+  },
+  // 旧式关联（超链接 filelink?k=<key>）收编为同名书签；已有同名书签的跳过。
+  // 同一 run 被格式变化拆成多个 portion 时只有第一个被套上（后面 hasByName 命中
+  // skipped）——书签覆盖不全但锚点有效。
+  adopt_legacy_links() {
+    if (!isWriterDoc()) return bmFail(NOT_TEXT_DOC_MSG);
+    const adopted = []; let skipped = 0, skippedInvalid = 0;
+    const invalidSeen = {};
+    // 生产链接形态：https://checkba-internal.local/open?u= + encodeURIComponent(
+    // 'checkba://filelink?k=<key>&projectId=<pid>')，即 ...%3Fk%3Dlk_x%26projectId%3D42。
+    // 先把整条 URL 解码（最多两层）再匹配，key 取到 & / # 为止；key 含
+    // [A-Za-z0-9_] 以外字符（后端兜底 lk_<UUID> 带 -）不能静默改写成别的名字
+    // ——那会永远对不上 link_key 且二次运行被 hasByName 误判 skipped——计入
+    // skippedInvalid 跳过。
+    function legacyKeyOf(url) {
+      let s = String(url || '');
+      for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(s); i++) {
+        try { s = decodeURIComponent(s); } catch (e) { break; }
+      }
+      const m = /filelink\?k=([^&#\s]+)/.exec(s);
+      if (!m) return null;
+      return { key: m[1], valid: /^[A-Za-z0-9_]{1,64}$/.test(m[1]) };
+    }
+    try {
+      const bms = xModel.getBookmarks();
+      const xText = xModel.getText();
+      // 先收集再插书签：枚举过程中改段落内容会让 portion 枚举失效。
+      // TextPortion 本身不能直接喂 insertTextContent（真机抛 IllegalArgumentException），
+      // 要用 createTextCursorByRange 在正文上造一个覆盖该 portion 的区间游标。
+      const targets = [];
+      const en = xText.createEnumeration();
+      while (en.hasMoreElements()) {
+        const para = en.nextElement();
+        if (!para.supportsService || !para.supportsService('com.sun.star.text.Paragraph')) continue;
+        const pen = para.createEnumeration();
+        while (pen.hasMoreElements()) {
+          const portion = pen.nextElement();
+          let url = '';
+          try { url = String(portion.getPropertyValue('HyperLinkURL') || ''); } catch (e) { continue; }
+          const k = legacyKeyOf(url);
+          if (!k) continue;
+          // 同一 run 常被书签/格式边界拆成多个 portion：非法 key 按去重后的 key 计数
+          if (!k.valid) { if (!invalidSeen[k.key]) { invalidSeen[k.key] = true; skippedInvalid++; } continue; }
+          targets.push({ key: k.key, start: portion.getStart(), end: portion.getEnd() });
+        }
+      }
+      // 逐目标隔离：一个坏 run 不能把已成功的 adopted 整体报成失败
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        try {
+          if (bms.hasByName(t.key)) { skipped++; continue; }
+          const cur = xText.createTextCursorByRange(t.start);
+          cur.gotoRange(t.end, true);
+          if (!(cur.getString() || '').length) { skipped++; continue; }
+          const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+          bm.setName(t.key);
+          xText.insertTextContent(cur, bm, true);
+          adopted.push(t.key);
+        } catch (e) { skipped++; }
+      }
+    } catch (e) { return bmFail('adopt_legacy_links failed: ' + errStr(e)); }
+    return { success: true, adopted: adopted, skipped: skipped, skippedInvalid: skippedInvalid };
+  },
+  // 跳到书签：anchorRange + selectVisibly（不借 set_selection，它只认 __ai_anchor_*）。
+  goto_bookmark(p) {
+    const name = String((p && p.name) || '');
+    const range = anchorRange(name);
+    if (!range) return bmFail('bookmark not found: ' + name);
+    if (!selectVisibly(range)) return bmFail('could not select bookmark: ' + name);
+    return { success: true, name: name };
+  },
+  // Read-only activation lookup: never select the target or add bookmarks.
+  get_hyperlink_at_cursor() {
+    if (!isWriterDoc()) return { success: true, url: '' };
+    const vc = ctrl.getViewCursor();
+    const hasSelection = !!(vc.getString() || '').length;
+    let url = '', field = null;
+    function readAt(range) {
+      try { const v = range.getPropertyValue('HyperLinkURL'); if (typeof v === 'string' && v) url = v; } catch (e) {}
+      try { field = range.getPropertyValue('TextField') || field; } catch (e) {}
+    }
+    readAt(vc);
+    if (!url && !field) {
       try {
-        const xText = vc.getText();
-        const cur = xText.createTextCursorByRange(vc.getStart());
-        if (cur.goRight(1, true)) {
-          const v2 = cur.getPropertyValue('HyperLinkURL');
-          if (typeof v2 === 'string') url = v2;
+        const cur = vc.getText().createTextCursorByRange(vc.getStart());
+        if (cur.goRight(1, true)) readAt(cur);
+      } catch (e) {}
+    }
+    // Writer selects a whole REF field on a positioning click. Permit exactly
+    // that field anchor, while rejecting ordinary/multi-run selected text.
+    if (hasSelection) {
+      try {
+        if (!field) return { success: true, url: '' };
+        const anchor = field.getAnchor(), text = vc.getText();
+        if (text.compareRegionStarts(vc, anchor) !== 0 || text.compareRegionEnds(vc, anchor) !== 0)
+          return { success: true, url: '' };
+      } catch (e) { return { success: true, url: '' }; }
+    }
+    let name = '', source = 2;
+    if (url.charAt(0) === '#') {
+      try { name = decodeURIComponent(url.slice(1)); } catch (e) { name = url.slice(1); }
+    } else if (!url && field) {
+      try {
+        if (field.supportsService('com.sun.star.text.textfield.GetReference')) {
+          name = String(field.getPropertyValue('SourceName') || '');
+          source = Number(field.getPropertyValue('ReferenceFieldSource'));
+          if (name) url = '#' + encodeURIComponent(name);
         }
       } catch (e) {}
     }
-    return { success: true, url: url };
+    let target = null;
+    if (name) {
+      let range = null;
+      try {
+        if (source === 2) range = anchorRange(name);
+        else if (source === 0) {
+          const refs = xModel.getReferenceMarks();
+          if (refs.hasByName(name)) range = refs.getByName(name).getAnchor();
+        }
+      } catch (e) {}
+      let text = '';
+      if (range) {
+        try {
+          text = range.getString() || '';
+          // Point bookmarks (headings are common) have no selected text.
+          if (!text) {
+            const cur = range.getText().createTextCursorByRange(range.getStart());
+            cur.gotoStartOfParagraph(false); cur.gotoEndOfParagraph(true);
+            text = cur.getString() || '';
+          }
+        } catch (e) {}
+      }
+      target = { name: name, exists: !!range, text: text.slice(0, 3000), truncated: text.length > 3000 };
+    }
+    return { success: true, url: url, target: target };
   },
   // insert an image (data URL / raw base64) at the view cursor — the WPS-era
   // insertImage. Bytes go JS→UNO through SequenceInputStream (same signed-Array
@@ -3272,9 +5257,11 @@ const EXEC = {
     const annotatedText = (range.getString() || '').slice(0, 120);
     // 拟人：选中并滚动到被批注的位置——选区同时就是批注的附着区间
     if (!selectVisibly(range)) return { success: false, message: 'could not select anchor: ' + anchorId };
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-      [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
+    withRecordChangesOff(function () {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+        [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
+    });
     return {
       success: true, anchor: anchorId, author: AI_AUTHOR, comment: comment,
       annotatedText: annotatedText,
@@ -3294,9 +5281,11 @@ const EXEC = {
     if (!annotatedText.length) return tableFail('请先选中要批注的文字');
     const author = humanAuthor || '';
     const before = countComments();
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-      [mkProp('Text', comment), mkProp('Author', author)]);
+    withRecordChangesOff(function () {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+        [mkProp('Text', comment), mkProp('Author', author)]);
+    });
     // 派发不报错也可能没命中——用批注条数变化确认，别对用户谎报成功
     const after = countComments();
     if (after <= before) return tableFail('批注未被插入（引擎未命中）');
@@ -3320,8 +5309,12 @@ const EXEC = {
     if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
     const target = String((p && p.target) || 'header').toLowerCase();
     if (target !== 'header' && target !== 'footer') return tableFail("target must be 'header' or 'footer'");
-    const text = p && p.text != null ? String(p.text) : null;
-    if (text == null) return tableFail('edit_header_footer requires {text}');
+    // pageNumberPattern：「第 {PAGE} 页 共 {NUMPAGES} 页」→ 文本 + PageNumber/PageCount 域交替，
+    // 接在 text 之后（text 可省略）。
+    const pattern = p && p.pageNumberPattern != null ? String(p.pageNumberPattern) : null;
+    const text = p && p.text != null ? String(p.text) : (pattern != null ? '' : null);
+    if (text == null) return tableFail('edit_header_footer requires {text} or {pageNumberPattern}');
+    if (p && p.fontSize != null && !(Number(p.fontSize) > 0)) return tableFail('bad fontSize: ' + p.fontSize);
     const ALIGN_MAP = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
     let alignValue = null;
     if (p && p.align != null) {
@@ -3329,24 +5322,42 @@ const EXEC = {
       // 先校验参数、后落笔——避免"对齐值非法"时页眉页脚文本已经写了一半
       if (alignValue == null) return tableFail('bad align: ' + p.align + ' (left/right/center/justify)');
     }
-    let styleName = '';
-    try {
-      const vc = ctrl.getViewCursor();
-      const savedRange = vc.getStart();
-      vc.gotoStart(false);
-      styleName = String(vc.getPropertyValue('PageStyleName') || '');
-      vc.gotoRange(savedRange, false);
-    } catch (e) { return tableFail('无法定位页面样式: ' + errStr(e)); }
-    if (!styleName) return tableFail('无法确定文档的页面样式');
-    let pageStyle;
-    try { pageStyle = xModel.getStyleFamilies().getByName('PageStyles').getByName(styleName); }
-    catch (e) { return tableFail('读取页面样式失败: ' + errStr(e)); }
+    const ps = currentPageStyle();
+    if (ps.error) return ps;
+    const pageStyle = ps.pageStyle, styleName = ps.styleName;
     const isOnProp = target === 'header' ? 'HeaderIsOn' : 'FooterIsOn';
     const textProp = target === 'header' ? 'HeaderText' : 'FooterText';
+    let fields = 0;
     try {
       pageStyle.setPropertyValue(isOnProp, true);
       const xt = pageStyle.getPropertyValue(textProp);
       xt.setString(text);
+      if (pattern != null) {
+        const cur = xt.createTextCursor();
+        cur.gotoEnd(false);
+        const re = /\{(PAGE|NUMPAGES)\}/g;
+        let last = 0, m;
+        const ARABIC = (css.style.NumberingType && css.style.NumberingType.ARABIC != null) ? css.style.NumberingType.ARABIC : 4;
+        while ((m = re.exec(pattern))) {
+          if (m.index > last) { xt.insertString(cur, pattern.slice(last, m.index), false); cur.gotoEnd(false); }
+          const f = xModel.createInstance(m[1] === 'PAGE' ? 'com.sun.star.text.TextField.PageNumber' : 'com.sun.star.text.TextField.PageCount');
+          try { f.setPropertyValue('NumberingType', shortAny(ARABIC)); } catch (e) {}
+          if (m[1] === 'PAGE') { try { f.setPropertyValue('SubType', css.text.PageNumberType.CURRENT); } catch (e) {} }
+          xt.insertTextContent(cur, f, false);
+          cur.gotoEnd(false);
+          fields++;
+          last = m.index + m[0].length;
+        }
+        if (last < pattern.length) xt.insertString(cur, pattern.slice(last), false);
+        try { xModel.getTextFields().refresh(); } catch (e) {}
+      }
+      if (p && (p.fontName != null || p.fontSize != null || p.fontNameAsian != null)) {
+        const all = xt.createTextCursor();
+        all.gotoStart(false); all.gotoEnd(true);
+        if (p.fontName != null) { try { setCharProp(all, 'CharFontName', String(p.fontName)); } catch (e) {} }
+        if (p.fontNameAsian != null) { try { all.setPropertyValue('CharFontNameAsian', String(p.fontNameAsian)); } catch (e) {} }
+        if (p.fontSize != null) { try { setCharProp(all, 'CharHeight', Number(p.fontSize)); } catch (e) {} }
+      }
       if (alignValue != null) {
         const en = xt.createEnumeration();
         while (en.hasMoreElements()) {
@@ -3357,7 +5368,88 @@ const EXEC = {
         }
       }
     } catch (e) { return tableFail('设置' + (target === 'header' ? '页眉' : '页脚') + '失败: ' + errStr(e)); }
-    return { success: true, target: target, pageStyle: styleName, text: text };
+    const out = { success: true, target: target, pageStyle: styleName, text: text };
+    if (pattern != null) { out.pageNumberPattern = pattern; out.fields = fields; }
+    return out;
+  },
+  // [页面] 纸张与页边距（单位 mm）：{width, height, orientation: portrait|landscape,
+  // margins: {top, bottom, left, right}}。作用于文档首节页面样式（取法同 edit_header_footer）。
+  // 横向要求宽 > 高：给了 orientation 时按它校正宽高；只给宽高时原样写入。
+  set_page_setup(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const ps = currentPageStyle();
+    if (ps.error) return ps;
+    const pageStyle = ps.pageStyle;
+    const mm = function (v) { const n = Number(v); return isFinite(n) && n > 0 ? Math.round(n * 100) : null; };
+    const applied = {};
+    let w = p && p.width != null ? mm(p.width) : null;
+    let h = p && p.height != null ? mm(p.height) : null;
+    if ((p && p.width != null && w == null) || (p && p.height != null && h == null)) return tableFail('width/height 必须是正数（mm）');
+    try {
+      if (p && p.orientation != null) {
+        const o = String(p.orientation).toLowerCase();
+        if (o !== 'portrait' && o !== 'landscape') return tableFail("orientation must be 'portrait' or 'landscape'");
+        const land = o === 'landscape';
+        let W = w != null ? w : pageStyle.getPropertyValue('Width');
+        let H = h != null ? h : pageStyle.getPropertyValue('Height');
+        if (land ? W < H : W > H) { const t = W; W = H; H = t; }
+        pageStyle.setPropertyValue('IsLandscape', land);
+        pageStyle.setPropertyValue('Width', W);
+        pageStyle.setPropertyValue('Height', H);
+        applied.orientation = o;
+        if (w != null) applied.width = Number(p.width);
+        if (h != null) applied.height = Number(p.height);
+      } else {
+        if (w != null) { pageStyle.setPropertyValue('Width', w); applied.width = Number(p.width); }
+        if (h != null) { pageStyle.setPropertyValue('Height', h); applied.height = Number(p.height); }
+      }
+      const margins = p && isPlainObj(p.margins) ? p.margins : null;
+      if (margins) {
+        const MP = { top: 'TopMargin', bottom: 'BottomMargin', left: 'LeftMargin', right: 'RightMargin' };
+        const got = {};
+        for (const k of Object.keys(MP)) {
+          if (margins[k] == null) continue;
+          const v = Number(margins[k]);
+          if (!isFinite(v) || v < 0) return tableFail('bad margin ' + k + ': ' + margins[k]);
+          pageStyle.setPropertyValue(MP[k], Math.round(v * 100));
+          got[k] = v;
+        }
+        if (Object.keys(got).length) applied.margins = got;
+      }
+    } catch (e) { return tableFail('页面设置失败: ' + errStr(e)); }
+    if (Object.keys(applied).length === 0) return tableFail('no page setup params given');
+    const rd = function (prop) { try { return Math.round(pageStyle.getPropertyValue(prop)) / 100; } catch (e) { return null; } };
+    return {
+      success: true, pageStyle: ps.styleName, applied: applied,
+      page: { width: rd('Width'), height: rd('Height'), landscape: !!pageStyle.getPropertyValue('IsLandscape'),
+        margins: { top: rd('TopMargin'), bottom: rd('BottomMargin'), left: rd('LeftMargin'), right: rd('RightMargin') } },
+    };
+  },
+  // [目录] 在光标处（position:'start' 时在文首）插入从大纲级别生成的目录
+  // （com.sun.star.text.ContentIndex + update()）。levels 缺省取画像 toc.levels，
+  // title 缺省取画像 toc.title；目录标题段走 Contents Heading 样式（按画像 titleStyle）。
+  insert_toc(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const levels = Math.max(1, Math.min(Number(p && p.levels) || HOUSE.tocLevels, 10));
+    const title = p && p.title != null ? String(p.title) : HOUSE.tocTitle;
+    const vc = ctrl.getViewCursor();
+    if (p && String(p.position || '').toLowerCase() === 'start') vc.gotoStart(false); else vc.collapseToEnd();
+    let index;
+    try {
+      applyProfileToStylesSafe(['Contents Heading']);
+      const xText = vc.getText();
+      index = xModel.createInstance('com.sun.star.text.ContentIndex');
+      index.setPropertyValue('CreateFromOutline', true);
+      index.setPropertyValue('Level', shortAny(levels));
+      index.setPropertyValue('Title', title);
+      xText.insertTextContent(vc, index, false);
+      index.update();
+    } catch (e) { return tableFail('insert_toc failed: ' + errStr(e)); }
+    let tocText = '';
+    try { tocText = index.getAnchor().getString() || ''; } catch (e) {}
+    const lines = tocText.split(/\r?\n/).filter(function (s) { return s.trim(); });
+    invalidateParaIndex();
+    return { success: true, levels: levels, title: title, entries: Math.max(0, lines.length - 1), text: tocText.slice(0, 400) };
   },
   // 分页符/分节符（Word 语义的"下一页"分节符）。页内插入而非追加：先在光标处
   // 打一个段落断（把光标后的内容推到新段），再给这个新段打上 BreakType（纯分页）
@@ -3417,23 +5509,34 @@ const EXEC = {
   // 点击定位、逐条接受/拒绝——修订的权威视图从页边挪进面板。
   list_revisions(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
-    const out = [];
+    // locate:false skips the paragraph text and locator: they rebuild the whole
+    // paragraph index after every edit, and review balloons render neither.
+    const locate = !(p && p.locate === false);
+    const out = [], tableCells = Object.create(null);
     let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
       const en = xModel.getRedlines().createEnumeration();
       while (en.hasMoreElements() && out.length < limit) {
         const r = en.nextElement();
         const it = { index: out.length };
-        try { it.type = r.getPropertyValue('RedlineType'); } catch (e) {}
+        try { it.identifier = String(r.getPropertyValue('RedlineIdentifier')); } catch (e) {}
+        // RedlineType 如实回传引擎原串（Insert / Delete / Format / ParagraphFormat /
+        // TextTable …）。改造前面板只分「Delete 与其余」，格式类修订被当成插入显示
+        // （dev-board#377）；面板的类型映射认不出的一律原样展示，不再硬塞进「插入」。
+        try { it.type = String(r.getPropertyValue('RedlineType')); } catch (e) {}
         try { it.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { it.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
+        // 格式类修订正文是空的，引擎给的说明（「属性已更改」之类）是唯一能读的信息
+        try { it.description = String(r.getPropertyValue('RedlineDescription') || ''); } catch (e) {}
         try {
           const d = r.getPropertyValue('RedlineDateTime');
-          if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
+          if (d) { it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes); it.timestamp = it.date + ':' + pad2(d.Seconds) + '.' + (d.NanoSeconds || 0); }
         } catch (e) {}
-        // 删除型在页边模式下文本收进 redline 对象（getString 可取）；插入型的
-        // 文本只在正文流里，要靠 RedlineStart/End 区间取。两路都试。
-        try { if (typeof r.getString === 'function') it.text = String(r.getString() || ''); } catch (e) {}
+        // SwXRedline.getString() creates a cursor in its hidden content section.
+        // Inline redlines have no such section: probing it throws inside native
+        // code and repeated probes destabilize this engine. RedlineText safely
+        // returns null when the text must be read from RedlineStart/End instead.
+        try { const hiddenText = r.getPropertyValue('RedlineText'); if (hiddenText) it.text = String(hiddenText.getString() || ''); } catch (e) {}
         let curEnd = null;
         try {
           const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
@@ -3449,20 +5552,57 @@ const EXEC = {
               rc.gotoRange(re, true);
               it.text = String(rc.getString() || '');
             }
-            const pc = rs.getText().createTextCursorByRange(rs);
-            try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            if (locate) {
+              const pc = rs.getText().createTextCursorByRange(rs);
+              try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            }
             // 表格内的修订：面板要标出来（页边互叠的正是这一类）
-            try { it.inTable = !!rs.getPropertyValue('Cell'); } catch (e) { it.inTable = false; }
+            try {
+              const cell = rs.getPropertyValue('Cell'), table = rs.getPropertyValue('TextTable');
+              it.inTable = !!cell;
+              if (cell && table) {
+                it.tableName = table.getName(); it.cellName = String(cell.getPropertyValue('CellName') || '');
+                it.wholeCell = !!it.text && it.text === String(cell.getString() || '');
+                it.tableCells = tableCells[it.tableName] || (tableCells[it.tableName] = table.getCellNames().filter(function (name) { return !!table.getCellByName(name).getString(); }));
+              }
+            } catch (e) { it.inTable = false; }
+            if (locate) applyLocator(it, rs, re);   // 批注关联用的可比坐标
           }
         } catch (e) {}
         prevEnd = curEnd;
-        it.text = String(it.text || '').slice(0, 120);
+        it.text = String(it.text || '');
         out.push(it);
       }
     } catch (e) { return tableFail(errStr(e)); }
-    return { success: true, count: out.length, revisions: out };
+    // Only infer an imported table operation when every nonempty cell is covered in
+    // full, with exactly the same author/type/engine timestamp. Partial cell edits
+    // and unrelated same-minute changes stay separate.
+    const candidates = {};
+    out.forEach(function (r) {
+      if (!r.wholeCell || !r.timestamp || !r.tableName || r.type !== 'Insert') return;
+      const key = JSON.stringify([r.tableName, r.type, r.author, r.timestamp]);
+      (candidates[key] || (candidates[key] = [])).push(r);
+    });
+    Object.keys(candidates).forEach(function (key) {
+      const rows = candidates[key], cells = rows[0].tableCells || [];
+      if (out.some(function (r) { return r.tableName === rows[0].tableName && r.type === 'Delete'; }) || rows.length < 2 || rows.length !== cells.length || !cells.every(function (name) { return rows.some(function (r) { return r.cellName === name; }); })) return;
+      rows.forEach(function (r) { r.operationId = key; r.operationKind = 'table-insert'; });
+    });
+    out.forEach(function (r) { delete r.tableCells; });
+    return { success: true, count: out.length, revisions: out, revision: currentReviewRevision(), documentSeq: docSeq };
   },
   goto_revision(p) {
+    if (p && p.documentSeq != null && p.documentSeq !== docSeq) return tableFail('修订已变化，请刷新后重试');
+    if (p && p.identifier != null) {
+      if (p.documentSeq !== docSeq || !p.identifier) return tableFail('修订已变化，请刷新后重试');
+      const matches = [], en = xModel.getRedlines().createEnumeration();
+      for (let index = 0; index < 500 && en.hasMoreElements(); index++) {
+        const r = en.nextElement();
+        if (String(r.getPropertyValue('RedlineIdentifier')) === p.identifier) matches.push(index);
+      }
+      if (matches.length !== 1) return tableFail('修订已变化，请刷新后重试');
+      p.index = matches[0];
+    } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
     const r = redlineAt(p && p.index);
     if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
     return selectRedlineRange(r)
@@ -3470,35 +5610,95 @@ const EXEC = {
       : { success: false, message: 'could not select revision range' };
   },
   // 逐条处置。**光标摆放是硬要求**（真机探针实证）：视图光标必须跨过 redline
-  // 区间——插入型这样才选中正文里的新增文本，删除型（页边模式下正文流里是
-  // 零宽）退化成定位到起点，两者都能被 dispatch 命中。摆错位置（collapse 到
-  // 起点再右移、或用 selectVisibly 传区间游标）会让 dispatch 打空，甚至凭空
-  // 多出一条空插入修订。
+  // 区间——插入型这样才选中正文里的新增文本；删除型按显示模式分支（页边模式下
+  // 正文流里是零宽，退化成定位到起点；内联模式下删除文字就在流里，同样要跨选），
+  // 见 selectRedlineRange。摆错位置（collapse 到起点再右移、或用 selectVisibly
+  // 传区间游标）会让 dispatch 打空，甚至凭空多出一条空插入修订。
+  // 带 AwdReviewGeometry 的引擎先走 resolveRedlinesByNativeId（按原生 id 派发）；
+  // 下面的光标路径只服务没有该契约的旧引擎（r4），原样保留。
   resolve_revision(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
+    const byId = resolveRedlinesByNativeId([p && p.index], expectedRedlineIdentifiers(p), action);
+    if (byId && byId.error) return tableFail(byId.error);
+    if (byId) {
+      return byId.results[0].success
+        ? { success: true, index: Number(p.index), action: action, remaining: byId.remaining, via: 'native-id' }
+        : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: byId.remaining, via: 'native-id' });
+    }
     const r = redlineAt(p && p.index);
     if (!r) return tableFail('no revision at index ' + (p && p.index));
     if (!selectRedlineRange(r, true)) return tableFail('could not select revision range');
-    const before = countRedlines();
+    const before = countRedlines(), beforeLayer = redlineLayerState(r);
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
     const after = countRedlines();
-    // dispatch 不报错也可能没命中——用条数变化确认，别对用户谎报成功
-    return after < before
+    // Stacked revisions may change their top layer without changing the count.
+    return redlineWasResolved(r, before, after, beforeLayer)
       ? { success: true, index: Number(p.index), action: action, remaining: after }
       : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: after });
+  },
+  // [审阅面板批量处置] ReviewPanel.resolveGroup 把一张卡片（首尾相接合并出的 K 条
+  // redline）一次性打包发过来，代替旧路径对每个 index 单独调 resolve_revision。
+  // resolve_revision 内部的 redlineAt(index) 每次都从头整棵重新枚举
+  // xModel.getRedlines()，K 条 = K 次 O(N) 重扫（O(K·N)）；这里一次性把枚举物化成
+  // 数组（O(N) 一次），K 个目标 index 直接按下标取引用，总开销降到 O(N+K)。
+  // indices 必须按降序处理（与 resolve_revision 的既有约定一致：处置一条后，
+  // 比它大的 index 在引擎里前移，比它小的不受影响）。
+  // 稳妥起见留一条退路：捕获的对象引用如果在跨多次 dispatch 复用时失效（真机未
+  // 验证过这一点——引擎对 redline 对象的生命周期没有文档化保证），selectRedlineRange
+  // 会因异常/取不到区间而返回 false，这时退回 redlineAt 按位重新枚举一次，只让
+  // 那一条退化成旧路径的开销，不拖累整批、也不会把错误的修订当成功处置掉。
+  resolve_revisions(p) {
+    if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
+    const action = String((p && p.action) || 'accept').toLowerCase();
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
+    const indices = Array.isArray(p && p.indices) ? p.indices : [];
+    if (!indices.length) return tableFail('resolve_revisions requires a non-empty indices array');
+    const byId = resolveRedlinesByNativeId(indices, expectedRedlineIdentifiers(p), action);
+    if (byId && byId.error) return tableFail(byId.error);
+    if (byId) {
+      return { success: true, action: action, resolved: byId.results.filter(function (x) { return x.success; }).length,
+        remaining: byId.remaining, results: byId.results, via: 'native-id' };
+    }
+    const all = [];
+    try {
+      const en = xModel.getRedlines().createEnumeration();
+      while (en.hasMoreElements()) all.push(en.nextElement());
+    } catch (e) { return tableFail(errStr(e)); }
+    const sorted = indices.slice().sort(function (a, b) { return b - a; });
+    const results = [];
+    const dispatcher = css.frame.DispatchHelper.create(context);
+    for (let i = 0; i < sorted.length; i++) {
+      const index = sorted[i];
+      let r = (index >= 0 && index < all.length) ? all[index] : null;
+      let ok = !!r && selectRedlineRange(r, true);
+      if (!ok) { r = redlineAt(index); ok = !!r && selectRedlineRange(r, true); } // 退回单条重扫兜底
+      if (!ok) { results.push({ index: index, success: false }); continue; }
+      const before = countRedlines(), beforeLayer = redlineLayerState(r);
+      dispatcher.executeDispatch(ctrl.getFrame(),
+        action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
+      const after = countRedlines();
+      results.push({ index: index, success: redlineWasResolved(r, before, after, beforeLayer) });
+    }
+    const resolved = results.filter(function (x) { return x.success; }).length;
+    return { success: true, action: action, resolved: resolved, remaining: countRedlines(), results: results };
   },
   resolve_all_revisions(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
     if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const before = countRedlines();
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
-    return { success: true, action: action, resolved: before - countRedlines(), remaining: countRedlines() };
+    suspendModifyListener(); // 引擎内部逐条处理修订，每条都会回调监听器（见 suspendModifyListener）
+    try {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+    } finally { resumeModifyListener(); }
+    const after = countRedlines(); // 前后各数一次（原先结束时数了两遍 O(N)）
+    return { success: true, action: action, resolved: before - after, remaining: after };
   },
   list_comments(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    const locate = !(p && p.locate === false);   // see list_revisions
     const out = [];
     try {
       const en = xModel.getTextFields().createEnumeration();
@@ -3508,31 +5708,58 @@ const EXEC = {
         const it = { index: out.length };
         try { it.id = commentIdOf(f); } catch (e) {}
         try { it.author = f.getPropertyValue('Author'); } catch (e) {}
-        try { it.content = String(f.getPropertyValue('Content') || '').slice(0, 500); } catch (e) {}
+        try { it.content = String(f.getPropertyValue('Content') || ''); } catch (e) {}
         try {
           const d = f.getPropertyValue('DateTimeValue');
-          if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
+          if (d) { it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes); it.timestamp = it.date + ':' + pad2(d.Seconds) + '.' + (d.NanoSeconds || 0); }
         } catch (e) {}
         try { it.resolved = !!f.getPropertyValue('Resolved'); } catch (e) { it.resolved = false; }
         try {
           const a = f.getAnchor();
-          it.anchorText = String(a.getString() || '').slice(0, 80);
-          it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
+          it.anchorText = String(a.getString() || '');
+          if (locate) {
+            it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
+            applyLocator(it, a.getStart(), a.getEnd());   // 与 list_revisions 同一坐标系
+          }
         } catch (e) {}
         out.push(it);
       }
     } catch (e) { return tableFail(errStr(e)); }
-    return { success: true, count: out.length, comments: out };
+    return { success: true, count: out.length, comments: out, revision: currentReviewRevision(), documentSeq: docSeq };
   },
   goto_comment(p) {
-    const f = commentAt(p && p.index);
+    let f, index = Number(p && p.index);
+    if (p && p.documentSeq != null) {
+      if (p.documentSeq !== docSeq || typeof p.id !== 'string' || !p.id) return tableFail('批注已变化，请刷新后重试');
+      const matches = [], en = xModel.getTextFields().createEnumeration();
+      for (let n = 0; n < 500 && en.hasMoreElements();) {
+        const field = en.nextElement();
+        if (!(field.supportsService && field.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        if (commentIdOf(field) === p.id) matches.push({ field: field, index: n });
+        n++;
+      }
+      if (matches.length !== 1) return tableFail('批注已变化，请刷新后重试');
+      f = matches[0].field; index = matches[0].index;
+    } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('批注已变化，请刷新后重试');
+    else f = commentAt(p && (p.id || p.index));
     if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
-    try { return selectVisibly(f.getAnchor()) ? { success: true, index: Number(p.index) } : { success: false, message: 'could not select anchor' }; }
+    try { return selectVisibly(f.getAnchor()) ? { success: true, index: index, id: commentIdOf(f) } : { success: false, message: 'could not select anchor' }; }
     catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  update_comment(p) {
+    if (!isReviewWritable()) return tableFail('文档为只读状态');
+    if (!matchCommentSnapshot(p)) return tableFail('批注已变化，请刷新后重试');
+    const f = commentAt(p && (p.id || p.index));
+    if (!f || typeof p.content !== 'string' || !p.content.trim()) return tableFail('批注内容不能为空');
+    if (p.expectedContent != null && f.getPropertyValue('Content') !== p.expectedContent) return tableFail('批注已变化，请刷新后重试');
+    f.setPropertyValue('Content', p.content);
+    return { success: f.getPropertyValue('Content') === p.content, id: commentIdOf(f) };
   },
   // AI 工具面（doc_resolve_comment）与 ReviewPanel（{index}）共用本原语：ref 优先
   // 取 id（commentAt 按 Name 定位，跨调用稳定），没有 id 才退回 index。
   set_comment_resolved(p) {
+    if (!isReviewWritable()) return tableFail('文档为只读状态');
+    if (!matchCommentSnapshot(p)) return tableFail('批注已变化，请刷新后重试');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const f = commentAt(ref);
     if (!f) return tableFail('no comment at ' + ref);
@@ -3541,35 +5768,21 @@ const EXEC = {
       return { success: true, id: commentIdOf(f), resolved: !!f.getPropertyValue('Resolved') };
     } catch (e) { return tableFail(errStr(e)); }
   },
-  // 删除批注：removeTextContent 是正路。**dispose() 不能信**——它在本引擎上
-  // 既不抛异常也不真的移除批注字段（真机实证），照着它的返回值报成功就是骗
-  // 用户。两条路都跑完还要用条数复核。
+  // Annotation removal must not itself become a tracked deletion: otherwise the
+  // field remains in the document and the comment count never decreases.
   delete_comment(p) {
+    if (!isReviewWritable()) return tableFail('文档为只读状态');
+    if (!matchCommentSnapshot(p)) return tableFail('批注已变化，请刷新后重试');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const f = commentAt(ref);
     if (!f) return tableFail('no comment at ' + ref);
     const before = countComments();
-    const errs = [];
-    // 主路：定位到批注锚点后派发 .uno:DeleteComment，**Id 参数（批注的 Name）
-    // 必传**——真机实证不带 Id 会静默打空（引擎按 Id 找批注，不认光标位置）。
-    // 与 add_comment 走 .uno:InsertAnnotation 同一先例。
-    // 前提：文档必须是可见的（.uno:DeleteComment 找的是引擎里的活动批注窗口，
-    // Hidden 打开的文档没有这些窗口，删除会静默失败——e2e 因此专门用可见文档）。
-    // 已解决的批注同理不再是活动窗口，先取消解决态再删。
-    try { if (f.getPropertyValue('Resolved')) f.setPropertyValue('Resolved', false); } catch (e) {}
-    try { selectVisibly(f.getAnchor()); } catch (e) { errs.push(errStr(e)); }
     try {
-      const name = commentIdOf(f);
-      css.frame.DispatchHelper.create(context).executeDispatch(
-        ctrl.getFrame(), '.uno:DeleteComment', '', 0, [mkProp('Id', name)]);
-    } catch (e) { errs.push(errStr(e)); }
-    if (countComments() === before) {
-      try { f.getAnchor().getText().removeTextContent(f); } catch (e) { errs.push(errStr(e)); }
-    }
+      withRecordChangesOff(function () { f.getAnchor().getText().removeTextContent(f); });
+    } catch (e) { return tableFail(errStr(e)); }
     const after = countComments();
-    return after < before
-      ? { success: true, remaining: after }
-      : Object.assign(tableFail('批注未被删除' + (errs.length ? '：' + errs.join(' | ') : '')), { remaining: after });
+    return after < before ? { success: true, remaining: after }
+      : Object.assign(tableFail('批注未被删除'), { remaining: after });
   },
   // [批注回复] 是否有真正的原生线程回复（LO 的 ParentId/ParentName 一类属性）
   // 在这个引擎版本上待查证——vendored zeta.js 未见相关 typedef，无法在不接
@@ -3599,9 +5812,11 @@ const EXEC = {
       }
     } catch (e) {}
     const replyContent = (parentAuthor ? ('回复 ' + parentAuthor + '：') : '') + text;
-    css.frame.DispatchHelper.create(context).executeDispatch(
-      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-      [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+    withRecordChangesOff(function () {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+        [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+    });
     let newField = null, newName = '';
     try {
       const en2 = xModel.getTextFields().createEnumeration();
@@ -3614,7 +5829,7 @@ const EXEC = {
     } catch (e) {}
     if (!newField) return tableFail('回复未生效（引擎未产生新批注）');
     try { newField.setPropertyValue('ParentId', parentId); } catch (e) {}
-    try { newField.setPropertyValue('ParentName', parentId); } catch (e) {}
+    try { const name = parent.getPropertyValue('Name'); if (name) newField.setPropertyValue('ParentName', name); } catch (e) {}
     return { success: true, id: newName, parentId: parentId, author: AI_AUTHOR, text: text };
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
@@ -3630,10 +5845,9 @@ const EXEC = {
         try { item.type = r.getPropertyValue('RedlineType'); } catch (e) {}
         try { item.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { item.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
-        try { if (typeof r.getString === 'function') item.text = String(r.getString() || '').slice(0, 80); } catch (e) {}
-        // 行内显示（ShowChangesInMargin=false）下删除文本留在正文流里，redline
-        // 自身 getString() 抛 RuntimeException（页边模式才把文本收进 redline）——
-        // 回退用 RedlineStart/End 区间从正文取；Insert 型两种模式都走这条。
+        try { const hiddenText = r.getPropertyValue('RedlineText'); if (hiddenText) item.text = String(hiddenText.getString() || '').slice(0, 80); } catch (e) {}
+        // Inline content has no hidden section; read its document range directly,
+        // just as list_revisions does, without an invalid native getString probe.
         if (item.text == null) {
           try {
             const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
@@ -3655,36 +5869,361 @@ const EXEC = {
   // 比较完成后把文档切只读（.uno:EditDoc 关编辑模式）——这是展示用文档，
   // 宿主（VersionCompareTab）没有任何保存路径，只读是第二道保险。
   compare_document(p) {
-    const raw = p && p.baseBytes;
-    let u8 = null;
-    if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
-    else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength);
-    else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
-    if (!u8 || u8.length === 0) return { success: false, stage: 'input', message: 'baseBytes empty' };
-    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
-    const url = 'file:///tmp/awd_base_cmp.docx';
-    try {
-      const sfa = css.ucb.SimpleFileAccess.create(context);
-      try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
-      const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
-      sfa.writeFile(url, stream);
-      try { stream.closeInput(); } catch (e) {}
-    } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+    if (!toUnoByteSeq(p && p.baseBytes)) return { success: false, stage: 'input', message: 'baseBytes empty' };
     try { setRedlineAuthor('版本对比'); } catch (e) {}
-    try {
-      css.frame.DispatchHelper.create(context).executeDispatch(
-        ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
-    } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
-    let count = 0;
-    try {
-      const en = xModel.getRedlines().createEnumeration();
-      while (en.hasMoreElements() && count < 10000) { en.nextElement(); count++; }
-    } catch (e) {}
+    const r = compareWithBytes(p && p.baseBytes, 'file:///tmp/awd_base_cmp.docx');
+    if (!r.success) return r;
     try {
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), '.uno:EditDoc', '', 0, []);
     } catch (e) {}
-    return { success: true, redlineCount: count };
+    comparisonModel = xModel; // The comparison tab is a read-only review surface.
+    return { success: true, redlineCount: r.redlineCount };
+  },
+  // ==================== 三方合并（合并比对稿）====================
+  // spec docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md §5.1。
+  // 「整条链必须在一条 worker 命令里跑完」是硬约束：execCommand 每条命令开头都会
+  // 把修订署名重置回 humanAuthor / AI WorkDeck（见 setRedlineAuthor 的说明），
+  // 跨命令切作者必然失效——spike 第一轮两侧修订全签成「本地用户」就是这么来的。
+  //
+  // 链路：① 载入另一侧 → 以对方署名与共同的上一版比较 → 只为收集「只改了格式」
+  // 的段；② 载入主线侧 → 以主线署名与共同的上一版比较（主线侧的改动成为带作者的
+  // 字符级修订，含表格/批注/格式）；③ 用后端给的 mainChunks 建「基线段序 → 当前
+  // 段序」映射并逐段核对归一文字，对不上就整份退回（stage:'align'）；④ 以对方
+  // 署名按 otherChunks 里 conflict=false 的块**从后往前**重放；⑤ 恢复 humanAuthor。
+  // 同一段两边都改了的块不重放——正文里只留主线侧那一版，另一侧的文字交给面板
+  // 的三选一（merge_take_other）。
+  // 结果留在实例里可编辑：**不派发 .uno:EditDoc**（真机实测该命令在 r5 上根本
+  // 不生效，版本对比标签页的只读靠的是「没有保存路径」）。
+  build_merge_draft(p) {
+    const t0 = Date.now();
+    const elapsedMs = {};
+    const restoreAuthor = function () { try { setRedlineAuthor(humanAuthor); } catch (e) {} };
+    const fail = function (stage, message) {
+      restoreAuthor();
+      elapsedMs.total = Date.now() - t0;
+      return { success: false, stage: stage, message: String(message || ''), elapsedMs: elapsedMs };
+    };
+    const plan = (p && p.plan) || {};
+    const mainChunks = Array.isArray(plan.mainChunks) ? plan.mainChunks : [];
+    const otherChunks = Array.isArray(plan.otherChunks) ? plan.otherChunks : [];
+    const baseUnits = Array.isArray(p && p.baseUnits) ? p.baseUnits : [];
+    const mainAuthor = String((p && p.mainAuthor) || '');
+    const otherAuthor = String((p && p.otherAuthor) || '');
+    const name = String((p && p.name) || 'merge.docx');
+    if (!baseUnits.length) return fail('align', 'baseUnits 为空，无法核对对齐');
+
+    // 基线单元序列的两张索引：单元下标 ↔ 正文段落序（表格单元不占段落序）。
+    const paraOrdOfUnit = [];
+    const unitOfParaOrd = [];
+    const baseParaNorm = [];
+    for (let i = 0; i < baseUnits.length; i++) {
+      const key = String((baseUnits[i] && baseUnits[i].key) || '');
+      if (key.charAt(0) === 'p') {
+        const ord = unitOfParaOrd.length;
+        paraOrdOfUnit[i] = ord;
+        unitOfParaOrd.push(i);
+        baseParaNorm.push(String((baseUnits[i] && baseUnits[i].norm) || ''));
+      } else paraOrdOfUnit[i] = -1;
+    }
+    const unitsIn = function (c) {
+      const out = [];
+      for (let i = Number(c.baseStart); i < Number(c.baseEnd) && i < baseUnits.length; i++) {
+        out.push({ index: i, key: String((baseUnits[i] && baseUnits[i].key) || ''), paraOrd: paraOrdOfUnit[i] });
+      }
+      return out;
+    };
+    const paraOrdsIn = function (c) {
+      return unitsIn(c).filter(function (u) { return u.paraOrd >= 0; }).map(function (u) { return u.paraOrd; });
+    };
+
+    // ① 另一侧「只改了格式、没改文字」的段：文字重放带不过来，只能列出来让律师
+    // 手动套（面板第 3 块）。spec §5.1 原设想用 .uno:CompareDocuments 的格式类修订
+    // 来收集，真机实测那条路走不通（见 paragraphScan 的说明），改成载入另一侧与
+    // 共同的上一版各扫一遍段落格式指纹，按 otherChunks 对齐段序后逐段比。
+    let t = Date.now();
+    let ld = EXEC.load_document({ bytes: p && p.otherBytes, name: name });
+    if (!ld || ld.success !== true || ld.empty) return fail('load-other', (ld && ld.message) || '另一侧的稿是空的');
+    const otherScan = paragraphScan();
+    elapsedMs.loadOther = Date.now() - t;
+    t = Date.now();
+    ld = EXEC.load_document({ bytes: p && p.baseBytes, name: name });
+    if (!ld || ld.success !== true || ld.empty) return fail('load-base', (ld && ld.message) || '共同的上一版是空的');
+    const baseScan = paragraphScan();
+    elapsedMs.loadBase = Date.now() - t;
+    t = Date.now();
+    // 基线段序 → 另一侧段序（另一侧删掉的段在它那边不存在，插入的段让后面的段往后挪）。
+    const otherTouched = Object.create(null);
+    const otherShifts = [];
+    otherChunks.slice().sort(function (a, b) { return Number(a.baseStart) - Number(b.baseStart); })
+      .forEach(function (c) {
+        const ords = paraOrdsIn(c);
+        ords.forEach(function (o) { otherTouched[o] = true; });
+        const type = String(c.type || 'MODIFY');
+        const texts = Array.isArray(c.texts) ? c.texts : [];
+        if (type === 'INSERT') {
+          let anchor = unitOfParaOrd.length;
+          for (let i2 = Number(c.baseStart); i2 < baseUnits.length; i2++) {
+            if (paraOrdOfUnit[i2] >= 0) { anchor = paraOrdOfUnit[i2]; break; }
+          }
+          if (texts.length) otherShifts.push({ from: anchor, delta: texts.length });
+        } else if (type === 'DELETE') {
+          if (ords.length) otherShifts.push({ from: ords[ords.length - 1] + 1, delta: -ords.length });
+        } else if (ords.length && texts.length !== ords.length) {
+          otherShifts.push({ from: ords[ords.length - 1] + 1, delta: texts.length - ords.length });
+        }
+      });
+    const otherParaIndexOf = function (ord) {
+      let d = 0;
+      for (let i2 = 0; i2 < otherShifts.length; i2++) { if (ord >= otherShifts[i2].from) d += otherShifts[i2].delta; }
+      return ord + d;
+    };
+    const formatOnlyOrds = [];
+    for (let ord = 0; ord < baseScan.length; ord++) {
+      if (otherTouched[ord]) continue;                       // 文字已重放，格式不必再单列
+      const oi = otherParaIndexOf(ord);
+      const o = otherScan[oi];
+      if (!o || o.norm !== baseScan[ord].norm) continue;     // 对不上就不猜
+      if (o.fmt !== baseScan[ord].fmt) formatOnlyOrds.push(ord);
+    }
+    elapsedMs.compareOther = Date.now() - t;
+
+    // ② 主线侧 vs 共同的上一版：主线的改动成为带作者的字符级修订。
+    t = Date.now();
+    ld = EXEC.load_document({ bytes: p && p.mainBytes, name: name });
+    if (!ld || ld.success !== true || ld.empty) return fail('load-main', (ld && ld.message) || '主线那一版是空的');
+    elapsedMs.loadMain = Date.now() - t;
+    t = Date.now();
+    try { setRedlineAuthor(mainAuthor); } catch (e) {}
+    const cmp = compareWithBytes(p && p.baseBytes, 'file:///tmp/awd_merge_main.docx');
+    if (!cmp.success) return fail('compare-main', cmp.message);
+    elapsedMs.compareMain = Date.now() - t;
+
+    // ③ 基线段序 → 当前段序：主线侧删掉的段仍留在流里（删除修订），只有新增的
+    // 段会让后面的段序往后挪。未被主线改过的段逐一核对归一文字，对不上即退回。
+    const mainTouched = Object.create(null);
+    const shifts = [];
+    mainChunks.forEach(function (c) {
+      const ords = paraOrdsIn(c);
+      ords.forEach(function (o) { mainTouched[o] = true; });
+      const type = String(c.type || 'MODIFY');
+      const texts = Array.isArray(c.texts) ? c.texts : [];
+      if (type === 'INSERT') {
+        let anchor = unitOfParaOrd.length;
+        for (let i = Number(c.baseStart); i < baseUnits.length; i++) {
+          if (paraOrdOfUnit[i] >= 0) { anchor = paraOrdOfUnit[i]; break; }
+        }
+        if (texts.length) shifts.push({ from: anchor, delta: texts.length });
+      } else if (type !== 'DELETE') {
+        const extra = texts.length - ords.length;
+        if (extra > 0 && ords.length) shifts.push({ from: ords[ords.length - 1] + 1, delta: extra });
+      }
+    });
+    const curParaIndexOf = function (ord) {
+      let d = 0;
+      for (let i = 0; i < shifts.length; i++) { if (ord >= shifts[i].from) d += shifts[i].delta; }
+      return ord + d;
+    };
+    let expectedTotal = unitOfParaOrd.length;
+    shifts.forEach(function (s) { expectedTotal += s.delta; });
+    const curParas = bodyParagraphStrings();
+    if (curParas.length !== expectedTotal) {
+      return fail('align', '段数与共同的上一版对不上（当前 ' + curParas.length + '，按计划应为 ' + expectedTotal + '）');
+    }
+    for (let ord = 0; ord < baseParaNorm.length; ord++) {
+      if (mainTouched[ord]) continue;
+      if (mergeNormalize(curParas[curParaIndexOf(ord)]) !== baseParaNorm[ord]) {
+        return fail('align', '第 ' + (ord + 1) + ' 段与共同的上一版对不上');
+      }
+    }
+
+    // ④ 以对方署名重放另一侧的改动（从后往前，前面的段序才不会漂）。
+    t = Date.now();
+    try { setRedlineAuthor(otherAuthor); } catch (e) {}
+    try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+    let replayed = 0;
+    let replayErr = null;
+    const rangeOfUnit = function (u) {
+      if (u.paraOrd >= 0) return paraAt(curParaIndexOf(u.paraOrd));
+      const ref = parseCellUnitKey(u.key);
+      return ref ? tableCellRange(ref) : null;
+    };
+    const deleteUnit = function (u) {
+      if (u.paraOrd >= 0) {
+        const para = paraAt(curParaIndexOf(u.paraOrd));
+        if (!para) return false;
+        const body = para.getText();
+        const cur = body.createTextCursorByRange(para.getStart());
+        cur.gotoEndOfParagraph(true);
+        try { cur.goRight(1, true); } catch (e) {}   // 连段末的换行一起选中 = 整段消失
+        cur.setString('');
+        return true;
+      }
+      const range = rangeOfUnit(u);
+      return range ? writeTrackedText(range, '') : false;
+    };
+    const insertParasAfter = function (prevOrd, texts) {
+      const body = xModel.getText();
+      let cur;
+      if (prevOrd < 0) cur = body.createTextCursorByRange(body.getStart());
+      else {
+        const anchor = paraAt(curParaIndexOf(prevOrd));
+        if (!anchor) return false;
+        cur = body.createTextCursorByRange(anchor.getEnd());
+      }
+      for (let i = 0; i < texts.length; i++) {
+        body.insertControlCharacter(cur, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+        body.insertString(cur, String(texts[i] == null ? '' : texts[i]), false);
+      }
+      return true;
+    };
+    const replayable = otherChunks.filter(function (c) { return !c.conflict; })
+      .slice().sort(function (a, b) { return Number(b.baseStart) - Number(a.baseStart); });
+    for (let k = 0; k < replayable.length && !replayErr; k++) {
+      const c = replayable[k];
+      const type = String(c.type || 'MODIFY');
+      const texts = Array.isArray(c.texts) ? c.texts : [];
+      const units = unitsIn(c);
+      try {
+        if (type === 'INSERT') {
+          let prevOrd = -1;
+          for (let i = Number(c.baseStart) - 1; i >= 0; i--) {
+            if (paraOrdOfUnit[i] >= 0) { prevOrd = paraOrdOfUnit[i]; break; }
+          }
+          if (!insertParasAfter(prevOrd, texts)) { replayErr = '插入新段失败（锚点段 ' + prevOrd + '）'; break; }
+          replayed += texts.length;
+        } else if (type === 'DELETE') {
+          for (let i = units.length - 1; i >= 0; i--) {
+            if (!deleteUnit(units[i])) { replayErr = '删除单元失败: ' + units[i].key; break; }
+            replayed++;
+          }
+        } else {
+          // 多出来的基线单元先清掉，多出来的新文本追加成新段，其余一一对应改写。
+          for (let i = units.length - 1; i >= texts.length; i--) {
+            if (!deleteUnit(units[i])) { replayErr = '删除单元失败: ' + units[i].key; break; }
+            replayed++;
+          }
+          if (!replayErr && texts.length > units.length && units.length) {
+            const last = units[units.length - 1];
+            if (last.paraOrd >= 0 && !insertParasAfter(last.paraOrd, texts.slice(units.length))) {
+              replayErr = '追加新段失败: ' + last.key;
+            } else replayed += texts.length - units.length;
+          }
+          const pairs = Math.min(units.length, texts.length);
+          for (let i = pairs - 1; i >= 0 && !replayErr; i--) {
+            const range = rangeOfUnit(units[i]);
+            if (!range) { replayErr = '找不到要改写的单元: ' + units[i].key; break; }
+            if (!writeTrackedText(range, texts[i])) { replayErr = '改写单元失败: ' + units[i].key; break; }
+            replayed++;
+          }
+        }
+      } catch (e) { replayErr = errStr(e); }
+    }
+    if (replayErr) return fail('replay', replayErr);
+    elapsedMs.replay = Date.now() - t;
+
+    // ⑤ 恢复用户本人的署名，回报结果。
+    restoreAuthor();
+    invalidateParaIndex();
+    const listed = EXEC.list_revisions({ limit: 500 });
+    const revisions = (listed && listed.revisions) || [];
+    let mainCount = 0, otherCount = 0;
+    revisions.forEach(function (r) {
+      const a = String(r.author || '');
+      if (a === mainAuthor) mainCount++;
+      else if (a === otherAuthor) otherCount++;
+    });
+    const formatOnly = formatOnlyOrds.map(function (ord) {
+      return { paraKey: curParaIndexOf(ord), preview: String(baseScan[ord].norm).slice(0, 40) };
+    });
+    const conflicts = [];
+    otherChunks.forEach(function (c) {
+      if (!c.conflict) return;
+      unitsIn(c).forEach(function (u) { if (u.key) conflicts.push(u.key); });
+    });
+    elapsedMs.total = Date.now() - t0;
+    return {
+      success: true, name: name, revisions: revisions, count: revisions.length,
+      mainCount: mainCount, otherCount: otherCount, replayed: replayed,
+      conflicts: conflicts, formatOnly: formatOnly, elapsedMs: elapsedMs,
+    };
+  },
+  // 同一段两边都改了时的「用律师乙的」：拒掉该段现有的（主线侧）修订让文字回到
+  // 共同的上一版，切成对方的署名把对方那一版文字写进去，再把刚产生的修订接受掉。
+  // 同样必须在一条命令里做完（署名）。「用你的」不需要新原语——直接接受该段修订。
+  merge_take_other(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const paraKey = Number(p && p.paraKey);
+    if (!(paraKey >= 0)) return tableFail('段落序非法: ' + (p && p.paraKey));
+    const text = String((p && p.text) == null ? '' : p.text);
+    const author = String((p && p.author) || '');
+    const revsIn = function () {
+      const listed = EXEC.list_revisions({ limit: 500 });
+      return ((listed && listed.revisions) || []).filter(function (r) { return Number(r.paraKey) === paraKey; });
+    };
+    const resolve = function (revs, action) {
+      if (!revs.length) return { success: true, resolved: 0 };
+      const args = { indices: revs.map(function (r) { return r.index; }), action: action };
+      return runRevisionResolution(function () { return EXEC.resolve_revisions(args); }, args, 'resolve_revisions');
+    };
+    const rej = resolve(revsIn(), 'reject');
+    if (!rej || rej.success !== true) return tableFail('拒绝该段原有修订失败：' + ((rej && rej.message) || ''));
+    invalidateParaIndex();
+    try { setRedlineAuthor(author); } catch (e) {}
+    let wrote = false;
+    try {
+      try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+      const para = paraAt(paraKey);
+      if (para) wrote = writeTrackedText(para, text);
+    } catch (e) { wrote = false; }
+    if (!wrote) { try { setRedlineAuthor(humanAuthor); } catch (e) {} return tableFail('写入另一侧的文字失败（第 ' + (paraKey + 1) + ' 段）'); }
+    invalidateParaIndex();
+    const acc = resolve(revsIn(), 'accept');
+    try { setRedlineAuthor(humanAuthor); } catch (e) {}
+    invalidateParaIndex();
+    const left = revsIn();
+    const para2 = paraAt(paraKey);
+    return {
+      success: left.length === 0, paraKey: paraKey,
+      revisionCount: (acc && acc.resolved) || 0, remainingInParagraph: left.length,
+      text: para2 ? String(para2.getString() || '') : '',
+    };
+  },
+  // [溯源光标条] 表格里的「当前这一格」。段落级溯源用 get_review_context 的
+  // paragraphIndex，xlsx 这一条与 pptx 的 slide_get_current 是它的对应物。
+  sheet_get_active_cell() {
+    if (!isCalcDoc()) return { success: false, error: NOT_SPREADSHEET_MSG, message: NOT_SPREADSHEET_MSG };
+    let sheet = '';
+    try { sheet = String(ctrl.getActiveSheet().getName() || ''); } catch (e) {}
+    let col = null, row = null;
+    try {
+      const sel = ctrl.getSelection();
+      if (sel && typeof sel.getCellAddress === 'function') {
+        const a = sel.getCellAddress(); col = a.Column; row = a.Row;
+      } else if (sel && typeof sel.getRangeAddress === 'function') {
+        const a = sel.getRangeAddress(); col = a.StartColumn; row = a.StartRow;
+      } else if (sel && typeof sel.getByIndex === 'function' && sel.getCount && sel.getCount() > 0) {
+        const a = sel.getByIndex(0).getRangeAddress(); col = a.StartColumn; row = a.StartRow;
+      }
+    } catch (e) { return { success: false, error: errStr(e), message: errStr(e) }; }
+    if (!(col >= 0) || !(row >= 0)) return { success: false, error: '取不到当前单元格', message: '取不到当前单元格' };
+    return { success: true, sheet: sheet, address: colLetterOf(col) + (row + 1) };
+  },
+  // [溯源光标条] 演示文稿里的「当前这一页」（1 基，与 slide_goto 同口径）。
+  slide_get_current() {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    try {
+      const page = ctrl.getCurrentPage ? ctrl.getCurrentPage() : null;
+      if (!page) return slideFail('取不到当前页');
+      let n = NaN;
+      try { n = Number(page.getPropertyValue('Number')); } catch (e) {}
+      if (!(n >= 1)) {
+        const i = locatePageIndex(page, {});
+        if (i >= 0) n = i + 1;
+      }
+      if (!(n >= 1)) return slideFail('取不到当前页');
+      return { success: true, slideNumber: n };
+    } catch (e) { return slideFail(errStr(e)); }
   },
   // ==================== Calc 电子表格原语（sheet_*） ====================
   // 与 doc_* 平行的 xlsx 操作面。Calc 没有 Writer 的修订（redline）机制，写入
@@ -5482,6 +8021,9 @@ const EXEC = {
   clear_anchors() {
     const bms = xModel.getBookmarks();
     const names = (bms.getElementNames && bms.getElementNames()) || [];
+    // 摘除与插入不同源：removeTextContent 本引擎实测容得下别的 story 的书签
+    // （单元格锚点用正文 XText 照样摘得掉，table-retype 的锚点组守着），
+    // 所以这里保留 xModel.getText()，不跟着 anchorBookmark 一起改。
     const xText = xModel.getText();
     let n = 0;
     for (let i = 0; i < names.length; i++) {
@@ -5493,20 +8035,140 @@ const EXEC = {
   },
 };
 
+// AI 工具面（宿主打 __agent 标记的命令）与即时审校 / 写作补全的只读取文命令
+// （FINAL_TEXT_ACTIONS）一律按**最终文本语义**执行。
+// WHY：AI 多轮改稿依赖「正文 = 改后的样子」——get_document_text / get_paragraph 读到的
+// 不能混进被删的旧字，find_text_locations / replace_nth_match 的计数只能数可见匹配
+// （dev-board#369）。内联「全部修订」是默认显示态，所以这条守卫是常态路径：执行前
+// 临时切到一种不含删除文字的态 + refresh，执行完切回去 + refresh。
+// 最终稿态与页边态的正文本来就不含删除文字，直接放行，零开销。
+// 非 Writer 文档一个属性都不碰（Impress 上问 Writer 专属属性会把引擎搞坏，
+// 见 withInlineMarkupForExport 头上的注释）。
+// 原语可能是 async（分批的 find_replace / apply_house_style），恢复必须等它 settle；
+// 分批命令在批间会让出事件循环，那期间插进来的别的命令会看到页边语义——与「批间允许
+// 别的命令插进来」这条既有约定同源，不额外收窄。
+const FINAL_TEXT_ACTIONS = new Set(['get_completion_context', 'accept_completion', 'insert_completion_content', 'get_review_context', 'goto_review_range', 'apply_review_edit']);
+const AGENT_VIEW_EXEMPT = { set_revision_view: 1, export_document: 1, load_document: 1 };
+function runAgentCommandInMarginView(action, fn) {
+  if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
+  const before = revisionViewState().mode;
+  if (before !== 'all') return fn();
+  // 通向「正文 = 改后的样子」有两条路，读回的正文 / 段号 / 偏移完全一致：
+  //   隐藏修订  RedlineDisplayType   → **模型**属性
+  //   页边      ShowChangesInMargin  → **控制器的视图设置**
+  // 本引擎每写一次那个视图设置就把视图滚回光标。默认视图变成内联之后这条守卫成了
+  // 常态路径，于是用户往下滚动、180ms 后即时审校读一次上下文，视口就被拽回光标所在
+  // 的文首——dev-board#604 报的「自动跳回开头」。真机实测（24.2.8-zhcn-r5）：切页边
+  // top 44880 → 0，隐藏修订 top 21840 → 21840 一动不动，正文与偏移两者一字不差。
+  // 所以先隐藏；引擎隐不掉（hideSupported=false，读回仍是 all）时才退回页边。
+  // 回归：tests/lowa-e2e/scroll-stability.mjs。
+  withViewOnlyChange(function () {
+    if (applyRevisionView('final').mode === 'all') applyRevisionView('margin');
+    try { xModel.refresh(); } catch (e) {}
+  });
+  const restore = function () {
+    withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
+  };
+  let out;
+  try { out = fn(); }
+  catch (e) { restore(); throw e; }
+  if (out && typeof out.then === 'function') {
+    return out.then(function (r) { restore(); return r; }, function (e) { restore(); throw e; });
+  }
+  restore();
+  return out;
+}
+
+const RESOLVE_REVISION_ACTIONS = new Set(['resolve_revision', 'resolve_revisions', 'resolve_all_revisions']);
+// Keep an open comment draft usable across unrelated edits and delayed view
+// notifications. Its native identity, full state and document must still match.
+function matchCommentSnapshot(p) {
+  if (p && p.documentSeq != null && p.documentSeq !== docSeq) return false;
+  if (!p || p.expectedComment == null) return !p || p.revision == null || p.revision === currentReviewRevision();
+  const expected = p.expectedComment;
+  if (p.documentSeq !== docSeq || typeof expected.id !== 'string' || !expected.id || p.id !== expected.id) return false;
+  const listed = EXEC.list_comments({ limit: 500 });
+  const matches = listed.success ? listed.comments.filter(c => c.id === expected.id) : [];
+  const fields = ['id', 'author', 'content', 'timestamp', 'anchorText'];
+  if (matches.length !== 1 || !fields.every(key => typeof expected[key] === 'string' && matches[0][key] === expected[key])
+      || typeof expected.resolved !== 'boolean' || matches[0].resolved !== expected.resolved) return false;
+  p.index = matches[0].index;
+  p.revision = currentReviewRevision();
+  return true;
+}
+// A view-only native notification can arrive after its command has returned and
+// advance the global revision. Snapshot-backed cards remain usable if the same
+// native revision still has exactly the content the user reviewed. Remap by ID,
+// never by an expired index, and reject changed targets or replacement documents.
+function matchRevisionSnapshot(p, action) {
+  if (p.documentSeq !== docSeq || !Array.isArray(p.expectedRevisions) || !p.expectedRevisions.length) return false;
+  const requested = action === 'resolve_revision' ? [p.index] : action === 'resolve_revisions' ? p.indices : null;
+  if (!Array.isArray(requested) || requested.length !== p.expectedRevisions.length || new Set(requested).size !== requested.length) return false;
+  const expected = p.expectedRevisions;
+  if (new Set(expected.map(r => r.identifier)).size !== expected.length || !expected.every(r => requested.includes(r.index) && typeof r.identifier === 'string' && r.identifier)) return false;
+  const listed = EXEC.list_revisions({ limit: 500 });
+  if (!listed.success) return false;
+  const current = new Map();
+  listed.revisions.forEach(r => current.set(r.identifier, current.has(r.identifier) ? null : r));
+  const fields = ['identifier', 'type', 'text', 'author', 'timestamp'];
+  const matched = expected.map(r => current.get(r.identifier));
+  if (!matched.every((r, i) => r && fields.every(key => typeof expected[i][key] === 'string' && r[key] === expected[i][key]))) return false;
+  if (action === 'resolve_revision') p.index = matched[0].index;
+  else p.indices = matched.map(r => r.index);
+  p.revision = currentReviewRevision();
+  return true;
+}
+function runRevisionResolution(fn, p, action) {
+  if (!isWriterDoc()) return fn();
+  if (!isReviewWritable()) return tableFail('文档为只读状态');
+  if (p && p.expectedRevisions != null) {
+    if (!matchRevisionSnapshot(p, action)) return tableFail('修订已变化，请刷新后重试');
+  } else if (p && p.revision != null && p.revision !== currentReviewRevision()) return tableFail('文档已变化，请刷新修订后重试');
+  // Hidden markup cannot be resolved, margin markup cannot be undone safely:
+  // both resolve in the inline view (see undoStep for the margin case).
+  const inMargin = readShowChangesInMargin() === true;
+  if (readShowChanges() !== false && !inMargin) return fn();
+  const before = revisionViewState().mode;
+  try {
+    withViewOnlyChange(function () { applyRevisionView('all'); xModel.refresh(); });
+    const result = fn();
+    if (inMargin) rememberInlineUndo();
+    return result;
+  } finally {
+    withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
+  }
+}
+
 function execCommand(reqId, action, params) {
+  // 原语可以是 async（分批的 find_replace / apply_house_style）：返回 Promise 就等它，
+  // 期间 worker 事件循环继续处理别的命令；同步原语路径与从前完全一样。
+  const finish = function (result) {
+    delete CANCELLED[reqId];
+    delete INFLIGHT[reqId];
+    if (action === 'get_review_context' && result && result.success) result.cursorRectRaw = EXEC.get_cursor_rect();
+    post('result', { reqId: reqId, result: result });
+  };
+  INFLIGHT[reqId] = true;
   let result;
   try {
     const p = params || {};
+    p.__reqId = reqId; // 分批命令发 progress / 查 cancel 用
     // 修订署名切换：AI 命令（宿主打 __agent 标记）→ AI WorkDeck；其余（IME 输入
     // 等用户本人操作）→ 用户名。失败不阻断命令本身（降级为引擎默认作者）。
     try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
     catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
-    result = fn ? fn(p) : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
+    result = fn
+      ? (RESOLVE_REVISION_ACTIONS.has(action) ? runRevisionResolution(function () { return fn(p); }, p, action) : (p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
+      : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };
   }
-  post('result', { reqId: reqId, result: result });
+  if (result && typeof result.then === 'function') {
+    result.then(finish, function (e) { finish({ success: false, message: errStr(e) }); });
+  } else {
+    finish(result);
+  }
 }
 
 // ---- message loop --------------------------------------------------------

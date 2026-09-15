@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.config;
 
+import com.checkba.config.ReviewAccountGate;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.auth.VerificationCodeStore;
@@ -32,7 +36,8 @@ class PhoneBindingGateTest {
     private static SmsAuthService activeSms() {
         return new SmsAuthService(
                 List.of(new SmsService(OK_TRANSPORT, true, "ak", "sk", "sign", "tpl")),
-                new VerificationCodeStore(), mock(UserRepository.class), false);
+                new VerificationCodeStore(), mock(UserRepository.class), false,
+                ReviewAccountGate.disabled());
     }
 
     private static PhoneLoginGuard guard(boolean required, String deadline) {

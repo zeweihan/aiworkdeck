@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.model.entity.AgentTodoList;
@@ -89,12 +92,35 @@ public class TodoListService {
         return confirmation;
     }
 
+    /**
+     * 状态归一化（dev-board#393）：done/finished/已完成 → completed，doing/进行中 → in_progress，
+     * todo/待办 → pending。这些写法都不是「不合法」，拒掉只会让模型再试一轮、再错一轮。
+     */
+    static String normalizeStatus(String raw) {
+        String s = raw == null ? "" : raw.trim().toLowerCase();
+        if (VALID_STATUSES.contains(s)) return s;
+        switch (s) {
+            case "done": case "finished": case "complete": case "已完成": case "完成":
+                return "completed";
+            case "doing": case "active": case "in-progress": case "inprogress": case "running": case "进行中": case "正在进行":
+                return "in_progress";
+            case "error": case "失败": case "cancelled": case "canceled":
+                return "failed";
+            default:
+                return "pending";
+        }
+    }
+
     /** 解析 + 归一化。写入路径与重启回填路径共用，回填的 JSON 因此也过一遍不变式。 */
     private ParsedTodos parse(String todosJson) {
         List<TodoItem> todos = new ArrayList<>();
         boolean demotedExtraInProgress = false;
         try {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(todosJson);
+            // 容错（dev-board#393）：模型偶尔把数组包成 {"todos":[...]}，拆开即可
+            if (root.isObject() && root.path("todos").isArray()) {
+                root = root.path("todos");
+            }
             if (!root.isArray()) {
                 return new ParsedTodos(List.of(), false,
                         LangText.of("Error: todos 必须是 JSON 数组，元素形如 {\"content\":\"...\",\"activeForm\":\"...\",\"status\":\"pending\"}",
@@ -106,8 +132,7 @@ public class TodoListService {
                 if (content.isEmpty()) continue;
                 String activeForm = n.path("activeForm").asText("").trim();
                 if (activeForm.isEmpty()) activeForm = content;
-                String status = n.path("status").asText("pending").trim().toLowerCase();
-                if (!VALID_STATUSES.contains(status)) status = "pending";
+                String status = normalizeStatus(n.path("status").asText("pending"));
                 // 不变式：最多一项 in_progress，多余的降级为 pending
                 if ("in_progress".equals(status)) {
                     if (seenInProgress) {
@@ -138,15 +163,25 @@ public class TodoListService {
 
     /**
      * 供编排器在每次工具执行后注入的"防走神"摘要（Claude Code system-reminder 模式）。
-     * 清单不存在或已全部完成时返回 null（不注入）。
+     * 清单不存在或已无待办事项（完成或失败均算数）时返回 null（不注入）。
+     *
+     * <p><b>failed 是终态，要和 completed 一起算"done"</b>：此前只认 completed，
+     * 一个 failed 项永远不会自己变成 completed，于是 {@code done < todos.size()} 恒成立，
+     * 这条提醒永远关不掉，且摘要正文只列 in_progress/pending，完全不提 failed 项——
+     * 模型收到的是一句问不出所以然的"还没做完"，看不出到底卡在哪一项（审计条目）。
      */
     public String reminder(String conversationId) {
         List<TodoItem> todos = currentList(conversationId);
         if (todos.isEmpty()) return null;
         long done = todos.stream().filter(t -> "completed".equals(t.status())).count();
-        if (done == todos.size()) return null;
+        List<String> failed = todos.stream().filter(t -> "failed".equals(t.status()))
+                .map(TodoItem::content).toList();
+        if (done + failed.size() == todos.size()) return null;
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("[任务清单状态 %d/%d 完成]", done, todos.size()));
+        if (!failed.isEmpty()) {
+            sb.append(" 已失败：").append(String.join("、", failed)).append("。");
+        }
         todos.stream().filter(t -> "in_progress".equals(t.status())).findFirst()
                 .ifPresent(t -> sb.append(" 进行中：").append(t.content()).append("。"));
         List<String> pending = todos.stream().filter(t -> "pending".equals(t.status()))

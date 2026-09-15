@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <!-- Inline Variant (Nested) -->
   <div v-if="variant === 'inline'" class="thinking-inline">
@@ -16,8 +18,8 @@
   </div>
 
   <!-- Standard Card Variant (Root) -->
-  <div v-else class="thinking-card" :class="{ 'is-done': status === 'done', 'ghost': variant === 'ghost' }">
-    <div class="header" @click="toggle">
+  <div v-else class="thinking-card" :class="{ 'is-working': status === 'thinking', 'is-done': status === 'done', 'ghost': variant === 'ghost' }">
+    <button type="button" class="header" :aria-expanded="isExpanded" @click="toggle">
       <div class="left">
         <div class="status-indicator">
           <span v-if="status === 'thinking'" class="pulse-ring"></span>
@@ -32,10 +34,10 @@
       <div class="right">
         <span class="chevron-icon" :class="{ 'expanded': isExpanded }"></span>
       </div>
-    </div>
+    </button>
 
     <transition name="expand">
-      <div class="body" v-if="isExpanded">
+      <div class="body" v-if="isExpanded && content">
         <div class="content">
           <MarkdownPreview :content="content" />
         </div>
@@ -61,7 +63,42 @@ const isExpanded = ref(true)
 const liveSeconds = ref(0)
 let timerInterval = null
 
+// updateTime/stopTimer/startTimer 挪到 watch(...) 前面（原来在后面）：下面的
+// watch 加了 immediate:true 之后，回调会在 watch() 这条语句执行的当下就同步
+// 跑一次（Vue 的 immediate watcher 就是这个语义，不是排到下一轮再跑），如果
+// startTimer/stopTimer 仍按原来的顺序声明在 watch 之后，immediate 回调此刻还
+// 引用不到它们——会话在 <script setup> 的执行顺序里踩中 const 的暂时性死区，
+// 直接抛 ReferenceError: Cannot access 'stopTimer' before initialization，
+// 整个组件渲染失败（用真实 Vue 组件挂载复现过，不是理论推测）。纯挪动顺序，
+// 三个函数体一字未改。
+const updateTime = () => {
+    if (!props.startTime) {
+        liveSeconds.value = 0
+        return
+    }
+    const diff = Math.floor((Date.now() - props.startTime) / 1000)
+    liveSeconds.value = diff > 0 ? diff : 0
+}
+
+const stopTimer = () => {
+    if (timerInterval) clearInterval(timerInterval)
+    timerInterval = null
+}
+
+const startTimer = () => {
+    stopTimer()
+    // Initial calc
+    updateTime()
+    timerInterval = setInterval(updateTime, 1000)
+}
+
 // Auto-collapse when done
+// immediate:true 是必需的，不是可选优化：RootBubble.vue 把 ghost 变体渲染在
+// v-if/v-else 两个结构不同的分支里，isReady 一旦翻真就整体换分支——Vue 会卸载
+// 旧的 ThinkingCard、挂载全新一个实例，而不是复用同一个组件更新 prop。挂载那
+// 一刻如果 status 已经是 'done'（很常见：标题/正文往往比"思考结束"晚不了多久
+// 出现），没有 immediate 这个 watcher 一次都不会跑——isExpanded 停在默认的
+// true，ghost 卡永远摊开显示模型的原始思维链，而不是折成一行"Thought for Ns"。
 watch(() => props.status, (newVal) => {
   if (newVal === 'done') {
     isExpanded.value = false
@@ -70,7 +107,7 @@ watch(() => props.status, (newVal) => {
     isExpanded.value = true
     startTimer()
   }
-})
+}, { immediate: true })
 
 onMounted(() => {
     if (props.status === 'thinking') {
@@ -81,27 +118,6 @@ onMounted(() => {
 onUnmounted(() => {
     stopTimer()
 })
-
-const startTimer = () => {
-    stopTimer()
-    // Initial calc
-    updateTime()
-    timerInterval = setInterval(updateTime, 1000)
-}
-
-const stopTimer = () => {
-    if (timerInterval) clearInterval(timerInterval)
-    timerInterval = null
-}
-
-const updateTime = () => {
-    if (!props.startTime) {
-        liveSeconds.value = 0
-        return
-    }
-    const diff = Math.floor((Date.now() - props.startTime) / 1000)
-    liveSeconds.value = diff > 0 ? diff : 0
-}
 
 const displayDuration = computed(() => {
     // If actively thinking, show live timer
@@ -124,8 +140,8 @@ const toggle = () => {
 /* Standard Card Styles */
 .thinking-card {
   margin-bottom: 12px;
-  background: #fff;
-  border: 1px solid #E9ECEF;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -147,9 +163,9 @@ const toggle = () => {
 }
 
 .thinking-card.is-done {
-  border-color: #f3f4f6;
+  border-color: var(--awd-border-subtle);
   box-shadow: none;
-  background: #f9fafb;
+  background: var(--awd-bg);
 }
 
 .thinking-card.ghost.is-done {
@@ -159,11 +175,16 @@ const toggle = () => {
 
 .header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   align-items: center;
-  padding: 6px 10px;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  margin: 0;
   cursor: pointer;
-  background: #fff;
+  background: var(--awd-surface);
   transition: background 0.2s;
 }
 
@@ -200,7 +221,7 @@ const toggle = () => {
 }
 
 .header:hover {
-  background-color: #F8F9FA;
+  background-color: var(--awd-bg);
 }
 
 .thinking-card.ghost .header:hover {
@@ -228,7 +249,7 @@ const toggle = () => {
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 2px solid #5BD197; /* Mint Green */
+  border: 2px solid var(--awd-mint); /* Mint Green */
   opacity: 0;
   animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
 }
@@ -244,47 +265,48 @@ const toggle = () => {
 }
 
 .title {
-  font-size: 11px; /* Slightly easier to read */
+  font-size: 12px;
   font-weight: 500;
-  color: #6C757D; /* Gray-Medium */
+  color: var(--awd-text-2); /* Gray-Medium */
   font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
 
 .thinking-card.is-done .title {
-  color: #ADB5BD; /* Lighter gray when done */
+  color: var(--awd-text-2);
   font-weight: 500;
 }
 
 .chevron-icon {
   width: 6px;
   height: 6px;
-  border-right: 1.5px solid #ADB5BD;
-  border-bottom: 1.5px solid #ADB5BD;
-  transform: rotate(45deg);
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--awd-text-2);
+  transform: rotate(-45deg);
   transition: transform 0.3s;
   display: block;
 }
 
 .chevron-icon.expanded {
-  transform: rotate(-135deg);
-  margin-top: 4px;
+  transform: rotate(45deg);
+  margin-top: 0;
 }
 
 .body {
-  border-top: 1px solid #E9ECEF;
-  background: #fff;
+  border-top: 1px solid var(--awd-border);
+  background: var(--awd-surface);
 }
 
 .content {
   padding: 8px 12px;
   font-size: 12px;
   line-height: 1.5;
-  color: #495057; /* Gray-Dark */
+  color: var(--awd-text-2); /* Gray-Dark */
 }
 
 .thinking-card.ghost .content {
     padding: 0; /* 无边距 */
-    color: #6C757D; /* Lighter text for ghost */
+    color: var(--awd-text-2); /* Lighter text for ghost */
     margin: 0;
     background: transparent !important;
     text-align: left; /* 左对齐 */
@@ -313,7 +335,7 @@ const toggle = () => {
     padding: 0;
     font-size: 13px;
     line-height: 1.5;
-    color: #6C757D;
+    color: var(--awd-text-2);
 }
 
 .thinking-card.ghost :deep(.markdown-body p) {
@@ -334,8 +356,8 @@ const toggle = () => {
 .thinking-card.ghost :deep(.markdown-body blockquote) {
     margin: 2px 0 !important;
     padding-left: 8px !important;
-    color: #ADB5BD;
-    border-left: 2px solid #E9ECEF !important;
+    color: var(--awd-text-3);
+    border-left: 2px solid var(--awd-border) !important;
 }
 
 .thinking-card.ghost :deep(.markdown-body h1),
@@ -344,14 +366,14 @@ const toggle = () => {
     margin-top: 6px !important;
     margin-bottom: 2px !important;
     font-size: 13px !important;
-    color: #495057;
+    color: var(--awd-text-2);
 }
 
 .thinking-card.ghost :deep(.markdown-body pre) {
     margin: 4px 0 !important;
     padding: 8px !important;
-    background: #F8F9FA;
-    border: 1px solid #E9ECEF;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
     border-radius: 4px;
 }
 
@@ -367,7 +389,7 @@ const toggle = () => {
 /* Inline Variant Styles */
 .thinking-inline {
     font-size: 12px;
-    color: #6C757D;
+    color: var(--awd-text-2);
     margin: 4px 0;
     background: transparent; /* Fix white background issue */
 }
@@ -379,7 +401,7 @@ const toggle = () => {
     user-select: none;
 }
 .h-wrap:hover {
-    color: #495057;
+    color: var(--awd-text-2);
 }
 .h-wrap .icon {
     font-size: 12px;
@@ -424,7 +446,7 @@ const toggle = () => {
 .thinking-inline :deep(.markdown-body) {
     font-size: 12px;
     line-height: 1.45;
-    color: #495057;
+    color: var(--awd-text-2);
     margin: 0;
     padding: 0;
 }
@@ -448,7 +470,7 @@ const toggle = () => {
     margin: 2px 0 !important;
     padding-left: 8px !important;
     border-left-width: 2px !important;
-    color: #ADB5BD;
+    color: var(--awd-text-3);
 }
 
 .thinking-inline :deep(.markdown-body h1),
@@ -464,8 +486,8 @@ const toggle = () => {
     margin: 2px 0 !important;
     padding: 6px !important;
     font-size: 11px;
-    background: #F8F9FA;
-    border: 1px solid #E9ECEF;
+    background: var(--awd-bg);
+    border: 1px solid var(--awd-border);
 }
 
 .thinking-inline :deep(.markdown-body table) {
@@ -491,4 +513,11 @@ const toggle = () => {
   max-height: 0;
   opacity: 0;
 }
+.header::after { border: 0; }
+.header:focus-visible { outline: 2px solid var(--awd-accent); outline-offset: 4px; }
+.thinking-card.is-working .title { animation: thinking-breathe 1.8s ease-in-out infinite; }
+@keyframes thinking-breathe { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .thinking-card.is-working .title { animation: none; } }
+.thinking-card.ghost .body { margin-top: 8px; padding-left: 14px; border-left: 1px solid var(--awd-border); }
+.thinking-card.ghost :deep(.markdown-body) { font-size: 12px; line-height: 1.65; }
 </style>

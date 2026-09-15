@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package com.checkba.service.ai;
 
 import com.checkba.service.LangText;
@@ -51,7 +54,11 @@ public class ToolRegistry {
             "fileName", List.of("name", "filename"),
             "markdownContent", List.of("markdown_content", "content"),
             "filePath", List.of("path"),
-            "fileId", List.of("id")
+            "fileId", List.of("id"),
+            // dev-board#466 真机实况：模型第一次就按 name/parentId 调 create_folder，
+            // 被判缺参后重试才对上——整理文件的任务本来就卡在 30 步预算上，白烧两步
+            "folderName", List.of("name", "folder_name"),
+            "parentFolderId", List.of("parentId", "parent_folder_id", "parent_id")
     );
 
     /** 旧编排器为部分工具提供的缺省参数值（行为保持；键为别名解析后的真实工具名） */
@@ -106,10 +113,34 @@ public class ToolRegistry {
      */
     public record ToolResult(String output, RegisteredTool tool, boolean found) {
 
+        /**
+         * 声明了 {@code fileEffect} 的工具，用它做返回值前缀表达
+         * 「这一次执行成功，但什么都没改」。
+         *
+         * <p>{@code @ToolMeta.fileEffect} 是写死的常量，编排器只看 success()，
+         * 于是一次「没找到、文件未改动」的查找替换也会发 file_change(MODIFIED)、
+         * 写进会话的文件变更历史——用户被告知本轮改了这个文件，去找却找不到改动。
+         * 有了这个前缀，副作用层能把「成功」与「改过」分开。
+         */
+        public static final String UNCHANGED_PREFIX = "未改动：";
+
+        /** 本次执行是否真的动了文件。仅对声明了 fileEffect 的工具有意义。 */
+        public boolean fileChanged() {
+            return success() && !output.stripLeading().startsWith(UNCHANGED_PREFIX);
+        }
+
         public boolean success() {
             if (!found || output == null) return false;
             String trimmed = output.stripLeading();
             if (trimmed.startsWith("Error")) return false;
+            // 中文失败前缀与英文同等对待：MemoryTools / TagTools / TaskTools /
+            // EvidenceTools / PptxTools 共 37 处失败返回写的是「错误：…」，它们**自认为在报错**，
+            // 判据却只认英文 "Error"，于是全被判成 SUCCESS——过程卡给失败的调用打绿勾、
+            // appendFailureNudge 把 consecutiveFailures 清零（连续失败纠正回路对这些工具
+            // 永不触发，模型能对着同一个错误重试到步数上限）、埋点也记成功。
+            // 只认**前缀**，不按包含匹配：合同正文里出现「失败」「错误」是家常便饭，
+            // 把正常结果误判成失败比漏判更糟。
+            if (trimmed.startsWith("错误")) return false;
             // 编辑器桥等工具的失败以 JSON 返回（如 {"error": "操作超时..."}）。
             // 此前只认 "Error" 前缀，这类失败被判成 SUCCESS：失败熔断计数被清零、
             // 前端显示绿勾、file_change 照发——模型一路"成功"空转到步数上限（F-09）。
@@ -126,6 +157,19 @@ public class ToolRegistry {
     private final Map<String, RegisteredTool> pluginToolCache = new ConcurrentHashMap<>();
     private final List<ToolSpecification> builtinSpecifications = new ArrayList<>();
 
+    /**
+     * 插件宿主 SPI（规范 v2.4 §11）：分发插件工具前把服务端上下文绑到 PluginHostFactory 的 ThreadLocal，
+     * 与下面 ToolContextHolder.set 同一处设、同一处清。字段注入 + required=false：
+     * 大量 {@code new ToolRegistry(...)} 直接构造的既有测试（含 EvalHarness）不受影响，null 即跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.plugin.PluginHostFactory pluginHostFactory;
+
+    /** 供测试直接装配。 */
+    void setPluginHostFactory(com.checkba.service.plugin.PluginHostFactory pluginHostFactory) {
+        this.pluginHostFactory = pluginHostFactory;
+    }
+
     public ToolRegistry(List<AgentToolComponent> toolComponents, PluginService pluginService,
                         ClientCapabilityService clientCapabilityService) {
         this.toolComponents = toolComponents;
@@ -136,13 +180,34 @@ public class ToolRegistry {
     @PostConstruct
     public void init() {
         for (AgentToolComponent bean : toolComponents) {
-            registerBean(bean);
+            boolean available = componentAvailable(bean);
+            if (!available) {
+                log.info("Tool component {} reports itself unavailable on this machine — "
+                        + "its tools stay registered but are not offered to the model",
+                        bean.getClass().getSimpleName());
+            }
+            registerBean(bean, available);
         }
         log.info("ToolRegistry initialized: {} built-in tools from {} components",
                 builtinTools.size(), toolComponents.size());
     }
 
-    private void registerBean(Object bean) {
+    /** 组件自报可用性绝不能掀翻启动：探测里抛出来的一律当"可用"，最坏只是多下发一个工具。 */
+    private boolean componentAvailable(AgentToolComponent bean) {
+        try {
+            return bean.isAvailable();
+        } catch (Exception e) {
+            log.warn("isAvailable() threw for {}, treating the component as available",
+                    bean.getClass().getSimpleName(), e);
+            return true;
+        }
+    }
+
+    /**
+     * @param offerToModel false 时只登记不下发：工具仍可被 resolve/execute 调到（拿到的是它自己
+     *                     那句可行动的错误），但不会出现在给 LLM 的 spec 清单里。
+     */
+    private void registerBean(Object bean, boolean offerToModel) {
         for (Method method : bean.getClass().getDeclaredMethods()) {
             if (!method.isAnnotationPresent(Tool.class)) {
                 continue;
@@ -156,7 +221,7 @@ public class ToolRegistry {
                     log.warn("Duplicate tool name '{}' — {} overrides {}",
                             spec.name(), bean.getClass().getSimpleName(),
                             previous.bean().getClass().getSimpleName());
-                } else {
+                } else if (offerToModel) {
                     builtinSpecifications.add(spec);
                 }
             } catch (Exception e) {
@@ -206,6 +271,25 @@ public class ToolRegistry {
 
     public boolean hasTool(String name) {
         return resolve(name).isPresent();
+    }
+
+    /**
+     * 使插件工具缓存失效：插件重扫/在线安装/卸载后，旧 JAR 加载出的 bean 不应再被分发。
+     *
+     * pluginToolCache 只是 resolve() 的懒加载优化层（省掉每次调用都做的反射方法扫描），
+     * pluginService.getPluginTools() 才是事实来源。插件更新后 PluginService.rescan() 会
+     * 用新 URLClassLoader 加载出全新的 bean 实例覆盖同名 key，但此前 pluginToolCache 里
+     * 一旦缓存过就永不过期——resolve() 命中缓存直接返回，永远看不到新 bean，用户在广场点
+     * 「更新/卸载」后 AI 调的还是旧版本的工具，全程零报错。
+     *
+     * 清空后不会立即重新扫描：下一次 resolve() 撞 miss 时按现有懒加载路径重新解析并回填。
+     */
+    public void invalidatePluginToolCache() {
+        int size = pluginToolCache.size();
+        pluginToolCache.clear();
+        if (size > 0) {
+            log.info("Plugin tool cache invalidated: {} cached entries cleared", size);
+        }
     }
 
     /**
@@ -295,6 +379,10 @@ public class ToolRegistry {
                         + "' requires permission(s) " + missing
                         + " not declared in the plugin manifest \"permissions\".", tool, true);
             }
+            // 宿主 SPI 的调用上下文（projectId/userId 以服务端为准，模型传的参数不可信）
+            if (pluginHostFactory != null) {
+                pluginHostFactory.bindCall(ctx);
+            }
         }
 
         // 装填线程上下文：修复流式回调线程与请求线程不一致导致的 ThreadLocal 丢失/串会话问题
@@ -326,6 +414,9 @@ public class ToolRegistry {
             // 同时清理 ProjectContextHolder：装填时设置了它（见上），此前只清 ToolContextHolder，
             // 池化回调线程复用会残留上个会话的 projectId/userId，导致记忆作用域串号。
             ProjectContextHolder.clear();
+            if (pluginHostFactory != null) {
+                pluginHostFactory.clear();
+            }
         }
     }
 

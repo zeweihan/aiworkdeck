@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
   新建/打开项目页。2026-08 起**不再是主入口**——「打开文件夹 / 新建项目文件夹」
   两个动作已经内嵌在项目列表页下方（先看见有哪些案卷，再谈新建）。本页保留两个用途：
@@ -13,7 +15,7 @@
       <view class="user-sidebar">
         <!-- Logo Area -->
         <view class="sidebar-logo-area">
-            <image src="/static/logo_full_v2.png" class="sidebar-logo" mode="heightFix" />
+            <image src="/static/logo_full_v2.png" class="sidebar-logo awd-brand-logo" mode="heightFix" />
         </view>
 
         <view class="user-card">
@@ -31,7 +33,6 @@
               </view>
             </view>
             <text class="user-name">{{ userDisplayName }}</text>
-            <text class="user-handle">@{{ username || 'user' }}</text>
             <view class="user-role-tag">
               <text class="role-text">{{ $t('account.standardUserRole') }}</text>
             </view>
@@ -140,7 +141,6 @@ export default {
   data() {
     return {
       userDisplayName: this.$t('account.defaultUserName'),
-      username: '',
       userAvatarUrl: '',
       busy: false,
       busyText: this.$t('account.busyOpeningProject'),
@@ -153,8 +153,7 @@ export default {
   onLoad(query) {
     const user = getCurrentUser()
     if (user) {
-      this.userDisplayName = user.displayName || user.username || this.$t('account.defaultUserName')
-      this.username = user.username
+      this.userDisplayName = user.displayName || this.$t('account.defaultUserName')
       this.userAvatarUrl = user.avatarUrl
     }
     // 应用菜单「新建项目文件夹…」跳入时自动拉起流程
@@ -227,12 +226,13 @@ export default {
         const res = await createProject({ projectType: 'BLANK', name: this.blankName })
         const projectId = res && res.id
         uni.showToast({ title: this.$t('account.projectCreateSuccess'), icon: 'success' })
+        // busy 一直保持到 reLaunch 真把页面带走：请求返回到跳转之间还有 500ms，
+        // 这段时间里放开按钮，再点一下就会用同一个名字再建一个空白项目
         setTimeout(() => {
           uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${projectId}` })
         }, 500)
       } catch (err) {
         uni.showToast({ title: (err && err.message) || this.$t('account.createProjectFailed'), icon: 'none' })
-      } finally {
         this.busy = false
       }
     },
@@ -242,21 +242,12 @@ export default {
 
 <style lang="scss" scoped>
 /* 品牌配色变量 - AI WorkDeck Palette */
-$brand-primary: #1A5336; /* Forest Green */
-$brand-accent: #5BD197;  /* Mint Green */
 $brand-dark: #212629;    /* Dark BG */
-$brand-bg: #F8F9FA;      /* Gray-Pale */
-$brand-white: #FFFFFF;
-$text-main: #2C3338;     /* Gray-Dark */
-$text-secondary: #6C757D;/* Gray-Medium */
-$text-light: #ADB5BD;
-$border-color: #E9ECEF;  /* Gray-Light */
-$danger-color: #E74C3C;
 
 .page-new-project {
   min-height: 100vh;
   /* Subtle Gradient Background */
-  background: linear-gradient(135deg, #F8F9FA 0%, #E8F3ED 100%);
+  background: linear-gradient(135deg, var(--awd-bg) 0%, var(--awd-accent-soft) 100%);
   padding: 40px 24px;
   box-sizing: border-box;
 }
@@ -292,7 +283,7 @@ $danger-color: #E74C3C;
 }
 
 .user-card {
-  background: $brand-white;
+  background: var(--awd-surface);
   border-radius: 16px;
   box-shadow: 0 4px 16px rgba(18, 52, 77, 0.05);
   overflow: hidden;
@@ -304,7 +295,7 @@ $danger-color: #E74C3C;
 .card-gold-accent {
   height: 4px;
   width: 100%;
-  background: $brand-primary;
+  background: var(--awd-accent);
 }
 
 .user-profile-main {
@@ -312,7 +303,7 @@ $danger-color: #E74C3C;
   flex-direction: column;
   align-items: center;
   padding: 32px 24px;
-  border-bottom: 1px solid $border-color;
+  border-bottom: 1px solid var(--awd-border);
 }
 
 .user-avatar-wrapper {
@@ -321,7 +312,7 @@ $danger-color: #E74C3C;
   border-radius: 50%;
   overflow: hidden;
   margin-bottom: 16px;
-  background-color: #eef2f5;
+  background-color: var(--awd-bg);
   box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
 
@@ -341,33 +332,28 @@ $danger-color: #E74C3C;
 
 .avatar-text {
   font-size: 32px;
-  color: #fff;
+  color: var(--awd-text-on-accent);
   font-weight: 500;
 }
 
 .user-name {
   font-size: 20px;
   font-weight: 600;
-  color: $text-main;
-  margin-bottom: 4px;
-}
-
-.user-handle {
-  font-size: 14px;
-  color: $text-secondary;
+  color: var(--awd-text);
+  /* 12px 原本由 @username 那一行的下边距提供，那行随「用户名不当名字显示」去掉了 */
   margin-bottom: 12px;
 }
 
 .user-role-tag {
-  background: rgba(26, 83, 54, 0.08); /* Forest Light */
+  background: var(--awd-accent-soft); /* Forest Light */
   padding: 4px 12px;
   border-radius: 4px;
-  border: 1px solid rgba(26, 83, 54, 0.1);
+  border: 1px solid var(--awd-accent-soft);
 }
 
 .role-text {
   font-size: 12px;
-  color: $brand-primary;
+  color: var(--awd-accent-text);
   font-weight: 500;
 }
 
@@ -384,18 +370,18 @@ $danger-color: #E74C3C;
   transition: background 0.2s;
 
   &:hover {
-    background-color: #F8F9FA;
+    background-color: var(--awd-bg);
   }
 }
 
 .action-text {
   font-size: 14px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
 }
 
 .action-arrow {
   font-size: 18px;
-  color: $text-light;
+  color: var(--awd-text-3);
   font-family: monospace;
 }
 
@@ -415,17 +401,17 @@ $danger-color: #E74C3C;
     display: block;
     font-size: 24px;
     font-weight: 600;
-    color: $text-main;
+    color: var(--awd-text);
     margin-bottom: 8px;
 }
 
 .content-subtitle {
     font-size: 14px;
-    color: $text-secondary;
+    color: var(--awd-text-2);
 }
 
 .project-form-card {
-  background: $brand-white;
+  background: var(--awd-surface);
   border-radius: 16px;
   padding: 24px;
   box-shadow: 0 4px 20px rgba(18, 52, 77, 0.04);
@@ -437,7 +423,7 @@ $danger-color: #E74C3C;
   align-items: center;
   justify-content: space-between;
   padding: 20px;
-  border: 1px solid $border-color;
+  border: 1px solid var(--awd-border);
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s;
@@ -447,8 +433,8 @@ $danger-color: #E74C3C;
   }
 
   &:hover {
-    border-color: $brand-primary;
-    background: rgba(91, 209, 151, 0.05);
+    border-color: var(--awd-accent);
+    background: var(--awd-accent-wash);
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(26, 83, 54, 0.08);
   }
@@ -469,17 +455,17 @@ $danger-color: #E74C3C;
 .ide-action-title {
   font-size: 16px;
   font-weight: 600;
-  color: $text-main;
+  color: var(--awd-text);
 }
 
 .ide-action-desc {
   font-size: 13px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
 }
 
 .ide-action-arrow {
   font-size: 22px;
-  color: $text-light;
+  color: var(--awd-text-3);
   font-family: monospace;
   margin-left: 16px;
 }
@@ -488,13 +474,13 @@ $danger-color: #E74C3C;
   margin-top: 16px;
   text-align: center;
   font-size: 13px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
 }
 
 .ide-web-hint {
   margin-top: 16px;
   font-size: 12px;
-  color: $text-light;
+  color: var(--awd-text-3);
 }
 
 /* 浏览器降级表单 */
@@ -516,11 +502,11 @@ $danger-color: #E74C3C;
   margin-bottom: 10px;
   font-size: 14px;
   font-weight: 500;
-  color: $text-main;
+  color: var(--awd-text);
 }
 
 .required-mark {
-  color: $danger-color;
+  color: var(--awd-danger-text);
   margin-left: 4px;
   font-size: 16px;
 }
@@ -532,23 +518,23 @@ $danger-color: #E74C3C;
 
 .input {
   height: 48px;
-  background-color: #fff;
-  border: 1px solid $border-color;
+  background-color: var(--awd-surface);
+  border: 1px solid var(--awd-border);
   border-radius: 8px;
   padding: 0 16px;
   font-size: 15px;
-  color: $text-main;
+  color: var(--awd-text);
   transition: all 0.2s;
   box-sizing: border-box;
   width: 100%;
 }
 
 .input:hover {
-  border-color: #bbb;
+  border-color: var(--awd-border-strong);
 }
 
 .input:focus {
-  border-color: $brand-primary;
+  border-color: var(--awd-accent);
   box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
   outline: none;
 }
@@ -558,7 +544,7 @@ $danger-color: #E74C3C;
   gap: 16px;
   margin-top: 40px;
   padding-top: 24px;
-  border-top: 1px solid #f5f5f5;
+  border-top: 1px solid var(--awd-border-subtle);
   max-width: 600px;
 }
 
@@ -577,23 +563,23 @@ $danger-color: #E74C3C;
 }
 
 .btn-cancel {
-    background: #f5f5f5;
-    color: $text-secondary;
+    background: var(--awd-surface-2);
+    color: var(--awd-text-2);
     flex: 1;
 
     &:hover {
-        background: #e0e0e0;
+        background: var(--awd-surface-3);
     }
 }
 
 .btn-create {
-  background-color: $brand-primary;
-  color: #fff;
+  background-color: var(--awd-accent);
+  color: var(--awd-text-on-accent);
   flex: 2;
   box-shadow: 0 4px 12px rgba(26, 83, 54, 0.2);
 
   &:hover {
-    background-color: lighten($brand-primary, 5%);
+    background-color: var(--awd-accent-hover);
     box-shadow: 0 6px 16px rgba(26, 83, 54, 0.3);
     transform: translateY(-1px);
   }
@@ -604,8 +590,8 @@ $danger-color: #E74C3C;
 }
 
 .btn-create[disabled] {
-  background-color: #E0E0E0;
-  color: #999;
+  background-color: var(--awd-surface-3);
+  color: var(--awd-text-3);
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
@@ -615,7 +601,7 @@ $danger-color: #E74C3C;
 .naming-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--awd-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -625,7 +611,7 @@ $danger-color: #E74C3C;
 .naming-dialog {
   width: 420px;
   max-width: calc(100vw - 48px);
-  background: #fff;
+  background: var(--awd-surface);
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
@@ -636,13 +622,13 @@ $danger-color: #E74C3C;
 .naming-title {
   font-size: 17px;
   font-weight: 600;
-  color: $text-main;
+  color: var(--awd-text);
   margin-bottom: 8px;
 }
 
 .naming-location {
   font-size: 12px;
-  color: $text-secondary;
+  color: var(--awd-text-2);
   margin-bottom: 16px;
   word-break: break-all;
 }
