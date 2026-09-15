@@ -114,8 +114,16 @@ public class CloudSyncService {
         this.projectRepository = projectRepository;
     }
 
-    /** CONFLICT（Task 9）：被拒后自动合并遇到冲突，仓库停在 MERGING 等裁决（同云端更新的冲突窗口）。 */
-    public enum UploadStatus { UPLOADED, REMOTE_AHEAD, OFFLINE_PENDING, NOT_LINKED, CONFLICT }
+    /**
+     * CONFLICT（Task 9）：被拒后自动合并遇到冲突，仓库停在 MERGING 等裁决（同云端更新的冲突窗口）。
+     *
+     * <p>NOTHING_TO_SUBMIT（dev-board 0.44.1 清单 B3）：这次 push 一个字节都没送出去
+     * （主线与案件库本来就一样），而本机还有一段没收尾的活——那段活还在工作段分支上，
+     * 还没收成任何一版，所以确实没有可交的东西。**没有复用 REMOTE_AHEAD**：它的语义是
+     * 「案件库比我新」，与这里「两边一模一样」正相反，而 cloudStatus 的 remoteAhead 标志、
+     * 前端三步清单的第 ② 步都跟着那个词走，混用会让三处对同一个字说不同的话。
+     */
+    public enum UploadStatus { UPLOADED, REMOTE_AHEAD, OFFLINE_PENDING, NOT_LINKED, CONFLICT, NOTHING_TO_SUBMIT }
 
     /** affectedFileIds：前台上传触发自动整合时，整合改写的文件 id（重载链用）；其余路径恒空列表。 */
     public record UploadResult(UploadStatus status, String message, List<Long> affectedFileIds) {
@@ -462,6 +470,14 @@ public class CloudSyncService {
      *
      * background 没有真实用户上下文，前台自动合并需要的提交作者身份
      * 用当前云端连接的账号名兜底（conn 在这条路径上总是在场——远端已绑定才走得到这里）。
+     *
+     * <p>「推成功」还要再分一次真假（dev-board 0.44.1 清单 B3）：
+     * {@code PushOutcome.pushed()} 把 git 的 OK 与 UP_TO_DATE 归成同一档，而手头有一段
+     * 没收尾的活时主线一动没动（那次编辑还在工作段分支上），推上去的就是 UP_TO_DATE——
+     * 一个字节都没送出去。这一档回 {@link UploadStatus#NOTHING_TO_SUBMIT}，两条路都不能走：
+     * 不许报 UPLOADED（界面会弹一句「已交稿」而什么都没交），也不许动
+     * pendingUpload/lastSyncSha（这次没有发生任何同步）。前端的三步清单本该在点下去
+     * 之前就拦住（#848），这一档是它漏拦之后唯一的兜底。
      */
     public UploadResult uploadToCloud(long projectId, boolean background) {
         ReentrantLock lock = sessionService.repoLock(projectId);
@@ -477,11 +493,31 @@ public class CloudSyncService {
                 return new UploadResult(UploadStatus.REMOTE_AHEAD, LangText.of("请先把等你做选择的文件处理完", "Please finish choosing your files first"));
             }
             try {
+                // 推之前先记下「这次推得出去东西吗」：主线与本机已知的 origin/master 相同时，
+                // git 只会回一句 UP_TO_DATE，一个字节都没送出去。**必须在 push 之前读**——
+                // 那次 push 自己就会把 refs/remotes/origin/master 更新掉（file:// 与 http
+                // 都一样，探针实测），推完再读就永远相等，每次交稿都会被误判成「没东西可交」。
+                String mainSha = repoService.resolveRef(projectId, repoService.mainBranch());
+                boolean deliversNothing = mainSha != null
+                        && mainSha.equals(repoService.originMasterSha(projectId));
                 ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
                         projectId, conn.getUsername(), conn.getDeviceToken());
                 if (out.pushed()) {
+                    // 什么都没送出去、而本机还有一段没收尾的活：那段活还在工作段分支上，
+                    // 一版都没收成，所以确实没有可交的东西。报 UPLOADED 就是把「什么都
+                    // 没交」说成「已交稿」（dev-board 0.44.1 清单 B3 真机实测到的那一句）。
+                    // 也不许动 pendingUpload / lastSyncSha：这次根本没有同步发生，清掉黄灯
+                    // 等于替律师宣布都交上去了；置上黄灯同样不对——没有哪一次交稿被拒。
+                    //
+                    // 不为此跳过 push：那一次 push 的 refspec 里还带着里程碑标签，主线没动
+                    // 但律师刚给某一版起了名字时，跳过就等于把这个名字永远留在本机。
+                    if (deliversNothing && sessionService.activeSession(projectId).isPresent()) {
+                        return new UploadResult(UploadStatus.NOTHING_TO_SUBMIT, LangText.of(
+                                "手头这段工作还没结束，还没有可以交的版。先结束本次工作，再交稿。",
+                                "Your current work session isn't wrapped into a version yet, so there's nothing to submit. End this work session first, then submit."));
+                    }
                     remote.setPendingUpload(false);
-                    remote.setLastSyncSha(repoService.resolveRef(projectId, repoService.mainBranch()));
+                    remote.setLastSyncSha(mainSha);
                     remoteRepository.save(remote);
                     return new UploadResult(UploadStatus.UPLOADED, null);
                 }

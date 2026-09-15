@@ -298,13 +298,13 @@
 <script>
 import {
   getVersionHistory, getVersionCompare, getVersionChanges, getCloudEvents,
-  getProjectFiles, uploadToCloud, updateFromCloud, enableVersionControl,
+  getProjectFiles, uploadToCloud, updateFromCloud, enableVersionControl, getVersionStatus,
 } from '@/services/api.js'
 import { layoutGraph, laneCountOf } from '@/utils/historyGraph.js'
 import { mergeHistoryRows, groupRowsByDay, eventRowText, comparePaneState } from '@/utils/historyRows.js'
 import { historyMergeLines, resolutionLine } from '@/utils/historyMerges.js'
 import { createVersionActions } from '@/composables/useVersionActions.js'
-import { submitGuideSteps } from '@/utils/submitGuide.js'
+import { submitNeedsGuide } from '@/utils/submitGuide.js'
 import { roleLabel } from '@/config/memberRoles.js'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdDatePicker from '@/components/AwdDatePicker.vue'
@@ -952,15 +952,22 @@ export default {
     // （CONFLICT 送去裁决现场、被拒后自动整合过的文件要走重载链）。
     async onSubmitDraft() {
       if (this.busy) return
-      // 手头的活没收尾、或者案件库已经被推进过：先摆三步清单，别让后端那句
-      // REMOTE_AHEAD 打发人（dev-board#645）。判据是页面传下来的缓存快照，判漏了
-      // 仍旧走下面这条老路，后端那句话原样兜底。
-      if (!submitGuideSteps({ working: this.working, ...(this.cloud || {}) }).canSubmit) {
-        this.$emit('submit-guide')
-        return
-      }
       this.busy = true
       try {
+        // 手头的活没收尾、或者案件库已经被推进过：先摆三步清单（dev-board#645）。
+        // 判据由 submitNeedsGuide 现读一次 /version/status——页面递下来的那份 working
+        // 不会因为律师刚才的编辑而刷新，而「工作中」直接交并不会被后端拒掉
+        // （主线一动没动，git 回 UP_TO_DATE 算成功，界面弹「已交稿」却什么都没交，
+        // dev-board 0.44.1 清单 B3）。
+        if (await submitNeedsGuide({
+          projectId: this.projectId,
+          working: this.working,
+          cloud: this.cloud,
+          readStatus: getVersionStatus,
+        })) {
+          this.$emit('submit-guide')
+          return
+        }
         const res = await uploadToCloud(this.projectId)
         const d = (res && res.data) || {}
         if (d.status === 'UPLOADED') {
@@ -969,6 +976,11 @@ export default {
           if (ids.length) this.$emit('reload-files', ids)
         } else if (d.status === 'CONFLICT') {
           this.$emit('conflict')
+        } else if (d.status === 'NOTHING_TO_SUBMIT') {
+          // 现读漏拦了（读失败退回快照、或读完到推之间才开的工作段）：这次什么都没交，
+          // 别弹「已交稿」，把三步清单摆出来（口径同 CollabDialog.onUpload）。
+          uni.showToast({ title: d.message || this.$t('version.submitGuideOneLeft'), icon: 'none' })
+          this.$emit('submit-guide')
         } else {
           uni.showToast({ title: d.message || this.$t('version.submitFailedNotice'), icon: 'none' })
         }

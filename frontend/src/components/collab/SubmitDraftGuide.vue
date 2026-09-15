@@ -9,8 +9,9 @@
 
   三处交稿入口（提交历史工具栏 / 协作抽屉 / 底部状态条那一格通往的抽屉）共用
   project-overview 上挂的这一个实例：三份各自判断必然走散，而判错的后果是律师看到
-  一句他看不懂的后端错误。后端那句 REMOTE_AHEAD 仍留着兜底（前端状态是缓存快照，
-  可能已经陈旧），正常路径不再走到它。
+  一句他看不懂的后端错误。后端那两句（REMOTE_AHEAD / NOTHING_TO_SUBMIT）仍留着兜底
+  ——前端的判据是现读一次 /version/status，但仍可能漏（读失败退回快照、或读完到推之间
+  才开的工作段），漏了就靠后端那一句；正常路径不再走到它们。
 
   mode='help' 是同一个弹窗的说明模式（协作抽屉里那个「这套协作怎么用」链接）：
   只摊开折叠区，不摆步骤——他此刻并没有在交稿，摆一排按钮等于把说明变成了操作。
@@ -145,10 +146,16 @@ export default {
       this.sessionName = ''
       this.expanded = this.mode === 'help'
       this.busy = false
+      if (this.mode === 'help') return
       // 先用页面递过来的快照把清单画出来（便宜、立刻有结果），再走一次联网重读。
       // cloudStatus 是不联网的本地快照，同事可能几小时前就交了新稿而本机还显示
       // 「一致」——那会让这张清单把「先取回」那一步整个漏掉（口径见 fetchCollabState）。
-      if (this.mode !== 'help') this.refresh({ online: true })
+      //
+      // 重读落地之前先 busy 把三个按钮压住（dev-board 0.44.1 清单 B3）：页面那份 working 不会
+      // 因为律师刚才的编辑而刷新，所以开窗第一帧很可能画成「可以交稿了」、第 ③ 步
+      // 还是个可点的主按钮——那一下点下去就是一次什么都没交的空交稿。
+      this.busy = true
+      this.refresh({ online: true }).finally(() => { this.busy = false })
     },
   },
   methods: {
@@ -270,8 +277,10 @@ export default {
           this.$emit('changed')
           this.$emit('conflict')
         } else {
-          // 判据是本机的缓存快照，可能已经陈旧（比如刚刚同事又交了一版）：后端那句
-          // REMOTE_AHEAD 就是这条路的兜底，原样说给律师听，再重读一次状态刷新清单。
+          // 判据可能已经陈旧（比如刚刚同事又交了一版、或者这一步点下去之前又开了一段
+          // 活）：后端那句 REMOTE_AHEAD / NOTHING_TO_SUBMIT 就是这条路的兜底，**原样**
+          // 说给律师听，再重读一次状态把清单上的勾刷新。本档不许自己拼文案：后端那句
+          // 才知道到底是「先取回」还是「先结束本次工作」。
           uni.showToast({ title: d.message || this.$t('version.submitFailedNotice'), icon: 'none' })
           await this.refresh()
         }
