@@ -3,7 +3,7 @@
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 
 // Observe rendered height, rather than traversing every historical token/tool result.
-export function useChatReadingPosition(listRef, contentRef) {
+export function useChatReadingPosition(listRef, contentRef, onViewportChange = () => {}) {
   const followLatest = ref(true)
   let observer
   let disposed = false
@@ -27,16 +27,35 @@ export function useChatReadingPosition(listRef, contentRef) {
     if (list.scrollTop < lastTop - 1) followLatest.value = false
     else if (distance <= 48) followLatest.value = true
     lastTop = list.scrollTop
+    onViewportChange()
   }
-  const navigateToMessage = ({ index, target = 'turn' }) => {
+  // Jumping and the "is it on screen" test must resolve the same element, or the locator
+  // bar can measure one card and scroll to another.
+  const locate = ({ index, target = 'turn' }) => {
     const list = element(listRef)
     const row = list?.querySelector(`[data-message-index="${Number(index)}"]`)
-    if (!row) return
+    if (!row) return null
     const selector = target === 'answer' ? '[data-chat-answer]' : target === 'attention' ? '[data-chat-attention]' : null
-    const destination = (selector && row.querySelector(selector)) || row
+    return { list, destination: (selector && row.querySelector(selector)) || row }
+  }
+  const navigateToMessage = ({ index, target = 'turn' }) => {
+    const found = locate({ index, target })
+    if (!found) return null
     followLatest.value = false
-    list.scrollTop += destination.getBoundingClientRect().top - list.getBoundingClientRect().top - 12
-    lastTop = list.scrollTop
+    found.list.scrollTop += found.destination.getBoundingClientRect().top - found.list.getBoundingClientRect().top - 12
+    lastTop = found.list.scrollTop
+    onViewportChange()
+    return found.destination
+  }
+  // Only report "off screen" when it was actually measured: a row that has not rendered
+  // yet is not proof the user lost sight of it, and claiming so flashes the bar on every
+  // freshly arrived card.
+  const isMessageOffscreen = ({ index, target = 'turn' }) => {
+    const found = locate({ index, target })
+    if (!found) return false
+    const view = found.list.getBoundingClientRect()
+    const rect = found.destination.getBoundingClientRect()
+    return rect.top >= view.bottom || rect.bottom <= view.top
   }
   watch([listRef, contentRef], () => {
     observer?.disconnect()
@@ -44,12 +63,12 @@ export function useChatReadingPosition(listRef, contentRef) {
     const content = element(contentRef)
     if (!list || !content) return
     if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(() => { if (followLatest.value) scrollToBottom() })
+      observer = new ResizeObserver(() => { if (followLatest.value) scrollToBottom(); onViewportChange() })
       observer.observe(list)
       observer.observe(content)
     }
     if (followLatest.value) scrollToBottom()
   }, { flush: 'post' })
   onBeforeUnmount(() => { disposed = true; observer?.disconnect() })
-  return { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage }
+  return { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage, isMessageOffscreen }
 }

@@ -305,8 +305,11 @@
       </view>
       </view>
     </div>
-    <view v-if="bubbles.length && !followLatest" class="return-to-latest">
-      <button @click="scrollToBottom">{{ $t('chat.activityBackToLatest') }} ↓</button>
+    <view v-if="bubbles.length && (attentionNotice || !followLatest)" class="return-to-latest">
+      <view class="locator-row">
+        <button v-if="attentionNotice" class="attention-locator" @click="jumpToAttention">{{ $t(attentionNotice.key, { n: attentionNotice.n }) }}</button>
+        <button v-if="!followLatest" class="back-to-latest" @click="scrollToBottom">{{ $t('chat.activityBackToLatest') }} ↓</button>
+      </view>
     </view>
 
     <!-- 3. Integrated Empty & Input Layout -->
@@ -712,7 +715,7 @@
 
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
-import { buildChatTurns, isPlanSnapshotCall, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
+import { buildChatTurns, isPlanSnapshotCall, pendingAttention, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
 import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import AgentInbox from './AgentInbox.vue'
@@ -936,7 +939,33 @@ export default {
     const chatTurns = computed(() => buildChatTurns(bubbles.value, {
       isStreaming: isStreaming.value, runStatus: agentRunStatus.value
     }))
-    const { followLatest, handleMessageScroll, scrollToBottom } = useChatReadingPosition(messageList, messageContent)
+    // 待处理定位条：长会话里反问卡/审批卡会被滚出视野，用户既看不见也回不去（#663）。
+    // 只在「确实测量到它不在可视区」时出现——看得见的卡再挂一条提示只是噪音。
+    const attentionTarget = computed(() => pendingAttention(chatTurns.value))
+    const attentionOffscreen = ref(false)
+    const syncAttentionLocator = () => {
+      const target = attentionTarget.value
+      // 贴着底读就一定看得见这张卡（它恒是最后一条）——历史回灌那一帧 DOM 已渲染、
+      // 自动贴底还没执行，不挡住的话浮条会闪一下再自己消失。
+      attentionOffscreen.value = !followLatest.value && !!target && isMessageOffscreen({ index: target.index, target: 'attention' })
+    }
+    const { followLatest, handleMessageScroll, scrollToBottom, navigateToMessage, isMessageOffscreen } =
+      useChatReadingPosition(messageList, messageContent, () => syncAttentionLocator())
+    watch(attentionTarget, syncAttentionLocator, { flush: 'post' })
+    const attentionNotice = computed(() => {
+      const target = attentionOffscreen.value ? attentionTarget.value : null
+      if (!target) return null
+      return { index: target.index, key: target.kind === 'question' ? 'chat.attentionLocatorQuestion' : 'chat.attentionLocatorApproval', n: target.count }
+    })
+    const jumpToAttention = () => {
+      const notice = attentionNotice.value
+      const card = notice && navigateToMessage({ index: notice.index, target: 'attention' })
+      if (!card) return
+      // 滚到位还不够：长会话里卡片和周围的正文长得一样，不闪一下用户仍要自己找。
+      card.classList.add('chat-attention-flash')
+      setTimeout(() => card.classList.remove('chat-attention-flash'), 1600)
+      syncAttentionLocator()
+    }
     watch(currentConversationId, () => { followLatest.value = true })
 
     const isDragging = ref(false)
@@ -2596,7 +2625,7 @@ export default {
        handleInboxSendNow,
        tokenUsage,
        messageList, messageContent, chatTurns,
-       followLatest, handleMessageScroll, scrollToBottom,
+       followLatest, handleMessageScroll, scrollToBottom, attentionNotice, jumpToAttention,
        isDragging,
        contextFiles,
        pastedImages,
@@ -2915,11 +2944,16 @@ export default {
 .conversation-turn { margin-bottom: 18px; }
 .return-to-latest button::after { border: 0; }
 .return-to-latest { position: relative; flex-shrink: 0; height: 0; z-index: 5; }
-.return-to-latest button {
+.return-to-latest .locator-row {
   position: absolute;
   bottom: 10px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.return-to-latest button {
   border: 1px solid var(--awd-border);
   border-radius: 20px;
   padding: 5px 14px;
@@ -2930,6 +2964,11 @@ export default {
   line-height: 1.6;
   white-space: nowrap;
   cursor: pointer;
+}
+.return-to-latest button.attention-locator {
+  border-color: var(--awd-warning);
+  color: var(--awd-warning-text);
+  background: var(--awd-warning-soft);
 }
 .message-row {
   margin-bottom: 14px;

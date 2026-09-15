@@ -403,4 +403,20 @@ function isApprovalPending(art) {
   font-weight: 600;
   color: var(--awd-text);
 }
+
+/* 定位条跳过来之后的短暂高亮（ChatInterface.jumpToAttention 挂/摘这个 class）。
+   样式留在本文件：带 data-chat-attention 的两处（审批卡外壳、QuestionCard 根节点）
+   都由本组件模板渲染，父组件的 scoped 选择器匹配不到它们。 */
+.chat-attention-flash {
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px var(--awd-warning);
+  animation: awd-attention-flash 1.4s ease-out;
+}
+@keyframes awd-attention-flash {
+  from { box-shadow: 0 0 0 6px var(--awd-warning-soft), 0 0 0 2px var(--awd-warning); }
+  to { box-shadow: 0 0 0 2px var(--awd-warning); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-attention-flash { animation: none; }
+}
 </style>
