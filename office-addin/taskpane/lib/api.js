@@ -672,6 +672,10 @@ export async function createConversation({ serverUrl, token }, projectId) {
 
 /**
  * 发送一条对话消息（后端异步 200，回复经 SSE 推送）。
+ *
+ * 失败时抛出的 Error 带 `status`（HTTP 状态码）——调用方据它区分「这条会话已经死了、
+ * 换一条就能继续」（403/404）与其余真故障。会话归属校验在 connect 与 chat 两条路上
+ * 是同一个 canUseConversation，所以两边必须能做同样的自愈判断（dev-board#715）。
  */
 export async function postChat({ serverUrl, token }, payload) {
   const base = normalizeBaseUrl(serverUrl)
@@ -685,7 +689,11 @@ export async function postChat({ serverUrl, token }, payload) {
   } catch (e) {
     throw new Error(t('apiChatUnreachable'))
   }
-  if (!resp.ok) throw new Error(t('apiChatFailedHttp', { status: resp.status }))
+  if (!resp.ok) {
+    const err = new Error(t('apiChatFailedHttp', { status: resp.status }))
+    err.status = resp.status
+    throw err
+  }
 }
 
 /**
