@@ -3438,84 +3438,90 @@ async function loadPptTextFrames(context) {
   return frames
 }
 
-/** 每个 command 的固定显示名（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐）
- *  按语言取字典（dev-board#150）：值来自 lib/i18n.js 的 cmd* key，随 currentLang 定死一次。 */
-export const COMMAND_DISPLAY_NAMES = {
-  get_text: t('cmdGetText'),
-  get_selection: t('cmdGetSelection'),
-  search: t('cmdSearch'),
-  replace_text: t('cmdReplaceText'),
-  replace_batch: t('cmdReplaceBatch'),
-  insert_text: t('cmdInsertText'),
-  add_comment: t('cmdAddComment'),
-  format_text: t('cmdFormatText'),
-  set_paragraph_format: t('cmdSetParagraphFormat'),
-  get_formatting: t('cmdGetFormatting'),
-  set_numbering: t('cmdSetNumbering'),
-  format_table: t('cmdFormatTable'),
-  apply_standard_format: t('cmdApplyStandardFormat'),
-  insert_table: t('cmdInsertTable'),
-  table_read: t('cmdTableRead'),
-  table_set_cell: t('cmdTableSetCell'),
-  table_add_row: t('cmdTableAddRow'),
-  table_delete_row: t('cmdTableDeleteRow'),
-  table_add_col: t('cmdTableAddCol'),
-  table_delete_col: t('cmdTableDeleteCol'),
-  insert_break: t('cmdInsertBreak'),
-  set_hyperlink: t('cmdSetHyperlink'),
-  edit_header_footer: t('cmdEditHeaderFooter'),
-  get_comments: t('cmdGetComments'),
-  reply_comment: t('cmdReplyComment'),
-  resolve_comment: t('cmdResolveComment'),
-  get_revisions: t('cmdGetRevisions'),
-  accept_revision: t('cmdAcceptRevision'),
-  reject_revision: t('cmdRejectRevision'),
-  insert_footnote: t('cmdInsertFootnote'),
-  insert_endnote: t('cmdInsertEndnote'),
-  insert_image: t('cmdInsertImage'),
-  apply_style: t('cmdApplyStyle'),
-  manage_content_control: t('cmdManageContentControl'),
-  set_document_properties: t('cmdSetDocumentProperties'),
-  excel_get_range: t('cmdExcelGetRange'),
-  excel_set_values: t('cmdExcelSetValues'),
-  excel_search: t('cmdExcelSearch'),
-  excel_format_cells: t('cmdExcelFormatCells'),
-  excel_set_borders: t('cmdExcelSetBorders'),
-  excel_edit_rows_cols: t('cmdExcelEditRowsCols'),
-  excel_merge_cells: t('cmdExcelMergeCells'),
-  excel_sort_range: t('cmdExcelSortRange'),
-  excel_manage_sheets: t('cmdExcelManageSheets'),
-  excel_freeze_panes: t('cmdExcelFreezePanes'),
-  excel_set_formulas: t('cmdExcelSetFormulas'),
-  excel_get_overview: t('cmdExcelGetOverview'),
-  excel_select_range: t('cmdExcelSelectRange'),
-  excel_set_autofilter: t('cmdExcelSetAutofilter'),
-  excel_conditional_format: t('cmdExcelConditionalFormat'),
-  excel_add_comment: t('cmdExcelAddComment'),
-  excel_get_comments: t('cmdExcelGetComments'),
-  excel_reply_comment: t('cmdExcelReplyComment'),
-  excel_resolve_comment: t('cmdExcelResolveComment'),
-  excel_delete_comment: t('cmdExcelDeleteComment'),
-  excel_set_data_validation: t('cmdExcelSetDataValidation'),
-  excel_add_chart: t('cmdExcelAddChart'),
-  excel_define_name: t('cmdExcelDefineName'),
-  excel_protect_sheet: t('cmdExcelProtectSheet'),
-  excel_group_rows_cols: t('cmdExcelGroupRowsCols'),
-  excel_add_pivot_table: t('cmdExcelAddPivotTable'),
-  ppt_get_slides: t('cmdPptGetSlides'),
-  ppt_replace_text: t('cmdPptReplaceText'),
-  ppt_format_text: t('cmdPptFormatText'),
-  ppt_add_slide: t('cmdPptAddSlide'),
-  ppt_delete_slide: t('cmdPptDeleteSlide'),
-  ppt_add_text_box: t('cmdPptAddTextBox'),
-  ppt_move_slide: t('cmdPptMoveSlide'),
-  ppt_add_shape: t('cmdPptAddShape'),
-  ppt_get_slide_details: t('cmdPptGetSlideDetails'),
-  ppt_delete_shape: t('cmdPptDeleteShape'),
-  ppt_add_table: t('cmdPptAddTable'),
-  ppt_table_read: t('cmdPptTableRead'),
-  ppt_table_set_cell: t('cmdPptTableSetCell'),
-  ppt_set_hyperlink: t('cmdPptSetHyperlink')
+/**
+ * 每个 command 的显示名 **i18n key**（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐）。
+ *
+ * 表里存的是 key 而不是翻好的字符串（dev-board#713）：此前这里是
+ * `get_text: t('cmdGetText')`，t() 在**模块加载那一刻**求值一次，此后用户点地球按钮
+ * 切语言，已经定死的名字再也不变——同一条会话里 Word 的 chip 是英文、Excel 的是中文，
+ * 正是这么来的。现在由 commandDisplayName() 在**每次渲染时**查字典。
+ */
+export const COMMAND_DISPLAY_KEYS = {
+  get_text: 'cmdGetText',
+  get_selection: 'cmdGetSelection',
+  search: 'cmdSearch',
+  replace_text: 'cmdReplaceText',
+  replace_batch: 'cmdReplaceBatch',
+  insert_text: 'cmdInsertText',
+  add_comment: 'cmdAddComment',
+  format_text: 'cmdFormatText',
+  set_paragraph_format: 'cmdSetParagraphFormat',
+  get_formatting: 'cmdGetFormatting',
+  set_numbering: 'cmdSetNumbering',
+  format_table: 'cmdFormatTable',
+  apply_standard_format: 'cmdApplyStandardFormat',
+  insert_table: 'cmdInsertTable',
+  table_read: 'cmdTableRead',
+  table_set_cell: 'cmdTableSetCell',
+  table_add_row: 'cmdTableAddRow',
+  table_delete_row: 'cmdTableDeleteRow',
+  table_add_col: 'cmdTableAddCol',
+  table_delete_col: 'cmdTableDeleteCol',
+  insert_break: 'cmdInsertBreak',
+  set_hyperlink: 'cmdSetHyperlink',
+  edit_header_footer: 'cmdEditHeaderFooter',
+  get_comments: 'cmdGetComments',
+  reply_comment: 'cmdReplyComment',
+  resolve_comment: 'cmdResolveComment',
+  get_revisions: 'cmdGetRevisions',
+  accept_revision: 'cmdAcceptRevision',
+  reject_revision: 'cmdRejectRevision',
+  insert_footnote: 'cmdInsertFootnote',
+  insert_endnote: 'cmdInsertEndnote',
+  insert_image: 'cmdInsertImage',
+  apply_style: 'cmdApplyStyle',
+  manage_content_control: 'cmdManageContentControl',
+  set_document_properties: 'cmdSetDocumentProperties',
+  excel_get_range: 'cmdExcelGetRange',
+  excel_set_values: 'cmdExcelSetValues',
+  excel_search: 'cmdExcelSearch',
+  excel_format_cells: 'cmdExcelFormatCells',
+  excel_set_borders: 'cmdExcelSetBorders',
+  excel_edit_rows_cols: 'cmdExcelEditRowsCols',
+  excel_merge_cells: 'cmdExcelMergeCells',
+  excel_sort_range: 'cmdExcelSortRange',
+  excel_manage_sheets: 'cmdExcelManageSheets',
+  excel_freeze_panes: 'cmdExcelFreezePanes',
+  excel_set_formulas: 'cmdExcelSetFormulas',
+  excel_get_overview: 'cmdExcelGetOverview',
+  excel_select_range: 'cmdExcelSelectRange',
+  excel_set_autofilter: 'cmdExcelSetAutofilter',
+  excel_conditional_format: 'cmdExcelConditionalFormat',
+  excel_add_comment: 'cmdExcelAddComment',
+  excel_get_comments: 'cmdExcelGetComments',
+  excel_reply_comment: 'cmdExcelReplyComment',
+  excel_resolve_comment: 'cmdExcelResolveComment',
+  excel_delete_comment: 'cmdExcelDeleteComment',
+  excel_set_data_validation: 'cmdExcelSetDataValidation',
+  excel_add_chart: 'cmdExcelAddChart',
+  excel_define_name: 'cmdExcelDefineName',
+  excel_protect_sheet: 'cmdExcelProtectSheet',
+  excel_group_rows_cols: 'cmdExcelGroupRowsCols',
+  excel_add_pivot_table: 'cmdExcelAddPivotTable',
+  ppt_get_slides: 'cmdPptGetSlides',
+  ppt_replace_text: 'cmdPptReplaceText',
+  ppt_format_text: 'cmdPptFormatText',
+  ppt_add_slide: 'cmdPptAddSlide',
+  ppt_delete_slide: 'cmdPptDeleteSlide',
+  ppt_add_text_box: 'cmdPptAddTextBox',
+  ppt_move_slide: 'cmdPptMoveSlide',
+  ppt_add_shape: 'cmdPptAddShape',
+  ppt_get_slide_details: 'cmdPptGetSlideDetails',
+  ppt_delete_shape: 'cmdPptDeleteShape',
+  ppt_add_table: 'cmdPptAddTable',
+  ppt_table_read: 'cmdPptTableRead',
+  ppt_table_set_cell: 'cmdPptTableSetCell',
+  ppt_set_hyperlink: 'cmdPptSetHyperlink'
 }
 
 /** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
@@ -3599,8 +3605,13 @@ const COMMAND_HOSTS = {
 
 const HOST_LABELS = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint' }
 
+/**
+ * chip 上的命令显示名。**每次调用都现查字典**，所以切换语言后（App.vue 以 :key 重挂载
+ * 整棵树，模板里的调用随之重新求值）已经渲染出来的 chip 也跟着换语言。
+ */
 export function commandDisplayName(command) {
-  return COMMAND_DISPLAY_NAMES[command] || t('cmdFallback', { command })
+  const key = COMMAND_DISPLAY_KEYS[command]
+  return key ? t(key) : t('cmdFallback', { command })
 }
 
 /**

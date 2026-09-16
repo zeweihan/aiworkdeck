@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { normalizeBaseUrl } from './settings.js'
-import { t } from './i18n.js'
+import { t, getLangTag } from './i18n.js'
 
 /**
  * 后端 REST 访问。鉴权统一走 X-Session-Id 请求头携带 awdt_ 设备令牌
@@ -13,8 +13,18 @@ import { t } from './i18n.js'
  * 服务端的「验证码错误或已过期」之类是用户唯一能据此改正的信息，必须透传（见 postAnonymous）。
  */
 
+/**
+ * 界面语言头（dev-board#713）。后端 AppLanguageRequestFilter 据它把这一次请求产出的
+ * 用户可见文案切成对应语言——云后端的 app.language 是全局单值、多租户下谁也不能去改它，
+ * 所以语言只能按请求声明。**每次调用都现取**（不是模块加载时定死一次）：
+ * 用户点地球按钮切语言后，下一条请求立刻是新语言。
+ */
+function langHeader() {
+  return { 'X-App-Language': getLangTag() }
+}
+
 function headers(token) {
-  return { 'Content-Type': 'application/json', 'X-Session-Id': token || '' }
+  return { 'Content-Type': 'application/json', 'X-Session-Id': token || '', ...langHeader() }
 }
 
 /**
@@ -173,7 +183,7 @@ export async function uploadRelayDocument({ serverUrl, token }, { bytes, fileNam
   const resp = await fetch(`${base}/api/mobile/media`, {
     method: 'POST',
     // multipart 边界由浏览器生成，不能手写 Content-Type
-    headers: { 'X-Session-Id': token || '' },
+    headers: { 'X-Session-Id': token || '', ...langHeader() },
     body: form
   })
   if (!resp.ok) throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
@@ -324,7 +334,8 @@ export async function uploadFileBytes({ serverUrl, token }, fileId, blob, totalS
         'Content-Type': 'application/octet-stream',
         'X-Session-Id': token || '',
         'X-File-Offset': '0',
-        'X-File-Total-Size': String(totalSize)
+        'X-File-Total-Size': String(totalSize),
+        ...langHeader()
       },
       body: blob
     })
@@ -519,7 +530,7 @@ async function postAnonymous(serverUrl, path, body) {
   try {
     resp = await fetch(`${base}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...langHeader() },
       body: JSON.stringify(body)
     })
   } catch (e) {
@@ -558,7 +569,7 @@ export async function postAwdkLogin({ serverUrl }, key) {
   try {
     resp = await fetch(`${base}/api/auth/awdk-login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...langHeader() },
       body: JSON.stringify({ key: (key || '').trim() })
     })
   } catch (e) {

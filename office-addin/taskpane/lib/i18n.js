@@ -7,8 +7,11 @@
  * Office.context.displayLanguage（Office 未就绪时 try/catch 吞掉），退回
  * navigator.language；'zh' 开头判中文，否则英文。
  * setLang() 可在运行时切换——字典查询走可变的 activeLang，界面由 App.vue 的
- * :key 重挂载让所有 t() 重新求值（officeExecutor 的 chip 名随模块加载定死一次，
- * 重开任务窗格才换，与 Office 显示语言变更的降级口径一致）。
+ * :key 重挂载让所有 t() 重新求值。
+ *
+ * **不许在模块顶层把 t() 的结果存进常量**（dev-board#713）：那等于把文案定死在加载那一刻，
+ * 切语言后再也不变。officeExecutor 的命令 chip 名踩过这颗雷（同一条会话里 Word 的 chip
+ * 是英文、Excel 的是中文），已改成存 i18n key、渲染时才查表。
  *
  * key 一律平铺，不分命名空间；带插值的串用 {name} 占位，t(key, {name: 'x'}) 替换。
  */
@@ -87,6 +90,8 @@ export const ZH = {
   quotaExhaustedNotice: '账户额度不足，本轮已中止。充值到账后重发这条消息即可继续。',
 
   // ---- App.vue：新建项目（dev-board#196）----
+  // 后端懒建的临时项目名（lib/projectName.js 按当前语言换掉库里存着的那个名字）
+  addinDefaultProjectName: '插件临时项目',
   newProjectOption: '+ 新建项目',
   newProjectTitle: '新建项目',
   newProjectPlaceholder: '项目名称，如「某某公司尽调」',
@@ -130,6 +135,8 @@ export const ZH = {
   // ---- ChatView.vue：消息气泡 ----
   thinkingProcess: '思考过程',
   toolFailedSuffix: '（失败）',
+  // 标点也要跟着语言走：英文界面里冒出一个全角「：」同样是界面语言不一致（AppSource 1100.7）
+  colon: '：',
   planLabel: '计划',
   proceedWithPlan: '按此计划推进',
   proposeChanges: '提出修改意见',
@@ -308,7 +315,7 @@ export const ZH = {
   conversationExpiredRetryFailed: '会话已失效：自动新建会话后重发仍未成功。请点击底部的「新对话」重新开始；若仍然失败，请检查网络连接或稍后再试。',
   conversationDenied: '当前会话无法继续：它可能属于另一台设备或另一个账户。请点击底部的「新对话」重新开始。',
 
-  // ---- lib/officeExecutor.js：工具活动 chip（COMMAND_DISPLAY_NAMES） ----
+  // ---- lib/officeExecutor.js：工具活动 chip（COMMAND_DISPLAY_KEYS） ----
   cmdGetText: '读取文档',
   cmdGetSelection: '读取选区',
   cmdSearch: '查找文本',
@@ -469,6 +476,7 @@ export const EN = {
   quotaExhaustedNotice: 'Your account is out of credit; this turn was stopped. Top up and resend this message to continue.',
 
   // ---- App.vue：新建项目（dev-board#196）----
+  addinDefaultProjectName: 'Plugin Temporary Project',
   newProjectOption: '+ New project',
   newProjectTitle: 'New project',
   newProjectPlaceholder: 'Project name, e.g. "Acme due diligence"',
@@ -513,6 +521,7 @@ export const EN = {
   // ---- ChatView.vue：消息气泡 ----
   thinkingProcess: 'Thinking',
   toolFailedSuffix: ' (failed)',
+  colon: ': ',
   planLabel: 'Plan',
   proceedWithPlan: 'Proceed with this plan',
   proposeChanges: 'Suggest changes',
@@ -688,7 +697,7 @@ export const EN = {
   conversationExpiredRetryFailed: 'This conversation is no longer valid, and resending it in a new conversation also failed. Tap "New chat" at the bottom to start over; if it keeps failing, check your network connection or try again later.',
   conversationDenied: 'This conversation cannot be continued: it may belong to another device or another account. Tap "New chat" at the bottom to start over.',
 
-  // ---- lib/officeExecutor.js：工具活动 chip（COMMAND_DISPLAY_NAMES） ----
+  // ---- lib/officeExecutor.js：工具活动 chip（COMMAND_DISPLAY_KEYS） ----
   cmdGetText: 'Read document',
   cmdGetSelection: 'Read selection',
   cmdSearch: 'Search text',
@@ -815,6 +824,18 @@ let activeLang = currentLang
 
 export function getLang() {
   return activeLang
+}
+
+/**
+ * 当前界面语言的 BCP-47 标签（zh-CN / en-US），随请求上送后端（X-App-Language 头 +
+ * chat 请求体的 appLanguage 字段）。后端 AppLanguageScope 据它选中英文 system prompt，
+ * 于是「界面英文 → 回答英文」（AppSource 政策 1100.7 的界面语言一致要求）。
+ *
+ * 值域刻意与后端 AppLanguageService 的 SUPPORTED 逐字对齐——两边各写一套形态
+ * （这边发 'en'、那边只认 'en-US'）会静默回落中文，不报错。
+ */
+export function getLangTag() {
+  return activeLang === 'zh' ? 'zh-CN' : 'en-US'
 }
 
 /**

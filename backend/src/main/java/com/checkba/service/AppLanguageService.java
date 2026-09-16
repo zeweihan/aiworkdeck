@@ -34,7 +34,16 @@ public class AppLanguageService {
         LangText.register(this);
     }
 
+    /**
+     * 生效语言。请求级覆盖（{@link AppLanguageScope}）优先于全局 system_setting——
+     * 多租户云后端上，Office/WPS 插件按请求声明自己的界面语言；桌面端不声明，
+     * 照旧读全局值，行为与覆盖层引入前逐字节一致。
+     */
     public String language() {
+        String scoped = AppLanguageScope.current();
+        if (scoped != null && SUPPORTED.contains(scoped)) {
+            return scoped;
+        }
         String v = settings.get(KEY, ZH_CN);
         // Set.of 的 contains(null) 会抛 NPE，先挡掉 null
         return v != null && SUPPORTED.contains(v) ? v : ZH_CN;

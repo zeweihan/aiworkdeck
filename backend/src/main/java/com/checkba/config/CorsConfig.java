@@ -109,7 +109,10 @@ public class CorsConfig {
             // 无 Origin 头（同源/curl）不受影响，正常处理。
 
             response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD");
-            response.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Session-Id, Cache-Control, Pragma, X-File-Offset, X-File-Total-Size");
+            // X-App-Language：客户端声明的界面语言（AppLanguageRequestFilter）。插件任务窗格
+            // 与后端同源时不触发预检，但私有部署可以把窗格与后端分域，漏了它整条链在那种
+            // 部署下会卡在预检上。
+            response.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Session-Id, X-App-Language, Cache-Control, Pragma, X-File-Offset, X-File-Total-Size");
             response.setHeader("Access-Control-Max-Age", "3600");
             response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-Suggested-Filename");
 

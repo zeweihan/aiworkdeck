@@ -11,14 +11,14 @@ import {
 import { createSseConnection, createTagStreamParser } from './sse.js'
 import {
   readActiveDocument, readDocumentMeta, detectHost, hashContent,
-  executeCommand, commandDisplayName, hostFamily
+  executeCommand, hostFamily
 } from './hostBridge.js'
 import {
   loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice,
   loadArchiveLinks
 } from './settings.js'
 import { isReadOnlyCommand, captureDocumentBytes, sha256Hex } from './docSnapshot.js'
-import { t } from './i18n.js'
+import { t, getLangTag } from './i18n.js'
 
 /**
  * 本窗格的宿主标签，用作会话 ID 存储键的一层作用域（settings.loadConversationId）。
@@ -1079,7 +1079,9 @@ async function handleClientAction(dataStr) {
   try { action = JSON.parse(dataStr) } catch (e) { return }
   if (!action || action.tool !== 'office_command' || !action.requestId) return
 
-  const chip = reactive({ label: commandDisplayName(action.command), status: 'running', error: '' })
+  // chip 上存的是 command 而不是翻好的 label（dev-board#713）：显示名由界面渲染时经
+  // commandDisplayName 现查，切语言后已经画出来的 chip 也跟着换。
+  const chip = reactive({ command: action.command, status: 'running', error: '' })
   const assistant = ensureAssistantBubble()
   if (!assistant.tools) assistant.tools = []
   assistant.tools.push(chip)
@@ -1285,7 +1287,12 @@ export async function send(overrideText) {
       // 不参与工具过滤，旧后端不认识该字段也无害
       clientCapability: 'office',
       officeHost: detectHost() || 'word',
-      officeFamily: hostFamily() === 'wps' ? 'wps' : 'office'
+      officeFamily: hostFamily() === 'wps' ? 'wps' : 'office',
+      // 本轮界面语言（dev-board#713）：后端据它选中/英文 system prompt，回答语言跟随界面。
+      // 必须随请求体走而不是只靠 X-App-Language 头——编排循环跑在池线程上，
+      // HTTP 线程上的语言作用域不跟着过去，而且请求体会被 AgentInbox 持久化，
+      // 排队/续跑的那一轮照样说对语言。旧后端不认识该字段，无害。
+      appLanguage: getLangTag()
     })
 
     try {

@@ -211,7 +211,7 @@ class AiAgentControllerTest {
             when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
             when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
 
-            ResponseEntity<?> resp = controller.startSession(req, "s");
+            ResponseEntity<?> resp = controller.startSession(req, "s", null);
 
             assertEquals(400, resp.getStatusCode().value());
             assertTrue(String.valueOf(resp.getBody()).contains("消息内容不能为空"), String.valueOf(resp.getBody()));
@@ -232,7 +232,7 @@ class AiAgentControllerTest {
             when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
             when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
 
-            ResponseEntity<?> resp = controller.startSession(req, "s");
+            ResponseEntity<?> resp = controller.startSession(req, "s", null);
 
             assertEquals(400, resp.getStatusCode().value());
             verify(agentOrchestrator, never()).handleUserMessage(any(), any());
@@ -262,7 +262,7 @@ class AiAgentControllerTest {
             when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
             when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
 
-            ResponseEntity<?> response = controller.startSession(req, "s");
+            ResponseEntity<?> response = controller.startSession(req, "s", null);
 
             assertEquals(200, response.getStatusCode().value());
             com.checkba.service.ai.AgentInboxService.Receipt receipt =
