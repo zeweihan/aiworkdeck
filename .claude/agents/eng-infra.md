@@ -210,6 +210,19 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    `moved (100,40)` 但热区被位图挡住、进不了进度卡——就是上面的 z 序地雷）、
    绿 https://github.com/zeweihan/aiworkdeck/actions/runs/33576754273 。
 
+6.5.7. **透明热区必须带 `WS_EX_TRANSPARENT`**（dev-board#706，回归点 PR#705/d0930497）：
+   `_AwdHotspot` 建的 SS_NOTIFY 空 STATIC 只管命中、不画东西，而 6.5.6 那句把背景位图
+   压到 z 序最底之后，位图的 `WS_CLIPSIBLINGS` 会把所有热区矩形从它的绘制区裁掉，
+   热区自己是 NULL 刷什么都不擦 → 真机上「立即安装」/条款链接/自定义安装开关/窗口按钮/
+   完成卡的「立即体验」与 ✕ 全是纯白方块（位图在热区之上时白块被盖住，所以压底才露馅）。
+   `WS_EX_TRANSPARENT` 让热区不参与下方兄弟的 WS_CLIPSIBLINGS 裁剪、且延后到它们画完再画，
+   位图就会把热区矩形也画上；对非 layered 子窗口不改变命中测试（nsDialogs 自己的
+   `NSD_CreateLabel` 用的就是这个 exstyle）。护栏：`installer-smoke.ps1` 的 `AssertPainted`
+   在 `01-welcome`/`05-done` 上逐热区验像素（绿块判白占比 < 10%、白底文字判非白像素数），
+   PR#705 的 run 33576754273 截图拿来复算全红、上一次 run 33480261799 全绿。
+   插件端没有「自定义安装」开关（不定义 `AWD_UI_DIR_CHOICE`，且窗口高度与桌面端一样是
+   760x500，分不出来），smoke 工作流给 addin 那一步传 `-NoDirChoice` 跳过那一格。
+
 6.6. **`dmg-builder` 补丁（`desktop/scripts/patch-dmg-builder.js` + package.json `postinstall`，安装器 UI 重设计新增）**：macOS 26.2+ 起 Finder 拒读 dmgbuild 写入 `.DS_Store` 的 `pBBk` 背景书签，导致桌面端主 DMG 背景不显示（electron-builder#9072 / dmgbuild#273，同版 Obsidian/Podman Desktop 同期中招）。`npm ci`/`npm install` 后自动对 `node_modules/dmg-builder/vendor/dmgbuild/core.py` 做定点补丁（跳过 Bookmark 生成，`icvp` 里的 alias 通道保留，老系统照常工作）。**升级 electron-builder 后若补丁脚本报「结构已变」**：先确认新版是否已自带该修复，再决定要不要删掉本补丁，不要盲目跳过。
 6.7. **安装包瘦身 P1（dev-board#528，规格 `docs/superpowers/specs/2026-09-09-installer-slimming-design.md`）**，四条新地雷：
    ① `prepare-backend.js` 拆包后调 `trim-driver-bundle.js` 把 Playwright `driver-bundle-*.jar` 重写成只含 `driver/<本平台>/`（mac-arm64 / win32_x64，字符串必须与 `DriverJar#platformDir` 逐字一致，161MB→31MB）；zip 条目级原样搬运不重压，找不到本平台目录直接抛错。

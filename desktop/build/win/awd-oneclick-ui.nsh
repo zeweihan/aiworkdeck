@@ -134,6 +134,9 @@ ManifestDPIAware true
 !ifndef WM_NCLBUTTONDOWN
   !define WM_NCLBUTTONDOWN 0x00A1
 !endif
+!ifndef WS_EX_TRANSPARENT
+  !define WS_EX_TRANSPARENT 0x00000020
+!endif
 ; WS_CAPTION（= WS_BORDER|WS_DLGFRAME）：初始化时剥掉，进度卡期间加回当拖动带
 !define AWDUI_WS_CAPTION 0x00C00000
 !define AWDUI_HTCAPTION 2
@@ -168,12 +171,27 @@ Var AwdDriveRoot  ; 目标盘根（如 "C:"），只为提示文案
 
 ; 透明点击热区：SS_NOTIFY 空文本 STATIC + NULL 背景刷（SetCtlColors transparent），
 ; 位图在其下方 z 序，视觉全靠位图、命中全靠热区。坐标是缩放后的像素。
+;
+; **`WS_EX_TRANSPARENT` 是契约的一部分，去掉就白块（dev-board#706，回归点 PR#705）**：
+; PR#705 为了拖动给背景位图加了 SS_NOTIFY，并在 nsDialogs::Show 之前把它
+; `SetWindowPos(HWND_BOTTOM)` 压到 z 序最底。位图带 WS_CLIPSIBLINGS，它的绘制区域会被
+; z 序在其之上的所有兄弟矩形裁掉——也就是这一批热区；而热区自己的背景刷是 NULL，
+; 什么都不擦，露出来的是 nsDialogs 对话框的白底（AwdWelcomeCreate 里
+; `SetCtlColors $AwdDialog "" 0xFFFFFF`）。结果就是「立即安装」「服务条款/隐私政策」
+; 「自定义安装」、右上角最小化/关闭、完成卡的「立即体验」和 ✕ 在真机上全变成纯白方块。
+; 位图压底之前热区在位图下面，白块被位图盖住，所以这坑到 PR#705 才露出来。
+; WS_EX_TRANSPARENT 正是 Win32 给「透明覆盖子窗口」的机制：带它的窗口延迟到其下方
+; 兄弟画完之后才画，且**不参与**下方兄弟的 WS_CLIPSIBLINGS 裁剪，位图会把热区矩形一起
+; 画上，热区自己什么都不擦，视觉就对了。它对非 layered 子窗口不改变命中测试
+; （热区带 SS_NOTIFY，仍返回 HTCLIENT），点击照旧落在热区上。
+; 回归护栏：installer-ui-smoke 的 installer-smoke.ps1 里 AssertPainted 逐个热区验像素
+;（品牌绿块的白占比、白底文字的非白像素数），同时原有流程照旧点遍所有热区。
 !macro _AwdHotspot outvar x y w h
   ${AwdPx} $R1 ${x}
   ${AwdPx} $R2 ${y}
   ${AwdPx} $R3 ${w}
   ${AwdPx} $R4 ${h}
-  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_NOTIFY} 0 $R1 $R2 $R3 $R4 ""
+  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_NOTIFY} ${WS_EX_TRANSPARENT} $R1 $R2 $R3 $R4 ""
   Pop ${outvar}
   SetCtlColors ${outvar} "" "transparent"
 !macroend
