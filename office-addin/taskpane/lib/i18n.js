@@ -310,6 +310,10 @@ export const ZH = {
   apiConversationIssueFailedHttp: '会话签发失败（HTTP {status}）',
   apiChatUnreachable: '后端不可达：消息未送出',
   apiChatFailedHttp: '对话请求失败（HTTP {status}）',
+  // 会话失效自愈（dev-board#715）：文案里不出现「登录/未授权/请先」三个子串（见 api.js 文件头）
+  conversationRenewedNotice: '原会话已失效，已自动新建一场会话并把这条消息重新发出。',
+  conversationExpiredRetryFailed: '会话已失效：自动新建会话后重发仍未成功。请点击底部的「新对话」重新开始；若仍然失败，请检查网络连接或稍后再试。',
+  conversationDenied: '当前会话无法继续：它可能属于另一台设备或另一个账户。请点击底部的「新对话」重新开始。',
 
   // ---- lib/officeExecutor.js：工具活动 chip（COMMAND_DISPLAY_KEYS） ----
   cmdGetText: '读取文档',
@@ -689,6 +693,9 @@ export const EN = {
   apiConversationIssueFailedHttp: 'Failed to issue conversation (HTTP {status})',
   apiChatUnreachable: 'Backend unreachable: message not sent',
   apiChatFailedHttp: 'Chat request failed (HTTP {status})',
+  conversationRenewedNotice: 'The previous conversation was no longer valid. A new one was started and this message was sent again.',
+  conversationExpiredRetryFailed: 'This conversation is no longer valid, and resending it in a new conversation also failed. Tap "New chat" at the bottom to start over; if it keeps failing, check your network connection or try again later.',
+  conversationDenied: 'This conversation cannot be continued: it may belong to another device or another account. Tap "New chat" at the bottom to start over.',
 
   // ---- lib/officeExecutor.js：工具活动 chip（COMMAND_DISPLAY_KEYS） ----
   cmdGetText: 'Read document',
