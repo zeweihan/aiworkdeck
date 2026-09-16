@@ -176,14 +176,14 @@ class WritingModelTransportTest {
             else assertNull(empty.tokenUsage());
         }
     }
-    @Test void boundedWritingDisablesQwenReasoningButPreservesNormalChatAndOtherModels() throws Exception {
+    @Test void boundedWritingDisablesOnlyVerifiedFlashReasoningAndPreservesOtherModels() throws Exception {
         serve();
-        for(String name:List.of("qwen/qwen3.7-flash","alibaba/test","openai/gpt-4o")) {
+        for(String name:List.of("qwen/qwen3.7-flash","qwen/qwen3.8-max-0902","qwen/qwen3.7-max","alibaba/test","openai/gpt-4o")) {
             var m=model(name,Duration.ofSeconds(2)); Collector bounded=new Collector();
             m.generateCancellable(List.of(UserMessage.from("synthetic")),512,bounded); bounded.await();
             var request=new ObjectMapper().readTree(body.get());
-            if(name.startsWith("openai/")) assertFalse(request.has("reasoning"));
-            else { assertTrue(request.has("reasoning")); assertFalse(request.path("reasoning").path("enabled").asBoolean(true)); }
+            if(name.equals("qwen/qwen3.7-flash")) { assertTrue(request.has("reasoning")); assertFalse(request.path("reasoning").path("enabled").asBoolean(true)); }
+            else assertFalse(request.has("reasoning"), "Unverified or mandatory-reasoning models retain defaults: " + name);
             Collector normal=new Collector(); m.generate(List.of(UserMessage.from("synthetic")),normal); normal.await();
             assertFalse(new ObjectMapper().readTree(body.get()).has("reasoning"));
         }

@@ -163,11 +163,9 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         if (explicitPromptCache) {
             body = markSystemForCaching(body);
         }
-        // Lightweight Qwen writing must not spend the entire small output budget on hidden reasoning.
-        // Other models and ordinary chat keep their existing provider behavior.
-        if (maxOutputTokens != null && modelName != null
-                && (modelName.toLowerCase(java.util.Locale.ROOT).startsWith("qwen/")
-                    || modelName.toLowerCase(java.util.Locale.ROOT).startsWith("alibaba/"))) {
+        // Verified Flash writing must not spend its small output budget on hidden reasoning.
+        // Other Qwen endpoints can require reasoning; leave every unverified model at its default.
+        if (maxOutputTokens != null && "qwen/qwen3.7-flash".equals(modelName)) {
             try {
                 ObjectNode writing = (ObjectNode) LENIENT.readTree(body);
                 writing.set("reasoning", LENIENT.createObjectNode().put("enabled", false));

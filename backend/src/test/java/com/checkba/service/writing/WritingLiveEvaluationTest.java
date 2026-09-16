@@ -52,7 +52,10 @@ class WritingLiveEvaluationTest {
             new Case("diligence-no-source",diligence,"法律意见书","本项目交易金额为","sentence",false,"")
         );
         ObjectMapper json=new ObjectMapper().findAndRegisterModules(); List<Map<String,Object>> report=new ArrayList<>();
+        String onlyCase=System.getenv().getOrDefault("WRITING_EVAL_CASE","");
+        assertTrue(onlyCase.isEmpty() || cases.stream().anyMatch(c -> c.name.equals(onlyCase)),"Unknown evaluation case");
         for(Case c:cases) {
+            if(!onlyCase.isEmpty() && !c.name.equals(onlyCase)) continue;
             var contexts=mock(WritingContextService.class); var models=mock(ChatModelFactory.class); var usage=mock(TokenUsageService.class);
             AtomicReference<String> raw=new AtomicReference<>(""), transportError=new AtomicReference<>("");
             var wire=new OpenRouterStreamingChatModel(key,"https://openrouter.ai/api/v1",model,Duration.ofSeconds(25));
