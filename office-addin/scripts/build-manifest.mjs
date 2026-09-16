@@ -91,6 +91,21 @@ if (!manifestSrc.includes(DEV_BASE_URL)) {
 }
 let manifestOut = manifestSrc.split(DEV_BASE_URL).join(baseUrl)
 
+// AppDomain 只能是 origin（scheme + host），不能带路径：Partner Center 的包校验对
+// `https://addin.workdeck.ai/office-addin` 直接报 "Invalid Manifest AppDomain Urls"
+// （2026-09-16 提交实测）。托管地址带子路径时上面的整体替换会把路径也写进去，这里单独收口。
+const addinOrigin = new URL(baseUrl).origin
+manifestOut = manifestOut.replace(/<AppDomain>([^<]+)<\/AppDomain>/g, (whole, url) => {
+  try {
+    return `<AppDomain>${new URL(url.trim()).origin}</AppDomain>`
+  } catch {
+    return whole
+  }
+})
+if (!manifestOut.includes(`<AppDomain>${addinOrigin}</AppDomain>`)) {
+  fail(`AppDomain 未收口为 origin：期望 <AppDomain>${addinOrigin}</AppDomain>`)
+}
+
 // 品牌站地址：显式 --brand-url 优先，否则按托管 host 派生；都没有就保持源文件默认值。
 // 先替换托管地址再替换品牌站，两者字面不同、互不吃掉（品牌站是 www.aiworkdeck.com，
 // 托管地址是 localhost:3000），顺序其实无关，这里按可读性排。
