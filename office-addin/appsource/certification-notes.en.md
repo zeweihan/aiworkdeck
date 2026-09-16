@@ -53,6 +53,13 @@ STEP 1 - OPEN THE TASK PANE  (Word)
    document is not empty.
 2. On the Home tab, in the "AI WorkDeck" group, choose "Open AI WorkDeck".
    The task pane opens on the right with a welcome card.
+   IF THE "AI WorkDeck" GROUP IS NOT ON THE HOME TAB: choose Home > "Add-ins" and
+   pick AI WorkDeck from the flyout that opens. That completes activation and the
+   group then appears. (This is the standard Office fallback documented at
+   https://learn.microsoft.com/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac
+   - "on some versions of Office, the add-in may not fully activate ... the add-in's
+   buttons may not appear on the ribbon". We have seen it specifically in PowerPoint
+   on Mac.) The same fallback applies to Steps 6 and 7 below.
 
 STEP 2 - SIGN IN
 3. The pane opens on a welcome card that explains what the add-in does. Choose the

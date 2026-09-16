@@ -206,8 +206,13 @@ final class Installer: NSObject, NSApplicationDelegate {
         }
         if failed.isEmpty {
             state = .done
+            // PowerPoint 旁加载在部分 Office 版本上不会自己把按钮画到功能区上
+            // （微软旁加载文档原话：「the add-in's buttons may not appear on the ribbon」，
+            // 解法是去「加载项」浮层里选一次）。这里如实写出来，别让用户以为装失败了。
             infoLabel.stringValue = "安装完成。完全退出并重新打开 Word / Excel / PowerPoint 后，"
-                + "功能区会出现「AI WorkDeck」按钮。"
+                + "「开始」选项卡上会出现「AI WorkDeck」按钮。\n"
+                + "若某个应用（PowerPoint 较常见）没出现，点「开始 → 加载项」，"
+                + "在浮层的「开发人员加载项」里选一次 AI WorkDeck 即可。"
             infoLabel.textColor = colForest
             infoLabel.alignment = .center
             secondaryButton.isHidden = true

@@ -62,6 +62,18 @@ cp manifest.xml ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef
 菜单「插入 → 加载项（Add-ins）→ 我的加载项 → 开发人员加载项」里选择 AI WorkDeck。
 更新 manifest 后需删掉重拷并重启宿主。
 
+> **旁加载不保证功能区上直接出现按钮**（dev-board#714）。微软旁加载文档明说
+> 「On some versions of Office, the add-in may not fully activate. For example, the
+> add-in's buttons may not appear on the ribbon.」，官方 Mac 旁加载步骤第 6 步本来
+> 就是「Select **Home** > **Add-ins**, and then select your add-in from the menu」。
+> 2026-09-16 在本机 macOS + Office 16.112 上实测：同一份 manifest，Word / Excel 的
+> 「开始」选项卡上有 AI WorkDeck 组，**PowerPoint 没有**；换一个全新 GUID、只留
+> Presentation 宿主的探针清单同样没有，而商店装的加载项（Ghostwriter / Claude）
+> 在 PowerPoint 上有组——所以这是 PowerPoint 旁加载侧的行为，不是清单问题。
+> 排查这类「某个宿主没有组」时，先按上面那一步从「加载项」浮层里选一次，
+> 不要先去改 manifest。
+> 参考：https://learn.microsoft.com/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac
+
 ### Windows（网络共享目录方式）
 
 1. 建一个文件夹（如 `C:\addin-manifests`），右键 → 属性 → 共享，共享给自己，记下网络路径（`\\机器名\addin-manifests`）。
