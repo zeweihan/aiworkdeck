@@ -515,4 +515,34 @@ class ChatModelFactoryTest {
         } finally { release.countDown(); server.stop(0); executor.shutdownNow(); }
     }
 
+    /**
+     * 2026-09-16 国际站云后端事故：system_setting 里没有 ai.activeProvider，静态默认值
+     * open-router 生效，而云后端本就不该配 BYOK key。非流式那条路当场被 openai4j 拦下
+     * （openAiApiKey cannot be null or empty），流式这条路却把 `Authorization: Bearer `
+     * 原样发给 OpenRouter，只换回一句 {"error":{"message":"Missing Authentication header"}}，
+     * 用户与日志都看不出下一步该做什么。两条路必须同样地当场失败。
+     */
+    @Test
+    @DisplayName("BYOK 通道无 API Key：流式通道当场拒绝，绝不把空 Bearer 发出去")
+    void blankByokKeyFailsFastOnStreamingPath() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        properties.getOpenRouter().setApiKey("");           // yml/env 都没给
+        setDbProvider("OPENROUTER");
+        when(systemSettingService.get(eq("external.openrouter.apiKey"), any())).thenReturn("");
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> factory.getStreamingChatModel(null));
+        // 同步路的既有行为作为对照：它一直就是当场抛
+        assertThrows(RuntimeException.class, () -> factory.getChatModel(null));
+
+        String message = e.getMessage();
+        assertNotNull(message);
+        // 4010 红线：这三个子串会被前端 api.js 判成掉线并清掉会话，把真正的原因一起冲掉
+        for (String forbidden : new String[]{"登录", "未授权", "请先"}) {
+            assertFalse(message.contains(forbidden),
+                    "BYOK 未配置的文案不得含「" + forbidden + "」，否则会被当成掉线：" + message);
+        }
+        assertTrue(message.contains("API Key"), "文案要点名缺的是什么：" + message);
+    }
+
 }

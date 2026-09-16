@@ -48,6 +48,18 @@ security:
     # allow-all 绝不能开（会整体旁路 Origin 闸）。
     allowed-origins: https://addin.aiworkdeck.com
 
+# 官方云后端只有平台通道一条路：这台机器上没有、也不该有任何 BYOK 的 OpenRouter key
+# （env 里没有 OPENROUTER_API_KEY，DB 里没有 external.openrouter.apiKey）。
+# 不钉这一行就会落到 application.yml 的静态默认值 open-router，每条消息都把
+# `Authorization: Bearer `（空 key）发给 OpenRouter，换回一句
+# {"error":{"message":"Missing Authentication header","code":401}}——2026-09-16 国际站
+# 云后端就是这么坏的：北京那台只是因为有人手工往 system_setting 写过一行 ai.activeProvider=AWD_CLOUD
+# 才没踩到，而那行不会随部署走到新实例上。DB 里那行仍然优先（resolveProvider 先读 DB），
+# 所以这一行对北京那台是零变化。
+ai:
+  model:
+    provider: awd-cloud
+
 storage:
   type: local
   local:
