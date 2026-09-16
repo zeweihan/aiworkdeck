@@ -264,7 +264,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   // Move the box to the current LO cursor. 拿不到光标映射时（没点过画布 / 映射
   // 失败）退回**最后一次点击处**而不是全覆盖：系统候选窗跟着输入框走，落在用户
   // 刚点的地方总比钉在画布左上角强。一次都没点过才全覆盖。
-  async function reposition() {
+  async function reposition(reason) {
     if (disposed) return
     const sequence = ++positionSequence
     const rect = await computeRect()
@@ -275,7 +275,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     // 光标动过了。覆盖层在**每一个**移动光标的动作后都会走到这里（上屏、回车、
     // 退格、方向键、快捷键、画布点击），所以这一个钩子就够宿主刷新工具栏激活态
     // ——引擎的 XSelectionChangeListener 盖不住纯光标移动，靠的就是这条补。
-    if (typeof onCursorMoved === 'function') { try { onCursorMoved() } catch (e) { /* ignore */ } }
+    if (typeof onCursorMoved === 'function') { try { onCursorMoved({ reason: reason === 'commit' ? 'commit' : 'move' }) } catch (e) { /* ignore */ } }
   }
 
   // The browser may report a final input before compositionend. Use that
@@ -306,7 +306,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     try { Promise.resolve(commit(t)).then(async (result) => {
       // Read the caret after insertion has completed, so suggestions follow the
       // new glyph/line instead of the position before the committed phrase.
-      await reposition()
+      await reposition('commit')
       if (result?.success !== false && typeof onCommitted === 'function') onCommitted(t)
     }).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }

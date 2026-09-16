@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { extractCompletionEntries, matchCompletionItems } from '../utils/completionLexicon.js'
+import { WRITING_ASSISTANCE_CSS, renderCompletionOption } from './writingAssistancePresentation.js'
 
 const LABELS = {
-  zh: { title: '写作辅助', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动补全', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', configure: '去设置配置', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
-  en: { title: 'Writing assistance', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Automatic suggestions', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', configure: 'Open settings', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
+  zh: { suggestions: '补全建议', manual: '显示补全建议 · Alt+/', noMatch: '没有匹配的本地词条，请继续输入或查看已学词库。', acceptKey: '补全', chooseKey: '选择', dismissKey: '关闭', title: '写作辅助', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动补全', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', configure: '去设置配置', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
+  en: { suggestions: 'Suggestions', manual: 'Show suggestions · Alt+/', noMatch: 'No matching local entries. Keep typing or review learned vocabulary.', acceptKey: 'Accept', chooseKey: 'Select', dismissKey: 'Dismiss', title: 'Writing assistance', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Automatic suggestions', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', configure: 'Open settings', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
 }
 let instanceSeq = 0
 // Longest selection the right-click lookup menu accepts.
 const CONTEXT_MENU_MAX = 160
+const SUGGEST_DELAY = 80
+const REFILTER_DELAY = 35
 
 /** Guest-side UI. No network access: all requests travel through the document host. */
 export function attachWritingAssistance({ canvas, input, execute, transport, focus, language = 'zh-CN' }) {
@@ -17,6 +20,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   const t = LABELS[language.startsWith('en') ? 'en' : 'zh']
   let config = { enabled: false, learning: false, hints: true, writable: false, session: '', items: [] }
   let items = [], current = null, choices = [], active = 0, generation = 0, timer = 0, learningTimer = 0
+  let refilter = false, preferredText = '', panelPoint
   let ownText = '', mode = '', disposed = false, composing = false, accepting = false, scope = 'project', clearArmed = false
   const pending = new Map()
   const learningWrites = new Set()
@@ -24,7 +28,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   const root = doc.createElement('div')
   root.className = 'awd-writing-assistance'
   const style = doc.createElement('style')
-  style.textContent = `.awd-writing-assistance{font:13px/1.5 system-ui,sans-serif;color:#26332e;position:fixed;z-index:10000;inset:0;pointer-events:none}.awd-writing-assistance button,.awd-writing-assistance input,.awd-writing-assistance select{font:inherit}.awd-writing-assistance button{cursor:pointer;border:0;background:transparent;color:inherit;text-align:left;padding:7px 10px;border-radius:5px}.awd-writing-assistance button:hover,.awd-writing-assistance button[aria-selected=true]{background:#e5eee8}.awd-writing-assistance .awd-wa-toggle{pointer-events:auto;position:absolute;bottom:12px;right:18px;border:1px solid #ccd6ce;background:#fff;box-shadow:0 2px 8px #0001}.awd-writing-assistance .awd-wa-panel{pointer-events:auto;position:absolute;width:350px;max-width:calc(100vw - 24px);max-height:55vh;overflow:auto;background:#fff;border:1px solid #ccd6ce;border-radius:9px;box-shadow:0 6px 24px #0002;padding:7px}.awd-writing-assistance .awd-wa-heading{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #edf0ed;padding-bottom:3px}.awd-writing-assistance .awd-wa-option{display:block;width:100%;word-break:break-word}.awd-writing-assistance small{display:block;color:#64736a;font-size:11px}.awd-writing-assistance .awd-wa-copy{white-space:pre-wrap;word-break:break-word;padding:8px;max-height:28vh;overflow:auto}.awd-writing-assistance label{display:block;padding:8px}.awd-writing-assistance table{width:100%;border-collapse:collapse;font-size:12px}.awd-writing-assistance td{border:1px solid #dce4de;padding:5px;word-break:break-word}.awd-writing-assistance td:first-child{min-width:8em;word-break:keep-all}.theme-dark .awd-writing-assistance{color:#e1e8e3}.theme-dark .awd-writing-assistance .awd-wa-panel,.theme-dark .awd-writing-assistance .awd-wa-toggle{background:#202622;border-color:#465148}.theme-dark .awd-writing-assistance button:hover,.theme-dark .awd-writing-assistance button[aria-selected=true]{background:#37463c}.theme-dark .awd-writing-assistance small{color:#b0bcb3}`
+  style.textContent = WRITING_ASSISTANCE_CSS
   doc.head.appendChild(style)
   doc.body.appendChild(root)
   const button = (text, fn, parent = panel) => {
@@ -49,19 +53,25 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   Object.assign(status.style, { position: 'absolute', width: '1px', height: '1px', overflow: 'hidden' }); root.appendChild(status)
   function note(text, parent = panel) { const n = doc.createElement('div'); n.textContent = text; n.className = 'awd-wa-copy'; parent.appendChild(n); return n }
   function position(point) {
-    const r = input.getBoundingClientRect()
-    const x = point ? point.x : r.width < view.innerWidth * 0.8 ? r.left : view.innerWidth - 380
-    let y = point ? point.y : r.height < 100 ? r.bottom + 4 : view.innerHeight - 300
-    if (!point && r.height < 100 && y + panel.offsetHeight > view.innerHeight - 12) {
-      y = r.top - panel.offsetHeight - 4
+    const r = input.getBoundingClientRect(), margin = 12, gap = 4
+    const anchored = !point && r.height < 100 && r.width < view.innerWidth * 0.8
+    const x = point ? point.x : anchored ? r.left : view.innerWidth - 400
+    panel.style.maxHeight = Math.max(0, view.innerHeight - margin * 2) + 'px'
+    let y = point ? point.y : anchored ? r.bottom + gap : view.innerHeight - 300
+    if (anchored) {
+      const below = Math.max(0, view.innerHeight - margin - r.bottom - gap)
+      const above = Math.max(0, r.top - margin - gap)
+      const upwards = panel.offsetHeight > below && above > below
+      panel.style.maxHeight = Math.min(view.innerHeight * 0.55, upwards ? above : below) + 'px'
+      y = upwards ? r.top - panel.offsetHeight - gap : r.bottom + gap
     }
-    panel.style.left = Math.max(8, Math.min(x, view.innerWidth - panel.offsetWidth - 12)) + 'px'
-    panel.style.top = Math.max(8, Math.min(y, view.innerHeight - panel.offsetHeight - 12)) + 'px'
+    panel.style.left = Math.max(8, Math.min(x, view.innerWidth - panel.offsetWidth - margin)) + 'px'
+    panel.style.top = Math.max(8, Math.min(y, view.innerHeight - panel.offsetHeight - margin)) + 'px'
   }
   function show(kind, title = t.title, point) {
     if (disposed) return
     input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); input.removeAttribute('aria-controls')
-    mode = kind; panel.replaceChildren(); panel.hidden = false
+    mode = kind; panelPoint = point; panel.dataset.mode = kind; panel.replaceChildren(); panel.hidden = false
     panel.setAttribute('role', kind === 'suggest' ? 'presentation' : 'dialog'); panel.setAttribute('aria-label', title)
     const head = doc.createElement('div'); head.className = 'awd-wa-heading'; panel.appendChild(head)
     const label = doc.createElement('strong'); label.textContent = title; head.appendChild(label)
@@ -69,10 +79,10 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     position(point)
   }
   function hide() {
-    mode = ''; choices = []; panel.hidden = true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); input.removeAttribute('aria-controls'); status.textContent = ''
+    mode = ''; choices = []; panel.hidden = true; panel.replaceChildren(); input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); input.removeAttribute('aria-controls'); status.textContent = ''
   }
   function invalidate({ flush = true } = {}) {
-    generation++; clearTimeout(timer); timer = 0; current = null; accepting = false
+    generation++; clearTimeout(timer); timer = 0; current = null; accepting = false; refilter = false; preferredText = ''
     hide()
     if (flush) flushLearning()
   }
@@ -115,34 +125,54 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   function eligibleItems() {
     return items.filter((x) => x.source !== 'learned' || !['WORD', 'PHRASE'].includes(x.kind) || x.uses >= 2)
   }
-  async function suggest() {
-    if (disposed || composing || !config.enabled || !config.writable || accepting) return
+  async function suggest({ manual = false } = {}) {
+    if (disposed || composing || (!config.enabled && !manual) || !config.writable || accepting) return
     const gen = generation
     let ctx
     try { ctx = await execute('get_completion_context', { radius: 160 }) } catch { return }
-    if (gen !== generation || composing || disposed || !config.enabled || !config.writable || !ctx?.success || !ctx.available || !ctx.token) return
+    if (gen !== generation || composing || disposed || (!config.enabled && !manual) || !config.writable || !ctx?.success || !ctx.available || !ctx.token) return
     current = ctx
-    choices = matchCompletionItems(ctx.before, eligibleItems())
-    active = 0
+    choices = matchCompletionItems(ctx.before, eligibleItems(), { manual })
+    active = Math.max(0, choices.findIndex(item => (item.displayText || item.text) === preferredText))
     if (!choices.length) {
       const completed = eligibleItems().find((x) => ['COMPANY', 'LAW', 'ARTICLE', 'CASE'].includes(x.kind) && ctx.before?.endsWith(x.text))
       if (completed && config.hints && (completed.entityId || completed.hasDetail)) showRelated(completed, ctx.token)
+      else if (manual) { show('notice', t.suggestions); note(t.noMatch); position() }
       else hide()
       return
     }
     renderChoices()
   }
+  function syncActiveChoice({ scroll = true } = {}) {
+    const rows = panel.querySelectorAll('[role="option"]')
+    rows.forEach((row, index) => row.setAttribute('aria-selected', String(index === active)))
+    if (scroll) rows[active]?.scrollIntoView?.({ block: 'nearest' })
+    input.setAttribute('aria-activedescendant', listId + '-' + active)
+    const count = panel.querySelector('.awd-wa-count')
+    if (count) count.textContent = `${active + 1} / ${choices.length}`
+    status.textContent = choices[active]?.text || ''
+  }
   function renderChoices() {
-    const saved = choices; show('suggest'); choices = saved
-    const list = doc.createElement('div'); list.id = listId; list.setAttribute('role', 'listbox'); panel.appendChild(list)
+    const saved = choices; show('suggest', t.suggestions); choices = saved
+    const list = doc.createElement('div'); list.id = listId; list.className = 'awd-wa-list'; list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', t.suggestions); panel.appendChild(list)
     choices.forEach((item, index) => {
-      const b = button(item.displayText || item.text, () => accept(index), list); b.className = 'awd-wa-option'; b.id = listId + '-' + index
-      b.setAttribute('role', 'option'); b.setAttribute('aria-selected', String(index === active))
-      const sub = doc.createElement('small'); sub.textContent = `${t[item.kind] || item.kind} · ${item.source === 'document' ? t.current : t[item.scope] || item.scope}`; b.appendChild(sub)
+      const b = button('', () => accept(index), list); b.className = 'awd-wa-option'; b.id = listId + '-' + index
+      b.setAttribute('role', 'option')
+      renderCompletionOption(doc, b, item, { kindLabel: t[item.kind] || item.kind, sourceLabel: item.source === 'document' ? t.current : t[item.scope] || item.scope })
     })
-    const hint = doc.createElement('small'); hint.textContent = t.local; panel.appendChild(hint)
-    input.setAttribute('aria-controls', listId); input.setAttribute('aria-expanded', 'true'); input.setAttribute('aria-activedescendant', listId + '-' + active)
-    status.textContent = choices[active]?.text || ''; position()
+    const footer = doc.createElement('div'); footer.className = 'awd-wa-footer'; panel.appendChild(footer)
+    const keys = doc.createElement('span'); keys.className = 'awd-wa-keys'; footer.appendChild(keys)
+    for (const [key, label] of [['↑↓', t.chooseKey], ['Tab', t.acceptKey], ['Esc', t.dismissKey]]) {
+      const group = doc.createElement('span'), badge = doc.createElement('kbd'); badge.textContent = key
+      group.append(badge, doc.createTextNode(' ' + label)); keys.appendChild(group)
+    }
+    const count = doc.createElement('span'); count.className = 'awd-wa-count'; footer.appendChild(count)
+    input.setAttribute('aria-controls', listId); input.setAttribute('aria-expanded', 'true')
+    position(); syncActiveChoice()
+  }
+  function requestSuggestions() {
+    if (disposed || composing || !config.writable) return
+    invalidate({ flush: false }); focus(); suggest({ manual: true })
   }
   async function accept(index) {
     const item = choices[index], ctx = current
@@ -153,7 +183,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       if (disposed || gen !== generation || session !== config.session || !config.writable) return
       if (!result?.success) { show('notice'); note(t.stale); return }
       flushLearning(); learn([{ text: item.text, kind: item.kind }], 'user'); learn([{ text: item.text, kind: item.kind }], 'project')
-      if (config.hints && ['COMPANY', 'LAW', 'ARTICLE', 'CASE'].includes(item.kind)) showRelated(item, result.token)
+      if (config.hints && (item.entityId || item.hasDetail) && ['COMPANY', 'LAW', 'ARTICLE', 'CASE'].includes(item.kind)) showRelated(item, result.token)
     } catch { if (!disposed && gen === generation) { show('notice'); note(t.error) } }
     finally { if (accepting === gen) accepting = false; if (!disposed && gen === generation) focus() }
   }
@@ -235,21 +265,25 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   }
   function committed(text) {
     if (disposed) return
-    generation++; accepting = false; hide()
+    const delay = refilter || mode === 'suggest' ? REFILTER_DELAY : SUGGEST_DELAY
+    generation++; accepting = false; hide(); refilter = false
     if (config.learning && config.writable) { ownText = (ownText + text).slice(-4000); clearTimeout(learningTimer); learningTimer = setTimeout(flushLearning, 8000) }
     if (/[。！？；\n]/.test(text)) flushLearning()
-    clearTimeout(timer); timer = config.enabled && config.writable ? setTimeout(suggest, 160) : 0
+    clearTimeout(timer); timer = config.enabled && config.writable ? setTimeout(suggest, delay) : 0
   }
   function keydown(e) {
     if (disposed) return false
     if (composing || e.isComposing || e.keyCode === 229) return false
+    const manualKey = !e.metaKey && !e.shiftKey && ((e.ctrlKey && !e.altKey && (e.key === ' ' || e.code === 'Space')) || (e.altKey && !e.ctrlKey && (e.key === '/' || e.code === 'Slash')))
+    if (manualKey && config.writable) { e.preventDefault(); if (!e.repeat) requestSuggestions(); return true }
     if (mode === 'suggest' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); accept(active); return true }
-      if (!e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); active = (active + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length; renderChoices(); return true }
+      if (!e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); active = (active + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length; preferredText = choices[active].displayText || choices[active].text; syncActiveChoice(); return true }
+      if (!e.shiftKey && (e.key === 'PageDown' || e.key === 'PageUp')) { e.preventDefault(); active = Math.max(0, Math.min(choices.length - 1, active + (e.key === 'PageDown' ? 5 : -5))); preferredText = choices[active].displayText || choices[active].text; syncActiveChoice(); return true }
     }
     if (e.key === 'Escape' && mode) { e.preventDefault(); invalidate(); return true }
     if (e.key.length > 1 || e.metaKey || e.ctrlKey || e.altKey) invalidate()
-    else { generation++; accepting = false; hide() }
+    else { refilter = mode === 'suggest'; generation++; accepting = false; hide() }
     return false
   }
   async function settings() {
@@ -263,7 +297,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       }
       label.appendChild(check); label.appendChild(doc.createTextNode(' ' + t[name])); panel.appendChild(label)
     }
-    button(t.manage, manage); button(t.refresh, async () => { const gen = generation; await rpc('refreshDocument'); if (!disposed && gen === generation) settings() }); position()
+    button(t.manual, requestSuggestions); button(t.manage, manage); button(t.refresh, async () => { const gen = generation; await rpc('refreshDocument'); if (!disposed && gen === generation) settings() }); position()
   }
   async function manage() {
     invalidate(); const gen = generation
@@ -312,9 +346,12 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   const startComposition = () => { composing = true; invalidate({ flush: false }) }
   const endComposition = () => { composing = false }
   const moved = () => invalidate()
-  const cursorMoved = () => {
+  const cursorMoved = (event) => {
+    // A commit reports its caret before committed(); keep its fast-refilter
+    // intent and active choice until that callback supplies the new text.
+    if (event?.reason === 'commit') return
     invalidate({ flush: false })
-    if (!disposed && !composing && config.enabled && config.writable && doc.activeElement === input) timer = setTimeout(suggest, 160)
+    if (!disposed && !composing && config.enabled && config.writable && doc.activeElement === input) timer = setTimeout(suggest, SUGGEST_DELAY)
   }
   const blur = (e) => { if (!root.contains(e.relatedTarget || doc.activeElement)) invalidate() }
   const refreshOnFocus = () => {
@@ -324,6 +361,12 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   }
   const pointer = (e) => { if (!root.contains(e.target)) invalidate() }
   const panelKeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); invalidate(); focus() } }
+  const resized = () => {
+    if (panel.hidden) return
+    position(panelPoint)
+    if (mode === 'suggest') syncActiveChoice()
+  }
+  view.addEventListener('resize', resized)
   input.addEventListener('compositionstart', startComposition)
   input.addEventListener('compositionend', endComposition)
   input.addEventListener('blur', blur)
@@ -342,6 +385,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       input.removeEventListener('compositionstart', startComposition); input.removeEventListener('compositionend', endComposition); input.removeEventListener('blur', blur)
       input.removeEventListener('focus', refreshOnFocus)
       canvas.removeEventListener('mousedown', moved); canvas.removeEventListener('wheel', moved); canvas.removeEventListener('contextmenu', contextMenu); input.removeEventListener('contextmenu', contextMenu); doc.removeEventListener('mousedown', pointer, true)
+      view.removeEventListener('resize', resized)
       root.remove(); style.remove()
       for (const [name, value] of Object.entries(inputAttributes)) { if (value == null) input.removeAttribute(name); else input.setAttribute(name, value) }
     },

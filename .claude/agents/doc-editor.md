@@ -47,6 +47,9 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 右键「二选一」由 worker 裁决（dev-board#601）：`installContextMenuInterceptor` 在每次换 controller 时注册 `XContextMenuInterceptor`，`hostHandlesContextMenu()` 为真（宿主可写、Writer、选区 1–160 字、行内「全部修订」视图下选区不碰删除修订）时返回 CANCELLED，原生菜单根本不弹；宿主右键走 `get_context_menu_context`（同一谓词，再经 FINAL_TEXT 视图取终稿文字），只在谓词成立时出 HTML 菜单。开关由 `set_host_context_menu` 随 writable 变化下发。**地雷：别再用合成 Escape 去关已弹出的 Qt 菜单**——关掉后 Qt 残留弹窗状态，下一次右键按下会移动光标、丢选区（真机复现：第二次打开即丢）；不带 Escape 时下一次按下又会点中残留菜单的「插入批注」。回归 `tests/lowa-e2e/context-menu.mjs`（真实按住/松开，像素判定两种菜单只出其一，`npm run test:lowa-context-menu`）；`writing-ui.mjs` 另以 `__writingNativeEscapes === 0` 守着「一条合成 Escape 都不许发」——#819 只改了实现没改这条用例，它在 master 上按旧契约断言 1，红了一段时间。
 - UNO 三动作 `get_completion_context` / `accept_completion` / `insert_completion_content` 以不透明 token 校验模型、光标/选区两端及上下文；补全只追加后缀，表格/纯文本原样插入，整组一次撤销。真实修改使 token 失效，只读导出期间保留 snapshot（含恢复 modified 标志），不能因自动保存误拒插入，也不能放宽位置校验。行内修订视图停用。
 - 首期能力止于确定性词库匹配、显式资料查询和原子插入；自动语义诊断、逻辑审校、段落推理与自动改写不在本期范围。
+- 候选体验（dev-board#700–702）：候选专用样式/安全文本渲染在 `writingAssistancePresentation.js`，标题、列表、快捷键底栏分区，列表独立滚动；方向键与翻页只更新 active 行，重筛保留仍匹配的选中项并滚入视野。普通名称没有已有资料时接受后直接继续写，不弹空资料卡；显式右键查询仍保留。
+- 自动触发保留中文2字/英文3字，调度80ms、连续键入重筛35ms；`Ctrl+Space` 或 `Alt+/`（macOS可避开切换输入法快捷键）显式调用允许1字/1字母，关闭自动弹出时仍可手动调用。均为本地确定性匹配，未加入语义预测或外查。调度值不是端到端延迟。可用上下文尾缀每次查询预计算一次，避免2500条长词逐词重复汉字正则扫描。
+- IME接线：`reposition('commit')` 将 `{reason:'commit'}` 交给 `onCursorMoved`，writing controller 等待紧随其后的 `committed()` 再重筛；若不区分输入后重定位与主动移动光标，35ms路径及选择保留会被清掉。其它移动仍立即使旧令牌失效。窗口resize只重新定位可见卡片，不清空详情（无头截图亦可能触发resize）。
 - 回归：`npm run test:completion`、`test:lowa-completion`、`test:writing-ui`、`test:writing-caret`、`test:lowa-link-preview`、`test:writing-desktop`；引擎测试包含移动/输入/重载拒旧 token、跨导出仍可插入、撤销/重做及资料表格。桌面用例从真实项目词库经中文输入/Tab 到自动保存后下载 DOCX 核对，夹具文件隔离在临时目录。
 
 ## 保存失败与关闭（实测清单 A6/C10）

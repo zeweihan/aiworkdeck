@@ -95,11 +95,11 @@ export function extractCompletionEntries(text, { segmenter, limit = MAX_ENTRIES 
   return selected
 }
 
-function isUsablePrefix(prefix) {
+function isUsablePrefix(prefix, manual) {
   const chineseCount = prefix.match(/\p{Script=Han}/gu)?.length || 0
   const latinCount = prefix.match(/[A-Za-z]/g)?.length || 0
   const caseNumberLead = /[（(]\d{4}[）)][\p{Script=Han}A-Za-z0-9]+$/u.test(prefix)
-  return chineseCount >= 2 || latinCount >= 3 || caseNumberLead
+  return chineseCount >= (manual ? 1 : 2) || latinCount >= (manual ? 1 : 3) || caseNumberLead
 }
 
 // 「…有限公司」末尾的「公司」是机构名后缀被截断的尾巴，不是用户在敲「公司章程」。
@@ -112,13 +112,13 @@ function isOrganizationSuffixTail(before, prefix) {
   return ORGANIZATION_SUFFIXES.some((suffix) => suffix.endsWith(withLead))
 }
 
-function longestTailPrefix(before, text) {
-  const maxLength = Math.min(before.length, text.length - 1)
-  for (let length = maxLength; length > 0; length -= 1) {
+function usableTailPrefixes(before, maxLength, manual) {
+  const prefixes = []
+  for (let length = Math.min(before.length, maxLength); length > 0; length -= 1) {
     const prefix = before.slice(-length)
-    if (isUsablePrefix(prefix) && text.startsWith(prefix) && !isOrganizationSuffixTail(before, prefix)) return prefix
+    if (isUsablePrefix(prefix, manual) && !isOrganizationSuffixTail(before, prefix)) prefixes.push(prefix)
   }
-  return ''
+  return prefixes
 }
 
 function itemRank(a, b) {
@@ -128,9 +128,14 @@ function itemRank(a, b) {
     || Number(b.lastUsedAt || 0) - Number(a.lastUsedAt || 0)
 }
 
-export function matchCompletionItems(before, items, { limit = 8 } = {}) {
+export function matchCompletionItems(before, items, { limit = 8, manual = false } = {}) {
   if (typeof before !== 'string' || !Array.isArray(items) || limit <= 0) return []
 
+  // Prefix eligibility depends on the context, not each candidate. Compute it
+  // once so large vocabularies do not rescan the same Han/Latin text per item.
+  const maxLength = items.reduce((max, item) => Math.max(max, typeof item?.text === 'string' ? item.text.length - 1 : 0), 0)
+  const prefixes = usableTailPrefixes(before, maxLength, manual)
+  if (!prefixes.length) return []
   const matches = []
   for (const item of items) {
     if (!item || typeof item.text !== 'string' || item.text.length < 2) continue
@@ -144,7 +149,7 @@ export function matchCompletionItems(before, items, { limit = 8 } = {}) {
     }
     let best
     for (const text of forms) {
-      const prefix = longestTailPrefix(before, text)
+      const prefix = prefixes.find(prefix => prefix.length < text.length && text.startsWith(prefix))
       if (prefix && (!best || prefix.length > best.prefix.length)) best = { ...item, text, displayText: item.displayText || item.text, prefix }
     }
     if (best) matches.push(best)

@@ -353,7 +353,7 @@ test('工商信息预览的字段名落在第一列并有可读最小宽度，�
   assert.deepEqual(rows.map(tr => tr.querySelector('td:first-child').textContent), ['企业名称', '统一社会信用代码', '法定代表人'])
 
   const css = h.doc.head.querySelector('style').textContent
-  const label = css.match(/\.awd-writing-assistance td:first-child\{([^}]*)\}/)
+  const label = css.match(/\.awd-writing-assistance td:first-child\s*\{([^}]*)\}/)
   assert.ok(label, '字段名列需要独立的样式规则')
   // 最长字段名「统一社会信用代码」8 个字；表格是自动布局，列宽不够就把字段名压成逐字竖排。
   const min = label[1].match(/min-width:(\d+(?:\.\d+)?)(em|px)/)
@@ -362,7 +362,7 @@ test('工商信息预览的字段名落在第一列并有可读最小宽度，�
   assert.ok(px >= '统一社会信用代码'.length * 12, `字段名列至少要放下 8 个 12px 汉字，实际 ${px}px`)
   assert.match(label[1], /word-break:keep-all/, '字段名不能按字符断行')
 
-  const panel = css.match(/\.awd-writing-assistance \.awd-wa-panel\{([^}]*)\}/)[1]
+  const panel = css.match(/\.awd-writing-assistance \.awd-wa-panel\s*\{([^}]*)\}/)[1]
   assert.match(panel, /max-width:calc\(100vw - 24px\)/, '弹层宽度仍受画布约束')
   assert.equal(/min-width:\d/.test(panel), false, '弹层最小宽度不能写成裸 px，窄画布下会溢出屏幕')
 })
@@ -392,4 +392,90 @@ test('凭据被拒的在线查询给出去设置配置的按钮，服务端凭�
     note: '本机未配置该检索通道的凭证（pkulaw-semantic），本次未检索', variants: [] }); await tick()
   assert.match(h.panel().textContent, /本机未配置该检索通道的凭证/)
   assert.equal(h.button('去设置配置'), undefined)
+})
+
+test('采用没有资料的普通名称后保持连续写作，不弹空资料卡', async t => {
+  const h = harness(t)
+  h.config({ items: [entries[1]] })
+  await suggestions(h); h.key('Tab'); await tick()
+  assert.equal(h.panel().hidden, true)
+  assert.equal(h.doc.activeElement, h.input)
+  assert.equal(h.messages.some(m => ['detail', 'lookup'].includes(m.action)), false)
+})
+
+test('上下选择只更新当前行，不重建候选节点；翻页能选到末项', async t => {
+  const h = harness(t)
+  h.config({ items: Array.from({ length: 8 }, (_, i) => ({ text: `北京当红第${i}公司`, kind: 'COMPANY', scope: 'project' })) })
+  await suggestions(h)
+  const list = h.doc.querySelector('[role=listbox]'), first = list.firstChild
+  let scrolled = 0
+  for (const row of list.children) row.scrollIntoView = () => { scrolled++ }
+  h.key('ArrowDown')
+  assert.equal(h.doc.querySelector('[role=listbox]'), list)
+  assert.equal(list.firstChild, first)
+  assert.equal(scrolled, 1)
+  h.key('PageDown'); h.key('PageDown')
+  assert.equal(h.doc.querySelector('[aria-selected=true]').firstChild.textContent, '北京当红第7公司')
+  assert.equal(h.doc.querySelector('.awd-wa-count').textContent, '8 / 8')
+})
+
+test('手动唤出可用单字前缀且关闭自动弹出时仍可用，不经过等待或联网', async t => {
+  const h = harness(t)
+  h.config({ enabled: false })
+  h.setContext({ before: '北' })
+  assert.equal(h.key('/', { code: 'Slash', altKey: true }).handled, true)
+  await tick()
+  assert.equal(h.queries().filter(c => c.action === 'get_completion_context').length, 1)
+  assert.equal(h.doc.querySelectorAll('[role=option]').length, 2)
+  assert.equal(h.messages.some(m => m.action === 'lookup'), false)
+  h.key('Tab'); await tick()
+  assert.equal(h.calls.find(c => c.action === 'accept_completion').params.prefix, '北')
+})
+
+test('Ctrl+Space手动无匹配有明确反馈，IME或只读时不接管快捷键', async t => {
+  const h = harness(t)
+  h.setContext({ before: '不存在' })
+  assert.equal(h.key(' ', { ctrlKey: true }).handled, true); await tick()
+  assert.match(h.panel().textContent, /没有匹配/)
+  h.input.dispatchEvent(new h.dom.window.CompositionEvent('compositionstart'))
+  assert.equal(h.key(' ', { ctrlKey: true, isComposing: true }).handled, false)
+  h.input.dispatchEvent(new h.dom.window.CompositionEvent('compositionend'))
+  h.config({ writable: false })
+  assert.equal(h.key('/', { code: 'Slash', altKey: true }).handled, false)
+})
+
+test('首弹80ms、继续输入35ms调度；旧候选令牌在输入后立即失效', async t => {
+  const h = harness(t)
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  h.api.committed('北京当红')
+  t.mock.timers.tick(79); await Promise.resolve()
+  assert.equal(h.queries().length, 0)
+  t.mock.timers.tick(1); await Promise.resolve()
+  assert.equal(h.input.getAttribute('aria-expanded'), 'true')
+  h.key('a')
+  assert.equal(h.panel().hidden, true, '旧候选立即隐藏，无法点选旧令牌')
+  h.setContext({ before: '北京当红晴', token: 'new' })
+  h.api.committed('晴')
+  t.mock.timers.tick(35); await Promise.resolve()
+  assert.equal(h.input.getAttribute('aria-expanded'), 'true')
+})
+
+test('候选高度受光标一侧可用空间限制，窗口变化后重新定位而不清空资料', async t => {
+  const h = harness(t)
+  Object.defineProperty(h.dom.window, 'innerHeight', { value: 400 })
+  h.input.getBoundingClientRect = () => ({ left: 200, top: 180, bottom: 204, width: 208, height: 24 })
+  Object.defineProperty(h.panel(), 'offsetHeight', { get: () => Math.min(300, parseFloat(h.panel().style.maxHeight) || 300) })
+  Object.defineProperty(h.panel(), 'offsetWidth', { value: 380 })
+  await suggestions(h)
+  const y = parseFloat(h.panel().style.top), height = h.panel().offsetHeight
+  assert.ok(y >= 208 || y + height <= 176, '不覆盖输入行')
+  assert.ok(y >= 8 && y + height <= 392, '不超出窗口')
+  h.key('ArrowDown')
+  const selected = h.doc.querySelector('[aria-selected="true"]')
+  let scrolled = false
+  selected.scrollIntoView = () => { scrolled = true }
+  h.dom.window.dispatchEvent(new h.dom.window.Event('resize'))
+  assert.equal(scrolled, true, '缩窗后重新确保当前候选可见')
+  assert.equal(h.panel().hidden, false)
+  assert.ok(parseFloat(h.panel().style.top) >= 8)
 })

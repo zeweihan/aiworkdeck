@@ -105,6 +105,50 @@ test('不补全单字、短英文、无关内容或已经完整输入的词条',
   assert.deepEqual(matchCompletionItems('北京示例有限公司', items), [])
 })
 
+test('显式手动补全允许单字姓名和短英文，自动触发门槛保持不变', () => {
+  const items = [
+    { text: '张三', kind: 'PERSON', scope: 'project' },
+    { text: 'Contract', kind: 'WORD' },
+  ]
+  for (const [before, text, prefix] of [['联系人张', '张三', '张'], ['C', 'Contract', 'C'], ['Co', 'Contract', 'Co']]) {
+    assert.deepEqual(matchCompletionItems(before, items), [])
+    const [match] = matchCompletionItems(before, items, { manual: true })
+    assert.equal(match.text, text)
+    assert.equal(match.prefix, prefix)
+    assert.ok(before.endsWith(match.prefix))
+    assert.ok(match.text.startsWith(match.prefix), '接受时仍只追加字面量后缀')
+  }
+  assert.equal(matchCompletionItems('Con', items)[0]?.text, 'Contract')
+  assert.deepEqual(matchCompletionItems('c', items, { manual: true }), [], '不擅自改变输入的大小写')
+})
+
+test('手动补全仍不枚举空前缀、标点或完整词条，并保留机构后缀保护', () => {
+  const items = [{ text: '张三', kind: 'PERSON' }, { text: '公司章程', kind: 'PHRASE' }, { text: '司法解释', kind: 'WORD' }]
+  for (const before of ['', '。', '张三', '北京示例有限公司']) {
+    assert.deepEqual(matchCompletionItems(before, items, { manual: true }), [], before)
+  }
+  assert.equal(matchCompletionItems('司', items, { manual: true })[0]?.text, '司法解释')
+  assert.equal(matchCompletionItems('该公司', items, { manual: true })[0]?.text, '公司章程')
+})
+
+test('共享尾缀匹配在长上下文中仍保留最长前缀、法规形式和排序去重', () => {
+  const before = '本协议约定'.repeat(28) + '依据《公司法》第十二'
+  const items = [
+    ...Array.from({ length: 2500 }, (_, index) => ({ text: '北京示例' + index + '有限公司', kind: 'COMPANY' })),
+    { text: '《公司法》第十二条', kind: 'ARTICLE', scope: 'user', uses: 10 },
+    { text: '《公司法》第十二条', kind: 'ARTICLE', scope: 'project', uses: 1 },
+    { text: '《民法典》第十二条', kind: 'ARTICLE', scope: 'project', uses: 2 },
+    { text: '十二事项', kind: 'PHRASE', scope: 'project' },
+  ]
+  const matches = matchCompletionItems(before, items)
+  assert.deepEqual(matches.map(({ text, prefix, scope }) => ({ text, prefix, scope })), [
+    { text: '《公司法》第十二条', prefix: '《公司法》第十二', scope: 'project' },
+    { text: '第十二条', prefix: '第十二', scope: 'project' },
+    { text: '十二事项', prefix: '十二', scope: 'project' },
+  ])
+  assert.deepEqual(matchCompletionItems(before, items, { limit: 1 }), matches.slice(0, 1))
+})
+
 test('先按前缀长度，再按project来源、使用次数和最近使用时间排序，并按text去重', () => {
   const items = [
     { text: '北京示例科技有限公司', kind: 'COMPANY', scope: 'user', source: 'learned', uses: 99, lastUsedAt: 99 },
