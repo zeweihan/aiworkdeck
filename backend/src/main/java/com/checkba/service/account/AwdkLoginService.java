@@ -33,9 +33,9 @@ import java.util.Optional;
  *
  * <p>Key 有两种来源，桥接之后的处理完全相同：
  * <ul>
- *   <li><b>账户登录</b>（主路径）：{@link #loginWithPhone} / {@link #loginWithPassword}
- *       先拿手机号验证码或邮箱口令调官网 {@code /api/auth/exchange-key} 换出 Key，
- *       用户从头到尾看不见它；</li>
+ *   <li><b>账户登录</b>（主路径）：{@link #loginWithPhone} / {@link #loginWithEmail} /
+ *       {@link #loginWithPassword} 先拿手机号验证码、邮箱验证码或账号口令调官网
+ *       {@code /api/auth/exchange-key} 换出 Key，用户从头到尾看不见它；</li>
  *   <li><b>手工粘贴</b>（保留给私有部署与团队服务器）：{@link #login(String)} 直接收 Key。</li>
  * </ul>
  *
@@ -199,6 +199,30 @@ public class AwdkLoginService {
         AccountLoginExchange.post(transport, objectMapper, baseUrl, "/api/auth/sms-login/send-code", body);
     }
 
+    /**
+     * 官网登录：给邮箱发验证码（转发官网 {@code /api/auth/mail-login/send-code}）。
+     *
+     * <p>与 {@link #sendLoginCode} 是同一条分叉的两半：大陆站账号本体是手机号、
+     * 国际站是邮箱。官网两条路由的形状逐条对应（body 只差字段名，人机验证同样排在
+     * 发信之前），所以这里也只差一个字段名。
+     *
+     * <p><b>不是可选项</b>：国际站的邮箱验证码注册建出来的账号 {@code passwordHash}
+     * 是空串（压根没有口令），而口令注册已随邮箱验证码上线一起关掉。少了这条，
+     * 新国际站用户在官网注册完就再也登不进 Office 插件——口令那条路对他无效。
+     *
+     * @throws IllegalArgumentException 开关关闭
+     * @throws AccountException NETWORK / UNAUTHORIZED（邮箱不合法等）/ CONFLICT / MALFORMED
+     */
+    public void sendLoginCodeByEmail(String email, String captchaToken) {
+        requireEnabled();
+        Map<String, Object> body = new HashMap<>();
+        body.put("email", email == null ? "" : email.trim());
+        // 与手机号那条同一条红线：人机验证 token 必须原样透传，官网 mail-login/send-code
+        // 同样把 verifyCaptcha 排在发信之前，不带就是 403。
+        body.put("captchaToken", captchaToken == null ? "" : captchaToken.trim());
+        AccountLoginExchange.post(transport, objectMapper, baseUrl, "/api/auth/mail-login/send-code", body);
+    }
+
     /** 官网人机验证的公开配置，原样转给插件端（只有公开参数，没有密钥）。 */
     public Map<String, Object> captchaConfig() {
         AccountTransport.Reply reply = transport.send("GET", baseUrl + "/api/auth/captcha-config", null, null);
@@ -218,7 +242,20 @@ public class AwdkLoginService {
         return exchangeAndBridge(credentials);
     }
 
-    /** 官网登录：账号 + 口令换 Key 再桥接（国际站主路径，及大陆站补绑期内的存量账号）。 */
+    /**
+     * 官网登录：邮箱 + 验证码换 Key 再桥接（国际站主路径）。
+     *
+     * <p>官网 {@code /api/auth/exchange-key} 的三种凭据形状之一（{@code {email, code}}），
+     * 与手机号那条走同一个端点、同一条桥，只差字段名。
+     */
+    public BridgeSession loginWithEmail(String email, String code) {
+        Map<String, Object> credentials = new HashMap<>();
+        credentials.put("email", email == null ? "" : email.trim());
+        credentials.put("code", code == null ? "" : code.trim());
+        return exchangeAndBridge(credentials);
+    }
+
+    /** 官网登录：账号 + 口令换 Key 再桥接（两站的存量口令账号）。 */
     public BridgeSession loginWithPassword(String account, String password) {
         Map<String, Object> credentials = new HashMap<>();
         credentials.put("account", account == null ? "" : account.trim());

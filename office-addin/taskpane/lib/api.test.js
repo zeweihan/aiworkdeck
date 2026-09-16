@@ -15,7 +15,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { getAccountLoginCaptchaConfig, postAccountLoginSendCode, fetchMobileDevices } from './api.js'
+import {
+  getAccountLoginCaptchaConfig,
+  postAccountLogin,
+  postAccountLoginSendCode,
+  postAccountLoginSendEmailCode,
+  fetchMobileDevices,
+} from './api.js'
 
 /** 替换 globalThis.fetch，返回 {calls, restore} */
 function stubFetch(handler) {
@@ -69,6 +75,66 @@ test('官网未启用人机验证时不传 token，请求体里仍有该字段�
     await postAccountLoginSendCode({ serverUrl: 'https://addin.example.com' }, '13800138000')
     const body = JSON.parse(f.calls[0].options.body)
     assert.equal(body.captchaToken, '')
+  } finally {
+    f.restore()
+  }
+})
+
+// ==================== 邮箱验证码（国际站主路径，dev-board#695） ====================
+//
+// 国际站的邮箱验证码注册建出来的账号 passwordHash 是空串（压根没有口令），口令注册也已关掉。
+// 缺了这条凭据形状，那批用户在官网注册完就再也登不进插件——邮箱+口令那条路对他们无效。
+
+test('邮箱发码：请求体带 email 与人机验证 token，且不混进 phone 字段', async () => {
+  const f = stubFetch(() => jsonReply({ code: 0, data: { sent: true } }))
+  try {
+    await postAccountLoginSendEmailCode(
+      { serverUrl: 'https://addin.example.com' }, '  hi@example.com ', ' tok-mail ')
+    assert.equal(f.calls.length, 1)
+    assert.ok(f.calls[0].url.endsWith('/api/auth/account-login/send-code'))
+    const body = JSON.parse(f.calls[0].options.body)
+    assert.equal(body.email, 'hi@example.com')
+    assert.equal(body.captchaToken, 'tok-mail')
+    // 后端 phone 优先：混着送两个字段会让「用户填了哪个」的判定变得含糊
+    assert.equal(body.phone, undefined)
+  } finally {
+    f.restore()
+  }
+})
+
+test('邮箱发码：官网未启用人机验证时 token 字段仍在（空串）', async () => {
+  const f = stubFetch(() => jsonReply({ code: 0, data: { sent: true } }))
+  try {
+    await postAccountLoginSendEmailCode({ serverUrl: 'https://addin.example.com' }, 'hi@example.com')
+    const body = JSON.parse(f.calls[0].options.body)
+    assert.equal(body.captchaToken, '')
+  } finally {
+    f.restore()
+  }
+})
+
+test('邮箱验证码登录：{email, code} 原样送出，换回 awdt_ 令牌', async () => {
+  const f = stubFetch(() => jsonReply({ code: 0, data: { token: 'awdt_mail', userId: 9 } }))
+  try {
+    const token = await postAccountLogin(
+      { serverUrl: 'https://addin.example.com' }, { email: 'hi@example.com', code: '123456' })
+    assert.equal(token, 'awdt_mail')
+    const body = JSON.parse(f.calls[0].options.body)
+    assert.equal(body.email, 'hi@example.com')
+    assert.equal(body.code, '123456')
+    assert.equal(body.password, undefined)
+  } finally {
+    f.restore()
+  }
+})
+
+test('邮箱发码失败：服务端文案原样透传（用户据此才知道该改用手机号）', async () => {
+  const f = stubFetch(() => jsonReply(
+    { code: 1, message: '当前站点不支持邮箱方式，请改用手机号' }, true, 200))
+  try {
+    await assert.rejects(
+      () => postAccountLoginSendEmailCode({ serverUrl: 'https://addin.example.com' }, 'hi@example.com', 'tok'),
+      /当前站点不支持邮箱方式/)
   } finally {
     f.restore()
   }

@@ -475,10 +475,27 @@ export async function postAccountLoginSendCode({ serverUrl }, phone, captchaToke
 }
 
 /**
- * 账户登录：手机号+验证码 或 邮箱+口令 换取本服务器的 awdt_ 设备令牌
+ * 账户登录：给邮箱发验证码（同一个匿名端点，后端按 email 字段转发官网 mail-login/send-code）。
+ *
+ * 国际站账号本体是邮箱，邮箱验证码注册出来的账号根本没有口令（passwordHash 空串），
+ * 所以这条不是「手机号那条的备选」而是那批用户唯一能用的登录路。
+ *
+ * **只送 email 不送 phone**：后端 phone 优先，混着送两个字段会让判定看填了哪个变得含糊。
+ */
+export async function postAccountLoginSendEmailCode({ serverUrl }, email, captchaToken) {
+  await postAnonymous(serverUrl, '/api/auth/account-login/send-code', {
+    email: (email || '').trim(),
+    captchaToken: (captchaToken || '').trim(),
+  })
+}
+
+/**
+ * 账户登录：手机号+验证码 / 邮箱+验证码 / 账号+口令 换取本服务器的 awdt_ 设备令牌
  * （匿名端点 POST /api/auth/account-login）。凭据用完即弃，只有换回的令牌被保存。
  *
- * @param credentials {phone, code} 或 {account, password}
+ * credentials 整体透传给后端，与官网 /api/auth/exchange-key 的三种凭据形状一一对应。
+ *
+ * @param credentials {phone, code} / {email, code} / {account, password}
  * @returns awdt_ 令牌字符串
  */
 export async function postAccountLogin({ serverUrl }, credentials) {

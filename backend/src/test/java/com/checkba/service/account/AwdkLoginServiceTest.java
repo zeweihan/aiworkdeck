@@ -454,12 +454,14 @@ class AwdkLoginServiceTest {
     }
 
     @Test
-    @DisplayName("开关关闭：账户登录与发验证码都不出站（关着的桥不该变成短信/口令转发口）")
+    @DisplayName("开关关闭：账户登录与发验证码都不出站（关着的桥不该变成短信/邮件/口令转发口）")
     void disabledBlocksAccountLoginAndCodeSend() {
         AwdkLoginService svc = service(false);
 
         assertThrows(IllegalArgumentException.class, () -> svc.sendLoginCode("13800138000", null));
+        assertThrows(IllegalArgumentException.class, () -> svc.sendLoginCodeByEmail("a@b.com", null));
         assertThrows(IllegalArgumentException.class, () -> svc.loginWithPhone("13800138000", "123456"));
+        assertThrows(IllegalArgumentException.class, () -> svc.loginWithEmail("a@b.com", "123456"));
         assertThrows(IllegalArgumentException.class, () -> svc.loginWithPassword("a@b.com", "pw12345678"));
 
         assertTrue(transport.calls.isEmpty(), "开关关闭时一条出站都不许发");
@@ -487,6 +489,96 @@ class AwdkLoginServiceTest {
         transport.enqueueNetworkFailure();
         AccountException e = assertThrows(AccountException.class,
                 () -> service(true).sendLoginCode("13800138000", null));
+        assertEquals(AccountException.Kind.NETWORK, e.getKind());
+    }
+
+    // ==================== 邮箱验证码登录（国际站主路径，dev-board#695） ====================
+
+    @Test
+    @DisplayName("邮箱发码：转发官网 mail-login/send-code（不是 sms-login），不带 Authorization")
+    void sendLoginCodeByEmailForwardsToMailRoute() {
+        transport.enqueue(200, "{\"ok\":true}");
+
+        service(true).sendLoginCodeByEmail("  hi@example.com  ", "tok-mail");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/mail-login/send-code",
+                transport.calls.get(0));
+        assertNull(transport.bearers.get(0));
+        assertTrue(transport.bodies.get(0).contains("hi@example.com"));
+        assertFalse(transport.bodies.get(0).contains("  hi@example.com  "), "邮箱应已 trim");
+        // 官网 mail-login/send-code 同样把 verifyCaptcha 排在发信之前，漏掉 token 整条链就断
+        assertTrue(transport.bodies.get(0).contains("tok-mail"), "人机验证 token 必须原样透传");
+    }
+
+    @Test
+    @DisplayName("邮箱登录：{email, code} 换 Key 后走同一条桥，用户全程看不到 Key")
+    void emailLoginExchangesKeyThenBridges() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true}").enqueue(200, ME_OK);
+
+        AwdkLoginService.BridgeSession session =
+                service(true).loginWithEmail("hi@example.com", "123456");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/exchange-key", transport.calls.get(0));
+        assertNull(transport.bearers.get(0), "登录阶段还没有 Key，不该带 Authorization");
+        assertTrue(transport.bodies.get(0).contains("\"email\":\"hi@example.com\""), transport.bodies.get(0));
+        assertTrue(transport.bodies.get(0).contains("\"code\":\"123456\""), transport.bodies.get(0));
+        // 官网按 {email, code} 这一形状分流，混进 account/password 会走到口令那条分支上去
+        assertFalse(transport.bodies.get(0).contains("password"), transport.bodies.get(0));
+
+        assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(1));
+        assertEquals(KEY, transport.bearers.get(1));
+        assertTrue(session.token().startsWith(DeviceTokenService.TOKEN_PREFIX));
+        assertEquals(session.userId(), deviceTokenService.resolveUserId(session.token()));
+        assertNotNull(bindingsByAccountId.get("acc_9f3a"));
+    }
+
+    @Test
+    @DisplayName("邮箱登录与手工粘 Key 落到同一个 server 用户（同一个 accountId）")
+    void emailLoginAndPastedKeyShareOneUser() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\"}").enqueue(200, ME_OK).enqueue(200, ME_OK);
+        AwdkLoginService svc = service(true);
+
+        AwdkLoginService.BridgeSession viaEmail = svc.loginWithEmail("hi@example.com", "123456");
+        AwdkLoginService.BridgeSession viaKey = svc.login(KEY);
+
+        assertEquals(viaEmail.userId(), viaKey.userId());
+        assertEquals(1, usersByName.size(), "同一个 accountId 不得建出两个用户");
+    }
+
+    @Test
+    @DisplayName("大陆站不支持邮箱（mail_not_supported_on_site）：给出「改用手机号」而不是一句通用失败")
+    void mailNotSupportedOnSiteTellsUserToUsePhone() {
+        transport.enqueue(400, "{\"error\":\"mail_not_supported_on_site\"}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).sendLoginCodeByEmail("hi@example.com", "tok"));
+
+        assertEquals(AccountException.Kind.UNAUTHORIZED, e.getKind());
+        assertTrue(e.getMessage().contains("手机号"), e.getMessage());
+        assertFalse(e.getMessage().contains("请稍后重试"), "别回落成看不出该怎么办的通用文案: " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("邮箱验证码错误：UNAUTHORIZED 且透传官网文案，不建任何数据")
+    void wrongMailCodeSurfacesWebsiteMessage() {
+        transport.enqueue(401, "{\"error\":\"invalid_code\",\"message\":\"验证码错误或已过期\"}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).loginWithEmail("hi@example.com", "000000"));
+
+        assertEquals(AccountException.Kind.UNAUTHORIZED, e.getKind());
+        assertEquals("验证码错误或已过期", e.getMessage());
+        assertTrue(usersByName.isEmpty());
+        assertTrue(bindingsByAccountId.isEmpty());
+    }
+
+    @Test
+    @DisplayName("邮箱发码时官网不可达：NETWORK（调用方据此不计入失败锁定）")
+    void sendLoginCodeByEmailNetworkFailure() {
+        transport.enqueueNetworkFailure();
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).sendLoginCodeByEmail("hi@example.com", null));
         assertEquals(AccountException.Kind.NETWORK, e.getKind());
     }
 

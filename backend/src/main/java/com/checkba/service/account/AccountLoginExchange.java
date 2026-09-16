@@ -102,6 +102,13 @@ final class AccountLoginExchange {
                     "This site does not support mobile numbers, please use email instead");
             case "sms_not_configured" -> LangText.of("短信服务暂不可用，请稍后重试",
                     "SMS is temporarily unavailable, please retry shortly");
+            // 邮箱那一半（官网 mail-login/*）：与上面两条逐条对称。大陆站没开邮箱账号体系时
+            // 官网回的就是 mail_not_supported_on_site，缺了这条会显示成「登录失败，请稍后重试」，
+            // 用户完全不知道该改用手机号。
+            case "mail_not_supported_on_site" -> LangText.of("当前站点不支持邮箱方式，请改用手机号",
+                    "This site does not support email sign-in, please use a mobile number instead");
+            case "mail_not_configured" -> LangText.of("邮件服务暂不可用，请稍后重试",
+                    "Email delivery is temporarily unavailable, please retry shortly");
             case "phone_binding_required" -> LangText.of(
                     "该账户尚未绑定手机号，且已超过绑定期限。请邮件联系 hi@aiworkdeck.com 处理",
                     "This account has no linked mobile number and the deadline has passed. Please email hi@aiworkdeck.com");
