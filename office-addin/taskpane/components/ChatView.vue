@@ -39,12 +39,12 @@
               :title="tool.error || ''"
             >
               <span v-if="tool.status === 'running'" class="chip-spinner"></span>
-              {{ tool.label }}<span v-if="tool.status === 'failed'">{{ t('toolFailedSuffix') }}</span>
+              {{ commandDisplayName(tool.command) }}<span v-if="tool.status === 'failed'">{{ t('toolFailedSuffix') }}</span>
             </span>
           </div>
           <!-- 失败详情不能只回传给模型：用户要看得到哪一步、为什么失败（dev-board#147/#149） -->
           <div v-for="(tool, ti) in failedTools(msg)" :key="'e' + ti" class="tool-error">
-            {{ tool.label }}：{{ tool.error }}
+            {{ commandDisplayName(tool.command) }}{{ t('colon') }}{{ tool.error }}
           </div>
           <!-- 计划/交付物卡（<artifact> 整块）：此前直接丢弃，审批型计划在插件端看不到本体 -->
           <div v-if="msg.artifact" class="artifact-card">
@@ -353,7 +353,7 @@ import {
   activeModelVision, defaultModelInfo, visionNotice, isImageAttachment
 } from '../lib/chatSession.js'
 import { openTransfer } from '../lib/transfer.js'
-import { readDocumentMeta, detectHost, locateInDocument } from '../lib/hostBridge.js'
+import { readDocumentMeta, detectHost, locateInDocument, commandDisplayName } from '../lib/hostBridge.js'
 import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'
 import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'

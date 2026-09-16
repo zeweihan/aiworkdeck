@@ -777,8 +777,12 @@ public class AgentOrchestrator {
         // 记忆检索、子 Agent、故障转移换模型——都在这个身份作用域内取 key。
         // 身份作用域必须建在**执行线程**上：提交线程（控制器线程）设了也不跟着走。
         // 本方法体里另有跨线程提交（标题生成），必须各自用 PlatformAiUserScope.wrap 重放。
-        Runnable turn = () -> PlatformAiUserScope.run(userId,
-                () -> handleUserMessageInScope(request, userId, guard));
+        // 界面语言同理要建在**执行线程**上：HTTP 线程上 AppLanguageRequestFilter 建的作用域
+        // 不跟着池线程走，而 system prompt 选中英文版正是在这条循环里做的（ContextAssembler）。
+        // 缺省（桌面端不上送）时 AppLanguageScope 不覆盖任何东西，照旧读全局 app.language。
+        Runnable turn = () -> com.checkba.service.AppLanguageScope.run(request.getAppLanguage(),
+                () -> PlatformAiUserScope.run(userId,
+                        () -> handleUserMessageInScope(request, userId, guard)));
         java.util.concurrent.Executor executor = this.turnExecutor;
         if (executor == null) {
             turn.run();

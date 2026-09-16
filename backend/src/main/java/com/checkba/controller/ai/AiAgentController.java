@@ -148,7 +148,14 @@ public class AiAgentController {
      */
     @PostMapping("/chat")
     public ResponseEntity<?> startSession(@RequestBody AgentChatRequest request,
-                                          @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+                                          @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                          @RequestHeader(value = com.checkba.config.AppLanguageRequestFilter.HEADER,
+                                                  required = false) String appLanguageHeader) {
+        // 界面语言：请求体优先，缺省时补上请求头里的那个。补这一手是因为编排循环跑在池线程上，
+        // 过滤器建的 ThreadLocal 作用域不跟着走——只有随请求体带过去的值才能活到那一轮。
+        if (com.checkba.service.AppLanguageScope.normalize(request.getAppLanguage()) == null) {
+            request.setAppLanguage(com.checkba.service.AppLanguageScope.normalize(appLanguageHeader));
+        }
         Long userId = AuthController.getUserIdFromSession(sessionId);
         // 越权校验：此前未登录也会起循环，且 projectId 完全由请求体给定——
         // ToolRegistry 把 projectId 强制注入工具参数只挡得住 LLM，挡不住 HTTP 调用方，
@@ -506,6 +513,15 @@ public class AiAgentController {
          * 缺省按 word 处理，兼容不发送该字段的存量 Word 插件。
          */
         private String officeHost;
+        /**
+         * 可选：本轮的界面语言（zh-CN / en-US，容忍 zh / en / en-GB 等写法）。
+         *
+         * <p>语言必须随请求体走而不是只靠 {@code X-App-Language} 请求头：编排循环跑在
+         * taskExecutor 池线程上，HTTP 线程上的 {@link com.checkba.service.AppLanguageScope}
+         * 不跟着过去；而且请求体会被 AgentInbox 持久化，排队/续跑的那一轮照样说对语言。
+         * 缺省 null = 回落全局 {@code app.language}，桌面端行为不变。
+         */
+        private String appLanguage;
         /** Running conversations default to steering; queue defers until a successful run finish. */
         private String submissionMode;
         /** Optional idempotency key scoped to conversation + authenticated user. */
@@ -546,6 +562,8 @@ public class AiAgentController {
         public void setOfficeHost(String officeHost) { this.officeHost = officeHost; }
         public String getOfficeFamily() { return officeFamily; }
         public void setOfficeFamily(String officeFamily) { this.officeFamily = officeFamily; }
+        public String getAppLanguage() { return appLanguage; }
+        public void setAppLanguage(String appLanguage) { this.appLanguage = appLanguage; }
         public String getSubmissionMode() { return submissionMode; }
         public void setSubmissionMode(String submissionMode) { this.submissionMode = submissionMode; }
         public String getClientRequestId() { return clientRequestId; }

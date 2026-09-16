@@ -16,7 +16,9 @@
         @change="onProjectSelect($event)"
       >
         <option value="" disabled>{{ t('selectProject') }}</option>
-        <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+        <!-- 名字过一层展示映射：后端懒建的「插件临时项目」按当时的界面语言取名并存进库，
+             用户切语言后它不会跟着变（dev-board#713），这里按当前语言显示，不改数据 -->
+        <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ displayProjectName(p.name) }}</option>
         <!-- 远程设备项目（dev-board#250/#297）：选中 = 归档绑定——云端建影子容器项目，
              这里的对话与文档副本自动归档回那台桌面机的该项目（onProjectSelect 的 remote:: 分支） -->
         <optgroup v-for="d in remoteDevices" :key="d.deviceId" :label="deviceGroupLabel(d)">
@@ -183,6 +185,7 @@ import {
   ensureAddinLink, fetchAddinLinks
 } from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
+import { displayProjectName } from './lib/projectName.js'
 import { rechargeUrl, openExternal } from './lib/site.js'
 import { hostFamily, hidePanel } from './lib/hostBridge.js'
 import { popIn } from './lib/motion.js'
@@ -234,7 +237,7 @@ const currentProjectName = computed(() => {
   const binding = archiveLinks.value[projectId.value]
   if (binding && binding.name) return binding.name
   const hit = projects.value.find(p => String(p.id) === projectId.value)
-  return hit ? hit.name : ''
+  return hit ? displayProjectName(hit.name) : ''
 })
 
 /**
