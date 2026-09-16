@@ -70,7 +70,9 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    -Djavacpp.platform=linux-x86_64 clean package`（瘦包 ~424M，先删旧产物防脏包坑）
    → rsync --partial **串行**传两台 `/opt/aiworkdeck/cloud/backend.jar.new` →
    sha256 对账 → 旧件备份 `backend.jar.rollback-<date>` → mv 换入 →
-   `systemctl restart aiworkdeck-cloud` → 冒烟：journal 无 ERROR、新端点返回体
+   `systemctl restart aiworkdeck-cloud` → 冒烟：journal 无 ERROR、新端点返回体。
+   新加坡实例 env 另有 `AI_ACCOUNT_BASE_URL=https://www.workdeck.ai`（代码默认值是国内站，
+   漏了国际站账号登录整条断，2026-09-16 实测），换 env 文件或重建机器时别丢
    不再与「不存在的端点」相同（后者恒为 `{"code":1,"message":"服务器内部错误"}` + 200，
    这也是判「接口没上」最快的探法）。表结构靠 `ddl-auto: update` 自动建，无手动迁移。
 4.7. **独立发布件逐项查、有更新随发版一起发（2026-09-11 维护者定，dev-board#592）**：
