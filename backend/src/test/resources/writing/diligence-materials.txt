@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# 合成数据，全部主体、日期及数字均为测试创作。
+项目：澄栖设备收购项目
+交易：收购青穗器材有限公司股权
+标的公司：青穗器材有限公司
+材料日期：2026年8月31日
+核查截止日：2026年9月15日
+材料版本：V2
+核查事项：业务资质文件
+材料取得状态：未取得
+核实状态：待核实

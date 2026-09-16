@@ -212,6 +212,9 @@ const paraIndex = { model: null, ranges: null, total: 0 };
 // 补全只保留一个内存快照；不把临时候选变成存进 docx 的书签。
 let completionSnapshot = null;
 let completionSeq = 0;
+// Semantic requests may outlive local candidate refreshes. They have their own
+// snapshot, but share the same cursor/text checks and document revision fence.
+let writingSnapshot = null;
 // Session-local, monotonic content generation; read-only exports do not advance it.
 let reviewRevision = 0, reviewModel = null;
 let viewChangeInFlight = 0;
@@ -2841,10 +2844,10 @@ function captureCompletion(radius) {
 }
 // 校验与落字必须在同一条同步 worker 命令内完成。活 range + 原文双校验防止
 // 同名前缀在别处出现、继续输入、换文档或迟到结果把内容落错位置。
-function checkCompletion(token) {
+function checkCompletion(token, snapshot) {
   const reason = completionGuard();
   if (reason) return completionUnavailable(reason);
-  const snap = completionSnapshot;
+  const snap = snapshot || completionSnapshot;
   if (!snap || !token || token !== snap.token || snap.model !== xModel) return completionUnavailable('stale');
   try {
     const vc = ctrl.getViewCursor();
@@ -2856,6 +2859,32 @@ function checkCompletion(token) {
     }
     return { success: true, cursor: vc, snapshot: snap };
   } catch (e) { return completionUnavailable('stale'); }
+}
+// Body paragraph scope is derived from the live range and final text, not the
+// document title. Plain legal headings count even when no heading style exists.
+function writingSectionOf(range) {
+  try {
+    const locator = rangeLocator(range.getStart(), range.getStart());
+    if (!locator || locator.paraKey < 0) return null;
+    return withParaIndex(function (ix) {
+      const index = locator.paraKey;
+      if (index >= ix.total) return null;
+      let appendix = '', heading = '';
+      for (let i = 0; i <= index; i++) {
+        const paragraph = ix.ranges[i], text = String(paragraph.getString() || '').trim();
+        const marker = text.match(/^(第[一二三四五六七八九十百零〇0-9]+[条节章]|附件[一二三四五六七八九十零〇0-9]+).{0,100}$/);
+        if (marker) {
+          if (marker[1].indexOf('附件') === 0) { appendix = marker[1]; heading = ''; }
+          else heading = marker[1];
+        } else {
+          let level = 0; try { level = Number(paragraph.getPropertyValue('OutlineLevel')) || 0; } catch (e) {}
+          if (level > 0 && level <= 6 && text.length <= 100) heading = text;
+        }
+      }
+      const path = [appendix, heading].filter(Boolean);
+      return { paragraphIndex: index, sectionPath: path, sectionTitle: path.length ? path.join(' / ') : '正文', scopeKnown: true };
+    });
+  } catch (e) { return null; }
 }
 // Review findings carry coordinates only within a verified immutable paragraph.
 // These temporary ranges are never bookmarks and never enter the saved document.
@@ -3174,6 +3203,59 @@ const EXEC = {
     return { success: true, revision: currentReviewRevision() };
   },
   get_completion_context(p) { return captureCompletion(p && p.radius); },
+  capture_writing_context(p) {
+    writingSnapshot = null;
+    if (p && p.composing) return completionUnavailable('composing');
+    const reason = completionGuard();
+    if (reason) return completionUnavailable(reason);
+    if (!isReviewWritable()) return completionUnavailable('readonly');
+    const result = captureCompletion(p && p.radius);
+    if (!result.success) return result;
+    if (result.selectedText.length > 2000) return completionUnavailable('selection-too-long');
+    const section = writingSectionOf(completionSnapshot.range);
+    if (!section) return completionUnavailable('unknown-writing-scope');
+    if (result.selectedText) {
+      const endSection = writingSectionOf(completionSnapshot.range.getEnd());
+      if (!endSection || endSection.sectionTitle !== section.sectionTitle) return completionUnavailable('selection-crosses-writing-scope');
+    }
+    writingSnapshot = Object.assign({}, completionSnapshot, { revision: currentReviewRevision() });
+    return Object.assign({}, result, section, { available: true, reason: undefined, revision: writingSnapshot.revision, writable: true });
+  },
+  accept_writing_suggestion(p) {
+    if (p && p.composing) return completionUnavailable('composing');
+    const reason = completionGuard();
+    if (reason) return completionUnavailable(reason);
+    if (!isReviewWritable()) return completionUnavailable('readonly');
+    const snap = writingSnapshot;
+    if (!p || !snap || snap.revision !== currentReviewRevision()
+      || (p.revision != null && p.revision !== snap.revision)) return completionUnavailable('stale');
+    const checked = checkCompletion(p.token, snap);
+    if (!checked.success) return checked;
+    if ((snap.selectedText && p.expectedSelection !== snap.selectedText)
+      || (p.expectedSelection != null && p.expectedSelection !== snap.selectedText)) return completionUnavailable('selection-mismatch');
+    if (typeof p.text !== 'string' || !p.text || p.text.length > 2000
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(p.text)) return completionUnavailable('invalid-suggestion');
+    const text = p.text.replace(/\r\n?/g, '\n');
+    // The text is already a suffix (or the exact selection's replacement).
+    // Never prepend captured context, parse Markdown or locate another range.
+    writingSnapshot = null;
+    const result = completionEdit('采用写作建议', function () {
+      const vc = checked.cursor;
+      let replaced = false;
+      if (snap.selectedText) {
+        let tracked = false; try { tracked = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+        if (tracked) replaced = applyMinimalRedline(vc, text);
+        if (!replaced) vc.setString('');
+      }
+      if (!replaced) {
+        vc.collapseToEnd();
+        insertTextAtCursor(vc, text);
+      }
+      vc.collapseToEnd();
+      return { inserted: text, replaced: snap.selectedText, operation: snap.selectedText ? 'replace-selection' : 'insert-suffix' };
+    });
+    return Object.assign(result, { revision: currentReviewRevision() });
+  },
   set_host_context_menu(p) {
     hostContextMenu = { enabled: !!(p && p.enabled), maxLength: Math.max(0, Number(p && p.maxLength) || 0) };
     return { success: true };
@@ -8116,7 +8198,7 @@ const EXEC = {
 // 原语可能是 async（分批的 find_replace / apply_house_style），恢复必须等它 settle；
 // 分批命令在批间会让出事件循环，那期间插进来的别的命令会看到页边语义——与「批间允许
 // 别的命令插进来」这条既有约定同源，不额外收窄。
-const FINAL_TEXT_ACTIONS = new Set(['get_completion_context', 'accept_completion', 'insert_completion_content', 'get_review_context', 'goto_review_range', 'apply_review_edit']);
+const FINAL_TEXT_ACTIONS = new Set(['get_completion_context', 'accept_completion', 'insert_completion_content', 'capture_writing_context', 'accept_writing_suggestion', 'get_review_context', 'goto_review_range', 'apply_review_edit']);
 const AGENT_VIEW_EXEMPT = { set_revision_view: 1, export_document: 1, load_document: 1 };
 function runAgentCommandInMarginView(action, fn) {
   if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();

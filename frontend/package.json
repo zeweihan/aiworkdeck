@@ -47,6 +47,7 @@
     "test:lowa-scroll": "node tests/lowa-e2e/scroll-stability.mjs",
     "test:completion": "node --test tests/completion/*.test.mjs",
     "test:writing-ui": "node tests/lowa-e2e/writing-ui.mjs",
+    "test:semantic-writing": "node tests/lowa-e2e/semantic-writing.mjs",
     "test:writing-caret": "node tests/lowa-e2e/writing-caret.mjs",
     "test:lowa-link-preview": "node tests/lowa-e2e/link-preview.mjs",
     "test:writing-desktop": "node tests/desktop-e2e/writing.mjs",
