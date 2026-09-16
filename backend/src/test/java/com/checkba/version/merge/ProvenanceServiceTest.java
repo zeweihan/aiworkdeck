@@ -230,6 +230,110 @@ class ProvenanceServiceTest {
         assertEquals(first, units.get("p0").sha(), "没被这段工作动过的段落照旧归更早那一版");
     }
 
+    // ------------------------ 文件级版本身份（dev-board#672 复测，2026-09-16） ----
+
+    /**
+     * 编辑器顶上那条小条改成了**文件级**指示器：说这份文件最近一次**有名字**的版本，
+     * 不再逐段跟光标。所以它必须是「最近一次动过**这个文件**的命名版本」——
+     * 拿 HEAD 那一版顶上去的话，同事在别的文件上收了一段工作，这份合同的小条就会
+     * 跟着改名，律师会以为有人动过他的合同。
+     */
+    @Test
+    void fileVersionIsTheLatestNamedVersionThatTouchedThisFile(@TempDir Path root) throws Exception {
+        ProjectRepoService repo = svc(root);
+        init(root, repo);
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方");
+        String contract = commit(repo, "合同第一稿", "session");
+
+        // 之后又收了一段工作，但动的是另一份文件
+        writeDoc(root, "台账.docx", "注册资本 100 万");
+        String ledger = commit(repo, "台账第一稿", "session");
+
+        ProvenanceUnit fv = fileVersionOf(service(repo).provenance(PID, UID, "合同.docx", "HEAD"));
+        assertNotNull(fv, "这份文件进过命名版本，就该报得出来");
+        assertEquals(contract, fv.sha(), "要报最近一次动过这个文件的命名版本");
+        assertNotEquals(ledger, fv.sha(), "不能拿 HEAD 那一版顶上去");
+        assertEquals("合同第一稿", fv.title());
+        assertEquals(NAME, fv.authorName());
+        assertEquals(contract.substring(0, 7), fv.shortId());
+        assertNotNull(fv.when());
+        assertEquals("session", fv.type());
+    }
+
+    /**
+     * 自动存档不算「有名字」——折叠口径与 {@link ProvenanceService#foldMap} 逐字相同
+     * （session 开组、其后更旧的 auto 折进它），只是施加在这份文件自己的历史上。
+     * 还没收尾那段工作里的 auto 比任何命名版本都新、找不到归宿，照旧跳过（#672 A2 同一条）。
+     */
+    @Test
+    void fileVersionSkipsAutosaves(@TempDir Path root) throws Exception {
+        ProjectRepoService repo = svc(root);
+        init(root, repo);
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方");
+        String named = commit(repo, "合同第一稿", "session");
+
+        // 还没收尾的这段工作里的一笔防抖存档
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方（培训 5 个工作日）");
+        String auto = commit(repo, "修改了《合同》", "auto");
+
+        ProvenanceUnit fv = fileVersionOf(service(repo).provenance(PID, UID, "合同.docx", "HEAD"));
+        assertNotNull(fv);
+        assertNotEquals(auto, fv.sha(), "自动存档不该当成「有名字的版本」端给律师");
+        assertEquals(named, fv.sha());
+        assertEquals("合同第一稿", fv.title());
+
+        // 这段工作收尾之后，小条要跟着换成律师起的那个名字
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方（培训 5 个工作日）", "第三条 期限");
+        String landed = commit(repo, "第九条培训天数改为 5 个工作日", "session");
+
+        ProvenanceUnit after = fileVersionOf(service(repo).provenance(PID, UID, "合同.docx", "HEAD"));
+        assertEquals(landed, after.sha());
+        assertEquals("第九条培训天数改为 5 个工作日", after.title());
+    }
+
+    /** 这份文件还没进过任何命名版本（在还没收尾的这段工作里新建的）：不报版本，界面落到「初始版本」。 */
+    @Test
+    void fileVersionIsAbsentUntilTheFileLandsANamedVersion(@TempDir Path root) throws Exception {
+        ProjectRepoService repo = svc(root);
+        init(root, repo);
+
+        writeDoc(root, "新起草的补充协议.docx", "第一条 甲方");
+        commit(repo, "修改了《新起草的补充协议》", "auto");
+
+        Map<String, Object> res = service(repo).provenance(PID, UID, "新起草的补充协议.docx", "HEAD");
+        assertEquals(Boolean.TRUE, res.get("versioned"), "版本记录是开着的——界面靠这一位决定小条出不出现");
+        assertNull(res.get("fileVersion"), "只有自动存档动过，这份文件还没有名字");
+    }
+
+    /**
+     * 「本机未保存的改动」改成文件级：这份文件磁盘上的内容领先版本记录时为真。
+     * 判定走后端单路径 status（只读、不 add），不做全文比对。
+     */
+    @Test
+    void dirtyFollowsTheWorkingTreeOfThisFileOnly(@TempDir Path root) throws Exception {
+        ProjectRepoService repo = svc(root);
+        init(root, repo);
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方");
+        writeDoc(root, "台账.docx", "注册资本 100 万");
+        commit(repo, "第一稿", "session");
+
+        ProvenanceService svc = service(repo);
+        assertEquals(Boolean.FALSE, svc.provenance(PID, UID, "合同.docx", "HEAD").get("dirty"),
+                "刚落过版，磁盘与版本记录一致");
+
+        writeDoc(root, "合同.docx", "第一条 甲方", "第二条 乙方（改了）");
+        assertEquals(Boolean.TRUE, svc.provenance(PID, UID, "合同.docx", "HEAD").get("dirty"));
+        assertEquals(Boolean.FALSE, svc.provenance(PID, UID, "台账.docx", "HEAD").get("dirty"),
+                "脏位是逐文件的，别的文件不该跟着亮");
+
+        commit(repo, "改了第二条", "session");
+        assertEquals(Boolean.FALSE, svc.provenance(PID, UID, "合同.docx", "HEAD").get("dirty"),
+                "结束工作 / 采纳落版之后要灭掉");
+    }
+
     @Test
     void xlsxCellsAndPptxSlides(@TempDir Path root) throws Exception {
         ProjectRepoService repo = svc(root);
@@ -327,6 +431,10 @@ class ProvenanceServiceTest {
             byKey.put(u.key(), u);
         }
         return byKey;
+    }
+
+    private ProvenanceUnit fileVersionOf(Map<String, Object> response) {
+        return (ProvenanceUnit) response.get("fileVersion");
     }
 
     private Path cacheFileFor(Path dir, String sha) throws Exception {

@@ -186,6 +186,38 @@ export function provenanceLabel(t, unit, opts = {}) {
 }
 
 /**
+ * 编辑器顶上那条**版本身份小条**说什么（dev-board#672 复测，2026-09-16 用户拍板）。
+ *
+ * 它原来是「溯源光标条」，逐段跟着光标走（设计稿 §5.5）。律师读不出自己最想知道
+ * 的那件事——「我现在看的这份文件，存进版本记录了吗？是哪一版？」：光标随便一动
+ * 那句话就换一个名字，落在表格里还整条消失。改成**文件级**之后它只回答那一件事。
+ * 逐段归属一个字没动，仍在审阅面板的「溯源」标签里（{@link provenanceLabel}）。
+ *
+ * 三态，顺序有意义：
+ * 1. 没开版本记录（`versioned` 假）→ 整条不出现。这时说「初始版本」或「本机未保存的
+ *    改动」都是胡说。
+ * 2. 这份文件磁盘上的内容领先版本记录（`dirty`）→ 「本机未保存的改动」。它排在版本名
+ *    前面：律师此刻要知道的是「还没进版本记录」，而不是上一版叫什么。
+ * 3. 否则报最近一次**有名字**的版本（自动存档的折叠在后端做，见
+ *    `ProjectRepoService.latestNamedVersionForPath`）；这份文件还没进过任何命名版本时
+ *    落到「初始版本」。
+ *
+ * `sha` 非空才可点（点一下打开那一版）——第 1、2 态与「初始版本」都没有那一版可开。
+ *
+ * @param {Function} t     翻译器
+ * @param {Object} state   `{versioned, dirty, fileVersion}`，来自 `/version/provenance`
+ * @returns {{visible: boolean, text: string, sha: string}}
+ */
+export function fileVersionBar(t, state, opts = {}) {
+  const st = state || {}
+  if (!st.versioned) return { visible: false, text: '', sha: '' }
+  if (st.dirty) return { visible: true, text: t('version.provenanceUnsaved'), sha: '' }
+  const fv = st.fileVersion || null
+  if (!fv || !fv.sha) return { visible: true, text: t('version.provenanceFileInitial'), sha: '' }
+  return { visible: true, text: provenanceLabel(t, fv, opts), sha: String(fv.sha) }
+}
+
+/**
  * 侧栏顶部的一行摘要：'本稿 62 段：你 40 段 · 律师乙 20 段 · 更早 2 段'。
  * @param {Array} rows [{unit}]，每段一条（unit 可为 null）
  */

@@ -597,10 +597,13 @@ public class VersionController {
         // 归属校验先做：这一步不因「还没开版本记录」而跳过，越权探测在两条路径上同一个回答
         String relPath = relPathOfFile(projectId, fileId);
         if (!repoService.isInitialized(projectId) || provenanceService == null) {
+            // versioned=false 是「这条小条整个不出现」的判据（dev-board#672 复测）：
+            // 没开版本记录时说「初始版本」或「本机未保存的改动」都是胡说
             return ok(Map.of("ref", wanted,
                     "kind", com.checkba.version.merge.ThreeWayAnalyzer.kindOf(relPath)
                             .name().toLowerCase(java.util.Locale.ROOT),
-                    "units", List.of(), "truncated", false, "computing", false));
+                    "units", List.of(), "truncated", false, "computing", false,
+                    "versioned", false, "dirty", false));
         }
         return ok(provenanceService.provenance(projectId, userId, relPath, wanted));
     }

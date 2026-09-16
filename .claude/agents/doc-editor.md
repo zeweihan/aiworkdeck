@@ -290,7 +290,9 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 | `sheet_get_active_cell`（:6165） | 无 | `{success:true, sheet, address}`（`address` 是 `B7` 这种 A1 写法） | `{success:false, error, message}`；非 Calc 文档明确拒绝 |
 | `slide_get_current`（:6184） | 无 | `{success:true, slideNumber}`（**1 基**，与 `slide_goto` 同口径） | `slideFail(...)`；非 Impress 文档明确拒绝 |
 
-后两条是**溯源光标条**的取数原语：段落级用 `get_review_context` 的 `paragraphIndex`，表格与演示文稿这两条是它的对应物。
+后两条是**逐段溯源**里「当前这一格 / 当前这一页」的取数原语：段落级用 `get_review_context` 的 `paragraphIndex`，
+表格与演示文稿这两条是它的对应物。**编辑器顶上那条小条自 dev-board#672 复测（2026-09-16）起是文件级的，不再用它们**
+（见 version-control.md 的「版本身份小条」）；两条原语本身是引擎公开 API，`lowa-e2e` 组 34 有用例，不要当死代码清掉。
 
 **`build_merge_draft` 的五步链路**（顺序是硬的）：
 ① 载入另一侧 → `paragraphScan()`；② 载入共同的上一版 → `paragraphScan()`，两张快照按 `otherChunks` 推出的

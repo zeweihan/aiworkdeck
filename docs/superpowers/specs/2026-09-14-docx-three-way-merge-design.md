@@ -312,13 +312,28 @@ Analysis {
 
 ### 5.5 逐段溯源界面
 
-- `LibreOfficeEditor` 顶部工具栏右侧一条**溯源光标条**：光标所在段落对应的
-  「韩泽伟 · 9 月 13 日 · 核对注册资本」（作者名永远在最前，本人显示「你」；自动存档不例外——
-  版本标题那一格换成「自动存档」，如「律师乙 · 9 月 14 日 · 自动存档」，罕见带标题的自动存档仍显示标题；
-  未对上显示「本机未保存的改动」），
-  点击 → `openCommitHistoryTab({focusSha})`。数据：`sel_changed` 与既有聚焦轮询触发 `get_review_context()` 取 `paragraphIndex`，
-  查 `provenanceAlign` 的映射；文档保存落版后（`reload-files`/自动保存成功）重新拉 provenance。
-  xlsx 用 `sheet_get_active_cell`，pptx 用 `slide_get_current`，同一条。
+- `LibreOfficeEditor` 顶部工具栏右侧一条**版本身份小条**：说这份**文件**最近一次有名字的版本
+  「韩泽伟 · 9 月 13 日 · 核对注册资本」（作者名永远在最前，本人显示「你」），点击 → `openCommitHistoryTab({focusSha})`。
+  **改动来源：dev-board#672 复测，2026-09-16 用户拍板改成文件级**——它原本是逐段跟光标走的「溯源光标条」
+  （下面那段划掉的就是初版口径）。病灶：律师在这里要读的是「我现在看的这份文件，存进版本记录了吗、是哪一版」，
+  而光标随便一动那句话就换一个名字，落进表格还整条消失（`provInBody` 那道闸）。逐段归属并没有取消，
+  它仍在 `ReviewPanel` 的「溯源」标签里（下一条）。
+  - **取数**：`GET /version/provenance` 一次带回 `{versioned, dirty, fileVersion}` 三个字段
+    （后端 `ProvenanceService.putFileVersion`，**算在昂贵的逐段回溯之前**，所以 `computing:true` 那条路也带着），
+    前端纯函数 `utils/provenanceAlign.js` 的 `fileVersionBar` 判三态：`versioned` 假 → 整条不出现；
+    `dirty` → 「本机未保存的改动」（排在版本名前面）；否则 `fileVersion` → 作者 · 日期 · 版本标题，
+    `fileVersion` 为 null（这份文件还没进过任何命名版本）→ 「初始版本」。`sha` 非空才可点。
+  - **「最近一次有名字的版本」= 后端 `ProjectRepoService.latestNamedVersionForPath`**：沿这份文件自己的历史
+    从新往旧走、第一条 `kind != auto` 的版本。折叠口径与 `ProvenanceService.foldMap` 逐字相同
+    （session 开组、其后更旧的 auto 折进它），只是施加在这份文件自己的历史上；还没收尾那段工作里的 auto
+    比任何命名版本都新、找不到归宿，照旧不算有名字（dev-board#672 A2 同一条）。
+  - **「本机未保存的改动」= 后端 `ProjectRepoService.isPathDirty`**：单路径 `git status`，**只读、一次 add 都不做**
+    （add 在合并窗口里等于「这个冲突我解决了」），也不做全文比对。结束工作 / 采纳 / 重载落版后随 `version-landed`
+    重拉 provenance 而消失（PR#860 已接好的那条链）。
+  - ~~初版（dev-board#632）：光标所在段落对应的一句话，自动存档显示「自动存档」，未对上显示「本机未保存的改动」；
+    数据由 `sel_changed` 与既有聚焦轮询触发 `get_review_context()` 取 `paragraphIndex`、查 `provenanceAlign` 的映射，
+    xlsx 用 `sheet_get_active_cell`、pptx 用 `slide_get_current`。~~ 两条引擎原语仍在（引擎公开 API，`lowa-e2e` 组 34
+    有用例），只是不再有宿主调用方。
 - `ReviewPanel` 加第三个标签「溯源」：按段落序列出（段落首 40 字 · 作者 · 日期 · 版本标题），点行 `select_paragraph`，
   点作者/版本跳提交历史；顶部按作者/版本聚合的一行摘要「本稿 62 段：你 40 段 · 律师乙 20 段 · 更早 2 段」。
   「悬停」在画布式引擎里没有逐段 DOM，因此产品口径是**光标条 + 侧栏**，spec 明确这一点。

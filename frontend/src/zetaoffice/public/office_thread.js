@@ -6258,7 +6258,7 @@ const EXEC = {
       text: para2 ? String(para2.getString() || '') : '',
     };
   },
-  // [溯源光标条] 表格里的「当前这一格」。段落级溯源用 get_review_context 的
+  // [逐段溯源] 表格里的「当前这一格」。段落级用 get_review_context 的
   // paragraphIndex，xlsx 这一条与 pptx 的 slide_get_current 是它的对应物。
   sheet_get_active_cell() {
     if (!isCalcDoc()) return { success: false, error: NOT_SPREADSHEET_MSG, message: NOT_SPREADSHEET_MSG };

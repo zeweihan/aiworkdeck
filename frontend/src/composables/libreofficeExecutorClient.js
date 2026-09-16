@@ -99,7 +99,9 @@ export const EDITOR_ACTIONS = [
   // [三方合并 dev-board#630/#631/#632] host-initiated：合并比对稿。
   // build_merge_draft 把「主线侧原生比较 + 另一侧逐段重放」整条链做在**一条命令里**
   //（修订署名必须同命令内切换，见 office_thread.js 的说明）；merge_take_other 是同段
-  // 冲突「用律师乙的」。sheet_get_active_cell / slide_get_current 供溯源光标条取数。
+  // 冲突「用律师乙的」。sheet_get_active_cell / slide_get_current 是逐段溯源里
+  // 「当前这一格 / 当前这一页」的取数原语（顶上那条版本身份小条 #672 起是文件级的，
+  // 不再用它们；两条原语本身是引擎公开 API，lowa-e2e 组 34 有用例）。
   'build_merge_draft', 'merge_take_other', 'sheet_get_active_cell', 'slide_get_current',
   // [格式增强] 富格式原语：编号/表格/格式读取/全文标准格式化；insert_under_heading
   // 是后端一直在派发但从未接通的原语（本次补齐 worker 实现）。
