@@ -65,7 +65,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `MergeAnalysisService.java`（`@Service`）—— 合并窗口里的编排：按 `(projectId, HEAD, MERGE_HEAD)` 缓存（:83/:98）、单路径 5 秒闸 + 守护线程池（:47/:54）、`documentMerges`（:127）给 `/status`、`conflictExtras`（:159）给三个冲突对象。
 - `PendingMergeStore.java`（`@Service`）—— 待决记录，落 `<gitdir>/awd-merge-pending.json`（:48）。`put`/`get`/`all`/`clear` 四个方法，生命周期与合并窗口同寿。
 - `XlsxMerger.java` / `PptxMerger.java` —— 后端按 `decisions` 拼合并件（docx 那一半在引擎里）。pptx 有 sldId 与相似度两条对齐路径，阈值 `SIMILARITY_FLOOR = 0.6`（:58）。
-- `ProvenanceService.java`（`@Service`）—— 逐段溯源：`provenance()`（:150）对外、`precomputeAsync()`（:189）给提交钩子、`compute`/`attribute`/`align`（:269/:363/:407）是算法本体、缓存在 `<gitdir>/awd-cache/provenance/`（:516）。窗口 `MAX_HISTORY = 500`（:94）、请求预算 30 秒（:97）。
+- `ProvenanceService.java`（`@Service`）—— 逐段溯源：`provenance()`（:150）对外、`precomputeAsync()`（:189）给提交钩子、`compute`/`attribute`/`align`（:269/:363/:407）是算法本体、缓存在 `<gitdir>/awd-cache/provenance/`（:516）。窗口 `MAX_HISTORY = 500`（:94）、请求预算 30 秒（:97）。另有 `putFileVersion`/`toUnit` —— 编辑器顶上那条**文件级**版本身份小条的三个字段（dev-board#672 复测），算在逐段回溯之前，见下方「版本身份小条」。
 - 记录类型：`Unit`（单元键 + 原文 + 归一）、`Chunk`（一侧的一处改动，**坐标永远落在基线上**）、`Overlap`（三栏文字）、`Analysis`、`MergePlan`、`MergeKind`、`MergeDecision`、`MergeReason`、`Decision`（`key`/`side`/`action`，逐字进用户产物）、`MergeRecord`、`Slide`、`ProvenanceUnit`。
 
 **前端 `frontend/src/components/version/`（8 个组件）**
@@ -108,7 +108,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `VersionNodeDetail.vue` —— 点某个节点弹出的详情弹窗：拉该 sha 的变更列表、「退回到这一版」二次确认、「标为重要版本」、第 3 期新增「从这一版另起一稿」（`openDraftNaming`，独立嵌套 `.awd-dialog`，同款 `.uni-input-input` 陷阱；`createDraft(projectId, version.sha, name)`，任意节点都能开，包括采纳产生的双亲合并节点）、对 `MODIFY` 类型且非根提交的改动行渲染「和上一版对比」按钮，`@tap` 上抛 `{path, sha}` 交给宿主页面决定走桌面修订稿分支还是文本降级分支。
 - `MergeReviewTab.vue` —— 三方合并新增（dev-board#630），**可编辑**的合并比对稿宿主：主线侧改动是一批带作者的修订，另一侧不重叠的改动被逐段重放成另一位作者的修订，同一段两边都改了的那几处刻意没重放、交给右栏 `ReviewPanel`（`mode="merge"`）三选一。与 `VersionCompareTab` 一样**没有 upload 路径**（导出字节只走 `POST /version/merge/resolve-file`，绝不写回 `ProjectFile`）、不进保活池、不派发 `.uno:EditDoc`（spike A5 实测 r5 上不生效，只读靠的是「没有保存路径」）。标签管道见 `sidebar-shell.md` 的 `merge-review` 一条。
 - `VersionCompareTab.vue` —— 第 2 期新增，「和上一版对比」的桌面 docx 展示宿主，**只读、绝无保存路径**：不订阅 `lo-relay` 的 `modified` 信号、不进保活池（`_libreRefs`/LRU 一概不注册）、`beforeUnmount` 只 `dispose executor` + 移除 `<webview>`。流程：并行下载新旧字节 + 启动引擎 → `load_document` 新版 → `compare_document` 一次性生成修订并自动切只读。
-- **三方合并的前端纯函数与编排**：`composables/useDocumentMerge.js`（自动合并编排，纯工厂）、`services/mergeDraft.js`（`fetchMergeInputs` + `buildMergeDraft`，自动合并与比对稿标签页共用）、`utils/mergeRows.js`（裁决总览行态与文案）、`utils/mergeReviewDecisions.js`（`collectDecisions`）、`utils/historyMerges.js`（把两条新尾注翻成人话）、`utils/provenanceAlign.js`（溯源 LCS 对齐 + 自带同步 sha256）、`utils/mergeSideNames.js`（两侧的称呼与喂给引擎的署名 = 修订分桶键，见下方「两侧的称呼与分桶键」）。后五个是纯函数，`node --test` 直接跑（`mergeSideNames` 只 import `historyMerges`，其余零依赖）。
+- **三方合并的前端纯函数与编排**：`composables/useDocumentMerge.js`（自动合并编排，纯工厂）、`services/mergeDraft.js`（`fetchMergeInputs` + `buildMergeDraft`，自动合并与比对稿标签页共用）、`utils/mergeRows.js`（裁决总览行态与文案）、`utils/mergeReviewDecisions.js`（`collectDecisions`）、`utils/historyMerges.js`（把两条新尾注翻成人话）、`utils/provenanceAlign.js`（溯源 LCS 对齐 + 自带同步 sha256 + `fileVersionBar` 文件级小条三态）、`utils/mergeSideNames.js`（两侧的称呼与喂给引擎的署名 = 修订分桶键，见下方「两侧的称呼与分桶键」）。后五个是纯函数，`node --test` 直接跑（`mergeSideNames` 只 import `historyMerges`，其余零依赖）。
 
 **前端集成点**
 
@@ -128,9 +128,9 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 
 **「结束本次工作」在稿上是另一件事（`endSessionOnDraft`，v0.44.1 真机反馈 B2）**：`endSession` 第一行 `requireNotMerging` 之后立刻按 `onDraftBranch` 分流。站在稿上时它只做一件事——把这一稿此刻的改动落成一笔**有名字**的 `kind=session` 提交（标题为空则走 `defaultTitle(draft.startedAt)`），稿照旧 ACTIVE，不并回主线、不删分支、不切分支、不动任何工作段。**这道分流不是可选的优化**：稿上不开工作段（`onChangeSignal` 对 `draft/*` 跳过 `ensureSession`），而律师切到稿上之前主线那一段工作很可能还挂着 ACTIVE——不分流就会把**主线那段工作**合并掉，还把律师从稿上硬切回主线（护栏 `DraftLifecycleTest.endSessionOnADraftNamesAVersionOnTheDraftAndLeavesMainlineAlone`，去掉分流三条断言同时转红）。前端 `WorkSessionBar` 的稿态因此也露出「结束本次工作」，**复用主线那条命名流程**（`openNaming` → `end` → `endWorkSession`），没有第二套 API。没有改动时与主线同口径：不落空提交，用 `notice` 报信而不是抛异常。
 
-**溯源的自动存档要折进「它所属的那一版」（`ProvenanceService.foldAutosaves`/`foldMap`，v0.44.1 真机反馈 A2）**：归属算的是精确那一笔提交，而工作段内每一次防抖存档都是一笔 `kind=auto` 的无名提交——律师在时间线上根本看不到它们（`VersionTimeline.grouped` 把 auto 折进上一条命名节点），却会在编辑器顶上那条溯源里读到「修改了《采购合同》」而不是他自己起的名字。折叠只发生在**出参侧**（`enrich`，逐版缓存里仍是精确 sha，口径变了不必清缓存），且与时间线**逐字同一套分组口径**：沿 `log(HEAD)`（新在前）走，`session` 开组，其后更旧的每一条 auto 都归到它头上。**还没收尾的那段工作照旧不折**——它的 auto 比任何命名版本都新、找不到归宿，这时说「自动存档」是对的（护栏 `ProvenanceServiceTest.autoCommitIsAttributedWithAutoType` 与 `.autosaveIsFoldedIntoTheNamedVersionItBelongsTo` 是这条规则的两面）。已知取舍：分组按提交时间序，与时间线同样的不精确（跨天的工作段撞上同事推进时可能归到相邻那一版）。
+**溯源的自动存档要折进「它所属的那一版」（`ProvenanceService.foldAutosaves`/`foldMap`，v0.44.1 真机反馈 A2）**：归属算的是精确那一笔提交，而工作段内每一次防抖存档都是一笔 `kind=auto` 的无名提交——律师在时间线上根本看不到它们（`VersionTimeline.grouped` 把 auto 折进上一条命名节点），却会在编辑器顶上那条溯源里读到「修改了《采购合同》」而不是他自己起的名字。折叠只发生在**出参侧**（`enrich`，逐版缓存里仍是精确 sha，口径变了不必清缓存），且与时间线**逐字同一套分组口径**：沿 `log(HEAD)`（新在前）走，`session` 开组，其后更旧的每一条 auto 都归到它头上。**还没收尾的那段工作照旧不折**——它的 auto 比任何命名版本都新、找不到归宿，这时说「自动存档」是对的（护栏 `ProvenanceServiceTest.autoCommitIsAttributedWithAutoType` 与 `.autosaveIsFoldedIntoTheNamedVersionItBelongsTo` 是这条规则的两面）。已知取舍：分组按提交时间序，与时间线同样的不精确（跨天的工作段撞上同事推进时可能归到相邻那一版）。**编辑器顶上那条小条 dev-board#672 复测起不走这条路**（它改成文件级了，折叠在 `ProjectRepoService.latestNamedVersionForPath` 里按同一口径做），这里的折叠现在只服务侧栏「溯源」标签的逐段行。
 
-**`version-landed`：落了新的一版就要重问溯源（v0.44.1 真机反馈 A2/C5）**。`VersionPanel` 的 `onVersionLanded`（`@ended`）与 `onReload`（采纳/退回/切线/丢弃）都 emit 它，`project-overview.vue` 接到 `refreshLibreProvenance`（`librePool.js`，逐 `_libreRefs` 实例调 `loadProvenance`，跳过空白备胎、单实例抛错不连带）。**必须独立于 `reload-files` 那条链**：「结束本次工作」一个字节都不改磁盘，走不到重载链，也不会再触发自动保存——不补这一条，溯源小条会一直写着上一版的标题，刚敲过的段落一直挂着「本机未保存的改动」，律师再改一次才刷新。护栏 `frontend/tests/version-history/provenanceRefresh.test.mjs`。
+**`version-landed`：落了新的一版就要重问溯源（v0.44.1 真机反馈 A2/C5）**。`VersionPanel` 的 `onVersionLanded`（`@ended`）与 `onReload`（采纳/退回/切线/丢弃）都 emit 它，`project-overview.vue` 接到 `refreshLibreProvenance`（`librePool.js`，逐 `_libreRefs` 实例调 `loadProvenance`，跳过空白备胎、单实例抛错不连带）。**必须独立于 `reload-files` 那条链**：「结束本次工作」一个字节都不改磁盘，走不到重载链，也不会再触发自动保存——不补这一条，溯源小条会一直写着上一版的标题，刚敲过的段落一直挂着「本机未保存的改动」，律师再改一次才刷新。护栏 `frontend/tests/version-history/provenanceRefresh.test.mjs`。（dev-board#672 复测之后「本机未保存的改动」是**文件级**的一位，同样靠这条链灭掉，见下方「版本身份小条」。）
 
 **spec 5.8「分叉连线图」的降级已经作废（2026-09-14）**：spec 原文设想时间线上用连线画出「另起一稿」的分叉与「采纳」的合并；v1 落地时降级成一条平铺列表，2026-09-14 两处都补上了。① 版本面板的 `VersionTimeline.vue`：合并节点画 `.merge-curve`，进行中的稿画 Phase B 分叉线（`.draft-fork-curve`），后者需要逐稿拉 `/drafts/{id}/timeline` 找分叉点，**分叉点不在当前主线历史窗口内 / 端点出错 / 404 一律降级为不画**。② 真正的 `git log --graph --all` 在新的「提交历史」标签页：`GET /version/history` 一次给回主线 + 各稿 + 案件库最新稿的合成流（walk 根、TOPO 与 RevFlag 依赖见下方「协作历史」一节），泳道布局在纯函数 `frontend/src/utils/historyGraph.js` 里。进行中的稿仍然同时列在 `DraftList` 中（`log()`/`getVersionTimeline` 只沿当前 HEAD walk，所以老的 `/timeline` 端点看不到它们）。
 
@@ -512,7 +512,7 @@ xlsx 是无序集合，按单元格键比交集（`analyzeCells` :228），公�
 | `GET /version/merge/analysis?path=` | 一份冲突文件的完整 `Analysis`（含 overlaps 三栏文字、`plan`、`baseUnits`） | 裁决界面**按需**拉，**不塞进 `/status`**——一份几百段的合同这几个字段是几十 KB，每 120 秒推一遍纯属浪费。响应的 `data` 直接就是 `Analysis`（不再裹一层），前端 `services/mergeDraft.js` 按这个形状读 |
 | `POST /version/merge/resolve-file` | docx：客户端把引擎导出的字节传上来落盘 + 记一条待决记录 | multipart（`decisions` 是一段 JSON 数组文本，multipart 字段装不下结构化对象）。**只是「这一份我处理完了」，不是收尾** |
 | `POST /version/merge/resolve-structured` | xlsx/pptx：合并件由后端 POI 按 `decisions` 拼 | 这两类不需要引擎，字节不必在客户端和服务端之间走一个来回；`decisions` 为空即自动模式（另一侧独有的改动全部合入） |
-| `GET /version/provenance?fileId=&ref=` | 这份文件每一段 / 每格 / 每页最后是哪一版改的 | 见下方「逐段溯源」 |
+| `GET /version/provenance?fileId=&ref=` | 这份文件每一段 / 每格 / 每页最后是哪一版改的，外加编辑器顶上那条小条要的三个文件级字段（`versioned`/`dirty`/`fileVersion`） | 见下方「逐段溯源」与「版本身份小条」 |
 
 两个 resolve 端点共用 `landMerged`（:793）落盘 + 记录 + 回执，计数**取自分析结果而不是信客户端报上来的数**，
 且只在自动模式下有意义（逐处裁决的账在 `decisions` 里）。
@@ -687,6 +687,38 @@ LCS 的 DP 表是 O(n·m)，超过 `MAX_CELLS = 1500×1500`（:109）退回「�
 没对上说「本机未保存的改动」、回溯到头说「更早的版本」。
 表格 / 演示文稿的「当前这一格 / 当前这一页」由引擎新原语 `sheet_get_active_cell` / `slide_get_current` 提供，
 与段落级的 `get_review_context.paragraphIndex` 是同一个位置（契约见 doc-editor.md）。
+**这两条原语自 dev-board#672 复测起没有宿主调用方了**（小条改成文件级，见下一段），但它们是引擎公开 API、
+`lowa-e2e` 组 34 有用例，不要当死代码清掉。
+
+**编辑器顶上那条「版本身份小条」是文件级的，不跟光标（dev-board#672 复测，2026-09-16 用户拍板；
+spec §5.5 已改，初版口径在那里划掉留痕）**。它原本是「溯源光标条」，逐段跟着光标走——
+律师在这里要读的是「我现在看的这份文件，存进版本记录了吗、是哪一版」，而光标随便一动那句话就换一个名字，
+落进表格还整条消失（旧的 `provInBody` 那道闸）。现在它只回答那一件事，**逐段归属一个字没动**：
+仍在 `ReviewPanel` 的「溯源」标签里（数据是 `provRows`，与光标无关）。
+- **取数**：`GET /version/provenance` 一次带回三个新字段 —— `versioned`（这个项目开没开版本记录）、
+  `dirty`（这份文件磁盘上是不是领先版本记录）、`fileVersion`（最近一次**有名字**的版本，形状是 `ProvenanceUnit`，
+  `key`/`textHash` 为 null）。三者由 `ProvenanceService.putFileVersion` 产出，**算在昂贵的逐段回溯之前**，
+  所以 `computing:true` 那条路也带着它们——否则律师要盯着一条空白小条等几十秒。
+  `VersionController` 的「没开版本记录」早退分支也回 `versioned:false` + `dirty:false`（`Map.of` 装不了 null，
+  `fileVersion` 那个键直接不给；前端读到 undefined 与 null 同义）。
+- **「最近一次有名字的版本」= `ProjectRepoService.latestNamedVersionForPath`**：沿**这份文件自己的历史**
+  从新往旧走，第一条 `kind != auto`（kind 缺失按 auto，与 `toEntry` 同口径）且触及该路径的版本，命中即早停。
+  这就是 `ProvenanceService.foldMap` 的折叠口径施加在文件尺度上——组头就是第一条非 auto；
+  折叠落在这份文件自己的历史里是对的而不是巧合：一段工作收尾时的 NO_FF 合并节点带着这段工作对该文件的净变化
+  （见地雷 #14），所以 auto 的归宿必然也触及这个路径。还没收尾那段工作里的 auto 比任何命名版本都新、
+  找不到归宿，照旧不算有名字。窗口上限沿用 `MAX_HISTORY`（500）。
+- **「本机未保存的改动」= `ProjectRepoService.isPathDirty`**：**单路径 `git status`，只读、一次 `add` 都不做**
+  （`add` 在合并窗口里等于「这个冲突我解决了」，见地雷 #20；这条小条随每次落版刷新，绝不能带副作用），
+  也顺带省掉 `pendingChanges` 的全仓 `add "."`。读不出来一律报「不脏」——宁可少说一句，
+  也不要在正文上方挂一句站不住的「本机未保存的改动」。结束工作 / 采纳 / 重载落版后随 `version-landed`
+  重拉 provenance 而消失（PR#860 已接好的链）。
+- **三态判定在纯函数 `utils/provenanceAlign.js` 的 `fileVersionBar`**（顺序有意义）：`versioned` 假 → 整条不出现
+  （这时说「初始版本」或「本机未保存的改动」都是胡说）；`dirty` → 「本机未保存的改动」，**排在版本名前面**
+  （律师此刻要知道的是「还没进版本记录」）；否则报 `fileVersion`，为 null 时落到「初始版本」
+  （`version.provenanceFileInitial`）。`sha` 非空才可点（点击行为没动，仍是 `open-history`）。
+  组件那边只剩 `provenanceBar`/`provenanceBarVisible`/`provText`/`provSha` 四个薄 computed。
+  护栏 `frontend/tests/version-history/fileVersionBar.test.mjs`（11 条）与
+  `ProvenanceServiceTest.fileVersion*`/`.dirtyFollowsTheWorkingTreeOfThisFileOnly`。
 
 **已知限制（都是取舍，不是待修的 bug）**：
 - **另一侧「只改了格式没改文字」的段自动合不过来**——文字重放带不动格式。这一档不静默丢掉：引擎把它列进 `formatOnly`，
@@ -798,7 +830,9 @@ LCS 的 DP 表是 O(n·m)，超过 `MAX_CELLS = 1500×1500`（:109）退回「�
   `XlsxMergerTest`/`PptxMergerTest`（以主线为底改、清空即删格、公式重算、sldId 与相似度两条对齐路径）、
   `MergeAnalysisServiceTest`（缓存键、超时降级、`documentMerges` 的 `state`）、
   `MergeResolveFileTest`（两个 resolve 端点 + `requireConflictPath` 的路径/语境双校验 + `MERGED` 护栏）、
-  `ProvenanceServiceTest`（两条归属规则、第二父、改名跟随 `followsRename`、窗口截断、缓存命中）。
+  `ProvenanceServiceTest`（两条归属规则、第二父、改名跟随 `followsRename`、窗口截断、缓存命中；
+  dev-board#672 复测新增 `fileVersionIsTheLatestNamedVersionThatTouchedThisFile` / `fileVersionSkipsAutosaves` /
+  `fileVersionIsAbsentUntilTheFileLandsANamedVersion` / `dirtyFollowsTheWorkingTreeOfThisFileOnly` 四条钉文件级小条）。
   尾注的写读往返由 `com.checkba.version.CommitTrailerContractTest` 钉（`X-AWD-Merge-Context` 三值 + 未知值只 warn 不阻断、
   `X-AWD-Merges` 的 auto/manual 两种 list、截断 `+N`、脏条目丢弃、编码往返）。
   夹具在同包的 `MergeFixtures`（现造三份同源 docx/xlsx/pptx）与 `MergeScene`（起一个真仓库把两边推到 MERGING 态），

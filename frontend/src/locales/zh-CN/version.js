@@ -399,17 +399,16 @@ export default {
   detailMerges: '合并',
   resolutionKeptSide: '{path} 留了{side}的',
   resolutionMerged: '{path} 已逐处合并',
-  // 逐段溯源（dev-board#632）。光标条与侧栏「溯源」标签共用这几句。
+  // 逐段溯源（dev-board#632）。版本身份小条与侧栏「溯源」标签共用这几句。
   provenanceTab: '溯源',
   provenanceUnsaved: '本机未保存的改动',
   provenanceEarlier: '更早的版本',
-  provenanceLoading: '正在查这一段的来历…',
+  // 小条（dev-board#672 复测）：这份文件还没进过任何命名版本时说这一句
+  provenanceFileInitial: '初始版本',
   provenanceEmpty: '这份文件还没有版本记录，暂时查不到每一段的来历。',
   provenanceSummary: '本稿 {total} 段：{parts}',
   provenanceSummaryPart: '{name} {count} 段',
   provenanceTruncated: '只回溯了最近的版本，更早的改动统一记作「更早的版本」。',
-  provenanceCellLabel: '当前单元格',
-  provenanceSlideLabel: '当前页',
   resolutionKeptMain: '{path} 留了你这边',
   resolutionKeptDraft: '{path} 留了同事那边',
   resolutionKeptBoth: '{path} 两边都留',

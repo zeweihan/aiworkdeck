@@ -157,12 +157,18 @@ public class ProvenanceService {
         out.put("units", List.of());
         out.put("truncated", false);
         out.put("computing", false);
+        // 文件级版本身份（dev-board#672 复测）：小条出不出现看 versioned，说什么看后两个
+        out.put("versioned", false);
+        out.put("fileVersion", null);
+        out.put("dirty", false);
 
         String sha = repoService.resolveRef(projectId, wanted);
         if (sha == null) {
             return out;
         }
         out.put("ref", sha);
+        out.put("versioned", true);
+        putFileVersion(out, projectId, userId, relPath, sha);
 
         Computed computed;
         try {
@@ -569,19 +575,52 @@ public class ProvenanceService {
                 out.add(new ProvenanceUnit(a.key(), a.hash(), null, null, null, false, null, earlier, null));
                 continue;
             }
-            String title = e.note() != null && !e.note().isBlank() ? e.note() : e.message();
-            out.add(new ProvenanceUnit(
-                    a.key(),
-                    a.hash(),
-                    e.sha(),
-                    e.sha().length() < 7 ? e.sha() : e.sha().substring(0, 7),
-                    VersionAuthorResolver.preferredAuthorName(e, remoteNames),
-                    isSelf(e, projectId, userId),
-                    e.when(),
-                    title,
-                    HistoryTypeClassifier.classify(e.message(), e.kind())));
+            out.add(toUnit(a.key(), a.hash(), e, remoteNames, projectId, userId));
         }
         return out;
+    }
+
+    /** 一笔版本翻成律师读得懂的一条：谁、哪一版、什么时候、那一版叫什么。逐段与文件级共用。 */
+    private ProvenanceUnit toUnit(String key, String hash, VersionEntry e,
+                                  Map<String, String> remoteNames, long projectId, long userId) {
+        String title = e.note() != null && !e.note().isBlank() ? e.note() : e.message();
+        return new ProvenanceUnit(
+                key,
+                hash,
+                e.sha(),
+                e.sha().length() < 7 ? e.sha() : e.sha().substring(0, 7),
+                VersionAuthorResolver.preferredAuthorName(e, remoteNames),
+                isSelf(e, projectId, userId),
+                e.when(),
+                title,
+                HistoryTypeClassifier.classify(e.message(), e.kind()));
+    }
+
+    /**
+     * 文件级版本身份（dev-board#672 复测，2026-09-16 用户拍板）：编辑器顶上那条小条
+     * 不再逐段跟光标，改说「这份文件最近一次有名字的版本」+「本机未保存的改动」。
+     * 逐段溯源本身一个字没动——{@code units} 照旧。
+     *
+     * <p>这两样**算在昂贵的逐段回溯之前**：回溯超预算时整条请求回 {@code computing:true}，
+     * 小条不该跟着空着几十秒（它本来只要一次早停 walk 加一次单路径 status）。
+     *
+     * <p>两样都是尽力而为：算不出来就少说一句，绝不把编辑器顶栏变成一个错误提示。
+     */
+    private void putFileVersion(Map<String, Object> out, long projectId, long userId,
+                                String relPath, String ref) {
+        try {
+            out.put("dirty", repoService.isPathDirty(projectId, relPath));
+        } catch (Exception e) {
+            log.debug("读单文件脏位失败: project={} path={}", projectId, relPath, e);
+        }
+        try {
+            VersionEntry e = repoService.latestNamedVersionForPath(projectId, ref, relPath, maxHistory);
+            if (e != null) {
+                out.put("fileVersion", toUnit(null, null, e, remoteDisplayNames(projectId), projectId, userId));
+            }
+        } catch (Exception ex) {
+            log.warn("读文件级版本身份失败: project={} path={}", projectId, relPath, ex);
+        }
     }
 
     /**

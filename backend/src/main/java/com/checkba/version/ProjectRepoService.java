@@ -549,6 +549,73 @@ public class ProjectRepoService {
         }
     }
 
+    /**
+     * 这份文件**最近一次有名字的版本**（dev-board#672 复测，2026-09-16 用户拍板）。
+     *
+     * <p>编辑器顶上那条小条不再逐段跟光标，改成文件级指示器，用的就是这一条。
+     * 折叠口径与 {@code ProvenanceService.foldMap} 逐字相同（{@code session} 开组、其后
+     * 更旧的 {@code auto} 折进它），只是施加在**这份文件自己的历史**上——组头就是第一条
+     * 非 auto，所以这里等价于「沿这份文件的历史从新往旧走，第一条 kind != auto 的版本」。
+     * 折叠落在这份文件自己的历史里是对的而不是巧合：一段工作收尾时的 NO_FF 合并节点
+     * 带着这段工作对该文件的净变化（见 {@link #logForPath} 那条地雷），所以 auto 的归宿
+     * 必然也「触及」这个路径。
+     *
+     * <p>还没收尾那段工作里的 auto 比任何命名版本都新、找不到归宿，照旧不算有名字
+     * （与溯源出参侧的折叠同一条规则）：跳过它们，报更旧的那一版。
+     *
+     * <p>早停：命中第一条就返回，不像 {@link #logForPath} 那样把整个窗口走完。
+     *
+     * @param maxScan 最多看多少笔提交（防着一份很老的文件把整部历史走穿）
+     * @return 窗口内没有任何命名版本触及过这个路径时 null
+     */
+    public VersionEntry latestNamedVersionForPath(long projectId, String ref, String relPath, int maxScan) {
+        if (relPath == null || relPath.isBlank()) return null;
+        try (Repository repo = open(projectId); Git git = new Git(repo);
+             RevWalk walk = new RevWalk(repo)) {
+            ObjectId start = repo.resolve(ref);
+            if (start == null) return null;
+            Map<String, String> milestones = milestonesIn(repo);
+            TreeFilter pathFilter = PathFilter.create(relPath);
+            for (RevCommit c : git.log().add(start).setMaxCount(Math.max(1, maxScan)).call()) {
+                // kind 缺失按 auto 处理，与 toEntry 同口径
+                String kind = extractTrailer(c.getFullMessage(), KIND_TRAILER);
+                if (kind == null || "auto".equals(kind)) continue;
+                RevCommit commit = walk.parseCommit(c.getId());
+                if (touchesPath(repo, git, walk, commit, pathFilter)) {
+                    return toEntry(c, milestones);
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            throw new VersionException("读取文件最近的命名版本失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 这份文件磁盘上的内容是不是已经领先版本记录了——编辑器顶上那条小条的
+     * 「本机未保存的改动」就是这一位（dev-board#672 复测）。
+     *
+     * <p>**只读**：走单路径 {@code status}，一次 {@code add} 都不做。{@code git add} 在合并
+     * 窗口里的语义是「这个冲突我解决了」（见 {@link #pendingChanges} 的注释），而这条小条会
+     * 随编辑器每次落版刷新，绝不能带副作用；顺带也省掉了全仓 {@code add "."} 的开销。
+     *
+     * <p>读不出来时保守地报「不脏」：这是一个锦上添花的指示器，宁可少说一句，
+     * 也不要在正文上方挂一句站不住的「本机未保存的改动」。
+     */
+    public boolean isPathDirty(long projectId, String relPath) {
+        if (relPath == null || relPath.isBlank()) return false;
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            Status st = git.status().addPath(relPath).call();
+            return !st.getModified().isEmpty() || !st.getChanged().isEmpty()
+                    || !st.getAdded().isEmpty() || !st.getRemoved().isEmpty()
+                    || !st.getMissing().isEmpty() || !st.getUntracked().isEmpty()
+                    || !st.getConflicting().isEmpty();
+        } catch (Exception e) {
+            log.warn("读取单文件未提交改动失败: project={} path={}", projectId, relPath, e);
+            return false;
+        }
+    }
+
     // ==================== 统一历史（spec 2026-09-14 §2.4） ====================
 
     /**
