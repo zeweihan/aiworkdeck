@@ -30,7 +30,7 @@
 - [x] Engine: capture semantic context and accept semantic text commands; bounded whole-sentence/paragraph insertion uses existing completion token/check and one undo group; selection replacement only when explicitly previewed and expected text matches.
 - [x] Local contextual fields: explicit local suggestions use role/definition facts; ordinary typing retains existing local word completion; unknown type falls back to existing word completion. Automatic ranking integration is a later milestone.
 - [x] Initial evaluation: non-mirrored domain tests, context/generation auth and negative tests, real LOWA accept/undo/stale cases, live models against 18 frozen synthetic development cases (not the held-out release set). Record failures, cost and complete-path latency; no timing-constant claims.
-- [ ] Docs, independent review, CI and merge; dev-board records and pending user retest. No release.
+- [x] Docs and independent review; final CI/merge and dev-board status tracked in [PR #874](https://github.com/zeweihan/aiworkdeck/pull/874). No release.
 
 ## Integration rulings
 
