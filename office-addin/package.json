@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "build:deploy": "node scripts/build-manifest.mjs",
     "build:wps": "node scripts/build-wps.mjs",
-    "test": "node --test taskpane/lib/*.test.js",
+    "test": "node --test taskpane/lib/*.test.js scripts/*.test.mjs",
     "build:installers": "node installer/build-installers.mjs"
   },
   "dependencies": {
