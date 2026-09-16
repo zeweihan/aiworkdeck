@@ -65,3 +65,25 @@ If only three can be produced, keep 1, 3 and 4 — hero, platform breadth, secon
 ```
 
 Upload order in Partner Center is the display order, so the numbers are the order.
+
+---
+
+## 当前已有的镜头（2026-09-16 走查，dev-board#697）
+
+| 文件 | 画面 | 可否直接上架 |
+|---|---|---|
+| `01-word-mac-signed-in.png` | Mac Word，任务窗格已登录，文档是三段英文谅解备忘录，窗格显示三个快捷动作 | 可用（英文界面） |
+| `01-word-mac-tracked-changes.png` | Mac Word 审阅选项卡，AI 把口语化表述改成正式措辞，正文里是彩色修订 | **待重拍**：AI 回复正文是中文（dev-board#713） |
+| `02-excel-mac-signed-in.png` | Mac Excel，窗格已登录，工作表里是小表格 | 可用 |
+| `04-excel-mac-conversation.png` | Mac Excel，窗格里一轮完整问答 | **待重拍**：回复中文，且工具 chip 显示为「读取区域」（dev-board#713） |
+
+还缺三张，商店列表至少要覆盖审核说明里出现的每个宿主：
+
+- **PowerPoint（Mac）**：功能区上没有 AI WorkDeck 组，按钮进不去（dev-board#714），修好后补拍新增幻灯片那一幕。
+- **Word（Windows）**：Parallels 里那台装的仍是国内站清单，登录报「当前站点不支持邮箱方式」。
+  在虚拟机里跑一次 `https://addin.workdeck.ai/office-addin/dl/AI-WorkDeck-Office-Addin.exe` 再重开 Word 即可。
+- **Word（网页版）**：插入 → 加载项 → 上传我的加载项，传 `office-addin/dist-deploy-intl/manifest.xml`。
+
+重拍时注意：修订气泡会打印 Word 用户的真实姓名，截图前把该窗口切成行内修订
+（`osascript -e 'tell application "Microsoft Word" to set revisions mode of view of active window to in line revisions'`），
+截完再切回去。
