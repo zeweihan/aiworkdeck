@@ -55,14 +55,16 @@ STEP 1 - OPEN THE TASK PANE  (Word)
    The task pane opens on the right with a welcome card.
 
 STEP 2 - SIGN IN
-3. Choose "Sign in" at the top right of the task pane.
+3. The pane opens on a welcome card that explains what the add-in does. Choose the
+   sign-in entry on that card (there is no control labelled "Sign in" in the header).
 4. Select the "Email" tab (email + verification code).
 5. Enter {{REVIEW_EMAIL}} in the Email field and {{REVIEW_CODE}} in the Verification code
    field. Do NOT press "Get code" - the code above is fixed for this account and nothing
    is emailed; pressing it is harmless but unnecessary. If a human-verification widget
    appears, complete it once.
 6. Choose "Sign in and connect". The pane returns to the chat view and an avatar
-   appears at the top right.
+   appears at the top right. The sign-in form is deliberately not reachable again once
+   signed in; use the avatar menu to sign out first if you need to sign in a second time.
    (The "Phone" tab is for customers with a Chinese mobile number; it sends an SMS and is
    not usable for this review, so please use the Email tab.)
 
@@ -80,7 +82,10 @@ STEP 4 - EDIT THE DOCUMENT  (this is the core scenario)
    Expected result: the edits appear in the document as TRACKED CHANGES (coloured,
    underlined insertions and struck-through deletions). Confirm this on the Word
    Review tab - the changes can be accepted or rejected individually.
-   The pane shows a chip naming each document operation it performed.
+   How the tracked changes are drawn depends on your own Word setting (Review tab,
+   Display for Review): balloons in the right margin, inline markup, or - in Simple
+   Markup - only vertical change bars. Choose All Markup to see the edits themselves.
+   The pane also shows a chip naming each document operation it performed.
 
 STEP 5 - ADD A COMMENT
 10. Send:
@@ -94,6 +99,7 @@ STEP 6 - EXCEL
 11. Open Excel, and in a blank sheet enter a few rows - for example A1:B4 with
     headers "Item" and "Amount" and three numeric rows.
 12. Home tab -> "AI WorkDeck" group -> "Open AI WorkDeck". You are still signed in.
+    (If that group is not on the ribbon, use Home tab -> Add-ins -> AI WorkDeck.)
 13. Send:
 
       Please add a total row under the table and make the header row bold.
@@ -106,6 +112,7 @@ STEP 7 - POWERPOINT
 14. Open PowerPoint, create a presentation with a title slide plus one content slide,
     and put some text on both.
 15. Home tab -> "AI WorkDeck" group -> "Open AI WorkDeck".
+    (If that group is not on the ribbon, use Home tab -> Add-ins -> AI WorkDeck.)
 16. Send:
 
       Please add a new slide at the end summarising this deck in three bullet points.
