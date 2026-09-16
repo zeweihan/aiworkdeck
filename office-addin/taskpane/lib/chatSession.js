@@ -119,6 +119,19 @@ let generation = 0
 // 会话 ID 优先由服务端签发（POST /api/agent/conversations）；
 // 端点不存在或失败时静默回退客户端生成的 conv-<毫秒>（与主前端一致）。插件会话独立。
 let conversationId = null
+/**
+ * 当前会话在服务端是否已经有落库消息（dev-board#715）。
+ *
+ * 它是「403 能不能就地自愈」的唯一判据：后端 canUseConversation 对**无消息**的会话
+ * 走签发登记簿（内存态，重启即清、24 小时过期），对**有消息**的会话走 DB 归属。
+ * 所以 403 有两种含义——无消息＝这个 ID 已经死了（丢掉换一个即可，什么都不会丢），
+ * 有消息＝它是别人的会话（换一个也修不好，得如实告诉用户）。
+ *
+ * **不能拿 messages.value.length 当判据**：send() 在调 preconnect/postChat 之前
+ * 就把用户气泡推进去了，于是「本地没有消息」在发送路径上永远不成立——
+ * 旧的 connect 自愈因此在发送路径上是一段死代码（dev-board#142 只覆盖到进面板那一次）。
+ */
+let conversationPersisted = false
 let connection = null
 let parser = null
 let currentAssistant = null
@@ -231,6 +244,7 @@ export async function activateSession({ settings, projectId }) {
   banner.value = ''
   notice.value = ''
   conversationId = null
+  conversationPersisted = false
   attachedFiles.value = []
   uploadingFiles.value = []
   // 换了账户/项目就要重新拉清单，旧清单上做出的「刚选了看不了图的模型」提示随之作废
@@ -248,6 +262,8 @@ export async function activateSession({ settings, projectId }) {
     conversationId = stored
     const history = await fetchConversationHistory(settings, stored)
     if (gen !== generation) return
+    // 服务端有落库消息 = 这条会话是真实存在的，之后再 403 就不是「已失效」而是归属问题
+    conversationPersisted = history.length > 0
     if (history.length) {
       messages.value = history.map(toLocalMessage)
       sealStaleQuestions()
@@ -518,6 +534,7 @@ export async function switchConversation(convId) {
   saveConversationId(ctx.projectId, convId, hostScope())
   const history = await fetchConversationHistory(ctx.settings, convId)
   if (gen !== generation) return
+  conversationPersisted = history.length > 0
   if (history.length) {
     messages.value = history.map(toLocalMessage)
     sealStaleQuestions()
@@ -540,33 +557,59 @@ export async function switchConversation(convId) {
  */
 async function preconnect() {
   if (!ctx.projectId || !ctx.settings || !isConfigured(ctx.settings)) return
-  if (!conversationId) {
-    // 会话 ID 优先服务端签发；仅旧后端（端点 404）时回退客户端生成。
-    // 按项目落本机存储，任务窗格重建后据它接回同一场对话。
-    const gen = generation
-    const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
-    if (gen !== generation) return
-    conversationId = issued || `conv-${Date.now()}`
-    saveConversationId(ctx.projectId, conversationId, hostScope())
-  }
+  // 签发到一半会话身份又变了（切项目/切账户）：本次流程整体作废，别拿旧身份去建连
+  if (!conversationId && !(await issueConversation())) return
   try {
     await ensureConnection()
   } catch (e) {
-    // 自愈：存量会话 ID 已死（云后端签发登记簿是内存态，重启即清；或 localStorage 里
-    // 留着历史版本自造的 conv-*）。特征是 connect 403 且本地没有任何消息——有消息的
-    // 会话走 DB 归属判定不会 403。丢弃死 ID → 重新签发 → 只重试一次。
-    const canHeal = e && e.status === 403 && !messages.value.length
-    if (!canHeal) throw e
-    const gen = generation
+    // 自愈：存量会话 ID 已死（云后端签发登记簿是内存态，重启即清、24 小时过期；
+    // 或 localStorage 里留着历史版本自造的 conv-*）。丢弃死 ID → 重新签发 → 只重试一次。
+    if (!canHealConversation(e)) throw e
     console.warn('[Addin] 存量会话已失效（connect 403），丢弃并重新签发', conversationId)
-    conversationId = null
-    saveConversationId(ctx.projectId, '', hostScope())
-    const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
-    if (gen !== generation) return
-    conversationId = issued || `conv-${Date.now()}`
-    saveConversationId(ctx.projectId, conversationId, hostScope())
+    if (!(await renewConversation())) return
     await ensureConnection()
   }
+}
+
+/**
+ * 这次失败是不是「会话 ID 已经死了、换一条就能继续」。
+ *
+ * 403 = 后端 canUseConversation 不放行；404 = 会话不存在（旧后端/被删）。两者在
+ * **服务端没有落库消息**时含义相同：这个 ID 作废了，换一个新的什么都不会丢。
+ * 有落库消息的会话 403 是归属问题（别的账号/别的设备），换 ID 修不好，也不该
+ * 悄悄把用户看得见的历史扔掉——那一档走 conversationDenied 文案如实交代。
+ */
+function canHealConversation(e) {
+  const status = e && e.status
+  return (status === 403 || status === 404) && !conversationPersisted
+}
+
+/** 签发一个新会话 ID 并落盘（旧后端端点 404 时回退客户端自造）。 */
+async function issueConversation() {
+  const gen = generation
+  const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
+  if (gen !== generation) return false
+  conversationId = issued || `conv-${Date.now()}`
+  saveConversationId(ctx.projectId, conversationId, hostScope())
+  conversationPersisted = false
+  return true
+}
+
+/**
+ * 丢弃当前（已死的）会话 ID 换一个新的。返回 false 表示期间会话身份又变了，
+ * 调用方应当整体放弃本次流程（结果已作废）。
+ *
+ * 连接也要一并关掉：它是绑在旧 conversationId 上建起来的，留着它的话
+ * ensureConnection 会当成「已连好」直接返回，新会话反而没有通道。
+ */
+async function renewConversation() {
+  closeConnection()
+  conversationId = null
+  conversationPersisted = false
+  saveConversationId(ctx.projectId, '', hostScope())
+  // 新会话在后端没有 InlineContentCache 条目，正文省传的前提不复存在
+  resetDocCache()
+  return issueConversation()
 }
 
 /**
@@ -1223,12 +1266,12 @@ export async function send(overrideText) {
     }
     if (!activeContext) activeContext = readDocumentMeta()
 
-    await postChat(settings, {
+    const buildPayload = (context) => ({
       projectId: parseInt(projectId, 10),
       conversationId,
       message: prompt,
       mode: 'AGENT',
-      activeContext,
+      activeContext: context,
       // 按次指定模型与手选 skill（后端 AgentChatRequest 原生字段；空值不上送走默认）
       ...(selectedModel.value ? { model: selectedModel.value } : {}),
       ...(selectedSkillIds.value.length ? { skillIds: [...selectedSkillIds.value] } : {}),
@@ -1244,13 +1287,46 @@ export async function send(overrideText) {
       officeHost: detectHost() || 'word',
       officeFamily: hostFamily() === 'wps' ? 'wps' : 'office'
     })
+
+    try {
+      await postChat(settings, buildPayload(activeContext))
+    } catch (e) {
+      // chat 与 connect 走的是同一个 canUseConversation（dev-board#715）：连得上不等于
+      // 发得出——SSE 的重连循环把 403 吞在退避里只显示「正在重连」，POST /chat 却当场
+      // 报错，于是用户看到「每条都失败，只有点新对话才恢复」。这里与 connect 同一套自愈：
+      // 换一条会话 → 重发这一条 → 再失败才报错。
+      if (!canHealConversation(e)) throw e
+      console.warn('[Addin] 会话已失效（chat HTTP ' + e.status + '），丢弃并重新签发后重发一次', conversationId)
+      if (!(await renewConversation())) return { needSettings: false }
+      await ensureConnection()
+      // 新会话在后端没有正文缓存：重建 activeContext，让省传退回全文，
+      // 否则重发的这条消息在模型眼里是一份「只有哈希、没有正文」的空上下文
+      let retryContext = activeContext
+      if (read && read.doc) retryContext = buildActiveContext(read.doc, read.hash)
+      await postChat(settings, buildPayload(retryContext))
+      notice.value = t('conversationRenewedNotice')
+    }
+    // 消息已被后端收下 = 这条会话从此有落库消息，后续 403 不再是「已失效」
+    conversationPersisted = true
     if (perfRound) perfRound.chatAcceptedMs = perfSince()
   } catch (e) {
-    assistant.error = e.message || t('sendFailed')
+    assistant.error = sendErrorText(e)
     disableDocDedup()
     finishStreaming()
   }
   return { needSettings: false }
+}
+
+/**
+ * 发送失败的用户可读文案：裸的「HTTP 403」对用户没有任何可操作信息，
+ * 换成说清处境与下一步的两句话（红线：不含「登录/未授权/请先」，见 api.js 文件头）。
+ */
+function sendErrorText(e) {
+  const status = e && e.status
+  if (status === 403 || status === 404) {
+    return conversationPersisted ? t('conversationDenied') : t('conversationExpiredRetryFailed')
+  }
+  return (e && e.message) || t('sendFailed')
 }
 
 /**
@@ -1278,6 +1354,7 @@ export function newConversation() {
   closeConnection()
   if (ctx.projectId) saveConversationId(ctx.projectId, '', hostScope())
   conversationId = null
+  conversationPersisted = false
   messages.value = []
   currentAssistant = null
   parser = null
