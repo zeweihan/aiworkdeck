@@ -559,9 +559,32 @@ public class ChatModelFactory {
             
             String apiKey = resolveOpenRouterApiKey();
             String baseUrl = resolveOpenRouterBaseUrl();
+            requireByokKey(apiKey);
             
             return streamingModel(apiKey, baseUrl, modelId, config.getTimeout());
         });
+    }
+
+    /**
+     * BYOK 通道的 key 为空时当场拒绝，不许把 {@code Authorization: Bearer } 发出去。
+     *
+     * <p>非流式那条路早就有这道闸（openai4j 的 {@code OpenAiClient.Builder.openAiApiKey}
+     * 直接抛「openAiApiKey cannot be null or empty」），而流式通道是我们自己持有 HTTP 层的
+     * {@link OpenRouterStreamingChatModel}，空 key 会原样发出去，换回 OpenRouter 的
+     * {@code {"error":{"message":"Missing Authentication header","code":401}}}——
+     * 一条指不出任何下一步的上游 401。2026-09-16 国际站云后端就是这么坏的：
+     * {@code ai.activeProvider} 没写进 system_setting，静态默认值 {@code open-router} 生效，
+     * 而云后端本就不该有 BYOK key，于是每条消息都发空 Bearer。
+     *
+     * <p>文案红线同 AccountService：不得含「登录」「未授权」「请先」三个子串，
+     * 否则前端 api.js 会按 4010 掉线处理、把真正的原因连同会话一起清掉。
+     */
+    private static void requireByokKey(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException(
+                    "当前 AI 供应商是「自备 Key」（OpenRouter），但没有配置 API Key。"
+                            + "到设置页填入 OpenRouter API Key，或把供应商切换为「AI WorkDeck 云端」");
+        }
     }
 
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreateOllamaStreamingModel(String modelName) {
