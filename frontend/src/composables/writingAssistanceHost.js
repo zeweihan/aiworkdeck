@@ -7,9 +7,10 @@ const preferenceListeners = new Map()
 
 /** Host-scoped vocabulary and explicit lookup. Dependencies stay injectable for isolation tests. */
 export function createWritingAssistanceHost({ projectId, fileId, userId, execute, send, api, storage, writable, language,
-  openSettings = null,
+  openSettings = null, semantic = null,
   timers = { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) } }) {
   const session = `${projectId}:${fileId}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+  semantic?.bindSession(session)
   const key = `awd_writing_preferences_${userId}`
   let disposed = false, items = [], documentItems = [], loadSequence = 0, seedSequence = 0
   const seededTexts = new Set()
@@ -91,6 +92,7 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     }
   }
   async function perform(action, data) {
+    if (action.startsWith('semantic-') && semantic) return semantic.perform(action, data)
     switch (action) {
       case 'refresh': await refresh(); return {}
       case 'refreshDocument': await Promise.all([refresh(), seedDocument()]); return {}
@@ -131,6 +133,7 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
       await Promise.allSettled([refresh(), seedDocument()])
     },
     modified() {
+      semantic?.modified()
       if (disposed || seedComplete || !writable) return
       // A first scan interrupted by typing must recover when the user pauses.
       // Once seeded, ongoing input learning handles edits without rescanning.
@@ -154,6 +157,7 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     destroy() {
       if (disposed) return
       disposed = true; loadSequence++; seedSequence++
+      semantic?.destroy()
       if (seedTimer != null) timers.clear(seedTimer)
       const listeners = preferenceListeners.get(key)
       listeners?.delete(receivePreferences)

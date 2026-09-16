@@ -22,6 +22,7 @@ import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.openai.InternalOpenAiHelper;
 import dev.langchain4j.model.openai.OpenAiStreamingResponseBuilder;
+import dev.langchain4j.model.output.TokenUsage;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.MediaType;
@@ -86,6 +87,16 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     /** 本模型是否需要显式提示缓存断点，见 {@link #requiresExplicitPromptCache}。 */
     private final boolean explicitPromptCache;
 
+    /** Empty/length-limited responses can still incur provider usage; null means unreported, never zero. */
+    public static final class EmptyResponseException extends RuntimeException {
+        private final TokenUsage tokenUsage;
+        public EmptyResponseException(TokenUsage tokenUsage) {
+            super("Stream ended without usable assistant content");
+            this.tokenUsage = tokenUsage;
+        }
+        public TokenUsage tokenUsage() { return tokenUsage; }
+    }
+
     public OpenRouterStreamingChatModel(String apiKey, String baseUrl, String modelName, Duration timeout) {
         this.apiKey = apiKey;
         this.modelName = modelName;
@@ -107,6 +118,14 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         return modelName;
     }
 
+    public Call generateCancellable(List<ChatMessage> messages, int maxOutputTokens,
+                                    StreamingResponseHandler<AiMessage> handler) {
+        if (maxOutputTokens < 256 || maxOutputTokens > 4096) {
+            throw new IllegalArgumentException("Writing output limit must be between 256 and 4096 tokens");
+        }
+        return send(messages, null, maxOutputTokens, handler);
+    }
+
     @Override
     public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
         generate(messages, (List<ToolSpecification>) null, handler);
@@ -122,6 +141,11 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     @Override
     public void generate(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
                          StreamingResponseHandler<AiMessage> handler) {
+        send(messages, toolSpecifications, null, handler);
+    }
+
+    private Call send(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
+                      Integer maxOutputTokens, StreamingResponseHandler<AiMessage> handler) {
         // 不做显式缓存的通道要先把分界标记摘掉（在序列化之前，保住字节级一致）
         List<ChatMessage> outbound = explicitPromptCache ? messages : stripVolatileSeparator(messages);
         ChatCompletionRequest.Builder rb = ChatCompletionRequest.builder()
@@ -133,10 +157,22 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         if (toolSpecifications != null && !toolSpecifications.isEmpty()) {
             rb.tools(InternalOpenAiHelper.toTools(toolSpecifications, false));
         }
+        if (maxOutputTokens != null) rb.maxTokens(maxOutputTokens);
         // 非 Anthropic 一律走这一行的原样结果，请求体逐字节与改造前一致
         String body = Json.toJson(rb.build());
         if (explicitPromptCache) {
             body = markSystemForCaching(body);
+        }
+        // Lightweight Qwen writing must not spend the entire small output budget on hidden reasoning.
+        // Other models and ordinary chat keep their existing provider behavior.
+        if (maxOutputTokens != null && modelName != null
+                && (modelName.toLowerCase(java.util.Locale.ROOT).startsWith("qwen/")
+                    || modelName.toLowerCase(java.util.Locale.ROOT).startsWith("alibaba/"))) {
+            try {
+                ObjectNode writing = (ObjectNode) LENIENT.readTree(body);
+                writing.set("reasoning", LENIENT.createObjectNode().put("enabled", false));
+                body = LENIENT.writeValueAsString(writing);
+            } catch (IOException e) { throw new IllegalStateException("Cannot encode writing request", e); }
         }
 
         Request request = new Request.Builder()
@@ -147,8 +183,12 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
                 .post(RequestBody.create(body, JSON))
                 .build();
 
-        StreamSession session = new StreamSession(handler);
-        client.newCall(request).enqueue(new Callback() {
+        StreamSession session = new StreamSession(handler, maxOutputTokens != null);
+        // Explicit paid writing requests do not transparently retry a failed connection.
+        // The existing general chat transport retains its original OkHttp policy.
+        OkHttpClient transport = maxOutputTokens == null ? client : client.newBuilder().retryOnConnectionFailure(false).build();
+        Call call = transport.newCall(request);
+        call.enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
                 session.fail(e);
@@ -173,6 +213,7 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
                 }
             }
         });
+        return call;
     }
 
     // ==================== 提示缓存（Anthropic 显式断点） ====================
@@ -325,9 +366,12 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         private final ReasoningStreamingHandler reasoningHandler;
         private final OpenAiStreamingResponseBuilder builder = new OpenAiStreamingResponseBuilder();
         private final AtomicBoolean settled = new AtomicBoolean(false);
+        private TokenUsage reportedUsage;
+        private final boolean privateWriting;
 
-        StreamSession(StreamingResponseHandler<AiMessage> handler) {
+        StreamSession(StreamingResponseHandler<AiMessage> handler, boolean privateWriting) {
             this.handler = handler;
+            this.privateWriting = privateWriting;
             this.reasoningHandler = handler instanceof ReasoningStreamingHandler rh ? rh : null;
         }
 
@@ -370,7 +414,8 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             try {
                 root = LENIENT.readTree(payload);
             } catch (IOException e) {
-                log.warn("Unparseable SSE chunk ignored: {}", abbreviate(payload));
+                if (privateWriting) log.warn("Unparseable writing SSE chunk ignored");
+                else log.warn("Unparseable SSE chunk ignored: {}", abbreviate(payload));
                 return false;
             }
             // OpenRouter 会在 HTTP 200 之后用 data 事件送上游错误（{"error":{"code":429,...}}），
@@ -385,10 +430,16 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             try {
                 chunk = LENIENT.readValue(payload, ChatCompletionResponse.class);
             } catch (IOException e) {
-                log.warn("SSE chunk does not fit ChatCompletionResponse, ignored: {}", abbreviate(payload));
+                if (privateWriting) log.warn("Writing SSE chunk does not fit ChatCompletionResponse, ignored");
+                else log.warn("SSE chunk does not fit ChatCompletionResponse, ignored: {}", abbreviate(payload));
                 return false;
             }
             builder.append(chunk);
+            JsonNode usage = root.path("usage");
+            if (usage.path("prompt_tokens").isIntegralNumber() && usage.path("completion_tokens").isIntegralNumber()) {
+                int input = usage.path("prompt_tokens").asInt(), output = usage.path("completion_tokens").asInt();
+                if (input >= 0 && output >= 0) reportedUsage = new TokenUsage(input, output);
+            }
             List<ChatCompletionChoice> choices = chunk.choices();
             if (choices != null && !choices.isEmpty()) {
                 Delta delta = choices.get(0).delta();
@@ -422,7 +473,21 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
 
         private void complete() {
             if (!settled.compareAndSet(false, true)) return;
-            handler.onComplete(builder.build());
+            dev.langchain4j.model.output.Response<AiMessage> response;
+            try {
+                response = builder.build();
+            } catch (Exception e) {
+                // settled is already true: calling fail() here would silently discard this terminal.
+                handler.onError(new EmptyResponseException(reportedUsage));
+                return;
+            }
+            if (response == null || response.content() == null
+                    || ((response.content().text() == null || response.content().text().isBlank())
+                        && !response.content().hasToolExecutionRequests())) {
+                handler.onError(new EmptyResponseException(reportedUsage));
+                return;
+            }
+            handler.onComplete(response);
         }
 
         void fail(Throwable t) {

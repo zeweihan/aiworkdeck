@@ -177,6 +177,8 @@ import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
 import { createInlineReviewHost } from '@/composables/inlineReviewHost.js'
 import { createWritingAssistanceHost } from '@/composables/writingAssistanceHost.js'
+import { createSemanticWritingHost } from '@/composables/semanticWritingHost.js'
+import { getSemanticWritingSettings, saveSemanticWritingSettings, createSemanticWritingSuggestion, getSemanticWritingSuggestion, cancelSemanticWritingSuggestion, acceptSemanticWritingSuggestion } from '@/services/api.js'
 import { getProvenance, reviewDocInsight, listWritingCompletions, learnWritingCompletions, deleteWritingCompletion, clearWritingCompletions, lookupWritingSelection, getDocInsightEntity, getWritingCompletionDetail } from '@/services/api.js'
 import { guestPointToHost } from '@/utils/insightPopup.js'
 import { alignProvenance, fileVersionBar, provenanceSummary } from '@/utils/provenanceAlign.js'
@@ -1142,6 +1144,12 @@ export default {
         projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
         execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
         writable: this.canWrite,
+        semantic: createSemanticWritingHost({
+          projectId: Number(this.projectId), fileId: this.file.id, title: this.file.name || this.file.fileName || '', writable: this.canWrite,
+          execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
+          api: { settings: getSemanticWritingSettings, saveSettings: saveSemanticWritingSettings, suggest: createSemanticWritingSuggestion,
+            get: getSemanticWritingSuggestion, cancel: cancelSemanticWritingSuggestion, accept: acceptSemanticWritingSuggestion },
+        }),
         storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
         api: { list: listWritingCompletions, learn: learnWritingCompletions, remove: deleteWritingCompletion,
           clear: clearWritingCompletions, lookup: lookupWritingSelection, detail: getDocInsightEntity, learnedDetail: getWritingCompletionDetail },
