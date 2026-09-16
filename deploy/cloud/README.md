@@ -104,6 +104,10 @@
 - 存量本地 blob 无需搬迁：storagePath 以 `/` 开头的旧行走双读兼容，最迟 30 天被
   ACK/TTL 消化。
   （会话已 DB 落库，重启不掉浏览器登录态）
+- **国际站实例（addin.workdeck.ai，新加坡机）env 必须配 `AI_ACCOUNT_BASE_URL=https://www.workdeck.ai`**：
+  `ai.account.base-url` 的代码默认值是国内站 `https://www.aiworkdeck.com`，application-cloud.yml 不覆盖。
+  漏配的表现是国际站邮箱账号在插件里登录被回「当前站点不支持邮箱方式」（官网 `mail_not_supported_on_site`），
+  2026-09-16 实测（dev-board#695）。北京实例保持默认。
 - 更新插件任务窗格：office-addin `npm run build:deploy -- --url https://addin.aiworkdeck.com/office-addin`
   → 覆盖 web/office-addin/（**不要**动 web/ 根下的重定向 index.html，也不要再铺 h5）
 - DB 备份：`sudo -u postgres pg_dump aiworkdeck_cloud | gzip > /root/backup/...`（建议进 cron）
