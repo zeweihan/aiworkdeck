@@ -394,7 +394,7 @@ startEditorEndpoint({
       onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
-      onCursorMoved: () => { relaySelection(); writingAssistance?.cursorMoved(); inlineReview?.cursorMoved() },
+      onCursorMoved: (event) => { relaySelection(); writingAssistance?.cursorMoved(event); inlineReview?.cursorMoved() },
       onCommitted: (text) => { writingAssistance?.committed(text); inlineReview?.committed(text) },
       onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
       onCommentRequested: () => relayCommentRequest(),

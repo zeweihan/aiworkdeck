@@ -28,10 +28,12 @@ function harness(t) {
   // 引擎那一侧：落到 window 的按键就是「引擎能看到的按键」。
   const leaked = []
   dom.window.addEventListener('keydown', e => leaked.push(e.key))
-  let writing = null
+  let writing = null, before = '北京当红'
   const overlay = attachImeOverlay({
     canvas,
-    commit: () => ({ success: true }),
+    commit: text => { before += text; return { success: true } },
+    onCommitted: text => writing?.committed(text),
+    onCursorMoved: event => writing?.cursorMoved(event),
     onEnter: async () => { commands.push({ action: 'insert_paragraph', params: {} }); return { success: true } },
     sendCommand: async (action, params) => { commands.push({ action, params }); return { success: true } },
     onAssistanceKey: event => writing?.keydown(event) || false,
@@ -43,7 +45,7 @@ function harness(t) {
   const execute = async (action, params) => {
     calls.push({ action, params })
     if (action === 'get_completion_context') {
-      return { success: true, available: true, hasSelection: false, before: '北京当红', after: '', paragraph: '北京当红', token: 'cursor-1' }
+      return { success: true, available: true, hasSelection: false, before, after: '', paragraph: '北京当红', token: 'cursor-1' }
     }
     return { success: true, token: 'cursor-2' }
   }
@@ -64,7 +66,7 @@ function harness(t) {
     return event
   }
   return { dom, doc, canvas, input: overlay.element, overlay, writing, commands, calls, leaked,
-    press, expanded: () => overlay.element.getAttribute('aria-expanded'),
+    press, setBefore: value => { before = value }, expanded: () => overlay.element.getAttribute('aria-expanded'),
     open: async () => { writing.committed('北京当红'); await debounce(); assert.equal(overlay.element.getAttribute('aria-expanded'), 'true', '候选应已展开') } }
 }
 
@@ -126,4 +128,20 @@ test('落在画布上的方向键与回车照旧走引擎，宿主面板里的�
   h.press(panelButton, 'ArrowLeft')
   await tick()
   assert.deepEqual(h.commands, [], '宿主自己的 DOM 面板里的按键不归覆盖层管')
+})
+
+
+test('真实覆盖层重定位不清掉连续输入的候选选择及快速筛选', async t => {
+  const h = harness(t)
+  h.setBefore('北京当')
+  await h.open()
+  h.press(h.input, 'ArrowDown')
+  const picked = h.input.getAttribute('aria-activedescendant')
+  const delays = [], original = globalThis.setTimeout
+  t.mock.method(globalThis, 'setTimeout', (fn, delay, ...args) => { delays.push(delay); return original(fn, delay, ...args) })
+  h.press(h.input, '红')
+  h.input.dispatchEvent(new h.dom.window.InputEvent('input', { data: '红', inputType: 'insertText', bubbles: true }))
+  await new Promise(resolve => original(resolve, 120))
+  assert.ok(delays.includes(35), '真正的插入→光标重定位→提交链路必须使用35ms刷新')
+  assert.equal(h.input.getAttribute('aria-activedescendant'), picked, '仍有匹配的已选第二项不能跳回第一项')
 })
