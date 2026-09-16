@@ -255,6 +255,66 @@ class AuthControllerHardeningTest {
     }
 
     @Test
+    @DisplayName("邮箱+验证码走 loginWithEmail（国际站那批账号根本没有口令，落到口令分支必失败）")
+    void accountLoginEmailCodeBranch() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithEmail("hi@example.com", "123456"))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_z", 9L, "awd_hi", "Hi", 33L));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLogin(
+                Map.of("email", "hi@example.com", "code", "123456"), http());
+
+        assertEquals(0, result.get("code"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertEquals("awdt_z", data.get("token"));
+        verify(awdkLoginService, never()).loginWithPassword(any(), any());
+        verify(awdkLoginService, never()).loginWithPhone(any(), any());
+    }
+
+    @Test
+    @DisplayName("判定顺序：phone+code 优先于 email+code（两个都填时不该同时出站两次）")
+    void accountLoginPrefersPhoneOverEmail() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithPhone(anyString(), anyString()))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_p", 1L, "awd_p", "P", 1L));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        controller.accountLogin(
+                Map.of("phone", "13800138000", "email", "hi@example.com", "code", "123456"), http());
+
+        verify(awdkLoginService).loginWithPhone("13800138000", "123456");
+        verify(awdkLoginService, never()).loginWithEmail(any(), any());
+    }
+
+    @Test
+    @DisplayName("发验证码：填了 email 就转发邮箱那条路由，不是手机号那条")
+    void accountLoginSendCodeEmailBranch() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginSendCode(
+                Map.of("email", "hi@example.com", "captchaToken", "verify-param"), http());
+
+        assertEquals(0, result.get("code"));
+        verify(awdkLoginService).sendLoginCodeByEmail("hi@example.com", "verify-param");
+        verify(awdkLoginService, never()).sendLoginCode(any(), any());
+    }
+
+    @Test
+    @DisplayName("发验证码：手机号与邮箱都没填是参数错误，一条出站都不发")
+    void accountLoginSendCodeNeedsPhoneOrEmail() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginSendCode(Map.of("captchaToken", "tok"), http());
+
+        assertEquals(1, result.get("code"));
+        verifyNoInteractions(awdkLoginService);
+    }
+
+    @Test
     @DisplayName("验证码连续错 5 次后锁定：第 6 次不再出站到官网")
     void accountLoginLockoutAfterFiveWrongCodes() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);

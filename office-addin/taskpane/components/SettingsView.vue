@@ -13,7 +13,7 @@
         {{ t('loginHint') }}
       </p>
 
-      <!-- 手机号是大陆站主路径；国际站与存量账号走邮箱口令 -->
+      <!-- 手机号是大陆站主路径，邮箱验证码是国际站主路径；口令只剩两站的存量账号还在用 -->
       <div class="tabs">
         <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">{{ t('tabPhone') }}</button>
         <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">{{ t('tabEmail') }}</button>
@@ -30,31 +30,62 @@
           <span class="label">{{ t('smsCodeLabel') }}</span>
           <div class="code-row">
             <input v-model="smsCode" type="text" :placeholder="t('smsCodePlaceholder')" spellcheck="false" autocomplete="one-time-code" />
-            <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !phone.trim()" @click="sendCode">
+            <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !phone.trim()" @click="sendCode('phone')">
               {{ codeBtnLabel }}
             </button>
           </div>
-          <!--
-            人机验证控件的落点。阿里云是 popup 模式，平时不占位；`-trigger` 是 SDK 要求的
-            触发元素，由 getToken() 代点，用户看不到它，所以藏起来但**必须留在文档里**
-            （display:none 的节点仍可被 click()，移出文档就取不到 token 了）。
-          -->
-          <div id="login-captcha" class="captcha-holder"></div>
-          <button id="login-captcha-trigger" type="button" class="captcha-trigger" aria-hidden="true" tabindex="-1"></button>
         </div>
       </template>
 
       <template v-else>
-        <label class="field">
-          <span class="label">{{ t('emailLabel') }}</span>
-          <input v-model="account" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="username" />
-        </label>
+        <!-- 邮箱 tab 的主路径同样是验证码：国际站邮箱验证码注册出来的账号根本没有口令 -->
+        <template v-if="emailMode === 'code'">
+          <label class="field">
+            <span class="label">{{ t('emailLabel') }}</span>
+            <input v-model="email" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="email" />
+          </label>
 
-        <label class="field">
-          <span class="label">{{ t('passwordLabel') }}</span>
-          <input v-model="password" type="password" :placeholder="t('passwordPlaceholder')" spellcheck="false" autocomplete="current-password" />
-        </label>
+          <div class="field">
+            <span class="label">{{ t('smsCodeLabel') }}</span>
+            <div class="code-row">
+              <input v-model="emailCode" type="text" :placeholder="t('smsCodePlaceholder')" spellcheck="false" autocomplete="one-time-code" />
+              <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !email.trim()" @click="sendCode('email')">
+                {{ codeBtnLabel }}
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <label class="field">
+            <span class="label">{{ t('emailLabel') }}</span>
+            <input v-model="account" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="username" />
+          </label>
+
+          <label class="field">
+            <span class="label">{{ t('passwordLabel') }}</span>
+            <input v-model="password" type="password" :placeholder="t('passwordPlaceholder')" spellcheck="false" autocomplete="current-password" />
+          </label>
+        </template>
+
+        <div class="field">
+          <button class="linklike" @click="toggleEmailMode">
+            {{ emailMode === 'code' ? t('usePasswordInstead') : t('useCodeInstead') }}
+          </button>
+        </div>
       </template>
+
+      <!--
+        人机验证控件的落点。阿里云是 popup 模式，平时不占位；`-trigger` 是 SDK 要求的
+        触发元素，由 getToken() 代点，用户看不到它，所以藏起来但**必须留在文档里**
+        （display:none 的节点仍可被 click()，移出文档就取不到 token 了）。
+
+        **必须放在 v-if 分支之外**：控件在 onMounted 时按 id 认下这两个节点，之后一直
+        持有它们。放进某个分支里，用户切一次 tab 节点就被 Vue 拆掉，SDK 攥着的是一个
+        已经不在文档里的元素——弹不出滑块，也取不到 token，而且一声不响。
+      -->
+      <div id="login-captcha" class="captcha-holder"></div>
+      <button id="login-captcha-trigger" type="button" class="captcha-trigger" aria-hidden="true" tabindex="-1"></button>
 
       <div class="actions">
         <button class="btn primary" :disabled="connecting" @click="connectWithAccount">
@@ -131,6 +162,7 @@ import {
   getAccountLoginCaptchaConfig,
   postAccountLogin,
   postAccountLoginSendCode,
+  postAccountLoginSendEmailCode,
   postAwdkLogin
 } from '../lib/api.js'
 import { setupCaptcha } from '../lib/captcha.js'
@@ -153,10 +185,14 @@ const connecting = ref(false)
 const keyStatus = ref('')
 const keyStatusKind = ref('ok')
 
-// 账户登录（主路径）
+// 账户登录（主路径）。mode 是顶层 tab（手机号 / 邮箱）；emailMode 是邮箱 tab 内的
+// 二级切换：主路径 code（国际站邮箱验证码注册出来的账号只有这条路），password 留给存量账号。
 const mode = ref('phone')
+const emailMode = ref('code')
 const phone = ref('')
 const smsCode = ref('')
+const email = ref('')
+const emailCode = ref('')
 const account = ref('')
 const password = ref('')
 const sendingCode = ref(false)
@@ -223,7 +259,18 @@ function switchMode(next) {
   loginStatus.value = ''
 }
 
-async function sendCode() {
+function toggleEmailMode() {
+  emailMode.value = emailMode.value === 'code' ? 'password' : 'code'
+  loginStatus.value = ''
+}
+
+/**
+ * 发验证码。两个渠道（手机号 / 邮箱）走同一个云后端端点，由后端按填了哪个字段
+ * 转发到官网的 sms-login 或 mail-login，人机验证与倒计时两边完全一致。
+ *
+ * @param channel 'phone' | 'email'
+ */
+async function sendCode(channel) {
   loginStatus.value = ''
   if (!serverUrl.value.trim()) {
     loginStatusKind.value = 'error'
@@ -232,7 +279,7 @@ async function sendCode() {
   }
   sendingCode.value = true
   try {
-    // 先过人机验证再发码：官网把 verifyCaptcha 排在发短信之前，不带 token 就是 403。
+    // 先过人机验证再发码：官网把 verifyCaptcha 排在发信之前，不带 token 就是 403。
     // 官网未启用时 ensureCaptcha() 给 null，token 留空，行为与从前一致。
     const widget = await (captchaReady || ensureCaptcha())
     let captchaToken = ''
@@ -244,9 +291,13 @@ async function sendCode() {
         return
       }
     }
-    await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value, captchaToken)
+    if (channel === 'email') {
+      await postAccountLoginSendEmailCode({ serverUrl: serverUrl.value }, email.value, captchaToken)
+    } else {
+      await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value, captchaToken)
+    }
     loginStatusKind.value = 'ok'
-    loginStatus.value = t('codeSent')
+    loginStatus.value = channel === 'email' ? t('codeSentEmail') : t('codeSent')
     startCooldown()
   } catch (e) {
     loginStatusKind.value = 'error'
@@ -257,7 +308,24 @@ async function sendCode() {
 }
 
 /**
- * 账户登录：手机号+验证码 或 邮箱+口令换取 awdt_ 设备令牌后保存并进入对话视图。
+ * 当前表单要送出的凭据形状，与官网 /api/auth/exchange-key 的三种一一对应。
+ * 一并给出「填齐了没有」与没填齐时该说哪句话——三条分支的判定写在一处才不会漂。
+ */
+function currentCredentials() {
+  if (mode.value === 'phone') {
+    const credentials = { phone: phone.value.trim(), code: smsCode.value.trim() }
+    return { credentials, filled: !!(credentials.phone && credentials.code), hint: 'fillPhoneAndCode' }
+  }
+  if (emailMode.value === 'code') {
+    const credentials = { email: email.value.trim(), code: emailCode.value.trim() }
+    return { credentials, filled: !!(credentials.email && credentials.code), hint: 'fillEmailAndCode' }
+  }
+  const credentials = { account: account.value.trim(), password: password.value }
+  return { credentials, filled: !!(credentials.account && credentials.password), hint: 'fillEmailAndPassword' }
+}
+
+/**
+ * 账户登录：手机号+验证码 / 邮箱+验证码 / 账号+口令换取 awdt_ 设备令牌后保存并进入对话视图。
  * 凭据用完即弃（不落 localStorage，只有换回的 awdt_ 令牌被保存）。
  */
 async function connectWithAccount() {
@@ -267,21 +335,17 @@ async function connectWithAccount() {
     loginStatus.value = t('serverUrlEmptyHint')
     return
   }
-  const credentials = mode.value === 'phone'
-    ? { phone: phone.value.trim(), code: smsCode.value.trim() }
-    : { account: account.value.trim(), password: password.value }
-  const filled = mode.value === 'phone'
-    ? credentials.phone && credentials.code
-    : credentials.account && credentials.password
+  const { credentials, filled, hint } = currentCredentials()
   if (!filled) {
     loginStatusKind.value = 'error'
-    loginStatus.value = mode.value === 'phone' ? t('fillPhoneAndCode') : t('fillEmailAndPassword')
+    loginStatus.value = t(hint)
     return
   }
   connecting.value = true
   try {
     const awdtToken = await postAccountLogin({ serverUrl: serverUrl.value }, credentials)
     smsCode.value = ''
+    emailCode.value = ''
     password.value = ''
     applyToken(awdtToken)
     loginStatusKind.value = 'ok'
@@ -413,6 +477,19 @@ function save() {
 }
 
 .code-row input { flex: 1; }
+
+/* 邮箱 tab 内的二级切换：是个按钮（要能键盘聚焦），画成一行次要文字链 */
+.linklike {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--awd-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.linklike:hover { color: var(--awd-primary); }
 
 .code-btn {
   flex: none;

@@ -350,7 +350,8 @@ public class AuthController {
     }
 
     /**
-     * 账户登录：给手机号发验证码（匿名，转发官网 {@code /api/auth/sms-login/send-code}）。
+     * 账户登录：给手机号或邮箱发验证码（匿名，按填了哪个转发官网
+     * {@code /api/auth/sms-login/send-code} 或 {@code /api/auth/mail-login/send-code}）。
      *
      * <p>与下面的 {@code /account-login} 一起，让 Office 插件用户直接用手机号/邮箱登录，
      * 不必再去官网账户页生成 awdk_ Key 手工搬运。受同一个
@@ -389,9 +390,21 @@ public class AuthController {
         try {
             authAbuseGuard.checkCodeSendRate(ip);
             authAbuseGuard.recordCodeSend(ip);
-            awdkLoginService.sendLoginCode(
-                    body == null ? null : body.get("phone"),
-                    body == null ? null : body.get("captchaToken"));
+            // phone 与 email 二选一：大陆站账号本体是手机号、国际站是邮箱，本服务器不判站点，
+            // 用户填了哪个就转发哪条官网路由。phone 优先只是为了让判定顺序确定，
+            // 插件端每次也只会填一个。
+            String phone = trimmedField(body, "phone");
+            String email = trimmedField(body, "email");
+            String captchaToken = body == null ? null : body.get("captchaToken");
+            if (!phone.isEmpty()) {
+                awdkLoginService.sendLoginCode(phone, captchaToken);
+            } else if (!email.isEmpty()) {
+                awdkLoginService.sendLoginCodeByEmail(email, captchaToken);
+            } else {
+                result.put("code", 1);
+                result.put("message", LangText.of("请填写手机号或邮箱", "Please enter a phone number or an email address"));
+                return result;
+            }
             result.put("code", 0);
             result.put("message", LangText.of("验证码已发送", "Verification code sent"));
             result.put("data", Map.of("sent", true));
@@ -402,12 +415,23 @@ public class AuthController {
         return result;
     }
 
+    /** 取一个请求体字段并去掉首尾空白；缺字段/整个 body 为空时给空串（便于 isEmpty 判定）。 */
+    private static String trimmedField(Map<String, String> body, String key) {
+        if (body == null) return "";
+        String value = body.get(key);
+        return value == null ? "" : value.trim();
+    }
+
     /**
-     * 账户登录：手机号+验证码 或 账号+口令 → 本服务器的 awdt_ 设备令牌（匿名端点）。
+     * 账户登录：手机号+验证码 / 邮箱+验证码 / 账号+口令 → 本服务器的 awdt_ 设备令牌（匿名端点）。
      *
      * <p>与 {@code /awdk-login} 是同一条桥的两个入口，信封与限速形状刻意保持一致。
-     * 两种凭据形状按站点分（大陆站手机号、国际站邮箱），这里不判站点——判站点的是官网，
+     * 三种凭据形状与官网 {@code /api/auth/exchange-key} 一一对应（大陆站主路径是手机号、
+     * 国际站是邮箱验证码、口令留给两站的存量账号），这里不判站点——判站点的是官网，
      * 本服务器按用户填了什么转发即可。
+     *
+     * <p><b>邮箱+验证码不是可选项</b>：国际站邮箱验证码注册出来的账号没有口令
+     * （{@code passwordHash} 是空串），缺了这条那批用户永远登不进 Office 插件。
      *
      * <p>注意不能复用 {@code /api/account/login}：那条开头就要 {@code requireUser(sessionId)}，
      * 在 local-mode 的桌面端会自动解析成本机用户所以没事，云后端 {@code local-mode=false}
@@ -425,13 +449,18 @@ public class AuthController {
             result.put("message", e.getMessage());
             return result;
         }
-        String phone = body == null ? null : body.get("phone");
+        String phone = trimmedField(body, "phone");
+        String email = trimmedField(body, "email");
         try {
-            var session = (phone != null && !phone.isBlank())
+            // 判定顺序：phone+code → email+code → account+password。前两条都用 code 字段，
+            // 靠填了哪个标识分流；口令是最后的兜底分支（旧客户端只会送 account/password）。
+            var session = !phone.isEmpty()
                     ? awdkLoginService.loginWithPhone(phone, body.get("code"))
-                    : awdkLoginService.loginWithPassword(
-                            body == null ? null : body.get("account"),
-                            body == null ? null : body.get("password"));
+                    : !email.isEmpty()
+                            ? awdkLoginService.loginWithEmail(email, body.get("code"))
+                            : awdkLoginService.loginWithPassword(
+                                    body == null ? null : body.get("account"),
+                                    body == null ? null : body.get("password"));
             authAbuseGuard.recordLoginSuccess(ip, ACCOUNT_LOGIN_RATE_KEY);
             result.put("code", 0);
             // tokenId 让调用方（桌面端官方案件库连接）在断开时撤得掉这枚长期凭据；
