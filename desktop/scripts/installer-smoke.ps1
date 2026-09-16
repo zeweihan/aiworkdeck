@@ -11,7 +11,11 @@ param(
   # 这条路径原先没有任何用例覆盖过（zh/en 正常流程关的是完成卡的 ✕，走的是另一个
   # 函数），且必须单独跑——接在别的点击或对话框后面会被焦点/ESC 干扰，分不清
   # 「点击没落到热区上」还是「关窗动作本身没生效」。
-  [switch]$CloseOnly
+  [switch]$CloseOnly,
+  # 插件端（office-addin/installer/win/installer.nsi）不定义 AWD_UI_DIR_CHOICE，
+  # 欢迎卡上没有「自定义安装」开关——热区像素断言要跳过那一格，否则必红。
+  # 窗口尺寸分不出两端（两边的欢迎卡都是 760x500，展开后才变 568），只能显式传。
+  [switch]$NoDirChoice
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -120,6 +124,89 @@ function ShotFull([string]$name) {
   Write-Host "shot $name (full screen $($b.Width) x $($b.Height))"
 }
 
+# 热区像素断言（dev-board#706）。回归点 PR#705：背景位图为了拖动加了 SS_NOTIFY 并被压到
+# z 序最底，位图带 WS_CLIPSIBLINGS，绘制时会把上层所有热区矩形裁掉；热区用 NULL 刷什么都
+# 不擦，于是露出 nsDialogs 对话框的白底——「立即安装」「服务条款」「自定义安装」「立即体验」
+# 和两个窗口按钮在真机上全变成纯白方块。当时 CI 全绿，因为这个脚本只断言流程不看像素。
+# 判据只看颜色分布，不做图像比对，对不同 runner 的字体渲染差异鲁棒：
+#   dark = 底本来是品牌绿/深绿 hero，纯白像素占比必须低于 Limit（盖白后是 100%）；
+#   ink  = 底本来就是白，靠文字/图标的非白像素证明画上了，数量必须不低于 Limit（盖白后是 0）。
+# 与 DragAssert 同一风格：失败先记下，走完全流程再一并 throw。
+$hotspotFailures = @()
+
+function Region([string]$n, [int]$x, [int]$y, [int]$w, [int]$ht, [string]$mode, [int]$limit) {
+  return @{ Name = $n; X = $x; Y = $y; W = $w; H = $ht; Mode = $mode; Limit = $limit }
+}
+
+# 坐标 = awd-oneclick-ui.nsh 的 AWDUI_* 基准常量，100% DPI 下即物理像素，
+# 截图取的是窗口矩形、卡片无边框（客户区 == 窗口矩形），所以可以直接当截图坐标用。
+$welcomeRegions = @(
+  (Region 'CTA'    460 414 260 72 'dark' 10),   # 立即安装：整块品牌绿
+  (Region 'MIN'    668   8  40 32 'dark' 10),   # 最小化：深绿 hero 顶栏
+  (Region 'CLOSE'  712   8  40 32 'dark' 10),   # 关闭 ✕：深绿 hero 顶栏
+  (Region 'TERMS'  146 416  54 24 'ink'  40),   # 服务条款链接：白底上的文字
+  (Region 'PRIV'   232 416  54 24 'ink'  40)    # 隐私政策链接：白底上的文字
+)
+if (-not $NoDirChoice) {
+  # 自定义安装开关：白底上的文字 + 箭头
+  $welcomeRegions += (Region 'TOGGLE' 44 448 130 26 'ink' 40)
+}
+# 完成卡（oneclick-mini-done.html，360x132 白底）：按钮是深绿渐变，✕ 是白底上的灰字。
+# ✕ 只有几十个非白像素（实测好样本 56），阈值压到 20 留足余量，坏样本是 0。
+$doneRegions = @(
+  (Region 'MCLOSE'  320  6  34 28 'ink'  20),
+  (Region 'DONEBTN' 236 80 104 36 'dark' 10)
+)
+
+function AssertPainted([string]$stage, [string]$shotName, $regions) {
+  $path = Join-Path $OutDir "$shotName.png"
+  if (-not (Test-Path $path)) {
+    $script:hotspotFailures += "$stage card: screenshot $shotName.png is missing, hotspots not checked"
+    return
+  }
+  $full = (Resolve-Path $path).Path
+  $bmp = New-Object System.Drawing.Bitmap -ArgumentList $full
+  try {
+    foreach ($rg in $regions) {
+      if (($rg.X + $rg.W) -gt $bmp.Width -or ($rg.Y + $rg.H) -gt $bmp.Height) {
+        $script:hotspotFailures += "$stage card / $($rg.Name): region $($rg.X),$($rg.Y),$($rg.W),$($rg.H) falls outside the $($bmp.Width)x$($bmp.Height) screenshot"
+        continue
+      }
+      $total = 0
+      $white = 0
+      for ($yy = $rg.Y; $yy -lt ($rg.Y + $rg.H); $yy++) {
+        for ($xx = $rg.X; $xx -lt ($rg.X + $rg.W); $xx++) {
+          $c = $bmp.GetPixel($xx, $yy)
+          $total++
+          if ($c.R -ge 250 -and $c.G -ge 250 -and $c.B -ge 250) { $white++ }
+        }
+      }
+      $nonwhite = $total - $white
+      $pct = [math]::Round(100.0 * $white / $total, 2)
+      Write-Host "hotspot[$stage/$($rg.Name)]: white $white/$total ($pct%), non-white $nonwhite"
+      if ($rg.Mode -eq 'dark') {
+        if ($pct -ge $rg.Limit) {
+          $script:hotspotFailures += "$stage card / $($rg.Name) hotspot is painted over: $pct% of the region is pure white (expected under $($rg.Limit)% - the bitmap underneath should show through)"
+        }
+      } else {
+        if ($nonwhite -lt $rg.Limit) {
+          $script:hotspotFailures += "$stage card / $($rg.Name) hotspot is painted over: only $nonwhite non-white pixels in the region (expected at least $($rg.Limit) - the bitmap underneath should show through)"
+        }
+      }
+    }
+  } finally {
+    $bmp.Dispose()
+  }
+}
+
+# 收尾统一 throw：拖动与热区两类断言都不当场中断，免得一次红吞掉后面阶段的结论。
+function ThrowIfFailed {
+  $all = @($script:dragFailures) + @($script:hotspotFailures)
+  if ($all.Count -gt 0) {
+    throw ("assertions failed (drag: dev-board#366 / hotspot: dev-board#706):`n - " + ($all -join "`n - "))
+  }
+}
+
 function ClickAt([int]$bx, [int]$by) {
   $r = Get-Rect
   Clear-Overlay ($r.L + $bx) ($r.T + $by)
@@ -183,6 +270,7 @@ function AssertResponsive([string]$stage) {
 
 # 1. 大卡片首页
 Shot '01-welcome'
+AssertPainted 'welcome' '01-welcome' $welcomeRegions
 
 if ($CloseOnly) {
   # 先把视线清障单独做掉再断言进程还活着：Clear-Overlay 挡不住视线时会按 ESC，
@@ -198,6 +286,7 @@ if ($CloseOnly) {
   Start-Sleep -Seconds 3
   if ($p.HasExited) {
     Write-Host 'close flow completed: welcome card close button exited the installer'
+    ThrowIfFailed
     exit 0
   }
   # 没退出。下面两条对照都跑一遍并把结论留在日志里，回归时不用再猜是哪一头坏了。
@@ -268,6 +357,7 @@ if ($ExpectBlocked) {
   # 分不清是闸的问题还是关窗的问题（dev-board#354，根因已确认并修掉）。
   $p.Kill()
   Write-Host 'blocked flow completed: gate fired, install never started'
+  ThrowIfFailed
   exit 0
 }
 
@@ -300,6 +390,7 @@ Shot '04-progress2'
 # 4. 等安装收尾进完成卡（payload + 3x2s Sleep，10 秒余量）
 Start-Sleep -Seconds 10
 Shot '05-done'
+AssertPainted 'done' '05-done' $doneRegions
 # 4b. 完成卡也要能拖：按在副标题文字上（120,60，不在「立即体验」与 ✕ 的热区里）
 DragAssert 'done' 120 60 -150 100
 # 5. 点完成卡右上角 ✕（AWDUI_MCLOSE 320,6,34,28 → 中心 337,20）
@@ -310,7 +401,5 @@ if (-not $p.HasExited) {
   $p.Kill()
   throw "installer did not exit after closing finish card"
 }
-if ($dragFailures.Count -gt 0) {
-  throw ("drag assertions failed (dev-board#366):`n - " + ($dragFailures -join "`n - "))
-}
+ThrowIfFailed
 Write-Host 'smoke flow completed, installer exited cleanly'
