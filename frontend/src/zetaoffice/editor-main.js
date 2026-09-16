@@ -23,6 +23,7 @@ import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
 import { attachDocumentLinkClicks } from '../composables/zetaOfficeLinkClick.js'
 import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
 import { attachWritingAssistance } from '../composables/zetaOfficeCompletion.js'
+import { attachSemanticWritingPanel } from '../composables/semanticWritingPanel.js'
 import { attachInlineReview } from '../composables/zetaOfficeInlineReview.js'
 // 光标邻域半径的单一出处：宿主侧 matchEntityAt 用同一个默认值做窗口截取，
 // 两边不一致会让「实体名明明就在光标上却匹配不到」（纯数据模块，不带 Vue/uni）。
@@ -349,12 +350,15 @@ startEditorEndpoint({
     try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-log', msg: String(m) }) } catch (e) { /* ignore */ }
   },
 }).then((endpoint) => {
+  let semanticWriting = null
   reviewBalloons = attachReviewBalloons({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), transport: hostTransport, locale: q.get('uilang') || 'zh' })
   // A layout result can arrive while the host has already started another UNO
   // command. Never resize the Qt canvas during import/export or an edit.
   const executeWithReview = endpoint.executor.executeCommand.bind(endpoint.executor)
   endpoint.executor.executeCommand = async (action, params, callOpts) => {
-    if (/^(get_|list_)/.test(action) || action === 'set_review_balloons' || (action === 'set_revision_view' && !params?.mode)) return executeWithReview(action, params, callOpts)
+    if (['capture_writing_context', 'accept_writing_suggestion'].includes(action) && semanticWriting?.isComposing())
+      return { success: false, available: false, reason: 'composing', error: 'composing', message: '请先完成当前输入，再生成或采用建议。' }
+    if (/^(get_|list_)/.test(action) || action === 'capture_writing_context' || action === 'set_review_balloons' || (action === 'set_revision_view' && !params?.mode)) return executeWithReview(action, params, callOpts)
     reviewBalloons.suspend(action)
     try { return await executeWithReview(action, params, callOpts) }
     finally { reviewBalloons.resume() }
@@ -394,8 +398,8 @@ startEditorEndpoint({
       onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
-      onCursorMoved: (event) => { relaySelection(); writingAssistance?.cursorMoved(event); inlineReview?.cursorMoved() },
-      onCommitted: (text) => { writingAssistance?.committed(text); inlineReview?.committed(text) },
+      onCursorMoved: (event) => { relaySelection(); writingAssistance?.cursorMoved(event); semanticWriting?.cursorMoved(event); inlineReview?.cursorMoved() },
+      onCommitted: (text) => { writingAssistance?.committed(text); semanticWriting?.committed(text); inlineReview?.committed(text) },
       onAssistanceKey: (event) => writingAssistance?.keydown(event) || false,
       onCommentRequested: () => relayCommentRequest(),
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
@@ -405,9 +409,11 @@ startEditorEndpoint({
       execute: (action, params) => endpoint.executor.executeCommand(action, params),
       transport: hostTransport, focus: overlay.focus, language: q.get('uilang') || 'zh-CN',
     })
+    semanticWriting = attachSemanticWritingPanel({ canvas: document.getElementById('qtcanvas'), input: overlay.element,
+      transport: hostTransport, focus: overlay.focus })
     inlineReview = attachInlineReview({ canvas: document.getElementById('qtcanvas'), input: overlay.element,
       execute: (action, params) => endpoint.executor.executeCommand(action, params), transport: hostTransport, language: q.get('uilang') || 'zh-CN' })
-    window.addEventListener('pagehide', () => { writingAssistance.destroy(); inlineReview.destroy(); reviewBalloons?.destroy() }, { once: true })
+    window.addEventListener('pagehide', () => { writingAssistance.destroy(); semanticWriting.destroy(); inlineReview.destroy(); reviewBalloons?.destroy() }, { once: true })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
   // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且

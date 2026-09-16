@@ -2183,6 +2183,26 @@ export function refreshDocInsightEntity(projectId, entityId) {
 export function listWritingCompletions(projectId) {
   return request({ url: `/api/projects/${projectId}/completion`, method: 'GET' })
 }
+
+// Explicit semantic writing requests; merely opening a document never generates text.
+export function getSemanticWritingSettings(projectId) {
+  return request({ logBody: false, url: `/api/projects/${projectId}/writing/settings`, method: 'GET' })
+}
+export function saveSemanticWritingSettings(projectId, data) {
+  return request({ logBody: false, url: `/api/projects/${projectId}/writing/settings`, method: 'PUT', data })
+}
+export function createSemanticWritingSuggestion(projectId, data) {
+  return request({ logBody: false, url: `/api/projects/${projectId}/writing/suggestions`, method: 'POST', data, timeout: 120000 })
+}
+export function getSemanticWritingSuggestion(projectId, id) {
+  return request({ logBody: false, url: `/api/projects/${projectId}/writing/suggestions/${encodeURIComponent(id)}`, method: 'GET' })
+}
+export function cancelSemanticWritingSuggestion(projectId, id) {
+  return request({ logBody: false, url: `/api/projects/${projectId}/writing/suggestions/${encodeURIComponent(id)}`, method: 'DELETE' })
+}
+export function acceptSemanticWritingSuggestion(projectId, id, data) {
+  return request({ logBody: false, url: `/api/projects/${projectId}/writing/suggestions/${encodeURIComponent(id)}/accept`, method: 'POST', data })
+}
 export function getWritingCompletionDetail(projectId, id) {
   return request({ url: `/api/projects/${projectId}/completion/entries/${encodeURIComponent(id)}`, method: 'GET' })
 }

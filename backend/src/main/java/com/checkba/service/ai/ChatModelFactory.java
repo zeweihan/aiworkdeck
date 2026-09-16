@@ -248,6 +248,24 @@ public class ChatModelFactory {
                 .logRequests(false).logResponses(false).build();
     }
 
+    /** One explicit writing request: bounded transport, no cache, no provider fallback. */
+    public OpenRouterStreamingChatModel getWritingModel(java.time.Duration timeout) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("Writing request deadline expired");
+        }
+        long started = System.nanoTime();
+        ResolvedTarget target = resolveTarget(validatedAuxModelId(), true);
+        if (target.channel() == AiModelProperties.Provider.OLLAMA) {
+            throw new com.checkba.exception.FeatureNotConfiguredException("writing-model",
+                    "当前本地模型通道暂不支持可取消的写作续写；未改用云端模型");
+        }
+        boolean platform = target.channel() == AiModelProperties.Provider.AWD_CLOUD;
+        String key = platform ? platformApiKey() : resolveOpenRouterApiKey();
+        String baseUrl = platform ? aiModelProperties.getOpenRouter().getBaseUrl() : resolveOpenRouterBaseUrl();
+        recordModelUse(target.channel().name(), target.modelId(), true);
+        return new OpenRouterStreamingChatModel(key, baseUrl, target.modelId(), remainingTimeout(timeout, started));
+    }
+
     private static java.time.Duration remainingTimeout(java.time.Duration budget, long started) {
         java.time.Duration remaining = budget.minusNanos(System.nanoTime() - started);
         if (remaining.isZero() || remaining.isNegative()) {
