@@ -53,14 +53,14 @@ Office/WPS 会话（`ClientCapabilityService.capabilityOf == OFFICE`）新增四
 - `case:<remoteProjectId>:<path>`
 - `git:<repoLinkId>:<path>`
 
-`locator` 语义：`page:N`（Word）、`slide:N`（PPT）、`sheet:<名>[!A1:D20]`（Excel）、`heading:<文字>`（Word 标题所辖段落）。不支持的组合返回明确文案，不静默退回全文。
+`locator` 语义：`page:N`（Word）、`slide:N`（PPT）、`sheet:<名>[!A1:D20]`（Excel）、`heading:<文字>`（Word 标题所辖段落）。按 locator 精确截取只对 `open:` 来源生效；未打开的来源（desk/cloud/case/git）抽出的是纯文本、没有页的概念，带 locator 时返回全文并在开头写明「未打开的文件无法按页定位，以下为全文」。打开文档上不支持的组合返回明确错误文案，不静默退回全文。
 
 **末位约束**：Office 会话现有的「本会话只能编辑打开的这一份文档」硬规则（`ContextAssemblerService` 482 行附近，中英两处）改写为：可读任何参考来源；可经 `ref_edit` 改**其他打开的文档**；未打开的文件一律不改，请用户打开。仍挂本段末位。
 
 ## 4. 打开文档互读互改（#717）
 
 ### 4.1 窗格登记（PaneRegistry）
-- 窗格启动后每 30 秒 `POST /api/addin/panes/heartbeat`：`{paneId, host(word|excel|powerpoint), family(office|wps), docName, projectId, conversationId}`。`paneId` 为窗格生成的 UUID，存 sessionStorage（同窗格重载不变、新窗格新值）。
+- 窗格启动后每 30 秒 `POST /api/addin/panes/heartbeat`：`{paneId, host(word|excel|powerpoint), family(office|wps), docName, projectId, conversationId}`。`paneId` 复用窗格建 SSE 时已上送的 `clientId: paneId`（chatSession.js），不另造。
 - 服务端按 userId 持有 `Map<paneId, PaneInfo>`，90 秒无心跳即过期；窗格卸载时 `navigator.sendBeacon` 发 `/panes/bye`。
 - 切换会话/项目后立即补发一次心跳（conversationId 变化即重登记）。
 - `ref_list(source=open)` 排除发起方自身 paneId。
@@ -73,7 +73,7 @@ Office/WPS 会话（`ClientCapabilityService.capabilityOf == OFFICE`）新增四
 
 ### 4.3 B 窗格明示痕迹
 - 收到带 `origin` 的写入类命令：
-  - Word：强制 `trackAll`（既有 `withTrackedChanges`），宿主不支持 WordApi 1.6 时**拒绝执行**并回错「本机 Word 版本无法标记修订，已拒绝跨文档修改」——无痕迹的跨文档写入不允许发生。
+  - Word：强制 `trackAll`（既有 `withTracking`，门槛 `trackingSupported()` = WordApi 1.4），宿主不支持时**拒绝执行**并回错「本机 Word 版本无法标记修订，已拒绝跨文档修改」——无痕迹的跨文档写入不允许发生。
   - Excel / PPT：执行前按命令读取受影响区域原值（Excel 单元格 values/formulas；PPT 形状文本），与新值一起记入修订记录，支持一键撤销（写回原值）。撤销前比对当前值，已被用户再改过则提示冲突不覆盖。
   - WPS：同上三分支，走 wps*Handlers；WPS 文字修订开关用 `TrackRevisions`。
 - 新组件 `components/RevisionLogPanel.vue` + `lib/revisionLog.js`（模块级 store，按文档持久化到 localStorage `awd_addin_revlog_{docKey}`，上限 200 条）：条目 `{id, time, originDocName, originConversationId, command, summary, before?, after?, undoable}`；操作：定位（Word 用修订定位/搜索，Excel 选中区域，PPT 跳页）、撤销、清空已读。
@@ -91,7 +91,7 @@ Office/WPS 会话（`ClientCapabilityService.capabilityOf == OFFICE`）新增四
 - 桌面端 `MobileRelayClientService` 起一个 daemon 线程持有该流（java.net.http 流式读取），收到 nudge 立刻执行既有 `pollTransferCommands()` 与新的 `pollReferenceRequests()`；断线指数退避重连（1s→60s）；**连不上时 60 秒轮询照旧**，兜底行为与今天逐字相同。
 - 在线判定：流在连 = 在线（替代 180 秒 touchDevice 窗口用于参考读取；transfer 的 180 秒窗口不动）。
 - 旧云后端（端点 404）：桌面端进程内钉死不再尝试，同既有 404 惯例。
-- nginx：`/api/mobile/desktop/stream` 关缓冲、`proxy_read_timeout 3600s`（两台 addin 的 conf 与 `deploy/cloud/nginx-addin.conf.example` 同步）。
+- nginx：两台 addin 的通用 `location /api/` 已是 `proxy_buffering off` + `proxy_read_timeout 3600s`，无需改动。
 
 ## 6. 桌面端项目文件按需读取（#718）
 
@@ -111,7 +111,7 @@ Office/WPS 会话（`ClientCapabilityService.capabilityOf == OFFICE`）新增四
 ## 7. git 来源（#720）
 
 ### 7.1 官方案件库（case 实例）
-- case 与 addin 是同一 jar 的两个实例，库与用户表分离；**同一人的跨实例身份键 = `AccountBinding.externalAccountId`**（官网账号 id，两边 awdk 登录都会写）。计划阶段须先核实两边对同一官网账号写入的是同一值。
+- case 与 addin 是同一 jar 的两个实例，库与用户表分离；**同一人的跨实例身份键 = `AccountBinding.externalAccountId`**（官网账号 id，两边 awdk 登录都会写）。已核实（代码）：两实例的 accountId 都取自同一官网 `GET /api/account/me`，只要两边 `ai.account.base-url` 相同即一致。
 - case 实例新增内部端点 `/api/internal/ref/{list,read}`：仅 127.0.0.1 可达（nginx `^~ /api/internal/` 返回 404 兜底，与 transfer 计费同款）+ 共享密钥头 `X-Internal-Secret`（env `AWD_REF_INTERNAL_SECRET`，未配恒 404）。参数带 `externalAccountId`，case 侧据此找本地用户并按既有成员权限（非客户角色可读）判定。
 - 读取：JGit 读 `repos/project-{id}.git` 的 master HEAD（经既有 `blobAt` 50MB 闸），Office 格式经 `DocumentTextService` 抽文字。
 - 国际站没有案件库：SG 实例不配该密钥，来源自动缺席。
@@ -176,12 +176,12 @@ Office/WPS 会话（`ClientCapabilityService.capabilityOf == OFFICE`）新增四
 - 云后端 jar（北京、新加坡）：新端点与登记簿；case 实例：内部端点 + env。
 - 桌面端（随发版）：常连、READ/LIST 处理、ref_open。
 - 插件静态包（两台）：心跳、跨窗格执行、修订记录面板、git 关联入口。
-- nginx：两台 addin 的 stream 路径；case 的 `/api/internal/` 兜底已存在需确认。
+- nginx：addin 无需改；case.aiworkdeck.com 新增 `location ^~ /api/internal/ { return 404; }`（本仓尚无入站 internal 端点，属新增）。
 - 领域文档同 PR 更新：office-addin.md、ai-chat.md、mobile-sync.md、version-control.md。
 
 ## 12. 未验证项（计划阶段首先核实）
 
 1. Mac Word / WPS 文字的按页读取 API 可用性。
-2. addin 与 case 两实例对同一官网账号写入的 `externalAccountId` 一致。
+2. ~~addin 与 case 两实例 `externalAccountId` 一致~~（已由代码核实）。
 3. Office 窗格卸载时 sendBeacon 在 Mac WKWebView 上是否送达（不送达时靠 90 秒过期兜底）。
 4. 两个同宿主窗格（两个 Word 文档）各自独立 SSE 连接、sessionStorage 独立（paneId 不冲突）。
