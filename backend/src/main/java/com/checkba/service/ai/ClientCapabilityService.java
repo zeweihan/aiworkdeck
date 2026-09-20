@@ -129,6 +129,48 @@ public class ClientCapabilityService {
         return hostByConversation.getOrDefault(conversationId, OfficeHost.WORD);
     }
 
+    /** LOWA 活跃文档类型三分值，与 {@link ContextAssemblerService#lowaDocKind} 的返回值同源。 */
+    public static final String DOC_KIND_WRITER = "doc";
+    public static final String DOC_KIND_SHEET = "sheet";
+    public static final String DOC_KIND_SLIDE = "slide";
+
+    /**
+     * 与「当前打开的是哪一类文档」无关、任何 LOWA 会话都要保留的 doc_* / sheet_* 工具
+     *（dev-board#729）。判据是<b>这个工具的效果不依赖活跃文档的类型</b>，分两类：
+     *
+     * <p><b>纯后端（不经 {@code EditorBridgeService.executeEditorCommand}）</b>——逐个核对过
+     * {@code DocumentEditTools} / {@code CheckpointTools} 的 85 个 @Tool，真正纯后端的只有这几个：
+     * <ul>
+     *   <li>{@code doc_list_project_files} / {@code doc_open_file} / {@code doc_search_related_docs}
+     *       —— 读 project_file 表 + 经 SSE 下发打开指令，是「换一份目标文档」的唯一入口，
+     *       裁掉它 xlsx 会话里的模型就再也打不开任何 Word 文档了；</li>
+     *   <li>{@code doc_restore_checkpoint} —— 按 fileId 还原本轮快照，与文档类型无关。
+     *       Calc/Impress 没有修订痕迹、写入即生效，它就是那两类文档唯一的后悔药。</li>
+     * </ul>
+     *
+     * <p><b>「新建并打开一份新文档」</b>——它们作用在新建出来的那份文件上，跟此刻开着什么无关：
+     * <ul>
+     *   <li>{@code sheet_create_file}（POI 建空白 xlsx + 注册 + 下发打开）——
+     *       「把合同里的付款条款整理成一张表」在 Word 会话里是常见任务；</li>
+     *   <li>{@code doc_start_stream}（建空白 docx + 打开 + 进流式写入模式）——
+     *       「看着这份台账起草一份说明」在 Excel 会话里同样常见。它确实走桥，
+     *       但走的是新建出来的那份 docx，不是活跃文档。</li>
+     * </ul>
+     * 少了这两个，跨类型的新建流程在第一步就被堵死；而它们一旦执行成功，
+     * 活跃文档就换了类型，编排器会把工具集放回全集（见 {@code AgentOrchestrator} 的
+     * {@code widenDocKindAfterDocumentSwitch}）。
+     *
+     * <p>其余 doc_* / sheet_* / slide_* 全部作用在活跃文档上，类型不匹配时一律是
+     * 「worker 报错」或更糟的静默错改，模型看得见就会去试。
+     */
+    private static final java.util.Set<String> KIND_AGNOSTIC_LOWA_TOOLS = java.util.Set.of(
+            "doc_list_project_files",
+            "doc_open_file",
+            "doc_search_related_docs",
+            "doc_restore_checkpoint",
+            "sheet_create_file",
+            "doc_start_stream");
+
     /**
      * 工具对该会话是否可见。
      * doc_* / sheet_* / slide_* 是 LOWA 专属远端执行工具（经 EditorBridgeService 等前端回执）；
@@ -139,18 +181,125 @@ public class ClientCapabilityService {
      * 后端 StorageService 落盘、无客户端执行器依赖，dev-board#37），刻意不过滤。
      */
     public boolean isToolVisible(String toolName, String conversationId) {
+        return isToolVisible(toolName, conversationId, null);
+    }
+
+    /**
+     * 再按 LOWA 活跃文档类型收窄（dev-board#729 ①）。
+     *
+     * <p>doc_* / sheet_* / slide_* 是**三套互不相通**的原语：Writer 文档上调 sheet_* 必然报
+     * 「当前打开的不是电子表格」，Calc 上调 doc_* 连 {@code xModel.getText()} 都过不去。
+     * 三套一起下发的代价是实打实的钱和时间——202 个工具的 schema 约占 prompt 的 2/3
+     * （实测 59045 → 18854 token、首轮 26.4s → 6.1s），而其中三分之二在本轮一个字都用不上。
+     *
+     * @param activeDocKind {@link #DOC_KIND_WRITER} / {@link #DOC_KIND_SHEET} /
+     *                      {@link #DOC_KIND_SLIDE}；null 或其它值（没有活跃文档、纯文本、
+     *                      类型判不出来）一律**不裁剪**——少给工具会让模型直接做不成事，
+     *                      判不准时必须倒向全集。
+     */
+    public boolean isToolVisible(String toolName, String conversationId, String activeDocKind) {
         if (toolName == null) {
             return false;
         }
-        boolean lowaOnly = toolName.startsWith("doc_") || toolName.startsWith("sheet_") || toolName.startsWith("slide_");
+        boolean lowaOnly = isLowaTool(toolName);
         boolean officeOnly = toolName.startsWith("office_");
         if (!lowaOnly && !officeOnly) {
             return true;
         }
         return switch (capabilityOf(conversationId)) {
-            case LOWA -> lowaOnly;
+            case LOWA -> lowaOnly && visibleForDocKind(toolName, activeDocKind);
             case OFFICE -> officeOnly && hostOfTool(toolName) == officeHostOf(conversationId);
             case NONE -> false;
+        };
+    }
+
+    /**
+     * 是否是 LOWA 专属的远端执行工具（doc_* / sheet_* / slide_*）。
+     *
+     * <p>只回答「这个工具需不需要 LOWA 编辑器」，读写一视同仁——{@link #isToolVisible}
+     * 要的就是这个：Office 会话里连 {@code doc_get_document_text} 都执行不了。
+     *
+     * <p><b>不要把它和 {@link #isDocumentWritingTool} 合成一个函数。</b>
+     * 两个消费者问的是不同的问题，合并过一次就出过事：按这个宽判据算
+     * {@code bubble_end.documentEdited}，「先读文档再起草条款」那一轮会因为
+     * 调过 doc_get_document_text 被判成「改过文档」，回复下方的「用到文档」被误藏——
+     * 而那恰恰是最该出按钮的场景（dev-board#728）。
+     */
+    public static boolean isLowaTool(String toolName) {
+        return toolName != null
+                && (toolName.startsWith("doc_")
+                    || toolName.startsWith("sheet_")
+                    || toolName.startsWith("slide_"));
+    }
+
+    /**
+     * 读取 / 定位 / 打开类工具的名字模式（去掉 doc_ / sheet_ / slide_ 前缀之后的部分）。
+     *
+     * <p>按 DocumentEditTools、DocumentAuditTools、CheckpointTools、SlideEditTools 里
+     * 全部 113 个 {@code doc_/sheet_/slide_} 工具名逐个核对得出，31 个只读、82 个写入；
+     * {@code DocumentWritingToolClassificationTest} 扫源码逐名钉住，新增工具没归类就会红。
+     *
+     * <p><b>为什么不能只按「读起来像读」的词头一刀切</b>——两个真实的坑：
+     * <ul>
+     *   <li>{@code doc_find_replace} 以 {@code find_} 开头，却是全仓最常用的写入原语。
+     *       所以 {@code find} 不是词头模式，只有 {@code find_text} 进精确名单；</li>
+     *   <li>{@code doc_set_selection} 只挪选区（只读），而 {@code doc_replace_selection} /
+     *       {@code doc_delete_selection} / {@code doc_format_selection} 都是写入。
+     *       所以 {@code selection} 不能做子串匹配，只有 {@code set_selection} 进精确名单。</li>
+     * </ul>
+     *
+     * <p>词头一律用 {@code (?:_|$)} 收尾，不做前缀模糊匹配：{@code inspect} 若松绑就会
+     * 咬到 {@code insert_*}。{@code summar} 是唯一的例外（要同时覆盖 summary / summarize），
+     * 目前没有工具命中，是给后来者留的。
+     *
+     * <p>拿不准的一律算写入（{@code doc_collapse_cursor} / {@code doc_undo} /
+     * {@code doc_redo} / {@code doc_restore_checkpoint} 都在写入侧）：多算只是少出一个按钮，
+     * 漏算会让用户在 AI 已经写进文档之后又被请去手动插一遍。
+     */
+    private static final java.util.regex.Pattern READ_ONLY_STEM = java.util.regex.Pattern.compile(
+            "^(?:audit|check|count|debug|get|goto|inspect|list|locate|read|search|select)(?:_|$)|^summar");
+
+    /** 以 read 结尾的读取工具（doc_table_read / slide_table_read）。 */
+    private static final java.util.regex.Pattern READ_ONLY_SUFFIX =
+            java.util.regex.Pattern.compile("(?:^|_)read$");
+
+    /** 词头模式覆盖不到、必须逐个点名的只读工具（见上面两个坑）。 */
+    private static final java.util.Set<String> READ_ONLY_EXACT =
+            java.util.Set.of("open_file", "find_text", "set_selection");
+
+    /**
+     * 这个工具会不会真的改动文档内容。{@code bubble_end.documentEdited} 的唯一判据
+     * （dev-board#728）：本轮调过它并成功返回，就说明 AI 已经把内容写进文档了，
+     * 前端不必再请用户手动插一遍。
+     *
+     * <p>判据是<b>工具名</b>而不是 {@code @ToolMeta.fileEffect}：最常用的几个写入原语
+     * （doc_insert_at_cursor / doc_replace_selection / doc_start_stream / doc_delete_text …）
+     * 压根没声明 fileEffect（113 个里 45 个没有），按它判会把真正的编辑漏成「没动过」。
+     */
+    public static boolean isDocumentWritingTool(String toolName) {
+        if (!isLowaTool(toolName)) {
+            return false;
+        }
+        String action = toolName.substring(toolName.indexOf('_') + 1);
+        return !(READ_ONLY_STEM.matcher(action).find()
+                || READ_ONLY_SUFFIX.matcher(action).find()
+                || READ_ONLY_EXACT.contains(action));
+    }
+
+    /** 活跃文档类型闸：只收窄、绝不放宽（调用方已确认是 LOWA 会话的 lowaOnly 工具）。 */
+    static boolean visibleForDocKind(String toolName, String activeDocKind) {
+        if (activeDocKind == null || activeDocKind.isBlank()) {
+            return true;
+        }
+        if (KIND_AGNOSTIC_LOWA_TOOLS.contains(toolName)) {
+            return true;
+        }
+        return switch (activeDocKind) {
+            case DOC_KIND_WRITER -> toolName.startsWith("doc_");
+            case DOC_KIND_SHEET -> toolName.startsWith("sheet_");
+            case DOC_KIND_SLIDE -> toolName.startsWith("slide_");
+            // "text"（纯文本走 text_*，不进 LOWA）与任何未知值：判不准就不裁
+            default -> true;
         };
     }
 

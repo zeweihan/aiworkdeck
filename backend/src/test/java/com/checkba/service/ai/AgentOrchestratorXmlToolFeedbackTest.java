@@ -103,6 +103,9 @@ class AgentOrchestratorXmlToolFeedbackTest {
         }).when(sse).send(any(), any(), any());
 
         ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
+        // dev-board#729 ⑤：编排器改用 countByConversationId 判首轮；mock 默认回 0 会误判首轮、起异步标题线程
+        // 与下一次 when(...) 打架（CI 上 Mockito WrongTypeOfReturnValue）。计数跟随 list 桩，保持各用例原语义。
+        when(messageService.countByConversationId(any())).thenAnswer(inv -> (long) messageService.listByConversationId(inv.getArgument(0)).size());
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
@@ -113,7 +116,7 @@ class AgentOrchestratorXmlToolFeedbackTest {
                         SystemMessage.from("system"), UserMessage.from("读一下这份合同"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
 
         SkillRouter skillRouter = mock(SkillRouter.class);

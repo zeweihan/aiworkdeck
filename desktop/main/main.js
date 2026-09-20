@@ -442,6 +442,7 @@ function createMainWindow() {
       preload: path.join(__dirname, '../preload/preload.js'),
       additionalArguments: [
         '--checkba-api-base=http://127.0.0.1:' + backendPort,
+        '--checkba-system-memory=' + require('node:os').totalmem(),
         // ARM 版 Windows（Mac 虚拟机）转译运行时启动看门狗已放宽 8 倍（dev-board#340），
         // 渲染层的等待死线要跟着放大，否则前端仍按 90 秒判超时（dev-board#341）
         ...(require('./services/win-arch').isWinArmEmulated() ? ['--checkba-win-emulated=1'] : [])
@@ -455,6 +456,25 @@ function createMainWindow() {
       webviewTag: true
     }
   })
+
+  // dev-board#726：Windows 上单独按 Alt（用户报的「Ctrl」大概率是相邻键口误）
+  // 会把 Menu.setApplicationMenu 挂的原生「每窗口顶部菜单」弹出来盖住内容——
+  // titleBarStyle:'hidden' 只是不画那条常驻的菜单栏，不代表它不会被 Alt 唤出。
+  // setMenuBarVisibility(false) + setAutoHideMenuBar(false) 关掉这条路：
+  // 显式设为非 auto-hide 后 Alt 不再有「按一下唤出」的语义，菜单彻底不可见，
+  // 但 Menu 对象仍挂在窗口上——accelerator 是否失效只取决于各 MenuItem 的
+  // registerAccelerator（Windows/Linux 默认 true，app-menu.js 未设过 false），
+  // 与菜单栏可见性无关（Electron BrowserWindow 文档：
+  // https://www.electronjs.org/docs/latest/api/browser-window
+  // 里 setMenuBarVisibility/setAutoHideMenuBar 只描述菜单条的显示/自动隐藏，
+  // 不提及会连带关闭 accelerator；MenuItem 文档的 registerAccelerator 字段
+  // 才是控制加速键是否注册的开关）。mac 走系统全局菜单栏，不受影响。
+  if (process.platform === 'win32') {
+    try {
+      mainWindow.setMenuBarVisibility(false)
+      mainWindow.setAutoHideMenuBar(false)
+    } catch (e) { /* ignore */ }
+  }
 
   // 官网头像的 CORP 放行（dev-board#603）。必须赶在第一次 load 之前挂上，
   // 否则首屏那次头像请求会漏在拦截器外面。只挂一次（函数内自带去重标记）。
@@ -485,11 +505,14 @@ function createMainWindow() {
 
   // 无边框窗口：全屏时 mac 的交通灯会隐藏，渲染层顶栏左侧那段留白必须跟着归零，
   // 否则全屏下项目名会莫名其妙缩进 88px。渲染层收在 windowChrome.js。
+  // isMaximized 同理上报给 Windows：非最大化时应用边界要描边区分浅色资源管理器
+  // （dev-board#722），全屏/最大化时不描边。
   const sendChromeState = () => {
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('checkba:chrome-state', {
           fullscreen: mainWindow.isFullScreen(),
+          isMaximized: mainWindow.isMaximized(),
         })
       }
     } catch (e) {
@@ -498,6 +521,8 @@ function createMainWindow() {
   }
   mainWindow.on('enter-full-screen', sendChromeState)
   mainWindow.on('leave-full-screen', sendChromeState)
+  mainWindow.on('maximize', sendChromeState)
+  mainWindow.on('unmaximize', sendChromeState)
   mainWindow.webContents.on('did-finish-load', sendChromeState)
 
   // 拦截渲染进程里的 window.open（包括嵌入页/iframe 点击超链接）

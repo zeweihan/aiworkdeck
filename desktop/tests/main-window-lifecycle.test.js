@@ -17,7 +17,7 @@ function section(from, to) {
 
 // Execute the shipping functions, with only Electron/OS effects replaced. No source-pattern
 // assertion can catch a stale closed callback nulling the replacement window.
-function harness() {
+function harness(platform = 'darwin') {
   const windows = []
   const intervals = []
   class Window extends EventEmitter {
@@ -26,6 +26,7 @@ function harness() {
       this.options = options
       this.destroyed = false
       this.sent = []
+      this.menuBarCalls = []
       this.webContents = new EventEmitter()
       this.webContents.send = (...args) => this.sent.push(args)
       this.webContents.setWindowOpenHandler = () => {}
@@ -35,6 +36,9 @@ function harness() {
     isDestroyed() { return this.destroyed }
     loadFile() {}
     isFullScreen() { return false }
+    // dev-board#726：win32 建窗后应显式收起原生菜单条，见 createMainWindow。
+    setMenuBarVisibility(visible) { this.menuBarCalls.push(['setMenuBarVisibility', visible]) }
+    setAutoHideMenuBar(hide) { this.menuBarCalls.push(['setAutoHideMenuBar', hide]) }
     static getAllWindows() { return windows.filter(w => !w.destroyed) }
   }
   const app = new EventEmitter()
@@ -42,12 +46,13 @@ function harness() {
   const clipboard = { text: 'already copied before launch', availableFormats: () => ['text/plain'], readText() { return this.text } }
   const context = vm.createContext({
     app, BrowserWindow: Window, clipboard, path, console,
-    process: { platform: 'darwin', env: {} }, __dirname: path.join(__dirname, '../main'),
+    process: { platform, env: {} }, __dirname: path.join(__dirname, '../main'),
     screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1400, height: 900 } }) },
     require: name => {
-      // 建窗那段里现场 require 的模块只有这两个；来了别的就当场报死，
+      // 建窗那段里现场 require 的模块在这里明确列出；来了别的就当场报死，
       // 免得新依赖悄悄混进建窗路径还没人知道。
       const stubs = {
+        'node:os': { totalmem: () => 8 * 1024 ** 3 },
         './services/win-arch': { isWinArmEmulated: () => false },
         './reload-guard': { attachReloadGuard: () => true },
       }
@@ -79,6 +84,21 @@ test('mac activation during service startup waits for the allocated backend port
   h.context.finishStartup()
   assert.equal(h.windows.length, 1)
   assert.ok(h.windows[0].options.webPreferences.additionalArguments.includes('--checkba-api-base=http://127.0.0.1:9799'))
+})
+
+test('dev-board#726: win32 window hides the native menu bar and turns off its Alt auto-hide toggle', () => {
+  const h = harness('win32')
+  h.context.finishStartup()
+  assert.deepEqual(h.windows[0].menuBarCalls, [
+    ['setMenuBarVisibility', false],
+    ['setAutoHideMenuBar', false],
+  ])
+})
+
+test('dev-board#726: mac window never touches menu bar visibility (real system menu bar)', () => {
+  const h = harness('darwin')
+  h.context.finishStartup()
+  assert.deepEqual(h.windows[0].menuBarCalls, [])
 })
 
 test('repeated creation keeps the current window and its clipboard destination', () => {
@@ -123,4 +143,33 @@ test('closing the current window still permits Dock activation to reopen it', ()
   assert.equal(h.windows.length, 2)
   assert.equal(h.context.current(), h.windows[1])
   assert.equal(h.intervals.length, 1)
+})
+
+function preloadBridge(argv) {
+  let bridge
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../preload/preload.js'), 'utf8'), {
+    process: { argv, platform: 'win32' },
+    require: name => {
+      assert.equal(name, 'electron')
+      return {
+        contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value } },
+        ipcRenderer: {},
+      }
+    },
+  })
+  return bridge
+}
+
+test('physical memory reaches the sandboxed preload through the real window arguments', () => {
+  const h = harness()
+  h.context.finishStartup()
+  const bridge = preloadBridge(h.windows[0].options.webPreferences.additionalArguments)
+  assert.equal(bridge.systemMemory.totalBytes, 8 * 1024 ** 3)
+})
+
+test('missing or malformed physical memory remains unknown, never zero', () => {
+  for (const value of [null, '', '0', '-1', 'NaN', 'Infinity', '1.5', '9007199254740992', '8192oops']) {
+    const bridge = preloadBridge(value === null ? [] : ['--checkba-system-memory=' + value])
+    assert.equal(bridge.systemMemory.totalBytes, null, String(value))
+  }
 })

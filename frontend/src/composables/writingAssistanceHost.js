@@ -54,14 +54,22 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
     const seq = ++seedSequence
     const current = () => !disposed && seq === seedSequence
     if (!current() || !writable) return
-    const view = await execute('set_revision_view', {}).catch(() => null)
-    if (!current() || !view || view.mode === 'all') return
     // Initial load/manual refresh: page the live body within one worker revision.
     // The API's 50-entry learn batch is independent of the document vocabulary.
+    //
+    // `__agent: true` is what asks the worker for FINAL TEXT (it runs the read
+    // through runAgentCommandInMarginView, which hides tracked deletions for the
+    // duration of that one command and is a no-op on a document without any).
+    // Without it the inline "all markup" view — the product default since
+    // dev-board#368 — mixes deleted words back into the body and the extracted
+    // vocabulary is nonsense. This used to bail out on `mode === 'all'` instead,
+    // which silently disabled document vocabulary entirely in the default view
+    // (dev-board#725: a leftover from the days when the default was the margin
+    // view). It is a pure read; the redline author it implies creates nothing.
     const paragraphs = []
     let revision, start = 0, chars = 0, stop = false
     for (let page = 0; page < 1000 && !stop; page++) {
-      const result = await execute('get_document_text', { startParagraph: start, maxParagraphs: 200 }).catch(() => null)
+      const result = await execute('get_document_text', { startParagraph: start, maxParagraphs: 200, __agent: true }).catch(() => null)
       if (!current() || !result?.success || result.revision == null || !Array.isArray(result.paragraphs)) return
       if (revision == null) revision = result.revision
       if (result.revision !== revision) return

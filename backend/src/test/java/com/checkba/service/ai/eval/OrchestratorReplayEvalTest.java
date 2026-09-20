@@ -115,6 +115,26 @@ class OrchestratorReplayEvalTest {
             }
         }
 
+        // 5.1.1 逐轮变化的可见性（dev-board#729 ①）：起跑时按活跃文档类型裁掉，
+        // 中途新建/切换到别的类型的文档后放回全集。首尾两次调用分别断言。
+        if (!c.expect.offeredToolsExcludeFirstCall.isEmpty()
+                || !c.expect.offeredToolsIncludeLastCall.isEmpty()) {
+            List<List<String>> withTools = r.toolNamesOfferedPerLlmCall().stream()
+                    .filter(o -> !o.isEmpty()).toList();
+            assertTrue(withTools.size() >= 2,
+                    "逐轮可见性断言至少需要两次携带工具的调用，实际 " + withTools.size() + " 次");
+            for (String name : c.expect.offeredToolsExcludeFirstCall) {
+                assertFalse(withTools.get(0).contains(name),
+                        "首次 LLM 调用不应可见 [" + name + "]（起跑裁剪失效），实际: " + withTools.get(0));
+            }
+            List<String> last = withTools.get(withTools.size() - 1);
+            for (String name : c.expect.offeredToolsIncludeLastCall) {
+                assertTrue(last.contains(name),
+                        "末次 LLM 调用应可见 [" + name + "]（切换文档后没把工具集放回全集，"
+                                + "模型第一步做成了、第二步没有工具可用），实际: " + last);
+            }
+        }
+
         // 5.2 回喂断言：编排器主动追加的系统提醒应出现在某次 LLM 上下文里
         for (String marker : c.expect.promptContains) {
             assertTrue(r.promptTexts().stream().anyMatch(p -> p.contains(marker)),

@@ -40,6 +40,7 @@ try {
   const reset = async () => { await ok('load_document', { name: 'inline-review.docx', bytes: blank }); await ok('insert_at_cursor', { text: body }) }
   const snapshot = () => ok('get_document_text', { __agent: true })
   const waitChip = async () => { try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 4000 }) } catch (e) { console.log('CHIP WAIT', await exec('get_review_context'), await page.evaluate(() => ({ state: window.__lastReviewState, input: document.activeElement?.outerHTML.slice(0,100), chip: document.querySelector('.awd-ir-chip')?.outerHTML, clicks: window.__reviewClicks }))); throw e } }
+  const ballText = () => page.$eval('.awd-ir-ball', e => (e.hidden ? '' : e.textContent))
   const text = async () => (await snapshot()).paragraphs.map(p => p.text).join('\n')
   const params = async (paragraphIndex = 0) => { const s = await snapshot(); const p = s.paragraphs[paragraphIndex]; const start = p.text.indexOf('30'); return { revision: s.revision, paragraphIndex, start, end: start + 2, expectedParagraph: p.text, quote: '30', replacement: '15' } }
   await reset()
@@ -71,24 +72,35 @@ try {
   const state = async (patch = {}) => { await new Promise(resolve => setTimeout(resolve, 600)); p = { ...p, revision: (await snapshot()).revision }; return page.evaluate(async (p, patch) => { window.postMessage({ __lo: 'lo-relay', type: 'inline-review-state', session: 'review-test', enabled: true, writable: true, revision: p.revision, status: 'ready', deepStatus: 'idle', findings: [{ id: 'term', kind: 'TEST_FIXTURE', title: '付款期限待核对', message: '测试提示：请核对两处约定。', severity: 'warning', ...p }], ...patch }, location.origin); await new Promise(resolve => setTimeout(resolve, 0)) }, p, patch) }
   await state()
   await clickCaret()
-  try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 5000 }) } catch (e) { console.log('INITIAL CHIP', p, await exec('get_review_context'), await page.$eval('.awd-ir-status', e => e.textContent)); await page.screenshot({ path: '/tmp/awd-547-inline-failure.png' }); throw e }
+  try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 5000 }) } catch (e) { console.log('INITIAL CHIP', p, await exec('get_review_context'), await ballText()); await page.screenshot({ path: '/tmp/awd-547-inline-failure.png' }); throw e }
+  // dev-board#723/#724：正文里只剩浮球 + 行旁标记，清单在宿主右栏的「审校」标签里。
+  assert.equal(await page.$$eval('.awd-ir-panel', n => n.length), 0, 'no panel may cover the body text')
+  assert.equal((await ballText()).includes('1'), true, 'the ball carries the unread count')
   await page.click('.awd-ir-chip')
-  await page.waitForFunction(() => document.querySelector('.awd-ir-panel')?.textContent.includes('付款期限待核对'))
+  await page.waitForFunction(() => window.__reviewRequests.some(r => r.action === 'open-panel'))
   assert.equal(await text(), body, 'showing review does not change the document')
-  assert.equal(await page.evaluate(() => window.__reviewRequests.length), 0, 'no AI or external request without a click')
+  assert.equal(await page.evaluate(() => window.__reviewRequests.filter(r => r.action !== 'open-panel').length), 0, 'no AI or external request without a click')
+  await page.click('.awd-ir-ball')
+  await page.waitForFunction(() => window.__reviewRequests.filter(r => r.action === 'open-panel').length === 2)
   await page.screenshot({ path: '/tmp/awd-547-inline-review.png' })
-  const clickButton = label => page.evaluate(label => [...document.querySelectorAll('.awd-ir-panel button')].find(b => b.textContent === label).click(), label)
-  await clickButton('深入审校（AI）')
-  await page.waitForFunction(() => window.__reviewRequests.length === 1)
-  assert.equal(await page.evaluate(() => window.__reviewRequests[0].action), 'deep')
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll('.awd-ir-panel button')].find(b => b.textContent === '深入审校中…').disabled), true)
-  await state(); await page.waitForFunction(() => !document.querySelector('.awd-ir-panel')?.hidden)
-  await clickButton('采用建议'); await page.waitForFunction(() => document.querySelector('.awd-ir-panel')?.textContent.includes('已采用建议'))
-  assert.equal(await text(), body.replace('30', '15')); await ok('undo'); assert.equal(await text(), body); await ok('collapse_selection', { to: 'end' })
-  p = await params(); await state(); await clickCaret()
+  // 浮球拖动后靠边吸附，位置落 localStorage（客体页每开一份文档都是新 webview，
+  // sessionStorage 每次重来，位置留不住）。
+  const ballBox = await (await page.$('.awd-ir-ball')).boundingBox()
+  await page.mouse.move(ballBox.x + ballBox.width / 2, ballBox.y + ballBox.height / 2)
+  await page.mouse.down(); await page.mouse.move(ballBox.x + 180, Math.max(40, ballBox.y - 120), { steps: 10 }); await page.mouse.up()
+  const movedBox = await (await page.$('.awd-ir-ball')).boundingBox()
+  assert.ok(Math.abs(movedBox.y - ballBox.y) > 40, 'the ball follows a real drag')
+  assert.ok(await page.evaluate(() => Object.keys(localStorage).some(k => k.startsWith('awd_inline_review_'))), 'ball position persists')
+  // 关闭态：正文里一个提示都不留
+  await state({ enabled: false, status: 'disabled' })
+  assert.equal(await page.$eval('.awd-ir-ball', e => e.hidden), true, 'disabled keeps the body text clean')
+  assert.equal(await page.$eval('.awd-ir-chip', e => e.hidden), true)
+  await state(); await clickCaret()
   try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 4000 }) } catch (e) {
-    console.log('AFTER UNDO', p, await exec('get_review_context'), await page.$eval('.awd-ir-status', e => e.textContent)); await page.screenshot({ path: '/tmp/awd-547-inline-failure.png' }); throw e
+    console.log('AFTER RE-ENABLE', p, await exec('get_review_context'), await ballText()); await page.screenshot({ path: '/tmp/awd-547-inline-failure.png' }); throw e
   }
+  // 采用建议这条链路在本文件前半段已用真引擎逐项验过（goto/apply/undo/redo/stale），
+  // 按钮本身现在长在宿主的 Vue 面板里，不在客体页——那一半由 desktop-e2e/writing.mjs 走。
   await page.evaluate(() => document.querySelector('input[data-lo-ime]').dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })))
   assert.equal(await page.$eval('.awd-ir-chip', e => e.hidden), true, 'IME hides hints immediately')
   await page.evaluate(() => document.querySelector('input[data-lo-ime]').dispatchEvent(new CompositionEvent('compositionend', { data: '', bubbles: true })))
@@ -99,5 +111,5 @@ try {
   const exported = await ok('export_document', { name: 'review-clean.docx' })
   const docx = await JSZip.loadAsync(Uint8Array.from(Object.values(exported.bytes)))
   assert.equal((await docx.file('word/document.xml').async('string')).includes('__ai_anchor_'), false, 'review adds no persisted anchors')
-  console.log('PASS real guest chip/detail, explicit AI only, guarded apply/undo, IME/scroll/stale hiding, no document anchors')
+  console.log('PASS real guest ball/chip, host-side list only, guarded apply/undo, IME/scroll/stale hiding, no document anchors')
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)) }

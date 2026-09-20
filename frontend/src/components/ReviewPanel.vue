@@ -7,6 +7,9 @@
         <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: allGroups.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
+        <!-- 「审校」（dev-board#723/#724）：即时审校的清单。inlineReview 为 null
+             （非 Writer / 没有项目 / 引擎没起来）时整个标签不出现。 -->
+        <text v-if="inlineReview" class="rp-tab" :class="{ on: tab === 'chk' }" @tap="tab = 'chk'">{{ $t('editor.review.checkTab', { count: inlineReviewCount }) }}</text>
         <!-- 「溯源」（dev-board#632）：这一段是谁、哪一版、什么时候改的。
              这份文件没有版本记录时 provenance 为 null，标签整个不出现。 -->
         <text v-if="provenance" class="rp-tab" :class="{ on: tab === 'prov' }" @tap="tab = 'prov'">{{ $t('version.provenanceTab') }}</text>
@@ -30,7 +33,7 @@
       </view>
     </scroll-view>
 
-    <view v-if="error && tab !== 'evd'" class="rp-error">{{ error }}</view>
+    <view v-if="error && tab !== 'evd' && tab !== 'chk'" class="rp-error">{{ error }}</view>
     <view v-if="listLimitReached" class="rp-limit">{{ $t('editor.review.limitReached', { count: 500 }) }}</view>
 
     <!-- 底稿页：独立组件、v-show 常驻（tab 上要显示计数，且切页不丢筛选/折叠态） -->
@@ -43,6 +46,17 @@
       @count="evidenceCount = $event"
       @locate="$emit('locate', $event)"
       @changed="$emit('changed')"
+    />
+
+    <!-- 审校页：同样 v-show 常驻（标签上要显示计数，切页不丢忽略/分类） -->
+    <InlineReviewPanel
+      v-if="!isMerge && inlineReview"
+      v-show="tab === 'chk'"
+      :state="inlineReview"
+      :executor="executor"
+      @count="inlineReviewCount = $event"
+      @changed="$emit('changed')"
+      @action="$emit('inline-review', $event)"
     />
 
     <!-- 合并比对稿模式（dev-board#630，spec §5.4）：三块固定顺序，没有标签切换。
@@ -122,7 +136,7 @@
       </view>
     </scroll-view>
 
-    <scroll-view v-show="!isMerge && tab !== 'evd'" class="rp-list" scroll-y :scroll-into-view="activeCardId" scroll-with-animation>
+    <scroll-view v-show="!isMerge && tab !== 'evd' && tab !== 'chk'" class="rp-list" scroll-y :scroll-into-view="activeCardId" scroll-with-animation>
       <!-- 修订 -->
       <template v-if="tab === 'rev'">
         <view v-if="!revisions.length" class="rp-empty">
@@ -219,6 +233,7 @@
 //   类型  引擎 RedlineType 如实映射成 插入/删除/格式/段落格式，认不出的原样显示；
 //   理由  位置上与修订重叠/相接的批注挂进卡片，处置后顺手标记为已解决。
 import EvidencePanel from '@/components/EvidencePanel.vue'
+import InlineReviewPanel from '@/components/InlineReviewPanel.vue'
 import {
   groupRevisions, countByAuthorKind, filterByAuthorKind, linkCommentsToRevisions, authorKind,
 } from '@/utils/reviewGrouping.js'
@@ -249,8 +264,8 @@ function fenceSnapshot(src, fields) {
 
 export default {
   name: 'ReviewPanel',
-  components: { EvidencePanel },
-  emits: ['close', 'changed', 'locate', 'merge-state', 'open-other-version', 'open-history'],
+  components: { EvidencePanel, InlineReviewPanel },
+  emits: ['close', 'changed', 'locate', 'merge-state', 'open-other-version', 'open-history', 'inline-review'],
   props: {
     documentLocation: { type: Object, default: () => ({}) },
     // LibreOffice executor（executeCommand(action, params)）。null 时面板静默。
@@ -283,10 +298,13 @@ export default {
     // 逐段溯源（dev-board#632）：{rows:[{index, text, unit}], summary, truncated, loading}。
     // null = 这份文件没有溯源可看（没开版本记录 / 老服务端），「溯源」标签不出现。
     provenance: { type: Object, default: null },
+    // 即时审校的状态快照（inlineReviewHost 的 publish）。null = 这份文档没有审校，
+    // 「审校」标签整个不出现。
+    inlineReview: { type: Object, default: null },
   },
   data() {
     return {
-      tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0,
+      tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0, inlineReviewCount: 0,
       reviewRevision: null, reviewDocumentSeq: null,
       authorFilter: 'all',
       // 合并模式的两笔账：块 1 每处选了哪一边，块 2 每条修订怎么处置的。
@@ -388,6 +406,12 @@ export default {
     mergeConflicts: { handler() { if (this.isMerge) this.emitMergeState() }, immediate: true },
   },
   methods: {
+    /** 宿主切标签用（正文浮球点开时要直接落在「审校」页）。合并模式没有标签。 */
+    openTab(key) {
+      if (this.isMerge || !key) return
+      if (key === 'chk' && !this.inlineReview) return
+      this.tab = key
+    },
     // ---- 合并比对稿模式（dev-board#630） ------------------------------------
     /** 'p12' → 12；'t1.2.3' → null（表格单元不在正文段落序里，定位不过去） */
     paraIndexOf(key) {

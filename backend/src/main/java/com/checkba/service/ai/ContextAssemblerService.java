@@ -73,6 +73,21 @@ public class ContextAssemblerService {
     @Autowired(required = false)
     private MemoryDocumentService memoryDocumentService;
 
+    /**
+     * 模板画像解析（dev-board#729 ②）：末位提醒要直接告诉模型「本项目有没有画像」。
+     *
+     * <p>字段注入 + required=false，与 {@link #memoryDocumentService} 同一口径——
+     * 本类是 {@code @RequiredArgsConstructor}，加 final 字段要牵动一批手工 new 的测试。
+     * 为 null 时整段不注入（行为与加这条之前完全一致）。
+     */
+    @Autowired(required = false)
+    private StyleProfileResolver styleProfileResolver;
+
+    /** 供测试直接装配。 */
+    void setStyleProfileResolver(StyleProfileResolver resolver) {
+        this.styleProfileResolver = resolver;
+    }
+
     // 应用语言（EN 版 PR5）：en-US 时选英文 system prompt 与各硬编码段的英文文本；
     // zh-CN 路径的代码与文本一字不动（中文版行为保持逐字节一致是硬约束）。
     private final com.checkba.service.AppLanguageService appLanguageService;
@@ -736,7 +751,8 @@ public class ContextAssemblerService {
         // 重新发现文档。末位消息是注意力最高的位置，这里再说一次才真正生效。
         String userText = userPrompt + activeDocumentReminder(activeContext,
                 clientCapabilityService.capabilityOf(conversationId),
-                clientCapabilityService.officeHostOf(conversationId));
+                clientCapabilityService.officeHostOf(conversationId))
+                + templateProfileFact(activeContext, clientCapabilityService.capabilityOf(conversationId), projectId);
 
         if (visionAttachments.isEmpty()) {
             // 没有图片时**保持旧构造**。语义上「只含一个 TextContent 的 list」与纯文本等价
@@ -964,6 +980,64 @@ public class ContextAssemblerService {
     }
 
     /**
+     * 模板画像的事实陈述（dev-board#729 ②），跟在活跃文档提醒之后、同样挂在用户消息末位。
+     *
+     * <p><b>为什么要专门说这一句</b>：{@code doc_apply_style_profile} 的描述原文是
+     * 「项目有模板画像时，用户要求『按模板排版』用本工具而不是 doc_apply_standard_format」——
+     * 「有没有画像」这件事模型<b>没有任何办法自己判断</b>，真机上它于是先花一整轮去
+     * {@code list_files(_模板)} 探一探（那一轮的墙钟中位 80 秒、91% 花在推理上）。
+     * 服务端本来就知道答案（{@link StyleProfileResolver} 的解析链），直接告诉它。
+     *
+     * <p>只在「LOWA 会话 + 活跃文档是 Writer 文档」时注入：画像是 Word 排版的事，
+     * Calc/Impress/Office 插件会话都用不上，多一句是白花钱。
+     */
+    private String templateProfileFact(com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+                                       ClientCapabilityService.Capability capability,
+                                       String projectId) {
+        if (styleProfileResolver == null || capability != ClientCapabilityService.Capability.LOWA) {
+            return "";
+        }
+        if (activeContext == null || activeContext.getId() == null || activeContext.getId().isEmpty()) {
+            return "";
+        }
+        if (!ClientCapabilityService.DOC_KIND_WRITER.equals(lowaDocKind(activeContext))) {
+            return "";
+        }
+        Long pid;
+        try {
+            pid = projectId == null || projectId.isBlank() ? null : Long.valueOf(projectId.trim());
+        } catch (NumberFormatException e) {
+            return "";
+        }
+        StyleProfileResolver.Source source;
+        try {
+            source = styleProfileResolver.resolveWithSource(pid, null).source();
+        } catch (Exception e) {
+            // 画像解析失败不该让整轮上下文组装出问题——少一句提醒只是慢一轮
+            log.warn("模板画像来源解析失败，本轮不注入该事实: {}", e.getMessage());
+            return "";
+        }
+        boolean english = appLanguageService.isEnglish();
+        if (source.hasCustomProfile()) {
+            return english
+                    ? "\n\n[SYSTEM NOTE] This project HAS a template style profile (source: "
+                      + source.name().toLowerCase(java.util.Locale.ROOT) + "). When the user asks for "
+                      + "\"format it per our template / house style\", call `doc_apply_style_profile` directly — "
+                      + "do NOT spend a round listing files to look for a template folder."
+                    : "\n\n[系统提醒] 本项目模板画像：有（来源：" + source.label() + "）。"
+                      + "用户要求「按模板/按所里格式排版」时**直接调用 `doc_apply_style_profile`**，"
+                      + "不要先去 list_files / search_project_files 找模板文件夹——这件事服务端已经替你确认过了。";
+        }
+        return english
+                ? "\n\n[SYSTEM NOTE] This project has NO template style profile. For \"format it properly\" "
+                  + "use `doc_apply_standard_format` (the built-in house style) — do NOT spend a round "
+                  + "looking for a template folder, and do NOT call `doc_apply_style_profile`."
+                : "\n\n[系统提醒] 本项目模板画像：无。"
+                  + "用户要求「规范格式/按标准排版」时**直接调用 `doc_apply_standard_format`**（内置律所标准格式），"
+                  + "不要去 list_files / search_project_files 找模板文件夹，也不要调 `doc_apply_style_profile`。";
+    }
+
+    /**
      * 活跃文档的末位提醒（拼在用户消息尾部），文案按会话客户端能力切换（Phase C）：
      * lowa=doc_* 口径（现状）；office=office_* 口径（正文已内联注入，改动经 office_* 落到宿主，
      * 按宿主 Word/Excel/PowerPoint 点名对应工具集）；none=只读口径。无活跃文档时返回空串。
@@ -1071,12 +1145,22 @@ public class ContextAssemblerService {
      * pptx→slide_*（返回 "slide"）。优先取 fileType（后端已知扩展名，无点号），
      * 缺失时退回文件名后缀。三套原语互不相通，判据错了就是模型调用会死路径。
      */
-    private static String lowaDocKind(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
-        String ext = activeContext.getFileType();
+    public static String lowaDocKind(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        return lowaDocKindOf(activeContext.getFileType(), activeContext.getName());
+    }
+
+    /**
+     * 同一判据的「只有扩展名/文件名」入口：编排器在本轮中途 {@code doc_open_file} 切文档后
+     * 只拿得到 fileId 与文件名，按它重算工具可见性（dev-board#729 ①）。
+     *
+     * <p><b>判据只此一份</b>：工具白名单与末位提醒文案必须由同一个函数产出，
+     * 各写一份的后果是「提醒说这是表格、下发的却是 Writer 工具集」——两边都不报错。
+     */
+    public static String lowaDocKindOf(String fileType, String fileName) {
+        String ext = fileType;
         if (ext == null || ext.isBlank()) {
-            String name = activeContext.getName();
-            int dot = name == null ? -1 : name.lastIndexOf('.');
-            ext = (dot >= 0 && dot < name.length() - 1) ? name.substring(dot + 1) : "";
+            int dot = fileName == null ? -1 : fileName.lastIndexOf('.');
+            ext = (dot >= 0 && dot < fileName.length() - 1) ? fileName.substring(dot + 1) : "";
         }
         ext = ext.toLowerCase(java.util.Locale.ROOT);
         if (ext.startsWith("xls") || ext.startsWith("et") || "csv".equals(ext)) return "sheet";

@@ -59,6 +59,8 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
   const EDIT_DELAY = 250, FRESH_DELAY = 900
   let wantFresh = true, freshTimer = null, lastAction = '', pendingPolls = 0
   let enabled = false, cards = [], focusKey = '', busy = false, editingKey = '', pointerDown = false
+  // Last read's gutter conclusion; the width only moves once two reads agree.
+  let lastWantGutter = false
   const pageLayers = new Map()
   function showNotice(text) { notice.textContent = text; notice.hidden = !text }
   function makeCard(item) {
@@ -285,7 +287,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
         root.hidden = true; snapshot = null
         // An unsupported engine retains its own notes. Do not keep probing or
         // reserve an empty gutter when the geometry contract is unavailable.
-        if (enabled) { enabled = false; await execute('set_review_balloons', { enabled: false, width: 280 }) }
+        if (enabled) { enabled = false; lastWantGutter = false; await execute('set_review_balloons', { enabled: false, width: 280 }) }
         return
       }
       if (data.stale || data.unread) armFresh()
@@ -295,14 +297,27 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
       else if (pendingPolls < 6) { pendingPolls++; schedule(700) }
       // Cards on pages Writer has not laid out yet, or not read yet, keep the
       // gutter: releasing it for one read would shift the page back and forth.
-      const items = reviewItems(data), hasItems = items.length > 0 || data.pending > 0 || (enabled && data.unread > 0)
+      // The gutter is all-or-nothing (280px or 0) and every switch reflows the
+      // whole page sideways, so act only on a conclusion two consecutive reads
+      // agree on — symmetric, both when reserving and when releasing. A single
+      // read taken while Writer is still laying out far pages used to be enough
+      // to move it (dev-board#725). `unread` counts on both sides for the same
+      // reason; weighing it only while already enabled was the asymmetry that
+      // let one direction win a race the other could not.
+      const items = reviewItems(data), wantGutter = items.length > 0 || data.pending > 0 || data.unread > 0
+      const settled = wantGutter === lastWantGutter
+      lastWantGutter = wantGutter
       snapshot = data
-      const desiredWidth = hasItems ? 280 : 0
-      if (hasItems !== enabled || (data.sidebarWidth != null && Number(data.sidebarWidth) !== desiredWidth)) {
-        const changed = await execute('set_review_balloons', { enabled: hasItems, width: 280 })
+      const desiredWidth = wantGutter ? 280 : 0
+      const wrongWidth = wantGutter !== enabled || (data.sidebarWidth != null && Number(data.sidebarWidth) !== desiredWidth)
+      // Not settled: look again shortly. Never re-arm at 0ms — this reads the
+      // native geometry on the single-threaded office loop.
+      if (wrongWidth && !settled) schedule(EDIT_DELAY)
+      if (wrongWidth && settled) {
+        const changed = await execute('set_review_balloons', { enabled: wantGutter, width: 280 })
         if (disposed || suspended || capturedGeneration !== generation) return
         if (!changed?.success || changed.available === false) { root.hidden = true; return }
-        enabled = hasItems
+        enabled = wantGutter
         // One fresh read after a native gutter transition; no periodic polling.
         again = true
       }
@@ -347,7 +362,7 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     suspend(action) {
       suspended++; generation++; clearTimeout(timer); lastAction = action
       if (action === 'load_document') {
-        busy = false; editingKey = ''; pointerDown = false; snapshot = null; cards = []; focusKey = ''; enabled = false
+        busy = false; editingKey = ''; pointerDown = false; snapshot = null; cards = []; focusKey = ''; enabled = false; lastWantGutter = false
         list.replaceChildren(); pageLayers.clear(); svg.replaceChildren(); root.hidden = true
       }
     },

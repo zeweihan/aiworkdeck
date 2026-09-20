@@ -18,6 +18,7 @@ import {
 } from '../../src/composables/agentInboxState.mjs'
 import { captureChatTimeline, visibleChatTimeline } from '../../src/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from '../../src/composables/bubbleId.js'
+import { documentEditedFromProcesses } from '../../src/utils/useInDocumentVisibility.js'
 
 const source = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
 
@@ -27,11 +28,13 @@ function stream(overrides = {}) {
     .replace('        bubbles,\n', '        bubbles, handleEvent, currentAssistantBubble, createAssistantBubble, createUserBubble,\n')
   const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
     'createProtocolTagRegex', 'decodeProtocolTags', 't', 'nextBubbleId', 'captureChatTimeline',
+    'documentEditedFromProcesses',
     'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
     'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
     body + '\nreturn useAgentStream()')
   const value = factory(ref, reactive, nextTick, () => {}, () => null,
     createProtocolTagRegex, decodeProtocolTags, key => key, nextBubbleId, captureChatTimeline,
+    documentEditedFromProcesses,
     createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
     () => 'http://test.local', () => 'test-session',
     overrides.getAgentInbox || (async () => ({ items: [], runId: null, status: null })),

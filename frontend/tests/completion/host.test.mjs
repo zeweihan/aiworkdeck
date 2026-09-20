@@ -196,6 +196,35 @@ test('mixed-revision document pages are never published or learned', async t => 
   assert.deepEqual(f.learned, [])
 })
 
+// dev-board#725: the product default is the inline "all markup" view. seedDocument
+// used to probe set_revision_view and return early whenever the mode was 'all' —
+// a leftover from the days when the default was the margin view — which silently
+// disabled document vocabulary in exactly the view every user sits in. Final text
+// now comes from the read itself (__agent runs it through the worker's
+// runAgentCommandInMarginView), so the display mode is nobody's business here.
+test('the inline all-markup default still seeds document vocabulary, reading final text', async t => {
+  const messages = [], calls = []
+  const host = createWritingAssistanceHost({ projectId: 11, fileId: 22, userId: Math.random(), writable: true,
+    send: m => messages.push(m), storage: { get() {}, set() {} },
+    execute: async (action, params) => {
+      calls.push({ action, params })
+      if (action === 'set_revision_view') return { mode: 'all' }
+      if (action === 'get_review_context') return { success: true, revision: 1 }
+      return { success: true, revision: 1, paragraphs: [{ index: 0, text: '股东名册中青岛致衡贸易有限公司持股40%。' }] }
+    },
+    api: { list: async () => ({ items: [] }), learn: async () => ({}) },
+  })
+  t.after(() => host.destroy())
+  await host.start()
+  assert.equal(matchCompletionItems('青岛致', messages.at(-1).config?.items || [])[0]?.text, '青岛致衡贸易有限公司',
+    '内联「全部修订」默认视图下文档词库必须照样采集（dev-board#725）')
+  const reads = calls.filter(x => x.action === 'get_document_text')
+  assert.ok(reads.length > 0 && reads.every(x => x.params?.__agent === true),
+    '正文读取必须要最终文本，否则被删的旧字会混进词库')
+  assert.equal(calls.some(x => x.action === 'set_revision_view'), false,
+    '采集不许再按显示方式设闸')
+})
+
 test('manual document refresh retries a failed seed; focus refresh does not scan the document', async t => {
   let available = false
   const f = pagedFixture(t, () => available

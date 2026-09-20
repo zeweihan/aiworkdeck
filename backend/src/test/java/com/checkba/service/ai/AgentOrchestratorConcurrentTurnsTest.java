@@ -184,6 +184,9 @@ class AgentOrchestratorConcurrentTurnsTest {
         editorBridge = mock(EditorBridgeService.class);
 
         messageService = mock(ProjectAiMessageService.class);
+        // dev-board#729 ⑤：编排器改用 countByConversationId 判首轮；mock 默认回 0 会误判首轮、起异步标题线程
+        // 与下一次 when(...) 打架（CI 上 Mockito WrongTypeOfReturnValue）。计数跟随 list 桩，保持各用例原语义。
+        when(messageService.countByConversationId(any())).thenAnswer(inv -> (long) messageService.listByConversationId(inv.getArgument(0)).size());
         // >1 条历史：跳过首轮标题生成那条跨线程分支，本用例只关心消息行归属
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
@@ -201,7 +204,7 @@ class AgentOrchestratorConcurrentTurnsTest {
                         SystemMessage.from("system"), UserMessage.from("user"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any()))
+        when(toolRegistry.getAllSpecifications(any(), any()))
                 .thenReturn(specs("law_search", "mask_text", "read_document"));
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))

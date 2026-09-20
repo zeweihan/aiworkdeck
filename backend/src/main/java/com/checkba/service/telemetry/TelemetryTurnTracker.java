@@ -31,7 +31,25 @@ public class TelemetryTurnTracker {
     private static final Set<String> TERMINAL =
             Set.of("FINISHED", "ERROR", "CANCELLED", "PAUSED", "AWAITING_APPROVAL", "AWAITING_INPUT");
 
-    private record TurnCtx(long startMs, Map<String, Object> attrs) {}
+    /**
+     * 一轮的上下文。rounds / firstPromptTokens 是**可变**的——它们在轮次跑的过程中被
+     * {@link #noteRound} / {@link #notePromptTokens} 累计，到终态才随 ai.turn 一起发出去
+     *（dev-board#729 ⑥：一条消息到底跑了几个 LLM 往返、首轮 prompt 有多大，
+     * 是「慢在哪、贵在哪」的两个基本判据，此前账本里一个都没有）。
+     */
+    private static final class TurnCtx {
+        final long startMs;
+        final Map<String, Object> attrs;
+        final java.util.concurrent.atomic.AtomicInteger rounds = new java.util.concurrent.atomic.AtomicInteger();
+        /** -1 = 还没拿到（通道没回 usage，如 Ollama / 回放评测的脚本模型） */
+        final java.util.concurrent.atomic.AtomicInteger firstPromptTokens =
+                new java.util.concurrent.atomic.AtomicInteger(-1);
+
+        TurnCtx(long startMs, Map<String, Object> attrs) {
+            this.startMs = startMs;
+            this.attrs = attrs;
+        }
+    }
 
     private final TelemetryService telemetry;
     private final Map<String, TurnCtx> open = new ConcurrentHashMap<>();
@@ -55,14 +73,36 @@ public class TelemetryTurnTracker {
         open.put(conversationId, new TurnCtx(System.currentTimeMillis(), safe));
     }
 
+    /**
+     * 本轮又发起了一次 LLM 往返（AgentOrchestrator.runLoop 在 generate 之前调用）。
+     * 无开启轮次时 no-op——子 Agent、辅助模型这类不属于任何轮次的调用不该被计进来。
+     */
+    public void noteRound(String conversationId) {
+        if (conversationId == null) return;
+        TurnCtx ctx = open.get(conversationId);
+        if (ctx != null) ctx.rounds.incrementAndGet();
+    }
+
+    /** 本轮某次 LLM 调用回来的 promptTokens；只记第一次（后续轮次叠着工具结果，看不出前缀体量）。 */
+    public void notePromptTokens(String conversationId, int promptTokens) {
+        if (conversationId == null || promptTokens <= 0) return;
+        TurnCtx ctx = open.get(conversationId);
+        if (ctx != null) ctx.firstPromptTokens.compareAndSet(-1, promptTokens);
+    }
+
     /** 状态跳变（AgentRunStateService.mark 调用）；非终态或无开启轮次时为 no-op */
     public void onStatus(String conversationId, String status) {
         if (conversationId == null || status == null || !TERMINAL.contains(status)) return;
         TurnCtx ctx = open.remove(conversationId);
         if (ctx == null) return;
-        Map<String, Object> attrs = new HashMap<>(ctx.attrs());
+        Map<String, Object> attrs = new HashMap<>(ctx.attrs);
         attrs.put("outcome", status);
-        attrs.put("durationMs", System.currentTimeMillis() - ctx.startMs());
+        attrs.put("durationMs", System.currentTimeMillis() - ctx.startMs);
+        attrs.put("rounds", ctx.rounds.get());
+        int firstPrompt = ctx.firstPromptTokens.get();
+        // 拿不到就不写这个字段：通道没回 usage 时写个 0 会让「首轮 prompt 为 0」
+        // 与「真的很小」在账本里长得一模一样
+        if (firstPrompt > 0) attrs.put("promptTokensFirstRound", firstPrompt);
         telemetry.recordConv("ai.turn", conversationId, attrs);
     }
 }
