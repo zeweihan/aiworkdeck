@@ -248,6 +248,13 @@
             :title="$t('editor.toolbar.inlineReview')" @tap.stop="$emit('toggle-inline-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.inlineReviewShort') }}</text>
       </view>
+      <!-- 有据续写（dev-board#748）。面板本体长在客体页里（要跟着正文光标走），
+           这里是它的唯一入口：点一下给客体发开合指令，按下态等客体回报。
+           客体报不可用（非 Writer / 只读 / 换文档重起）时整颗按钮不出现。 -->
+      <view v-if="semanticWritingAvailable" class="etb-btn wide" :class="{ on: semanticWritingOn }"
+            :title="$t('editor.toolbar.semanticWriting')" @tap.stop="$emit('toggle-semantic-writing')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.semanticWritingShort') }}</text>
+      </view>
       <view class="etb-stepper" :title="$t('editor.toolbar.zoom')">
         <text class="etb-step-b" @tap.stop="stepZoom(-10)">−</text>
         <text class="etb-step-v z" @tap.stop="resetZoom">{{ Math.round(state.view.zoom || 100) }}%</text>
@@ -373,7 +380,7 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'toggle-inline-review', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-inline-review', 'toggle-semantic-writing', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
@@ -383,6 +390,9 @@ export default {
     // 即时审校此刻开着没有 / 这份文档有没有即时审校（非 Writer、没有项目时整个按钮不出现）。
     inlineReviewOn: { type: Boolean, default: true },
     inlineReviewAvailable: { type: Boolean, default: false },
+    // 有据续写面板此刻开着没有 / 这份文档有没有这项能力（两者都由客体页上报）。
+    semanticWritingOn: { type: Boolean, default: false },
+    semanticWritingAvailable: { type: Boolean, default: false },
   },
   data() {
     return {

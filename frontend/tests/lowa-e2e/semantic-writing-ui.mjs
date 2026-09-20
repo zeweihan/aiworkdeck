@@ -31,11 +31,19 @@ try {
     window.addEventListener('message',async e=>{const m=e.data;if(m?.type==='modified'){window.__semanticTrace.push({event:'modified'});host.modified();return}if(m?.type!=='writing-request'||!m.action?.startsWith('semantic-')||m.session!=='semantic-ui-fixture')return
       window.__semanticTrace.push({event:m.action})
       try{const result=await host.perform(m.action,m.data);window.postMessage({__lo:'lo-relay',type:'writing-response',session:m.session,id:m.id,result},location.origin)}catch(error){window.postMessage({__lo:'lo-relay',type:'writing-response',session:m.session,id:m.id,error:error.message},location.origin)}})
+    // 客体回报的可用/开合态（dev-board#748）——真实宿主据此决定工具栏按钮的显隐与按下态。
+    window.addEventListener('message',e=>{if(e.data?.type==='semantic-writing-state')window.__semanticState=e.data})
     window.postMessage({__lo:'lo-relay',type:'writing-config',config:{session:'semantic-ui-fixture',writable:true,enabled:false,learning:false,items:[]}},location.origin)
   })
   const clickText = text => page.evaluate(text=>[...document.querySelectorAll('.awd-semantic button')].find(b=>b.textContent===text)?.click(),text)
-  await page.waitForSelector('.awd-semantic-launch:not([hidden])')
-  await clickText('语义补全'); await page.waitForSelector('.awd-semantic-file input')
+  // 画布上不再有那颗固定按钮（dev-board#748）：唯一入口在宿主工具栏，
+  // 这里发它那条开合指令代替点击；面板关着时根节点整个不渲染。
+  await page.waitForFunction(()=>window.__semanticState?.available===true&&window.__semanticState?.open===false)
+  assert.equal(await page.$('.awd-semantic-launch'),null)
+  assert.equal(await page.$eval('.awd-semantic',el=>el.hidden),true)
+  await page.evaluate(()=>window.postMessage({__lo:'lo-relay',type:'semantic-writing-panel',open:true},location.origin))
+  await page.waitForSelector('.awd-semantic-file input')
+  await page.waitForFunction(()=>window.__semanticState?.open===true)
   await page.select('.awd-semantic select','diligence')
   await page.click('.awd-semantic-file input')
   await clickText('续写一句')
@@ -69,5 +77,9 @@ try {
   assert.equal(await page.$eval('.awd-semantic-sheet',el=>getComputedStyle(el).backgroundColor),'rgb(30, 41, 35)')
   await page.screenshot({path:'/tmp/semantic-writing-preview-dark.png'})
   await page.evaluate(()=>window.postMessage({__lo:'lo-relay',type:'set-theme',theme:'light'},location.origin))
-  console.log('PASS real LOWA semantic panel: preview, exact source, server-only acceptance, one undo, IME dispatch guard, small viewport and app theme. Screenshot /tmp/semantic-writing-preview.png labelled synthetic.')
+  // 客体里的「关闭」要回报给宿主，否则工具栏按下态会停在开着。
+  await clickText('关闭')
+  await page.waitForFunction(()=>window.__semanticState?.open===false)
+  assert.equal(await page.$eval('.awd-semantic',el=>el.hidden),true)
+  console.log('PASS real LOWA semantic panel: preview, exact source, server-only acceptance, one undo, IME dispatch guard, small viewport, app theme and host-toolbar-only entry. Screenshot /tmp/semantic-writing-preview.png labelled synthetic.')
 } finally { await browser.close(); server.close() }

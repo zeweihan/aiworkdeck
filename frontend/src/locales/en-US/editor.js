@@ -275,6 +275,8 @@ export default {
     reviewShort: 'Review',
     inlineReview: 'Inline review (rule checks after you pause typing; never calls a model)',
     inlineReviewShort: 'Checks',
+    semanticWriting: 'Evidence-backed drafting (suggestions cite project materials; nothing is written until you accept)',
+    semanticWritingShort: 'Drafting',
     insightPanel: 'Analyze this document and open the References panel',
     insightShort: 'Analyze',
     zoom: 'Zoom',

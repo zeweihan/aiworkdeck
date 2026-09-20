@@ -276,6 +276,8 @@ export default {
     reviewShort: '审阅',
     inlineReview: '即时审校（停笔后跑规则检查，不调用 AI）',
     inlineReviewShort: '审校',
+    semanticWriting: '有据续写（结合项目材料生成建议，点「采用」才写入正文）',
+    semanticWritingShort: '有据续写',
     insightPanel: '解析本文并打开「依据」窗格',
     insightShort: '解析',
     zoom: '显示比例',
