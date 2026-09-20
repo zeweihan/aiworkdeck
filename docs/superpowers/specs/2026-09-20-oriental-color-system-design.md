@@ -73,10 +73,19 @@ design/tokens/awd-palette.json          ← 唯一真源（三仓各存一份逐
   │     ├→ app/globals.css               --king-* 变量与 @theme inline 映射
   │     └→ lib/plugin-template.ts        发给第三方插件作者的模板令牌表
   │
-  └─ aiworkdeck_mobile/scripts/generate-tokens.mjs
-        ├→ ios/Sources/Design/Tokens.swift
+  └─ aiworkdeck_mobile：**不新建生成器**，接进仓里已有的 contract/tokens.json 跨端体系
+        ├→ ios/Sources/Contract/Tokens.swift
+        ├→ android/contract/src/main/kotlin/com/aiworkdeck/contract/Tokens.kt
+        ├→ harmony/contract/src/main/ets/Tokens.ets
         └→ miniprogram/styles/tokens.wxss
 ```
+
+**两处盘点报错、落地时才发现的事实**（记在这里防止下次又踩）：
+- 移动仓不是「iOS + 小程序双端」，是**四端**：iOS、小程序、Android、鸿蒙。
+- `Tokens.swift` 的真实路径是 `ios/Sources/Contract/Tokens.swift`，不是盘点报的 `ios/Sources/Design/`。
+- 该仓早就有一套 `contract/tokens.json` 驱动的跨端令牌生成体系，所以这一仓是接进去而不是另起炉灶。
+- 主仓的令牌消费方是**四个**不是三个：第四个是 `frontend/src/zetaoffice/editor.html`
+  （LOWA 编辑器是独立 document，继承不到宿主的 CSS 自定义属性，要单独注入一份）。
 
 每个仓加 `scripts/check-palette.mjs`，CI 里跑：重新生成一遍，与入库文件逐字节比对，不一致即红。
 跨仓一致性靠 `awd-palette.json` 里的 `version` + 各仓校验自己那份副本的 sha256。
@@ -98,7 +107,7 @@ design/tokens/awd-palette.json          ← 唯一真源（三仓各存一份逐
 | ↳ 其中最大一坨 | 注入 LOWA iframe 的 CSS 字符串（`zetaOfficeInlineReview.js`、`semanticWritingPanel.js`、`zetaOfficeReviewBalloons.js`、`writingAssistancePresentation.js`、`zetaOfficeImeOverlay.js`）约 163 处 | 只扫 .css/.vue 会全漏 |
 | Office/WPS 插件 | 组件内联 36 处、`scripts/build-wps.mjs` 的 `BRAND_STYLE` 28 处、`installer/art` 三个 HTML 57 处、`installer/mac/main.swift` 10 个 Swift 常量 | 六个宿主面共用一份产物 |
 | 桌面外壳 | `main/main.js` 的 `backgroundColor`/`titleBarOverlay`；`build/dmg-background.html` 与 `build/win/*.html` 六个源文件约 123 处 | 改 HTML 后须手动跑 `render-win-installer-art.mjs` / `render-oneclick-art.mjs` 重渲位图入库，**CI 不会自动跑** |
-| 可视化 | litviz vendor（走 `PATCHES.md` 的 `[AWD-PATCH]` 机制，不直接改源码）、标签调色板、日历分类色、版本时间轴强调色 | 195 个点 |
+| 可视化 | litviz vendor 已按 `PATCHES.md` 打成 `[AWD-PATCH 4]`（歸藏风强调色 克莱因蓝 `#002FA7` → 墨竹青 `#2E5A50`）、标签调色板、日历分类色、版本时间轴强调色 | 195 个点 |
 | 内部工具 | `backend/src/main/resources/static/feedback-console/index.html` 反馈看板管理台 | 照改（它是产品化页面） |
 
 ### aiworkdeckweb（官网）
@@ -112,9 +121,10 @@ design/tokens/awd-palette.json          ← 唯一真源（三仓各存一份逐
 - 16 张产品截图/海报画面里是旧配色 UI，需换色后重新出图
 - 同步更新 `DESIGN.md` 的色彩章节
 
-### aiworkdeck_mobile（移动端）
+### aiworkdeck_mobile（移动端，实为四端）
 
-- `ios/Sources/Design/Tokens.swift` 与 `miniprogram/styles/tokens.wxss` 改由生成器产出，并真正补上对拍脚本
+- 四端令牌（Swift / Kotlin / ETS / wxss）统一由仓内既有的 `contract/tokens.json` 体系产出，
+  色值来自 `design/tokens/awd-palette.json`；并真正补上那个声称存在却不存在的对拍脚本
 - iOS `Design/Components.swift` 缩略图占位渐变 6 处
 - 小程序 `glass.wxss`、6 个页面/组件 wxss、`utils/icons.ts`（SVG 图标用 JS 常量拼 data URI）、
   `app.json` 的 `window.backgroundColor`、`project.ts` 的 `wx.showModal` `confirmColor`
