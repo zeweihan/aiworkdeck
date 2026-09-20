@@ -211,24 +211,48 @@ export function overallPercentOf(scope) {
 }
 
 export const PROMPTED_PREF_KEY = 'optionalComponentsPromptedVersion'
+/** 上次提示时清单里有哪些组件（与 PROMPTED_PREF_KEY 并列落 prefs，dev-board#751） */
+export const PROMPTED_PACKS_PREF_KEY = 'optionalComponentsPromptedPacks'
 
-/** 大版本号（0.38.0 → 0.38）。小版本补丁不该让面板重新弹一次。 */
-function majorOf(v) {
-  const parts = String(v || '').split('.')
-  return parts.length >= 2 ? parts[0] + '.' + parts[1] : String(v || '')
+/** 缺失 = 运行时没装，或有配套模型而模型没下。 */
+function missingPackIds(items) {
+  return (items || [])
+    .filter((i) => i && (!i.installed || (i.modelId && !i.modelInstalled)))
+    .map((i) => i.packId)
+}
+
+/**
+ * 「提示过哪些组件」的新值：旧集合 ∪ 本次清单里的<b>全部</b>组件（不只是缺的）。
+ *
+ * <p>记全部而不是只记缺的，是为了让「用户自己从 设置→组件管理 卸载一个组件」不被当成
+ * 新组件——它早就被提示过了。并集又保证这个集合单调增，不会因为某次清单拉不全而回退。
+ */
+export function mergePromptedPackIds(prompted, items) {
+  const out = new Set(Array.isArray(prompted) ? prompted : [])
+  for (const i of items || []) {
+    if (i && i.packId) out.add(i.packId)
+  }
+  return [...out].sort()
 }
 
 /**
  * 首次登录后要不要弹「可选组件」面板（设计 §4.1）。
- * 判据四条全要满足：桌面端 / 接口真的回了组件 / 存在未装的（运行时或模型缺任一都算）/
- * 本大版本没提示过。标记存 electron prefs，重装才重置——localStorage 被清一次
- * 用户就会被重新打扰一遍。
+ * 判据：桌面端 / 接口真的回了组件 / 存在未装的（运行时或模型缺任一都算）/
+ * 缺的里面有<b>上次没提示过</b>的。
+ *
+ * <p>dev-board#751 之前这一条是「本大版本没提示过」，于是每个 0.x 发版都把用户已经
+ * 点过「稍后再说」的同一批组件再问一遍。现在记的是组件集合：同一批不再重弹，
+ * 真出现新组件才弹。标记存 electron prefs，重装才重置（重装后弹一次是设计允许的）。
+ *
+ * @param promptedPackIds 上次记下的组件集合；null/undefined = 老标记（0.46 及以前，
+ *        只记了版本号）。那种情况按「这批都提示过」处置——用户已经答过一次了。
  */
-export function shouldPromptOptionalComponents({ items, promptedVersion, appVersion, isDesktop }) {
+export function shouldPromptOptionalComponents({ items, promptedVersion, promptedPackIds, isDesktop }) {
   if (!isDesktop) return false
   const list = items || []
   if (!list.length) return false
-  const anyMissing = list.some((i) => !i.installed || (i.modelId && !i.modelInstalled))
-  if (!anyMissing) return false
-  return majorOf(promptedVersion) !== majorOf(appVersion)
+  const missing = missingPackIds(list)
+  if (!missing.length) return false
+  if (Array.isArray(promptedPackIds)) return missing.some((id) => !promptedPackIds.includes(id))
+  return !promptedVersion
 }

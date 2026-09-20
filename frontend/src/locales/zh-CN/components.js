@@ -10,6 +10,9 @@ export default {
   installOne: '下载此组件',
   later: '稍后再说',
   laterHint: '随时可以在「设置 → 组件管理」里下载。',
+  // 面板里已就绪的组件不再给复选框，收成底部这一行（dev-board#751）
+  alreadyReady: '已就绪：{names}。',
+  nameSeparator: '、',
   manageTitle: '组件管理',
 
   promptWithModel: '需要下载{name}（约 {runtime} MB；含模型约 {total} MB）。落盘于 ~/.aiworkdeck，可在「设置→组件管理」卸载释放。',

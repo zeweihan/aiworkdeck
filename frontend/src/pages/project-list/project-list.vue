@@ -360,7 +360,12 @@ import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
 import { optionalComponents } from '@/services/api.js'
-import { shouldPromptOptionalComponents, PROMPTED_PREF_KEY } from '@/composables/useOptionalComponents.js'
+import {
+  shouldPromptOptionalComponents,
+  mergePromptedPackIds,
+  PROMPTED_PREF_KEY,
+  PROMPTED_PACKS_PREF_KEY,
+} from '@/composables/useOptionalComponents.js'
 
 const VIEW_MODE_KEY = 'checkba_project_list_view'
 
@@ -461,18 +466,29 @@ export default {
     async maybePromptOptionalComponents() {
       if (!isDesktopHost() || !host.prefs) return
       try {
-        const [res, prompted, status] = await Promise.all([
+        const [res, prompted, promptedPacks, status] = await Promise.all([
           optionalComponents(),
           host.prefs.get(PROMPTED_PREF_KEY),
+          host.prefs.get(PROMPTED_PACKS_PREF_KEY),
           host.update ? host.update.status() : Promise.resolve(null),
         ])
+        const unwrap = (v) => (v && v.value !== undefined ? v.value : v)
+        const items = (res && res.components) || []
+        const promptedPackIds = unwrap(promptedPacks)
         this.appVersion = (status && status.appVersion) || ''
         this.showOptionalComponents = shouldPromptOptionalComponents({
-          items: (res && res.components) || [],
-          promptedVersion: prompted && prompted.value !== undefined ? prompted.value : prompted,
-          appVersion: this.appVersion,
+          items,
+          promptedVersion: unwrap(prompted),
+          promptedPackIds,
           isDesktop: true,
         })
+        // 0.46 及以前只记了版本号。不弹的时候把「提示过哪些组件」补齐，
+        // 将来真多出一个新组件时才认得出来（否则这批老用户永远不会再被提示）。
+        // 清单为空（后端没起来 / ai.packs 关着）时不写：那会把空集当成「提示过的全部」，
+        // 下次清单正常了反而全成了「新组件」。
+        if (!this.showOptionalComponents && !Array.isArray(promptedPackIds) && items.length) {
+          await host.prefs.set(PROMPTED_PACKS_PREF_KEY, mergePromptedPackIds(null, items))
+        }
       } catch (e) {
         // 后端还没起来 / 离线部署关了 ai.packs：不打扰，用户仍可从设置进组件管理
         console.warn('[project-list] 可选组件检查跳过', e)
