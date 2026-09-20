@@ -3825,7 +3825,13 @@ export default {
     showAiPanel() { this.pushMenuState() },
     // 分屏开关会把右侧那条标签栏整个建/拆，滚轮横滚是原生挂上去的，得跟着重挂
     // （幂等，见 tabDragSplit.rebindTabsWheel）。
-    splitMode() { this.pushMenuState(); this.$nextTick(() => this.rebindTabsWheel()) },
+    splitMode() {
+      this.pushMenuState()
+      this.$nextTick(() => this.rebindTabsWheel())
+      // 重开分屏会重建右侧引擎，活动文件 ID 没变也必须重新核算驻留预算。
+      if (this.splitMode) this.onActiveOfficeFileChanged('right', this.activeFileRight)
+      else this.scheduleLibreSpare()
+    },
     activeToolKey() { this.pushMenuState() },
     leftPaneKey() { this.pushMenuState() },
     isRecording() { this.pushMenuState() },
@@ -3853,6 +3859,7 @@ export default {
     focusedPane() { this.syncLibreExecutor() },
     // 关闭 tab 后清掉文件已不在左列表的过继备胎条目（closeFile 已 flush）
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
+    'rightFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
     // 批量命令（find_replace 逐命中路径 / apply_house_style）的「第 x/y 处」进度

@@ -9,10 +9,16 @@ const apiBaseUrl = apiBaseArg ? apiBaseArg.slice('--checkba-api-base='.length) :
 // ARM 版 Windows（Mac 虚拟机）转译运行：主进程看门狗超时已放宽 8 倍（dev-board#340），
 // 渲染层的等待死线要同步放宽，否则会在后端仍在正常预热时判超时（dev-board#341）
 const winEmulated = process.argv.includes('--checkba-win-emulated=1')
+// sandbox preload 不能直接读 os；由主进程注入物理内存，供编辑器选择预热策略。
+const systemMemoryArg = process.argv.find((a) => a.startsWith('--checkba-system-memory='))
+const systemMemoryBytes = systemMemoryArg ? Number(systemMemoryArg.slice('--checkba-system-memory='.length)) : NaN
 
 contextBridge.exposeInMainWorld('checkbaDesktop', {
   apiBaseUrl,
   winEmulated,
+  systemMemory: {
+    totalBytes: Number.isSafeInteger(systemMemoryBytes) && systemMemoryBytes > 0 ? systemMemoryBytes : null,
+  },
   // 窗口外壳：无边框窗口下渲染层要自己让出交通灯/窗口控件的位置，
   // 得知道跑在哪个平台、以及此刻是不是全屏（全屏时交通灯隐藏）。
   chrome: {

@@ -4,7 +4,7 @@
 // 模式说明见 .claude/agents/sidebar-shell.md 与 PR#151/#159。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
-import { isDesktopHost } from '@/services/host.js'
+import { host, isDesktopHost } from '@/services/host.js'
 
 // 内嵌 LibreOffice 保活池按文档体积计权（尽调模块 P3 稳定性余项 #2，
 // dev-board#100）：固定 LRU=3 与文档体积无关，三个 150 页/6.6MB 级大文档同时
@@ -18,6 +18,15 @@ import { isDesktopHost } from '@/services/host.js'
 // 权重 1 处理，退化成旧的"按数量"语义，不会异常淘汰。
 const LIBRE_SIZE_UNIT_BYTES = 2 * 1024 * 1024
 const LIBRE_WEIGHT_BUDGET = 6
+const LOW_MEMORY_BYTES = 8 * 1024 ** 3
+const LOW_MEMORY_INSTANCE_BUDGET = 2
+
+// 引擎固定基座远大于小文档本身；低内存设备不能只按压缩后的文件体积记账。
+// 用宿主真实物理内存，旧壳/网页缺失时保守处理，不依赖浏览器截断的 deviceMemory。
+function useConservativeLibrePool() {
+    const total = Number(host.systemMemory?.totalBytes)
+    return !Number.isFinite(total) || total <= LOW_MEMORY_BYTES
+}
 
 function libreInstanceWeight(fileSizeBytes) {
     const n = Number(fileSizeBytes)
@@ -79,6 +88,8 @@ export const librePoolMethods = {
     onActiveOfficeFileChanged(pane, file) {
         if (file && this.useLibreEditor(file)) {
             if (pane === 'left') this.maybeAdoptLibreSpare(file)
+            // 右窗格不能过继左侧备胎；首份文档直接右开时也不能多留一套空白引擎。
+            if (useConservativeLibrePool()) this.libreSpares = this.libreSpares.filter(sp => sp.file || sp.hidden)
             this.touchLibreLru(pane, file.id, file.fileSize)
         }
         this.syncLibreExecutor()
@@ -95,6 +106,7 @@ export const librePoolMethods = {
     scheduleLibreSpare() {
         // 延迟建胎：避开项目打开期（文件树/面板初始化）的资源竞争。
         clearTimeout(this._libreSpareTimer)
+        if (useConservativeLibrePool() && this.hasLibreDocumentInstance()) return
         this._libreSpareTimer = setTimeout(() => this.initLibreSpare(), 4000)
     },
     initLibreSpare() {
@@ -102,11 +114,20 @@ export const librePoolMethods = {
         if (typeof this.isActiveOverviewInstance === 'function' && !this.isActiveOverviewInstance()) return
         // 备胎是常驻的空白 LOWA 实例（数百 MB 内存），只在桌面壳里预热：
         // Web 态没有保活语境（页面刷新即丢），不值这个内存。
-        if (!isDesktopHost()) return
+        if (!isDesktopHost() || (useConservativeLibrePool() && this.hasLibreDocumentInstance())) return
         if (this.libreSpares.some(sp => !sp.file && !sp.hidden)) return // 已有空闲备胎
         this._libreSpareSeq = (this._libreSpareSeq || 0) + 1
         this.libreSpares.push({ key: this._libreSpareSeq, file: null })
         console.log('[ProjectOverview] LibreOffice spare booting (#' + this._libreSpareSeq + ')')
+    },
+    // 对齐两个窗格模板：当前文档与 LRU 中的文档才会挂引擎，关闭分屏的右栏不算。
+    // 不依赖 ref：用户在 4 秒计时期间打开文档，组件尚未 mounted 时也要阻止补胎。
+    hasLibreDocumentInstance() {
+        if (this.libreSpares.some(sp => sp.file && !sp.hidden)) return true
+        const mounted = (pane, files, activeId) => files.some(f => this.useLibreEditor(f) &&
+            (f.id === activeId || this.libreLruKeys.includes(pane + ':' + f.id)))
+        return mounted('left', this.leftFiles, this.activeFileIdLeft) ||
+            (this.splitMode && mounted('right', this.rightFiles, this.activeFileIdRight))
     },
     maybeAdoptLibreSpare(file) {
         if (!file || !this.useLibreEditor(file)) return
@@ -188,6 +209,8 @@ export const librePoolMethods = {
     // 关闭 tab（closeFile 已 flush 过）后清掉文件已不在左列表的过继条目。
     pruneClosedLibreSpares() {
         this.libreSpares = this.libreSpares.filter(sp => !sp.file || this.isLibreKeyOpen('left:' + sp.file.id))
+        // 全部关掉后恢复首开预热；4 秒期间又打开文档，init 会再次核验。
+        if (useConservativeLibrePool()) this.scheduleLibreSpare()
     },
     // fileSize 是"刚激活的这份文档"的体积（调用方 onActiveOfficeFileChanged 手头
     // 就有，直接传入，不必等组件挂载完成才能取到）；池里其它 key 的体积从
@@ -203,8 +226,21 @@ export const librePoolMethods = {
         let acc = 0
         for (const k of keys) {
             acc += (k === key ? libreInstanceWeight(fileSize) : this.libreWeightOf(k))
-            if (acc > LIBRE_WEIGHT_BUDGET) this.evictLibreInstance(k)
+            if (acc > LIBRE_WEIGHT_BUDGET || this.exceedsLibreInstanceBudget(k)) this.evictLibreInstance(k)
         }
+    },
+    // 活动窗格优先占名额，其余名额留给最近使用的后台文档。
+    // 分屏时较旧的活动文档也必须先占名额，不能因其 LRU 排名低多留下一个后台实例。
+    exceedsLibreInstanceBudget(key) {
+        if (!useConservativeLibrePool()) return false
+        // 关分屏会卸载右窗格，但标签及 LRU 还在；这些条目此刻没有驻留引擎。
+        const residentKeys = this.libreLruKeys.filter(k => this.splitMode || !k.startsWith('right:'))
+        const active = (k) => k === 'left:' + this.activeFileIdLeft || (this.splitMode && k === 'right:' + this.activeFileIdRight)
+        if (active(key)) return false
+        const activeCount = residentKeys.filter(active).length
+        const inactive = residentKeys.filter(k => !active(k))
+        const index = inactive.indexOf(key)
+        return index >= Math.max(0, LOW_MEMORY_INSTANCE_BUDGET - activeCount)
     },
     // key 对应实例的体积权重：从已挂载的 _libreRefs 反查 file.fileSize；拿不到
     // （未挂载/无体积信息）按最小权重 1 处理。
@@ -235,7 +271,7 @@ export const librePoolMethods = {
         if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
         let acc = 0
         for (let i = 0; i <= idx; i++) acc += this.libreWeightOf(this.libreLruKeys[i])
-        if (acc <= LIBRE_WEIGHT_BUDGET) return
+        if (acc <= LIBRE_WEIGHT_BUDGET && !this.exceedsLibreInstanceBudget(key)) return
         this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
         this.pruneLibreSpare(key)
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
