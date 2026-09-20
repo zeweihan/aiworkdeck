@@ -522,8 +522,9 @@ def theme_drawio(xml, mode, hub_id=None):
         # cue for start/end, not decoration — so that one keeps its shape.
         xml = re.sub(r'rounded=1;(?!arcSize=50)', 'rounded=0;', xml)
         return xml
-    # 歸藏风 — Klein blue + grey + white
-    IKB, DINK, SUB, LINE, BORDER = "#002FA7", "#333333", "#737373", "#BDBDBD", "#D4D4D2"
+    # 歸藏风 — one accent + grey + white
+    # [AWD-PATCH 4 · 见 litviz/PATCHES.md] accent moved from Klein blue #002FA7 to 墨竹青 #2E5A50; name kept.
+    IKB, DINK, SUB, LINE, BORDER = "#2E5A50", "#333333", "#737373", "#BDBDBD", "#D4D4D2"
 
     def _lum(c):
         r, g, b = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)

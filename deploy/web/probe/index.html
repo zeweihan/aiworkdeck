@@ -9,13 +9,15 @@
 <style>
   body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
   h1 { font-size: 20px; }
-  .item { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #eee; }
-  .ok { color: #0a7d32; font-weight: 600; }
-  .fail { color: #c0392b; font-weight: 600; }
+  .item { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #EAE7DD; }
+  /* 配色源 design/tokens/awd-palette.json 的 roles.light（dev-board#731）：本页没有构建步骤读不到
+     令牌文件，直接抄字面值。通过态没有独立的 success 语义，借墨竹青 accent 族承载；失败态用 danger 族。 */
+  .ok { color: #2E5A50; font-weight: 600; }
+  .fail { color: #9A3A30; font-weight: 600; }
   .verdict { margin-top: 20px; padding: 14px; border-radius: 8px; font-weight: 600; }
-  .verdict.ok { background: #e8f7ee; }
-  .verdict.fail { background: #fdecea; }
-  small { color: #888; word-break: break-all; }
+  .verdict.ok { background: #E3EDE9; }
+  .verdict.fail { background: #FAF0EE; }
+  small { color: #6B675C; word-break: break-all; }
 </style>
 </head>
 <body>

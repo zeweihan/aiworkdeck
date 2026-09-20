@@ -93,7 +93,7 @@ function pick(opt) {
 }
 
 .question-card.is-history .q-dot {
-  background: #ADB5BD;
+  background: var(--awd-text-3);
 }
 
 .q-title {

@@ -343,7 +343,7 @@ export default {
 
   &:focus {
     border-color: var(--awd-panel-accent-2);
-    box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.15);
+    box-shadow: 0 0 0 2px rgba(137, 168, 160, 0.15);
   }
 }
 

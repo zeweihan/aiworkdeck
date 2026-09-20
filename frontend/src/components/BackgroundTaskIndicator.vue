@@ -118,9 +118,9 @@ const props = defineProps({
 defineEmits(['dismiss'])
 
 const isMinimized = ref(false)
-const brandMint = '#5BD197'
-const brandForest = '#1A5336'
-const brandGradient = 'linear-gradient(90deg, #1A5336, #5BD197)'
+const brandMint = 'var(--awd-mint)'
+const brandForest = 'var(--awd-accent)'
+const brandGradient = 'linear-gradient(90deg, var(--awd-accent), var(--awd-mint))'
 
 const hasActiveTasks = computed(() => {
   return Object.keys(props.backgroundTasks).length > 0
@@ -196,7 +196,7 @@ const formatTime = (seconds) => {
 
 /* Full Panel Style */
 .task-panel {
-  background: rgba(33, 38, 41, 0.9); /* Dark BG #212629 with opacity */
+  background: rgba(34, 31, 26, 0.9); /* Dark BG #221F1A with opacity */
   border: 1px solid var(--awd-accent-soft); /* Subtle Mint border */
   border-radius: 12px;
   padding: 16px;
@@ -204,7 +204,7 @@ const formatTime = (seconds) => {
   max-width: 360px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(12px);
-  color: var(--awd-text-on-accent);
+  color: #EDE9DF;
 }
 
 .panel-header {
@@ -225,16 +225,16 @@ const formatTime = (seconds) => {
 .header-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--awd-text-on-accent);
+  color: #EDE9DF;
 }
 
 .header-title i {
   margin-right: 8px;
-  color: var(--awd-mint); /* Mint Green */
+  color: var(--awd-mint); /* 竹月青（令牌名 mint 是插件 SDK 公开契约，保留不改名） */
 }
 
 .task-count {
-  background: var(--awd-accent); /* Forest Green */
+  background: var(--awd-accent); /* 墨竹青 */
   color: white;
   padding: 2px 8px;
   border-radius: 12px;
@@ -263,7 +263,7 @@ const formatTime = (seconds) => {
 .minimize-icon {
   width: 12px;
   height: 2px;
-  background: #ADB5BD;
+  background: var(--awd-text-3);
   border-radius: 1px;
 }
 
@@ -271,7 +271,7 @@ const formatTime = (seconds) => {
 .minimized-circle {
   width: 48px;
   height: 48px;
-  background: #212629;
+  background: #221F1A;
   border-radius: 50%;
   border: 1px solid var(--awd-accent-soft);
   display: flex;
@@ -285,7 +285,7 @@ const formatTime = (seconds) => {
 
 .minimized-circle:hover {
   transform: scale(1.05);
-  box-shadow: 0 6px 20px rgba(91, 209, 151, 0.2);
+  box-shadow: 0 6px 20px rgba(137, 168, 160, 0.2);
 }
 
 .progress-ring {
@@ -323,7 +323,7 @@ const formatTime = (seconds) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1.5px solid #212629;
+  border: 1.5px solid #221F1A;
 }
 
 /* Task List Items */
@@ -376,7 +376,9 @@ const formatTime = (seconds) => {
 .task-type {
   font-size: 13px;
   font-weight: 600;
-  color: var(--awd-text-on-accent);
+  /* 这块浮标不论浅深主题都是暖墨底，所以文字色必须固定取 roles.dark.text，
+     不能用 var(--awd-text)（那个会跟着主题翻，浅色下就成了深字压深底）。 */
+  color: #EDE9DF;
   /* 状态与关闭按钮靠右成一组，所以标题吃掉剩余宽度 */
   flex: 1;
 }
@@ -386,14 +388,14 @@ const formatTime = (seconds) => {
   padding: 0 4px;
   border: none;
   background: transparent;
-  color: var(--awd-text-on-accent);
+  color: #EDE9DF;
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
 }
 
 .task-dismiss-btn:hover {
-  color: var(--awd-text-on-accent);
+  color: #EDE9DF;
 }
 
 .task-status {

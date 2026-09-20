@@ -1752,7 +1752,7 @@ export default {
   margin-left: -5px;
   border-radius: 50%;
   background: var(--awd-accent);
-  box-shadow: 0 1px 4px rgba(26, 83, 54, 0.4);
+  box-shadow: 0 1px 4px rgba(46, 90, 80, 0.4);
 }
 
 .audio-times {

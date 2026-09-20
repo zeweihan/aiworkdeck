@@ -304,7 +304,7 @@ export default {
 .recharge-preset:hover { border-color: var(--awd-mint); }
 .recharge-preset.checked {
   border-color: var(--awd-accent); background: var(--awd-accent-soft);
-  box-shadow: 0 0 0 1px #1A5336 inset;
+  box-shadow: 0 0 0 1px var(--awd-accent) inset;
 }
 .recharge-preset-cur { font-size: 24rpx; font-weight: 600; color: var(--awd-accent-text); }
 .recharge-preset-text { font-size: 40rpx; font-weight: 700; color: var(--awd-accent-text); font-variant-numeric: tabular-nums; }

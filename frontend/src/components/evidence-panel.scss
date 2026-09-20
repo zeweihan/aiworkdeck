@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 // evidence-panel.scss — EvidencePanel.vue（审阅面板「底稿」页）的样式实体。
 // 外置形制照 project-overview.vue + project-overview.scss 那套（见 .claude/agents/sidebar-shell.md）。
-// 配色红线：外壳保持浅色（白/#F8F9FA + 森林绿 #1A5336 / mint #5BD197 点缀），不要引入深色 chrome。
+// 配色红线：外壳保持浅色（白/var(--awd-bg) + 墨竹青 #2E5A50 主色 / mint var(--awd-mint)（竹月青氛围色）点缀），不要引入深色 chrome。
 
 .ep { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
@@ -17,7 +17,7 @@
 .ep-stat.orphan { color: var(--awd-danger-text); background: var(--awd-danger-soft); }
 // 计数为 0 的那类淡掉，但仍然列出来——统计要完整，不能因为是 0 就不显示
 .ep-stat.zero { opacity: 0.5; }
-.ep-stat.on { border-color: var(--awd-accent); font-weight: 600; opacity: 1; }
+.ep-stat.on { border-color: var(--awd-accent-text); font-weight: 600; opacity: 1; }
 
 // ---- 视图切换 + 维度筛选 ----
 .ep-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 0; gap: 6px; }

@@ -8,6 +8,10 @@
 2026-08-25 升级到 monorepo new-litigation-visualization `0b2c8f8`（重画仍是 v1.0.2）时
 已逐条复核：三条补丁上游都还没修，全部保留原样。
 
+2026-09-20 起多一条 PATCH 4（歸藏风 强调色换品牌色）。它和 1-3 不是一类：前三条是
+**修上游的 bug**，上游修好就能删；PATCH 4 是**我们的品牌色覆盖**，上游永远不会"修"它，
+每次升级都必须重新套用，不要因为"上游没这个问题"就把它删掉。
+
 ---
 
 ## PATCH 1 · 跨平台探测中文宋体（`scripts/render.py` · `_best_installed_song`）
@@ -75,6 +79,52 @@ out.append(f'<g data-role="node" data-id="{nid}"{emph_attr}>')
 
 **改法**：枚举里补上 `comparison_table`，并在同级留一个 `_awd_patch_3` 说明键
 （JSON 没法写注释，多余的键 JSON Schema 会忽略）。**值得回馈上游。**
+
+## PATCH 4 · 歸藏风的强调色换成墨竹青（克莱因蓝 `#002FA7` → `#2E5A50`）
+
+**为什么非改不可**：引擎出的图是产品里的一等产物（诉讼可视化面板、导出的 pptx/drawio），
+和工作台同屏显示。上游 歸藏风 用克莱因蓝作唯一高饱和锚点，换到东方清雅体系
+（`design/tokens/awd-palette.json` v2.0.0）之后，那支蓝是全产品里唯一一处不属于任何
+色族的颜色，同屏就是一块外来色。
+
+**改了什么 / 没改什么**：**只并入强调色，不套整套体系**。上游那套克制的灰阶美学
+（`#FAFAF8` 纸、`#333333` 墨、`#737373`/`#BDBDBD`/`#D4D4D2` 灰阶、几何、字号、留白）
+一个值都没动——那是"法律文书插图"的专业调性，硬塞竹月青/玉脂白/浅茶金会毁掉它。
+**深红 `#991B1B` 原样保留**，它是"唯一重点/对抗方"的授权标记，与本系列 LOGO 同源，
+不参与本次换色。
+
+`IKB` / `accent6` 这些上游标识符**名字一个没改**，只换值——改名会把 diff 摊大、
+升级时每一处都要人工判，收益为零。
+
+**动到的位置**（源码里都有 `[AWD-PATCH 4]` 标记，grep 这个标记能找全）：
+
+| 文件 | 位置 |
+|---|---|
+| `scripts/render.py` | `to_guizang()` docstring、`IKB` 常量、收尾 `THEME` 白名单 |
+| `scripts/export_drawio.py` | `theme_drawio()` 里的 `IKB` 常量 |
+| `scripts/export_pptx.py` | `_THEME` 里的 `<a:accent6>` |
+| `references/visual-style.md` | 歸藏风 palette 条目、guard 白名单条目 |
+| `references/STANDARDS.md` | lint 一节里"歸藏风 legitimately uses…"的说明 |
+| `tests/run_checks.py` | **8 处**字面断言（点阵不许用强调色、pptx 底纹不许是强调色、歸藏风 deck 必须带强调色、`THEME` 集合、菱形决策节点与实心块、drawio 的 `allowed` 集合与必含断言） |
+
+**为什么连 vendored 测试也一起改**：上游那 8 处守卫把 `002FA7` 写成了字面量。
+不同步改，换色当天 `run_checks.py` 立刻从 146/149 掉到 138/149——**而且掉的是真守卫**
+（"歸藏风 丢了强调色"这类断言仍然有价值，只是要断言新的值）。把字面量跟着换，
+守卫的语义一条没丢，仍然守着"歸藏风 只许出现白名单里那几个色"。
+
+**没动 `CHANGELOG.md:94`**（"克莱因蓝 `#002FA7`"）——那是上游的历史记录，改它等于篡改沿革。
+
+**`scripts/lint.py` 不用改。** 交接时的说法是"lint.py 的颜色白名单不同步改会让渲染产出假红"，
+**实测不成立**：`lint.py` 第 4 项检查用的是 `_REJECTED_BLUE` **黑名单**（Tailwind slate 族 +
+几个常见蓝），`#002FA7` 本来就不在里面，`#2E5A50` 更不在。真正的白名单在
+`render.py` 的 `THEME` 集合与 `run_checks.py` 的 `THEME`/`allowed` 集合里——上表已覆盖。
+实测：五张 歸藏风 图（flowchart / relationship / relation-tree / timeline-gantt /
+comparison-table）渲染后 `lint_svg()` 零告警，输出色集恰好等于白名单。
+
+**回归结论**：补丁前 146/149，补丁后 146/149，失败项仍是且仅是那 3 项 README 文档守卫。
+
+**上游该不该回馈**：不该。这是我们的品牌色，不是上游的 bug。升级引擎时这条**永远保留**，
+每次都要重新套用。
 
 ---
 

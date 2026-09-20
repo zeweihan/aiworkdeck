@@ -1902,7 +1902,7 @@ export default {
 .libre-body.review-overview-open .libre-stale-bar,
 .libre-body.review-overview-open .libre-evidence-drop { right: 288px; }
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
-.libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px #1A5336; }
+.libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px var(--awd-accent); }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;
   padding-bottom: 28px; background: rgba(230, 249, 240, 0.25); border: 2px dashed var(--awd-accent); box-sizing: border-box; }
 .libre-evidence-drop.over { background: var(--awd-accent-soft); border-color: var(--awd-accent); border-style: solid; }

@@ -105,18 +105,21 @@ class TagServiceTest {
         when(tagRepository.findByProjectIdAndName(1L, "张三")).thenReturn(Optional.empty());
         when(tagRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
+        // 三个默认色的权威源是 design/tokens/awd-palette.json 的 roles.light
+        //（当事人=warning / 争点=danger / 普通=info），前端 utils/tagTypes.js 与
+        // TagService 的常量必须三方一致。2026-09-20 东方清雅换代后的取值见下（dev-board#731）。
         Tag party = tagService.getOrCreateTag(1L, "张三", "PARTY", null);
-        assertEquals("#B45309", party.getColor());
+        assertEquals("#B8842B", party.getColor());
         assertEquals("PARTY", party.getType());
         assertFalse(party.getIsSystem());
 
         when(tagRepository.findByProjectIdAndName(1L, "违约责任")).thenReturn(Optional.empty());
         Tag issue = tagService.getOrCreateTag(1L, "违约责任", "ISSUE", null);
-        assertEquals("#9B1C31", issue.getColor());
+        assertEquals("#B5483C", issue.getColor());
 
         when(tagRepository.findByProjectIdAndName(1L, "证据一")).thenReturn(Optional.empty());
         Tag normal = tagService.getOrCreateTag(1L, "证据一", "NORMAL", null);
-        assertEquals("#3B82F6", normal.getColor());
+        assertEquals("#3C5A73", normal.getColor());
     }
 
     @Test

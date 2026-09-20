@@ -128,10 +128,14 @@ export default {
       // 创建请求在途标志：名字要等请求返回才清，没有这道闸双击就会用同名再发一次
       adding: false,
       showColorPicker: false,
+      // 东方清雅体系的分类色板（design/tokens/awd-palette.json v2.0.0）。
+      // 十个彩色档在 CIELCh 上固定 L*=45 / C*=26、色相角从 24° 起每 36° 一格，
+      // 再加暖中性灰与墨色两档。两两最小色差 CIEDE2000 = 10.33（旧板 7.16），
+      // 每一档压 --awd-bg 都是 4.6:1 以上，当文字用也够。
       presetColors: [
-        '#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6',
-        '#6366F1', '#8B5CF6', '#EC4899', '#6B7280', '#000000',
-        '#B45309', '#9B1C31'
+        '#955B5A', '#8A6246', '#756B3F', '#58724A', '#387661',
+        '#17767B', '#27728F', '#536B95', '#78628B', '#8F5B74',
+        '#6B675C', '#2B2A26'
       ],
       // 新建/编辑标签共用的类型三段控件
       typeOptions: [
@@ -227,7 +231,7 @@ export default {
         content: this.$t('files.deleteTagConfirm', { name: tag.name }),
         confirmText: this.$t('common.delete'),
         cancelText: this.$t('common.cancel'),
-        confirmColor: '#E74C3C',
+        confirmColor: '#B5483C',
         success: async (res) => {
           if (res.confirm) {
             try {

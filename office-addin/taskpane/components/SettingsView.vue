@@ -577,7 +577,7 @@ input, textarea {
 input:focus, textarea:focus {
   outline: none;
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
+  box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.18);
 }
 
 .actions {

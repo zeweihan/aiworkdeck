@@ -46,6 +46,9 @@ function harness(platform = 'darwin') {
   const clipboard = { text: 'already copied before launch', availableFormats: () => ['text/plain'], readText() { return this.text } }
   const context = vm.createContext({
     app, BrowserWindow: Window, clipboard, path, console,
+    // createMainWindow 用 nativeTheme 决定窗口的 backgroundColor（首屏白闪兜底，dev-board#731）。
+    // 默认给浅色：桌面壳启动时 applyNativeTheme('light') 就是出厂值，与真实运行一致。
+    nativeTheme: { shouldUseDarkColors: false },
     process: { platform, env: {} }, __dirname: path.join(__dirname, '../main'),
     screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1400, height: 900 } }) },
     require: name => {

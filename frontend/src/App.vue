@@ -158,7 +158,7 @@ export default {
 /* uni.showModal Style Override (Web/H5) */
 uni-modal .uni-modal {
     border-radius: 12px;
-    box-shadow: 0 12px 32px rgba(18, 52, 77, 0.16);
+    box-shadow: var(--awd-shadow-lg);
     overflow: hidden;
 }
 
@@ -214,68 +214,86 @@ uni-toast .uni-toast__content {
    纯 css，自定义属性两边都能用、天然穿透 scoped，且能在运行时整体切换。
 
    切换机制：utils/theme.js 在 documentElement 上挂 data-theme="light|dark"
-   （「跟随系统」解析成其中之一后再挂，页面里不出现第三种状态）。 */
+   （「跟随系统」解析成其中之一后再挂，页面里不出现第三种状态）。
+
+   **下面两个 AWD-TOKENS 区段由脚本生成，不要手改。**
+   色源是 design/tokens/awd-palette.json（三个仓各存一份逐字节相同的副本），
+   改配色只改那里，然后跑 node scripts/generate-tokens.mjs 重新生成；
+   scripts/check-palette.mjs 在 CI 里对拍 sha256、令牌漂移与对比度。 */
 html,
 html[data-theme='light'] {
+    /* AWD-TOKENS:BEGIN app-light */
+    /* 此段由 scripts/generate-tokens.mjs 生成，勿手改。色源：design/tokens/awd-palette.json */
     /* 表面：底色 → 卡片 → 悬停/凹陷 → 更重的填充 */
-    --awd-bg: #F8F9FA;
-    --awd-surface: #FFFFFF;
-    --awd-surface-2: #F1F3F5;
-    --awd-surface-3: #E9ECEF;
+    --awd-bg: #F1EFE7;
+    --awd-surface: #FCFBF7;
+    --awd-surface-2: #E9E6DC;
+    --awd-surface-3: #DFDBCE;
     /* 文字三阶 + 强调底上的反白 */
-    --awd-text: #2C3338;
-    --awd-text-2: #6C757D;
-    --awd-text-3: #ADB5BD;
+    --awd-text: #2B2A26;
+    --awd-text-2: #6B675C;
+    --awd-text-3: #A8A296;
     --awd-text-on-accent: #FFFFFF;
     /* 边框三阶 */
-    --awd-border-subtle: #F1F3F5;
-    --awd-border: #E9ECEF;
-    --awd-border-strong: #CBD5E1;
-    /* 品牌：accent 作底、accent-text 作字——深色下两者取值不同，必须分开 */
-    --awd-accent: #1A5336;
-    --awd-accent-hover: #164429;
-    --awd-accent-text: #1A5336;
-    --awd-accent-soft: #E6F9F0;
-    --awd-accent-wash: rgba(26, 83, 54, 0.04);
-    --awd-mint: #5BD197;
-    /* mint 亮绿底上的文字：两个主题下 mint 都是亮色，配对文字恒为深墨 */
-    --awd-text-on-mint: #14301F;
+    --awd-border-subtle: #EAE7DD;
+    --awd-border: #DDD8CA;
+    --awd-border-strong: #C3BCA9;
+    /* 品牌墨竹青：accent 作底、accent-text 作字（深色下两者取值不同，必须分开） */
+    --awd-accent: #2E5A50;
+    --awd-accent-hover: #254A41;
+    --awd-accent-text: #2E5A50;
+    --awd-accent-soft: #E3EDE9;
+    --awd-accent-wash: rgba(46, 90, 80, 0.05);
+    /* 氛围色竹月青：大面积浅底/选中/悬停/图表/装饰线，对白底仅 2.6:1，不承载正文与按钮文字。
+       --awd-mint 是插件 SDK 的公开契约名（utils/appTheme.js 的 THEME_TOKEN_NAMES →
+       PluginPane 注入第三方插件 iframe，插件 CSS 里写着 var(--awd-mint)），改名会静默
+       打破它们，所以名字保留、只换值；--awd-bamboo 是同值别名，新代码用语义正确的这个。 */
+    --awd-mint: #89A8A0;
+    --awd-bamboo: #89A8A0;
+    --awd-text-on-mint: #1E3A33;
+    /* 浅茶金点睛：分隔金线 / 引用块 / 徽章 / 空状态描边。对白底 1.7:1，不做大面积底色、
+       不承载任何信息层级；需要茶金文字时一律用 gold-text。 */
+    --awd-gold: #D7C5A1;
+    --awd-gold-line: #C9B48A;
+    --awd-gold-text: #7E6439;
+    --awd-gold-soft: #F5EFE2;
     /* 语义状态 */
-    --awd-danger: #E74C3C;
-    --awd-danger-text: #C53030;
-    --awd-danger-soft: #FEF2F2;
-    --awd-warning: #F59E0B;
-    --awd-warning-text: #B45309;
-    --awd-warning-soft: #FFF7ED;
-    --awd-info: #3B82F6;
-    --awd-info-text: #1D4ED8;
-    --awd-info-soft: #EFF6FF;
+    --awd-danger: #B5483C;
+    --awd-danger-text: #9A3A30;
+    --awd-danger-soft: #FAF0EE;
+    --awd-warning: #B8842B;
+    --awd-warning-text: #8A6320;
+    --awd-warning-soft: #F8F1E2;
+    --awd-info: #3C5A73;
+    --awd-info-text: #2F4A60;
+    --awd-info-soft: #EDF1F4;
+    /* 阴影与遮罩 */
+    --awd-shadow-sm: 0 1px 2px rgba(58, 52, 40, 0.06);
+    --awd-shadow-md: 0 4px 16px rgba(58, 52, 40, 0.08);
+    --awd-shadow-lg: 0 12px 32px rgba(58, 52, 40, 0.16);
+    --awd-overlay: rgba(35, 32, 26, 0.45);
+    /* 空态光晕（工作区/首屏那圈柔光）与整页斜向柔光的落点色 */
+    --awd-halo-1: #E3EDE9;
+    --awd-halo-2: rgba(46, 90, 80, 0.04);
+    --awd-halo-page: #E3EDE9;
+    /* 毛玻璃表面（登录页那种半透明卡片） */
+    --awd-glass: rgba(252, 251, 247, 0.75);
+    --awd-glass-border: rgba(255, 255, 255, 0.5);
+    /* 编辑器纸外工作区（纸张本身由 LOWA 引擎渲染，永远是纸白，不参与主题） */
+    --awd-canvas: #E4E0D4;
+    /* AWD-TOKENS:END app-light */
     /* 文件类型色（dev-board#504）：工作台标签页的图标与激活指示条按文件类型着色。
        前四种沿用各自宿主软件的既有认知（Word 蓝 / PPT 橙 / Excel 绿 / PDF 红），
        Markdown 用中性灰（它是纯文本，不属于任何一家），图片取紫——六个色相里
-       只有紫既离前五种最远、又不是任何办公套件的品牌色，一眼能认出「这不是文档」。 */
+       只有紫既离前五种最远、又不是任何办公套件的品牌色，一眼能认出「这不是文档」。
+       这六个是宿主软件的官方品牌色，是识别线索不是装饰，**不随配色体系变化**，
+       所以刻意留在生成区段之外（色源 awd-palette.json 的 frozen 块同此约定）。 */
     --awd-file-word: #185ABD;
     --awd-file-ppt: #C43E1C;
     --awd-file-excel: #1D6F42;
     --awd-file-pdf: #D93025;
     --awd-file-md: #6B7280;
     --awd-file-image: #7C3AED;
-    /* 阴影与遮罩 */
-    --awd-shadow-sm: 0 1px 2px rgba(18, 52, 77, 0.06);
-    --awd-shadow-md: 0 4px 16px rgba(18, 52, 77, 0.08);
-    --awd-shadow-lg: 0 12px 32px rgba(18, 52, 77, 0.16);
-    --awd-overlay: rgba(0, 0, 0, 0.45);
-    /* 空态光晕（工作区/首屏那圈柔光）：浅色是品牌绿薄雾；深色不能沿用——
-       半透明绿铺在深底上会变成一团脏绿雾，改成不带色相的极淡提亮 */
-    --awd-halo-1: #E6F9F0;
-    --awd-halo-2: rgba(26, 83, 54, 0.04);
-    /* 整页斜向柔光的落点色（项目列表页/设置页） */
-    --awd-halo-page: #E6F9F0;
-    /* 毛玻璃表面（登录页那种半透明卡片） */
-    --awd-glass: rgba(255, 255, 255, 0.75);
-    --awd-glass-border: rgba(255, 255, 255, 0.5);
-    /* 编辑器纸外工作区（纸张本身由 LOWA 引擎渲染，永远是纸白，不参与主题） */
-    --awd-canvas: #F1F3F5;
     color-scheme: light;
 }
 
@@ -283,55 +301,83 @@ html[data-theme='dark'] {
     /* 阶差要比浅色更舍得拉开：深色下人眼对低亮度差极不敏感，页面与卡片只差
        3-4 个灰阶时卡片会整个"沉进"背景里（第一版 #17191C/#1E2125 就是这样，
        维护者实测反馈「卡片边框也看不见」）。现在页面最深、卡片明显抬起、
-       边框独立成一档，三者互相认得出。 */
-    --awd-bg: #131518;
-    --awd-surface: #1C2024;
-    --awd-surface-2: #23272C;
-    --awd-surface-3: #2C3137;
-    --awd-text: #E7EAEC;
-    --awd-text-2: #A6ADB4;
-    --awd-text-3: #767E86;
-    /* 深色下 accent 底仍是深绿，反白文字对比度约 5.4:1，语义与浅色一致 */
+       边框独立成一档，三者互相认得出。
+
+       东方清雅体系下深色是**暖墨调**（不是中性灰）：深档跟着玉脂白那支暖相走，
+       与浅色模式同源。accent 底仍是压深的墨竹青，反白文字语义与浅色一致；
+       绿字直接用墨竹青在深底上读不出来，accent-text 换成竹月青本色
+       （对 --awd-bg 7.0:1，由 check-palette.mjs 的 dark/accent-text-on-bg 钉着）。
+       空态光晕不沿用浅色的带色雾——半透明色铺在深底上会糊成一团脏雾，
+       改成不带色相的极淡提亮。 */
+    /* AWD-TOKENS:BEGIN app-dark */
+    /* 此段由 scripts/generate-tokens.mjs 生成，勿手改。色源：design/tokens/awd-palette.json */
+    /* 表面：底色 → 卡片 → 悬停/凹陷 → 更重的填充 */
+    --awd-bg: #191713;
+    --awd-surface: #221F1A;
+    --awd-surface-2: #2B2721;
+    --awd-surface-3: #363129;
+    /* 文字三阶 + 强调底上的反白 */
+    --awd-text: #EDE9DF;
+    --awd-text-2: #B0AA9C;
+    --awd-text-3: #7D7768;
     --awd-text-on-accent: #FFFFFF;
-    --awd-border-subtle: #23272C;
-    --awd-border: #373D44;
-    --awd-border-strong: #4B525A;
-    --awd-accent: #24714A;
-    --awd-accent-hover: #2E8B5A;
-    /* 绿字直接用森林绿在深底上读不出来，换高亮薄荷（对比度约 8:1） */
-    --awd-accent-text: #6FD9A3;
-    --awd-accent-soft: rgba(91, 209, 151, 0.13);
-    --awd-accent-wash: rgba(91, 209, 151, 0.06);
-    --awd-mint: #5BD197;
-    --awd-text-on-mint: #14301F;
-    --awd-danger: #E05A4E;
-    --awd-danger-text: #FF8A80;
-    --awd-danger-soft: rgba(231, 76, 60, 0.15);
-    --awd-warning: #D9971F;
-    --awd-warning-text: #F0B23C;
-    --awd-warning-soft: rgba(245, 158, 11, 0.14);
-    --awd-info: #3B6FD4;
-    --awd-info-text: #7FAEF9;
-    --awd-info-soft: rgba(59, 130, 246, 0.15);
+    /* 边框三阶 */
+    --awd-border-subtle: #2B2721;
+    --awd-border: #3D372E;
+    --awd-border-strong: #524B3F;
+    /* 品牌墨竹青：accent 作底、accent-text 作字（深色下两者取值不同，必须分开） */
+    --awd-accent: #3E6E62;
+    --awd-accent-hover: #4C8576;
+    --awd-accent-text: #89A8A0;
+    --awd-accent-soft: rgba(137, 168, 160, 0.14);
+    --awd-accent-wash: rgba(137, 168, 160, 0.06);
+    /* 氛围色竹月青：大面积浅底/选中/悬停/图表/装饰线，对白底仅 2.6:1，不承载正文与按钮文字。
+       --awd-mint 是插件 SDK 的公开契约名（utils/appTheme.js 的 THEME_TOKEN_NAMES →
+       PluginPane 注入第三方插件 iframe，插件 CSS 里写着 var(--awd-mint)），改名会静默
+       打破它们，所以名字保留、只换值；--awd-bamboo 是同值别名，新代码用语义正确的这个。 */
+    --awd-mint: #89A8A0;
+    --awd-bamboo: #89A8A0;
+    --awd-text-on-mint: #1E3A33;
+    /* 浅茶金点睛：分隔金线 / 引用块 / 徽章 / 空状态描边。对白底 1.7:1，不做大面积底色、
+       不承载任何信息层级；需要茶金文字时一律用 gold-text。 */
+    --awd-gold: #D7C5A1;
+    --awd-gold-line: #8A7A5C;
+    --awd-gold-text: #D7C5A1;
+    --awd-gold-soft: rgba(215, 197, 161, 0.13);
+    /* 语义状态 */
+    --awd-danger: #CC6154;
+    --awd-danger-text: #E8938A;
+    --awd-danger-soft: rgba(181, 72, 60, 0.16);
+    --awd-warning: #D19C3D;
+    --awd-warning-text: #E0B461;
+    --awd-warning-soft: rgba(184, 132, 43, 0.15);
+    --awd-info: #5E8299;
+    --awd-info-text: #93B3C6;
+    --awd-info-soft: rgba(60, 90, 115, 0.18);
+    /* 阴影与遮罩 */
+    --awd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --awd-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --awd-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --awd-overlay: rgba(0, 0, 0, 0.6);
+    /* 空态光晕（工作区/首屏那圈柔光）与整页斜向柔光的落点色 */
+    --awd-halo-1: rgba(255, 255, 255, 0.045);
+    --awd-halo-2: rgba(255, 255, 255, 0);
+    --awd-halo-page: #1D1A16;
+    /* 毛玻璃表面（登录页那种半透明卡片） */
+    --awd-glass: rgba(34, 31, 26, 0.74);
+    --awd-glass-border: rgba(255, 255, 255, 0.10);
+    /* 编辑器纸外工作区（纸张本身由 LOWA 引擎渲染，永远是纸白，不参与主题） */
+    --awd-canvas: #141210;
+    /* AWD-TOKENS:END app-dark */
     /* 文件类型色：浅色那六个是「铺在白底上」调的深色，直接搬到深底上一律读不出来，
-       统一提亮到对 --awd-surface(#1C2024) 至少 4.5:1。色相不动，认知不变。 */
+       统一提亮到对 --awd-surface 至少 4.5:1。色相不动，认知不变。
+       同浅色，这六个不随配色体系变化，留在生成区段之外。 */
     --awd-file-word: #6FA8FF;
     --awd-file-ppt: #FF9470;
     --awd-file-excel: #4CC38A;
     --awd-file-pdf: #FF8A80;
     --awd-file-md: #A6ADB4;
     --awd-file-image: #A78BFA;
-    /* 深色下阴影靠纯黑加重，浅色那套带蓝的柔光在深底上等于没有 */
-    --awd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --awd-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-    --awd-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
-    --awd-overlay: rgba(0, 0, 0, 0.6);
-    --awd-halo-1: rgba(255, 255, 255, 0.045);
-    --awd-halo-2: rgba(255, 255, 255, 0);
-    --awd-halo-page: #171A1E;
-    --awd-glass: rgba(28, 32, 36, 0.74);
-    --awd-glass-border: rgba(255, 255, 255, 0.10);
-    --awd-canvas: #101214;
     color-scheme: dark;
 }
 
@@ -608,13 +654,13 @@ html.is-desktop .awd-window-drag-strip {
     cursor: pointer;
     user-select: none;
     -webkit-app-region: no-drag;
-    box-shadow: 0 2px 10px rgba(18, 52, 77, 0.12);
+    box-shadow: var(--awd-shadow-md);
     transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .awd-global-back:hover {
     border-color: var(--awd-mint);
-    box-shadow: 0 4px 16px rgba(26, 83, 54, 0.18);
+    box-shadow: var(--awd-shadow-lg);
 }
 
 /* ---- 逐页让位 ----

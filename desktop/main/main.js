@@ -425,6 +425,9 @@ function createMainWindow() {
     width: Math.min(1400, workArea.width),
     height: Math.min(900, workArea.height),
     icon: path.join(__dirname, '../../frontend/src/static/icon.png'),
+    // 首屏白闪修复（dev-board#731）：Electron 默认白底，页面加载完成前会露出。
+    // 取值与 design/tokens/awd-palette.json 的 roles.light.bg / roles.dark.bg 一致。
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#191713' : '#F1EFE7',
     // 无边框：窗口控件并进渲染层已有的 .project-header（42px），系统标题栏不再单占
     // 一条。设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md。
     titleBarStyle: 'hidden',
@@ -633,9 +636,9 @@ ipcMain.handle('checkba:ocr-start-selection', async (_evt, payload) => {
   <style>
     html, body { margin:0; padding:0; width:100%; height:100%; background: transparent; cursor: crosshair; user-select:none; }
     .layer { position: fixed; inset: 0; }
-    .hint { position: fixed; left: 14px; top: 14px; padding: 6px 10px; background: rgba(255,255,255,0.88); border: 1px solid rgba(224,224,224,0.7); border-radius: 10px; font-size: 12px; color:#12344D; }
+    .hint { position: fixed; left: 14px; top: 14px; padding: 6px 10px; background: rgba(252,251,247,0.88); border: 1px solid rgba(221,216,202,0.7); border-radius: 10px; font-size: 12px; color:#2E5A50; }
     .shade { position: fixed; inset: 0; background: rgba(0,0,0,0.12); }
-    .rect { position: fixed; border: 2px solid rgba(37,99,235,0.85); background: rgba(37,99,235,0.12); border-radius: 6px; pointer-events:none; display:none; }
+    .rect { position: fixed; border: 2px solid rgba(46,90,80,0.85); background: rgba(46,90,80,0.12); border-radius: 6px; pointer-events:none; display:none; }
   </style>
 </head>
 <body>
@@ -1354,12 +1357,12 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
     html, body { margin:0; padding:0; width:100%; height:100%; background: transparent; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }
     /* 只保留小卡片本身：不要“黑色大框/遮罩” */
     body { display:flex; align-items:center; justify-content:center; }
-    .card { width: 420px; max-width: calc(100vw - 24px); background: rgba(255,255,255,0.98); border: 1px solid rgba(226,232,240,0.95); border-radius: 14px; box-shadow: none; overflow: hidden; }
-    .head { padding: 14px 16px 10px; font-weight: 800; font-size: 14px; color: #0f172a; }
-    .body { padding: 0 16px 14px; font-size: 13px; color: #334155; line-height: 1.55; white-space: pre-wrap; }
-    .foot { display:flex; gap:10px; padding: 12px; justify-content:flex-end; background: rgba(248,250,252,0.92); border-top: 1px solid rgba(226,232,240,0.9); }
-    button { height: 30px; padding: 0 12px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35); background: #fff; font-size: 12px; color: #12344D; cursor: pointer; }
-    button.primary { background: #12344D; border-color: transparent; color: #fff; }
+    .card { width: 420px; max-width: calc(100vw - 24px); background: rgba(252,251,247,0.98); border: 1px solid rgba(221,216,202,0.95); border-radius: 14px; box-shadow: none; overflow: hidden; }
+    .head { padding: 14px 16px 10px; font-weight: 800; font-size: 14px; color: #2B2A26; }
+    .body { padding: 0 16px 14px; font-size: 13px; color: #6B675C; line-height: 1.55; white-space: pre-wrap; }
+    .foot { display:flex; gap:10px; padding: 12px; justify-content:flex-end; background: rgba(233,230,220,0.92); border-top: 1px solid rgba(221,216,202,0.9); }
+    button { height: 30px; padding: 0 12px; border-radius: 10px; border: 1px solid rgba(195,188,169,0.55); background: #FCFBF7; font-size: 12px; color: #2E5A50; cursor: pointer; }
+    button.primary { background: #2E5A50; border-color: transparent; color: #fff; }
   </style>
 </head>
 <body>

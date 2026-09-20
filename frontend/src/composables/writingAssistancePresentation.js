@@ -1,12 +1,17 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+/* --wa-* 这一层保留（组件内部的语义名），但取值全部改挂 editor.html 头部那套
+   --awd-*：写作辅助面板注入的是编辑器页自己的 document，宿主 App.vue 的 :root
+   令牌继承不进来，所以令牌表由 editor.html 自带一份。深浅两套由 html.theme-dark
+   上的 --awd-* 取值切换，下面不再单列 .theme-dark 的 --wa-* 覆盖。
+   表面按浅到深排一条梯：panel=surface > 页脚条=bg > 悬停=surface-2 > 选中=accent-soft。 */
 export const WRITING_ASSISTANCE_CSS = `
 .awd-writing-assistance {
-  --wa-surface:#fff; --wa-muted-surface:#f6f8f7; --wa-text:#263b32;
-  --wa-muted:#69766f; --wa-border:#cbd6cf; --wa-divider:#e7ede9;
-  --wa-accent:#235b45; --wa-hover:#f0f5f2; --wa-selected:#e4efe8;
-  --wa-mark:#174d35; --wa-badge:#edf2ef;
+  --wa-surface:var(--awd-surface); --wa-muted-surface:var(--awd-bg); --wa-text:var(--awd-text);
+  --wa-muted:var(--awd-text-2); --wa-border:var(--awd-border); --wa-divider:var(--awd-border-subtle);
+  --wa-accent:var(--awd-accent-text); --wa-hover:var(--awd-surface-2); --wa-selected:var(--awd-accent-soft);
+  --wa-mark:var(--awd-accent-text); --wa-badge:var(--awd-surface-2);
   position:fixed; z-index:10000; inset:0; pointer-events:none;
   color:var(--wa-text); font:13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
 }
@@ -24,13 +29,13 @@ export const WRITING_ASSISTANCE_CSS = `
 }
 .awd-writing-assistance .awd-wa-toggle {
   pointer-events:auto; position:absolute; bottom:12px; right:18px;
-  border:1px solid var(--wa-border); background:var(--wa-surface); box-shadow:0 2px 8px #12291d14;
+  border:1px solid var(--wa-border); background:var(--wa-surface); box-shadow:var(--awd-shadow-md);
 }
 .awd-writing-assistance .awd-wa-panel {
   pointer-events:auto; position:absolute; width:380px; max-width:calc(100vw - 24px);
   max-height:55vh; overflow:auto; padding:7px; background:var(--wa-surface);
   border:1px solid var(--wa-border); border-radius:10px;
-  box-shadow:0 3px 8px #12291d0a,0 12px 32px #12291d1f;
+  box-shadow:var(--awd-shadow-lg);
 }
 .awd-writing-assistance .awd-wa-heading {
   display:flex; justify-content:space-between; align-items:center; gap:12px;
@@ -103,15 +108,10 @@ export const WRITING_ASSISTANCE_CSS = `
   background:var(--wa-surface); color:var(--wa-text); font-family:inherit; font-size:10px; line-height:17px; text-align:center;
   box-shadow:0 1px 0 var(--wa-border);
 }
-.theme-dark .awd-writing-assistance {
-  --wa-surface:#202823; --wa-muted-surface:#1c231f; --wa-text:#e2ebe5;
-  --wa-muted:#a5b5aa; --wa-border:#4d5f52; --wa-divider:#35443a;
-  --wa-accent:#a2d2b4; --wa-hover:#29372e; --wa-selected:#314a3a;
-  --wa-mark:#c0edce; --wa-badge:#28392e;
-}
 @media (prefers-contrast:more) {
-  .awd-writing-assistance { --wa-muted:#445b4c; --wa-border:#6c8073; --wa-divider:#98aaa0; }
-  .theme-dark .awd-writing-assistance { --wa-muted:#ceded2; --wa-border:#9fb5a6; --wa-divider:#788f7f; }
+  /* 高对比：次要文字提到正文档，两道分隔线提到最重的一档边框。深浅两套取值同样
+     由 --awd-* 自己切，所以只剩一条规则。 */
+  .awd-writing-assistance { --wa-muted:var(--awd-text); --wa-border:var(--awd-border-strong); --wa-divider:var(--awd-border-strong); }
   .awd-writing-assistance .awd-wa-option-title mark { text-decoration:underline; text-underline-offset:3px; }
 }
 @media (forced-colors:active) {

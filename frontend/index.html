@@ -13,6 +13,23 @@
       (coverSupport ? ', viewport-fit=cover' : '') + '" />')
   </script>
   <title>AI WorkDeck</title>
+  <meta name="theme-color" content="#F1EFE7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#191713" media="(prefers-color-scheme: dark)" />
+  <style>
+    /* 首屏白闪修复（dev-board#731）：Vue 挂载前先兜一层背景色，取值与
+       design/tokens/awd-palette.json 的 roles.light.bg / roles.dark.bg 一致。
+
+       【这里的 :not([data-theme]) 不是装饰，删了会破配色红线】
+       应用自己的主题权威源是 utils/appTheme.js，它在 documentElement 上挂 data-theme。
+       跟随系统的兜底只能在 data-theme 还没挂上去（即 Vue 挂载前的第一帧）时生效；
+       一旦挂上了就必须听 data-theme 的，否则「系统是深色、应用设的是浅色」的用户
+       会被媒体查询永久按成深色外壳——那正是 CLAUDE.md 里已被否决的深色 chrome。
+       挂载后走 var(--awd-bg)，由 App.vue 的 html[data-theme='light'|'dark'] 决定。 */
+    html, body { background: var(--awd-bg, #F1EFE7); }
+    @media (prefers-color-scheme: dark) {
+      html:not([data-theme]), html:not([data-theme]) body { background: #191713; }
+    }
+  </style>
   <!--preload-links-->
   <!--app-context-->
 </head>

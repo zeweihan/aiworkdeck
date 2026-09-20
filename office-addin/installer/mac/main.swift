@@ -7,7 +7,7 @@
 //
 // UI：单窗口 AppKit（不用 SwiftUI，目标 macOS 11）。安装由按钮触发而非启动即写——
 // 用户先看到要发生什么，TCC 授权弹窗也有了上下文；失败态在窗口内给指引而不是弹一串 Alert。
-// 外观锁 light（与桌面端 native-appearance 红线一致），配色对齐产品令牌（森林绿/薄荷/纸面）。
+// 外观锁 light（与桌面端 native-appearance 红线一致），配色对齐产品令牌（墨竹青/竹月青/玉脂白）。
 import AppKit
 
 // MARK: - 品牌色（对齐 frontend/src/uni.scss 的 awd 令牌）
@@ -16,16 +16,16 @@ func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
             green: CGFloat((hex >> 8) & 0xFF) / 255,
             blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
 }
-let colForest = rgb(0x1A5336)
-let colForestDark = rgb(0x123A26)
-let colMintDeep = rgb(0x2D7A52)
-let colInk = rgb(0x212529)
-let colGray = rgb(0x868E96)
-let colCard = rgb(0xF8F9FA)
-let colLine = rgb(0xE9ECEF)
-let colIdleDot = rgb(0xCED4DA)
-let colAmber = rgb(0xB7791F)
-let colError = rgb(0xC0392B)
+let colForest = rgb(0x2E5A50)
+let colForestDark = rgb(0x254A41)
+let colMintDeep = rgb(0x2E5A50)
+let colInk = rgb(0x2B2A26)
+let colGray = rgb(0xA8A296)
+let colCard = rgb(0xF1EFE7)
+let colLine = rgb(0xDFDBCE)
+let colIdleDot = rgb(0xC3BCA9)
+let colAmber = rgb(0xB8842B)
+let colError = rgb(0xB5483C)
 
 final class FlippedView: NSView { override var isFlipped: Bool { true } }
 

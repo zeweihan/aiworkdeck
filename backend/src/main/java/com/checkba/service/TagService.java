@@ -18,10 +18,14 @@ public class TagService {
 
     private final TagRepository tagRepository;
 
-    /** 标签类型默认色：当事人琥珀褐 / 争议焦点深红褐 / 普通蓝（与 AutoTaggingService 自动标签色一致） */
-    private static final String DEFAULT_COLOR_PARTY = "#B45309";
-    private static final String DEFAULT_COLOR_ISSUE = "#9B1C31";
-    private static final String DEFAULT_COLOR_NORMAL = "#3B82F6";
+    /**
+     * 标签类型默认色：东方清雅配色体系（design/tokens/awd-palette.json，dev-board#731）
+     * 换代，当事人取 warning 族 / 争议焦点取 danger 族 / 普通取 info 族（与 AutoTaggingService
+     * 自动标签色一致）。只换新建默认值，用户已保存的标签颜色是用户内容，不做存量迁移。
+     */
+    private static final String DEFAULT_COLOR_PARTY = "#B8842B";
+    private static final String DEFAULT_COLOR_ISSUE = "#B5483C";
+    private static final String DEFAULT_COLOR_NORMAL = "#3C5A73";
 
     /**
      * 校验标签类型白名单：null 或 NORMAL/PARTY/ISSUE；非法值抛异常。

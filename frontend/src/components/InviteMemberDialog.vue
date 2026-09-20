@@ -695,7 +695,7 @@ export default {
 .workdeck-input:focus {
   border-color: var(--awd-accent);
   outline: none;
-  box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
+  box-shadow: 0 0 0 3px rgba(46, 90, 80, 0.1);
 }
 
 /* ---- 查人结果区 ---- */

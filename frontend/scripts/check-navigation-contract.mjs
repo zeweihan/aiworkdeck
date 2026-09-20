@@ -80,7 +80,7 @@ const extractMethodBody = (src, marker) => {
 
 // 深色 chrome 判定按感知亮度算，不按固定十六进制前缀比对——旧写法要么漏判
 // #212629（"21262" 后紧跟同为十六进制字符的 "9"，\b 不成立，正则整条不匹配），
-// 要么误伤 #1A5336 森林绿（"1" + 5 位十六进制字符照样能拼出 "1A5336"）。
+// 要么误伤 #2E5A50 墨竹青（"2" + 5 位十六进制字符照样能拼出 "2E5A50"）。
 // 同时把 background-color: 也纳入覆盖面（旧正则只认 background:）。
 const findDarkChromeBackground = (css) => {
   const re = /background(?:-color)?:\s*#([0-9a-f]{6}|[0-9a-f]{3})\b/gi
@@ -193,8 +193,8 @@ check('project-list.scss 不许把两块死样式搬过来', () => {
 
 check('project-list.scss 守浅色外壳红线', () => {
   const css = readFrontend('src/pages/project-list/project-list.scss')
-  if (!css.includes('#1A5336')) return '缺森林绿 #1A5336'
-  if (!css.includes('#F8F9FA')) return '缺浅底 #F8F9FA'
+  if (!css.includes('#2E5A50')) return '缺墨竹青 #2E5A50'
+  if (!css.includes('#F1EFE7')) return '缺浅底 #F1EFE7'
   const dark = findDarkChromeBackground(css)
   if (dark) return '外壳不做深色 chrome（' + dark + '）'
   return null

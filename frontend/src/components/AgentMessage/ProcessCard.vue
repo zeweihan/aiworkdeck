@@ -355,7 +355,7 @@ const renderItems = computed(() => {
 .process-card {
   background: var(--awd-surface);
   border-radius: 12px 12px 0 0;
-  /* border-bottom: 1px solid #1A5336; */
+  /* border-bottom: 1px solid var(--awd-accent); */
   /* box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1); */
   /* margin-bottom: 12px; */
   overflow: hidden;

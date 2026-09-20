@@ -20,11 +20,14 @@ export function normalizeTagType(tag) {
   return type === TAG_TYPE_PARTY || type === TAG_TYPE_ISSUE ? type : TAG_TYPE_NORMAL
 }
 
-// 建标签时的默认色系（spec 定案；颜色之后仍可在标签管理里改，这里只管新建默认值）
+// 建标签时的默认色系（spec 定案；颜色之后仍可在标签管理里改，这里只管新建默认值）。
+// 东方清雅配色体系（design/tokens/awd-palette.json，dev-board#731）换代：当事人取 warning
+// 族、争议焦点取 danger 族、普通标签取 info 族。只换新建默认值，用户已保存的标签颜色是
+// 用户内容，不做存量迁移。
 export const TAG_TYPE_DEFAULT_COLORS = {
-  [TAG_TYPE_PARTY]: '#B45309',
-  [TAG_TYPE_ISSUE]: '#9B1C31',
-  [TAG_TYPE_NORMAL]: '#3B82F6'
+  [TAG_TYPE_PARTY]: '#B8842B',
+  [TAG_TYPE_ISSUE]: '#B5483C',
+  [TAG_TYPE_NORMAL]: '#3C5A73'
 }
 
 // 类型名走 locale 文件（EN 版红线），这里只维护「类型 → i18n key」的映射，

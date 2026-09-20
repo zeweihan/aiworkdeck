@@ -5,12 +5,15 @@
 <head>
   <meta charset="utf-8">
   <title>__PLUGIN_NAME__</title>
+  <!-- 颜色一律 var(--awd-*, 兜底值)：宿主握手后会把当前主题的 --awd-* 令牌注入
+       本 iframe（名单见宿主 utils/appTheme.js 的 THEME_TOKEN_NAMES），插件就自动跟随
+       亮/暗主题；兜底值取自 design/tokens/awd-palette.json 的浅色角色，供老宿主使用。 -->
   <style>
-    body { margin: 0; padding: 12px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 13px; color: #1f2933; background: #ffffff; }
+    body { margin: 0; padding: 12px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 13px; color: var(--awd-text, #2B2A26); background: var(--awd-surface, #FCFBF7); }
     h1 { font-size: 14px; margin: 0 0 8px; }
-    button { font-size: 12px; padding: 4px 10px; border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; cursor: pointer; }
-    button:hover { background: #eef1f4; }
-    #out { margin-top: 10px; white-space: pre-wrap; color: #52606d; }
+    button { font-size: 12px; padding: 4px 10px; border: 1px solid var(--awd-border, #DDD8CA); border-radius: 4px; background: var(--awd-surface-2, #E9E6DC); cursor: pointer; }
+    button:hover { background: var(--awd-surface-3, #DFDBCE); }
+    #out { margin-top: 10px; white-space: pre-wrap; color: var(--awd-text-2, #6B675C); }
   </style>
 </head>
 <body>

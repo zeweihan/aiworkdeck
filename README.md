@@ -13,11 +13,11 @@
 
 <p align="center">
   <a href="https://github.com/zeweihan/aiworkdeck/stargazers"><img src="https://img.shields.io/github/stars/zeweihan/aiworkdeck?style=social" alt="Stars"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=1A5336" alt="Release"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1A5336" alt="Platform"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=2E5A50" alt="Release"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-2E5A50" alt="Platform"></a>
   <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-blue.svg" alt="License: AGPLv3"></a>
-  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/commercial%20license-available-1A5336.svg" alt="Commercial license"></a>
-  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/website-aiworkdeck.com-1A5336.svg" alt="Website"></a>
+  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/commercial%20license-available-2E5A50.svg" alt="Commercial license"></a>
+  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/website-aiworkdeck.com-2E5A50.svg" alt="Website"></a>
 </p>
 
 <p align="center">

@@ -19,6 +19,10 @@ jobs:
           node-version: '20'
       - name: Check new files carry SPDX headers
         run: node scripts/check-spdx.mjs
+      # 配色守卫：色源 sha256（三仓逐字节相同）、令牌生成区段无手改漂移、
+      # WCAG 对比度复算与硬闸。零依赖，跟 SPDX 检查共用这个轻量 job。
+      - name: Check color palette and generated tokens
+        run: node scripts/check-palette.mjs
 
   backend:
     name: Backend (mvn test)

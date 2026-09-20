@@ -184,7 +184,8 @@ flatten dates, routes and arrow direction into a tree). Pipeline gates, in order
 4. **lint** (`lint.py`) — final-SVG artifact check, **read-only, changes no visuals**:
    non-finite numbers, off-canvas boxes/anchors, arrows drawn as a single diagonal,
    **rejected blue/slate colours** — the "no blue" standard **scoped to 奇川风**, the
-   colour master (歸藏风 legitimately uses Klein blue `#002FA7`; its own guard enforces
+   colour master (歸藏风 legitimately uses its one accent `#2E5A50` — upstream
+   Klein blue `#002FA7`, see [AWD-PATCH 4]; its own guard enforces
    that palette instead) — via a blacklist that does
    NOT false-flag our mildly-cool neutral grays, marker `orient` sanity, well-formed
    XML, and `url(#id)` reference integrity. Runs on every render; `--strict` makes a

@@ -3084,7 +3084,7 @@ export default {
 /* 输入区获得焦点时整卡亮起：品牌绿描边 + mint 光晕（浅色，不做深色 chrome） */
 .input-card:focus-within {
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.16), 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
+  box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.16), 0 1px 2px rgba(18, 52, 77, 0.04), 0 4px 16px rgba(18, 52, 77, 0.06);
 }
 
 /* Recent History Section - 紧凑专业样式 */
@@ -3714,7 +3714,7 @@ export default {
   height: 48px;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 6px rgba(26, 83, 54, 0.15);
+  box-shadow: 0 2px 6px rgba(46, 90, 80, 0.15);
 }
 
 .preview-thumb {
@@ -3736,7 +3736,7 @@ export default {
   text-align: center;
   line-height: 18px;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(26, 83, 54, 0.3);
+  box-shadow: 0 1px 3px rgba(46, 90, 80, 0.3);
   transition: all 0.15s ease;
 }
 
@@ -3960,7 +3960,7 @@ export default {
   50% {
     background: var(--awd-accent-soft);
     border-color: var(--awd-mint);
-    box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.18);
+    box-shadow: 0 0 0 2px rgba(137, 168, 160, 0.18);
   }
 }
 
@@ -4660,10 +4660,10 @@ export default {
 }
 
 .status-btn.modified:hover {
-  /* background-color: #5BD197; Mint Green */
+  /* background-color: var(--awd-mint); Mint Green */
   background-color: var(--awd-mint);
   /* color: #ffffff; */
-  /* border-color: #1A5336; */
+  /* border-color: var(--awd-accent-text); */
 }
 
 .status-btn.created {
@@ -4787,8 +4787,8 @@ export default {
   cursor: pointer;
   padding: 4px 10px;
   border-radius: 99px;
-  /* background-color: #E6F9F0; Mint Lightest */
-  /* border: 1px solid rgba(26, 83, 54, 0.1); */
+  /* background-color: var(--awd-accent-soft); Mint Lightest */
+  /* border: 1px solid rgba(46, 90, 80, 0.1); */
 }
 
 .user-bubble:hover .rollback-btn {
@@ -4796,8 +4796,8 @@ export default {
 }
 
 .rollback-btn:hover {
-  /* background-color: #5BD197; Mint Green */
-  /* border-color: #1A5336; */
+  /* background-color: var(--awd-mint); Mint Green */
+  /* border-color: var(--awd-accent-text); */
 }
 
 .rollback-icon-svg {

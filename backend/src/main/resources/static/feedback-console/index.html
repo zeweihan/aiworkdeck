@@ -21,15 +21,19 @@
     凭据不进 URL（URL 里的 token 会落 nginx access log）。
 -->
 <style>
+  /* 值取自 design/tokens/awd-palette.json v2.0.0 的 roles.light。
+     本页由 backend.jar 直接托管，拿不到前端包里的 --awd-* 令牌，
+     所以在这里照抄一份角色色值；改配色时跟着总表一起改。 */
   :root {
-    --ink: #1f2328;
-    --ink-soft: #57606a;
-    --paper: #faf9f7;
-    --card: #ffffff;
-    --line: #e4e1db;
-    --accent: #1a5336;
-    --accent-soft: #eef4f0;
-    --warn: #9d3b3b;
+    --ink: #2B2A26;        /* text */
+    --ink-soft: #6B675C;   /* text-2 */
+    --paper: #F1EFE7;      /* bg 玉脂白 */
+    --card: #FCFBF7;       /* surface */
+    --line: #DDD8CA;       /* border */
+    --accent: #2E5A50;     /* accent 墨竹青 */
+    --accent-soft: #E3EDE9;/* accent-soft */
+    --warn: #9A3A30;       /* danger-text */
+    --shade: #E9E6DC;      /* surface-2 */
   }
   * { box-sizing: border-box; }
   body {
@@ -62,7 +66,7 @@
   .field label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 4px; }
   .field input {
     width: 100%; padding: 9px 12px; font-size: 15px;
-    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink);
   }
   .field input:focus { outline: none; border-color: var(--accent); }
   .btn {
@@ -88,7 +92,7 @@
     display: inline-block; padding: 1px 8px; border-radius: 999px;
     font-size: 12px; background: var(--accent-soft); color: var(--accent); white-space: nowrap;
   }
-  .tag.gray { background: #f0efec; color: var(--ink-soft); }
+  .tag.gray { background: var(--shade); color: var(--ink-soft); }
   /* 详情 */
   .detail h2 { font: 600 18px/1.4 "Songti SC", Georgia, serif; margin: 0 0 2px; }
   .meta-line { color: var(--ink-soft); font-size: 13px; margin-bottom: 14px; }
@@ -108,7 +112,7 @@
   .att-name { font-size: 13px; color: var(--ink-soft); margin: 10px 0 4px; }
   .att-name a { color: var(--accent); }
   pre.ctx {
-    background: #f6f5f2; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--shade); border: 1px solid var(--line); border-radius: 8px;
     padding: 12px 14px; font-size: 12.5px; line-height: 1.6; overflow-x: auto;
     white-space: pre-wrap; word-break: break-word;
   }

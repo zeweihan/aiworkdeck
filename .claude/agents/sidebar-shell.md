@@ -580,14 +580,14 @@ dd-files 那个例外已取消，它 header 里的「＋」挪进了面板内部
 `MarketSidebarPanel`（维护者点过名的形态）：`--awd-panel-pad-x:10px` /
 `--awd-panel-sec-h:26px`（分组头行高）/ `--awd-panel-row-h:28px` /
 `--awd-panel-fs-sec:11px`(配 700 字重) / `--awd-panel-fs:12px` /
-`--awd-panel-border:#E9ECEF` / `--awd-panel-accent:#1A5336` 等。
+`--awd-panel-border:#DDD8CA` / `--awd-panel-accent:#2E5A50` 等。
 **用 CSS 自定义属性而不是 scss 变量**：各面板的 `<style scoped>` 有的写 scss
 有的写纯 css，自定义属性两边都能用且天然穿透 scoped。已套用：SearchPanel /
 EasyVoicePane / DesensitizePane / LitigationVisualPanel / MeetingRecordingPanel /
 DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定义边距。
 
 分组头的统一形制（各面板类名前缀不同但结构一致）：
-`26px 行高 + 11px/700 标题 + 计数徽章（圆角 999px、#F1F3F5 底）+ spacer + 右侧动作`。
+`26px 行高 + 11px/700 标题 + 计数徽章（圆角 999px、#E9E6DC 底）+ spacer + 右侧动作`。
 
 ## CSS 体系
 
@@ -660,7 +660,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
     激活标签那块白底；多出的 4px 溢出到编辑区头上，`.editors-container` 与
     `.editor-pane` 都是 `position:relative` 且有背景色、排在更后面，**z-index 只到 1
     时下面 3px 会被盖掉**——真渲染对照实测：z2 时 hover 后 y79.0..82.5 全是
-    `#CBD5E1`，改回 z1 只剩 y79.0..79.5 那 1px，其余是编辑器白底）。
+    `#C3BCA9`，改回 z1 只剩 y79.0..79.5 那 1px，其余是编辑器白底）。
   z-index 只给 `.tabs-scroll`，**不要给 `.etb-scroll` 或 `.etb-wrap`**——工具栏下拉是
   `position:fixed` 弹层，多一个层叠上下文就把它们框住了。
   **验证滑轨只能抓真实屏幕**：CDP 截图（puppeteer `page.screenshot`，`fromSurface`

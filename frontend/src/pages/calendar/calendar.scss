@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* 全局日历页样式。配色沿用 project-list.vue 的品牌调色板（浅色专业风红线，
-   sidebar-shell 配色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀）。 */
+   sidebar-shell 配色红线：白 / var(--awd-bg) 底 + 墨竹青 #2E5A50 主色 + mint var(--awd-mint)（竹月青氛围色）点缀）。 */
 
 .page-calendar {
   height: 100vh;
@@ -63,7 +63,7 @@
   transition: all 0.2s;
 
   &:hover {
-    border-color: var(--awd-accent);
+    border-color: var(--awd-accent-text);
     color: var(--awd-accent-text);
   }
 }
@@ -126,7 +126,7 @@
 
     &:hover {
       background: var(--awd-bg);
-      border-color: var(--awd-accent);
+      border-color: var(--awd-accent-text);
       color: var(--awd-accent-text);
     }
 
@@ -137,7 +137,7 @@
 
   :deep(.fc-button-primary:not(:disabled).fc-button-active) {
     background: var(--awd-accent);
-    border-color: var(--awd-accent);
+    border-color: var(--awd-accent-text);
     color: var(--awd-text-on-accent);
   }
 

@@ -95,8 +95,8 @@
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
 		"navigationBarTitleText": "AI WorkDeck",
-		"navigationBarBackgroundColor": "#F8F8F8",
-		"backgroundColor": "#F8F8F8",
+		"navigationBarBackgroundColor": "#F1EFE7",
+		"backgroundColor": "#F1EFE7",
 		// rpx 恒定按 375 基准换算（1rpx = 0.5px）。uni-h5 默认是移动端口径：
 		// 根字号取 `窗口宽 <= 960 ? 窗口宽 : 375`，再除以 23.4375。桌面端窗口一旦
 		// 拖窄到 960 以下，根字号就从 16px 一路涨到 40px，全应用 rpx 尺寸整体放大

@@ -64,8 +64,8 @@ import { isDone, toEventStart } from '@/components/calendar/taskUtils.js'
 import TaskDialog from '@/components/calendar/TaskDialog.vue'
 import UpcomingList from '@/components/calendar/UpcomingList.vue'
 
-const DONE_BG = '#F1F3F5'
-const DONE_TEXT = '#ADB5BD'
+const DONE_BG = 'var(--awd-surface-2)'
+const DONE_TEXT = 'var(--awd-text-3)'
 
 function escapeHtml(s) {
   return String(s == null ? '' : s)

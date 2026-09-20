@@ -72,7 +72,7 @@ export default {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
   padding: 8px 12px; border-radius: 10px;
   background: var(--awd-surface); border: 1px solid var(--awd-accent);
-  box-shadow: 0 6px 20px rgba(26, 83, 54, 0.22);
+  box-shadow: 0 6px 20px rgba(46, 90, 80, 0.22);
   font-size: 12px; color: var(--awd-text);
 }
 .evidence-bar.is-error { border-color: var(--awd-danger); box-shadow: 0 6px 20px rgba(180, 35, 24, 0.18); }

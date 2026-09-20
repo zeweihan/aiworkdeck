@@ -123,7 +123,7 @@
             </view>
             <view class="form-options">
                <view class="remember-me">
-                 <checkbox style="transform:scale(0.7)" color="#5BD197" checked />
+                 <checkbox style="transform:scale(0.7)" color="var(--awd-mint)" checked />
                  <text>{{ $t('account.rememberMe') }}</text>
                </view>
                <text class="link-text">{{ $t('account.forgotPassword') }}</text>
@@ -770,7 +770,7 @@ $glass-border: var(--awd-glass-border);
   border-radius: 20px;
   padding: 40px;
   box-shadow: 
-    0 16px 48px rgba(26, 83, 54, 0.1),
+    0 16px 48px rgba(46, 90, 80, 0.1),
     0 4px 12px rgba(0,0,0,0.05);
   display: flex;
   flex-direction: column;
@@ -851,7 +851,7 @@ $glass-border: var(--awd-glass-border);
   &:focus {
     background: var(--awd-surface);
     border-color: var(--awd-mint);
-    box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.2);
+    box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.2);
   }
 }
 .placeholder-style {

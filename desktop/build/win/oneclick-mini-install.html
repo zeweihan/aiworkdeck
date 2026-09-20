@@ -13,34 +13,34 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 360px; height: 132px; overflow: hidden; }
   body {
-    position: relative; background: #FFFFFF;
+    position: relative; background: #FCFBF7;
     font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .frame { position: absolute; inset: 0; border: 1px solid #DCE5DF; z-index: 9; }
+  .frame { position: absolute; inset: 0; border: 1px solid #DDD8CA; z-index: 9; }
   .accent {
     position: absolute; left: 0; top: 0; width: 360px; height: 3px;
-    background: linear-gradient(90deg, #1D6440 0%, #5BD197 60%, #A6EFCA 100%);
+    background: linear-gradient(90deg, #1D6453 0%, #89A8A0 60%, #A6EFDE 100%);
   }
   .logo { position: absolute; left: 17px; top: 14px; width: 30px; height: 30px; } /* 图标自带透明边距，30px 盒子 = 24px 底板 */
   .brand {
     position: absolute; left: 52px; top: 20px;
-    font-size: 14px; font-weight: 600; color: #17301F; letter-spacing: 0.02em;
+    font-size: 14px; font-weight: 600; color: #17302A; letter-spacing: 0.02em;
   }
   /* 状态行：主文案 + 右侧弱化的版本号（?ver= 传入，空则隐藏） */
   .status {
     position: absolute; left: 20px; top: 60px;
-    font-size: 13px; color: #44524A; letter-spacing: 0.02em;
+    font-size: 13px; color: #2B2A26; letter-spacing: 0.02em;
   }
   .hint {
     position: absolute; right: 20px; top: 61px;
-    font-size: 11px; color: #9DAFA3; letter-spacing: 0.14em;
+    font-size: 11px; color: #A8A296; letter-spacing: 0.14em;
   }
   /* 轨道 (20,100,320,6)=AWDUI_BAR：真进度条剥掉系统主题后是扁平色块，
      叠在这条圆角浅薄荷轨道上 */
   .track {
     position: absolute; left: 20px; top: 100px; width: 320px; height: 6px;
-    border-radius: 3px; background: #ECF2EE;
+    border-radius: 3px; background: #ECF2F0;
   }
 </style>
 </head>

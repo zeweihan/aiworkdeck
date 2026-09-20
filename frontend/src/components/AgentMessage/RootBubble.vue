@@ -208,7 +208,7 @@ function isApprovalPending(art) {
   border: 1.5px solid var(--awd-mint); /* Mint Green */
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 2px 12px rgba(26, 83, 54, 0.10);
+  box-shadow: 0 2px 12px rgba(46, 90, 80, 0.10);
 }
 
 /* 顶部色条：森林绿→薄荷绿，视觉上先声夺人 */

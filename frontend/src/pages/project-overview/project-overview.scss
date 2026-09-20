@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* Color Config - AI WorkDeck Palette */
-$color-accent: #5BD197; // Mint Green
+$color-accent: var(--awd-mint); // Mint Green
 
 /* Mixins */
 @mixin flex-center {
@@ -802,7 +802,7 @@ $color-accent: #5BD197; // Mint Green
   border-radius: 24px;
   box-shadow:
     0 1px 2px rgba(33, 38, 41, 0.04),
-    0 14px 36px rgba(26, 83, 54, 0.08);
+    0 14px 36px rgba(46, 90, 80, 0.08);
 }
 
 .empty-state-img {
@@ -2792,13 +2792,13 @@ $color-accent: #5BD197; // Mint Green
   white-space: nowrap;
   flex-shrink: 1;
   min-width: 2.5em;
-  box-shadow: 0 1px 3px rgba(26, 83, 54, 0.2);
+  box-shadow: 0 1px 3px rgba(46, 90, 80, 0.2);
   transition: all 0.15s ease;
 }
 
 .ai-tag:hover {
   background: linear-gradient(135deg, var(--awd-accent-hover) 0%, var(--awd-accent) 100%);
-  box-shadow: 0 2px 6px rgba(26, 83, 54, 0.3);
+  box-shadow: 0 2px 6px rgba(46, 90, 80, 0.3);
 }
 
 .ai-input-footer {
@@ -2933,7 +2933,7 @@ $color-accent: #5BD197; // Mint Green
 
   &:hover {
     border-color: var(--awd-mint);
-    box-shadow: 0 2px 8px rgba(91, 209, 151, 0.2);
+    box-shadow: 0 2px 8px rgba(137, 168, 160, 0.2);
     background: var(--awd-surface);
   }
 }
@@ -4034,7 +4034,7 @@ $color-accent: #5BD197; // Mint Green
 
 .awd-btn-primary:hover {
   background: var(--awd-accent-hover);
-  box-shadow: 0 4px 6px -1px rgba(26, 83, 54, 0.2);
+  box-shadow: 0 4px 6px -1px rgba(46, 90, 80, 0.2);
 }
 
 .awd-btn-secondary {
@@ -4073,7 +4073,7 @@ $color-accent: #5BD197; // Mint Green
 .awd-input:focus {
   border-color: var(--awd-accent);
   outline: none;
-  box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
+  box-shadow: 0 0 0 3px rgba(46, 90, 80, 0.1);
 }
 
 .awd-field {

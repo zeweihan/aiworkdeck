@@ -281,9 +281,9 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$rail-main: #1A5336;
-$rail-main-line: rgba(26, 83, 54, .28);
-$rail-draft-line: rgba(91, 209, 151, .45);
+$rail-main: var(--awd-accent);
+$rail-main-line: rgba(46, 90, 80, .28);
+$rail-draft-line: rgba(137, 168, 160, .45);
 
 .timeline { flex: 1; padding: 12rpx 0; }
 .timeline-empty { padding: 24rpx; color: var(--awd-text-3); font-size: 26rpx; }

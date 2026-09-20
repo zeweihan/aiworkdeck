@@ -11,7 +11,7 @@
       <view class="input-wrapper">
         <view class="input-box" :class="{ focused: isSearchFocused }">
           <view class="search-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6C757D" stroke-width="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--awd-text-2)" stroke-width="2">
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
@@ -151,7 +151,7 @@
     <!-- Empty State -->
     <view class="empty-state" v-if="!hasSearched && !loading">
        <view class="empty-icon">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#E9ECEF" stroke-width="1.5">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--awd-surface-3)" stroke-width="1.5">
              <circle cx="11" cy="11" r="8"></circle>
              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
@@ -282,7 +282,7 @@ export default {
     },
     getTagStyle(tag) {
         const isSelected = this.selectedTagIds.includes(tag.id);
-        const color = tag.color || '#6C757D';
+        const color = tag.color || 'var(--awd-text-2)';
 
         if (isSelected) {
             return {
@@ -439,7 +439,7 @@ export default {
 
 <style lang="scss" scoped>
 /* Brands Colors from color.md */
-$brand-mint: #5BD197;
+$brand-mint: var(--awd-mint);
 
 .search-panel {
   display: flex;

@@ -6265,7 +6265,7 @@ export default {
           audio: '#B3B37E',
           mp3: '#B3B37E',
 
-          default: '#6C757D'
+          default: 'var(--awd-text-2)'
        }
        return colors[t] || colors.default
     },
@@ -6295,7 +6295,7 @@ export default {
            : file.name
 
        // Use AI WorkDeck brand colors for the tag
-       const tagHtml = `<span class="ai-tag" contenteditable="false" data-file-id="${file.id || file.fileId}" data-full-name="${file.name}" title="${file.name}" style="background: linear-gradient(135deg, #1A5336 0%, #2D7A52 100%); color: #FFFFFF; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(26,83,54,0.2);">@${displayName}</span>&nbsp;`
+       const tagHtml = `<span class="ai-tag" contenteditable="false" data-file-id="${file.id || file.fileId}" data-full-name="${file.name}" title="${file.name}" style="background: linear-gradient(135deg, var(--awd-accent) 0%, #2D7A52 100%); color: #FFFFFF; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(46, 90, 80,0.2);">@${displayName}</span>&nbsp;`
 
 
        const sel = window.getSelection()

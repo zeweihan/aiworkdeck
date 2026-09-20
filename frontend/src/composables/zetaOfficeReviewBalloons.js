@@ -20,30 +20,31 @@ export function attachReviewBalloons({ canvas, execute, transport, locale = 'zh'
     : { title: '批注与修订', overview: '审阅列表', insert: '插入', delete: '删除', table: '表格', comment: '批注', accept: '接受', reject: '拒绝', resolve: '解决', reopen: '重新打开', edit: '编辑', remove: '删除', save: '保存', cancel: '取消', more: '部分审阅条目暂未显示。', failed: '审阅更新失败，请重试。', empty: '暂无批注或修订', other: '更改', format: '格式', paraFormat: '段落格式', unknown: '未知作者' }
   const root = doc.createElement('div'); root.className = 'awd-review-balloons'; root.hidden = true
   const style = doc.createElement('style'); style.textContent = `
-    .awd-review-balloons { position:fixed;overflow:hidden;pointer-events:none;z-index:5;color:#26352f;font:12px/1.5 system-ui,sans-serif; }
+    /* 色值全部走 editor.html 头部那套 --awd-*（本页是独立 document，宿主令牌继承不过来，
+       所以那份令牌表就在本页自己的 <style> 里）。深浅两套由 html.theme-dark 上的令牌
+       取值切换，这里不再写 .theme-dark 分支。
+       竹月青 --awd-bamboo 只用在连线、滚动条这类装饰件上（对白底 2.6:1，承载不了文字）；
+       作者名、卡片描边这类要认得出的地方一律用 --awd-accent-text。 */
+    .awd-review-balloons { position:fixed;overflow:hidden;pointer-events:none;z-index:5;color:var(--awd-text);font:12px/1.5 system-ui,sans-serif; }
     .awd-review-balloons[hidden] { display:none; }
-    .awd-rb-actions button { cursor:pointer;font:inherit;color:inherit;background:transparent;border:1px solid #ced8d2;border-radius:5px;padding:2px 7px; }
+    .awd-rb-actions button { cursor:pointer;font:inherit;color:inherit;background:transparent;border:1px solid var(--awd-border);border-radius:5px;padding:2px 7px; }
     .awd-rb-list { position:absolute;inset:0;pointer-events:none; }
     .awd-rb-page { position:absolute;overflow:hidden;pointer-events:none; }
     .awd-rb-page.overflowing { pointer-events:auto; }
-    .awd-rb-overflow { position:absolute;right:0;top:0;width:8px;height:100%;margin:0;writing-mode:vertical-lr;direction:ltr;accent-color:#6d9b85;pointer-events:auto;z-index:2; }
-    .awd-rb-card { position:absolute;transform-origin:top left;padding:10px;box-sizing:border-box;background:#fff;border:1px solid #d8dfdc;border-radius:8px;box-shadow:0 2px 5px #16302608;pointer-events:auto;cursor:pointer; }
-    .awd-rb-card:hover,.awd-rb-card.active { border-color:#437762;box-shadow:0 0 0 1px #43776233; }
+    .awd-rb-overflow { position:absolute;right:0;top:0;width:8px;height:100%;margin:0;writing-mode:vertical-lr;direction:ltr;accent-color:var(--awd-bamboo);pointer-events:auto;z-index:2; }
+    .awd-rb-card { position:absolute;transform-origin:top left;padding:10px;box-sizing:border-box;background:var(--awd-surface);border:1px solid var(--awd-border);border-radius:8px;box-shadow:var(--awd-shadow-sm);pointer-events:auto;cursor:pointer; }
+    .awd-rb-card:hover,.awd-rb-card.active { border-color:var(--awd-accent-text);box-shadow:0 0 0 1px var(--awd-bamboo); }
     .awd-rb-card.resolved { opacity:.65; }
-    .awd-rb-meta { display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:#67756e;font-size:11px; }
-    .awd-rb-meta strong { color:#315847;font-weight:600; }
+    .awd-rb-meta { display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:var(--awd-text-2);font-size:11px; }
+    .awd-rb-meta strong { color:var(--awd-accent-text);font-weight:600; }
     .awd-rb-content { white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;margin:7px 0;font-size:13px;line-height:1.6;cursor:text; }
-    .awd-rb-card.deletion .awd-rb-content { color:#a34640;text-decoration:line-through; }
-    .awd-rb-quote { border-left:2px solid #d8dfdc;padding-left:7px;margin:6px 0;color:#67756e;white-space:pre-wrap;overflow-wrap:anywhere;max-height:48px;overflow:auto; }
+    .awd-rb-card.deletion .awd-rb-content { color:var(--awd-danger-text);text-decoration:line-through; }
+    .awd-rb-quote { border-left:2px solid var(--awd-gold-line);padding-left:7px;margin:6px 0;color:var(--awd-text-2);white-space:pre-wrap;overflow-wrap:anywhere;max-height:48px;overflow:auto; }
     .awd-rb-editor { width:100%;height:140px;box-sizing:border-box;font:inherit;resize:none; }
     .awd-rb-actions { display:flex;gap:6px;flex-wrap:wrap; }.awd-rb-actions button:disabled { opacity:.45;cursor:wait; }
     .awd-rb-lines { position:absolute;inset:0;width:100%;height:100%;overflow:hidden;pointer-events:none; }
-    .awd-rb-lines path { fill:none;stroke:#6d9b85;stroke-width:1;stroke-dasharray:4 4;opacity:.65; }
-    .awd-rb-notice { position:absolute;bottom:8px;right:8px;max-width:260px;padding:5px 10px;background:#f1f3f5;color:#7d5346;z-index:3; }
-    .theme-dark .awd-rb-notice { background:#101214;color:#c5d0ca;border-color:#343e38; }
-    .theme-dark .awd-rb-card { background:#1b211e;color:#dae3dc;border-color:#3a4840; }
-    .theme-dark .awd-rb-meta strong { color:#92bea5; }
-    .theme-dark .awd-rb-card.deletion .awd-rb-content { color:#e69590; }
+    .awd-rb-lines path { fill:none;stroke:var(--awd-bamboo);stroke-width:1;stroke-dasharray:4 4;opacity:.65; }
+    .awd-rb-notice { position:absolute;bottom:8px;right:8px;max-width:260px;padding:5px 10px;background:var(--awd-warning-soft);color:var(--awd-warning-text);z-index:3; }
   `
   const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.classList.add('awd-rb-lines')
   const list = doc.createElement('aside'); list.className = 'awd-rb-list'; list.setAttribute('aria-label', labels.title)

@@ -14,10 +14,10 @@
  * 另外 .card-style-default / .badge-text-new / .arrow-char / .rename-box / .rename-input
  * 在原页面同样无定义，本次是纯搬迁不夹带视觉改动，保持无定义。
  *
- * 配色守浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。
+ * 配色守浅色红线：白 / var(--awd-bg) 浅茶白底 #F1EFE7 + 墨竹青 #2E5A50 主色 + mint var(--awd-mint)（竹月青氛围色）点缀，不做深色 chrome。
  */
 /* 品牌配色变量 - Updated to AI WorkDeck Palette */
-$brand-dark: #212629;    /* Dark BG */
+$brand-dark: #221F1A;    /* Dark BG */
 
 
 /* 页面外壳。原 .page-userprofile（:1311-1327）与 .main-content（:1509-1515）改写：
@@ -91,7 +91,7 @@ $brand-dark: #212629;    /* Dark BG */
     transition: all 0.2s;
 
     &:hover {
-        border-color: var(--awd-accent);
+        border-color: var(--awd-accent-text);
         color: var(--awd-accent-text);
     }
 }
@@ -398,7 +398,7 @@ $brand-dark: #212629;    /* Dark BG */
     cursor: pointer;
     
     &:hover {
-        border-color: var(--awd-accent);
+        border-color: var(--awd-accent-text);
         color: var(--awd-accent-text);
     }
 }
@@ -418,7 +418,7 @@ $brand-dark: #212629;    /* Dark BG */
     width: 24px;
     height: 24px;
     background: $brand-dark;
-    color: var(--awd-text-on-accent);
+    color: #EDE9DF;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -693,7 +693,7 @@ $brand-dark: #212629;    /* Dark BG */
 
     &:hover {
         background: var(--awd-accent-hover);
-        border-color: var(--awd-accent);
+        border-color: var(--awd-accent-text);
         transform: translateY(-1px);
     }
 }
@@ -707,7 +707,7 @@ $brand-dark: #212629;    /* Dark BG */
     .create-glyph { color: var(--awd-accent-text); }
 
     &:hover {
-        border-color: var(--awd-accent);
+        border-color: var(--awd-accent-text);
         color: var(--awd-accent-text);
         transform: translateY(-1px);
     }
@@ -805,7 +805,7 @@ $brand-dark: #212629;    /* Dark BG */
     border-color: var(--awd-border);
 
     &:hover {
-        border-color: var(--awd-accent);
+        border-color: var(--awd-accent-text);
         color: var(--awd-accent-text);
     }
 }
@@ -813,11 +813,11 @@ $brand-dark: #212629;    /* Dark BG */
 .awd-btn-primary {
     background: var(--awd-accent);
     color: var(--awd-text-on-accent);
-    border-color: var(--awd-accent);
+    border-color: var(--awd-accent-text);
 
     &:hover {
         background: var(--awd-accent-hover);
-        border-color: var(--awd-accent);
+        border-color: var(--awd-accent-text);
     }
 
     &[disabled] {

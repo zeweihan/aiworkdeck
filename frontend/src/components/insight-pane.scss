@@ -3,7 +3,7 @@
 // insight-pane.scss — InsightPane.vue（工作台「依据」面板）的样式实体。
 // 外置形制照 evidence-panel.scss（见 .claude/agents/sidebar-shell.md）。
 //
-// 配色红线：外壳保持浅色（白 / #F8F9FA + 森林绿 #1A5336、mint #5BD197 点缀），
+// 配色红线：外壳保持浅色（白 / var(--awd-bg) + 墨竹青 #2E5A50 主色、mint var(--awd-mint)（竹月青氛围色）点缀），
 // 不要引入深色 chrome。密度一律走 App.vue 的 --awd-panel-* 令牌，不要再自定义边距。
 
 .ip { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--awd-surface); }
