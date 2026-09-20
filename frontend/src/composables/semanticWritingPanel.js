@@ -3,27 +3,26 @@
 /** Guest UI only. All data and mutations travel through the existing writing session. */
 export function attachSemanticWritingPanel({ canvas, input, transport, focus }) {
   const doc = canvas.ownerDocument, win = doc.defaultView
-  let session = '', writable = false, composing = false, disposed = false, sequence = 0, requestId = 0, timer = null, active = false, accepting = false, saving = false
+  let session = '', writable = false, available = false, sheetOpen = false, composing = false, disposed = false, sequence = 0, requestId = 0, timer = null, active = false, accepting = false, saving = false
   const pending = new Map(), selected = new Set()
-  const root = doc.createElement('div'); root.className = 'awd-semantic'
+  const root = doc.createElement('div'); root.className = 'awd-semantic'; root.hidden = true
   // 色值全部走 editor.html 头部那套 --awd-*：面板注入的是编辑器页自己的 document
   // （canvas.ownerDocument），宿主 App.vue 的 :root 令牌继承不进来，令牌表由
   // editor.html 自带一份。深浅两套靠 html.theme-dark 上的令牌取值切换，
   // 这里不再写 .theme-dark 分支。
   const style = doc.createElement('style'); style.textContent = `
     .awd-semantic{font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--awd-text);position:fixed;right:16px;top:14px;z-index:2147482600}
-    .awd-semantic *{box-sizing:border-box}.awd-semantic button,.awd-semantic input,.awd-semantic textarea,.awd-semantic select{font:inherit}.awd-semantic :focus-visible{outline:3px solid var(--awd-accent-text);outline-offset:3px}
+    .awd-semantic[hidden]{display:none!important}.awd-semantic *{box-sizing:border-box}.awd-semantic button,.awd-semantic input,.awd-semantic textarea,.awd-semantic select{font:inherit}.awd-semantic :focus-visible{outline:3px solid var(--awd-accent-text);outline-offset:3px}
     .awd-semantic button{border:1px solid var(--awd-border);background:var(--awd-surface);color:var(--awd-accent-text);border-radius:7px;padding:6px 10px;cursor:pointer}.awd-semantic button:hover{background:var(--awd-accent-soft)}.awd-semantic button:disabled{opacity:.45;cursor:default}
-    .awd-semantic-launch{box-shadow:var(--awd-shadow-md)}.awd-semantic-sheet{position:absolute;right:0;top:40px;width:min(420px,calc(100vw - 32px));max-height:calc(100vh - 76px);overflow:auto;background:var(--awd-surface);border:1px solid var(--awd-border);border-radius:12px;box-shadow:var(--awd-shadow-lg)}
+    .awd-semantic-sheet{position:absolute;right:0;top:0;width:min(420px,calc(100vw - 32px));max-height:calc(100vh - 28px);overflow:auto;background:var(--awd-surface);border:1px solid var(--awd-border);border-radius:12px;box-shadow:var(--awd-shadow-lg)}
     .awd-semantic-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--awd-border-subtle)}.awd-semantic-head strong{font-size:16px}.awd-semantic-section{padding:14px 18px;border-bottom:1px solid var(--awd-border-subtle)}.awd-semantic-label{display:block;font-size:12px;font-weight:600;color:var(--awd-text-2);margin:0 0 5px}.awd-semantic select,.awd-semantic textarea,.awd-semantic input[type=date]{display:block;width:100%;border:1px solid var(--awd-border);border-radius:6px;padding:7px;background:var(--awd-surface);color:var(--awd-text);margin-bottom:10px}.awd-semantic textarea{resize:vertical;min-height:56px}
     .awd-semantic-files{max-height:126px;overflow:auto;margin:8px 0}.awd-semantic-file{display:flex;gap:8px;align-items:flex-start;padding:5px 0;overflow-wrap:anywhere}.awd-semantic-file input{margin-top:4px}.awd-semantic-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.awd-semantic .awd-semantic-primary{background:var(--awd-accent);color:var(--awd-text-on-accent);border-color:var(--awd-accent)}.awd-semantic .awd-semantic-primary:hover{background:var(--awd-accent-hover);border-color:var(--awd-accent-hover)}.awd-semantic-hint{font-size:12px;color:var(--awd-text-2);margin:6px 0;white-space:pre-wrap}.awd-semantic-status{padding:12px 18px;background:var(--awd-accent-soft);white-space:pre-wrap;color:var(--awd-accent-text)}.awd-semantic-card{padding:15px 18px;border-top:1px solid var(--awd-border-subtle)}.awd-semantic-preview{font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 12px}.awd-semantic details{border-left:2px solid var(--awd-gold-line);padding-left:10px;margin:10px 0;color:var(--awd-text-2)}.awd-semantic summary{cursor:pointer;font-size:12px}.awd-semantic blockquote{margin:8px 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.awd-semantic [hidden]{display:none!important}
   `
   doc.head.append(style); doc.body.append(root)
   function element(tag, text, parent, cls) { const el = doc.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; parent?.append(el); return el }
   function button(text, parent, handler, cls) { const el = element('button', text, parent, cls); el.type = 'button'; el.addEventListener('click', () => Promise.resolve(handler()).catch(e => status(e.message))); return el }
-  const launch = button('语义补全', root, async () => { sheet.hidden = !sheet.hidden; if (!sheet.hidden) await loadSettings() }, 'awd-semantic-launch'); launch.hidden = true
-  const sheet = element('section', null, root, 'awd-semantic-sheet'); sheet.hidden = true; sheet.setAttribute('aria-label', '语义补全'); sheet.setAttribute('role', 'dialog')
-  const head = element('div', null, sheet, 'awd-semantic-head'); element('strong', '有据续写', head); button('关闭', head, () => { sheet.hidden = true; invalidate(true); focus?.() })
+  const sheet = element('section', null, root, 'awd-semantic-sheet'); sheet.hidden = true; sheet.setAttribute('aria-label', '有据续写'); sheet.setAttribute('role', 'dialog')
+  const head = element('div', null, sheet, 'awd-semantic-head'); element('strong', '有据续写', head); button('关闭', head, () => closePanel(true))
   const controls = element('div', null, sheet, 'awd-semantic-section')
   element('label', '文书类型', controls, 'awd-semantic-label')
   const profile = element('select', null, controls); profile.setAttribute('aria-label', '文书类型')
@@ -45,6 +44,13 @@ export function attachSemanticWritingPanel({ canvas, input, transport, focus }) 
   const cancelButton = button('取消生成', sheet, () => { invalidate(true); status('已取消生成。') }); cancelButton.hidden = true
   const output = element('div', null, sheet)
   function status(text) { statusEl.textContent = text || '' }
+  // 面板的唯一入口在宿主的自建工具栏（dev-board#748）：客体只按指令开合，并把
+  // 「这份文档有没有这项能力」与「面板此刻开着没有」回报给宿主同步按下态。
+  // 关着时根节点整个 display:none——画布上不留一个像素，也截不到点击。
+  function report() { try { transport.send({ __lo: 'lo-relay', type: 'semantic-writing-state', available, open: sheetOpen }) } catch (e) { /* 通道没起来 */ } }
+  function applyOpen() { sheetOpen = sheetOpen && available; sheet.hidden = !sheetOpen; root.hidden = !sheetOpen }
+  function closePanel(refocus) { if (!sheetOpen) return; sheetOpen = false; applyOpen(); invalidate(true); report(); if (refocus) focus?.() }
+  function openPanel() { if (!available || sheetOpen) return; sheetOpen = true; applyOpen(); report(); loadSettings().catch(e => status(e.message)) }
   function rpc(action, data = {}) {
     if (disposed || !session) return Promise.reject(new Error('文档已切换，请重新打开面板。'))
     const id = `semantic-${++requestId}`, expected = session
@@ -135,13 +141,18 @@ export function attachSemanticWritingPanel({ canvas, input, transport, focus }) 
     if (disposed) return
     if (msg?.type === 'writing-config') {
       const config = msg.config || {}
-      if ('session' in config && config.session !== session) { invalidate(); selected.clear(); files.replaceChildren(); stance.value = ''; cutoff.value = ''; profile.value = 'auto'; sheet.hidden = true; session = config.session || ''; for (const item of pending.values()) { win.clearTimeout(item.timeout); item.reject(new Error('文档已切换。')) } pending.clear() }
+      if ('session' in config && config.session !== session) { invalidate(); selected.clear(); files.replaceChildren(); stance.value = ''; cutoff.value = ''; profile.value = 'auto'; sheetOpen = false; session = config.session || ''; for (const item of pending.values()) { win.clearTimeout(item.timeout); item.reject(new Error('文档已切换。')) } pending.clear() }
       if ('writable' in config) writable = !!config.writable
-      launch.hidden = !session || !writable
-      if (!session || !writable) sheet.hidden = true
+      const wasOpen = sheetOpen
+      available = !!session && !!writable
+      applyOpen()
+      if (wasOpen && !sheetOpen) invalidate(true)
+      report()
       if (config.semantic?.state === 'STALE') invalidate()
       return
     }
+    // 宿主工具栏的开合指令（dev-board#748）。
+    if (msg?.type === 'semantic-writing-panel') { if (msg.open) openPanel(); else closePanel(false); return }
     if (msg?.type !== 'writing-response' || msg.session !== session) return
     const item = pending.get(msg.id); if (!item) return
     pending.delete(msg.id); win.clearTimeout(item.timeout)
@@ -149,7 +160,7 @@ export function attachSemanticWritingPanel({ canvas, input, transport, focus }) 
   })
   const beginComposition = () => { composing = true; if (active) invalidate(true) }, endComposition = () => { composing = false }
   doc.addEventListener('compositionstart', beginComposition, true); doc.addEventListener('compositionend', endComposition, true)
-  sheet.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') { sheet.hidden = true; invalidate(true); focus?.() } })
+  sheet.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') closePanel(true) })
   profile.addEventListener('change', () => invalidate(true)); stance.addEventListener('input', () => invalidate(true)); cutoff.addEventListener('change', () => invalidate(true))
   return {
     isComposing() { return composing },

@@ -62,8 +62,11 @@
       :review-open="reviewOpen"
       :inline-review-on="inlineReviewEnabled"
       :inline-review-available="!!inlineReviewState"
+      :semantic-writing-on="semanticWritingOpen"
+      :semantic-writing-available="semanticWritingAvailable"
       @toggle-review="reviewOpen = !reviewOpen"
       @toggle-inline-review="toggleInlineReview"
+      @toggle-semantic-writing="toggleSemanticWriting"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
@@ -259,6 +262,11 @@ export default {
       // 即时审校（dev-board#723/#724）：宿主这边只存一份 host publish 出来的快照，
       // 下传给审阅面板的「审校」标签。null = 这份文档没有审校（非 Writer/没项目/没就绪）。
       inlineReviewState: null,
+      // 有据续写（dev-board#748）：面板长在客体页里，宿主只持有它上报的两个位——
+      // 这份文档有没有这项能力（非 Writer / 只读 / 未就绪时为假）、面板此刻开着没有。
+      // 不在本地乐观翻：客体里的「关闭」与 Esc 也走同一条回报，两边才不会漂。
+      semanticWritingAvailable: false,
+      semanticWritingOpen: false,
       // 当前登录用户名。审阅面板的「我」这一桶按它归类作者（dev-board#377），
       // 与下面 load_document 传给引擎的 authorName 同源（currentAuthorName），
       // 两处必须是同一个字符串——否则用户自己的修订会被归成「其他人」。
@@ -627,6 +635,16 @@ export default {
       this._inlineReviewHost.setEnabled(!this.inlineReviewEnabled)
       this.$emit('menu-state')
     },
+    /**
+     * 工具栏的「有据续写」开关（dev-board#748）。面板本体在客体页里（要跟着光标
+     * 与选区走），宿主只把意图送过去；按下态等客体的 semantic-writing-state 回报。
+     */
+    toggleSemanticWriting() {
+      if (!this._transportSend) return
+      try {
+        this._transportSend({ __lo: 'lo-relay', type: 'semantic-writing-panel', open: !this.semanticWritingOpen })
+      } catch (e) { /* 通道没起来：客体就绪后会重新上报可用态 */ }
+    },
     /** 正文浮球 → 打开右栏审阅面板并落在「审校」页。 */
     openInlineReviewPanel() {
       this.reviewOpen = true
@@ -947,6 +965,10 @@ export default {
         if (!msg || msg.__lo !== 'lo-relay') return
         if (msg.type === 'inline-review-request') {
           if (this._inlineReviewHost) this._inlineReviewHost.handle(msg)
+        } else if (msg.type === 'semantic-writing-state') {
+          // 有据续写面板的可用/开合回报（dev-board#748）。工具栏按钮的显隐与按下态只认它。
+          this.semanticWritingAvailable = !!msg.available
+          this.semanticWritingOpen = !!msg.open
         } else if (msg.type === 'writing-request') {
           if (this._writingHost) this._writingHost.handle(msg)
         } else if (msg.type === 'open-url' && msg.url) {
@@ -1182,6 +1204,10 @@ export default {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       this.inlineReviewState = null
+      // 换文档/重载先把入口收回去：客体重建会重新上报，在那之前宁可没有按钮，
+      // 也不能端着上一份文档的可用态（可能根本不是 Writer）。
+      this.semanticWritingAvailable = false
+      this.semanticWritingOpen = false
       if (!this.ready || this._reloading || this.docLoadFailed || this.docKind !== 'writer' || !this.file?.id || !this.projectId || !this._transportSend) return
       this._writingHost = createWritingAssistanceHost({
         projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
