@@ -443,8 +443,8 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   只记第一次（后续轮次叠着工具结果，混在一起就看不出固定前缀体量了）；两者都只由
   **当前轮次**记账（`isCurrentRun` 闸），拿不到 usage 时 `promptTokensFirstRound` **整个字段不写**
   （写 0 会让「拿不到」与「真的很小」在账本里长得一模一样）。有了这两个数才分得清
-  「一轮很慢」与「跑了八轮」——此前账本里只有总时长。**官网仓 lib/telemetry-store.ts 的
-  EVENT_WHITELIST 尚未同步这两个字段**（跨仓，不在本次改动范围），不同步的话上报到官网会被整条丢弃。
+  「一轮很慢」与「跑了八轮」——此前账本里只有总时长。官网仓 lib/telemetry-store.ts 的
+  EVENT_WHITELIST 只按事件名过滤（ai.turn 已在内），attrs 原样落库，字段级不需跨仓同步（2026-09-20 核对）。
   配套还有两条 INFO 日志：`[Round] conv=… depth=… round=… tools=… messages=…`（每轮工具数与栈深）
   与 `Stream TTFT conv=… model=… kind=token|reasoning ms=…`（首字节耗时，零点是看门狗上弦那一刻，
   即工具准备与本地压缩都做完、马上要发请求；kind 区分正文与思考增量，混看会把「思考了 4 秒」
