@@ -1,201 +1,97 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cursorRectToPixels, nativeCursorRectToPixels } from './zetaOfficeImeOverlay.js'
+import { isFresh, visibleFindings } from '../utils/inlineReviewGrouping.js'
 
 const LABELS = {
-  zh: { title: '即时审校', disabled: '即时审校已关闭', enable: '开启即时检查', disable: '关闭即时检查', checking: '正在检查', stale: '正文已变化，等待重新检查', error: '检查暂不可用', empty: '此分类暂无问题', list: '查看全部问题', close: '关闭', collapse: '收起', expand: '展开', locate: '定位原文', apply: '采用建议', ignore: '忽略本条', refresh: '重新检查', deep: '深入审校（AI）', deepBusy: '深入审校中…', insight: '打开依据与在线核验', scope: '当前检查范围：正文段落；表格、页眉页脚等请使用完整核验。', truncated: '本次检查有截断，不能视为全文检查完成。', local: '即时规则检查', saved: '已采用建议，可撤销。', failed: '正文或版本已变化，请重新检查。', count: n => `${n} 条提示`, tabs: { all: '全部', supplement: '待补充', consistency: '一致性', format: '格式与号码', ai: 'AI 审校' } },
-  en: { title: 'Inline review', disabled: 'Inline review is off', enable: 'Enable live checks', disable: 'Disable live checks', checking: 'Checking…', stale: 'Text changed. Waiting for a fresh check.', error: 'Checks are unavailable', empty: 'No issues in this category', list: 'View all issues', close: 'Close', collapse: 'Collapse', expand: 'Expand', locate: 'Locate text', apply: 'Apply suggestion', ignore: 'Dismiss this issue', refresh: 'Check again', deep: 'Deep review (AI)', deepBusy: 'Deep review running…', insight: 'Open sources and online verification', scope: 'Scope: body paragraphs. Use full verification for tables, headers and footers.', truncated: 'This check was truncated; it does not cover the whole document.', local: 'Live rule checks', saved: 'Suggestion applied. Undo is available.', failed: 'The document or version changed. Check again.', count: n => `${n} suggestions`, tabs: { all: 'All', supplement: 'Missing info', consistency: 'Consistency', format: 'Format & IDs', ai: 'AI review' } },
+  zh: { title: '即时审校', icon: '审', checking: '正在检查', stale: '正文已变化，等待重新检查', error: '检查暂不可用', open: '打开审校清单', count: n => `${n} 条提示` },
+  en: { title: 'Inline review', icon: 'R', checking: 'Checking…', stale: 'Text changed. Waiting for a fresh check.', error: 'Checks are unavailable', open: 'Open the review list', count: n => `${n} suggestions` },
 }
 
-/** A transient guest DOM layer. Showing, inspecting and dismissing findings never edits the document. */
+/**
+ * 正文里的那一层：只有一颗浮球和光标旁的小标记（dev-board#723/#724）。
+ *
+ * WHY：380px 的浮窗压着正文、关不掉，律师读一段要先把它拖开。清单搬到宿主右栏的
+ * 审阅面板（第五个标签「审校」），这里只保留「有几条」和「点一下打开」。
+ * 显示、检查、忽略都不改文档；浮球位置与显隐是本机习惯，不落进 docx。
+ */
 export function attachInlineReview({ canvas, input, execute, transport, language = 'zh-CN' }) {
   const doc = canvas.ownerDocument, view = doc.defaultView
   const english = language.startsWith('en')
   const t = LABELS[english ? 'en' : 'zh']
-  const errors = english ? { REVIEW_INLINE_REVISIONS: 'Switch from inline tracked changes to margin or final view to review.', REVIEW_SNAPSHOT_FAILED: 'The current document could not be read. Try checking again.', REVIEW_FAILED: 'Review failed. Try checking again.', REVIEW_DEEP_INCOMPLETE: 'Deep review did not finish completely. Only completed checks are shown below; you can retry.' } : { REVIEW_INLINE_REVISIONS: '请切换到页边修订或最终视图后再审校。', REVIEW_SNAPSHOT_FAILED: '暂时无法读取当前文档，请重新检查。', REVIEW_FAILED: '本次审校未完成，请重新检查。', REVIEW_DEEP_INCOMPLETE: '深入审校未完整完成，以下仅为已完成的检查，可重试。' }
-  let state = { session: '', enabled: false, revision: null, status: 'disabled', findings: [] }
-  // 「未完整完成，可重试」不说原因，用户分不清该充值、换网络还是把文档分段（dev-board D4）。
-  // 码由后端 DocInsightService.DEEP_REASON_* 下发，未知码只显示基础那句，绝不把码本身露给用户。
-  const deepReasons = english ? {
-    DEEP_TIMEOUT: ' Cause: the model did not respond within the time limit.',
-    DEEP_BUDGET: ' Cause: the review ran out of time; the rest of the body was not checked.',
-    DEEP_UNPARSEABLE: ' Cause: the model reply could not be parsed; it may have been cut off.',
-    DEEP_UPSTREAM: ' Cause: the model service is temporarily failing.',
-    DEEP_NETWORK: ' Cause: this machine cannot reach the model service. Check the network or proxy.',
-    DEEP_RATE_LIMITED: ' Cause: the model service is rate limiting. Wait a minute and try again.',
-    DEEP_QUOTA: ' Cause: the account is out of credit. Top up or allocate credit first.',
-    DEEP_TOO_LONG: ' Cause: this passage exceeds the model context. Split it and review again.',
-    DEEP_MODEL_UNAVAILABLE: ' Cause: the auxiliary model is unavailable. Pick another one in settings.',
-    DEEP_REGION: ' Cause: the provider rejected this network region. Change the model or the network.',
-    DEEP_FAILED: ' Cause: the model call failed.',
-  } : {
-    DEEP_TIMEOUT: '原因：AI 模型没有在时限内返回。',
-    DEEP_BUDGET: '原因：本次审校时间用尽，正文后面的部分还没检查。',
-    DEEP_UNPARSEABLE: '原因：模型返回的内容无法解析，可能被截断。',
-    DEEP_UPSTREAM: '原因：模型服务暂时故障。',
-    DEEP_NETWORK: '原因：本机连不上模型服务，请检查网络或代理。',
-    DEEP_RATE_LIMITED: '原因：模型服务限流，请等一分钟再试。',
-    DEEP_QUOTA: '原因：账户额度不足，请先充值或分配额度。',
-    DEEP_TOO_LONG: '原因：这一段正文超出模型上下文，请分段后再审校。',
-    DEEP_MODEL_UNAVAILABLE: '原因：当前辅助模型不可用，请到设置页更换。',
-    DEEP_REGION: '原因：当前网络环境被服务商按地域拒绝，请更换模型或网络。',
-    DEEP_FAILED: '原因：模型调用失败。',
-  }
-  const retried = english ? ' It was already retried once automatically.' : '（已自动重试一次仍失败）'
+  let state = { session: '', enabled: false, hidden: false, revision: null, status: 'disabled', findings: [] }
   let generation = 0, sequence = 0, timer = 0, disposed = false, composing = false, inFlight = false, again = false
-  let anchor = null, click = null, context = null, panelMode = '', busy = false, activeTab = 'all'
-  let panelPosition = null, drag = null, storageKey = ''
-  const ignored = new Set()
+  let anchor = null, click = null, context = null
+  let ballPosition = null, drag = null, storageKey = ''
   const root = doc.createElement('div'); root.className = 'awd-inline-review'
   const style = doc.createElement('style')
-  style.textContent = `.awd-inline-review{position:fixed;inset:0;z-index:9998;pointer-events:none;font:13px/1.5 system-ui,sans-serif;color:#26332e}.awd-inline-review button{font:inherit;color:inherit;border:1px solid #ccd6ce;border-radius:6px;background:#fff;padding:5px 9px;cursor:pointer}.awd-inline-review button:focus-visible{outline:2px solid #527866;outline-offset:2px}.awd-inline-review button:disabled{opacity:.55;cursor:default}.awd-ir-status{pointer-events:auto;position:absolute;left:18px;bottom:64px;max-width:calc(100vw - 72px);display:flex;align-items:center;gap:8px;padding:7px 8px 7px 11px;background:#fff;border:1px solid #ccd6ce;border-radius:9px;box-shadow:0 2px 8px #0002;cursor:move;user-select:none}.awd-ir-status-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.awd-ir-chip{pointer-events:auto;position:absolute;box-shadow:0 2px 8px #0002;white-space:nowrap}.awd-ir-panel{pointer-events:auto;position:absolute;width:380px;max-width:calc(100vw - 24px);max-height:70vh;display:flex;flex-direction:column;padding:0;background:#fff;border:1px solid #ccd6ce;border-radius:9px;box-shadow:0 6px 24px #0002}.awd-ir-head,.awd-ir-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.awd-ir-head{justify-content:space-between;padding:10px 12px;cursor:move;user-select:none;border-bottom:1px solid #e1e7e2}.awd-ir-head-actions{display:flex;gap:6px}.awd-ir-body{overflow:auto;padding:0 12px 12px;overscroll-behavior:contain}.awd-ir-tabs{position:sticky;top:0;z-index:1;display:flex;flex-wrap:wrap;gap:5px;padding:9px 0 6px;background:#fff;border-bottom:1px solid #edf0ed}.awd-ir-tabs button{white-space:nowrap}.awd-ir-tabs button[aria-selected=true]{background:#e5eee8;border-color:#8ca798}.awd-ir-item{border-top:1px solid #e1e7e2;margin-top:10px;padding-top:9px}.awd-ir-copy{white-space:pre-wrap;word-break:break-word;margin:6px 0}.awd-ir-note{font-size:11px;color:#64736a;margin:7px 0}.theme-dark .awd-inline-review{color:#e1e8e3}.theme-dark .awd-inline-review button,.theme-dark .awd-ir-panel,.theme-dark .awd-ir-status,.theme-dark .awd-ir-tabs{background:#202622;border-color:#465148}.theme-dark .awd-ir-tabs button[aria-selected=true]{background:#37463c}.theme-dark .awd-ir-note{color:#b0bcb3}.awd-inline-review [hidden]{display:none!important}`
+  style.textContent = `.awd-inline-review{position:fixed;inset:0;z-index:9998;pointer-events:none;font:13px/1.5 system-ui,sans-serif;color:#26332e}.awd-inline-review button{font:inherit;color:inherit;border:1px solid #ccd6ce;border-radius:6px;background:#fff;padding:5px 9px;cursor:pointer}.awd-inline-review button:focus-visible{outline:2px solid #527866;outline-offset:2px}.awd-ir-ball{pointer-events:auto;position:absolute;left:18px;bottom:64px;display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:999px;box-shadow:0 2px 8px #0002;cursor:pointer;user-select:none}.awd-ir-ball.busy{opacity:.7}.awd-ir-ball-i{font-weight:600}.awd-ir-ball-n{min-width:17px;padding:0 5px;border-radius:999px;background:#527866;color:#fff;font-size:11px;text-align:center}.awd-ir-chip{pointer-events:auto;position:absolute;box-shadow:0 2px 8px #0002;white-space:nowrap}.theme-dark .awd-inline-review{color:#e1e8e3}.theme-dark .awd-inline-review button{background:#202622;border-color:#465148}.awd-inline-review [hidden]{display:none!important}`
   doc.head.appendChild(style); doc.body.appendChild(root)
   function button(label, action, parent) {
     const b = doc.createElement('button'); b.type = 'button'; b.textContent = label
     b.addEventListener('mousedown', e => e.preventDefault())
-    b.addEventListener('click', () => { Promise.resolve().then(action).catch(() => notice(t.failed)) })
+    b.addEventListener('click', () => { Promise.resolve().then(action).catch(() => {}) })
     parent.appendChild(b); return b
   }
-  const status = doc.createElement('div'); status.className = 'awd-ir-status'; status.hidden = true
-  const statusLabel = copy('', status, 'awd-ir-status-label')
-  const statusExpand = button(t.expand, openFromStatus, status); statusExpand.setAttribute('aria-label', t.expand)
-  root.appendChild(status)
-  const chip = button('', () => openPanel('current'), root); chip.className = 'awd-ir-chip'; chip.hidden = true
-  const panel = doc.createElement('section'); panel.className = 'awd-ir-panel'; panel.hidden = true; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', t.title); root.appendChild(panel)
-  function copy(text, parent = panel, className = 'awd-ir-copy') {
-    const el = doc.createElement('div'); el.className = className; el.textContent = text; parent.appendChild(el); return el
-  }
-  function findings() { return (state.findings || []).filter(f => !ignored.has(String(f.id))) }
-  function bucket(f) {
-    const kind = String(f?.kind || '').toUpperCase()
-    if (kind === 'LOGIC_REVIEW' || kind.startsWith('AI_')) return 'ai'
-    if (['PLACEHOLDER', 'BLANK', 'DOCUMENT_NOT_FOUND'].includes(kind)) return 'supplement'
-    if (['COUNT_MISMATCH', 'ARITHMETIC', 'DANGLING_REFERENCE'].includes(kind)) return 'consistency'
-    if (['SCRIPT_OUTLIER', 'NUMBERING', 'USCC_INVALID'].includes(kind)) return 'format'
-    return 'consistency'
-  }
-  function tabFindings(list, tab = activeTab) { return tab === 'all' ? list : list.filter(f => bucket(f) === tab) }
+  const ball = button('', openPanel, root); ball.className = 'awd-ir-ball'; ball.hidden = true
+  const ballIcon = doc.createElement('span'); ballIcon.className = 'awd-ir-ball-i'; ballIcon.textContent = t.icon
+  const ballCount = doc.createElement('span'); ballCount.className = 'awd-ir-ball-n'; ballCount.hidden = true
+  ball.replaceChildren(ballIcon, ballCount)
+  const chip = button('', openPanel, root); chip.className = 'awd-ir-chip'; chip.hidden = true
+  function findings() { return visibleFindings(state.findings, null) }
   function currentFindings() { return findings().filter(f => f.paragraphIndex === context?.paragraphIndex && (!f.expectedParagraph || f.expectedParagraph === context.text)) }
-  function hide() { chip.hidden = true; panel.hidden = true; panelMode = ''; renderStatus(); placeStatus() }
   function invalidate(markStale = true) {
     generation++; clearTimeout(timer); timer = 0; context = null; chip.hidden = true
     if (markStale) state = { ...state, status: state.enabled === false ? 'disabled' : 'stale' }
-    if (panelMode) openPanel(panelMode); else panel.hidden = true
-    renderStatus()
+    renderBall()
   }
   function request(action, data) {
     if (!state.session || disposed) return
-    if (action === 'deep' && state.deepStatus === 'checking') return
     transport.send({ __lo: 'lo-relay', type: 'inline-review-request', session: state.session, id: ++sequence, revision: state.revision, action, ...(data ? { data } : {}) })
-    if (action === 'deep') { state = { ...state, deepStatus: 'checking' }; renderStatus(); if (panelMode) openPanel(panelMode) }
   }
-  function renderStatus() {
-    status.hidden = !state.session || !panel.hidden
-    const label = state.enabled === false ? t.disabled : state.status === 'checking' ? t.checking : state.status === 'stale' ? t.stale : state.status === 'error' ? t.error : `${t.title} · ${t.count(findings().length)}`
-    statusLabel.textContent = label; status.title = label; placeStatus()
+  /** 浮球/行旁标记的唯一动作：让宿主打开右栏审阅面板的「审校」标签。 */
+  function openPanel() { if (!drag || !drag.moved) request('open-panel') }
+  function statusLabel() {
+    return state.status === 'checking' ? t.checking
+      : state.status === 'stale' ? t.stale
+        : state.status === 'error' ? t.error
+          : `${t.title} · ${t.count(findings().length)}`
   }
-  function clampPosition(pos, element = panel) {
-    const width = element.offsetWidth || (element === status ? 210 : 380)
-    const height = element.offsetHeight || (element === status ? 42 : 320)
+  function renderBall() {
+    // 关闭态在正文里不挂任何东西——「已关闭」的提示本身就是打扰（dev-board#723）。
+    const on = !!state.session && state.enabled !== false && state.hidden !== true
+    ball.hidden = !on
+    if (!on) return
+    const count = findings().length
+    ballCount.textContent = count ? String(count) : ''
+    ballCount.hidden = !count
+    ball.classList.toggle('busy', state.status === 'checking')
+    const label = `${statusLabel()}（${t.open}）`
+    ball.title = label; ball.setAttribute('aria-label', label)
+    placeBall()
+  }
+  function clampPosition(pos) {
+    const width = ball.offsetWidth || 64, height = ball.offsetHeight || 32
     return { x: Math.max(8, Math.min(pos.x, view.innerWidth - width - 8)), y: Math.max(8, Math.min(pos.y, view.innerHeight - height - 8)) }
   }
-  function savePosition() { try { if (storageKey && panelPosition) view.sessionStorage?.setItem(storageKey, JSON.stringify(panelPosition)) } catch {} }
-  function placeStatus() {
-    if (!panelPosition || status.hidden) return
-    panelPosition = clampPosition(panelPosition, status)
-    status.style.left = panelPosition.x + 'px'; status.style.top = panelPosition.y + 'px'; status.style.bottom = 'auto'
+  /** 靠边吸附：松手后回到最近的一侧，只保留纵向位置。 */
+  function snapPosition(pos) {
+    const width = ball.offsetWidth || 64
+    const left = pos.x + width / 2 < view.innerWidth / 2
+    return clampPosition({ x: left ? 12 : view.innerWidth - width - 12, y: pos.y })
   }
-  function place() {
-    if (panelPosition) {
-      panelPosition = clampPosition(panelPosition); panel.style.left = panelPosition.x + 'px'; panel.style.top = panelPosition.y + 'px'; return
-    }
-    const x = chip.hidden ? 18 : parseFloat(chip.style.left) || 18
-    const y = chip.hidden ? view.innerHeight - panel.offsetHeight - 54 : (parseFloat(chip.style.top) || 18) + chip.offsetHeight + 5
-    panel.style.left = Math.max(8, Math.min(x, view.innerWidth - panel.offsetWidth - 12)) + 'px'
-    panel.style.top = Math.max(8, Math.min(y, view.innerHeight - panel.offsetHeight - 12)) + 'px'
-  }
-  function notice(text) { if (disposed) return; status.hidden = true; panel.hidden = false; panel.replaceChildren(); copy(text); button(t.close, hide, panel); place() }
-  function rangeParams(f) {
-    return { revision: state.revision, paragraphIndex: f.paragraphIndex, start: f.start, end: f.end, expectedParagraph: f.expectedParagraph, quote: f.quote }
-  }
-  async function actOnFinding(f, apply) {
-    if (busy || state.status !== 'ready' || (apply && !state.writable)) return
-    const gen = generation, session = state.session
-    busy = true
-    try {
-      const result = await execute(apply ? 'apply_review_edit' : 'goto_review_range', { ...rangeParams(f), ...(apply ? { replacement: f.replacement } : {}) })
-      if (disposed || session !== state.session || (!apply && gen !== generation)) return
-      if (!result?.success) { notice(t.failed); return }
-      if (apply) { invalidate(); notice(t.saved) }
-      else { hide(); schedule() }
-    } finally { busy = false }
-  }
-  function openFromStatus() {
-    if (!panelPosition) {
-      const rect = status.getBoundingClientRect()
-      panelPosition = { x: rect.left || 18, y: rect.top || Math.max(8, view.innerHeight - 42 - 64) }
-    }
-    openPanel('all')
-  }
-  function openPanel(mode) {
-    if (disposed || !state.session) return
-    panelMode = mode; panel.hidden = false; status.hidden = true; panel.replaceChildren()
-    const head = copy('', panel, 'awd-ir-head'); const heading = copy(t.title, head); heading.className = 'awd-ir-title'
-    const headActions = copy('', head, 'awd-ir-head-actions')
-    const collapse = button(t.collapse, hide, headActions)
-    collapse.setAttribute('aria-expanded', 'true')
-    button(t.close, hide, headActions)
-    const body = copy('', panel, 'awd-ir-body')
-    copy(note(), body, 'awd-ir-note')
-    if (typeof state.summary === 'string' && state.summary) copy(state.summary, body)
-    else if (Number.isFinite(state.summary?.findingCount)) copy(t.count(state.summary.findingCount), body, 'awd-ir-note')
-    const fresh = context?.revision === state.revision && state.status === 'ready' && state.enabled !== false
-    const base = fresh ? (mode === 'current' ? currentFindings() : findings()) : []
-    if (mode === 'all' && fresh) {
-      const tabs = copy('', body, 'awd-ir-tabs'); tabs.setAttribute('role', 'tablist')
-      for (const key of ['all', 'supplement', 'consistency', 'format', 'ai']) {
-        const count = tabFindings(base, key).length
-        const tab = button(`${t.tabs[key]} ${count}`, () => { activeTab = key; openPanel(mode) }, tabs)
-        tab.setAttribute('role', 'tab')
-        tab.setAttribute('aria-selected', String(activeTab === key))
-      }
-    }
-    const list = mode === 'all' ? tabFindings(base) : base
-    if (!list.length && fresh && state.deepStatus !== 'error' && !state.truncated) copy(t.empty, body)
-    for (const f of list) {
-      const item = copy('', body, 'awd-ir-item')
-      const title = doc.createElement('strong'); title.textContent = f.title || f.kind; item.appendChild(title)
-      if (f.quote) copy(f.quote, item, 'awd-ir-note')
-      copy(f.message || '', item)
-      for (const related of f.related || []) if (related.quote) {
-        copy(related.quote, item, 'awd-ir-note')
-        if (typeof related.expectedParagraph === 'string') button(t.locate, () => actOnFinding(related, false), item)
-      }
-      const actions = copy('', item, 'awd-ir-actions')
-      if (typeof f.expectedParagraph === 'string' && Number.isInteger(f.start) && Number.isInteger(f.end)) {
-        button(t.locate, () => actOnFinding(f, false), actions)
-        if (state.writable && typeof f.replacement === 'string') button(t.apply, () => actOnFinding(f, true), actions)
-      }
-      button(t.ignore, () => { ignored.add(String(f.id)); openPanel(mode); renderStatus(); renderChip() }, actions)
-    }
-    if (mode === 'current') button(t.list, () => openPanel('all'), body)
-    copy(t.scope, body, 'awd-ir-note'); if (state.truncated) copy(t.truncated, body, 'awd-ir-note')
-    const actions = copy('', body, 'awd-ir-actions')
-    button(t.refresh, () => request('refresh'), actions).disabled = state.status === 'checking' || !state.enabled
-    button(state.deepStatus === 'checking' ? t.deepBusy : t.deep, () => request('deep'), actions).disabled = state.deepStatus === 'checking' || !state.enabled || !state.writable
-    button(t.insight, () => request('open-insight'), actions)
-    button(state.enabled ? t.disable : t.enable, () => request('preferences', { enabled: !state.enabled }), body)
-    place()
-  }
-  function note() {
-    const base = errors[state.message] || state.message
-      || (state.status === 'error' ? t.error : state.status === 'stale' ? t.stale : state.status === 'checking' ? t.checking : t.local)
-    if (state.message !== 'REVIEW_DEEP_INCOMPLETE') return base
-    return base + (deepReasons[state.deepReason] || '') + (state.deepRetried ? retried : '')
+  // 位置用 localStorage：客体页每开一份文档就是一个新 webview（sessionStorage 每次重来），
+  // 而浮球摆在哪是跨文档的本机习惯，与 awd_sidebar_collapsed 同一口径。
+  function savePosition() { try { if (storageKey && ballPosition) view.localStorage?.setItem(storageKey, JSON.stringify(ballPosition)) } catch {} }
+  function placeBall() {
+    if (!ballPosition || ball.hidden) return
+    ballPosition = clampPosition(ballPosition)
+    ball.style.left = ballPosition.x + 'px'; ball.style.top = ballPosition.y + 'px'; ball.style.bottom = 'auto'
   }
   function renderChip() {
     chip.hidden = true
-    if ((!anchor && !context?.cursorRectRaw?.nativeCaret) || !context?.available || context.hasSelection || context.revision !== state.revision || !state.enabled || state.status !== 'ready' || composing || !currentFindings().length) return
+    if (state.hidden === true) return
+    if ((!anchor && !context?.cursorRectRaw?.nativeCaret) || !context?.available || context.hasSelection || context.revision !== state.revision || !isFresh(state) || composing || !currentFindings().length) return
     if (!doc.querySelector('.awd-wa-panel')?.hidden && doc.querySelector('.awd-wa-panel')) return
     const rect = nativeCursorRectToPixels(context.cursorRectRaw, canvas.getBoundingClientRect()) || cursorRectToPixels(context.cursorRectRaw, anchor)
     if (!rect || rect.top < 0 || rect.top > view.innerHeight - 35 || rect.left < 0 || rect.left > view.innerWidth) return
@@ -219,7 +115,6 @@ export function attachInlineReview({ canvas, input, execute, transport, language
       if (result?.revision !== state.revision) return
       context = result
       renderChip()
-      if (panelMode) openPanel(panelMode)
     } catch { /* A read failure never interrupts typing. */ }
     finally { inFlight = false; if (again) { again = false; schedule() } }
   }
@@ -227,16 +122,14 @@ export function attachInlineReview({ canvas, input, execute, transport, language
   const unsubscribe = transport.subscribe(msg => {
     if (disposed || msg?.__lo !== 'lo-relay' || msg.type !== 'inline-review-state' || !msg.session) return
     const sameRevision = msg.session === state.session && msg.revision != null && msg.revision === state.revision
-    const openMode = msg.session === state.session ? panelMode : ''
     const savedContext = sameRevision ? context : null
     if (msg.session !== state.session) {
-      ignored.clear(); anchor = null; click = null; panelPosition = null; activeTab = 'all'
+      anchor = null; click = null; ballPosition = null
       storageKey = msg.layoutKey || `awd_inline_review_panel_${msg.session}`
-      try { const saved = JSON.parse(view.sessionStorage?.getItem(storageKey) || 'null'); if (Number.isFinite(saved?.x) && Number.isFinite(saved?.y)) panelPosition = saved } catch {}
+      try { const saved = JSON.parse(view.localStorage?.getItem(storageKey) || 'null'); if (Number.isFinite(saved?.x) && Number.isFinite(saved?.y)) ballPosition = saved } catch {}
     }
-    invalidate(false); state = { ...msg, findings: Array.isArray(msg.findings) ? msg.findings.slice(0, 200) : [] }; renderStatus()
+    invalidate(false); state = { ...msg, findings: Array.isArray(msg.findings) ? msg.findings.slice(0, 200) : [] }; renderBall()
     context = savedContext
-    if (openMode) openPanel(openMode)
     schedule()
   })
   const moved = () => { invalidate(false); schedule() }
@@ -251,31 +144,38 @@ export function attachInlineReview({ canvas, input, execute, transport, language
     const next = viewport()
     if (next === lastViewport) return
     lastViewport = next; onScroll()
-    if (!panel.hidden) place()
-    else placeStatus()
+    if (ballPosition) { ballPosition = snapPosition(ballPosition); placeBall() }
   }
   const onCompositionStart = () => { composing = true; click = null; invalidate(false) }
   const onCompositionEnd = () => { composing = false; schedule() }
   const onBlur = e => { if (!root.contains(e.relatedTarget)) invalidate(false) }
-  const onPanelKey = e => { if (e.key === 'Escape') { e.preventDefault(); hide() } }
   const onDragDown = e => {
-    const target = e.currentTarget
-    if (e.button !== 0 || e.target.closest('button') || (target === panel && !e.target.closest('.awd-ir-head'))) return
-    const rect = target.getBoundingClientRect(); drag = { target, dx: e.clientX - rect.left, dy: e.clientY - rect.top }
+    if (e.button !== 0) return
+    const rect = ball.getBoundingClientRect()
+    drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, x0: e.clientX, y0: e.clientY, moved: false }
     e.preventDefault()
   }
-  const onPanelMove = e => {
+  const onDragMove = e => {
     if (!drag) return
-    panelPosition = clampPosition({ x: e.clientX - drag.dx, y: e.clientY - drag.dy }, drag.target)
-    if (drag.target === status) placeStatus(); else place()
+    // 4px 阈值：手抖不算拖动，否则每次点浮球都变成「拖了一下」而打不开面板。
+    if (!drag.moved && Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) <= 4) return
+    drag.moved = true
+    ballPosition = clampPosition({ x: e.clientX - drag.dx, y: e.clientY - drag.dy })
+    placeBall()
   }
-  const onPanelUp = () => { if (!drag) return; drag = null; savePosition() }
+  const onDragUp = () => {
+    if (!drag) return
+    if (drag.moved && ballPosition) { ballPosition = snapPosition(ballPosition); placeBall(); savePosition() }
+    const finished = drag
+    // click 紧接着 mouseup 派发，等它过去再清掉拖动标记。
+    view.setTimeout(() => { if (drag === finished) drag = null }, 0)
+  }
   input.addEventListener('keydown', onKey); input.addEventListener('compositionstart', onCompositionStart); input.addEventListener('compositionend', onCompositionEnd); input.addEventListener('blur', onBlur)
-  canvas.addEventListener('mouseup', onClick, true); canvas.addEventListener('wheel', onScroll, { passive: true }); view.addEventListener('resize', onResize); panel.addEventListener('keydown', onPanelKey); panel.addEventListener('mousedown', onDragDown); status.addEventListener('mousedown', onDragDown); view.addEventListener('mousemove', onPanelMove); view.addEventListener('mouseup', onPanelUp)
+  canvas.addEventListener('mouseup', onClick, true); canvas.addEventListener('wheel', onScroll, { passive: true }); view.addEventListener('resize', onResize)
+  ball.addEventListener('mousedown', onDragDown); view.addEventListener('mousemove', onDragMove); view.addEventListener('mouseup', onDragUp)
   const completionPanel = doc.querySelector('.awd-wa-panel')
   const observer = completionPanel ? new view.MutationObserver(() => {
-    // The caret-adjacent chip competes with completion choices. A review panel
-    // the user explicitly opened and positioned is independent and stays put.
+    // The caret-adjacent chip competes with completion choices.
     if (!completionPanel.hidden) chip.hidden = true
     else renderChip()
   }) : null
@@ -285,7 +185,8 @@ export function attachInlineReview({ canvas, input, execute, transport, language
     destroy() {
       disposed = true; invalidate(); unsubscribe?.(); observer?.disconnect()
       input.removeEventListener('keydown', onKey); input.removeEventListener('compositionstart', onCompositionStart); input.removeEventListener('compositionend', onCompositionEnd); input.removeEventListener('blur', onBlur)
-      canvas.removeEventListener('mouseup', onClick, true); canvas.removeEventListener('wheel', onScroll); view.removeEventListener('resize', onResize); panel.removeEventListener('keydown', onPanelKey); panel.removeEventListener('mousedown', onDragDown); status.removeEventListener('mousedown', onDragDown); view.removeEventListener('mousemove', onPanelMove); view.removeEventListener('mouseup', onPanelUp)
+      canvas.removeEventListener('mouseup', onClick, true); canvas.removeEventListener('wheel', onScroll); view.removeEventListener('resize', onResize)
+      ball.removeEventListener('mousedown', onDragDown); view.removeEventListener('mousemove', onDragMove); view.removeEventListener('mouseup', onDragUp)
       root.remove(); style.remove()
     },
   }

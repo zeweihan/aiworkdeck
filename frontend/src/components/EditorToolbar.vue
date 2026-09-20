@@ -242,6 +242,12 @@
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
+      <!-- 即时审校开关（dev-board#723）。按下态 = 开着；关掉之后不发任何 worker
+           命令与 HTTP 请求，正文里也不留「已关闭」的提示。 -->
+      <view v-if="inlineReviewAvailable" class="etb-btn wide" :class="{ on: inlineReviewOn }"
+            :title="$t('editor.toolbar.inlineReview')" @tap.stop="$emit('toggle-inline-review')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.inlineReviewShort') }}</text>
+      </view>
       <view class="etb-stepper" :title="$t('editor.toolbar.zoom')">
         <text class="etb-step-b" @tap.stop="stepZoom(-10)">−</text>
         <text class="etb-step-v z" @tap.stop="resetZoom">{{ Math.round(state.view.zoom || 100) }}%</text>
@@ -367,15 +373,16 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'toggle-insight', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-inline-review', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
     // 宿主在「选区/光标动了」「文档改了」时自增，驱动激活态刷新。
     refreshKey: { type: Number, default: 0 },
     reviewOpen: { type: Boolean, default: false },
-    // 「依据」窗格（dev-board#182）此刻开着没有——按钮的按下态跟着它。
-    insightOpen: { type: Boolean, default: false },
+    // 即时审校此刻开着没有 / 这份文档有没有即时审校（非 Writer、没有项目时整个按钮不出现）。
+    inlineReviewOn: { type: Boolean, default: true },
+    inlineReviewAvailable: { type: Boolean, default: false },
   },
   data() {
     return {

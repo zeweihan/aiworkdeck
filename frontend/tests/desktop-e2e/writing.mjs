@@ -262,48 +262,43 @@ try {
   await guest.evaluate(() => document.activeElement?.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' })))
   await guest.keyboard.sendCharacter(draft)
   await guest.evaluate((text) => document.activeElement?.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text })), draft)
-  await guest.waitForFunction(() => /[1-9]\d* 条提示/.test(document.querySelector('.awd-ir-status')?.textContent || ''), { timeout: 30000 }).catch(async error => {
-    console.error('INLINE STATE', await guest.evaluate(() => ({ status: document.querySelector('.awd-ir-status')?.outerHTML, panel: document.querySelector('.awd-ir-panel')?.textContent })))
+  // 正文里只剩一颗浮球（dev-board#723/#724）：清单搬到宿主右栏审阅面板的「审校」标签。
+  await guest.waitForFunction(() => {
+    const ball = document.querySelector('.awd-ir-ball')
+    return !!ball && !ball.hidden && /[1-9]/.test(ball.textContent || '')
+  }, { timeout: 30000 }).catch(async error => {
+    console.error('INLINE BALL', await guest.evaluate(() => document.querySelector('.awd-ir-ball')?.outerHTML))
     console.error('REVIEW REQUEST COUNT', reviewRequests.length, 'LAST', JSON.stringify(reviewRequests.at(-1)))
     await guest.screenshot({ path: path.join(os.tmpdir(), 'awd-547-desktop-inline-failure.png') })
     throw error
   })
-  await guest.click('.awd-ir-status button')
-  await guest.waitForFunction(() => document.querySelector('.awd-ir-panel')?.textContent.includes('存在待定内容'), { timeout: 10000 })
+  assert.equal(await guest.$$eval('.awd-ir-panel', nodes => nodes.length), 0, '正文里不许再有压字的审校浮窗')
   const clickLabel = async (surface, selector, label) => {
     const nodes = await surface.$$(selector)
     for (const node of nodes) {
-      if ((await node.evaluate(el => el.textContent)).startsWith(label)) { await node.click(); return }
+      if ((await node.evaluate(el => el.textContent)).trim().startsWith(label)) { await node.click(); return }
     }
     throw new Error(`No visible action: ${label}`)
   }
-  console.log('验收：正文补全、Tab、即时规则已通过；拖动与分类')
-  const panelBefore = await (await guest.$('.awd-ir-panel')).boundingBox()
-  const dragHead = await (await guest.$('.awd-ir-head')).boundingBox()
-  await guest.mouse.move(dragHead.x + 50, dragHead.y + 15)
-  await guest.mouse.down(); await guest.mouse.move(dragHead.x + 180, Math.max(30, dragHead.y - 90), { steps: 12 }); await guest.mouse.up()
-  const panelAfter = await (await guest.$('.awd-ir-panel')).boundingBox()
-  assert.ok(Math.abs(panelAfter.x - panelBefore.x) + Math.abs(panelAfter.y - panelBefore.y) > 50, 'review must move with a real title-bar drag')
-  const tabVisibility = await guest.$$eval('.awd-ir-tabs [role="tab"]', tabs => tabs.map(tab => {
-    const r = tab.getBoundingClientRect(), box = tab.parentElement.getBoundingClientRect()
-    return { label: tab.textContent, visible: r.width > 0 && r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1 }
-  }))
-  assert.ok(tabVisibility.length >= 4 && tabVisibility.every(tab => tab.visible), `All review tabs must be fully visible: ${JSON.stringify(tabVisibility)}`)
-  await guest.mouse.move(panelAfter.x + panelAfter.width / 2, panelAfter.y + panelAfter.height - 40)
-  await guest.mouse.wheel({ deltaY: 500 })
-  await guest.mouse.wheel({ deltaY: -1000 })
-  await guest.waitForFunction(() => [...document.querySelectorAll('.awd-ir-tabs [role="tab"]')].every(tab => {
-    const r = tab.getBoundingClientRect(), body = tab.closest('.awd-ir-body').getBoundingClientRect()
-    return r.top >= body.top - 1 && r.bottom <= body.bottom + 1
-  }), { timeout: 3000 })
-  await clickLabel(guest, '.awd-ir-tabs [role="tab"]', '待补充')
-  assert.ok(await guest.$eval('.awd-ir-panel', el => el.textContent.includes('存在待定内容')))
-  await clickLabel(guest, '.awd-ir-tabs [role="tab"]', 'AI 审校')
-  assert.equal(await guest.$$eval('.awd-ir-item', rows => rows.length), 0, 'AI category must not contain local placeholder findings')
+  console.log('验收：正文补全、Tab、即时规则已通过；浮球拖动与右栏清单')
+  const ballBefore = await (await guest.$('.awd-ir-ball')).boundingBox()
+  await guest.mouse.move(ballBefore.x + ballBefore.width / 2, ballBefore.y + ballBefore.height / 2)
+  await guest.mouse.down()
+  await guest.mouse.move(ballBefore.x + 200, Math.max(40, ballBefore.y - 140), { steps: 12 })
+  await guest.mouse.up()
+  const ballAfter = await (await guest.$('.awd-ir-ball')).boundingBox()
+  assert.ok(Math.abs(ballAfter.y - ballBefore.y) > 50, '浮球必须跟着真实拖动走')
+  await guest.click('.awd-ir-ball')
+  // 清单在宿主渲染层（webview 之外）：点浮球应当打开审阅面板并落在「审校」页
+  await page.waitForFunction(() => [...document.querySelectorAll('.irp-item')].some(el => el.textContent.includes('存在待定内容')), { timeout: 20000 })
+  await guest.screenshot({ path: path.join(isolation.root, 'review-ball.png') })
+  await clickLabel(page, '.irp-tab', '待补充')
+  assert.ok(await page.$$eval('.irp-item', rows => rows.some(el => el.textContent.includes('存在待定内容'))))
+  await clickLabel(page, '.irp-tab', 'AI 审校')
+  assert.equal(await page.$$eval('.irp-item', rows => rows.length), 0, 'AI category must not contain local placeholder findings')
   assert.equal(reviewRequests.some(body => body.deep), false, 'switching category must never run AI')
-  await clickLabel(guest, '.awd-ir-tabs [role="tab"]', '全部')
-  await guest.screenshot({ path: path.join(isolation.root, 'review-drag-tabs.png') })
-  await clickLabel(guest, '.awd-ir-head button', '收起')
+  await clickLabel(page, '.irp-tab', '全部')
+  await page.screenshot({ path: path.join(isolation.root, 'review-panel-tabs.png') })
 
   // Read/position through the real host executor, then activate only by Chromium mouse input.
   console.log('验收：拖动与分类已通过；真实Ctrl链接')
