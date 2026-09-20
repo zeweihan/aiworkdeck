@@ -70,8 +70,17 @@ test('滚轮横滚改成原生 addEventListener 挂在真实元素上，且会�
   assert.match(VUE, /mounted\(\)[\s\S]{0,1200}?rebindTabsWheel\(\)/, 'mounted 里没有挂')
   assert.match(VUE, /beforeUnmount\(\)[\s\S]{0,400}?unbindTabsWheel\(\)/, 'beforeUnmount 里没有摘')
   // 分屏开关会把右侧那条标签栏整个建/拆，回来要重挂（bind 是幂等的）
-  assert.match(VUE, /splitMode\(\)[^\n]*rebindTabsWheel\(\)/,
-    'splitMode 变化后没有重挂：右侧标签栏是新建出来的元素，老监听在旧元素上')
+  const splitWatch = VUE.match(/    splitMode\(\) \{([\s\S]*?)\n    activeToolKey/)
+  assert.ok(splitWatch, '缺少 splitMode watcher')
+  let tick, bindings = 0
+  new Function(splitWatch[1].replace(/\},\s*$/, '')).call({
+    splitMode: false, pushMenuState() {}, scheduleLibreSpare() {},
+    $nextTick(fn) { tick = fn }, rebindTabsWheel() { bindings++ },
+  })
+  assert.equal(bindings, 0, '必须等标签栏 DOM 更新后再挂滚轮')
+  assert.equal(typeof tick, 'function', 'splitMode watcher 必须安排 DOM 更新后的重挂')
+  tick()
+  assert.equal(bindings, 1, '右侧标签栏建/拆后必须重挂原生监听')
 })
 
 test('.awd-hairline-scroll 定义在全局样式里，静止透明、悬停才显形', () => {

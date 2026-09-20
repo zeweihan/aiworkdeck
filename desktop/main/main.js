@@ -439,6 +439,7 @@ function createMainWindow() {
       preload: path.join(__dirname, '../preload/preload.js'),
       additionalArguments: [
         '--checkba-api-base=http://127.0.0.1:' + backendPort,
+        '--checkba-system-memory=' + require('node:os').totalmem(),
         // ARM 版 Windows（Mac 虚拟机）转译运行时启动看门狗已放宽 8 倍（dev-board#340），
         // 渲染层的等待死线要跟着放大，否则前端仍按 90 秒判超时（dev-board#341）
         ...(require('./services/win-arch').isWinArmEmulated() ? ['--checkba-win-emulated=1'] : [])

@@ -45,9 +45,10 @@ function harness() {
     process: { platform: 'darwin', env: {} }, __dirname: path.join(__dirname, '../main'),
     screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1400, height: 900 } }) },
     require: name => {
-      // 建窗那段里现场 require 的模块只有这两个；来了别的就当场报死，
+      // 建窗那段里现场 require 的模块在这里明确列出；来了别的就当场报死，
       // 免得新依赖悄悄混进建窗路径还没人知道。
       const stubs = {
+        'node:os': { totalmem: () => 8 * 1024 ** 3 },
         './services/win-arch': { isWinArmEmulated: () => false },
         './reload-guard': { attachReloadGuard: () => true },
       }
@@ -123,4 +124,33 @@ test('closing the current window still permits Dock activation to reopen it', ()
   assert.equal(h.windows.length, 2)
   assert.equal(h.context.current(), h.windows[1])
   assert.equal(h.intervals.length, 1)
+})
+
+function preloadBridge(argv) {
+  let bridge
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../preload/preload.js'), 'utf8'), {
+    process: { argv, platform: 'win32' },
+    require: name => {
+      assert.equal(name, 'electron')
+      return {
+        contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value } },
+        ipcRenderer: {},
+      }
+    },
+  })
+  return bridge
+}
+
+test('physical memory reaches the sandboxed preload through the real window arguments', () => {
+  const h = harness()
+  h.context.finishStartup()
+  const bridge = preloadBridge(h.windows[0].options.webPreferences.additionalArguments)
+  assert.equal(bridge.systemMemory.totalBytes, 8 * 1024 ** 3)
+})
+
+test('missing or malformed physical memory remains unknown, never zero', () => {
+  for (const value of [null, '', '0', '-1', 'NaN', 'Infinity', '1.5', '9007199254740992', '8192oops']) {
+    const bridge = preloadBridge(value === null ? [] : ['--checkba-system-memory=' + value])
+    assert.equal(bridge.systemMemory.totalBytes, null, String(value))
+  }
 })

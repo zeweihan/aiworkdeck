@@ -10,7 +10,7 @@
 // 抽取套路同 fileOpenTabs.js 的既有测试（pending-local-file-silent-fail.test.mjs）：
 // librePool.js 带 @/ 别名 import（isDesktopHost，仅 initLibreSpare 用到，本文件不
 // exercise 备胎逻辑），plain node --test 解不了别名，剥掉 import 行后用 Function
-// 求值，isDesktopHost 用形参喂个不会被调用的桩。
+// 求值，宿主桩用 16GiB 验证原体积策略；低内存策略另有专门的行为回归。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -22,8 +22,8 @@ function loadMethods() {
   const body = SRC
     .replace(/^\s*import[\s\S]*?from\s*'[^']*'\s*$/gm, '')
     .replace(/export const librePoolMethods = \{/, 'return {')
-  const factory = new Function('isDesktopHost', body)
-  return factory(() => true)
+  const factory = new Function('isDesktopHost', 'host', body)
+  return factory(() => true, { systemMemory: { totalBytes: 16 * 1024 ** 3 } })
 }
 
 const MB = 1024 * 1024

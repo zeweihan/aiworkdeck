@@ -49,8 +49,34 @@ cd desktop && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish n
 
 ## Notes
 
+### 文档引擎内存复测（dev-board#721）
+
+8 GiB 及以下设备保留第一套引擎预热，但有文档实例后不再补一套空白引擎。
+最近两份文档按原保存保护规则保活，分屏中的活动文档和保存失败的文档不强制卸载。
+旧壳未提供物理内存时使用同一保守策略；大内存设备沿用现有预热策略。
+
+隔离实验使用合成文档，不读用户项目，也不启动后端或上传报告。先准备本树
+`frontend/dist/zetaoffice`（含 LOWA 引擎和字体），再从 `desktop/` 运行：
+
+```bash
+npx electron scripts/measure-editor-memory.js
+```
+
+也可用环境变量 `AWD_EDITOR_DIR` 指向安装版的 `resources/frontend/dist/zetaoffice`；
+`AWD_MEMORY_OUTPUT` 指定 JSON 报告路径（默认系统临时目录）。Windows PowerShell 示例：
+
+```powershell
+$env:AWD_EDITOR_DIR = 'C:\\path\\to\\AI WorkDeck\\resources\\frontend\\dist\\zetaoffice'
+$env:AWD_MEMORY_OUTPUT = "$env:TEMP\\awd-editor-memory.json"
+npx electron scripts/measure-editor-memory.js
+```
+
+实验依次记录一套引擎、两套引擎、销毁备用引擎和全部关闭后的进程工作集；随后验证
+剩余引擎的插入、DOCX 导出和重开内容。它衡量引擎固定成本，不代表整套应用占用，
+也不代替实际 UI 的预热/保活测试。工作集加总含共享页，macOS 压缩内存会影响读数，
+不可直接换算成 Windows 任务管理器百分比。Windows 报告另含 Electron 提供的 privateBytes。
+
 - 开发模式下，Electron 会加载 Vite Dev Server（保留你的前端热更新体验）。
 - 生产模式下，会加载 `frontend` 的构建产物。
 - 单元测试：`npm test`（node:test，覆盖 ServiceManager）。
-
 
