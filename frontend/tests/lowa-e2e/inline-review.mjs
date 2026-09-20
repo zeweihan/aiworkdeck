@@ -69,7 +69,7 @@ try {
   await reset(); p = await params()
   await page.evaluate(() => { window.__reviewRequests = []; window.__reviewClicks=[]; document.getElementById('qtcanvas').addEventListener('mouseup',e=>window.__reviewClicks.push([e.clientX,e.clientY]),true); window.addEventListener('message', e => { if (e.data?.type === 'inline-review-request') window.__reviewRequests.push(e.data); if(e.data?.type === 'inline-review-state') window.__lastReviewState=e.data }) })
   // The real host checks after its 1.2s debounce, after the guest's 500ms modified relay.
-  const state = async (patch = {}) => { await new Promise(resolve => setTimeout(resolve, 600)); p = { ...p, revision: (await snapshot()).revision }; return page.evaluate(async (p, patch) => { window.postMessage({ __lo: 'lo-relay', type: 'inline-review-state', session: 'review-test', enabled: true, writable: true, revision: p.revision, status: 'ready', deepStatus: 'idle', findings: [{ id: 'term', kind: 'TEST_FIXTURE', title: '付款期限待核对', message: '测试提示：请核对两处约定。', severity: 'warning', ...p }], ...patch }, location.origin); await new Promise(resolve => setTimeout(resolve, 0)) }, p, patch) }
+  const state = async (patch = {}) => { await new Promise(resolve => setTimeout(resolve, 600)); p = { ...p, revision: (await snapshot()).revision }; return page.evaluate(async (p, patch) => { window.postMessage({ __lo: 'lo-relay', type: 'inline-review-state', session: 'review-test', ai: true, writable: true, revision: p.revision, status: 'ready', deepStatus: 'idle', findings: [{ id: 'term', kind: 'TEST_FIXTURE', title: '付款期限待核对', message: '测试提示：请核对两处约定。', severity: 'warning', ...p }], ...patch }, location.origin); await new Promise(resolve => setTimeout(resolve, 0)) }, p, patch) }
   await state()
   await clickCaret()
   try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 5000 }) } catch (e) { console.log('INITIAL CHIP', p, await exec('get_review_context'), await ballText()); await page.screenshot({ path: '/tmp/awd-547-inline-failure.png' }); throw e }
@@ -80,7 +80,7 @@ try {
   await page.waitForFunction(() => window.__reviewRequests.some(r => r.action === 'open-panel'))
   assert.equal(await text(), body, 'showing review does not change the document')
   assert.equal(await page.evaluate(() => window.__reviewRequests.filter(r => r.action !== 'open-panel').length), 0, 'no AI or external request without a click')
-  await page.click('.awd-ir-ball')
+  await page.click('.awd-ir-open')
   await page.waitForFunction(() => window.__reviewRequests.filter(r => r.action === 'open-panel').length === 2)
   await page.screenshot({ path: '/tmp/awd-547-inline-review.png' })
   // 浮球拖动后靠边吸附，位置落 localStorage（客体页每开一份文档都是新 webview，
@@ -91,9 +91,20 @@ try {
   const movedBox = await (await page.$('.awd-ir-ball')).boundingBox()
   assert.ok(Math.abs(movedBox.y - ballBox.y) > 40, 'the ball follows a real drag')
   assert.ok(await page.evaluate(() => Object.keys(localStorage).some(k => k.startsWith('awd_inline_review_'))), 'ball position persists')
-  // 关闭态：正文里一个提示都不留
-  await state({ enabled: false, status: 'disabled' })
-  assert.equal(await page.$eval('.awd-ir-ball', e => e.hidden), true, 'disabled keeps the body text clean')
+  // dev-board#749：AI 关掉之后浮球**不消失**（开关就在它身上，藏了就没地方再打开），
+  // 只是弱化、并且不再自动调模型；规则检查照跑，所以计数还在。
+  await state({ ai: false })
+  assert.equal(await page.$eval('.awd-ir-ball', e => e.hidden), false, 'the ball survives turning AI off')
+  assert.equal(await page.$eval('.awd-ir-ball', e => e.classList.contains('off')), true)
+  assert.equal((await ballText()).includes('1'), true, 'rule findings still counted with AI off')
+  // 浮球菜单：开/关、立即 AI 审校、隐藏浮球三项，且都只是给宿主发一条请求。
+  await page.click('.awd-ir-more')
+  assert.equal(await page.$eval('.awd-ir-menu', e => e.hidden), false)
+  await page.click('.awd-ir-menu button')
+  await page.waitForFunction(() => window.__reviewRequests.some(r => r.action === 'preferences' && r.data?.ai === true))
+  // 会话结束（宿主 destroy）才把正文里的东西全部摘掉。
+  await state({ status: 'disabled' })
+  assert.equal(await page.$eval('.awd-ir-ball', e => e.hidden), true, 'a finished session keeps the body text clean')
   assert.equal(await page.$eval('.awd-ir-chip', e => e.hidden), true)
   await state(); await clickCaret()
   try { await page.waitForSelector('.awd-ir-chip:not([hidden])', { timeout: 4000 }) } catch (e) {

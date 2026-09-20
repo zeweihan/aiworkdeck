@@ -7,8 +7,9 @@
         <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: allGroups.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
         <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
-        <!-- 「审校」（dev-board#723/#724）：即时审校的清单。inlineReview 为 null
-             （非 Writer / 没有项目 / 引擎没起来）时整个标签不出现。 -->
+        <!-- 「AI 审校」（dev-board#723/#724，改名见 #749）：规则检查 + AI 审校的
+             同一张清单。inlineReview 为 null（非 Writer / 没有项目 / 引擎没起来）
+             时整个标签不出现。 -->
         <text v-if="inlineReview" class="rp-tab" :class="{ on: tab === 'chk' }" @tap="tab = 'chk'">{{ $t('editor.review.checkTab', { count: inlineReviewCount }) }}</text>
         <!-- 「溯源」（dev-board#632）：这一段是谁、哪一版、什么时候改的。
              这份文件没有版本记录时 provenance 为 null，标签整个不出现。 -->

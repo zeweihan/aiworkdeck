@@ -52,12 +52,13 @@ test('忽略过的条目不进列表也不进计数', () => {
   assert.equal(visibleFindings(null, ['p']).length, 0)
 })
 
-test('新鲜度：只有「开着 + ready + 有 revision」才算对得上当前正文', () => {
-  assert.equal(isFresh({ enabled: true, status: 'ready', revision: 3 }), true)
-  assert.equal(isFresh({ enabled: true, status: 'checking', revision: 3 }), false)
-  assert.equal(isFresh({ enabled: true, status: 'stale', revision: null }), false)
-  assert.equal(isFresh({ enabled: true, status: 'ready', revision: null }), false, '没有版本号就无从围栏')
-  assert.equal(isFresh({ enabled: false, status: 'ready', revision: 3 }), false)
+test('新鲜度：只看规则那一层的 ready + revision，与 AI 开关无关', () => {
+  assert.equal(isFresh({ ai: true, status: 'ready', revision: 3 }), true)
+  assert.equal(isFresh({ ai: true, status: 'checking', revision: 3 }), false)
+  assert.equal(isFresh({ ai: true, status: 'stale', revision: null }), false)
+  assert.equal(isFresh({ ai: true, status: 'ready', revision: null }), false, '没有版本号就无从围栏')
+  assert.equal(isFresh({ ai: false, status: 'ready', revision: 3 }), true, '关掉 AI 不让上一轮结论作废')
+  assert.equal(isFresh({ status: 'disabled', revision: 3 }), false)
   assert.equal(isFresh(null), false)
 })
 

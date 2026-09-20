@@ -2,26 +2,26 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="irp">
-    <!-- 顶栏：这轮检查的状态 + 开关/重新检查/深入审校/浮球显隐。
-         「深入审校」是本面板上唯一会调模型的按钮，只在点它时才调。 -->
+    <!-- 顶栏：这轮检查的状态 + AI 开关/重新检查/立即 AI 审校/浮球显隐。
+         开关只管 AI 那一层：规则检查始终在跑，它不调模型也不花钱（dev-board#749）。 -->
     <view class="irp-top">
       <text class="irp-note">{{ noteText }}</text>
       <view class="irp-top-acts">
-        <text class="irp-act sw" :class="{ off: !enabled }" @tap="toggleEnabled">
-          {{ enabled ? $t('editor.inlineReview.disable') : $t('editor.inlineReview.enable') }}
+        <text class="irp-act sw" :class="{ off: !aiEnabled }" @tap="toggleAi">
+          {{ aiEnabled ? $t('editor.inlineReview.aiDisable') : $t('editor.inlineReview.aiEnable') }}
         </text>
-        <text v-if="enabled" class="irp-act" :class="{ disabled: checking }" @tap="refresh">{{ $t('editor.inlineReview.refresh') }}</text>
-        <text v-if="enabled && writable" class="irp-act deep" :class="{ disabled: deepBusy }" @tap="runDeep">
+        <text class="irp-act" :class="{ disabled: checking }" @tap="refresh">{{ $t('editor.inlineReview.refresh') }}</text>
+        <text v-if="writable" class="irp-act deep" :class="{ disabled: deepBusy }" @tap="runDeep">
           {{ deepBusy ? $t('editor.inlineReview.deepBusy') : $t('editor.inlineReview.deep') }}
         </text>
-        <text v-if="enabled" class="irp-act" @tap="toggleBall">
+        <text class="irp-act" @tap="toggleBall">
           {{ ballHidden ? $t('editor.inlineReview.showBall') : $t('editor.inlineReview.hideBall') }}
         </text>
       </view>
     </view>
 
     <!-- 分类：计数恒按未筛选的全量算（切分类不变），与审阅标签上的数字同源。 -->
-    <view v-if="enabled" class="irp-tabs">
+    <view class="irp-tabs">
       <text v-for="b in BUCKETS" :key="b" class="irp-tab" :class="{ on: bucket === b }" @tap="bucket = b">
         {{ $t('editor.inlineReview.bucket.' + b) }} {{ counts[b] }}
       </text>
@@ -30,7 +30,9 @@
     <view v-if="notice" class="irp-flash">{{ notice }}</view>
 
     <scroll-view class="irp-list" scroll-y>
-      <view v-if="!enabled" class="irp-empty">
+      <!-- AI 关着时「AI 审校」这一桶天然是空的，说清是为什么空——否则看起来像
+           AI 看过一遍、什么都没发现。 -->
+      <view v-if="!rows.length && !aiEnabled && bucket === 'ai'" class="irp-empty">
         <text class="irp-empty-t">{{ $t('editor.inlineReview.offTitle') }}</text>
         <text class="irp-empty-s">{{ $t('editor.inlineReview.offHint') }}</text>
       </view>
@@ -62,17 +64,21 @@
         </view>
       </view>
 
-      <text v-if="enabled" class="irp-scope">{{ $t('editor.inlineReview.scope') }}</text>
-      <text v-if="enabled && truncated" class="irp-scope warn">{{ $t('editor.inlineReview.truncated') }}</text>
+      <text class="irp-scope">{{ $t('editor.inlineReview.scope') }}</text>
+      <text v-if="truncated" class="irp-scope warn">{{ $t('editor.inlineReview.truncated') }}</text>
     </scroll-view>
   </view>
 </template>
 
 <script>
-// InlineReviewPanel.vue — 即时审校清单（审阅面板第五个标签「审校」，dev-board#723/#724）。
+// InlineReviewPanel.vue — AI 审校清单（审阅面板第五个标签「AI 审校」，
+// dev-board#723/#724，命名与开关归属见 #749）。
 //
 // WHY：清单原来是正文上一个 380px 的浮窗，压着字、关不掉，而律师读的是正文。
 // 搬进右栏之后正文只剩一颗浮球；这里是唯一的清单视图。
+//
+// 两层一张清单：规则检查（结构、编号、交叉引用、算式、证件号码）始终在跑，
+// 顶栏那个开关只管 AI 那一层——它要扣 Credits，所以必须能关。
 //
 // 数据来自宿主的 inlineReviewHost（worker 快照 + /insight/review 的规则结果），
 // 由 LibreOfficeEditor 经 ReviewPanel 以 state 下传；本组件不自己发请求、不自己
@@ -109,7 +115,7 @@ export default {
   },
   computed: {
     BUCKETS: () => REVIEW_BUCKETS,
-    enabled() { return !this.state || this.state.enabled !== false },
+    aiEnabled() { return !this.state || this.state.ai !== false },
     writable() { return !this.state || this.state.writable !== false },
     ballHidden() { return !!(this.state && this.state.hidden) },
     checking() { return !!(this.state && this.state.status === 'checking') },
@@ -118,7 +124,6 @@ export default {
     truncated() { return this.fresh ? !!(this.state && this.state.truncated) : this.lastTruncated },
     // 忽略过的条目不进任何计数：标签上的数字与列表必须是同一批。
     all() {
-      if (!this.enabled) return []
       const source = this.fresh ? (this.state && this.state.findings) : this.lastFresh
       return visibleFindings(source, this.ignored)
     },
@@ -128,12 +133,17 @@ export default {
       const s = (this.state && this.state.status) || 'stale'
       if (s === 'checking') return this.$t('editor.inlineReview.checking')
       if (s === 'error') return this.$t('editor.inlineReview.error')
-      if (s === 'disabled') return this.$t('editor.inlineReview.offTitle')
       return this.$t('editor.inlineReview.stale')
+    },
+    // 自动 AI 审校被本会话停掉的原因（额度、限流、模型不可用、地域）。手动按钮还在。
+    autoPausedText() {
+      const code = (this.state && this.state.autoBlocked) || ''
+      if (!DEEP_REASONS.has(code)) return ''
+      return this.$t('editor.inlineReview.autoPaused') + ' ' + this.$t('editor.inlineReview.deepReason.' + code)
     },
     noteText() {
       const msg = (this.state && this.state.message) || ''
-      if (!msg) return this.fresh ? this.$t('editor.inlineReview.local') : this.statusText
+      if (!msg) return this.autoPausedText || (this.fresh ? this.$t('editor.inlineReview.local') : this.statusText)
       const base = ERRORS.has(msg) ? this.$t('editor.inlineReview.err.' + msg) : this.$t('editor.inlineReview.error')
       if (msg !== 'REVIEW_DEEP_INCOMPLETE') return base
       const code = (this.state && this.state.deepReason) || ''
@@ -201,7 +211,7 @@ export default {
     },
     refresh() { if (!this.checking) this.$emit('action', { action: 'refresh' }) },
     runDeep() { if (!this.deepBusy) this.$emit('action', { action: 'deep' }) },
-    toggleEnabled() { this.$emit('action', { action: 'enabled', value: !this.enabled }) },
+    toggleAi() { this.$emit('action', { action: 'ai', value: !this.aiEnabled }) },
     toggleBall() { this.$emit('action', { action: 'hidden', value: !this.ballHidden }) },
   },
 }

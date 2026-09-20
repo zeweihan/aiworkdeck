@@ -60,12 +60,9 @@
       :executor="executor"
       :refresh-key="uiRefreshKey"
       :review-open="reviewOpen"
-      :inline-review-on="inlineReviewEnabled"
-      :inline-review-available="!!inlineReviewState"
       :semantic-writing-on="semanticWritingOpen"
       :semantic-writing-available="semanticWritingAvailable"
       @toggle-review="reviewOpen = !reviewOpen"
-      @toggle-inline-review="toggleInlineReview"
       @toggle-semantic-writing="toggleSemanticWriting"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
@@ -259,8 +256,8 @@ export default {
       reviewOpen: false,
       reviewLocation: {},
       reviewRefreshKey: 0,
-      // 即时审校（dev-board#723/#724）：宿主这边只存一份 host publish 出来的快照，
-      // 下传给审阅面板的「审校」标签。null = 这份文档没有审校（非 Writer/没项目/没就绪）。
+      // AI 审校（dev-board#723/#724/#749）：宿主这边只存一份 host publish 出来的快照，
+      // 下传给审阅面板的「AI 审校」标签。null = 这份文档没有审校（非 Writer/没项目/没就绪）。
       inlineReviewState: null,
       // 有据续写（dev-board#748）：面板长在客体页里，宿主只持有它上报的两个位——
       // 这份文档有没有这项能力（非 Writer / 只读 / 未就绪时为假）、面板此刻开着没有。
@@ -345,9 +342,10 @@ export default {
     reviewOverviewShown() {
       return this.reviewOpen && this.ready && this.showsReview
     },
-    // 工具栏「审校」按钮的按下态。host 还没建起来时按默认（开启但安静）显示。
-    inlineReviewEnabled() {
-      return !this.inlineReviewState || this.inlineReviewState.enabled !== false
+    // 「AI 审校」此刻开着没有（dev-board#749：开关在正文浮球与审阅面板上，
+    // 工具栏不再有按钮）。host 还没建起来时按默认（开启但安静）显示。
+    aiReviewEnabled() {
+      return !this.inlineReviewState || this.inlineReviewState.ai !== false
     },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
@@ -616,7 +614,7 @@ export default {
     menuState() {
       const tb = this.$refs.toolbar
       const rec = tb && tb.state && tb.state.view ? tb.state.view.recordChanges : false
-      return { trackChanges: !!rec, reviewOpen: !!this.reviewOpen, inlineReview: this.inlineReviewEnabled }
+      return { trackChanges: !!rec, reviewOpen: !!this.reviewOpen, aiReview: this.aiReviewEnabled }
     },
     menuToggleTrackChanges() {
       const tb = this.$refs.toolbar
@@ -625,14 +623,17 @@ export default {
     menuToggleReviewPanel() {
       this.reviewOpen = !this.reviewOpen
     },
-    menuToggleInlineReview() {
-      this.toggleInlineReview()
+    menuToggleAiReview() {
+      this.toggleAiReview()
     },
-    // ---- 即时审校（dev-board#723/#724）------------------------------------
-    /** 工具栏/菜单的「审校」开关。偏好是用户级的（跨标签共享），不按文件分。 */
-    toggleInlineReview() {
+    // ---- AI 审校（dev-board#723/#724，形态改造 #749）-----------------------
+    /**
+     * 「AI 审校」开关。偏好是用户级的（跨标签共享），不按文件分。
+     * 关掉之后规则检查照常跑——它不花钱，也不调模型；这个开关只管 AI 那一层。
+     */
+    toggleAiReview() {
       if (!this._inlineReviewHost) return
-      this._inlineReviewHost.setEnabled(!this.inlineReviewEnabled)
+      this._inlineReviewHost.setAiEnabled(!this.aiReviewEnabled)
       this.$emit('menu-state')
     },
     /**
@@ -645,18 +646,18 @@ export default {
         this._transportSend({ __lo: 'lo-relay', type: 'semantic-writing-panel', open: !this.semanticWritingOpen })
       } catch (e) { /* 通道没起来：客体就绪后会重新上报可用态 */ }
     },
-    /** 正文浮球 → 打开右栏审阅面板并落在「审校」页。 */
+    /** 正文浮球 → 打开右栏审阅面板并落在「AI 审校」页。 */
     openInlineReviewPanel() {
       this.reviewOpen = true
       this.$nextTick(() => { this.$refs.review?.openTab('chk') })
     },
-    /** 审校面板上的开关/重查/深入审校（清单里的定位与采用由面板直接走 executor）。 */
+    /** 面板上的开关/重查/立即 AI 审校（清单里的定位与采用由面板直接走 executor）。 */
     onInlineReviewAction(payload) {
       const host = this._inlineReviewHost
       if (!host || !payload) return
       if (payload.action === 'refresh') host.refresh()
       else if (payload.action === 'deep') host.runDeep()
-      else if (payload.action === 'enabled') { host.setEnabled(payload.value); this.$emit('menu-state') }
+      else if (payload.action === 'ai') { host.setAiEnabled(payload.value); this.$emit('menu-state') }
       else if (payload.action === 'hidden') host.setBallHidden(payload.value)
     },
     /**
@@ -1231,7 +1232,7 @@ export default {
         writable: this.canWrite, review: reviewDocInsight, active: this.active !== false,
         storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
         openInsight: () => this.onToggleInsight(),
-        // 正文浮球只是入口：清单在右栏审阅面板的「审校」标签里。
+        // 正文浮球只是入口：清单在右栏审阅面板的「AI 审校」标签里。
         openPanel: () => this.openInlineReviewPanel(),
         onState: (state) => { this.inlineReviewState = state },
       })

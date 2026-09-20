@@ -32,14 +32,15 @@ export const DOCUMENT_COMMANDS = [
     run: 'wb:toggleReviewPanel',
   },
   {
-    // 即时审校（dev-board#723）：默认开着但安静——结果只在审阅面板的「审校」页与
-    // 正文那颗浮球上出现。关掉之后一条 worker 命令、一次 HTTP 都不发。
-    id: 'doc.inlineReview',
-    label: { zh: '即时审校', en: 'Inline Review' },
+    // AI 审校（dev-board#723，#749 收窄到只管 AI 那一层）：默认开着但安静——结果
+    // 只在审阅面板的「AI 审校」页与正文那颗浮球上出现。关掉之后一次模型调用都不发；
+    // 不花钱的规则检查始终在跑，不受这个开关影响。
+    id: 'doc.aiReview',
+    label: { zh: 'AI 审校', en: 'AI Review' },
     menu: 'document', group: 1,
-    type: 'checkbox', checked: 'inlineReview',
+    type: 'checkbox', checked: 'aiReview',
     when: ['workbench', 'docTab'],
-    run: 'wb:toggleInlineReview',
+    run: 'wb:toggleAiReview',
   },
 
   {

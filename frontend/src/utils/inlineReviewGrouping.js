@@ -40,9 +40,12 @@ export function visibleFindings(findings, ignored) {
 /**
  * 这批结果还对得上当前正文吗。
  * 对不上就只许看、不许定位/采用——旧 revision 的段落偏移落在改过的正文上会改错地方。
+ *
+ * 只看规则那一层的状态：AI 开关（state.ai，dev-board#749）与新鲜度无关——
+ * 关掉 AI 之后规则检查照跑，上一轮 AI 给的条目也照样对得上正文。
  */
 export function isFresh(state) {
-  return !!state && state.enabled !== false && state.status === 'ready' && state.revision != null
+  return !!state && state.status === 'ready' && state.revision != null
 }
 
 export function isLocatable(finding) {

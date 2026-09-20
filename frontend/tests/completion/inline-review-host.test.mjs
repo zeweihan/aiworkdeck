@@ -17,6 +17,7 @@ function fixture(t, opts = {}) {
         : { success: true, revision, paragraphs: [{ index: 0, text: text.body }] },
     review: async (pid, body) => { calls.push({ pid, body }); return { findings: [{ kind: 'BLANK', paragraphIndex: 0, quote: '【待填写】', title: '尚有待填写内容' }] } },
   }
+  const clock = { at: 1_000_000 }
   const host = createInlineReviewHost({ projectId: 7, fileId: 8, userId: Math.random(),
     execute: (...args) => { execCalls.push(args[0]); return dependencies.execute(...args) },
     review: (...args) => dependencies.review(...args),
@@ -24,12 +25,13 @@ function fixture(t, opts = {}) {
     openInsight: () => calls.push({ open: true }),
     openPanel: () => calls.push({ panel: true }),
     onState: (s) => states.push(s),
+    now: () => clock.at,
     timers: { set: (fn, ms) => { delays.push(ms); tasks.set(++timerId, fn); return timerId }, clear: (id) => tasks.delete(id) }, ...opts,
   })
   t.after(() => host.destroy())
   const tick = async () => { const entries = [...tasks]; tasks.clear(); await Promise.all(entries.map(([, fn]) => fn())) }
   const request = (action, data, session = host.session) => host.handle({ type: 'inline-review-request', session, action, data })
-  return { host, dependencies, calls, execCalls, delays, states, messages, tasks, stored, tick, request, text,
+  return { host, dependencies, calls, execCalls, delays, states, messages, tasks, stored, tick, request, text, clock,
     paragraph: text.body, edit() { revision++; host.modified() },
     retype(body) { text.body = body; revision++; host.modified() } }
 }
@@ -49,7 +51,7 @@ test('opening and rapid typing coalesce into rules-only checks of the live docum
   assert.equal(state.findings[0].start, f.paragraph.indexOf('【待填写】'))
 })
 
-test('deep review requires an explicit action; repeated clicks cannot duplicate the paid request', async (t) => {
+test('repeated explicit clicks cannot duplicate the paid request', async (t) => {
   const f = fixture(t); f.host.start(); await f.tick()
   let finish
   f.dependencies.review = async (pid, body) => { f.calls.push({ pid, body }); return new Promise((r) => { finish = r }) }
@@ -108,12 +110,17 @@ test('opening evidence is read-only and stale guest sessions have no effects', a
   assert.deepEqual(f.calls, [{ open: true }])
 })
 
-test('disabled preference cancels pending checks and resumes only after explicit enable', async (t) => {
-  const f = fixture(t); f.host.start(); await f.request('preferences', { enabled: false })
-  await f.tick(); f.edit(); await f.tick()
-  assert.equal(f.calls.length, 0); assert.equal(f.messages.at(-1).status, 'disabled')
-  await f.request('preferences', { enabled: true }); await f.tick()
-  assert.equal(f.calls.length, 1)
+test('关掉 AI 只停模型那一层，不花钱的规则检查照常跑', async (t) => {
+  const f = fixture(t); f.host.start(); await f.request('preferences', { ai: false })
+  await f.tick()
+  assert.equal(f.calls.length, 1, '规则检查不受 AI 开关影响')
+  assert.equal(f.calls[0].body.deep, false)
+  assert.equal(f.messages.at(-1).status, 'ready')
+  assert.equal(f.messages.at(-1).ai, false)
+  assert.equal(f.tasks.size, 0, '关着 AI 就不许排自动 AI 审校')
+  f.retype('第一条 价款：人民币一百万元。'); await f.tick()
+  assert.equal(f.calls.length, 2)
+  assert.equal(f.calls.every((c) => c.body.deep === false), true, '关着的时候一次模型调用都不许发')
 })
 
 test('inline revision display reads the guarded final text snapshot', async (t) => {
@@ -131,7 +138,7 @@ test('destroy prevents late responses, timers and all future actions', async (t)
   const pending = f.request('deep'); await new Promise(setImmediate)
   f.host.destroy(); const count = f.messages.length; finish({ findings: [] }); await pending
   assert.equal(f.messages.length, count); assert.equal(f.tasks.size, 0)
-  assert.equal(f.messages.at(-1).enabled, false)
+  assert.equal(f.messages.at(-1).status, 'disabled')
   assert.equal(await f.request('deep'), false)
 })
 
@@ -217,35 +224,99 @@ test('layout key is stable per user across documents and differs between users',
 
 test('默认开启但安静：没有存过偏好时仍然开着，防抖是 2.5 秒', async (t) => {
   const f = fixture(t); f.host.start()
-  assert.equal(f.messages.at(-1).enabled, true)
+  assert.equal(f.messages.at(-1).ai, true)
   assert.equal(f.messages.at(-1).hidden, false)
   assert.deepEqual(f.delays, [2500], '防抖 1.2s → 2.5s（dev-board#724 降资源第三项）')
   await f.tick()
   assert.equal(f.calls.length, 1)
 })
 
-test('关掉之后一条 worker 命令、一次 HTTP 都不发', async (t) => {
+test('AI 开关落盘、跨标签同步，关掉之后手动仍可跑一次', async (t) => {
   const f = fixture(t); f.host.start(); await f.tick()
-  const execBefore = f.execCalls.length, httpBefore = f.calls.length
-  f.host.setEnabled(false)
-  for (let i = 0; i < 5; i++) f.edit()
-  assert.equal(f.tasks.size, 0, '关闭态不许排下一轮检查')
-  await f.tick()
-  assert.equal(f.execCalls.length, execBefore)
-  assert.equal(f.calls.length, httpBefore)
-  assert.equal(f.messages.at(-1).status, 'disabled')
-  assert.equal([...f.stored.values()][0].enabled, false, '偏好落盘')
-  f.host.setEnabled(true); await f.tick()
-  assert.ok(f.execCalls.length > execBefore, '重新开启后恢复检查')
-  assert.equal(f.messages.at(-1).status, 'ready')
+  f.host.setAiEnabled(false)
+  assert.equal([...f.stored.values()][0].ai, false, '偏好落盘')
+  assert.equal([...f.stored.keys()][0].startsWith('awd_ai_review_'), true, '换了新键：旧键的 enabled 语义对不上')
+  assert.equal(f.messages.at(-1).ai, false)
+  assert.equal(f.tasks.size, 0)
+  await f.host.runDeep()
+  assert.equal(f.calls.at(-1).body.deep, true, '关的是自动，手动的「立即 AI 审校」仍然给跑')
+  f.host.setAiEnabled(true)
+  assert.equal(f.messages.at(-1).ai, true)
 })
 
-test('浮球显隐（hidden）与开关（enabled）是两件事', async (t) => {
+test('停笔到冷却时间后自动跑一次 AI；同一份正文不会再跑第二次', async (t) => {
+  const f = fixture(t); f.host.start(); await f.tick()
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.delays.at(-1), 20000, '规则跑完排一次自动 AI，冷却 20 秒')
+  await f.tick()
+  assert.equal(f.calls.length, 2)
+  assert.equal(f.calls.at(-1).body.deep, true)
+  assert.equal(f.messages.at(-1).deepStatus, 'ready')
+  // 只是 revision 前进（改格式、滚页、切标签）不该再花一次钱
+  f.edit(); await f.tick()
+  assert.equal(f.calls.length, 2, '正文一个字没动：不再自动跑 AI')
+  assert.equal(f.tasks.size, 0)
+})
+
+test('继续输入把自动 AI 推迟，只留规则检查那一轮', async (t) => {
+  const f = fixture(t); f.host.start(); await f.tick()
+  f.edit()
+  assert.equal(f.tasks.size, 1, '输入撤掉在排的自动 AI，只剩规则那一轮')
+  assert.equal(f.delays.at(-1), 2500)
+  await f.tick()
+  assert.equal(f.calls.every((c) => c.body.deep === false), true)
+})
+
+test('两次自动 AI 之间有最小间隔，手动那条不受限制', async (t) => {
+  const f = fixture(t); f.host.start(); await f.tick(); await f.tick()
+  assert.equal(f.calls.at(-1).body.deep, true)
+  f.retype('第一条 价款：【待填写】。第二条 交付：【待填写】。')
+  await f.tick()
+  assert.equal(f.delays.at(-1), 180000, '刚跑过一次：下一次自动 AI 至少隔 3 分钟')
+  await f.host.runDeep()
+  assert.equal(f.calls.at(-1).body.deep, true, '手动按钮不受最小间隔限制')
+  f.clock.at += 600000
+  f.retype('第一条 价款：人民币一百万元。')
+  await f.tick()
+  assert.equal(f.delays.at(-1), 20000, '隔得够久了就回到 20 秒冷却')
+})
+
+test('额度/限流一类的失败之后，本会话不再自动跑 AI', async (t) => {
+  const f = fixture(t)
+  f.dependencies.review = async (pid, body) => { f.calls.push({ pid, body }); return body.deep
+    ? { findings: [], summary: { deepComplete: false, deepReason: 'DEEP_QUOTA' } }
+    : { findings: [] } }
+  f.host.start(); await f.tick(); await f.tick()
+  assert.equal(f.calls.at(-1).body.deep, true)
+  assert.equal(f.messages.at(-1).autoBlocked, 'DEEP_QUOTA')
+  f.retype('第一条 价款：人民币一百万元。')
+  await f.tick()
+  assert.equal(f.tasks.size, 0, '不再排自动 AI')
+  const before = f.calls.length
+  await f.host.runDeep()
+  assert.equal(f.calls.length, before + 1, '手动重试仍然可用')
+})
+
+test('旧偏好键的「关掉」按 AI 关迁移过来，不替用户重新打开要花钱的那条链路', async (t) => {
+  const stored = new Map([['awd_inline_review_legacy', { enabled: false, hidden: true }]])
+  const messages = []
+  const host = createInlineReviewHost({ projectId: 1, fileId: 2, userId: 'legacy',
+    execute: async () => ({ success: true, revision: 1, paragraphs: [] }), review: async () => ({ findings: [] }),
+    send: (m) => messages.push(m), storage: { get: (k) => stored.get(k), set: (k, v) => stored.set(k, v) },
+    timers: { set: () => 0, clear: () => {} } })
+  t.after(() => host.destroy())
+  host.start()
+  assert.equal(messages.at(-1).ai, false)
+  assert.equal(messages.at(-1).hidden, true)
+  assert.equal(messages.at(-1).status, 'stale', '规则检查不因旧的关闭偏好停掉')
+})
+
+test('浮球显隐（hidden）与 AI 开关（ai）是两件事', async (t) => {
   const f = fixture(t); f.host.start(); await f.tick()
   const httpBefore = f.calls.length
   f.host.setBallHidden(true)
   assert.equal(f.messages.at(-1).hidden, true)
-  assert.equal(f.messages.at(-1).enabled, true)
+  assert.equal(f.messages.at(-1).ai, true)
   assert.equal(f.messages.at(-1).status, 'ready', '藏浮球不该把这一轮结果作废')
   f.retype('第一条 价款：【待填写】。第二条 交付。')
   await f.tick()
