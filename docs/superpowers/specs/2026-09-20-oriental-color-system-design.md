@@ -50,6 +50,9 @@ WCAG 线：正文 4.5:1，大字与控件 3:1。工作台是四列同屏、小�
 - **纸张永远是纸白。** `office_thread.js` 的 `DocColor` 刻意不动（注释明写"深色下纸仍是纸白"）。
   外壳转暖之后白纸在暖案上更像纸——这是本次换色的额外收益。同时 `--awd-surface` 从纯白改为 `#FCFBF7`，
   让面板与文档纸张天然区分开。
+- **竹月青做选中态必须配第二信号。** 竹月青在玉脂白上只有 2.23:1，纯靠这块底色表达"选中"
+  在弱视与强光下不可辨。凡是用竹月青底表示状态的地方，必须同时配边框、字重或图标变化。
+  （旧体系的薄荷底是 1.91:1，更差，所以这不是新增回归，但既然重做就补上。）
 - **`--awd-mint` 令牌名保留，值换成竹月青。** 这个名字是插件 SDK 公开契约
   （`THEME_TOKEN_NAMES` 白名单 + 第三方插件 CSS 里的 `var(--awd-mint)`），改名会静默打破第三方插件。
   新增 `--awd-bamboo` 作同值别名，供新代码使用语义正确的名字。
@@ -147,7 +150,7 @@ design/tokens/awd-palette.json          ← 唯一真源（三仓各存一份逐
 | `frontend/tests/project-home/page.test.mjs` | 源码含 `#1A5336` | 改断言目标色值 |
 | `frontend/scripts/check-navigation-contract.mjs` | 同上 | 改断言目标色值 |
 | `scripts/star-history.mjs` | 用 `#5BD197`/`#1A5336`/`#2D7A52` 画 SVG 徽章 | 换新值 |
-| `litviz/.../lint.py` | 颜色白名单 | 必须与令牌改动同步改，否则渲染产出会被判"未授权颜色"假红 |
+| `litviz/.../lint.py` | 颜色**黑名单**（拒绝 Tailwind slate 与常见蓝，16 个字面量） | 不是白名单，不存在"不同步改就假红"。真风险在反向：竹月青是去饱和蓝绿，中性阶若取 slate 值会精确命中被真拒。已复算确认本色源 56 个色值与该列表零交集 |
 | `README.md` / `README.zh-CN.md` | shields.io 徽章色 | 换新值 |
 
 **保留不动的断言**（换色不影响，删了反而丢护栏）：
@@ -193,3 +196,118 @@ logo 与应用图标是**位图 PNG，三仓都没有找到矢量源文件**。�
   本次只换色不统一列表——统一是架构问题，超出换色范围。
 - **AI 修订作者色**由 LibreOffice 引擎按作者名哈希自动分配，代码里没有可改的色值。
   要让"AI 作者的修订"固定为竹月青需新增显式 `RedlineColor` 机制，是独立需求。
+
+## 11. 完整性批判补遗（盘点后第二轮，2026-09-20）
+
+一个独立 agent 对十份盘点做对抗式复核，找出 14 个缺口。以下是会改变工作量的部分。
+
+### 11.1 官网那一面盘错了树（最严重）
+
+官网主检出在 `claude/registry-declarative-payload`，落后 `origin/master` 58 个提交，
+**169 个新增文件不在被盘的树里**，约 1147 个颜色点没进账。漏掉的是整块产品面：
+
+| 漏掉的面 | 路径 | 颜色点 |
+|---|---|---|
+| 团队/律所管理台 | `app/[lang]/account/TeamSection.tsx`、`TeamDashboard.tsx` | 164 |
+| 证书出图管线 | `lib/certificate.ts` | 104 |
+| 透明度公示页与后台 | `app/[lang]/transparency/page.tsx`、`admin/Transparency.tsx` | 116 |
+| 法人格测验 | `app/[lang]/quiz/QuizFlow.tsx`、`WeChatGate.tsx` | 78 |
+| 简历页与个人主页评论 | `app/[lang]/u/[username]/ResumeSections.tsx`、`CommentsSection.tsx` | 75 |
+| 社区论坛与聊天室 | `app/[lang]/community/**`（6 文件） | 157 |
+| Skill 对话面板 | `components/skills/SkillChatPane.tsx` | 44 |
+| 证书样式选择器 | `app/[lang]/cert/[id]/CertStylePicker.tsx` | 44 |
+| 四榜图表页 | `app/[lang]/skills/charts/page.tsx` | 36 |
+| 商业授权与定价整组 | `components/pricing/*.tsx`（6 文件） | 86 |
+| 404 错误页 | `app/[lang]/not-found.tsx`、`NotFoundContent.tsx` | 9 |
+| 手机落地引导 | `app/[lang]/start/MobileStart.tsx` | 28 |
+| OG 出图脚本与成品 | `scripts/gen-og.mjs`、`public/og.png` | 9 + 位图 |
+| Product Hunt 徽章代理 | `app/api/ph-badge/route.ts` | 10 |
+
+本次官网改造在从 `origin/master` 新切的 `claude/color-system-bamboo` 工作树上做，树是对的。
+
+### 11.2 `frontend/src/static/` 65 张 PNG 里 31 张烧着品牌色
+
+图形资产那一面断言"没有烧死颜色的图片资产"，是错的。降采样解码统计非灰像素后确认：
+除 4 张 logo/icon 外，**另有 26 张 UI 状态图标把品牌绿烧进了像素**——
+左右栏、文件树、录音、截图、回收站、搜索、排序、批量选择的「选中/悬停态」
+就是靠烧死的品牌绿表达的（对照组 `left-bar.png`、`documents_unselected.png` 是纯灰阶）。
+
+取色证据：`left-bar_selected.png` → `#184830`；`search_selected.png` → `#48C078`。
+
+不重出这 26 张，换完色工作台的所有选中态会留着旧绿。
+
+### 11.3 产品里还活着第三套品牌色：藏青 `#12344D` + 金 `#C8A45D`
+
+- `frontend/src/uni.scss:21,23,25` 定义；`$awd-*` 确为死码，但 `$uni-*` 有 18 处活消费者，
+  **全部集中在 `pages/variable-library/variable-library.vue`——整页跑在藏青+金体系上**，
+  对 `--awd-*` 的任何改动免疫。
+- 同一个藏青独立出现在 `desktop/main/main.js:611`（OCR 框选浮层提示条）与
+  `:1336-1337`（应用内统一确认弹窗 `checkba:ui-confirm` 的主次按钮）。
+
+这是一套有内在一致性的第二品牌，不是噪音。本次一并并入统一体系。
+
+### 11.4 第三方插件作者拿到的三份脚手架，没有一份跟得上换色
+
+1. `backend/src/main/resources/plugin-dev/template-index.html` —— 后端发给开发者的初始模板，
+   全硬编码 GitHub 灰，一个 `var(--awd-*)` 都没有。每个从它起步的第三方插件都对主题通道免疫。
+2. 官网 `lib/plugin-template.ts` 的模板页与宿主模拟器 —— 硬编码，且用了**第四个森林绿 `#1f4c3a`**。
+3. `examples/hello-web-plugin/web/index.html` —— 写法正确（`var(--awd-text, #1f2421)` 带 fallback），
+   但 fallback 值是旧色，与 App.vue 令牌对不上。
+
+修法：三份脚手架都改成「令牌优先 + fallback 取自色源」，让第三方插件出厂就跟着主题走。
+
+### 11.5 其余缺口
+
+- **证书/分享卡/徽章/四榜出图链**（官网 `lib/certificate.ts` 12 套配色 + `lib/quiz-card.ts` +
+  `lib/badges.ts` + `lib/charts.ts`）：产物是用户下载、分享、打印的 PNG。默认那套正是旧品牌，
+  且内含 `#0E2117`——被否决的深色 chrome 色值，在这里作为正式产物活着。
+  需一并决定历史已生成的证书图是否重出（本次决定：不重出，新老并存，新证书用新体系）。
+- **后端默认标签色** `TagService.java:22-24` 与 `AutoTaggingService.java:131`：
+  写进 DB 的初值。本次只改默认值（新标签生效），**不刷老数据**（那是用户内容）。
+- **首屏白闪**：`frontend/index.html` 无任何背景声明、`desktop/main/main.js` 的主窗口
+  `BrowserWindow` 没有 `backgroundColor` 字段、`frontend/src/pages.json` 的
+  `navigationBarBackgroundColor`/`backgroundColor` 还是 `#F8F8F8`。
+  换成玉脂白后这三处会在每次启动时闪一下纯白。一并补上。
+- **iOS**：`Info.plist` 的 `UILaunchScreen` 是空字典（启动屏走系统背景色，与 App 令牌无关）；
+  `Assets.xcassets` 下**没有 `AccentColor.colorset`**，导致没显式 `.tint()` 的控件走系统蓝
+  （`ProjectPickerView.swift:86`、`LoginView.swift:107` 已确认漏网）。一并补上。
+- **验证码邮件 HTML** 官网 `lib/mail-auth.ts:96-107`：全仓唯一一封带 HTML 的产品邮件，
+  目前是裸 `#666` 零品牌。本次补上品牌色。
+- **部署探针页** `deploy/web/probe/index.html`：线上可访问的运维页，一并换。
+  `experiments/zetaoffice-spike/index.html` 是实验代码，判作废不动。
+- **pptx-service**：有一整套跑在金色体系上的 React 前端（`tailwind.config.js` 自定义 yellow 色阶）
+  与 8 套 PPT 预设主色。维持第 10 节的判断：独立 LICENSE 的第三方受限服务，不在本次范围。
+
+### 11.6 确认不存在、可以放心的
+
+三仓全量检索确认为零命中，本次不处理：托盘气泡、离线页、崩溃降级页、
+小程序客服消息与订阅消息模板、短信（无颜色）。
+`frontend/src/utils/` 下只有 `appTheme.js` 一份主题逻辑，不存在第三份。
+
+### 11.7 已复算确认的对比度结论
+
+批判报告第二部分列了五类风险（335 处 accent 当文字色、218 处白字压 accent 底、
+10px 计数徽标、焦点环、状态小圆点），**全部建立在「accent 变成竹月青」的假设上**。
+本方案的 accent 是派生的墨竹青，实测：
+
+| 风险项 | 实测 | 门槛 |
+|---|---|---|
+| accent 当正文色（亮/页面底） | 6.77:1 | 4.5 |
+| accent 当正文色（亮/卡片底） | 7.53:1 | 4.5 |
+| accent 当强调文字（暗） | 6.97:1 | 4.5 |
+| 白字压 accent 底（亮） | 7.79:1 | 4.5 |
+| 白字压 accent 底（暗） | 5.81:1 | 4.5 |
+| 焦点环 accent vs 卡片底 | 7.53:1 | 3.0 |
+
+五类风险一处未踩。受门槛约束的 17 项全部通过，复算脚本逻辑并入 `check-palette.mjs`。
+
+### 11.8 本次仍不做，但如实记录的既有欠账
+
+三仓全量检索 `@media print` / `@page` / `forced-colors` / `prefers-contrast` /
+`-ms-high-contrast`，**命中数全部为 0**：产品会导出与打印 docx、pdf、证书 PNG、
+诉讼可视化图，却没有一处为「在纸上」重新定义颜色；Windows 高对比度模式下所有靠颜色
+传状态的小圆点会被系统色覆盖成同一色，而产品没有形状或文字兜底。
+
+这在旧体系下已经是欠账，换色不使其恶化（本方案 accent 6.77:1 优于旧体系在同位置的表现）。
+补打印样式表与 forced-colors 支持是独立一张卡的事，不塞进本批。
+
