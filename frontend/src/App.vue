@@ -456,6 +456,24 @@ html.is-mac.is-fullscreen {
 html.is-win {
     --awd-titlebar-safe-inline-end: 148px;
 }
+/* win：非最大化时应用边界与浅色资源管理器（#F8F9FA 页面、#FFFFFF 顶栏）几乎同色
+   （dev-board#722），描 1px 内框区分开；最大化/全屏时系统本身就有窗口边界，不描。
+   用 outline + 负 outline-offset，不用 inset box-shadow：body/页面根节点（100vh、
+   不透明背景）是 html 的子节点，会按绘制顺序盖在父节点的 box-shadow 上面，实测
+   inset box-shadow 打在 html 上完全不可见；outline 不受这个绘制层级限制，能穿透
+   子节点的不透明背景显示（同样已用无头浏览器验证：加了它不产生滚动条、不改
+   scrollHeight）。不占布局空间，也不跟内容产生额外间距。配色红线：只用既有的
+   --awd-border-strong 令牌，不新增硬编码颜色，深色主题沿用该令牌已有的深色取值。 */
+html.is-win:not(.is-maximized):not(.is-fullscreen) {
+    outline: 1px solid var(--awd-border-strong);
+    outline-offset: -1px;
+}
+/* 顶栏下边框同样提到 --awd-border-strong，跟窗口描边一个基调，避免描边窗口里
+   顶栏下面那条更浅的 --awd-border 显得突兀。选择器权重高于 project-overview.scss
+   里的 `.project-header { border-bottom: ... }`（(0,1,1)），同一份文档里就能压住。 */
+html.is-win:not(.is-maximized):not(.is-fullscreen) .project-header {
+    border-bottom-color: var(--awd-border-strong);
+}
 
 /* 工作台顶栏就是标题栏：空白处可拖动窗口 */
 html.is-desktop .project-header {

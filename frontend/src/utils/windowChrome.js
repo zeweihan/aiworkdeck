@@ -53,6 +53,17 @@ function classes() {
 }
 
 /**
+ * 主进程 chrome-state 推送的纯处理逻辑，抽出来是为了不依赖 document/host 也能单测
+ * （dev-board#722：Windows 非最大化描边）。classList 只要求 toggle(name, force) 接口，
+ * 传真实的 document.documentElement.classList 或测试用的假 Set 都行。
+ */
+export function applyChromeState(classList, data) {
+  if (!classList || !data) return
+  classList.toggle('is-fullscreen', !!data.fullscreen)
+  classList.toggle('is-maximized', !!data.isMaximized)
+}
+
+/**
  * 页面级拖拽条：给那些没有自己顶栏的页面（项目列表、设置、个人中心…）一条可以
  * 拖动窗口的区域。自带顶栏的几页由 OWN_TITLEBAR_ROUTES 让开，那边由顶栏自己承担拖拽。
  *
@@ -147,11 +158,12 @@ export function initWindowChrome() {
 
   // 全屏态：mac 全屏时交通灯隐藏，顶栏左侧那 88px 留白必须归零，
   // 否则全屏下项目名会莫名其妙缩进。主进程在进出全屏与首次加载完成时各推一次。
+  // 最大化态：Windows 非最大化时应用边界要描边区分浅色资源管理器（dev-board#722）；
+  // 没有同步查询接口，首个 state（enter/leave-full-screen、maximize/unmaximize、
+  // did-finish-load 都会推）到来前按未挂 class 处理，即视为「不描边」，不会闪烁——
+  // 应用刚起来时窗口本来就还没被人拖小。
   if (host.chrome && host.chrome.onState) {
-    host.chrome.onState((data) => {
-      if (!data) return
-      cl.toggle('is-fullscreen', !!data.fullscreen)
-    })
+    host.chrome.onState((data) => applyChromeState(cl, data))
   }
 
   mountDragStrip()
