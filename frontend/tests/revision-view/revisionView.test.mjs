@@ -185,8 +185,17 @@ test('__agent 命令按页边语义执行：内联态下临时切页边，跑完
   assert.match(fn, /if \(AGENT_VIEW_EXEMPT\[action\] \|\| !isWriterDoc\(\)\) return fn\(\)/,
     '豁免名单 + 非 Writer 一个属性都不碰')
   assert.match(fn, /if \(before !== 'all'\) return fn\(\)/, '页边/最终稿态正文本来就不含删除文字，零开销直通')
+  assert.match(fn, /if \(!hasAnyRedline\(\)\) return fn\(\)/,
+    '一条修订都没有 = 正文里没有被删的字，整趟往返是纯成本（dev-board#725）')
   assert.match(fn, /applyRevisionView\('margin'\)/)
-  assert.match(fn, /xModel\.refresh\(\)/, '切完要重排，否则读到的还是旧版面（#367 探针 R2 同源）')
+  // **这里刻意不 refresh()**（dev-board#725 真机实测 24.2.8-zhcn-r5）：隐藏修订后不重排，
+  // getString / 段落枚举 / 区间偏移读到的最终文本与「切+refresh」逐字相等（同一段两条
+  // 路径都读到「第2段前置，新表述，后续内容在这里。」），而 refresh() 是整份文档重排，
+  // 这条守卫在默认内联视图下是 35ms/180ms 节拍的常态路径。导出那条
+  // （withInlineMarkupForExport）仍然必须 refresh——那里消费的是版面不是文本。
+  assert.doesNotMatch(fn, /xModel\.refresh\(\)/, '只读守卫不许整份重排（dev-board#725）')
+  assert.match(fn, /paragraphTextOf\(ctrl\.getViewCursor\(\)\)/,
+    '还原视图后要补一次正文读，把 Writer 缓存的光标屏幕坐标拉回用户的视图几何（dev-board#725）')
   assert.match(fn, /out\.then\(function \(r\) \{ restore\(\); return r; \}, function \(e\) \{ restore\(\); throw e; \}\)/,
     '分批原语是 async，恢复要等它 settle')
   assert.match(fn, /catch \(e\) \{ restore\(\); throw e; \}/, '同步抛异常也要还原')

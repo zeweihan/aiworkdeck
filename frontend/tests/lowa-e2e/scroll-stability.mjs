@@ -98,7 +98,62 @@ try {
   assert.equal((await ok('set_revision_view', {})).mode, 'all', '跑完必须还原用户所选的显示态')
   assert.equal((await ok('list_revisions', { limit: 50, locate: false })).count, 12, '只读命令不得动修订')
 
-  console.log('PASS 滚动后视口不回顶（只读/补全/AI 读取/客体页自发刷新四条路径），最终文本语义与显示态不变')
+  // ---------- 光标不左右横跳（dev-board#725）----------
+  // Writer 把光标的**屏幕**坐标缓存着，只在下一次读正文时按当时的视图几何重算。
+  // 守卫最后一次读正文发生在「删除文字被藏起来」的最终文本视图里，于是命令返回
+  // 之后光标一直画在左边一个删除段的宽度上（真机实测 −2142 twip），用户再敲一个
+  // 字才弹回原处——这一左一右就是「光标经常左右横跳」。
+  const caretX = async () => (await ok('get_review_layout', { fresh: false })).view.caretX
+
+  // 防空断言：这一段必须真的带删除修订，否则「光标不动」是白拿的。
+  const inline7 = (await ok('get_paragraph', { index: 7 })).text
+  assert.ok(inline7.includes('旧表述'), '夹具第 7 段必须带删除修订（内联正文里看得见旧字）：' + inline7)
+
+  await ok('select_paragraph', { index: 7 })
+  await ok('collapse_selection', { to: 'end' })
+  const settled = await caretX()
+  const seen = new Set()
+  for (let i = 0; i < 20; i++) {
+    await ok('get_completion_context', { radius: 160 }); seen.add(await caretX())
+    await ok('get_review_context'); seen.add(await caretX())
+  }
+  assert.deepEqual([...seen], [settled],
+    '40 次只读取上下文之后光标横向漂了（dev-board#725）：settle=' + settled + ' 实测=' + JSON.stringify([...seen]))
+
+  // 用户真正的节奏：敲一个字，紧随其后的补全/审校读一次上下文。
+  for (let i = 0; i < 3; i++) {
+    await ok('insert_at_cursor', { text: '甲' })
+    const typed = await caretX()
+    await ok('get_completion_context', { radius: 160 })
+    assert.equal(await caretX(), typed, '第 ' + i + ' 个字打完，补全读取把光标拽走了（dev-board#725）')
+    await ok('get_review_context')
+    assert.equal(await caretX(), typed, '第 ' + i + ' 个字打完，审校读取把光标拽走了（dev-board#725）')
+  }
+  await ok('undo'); await ok('undo'); await ok('undo')
+
+  // 语义护栏：守卫内部不再 refresh()，读到的最终文本必须与「显式切最终稿再读」逐字相等。
+  await ok('select_paragraph', { index: 7 })
+  await ok('collapse_selection', { to: 'end' })
+  const guarded = (await ok('get_review_context')).text
+  await ok('set_revision_view', { mode: 'final' })
+  const explicitFinal = (await ok('get_paragraph', { index: 7 })).text
+  await ok('set_revision_view', { mode: 'all' })
+  assert.equal(guarded, explicitFinal, '去掉 refresh() 后最终文本语义变了')
+  assert.ok(!guarded.includes('旧表述'), '最终文本里不许混进被删的旧字：' + guarded)
+
+  // 没有任何修订的文档整趟往返都跳过（起草场景）：语义与光标都得照旧。
+  assert.equal((await ok('resolve_all_revisions', { action: 'accept' })).success, true)
+  assert.equal((await ok('list_revisions', { limit: 50, locate: false })).count, 0, '前提：修订已全部接受')
+  await ok('select_paragraph', { index: 7 })
+  await ok('collapse_selection', { to: 'end' })
+  const bare = await caretX()
+  const bareText = (await ok('get_review_context')).text
+  assert.equal(bareText, explicitFinal, '无修订文档读到的正文应当就是接受后的正文')
+  for (let i = 0; i < 5; i++) { await ok('get_completion_context', { radius: 160 }); await ok('get_review_context') }
+  assert.equal(await caretX(), bare, '无修订文档上光标也漂了（守卫本该整段跳过）')
+  assert.equal((await ok('set_revision_view', {})).mode, 'all', '跑完仍是用户所选的显示态')
+
+  console.log('PASS 滚动后视口不回顶（只读/补全/AI 读取/客体页自发刷新四条路径），最终文本语义与显示态不变；光标横向不漂（带修订段落 40 次读取 + 逐字键入 + 无修订文档）')
 } finally {
   await browser.close()
   await new Promise((r) => server.close(r))
