@@ -890,6 +890,31 @@ try {
   })
   await shot('j6-settings-tab')
 
+  // ============ J6.35 左栏收起按钮（rail 底部，dev-board#727） ============
+  // 用户反馈：左栏「窗口建议」占地方、平时用得少，影响正文和 AI 助手展示，要求 rail
+  // 上就地加一个收起按钮。新按钮挂在版本记录与成员堆叠之间，@tap 走与顶栏同一个
+  // toggleSidebar（config/leftSidebarPlugins.js 的顺序、面板内容不受影响），这里
+  // 只验证「点了真的收起/展开、宽度归零」，不重复顶栏那份已有覆盖。
+  // 用 `.left-rail [title=...]` 而不是裸 `[title=...]`：顶栏也有一个同文案的
+  // 同功能按钮，裸选择器会命中 DOM 里更早出现的那个而不是这里要测的新按钮。
+  console.log('== J6.35 左栏收起按钮 ==')
+  await step('rail 收起按钮把 .sidebar-left 收到 0 宽，再点一次能展开回来', async () => {
+    await page.waitForSelector('.sidebar-left', { timeout: 10000 })
+    const widthBefore = await page.$eval('.sidebar-left', (el) => el.getBoundingClientRect().width)
+    if (widthBefore <= 0) throw new Error('测试起点应为左栏展开状态，实际宽度: ' + widthBefore)
+    await mouseClickSel('.left-rail [title="收起左侧栏"]')
+    await page.waitForFunction(
+      () => document.querySelector('.sidebar-left')?.getBoundingClientRect().width === 0,
+      { timeout: 8000 },
+    )
+    await mouseClickSel('.left-rail [title="展开左侧栏"]')
+    await page.waitForFunction(
+      () => (document.querySelector('.sidebar-left')?.getBoundingClientRect().width || 0) > 0,
+      { timeout: 8000 },
+    )
+  })
+  await shot('j6.35-sidebar-collapse')
+
   // ============ J6.6 剪贴板面板 ============
   // 剪贴板簇长期没有端到端覆盖，而它重度依赖 document/window 全局监听
   // （copy/paste/keydown 三路兜底）——正是"搬进 .js 模块后静态检查发现不了"的失效面。
