@@ -28,7 +28,7 @@ function section(from, to) {
   return source.slice(start, end)
 }
 
-function harness() {
+function harness({ dark = false } = {}) {
   const windows = []
   class Window extends EventEmitter {
     constructor(options) {
@@ -54,6 +54,9 @@ function harness() {
   app.isPackaged = false
   const context = vm.createContext({
     app, BrowserWindow: Window, path, console,
+    // createMainWindow 用 nativeTheme 决定窗口的 backgroundColor（首屏白闪兜底，dev-board#731）。
+    // 默认给浅色：桌面壳启动时 applyNativeTheme('light') 就是出厂值，与真实运行一致。
+    nativeTheme: { shouldUseDarkColors: dark },
     process: { platform: 'win32', env: {} }, __dirname: path.join(__dirname, '../main'),
     screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1400, height: 900 } }) },
     require: name => {
@@ -131,4 +134,33 @@ test('已销毁的窗口收到迟到的 maximize 不抛错（sendChromeState 的
   const win = h.windows[0]
   win.destroyed = true
   assert.doesNotThrow(() => win.emit('maximize'))
+})
+
+// 首屏白闪兜底（dev-board#731）：主窗口必须自带 backgroundColor，否则 Electron 默认白底，
+// 换成玉脂白外壳后每次启动都会闪一下纯白。取值必须来自色源 design/tokens/awd-palette.json，
+// 不许在 main.js 里另写一套字面量。
+test('主窗口带 backgroundColor，且取值与色源一致（浅色）', () => {
+  const palette = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '../../design/tokens/awd-palette.json'), 'utf8')
+  )
+  const h = harness()
+  h.context.create()
+  assert.equal(
+    String(h.windows[0].options.backgroundColor).toUpperCase(),
+    palette.roles.light.bg.toUpperCase(),
+    '主窗口浅色底应等于色源 roles.light.bg'
+  )
+})
+
+test('系统处于深色时主窗口底色跟着走，不会先闪浅色', () => {
+  const palette = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '../../design/tokens/awd-palette.json'), 'utf8')
+  )
+  const h = harness({ dark: true })
+  h.context.create()
+  assert.equal(
+    String(h.windows[0].options.backgroundColor).toUpperCase(),
+    palette.roles.dark.bg.toUpperCase(),
+    '主窗口深色底应等于色源 roles.dark.bg'
+  )
 })
