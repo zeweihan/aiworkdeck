@@ -1,0 +1,112 @@
+[
+  {
+    "id": "creating-a-sheet-from-a-writer-session-widens-the-tool-set",
+    "title": "Word 会话里建表：sheet_create_file 成功后下一轮拿回 sheet_* 全套（dev-board#729 ①）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "把这份合同的付款条款整理成一张表格文件",
+    "activeDocument": { "id": "1001", "name": "股权转让协议.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "sheet_create_file", "arguments": { "fileName": "付款条款对照表.xlsx" } }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "sheet_write_cells",
+            "arguments": { "range": "A1", "valuesJson": "[[\"条款号\",\"付款节点\",\"金额\"]]" }
+          }
+        ]
+      },
+      { "text": "<final>已新建《付款条款对照表.xlsx》并填入表头与三期付款条款。</final>" }
+    ],
+    "toolStubs": {
+      "sheet_create_file": "{\"success\": true, \"fileId\": 2001, \"name\": \"付款条款对照表.xlsx\"}",
+      "sheet_write_cells": "{\"success\": true, \"written\": 3}"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "sheet_create_file" },
+        { "name": "sheet_write_cells" }
+      ],
+      "offeredToolsInclude": ["sheet_create_file"],
+      "offeredToolsExcludeFirstCall": ["sheet_write_cells", "slide_add_page"],
+      "offeredToolsIncludeLastCall": ["sheet_write_cells"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "drafting-a-word-file-from-a-calc-session-widens-the-tool-set",
+    "title": "Excel 会话里起草 Word：doc_start_stream 成功后下一轮拿回 doc_* 全套（dev-board#729 ①）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "看着这份台账起草一份说明",
+    "activeDocument": { "id": "1002", "name": "股权款台账.xlsx", "fileType": "xlsx" },
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_start_stream", "arguments": { "fileName": "股权款说明.docx" } }
+        ]
+      },
+      {
+        "toolCalls": [
+          { "name": "doc_apply_standard_format", "arguments": {} }
+        ]
+      },
+      { "text": "<final>已新建《股权款说明.docx》并按律所标准格式排版。</final>" }
+    ],
+    "toolStubs": {
+      "doc_start_stream": "{\"success\": true, \"fileId\": 2002, \"name\": \"股权款说明.docx\"}",
+      "doc_apply_standard_format": "{\"success\": true, \"truncated\": false}"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_start_stream" },
+        { "name": "doc_apply_standard_format" }
+      ],
+      "offeredToolsInclude": ["doc_start_stream"],
+      "offeredToolsExcludeFirstCall": ["doc_apply_standard_format", "doc_find_replace"],
+      "offeredToolsIncludeLastCall": ["doc_apply_standard_format", "doc_find_replace"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "opening-a-different-document-type-mid-run-widens-the-tool-set",
+    "title": "本轮中途 doc_open_file 切到别类型文档：从那一轮起改为全集（dev-board#729 ①）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "打开那份台账看看，再回来核对合同里的金额",
+    "activeDocument": { "id": "1001", "name": "股权转让协议.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_open_file", "arguments": { "fileId": 3001 } }
+        ]
+      },
+      {
+        "toolCalls": [
+          { "name": "sheet_get_overview", "arguments": {} }
+        ]
+      },
+      { "text": "<final>台账里三期付款合计与合同第 4 条一致。</final>" }
+    ],
+    "toolStubs": {
+      "doc_open_file": "已打开《股权款台账.xlsx》。",
+      "sheet_get_overview": "{\"sheets\": [{\"name\": \"付款\", \"rows\": 12}]}"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_open_file" },
+        { "name": "sheet_get_overview" }
+      ],
+      "offeredToolsExcludeFirstCall": ["sheet_get_overview"],
+      "offeredToolsIncludeLastCall": ["sheet_get_overview", "slide_add_page"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

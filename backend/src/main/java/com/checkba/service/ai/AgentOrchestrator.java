@@ -173,6 +173,18 @@ public class AgentOrchestrator {
         Long activeFileId;
         // 活跃文档名（仅用于给模型的反馈文案）
         String activeFileName;
+        /**
+         * 本轮下发工具时用的活跃文档类型（dev-board#729 ①）：doc / sheet / slide，
+         * null = 不裁剪（没有活跃文档、纯文本、或本轮中途换过文档类型）。
+         *
+         * <p><b>一轮内只算一次</b>：runLoop 每次递归都按它取工具集，如果每轮重算，
+         * 模型上一轮看得见的工具这一轮可能就没了——它已经在 messages 里宣布要调那个工具，
+         * 通道会直接 400。唯一的改写点是 {@link #dispatchTool} 里的 doc_open_file 切类型分支。
+         */
+        String activeDocKind;
+        // LLM 往返轮数与首轮 promptTokens（埋点 ai.turn；只由当前轮次记账）
+        int llmRounds;
+        boolean promptTokensRecorded;
     }
 
     /**
@@ -585,10 +597,22 @@ public class AgentOrchestrator {
                 String fid = extractArg(argsJson, "fileId");
                 if (fid != null && !fid.isEmpty()) {
                     Long opened = Long.parseLong(fid.trim());
+                    if (!opened.equals(guard.activeFileId)) {
+                        widenDocKindIfTypeChanged(guard, opened, conversationId);
+                    }
                     guard.activeFileName = activeDocNameAfterOpen(guard.activeFileId, guard.activeFileName, opened);
                     guard.activeFileId = opened;
                 }
             } catch (Exception ignore) { /* fileId 非数字时保持原值 */ }
+        }
+        // 「新建并打开一份别的类型的文档」同样要把工具集放回全集（dev-board#729 ①）：
+        // 在 Word 会话里 sheet_create_file 建了张表，接下来要填内容的 sheet_write_cells
+        // 还被裁着——模型第一步做成了、第二步没有工具可用，这是最坏的一种半途而废。
+        if (guard != null && result.success()) {
+            String createdKind = NEW_DOCUMENT_TOOL_KINDS.get(toolName);
+            if (createdKind != null) {
+                widenDocKindAfterDocumentSwitch(guard, createdKind, toolName, conversationId);
+            }
         }
         return result;
     }
@@ -601,6 +625,83 @@ public class AgentOrchestrator {
      */
     static String activeDocNameAfterOpen(Long previousId, String previousName, Long openedId) {
         return openedId != null && openedId.equals(previousId) ? previousName : null;
+    }
+
+    /**
+     * 「新建并打开一份新文档」的工具 → 它建出来的文档类型（dev-board#729 ①）。
+     *
+     * <p>这两个是 {@code ClientCapabilityService.KIND_AGNOSTIC_LOWA_TOOLS} 里的「新建」那一类：
+     * 跨类型新建流程的第一步。第二步（往新文档里写）需要的是另一套原语，
+     * 所以它们一旦成功就要把工具集放回全集。
+     */
+    private static final Map<String, String> NEW_DOCUMENT_TOOL_KINDS = Map.of(
+            "sheet_create_file", ClientCapabilityService.DOC_KIND_SHEET,
+            "doc_start_stream", ClientCapabilityService.DOC_KIND_WRITER);
+
+    /** 新建并打开的文档与本轮裁剪用的类型不一致时放回全集；一致时什么都不做。 */
+    private void widenDocKindAfterDocumentSwitch(RunGuard guard, String createdKind,
+                                                 String toolName, String conversationId) {
+        if (guard.activeDocKind == null || guard.activeDocKind.equals(createdKind)) {
+            return;
+        }
+        log.info("[ToolVisibility] conv={} {} 新建并打开了 {} 类文档（本轮原为 {}），"
+                        + "从下一轮起改为下发全集工具",
+                conversationId, toolName, createdKind, guard.activeDocKind);
+        guard.activeDocKind = null;
+    }
+
+    /**
+     * 本轮中途 {@code doc_open_file} 切到了别的文档：类型一变就**放回全集**并打一条日志。
+     *
+     * <p>只放宽、不收窄——收窄会把模型上一轮已经决定要调的工具从下一轮的 schema 里拿掉，
+     * 而它此刻正在读那份新文档，这时候少给工具就是直接让任务失败。类型读不出来
+     * （文件不存在 / 查库失败）同样按「不裁」处理。
+     */
+    private void widenDocKindIfTypeChanged(RunGuard guard, Long openedId, String conversationId) {
+        if (guard.activeDocKind == null) {
+            return;
+        }
+        String openedKind = null;
+        try {
+            com.checkba.model.entity.ProjectFile opened = projectFileService.getFile(openedId);
+            if (opened != null) {
+                openedKind = trimmableDocKind(
+                        ContextAssemblerService.lowaDocKindOf(opened.getFileType(), opened.getName()));
+            }
+        } catch (Exception e) {
+            log.warn("[ToolVisibility] 读取新打开文档 {} 的类型失败，本轮改用全集工具: {}", openedId, e.getMessage());
+        }
+        if (guard.activeDocKind.equals(openedKind)) {
+            return;
+        }
+        log.info("[ToolVisibility] conv={} 本轮活跃文档类型变化 {} -> {}（fileId={}），"
+                        + "从下一轮起改为下发全集工具",
+                conversationId, guard.activeDocKind, openedKind == null ? "unknown" : openedKind, openedId);
+        guard.activeDocKind = null;
+    }
+
+    /**
+     * 本轮起跑时的活跃文档类型（dev-board#729 ①）：只有 LOWA 三类文档才裁剪工具集。
+     *
+     * <p>没有活跃文档、纯文本（text_* 口径）、判不出来的一律返回 null = 全集：
+     * 少给工具是「模型直接做不成事」，多给只是多花点钱，判不准时必须倒向后者。
+     * Office 插件会话不走这条路——它的 doc_* / sheet_* / slide_* 本来就整体隐藏。
+     */
+    static String initialDocKind(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        if (activeContext == null || activeContext.getId() == null || activeContext.getId().isEmpty()) {
+            return null;
+        }
+        return trimmableDocKind(ContextAssemblerService.lowaDocKind(activeContext));
+    }
+
+    /** 三类可裁剪的 LOWA 文档类型；其它（含 "text"）一律 null = 不裁。 */
+    private static String trimmableDocKind(String kind) {
+        if (ClientCapabilityService.DOC_KIND_WRITER.equals(kind)
+                || ClientCapabilityService.DOC_KIND_SHEET.equals(kind)
+                || ClientCapabilityService.DOC_KIND_SLIDE.equals(kind)) {
+            return kind;
+        }
+        return null;
     }
 
     /** 活跃文档的展示名：名字缺失（含模型中途切文档后作废的情况）时回退为通称，避免出现「《null》」。 */
@@ -836,9 +937,13 @@ public class AgentOrchestrator {
                 projectId, userId, conversationId, "USER", request.getMessage(), request.getDisplayText()
             );
             
-            // 1.1 首次对话时异步生成对话标题
-            List<com.checkba.model.entity.ProjectAiMessage> existingMsgs = messageService.listByConversationId(conversationId);
-            if (existingMsgs.size() <= 1) { // Only the user message we just saved
+            // 1.1 首次对话时异步生成对话标题。
+            // 只要一个数字就用 count 查（dev-board#729 ⑤）：原先这里 listByConversationId 把整条
+            // 会话的全部消息（正文 + executionLog，长会话轻松几十万字符）读出来映射成实体，
+            // 只为了 size()<=1 这个判断；紧接着 ContextAssemblerService 还要再全量读一次。
+            // 两次都卡在用户等待首 token 的关键路径上。
+            boolean firstTurn = messageService.countByConversationId(conversationId) <= 1;
+            if (firstTurn) { // Only the user message we just saved
                 final String convId = conversationId;
                 final String userMsg = request.getMessage();
                 // 跨线程提交：身份不会自动传递（池线程继承的是创建者而非提交者），显式重放
@@ -873,7 +978,7 @@ public class AgentOrchestrator {
 
             // 1.3 事项类型 AI 兜底分类：仅会话首轮且未命中 skill（skill 命中由 SkillRouter 产出类别）；
             // 异步、开关关闭时 no-op，绝不阻塞对话主链路
-            if (existingMsgs.size() <= 1) {
+            if (firstTurn) {
                 matterClassifierService.classifyAsync(conversationId, request.getMessage(),
                         skillRouter.activeSkill(guard.runId).isPresent());
             }
@@ -933,6 +1038,13 @@ public class AgentOrchestrator {
                     guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());
                     guard.activeFileName = request.getActiveContext().getName();
                 } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
+            }
+            // 工具可见性按活跃文档类型收窄（dev-board#729 ①）：本轮只算这一次，
+            // 之后每轮递归都沿用，保证同一轮工具集不变
+            guard.activeDocKind = initialDocKind(request.getActiveContext());
+            if (guard.activeDocKind != null) {
+                log.info("[ToolVisibility] conv={} 活跃文档类型={}，本轮按该类型裁剪 doc_/sheet_/slide_ 工具集",
+                        conversationId, guard.activeDocKind);
             }
             runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);
 
@@ -1025,6 +1137,15 @@ public class AgentOrchestrator {
         // 「本次 AI 调用未携带用户身份」，在编排器这层看起来就是「平台通道不可用」整轮终止。
         handler.setOnComplete(response -> PlatformAiUserScope.run(userId, () -> {
           try {
+            // 埋点 ai.turn 的 promptTokensFirstRound（dev-board#729 ⑥）：首轮 prompt 有多大，
+            // 是判断「工具 schema / 固定前缀是否过肥」的唯一在线证据（本机实测约 5 万，其中 2/3 是工具）。
+            // 只记第一轮：后续轮次还叠着工具结果，混在一起就看不出前缀本身的体量了。
+            if (!guard.promptTokensRecorded && isCurrentRun(guard)
+                    && response != null && response.tokenUsage() != null
+                    && response.tokenUsage().inputTokenCount() != null) {
+                guard.promptTokensRecorded = true;
+                telemetryTurnTracker.notePromptTokens(conversationId, response.tokenUsage().inputTokenCount());
+            }
             // 重试/溢出预算的清零不在此处——必须等空响应判定之后（见下）：空响应也会走到
             // onComplete，在判定前清零会让它每次都从第 1 次重试起步，变成无限重试循环。
             // Unconditionally turn off streaming mode when generation ends
@@ -1701,7 +1822,10 @@ public class AgentOrchestrator {
 
         // 先完成本地压缩和工具准备，再计模型请求的首字等待时间。
         compactIfNeeded(messages, conversationId, modelId);
-        List<ToolSpecification> registered = toolRegistry.getAllSpecifications(conversationId);
+        // 工具集按本轮活跃文档类型收窄（dev-board#729 ①）。guard.activeDocKind 在本轮起跑时算定，
+        // 每轮递归都读同一个值——一轮内工具集必须不变，否则模型刚宣布要调的工具下一轮就消失了。
+        List<ToolSpecification> registered =
+                toolRegistry.getAllSpecifications(conversationId, guard == null ? null : guard.activeDocKind);
         List<ToolSpecification> visible;
         if (agentMode == AgentMode.ASK) {
             visible = registered.stream().filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();
@@ -1717,6 +1841,15 @@ public class AgentOrchestrator {
             }
         }
         handler.armInactivityWatchdog(STREAM_FIRST_TOKEN_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS);
+        // 埋点 ai.turn 的 rounds（dev-board#729 ⑥）：一条消息到底跑了几个 LLM 往返，
+        // 是「慢在哪」的第一判据（91% 的墙钟在推理上，轮数直接决定总时长）。
+        // 被取代的旧轮次不记账——它的 ai.turn 本来就不会闭合（isCurrentRun 契约）。
+        if (guard != null && isCurrentRun(guard)) {
+            guard.llmRounds++;
+            telemetryTurnTracker.noteRound(conversationId);
+        }
+        log.info("[Round] conv={} depth={} round={} tools={} messages={}",
+                conversationId, depth, guard == null ? -1 : guard.llmRounds, visible.size(), messages.size());
         try {
             model.generate(messages, visible, handler);
         } catch (Exception e) {

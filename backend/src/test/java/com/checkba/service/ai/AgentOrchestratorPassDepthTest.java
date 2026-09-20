@@ -107,7 +107,7 @@ class AgentOrchestratorPassDepthTest {
                         SystemMessage.from("system"), UserMessage.from("请校对全文"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))
                 .thenAnswer(inv -> new ToolRegistry.ToolResult("{\"pass\":{\"done\":false}}", null, true));

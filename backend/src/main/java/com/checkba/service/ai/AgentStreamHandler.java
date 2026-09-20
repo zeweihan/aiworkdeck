@@ -60,6 +60,9 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     private volatile boolean streamedAnyReasoning = false;
     // 最近一次流活动时间（onNext / onReasoning / onKeepAlive 刷新），看门狗据此判定"流停滞"
     private volatile long lastActivityNanos = System.nanoTime();
+    // 本轮请求发出的时刻（armInactivityWatchdog 设定）与「首字已记过账」闩，用于 TTFT 日志
+    private volatile long roundStartNanos = 0L;
+    private volatile boolean ttftLogged = false;
     private volatile java.util.concurrent.ScheduledFuture<?> watchdogFuture;
 
     // 守护线程调度器：进程退出不被它拖住；全局单线程足够（只做轻量检查）
@@ -92,6 +95,10 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
      */
     public void armInactivityWatchdog(int firstTokenSeconds, int inactivitySeconds) {
         lastActivityNanos = System.nanoTime();
+        // TTFT 的零点（dev-board#729 ⑥）：看门狗上弦的位置正好是「工具准备与本地压缩都做完、
+        // 马上要发请求」那一刻，与 runLoop 里 generate 的调用点只隔几行，是最诚实的起算点。
+        roundStartNanos = lastActivityNanos;
+        ttftLogged = false;
         watchdogFuture = WATCHDOG.scheduleWithFixedDelay(() -> {
             if (terminated.get()) return;
             long idleSec = (System.nanoTime() - lastActivityNanos) / 1_000_000_000L;
@@ -109,6 +116,23 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                                 "Model returned nothing within " + limitSec + " seconds")));
             }
         }, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /**
+     * 首字节到达时间（TTFT，dev-board#729 ⑥）：每轮只打一条 info。
+     *
+     * <p>本机实测一条消息的墙钟中位 80 秒、其中 91% 花在 LLM 推理上，但「推理」到底是
+     * 等首字节（prompt 太大、服务商排队）还是生成本身慢，日志里一直看不出来。
+     * 看门狗早就在维护 {@code lastActivityNanos}，这里只是把上弦时刻到首字节的差值写出来。
+     *
+     * <p>{@code kind} 区分 token 与 reasoning：思考型模型的首字节是思考增量，
+     * 两者混在一起看会把「思考了 4 秒就开始吐」误读成「正文 4 秒就出来了」。
+     */
+    private void noteFirstByte(String kind) {
+        if (ttftLogged || roundStartNanos == 0L) return;
+        ttftLogged = true;
+        log.info("Stream TTFT conv={} model={} kind={} ms={}",
+                conversationId, modelId, kind, (System.nanoTime() - roundStartNanos) / 1_000_000L);
     }
 
     private void cancelWatchdog() {
@@ -161,7 +185,10 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         // 终态后到达的迟到 token 丢弃（看门狗已终止本轮时，底层流可能还在吐）
         if (terminated.get()) return;
         lastActivityNanos = System.nanoTime();
-        if (token != null && !token.isEmpty()) streamedAnyToken = true;
+        if (token != null && !token.isEmpty()) {
+            streamedAnyToken = true;
+            noteFirstByte("token");
+        }
         if (token != null) {
             // Notify token callback for real-time state tracking
             if (onToken != null) {
@@ -186,6 +213,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         if (terminated.get() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
         lastActivityNanos = System.nanoTime();
         streamedAnyReasoning = true;
+        noteFirstByte("reasoning");
         sendSse("reasoning_delta", "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
     }
 

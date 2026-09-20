@@ -77,7 +77,7 @@ class AgentOrchestratorTerminalErrorPersistenceTest {
                         SystemMessage.from("system"), UserMessage.from("整理一下这份合同"))));
 
         ToolRegistry toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         SkillRouter skillRouter = mock(SkillRouter.class);
         when(skillRouter.visibleTools(any(), any())).thenAnswer(inv -> inv.getArgument(1));
         XmlToolCallParser parser = mock(XmlToolCallParser.class);

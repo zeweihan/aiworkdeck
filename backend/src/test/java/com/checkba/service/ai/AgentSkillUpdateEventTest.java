@@ -115,7 +115,7 @@ class AgentSkillUpdateEventTest {
                         SystemMessage.from("system"), UserMessage.from("帮我出一张诉讼时间轴"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
 
         skillRouter = mock(SkillRouter.class);
@@ -216,7 +216,7 @@ class AgentSkillUpdateEventTest {
     @Test
     @DisplayName("ASK 只暴露并执行 memory_list/read/search，读完后可继续生成答案")
     void askModeKeepsOnlyReadOnlyMemoryTools() {
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of(
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of(
                 spec("memory_list"), spec("memory_read"), spec("memory_search"), spec("memory_write")));
         when(toolRegistry.execute(eq("memory_read"), any(), any()))
                 .thenReturn(new ToolRegistry.ToolResult("remembered preference", null, true));
@@ -250,7 +250,7 @@ class AgentSkillUpdateEventTest {
     @Test
     @DisplayName("ASK 对模型伪造的 memory_write 做分发层拒绝")
     void askModeRejectsUnadvertisedWriteCall() {
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of(spec("memory_read"), spec("memory_write")));
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of(spec("memory_read"), spec("memory_write")));
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
         StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
             @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
@@ -283,7 +283,7 @@ class AgentSkillUpdateEventTest {
         List<ToolSpecification> registered = new ArrayList<>();
         registered.add(action);
         registered.addAll(memory);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(registered);
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(registered);
         when(skillRouter.visibleTools(any(), any())).thenReturn(List.of(action));
         List<String> offered = new CopyOnWriteArrayList<>();
         StreamingChatLanguageModel model = new StreamingChatLanguageModel() {

@@ -63,7 +63,19 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
 - `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。
 
 **桥接服务**
-- `backend/src/main/java/com/checkba/service/ai/EditorBridgeService.java` — 核心桥接：生成 requestId、经 SSE `client_action` 下发、CompletableFuture 阻塞等前端结果（超时 30s）。曾名 WpsActionService。
+- `backend/src/main/java/com/checkba/service/ai/EditorBridgeService.java` — 核心桥接：生成 requestId、经 SSE `client_action` 下发、CompletableFuture 阻塞等前端结果。曾名 WpsActionService。
+  **超时是分级的**（`ACTION_TIMEOUT_SECONDS`，默认 30s）：整文档装载/导出/三方合并 180s，
+  写入类与**读取类**同为 120s，只有瞬时交互（`collapse_selection`/`goto`/`undo` 等）还吃 30s 默认值。
+  读取类是 dev-board#729 ③ 才进表的——此前全部吃 30s，而本机 telemetry 219 次桥调用里 12 次超时
+  共空等 362 秒，后端日志 86 次超时里 **79 次是读取类**（find_text_locations 41、get_document_text 15 居前）。
+  根因是 `doc_open_file` 是 fire-and-forget：模型「打开文档 → 立刻读」时那条读命令正撞在装载中
+  （`doc_open_file_sync` 自己就给了 180s）。代价还不止那 30 秒——模型拿到失败会再读一次，
+  又是一整个 LLM 往返（真机中位 80 秒）。
+  **三处同表**：本表 + `frontend/src/composables/libreofficeExecutorClient.js` 与 `zetaOfficeRelay.js`
+  的 `ACTION_BUDGET_MS`。**只改后端是无效的**：前端到点会自己 reject 并把错误回传，
+  后端那 120 秒等不到任何东西。护栏 `EditorBridgeServiceTest`。
+  **`TIMEOUT_RESULT_JSON` 里不许再点名任何读取工具**：旧文案让模型「去调 doc_get_document_text 确认」，
+  而读取命令与超时的那条在同一个编辑器上排队，十有八九跟着一起超时——一次超时变成两次。
 - `backend/src/main/java/com/checkba/controller/ai/EditorResultController.java` — `POST /editor-result`（旧别名 `/wps-result`）回调解锁 Future。
 - `backend/src/main/java/com/checkba/service/ai/AgentOrchestrator.java` — dispatchTool 在首个 MODIFIED 工具前建检查点（~:168）；doc_open_file 后切 activeFileId（~:179）；流式 token 双发 doc_stream_data/wps_stream_data（~:371-376）。
 - `backend/src/main/java/com/checkba/service/ai/AgentStreamHandler.java` — 流式写入编辑器的过滤逻辑（~:69 起）。

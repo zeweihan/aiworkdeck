@@ -32,12 +32,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class EvalToolBeanParityTest {
 
-    private static final Set<String> KNOWN_MISSING = Set.of(
-            // TodoTools 已于 2026-08 的交互对齐补进 RealToolBeans（反问/长任务那批改动里，
-            // todo_write 的可见性本来就是要断言的对象），故从名单移除。
-            "CheckpointTools",    // 文档检查点
-            "SlideEditTools"      // slide_* 演示文稿原语
-    );
+    /**
+     * 欠账已清零（dev-board#729 ①）：CheckpointTools 与 SlideEditTools 已补进 RealToolBeans。
+     * 名单留空是刻意的——下一个想往这里加名字的人，请先读上面那段说明。
+     */
+    private static final Set<String> KNOWN_MISSING = Set.of();
 
     @Test
     @DisplayName("生产的每个 AgentToolComponent 都在评测的工具 bean 清单里（已知欠账除外）")

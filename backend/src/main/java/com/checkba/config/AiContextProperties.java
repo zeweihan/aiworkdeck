@@ -27,11 +27,43 @@ import java.util.Map;
 @ConfigurationProperties(prefix = "ai.context")
 public class AiContextProperties {
 
-    /** 上下文总 token 预算（默认基于 GPT-4 128K / Gemini 1M 的保守值） */
-    private int maxContextTokens = 100000;
+    /**
+     * 上下文总 token 预算的**兜底值**：只在模型标识解析不出上下文长度时才用到
+     *（白名单外的模型 id、Ollama 本地模型、modelKey 为 null 的调用）。
+     *
+     * <p>白名单内的模型走 {@code AllowedModels.getContextLength()} 派生（见 {@link #maxContextTokensFor}），
+     * 不再吃常数。旧值 100000 的依据是「GPT-4 128K」，而今天白名单里最小的
+     * Claude Haiku 4.5 也有 20 万，多数是 100 万。用 10 万当总预算的后果是每条稍长的会话
+     * 都在首 token 之前插一次<b>同步 LLM 摘要调用</b>（ContextCompressor → ConversationSummarizer），
+     * 白白多等一整个模型往返，还把真实上下文压没了。
+     *
+     * <p><b>为什么兜底值也一起抬到 20 万</b>：{@link #systemPromptReserve} 同时从 8000 改到了
+     * 60000（那才是真实前缀体量）。兜底值若还停在 10 万，解析不出上下文长度的模型
+     *（白名单外 id / 本地 Ollama）的「历史可用预算」会从 79000 掉到 27000 —— 比改动前更早触发
+     * 同步摘要，与本次「提速」的目标正好相反。20 万取白名单里最小的那一条，
+     * 保证这次改动<b>只会放宽、不会收紧任何一个模型</b>。
+     */
+    private int maxContextTokens = 200000;
 
-    /** system prompt 预留 token */
-    private int systemPromptReserve = 8000;
+    /**
+     * 派生总预算时给模型标称上下文留的余量比例（0.85 = 用 85%）。
+     *
+     * <p>标称上下文是「输入 + 输出」的总和，而 responseReserve 只覆盖我们预期的回复长度；
+     * 再加上 chars/token=2.0 这个估算系数对中文系统性偏乐观，顶着标称值用必然会撞 400。
+     * 撞了也不是没救（CONTEXT_OVERFLOW 有专用恢复通道），但那要白烧一次请求。
+     */
+    private double modelBudgetHeadroom = 0.85;
+
+    /**
+     * system prompt 预留 token。
+     *
+     * <p><b>60000 是实测值，不是拍的</b>：本机 telemetry 的每轮 promptTokens 约 5 万，
+     * 其中约 2/3 是工具 schema（202 个工具 59045 token，裁到 16 个只剩 18854）。
+     * 旧值 8000 与真实固定前缀差了近一个数量级，于是「历史可用预算」被系统性高估
+     * 7 倍有余——压缩该触发时不触发（等服务商 400），不该触发时因为总预算只有 10 万
+     * 反而提前触发。这一项与 {@link #maxContextTokens} 的错误方向相反，互相掩盖了很久。
+     */
+    private int systemPromptReserve = 60000;
 
     /** 记忆注入预留 token */
     private int memoryReserve = 5000;
@@ -113,22 +145,44 @@ public class AiContextProperties {
 
     /**
      * 解析指定模型的上下文总 token 预算：
-     * 1. 精确匹配 modelTokenBudgets 的 key（不区分大小写）
-     * 2. 子串匹配：key 包含于模型标识中
-     * 3. 否则返回默认 maxContextTokens
+     * <ol>
+     *   <li>精确匹配 modelTokenBudgets 的 key（不区分大小写）——显式配置永远最优先；</li>
+     *   <li>子串匹配：key 包含于模型标识中；</li>
+     *   <li><b>按 {@code com.checkba.service.ai.AllowedModels} 的标称上下文长度派生</b>
+     *       （× {@link #modelBudgetHeadroom}）；</li>
+     *   <li>都不命中（白名单外 id / Ollama 本地模型 / modelKey 为 null）时返回兜底
+     *       {@link #maxContextTokens}。</li>
+     * </ol>
+     *
+     * <p>第 3 步是 dev-board#729 ④ 加的。此前 {@code modelTokenBudgets} 一直是空的，
+     * 于是所有模型都吃 10 万这个常数——而生产默认模型 deepseek-v4-flash 的真实上下文是
+     * 1,048,576。把 100 万的窗口当 10 万用，代价是每条长一点的会话都在首 token 之前
+     * 多插一次同步 LLM 摘要调用。
+     *
+     * <p><b>只会变大不会变小</b>：白名单里最小的是 Claude Haiku 4.5 的 20 万，
+     * ×0.85 = 17 万，仍高于原来的 10 万。所以这条改动不会让任何模型比以前更早触发压缩。
      */
     public int maxContextTokensFor(String modelKey) {
-        if (modelKey == null || modelKey.isBlank() || modelTokenBudgets.isEmpty()) {
+        if (modelKey == null || modelKey.isBlank()) {
             return maxContextTokens;
         }
         String normalized = modelKey.toLowerCase();
-        Integer exact = modelTokenBudgets.get(normalized);
-        if (exact != null) {
-            return exact;
+        if (!modelTokenBudgets.isEmpty()) {
+            Integer exact = modelTokenBudgets.get(normalized);
+            if (exact != null) {
+                return exact;
+            }
+            for (Map.Entry<String, Integer> e : modelTokenBudgets.entrySet()) {
+                if (normalized.contains(e.getKey().toLowerCase())) {
+                    return e.getValue();
+                }
+            }
         }
-        for (Map.Entry<String, Integer> e : modelTokenBudgets.entrySet()) {
-            if (normalized.contains(e.getKey().toLowerCase())) {
-                return e.getValue();
+        com.checkba.service.ai.AllowedModels known = com.checkba.service.ai.AllowedModels.fromId(modelKey);
+        if (known != null) {
+            int derived = (int) Math.floor(known.getContextLength() * modelBudgetHeadroom);
+            if (derived > 0) {
+                return derived;
             }
         }
         return maxContextTokens;
@@ -249,6 +303,8 @@ public class AiContextProperties {
 
     public int getMaxContextTokens() { return maxContextTokens; }
     public void setMaxContextTokens(int maxContextTokens) { this.maxContextTokens = maxContextTokens; }
+    public double getModelBudgetHeadroom() { return modelBudgetHeadroom; }
+    public void setModelBudgetHeadroom(double modelBudgetHeadroom) { this.modelBudgetHeadroom = modelBudgetHeadroom; }
     public int getSystemPromptReserve() { return systemPromptReserve; }
     public void setSystemPromptReserve(int systemPromptReserve) { this.systemPromptReserve = systemPromptReserve; }
     public int getMemoryReserve() { return memoryReserve; }

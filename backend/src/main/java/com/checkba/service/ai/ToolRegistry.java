@@ -251,9 +251,24 @@ public class ToolRegistry {
      * none 会话两者都隐藏。conversationId 为 null 时按默认能力（LOWA）处理。
      */
     public List<ToolSpecification> getAllSpecifications(String conversationId) {
+        return getAllSpecifications(conversationId, null);
+    }
+
+    /**
+     * 再按 LOWA 活跃文档类型收窄（dev-board#729 ①）：docx 会话不下发 sheet_* 与 slide_* 的 schema。
+     *
+     * <p><b>只裁 spec、不裁 resolve/execute</b>（与 {@code AgentToolComponent.isAvailable()}
+     * 同一口径）：模型看不见即不会去试，而万一经 XML 兜底路径调到了被裁的工具，
+     * 拿到的是工具自己那句可行动的错误（"当前打开的不是电子表格…"），
+     * 远好过一句 "Tool not found"——后者会让模型以为这个能力整个不存在。
+     *
+     * @param activeDocKind 见 {@link ClientCapabilityService#isToolVisible(String, String, String)}；
+     *                      null = 不裁剪
+     */
+    public List<ToolSpecification> getAllSpecifications(String conversationId, String activeDocKind) {
         List<ToolSpecification> filtered = new ArrayList<>();
         for (ToolSpecification spec : getAllSpecifications()) {
-            if (clientCapabilityService.isToolVisible(spec.name(), conversationId)) {
+            if (clientCapabilityService.isToolVisible(spec.name(), conversationId, activeDocKind)) {
                 filtered.add(spec);
             }
         }

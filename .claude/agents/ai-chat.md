@@ -113,6 +113,44 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
+- **工具可见性是三层闸，判据分别在三个地方**（改任一层前先分清是哪一层）：
+  ① **会话客户端能力**（`ClientCapabilityService.isToolVisible`）：LOWA 会话只见 doc_/sheet_/slide_，
+     Office 插件会话只见 office_* 且按宿主 Word/Excel/PowerPoint 再分，none 两者皆无；
+  ② **活跃文档类型**（dev-board#729 ①，同一个方法的三参重载 + `visibleForDocKind`）：
+     docx 隐藏全部 slide_* 与除 `sheet_create_file` 外的 sheet_*；xlsx/pptx 反过来隐藏 doc_*，
+     但 `KIND_AGNOSTIC_LOWA_TOOLS` 里的**六个工具永远保留**——判据是
+     「这个工具的效果不依赖活跃文档的类型」，两类：
+     **纯后端**（不经 `executeEditorCommand`）的 doc_list_project_files / doc_open_file /
+     doc_search_related_docs / doc_restore_checkpoint（裁掉它们 xlsx 会话就再也打不开 Word 文档、
+     Calc/Impress 也没有后悔药了）；**「新建并打开一份新文档」**的 sheet_create_file 与
+     doc_start_stream（作用在新建出来的那份文件上，不是活跃文档）。
+     **判不准一律倒向全集**：kind 为 null / 空 / "text" / 未知值都不裁。
+  ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节。
+  - **为什么值得做②**：工具规格**每一轮都要重发**，一条消息跑三五个往返就付三五遍。
+    本机实测 202 个工具 59045 prompt token / 首轮 26.4s，裁到 16 个 18854 token / 6.1s；
+    本仓离线实测（`ToolSchemaBudgetTest`）docx 省 26.7%、xlsx 省 38.9%、pptx 省 39.7% 的 schema 体量。
+  - **一轮内工具集必须不变**：kind 在 `beginRun` 时算一次存进 `RunGuard.activeDocKind`，
+    runLoop 每次递归都读同一个值。每轮重算的话，模型上一轮已经宣布要调的工具这一轮可能就没了，
+    通道直接 400。**改写点只有 `dispatchTool` 里的两处，且都只放宽不收窄**：
+    `doc_open_file` 切到不同类型（`widenDocKindIfTypeChanged`，类型读不出来也算变了）；
+    `sheet_create_file` / `doc_start_stream` 成功建了别类型的文档
+    （`widenDocKindAfterDocumentSwitch`，表在 `NEW_DOCUMENT_TOOL_KINDS`）。
+    第二处是**必须的**：Word 会话里 `sheet_create_file` 建了张表，接下来填内容的
+    `sheet_write_cells` 还被裁着——第一步做成了、第二步没有工具可用，是最坏的一种半途而废。
+    新增任何「会换掉活跃文档」的工具都要进这两处之一。
+  - **只裁 spec，不裁 resolve/execute**（与 `AgentToolComponent.isAvailable()` 同口径）：
+    模型看不见即不会试，万一经 XML 兜底路径调到了被裁的工具，拿到的是工具自己那句可行动的
+    错误（"当前打开的不是电子表格…"），远好过 "Tool not found"。
+  - 判文档类型的**单一判据**是 `ContextAssemblerService.lowaDocKind(ContextItem)` /
+    `lowaDocKindOf(fileType, fileName)`（prompt 文案与工具白名单必须同源，各写一份的表现是
+    「提醒说这是表格、下发的却是 Writer 工具集」，两边都不报错）。
+  - 回放护栏 `cases-tool-visibility.json`（5 例，起跑时的裁剪）+ `cases-tool-visibility-widening.json`
+    （3 例，中途放回全集；用 `expect.offeredToolsExcludeFirstCall` / `offeredToolsIncludeLastCall`
+    这对**逐轮**断言——全轮次的 `offeredToolsExclude` 在这种形态下必然自相矛盾）
+    + `ClientCapabilityDocKindTest` + `ToolSchemaBudgetTest`。
+    **`RealToolBeans` 的清单必须齐全**：CheckpointTools 与 SlideEditTools 长期漏列，
+    于是针对它们的 `offeredToolsExclude` 全是空断言（工具名没注册，排除断言恒过）——
+    已于 dev-board#729 补齐，`EvalToolBeanParityTest.KNOWN_MISSING` 现在是空集，别再往里加名字。
 - **组件级可用性闸（dev-board#396）**：`AgentToolComponent.isAvailable()`（default true）。返回 false 的组件**仍然登记进 builtinTools**（resolve/execute 照常命中），但**它的 spec 不进 builtinSpecifications**——模型看不见即不会去试，而万一被 XML 兜底路径调到，拿到的是工具自己那句可行动的错误（远好过 "tool not found"）。探测在 `ToolRegistry.init` 的 @PostConstruct 上跑，所以实现**必须自己缓存且绝不抛异常**（抛了也被 `componentAvailable` 兜成"可用"，最坏多下发一个工具，但不许让后端起不来）。今天唯一的使用者是 `PythonTools`：`run_python` 无条件 `docker run python:3.9-slim`，判据是「docker 可执行文件在 **且** `docker version` 成功」（Docker Desktop 装了没开的机器上 CLI 在、守护进程不在，run 一样起不来），3 秒超时、输出 DISCARD（接了管道又不读会把子进程卡在 write 上）、**进程级**缓存（不是每实例一份：eval 里每个 harness 都会新建一个 PythonTools，逐个 fork docker 子进程会把测试拖慢几分钟）。护栏 `ToolRegistryAvailabilityTest` / `PythonToolsDockerGateTest`。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
 - tools/：FileTools(13，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(2，dev-board #53：task_create/task_list，项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。
@@ -144,6 +182,23 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **finishReason 结构化消费**（2026-08 对标 dsh，此前全链路零消费）：① `isTruncatedToolCallRound`——LENGTH + 工具调用**一律不执行**（参数被砍半后「恰好仍可解析」比解析失败更危险：半截 write_file 覆盖用户文件），且截断轮的 AiMessage **不入栈**（不执行又入栈 = tool_calls 无配对结果 → 通道 400），复用 malformedToolRounds 纠正回路 ≤2 轮，耗尽转 PAUSED（`bubble_end reason=max_tokens`）；② LENGTH + 纯文本 → 「暂停 + 继续」收尾，不装正常完成，刻意不触发记忆管线与版本落档；③ `isEmptyResponse`——正常终止 + 零内容 + **零 token 流出**（三条件缺一不可，有 token 给用户看过就绝不重放）按瞬时错误退避重试，空 AiMessage 不入栈，预算耗尽转终态错误而不是静默 FINISHED。finishReason 为 null 的通道（Ollama / 回放评测的 ScriptedStreamingModel）行为与改造前一致。测试：`AgentOrchestratorFinishReasonTest`。
 - **REGION_BLOCKED = 403 的地域子类**：OpenRouter 对国际模型在境内网络返回 403「This model is not available in your region」。**不许整体放宽 403**——key 失效/额度禁用也是 403，放宽会把它们带进换模型重试变成重复扣费探测；判据是「403 + 响应体含地域语义」（多子串择一命中，`looksLikeRegionRejection`）。这是文本匹配，上游改文案会退化成 FATAL，退化方向安全（不换模型、只是文案回英文原文）。不重试（同网络重试永远撞同一个 403）但 failoverable，且 `Kind.requiresRegionAgnosticFailover()` 要求候选收窄成 `AllowedModels.Region.GLOBAL`。终态错误载荷带稳定标记 `LlmErrorClassifier.REGION_BLOCKED_MARKER`（"AI_REGION_BLOCKED"，由 `taggedErrorMessage` 拼），前端 `useAgentStream` 用 includes 命中后换成中文引导（载荷前面还拼着「Stream Error: 」，别写成前缀判断）。
 - **故障转移链**（`ai.failover.models`，默认两个区域无关常青模型）：重试预算耗尽仍是限流/瞬时错误、模型下线 404（PR#144 坑的一般化）、或地域拒绝时，`switchToFailoverModel` 换模型同 depth 重放本轮并发 SSE 明示切到了哪个。候选必须在 `AllowedModels` 白名单内——非白名单会被工厂静默回落默认模型，切了等于没切；REGION_BLOCKED 还要再按 `AllowedModels.availableIn(GLOBAL)` 过滤，否则换一个同样是国际档的模型只会再撞一次 403。**计费红线：只换 modelId，通道由 `ChatModelFactory.resolveProvider()` 决定，与 modelId 无关**；平台通道下取不到 key 抛的 AccountException 原样透出并终止，绝不回退 BYOK（会花用户自己的钱）。FATAL（400/401、非地域 403 与未知错误）不换模型。
+- **上下文预算的基数（dev-board#729 ④，改压缩相关代码前先读这条）**：「历史可用预算」=
+  `maxContextTokensFor(modelId) - systemPromptReserve - memoryReserve - responseReserve`
+  （`ContextCompressor.getAvailableTokensForHistory`，`RunLoopCompactor` 也读它）。
+  - `maxContextTokensFor` 的解析链是**四级**：显式 `ai.context.model-token-budgets` 精确匹配 →
+    子串匹配 → **`AllowedModels.contextLength × model-budget-headroom`（0.85）** → 兜底
+    `ai.context.max-context-tokens`。第三级是新加的：改动前 `modelTokenBudgets` 一直是空的，
+    于是**所有模型都吃 10 万那个常数**，而生产默认模型 deepseek-v4-flash 的真实上下文是 1,048,576。
+  - `system-prompt-reserve` 是 **60000，实测值**（每轮 promptTokens 约 5 万，其中约 2/3 是工具 schema）。
+    旧值 8000 与真实固定前缀差了近一个数量级；它与「总预算只有 10 万」两个错误方向相反，
+    互相掩盖了很久——**改其中一个必须同时看另一个**。
+  - 兜底 `max-context-tokens` 随之从 10 万抬到 **20 万**（白名单里最小的 Claude Haiku 4.5）：
+    reserve 抬到 6 万后兜底值若还是 10 万，解析不出上下文长度的模型（白名单外 id / 本地 Ollama）
+    可用预算会从 79000 掉到 27000，比改动前更早触发同步摘要。
+    **不变式：任何模型的历史可用预算都不得低于旧口径的 79000**，由
+    `AiContextPropertiesTest.noModelEverGetsATighterHistoryBudgetThanBefore` 钉住。
+  - 为什么这件事要紧：触发压缩会走 `ContextCompressor` → `ConversationSummarizer`，
+    那是**首 token 之前的同步 LLM 调用**——用户白等一整个模型往返，上下文还被压掉了。
 - **自动 compaction**（`context/RunLoopCompactor` + `ai.context.compaction`）：runLoop 每轮 generate 前估算 token，超「历史可用预算 × 0.8」时把中段折叠成一条摘要，保留 system prompt + 首条用户消息 + 最近 8 条。**结构感知**：保留段绝不以 ToolExecutionResultMessage 打头（拆散 tool_calls 配对会让 OpenAI 兼容通道直接 400），这也是不能直接复用 ContextCompressor 的原因——那套会把消息重建成纯文本、抹掉 toolExecutionRequests。摘要本地生成不调 LLM（交互路径中间插同步 LLM 调用等于新增一处卡死成因），上一版摘要会并进新摘要。压缩失败一律原样继续；中段不足 4 条不压，回放评测用例碰不到阈值。
   - **剪枝先于折叠**（2026-08 对标 dsh tool-result-pruner）：触发后先把中段（keepRecent 尾部**刻意不动**——模型正在引用）超过 8192 字符的工具结果剪成首 4096 + 尾 1024 + 省略标记（`PRUNE_MARKER`，提示模型要全文重调工具），只改正文不动 id/toolName（配对不断）；剪完重估、够了就完全不折叠。**必须变小**：折叠后估算不降反升就放弃折叠退回剪枝版（小中段的摘要头开销会得不偿失，溢出恢复还会拿着更大的栈白撞 400）。
   - `forceCompact(messages, modelId)`：CONTEXT_OVERFLOW 恢复通道专用，跳过阈值判断做剪枝 + 折叠；返回原实例 = 压不动（调用方据此放弃重试）。
@@ -372,6 +427,17 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   ai.turn 由 AgentRunStateService.mark 单点合成（新增终止分支走 mark 即自动覆盖）；
   ai.tool 在 dispatchTool；真实模型分布在 ChatModelFactory 的 getOrCreate* 处（请求 modelId 会被白名单改写，别埋 controller）。
   隐私红线：消息文本/文件名/原始 conversationId 永不入账本，convKey 用 InstallIdentityService 派生。
+  **ai.turn 的 `rounds` 与 `promptTokensFirstRound`（dev-board#729 ⑥）**：前者由
+  `TelemetryTurnTracker.noteRound`（runLoop 每次 generate 前）累计，后者由 `notePromptTokens`
+  只记第一次（后续轮次叠着工具结果，混在一起就看不出固定前缀体量了）；两者都只由
+  **当前轮次**记账（`isCurrentRun` 闸），拿不到 usage 时 `promptTokensFirstRound` **整个字段不写**
+  （写 0 会让「拿不到」与「真的很小」在账本里长得一模一样）。有了这两个数才分得清
+  「一轮很慢」与「跑了八轮」——此前账本里只有总时长。**官网仓 lib/telemetry-store.ts 的
+  EVENT_WHITELIST 尚未同步这两个字段**（跨仓，不在本次改动范围），不同步的话上报到官网会被整条丢弃。
+  配套还有两条 INFO 日志：`[Round] conv=… depth=… round=… tools=… messages=…`（每轮工具数与栈深）
+  与 `Stream TTFT conv=… model=… kind=token|reasoning ms=…`（首字节耗时，零点是看门狗上弦那一刻，
+  即工具准备与本地压缩都做完、马上要发请求；kind 区分正文与思考增量，混看会把「思考了 4 秒」
+  误读成「正文 4 秒就出来了」）。
 - 新增工具不要改编排器（Phase 1 五条不变式）：实现 AgentToolComponent + @Tool + @ToolMeta 即自动注册；显示名要同步 toolDisplayNames.js。
 - SubAgentTools 注入必须 @Lazy（启动死环）。
 - 30 秒覆盖启发式曾致历史丢回复，现为轮次级 upsert（PR#153）——改历史持久化先读该记录。
@@ -460,7 +526,7 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，**13 组**）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）、cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）与 **cases-question**（反问停机：awaiting_input / 执行日志随停机落库 / 同轮工具+反问不递归 / 计划审批优先于反问）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
   - **地雷：`eval/RealToolBeans.instantiateAll()` 的清单必须与生产 `AgentToolComponent` 集合同步。** TodoTools 曾长期漏列，于是 `todo_write` 在整个回放评测里根本没注册——`offeredToolsInclude` 永远失败、`offeredToolsExclude` 永远通过，相关可见性断言全是空的（已补 TodoTools）。**目前仍缺 CheckpointTools 与 SlideEditTools**，补时要同时复核各用例的 offeredToolsExclude。
   - **跨类 `public static final` 常量在编译期内联**：只跑 `mvn test` 的增量编译会留下「源码一致、字节码不一致」的假失败，验证阶段一律 `mvn clean test`。
-  - **`mvn clean test` 里有 14 条 skip 是常态**（2026-09-09 实测：Tests run 3410 / Skipped 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
+  - **`mvn clean test` 里有 15 条 skip 是常态**（2026-09-20 实测：Tests run 4321 / Skipped 15；2026-09-09 时是 3410 / 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；WritingLiveEvaluationTest **1** 条同样要 key；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
   - **Mockito 陷阱（踩过）**：`String.valueOf(inv.getArgument(n))` 会被 Java 重载决议挑成 `String.valueOf(char[])`（泛型 `<T> T` 推成 `char[]`），运行时抛 ClassCastException；若该 mock 的调用方把异常吞掉只 log（如 `SubAgentService.sendProgress`），表现就是「队列永远空、断言说没收到事件」，看着像生产代码不发事件。写 `inv.getArgument(n, String.class)`。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
 - 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。
