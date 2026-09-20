@@ -55,8 +55,10 @@
           </template>
 
             <!-- 5b. Message Actions：插入/替换/导出收进一个图标，点开再选（用户反馈三个
-                 平铺按钮太占地方）。菜单向上弹，透明遮罩点外即收。 -->
-            <div v-if="bubble.content && !bubble.isStreaming" class="message-actions">
+                 平铺按钮太占地方）。菜单向上弹，透明遮罩点外即收。
+                 按需展示：本轮已经改过文档、正在反问、或只是一句回执时都不出
+                 （判据在 utils/useInDocumentVisibility.js，dev-board#728）。 -->
+            <div v-if="showUseInDocument" class="message-actions">
                <div class="msg-act-trigger" :class="{ active: showActions }" @click.stop="showActions = !showActions">
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
@@ -115,6 +117,7 @@ import QuestionCard from './QuestionCard.vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
 import { t } from '@/i18n'
 import { visibleChatTimeline, isTimelineEntryActive } from './chatTimeline.mjs'
+import { shouldShowUseInDocument } from '@/utils/useInDocumentVisibility.js'
 
 const props = defineProps({
   bubble: { type: Object, required: true },
@@ -130,6 +133,8 @@ function sendAction(type) {
 }
 
 const showActions = ref(false)
+// 「用到文档」那组操作的可见性。判定整体在纯函数里（可单测），这里只做响应式包装。
+const showUseInDocument = computed(() => shouldShowUseInDocument(props.bubble))
 function pickAction(type) {
   showActions.value = false
   sendAction(type)

@@ -192,7 +192,7 @@ class AgentOrchestratorBlankToolOutputTest {
         assertFalse(sseEvents.contains("error"),
                 "空输出不许把整轮打掉（langchain4j 的 ensureNotBlank）：" + sseEvents);
         assertEquals(2, model.calls.get(), "空结果也要回喂模型继续下一轮");
-        assertEquals("{\"status\":\"finished\"}", bubbleEndData());
+        assertEquals("{\"status\":\"finished\",\"documentEdited\":false}", bubbleEndData());
         assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-blank").status());
 
         ToolExecutionResultMessage toolResult = model.lastMessages.stream()

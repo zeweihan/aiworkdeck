@@ -13,6 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { shouldShowUseInDocument } from '../../src/utils/useInDocumentVisibility.js'
 
 const SRC = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
 const BUBBLE = readFileSync(new URL('../../src/components/AgentMessage/RootBubble.vue', import.meta.url), 'utf8')
@@ -48,10 +49,16 @@ test('abort() 的停止提示走 stopNotice 独立字段，不写 content', () =
     '系统提示拼进 content 会触发 isReady/hasContent/「用到文档」chip 判定')
 })
 
-test('RootBubble 渲染 stopNotice，且「用到文档」chip 判据仍只认 content', () => {
+test('RootBubble 渲染 stopNotice，且「用到文档」chip 判据不认 stopNotice', () => {
   assert.match(BUBBLE, /bubble\.stopNotice/, 'RootBubble 要渲染停止提示条')
-  assert.match(BUBBLE, /v-if="bubble\.content && !bubble\.isStreaming"/,
-    'message-actions 的判据是 content 非空且流已结束，别把 stopNotice 算进去')
+  // 判据在 dev-board#728 收窄并整体挪进 shouldShowUseInDocument（按需展示），
+  // 这里改断行为而不是断模板字面量：#212 要守的是「只有停止提示、没有模型正文的
+  // 那一回合不该长出可插入文档的操作项」，换成源码字符串比对只会在每次改模板时误报。
+  assert.match(BUBBLE, /v-if="showUseInDocument"/,
+    'message-actions 的可见性统一走 shouldShowUseInDocument')
+  assert.equal(
+    shouldShowUseInDocument({ content: '', isStreaming: false, stopNotice: '[正在停止] 已请求中断' }),
+    false, '停止提示不是模型正文，不该让「用到文档」冒出来')
 })
 
 // 执行真正的 abort 函数体：挂起的网络请求不得阻挡本地收尾，失败也不能谎报已发送。

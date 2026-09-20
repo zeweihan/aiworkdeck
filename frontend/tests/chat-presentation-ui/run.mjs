@@ -103,6 +103,15 @@ try {
   await wait(() => !window.chatState.isStreaming)
   const order = await page.evaluate(() => { const els = [...[...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.root-bubble-container').children]; return els.filter(e => e.matches('.thinking-card,.activity-entry,.main-content') && !e.textContent.startsWith('计划')).map(e => e.matches('.thinking-card') ? 'thinking' : e.matches('.main-content') ? 'text' : 'execution') })
   assert.deepEqual(order, ['thinking', 'text', 'execution', 'thinking', 'text'])
+  // 「用到文档」按需展示（dev-board#728）。这里是唯一能证明 computed 真的接上了 v-if 的地方：
+  // 判定本身有纯函数单测，而「判定 -> 模板」这一段接线只有真渲染看得见。
+  const actions = () => page.evaluate(() =>
+    !![...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.message-actions'))
+  assert.equal(await actions(), false, '一句回执下面不该挂插入/替换/导出')
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).content = '甲方应于本协议签署之日起十个工作日内，将标的股权对应的全部权利凭证交付乙方，并配合办理工商变更登记手续；逾期交付的，每逾期一日按转让价款的万分之五向乙方支付违约金，逾期超过三十日的，乙方有权解除本协议。' })
+  await wait(() => [...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.message-actions'))
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).documentEdited = true })
+  await wait(() => ![...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.message-actions'))
   await page.evaluate(() => window.loadFixture('single'))
   await page.screenshot({ path: '/tmp/awd-chat-646-light.png' })
   await page.focus('.thinking-card .header')
@@ -118,7 +127,7 @@ try {
   await wait(() => window.ready)
   assert.ok(await page.$eval('.message-list', el => el.textContent.includes('Ran 17 operations')), 'English controls interpolate')
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))
