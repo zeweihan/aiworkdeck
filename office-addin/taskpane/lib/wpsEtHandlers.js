@@ -29,6 +29,9 @@
  * 7. 空工作表的 UsedRange 行为（VBA 口径返回 A1 单格而非 null）。
  */
 
+import { etRangeText } from './wpsDoc.js'
+import { parseLocator, capReferenceText, unsupportedLocatorError } from './referenceRead.js'
+
 /* ==================== 入口与通用 helper ==================== */
 
 /** 表格宿主 Application 入口（仅在 WPS 表格进程内有效） */
@@ -1092,6 +1095,22 @@ export const WPS_ET_HANDLERS = {
       pivot.AddDataField(pivotFieldOrThrow(pivot, field))
     }
     return { added: true, name: String(pivot.Name || name), rowFields, valueFields }
+  },
+
+  // ==================== 供其他窗格引用（dev-board#717） ====================
+
+  /**
+   * 别的窗格经云端下发：按 locator 读本工作簿的一块区域为 TSV，返回 {text}
+   * （契约同 officeExecutor）。只读；不带定位读活动工作表的已用区域，与随消息附带的正文同口径。
+   */
+  async read_for_reference(args) {
+    const loc = parseLocator(args.locator)
+    if (loc.kind !== 'none' && loc.kind !== 'sheet') throw unsupportedLocatorError('excel', loc.kind)
+    // 名字写错时 resolveSheet 会列出工作簿里现有的表名
+    const sheet = resolveSheet(loc.kind === 'sheet' ? loc.sheet : '')
+    const explicit = loc.kind === 'sheet' && loc.range
+    const range = explicit ? sheet.Range(loc.range) : sheet.UsedRange
+    return capReferenceText(etRangeText(sheet, range, { isUsedRange: !explicit }))
   }
 }
 
@@ -1107,4 +1126,96 @@ function pivotFieldOrThrow(pivot, field) {
     throw new Error(`未找到透视表字段：${field}（字段名须与源区域首行列标题完全一致，可先用 office_excel_get_range 核对）`)
   }
   return pf
+}
+
+/* ==================== 跨文档写入的改前值与撤销（dev-board#717） ==================== */
+
+/**
+ * 与 officeExecutor.captureOfficeState 同契约、同快照形态（excel：target {kind, sheetName, address}，
+ * state = target + formulas）。只覆盖改内容的命令，格式/结构类返回 null（撤不掉就不给假撤销）。
+ *
+ * 取的是 Range.Formula（常量格即常量、公式格即公式），写回也走 Formula——撤销要把公式还原成
+ * 公式，而不是还原成它当时算出来的值。**Formula 的读取形态（单格标量 / 多格二维）按与 Value2
+ * 同口径处理，未经真机验证**，这里做与 read2D 相同的防御性归一。
+ */
+const ET_UNDOABLE_COMMANDS = new Set(['excel_set_values', 'excel_set_formulas', 'excel_sort_range'])
+
+function readFormula2D(rng) {
+  const rows = rng.Rows.Count
+  const cols = rng.Columns.Count
+  const v = rng.Formula
+  if (rows === 1 && cols === 1) return [[Array.isArray(v) ? (Array.isArray(v[0]) ? v[0][0] : v[0]) : v]]
+  if (!Array.isArray(v)) return [[v]]
+  if (!Array.isArray(v[0])) {
+    if (rows === 1) return [v]
+    if (cols === 1) return v.map((x) => [x])
+  }
+  return v
+}
+
+export function captureEtState(command, args, limits) {
+  if (!ET_UNDOABLE_COMMANDS.has(command)) return null
+  const a = args || {}
+  const rangeAddress = String(a.rangeAddress || '')
+  if (!rangeAddress) return null
+  const data = command === 'excel_set_values' ? a.values
+    : command === 'excel_set_formulas' ? a.formulas : null
+  if (data && (!Array.isArray(data) || !data.length || !Array.isArray(data[0]))) return null
+  const sheet = resolveSheet(String(a.sheetName || ''))
+  let rng = sheet.Range(rangeAddress)
+  let rows = rng.Rows.Count
+  let cols = rng.Columns.Count
+  if (data) {
+    // 与 excel_set_values / excel_set_formulas 的落笔区域同一口径：单元格起点按数据尺寸展开
+    const dr = data.length
+    const dc = data[0].length
+    if (rows === 1 && cols === 1 && (dr > 1 || dc > 1)) {
+      rng = rng.Resize(dr, dc)
+      rows = dr
+      cols = dc
+    } else if (rows !== dr || cols !== dc) {
+      return null
+    }
+  }
+  const maxCells = limits && Number.isFinite(limits.maxCells) ? limits.maxCells : Infinity
+  if (rows * cols > maxCells) return null
+  const target = { kind: 'excel', sheetName: String(sheet.Name), address: String(rng.Address(false, false)) }
+  return { target, before: { ...target, formulas: readFormula2D(rng) } }
+}
+
+/** 按 target 读当前值；表被删、地址失效时回 null（撤销按冲突处理） */
+export function readEtState(target) {
+  const t = target || {}
+  if (t.kind !== 'excel') return null
+  try {
+    const rng = resolveSheet(String(t.sheetName || '')).Range(t.address)
+    return { kind: 'excel', sheetName: t.sheetName, address: t.address, formulas: readFormula2D(rng) }
+  } catch (e) {
+    return null
+  }
+}
+
+export function writeEtState(state) {
+  const s = state || {}
+  if (s.kind !== 'excel') throw new Error('无法识别的修订快照，撤销未执行')
+  resolveSheet(String(s.sheetName || '')).Range(s.address).Formula = s.formulas
+}
+
+/**
+ * 修订记录的「定位」（dev-board#717）：激活目标表并选中区域。永不 throw，一律回 {found}——
+ * 表已被删、地址失效只是「定位不到」，面板给一句轻提示即可。
+ */
+export function locateEtTarget(target) {
+  const t = target || {}
+  const sheetName = String(t.sheetName || '')
+  const address = String(t.address || '')
+  if (t.kind !== 'excel' || !sheetName || !address) return { found: false }
+  try {
+    const sheet = resolveSheet(sheetName)
+    sheet.Activate()
+    sheet.Range(address).Select()
+    return { found: true }
+  } catch (e) {
+    return { found: false }
+  }
 }

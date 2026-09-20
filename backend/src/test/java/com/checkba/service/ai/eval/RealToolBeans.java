@@ -23,6 +23,7 @@ import com.checkba.service.ai.tools.CheckpointTools;
 import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
+import com.checkba.service.ai.tools.ReferenceTools;
 import com.checkba.service.ai.tools.SlideEditTools;
 import com.checkba.service.ai.tools.SubAgentTools;
 import com.checkba.service.ai.tools.TagTools;
@@ -80,6 +81,8 @@ final class RealToolBeans {
                 PluginDevTools.class,
                 PptxTools.class,
                 PythonTools.class,
+                // ref_* 只对 OFFICE 会话可见（dev-board#717），回放用例默认 LOWA，不改变既有可见工具集
+                ReferenceTools.class,
                 SlideEditTools.class,
                 SubAgentTools.class,
                 TextFileEditTools.class,

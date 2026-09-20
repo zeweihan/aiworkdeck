@@ -3,6 +3,7 @@
 
 package com.checkba.service.ai;
 
+import com.checkba.service.addin.PaneRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -65,6 +66,12 @@ public class OfficeBridgeService {
         return ACTION_TIMEOUT_SECONDS.getOrDefault(command, OFFICE_ACTION_TIMEOUT_SECONDS);
     }
 
+    /**
+     * 超时失败文案的开头。跨文档读取（OpenDocSource）靠它认出超时、换掉下面那句只适用于写入的
+     * 「请不要直接重试这条写入命令」，所以改超时文案时开头必须仍是这个常量。
+     */
+    public static final String TIMEOUT_PREFIX = "操作超时";
+
     /** 测试覆盖用的超时（>0 时压过分级表；生产恒为 0，走 timeoutSecondsFor）。 */
     private volatile int timeoutOverrideSeconds = 0;
 
@@ -87,7 +94,54 @@ public class OfficeBridgeService {
         if (conversationId == null || conversationId.isBlank()) {
             return errorJson("缺少会话上下文，无法下发 Office 命令。");
         }
+        return dispatch(conversationId, command, args, null);
+    }
 
+    /** 跨窗格下发的发起方（dev-board#717）：B 窗格据此强制标修订、记修订记录。 */
+    public record CrossPaneOrigin(String paneId, String docName, String conversationId) {
+    }
+
+    /**
+     * 把命令下发到同一账号的另一个窗格（dev-board#717）。
+     *
+     * <p>发往目标窗格<b>当前</b>的会话，载荷多一个 {@code origin} 键。
+     * 归属校验仍由 OfficeResultController 按挂起表里登记的目标会话做。
+     *
+     * <p><b>「窗格还在不在」只看心跳，不看 SSE 有没有 emitter。</b>后端每轮结束都主动关掉 SSE
+     * 流（AgentOrchestrator/AgentStreamHandler），窗格要退避 1~30 秒才重连——一个开得好好的
+     * 窗格在这段空档里就是「没有 emitter」的。按 emitter 判活会把这段空档诬成「窗格没打开」，
+     * 而本窗格的 executeOfficeCommand 从来不这么做：client_action 进补发缓冲，重连时按
+     * Last-Event-ID 补回去（dev-board#287），照样执行。跨窗格没有理由比它脆。
+     * 真正关掉的窗格由 PaneRegistry 的 90 秒心跳过期兜住，调用方（OpenDocSource.target）
+     * 在这之前就报「窗格已经关闭」了。
+     *
+     * <p>origin 必须有：B 窗格靠它判定「这是跨文档写入」并强制标修订，
+     * 缺了它的写入到了 B 那边会被当成本窗格自己的操作，痕迹保证就落空了。
+     */
+    public String executeOnPane(PaneRegistry.PaneInfo target, String command,
+                                Map<String, Object> args, CrossPaneOrigin origin) {
+        if (target == null || target.conversationId() == null || target.conversationId().isBlank()) {
+            String name = target == null || target.docName() == null || target.docName().isBlank()
+                    ? "目标文档" : "《" + target.docName() + "》";
+            return errorJson(name + "的 AI WorkDeck 窗格还没有登记会话，请在该文档里打开 AI WorkDeck 窗格后重试。");
+        }
+        if (origin == null) {
+            return errorJson("缺少发起方信息，无法跨文档下发命令。");
+        }
+        Map<String, Object> o = new java.util.HashMap<>();
+        o.put("paneId", origin.paneId());
+        o.put("docName", origin.docName());
+        o.put("conversationId", origin.conversationId());
+        log.info("Cross-pane office command: command={}, targetPane={}, originPane={}",
+                command, target.paneId(), origin.paneId());
+        return dispatch(target.conversationId(), command, args, Map.of("origin", o));
+    }
+
+    /**
+     * 下发并阻塞等回传。extra 非空时并入载荷（跨窗格的 origin）。
+     */
+    private String dispatch(String conversationId, String command, Map<String, Object> args,
+                            Map<String, Object> extra) {
         String requestId = UUID.randomUUID().toString();
         int timeoutSeconds = timeoutOverrideSeconds > 0 ? timeoutOverrideSeconds : timeoutSecondsFor(command);
         CompletableFuture<OfficeActionResult> future = new CompletableFuture<>();
@@ -100,6 +154,7 @@ public class OfficeBridgeService {
             payload.put("command", command);
             payload.put("args", args != null ? args : Map.of());
             payload.put("conversationId", conversationId);
+            if (extra != null) payload.putAll(extra);
             sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payload));
             log.info("Sent office command: command={}, requestId={}", command, requestId);
 
@@ -118,7 +173,7 @@ public class OfficeBridgeService {
             // 旧文案只说「超时」，模型的自然反应就是原样重试一次——于是同一段内容
             // 被写进文档两遍，律师拿到的是重复条款。所以这里必须明确禁止直接重试，
             // 并指出先核对。写入类命令尤其要说死。
-            return errorJson("操作超时：插件未在 " + timeoutSeconds + " 秒内返回结果。"
+            return errorJson(TIMEOUT_PREFIX + "：插件未在 " + timeoutSeconds + " 秒内返回结果。"
                     + "注意：命令已经下发，宿主端**可能已经执行成功**，只是回执没回来。"
                     + "请不要直接重试这条写入命令（会写入两遍），"
                     + "先用读取类工具核对文档当前内容，确认没生效再重试。"

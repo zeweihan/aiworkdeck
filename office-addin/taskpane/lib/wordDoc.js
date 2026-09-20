@@ -59,38 +59,46 @@ async function readWordBody() {
   return { text, name: documentDisplayName('当前 Word 文档'), fileType: 'docx' }
 }
 
-async function readExcelSheet() {
+/**
+ * 一片区域读成 TSV 文字（最多 MAX_EXCEL_ROWS 行）。随消息附带的表格正文与
+ * read_for_reference（dev-board#717，别的窗格按 sheet: 定位读本表）共用这一份口径。
+ * range 为已用区域时可能是 null object（空表）。
+ */
+export async function excelRangeText(context, sheet, range) {
+  sheet.load('name')
+  // **先只取尺寸，不取值**（dev-board#288）：既然只展示前 MAX_EXCEL_ROWS 行，
+  // 把整片已用区域的 values 编组过桥就是白搬——几万行的台账「一问就卡死几十秒」，
+  // 而且卡的是同步桥上的任务窗格。WPS 面（wpsDoc.readEtSheet）早就是「先 Resize
+  // 再取 Value2」，Office 面一直没跟。截断必须发生在过桥之前。
+  range.load('address,isNullObject,rowIndex,columnIndex,rowCount,columnCount')
+  await context.sync()
+  if (range.isNullObject) return `工作表「${sheet.name}」为空`
+  const totalRows = range.rowCount
+  const shownRows = Math.min(totalRows, MAX_EXCEL_ROWS)
+  // getRangeByIndexes 是 ExcelApi 1.1，无版本门槛
+  const slice = shownRows < totalRows
+    ? sheet.getRangeByIndexes(range.rowIndex, range.columnIndex, shownRows, range.columnCount)
+    : range
+  slice.load('values')
+  await context.sync()
+  const rows = slice.values || []
+  const lines = rows.map((row) => row.map((v) => (v == null ? '' : String(v))).join('\t'))
+  let out = `工作表「${sheet.name}」（区域 ${range.address}）：\n` + lines.join('\n')
+  if (totalRows > MAX_EXCEL_ROWS) {
+    out += `\n...（共 ${totalRows} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
+  }
+  return out
+}
+
+export async function readExcelSheet() {
   const text = await Excel.run(async (context) => {
     const sheet = context.workbook.worksheets.getActiveWorksheet()
-    sheet.load('name')
-    const used = sheet.getUsedRangeOrNullObject(true)
-    // **先只取尺寸，不取值**（dev-board#288）：既然只展示前 MAX_EXCEL_ROWS 行，
-    // 把整片已用区域的 values 编组过桥就是白搬——几万行的台账「一问就卡死几十秒」，
-    // 而且卡的是同步桥上的任务窗格。WPS 面（wpsDoc.readEtSheet）早就是「先 Resize
-    // 再取 Value2」，Office 面一直没跟。截断必须发生在过桥之前。
-    used.load('address,isNullObject,rowIndex,columnIndex,rowCount,columnCount')
-    await context.sync()
-    if (used.isNullObject) return `工作表「${sheet.name}」为空`
-    const totalRows = used.rowCount
-    const shownRows = Math.min(totalRows, MAX_EXCEL_ROWS)
-    // getRangeByIndexes 是 ExcelApi 1.1，无版本门槛
-    const slice = shownRows < totalRows
-      ? sheet.getRangeByIndexes(used.rowIndex, used.columnIndex, shownRows, used.columnCount)
-      : used
-    slice.load('values')
-    await context.sync()
-    const rows = slice.values || []
-    const lines = rows.map((row) => row.map((v) => (v == null ? '' : String(v))).join('\t'))
-    let out = `工作表「${sheet.name}」（区域 ${used.address}）：\n` + lines.join('\n')
-    if (totalRows > MAX_EXCEL_ROWS) {
-      out += `\n...（共 ${totalRows} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
-    }
-    return out
+    return excelRangeText(context, sheet, sheet.getUsedRangeOrNullObject(true))
   })
   return { text, name: documentDisplayName('当前 Excel 工作簿'), fileType: 'xlsx' }
 }
 
-async function readPptSlides() {
+export async function readPptSlides() {
   const supported = (() => {
     try { return Office.context.requirements.isSetSupported('PowerPointApi', '1.4') } catch (e) { return false }
   })()
@@ -167,6 +175,20 @@ export function readDocumentMeta() {
     : host === 'excel' ? '当前 Excel 工作簿' : '当前 PowerPoint 演示文稿'
   const fileType = host === 'word' ? 'docx' : host === 'excel' ? 'xlsx' : 'pptx'
   return { id: 'office-current-document', name: documentDisplayName(fallback), fileType }
+}
+
+/**
+ * 当前文档的文件路径（dev-board#717）：修订记录按文档分开存，路径是最稳的标识——
+ * 同一份文档换个窗口打开仍是同一条记录。未保存的新文档没有 url，回空串，
+ * 由调用方退回「宿主:文档名」。
+ */
+export function officeDocumentPath() {
+  try {
+    const url = Office.context && Office.context.document && Office.context.document.url
+    return url ? String(url) : ''
+  } catch (e) {
+    return ''
+  }
 }
 
 export async function readActiveDocument() {

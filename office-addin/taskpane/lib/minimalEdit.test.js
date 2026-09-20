@@ -15,7 +15,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { minimalEdits } from './minimalEdit.js'
+import { minimalEdits, substringEdits } from './minimalEdit.js'
 
 /** 按差分段逐段替换，还原出新文（模拟「接受全部修订」） */
 function applyEdits(oldStr, edits) {
@@ -221,5 +221,66 @@ test('随机改写脚本：接受全部修订后的正文恒等于新文', () =>
     assertShape(before, edits)
     assert.equal(applyEdits(before, edits), after,
       `第 ${round} 轮不恒等：\n  before=${before}\n  after=${after}`)
+  }
+})
+
+/* ==================== substringEdits：给「切不出零长度区间」的宿主用（dev-board#717） ==================== */
+// 跨文档写入的撤销要把 PPT 文本框改回原文。整框回写会抹掉框内分段格式与超链接，
+// 所以按差异段落笔——但 PowerPoint 的 getSubstring / WPS 的 Characters 切零长度区间
+// 行为未经验证，纯插入要借一个相邻字符变成「替换 1 个字」。
+
+test('substringEdits：纯插入借右邻字符变成替换，不产出零长度区间', () => {
+  const edits = substringEdits('甲方盖章', '甲方签字盖章')
+  for (const e of edits) assert.ok(e.end > e.start, JSON.stringify(e))
+  assert.equal(applyEdits('甲方盖章', edits), '甲方签字盖章')
+})
+
+test('substringEdits：插在末尾时借左邻字符', () => {
+  const edits = substringEdits('甲方', '甲方盖章')
+  for (const e of edits) assert.ok(e.end > e.start, JSON.stringify(e))
+  assert.equal(applyEdits('甲方', edits), '甲方盖章')
+})
+
+test('substringEdits：借字不劈开代理对', () => {
+  const before = 'a\u{1F600}'
+  const edits = substringEdits(before, before + 'b')
+  for (const e of edits) {
+    assert.ok(e.end > e.start)
+    assert.equal(e.oldText, before.slice(e.start, e.end))
+    assert.ok(!/^[\uDC00-\uDFFF]/.test(e.oldText), '不许从低代理项开始切')
+  }
+  assert.equal(applyEdits(before, edits), before + 'b')
+})
+
+test('substringEdits：原串为空时只能整体赋值（交给调用方处理），不越界', () => {
+  const edits = substringEdits('', '甲方')
+  assert.deepEqual(edits, [{ start: 0, end: 0, oldText: '', newText: '甲方' }])
+  assert.deepEqual(substringEdits('同', '同'), [])
+})
+
+test('substringEdits 随机脚本：从右到左逐段落笔后恒等于目标文本', () => {
+  const zh = ['甲方', '乙方', '应当', '支付', '价款', '违约', '赔偿']
+  let seed = 717
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    return seed / 0x7fffffff
+  }
+  const pick = (arr) => arr[Math.floor(rand() * arr.length)]
+  for (let round = 0; round < 300; round++) {
+    const words = Array.from({ length: 2 + Math.floor(rand() * 8) }, () => pick(zh))
+    const before = words.join('')
+    const mutated = words.slice()
+    const at = Math.floor(rand() * (mutated.length + 1))
+    if (rand() < 0.5) mutated.splice(at, 0, pick(zh))
+    else mutated.splice(Math.min(at, mutated.length - 1), 1)
+    const after = mutated.join('')
+    const edits = substringEdits(before, after)
+    let text = before
+    for (let k = edits.length - 1; k >= 0; k--) {
+      const e = edits[k]
+      assert.ok(e.end > e.start, `第 ${round} 轮出现零长度区间`)
+      text = text.slice(0, e.start) + e.newText + text.slice(e.end)
+    }
+    assert.equal(text, after, `第 ${round} 轮不恒等：${before} -> ${after}`)
   }
 })

@@ -204,6 +204,22 @@ nginx -t && nginx -s reload
    只验接口不验这条链等于没验。
 8. **大体积**：推一个 > 500 MB 的案卷，确认没有 413、没有超时、
    `/data` 余量与 `journalctl` 都干净。撞 413 就调 nginx 的 `client_max_body_size`。
+9. **插件参考内部口**（只在配了 `AWD_REF_INTERNAL_SECRET` 时验，dev-board#720）：
+   ```bash
+   # 公网必须 404（nginx 的 ^~ /api/internal/ 兜底，带不带密钥头都一样）
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://case.aiworkdeck.com/api/internal/ref/list
+   # 本机回环 + 正确密钥 → code:0；密钥写错一个字符 → 404（刻意不是 401/403）
+   curl -s -X POST http://127.0.0.1:9797/api/internal/ref/list \
+     -H 'X-Internal-Secret: <env 里那把>' -H 'Content-Type: application/json' \
+     -d '{"externalAccountId":"<官网账号 id>"}'
+   ```
+   同一条命令在 **addin 那台**（`http://127.0.0.1:9696`）必须也是 **404**：那对端点只在
+   case profile 上提供（`ref.internal.serve`），addin 那台配着同一把密钥只是为了当出站头。
+   在 addin 上拿到 `code:0` 说明它被错误地用 case profile 起来了，立即停机排查。
+
+   查得到的前提是**两边同一个官网账号**：跨实例身份键只有 `AccountBinding.externalAccountId`，
+   而它来自 `ai.account.base-url` 指的那个官网——case 与 addin 两台的这个配置必须一致
+   （都默认 `https://www.aiworkdeck.com`），否则同一个人在两边对不上号，清单恒为空。
 
 ---
 

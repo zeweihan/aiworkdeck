@@ -61,6 +61,7 @@ class MobileRelayClientHttpTest {
     private StorageServiceFactory storageServiceFactory;
     private StorageService storageService;
     private com.checkba.service.ProjectAiMessageService projectAiMessageService;
+    private DesktopRefHandler desktopRefHandler;
 
     @TempDir
     Path stateDir;
@@ -234,6 +235,7 @@ class MobileRelayClientHttpTest {
         storageServiceFactory = mock(StorageServiceFactory.class);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         projectAiMessageService = mock(com.checkba.service.ProjectAiMessageService.class);
+        desktopRefHandler = mock(DesktopRefHandler.class);
     }
 
     @AfterEach
@@ -259,7 +261,7 @@ class MobileRelayClientHttpTest {
         return new MobileRelayClientService(true, true, baseUrl,
                 "https://www.aiworkdeck.com", stateDir.toString(),
                 accountService, localIdentityService, projectRepository,
-                projectFileService, storageServiceFactory, projectAiMessageService);
+                projectFileService, storageServiceFactory, projectAiMessageService, desktopRefHandler);
     }
 
     private static String readBody(InputStream in) throws java.io.IOException {
@@ -564,7 +566,7 @@ class MobileRelayClientHttpTest {
         MobileRelayClientService notLocal = new MobileRelayClientService(true, false, baseUrl,
                 "https://www.aiworkdeck.com", stateDir.toString(),
                 accountService, localIdentityService, projectRepository,
-                projectFileService, storageServiceFactory, projectAiMessageService);
+                projectFileService, storageServiceFactory, projectAiMessageService, desktopRefHandler);
         notLocal.pushDirectory();
         assertTrue(dirBodies.isEmpty(), "非 local-mode（云端/团队服务器）绝不出站");
     }

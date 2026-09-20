@@ -31,6 +31,9 @@ const msoShapeIsoscelesTriangle = 7
 const msoShapeOval = 9
 /** MsoShapeType（识别用） */
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
+import { substringEdits } from './minimalEdit.js'
+import { readWppSlides } from './wpsDoc.js'
+import { parseLocator, capReferenceText, blankPageText, unsupportedLocatorError } from './referenceRead.js'
 const msoTable = 19
 /** MsoShapeType：组合（与 wpsDoc.collectShapeText 同一常量） */
 const msoGroup = 6
@@ -635,5 +638,186 @@ export const WPS_WPP_HANDLERS = {
       }
     }
     throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 office_ppt_get_slides 核对）')
+  },
+
+  // ==================== 供其他窗格引用（dev-board#717） ====================
+
+  /**
+   * 别的窗格经云端下发：按 locator 读本演示稿，返回 {text}（契约同 officeExecutor）。
+   * 不带定位读全部幻灯片（与随消息附带的正文同口径）；slide:N 只取第 N 页，
+   * 表格单元格与组合子形状里的文字一并收（textBearingShapes，与 ppt_get_slides 同口径）。
+   */
+  async read_for_reference(args) {
+    const loc = parseLocator(args.locator)
+    if (loc.kind === 'none') return capReferenceText(readWppSlides().text)
+    if (loc.kind !== 'slide') throw unsupportedLocatorError('powerpoint', loc.kind)
+    const pres = activePresentation()
+    const count = Number(pres.Slides.Count) || 0
+    if (loc.n > count) throw new Error(`演示稿只有 ${count} 页`)
+    const texts = []
+    for (const { shape } of textBearingShapes(pres.Slides.Item(loc.n).Shapes)) {
+      const t = shapeText(shape).trim()
+      if (t) texts.push(t)
+    }
+    return capReferenceText(texts.length ? texts.join('\n') : blankPageText(loc.n))
+  }
+}
+
+// ==================== 跨文档写入的改前值与撤销（dev-board#717） ====================
+
+/**
+ * 与 officeExecutor.captureOfficeState 同契约、同快照形态：
+ *   pptCell    target {kind, slideNumber, shapeId, row, col}   state = target + text
+ *   pptFrames  target {kind, frames:[{slide, frame}]}          state {kind, frames:[{slide, frame, text}]}
+ * frame 是 textBearingShapes 列表里的下标（与 ppt_replace_text 遍历同一张表，含表格单元格与组合子形状）。
+ * 位置式定位：结构变过之后文字对不上改后值，撤销按冲突拒绝。
+ * 其余命令（格式、加删页/形状/表格、挂链）返回 null——写回文字撤不掉它们，不给假撤销。
+ */
+export function captureWppState(command, args, limits) {
+  const a = args || {}
+  if (command === 'ppt_table_set_cell') {
+    const slideNumber = Math.floor(Number(a.slideNumber))
+    const row = Math.floor(Number(a.row))
+    const col = Math.floor(Number(a.col))
+    if (!(slideNumber >= 1) || !(row >= 0) || !(col >= 0)) return null
+    const target = { kind: 'pptCell', slideNumber, shapeId: a.shapeId == null ? '' : String(a.shapeId), row, col }
+    const state = readWppState(target)
+    return state ? { target, before: state } : null
+  }
+  if (command === 'ppt_replace_text') {
+    const searchText = String(a.searchText || '')
+    if (!searchText) return null
+    const pres = activePresentation()
+    const slideCount = pres.Slides.Count
+    const hits = []
+    let chars = 0
+    for (let i = 1; i <= slideCount; i++) {
+      textBearingShapes(pres.Slides.Item(i).Shapes).forEach(({ shape }, j) => {
+        const text = shapeText(shape)
+        if (!findAllNormalized(text, searchText).length) return
+        hits.push({ slide: i, frame: j, text })
+        chars += text.length
+      })
+    }
+    const maxChars = limits && Number.isFinite(limits.maxChars) ? limits.maxChars : Infinity
+    if (!hits.length || chars > maxChars) return null
+    const target = { kind: 'pptFrames', frames: hits.map(({ slide, frame }) => ({ slide, frame })) }
+    return { target, before: { kind: 'pptFrames', frames: hits } }
+  }
+  return null
+}
+
+function cellTableOf(t) {
+  const table = findTableShape(getSlideOrThrow(activePresentation(), t.slideNumber), t.shapeId).Table
+  if (t.row + 1 > table.Rows.Count || t.col + 1 > table.Columns.Count) return null
+  return table
+}
+
+function frameShapeOf(pres, f) {
+  if (f.slide > pres.Slides.Count) return null
+  const entry = textBearingShapes(pres.Slides.Item(f.slide).Shapes)[f.frame]
+  return entry ? entry.shape : null
+}
+
+/** 按 target 读当前值；目标已不存在时回 null（撤销按冲突处理） */
+export function readWppState(target) {
+  const t = target || {}
+  try {
+    if (t.kind === 'pptCell') {
+      const table = cellTableOf(t)
+      return table ? { ...t, text: readCellText(table, t.row + 1, t.col + 1) } : null
+    }
+    if (t.kind === 'pptFrames') {
+      const pres = activePresentation()
+      const frames = []
+      for (const f of t.frames || []) {
+        const shape = frameShapeOf(pres, f)
+        if (!shape) return null
+        frames.push({ slide: f.slide, frame: f.frame, text: shapeText(shape) })
+      }
+      return { kind: 'pptFrames', frames }
+    }
+  } catch (e) {
+    return null
+  }
+  return null
+}
+
+/**
+ * 写回快照（撤销）。文本框只改差异段：Characters(start, len) 是 1 基、与 JS 下标对齐
+ * （真机实测，见 ppt_replace_text 的说明），从右到左落笔；不整框回写，保住框内格式与超链接。
+ */
+export function writeWppState(state) {
+  const s = state || {}
+  if (s.kind === 'pptCell') {
+    const table = cellTableOf(s)
+    if (!table) throw new Error('目标单元格已不存在')
+    table.Cell(s.row + 1, s.col + 1).Shape.TextFrame.TextRange.Text = s.text
+    return
+  }
+  if (s.kind === 'pptFrames') {
+    const pres = activePresentation()
+    for (const f of s.frames || []) {
+      const shape = frameShapeOf(pres, f)
+      if (!shape) throw new Error('目标文本框已不存在')
+      const range = shape.TextFrame.TextRange
+      const current = String(range.Text || '')
+      if (current === f.text) continue
+      if (!current.length) {
+        range.Text = f.text
+        continue
+      }
+      const edits = substringEdits(current, f.text)
+      for (let k = edits.length - 1; k >= 0; k--) {
+        const e = edits[k]
+        // 每段都从完整 TextRange 重新切（与 ppt_replace_text 同一条纪律）：旧 TextRange 在
+        // 文字长度变化后是否跟着伸缩未经验证，从右到左落笔保证左边的偏移不受影响
+        shape.TextFrame.TextRange.Characters(e.start + 1, e.end - e.start).Text = e.newText
+      }
+    }
+    return
+  }
+  throw new Error('无法识别的修订快照，撤销未执行')
+}
+
+/** 位置式快照 target 对应的页码（1 基）；不是 PPT 目标或页码不成立回 0 */
+function slideNumberOfTarget(target) {
+  const t = target || {}
+  if (t.kind === 'pptSlide' || t.kind === 'pptCell') {
+    const n = Math.floor(Number(t.slideNumber))
+    return n >= 1 ? n : 0
+  }
+  if (t.kind === 'pptFrames') {
+    const first = Array.isArray(t.frames) ? t.frames[0] : null
+    const n = first ? Math.floor(Number(first.slide)) : 0
+    return n >= 1 ? n : 0
+  }
+  return 0
+}
+
+/**
+ * 修订记录的「定位」（dev-board#717）：跳到目标页。Slides.Item(n).Select() 在普通视图之外
+ * 可能抛（VBA 语义如此，**WPS 真机未验证**），退到 ActiveWindow.View.GotoSlide(n)。
+ * 两条路都不行就回 {found:false}——定位不到只是轻提示，不是错误，永不 throw。
+ */
+export function locateWppTarget(target) {
+  const n = slideNumberOfTarget(target)
+  if (!n) return { found: false }
+  let pres
+  try {
+    pres = activePresentation()
+    if (n > pres.Slides.Count) return { found: false }
+  } catch (e) {
+    return { found: false }
+  }
+  try {
+    pres.Slides.Item(n).Select()
+    return { found: true }
+  } catch (e) { /* 普通视图外不能 Select，退到 GotoSlide */ }
+  try {
+    app().ActiveWindow.View.GotoSlide(n)
+    return { found: true }
+  } catch (e) {
+    return { found: false }
   }
 }

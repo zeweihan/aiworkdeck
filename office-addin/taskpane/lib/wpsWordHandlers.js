@@ -35,6 +35,9 @@
 import { minimalEdits } from './minimalEdit.js'
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
+import {
+  parseLocator, findHeadingSpan, capReferenceText, blankPageText, unsupportedLocatorError
+} from './referenceRead.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json
 // 的字节副本，由 frontend/scripts/sync-house-profile.mjs 同步（与 officeExecutor 同一份）。
 import houseProfile from './house-default.json' with { type: 'json' }
@@ -106,6 +109,13 @@ const wdPropertyComments = 5
 const wdPropertyCategory = 18
 // WdSelectionType
 const wdSelectionIP = 1
+// WdGoToItem / WdGoToDirection / WdStatistic / WdInformation（按页读取，dev-board#717）
+const wdGoToPage = 1
+const wdGoToAbsolute = 1
+const wdStatisticPages = 2
+const wdNumberOfPagesInDocument = 4
+// WdOutlineLevel：1-9 为标题，10 为正文（wdOutlineLevelBodyText）
+const wdOutlineLevelBodyText = 10
 
 /* ==================== 通用上限（与 officeExecutor 同口径） ==================== */
 
@@ -159,10 +169,46 @@ function normalizeNewlines(s) {
   return String(s == null ? '' : s).replace(/\r\n/g, '\r').replace(/\n/g, '\r')
 }
 
+/** 跨文档写入标不了修订时的回错（模型可见，保持中文；与 officeExecutor 同文案） */
+const CROSS_DOC_NO_TRACKING = '本机 WPS 文字无法标记修订，已拒绝跨文档修改'
+
+/**
+ * 跨文档写入的强制修订（dev-board#717）：wpsExecutor 见到 args.__forceTracking 就经
+ * withForcedTracking 执行。强制期间 withTracking **不许**降级直改、withTrackingOff 不许
+ * 关修订——别的窗格的 AI 改本文档，没有修订痕迹的写入不允许发生。
+ * crossDocWrite 已先按 wpsTrackingSupported() 拒绝过一次，这里是双保险。
+ */
+let forcedTrackingDepth = 0
+
+export async function withForcedTracking(fn) {
+  forcedTrackingDepth++
+  try {
+    return await fn()
+  } finally {
+    forcedTrackingDepth--
+  }
+}
+
+/**
+ * 修订开关能否读写（跨文档写入的前置判定）。探测时写回原值，不改变用户的开关状态；
+ * 读或写抛异常（旧版/受限文档/没有打开的文档）即判不支持。
+ */
+export function wpsTrackingSupported() {
+  try {
+    const doc = activeDoc()
+    const prev = doc.TrackRevisions
+    doc.TrackRevisions = prev
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
 /**
  * 在开启 WPS 原生修订（Document.TrackRevisions）的前提下执行 fn，结束后恢复原值。
  * TrackRevisions 读或写抛异常（旧版/受限文档）时降级为直接修改，标 tracked:false
  * ——与 officeExecutor.withTracking 同契约。fn 为同步函数（WPS JSAPI 是同步桥）。
+ * 跨文档写入（强制修订）期间不降级，直接拒绝。
  */
 function withTracking(doc, fn) {
   let prev = null
@@ -174,6 +220,7 @@ function withTracking(doc, fn) {
     trackable = false
   }
   if (!trackable) {
+    if (forcedTrackingDepth > 0) throw new Error(CROSS_DOC_NO_TRACKING)
     return { ...fn(), tracked: false }
   }
   try {
@@ -191,6 +238,8 @@ function withTracking(doc, fn) {
  * 关掉修订，结束后恢复。TrackRevisions 不可用时按原样直删。
  */
 function withTrackingOff(doc, fn) {
+  // 跨文档写入不许关修订执行（删掉的行列不会留下任何痕迹）；crossDocWrite 已按命令拒绝过
+  if (forcedTrackingDepth > 0) throw new Error('该操作执行时必须关闭修订，无法留下痕迹，已拒绝跨文档修改')
   let prev = null
   let restorable = true
   try {
@@ -2126,5 +2175,96 @@ export const WPS_WORD_HANDLERS = {
     setProp('comments', wdPropertyComments, args.comments)
     setProp('category', wdPropertyCategory, args.category)
     return { applied }
+  },
+
+  // ==================== 供其他窗格引用（dev-board#717） ====================
+
+  /**
+   * 别的窗格经云端下发：按 locator 读本文档的一块文字，返回 {text}（契约同 officeExecutor）。
+   * 只读、不改文档。文字保持宿主原文（段落符 \r），与 get_text 同口径。
+   */
+  async read_for_reference(args) {
+    const loc = parseLocator(args.locator)
+    const doc = activeDoc()
+    if (loc.kind === 'none') return capReferenceText(bodyText(doc))
+    if (loc.kind === 'page') return capReferenceText(readWpsPage(doc, loc.n))
+    if (loc.kind === 'heading') return capReferenceText(readWpsHeading(doc, loc.text))
+    throw unsupportedLocatorError('word', loc.kind)
   }
+}
+
+/** 文档总页数：ComputeStatistics(wdStatisticPages) 优先，退回 Range().Information(wdNumberOfPagesInDocument) */
+function wpsPageCount(doc) {
+  let first = null
+  try {
+    const n = Number(doc.ComputeStatistics(wdStatisticPages))
+    if (Number.isFinite(n) && n >= 1) return n
+  } catch (e) { first = e }
+  try {
+    const n = Number(doc.Range().Information(wdNumberOfPagesInDocument))
+    if (Number.isFinite(n) && n >= 1) return n
+  } catch (e) { first = first || e }
+  throw first || new Error('取不到文档总页数')
+}
+
+/**
+ * 第 N 页的原文：GoTo(wdGoToPage, wdGoToAbsolute, N) 取页首，第 N+1 页页首（末页取文末）
+ * 为终点，doc.Range(start, end) 读出。GoTo 返回的是文档位置，与 Range(s,e) 同一套坐标，
+ * 不涉及 JS 下标换算。
+ *
+ * **WPS 按页读取未经真机验证**（spec 第 12 节第 1 项）：宿主调用失败统一报
+ * 「WPS 按页读取失败：<原因>」，让模型改用标题或不带定位读取，而不是拿到错页。
+ */
+function readWpsPage(doc, n) {
+  let total
+  try {
+    total = wpsPageCount(doc)
+  } catch (e) {
+    throw new Error('WPS 按页读取失败：' + ((e && e.message) || String(e)))
+  }
+  if (n > total) throw new Error(`文档只有 ${total} 页`)
+  let text
+  try {
+    const start = Number(doc.GoTo(wdGoToPage, wdGoToAbsolute, n).Start)
+    const end = n < total
+      ? Number(doc.GoTo(wdGoToPage, wdGoToAbsolute, n + 1).Start)
+      : Number(doc.Range().End)
+    // 页边界对不上（GoTo 没按页跳、停在原地）就别硬读——读出来的是错页或空串
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      throw new Error(`页边界异常（第 ${n} 页起点 ${start}、终点 ${end}）`)
+    }
+    text = String(doc.Range(start, end).Text || '')
+  } catch (e) {
+    throw new Error('WPS 按页读取失败：' + ((e && e.message) || String(e)))
+  }
+  return text.trim() ? text : blankPageText(n)
+}
+
+/**
+ * 标题所辖段落的原文：逐段只取大纲级别（每段两次跨桥调用），**只有标题段才取文字**，
+ * 算出段落区间后用 doc.Range(首段起点, 下一个同级标题起点或文末) 一次读出。
+ * 正文段落逐段取 Range.Text 在长合同上是几千次白跑的跨进程往返。
+ */
+function readWpsHeading(doc, headingText) {
+  const paras = doc.Paragraphs
+  const count = Number(paras.Count) || 0
+  const list = []
+  for (let i = 1; i <= count; i++) {
+    let level = wdOutlineLevelBodyText
+    let p = null
+    try {
+      p = paras.Item(i)
+      level = Number(p.OutlineLevel)
+    } catch (e) { /* 取不到大纲级别按正文处理 */ }
+    const isHeading = level >= 1 && level <= 9
+    let text = ''
+    if (isHeading && p) {
+      try { text = String(p.Range.Text || '') } catch (e) { /* 读不到文字的标题不参与匹配 */ }
+    }
+    list.push({ text, isHeading, level })
+  }
+  const { start, end } = findHeadingSpan(list, headingText)
+  const from = Number(paras.Item(start + 1).Range.Start)
+  const to = end < count ? Number(paras.Item(end + 1).Range.Start) : Number(doc.Range().End)
+  return String(doc.Range(from, to).Text || '')
 }

@@ -19,12 +19,19 @@ const KEY_PROJECT = 'awd_addin_project_id'
 //   (b) 每次发消息都把会话的 officeHost 覆盖成自己那个宿主，模型的工具面在两轮之间
 //       来回翻，用户看到「PPT 文件不在可编辑列表中」。
 // 这与 2026-08-28 已修的 PluginStorage 窗格 id 共用键是同一类地雷，当时漏了会话 id。
+// **还要再按文档分一层**（2026-09-20，dev-board#717）：同一个项目里同时开着两份 Word 时，
+// 只按项目+宿主分键的话两个窗格拿到同一个 conversationId，而跨文档读写是按 conversationId
+// 往 SSE 推命令的——两个窗格在通道上根本分不开：抢到 emitter 的那个会替另一个执行
+// read_for_reference，把**自己**的正文当成对方文档的内容交回去，全链路没有一处报错。
+// 这正是「参考 A 文档改 B 文档」那条主用例本身。
 const KEY_CONVERSATION_PREFIX = 'awd_addin_conv_'
 // v0.27.4 及更早只按项目分键的旧键前缀，用于一次性迁移（见 loadConversationId）
 const LEGACY_CONVERSATION_PREFIX = 'awd_addin_conv_'
 
-function conversationKey(projectId, hostTag) {
-  return KEY_CONVERSATION_PREFIX + (hostTag || 'unknown') + '_' + projectId
+/** docKey 为空（普通浏览器调试、宿主判不出）时退回「项目+宿主」键，与 v0.44 一致 */
+function conversationKey(projectId, hostTag, docKey) {
+  const scoped = KEY_CONVERSATION_PREFIX + (hostTag || 'unknown') + '_' + projectId
+  return docKey ? scoped + '_' + docKey : scoped
 }
 
 /**
@@ -165,17 +172,28 @@ export function saveProjectId(projectId) {
 }
 
 /**
- * 取该项目在该宿主下上次的会话 ID（无则空串）。
+ * 取该项目在该宿主、该文档下上次的会话 ID（无则空串）。
  *
- * 升级迁移：旧版本只按项目分键，那个键在语义上属于**文字/Word 宿主**
- * （officeHost 缺省即 WORD）。所以只有 word 宿主认领它，认领后立刻删掉旧键——
- * 留着的话表格/演示窗格下次还会读到它，等于把刚分开的会话又并回去。
+ * 升级迁移两级，都是「认领后立刻删旧键」：留着的话下一份文档还会读到它，
+ * 等于把刚分开的会话又并回去。
+ *   1. v0.44 及更早按「项目+宿主」分键——先开的那份文档认领它；
+ *   2. v0.27.4 及更早只按项目分键，那个键在语义上属于**文字/Word 宿主**
+ *      （officeHost 缺省即 WORD），所以只有 word 宿主认领它。
  */
-export function loadConversationId(projectId, hostTag) {
+export function loadConversationId(projectId, hostTag, docKey) {
   if (!projectId) return ''
-  const key = conversationKey(projectId, hostTag)
+  const key = conversationKey(projectId, hostTag, docKey)
   const current = safeGetItem(key) || ''
   if (current) return current
+  if (docKey) {
+    const hostScoped = conversationKey(projectId, hostTag, '')
+    const inherited = safeGetItem(hostScoped) || ''
+    if (inherited) {
+      safeSetItem(key, inherited)
+      safeRemoveItem(hostScoped)
+      return inherited
+    }
+  }
   if (hostTag === 'word') {
     const legacy = safeGetItem(LEGACY_CONVERSATION_PREFIX + projectId) || ''
     if (legacy) {
@@ -188,11 +206,11 @@ export function loadConversationId(projectId, hostTag) {
 }
 
 /**
- * 记住该项目在该宿主下的会话 ID；传空值即清除（「新对话」）。
+ * 记住该项目在该宿主、该文档下的会话 ID；传空值即清除（「新对话」）。
  */
-export function saveConversationId(projectId, conversationId, hostTag) {
+export function saveConversationId(projectId, conversationId, hostTag, docKey) {
   if (!projectId) return
-  const key = conversationKey(projectId, hostTag)
+  const key = conversationKey(projectId, hostTag, docKey)
   if (conversationId) safeSetItem(key, String(conversationId))
   else safeRemoveItem(key)
 }

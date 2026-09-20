@@ -115,3 +115,13 @@ version:
 collab:
   eligibility:
     policy: firm-or-team
+
+# 插件跨文件参考的内部口（dev-board#720，spec 2026-09-18 §7.1）：只有本实例提供
+# /api/internal/ref/{list,read}，插件云后端（addin 实例）经 127.0.0.1 来问。
+# 开关与密钥刻意分开：AWD_REF_INTERNAL_SECRET 是一把两用的（addin 侧当出站头配着同一个值），
+# 若让它兼任开关，按部署文档配完 addin 那台，addin 的 JVM 里也会跟着打开这对
+# 不需要会话、只按 externalAccountId 认人的读取端点——而 addin 侧的 nginx 没有
+# `^~ /api/internal/` 兜底。密钥仍为空时本实例照样恒回裸 404（第二道闸）。
+ref:
+  internal:
+    serve: true

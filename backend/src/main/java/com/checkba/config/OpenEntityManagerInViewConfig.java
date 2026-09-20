@@ -31,6 +31,9 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  *
  * <p>SSE 端点不再持有 EntityManager 后，connect 里的查询各自走仓储方法自带的只读事务，
  * 查完即还连接。connect 只读实体的基本字段，不存在懒加载。
+ *
+ * <p>新增任何「连上就一直挂着」的端点（SseEmitter / DeferredResult / 长轮询）都要往
+ * {@link #LONG_LIVED_STREAM_PATHS} 里补一条，否则每条流就是一条被占死的数据库连接。
  */
 @Configuration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -38,7 +41,14 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class OpenEntityManagerInViewConfig implements WebMvcConfigurer {
 
     /** 长连接异步端点：不许在流的生命周期里持有 EntityManager（及其 JDBC 连接）。 */
-    static final String[] LONG_LIVED_STREAM_PATHS = {"/api/agent/connect/**"};
+    static final String[] LONG_LIVED_STREAM_PATHS = {
+            "/api/agent/connect/**",
+            // 桌面端门铃流（dev-board#719）：SseEmitter(0L)，桌面端开着就一直连着。handler 第一件事
+            // 就是拿 awdt_ 设备令牌查库（DeviceTokenService.resolve），那条 JDBC 连接在 OSIV 下要到
+            // 整条流结束才还——池子默认 10 条，十来台桌面端同时在线就占满，与 D1 同一个病灶。
+            // 护栏 DoorbellStreamPoolReleaseTest。
+            "/api/mobile/desktop/stream"
+    };
 
     @Bean
     public OpenEntityManagerInViewInterceptor openEntityManagerInViewInterceptor() {

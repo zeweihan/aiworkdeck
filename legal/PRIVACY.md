@@ -1,6 +1,6 @@
 # AI WorkDeck 隐私说明
 
-更新日期：2026-09-10
+更新日期：2026-09-20
 
 本说明描述 AI WorkDeck 桌面应用的两件事：
 
@@ -45,6 +45,15 @@
 **语音合成不在这张表里**：它只有本机一档，随包内置的引擎在你的机器上合成，不出本机，也没有云端通路。
 
 **可选组件的模型文件从公开模型站下载，同样不经过我们的服务器。** 文档解析、语音合成、本机转写这几个可选组件的模型不随安装包分发，只在你主动点「下载」时，由你的机器直接从 ModelScope（modelscope.cn）下载；连不上时改从 HuggingFace 镜像（hf-mirror.com）下载，其中较大的文件可能由 HuggingFace 官方 CDN 提供。下载请求只包含要取的模型名与文件名，不上传任何文档、对话或其他用户数据。
+
+**跨文件参考与修改（Office/WPS 插件）。** Office/WPS 任务窗格里的 AI 连的是我们托管的插件云后端（addin.aiworkdeck.com / addin.workdeck.ai）。它可以读你指定的其他文件、改你另一个打开着的文档，因此下列内容会经过我们的服务器：
+
+- **另一个打开着的文档**：你在 A 文档的窗格里要求 AI 参考或修改 B 文档时，B 的正文与要写入的改动经云后端在**你同一账号**的两个窗格之间转发，只在内存中停留，不存储。只有当时开着 AI WorkDeck 窗格的文档才改得了，其余文件一律只读。
+- **桌面端项目里的文件**：AI 需要参考你桌面端项目里的文件时，由桌面端在你本机抽出该文件的文字，经云后端转发给 AI，只在内存中停留，不存储，不收费。桌面端为此与**既有的**插件云后端多保持一条连接，不新增其他服务器。
+- **云端项目与官方案件库里的文件**：这些文件本来就存放在我们这里，AI 按你已有的项目/案卷读取权限取用其文字，只读不改，不另外留存副本。
+- **你关联的 GitHub / Gitee 仓库**：你在插件里关联仓库后，云后端会使用你提供的访问令牌读取该仓库的文件列表与你要求参考的文件（出站访问 api.github.com 或 gitee.com），**只读、不提交、不推送**；令牌加密保存、不回显、不写进日志，可随时在插件里解除关联。
+
+以上参考材料的文字**不写日志、不入库、不用于任何模型训练**，也不产生 Credits 扣费（整份文件的跨设备传输仍按原有口径计费）。
 
 ## 三、会留下的记录：账务流水
 
@@ -145,7 +154,7 @@
 
 # AI WorkDeck Privacy Note
 
-Last updated: 2026-09-10
+Last updated: 2026-09-20
 
 ## Part 1 — Platform services
 
@@ -165,6 +174,8 @@ Last updated: 2026-09-10
 **Meeting audio is the only item written to disk on our side.** The desktop app uploads it directly to our object storage (bypassing the application server); the object is deleted by code once transcription finishes or the task fails, and a 24-hour lifecycle rule on the bucket clears anything the code misses. The transcript is not retained after it is returned to the desktop app. Every other service passes content through only at call time: request content is not logged, not stored, and not used to train any model. All six vendors are inside mainland China, so the platform-sourced tier involves no transfer of personal information abroad. Speech synthesis is absent from the table: it has an on-device tier only, synthesizing in the bundled engine with no cloud path at all.
 
 **Optional-component models come from public model hubs, not from our servers.** The models for the optional components (document parsing, speech synthesis, on-device transcription) are not shipped in the installer. Only when you choose to download one does your machine fetch it directly from ModelScope (modelscope.cn); if that cannot be reached it falls back to a HuggingFace mirror (hf-mirror.com), where larger files may be served by HuggingFace's own CDN. The requests carry only the model and file names being fetched; no documents, conversations, or other user data are uploaded.
+
+**Cross-file reference and editing (Office/WPS add-in).** The AI in the Office/WPS task pane talks to our hosted add-in backend (addin.aiworkdeck.com / addin.workdeck.ai). It can read other files you point it at and edit another document you have open, so the following passes through our servers. **Another open document:** when you ask the AI in document A's pane to use or edit document B, B's text and the edits to be applied are relayed by the cloud backend between two panes **of your own account**, held in memory only and never stored; only a document that currently has the AI WorkDeck pane open can be edited, everything else is read-only. **A file in a desktop project:** the desktop app extracts that file's text on your own machine and the cloud backend relays it to the AI, in memory only, not stored and not charged; for this the desktop app keeps one extra connection to the **existing** add-in backend and adds no other server. **A file in a cloud project or in the official case library:** those files already live with us and are read under the project or matter permissions you already have, read-only, with no extra copy kept. **A GitHub or Gitee repository you link:** once you link one in the add-in, the cloud backend uses the access token you supplied to read that repository's file list and the file you asked for (outbound calls to api.github.com or gitee.com), **read-only, never committing and never pushing**; the token is stored encrypted, never echoed back, never logged, and the link can be removed at any time. In all four cases the reference text is not logged, not stored, and not used to train any model, and reading it is not charged (transferring a whole file across devices is still billed as before).
 
 **What is kept: billing entries.** Each platform-sourced call leaves one ledger entry under your account recording the service name, operation, quantity (minutes / pages / calls / thousand characters), amount charged, timestamp, and idempotency key. It contains no request content, no result content, and no file names. These are financial records, kept for the life of the account, and visible to you under Settings → Account and Usage.
 

@@ -107,6 +107,16 @@ server {
         gzip off;
     }
 
+    # ================= 内部口：公网恒 404 =================
+    # /api/internal/ref/{list,read}（dev-board#720）只给**同机**的插件云后端用，
+    # 它走 127.0.0.1:9797 直连、根本不经过 nginx。应用层已有三道闸（密钥未配 /
+    # 密钥不符 / 来源不是回环，三种都回裸 404），这条是第四道，也让这个路径在公网上
+    # 与其余不存在的路径长得一模一样。
+    # `^~` 不可省：它让这条前缀命中后不再去试正则 location（也压过下面更短的 /api/）。
+    location ^~ /api/internal/ {
+        return 404;
+    }
+
     # ================= 后端 API =================
     # 桌面端要打的：/api/auth/awdk-login、/api/auth/device-token、/api/projects/*、
     # /api/cloud/*、/api/projects/{id}/version/prepare-remote、/api/admin/wizard（探活）

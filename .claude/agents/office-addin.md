@@ -139,6 +139,14 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **会话 ID 存储键按宿主分作用域**：`awd_addin_conv_{host}_{projectId}`（`settings.loadConversationId/saveConversationId`
   收第三个参数 hostTag，`chatSession.hostScope()` 提供）。旧键只由 word 宿主一次性认领后删除。
   **hostScope() 取不到宿主时用 'unknown'，绝不能回落 'word'**——回落就是把三个宿主并回一个会话。
+- **再按文档分一层**（2026-09-20，dev-board#717）：`awd_addin_conv_{host}_{projectId}_{docKey}`，
+  第四个参数由 `chatSession.docScope()` 给（= `hostBridge.documentKey()`，有路径用路径、否则
+  `宿主:文档名`，取一次就记住——中途另存为会换路径，读写必须是同一个键）。
+  **为什么非分不可**：只分到宿主时，同一个项目里同时开着的两份 Word 拿到同一个 conversationId，
+  而跨文档读写是按 conversationId 往 SSE 推命令的——两个窗格在通道上分不开，抢到 emitter 的那个
+  会替另一个执行 `read_for_reference`，把自己的正文当成对方文档的内容交给模型，沿途无人报错。
+  后端 `OpenDocSource.requireAddressable` 现在会拒绝这种目标（既不列也不下发），根子在这个键。
+  docKey 取不到（普通浏览器调试）时退回宿主级键；旧的宿主级键由先开的那份文档一次性认领后删除。
 - **任务窗格实例身份**：`chatSession.paneId`（每次窗格载入生成、不持久化）经 `X-Client-Instance`
   请求头上送。后端 `SseEmitterService.createConnection(id, clientId, lastEventId)` 认出「换了窗格」时
   先给旧连接发 `superseded` 事件再关，客户端收到即**停止重连**并提示——把无限互顶变成一次性移交。
@@ -305,3 +313,51 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **量偏移口径的环境坑**：`Application.Name` **判不了宿主**——WPS 的 COM 层为了让针对 Word 写的 VBA 宏原样能跑，Name 属性直接返回 `"Microsoft Word"`（实测：机器上 Word 已卸载，`kwps.Application` 建出来的对象 Name 仍是 Microsoft Word）。**要按 `Application.Path` 判**（WPS 是 `...\Kingsoft\WPS Office\<版本>\office6`）。另：给 guest 跑的 .ps1 若含中文注释**必须存成带 BOM 的 UTF-8**，否则 Windows PowerShell 5.1 读乱后会报语法错。Parallels 共享的 `\\Mac\Home` 对 guest **可写**（`Remove-Item` 会静默失败）。
 - `npm test`（含 wps*Handlers 单测与 sse XHR 通道用例）+ `npm run build` + `npm run build:wps`。
 - 真机清单见 office-addin/README.md「WPS 加载项」章（Windows 虚拟机装个人版 WPS）。
+
+## 跨文件读写：窗格心跳、跨文档写入与修订记录（2026-09-18，dev-board#717-720）
+
+spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md`。一句话：A 文档窗格里的 AI 能读别的文件（另一个打开的文档 / 桌面端项目 / 云端项目 / 官方案件库 / 关联的 git 仓库），也能改**另一个打开着的**文档——但痕迹必须落在**被改的那份文档自己的窗格**里。后端那一半（`ref_*` 四个工具、五个来源、`PaneRegistry`、`executeOnPane`）见 ai-chat.md「参考来源工具 ref_*」节；桌面端那一半见 mobile-sync.md「桌面端常连与参考读取」节。
+
+### 关键文件（新增）
+
+- `taskpane/lib/paneHeartbeat.js` — 30 秒一轮的心跳循环（`startHeartbeat({getState, post})`，起步即发一次，`beatNow()` 供补发）。**任何失败一律吞掉**：它跑在定时器里，抛出去就是没人接的 unhandled rejection；漏一轮无害，云端 90 秒过期本来就留了两轮余量。
+- `taskpane/lib/referenceRead.js` — `read_for_reference` 的纯函数部分：`parseLocator`（`page:N` / `slide:N` / `sheet:名[!A1:D20]` / `heading:文字` / 空）、`sliceByHeading`、`capReferenceText`、`blankPageText`、`unsupportedLocatorError`。Office 面与 WPS 面共用同一份口径。
+- `taskpane/lib/crossDocWrite.js` — 收到带 `origin` 的命令后怎么执行、怎么留痕、怎么撤销（`runCrossDocWrite` / `undoRevisionEntry` / `locateEntry` / `mergeCrossDocBanner` / `summarize`）。宿主相关的取值写回全部经 `hostBridge` 注入，可在 node 里测。
+- `taskpane/lib/revisionLog.js` — 修订记录 store（模块级 `entries` reactive + `unread` ref + `revisionLogOpen`），按文档持久化。
+- `taskpane/lib/gitLink.js` + `components/GitLinkPanel.vue` — 关联 GitHub/Gitee 仓库的入口（账户菜单一处）。
+- `components/RevisionLogPanel.vue` — 修订记录面板（overlay，同 TransferPanel 形态）。
+- 改：`chatSession.js`（paneId/身份广播/跨文档分流）、`api.js`（三组新端点）、`hostBridge.js`（跨文档五个接缝 + `documentKey()`）、`officeExecutor.js` / `wpsExecutor.js` / `wps{Word,Et,Wpp}Handlers.js`（`read_for_reference` + 快照读写）、`docSnapshot.js`、`i18n.js` / `i18n.test.js`、`App.vue`。
+
+### 核心契约
+
+- **paneId 就是 SSE 的 `clientId`，不另造第二个**：`chatSession.paneId = makePaneId()` 既当建 SSE 时（`/api/agent/connect/{cid}`）上送的 `clientId`，也当心跳与 `open:<paneId>` 里的那一个。两个同宿主窗格（两份 Word）各自独立。
+- **心跳 `POST /api/addin/panes/heartbeat`**，body `{paneId, host, family, docName, projectId, conversationId}`，30 秒一轮；云端 90 秒没收到即当窗格已关。未登录（`configured` 为假）不发。`docName` **每轮现取**（未保存的新文档另存后名字会变）。云端对 `conversationId` 过一次 `canUseConversation`：**不是本账号的会话 → 整条心跳回 `code:1` 且不登记**（ai-chat.md 地雷 2b）。心跳失败本来就吞掉、下一轮再发，所以插件侧不需要为这一档加分支；窗格表现为暂时不出现在别人的 `ref_list` 里。
+- **会话身份一变立刻补发**：`chatSession` 里 conversationId 的**每一处赋值都必须走 `setConversationId`**，它经 `onIdentityChange` 通知 App.vue 调 `hb.beatNow()`。绕过它 = 云端在下一轮心跳前（最多 30 秒）都拿着旧 conversationId，别的窗格发来的命令全投进一条没人听的会话里白等超时。
+- **告别 `POST /api/addin/panes/bye`**：`pagehide` 与 `logout` 各发一次。**优先 `navigator.sendBeacon`**——卸载途中普通 fetch 会被掐掉；beacon 带不了自定义头，所以**令牌放在 body.token 里**，载荷用 `text/plain`（CORS 安全类型，跨域不触发预检），后端 `AddinPaneController.bye` 两种都认。beacon 不可用时落 `fetch(..., {keepalive:true})`。**登出时先告别再注销**：令牌一失效就认不出这是谁的窗格了。送不到也只是退回 90 秒过期兜底。
+- **`read_for_reference {locator}` 是读取的唯一出口**，三宿主 × 两家族共六个实现，返回 `{text, truncated, totalChars}`（后端只取 `text`）。**宿主不支持的定位组合一律明确报错，绝不静默退回全文**——模型以为拿到的是第 3 页、其实是全文，比报错更糟。Word 按页要 `WordApiDesktop 1.2`（`wordPagesSupported()`），WPS 文字走 `ComputeStatistics` / `Information`。上限 200,000 字符、截断标注 `\n...(截断)`，**与后端 `ReferenceSourceService.MAX_CHARS` / `cap()` 逐字一致**。空页回「（第 N 页没有可读取的文字）」而不是空串。
+- **它必须留在 `docSnapshot.READ_ONLY_COMMANDS` 里**：漏掉的话别人来读一次就被当成本文档有写入，白触发一次文档镜像上传。
+- **跨文档命令走另一条路**：`handleClientAction` 见到 `action.origin` 就转 `handleCrossDocAction`，**串行排队**（`crossDocQueue`）——「取改前值 → 执行 → 读回改后值」是一个整体，两条命令交错会让后一条记下的改前值是前一条改到一半的状态，撤销就写回错东西。这是**别的会话**的动作，不往本窗格当前会话的气泡里挂工具 chip；无论成败都照常 `postOfficeResult`（发起方的工具调用在等它），永不 throw。
+- **Word 面：无痕迹的跨文档写入不允许发生。** `crossDocTrackingOk()`（Office = `WordApi 1.4`，WPS = `TrackRevisions` 可读写）为假时**拒绝执行**并回「本机 Word 版本无法标记修订，已拒绝跨文档修改」；`WORD_UNTRACKABLE_COMMANDS`（`table_delete_row` / `table_delete_col` / `accept_revision` / `reject_revision` / `set_document_properties` / **`add_comment` / `reply_comment` / `resolve_comment`**）本身就标不出修订，同样拒绝——批注不是修订，两个家族的处理函数都不经 `withTracking`，`__forceTracking` 传进去会被原样丢掉。**漏一条的后果不只是少一道痕迹**：`runCrossDocWrite` 会照样记下一条 `undoable:false` 且没有 `noBefore` 的条目，面板据此显示「已标为修订，撤销请在修订中拒绝」，而文档里根本没有那处修订可拒绝。名单与执行器的对拍护栏在 `crossDocWrite.test.js`（Word 宿主的每条写入命令：要么经 withTracking 执行，要么在名单里）。**注意这与本窗格自己的写入不同**：自己的写入在 1.4 不支持时是降级直改标 `tracked:false`（见上文「工具桥」），跨文档不给这条降级。
+- **Excel / PPT 面：没有修订机制，修订记录就是唯一痕迹**，也是撤销的依据。执行前经 `captureCrossDocState` 取受影响区域原值、执行后读回改后值，一并记进条目；`UNDO_LIMITS`（2000 格 / 20000 字符）之外不记快照，条目如实标「无法记录改前值」并照常执行。撤销前 `sameState(当前值, 改后值)` 比对，用户已再改过就报冲突**不覆盖**。`excel_select_range` 在 `NO_TRACE_COMMANDS` 里：不改内容，不留条目也不弹横幅。
+- **修订记录按文档分开存**：`hostBridge.documentKey()`（Office 文档 URL / WPS `FullName`；**没有路径时是「宿主:文档名#本窗格实例」**，见地雷 5；判不出宿主回空串 = 只在内存里）→ `revisionLog.bindDocument(docKey)`，落 `localStorage` 键 `awd_addin_revlog_{docKey}`，上限 200 条。**写满配额的降级**：丢掉最新 20 条之外条目的 `before`/`after` 再存一次，那些条目改标 `undoable:false` + `snapshotDropped`，内存里同步改——宁可较早的撤不了，也不能整本记录从此存不进去、刷新后全没了。
+- **跨文档写入之后要就地触发一次文档镜像**（`handleCrossDocAction` 置 `turnHadWrite` 后**立刻** `maybeArchiveSnapshot()`）。`turnHadWrite` 平时由 `finishStreaming` 消费，而收到跨文档命令的窗格并没有在跑自己的轮次——只置位不汇合的话，镜像要等本窗格的用户下次自己发消息才跑；被改的那份文档常常根本没人在它的窗格里聊天，于是**永远不跑**，桌面端项目里那份副本停在改动之前，界面上还没有任何迹象说它是旧的。护栏 `crossDocChat.test.js` 的镜像用例。
+- **条目存 `summaryKey` + `summaryParams`，不存翻好的文字**（dev-board#713 同一条纪律）：切语言后已经记下的条目跟着换语言。
+- **横幅与角标是两件事**：横幅（`chatSession.crossDocBanner`，同一来源 10 秒内合并计数）不自隐，用户点「查看」进面板或点 x 收起；**点 x 不清未读角标**（只是把提示划走，并没有看过改了什么），只有打开面板才清。头部入口的角标是「有人改过你的文档」唯一一直在的提示。
+- **git 关联**：`GET/POST/DELETE /api/addin/git-links`，信封 `{code, message}`，**message 原样上浮**（「服务器未配置 git 令牌密钥」「仓库拒绝了这次访问」是用户唯一能据以改正的信息）。仓库访问令牌只在 POST 请求体里出现一次，**不写日志、不回显、不进本机存储**；面板只显示 `tokenLast4` 与 `lastError`。只读关联——AI 从不提交、不推送。
+
+### 已知地雷（跨文件面）
+
+1. **绕过 `setConversationId` = 跨窗格下发静默投空**。新会话/切会话/换项目/登出，四条路径都要经它。
+2. **新增写入类命令要想清楚跨文档那一面**：Word 面标不出修订的要进 `WORD_UNTRACKABLE_COMMANDS`（否则会发生无痕迹的跨文档写入）；Excel/PPT 面要在 `captureOfficeState` / `captureWpsState` 里给出快照口径，给不出就是「不可撤销」——这是如实标注，不是 bug，但别让它默默变成「记了个错的改前值」。
+3. **新增只读命令要进 `READ_ONLY_COMMANDS`**（漏加会被当成写入：多拍一次镜像、跨文档时还会白弹一次横幅）。
+5. **未保存的新文档不能只靠「宿主:文档名」当键**（2026-09-20 修，`hostBridge.documentKey`）。Office 面的文档名就是从 `Office.context.document.url` 推出来的，url 为空（未保存的新文档）时它是宿主通称「当前 Word 文档」——两份新建的 Word 于是算出同一个 docKey、同一条 conversationId，跨窗格下发按会话走，命令落到另一份文档上，沿途无人报错（后端 `OpenDocSource` 现在会拒绝这种寻址不到的目标，但那是兜底，根子在这个键）。没有路径时键后面再缀一维「本窗格实例」（模块加载时生成、不持久化）：未保存的新文档本来就没有稳定身份，窗格重载即换键、修订记录只在本次会话内存活，但两份新文档绝不会撞在一起；存过盘之后有了路径，键自然回到按路径分。护栏 `revisionLocate.test.js` 的两条 documentKey 用例。
+4. **两个新组件必须在 `i18n.test.js` 的 `SCAN_FILES` 里**（已加）：那条扫描是「模板里不得出现裸中文」的唯一护栏，不加等于这两个面板不受管。
+5. **sendBeacon 在 Mac WKWebView 上是否送达未验证**：送不到就退回 90 秒过期，表现是关掉的文档在别人的 `ref_list` 里多留一会儿——**不要为此把过期时间调短**，那会误杀网络抖动的活窗格。
+6. **`documentKey()` 必须在 `Office.onReady` 之后取**（App.vue 的 `onMounted` 已满足）：早了拿不到文档路径，条目会落到空 key 上、只在内存里。
+7. **横幅文案不许说「修订已标记」**：那只对文字宿主成立，表格/演示没有修订机制。现文案统一说「已记入修订记录」。
+
+### 验证（跨文件面）
+
+- `cd office-addin && npm test` —— 新增 `paneHeartbeat.test.js`、`chatSessionIdentity.test.js`（身份广播与补发）、`referenceRead.test.js` / `referenceReadOffice.test.js` / `referenceReadWps.test.js`（locator 解析、按页/标题切段、截断、不支持即报错）、`crossDocWrite.test.js`（强制修订、拒绝分支、快照与冲突撤销）、`crossDocChat.test.js`（origin 分流、串行、必定回传）、`officeCrossDoc.test.js` / `wpsCrossDoc.test.js`（两个家族的快照读写接缝）、`revisionLog.test.js` / `revisionLogUi.test.js` / `revisionLogPanel.test.js` / `revisionLocate.test.js`、`gitLink.test.js`、`api.test.js`（心跳/告别/git-links 的请求形状）。
+- UI/vite 动过就再 `npm run build`（与 `npm run build:wps`）。
+- **真机走查是这批的判据，不是可选项**（spec §10）：Mac 上 Word A + Word B 互读互改、Word A 改 Excel/PPT B 并撤销、WPS（Parallels）同样两轮、桌面端常连的冷热耗时与断网回落、案件库与 GitHub 各读一份 docx。未做的项在卡上与汇报里如实标「未验证」。

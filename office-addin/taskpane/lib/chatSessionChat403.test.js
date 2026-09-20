@@ -33,6 +33,10 @@ globalThis.Word = {}
 
 const { activateSession, send, messages, stop } = await import('./chatSession.js')
 const { t, ZH } = await import('./i18n.js')
+// 会话 ID 的存储键除了项目与宿主，还按**文档**分一层（dev-board#717）：同项目里的两份
+// Word 必须拿到各自的 conversationId，否则跨文档读写按会话下发时两个窗格分不开。
+const { documentKey } = await import('./hostBridge.js')
+const convKey = (projectId) => `awd_addin_conv_word_${projectId}_${documentKey()}`
 
 /** 永不出数据的 SSE 响应体（建连成功后读流挂起，不影响用例收尾） */
 function sseOkResponse() {
@@ -90,14 +94,14 @@ test('chat 403（会话已失效）：丢弃死 ID → 重新签发 → 自动�
   })
   try {
     await activateSession({ settings: SETTINGS, projectId: '21' })
-    assert.equal(store.get('awd_addin_conv_word_21'), 'conv-dead')
+    assert.equal(store.get(convKey(21)), 'conv-dead')
 
     await send('帮我看看这份合同')
 
     // 死 ID 发了一次、新 ID 重发了一次，且只重发一次
     assert.deepEqual(chatConversationIds(f.calls), ['conv-dead', 'conv-fresh'])
     // 新会话 ID 落盘，替换掉死的那个
-    assert.equal(store.get('awd_addin_conv_word_21'), 'conv-fresh')
+    assert.equal(store.get(convKey(21)), 'conv-fresh')
     // 新会话也建起了自己的 SSE 通道（连接绑在会话 ID 上，不能继续用旧的）
     assert.ok(f.calls.some((c) => c.url.includes('/api/agent/connect/conv-fresh')))
     // 用户看不到报错——这条消息确实发出去了
@@ -136,7 +140,7 @@ test('重发仍失败才报错，且文案说清下一步（不是裸的 HTTP 40
 
 test('有落库历史的会话 403 不换 ID（那是归属问题），文案如实交代', async () => {
   store.clear()
-  store.set('awd_addin_conv_word_23', 'conv-owned-by-someone-else')
+  store.set(convKey(23), 'conv-owned-by-someone-else')
   let issued = 0
   const f = stubFetch((url) => {
     if (url.includes('/api/ai/history')) return jsonReply([{ role: 'USER', content: '早先的问题' }])
@@ -152,7 +156,7 @@ test('有落库历史的会话 403 不换 ID（那是归属问题），文案如
 
     assert.equal(issued, 0, '有历史的会话不该被悄悄丢掉换新的')
     assert.deepEqual(chatConversationIds(f.calls), ['conv-owned-by-someone-else'])
-    assert.equal(store.get('awd_addin_conv_word_23'), 'conv-owned-by-someone-else')
+    assert.equal(store.get(convKey(23)), 'conv-owned-by-someone-else')
     assert.equal(lastAssistant().error, t('conversationDenied'))
   } finally {
     await stop()
@@ -208,7 +212,7 @@ test('发送路径上的 connect 403 同样自愈（旧判据 !messages.length �
   try {
     // 第一幕：进面板时预连就 403（会话是空的），activateSession 那次自愈把 conv-1 换成 conv-2
     await activateSession({ settings: SETTINGS, projectId: '25' })
-    assert.equal(store.get('awd_addin_conv_word_25'), 'conv-2')
+    assert.equal(store.get(convKey(25)), 'conv-2')
 
     // 第二幕：conv-2 在发送之前也死了，且连接已断（每轮结束后端会主动关流）
     dead.add('conv-2')
@@ -219,7 +223,7 @@ test('发送路径上的 connect 403 同样自愈（旧判据 !messages.length �
     assert.equal(issued, 3, '发送路径上的 connect 403 必须同样换 ID 重连')
     assert.deepEqual(chatConversationIds(f.calls), ['conv-3'])
     assert.equal(lastAssistant().error, '')
-    assert.equal(store.get('awd_addin_conv_word_25'), 'conv-3')
+    assert.equal(store.get(convKey(25)), 'conv-3')
   } finally {
     await stop()
     f.restore()

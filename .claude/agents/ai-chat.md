@@ -559,3 +559,71 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 ## 超时与失败收尾补充（2026-09-15，dev-board#650）
 
 SSE 建连只等待响应头15秒，已有长流不套这个上限；发送中初次连接失败也必须reject。停止先结束本地等待，再独立用10秒请求确认后台取消，失败不能写“已停止”。模型generate同步抛错走handler.onError同一终态闸，工具准备/本地压缩完成才启动首字看门狗。验证见 `agent-stream-connect/abort` 和 `AgentOrchestratorFailoverFlowTest`；完整矩阵与成本流程见 `doc/ai-timeout-cost-audit.md`。
+
+## 参考来源工具 ref_*（2026-09-18，dev-board#717-720）
+
+spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md`。Office/WPS 任务窗格的会话多了四个工具：读别的文件、改**另一个打开着的**文档。插件那一侧（心跳、`read_for_reference`、修订记录）见 office-addin.md「跨文件读写」节；桌面端那一侧见 mobile-sync.md「桌面端常连与参考读取」节。
+
+### 关键文件
+
+- `service/ai/tools/ReferenceTools.java` — 四个 `@Tool`，唯一后端入口。
+- `service/ai/ref/ReferenceSourceService.java` — 按 ref 前缀分派 + 合并清单 + 统一截断与错误包装。
+- `service/ai/ref/{RefSource,RefQuery,RefEntry,RefSourceException}.java` — 来源接口与数据形状。
+- `service/ai/ref/{OpenDocSource,DesktopSource,CloudProjectSource,CaseLibrarySource,GitProviderSource}.java` — 五个来源。
+- `service/ai/ref/CaseRefClient.java` — 案件库内部口的出站客户端；`controller/internal/InternalRefController.java` 是案件库那一侧的入站端点（见 version-control.md）。
+- `service/addin/PaneRegistry.java` + `controller/addin/AddinPaneController.java` — 窗格登记簿与心跳/告别端点。
+- `service/addin/{GitProviderClient,GitTokenCipher}.java` + `controller/addin/AddinGitLinkController.java` + `model/entity/AddinGitRepoLink.java` — 关联 GitHub/Gitee 仓库。
+- `service/file/ProjectFileTextExtractor.java` — 从 `FileTools.extract_file_text` 抽出的抽文字路由，现在三个使用方共用（工具、云端项目来源、桌面端参考读取）。
+- 改：`OfficeBridgeService.executeOnPane`、`ClientCapabilityService.isToolVisible`、`ContextAssemblerService` 的 Office 末位硬规则、`ProjectFileService.{findByRelativePath,listRelativePaths}`。
+
+### 工具契约
+
+| 工具 | 参数 | 说明 |
+|---|---|---|
+| `ref_list` | `query`（文件名关键字，可空）、`source`（`open`/`desk`/`cloud`/`case`/`git`，可空 = 全部） | 每行一条 `ref \| source \| path[ \| host][ \| openable]`，总数 ≤100 |
+| `ref_read` | `ref`、`locator`（可空） | 纯文本，≤200,000 字符，截断标注 `...(截断)` |
+| `ref_edit` | `ref`（必须 `open:`）、`command`、`argsJson` | 把 office_* 命令下发到那个文档自己的窗格 |
+| `ref_open` | `ref`（必须 `desk:` 且 LIST 标了 `openable`） | 请桌面端用系统默认程序打开该文件，**只限文档类扩展名**（见 mobile-sync.md 地雷 12b） |
+
+- **ref 是不透明串，模型只复制不构造**：`open:<paneId>` / `desk:<deviceId>:<projectKey>:<path>` / `cloud:<fileId>` / `case:<remoteProjectId>:<path>` / `git:<repoLinkId>:<path>`。`desk:` 的 path 可含 `:`，**只按前两个 `:` 切**（`DesktopSource.split`）；`case:` / `git:` 只按第一个切。
+- **userId / projectId / conversationId 由 ToolRegistry 的 `SERVER_CONTEXT_PARAMS` 强制注入**，模型传的同名值一律被覆盖——否则拿别人的会话或项目当参考来源就是一行参数的事。
+- **`ref_*` 只对 OFFICE 会话可见，且这是显式写出来的**：`ref_` 不属于 `doc_/sheet_/slide_/office_`，按 `isToolVisible` 的前缀规则会落进「所有会话可见」，所以那里加了一条 `toolName.startsWith("ref_") → capabilityOf == OFFICE`。LOWA 会话已有项目文件工具，不引入。护栏 `ClientCapabilityServiceTest`。
+- **`RealToolBeans.instantiateAll()` 已补上 `ReferenceTools`**（那份清单必须与生产 `AgentToolComponent` 集合同步，见上文 TodoTools 的旧坑）。回放用例默认 LOWA 会话，既有可见工具集不变。
+
+### 分派与合并（ReferenceSourceService）
+
+- **顺序固定 `open → desk → cloud → case → git`**（`ORDER`，构造时按它把来源装进 `LinkedHashMap`）：模型读到的清单顺序就是「离用户最近的先来」。
+- **一个来源失败只并列一行 `[scheme] 不可用：…`，不让整份清单失败**。非 `RefSourceException` 的运行时异常**不把 message 带给模型**（可能夹带上游响应片段），只记异常类名、回一句「暂时无法访问」。
+- **`available(q)` 为假的来源整块跳过**：国际站没配案件库、这个人没绑官网账号、这个项目没关联仓库，都属于「这个来源在此上下文不存在」，不是错误，清单里不添噪音行。
+- **`read` 的统一收尾**：空白正文换成「该文件没有可读取的文字。」；超上限走 `cap()`——**不把代理对切成半个字符**（生僻字/emoji 落在边界上会变乱码）。`edit`/`open` 的空白结果换成一句「无法确认操作是否完成」。**工具输出永不为空串**（`ToolExecutionResultMessage.ensureNotBlank` 那条地雷）。
+- **只有 `open:` 可写**（D 决策）：`RefSource.edit` 的默认实现直接抛「该文件没有打开，不能直接修改」，其余四个来源一个字都不用写。
+- **未打开的来源带 `locator` 时**走 `RefSource.withLocatorNote`：在全文前面加一句「未打开的文件无法按页定位，以下为全文。」——**悄悄忽略 locator 会让模型把全文当成「第 3 页」来引用**。正文为空时原样返回空白（给空白加抬头等于告诉模型「这份文件的全文就是空的」）。
+
+### 跨窗格下发（OpenDocSource + OfficeBridgeService）
+
+- `executeOnPane(target, command, args, origin)` 复用既有 pendingRequests/CompletableFuture，**发往目标窗格当前的 conversationId**，载荷多一个 `origin: {paneId, docName, conversationId}`。`OfficeResultController` 的归属校验一行未改。
+- **「窗格还在不在」只看心跳，不看 SSE 有没有 emitter**（2026-09-20 修）。后端每轮结束都主动关掉 SSE 流（`AgentOrchestrator` / `AgentStreamHandler`），窗格要退避 1~30 秒才重连——一个开得好好的窗格在这段空档里就是没有 emitter 的。按 emitter 判活会把这段空档诬成「请在该文档里打开 AI WorkDeck 窗格」，而用户正看着那个窗格。本窗格的 `executeOfficeCommand` 从来不这么做：`client_action` 进补发缓冲，重连时按 Last-Event-ID 补回去（dev-board#287）。真正关掉的窗格由 `PaneRegistry` 的 90 秒心跳过期兜住，`OpenDocSource.target` 在这之前就报「窗格已经关闭」。
+- **origin 必须有**：B 窗格靠它判定「这是跨文档写入」并强制标修订，缺了它的写入到了 B 那边会被当成本窗格自己的操作，痕迹保证就落空——所以发起方窗格还没登记上（心跳未到）时也照样给 origin，`docName` 兜底成「另一个文档」。
+- **读取超时的文案要换一句**：通用超时文案开头是 `OfficeBridgeService.TIMEOUT_PREFIX`（`操作超时`）、后半句写的是「请不要直接重试这条写入命令」，那是给写入的；`OpenDocSource.read` 认这个前缀并换成读取版文案。**改超时文案时开头必须仍是这个常量。**
+- **撞会话的窗格既不列也不下发**（`OpenDocSource.requireAddressable` / `unaddressable`，读写两条路都过）。下发是按 conversationId 推 SSE 的，「两个窗格但同一条会话」在通道上分不开——命令落到当时占着 emitter 的那个窗格，读回来的是**另一份文档**的正文却顶着目标文档的名字，沿途无人报错。三种成因都要挡：目标就是自己（回「这是当前文档本身，请直接用 office_* 工具」）、目标与发起方撞会话、**目标与另一个第三方窗格撞会话**（与发起方无关，只看 `PaneRegistry.panesOfConversation(target.conversationId).size() > 1`；两份**未保存**的新文档就是这个形状）。后两种点名目标文档、让用户去那个窗格点「新对话」。插件侧的会话键已按「项目+宿主+文档」分（见 office-addin.md），这里是兜底。
+- **发起方认不准就不署名**：`PaneRegistry.paneOfConversation` 在一条会话挂着多个窗格时返回 empty（不再 `findFirst` 随便挑一个），`origin` 于是退回通称「另一个文档」。挑错的代价是 B 的修订记录与横幅把这次修改署到**另一份文档**头上。护栏 `OpenDocSourceTest.{twinPanesOnAThirdConversationAreNeitherListedNorAddressable,ambiguousCallerIsNeverAttributedToTheWrongDocument}`、`PaneRegistryTest.twoPanesCanShareOneConversationAndThenNeitherIsTheOne`。
+
+### 末位硬规则改写（ContextAssemblerService）
+
+dev-board#285 那条「**本会话能直接编辑的只有上面这一份打开的文档**」（病灶：模型说「PPT 不在可编辑列表中」却把内容写进了当前 Word）现在改写为三句，仍挂 Office 分支**末位**（约束放前面会被弱模型无视）：可读任何参考来源（`ref_list` → `ref_read`）；可经 `ref_edit` 改其他**打开着**的文档，且只改用户要求的那一份、**绝不把本该写进那个文件的内容改写进当前这份**（原病灶的禁令原样保留）；**未打开的文件一律不改**，桌面端项目里的可用 `ref_open` 代为打开，然后停下来等用户。**中英两版逐条对应**（中文版内联在 `assemble()` 的 OFFICE 分支里，英文版在 `activeDocumentGuidanceEn`），护栏 `ContextAssemblerServiceTest` 的「跨文件读写的硬边界」两条（三类宿主 × 中英，且断言它仍排在纯文本约束之后、活跃文档正文之前）。
+
+### 已知地雷（参考来源面）
+
+1. **登记簿全是进程内存**（`PaneRegistry` / `ReferenceRequestStore` / `DesktopStreamService`），前提是**单区域单 JVM**（北京、新加坡各一个实例）。横向扩容要先做粘性路由 + 共享登记簿，本设计没做——加实例会让「B 窗格连在另一台上」表现成「窗格没连着」。
+2. **心跳登记要在写入时顺带清过期**（`PaneRegistry.heartbeat` 里的 `purgeExpired`）：窗格每次载入换一个 paneId，只在 `list()` 里清的话，从不发起跨文档读取的账号下会一直堆着没来得及告别的旧窗格。
+2b. **心跳里的 `conversationId` 不信任请求体**（`AddinPaneController` 的 `canUseConversation`，与 `OfficeResultController` 同一条线）。登记簿是跨窗格下发链路上**唯一**一处 conversationId 来自客户端的地方——`executeOnPane` 直接往 `target.conversationId()` 那条连接推 `client_action`，`OpenDocSource.target` 只校验 paneId 在**调用者自己**名下（那是调用者自己造的）。不校验的话，任何登录用户把别人的 conversationId 登记到自己名下，`ref_read`/`ref_edit ref=open:<自己的paneId>` 就落到别人开着的文档上；结果回传那一闸也拦不住，受害者自己的窗格是合法投递者。护栏 `AddinPaneControllerTest.heartbeatWithSomeoneElsesConversationIsRejectedAndNotRegistered`。没带会话 id 的心跳照常登记（窗格只是暂时不可被下发）。
+3. **参考材料的正文一个字都不许进日志**：五个来源 + service 的日志只记 scheme / 长度 / 耗时 / 异常类名。git 那条尤其严——**Gitee v5 的令牌在查询串里**，把 URL 或上游响应体拼进 message 就等于写进一次日志（`GitProviderClient` 的类注释把这条写死了）。
+4. **参考材料不计费**：不走 `TransferBillingClient`，与整份文件的 PULL/PUSH 账目完全分离。**OCR 也算计费**（2026-09-20 修）：平台代采档的 OCR 按页扣 Credits，所以参考入口（`ProjectFileTextExtractor.extract` / `extractBytes`）走到 OCR 分支时改为回一句「参考读取不做文字识别，请先在工作台里识别」，而不是默默扣钱——`legal/PRIVACY.md` 中英两版都写着参考材料「不产生 Credits 扣费」。
+5. **`ProjectFileTextExtractor` 是从 `FileTools.extract_file_text` 抽出来的同一条路由**（图片直接 OCR / PDF 先抽文字层抽不出才 OCR / 其余 Tika，dev-board#396 口径），三个使用方共用；**但只有工具入口 `extractText(pf)` 真走 OCR**，两个参考入口按上一条拒绝。改它等于同时改 `extract_file_text`，`ExtractFileText*Test` 与 `ProjectFileTextExtractorTest` 要一起跑。OCR 的「[System: …]」形态失败一律转成 `OcrFailedException`，**绝不能被当成正文**。
+6. **`cloud:` 的 fileId 是模型抄来的参数**：读之前一律 `hasReadPermission`，判不过与「不存在」回**同一句话**，不回显别人项目的文件名。`case:` / `git:` 同理。
+
+### 验证（参考来源面）
+
+```bash
+cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q test -Dtest='ReferenceSourceServiceTest,ReferenceToolsTest,OpenDocSourceTest,DesktopSourceTest,CloudProjectSourceTest,CaseLibrarySourceTest,CaseRefClientTest,GitProviderSourceTest,PaneRegistryTest,AddinPaneControllerTest,AddinGitLinkControllerTest,GitProviderClientTest,GitTokenCipherTest,OfficeBridgeCrossPaneTest,ClientCapabilityServiceTest,ContextAssemblerServiceTest,ProjectFileTextExtractorTest,ProjectFileServicePathTest'
+```

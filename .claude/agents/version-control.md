@@ -819,6 +819,37 @@ spec §5.5 已改，初版口径在那里划掉留痕）**。它原本是「溯�
 
 56. **版本操作后的「重载打开中的编辑器」必须同时清两个注册表，只摘 `libreLruKeys` 等于没刷新**（v0.44.1 真机反馈 A1）——链路本身是通的（`resolveAdopt` 报 `affectedFileIds`，护栏 `DraftAdoptTest.resolveAdoptReportsTheResolvedFileForEditorReload`；`AdoptConflictDialog` → `VersionPanel.onReload` → `reload-files` → `onVersionReloadFiles`），断在最后一步：非活动实例靠「摘出 `libreLruKeys` 让它卸载」刷新，而**过继备胎**渲染自 `libreSpares`，`leftLibreFiles` 还会把「有备胎顶着」的文件整个排除掉——只摘 LRU 键那个实例压根不卸载，端着的还是合并前的字节。而左窗格首开的那份文档**一定**是过继来的备胎（`maybeAdoptLibreSpare`），也就是最常见的那一种实例。表现：采纳一稿逐处裁决完，磁盘已是合并结果、文档标签里仍是旧正文，关掉标签重开才对（`closeFile` → `pruneClosedLibreSpares` 顺手清掉了备胎槽）。现已收拢进 `librePool.unloadInactiveLibreInstances(fileId)`（两个注册表一起清，活动实例照旧跳过、交给 `reloadActiveLibreInstances` 就地换文档），LRU 淘汰那条路本来就两边都清（`evictLibreInstance` 末尾的 `pruneLibreSpare`）。**今后任何「让某个文件的实例重新装载」的新入口都调这一个方法**，别再自己 filter 一遍 LRU。护栏 `frontend/tests/version-history/versionReloadPool.test.mjs`。
 
+## 案件库的内部只读口（2026-09-18，dev-board#720，spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md` §7.1）
+
+插件里的 AI 要把官方案件库当参考来源：插件云后端（addin 实例）经 **127.0.0.1** 问案件库（case 实例）「这个官网账号在案件库里能看到哪些文件、某一份的正文是什么」。**只读**——没有任何写接口，也不在这条口子上碰工作段、分支与提交。云端那一侧的来源分派见 ai-chat.md「参考来源工具 ref_*」节，部署配置见 `deploy/case/README.md` 验收清单第 9 条与 `deploy/cloud/README.md`。
+
+### 关键文件
+
+- `controller/internal/InternalRefController.java` — 案件库这一侧的入站端点（`POST /api/internal/ref/list` 与 `/read`）。
+- `service/ai/ref/CaseRefClient.java` + `service/ai/ref/CaseLibrarySource.java` — addin 那一侧的出站客户端与来源实现。
+- 配置：`ref.internal.serve`（**只有 `application-case.yml` 写死 true**，默认 false）、`ref.internal.secret`（`AWD_REF_INTERNAL_SECRET`，**两个实例配同一个值**）、`ref.case.base-url`（`AWD_REF_CASE_BASE_URL`，北京同机即 `http://127.0.0.1:9797`）。
+
+### 核心契约
+
+- **跨实例身份键只有一个：`AccountBinding.externalAccountId`**（官网账户 id）。case 与 addin 是同一个 jar 的两个实例，库与用户表分离，同一个人在两边是两个本机 userId，**本机数字 id 跨实例毫无意义**。两边的 accountId 都来自同一个官网 `GET /api/account/me`，因此**两台的 `ai.account.base-url` 必须一致**（都默认 `https://www.aiworkdeck.com`）；不一致时同一个人在两边对不上号，清单恒为空且不报错。addin 侧查不到绑定 = 这个人没用官网账号登录过本实例，`CaseLibrarySource.available()` 为假，**一次请求都不发**。
+- **四道闸，缺一不可，且一律回裸 404**（不是 401/403——不告诉扫描器这里有个端点，与公网 nginx 的 `^~ /api/internal/` 兜底长得一模一样）：① `ref.internal.serve` 未开；② `ref.internal.secret` 未配置（国际站与自建服务器的默认态）；③ `X-Internal-Secret` 不等（**常量时间比较**，这条口子可以被无限重试，逐字节比较给的就是一个可测的旁路）；④ 来源不是回环地址。两侧 nginx 的 404 是第五道。
+- **「提供这条口子」的开关必须与密钥分开**（`ref.internal.serve`）。`ref.internal.secret` 是**一把密钥两个用途**：case 拿它校验入站，addin 拿它当出站头，部署文档要求两台逐字同值。若让密钥兼任开关，按文档给 addin 配上 `AWD_REF_INTERNAL_SECRET` 就等于在**插件云后端**里也开出这对**不需要会话**、只按 `externalAccountId` 认人的读取端点，读的是 addin 自己的库——而 addin 侧当时连 nginx 的 `^~ /api/internal/` 兜底都没有，全靠回环判定一根绳（同机的另一个容器、低权限 shell、任何一处 SSRF 都在回环里）。护栏 `InternalRefControllerTest.notServingIs404EvenWithRightSecretFromLoopback`；两份 `nginx-*.conf.example` 现在都带那条 404。
+- **回环判定只认 IP 字面量**（`InternalRefController.loopback`）：servlet 的 `getRemoteAddr()` 从来不回主机名，拿主机名去解析等于把判定交给可被投毒的 DNS。认 `127.0.0.0/8`、`::1`、`0:0:0:0:0:0:0:1`，处理 `::ffff:` 前缀、IPv6 的 `%scope` 与方括号。**前提是 `server.forward-headers-strategy=native` 已开**（`application-case.yml` 与 `application-cloud.yml` 都开着）：没开的话应用层看到的 IP 恒为 nginx 的 127.0.0.1，这道闸会退化成只剩密钥那一道。
+- **权限沿用案件库既有口径**：`ProjectMemberService.hasReadPermission` 且**不是客户角色**（`isClient`），与 `VersionController.requireMember` 同一条线。**判不过与「找不到」回同一句话**（`NO_ACCESS`），不回显别人案卷里的文件名。
+- **读的是主分支 HEAD**：`repoService.readBlobAtCommit(projectId, repoService.mainBranch(), path)`，既有的 50MB 闸在 `blobAt` 里；Office 格式经 `ProjectFileTextExtractor.extractBytes` 抽文字。清单走 `isInitialized` → `resolveRef(mainBranch())` → `listPaths(head)`，上限 200 条。
+- **`.awd/` 前缀一律过滤**：文件树清单对律师不可见，对模型同样不可见（与 `VersionController` 各处的过滤同口径）。`read` 也挡这个前缀。
+- **单个案卷读不出来只跳过这一个**，不让整份清单失败（没建过仓、HEAD 解析不了的项目都属于这类）。
+- **addin 侧的失败分两档，绝不能混**（`CaseRefClient`）：案件库那侧说得出原因的（`code != 0` + message，例如没有读取权限、超过 50MB）抛 `CaseRefException`，**原样转述给律师**；传输故障、裸 404（密钥未配 / 不符 / nginx 兜底）、响应解析不了一律抛普通 `IOException`，上层只说「案件库暂时无法访问」——把这些说成业务原因会引着律师去改一个根本没问题的权限。形状照 `HttpAccountDirectoryClient`：固定 HTTP/1.1、不跟随重定向、**不重试**（律师就在窗格前面等着）。
+- **红线**：正文只在内存里过一遍，不落盘、不入库、不计费；两侧日志只记项目 id / 条数 / 长度，**绝不记正文与文件路径**。
+- **国际站没有案件库**：SG 实例不配这两项，来源自动缺席。北京 addin 与 case 同机（`127.0.0.1:9797`），日后分机要改成内网地址并同步 `deploy/cloud/README.md`。
+
+### 验证（内部口）
+
+```bash
+cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q test -Dtest='InternalRefControllerTest,CaseRefClientTest,CaseLibrarySourceTest'
+```
+`InternalRefControllerTest` 钉住三道闸（密钥未配 / 密钥不符 / 缺头 / 非回环各一条，外加 IPv6 回环放行）、客户角色在清单与读取里都看不到东西、无权与不存在同一句话、`.awd/` 不出现、没有版本历史的案卷被跳过而不是让整份清单失败，以及真的从临时裸仓读出 HEAD 那一版的正文。**这几个类都在 `com.checkba.version.**` 过滤器之外**，动这条口子时要单独 `-Dtest=` 圈上。
+
 ## 验证
 
 - **破坏-还原式验证（「还原病灶即转红」）在本仓有一个真会骗人的坑：还原之后必须 `touch` 源文件**。破坏时脚本重写文件 → mtime 变新 → 编译进 `target/classes`；还原若用 `cp`/`mv` 把旧内容搬回来，源文件 mtime 反而**早于**那个被破坏的 `.class`，maven 增量编译判定「没变化」，后续每一次 `mvn test` 跑的都还是被破坏的字节码。dev-board#439 就因此追了半天一个根本不存在的「Hibernate 不生成复合唯一约束」的假故障（DDL 日志里真的没有那条约束——因为加载的是上一轮破坏后的类），还差点为它写了一个不必要的"修复"。凡是脚本化的破坏-还原循环，还原后加一行 `touch`，或者干脆 `mvn clean`。

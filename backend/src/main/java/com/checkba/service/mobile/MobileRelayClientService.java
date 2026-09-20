@@ -59,6 +59,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   <li>跟在同一轮询节奏后响应跨设备文件传输命令（dev-board#251 B 侧）：LIST 回清单、
  *       PULL 把本机文件流式回传、PUSH 把对方投来的文件落到「跨设备文件/YYYY-MM-DD/」；
  *       命中传输往来时进入 5 秒一次的热窗口短轮询，见 {@link #pollTransferCommands()}。</li>
+ *   <li>与云端保持一条 SSE「门铃」常连（dev-board#719）：收到 nudge 立刻取件，
+ *       把插件里的 AI 要读的项目文件抽成文字回传（{@link #pollReferenceRequests()}）。
+ *       门铃只是「快一点」，断线或旧云端不支持时全靠上面那轮 60 秒轮询兜底。</li>
  * </ul>
  *
  * <p>只在 {@code security.local-mode=true}（单机桌面版）活动：云后端与团队服务器
@@ -81,6 +84,7 @@ public class MobileRelayClientService {
     private final ProjectFileService projectFileService;
     private final StorageServiceFactory storageServiceFactory;
     private final com.checkba.service.ProjectAiMessageService projectAiMessageService;
+    private final DesktopRefHandler desktopRefHandler;
     private final ObjectMapper mapper = new ObjectMapper();
     private final Path stateFile;
     private final HttpClient http = HttpClient.newBuilder()
@@ -107,6 +111,38 @@ public class MobileRelayClientService {
     static long TRANSFER_HOT_WINDOW_MS = 120_000L;
     static long TRANSFER_HOT_POLL_INTERVAL_MS = 5_000L;
 
+    /** /desktop/stream 404（旧服务器没有门铃流）：进程内钉死，同 transferCommandsUnsupported 的惯例。 */
+    private volatile boolean streamUnsupported = false;
+    /** /ref/requests 404（旧服务器）：同款进程内静默钉死（dev-board#718）。 */
+    private volatile boolean refUnsupported = false;
+    /** 门铃线程（daemon，惰性创建）：持有那条 SSE 常连，收到 nudge 立刻取件。 */
+    private volatile ExecutorService doorbellExecutor;
+    /** 取件线程（daemon，惰性创建）：取件一律不在读 SSE 的那条线程上跑，见 {@link #dispatchNudge}。 */
+    private volatile ExecutorService nudgeExecutor;
+    /** 每种取件是否已有一次在排队：同种不堆积（取件本来就是「把待办一次取空」）。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, AtomicBoolean> nudgeQueued =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /** 防止 ensureDoorbell 的重复调用出两条并行的门铃循环。 */
+    private final AtomicBoolean doorbellRunning = new AtomicBoolean(false);
+    /** 关停位：@PreDestroy 与测试收尾置位，循环下一轮即退出。 */
+    private volatile boolean doorbellStopped = false;
+    /** 断线重连退避：连接活够 {@link #DOORBELL_STABLE_MS} 才复位到下限。包可见非 final，测试用短值覆盖。 */
+    static long DOORBELL_MIN_BACKOFF_MS = 1_000L;
+    static long DOORBELL_MAX_BACKOFF_MS = 60_000L;
+    /**
+     * 「这次是条好连接」的门槛：连上并活够这么久，退避才复位。
+     *
+     * <p>云端 {@code DesktopStreamService.connect} 在建连那一刻就无条件写 {@code event:ready}，
+     * 所以「收到过 ready」只等于「请求拿到了响应」，一条活 50 毫秒的连接与活一小时的连接
+     * 在这件事上没有区别。只按 ready 复位就会在「每次都连得上、连上就被立刻断开」
+     * （SSE 前面的 nginx 配错/过载）时退化成 1 Hz 重连循环，而每次重连云端都要按
+     * {@code awdt_} 令牌查一次库——装机量有多少就是每秒多少次。这正是插件侧 SSE
+     * 早就修过并写进注释的那个形状（sse.js STABLE_CONNECTION_MS，dev-board#285）。
+     *
+     * <p>取云端心跳间隔（15 秒）的两倍：低于它的连接一律当作短命连接继续翻倍退避。
+     */
+    static long DOORBELL_STABLE_MS = 30_000L;
+
     /** 持久化结构：~/.aiworkdeck/mobile-relay.json */
     public static class RelayState {
         public String deviceId;
@@ -126,7 +162,8 @@ public class MobileRelayClientService {
             ProjectRepository projectRepository,
             ProjectFileService projectFileService,
             StorageServiceFactory storageServiceFactory,
-            com.checkba.service.ProjectAiMessageService projectAiMessageService) {
+            com.checkba.service.ProjectAiMessageService projectAiMessageService,
+            DesktopRefHandler desktopRefHandler) {
         this.enabled = enabled;
         this.localMode = localMode;
         // 国际站账户连到国际中转，大陆站连大陆中转——跟着账户走，别让尽调影像跨境
@@ -140,6 +177,7 @@ public class MobileRelayClientService {
         this.projectFileService = projectFileService;
         this.storageServiceFactory = storageServiceFactory;
         this.projectAiMessageService = projectAiMessageService;
+        this.desktopRefHandler = desktopRefHandler;
         this.stateFile = Path.of(stateDir, "mobile-relay.json");
     }
 
@@ -227,6 +265,9 @@ public class MobileRelayClientService {
             pollTransferCommands();
             // 插件对话镜像（dev-board#298）同理挂在 finally：早 return 不能把它饿死。
             pollConversationSync();
+            // 参考读取（dev-board#718）：门铃是「快一点」，这一轮才是兜底——门铃断线、
+            // 旧云端没有门铃流时，取件全靠这里。同样必须在 finally。
+            pollReferenceRequests();
         }
     }
 
@@ -855,6 +896,331 @@ public class MobileRelayClientService {
         } finally {
             hotLoopRunning.set(false);
         }
+    }
+
+    // ==================== 门铃流与参考读取（dev-board#718 #719） ====================
+
+    /**
+     * 门铃看门人：账户连上之后才谈得上建流，而账户可能在启动之后才连——所以这件事要反复看，
+     * 不能只在 @PostConstruct 做一次。已在跑、旧服务器不支持、已关停时都是空操作。
+     */
+    @Scheduled(initialDelay = 20_000, fixedDelay = 30_000)
+    public void ensureDoorbell() {
+        if (!active() || streamUnsupported || doorbellStopped) return;
+        startDoorbell();
+    }
+
+    /** 起门铃线程（已在跑则什么也不做）。 */
+    void startDoorbell() {
+        if (doorbellStopped || !doorbellRunning.compareAndSet(false, true)) return;
+        doorbellExecutor().submit(this::runDoorbell);
+    }
+
+    /** 关停门铃：进程收尾与测试收尾都用它，别让 daemon 线程带着退避循环活过来源对象。 */
+    @jakarta.annotation.PreDestroy
+    void stopDoorbell() {
+        doorbellStopped = true;
+        ExecutorService executor = doorbellExecutor;
+        if (executor != null) executor.shutdownNow();
+        ExecutorService nudges = nudgeExecutor;
+        if (nudges != null) nudges.shutdownNow();
+    }
+
+    private synchronized ExecutorService doorbellExecutor() {
+        if (doorbellExecutor == null) {
+            doorbellExecutor = Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "mobile-relay-doorbell");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return doorbellExecutor;
+    }
+
+    /** 门铃流的一轮结果：决定下一轮要不要连、等多久。 */
+    enum Doorbell { CONNECTED, FAILED, SUPERSEDED, UNSUPPORTED, REBIND }
+
+    /**
+     * 断线重连循环：连上并活够 {@link #DOORBELL_STABLE_MS} 才把退避复位；被别的连接顶掉
+     * （superseded）时按最大退避等，免得同机多个实例共用 relay 身份互相顶成死循环
+     * （mobile-sync 地雷 8 的同形状风险）。
+     */
+    private void runDoorbell() {
+        long backoff = DOORBELL_MIN_BACKOFF_MS;
+        try {
+            while (active() && !streamUnsupported && !doorbellStopped) {
+                Doorbell outcome;
+                long openedAt = System.currentTimeMillis();
+                try {
+                    outcome = openDoorbellStream();
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (Exception e) {
+                    outcome = Doorbell.FAILED;
+                    log.debug("手机同步：门铃流断开（{}），稍后重连", e.getClass().getSimpleName());
+                }
+                if (outcome == Doorbell.UNSUPPORTED || doorbellStopped || !active()) return;
+                backoff = nextDoorbellBackoff(backoff, outcome, System.currentTimeMillis() - openedAt);
+                try {
+                    Thread.sleep(backoff);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        } finally {
+            doorbellRunning.set(false);
+        }
+    }
+
+    /**
+     * 下一轮的退避时长。
+     *
+     * @param current  本轮用的退避
+     * @param outcome  本轮结局
+     * @param livedMs  这条流从发起请求到断开活了多久
+     *
+     * <p>只有<b>活够 {@link #DOORBELL_STABLE_MS} 的 CONNECTED</b> 才复位：连上即被断的形态
+     * （relay 前的 nginx 对 SSE 配错/过载，头发完就关）同样会走到 CONNECTED，按它复位
+     * 就是每秒一次重连、每秒一次令牌查库，而且永远不会自己好。短命连接一律继续翻倍。
+     *
+     * <p>REBIND 是本机主动断开去换账号令牌的，不算故障，照常立刻重连。
+     */
+    static long nextDoorbellBackoff(long current, Doorbell outcome, long livedMs) {
+        long doubled = Math.min(Math.max(current, DOORBELL_MIN_BACKOFF_MS) * 2, DOORBELL_MAX_BACKOFF_MS);
+        return switch (outcome) {
+            case REBIND -> DOORBELL_MIN_BACKOFF_MS;
+            case CONNECTED -> livedMs >= DOORBELL_STABLE_MS ? DOORBELL_MIN_BACKOFF_MS : doubled;
+            case SUPERSEDED -> DOORBELL_MAX_BACKOFF_MS;
+            default -> doubled;
+        };
+    }
+
+    /**
+     * 连一次门铃流并一直读到断开。
+     *
+     * <p>刻意**不设请求超时**：这条流本来就要一直开着，设了超时等于给自己定时断线。代价是
+     * 对端无声消失时这里可能挂住不报错——可以接受，因为门铃从来只是「快一点」，
+     * {@link #pollInbox()} 的 60 秒轮询是兜底，挂住最多退回到今天的行为。
+     *
+     * <p>换账号守卫：云端在**建连那一刻**把这条流登记在 (userId, deviceId) 名下，之后不再
+     * 重新鉴权。用户换账号后其余出站都经 {@link #currentToken()} 自动改投新账号，唯独这条流
+     * 还挂在旧账号上——新账号那边 {@code isOnline} 恒为假，ref_list / ref_read 直接被拒，
+     * 且报的是「桌面端版本较旧」这种完全不对的诊断。所以每读到一行就比一次账户指纹
+     * （云端每 15 秒一个 ping，至多晚一个 ping 的工夫），变了就断开重连。
+     */
+    private Doorbell openDoorbellStream() throws IOException, InterruptedException {
+        String token = currentToken();
+        if (token == null) return Doorbell.FAILED;
+        String boundFingerprint = accountService.accountFingerprintOrNull();
+        HttpRequest req = HttpRequest.newBuilder(
+                        URI.create(baseUrl + "/api/mobile/desktop/stream?deviceId=" + deviceId()))
+                .header("X-Session-Id", token)
+                .header("Accept", "text/event-stream")
+                .GET().build();
+        HttpResponse<java.util.stream.Stream<String>> resp =
+                http.send(req, HttpResponse.BodyHandlers.ofLines());
+        Doorbell early = doorbellEarlyExit(resp.statusCode(), resp.body());
+        if (early != null) return early;
+
+        boolean ready = false;
+        String event = null;
+        try (java.util.stream.Stream<String> lines = resp.body()) {
+            for (java.util.Iterator<String> it = lines.iterator(); it.hasNext(); ) {
+                String line = it.next();
+                if (doorbellStopped || !active()) return Doorbell.CONNECTED;
+                if (accountSwitched(boundFingerprint)) {
+                    log.info("手机同步：账户已切换，重建桌面端常连");
+                    return Doorbell.REBIND;
+                }
+                if (line.startsWith("event:")) {
+                    event = line.substring("event:".length()).trim();
+                    if ("ready".equals(event)) {
+                        ready = true;
+                        log.info("手机同步：桌面端常连已建立");
+                    } else if ("superseded".equals(event)) {
+                        log.info("手机同步：桌面端常连被同设备的新连接顶替");
+                        return Doorbell.SUPERSEDED;
+                    }
+                } else if (line.startsWith("data:")) {
+                    if ("nudge".equals(event)) {
+                        handleNudge(line.substring("data:".length()).trim());
+                    }
+                    event = null;
+                }
+            }
+        }
+        return ready ? Doorbell.CONNECTED : Doorbell.FAILED;
+    }
+
+    /**
+     * 门铃响应的非 2xx 分支：<b>先关掉响应体，再收工</b>。
+     *
+     * <p>{@code BodyHandlers.ofLines()} 交回来的是惰性流：订阅一直挂着，直到流被消费完或被
+     * close。提前 return 而不碰 {@code resp.body()} 的话，这条连接（HTTP/2 下是这条 stream）
+     * 永远不释放。而 {@code http} 是本类所有出站共用的一个客户端——取件轮询、传输命令、
+     * 参考结果回传都走它。relay 前面的 nginx 502/503 一段时间，门铃就按退避一遍遍重连，
+     * 每次漏一条，攒到 MAX_CONCURRENT_STREAMS 就把其余手机同步功能一起拖死，直到重启进程。
+     *
+     * @return 非 2xx 时的结局；2xx 返回 null，由调用方接着读这条流
+     */
+    Doorbell doorbellEarlyExit(int status, java.util.stream.Stream<String> body) {
+        if (status >= 200 && status < 300) return null;
+        if (body != null) body.close();
+        if (status == 404) {
+            streamUnsupported = true;
+            log.info("手机同步：服务器未开通桌面端常连（/desktop/stream 404），"
+                    + "本次运行不再尝试（服务器升级后重启桌面端恢复）");
+            return Doorbell.UNSUPPORTED;
+        }
+        if (status == 401) {
+            // SSE 没法回 JSON 信封，鉴权失败是裸 401：作废令牌，下一轮用新令牌重连
+            invalidateToken();
+        }
+        return Doorbell.FAILED;
+    }
+
+    /** 门铃载荷只有类型，不含内容；按类型立刻去取件（取件本身仍走带令牌的普通请求）。 */
+    private void handleNudge(String data) {
+        String kind;
+        try {
+            kind = mapper.readTree(data).path("kind").asText("");
+        } catch (Exception e) {
+            return;
+        }
+        switch (kind) {
+            case "ref" -> dispatchNudge(kind, this::pollReferenceRequests);
+            case "transfer" -> dispatchNudge(kind, this::pollTransferCommands);
+            // 前向兼容：以后加的类型旧桌面端不认识，安静跳过
+            default -> log.debug("手机同步：未知门铃类型 {}", kind);
+        }
+    }
+
+    /**
+     * 取件放到读流那条线程之外跑。
+     *
+     * <p>在门铃线程上直接取件的话，一次 200MB 的 PULL / PUSH（{@code Duration.ofMinutes(10)}）
+     * 能把它按住十分钟，这期间流里后来的每一条 nudge 都读不到——而云端那侧
+     * {@link ReferenceRequestStore#TTL_MS} 只有 60 秒，且 {@code stream.isOnline} 仍报在线，
+     * 于是参考读取被照常受理、然后白等到超时，律师看到的是「桌面端 60 秒内未响应」。
+     *
+     * <p>每种取件各自一条任务、互不挡道；同种已经排着一次就不再追加——取件本来就是
+     * 「把待办一次取空」，堆积没有意义。排队标记在任务**开始时**清掉，这样任务跑着时
+     * 新来的 nudge 仍会再排一次（那是新到的待办，不能吞）。
+     */
+    private void dispatchNudge(String kind, Runnable task) {
+        AtomicBoolean queued = nudgeQueued.computeIfAbsent(kind, k -> new AtomicBoolean());
+        if (!queued.compareAndSet(false, true)) return;
+        try {
+            nudgeExecutor().submit(() -> {
+                queued.set(false);
+                try {
+                    task.run();
+                } catch (RuntimeException e) {
+                    log.warn("手机同步：门铃取件 {} 异常（下一次门铃或轮询重试）", kind, e);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            queued.set(false); // 关停中
+        }
+    }
+
+    private synchronized ExecutorService nudgeExecutor() {
+        if (nudgeExecutor == null) {
+            // 缓存池：并发上限由 nudgeQueued 的按种类收敛管着（最多一种一条在跑、一条在排），
+            // 不用固定线程数——固定 1 条就等于把参考读取排在十分钟的传输后面，正是要治的病
+            nudgeExecutor = Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "mobile-relay-nudge");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return nudgeExecutor;
+    }
+
+    /** 建流时的账户指纹与此刻不一致 = 用户换了账号。指纹暂时取不到（null）不算换人。 */
+    private boolean accountSwitched(String boundFingerprint) {
+        String now = accountService.accountFingerprintOrNull();
+        return now != null && !now.equals(boundFingerprint);
+    }
+
+    /**
+     * 参考读取取件：门铃响时立刻调一次，此外跟在 pollInbox 每轮末尾兜底。
+     * 逐条处理，单条失败不影响其余；结果必须回传，否则云端那一侧要白等 60 秒。
+     */
+    void pollReferenceRequests() {
+        if (!active()) return;
+        if (refUnsupported) return;
+        try {
+            HttpResponse<String> resp = authed("GET",
+                    "/api/mobile/ref/requests?deviceId=" + deviceId(), null);
+            if (resp == null) return;
+            if (resp.statusCode() == 404) {
+                refUnsupported = true;
+                log.info("手机同步：服务器未开通参考读取（/ref/requests 404），"
+                        + "本次运行不再轮询（服务器升级后重启桌面端恢复）");
+                return;
+            }
+            if (resp.statusCode() < 200 || resp.statusCode() >= 300) return;
+            JsonNode requests = mapper.readTree(resp.body()).path("requests");
+            if (!requests.isArray() || requests.isEmpty()) return;
+            for (JsonNode request : requests) {
+                try {
+                    handleReferenceRequest(request);
+                } catch (Exception e) {
+                    log.warn("手机同步：参考请求 {} 处理失败（不影响其余）",
+                            request.path("id").asText(""), e);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("手机同步：参考请求轮询异常（下轮重试）", e);
+        }
+    }
+
+    /** id 只收 UUID 形态：它要拼进回传 URL，路径穿越的老坑（clientMediaId）不踩第二次。 */
+    private static final java.util.regex.Pattern REF_REQUEST_ID =
+            java.util.regex.Pattern.compile("[0-9a-zA-Z-]{1,64}");
+
+    private void handleReferenceRequest(JsonNode request) throws IOException {
+        String id = request.path("id").asText("");
+        String kind = request.path("kind").asText("");
+        if (!REF_REQUEST_ID.matcher(id).matches()) {
+            log.warn("手机同步：参考请求标识不合法，跳过");
+            return;
+        }
+        long started = System.currentTimeMillis();
+        Map<String, Object> result;
+        try {
+            result = desktopRefHandler.handle(referencePayload(request));
+        } catch (RuntimeException e) {
+            // handler 承诺永不抛，这里只是最后一道：不回传等于让云端白等 60 秒
+            log.warn("手机同步：参考请求 {} 处理异常", id, e);
+            result = Map.of("ok", false, "error", "桌面端处理失败，可稍后重试。");
+        }
+        Object text = result.get("text");
+        Object entries = result.get("entries");
+        log.info("手机同步：参考请求 {} 已处理 kind={} ok={} chars={} entries={} 耗时={}ms", id, kind,
+                result.get("ok"),
+                text instanceof String s ? s.length() : 0,
+                entries instanceof List<?> l ? l.size() : 0,
+                System.currentTimeMillis() - started);
+        HttpResponse<String> resp = authed("POST", "/api/mobile/ref/" + id + "/result",
+                mapper.writeValueAsString(result));
+        if (!okEnvelope(resp)) {
+            log.warn("手机同步：参考请求 {} 结果回传失败", id);
+        }
+    }
+
+    /** 只把契约里的字段交给 handler：云端以后多带字段也不会被当成参数悄悄生效。 */
+    private static Map<String, Object> referencePayload(JsonNode request) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("id", request.path("id").asText(""));
+        payload.put("kind", request.path("kind").asText(""));
+        payload.put("projectKey", request.path("projectKey").asText(""));
+        if (request.hasNonNull("path")) payload.put("path", request.path("path").asText());
+        if (request.hasNonNull("keyword")) payload.put("keyword", request.path("keyword").asText());
+        return payload;
     }
 
     // ==================== 凭据与传输 ====================
