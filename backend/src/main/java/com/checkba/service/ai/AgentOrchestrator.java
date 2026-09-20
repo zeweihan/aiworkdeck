@@ -116,6 +116,12 @@ public class AgentOrchestrator {
         /** 本轮的取消标志。只有 {@link AgentOrchestrator#setCancelled} 解析到的那一轮会被置位。 */
         private final java.util.concurrent.atomic.AtomicBoolean cancelled =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        /**
+         * 本轮是否成功调用过文档编辑工具（doc_/sheet_/slide_）。随 bubble_end 下发给前端，
+         * 决定「用到文档」那组手动操作还要不要出（dev-board#728）。
+         * 工具分发跑在流式回调线程、读取在收尾线程，故 volatile。
+         */
+        private volatile boolean documentEdited;
 
         RunGuard(String conversationId, String runId, long connectionEpoch) {
             this.conversationId = conversationId;
@@ -156,6 +162,27 @@ public class AgentOrchestrator {
 
         boolean isCancelled() {
             return cancelled.get();
+        }
+
+        /**
+         * 记一次工具执行结果。两个条件缺一不可：
+         * <ul>
+         *   <li><b>成功返回</b>——失败的调用什么都没写进文档，按它藏掉「用到文档」
+         *       等于把用户唯一的补救入口一起藏了；</li>
+         *   <li><b>是写入类工具</b>（{@link ClientCapabilityService#isDocumentWritingTool}）——
+         *       读取/定位/打开类不算。「让 AI 先读文档再起草条款」正是最该出按钮的场景，
+         *       按宽前缀判会把它误藏（dev-board#728）。</li>
+         * </ul>
+         * 置位后不再清零：本轮改过就是改过，后面再跑几个读取工具也不会把它改回来。
+         */
+        void noteToolResult(String toolName, boolean success) {
+            if (success && ClientCapabilityService.isDocumentWritingTool(toolName)) {
+                documentEdited = true;
+            }
+        }
+
+        boolean documentEdited() {
+            return documentEdited;
         }
 
         // 原地打转检测：滑动窗口，识别 A/A/A 与 A/B/A/B 两种重复模式，先干预后熔断
@@ -357,6 +384,28 @@ public class AgentOrchestrator {
         sseEmitterService.send(guard.conversationId, eventName, payload);
     }
 
+    /**
+     * bubble_end 载荷。status 是跨端契约字面量（前端两处解析 + run_state 分支 + Office 插件的
+     * 状态分档），reason 沿用原有位置，documentEdited 追加在最后。
+     *
+     * <p>多处手写 JSON 必然漂移——「AI 已经把内容写进文档了，就别再请用户手动插入一遍」
+     * （dev-board#728）要成立，六个发送点得**一个不漏**地带上这个字段，所以全部收敛到这里。
+     * status/reason 都是代码里的字面量，不需要转义。
+     */
+    private String bubbleEndPayload(RunGuard guard, String status) {
+        return bubbleEndPayload(guard, status, null);
+    }
+
+    private String bubbleEndPayload(RunGuard guard, String status, String reason) {
+        StringBuilder sb = new StringBuilder("{\"status\":\"").append(status).append('"');
+        if (reason != null) {
+            sb.append(",\"reason\":\"").append(reason).append('"');
+        }
+        return sb.append(",\"documentEdited\":")
+                .append(guard != null && guard.documentEdited())
+                .append('}').toString();
+    }
+
     /** 会话运行状态点：同上，被取代的旧轮次不许再改（否则把新轮次的 RUNNING 盖成终态）。 */
     private void markRunState(RunGuard guard, AgentRunStateService.RunStatus status) {
         if (!isCurrentRun(guard)) return;
@@ -499,7 +548,7 @@ public class AgentOrchestrator {
         sendTextDelta(guard, notice);
         saveAssistantMessage(guard, projectId, userId, executionLog + guard.streamSnapshot() + notice);
         markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
-        sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"no_progress\"}");
+        sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "paused", "no_progress"));
         closeSse(guard);
         endRun(guard);
     }
@@ -559,8 +608,11 @@ public class AgentOrchestrator {
                     guard.activeFileId, guard.activeFileName, extractArg(argsJson, "fileId"));
             if (shortCircuit != null) {
                 log.info("[ActiveDoc] 短路 doc_open_file：目标就是已打开的活跃文档 id={}", guard.activeFileId);
-                return new ToolRegistry.ToolResult(
+                ToolRegistry.ToolResult shortResult = new ToolRegistry.ToolResult(
                         shortCircuit, toolRegistry.resolve(toolName).orElse(null), true);
+                // 本方法有两个出口，两个都要记——漏一个就是一条静默失效的支路
+                guard.noteToolResult(toolName, shortResult.success());
+                return shortResult;
             }
         }
 
@@ -589,6 +641,12 @@ public class AgentOrchestrator {
                     guard.activeFileId = opened;
                 }
             } catch (Exception ignore) { /* fileId 非数字时保持原值 */ }
+        }
+
+        // 本轮有没有动过文档：原生 function calling 与 XML 兜底两条工具循环都经过这里，
+        // 记在这一处就够了。收尾时随 bubble_end 下发（dev-board#728）。
+        if (guard != null) {
+            guard.noteToolResult(toolName, result.success());
         }
         return result;
     }
@@ -1100,7 +1158,7 @@ public class AgentOrchestrator {
                         + (aiMessage.text() != null ? aiMessage.text() : "") + notice;
                 saveAssistantMessage(guard, projectId, userId, truncPersisted);
                 markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
-                sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
+                sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "paused", "max_tokens"));
                 closeSse(guard);
                 endRun(guard);
                 return;
@@ -1508,7 +1566,7 @@ public class AgentOrchestrator {
                     saveAssistantMessage(guard, projectId, userId, fullContent);
                     markRunState(guard, AgentRunStateService.RunStatus.AWAITING_APPROVAL);
                     // 发送 bubble_end 表示当前响应结束（等待用户审批）
-                    sendRunEvent(guard, "bubble_end", "{\"status\":\"awaiting_approval\"}");
+                    sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "awaiting_approval"));
                     closeSse(guard);
                     endRun(guard);
                     return; // Stop and wait for user action
@@ -1558,7 +1616,7 @@ public class AgentOrchestrator {
                 String truncContent = (executionLog.length() > 0 ? executionLog.toString() + content : content) + notice;
                 saveAssistantMessage(guard, projectId, userId, truncContent);
                 markRunState(guard, AgentRunStateService.RunStatus.PAUSED);
-                sendRunEvent(guard, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
+                sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "paused", "max_tokens"));
                 closeSse(guard);
                 endRun(guard);
                 return;
@@ -1586,7 +1644,7 @@ public class AgentOrchestrator {
             }
             markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
             // 发送 bubble_end 表示整个循环真正结束
-            sendRunEvent(guard, "bubble_end", "{\"status\":\"finished\"}");
+            sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "finished"));
             // 清理本轮登记；队列跑空才关流（见 endRunAndDrain）
             endRunAndDrain(guard);
           } catch (Exception e) {
@@ -2135,7 +2193,7 @@ public class AgentOrchestrator {
         saveAssistantMessage(guard, projectId, userId, persistedContent);
         markRunState(guard, AgentRunStateService.RunStatus.AWAITING_INPUT);
         // status=awaiting_input：会话列表显示「待回答」（区别于待审批），前端解锁输入区
-        sendRunEvent(guard, "bubble_end", "{\"status\":\"awaiting_input\"}");
+        sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "awaiting_input"));
         closeSse(guard);
         endRun(guard);
     }

@@ -172,7 +172,7 @@ class AgentOrchestratorQuestionStopTest {
 
         assertEquals(1, model.calls.get(), "反问必须停机，不能递归下一轮让模型自己接着猜");
         assertEquals(AgentRunStateService.RunStatus.AWAITING_INPUT, runState.get("conv-q").status());
-        assertEquals("{\"status\":\"awaiting_input\"}", bubbleEndData(),
+        assertEquals("{\"status\":\"awaiting_input\",\"documentEdited\":false}", bubbleEndData(),
                 "status 字面量是跨端契约（前端两处解析 + Office 插件 stillRunning）");
         assertFalse(sseEvents.contains("error"), "反问不是错误");
         // 问题正文必须落库：用户关掉 app 明天回来还要看得见问题与选项
@@ -200,7 +200,7 @@ class AgentOrchestratorQuestionStopTest {
         verify(toolRegistry).execute(any(), any(), any());
         assertEquals(1, model.calls.get(), "工具结果不该带着未决问题递归下一轮");
         assertEquals(AgentRunStateService.RunStatus.AWAITING_INPUT, runState.get("conv-q-tool").status());
-        assertEquals("{\"status\":\"awaiting_input\"}", bubbleEndData());
+        assertEquals("{\"status\":\"awaiting_input\",\"documentEdited\":false}", bubbleEndData());
     }
 
     @Test
@@ -209,7 +209,7 @@ class AgentOrchestratorQuestionStopTest {
         run("conv-plain", AiMessage.from("<final>好的，已经改好了。</final>"));
 
         assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-plain").status());
-        assertEquals("{\"status\":\"finished\"}", bubbleEndData());
+        assertEquals("{\"status\":\"finished\",\"documentEdited\":false}", bubbleEndData());
     }
 
     @Test

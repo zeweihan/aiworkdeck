@@ -7,6 +7,7 @@ import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentT
 import { t } from '@/i18n'
 import { captureChatTimeline } from '@/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from './bubbleId.js'
+import { documentEditedFromProcesses } from '@/utils/useInDocumentVisibility.js'
 import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
@@ -183,6 +184,12 @@ export function useAgentStream() {
         // 正文刻意不再并进 content——点选项时用户气泡里不该出现代拟的机器口吻长句，
         // 问题正文与选项要作为结构化数据交给问题卡（决策 D 的显示通道）。
         question: null,
+        // 本轮后端有没有成功调用过文档编辑工具（doc_/sheet_/slide_），由 bubble_end 下发。
+        // 「用到文档」那组手动操作据此按需展示——AI 已经写进文档了就不再请用户插一遍。
+        documentEdited: false,
+        // 本轮终态（bubble_end.status：finished/paused/awaiting_approval/awaiting_input）。
+        // 全局 agentRunStatus 只记「最后一轮」，而按钮的可见性要按气泡各自判。
+        status: '',
         rawLog: '',
         isStreaming: false,
         // 用户点停止后的提示条文案。刻意不并进 content：content 是「模型正文」，
@@ -1228,6 +1235,10 @@ export function useAgentStream() {
             if (evt === 'bubble_end') {
                 try {
                     const d = JSON.parse(dataStr || '{}')
+                    // 气泡自身的终态与「本轮动过文档没有」：RootBubble 按它决定
+                    // 「用到文档」那组操作出不出（dev-board#728）
+                    currentAssistantBubble.value.status = d.status || ''
+                    currentAssistantBubble.value.documentEdited = !!d.documentEdited
                     agentPaused.value = d.status === 'paused' ? { reason: d.reason || '' } : null
                     agentAwaitingInput.value = d.status === 'awaiting_input'
                     agentRunStatus.value = d.status === 'paused' ? 'PAUSED'
@@ -1954,6 +1965,9 @@ export function useAgentStream() {
             flushRemainingBuffer()
             settleRootThinking(bubble)
             finalizeProcesses('success')
+            // 历史回灌补 documentEdited：GET /api/ai/history 回的是原始协议正文，
+            // 没有 bubble_end 那个字段。不补的话刷新一次按钮就全回来了，看着像没修
+            bubble.documentEdited = documentEditedFromProcesses(bubble.processes)
             for (const entry of bubble.timeline) {
                 if (entry.type === 'thinking') Object.assign(entry.data, { status: 'done', duration: 0, startTime: 0 })
             }

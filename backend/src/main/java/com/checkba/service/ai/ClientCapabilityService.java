@@ -142,7 +142,7 @@ public class ClientCapabilityService {
         if (toolName == null) {
             return false;
         }
-        boolean lowaOnly = toolName.startsWith("doc_") || toolName.startsWith("sheet_") || toolName.startsWith("slide_");
+        boolean lowaOnly = isLowaTool(toolName);
         boolean officeOnly = toolName.startsWith("office_");
         if (!lowaOnly && !officeOnly) {
             return true;
@@ -152,6 +152,79 @@ public class ClientCapabilityService {
             case OFFICE -> officeOnly && hostOfTool(toolName) == officeHostOf(conversationId);
             case NONE -> false;
         };
+    }
+
+    /**
+     * 是否是 LOWA 专属的远端执行工具（doc_* / sheet_* / slide_*）。
+     *
+     * <p>只回答「这个工具需不需要 LOWA 编辑器」，读写一视同仁——{@link #isToolVisible}
+     * 要的就是这个：Office 会话里连 {@code doc_get_document_text} 都执行不了。
+     *
+     * <p><b>不要把它和 {@link #isDocumentWritingTool} 合成一个函数。</b>
+     * 两个消费者问的是不同的问题，合并过一次就出过事：按这个宽判据算
+     * {@code bubble_end.documentEdited}，「先读文档再起草条款」那一轮会因为
+     * 调过 doc_get_document_text 被判成「改过文档」，回复下方的「用到文档」被误藏——
+     * 而那恰恰是最该出按钮的场景（dev-board#728）。
+     */
+    public static boolean isLowaTool(String toolName) {
+        return toolName != null
+                && (toolName.startsWith("doc_")
+                    || toolName.startsWith("sheet_")
+                    || toolName.startsWith("slide_"));
+    }
+
+    /**
+     * 读取 / 定位 / 打开类工具的名字模式（去掉 doc_ / sheet_ / slide_ 前缀之后的部分）。
+     *
+     * <p>按 DocumentEditTools、DocumentAuditTools、CheckpointTools、SlideEditTools 里
+     * 全部 113 个 {@code doc_/sheet_/slide_} 工具名逐个核对得出，31 个只读、82 个写入；
+     * {@code DocumentWritingToolClassificationTest} 扫源码逐名钉住，新增工具没归类就会红。
+     *
+     * <p><b>为什么不能只按「读起来像读」的词头一刀切</b>——两个真实的坑：
+     * <ul>
+     *   <li>{@code doc_find_replace} 以 {@code find_} 开头，却是全仓最常用的写入原语。
+     *       所以 {@code find} 不是词头模式，只有 {@code find_text} 进精确名单；</li>
+     *   <li>{@code doc_set_selection} 只挪选区（只读），而 {@code doc_replace_selection} /
+     *       {@code doc_delete_selection} / {@code doc_format_selection} 都是写入。
+     *       所以 {@code selection} 不能做子串匹配，只有 {@code set_selection} 进精确名单。</li>
+     * </ul>
+     *
+     * <p>词头一律用 {@code (?:_|$)} 收尾，不做前缀模糊匹配：{@code inspect} 若松绑就会
+     * 咬到 {@code insert_*}。{@code summar} 是唯一的例外（要同时覆盖 summary / summarize），
+     * 目前没有工具命中，是给后来者留的。
+     *
+     * <p>拿不准的一律算写入（{@code doc_collapse_cursor} / {@code doc_undo} /
+     * {@code doc_redo} / {@code doc_restore_checkpoint} 都在写入侧）：多算只是少出一个按钮，
+     * 漏算会让用户在 AI 已经写进文档之后又被请去手动插一遍。
+     */
+    private static final java.util.regex.Pattern READ_ONLY_STEM = java.util.regex.Pattern.compile(
+            "^(?:audit|check|count|debug|get|goto|inspect|list|locate|read|search|select)(?:_|$)|^summar");
+
+    /** 以 read 结尾的读取工具（doc_table_read / slide_table_read）。 */
+    private static final java.util.regex.Pattern READ_ONLY_SUFFIX =
+            java.util.regex.Pattern.compile("(?:^|_)read$");
+
+    /** 词头模式覆盖不到、必须逐个点名的只读工具（见上面两个坑）。 */
+    private static final java.util.Set<String> READ_ONLY_EXACT =
+            java.util.Set.of("open_file", "find_text", "set_selection");
+
+    /**
+     * 这个工具会不会真的改动文档内容。{@code bubble_end.documentEdited} 的唯一判据
+     * （dev-board#728）：本轮调过它并成功返回，就说明 AI 已经把内容写进文档了，
+     * 前端不必再请用户手动插一遍。
+     *
+     * <p>判据是<b>工具名</b>而不是 {@code @ToolMeta.fileEffect}：最常用的几个写入原语
+     * （doc_insert_at_cursor / doc_replace_selection / doc_start_stream / doc_delete_text …）
+     * 压根没声明 fileEffect（113 个里 45 个没有），按它判会把真正的编辑漏成「没动过」。
+     */
+    public static boolean isDocumentWritingTool(String toolName) {
+        if (!isLowaTool(toolName)) {
+            return false;
+        }
+        String action = toolName.substring(toolName.indexOf('_') + 1);
+        return !(READ_ONLY_STEM.matcher(action).find()
+                || READ_ONLY_SUFFIX.matcher(action).find()
+                || READ_ONLY_EXACT.contains(action));
     }
 
     /** office_* 工具所属宿主：按前缀细分（最长前缀优先，office_excel_ 也以 office_ 开头）。 */
