@@ -129,7 +129,11 @@ public class PackController {
             m.put("packId", e.packId());
             m.put("service", e.service());
             m.put("state", st.getState());
-            m.put("installed", NativePackService.STATE_READY.equals(st.getState()));
+            // 「装没装」按磁盘算，不按内存态（dev-board#751）：PackUpdater 对已装包走追新时
+            // 内存态是 downloading，镜像一抖就永久停在 failed，而 current.json 仍指着可用的旧版本。
+            // 只看内存态会让面板把装好的组件重新列成待下载，用户的原话是「已经有了还让我下，很奇怪」。
+            // isReady 已排掉半成品与被平台封禁的包（那两种要的不是重下）。
+            m.put("installed", NativePackService.STATE_READY.equals(st.getState()) || packs.isReady(e.packId()));
             m.put("installedVersion", st.getInstalledVersion());
             m.put("latestVersion", packs.knownLatestVersion(e.packId()));
             m.put("downloadBytes", sizes.downloadBytes());

@@ -7,6 +7,8 @@ export default {
   installOne: 'Download this component',
   later: 'Not now',
   laterHint: 'You can download them any time from Settings → Components.',
+  alreadyReady: 'Already installed: {names}.',
+  nameSeparator: ', ',
   manageTitle: 'Components',
 
   promptWithModel: '{name} needs to be downloaded (about {runtime} MB; about {total} MB including the model). It is stored under ~/.aiworkdeck and can be removed from Settings → Components.',

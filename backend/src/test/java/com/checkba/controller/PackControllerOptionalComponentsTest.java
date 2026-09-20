@@ -74,4 +74,51 @@ class PackControllerOptionalComponentsTest {
         // 本端点不许发网络请求：镜像不可达时 20s 超时 × 两个源会把首次登录面板拖死
         verify(packs, never()).info(anyString());
     }
+
+    @Test
+    @DisplayName("盘上装好的包在追新途中/追新失败后仍算已装（dev-board#751：不能让面板催用户重下）")
+    void diskReadyCountsAsInstalledWhileUpgrading() {
+        NativePackService packs = mock(NativePackService.class);
+        ModelPresence models = mock(ModelPresence.class);
+        // PackUpdater 起步 45s 后对已装包走一遍完整安装事务：内存态在那期间是 downloading，
+        // 镜像抖一下就永久停在 failed（进程内不再复位）——可 current.json 一直指着可用的旧版本
+        NativePackService.PackStatus upgrading = new NativePackService.PackStatus();
+        upgrading.setState(NativePackService.STATE_DOWNLOADING);
+        upgrading.setInstalledVersion("1.0.0");
+        NativePackService.PackStatus failed = new NativePackService.PackStatus();
+        failed.setState(NativePackService.STATE_FAILED);
+        failed.setInstalledVersion("1.0.0");
+        when(packs.status(anyString())).thenReturn(new NativePackService.PackStatus());
+        when(packs.status("mineru-runtime")).thenReturn(upgrading);
+        when(packs.status("kokoro-runtime")).thenReturn(failed);
+        when(packs.isReady("mineru-runtime")).thenReturn(true);
+        when(packs.isReady("kokoro-runtime")).thenReturn(true);
+        when(packs.knownSizes(anyString())).thenReturn(new NativePackService.Sizes(0, 0));
+
+        List<Map<String, Object>> out = PackController.optionalComponentViews(packs, models);
+
+        assertEquals(Boolean.TRUE, out.get(1).get("installed"), "追新途中仍是已装");
+        assertEquals("downloading", out.get(1).get("state"), "state 照实报，进度照旧能轮询");
+        assertEquals(Boolean.TRUE, out.get(2).get("installed"), "追新失败也不该把已装包报成未装");
+        assertEquals(Boolean.FALSE, out.get(0).get("installed"), "真没装的还是未装");
+    }
+
+    @Test
+    @DisplayName("被平台封禁的包不算已装（isReady 已排掉，要的是卸载不是重下）")
+    void revokedIsNotInstalled() {
+        NativePackService packs = mock(NativePackService.class);
+        ModelPresence models = mock(ModelPresence.class);
+        NativePackService.PackStatus revoked = new NativePackService.PackStatus();
+        revoked.setState(NativePackService.STATE_REVOKED);
+        revoked.setInstalledVersion("1.0.0");
+        when(packs.status(anyString())).thenReturn(new NativePackService.PackStatus());
+        when(packs.status("asr-runtime")).thenReturn(revoked);
+        when(packs.isReady(anyString())).thenReturn(false);
+        when(packs.knownSizes(anyString())).thenReturn(new NativePackService.Sizes(0, 0));
+
+        List<Map<String, Object>> out = PackController.optionalComponentViews(packs, models);
+
+        assertEquals(Boolean.FALSE, out.get(3).get("installed"));
+        assertEquals("revoked", out.get(3).get("state"));
+    }
 }

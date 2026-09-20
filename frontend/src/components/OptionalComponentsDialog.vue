@@ -4,11 +4,16 @@
   首次登录后的「可选组件」面板（设计 §4.1）。
 
   只在四个条件同时成立时由 project-list 打开：桌面端 / 接口真的回了组件 /
-  存在未装的 / 本大版本没提示过（判定在 useOptionalComponents.shouldPromptOptionalComponents）。
-  「稍后再说」是一等公民——关掉之后本大版本不再打扰，入口留在 设置 → 组件管理。
+  存在未装的 / 缺的里面有上次没提示过的（判定在 useOptionalComponents.shouldPromptOptionalComponents）。
+  「稍后再说」是一等公民——关掉之后同一批组件不再打扰，入口留在 设置 → 组件管理。
 
   「提示过」的标记落 electron prefs（~/.aiworkdeck/prefs.json），不是 localStorage：
-  那个随浏览器数据一起被清，也不区分重装。
+  那个随浏览器数据一起被清，也不区分重装。记的是组件集合而不只是版本号（dev-board#751）：
+  此前每次 0.x 升级都会把同一批已经答过的组件再问一遍。
+
+  清单只列缺失的组件（dev-board#751）：已就绪的收在底部一行灰字，不给复选框、不参与
+  「立即下载所选」与总进度。清单在面板打开时定格，下载完成的卡片留在原地（状态转「已就绪」、
+  复选框消失），不会装到一半从眼前消失。
 
   下载走应用级单例（services/componentDownloads.js，dev-board#581）：下载中可「后台下载」
   关面板，「稍后再说」/点遮罩在下载中也只是转后台、不中断；进度在 设置 → 组件管理 接着看，
@@ -22,14 +27,16 @@
 
       <scroll-view scroll-y class="ocd-list">
         <OptionalComponentCard
-          v-for="item in controller.state.items"
+          v-for="item in pendingItems"
           :key="item.packId"
           :item="item"
-          :selectable="true"
+          :selectable="item.phase !== 'ready'"
           :busy="controller.state.running"
           @toggle="onToggle"
         />
       </scroll-view>
+
+      <text v-if="readyLine" class="ocd-ready">{{ readyLine }}</text>
 
       <view v-if="controller.state.running" class="ocd-total">
         <text class="ocd-total-text">
@@ -60,7 +67,11 @@
 import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
 import { host } from '@/services/host.js'
 import { componentDownloads } from '@/services/componentDownloads.js'
-import { PROMPTED_PREF_KEY } from '@/composables/useOptionalComponents.js'
+import {
+  PROMPTED_PREF_KEY,
+  PROMPTED_PACKS_PREF_KEY,
+  mergePromptedPackIds,
+} from '@/composables/useOptionalComponents.js'
 
 export default {
   name: 'OptionalComponentsDialog',
@@ -73,11 +84,35 @@ export default {
     return {
       // 应用级单例：状态不跟这个面板走，面板关了下载照样继续
       controller: componentDownloads,
+      // 面板打开时缺失的组件 id（定格）：装完的卡片留在清单里，不在下载途中消失
+      pendingIds: null,
     }
   },
   computed: {
+    /** 面板打开时就缺的那些（列成卡片）；load 还没回来时按当前 phase 兜底 */
+    pendingItems() {
+      const items = this.controller.state.items
+      const ids = this.pendingIds
+      if (!ids) return items.filter((i) => i.phase !== 'ready')
+      return items.filter((i) => ids.includes(i.packId))
+    },
+    /** 打开时就已就绪的：只在底部报个名，不给复选框、不参与下载 */
+    readyLine() {
+      const items = this.controller.state.items
+      const ids = this.pendingIds
+      const done = ids ? items.filter((i) => !ids.includes(i.packId)) : items.filter((i) => i.phase === 'ready')
+      if (!done.length) return ''
+      const names = done
+        .map((i) => this.$t('components.' + i.localeKey + '.name'))
+        .join(this.$t('components.nameSeparator'))
+      return this.$t('components.alreadyReady', { names })
+    },
+    /** 已就绪的绝不入批：既不算勾选，也不进总进度 */
+    selectedItems() {
+      return this.controller.state.items.filter((i) => i.selected && i.phase !== 'ready')
+    },
     anySelected() {
-      return this.controller.state.items.some((i) => i.selected)
+      return this.selectedItems.length > 0
     },
     overall() {
       return this.controller.overallPercent()
@@ -91,6 +126,10 @@ export default {
     for (const item of this.controller.state.items) {
       await this.controller.fillSizes(item)
     }
+    // 清单定格在「此刻还缺的」：已就绪的收进底部灰字那行
+    this.pendingIds = this.controller.state.items
+      .filter((i) => i.phase !== 'ready')
+      .map((i) => i.packId)
     // 「模型已装的组件默认勾选」——用户此前已经选择过这个功能（设计 §3.4）
     for (const item of this.controller.state.items) {
       if (item.phase !== 'ready' && item.modelId && item.modelInstalled) item.selected = true
@@ -108,11 +147,10 @@ export default {
     async onInstall() {
       if (!this.anySelected || this.controller.state.running) return
       // 面板在前台看着：装完由面板自己交代（全成功关面板、有失败留着原地重试）
-      this._claims = this.controller.state.items.filter((i) => i.selected)
-        .map((i) => this.controller.claim(i.packId))
+      this._claims = this.selectedItems.map((i) => this.controller.claim(i.packId))
       // 用户已经作答，先落标记：转后台之后面板就卸载了，等装完再写就写不上
       await this.markPrompted()
-      await this.controller.installAll(this.controller.state.items.filter((i) => i.selected))
+      await this.controller.installAll(this.selectedItems)
       if (this._backgrounded) return
       this.releaseClaims()
       // 有失败的就把面板留着，用户能在卡片上原地重试；全成功才关
@@ -135,10 +173,17 @@ export default {
       for (const release of this._claims || []) release()
       this._claims = []
     },
-    /** 标记落 electron prefs：重装才重置，下个大版本会再问一次 */
+    /**
+     * 标记落 electron prefs：重装才重置。记的是「提示过哪些组件」（并集），
+     * 版本号只留档——判定不再看它，否则每个 0.x 升级都会把同一批再问一遍。
+     */
     async markPrompted() {
       try {
-        if (host.prefs) await host.prefs.set(PROMPTED_PREF_KEY, this.appVersion)
+        if (!host.prefs) return
+        const stored = await host.prefs.get(PROMPTED_PACKS_PREF_KEY)
+        const prev = stored && stored.value !== undefined ? stored.value : stored
+        await host.prefs.set(PROMPTED_PACKS_PREF_KEY, mergePromptedPackIds(prev, this.controller.state.items))
+        await host.prefs.set(PROMPTED_PREF_KEY, this.appVersion)
       } catch (e) {
         console.warn('[OptionalComponents] 写提示标记失败', e)
       }
@@ -204,5 +249,6 @@ export default {
 }
 .ocd-btn.primary:hover { background: var(--awd-accent-hover); }
 .ocd-btn.disabled { opacity: 0.5; }
+.ocd-ready { font-size: 12px; color: var(--awd-text-3); margin-top: 10px; line-height: 1.5; }
 .ocd-hint { font-size: 12px; color: var(--awd-text-2); margin-top: 8px; }
 </style>
