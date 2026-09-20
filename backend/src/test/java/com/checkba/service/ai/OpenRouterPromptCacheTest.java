@@ -46,16 +46,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>两条断言方向同等重要：
  * <ol>
  *   <li>Anthropic 模型的 system 必须变成带 {@code cache_control} 的 content block；</li>
- *   <li><b>其它模型的请求体逐字节不变</b>——这是「不影响其它通道」的护栏，
- *       用 {@code Json.toJson} 重建同一个请求做快照对比，改动波及全体模型时它会红。</li>
+ *   <li><b>其它模型的请求体在语义上不变</b>——这是「不影响其它通道」的护栏，
+ *       用 {@code Json.toJson} 重建同一个请求，解析成树逐字段对比，改动波及全体模型时它会红。</li>
  * </ol>
+ *
+ * <p><b>为什么比的是树而不是字节</b>（dev-board#750）：openai4j 的 {@code Json} 开着
+ * {@code INDENT_OUTPUT}，于是每个请求体都带着缩进，而工具 schema 嵌套很深——200 个工具的
+ * 请求体里有 23.5% 是纯空白，每一轮都要重传一遍。现在发出去之前统一压成紧凑 JSON
+ * （{@link OpenRouterStreamingChatModel#compact}），所以字节级快照已经不成立。
+ * 护栏真正要守的是「字段一个不多一个不少、值一个没变」，这一点树对比守得住；
+ * 「有没有被重新排版」另由 {@link #requestBodyCarriesNoIndentation} 单独钉住。</p>
  */
 class OpenRouterPromptCacheTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private HttpServer server;
-    /** 原始请求体，一个空白字符都不去掉——快照对比要的就是字节级。 */
+    /** 原始请求体，原样保留不做任何整形——「有没有缩进」这条断言要的就是原始字节。 */
     private volatile String rawRequestBody;
 
     @BeforeEach
@@ -166,11 +173,11 @@ class OpenRouterPromptCacheTest {
     }
 
     @Test
-    @DisplayName("非 Anthropic 模型：请求体与改造前逐字节一致（快照护栏）")
-    void nonAnthropicRequestBodyIsByteIdentical() throws Exception {
+    @DisplayName("非 Anthropic 模型：请求体与改造前逐字段一致（快照护栏）")
+    void nonAnthropicRequestBodyIsSemanticallyIdentical() throws Exception {
         run("deepseek/deepseek-v4-flash");
 
-        // 改造前的口径：Json.toJson(ChatCompletionRequest)，不经任何后处理
+        // 参照口径：Json.toJson(ChatCompletionRequest)，不经任何后处理
         String expected = Json.toJson(ChatCompletionRequest.builder()
                 .stream(true)
                 .streamOptions(StreamOptions.builder().includeUsage(true).build())
@@ -179,9 +186,29 @@ class OpenRouterPromptCacheTest {
                 .temperature(0.7)
                 .build());
 
-        assertEquals(expected, rawRequestBody,
-                "非 Anthropic 通道的请求体一个字节都不许变");
+        assertEquals(MAPPER.readTree(expected), MAPPER.readTree(rawRequestBody),
+                "非 Anthropic 通道的请求体不许有任何字段级变化");
         assertFalse(rawRequestBody.contains("cache_control"), rawRequestBody);
+    }
+
+    @Test
+    @DisplayName("请求体不带缩进：工具 schema 上的空白是每轮都要重传的纯浪费（dev-board#750）")
+    void requestBodyCarriesNoIndentation() throws Exception {
+        run("deepseek/deepseek-v4-flash");
+
+        // Json.toJson 的缩进形态是 `{\n  "` —— 出现它就说明压缩那一步被绕过了
+        assertFalse(rawRequestBody.contains("\n"),
+                "请求体里不该有换行（说明又回到了缩进 JSON）：" + rawRequestBody);
+
+        String pretty = Json.toJson(ChatCompletionRequest.builder()
+                .stream(true)
+                .streamOptions(StreamOptions.builder().includeUsage(true).build())
+                .model("deepseek/deepseek-v4-flash")
+                .messages(InternalOpenAiHelper.toOpenAiMessages(MESSAGES))
+                .temperature(0.7)
+                .build());
+        assertTrue(rawRequestBody.length() < pretty.length(),
+                "压缩后必须比缩进版短：compact=" + rawRequestBody.length() + " pretty=" + pretty.length());
     }
 
     @Test
@@ -250,8 +277,8 @@ class OpenRouterPromptCacheTest {
     }
 
     @Test
-    @DisplayName("非 Anthropic 通道：标记被摘掉，请求体仍与「system 本就是一整串」逐字节一致")
-    void nonAnthropicStripsSeparatorAndStaysByteIdentical() throws Exception {
+    @DisplayName("非 Anthropic 通道：标记被摘掉，请求体仍与「system 本就是一整串」逐字段一致")
+    void nonAnthropicStripsSeparatorAndStaysSemanticallyIdentical() throws Exception {
         runSplit("deepseek/deepseek-v4-flash");
 
         // 期望 = 把标记摘掉后的等价请求，走改造前那条 Json.toJson 口径
@@ -265,7 +292,8 @@ class OpenRouterPromptCacheTest {
                 .temperature(0.7)
                 .build());
 
-        assertEquals(expected, rawRequestBody, "非显式缓存通道的请求体一个字节都不许变");
+        assertEquals(MAPPER.readTree(expected), MAPPER.readTree(rawRequestBody),
+                "非显式缓存通道的请求体不许有任何字段级变化");
         assertFalse(rawRequestBody.contains("awd:volatile"), rawRequestBody);
         assertFalse(rawRequestBody.contains("cache_control"), rawRequestBody);
     }

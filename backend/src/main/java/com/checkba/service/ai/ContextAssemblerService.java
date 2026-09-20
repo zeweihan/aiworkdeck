@@ -124,6 +124,9 @@ public class ContextAssemblerService {
 
         java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
 
+        // 组装分段计时（DEBUG 才计，默认零开销零输出）：这一整段都串在用户等首 token 的时间里
+        TurnTimings timings = TurnTimings.start(log, "assemble", conversationId);
+
         // 项目上下文必须**最先**设置，早于本方法里任何一次读文件。
         //
         // 它是 ThreadLocal，而 ToolFileGuard.rejectIfOutsideProject 的项目归属就从它取。
@@ -305,6 +308,7 @@ public class ContextAssemblerService {
         //    但在 <file> 段里明写「这是 OCR 转写文本、当前模型看不到图像本身」——
         //    这是产品口径要求的「明示降级」，也让模型知道文字可能有识别误差。
         // 同一张图绝不允许两条路都走：那会既付图像 token 又付 OCR 的钱，还给模型两份可能打架的输入。
+        timings.mark("prompt");
         List<VisionAttachment> visionAttachments = new java.util.ArrayList<>();
         boolean visionCapable = resolveVisionCapable(modelKey);
         if (contextItems != null && !contextItems.isEmpty()) {
@@ -381,6 +385,8 @@ public class ContextAssemblerService {
                 }
             }
         }
+
+        timings.mark("files", contextItems == null ? 0 : contextItems.size());
 
         // [Injection] Active Document Context (auto-detected current tab)
         // This is injected when no explicit context is provided but user is viewing a document
@@ -593,6 +599,7 @@ public class ContextAssemblerService {
         // （每轮问题不同结果就不同），且排序带随机项，所以同一个问题两次的结果都可能不一样。
         // 留在稳定前缀里等于「有记忆的项目永远命中不了缓存」——正是本次要治的病。
         // 位置仍是 system 末尾，模型读到的相对顺序没变。
+        timings.mark("activeDoc");
         Long projectIdLong = null;
         try {
             projectIdLong = projectId != null ? Long.parseLong(projectId) : null;
@@ -613,6 +620,8 @@ public class ContextAssemblerService {
             }
         }
         
+        timings.mark("memIndex");
+
         if (projectIdLong != null) {
             Optional<ProjectMemory> projectMemoryOpt = memoryManager.getProjectMemory(projectIdLong);
             if (projectMemoryOpt.isPresent()) {
@@ -649,6 +658,8 @@ public class ContextAssemblerService {
                 }
             }
         }
+
+        timings.mark("memory");
 
         // 整理/归类多份文件必须成批提交（dev-board#466）。与 #419 的 office_replace_batch 同一道题：
         // 文件树的变更原语全是单项的，而步数预算按 LLM 轮数计（AgentOrchestrator.MAX_LOOP_DEPTH=30），
@@ -690,9 +701,12 @@ public class ContextAssemblerService {
 
         messages.add(dev.langchain4j.data.message.SystemMessage.from(systemText.toString()));
 
+        timings.mark("systemPrompt", systemText.length());
+
         // 3. 加载对话历史并进行智能压缩
         List<com.checkba.model.entity.ProjectAiMessage> historyEntities = messageService.listByConversationId(conversationId);
-        
+        timings.mark("historyLoad", historyEntities.size());
+
         // 转换为 ChatMessage 列表
         java.util.List<dev.langchain4j.data.message.ChatMessage> historyMessages = new java.util.ArrayList<>();
         for (com.checkba.model.entity.ProjectAiMessage entity : historyEntities) {
@@ -746,6 +760,7 @@ public class ContextAssemblerService {
             }
         }
         
+        timings.mark("historyCompress", historyMessages.size());
         messages.addAll(historyMessages);
 
         // 4. Add Current User Prompt
@@ -786,6 +801,8 @@ public class ContextAssemblerService {
                             .toList());
         }
 
+        timings.mark("userMsg");
+        timings.done(log);
         return messages;
     }
 

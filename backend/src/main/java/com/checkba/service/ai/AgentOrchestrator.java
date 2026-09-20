@@ -983,7 +983,10 @@ public class AgentOrchestrator {
         // 同时把上次遗留的 INTERRUPTED 覆盖掉（用户点「继续」走的就是这条路）。
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING,
                 request.getProjectId(), userId);
-        
+
+        // 首 token 之前这段准备工作全部串在用户的等待里，分段只在 DEBUG 打开时才计（见 TurnTimings）
+        TurnTimings timings = TurnTimings.start(log, "prep", conversationId);
+
         try {
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
             
@@ -1000,6 +1003,7 @@ public class AgentOrchestrator {
             // 会话的全部消息（正文 + executionLog，长会话轻松几十万字符）读出来映射成实体，
             // 只为了 size()<=1 这个判断；紧接着 ContextAssemblerService 还要再全量读一次。
             // 两次都卡在用户等待首 token 的关键路径上。
+            timings.mark("saveUserMsg");
             boolean firstTurn = messageService.countByConversationId(conversationId) <= 1;
             if (firstTurn) { // Only the user message we just saved
                 final String convId = conversationId;
@@ -1026,6 +1030,7 @@ public class AgentOrchestrator {
             // ASK 模式下 skill 整体不生效（不传工具、ContextAssembler 也跳过注入），
             // 因此手动选择在 ASK 下不参与——让"面板上亮着 skill、实际什么都没注入"这种
             // 显示与实际不一致的状态压根不出现。
+            timings.mark("firstTurnCheck");
             boolean skillsEffective = agentMode != AgentMode.ASK;
             skillRouter.activateForTurn(conversationId, guard.runId, request.getMessage(),
                     request.getPinnedSkillId(), skillsEffective ? request.getSkillIds() : null);
@@ -1040,6 +1045,7 @@ public class AgentOrchestrator {
                 matterClassifierService.classifyAsync(conversationId, request.getMessage(),
                         skillRouter.activeSkill(guard.runId).isPresent());
             }
+            timings.mark("skills");
 
             // 2. Build Context & History Message Stack (Spec v1.8)
             log.info("Assembling full message context for conversation: {}", conversationId);
@@ -1062,6 +1068,7 @@ public class AgentOrchestrator {
                 request.getModel()
             );
             
+            timings.mark("assemble", messages.size());
             log.info("Message assembly complete. Total messages: {}", messages.size());
             log.debug("Detailed Message Stack:");
             for (dev.langchain4j.data.message.ChatMessage m : messages) {
@@ -1079,6 +1086,9 @@ public class AgentOrchestrator {
             log.info("Getting streaming model: {}", request.getModel());
             StreamingChatLanguageModel model = chatModelFactory.getStreamingChatModel(request.getModel());
             
+            timings.mark("model");
+            timings.done(log);
+
             if (model == null) {
                 throw new RuntimeException("Could not create streaming model for ID: " + request.getModel());
             }
@@ -1879,7 +1889,9 @@ public class AgentOrchestrator {
         }));
 
         // 先完成本地压缩和工具准备，再计模型请求的首字等待时间。
+        TurnTimings roundTimings = TurnTimings.start(log, "round", conversationId);
         compactIfNeeded(messages, conversationId, modelId);
+        roundTimings.mark("compact");
         // 工具集按本轮活跃文档类型收窄（dev-board#729 ①）。guard.activeDocKind 在本轮起跑时算定，
         // 每轮递归都读同一个值——一轮内工具集必须不变，否则模型刚宣布要调的工具下一轮就消失了。
         List<ToolSpecification> registered =
@@ -1898,6 +1910,8 @@ public class AgentOrchestrator {
                 }
             }
         }
+        roundTimings.mark("tools", visible.size());
+        roundTimings.done(log);
         handler.armInactivityWatchdog(STREAM_FIRST_TOKEN_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS);
         // 埋点 ai.turn 的 rounds（dev-board#729 ⑥）：一条消息到底跑了几个 LLM 往返，
         // 是「慢在哪」的第一判据（91% 的墙钟在推理上，轮数直接决定总时长）。

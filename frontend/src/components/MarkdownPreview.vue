@@ -5,14 +5,25 @@
     <view v-if="loading" class="markdown-loading">
       <text>{{ $t('files.loadingDots') }}</text>
     </view>
-    <view v-else class="markdown-body" v-html="displayedHtml"></view>
+    <view v-else class="markdown-body" v-html="renderedHtml"></view>
   </view>
 </template>
 
 <script>
-import MarkdownIt from 'markdown-it'
+import { renderMarkdown } from '@/utils/markdownRenderer.js'
 import { getFileDownloadUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
+
+// 每帧最多渲染一次（dev-board#750）。流式回答每个 token 都会换一次 content，而这里的渲染
+// 是「整篇重新解析 + 整段 innerHTML 重写」——不是追加。不合帧的话，一篇 N 个 token 的回答
+// 要把全文重建 N 遍（O(n²)），还会在每次重写时清掉用户在正文里选中的文字。
+// 合帧不会推迟首字：第一次渲染走同步路径，之后才开始攒帧。
+const scheduleFrame = typeof requestAnimationFrame === 'function'
+  ? (cb) => requestAnimationFrame(cb)
+  : (cb) => setTimeout(cb, 16)
+const cancelFrame = typeof requestAnimationFrame === 'function'
+  ? (h) => cancelAnimationFrame(h)
+  : (h) => clearTimeout(h)
 
 export default {
   name: 'MarkdownPreview',
@@ -29,31 +40,27 @@ export default {
     }
   },
   data() {
-    const md = new MarkdownIt({
-      // 渲染结果直接进 v-html，而内容来自他人上传的 .md 与模型输出，
-      // 放行原始 HTML 等于存储型 XSS，故禁用
-      html: false,
-      linkify: true,
-      typographer: true
-    })
-    // 裸 <table> 没有滚动容器，宽表格会被上游面板的 overflow:hidden 直接裁掉且不出滚动条，
-    // 这里包一层可横向滚动的 div（dev-board#467）
-    md.renderer.rules.table_open = () => '<div class="md-table-scroll"><table>'
-    md.renderer.rules.table_close = () => '</table></div>'
+    // md 实例刻意不放在这里：放进 data() 会被 Vue 做成响应式代理，解析慢 3.7 倍以上
+    // （详见 utils/markdownRenderer.js 的注释）
     return {
-      md,
+      // 首屏同步渲染一次：静态预览（文件、历史消息、计划卡）挂载后立刻就要有内容，
+      // 之后的变更才开始合帧
+      renderedHtml: renderMarkdown(this.content || ''),
       loadedContent: '',
       loading: false
     }
   },
   computed: {
-    displayedHtml() {
+    sourceText() {
       // 优先使用直接传入的 content，其次使用从服务器加载的内容
-      const text = this.content || this.loadedContent || ''
-      return this.md.render(text)
+      return this.content || this.loadedContent || ''
     }
   },
   watch: {
+    // 刻意不 immediate：首屏那一次已经在 data() 里同步渲染过了
+    sourceText() {
+      this.scheduleRender()
+    },
     file: {
       immediate: true,
       handler(newFile) {
@@ -63,7 +70,27 @@ export default {
       }
     }
   },
+  beforeUnmount() {
+    if (this.renderFrame != null) {
+      cancelFrame(this.renderFrame)
+      this.renderFrame = null
+    }
+  },
   methods: {
+    scheduleRender() {
+      // 已有待执行的帧时不重复排：回调里读的是当时最新的 sourceText，
+      // 所以最后一次变更一定会被渲染出来（不会丢尾巴）。
+      // renderFrame 未初始化时是 undefined，`!= null` 同样为 false——刻意不进 data()，
+      // 它不参与渲染，放进去只会让每一帧多两次无谓的响应式写入。
+      if (this.renderFrame != null) return
+      this.renderFrame = scheduleFrame(() => {
+        this.renderFrame = null
+        this.renderNow()
+      })
+    },
+    renderNow() {
+      this.renderedHtml = renderMarkdown(this.sourceText)
+    },
     async loadFileContent() {
       if (!this.file) return
 

@@ -6,19 +6,21 @@
 //      （渲染器半边：证明 renderer.rules 真的接上了，不是样式表里孤零零挂了个类名）；
 //   ② 非表格内容（标题/代码块）渲染形态不受影响。
 // 同仓 tests/_lib/review-panel-vm.mjs / tests/insight/insightPane.test.mjs 的套路：把
-// <script> 剥出来当普通对象跑，import 行整块删掉后用形参把依赖喂回去；markdown-it 是
-// 真实现（表格渲染是 markdown-it 自己的行为，桩不出真值），getFileDownloadUrl /
-// getAuthHeaders 与本用例无关，喂桩即可。
+// <script> 剥出来当普通对象跑，import 行整块删掉后用形参把依赖喂回去；renderMarkdown 用
+// 真实现（表格包裹是 markdown-it + 我们的 renderer.rules 的真行为，桩不出真值），
+// getFileDownloadUrl / getAuthHeaders 与本用例无关，喂桩即可。
+// dev-board#750 起 markdown-it 实例搬到了 src/utils/markdownRenderer.js（模块级单例，
+// 不能进 data()），渲染结果也从 computed displayedHtml 改成了 data 里的 renderedHtml。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import MarkdownIt from 'markdown-it'
+import { renderMarkdown } from '../../src/utils/markdownRenderer.js'
 
 const SRC = readFileSync(new URL('../../src/components/MarkdownPreview.vue', import.meta.url), 'utf8')
 
 function makeVm(content) {
   const deps = {
-    MarkdownIt,
+    renderMarkdown,
     getFileDownloadUrl: async () => '',
     getAuthHeaders: () => ({}),
   }
@@ -53,7 +55,7 @@ const x = 1
 `
 
 test('markdown-it 渲染出的每个 <table> 都被 <div class="md-table-scroll"> 直接包裹', () => {
-  const html = makeVm(TABLE_MD).displayedHtml
+  const html = makeVm(TABLE_MD).renderedHtml
   const tableCount = (html.match(/<table>/g) || []).length
   assert.equal(tableCount, 1, '用例本身要包含一张表格')
   // 每个 <table> 前紧邻 wrapper 开标签
@@ -65,14 +67,14 @@ test('markdown-it 渲染出的每个 <table> 都被 <div class="md-table-scroll"
 })
 
 test('非表格内容渲染形态不受影响（标题、代码块照常）', () => {
-  const html = makeVm(TABLE_MD).displayedHtml
+  const html = makeVm(TABLE_MD).renderedHtml
   assert.match(html, /<h1>核查表<\/h1>/)
   assert.match(html, /<pre><code class="language-js">/)
 })
 
 test('多张表格：每张各自被单独包裹，不会串包', () => {
   const twoTables = `${TABLE_MD}\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n`
-  const html = makeVm(twoTables).displayedHtml
+  const html = makeVm(twoTables).renderedHtml
   const tableCount = (html.match(/<table>/g) || []).length
   assert.equal(tableCount, 2)
   const openMatches = [...html.matchAll(/<div class="md-table-scroll"><table>/g)]

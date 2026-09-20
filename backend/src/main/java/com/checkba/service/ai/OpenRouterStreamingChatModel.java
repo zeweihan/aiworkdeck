@@ -67,8 +67,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 错误语义也对齐：非 2xx 抛 {@link OpenAiHttpException}（{@code LlmErrorClassifier} 按状态码分类），
  * 连接失败等 IOException 原样回调 {@code onError}。
  *
- * <p>logRequests/logResponses 这类请求体物化的坑在本类不存在：请求体只序列化一次直接发出，
- * 响应按行消费不落整段字符串。
+ * <p>logRequests/logResponses 这类请求体物化的坑在本类不存在：请求体在本进程里走一遍
+ * {@link #compact} 去掉缩进就直接发出（从不写进日志），响应按行消费不落整段字符串。
  */
 public final class OpenRouterStreamingChatModel implements StreamingChatLanguageModel {
 
@@ -146,7 +146,7 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
 
     private Call send(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
                       Integer maxOutputTokens, StreamingResponseHandler<AiMessage> handler) {
-        // 不做显式缓存的通道要先把分界标记摘掉（在序列化之前，保住字节级一致）
+        // 不做显式缓存的通道要先把分界标记摘掉（在序列化之前做，标记不能漏进报文）
         List<ChatMessage> outbound = explicitPromptCache ? messages : stripVolatileSeparator(messages);
         ChatCompletionRequest.Builder rb = ChatCompletionRequest.builder()
                 .stream(true)
@@ -158,8 +158,16 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             rb.tools(InternalOpenAiHelper.toTools(toolSpecifications, false));
         }
         if (maxOutputTokens != null) rb.maxTokens(maxOutputTokens);
-        // 非 Anthropic 一律走这一行的原样结果，请求体逐字节与改造前一致
-        String body = Json.toJson(rb.build());
+        // openai4j 0.23 的 Json 开着 INDENT_OUTPUT（字节码实证），于是每一个请求体都是
+        // 缩进过的漂亮 JSON。工具 schema 嵌套很深（tools→function→parameters→properties→
+        // 每个参数），缩进在那上面是个大乘数：本机实测 200 个工具的请求体 213110 字节，
+        // 压成紧凑 163026 字节——**每一轮白白多传 23.5%**，而工具规格是每轮都要重发的。
+        // 直连 openrouter.ai 实测（故意用不存在的模型，上游读完请求体立刻 400，
+        // 所以计时不含 prefill）：紧凑 197796 字节 836ms / 缩进 262694 字节 925ms，
+        // 约 90ms/轮；链路越慢省得越多，而目标用户恰恰在慢链路那一头。
+        // 语义上与缩进版完全等价（JSON 解析器看不出区别），token 计费也不受影响——
+        // 上游是按解析后的结构重新渲染进模型 prompt 的，不是按我们的原始字节。
+        String body = compact(Json.toJson(rb.build()));
         if (explicitPromptCache) {
             body = markSystemForCaching(body);
         }
@@ -242,6 +250,24 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         AllowedModels m = AllowedModels.fromId(modelId);
         return m != null && (m.getVendor() == AllowedModels.Vendor.ANTHROPIC
                 || m.getVendor() == AllowedModels.Vendor.ALIBABA);
+    }
+
+    /**
+     * 去掉 {@link Json#toJson} 加的缩进，其余一字不改。
+     *
+     * <p>走「解析回来再紧凑写出去」而不是自建 ObjectMapper 直接序列化请求对象：openai4j 的
+     * DTO 上挂着它自己的命名策略与 NON_NULL 之类的注解，换一个 mapper 就等于把那些约定
+     * 重新赌一遍；按它的输出做树等价的改写，结果必然与它一致。这一趟解析+重写对 200KB
+     * 的报文是毫秒级，换回来的是几十到几百毫秒的上传时间。
+     *
+     * <p>失败一律原样返回：压不小只是多传一点，绝不能让本轮对话发不出去。
+     */
+    static String compact(String body) {
+        try {
+            return LENIENT.writeValueAsString(LENIENT.readTree(body));
+        } catch (IOException e) {
+            return body;
+        }
     }
 
     /**

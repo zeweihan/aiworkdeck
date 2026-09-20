@@ -462,8 +462,10 @@ export function useAgentStream() {
                     if (done) break
 
                     const chunk = decoder.decode(value, { stream: true })
-                    // 调试日志：显示接收到的 chunk 时间戳
-                    console.log('[SSE] Chunk received at:', new Date().toISOString(), 'size:', chunk.length)
+                    // 这条循环是逐 token 的热路径：后端每个模型 token 发一条 text_delta，
+                    // 所以这里每加一条日志就是「每 token 一次」。打开 DevTools 时
+                    // console.log 每条要几十到几百微秒，几千 token 的回答会把主线程
+                    // 吃掉百分之几并周期性卡顿，还会把会话正文写进控制台（dev-board#750）。
                     lastSseActivityAt = Date.now()
                     buffer += chunk
 
@@ -471,10 +473,6 @@ export function useAgentStream() {
                     buffer = lines.pop() // Keep incomplete line
 
                     for (const line of lines) {
-                        // 调试日志：显示解析的 SSE 行
-                        if (line.trim()) {
-                            console.log('[SSE] Processing line:', line.substring(0, 80) + (line.length > 80 ? '...' : ''))
-                        }
                         parseSSELineFull(line)
                     }
                 }
@@ -822,8 +820,8 @@ export function useAgentStream() {
     }
 
     const handleEvent = (evt, dataStr) => {
-        // 调试日志：显示事件处理
-        console.log('[SSE] handleEvent:', evt, 'dataLen:', dataStr?.length || 0, 'time:', new Date().toISOString())
+        // 这里同样是逐 token 的热路径（每个 text_delta 都要过一次），不要在此加日志：
+        // 见上面 SSE 读取循环里的说明（dev-board#750）。
 
         // 任务清单更新：不依赖活跃气泡（重连恢复时也要能收到），放在气泡守卫之前
         if (evt === 'plan_update') {
@@ -1080,8 +1078,6 @@ export function useAgentStream() {
         } else if (evt === 'text_delta') {
             try {
                 const d = JSON.parse(dataStr)
-                // 调试日志：显示 text_delta 内容
-                console.log('[SSE] text_delta content:', (d.content || '').substring(0, 50))
                 processTextStream(d.content || '')
             } catch (e) {
                 processTextStream(dataStr)
