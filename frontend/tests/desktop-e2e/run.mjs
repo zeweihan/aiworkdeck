@@ -217,6 +217,17 @@ try {
   // 语言落了盘，随后跳工作台只是改 hash（同文档导航），钩子根本不触发。
   await page.evaluate(() => { try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ } })
 
+  // dev-board#726：单独按 Alt 曾经会唤起 AppMenuBar.vue 的自绘菜单（Windows 惯例），
+  // 现已删掉该分支——菜单只能鼠标点开。注意：AppMenuBar 只在 `<html class="is-win">`
+  // 时渲染（见 windowChrome.js），这套 e2e 跑在 mac 开发机的 dev Electron 上，
+  // process.platform 恒为 darwin，is-win 永远不会挂上，.amb-menu 因此本来就不存在——
+  // 这一步在本机跑只能证明"没有引入新的报错"，无法真正复现 Windows 上的回归。
+  // 真要验证需要在 win32 机器/CI 腿上跑本文件。
+  await page.keyboard.press('Alt')
+  await sleep(200)
+  const ambMenuAfterAlt = await page.evaluate(() => !!document.querySelector('.amb-menu'))
+  if (ambMenuAfterAlt) throw new Error('dev-board#726 回归：单独按 Alt 又把 .amb-menu 弹出来了')
+
   // 列表页的新建入口有两种合法形态，桌面那一种只有这里能验。app-e2e 的浏览器目标
   // 注入的最小桌面桩故意不含 fs（补 fs 会把全应用每个 `host.fs && …` 守卫一起从
   // false 翻成真，让所有页面拿着一个只有 showOpenDialog 的假 fs 走桌面分支，把

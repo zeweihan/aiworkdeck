@@ -454,6 +454,25 @@ function createMainWindow() {
     }
   })
 
+  // dev-board#726：Windows 上单独按 Alt（用户报的「Ctrl」大概率是相邻键口误）
+  // 会把 Menu.setApplicationMenu 挂的原生「每窗口顶部菜单」弹出来盖住内容——
+  // titleBarStyle:'hidden' 只是不画那条常驻的菜单栏，不代表它不会被 Alt 唤出。
+  // setMenuBarVisibility(false) + setAutoHideMenuBar(false) 关掉这条路：
+  // 显式设为非 auto-hide 后 Alt 不再有「按一下唤出」的语义，菜单彻底不可见，
+  // 但 Menu 对象仍挂在窗口上——accelerator 是否失效只取决于各 MenuItem 的
+  // registerAccelerator（Windows/Linux 默认 true，app-menu.js 未设过 false），
+  // 与菜单栏可见性无关（Electron BrowserWindow 文档：
+  // https://www.electronjs.org/docs/latest/api/browser-window
+  // 里 setMenuBarVisibility/setAutoHideMenuBar 只描述菜单条的显示/自动隐藏，
+  // 不提及会连带关闭 accelerator；MenuItem 文档的 registerAccelerator 字段
+  // 才是控制加速键是否注册的开关）。mac 走系统全局菜单栏，不受影响。
+  if (process.platform === 'win32') {
+    try {
+      mainWindow.setMenuBarVisibility(false)
+      mainWindow.setAutoHideMenuBar(false)
+    } catch (e) { /* ignore */ }
+  }
+
   // 官网头像的 CORP 放行（dev-board#603）。必须赶在第一次 load 之前挂上，
   // 否则首屏那次头像请求会漏在拦截器外面。只挂一次（函数内自带去重标记）。
   attachAvatarCorpRelaxation(mainWindow.webContents.session)

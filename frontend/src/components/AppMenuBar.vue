@@ -81,14 +81,10 @@ export default {
   mounted() {
     this.syncVisible()
     this.rebuild()
-    // Alt 唤起第一个菜单（Windows 惯例）。只认单独按下的 Alt，避免吞掉
-    // Alt+字母 这类组合——那些是加速键。
+    // dev-board#726：单独按修饰键（Alt/Ctrl）唤起菜单的热键已取消——会跟
+    // Alt+Tab 切回窗口、Ctrl 打字等日常操作撞在一起。菜单仍可鼠标点开；
+    // 打开后 Escape/左右方向键的键盘导航保留。
     this._keydown = (e) => {
-      if (e.key === 'Alt' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        e.preventDefault()
-        this.openId = this.openId ? '' : (this.menus[0] && this.menus[0].id) || ''
-        return
-      }
       if (!this.openId) return
       if (e.key === 'Escape') { e.preventDefault(); this.close() }
       else if (e.key === 'ArrowRight') { e.preventDefault(); this.step(1) }
