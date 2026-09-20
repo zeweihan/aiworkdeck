@@ -1,0 +1,191 @@
+{
+  "version": "2.0.0",
+  "name": "东方清雅 Oriental Serenity",
+  "codename": "bamboo-moon",
+  "replaces": "1.x forest-mint（深松绿 #1A5336 + 薄荷 #5BD197 + Bootstrap 冷灰）",
+  "authority": "本文件是 AI WorkDeck 全产品配色的唯一真源。三个仓各存一份逐字节相同的副本，由各自的 check-palette 脚本对拍。改配色只改这里，然后跑各仓的 generate 脚本重新生成令牌文件。",
+  "consumers": [
+    "checkba_cloud: frontend/src/App.vue 的 :root/--awd-* 令牌块",
+    "checkba_cloud: frontend/src/uni.scss 的 $awd-* SCSS 变量",
+    "checkba_cloud: office-addin/taskpane/styles.css 的 --awd-* 令牌块",
+    "aiworkdeckweb: app/globals.css 的 --king-* 变量与 Tailwind v4 @theme inline 映射",
+    "aiworkdeckweb: lib/plugin-template.ts 内嵌的第三方插件模板令牌表",
+    "aiworkdeck_mobile: ios/Sources/Design/Tokens.swift",
+    "aiworkdeck_mobile: miniprogram/styles/tokens.wxss"
+  ],
+
+  "base": {
+    "bamboo": {
+      "hex": "#89A8A0",
+      "name": "竹月青",
+      "hsl": "164, 15%, 60%",
+      "role": "氛围色。大面积浅底、选中态、悬停、图表、装饰线。对白底对比度仅 2.6:1，禁止承载正文与按钮文字。在深色模式下对深底 7.0:1，是深色模式的强调文字色。"
+    },
+    "jadeWhite": {
+      "hex": "#F1EFE7",
+      "name": "玉脂白",
+      "hsl": "48, 26%, 93%",
+      "role": "中性色族的源头。整套背景/表面/边框由它派生暖调；文字档收敛回近中性暖墨，避免暖灰文字显旧。"
+    },
+    "teaGold": {
+      "hex": "#D7C5A1",
+      "name": "浅茶金",
+      "hsl": "40, 40%, 74%",
+      "role": "点睛色。只做分隔金线、引用块、徽章、空状态描边等小面积用途。对白底 1.7:1，禁止承载任何信息层级。不做大面积底色——长时间工作界面里暖黄大面积会显脏。"
+    }
+  },
+
+  "_decisions": {
+    "accent": "竹月青承载不了文字，所以主色是从它压深派生的墨竹青 #2E5A50（同色相 H166，白字对比 7.8:1）。深浅同族，观感仍是竹月青那支调子。",
+    "neutralWarmth": "浅档暖（背景/表面/边框跟玉脂白 H≈45），深档收敛（正文 #2B2A26 只留 S≈6%）。全条都暖会让灰字发棕，法律文书界面显旧。",
+    "paperStaysWhite": "编辑器纸张永远是纸白，不参与主题（office_thread.js 的 DocColor 刻意不动）。外壳转暖之后，白纸在暖案上反而更像纸——这是本次换色的额外收益，不是代价。",
+    "mintTokenRetained": "--awd-mint 这个令牌名是插件 SDK 公开契约（THEME_TOKEN_NAMES 白名单 + 第三方插件 CSS 里的 var(--awd-mint)），名字不改，值换成竹月青。新增 --awd-bamboo 作同值别名供新代码使用语义正确的名字。",
+    "semanticHues": "语义色保留色相家族（红/黄/蓝）只降饱和、压到同一明度台阶，与暖底协调但仍一眼可辨。危险色取朱砂 #B5483C（印泥色），是东方体系里天然的红。",
+    "fileTypeColorsFrozen": "Word 蓝 / PPT 橙 / Excel 绿 / PDF 红是宿主软件官方品牌色，是识别线索不是装饰，不随本体系变化。"
+  },
+
+  "roles": {
+    "light": {
+      "bg": "#F1EFE7",
+      "surface": "#FCFBF7",
+      "surface-2": "#E9E6DC",
+      "surface-3": "#DFDBCE",
+      "canvas": "#E4E0D4",
+
+      "text": "#2B2A26",
+      "text-2": "#6B675C",
+      "text-3": "#A8A296",
+      "text-on-accent": "#FFFFFF",
+      "text-on-mint": "#1E3A33",
+
+      "border-subtle": "#EAE7DD",
+      "border": "#DDD8CA",
+      "border-strong": "#C3BCA9",
+
+      "accent": "#2E5A50",
+      "accent-hover": "#254A41",
+      "accent-text": "#2E5A50",
+      "accent-soft": "#E3EDE9",
+      "accent-wash": "rgba(46, 90, 80, 0.05)",
+
+      "mint": "#89A8A0",
+      "bamboo": "#89A8A0",
+
+      "gold": "#D7C5A1",
+      "gold-line": "#C9B48A",
+      "gold-text": "#7E6439",
+      "gold-soft": "#F5EFE2",
+
+      "danger": "#B5483C",
+      "danger-text": "#9A3A30",
+      "danger-soft": "#FAF0EE",
+      "warning": "#B8842B",
+      "warning-text": "#8A6320",
+      "warning-soft": "#F8F1E2",
+      "info": "#3C5A73",
+      "info-text": "#2F4A60",
+      "info-soft": "#EDF1F4",
+
+      "overlay": "rgba(35, 32, 26, 0.45)",
+      "glass": "rgba(252, 251, 247, 0.75)",
+      "glass-border": "rgba(255, 255, 255, 0.5)",
+
+      "halo-1": "#E3EDE9",
+      "halo-2": "rgba(46, 90, 80, 0.04)",
+      "halo-page": "#E3EDE9",
+
+      "shadow-sm": "0 1px 2px rgba(58, 52, 40, 0.06)",
+      "shadow-md": "0 4px 16px rgba(58, 52, 40, 0.08)",
+      "shadow-lg": "0 12px 32px rgba(58, 52, 40, 0.16)"
+    },
+
+    "dark": {
+      "bg": "#191713",
+      "surface": "#221F1A",
+      "surface-2": "#2B2721",
+      "surface-3": "#363129",
+      "canvas": "#141210",
+
+      "text": "#EDE9DF",
+      "text-2": "#B0AA9C",
+      "text-3": "#7D7768",
+      "text-on-accent": "#FFFFFF",
+      "text-on-mint": "#1E3A33",
+
+      "border-subtle": "#2B2721",
+      "border": "#3D372E",
+      "border-strong": "#524B3F",
+
+      "accent": "#3E6E62",
+      "accent-hover": "#4C8576",
+      "accent-text": "#89A8A0",
+      "accent-soft": "rgba(137, 168, 160, 0.14)",
+      "accent-wash": "rgba(137, 168, 160, 0.06)",
+
+      "mint": "#89A8A0",
+      "bamboo": "#89A8A0",
+
+      "gold": "#D7C5A1",
+      "gold-line": "#8A7A5C",
+      "gold-text": "#D7C5A1",
+      "gold-soft": "rgba(215, 197, 161, 0.13)",
+
+      "danger": "#CC6154",
+      "danger-text": "#E8938A",
+      "danger-soft": "rgba(181, 72, 60, 0.16)",
+      "warning": "#D19C3D",
+      "warning-text": "#E0B461",
+      "warning-soft": "rgba(184, 132, 43, 0.15)",
+      "info": "#5E8299",
+      "info-text": "#93B3C6",
+      "info-soft": "rgba(60, 90, 115, 0.18)",
+
+      "overlay": "rgba(0, 0, 0, 0.6)",
+      "glass": "rgba(34, 31, 26, 0.74)",
+      "glass-border": "rgba(255, 255, 255, 0.10)",
+
+      "halo-1": "rgba(255, 255, 255, 0.045)",
+      "halo-2": "rgba(255, 255, 255, 0)",
+      "halo-page": "#1D1A16",
+
+      "shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.4)",
+      "shadow-md": "0 4px 16px rgba(0, 0, 0, 0.45)",
+      "shadow-lg": "0 12px 32px rgba(0, 0, 0, 0.55)"
+    }
+  },
+
+  "frozen": {
+    "_why": "以下色值不随配色体系变化。改动它们会破坏第三方识别、用户文档产物或公开契约。",
+    "file-word": "#185ABD",
+    "file-ppt": "#C43E1C",
+    "file-excel": "#1D6F42",
+    "file-pdf": "#D93025",
+    "file-md": "#6B7280",
+    "file-image": "#7C3AED"
+  },
+
+  "contrast": {
+    "_method": "WCAG 2.1 相对亮度比，作者手算并由 scripts/check-palette.mjs 复算校验。",
+    "_gates": "正文 ≥4.5:1，大字与控件 ≥3:1。",
+    "light/text-on-bg": 12.47,
+    "light/text-2-on-bg": 4.9,
+    "light/text-2-on-surface": 5.45,
+    "light/accent-on-bg": 6.77,
+    "light/textOnAccent-on-accent": 7.8,
+    "light/gold-text-on-bg": 4.84,
+    "light/textOnMint-on-mint": 4.78,
+    "light/danger-on-white": 5.31,
+    "dark/text-on-bg": 14.76,
+    "dark/text-2-on-bg": 7.74,
+    "dark/accent-text-on-bg": 6.97,
+    "dark/gold-text-on-bg": 10.56
+  },
+
+  "brand": {
+    "_scope": "logo 与应用图标：保形换调。形状一笔不改，只换两个色。",
+    "mark-deep": "#2E5A50",
+    "mark-light": "#89A8A0",
+    "_was": "mark-deep #1A5336 / #124C34 / #155537；mark-light #5BD197 / #6ACFA8 / #6ADAAF",
+    "_note": "浅茶金不进 logo，只做 UI 点睛。三端图标、favicon、OG 图、安装器美术、App Store 素材需按此重出。"
+  }
+}
