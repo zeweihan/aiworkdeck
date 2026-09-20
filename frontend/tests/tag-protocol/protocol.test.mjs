@@ -17,6 +17,7 @@ import {
   PROTOCOL_TAGS,
   createProtocolTagRegex,
   decodeProtocolTags,
+  decodeProtocolTagsIncremental,
   parseToolBlock
 } from '../../src/composables/agentTagProtocol.mjs'
 
@@ -126,4 +127,68 @@ test('标签清单只此一份：正则由 PROTOCOL_TAGS 生成', () => {
   for (const tag of PROTOCOL_TAGS) assert.ok(src.includes(tag), `正则里少了 ${tag}`)
   // 与后端 AgentTagProtocol.TAGS 的逐字对拍在 backend AgentTagProtocolTest
   assert.equal(PROTOCOL_TAGS.length, 11)
+})
+
+// ==================== 增量解转义（dev-board#750）====================
+//
+// 工具输出是逐 delta 流进来的。原先每个 delta 都对**整段已累加**的文本重跑一次
+// decodeProtocolTags，载荷含被中和标签时就是每 delta 一次全串正则 + 全串重建（O(n²)），
+// 表现为「调某个工具时整个面板卡住」。改成只解这一段新到的、把可能被切开的尾巴留到下一次。
+//
+// 唯一要钉死的不变式：**不管怎么切，结果必须与整段一次解码逐字相同**。
+
+/** 按给定切点把 text 切成若干段，逐段喂给增量解码器，返回拼起来的结果 */
+const feedInPieces = (text, pieces) => {
+  let out = ''
+  let carry = ''
+  for (const piece of pieces) {
+    const r = decodeProtocolTagsIncremental(piece, carry)
+    out += r.text
+    carry = r.carry
+  }
+  // 流结束/标签闭合时收尾，与 useAgentStream 的 flush 同一口径
+  return out + decodeProtocolTags(carry)
+}
+
+const splitEvery = (text, n) => {
+  const out = []
+  for (let i = 0; i < text.length; i += n) out.push(text.slice(i, i + n))
+  return out
+}
+
+test('增量解转义：被切开的转义标签跨两个 delta 也能正确还原', () => {
+  // 把 &lt;/tool_output> 从中间切开——这正是原实现里「对整段重解」想兜住的情况
+  const at = ESCAPED.indexOf('&lt;/tool_output>') + 6
+  const result = feedInPieces(ESCAPED, [ESCAPED.slice(0, at), ESCAPED.slice(at)])
+  assert.equal(result, RAW, '跨 delta 边界的转义标签必须还原成原文')
+})
+
+test('增量解转义：每一种切法都与整段一次解码逐字相同', () => {
+  for (const n of [1, 2, 3, 5, 7, 13, 64, 9999]) {
+    assert.equal(feedInPieces(ESCAPED, splitEvery(ESCAPED, n)), RAW, `按 ${n} 字符切时结果不一致`)
+  }
+})
+
+test('增量解转义：一个 & 一个 l 一个 t 这样逐字符喂也不会漏', () => {
+  assert.equal(feedInPieces(ESCAPED, [...ESCAPED]), RAW)
+})
+
+test('增量解转义：合同占位符与普通尖括号照样原样保留', () => {
+  const raw = '模板里写 <甲方>、<Party A>，条件是 a < b'
+  assert.equal(feedInPieces(raw, splitEvery(raw, 3)), raw)
+})
+
+test('增量解转义：孤立的 &lt; 不会把后面的正文永久扣在缓冲区里', () => {
+  // 后面永远不来 '>'，尾巴超过上限就必须放行，否则这段输出用户一个字都看不到
+  const lonely = '&lt;' + 'x'.repeat(2000)
+  const r = decodeProtocolTagsIncremental(lonely, '')
+  assert.ok(r.text.length > 0, '超过上限后必须把扣住的文本放出来')
+  assert.equal(r.text + r.carry, lonely, '放行时一个字都不能丢')
+})
+
+test('增量解转义：收尾那一步把尾巴原样交出来，什么都不丢', () => {
+  const r = decodeProtocolTagsIncremental('尾巴是 &lt;/tool', '')
+  assert.equal(r.carry, '&lt;/tool', '还可能长成完整标签的那一截要留下')
+  assert.equal(r.text + decodeProtocolTags(r.carry), '尾巴是 &lt;/tool',
+    '流断在半截标签上时，那一截按原文交出去（它本来就不是标签）')
 })

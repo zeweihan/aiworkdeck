@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { ref, reactive, nextTick, computed, watchEffect } from 'vue'
-import { createProtocolTagRegex, decodeProtocolTags } from '../../src/composables/agentTagProtocol.mjs'
+import { createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental } from '../../src/composables/agentTagProtocol.mjs'
 import {
   applyInboxReceipt,
   applyInboxSnapshot,
@@ -27,13 +27,13 @@ function stream(overrides = {}) {
     .replace('export function useAgentStream()', 'function useAgentStream()')
     .replace('        bubbles,\n', '        bubbles, handleEvent, currentAssistantBubble, createAssistantBubble, createUserBubble,\n')
   const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
-    'createProtocolTagRegex', 'decodeProtocolTags', 't', 'nextBubbleId', 'captureChatTimeline',
+    'createProtocolTagRegex', 'decodeProtocolTags', 'decodeProtocolTagsIncremental', 't', 'nextBubbleId', 'captureChatTimeline',
     'documentEditedFromProcesses',
     'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
     'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
     body + '\nreturn useAgentStream()')
   const value = factory(ref, reactive, nextTick, () => {}, () => null,
-    createProtocolTagRegex, decodeProtocolTags, key => key, nextBubbleId, captureChatTimeline,
+    createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental, key => key, nextBubbleId, captureChatTimeline,
     documentEditedFromProcesses,
     createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
     () => 'http://test.local', () => 'test-session',

@@ -277,25 +277,119 @@ class OpenRouterPromptCacheTest {
     }
 
     @Test
-    @DisplayName("非 Anthropic 通道：标记被摘掉，请求体仍与「system 本就是一整串」逐字段一致")
-    void nonAnthropicStripsSeparatorAndStaysSemanticallyIdentical() throws Exception {
+    @DisplayName("自动缓存通道：易变段拆成紧随其后的第二条 system，两条拼起来等于原文")
+    void autoCachingChannelSplitsVolatileIntoSecondSystemMessage() throws Exception {
         runSplit("deepseek/deepseek-v4-flash");
 
-        // 期望 = 把标记摘掉后的等价请求，走改造前那条 Json.toJson 口径
-        String expected = Json.toJson(ChatCompletionRequest.builder()
-                .stream(true)
-                .streamOptions(StreamOptions.builder().includeUsage(true).build())
-                .model("deepseek/deepseek-v4-flash")
-                .messages(InternalOpenAiHelper.toOpenAiMessages(List.of(
-                        SystemMessage.from(STABLE + VOLATILE),
-                        UserMessage.from("这一条有什么风险？"))))
-                .temperature(0.7)
-                .build());
+        JsonNode messages = MAPPER.readTree(rawRequestBody).path("messages");
+        assertEquals(3, messages.size(), "稳定 system + 易变 system + 用户消息：" + rawRequestBody);
 
-        assertEquals(MAPPER.readTree(expected), MAPPER.readTree(rawRequestBody),
-                "非显式缓存通道的请求体不许有任何字段级变化");
+        JsonNode stable = messages.get(0);
+        assertEquals("system", stable.path("role").asText(), rawRequestBody);
+        assertTrue(stable.path("content").isTextual(), "自动缓存通道不走 content block 形态");
+        assertEquals(STABLE, stable.path("content").asText(),
+                "第一条 system 必须一字不差地只含稳定段——多一个每轮变的字节，整个前缀缓存就全丢");
+        assertFalse(stable.path("content").asText().contains("Current System Time"),
+                "每轮变化的时间戳绝不能留在第一条 system 里：" + rawRequestBody);
+
+        JsonNode tail = messages.get(1);
+        assertEquals("system", tail.path("role").asText(), rawRequestBody);
+        assertEquals(VOLATILE, tail.path("content").asText(), "第二条 system 就是易变段原文");
+
+        assertEquals("user", messages.get(2).path("role").asText());
+
+        // (a) 模型读到的文字一字不变，变的只是消息边界
+        assertEquals(STABLE + VOLATILE,
+                stable.path("content").asText() + tail.path("content").asText(),
+                "两条拼起来必须与原来那一整串完全相同");
+
         assertFalse(rawRequestBody.contains("awd:volatile"), rawRequestBody);
         assertFalse(rawRequestBody.contains("cache_control"), rawRequestBody);
+    }
+
+    @Test
+    @DisplayName("白名单之外的模型退回拼接——形态没验证过就不赌 400")
+    void unknownModelKeepsTheSingleConcatenatedSystem() throws Exception {
+        runSplit("some-vendor/unverified-model");
+
+        JsonNode messages = MAPPER.readTree(rawRequestBody).path("messages");
+        assertEquals(2, messages.size(), "退回旧形态：一条 system + 一条 user：" + rawRequestBody);
+        assertEquals(STABLE + VOLATILE, messages.get(0).path("content").asText(),
+                "摘掉标记后原样拼接，与改造前一致");
+        assertFalse(rawRequestBody.contains("awd:volatile"), rawRequestBody);
+    }
+
+    @Test
+    @DisplayName("Google 退回拼接：原生只有一个 system_instruction，且本机地域受限验不了")
+    void googleKeepsTheSingleConcatenatedSystem() throws Exception {
+        runSplit("google/gemini-3.6-flash");
+        assertSingleConcatenatedSystem();
+    }
+
+    @Test
+    @DisplayName("GPT 退回拼接：本机探针拿到的是 403 地域受限，属「未能验证」")
+    void unverifiedGptKeepsTheSingleConcatenatedSystem() throws Exception {
+        runSplit("openai/gpt-5.6-terra");
+        assertSingleConcatenatedSystem();
+    }
+
+    /** 没被拆：一条 system（标记摘掉后原样拼接）+ 一条 user。 */
+    private void assertSingleConcatenatedSystem() throws Exception {
+        JsonNode messages = MAPPER.readTree(rawRequestBody).path("messages");
+        assertEquals(2, messages.size(), "不该被拆成两条 system：" + rawRequestBody);
+        assertEquals(STABLE + VOLATILE, messages.get(0).path("content").asText(), rawRequestBody);
+        assertFalse(rawRequestBody.contains("awd:volatile"), rawRequestBody);
+    }
+
+    @Test
+    @DisplayName("放行名单只含实测过的 id，且与显式缓存档不重叠")
+    void verifiedListIsExactAndDisjointFromExplicitCache() {
+        for (String ok : new String[]{"deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro",
+                "z-ai/glm-5.2", "moonshotai/kimi-k2.6", "moonshotai/kimi-k3",
+                "bytedance-seed/seed-2.0-lite", "minimax/minimax-m3", "x-ai/grok-4.5"}) {
+            assertTrue(OpenRouterStreamingChatModel.splitsVolatileSystem(ok), ok + " 应当放行");
+        }
+        // 实测 403（地域受限，验不了）、显式缓存档、白名单外的 id 一律不放行
+        for (String no : new String[]{"openai/gpt-5.6-terra", "google/gemini-3.6-flash",
+                "anthropic/claude-sonnet-5", "qwen/qwen3.7-flash",
+                "some-vendor/unverified-model", "deepseek/deepseek-v4-flash:beta", null}) {
+            assertFalse(OpenRouterStreamingChatModel.splitsVolatileSystem(no), no + " 不该放行");
+        }
+    }
+
+    @Test
+    @DisplayName("没有分隔标记（外部调用方 / 旧形态）时一条都不拆")
+    void messagesWithoutSeparatorAreLeftAlone() throws Exception {
+        run("deepseek/deepseek-v4-flash");
+
+        JsonNode messages = MAPPER.readTree(rawRequestBody).path("messages");
+        assertEquals(2, messages.size(), "没有标记就没有易变段，不该凭空多出一条 system：" + rawRequestBody);
+        assertEquals("你是一名律师助理。\n<file>合同正文……</file>",
+                messages.get(0).path("content").asText());
+    }
+
+    @Test
+    @DisplayName("易变段为空时不拆（不发空 system 消息）")
+    void emptyVolatileTailIsNotSplitOut() {
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        List<ChatMessage> out = OpenRouterStreamingChatModel.splitVolatileSystem(
+                List.of(SystemMessage.from(STABLE + sep), UserMessage.from("q")));
+        assertEquals(2, out.size(), "空的易变段不该变成一条空 system 消息");
+        assertEquals(STABLE, ((SystemMessage) out.get(0)).text());
+    }
+
+    @Test
+    @DisplayName("两条正文相同的 system 各自按自己的标记拆，不会串到一起")
+    void twoIdenticalSystemMessagesAreSplitIndependently() {
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        SystemMessage same = SystemMessage.from("S" + sep + "V");
+        List<ChatMessage> out = OpenRouterStreamingChatModel.splitVolatileSystem(
+                List.of(same, same, UserMessage.from("q")));
+        assertEquals(5, out.size(), "两条各拆成两条 + 用户消息：" + out);
+        assertEquals("S", ((SystemMessage) out.get(0)).text());
+        assertEquals("V", ((SystemMessage) out.get(1)).text());
+        assertEquals("S", ((SystemMessage) out.get(2)).text());
+        assertEquals("V", ((SystemMessage) out.get(3)).text());
     }
 
     @Test

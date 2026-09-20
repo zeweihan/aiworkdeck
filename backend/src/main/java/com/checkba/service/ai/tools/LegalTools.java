@@ -31,6 +31,27 @@ public class LegalTools implements AgentToolComponent {
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     private final com.checkba.service.DocumentTextService documentTextService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.platform.ExternalServiceAvailability externalServiceAvailability;
+
+    /** 平台档下法宝检索必须经网关，没连账户时四个 law_* 工具每次都只会回一句「不可用」。 */
+    private static final java.util.Set<String> PKULAW_TOOLS =
+            java.util.Set.of("law_search", "law_search_keyword", "law_recognition", "get_law_article");
+
+    /**
+     * 没连账户时不把法宝检索下发给模型（dev-board#750）。{@code read_document} 读的是项目里
+     * 已有的文件、全程不出网，绝不能跟着一起藏——那会让模型以为它连文件都读不了。
+     */
+    @Override
+    public java.util.Set<String> currentlyUnusableTools() {
+        if (externalServiceAvailability != null
+                && !externalServiceAvailability.usable(
+                        com.checkba.service.platform.ExternalServiceProvider.PKULAW)) {
+            return PKULAW_TOOLS;
+        }
+        return java.util.Set.of();
+    }
+
     // --- File Operations ---
 
     /**

@@ -93,4 +93,93 @@ class ToolRegistryAvailabilityTest {
         assertTrue(names.contains("throwing_avail_probe"), names.toString());
     }
 
+    // ==================== 运行期可用性（dev-board#750） ====================
+
+    /**
+     * 一半工具依赖外部服务、一半是纯本地的组件——现实里 WebTools / LegalTools 就是这个形状
+     * （search_web 要账户、browse_url 不要；law_* 要账户、read_document 不要）。
+     */
+    static class HalfRemoteTools implements AgentToolComponent {
+        boolean connected = true;
+
+        @Override
+        public java.util.Set<String> currentlyUnusableTools() {
+            return connected ? java.util.Set.of() : java.util.Set.of("remote_probe");
+        }
+
+        @Tool("needs the account")
+        public String remote_probe(@P("t") String t) {
+            return "remote:" + t;
+        }
+
+        @Tool("purely local, never gated")
+        public String local_probe(@P("t") String t) {
+            return "local:" + t;
+        }
+    }
+
+    /** currentlyUnusableTools() 抛异常时必须当成「没有不可用的工具」。 */
+    static class ThrowingRuntimeGate implements AgentToolComponent {
+        @Override
+        public java.util.Set<String> currentlyUnusableTools() {
+            throw new IllegalStateException("gate blew up");
+        }
+
+        @Tool("probe whose runtime gate throws")
+        public String runtime_throwing_probe(@P("t") String t) {
+            return "t:" + t;
+        }
+    }
+
+    @Test
+    @DisplayName("未连接时那几个工具不下发，同组件里的本地工具照常下发")
+    void runtimeUnusableToolsAreHiddenWhileLocalOnesStay() {
+        HalfRemoteTools tools = new HalfRemoteTools();
+        ToolRegistry registry = registryOf(tools);
+
+        tools.connected = false;
+        java.util.Set<String> unusable = registry.unusableToolNames();
+        assertEquals(java.util.Set.of("remote_probe"), unusable, unusable.toString());
+
+        // 编排器拿到注册表的清单后再去掉 unusable（见 AgentOrchestrator：可见性的最后一道
+        // 裁剪本来就在那里）。这里复刻那一步。
+        List<String> names = registry.getAllSpecifications("conv", null).stream()
+                .map(ToolSpecification::name).filter(n -> !unusable.contains(n)).toList();
+        assertFalse(names.contains("remote_probe"), "没连账户时它每次都只会回一句「不可用」：" + names);
+        assertTrue(names.contains("local_probe"), "同组件里的本地工具绝不能跟着一起藏：" + names);
+    }
+
+    @Test
+    @DisplayName("连上之后立刻回到全集——这是运行期判定，不是启动时探一次")
+    void connectingBringsTheToolBack() {
+        HalfRemoteTools tools = new HalfRemoteTools();
+        ToolRegistry registry = registryOf(tools);
+
+        tools.connected = true;
+        assertTrue(registry.unusableToolNames().isEmpty());
+        List<String> names = specNames(registry);
+        assertTrue(names.contains("remote_probe"), names.toString());
+        assertTrue(names.contains("local_probe"), names.toString());
+    }
+
+    @Test
+    @DisplayName("运行期不可用也只裁 spec，不裁 resolve/execute")
+    void runtimeHiddenToolIsStillDispatchable() {
+        HalfRemoteTools tools = new HalfRemoteTools();
+        ToolRegistry registry = registryOf(tools);
+        tools.connected = false;
+
+        assertTrue(registry.resolve("remote_probe").isPresent(),
+                "XML 兜底路径调到时要拿到工具自己那句可行动的错误，而不是 'tool not found'");
+    }
+
+    @Test
+    @DisplayName("运行期判定抛异常 = 没有不可用的工具（判不准一律倒向全集）")
+    void throwingRuntimeGateHidesNothing() {
+        ToolRegistry registry = registryOf(new ThrowingRuntimeGate());
+        assertTrue(registry.unusableToolNames().isEmpty());
+        List<String> names = specNames(registry);
+        assertTrue(names.contains("runtime_throwing_probe"), names.toString());
+    }
+
 }

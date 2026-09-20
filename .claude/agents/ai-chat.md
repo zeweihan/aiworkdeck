@@ -104,13 +104,14 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   - **稳定段（标记之前，打断点）**：基底 prompt + enforcement + 模式约束 + skill 注入 + `# User Context Files` + `# Active Document`（含最长 20 万字符的内联正文）。
   - **易变段（标记之后，不打断点）**：`# Current Context`（Current System Time / Agent Mode / Phase / Project ID / Task List ID / Plan ID）+ `## Phase Instructions` + `# 项目记忆` / `# 相关记忆` / `# 用户偏好与习惯`。
   通道层 `markSystemForCaching` 按标记拆成两个 text block，只给第一块打 `cache_control`，**标记本身被吃掉、模型永远看不到**；没有标记时退化成「整段 system 一个断点」（旧行为兜底）。
-- **地雷一之补充（dev-board#750 实测，这条与上一条方向相反，别搞混）**：上一条只对**显式缓存**的通道（Anthropic / Qwen）成立——那里我们真的把 system 拆成两个 content block，只给前一块打断点。**自动缓存的通道（DeepSeek / OpenAI / Grok / Moonshot / Groq / Z.AI / Gemini 2.5）走的是 `stripVolatileSeparator`，易变段被原样拼回 system 的尾巴，于是整段 system 每轮都不一样。** 直连实测（`deepseek/deepseek-v4-flash`，33KB system + 200 工具，prompt 51477）：
+- **易变段在三种通道下的实际形态（dev-board#750，别只记住上一条）**：上一条只对**显式缓存**的通道（Anthropic / Qwen）成立——那里 system 被拆成两个 content block，只给前一块打断点。自动缓存的通道（DeepSeek / OpenAI / Grok / Moonshot / Groq / Z.AI）原先走 `stripVolatileSeparator`，易变段被原样拼回 system 的尾巴，于是**整段 system 每轮都不一样、前缀缓存零命中**；现在改成按标记拆成**紧随其后的第二条 system 消息**（`splitVolatileSystem`）。直连实测（`deepseek/deepseek-v4-flash`，33KB system + 200 工具，prompt 51477）：
   - 前后两次请求**完全相同** → `cached_tokens` = **51456**（99.9%）；
   - **只把 system 末尾的时间戳改了 7 秒** → `cached_tokens` = **0**（不是「命中到时间戳为止」，是整个前缀全丢）；
   - 把同一段易变文本**搬进用户消息**、system 保持不变 → 预热后 `cached_tokens` = **35584**；
   - 把它**单独做成第二条 system 消息** → 预热后 `cached_tokens` = **40192**，且模型确实读得到（问「当前系统时间是哪一年」答「2031」）。
-  TTFT 影响（4 组配对，中位数）：命中 2870ms / 未命中 3547ms，约 **0.7s/轮**；真正的大头是**每轮多付约 4.25 万个全价输入 token**（缓存读价约输入价 1/10）。
-  **也就是说：今天每一轮对话在自动缓存通道上都是零命中。** 要修就得把易变段移出 system 消息（第二条 system 或挂用户消息末位），这是会改变模型读到的结构的动作，**属于要维护者拍板的 prompt 改动，未做**。改之前先跑一遍上面那组探针确认数字还成立。
+  TTFT 影响（4 组配对，中位数）：命中 2870ms / 未命中 3547ms，约 **0.7s/轮**；更大的一块是**每轮少付约 4.4 万个全价输入 token**（缓存读价约输入价 1/10）。
+  改前/改后 A/B（同一段 system，每轮换时间戳，各 6 轮）：拼成一条 `cached_tokens` = 0/0/0/1792/1792/1792；拆成第二条 = 45568/33792/45568/45568/47360/33792。
+  **三条硬约束**：① 模型读到的文字一字不变，变的只是消息边界（第一条 = 标记之前，第二条 = 标记之后，测试里对拼接结果做了逐字断言）；② 适用范围是 `splitsVolatileSystem` 里那份**逐个实测过的名单**（`VERIFIED_MULTI_SYSTEM`），不是推导出来的规则——判错的代价是 400 打掉用户一整轮，收益只是省钱，所以「没有正面证据就不拆」。2026-09-21 探针（每个模型一次请求、不预热，第二条 system 里塞一个只出现在那里的事实「2031年」再问它）：deepseek-v4-flash / deepseek-v4-pro / glm-5.2 / kimi-k2.6 / kimi-k3 / seed-2.0-lite / minimax-m3 / grok-4.5 **全部 200 且答出 2031，放行**；`openai/gpt-5.6-terra` 与 `google/gemini-3.6-flash` 拿到 403 `This model is not available in your region.`——**是本机出口被地域拦，不是拒收多条 system**（单条 system 的最小请求同样 403，换走本机系统代理仍 403），属「未能验证」不是「验证失败」，一律退回拼接。③ 要新开一个模型，先补一次同样的探针（**HTTP 200 + 答得出第二条里的事实**两条都要），再把 id 加进 `VERIFIED_MULTI_SYSTEM` 并在那段 javadoc 的表里补一行；白名单外的 id（自配 aux/subagent 模型、故障转移新型号、`:beta` 变体）恒不放行。
 - **地雷一：任何每轮可能变的内容，一律 append 到标记之后**。写进稳定段的话缓存永远不命中，**不报错、只是静默按全价计费**——没有任何东西会告诉你。特别注意：`# 相关记忆` 是按 `userPrompt` 现查的（`ContextAssemblerService` 里 `retrieveMemories(projectId, userPrompt, null, 5)`）且排序带随机项，**同一个问题两次的结果都可能不同**，所以它必须在标记之后（这就是为什么易变段不止 `# Current Context` 那几行）。同理，**`assemble()` 里 `systemText.append(SYSTEM_VOLATILE_SEPARATOR)` 那一行之后再往 `systemText` 追加任何东西，都会掉进被缓存的前缀里**——新增注入段要么放在标记之前（确认它稳定），要么 append 到 `volatileText`。
 - **「末位」语义没有被破坏**：本仓真正的末位约束是**挂在用户消息尾部**的 `[系统提醒]`（`activeDocumentReminder`），不是 system 的尾巴；system 里那些「必须/禁止」类指引（#419 的 `office_replace_batch` 批量指引、纯文本约束等）仍在稳定段的末尾，易变段排在它们之后不算把它们从末位挤走——易变段是状态与记忆，不是行为约束。新增行为约束仍按老规矩挂用户消息末位。
 - **验证「稳定」这件事本身要靠测试**：`ContextAssemblerServiceTest.volatileFieldsLiveAfterTheSeparator`（标记恰好一次、时间戳/阶段/阶段指引都在标记之后、内联正文在标记之前）与 `stablePrefixIsByteIdenticalAcrossTurns`（连续两次 assemble 的标记前半段逐字节相同）。
@@ -135,7 +136,22 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      Calc/Impress 也没有后悔药了）；**「新建并打开一份新文档」**的 sheet_create_file 与
      doc_start_stream（作用在新建出来的那份文件上，不是活跃文档）。
      **判不准一律倒向全集**：kind 为 null / 空 / "text" / 未知值都不裁。
-  ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节。
+  ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节；
+  ④ **运行期可用性**（dev-board#750）：账户没连时那些必然回「尚未连接 AI WorkDeck 账户」的工具不下发。
+     判据链是 `AgentToolComponent.currentlyUnusableTools()` → `ToolRegistry.unusableToolNames()`
+     → 起跑时存进 `RunGuard.unusableTools` → **在编排器里**做最后一道过滤（与 skill 白名单、
+     ASK 只读记忆工具同一处；**刻意不放进 ToolRegistry**：那里多一个重载会让只 stub 了旧重载的
+     Mockito 测试静默拿到空工具集，本次就踩了两个）。
+     与 `isAvailable()` 的分工：那个是**进程级**的（@PostConstruct 探一次，如本机有没有 Docker），
+     这个是**运行期**的（账户随时可连可断）；粒度也不同，这个按工具名——同一组件里常常一半要账户、
+     一半是纯本地的（`WebTools` 的 search_web 要、browse_url 不要；`LegalTools` 的 law_* 要、
+     read_document 不要），**连坐的表现是「模型以为它连文件都读不了」**。
+     受影响的只有三个组件共 8 个工具（真机实测：200 → 192）：`search_web`（SEARCH）、`law_search` / `law_search_keyword` /
+     `law_recognition` / `get_law_article`（PKULAW）、`qichacha_query` / `qichacha_ipr`（QICHACHA）、
+     `tushare_query`（TUSHARE）。判据 `ExternalServiceAvailability.usable(service)`
+     **只判「平台档 + 没连账户」这一种**，BYOK/LOCAL 档与判不出来的一律当可用——
+     藏掉一个能用的工具比失败一次严重得多。云后端 `resolve()` 恒不返回 PLATFORM，这道闸天然空转。
+     **一轮内不变**：与 activeDocKind 同一条契约，而且这一个连中途放宽的口子都没有。
   - **为什么值得做②**：工具规格**每一轮都要重发**，一条消息跑三五个往返就付三五遍。
     本机实测 202 个工具 59045 prompt token / 首轮 26.4s，裁到 16 个 18854 token / 6.1s；
     本仓离线实测（`ToolSchemaBudgetTest`）docx 省 26.7%、xlsx 省 38.9%、pptx 省 39.7% 的 schema 体量。
@@ -246,10 +262,18 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **仍然存在的已知局限（刻意没做）**：① 埋点 `TelemetryTurnTracker` 仍按 conversationId 记，被取代那一轮的 `ai.turn` 不会闭合；② 跨进程重启的 `AgentRunRecoveryService` 仍按 conversationId 回收（重启后进程内一个 RunGuard 都不剩，`agent_run_record` 每会话一行仍然正确，加 runId 列没有消费者）；③ 旧轮次收尾时仍会执行 `editorBridgeService.setStreamingMode(cid, false)`，把新轮次正在进行的编辑器流式写入模式一起关掉。**这里刻意没加闸**：流式模式是工具打开、收尾关闭的会话级开关，给旧轮次加闸只会换成「旧轮次开的流式模式永远不关」这种更难查的泄漏；正确修法是把流式模式本身做成轮次级状态，属 ai-doc-bridge 领域。
 
 **前端消费**
-- **正文渲染的三条性能红线（dev-board#750）**：后端每个模型 token 发一条 `text_delta`，所以「每 token 做一次」的东西都会被放大几千倍。
+- **正文渲染与流式解析的四条性能红线（dev-board#750）**：后端每个模型 token 发一条 `text_delta`，所以「每 token 做一次」的东西都会被放大几千倍。
   ① **markdown-it 实例必须是模块级单例**（`frontend/src/utils/markdownRenderer.js`），**绝不能放进组件的 `data()`**：Vue 3 会把 `data()` 返回的对象整个 `reactive()`，解析过程中对 `md.options`/`md.block`/`md.inline`/`md.renderer` 的每次内部访问都要过 Proxy trap，而 render 跑在 computed getter 里还要登记依赖。实测（markdown-it 14 + @vue/reactivity，8450 字中文法律文书）：普通实例 0.545ms / 响应式实例 2.028ms / 在 computed 里 2.377ms，**慢 3.7~4.4 倍**；整条流累计 313ms → 1972ms。`PlainTextEditor` 用 `this._md`（挂实例 ctx，不进 data）是对的写法。
   ② **`MarkdownPreview` 的渲染按帧合并**：这里是「整篇重新解析 + 整段 `v-html` 重写」，不是追加，所以不合帧就是「全文重建 × token 数」的 O(n²)，还会在每次重写时**清掉用户在正文里选中的文字**。首屏那一次在 `data()` 里同步渲染（静态预览/历史/计划卡挂载即有内容，不推迟首字），之后走 `scheduleRender()` 每帧至多一次；`requestAnimationFrame` 不存在时回落 `setTimeout(16)`，`beforeUnmount` 取消待执行的帧。`renderFrame`/`sourceText` 的形状别乱改——护栏在 `frontend/tests/markdown-table/mdStreaming.test.mjs`（两条病灶各自还原都验证过会转红）。
-  ③ **SSE 热路径（`useAgentStream` 的读取循环、`handleEvent`、`text_delta` 分支）不许加 `console.log`**：`vite.config.js` 没有 `drop_console`，这些日志会进生产包；DevTools 打开时每条几十到几百微秒 × 每 token 一次，还会把会话正文写进控制台。
+  ③ **工具载荷的解转义必须是增量的**：`decodeProtocolTagsIncremental(chunk, carry)`（`agentTagProtocol.mjs`）
+  只解这一段新到的、把「还可能长成完整转义标签」的尾巴留到下一次，闭合时（`</tool_code>` /
+  `</tool_output>`）与 `flushRemainingBuffer` 各收一次。原先每个 delta 都对**整段已累加**的文本
+  重跑一次全串正则，载荷含被中和标签时是 O(n²)。**尾巴的判据有两半，漏一半就会漏还原**：
+  `&lt;/tool_out` 这种标签名被切断的，和 `&l` / `&lt` 这种**连 `&lt;` 本身都被切断**的
+  （逐字符喂时就是后者，最容易漏）；另外孤立的 `&lt;` 后面永远不来 `>` 时要按 `MAX_CARRY` 放行，
+  否则之后整段输出永久扣在缓冲区里。护栏在 `tests/tag-protocol/protocol.test.mjs`：
+  **同一段文本按 1/2/3/5/7/13/64/9999 字符切都必须与整段一次解码逐字相同**。
+  ④ **SSE 热路径（`useAgentStream` 的读取循环、`handleEvent`、`text_delta` 分支）不许加 `console.log`**：`vite.config.js` 没有 `drop_console`，这些日志会进生产包；DevTools 打开时每条几十到几百微秒 × 每 token 一次，还会把会话正文写进控制台。
 - **对话按时间线分层（2026-09-15，dev-board#646，取代 #584 的固定活动面板）**：`ChatInterface` 仍用 `AgentMessage/chatTurns.mjs` 按 USER 分轮（`.conversation-turn` + `.message-row.user/.assistant`，保留原 bubbles 与全局索引），但思考/执行/任务/产物/正文**全部回到消息流里按发生顺序渲染**，顺序由 `AgentMessage/chatTimeline.mjs` 决定。`TurnActivityPanel.vue` / `TitleCard.vue` / `RootBubble` 的 `hideActivity` / 固定活动面板入口 / 28 个 `chat.activity*` 文案键（只留下 ChatInterface 还在用的 `activityBackToLatest`）**已整体删除**；「待回答/审批的常驻定位入口」以浮条形态补回（dev-board#663，见下条）。后台任务取消仍走输入区与 BackgroundTaskIndicator，不混用生命周期。
   - **待处理定位条（dev-board#663）**：长会话里反问卡/审批卡会被滚出视野，用户既看不见也回不去。`ChatInterface` 在 `.return-to-latest` 容器里（新增 `.locator-row` 横排，「回到最新」按钮拿到 `.back-to-latest` 类名）多渲一个 `.attention-locator` 按钮，点击 `navigateToMessage({index, target:'attention'})` 滚到卡片并给它挂 1.6s 的 `.chat-attention-flash`（样式在 **RootBubble 的 scoped style 里**——带 `data-chat-attention` 的两处都由该组件模板渲染，ChatInterface 的 scoped 选择器匹配不到）。三条契约：
     ① **判据只此一处**。`chatTurns.mjs` 导出的 `pendingAttention(turns)` 读 `buildChatTurns` 已经算好的 `attentionIndex` / 新增的 `attentionKind`（`'question'|'approval'`），**不许再写一份判定**——那条判定含 `isLatest && !isStreaming`，与 RootBubble 给卡片 `actionable` 的是同一条链，另起一份的表现是「定位条把用户送到一张点了没反应的卡上」。返回 `{index, kind, count}`，最早一条 + 计数；今天 `attentionIndex` 只在最新一轮设置，所以 count 恒为 1，聚合是给判定放宽留的（`attention-locator.test.mjs` 直接喂合成 turns 钉住这条）。

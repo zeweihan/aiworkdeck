@@ -86,6 +86,8 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     private final String modelName;
     /** 本模型是否需要显式提示缓存断点，见 {@link #requiresExplicitPromptCache}。 */
     private final boolean explicitPromptCache;
+    /** 本模型走不走「易变段拆成第二条 system 消息」那条路，见 {@link #splitsVolatileSystem}。 */
+    private final boolean splitVolatile;
 
     /** Empty/length-limited responses can still incur provider usage; null means unreported, never zero. */
     public static final class EmptyResponseException extends RuntimeException {
@@ -101,6 +103,7 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.explicitPromptCache = requiresExplicitPromptCache(modelName);
+        this.splitVolatile = splitsVolatileSystem(modelName);
         String base = baseUrl == null ? "" : baseUrl;
         this.endpoint = (base.endsWith("/") ? base.substring(0, base.length() - 1) : base) + "/chat/completions";
         Duration t = timeout == null ? Duration.ofSeconds(60) : timeout;
@@ -146,8 +149,12 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
 
     private Call send(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
                       Integer maxOutputTokens, StreamingResponseHandler<AiMessage> handler) {
-        // 不做显式缓存的通道要先把分界标记摘掉（在序列化之前做，标记不能漏进报文）
-        List<ChatMessage> outbound = explicitPromptCache ? messages : stripVolatileSeparator(messages);
+        // 分界标记绝不能漏进报文，三条路各自处理（都在序列化之前做）：
+        //   显式缓存（Anthropic/Qwen）→ 留着标记，markSystemForCaching 按它拆 content block；
+        //   自动缓存且形态已验证 → 按标记拆成两条 system 消息（dev-board#750，见 splitVolatileSystem）；
+        //   其余 → 摘掉标记原样拼接（旧行为）。
+        List<ChatMessage> outbound = explicitPromptCache ? messages
+                : (splitVolatile ? splitVolatileSystem(messages) : stripVolatileSeparator(messages));
         ChatCompletionRequest.Builder rb = ChatCompletionRequest.builder()
                 .stream(true)
                 .streamOptions(StreamOptions.builder().includeUsage(true).build())
@@ -336,10 +343,7 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     /**
      * 不做显式缓存的通道：把分界标记从 system 里摘掉，其余一切照旧。
      *
-     * <p><b>必须在序列化之前摘</b>。序列化之后再用 Jackson 改写会顺带改掉排版
-     * （openai4j 的 {@code Json} 开着 INDENT_OUTPUT），那样这些通道的请求体就不再与改造前
-     * 逐字节一致了——而「不影响其它通道」正是这次改造唯一的硬护栏
-     * （{@code OpenRouterPromptCacheTest.nonAnthropicStripsSeparatorAndStaysByteIdentical}）。
+     * <p><b>必须在序列化之前摘</b>：标记是我们内部的约定，一个字节都不许漏进报文。
      *
      * <p>没有任何 system 带标记时返回原列表本身，不做多余的拷贝。
      */
@@ -356,6 +360,113 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             out.set(i, dev.langchain4j.data.message.SystemMessage.from(text.replace(sep, "")));
         }
         return out == null ? messages : out;
+    }
+
+    /**
+     * 自动缓存的通道：把标记之后的易变段<b>拆成紧随其后的第二条 system 消息</b>（dev-board#750）。
+     *
+     * <p><b>要解决的问题</b>：这些供应商做自动前缀缓存，但前缀必须逐字匹配。我们把当前时间
+     * （精确到秒）、会话阶段、按本轮提问现查的记忆全拼在 system 的尾巴上，于是<b>整段 system
+     * 每轮都不一样</b>。直连 {@code deepseek/deepseek-v4-flash} 实测（33KB system + 200 工具，
+     * prompt 51477）：
+     * <ul>
+     *   <li>两次请求完全相同 → {@code cached_tokens} = 51456（99.9%）；</li>
+     *   <li><b>只把 system 末尾的时间戳改 7 秒</b> → {@code cached_tokens} = <b>0</b>
+     *       ——不是「命中到时间戳为止」，是整个前缀全丢；</li>
+     *   <li>把同一段文字拆成第二条 system 消息 → 预热后 {@code cached_tokens} = <b>40192</b>，
+     *       且模型确实读得到它（问「当前系统时间是哪一年」答「2031」）。</li>
+     * </ul>
+     * TTFT 约 0.7s/轮（命中 2870ms / 未命中 3547ms，4 组配对中位数）；更大的一块是每轮少付
+     * 约 4 万个全价输入 token（缓存读价约输入价 1/10）。
+     *
+     * <p><b>模型读到的文字一字不变</b>，变的只是消息边界：第一条 = 标记之前，第二条 = 标记之后。
+     * 易变段为空白时不拆（不发空 system 消息），退化成 {@link #stripVolatileSeparator}。
+     *
+     * <p>适用范围见 {@link #splitsVolatileSystem}。
+     */
+    static List<ChatMessage> splitVolatileSystem(List<ChatMessage> messages) {
+        if (messages == null) return null;
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        List<ChatMessage> out = null;
+        // 每拆开一条就往后挪一位。**不能用 out.indexOf(m) 去定位**：两条正文相同的 system
+        // 消息在 equals 下不可区分，indexOf 会命中前一条，把内容改到别人头上。
+        int inserted = 0;
+        for (int i = 0; i < messages.size(); i++) {
+            ChatMessage m = messages.get(i);
+            if (!(m instanceof dev.langchain4j.data.message.SystemMessage sm)) continue;
+            String text = sm.text();
+            if (text == null) continue;
+            int at = text.indexOf(sep);
+            if (at < 0) continue;
+            String stable = text.substring(0, at);
+            String volatilePart = text.substring(at + sep.length());
+            if (out == null) out = new java.util.ArrayList<>(messages);
+            int idx = i + inserted;
+            if (volatilePart.isBlank() || stable.isBlank()) {
+                // 有一半是空的就别拆：空 system 消息是白送的报文噪音，而且有的供应商会拒
+                out.set(idx, dev.langchain4j.data.message.SystemMessage.from(text.replace(sep, "")));
+                continue;
+            }
+            out.set(idx, dev.langchain4j.data.message.SystemMessage.from(stable));
+            out.add(idx + 1, dev.langchain4j.data.message.SystemMessage.from(volatilePart));
+            inserted++;
+        }
+        return out == null ? messages : out;
+    }
+
+    /**
+     * 逐个实测过「接受两条 system 消息、且确实读得到第二条」的模型（dev-board#750）。
+     *
+     * <p><b>这是一份实测名单，不是推导出来的规则</b>：判错的代价是 400 打掉用户一整轮对话，
+     * 而收益只是省点钱，所以口径是「没有正面证据就不拆」。
+     *
+     * <p>2026-09-21 探针（直连 openrouter.ai，每个模型一次请求、不预热；
+     * 请求 = 稳定 system + 第二条 system（内含只出现在那里的事实「2031年」）+ 问那个事实）：
+     * <pre>
+     *   deepseek/deepseek-v4-flash    200  答出 2031   放行
+     *   deepseek/deepseek-v4-pro      200  答出 2031   放行
+     *   z-ai/glm-5.2                  200  答出 2031   放行
+     *   moonshotai/kimi-k2.6          200  答出 2031   放行
+     *   moonshotai/kimi-k3            200  答出 2031   放行
+     *   bytedance-seed/seed-2.0-lite  200  答出 2031   放行
+     *   minimax/minimax-m3            200  答出 2031   放行
+     *   x-ai/grok-4.5                 200  答出 2031   放行
+     *   openai/gpt-5.6-terra          403  —           不放行（见下）
+     *   google/gemini-3.6-flash       403  —           不放行（见下）
+     * </pre>
+     *
+     * <p>那两个 403 的原文是 {@code "This model is not available in your region."}——
+     * <b>是本机出口被地域拦，不是拒收多条 system</b>（单条 system 的最小请求同样 403，
+     * 换走本机系统代理仍 403）。也就是说它们是<b>「未能验证」而不是「验证失败」</b>，
+     * 按「没有正面证据就不拆」一律退回拼接。哪天在能访问国际模型的出口上补验过，
+     * 把 id 加进来并在上表补一行即可。Google 另有一条独立理由：它的原生接口只有一个
+     * {@code system_instruction}，多条 system 要靠 OpenRouter 代为合并，合并之后就是今天的形态，
+     * 本来就没有收益。
+     *
+     * <p>Anthropic / Qwen 不在此列是另一回事：它们走显式断点（{@link #markSystemForCaching}），
+     * system 已经被拆成两个 content block，再动消息边界是多此一举——
+     * {@link #splitsVolatileSystem} 里那句提前返回就是为此。
+     */
+    private static final java.util.Set<String> VERIFIED_MULTI_SYSTEM = java.util.Set.of(
+            "deepseek/deepseek-v4-flash",
+            "deepseek/deepseek-v4-pro",
+            "z-ai/glm-5.2",
+            "moonshotai/kimi-k2.6",
+            "moonshotai/kimi-k3",
+            "bytedance-seed/seed-2.0-lite",
+            "minimax/minimax-m3",
+            "x-ai/grok-4.5");
+
+    /**
+     * 这个模型走不走「第二条 system 消息」那条路。
+     *
+     * <p>判据只有一条：{@link #VERIFIED_MULTI_SYSTEM} 里逐个实测过的才放行。白名单之外的 id
+     * （自配的 {@code ai.auxModel} / {@code ai.subagentModel}、故障转移链上的新型号、
+     * {@code :beta} 变体）一律退回拼接——形态未知就不赌。
+     */
+    static boolean splitsVolatileSystem(String modelId) {
+        if (modelId == null || requiresExplicitPromptCache(modelId)) return false;
+        return VERIFIED_MULTI_SYSTEM.contains(modelId);
     }
 
     /**

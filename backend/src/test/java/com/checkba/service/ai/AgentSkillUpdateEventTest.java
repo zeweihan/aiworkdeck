@@ -43,6 +43,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -307,6 +308,53 @@ class AgentSkillUpdateEventTest {
 
         assertTrue(offered.contains("skill_action"));
         assertTrue(offered.containsAll(memory.stream().map(ToolSpecification::name).toList()));
+    }
+
+    @Test
+    @DisplayName("运行期不可用的工具不下发给模型，同轮次内保持一致（dev-board#750）")
+    void runtimeUnusableToolsNeverReachTheModel() {
+        List<ToolSpecification> registered = List.of(
+                spec("law_search"), spec("search_web"), spec("read_document"), spec("browse_url"));
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(registered);
+        when(toolRegistry.unusableToolNames())
+                .thenReturn(java.util.Set.of("law_search", "search_web"));
+        when(skillRouter.visibleTools(any(), any()))
+                .thenAnswer(inv -> inv.getArgument(1, List.class));
+        when(toolRegistry.execute(any(), any(), any()))
+                .thenReturn(new ToolRegistry.ToolResult("文档正文……", null, true));
+
+        List<List<String>> offered = new CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        StreamingChatLanguageModel model = new StreamingChatLanguageModel() {
+            @Override public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+                generate(messages, List.of(), handler);
+            }
+            @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                                           StreamingResponseHandler<AiMessage> handler) {
+                offered.add(tools.stream().map(ToolSpecification::name).toList());
+                // 第一轮调一个工具，逼出第二轮——本轮工具集必须一模一样
+                AiMessage reply = calls.getAndIncrement() == 0
+                        ? AiMessage.from(ToolExecutionRequest.builder().id("r1").name("read_document")
+                                .arguments("{}").build())
+                        : AiMessage.from("done");
+                if (reply.text() != null) handler.onNext(reply.text());
+                handler.onComplete(Response.from(reply));
+            }
+        };
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+
+        run("conv-runtime-gate", AgentMode.AGENT, null);
+
+        assertEquals(2, offered.size(), "应当跑了两轮：" + offered);
+        for (List<String> round : offered) {
+            assertFalse(round.contains("law_search"), "没连账户时 law_search 不许下发：" + round);
+            assertFalse(round.contains("search_web"), "没连账户时 search_web 不许下发：" + round);
+            assertTrue(round.contains("read_document"), "本地工具绝不能连坐：" + round);
+            assertTrue(round.contains("browse_url"), "本地工具绝不能连坐：" + round);
+        }
+        assertEquals(offered.get(0), offered.get(1), "一轮内工具集必须不变，否则通道直接 400");
+        // 每轮起跑只算一次，不是每个 LLM 往返都重算
+        verify(toolRegistry, times(1)).unusableToolNames();
     }
 
     private static ToolSpecification spec(String name) {

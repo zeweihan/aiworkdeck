@@ -25,4 +25,25 @@ public interface AgentToolComponent {
     default boolean isAvailable() {
         return true;
     }
+
+    /**
+     * 本组件里此刻<b>确定</b>用不了的工具名（dev-board#750）。默认空集。
+     *
+     * <p>与 {@link #isAvailable()} 的分工：那一个是**进程级**的（@PostConstruct 探一次，
+     * 例如本机有没有 Docker），这一个是**运行期**的——账户连没连、凭证配没配会在用户手里
+     * 随时变，探一次没用。粒度也不同：这里按工具名，因为同一个组件里常常一半工具依赖外部
+     * 服务、另一半是纯本地的（{@code WebTools} 的 search_web 要账户，browse_url 不要；
+     * {@code LegalTools} 的 law_* 要账户，read_document 不要）。
+     *
+     * <p>处置与 {@code isAvailable()} 一致：<b>只裁 spec、不裁 resolve/execute</b>。模型看不见
+     * 就不会浪费一整轮去试（实测一条纯法律问答 4 个 LLM 往返里有 2 轮花在必然「不可用」的
+     * 工具上，每轮 3~5 秒），万一经 XML 兜底路径调到，拿到的仍是工具自己那句可行动的错误。
+     *
+     * <p><b>判不准一律返回空集</b>：宁可多下发一个会失败的工具，也不能把能用的藏起来——
+     * 藏掉的表现是「这个能力整个不存在」，比失败一次严重得多。实现必须绝不抛异常
+     * （抛了也会被 ToolRegistry 兜成空集），也不该做网络请求：它在每条用户消息起跑时都要跑一次。
+     */
+    default java.util.Set<String> currentlyUnusableTools() {
+        return java.util.Set.of();
+    }
 }
