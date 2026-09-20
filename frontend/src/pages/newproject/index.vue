@@ -242,7 +242,7 @@ export default {
 
 <style lang="scss" scoped>
 /* 品牌配色变量 - AI WorkDeck Palette */
-$brand-dark: #212629;    /* Dark BG */
+$brand-dark: #221F1A;    /* Dark BG */
 
 .page-new-project {
   min-height: 100vh;
@@ -332,7 +332,7 @@ $brand-dark: #212629;    /* Dark BG */
 
 .avatar-text {
   font-size: 32px;
-  color: var(--awd-text-on-accent);
+  color: #EDE9DF;
   font-weight: 500;
 }
 
@@ -436,7 +436,7 @@ $brand-dark: #212629;    /* Dark BG */
     border-color: var(--awd-accent);
     background: var(--awd-accent-wash);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(26, 83, 54, 0.08);
+    box-shadow: 0 4px 12px rgba(46, 90, 80, 0.08);
   }
 
   &.is-busy {
@@ -535,7 +535,7 @@ $brand-dark: #212629;    /* Dark BG */
 
 .input:focus {
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
+  box-shadow: 0 0 0 3px rgba(46, 90, 80, 0.1);
   outline: none;
 }
 
@@ -576,11 +576,11 @@ $brand-dark: #212629;    /* Dark BG */
   background-color: var(--awd-accent);
   color: var(--awd-text-on-accent);
   flex: 2;
-  box-shadow: 0 4px 12px rgba(26, 83, 54, 0.2);
+  box-shadow: 0 4px 12px rgba(46, 90, 80, 0.2);
 
   &:hover {
     background-color: var(--awd-accent-hover);
-    box-shadow: 0 6px 16px rgba(26, 83, 54, 0.3);
+    box-shadow: 0 6px 16px rgba(46, 90, 80, 0.3);
     transform: translateY(-1px);
   }
 

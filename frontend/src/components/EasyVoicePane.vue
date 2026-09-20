@@ -938,7 +938,7 @@ export default {
   cursor: pointer;
   border: none;
   outline: none;
-  box-shadow: 0 2px 4px rgba(26, 83, 54, 0.1);
+  box-shadow: 0 2px 4px rgba(46, 90, 80, 0.1);
   transition: all 0.2s;
 }
 

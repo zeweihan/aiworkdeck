@@ -815,7 +815,7 @@ async function confirmDelete(c) {
   width: 44px;
   height: 44px;
   border-radius: 10px;
-  box-shadow: 0 4px 14px rgba(26, 83, 54, 0.16);
+  box-shadow: 0 4px 14px rgba(46, 90, 80, 0.16);
 }
 
 .welcome-title {
@@ -840,7 +840,7 @@ async function confirmDelete(c) {
   color: #fff;
   font-size: 13px;
   transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
-  box-shadow: 0 4px 14px rgba(26, 83, 54, 0.22);
+  box-shadow: 0 4px 14px rgba(46, 90, 80, 0.22);
 }
 
 .welcome-btn:hover { background: var(--awd-primary-hover); }
@@ -862,7 +862,7 @@ async function confirmDelete(c) {
 
 .user-bubble {
   background: var(--awd-user-bubble);
-  border: 1px solid rgba(45, 122, 82, 0.18);
+  border: 1px solid rgba(46, 90, 80, 0.18);
   border-radius: 10px 10px 3px 10px;
 }
 
@@ -1005,7 +1005,7 @@ async function confirmDelete(c) {
   border-color: var(--awd-accent);
   color: var(--awd-primary);
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(26, 83, 54, 0.12);
+  box-shadow: 0 4px 14px rgba(46, 90, 80, 0.12);
 }
 
 .quick-btn:active { transform: translateY(0); }
@@ -1088,7 +1088,7 @@ async function confirmDelete(c) {
    更多菜单的捕获层/面板自带更高层级（24/26），不依赖 composer 的层叠上下文 */
 .composer {
   position: relative;
-  border-top: 1px solid rgba(26, 83, 54, 0.10);
+  border-top: 1px solid rgba(46, 90, 80, 0.10);
   padding: 8px 12px 10px;
   flex-shrink: 0;
 }
@@ -1153,7 +1153,7 @@ async function confirmDelete(c) {
   position: fixed;
   inset: 0;
   z-index: 24;
-  background: rgba(14, 33, 23, 0.14);
+  background: rgba(46, 90, 80, 0.14);
 }
 
 /* 更多菜单面板：毛玻璃浮层，锚在 composer 正上方 */
@@ -1166,7 +1166,7 @@ async function confirmDelete(c) {
   max-height: 300px;
   overflow-y: auto;
   z-index: 26;
-  border: 1px solid rgba(26, 83, 54, 0.12);
+  border: 1px solid rgba(46, 90, 80, 0.12);
   border-radius: var(--awd-radius-md);
   box-shadow: var(--awd-shadow-float);
   padding: 6px;
@@ -1332,7 +1332,7 @@ async function confirmDelete(c) {
 .overlay {
   position: absolute;
   inset: 0;
-  background: rgba(14, 33, 23, 0.24);
+  background: rgba(46, 90, 80, 0.24);
   display: flex;
   align-items: flex-end;
   z-index: 20;
@@ -1342,9 +1342,9 @@ async function confirmDelete(c) {
   width: 100%;
   max-height: 65%;
   overflow-y: auto;
-  border-top: 1px solid rgba(26, 83, 54, 0.12);
+  border-top: 1px solid rgba(46, 90, 80, 0.12);
   border-radius: var(--awd-radius-md) var(--awd-radius-md) 0 0;
-  box-shadow: 0 -8px 32px rgba(18, 58, 38, 0.14);
+  box-shadow: 0 -8px 32px rgba(46, 90, 80, 0.14);
   padding: 8px 10px 12px;
 }
 
@@ -1462,7 +1462,7 @@ textarea {
 textarea:focus {
   outline: none;
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
+  box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.18);
 }
 
 .btn-col {

@@ -17,10 +17,10 @@
 /* 颜色变量 */
 
 /* 品牌配色系统 */
-/* 品牌金色：重要强调、小面积线条、激活下划线 */
-$brand-color-gold: #C8A45D;
-/* 功能主色：深墨蓝 - 按钮主色、表单 focus 边框、Tab 激活文字 */
-$brand-color-primary: #12344D;
+/* 品牌点睛色：浅茶金 - 小面积线条、激活下划线、徽章描边 */
+$brand-color-gold: #D7C5A1;
+/* 功能主色：墨竹青 - 按钮主色、表单 focus 边框、Tab 激活文字 */
+$brand-color-primary: #2E5A50;
 /* 行为相关颜色 */
 $uni-color-primary: $brand-color-primary;
 $uni-color-success: #4cd964;
@@ -69,8 +69,8 @@ $uni-border-radius-circle: 50%;
 /* 统一卡片/布局圆角与阴影（工作台类页面复用） */
 $brand-card-radius-lg: 16px;
 $brand-card-radius-md: 12px;
-$brand-card-shadow-soft: 0 12px 32px rgba(18, 52, 77, 0.06);
-$brand-card-shadow-hover: 0 18px 40px rgba(18, 52, 77, 0.12);
+$brand-card-shadow-soft: 0 12px 32px rgba(58, 52, 40, 0.06);
+$brand-card-shadow-hover: 0 18px 40px rgba(58, 52, 40, 0.12);
 
 /* 水平间距 */
 $uni-spacing-row-sm: 5px;
@@ -94,58 +94,65 @@ $uni-color-paragraph: #3f536e; // 文章段落颜色
 $uni-font-size-paragraph: 15px;
 
 /* ============================================================
- * AI WorkDeck 绿系设计令牌（2026-08 UI 升级，对齐官网 DESIGN.md v1
- * 与 prototype_awd/assets/aiworkdeck.css）。
- * 约定：深色 chrome 表面（顶栏/rail/左栏/右栏/状态条）用 $awd-chrome-*，
- * 浅色内容表面（编辑区/抽屉/弹窗）用 $awd-ivory 系中性色。
+ * AI WorkDeck 设计令牌（东方清雅 Oriental Serenity）。
+ *
+ * **下面的 AWD-TOKENS 区段由脚本生成，不要手改。**
+ * 色源是 design/tokens/awd-palette.json（三个仓各存一份逐字节相同的副本），
+ * 改配色只改那里，然后跑 node scripts/generate-tokens.mjs 重新生成；
+ * scripts/check-palette.mjs 在 CI 里对拍 sha256、令牌漂移与对比度。
+ *
+ * 令牌名是 2026-08 那版留下的历史名（chrome / forest / ivory / mint…），
+ * **只换值不改名**——CLAUDE.md 明文禁止「统一命名 / 清理历史前缀」。
+ * 名字与新语义角色的对应关系写在 scripts/generate-tokens.mjs 的 SCSS_GROUPS 里。
  * ============================================================ */
 
-/* chrome 深绿阶（深→浅） */
-$awd-chrome-base: #0E2117;   // 最深底（画布外壳）
-$awd-chrome-top: #0F2A1C;    // 顶栏 / 底部状态条
-$awd-chrome-panel: #0D241A;  // 左右侧栏面板
-$awd-chrome-line: #1D3A29;   // chrome 内分隔线 / 画布深底
-$awd-chrome-hover: #16452D;  // 深底 hover 面
-$awd-chrome-active: #2D5240; // 深底激活边 / 强分隔
+/* AWD-TOKENS:BEGIN uni-scss */
+/* 此段由 scripts/generate-tokens.mjs 生成，勿手改。色源：design/tokens/awd-palette.json */
+/* 深色表面阶（历史名 chrome-*，深→浅） */
+$awd-chrome-base: #141210;
+$awd-chrome-top: #191713;
+$awd-chrome-panel: #221F1A;
+$awd-chrome-line: #3D372E;
+$awd-chrome-hover: #2B2721;
+$awd-chrome-active: #3E6E62;
+/* 品牌色：墨竹青作主色，竹月青作氛围色 */
+$awd-forest: #2E5A50;
+$awd-forest-dark: #254A41;
+$awd-mint: #89A8A0;
+$awd-mint-deep: #2E5A50;
+$awd-mint-pale: #E3EDE9;
+$awd-brass: #3E6E62;
+/* 浅色中性阶（玉脂白系暖调） */
+$awd-ivory: #FCFBF7;
+$awd-bone: #F1EFE7;
+$awd-stone: #DDD8CA;
+$awd-stone-md: #C3BCA9;
+$awd-slate: #6B675C;
+$awd-charcoal: #2B2A26;
+/* 深底文字阶 */
+$awd-text-on-dark: #EDE9DF;
+$awd-text-on-dark-2: #B0AA9C;
+$awd-text-on-dark-3: #7D7768;
+/* 编辑画布（纸页周围） */
+$awd-canvas: #E4E0D4;
+/* 语义色（-on-dark 变体供深底文字用） */
+$awd-amber: #B8842B;
+$awd-amber-on-dark: #E0B461;
+$awd-brick: #B5483C;
+$awd-brick-on-dark: #E8938A;
+$awd-sage: #89A8A0;
+/* AWD-TOKENS:END uni-scss */
 
-/* 品牌色 */
-$awd-forest: #1A5336;        // king-forest，主品牌绿
-$awd-forest-dark: #123A26;   // king-forest-darker
-$awd-mint: #5BD197;          // king-mint，点缀专用（不做大面积底色）
-$awd-mint-deep: #2D7A52;     // 白底上的 mint 替代（保证对比度）
-$awd-mint-pale: #E6F9F0;
-$awd-brass: #3E8E63;         // 次级强调绿
-
-/* 浅色中性阶（暖白系，替代冷灰 #F8F9FA 系） */
-$awd-ivory: #FAF8F4;
-$awd-bone: #F1ECE3;
-$awd-stone: #E2DBCE;
-$awd-stone-md: #C5BBA8;
-$awd-slate: #6B6E73;
-$awd-charcoal: #2B2C30;
-
-/* 深底文字阶（绿灰，禁用蓝灰） */
-$awd-text-on-dark: #ECF2EE;
-$awd-text-on-dark-2: #A8BDB2;
-$awd-text-on-dark-3: #7FA08F;
-
-/* 编辑画布 */
-$awd-canvas: #1D3A29;        // 纸页周围深底（与引擎 AppBackground 一致）
-$awd-paper: #FCFBF8;         // 纸页
-
-/* 语义色（-on-dark 变体供深底文字用，保证对比度 ≥ 4.5:1） */
-$awd-amber: #C58A2E;
-$awd-amber-on-dark: #E2B268;
-$awd-brick: #A03B2C;
-$awd-brick-on-dark: #E07A6A;
-$awd-sage: #5E8061;
+/* 纸页：LOWA 引擎渲染的纸张永远是纸白，不参与主题，也不随配色体系变化
+   （色源 awd-palette.json 的 _decisions.paperStaysWhite），所以留在生成区段之外。 */
+$awd-paper: #FCFBF8;
 
 /* 字体三轨：衬线只用于展示位，正文无衬线，元信息/状态用等宽 */
 $awd-font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
 $awd-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 $awd-font-mono: 'JetBrains Mono', 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
 
-/* 圆角与阴影（chrome 表面一律小圆角，浅色卡片沿用 brand-card-*） */
+/* 圆角与阴影（形状不属于配色体系，不随色源变化） */
 $awd-radius-sm: 6px;
 $awd-radius-md: 10px;
 $awd-shadow-paper: 0 4px 24px rgba(0, 0, 0, 0.35);

@@ -1125,7 +1125,7 @@ export default {
 
   &:focus {
     border-color: var(--awd-accent);
-    box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
+    box-shadow: 0 0 0 3px rgba(46, 90, 80, 0.1);
   }
 }
 
@@ -1177,7 +1177,7 @@ export default {
 
   &:focus {
     border-color: var(--awd-accent);
-    box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
+    box-shadow: 0 0 0 3px rgba(46, 90, 80, 0.1);
   }
 }
 

@@ -145,7 +145,7 @@ test('概览不内嵌 ChatInterface；样式外置；禁 emoji；浅色', () => 
   for (const f of ['pages/project-home/project-home.scss', 'components/project-home/project-home-pane.scss']) {
     const scss = readFileSync(resolve(ROOT, f), 'utf8')
     assert.ok(!scss.includes('#212629'), '外壳保持浅色: ' + f)
-    assert.ok(scss.includes('#1A5336'), '缺森林绿: ' + f)
+    assert.ok(scss.includes('#2E5A50'), '缺墨竹青: ' + f)
   }
 })
 

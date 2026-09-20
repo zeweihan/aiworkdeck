@@ -334,7 +334,7 @@ export default {
 
 .clip-card:hover {
   border-color: var(--awd-mint);
-  box-shadow: 0 8px 16px rgba(91, 209, 151, 0.12);
+  box-shadow: 0 8px 16px rgba(137, 168, 160, 0.12);
   transform: translateY(-2px);
 }
 

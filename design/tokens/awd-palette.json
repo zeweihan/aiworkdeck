@@ -8,6 +8,8 @@
     "checkba_cloud: frontend/src/App.vue 的 :root/--awd-* 令牌块",
     "checkba_cloud: frontend/src/uni.scss 的 $awd-* SCSS 变量",
     "checkba_cloud: office-addin/taskpane/styles.css 的 --awd-* 令牌块",
+    "checkba_cloud: frontend/src/zetaoffice/editor.html 的 :root/--awd-* 令牌块",
+    "checkba_cloud: frontend/src/zetaoffice/public/office_thread.js 的 set_app_theme（LO AppBackground 数字字面量，与 canvas 角色同值手动同步）",
     "aiworkdeckweb: app/globals.css 的 --king-* 变量与 Tailwind v4 @theme inline 映射",
     "aiworkdeckweb: lib/plugin-template.ts 内嵌的第三方插件模板令牌表",
     "aiworkdeck_mobile: ios/Sources/Design/Tokens.swift",

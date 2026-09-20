@@ -346,13 +346,18 @@ def to_guizang(svg, layout=None):
     """歸藏风 — the Guizang "Swiss International" theme (for online / lecture /
     social sharing). Same 奇川风 geometry & layout; only the surface changes:
       · sans-serif type (Inter / Noto Sans SC), replacing the Song serif;
-      · Klein-blue #002FA7 accent — decision nodes become blue DIAMONDS with white
-        text; emphasis / feedback edges turn blue;
+      · single-accent theme — decision nodes become solid accent DIAMONDS with
+        white text; emphasis / feedback edges take the accent;
+        [AWD-PATCH 4 · 见 litviz/PATCHES.md] the accent was Klein blue #002FA7 upstream; it is 墨竹青 #2E5A50
+        here so the engine's one saturated anchor matches the product palette.
+        Everything else about 歸藏风 (grey ramp, geometry, type) is untouched;
       · plain white modules with a light-grey hairline border and SHARP corners
         (small radii -> 0; the terminal pill keeps its stadium shape);
       · dark-grey text, light-grey connectors (soft, not heavy)."""
+    # IKB keeps its upstream name (it is referenced further down); only the value
+    # moved off Klein blue. [AWD-PATCH 4 · 见 litviz/PATCHES.md]
     PAPER, INK, SUB, LINE, BORDER, IKB = \
-        "#FAFAF8", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#002FA7"
+        "#FAFAF8", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#2E5A50"
     _sub_reset()
     svg = _sub(r'font-family="[^"]*"',
                "font-family=\"Inter, 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif\"",
@@ -524,8 +529,9 @@ def to_guizang(svg, layout=None):
         return tag + ">" + content + "</text>"
     svg = re.sub(r'(<text\b[^>]*?)>([^<]*)</text>', _mono, svg, flags=re.S)
 
-    # any element STILL off-palette (timeline / gantt / comparison) -> blue / grey / white
-    THEME = {"#FAFAF8", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#E0E0E0", "#002FA7", "#FFFFFF"}
+    # any element STILL off-palette (timeline / gantt / comparison) -> accent / grey / white
+    # [AWD-PATCH 4 · 见 litviz/PATCHES.md] accent moved from #002FA7 to #2E5A50
+    THEME = {"#FAFAF8", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#E0E0E0", "#2E5A50", "#FFFFFF"}
     def _lum(c):
         r, g, b = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
         return (0.299 * r + 0.587 * g + 0.114 * b) / 255

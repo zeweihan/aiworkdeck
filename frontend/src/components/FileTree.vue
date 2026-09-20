@@ -68,7 +68,7 @@
               <text class="form-label">{{ $t('fileTree.currentTags') }}</text>
               <view class="tags-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; min-height: 32px;">
                   <view v-if="!targetFileForTags || !targetFileForTags.tags || targetFileForTags.tags.length === 0" class="empty-tags">
-                     <text style="color: #6C757D; font-size: 13px;">{{ $t('fileTree.noTags') }}</text>
+                     <text style="color: var(--awd-text-2); font-size: 13px;">{{ $t('fileTree.noTags') }}</text>
                   </view>
                   <TagChip
                     v-for="tag in (targetFileForTags ? targetFileForTags.tags : [])"
@@ -338,11 +338,11 @@
       @dragenter="onTreeDragEnter" @dragover="onTreeDragOver" @dragleave="onTreeDragLeave" @drop="onTreeDrop"
     >
       <!-- Recycle Bin Header -->
-      <view v-if="viewMode === 'recycle'" class="tree-toolbar" style="background: #E8F3ED; border-bottom: 1px solid #E9ECEF; justify-content: space-between;">
+      <view v-if="viewMode === 'recycle'" class="tree-toolbar" style="background: #E8F3ED; border-bottom: 1px solid var(--awd-surface-3); justify-content: space-between;">
          <svg class="recycle-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
            <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
          </svg>
-         <text style="font-size: 12px; color: #1A5336; display: flex; align-items: center; font-weight: 500;">{{ $t('fileTree.recycleBinCount', { count: recycleBin.length }) }}</text>
+         <text style="font-size: 12px; color: var(--awd-accent-text); display: flex; align-items: center; font-weight: 500;">{{ $t('fileTree.recycleBinCount', { count: recycleBin.length }) }}</text>
          <text class="action-btn recycle-back-btn" @tap="exitRecycleBin">{{ $t('fileTree.back') }}</text>
       </view>
 
@@ -2906,7 +2906,7 @@ export default {
     async handleCreateNewTag(payload) {
        // payload can be string (legacy) or { name, color, type } object
        const tagName = typeof payload === 'string' ? payload : payload?.name
-       const tagColor = typeof payload === 'object' ? payload?.color : '#5BD197'
+       const tagColor = typeof payload === 'object' ? payload?.color : '#89A8A0'
        const tagType = typeof payload === 'object' ? payload?.type : undefined
 
        if (!this.targetFileForTags || !tagName) return
@@ -2951,7 +2951,7 @@ export default {
 
       // Sort tags by spectral position (hue)
       const sortedTags = this.sortTagsBySpectrum(tags)
-      const colors = sortedTags.map(t => t.color || '#5BD197')
+      const colors = sortedTags.map(t => t.color || '#89A8A0')
 
       if (colors.length === 1) {
         return { background: colors[0] }
@@ -4231,7 +4231,7 @@ export default {
 
 .awd-input:focus {
   border-color: var(--awd-mint); /* Mint Green */
-  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.15);
+  box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.15);
 }
 
 .awd-dialog-footer {

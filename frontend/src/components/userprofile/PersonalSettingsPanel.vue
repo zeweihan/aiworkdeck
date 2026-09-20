@@ -840,8 +840,8 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-dark: #212629;
-$text-secondary: #6C757D;
+$brand-dark: #221F1A;
+$text-secondary: var(--awd-text-2);
 
 .panel-settings {
   background: var(--awd-surface);
@@ -900,7 +900,7 @@ $text-secondary: #6C757D;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: #EDE9DF;
   font-size: 20px;
   overflow: hidden;
   flex-shrink: 0;

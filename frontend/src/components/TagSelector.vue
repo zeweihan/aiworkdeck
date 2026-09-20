@@ -133,11 +133,16 @@ export default {
       pendingTagName: '',
       selectedType: TAG_TYPE_NORMAL,
       selectedColor: TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL],
+      // 东方清雅体系的分类色板（design/tokens/awd-palette.json v2.0.0）。
+      // 前十档与 TagManager 同源：CIELCh 上 L*=45 / C*=26，色相角 24° 起每 36° 一格。
+      // 后六档是浅一阶的第二梯队（L*=60 / C*=24，色相角 42° 起每 60° 一格），
+      // 靠明度差而不是更密的色相分格拉开距离；末档是暖中性灰。
+      // 十七档两两最小色差 CIEDE2000 = 10.33（旧板 4.99）。
       presetColors: [
-        '#EF4444', '#F97316', '#F59E0B', '#84CC16', '#10B981',
-        '#5BD197', '#14B8A6', '#06B6D4', '#3B82F6', '#6366F1',
-        '#8B5CF6', '#A855F7', '#EC4899', '#F43F5E', '#6B7280',
-        '#B45309', '#9B1C31'
+        '#955B5A', '#8A6246', '#756B3F', '#58724A', '#387661',
+        '#17767B', '#27728F', '#536B95', '#78628B', '#8F5B74',
+        '#B88475', '#979267', '#679B83', '#529BAC', '#8290BA',
+        '#B2839E', '#6B675C'
       ],
       // 新建标签弹层里的类型三段控件，顺序与分组顺序一致
       typeOptions: [
@@ -230,7 +235,7 @@ export default {
 
 .input-wrapper:focus-within {
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 2px rgba(26, 83, 54, 0.1);
+  box-shadow: 0 0 0 2px rgba(46, 90, 80, 0.1);
 }
 
 .tag-input {
@@ -445,7 +450,7 @@ export default {
 
 .color-option-compact.selected {
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 2px rgba(26, 83, 54, 0.2);
+  box-shadow: 0 0 0 2px rgba(46, 90, 80, 0.2);
   transform: scale(1.1);
 }
 

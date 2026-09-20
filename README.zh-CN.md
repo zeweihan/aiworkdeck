@@ -12,11 +12,11 @@
 
 <p align="center">
   <a href="https://github.com/zeweihan/aiworkdeck/stargazers"><img src="https://img.shields.io/github/stars/zeweihan/aiworkdeck?style=social" alt="Stars"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=1A5336" alt="Release"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1A5336" alt="Platform"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=2E5A50" alt="Release"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-2E5A50" alt="Platform"></a>
   <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-blue.svg" alt="License: AGPLv3"></a>
-  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/%E5%95%86%E4%B8%9A%E8%AE%B8%E5%8F%AF-%E5%8F%AF%E7%94%A8-1A5336.svg" alt="商业许可"></a>
-  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-aiworkdeck.com-1A5336.svg" alt="官网"></a>
+  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/%E5%95%86%E4%B8%9A%E8%AE%B8%E5%8F%AF-%E5%8F%AF%E7%94%A8-2E5A50.svg" alt="商业许可"></a>
+  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-aiworkdeck.com-2E5A50.svg" alt="官网"></a>
 </p>
 
 <p align="center">

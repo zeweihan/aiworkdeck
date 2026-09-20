@@ -379,8 +379,8 @@ export default {
   font-size: 22rpx;
   padding: 4rpx 12rpx;
   border-radius: 999rpx;
-  background-color: rgba($uni-color-primary, 0.08);
-  color: $uni-color-primary;
+  background-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
 }
 
 .meta-row {
@@ -430,8 +430,8 @@ export default {
   line-height: 44rpx;
   text-align: center;
   border-radius: 999rpx;
-  background-color: rgba($uni-color-primary, 0.08);
-  color: $uni-color-primary;
+  background-color: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
   font-size: 28rpx;
 }
 
@@ -486,8 +486,8 @@ export default {
   font-size: 22rpx;
   padding: 2rpx 8rpx;
   border-radius: 999rpx;
-  background-color: rgba($uni-color-primary, 0.06);
-  color: $uni-color-primary;
+  background-color: var(--awd-accent-wash);
+  color: var(--awd-accent-text);
 }
 
 .var-value-input {
@@ -538,7 +538,7 @@ export default {
   font-weight: 500;
   color: var(--awd-text);
   padding-left: 12rpx;
-  border-left: 4rpx solid $uni-color-primary;
+  border-left: 4rpx solid var(--awd-accent);
 }
 </style>
 

@@ -863,7 +863,7 @@ function pickAudioMime() {
 
 .awdfb-launcher:hover {
   border-color: var(--awd-mint);
-  box-shadow: 0 4px 16px rgba(26, 83, 54, 0.18);
+  box-shadow: 0 4px 16px rgba(46, 90, 80, 0.18);
 }
 
 /* 拖动中：抬起来一点，并且关掉 transition——否则每一帧都在补间，跟手感全无 */
@@ -871,7 +871,7 @@ function pickAudioMime() {
   cursor: grabbing;
   transition: none;
   border-color: var(--awd-mint);
-  box-shadow: 0 8px 22px rgba(26, 83, 54, 0.26);
+  box-shadow: 0 8px 22px rgba(46, 90, 80, 0.26);
 }
 
 .awdfb-mask {

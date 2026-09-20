@@ -661,7 +661,7 @@ export default {
 
 .var-card:hover {
   border-color: var(--awd-mint);
-  box-shadow: 0 8px 24px rgba(91, 209, 151, 0.15); /* Mint shadow */
+  box-shadow: 0 8px 24px rgba(137, 168, 160, 0.15); /* Mint shadow */
   transform: translateY(-2px);
 }
 
@@ -809,7 +809,7 @@ export default {
   &:focus {
     border-color: var(--awd-mint);
     outline: none;
-    box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.2);
+    box-shadow: 0 0 0 2px rgba(137, 168, 160, 0.2);
   }
 }
 

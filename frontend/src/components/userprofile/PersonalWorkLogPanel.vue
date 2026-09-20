@@ -243,7 +243,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-dark: #212629;
+$brand-dark: #221F1A;
 
 .panel-work-log {
   width: 100%;
@@ -278,7 +278,7 @@ $brand-dark: #212629;
   line-height: 36px;
   padding: 0 20px;
   background: $brand-dark;
-  color: var(--awd-text-on-accent);
+  color: #EDE9DF;
   font-size: 13px;
   border-radius: 6px;
   border: none;

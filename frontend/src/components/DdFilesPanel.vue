@@ -316,7 +316,7 @@ export default {
   &.active {
     border-color: var(--awd-accent);
     background-color: var(--awd-accent-soft);
-    box-shadow: 0 2px 8px rgba(26, 83, 54, 0.1);
+    box-shadow: 0 2px 8px rgba(46, 90, 80, 0.1);
   }
 
   &.active:hover {

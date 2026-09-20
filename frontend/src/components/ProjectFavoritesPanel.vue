@@ -282,13 +282,13 @@ export default {
 
 .fav-card:hover {
   border-color: var(--awd-mint);
-  box-shadow: 0 8px 24px rgba(91, 209, 151, 0.15);
+  box-shadow: 0 8px 24px rgba(137, 168, 160, 0.15);
   transform: translateY(-2px);
 }
 
 .fav-card.card--highlight {
   border-color: var(--awd-mint);
-  box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.3);
+  box-shadow: 0 0 0 2px rgba(137, 168, 160, 0.3);
 }
 
 .card-header {

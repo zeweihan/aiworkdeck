@@ -542,7 +542,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* VS Code 扩展栏密度 + 产品浅色体系（森林绿 #1A5336 / mint #5BD197 点缀） */
+/* VS Code 扩展栏密度 + 产品浅色体系（墨竹青 #2E5A50 主色 / mint var(--awd-mint)（竹月青氛围色）点缀） */
 .msb {
   display: flex;
   flex-direction: column;
@@ -563,7 +563,7 @@ export default {
 
   &:focus-within {
     border-color: var(--awd-mint);
-    box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.15);
+    box-shadow: 0 0 0 2px rgba(137, 168, 160, 0.15);
   }
 }
 
@@ -843,7 +843,7 @@ export default {
   /* 付费未购：描边而非实心，与「安装」区分开——点它去的是官网，不是本机动作 */
   &.buy {
     background: var(--awd-surface);
-    border-color: var(--awd-accent);
+    border-color: var(--awd-accent-text);
 
     text {
       color: var(--awd-accent-text);

@@ -916,7 +916,7 @@ export default {
 
 .shelf-card:hover {
   border-color: var(--awd-accent);
-  box-shadow: 0 1px 4px rgba(26, 83, 54, 0.12);
+  box-shadow: 0 1px 4px rgba(46, 90, 80, 0.12);
 }
 
 .shelf-card-main {

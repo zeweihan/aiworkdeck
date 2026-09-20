@@ -223,7 +223,9 @@ in `render.py` (plus a theme-aware, roomier box padding in the renderers, keyed 
 
 Frozen rules (locked by the `歸藏风 · …` guard):
 
-- **Palette — Klein blue + grey + white, nothing else.** Accent `#002FA7` (IKB),
+- **Palette — one accent + grey + white, nothing else.** Accent `#2E5A50`
+  (墨竹青; upstream ships Klein blue `#002FA7` here — see `litviz/PATCHES.md`
+  [AWD-PATCH 4]),
   paper `#FAFAF8`, dark-grey ink `#333333`, secondary grey `#737373`, hairline
   border `#D4D4D2`, soft connector grey `#BDBDBD`, white. The guard rejects any
   off-palette colour, so timeline / gantt / comparison shading is remapped in too.
@@ -271,7 +273,7 @@ only engages when 歸藏风 is requested.
   `_THEME == "guizang"` (flow / relation / tree / timeline cards / comparison),
   so blocks read as substantial Swiss modules. 奇川风 padding is untouched.
 - Palette whitelist (guard-enforced): `#FAFAF8 #333333 #737373 #BDBDBD #D4D4D2
-  #E0E0E0 #002FA7 #FFFFFF` — nothing else may appear.
+  #E0E0E0 #2E5A50 #FFFFFF` — nothing else may appear. [AWD-PATCH 4]
 
 ### 白描 — filled-shape & marker rules (finalised)
 

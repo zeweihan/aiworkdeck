@@ -27,7 +27,11 @@ export const THEME_TOKEN_NAMES = [
   'bg', 'surface', 'surface-2', 'surface-3',
   'text', 'text-2', 'text-3', 'text-on-accent', 'text-on-mint',
   'border-subtle', 'border', 'border-strong',
-  'accent', 'accent-hover', 'accent-text', 'accent-soft', 'accent-wash', 'mint',
+  'accent', 'accent-hover', 'accent-text', 'accent-soft', 'accent-wash',
+  // 'mint' 这个名字是公开契约：第三方插件 CSS 里写着 var(--awd-mint)，只换值不改名
+  // （东方清雅体系下它的值是竹月青 #89A8A0）；'bamboo' 是同值语义别名，新代码用它。
+  'mint', 'bamboo',
+  'gold', 'gold-line', 'gold-text', 'gold-soft',
   'danger', 'danger-text', 'danger-soft',
   'warning', 'warning-text', 'warning-soft',
   'info', 'info-text', 'info-soft',

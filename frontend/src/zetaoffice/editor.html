@@ -16,23 +16,154 @@
     } catch (e) { /* ignore */ }
   </script>
   <style>
-    html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #F1F3F5; font: 13px/1.5 system-ui, sans-serif; }
-    /* 与宿主 --awd-canvas 同值（light #F1F3F5 / dark #101214）。boot 前画布不可见，
-       这个底色就是用户看到的整个编辑器区域；class 由 head 里的内联脚本按 ?theme=
-       同步设好，避免深色下先白一闪。boot 后由 set_app_theme 把 LO AppBackground
-       调成同色。 */
-    html.theme-dark, html.theme-dark body { background: #101214; }
+    /* 配色令牌。本页是**独立 document**（桌面壳是 <webview partition="persist:zetaoffice">，
+       Web 版是同源 <iframe>），宿主 App.vue 的 :root 自定义属性继承不进来；注入样式的
+       composables 又都跑在本 document 内，拿不到宿主的 getComputedStyle，所以整套
+       --awd-* 在这里自带一份。名字与取值同 App.vue 一字不差（令牌名是公开契约，只换值）。
+       深浅切换沿用本页既有的 html.theme-dark 开关（head 里的防白闪内联脚本先挂，
+       运行期由 editor-main.js 的 applyTheme 跟着宿主 set-theme 消息切）。 */
+    html {
+      /* AWD-TOKENS:BEGIN editor-light */
+      /* 此段由 scripts/generate-tokens.mjs 生成，勿手改。色源：design/tokens/awd-palette.json */
+      /* 表面：底色 → 卡片 → 悬停/凹陷 → 更重的填充 */
+      --awd-bg: #F1EFE7;
+      --awd-surface: #FCFBF7;
+      --awd-surface-2: #E9E6DC;
+      --awd-surface-3: #DFDBCE;
+      /* 文字三阶 + 强调底上的反白 */
+      --awd-text: #2B2A26;
+      --awd-text-2: #6B675C;
+      --awd-text-3: #A8A296;
+      --awd-text-on-accent: #FFFFFF;
+      /* 边框三阶 */
+      --awd-border-subtle: #EAE7DD;
+      --awd-border: #DDD8CA;
+      --awd-border-strong: #C3BCA9;
+      /* 品牌墨竹青：accent 作底、accent-text 作字（深色下两者取值不同，必须分开） */
+      --awd-accent: #2E5A50;
+      --awd-accent-hover: #254A41;
+      --awd-accent-text: #2E5A50;
+      --awd-accent-soft: #E3EDE9;
+      --awd-accent-wash: rgba(46, 90, 80, 0.05);
+      /* 氛围色竹月青：大面积浅底/选中/悬停/图表/装饰线，对白底仅 2.6:1，不承载正文与按钮文字。
+         --awd-mint 是插件 SDK 的公开契约名（utils/appTheme.js 的 THEME_TOKEN_NAMES →
+         PluginPane 注入第三方插件 iframe，插件 CSS 里写着 var(--awd-mint)），改名会静默
+         打破它们，所以名字保留、只换值；--awd-bamboo 是同值别名，新代码用语义正确的这个。 */
+      --awd-mint: #89A8A0;
+      --awd-bamboo: #89A8A0;
+      --awd-text-on-mint: #1E3A33;
+      /* 浅茶金点睛：分隔金线 / 引用块 / 徽章 / 空状态描边。对白底 1.7:1，不做大面积底色、
+         不承载任何信息层级；需要茶金文字时一律用 gold-text。 */
+      --awd-gold: #D7C5A1;
+      --awd-gold-line: #C9B48A;
+      --awd-gold-text: #7E6439;
+      --awd-gold-soft: #F5EFE2;
+      /* 语义状态 */
+      --awd-danger: #B5483C;
+      --awd-danger-text: #9A3A30;
+      --awd-danger-soft: #FAF0EE;
+      --awd-warning: #B8842B;
+      --awd-warning-text: #8A6320;
+      --awd-warning-soft: #F8F1E2;
+      --awd-info: #3C5A73;
+      --awd-info-text: #2F4A60;
+      --awd-info-soft: #EDF1F4;
+      /* 阴影与遮罩 */
+      --awd-shadow-sm: 0 1px 2px rgba(58, 52, 40, 0.06);
+      --awd-shadow-md: 0 4px 16px rgba(58, 52, 40, 0.08);
+      --awd-shadow-lg: 0 12px 32px rgba(58, 52, 40, 0.16);
+      --awd-overlay: rgba(35, 32, 26, 0.45);
+      /* 空态光晕（工作区/首屏那圈柔光）与整页斜向柔光的落点色 */
+      --awd-halo-1: #E3EDE9;
+      --awd-halo-2: rgba(46, 90, 80, 0.04);
+      --awd-halo-page: #E3EDE9;
+      /* 毛玻璃表面（登录页那种半透明卡片） */
+      --awd-glass: rgba(252, 251, 247, 0.75);
+      --awd-glass-border: rgba(255, 255, 255, 0.5);
+      /* 编辑器纸外工作区（纸张本身由 LOWA 引擎渲染，永远是纸白，不参与主题） */
+      --awd-canvas: #E4E0D4;
+      /* AWD-TOKENS:END editor-light */
+      color-scheme: light;
+    }
+    html.theme-dark {
+      /* AWD-TOKENS:BEGIN editor-dark */
+      /* 此段由 scripts/generate-tokens.mjs 生成，勿手改。色源：design/tokens/awd-palette.json */
+      /* 表面：底色 → 卡片 → 悬停/凹陷 → 更重的填充 */
+      --awd-bg: #191713;
+      --awd-surface: #221F1A;
+      --awd-surface-2: #2B2721;
+      --awd-surface-3: #363129;
+      /* 文字三阶 + 强调底上的反白 */
+      --awd-text: #EDE9DF;
+      --awd-text-2: #B0AA9C;
+      --awd-text-3: #7D7768;
+      --awd-text-on-accent: #FFFFFF;
+      /* 边框三阶 */
+      --awd-border-subtle: #2B2721;
+      --awd-border: #3D372E;
+      --awd-border-strong: #524B3F;
+      /* 品牌墨竹青：accent 作底、accent-text 作字（深色下两者取值不同，必须分开） */
+      --awd-accent: #3E6E62;
+      --awd-accent-hover: #4C8576;
+      --awd-accent-text: #89A8A0;
+      --awd-accent-soft: rgba(137, 168, 160, 0.14);
+      --awd-accent-wash: rgba(137, 168, 160, 0.06);
+      /* 氛围色竹月青：大面积浅底/选中/悬停/图表/装饰线，对白底仅 2.6:1，不承载正文与按钮文字。
+         --awd-mint 是插件 SDK 的公开契约名（utils/appTheme.js 的 THEME_TOKEN_NAMES →
+         PluginPane 注入第三方插件 iframe，插件 CSS 里写着 var(--awd-mint)），改名会静默
+         打破它们，所以名字保留、只换值；--awd-bamboo 是同值别名，新代码用语义正确的这个。 */
+      --awd-mint: #89A8A0;
+      --awd-bamboo: #89A8A0;
+      --awd-text-on-mint: #1E3A33;
+      /* 浅茶金点睛：分隔金线 / 引用块 / 徽章 / 空状态描边。对白底 1.7:1，不做大面积底色、
+         不承载任何信息层级；需要茶金文字时一律用 gold-text。 */
+      --awd-gold: #D7C5A1;
+      --awd-gold-line: #8A7A5C;
+      --awd-gold-text: #D7C5A1;
+      --awd-gold-soft: rgba(215, 197, 161, 0.13);
+      /* 语义状态 */
+      --awd-danger: #CC6154;
+      --awd-danger-text: #E8938A;
+      --awd-danger-soft: rgba(181, 72, 60, 0.16);
+      --awd-warning: #D19C3D;
+      --awd-warning-text: #E0B461;
+      --awd-warning-soft: rgba(184, 132, 43, 0.15);
+      --awd-info: #5E8299;
+      --awd-info-text: #93B3C6;
+      --awd-info-soft: rgba(60, 90, 115, 0.18);
+      /* 阴影与遮罩 */
+      --awd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+      --awd-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+      --awd-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+      --awd-overlay: rgba(0, 0, 0, 0.6);
+      /* 空态光晕（工作区/首屏那圈柔光）与整页斜向柔光的落点色 */
+      --awd-halo-1: rgba(255, 255, 255, 0.045);
+      --awd-halo-2: rgba(255, 255, 255, 0);
+      --awd-halo-page: #1D1A16;
+      /* 毛玻璃表面（登录页那种半透明卡片） */
+      --awd-glass: rgba(34, 31, 26, 0.74);
+      --awd-glass-border: rgba(255, 255, 255, 0.10);
+      /* 编辑器纸外工作区（纸张本身由 LOWA 引擎渲染，永远是纸白，不参与主题） */
+      --awd-canvas: #141210;
+      /* AWD-TOKENS:END editor-dark */
+      color-scheme: dark;
+    }
+
+    html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: var(--awd-canvas); font: 13px/1.5 system-ui, sans-serif; }
+    /* 底色走 --awd-canvas（与宿主同名令牌同值）。boot 前画布不可见，这个底色就是用户
+       看到的整个编辑器区域；深色分支由上面 html.theme-dark 里的令牌取值接管，不再单写
+       一条覆盖规则。boot 后由 set_app_theme 把 LO AppBackground 调成同色。 */
     /* Qt REQUIRES id="qtcanvas"; canvas must have no border/padding (outline ok). */
     #qtcanvas { width: 100%; height: 100%; border: 0; padding: 0; outline: 0; visibility: hidden; }
     /* Verification panel (only shown with ?verify=1) */
     #verify { position: fixed; top: 0; left: 0; right: 0; display: none; gap: 8px; align-items: center;
-      padding: 6px 10px; background: #1F2937; color: #fff; flex-wrap: wrap; z-index: 10; }
+      padding: 6px 10px; background: var(--awd-surface-3); color: var(--awd-text); flex-wrap: wrap; z-index: 10; }
     #verify.on { display: flex; }
-    #verify button { font: inherit; padding: 4px 10px; border: 0; border-radius: 4px; background: #059669; color: #fff; cursor: pointer; }
-    #verify button:disabled { background: #6b7280; cursor: not-allowed; }
+    #verify button { font: inherit; padding: 4px 10px; border: 0; border-radius: 4px; background: var(--awd-accent); color: var(--awd-text-on-accent); cursor: pointer; }
+    #verify button:disabled { background: var(--awd-text-3); cursor: not-allowed; }
     #verify input { font: inherit; padding: 4px 8px; border: 0; border-radius: 4px; width: 240px; }
     #vlog { position: fixed; right: 8px; bottom: 8px; width: 380px; max-height: 38vh; display: none;
-      padding: 8px; background: #0b1220; color: #d1fae5; font: 11px/1.45 ui-monospace, monospace;
+      padding: 8px; background: var(--awd-surface-3); color: var(--awd-text); font: 11px/1.45 ui-monospace, monospace;
       overflow: auto; white-space: pre-wrap; word-break: break-all; border-radius: 6px; z-index: 10; }
     #vlog.on { display: block; }
   </style>

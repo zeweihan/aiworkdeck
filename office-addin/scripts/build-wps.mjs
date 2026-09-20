@@ -46,8 +46,8 @@ const BRAND_STYLE = `    <style id="awd-brand">
         body {
             margin: 0;
             padding: 48px 24px 64px;
-            background: #F8F9FA;
-            color: #212529;
+            background: #F1EFE7;
+            color: #2B2A26;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Inter", sans-serif;
             -webkit-font-smoothing: antialiased;
         }
@@ -60,66 +60,66 @@ const BRAND_STYLE = `    <style id="awd-brand">
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 0.22em;
-            color: #1A5336;
+            color: #2E5A50;
         }
-        .awd-eyebrow-line { width: 32px; height: 1px; background: #1A5336; }
+        .awd-eyebrow-line { width: 32px; height: 1px; background: #2E5A50; }
         .awd-note {
             max-width: 760px;
             margin: -18px auto 24px;
             padding: 12px 16px;
-            background: #fff;
-            border: 1px solid rgba(233, 236, 239, 0.9);
-            border-left: 3px solid #1A5336;
+            background: #FCFBF7;
+            border: 1px solid rgba(223, 219, 206, 0.9);
+            border-left: 3px solid #2E5A50;
             border-radius: 8px;
             font-size: 13px;
             line-height: 1.8;
-            color: #495057;
+            color: #6B675C;
         }
-        .awd-note b { color: #123A26; }
+        .awd-note b { color: #254A41; }
         .divTitle {
             max-width: 760px;
             margin: 0 auto 28px;
             font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
             font-size: 32px;
             font-weight: 700;
-            color: #123A26;
+            color: #254A41;
         }
         .addonList {
             max-width: 760px !important; /* 机制 JS 会写 inline 800*dpr，压回 */
             margin: 0 auto;
             padding: 8px 24px 16px;
-            background: #fff;
-            border: 1px solid rgba(233, 236, 239, 0.9);
+            background: #FCFBF7;
+            border: 1px solid rgba(223, 219, 206, 0.9);
             border-radius: 12px;
-            box-shadow: 0 18px 40px -18px rgba(18, 58, 38, 0.12);
+            box-shadow: 0 18px 40px -18px rgba(46, 90, 80, 0.12);
         }
         .addonItem { font-size: 13px; line-height: 40px; margin-bottom: 0; border-radius: 6px; }
-        .addonItem .addonItemName4 { font-size: 12px; line-height: 1.6; color: #868E96; word-break: break-all; }
-        .addonItem:hover { border: 0; border-radius: 6px; background: #F1F3F5; }
+        .addonItem .addonItemName4 { font-size: 12px; line-height: 1.6; color: #A8A296; word-break: break-all; }
+        .addonItem:hover { border: 0; border-radius: 6px; background: #E9E6DC; }
         .addonItemTitle,
         .addonItemTitle:hover {
             background: transparent;
             border: 0;
-            border-bottom: 1px solid #E9ECEF;
+            border-bottom: 1px solid #DFDBCE;
             border-radius: 0;
             font-size: 11px;
             letter-spacing: 0.08em;
-            color: #868E96;
+            color: #A8A296;
         }
-        .addonItemButton { padding: 5px 14px; background-color: #1A5336; border-radius: 6px; font-size: 12px; }
-        .addonItemButton:hover { background-color: #123A26; }
+        .addonItemButton { padding: 5px 14px; background-color: #2E5A50; border-radius: 6px; font-size: 12px; }
+        .addonItemButton:hover { background-color: #254A41; }
         .ClearAll {
             max-width: 760px !important;
             margin: 24px auto 0;
             box-sizing: border-box;
             font-size: 13px;
             line-height: 40px;
-            color: #868E96;
-            background: #fff;
-            border: 1px solid #E9ECEF;
+            color: #A8A296;
+            background: #FCFBF7;
+            border: 1px solid #DFDBCE;
             border-radius: 8px;
         }
-        .ClearAll:hover { border-radius: 8px; border-color: #ADB5BD; background: #F1F3F5; color: #C0392B; }
+        .ClearAll:hover { border-radius: 8px; border-color: #C3BCA9; background: #E9E6DC; color: #B5483C; }
         /* 空态：WPS 本地服务没连上时表格只剩表头，给一句解释（纯 CSS，不动机制） */
         .addonList:has(.addonItemTitle:only-child)::after {
             content: "未检测到已发布的加载项。请确认本机已安装并启动过 WPS Office，并允许浏览器打开 WPS 以连接本地服务。";
@@ -127,7 +127,7 @@ const BRAND_STYLE = `    <style id="awd-brand">
             padding: 28px 0 20px;
             text-align: center;
             font-size: 13px;
-            color: #868E96;
+            color: #A8A296;
         }
     </style>`
 

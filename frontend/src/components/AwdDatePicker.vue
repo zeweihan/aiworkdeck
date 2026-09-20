@@ -25,7 +25,7 @@
 
 <script>
 const BORDER_DEFAULT = '#E6EAE8'
-const BORDER_FOCUS = '#5BD197'
+const BORDER_FOCUS = 'var(--awd-mint)'
 
 export default {
   name: 'AwdDatePicker',
@@ -69,10 +69,10 @@ export default {
         'padding: 0 10px',
         'border: 1px solid ' + BORDER_DEFAULT,
         'border-radius: 6px',
-        'background-color: #fff',
+        'background-color: var(--awd-surface)',
         'font-size: 13px',
         'font-family: inherit',
-        'color: #212629',
+        'color: #2B2A26',
         'outline: none',
         'transition: border-color 0.15s ease',
       ].join(';')

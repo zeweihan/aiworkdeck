@@ -3766,12 +3766,14 @@ const EXEC = {
   // ---- [主题] 纸外工作区配色（dev-board#273）------------------------------
   // 宿主深浅主题切换时把 LO 的 AppBackground（纸张周围的工作区底色）跟着切；
   // DocColor（纸张本身）刻意不动——文档以打印观感为准，深色下纸仍是纸白。
-  // 配置项运行时可写（与 setRedlineAuthor 同一机制）；色值与宿主 --awd-canvas
-  // 令牌同源（light #F1F3F5 / dark #101214），两边不一致会在 iframe 底与画布
-  // 之间露出一圈异色缝。
+  // 配置项运行时可写（与 setRedlineAuthor 同一机制）；色值与 --awd-canvas 令牌同源
+  // （light #E4E0D4 / dark #141210，见 design/tokens/awd-palette.json 的
+  // roles.light.canvas / roles.dark.canvas，editor.html 头部那份令牌表同值），
+  // 两边不一致会在 iframe 底与画布之间露出一圈异色缝。本文件跑在 worker 里没有
+  // DOM，读不到 CSS 自定义属性，所以只能是数字字面量——改配色时跟着色源一起改。
   set_app_theme(p) {
     const mode = p && p.mode === 'dark' ? 'dark' : 'light';
-    const color = mode === 'dark' ? 0x101214 : 0xF1F3F5;
+    const color = mode === 'dark' ? 0x141210 : 0xE4E0D4;
     try {
       const provider = context.getServiceManager().createInstanceWithContext(
         'com.sun.star.configuration.ConfigurationProvider', context);

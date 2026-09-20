@@ -175,11 +175,13 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   Object.assign(preview.style, {
     position: 'absolute', display: 'none', zIndex: '6',
     maxWidth: '32em', padding: '2px 7px',
-    background: '#fff', border: '1px solid #C7CDD3', borderRadius: '5px',
-    boxShadow: '0 2px 8px rgba(15, 23, 42, 0.16)',
+    // 色值走 editor.html 头部那套 --awd-*（本页是独立 document，宿主令牌继承不过来）。
+    // 行内 style 里的 var() 照常解析——自定义属性挂在本文档的 documentElement 上。
+    background: 'var(--awd-surface)', border: '1px solid var(--awd-border)', borderRadius: '5px',
+    boxShadow: 'var(--awd-shadow-md)',
     font: '14px/1.45 system-ui, -apple-system, "PingFang SC", sans-serif',
-    color: '#1F2937', whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis',
-    textDecoration: 'underline', textDecorationColor: '#9CA3AF',
+    color: 'var(--awd-text)', whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis',
+    textDecoration: 'underline', textDecorationColor: 'var(--awd-text-3)',
     pointerEvents: 'none',
   })
   host.appendChild(preview)

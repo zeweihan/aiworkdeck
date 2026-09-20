@@ -128,7 +128,10 @@ public class AutoTaggingService {
                         String color = "#" + Integer.toHexString((tagName.hashCode() & 0x00FFFFFF) | 0x1000000).substring(1).toUpperCase(); // Simple deterministic color
                         // Or use a specific system color
                         
-                        Tag tag = tagService.getOrCreateSystemTag(projectId, tagName, "#3B82F6"); // Default blue for auto tags
+                        // 东方清雅配色体系（design/tokens/awd-palette.json，dev-board#731）换代：
+                        // 普通标签取 info 族，与 TagService 的 DEFAULT_COLOR_NORMAL 一致。只换新建
+                        // 默认值，用户已保存的标签颜色是用户内容，不做存量迁移。
+                        Tag tag = tagService.getOrCreateSystemTag(projectId, tagName, "#3C5A73"); // Default info color for auto tags
                         fileTagService.addTagToFile(fileId, tag.getId(), userId);
                     } catch (Exception e) {
                         log.error("Failed to add tag '{}'", tagName, e);

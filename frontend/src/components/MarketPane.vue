@@ -845,9 +845,9 @@ export default {
 /* 视觉规范：aiworkdeckweb/DESIGN.md（法律刊物式编辑排版）。
    色值与官网 globals.css 的 CSS 变量一一对应，改这里先去改官网。 */
 
-$gray-dark: #2C3338;
-$gray-medium: #6C757D;
-$gray-light: #E9ECEF;
+$gray-dark: var(--awd-text);
+$gray-medium: var(--awd-text-2);
+$gray-light: var(--awd-surface-3);
 
 /* 展示级衬线：大标题 / 区块题名 / 卡片题名 / 统计数字。
    桌面端不打包 Noto Serif SC，回落到系统宋体栈（与官网 .font-display 同一条链） */
@@ -1608,8 +1608,8 @@ $gray-light: #E9ECEF;
 /* ---------- 嵌入态（standalone=false）：收掉独立页的大 hero/超宽版式，
    与 AdminPane.vue 其余设置分区（.section-card/.section-header/.section-title）
    的卡片式、浅色、统一留白语言对齐。standalone=true 的独立页（/pages/plugin-market）
-   不带 .is-embedded，一字不变。色值对照：$gray-dark(#2C3338) = admin 的 $text-main，
-   $gray-medium(#6C757D) = admin 的 $text-secondary，$gray-light(#E9ECEF) = admin 的
+   不带 .is-embedded，一字不变。色值对照：$gray-dark(var(--awd-text)) = admin 的 $text-main，
+   $gray-medium(var(--awd-text-2)) = admin 的 $text-secondary，$gray-light(var(--awd-surface-3)) = admin 的
    $border-color，写法不同是因为两个组件的 scss 变量各自 scoped，数值特意保持一致。 */
 .market-pane.is-embedded {
   background: transparent;

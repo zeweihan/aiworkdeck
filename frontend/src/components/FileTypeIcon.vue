@@ -44,8 +44,8 @@ export default {
     // Colors
     colors() {
         return {
-            neutral: '#6C757D',
-            activeBody: '#1A5336', // Forest Green
+            neutral: 'var(--awd-text-2)',
+            activeBody: 'var(--awd-accent)', // Forest Green
             word: '#7E94B3',
             ppt: '#B38F7E',
             pdf: '#B37E7E',

@@ -517,7 +517,7 @@ onMounted(async () => {
   gap: 6px;
   min-height: 40px;
   padding: 4px 10px;
-  border-bottom: 1px solid rgba(26, 83, 54, 0.10);
+  border-bottom: 1px solid rgba(46, 90, 80, 0.10);
   box-shadow: var(--awd-shadow-soft);
   flex-shrink: 0;
 }
@@ -553,15 +553,15 @@ onMounted(async () => {
   max-width: 220px;
   padding: 3px 6px;
   font-size: 12px;
-  color: var(--awd-danger, #b23a3a);
+  color: var(--awd-danger, #B5483C);
 }
 
 .project-retry-btn {
   padding: 2px 8px;
-  border: 1px solid var(--awd-danger, #b23a3a);
+  border: 1px solid var(--awd-danger, #B5483C);
   border-radius: var(--awd-radius-sm);
   background: var(--awd-surface);
-  color: var(--awd-danger, #b23a3a);
+  color: var(--awd-danger, #B5483C);
   flex-shrink: 0;
 }
 
@@ -578,8 +578,8 @@ onMounted(async () => {
 }
 
 .archive-hint.error {
-  color: var(--awd-danger, #b23a3a);
-  border-color: var(--awd-danger, #b23a3a);
+  color: var(--awd-danger, #B5483C);
+  border-color: var(--awd-danger, #B5483C);
 }
 
 .icon-btn {
@@ -646,7 +646,7 @@ onMounted(async () => {
   transition: box-shadow 0.2s ease, transform 0.1s ease;
 }
 
-.avatar-btn:hover { box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.25); }
+.avatar-btn:hover { box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.25); }
 .avatar-btn:active { transform: translateY(1px); }
 
 .avatar-img {
@@ -673,7 +673,7 @@ onMounted(async () => {
   top: 44px;
   right: 8px;
   width: 210px;
-  border: 1px solid rgba(26, 83, 54, 0.12);
+  border: 1px solid rgba(46, 90, 80, 0.12);
   border-radius: var(--awd-radius-md);
   box-shadow: var(--awd-shadow-float);
   padding: 10px 8px 8px;
@@ -767,7 +767,7 @@ onMounted(async () => {
 .np-input:focus {
   outline: none;
   border-color: var(--awd-accent);
-  box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.18);
+  box-shadow: 0 0 0 3px rgba(137, 168, 160, 0.18);
 }
 
 .np-actions {
@@ -824,7 +824,7 @@ onMounted(async () => {
 }
 
 .menu-item.danger:hover {
-  background: rgba(160, 59, 44, 0.08);
+  background: rgba(181, 72, 60, 0.08);
   color: var(--awd-danger);
 }
 

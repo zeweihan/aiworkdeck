@@ -2742,7 +2742,7 @@ export default {
 
 <style lang="scss" scoped>
 /* AI WorkDeck Color System */
-$brand-mint: #5BD197;
+$brand-mint: var(--awd-mint);
 
 $brand-accent: $brand-mint;
 
@@ -2816,7 +2816,7 @@ $brand-accent: $brand-mint;
 .user-avatar-placeholder {
     width: 100%;
     height: 100%;
-    background: #212629;
+    background: #221F1A;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2824,7 +2824,7 @@ $brand-accent: $brand-mint;
 
 .avatar-text {
     font-size: 28px;
-    color: var(--awd-text-on-accent);
+    color: #EDE9DF;
     font-weight: 500;
 }
 
@@ -3165,7 +3165,7 @@ $brand-accent: $brand-mint;
   font-weight: 500;
   border: none;
   cursor: pointer;
-  box-shadow: 0 2px 4px rgba(26, 83, 54, 0.2);
+  box-shadow: 0 2px 4px rgba(46, 90, 80, 0.2);
   transition: background 0.2s;
   
   &:active {

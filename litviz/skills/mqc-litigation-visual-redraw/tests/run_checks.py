@@ -644,11 +644,11 @@ def _():
     dot = re.search(r'<pattern id="gzdot".*?</pattern>', gz, re.S)
     assert dot, "歸藏风 lost its dot-matrix layer"
     col = re.search(r'fill="(#[0-9A-Fa-f]{6})"', dot.group(0)).group(1).upper()
-    assert col != "#002FA7", "the dot grid is painted in the accent colour"
+    assert col != "#2E5A50", "the dot grid is painted in the accent colour"  # [AWD-PATCH 4 · see litviz/PATCHES.md]
     assert col in ("#D4D4D2", "#BDBDBD", "#E0E0E0"), f"dot grid colour {col} is not a light grey"
     slide, _, _, _ = _pptx_bytes(render_flow, load("ex_flow.json"), "guizang")
     pat = re.search(r'<a:pattFill.*?</a:pattFill>', slide, re.S)
-    assert pat and "002FA7" not in pat.group(0), "the deck's backdrop texture is blue"
+    assert pat and "2E5A50" not in pat.group(0), "the deck's backdrop texture is the accent"  # [AWD-PATCH 4 · see litviz/PATCHES.md]
 
 
 @check("歸藏风 · Latin/numeral runs carry TRACKING, in the SVG and in the deck")
@@ -1815,7 +1815,7 @@ def _():
         slide, _, svg, _ = _pptx_bytes(render_flow, load("ex_flow.json"), mode)
         assert "<a:t>" in slide and "<p:sp>" in slide, f"mode {mode}: empty deck"
         if mode == "guizang":
-            assert "002FA7" in slide, "歸藏风 deck lost the Klein blue"
+            assert "2E5A50" in slide, "歸藏风 deck lost its accent"  # [AWD-PATCH 4 · see litviz/PATCHES.md]
         if mode == "mono":
             assert "991B1B" not in slide, "白描 deck still carries the deep red"
 
@@ -2680,7 +2680,8 @@ def _baimiao_mode():
 def _guizang_mode():
     import re as _re
     import render as _render
-    THEME = {"#FAFAF8", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#E0E0E0", "#002FA7", "#FFFFFF"}
+    # [AWD-PATCH 4 · see litviz/PATCHES.md]
+    THEME = {"#FAFAF8", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#E0E0E0", "#2E5A50", "#FFFFFF"}
     for name in ("ex_flow.json", "ex_relation.json", "ex_tree.json"):
         m = load(name)
         mod = _render.choose(m)
@@ -2699,9 +2700,10 @@ def _guizang_mode():
         assert "宋体" not in svg and "Songti" not in svg, f"{name}: serif survived into 歸藏风"
         if name == "ex_flow.json":
             # decision is a 4-point blue DIAMOND, and there is at least one solid blue block
-            assert _re.search(r'<path d="M [\d.]+,[\d.]+ L [\d.]+,[\d.]+ L [\d.]+,[\d.]+ L [\d.]+,[\d.]+ Z" fill="#002FA7"', svg), \
-                f"{name}: decision is not a blue diamond"
-            assert svg.count('fill="#002FA7"') >= 2, f"{name}: expected solid blue blocks (terminals/diamond)"
+            # [AWD-PATCH 4 · see litviz/PATCHES.md]
+            assert _re.search(r'<path d="M [\d.]+,[\d.]+ L [\d.]+,[\d.]+ L [\d.]+,[\d.]+ L [\d.]+,[\d.]+ Z" fill="#2E5A50"', svg), \
+                f"{name}: decision is not an accent diamond"
+            assert svg.count('fill="#2E5A50"') >= 2, f"{name}: expected solid accent blocks (terminals/diamond)"
 
 
 # ---- drawio theming ------------------------------------------------------
@@ -2728,9 +2730,10 @@ def _drawio_themes():
             _hid = max(_d, key=lambda i: _d[i])
             _hub = "c%d" % [n["id"] for n in m["nodes"]].index(_hid)
         gz = cols(_ex.theme_drawio(base, "guizang", _hub))
-        allowed = {"#002FA7", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#FFFFFF"}
+        # [AWD-PATCH 4 · see litviz/PATCHES.md]
+        allowed = {"#2E5A50", "#333333", "#737373", "#BDBDBD", "#D4D4D2", "#FFFFFF"}
         assert gz <= allowed, f"{name}: 歸藏风 drawio stray {gz - allowed}"
-        assert "#002FA7" in gz, f"{name}: 歸藏风 drawio lost its blue"
+        assert "#2E5A50" in gz, f"{name}: 歸藏风 drawio lost its accent"
         # structure untouched — only colours changed
         strip = lambda x: _re.sub(r'(?:fill|stroke|font)Color=#[0-9A-Fa-f]{6}', '', x)
         assert strip(_ex.theme_drawio(base, "guizang", _hub)) == strip(base), \

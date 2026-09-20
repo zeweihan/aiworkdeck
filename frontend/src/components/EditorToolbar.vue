@@ -71,10 +71,10 @@
         <view class="etb-drop" :class="{ open: menu === 'color' }">
           <view ref="trig_color" class="etb-btn" :title="$t('editor.toolbar.textColor')" @tap.stop="toggleMenu('color')">
             <text class="etb-tx">A</text>
-            <view class="etb-swatch" :style="{ background: state.character.color === 'auto' ? '#2C3338' : state.character.color }"></view>
+            <view class="etb-swatch" :style="{ background: state.character.color === 'auto' ? 'var(--awd-text)' : state.character.color }"></view>
           </view>
           <view v-if="menu === 'color'" class="etb-palette" :style="popStyle(128)" @tap.stop>
-            <view v-for="c in TEXT_COLORS" :key="c.v" class="etb-chip" :style="{ background: c.v === 'auto' ? '#2C3338' : c.v }"
+            <view v-for="c in TEXT_COLORS" :key="c.v" class="etb-chip" :style="{ background: c.v === 'auto' ? 'var(--awd-text)' : c.v }"
                   :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('color', c.v)"></view>
           </view>
         </view>
@@ -327,7 +327,7 @@ const ALIGNS = [
   { k: 'justify', cmd: 'align_justify', t: 'alignJustify', icon: 'alignJustify' },
 ]
 const TEXT_COLORS = [
-  { v: 'auto', t: 'auto' }, { v: '#C0392B', t: 'red' }, { v: '#1A5336', t: 'ink' },
+  { v: 'auto', t: 'auto' }, { v: '#C0392B', t: 'red' }, { v: '#2E5A50', t: 'ink' },
   { v: '#1D4ED8', t: 'blue' }, { v: '#B45309', t: 'brown' }, { v: '#6B21A8', t: 'purple' },
   { v: '#495057', t: 'darkGray' }, { v: '#868E96', t: 'gray' },
 ]

@@ -78,16 +78,16 @@ const stamp = new Date(now).toISOString().slice(0, 10)
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Star history of ${REPO}">
   <defs>
     <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5BD197" stop-opacity="0.35"/>
-      <stop offset="1" stop-color="#5BD197" stop-opacity="0.02"/>
+      <stop offset="0" stop-color="#89A8A0" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#89A8A0" stop-opacity="0.02"/>
     </linearGradient>
   </defs>
-  <text x="${M.l}" y="24" font-size="15" font-weight="600" fill="#2D7A52" font-family="ui-sans-serif,system-ui,sans-serif">⭐ ${dates.length} stars · ${REPO}</text>
+  <text x="${M.l}" y="24" font-size="15" font-weight="600" fill="#2E5A50" font-family="ui-sans-serif,system-ui,sans-serif">⭐ ${dates.length} stars · ${REPO}</text>
   <text x="${W - M.r}" y="24" text-anchor="end" font-size="11" fill="#7C8A93" font-family="ui-sans-serif,system-ui,sans-serif">updated ${stamp}</text>
   <g font-family="ui-sans-serif,system-ui,sans-serif">${yTicks}${xTicks}</g>
   <path d="${area}" fill="url(#fill)"/>
-  <path d="${d}" fill="none" stroke="#2D7A52" stroke-width="2.5" stroke-linejoin="round"/>
-  <circle cx="${X(now)}" cy="${Y(dates.length)}" r="4" fill="#1A5336"/>
+  <path d="${d}" fill="none" stroke="#2E5A50" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="${X(now)}" cy="${Y(dates.length)}" r="4" fill="#2E5A50"/>
 </svg>
 `
 fs.mkdirSync(path.dirname(OUT), { recursive: true })
