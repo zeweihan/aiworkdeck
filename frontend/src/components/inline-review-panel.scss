@@ -1,0 +1,58 @@
+/* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+// inline-review-panel.scss — InlineReviewPanel.vue（审阅面板「审校」页）的样式实体。
+// 外置形制照 EvidencePanel + evidence-panel.scss 那套（壳-芯分法）。
+// 配色红线：外壳保持浅色，令牌一律走 --awd-*，不要引入深色 chrome。
+
+.irp { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+// ---- 顶栏：状态一句话 + 开关/重查/深入审校/浮球 ----
+.irp-top { padding: 8px 10px 0; }
+.irp-note { display: block; font-size: 11px; line-height: 1.5; color: var(--awd-text-2); }
+.irp-top-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+.irp-act { padding: 2px 8px; border-radius: 6px; font-size: 12px; color: var(--awd-text-2);
+  border: 1px solid var(--awd-border); background: var(--awd-surface); }
+.irp-act.ok { color: var(--awd-accent-text); border-color: var(--awd-mint); }
+.irp-act.deep { color: var(--awd-accent-text); }
+.irp-act.sw { color: var(--awd-accent-text); background: var(--awd-accent-soft); border-color: transparent; }
+.irp-act.sw.off { color: var(--awd-text-2); background: var(--awd-surface-2); }
+.irp-act.disabled { opacity: 0.45; }
+
+// ---- 分类：计数恒按全量算，切分类不变 ----
+.irp-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px 0; }
+.irp-tab { padding: 1px 7px; border-radius: 10px; font-size: 11px; color: var(--awd-text-2);
+  background: var(--awd-surface-2); border: 1px solid transparent; }
+.irp-tab.on { border-color: var(--awd-accent); color: var(--awd-accent-text); background: var(--awd-accent-soft); font-weight: 600; }
+
+.irp-flash { margin: 8px 10px 0; padding: 6px 8px; border-radius: 6px; font-size: 12px;
+  background: var(--awd-surface-2); color: var(--awd-text-2); }
+
+// ---- 列表 ----
+.irp-list { flex: 1; min-height: 0; padding: 8px 10px; }
+.irp-empty { padding: 28px 6px; }
+.irp-empty-t { display: block; font-size: 13px; color: var(--awd-text); }
+.irp-empty-s { display: block; margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--awd-text-2); }
+
+.irp-item { padding: 8px 9px; margin-bottom: 8px; border-radius: 7px;
+  background: var(--awd-surface); border: 1px solid var(--awd-border); border-left-width: 3px; }
+.irp-item.sev-warn { border-left-color: var(--awd-warning); }
+.irp-item.sev-error { border-left-color: var(--awd-danger); }
+.irp-item.sev-info { border-left-color: var(--awd-border-strong); }
+// 过期：仍然列出来（问题没有自己消失），但整块淡掉并禁用动作
+.irp-item.stale { opacity: 0.62; }
+
+.irp-item-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.irp-item-t { font-size: 13px; font-weight: 600; color: var(--awd-text); }
+.irp-bucket { flex: none; padding: 0 6px; border-radius: 9px; font-size: 10px;
+  color: var(--awd-text-2); background: var(--awd-surface-2); }
+.irp-quote { display: block; margin-top: 5px; font-size: 11px; color: var(--awd-text-2);
+  word-break: break-all; }
+.irp-text { display: block; margin-top: 5px; font-size: 12px; line-height: 1.6; color: var(--awd-text); }
+.irp-related { display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  margin-top: 5px; padding-left: 7px; border-left: 1px solid var(--awd-border); }
+.irp-stale { display: block; margin-top: 6px; font-size: 11px; color: var(--awd-text-2); }
+.irp-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+
+.irp-scope { display: block; margin-top: 8px; font-size: 11px; line-height: 1.6; color: var(--awd-text-2); }
+.irp-scope.warn { color: var(--awd-danger-text); }

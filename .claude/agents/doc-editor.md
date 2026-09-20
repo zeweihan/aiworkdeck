@@ -374,13 +374,21 @@ lowa-e2e 组 34 最后一项就是篡改一条 `baseUnits.norm` 后断言必须�
 - 离开工作台/退出登录前，`flushDirtyEditors` 逐个保存后必须同步重扫当前 Office/文本注册表；保存 B 期间重新编辑 A、原本干净实例变脏、或新注册实例变脏都应阻止导航（`flush-dirty-editors.test.mjs` 时序用例），不能只相信每个实例刚保存时的状态。
 - 文本标签关闭同样必须检查 `flushSave` 返回值及最终 dirty/saving；失败仅提示原有重试入口并保留标签。`PlainTextEditor.flushSave` 不得吞掉 `save()` 的 false，也不能在保存期间新增输入后报全已保存。
 
-## 即时审校（dev-board#547）
+## 即时审校（dev-board#547，形态改造 dev-board#723/#724）
 
-`inlineReviewHost.js` 读当前 Writer 正文快照，修改后 1.2 秒防抖调 `/insight/review`（`deep:false`），只有点击「深入审校」才传 `deep:true`。会话与 worker revision 双围栏拦住迟到结果；修改、换文档、销毁立即失效。同用户开关同步，独立于写作补全开关。默认计时器用箭头包装调用，不能以 `{set:setTimeout}.set()` 调浏览器原生函数（Illegal invocation，Node 单测捕获不了）；真实浏览器测试覆盖启动与销毁。
+`inlineReviewHost.js` 读当前 Writer 正文快照，修改后 **2.5 秒**防抖调 `/insight/review`（`deep:false`），只有点击「深入审校」才传 `deep:true`。会话与 worker revision 双围栏拦住迟到结果；修改、换文档、销毁立即失效。同用户开关同步，独立于写作补全开关。默认计时器用箭头包装调用，不能以 `{set:setTimeout}.set()` 调浏览器原生函数（Illegal invocation，Node 单测捕获不了）；真实浏览器测试覆盖启动与销毁。
 
-`zetaOfficeInlineReview.js` 是不落盘的 guest DOM：当前段落光标旁提示、全量问题清单、原文定位、明确点击采用。不给文档塞书签或批注。IME/编辑/滚动立即隐藏旧定位；**LOWA boot 每秒发同尺寸 synthetic resize，不能因此清掉提示；只有视口或 canvas 几何变化才失效**。不抢 Tab；候选菜单打开时让位。
+`zetaOfficeInlineReview.js` 是不落盘的 guest DOM，**只剩两件东西**（#723/#724 之前那个 380px 的 `.awd-ir-panel` 已删除——它压着正文且关不掉）：
+- `.awd-ir-ball` 浮球：图标 + 未读计数，可拖、松手**靠边吸附**、位置持久化。**位置存 localStorage 不是 sessionStorage**——客体页每开一份文档就是一个新 webview（sessionStorage 每次重来），而浮球摆在哪是跨文档的本机习惯（同 `awd_sidebar_collapsed` 口径）；键仍是宿主下发的 `layoutKey`（`awd_inline_review_layout_<hash(userId)>`，按用户不按文件，不带文档内容）。拖动有 4px 阈值，拖完那一下的 `click` 不算点击（否则每次拖完都会顺手打开面板）。
+- `.awd-ir-chip` 光标旁标记：保留原样（当前段落有几条）。
 
-审校入口与面板是同一个可拖动悬浮控件，收起后保留用户位置；位置只按稳定用户 key 存 sessionStorage，不带文档内容。分类固定为全部/待补充/一致性/格式与号码/AI 审校，tab 钉在列表滚动区上方，计数始终来自全量 finding。正文变化后保留用户的展开/收起选择，但旧 finding 禁止定位或采用并显示等待重查；补全菜单出现时只隐藏行旁 chip，不能顺带收起用户打开的审校面板。
+点浮球或点 chip 都只发一条 `inline-review-request {action:'open-panel'}`，由宿主打开右栏审阅面板并切到「审校」页；客体页不再自己画清单、不自己发 `deep`/`preferences` 之外的任何东西。**关闭态（`enabled:false`）与藏浮球（`hidden:true`）正文里一个字都不挂**——「已关闭」的提示本身就是打扰。IME/编辑/滚动立即隐藏旧定位；**LOWA boot 每秒发同尺寸 synthetic resize，不能因此清掉提示；只有视口或 canvas 几何变化才失效**。不抢 Tab；候选菜单打开时只让 chip，不动浮球。
+
+清单在宿主：`components/InlineReviewPanel.vue` + 外置 `inline-review-panel.scss`（壳-芯分法同 EvidencePanel），挂在 `ReviewPanel.vue` 的**第五个标签「审校」**（key `chk`，`v-show` 常驻以便标签显示计数；`inlineReview` prop 为 null 时整个标签不出现）。分类固定为全部/待补充/一致性/格式与号码/AI 审校，**计数恒按未筛选全量算**；判定全在纯函数 `utils/inlineReviewGrouping.js`（`bucketOf`/`filterByBucket`/`countByBucket`/`visibleFindings`/`isFresh`/`isLocatable`/`isApplicable`），**guest 与宿主共用这一份**——各写一份的话浮球上的数字和面板里的条数会对不上。定位走 `goto_review_range`、采用走 `apply_review_edit`（都由面板直接发给 executor），**禁止 `find_text_locations`**（会把书签写进 docx）。正文一改宿主就把 findings 清空（旧坐标不可信），面板**保留上一轮清单**并标「等待重新检查」+ 禁用定位/采用（清单整片消失再冒出来，律师会以为问题自己没了）。
+
+开关（dev-board#723 拍板：**默认开启但安静**，不是默认关）：工具栏「审阅」旁的「审校」按钮（`toggle-inline-review`）与命令表 `doc.inlineReview`（`wb:toggleInlineReview` → `LibreOfficeEditor.menuToggleInlineReview`）。偏好键仍是 `awd_inline_review_<userId>`（用户级、跨标签共享，**不按 fileId 拆**），值是 `{enabled, hidden}` 两个独立字段：`enabled` 关掉之后**一条 worker 命令、一次 HTTP 都不发**；`hidden` 只管浮球，检查照跑（面板里「隐藏/显示正文浮球」写它）。
+
+降资源三项（#724）：①`host.setActive(bool)` —— 只给当前激活（可见、非 `.libre-standby`）的实例跑，后台标签不发请求、连显式 `deep` 也拒绝，切回来若正文已变补一轮；宿主由 `LibreOfficeEditor` 的 `active` prop 驱动（project-overview 三处渲染点各自传与 `libre-standby` 同源的判据）。②全文快照哈希未变（与上一轮逐段逐字相同）不重发 POST，直接复用上一轮结论发布（格式改动/切标签会让 revision 前进但正文没动）。③防抖 1.2s → 2.5s。
 
 worker `get_document_text` 与 `get_review_context` 回 revision；`goto_review_range` / `apply_review_edit` 校验 revision、0 基段落、UTF-16 起止、完整段落和引文后操作临时 range。采用建议保留细粒度修订、一次撤销，旧结果拒绝。导出不增 revision，重载即使同文也增。`get_cursor_rect.viewData` 只返回可序列化原始值。
 
@@ -390,4 +398,4 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 
 检查范围为正文段落（不含表格、页眉页脚），单段 >15,000 字跳过并披露截断，总计 200,000 字/10,000 段/60 页。行内修订模式需切页边或最终视图。完整在线核验保留在依据窗格，打开窗格不自动调用模型或外库，点击后先保存对应文档。
 
-验证：`npm run test:inline-review`、`test:lowa-inline-review`，真实桌面 `tests/desktop-e2e/writing.mjs` 同时检查中文补全与刚输入正文的规则提示、无自动深入审校/外查。
+验证：`npm run test:inline-review`（宿主 host 契约 + guest 形态 + 纯函数三组）、`test:project-home`（「审校」标签与面板动作：`review-panel-inline-check-tab.test.mjs`）、`test:lowa-inline-review`（真引擎：浮球/chip、只发 open-panel、关闭态正文干净、导出件无锚点），真实桌面 `tests/desktop-e2e/writing.mjs` 走完「输入正文 → 浮球出数 → 拖动 → 点开右栏清单 → 切分类」，并检查无自动深入审校/外查。
