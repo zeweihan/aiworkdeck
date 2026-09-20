@@ -74,6 +74,112 @@ class DocumentTextServiceTest {
         assertTrue(text.contains("Shareholders Meeting Notice 2026"), "PDF 文本应被抽取，实际: " + text);
     }
 
+    // ==== 抽取缓存（dev-board#729 ⑤）====
+    // read_document 本机中位 1128ms，而一轮对话里同一份文档常被读多次（模型读一次、
+    // 上下文组装注入一次、审计/勾稽工具再读一次），此前每次都重新跑一遍 Tika。
+
+    /** 计数用的存储：记录同一路径被真正打开了几次。 */
+    private static final class CountingStorage implements com.checkba.storage.StorageService {
+        final java.util.concurrent.atomic.AtomicInteger opens = new java.util.concurrent.atomic.AtomicInteger();
+        byte[] bytes;
+        long lastModified = 1_700_000_000_000L;
+
+        CountingStorage(byte[] bytes) {
+            this.bytes = bytes;
+        }
+
+        @Override
+        public org.springframework.core.io.Resource load(String path) {
+            return new org.springframework.core.io.ByteArrayResource(bytes) {
+                @Override
+                public long lastModified() {
+                    return lastModified;
+                }
+
+                @Override
+                public java.io.InputStream getInputStream() {
+                    opens.incrementAndGet();
+                    return new ByteArrayInputStream(bytes);
+                }
+            };
+        }
+
+        @Override public String save(String fileId, java.io.InputStream in) { throw new UnsupportedOperationException(); }
+        @Override public void delete(String fileId) { throw new UnsupportedOperationException(); }
+        @Override public boolean exists(String fileId) { return true; }
+        @Override public String getUrl(String fileId) { return null; }
+        @Override public String append(String fileId, java.io.InputStream in) { throw new UnsupportedOperationException(); }
+        @Override public long getSize(String fileId) { return bytes.length; }
+    }
+
+    private static com.checkba.model.entity.ProjectFile docxFile(Long id) {
+        com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();
+        f.setId(id);
+        f.setName("合同.docx");
+        f.setFileType("docx");
+        f.setFilePath("p/1/合同.docx");
+        return f;
+    }
+
+    private static byte[] docxBytes(String text) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (XWPFDocument doc = new XWPFDocument()) {
+            doc.createParagraph().createRun().setText(text);
+            doc.write(out);
+        }
+        return out.toByteArray();
+    }
+
+    @Test
+    void secondExtractOfTheSameUnchangedFileIsServedFromCache() throws Exception {
+        CountingStorage storage = new CountingStorage(docxBytes("缓存命中测试正文"));
+        var factory = org.mockito.Mockito.mock(com.checkba.storage.StorageServiceFactory.class);
+        org.mockito.Mockito.when(factory.getStorageService()).thenReturn(storage);
+        DocumentTextService svc = new DocumentTextService(factory);
+
+        String first = svc.extractText(docxFile(1L));
+        String second = svc.extractText(docxFile(1L));
+
+        assertTrue(first.contains("缓存命中测试正文"));
+        assertTrue(second.contains("缓存命中测试正文"));
+        org.junit.jupiter.api.Assertions.assertEquals(1, storage.opens.get(),
+                "同一份没变过的文件不应被抽取第二遍");
+    }
+
+    @Test
+    void changedFileIsReExtractedNotServedStale() throws Exception {
+        CountingStorage storage = new CountingStorage(docxBytes("第一版正文"));
+        var factory = org.mockito.Mockito.mock(com.checkba.storage.StorageServiceFactory.class);
+        org.mockito.Mockito.when(factory.getStorageService()).thenReturn(storage);
+        DocumentTextService svc = new DocumentTextService(factory);
+
+        assertTrue(svc.extractText(docxFile(1L)).contains("第一版正文"));
+
+        // 编辑器保存 / 版本回退 / 插件写回都只动磁盘，不一定动 project_file 那一行——
+        // 所以指纹必须取物理文件的 mtime 与长度，不能取 DB 的 updatedAt
+        storage.bytes = docxBytes("改过之后的正文");
+        storage.lastModified += 1000;
+
+        String after = svc.extractText(docxFile(1L));
+        assertTrue(after.contains("改过之后的正文"), "改过的文件必须重抽，实际: " + after);
+        org.junit.jupiter.api.Assertions.assertEquals(2, storage.opens.get());
+    }
+
+    @Test
+    void unreadableTimestampFallsBackToAlwaysExtracting() throws Exception {
+        CountingStorage storage = new CountingStorage(docxBytes("没有时间戳"));
+        storage.lastModified = 0L; // 某些 Resource 实现拿不到 mtime
+        var factory = org.mockito.Mockito.mock(com.checkba.storage.StorageServiceFactory.class);
+        org.mockito.Mockito.when(factory.getStorageService()).thenReturn(storage);
+        DocumentTextService svc = new DocumentTextService(factory);
+
+        svc.extractText(docxFile(1L));
+        svc.extractText(docxFile(1L));
+
+        org.junit.jupiter.api.Assertions.assertEquals(2, storage.opens.get(),
+                "拿不到指纹时宁可重抽一次，也不能给出可能陈旧的正文");
+    }
+
     @Test
     void extractsTextFromXlsx() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();

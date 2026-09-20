@@ -386,6 +386,22 @@
           </view>
         </view>
 
+        <!-- 左栏收起/展开（dev-board#727）：用户反馈左栏「窗口建议」占地方、常显却用得少，
+             要求 rail 上就地能收起。与顶栏同功能按钮（:154-164）、Alt+Ctrl+B 走的是
+             同一个 toggleSidebar；这里只是把入口挪到左栏本体旁边、伸手可及。 -->
+        <view
+          class="rail-btn"
+          :class="{ active: !sidebarCollapsed }"
+          :title="sidebarCollapsed ? $t('workbench.expandSidebar') : $t('workbench.collapseSidebar')"
+          @tap="toggleSidebar"
+        >
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.panelLeft" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
+
         <!-- Project Members Stack -->
         <view class="rail-members-container" v-if="projectMembers && projectMembers.length > 0">
            <view class="members-stack-icon">
@@ -1047,8 +1063,8 @@
                       @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
-                      :insight-open="insightPaneOpen && insightDocFileId === file.id"
                       :insight-subscribed="insightSubscribedFor(file)"
+                      :active="!!(activeFileLeft && activeFileLeft.id === file.id)"
                       @open-insight="onOpenInsight($event, 'left')"
                       @cursor-context="onEditorCursorContext"
                       @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
@@ -1077,8 +1093,8 @@
                       @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
-                      :insight-open="!!(sp.file && insightPaneOpen && insightDocFileId === sp.file.id)"
                       :insight-subscribed="insightSubscribedFor(sp.file)"
+                      :active="!!(sp.file && activeFileLeft && activeFileLeft.id === sp.file.id)"
                       @open-insight="onOpenInsight($event, 'left')"
                       @cursor-context="onEditorCursorContext"
                       @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
@@ -1275,8 +1291,8 @@
                       @command-progress="onEditorCommandProgress"
                       @evidence-drop="onEvidenceDrop($event, 'right')"
                       @locator-consumed="onLocatorConsumed"
-                      :insight-open="insightPaneOpen && insightDocFileId === file.id"
                       :insight-subscribed="insightSubscribedFor(file)"
+                      :active="!!(activeFileRight && activeFileRight.id === file.id)"
                       @open-insight="onOpenInsight($event, 'right')"
                       @cursor-context="onEditorCursorContext"
                       @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
@@ -2244,6 +2260,7 @@ import { tabDragSplitMethods } from './tabDragSplit.js'
 import { fitPanelWidths } from './panelWidthLimits.js'
 import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { railSortData, railSortMethods } from './railSort.js'
+import { loadSidebarCollapsed, saveSidebarCollapsed } from './sidebarCollapse.js'
 import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { useDocumentMerge } from '@/composables/useDocumentMerge.js'
@@ -3349,6 +3366,8 @@ export default {
     this.loadPanelDocks()
     // rail 图标顺序（dev-board#204）：同为本机习惯，跟停靠位一起在首帧前恢复
     this.loadRailOrder()
+    // 左栏收起状态（dev-board#727）：同为本机习惯，不带 projectId
+    this.sidebarCollapsed = loadSidebarCollapsed(uni)
     this.initThemeSwitch()
 
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
@@ -5439,6 +5458,8 @@ export default {
     // --- 布局控制 ---
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
+      saveSidebarCollapsed(uni, this.sidebarCollapsed)
+      this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
     toggleAiPanel() {

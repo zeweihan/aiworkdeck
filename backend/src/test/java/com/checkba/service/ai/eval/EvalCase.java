@@ -39,6 +39,11 @@ public class EvalCase {
     public String mode = "AGENT";
     /** 用户输入 */
     public String userInput;
+    /**
+     * 可选：本轮的活跃文档（编辑器里打开着的那一份）。
+     * 决定编排器下发哪一套编辑原语（dev-board#729 ①：docx 不下发 sheet_* / slide_*）。
+     */
+    public ActiveDocument activeDocument;
     /** 非 null 时该用例进入真实 LLM 冒烟集（RealLlmSmokeTest） */
     public Smoke smoke;
     /** 预录的模型输出，按轮次回放 */
@@ -47,6 +52,15 @@ public class EvalCase {
     public Map<String, String> toolStubs = new HashMap<>();
     /** 断言 */
     public Expect expect = new Expect();
+
+    /** 活跃文档（映射成 AiAgentController.ContextItem 塞进 chat 请求） */
+    public static class ActiveDocument {
+        /** 文件 ID（字符串，与真实请求一致） */
+        public String id = "1001";
+        public String name;
+        /** 扩展名（无点号）；留空时按 name 的后缀判类型 */
+        public String fileType;
+    }
 
     /** 一轮预录模型输出：text（XML 协议整段文本）或 toolCalls（原生 function calling），二选一 */
     public static class Turn {
@@ -89,6 +103,14 @@ public class EvalCase {
         public List<String> offeredToolsInclude = new ArrayList<>();
         /** 每次携带工具的 LLM 调用中，可见工具应排除的名字（Skill 裁剪断言；空 = 不断言） */
         public List<String> offeredToolsExclude = new ArrayList<>();
+        /**
+         * 只对**第一次**携带工具的调用断言排除（dev-board#729 ①）。
+         * 用于「起跑时按活跃文档类型裁掉，中途新建/切换文档后又放回来」这种<b>逐轮变化</b>的形态——
+         * 全轮次的 offeredToolsExclude 在这里必然自相矛盾。
+         */
+        public List<String> offeredToolsExcludeFirstCall = new ArrayList<>();
+        /** 只对**最后一次**携带工具的调用断言包含；与上一条配对使用。 */
+        public List<String> offeredToolsIncludeLastCall = new ArrayList<>();
         /** 会话文件夹重命名（<title> 协议）应包含的子串（null = 不断言） */
         public String renamedTitleContains;
         /** 应在某次 LLM 调用的上下文中出现的子串（断言编排器回喂了某条系统提醒；空 = 不断言） */

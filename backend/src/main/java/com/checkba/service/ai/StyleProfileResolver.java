@@ -51,11 +51,60 @@ public class StyleProfileResolver {
         this.pluginContributionService = svc;
     }
 
+    /**
+     * 选中的画像来自哪一级（dev-board#729 ②）。
+     *
+     * <p>模型此前无从判断「这个项目到底有没有模板画像」——工具描述只说「项目有模板画像时用本工具」，
+     * 于是真机上它会先花一整轮去 {@code list_files(_模板)} 探一探。事实直接写进末位提醒就没有这一轮。
+     */
+    public enum Source {
+        /** 工具调用显式传了 styleProfileJson */
+        EXPLICIT("本次调用显式传入"),
+        /** 项目 _模板/画像.json */
+        PROJECT("项目 " + TEMPLATE_FOLDER + "/" + PROFILE_FILE),
+        /** 用户选中的插件贡献画像 */
+        PLUGIN("已选中的插件画像"),
+        /** SystemSetting dd.styleProfile.default */
+        SYSTEM("系统默认画像设置"),
+        /** 谁都没有，退到内置律所标准格式 */
+        HOUSE_DEFAULT("无（内置律所标准格式）");
+
+        private final String label;
+
+        Source(String label) {
+            this.label = label;
+        }
+
+        /** 给模型看的来源说明（中文）。 */
+        public String label() {
+            return label;
+        }
+
+        /** 是否存在一份「团队自己的」画像（house-default 不算）。 */
+        public boolean hasCustomProfile() {
+            return this != HOUSE_DEFAULT;
+        }
+    }
+
+    /** 画像 + 它来自哪一级。 */
+    public record Resolved(StyleProfile profile, Source source) {
+    }
+
     public StyleProfile resolve(Long projectId, String explicitJson) {
+        return resolveWithSource(projectId, explicitJson).profile();
+    }
+
+    /**
+     * 与 {@link #resolve} 同一条解析链，额外回报命中的是哪一级。
+     *
+     * <p><b>解析链只此一份</b>：另写一个「只判断有没有画像」的函数，早晚会和真正的写端解析
+     * 各说各话——末位提醒说「有画像」而写端退回了 house-default，两边都不报错。
+     */
+    public Resolved resolveWithSource(Long projectId, String explicitJson) {
         StyleProfile house = StyleProfiles.houseDefault();
         if (explicitJson != null && !explicitJson.isBlank()) {
             try {
-                return house.merge(StyleProfiles.parse(explicitJson));
+                return new Resolved(house.merge(StyleProfiles.parse(explicitJson)), Source.EXPLICIT);
             } catch (Exception e) {
                 log.warn("styleProfileJson 解析失败，退到项目画像: {}", e.getMessage());
             }
@@ -63,7 +112,7 @@ public class StyleProfileResolver {
         if (projectId != null) {
             try {
                 String json = readProjectProfile(projectId);
-                if (json != null) return house.merge(StyleProfiles.parse(json));
+                if (json != null) return new Resolved(house.merge(StyleProfiles.parse(json)), Source.PROJECT);
             } catch (Exception e) {
                 log.warn("项目 {} 的 {}/{} 读取失败，退到系统默认: {}", projectId, TEMPLATE_FOLDER, PROFILE_FILE, e.getMessage());
             }
@@ -73,18 +122,20 @@ public class StyleProfileResolver {
         if (pluginContributionService != null) {
             try {
                 String json = pluginContributionService.selectedStyleProfileJson();
-                if (json != null) return house.merge(StyleProfiles.parse(json));
+                if (json != null) return new Resolved(house.merge(StyleProfiles.parse(json)), Source.PLUGIN);
             } catch (Exception e) {
                 log.warn("插件画像解析失败，退到系统默认: {}", e.getMessage());
             }
         }
         try {
             String json = systemSettingService == null ? null : systemSettingService.get(SETTING_KEY, null);
-            if (json != null && !json.isBlank()) return house.merge(StyleProfiles.parse(json));
+            if (json != null && !json.isBlank()) {
+                return new Resolved(house.merge(StyleProfiles.parse(json)), Source.SYSTEM);
+            }
         } catch (Exception e) {
             log.warn("SystemSetting {} 解析失败，退到 house-default: {}", SETTING_KEY, e.getMessage());
         }
-        return house;
+        return new Resolved(house, Source.HOUSE_DEFAULT);
     }
 
     /** 项目根目录下 _模板/画像.json 的内容；没有返回 null。 */

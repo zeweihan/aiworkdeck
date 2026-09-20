@@ -323,15 +323,24 @@ ai:
       - qwen/qwen3.7-flash
   # AI 上下文与压缩配置（对应 AiContextProperties，以下均为默认值，可按需覆盖）
   context:
-    # 上下文总 token 预算
-    max-context-tokens: 100000
-    # 各项 token 预留
-    system-prompt-reserve: 8000
+    # 上下文总 token 预算的**兜底值**：只在模型标识解析不出上下文长度时用到
+    # （白名单外的 id / Ollama 本地模型 / 没带 modelKey 的调用）。白名单内的模型按
+    # AllowedModels.contextLength × model-budget-headroom 派生（dev-board#729 ④）。
+    # 取白名单里最小的那一条（Claude Haiku 4.5 = 20 万）：system-prompt-reserve 同时从 8000
+    # 提到 60000，兜底值若还停在 10 万，解析不出的模型会比改动前更早触发同步摘要。
+    max-context-tokens: 200000
+    # 派生总预算时给标称上下文留的余量：标称值是「输入+输出」的总和，而 chars/token=2.0
+    # 对中文系统性偏乐观，顶着标称值用必然撞 400（撞了有恢复通道，但要白烧一次请求）。
+    model-budget-headroom: 0.85
+    # 各项 token 预留。system-prompt-reserve 是**实测值**：本机每轮 promptTokens 约 5 万，
+    # 其中约 2/3 是工具 schema（202 个工具 59045 token）。旧值 8000 与真实固定前缀差了近一个
+    # 数量级，「历史可用预算」被高估 7 倍有余。
+    system-prompt-reserve: 60000
     memory-reserve: 5000
     response-reserve: 8000
     # token 估算系数：每个 token 约折合多少字符
     chars-per-token: 2.0
-    # 按模型覆盖 token 总预算（key 支持子串匹配模型标识），示例：
+    # 按模型覆盖 token 总预算（key 支持子串匹配模型标识）。显式配置优先于上面的派生，示例：
     # model-token-budgets:
     #   "[gemini]": 500000
     #   "[qwen3-vl]": 30000

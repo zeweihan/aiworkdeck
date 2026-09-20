@@ -37,7 +37,9 @@ export const panelSwitchingMethods = {
       }
 
       if (this.leftPaneKey === key) {
-        this.sidebarCollapsed = !this.sidebarCollapsed
+        // 收展走统一出口（dev-board#727）：与 rail 底部/顶栏的收起按钮共用同一个
+        // toggleSidebar，确保持久化与 triggerWorkbenchResize 两条路径不会各走各的。
+        this.toggleSidebar()
       } else {
         this.leftPaneKey = key
         this.sidebarCollapsed = false

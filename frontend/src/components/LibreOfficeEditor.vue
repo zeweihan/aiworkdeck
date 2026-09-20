@@ -60,9 +60,10 @@
       :executor="executor"
       :refresh-key="uiRefreshKey"
       :review-open="reviewOpen"
-      :insight-open="insightOpen"
+      :inline-review-on="inlineReviewEnabled"
+      :inline-review-available="!!inlineReviewState"
       @toggle-review="reviewOpen = !reviewOpen"
-      @toggle-insight="onToggleInsight"
+      @toggle-inline-review="toggleInlineReview"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
@@ -136,10 +137,12 @@
         :doc-file-id="file && file.id"
         :self-author="selfAuthor"
         :provenance="provenanceForPanel"
+        :inline-review="inlineReviewState"
         @open-history="openProvenanceHistory"
         @close="reviewOpen = false"
         @changed="onReviewChanged"
         @locate="onEvidenceLocate"
+        @inline-review="onInlineReviewAction"
       />
     </view>
   </view>
@@ -228,11 +231,14 @@ export default {
     // 当前用户对该项目有没有写权限（只读成员 / 客户 = false）。adopt_legacy_links 会改文档并触发
     // 自动保存，只读成员不该跑；核对回写（/anchors/report）只需读权限，不受此影响。
     canWrite: { type: Boolean, default: true },
-    // 「依据」窗格此刻是不是绑在这份文档上（dev-board#182）。
-    // insightOpen 只管工具栏按钮的按下态；insightSubscribed 会往客体页下发订阅开关——
-    // **不订阅时客体页一次 get_cursor_context 都不打**，常态零开销。
-    insightOpen: { type: Boolean, default: false },
+    // 「依据」窗格此刻是不是绑在这份文档上（dev-board#182）。这个开关会往客体页
+    // 下发订阅——**不订阅时客体页一次 get_cursor_context 都不打**，常态零开销。
+    // （原来还有一个 insightOpen 只管工具栏按钮的按下态；那个按钮早已不在工具栏上，
+    //   dev-board#723 顺手把这条死链从工具栏、本组件与工作台三处一起摘掉。）
     insightSubscribed: { type: Boolean, default: false },
+    // 这个实例此刻是不是用户正在看的那一个（保活池里后台标签为 false）。
+    // 即时审校只给激活实例跑——后台标签既不发 worker 命令也不发 HTTP（dev-board#724）。
+    active: { type: Boolean, default: true },
   },
   data() {
     return {
@@ -250,6 +256,9 @@ export default {
       reviewOpen: false,
       reviewLocation: {},
       reviewRefreshKey: 0,
+      // 即时审校（dev-board#723/#724）：宿主这边只存一份 host publish 出来的快照，
+      // 下传给审阅面板的「审校」标签。null = 这份文档没有审校（非 Writer/没项目/没就绪）。
+      inlineReviewState: null,
       // 当前登录用户名。审阅面板的「我」这一桶按它归类作者（dev-board#377），
       // 与下面 load_document 传给引擎的 authorName 同源（currentAuthorName），
       // 两处必须是同一个字符串——否则用户自己的修订会被归成「其他人」。
@@ -327,6 +336,10 @@ export default {
     // 两处不许各写一份——面板不在时浮层白白让出 288px，面板在时又压住浮层。
     reviewOverviewShown() {
       return this.reviewOpen && this.ready && this.showsReview
+    },
+    // 工具栏「审校」按钮的按下态。host 还没建起来时按默认（开启但安静）显示。
+    inlineReviewEnabled() {
+      return !this.inlineReviewState || this.inlineReviewState.enabled !== false
     },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
@@ -407,6 +420,8 @@ export default {
     ready(v) { this.$emit('menu-state'); if (v) { this.consumeLocator(); this.pushInsightSub(); this.pushTheme(); this.loadProvenance() } },
     // 「依据」窗格开合 → 客体页的光标上报订阅（dev-board#182）
     insightSubscribed() { this.pushInsightSub() },
+    // 退到后台的实例停掉即时审校；切回来若正文已变就补一轮（dev-board#724）。
+    active(v) { this._inlineReviewHost?.setActive(!!v) },
     docKind() { this.$emit('menu-state'); this.initWritingAssistance() },
     canWrite() { this.initWritingAssistance() },
     // 宿主 openFile(file, {locator}) 把定位符挂在 tab 对象上；已打开的标签再次被
@@ -458,6 +473,7 @@ export default {
     this._provSeq = (this._provSeq || 0) + 1
     if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
     if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+    this.inlineReviewState = null
     uni.$off('file-drag-start', this._onEvidenceDragStart)
     uni.$off('file-drag-end', this._onEvidenceDragEnd)
     if (this._onThemeChanged) { uni.$off(APP_THEME_EVENT, this._onThemeChanged); this._onThemeChanged = null }
@@ -592,7 +608,7 @@ export default {
     menuState() {
       const tb = this.$refs.toolbar
       const rec = tb && tb.state && tb.state.view ? tb.state.view.recordChanges : false
-      return { trackChanges: !!rec, reviewOpen: !!this.reviewOpen }
+      return { trackChanges: !!rec, reviewOpen: !!this.reviewOpen, inlineReview: this.inlineReviewEnabled }
     },
     menuToggleTrackChanges() {
       const tb = this.$refs.toolbar
@@ -600,6 +616,30 @@ export default {
     },
     menuToggleReviewPanel() {
       this.reviewOpen = !this.reviewOpen
+    },
+    menuToggleInlineReview() {
+      this.toggleInlineReview()
+    },
+    // ---- 即时审校（dev-board#723/#724）------------------------------------
+    /** 工具栏/菜单的「审校」开关。偏好是用户级的（跨标签共享），不按文件分。 */
+    toggleInlineReview() {
+      if (!this._inlineReviewHost) return
+      this._inlineReviewHost.setEnabled(!this.inlineReviewEnabled)
+      this.$emit('menu-state')
+    },
+    /** 正文浮球 → 打开右栏审阅面板并落在「审校」页。 */
+    openInlineReviewPanel() {
+      this.reviewOpen = true
+      this.$nextTick(() => { this.$refs.review?.openTab('chk') })
+    },
+    /** 审校面板上的开关/重查/深入审校（清单里的定位与采用由面板直接走 executor）。 */
+    onInlineReviewAction(payload) {
+      const host = this._inlineReviewHost
+      if (!host || !payload) return
+      if (payload.action === 'refresh') host.refresh()
+      else if (payload.action === 'deep') host.runDeep()
+      else if (payload.action === 'enabled') { host.setEnabled(payload.value); this.$emit('menu-state') }
+      else if (payload.action === 'hidden') host.setBallHidden(payload.value)
     },
     /**
      * 工具栏「解析」（dev-board#182）。窗格在工作台一级（可停右栏也可停左栏），
@@ -766,6 +806,7 @@ export default {
     async remountEditor() {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      this.inlineReviewState = null
       this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
       try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
       this._eventUnsub = null
@@ -1068,6 +1109,7 @@ export default {
     async finishDocLoad() {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      this.inlineReviewState = null
       // 重入闸：卡住 30s 露出的「重试」按钮会在原来那次装载**仍在途**时（弱网/挂起
       // 代理下 XHR 的 60s 超时还没到）再起一条链路，两条各自 dispatch 一次
       // load_document，且后完成的那条按最后写者赢覆盖 ready/statusKey/docKind——
@@ -1139,6 +1181,7 @@ export default {
     initWritingAssistance() {
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      this.inlineReviewState = null
       if (!this.ready || this._reloading || this.docLoadFailed || this.docKind !== 'writer' || !this.file?.id || !this.projectId || !this._transportSend) return
       this._writingHost = createWritingAssistanceHost({
         projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
@@ -1159,9 +1202,12 @@ export default {
       this._inlineReviewHost = createInlineReviewHost({
         projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
         execute: (action, params) => this.executor.executeCommand(action, params), send: this._transportSend,
-        writable: this.canWrite, review: reviewDocInsight,
+        writable: this.canWrite, review: reviewDocInsight, active: this.active !== false,
         storage: { get: (key) => uni.getStorageSync(key), set: (key, value) => uni.setStorageSync(key, value) },
         openInsight: () => this.onToggleInsight(),
+        // 正文浮球只是入口：清单在右栏审阅面板的「审校」标签里。
+        openPanel: () => this.openInlineReviewPanel(),
+        onState: (state) => { this.inlineReviewState = state },
       })
       this._inlineReviewHost.start()
     },
@@ -1306,6 +1352,7 @@ export default {
       this._reloading = true
       if (this._writingHost) { this._writingHost.destroy(); this._writingHost = null }
       if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
+      this.inlineReviewState = null
       const cancelAutoSave = () => {
         clearTimeout(this._saveTimer)
         this._saveTimer = null

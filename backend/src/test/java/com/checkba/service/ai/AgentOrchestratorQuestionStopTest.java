@@ -104,6 +104,9 @@ class AgentOrchestratorQuestionStopTest {
         }).when(sse).send(any(), any(), any());
 
         messageService = mock(ProjectAiMessageService.class);
+        // dev-board#729 ⑤：编排器改用 countByConversationId 判首轮；mock 默认回 0 会误判首轮、起异步标题线程
+        // 与下一次 when(...) 打架（CI 上 Mockito WrongTypeOfReturnValue）。计数跟随 list 桩，保持各用例原语义。
+        when(messageService.countByConversationId(any())).thenAnswer(inv -> (long) messageService.listByConversationId(inv.getArgument(0)).size());
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
@@ -114,7 +117,7 @@ class AgentOrchestratorQuestionStopTest {
                         SystemMessage.from("system"), UserMessage.from("帮我起草一份股权转让协议"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))
                 .thenReturn(new ToolRegistry.ToolResult("ok", null, true));
@@ -172,7 +175,7 @@ class AgentOrchestratorQuestionStopTest {
 
         assertEquals(1, model.calls.get(), "反问必须停机，不能递归下一轮让模型自己接着猜");
         assertEquals(AgentRunStateService.RunStatus.AWAITING_INPUT, runState.get("conv-q").status());
-        assertEquals("{\"status\":\"awaiting_input\"}", bubbleEndData(),
+        assertEquals("{\"status\":\"awaiting_input\",\"documentEdited\":false}", bubbleEndData(),
                 "status 字面量是跨端契约（前端两处解析 + Office 插件 stillRunning）");
         assertFalse(sseEvents.contains("error"), "反问不是错误");
         // 问题正文必须落库：用户关掉 app 明天回来还要看得见问题与选项
@@ -200,7 +203,7 @@ class AgentOrchestratorQuestionStopTest {
         verify(toolRegistry).execute(any(), any(), any());
         assertEquals(1, model.calls.get(), "工具结果不该带着未决问题递归下一轮");
         assertEquals(AgentRunStateService.RunStatus.AWAITING_INPUT, runState.get("conv-q-tool").status());
-        assertEquals("{\"status\":\"awaiting_input\"}", bubbleEndData());
+        assertEquals("{\"status\":\"awaiting_input\",\"documentEdited\":false}", bubbleEndData());
     }
 
     @Test
@@ -209,7 +212,7 @@ class AgentOrchestratorQuestionStopTest {
         run("conv-plain", AiMessage.from("<final>好的，已经改好了。</final>"));
 
         assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-plain").status());
-        assertEquals("{\"status\":\"finished\"}", bubbleEndData());
+        assertEquals("{\"status\":\"finished\",\"documentEdited\":false}", bubbleEndData());
     }
 
     @Test

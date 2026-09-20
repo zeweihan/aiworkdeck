@@ -131,6 +131,9 @@ public final class EvalHarness {
 
         List<SavedMessage> savedMessages = new CopyOnWriteArrayList<>();
         ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
+        // dev-board#729 ⑤：编排器改用 countByConversationId 判首轮；mock 默认回 0 会误判首轮、起异步标题线程
+        // 与下一次 when(...) 打架（CI 上 Mockito WrongTypeOfReturnValue）。计数跟随 list 桩，保持各用例原语义。
+        when(messageService.countByConversationId(any())).thenAnswer(inv -> (long) messageService.listByConversationId(inv.getArgument(0)).size());
         // USER 消息落库走六参重载（契约 D：末位是 displayContent，缺省 null）。
         // 编排器只调六参那一个，五参重载在这里不桩也无妨；但**两个都桩着**是刻意的——
         // 哪天有人把调用点改回五参，评测不会因为「一条 USER 消息都没记录」而给出误导性的失败。
@@ -216,6 +219,13 @@ public final class EvalHarness {
         request.setMessage(c.userInput);
         request.setModel("anthropic/claude-3.5-sonnet");
         request.setMode(c.mode);
+        if (c.activeDocument != null) {
+            AiAgentController.ContextItem active = new AiAgentController.ContextItem();
+            active.setId(c.activeDocument.id);
+            active.setName(c.activeDocument.name);
+            active.setFileType(c.activeDocument.fileType);
+            request.setActiveContext(active);
+        }
 
         orchestrator.handleUserMessage(request, 7L);
 

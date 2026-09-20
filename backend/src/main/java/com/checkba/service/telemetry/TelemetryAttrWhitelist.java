@@ -24,8 +24,11 @@ public final class TelemetryAttrWhitelist {
 
     private static final Map<String, Set<String>> ALLOWED = Map.ofEntries(
             Map.entry("app.start", Set.of("platform", "profile")),
+            // rounds / promptTokensFirstRound：dev-board#729 ⑥。官网仓 lib/telemetry-store.ts 的
+            // EVENT_WHITELIST 只按事件名过滤（ai.turn 已在内），attrs 原样落库，字段级不需同步
             Map.entry("ai.turn", Set.of("mode", "model", "provider", "outcome",
-                    "durationMs", "attachmentCount", "hasPinnedSkill")),
+                    "durationMs", "attachmentCount", "hasPinnedSkill",
+                    "rounds", "promptTokensFirstRound")),
             Map.entry("ai.tool", Set.of("toolName", "success", "durationMs",
                     "fileEffect", "fromPlugin")),
             Map.entry("ai.model", Set.of("provider", "targetModel", "streaming")),

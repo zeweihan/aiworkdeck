@@ -17,7 +17,7 @@ function section(from, to) {
 
 // Execute the shipping functions, with only Electron/OS effects replaced. No source-pattern
 // assertion can catch a stale closed callback nulling the replacement window.
-function harness() {
+function harness(platform = 'darwin') {
   const windows = []
   const intervals = []
   class Window extends EventEmitter {
@@ -26,6 +26,7 @@ function harness() {
       this.options = options
       this.destroyed = false
       this.sent = []
+      this.menuBarCalls = []
       this.webContents = new EventEmitter()
       this.webContents.send = (...args) => this.sent.push(args)
       this.webContents.setWindowOpenHandler = () => {}
@@ -35,6 +36,9 @@ function harness() {
     isDestroyed() { return this.destroyed }
     loadFile() {}
     isFullScreen() { return false }
+    // dev-board#726：win32 建窗后应显式收起原生菜单条，见 createMainWindow。
+    setMenuBarVisibility(visible) { this.menuBarCalls.push(['setMenuBarVisibility', visible]) }
+    setAutoHideMenuBar(hide) { this.menuBarCalls.push(['setAutoHideMenuBar', hide]) }
     static getAllWindows() { return windows.filter(w => !w.destroyed) }
   }
   const app = new EventEmitter()
@@ -42,7 +46,7 @@ function harness() {
   const clipboard = { text: 'already copied before launch', availableFormats: () => ['text/plain'], readText() { return this.text } }
   const context = vm.createContext({
     app, BrowserWindow: Window, clipboard, path, console,
-    process: { platform: 'darwin', env: {} }, __dirname: path.join(__dirname, '../main'),
+    process: { platform, env: {} }, __dirname: path.join(__dirname, '../main'),
     screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1400, height: 900 } }) },
     require: name => {
       // 建窗那段里现场 require 的模块在这里明确列出；来了别的就当场报死，
@@ -80,6 +84,21 @@ test('mac activation during service startup waits for the allocated backend port
   h.context.finishStartup()
   assert.equal(h.windows.length, 1)
   assert.ok(h.windows[0].options.webPreferences.additionalArguments.includes('--checkba-api-base=http://127.0.0.1:9799'))
+})
+
+test('dev-board#726: win32 window hides the native menu bar and turns off its Alt auto-hide toggle', () => {
+  const h = harness('win32')
+  h.context.finishStartup()
+  assert.deepEqual(h.windows[0].menuBarCalls, [
+    ['setMenuBarVisibility', false],
+    ['setAutoHideMenuBar', false],
+  ])
+})
+
+test('dev-board#726: mac window never touches menu bar visibility (real system menu bar)', () => {
+  const h = harness('darwin')
+  h.context.finishStartup()
+  assert.deepEqual(h.windows[0].menuBarCalls, [])
 })
 
 test('repeated creation keeps the current window and its clipboard destination', () => {

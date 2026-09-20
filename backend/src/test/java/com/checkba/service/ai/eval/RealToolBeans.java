@@ -19,9 +19,11 @@ import com.checkba.service.ai.tools.OfficeEditTools;
 import com.checkba.service.ai.tools.ContributedTemplateTools;
 import com.checkba.service.ai.tools.PdfTools;
 import com.checkba.service.ai.tools.CapabilityTools;
+import com.checkba.service.ai.tools.CheckpointTools;
 import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
+import com.checkba.service.ai.tools.SlideEditTools;
 import com.checkba.service.ai.tools.SubAgentTools;
 import com.checkba.service.ai.tools.TagTools;
 import com.checkba.service.ai.tools.TaskTools;
@@ -55,6 +57,12 @@ final class RealToolBeans {
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
                 CapabilityTools.class,
+                // 与 TodoTools 同一个坑：CheckpointTools（doc_restore_checkpoint）与
+                // SlideEditTools（slide_* 全族）长期漏列，于是所有针对它们的
+                // offeredToolsExclude 断言都是空断言（工具名压根没注册，排除断言恒过）。
+                // dev-board#729 ① 要断言「docx 活跃时 slide_* 被裁掉」，先把它们补进来，
+                // 否则那条用例即使裁剪整个失效也照样绿。
+                CheckpointTools.class,
                 ContributedTemplateTools.class,
                 DdExportTools.class,
                 DocumentAuditTools.class,
@@ -72,6 +80,7 @@ final class RealToolBeans {
                 PluginDevTools.class,
                 PptxTools.class,
                 PythonTools.class,
+                SlideEditTools.class,
                 SubAgentTools.class,
                 TextFileEditTools.class,
                 // TodoTools 长期漏列：todo_write 在整个回放评测里根本没注册，

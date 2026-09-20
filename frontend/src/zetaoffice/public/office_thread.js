@@ -289,6 +289,13 @@ function countRedlines() {
   try { const en = xModel.getRedlines().createEnumeration(); while (en.hasMoreElements()) { en.nextElement(); n++; } } catch (e) {}
   return n;
 }
+// O(1) "does this document carry any tracked change at all?" — one enumeration
+// handle, no element is fetched (fetching one costs 3-7ms on this engine, see
+// dev-board#587). Unknown counts as "yes": the final-text guard must never be
+// skipped on a document that might hide deletions.
+function hasAnyRedline() {
+  try { return !!xModel.getRedlines().createEnumeration().hasMoreElements(); } catch (e) { return true; }
+}
 // 两个文本区间的起点是否重合——list_revisions 用它判断相邻修订是否首尾相接。
 // 跨 XText（正文 vs 表格单元格）比较时引擎抛 IllegalArgumentException：那本来
 // 也不算相接，吞掉当 false。
@@ -2785,7 +2792,17 @@ function readNativeCaretRect(frame, live, charHeightPt) {
   const dpi = inch.X, scale = dpi / 1440 * values[2] / 100;
   const width = (values[5] - values[3]) * scale, height = (values[6] - values[4]) * scale;
   if (width <= 0 || height <= 0) return null;
-  const matches = function (r) { return Math.abs(r.Width - width) <= 2 && Math.abs(r.Height - height) <= 2; };
+  // The expected size is derived from twips through the live DPI, so its
+  // rounding error against the window's own integer pixel size grows with the
+  // device scale: a fixed +-2 **physical** pixel window stops matching the
+  // editing child on a fractional-DPI display (Windows 125%/150%, Retina).
+  // readNativeCaretRect then returns null and the IME box falls back to the
+  // last click — that is what makes the candidate window and the preview bar
+  // jump around (dev-board#725). Scale the tolerance with the DPI instead
+  // (2px at 96dpi, 3 at 125%/150%, 5 at 2x) and keep it far below the gap to
+  // any other window, so it still cannot match rulers, scrollbars or sidebar.
+  const tol = Math.max(2, Math.ceil(2 * dpi / 96));
+  const matches = function (r) { return Math.abs(r.Width - width) <= tol && Math.abs(r.Height - height) <= tol; };
   let path = caretWindowCache && caretWindowCache.model === xModel ? caretWindowCache.path : null;
   try { if (path && !matches(path[path.length - 1].getPosSize())) path = null; } catch (e) { path = null; }
   if (!path) {
@@ -2815,7 +2832,12 @@ function completionUnavailable(reason) {
 }
 function completionGuard() {
   if (!isWriterDoc()) return 'not-writer';
-  if (revisionViewState().mode === 'all') return 'inline-revisions';
+  // 内联「全部修订」视图下正文里混着被删的旧字，补全/审校的偏移与原文校验都会错位
+  // ——所以这些动作只在最终文本语义下工作，平时由 runAgentCommandInMarginView 临时
+  // 切过去。但**一条修订都没有**时，这个视图与最终文本没有任何区别，那条守卫也正
+  // 因此整段跳过（dev-board#725）；这里要跟着放行，否则起草场景下补全与即时审校会
+  // 一律回 inline-revisions。
+  if (revisionViewState().mode === 'all' && hasAnyRedline()) return 'inline-revisions';
   return null;
 }
 function captureCompletion(radius) {
@@ -2986,8 +3008,15 @@ function reviewLayout(p) {
   function add(kind, data, native, key) {
     if (!native?.anchor || native.available === false || native.page == null) {
       // Laid-out-later pages still hold cards: the host keeps their gutter.
+      // Only what this view actually draws as a card counts. In the inline
+      // view no revision draws one (revisionCards is false and the host drops
+      // them), and there `data` is the bare {index} with no type at all, so
+      // `data.type !== 'Insert'` used to be vacuously true: every revision on
+      // a not-yet-laid-out page reserved the 280px gutter, and releasing it
+      // once Writer finished laying out reflowed the whole page sideways
+      // (dev-board#725 — 300 段夹具实测 pending 100 → 44 → 0).
       missing = true;
-      if (kind === 'comment' || (data && data.type !== 'Insert')) pending++;
+      if (kind === 'comment' || (revisionCards && data && data.type !== 'Insert')) pending++;
       return;
     }
     items.push({ key: key, kind: kind, data: data, x: native.anchor.x, y: native.anchor.y,
@@ -8204,6 +8233,11 @@ function runAgentCommandInMarginView(action, fn) {
   if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
   const before = revisionViewState().mode;
   if (before !== 'all') return fn();
+  // 没有任何修订 = 正文里没有被删的字，最终文本就是当前文本。这是起草场景的
+  // 常态，而这一趟往返并不便宜：两次模型属性写 + 两次 invalidateParaIndex（下一
+  // 次读要把整份段落索引重新枚举一遍），还会把 Writer 缓存的光标屏幕坐标留在
+  // 另一个视图的几何里（dev-board#725）。一次 O(1) 的枚举探问就能整段跳过。
+  if (!hasAnyRedline()) return fn();
   // 通向「正文 = 改后的样子」有两条路，读回的正文 / 段号 / 偏移完全一致：
   //   隐藏修订  RedlineDisplayType   → **模型**属性
   //   页边      ShowChangesInMargin  → **控制器的视图设置**
@@ -8213,12 +8247,23 @@ function runAgentCommandInMarginView(action, fn) {
   // top 44880 → 0，隐藏修订 top 21840 → 21840 一动不动，正文与偏移两者一字不差。
   // 所以先隐藏；引擎隐不掉（hideSupported=false，读回仍是 all）时才退回页边。
   // 回归：tests/lowa-e2e/scroll-stability.mjs。
+  // **不 refresh()**：真机实测（24.2.8-zhcn-r5）隐藏修订后不重排，getString /
+  // 段落枚举 / 区间偏移读回来的最终文本与「切+refresh」一字不差（探针：同一段
+  // 两条路径都读到 "第2段前置，新表述，后续内容在这里。"）。而 refresh() 是整份
+  // 文档重排，这条守卫在默认内联视图下是 35ms/180ms 节拍的常态路径，一读两排。
+  // 导出那条路（withInlineMarkupForExport）仍然必须 refresh——那里消费的是版面，
+  // 不是文本，别把这两处当同一回事。
   withViewOnlyChange(function () {
     if (applyRevisionView('final').mode === 'all') applyRevisionView('margin');
-    try { xModel.refresh(); } catch (e) {}
   });
   const restore = function () {
-    withViewOnlyChange(function () { applyRevisionView(before); try { xModel.refresh(); } catch (e) {} });
+    withViewOnlyChange(function () { applyRevisionView(before); });
+    // Writer 把光标的屏幕坐标缓存着，只在下一次**读正文**时按当时的视图几何重算。
+    // 这条命令最后一次读正文发生在最终文本视图里，所以不在这儿补一次读，光标就
+    // 一直画在「删除文字被藏起来」的位置上——IME 输入框、系统候选窗和闪烁的光标
+    // 全都左移一个删除段的宽度，直到用户再敲一个字才弹回去。用户报的「光标经常
+    // 左右横跳」就是这一左一右（真机实测 ±2142 twip / 每次读，dev-board#725）。
+    try { paragraphTextOf(ctrl.getViewCursor()); } catch (e) {}
   };
   let out;
   try { out = fn(); }

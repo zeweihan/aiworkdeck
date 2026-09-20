@@ -75,6 +75,70 @@ class TelemetryTurnTrackerTest {
         verify(telemetry, times(1)).recordConv(eq("ai.turn"), eq("conv-q"), any());
     }
 
+    // ==== rounds / promptTokensFirstRound（dev-board#729 ⑥）====
+    // 一条消息跑了几个 LLM 往返、首轮 prompt 有多大，是「慢在哪、贵在哪」的两个基本判据，
+    // 此前账本里一个都没有——只知道总时长 80 秒，不知道是一轮慢还是跑了八轮。
+
+    @Test
+    @DisplayName("ai.turn 带上本轮 LLM 往返数与首轮 promptTokens")
+    void turnCarriesRoundCountAndFirstRoundPromptTokens() {
+        TelemetryService telemetry = mock(TelemetryService.class);
+        TelemetryTurnTracker tracker = new TelemetryTurnTracker(telemetry);
+
+        tracker.startTurn("conv-r", Map.of("mode", "AGENT"));
+        tracker.noteRound("conv-r");
+        tracker.notePromptTokens("conv-r", 59045);
+        tracker.noteRound("conv-r");
+        // 后续轮次的 promptTokens 更大（叠着工具结果），但只记第一次——
+        // 混在一起就看不出固定前缀本身的体量了
+        tracker.notePromptTokens("conv-r", 91000);
+        tracker.noteRound("conv-r");
+        tracker.onStatus("conv-r", "FINISHED");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(telemetry).recordConv(eq("ai.turn"), eq("conv-r"), captor.capture());
+        assertEquals(3, captor.getValue().get("rounds"));
+        assertEquals(59045, captor.getValue().get("promptTokensFirstRound"));
+    }
+
+    @Test
+    @DisplayName("通道不回 usage（Ollama / 回放评测）时不写 promptTokensFirstRound，而不是写 0")
+    void missingUsageLeavesTheFieldOutEntirely() {
+        TelemetryService telemetry = mock(TelemetryService.class);
+        TelemetryTurnTracker tracker = new TelemetryTurnTracker(telemetry);
+
+        tracker.startTurn("conv-s", Map.of("mode", "AGENT"));
+        tracker.noteRound("conv-s");
+        tracker.onStatus("conv-s", "FINISHED");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(telemetry).recordConv(eq("ai.turn"), eq("conv-s"), captor.capture());
+        assertEquals(1, captor.getValue().get("rounds"));
+        assertFalse(captor.getValue().containsKey("promptTokensFirstRound"),
+                "写 0 会让「拿不到」与「真的很小」在账本里长得一模一样");
+    }
+
+    @Test
+    @DisplayName("没有开启轮次时 noteRound / notePromptTokens 是 no-op（子 Agent、辅助模型不该被计进来）")
+    void countersOutsideATurnAreNoop() {
+        TelemetryService telemetry = mock(TelemetryService.class);
+        TelemetryTurnTracker tracker = new TelemetryTurnTracker(telemetry);
+
+        assertDoesNotThrow(() -> tracker.noteRound("conv-none"));
+        assertDoesNotThrow(() -> tracker.notePromptTokens("conv-none", 1234));
+        assertDoesNotThrow(() -> tracker.noteRound(null));
+        verifyNoInteractions(telemetry);
+    }
+
+    @Test
+    @DisplayName("两个新字段都在 ai.turn 的白名单里（不在就整条被丢弃）")
+    void newFieldsAreWhitelisted() {
+        assertTrue(TelemetryAttrWhitelist.allowedAttrs("ai.turn").contains("rounds"));
+        assertTrue(TelemetryAttrWhitelist.allowedAttrs("ai.turn").contains("promptTokensFirstRound"));
+    }
+
     @Test
     @DisplayName("状态机全覆盖：除 RUNNING/INTERRUPTED 外每个 RunStatus 都必须闭合轮次")
     void everyStoppingStatusClosesTurn() {

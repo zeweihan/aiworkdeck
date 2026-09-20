@@ -256,8 +256,18 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     try {
       const raw = await getCursorRaw()
       const surface = canvas.getBoundingClientRect(), parent = host.getBoundingClientRect()
-      return nativeCursorRectToPixels(raw, { left: surface.left - parent.left, top: surface.top - parent.top, width: surface.width, height: surface.height })
-        || cursorRectToPixels(raw, anchor)
+      const native = nativeCursorRectToPixels(raw, { left: surface.left - parent.left, top: surface.top - parent.top, width: surface.width, height: surface.height })
+      // A successful native read also re-derives the live origin, so the next
+      // read that cannot find the editing child (the window search has a
+      // pixel tolerance and misses on fractional DPI — dev-board#725) maps from
+      // real caret geometry instead of a stale click. lastClick stays the last
+      // resort for a session that has never had either.
+      if (native && raw && raw.pos && Number.isFinite(raw.pos.X)) {
+        const s = scaleFromZoom(raw), sc = scrollMm(raw) || { x: 0, y: 0 }
+        anchor = { x: native.left - s * (raw.pos.X - sc.x) - (CURSOR_MAP.nudgeX || 0),
+          y: native.top - s * (raw.pos.Y - sc.y) - (CURSOR_MAP.nudgeY || 0) }
+      }
+      return native || cursorRectToPixels(raw, anchor)
     } catch (e) { mapOk = false; return null }
   }
 

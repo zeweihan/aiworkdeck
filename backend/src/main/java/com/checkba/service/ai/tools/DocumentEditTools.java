@@ -1131,6 +1131,7 @@ public class DocumentEditTools implements AgentToolComponent {
           "行距最小值 16 磅、首行缩进 2 字符；首段短文本视为主标题（16 号加粗居中）；标题段整段加粗；" +
           "表格套 Grid 1.5 磅边框、10 号字、首行加粗居中、数字居右；表格后首段段前 18 磅。" +
           "用户要求'规范格式/按标准排版'时用本工具，正文中既有的加粗强调不会被抹掉。" +
+          "系统提醒说「本项目模板画像：无」时，排版一律用本工具，不要去找模板文件夹。" +
           "长文档会分批处理并回传进度（最长约 2 分钟），一次调用即可完成，不要重复调用；返回 truncated=false 表示全文已处理。")
     public String doc_apply_standard_format() {
         log.info("Tool: doc_apply_standard_format called");
@@ -1157,9 +1158,11 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "套用模板画像", category = "document", fileEffect = "MODIFIED")
-    @Tool("【格式】按项目的模板画像（_模板/画像.json；没有则用律所标准格式）给当前文档套格式：先改 Standard/Heading 1-6/表格样式定义，" +
+    @Tool("【格式】按项目的模板画像给当前文档套格式：先改 Standard/Heading 1-6/表格样式定义，" +
           "再按 scope 做最小直接格式。scope: document=全文（默认）/ selection=只改选区内段落 / styles-only=只改样式定义不碰正文。" +
-          "项目有模板画像时，用户要求'按模板/按所里格式排版'用本工具而不是 doc_apply_standard_format。" +
+          "**本项目到底有没有模板画像，系统提醒里已经明确告诉你了**（「本项目模板画像：有/无」）：" +
+          "有画像才用本工具，没有就用 doc_apply_standard_format。" +
+          "不要为了确认这件事去 list_files / search_project_files 翻模板文件夹——那要白花一整轮。" +
           "长文档分批处理并回传进度，一次调用即可，truncated=false 表示全文已处理。")
     public String doc_apply_style_profile(
             @P("document=全文（默认）/ selection=选区 / styles-only=只改样式定义") String scope

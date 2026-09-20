@@ -15,8 +15,8 @@ export function makeReviewComponent() {
     .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '')
   const names = Object.keys(reviewGrouping)
   // eslint-disable-next-line no-new-func
-  const factory = new Function('EvidencePanel', ...names, script.replace('export default', 'return'))
-  return factory({}, ...names.map((n) => reviewGrouping[n]))
+  const factory = new Function('EvidencePanel', 'InlineReviewPanel', ...names, script.replace('export default', 'return'))
+  return factory({}, {}, ...names.map((n) => reviewGrouping[n]))
 }
 
 // props 里给的字段直接铺到 this 上（组件里 props 与 data 同层可见）。
