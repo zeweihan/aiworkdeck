@@ -1,0 +1,182 @@
+[
+  {
+    "id": "writer-active-hides-sheet-and-slide-tools",
+    "title": "docx 活跃：不下发 slide_* 与写入类 sheet_*（dev-board#729 ①）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "把这份合同里的「甲方」都改成「买方」",
+    "activeDocument": { "id": "1001", "name": "股权转让协议.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_find_replace",
+            "arguments": { "findText": "甲方", "replaceText": "买方" }
+          }
+        ]
+      },
+      { "text": "<final>已把全文 12 处「甲方」改为「买方」，均以修订形式呈现。</final>" }
+    ],
+    "toolStubs": {
+      "doc_find_replace": "{\"success\": true, \"replaced\": 12}"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "doc_find_replace" }],
+      "offeredToolsInclude": [
+        "doc_find_replace",
+        "doc_find_text",
+        "doc_get_document_text",
+        "doc_audit_structure",
+        "doc_restore_checkpoint",
+        "sheet_create_file",
+        "write_docx"
+      ],
+      "offeredToolsExclude": [
+        "slide_add_page",
+        "slide_get_overview",
+        "slide_table_set_cell",
+        "sheet_write_cells",
+        "sheet_get_overview",
+        "sheet_read_range"
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "calc-active-hides-writer-bridge-tools",
+    "title": "xlsx 活跃：doc_* 只留纯后端那几个，slide_* 全隐藏（dev-board#729 ①）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "把 B 列的金额加总写到 B20",
+    "activeDocument": { "id": "1002", "name": "股权款台账.xlsx", "fileType": "xlsx" },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "sheet_write_cells",
+            "arguments": { "range": "B20", "valuesJson": "[[\"=SUM(B2:B19)\"]]" }
+          }
+        ]
+      },
+      { "text": "<final>已在 B20 写入合计公式。</final>" }
+    ],
+    "toolStubs": {
+      "sheet_write_cells": "{\"success\": true, \"written\": 1}"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "sheet_write_cells" }],
+      "offeredToolsInclude": [
+        "sheet_write_cells",
+        "sheet_read_range",
+        "sheet_create_file",
+        "doc_list_project_files",
+        "doc_open_file",
+        "doc_restore_checkpoint",
+        "extract_file_text"
+      ],
+      "offeredToolsExclude": [
+        "doc_find_replace",
+        "doc_get_document_text",
+        "doc_find_text",
+        "doc_audit_structure",
+        "slide_add_page",
+        "slide_get_overview"
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "impress-active-keeps-slide-tools-only",
+    "title": "pptx 活跃：slide_* 可见，doc_* 与 sheet_* 按纯后端口径裁剪（dev-board#729 ①）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "第 3 页的标题改成「交易架构」",
+    "activeDocument": { "id": "1003", "name": "交易路演.pptx", "fileType": "pptx" },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "slide_set_shape_text",
+            "arguments": { "slideNumber": 3, "shapeName": "Title 1", "text": "交易架构" }
+          }
+        ]
+      },
+      { "text": "<final>第 3 页标题已改为「交易架构」。</final>" }
+    ],
+    "toolStubs": {
+      "slide_set_shape_text": "{\"success\": true}"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "slide_set_shape_text" }],
+      "offeredToolsInclude": [
+        "slide_set_shape_text",
+        "slide_get_overview",
+        "doc_open_file",
+        "doc_restore_checkpoint",
+        "sheet_create_file"
+      ],
+      "offeredToolsExclude": [
+        "doc_find_replace",
+        "doc_get_document_text",
+        "sheet_write_cells"
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "no-active-document-keeps-every-editing-tool",
+    "title": "没有活跃文档：三套原语全下发（判不准时必须倒向全集）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "项目里都有哪些文件？",
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_list_project_files", "arguments": { "projectId": 1 } }
+        ]
+      },
+      { "text": "<final>项目里有 2 份文档。</final>" }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "项目文件列表：\n- ID: 101, 名称: 股权结构说明.docx"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "doc_list_project_files" }],
+      "offeredToolsInclude": [
+        "doc_find_replace",
+        "sheet_write_cells",
+        "slide_add_page"
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "template-profile-fact-skips-the-template-folder-hunt",
+    "title": "模板画像事实直接给模型：不再先去 list_files(_模板) 探一轮（dev-board#729 ②）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "按所里的模板给这份文件排一下版",
+    "activeDocument": { "id": "1004", "name": "法律意见书.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_apply_style_profile", "arguments": { "scope": "document" } }
+        ]
+      },
+      { "text": "<final>已按项目模板画像完成全文排版。</final>" }
+    ],
+    "toolStubs": {
+      "doc_apply_style_profile": "{\"success\": true, \"truncated\": false}"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "doc_apply_style_profile" }],
+      "offeredToolsExclude": ["slide_add_page", "sheet_write_cells"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

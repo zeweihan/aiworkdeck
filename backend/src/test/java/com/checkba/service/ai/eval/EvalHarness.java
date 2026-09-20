@@ -216,6 +216,13 @@ public final class EvalHarness {
         request.setMessage(c.userInput);
         request.setModel("anthropic/claude-3.5-sonnet");
         request.setMode(c.mode);
+        if (c.activeDocument != null) {
+            AiAgentController.ContextItem active = new AiAgentController.ContextItem();
+            active.setId(c.activeDocument.id);
+            active.setName(c.activeDocument.name);
+            active.setFileType(c.activeDocument.fileType);
+            request.setActiveContext(active);
+        }
 
         orchestrator.handleUserMessage(request, 7L);
 

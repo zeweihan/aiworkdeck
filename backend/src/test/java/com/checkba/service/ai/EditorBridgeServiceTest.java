@@ -56,9 +56,38 @@ class EditorBridgeServiceTest {
     @Test
     @DisplayName("表外 action 仍是 30s 默认值")
     void defaultStaysThirtySeconds() throws Exception {
-        assertEquals(30, EditorBridgeService.timeoutSecondsFor("get_selection"));
+        // 瞬时的交互类（选区折叠/跳转/撤销）本来就该在毫秒级回来，没有理由进表
+        assertEquals(30, EditorBridgeService.timeoutSecondsFor("collapse_selection"));
+        assertEquals(30, EditorBridgeService.timeoutSecondsFor("goto"));
         assertEquals(120, EditorBridgeService.timeoutSecondsFor("find_replace"));
         assertEquals(30, EditorBridgeService.timeoutSecondsFor(null));
+    }
+
+    @Test
+    @DisplayName("读取类 action 与写入类同档 120s：30s 默认值下 79/86 次桥超时都是读命令（dev-board#729 ③）")
+    void readActionsGetTheSameBudgetAsWrites() throws Exception {
+        Map<String, Integer> t = table();
+        // 真机日志里超时次数最多的两个
+        assertEquals(120, t.get("find_text_locations"));
+        assertEquals(120, t.get("get_document_text"));
+        // 其余 Writer 读取面
+        assertEquals(120, t.get("get_paragraph"));
+        assertEquals(120, t.get("get_outline"));
+        assertEquals(120, t.get("get_clauses"));
+        assertEquals(120, t.get("get_cursor_context"));
+        assertEquals(120, t.get("get_selection"));
+        assertEquals(120, t.get("get_formatting"));
+        assertEquals(120, t.get("get_bookmark_context"));
+        assertEquals(120, t.get("list_revisions"));
+        assertEquals(120, t.get("list_comments"));
+        assertEquals(120, t.get("table_read"));
+        // Calc / Impress 读取面同档
+        assertEquals(120, t.get("sheet_get_overview"));
+        assertEquals(120, t.get("sheet_read_range"));
+        assertEquals(120, t.get("sheet_search"));
+        assertEquals(120, t.get("slide_get_overview"));
+        assertEquals(120, t.get("slide_get_page"));
+        assertEquals(120, t.get("slide_table_read"));
     }
 
     @Test
@@ -79,6 +108,11 @@ class EditorBridgeServiceTest {
                 "旧文案把「后端不再等」说成「没执行」，模型据此重发造成双改");
         assertTrue(payload.contains("可能已写入"), "必须点明内容可能已经落进文档");
         assertTrue(payload.contains("不要重发"), "必须明确禁止重发同一命令");
+        // dev-board#729 ③：旧文案让模型「去调 doc_get_document_text 确认」，而读取命令
+        // 与超时的那条在同一个编辑器上排队，十有八九跟着一起超时——一次超时变成两次，
+        // 白烧一整个 LLM 往返。不许再在超时回执里点名任何读取工具。
+        assertTrue(!payload.contains("doc_get_document_text") && !payload.contains("doc_read_paragraphs"),
+                "超时回执不得引导模型立刻整篇读回（连锁超时），实际: " + payload);
     }
 
     // ==== 本轮重复整段插入的确定性去重闸（dev-board#464）====

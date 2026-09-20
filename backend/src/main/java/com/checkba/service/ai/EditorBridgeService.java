@@ -123,7 +123,36 @@ public class EditorBridgeService {
             Map.entry("insert_at_cursor", 120),
             Map.entry("insert_under_heading", 120),
             Map.entry("replace_selection", 120),
-            Map.entry("modify_paragraph", 120));
+            Map.entry("modify_paragraph", 120),
+            // ===== 读取类（dev-board#729 ③）=====
+            // 本机 telemetry 实测：219 次桥调用里 12 次超时、共空等 362 秒；后端日志 86 次超时
+            // 里 79 次是读取类（find_text_locations 41、get_document_text 15 居前）。
+            // 读取类此前全部吃 30 秒默认值，而 doc_open_file 是 fire-and-forget——
+            // 模型「打开文档 → 立刻读」时，那条读命令正撞在文档装载中（doc_open_file_sync 自己
+            // 就给了 180 秒），30 秒必然不够。超时的代价还不止那 30 秒：模型拿到失败会再读一次，
+            // 又是一整个 LLM 往返（本机中位 80 秒）。读取类没有副作用，等久一点没有任何风险，
+            // 与写入类同档 120 秒。
+            Map.entry("get_document_text", 120),
+            Map.entry("find_text_locations", 120),
+            Map.entry("get_paragraph", 120),
+            Map.entry("get_outline", 120),
+            Map.entry("get_clauses", 120),
+            Map.entry("get_cursor_context", 120),
+            Map.entry("get_selection", 120),
+            Map.entry("get_formatting", 120),
+            Map.entry("get_bookmark_context", 120),
+            Map.entry("list_revisions", 120),
+            Map.entry("list_comments", 120),
+            Map.entry("table_read", 120),
+            Map.entry("debug_revisions", 120),
+            Map.entry("sheet_get_overview", 120),
+            Map.entry("sheet_read_range", 120),
+            Map.entry("sheet_search", 120),
+            Map.entry("sheet_get_comments", 120),
+            Map.entry("slide_get_overview", 120),
+            Map.entry("slide_get_page", 120),
+            Map.entry("slide_read_notes", 120),
+            Map.entry("slide_table_read", 120));
 
     /**
      * 超时回执（dev-board#464）。「后端不再等」不等于「没执行」——worker 打不断，
@@ -131,7 +160,9 @@ public class EditorBridgeService {
      * 被模型读成失败，原样重发一次，用户看到同一份长报告以修订插了两遍。
      */
     static final String TIMEOUT_RESULT_JSON = "{\"error\": \"操作超时：编辑器可能仍在执行该命令，"
-            + "内容可能已写入。不要重发同一命令，先用读取工具（如 doc_get_document_text）确认文档状态。\", \"code\": \"EDITOR_RESULT_TIMEOUT\", \"outcomeUnknown\": true, \"retryable\": false}";
+            + "内容可能已写入。不要重发同一命令，也不要立刻整篇读回确认——读取命令在同一个编辑器上排队，"
+            + "十有八九跟着一起超时（连锁超时，白烧一整轮）。把「这一步结果未知」如实告诉用户，"
+            + "由用户在编辑器里看一眼。\", \"code\": \"EDITOR_RESULT_TIMEOUT\", \"outcomeUnknown\": true, \"retryable\": false}";
 
     /**
      * 本轮（run）内已下发过的整段插入：conversationId -> 指纹集合。

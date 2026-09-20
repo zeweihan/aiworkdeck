@@ -162,6 +162,87 @@ class ContextAssemblerServiceTest {
         assertTrue(systemText.contains("已在编辑器中打开"), "正文读不到也应声明该文档已打开");
     }
 
+    // ==== 模板画像事实（dev-board#729 ②）====
+    // 「本项目有没有模板画像」模型自己判断不了，真机上它会先花一整轮去 list_files(_模板) 探一探。
+    // 服务端本来就知道答案（StyleProfileResolver 的解析链），直接写进末位提醒。
+
+    private static StyleProfileResolver resolverReporting(StyleProfileResolver.Source source) {
+        StyleProfileResolver resolver = mock(StyleProfileResolver.class);
+        when(resolver.resolveWithSource(any(), any())).thenReturn(
+                new StyleProfileResolver.Resolved(
+                        com.checkba.util.style.StyleProfiles.houseDefault(), source));
+        return resolver;
+    }
+
+    @Test
+    @DisplayName("有项目画像：末位提醒直说「有」+ 来源，并明令不要去翻模板文件夹")
+    void templateProfilePresenceIsStatedAtTheLastPosition() {
+        assembler.setStyleProfileResolver(resolverReporting(StyleProfileResolver.Source.PROJECT));
+
+        String userText = assembleLastUserText(activeDoc());
+
+        assertTrue(userText.contains("本项目模板画像：有"), "实际: " + userText);
+        assertTrue(userText.contains("doc_apply_style_profile"), "要点名该调哪个工具");
+        assertTrue(userText.contains("list_files"), "要明令不要去翻模板文件夹");
+    }
+
+    @Test
+    @DisplayName("没有画像：末位提醒直说「无」，并把落点指向 doc_apply_standard_format")
+    void templateProfileAbsenceIsAlsoStated() {
+        assembler.setStyleProfileResolver(
+                resolverReporting(StyleProfileResolver.Source.HOUSE_DEFAULT));
+
+        String userText = assembleLastUserText(activeDoc());
+
+        assertTrue(userText.contains("本项目模板画像：无"), "实际: " + userText);
+        assertTrue(userText.contains("doc_apply_standard_format"), "要点名该调哪个工具");
+    }
+
+    @Test
+    @DisplayName("画像事实只对 Writer 文档说：表格/演示/无活跃文档一律不注入（多一句是白花钱）")
+    void templateProfileFactOnlyAppliesToWriterDocuments() {
+        assembler.setStyleProfileResolver(resolverReporting(StyleProfileResolver.Source.PROJECT));
+
+        AiAgentController.ContextItem sheet = new AiAgentController.ContextItem();
+        sheet.setId("124");
+        sheet.setName("股权款台账.xlsx");
+        sheet.setFileType("xlsx");
+        assertFalse(assembleLastUserText(sheet).contains("本项目模板画像"));
+
+        assertFalse(assembleLastUserText(null).contains("本项目模板画像"));
+    }
+
+    @Test
+    @DisplayName("没有画像解析器（既有手工构造路径）时整段不注入，行为与加这条之前一致")
+    void templateProfileFactIsSkippedWithoutResolver() {
+        assertFalse(assembleLastUserText(activeDoc()).contains("本项目模板画像"));
+    }
+
+    @Test
+    @DisplayName("画像事实有英文版（应用语言 en-US 时不许冒中文）")
+    void templateProfileFactHasAnEnglishVersion() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        assembler.setStyleProfileResolver(resolverReporting(StyleProfileResolver.Source.PROJECT));
+
+        String userText = assembleLastUserText(activeDoc());
+
+        assertTrue(userText.contains("template style profile"), "实际: " + userText);
+        assertFalse(userText.contains("本项目模板画像"), "英文模式不该出现中文那句");
+    }
+
+    @Test
+    @DisplayName("画像解析抛异常不许掀翻整轮组装：少一句提醒只是慢一轮")
+    void templateProfileResolutionFailureNeverBreaksAssembly() {
+        StyleProfileResolver boom = mock(StyleProfileResolver.class);
+        when(boom.resolveWithSource(any(), any())).thenThrow(new IllegalStateException("db down"));
+        assembler.setStyleProfileResolver(boom);
+
+        String userText = assembleLastUserText(activeDoc());
+
+        assertFalse(userText.contains("本项目模板画像"));
+        assertTrue(userText.contains("帮我修订一下"), "用户原文必须还在");
+    }
+
     @Test
     @DisplayName("无活跃文档时不注入 active_document 段")
     void noActiveContextNoInjection() {

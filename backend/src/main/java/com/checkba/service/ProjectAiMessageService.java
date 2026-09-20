@@ -176,6 +176,15 @@ public class ProjectAiMessageService {
     }
 
     /**
+     * 会话消息条数（dev-board#729 ⑤）。判「是不是会话首轮」用它，不要用
+     * {@code listByConversationId(...).size()}——那会把整条会话的正文与执行日志全读出来，
+     * 而这个判断只需要一个数字，且它就在用户等待首 token 的关键路径上。
+     */
+    public long countByConversationId(String conversationId) {
+        return repository.countByConversationId(conversationId);
+    }
+
+    /**
      * 是否为插件镜像会话（dev-board#298）：首条消息带 sourceChannel。
      * 镜像会话在桌面端只读——插件那头还在续写同一条时间线，桌面直接续写会双头交错；
      * 续聊走 {@link #forkConversation}。云端原生会话的 sourceChannel 恒为 null，不受影响。

@@ -17,6 +17,16 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
     List<ProjectAiMessage> findByConversationIdOrderByCreatedAtAsc(String conversationId);
 
     /**
+     * 会话消息条数（dev-board#729 ⑤）。
+     *
+     * <p>编排器的「这是不是首轮」判断此前是 {@code listByConversationId(...).size() <= 1}——
+     * 把整条会话的全部消息（含每条几千到几万字符的正文与 executionLog）从库里读出来、
+     * 映射成实体，只为了拿一个数字；而 {@code ContextAssemblerService} 紧接着还要再全量读一次。
+     * 长会话里这是两次可观的往返，且都在用户等待首 token 的关键路径上。
+     */
+    long countByConversationId(String conversationId);
+
+    /**
      * 获取会话列表，包含 conversationTitle 和用户第一条消息
      * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel]
      * sourceChannel 取首条消息的（镜像导入的会话在首条上带 office-word 等值，dev-board#298）。

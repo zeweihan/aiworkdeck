@@ -129,6 +129,48 @@ public class ClientCapabilityService {
         return hostByConversation.getOrDefault(conversationId, OfficeHost.WORD);
     }
 
+    /** LOWA 活跃文档类型三分值，与 {@link ContextAssemblerService#lowaDocKind} 的返回值同源。 */
+    public static final String DOC_KIND_WRITER = "doc";
+    public static final String DOC_KIND_SHEET = "sheet";
+    public static final String DOC_KIND_SLIDE = "slide";
+
+    /**
+     * 与「当前打开的是哪一类文档」无关、任何 LOWA 会话都要保留的 doc_* / sheet_* 工具
+     *（dev-board#729）。判据是<b>这个工具的效果不依赖活跃文档的类型</b>，分两类：
+     *
+     * <p><b>纯后端（不经 {@code EditorBridgeService.executeEditorCommand}）</b>——逐个核对过
+     * {@code DocumentEditTools} / {@code CheckpointTools} 的 85 个 @Tool，真正纯后端的只有这几个：
+     * <ul>
+     *   <li>{@code doc_list_project_files} / {@code doc_open_file} / {@code doc_search_related_docs}
+     *       —— 读 project_file 表 + 经 SSE 下发打开指令，是「换一份目标文档」的唯一入口，
+     *       裁掉它 xlsx 会话里的模型就再也打不开任何 Word 文档了；</li>
+     *   <li>{@code doc_restore_checkpoint} —— 按 fileId 还原本轮快照，与文档类型无关。
+     *       Calc/Impress 没有修订痕迹、写入即生效，它就是那两类文档唯一的后悔药。</li>
+     * </ul>
+     *
+     * <p><b>「新建并打开一份新文档」</b>——它们作用在新建出来的那份文件上，跟此刻开着什么无关：
+     * <ul>
+     *   <li>{@code sheet_create_file}（POI 建空白 xlsx + 注册 + 下发打开）——
+     *       「把合同里的付款条款整理成一张表」在 Word 会话里是常见任务；</li>
+     *   <li>{@code doc_start_stream}（建空白 docx + 打开 + 进流式写入模式）——
+     *       「看着这份台账起草一份说明」在 Excel 会话里同样常见。它确实走桥，
+     *       但走的是新建出来的那份 docx，不是活跃文档。</li>
+     * </ul>
+     * 少了这两个，跨类型的新建流程在第一步就被堵死；而它们一旦执行成功，
+     * 活跃文档就换了类型，编排器会把工具集放回全集（见 {@code AgentOrchestrator} 的
+     * {@code widenDocKindAfterDocumentSwitch}）。
+     *
+     * <p>其余 doc_* / sheet_* / slide_* 全部作用在活跃文档上，类型不匹配时一律是
+     * 「worker 报错」或更糟的静默错改，模型看得见就会去试。
+     */
+    private static final java.util.Set<String> KIND_AGNOSTIC_LOWA_TOOLS = java.util.Set.of(
+            "doc_list_project_files",
+            "doc_open_file",
+            "doc_search_related_docs",
+            "doc_restore_checkpoint",
+            "sheet_create_file",
+            "doc_start_stream");
+
     /**
      * 工具对该会话是否可见。
      * doc_* / sheet_* / slide_* 是 LOWA 专属远端执行工具（经 EditorBridgeService 等前端回执）；
@@ -139,6 +181,23 @@ public class ClientCapabilityService {
      * 后端 StorageService 落盘、无客户端执行器依赖，dev-board#37），刻意不过滤。
      */
     public boolean isToolVisible(String toolName, String conversationId) {
+        return isToolVisible(toolName, conversationId, null);
+    }
+
+    /**
+     * 再按 LOWA 活跃文档类型收窄（dev-board#729 ①）。
+     *
+     * <p>doc_* / sheet_* / slide_* 是**三套互不相通**的原语：Writer 文档上调 sheet_* 必然报
+     * 「当前打开的不是电子表格」，Calc 上调 doc_* 连 {@code xModel.getText()} 都过不去。
+     * 三套一起下发的代价是实打实的钱和时间——202 个工具的 schema 约占 prompt 的 2/3
+     * （实测 59045 → 18854 token、首轮 26.4s → 6.1s），而其中三分之二在本轮一个字都用不上。
+     *
+     * @param activeDocKind {@link #DOC_KIND_WRITER} / {@link #DOC_KIND_SHEET} /
+     *                      {@link #DOC_KIND_SLIDE}；null 或其它值（没有活跃文档、纯文本、
+     *                      类型判不出来）一律**不裁剪**——少给工具会让模型直接做不成事，
+     *                      判不准时必须倒向全集。
+     */
+    public boolean isToolVisible(String toolName, String conversationId, String activeDocKind) {
         if (toolName == null) {
             return false;
         }
@@ -148,7 +207,7 @@ public class ClientCapabilityService {
             return true;
         }
         return switch (capabilityOf(conversationId)) {
-            case LOWA -> lowaOnly;
+            case LOWA -> lowaOnly && visibleForDocKind(toolName, activeDocKind);
             case OFFICE -> officeOnly && hostOfTool(toolName) == officeHostOf(conversationId);
             case NONE -> false;
         };
@@ -225,6 +284,23 @@ public class ClientCapabilityService {
         return !(READ_ONLY_STEM.matcher(action).find()
                 || READ_ONLY_SUFFIX.matcher(action).find()
                 || READ_ONLY_EXACT.contains(action));
+    }
+
+    /** 活跃文档类型闸：只收窄、绝不放宽（调用方已确认是 LOWA 会话的 lowaOnly 工具）。 */
+    static boolean visibleForDocKind(String toolName, String activeDocKind) {
+        if (activeDocKind == null || activeDocKind.isBlank()) {
+            return true;
+        }
+        if (KIND_AGNOSTIC_LOWA_TOOLS.contains(toolName)) {
+            return true;
+        }
+        return switch (activeDocKind) {
+            case DOC_KIND_WRITER -> toolName.startsWith("doc_");
+            case DOC_KIND_SHEET -> toolName.startsWith("sheet_");
+            case DOC_KIND_SLIDE -> toolName.startsWith("slide_");
+            // "text"（纯文本走 text_*，不进 LOWA）与任何未知值：判不准就不裁
+            default -> true;
+        };
     }
 
     /** office_* 工具所属宿主：按前缀细分（最长前缀优先，office_excel_ 也以 office_ 开头）。 */

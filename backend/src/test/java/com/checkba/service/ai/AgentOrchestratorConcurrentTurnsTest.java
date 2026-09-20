@@ -201,7 +201,7 @@ class AgentOrchestratorConcurrentTurnsTest {
                         SystemMessage.from("system"), UserMessage.from("user"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any()))
+        when(toolRegistry.getAllSpecifications(any(), any()))
                 .thenReturn(specs("law_search", "mask_text", "read_document"));
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))

@@ -107,7 +107,7 @@ class AddinRequestLanguageTest {
                 });
 
         ToolRegistry toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(Optional.empty());
 
         SkillRouter skillRouter = mock(SkillRouter.class);

@@ -114,7 +114,7 @@ class AgentOrchestratorQuestionStopTest {
                         SystemMessage.from("system"), UserMessage.from("帮我起草一份股权转让协议"))));
 
         toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.getAllSpecifications(any())).thenReturn(List.of());
+        when(toolRegistry.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(toolRegistry.resolve(anyString())).thenReturn(java.util.Optional.empty());
         when(toolRegistry.execute(any(), any(), any()))
                 .thenReturn(new ToolRegistry.ToolResult("ok", null, true));

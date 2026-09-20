@@ -83,7 +83,7 @@ class AgentOrchestratorInboxTest {
         }).when(assembler).assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
 
         tools = mock(ToolRegistry.class);
-        when(tools.getAllSpecifications(any())).thenReturn(List.of());
+        when(tools.getAllSpecifications(any(), any())).thenReturn(List.of());
         when(tools.resolve(anyString())).thenReturn(Optional.empty());
         SkillRouter skills = mock(SkillRouter.class);
         when(skills.visibleTools(any(), any())).thenAnswer(inv -> inv.getArgument(1));
