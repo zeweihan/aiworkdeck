@@ -59,8 +59,26 @@ public class WebTools implements AgentToolComponent {
     @org.springframework.beans.factory.annotation.Autowired
     private com.checkba.service.platform.PlatformGatewayClient platformGatewayClient;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.platform.ExternalServiceAvailability externalServiceAvailability;
+
     /** 搜索的上游超时。**不沿用账户通道的 5 秒**——博查返回 10 条带摘要的结果经常要十几秒。 */
     private static final int SEARCH_TIMEOUT_SECONDS = 30;
+
+    /**
+     * 平台档没连账户时不把 search_web 下发给模型（dev-board#750）——它每次都只会回
+     * 「尚未连接 AI WorkDeck 账户」，而模型会为此白花一整轮。{@code browse_url} 走本机
+     * Playwright，与账户无关，永远照常下发。
+     */
+    @Override
+    public java.util.Set<String> currentlyUnusableTools() {
+        if (externalServiceAvailability != null
+                && !externalServiceAvailability.usable(
+                        com.checkba.service.platform.ExternalServiceProvider.SEARCH)) {
+            return java.util.Set.of("search_web");
+        }
+        return java.util.Set.of();
+    }
 
     @ToolMeta(displayName = "网络搜索", category = "web")
     @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")

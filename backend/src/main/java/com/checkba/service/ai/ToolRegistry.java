@@ -276,6 +276,28 @@ public class ToolRegistry {
     }
 
     /**
+     * 此刻确定用不了的工具名（账户没连、凭证没配这类<b>运行期</b>状态）。
+     *
+     * <p>调用点只有一个：编排器在每条用户消息起跑时算一次，存进 RunGuard 供本轮所有递归复用。
+     * 组件抛异常一律当「没有不可用的工具」——判不准就多下发，绝不把能用的藏掉。
+     */
+    public Set<String> unusableToolNames() {
+        Set<String> all = new java.util.HashSet<>();
+        for (AgentToolComponent bean : toolComponents) {
+            try {
+                Set<String> names = bean.currentlyUnusableTools();
+                if (names != null) {
+                    all.addAll(names);
+                }
+            } catch (Exception e) {
+                log.warn("currentlyUnusableTools() threw for {}, ignoring it",
+                        bean.getClass().getSimpleName(), e);
+            }
+        }
+        return all;
+    }
+
+    /**
      * 插件启停过滤：内置工具（不属于任何插件，pid == null）恒可见；
      * 插件工具仅在所属插件启用时可见。
      */

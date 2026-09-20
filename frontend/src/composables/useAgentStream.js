@@ -3,7 +3,7 @@
 import { ref, reactive, nextTick, onUnmounted, getCurrentInstance } from 'vue'
 import { deleteAgentInboxItem, getAgentInbox, getApiBaseUrl, getConversationMetadata, updateAgentInboxItem } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
-import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
+import { createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental } from '@/composables/agentTagProtocol.mjs'
 import { t } from '@/i18n'
 import { captureChatTimeline } from '@/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from './bubbleId.js'
@@ -1415,8 +1415,26 @@ export function useAgentStream() {
         })
     }
 
+    /**
+     * 把增量解转义留在各 tool 条目上的尾巴收掉（dev-board#750）。
+     *
+     * 正常路径由 </tool_code> / </tool_output> 闭合时收；这里兜的是「流中途断了、标签
+     * 永远不闭合」那一档——不收的话最后那一截（最多 MAX_CARRY）就永远显示不出来。
+     */
+    const flushToolCarries = (bubble) => {
+        if (!bubble || !bubble.processes) return
+        for (const proc of bubble.processes) {
+            for (const item of proc.items || []) {
+                if (item.type !== 'tool') continue
+                if (item.codeCarry) { item.code += decodeProtocolTags(item.codeCarry); item.codeCarry = '' }
+                if (item.outputCarry) { item.output += decodeProtocolTags(item.outputCarry); item.outputCarry = '' }
+            }
+        }
+    }
+
     // Flush any remaining content in parserBuffer (called when stream ends)
     const flushRemainingBuffer = () => {
+        flushToolCarries(currentAssistantBubble.value)
         if (parserBuffer && parserBuffer.trim()) {
             console.log('[AgentStream] Flushing remaining buffer:', parserBuffer.length, 'chars')
             // 结尾那截围栏是 processTextStream 特意留在缓冲区里的（见 PARTIAL_FENCE），
@@ -1522,9 +1540,12 @@ export function useAgentStream() {
             if (p && p.items.length > 0) {
                 const lastItem = p.items[p.items.length - 1]
                 if (lastItem.type === 'tool') {
-                    // 解转义放在累加之后：&lt; 可能被切在两段字节之间，
-                    // 对整段已累加的文本还原才不会漏（decodeProtocolTags 幂等）
-                    lastItem.code = decodeProtocolTags(lastItem.code + text)
+                    // 增量解转义（dev-board#750）：只解这一段新到的，结尾那截可能被切开的
+                    // 标签留到下一次。原先每个 delta 都对整段已累加的文本重跑一次正则，
+                    // 载荷含被中和标签时是 O(n²)，表现为「调某个工具时面板卡住」。
+                    const piece = decodeProtocolTagsIncremental(text, lastItem.codeCarry)
+                    lastItem.code += piece.text
+                    lastItem.codeCarry = piece.carry
                 }
             }
         } else if (activeTag === 'tool_output') {
@@ -1535,8 +1556,10 @@ export function useAgentStream() {
                 if (p) toolItem = [...p.items].reverse().find(i => i.type === 'tool')
             }
             if (toolItem) {
-                // 同 tool_code：对整段已累加的文本解转义，跨 chunk 的 &lt; 才不会漏
-                toolItem.output = decodeProtocolTags(toolItem.output + text)
+                // 同 tool_code：增量解转义 + 留半截标签的尾巴（闭合时由 flushToolCarry 收尾）
+                const piece = decodeProtocolTagsIncremental(text, toolItem.outputCarry)
+                toolItem.output += piece.text
+                toolItem.outputCarry = piece.carry
                 // ONLY use heuristic if status wasn't set by backend (i.e., still 'loading')
                 // If backend already set status via <tool_output status="..."> attribute, do NOT override
                 if (toolItem.status === 'loading') {
@@ -1745,6 +1768,14 @@ export function useAgentStream() {
             }
         } else if (tagName === 'tool_code') {
             if (isClose) {
+                // 收掉增量解转义留下的尾巴：那一截可能是「看着像半截标签、其实就是正文」
+                // 的文本，不收就永远显示不出来（dev-board#750）
+                const proc = bubble.processes.find(p => p.id === activeProcessId)
+                const openItem = proc && proc.items.length > 0 ? proc.items[proc.items.length - 1] : null
+                if (openItem && openItem.type === 'tool' && openItem.codeCarry) {
+                    openItem.code += decodeProtocolTags(openItem.codeCarry)
+                    openItem.codeCarry = ''
+                }
                 activeTag = 'process'
             } else {
                 const currentProc = bubble.processes.find(p => p.id === activeProcessId)
@@ -1753,6 +1784,9 @@ export function useAgentStream() {
                         type: 'tool',
                         code: '',
                         output: '',
+                        // 增量解转义留到下一段的尾巴；预声明才是响应式的（dev-board#750）
+                        codeCarry: '',
+                        outputCarry: '',
                         status: 'loading'
                     })
                 }
@@ -1771,6 +1805,12 @@ export function useAgentStream() {
                     })
                 }
                 activeProcessId = null
+                // 同 tool_code：先把尾巴收掉再去读 output，否则最后那一截既显示不出来、
+                // 也参与不了下面这个 file creation 的判断（dev-board#750）
+                if (activeToolItem && activeToolItem.outputCarry) {
+                    activeToolItem.output += decodeProtocolTags(activeToolItem.outputCarry)
+                    activeToolItem.outputCarry = ''
+                }
                 // Check if tool output contains file creation success JSON (legacy check, keep for now)
                 const closedItem = activeToolItem
                 if (closedItem && closedItem.output) {

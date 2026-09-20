@@ -209,6 +209,15 @@ public class AgentOrchestrator {
          * 通道会直接 400。唯一的改写点是 {@link #dispatchTool} 里的 doc_open_file 切类型分支。
          */
         String activeDocKind;
+        /**
+         * 本轮确定用不了、因而不下发给模型的工具名（dev-board#750）：账户没连时的
+         * law_* / search_web / qichacha_* / tushare_query 之类。
+         *
+         * <p><b>与 activeDocKind 同一条契约：一轮内只算一次</b>，而且这一个连中途放宽的口子
+         * 都没有——账户状态不会在一轮对话中间变，真变了也由下一轮接住。每轮重算等于让模型
+         * 上一轮宣布要调的工具这一轮消失，通道直接 400。
+         */
+        java.util.Set<String> unusableTools = java.util.Set.of();
         // LLM 往返轮数与首轮 promptTokens（埋点 ai.turn；只由当前轮次记账）
         int llmRounds;
         boolean promptTokensRecorded;
@@ -1114,6 +1123,13 @@ public class AgentOrchestrator {
                 log.info("[ToolVisibility] conv={} 活跃文档类型={}，本轮按该类型裁剪 doc_/sheet_/slide_ 工具集",
                         conversationId, guard.activeDocKind);
             }
+            // 运行期不可用的工具也在同一处算定（dev-board#750）：账户没连时那些工具每次都只会回
+            // 一句「尚未连接 AI WorkDeck 账户」，而模型会为此白花一整轮（3~5 秒）
+            guard.unusableTools = toolRegistry.unusableToolNames();
+            if (!guard.unusableTools.isEmpty()) {
+                log.info("[ToolVisibility] conv={} 本轮不下发 {} 个当前用不了的工具：{}",
+                        conversationId, guard.unusableTools.size(), guard.unusableTools);
+            }
             runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);
 
         } catch (com.checkba.service.account.AccountException e) {
@@ -1896,6 +1912,14 @@ public class AgentOrchestrator {
         // 每轮递归都读同一个值——一轮内工具集必须不变，否则模型刚宣布要调的工具下一轮就消失了。
         List<ToolSpecification> registered =
                 toolRegistry.getAllSpecifications(conversationId, guard == null ? null : guard.activeDocKind);
+        // 再去掉本轮运行期确定用不了的（dev-board#750）。这一层刻意放在编排器而不是注册表里：
+        // 可见性的最后一道裁剪本来就在这里（skill 白名单、ASK 只留只读记忆工具），而且
+        // guard.unusableTools 是**轮次级**状态，只有这里拿得到。
+        if (guard != null && !guard.unusableTools.isEmpty()) {
+            registered = registered.stream()
+                    .filter(s -> !guard.unusableTools.contains(s.name()))
+                    .toList();
+        }
         List<ToolSpecification> visible;
         if (agentMode == AgentMode.ASK) {
             visible = registered.stream().filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();

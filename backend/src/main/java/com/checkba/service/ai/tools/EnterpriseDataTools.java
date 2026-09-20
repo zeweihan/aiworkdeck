@@ -54,6 +54,34 @@ public class EnterpriseDataTools implements AgentToolComponent {
     @Value("${ai.tools.enterprise-demo-fixtures:}")
     private String enterpriseDemoFixturesDir;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.platform.ExternalServiceAvailability externalServiceAvailability;
+
+    /**
+     * 平台档没连账户时不下发这几个工具（dev-board#750）。两个服务分别判：企查查与
+     * Tushare 的档位是独立设置的，连着一个不代表另一个也能用。
+     *
+     * <p>演示桩目录（{@code ai.tools.enterprise-demo-fixtures}）配上时<b>不藏</b>：
+     * 那条路压根不出网，藏了录不成演示视频。
+     */
+    @Override
+    public java.util.Set<String> currentlyUnusableTools() {
+        if (externalServiceAvailability == null || StringUtils.hasText(enterpriseDemoFixturesDir)) {
+            return java.util.Set.of();
+        }
+        java.util.Set<String> hidden = new java.util.HashSet<>();
+        if (!externalServiceAvailability.usable(
+                com.checkba.service.platform.ExternalServiceProvider.QICHACHA)) {
+            hidden.add("qichacha_query");
+            hidden.add("qichacha_ipr");
+        }
+        if (!externalServiceAvailability.usable(
+                com.checkba.service.platform.ExternalServiceProvider.TUSHARE)) {
+            hidden.add("tushare_query");
+        }
+        return hidden;
+    }
+
     @ToolMeta(displayName = "查询企业工商信息", category = "data")
     @Tool("Look up a Chinese company's business registration record (legal name, registered capital, address, shareholders, executives) by company name or unified social credit code. Returns the raw record as JSON.")
     public String qichacha_query(String companyName) {
