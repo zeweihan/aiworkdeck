@@ -242,12 +242,8 @@
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
-      <!-- 即时审校开关（dev-board#723）。按下态 = 开着；关掉之后不发任何 worker
-           命令与 HTTP 请求，正文里也不留「已关闭」的提示。 -->
-      <view v-if="inlineReviewAvailable" class="etb-btn wide" :class="{ on: inlineReviewOn }"
-            :title="$t('editor.toolbar.inlineReview')" @tap.stop="$emit('toggle-inline-review')">
-        <text class="etb-tx sm">{{ $t('editor.toolbar.inlineReviewShort') }}</text>
-      </view>
+      <!-- 「审校」按钮已随 dev-board#749 撤掉：开关归正文那颗浮球（开关必须和它
+           控制的东西待在一起），工具栏这里只留「审阅」。 -->
       <!-- 有据续写（dev-board#748）。面板本体长在客体页里（要跟着正文光标走），
            这里是它的唯一入口：点一下给客体发开合指令，按下态等客体回报。
            客体报不可用（非 Writer / 只读 / 换文档重起）时整颗按钮不出现。 -->
@@ -380,16 +376,13 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'toggle-inline-review', 'toggle-semantic-writing', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-semantic-writing', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
     // 宿主在「选区/光标动了」「文档改了」时自增，驱动激活态刷新。
     refreshKey: { type: Number, default: 0 },
     reviewOpen: { type: Boolean, default: false },
-    // 即时审校此刻开着没有 / 这份文档有没有即时审校（非 Writer、没有项目时整个按钮不出现）。
-    inlineReviewOn: { type: Boolean, default: true },
-    inlineReviewAvailable: { type: Boolean, default: false },
     // 有据续写面板此刻开着没有 / 这份文档有没有这项能力（两者都由客体页上报）。
     semanticWritingOn: { type: Boolean, default: false },
     semanticWritingAvailable: { type: Boolean, default: false },

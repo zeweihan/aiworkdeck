@@ -51,8 +51,8 @@ export const menuCommandsMethods = {
       recording: !!this.isRecording,
       trackChanges: !!edState.trackChanges,
       reviewOpen: !!edState.reviewOpen,
-      // 即时审校默认开：编辑器还没上报状态时按开着显示，与工具栏按钮同口径。
-      inlineReview: edState.inlineReview !== false,
+      // AI 审校默认开：编辑器还没上报状态时按开着显示，与正文浮球同口径。
+      aiReview: edState.aiReview !== false,
       aiRunning: !!chatState.aiRunning,
       aiModeAsk: chatState.aiMode === 'ASK',
       aiModePlan: chatState.aiMode === 'PLAN',
@@ -172,7 +172,7 @@ export const menuCommandsMethods = {
       case 'find': { const ed = this.requireEditor(); if (ed) ed.menuOpenFind(); break }
       case 'toggleTrackChanges': { const ed = this.requireEditor(); if (ed) await ed.menuToggleTrackChanges(); break }
       case 'toggleReviewPanel': { const ed = this.requireEditor(); if (ed) ed.menuToggleReviewPanel(); break }
-      case 'toggleInlineReview': { const ed = this.requireEditor(); if (ed) ed.menuToggleInlineReview(); break }
+      case 'toggleAiReview': { const ed = this.requireEditor(); if (ed) ed.menuToggleAiReview(); break }
       case 'acceptAllRevisions': { const ed = this.requireEditor(); if (ed) await ed.menuResolveAllRevisions('accept'); break }
       case 'rejectAllRevisions': { const ed = this.requireEditor(); if (ed) await ed.menuResolveAllRevisions('reject'); break }
       case 'clearFormatting': { const ed = this.requireEditor(); if (ed) await ed.menuClearFormatting(); break }

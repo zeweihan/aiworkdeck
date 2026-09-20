@@ -254,6 +254,16 @@ try {
   await guest.keyboard.press('Tab')
   await guest.waitForFunction((name) => document.querySelector('.awd-wa-heading')?.textContent.includes(name), { timeout: 15000 }, selectedName)
 
+  // dev-board#749：AI 审校的开关就长在正文那颗浮球上（工具栏不再有「审校」按钮）。
+  // 先从浮球菜单里关掉 AI，后面「切分类不会调模型」那条断言才是确定的——开着的话
+  // 停笔 20 秒本来就会自动跑一次。浮球现在一开始就在，不必等到有结果。
+  await guest.waitForSelector('.awd-ir-ball:not([hidden])', { timeout: 30000 })
+  await guest.click('.awd-ir-more')
+  await guest.waitForSelector('.awd-ir-menu:not([hidden])')
+  assert.ok((await guest.$eval('.awd-ir-menu button', el => el.textContent)).includes('关闭 AI 审校'))
+  await guest.click('.awd-ir-menu button')
+  await guest.waitForFunction(() => document.querySelector('.awd-ir-ball')?.classList.contains('off') === true)
+
   // Continue normal writing: rules must inspect live text without an explicit parse.
   await guest.keyboard.press('Escape')
   await guest.keyboard.press('End')
@@ -262,7 +272,8 @@ try {
   await guest.evaluate(() => document.activeElement?.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' })))
   await guest.keyboard.sendCharacter(draft)
   await guest.evaluate((text) => document.activeElement?.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text })), draft)
-  // 正文里只剩一颗浮球（dev-board#723/#724）：清单搬到宿主右栏审阅面板的「审校」标签。
+  // 正文里只剩一颗浮球（dev-board#723/#724）：清单搬到宿主右栏审阅面板的「AI 审校」标签。
+  // 规则检查与 AI 开关无关，上面关掉 AI 之后这颗浮球上的计数照常出。
   await guest.waitForFunction(() => {
     const ball = document.querySelector('.awd-ir-ball')
     return !!ball && !ball.hidden && /[1-9]/.test(ball.textContent || '')
@@ -288,8 +299,8 @@ try {
   await guest.mouse.up()
   const ballAfter = await (await guest.$('.awd-ir-ball')).boundingBox()
   assert.ok(Math.abs(ballAfter.y - ballBefore.y) > 50, '浮球必须跟着真实拖动走')
-  await guest.click('.awd-ir-ball')
-  // 清单在宿主渲染层（webview 之外）：点浮球应当打开审阅面板并落在「审校」页
+  await guest.click('.awd-ir-open')
+  // 清单在宿主渲染层（webview 之外）：点浮球应当打开审阅面板并落在「AI 审校」页
   await page.waitForFunction(() => [...document.querySelectorAll('.irp-item')].some(el => el.textContent.includes('存在待定内容')), { timeout: 20000 })
   await guest.screenshot({ path: path.join(isolation.root, 'review-ball.png') })
   await clickLabel(page, '.irp-tab', '待补充')

@@ -15,9 +15,13 @@ function harness(t, override, language) {
   let result = { success: true, available: true, revision: 1, paragraphIndex: 0, text: '应于30日付款', offset: 5, hasSelection: false, cursorRectRaw: { pos: { X: 1000, Y: 1000 }, zoom: 100, charHeightPt: 12 } }
   const api = attachInlineReview({ canvas, input, language, execute: async (action, params) => { calls.push({ action, params }); return override ? override(action, params) : result }, transport: { subscribe(fn) { receive = fn; return () => {} }, send(msg) { messages.push(msg) } } })
   const finding = { id: '1', paragraphIndex: 0, start: 2, end: 4, expectedParagraph: '应于30日付款', quote: '30', replacement: '15', title: '期限', message: '请核对期限' }
-  const state = patch => receive({ __lo: 'lo-relay', type: 'inline-review-state', session: 'doc1', layoutKey: 'awd_inline_review_layout_x', enabled: true, hidden: false, writable: true, status: 'ready', revision: 1, findings: [finding], ...patch })
+  const state = patch => receive({ __lo: 'lo-relay', type: 'inline-review-state', session: 'doc1', layoutKey: 'awd_inline_review_layout_x', ai: true, hidden: false, writable: true, status: 'ready', deepStatus: 'idle', revision: 1, findings: [finding], ...patch })
   const click = () => canvas.dispatchEvent(new dom.window.MouseEvent('mouseup', { button: 0, clientX: 150, clientY: 150 }))
   const ball = () => doc.querySelector('.awd-ir-ball')
+  const open = () => doc.querySelector('.awd-ir-open')
+  const more = () => doc.querySelector('.awd-ir-more')
+  const menu = () => doc.querySelector('.awd-ir-menu')
+  const menuItems = () => [...doc.querySelectorAll('.awd-ir-menu button')]
   const chip = () => doc.querySelector('.awd-ir-chip')
   const drag = (from, to) => {
     ball().dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true, button: 0, clientX: from[0], clientY: from[1] }))
@@ -25,7 +29,7 @@ function harness(t, override, language) {
     dom.window.dispatchEvent(new dom.window.MouseEvent('mouseup'))
   }
   t.after(() => { api.destroy(); dom.window.close() })
-  return { doc, dom, input, canvas, api, calls, messages, state, click, ball, chip, drag, setResult: r => { result = r } }
+  return { doc, dom, input, canvas, api, calls, messages, state, click, ball, open, more, menu, menuItems, chip, drag, setResult: r => { result = r } }
 }
 
 test('正文里只有浮球和行旁标记，不再有可压住正文的大浮窗', async t => {
@@ -33,7 +37,7 @@ test('正文里只有浮球和行旁标记，不再有可压住正文的大浮�
   assert.equal(h.doc.querySelector('.awd-ir-panel'), null, '380px 浮窗必须彻底消失')
   assert.equal(h.ball().hidden, false)
   assert.equal(h.ball().textContent.includes('1'), true, '浮球带未读计数')
-  assert.ok(h.ball().title.includes('即时审校'))
+  assert.ok(h.open().title.includes('AI 审校'), h.open().title)
   assert.equal(h.chip().hidden, false)
   // 显示提示不发任何请求，只读光标上下文
   assert.equal(h.messages.length, 0)
@@ -42,7 +46,7 @@ test('正文里只有浮球和行旁标记，不再有可压住正文的大浮�
 
 test('点浮球和点行旁标记都只通知宿主打开审校清单，不在正文里画面板', async t => {
   const h = harness(t); h.state(); h.click(); await tick()
-  h.ball().click(); await Promise.resolve()
+  h.open().click(); await Promise.resolve()
   assert.equal(h.messages.length, 1)
   assert.equal(h.messages[0].type, 'inline-review-request')
   assert.equal(h.messages[0].action, 'open-panel')
@@ -52,14 +56,62 @@ test('点浮球和点行旁标记都只通知宿主打开审校清单，不在�
   assert.equal(h.doc.querySelector('.awd-ir-panel'), null)
 })
 
-test('关闭态正文里什么都不挂，也不再读光标', async t => {
-  const h = harness(t); h.state({ enabled: false, status: 'disabled' }); h.click(); await tick()
+test('AI 关掉之后浮球还在（开关就在它身上），只是弱化；规则计数照常', async t => {
+  const h = harness(t); h.state({ ai: false }); h.click(); await tick()
+  assert.equal(h.ball().hidden, false, '藏了浮球就没地方再把 AI 打开')
+  assert.equal(h.ball().classList.contains('off'), true)
+  assert.equal(h.ball().textContent.includes('1'), true, '规则检查照跑，计数不因 AI 关掉消失')
+  assert.ok(h.open().title.includes('AI 审校已关闭'), h.open().title)
+  assert.equal(h.chip().hidden, false, '行旁标记属于规则那一层')
+})
+
+test('会话结束（宿主 destroy）才把正文里的东西全摘掉，也不再读光标', async t => {
+  const h = harness(t); h.state({ status: 'disabled', findings: [] }); h.click(); await tick()
   assert.equal(h.ball().hidden, true)
   assert.equal(h.chip().hidden, true)
-  assert.equal(h.doc.body.textContent.includes('已关闭'), false, '关闭态不许在正文里留提示')
+  assert.equal(h.doc.body.textContent.includes('已关闭'), false, '正文里不许留「已关闭」的提示')
   const count = h.calls.length
   h.api.cursorMoved(); await tick()
   assert.equal(h.calls.length, count)
+})
+
+test('浮球菜单三项各发一条请求，点完即关；Esc 关闭并把焦点还给触发器', async t => {
+  const h = harness(t); h.state(); await tick()
+  assert.equal(h.menu().hidden, true)
+  h.more().click(); await Promise.resolve()
+  assert.equal(h.menu().hidden, false)
+  assert.deepEqual(h.menuItems().map(b => b.textContent), ['关闭 AI 审校', '立即 AI 审校', '隐藏正文浮球'])
+  assert.equal(h.doc.activeElement, h.menuItems()[0], '打开就把焦点放进菜单')
+  h.menuItems()[1].click(); await Promise.resolve()
+  assert.equal(h.messages.at(-1).action, 'deep')
+  assert.equal(h.menu().hidden, true, '点完就关')
+  h.more().click(); await Promise.resolve()
+  h.menuItems()[0].click(); await Promise.resolve()
+  assert.deepEqual(h.messages.at(-1).data, { ai: false })
+  h.more().click(); await Promise.resolve()
+  h.menuItems()[2].click(); await Promise.resolve()
+  assert.deepEqual(h.messages.at(-1).data, { hidden: true })
+  h.state(); h.more().click(); await Promise.resolve()
+  h.menu().dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  assert.equal(h.menu().hidden, true)
+  assert.equal(h.doc.activeElement, h.more())
+  // 菜单里一条命令都不发给引擎：显示层不改文档
+  assert.equal(h.calls.every(c => c.action === 'get_review_context'), true)
+})
+
+test('AI 关着时菜单那一项变成「开启」，运行中不许重复点', async t => {
+  const h = harness(t); h.state({ ai: false }); await tick()
+  h.more().click(); await Promise.resolve()
+  assert.equal(h.menuItems()[0].textContent, '开启 AI 审校')
+  h.state({ deepStatus: 'checking' })
+  assert.equal(h.menuItems()[1].disabled, true, 'AI 跑着的时候不许再点一次')
+  assert.equal(h.ball().classList.contains('busy'), true)
+  assert.ok(h.open().title.includes('AI 审校中'), h.open().title)
+})
+
+test('额度一类的暂停在浮球上说清原因', async t => {
+  const h = harness(t); h.state({ autoBlocked: 'DEEP_QUOTA' }); await tick()
+  assert.ok(h.open().title.includes('额度不足'), h.open().title)
 })
 
 test('hidden 偏好只藏浮球，检查照跑、宿主面板照收', async t => {
@@ -78,10 +130,10 @@ test('浮球可拖、松手靠边吸附、位置按用户键落 localStorage；�
   assert.equal(h.ball().style.left, '948px', '松手吸到最近的一边（1024 宽视口的右侧）')
   const saved = JSON.parse(h.dom.window.localStorage.getItem('awd_inline_review_layout_x'))
   assert.equal(saved.y, 290)
-  h.ball().click(); await Promise.resolve()
+  h.open().click(); await Promise.resolve()
   assert.equal(h.messages.length, 0, '拖动结束后的那一次 click 不该打开清单')
   await new Promise(r => setTimeout(r, 5))
-  h.ball().click(); await Promise.resolve()
+  h.open().click(); await Promise.resolve()
   assert.equal(h.messages.at(-1).action, 'open-panel')
 })
 
@@ -156,6 +208,8 @@ test('写作建议出现只隐藏行旁标记，浮球与它的位置不受影�
 
 test('English ball label is localized', async t => {
   const h = harness(t, null, 'en-US'); h.state(); await tick()
-  assert.ok(h.ball().title.includes('Inline review'), h.ball().title)
-  assert.ok(h.ball().title.includes('suggestions'), h.ball().title)
+  assert.ok(h.open().title.includes('AI review'), h.open().title)
+  assert.ok(h.open().title.includes('suggestions'), h.open().title)
+  h.more().click(); await Promise.resolve()
+  assert.deepEqual(h.menuItems().map(b => b.textContent), ['Turn AI review off', 'Run AI review now', 'Hide the floating ball'])
 })

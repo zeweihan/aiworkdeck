@@ -14,7 +14,7 @@ import { makeInlineReviewVm } from '../_lib/inline-review-panel-vm.mjs'
 
 const PARA = '甲方应于30日内付款，共计三笔。'
 const READY = (patch = {}) => ({
-  session: 's1', enabled: true, hidden: false, writable: true, status: 'ready', deepStatus: 'idle',
+  session: 's1', ai: true, hidden: false, writable: true, status: 'ready', deepStatus: 'idle',
   revision: 7, truncated: false, message: '',
   findings: [
     { id: 'f1', kind: 'PLACEHOLDER', title: '存在待定内容', message: '补齐', paragraphIndex: 0, start: 4, end: 7, quote: '30日', expectedParagraph: PARA, replacement: '15日' },
@@ -29,7 +29,7 @@ function recorder(result = { success: true }) {
   return { calls, executor: { executeCommand: async (action, params) => { calls.push({ action, params }); return result } } }
 }
 
-test('审阅面板：没有审校时「审校」标签不出现，有审校时可由宿主直接切过去', () => {
+test('审阅面板：没有审校时「AI 审校」标签不出现，有审校时可由宿主直接切过去', () => {
   const plain = makeReviewVm(null, {})
   plain.openTab('chk')
   assert.equal(plain.tab, 'rev', '没有 inlineReview 时切不过去（标签也不渲染）')
@@ -96,13 +96,13 @@ test('只读成员不给采用；重复引文被摘掉 replacement 后同样不�
   assert.equal(vm.applicable(vm.all[2]), false, 'f3 没有坐标')
 })
 
-test('开关/浮球/重查/深入审校都只上抛给宿主，面板自己不发请求', () => {
+test('AI 开关/浮球/重查/立即 AI 审校都只上抛给宿主，面板自己不发请求', () => {
   const r = recorder()
   const vm = makeInlineReviewVm(r.executor, { state: READY() })
-  vm.toggleEnabled(); vm.toggleBall(); vm.refresh(); vm.runDeep()
+  vm.toggleAi(); vm.toggleBall(); vm.refresh(); vm.runDeep()
   const actions = vm.emitted.filter(([name]) => name === 'action').map(([, p]) => p)
   assert.deepEqual(actions, [
-    { action: 'enabled', value: false },
+    { action: 'ai', value: false },
     { action: 'hidden', value: true },
     { action: 'refresh' },
     { action: 'deep' },
@@ -136,10 +136,19 @@ test('换文档时忽略清单、分类与上一轮结果都不跟过去', () =>
   assert.equal(vm.all.length, 0)
 })
 
-test('关闭态：面板只说「已关闭」，计数归零，不残留上一轮清单', () => {
-  const vm = makeInlineReviewVm(recorder().executor, { state: READY() })
-  vm.setState(READY({ enabled: false, status: 'disabled', findings: [] }))
-  assert.equal(vm.enabled, false)
-  assert.equal(vm.all.length, 0)
-  assert.deepEqual(vm.emitted.at(-1), ['count', 0])
+test('AI 关掉之后规则检查那一半照常显示，只有「AI 审校」那一桶说清是为什么空', () => {
+  const vm = makeInlineReviewVm(recorder().executor, { state: READY({ ai: false }) })
+  assert.equal(vm.aiEnabled, false)
+  assert.equal(vm.all.length, 3, '规则结果不因 AI 关掉消失')
+  assert.deepEqual(vm.emitted.at(-1), ['count', 3])
+  vm.bucket = 'ai'
+  assert.deepEqual(vm.rows.map((f) => f.id), ['f3'], 'AI 桶里已有的结论不清掉')
+})
+
+test('自动 AI 被额度一类的原因停掉时，顶栏说清原因并指向手动重试', () => {
+  const vm = makeInlineReviewVm(recorder().executor, { state: READY({ autoBlocked: 'DEEP_QUOTA' }) })
+  assert.ok(vm.noteText.includes('editor.inlineReview.autoPaused'))
+  assert.ok(vm.noteText.includes('editor.inlineReview.deepReason.DEEP_QUOTA'))
+  vm.setState(READY({ autoBlocked: 'NOT_A_CODE' }))
+  assert.equal(vm.noteText.includes('NOT_A_CODE'), false, '认不出的码不露给用户')
 })
