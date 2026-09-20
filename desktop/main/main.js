@@ -483,11 +483,14 @@ function createMainWindow() {
 
   // 无边框窗口：全屏时 mac 的交通灯会隐藏，渲染层顶栏左侧那段留白必须跟着归零，
   // 否则全屏下项目名会莫名其妙缩进 88px。渲染层收在 windowChrome.js。
+  // isMaximized 同理上报给 Windows：非最大化时应用边界要描边区分浅色资源管理器
+  // （dev-board#722），全屏/最大化时不描边。
   const sendChromeState = () => {
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('checkba:chrome-state', {
           fullscreen: mainWindow.isFullScreen(),
+          isMaximized: mainWindow.isMaximized(),
         })
       }
     } catch (e) {
@@ -496,6 +499,8 @@ function createMainWindow() {
   }
   mainWindow.on('enter-full-screen', sendChromeState)
   mainWindow.on('leave-full-screen', sendChromeState)
+  mainWindow.on('maximize', sendChromeState)
+  mainWindow.on('unmaximize', sendChromeState)
   mainWindow.webContents.on('did-finish-load', sendChromeState)
 
   // 拦截渲染进程里的 window.open（包括嵌入页/iframe 点击超链接）
