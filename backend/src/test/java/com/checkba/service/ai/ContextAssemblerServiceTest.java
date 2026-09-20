@@ -609,6 +609,65 @@ class ContextAssemblerServiceTest {
                 "powerpoint 会话不应点名 Word 面的过卷工具");
     }
 
+    // ==== 跨文件读写的硬边界（dev-board#717，改写 #285 的「只能编辑这一份」）====
+    // 可读任何参考来源（ref_list / ref_read）、可经 ref_edit 改其他**打开着**的文档、
+    // 未打开的文件一律不改。这条仍必须挂在 Office 分支的末位——约束放前面会被弱模型无视。
+
+    @Test
+    @DisplayName("office 会话（中文）：末位硬规则改为可读参考、可改打开文档、未打开的一律不改，三类宿主都挂末位")
+    void officeBoundaryRuleAllowsReferencesAndOpenDocEditsZh() {
+        for (String host : new String[] {"word", "excel", "powerpoint"}) {
+            capabilityService.record("conv-1", "office", host);
+            String systemText = assembleSystemText(officeDoc("第一条 甲方应承担违约责任……"));
+
+            int rule = systemText.indexOf("未打开的文件一律不能修改");
+            assertTrue(rule >= 0, host + "：应有「未打开的文件一律不能修改」硬规则");
+            assertTrue(systemText.contains("ref_list"), host + "：应指引用 ref_list 找参考文件");
+            assertTrue(systemText.contains("ref_read"), host + "：应指引用 ref_read 读参考文件");
+            assertTrue(systemText.contains("ref_edit"), host + "：应指引用 ref_edit 改其他打开的文档");
+            assertTrue(systemText.contains("ref_open"), host + "：应指引桌面端项目文件可用 ref_open 代为打开");
+            assertFalse(systemText.contains("不在本会话的编辑范围内"), host + "：旧的「一概不碰其他文件」口径应已移除");
+            // 仍在 Office 分支的最后：纯文本约束之后、活跃文档正文之前
+            assertTrue(rule > systemText.lastIndexOf("所有写进文档的内容必须是纯文本"),
+                    host + "：硬规则应排在纯文本约束之后（Office 分支末位）");
+            assertTrue(rule < systemText.indexOf("<active_document id=\"office-current-document\""),
+                    host + "：硬规则应在活跃文档正文之前（同属指引段）");
+        }
+    }
+
+    @Test
+    @DisplayName("office 会话（英文）：同一条末位硬规则的英文版，与中文逐条对应")
+    void officeBoundaryRuleAllowsReferencesAndOpenDocEditsEn() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        for (String host : new String[] {"word", "excel", "powerpoint"}) {
+            capabilityService.record("conv-1", "office", host);
+            String systemText = assembleSystemText(officeDoc("Article 1 The Party A shall..."));
+
+            int rule = systemText.indexOf("Files that are not open must never be edited");
+            assertTrue(rule >= 0, host + ": the not-open rule must be present");
+            assertTrue(systemText.contains("ref_list"), host + ": should point to ref_list");
+            assertTrue(systemText.contains("ref_read"), host + ": should point to ref_read");
+            assertTrue(systemText.contains("ref_edit"), host + ": should point to ref_edit");
+            assertTrue(systemText.contains("ref_open"), host + ": should point to ref_open");
+            assertFalse(systemText.contains("outside this session's reach"), host + ": old wording must be gone");
+            assertFalse(systemText.contains("未打开的文件一律不能修改"), host + ": no Chinese rule in English mode");
+            assertTrue(rule > systemText.lastIndexOf("Everything you write into the document must be plain text"),
+                    host + ": the rule stays last in the Office branch");
+            assertTrue(rule < systemText.indexOf("<active_document id=\"office-current-document\""),
+                    host + ": the rule stays inside the guidance section");
+        }
+    }
+
+    @Test
+    @DisplayName("非 office 会话不提 ref_* 工具（它们对 LOWA/none 会话不可见）")
+    void nonOfficeSessionsAreNotToldAboutRefTools() {
+        assertFalse(assembleSystemText(officeDoc("第一条 试用期为三个月……")).contains("ref_edit"),
+                "默认（LOWA）会话看不到 ref_*，不能在 prompt 里点名");
+        capabilityService.record("conv-1", "none");
+        assertFalse(assembleSystemText(officeDoc("第一条 试用期为三个月……")).contains("ref_edit"),
+                "none 会话看不到 ref_*，不能在 prompt 里点名");
+    }
+
     @Test
     @DisplayName("整理文件类任务：稳定段末位强制 move_files_batch 一次提交（dev-board#466）")
     void fileOrganisingIsToldToBatchMoves() {

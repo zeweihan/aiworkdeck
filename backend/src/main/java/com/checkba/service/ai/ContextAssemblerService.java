@@ -494,12 +494,15 @@ public class ContextAssemblerService {
                     // 但仍旧动手」——真实案例：用户要求「在 PPT 里加一页」，模型回「PPT 文件不在可编辑列表中」，
                     // 转头把那一页的内容写进了当前这份 Word 文档。含糊其辞比做不到更伤人，所以把
                     // 「说清楚 + 指路」写成硬规则，并且挂在本段末位（约束放前面会被弱模型无视）。
-                    systemText.append("**本会话能直接编辑的只有上面这一份打开的文档。** ");
-                    systemText.append("用户提到的其他文件（另一个 Office/WPS 窗口里打开的演示稿/工作簿/文档，或仅存在于项目里的文件）");
-                    systemText.append("都不在本会话的编辑范围内：不要凭上一轮的印象替它作答，更不要把本该写进那个文件的内容");
-                    systemText.append("改写进当前这份文档。遇到这种请求，直接说明当前连着的是哪一个软件里的哪一份文件、");
-                    systemText.append("并告诉用户在对应的软件（WPS 文字/表格/演示，或 Word/Excel/PowerPoint）里打开目标文件后，");
-                    systemText.append("在那边打开 AI WorkDeck 任务窗格即可；然后停下来等用户，不要自行找替代做法。\n\n");
+                    // dev-board#717 起放开为：可读任何参考来源（ref_list / ref_read）、可经 ref_edit 改其他
+                    // **打开着**的文档（痕迹在那个文档自己的窗格里明示）；未打开的文件仍一律不改（D 决策）。
+                    // 「别把 B 的内容写进 A」这条原病灶的禁令原样保留。英文版见 activeDocumentGuidanceEn，两边逐条对应。
+                    systemText.append("**本会话直接编辑的是上面这一份打开的文档。** ");
+                    systemText.append("用户提到其他文件时：需要参考内容，用 ref_list 找到它再用 ref_read 读取，不要凭上一轮的印象作答；");
+                    systemText.append("需要修改另一个**打开着**的文档，用 ref_edit，并且只改用户要求改的那个文档，");
+                    systemText.append("绝不能把本该写进那个文件的内容改写进当前这份文档。");
+                    systemText.append("**未打开的文件一律不能修改**：说明它没有打开，桌面端项目里的文件可用 ref_open 代为打开，");
+                    systemText.append("然后请用户在那个文档里打开 AI WorkDeck 窗格，停下来等用户。\n\n");
                 }
                 case NONE -> {
                     systemText.append("当前客户端没有文档编辑执行器：正文仅供阅读分析，");
@@ -1590,15 +1593,15 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                 sb.append("Everything you write into the document must be plain text: never include Markdown markup ")
                   .append("(--- rules, **bold**, # headings, ``` fences, ...) - it is not rendered and lands as literal ")
                   .append("characters in the document; use the formatting tools for headings, emphasis, or lists instead.\n\n");
-                // Editing-scope boundary - mirrors the Chinese branch (dev-board#285).
-                sb.append("**The only document this session can edit is the one described above.** ")
-                  .append("Any other file the user mentions - a presentation, workbook, or document open in a different ")
-                  .append("Office/WPS window, or a file that only exists in the project - is outside this session's reach: ")
-                  .append("do not answer for it from an earlier impression, and never write content meant for that file ")
-                  .append("into the current document instead. When asked, say plainly which application and which file ")
-                  .append("you are attached to, tell the user to open the target file in the matching application ")
-                  .append("(WPS Writer/Spreadsheets/Presentation, or Word/Excel/PowerPoint) and open the AI WorkDeck ")
-                  .append("task pane there, then stop and wait - do not improvise a substitute.\n\n");
+                // Editing-scope boundary - mirrors the Chinese branch (dev-board#285, widened by #717:
+                // any reference source may be read, other OPEN documents may be edited via ref_edit,
+                // files that are not open are never edited).
+                sb.append("**This session edits the one open document described above.** ")
+                  .append("When the user refers to another file: to use its content, find it with ref_list and read it with ref_read - ")
+                  .append("never answer for it from an earlier impression. To change another document that is **open**, use ref_edit, ")
+                  .append("change only the document the user asked for, and never write content meant for that file into the current one. ")
+                  .append("**Files that are not open must never be edited**: say it is not open; a desktop-project file can be opened ")
+                  .append("with ref_open; then ask the user to open the AI WorkDeck task pane in that document, and stop and wait.\n\n");
             }
             case NONE -> sb.append(EN_GUIDE_NONE);
             default -> {

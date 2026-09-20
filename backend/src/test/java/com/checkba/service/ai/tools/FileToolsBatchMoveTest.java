@@ -102,7 +102,7 @@ class FileToolsBatchMoveTest {
                     return node;
                 });
 
-        tools = new FileTools(fileService, repository, bridge, null, null, null, null, null);
+        tools = new FileTools(fileService, repository, bridge, null, null, null, null, null, null);
         ProjectContextHolder.setProjectId(String.valueOf(PROJECT_ID));
         ProjectContextHolder.setUserId(USER_ID);
     }

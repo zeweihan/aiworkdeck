@@ -33,6 +33,16 @@ server {
     add_header Cross-Origin-Opener-Policy   same-origin  always;
     add_header Cross-Origin-Embedder-Policy require-corp always;
 
+    # ---- 内部口：公网恒 404（dev-board#720）----
+    # 本实例（cloud profile）压根不提供 /api/internal/ref/{list,read}——那对端点只在
+    # 案件库（case profile，ref.internal.serve=true）上存在，且只走同机回环。
+    # 这条规则是纵深防御：AWD_REF_INTERNAL_SECRET 在这台上也配着（当出站头用），
+    # 万一哪天有人把 case profile 的 jar 挂到这台 nginx 后面，公网这一面仍然是 404。
+    # `^~` 不可省：它让这条前缀命中后不再去试正则 location（也压过下面更短的 /api/）。
+    location ^~ /api/internal/ {
+        return 404;
+    }
+
     # ---- 后端 API（Spring Boot :9696，只监听 127.0.0.1）----
     location /api/ {
         proxy_pass http://127.0.0.1:9696;

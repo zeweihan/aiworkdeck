@@ -27,7 +27,9 @@ const READ_ONLY_COMMANDS = new Set([
   'get_text', 'get_selection', 'search', 'get_formatting', 'get_comments', 'get_revisions',
   'table_read',
   'excel_get_range', 'excel_search', 'excel_get_overview', 'excel_get_comments',
-  'ppt_get_slides', 'ppt_get_slide_details', 'ppt_table_read'
+  'ppt_get_slides', 'ppt_get_slide_details', 'ppt_table_read',
+  // 别的窗格按 locator 读本文档（dev-board#717），只读
+  'read_for_reference'
 ])
 
 export function isReadOnlyCommand(command) {

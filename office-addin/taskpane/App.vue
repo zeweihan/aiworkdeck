@@ -49,6 +49,24 @@
         <button class="project-retry-btn" @click="refreshProjects">{{ t('uploadRetry') }}</button>
       </div>
       <span class="header-spacer"></span>
+      <!-- 修订记录（dev-board#717）：别的窗格的 AI 改了本文档时，痕迹、定位与撤销都在这里。
+           有未读条目时带数字角标——横幅会被用户划走/自己换掉，角标是那条「有人改过你的文档」
+           唯一一直在的提示 -->
+      <button
+        v-if="view === 'chat'"
+        class="icon-btn revlog-btn"
+        :title="t('revLogTitle')"
+        :aria-label="t('revLogTitle')"
+        @click="showRevisionLog"
+      >
+        <svg class="revlog-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 3h8l4 4v14H6z"/>
+          <path d="M14 3v4h4"/>
+          <path d="M9 12h6"/>
+          <path d="M9 16h4"/>
+        </svg>
+        <span v-if="revisionUnread" class="revlog-badge">{{ revisionUnread > 99 ? '99+' : revisionUnread }}</span>
+      </button>
       <!-- 语言切换（dev-board#177/#193）：未登录也要能切，所以放头部而不是账户菜单里；
            地球图标 + 目标语言缩写，让它一眼可读为「切换语言」而不是一个谜之汉字按钮 -->
       <button
@@ -82,6 +100,19 @@
     <!-- 归档绑定提示（dev-board#297）：绑定成功/失败的一次性反馈，几秒自隐 -->
     <div v-if="archiveHint" class="archive-hint" :class="{ error: archiveHintError }">{{ archiveHint }}</div>
 
+    <!-- 跨文档修改横幅（dev-board#717）：别的窗格的 AI 刚改了本文档。不自隐——
+         文档被别人改过是要用户过目的事，由用户点「查看」进修订记录或点 x 收起 -->
+    <div v-if="crossDocBanner" class="crossdoc-banner">
+      <span class="crossdoc-text">{{
+        t('crossDocBanner', {
+          name: crossDocBanner.originDocName || t('revLogUnknownDoc'),
+          count: crossDocBanner.count
+        })
+      }}</span>
+      <button class="crossdoc-view" @click="showRevisionLog">{{ t('crossDocBannerOpen') }}</button>
+      <button class="crossdoc-close" @click="dismissCrossDocBanner">x</button>
+    </div>
+
     <!-- 账户菜单（dev-board#194）：展示账户基本信息与 AI 额度，不再挂「高级设置」入口——
          那个入口把已登录用户带回登录表单，看起来像是被登出了 -->
     <div v-if="accountOpen" class="account-overlay" @click.self="accountOpen = false">
@@ -102,6 +133,8 @@
         </div>
         <!-- 充值走官网账户页（dev-board#198）：云后端不落用户 awdk key，收银台进不了任务窗格 -->
         <button v-if="siteRecharge" class="menu-item" :title="t('rechargeTitle')" @click="openRecharge">{{ t('recharge') }}</button>
+        <!-- 关联 git 仓库（dev-board#720）：给不装桌面端的用户一个权威参考源 -->
+        <button class="menu-item" @click="showGitLink">{{ t('menuGitLink') }}</button>
         <button class="menu-item danger" @click="logout">{{ t('logout') }}</button>
       </div>
     </div>
@@ -167,6 +200,18 @@
       :project-id="projectId"
       @close="closeTransfer()"
     />
+
+    <!-- 修订记录面板（dev-board#717）：头部入口与横幅共用模块级开关（lib/revisionLog.js），
+         与 TransferPanel 同款 overlay，挂在顶层盖住整个任务窗格 -->
+    <RevisionLogPanel v-if="revisionLogOpen" @close="closeRevisionLog()" />
+
+    <!-- 关联 git 仓库面板（dev-board#720）：只有账户菜单一个入口，开关就留在 App.vue -->
+    <GitLinkPanel
+      v-if="gitLinkOpen"
+      :settings="settings"
+      :project-id="projectId"
+      @close="gitLinkOpen = false"
+    />
   </div>
 </template>
 
@@ -175,6 +220,8 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import SettingsView from './components/SettingsView.vue'
 import ChatView from './components/ChatView.vue'
 import TransferPanel from './components/TransferPanel.vue'
+import RevisionLogPanel from './components/RevisionLogPanel.vue'
+import GitLinkPanel from './components/GitLinkPanel.vue'
 import {
   loadSettings, saveProjectId, isConfigured, hydrateSettings, clearToken, mirrorLang,
   loadArchiveLinks, saveArchiveLink, mergeArchiveLinks
@@ -182,14 +229,20 @@ import {
 import {
   fetchMyProjects, ensureAddinDefaultProject, fetchMe, postLogout,
   createProject, fetchPlatformAiStatus, fetchMobileDevices,
-  ensureAddinLink, fetchAddinLinks
+  ensureAddinLink, fetchAddinLinks, postPaneHeartbeat, sendPaneBye
 } from './lib/api.js'
 import { t, getLang, setLang } from './lib/i18n.js'
 import { displayProjectName } from './lib/projectName.js'
 import { rechargeUrl, openExternal } from './lib/site.js'
-import { hostFamily, hidePanel } from './lib/hostBridge.js'
+import { hostFamily, hidePanel, detectHost, readDocumentMeta, documentKey } from './lib/hostBridge.js'
 import { popIn } from './lib/motion.js'
 import { transferOpen, closeTransfer } from './lib/transfer.js'
+import { paneIdentity, onIdentityChange, crossDocBanner } from './lib/chatSession.js'
+import { startHeartbeat } from './lib/paneHeartbeat.js'
+import {
+  revisionLogOpen, openRevisionLog, closeRevisionLog, bindDocument,
+  unread as revisionUnread
+} from './lib/revisionLog.js'
 
 const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))
@@ -209,6 +262,8 @@ const langKey = ref(getLang())
 const me = ref(null)
 const accountOpen = ref(false)
 const accountMenuEl = ref(null)
+/** 关联 git 仓库面板（dev-board#720）：入口只有账户菜单一处，开关不必做成模块级 */
+const gitLinkOpen = ref(false)
 /** 按用户的平台 AI 额度（/api/platform-ai/key/status；拿不到就不展示额度行） */
 const aiQuota = ref(null)
 
@@ -452,6 +507,8 @@ function toggleLang() {
 
 async function logout() {
   accountOpen.value = false
+  // 先告别再注销：注销后令牌失效，bye 就认不出这是谁的窗格了
+  sendPaneBye(settings, paneIdentity().paneId)
   postLogout(settings) // 尽力而为，不等待
   clearToken()
   settings.token = ''
@@ -479,7 +536,30 @@ watch(accountOpen, (open) => {
   }
 })
 
+/**
+ * 打开修订记录（dev-board#717）：头部入口与横幅的「查看」共用这一个——看过面板就等于
+ * 看过这批修改，横幅留着只会让人以为还有新的。openRevisionLog 顺带清未读角标。
+ */
+function showGitLink() {
+  accountOpen.value = false
+  gitLinkOpen.value = true
+}
+
+function showRevisionLog() {
+  openRevisionLog()
+  crossDocBanner.value = null
+}
+
+/** 收起横幅：不清未读角标——用户只是把提示划走，并没有看过改了什么 */
+function dismissCrossDocBanner() {
+  crossDocBanner.value = null
+}
+
 onMounted(async () => {
+  // 修订记录按文档分开存（dev-board#717）：不绑定的话别的文档的条目会串到这一份上。
+  // Office.onReady 之后才挂载（main.js），这里 documentKey() 拿得到宿主与文档路径；
+  // 普通浏览器直开调试时回空串 = 不绑定，条目只在内存里。
+  bindDocument(documentKey())
   // webview 清过 localStorage 时从 OfficeRuntime.storage 回灌（dev-board#174）
   try {
     const restored = await hydrateSettings()
@@ -499,7 +579,32 @@ onMounted(async () => {
   }
   refreshProjects()
   loadMe()
+  startPaneHeartbeat()
 })
+
+/**
+ * 窗格心跳与告别（dev-board#717）：让同一账号的其他窗格能看见并跨文档读写本文档。
+ * 未登录不发；会话身份（会话/项目）一变立刻补发，不等 30 秒的下一轮；
+ * 窗格关闭（pagehide）时告别，云端立刻摘掉登记，不必等 90 秒过期。
+ * 文档名每次现取：未保存的新文档在用户另存后名字会变。
+ */
+function startPaneHeartbeat() {
+  const hb = startHeartbeat({
+    getState: () => {
+      if (!configured.value) return null
+      const meta = readDocumentMeta()
+      return {
+        ...paneIdentity(),
+        host: detectHost(),
+        family: hostFamily(),
+        docName: meta ? meta.name : ''
+      }
+    },
+    post: (body) => postPaneHeartbeat(settings, body)
+  })
+  onIdentityChange(() => hb.beatNow())
+  window.addEventListener('pagehide', () => sendPaneBye(settings, paneIdentity().paneId))
+}
 </script>
 
 <style scoped>
@@ -582,6 +687,49 @@ onMounted(async () => {
   border-color: var(--awd-danger, #B5483C);
 }
 
+/* 跨文档修改横幅（dev-board#717）：头部下方，与归档提示同一条带，但不自隐 */
+.crossdoc-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 10px 0;
+  padding: 6px 8px 6px 10px;
+  border-radius: var(--awd-radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--awd-primary);
+  background: var(--awd-mint-pale);
+  /* 边框一律走令牌：写死的 rgba 是旧配色的森绿，换代后会在新底色上显眼（dev-board#731） */
+  border: 1px solid var(--awd-border-strong);
+}
+
+.crossdoc-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.crossdoc-view {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border: 1px solid var(--awd-primary);
+  border-radius: 999px;
+  background: var(--awd-surface);
+  color: var(--awd-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.crossdoc-view:hover { background: var(--awd-primary); color: #fff; }
+
+.crossdoc-close {
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--awd-text-secondary);
+  font-family: var(--awd-font-mono, monospace);
+}
+
 .icon-btn {
   padding: 3px 10px;
   border: 1px solid var(--awd-border);
@@ -597,6 +745,35 @@ onMounted(async () => {
 }
 
 .icon-btn:active { transform: translateY(1px); }
+
+/* 修订记录入口（dev-board#717）：角标压在图标右上角，容器要相对定位 */
+.revlog-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.revlog-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.revlog-badge {
+  position: absolute;
+  top: -3px;
+  right: -2px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--awd-danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+}
 
 .lang-btn {
   display: inline-flex;

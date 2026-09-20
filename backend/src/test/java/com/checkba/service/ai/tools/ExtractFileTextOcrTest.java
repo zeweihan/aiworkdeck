@@ -34,8 +34,12 @@ class ExtractFileTextOcrTest {
     private final FileContentExtractorService extractor = Mockito.mock(FileContentExtractorService.class);
     private final DocumentTextService documentTextService = Mockito.mock(DocumentTextService.class);
 
+    // 抽取路由已搬进 ProjectFileTextExtractor（dev-board#718）：这里接真实的抽取器，
+    // 本测试的全部断言因此仍然覆盖真实路由，而不是一个被 mock 掉的委托
     private final FileTools tools =
-            new FileTools(projectFileService, repo, null, extractor, null, documentTextService, null, null);
+            new FileTools(projectFileService, repo, null, extractor, null, documentTextService, null, null,
+                    new com.checkba.service.file.ProjectFileTextExtractor(
+                            documentTextService, extractor, projectFileService));
 
     @AfterEach
     void clearContext() {

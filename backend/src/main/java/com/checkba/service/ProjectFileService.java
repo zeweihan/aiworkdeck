@@ -1179,6 +1179,101 @@ public class ProjectFileService {
             return inputStream.readAllBytes();
         }
     }
+
+    /** 相对路径索引里「项目根」的键：parent_id 为 NULL 与历史遗留的 0 都是根（见 resolveParentId）。 */
+    private static final Long PATH_ROOT = 0L;
+
+    /**
+     * 按项目内相对路径（如 {@code 合同/主合同.docx}）找未删除的条目（dev-board#718，参考材料读取）。
+     *
+     * <p>只沿文件树（数据库里未删除的行）逐层按名称匹配，从不碰文件系统，所以路径不可能逃出项目；
+     * 空段、{@code .}、{@code ..}、首尾的 {@code /} 一律视为找不到。中间段只匹配文件夹，
+     * 末段同名时优先文件。口径与 {@link #listRelativePaths} 同源：清单里的每条路径都能解析回同一行。
+     */
+    public Optional<ProjectFile> findByRelativePath(Long projectId, String relPath) {
+        if (projectId == null || relPath == null || relPath.isEmpty()) {
+            return Optional.empty();
+        }
+        String[] segments = relPath.split("/", -1);
+        for (String seg : segments) {
+            if (seg.isEmpty() || ".".equals(seg) || "..".equals(seg)) {
+                return Optional.empty();
+            }
+        }
+        java.util.Map<Long, List<ProjectFile>> children = liveChildrenIndex(projectId);
+        Long parentKey = PATH_ROOT;
+        ProjectFile current = null;
+        for (int i = 0; i < segments.length; i++) {
+            boolean last = i == segments.length - 1;
+            ProjectFile match = null;
+            for (ProjectFile c : children.getOrDefault(parentKey, List.of())) {
+                if (!segments[i].equals(c.getName())) {
+                    continue;
+                }
+                boolean folder = Boolean.TRUE.equals(c.getIsFolder());
+                if (!last && !folder) {
+                    continue;
+                }
+                if (match == null || (last && Boolean.TRUE.equals(match.getIsFolder()) && !folder)) {
+                    match = c;
+                }
+            }
+            if (match == null) {
+                return Optional.empty();
+            }
+            current = match;
+            parentKey = match.getId();
+        }
+        return Optional.ofNullable(current);
+    }
+
+    /**
+     * 列出项目内全部未删除的文件（不含文件夹）及其相对路径（dev-board#718，参考材料清单）。
+     *
+     * @param keyword 文件名包含的关键字，忽略大小写；null 或空白表示不过滤
+     * @param limit   按路径排序后截取的条数
+     */
+    public List<java.util.Map.Entry<String, ProjectFile>> listRelativePaths(Long projectId, String keyword, int limit) {
+        if (projectId == null || limit <= 0) {
+            return List.of();
+        }
+        String kw = keyword == null ? "" : keyword.trim().toLowerCase(java.util.Locale.ROOT);
+        java.util.Map<Long, List<ProjectFile>> children = liveChildrenIndex(projectId);
+        List<java.util.Map.Entry<String, ProjectFile>> out = new ArrayList<>();
+        java.util.Deque<java.util.Map.Entry<String, Long>> pending = new java.util.ArrayDeque<>();
+        java.util.Set<Long> visited = new java.util.HashSet<>();
+        pending.push(java.util.Map.entry("", PATH_ROOT));
+        while (!pending.isEmpty()) {
+            java.util.Map.Entry<String, Long> dir = pending.pop();
+            for (ProjectFile c : children.getOrDefault(dir.getValue(), List.of())) {
+                String path = dir.getKey().isEmpty() ? c.getName() : dir.getKey() + "/" + c.getName();
+                if (Boolean.TRUE.equals(c.getIsFolder())) {
+                    // visited 防御异常数据里的父子环
+                    if (visited.add(c.getId())) {
+                        pending.push(java.util.Map.entry(path, c.getId()));
+                    }
+                } else if (kw.isEmpty() || (c.getName() != null
+                        && c.getName().toLowerCase(java.util.Locale.ROOT).contains(kw))) {
+                    out.add(java.util.Map.entry(path, c));
+                }
+            }
+        }
+        out.sort(java.util.Map.Entry.comparingByKey());
+        return out.size() > limit ? List.copyOf(out.subList(0, limit)) : out;
+    }
+
+    /** 项目内未删除的行按父节点分组（根统一记在 {@link #PATH_ROOT} 下）。 */
+    private java.util.Map<Long, List<ProjectFile>> liveChildrenIndex(Long projectId) {
+        java.util.Map<Long, List<ProjectFile>> children = new java.util.HashMap<>();
+        for (ProjectFile f : projectFileRepository.findByProjectIdOrderBySortOrderAsc(projectId)) {
+            if (Boolean.TRUE.equals(f.getIsDeleted()) || f.getName() == null) {
+                continue;
+            }
+            Long parent = f.getParentId() == null ? PATH_ROOT : f.getParentId();
+            children.computeIfAbsent(parent, k -> new ArrayList<>()).add(f);
+        }
+        return children;
+    }
     /**
      * 保存 Artifact 文件 (AI 助手工作计划/任务清单)
      * 路径: /AI Assistant Files/{conversationId}/{filename}.md

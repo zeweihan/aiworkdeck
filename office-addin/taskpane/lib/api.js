@@ -727,6 +727,118 @@ export async function postOfficeResult({ serverUrl, token }, payload) {
 }
 
 /**
+ * 窗格心跳（POST /api/addin/panes/heartbeat，dev-board#717）。
+ * body {paneId, host, family, docName, projectId, conversationId}。
+ * 失败抛错，由 paneHeartbeat 的循环吞掉（漏一次无害，下一轮再发）。
+ */
+export async function postPaneHeartbeat({ serverUrl, token }, body) {
+  const base = normalizeBaseUrl(serverUrl)
+  const resp = await fetch(`${base}/api/addin/panes/heartbeat`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify(body)
+  })
+  if (!resp.ok) throw new Error('heartbeat ' + resp.status)
+}
+
+/**
+ * 窗格告别（POST /api/addin/panes/bye）：窗格卸载时让云端立刻摘掉这条登记，
+ * 不必等 90 秒过期。尽力而为，永不抛。
+ *
+ * 优先 sendBeacon——卸载途中普通 fetch 会被浏览器掐掉。beacon 带不了自定义头，
+ * 所以令牌放在 body.token 里（后端 bye 端点两处都认）；载荷用 text/plain，
+ * 它是 CORS 安全类型，跨域也不触发预检——关窗那一刻等不起一次预检往返。
+ * beacon 不可用或被拒收时落到 fetch keepalive。
+ */
+export function sendPaneBye({ serverUrl, token }, paneId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token || !paneId) return
+  const url = `${base}/api/addin/panes/bye`
+  const payload = JSON.stringify({ paneId, token })
+  try {
+    if (typeof navigator !== 'undefined' && navigator && typeof navigator.sendBeacon === 'function' &&
+        navigator.sendBeacon(url, new Blob([payload], { type: 'text/plain' }))) return
+  } catch (e) { /* 落到 fetch keepalive */ }
+  try {
+    fetch(url, { method: 'POST', headers: headers(token), body: payload, keepalive: true }).catch(() => {})
+  } catch (e) { /* 尽力而为 */ }
+}
+
+/**
+ * 关联 git 仓库（dev-board#720）：GET/POST/DELETE /api/addin/git-links。
+ *
+ * 三条都走 `{code, message}` 信封，**message 原样上浮**——「服务器未配置 git 令牌密钥」
+ * 「仓库访问失败：令牌无效」这类是用户唯一能据以改正的信息，换成自造的通用文案
+ * 等于把界面做成哑巴（同 postAnonymous 里账户登录那两条的理由）。
+ * 令牌只在 POST 的请求体里出现一次，不写日志、不回显、不进本机存储。
+ */
+async function gitLinkEnvelope(resp) {
+  let data = null
+  try {
+    data = await resp.json()
+  } catch (e) {
+    // 非 JSON（网关错误页之类）：落到下面按 HTTP 状态报
+  }
+  const message = data && data.message ? String(data.message) : ''
+  if (!data || data.code !== 0) {
+    if (message) throw new Error(message)
+    if (!resp.ok) throw new Error(t('apiConnectFailedHttp', { status: resp.status }))
+    throw new Error(t('apiBadResponseFormat'))
+  }
+  return data
+}
+
+async function gitLinkFetch(base, path, options) {
+  let resp
+  try {
+    resp = await fetch(`${base}${path}`, options)
+  } catch (e) {
+    throw new Error(t('apiBackendUnreachable'))
+  }
+  return gitLinkEnvelope(resp)
+}
+
+/** GET /api/addin/git-links?projectId= → 该项目的关联仓库（不含令牌） */
+export async function listGitLinks({ serverUrl, token }, projectId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  const data = await gitLinkFetch(base, `/api/addin/git-links?projectId=${encodeURIComponent(projectId)}`, {
+    headers: headers(token)
+  })
+  return Array.isArray(data.links) ? data.links : []
+}
+
+/**
+ * POST /api/addin/git-links → 服务端先用一次只读 API 调用校验再落库，返回 link（不含令牌）。
+ * 第二个参数里的 `token` 是**仓库访问令牌**，与第一个参数里的会话令牌是两码事。
+ */
+export async function createGitLink({ serverUrl, token }, { projectId, url, branch, token: repoToken }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  const data = await gitLinkFetch(base, '/api/addin/git-links', {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({
+      projectId,
+      url: (url || '').trim(),
+      branch: (branch || '').trim(),
+      token: (repoToken || '').trim()
+    })
+  })
+  return data.link || null
+}
+
+/** DELETE /api/addin/git-links/{id} → 解除关联（仅本人的行） */
+export async function deleteGitLink({ serverUrl, token }, id) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error(t('apiServerUrlEmpty'))
+  await gitLinkFetch(base, `/api/addin/git-links/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: headers(token)
+  })
+}
+
+/**
  * 请求后端停止当前会话的执行。
  */
 export async function postCancel({ serverUrl, token }, conversationId) {

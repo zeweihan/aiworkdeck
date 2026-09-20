@@ -623,6 +623,45 @@ collab:
     # 写错值启动即失败（CollaborationPolicyConfig），不静默落回 open。
     policy: ${COLLAB_ELIGIBILITY_POLICY:open}
 
+# 插件里的 AI 读取其他来源的文件（dev-board#720，spec 2026-09-18 §7.1）。
+# internal.serve：本实例是否**提供**内部口 /api/internal/ref/{list,read}。
+#   只有案件库开（application-case.yml 里写死 true），默认 false，addin / 团队服务器 /
+#   桌面端一律不提供，两个端点恒回裸 404。
+#   **必须与 internal.secret 分开**：那把密钥是一把两用的（见下），按部署文档 addin 侧也配着
+#   同一个值；若「配了密钥」就等于「提供这条口子」，addin 的 JVM 里就会跟着打开一对不需要
+#   会话、只按 externalAccountId 认人的读取端点，读的是 addin 自己的库——而 addin 侧的 nginx
+#   没有 `^~ /api/internal/` 兜底，就只剩回环判定一根绳。
+# internal.secret：案件库（case 实例）内部口 /api/internal/ref/{list,read} 的共享密钥。
+#   **一把密钥两个用途**：case 实例拿它校验入站请求，addin 实例拿它作为出站鉴权头
+#   X-Internal-Secret——两边配同一个值即互通。为空（默认）时案件库来源整块缺席：
+#   case 侧的两个端点恒回裸 404，addin 侧一次请求都不发。
+#   与 TRANSFER_BILLING_SECRET / MOBILE_BILLING_SECRET / COLLAB_DIRECTORY_SECRET
+#   是四把不同的密钥，不要复用（只在服务器 env 里配，别入库）。
+# case.base-url：addin 实例去找案件库的地址，北京两实例同机即 http://127.0.0.1:9797。
+#   公网 nginx 对 `^~ /api/internal/` 恒 404 兜底，这条口子只走回环。
+#   为空（国际站与自建服务器的默认态）= 本服务器没有案件库。
+ref:
+  internal:
+    serve: false
+    secret: ${AWD_REF_INTERNAL_SECRET:}
+  case:
+    base-url: ${AWD_REF_CASE_BASE_URL:}
+
+# 插件里关联的 GitHub / Gitee 仓库（dev-board#720，spec 2026-09-18 §7.2）。只读：
+# AI 从这些仓库读文件，从不提交、不推送。
+# token-secret：用户填的仓库访问令牌的落库加密密钥（AES-256-GCM，密钥 = SHA-256(本值)）。
+#   **与 security.platform-key-secret 是两把不同的密钥，不要复用**：平台 AI 通道密钥与
+#   用户自己的 git 令牌是两类凭据，泄一把不该带走另一把。任意高熵串即可，例如
+#   `openssl rand -base64 32`，只在服务器 env 里配，别入库。
+#   为空（默认）时带令牌的关联一律拒绝（回 503 明说「服务器未配置」），**绝不明文落库**；
+#   公开仓库（不填令牌）不受影响，照样能关联。
+# github-api / gitee-api：两家的 API 根地址，留默认即可；单测把它们指向本机桩服务。
+addin:
+  git:
+    token-secret: ${AWD_GIT_TOKEN_SECRET:}
+    github-api: ${AWD_GIT_GITHUB_API:https://api.github.com}
+    gitee-api: ${AWD_GIT_GITEE_API:https://gitee.com/api/v5}
+
 # 文件存储配置
 storage:
   # 存储类型：local（本地文件系统）或 oss（对象存储）

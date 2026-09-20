@@ -74,13 +74,16 @@ class MobileTransferServiceTest {
     // 一样 mock 掉，避免测试环境里的无关网络依赖
     @MockBean
     private WebTools webTools;
+    // 门铃流（dev-board#719）：建了要 B 处理的命令行后按一下门铃，这里只验证「按了」
+    @MockBean
+    private DesktopStreamService desktopStream;
 
     private static final Long USER_A = 9001L;
     private static final Long USER_B = 9002L;
 
     @BeforeEach
     void setUp() {
-        reset(billing);
+        reset(billing, desktopStream);
         bindAccount(USER_A, "acct-a");
         bindAccount(USER_B, "acct-b");
     }
@@ -329,6 +332,77 @@ class MobileTransferServiceTest {
         MobileTransferRequest again = service.push(USER_A, "dev-b", "1", file.getId(), requestId);
         assertEquals(row.getId(), again.getId());
         verify(billing, times(1)).charge(eq("acct-a"), eq(5L), anyString(), anyString());
+    }
+
+    // ==================== 门铃：新命令行即刻叫 B 来取 ====================
+
+    @Test
+    @DisplayName("LIST/PULL/PUSH 建行后各按一次门铃（kind=transfer）；按不响也不影响建行")
+    void newCommandRowsNudgeTheTargetDesktop() {
+        relayStore.touchDevice(USER_A, "dev-a");
+        when(desktopStream.nudge(anyLong(), anyString(), anyString())).thenReturn(false);
+        when(billing.charge(eq("acct-a"), anyLong(), anyString(), anyString()))
+                .thenReturn(new TransferBillingClient.ChargeResult(1, "ledger-n"));
+
+        service.list(USER_A, "dev-a", "42", newRequestId());
+        verify(desktopStream, times(1)).nudge(USER_A, "dev-a", "transfer");
+
+        service.pull(USER_A, "dev-a", "42", "file-1", "a.pdf", 10, newRequestId());
+        verify(desktopStream, times(2)).nudge(USER_A, "dev-a", "transfer");
+
+        Project project = newProject(USER_A, "门铃项目");
+        ProjectFile folder = projectFileService.createFolder(project.getId(), null, "文件夹", USER_A);
+        ProjectFile file = projectFileService.createFile(project.getId(), folder.getId(), "n.txt",
+                "txt", 5L, null, null, USER_A);
+        MobileTransferRequest pushed = service.push(USER_A, "dev-b", "1", file.getId(), newRequestId());
+        assertEquals("STAGED", pushed.getStatus());
+        verify(desktopStream).nudge(USER_A, "dev-b", "transfer");
+    }
+
+    @Test
+    @DisplayName("门铃抛异常不许挡住建行（B 的 60 秒轮询兜底）")
+    void nudgeFailureNeverBreaksCommandCreation() {
+        relayStore.touchDevice(USER_A, "dev-a");
+        when(desktopStream.nudge(anyLong(), anyString(), anyString())).thenThrow(new IllegalStateException("boom"));
+
+        MobileTransferRequest row = service.list(USER_A, "dev-a", "42", newRequestId());
+        assertEquals("PENDING", row.getStatus());
+    }
+
+    @Test
+    @DisplayName("同一 requestId 重放不再按门铃：LIST/PULL/PUSH 三条路口径一致")
+    void idempotentReplayDoesNotRingTheDoorbellAgain() {
+        relayStore.touchDevice(USER_A, "dev-a");
+        when(desktopStream.nudge(anyLong(), anyString(), anyString())).thenReturn(true);
+        when(billing.charge(eq("acct-a"), anyLong(), anyString(), anyString()))
+                .thenReturn(new TransferBillingClient.ChargeResult(1, "ledger-replay"));
+
+        String listId = newRequestId();
+        service.list(USER_A, "dev-a", "42", listId);
+        service.list(USER_A, "dev-a", "42", listId);
+        verify(desktopStream, times(1)).nudge(USER_A, "dev-a", "transfer");
+
+        String pullId = newRequestId();
+        service.pull(USER_A, "dev-a", "42", "file-1", "a.pdf", 10, pullId);
+        service.pull(USER_A, "dev-a", "42", "file-1", "a.pdf", 10, pullId);
+        verify(desktopStream, times(2)).nudge(USER_A, "dev-a", "transfer");
+
+        Project project = newProject(USER_A, "门铃重放项目");
+        ProjectFile folder = projectFileService.createFolder(project.getId(), null, "文件夹", USER_A);
+        ProjectFile file = projectFileService.createFile(project.getId(), folder.getId(), "n.txt",
+                "txt", 5L, null, null, USER_A);
+        String pushId = newRequestId();
+        service.push(USER_A, "dev-b", "1", file.getId(), pushId);
+        service.push(USER_A, "dev-b", "1", file.getId(), pushId);
+        verify(desktopStream, times(1)).nudge(USER_A, "dev-b", "transfer");
+    }
+
+    @Test
+    @DisplayName("在线闸拒绝时不按门铃")
+    void rejectedCommandDoesNotNudge() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.list(USER_A, "dev-never-seen", "42", newRequestId()));
+        verify(desktopStream, never()).nudge(anyLong(), anyString(), anyString());
     }
 
     // ==================== billing 未配置：DISABLED 文案 ====================

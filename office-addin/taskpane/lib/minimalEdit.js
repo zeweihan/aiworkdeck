@@ -227,3 +227,42 @@ function mergeNearbyRuns(runs, oTok, o) {
     } else k++
   }
 }
+
+/**
+ * 与 minimalEdits 同一份差分，但**每一段都至少覆盖 1 个原文字符**（dev-board#717）。
+ *
+ * 给「切不出零长度区间」的宿主用：跨文档写入的撤销要把 PPT 文本框改回原文，整框回写
+ * 会抹掉框内的分段格式与超链接，所以按差异段落笔；而 PowerPoint 的 getSubstring(start, 0)
+ * 与 WPS 的 Characters(start, 0) 行为都未经验证。纯插入因此借一个相邻字符（优先右邻，
+ * 插在末尾时借左邻，代理对整体借）变成「替换 1 个字」，逐段替换后的结果不变。
+ *
+ * 原串为空时没有字符可借，原样返回那一条零长度插入，由调用方整体赋值。
+ */
+export function substringEdits(oldStr, newStr) {
+  const o = oldStr == null ? '' : String(oldStr)
+  const edits = minimalEdits(o, newStr)
+  if (!o.length) return edits
+  const widened = edits.map((e) => {
+    if (e.end > e.start) return e
+    if (e.start < o.length) {
+      const ch = String.fromCodePoint(o.codePointAt(e.start))
+      return { start: e.start, end: e.start + ch.length, oldText: ch, newText: e.newText + ch }
+    }
+    let from = e.start - 1
+    const low = o.charCodeAt(from)
+    if (low >= 0xdc00 && low <= 0xdfff && from > 0) from--
+    const ch = o.slice(from, e.start)
+    return { start: from, end: e.start, oldText: ch, newText: ch + e.newText }
+  })
+  // 借来的字符与邻段重叠时（理论上不会：LCS 的相邻段之间至少隔一个公共词，这里只是兜底）
+  // 退成一段覆盖全部差异的替换——段外的前后缀在新旧文里本来就相同
+  for (let k = 1; k < widened.length; k++) {
+    if (widened[k].start < widened[k - 1].end) {
+      const n = newStr == null ? '' : String(newStr)
+      const start = widened[0].start
+      const end = widened[widened.length - 1].end
+      return [{ start, end, oldText: o.slice(start, end), newText: n.slice(start, n.length - (o.length - end)) }]
+    }
+  }
+  return widened
+}

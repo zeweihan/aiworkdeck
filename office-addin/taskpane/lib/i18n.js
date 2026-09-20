@@ -392,7 +392,51 @@ export const ZH = {
   cmdPptTableRead: '读取表格',
   cmdPptTableSetCell: '修改表格单元格',
   cmdPptSetHyperlink: '设置超链接',
+  cmdReadForReference: '供其他文档读取',
   cmdFallback: '文档操作（{command}）',
+
+  // ---- lib/crossDocWrite.js：修订记录条目摘要（dev-board#717）----
+  revSumReplace: '将“{from}”改为“{to}”',
+  revSumReplaceBatch: '批量改写 {count} 处',
+  revSumInsert: '插入“{text}”',
+  revSumExcelWrite: '写入 {range}',
+  revSumExcelSort: '排序 {range}',
+  revSumPptCell: '第 {slide} 页表格第 {row} 行第 {col} 列改为“{text}”',
+
+  // ---- RevisionLogPanel.vue / App.vue：修订记录面板与跨文档横幅（dev-board#717）----
+  revLogTitle: '修订记录',
+  revLogEmpty: '还没有来自其他文档的修改',
+  revLogFrom: '来自《{name}》',
+  revLogUnknownDoc: '其他文档',
+  revLogLocate: '定位',
+  revLogLocateMiss: '在本文档里没找到这处修改，可能已被再次改动',
+  revLogUndo: '撤销',
+  revLogUndone: '已撤销',
+  revLogConflict: '这里已被再次修改，未覆盖',
+  revLogUndoFailed: '撤销失败：{message}',
+  // 宿主中立：Office 与 WPS 文字都走这条（痕迹是文档自己的修订，不是本面板能撤的）
+  revLogNotUndoable: '已标为修订，撤销请在文档里拒绝该修订',
+  revLogNoBefore: '无法记录改前值，不能撤销',
+  revLogClear: '清空',
+  // 「修订已标记」只对文字宿主成立，表格/演示没有修订机制，统一说「已记入修订记录」
+  crossDocBanner: '来自《{name}》会话的 AI 刚修改了本文档 {count} 处，已记入修订记录',
+  crossDocBannerOpen: '查看',
+
+  // ---- GitLinkPanel.vue / lib/gitLink.js：关联 git 仓库（dev-board#720）----
+  menuGitLink: '关联 git 仓库',
+  gitLinkTitle: '关联 git 仓库',
+  gitLinkUrl: '仓库地址',
+  gitLinkUrlPlaceholder: 'https://github.com/用户名/仓库名',
+  gitLinkBranch: '分支（留空为默认）',
+  gitLinkToken: '访问令牌（只读权限即可）',
+  gitLinkSave: '验证并保存',
+  gitLinkVerifying: '正在验证…',
+  gitLinkRemove: '解除关联',
+  gitLinkOnlyHosts: '只支持 GitHub 与 Gitee',
+  gitLinkBadUrl: '仓库地址格式不对，例如 https://github.com/用户名/仓库名',
+  gitLinkHint: 'AI 只会读取这个仓库里的文件，不会提交或推送；令牌加密保存，可随时解除。',
+  gitLinkNoProject: '请先在顶部选择项目',
+  gitLinkEmpty: '还没有关联仓库',
 
   // ---- lib/transfer.js（dev-board#251）----
   transferHttpFailed: '连接失败（HTTP {status}）',
@@ -774,7 +818,49 @@ export const EN = {
   cmdPptTableRead: 'Read table',
   cmdPptTableSetCell: 'Edit table cell',
   cmdPptSetHyperlink: 'Set hyperlink',
+  cmdReadForReference: 'Read for another document',
   cmdFallback: 'Document action ({command})',
+
+  // ---- lib/crossDocWrite.js：修订记录条目摘要（dev-board#717）----
+  revSumReplace: 'Changed "{from}" to "{to}"',
+  revSumReplaceBatch: 'Batch edit of {count} place(s)',
+  revSumInsert: 'Inserted "{text}"',
+  revSumExcelWrite: 'Wrote {range}',
+  revSumExcelSort: 'Sorted {range}',
+  revSumPptCell: 'Slide {slide}, table row {row} column {col} set to "{text}"',
+
+  // ---- RevisionLogPanel.vue / App.vue：修订记录面板与跨文档横幅（dev-board#717）----
+  revLogTitle: 'Change log',
+  revLogEmpty: 'No changes from other documents yet',
+  revLogFrom: 'From "{name}"',
+  revLogUnknownDoc: 'another document',
+  revLogLocate: 'Locate',
+  revLogLocateMiss: 'Could not find this change here; it may have been changed again',
+  revLogUndo: 'Undo',
+  revLogUndone: 'Undone',
+  revLogConflict: 'Changed again since, not overwritten',
+  revLogUndoFailed: 'Undo failed: {message}',
+  revLogNotUndoable: 'Marked as a tracked change; reject that revision in the document to undo it',
+  revLogNoBefore: 'Previous value not recorded, cannot undo',
+  revLogClear: 'Clear',
+  crossDocBanner: 'The AI in "{name}" just changed {count} place(s) in this document; recorded in the change log',
+  crossDocBannerOpen: 'View',
+
+  // ---- GitLinkPanel.vue / lib/gitLink.js：关联 git 仓库（dev-board#720）----
+  menuGitLink: 'Linked git repositories',
+  gitLinkTitle: 'Linked git repositories',
+  gitLinkUrl: 'Repository URL',
+  gitLinkUrlPlaceholder: 'https://github.com/owner/repo',
+  gitLinkBranch: 'Branch (blank = default)',
+  gitLinkToken: 'Access token (read-only is enough)',
+  gitLinkSave: 'Verify and save',
+  gitLinkVerifying: 'Verifying…',
+  gitLinkRemove: 'Unlink',
+  gitLinkOnlyHosts: 'Only GitHub and Gitee are supported',
+  gitLinkBadUrl: 'That does not look like a repository URL, e.g. https://github.com/owner/repo',
+  gitLinkHint: 'The AI only reads files in this repository and never commits or pushes. The token is stored encrypted and can be removed at any time.',
+  gitLinkNoProject: 'Choose a project at the top first',
+  gitLinkEmpty: 'No linked repositories yet',
 
   // ---- lib/transfer.js（dev-board#251）----
   transferHttpFailed: 'Connection failed (HTTP {status})',

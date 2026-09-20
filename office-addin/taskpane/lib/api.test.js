@@ -21,6 +21,8 @@ import {
   postAccountLoginSendCode,
   postAccountLoginSendEmailCode,
   fetchMobileDevices,
+  postPaneHeartbeat,
+  sendPaneBye,
 } from './api.js'
 
 /** 替换 globalThis.fetch，返回 {calls, restore} */
@@ -234,5 +236,109 @@ test('fetchMobileDevices：没有 token 或地址时不发请求，直接返回 
     assert.equal(f.calls.length, 0)
   } finally {
     f.restore()
+  }
+})
+
+// ---- 窗格心跳与告别（dev-board#717） ----
+
+/** 替换 globalThis.navigator（Node 22 自带一个只有 getter 的 navigator，可重定义） */
+function stubNavigator(value) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true })
+  return () => {
+    if (original) Object.defineProperty(globalThis, 'navigator', original)
+    else delete globalThis.navigator
+  }
+}
+
+test('postPaneHeartbeat：POST 到 /api/addin/panes/heartbeat，令牌走 X-Session-Id 头', async () => {
+  const f = stubFetch(() => jsonReply({ code: 0 }))
+  try {
+    const body = { paneId: 'p1', host: 'word', family: 'office', docName: 'A.docx', projectId: 11, conversationId: 'c1' }
+    await postPaneHeartbeat({ serverUrl: 'https://addin.example.com/', token: 'awdt_xxx' }, body)
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.calls[0].url, 'https://addin.example.com/api/addin/panes/heartbeat')
+    assert.equal(f.calls[0].options.method, 'POST')
+    assert.equal(f.calls[0].options.headers['X-Session-Id'], 'awdt_xxx')
+    assert.deepEqual(JSON.parse(f.calls[0].options.body), body)
+  } finally {
+    f.restore()
+  }
+})
+
+test('postPaneHeartbeat：非 2xx 抛错（由心跳循环吞掉，这里只负责如实报告）', async () => {
+  const f = stubFetch(() => jsonReply({}, false, 404))
+  try {
+    await assert.rejects(
+      postPaneHeartbeat({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' }, { paneId: 'p1' }),
+      /404/
+    )
+  } finally {
+    f.restore()
+  }
+})
+
+test('sendPaneBye：优先 sendBeacon，text/plain 载荷里带 paneId 与令牌（beacon 带不了自定义头）', async () => {
+  const beacons = []
+  const restoreNav = stubNavigator({ sendBeacon: (url, blob) => { beacons.push({ url, blob }); return true } })
+  const f = stubFetch(() => jsonReply({ code: 0 }))
+  try {
+    sendPaneBye({ serverUrl: 'https://addin.example.com/', token: 'awdt_xxx' }, 'p1')
+    assert.equal(beacons.length, 1)
+    assert.equal(beacons[0].url, 'https://addin.example.com/api/addin/panes/bye')
+    // text/plain 是 CORS 安全类型：跨域 beacon 不触发预检，关窗那一刻才发得出去
+    assert.equal(beacons[0].blob.type, 'text/plain')
+    assert.deepEqual(JSON.parse(await beacons[0].blob.text()), { paneId: 'p1', token: 'awdt_xxx' })
+    assert.equal(f.calls.length, 0)
+  } finally {
+    f.restore()
+    restoreNav()
+  }
+})
+
+test('sendPaneBye：sendBeacon 拒收或不存在时落到 fetch keepalive', async () => {
+  for (const nav of [{ sendBeacon: () => false }, {}, { sendBeacon: () => { throw new Error('blocked') } }]) {
+    const restoreNav = stubNavigator(nav)
+    const f = stubFetch(() => jsonReply({ code: 0 }))
+    try {
+      sendPaneBye({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' }, 'p1')
+      assert.equal(f.calls.length, 1)
+      assert.equal(f.calls[0].url, 'https://addin.example.com/api/addin/panes/bye')
+      assert.equal(f.calls[0].options.method, 'POST')
+      assert.equal(f.calls[0].options.keepalive, true)
+      assert.equal(f.calls[0].options.headers['X-Session-Id'], 'awdt_xxx')
+      assert.deepEqual(JSON.parse(f.calls[0].options.body), { paneId: 'p1', token: 'awdt_xxx' })
+    } finally {
+      f.restore()
+      restoreNav()
+    }
+  }
+})
+
+test('sendPaneBye：没有地址、令牌或 paneId 时什么都不发', async () => {
+  const beacons = []
+  const restoreNav = stubNavigator({ sendBeacon: (url) => { beacons.push(url); return true } })
+  const f = stubFetch(() => jsonReply({ code: 0 }))
+  try {
+    sendPaneBye({ serverUrl: '', token: 'awdt_xxx' }, 'p1')
+    sendPaneBye({ serverUrl: 'https://addin.example.com', token: '' }, 'p1')
+    sendPaneBye({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' }, '')
+    assert.equal(beacons.length, 0)
+    assert.equal(f.calls.length, 0)
+  } finally {
+    f.restore()
+    restoreNav()
+  }
+})
+
+test('sendPaneBye：fetch 兜底失败也不抛（关窗路径上没人接得住异常）', async () => {
+  const restoreNav = stubNavigator({})
+  const f = stubFetch(() => { throw new Error('offline') })
+  try {
+    assert.doesNotThrow(() => sendPaneBye({ serverUrl: 'https://addin.example.com', token: 'awdt_xxx' }, 'p1'))
+    await new Promise((r) => setImmediate(r))
+  } finally {
+    f.restore()
+    restoreNav()
   }
 })

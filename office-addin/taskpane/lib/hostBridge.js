@@ -19,21 +19,37 @@ import {
   officeAvailable,
   detectHost as officeDetectHost,
   readActiveDocument as officeReadActiveDocument,
-  readDocumentMeta as officeReadDocumentMeta
+  readDocumentMeta as officeReadDocumentMeta,
+  officeDocumentPath
 } from './wordDoc.js'
 import {
   executeOfficeCommand,
   commandDisplayName as sharedCommandDisplayName,
-  locateInDocument as officeLocateInDocument
+  locateInDocument as officeLocateInDocument,
+  trackingSupported as officeTrackingSupported,
+  captureOfficeState,
+  readOfficeState,
+  writeOfficeState,
+  locateOfficeTarget
 } from './officeExecutor.js'
 import {
   wpsAvailable,
   detectWpsHost,
   readWpsActiveDocument,
   readWpsDocumentMeta,
-  hideWpsTaskPane
+  hideWpsTaskPane,
+  wpsDocumentPath
 } from './wpsDoc.js'
-import { executeWpsCommand, locateInWpsDocument } from './wpsExecutor.js'
+import {
+  executeWpsCommand,
+  locateInWpsDocument,
+  wpsTrackingSupported,
+  captureWpsState,
+  readWpsState,
+  writeWpsState,
+  locateWpsTarget
+} from './wpsExecutor.js'
+import { docKeyOf } from './revisionLog.js'
 
 export { hashContent } from './wordDoc.js'
 
@@ -114,4 +130,83 @@ export async function locateInDocument(text) {
   if (family === 'office') return officeLocateInDocument(text)
   if (family === 'wps') return locateInWpsDocument(text)
   return { found: false }
+}
+
+// ==================== 跨文档写入（dev-board#717） ====================
+
+/**
+ * 本窗格的文字宿主能否标记修订：别的窗格发来的写入要靠它判定能不能执行
+ * （标不了就拒绝，无痕迹的跨文档写入不允许发生）。Office = WordApi 1.4；
+ * WPS = TrackRevisions 可读写。非文字宿主与普通浏览器一律 false。
+ */
+export function crossDocTrackingOk() {
+  const family = hostFamily()
+  if (family === 'office') return officeTrackingSupported()
+  if (family === 'wps') return wpsTrackingSupported()
+  return false
+}
+
+/** 执行前取受影响区域的原值：{target, before} 或 null（不可撤销） */
+export async function captureCrossDocState(command, args, limits) {
+  const family = hostFamily()
+  if (family === 'office') return captureOfficeState(command, args, limits)
+  if (family === 'wps') return captureWpsState(command, args, limits)
+  return null
+}
+
+/** 按 target 读当前值；目标已不存在时回 null */
+export async function readCrossDocState(target) {
+  const family = hostFamily()
+  if (family === 'office') return readOfficeState(target)
+  if (family === 'wps') return readWpsState(target)
+  return null
+}
+
+/** 把快照写回宿主（撤销）；失败抛错 */
+export async function writeCrossDocState(state) {
+  const family = hostFamily()
+  if (family === 'office') return writeOfficeState(state)
+  if (family === 'wps') return writeWpsState(state)
+  throw new Error('宿主环境不可用：请在 Office 或 WPS 任务窗格中使用本插件')
+}
+
+/**
+ * 修订记录面板的「定位」：按快照 target 跳到被改的位置（Excel 激活表并选中区域、
+ * PPT 跳到那一页）。Word 条目不走这里（靠 locateInDocument 按文字选中）。
+ * 永不 throw，一律回 {found}——定位不到只是轻提示，不是错误。
+ */
+export async function locateCrossDocTarget(target) {
+  const family = hostFamily()
+  if (family === 'office') return locateOfficeTarget(target)
+  if (family === 'wps') return locateWpsTarget(target)
+  return { found: false }
+}
+
+/**
+ * 本窗格实例的随机后缀：模块加载时生成一次，不持久化（与 chatSession.paneId 同寿命）。
+ * 只用在「没有文件路径」的那条退路上，见 documentKey。
+ */
+const UNSAVED_DOC_SCOPE = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+
+/**
+ * 修订记录与会话 ID 按哪一份文档分开存：有文件路径（Office 的文档 URL、WPS 的 FullName）
+ * 就用路径；连宿主都判不出（普通浏览器调试）回空串 = 不绑定，条目只在内存里。
+ *
+ * **没有路径时不能只用「宿主:文档名」**（dev-board#717）：Office 面的文档名正是从
+ * Office.context.document.url 推出来的，url 为空（未保存的新文档）时它是宿主通称
+ * （「当前 Word 文档」），于是两份新建的 Word 算出同一个键 → 同一条 conversationId →
+ * 跨窗格下发按会话走，命令落到另一份文档上，沿途无人报错。这时再补一维「本窗格实例」：
+ * 未保存的新文档本来就没有稳定身份（窗格重载即换键，修订记录只在本次会话内存活），
+ * 但两份新文档绝不会撞在一起。存过盘之后有了路径，键自然回到按路径分，跨重载稳定。
+ */
+export function documentKey() {
+  const host = detectHost()
+  if (!host) return ''
+  const family = hostFamily()
+  const path = family === 'office' ? officeDocumentPath()
+    : family === 'wps' ? wpsDocumentPath() : ''
+  const meta = readDocumentMeta()
+  const key = docKeyOf({ path, host, docName: meta ? meta.name : '' })
+  if (!key || path) return key
+  return `${key}#${UNSAVED_DOC_SCOPE}`
 }

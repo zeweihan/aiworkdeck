@@ -49,6 +49,8 @@ public class FileTools implements AgentToolComponent {
     private final com.checkba.service.DocumentTextService documentTextService;
     private final com.checkba.service.ai.AiDocxExportService aiDocxExportService;
     private final com.checkba.service.ai.StyleProfileResolver styleProfileResolver;
+    /** extract_file_text 的抽取路由（OCR 判定、文字层、扫描件补 OCR），与参考材料读取共用（dev-board#718）。 */
+    private final com.checkba.service.file.ProjectFileTextExtractor textExtractor;
     private static final Long AGENT_USER_ID = 10001L;
 
     /**
@@ -290,16 +292,15 @@ public class FileTools implements AgentToolComponent {
         }
         try {
             String name = pf.getName();
-            boolean ocrSupported = fileContentExtractorService != null
-                    && fileContentExtractorService.isOcrSupported(name);
-            // 图片没有文字层可抽，直接 OCR；PDF 先抽文字层，抽不出（扫描件）才 OCR
-            String text = ocrSupported && !hasTextLayerCandidate(pf)
-                    ? null
-                    : documentTextService.extractText(pf);
-            if (!StringUtils.hasText(text) && ocrSupported) {
-                String ocr = extractWithOcr(pf);
-                if (ocr.startsWith("Error")) return ocr;
-                text = ocr;
+            boolean ocrSupported = textExtractor.isOcrSupported(name);
+            // 图片没有文字层可抽，直接 OCR；PDF 先抽文字层，抽不出（扫描件）才 OCR——路由在抽取器里。
+            // OCR 失败一律 Error: 开头并把底层原因原样带出（Credits 不足、OCR 未开放、上游报错），
+            // 模型才能转述真实原因，而不是转头去调 run_python 自己跑 OCR（dev-board#396）。
+            String text;
+            try {
+                text = textExtractor.extractText(pf);
+            } catch (com.checkba.service.file.ProjectFileTextExtractor.OcrFailedException e) {
+                return "Error: " + e.getMessage();
             }
             if (!StringUtils.hasText(text)) {
                 return ocrSupported
@@ -315,58 +316,6 @@ public class FileTools implements AgentToolComponent {
             log.warn("extract_file_text failed for fileId={}", fileId, e);
             return "Error extracting text: " + e.getMessage();
         }
-    }
-
-    /** PDF 可能带文字层，值得先抽一次；其余 OCR 格式（jpg/png/...）没有文字层，抽也是空。 */
-    private static boolean hasTextLayerCandidate(ProjectFile pf) {
-        String name = pf.getName() == null ? "" : pf.getName().toLowerCase();
-        return "pdf".equalsIgnoreCase(pf.getFileType()) || name.endsWith(".pdf");
-    }
-
-    /**
-     * 走与 {@code read_file} 完全相同的 OCR 分支（isOcrSupported → extractTextWithOcr → OcrService）。
-     *
-     * <p>此前 extract_file_text 只有 Tika 一条路，图片恒抽不出正文，返回的提示又只提
-     * 「image PDFs」——模型据此认定项目里的图片读不了，转头去调 run_python 找 OCR，
-     * 撞上「Cannot run program docker」后自己得出「OCR 环境不可用」的结论告诉用户。
-     * 其实图片一直是可读的，云端 OCR 就在 read_file 那条路上。
-     *
-     * <p>失败一律返回 {@code Error:} 开头并<b>把底层原因原样带出</b>（Credits 不足、OCR 未开放、
-     * 上游报错都长得不一样），模型才能把真实原因转述给用户，而不是自己编一个。
-     */
-    private String extractWithOcr(ProjectFile pf) {
-        Path tempPath = null;
-        try {
-            byte[] bytes = projectFileService.getFileBytes(pf.getId());
-            if (bytes == null || bytes.length == 0) {
-                return "Error: file '" + pf.getName() + "' is empty on disk, nothing to recognise.";
-            }
-            tempPath = Files.createTempFile("checkba_ocr_" + pf.getId() + "_", ocrTempSuffix(pf));
-            Files.write(tempPath, bytes);
-            String result = fileContentExtractorService.extractTextWithOcr(tempPath.toFile());
-            // extractTextWithOcr 的失败以 "[System: ...]" 形态返回（非空、无 Error 前缀），
-            // 直接透传会被判成成功并当作正文喂给模型
-            if (result != null && result.startsWith("[System:")) {
-                return "Error: cloud OCR failed on '" + pf.getName() + "' — "
-                        + result.substring("[System:".length()).replace("]", "").trim();
-            }
-            return result == null ? "" : result;
-        } catch (Exception e) {
-            log.warn("OCR extraction failed for fileId={}", pf.getId(), e);
-            return "Error: cloud OCR failed on '" + pf.getName() + "' — " + e.getMessage();
-        } finally {
-            if (tempPath != null) {
-                try { Files.deleteIfExists(tempPath); } catch (Exception ignore) {}
-            }
-        }
-    }
-
-    /** 临时文件必须保留原扩展名：extractTextWithOcr 按文件名判断走图片还是 PDF 分支。 */
-    private static String ocrTempSuffix(ProjectFile pf) {
-        String name = pf.getName() == null ? "" : pf.getName();
-        int dot = name.lastIndexOf('.');
-        if (dot > 0 && dot < name.length() - 1) return name.substring(dot);
-        return StringUtils.hasText(pf.getFileType()) ? "." + pf.getFileType() : ".tmp";
     }
 
     /**

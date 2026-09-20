@@ -84,6 +84,7 @@ public class MobileTransferService {
     private final MobileRelayStoreService relayStore;
     private final MobileRelayBlobStore blobStore;
     private final TransferBillingClient billing;
+    private final DesktopStreamService desktopStream;
     private final ObjectMapper om;
 
     public MobileTransferService(MobileTransferRequestRepository repository,
@@ -95,6 +96,7 @@ public class MobileTransferService {
                                   MobileRelayStoreService relayStore,
                                   MobileRelayBlobStore blobStore,
                                   TransferBillingClient billing,
+                                  DesktopStreamService desktopStream,
                                   ObjectMapper om) {
         this.repository = repository;
         this.mediaInboxRepository = mediaInboxRepository;
@@ -105,6 +107,7 @@ public class MobileTransferService {
         this.relayStore = relayStore;
         this.blobStore = blobStore;
         this.billing = billing;
+        this.desktopStream = desktopStream;
         this.om = om;
     }
 
@@ -141,7 +144,10 @@ public class MobileTransferService {
         LocalDateTime now = LocalDateTime.now();
         row.setCreatedAt(now);
         row.setUpdatedAt(now);
-        return saveOrIdempotent(userId, requestId, row);
+        SavedRow saved = saveOrIdempotent(userId, requestId, row);
+        // 只有真建了新行才按门铃：并发撞约束拿到的既有行，对方那一笔早已按过
+        if (saved.created()) nudgeDesktop(userId, deviceId);
+        return saved.row();
     }
 
     /** GET /{id}：属主可读，LIST DONE 带 files。 */
@@ -201,7 +207,10 @@ public class MobileTransferService {
         LocalDateTime now = LocalDateTime.now();
         row.setCreatedAt(now);
         row.setUpdatedAt(now);
-        return saveOrIdempotent(userId, requestId, row);
+        SavedRow saved = saveOrIdempotent(userId, requestId, row);
+        // 只有真建了新行才按门铃：并发撞约束拿到的既有行，对方那一笔早已按过
+        if (saved.created()) nudgeDesktop(userId, deviceId);
+        return saved.row();
     }
 
     /**
@@ -356,13 +365,20 @@ public class MobileTransferService {
         LocalDateTime now = LocalDateTime.now();
         row.setCreatedAt(now);
         row.setUpdatedAt(now);
+        MobileTransferRequest saved;
+        boolean created;
         try {
-            return repository.save(row);
+            saved = repository.save(row);
+            created = true;
         } catch (DataIntegrityViolationException e) {
             // 并发撞约束：对方那笔已经提交，我们这份多余的 blob 不需要了（不占配额也不留垃圾）
             blobStore.deleteQuietly(stored.locator());
-            return repository.findByUserIdAndRequestId(userId, requestId).orElseThrow(() -> e);
+            saved = repository.findByUserIdAndRequestId(userId, requestId).orElseThrow(() -> e);
+            created = false;
         }
+        // 与 list/pull 同口径：只有真建了新行才按门铃
+        if (created) nudgeDesktop(userId, targetDeviceId);
+        return saved;
     }
 
     // ==================== 响应端（B） ====================
@@ -577,11 +593,28 @@ public class MobileTransferService {
 
     // ==================== 内部 ====================
 
-    private MobileTransferRequest saveOrIdempotent(Long userId, String requestId, MobileTransferRequest row) {
+    /**
+     * 新命令行建好后按一次门铃（dev-board#719），叫 B 立刻来取，不用干等 60 秒轮询。
+     * 按不响（B 离线、旧版桌面端没有门铃流、写失败）一律无害：B 的 60 秒轮询照旧兜底，
+     * 所以门铃的任何失败都不许挡住建行——行已经落库、费也已经扣了。
+     */
+    private void nudgeDesktop(Long userId, String deviceId) {
+        if (userId == null || deviceId == null) return;
         try {
-            return repository.save(row);
+            desktopStream.nudge(userId, deviceId, "transfer");
+        } catch (RuntimeException e) {
+            log.debug("门铃通知失败（不影响建行）：{}", e.getClass().getSimpleName());
+        }
+    }
+
+    /** 建行结果：{@code created} 为假表示并发撞了唯一约束、拿回的是对方已提交的那一行。 */
+    private record SavedRow(MobileTransferRequest row, boolean created) {}
+
+    private SavedRow saveOrIdempotent(Long userId, String requestId, MobileTransferRequest row) {
+        try {
+            return new SavedRow(repository.save(row), true);
         } catch (DataIntegrityViolationException e) {
-            return repository.findByUserIdAndRequestId(userId, requestId).orElseThrow(() -> e);
+            return new SavedRow(repository.findByUserIdAndRequestId(userId, requestId).orElseThrow(() -> e), false);
         }
     }
 

@@ -205,6 +205,11 @@ const NAMES = {
   slide_table_set_cell: { zh: '写表格单元格', en: 'Set table cell' },
   slide_table_set_style: { zh: '设置表格样式', en: 'Set table style' },
   slide_set_hyperlink: { zh: '设置超链接', en: 'Set hyperlink' },
+  // 跨文件参考（dev-board#717-720）ref_* 工具：同 office_* 一样只在插件会话可见，收录作兜底
+  ref_list: { zh: '查找参考文件', en: 'Find reference files' },
+  ref_read: { zh: '读取参考文件', en: 'Read reference file' },
+  ref_edit: { zh: '修改另一个文档', en: 'Edit another document' },
+  ref_open: { zh: '打开项目文件', en: 'Open project file' },
   // Office 插件（Word 任务窗格）office_* 工具桥
   // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
   office_get_text: { zh: '读取文档', en: 'Read document' },

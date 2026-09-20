@@ -101,6 +101,21 @@ function documentDisplayName(fallback) {
   return fallback
 }
 
+/**
+ * 当前文档的文件路径（dev-board#717）：修订记录按文档分开存，FullName 是最稳的标识。
+ * 未保存的新文档 FullName 退化成文件名，取不到时回空串，由调用方退回「宿主:文档名」。
+ */
+export function wpsDocumentPath() {
+  try {
+    const host = detectWpsHost()
+    const app = wpsApp()
+    const doc = host === 'word' ? app.ActiveDocument
+      : host === 'excel' ? app.ActiveWorkbook : app.ActivePresentation
+    if (doc && doc.FullName) return String(doc.FullName)
+  } catch (e) { /* 未打开文档 / 非 WPS 环境 */ }
+  return ''
+}
+
 function readWordBody() {
   const app = wps.WpsApplication()
   const doc = app.ActiveDocument
@@ -134,27 +149,29 @@ function normalizeValues(v, rows, cols) {
   return v
 }
 
-function readEtSheet() {
-  const app = wps.EtApplication()
-  const sheet = app.ActiveSheet
-  if (!sheet) throw new Error('当前没有打开的工作簿')
-  const used = sheet.UsedRange
+/**
+ * 一片区域读成 TSV 文字（最多 MAX_EXCEL_ROWS 行）。随消息附带的表格正文与
+ * read_for_reference（dev-board#717，别的窗格按 sheet: 定位读本表）共用这一份口径。
+ * isUsedRange 为真时按「空表的 UsedRange 是 A1 单格」判空；显式给的区域不做这层判断
+ * （用户点名要的单格本来就可能是空的，报「工作表为空」就是撒谎）。
+ */
+export function etRangeText(sheet, range, { isUsedRange = true } = {}) {
   const name = String(sheet.Name || '')
-  const emptyResult = { text: `工作表「${name}」为空`, name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
-  if (!used) return emptyResult
-  const rowCount = used.Rows.Count
-  const colCount = used.Columns.Count
+  const empty = `工作表「${name}」为空`
+  if (!range) return empty
+  const rowCount = range.Rows.Count
+  const colCount = range.Columns.Count
   // 空表的 UsedRange 不是空引用而是 A1 单格（VBA 口径，真机实测确认）——不这样判的话
   // 空工作表会被描述成「区域 A1」外加一个空单元格，而不是老实说「为空」
-  if (rowCount === 1 && colCount === 1) {
-    const only = used.Value2
-    if (only == null || only === '') return emptyResult
+  if (isUsedRange && rowCount === 1 && colCount === 1) {
+    const only = range.Value2
+    if (only == null || only === '') return empty
   }
   const shownRows = Math.min(rowCount, MAX_EXCEL_ROWS)
   // 跨进程桥逐格取值极慢（约 0.2ms/调用），必须 Value2 批量读。
   // **先 Resize 到要展示的行数再取值**：既然只展示前 MAX_EXCEL_ROWS 行，把整片已用
   // 区域搬过桥就是白搬——十万行的工作簿会把任务窗格拖到长时间无响应。
-  const source = rowCount > shownRows ? used.Resize(shownRows, colCount) : used
+  const source = rowCount > shownRows ? range.Resize(shownRows, colCount) : range
   const values = normalizeValues(source.Value2, shownRows, colCount)
   const lines = []
   for (let r = 0; r < shownRows && r < values.length; r++) {
@@ -166,11 +183,18 @@ function readEtSheet() {
     }
     lines.push(cells.join('\t'))
   }
-  let out = `工作表「${name}」（区域 ${rangeAddress(used)}）：\n` + lines.join('\n')
+  let out = `工作表「${name}」（区域 ${rangeAddress(range)}）：\n` + lines.join('\n')
   if (rowCount > MAX_EXCEL_ROWS) {
     out += `\n...（共 ${rowCount} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
   }
-  return { text: out, name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
+  return out
+}
+
+function readEtSheet() {
+  const app = wps.EtApplication()
+  const sheet = app.ActiveSheet
+  if (!sheet) throw new Error('当前没有打开的工作簿')
+  return { text: etRangeText(sheet, sheet.UsedRange), name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
 }
 
 /** MsoShapeType：组合 */
@@ -223,7 +247,7 @@ function collectShapeText(shape, out, depth = 0) {
   } catch (e) { /* 个别形状没有文本框架 */ }
 }
 
-function readWppSlides() {
+export function readWppSlides() {
   const app = wps.WppApplication()
   const pres = app.ActivePresentation
   if (!pres) throw new Error('当前没有打开的演示文稿')

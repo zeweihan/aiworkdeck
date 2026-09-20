@@ -11,7 +11,7 @@ import {
 import { createSseConnection, createTagStreamParser } from './sse.js'
 import {
   readActiveDocument, readDocumentMeta, detectHost, hashContent,
-  executeCommand, hostFamily
+  executeCommand, hostFamily, documentKey
 } from './hostBridge.js'
 import {
   loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice,
@@ -19,6 +19,8 @@ import {
 } from './settings.js'
 import { isReadOnlyCommand, captureDocumentBytes, sha256Hex } from './docSnapshot.js'
 import { t, getLangTag } from './i18n.js'
+import { runCrossDocWrite, mergeCrossDocBanner } from './crossDocWrite.js'
+import { record as recordRevision } from './revisionLog.js'
 
 /**
  * 本窗格的宿主标签，用作会话 ID 存储键的一层作用域（settings.loadConversationId）。
@@ -27,6 +29,24 @@ import { t, getLangTag } from './i18n.js'
  */
 function hostScope() {
   return detectHost() || 'unknown'
+}
+
+/**
+ * 会话 ID 存储键的第三层作用域：**哪一份文档**（dev-board#717）。
+ *
+ * 只按「项目+宿主」分的话，同一个项目里同时开着的两份 Word 会共用一个 conversationId。
+ * 跨文档读写是按 conversationId 往 SSE 推命令的，两个窗格因此在通道上分不开：
+ * 抢到 emitter 的那个窗格会替另一个执行 read_for_reference，把自己的正文当成对方文档的
+ * 内容交给模型——「参考 A 改 B」这条主用例静默读错文档。后端现在会拒绝这种寻址不到的目标
+ * （OpenDocSource.requireAddressable），根子在这里。
+ *
+ * 取一次就记住：中途另存为会换文档路径，读的键与写的键必须是同一个。
+ * 取不到（普通浏览器调试）回空串 = 退回按「项目+宿主」分，与改造前一致。
+ */
+let docScopeCache = ''
+function docScope() {
+  if (!docScopeCache) docScopeCache = documentKey() || ''
+  return docScopeCache
 }
 
 /**
@@ -107,6 +127,12 @@ export const attachedFiles = ref([])
 export const uploadingFiles = ref([])
 /** 客户端单文件上限：超限直接标失败，不发起请求 */
 export const UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+/**
+ * 跨文档写入横幅（dev-board#717）：别的窗格的 AI 刚改了本文档时为 {originDocName, count, at}，
+ * 否则 null。同一来源 10 秒内连续改合并计数（crossDocWrite.mergeCrossDocBanner）；
+ * 界面点「查看」打开修订记录并把它置回 null。
+ */
+export const crossDocBanner = ref(null)
 
 // ==================== 内部状态 ====================
 
@@ -132,6 +158,42 @@ let conversationId = null
  * 旧的 connect 自愈因此在发送路径上是一段死代码（dev-board#142 只覆盖到进面板那一次）。
  */
 let conversationPersisted = false
+
+/**
+ * 窗格身份（dev-board#717）：心跳上送给云端登记簿的那三项。跨窗格下发按「目标窗格
+ * **当前**的 conversationId」推 SSE，所以会话一变就得立刻通知心跳补发——否则云端
+ * 在下一次心跳（最多 30 秒）之前都拿着旧会话，别的窗格发来的命令全投进一条没人听的
+ * 会话里白等超时。conversationId 的每一处赋值都走 setConversationId，别绕过它。
+ */
+const identityListeners = new Set()
+let lastIdentityKey = ''
+
+export function paneIdentity() {
+  const pid = parseInt(ctx.projectId, 10)
+  return { paneId, conversationId, projectId: Number.isFinite(pid) ? pid : null }
+}
+
+/** 注册会话身份变化的回调，返回退订函数 */
+export function onIdentityChange(cb) {
+  identityListeners.add(cb)
+  return () => identityListeners.delete(cb)
+}
+
+function notifyIdentity() {
+  const id = paneIdentity()
+  const key = `${id.projectId}|${id.conversationId}`
+  if (key === lastIdentityKey) return
+  lastIdentityKey = key
+  for (const cb of identityListeners) {
+    try { cb(id) } catch (e) { /* 监听者出错不影响会话流程 */ }
+  }
+}
+
+function setConversationId(next) {
+  conversationId = next
+  notifyIdentity()
+}
+
 let connection = null
 let parser = null
 let currentAssistant = null
@@ -243,7 +305,7 @@ export async function activateSession({ settings, projectId }) {
   everReconnected = false
   banner.value = ''
   notice.value = ''
-  conversationId = null
+  setConversationId(null)
   conversationPersisted = false
   attachedFiles.value = []
   uploadingFiles.value = []
@@ -257,9 +319,9 @@ export async function activateSession({ settings, projectId }) {
   refreshCatalogs()
 
   // 任务窗格重建（切文档、重开窗格）后：接着上次的会话，而不是从空白开始
-  const stored = loadConversationId(pid, hostScope())
+  const stored = loadConversationId(pid, hostScope(), docScope())
   if (stored) {
-    conversationId = stored
+    setConversationId(stored)
     const history = await fetchConversationHistory(settings, stored)
     if (gen !== generation) return
     // 服务端有落库消息 = 这条会话是真实存在的，之后再 403 就不是「已失效」而是归属问题
@@ -530,8 +592,8 @@ export async function switchConversation(convId) {
   banner.value = ''
   notice.value = ''
   resetDocCache()
-  conversationId = convId
-  saveConversationId(ctx.projectId, convId, hostScope())
+  setConversationId(convId)
+  saveConversationId(ctx.projectId, convId, hostScope(), docScope())
   const history = await fetchConversationHistory(ctx.settings, convId)
   if (gen !== generation) return
   conversationPersisted = history.length > 0
@@ -589,8 +651,8 @@ async function issueConversation() {
   const gen = generation
   const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
   if (gen !== generation) return false
-  conversationId = issued || `conv-${Date.now()}`
-  saveConversationId(ctx.projectId, conversationId, hostScope())
+  setConversationId(issued || `conv-${Date.now()}`)
+  saveConversationId(ctx.projectId, conversationId, hostScope(), docScope())
   conversationPersisted = false
   return true
 }
@@ -604,9 +666,9 @@ async function issueConversation() {
  */
 async function renewConversation() {
   closeConnection()
-  conversationId = null
+  setConversationId(null)
   conversationPersisted = false
-  saveConversationId(ctx.projectId, '', hostScope())
+  saveConversationId(ctx.projectId, '', hostScope(), docScope())
   // 新会话在后端没有 InlineContentCache 条目，正文省传的前提不复存在
   resetDocCache()
   return issueConversation()
@@ -1078,6 +1140,11 @@ async function handleClientAction(dataStr) {
   let action = null
   try { action = JSON.parse(dataStr) } catch (e) { return }
   if (!action || action.tool !== 'office_command' || !action.requestId) return
+  // 带 origin = 别的窗格的 AI 经云端下发、要读/改本文档（dev-board#717），走另一条路
+  if (action.origin) {
+    crossDocQueue = crossDocQueue.then(() => handleCrossDocAction(action))
+    return
+  }
 
   // chip 上存的是 command 而不是翻好的 label（dev-board#713）：显示名由界面渲染时经
   // commandDisplayName 现查，切语言后已经画出来的 chip 也跟着换。
@@ -1111,6 +1178,57 @@ async function handleClientAction(dataStr) {
   } catch (e) {
     chip.status = 'failed'
     chip.error = t('resultSendFailedPrefix') + ((e && e.message) || t('networkError'))
+    banner.value = t('toolResultSendFailed')
+  }
+}
+
+/**
+ * 跨文档命令逐条串行执行：「取改前值 → 执行 → 读回改后值」必须是一个整体，两条命令
+ * 交错的话后一条记下的改前值会是前一条改到一半的状态，撤销就会写回错的东西。
+ */
+let crossDocQueue = Promise.resolve()
+
+/**
+ * 执行别的窗格发来的命令（SSE client_action 带 origin）。与本会话自己的命令三点不同：
+ *   - 这是**别的会话**的动作，不往本窗格当前会话的气泡里挂工具 chip；
+ *   - 写入走 runCrossDocWrite：Word 强制修订（标不了就拒绝）、Excel/PPT 记改前值；
+ *   - 写入成功记进修订记录并弹横幅（同一来源合并计数），本文档的用户一眼看得到谁改了什么。
+ * 无论成败都照常回传结果——发起方的工具调用在等它。永不 throw。
+ */
+async function handleCrossDocAction(action) {
+  let outcome
+  try {
+    outcome = await runCrossDocWrite({
+      command: action.command,
+      args: action.args || {},
+      origin: action.origin,
+      host: detectHost(),
+      family: hostFamily()
+    })
+  } catch (e) {
+    outcome = { result: { ok: false, error: (e && e.message) || String(e) }, entry: null }
+  }
+  const result = outcome.result
+  if (outcome.entry) {
+    try { recordRevision(outcome.entry) } catch (e) { /* 记录失败不影响回传 */ }
+    crossDocBanner.value = mergeCrossDocBanner(crossDocBanner.value, outcome.entry.originDocName, nowMs())
+  }
+  // 本文档被改过：与本窗格自己的写入同样触发文档镜像（dev-board#299，多拍无害）。
+  // **必须就地汇合一次**：turnHadWrite 平时由 finishStreaming 消费，而本窗格这会儿并没有
+  // 在跑自己的轮次——只置位的话，镜像要等到本窗格的用户下次自己发消息才跑，用户从此不再
+  // 用这个窗格的话就永远不跑，桌面端项目里那份副本停在改动之前，还没有任何迹象说明它是旧的。
+  if (result.ok && !isReadOnlyCommand(action.command)) {
+    turnHadWrite = true
+    maybeArchiveSnapshot()
+  }
+  try {
+    await postOfficeResult(ctx.settings, {
+      requestId: action.requestId,
+      ok: result.ok,
+      data: result.ok ? result.data : null,
+      error: result.ok ? null : result.error
+    })
+  } catch (e) {
     banner.value = t('toolResultSendFailed')
   }
 }
@@ -1359,8 +1477,8 @@ export async function stop() {
 
 export function newConversation() {
   closeConnection()
-  if (ctx.projectId) saveConversationId(ctx.projectId, '', hostScope())
-  conversationId = null
+  if (ctx.projectId) saveConversationId(ctx.projectId, '', hostScope(), docScope())
+  setConversationId(null)
   conversationPersisted = false
   messages.value = []
   currentAssistant = null

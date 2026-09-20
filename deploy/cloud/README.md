@@ -111,3 +111,48 @@
 - 更新插件任务窗格：office-addin `npm run build:deploy -- --url https://addin.aiworkdeck.com/office-addin`
   → 覆盖 web/office-addin/（**不要**动 web/ 根下的重定向 index.html，也不要再铺 h5）
 - DB 备份：`sudo -u postgres pg_dump aiworkdeck_cloud | gzip > /root/backup/...`（建议进 cron）
+
+## 插件跨文件读写（dev-board#717-720，spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md`）
+
+插件里的 AI 多了五个参考来源（打开着的文档 / 桌面端项目 / 云端项目 / 官方案件库 / 关联的
+GitHub·Gitee 仓库）。**前三个不需要任何部署动作**（窗格登记簿与参考请求登记簿都是进程内存，
+门铃流走既有的 `location /api/`）；要配的只有案件库与 git 令牌两项，见 env.example 尾部。
+
+| 项 | 北京 addin | 新加坡 addin | case 实例 |
+|---|---|---|---|
+| `AWD_REF_INTERNAL_SECRET` | 配，**与 case 同值** | 不配 | 配，与北京 addin 同值 |
+| `AWD_REF_CASE_BASE_URL` | `http://127.0.0.1:9797` | 不配 | 不配（它是被问的那一方） |
+| `AWD_GIT_TOKEN_SECRET` | 配（独立新生成） | 配（独立新生成） | 不配（案件库不跑插件对话） |
+
+- **国际站没有案件库**：两项不配 = `CaseRefClient.configured()` 为假，`CaseLibrarySource`
+  整块缺席，**一次请求都不发**，模型的候选清单里干脆没有这个来源。
+- **密钥不许复用**：`AWD_REF_INTERNAL_SECRET` 与 TRANSFER_BILLING_SECRET /
+  MOBILE_BILLING_SECRET / COLLAB_DIRECTORY_SECRET 是四把；`AWD_GIT_TOKEN_SECRET` 与
+  `AWD_PLATFORM_KEY_SECRET` 是两把。`AWD_GIT_TOKEN_SECRET` 换值 = 存量令牌密文全部解不开
+  （用户要重新填一次令牌），迁移换机必须原样带走。
+- **nginx：门铃流不用改。** `GET /api/mobile/desktop/stream` 落在既有的
+  `location /api/` 上，那里已经是 `proxy_buffering off` + `proxy_read_timeout 3600s`，
+  正是 SSE 要的两条；后端另外回 `X-Accel-Buffering: no` 双保险。
+- **nginx：两侧各加一条 404 兜底**（见两份 `nginx-*.conf.example`，addin 侧与 case 侧
+  都要有；`^~` 不可省，否则会被后面更短的 `location /api/` 抢走）：
+  ```nginx
+  location ^~ /api/internal/ { return 404; }
+  ```
+  `/api/internal/ref/{list,read}` 只许从回环进（addin 与 case 同机，走 127.0.0.1:9797 不经
+  nginx）。case 侧应用层有四道闸（本实例不提供 / 密钥未配 / 密钥不符 / 来源不是回环，
+  **四种都回裸 404**），nginx 这条是第五道，也让公网上的探测面与其余路径长得一模一样。
+  addin 侧本来就不提供这对端点（`ref.internal.serve` 只在 case profile 打开，
+  配了 `AWD_REF_INTERNAL_SECRET` 也不会把它打开——那把密钥在 addin 上只当出站头用），
+  这条规则是给「万一哪天有人把 case profile 的 jar 挂到这台 nginx 后面」留的。
+- **更新顺序**：case 实例先上（内部口先在，addin 问过去才有人应），再上 addin 实例，
+  最后铺插件静态包（`npm run build:deploy -- --url …`，见上面「更新插件任务窗格」那条）。反过来只是这段时间里
+  案件库来源暂时不可用，不会坏别的来源。
+- **验收**（上线后各跑一次）：
+  - `curl -s -o /dev/null -w '%{http_code}\n' https://case.aiworkdeck.com/api/internal/ref/list -X POST`
+    → **404**（nginx 兜底；带不带 `X-Internal-Secret` 都一样）。
+  - 在案件库那台上 `curl -X POST http://127.0.0.1:9797/api/internal/ref/list -H 'X-Internal-Secret: <值>'
+    -H 'Content-Type: application/json' -d '{"externalAccountId":"<官网账号 id>"}'` → `{"code":0,...}`；
+    故意写错密钥 → **404**（不是 401/403，刻意的）。
+  - 插件里问一句「项目里有哪些文件可以参考」，`ref_list` 至少列出云端项目那一档；
+    桌面端开着时 `desk:` 那一档也在（桌面端要跟着发版才有门铃流，旧版桌面端会被明确说成
+    「还没有与云端建立常连（多半是版本较旧）」，不是「离线」）。

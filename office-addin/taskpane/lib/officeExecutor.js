@@ -24,8 +24,11 @@
  * 差异段落笔，避免修订面板里出现「整段删 + 整段插」。
  */
 
-import { officeAvailable, detectHost } from './wordDoc.js'
-import { minimalEdits } from './minimalEdit.js'
+import { officeAvailable, detectHost, readExcelSheet, readPptSlides, excelRangeText } from './wordDoc.js'
+import {
+  parseLocator, sliceByHeading, capReferenceText, blankPageText, unsupportedLocatorError
+} from './referenceRead.js'
+import { minimalEdits, substringEdits } from './minimalEdit.js'
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
 import { t } from './i18n.js'
@@ -41,7 +44,11 @@ const MAX_SEARCH_HITS = 20
 // Word 的查找串上限（超了直接判非法）
 const WORD_SEARCH_MAX_CHARS = 255
 
-function trackingSupported() {
+/**
+ * Word 原生修订（changeTrackingMode）的门槛：WordApi 1.4。导出给跨文档写入做前置判定
+ * （dev-board#717）：标不了修订的宿主上，别的窗格发来的写入一律拒绝。
+ */
+export function trackingSupported() {
   try {
     return Office.context.requirements.isSetSupported('WordApi', '1.4')
   } catch (e) {
@@ -120,12 +127,24 @@ function truncate(text) {
     : { text: s, truncated: false, totalChars: s.length }
 }
 
+/** 跨文档写入标不了修订时的回错（模型可见，保持中文） */
+const CROSS_DOC_NO_TRACKING = '本机 Word 版本无法标记修订，已拒绝跨文档修改'
+
+/**
+ * 跨文档写入的强制修订（dev-board#717）：executeOfficeCommand 见到 args.__forceTracking
+ * 就在执行期间把这里加一。强制期间 withTracking **不许**降级直改——别的窗格的 AI 改本文档，
+ * 没有修订痕迹的写入不允许发生。crossDocWrite 已先按 trackingSupported() 拒绝过一次，
+ * 这里是双保险（两处用的是同一个判定，正常情况下走不到）。
+ */
+let forcedTrackingDepth = 0
+
 /**
  * 在开启 Word 原生修订（TrackAll）的前提下执行 fn，结束后恢复原模式。
  * 返回 fn 的结果并附 tracked 标记。
  */
 async function withTracking(context, fn) {
   if (!trackingSupported()) {
+    if (forcedTrackingDepth > 0) throw new Error(CROSS_DOC_NO_TRACKING)
     const data = await fn()
     return { ...data, tracked: false }
   }
@@ -3182,7 +3201,119 @@ const HANDLERS = {
       }
       throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 office_ppt_get_slides 核对）')
     })
+  },
+
+  // ==================== 供其他窗格引用（三宿主通用，不登记 COMMAND_HOSTS） ====================
+
+  /**
+   * 别的窗格经云端下发（dev-board#717）：按 locator 读本文档的一块文字，返回 {text}。
+   * 只读、不改文档；宿主不支持的定位组合明确报错，不静默退回全文。
+   */
+  async read_for_reference(args) {
+    const loc = parseLocator(args.locator)
+    const host = detectHost()
+    let text
+    if (host === 'word') text = await readWordForReference(loc)
+    else if (host === 'excel') text = await readExcelForReference(loc)
+    else if (host === 'powerpoint') text = await readPptForReference(loc)
+    else throw new Error('unsupported host: 无法识别当前宿主')
+    return capReferenceText(text)
   }
+}
+
+/** Pane.pages / Page.getRange（按页读取）属 WordApiDesktop 1.2，只有较新的桌面版 Word 才有 */
+function wordPagesSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApiDesktop', '1.2')
+  } catch (e) {
+    return false
+  }
+}
+
+/** Word 面 read_for_reference：全文 / 第 N 页 / 标题所辖段落 */
+async function readWordForReference(loc) {
+  if (loc.kind === 'none') {
+    return Word.run(async (context) => {
+      const body = context.document.body
+      body.load('text')
+      await context.sync()
+      return body.text || ''
+    })
+  }
+  if (loc.kind === 'heading') {
+    return Word.run(async (context) => {
+      // 只要 text 与 outlineLevel（WordApi 1.1）。styleBuiltIn 是 1.3，老宿主上连 load 都不能带；
+      // 大纲级别 1-9 即标题（内置「标题 1-9」样式的大纲级别与级数相同），正文是 10
+      const paragraphs = context.document.body.paragraphs
+      paragraphs.load('items/text,items/outlineLevel')
+      await context.sync()
+      const list = paragraphs.items.map((p) => {
+        const level = Number(p.outlineLevel)
+        return { text: p.text || '', isHeading: level >= 1 && level <= 9, level }
+      })
+      return sliceByHeading(list, loc.text)
+    })
+  }
+  if (loc.kind === 'page') {
+    if (!wordPagesSupported()) {
+      throw new Error('本机 Word 不支持按页读取，可改用标题或关键词（按页读取需要 WordApiDesktop 1.2）')
+    }
+    return Word.run(async (context) => {
+      const pages = context.document.activeWindow.activePane.pages
+      pages.load('items/index')
+      await context.sync()
+      const total = pages.items.length
+      if (loc.n > total) throw new Error(`文档只有 ${total} 页`)
+      const range = pages.items[loc.n - 1].getRange()
+      range.load('text')
+      await context.sync()
+      const text = range.text || ''
+      return text.trim() ? text : blankPageText(loc.n)
+    })
+  }
+  throw unsupportedLocatorError('word', loc.kind)
+}
+
+/** 按名找工作表：先列出全部表名再取（ExcelApi 1.1 即可，名字不存在时能列出现有表） */
+async function worksheetByNameOrThrow(context, name) {
+  const sheets = context.workbook.worksheets
+  sheets.load('items/name')
+  await context.sync()
+  const names = sheets.items.map((w) => w.name)
+  // Excel 的表名不区分大小写：先精确，再忽略大小写
+  const hit = names.find((n) => n === name) || names.find((n) => n.toLowerCase() === name.toLowerCase())
+  if (!hit) {
+    throw new Error(`未找到名为「${name}」的工作表。`
+      + (names.length ? `本工作簿现有工作表：${names.join('、')}。` : '')
+      + '请用其中之一重试，或不带定位读取活动工作表。')
+  }
+  return sheets.getItem(hit)
+}
+
+/** Excel 面 read_for_reference：活动表 / 指定表（可带区域） */
+async function readExcelForReference(loc) {
+  if (loc.kind === 'none') return (await readExcelSheet()).text
+  if (loc.kind !== 'sheet') throw unsupportedLocatorError('excel', loc.kind)
+  return Excel.run(async (context) => {
+    const sheet = await worksheetByNameOrThrow(context, loc.sheet)
+    const range = loc.range ? sheet.getRange(loc.range) : sheet.getUsedRangeOrNullObject(true)
+    return excelRangeText(context, sheet, range)
+  })
+}
+
+/** PowerPoint 面 read_for_reference：全部幻灯片 / 第 N 页 */
+async function readPptForReference(loc) {
+  if (loc.kind === 'none') return (await readPptSlides()).text
+  if (loc.kind !== 'slide') throw unsupportedLocatorError('powerpoint', loc.kind)
+  requirePptTextApi()
+  return PowerPoint.run(async (context) => {
+    const [slideFrames] = await loadPptTextFrames(context, loc.n)
+    const texts = slideFrames
+      .filter((tf) => !tf.isNullObject && tf.hasText)
+      .map((tf) => (tf.textRange.text || '').trim())
+      .filter(Boolean)
+    return texts.length ? texts.join('\n') : blankPageText(loc.n)
+  })
 }
 
 /** excel_get_range 返回值的行数上限（防超长工具输出撑爆模型上下文） */
@@ -3389,14 +3520,20 @@ const PPT_GROUP_MAX_DEPTH = 4
  * 表格文字不在这里收：Office 面有 ppt_table_read / ppt_table_set_cell 专门通道
  * （WPS 面没有那条通道，所以它把表格并进了遍历）。
  */
-async function loadPptTextFrames(context) {
+async function loadPptTextFrames(context, onlySlide) {
   const slides = context.presentation.slides
   slides.load('items')
   await context.sync()
-  slides.items.forEach((slide) => slide.shapes.load('items/type'))
+  // onlySlide（1 起页码）：只收这一页（read_for_reference 的 slide:N），返回值仍是按页分组的数组
+  let targets = slides.items
+  if (onlySlide) {
+    if (onlySlide > slides.items.length) throw new Error(`演示稿只有 ${slides.items.length} 页`)
+    targets = [slides.items[onlySlide - 1]]
+  }
+  targets.forEach((slide) => slide.shapes.load('items/type'))
   await context.sync()
 
-  const perSlide = slides.items.map((slide) => slide.shapes.items.slice())
+  const perSlide = targets.map((slide) => slide.shapes.items.slice())
   if (pptApiSupported('1.8')) {
     // 逐层展开组合：只在这一层真的有组合时才多花一次 sync
     for (let depth = 0; depth < PPT_GROUP_MAX_DEPTH; depth++) {
@@ -3521,10 +3658,14 @@ export const COMMAND_DISPLAY_KEYS = {
   ppt_add_table: 'cmdPptAddTable',
   ppt_table_read: 'cmdPptTableRead',
   ppt_table_set_cell: 'cmdPptTableSetCell',
-  ppt_set_hyperlink: 'cmdPptSetHyperlink'
+  ppt_set_hyperlink: 'cmdPptSetHyperlink',
+  read_for_reference: 'cmdReadForReference'
 }
 
-/** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
+/**
+ * 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐）。
+ * read_for_reference 三宿主通用（按当前宿主分支），刻意不登记。
+ */
 const COMMAND_HOSTS = {
   get_text: 'word',
   get_selection: 'word',
@@ -3633,12 +3774,17 @@ export async function executeOfficeCommand(command, args) {
       error: `unsupported host: 该命令只在 ${HOST_LABELS[requiredHost]} 中可用（当前宿主：${HOST_LABELS[host] || '未知'}）`
     }
   }
+  // __forceTracking 是跨文档写入的内部标记（crossDocWrite 加的），不许漏进 handler 的参数
+  const { __forceTracking: forceTracking, ...cleanArgs } = args || {}
+  if (forceTracking) forcedTrackingDepth++
   try {
-    const data = await handler(args || {})
+    const data = await handler(cleanArgs)
     return { ok: true, data: data == null ? {} : data }
   } catch (e) {
     console.warn('[Addin] office_command 执行失败', command, e)
-    return { ok: false, error: await describeExecutionError(e, command, args || {}) }
+    return { ok: false, error: await describeExecutionError(e, command, cleanArgs) }
+  } finally {
+    if (forceTracking) forcedTrackingDepth--
   }
 }
 
@@ -3681,4 +3827,273 @@ async function listWorksheetNames() {
   } catch (err) {
     return []
   }
+}
+
+/* ==================== 跨文档写入的改前值与撤销（dev-board#717） ==================== */
+
+/**
+ * Excel / PPT 没有修订机制：别的窗格改本文档时，执行前按命令取受影响区域的原值，
+ * 执行后按同一 target 读回改后值，一并记进修订记录；撤销时先比对当前值再写回（见 crossDocWrite）。
+ *
+ * **只覆盖「改内容」的命令**。格式、结构（加删表/页/形状、合并、筛选、条件格式…）写回内容
+ * 撤不掉，一律返回 null——条目如实标「无法记录改前值」，不给假撤销。
+ *
+ * 快照形态（与 WPS 面同构；crossDocWrite 只做整体比对，不认字段）：
+ *   excel      target {kind, sheetName, address}                  state = target + formulas（二维，常量格即常量）
+ *   pptCell    target {kind, slideNumber, shapeId, row, col}      state = target + text
+ *   pptFrames  target {kind, frames:[{slide, frame}]}             state {kind, frames:[{slide, frame, text}]}
+ * PPT 的定位是位置式的（第几页第几个文本框）：结构变过之后读到的是「某个框」，但文字对不上
+ * 改后值，撤销按冲突拒绝——冲突比对就是这里的安全阀。
+ */
+const EXCEL_UNDOABLE_COMMANDS = new Set(['excel_set_values', 'excel_set_formulas', 'excel_sort_range'])
+
+function limitOf(limits, key) {
+  const v = limits && limits[key]
+  return Number.isFinite(v) ? v : Infinity
+}
+
+function localAddress(address) {
+  const s = String(address || '')
+  const at = s.lastIndexOf('!')
+  return at >= 0 ? s.slice(at + 1) : s
+}
+
+/**
+ * 取一条命令执行前的受影响区域原值：返回 {target, before} 或 null（该命令不可撤销 /
+ * 区域过大 / 入参不成立——入参不成立时 handler 自己会报错，不会落笔）。
+ */
+export async function captureOfficeState(command, args, limits) {
+  const a = args || {}
+  if (EXCEL_UNDOABLE_COMMANDS.has(command)) return captureExcelState(command, a, limits)
+  if (command === 'ppt_table_set_cell') return capturePptCellState(a)
+  if (command === 'ppt_replace_text') return capturePptFramesState(a, limits)
+  return null
+}
+
+async function captureExcelState(command, args, limits) {
+  const rangeAddress = String(args.rangeAddress || '')
+  if (!rangeAddress) return null
+  const data = command === 'excel_set_values' ? args.values
+    : command === 'excel_set_formulas' ? args.formulas : null
+  if (data && (!Array.isArray(data) || !data.length || !Array.isArray(data[0]))) return null
+  return Excel.run(async (context) => {
+    const sheet = resolveSheet(context, String(args.sheetName || ''))
+    sheet.load('name')
+    let range = sheet.getRange(rangeAddress)
+    range.load('rowCount,columnCount,address')
+    await context.sync()
+    let rows = range.rowCount
+    let cols = range.columnCount
+    if (data) {
+      // 与 excel_set_values / excel_set_formulas 的落笔区域同一口径：单元格起点按数据尺寸展开
+      const dr = data.length
+      const dc = data[0].length
+      if (rows === 1 && cols === 1 && (dr > 1 || dc > 1)) {
+        range = range.getResizedRange(dr - 1, dc - 1)
+        rows = dr
+        cols = dc
+      } else if (rows !== dr || cols !== dc) {
+        return null
+      }
+    }
+    if (rows * cols > limitOf(limits, 'maxCells')) return null
+    range.load('address,formulas')
+    await context.sync()
+    const target = { kind: 'excel', sheetName: sheet.name, address: localAddress(range.address) }
+    return { target, before: { ...target, formulas: range.formulas } }
+  })
+}
+
+async function capturePptCellState(args) {
+  if (!pptApiSupported('1.8')) return null
+  const slideNumber = Math.floor(Number(args.slideNumber))
+  const row = Math.floor(Number(args.row))
+  const col = Math.floor(Number(args.col))
+  if (!(slideNumber >= 1) || !(row >= 0) || !(col >= 0)) return null
+  const target = { kind: 'pptCell', slideNumber, shapeId: args.shapeId ? String(args.shapeId) : '', row, col }
+  const state = await readPptCellState(target)
+  return state ? { target, before: state } : null
+}
+
+async function readPptCellState(t) {
+  return PowerPoint.run(async (context) => {
+    const slides = context.presentation.slides
+    slides.load('items/$none')
+    await context.sync()
+    const slide = getSlideOrThrow(slides, t.slideNumber)
+    const table = await getPptTableOrThrow(context, slide, t.shapeId || undefined)
+    const cell = table.getCellOrNullObject(t.row, t.col)
+    cell.load('text,isNullObject')
+    await context.sync()
+    if (cell.isNullObject) return null
+    return { ...t, text: cell.text == null ? '' : String(cell.text) }
+  })
+}
+
+async function capturePptFramesState(args, limits) {
+  const searchText = String(args.searchText || '')
+  if (!searchText || !pptApiSupported('1.4')) return null
+  return PowerPoint.run(async (context) => {
+    const frames = await loadPptTextFrames(context)
+    const hits = []
+    let chars = 0
+    frames.forEach((slideFrames, si) => {
+      slideFrames.forEach((tf, fi) => {
+        if (tf.isNullObject || !tf.hasText) return
+        const text = tf.textRange.text || ''
+        // 与 ppt_replace_text 同一个命中判定：它改哪些框，这里就记哪些框
+        if (!findAllNormalized(text, searchText).length) return
+        hits.push({ slide: si + 1, frame: fi, text })
+        chars += text.length
+      })
+    })
+    if (!hits.length || chars > limitOf(limits, 'maxChars')) return null
+    const target = { kind: 'pptFrames', frames: hits.map(({ slide, frame }) => ({ slide, frame })) }
+    return { target, before: { kind: 'pptFrames', frames: hits } }
+  })
+}
+
+async function readPptFramesState(t) {
+  return PowerPoint.run(async (context) => {
+    const frames = await loadPptTextFrames(context)
+    const out = []
+    for (const f of t.frames || []) {
+      const tf = frames[f.slide - 1] && frames[f.slide - 1][f.frame]
+      if (!tf || tf.isNullObject) return null
+      out.push({ slide: f.slide, frame: f.frame, text: tf.hasText ? (tf.textRange.text || '') : '' })
+    }
+    return { kind: 'pptFrames', frames: out }
+  })
+}
+
+/** 按 target 读当前值（形态同 captureOfficeState 的 before）。目标已不存在或读不到时回 null。 */
+export async function readOfficeState(target) {
+  const t = target || {}
+  try {
+    if (t.kind === 'excel') {
+      return await Excel.run(async (context) => {
+        const range = context.workbook.worksheets.getItem(t.sheetName).getRange(t.address)
+        range.load('formulas')
+        await context.sync()
+        return { kind: 'excel', sheetName: t.sheetName, address: t.address, formulas: range.formulas }
+      })
+    }
+    if (t.kind === 'pptCell') return await readPptCellState(t)
+    if (t.kind === 'pptFrames') return await readPptFramesState(t)
+  } catch (e) {
+    return null
+  }
+  return null
+}
+
+/**
+ * 把快照写回宿主（撤销）。PPT 文本框只改差异段（substringEdits），不整框回写——
+ * 整框回写会抹掉框内分段格式与超链接（与 ppt_replace_text 的 dev-board#288 同一条纪律）。
+ * 未知形态抛错：撤销失败必须让用户看见，不许静默当成功。
+ */
+export async function writeOfficeState(state) {
+  const s = state || {}
+  if (s.kind === 'excel') {
+    return Excel.run(async (context) => {
+      const range = context.workbook.worksheets.getItem(s.sheetName).getRange(s.address)
+      range.formulas = s.formulas
+      await context.sync()
+    })
+  }
+  if (s.kind === 'pptCell') {
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, s.slideNumber)
+      const table = await getPptTableOrThrow(context, slide, s.shapeId || undefined)
+      const cell = table.getCellOrNullObject(s.row, s.col)
+      cell.load('isNullObject')
+      await context.sync()
+      if (cell.isNullObject) throw new Error('目标单元格已不存在')
+      cell.text = s.text
+      await context.sync()
+    })
+  }
+  if (s.kind === 'pptFrames') {
+    return PowerPoint.run(async (context) => {
+      const frames = await loadPptTextFrames(context)
+      for (const f of s.frames || []) {
+        const tf = frames[f.slide - 1] && frames[f.slide - 1][f.frame]
+        if (!tf || tf.isNullObject) throw new Error('目标文本框已不存在')
+        const current = tf.hasText ? (tf.textRange.text || '') : ''
+        if (current === f.text) continue
+        if (!current.length) {
+          tf.textRange.text = f.text
+          continue
+        }
+        // 偏移都按读到的原文算，从右到左落笔，右边先改不推移左边的坐标
+        const edits = substringEdits(current, f.text)
+        for (let k = edits.length - 1; k >= 0; k--) {
+          const e = edits[k]
+          tf.textRange.getSubstring(e.start, e.end - e.start).text = e.newText
+        }
+      }
+      await context.sync()
+    })
+  }
+  throw new Error('无法识别的修订快照，撤销未执行')
+}
+
+/* ==================== 修订记录的「定位」（dev-board#717） ==================== */
+
+/** 位置式快照 target 对应的页码（1 基）；不是 PPT 目标或页码不成立回 0 */
+function pptSlideNumberOfTarget(target) {
+  const t = target || {}
+  if (t.kind === 'pptSlide' || t.kind === 'pptCell') {
+    const n = Math.floor(Number(t.slideNumber))
+    return n >= 1 ? n : 0
+  }
+  if (t.kind === 'pptFrames') {
+    const first = Array.isArray(t.frames) ? t.frames[0] : null
+    const n = first ? Math.floor(Number(first.slide)) : 0
+    return n >= 1 ? n : 0
+  }
+  return 0
+}
+
+/**
+ * 把修订记录里的一条跨文档修改定位到文档里：Excel 激活目标表并选中区域，PPT 选中目标页。
+ * Word 条目不走这里（靠 locateInDocument 按改后的文字选中）。
+ *
+ * 永不 throw，一律回 {found}——目标已被删、宿主版本不够（setSelectedSlides 属
+ * PowerPointApi 1.5）、宿主与目标对不上（快照是别的宿主记的），都只是「定位不到」，
+ * 面板给一句轻提示即可，不是错误。
+ */
+export async function locateOfficeTarget(target) {
+  const t = target || {}
+  try {
+    if (t.kind === 'excel') {
+      const sheetName = String(t.sheetName || '')
+      const address = String(t.address || '')
+      if (detectHost() !== 'excel' || !sheetName || !address) return { found: false }
+      await Excel.run(async (context) => {
+        const sheet = context.workbook.worksheets.getItem(sheetName)
+        sheet.activate()
+        sheet.getRange(address).select()
+        await context.sync()
+      })
+      return { found: true }
+    }
+    const slideNumber = pptSlideNumberOfTarget(t)
+    if (slideNumber) {
+      if (detectHost() !== 'powerpoint' || !pptApiSupported('1.5')) return { found: false }
+      return await PowerPoint.run(async (context) => {
+        const slides = context.presentation.slides
+        slides.load('items/id')
+        await context.sync()
+        const slide = slides.items[slideNumber - 1]
+        if (!slide) return { found: false }
+        context.presentation.setSelectedSlides([slide.id])
+        await context.sync()
+        return { found: true }
+      })
+    }
+  } catch (e) { /* 表/页已被删、宿主拒绝：按定位不到处理 */ }
+  return { found: false }
 }

@@ -107,3 +107,56 @@ test('存储正常可用时读写行为不受影响（回归正常路径）', as
     restore()
   }
 })
+
+/**
+ * 会话 ID 的存储键还要按**文档**分一层（dev-board#717）。
+ *
+ * 病灶：只按「项目+宿主」分键时，同一个项目里同时开着的两份 Word 拿到同一个
+ * conversationId。跨文档读写是按 conversationId 往 SSE 推命令的，两个窗格于是在通道上
+ * 分不开——抢到 emitter 的那个窗格会替另一个执行 read_for_reference，把自己的正文当成
+ * 对方文档的内容交回去，全链路没有一处报错。把 docKey 这层去掉，下面两条立刻转红。
+ */
+test('同项目同宿主的两份文档各有各的会话 ID，互不串门', async () => {
+  const store = new Map()
+  const restore = stubLocalStorage({
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)) },
+    removeItem: (k) => { store.delete(k) }
+  })
+  try {
+    const { loadConversationId, saveConversationId } = await import('./settings.js')
+    const docA = 'file:///cases/A/主合同.docx'
+    const docB = 'file:///cases/A/补充协议.docx'
+
+    saveConversationId('11', 'conv-A', 'word', docA)
+
+    assert.equal(loadConversationId('11', 'word', docA), 'conv-A')
+    assert.equal(loadConversationId('11', 'word', docB), '', 'B 文档不该捡到 A 的会话')
+
+    saveConversationId('11', 'conv-B', 'word', docB)
+    assert.equal(loadConversationId('11', 'word', docA), 'conv-A', 'B 落盘不该覆盖 A')
+    assert.equal(loadConversationId('11', 'word', docB), 'conv-B')
+  } finally {
+    restore()
+  }
+})
+
+test('升级迁移：先开的那份文档认领按项目+宿主分的旧键，认领后旧键即删', async () => {
+  const store = new Map()
+  const restore = stubLocalStorage({
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)) },
+    removeItem: (k) => { store.delete(k) }
+  })
+  try {
+    const { loadConversationId } = await import('./settings.js')
+    store.set('awd_addin_conv_word_11', 'conv-老会话')
+
+    assert.equal(loadConversationId('11', 'word', 'file:///cases/A/主合同.docx'), 'conv-老会话')
+    assert.equal(store.has('awd_addin_conv_word_11'), false, '旧键留着，第二份文档下次还会读到它')
+    // 第二份文档从空白开始，而不是又并回同一条会话
+    assert.equal(loadConversationId('11', 'word', 'file:///cases/A/补充协议.docx'), '')
+  } finally {
+    restore()
+  }
+})
