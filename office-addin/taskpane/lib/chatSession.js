@@ -238,6 +238,22 @@ function setConversationId(next) {
 }
 
 let connection = null
+/**
+ * 当前 SSE 连接是按哪个 conversationId 建的（dev-board#764）。
+ *
+ * 通道是**按会话**建的：`createSseConnection` 在创建时就把 conversationId 焊进
+ * GET /api/agent/connect/{cid} 的地址，之后的重连也一直用它。所以「连接还在」
+ * 不等于「连的是当前这条会话」——两者一旦错开，POST /chat 走会话 B、SSE 听着
+ * 会话 A，后端推给 B 的 client_action/text_delta/bubble_end 一条都到不了窗格：
+ * 工具 chip 不出现、正文不出现、office_command 全部空等 30 秒超时，而**两端都
+ * 不报错**（后端把事件存进补发缓冲等一个永远不会来的重连）。2026-09-21 真机
+ * Excel 就是这样：SSE 在 conv-…2590、chat 在 conv-…2592，两条会话 ID 由两次
+ * 并发签发产生，只差 2 毫秒。
+ *
+ * 记下绑定的 ID，ensureConnection 每次都比对——不一致即换通道，让这类错配
+ * 立刻可见地自愈，而不是静默吞掉整轮。
+ */
+let connectionConvId = null
 let parser = null
 let currentAssistant = null
 // SSE 是否发生过**轮次中途**的断线重连：只有这种重连之后的 run_state 才用于兜底解锁
@@ -691,12 +707,42 @@ export async function switchConversation(convId) {
 }
 
 /**
+ * 同一时刻只许有一条 preconnect 在跑（dev-board#764）。
+ *
+ * 不串起来的后果是**两条会话**：`activateSession` 的预连还卡在签发那个往返上时，
+ * 用户已经把消息发出去了，send 的兜底 preconnect 看到 conversationId 仍是 null，
+ * 于是又签发一次。两个 ID 只差几毫秒（真机实测 conv-…2590 / conv-…2592），
+ * 先回来的那个建了 SSE，后回来的那个覆盖了 conversationId 并被 POST /chat 带走——
+ * 从此这一轮的所有事件都推给一条没人听的会话。
+ *
+ * 只共享**正在跑**的那一次：settle 后立刻清空，下一次调用照旧真跑一遍
+ * （send 前的 reconnectNow 唤醒不能被跳过，见 ensureConnection）。
+ * 按 generation 判等，是因为切项目/切账户/切会话/新对话都会换掉会话身份——
+ * 那之后旧流程的结果已经作废，不能再复用。
+ */
+let preconnectInFlight = null
+let preconnectGen = -1
+
+function preconnect() {
+  if (preconnectInFlight && preconnectGen === generation) return preconnectInFlight
+  const gen = generation
+  preconnectGen = gen
+  const run = runPreconnect().finally(() => {
+    // 期间身份又变了的话，清掉的就不是自己这一次了——按 generation 认领
+    if (preconnectGen === gen) { preconnectInFlight = null; preconnectGen = -1 }
+  })
+  preconnectInFlight = run
+  return run
+}
+
+/**
  * 备好会话 ID 与 SSE 连接。签发一个往返、建连一个往返，两个都从「发消息」的
  * 关键路径上挪到这里——进面板/切项目时、以及新对话后就做完。
  * 三处调用：activateSession（回灌或预连）、newConversation（新会话预连）、
  * send（兜底重试：前两处失败或还没跑完时）。都已就位时是空操作。
+ * 外面永远经 preconnect() 调，别直接调这个——并发保护在那一层。
  */
-async function preconnect() {
+async function runPreconnect() {
   if (!ctx.projectId || !ctx.settings || !isConfigured(ctx.settings)) return
   // 签发到一半会话身份又变了（切项目/切账户）：本次流程整体作废，别拿旧身份去建连
   if (!conversationId && !(await issueConversation())) return
@@ -1313,6 +1359,11 @@ async function handleCrossDocAction(action) {
 }
 
 async function ensureConnection() {
+  // 通道必须绑在**当前**会话上（dev-board#764）：连接是按 conversationId 建的，
+  // 会话一变就得换通道。正常路径（newConversation/switchConversation/renewConversation）
+  // 都会先 closeConnection，走不到这里；能走到就说明有人换了会话却没换通道——
+  // 那种状态下后端推给新会话的事件一条都到不了窗格，且两端都不报错。
+  if (connection && connectionConvId !== conversationId) closeConnection()
   if (connection) {
     // 连接对象在但可能处于重连退避（后端每轮结束会主动关流）：发送前把它唤醒并
     // 等到 emitter 真正挂上，否则 POST /chat 的快回合事件会被服务端静默丢弃
@@ -1354,17 +1405,18 @@ async function ensureConnection() {
       }
     },
     onClose: () => {
-      if (connection === conn) connection = null
+      if (connection === conn) { connection = null; connectionConvId = null }
       clearReconnectNotice()
       // 连接彻底关闭时不静默卡死输入框（断线重连由 sse.js 内部处理，不走这里）
       if (streaming.value) finishStreaming()
     }
   })
   connection = conn
+  connectionConvId = conversationId
   try {
     await conn.ready
   } catch (e) {
-    if (connection === conn) connection = null
+    if (connection === conn) { connection = null; connectionConvId = null }
     throw e
   }
   // 只有「本次发送触发了建连」才记时——预连时没有轮次在跑，perfRound 为空
@@ -1377,6 +1429,7 @@ function closeConnection() {
     connection.close()
     connection = null
   }
+  connectionConvId = null
 }
 
 // ==================== 交互 ====================
@@ -1555,6 +1608,9 @@ export async function stop() {
 }
 
 export function newConversation() {
+  // 换会话 = 换会话身份：in-flight 的旧预连（连同它已经签发的 ID）就此作废，
+  // 不能被下面这次 preconnect 复用，也不该再把结果写回来（dev-board#764）
+  generation++
   closeConnection()
   rememberConversation('')
   setConversationId(null)
