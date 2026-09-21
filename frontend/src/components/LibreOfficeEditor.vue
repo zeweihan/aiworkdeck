@@ -343,7 +343,7 @@ export default {
       return this.docKind !== 'calc' && this.docKind !== 'impress'
     },
     // 审阅概览此刻是否渲染。v-if 与 .libre-body 的让位 class 共用这一个判据，
-    // 两处不许各写一份——面板不在时浮层白白让出 288px，面板在时又压住浮层。
+    // 两处不许各写一份——面板不在时浮层白白让出 320px，面板在时又压住浮层。
     reviewOverviewShown() {
       return this.reviewOpen && this.ready && this.showsReview
     },
@@ -1945,12 +1945,12 @@ export default {
 }
 .libre-prov-text.clickable { color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; }
 
-/* 概览打开时，画布上的宿主浮层让出面板那 288px（= ReviewPanel .rp 的宽度），画布本身
+/* 概览打开时，画布上的宿主浮层让出面板那 320px（= ReviewPanel .rp 的宽度），画布本身
    不挤宽。不让的话：保存失败的「重试」、改字 stale 条右侧的 保留/打开/忽略、拖拽关联
    投放框的右半边与居中提示都被压在面板底下，看不见也点不到。 */
-.libre-body.review-overview-open .libre-float { right: calc(288px + 16px); }
+.libre-body.review-overview-open .libre-float { right: calc(320px + 16px); }
 .libre-body.review-overview-open .libre-stale-bar,
-.libre-body.review-overview-open .libre-evidence-drop { right: 288px; }
+.libre-body.review-overview-open .libre-evidence-drop { right: 320px; }
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
 .libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px var(--awd-accent); }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;

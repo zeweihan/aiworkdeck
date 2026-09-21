@@ -3,20 +3,26 @@
 <template>
   <view class="rp">
     <view class="rp-head">
-      <view v-if="!isMerge" class="rp-tabs">
-        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: allGroups.length }) }}</text>
-        <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
-        <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab', { count: evidenceCount }) }}</text>
+      <!-- 收起（dev-board#753）：面板左上角一个向右的箭头，指向它收起的方向。
+           原先是右端一行 12px 灰字「收起」，真机上没人看得见。 -->
+      <view class="rp-collapse" :title="$t('editor.review.collapse')" :aria-label="$t('editor.review.collapse')" @tap="$emit('close')">
+        <svg class="rp-collapse-ico" viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </view>
+      <!-- 标签行（dev-board#754）：五个标签排一行、谁都不许折行，计数是同一行里
+           的小号数字（文案本身不带 {count}，否则会连着标签一起被折行）。 -->
+      <view v-if="!isMerge" ref="tabs" class="rp-tabs awd-hairline-scroll">
+        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab') }}<text class="rp-tab-n">{{ allGroups.length }}</text></text>
+        <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab') }}<text class="rp-tab-n">{{ comments.length }}</text></text>
+        <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab') }}<text class="rp-tab-n">{{ evidenceCount }}</text></text>
         <!-- 「AI 审校」（dev-board#723/#724，改名见 #749）：规则检查 + AI 审校的
              同一张清单。inlineReview 为 null（非 Writer / 没有项目 / 引擎没起来）
              时整个标签不出现。 -->
-        <text v-if="inlineReview" class="rp-tab" :class="{ on: tab === 'chk' }" @tap="tab = 'chk'">{{ $t('editor.review.checkTab', { count: inlineReviewCount }) }}</text>
+        <text v-if="inlineReview" class="rp-tab" :class="{ on: tab === 'chk' }" @tap="tab = 'chk'">{{ $t('editor.review.checkTab') }}<text class="rp-tab-n">{{ inlineReviewCount }}</text></text>
         <!-- 「溯源」（dev-board#632）：这一段是谁、哪一版、什么时候改的。
              这份文件没有版本记录时 provenance 为 null，标签整个不出现。 -->
         <text v-if="provenance" class="rp-tab" :class="{ on: tab === 'prov' }" @tap="tab = 'prov'">{{ $t('version.provenanceTab') }}</text>
       </view>
       <text v-else class="rp-merge-title">{{ $t('version.mergePanelTitle') }}</text>
-      <text class="rp-close" @tap="$emit('close')">{{ $t('editor.review.collapse') }}</text>
     </view>
 
     <view v-if="!isMerge && tab === 'rev' && revisions.length" class="rp-bulk">
@@ -405,8 +411,17 @@ export default {
     // 合并模式下宿主的「完成裁决」按钮靠这条消息算可点与文案，所以清单一变就要报一次。
     revisions() { if (this.isMerge) this.emitMergeState() },
     mergeConflicts: { handler() { if (this.isMerge) this.emitMergeState() }, immediate: true },
+    // 英文标签比中文长得多，一行放不下时标签行横向滚（绝不折行）。宿主也会直接
+    // 切标签（正文浮球点开就落在「AI 审校」），那一下选中的标签可能正躲在滚动
+    // 区外——界面看着没变，实际内容已经换了。切完把它滚进视野。
+    tab() { this.$nextTick(() => this.revealActiveTab()) },
   },
   methods: {
+    revealActiveTab() {
+      const box = this.$refs.tabs
+      const el = box && box.querySelector && box.querySelector('.rp-tab.on')
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    },
     /** 宿主切标签用（正文浮球点开时要直接落在「审校」页）。合并模式没有标签。 */
     openTab(key) {
       if (this.isMerge || !key) return
@@ -671,14 +686,25 @@ export default {
 </script>
 
 <style scoped>
-.rp { display: flex; flex-direction: column; width: 288px; height: 100%; background: var(--awd-bg);
+/* 320px（原 288）：五个标签 + 收起箭头排一行要这么宽（dev-board#754）。
+   这个数与 LibreOfficeEditor 里浮层的让位宽度是同一个，改这里要一起改那边。 */
+.rp { display: flex; flex-direction: column; width: 320px; height: 100%; background: var(--awd-bg);
   border-left: 1px solid var(--awd-border); }
-.rp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px;
+.rp-head { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 6px;
   border-bottom: 1px solid var(--awd-border); }
-.rp-tabs { display: flex; gap: 4px; }
-.rp-tab { padding: 3px 9px; border-radius: 6px; font-size: 12px; color: var(--awd-text-2); }
+.rp-collapse { flex: none; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; color: var(--awd-text-2); cursor: pointer; }
+.rp-collapse:hover { background: var(--awd-surface-2); color: var(--awd-text); }
+.rp-collapse-ico { width: 16px; height: 16px; display: block; }
+/* 一行放不下时（英文标签长得多）横向滚，绝不折行：折行会把每个标签挤成两行。 */
+.rp-tabs { flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; gap: 2px; overflow-x: auto; }
+.rp-tab { flex: none; white-space: nowrap; padding: 3px 7px; border-radius: 6px;
+  font-size: 12px; color: var(--awd-text-2); }
 .rp-tab.on { background: var(--awd-accent-soft); color: var(--awd-accent-text); font-weight: 600; }
-.rp-close { font-size: 12px; color: var(--awd-text-2); }
+/* 计数与标签同一行、同一条基线，只是小一号淡一档。间距用 margin 不用 flex gap：
+   uni-h5 下 <text> 的内容真正落在内层 span 里，外层的 gap 够不着它。 */
+.rp-tab-n { margin-left: 3px; font-size: 10.5px; color: var(--awd-text-3); }
+.rp-tab.on .rp-tab-n { color: var(--awd-accent-text); }
 .rp-bulk { display: flex; gap: 6px; padding: 8px 10px 0; }
 .rp-bulk-btn { flex: 1; text-align: center; padding: 4px 0; border: 1px solid var(--awd-border); border-radius: 6px;
   font-size: 12px; color: var(--awd-text-2); background: var(--awd-surface); }
