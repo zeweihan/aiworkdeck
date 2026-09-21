@@ -457,6 +457,23 @@
         </view>
 
         <!-- 用户头像已搬到顶栏右上角（「设置」的下拉入口）。 -->
+
+        <!-- 反馈入口（dev-board#755）：原来是右下角那颗可拖动的浮钮，维护者判词
+             「整个界面浮球太多、看起来非常混乱」，收进 rail 底部做固定图标。
+             面板本体仍是页面树之外的 body 级单例，这里只发事件叫它（统一出口
+             utils/feedbackWidget.js 的 openFeedbackWidget）。
+             不按 isClientView 收：客户也会遇到问题、也该报得出来。 -->
+        <view
+          class="rail-btn"
+          :title="$t('feedback.launcherTitle')"
+          @tap="openFeedback"
+        >
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.feedback" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
       </view>
 
       <!-- File Picker Dialog (for EasyVoice Import) -->
@@ -2244,6 +2261,7 @@ import {
 import { activityTracker } from '@/utils/activityTracker.js'
 
 import { ICONS as GLYPHS } from '@/config/icons.js'
+import { openFeedbackWidget } from '@/utils/feedbackWidget.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import ShareholderMeetingPanel from '@/components/ShareholderMeetingPanel.vue'
 import MeetingRecordingPanel from '@/components/MeetingRecordingPanel.vue'
@@ -5456,6 +5474,11 @@ export default {
     },
 
     // --- 布局控制 ---
+    // rail 底部的反馈图标（dev-board#755）。面板是 body 级单例，这里只能发事件叫它。
+    openFeedback() {
+      openFeedbackWidget()
+    },
+
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       saveSidebarCollapsed(uni, this.sidebarCollapsed)

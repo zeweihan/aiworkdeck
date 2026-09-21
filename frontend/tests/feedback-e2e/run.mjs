@@ -157,17 +157,21 @@ try {
     await sleep(400)
   }
 
-  await step('进入工作台，右下角浮窗常驻可见', async () => {
+  // 入口不再是右下角的浮钮，是左栏 rail 底部那个固定图标（dev-board#755）。
+  // rail 按钮的 :title 会落成 DOM 的 title 属性（app-e2e 找「资源管理器」同法）。
+  const RAIL_FEEDBACK = '.left-rail [title="报告问题 / 提建议"]'
+
+  await step('进入工作台，左栏 rail 底部的反馈入口在场', async () => {
     // dev server 冷启动时首次 transform 整个工作台页要几十秒（project-overview 一万多行），
     // 20s 的等待会稳定超时并把原因伪装成「浮窗没出来」
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
       { waitUntil: 'domcontentloaded', timeout: 120000 })
     await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), POLL(120000))
-    await page.waitForSelector('.awdfb-launcher', { timeout: 15000 })
+    await page.waitForSelector(RAIL_FEEDBACK, { timeout: 15000 })
   })
 
-  await step('点开浮窗并打字', async () => {
-    await clickSel('.awdfb-launcher')
+  await step('点开反馈面板并打字', async () => {
+    await clickSel(RAIL_FEEDBACK)
     await page.waitForSelector('.awdfb-panel', { timeout: 10000 })
     await clickSel('.awdfb-text')
     await page.keyboard.type(MARKER + ' 保存按钮点了没反应')
@@ -258,7 +262,7 @@ try {
     // 提交成功后不再自动关闭（用户要能看清结果卡），得手动点关闭。
     await clickSel('.awdfb-x')
     await page.waitForFunction(() => !document.querySelector('.awdfb-mask'), POLL(10000))
-    await page.waitForSelector('.awdfb-launcher', { timeout: 10000 })
+    await page.waitForSelector(RAIL_FEEDBACK, { timeout: 10000 })
   })
 } finally {
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch { /* 清不掉不影响结论 */ }
@@ -267,5 +271,5 @@ try {
   await sleep(1500)
   try { elec.kill('SIGKILL') } catch { /* ignore */ }
 }
-console.log(failed ? '\n结果：' + failed + ' 步失败' : '\n结果：反馈浮窗全链路通（截图+语音+落库+附件回读）')
+console.log(failed ? '\n结果：' + failed + ' 步失败' : '\n结果：反馈面板全链路通（截图+语音+落库+附件回读）')
 process.exit(failed ? 1 : 0)

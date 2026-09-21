@@ -106,6 +106,10 @@ export const ICONS = {
   audioLines: ['M2 10v4', 'M6 6v12', 'M10 3v18', 'M14 8v8', 'M18 5v14', 'M22 10v4'],
   arrowUpRight: ['M7 17 17 7', 'M8 7h9v9'],
   files: ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7l-5-5Z', 'M15 2v5h5', 'M9 13h6', 'M9 17h6'],
+  // 反馈入口（左栏 rail 底部与项目列表页页头，dev-board#755）：对话气泡 + 感叹号。
+  // 末一段是「点」——线帽圆角的零长线段，与 warning 的写法同源（这里不画 <circle>：
+  // rail 与页头的图标模板都只 v-for <path>）。
+  feedback: ['M21 14a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v9Z', 'M12 7v4', 'M12 13.4h.01'],
   // 自绘音频播放器（FilePreview）用；填充式三角/双竖条，比描边款在 40px 圆钮里更清楚
   play: ['M8 5.5v13l11-6.5-11-6.5Z'],
   pause: ['M9 5v14', 'M15 5v14'],

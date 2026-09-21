@@ -34,3 +34,13 @@ export function mountFeedbackWidget() {
   }
   // #endif
 }
+
+/**
+ * 打开反馈面板。**这是唯一的打开通道**（dev-board#755 撤掉浮钮之后）：
+ * 浮窗是 body 级单例，页面组件拿不到它的实例，只能靠事件叫它。
+ * 入口方（左栏 rail 底部的图标、项目列表页页头的按钮、桌面应用菜单「报告问题…」）
+ * 一律调这里，别各写各的 uni.$emit。
+ */
+export function openFeedbackWidget() {
+  try { uni.$emit('awd:open-feedback') } catch (e) { /* ignore */ }
+}

@@ -55,11 +55,16 @@ test('D3: 「立即发送」恢复执行前，本地没有 SSE 就先重连，�
   assert.match(body.slice(0, connectAt), /isConnected\.value/, '已经在线时不许重复建连')
 })
 
-test('D4: 队列面板声明 data-awd-keep-clear，反馈浮钮要避开它', () => {
+// D4 原本是「队列面板声明 data-awd-keep-clear，反馈浮钮要避开它」。dev-board#755
+// 把反馈入口从可拖动浮钮改成左栏 rail 底部的固定图标，浮钮连同让路机制一起撤掉，
+// 这类遮挡不可能再发生——守的点因此换成「浮钮不许回来」（回来了就得连让路一起恢复）。
+test('D4: 反馈入口不再是浮钮，队列面板/输入卡不会被它盖住', () => {
   const root = INBOX.match(/<template>(?:\s|<!--[\s\S]*?-->)*(<view\b[^>]*>)/)
   assert.ok(root, '找不到 AgentInbox 根节点')
   assert.match(root[1], /class="agent-inbox"/)
-  assert.match(root[1], /data-awd-keep-clear/, '队列在输入卡外面，输入卡的声明管不到它')
+  const widget = read('../../src/components/FeedbackWidget.vue')
+  assert.ok(!widget.includes('awdfb-launcher'), '反馈浮钮不许回来（dev-board#755）')
+  assert.ok(!widget.includes('pointerdown'), '入口不许再可拖动')
 })
 
 test('D2: #798 新增的每个 textarea/input 都显式声明 maxlength（uni-h5 缺省 140 字）', () => {

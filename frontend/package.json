@@ -66,6 +66,7 @@
     "test:lowa-big": "LOWA_E2E_BIG=1 node tests/lowa-e2e/big-doc.mjs",
     "test:app-e2e": "node tests/app-e2e/run.mjs",
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",
+    "test:feedback-widget": "node --test tests/feedback-widget/*.test.mjs",
     "test:feedback-e2e": "node tests/feedback-e2e/run.mjs",
     "test:meeting-e2e": "node tests/meeting-e2e/run.mjs",
     "test:ai-alignment-e2e": "node tests/ai-alignment-e2e/run.mjs",

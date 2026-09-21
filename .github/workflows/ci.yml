@@ -106,6 +106,9 @@ jobs:
       - name: Titlebar drag-region contract (全屏浮层必须 no-drag，B4 / 0907 B10)
         working-directory: frontend
         run: npm run test:window-chrome
+      - name: Feedback entry contract (rail 底部固定图标，不许再有浮钮，dev-board#755)
+        working-directory: frontend
+        run: npm run test:feedback-widget
       - name: Clipboard capture gate + delete chain (dev-board#455)
         working-directory: frontend
         run: npm run test:clipboard

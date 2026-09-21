@@ -40,6 +40,9 @@
               <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
             </template>
             <button class="btn-secondary-small" @tap="goToCalendar">{{ $t('projects.calendarEntry') }}</button>
+            <!-- 反馈：本页没有 rail（工作台的入口在 rail 底部），而它是启动的唯一落点，
+                 浮钮撤掉后这里必须有一处，否则浏览器端连报问题的地方都没有。 -->
+            <button class="btn-secondary-small" :title="$t('feedback.launcherTitle')" @tap="openFeedback">{{ $t('feedback.launcherLabel') }}</button>
             <button class="btn-secondary-small" @tap="goToUserProfile">{{ $t('projects.personalCenter') }}</button>
           </view>
         </view>
@@ -356,6 +359,7 @@ import { getCurrentUser, getSessionId } from '@/utils/auth.js'
 import { isDesktopHost, host } from '@/services/host.js'
 import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { ICONS } from '@/config/icons.js'
+import { openFeedbackWidget } from '@/utils/feedbackWidget.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
@@ -808,6 +812,11 @@ export default {
     // 日历页同样不是工作台，同一模式
     goToCalendar() {
       uni.navigateTo({ url: '/pages/calendar/calendar' })
+    },
+    // 反馈入口（dev-board#755）。本页没有 rail，而它是启动的唯一落点——浮钮撤掉后
+    // 这里要是没入口，浏览器端（没有应用菜单）就彻底报不了问题了。
+    openFeedback() {
+      openFeedbackWidget()
     },
     startRename(project) {
       if (this.isClientUser) return

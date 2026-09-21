@@ -1,7 +1,14 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
-  常驻反馈浮窗（右下角）。
+  反馈面板（窗口左下角，挨着左栏 rail）。
+
+  **这里只有面板，没有入口**（dev-board#755）：原来右下角那颗可拖动的浮钮撤了——
+  维护者的判词是「整个界面浮球太多、看起来非常混乱」。入口改成左栏 rail 底部的固定
+  图标（工作台）与项目列表页页头的按钮，加上桌面应用菜单的「报告问题…」，三处都经
+  uni.$emit('awd:open-feedback') 叫这个面板（统一出口 utils/feedbackWidget.js 的
+  openFeedbackWidget）。入口既然固定在左栏，面板也跟着钉在左下角：不再可拖动、
+  不再持久化位置，「浮钮压住别人主操作区」那套让路机制（utils/keepClear.js）一并撤掉。
 
   组件由 App.vue 单独 createApp 挂在 <body> 下（见 utils/feedbackWidget.js），
   不在 uni 的页面树里，因此全应用只有一个实例，天然绕开 project-overview 那条
@@ -19,36 +26,10 @@
 -->
 <template>
   <div class="awdfb">
-    <!-- 入口按钮可以在窗口里拖着走：钉死在右下角时它会挡住底部工具抽屉、
-         状态栏和编辑器右下角的控件。按下-拖动-松开由 pointer 事件自己判，
-         位移没超过阈值才算点击（所以这里不写 @click，否则拖完手一松还会开面板）。 -->
-    <div
-      v-if="!open"
-      class="awdfb-launcher"
-      :class="{ 'is-moving': moving }"
-      :style="launcherStyle"
-      role="button"
-      tabindex="0"
-      :title="$t('feedback.launcherTitle')"
-      @pointerdown="onLauncherDown"
-      @keydown.enter="openPanel"
-    >
-      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-        <path
-          d="M12 3.5c-3.3 0-6 2.4-6 5.4 0 1.6.8 3 2 4v1.6c0 .5.5.8.9.6l1.7-1c.4.1.9.1 1.4.1 3.3 0 6-2.4 6-5.3S15.3 3.5 12 3.5Z"
-          fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"
-        />
-        <path d="M12 7.2v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        <circle cx="12" cy="12.4" r="0.9" fill="currentColor" />
-      </svg>
-      <span>{{ $t('feedback.launcherLabel') }}</span>
-    </div>
-
     <div v-if="open" class="awdfb-mask">
       <div
         class="awdfb-panel"
         :class="{ 'is-dragging': dragging }"
-        :style="panelStyle"
         @dragover.prevent="dragging = true"
         @dragleave="dragging = false"
         @drop.prevent="onDrop"
@@ -188,13 +169,9 @@ import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { t as t$ } from '@/i18n'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
-import { KEEP_CLEAR_ATTR, resolveLauncherTop } from '@/utils/keepClear.js'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
-// 入口按钮被拖到哪儿了。存起来是必须的：每次启动都弹回右下角的话，
-// 「它挡住了我要点的东西」这个问题等于没解决。
-const LAUNCHER_POS_KEY = 'awd_feedback_launcher_pos'
 
 // 状态对用户的说法：不暴露 NEW/PR_OPENED/EMAILED/SKIPPED/FAILED 这些内部枚举。
 const MINE_STATUS_LABELS = {
@@ -249,14 +226,8 @@ export default {
       playing: false,
       capturing: false,
       submitting: false,
-      // 注意：dragging 是「有文件被拖到面板上」，跟入口按钮的拖动无关，别混用
+      // dragging = 有文件被拖到面板上（面板本身不可拖动，入口也不是浮钮了）
       dragging: false,
-      // 入口按钮的位置。null = 没挪过，走 CSS 里的右下角默认值
-      launcherPos: null,
-      // 让路后的 top（null = 没压住任何 data-awd-keep-clear 区域，按原位显示）。
-      // 只是显示层的偏移，不写回 launcherPos、不持久化：主操作区挪走后按钮就回原位
-      keepClearTop: null,
-      moving: false,
       showContext: false,
       status: '',
       statusIsError: false,
@@ -293,162 +264,23 @@ export default {
       if (this.view === 'result') return this.resultOk ? this.$t('feedback.headResultOk') : this.$t('feedback.submitFailed')
       return this.$t('feedback.headDefaultTitle')
     },
-    launcherStyle() {
-      const top = this.keepClearTop
-      if (!this.launcherPos) {
-        // 默认位（CSS 的 right/bottom）只在让路时改竖直坐标，水平仍贴右缘
-        return top == null ? {} : { top: top + 'px', bottom: 'auto' }
-      }
-      // 挪过之后改成左上角定位，得把 CSS 里的 right/bottom 显式解掉
-      return {
-        left: this.launcherPos.left + 'px',
-        top: (top == null ? this.launcherPos.top : top) + 'px',
-        right: 'auto',
-        bottom: 'auto',
-      }
-    },
-    panelStyle() {
-      if (!this.launcherPos) return {}
-      // 面板跟着入口所在的象限走：入口拖到左上角、面板还从右下角冒出来会很跳。
-      // 只认象限不做精确贴附——面板 420px 宽、最高 78vh，精确贴附在小窗口下必然出界。
-      const w = (typeof window !== 'undefined' && window.innerWidth) || 1280
-      const h = (typeof window !== 'undefined' && window.innerHeight) || 800
-      const atLeft = this.launcherPos.left + 60 < w / 2
-      const atTop = this.launcherPos.top + 14 < h / 2
-      return {
-        left: atLeft ? '16px' : 'auto',
-        right: atLeft ? 'auto' : '16px',
-        top: atTop ? '16px' : 'auto',
-        bottom: atTop ? 'auto' : '34px',
-      }
-    },
   },
   mounted() {
-    // 菜单栏的「反馈…」「报告问题…」经这条事件打开浮窗。浮窗挂在页面树之外
-    // （feedbackWidget.js 的 body 级单例），菜单派发器够不到组件实例，只能走事件。
+    // 三个入口（左栏 rail 底部的图标、项目列表页页头的按钮、桌面应用菜单「报告问题…」）
+    // 都经这条事件开面板。面板挂在页面树之外（feedbackWidget.js 的 body 级单例），
+    // 入口方够不到组件实例，只能走事件——统一出口是 utils/feedbackWidget.js 的
+    // openFeedbackWidget()，别各写各的 uni.$emit。
     this._openFromMenu = () => { if (!this.open) this.openPanel() }
     try { uni.$on('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
-    this.restoreLauncherPos()
-    // 窗口缩小后旧坐标可能整个落到视口外，缩一次窗就再也点不到那个按钮了
-    this._onWinResize = () => {
-      if (this.launcherPos) this.launcherPos = this.clampPos(this.launcherPos)
-      this.updateKeepClear()
-    }
-    try { window.addEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
-    // 主操作区的位置随页面状态变（空会话输入卡垂直居中 → 有消息后沉底、切面板、
-    // 文案折行），没有能统一订阅的事件，所以低频轮询：每次只是一个 querySelectorAll
-    // 加几次 getBoundingClientRect，代价可以忽略。
-    this.$nextTick(() => this.updateKeepClear())
-    this._keepClearTimer = setInterval(() => this.updateKeepClear(), 800)
   },
   beforeUnmount() {
     try { uni.$off('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
-    try { window.removeEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
-    clearInterval(this._keepClearTimer)
-    this.detachLauncherDrag()
     this.stopRecording(true)
     this.stopPlay()
     this.revokeAll()
     setGlobalOverlay(false)
   },
   methods: {
-    // ==================== 入口按钮拖动 ====================
-    // 尺寸是量出来的（padding 会随文案长度变），别写死
-    launcherSize() {
-      const el = this.$el && this.$el.querySelector('.awdfb-launcher')
-      return { w: (el && el.offsetWidth) || 96, h: (el && el.offsetHeight) || 28 }
-    },
-    clampPos(pos) {
-      const { w, h } = this.launcherSize()
-      const vw = (typeof window !== 'undefined' && window.innerWidth) || 1280
-      const vh = (typeof window !== 'undefined' && window.innerHeight) || 800
-      const M = 8
-      return {
-        left: Math.min(Math.max(pos.left, M), Math.max(M, vw - w - M)),
-        top: Math.min(Math.max(pos.top, M), Math.max(M, vh - h - M)),
-      }
-    },
-    // 浮钮不许压住主操作区（dev-board#574）：任何固定坐标都会在某种布局下压住别人的
-    // 发送键，所以由主操作区自己打 data-awd-keep-clear 声明，这里每次落位前避开。
-    // 只算竖直方向——水平挪动会让贴边的按钮跑进内容区中间。
-    updateKeepClear() {
-      if (this.open || this.moving || typeof document === 'undefined') return
-      const vw = window.innerWidth || 1280
-      const vh = window.innerHeight || 800
-      const { w, h } = this.launcherSize()
-      // 没挪过时的原位由 CSS 决定（right:16px; bottom:40vh），这里按同一公式换算
-      const base = this.launcherPos || { left: vw - 16 - w, top: vh - vh * 0.4 - h }
-      const obstacles = [...document.querySelectorAll('[' + KEEP_CLEAR_ATTR + ']')]
-        .map((el) => el.getBoundingClientRect())
-      const top = resolveLauncherTop({ left: base.left, top: base.top, width: w, height: h }, obstacles, vh)
-      const next = top === base.top ? null : top
-      if (next !== this.keepClearTop) this.keepClearTop = next
-    },
-    restoreLauncherPos() {
-      try {
-        const saved = uni.getStorageSync(LAUNCHER_POS_KEY)
-        if (saved && typeof saved.left === 'number' && typeof saved.top === 'number') {
-          this.launcherPos = this.clampPos(saved)
-        }
-      } catch (e) { /* 存储读不出来就用默认角落 */ }
-    },
-    onLauncherDown(e) {
-      if (e.button !== undefined && e.button !== 0) return
-      const el = e.currentTarget
-      const rect = el.getBoundingClientRect()
-      this._drag = {
-        dx: e.clientX - rect.left,
-        dy: e.clientY - rect.top,
-        x0: e.clientX,
-        y0: e.clientY,
-        moved: false,
-      }
-      // 监听挂在 window 上而不是按钮上：拖快了指针会跑出按钮范围，挂在按钮上
-      // 就收不到 pointerup，按钮会永远卡在「拖动中」。（setPointerCapture 能解决
-      // 这个问题，但它在 CDP 合成事件下不一定拿得到，e2e 会跟着一起坏。）
-      this._onLauncherMove = (ev) => this.onLauncherMove(ev)
-      this._onLauncherUp = (ev) => this.onLauncherUp(ev)
-      window.addEventListener('pointermove', this._onLauncherMove)
-      window.addEventListener('pointerup', this._onLauncherUp)
-      window.addEventListener('pointercancel', this._onLauncherUp)
-      void el
-    },
-    onLauncherMove(e) {
-      if (!this._drag) return
-      // 4px 阈值：手抖不该被当成拖动，否则想点开面板的人会拖出一点位移然后什么也没发生
-      if (!this._drag.moved
-        && Math.abs(e.clientX - this._drag.x0) < 4
-        && Math.abs(e.clientY - this._drag.y0) < 4) return
-      this._drag.moved = true
-      this.moving = true
-      // 拖动中按钮必须跟手，让路偏移先撤掉；松手后再重新判一次
-      this.keepClearTop = null
-      this.launcherPos = this.clampPos({
-        left: e.clientX - this._drag.dx,
-        top: e.clientY - this._drag.dy,
-      })
-    },
-    onLauncherUp() {
-      const moved = !!(this._drag && this._drag.moved)
-      this.detachLauncherDrag()
-      this.moving = false
-      if (!moved) {
-        this.openPanel()
-        return
-      }
-      try { uni.setStorageSync(LAUNCHER_POS_KEY, this.launcherPos) } catch (e) { /* ignore */ }
-      this.updateKeepClear()
-    },
-    detachLauncherDrag() {
-      if (this._onLauncherMove) window.removeEventListener('pointermove', this._onLauncherMove)
-      if (this._onLauncherUp) {
-        window.removeEventListener('pointerup', this._onLauncherUp)
-        window.removeEventListener('pointercancel', this._onLauncherUp)
-      }
-      this._onLauncherMove = null
-      this._onLauncherUp = null
-      this._drag = null
-    },
     openPanel() {
       this.open = true
       this.view = 'form'
@@ -832,48 +664,6 @@ function pickAudioMime() {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
-.awdfb-launcher {
-  position: fixed;
-  right: 16px;
-  /* 默认停在右缘约 60% 高度处：右下角（bottom:34px）正好压在 AI 面板 composer
-     的模型选择器/发送键上（dev-board#213）。挪过的用户走 launcherStyle 的
-     left/top 持久化坐标，不受这个默认值影响。 */
-  bottom: 40vh;
-  z-index: 99998;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 11px;
-  border: 1px solid var(--awd-border);
-  border-radius: 14px;
-  background: var(--awd-surface);
-  color: var(--awd-accent-text);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  user-select: none;
-  box-shadow: 0 2px 10px rgba(18, 52, 77, 0.12);
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
-  /* 拖到顶部那条 38px 拖拽条上时，别让它被当成「拖窗口」 */
-  -webkit-app-region: no-drag;
-  /* 触摸/触控板上不写这条，pointermove 会被浏览器的滚动手势抢走 */
-  touch-action: none;
-}
-
-.awdfb-launcher:hover {
-  border-color: var(--awd-mint);
-  box-shadow: 0 4px 16px rgba(46, 90, 80, 0.18);
-}
-
-/* 拖动中：抬起来一点，并且关掉 transition——否则每一帧都在补间，跟手感全无 */
-.awdfb-launcher.is-moving {
-  cursor: grabbing;
-  transition: none;
-  border-color: var(--awd-mint);
-  box-shadow: 0 8px 22px rgba(46, 90, 80, 0.26);
-}
-
 .awdfb-mask {
   position: fixed;
   inset: 0;
@@ -883,10 +673,14 @@ function pickAudioMime() {
 
 .awdfb-panel {
   position: fixed;
-  right: 16px;
+  /* 钉在窗口左下角，挨着入口所在的左栏 rail（工作台 rail 宽 50px + 8px 间距）。
+     底部 34px 让开工作台那条 26px 的状态条。没有 rail 的页面（项目列表页等）
+     这点左边距只是内缩一点，不会压住任何东西。入口不再可拖动，面板也就不再有
+     「跟着入口象限跑」的落点计算（dev-board#755）。 */
+  left: 58px;
   bottom: 34px;
   width: 420px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 74px); /* 左 58 + 右留 16 */
   max-height: 78vh;
   display: flex;
   flex-direction: column;

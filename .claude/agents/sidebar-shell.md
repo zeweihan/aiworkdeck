@@ -460,14 +460,28 @@ config/commands/{app,file,edit,document,ai,view,go,tools,help}.js  纯数据，�
 **客户视图过滤是安全边界不是排版偏好**：`when: ['notClient']` 同时决定菜单项 enabled
 和命令能否执行，加速键在客户视图下按下去必须什么都不发生。
 
-## 反馈浮窗与外壳的两处接缝（2026-08）
+## 反馈面板与外壳的接缝（2026-08 立，2026-09-21 入 rail）
 
-右下角常驻反馈浮窗**不在页面树里**：`App.vue onLaunch` 经 `utils/feedbackWidget.js`
+反馈面板**不在页面树里**：`App.vue onLaunch` 经 `utils/feedbackWidget.js`
 在 `<body>` 下单独 `createApp` 挂一个实例（因此天生免疫下面那条页面栈多实例地雷）。
-它与外壳只有两处接缝：① `utils/overlayState.js` 的 `globalOverlayActive` 被
-`desktopOverlayActive` 或进去（浮窗自己不调 `setViewsVisible`，否则和那个 watcher 抢
+它与外壳的接缝：① `utils/overlayState.js` 的 `globalOverlayActive` 被
+`desktopOverlayActive` 或进去（面板自己不调 `setViewsVisible`，否则和那个 watcher 抢
 BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看板）。详见
 `.claude/agents/feedback-optimizer.md`。
+
+**入口在 rail 底部，全局不再有浮球（dev-board#755）**：原来右下角那颗可拖动的浮钮
+（`.awdfb-launcher`）撤了——维护者判词「整个界面浮球太多、看起来非常混乱」。现在三处入口：
+工作台 rail 最底下那个图标（`GLYPHS.feedback`，`@tap="openFeedback"`，排在成员堆叠之后、
+**不按 `isClientView` 收**——客户也该报得出问题）、项目列表页页头的「反馈」按钮
+（那页没有 rail，而它是启动的唯一落点；浏览器端没有应用菜单，这里没入口就等于报不了问题）、
+桌面应用菜单「帮助 > 报告问题…」。三处都调
+**`utils/feedbackWidget.js` 的 `openFeedbackWidget()`**（内部 `uni.$emit('awd:open-feedback')`）——
+面板是 body 级单例，页面组件够不到它的实例，**别各写各的 `uni.$emit`**。
+面板本身跟着钉在窗口左下角（`left:58px` = rail 50 + 8，`bottom:34px` 让开 26px 状态条），
+不可拖动、不持久化位置；「浮钮避开主操作区」那套让路机制（`utils/keepClear.js` +
+`data-awd-keep-clear`）随浮钮一起删了。
+护栏 `frontend/tests/feedback-widget/rail-entry.test.mjs`（`npm run test:feedback-widget`，已进 CI）
+钉着「浮钮与拖动一行都不许回来」。
 
 **页面栈地雷（本领域核心机制）**：navigateTo 反复进入 project-overview 不销毁旧实例——页面栈多实例并存，每个都持有全局监听。守卫模式：活跃实例指针 `window.__checkbaActiveOverviewVm` + isActiveOverviewInstance() 判活跃、去重状态挂 window 不挂实例、只清/接管指向自己的指针（beforeUnmount/onShow/mounted 三处配合）。切换项目用 reLaunch 避免堆叠。**外壳里新增任何全局订阅必须套用此模式**（PR#148/#151）。
 **新页同样成立**：`project-home.vue` 套同一套守卫，但**必须用自己的指针名** `window.__checkbaProjectHomeVm`——复用工作台的 `__checkbaActiveOverviewVm`（:2086/:2291/:2352 登记与清理，:3444 判活跃）会让工作台的全局事件被概览页拦掉。`project-home` 的轮询纪律：只在 onLoad 与 onShow 各刷一次，不起定时器；**绝不调 `getVersionStatus` / `/version/status`**（enabled 时会一路走到 `ProjectRepoService` 跑两次 `git add "."`，工作台已有 ≥7 处触发点在喂同一份状态，概览页再打第三次是纯浪费且会与工作台争 per-project 锁）。要「最近修改」时间取 `/version/timeline` 最新一条的 when。

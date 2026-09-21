@@ -1,8 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <!-- data-awd-keep-clear：队列在输入卡外面，右下角反馈浮钮要一并避开（utils/keepClear.js） -->
-  <view v-if="items.length" class="agent-inbox" data-awd-keep-clear>
+  <view v-if="items.length" class="agent-inbox">
     <view class="agent-inbox-head">
       <text class="agent-inbox-title">{{ $t('chat.inboxTitle') }}</text>
       <text class="agent-inbox-count">{{ items.length }}</text>
