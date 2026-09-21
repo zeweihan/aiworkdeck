@@ -223,15 +223,55 @@ public class AwdkLoginService {
         AccountLoginExchange.post(transport, objectMapper, baseUrl, "/api/auth/mail-login/send-code", body);
     }
 
-    /** 官网人机验证的公开配置，原样转给插件端（只有公开参数，没有密钥）。 */
+    /**
+     * 官网人机验证的公开配置，原样转给插件端（只有公开参数，没有密钥），外加一个
+     * 本服务器自己算的 {@code accountIdentity}（dev-board#766）。
+     *
+     * <p><b>accountIdentity 解决的是什么</b>：官网两个站各只认一种账号本体——大陆站是
+     * 手机号、国际站是邮箱（官网 {@code lib/phone-policy.ts} / {@code lib/mail-policy.ts}：
+     * 「两个都为真的站不存在，两个都为假也不存在」）。插件端此前判不了站点，登录页恒定
+     * 停在「手机号」那个 tab，国际站用户要填完号、等完一次发码往返，才由官网的
+     * {@code sms_not_supported_on_site} 告知「本站不支持手机号方式」。有了这个字段，
+     * 插件在**渲染登录页那一刻**就知道该给哪个 tab。
+     *
+     * <p>为什么由本服务器给而不是官网：官网的 {@code /api/auth/captcha-config} 至今只带
+     * 控件参数，没有站点信息；而本服务器本来就知道自己桥到哪个站（{@code ai.account.base-url}）。
+     * 判定复用 {@link com.checkba.version.OfficialCloudEndpoint#isInternationalSite}
+     * 那份**按主机**的实现，不是 {@code contains("workdeck.ai")}。
+     *
+     * <p>官网不可达或回了没法解析的内容时照样给出 accountIdentity：它只取决于本机配置，
+     * 与这次出站的成败无关——把「站点是哪个」和「控件开没开」绑在一起，等于官网一抖
+     * 插件的登录页就又退回瞎猜。
+     */
     public Map<String, Object> captchaConfig() {
+        Map<String, Object> config = new HashMap<>();
         AccountTransport.Reply reply = transport.send("GET", baseUrl + "/api/auth/captcha-config", null, null);
-        if (reply.networkFailure() || reply.status() < 200 || reply.status() >= 300) {
-            Map<String, Object> off = new HashMap<>();
-            off.put("provider", null);
-            return off;
+        boolean ok = !reply.networkFailure() && reply.status() >= 200 && reply.status() < 300;
+        Map<String, Object> remote = Map.of();
+        if (ok) {
+            try {
+                remote = AccountLoginExchange.parse(objectMapper, reply.body());
+            } catch (AccountException e) {
+                // 200 但内容不是 JSON（中间有捕获门户/代理页是真实存在的形态）：
+                // 按「未启用」降级，让报错发生在发码那步（那里有可读文案）。
+                ok = false;
+            }
         }
-        return AccountLoginExchange.parse(objectMapper, reply.body());
+        if (ok) {
+            config.putAll(remote);
+        } else {
+            config.put("provider", null);
+        }
+        config.put("accountIdentity", accountIdentity());
+        return config;
+    }
+
+    /**
+     * 本服务器桥到的那个站以什么为账号本体：国际站是 {@code "email"}，其余（大陆站、
+     * 私有部署指向大陆站）是 {@code "phone"}。两值互斥，没有第三种。
+     */
+    public String accountIdentity() {
+        return com.checkba.version.OfficialCloudEndpoint.isInternationalSite(baseUrl) ? "email" : "phone";
     }
 
     /** 官网登录：手机号 + 验证码换 Key 再桥接（大陆站主路径）。 */

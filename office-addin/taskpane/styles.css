@@ -76,7 +76,9 @@ body { display: flex; flex-direction: column; }
 #app { height: 100%; flex: 1 1 auto; min-height: 0; }
 
 /* AGPL §0 Appropriate Legal Notices：常显、不可关闭的许可与商标告示。
-   次级文字色 + 小字，不抢眼；外壳保持浅色，不引入任何深色 chrome。 */
+   次级文字色 + 小字，不抢眼；外壳保持浅色，不引入任何深色 chrome。
+   dev-board#765：默认只占一行（原本四五行把窗格底部吃掉一大块），
+   完整告示收进 <details>——内容一字未删，只是默认折叠。 */
 .legal-notice {
   flex: none;
   padding: 6px 10px 8px;
@@ -86,8 +88,29 @@ body { display: flex; flex-direction: column; }
   color: var(--awd-text-secondary);
   word-break: break-word;
 }
-.legal-notice div + div { margin-top: 1px; }
 .legal-notice a { color: inherit; text-decoration: underline; }
+
+/* 折叠行：去掉两套宿主默认三角标（Chromium 旧版走 ::-webkit-details-marker，
+   新版走 list-style），换成自己画的一个尖角——WPS 的 CEF 内核版本参差，
+   只写一套会在另一边出两个标记。 */
+.legal-summary {
+  cursor: pointer;
+  list-style: none;
+}
+.legal-summary::-webkit-details-marker { display: none; }
+.legal-summary::after { content: "▸"; margin-left: 4px; }
+.legal-details[open] > .legal-summary::after { content: "▾"; }
+.legal-full { margin-top: 4px; }
+.legal-full > div + div { margin-top: 1px; }
+
+/* 中英两份同时写在页里，由 <html lang> 二选一（i18n.js 切语言时同步该属性）。
+   **默认隐英文、显中文**：页面自带 lang="zh-CN"，脚本整个没跑起来时
+   也得有一份告示在（反过来默认都显就成了两遍）。display 写死 inline/block
+   而不用 revert：WPS 的 CEF 内核未必有那个关键字。 */
+.legal-notice .legal-lang[data-lang="en"] { display: none; }
+html[lang^="en"] .legal-notice .legal-lang[data-lang="zh"] { display: none; }
+html[lang^="en"] .legal-notice span.legal-lang[data-lang="en"] { display: inline; }
+html[lang^="en"] .legal-notice div.legal-lang[data-lang="en"] { display: block; }
 
 button {
   font-family: inherit;

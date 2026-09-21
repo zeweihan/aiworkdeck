@@ -76,6 +76,12 @@ export async function setupCaptcha(config, holderId) {
     const widgetId = window.turnstile.render(el, {
       sitekey: config.siteKey,
       appearance: 'interaction-only',
+      // 外壳恒为浅色（配色红线），控件不能跟着系统走：theme 缺省是 'auto'，
+      // 深色系统下 Turnstile 会渲染成一块黑底方框贴在浅色表单上（dev-board#766 真机截图）。
+      theme: 'light',
+      // 窗格窄（Word 默认约 320px，用户还能再拖窄）：compact 是 150px 宽，
+      // 'normal'/'flexible' 都按 300px 起算，套进表单卡片里会横向溢出。
+      size: 'compact',
     })
     return {
       provider: 'turnstile',
@@ -115,6 +121,8 @@ export async function setupCaptcha(config, holderId) {
     },
     onBizResultCallback: () => { /* 业务结果由发码流程处理 */ },
     getInstance: (i) => { instance = i },
+    // 滑条跟着表单宽度走（见 slideWidth）；高度与输入框同一档，弹层里不至于突兀。
+    // 阿里云 2.0 的 SDK 没有明暗主题开关，浅色是它的默认外观，与外壳一致。
     slideStyle: { width: slideWidth(holderId), height: 40 },
     language: 'cn',
     onError: (e) => console.warn('[captcha] 阿里云控件初始化失败:', e),
