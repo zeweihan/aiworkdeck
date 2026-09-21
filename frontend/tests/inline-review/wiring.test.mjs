@@ -50,8 +50,8 @@ test('菜单与命令面板那一条改名，run 与编辑器上的方法名对�
 })
 
 test('两种语言的 AI 审校文案齐全且互相对齐', () => {
-  assert.equal(zh.review.checkTab, 'AI 审校 {count}')
-  assert.equal(en.review.checkTab, 'AI Review {count}')
+  assert.equal(zh.review.checkTab, 'AI 审校')
+  assert.equal(en.review.checkTab, 'AI Review')
   const keys = (o) => Object.keys(o).sort()
   assert.deepEqual(keys(zh.inlineReview), keys(en.inlineReview))
   assert.deepEqual(keys(zh.inlineReview.bucket), keys(en.inlineReview.bucket))

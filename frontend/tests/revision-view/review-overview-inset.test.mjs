@@ -43,7 +43,7 @@ test('画布上的宿主浮层都在让位规则里，且都是 .libre-canvas-wr
   assert.match(wrap, /class="libre-evidence-drop"/)
   assert.match(wrap, /<view class="libre-float">/)
   const panelWidth = Number(PANEL.match(/\.rp \{[^}]*?\bwidth: (\d+)px/)[1])
-  assert.equal(panelWidth, 288, '前置条件：读到了 ReviewPanel 的宽度')
+  assert.equal(panelWidth, 320, '前置条件：读到了 ReviewPanel 的宽度')
   const rule = (selector) => {
     const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const m = style.match(new RegExp('\\.libre-body\\.review-overview-open ' + esc + '[^{]*\\{([^}]*)\\}'))

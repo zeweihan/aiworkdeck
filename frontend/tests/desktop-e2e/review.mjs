@@ -111,7 +111,7 @@ try {
   assert.equal(await guest.$eval('#qtcanvas', n => n.getBoundingClientRect().width), canvasBefore, 'Overview must not shrink native canvas')
   assert.equal(await host.$eval('.libre-review-overview', n => getComputedStyle(n).position), 'absolute')
   await host.screenshot({path:path.join(artifacts,'overview.png')})
-  await click('.rp-close')
+  await click('.rp-collapse')
   await host.waitForSelector('.libre-review-overview', {hidden:true})
   await click('.etb-field[title="修订显示方式"]')
   await click('.etb-item', '批注框中显示修订')
