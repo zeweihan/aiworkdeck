@@ -237,7 +237,7 @@ import { rechargeUrl, openExternal } from './lib/site.js'
 import { hostFamily, hidePanel, detectHost, readDocumentMeta, documentKey } from './lib/hostBridge.js'
 import { popIn } from './lib/motion.js'
 import { transferOpen, closeTransfer } from './lib/transfer.js'
-import { paneIdentity, onIdentityChange, crossDocBanner } from './lib/chatSession.js'
+import { paneIdentity, onIdentityChange, crossDocBanner, syncActiveDocument } from './lib/chatSession.js'
 import { startHeartbeat } from './lib/paneHeartbeat.js'
 import {
   revisionLogOpen, openRevisionLog, closeRevisionLog, bindDocument,
@@ -580,7 +580,29 @@ onMounted(async () => {
   refreshProjects()
   loadMe()
   startPaneHeartbeat()
+  watchActiveDocument()
 })
+
+/**
+ * 文档换了就换会话（dev-board#767）：会话按文档绑定，窗格随文档窗口走、用户在同一窗格里
+ * 切了文档、或把新建的文档存成了文件，都得让会话与修订记录跟着走。
+ *
+ * 两个时机，都是「没换就什么都不做」：
+ *   - 窗格重新拿到焦点（用户切回这个文档窗口、点进窗格）——不用轮询就能抓到的那一下；
+ *   - 心跳那一轮（30 秒）顺带再兜一次。WPS 的停靠窗格在宿主切文档时未必收得到 focus，
+ *     只挂 focus 的话用户一直不点窗格，状态就永远停在上一份文档上。
+ */
+async function syncDocumentBinding() {
+  try {
+    if (await syncActiveDocument()) bindDocument(documentKey())
+  } catch (e) {
+    // 取不到宿主/建连失败都不该打断界面，下一次再试
+  }
+}
+
+function watchActiveDocument() {
+  window.addEventListener('focus', syncDocumentBinding)
+}
 
 /**
  * 窗格心跳与告别（dev-board#717）：让同一账号的其他窗格能看见并跨文档读写本文档。
@@ -592,6 +614,8 @@ function startPaneHeartbeat() {
   const hb = startHeartbeat({
     getState: () => {
       if (!configured.value) return null
+      // 心跳这一轮顺带看一眼文档换了没有（见 syncDocumentBinding）；不阻塞本次心跳
+      syncDocumentBinding()
       const meta = readDocumentMeta()
       return {
         ...paneIdentity(),
