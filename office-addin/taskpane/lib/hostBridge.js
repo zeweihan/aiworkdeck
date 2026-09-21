@@ -203,7 +203,14 @@ const UNSAVED_DOC_SCOPE = 'u' + Date.now().toString(36) + Math.random().toString
  * Office.context.document.url 推出来的，url 为空时它是宿主通称（「当前 Word 文档」），
  * 于是两份新建的 Word 算出同一个键 → 同一条 conversationId → 跨窗格下发按会话走，
  * 命令落到另一份文档上，沿途无人报错。所以再补一维「本窗格实例」：两份新文档绝不会撞在一起。
+ *
+ * **未保存时用的是固定串 'unsaved'，不是文档名**（dev-board#768）：那个通称自
+ * 2026-09-21 起跟着界面语言走（「当前 Word 文档」/ "Current Word document"），
+ * 拿它拼键等于用户切一次语言就换一条 conversationId、会话历史与修订记录凭空消失。
+ * 这条退路本来就靠「宿主 + 本窗格实例」区分，名字一个字都不该参与。
  */
+const UNSAVED_DOC_NAME = 'unsaved'
+
 export function documentIdentity() {
   const host = detectHost()
   if (!host) return { key: '', saved: false }
@@ -213,7 +220,7 @@ export function documentIdentity() {
   if (path) return { key: docKeyOf({ path, host }), saved: true }
   // 名字只在「没有路径」这条退路上要，取到路径时不必再跨一次桥问宿主
   const meta = readDocumentMeta()
-  const base = docKeyOf({ path: '', host, docName: meta ? meta.name : '' })
+  const base = docKeyOf({ path: '', host, docName: UNSAVED_DOC_NAME })
   return base ? { key: `${base}#${UNSAVED_DOC_SCOPE}`, saved: false } : { key: '', saved: false }
 }
 

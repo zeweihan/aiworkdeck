@@ -75,6 +75,12 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - **Turnstile 必须显式 `theme: 'light'` + `size: 'compact'`**（dev-board#766）。`theme` 缺省是 `auto`，深色系统下控件是一块黑方框贴在浅色表单上（配色红线是外壳恒浅色，真机截图实证）。尺寸：本机实测（容器宽 286/246/200 三档）`normal` 与 `flexible` 的内容宽恒为 300px，窗格里必定横向溢出；只有 `compact` 跟着容器走不溢出，代价是占位高 146px（另两个是 71px）。**容器刻意不画边框/底色**：`appearance:'interaction-only'` 下显不显示由 Cloudflare 决定，框一画上去，它不显示时就是表单里凭空多出的一个空框。
 - 全局禁 emoji；包管理 npm 不是 pnpm。
 - **不许在模块顶层把 `t()` 的结果存进常量**（dev-board#713）。那等于把文案定死在模块加载那一刻，用户切语言后再也不变，而且**不报错**。`officeExecutor.js` 的命令 chip 名踩过这颗雷（`COMMAND_DISPLAY_NAMES` 的值是 `t('cmdX')`），症状是同一条会话里 Word 的 chip 是英文、Excel 的是中文。现在表里存的是 i18n key（`COMMAND_DISPLAY_KEYS`），`commandDisplayName()` 渲染时才查；**chip 对象上存 `command` 不存 `label`**，界面渲染 `commandDisplayName(tool.command)`，靠 App.vue 的 `:key` 重挂载跟着换语言——存 label 就又把文案冻在创建那一刻了。
+- **文档通称跟界面语言走，但绝不许进 `documentKey`**（dev-board#768）：
+  `wordDoc.fallbackDocName` / `wpsDoc.fallbackWpsDocName` 按 i18n 出「当前 Word 文档」/
+  "Current Word document"（六个宿主面各一条，`readDocumentMeta` 与三个读取器共用）——它既是上下文
+  chip 上的字，也随 `activeContext.name` 上送进模型上下文，英文界面挂中文通称等于告诉用户插件没认出文件。
+  但 `hostBridge.documentKey()` 在没有文件路径时改用固定串 `UNSAVED_DOC_NAME='unsaved'`：
+  那是会话与修订记录的分组键，跟着语言变就等于用户切一次语言、历史与修订记录凭空消失一次，而且不报错。
 - **懒建项目名只做展示层映射，不许改库里的数据**（dev-board#713）。后端按**建项目那一刻**的语言给「插件临时项目」取名并存进 `project.name`，用户之后切语言它不会跟着变。映射在 `lib/projectName.js`（两个固定名 ↔ 当前语言）。反过来「后台按界面语言把库里的名字改掉」是错的：项目名是用户可改字段，会覆盖用户自己起的名字，两台机器语言不同时还会来回翻。改后端 `ProjectController.ADDIN_DEFAULT_PROJECT_NAME_ZH/_EN` 两个字面量时必须同步 `ADDIN_DEFAULT_PROJECT_NAMES`，否则老项目的名字翻不过来（静默）。
 - **语言值域两端必须逐字对齐**：插件发 `zh-CN`/`en-US`（`getLangTag()`），后端 `AppLanguageService.SUPPORTED` 只认这两个。发 `zh`/`en` 会被 `AppLanguageScope.normalize` 之外的比对当成没声明→静默回落中文。反过来后端的 `normalize` 刻意只按前两位语言码判定（容忍 `en-GB`/`zh-Hant-TW`）——整串匹配会把 Office/浏览器给的各种 locale 形态全判成不认识。
 - 部署期 CORS：插件正式 Origin 要进 `security.cors.allowed-origins`；local-mode 下 LocalModeAccessFilter 用同一份白名单硬拦非 GET 跨站请求。`security.cors.allow-all` 绝不能开。localhost/127.0.0.1 默认放行，开发态零配置。
@@ -223,6 +229,15 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
   补不回来也要给一句人话（`msg.notice`，走 `.msg-notice` 次要色，不是 `msg.error` 的红字）。
 - **标签流解析器的 salvage**：模型不输出 `<final>`、把正文写在 `process/step/walkthrough` 里时，
   整轮会被逐字丢弃。`flush()` 里**仅当本气泡一个字都没进正文**才把这些散文捞回来（工具载荷除外）。
+  **「进过正文」只算非空白**（`route()` 里的 `/\S/` 判据，dev-board#768）：协议标签之间的裸换行
+  （`</process>\n<process>`）栈空，会走主文本那一支，把它算成「产出过正文」等于让 salvage 从第一轮起
+  永久失效——而界面那边的前导空白守卫又把这些换行原样丢掉，于是「不渲染」与「丢光」重新合并成一件事。
+  真机 2026-09-21：7 轮 `<process>` 正文逐字消失，用户只看到空白气泡加一行「已完成 · 55 秒」。
+- **空白气泡的成因不止断线一种，文案必须按轮区分**（dev-board#768）：`recoverEmptyBubble` 补不回来时，
+  只有**本轮真断过线**（`turnDisconnected`，与 `everReconnected` 同处置起但按轮清零）才说
+  `emptyAnswerLost`（连接中断），否则说 `emptyAnswerNone`（这一轮没有文字回复）。
+  用会话级的 `everReconnected` 写文案等于此后每一次空回复都栽赃给连接——用户去查网络、查代理、
+  重启 Word，全在错误的方向上使劲，而该看的是文档里已经写进去的那部分。
 - **`sendTextDelta` 的信封必须用 Jackson 序列化**：手写 replace 漏制表符与控制字符，
   模型从表格里带出一个 Tab 就让整条 text_delta 变非法 JSON，客户端 parse 失败后按原文渲染，
   用户看到 `{"content":"…` 这一串信封本身。
@@ -394,7 +409,7 @@ spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md`。一句话�
 1. **绕过 `setConversationId` = 跨窗格下发静默投空**。新会话/切会话/换项目/登出，四条路径都要经它。
 2. **新增写入类命令要想清楚跨文档那一面**：Word 面标不出修订的要进 `WORD_UNTRACKABLE_COMMANDS`（否则会发生无痕迹的跨文档写入）；Excel/PPT 面要在 `captureOfficeState` / `captureWpsState` 里给出快照口径，给不出就是「不可撤销」——这是如实标注，不是 bug，但别让它默默变成「记了个错的改前值」。
 3. **新增只读命令要进 `READ_ONLY_COMMANDS`**（漏加会被当成写入：多拍一次镜像、跨文档时还会白弹一次横幅）。
-5. **未保存的新文档不能只靠「宿主:文档名」当键**（2026-09-20 修，`hostBridge.documentKey`）。Office 面的文档名就是从 `Office.context.document.url` 推出来的，url 为空（未保存的新文档）时它是宿主通称「当前 Word 文档」——两份新建的 Word 于是算出同一个 docKey、同一条 conversationId，跨窗格下发按会话走，命令落到另一份文档上，沿途无人报错（后端 `OpenDocSource` 现在会拒绝这种寻址不到的目标，但那是兜底，根子在这个键）。没有路径时键后面再缀一维「本窗格实例」（模块加载时生成、不持久化）：未保存的新文档本来就没有稳定身份，窗格重载即换键、修订记录只在本次会话内存活，但两份新文档绝不会撞在一起；存过盘之后有了路径，键自然回到按路径分。护栏 `revisionLocate.test.js` 的两条 documentKey 用例。
+5. **未保存的新文档不能只靠「宿主:文档名」当键**（2026-09-20 修，`hostBridge.documentKey`）。Office 面的文档名就是从 `Office.context.document.url` 推出来的，url 为空（未保存的新文档）时它是宿主通称「当前 Word 文档」——两份新建的 Word 于是算出同一个 docKey、同一条 conversationId，跨窗格下发按会话走，命令落到另一份文档上，沿途无人报错（后端 `OpenDocSource` 现在会拒绝这种寻址不到的目标，但那是兜底，根子在这个键）。没有路径时键改用固定串 `unsaved`（2026-09-21 起，文档通称已随界面语言变，见上面那条地雷）并再缀一维「本窗格实例」（模块加载时生成、不持久化）：未保存的新文档本来就没有稳定身份，窗格重载即换键、修订记录只在本次会话内存活，但两份新文档绝不会撞在一起；存过盘之后有了路径，键自然回到按路径分。护栏 `revisionLocate.test.js` 的两条 documentKey 用例。
 4. **两个新组件必须在 `i18n.test.js` 的 `SCAN_FILES` 里**（已加）：那条扫描是「模板里不得出现裸中文」的唯一护栏，不加等于这两个面板不受管。
 5. **sendBeacon 在 Mac WKWebView 上是否送达未验证**：送不到就退回 90 秒过期，表现是关掉的文档在别人的 `ref_list` 里多留一会儿——**不要为此把过期时间调短**，那会误杀网络抖动的活窗格。
 6. **`documentKey()` 必须在 `Office.onReady` 之后取**（App.vue 的 `onMounted` 已满足）：早了拿不到文档路径，条目会落到空 key 上、只在内存里。

@@ -61,7 +61,8 @@ test('Office：未保存的新文档 saved:false，key 带本窗格实例后缀'
   try {
     const id = documentIdentity()
     assert.equal(id.saved, false, '没有路径就不是「存过盘」')
-    assert.match(id.key, /^word:当前 Word 文档#/)
+    // dev-board#768：未保存分支用固定串 'unsaved'，不用随语言变的文档通称，否则切语言就换键
+    assert.match(id.key, /^word:unsaved#/)
     assert.equal(documentIdentity().key, id.key, '同一个窗格里反复取必须是同一个键')
   } finally { restore() }
 })

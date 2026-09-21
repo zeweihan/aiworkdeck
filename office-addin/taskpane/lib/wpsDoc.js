@@ -10,6 +10,8 @@
  * 后端 officeHost 契约不感知家族差异。
  */
 
+import { t } from './i18n.js'
+
 // 与 wordDoc.js 一致的上限口径
 const MAX_BODY_CHARS = 200_000
 const MAX_EXCEL_ROWS = 2000
@@ -90,6 +92,15 @@ export function wpsApp() {
   throw new Error('WPS 环境不可用')
 }
 
+/**
+ * 取不到文件名时的文档通称（未保存的新文档）。随界面语言走的理由与 Office 面同源，
+ * 见 wordDoc.fallbackDocName（dev-board#768）。
+ */
+export function fallbackWpsDocName(host) {
+  return host === 'word' ? t('docNameWpsWord')
+    : host === 'excel' ? t('docNameWpsExcel') : t('docNameWpsPpt')
+}
+
 function documentDisplayName(fallback) {
   try {
     const host = detectWpsHost()
@@ -121,7 +132,7 @@ function readWordBody() {
   const doc = app.ActiveDocument
   if (!doc) throw new Error('当前没有打开的文档')
   const text = String(doc.Range().Text || '')
-  return { text, name: documentDisplayName('当前 WPS 文档'), fileType: 'docx' }
+  return { text, name: documentDisplayName(fallbackWpsDocName('word')), fileType: 'docx' }
 }
 
 /** Address 在 JSAPI 是带参属性=按函数调（$A$1 绝对引用关掉）；个别版本可能是纯属性，兜一手 */
@@ -194,7 +205,7 @@ function readEtSheet() {
   const app = wps.EtApplication()
   const sheet = app.ActiveSheet
   if (!sheet) throw new Error('当前没有打开的工作簿')
-  return { text: etRangeText(sheet, sheet.UsedRange), name: documentDisplayName('当前 WPS 工作簿'), fileType: 'xlsx' }
+  return { text: etRangeText(sheet, sheet.UsedRange), name: documentDisplayName(fallbackWpsDocName('excel')), fileType: 'xlsx' }
 }
 
 /** MsoShapeType：组合 */
@@ -270,7 +281,7 @@ export function readWppSlides() {
   if (total > MAX_PPT_SLIDES) {
     out += `\n...（共 ${total} 页，仅附前 ${MAX_PPT_SLIDES} 页）`
   }
-  return { text: out, name: documentDisplayName('当前 WPS 演示文稿'), fileType: 'pptx' }
+  return { text: out, name: documentDisplayName(fallbackWpsDocName('powerpoint')), fileType: 'pptx' }
 }
 
 /**
@@ -311,8 +322,7 @@ export function hideWpsTaskPane() {
 export function readWpsDocumentMeta() {
   const host = detectWpsHost()
   if (!host) return null
-  const fallback = host === 'word' ? '当前 WPS 文档'
-    : host === 'excel' ? '当前 WPS 工作簿' : '当前 WPS 演示文稿'
+  const fallback = fallbackWpsDocName(host)
   const fileType = host === 'word' ? 'docx' : host === 'excel' ? 'xlsx' : 'pptx'
   return { id: 'office-current-document', name: documentDisplayName(fallback), fileType }
 }

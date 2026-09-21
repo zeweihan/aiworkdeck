@@ -454,7 +454,13 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, 
     if (stack.includes('option')) { optionBuf += text; return }
     if (stack.includes('artifact')) { artifactBuf += text; return }
     if (stack.includes('final') || stack.includes('question') || stack.length === 0) {
-      mainEmitted = true
+      // **只有非空白才算「本气泡产出过正文」**（dev-board#768）：协议标签之间的裸换行
+      // （`</process>\n<process>`、模型在末尾多打的一个 \n）也走这一支，把它算成正文
+      // 会让下面 flush() 的兜底在第一轮就永久失效——而界面那边的前导空白守卫又把这些
+      // 换行原样丢掉，于是「不渲染」与「丢光」重新合并成同一件事。真机实录：模型整轮
+      // 只输出 <process>/<step>/<tool_code>、一个 <final> 都没有，七轮正文被逐字丢弃，
+      // 用户看到的是一个空白气泡加一行「已完成 · 55 秒」。
+      if (/\S/.test(text)) mainEmitted = true
       onMainText(text)
       return
     }
