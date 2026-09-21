@@ -15,7 +15,7 @@ export const WRITING_ASSISTANCE_CSS = `
   position:fixed; z-index:10000; inset:0; pointer-events:none;
   color:var(--wa-text); font:13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
 }
-.awd-writing-assistance [hidden] { display:none !important; }
+.awd-writing-assistance[hidden], .awd-writing-assistance [hidden] { display:none !important; }
 .awd-writing-assistance *, .awd-writing-assistance *::before { box-sizing:border-box; }
 .awd-writing-assistance button, .awd-writing-assistance input, .awd-writing-assistance select { font:inherit; }
 .awd-writing-assistance button {
@@ -26,10 +26,6 @@ export const WRITING_ASSISTANCE_CSS = `
 .awd-writing-assistance button[aria-selected="true"] { background:var(--wa-selected); }
 .awd-writing-assistance button:focus-visible, .awd-writing-assistance select:focus-visible {
   outline:2px solid var(--wa-accent); outline-offset:-2px;
-}
-.awd-writing-assistance .awd-wa-toggle {
-  pointer-events:auto; position:absolute; bottom:12px; right:18px;
-  border:1px solid var(--wa-border); background:var(--wa-surface); box-shadow:var(--awd-shadow-md);
 }
 .awd-writing-assistance .awd-wa-panel {
   pointer-events:auto; position:absolute; width:380px; max-width:calc(100vw - 24px);

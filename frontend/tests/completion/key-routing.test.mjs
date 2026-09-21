@@ -65,8 +65,11 @@ function harness(t) {
     target.dispatchEvent(event)
     return event
   }
-  return { dom, doc, canvas, input: overlay.element, overlay, writing, commands, calls, leaked,
+  const deliver = msg => { for (const listener of subscribers) listener({ __lo: 'lo-relay', ...msg }) }
+  return { dom, doc, canvas, input: overlay.element, overlay, writing, commands, calls, leaked, deliver,
     press, setBefore: value => { before = value }, expanded: () => overlay.element.getAttribute('aria-expanded'),
+    // 设置面板没有画布上的入口了（dev-board#755），只能由宿主工具栏发指令开合。
+    openSettings: () => deliver({ type: 'writing-assistance-panel', open: true }),
     open: async () => { writing.committed('北京当红'); await debounce(); assert.equal(overlay.element.getAttribute('aria-expanded'), 'true', '候选应已展开') } }
 }
 
@@ -121,8 +124,9 @@ test('落在画布上的方向键与回车照旧走引擎，宿主面板里的�
   h.press(h.canvas, 'Enter')
   await tick()
   assert.deepEqual(h.commands.map(c => c.action), ['move_cursor', 'insert_paragraph'])
+  h.openSettings()
   const panelButton = h.doc.querySelector('.awd-writing-assistance button')
-  assert.ok(panelButton, '写作辅助面板存在')
+  assert.ok(panelButton, '自动补全设置面板已打开')
   h.commands.length = 0
   h.press(panelButton, 'Tab')
   h.press(panelButton, 'ArrowLeft')

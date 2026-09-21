@@ -197,8 +197,10 @@ try {
     for (const target of targets) {
       const candidate = await target.page().catch(() => null)
       const active = candidate && await candidate.evaluate(() => {
-        const toggle = document.querySelector('.awd-wa-toggle')
-        return !!document.querySelector('#canvas, canvas') && !!toggle && !toggle.hidden
+        // dev-board#755：画布右下角那颗按钮撤掉了，「写作会话已就绪」改看根节点上的
+        // data-available（入口本身搬进了宿主工具栏，客体里没有可见常驻元素了）。
+        const root = document.querySelector('.awd-writing-assistance[data-available="true"]')
+        return !!document.querySelector('#canvas, canvas') && !!root
       }).catch(() => false)
       if (active) { guest = candidate; break }
     }

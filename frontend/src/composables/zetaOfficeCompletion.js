@@ -4,8 +4,8 @@ import { extractCompletionEntries, matchCompletionItems } from '../utils/complet
 import { WRITING_ASSISTANCE_CSS, renderCompletionOption } from './writingAssistancePresentation.js'
 
 const LABELS = {
-  zh: { suggestions: '补全建议', manual: '显示补全建议 · Alt+/', noMatch: '没有匹配的本地词条，请继续输入或查看已学词库。', acceptKey: '补全', chooseKey: '选择', dismissKey: '关闭', title: '写作辅助', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动补全', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', configure: '去设置配置', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
-  en: { suggestions: 'Suggestions', manual: 'Show suggestions · Alt+/', noMatch: 'No matching local entries. Keep typing or review learned vocabulary.', acceptKey: 'Accept', chooseKey: 'Select', dismissKey: 'Dismiss', title: 'Writing assistance', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Automatic suggestions', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', configure: 'Open settings', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
+  zh: { suggestions: '补全建议', manual: '显示补全建议 · Alt+/', noMatch: '没有匹配的本地词条，请继续输入或查看已学词库。', acceptKey: '补全', chooseKey: '选择', dismissKey: '关闭', title: '自动补全', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动弹出候选', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', configure: '去设置配置', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', contextHint: '选中文字后右键可查询机构 / 法规 / 案例，点了才联网、才可能扣费。', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
+  en: { suggestions: 'Suggestions', manual: 'Show suggestions · Alt+/', noMatch: 'No matching local entries. Keep typing or review learned vocabulary.', acceptKey: 'Accept', chooseKey: 'Select', dismissKey: 'Dismiss', title: 'Autocomplete', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Suggest as I type', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', configure: 'Open settings', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', contextHint: 'Select text and right-click to look up a company, law or case. Nothing goes online — and nothing can be charged — until you click.', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
 }
 let instanceSeq = 0
 // Longest selection the right-click lookup menu accepts.
@@ -27,6 +27,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   let requestSeq = 0, lastRefreshAt = Date.now(), contextMenuWritable = false
   const root = doc.createElement('div')
   root.className = 'awd-writing-assistance'
+  root.hidden = true
   const style = doc.createElement('style')
   style.textContent = WRITING_ASSISTANCE_CSS
   doc.head.appendChild(style)
@@ -42,8 +43,6 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       try { Promise.resolve(fn(e)).catch(failed) } catch (error) { failed(error) }
     }); parent.appendChild(b); return b
   }
-  const toggle = button(t.title, () => settings(), root)
-  toggle.className = 'awd-wa-toggle'; toggle.hidden = true
   const panel = doc.createElement('div'); panel.className = 'awd-wa-panel'; panel.hidden = true; root.appendChild(panel)
   const listId = 'awd-completion-list-' + (++instanceSeq)
   const inputAttributes = Object.fromEntries(['role', 'aria-hidden', 'aria-label', 'aria-autocomplete', 'aria-expanded', 'aria-controls', 'aria-activedescendant'].map(name => [name, input.getAttribute(name)]))
@@ -51,6 +50,21 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   input.setAttribute('aria-label', t.title); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-expanded', 'false')
   const status = doc.createElement('div'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   Object.assign(status.style, { position: 'absolute', width: '1px', height: '1px', overflow: 'hidden' }); root.appendChild(status)
+  // 设置面板的唯一入口在宿主的自建工具栏（dev-board#755）：画布右下角那颗常驻
+  // 按钮撤掉，客体只按指令开合，并把「这份文档有没有这项能力」与「面板此刻开着
+  // 没有」回报给宿主同步显隐与按下态。关着时根节点整个 display:none——画布上不留
+  // 一个像素，也截不到点击。打字时的候选列表与右键查询卡片不归这条回报管：它们
+  // 跟着光标自己弹，本来就不是这颗按钮开出来的。
+  const SETTINGS_MODES = ['settings', 'manage']
+  let available = false, panelOpen = false
+  function report() {
+    // data-available 是这份客体「写作会话已就绪」的唯一 DOM 标记（原先靠画布右下角
+    // 那颗按钮的 hidden 判断，桌面走查用它认哪个 webview 是当前文档）。
+    root.dataset.available = available ? 'true' : 'false'
+    try { transport.send({ __lo: 'lo-relay', type: 'writing-assistance-state', available, open: panelOpen }) }
+    catch (error) { /* 通道没起来：客体就绪后配置消息会再报一次 */ }
+  }
+  function setPanelOpen(next) { if (panelOpen === next) return; panelOpen = next; report() }
   function note(text, parent = panel) { const n = doc.createElement('div'); n.textContent = text; n.className = 'awd-wa-copy'; parent.appendChild(n); return n }
   function position(point) {
     const r = input.getBoundingClientRect(), margin = 12, gap = 4
@@ -70,8 +84,9 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   }
   function show(kind, title = t.title, point) {
     if (disposed) return
+    root.hidden = false
     input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); input.removeAttribute('aria-controls')
-    mode = kind; panelPoint = point; panel.dataset.mode = kind; panel.replaceChildren(); panel.hidden = false
+    mode = kind; panelPoint = point; panel.dataset.mode = kind; setPanelOpen(SETTINGS_MODES.includes(kind)); panel.replaceChildren(); panel.hidden = false
     panel.setAttribute('role', kind === 'suggest' ? 'presentation' : 'dialog'); panel.setAttribute('aria-label', title)
     const head = doc.createElement('div'); head.className = 'awd-wa-heading'; panel.appendChild(head)
     const label = doc.createElement('strong'); label.textContent = title; head.appendChild(label)
@@ -79,7 +94,8 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     position(point)
   }
   function hide() {
-    mode = ''; choices = []; panel.hidden = true; panel.replaceChildren(); input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); input.removeAttribute('aria-controls'); status.textContent = ''
+    mode = ''; choices = []; panel.hidden = true; root.hidden = true; panel.replaceChildren(); input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); input.removeAttribute('aria-controls'); status.textContent = ''
+    setPanelOpen(false)
   }
   function invalidate({ flush = true } = {}) {
     generation++; clearTimeout(timer); timer = 0; current = null; accepting = false; refilter = false; preferredText = ''
@@ -107,13 +123,20 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       config = { ...config, ...msg.config }
       if (Array.isArray(msg.config.items)) items = msg.config.items.map(item => ({ ...item }))
       if (changed || Array.isArray(msg.config.items)) lastRefreshAt = Date.now()
-      toggle.hidden = !config.writable
+      const nextAvailable = !!config.session && !!config.writable
+      if (nextAvailable !== available) { available = nextAvailable; report() }
       if (!config.learning || !config.writable) { ownText = ''; clearTimeout(learningTimer); learningTimer = 0 }
       if (disabled || !config.writable) invalidate({ flush: false })
       if (contextMenuWritable !== !!config.writable) {
         contextMenuWritable = !!config.writable
         execute('set_host_context_menu', { enabled: contextMenuWritable, maxLength: CONTEXT_MENU_MAX }).catch(() => {})
       }
+      return
+    }
+    // 宿主工具栏的开合指令（dev-board#755）。按下态由上面的 report 回报，宿主不本地乐观翻。
+    if (msg.type === 'writing-assistance-panel') {
+      if (msg.open) { if (available && !panelOpen) settings() }
+      else if (panelOpen) invalidate()
       return
     }
     if (msg.type !== 'writing-response') return
@@ -297,7 +320,11 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
       }
       label.appendChild(check); label.appendChild(doc.createTextNode(' ' + t[name])); panel.appendChild(label)
     }
-    button(t.manual, requestSuggestions); button(t.manage, manage); button(t.refresh, async () => { const gen = generation; await rpc('refreshDocument'); if (!disposed && gen === generation) settings() }); position()
+    button(t.manual, requestSuggestions); button(t.manage, manage); button(t.refresh, async () => { const gen = generation; await rpc('refreshDocument'); if (!disposed && gen === generation) settings() })
+    // 右键查询不受上面「自动弹出候选」开关影响，也不在这里给开关——它默认开着，
+    // 而且只有点下去才联网。面板里说一句，免得用户以为关了开关就没有外查这回事。
+    const contextHint = doc.createElement('small'); contextHint.className = 'awd-wa-copy'; contextHint.textContent = t.contextHint; panel.appendChild(contextHint)
+    position()
   }
   async function manage() {
     invalidate(); const gen = generation
@@ -353,7 +380,11 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     invalidate({ flush: false })
     if (!disposed && !composing && config.enabled && config.writable && doc.activeElement === input) timer = setTimeout(suggest, SUGGEST_DELAY)
   }
-  const blur = (e) => { if (!root.contains(e.relatedTarget || doc.activeElement)) invalidate() }
+  // 设置面板不吃失焦：它的入口在宿主工具栏上（dev-board#755），点那颗按钮的同时
+  // 客体这边的输入框就失焦了，跨进程的失焦通知与开合指令谁先到没有保证——照旧
+  // invalidate 的话，面板会「闪一下就没了」。候选列表与右键卡片仍然吃失焦：它们
+  // 钉着光标，焦点走了就不该再留在画布上。
+  const blur = (e) => { if (panelOpen) return; if (!root.contains(e.relatedTarget || doc.activeElement)) invalidate() }
   const refreshOnFocus = () => {
     if (disposed || !config.writable || !config.session || Date.now() - lastRefreshAt < 30000) return
     lastRefreshAt = Date.now()
@@ -377,6 +408,7 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
   input.addEventListener('contextmenu', contextMenu)
   doc.addEventListener('mousedown', pointer, true)
   root.addEventListener('keydown', panelKeydown)
+  report()
   return { committed, keydown, invalidate, cursorMoved,
     destroy() {
       if (disposed) return

@@ -278,6 +278,8 @@ export default {
     reviewShort: '审阅',
     semanticWriting: '有据续写（结合项目材料生成建议，点「采用」才写入正文）',
     semanticWritingShort: '有据续写',
+    autocomplete: '自动补全（本地词库，打字时给候选；不调模型、不联网）',
+    autocompleteShort: '自动补全',
     insightPanel: '解析本文并打开「依据」窗格',
     insightShort: '解析',
     zoom: '显示比例',

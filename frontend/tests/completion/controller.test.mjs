@@ -16,12 +16,13 @@ const entries = [
 function harness(t, overrides = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body><canvas></canvas><input aria-hidden="true"><button id="outside">外部</button></body></html>', { pretendToBeVisual: true })
   const { document: doc } = dom.window, canvas = doc.querySelector('canvas'), input = doc.querySelector('input')
-  const calls = [], messages = [], subscribers = new Set()
+  const calls = [], messages = [], stateMessages = [], subscribers = new Set()
   let context = { success: true, available: true, hasSelection: false, selectedText: '', before: '北京当红', after: '', paragraph: '北京当红', token: 'cursor-1' }
   const deliver = msg => { for (const listener of subscribers) listener({ __lo: 'lo-relay', ...msg }) }
   const transport = {
     subscribe: fn => { subscribers.add(fn); return () => subscribers.delete(fn) },
     send: msg => {
+      if (msg.type === 'writing-assistance-state') { stateMessages.push(msg); return }
       messages.push(msg)
       if (msg.action === 'preferences' || (msg.action === 'learn' && !overrides.deferLearning)) deliver({ type: 'writing-response', id: msg.id, session: msg.session, result: {} })
     },
@@ -45,11 +46,16 @@ function harness(t, overrides = {}) {
   }
   t.after(() => { api.destroy(); dom.window.close() })
   const queries = () => calls.filter(c => c.action !== 'set_host_context_menu')
-  return { dom, doc, canvas, input, api, calls, queries, messages, config, key, button, respond, deliver, setContext: value => { context = { ...context, ...value } }, panel: () => doc.querySelector('.awd-wa-panel') }
+  const states = () => stateMessages
+  return { dom, doc, canvas, input, api, calls, queries, messages, states, config, key, button, respond, deliver, setContext: value => { context = { ...context, ...value } },
+    panel: () => doc.querySelector('.awd-wa-panel'), root: () => doc.querySelector('.awd-writing-assistance'),
+    // 设置面板没有画布上的入口了，只能由宿主工具栏发指令开合。
+    openSettings: () => deliver({ type: 'writing-assistance-panel', open: true }),
+    closeSettings: () => deliver({ type: 'writing-assistance-panel', open: false }) }
 }
 async function suggestions(h) { h.api.committed('北京当红'); await debounce(); assert.equal(h.input.getAttribute('aria-expanded'), 'true') }
 async function openManagement(h) {
-  h.button('写作辅助').click(); h.button('已学词库').click(); await tick()
+  h.openSettings(); h.button('已学词库').click(); await tick()
   h.respond('refresh', {}); await tick()
 }
 
@@ -267,14 +273,14 @@ test('WORD/PHRASE 的低频学习项不抢候选；错误 session 的回复被�
   h.config({ writable: false })
   h.respond('lookup', { title: '迟到', variants: [{ text: '错误' }] }); await tick()
   assert.equal(h.panel().hidden, true)
-  assert.equal(h.doc.querySelector('.awd-wa-toggle').hidden, true)
+  assert.equal(h.states().at(-1).available, false, '只读之后宿主工具栏那颗按钮要收回去')
 })
 
 test('管理入口等待个人/项目学习落盘，再刷新带 ID 的词库供立即删除', async t => {
   const h = harness(t, { deferLearning: true })
   h.config({ learning: true, enabled: false, items: [] })
   h.api.committed('联系人：李四。')
-  h.button('写作辅助').click(); h.button('已学词库').click(); await tick()
+  h.openSettings(); h.button('已学词库').click(); await tick()
   const writes = h.messages.filter(m => m.action === 'learn')
   assert.equal(writes.length, 2)
   assert.equal(h.messages.some(m => m.action === 'refresh'), false, '学习未落盘前不提前刷新')
@@ -478,4 +484,67 @@ test('候选高度受光标一侧可用空间限制，窗口变化后重新定�
   assert.equal(scrolled, true, '缩窗后重新确保当前候选可见')
   assert.equal(h.panel().hidden, false)
   assert.ok(parseFloat(h.panel().style.top) >= 8)
+})
+
+
+// dev-board#755：画布右下角那颗常驻按钮撤掉，设置面板改由宿主自建工具栏开合。
+test('画布上不再有常驻入口；面板关着时根节点整块藏起来', async t => {
+  const h = harness(t)
+  assert.equal(h.doc.querySelector('.awd-wa-toggle'), null, '右下角那颗按钮必须撤掉')
+  assert.equal(h.root().hidden, true, '面板关着时根节点不占画布像素')
+  h.openSettings()
+  assert.equal(h.root().hidden, false)
+  assert.ok(h.button('已学词库'), '设置面板由工具栏指令打开')
+  assert.equal(h.panel().querySelector('strong').textContent, '自动补全')
+  h.closeSettings()
+  assert.equal(h.panel().hidden, true)
+  assert.equal(h.root().hidden, true)
+  // 打字候选不是这颗按钮开出来的：它照弹，根节点跟着露出来。
+  h.api.committed('北京当红'); await debounce()
+  assert.equal(h.root().hidden, false)
+  assert.equal(h.input.getAttribute('aria-expanded'), 'true')
+})
+
+test('可用态与开合态回报给宿主；只有设置面板算「开着」', async t => {
+  const h = harness(t)
+  assert.deepEqual(h.states().at(-1), { __lo: 'lo-relay', type: 'writing-assistance-state', available: true, open: false })
+  h.openSettings()
+  assert.deepEqual(h.states().at(-1), { __lo: 'lo-relay', type: 'writing-assistance-state', available: true, open: true })
+  h.button('已学词库').click(); await tick()
+  h.respond('refresh', {}); await tick()
+  assert.equal(h.states().at(-1).open, true, '已学词库是设置面板的下一页，按钮仍按着')
+  h.closeSettings()
+  assert.equal(h.states().at(-1).open, false)
+  // 打字候选/右键卡片不点亮工具栏那颗按钮。
+  h.api.committed('北京当红'); await debounce()
+  assert.equal(h.states().at(-1).open, false)
+  // 不可写就没有这项能力，宿主据此把按钮整个收掉。
+  h.config({ writable: false })
+  assert.deepEqual(h.states().at(-1), { __lo: 'lo-relay', type: 'writing-assistance-state', available: false, open: false })
+  h.openSettings()
+  assert.equal(h.panel().hidden, true, '报了不可用之后，迟到的开合指令不许把面板开出来')
+})
+
+test('设置面板里说明右键查询要点一下才联网，开关文案不与面板同名', async t => {
+  const h = harness(t)
+  h.openSettings()
+  const text = h.panel().textContent
+  assert.ok(text.includes('自动弹出候选'), '面板内的开关不能再叫「自动补全」，会与面板标题同名')
+  assert.ok(text.includes('选中文字后右键可查询机构 / 法规 / 案例，点了才联网、才可能扣费。'))
+})
+
+test('宿主工具栏打开面板时客体输入框会失焦，面板不许跟着关掉', async t => {
+  const h = harness(t)
+  h.openSettings()
+  assert.equal(h.panel().hidden, false)
+  // 点宿主工具栏那颗按钮 = 焦点离开客体页；跨进程的失焦与开合指令谁先到没有保证。
+  h.doc.querySelector('#outside').focus(); await tick()
+  assert.equal(h.panel().hidden, false, '面板不能「闪一下就没了」')
+  assert.equal(h.states().at(-1).open, true)
+  // 候选列表仍然吃失焦：它钉着光标，焦点走了不该留在画布上。
+  h.closeSettings()
+  h.api.committed('北京当红'); await debounce()
+  assert.equal(h.input.getAttribute('aria-expanded'), 'true')
+  h.input.focus(); h.doc.querySelector('#outside').focus(); await tick()
+  assert.equal(h.panel().hidden, true)
 })
