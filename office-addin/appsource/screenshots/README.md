@@ -76,13 +76,13 @@ Upload order in Partner Center is the display order, so the numbers are the orde
 | `01-word-mac-tracked-changes.png` | Mac Word，AI 把第一段口语化表述改成正式措辞并加结束句，正文里是修订，窗格英文回复（2026-09-21 维护者重拍） | 可用；气泡里有维护者姓名 |
 | `02-word-mac-comment.png` | Mac Word，AI 在第一句上加批注询问日期是否正确（2026-09-21） | 可用 |
 | `04-powerpoint-mac-new-slide.png` | Mac PowerPoint，AI 在末尾新增「Key Takeaways」三点总结页（2026-09-21；原图非 16:9，补了白边；画面里有一枚「已添加到剪贴板」提示） | 可用，最好重拍去掉提示 |
+| `06-word-web.png` | Word 网页版（word.cloud.microsoft），旁加载清单后 AI 生成一份带修订的英文备忘录，窗格英文回复（2026-09-21；原图非 16:9，补白边；带浏览器外框） | 可用 |
 | `02-excel-mac-signed-in.png` | Mac Excel，窗格已登录，工作表里是小表格 | 可用 |
 | `04-excel-mac-conversation.png` | Mac Excel，窗格里一轮完整问答 | **待重拍**：回复中文；且 2026-09-21 重拍时 Excel 合计行指令未生效（dev-board#764），修好后再拍 |
 
 还缺三张，商店列表至少要覆盖审核说明里出现的每个宿主：
 
 - **Word（Windows）**：2026-09-21 已拍到一张，但窗格里显示「This reply was lost while the connection was down」（dev-board#768），修好后重拍。
-- **Word（网页版）**：插入 → 加载项 → 上传我的加载项，传 `office-addin/dist-deploy-intl/manifest.xml`。
 
 重拍时注意：修订气泡会打印 Word 用户的真实姓名，截图前把该窗口切成行内修订
 （`osascript -e 'tell application "Microsoft Word" to set revisions mode of view of active window to in line revisions'`），
