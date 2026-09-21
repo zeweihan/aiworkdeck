@@ -55,8 +55,12 @@ public final class OfficialCloudEndpoint {
      * 按**主机**判定站点，不用 {@code contains("workdeck.ai")}——那会把
      * {@code workdeck.ai.evil.com} 也算成国际站（同 AccountEndpoint 不用
      * {@code startsWith("127.")} 判回环的理由）。
+     *
+     * <p>公开给别处复用（{@code AwdkLoginService.accountIdentity()} 要按站点告诉插件
+     * 登录页该给手机号还是邮箱）：站点判定只该有这一份，再抄一遍就会有一份用
+     * {@code contains} 的影子实现。
      */
-    private static boolean isInternationalSite(String accountBaseUrl) {
+    public static boolean isInternationalSite(String accountBaseUrl) {
         if (accountBaseUrl == null || accountBaseUrl.isBlank()) return false;
         try {
             String host = URI.create(accountBaseUrl.trim()).getHost();
