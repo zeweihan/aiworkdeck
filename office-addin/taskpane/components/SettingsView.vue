@@ -13,10 +13,21 @@
         {{ t('loginHint') }}
       </p>
 
-      <!-- 手机号是大陆站主路径，邮箱验证码是国际站主路径；口令只剩两站的存量账号还在用 -->
-      <div class="tabs">
-        <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">{{ t('tabPhone') }}</button>
-        <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">{{ t('tabEmail') }}</button>
+      <!--
+        手机号是大陆站主路径，邮箱验证码是国际站主路径——两个站各只认一种账号本体，
+        由云后端的 captcha-config 带回 accountIdentity 告诉我们是哪一种（dev-board#766）。
+        只剩一种时整行不渲染：给用户一个点不出别的东西的单选按钮没有意义；而把不支持的
+        那个也画出来，就是把他往「填完号、等完一次发码往返、才被告知本站不支持」引——
+        那正是这张卡的起因。拿不到配置（旧后端/网络不通）时两个都给，与改造前一致。
+      -->
+      <div v-if="codeTabs.length > 1" class="tabs">
+        <button
+          v-for="tab in codeTabs"
+          :key="tab"
+          class="tab"
+          :class="{ 'is-active': mode === tab }"
+          @click="switchMode(tab)"
+        >{{ tab === 'phone' ? t('tabPhone') : t('tabEmail') }}</button>
       </div>
 
       <template v-if="mode === 'phone'">
@@ -37,43 +48,46 @@
         </div>
       </template>
 
-      <template v-else>
-        <!-- 邮箱 tab 的主路径同样是验证码：国际站邮箱验证码注册出来的账号根本没有口令 -->
-        <template v-if="emailMode === 'code'">
-          <label class="field">
-            <span class="label">{{ t('emailLabel') }}</span>
-            <input v-model="email" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="email" />
-          </label>
-
-          <div class="field">
-            <span class="label">{{ t('smsCodeLabel') }}</span>
-            <div class="code-row">
-              <input v-model="emailCode" type="text" :placeholder="t('smsCodePlaceholder')" spellcheck="false" autocomplete="one-time-code" />
-              <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !email.trim()" @click="sendCode('email')">
-                {{ codeBtnLabel }}
-              </button>
-            </div>
-          </div>
-        </template>
-
-        <template v-else>
-          <label class="field">
-            <span class="label">{{ t('emailLabel') }}</span>
-            <input v-model="account" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="username" />
-          </label>
-
-          <label class="field">
-            <span class="label">{{ t('passwordLabel') }}</span>
-            <input v-model="password" type="password" :placeholder="t('passwordPlaceholder')" spellcheck="false" autocomplete="current-password" />
-          </label>
-        </template>
+      <!-- 邮箱 tab 的主路径同样是验证码：国际站邮箱验证码注册出来的账号根本没有口令 -->
+      <template v-else-if="mode === 'email'">
+        <label class="field">
+          <span class="label">{{ t('emailLabel') }}</span>
+          <input v-model="email" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="email" />
+        </label>
 
         <div class="field">
-          <button class="linklike" @click="toggleEmailMode">
-            {{ emailMode === 'code' ? t('usePasswordInstead') : t('useCodeInstead') }}
-          </button>
+          <span class="label">{{ t('smsCodeLabel') }}</span>
+          <div class="code-row">
+            <input v-model="emailCode" type="text" :placeholder="t('smsCodePlaceholder')" spellcheck="false" autocomplete="one-time-code" />
+            <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !email.trim()" @click="sendCode('email')">
+              {{ codeBtnLabel }}
+            </button>
+          </div>
         </div>
       </template>
+
+      <template v-else>
+        <label class="field">
+          <span class="label">{{ t('emailLabel') }}</span>
+          <input v-model="account" type="email" :placeholder="t('emailPlaceholder')" spellcheck="false" autocomplete="username" />
+        </label>
+
+        <label class="field">
+          <span class="label">{{ t('passwordLabel') }}</span>
+          <input v-model="password" type="password" :placeholder="t('passwordPlaceholder')" spellcheck="false" autocomplete="current-password" />
+        </label>
+      </template>
+
+      <!--
+        口令那条路**不随站点隐藏**：站点只决定验证码走手机号还是邮箱，口令是两站存量账号
+        共用的第三条路。所以这行链子常驻在表单下方，而不是像改造前那样挂在邮箱 tab 里面
+        ——大陆站隐掉邮箱 tab 时，那样会把存量口令用户的入口一起埋掉。
+      -->
+      <div class="field">
+        <button class="linklike" @click="togglePasswordMode">
+          {{ mode === 'password' ? t('useCodeInstead') : t('usePasswordInstead') }}
+        </button>
+      </div>
 
       <!--
         人机验证控件的落点。阿里云是 popup 模式，平时不占位；`-trigger` 是 SDK 要求的
@@ -166,6 +180,7 @@ import {
   postAwdkLogin
 } from '../lib/api.js'
 import { setupCaptcha } from '../lib/captcha.js'
+import { accountIdentityOf, defaultMode, isModeAvailable, visibleCodeTabs } from '../lib/loginTabs.js'
 import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
 import { t } from '../lib/i18n.js'
 
@@ -185,10 +200,12 @@ const connecting = ref(false)
 const keyStatus = ref('')
 const keyStatusKind = ref('ok')
 
-// 账户登录（主路径）。mode 是顶层 tab（手机号 / 邮箱）；emailMode 是邮箱 tab 内的
-// 二级切换：主路径 code（国际站邮箱验证码注册出来的账号只有这条路），password 留给存量账号。
+// 账户登录（主路径）。mode 是表单形态：phone / email 两条验证码路 + password
+// （两站存量账号共用的第三条路，不随站点隐藏，见 lib/loginTabs.js）。
+// identity 是本服务器桥到的站点以什么为账号本体，由 captcha-config 带回；
+// 空串 = 未知（旧后端/配置取不到），此时两个验证码 tab 都给，与改造前一致。
 const mode = ref('phone')
-const emailMode = ref('code')
+const identity = ref('')
 const phone = ref('')
 const smsCode = ref('')
 const email = ref('')
@@ -208,6 +225,9 @@ let captchaReady = null
 
 /** 当前连接状态摘要：只读本地设置，不发请求 */
 const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || t('noAddressSet'))
+
+/** 本站点支持的验证码 tab（未知时两个都给） */
+const codeTabs = computed(() => visibleCodeTabs(identity.value))
 
 const codeBtnLabel = computed(() => {
   if (cooldown.value > 0) return t('resendCountdown', { seconds: cooldown.value })
@@ -230,12 +250,27 @@ async function ensureCaptcha() {
   if (captcha) return captcha
   try {
     const config = await getAccountLoginCaptchaConfig({ serverUrl: serverUrl.value })
+    // 同一份公开配置顺带告诉我们站点以什么为账号本体，不用再多一次往返
+    applyIdentity(accountIdentityOf(config))
     captcha = await setupCaptcha(config, 'login-captcha')
   } catch (e) {
     console.warn('[settings] 人机验证控件装配失败:', e)
     captcha = null
   }
   return captcha
+}
+
+/**
+ * 站点能力到达后落到界面上。
+ *
+ * 当前形态一旦在这个站点下不成立就立刻纠正——**不看用户是不是手动点过**：
+ * 那个 tab 马上就要从界面上消失，留着它等于让用户对着一个没有退路的表单发呆
+ * （配置是异步到的，在那一两秒里用户完全可能已经点过一下）。
+ * identity 为空（未知）时两个 tab 都可用，这里什么也不会动。
+ */
+function applyIdentity(next) {
+  identity.value = next
+  if (!isModeAvailable(mode.value, next)) mode.value = defaultMode(next)
 }
 
 function stopCooldown() {
@@ -259,9 +294,9 @@ function switchMode(next) {
   loginStatus.value = ''
 }
 
-function toggleEmailMode() {
-  emailMode.value = emailMode.value === 'code' ? 'password' : 'code'
-  loginStatus.value = ''
+/** 验证码 ⇄ 口令。回来时落到本站点支持的那条验证码路上 */
+function togglePasswordMode() {
+  switchMode(mode.value === 'password' ? defaultMode(identity.value) : 'password')
 }
 
 /**
@@ -316,7 +351,7 @@ function currentCredentials() {
     const credentials = { phone: phone.value.trim(), code: smsCode.value.trim() }
     return { credentials, filled: !!(credentials.phone && credentials.code), hint: 'fillPhoneAndCode' }
   }
-  if (emailMode.value === 'code') {
+  if (mode.value === 'email') {
     const credentials = { email: email.value.trim(), code: emailCode.value.trim() }
     return { credentials, filled: !!(credentials.email && credentials.code), hint: 'fillEmailAndCode' }
   }
@@ -497,12 +532,20 @@ function save() {
 }
 
 /*
-  阿里云是 popup 模式，控件本身不占位，这个 div 平时是空的（留 margin 只为
-  turnstile 那条分支——它会把控件渲染进来，需要一点与上方输入框的间距）。
+  阿里云是 popup 模式，控件本身不占位，这个 div 平时是空的。turnstile 那条分支会把控件
+  渲染进来：居中 + 与上下表单同一档间距（dev-board#766，改前它是贴着左边的一块外来方块）。
+
+  **刻意不给它画边框/底色**：turnstile 用的是 appearance:'interaction-only'，要不要显示
+  由 Cloudflare 决定，我们控制不了；框一画上去，它不显示的时候就变成表单里凭空多出的
+  一个空框。间距与居中已经足够把它归进版面，边框反而是拿确定的副作用换不确定的好处。
+
   **不要给它 display:none**：turnstile 渲染进不可见容器会拿不到尺寸而不出现。
 */
 .captcha-holder:not(:empty) {
+  display: flex;
+  justify-content: center;
   margin-top: 8px;
+  margin-bottom: 12px;
 }
 
 /*

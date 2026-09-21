@@ -32,16 +32,35 @@
 </head>
 <body>
   <div id="app"></div>
-  <!-- AGPL §0 Appropriate Legal Notices：许可与商标告示。
+  <!-- AGPL §0 Appropriate Legal Notices：许可与商标告示（dev-board#765 改成默认折叠一行）。
+
        刻意放在 #app 之外的静态 HTML 里，而不是 Vue 树内：Office/WPS 宿主里 JS 挂载失败
-       （office.js CDN 挂了、宿主注入延迟）时告示仍在。此处早于 i18n 模块，
-       文案与工作台设置页的「关于」区块同源，任务窗格空间紧，只留中文。 -->
+       （office.js CDN 挂了、宿主注入延迟）时告示仍在。同理，折叠用原生 <details>，
+       **不接任何 JS**——拿 JS 管开合等于把“挂载失败时告示仍在”退化成“告示在、但永远展不开”。
+
+       告示内容一字未删，只是默认收起：折叠行自己就点明了品牌、许可证与商标，
+       展开后是完整版文与三条链接。中英两份同时写在页里，由 <html lang> + 纯 CSS 二选一
+       （i18n.js 在切语言时同步该属性）——页脚在 Vue 树外，拿不到 t()；
+       脚本整个没跑起来时 <html lang="zh-CN"> 是页面自带的，中文那份照样显示。 -->
   <footer class="legal-notice">
-    <div>AI WorkDeck · 版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者</div>
-    <div>依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得用作产品名。</div>
-    <div><a href="https://github.com/zeweihan/aiworkdeck" target="_blank" rel="noopener noreferrer">源代码</a>
-      · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">许可证全文</a>
-      · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md" target="_blank" rel="noopener noreferrer">商标说明</a></div>
+    <details class="legal-details">
+      <summary class="legal-summary">
+        <span class="legal-lang" data-lang="zh">AI WorkDeck · AGPL-3.0 · 源代码 · 许可证 · 商标说明</span>
+        <span class="legal-lang" data-lang="en">AI WorkDeck · AGPL-3.0 · Source · License · Trademark</span>
+      </summary>
+      <div class="legal-full">
+        <div class="legal-lang" data-lang="zh">AI WorkDeck · 版权所有 2026 北京京微资易科技有限公司及 AI WorkDeck 贡献者</div>
+        <div class="legal-lang" data-lang="en">AI WorkDeck · Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors</div>
+        <div class="legal-lang" data-lang="zh">依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得用作产品名。</div>
+        <div class="legal-lang" data-lang="en">Released under the GNU Affero General Public License v3.0 or later, with ABSOLUTELY NO WARRANTY. &quot;AI WorkDeck&quot; is a trademark of Beijing Jingwei Ziyi Technology Co., Ltd.; do not use that name as the product name when redistributing a modified version.</div>
+        <div class="legal-lang" data-lang="zh"><a href="https://github.com/zeweihan/aiworkdeck" target="_blank" rel="noopener noreferrer">源代码</a>
+          · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">许可证全文</a>
+          · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md" target="_blank" rel="noopener noreferrer">商标说明</a></div>
+        <div class="legal-lang" data-lang="en"><a href="https://github.com/zeweihan/aiworkdeck" target="_blank" rel="noopener noreferrer">Source code</a>
+          · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE" target="_blank" rel="noopener noreferrer">Full license</a>
+          · <a href="https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md" target="_blank" rel="noopener noreferrer">Trademark notice</a></div>
+      </div>
+    </details>
   </footer>
   <script type="module" src="/taskpane/main.js"></script>
 </body>

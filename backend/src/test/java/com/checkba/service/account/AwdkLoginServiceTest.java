@@ -149,7 +149,11 @@ class AwdkLoginServiceTest {
     }
 
     private AwdkLoginService service(boolean enabled) {
-        return new AwdkLoginService(enabled, "https://www.aiworkdeck.com",
+        return service(enabled, "https://www.aiworkdeck.com");
+    }
+
+    private AwdkLoginService service(boolean enabled, String accountBaseUrl) {
+        return new AwdkLoginService(enabled, accountBaseUrl,
                 transport, bindingRepository, userService, deviceTokenService, platformAiKeyService);
     }
 
@@ -631,5 +635,52 @@ class AwdkLoginServiceTest {
         transport.enqueue(200, ME_OK.replace("\"plan\":\"paid\"", "\"plan\":\"paid\",\"phone\":\"+86 186\""));
         AwdkLoginService.BridgeSession session = service(true).login(KEY);
         assertNull(usersById.get(session.userId()).getPhone());
+    }
+
+    // ==================== 登录页该给哪个 tab（accountIdentity，dev-board#766） ====================
+
+    private static final String CAPTCHA_ON =
+            "{\"provider\":\"turnstile\",\"siteKey\":\"0x4AAA\"}";
+
+    @Test
+    @DisplayName("大陆站：accountIdentity=phone，官网的控件参数原样保留")
+    void captchaConfigMarksPhoneSiteAndKeepsWidgetParams() {
+        transport.enqueue(200, CAPTCHA_ON);
+        Map<String, Object> config = service(true, "https://www.aiworkdeck.com").captchaConfig();
+        assertEquals("phone", config.get("accountIdentity"));
+        assertEquals("turnstile", config.get("provider"));
+        assertEquals("0x4AAA", config.get("siteKey"));
+    }
+
+    @Test
+    @DisplayName("国际站：accountIdentity=email——插件登录页据此直接落在邮箱 tab")
+    void captchaConfigMarksEmailSite() {
+        transport.enqueue(200, CAPTCHA_ON);
+        assertEquals("email", service(true, "https://workdeck.ai").captchaConfig().get("accountIdentity"));
+    }
+
+    @Test
+    @DisplayName("官网不可达：provider 为空但 accountIdentity 仍在——站点只取决于本机配置")
+    void captchaConfigStillMarksSiteWhenWebsiteUnreachable() {
+        transport.enqueueNetworkFailure();
+        Map<String, Object> config = service(true, "https://workdeck.ai").captchaConfig();
+        assertNull(config.get("provider"));
+        assertEquals("email", config.get("accountIdentity"));
+    }
+
+    @Test
+    @DisplayName("200 但内容不是 JSON：降级成未启用，不把整条配置端点打成 500")
+    void captchaConfigDegradesOnUnparseableBody() {
+        transport.enqueue(200, "<html>captive portal</html>");
+        Map<String, Object> config = service(true, "https://www.aiworkdeck.com").captchaConfig();
+        assertNull(config.get("provider"));
+        assertEquals("phone", config.get("accountIdentity"));
+    }
+
+    @Test
+    @DisplayName("站点判定按主机，不是 contains：workdeck.ai.evil.com 不算国际站")
+    void accountIdentityJudgesByHostNotSubstring() {
+        assertEquals("phone", service(true, "https://workdeck.ai.evil.com").accountIdentity());
+        assertEquals("email", service(true, "https://addin.workdeck.ai").accountIdentity());
     }
 }

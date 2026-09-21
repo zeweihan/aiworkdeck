@@ -913,6 +913,27 @@ export function getLang() {
 }
 
 /**
+ * 把生效语言写到 {@code <html lang>}（dev-board#765）。
+ *
+ * 窗格底部的许可告示是静态 HTML，刻意在 Vue 树外（JS 挂不上时它也得在），
+ * 拿不到 t()；它的中英两份写死在页里，靠这个属性 + 纯 CSS 二选一。
+ * 顺带让宿主 WebView 的拼写检查与字体启发式按真实语言走。
+ *
+ * document 拿不到（node 跑单测）时静默跳过——这是展示层的事，不该把字典模块弄挂。
+ */
+function syncDocumentLang() {
+  try {
+    if (typeof document !== 'undefined' && document.documentElement) {
+      document.documentElement.lang = activeLang === 'zh' ? 'zh-CN' : 'en-US'
+    }
+  } catch (e) {
+    // 宿主不给 document：忽略
+  }
+}
+
+syncDocumentLang()
+
+/**
  * 当前界面语言的 BCP-47 标签（zh-CN / en-US），随请求上送后端（X-App-Language 头 +
  * chat 请求体的 appLanguage 字段）。后端 AppLanguageScope 据它选中英文 system prompt，
  * 于是「界面英文 → 回答英文」（AppSource 政策 1100.7 的界面语言一致要求）。
@@ -931,6 +952,8 @@ export function getLangTag() {
 export function setLang(lang) {
   if (lang !== 'zh' && lang !== 'en') return
   activeLang = lang
+  // 页脚的许可告示不在 Vue 树里，:key 重挂载带不动它，只能靠这一句跟着换语言
+  syncDocumentLang()
   try {
     localStorage.setItem(LANG_STORAGE_KEY, lang)
   } catch (e) {
