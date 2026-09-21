@@ -24,9 +24,13 @@ const KEY_PROJECT = 'awd_addin_project_id'
 // 往 SSE 推命令的——两个窗格在通道上根本分不开：抢到 emitter 的那个会替另一个执行
 // read_for_reference，把**自己**的正文当成对方文档的内容交回去，全链路没有一处报错。
 // 这正是「参考 A 文档改 B 文档」那条主用例本身。
+//
+// **旧键一律不认领**（2026-09-21，dev-board#767）：早先这里做过两级「首次以文档键打开时
+// 继承旧键」的升级迁移，症状是用户在 Word 里新建一份空白 Document1、一开窗格就看见上一篇
+// 新闻摘要的对话——那条旧会话属于另一份文档，继承过来就是把它按在了不相干的文档上。
+// 会话按文档绑定意味着「这份文档没开过插件就是新对话」，旧会话留在历史面板里可以手动翻回去，
+// 服务端一条也没丢。
 const KEY_CONVERSATION_PREFIX = 'awd_addin_conv_'
-// v0.27.4 及更早只按项目分键的旧键前缀，用于一次性迁移（见 loadConversationId）
-const LEGACY_CONVERSATION_PREFIX = 'awd_addin_conv_'
 
 /** docKey 为空（普通浏览器调试、宿主判不出）时退回「项目+宿主」键，与 v0.44 一致 */
 function conversationKey(projectId, hostTag, docKey) {
@@ -174,35 +178,12 @@ export function saveProjectId(projectId) {
 /**
  * 取该项目在该宿主、该文档下上次的会话 ID（无则空串）。
  *
- * 升级迁移两级，都是「认领后立刻删旧键」：留着的话下一份文档还会读到它，
- * 等于把刚分开的会话又并回去。
- *   1. v0.44 及更早按「项目+宿主」分键——先开的那份文档认领它；
- *   2. v0.27.4 及更早只按项目分键，那个键在语义上属于**文字/Word 宿主**
- *      （officeHost 缺省即 WORD），所以只有 word 宿主认领它。
+ * 只认这一个键：这份文档自己存过的那条。没有就是没有——不去继承按「项目+宿主」或
+ * 只按项目分的老键（见文件头），那样会把别的文档的对话挂到本文档上。
  */
 export function loadConversationId(projectId, hostTag, docKey) {
   if (!projectId) return ''
-  const key = conversationKey(projectId, hostTag, docKey)
-  const current = safeGetItem(key) || ''
-  if (current) return current
-  if (docKey) {
-    const hostScoped = conversationKey(projectId, hostTag, '')
-    const inherited = safeGetItem(hostScoped) || ''
-    if (inherited) {
-      safeSetItem(key, inherited)
-      safeRemoveItem(hostScoped)
-      return inherited
-    }
-  }
-  if (hostTag === 'word') {
-    const legacy = safeGetItem(LEGACY_CONVERSATION_PREFIX + projectId) || ''
-    if (legacy) {
-      safeSetItem(key, legacy)
-      safeRemoveItem(LEGACY_CONVERSATION_PREFIX + projectId)
-      return legacy
-    }
-  }
-  return ''
+  return safeGetItem(conversationKey(projectId, hostTag, docKey)) || ''
 }
 
 /**

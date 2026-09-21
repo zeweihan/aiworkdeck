@@ -143,16 +143,36 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 
 **新增契约**
 - **会话 ID 存储键按宿主分作用域**：`awd_addin_conv_{host}_{projectId}`（`settings.loadConversationId/saveConversationId`
-  收第三个参数 hostTag，`chatSession.hostScope()` 提供）。旧键只由 word 宿主一次性认领后删除。
+  收第三个参数 hostTag，`chatSession.hostScope()` 提供）。
   **hostScope() 取不到宿主时用 'unknown'，绝不能回落 'word'**——回落就是把三个宿主并回一个会话。
 - **再按文档分一层**（2026-09-20，dev-board#717）：`awd_addin_conv_{host}_{projectId}_{docKey}`，
-  第四个参数由 `chatSession.docScope()` 给（= `hostBridge.documentKey()`，有路径用路径、否则
-  `宿主:文档名`，取一次就记住——中途另存为会换路径，读写必须是同一个键）。
+  第四个参数由 `chatSession.docScope()` 给（= `hostBridge.documentIdentity().key`，有路径用路径、否则
+  `宿主:文档名#本窗格实例`；缓存一份，换文档时整体换，读写必须是同一个键）。
   **为什么非分不可**：只分到宿主时，同一个项目里同时开着的两份 Word 拿到同一个 conversationId，
   而跨文档读写是按 conversationId 往 SSE 推命令的——两个窗格在通道上分不开，抢到 emitter 的那个
   会替另一个执行 `read_for_reference`，把自己的正文当成对方文档的内容交给模型，沿途无人报错。
   后端 `OpenDocSource.requireAddressable` 现在会拒绝这种目标（既不列也不下发），根子在这个键。
-  docKey 取不到（普通浏览器调试）时退回宿主级键；旧的宿主级键由先开的那份文档一次性认领后删除。
+  docKey 取不到（普通浏览器调试）时退回宿主级键。
+- **对话按文档绑定**（2026-09-21，dev-board#767）。三条规矩，缺一条就是维护者报的那个病
+  （Windows Word 里新建空白 Document1，一开窗格就挂着上一篇新闻摘要的对话）：
+  1. **旧键一律不认领**。`settings.loadConversationId` 只认这份文档自己那个键，此前两级
+     「首次以文档键打开时继承按项目+宿主／只按项目分的旧键」的升级迁移已**整个删掉**——
+     那正是把别的文档的对话按在本文档上的那一步。旧会话一条没丢，在历史面板里可手动翻回去。
+  2. **未保存的文档不落盘**。`hostBridge.documentIdentity()` 回 `{key, saved}` 三态，
+     `chatSession.docPersist()` 据此决定存不存：`saved:false`（新建、没存过盘）一律不存，
+     于是每次打开都是新对话。**key 为空（判不出宿主，普通浏览器调试）时仍然落盘**，
+     退回宿主级键与改造前一致——别把这一档并进「不落盘」，那会让调试态与产品态行为分叉。
+     注意这与 revisionLog 的绑定是两回事：修订记录用同一个 key，但它只要求本次窗格会话内稳定。
+  3. **文档是会话身份的一部分**。`activateSession` 的 sessionKey 里带 docScope
+     （`sessionIdentityKey`），所以「换文档」走的就是「换项目」那条久经考验的路
+     （关连接、清消息、按新键恢复或新签发、预连、#715 的 403 自愈）。触发器是
+     `chatSession.syncActiveDocument()`，App.vue 在**窗格重新拿到焦点**与**每轮心跳**时各调一次
+     （WPS 的停靠窗格切文档时未必收得到 focus，只挂 focus 会让状态永远停在上一份文档）；
+     文档没变是空操作。**流式进行中不切**（`refreshDocScope` 守住缓存）：SSE 通道绑在当前会话上，
+     半途换键等于把正在跑的轮次拆掉。**取不到身份（key 为空）时当成没变**，绝不拿空值顶掉活会话。
+  另有一条例外：**未保存的文档首次存盘不算换文档**（`!before.saved && after.saved`），
+  会话原地改挂到新键上、`sessionKey` 跟着更新，不重建——否则用户按一次 Ctrl+S，
+  正在进行的对话就被清屏重拉。存过盘的 A 另存为 B 不走这条，按维护者定的规矩当新文档处理。
 - **任务窗格实例身份**：`chatSession.paneId`（每次窗格载入生成、不持久化）经 `X-Client-Instance`
   请求头上送。后端 `SseEmitterService.createConnection(id, clientId, lastEventId)` 认出「换了窗格」时
   先给旧连接发 `superseded` 事件再关，客户端收到即**停止重连**并提示——把无限互顶变成一次性移交。
@@ -257,6 +277,7 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - 整篇过卷（dev-board#422）：后端 `mvn -f backend/pom.xml test -Dtest='OfficePass*Test,OfficeEditToolsTest,AgentOrchestratorPassDepthTest,ContextAssemblerServiceTest'`；插件端 `node --test office-addin/taskpane/lib/passProgress.test.js`。
 - 批量改写（过桥量与安全不变式）：`node --test office-addin/taskpane/lib/officeReplaceBatch.test.js`（Office 面，带 Word.js mock，会打印逐处 vs 批量的 sync 次数对照）与 `node --test office-addin/taskpane/lib/wpsWordHandlers.test.js`（WPS 文字面）。
 - 标签流解析：`node --test office-addin/taskpane/lib/sse.test.js`（Node 自带 test runner，无需 npm install）。
+- 对话按文档绑定（dev-board#767）：`node --test office-addin/taskpane/lib/docIdentity.test.js office-addin/taskpane/lib/chatSessionDocScope.test.js office-addin/taskpane/lib/settings.test.js`（**需先 `npm ci`**，chatSessionDocScope import 了 chatSession→vue）。三条病灶各有对应用例，改这条链前先把它们各还原一次：旧键继承加回 `loadConversationId` → 「存过盘但没开过插件的文档」转红；`docPersist()` 恒 true → 「新建未保存的文档」两条转红；`sessionIdentityKey` 去掉 docScope → 「窗格里换了文档」「另存为新名」转红。
 - 界面语言链（dev-board#713）：插件端 `node --test office-addin/taskpane/lib/appLanguage.test.js`（**需先 `npm ci`**，它 import 了 chatSession→vue）；后端 `mvn -Dtest='AppLanguageScopeTest,AppLanguageRequestFilterTest,AddinRequestLanguageTest' test`。
 - `npm run build:deploy -- --url https://addin.example.com --china` 后检查 dist-deploy/manifest.xml 无 localhost URL、taskpane.html 用 partner.office365.cn CDN。
 - **双主站各要一份自己的 Office 插件产物与安装器**（2026-08-29 发版后核对补的，此前两站都发国内那份）：托管地址被焙进包内 manifest，装哪个包就决定了任务窗格从哪个站加载、用哪个 office.js CDN——国际用户装国内包会整条链路绕回北京（实测 office.js TTFB 相差约 38 倍）。品牌站地址（SupportUrl / GetStarted.LearnMoreUrl，出现在 Office 加载项信息面板里）由 `build-manifest.mjs` 的 `BRAND_SITE_BY_ADDIN_HOST` 按托管 host 派生，私有部署用 `--brand-url`。安装器两份文件名相同，**必须用 `--dist` 分开输出目录**否则静默覆盖：`node installer/build-installers.mjs --url https://addin.workdeck.ai/office-addin --dist office-addin/installer/dist-intl`。官网侧对应 `siteConfig.addinOrigin` 与 `offersWpsAddin`（国际站不提供 WPS）。
