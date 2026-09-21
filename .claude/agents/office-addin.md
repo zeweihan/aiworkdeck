@@ -136,6 +136,22 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
   localStorage 共享——与 2026-08-28 已修的 PluginStorage 窗格 id 共用键是**同一类地雷**，当时漏了会话 id。
 
 **新增契约**
+- **一个窗格同一时刻只许有一条会话，SSE 通道必须绑在它身上**（dev-board#764，2026-09-21 真机 Mac Excel）。
+  `preconnect()` 有 in-flight 去重（`preconnectInFlight` + `preconnectGen`，按 `generation` 判等），
+  `ensureConnection()` 另记 `connectionConvId` 并在与当前 `conversationId` 不符时换通道。
+  两道防线各自都挡得住这个形态，一起留着。
+  **病灶形状**：`activateSession` 的预连还卡在 `POST /api/agent/conversations` 那个往返上时，
+  用户已经把消息发出去了，`send` 的兜底 preconnect 看到 `conversationId` 仍是 null，于是又签发一次
+  （真机两个 ID 只差 2 毫秒：`conv-…2590` / `conv-…2592`）。先回来的那条建了 SSE，
+  后回来的那条覆盖 `conversationId` 并被 `POST /chat` 带走——**SSE 听 A、chat 走 B**，
+  后端推给 B 的 `client_action`/`text_delta`/`bubble_end` 一条都到不了窗格
+  （`SseEmitterService.send` 找不到 emitter 就把事件存进补发缓冲，`log.debug` 一行都不报），
+  用户看到的是：文档纹丝不动、工具 chip 一个都没有、空气泡加一句「这一轮的结束状态没能确认」
+  （那句来自 `handleRunState` 的 `everReconnected` 兜底），后端那边则是每条 office_command 空等 30 秒超时。
+  **与宿主无关**——Excel 只是碰巧撞上那个窗口（同一时段 Word 隔了 15 秒才发第一条、PPT 隔了 9 秒，
+  Excel 只隔了 1.6 秒）。别按宿主去找原因。
+  **新增任何改 `conversationId` 的路径都要先 `closeConnection()`**；忘了的话 `ensureConnection` 的
+  那道闸会兜住，但兜住不等于对——通道被换掉时正在跑的轮次仍会丢事件。
 - **会话 ID 存储键按宿主分作用域**：`awd_addin_conv_{host}_{projectId}`（`settings.loadConversationId/saveConversationId`
   收第三个参数 hostTag，`chatSession.hostScope()` 提供）。旧键只由 word 宿主一次性认领后删除。
   **hostScope() 取不到宿主时用 'unknown'，绝不能回落 'word'**——回落就是把三个宿主并回一个会话。
@@ -241,6 +257,7 @@ description: Microsoft Office 与 WPS 插件领域。任务涉及 Word/Excel/PPT
 - `cd office-addin && npm install && npm run build`；manifest 校验（dev 与 dist-deploy 两份）见上。
 - 整篇过卷（dev-board#422）：后端 `mvn -f backend/pom.xml test -Dtest='OfficePass*Test,OfficeEditToolsTest,AgentOrchestratorPassDepthTest,ContextAssemblerServiceTest'`；插件端 `node --test office-addin/taskpane/lib/passProgress.test.js`。
 - 批量改写（过桥量与安全不变式）：`node --test office-addin/taskpane/lib/officeReplaceBatch.test.js`（Office 面，带 Word.js mock，会打印逐处 vs 批量的 sync 次数对照）与 `node --test office-addin/taskpane/lib/wpsWordHandlers.test.js`（WPS 文字面）。
+- 会话与通道一致性（dev-board#764）：`node --test office-addin/taskpane/lib/chatSessionExcelBridge.test.js`（带 Excel mock 的端到端：签发一条会话、SSE 与 chat 同一条、两条 office_command 落到假工作簿并收尾）。
 - 标签流解析：`node --test office-addin/taskpane/lib/sse.test.js`（Node 自带 test runner，无需 npm install）。
 - 界面语言链（dev-board#713）：插件端 `node --test office-addin/taskpane/lib/appLanguage.test.js`（**需先 `npm ci`**，它 import 了 chatSession→vue）；后端 `mvn -Dtest='AppLanguageScopeTest,AppLanguageRequestFilterTest,AddinRequestLanguageTest' test`。
 - `npm run build:deploy -- --url https://addin.example.com --china` 后检查 dist-deploy/manifest.xml 无 localhost URL、taskpane.html 用 partner.office365.cn CDN。
