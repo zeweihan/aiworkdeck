@@ -28,8 +28,16 @@ globalThis.localStorage = {
   setItem: (k, v) => { store.set(k, String(v)) },
   removeItem: (k) => { store.delete(k) }
 }
-// 宿主桩：会话 ID 的存储键按宿主分作用域（dev-board#285），不打桩就落在 'unknown'
-globalThis.Word = {}
+// 宿主桩：wordDoc.detectHost() 的兜底路径是「有 Word 全局即判 word 宿主」。
+// 会话 ID 的存储键按宿主分作用域（dev-board#285），不打这个桩就落在 'unknown' 上，
+// 用例读到的键与真实产品路径不是同一个。
+// 文档也要打桩，而且必须是**存过盘**的（有 document.url）：会话按文档绑定后，只有存过盘的
+// 文档才落盘（dev-board#767）——新建未保存的文档每次都是新对话，「存量会话」这一整组用例
+// 在它上面无从谈起。Word.run 给一个最小可用的桩，免得读正文那一步刷 console.warn。
+globalThis.Office = { context: { document: { url: 'file:///C:/cases/主合同.docx' } } }
+globalThis.Word = {
+  run: async (cb) => cb({ document: { body: { load() {}, text: '' } }, sync: async () => {} })
+}
 
 const { activateSession, send, messages, stop } = await import('./chatSession.js')
 const { t, ZH } = await import('./i18n.js')

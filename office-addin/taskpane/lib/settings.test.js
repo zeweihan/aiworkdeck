@@ -141,7 +141,15 @@ test('同项目同宿主的两份文档各有各的会话 ID，互不串门', as
   }
 })
 
-test('升级迁移：先开的那份文档认领按项目+宿主分的旧键，认领后旧键即删', async () => {
+/**
+ * 旧键一律不认领（dev-board#767）。
+ *
+ * 病灶：早先这里做过两级「首次以文档键打开时继承旧键」的升级迁移。维护者在 Windows Word 里
+ * 新建一份空白 Document1、一开窗格就看见上一篇新闻摘要的对话——那条会话属于另一份文档，
+ * 继承过来等于把它按在了不相干的文档上。会话按文档绑定 = 这份文档没开过插件就是新对话。
+ * 把任何一级继承加回 loadConversationId，下面两条立刻转红。
+ */
+test('旧键不被任何文档认领：没开过插件的文档就是新对话，旧键原样留着', async () => {
   const store = new Map()
   const restore = stubLocalStorage({
     getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -150,12 +158,35 @@ test('升级迁移：先开的那份文档认领按项目+宿主分的旧键，�
   })
   try {
     const { loadConversationId } = await import('./settings.js')
-    store.set('awd_addin_conv_word_11', 'conv-老会话')
+    // v0.44 及更早按「项目+宿主」分的键
+    store.set('awd_addin_conv_word_11', 'conv-上一篇新闻摘要')
+    // v0.27.4 及更早只按项目分的键
+    store.set('awd_addin_conv_11', 'conv-更老的会话')
 
-    assert.equal(loadConversationId('11', 'word', 'file:///cases/A/主合同.docx'), 'conv-老会话')
-    assert.equal(store.has('awd_addin_conv_word_11'), false, '旧键留着，第二份文档下次还会读到它')
-    // 第二份文档从空白开始，而不是又并回同一条会话
+    assert.equal(loadConversationId('11', 'word', 'file:///cases/A/主合同.docx'), '',
+      '第一份文档也不该认领旧键')
     assert.equal(loadConversationId('11', 'word', 'file:///cases/A/补充协议.docx'), '')
+    // 旧键不删：它是 History 面板之外的最后一点线索，而且删了也换不回任何好处
+    assert.equal(store.get('awd_addin_conv_word_11'), 'conv-上一篇新闻摘要')
+    assert.equal(store.get('awd_addin_conv_11'), 'conv-更老的会话')
+  } finally {
+    restore()
+  }
+})
+
+test('同一份文档换了项目就是另一条会话（项目也是键的一层）', async () => {
+  const store = new Map()
+  const restore = stubLocalStorage({
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)) },
+    removeItem: (k) => { store.delete(k) }
+  })
+  try {
+    const { loadConversationId, saveConversationId } = await import('./settings.js')
+    const doc = 'file:///cases/A/主合同.docx'
+    saveConversationId('11', 'conv-项目11', 'word', doc)
+    assert.equal(loadConversationId('12', 'word', doc), '', '换了项目不该读到上个项目的会话')
+    assert.equal(loadConversationId('11', 'word', doc), 'conv-项目11')
   } finally {
     restore()
   }
