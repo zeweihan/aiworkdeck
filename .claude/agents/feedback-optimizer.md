@@ -12,7 +12,7 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
 ## 关键文件
 
 **采集（前端）**
-- `frontend/src/components/FeedbackWidget.vue` — 浮窗本体（浏览器/桌面通用；截图仅桌面）
+- `frontend/src/components/FeedbackWidget.vue` — **面板本体，不含入口**（浏览器/桌面通用；截图仅桌面）
 - `frontend/src/utils/feedbackWidget.js` — 在 `<body>` 下单独 `createApp` 挂载，全应用一个实例
 - `frontend/src/utils/overlayState.js` — 页面树之外的浮层开关（模块级 ref）
 - `frontend/src/utils/errorBuffer.js` — 最近 20 条前端报错环形缓冲，`main.js` 的全局错误处理器写入
@@ -108,17 +108,22 @@ optimizer.*」——普通用户永远 enabled=false，只看得到下面的「�
   而框选覆盖窗一定会抢焦点 → 条件等待集体假超时（现象是「截图没出来」，实际早就出来了）。
 - 多构造器的 Spring bean（`VoiceTranscriptionService`/`FeedbackTriageService`）
   必须给公开构造器打 `@Autowired`，否则整个上下文起不来。
-- **浮钮的「让路」契约 `data-awd-keep-clear`（dev-board#574）**：入口浮钮是 fixed 常驻层，
-  任何固定坐标都会在某种布局下压住别人的主操作（#213 压过沉底发送键，挪到右缘 60% 后又压住
-  英文空会话折行后的居中输入卡）。现在由主操作区容器自己打 `data-awd-keep-clear`，
-  `FeedbackWidget.updateKeepClear()` 每 800ms / resize / 拖动松手后只沿竖直方向避开
-  （几何在 `utils/keepClear.js`，`tests/feedback-widget/keep-clear.test.mjs` 覆盖）。
-  让路只是显示偏移，不写回 `launcherPos`、不持久化。**新面板的主操作按钮若贴右缘，
-  要自己加这个属性**，浮钮不会自动识别可点元素。app-e2e J12 在点发送前断言
-  `elementFromPoint` 命中按钮自身，被盖住直接判红（原来记 skip，门禁形同虚设）。
+- **入口在左栏 rail 底部，没有浮钮了（dev-board#755，2026-09-21）**：维护者判词
+  「整个界面浮球太多、看起来非常混乱」——`.awdfb-launcher` 连同拖动、位置持久化
+  （`awd_feedback_launcher_pos`）、以及「避开主操作区」的让路机制（`utils/keepClear.js` +
+  `data-awd-keep-clear`，dev-board#574）**整套删除**。#574 那类遮挡从此不可能发生：
+  浮层没了。三处入口（工作台 rail 底部图标 / 项目列表页页头按钮 / 应用菜单「报告问题…」）
+  一律调 `utils/feedbackWidget.js` 的 **`openFeedbackWidget()`**，内部还是
+  `uni.$emit('awd:open-feedback')`——面板是 body 级单例，入口方够不到它的实例。
+  面板钉在窗口左下角（`left:58px`/`bottom:34px`，挨着 rail、让开状态条），不可拖动。
+  护栏 `tests/feedback-widget/rail-entry.test.mjs`（`npm run test:feedback-widget`，已进 CI）。
+  app-e2e J12 那条「发送键被盖住判红」的断言保留（它防的是任何浮层，不只是反馈）。
+  **新增入口别自己写 `uni.$emit`**，走那个统一出口。
 
 ## 验证
 
 - `cd backend && mvn test`（JDK 21）：五个 *Test 覆盖落库、分诊规则、安全护栏、分流、邮件
+- `cd frontend && npm run test:feedback-widget`：入口契约（浮钮不许回来、面板落点、三处入口）
 - `cd frontend && npm run test:feedback-e2e`：dev Electron + CDP 真截图真录音真提交真回读
-- 改浮窗样式/位置后顺带 `npm run check:emits`
+  （入口选择器是 rail 上的 `[title="报告问题 / 提建议"]`，不再是 `.awdfb-launcher`）
+- 改面板样式/位置后顺带 `npm run check:emits`
