@@ -78,11 +78,11 @@ Upload order in Partner Center is the display order, so the numbers are the orde
 | `04-powerpoint-mac-new-slide.png` | Mac PowerPoint，AI 在末尾新增「Key Takeaways」三点总结页（2026-09-21；原图非 16:9，补了白边；画面里有一枚「已添加到剪贴板」提示） | 可用，最好重拍去掉提示 |
 | `06-word-web.png` | Word 网页版（word.cloud.microsoft），旁加载清单后 AI 生成一份带修订的英文备忘录，窗格英文回复（2026-09-21；原图非 16:9，补白边；带浏览器外框） | 可用 |
 | `02-excel-mac-signed-in.png` | Mac Excel，窗格已登录，工作表里是小表格 | 可用 |
-| `04-excel-mac-conversation.png` | Mac Excel，窗格里一轮完整问答 | **待重拍**：回复中文；且 2026-09-21 重拍时 Excel 合计行指令未生效（dev-board#764），修好后再拍 |
+| `03-excel-mac-total-row.png` | Mac Excel，AI 加合计行并把表头加粗，chip「Write range / Format cells」，页脚已是一行（2026-09-21，#764 修后） | 可用 |
+| `05-word-windows-tracked-changes.png` | Windows Word（Parallels，英文界面），第一段改正式并加结束句，词级修订，chip「Current Word document」（2026-09-21，#768 修后；右下角有输入法悬浮条） | 可用（备用第六张） |
 
-还缺三张，商店列表至少要覆盖审核说明里出现的每个宿主：
+六张齐了（Partner Center 只收 5 张，选法见 ../SUBMIT.md §4.4）。历史遗留：
 
-- **Word（Windows）**：2026-09-21 已拍到一张，但窗格里显示「This reply was lost while the connection was down」（dev-board#768），修好后重拍。
 
 重拍时注意：修订气泡会打印 Word 用户的真实姓名，截图前把该窗口切成行内修订
 （`osascript -e 'tell application "Microsoft Word" to set revisions mode of view of active window to in line revisions'`），

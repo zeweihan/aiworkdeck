@@ -15,7 +15,7 @@ Why this matters (quoting the submission guide):
 
 Before submitting, verify that the reviewer account:
 
-- signs in on the **Email** tab with `{{REVIEW_EMAIL}}` + `{{REVIEW_CODE}}`, where the second value
+- signs in with the **Email** form with `{{REVIEW_EMAIL}}` + `{{REVIEW_CODE}}`, where the second value
   is **fixed and handed to the reviewer in these notes** — never a real one-time code, because a
   reviewer cannot receive our email or SMS;
 - never expires and is not rate-limited out after repeated sign-ins;
@@ -64,7 +64,8 @@ STEP 1 - OPEN THE TASK PANE  (Word)
 STEP 2 - SIGN IN
 3. The pane opens on a welcome card that explains what the add-in does. Choose the
    sign-in entry on that card (there is no control labelled "Sign in" in the header).
-4. Select the "Email" tab (email + verification code).
+4. The sign-in form shows an Email field and a Verification code field (on this
+   international site the phone-number method is not offered, so there is no tab to pick).
 5. Enter {{REVIEW_EMAIL}} in the Email field and {{REVIEW_CODE}} in the Verification code
    field. Do NOT press "Get code" - the code above is fixed for this account and nothing
    is emailed; pressing it is harmless but unnecessary. If a human-verification widget
@@ -72,8 +73,6 @@ STEP 2 - SIGN IN
 6. Choose "Sign in and connect". The pane returns to the chat view and an avatar
    appears at the top right. The sign-in form is deliberately not reachable again once
    signed in; use the avatar menu to sign out first if you need to sign in a second time.
-   (The "Phone" tab is for customers with a Chinese mobile number; it sends an SMS and is
-   not usable for this review, so please use the Email tab.)
 
 STEP 3 - SELECT A PROJECT
 7. Use the project dropdown at the top of the pane. The test account already has a project;
