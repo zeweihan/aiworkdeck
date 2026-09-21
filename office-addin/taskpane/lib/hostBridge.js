@@ -189,24 +189,38 @@ export async function locateCrossDocTarget(target) {
 const UNSAVED_DOC_SCOPE = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
 
 /**
- * 修订记录与会话 ID 按哪一份文档分开存：有文件路径（Office 的文档 URL、WPS 的 FullName）
- * 就用路径；连宿主都判不出（普通浏览器调试）回空串 = 不绑定，条目只在内存里。
+ * 当前文档的身份：`{ key, saved }`。三态，调用方必须分开处理（dev-board#767）：
  *
- * **没有路径时不能只用「宿主:文档名」**（dev-board#717）：Office 面的文档名正是从
- * Office.context.document.url 推出来的，url 为空（未保存的新文档）时它是宿主通称
- * （「当前 Word 文档」），于是两份新建的 Word 算出同一个键 → 同一条 conversationId →
- * 跨窗格下发按会话走，命令落到另一份文档上，沿途无人报错。这时再补一维「本窗格实例」：
- * 未保存的新文档本来就没有稳定身份（窗格重载即换键，修订记录只在本次会话内存活），
- * 但两份新文档绝不会撞在一起。存过盘之后有了路径，键自然回到按路径分，跨重载稳定。
+ *   1. `saved:true` —— 文档存过盘（Office 的文档 URL、WPS 的 FullName），key 就是那条路径。
+ *      跨窗格重载稳定，会话 ID 与修订记录都可以按它落盘、下次打开原样恢复。
+ *   2. `saved:false` 且 key 非空 —— 新建、还没存过盘的文档。**没有稳定身份**：
+ *      下次打开的「新建空白文档」是另一份文档，拿同一个键去恢复对话就是 dev-board#767
+ *      报的那个病（空白 Document1 里挂着上一篇新闻摘要）。所以会话一律不落盘，每次都是新对话。
+ *      key 仍然给得出来，只用于「同一个窗格里文档换了没有」的比对，以及修订记录的本次会话内绑定。
+ *   3. key 为空 —— 连宿主都判不出（普通浏览器调试），不绑定任何文档。
+ *
+ * **未保存时不能只用「宿主:文档名」**（dev-board#717）：Office 面的文档名正是从
+ * Office.context.document.url 推出来的，url 为空时它是宿主通称（「当前 Word 文档」），
+ * 于是两份新建的 Word 算出同一个键 → 同一条 conversationId → 跨窗格下发按会话走，
+ * 命令落到另一份文档上，沿途无人报错。所以再补一维「本窗格实例」：两份新文档绝不会撞在一起。
  */
-export function documentKey() {
+export function documentIdentity() {
   const host = detectHost()
-  if (!host) return ''
+  if (!host) return { key: '', saved: false }
   const family = hostFamily()
   const path = family === 'office' ? officeDocumentPath()
     : family === 'wps' ? wpsDocumentPath() : ''
+  if (path) return { key: docKeyOf({ path, host }), saved: true }
+  // 名字只在「没有路径」这条退路上要，取到路径时不必再跨一次桥问宿主
   const meta = readDocumentMeta()
-  const key = docKeyOf({ path, host, docName: meta ? meta.name : '' })
-  if (!key || path) return key
-  return `${key}#${UNSAVED_DOC_SCOPE}`
+  const base = docKeyOf({ path: '', host, docName: meta ? meta.name : '' })
+  return base ? { key: `${base}#${UNSAVED_DOC_SCOPE}`, saved: false } : { key: '', saved: false }
+}
+
+/**
+ * 修订记录绑定用的文档标识（documentIdentity().key）。未保存的新文档也给得出键——
+ * 它只需要在本次窗格会话内稳定，不像会话 ID 那样要求跨重载可恢复。
+ */
+export function documentKey() {
+  return documentIdentity().key
 }

@@ -11,7 +11,7 @@ import {
 import { createSseConnection, createTagStreamParser } from './sse.js'
 import {
   readActiveDocument, readDocumentMeta, detectHost, hashContent,
-  executeCommand, hostFamily, documentKey
+  executeCommand, hostFamily, documentIdentity
 } from './hostBridge.js'
 import {
   loadConversationId, saveConversationId, isConfigured, loadModelChoice, saveModelChoice,
@@ -32,7 +32,7 @@ function hostScope() {
 }
 
 /**
- * 会话 ID 存储键的第三层作用域：**哪一份文档**（dev-board#717）。
+ * 会话 ID 存储键的第三层作用域：**哪一份文档**（dev-board#717 立键，dev-board#767 立规矩）。
  *
  * 只按「项目+宿主」分的话，同一个项目里同时开着的两份 Word 会共用一个 conversationId。
  * 跨文档读写是按 conversationId 往 SSE 推命令的，两个窗格因此在通道上分不开：
@@ -40,13 +40,56 @@ function hostScope() {
  * 内容交给模型——「参考 A 改 B」这条主用例静默读错文档。后端现在会拒绝这种寻址不到的目标
  * （OpenDocSource.requireAddressable），根子在这里。
  *
- * 取一次就记住：中途另存为会换文档路径，读的键与写的键必须是同一个。
+ * 缓存一份而不是每处现取：读的键与写的键必须是同一个，中途换文档要整体换（refreshDocScope）。
  * 取不到（普通浏览器调试）回空串 = 退回按「项目+宿主」分，与改造前一致。
  */
-let docScopeCache = ''
-function docScope() {
-  if (!docScopeCache) docScopeCache = documentKey() || ''
+let docScopeCache = null
+
+/**
+ * 重新取一次文档身份。两处刻意不动缓存：
+ *   - **流式进行中**：SSE 通道绑在当前会话上，这一轮的工具命令还在往这份文档下发，
+ *     半途换键等于把正在跑的轮次拆掉。等本轮收尾后的下一次再切。
+ *   - **取不到身份**（宿主忙/半初始化，key 为空）：当成「没变」，绝不拿空值顶掉一条活会话。
+ */
+function refreshDocScope() {
+  if (docScopeCache && streaming.value) return
+  const next = documentIdentity()
+  if (!next.key && docScopeCache) return
+  docScopeCache = next
+}
+
+function docIdentity() {
+  if (!docScopeCache) docScopeCache = documentIdentity()
   return docScopeCache
+}
+
+function docScope() {
+  return docIdentity().key
+}
+
+/**
+ * 这份文档的会话该不该落盘（dev-board#767）。
+ *
+ * 新建、还没存过盘的文档一律不落：它没有稳定身份，下次的「新建空白文档」是另一份文档，
+ * 把上一份的对话恢复上去正是维护者报的那个病（空白 Document1 里挂着上一篇新闻摘要）。
+ * 不落盘 = 每次打开都是新对话；旧对话一条没丢，仍在历史面板里可以手动翻回去。
+ * 宿主判不出（普通浏览器调试，key 为空）时退回按「项目+宿主」分，与改造前一致。
+ */
+function docPersist() {
+  const id = docIdentity()
+  return id.saved || !id.key
+}
+
+/** 记住当前文档的会话 ID（未保存的文档不落盘，见 docPersist）；空值即清除 */
+function rememberConversation(convId) {
+  if (!ctx.projectId || !docPersist()) return
+  saveConversationId(ctx.projectId, convId, hostScope(), docScope())
+}
+
+/** 取当前文档上次的会话 ID（未保存的文档从来没落过，恒空串 = 新对话） */
+function recallConversation(pid) {
+  if (!pid || !docPersist()) return ''
+  return loadConversationId(pid, hostScope(), docScope())
 }
 
 /**
@@ -297,13 +340,23 @@ function perfEnd() {
 // ==================== 会话激活与恢复 ====================
 
 /**
- * 绑定当前的连接配置与项目并恢复会话。视图挂载时、以及 settings/projectId 变化时调用。
+ * 绑定当前的连接配置、项目**与当前文档**并恢复会话。视图挂载时、settings/projectId 变化时、
+ * 以及窗格重新拿到焦点时（可能换了文档，见 syncActiveDocument）调用。
  * 身份未变时是空操作——切视图不会打断进行中的对话。
+ *
+ * 文档进会话身份是 dev-board#767 的落点：会话按文档绑定，换了文档就该换会话，
+ * 而换会话要做的事（关连接、清消息、按新键恢复或新签发、预连）与换项目逐条相同。
  */
+function sessionIdentityKey(settings, pid) {
+  const cfg = settings || {}
+  return `${cfg.serverUrl || ''}|${cfg.token || ''}|${pid || ''}|${docScope()}`
+}
+
 export async function activateSession({ settings, projectId }) {
   ctx.settings = settings
   const pid = projectId || ''
-  const key = `${settings ? settings.serverUrl : ''}|${settings ? settings.token : ''}|${pid}`
+  refreshDocScope()
+  const key = sessionIdentityKey(settings, pid)
   if (key === sessionKey) return
   sessionKey = key
   ctx.projectId = pid
@@ -334,8 +387,9 @@ export async function activateSession({ settings, projectId }) {
   // 模型/skill 清单随会话身份拉一次（失败静默：选择器隐藏，主链路不受影响）
   refreshCatalogs()
 
-  // 任务窗格重建（切文档、重开窗格）后：接着上次的会话，而不是从空白开始
-  const stored = loadConversationId(pid, hostScope(), docScope())
+  // 任务窗格重建（重开窗格、切回这份文档）后：接着**这份文档**上次的会话，而不是从空白开始。
+  // 这份文档没开过插件（含新建、还没存过盘的）时 stored 为空 = 新对话。
+  const stored = recallConversation(pid)
   if (stored) {
     setConversationId(stored)
     const history = await fetchConversationHistory(settings, stored)
@@ -359,6 +413,31 @@ export async function activateSession({ settings, projectId }) {
     restorePending = false
     console.warn('[Addin] 会话预连失败', e)
   }
+}
+
+/**
+ * 当前文档可能换了（dev-board#767）：窗格随文档窗口走、用户在同一窗格里切了文档，
+ * 或者刚把新建的文档另存成了一份有名字的文件。换了就按新文档的会话重来一遍
+ * （这份文档开过插件就恢复它最新的那条，没开过就是新对话）；没换是空操作。
+ * 返回 true 表示确实换了文档，调用方据此把别的按文档分的状态（修订记录）一并重绑。
+ *
+ * 流式进行中不切（refreshDocScope 会守住缓存），下一次调用再说。
+ */
+export async function syncActiveDocument() {
+  const before = docIdentity()
+  refreshDocScope()
+  const after = docIdentity()
+  if (after.key === before.key) return false
+  // 新建的文档刚被保存：它一直就是这一份文档，只是从此有了名字。把当前会话挂到新键上、
+  // 会话身份原地跟上，不重来一遍——否则用户按一次 Ctrl+S，正在进行的对话就被清屏重拉。
+  // 真正的「另存为新名」（存过盘的 A → 另一条路径 B）不走这条，按维护者定的规矩当新文档处理。
+  if (!before.saved && after.saved && conversationId) {
+    rememberConversation(conversationId)
+    sessionKey = sessionIdentityKey(ctx.settings, ctx.projectId)
+    return true
+  }
+  await activateSession({ settings: ctx.settings, projectId: ctx.projectId })
+  return true
 }
 
 /** 模型与 skill 清单：与会话无关，按连接配置拉一次；全部静默降级 */
@@ -609,7 +688,7 @@ export async function switchConversation(convId) {
   notice.value = ''
   resetDocCache()
   setConversationId(convId)
-  saveConversationId(ctx.projectId, convId, hostScope(), docScope())
+  rememberConversation(convId)
   const history = await fetchConversationHistory(ctx.settings, convId)
   if (gen !== generation) return
   conversationPersisted = history.length > 0
@@ -698,7 +777,7 @@ async function issueConversation() {
   const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
   if (gen !== generation) return false
   setConversationId(issued || `conv-${Date.now()}`)
-  saveConversationId(ctx.projectId, conversationId, hostScope(), docScope())
+  rememberConversation(conversationId)
   conversationPersisted = false
   return true
 }
@@ -714,7 +793,7 @@ async function renewConversation() {
   closeConnection()
   setConversationId(null)
   conversationPersisted = false
-  saveConversationId(ctx.projectId, '', hostScope(), docScope())
+  rememberConversation('')
   // 新会话在后端没有 InlineContentCache 条目，正文省传的前提不复存在
   resetDocCache()
   return issueConversation()
@@ -1533,7 +1612,7 @@ export function newConversation() {
   // 不能被下面这次 preconnect 复用，也不该再把结果写回来（dev-board#764）
   generation++
   closeConnection()
-  if (ctx.projectId) saveConversationId(ctx.projectId, '', hostScope(), docScope())
+  rememberConversation('')
   setConversationId(null)
   conversationPersisted = false
   messages.value = []
