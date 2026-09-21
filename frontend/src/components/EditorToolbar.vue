@@ -244,12 +244,19 @@
       </view>
       <!-- 「审校」按钮已随 dev-board#749 撤掉：开关归正文那颗浮球（开关必须和它
            控制的东西待在一起），工具栏这里只留「审阅」。 -->
-      <!-- 有据续写（dev-board#748）。面板本体长在客体页里（要跟着正文光标走），
-           这里是它的唯一入口：点一下给客体发开合指令，按下态等客体回报。
-           客体报不可用（非 Writer / 只读 / 换文档重起）时整颗按钮不出现。 -->
+      <!-- 写作一组：「有据续写」（dev-board#748）与「自动补全」（dev-board#755）。
+           两块面板本体都长在客体页里（要跟着正文光标走），这里是它们的唯一入口：
+           点一下给客体发开合指令，按下态等客体回报，宿主不本地乐观翻。
+           客体报不可用（非 Writer / 只读 / 换文档重起）时那颗按钮整个不出现；
+           两颗都不可用时连这条分隔线也不画，免得工具栏末尾挂一根孤线。 -->
+      <view v-if="semanticWritingAvailable || writingAssistanceAvailable" class="etb-sep"></view>
       <view v-if="semanticWritingAvailable" class="etb-btn wide" :class="{ on: semanticWritingOn }"
             :title="$t('editor.toolbar.semanticWriting')" @tap.stop="$emit('toggle-semantic-writing')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.semanticWritingShort') }}</text>
+      </view>
+      <view v-if="writingAssistanceAvailable" class="etb-btn wide" :class="{ on: writingAssistanceOn }"
+            :title="$t('editor.toolbar.autocomplete')" @tap.stop="$emit('toggle-writing-assistance')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.autocompleteShort') }}</text>
       </view>
       <view class="etb-stepper" :title="$t('editor.toolbar.zoom')">
         <text class="etb-step-b" @tap.stop="stepZoom(-10)">−</text>
@@ -376,7 +383,7 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'toggle-semantic-writing', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
@@ -386,6 +393,9 @@ export default {
     // 有据续写面板此刻开着没有 / 这份文档有没有这项能力（两者都由客体页上报）。
     semanticWritingOn: { type: Boolean, default: false },
     semanticWritingAvailable: { type: Boolean, default: false },
+    // 自动补全的设置面板同上（dev-board#755）。
+    writingAssistanceOn: { type: Boolean, default: false },
+    writingAssistanceAvailable: { type: Boolean, default: false },
   },
   data() {
     return {

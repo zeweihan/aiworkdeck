@@ -276,6 +276,8 @@ export default {
     reviewShort: 'Review',
     semanticWriting: 'Evidence-backed drafting (suggestions cite project materials; nothing is written until you accept)',
     semanticWritingShort: 'Drafting',
+    autocomplete: 'Autocomplete (local vocabulary while you type; no model, no network)',
+    autocompleteShort: 'Autocomplete',
     insightPanel: 'Analyze this document and open the References panel',
     insightShort: 'Analyze',
     zoom: 'Zoom',

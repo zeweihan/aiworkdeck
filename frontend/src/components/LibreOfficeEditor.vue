@@ -62,8 +62,11 @@
       :review-open="reviewOpen"
       :semantic-writing-on="semanticWritingOpen"
       :semantic-writing-available="semanticWritingAvailable"
+      :writing-assistance-on="writingAssistanceOpen"
+      :writing-assistance-available="writingAssistanceAvailable"
       @toggle-review="reviewOpen = !reviewOpen"
       @toggle-semantic-writing="toggleSemanticWriting"
+      @toggle-writing-assistance="toggleWritingAssistance"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
     />
@@ -264,6 +267,8 @@ export default {
       // 不在本地乐观翻：客体里的「关闭」与 Esc 也走同一条回报，两边才不会漂。
       semanticWritingAvailable: false,
       semanticWritingOpen: false,
+      writingAssistanceAvailable: false,
+      writingAssistanceOpen: false,
       // 当前登录用户名。审阅面板的「我」这一桶按它归类作者（dev-board#377），
       // 与下面 load_document 传给引擎的 authorName 同源（currentAuthorName），
       // 两处必须是同一个字符串——否则用户自己的修订会被归成「其他人」。
@@ -646,6 +651,18 @@ export default {
         this._transportSend({ __lo: 'lo-relay', type: 'semantic-writing-panel', open: !this.semanticWritingOpen })
       } catch (e) { /* 通道没起来：客体就绪后会重新上报可用态 */ }
     },
+    /**
+     * 工具栏的「自动补全」开关（dev-board#755）。开的是客体页里的设置面板
+     * （自动弹出候选 / 学习我输入的常用内容 / 相关资料提示 / 已学词库），
+     * 画布右下角那颗常驻按钮已经撤掉。按下态同样等客体的
+     * writing-assistance-state 回报，宿主不本地乐观翻。
+     */
+    toggleWritingAssistance() {
+      if (!this._transportSend) return
+      try {
+        this._transportSend({ __lo: 'lo-relay', type: 'writing-assistance-panel', open: !this.writingAssistanceOpen })
+      } catch (e) { /* 通道没起来：客体就绪后会重新上报可用态 */ }
+    },
     /** 正文浮球 → 打开右栏审阅面板并落在「AI 审校」页。 */
     openInlineReviewPanel() {
       this.reviewOpen = true
@@ -970,6 +987,10 @@ export default {
           // 有据续写面板的可用/开合回报（dev-board#748）。工具栏按钮的显隐与按下态只认它。
           this.semanticWritingAvailable = !!msg.available
           this.semanticWritingOpen = !!msg.open
+        } else if (msg.type === 'writing-assistance-state') {
+          // 自动补全设置面板的可用/开合回报（dev-board#755）。
+          this.writingAssistanceAvailable = !!msg.available
+          this.writingAssistanceOpen = !!msg.open
         } else if (msg.type === 'writing-request') {
           if (this._writingHost) this._writingHost.handle(msg)
         } else if (msg.type === 'open-url' && msg.url) {
@@ -1209,6 +1230,8 @@ export default {
       // 也不能端着上一份文档的可用态（可能根本不是 Writer）。
       this.semanticWritingAvailable = false
       this.semanticWritingOpen = false
+      this.writingAssistanceAvailable = false
+      this.writingAssistanceOpen = false
       if (!this.ready || this._reloading || this.docLoadFailed || this.docKind !== 'writer' || !this.file?.id || !this.projectId || !this._transportSend) return
       this._writingHost = createWritingAssistanceHost({
         projectId: Number(this.projectId), fileId: this.file.id, userId: (getCurrentUser() || {}).id || 'local',
