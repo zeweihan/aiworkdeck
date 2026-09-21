@@ -30,6 +30,8 @@ function setGlobals(g) {
 }
 
 const { locateCrossDocTarget, documentKey } = await import('./hostBridge.js')
+const { readDocumentMeta } = await import('./wordDoc.js')
+const { setLang, getLang } = await import('./i18n.js')
 
 /* ==================== Office：Excel ==================== */
 
@@ -212,10 +214,38 @@ test('documentKey：Office 用文档 URL；未保存（无 URL）在「宿主:�
   restore = setGlobals({ Office: { HostType, context: { host: 'Word', document: { url: '' } } }, Word: {} })
   try {
     const key = documentKey()
-    assert.match(key, /^word:当前 Word 文档#/, '仍以「宿主:文档名」开头，后面是本窗格实例的后缀')
-    assert.notEqual(key, 'word:当前 Word 文档', '光靠通称分不开两份未保存的新文档')
+    // 文档名一个字都不参与（dev-board#768）：那个通称跟着界面语言走，拿它拼键
+    // 就等于用户切一次语言、会话与修订记录凭空消失一次。
+    assert.match(key, /^word:unsaved#/, '未保存时的键是「宿主:unsaved#本窗格实例」')
+    assert.notEqual(key, 'word:unsaved', '光靠固定串分不开两份未保存的新文档')
     assert.equal(documentKey(), key, '同一个窗格里反复取必须是同一个键')
   } finally { restore() }
+})
+
+/**
+ * 文档通称自 dev-board#768 起随界面语言走（「当前 Word 文档」/ "Current Word document"）。
+ * 它是 chip 上给用户看的字，**不能**进 documentKey：进了的话用户切一次语言就换一条
+ * conversationId、会话历史与修订记录当场消失，而且一声不响。把 documentKey 里的
+ * UNSAVED_DOC_NAME 换回 meta.name 即可让这条用例转红。
+ */
+test('documentKey：未保存的新文档——切界面语言不改变键，尽管文档通称跟着变了', () => {
+  const restore = setGlobals({
+    Office: { HostType, context: { host: 'Word', document: { url: '' } } }, Word: {}
+  })
+  const savedLang = getLang()
+  try {
+    setLang('zh')
+    const zhKey = documentKey()
+    const zhName = readDocumentMeta().name
+    setLang('en')
+    const enKey = documentKey()
+    const enName = readDocumentMeta().name
+    assert.notEqual(zhName, enName, '前提：文档通称本来就该随语言变（变不了说明 i18n 那边没接上）')
+    assert.equal(zhKey, enKey, '切语言换了键 = 用户的会话历史与修订记录凭空消失')
+  } finally {
+    setLang(savedLang)
+    restore()
+  }
 })
 
 /**

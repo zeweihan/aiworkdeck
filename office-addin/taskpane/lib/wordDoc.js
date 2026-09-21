@@ -7,6 +7,8 @@
  * 宿主支持：Word（正文纯文本）/ Excel（活动工作表已用区域，TSV 文本）/
  * PowerPoint（各页形状文本清单，需 PowerPointApi 1.4）。
  */
+import { t } from './i18n.js'
+
 const MAX_BODY_CHARS = 200_000
 // Excel 内容读取的单元格上限（超大表只取前若干行，避免卡死任务窗格）
 const MAX_EXCEL_ROWS = 2000
@@ -49,6 +51,21 @@ function documentDisplayName(fallback) {
   return name
 }
 
+/**
+ * 取不到文件名时的文档通称（未保存的新文档、或 url 为空的环境）。
+ *
+ * **必须随界面语言走**（dev-board#768）：这串字既是上下文 chip 上用户看见的那行，
+ * 也随 activeContext.name 上送后端进模型上下文——英文界面里挂一句「当前 Word 文档」，
+ * 用户会以为插件根本没认出自己开的是哪一份文件。
+ *
+ * 注意它**不能**参与 hostBridge.documentKey 的计算：那是会话与修订记录的分组键，
+ * 跟着语言变就等于用户切一次语言、历史凭空消失一次（见 documentKey 里的说明）。
+ */
+export function fallbackDocName(host) {
+  return host === 'word' ? t('docNameWord')
+    : host === 'excel' ? t('docNameExcel') : t('docNamePpt')
+}
+
 async function readWordBody() {
   const text = await Word.run(async (context) => {
     const body = context.document.body
@@ -56,7 +73,7 @@ async function readWordBody() {
     await context.sync()
     return body.text || ''
   })
-  return { text, name: documentDisplayName('当前 Word 文档'), fileType: 'docx' }
+  return { text, name: documentDisplayName(fallbackDocName('word')), fileType: 'docx' }
 }
 
 /**
@@ -95,7 +112,7 @@ export async function readExcelSheet() {
     const sheet = context.workbook.worksheets.getActiveWorksheet()
     return excelRangeText(context, sheet, sheet.getUsedRangeOrNullObject(true))
   })
-  return { text, name: documentDisplayName('当前 Excel 工作簿'), fileType: 'xlsx' }
+  return { text, name: documentDisplayName(fallbackDocName('excel')), fileType: 'xlsx' }
 }
 
 export async function readPptSlides() {
@@ -139,7 +156,7 @@ export async function readPptSlides() {
     }
     return out
   })
-  return { text, name: documentDisplayName('当前 PowerPoint 演示文稿'), fileType: 'pptx' }
+  return { text, name: documentDisplayName(fallbackDocName('powerpoint')), fileType: 'pptx' }
 }
 
 /**
@@ -171,8 +188,7 @@ export async function hashContent(text) {
 export function readDocumentMeta() {
   const host = detectHost()
   if (!host) return null
-  const fallback = host === 'word' ? '当前 Word 文档'
-    : host === 'excel' ? '当前 Excel 工作簿' : '当前 PowerPoint 演示文稿'
+  const fallback = fallbackDocName(host)
   const fileType = host === 'word' ? 'docx' : host === 'excel' ? 'xlsx' : 'pptx'
   return { id: 'office-current-document', name: documentDisplayName(fallback), fileType }
 }

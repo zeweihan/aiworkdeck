@@ -1631,9 +1631,16 @@ public class AgentOrchestrator {
                 // 「静默收尾」会让用户看着一个做了一半的任务发呆——这里把原因追进正文，
                 // 让人知道该怎么办（换更小的参数、或用能自己写文档的工具）。
                 log.warn("Truncated tool_code persisted after corrections for {}, finishing with a visible note", conversationId);
-                content = content + "\n\n> 上一步的工具调用参数太长，模型输出被截断了两次，这一步没有执行完。"
-                        + "常见原因是要写进文档的表格或正文被整段塞进了工具参数。"
-                        + "可以让我把这一步拆小（分几次写），或改用能直接把内容写进文档的工具重试。";
+                // 这条说明必须**自己发一遍**，而且**包在 <final> 里**（dev-board#768）。
+                // 两条都不是讲究：截断恰恰发生在 <tool_code> 里、标签没闭合，直接把说明接在
+                // content 后面，它对两端解析器而言就落在工具载荷作用域内——插件端与桌面端
+                // 都把工具载荷丢掉，说明一个字都到不了用户眼前；而 content 本身已经流完了，
+                // 不补一次 text_delta 的话这段字连流里都不存在，只躺在落库的消息里。
+                // 真机实录：用户只看到一个空白气泡加一行「已完成 · 55 秒」，任务做了一半。
+                // <final> 在两端解析器里都优先于未闭合的工具作用域，是把它捞回正文的正路。
+                String truncVisible = truncatedToolNoticeDelta();
+                sendTextDelta(guard, truncVisible);
+                content = content + truncVisible;
             }
 
             // 3. Check for Artifacts
@@ -2228,6 +2235,30 @@ public class AgentOrchestrator {
         } catch (Exception e) {
             return "{\"content\":\"\"}";
         }
+    }
+
+    /**
+     * 两轮纠正后 tool_code 仍被截断时的收尾说明（dev-board#768）。
+     *
+     * <p><b>必须带 {@code <final>} 包裹。</b>截断恰恰发生在 {@code <tool_code>} 里、标签没闭合，
+     * 裸接在后面的文字对两端解析器（插件 {@code createTagStreamParser}、桌面
+     * {@code useAgentStream}）而言就落在工具载荷作用域内，两边都整块丢弃——说明一个字
+     * 都到不了用户眼前。{@code <final>} 在两端的路由里都优先于未闭合的工具作用域，
+     * 是把它捞回正文的正路。真机实录：用户只看到一个空白气泡加一行「已完成 · 55 秒」。
+     *
+     * <p>这段字既 {@code sendTextDelta} 一次（本轮的流已经放完了，不补就连流里都没有），
+     * 也拼进落库正文——后者是插件端「终态零正文 → 去 /api/ai/history 补取」的兜底依据。
+     */
+    static String truncatedToolNoticeDelta() {
+        return "<final>" + LangText.of(
+                "\n\n> 上一步的工具调用参数太长，模型输出被截断了两次，这一步没有执行完。"
+                        + "常见原因是要写进文档的表格或正文被整段塞进了工具参数。"
+                        + "可以让我把这一步拆小（分几次写），或改用能直接把内容写进文档的工具重试。",
+                "\n\n> The last tool call's arguments were too long and the model's output was cut off twice, "
+                        + "so that step did not finish. This usually happens when a whole table or passage "
+                        + "meant for the document is pasted into the tool arguments. Ask me to split that step "
+                        + "into smaller writes, or to retry with a tool that writes into the document directly.")
+                + "</final>";
     }
 
     static String truncate(String s, int max) {

@@ -79,6 +79,40 @@ test('已知的机器标签仍然整块不渲染，<final> 与思考通道不受
   assert.equal(thinking, '先查法条')
 })
 
+/**
+ * dev-board#768（真机 2026-09-21，Windows Word 英文界面）：模型整轮只输出
+ * <process>/<step>/<tool_code>，一个 <final> 都没有。dev-board#287 的兜底本该把这些
+ * 散文捞回来，却从第一轮起就失效——`</process>\n<process>` 之间那个裸换行栈空，
+ * 被当成「本气泡产出过正文」，而界面那边的前导空白守卫又把它原样丢掉。
+ * 结果：七轮正文逐字消失，用户只看到一个空白气泡加一行「已完成 · 55 秒」。
+ * 把 route() 里的 `if (/\S/.test(text))` 去掉即可让这条转红。
+ */
+test('整轮没有 <final>：标签间的裸换行不算正文，process/step 里的散文仍被兜底捞回来', () => {
+  const round = (n) => `<process name="part ${n}">\n  <step>正在写第 ${n} 节</step>\n`
+    + `  <tool_code>office_insert_text(text="正文 ${n}")</tool_code>\n</process>\n`
+  const { main } = parse([round(1), round(2)])
+  assert.ok(main.includes('正在写第 1 节'), '第一轮之后兜底就失效了 = 空白气泡')
+  assert.ok(main.includes('正在写第 2 节'))
+  // 工具载荷永远不捞：JSON 参数糊到用户脸上比空白更糟
+  assert.ok(!main.includes('office_insert_text'))
+})
+
+/**
+ * 同一轮的另一半（dev-board#768）：截断恰好发生在 <tool_code> 里、标签没闭合，
+ * 后端把「参数太长、这一步没做完」的说明接在后面。裸接等于接在工具载荷作用域里，
+ * 两端解析器都会丢掉它；包一层 <final> 才落回正文。后端那边去掉 <final> 包裹即转红。
+ */
+test('截断在未闭合的 <tool_code> 里：包在 <final> 里的收尾说明仍然落回正文', () => {
+  const truncated = '<process name="part 3">\n  <step>正在写第 3 节</step>\n'
+    + '  <tool_code>office_insert_text(text="被截断的长正文'
+  const note = '\n\n> 上一步的工具调用参数太长，这一步没有执行完。'
+  const bare = parse([truncated, note])
+  assert.ok(!bare.main.includes('参数太长'), '前提：裸接在未闭合 tool_code 后面的说明会被丢掉')
+  const wrapped = parse([truncated, '<final>' + note + '</final>'])
+  assert.ok(wrapped.main.includes('参数太长'), '包了 <final> 还收不到说明 = 用户仍然只看到空白')
+  assert.ok(!wrapped.main.includes('被截断的长正文'), '工具载荷不该跟着漏出来')
+})
+
 test('工具输出里的协议标签已被后端中和，不会顶掉标签栈把载荷漏进正文', () => {
   // 后端 AgentTagProtocol 把载荷里的 </tool_output> 起始 < 换成 &lt;（历史回灌走同一条解析）。
   // 不中和的话这里的标签栈会在载荷中间弹空，后半段载荷就当正文发给用户了。

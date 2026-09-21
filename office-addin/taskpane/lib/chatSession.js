@@ -205,6 +205,12 @@ let currentAssistant = null
 // run_state 兜底永久武装上，此后任何一条迟到的 run_state 都能把正在跑的轮次
 // 判成已完成并解锁输入框。
 let everReconnected = false
+// **本轮**有没有真的断过线（dev-board#768）。与 everReconnected 同一处置起，区别只在
+// 生命周期：everReconnected 一旦置起就管到会话结束（run_state 兜底一经武装就不撤），
+// 而「这一轮的回复是不是被断线吃掉的」必须按轮判——用会话级标志去写文案，等于此后
+// 每一次空回复都栽赃给连接。真机那一轮（11:19:38-11:20:32）服务端日志里没有任何重连，
+// 界面却言之凿凿地说「回复在连接中断时丢失」，根因就是没有这一维。
+let turnDisconnected = false
 // 「连接中断，正在自动重连……」的宽限计时器：正常收尾造成的那一秒重连不该报警，
 // 否则每一轮结束都闪一次断线横幅，真故障反而淹没在狼来了里（用户录屏里的那条
 // 横幅就分不清是哪种）。
@@ -303,6 +309,7 @@ export async function activateSession({ settings, projectId }) {
   passProgress.value = null
   clearReconnectNotice()
   everReconnected = false
+  turnDisconnected = false
   banner.value = ''
   notice.value = ''
   setConversationId(null)
@@ -589,6 +596,7 @@ export async function switchConversation(convId) {
   parser = null
   clearReconnectNotice()
   everReconnected = false
+  turnDisconnected = false
   banner.value = ''
   notice.value = ''
   resetDocCache()
@@ -926,8 +934,13 @@ function hasVisibleContent(msg) {
 
 /**
  * 终态却零正文时的补救：后端每轮都会把助手消息落库，去 /api/ai/history 取回最后
- * 一条助手消息补进这个气泡。取不到就明说这一轮丢了，并提示先看文档
- * ——工具调用是直接落到文档里的，正文丢了不代表活没干。
+ * 一条助手消息补进这个气泡。取不到就明说这一轮没有正文，并提示先看文档
+ * ——工具调用是直接落到文档里的，正文没出来不代表活没干。
+ *
+ * **文案按「本轮到底断没断线」分两种**（dev-board#768）：空白气泡的成因不止断线一种，
+ * 模型整轮只输出 <process>/<tool_code>、一个 <final> 都没有时同样零正文，而服务端日志
+ * 里一次重连都没有。把两种都说成「回复在连接中断时丢失」，用户会去查网络、查代理、
+ * 重启 Word——全在错误的方向上使劲，真正该看的是文档里已经写进去的那部分。
  */
 async function recoverEmptyBubble(target) {
   const gen = generation
@@ -951,7 +964,8 @@ async function recoverEmptyBubble(target) {
       console.warn('[Addin] 空气泡补取历史失败', e)
     }
   }
-  target.notice = recovered ? t('emptyAnswerRecovered') : t('emptyAnswerLost')
+  target.notice = recovered ? t('emptyAnswerRecovered')
+    : turnDisconnected ? t('emptyAnswerLost') : t('emptyAnswerNone')
   if (!recovered) target.text = ''
   target.done = true
   bumpScroll()
@@ -1252,7 +1266,7 @@ async function ensureConnection() {
       if (connection !== conn) return
       if (status === 'reconnecting') {
         // 轮次中途断的才算「断线过」；每轮结束那次是后端主动收尾，不是故障
-        if (streaming.value) everReconnected = true
+        if (streaming.value) { everReconnected = true; turnDisconnected = true }
         if (!reconnectNoticeTimer) {
           reconnectNoticeTimer = setTimeout(() => {
             reconnectNoticeTimer = null
@@ -1362,6 +1376,8 @@ export async function send(overrideText) {
   const assistant = ensureAssistantBubble()
   // 本轮由 send 触发：run_state 回到「不能当终态」的读法（回灌建连若还没收到 run_state，到此作废）
   restorePending = false
+  // 「本轮断过线没有」按轮清零（everReconnected 刻意不清，见它的定义）
+  turnDisconnected = false
   // 上一轮若被中途停止，它的待提交哈希就此作废——本轮带不带正文由本轮说了算
   pendingDocHash = ''
   streaming.value = true
@@ -1487,6 +1503,7 @@ export function newConversation() {
   notice.value = ''
   clearReconnectNotice()
   everReconnected = false
+  turnDisconnected = false
   streaming.value = false
   toolPrep.value = false
   passProgress.value = null

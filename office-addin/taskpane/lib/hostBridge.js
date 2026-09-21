@@ -198,7 +198,14 @@ const UNSAVED_DOC_SCOPE = 'u' + Date.now().toString(36) + Math.random().toString
  * 跨窗格下发按会话走，命令落到另一份文档上，沿途无人报错。这时再补一维「本窗格实例」：
  * 未保存的新文档本来就没有稳定身份（窗格重载即换键，修订记录只在本次会话内存活），
  * 但两份新文档绝不会撞在一起。存过盘之后有了路径，键自然回到按路径分，跨重载稳定。
+ *
+ * **没有路径时用的是固定串 'unsaved'，不是文档名**（dev-board#768）：那个通称自
+ * 2026-09-21 起跟着界面语言走（「当前 Word 文档」/ "Current Word document"），
+ * 拿它拼键等于用户切一次语言就换一条 conversationId、会话历史与修订记录凭空消失。
+ * 这条退路本来就靠「宿主 + 本窗格实例」区分，名字一个字都不该参与。
  */
+const UNSAVED_DOC_NAME = 'unsaved'
+
 export function documentKey() {
   const host = detectHost()
   if (!host) return ''
@@ -206,7 +213,7 @@ export function documentKey() {
   const path = family === 'office' ? officeDocumentPath()
     : family === 'wps' ? wpsDocumentPath() : ''
   const meta = readDocumentMeta()
-  const key = docKeyOf({ path, host, docName: meta ? meta.name : '' })
+  const key = docKeyOf({ path, host, docName: path ? (meta ? meta.name : '') : UNSAVED_DOC_NAME })
   if (!key || path) return key
   return `${key}#${UNSAVED_DOC_SCOPE}`
 }
