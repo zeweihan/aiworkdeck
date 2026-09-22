@@ -50,6 +50,16 @@ export default {
   rollbackDone: '已回退',
   rollbackDoneArchived: '已回退，原对话已存为分支',
   rollbackFailed: '回退失败: {error}',
+  // ---- 重新生成（dev-board#790）----
+  // 与「回退」共用同一个确认框与同一条后端截断通道，只有结尾那一步不同：
+  // 回退把原文放回输入框等你改，重新生成直接原样再问一次。
+  regenerate: '重新生成',
+  regenerateTitle: '用同一条提问再生成一次回答',
+  regenerateConfirmTitle: '重新生成',
+  regenerateWarning: '将先把当前对话存为分支，再用原来的提问重新生成这条回答。',
+  regeneratePreviewLabel: '将用这条提问重新生成：',
+  regenerateSending: '正在重新生成',
+  regenerateNoSource: '找不到这条回答对应的提问',
   unknownError: '未知错误',
   // ---- PPT 生成 ----
   pptConfigTitle: 'PPT 生成选项',
@@ -211,10 +221,21 @@ export default {
   stepN: '步骤 {n}',
   timelinePlan: '计划 · {done}/{total}',
   timelineExecuting: '正在执行 {n} 项操作',
+  // 有工具在跑时报工具名与秒数——「正在执行 3 项操作」分不清是在读合同、查企查查，
+  // 还是卡在某个超时的外部调用上（dev-board#792）
+  timelineExecutingTool: '正在{name} · {sec} 秒',
   timelineExecuted: '已执行 {n} 项操作',
   timelineExecutionError: '{n} 项操作 · 有操作未完成',
   stepsGroup: '执行过程',
   approvalNeededFlag: '待确认',
+  // ---- 复制（dev-board#790）----
+  copyAnswer: '复制',
+  copyCode: '复制',
+  copyToolCall: '复制调用',
+  copyToolOutput: '复制输出',
+  copyFailed: '复制失败',
+  // ---- 状态栏用量 ----
+  tokenUsageLine: '本轮 {n} tokens',
   // ---- ProcessCard ----
   statusError: '出错',
   statusSuccess: '成功',

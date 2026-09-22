@@ -8,9 +8,41 @@ window.inboxItems = []
 window.nextReceiptState = 'applied'
 window.uni = {
   getStorageSync: key => key === 'awd_app_language' ? new URLSearchParams(location.search).get('lang') || 'zh-CN' : '',
-  setStorageSync() {}, removeStorageSync() {}, $on() {}, $off() {}, $emit() {}, showToast() {},
+  setStorageSync() {}, removeStorageSync() {}, $on() {}, $off() {}, $emit() {},
+  showToast(options) { window.lastToast = options && options.title },
+  // 照 uni-app H5 的真实实现走：先试 navigator.clipboard，被拒再退回隐藏 textarea +
+  // execCommand('copy')。成功/失败两条分支因此是真的由平台决定的，不是这里写死的。
+  //
+  // 无头 Chrome 里异步剪贴板 API 恒返回 NotAllowedError（即便 overridePermissions +
+  // 用户手势），execCommand('copy') 可用但 'paste'/readText 一律被拒 —— 也就是说
+  // **这个环境读不回剪贴板**。所以用例断言的是 copiedText（组件算出来、交给平台的那段文字）
+  // 加上 success 分支确实走到了；「系统剪贴板里最后是什么」只能留给真机走查。
+  setClipboardData({ data, success, fail }) {
+    window.copiedText = data
+    const viaTextarea = () => {
+      const ta = document.createElement('textarea')
+      ta.value = data
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      ta.remove()
+      if (!ok) throw new Error('execCommand copy rejected')
+    }
+    Promise.resolve()
+      .then(() => (navigator.clipboard ? navigator.clipboard.writeText(data) : Promise.reject(new Error('no clipboard api'))))
+      .catch(() => viaTextarea())
+      .then(() => success && success())
+      .catch(() => (fail ? fail() : undefined))
+  },
   getSystemInfoSync: () => ({ platform: 'mac', windowWidth: innerWidth }),
-  request: ({ url, method, success }) => {
+  request: ({ url, method, data, success }) => {
+    // 回退/重新生成走的是同一条后端通道，记下来供用例断言「确实先截断了才重发」
+    if (String(url).includes('/api/agent/history/rollback')) {
+      window.rollbackCalls = [...(window.rollbackCalls || []), data]
+      return success?.({ statusCode: 200, data: { status: 'ok' } })
+    }
     if (String(url).includes('/api/agent/inbox/')) {
       if ((method || 'GET').toUpperCase() === 'DELETE') {
         const messageId = decodeURIComponent(String(url).split('?')[0].split('/').pop())
@@ -86,6 +118,25 @@ window.loadManyTurns = async (count = 200) => {
   chat.value.loadMessages(`fixture-many-${count}`, history)
   await nextTick()
   await new Promise(resolve => requestAnimationFrame(resolve))
+}
+
+// 运行中的一轮：状态条要报「正在<工具名> · N 秒」而不是「正在执行 N 项操作」（dev-board#792）。
+// 直接造一条流式气泡，不经 SSE——这里验的是展示层怎么读数据，不是解析器。
+// startedSecondsAgo 让秒数从一个确定值起跳，用例才能断言它在走。
+window.loadRunningFixture = async (startedSecondsAgo = 12) => {
+  await window.loadFixture('single')
+  window.chatState.bubbles.push({
+    id: 'live-run', role: 'ASSISTANT', content: '', isStreaming: true,
+    thinking: { content: '', status: 'done', duration: 0, startTime: 0 },
+    processes: [{
+      id: 'live-proc', title: '工具执行', items: [
+        { type: 'tool', code: 'search_web({"query":"违约金 上限"})', output: '已返回 5 条结果', status: 'success', startTime: Date.now() - 40000 },
+        { type: 'tool', code: 'read_document({"fileId":7})', output: '', status: 'loading', startTime: Date.now() - startedSecondsAgo * 1000 }
+      ]
+    }],
+    artifacts: [], planTodos: [], timeline: []
+  })
+  await nextTick()
 }
 await window.loadFixture()
 window.ready = true

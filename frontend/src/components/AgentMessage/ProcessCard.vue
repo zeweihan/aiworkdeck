@@ -92,6 +92,24 @@
                          <span class="tool-name">{{ formatToolName(item.code) }}</span>
                     </div>
                     <div class="tool-right">
+                         <!-- 复制调用 / 复制输出（审查 F6）：工具卡是可审计单元——
+                              律师要能把这次调用的参数拷出来自己复现，把输出拷进邮件或备忘。
+                              必须 @click.stop：整行本身是展开/收起输出的开关，不拦住的话
+                              点复制会顺手把刚看的输出折叠掉。 -->
+                         <div class="tool-copy">
+                            <div v-if="item.code" class="tool-copy-btn" :title="$t('chat.copyToolCall')" @click.stop="copyCall(item)">
+                               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                  <polyline points="16 18 22 12 16 6"></polyline>
+                                  <polyline points="8 6 2 12 8 18"></polyline>
+                               </svg>
+                            </div>
+                            <div v-if="hasOutput(item)" class="tool-copy-btn" :title="$t('chat.copyToolOutput')" @click.stop="copyOutput(item)">
+                               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                               </svg>
+                            </div>
+                         </div>
                          <div class="tool-status">
                               <span v-if="item.status === 'loading'" class="status-loading">{{ $t('chat.toolCalling') }}</span>
                               <span v-else-if="item.status === 'success'" class="status-success">{{ $t('chat.done') }}</span>
@@ -145,6 +163,7 @@ import SubtaskResultCard from './SubtaskResultCard.vue'
 import FileTypeIcon from '../FileTypeIcon.vue'
 import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
 import { humanizeToolOutput } from '@/utils/toolOutputHumanize.js'
+import { copyToClipboard } from '@/utils/chatClipboard.js'
 import { isEnglish } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 
@@ -232,6 +251,13 @@ const humanOutput = (item) => {
     humanCache.set(raw, shown)
     return shown
 }
+
+// ---- 复制调用 / 复制输出（dev-board#790）----
+// 复制的是**原文**：调用串 `read_document({"fileId":12})` 与工具返回的原始输出。
+// 刻意不复制 humanOutput 那份可读化结果——用户按复制是为了拿去复现或存证，
+// 要的是原样，不是我们替他整理过的版本。
+const copyCall = (item) => copyToClipboard(String((item && item.code) || '').trim())
+const copyOutput = (item) => copyToClipboard(outputText(item))
 
 const isOutputOpen = (idx) => !!openOutputs.value[idx]
 
@@ -568,6 +594,32 @@ const renderItems = computed(() => {
     align-items: center;
     gap: 5px;
     flex-shrink: 0;
+}
+
+/* 复制调用 / 复制输出：常驻但低调（--awd-text-3），hover 才变实。
+   刻意不做成「悬停整行才出现」——桌面壳里指针一离开就消失的按钮，
+   用户要先猜到它在那儿才找得到。 */
+.tool-copy {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.tool-copy-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    color: var(--awd-text-3);
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.tool-copy-btn:hover {
+    color: var(--awd-accent-text);
+    background: var(--awd-accent-soft);
 }
 
 .output-chevron {

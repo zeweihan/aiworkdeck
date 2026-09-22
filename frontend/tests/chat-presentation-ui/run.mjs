@@ -13,6 +13,9 @@ const tokens = source.slice(source.indexOf("html,\nhtml[data-theme='light']"), s
 const server = await createServer({ configFile: false, root: fixture, plugins: [vue()], resolve: { alias: { '@': `${root}src` }, dedupe: ['vue'] }, server: { host: '127.0.0.1', port: 5186, strictPort: true, fs: { allow: [root, fileURLToPath(new URL('../../node_modules', import.meta.url))] } } })
 await server.listen()
 const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true })
+// 复制用例要真的读回剪贴板（只断言「我们调了接口」证明不了复制走的是什么）
+await browser.defaultBrowserContext().overridePermissions('http://127.0.0.1:5186', ['clipboard-read', 'clipboard-write'])
+const shots = process.env.AWD_SHOTS || '/tmp'
 const page = await browser.newPage()
 const errors = []
 page.on('pageerror', error => errors.push(error.message))
@@ -313,7 +316,87 @@ try {
   await page.mouse.move(10, 10)
   await wait(() => !document.querySelector('.rail-panel'))
 
+  // ---- 复制（dev-board#790 / 审查 F2、F6、D-07）----
+  // 全仓此前一处剪贴板调用都没有，而复制是对话类产品里点击率最高的那颗按钮。
+  // 无头 Chrome 读不回剪贴板（异步 API 恒 NotAllowedError，execCommand('paste') 也被拒，
+  // 见夹具 setClipboardData 的注释），所以验的是「组件算出来交给平台的是哪段文字」+
+  // 「平台确实收下了」（成功分支走到、提示为已复制）。真机粘贴留给走查。
+  const copyAndRead = async (selector, index = 0) => {
+    await page.evaluate(() => { window.copiedText = ''; window.lastToast = '' })
+    await page.$$eval(selector, (els, i) => els[i].click(), index)
+    await wait(() => window.copiedText && window.lastToast)
+    const [text, toast] = await page.evaluate(() => [window.copiedText, window.lastToast])
+    assert.equal(toast, '已复制', `${selector}[${index}]：平台收下了才提示已复制`)
+    return text
+  }
   await page.evaluate(() => window.loadFixture('single'))
+  await wait(() => document.querySelector('.message-row.assistant .msg-copy-btn'))
+  // 关键的一条：复制不受「用到文档」那条判据门控。恰恰是 AI 刚改过文档的那一轮
+  // （documentEdited=true，整组按钮消失），用户最想把修改说明拷进邮件。
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).documentEdited = true })
+  await wait(() => ![...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.message-actions'))
+  assert.ok(await page.$('.message-row.assistant .msg-copy-btn'), '改过文档的那一轮仍然有复制键')
+  const copiedAnswer = await copyAndRead('.message-row.assistant .msg-copy-btn')
+  assert.ok(copiedAnswer.includes('第一部分：付款安排已核对。'), `复制的是这条回答的正文，实际：${copiedAnswer}`)
+  assert.ok(!/<\/?(final|thinking|process|tool_code)/.test(copiedAnswer), '协议 XML 不许被复制走')
+
+  // 工具卡：调用与输出各一颗 12px 图标，点了不该把刚展开的输出折叠回去。
+  await page.click('.message-row.assistant .activity-summary')
+  await wait(() => document.querySelector('.tool-copy-btn'))
+  assert.equal(await page.$$eval('.tool-row', els => els[0].querySelectorAll('.tool-copy-btn').length), 2, '调用与输出各一颗')
+  assert.equal(await copyAndRead('.tool-copy-btn', 0), 'read_document({"fileId":1})', '复制调用拿的是原样调用串')
+  assert.equal(await copyAndRead('.tool-copy-btn', 1), '已核对条款 1，付款期限为30日。', '复制输出拿的是工具原始输出')
+  assert.equal(await page.$('.tool-output'), null, '复制不该顺手把输出折叠状态弄翻')
+
+  // 正文里的代码块：流式期每帧重写整段 v-html，手工框选会被当场清掉，这里必须有按钮。
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).content += '\n\n```\n第三条 违约金上限为合同总价的 20%。\n```\n' })
+  await wait(() => document.querySelector('.md-copy-btn'))
+  assert.equal((await copyAndRead('.md-copy-btn')).trim(), '第三条 违约金上限为合同总价的 20%。', '代码块复制拿的是块内原文')
+
+  // ---- 运行状态条：工具名 + 秒数（dev-board#792 / 审查 F5）----
+  // 「正在执行 3 项操作」分不清 AI 是在读合同、查企查查，还是卡在某个超时调用上。
+  await page.evaluate(() => window.loadRunningFixture(12))
+  const runningLabel = () => page.$eval('.activity-summary.is-working span', el => el.textContent.trim())
+  await wait(() => document.querySelector('.activity-summary.is-working'))
+  const firstLabel = await runningLabel()
+  assert.ok(firstLabel.includes('读取文档'), `运行态要报当前工具名，实际：${firstLabel}`)
+  assert.ok(/1[23] 秒/.test(firstLabel), `运行态要报已用秒数，实际：${firstLabel}`)
+  assert.equal(await page.$('.message-row.assistant:last-child .msg-regen-btn'), null, '还在跑的时候不出重新生成')
+  await page.screenshot({ path: `${shots}/k13-running-tool.png` })
+  await wait(() => document.querySelector('.activity-summary.is-working span').textContent.includes('14 秒'))
+  // 跑完了退回原来的计数文案，行为一字未变
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).processes[0].items[1].status = 'success' })
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).isStreaming = false })
+  await wait(() => document.querySelector('.message-row.assistant:last-child .activity-summary').textContent.includes('已执行 2 项操作'))
+
+  // ---- 本轮 token 用量一行（dev-board#792 / 审查 F3①）----
+  assert.equal(await page.$('.status-bar-right'), null, '没有用量数据时不挂一个 0')
+  await page.evaluate(() => { window.chatState.tokenUsage.totalTokens = 12345 })
+  await wait(() => document.querySelector('.status-bar-right'))
+  assert.ok(await page.$eval('.status-bar-right', el => el.textContent.includes('12,345') && el.textContent.includes('本轮')), '输入区上沿报本轮用量')
+
+  // ---- 重新生成（dev-board#790 / 审查 D-07）----
+  // 走的是和「回退到这条消息」同一条后端通道：先截断（K1 之后会先存档），再原样重问。
+  await page.evaluate(() => { window.rollbackCalls = [] })
+  await page.evaluate(() => window.loadFixture('long'))
+  await wait(() => document.querySelector('.message-row.assistant:last-child .msg-regen-btn'))
+  assert.equal(await page.$$eval('.msg-regen-btn', els => els.length), 1, '重新生成只给最新一条：对着中间某条点下去会静默毁掉后面好几轮')
+  await page.click('.message-row.assistant:last-child .msg-regen-btn')
+  await wait(() => document.querySelector('.rollback-warning-content'))
+  assert.ok(await page.$eval('.awd-dialog-title', el => el.textContent.includes('重新生成')), '确认框说的是重新生成，不是回退')
+  await page.screenshot({ path: `${shots}/k11-regenerate-confirm.png` })
+  await tap('[data-rollback-confirm]')
+  await wait(() => (window.rollbackCalls || []).length === 1)
+  await wait(() => window.chatState.isStreaming)
+  assert.ok(await page.evaluate(() => !document.querySelector('.message-list').textContent.includes('合同审查结果')), '旧回答已从对话流里撤下')
+  assert.equal(await page.evaluate(() => window.chatState.bubbles.filter(b => b.role === 'USER').at(-1).content),
+    '请给出完整的风险清单，并说明需要我确认的事项。', '原提问被原样重发')
+  assert.equal(await page.evaluate(() => window.chatState.bubbles.filter(b => b.content === '请给出完整的风险清单，并说明需要我确认的事项。').length), 1,
+    '重发不该在历史里留下两条一样的提问')
+  assert.equal(await page.evaluate(() => document.querySelector('.chat-input-rich').textContent), '', '重新生成不碰输入框——用户此刻可能已经在里面打了别的')
+
+  await page.evaluate(() => window.loadFixture('single'))
+  await page.screenshot({ path: `${shots}/k11-copy-actions.png` })
   await page.screenshot({ path: '/tmp/awd-chat-646-light.png' })
   await page.focus('.thinking-card .header')
   await page.keyboard.press('Enter')
@@ -327,8 +410,20 @@ try {
   await page.goto('http://127.0.0.1:5186/?lang=en-US')
   await wait(() => window.ready)
   assert.ok(await page.$eval('.message-list', el => el.textContent.includes('Ran 17 operations')), 'English controls interpolate')
+  // 新加的四处复制 + 重新生成也必须跟着换语言（硬编码中文/英文在另一套界面里会原样露出来）
+  await page.evaluate(() => { window.chatState.bubbles.at(-1).content += '\n\n```\nAlpha\n```\n' })
+  await wait(() => document.querySelector('.md-copy-btn'))
+  await page.click('.message-row.assistant:last-child .activity-summary')
+  await wait(() => document.querySelector('.tool-copy-btn'))
+  assert.deepEqual(await page.evaluate(() => [
+    document.querySelector('.msg-copy-btn span').textContent.trim(),
+    document.querySelector('.msg-regen-btn span').textContent.trim(),
+    document.querySelector('.md-copy-btn').textContent.trim(),
+    document.querySelector('.tool-copy-btn').getAttribute('title')
+  ]), ['Copy', 'Regenerate', 'Copy', 'Copy call'], 'English labels for copy/regenerate')
+  await page.screenshot({ path: `${shots}/k11k13-english.png` })
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

@@ -666,6 +666,10 @@ export function useAgentStream() {
 
         if (!continuingRun) {
             fileChanges.value = []
+            // 本轮用量归零（dev-board#792）：与上面的 fileChanges 同一口径——状态栏那一行
+            // 报的是「这一轮」。此前只在切换会话时清，于是数字是整条会话的累计，
+            // 却要按「本轮」呈现，那是一句谎话。
+            tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
             agentPaused.value = null
             agentRunStatus.value = 'RUNNING'
             agentAwaitingInput.value = false
@@ -1886,7 +1890,11 @@ export function useAgentStream() {
                         // 增量解转义留到下一段的尾巴；预声明才是响应式的（dev-board#750）
                         codeCarry: '',
                         outputCarry: '',
-                        status: 'loading'
+                        status: 'loading',
+                        // 运行状态条的秒表起点（dev-board#792）。这一刻就是模型发出调用的时刻，
+                        // 工具跑完才会有 tool_output，中间这段静默正是用户最需要知道「在等什么、等了多久」的时候。
+                        // 历史回灌的条目没有这个字段（那时早就跑完了），RootBubble 按缺省 0 处理。
+                        startTime: Date.now()
                     })
                 }
                 activeTag = 'tool_code'
