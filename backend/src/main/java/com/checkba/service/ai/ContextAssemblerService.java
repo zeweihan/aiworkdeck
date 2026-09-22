@@ -59,6 +59,45 @@ public class ContextAssemblerService {
      */
     public static final String SYSTEM_VOLATILE_SEPARATOR = "\n\n<!-- awd:volatile -->\n";
 
+    /**
+     * 基底 prompt 里「文档工具指引」的占位标记（dev-board#809 / K29）。
+     *
+     * <p>基底 prompt 里只留与客户端能力<b>无关</b>的通用规则；doc_* / sheet_* / slide_* /
+     * office_* 这些**要有对应客户端执行器才跑得动**的工具，指引写在片段文件里，
+     * 由 {@link #spliceToolGuidance} 按会话能力拼到这个位置。
+     *
+     * <p><b>为什么必须分段</b>（实测「发现 A」，2026-09-22）：改动前基底 prompt 33357 字符
+     * 在 {@code AGENT+lowa} 与 {@code AGENT+none} 下<b>逐字节相同</b>，里面整三节在教 doc_* /
+     * pptx 编辑 / pdf 编辑——而这些工具在任务窗格会话与纯对话会话里
+     * {@code ClientCapabilityService.isToolVisible} 一个都不放行。后果不是报错，是
+     * <b>白烧一轮</b>：none 会话每次先调 {@code doc_list_project_files}，拿回
+     * "Tool not found or arguments invalid."，然后才开始干活。
+     *
+     * <p><b>片段属于稳定段</b>：内容只随（能力 × 宿主 × 语言）三元组变，一轮之内、
+     * 跨轮之间都不变，所以拼在 {@link #SYSTEM_VOLATILE_SEPARATOR} 之前不会影响提示缓存命中。
+     * 往片段里写任何每轮会变的东西（时间、id、现查的记忆）都会让缓存永久失效且无人知晓。
+     */
+    static final String TOOL_GUIDANCE_PLACEHOLDER = "<!-- awd:tool-guidance -->";
+
+    /**
+     * 能力（+ Office 宿主）→ 片段文件名主干。{@code SystemPromptToolVisibilityContractTest}
+     * 用同一张表逐名校验「片段里提到的工具在这一档下真的可见」。
+     */
+    static String toolGuidanceStem(ClientCapabilityService.Capability capability,
+                                   ClientCapabilityService.OfficeHost officeHost) {
+        return switch (capability) {
+            case NONE -> "tools-none";
+            case OFFICE -> switch (officeHost) {
+                case EXCEL -> "tools-office-excel";
+                case POWERPOINT -> "tools-office-ppt";
+                // WORD 是存量插件不上送 officeHost 时的兜底档，同 ClientCapabilityService
+                default -> "tools-office-word";
+            };
+            // LOWA 是未登记会话的兜底档（存量主前端不发 clientCapability），保持现状行为
+            default -> "tools-lowa";
+        };
+    }
+
     private final ProjectAiMessageService messageService;
     private final FileContextLoader fileContextLoader;
     private final AiContextProperties contextProperties;
@@ -190,7 +229,9 @@ public class ContextAssemblerService {
                 resource = new org.springframework.core.io.ClassPathResource("prompts/system_prompt.md");
             }
             if (resource.exists()) {
-                systemText.append(org.springframework.util.StreamUtils.copyToString(resource.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                String basePrompt = org.springframework.util.StreamUtils.copyToString(
+                        resource.getInputStream(), java.nio.charset.StandardCharsets.UTF_8);
+                systemText.append(spliceToolGuidance(basePrompt, conversationId, english));
             } else {
                 systemText.append("You are a helpful AI Assistant.");
             }
@@ -205,6 +246,11 @@ public class ContextAssemblerService {
         // [Injection] Enforcement (HIGHEST PRIORITY)
         // zh/en 差异只有 Language 一节（SIMPLIFIED CHINESE ONLY -> ENGLISH ONLY）与
         // artifact 命名示例；停机条件/输出顺序/工具规则两版逐条一致。
+        //
+        // **这一段三档能力共用，所以不许点名任何挑客户端的工具**（dev-board#809 / K29）：
+        // doc_* / sheet_* / slide_* / office_* 在别的能力档下压根不可见，提到名字就是在
+        // 请模型去调一个只会回 "Tool not found" 的工具（实测「发现 A」：none 会话每轮白烧一次）。
+        // 要写按能力不同的指引，写进 prompts/tools-*.md 片段，由 spliceToolGuidance 拼进来。
         String enforcement = english ? ENFORCEMENT_EN : """
 
 # SYSTEM ENFORCEMENT (HIGHEST PRIORITY - READ CAREFULLY)
@@ -216,7 +262,7 @@ public class ContextAssemblerService {
 
 ## Language
 - SIMPLIFIED CHINESE ONLY for all user-facing output.
-- Text written INTO a document (doc_*/office_* edits) follows that document's own script and terminology: Traditional stays Traditional, local usage stays local. This rule governs chat output only.
+- Text written INTO a document follows that document's own script and terminology: Traditional stays Traditional, local usage stays local. This rule governs chat output only.
 
 ## Chitchat / Simple Q&A
 - OMIT `<title>` and `<process>` tags entirely.
@@ -1422,6 +1468,64 @@ public class ContextAssemblerService {
     }
 
     /**
+     * 把本会话该看的「文档工具」片段拼进基底 prompt 的
+     * {@link #TOOL_GUIDANCE_PLACEHOLDER} 占位处（dev-board#809 / K29）。
+     *
+     * <p><b>占位标记一定会被消掉</b>：片段读不到时替换成空串，而不是把标记留给模型
+     * ——基底 prompt 里已经没有任何编辑器工具指引了，留一条注释只是噪音。
+     * 万一基底 prompt 是没有标记的旧版本（或英文缺失回退到了中文版而两版标记不一致），
+     * 就把片段接到末尾：宁可位置不理想，也不能整段指引凭空消失。
+     */
+    private String spliceToolGuidance(String basePrompt, String conversationId, boolean english) {
+        String stem = toolGuidanceStem(
+                clientCapabilityService.capabilityOf(conversationId),
+                clientCapabilityService.officeHostOf(conversationId));
+        String fragment = loadPromptFragment(stem, english);
+        if (basePrompt.contains(TOOL_GUIDANCE_PLACEHOLDER)) {
+            return basePrompt.replace(TOOL_GUIDANCE_PLACEHOLDER, fragment);
+        }
+        log.warn("Base system prompt has no {} placeholder; appending the '{}' fragment at the end",
+                TOOL_GUIDANCE_PLACEHOLDER, stem);
+        return fragment.isEmpty() ? basePrompt : basePrompt + "\n\n" + fragment;
+    }
+
+    /**
+     * 读一份片段：英文会话优先 {@code <stem>.en.md}，缺失回退中文版（与基底 prompt 同口径）。
+     * 两版都读不到时返回空串并 warn——少一段指引只是模型少知道些事，
+     * 让整轮对话挂掉才是不可接受的。
+     */
+    private String loadPromptFragment(String stem, boolean english) {
+        if (english) {
+            String en = readPromptResource("prompts/" + stem + ".en.md");
+            if (en != null) {
+                return en;
+            }
+        }
+        String zh = readPromptResource("prompts/" + stem + ".md");
+        if (zh == null) {
+            log.warn("Tool guidance fragment '{}' is missing from the classpath", stem);
+            return "";
+        }
+        return zh;
+    }
+
+    /** classpath 上的提示词资源；不存在或读失败返回 null（调用方决定怎么兜底）。 */
+    private String readPromptResource(String path) {
+        try {
+            org.springframework.core.io.ClassPathResource resource =
+                    new org.springframework.core.io.ClassPathResource(path);
+            if (!resource.exists()) {
+                return null;
+            }
+            return org.springframework.util.StreamUtils.copyToString(
+                    resource.getInputStream(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.error("Failed to read prompt resource {}", path, e);
+            return null;
+        }
+    }
+
+    /**
      * Determines the current phase based on plan and task list state.
      * - CHAT: No plan, no task list (simple conversation)
      * - PLAN: User request may need planning (no approved plan yet)
@@ -1574,7 +1678,7 @@ public class ContextAssemblerService {
 
 ## Language
 - ENGLISH ONLY for all user-facing output.
-- Text written INTO a document (doc_*/office_* edits) follows that document's own language, script and terminology. This rule governs chat output only.
+- Text written INTO a document follows that document's own language, script and terminology. This rule governs chat output only.
 
 ## Chitchat / Simple Q&A
 - OMIT `<title>` and `<process>` tags entirely.

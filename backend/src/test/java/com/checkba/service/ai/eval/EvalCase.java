@@ -124,6 +124,14 @@ public class EvalCase {
         /** 应在某次 LLM 调用的上下文中出现的子串（断言编排器回喂了某条系统提醒；空 = 不断言） */
         public List<String> promptContains = new ArrayList<>();
         /**
+         * 允许本轮出现「调了一个本会话里不存在或不可见的工具」的分发（默认 false = 不允许）。
+         *
+         * <p>默认不允许是刻意的：一次 Tool not found 就是白烧一整轮模型往返，
+         * 用例里出现它，要么是提示在教用不了的工具，要么是可见性裁剪与提示对不上。
+         * 只有专门在验错误回路的用例才该把它打开。
+         */
+        public boolean allowUnresolvedTools = false;
+        /**
          * 本轮应为哪个文件建过检查点（活跃文档的 id，字符串；null = 不断言）。
          *
          * <p>钉的是「写入类工具 ⇒ 有快照可退」这条产品承诺：编排器只对

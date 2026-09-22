@@ -142,6 +142,25 @@ class OrchestratorReplayEvalTest {
                             + " 次调用里都没有出现");
         }
 
+        // 5.2.1 一次 Tool not found = 白烧一整轮模型往返（dev-board#809 实测「发现 A」的形态）。
+        // 默认不允许，只有专门在验这件事本身的用例才放行。
+        //
+        // 「系统提示里有没有教用不了的工具」不在这里断言：回放 harness 的
+        // ContextAssemblerService 是 mock 的，system 消息只是一句占位符，
+        // 在这里写 promptExcludes 只会得到一条永远通过的空断言。
+        // 那一面由 ContextAssemblerServiceTest（真实 CAS）与
+        // SystemPromptToolVisibilityContractTest（逐名对拍片段）守。
+        if (!c.expect.allowUnresolvedTools) {
+            List<String> unresolved = r.dispatches().stream()
+                    .filter(d -> !d.found()).map(RecordingToolRegistry.Dispatch::resolvedName).toList();
+            assertTrue(unresolved.isEmpty(),
+                    "本轮调到了本会话里不存在或不可见的工具 " + unresolved
+                            + "（clientCapability="
+                            + (c.clientCapability == null ? "lowa(默认)" : c.clientCapability)
+                            + "）。模型拿回的是 \"Tool not found or arguments invalid.\"，"
+                            + "这一轮模型往返白烧了——通常意味着系统提示在教一个本会话用不了的工具。");
+        }
+
         // 5.3 本轮检查点（dev-board 审计 B-02）：写入类工具执行前必须为活跃文档留下快照，
         // 否则 doc_restore_checkpoint 无从恢复。判据是 @ToolMeta(fileEffect="MODIFIED")，
         // 所以漏标注解的写入原语会在这里现形。

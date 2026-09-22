@@ -54,10 +54,11 @@ class RedlineGranularityContractTest {
     @Test
     @DisplayName("system prompt（中/英）第 7 节的修订颗粒度条目要求未改动文字逐字照抄")
     void systemPromptRequiresVerbatimCopyOfUnchangedText() throws Exception {
-        String zh = readResource("prompts/system_prompt.md");
-        String en = readResource("prompts/system_prompt.en.md");
-        assertTrue(zh.contains("逐字照抄"), "system_prompt.md 修订颗粒度条目缺「逐字照抄」约束");
-        assertTrue(en.contains("verbatim"), "system_prompt.en.md revision-granularity note lacks the verbatim-copy constraint");
+        // 第 7 节自 dev-board#809（K29）起在按客户端能力拼装的 LOWA 片段里，不在基底 prompt
+        String zh = readResource("prompts/tools-lowa.md");
+        String en = readResource("prompts/tools-lowa.en.md");
+        assertTrue(zh.contains("逐字照抄"), "tools-lowa.md 修订颗粒度条目缺「逐字照抄」约束");
+        assertTrue(en.contains("verbatim"), "tools-lowa.en.md revision-granularity note lacks the verbatim-copy constraint");
     }
 
     private static String readResource(String path) throws Exception {
