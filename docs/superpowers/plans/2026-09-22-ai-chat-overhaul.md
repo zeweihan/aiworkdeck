@@ -203,42 +203,42 @@
 
 | 卡 | dev-board# | 批次 | 冲突组 | 状态 | PR |
 |---|---|---|---|---|---|
-| K1 回退修复 | | 1 | CI/UAS/后端 | 未开始 | |
-| K2 LEGACY_DEFAULTS | | 1 | ToolRegistry | 未开始 | |
-| K3 doc_read_paragraphs | | 1 | ToolFileGuard | 未开始 | |
-| K4 取消真正生效 | | 1 | AO/OpenRouter/Bridge | 未开始 | |
-| K5 菜单停止 | | 1 | CI | 未开始 | |
-| K6 拖拽 | | 1 | PO/CI | 未开始 | |
-| K7 待处理同步+角标+恢复会话 | | 1 | CI/UAS/Inbox | 未开始 | |
-| K8 虚拟标签 | | 1 | PO/CAS | 未开始 | |
-| K9 锚点错位 | | 1 | office_thread/DET | 未开始 | |
-| K10 ToolMeta 补齐 | | 1 | DET | 未开始 | |
-| K11 复制+重新生成 | | 2 | RootBubble/CI | 未开始 | |
-| K12 钢琴键 | | 2 | CI | 未开始 | |
-| K13 状态条+token | | 2 | RootBubble/CI | 未开始 | |
-| K14 上下文层 | | 2 | CI/UAS/CAS/新表 | 未开始 | |
-| K15 @ 引用 | | 2 | CI/FileTree | 未开始 | |
-| K16 键位 | | 2 | CI | 未开始 | |
-| K17 会话管理 | | 2 | PO | 未开始 | |
-| K18 从此分叉 | | 2 | CI/fork | 未开始 | |
-| K19 工具可见性声明化 | | 2 | ToolMeta/Capability/SkillRouter | 未开始 | |
-| K20 PDF 文字层 | | 2 | LegalTools/Extractor/CAS | 未开始 | |
-| K21 降级与上限可见 | | 2 | Config/CI/CAS | 未开始 | |
-| K22 steer 立即发送 | | 2 | Inbox | 未开始 | |
-| K23 X-Client-Instance | | 2 | UAS | 未开始 | |
-| K24 Excel 替换 | | 3 | DET/office_thread/Office | 未开始 | |
-| K25 PDF 页操作 | | 3 | PdfTools | 未开始 | |
-| K26 Office 桥超时+分页 | | 3 | Bridge/OfficeEditTools | 未开始 | |
-| K27 工具描述清理 | | 3 | 多 tool 组件 | 未开始 | |
-| K28 PPTX 权威面 | | 3 | PptxTools | 未开始 | |
-| K29 提示按能力分段 | | 3 | CAS/prompts | 未开始 | |
-| K30 渐进披露 | | 3 | ToolRegistry/AO | 未开始 | |
-| K31 长会话性能 | | 3 | CI/Markdown | 未开始 | |
-| K32 准备链并行化 | | 3 | CAS/Memory/OpenRouter | 未开始 | |
-| K33 Office Word 面 | | 3 | OfficeEditTools/skill | 未开始 | |
-| K34 音频附件 | | 3 | LegalTools | 未开始 | |
-| K35 文档漂移 | | 3 | docs | 未开始 | |
-| K36 SSE 摘旧名 | | 3 | Bridge/UAS | 未开始 | |
+| K1 回退修复 | #780 | 1 | CI/UAS/后端 | 未开始 | |
+| K2 LEGACY_DEFAULTS | #781 | 1 | ToolRegistry | 未开始 | |
+| K3 doc_read_paragraphs | #782 | 1 | ToolFileGuard | 未开始 | |
+| K4 取消真正生效 | #783 | 1 | AO/OpenRouter/Bridge | 未开始 | |
+| K5 菜单停止 | #784 | 1 | CI | 未开始 | |
+| K6 拖拽 | #785 | 1 | PO/CI | 未开始 | |
+| K7 待处理同步+角标+恢复会话 | #786 | 1 | CI/UAS/Inbox | 未开始 | |
+| K8 虚拟标签 | #787 | 1 | PO/CAS | 未开始 | |
+| K9 锚点错位 | #788 | 1 | office_thread/DET | 未开始 | |
+| K10 ToolMeta 补齐 | #789 | 1 | DET | 未开始 | |
+| K11 复制+重新生成 | #790 | 2 | RootBubble/CI | 未开始 | |
+| K12 钢琴键 | #791 | 2 | CI | 未开始 | |
+| K13 状态条+token | #792 | 2 | RootBubble/CI | 未开始 | |
+| K14 上下文层 | #793 | 2 | CI/UAS/CAS/新表 | 未开始 | |
+| K15 @ 引用 | #794 | 2 | CI/FileTree | 未开始 | |
+| K16 键位 | #795 | 2 | CI | 未开始 | |
+| K17 会话管理 | #796 | 2 | PO | 未开始 | |
+| K18 从此分叉 | #798 | 2 | CI/fork | 未开始 | |
+| K19 工具可见性声明化 | #799 | 2 | ToolMeta/Capability/SkillRouter | 未开始 | |
+| K20 PDF 文字层 | #800 | 2 | LegalTools/Extractor/CAS | 未开始 | |
+| K21 降级与上限可见 | #801 | 2 | Config/CI/CAS | 未开始 | |
+| K22 steer 立即发送 | #802 | 2 | Inbox | 未开始 | |
+| K23 X-Client-Instance | #803 | 2 | UAS | 未开始 | |
+| K24 Excel 替换 | #804 | 3 | DET/office_thread/Office | 未开始 | |
+| K25 PDF 页操作 | #805 | 3 | PdfTools | 未开始 | |
+| K26 Office 桥超时+分页 | #806 | 3 | Bridge/OfficeEditTools | 未开始 | |
+| K27 工具描述清理 | #807 | 3 | 多 tool 组件 | 未开始 | |
+| K28 PPTX 权威面 | #808 | 3 | PptxTools | 未开始 | |
+| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 未开始 | |
+| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 未开始 | |
+| K31 长会话性能 | #811 | 3 | CI/Markdown | 未开始 | |
+| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 未开始 | |
+| K33 Office Word 面 | #813 | 3 | OfficeEditTools/skill | 未开始 | |
+| K34 音频附件 | #814 | 3 | LegalTools | 未开始 | |
+| K35 文档漂移 | #815 | 3 | docs | 未开始 | |
+| K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 未开始 | |
 
 ## 派工模板（主会话给每个实施代理的任务书骨架）
 
