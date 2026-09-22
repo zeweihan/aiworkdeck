@@ -153,8 +153,11 @@ class DocumentEditToolsStyleTest {
         assertEquals(0.5, ft.get("insideBorderWidthPt"));
         assertEquals("#DDDDDD", ft.get("headerFill"));
         assertEquals(Boolean.TRUE, ft.get("repeatHeader"));
-        assertEquals("3,5", ft.get("columnWidthsCm"));
         assertFalse(ft.containsKey("borderWidthPt"));
+        // 列宽参数保位受理但**不下发**（dev-board#807，审计 B-07）：本引擎的 WASM 桥没注册
+        // TableColumnSeparator，worker 那条分支必抛，而它抛之前已经把边框/字号落到文档上了，
+        // 返回的 {success:false} 里又没有 applied——模型据此重试，同一张表被格式化两遍。
+        assertFalse(ft.containsKey("columnWidthsCm"), "列宽不该下发给编辑器：" + ft);
 
         tools.doc_format_selection(null, null, null, null, null, null, null, "Arial", "楷体_GB2312");
         Map<String, Object> fs = paramsOf("format_selection");

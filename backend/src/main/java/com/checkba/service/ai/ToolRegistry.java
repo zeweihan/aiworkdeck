@@ -90,13 +90,46 @@ public class ToolRegistry {
     /**
      * 工具名别名（旧 prompt / 老对话历史 / 模型惯性输出中出现过的名称映射到真实工具）。
      *
-     * 历史：Phase 2.5 灰度更名期间这里曾有 wps_* → doc_* 全量别名（since 0.4.x），
-     * 约定 ≥0.6.0 后移除，已于 0.7.9 后清理。旧名不再分发：模型输出 wps_* 会收到
-     * "未知工具"反馈并按系统提示改用 doc_*。
+     * <p><b>现在是空表，并且应当一直是空表。</b>别名的代价是<b>静默改道</b>：模型以为自己调了 A，
+     * 实际跑的是 B，而回喂给它的结果里没有任何一句说明发生过改写。
+     *
+     * <p>历史：Phase 2.5 灰度更名期间这里曾有 wps_* → doc_* 全量别名（since 0.4.x），
+     * 约定 ≥0.6.0 后移除，已于 0.7.9 后清理。最后一条 {@code search_laws → search_web}
+     * 于 dev-board#807（审计 A11）删除——它把「查法条」这个意图改道成了一次<b>公网搜索</b>，
+     * 而仓里同时有 law_search / law_search_keyword / law_recognition / get_law_article 四个真法源工具。
+     * 模型拿到的是网页摘要却当成法条原文引用，在法律场景里是直接的正确性风险，且全程零提示。
+     * 现在它会收到 {@link #UNKNOWN_TOOL_HINTS} 里那句指路，下一轮自己改用 law_search。
+     *
+     * <p>要给模型容错「名字写错了」，正确的位置是这条 not-found 的指路文案，不是这张表。
      */
-    public static final Map<String, String> TOOL_NAME_ALIASES = Map.ofEntries(
-            Map.entry("search_laws", "search_web")
+    public static final Map<String, String> TOOL_NAME_ALIASES = Map.of();
+
+    /**
+     * 未命中任何注册工具时的指路文案（工具名 → 该往哪儿去）。
+     *
+     * <p>与 {@link #TOOL_NAME_ALIASES} 的根本区别：别名<b>替模型做决定</b>且不告诉它，
+     * 这里只是<b>把决定权还给模型并给足信息</b>——它下一轮改调对的工具，日志里也看得见
+     * 它原本想调什么。代价只有一次 LLM 往返，换来的是模型不会把公网摘要当法条引用。
+     *
+     * <p>只收录模型按语义惯性最容易写错、且写错后果严重的名字。这不是同义词词典，
+     * 别往里堆：每多一条就多一处「本该报错却被兜住」的地方。
+     */
+    private static final Map<String, String> UNKNOWN_TOOL_HINTS = Map.ofEntries(
+            Map.entry("search_laws", "法规检索请用 law_search（语义检索法源）、law_search_keyword"
+                    + "（按法规名+关键词）或 get_law_article（按条文号取原文）；"
+                    + "search_web 是公网搜索，不是法源，其结果不得当作法条原文引用。"),
+            Map.entry("search_law", "法规检索请用 law_search（语义检索法源）、law_search_keyword"
+                    + "（按法规名+关键词）或 get_law_article（按条文号取原文）；"
+                    + "search_web 是公网搜索，不是法源，其结果不得当作法条原文引用。")
     );
+
+    /** 未注册工具的统一反馈：有指路就带上，没有就保持原样那一句。 */
+    public static String unknownToolMessage(String name) {
+        String hint = name == null ? null : UNKNOWN_TOOL_HINTS.get(name);
+        return hint == null
+                ? "Tool not found or arguments invalid."
+                : "Error: 未知工具 '" + name + "'。" + hint;
+    }
 
     /**
      * 一个已注册工具：宿主 Bean + 方法 + LLM 规格 + 产品元数据。
@@ -424,7 +457,7 @@ public class ToolRegistry {
         // 会话能力过滤：能力档位下不可见的工具按"不存在"拒绝（模型收到与未知工具一致的反馈）
         Optional<RegisteredTool> toolOpt = resolve(resolvedName, ctx != null ? ctx.conversationId() : null);
         if (toolOpt.isEmpty()) {
-            return new ToolResult("Tool not found or arguments invalid.", null, false);
+            return new ToolResult(unknownToolMessage(resolvedName), null, false);
         }
         RegisteredTool tool = toolOpt.get();
 

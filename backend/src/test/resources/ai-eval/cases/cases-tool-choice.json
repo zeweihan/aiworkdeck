@@ -1,0 +1,250 @@
+[
+  {
+    "id": "tool-choice-law-alias-is-corrected-not-silently-rerouted",
+    "title": "查法条误写 search_laws：应收到指向 law_search 的可行动错误，而不是被静默改道公网搜索（审计 A11）",
+    "category": "legal-research",
+    "protocol": "xml",
+    "userInput": "帮我查《公司法》第八十八条关于股东出资责任的规定",
+    "turns": [
+      {
+        "text": "<process name=\"检索法规\"><tool_code>search_laws(query=\"公司法 第八十八条 股东出资责任\")</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"检索法规\"><tool_code>law_search(query=\"公司法 股东出资责任 第八十八条\")</tool_code></process>"
+      },
+      {
+        "text": "<final>《公司法》第八十八条规定：股东转让已认缴出资但未届出资期限的股权的，由受让人承担缴纳该出资的义务……</final>"
+      }
+    ],
+    "toolStubs": {
+      "law_search": "《中华人民共和国公司法》第八十八条：股东转让已认缴出资但未届出资期限的股权的，由受让人承担缴纳该出资的义务……"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_laws" },
+        { "name": "law_search", "argsContain": { "query": "股东出资责任" } }
+      ],
+      "promptContains": ["不是法源"],
+      "offeredToolsInclude": ["law_search", "law_search_keyword", "get_law_article"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-memory-one-tool-per-intent",
+    "title": "回顾此前结论：记忆检索只offer一个 query_memory，不再有两个同义诱饵（审计 A13）",
+    "category": "memory",
+    "protocol": "native",
+    "userInput": "我们之前就这笔交易的对价是怎么定的？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "query_memory",
+            "arguments": { "query": "交易对价 定价依据", "depth": "hybrid" }
+          }
+        ]
+      },
+      { "text": "<final>此前的结论是以标的公司 2025 年净利润的 12 倍作价，并约定业绩承诺补偿。</final>" }
+    ],
+    "toolStubs": {
+      "query_memory": "找到 2 条相关记忆:\n[DECISION] 对价: 2025 年净利润 12 倍\n[CONCLUSION] 业绩承诺补偿条款已确认"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "query_memory", "argsContain": { "depth": "hybrid" } }],
+      "offeredToolsInclude": ["query_memory"],
+      "offeredToolsExclude": ["search_knowledge_base", "deep_search"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-memory-deep-is-a-parameter-not-a-third-tool",
+    "title": "要更全面的召回：走 query_memory(depth=deep) 一次，不是再挑一个工具连调三次（审计 A13）",
+    "category": "memory",
+    "protocol": "native",
+    "userInput": "把这个项目里跟「业绩承诺」有关的结论都翻出来，要全",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "query_memory",
+            "arguments": { "query": "业绩承诺", "depth": "deep", "limit": 10 }
+          }
+        ]
+      },
+      { "text": "<final>与业绩承诺有关的结论共 4 条，按时间整理如下……</final>" }
+    ],
+    "toolStubs": {
+      "query_memory": "深度检索结果 (4 条):\n1. [DECISION] 业绩承诺期三年\n2. [FACT] 补偿方式为股份补偿"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "query_memory", "argsContain": { "depth": "deep" } }],
+      "offeredToolsInclude": ["query_memory"],
+      "offeredToolsExclude": ["deep_search", "search_knowledge_base"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-read-docx-list-then-extract",
+    "title": "读一份 docx：先取 fileId 再抽全文，两步走完（审计 A14/B-10 的回归护栏）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "读一下《股权转让协议.docx》，违约责任是怎么约定的？",
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_list_project_files", "arguments": { "projectId": 1 } }
+        ]
+      },
+      {
+        "toolCalls": [
+          { "name": "extract_file_text", "arguments": { "fileId": 1001 } }
+        ]
+      },
+      { "text": "<final>违约责任约定在第 9 条：逾期支付按日万分之五计息，逾期超过 30 日守约方可解除。</final>" }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "项目文档列表 (共 1 个):\n- ID: 1001, 名称: 股权转让协议.docx, 类型: docx",
+      "extract_file_text": "第九条 违约责任\n逾期支付股权转让款的，每逾期一日按未付金额的万分之五支付违约金……"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_list_project_files" },
+        { "name": "extract_file_text", "argsContain": { "fileId": "1001" } }
+      ],
+      "offeredToolsInclude": ["doc_list_project_files", "extract_file_text", "read_document"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-project-inventory-in-one-call",
+    "title": "「项目里都有什么材料」一次清单调用答完，不用把四个专用清单挨个调一遍（审计 B-11）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "我这个项目里都有哪些材料？PDF 和图片也要",
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_list_project_files", "arguments": { "projectId": 1 } }
+        ]
+      },
+      { "text": "<final>项目里共 5 份材料：2 份 Word、1 份 Excel、1 份 PDF 判决书、1 张现场照片。</final>" }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "项目文件列表 (共 5 个):\n- ID: 1001, 名称: 股权转让协议.docx, 类型: docx [可编辑文档]\n- ID: 1002, 名称: 台账.xlsx, 类型: xlsx [可编辑文档]\n- ID: 1003, 名称: 方案.pptx, 类型: pptx [可编辑文档]\n- ID: 1004, 名称: 判决书.pdf, 类型: pdf [PDF]\n- ID: 1005, 名称: 现场照片.jpg, 类型: jpg [图片]"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "doc_list_project_files" }],
+      "offeredToolsInclude": ["doc_list_project_files"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-pptx-editing-goes-through-slide-tools",
+    "title": "改幻灯片正文：只有 slide_* 这一套权威编辑面，pptx_* 的重合编辑工具不再下发（审计 B-09）",
+    "category": "pptx",
+    "protocol": "native",
+    "userInput": "把第 2 页的标题改成「交易架构」",
+    "activeDocument": { "id": "1003", "name": "交易方案.pptx", "fileType": "pptx" },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "slide_set_shape_text",
+            "arguments": { "slideNumber": 2, "shapeName": "标题 1", "text": "交易架构" }
+          }
+        ]
+      },
+      { "text": "<final>第 2 页标题已改为「交易架构」。</final>" }
+    ],
+    "toolStubs": {
+      "slide_set_shape_text": "{\"success\": true}"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "slide_set_shape_text" }],
+      "offeredToolsInclude": ["slide_set_shape_text", "slide_get_overview", "slide_add_page"],
+      "offeredToolsExclude": ["pptx_apply_format", "pptx_edit_page", "pptx_open_file"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-chitchat-triggers-no-retrieval",
+    "title": "一句「谢谢，就这样」不该触发任何检索工具（记忆/检索工具面的过触发护栏）",
+    "category": "chat",
+    "protocol": "xml",
+    "userInput": "好的，谢谢，就这样吧",
+    "turns": [
+      { "text": "<final>好的，随时叫我。</final>" }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-open-document-by-fileid",
+    "title": "打开一份文档：清单取 fileId 再 doc_open_file，不去猜路径（回归护栏）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "把那份《尽职调查报告.docx》打开",
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_list_project_files", "arguments": { "projectId": 1 } }
+        ]
+      },
+      {
+        "toolCalls": [
+          { "name": "doc_open_file", "arguments": { "fileId": 2002 } }
+        ]
+      },
+      { "text": "<final>《尽职调查报告.docx》已在编辑器中打开。</final>" }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "项目文件列表 (共 1 个):\n- ID: 2002, 名称: 尽职调查报告.docx, 类型: docx [可编辑文档]",
+      "doc_open_file": "文档已打开: 尽职调查报告.docx"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_list_project_files" },
+        { "name": "doc_open_file", "argsContain": { "fileId": "2002" } }
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "tool-choice-law-family-has-no-decoy-name",
+    "title": "法规检索族完整下发，且工具面里没有 search_laws 这个名字（别名删除后的护栏，审计 A11）",
+    "category": "legal-research",
+    "protocol": "native",
+    "userInput": "《劳动合同法》里经济补偿的标准在哪一条？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "law_search_keyword",
+            "arguments": { "title": "劳动合同法", "fulltext": "经济补偿" }
+          }
+        ]
+      },
+      { "text": "<final>经济补偿标准规定在《劳动合同法》第四十七条。</final>" }
+    ],
+    "toolStubs": {
+      "law_search_keyword": "《中华人民共和国劳动合同法》第四十七条：经济补偿按劳动者在本单位工作的年限……"
+    },
+    "expect": {
+      "toolCalls": [{ "name": "law_search_keyword" }],
+      "offeredToolsInclude": ["law_search", "law_search_keyword", "get_law_article"],
+      "offeredToolsExclude": ["search_laws"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

@@ -59,39 +59,77 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 文件管理工具 ====================
 
-    @ToolMeta(displayName = "列出可编辑文档", category = "document")
-    @Tool("文件树里可编辑文档的权威清单，也是文件 ID 的主要来源：doc_open_file、extract_file_text 的 fileId，"
-            + "以及 rename_project_file / move_project_file / create_folder 的 fileId 与 parentFolderId 都从这里取。"
-            + "不含 PDF（用 pdf_list_files）与文件夹（用 list_project_folders）；只要物理路径不要 ID 才用 list_files。"
-            + "列出项目中的所有可编辑文档文件（docx, doc, xlsx, xls, pptx, ppt），返回文件ID、名称和类型的列表。")
+    @ToolMeta(displayName = "列出项目文件", category = "document")
+    @Tool("**项目文件的权威清单，一次列全**：Word / Excel / PPT / PDF / 纯文本(txt,md,csv…) / 图片 / 其他，"
+            + "每条给出 fileId、名称与类型标注。它是文件 ID 的主要来源——doc_open_file、extract_file_text、"
+            + "pdf_inspect 的 fileId，以及 rename_project_file / move_project_file / create_folder 的 "
+            + "fileId 与 parentFolderId 都从这里取。\n"
+            + "用户问「项目里都有什么」时调这一个就够了，不必再去调 pdf_list_files / pptx_list_files "
+            + "（那两个只是本清单按类型过滤后的子集）。只列文件夹用 list_project_folders；"
+            + "只要物理磁盘路径不要 ID 才用 list_files。")
     public String doc_list_project_files(
             @P("项目ID") Long projectId
     ) {
         log.info("Tool: doc_list_project_files called for projectId={}", projectId);
         try {
             List<ProjectFile> files = projectFileRepository.findByProjectIdOrderBySortOrderAsc(projectId);
-            
-            // 过滤出可编辑的文档文件
-            List<ProjectFile> editableFiles = files.stream()
+
+            // 全类型清单（dev-board#807，审计 B-11）：此前只过 isEditableDocument（六种 Office 后缀），
+            // PDF / txt / md / 图片一个都不在，于是「看看我项目里有什么」这件事要连调三四个
+            // 专用清单才拼得齐，而 txt 这类文件<b>没有任何一个工具能给出它的 fileId</b>。
+            // 现在一次列全，并在每条后面标出该用哪组原语——类型标注比「自己看后缀猜」可靠。
+            List<ProjectFile> visible = files.stream()
                     .filter(f -> !Boolean.TRUE.equals(f.getIsFolder()))
-                    .filter(f -> isEditableDocument(f.getName()))
+                    .filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
                     .collect(Collectors.toList());
-            
-            if (editableFiles.isEmpty()) {
-                return "项目中没有可编辑的文档文件。";
+
+            if (visible.isEmpty()) {
+                return "项目中还没有任何文件。";
             }
-            
-            StringBuilder sb = new StringBuilder("项目文档列表 (共 " + editableFiles.size() + " 个):\n");
-            for (ProjectFile f : editableFiles) {
-                sb.append(String.format("- ID: %d, 名称: %s, 类型: %s\n", 
-                        f.getId(), f.getName(), f.getFileType()));
+
+            StringBuilder sb = new StringBuilder("项目文件列表 (共 " + visible.size() + " 个):\n");
+            boolean hasEditable = false;
+            boolean hasPdf = false;
+            for (ProjectFile f : visible) {
+                String bucket = fileBucket(f.getName());
+                hasEditable |= "可编辑文档".equals(bucket);
+                hasPdf |= "PDF".equals(bucket);
+                sb.append(String.format("- ID: %d, 名称: %s, 类型: %s [%s]%n",
+                        f.getId(), f.getName(), f.getFileType(), bucket));
             }
+            sb.append("\n说明：");
+            if (hasEditable) {
+                sb.append("[可编辑文档] 用 doc_open_file 打开后用 doc_*/sheet_*/slide_* 编辑；");
+            }
+            if (hasPdf) {
+                sb.append("[PDF] 用 pdf_inspect 读、pdf_* 系列改；");
+            }
+            sb.append("任何一条都能用 extract_file_text 按 fileId 抽全文（图片与扫描件自动 OCR）。");
             return sb.toString();
-            
+
         } catch (Exception e) {
             log.error("Failed to list project files", e);
             return "Error: " + e.getMessage();
         }
+    }
+
+    /**
+     * 清单里的类型标注。判据只看扩展名——{@code ProjectFile.fileType} 是客户端自填、原样落库、
+     * 无校验的（见 ai-chat.md 图片多模态那一节），拿它分桶会把「用户随手填了个 doc」
+     * 变成模型的行动依据。
+     */
+    private String fileBucket(String fileName) {
+        if (isEditableDocument(fileName)) return "可编辑文档";
+        if (fileName == null) return "其他";
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".pdf")) return "PDF";
+        if (isImageFile(lower)) return "图片";
+        if (lower.endsWith(".txt") || lower.endsWith(".md") || lower.endsWith(".markdown")
+                || lower.endsWith(".csv") || lower.endsWith(".json") || lower.endsWith(".xml")
+                || lower.endsWith(".log") || lower.endsWith(".rtf")) {
+            return "纯文本";
+        }
+        return "其他";
     }
 
     @ToolMeta(displayName = "打开文档", category = "document")
@@ -115,7 +153,16 @@ public class DocumentEditTools implements AgentToolComponent {
                             + "读取用 extract_file_text，修改用 text_write_file / text_find_replace"
                             + "（改动会自动同步到用户已打开的文本标签）。";
                 }
-                return "Error: 该文件不是可编辑的文档格式: " + file.getName();
+                // 清单现在一次列全类型（审计 B-11），所以模型更容易拿一个 PDF/图片的
+                // fileId 过来。给它指对路，别让它以为这份文件整个读不了。
+                String lower = file.getName() == null ? "" : file.getName().toLowerCase();
+                if (lower.endsWith(".pdf")) {
+                    return "Error: " + file.getName() + " 是 PDF，不在文档编辑器中打开。"
+                            + "读取用 pdf_inspect 或 extract_file_text，"
+                            + "改动用 pdf_highlight / pdf_annotate / pdf_replace_text 等 pdf_* 工具。";
+                }
+                return "Error: 该文件不是可编辑的文档格式: " + file.getName()
+                        + "。要读它的正文用 extract_file_text（图片与扫描件会自动 OCR）。";
             }
             
             // 通过 SSE 发送打开文件指令到前端
@@ -924,17 +971,19 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("【格式】设置光标所在表格的格式（先把光标点进表格，或传 tableIndex 指定第 N 张表，0 开始）。" +
           "applyStandard=true 一键套标准表格式（Grid 实线 1.5 磅边框、10 号字、首行加粗居中、单元格垂直居中、数字居右）。" +
           "也可单独设：borderWidthPt 边框磅数、fontSizePt 表格字号、firstRowBold 首行加粗、" +
-          "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、columnWidthsPercent 列宽百分比（逗号分隔，如 '20,50,30'，个数=列数）、" +
+          "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、" +
           "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。" +
           "边框细分：borderColor(#RRGGBB) / borderStyle(single/double/dashed) / outsideBorderWidthPt 外框 / insideBorderWidthPt 内框；" +
-          "headerFill 表头底纹(#RRGGBB 或 none)、repeatHeader 跨页重复表头、columnWidthsCm 列宽厘米（逗号分隔，个数=列数，按比例折算）。")
+          "headerFill 表头底纹(#RRGGBB 或 none)、repeatHeader 跨页重复表头。" +
+          "【做不到】本编辑器引擎不支持按列设宽，没有任何参数能改列宽；用户要调列宽时直接告诉他这一点，" +
+          "不要试图用其他工具绕（插入新表、整表重写都改不了列宽）。")
     public String doc_format_table(
             @P("一键套标准表格式 true/false") Boolean applyStandard,
             @P("边框线宽（磅，如 1.5），不改则不传") Double borderWidthPt,
             @P("表格字号（磅），不改则不传") Double fontSizePt,
             @P("首行加粗 true/false，不改则不传") Boolean firstRowBold,
             @P("单元格垂直对齐：top/center/bottom，不改则不传") String cellVerticalAlign,
-            @P("列宽百分比，逗号分隔如 '20,50,30'，不改则不传") String columnWidthsPercent,
+            @P("【已弃用，本引擎做不到，传了也不会生效】列宽百分比") String columnWidthsPercent,
             @P("行高（磅），不改则不传") Double rowHeightPt,
             @P("行高规则：min(最小值,默认)/exact(固定值)") String rowHeightRule,
             @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
@@ -944,7 +993,7 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("内框线宽（磅），不改则不传") Double insideBorderWidthPt,
             @P("表头底纹：#RRGGBB 或 none 清除，不改则不传") String headerFill,
             @P("跨页重复表头 true/false，不改则不传") Boolean repeatHeader,
-            @P("列宽厘米，逗号分隔如 '3,5,4'（个数=列数，按比例折算），不改则不传") String columnWidthsCm
+            @P("【已弃用，本引擎做不到，传了也不会生效】列宽厘米") String columnWidthsCm
     ) {
         log.info("Tool: doc_format_table called standard={}, border={}, tableIndex={}", applyStandard, borderWidthPt, tableIndex);
         try {
@@ -954,7 +1003,6 @@ public class DocumentEditTools implements AgentToolComponent {
             if (fontSizePt != null) params.put("fontSizePt", fontSizePt);
             if (firstRowBold != null) params.put("firstRowBold", firstRowBold);
             if (cellVerticalAlign != null && !cellVerticalAlign.isEmpty()) params.put("cellVerticalAlign", cellVerticalAlign);
-            if (columnWidthsPercent != null && !columnWidthsPercent.isEmpty()) params.put("columnWidthsPercent", columnWidthsPercent);
             if (rowHeightPt != null) params.put("rowHeightPt", rowHeightPt);
             if (rowHeightRule != null && !rowHeightRule.isEmpty()) params.put("rowHeightRule", rowHeightRule);
             if (tableIndex != null) params.put("tableIndex", tableIndex);
@@ -964,12 +1012,66 @@ public class DocumentEditTools implements AgentToolComponent {
             if (insideBorderWidthPt != null) params.put("insideBorderWidthPt", insideBorderWidthPt);
             if (headerFill != null && !headerFill.isEmpty()) params.put("headerFill", headerFill);
             if (repeatHeader != null) params.put("repeatHeader", repeatHeader);
-            if (columnWidthsCm != null && !columnWidthsCm.isEmpty()) params.put("columnWidthsCm", columnWidthsCm);
-            return editorBridgeService.executeEditorCommand("format_table", params);
+
+            // 列宽在后端就地拒绝，一个字节都不下发（dev-board#807，审计 B-07）。
+            // 本引擎的 WASM 桥没注册 TableColumnSeparator，worker 侧读回再设回同样抛
+            // unregistered UNO type（doc-editor.md e2e 组 29 实锤），是条死路。
+            // 更要命的是 worker 的执行顺序：边框/字号/首行加粗/垂直对齐**先落到文档上**，
+            // 列宽最后才抛错，而那条错误分支 return {success:false} 里**没有 applied**——
+            // 模型被告知整条命令失败，转头重试或换手段，于是同一张表被格式化两三遍。
+            boolean askedColumnWidths = (columnWidthsPercent != null && !columnWidthsPercent.isEmpty())
+                    || (columnWidthsCm != null && !columnWidthsCm.isEmpty());
+            if (params.isEmpty()) {
+                return askedColumnWidths
+                        ? "Error: " + COLUMN_WIDTH_UNSUPPORTED
+                        : "Error: 没有给出任何格式参数。至少传一项（applyStandard / borderWidthPt / fontSizePt / "
+                                + "firstRowBold / cellVerticalAlign / rowHeightPt / headerFill / repeatHeader）。";
+            }
+            String raw = editorBridgeService.executeEditorCommand("format_table", params);
+            return annotateFormatTableResult(raw, params.keySet(), askedColumnWidths);
         } catch (Exception e) {
             log.error("Failed to format table", e);
             return "Error: " + e.getMessage();
         }
+    }
+
+    /** 按列设宽在本引擎上的统一说法。改文案时连 @Tool 描述里那句「做不到」一起改。 */
+    static final String COLUMN_WIDTH_UNSUPPORTED =
+            "本编辑器引擎不支持按列设宽（TableColumnSeparator 未在 WASM 桥注册），"
+                    + "columnWidthsPercent / columnWidthsCm 已被忽略，没有下发给编辑器。"
+                    + "不要换别的工具再试一次——没有任何工具能改列宽；"
+                    + "请如实告诉用户这一项做不到，需要他用 Word 打开后手工调整。";
+
+    /**
+     * 给 format_table 的原始返回补上「哪些已经生效」这一层（审计 B-07）。
+     *
+     * <p>worker 失败时只回一句 message，不回 applied——已经落到文档上的边框/字号就此
+     * 对模型不可见。后端拿不回那份清单（worker 没给），能做的是<b>把本次请求了哪些项说清楚</b>，
+     * 并明确禁止整条重发：整条重发会把已生效的那几项再做一遍（重复格式化），
+     * 而这正是这条审计条目里真实发生过的事。
+     */
+    private String annotateFormatTableResult(String raw, java.util.Set<String> requested,
+                                             boolean askedColumnWidths) {
+        if (raw == null || raw.isBlank()) {
+            return raw;
+        }
+        StringBuilder sb = new StringBuilder(raw);
+        if (askedColumnWidths) {
+            sb.append("\n注意：").append(COLUMN_WIDTH_UNSUPPORTED);
+        }
+        String compact = raw.replace(" ", "").replace("\t", "");
+        boolean failed = compact.contains("\"success\":false")
+                || compact.startsWith("{\"error\"")
+                || raw.stripLeading().startsWith("Error")
+                || raw.stripLeading().startsWith("错误");
+        if (failed && requested.size() > 1) {
+            sb.append("\n本次请求的格式项：").append(String.join("、", requested))
+                    .append("。编辑器按 边框 → 表头底纹 → 重复表头 → 字号/垂直对齐/首行加粗 → 行高 的顺序执行，"
+                            + "报错之前的几项**很可能已经落到文档上了，且不会回滚**。"
+                            + "请先用 doc_get_formatting 读回核对，只重发确实没生效的那几项；"
+                            + "不要整条命令重发——那会把已生效的项再做一遍。");
+        }
+        return sb.toString();
     }
 
     @ToolMeta(displayName = "插入表格", category = "document", fileEffect = "MODIFIED")
@@ -1056,67 +1158,76 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "插入表格行", category = "document", fileEffect = "MODIFIED")
-    @Tool("【改/表格】给表格插入空白行。position 是行号（1 开始），新行插在该行之前；" +
-          "不传 position 则追加到表尾。count 一次插几行（默认 1）。插完用 doc_table_set_cell 逐格填内容。" +
-          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
+    @Tool("【改/表格】给表格插入空白行。insertBeforeRow1Based 是**行号（1 开始）**，新行插在该行之前；" +
+          "不传则追加到表尾。count 一次插几行（默认 1）。插完用 doc_table_set_cell 逐格填内容。" +
+          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。" +
+          "注意行号基准：doc_* 这一族表格工具的行/列号都是 **1 开始**（Office 任务窗格里的 office_table_* 是 0 开始，别混用）。")
     public String doc_table_add_row(
-            @P("插入位置行号（1 开始，新行插在该行之前），不传则追加到表尾") Integer position,
+            @P("【已弃用，等价于 insertBeforeRow1Based】插入位置行号（1 开始）") Integer position,
             @P("插入几行，默认 1") Integer count,
             @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
-            @P("表名，一般不用传") String tableName
+            @P("表名，一般不用传") String tableName,
+            @P("新行插在第几行之前，**行号 1 开始**；不传则追加到表尾") Integer insertBeforeRow1Based
     ) {
-        log.info("Tool: doc_table_add_row called position={}, count={}, tableIndex={}", position, count, tableIndex);
-        return dispatchTableStructureCommand("table_add_row", position, count, tableIndex, tableName);
+        Integer row = insertBeforeRow1Based != null ? insertBeforeRow1Based : position;
+        log.info("Tool: doc_table_add_row called row={}, count={}, tableIndex={}", row, count, tableIndex);
+        return dispatchTableStructureCommand("table_add_row", row, count, tableIndex, tableName);
     }
 
     @ToolMeta(displayName = "删除表格行", category = "document", fileEffect = "MODIFIED")
-    @Tool("【改/表格】删除表格的整行。position 是要删的行号（1 开始，必填），count 连删几行（默认 1）。" +
+    @Tool("【改/表格】删除表格的整行。rowNumber1Based 是要删的行号（**1 开始**，必填），count 连删几行（默认 1）。" +
           "注意：删行是**直接删除、不留修订痕迹**（不像改文字那样能在修订里看到），删错只能靠撤销，" +
           "所以删之前务必先用 doc_table_read 看清要删的是哪一行。表格至少要留一行，删不掉全部行。" +
           "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
     public String doc_table_delete_row(
-            @P("要删的行号（1 开始）") Integer position,
+            @P("【已弃用，等价于 rowNumber1Based】要删的行号（1 开始）") Integer position,
             @P("连删几行，默认 1") Integer count,
             @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
-            @P("表名，一般不用传") String tableName
+            @P("表名，一般不用传") String tableName,
+            @P("要删的行号，**1 开始**（第一行 = 1）") Integer rowNumber1Based
     ) {
-        log.info("Tool: doc_table_delete_row called position={}, count={}, tableIndex={}", position, count, tableIndex);
-        if (position == null) {
-            return "Error: 缺少 position 参数（要删的行号，1 开始）";
+        Integer row = rowNumber1Based != null ? rowNumber1Based : position;
+        log.info("Tool: doc_table_delete_row called row={}, count={}, tableIndex={}", row, count, tableIndex);
+        if (row == null) {
+            return "Error: 缺少 rowNumber1Based 参数（要删的行号，1 开始）";
         }
-        return dispatchTableStructureCommand("table_delete_row", position, count, tableIndex, tableName);
+        return dispatchTableStructureCommand("table_delete_row", row, count, tableIndex, tableName);
     }
 
     @ToolMeta(displayName = "插入表格列", category = "document", fileEffect = "MODIFIED")
-    @Tool("【改/表格】给表格插入空白列。position 是列字母（如 B）或列号（1 开始），新列插在该列之前；" +
-          "不传 position 则追加到最右。count 一次插几列（默认 1）。" +
+    @Tool("【改/表格】给表格插入空白列。insertBeforeColumn 是列字母（如 B）或列号（**1 开始**），新列插在该列之前；" +
+          "不传则追加到最右。count 一次插几列（默认 1）。" +
           "合并过单元格的表格按列插入可能被引擎拒绝，失败会明确报出来。" +
           "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
     public String doc_table_add_col(
-            @P("插入位置列字母（如 B）或列号（1 开始），新列插在该列之前；不传则追加到最右") String position,
+            @P("【已弃用，等价于 insertBeforeColumn】列字母（如 B）或列号（1 开始）") String position,
             @P("插入几列，默认 1") Integer count,
             @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
-            @P("表名，一般不用传") String tableName
+            @P("表名，一般不用传") String tableName,
+            @P("新列插在哪一列之前：列字母（如 B）或列号（**1 开始**）；不传则追加到最右") String insertBeforeColumn
     ) {
-        log.info("Tool: doc_table_add_col called position={}, count={}, tableIndex={}", position, count, tableIndex);
-        return dispatchTableStructureCommand("table_add_col", position, count, tableIndex, tableName);
+        String col = (insertBeforeColumn != null && !insertBeforeColumn.isBlank()) ? insertBeforeColumn : position;
+        log.info("Tool: doc_table_add_col called col={}, count={}, tableIndex={}", col, count, tableIndex);
+        return dispatchTableStructureCommand("table_add_col", col, count, tableIndex, tableName);
     }
 
     @ToolMeta(displayName = "删除表格列", category = "document", fileEffect = "MODIFIED")
-    @Tool("【改/表格】删除表格的整列。position 是列字母（如 B）或列号（1 开始，必填），count 连删几列（默认 1）。" +
+    @Tool("【改/表格】删除表格的整列。columnRef 是列字母（如 B）或列号（**1 开始**，必填），count 连删几列（默认 1）。" +
           "与删行一样是**直接删除、不留修订痕迹**，删前先用 doc_table_read 看清。表格至少要留一列。" +
           "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
     public String doc_table_delete_col(
-            @P("要删的列字母（如 B）或列号（1 开始）") String position,
+            @P("【已弃用，等价于 columnRef】要删的列字母（如 B）或列号（1 开始）") String position,
             @P("连删几列，默认 1") Integer count,
             @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
-            @P("表名，一般不用传") String tableName
+            @P("表名，一般不用传") String tableName,
+            @P("要删的列：列字母（如 B）或列号（**1 开始**）") String columnRef
     ) {
-        log.info("Tool: doc_table_delete_col called position={}, count={}, tableIndex={}", position, count, tableIndex);
-        if (position == null || position.isBlank()) {
-            return "Error: 缺少 position 参数（要删的列字母如 B，或 1 开始的列号）";
+        String col = (columnRef != null && !columnRef.isBlank()) ? columnRef : position;
+        log.info("Tool: doc_table_delete_col called col={}, count={}, tableIndex={}", col, count, tableIndex);
+        if (col == null || col.isBlank()) {
+            return "Error: 缺少 columnRef 参数（要删的列字母如 B，或 1 开始的列号）";
         }
-        return dispatchTableStructureCommand("table_delete_col", position, count, tableIndex, tableName);
+        return dispatchTableStructureCommand("table_delete_col", col, count, tableIndex, tableName);
     }
 
     /**
@@ -1217,7 +1328,7 @@ public class DocumentEditTools implements AgentToolComponent {
     public String doc_insert_toc(
             @P("收入目录的标题级数 1-10，默认 3") Integer levels,
             @P("目录标题文本，默认 '目录'") String title,
-            @P("插入位置：cursor=光标处（默认）/ start=文首") String position
+            @P("插入位置（不是序号、不是页码）：cursor=光标处（默认）/ start=文首") String position
     ) {
         log.info("Tool: doc_insert_toc called levels={}, title={}", levels, title);
         try {
@@ -2174,12 +2285,13 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "管理工作表", category = "document", fileEffect = "MODIFIED")
     @Tool("【表格·结构】管理工作表：op=add 新建（name+可选 position）、rename 重命名（name+newName）、" +
-          "delete 删除（name，不能删最后一张）、move 移动（name+position，0 开始）。返回操作后的工作表清单。")
+          "delete 删除（name，不能删最后一张）、move 移动（name+position）。返回操作后的工作表清单。" +
+          "position 在这里是**工作表在标签栏里的序号，0 开始**（第一张表 = 0），不是行号也不是页码。")
     public String sheet_manage_sheets(
             @P("操作：add/rename/delete/move") String op,
             @P("工作表名（add 时为新表名）") String name,
             @P("新名称，仅 rename 需要") String newName,
-            @P("目标位置（0 开始），add/move 用；add 不传则加在最后") Integer position
+            @P("工作表序号，**0 开始**（第一张表 = 0），add/move 用；add 不传则加在最后") Integer position
     ) {
         log.info("Tool: sheet_manage_sheets called op={}, name={}", op, name);
         try {

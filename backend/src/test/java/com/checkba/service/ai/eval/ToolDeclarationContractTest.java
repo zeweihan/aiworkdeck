@@ -114,10 +114,32 @@ class ToolDeclarationContractTest {
             "PptxTools.java", 3,               // pptx_open_file / pptx_generate / pptx_apply_format
             "TextFileEditTools.java", 1));     // writeBack（text_write_file 与 text_find_replace 共用）
 
-    /** 只登记、不下发规格的工具（审计 A15）。 */
+    /**
+     * 只登记、不下发规格的工具（审计 A15 / A13 / B-09）。
+     *
+     * <p>三类，理由各不相同：
+     * <ul>
+     *   <li><b>永久停用 / 调试类</b>（delete_file、doc_debug_revisions）：不该出现在律师面前；</li>
+     *   <li><b>已合并的旧入口</b>（search_knowledge_base、deep_search，dev-board#807）：
+     *       三个雷同的记忆检索工具合成了 {@code query_memory(depth=quick|hybrid|deep)}，
+     *       旧名保留为兼容入口，规格不再下发，模型不会再在三个同义工具之间摇摆；</li>
+     *   <li><b>非权威编辑面</b>（pptx_open_file、pptx_apply_format、pptx_edit_page，dev-board#808）：
+     *       PPTX 的权威编辑面是 slide_*（编辑器内存、页码 1 起）。这三个走 pptx-service 直接改磁盘、
+     *       索引 0 起，与 slide_* 大面积重合；两套同时可见时模型混用必然错页，而 pptx_apply_format
+     *       改完还会强制 reload，把编辑器里尚未保存的修改静默丢掉。</li>
+     * </ul>
+     *
+     * <p>三类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
+     * 拿到的是工具自己那句可行动的说明，好过一句 "Tool not found"。
+     */
     private static final Set<String> EXPECTED_NOT_OFFERED = new TreeSet<>(Set.of(
             "delete_file",
-            "doc_debug_revisions"));
+            "doc_debug_revisions",
+            "search_knowledge_base",
+            "deep_search",
+            "pptx_open_file",
+            "pptx_apply_format",
+            "pptx_edit_page"));
 
     private static RecordingToolRegistry registry() {
         RecordingToolRegistry registry =
@@ -214,6 +236,15 @@ class ToolDeclarationContractTest {
         List<String> lowaNames = registry.getAllSpecifications("conv-lowa", null).stream()
                 .map(ToolSpecification::name).toList();
         for (String tool : EXPECTED_LOWA_ONLY) {
+            if (EXPECTED_NOT_OFFERED.contains(tool)) {
+                // 两道闸是叠加的：requiresHost 管「换一类客户端还剩什么」，offerToModel 管
+                // 「这个工具压根还该不该出现在模型面前」。pptx_open_file / pptx_apply_format
+                // 两样都占（dev-board#808），在 LOWA 会话里也照样不下发——这不是漏网，
+                // 逐名清单在 EXPECTED_NOT_OFFERED 那条测试里钉着。
+                assertFalse(lowaNames.contains(tool),
+                        tool + " 声明了 offerToModel = false，LOWA 会话里也不该下发");
+                continue;
+            }
             assertTrue(lowaNames.contains(tool), tool + " 必须仍然下发给 LOWA 会话");
         }
     }

@@ -59,31 +59,6 @@
     }
   },
   {
-    "id": "search-laws-alias-resolution-xml",
-    "title": "search_laws 旧别名应解析为 search_web（协议兼容回归）",
-    "category": "legal-research",
-    "protocol": "xml",
-    "userInput": "查一下2024年公司法修订后注册资本认缴期限的最新报道",
-    "turns": [
-      {
-        "text": "<process name=\"联网检索\"><tool_code>search_laws(query=\"2024 公司法修订 注册资本 认缴期限 五年\")</tool_code></process>"
-      },
-      {
-        "text": "<final>根据检索结果：新公司法规定有限责任公司股东认缴出资应当自公司成立之日起五年内缴足……</final>"
-      }
-    ],
-    "toolStubs": {
-      "search_web": "[{\"title\":\"新公司法注册资本认缴期限解读\",\"snippet\":\"五年实缴过渡安排……\"}]"
-    },
-    "expect": {
-      "toolCalls": [
-        { "name": "search_web", "argsContain": { "query": "注册资本" } }
-      ],
-      "structureContains": ["<process", "<final>"],
-      "bubbleEndStatus": "finished"
-    }
-  },
-  {
     "id": "law-keyword-then-article-chain-xml",
     "title": "关键词检索后追查具体法条（两轮工具链）",
     "category": "legal-research",

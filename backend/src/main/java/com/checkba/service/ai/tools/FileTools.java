@@ -159,9 +159,14 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "读取文件", category = "file")
-    @Tool("Read the content of a file. Provide path (absolute or relative to project root). "
+    @Tool("Read a file's text BY PATH (absolute, or relative to the project root). "
+            + "Use this only when you have a path and no database id — e.g. an entry list_files reported as "
+            + "'unregistered', or a file you just wrote with write_file. "
+            + "**When you have a fileId (from doc_list_project_files), use extract_file_text instead**: "
+            + "same extraction and same truncation, but it also accepts a FOLDER id and lists its children. "
             + "Images (jpg/png/bmp/webp...) and scanned PDFs are recognised automatically by the cloud OCR "
-            + "service — no local OCR setup, no Docker and no script is needed to read them.")
+            + "service — no local OCR setup, no Docker and no script is needed to read them. "
+            + "Max 10MB; very long text is truncated.")
     public String read_file(String filePath) {
         log.info("Tool: read_file called for {}", filePath);
         try {
@@ -204,10 +209,13 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "列出文件", category = "file")
-    @Tool("PHYSICAL DISK view of the project folder: returns paths only, NO database fileId, so nothing here can be "
-            + "fed to open/edit/rename/move tools. Use doc_list_project_files (documents), pdf_list_files (PDF) or "
-            + "pptx_list_files (PPTX) whenever a later step needs a fileId. "
-            + "Lists files and directories under data/projects/{projectId}/.")
+    @Tool("PHYSICAL DISK view of one directory under data/projects/{projectId}/: entries in on-disk layout, "
+            + "one level at a time (pass subPath to descend). Registered entries DO carry their database id "
+            + "— each line ends with (fileId=N) or (folderId=N), usable with doc_open_file, extract_file_text, "
+            + "move_project_file, rename_project_file and create_folder; entries not yet in the database are "
+            + "marked 'unregistered: run scan_files before moving/renaming'. "
+            + "Prefer doc_list_project_files for a whole-project inventory (it lists every file of every type "
+            + "with its id in one call); use this one when the on-disk folder structure itself is what matters.")
     public String list_files(
             @P("Project ID - files will be listed from data/projects/{projectId}/") Long projectId,
             @P("Optional: Subdirectory path within the project folder. Use '.' or empty for project root.") String subPath
@@ -271,7 +279,7 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "提取文档全文", category = "file")
-    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc, images etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Images (jpg/png/bmp/webp...) and scanned PDFs with no text layer are recognised automatically by the cloud OCR service — no local OCR setup, no Docker and no script is needed to read them. Returns extracted text (may be truncated for very large files). If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error, so you can then read each file in turn.")
+    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc, images etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Images (jpg/png/bmp/webp...) and scanned PDFs with no text layer are recognised automatically by the cloud OCR service — no local OCR setup, no Docker and no script is needed to read them. Returns extracted text (may be truncated for very large files). If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error, so you can then read each file in turn. This is the fileId entry point; read_file is the same extraction addressed BY PATH, for files that have no database id yet.")
     public String extract_file_text(
             @P("Project file database ID (from doc_list_project_files / material list). May also be a folder ID — you get its contents listed.") Long fileId
     ) {

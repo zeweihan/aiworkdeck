@@ -57,8 +57,9 @@ public class PdfTools implements AgentToolComponent {
     // ==================== 读取 ====================
 
     @ToolMeta(displayName = "列出PDF文件", category = "pdf")
-    @Tool("PDF 专用清单，也是 PDF 文件 ID 的唯一来源：doc_list_project_files 不列 PDF、search_project_files 不返回 ID，"
-            + "所有 pdf_* 工具的 fileId 只能从这里获取。列出项目中的所有 PDF 文件，返回文件 ID、名称和位置。")
+    @Tool("PDF 专用清单：等价于 doc_list_project_files 只保留 .pdf 的那一份结果，返回文件 ID、名称和位置。"
+            + "**要看项目里有哪些文件（含 Word / Excel / PPT / 文本 / 图片）请直接用 doc_list_project_files，一次列全**，"
+            + "它给出的 fileId 同样可以直接喂给 pdf_* 工具；只有在结果太多、确实只想看 PDF 时才用本工具。")
     public String pdf_list_files(
             @P("项目 ID") Long projectId
     ) {
