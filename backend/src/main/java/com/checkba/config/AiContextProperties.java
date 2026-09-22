@@ -338,6 +338,25 @@ public class AiContextProperties {
          */
         private int maxCharsActiveDocument = 200000;
 
+        /**
+         * 本轮<b>全部附件正文</b>合计的字符上限（dev-board#812 K32 ⑦，审查 C-09 ②）。
+         *
+         * <p>在这条之前只有两个<b>互相独立</b>的闸：单文件 {@link #maxCharsPerFile}（50000）
+         * 与文件数 {@link #maxFilesPerContext}（10）。它们乘起来没有总闸——十份长合同就是
+         * 50 万字符全部进 system，按 charsPerToken=2 算是 25 万 token。后果不是「贵一点」：
+         * <ol>
+         *   <li>system 段落在 {@code RunLoopCompactor} 的保护区里，<b>压缩碰不到它</b>；</li>
+         *   <li>一旦 system 自己超过模型窗口，{@code forceCompact} 必然返回原实例、
+         *       编排器判「压不动」直接终态——<b>这个会话此后每发一条消息都必死</b>。</li>
+         * </ol>
+         * 默认 120000 字符（约 6 万 token）：留给历史、工具结果与回复的余量是充足的，
+         * 而 6 万字的材料已经远超一轮对话能被真正读懂的量。
+         *
+         * <p>超限不是静默丢弃：按 contextItems 的顺序发放额度，用完的那一份只注入说明、
+         * 并经 {@code ContextTurnSink} 发 {@code context_notice} 让用户当场看见。
+         */
+        private int maxTotalAttachmentChars = 120000;
+
         /** 文件夹扫描时单文件的最大字符数（超出截断） */
         private int folderFileMaxChars = 20000;
 
@@ -358,6 +377,8 @@ public class AiContextProperties {
         public void setMaxCharsPerFile(int maxCharsPerFile) { this.maxCharsPerFile = maxCharsPerFile; }
         public int getMaxCharsActiveDocument() { return maxCharsActiveDocument; }
         public void setMaxCharsActiveDocument(int maxCharsActiveDocument) { this.maxCharsActiveDocument = maxCharsActiveDocument; }
+        public int getMaxTotalAttachmentChars() { return maxTotalAttachmentChars; }
+        public void setMaxTotalAttachmentChars(int maxTotalAttachmentChars) { this.maxTotalAttachmentChars = maxTotalAttachmentChars; }
         public int getFolderFileMaxChars() { return folderFileMaxChars; }
         public void setFolderFileMaxChars(int folderFileMaxChars) { this.folderFileMaxChars = folderFileMaxChars; }
         public int getChatContextMaxChars() { return chatContextMaxChars; }

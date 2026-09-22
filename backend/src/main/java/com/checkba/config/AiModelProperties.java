@@ -92,6 +92,12 @@ public class AiModelProperties {
          * Timeout.
          */
         private Duration timeout = Duration.ofSeconds(120);
+        /**
+         * OkHttp 每个 host 的并发请求上限（dev-board#812 K32 ⑤，审查 C-08）。
+         * 不设就是 OkHttp 默认的 5——全部流量打同一个 host，等于全进程最多 5 轮对话在途。
+         * 语义与取值理由见 {@code OpenRouterStreamingChatModel.DEFAULT_MAX_REQUESTS_PER_HOST}。
+         */
+        private int maxRequestsPerHost = 32;
 
         public String getApiKey() { return apiKey; }
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
@@ -101,6 +107,8 @@ public class AiModelProperties {
         public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
         public Duration getTimeout() { return timeout; }
         public void setTimeout(Duration timeout) { this.timeout = timeout; }
+        public int getMaxRequestsPerHost() { return maxRequestsPerHost; }
+        public void setMaxRequestsPerHost(int maxRequestsPerHost) { this.maxRequestsPerHost = maxRequestsPerHost; }
     }
 
     public static class Ollama {

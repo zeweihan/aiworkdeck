@@ -1366,4 +1366,104 @@ class ContextAssemblerServiceTest {
                 "英文会话不该同时拼进中文片段");
         assertFalse(systemText.contains("doc_"), "英文纯对话会话同样不该出现 doc_");
     }
+
+    // ==================== K32 ①：准备链并行化 ====================
+
+    @Test
+    @DisplayName("并行装配与串行装配逐字节相同（只是等待重叠，拼接顺序一字不变）")
+    void parallelAssemblyProducesByteIdenticalOutput() {
+        // 让每一段记忆/历史都真的产出内容，否则「顺序对不对」根本测不出来
+        MemoryManager memory = mock(MemoryManager.class);
+        com.checkba.model.entity.ProjectMemory pm = new com.checkba.model.entity.ProjectMemory();
+        pm.setProjectName("华东并购项目");
+        pm.setProjectType("股权收购");
+        when(memory.getProjectMemory(anyLong())).thenReturn(Optional.of(pm));
+        com.checkba.model.entity.MemoryEntry hit = new com.checkba.model.entity.MemoryEntry();
+        hit.setMemoryKey("交割先决条件");
+        hit.setMemoryValue("反垄断审批通过");
+        when(memory.retrieveMemories(anyLong(), anyString(), any(), anyInt())).thenReturn(List.of(hit));
+        when(memory.formatAsEvidenceLedger(any())).thenReturn("- 交割先决条件：反垄断审批通过\n");
+        com.checkba.model.entity.MemoryEntry pref = new com.checkba.model.entity.MemoryEntry();
+        pref.setMemoryKey("行文习惯");
+        pref.setMemoryValue("条款编号用「第X条」");
+        when(memory.retrieveUserMemories(anyLong(), anyInt())).thenReturn(List.of(pref));
+
+        ProjectAiMessageService messages = mock(ProjectAiMessageService.class);
+        when(messages.listByConversationId(anyString())).thenReturn(List.of(
+                historyRow("USER", "上一轮我问了什么"),
+                historyRow("ASSISTANT", "上一轮我答了什么")));
+
+        MemoryDocumentService docs = mock(MemoryDocumentService.class);
+        when(docs.contextIndexes(anyLong(), any(), anyInt()))
+                .thenReturn("## 个人记忆 [user]\n- [尽调要点](dd.md)\n");
+
+        String serial = assembleWith(memory, messages, docs, null);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            String parallel = assembleWith(memory, messages, docs, pool);
+            assertEquals(serial, parallel,
+                    "并行只改变等待方式，不改变任何一个字——拼接顺序与文本必须完全一致");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("并行段里的异常原样抛出，不被 CompletionException 包住")
+    void fanOutPreservesTheOriginalException() {
+        MemoryManager memory = mock(MemoryManager.class);
+        when(memory.getProjectMemory(anyLong()))
+                .thenThrow(new IllegalStateException("记忆库暂时不可用"));
+        ProjectAiMessageService messages = mock(ProjectAiMessageService.class);
+        when(messages.listByConversationId(anyString())).thenReturn(Collections.emptyList());
+
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            IllegalStateException thrown = org.junit.jupiter.api.Assertions.assertThrows(
+                    IllegalStateException.class,
+                    () -> assembleWith(memory, messages, null, pool));
+            assertEquals("记忆库暂时不可用", thrown.getMessage(),
+                    "上层按异常类型分支的代码不能因为并行化而全部落空");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("基底 prompt 只读一次盘：同一语言连续组装拿到的是同一个实例")
+    void theBasePromptIsReadFromTheClasspathOnlyOnce() {
+        String first = assembleSystemText(null);
+        String second = assembleSystemText(null);
+        // 两次的稳定段前缀必须一致（缓存生效的可观察后果）；内容非空说明确实读到了真文件
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        assertEquals(first.substring(0, first.indexOf(sep)), second.substring(0, second.indexOf(sep)));
+        assertTrue(first.length() > 1000, "读到的应当是真正的 prompt 文件而不是兜底文案");
+    }
+
+    private static com.checkba.model.entity.ProjectAiMessage historyRow(String role, String content) {
+        com.checkba.model.entity.ProjectAiMessage row = new com.checkba.model.entity.ProjectAiMessage();
+        row.setRole(role);
+        row.setContent(content);
+        return row;
+    }
+
+    /** 用指定的记忆/历史/记忆文档桩与（可选的）扇出池装一次，返回 system 正文。 */
+    private String assembleWith(MemoryManager memory, ProjectAiMessageService messages,
+                                MemoryDocumentService docs, java.util.concurrent.Executor pool) {
+        FileContextLoader fileContextLoader = mock(FileContextLoader.class);
+        SkillRouter skillRouter = mock(SkillRouter.class);
+        when(skillRouter.match(anyString())).thenReturn(Optional.empty());
+        ContextCompressor compressor = mock(ContextCompressor.class);
+        when(compressor.needsCompression(any(), any())).thenReturn(false);
+        ContextAssemblerService svc = new ContextAssemblerService(
+                legalTools, messages, fileContextLoader,
+                new AiContextProperties(), skillRouter, new ClientCapabilityService(), new InlineContentCache(),
+                memory, compressor, appLanguageService, chatModelFactory, projectFileService);
+        if (docs != null) svc.setMemoryDocumentServiceForTest(docs);
+        svc.setContextExecutorForTest(pool);
+        List<ChatMessage> out = svc.assemble(
+                "conv-1", "run-1", "帮我修订一下", null, null,
+                null, null, "88", AgentMode.AGENT, 1L, null);
+        return ((dev.langchain4j.data.message.SystemMessage) out.get(0)).text();
+    }
 }

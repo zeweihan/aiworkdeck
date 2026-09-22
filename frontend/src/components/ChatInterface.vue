@@ -1302,6 +1302,13 @@ export default {
         case 'image_limit': return t('chat.contextNoticeImageLimit', { name, max: n.detail || '' })
         case 'image_too_large': return t('chat.contextNoticeImageTooLarge', { name })
         case 'unreadable': return t('chat.contextNoticeUnreadable', { name })
+        // 本轮材料正文的合计额度用完了（dev-board#812 K32 ⑦）。刻意不并进 'dropped'：
+        // 那句话说的是「一轮最多带 N 份材料」、detail 是份数，而这里的 detail 是字数，
+        // 套进去会渲染成「一轮最多带 120000 份材料」。
+        case 'budget_exhausted': return t('chat.contextNoticeBudgetExhausted', { name, max: n.detail || '' })
+        // 整轮的处境而不是某一份材料：上下文超出模型窗口且压不动了（K32 ⑥）。
+        // 它不带 name，所以文案里不出现文件名。
+        case 'overflow': return t('chat.contextNoticeOverflow')
         default: return t('chat.contextNoticeGeneric', { name })
       }
     }

@@ -521,6 +521,9 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                       "{\"operation\":\"create\", \"id\":\"%s\", \"type\":\"%s\", \"status\":\"draft\", \"data\":{\"content\":\"%s\"}}",
                       artifactId, type, jsonContent
                   );
+                  // 合并窗口里可能还攒着这一段之前的正文，必须先发出去再发 artifact，
+                  // 否则前端会看到「产物先到、它前面那句话后到」
+                  flushPendingText();
                   sendSse("artifact", artifactEvent);
                   
                   // Flush text before artifact
@@ -600,8 +603,103 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         return buffer.substring(0, len).equals(prefix.substring(0, len));
     }
 
+    // ==================== text_delta 合流（dev-board#812 K32 ⑨，审查 C-14） ====================
+    // 通道层对每个模型 token 回调一次 onNext，于是一条 3000 token 的回答 =
+    // 3000 次 JSON 转义 + 3000 次重放缓冲入队/裁剪 + 3000 个 HTTP chunk，
+    // 前端再对应 3000 次事件分派与 3000 次响应式写入。单条成本很低，但这是整条链路上
+    // 被放大倍数最高的一段，也是前端那几条性能问题的乘数。
+    //
+    // **选后端合并而不是前端合并**：前端合并只省 Vue 那一半，后端这三笔照付，
+    // 而且 SSE 重放缓冲的条数（按条裁剪）一点都降不下来——断线重连要补发的量还是那么大。
+    // 后端合并两头都省，前端一个字都不用改（事件语义没变，仍然是「把 content 追加上去」）。
+    //
+    // **第一条不进窗口**：首字节的感知速度绝不能因为省钱而变慢，所以本轮第一段文本立即发。
+    // 之后按「16ms 窗口或累计 200 字符，谁先到」合并。
+
+    /** 合流窗口。16ms ≈ 一帧：比它更细的推送前端也渲染不出来。 */
+    private static final long COALESCE_WINDOW_MS = 16;
+    /** 窗口没到但已经攒够这么多字符就先发，免得大 chunk 被硬压成 16ms 一拍。 */
+    private static final int COALESCE_MAX_CHARS = 200;
+
+    /**
+     * 兜底 flush 的调度器。
+     *
+     * <p><b>刻意不复用 {@link #WATCHDOG}</b>：那条单线程跑的是「判流有没有死」的轻量检查，
+     * 而 flush 里要做 {@code emitter.send}——写 servlet 输出流，慢客户端上会阻塞。
+     * 混在一起的话一个卡住的浏览器就能把全进程的流看门狗拖停，
+     * 那正是看门狗本身要防的故障。
+     *
+     * <p>绝大多数 flush 其实不走这里：合并主要由生产者线程（OkHttp 回调）上的
+     * 字符数/时间判断触发，也就是今天每个 token 发送所在的同一条线程。
+     * 这个调度器只负责「停了、但缓冲里还剩一小截」那一种尾巴。
+     */
+    private static final java.util.concurrent.ScheduledExecutorService COALESCE_FLUSHER =
+            java.util.concurrent.Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r, "sse-text-coalesce");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private final StringBuilder pendingText = new StringBuilder();
+    /** 本轮是否已经发过第一条 text_delta（第一条不进窗口）。 */
+    private boolean firstTextEmitted = false;
+    /** 当前这批 pending 文本里第一个字符入队的时刻。 */
+    private long pendingSinceNanos = 0L;
+    private java.util.concurrent.ScheduledFuture<?> coalesceFuture;
+
     private void emitText(String text) {
         if (text == null || text.isEmpty()) return;
+        synchronized (pendingText) {
+            if (!firstTextEmitted) {
+                // 首字节的感知速度不许因为省钱而变慢
+                firstTextEmitted = true;
+                sendTextDeltaNow(text);
+                return;
+            }
+            if (pendingText.length() == 0) {
+                pendingSinceNanos = System.nanoTime();
+            }
+            pendingText.append(text);
+            boolean windowElapsed =
+                    System.nanoTime() - pendingSinceNanos >= COALESCE_WINDOW_MS * 1_000_000L;
+            if (pendingText.length() >= COALESCE_MAX_CHARS || windowElapsed) {
+                // 生产者线程上就地发——与改造前每个 token 的发送落在同一条线程上
+                flushPendingTextLocked();
+                return;
+            }
+            if (coalesceFuture == null) {
+                coalesceFuture = COALESCE_FLUSHER.schedule(this::flushPendingText,
+                        COALESCE_WINDOW_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    /**
+     * 把攒着的文本发出去。
+     *
+     * <p><b>每一个会改变事件顺序的地方都必须先调它</b>：artifact、token_usage、bubble_end、
+     * error 与编排器的终态处置都排在 text_delta 之后，漏掉一处就会出现
+     * 「气泡已经结束了，正文才姗姗来迟」——而且只在合并窗口恰好没到期时偶发。
+     */
+    void flushPendingText() {
+        synchronized (pendingText) {
+            flushPendingTextLocked();
+        }
+    }
+
+    private void flushPendingTextLocked() {
+        java.util.concurrent.ScheduledFuture<?> f = coalesceFuture;
+        if (f != null) {
+            f.cancel(false);
+            coalesceFuture = null;
+        }
+        if (pendingText.length() == 0) return;
+        String merged = pendingText.toString();
+        pendingText.setLength(0);
+        sendTextDeltaNow(merged);
+    }
+
+    private void sendTextDeltaNow(String text) {
         sendSse("text_delta", "{\"content\":\"" + escapeJson(text) + "\"}");
     }
 
@@ -635,6 +733,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                 "{\"promptTokens\":%d,\"completionTokens\":%d,\"totalTokens\":%d}",
                 promptTokens, completionTokens, totalTokens
             );
+            flushPendingText();
             sendSse("token_usage", usageJson);
         }
         
@@ -650,9 +749,11 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         // bubble_end 应该在整个循环真正结束时由 AgentOrchestrator 发送
         if (onCompleteCallback != null) {
             log.info("Response completed for {}. Full content:\n{}", conversationId, fullContentBuilder.toString());
+            flushPendingText();
             onCompleteCallback.accept(response);
         } else {
             // 没有回调，说明是简单的单次响应，发送 bubble_end
+            flushPendingText();
             sendSse("bubble_end", "{\"status\":\"finished\"}");
         }
     }
@@ -678,10 +779,12 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         // 有编排器回调时把错误处置完全交给它：瞬时错误可能走自动重试，
         // 此时不能先发 error 事件（前端会渲染"执行中断"），是否发由回调决定。
         if (onErrorCallback != null) {
+            flushPendingText();
             onErrorCallback.accept(error);
         } else {
             // 无回调（单次响应）：保持旧行为——发 error 并关流，
             // 否则 SSE 连接会挂到 30 分钟超时、前端永久显示加载态。
+            flushPendingText();
             sendSse("error", "Stream Error: " + error.getMessage());
             if (currentRunGate.getAsBoolean()) {
                 sseEmitterService.close(conversationId, connectionEpoch);

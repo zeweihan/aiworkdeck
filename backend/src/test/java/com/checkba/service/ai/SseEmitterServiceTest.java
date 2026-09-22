@@ -130,8 +130,55 @@ class SseEmitterServiceTest {
         svc.createConnection(id, "paneA");
         svc.send(id, "text_delta", "a");
         svc.close(id, svc.currentEpoch(id));
-        // 旧版插件与桌面端不带这个头：行为必须与改造前逐字一致（什么都不补）
+        // 旧版插件与桌面端不带这个头：**已经送达过的**一条都不许重发，
+        // 否则用户会在刷新后看到重复正文（dev-board#812 C-04 之后判据从
+        // 「没游标就什么都不补」收紧成「没游标就只补没送达过的」，这一条的结果不变）
         svc.createConnection(id, "paneA", null);
         assertEquals(0, svc.lastReplayCount(id));
     }
+
+    // ==================== C-04：建连与 POST 并行之后的首批事件 ====================
+
+    @Test
+    void eventsEmittedBeforeAnyEmitterAttachesAreReplayedOnTheFirstConnect() {
+        // 前端不再等建连完成就发 POST /chat，于是本轮最早的几个事件真有可能在
+        // emitter 挂上之前就发出去了。**一条会话的第一轮没有任何 Last-Event-ID 可带**——
+        // 旧判据（空游标一律返回 0）会把它们永远留在缓冲里，
+        // 用户看到的是一个连 bubble_start 都没有、开头缺字的气泡。
+        SseEmitterService svc = new SseEmitterService();
+        String id = "conv-c04-race";
+
+        // POST 先到：这几条发出去时还没有任何 emitter
+        svc.send(id, "bubble_start", "{\"bubbleId\":\"b1\"}");
+        svc.send(id, "text_delta", "{\"content\":\"不可\"}");
+        svc.send(id, "text_delta", "{\"content\":\"抗力\"}");
+        assertEquals(java.util.List.of("bubble_start", "text_delta", "text_delta"),
+                svc.bufferedEventNamesSince(id, 0), "没有 emitter 时事件必须进缓冲");
+
+        // 建连稍后才完成，且这条会话从来没有过游标
+        svc.createConnection(id, "paneA", null);
+        assertEquals(3, svc.lastReplayCount(id),
+                "首批事件（含 bubble_start 与头几条 text_delta）一条都不能丢");
+    }
+
+    @Test
+    void theSecondTurnGetsItsEarlyEventsBackEvenWithoutACursor() {
+        // 更接近真实的形态：第一轮正常收完、后端收尾关流，第二轮又是「POST 先于 connect」。
+        // 第一轮那些已经送达的绝不能重发，第二轮那些没送达的一条都不能少。
+        SseEmitterService svc = new SseEmitterService();
+        String id = "conv-c04-turn2";
+
+        svc.createConnection(id, "paneA");
+        svc.send(id, "text_delta", "{\"content\":\"第一轮\"}");     // 送达
+        svc.send(id, "bubble_end", "{\"status\":\"finished\"}");    // 送达
+        svc.close(id, svc.currentEpoch(id));                            // 后端每轮收尾关流
+
+        svc.send(id, "bubble_start", "{\"bubbleId\":\"b2\"}");      // 第二轮，没有 emitter
+        svc.send(id, "text_delta", "{\"content\":\"第二轮\"}");     // 第二轮，没有 emitter
+
+        svc.createConnection(id, "paneA", null);
+        assertEquals(2, svc.lastReplayCount(id),
+                "只补第二轮那两条；第一轮已经渲染过的重发就是重复正文");
+    }
+
 }

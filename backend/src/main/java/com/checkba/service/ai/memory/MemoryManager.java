@@ -568,21 +568,59 @@ public class MemoryManager {
     }
 
     /**
-     * 检索命中后更新 lastAccessedAt（失败不影响检索主流程）。
+     * 检索命中后更新 lastAccessedAt。
+     *
+     * <p><b>这是一次「读路径上的写」，所以它不许挡在首 token 前面</b>（dev-board#812 K32 ②，
+     * 审查 perf.missed ③）。{@code retrieveMemories} 由
+     * {@code ContextAssemblerService.assemble} 每轮同步调用，而 {@code lastAccessedAt}
+     * 纯粹是使用统计——本轮没有任何东西会读它。留在同步路上有两笔代价：多一次 DB 往返，
+     * 以及对命中的那几行取写锁，与 {@code MemoryPipelineService} 的异步写侧管线抢同一批行。
+     *
+     * <p>投递到 {@code memoryExecutor}（2/4 的小池，刻意与交互路径的 taskExecutor 隔离）。
+     * 池未注入时就地执行——各单元测试与手工 new 出来的实例走这条，行为与改之前一字不变。
+     * 失败一律只 log：统计写丢一次没有任何用户可见后果。
      */
     private void touchMemories(List<MemoryEntry> hits) {
         if (hits == null || hits.isEmpty()) return;
-        try {
-            List<Long> ids = hits.stream()
-                    .map(MemoryEntry::getId)
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
-            if (!ids.isEmpty()) {
-                memoryEntryRepository.touchLastAccessedAt(ids, LocalDateTime.now());
+        List<Long> ids = hits.stream()
+                .map(MemoryEntry::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+        if (ids.isEmpty()) return;
+        LocalDateTime now = LocalDateTime.now();
+        Runnable write = () -> {
+            try {
+                memoryEntryRepository.touchLastAccessedAt(ids, now);
+            } catch (Exception e) {
+                log.warn("Failed to touch lastAccessedAt for memories: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Failed to touch lastAccessedAt for memories: {}", e.getMessage());
+        };
+        java.util.concurrent.Executor pool = this.touchExecutor;
+        if (pool == null) {
+            write.run();
+            return;
         }
+        try {
+            pool.execute(write);
+        } catch (Exception e) {
+            // 池满/已关闭：就地补一次，绝不把统计写丢在异常里
+            log.warn("Could not queue lastAccessedAt touch, running inline: {}", e.getMessage());
+            write.run();
+        }
+    }
+
+    /**
+     * {@link #touchMemories} 的投递池。字段注入 + required=false（本类是
+     * {@code @RequiredArgsConstructor}，加 final 字段要牵动手工 new 的那几个测试）；
+     * 为 null 时就地同步执行。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @Qualifier("memoryExecutor")
+    private java.util.concurrent.Executor touchExecutor;
+
+    /** 供测试直接装配。 */
+    public void setTouchExecutorForTest(java.util.concurrent.Executor executor) {
+        this.touchExecutor = executor;
     }
 
     /**

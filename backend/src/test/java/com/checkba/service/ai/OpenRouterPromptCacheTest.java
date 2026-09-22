@@ -212,6 +212,28 @@ class OpenRouterPromptCacheTest {
     }
 
     @Test
+    @DisplayName("紧凑序列化与老三遍管线逐字节相同（dev-board#812 K32 ⑧）")
+    void compactSerializationMatchesTheOldThreePassPipeline() {
+        ChatCompletionRequest request = ChatCompletionRequest.builder()
+                .stream(true)
+                .streamOptions(StreamOptions.builder().includeUsage(true).build())
+                .model("deepseek/deepseek-v4-flash")
+                .messages(InternalOpenAiHelper.toOpenAiMessages(MESSAGES))
+                .temperature(0.7)
+                .build();
+
+        // 老口径：序列化（带缩进）→ 解析 → 再序列化
+        String threePass = OpenRouterStreamingChatModel.compact(Json.toJson(request));
+        // 新口径：一遍
+        String onePass = OpenRouterStreamingChatModel.compactJson(request);
+
+        assertEquals(threePass, onePass,
+                "换 mapper 不许改变发出去的任何一个字节——openai4j 的 Json 就是一个"
+                        + "只开了 INDENT_OUTPUT 的默认 ObjectMapper，命名与 NON_NULL 都在 DTO 注解上");
+        assertFalse(onePass.contains("\n"), "一遍序列化同样不能带缩进：" + onePass);
+    }
+
+    @Test
     @DisplayName("Ollama 之类的裸模型名不触发断点，也不炸")
     void bareModelNameIsNotMarked() throws Exception {
         run("llama3:latest");

@@ -36,6 +36,24 @@ public interface ContextTurnSink {
     String IMAGE_TOO_LARGE = "image_too_large";
     /** 抽不出任何正文（扫描件无文字层、格式不支持、读盘失败、OCR 一个字没认出来）。 */
     String UNREADABLE = "unreadable";
+    /**
+     * 本轮附件正文的<b>合计</b>字符额度已经用完，这一条一个字的正文都没进去
+     * （{@code ai.context.files.max-total-attachment-chars}，dev-board#812 K32 ⑦）。
+     *
+     * <p><b>刻意不复用 {@link #DROPPED}</b>：那条的文案写死是「一轮最多带 N 份材料」，
+     * detail 是份数；这里的 detail 是字符数，套进那句话会渲染成
+     * 「一轮最多带 120000 份材料」——比不提示更糟。
+     */
+    String BUDGET_EXHAUSTED = "budget_exhausted";
+    /**
+     * 上下文已超出模型窗口且压不动了（dev-board#812 K32 ⑥）。
+     *
+     * <p>与其余几条不同，它<b>不描述某一个附件</b>，而是整轮的终局：服务商已用 400 证实装不下，
+     * 强制压缩也没能让消息栈变小，这一轮到此为止，而且<b>此后每发一条消息都会再撞同一堵墙</b>。
+     * 原来这条路只在后端日志里留一行 warn，用户看到的是「又失败了」，
+     * 而唯一的出路（去掉几份附件）没有任何东西指向它。
+     */
+    String OVERFLOW = "overflow";
 
     /**
      * 一个附件的最终处置。

@@ -215,6 +215,10 @@ export default {
   contextNoticeImageLimit: '{name} 按文字识别（OCR）处理：本轮最多直送 {max} 张图',
   contextNoticeImageTooLarge: '{name} 按文字识别（OCR）处理：这张图超过体积上限',
   contextNoticeUnreadable: '{name} 没有可提取的文字，AI 读不到它的内容',
+  contextNoticeBudgetExhausted: '{name} 的正文没有进入本轮：材料正文合计已达 {max} 字上限（AI 仍可按需打开它）',
+  // 不提某一份材料：这条说的是整轮装不下了。必须给出可执行的下一步——
+  // 「又失败了」没有出路，而唯一的出路就是少带几份材料。
+  contextNoticeOverflow: '本轮内容超出模型的上下文窗口，已无法再压缩。请移除部分附件或另起一个对话后重试。',
   contextNoticeGeneric: '{name} 在本轮做了降级处理',
   // 音频附件（dev-board#814）：模型读的是转写稿，没有转写稿它只拿得到一个文件名。
   // 发送之前就说清楚，别让用户以为 AI 听了这段录音——这是能不能信任回答的分界。

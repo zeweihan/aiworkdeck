@@ -52,9 +52,30 @@ public class RunLoopCompactor {
     private final AiContextProperties properties;
     private final ContextCompressor contextCompressor;
 
-    /** 触发阈值：历史可用预算 × 触发比例（预算口径与 ContextCompressor 一致，单一来源） */
+    /**
+     * 触发阈值：可用于<b>整个消息栈</b>的预算 × 触发比例。
+     *
+     * <p><b>刻意不再用 {@code ContextCompressor.getAvailableTokensForHistory}</b>
+     * （dev-board#812 K32 ⑥，审查 C-09 ①）。那个方法回的是「历史」的预算，
+     * 已经扣掉了 {@code systemPromptReserve}；而本类的 {@link #estimateTokens} 统计的是
+     * <b>整个消息栈，system 消息也在里面</b>。两者相减等于把 system 扣了两遍：
+     * <pre>
+     *   旧： estimate(system + 历史)  vs  (总窗口 − 6万 − 5千 − 8千) × 0.8
+     *   新： estimate(system + 历史)  vs  (总窗口 − 5千 − 8千) × 0.8
+     * </pre>
+     * 后果不是「早压一点更安全」：带大附件时 system 自己就有好几万 token，
+     * tokens 恒大于 threshold，于是<b>每一轮都白跑一次剪枝/折叠</b>（中段不足 4 条时
+     * 直接返回，纯浪费），而且历史还很短的时候就开始丢历史。
+     *
+     * <p>另一半同样重要：现在用的是 system 的<b>真实</b>大小而不是一个 6 万的常数估计。
+     * 附件把 system 顶到 20 万时，阈值会如实收紧；system 很小时，历史能用满窗口。
+     *
+     * <p>{@code memoryReserve} / {@code responseReserve} 保持扣除：前者是给按需读取的
+     * Markdown 记忆留的余量，后者是模型回复本身要占的位置，都不在 {@code messages} 里。
+     */
     public int triggerThreshold(String modelId) {
-        int available = contextCompressor.getAvailableTokensForHistory(modelId);
+        int available = contextCompressor.getAvailableTokensForHistory(modelId)
+                + properties.getSystemPromptReserve();
         return (int) (available * properties.getCompaction().getTriggerRatio());
     }
 
