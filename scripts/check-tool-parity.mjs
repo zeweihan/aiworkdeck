@@ -82,6 +82,7 @@ const MATRIX = [
   ['表格读区域', 'sheet_read_range', 'office_excel_get_range'],
   ['表格写区域', 'sheet_write_cells', 'office_excel_set_values'],
   ['表格查找', 'sheet_search', 'office_excel_search'],
+  ['表格查找替换', 'sheet_find_replace', 'office_excel_replace'],
   ['工作簿概览', 'sheet_get_overview', 'office_excel_get_overview'],
   ['表格选中区域', 'sheet_select_range', 'office_excel_select_range'],
   ['单元格格式', 'sheet_format_cells', 'office_excel_format_cells'],

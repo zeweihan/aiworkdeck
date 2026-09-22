@@ -31,6 +31,14 @@
 
 import { etRangeText } from './wpsDoc.js'
 import { parseLocator, capReferenceText, unsupportedLocatorError } from './referenceRead.js'
+// excel_replace 的纯函数层与 Office 版共用（同一条指令在 Excel 和 WPS 表格上
+// 必须给出一样的结果），与 textMatch.js / minimalEdit.js 同一类角色。
+import {
+  MAX_REPORTED_CELLS,
+  planCellReplacement,
+  normalizeReplaceArgs,
+  buildReplaceResult
+} from './excelReplace.js'
 
 /* ==================== 入口与通用 helper ==================== */
 
@@ -462,6 +470,76 @@ export const WPS_ET_HANDLERS = {
       out.scannedRows = scanRows
       out.totalRows = totalRows
       out.note = `工作表共 ${totalRows} 行，本次只扫描了前 ${scanRows} 行；如需搜索靠后的数据，请指定更小的区域分批搜索`
+    }
+    return out
+  },
+
+  /**
+   * 区域内查找替换（dev-board#804 / 审查 A16·B-04），与 Office 版同契约、同返回形状。
+   *
+   * 只重写命中的那些格——excel_set_values 是按矩形区域写的，散点命中整块回写会把
+   * 区域内不该动的格子一起覆盖掉（静默数据错误），这正是本原语要解决的问题。
+   *
+   * 性能口径同 excel_search：值与公式各用一次 Value2 / Formula 二维批量读回，
+   * 只有真正要改的格才逐格赋值（过桥次数 = 改动格数，不是区域格数）。
+   * 扫描行数同样按 MAX_SEARCH_SCAN_ROWS 封顶并在返回值里如实交代。
+   */
+  async excel_replace(args) {
+    const { find, replace, matchCase, wholeCell, cap } = normalizeReplaceArgs(args)
+    const sheetName = String((args && args.sheetName) || '')
+    const rangeAddress = String((args && args.rangeAddress) || '')
+    const sheet = resolveSheet(sheetName)
+    const name = String(sheet.Name)
+    const rng = rangeAddress ? sheet.Range(rangeAddress) : sheet.UsedRange
+    if (!rng) throw new Error(`无法解析区域：${rangeAddress}`)
+    if (!rangeAddress && usedRangeIsEmpty(rng)) {
+      return buildReplaceResult({
+        sheet: name, address: '', find, replace, cells: [],
+        replaced: 0, occurrences: 0, skippedFormula: 0, skippedNumeric: 0, truncated: false, cap
+      })
+    }
+    const totalRows = rng.Rows.Count
+    const scanRows = Math.min(totalRows, MAX_SEARCH_SCAN_ROWS)
+    const scanned = scanRows < totalRows ? rng.Resize(scanRows, rng.Columns.Count) : rng
+    const values = read2D(scanned)
+    const formulas = readFormula2D(scanned)
+    // WPS 的 Row/Column 是 1 起，cellAddress 收 0 起——先归零再拼
+    const baseRow = rng.Row - 1
+    const baseCol = rng.Column - 1
+    const cells = []
+    let replaced = 0
+    let occurrences = 0
+    let skippedFormula = 0
+    let skippedNumeric = 0
+    let truncated = false
+    for (let r = 0; r < values.length && !truncated; r++) {
+      const row = values[r] || []
+      for (let c = 0; c < row.length; c++) {
+        const plan = planCellReplacement({
+          value: row[c], formula: (formulas[r] || [])[c], find, replace, matchCase, wholeCell
+        })
+        if (!plan) continue
+        if (plan.skip === 'formula') { skippedFormula++; continue }
+        if (plan.skip === 'numeric') { skippedNumeric++; continue }
+        // 赋值只能走 Value2（JSAPI 里 Value 是只读方法）；单格逐个写
+        sheet.Cells.Item(baseRow + r + 1, baseCol + c + 1).Value2 = plan.next
+        occurrences += plan.occurrences
+        if (cells.length < MAX_REPORTED_CELLS) cells.push(cellAddress(baseRow + r, baseCol + c))
+        replaced++
+        if (replaced >= cap) { truncated = true; break }
+      }
+    }
+    const out = buildReplaceResult({
+      sheet: name, address: String(rng.Address(false, false)), find, replace,
+      cells, replaced, occurrences, skippedFormula, skippedNumeric, truncated, cap
+    })
+    if (scanRows < totalRows) {
+      // 如实交代只扫到哪儿，不假装搜完了整张表
+      out.truncated = true
+      out.scannedRows = scanRows
+      out.totalRows = totalRows
+      out.note = `${out.note ? out.note + '；' : ''}区域共 ${totalRows} 行，本次只扫描了前 ${scanRows} 行；`
+        + '靠后的数据请指定更小的区域分批替换'
     }
     return out
   },
@@ -1138,7 +1216,7 @@ function pivotFieldOrThrow(pivot, field) {
  * 公式，而不是还原成它当时算出来的值。**Formula 的读取形态（单格标量 / 多格二维）按与 Value2
  * 同口径处理，未经真机验证**，这里做与 read2D 相同的防御性归一。
  */
-const ET_UNDOABLE_COMMANDS = new Set(['excel_set_values', 'excel_set_formulas', 'excel_sort_range'])
+const ET_UNDOABLE_COMMANDS = new Set(['excel_set_values', 'excel_set_formulas', 'excel_sort_range', 'excel_replace'])
 
 function readFormula2D(rng) {
   const rows = rng.Rows.Count
@@ -1157,12 +1235,15 @@ export function captureEtState(command, args, limits) {
   if (!ET_UNDOABLE_COMMANDS.has(command)) return null
   const a = args || {}
   const rangeAddress = String(a.rangeAddress || '')
-  if (!rangeAddress) return null
+  // excel_replace 的 rangeAddress 可以留空（= 整片已用区域）；不跟着走一遍已用区域，
+  // 最常用的那次「全表替换」就没有撤销点了。其余命令仍要求显式地址。
+  if (!rangeAddress && command !== 'excel_replace') return null
   const data = command === 'excel_set_values' ? a.values
     : command === 'excel_set_formulas' ? a.formulas : null
   if (data && (!Array.isArray(data) || !data.length || !Array.isArray(data[0]))) return null
   const sheet = resolveSheet(String(a.sheetName || ''))
-  let rng = sheet.Range(rangeAddress)
+  let rng = rangeAddress ? sheet.Range(rangeAddress) : sheet.UsedRange
+  if (!rng || (!rangeAddress && usedRangeIsEmpty(rng))) return null
   let rows = rng.Rows.Count
   let cols = rng.Columns.Count
   if (data) {

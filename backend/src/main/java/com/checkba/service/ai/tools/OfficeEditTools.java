@@ -58,6 +58,13 @@ public class OfficeEditTools implements AgentToolComponent {
     /** office_excel_set_values 单次写入的单元格上限（防一把写爆工作表与 SSE payload） */
     private static final int MAX_SET_CELLS = 2000;
 
+    /**
+     * office_excel_replace 单次替换的硬顶。与桌面端
+     * {@link DocumentEditTools#MAX_SHEET_REPLACEMENTS} 同值——同一个上限在
+     * LOWA / Office / WPS 三个宿主上必须一样，否则模型换个宿主就撞到不同的墙。
+     */
+    static final int MAX_EXCEL_REPLACEMENTS = 2000;
+
     /** 文字颜色格式：#RRGGBB */
     private static final java.util.regex.Pattern HEX_COLOR = java.util.regex.Pattern.compile("^#[0-9A-Fa-f]{6}$");
 
@@ -1438,7 +1445,9 @@ public class OfficeEditTools implements AgentToolComponent {
     }
 
     @Tool("在当前 Excel 工作表的已用区域中查找文本（大小写不敏感的包含匹配），" +
-          "返回命中单元格地址与内容。sheetName 缺省为当前活动工作表。")
+          "返回命中单元格地址与内容。sheetName 缺省为当前活动工作表。" +
+          "要成批改写命中的内容，直接用 office_excel_replace，不要「查出地址再 office_excel_set_values 回写」" +
+          "——后者按矩形区域写，会把区域内不该动的格子一起覆盖掉。")
     @ToolMeta(displayName = "查找单元格", category = "office")
     public String office_excel_search(
             @P("会话ID（系统自动注入）") String conversationId,
@@ -1456,6 +1465,56 @@ public class OfficeEditTools implements AgentToolComponent {
         args.put("sheetName", sheetName == null ? "" : sheetName.trim());
         args.put("query", query);
         return officeBridgeService.executeOfficeCommand(conversationId, "excel_search", args);
+    }
+
+    @Tool("在 Excel 区域内查找并替换文本，只改命中的那些格——区域内其他格一个字都不动。" +
+          "成批改写一律用本工具，不要「office_excel_search 查地址 + office_excel_set_values 回写」：" +
+          "后者按矩形区域写，会把区域内不该动的格子一起覆盖掉。" +
+          "rangeAddress 不传则用整张表的已用区域；缺省是包含匹配、不区分大小写，" +
+          "wholeCell=true 时要求整格内容与 find 完全相等。" +
+          "只动纯文本格：公式格与数值格即使显示出来的文本命中也跳过不改" +
+          "（改了会毁掉公式、或把数字变成文本），跳过多少格在返回值里如实交代。" +
+          "返回 {replaced 改了几格, occurrences 共替换几处, cells 前若干个地址, truncated}。" +
+          "单次最多替换 " + MAX_EXCEL_REPLACEMENTS + " 格，超限先缩小 rangeAddress 分块做。" +
+          "Excel 没有修订机制，写入即刻生效——改错了在 Excel 里按 Ctrl+Z 撤销，或用任务窗格的修订记录回退。")
+    @ToolMeta(displayName = "替换单元格文本", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_replace(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1:D100（可选；为空取整张表的已用区域）") String rangeAddress,
+            @P("查找内容（字面量，不是正则）") String find,
+            @P("替换成什么；传空字符串表示删除命中的文本。不能省略") String replace,
+            @P("区分大小写，默认不区分（不改则不传）") Boolean matchCase,
+            @P("整格匹配：true 时要求整格内容与 find 完全相等才替换，默认 false（不改则不传）") Boolean wholeCell,
+            @P("最多替换多少格，不传按上限；命中更多时提前停下并在返回值里标 truncated") Integer maxReplacements
+    ) {
+        log.info("Tool: office_excel_replace called, sheet={}, range={}, find={}", sheetName, rangeAddress, find);
+        if (find == null || find.isBlank()) {
+            return "Error: 查找文本不能为空";
+        }
+        if (find.length() > 255) {
+            return "Error: 查找文本过长（上限 255 字符），请缩短后重试";
+        }
+        // 省略 replace 不等于「替换成空串」：那会把命中的内容静默删掉。要删就显式传空串。
+        if (replace == null) {
+            return "Error: 缺少替换文本（要把命中的文本删掉，请显式传空字符串 \"\"）";
+        }
+        if (find.equals(replace)) {
+            return "Error: 查找与替换文本相同，这次替换不会改变任何内容";
+        }
+        if (maxReplacements != null && (maxReplacements < 1 || maxReplacements > MAX_EXCEL_REPLACEMENTS)) {
+            return "Error: maxReplacements 需在 1 到 " + MAX_EXCEL_REPLACEMENTS + " 之间（不传则按上限 "
+                    + MAX_EXCEL_REPLACEMENTS + "）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", rangeAddress == null ? "" : rangeAddress.trim());
+        args.put("find", find);
+        args.put("replace", replace);
+        if (matchCase != null) args.put("matchCase", matchCase);
+        if (wholeCell != null) args.put("wholeCell", wholeCell);
+        if (maxReplacements != null) args.put("maxReplacements", maxReplacements);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_replace", args);
     }
 
     // ==================== Excel 格式/结构（批次6，office_excel_*，仅 Excel 会话可见） ====================

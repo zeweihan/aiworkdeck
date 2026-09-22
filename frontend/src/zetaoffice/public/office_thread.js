@@ -1633,6 +1633,36 @@ function normalizeFormula(f) {
   return out;
 }
 
+// sheet_find_replace 的字面量替换与计数（**不是正则**：合同里的「(甲方)」「*备注」
+// 带正则元字符，编成 RegExp 会当成语法而不是文字）。matchCase=false 时按小写位置
+// 扫描原串，保证替换落点与大小写无关、而未命中部分原样保留。
+function replaceAllLiteral(text, find, replace, matchCase) {
+  if (!find) return text;
+  const hay = matchCase ? text : text.toLowerCase();
+  const needle = matchCase ? find : find.toLowerCase();
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const at = hay.indexOf(needle, i);
+    if (at === -1) { out += text.slice(i); return out; }
+    out += text.slice(i, at) + replace;
+    i = at + needle.length;
+  }
+}
+function countLiteral(text, find, matchCase) {
+  if (!find) return 0;
+  const hay = matchCase ? text : text.toLowerCase();
+  const needle = matchCase ? find : find.toLowerCase();
+  let n = 0;
+  let i = 0;
+  for (;;) {
+    const at = hay.indexOf(needle, i);
+    if (at === -1) return n;
+    n++;
+    i = at + needle.length;
+  }
+}
+
 // ---- Impress（演示文稿 slide_*）原语 helpers --------------------------------
 // 引擎自 r4 起含 Impress 模块（doc-editor.md 待 r4 验收更新口径）；pptx/odp 经
 // load_document 打开后由 Impress 承载，doc_*（xModel.getText()）/sheet_*
@@ -7200,6 +7230,104 @@ const EXEC = {
       success: true, sheet: sheet.getName(), range: sheetRangeName(addr), query: query,
       count: hits.length, hits: hits, truncated: hits.length >= 50,
     };
+  },
+  // [表格·写] Excel 专用查找替换（dev-board#804）。与 sheet_search 共用扫描循环，
+  // 命中后**只重写那一格**——区别于 sheet_write_cells 的矩形整块回写（散点命中用它
+  // 会把区域内不该动的格子一起覆盖掉，属于静默数据错误）。
+  //
+  // 只动纯文本格（CellContentType.TEXT）。公式格与数值格即使显示出来的字符串命中也
+  // 跳过：对公式格 setString 会把公式本身毁掉，对数值格会把数字变成文本（"2500.5"
+  // 里含 "50" 这种误伤在数字面上极其常见）。跳过多少格在返回值里如实交代，让模型
+  // 知道「没替的那些不是漏了，是本原语做不到」。
+  //
+  // Calc 没有修订机制，写入即生效——安全网是 doc_undo 与文档检查点（工具描述里已
+  // 对模型讲明）。
+  sheet_find_replace(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const find = (p && p.find != null) ? String(p.find) : '';
+    if (!find) return tableFail('sheet_find_replace requires {find}');
+    // 省略 replace 不等于「替换成空串」——后端已拦一道，worker 这道是给宿主直调留的。
+    if (!p || p.replace == null) return tableFail('sheet_find_replace requires {replace}（要删除命中文本请显式传空字符串）');
+    const replace = String(p.replace);
+    if (find === replace) return tableFail('find 与 replace 相同，这次替换不会改变任何内容');
+    const matchCase = !!(p && p.matchCase);
+    const wholeCell = !!(p && p.wholeCell);
+    const MAX_REPLACEMENTS = 2000; // 与后端 DocumentEditTools.MAX_SHEET_REPLACEMENTS 同值
+    let cap = MAX_REPLACEMENTS;
+    if (p && p.maxReplacements != null) {
+      const n = Number(p.maxReplacements);
+      if (!isFinite(n) || n < 1) return tableFail('maxReplacements 需为不小于 1 的整数');
+      cap = Math.min(Math.floor(n), MAX_REPLACEMENTS);
+    }
+    let addr;
+    try {
+      const range = (p && p.range) ? sheetRange(sheet, p.range) : null;
+      if (p && p.range && !range) return tableFail('无效的区域: ' + p.range);
+      addr = range ? range.getRangeAddress() : usedRangeAddress(sheet);
+    } catch (e) { return tableFail('读取替换区域失败: ' + errStr(e)); }
+    const nRows = addr.EndRow - addr.StartRow + 1;
+    const nCols = addr.EndColumn - addr.StartColumn + 1;
+    const MAX_SCAN = 20000; // 同 sheet_search
+    if (nRows * nCols > MAX_SCAN) return tableFail('替换区域过大（上限 ' + MAX_SCAN + ' 格），请缩小 range');
+
+    const T = css.table.CellContentType;
+    const needle = matchCase ? find : find.toLowerCase();
+    const cells = [];        // 改过的坐标（回给模型的只取前 MAX_REPORTED 个）
+    const MAX_REPORTED = 50;
+    let replaced = 0;        // 改了几格
+    let occurrences = 0;     // 共替换几处（一格里可能有多处）
+    let skippedFormula = 0;  // 命中但不敢动的公式格
+    let skippedNumeric = 0;  // 命中但不敢动的数值格
+    let truncated = false;   // 因 cap 提前收手
+    let firstChanged = null;
+
+    for (let r = 0; r < nRows && !truncated; r++) {
+      for (let c = 0; c < nCols; c++) {
+        const cell = sheet.getCellByPosition(addr.StartColumn + c, addr.StartRow + r);
+        let type;
+        try { type = cell.getType(); } catch (e) { continue; }
+        if (enumEq(type, T.EMPTY)) continue;
+        const isFormula = enumEq(type, T.FORMULA);
+        const isValue = enumEq(type, T.VALUE);
+        // 判定用的文本：公式/数值格看显示值（是否「看起来命中」），文本格看原文
+        const shown = isFormula || isValue ? String(readCellOut(cell)) : String(cell.getString());
+        const hay = matchCase ? shown : shown.toLowerCase();
+        if (hay.indexOf(needle) === -1) continue;
+        if (wholeCell && (matchCase ? shown : hay) !== (matchCase ? find : needle)) continue;
+        if (isFormula) { skippedFormula++; continue; }
+        if (isValue) { skippedNumeric++; continue; }
+        const next = wholeCell ? replace : replaceAllLiteral(shown, find, replace, matchCase);
+        if (next === shown) continue;
+        occurrences += wholeCell ? 1 : countLiteral(shown, find, matchCase);
+        try { cell.setString(next); } catch (e) { return tableFail('写入单元格失败: ' + errStr(e)); }
+        const name = colLetterOf(addr.StartColumn + c) + (addr.StartRow + r + 1);
+        if (!firstChanged) firstChanged = name;
+        if (cells.length < MAX_REPORTED) cells.push(name);
+        replaced++;
+        if (replaced >= cap) { truncated = true; break; }
+      }
+    }
+    // 拟人：把视图停在第一处改动上，用户看得见 AI 动了哪儿
+    if (firstChanged) { try { ctrl.select(sheet.getCellRangeByName(firstChanged)); } catch (e) {} }
+
+    const res = {
+      success: true, sheet: sheet.getName(), range: sheetRangeName(addr),
+      find: find, replace: replace,
+      replaced: replaced, occurrences: occurrences,
+      cells: cells, cellsTruncated: replaced > cells.length,
+      truncated: truncated,
+    };
+    if (skippedFormula) res.skippedFormulaCells = skippedFormula;
+    if (skippedNumeric) res.skippedNumericCells = skippedNumeric;
+    const notes = [];
+    if (truncated) notes.push('已达单次替换上限（' + cap + ' 格）并提前停下，剩余命中未处理——缩小 range 或分批继续');
+    if (skippedFormula) notes.push(skippedFormula + ' 个公式格显示的文本命中但未改动（改了会毁掉公式，请用 sheet_write_cells 重写这些公式）');
+    if (skippedNumeric) notes.push(skippedNumeric + ' 个数值格显示的文本命中但未改动（改了会把数字变成文本，数值请用 sheet_write_cells 写）');
+    if (!replaced && !skippedFormula && !skippedNumeric) notes.push('区域内没有命中');
+    if (notes.length) res.note = notes.join('；');
+    return res;
   },
   // [表格·结构] 工作簿级命名区域（XNamedRanges）。op: add（name+range+可选
   // sheet）/ remove（name）/ list（枚举全部）。add 落成绝对引用公式

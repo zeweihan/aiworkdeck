@@ -500,7 +500,9 @@ public class ContextAssemblerService {
                         case EXCEL -> {
                             systemText.append("该工作簿在用户本机的表格软件（Microsoft Excel 或 WPS 表格）中打开，活动工作表内容已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_excel_* 工具（office_excel_get_range / ");
-                            systemText.append("office_excel_set_values / office_excel_search），写入直接生效");
+                            systemText.append("office_excel_set_values / office_excel_search / office_excel_replace），写入直接生效");
+                            systemText.append("（成批改写用 office_excel_replace，不要「查出地址再 office_excel_set_values 回写」，"
+                                    + "那会覆盖掉区域内不该动的格子）");
                             systemText.append("（Excel 没有修订机制）。表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式）");
                             systemText.append("用对应 office_excel_* 工具（office_excel_format_cells / office_excel_set_borders / ");
                             systemText.append("office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / ");
@@ -600,7 +602,9 @@ public class ContextAssemblerService {
                     switch (lowaDocKind(activeContext)) {
                         case "sheet" -> {
                             systemText.append("这是一份电子表格，读取/修改一律使用 sheet_* 工具" +
-                                    "（sheet_get_overview 先看工作表结构、sheet_read_range / sheet_write_cells 读写单元格），" +
+                                    "（sheet_get_overview 先看工作表结构、sheet_read_range / sheet_write_cells 读写单元格、" +
+                                    "sheet_search 查找、sheet_find_replace 成批替换——成批改写用它，" +
+                                    "不要「查出坐标再 sheet_write_cells 回写」，那会覆盖掉不该动的格子），" +
                                     "写入直接生效（Calc 没有修订机制）——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
                             systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
@@ -1264,7 +1268,8 @@ public class ContextAssemblerService {
                         + "活动工作表内容已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前表格」「改一下」等都指它——"
                         + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
-                        + "office_excel_set_values / office_excel_search），写入直接生效（Excel 没有修订机制）；"
+                        + "office_excel_set_values / office_excel_search / office_excel_replace），写入直接生效（Excel 没有修订机制）；"
+                        + "成批改写用 office_excel_replace（只改命中的格），不要「查出地址再整块回写」；"
                         + "表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式/筛选/条件格式）用对应 office_excel_* 工具"
                         + "（office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / "
                         + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
@@ -1721,7 +1726,7 @@ You are in Agent mode, the default full-capability mode:
     // 活跃文档指引（system prompt 段）的英文分支文本，与中文 switch 各分支逐条对应
     private static final String EN_GUIDE_OFFICE_EXCEL = """
 This workbook is open in the user's spreadsheet application (Microsoft Excel or WPS Spreadsheets); the active worksheet's content is inlined below with this request.
-Read and modify it exclusively with the office_excel_* tools (office_excel_get_range / office_excel_set_values / office_excel_search); writes take effect immediately (Excel has no track-changes mechanism).
+Read and modify it exclusively with the office_excel_* tools (office_excel_get_range / office_excel_set_values / office_excel_search / office_excel_replace); writes take effect immediately (Excel has no track-changes mechanism). For bulk edits use office_excel_replace, which rewrites only the matching cells - do not "search for addresses, then write the block back with office_excel_set_values", which overwrites cells that should stay untouched.
 For formatting and structural changes (cell formats / borders / rows and columns / merging / sorting / worksheets / freezing / formulas), use the corresponding office_excel_* tools (office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / office_excel_conditional_format).
 Before changing the sheet you may first call office_excel_get_overview to see the worksheet list and each sheet's dimensions; office_excel_select_range can move the user's view to a location.
 Cell comments use office_excel_add_comment / office_excel_get_comments / office_excel_reply_comment / office_excel_resolve_comment / office_excel_delete_comment; data validation uses office_excel_set_data_validation; charts use office_excel_add_chart; named ranges use office_excel_define_name; sheet protection uses office_excel_protect_sheet; row/column grouping uses office_excel_group_rows_cols; basic pivot tables use office_excel_add_pivot_table.
@@ -1755,7 +1760,7 @@ Give your conclusions or suggested edits in prose; do not attempt to call docume
 """;
 
     private static final String EN_GUIDE_LOWA_SHEET = """
-This is a spreadsheet. Read and modify it exclusively with the sheet_* tools (sheet_get_overview first to see the worksheet structure, sheet_read_range / sheet_write_cells to read and write cells); writes take effect immediately (Calc has no track-changes mechanism). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. This session has no doc_* tools.
+This is a spreadsheet. Read and modify it exclusively with the sheet_* tools (sheet_get_overview first to see the worksheet structure, sheet_read_range / sheet_write_cells to read and write cells, sheet_search to find text and sheet_find_replace for bulk replacement - use it for bulk edits instead of "search for coordinates, then write back with sheet_write_cells", which would overwrite cells that should stay untouched); writes take effect immediately (Calc has no track-changes mechanism). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. This session has no doc_* tools.
 
 """;
 
@@ -1863,7 +1868,8 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "<active_document> and can be read and analyzed directly. "
                         + "Unless the user names another file, \"this\", \"the current spreadsheet\", \"change it\", "
                         + "and the like refer to this workbook - read and modify it exclusively via the office_excel_* tools "
-                        + "(office_excel_get_range / office_excel_set_values / office_excel_search); "
+                        + "(office_excel_get_range / office_excel_set_values / office_excel_search / office_excel_replace); "
+                        + "for bulk edits use office_excel_replace, which rewrites only the matching cells; "
                         + "writes take effect immediately (Excel has no track-changes mechanism); "
                         + "formatting and structural changes (cell formats / borders / rows and columns / merging / sorting / "
                         + "worksheets / freezing / formulas / filters / conditional formats) use the corresponding office_excel_* tools "

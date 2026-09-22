@@ -587,9 +587,62 @@ class OfficeEditToolsTest {
         // 查找与替换
         assertTrue(tools.office_excel_search("conv-1", null, " ").startsWith("Error"));
         assertTrue(tools.office_excel_search("conv-1", null, "长".repeat(256)).startsWith("Error"));
+        assertTrue(tools.office_excel_replace("conv-1", null, null, " ", "x", null, null, null).startsWith("Error"));
+        // 省略 replace 不能当成「替换成空」——那是静默删数据
+        assertTrue(tools.office_excel_replace("conv-1", null, null, "甲方", null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_replace("conv-1", null, null, "甲方", "甲方", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_replace("conv-1", null, null, "甲方", "买受人", null, null, 0).startsWith("Error"));
+        assertTrue(tools.office_excel_replace("conv-1", null, null, "甲方", "买受人", null, null, 99999).startsWith("Error"));
         assertTrue(tools.office_ppt_replace_text("conv-1", "", "x").startsWith("Error"));
         assertTrue(tools.office_ppt_replace_text("conv-1", "找我", null).startsWith("Error"));
         verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("office_excel_replace：下发 excel_replace，空串替换 = 删除命中文本（dev-board#804）")
+    void excelReplaceDispatches() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("excel_replace"), anyMap()))
+                .thenReturn("{\"replaced\":3,\"occurrences\":4}");
+
+        String result = tools.office_excel_replace("conv-1", "台账", "A1:D100", "甲方", "买受人", true, false, 100);
+        assertEquals("{\"replaced\":3,\"occurrences\":4}", result);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_replace"), args.capture());
+        Map<String, Object> a = args.getValue();
+        assertEquals("台账", a.get("sheetName"));
+        assertEquals("A1:D100", a.get("rangeAddress"));
+        assertEquals("甲方", a.get("find"));
+        assertEquals("买受人", a.get("replace"));
+        assertEquals(Boolean.TRUE, a.get("matchCase"));
+        assertEquals(Boolean.FALSE, a.get("wholeCell"));
+        assertEquals(100, a.get("maxReplacements"));
+
+        // 空串是合法的「删掉命中文本」，不能被当成缺参拦下
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("excel_replace"), anyMap())).thenReturn("{}");
+        assertFalse(tools.office_excel_replace("conv-1", null, null, "（草稿）", "", null, null, null)
+                .startsWith("Error"));
+    }
+
+    @Test
+    @DisplayName("Excel 查找/替换两个工具互相指路，不让模型退回整块回写")
+    void excelSearchAndReplaceCrossReference() {
+        String search = toolDescription("office_excel_search");
+        String replace = toolDescription("office_excel_replace");
+        assertTrue(search.contains("office_excel_replace"), search);
+        assertTrue(replace.contains("office_excel_search"), replace);
+        assertTrue(replace.contains("office_excel_set_values"),
+                "要点名说清为什么不能用整块回写：" + replace);
+    }
+
+    private static String toolDescription(String name) {
+        for (java.lang.reflect.Method m : OfficeEditTools.class.getDeclaredMethods()) {
+            if (!m.getName().equals(name)) continue;
+            dev.langchain4j.agent.tool.Tool t = m.getAnnotation(dev.langchain4j.agent.tool.Tool.class);
+            if (t != null) return String.join(" ", t.value());
+        }
+        throw new AssertionError("找不到工具方法 " + name);
     }
 
     @Test

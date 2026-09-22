@@ -113,6 +113,8 @@ class OfficeBridgeServiceTest {
                 "批量改写要留够时间");
         assertTrue(OfficeBridgeService.timeoutSecondsFor("apply_standard_format") >= 120,
                 "整篇套用标准格式是逐段落笔，同样跑得久");
+        assertTrue(OfficeBridgeService.timeoutSecondsFor("excel_replace") >= 120,
+                "表格批量替换要把整片已用区域读回、逐格比对再回写（dev-board#804）");
     }
 
     @Test

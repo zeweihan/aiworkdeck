@@ -105,7 +105,7 @@ class PluginHostImpl implements PluginHost {
             "get_selection_hyperlink", "set_selection_hyperlink", "insert_link_with_bookmark",
             // calc
             "sheet_get_overview", "sheet_read_range", "sheet_write_cells", "sheet_format_cells", "sheet_set_borders",
-            "sheet_merge_cells", "sheet_set_row_col", "sheet_edit_rows_cols", "sheet_manage_sheets", "sheet_search",
+            "sheet_merge_cells", "sheet_set_row_col", "sheet_edit_rows_cols", "sheet_manage_sheets", "sheet_search", "sheet_find_replace",
             "sheet_select_range", "sheet_sort_range", "sheet_set_autofilter", "sheet_freeze_panes",
             "sheet_conditional_format", "sheet_set_data_validation", "sheet_define_name", "sheet_group_rows_cols",
             "sheet_protect_sheet", "sheet_add_chart", "sheet_add_pivot_table", "sheet_add_comment",

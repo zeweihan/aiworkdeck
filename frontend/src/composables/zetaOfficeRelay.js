@@ -87,6 +87,7 @@ const ACTION_BUDGET_MS = {
   get_selection: 120000, get_formatting: 120000, get_bookmark_context: 120000,
   list_revisions: 120000, list_comments: 120000, table_read: 120000, debug_revisions: 120000,
   sheet_get_overview: 120000, sheet_read_range: 120000, sheet_search: 120000,
+  sheet_find_replace: 120000,
   sheet_get_comments: 120000,
   slide_get_overview: 120000, slide_get_page: 120000, slide_read_notes: 120000,
   slide_table_read: 120000,

@@ -2702,6 +2702,112 @@ try {
       JSON.stringify(k9keep))
   }
 
+  // ---------- 组 36：Calc 查找替换（sheet_find_replace，dev-board#804）----------
+  // 缺口（审查 A16 / B-04）：表格是三族里唯一「能找不能改」的面。模型只能 sheet_search
+  // 拿坐标再 sheet_write_cells 回写，而后者按矩形区域写——散点命中整块回写会把区域内
+  // 不该动的格子一起覆盖掉（静默数据错误）。
+  //
+  // 本组盯四条不变式，全在真 Calc 模型上验：
+  //   (1) 命中的文本格改了，**同区域内没命中的格一个字都没变**；
+  //   (2) 公式格即使算出来的文本命中也不动（写字符串会把公式本身毁掉），跳过数如实报出；
+  //   (3) 数值格即使显示文本命中也不动（否则数字会变成文本）；
+  //   (4) Calc 没有修订机制，唯一的后悔药 doc_undo 真能把这一批替换退回原文。
+  console.log('\n[36] Calc sheet_find_replace：只改命中格 / 公式数值格不动 / doc_undo 回滚')
+  {
+    const guard36 = await exec('sheet_find_replace', { find: '甲方', replace: '买受人' })
+    check('Writer 文档上 sheet_find_replace 被明确拒绝',
+      guard36.success === false && /电子表格/.test(guard36.message || ''), JSON.stringify(guard36))
+
+    await exec('debug_fresh_calc')
+    // A 列：两格含「甲方」的文本 + 一格不含的；B 列：不含的文本、数值、公式、含两处的文本。
+    // B3 的公式刻意把「甲方」写成字面量（不引用会被替换的格），保证扫到它时它算出来的
+    // 文本一定命中 —— 不做类型判定的实现会把公式写成字符串，当场报废。
+    const W36 = await exec('sheet_write_cells', {
+      startCell: 'A1',
+      rows: [
+        ['甲方名称', '张三'],
+        ['甲方代表', 12500],
+        ['乙方名称', '="甲方"&A3'],
+        ['备注：甲方与甲方各执一份', '甲方甲方'],
+      ],
+    })
+    check('替换前写入 4×2 夹具', W36.success === true && W36.cellsWritten === 8, JSON.stringify(W36))
+
+    const before36 = await exec('sheet_read_range', { range: 'A1:B4' })
+    const ORIGINAL36 = JSON.stringify(before36.rows)
+    check('夹具就位：公式格算出「甲方乙方名称」（显示文本含甲方）',
+      before36.success === true && before36.rows[2][1] === '甲方乙方名称',
+      JSON.stringify(before36.rows))
+
+    const rep36 = await exec('sheet_find_replace', { find: '甲方', replace: '买受人' })
+    check('sheet_find_replace 成功并报出改了几格 / 共几处',
+      rep36.success === true && rep36.replaced === 4 && rep36.occurrences === 6,
+      JSON.stringify(rep36))
+    check('回报的坐标就是命中的那几格（A1/A2/A4/B4）',
+      Array.isArray(rep36.cells) && rep36.cells.join(',') === 'A1,A2,A4,B4',
+      JSON.stringify(rep36.cells))
+    check('公式格算出的文本命中但未改动，并如实报数',
+      rep36.skippedFormulaCells === 1 && /公式/.test(rep36.note || ''),
+      JSON.stringify(rep36))
+
+    const after36 = await exec('sheet_read_range', { range: 'A1:B4' })
+    check('命中的文本格都改了（含一格内两处）',
+      after36.rows[0][0] === '买受人名称' && after36.rows[1][0] === '买受人代表'
+      && after36.rows[3][0] === '备注：买受人与买受人各执一份' && after36.rows[3][1] === '买受人买受人',
+      JSON.stringify(after36.rows))
+    check('**未命中的格一个字都没变**（B1 文本 / A3 文本 / B2 数值）',
+      after36.rows[0][1] === '张三' && after36.rows[2][0] === '乙方名称' && after36.rows[1][1] === 12500,
+      JSON.stringify(after36.rows))
+    check('公式格原样存活：公式串还在、结果照旧',
+      (after36.formulas || []).some((f) => f.cell === 'B3' && /A3/.test(f.formula))
+      && after36.rows[2][1] === '甲方乙方名称',
+      JSON.stringify(after36.formulas) + ' / ' + JSON.stringify(after36.rows[2]))
+
+    // 数值格：B2=12500 的显示文本含「500」，替换必须跳过它（改了数字就变成文本）
+    const num36 = await exec('sheet_find_replace', { find: '500', replace: '600' })
+    check('数值格显示文本命中也不改，跳过数如实报出',
+      num36.success === true && num36.replaced === 0 && num36.skippedNumericCells === 1
+      && /数值/.test(num36.note || ''),
+      JSON.stringify(num36))
+    const num36r = await exec('sheet_read_range', { range: 'B2:B2' })
+    check('数值格仍是数值 12500（没被写成文本）', num36r.rows[0][0] === 12500, JSON.stringify(num36r.rows))
+
+    // wholeCell：只有整格等于 find 的才换
+    const whole36 = await exec('sheet_find_replace', { find: '张三', replace: '李四', wholeCell: true })
+    check('wholeCell 换掉整格相等的那一格', whole36.success === true && whole36.replaced === 1, JSON.stringify(whole36))
+    const whole36b = await exec('sheet_find_replace', { find: '买受人', replace: '出卖人', wholeCell: true })
+    check('wholeCell 下「买受人名称」不算命中', whole36b.success === true && whole36b.replaced === 0, JSON.stringify(whole36b))
+
+    // maxReplacements：命中更多时提前停下并标 truncated
+    const cap36 = await exec('sheet_find_replace', { find: '买受人', replace: '出卖人', maxReplacements: 1 })
+    check('maxReplacements 到点即停并标 truncated',
+      cap36.success === true && cap36.replaced === 1 && cap36.truncated === true && /上限/.test(cap36.note || ''),
+      JSON.stringify(cap36))
+
+    // 参数守卫：不动文档
+    const bad36 = await exec('sheet_find_replace', { find: '出卖人' })
+    check('省略 replace 被拒（不能当成静默删数据）', bad36.success === false, JSON.stringify(bad36))
+    const same36 = await exec('sheet_find_replace', { find: '出卖人', replace: '出卖人' })
+    check('find 与 replace 相同被拒', same36.success === false, JSON.stringify(same36))
+    const badRange36 = await exec('sheet_find_replace', { find: 'a', replace: 'b', range: 'not-a-range' })
+    check('非法区域被拒绝', badRange36.success === false, JSON.stringify(badRange36))
+
+    // doc_undo 回滚：Calc 没有修订机制，这是唯一的后悔药（#921 已给 Calc 会话放回 doc_undo）。
+    // 一格一步地退，直到回到夹具原文为止——引擎把一次批量替换记成几条 undo 动作是
+    // 它自己的事，用例只认「退得回去」这个结果，不去假设步数。
+    const u1 = await exec('undo', { steps: 1 })
+    check('undo 在 Calc 文档上生效', u1.success === true, JSON.stringify(u1))
+    let restored36 = false
+    for (let i = 0; i < 60 && !restored36; i++) {
+      const rd = await exec('sheet_read_range', { range: 'A1:B4' })
+      if (JSON.stringify(rd.rows) === ORIGINAL36) { restored36 = true; break }
+      const u = await exec('undo', { steps: 1 })
+      if (!u || u.success !== true) break
+    }
+    check('doc_undo 能把整批替换退回原文（甲方全部复原、公式与数值完好）',
+      restored36 === true, '退不回 ' + ORIGINAL36)
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

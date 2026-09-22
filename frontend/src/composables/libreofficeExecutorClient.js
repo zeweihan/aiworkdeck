@@ -147,6 +147,9 @@ export const EDITOR_ACTIONS = [
   // 工作簿级命名区域 / 工作表保护 / 行列分组大纲 / 数据透视表（行分组+求和基础形态）。
   'sheet_add_comment', 'sheet_get_comments', 'sheet_delete_comment',
   'sheet_set_data_validation', 'sheet_add_chart', 'sheet_search',
+  // [表格批量替换] dev-board#804：Calc 此前只有只读的 sheet_search，成批改写只能
+  // 退回 sheet_write_cells 的矩形整块回写（会覆盖掉区域内不该动的格）。
+  'sheet_find_replace',
   'sheet_define_name', 'sheet_protect_sheet', 'sheet_group_rows_cols',
   'sheet_add_pivot_table',
   // [Impress 演示文稿] slide_* 原语集 Phase 1（打开/读取/文本编辑）：与 doc_*(Writer)/
@@ -180,6 +183,8 @@ export const ACTION_BUDGET_MS = {
   load_document: 180000, export_document: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
   apply_style_profile: 120000,
+  // 表格批量替换（dev-board#804）：一次扫到 20000 格、逐格落笔，同 find_replace 量级。
+  sheet_find_replace: 120000,
   // 流式 chunk 和收尾都可能一次写完整表格；完整回答插入也复用 stream_insert。
   stream_insert: 120000, stream_flush: 120000,
   // resolve_revisions（批量处置一张审阅卡片）最坏情况下 K 接近全文 redline 总数 N
