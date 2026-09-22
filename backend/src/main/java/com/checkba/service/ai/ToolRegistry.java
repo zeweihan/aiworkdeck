@@ -217,10 +217,13 @@ public class ToolRegistry {
     }
 
     /**
-     * @param offerToModel false 时只登记不下发：工具仍可被 resolve/execute 调到（拿到的是它自己
-     *                     那句可行动的错误），但不会出现在给 LLM 的 spec 清单里。
+     * @param componentOffersToModel 组件级开关（{@code AgentToolComponent.isAvailable()}）：
+     *                     false 时本组件的工具只登记不下发。单个工具还能再用
+     *                     {@code @ToolMeta.offerToModel = false} 单独退出下发（dev-board#799）。
+     *                     两者都是「只登记不下发」：工具仍可被 resolve/execute 调到，
+     *                     拿到的是它自己那句可行动的错误，好过一句 "Tool not found"。
      */
-    private void registerBean(Object bean, boolean offerToModel) {
+    private void registerBean(Object bean, boolean componentOffersToModel) {
         for (Method method : bean.getClass().getDeclaredMethods()) {
             if (!method.isAnnotationPresent(Tool.class)) {
                 continue;
@@ -230,11 +233,16 @@ public class ToolRegistry {
                 ToolMeta meta = method.getAnnotation(ToolMeta.class);
                 RegisteredTool previous = builtinTools.put(spec.name(),
                         new RegisteredTool(bean, method, spec, meta, false));
+                // 宿主声明无条件推给可见性服务：它同时管规格下发与分发拒绝，
+                // 不能因为这个工具本轮不下发规格就漏掉分发那一头。
+                if (meta != null && clientCapabilityService != null) {
+                    clientCapabilityService.declareHostRequirement(spec.name(), meta.requiresHost());
+                }
                 if (previous != null) {
                     log.warn("Duplicate tool name '{}' — {} overrides {}",
                             spec.name(), bean.getClass().getSimpleName(),
                             previous.bean().getClass().getSimpleName());
-                } else if (offerToModel) {
+                } else if (componentOffersToModel && (meta == null || meta.offerToModel())) {
                     builtinSpecifications.add(spec);
                 }
             } catch (Exception e) {

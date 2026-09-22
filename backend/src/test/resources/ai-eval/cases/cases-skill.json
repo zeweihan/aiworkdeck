@@ -242,5 +242,44 @@
         "doc_apply_standard_format"
       ]
     }
+  },
+  {
+    "id": "skill-toolless-skill-does-not-collapse-tool-set",
+    "title": "不带工具的 skill（语音合成，enabled_by_default: true）命中：doc_* 仍然可见——tool_policy 缺省 passthrough，不裁剪。改之前它一命中就把整轮工具集裁成 base-tools ∪ 编排类工具十来个、doc_* 全部消失，模型只能回一句「我无法修改文档」，不报错不告警（dev-board#799 / 审计 A2）",
+    "category": "skill",
+    "protocol": "xml",
+    "userInput": "先朗读文档的第一段，然后把甲方名称统一改成「京微资易」。",
+    "turns": [
+      {
+        "text": "<process name=\"统一甲方名称\"><tool_code>doc_find_replace(findText=\"甲方\", replaceText=\"京微资易\", replaceAll=true)</tool_code></process>"
+      },
+      {
+        "text": "<final>朗读请在左栏「语音合成」面板里操作（对话里没有合成能力）；甲方名称已在正文中统一替换，改动带修订痕迹，可逐条接受或拒绝。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_find_replace": "{\"success\":true,\"replacedCount\":7}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_find_replace"
+        }
+      ],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": [
+        "doc_find_replace",
+        "doc_get_document_text",
+        "doc_add_comment",
+        "doc_undo",
+        "read_document",
+        "todo_write",
+        "dispatch_subtask"
+      ]
+    }
   }
 ]

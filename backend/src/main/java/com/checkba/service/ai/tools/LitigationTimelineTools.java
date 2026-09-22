@@ -274,8 +274,10 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
     // ==================== 出图 ====================
 
+    // 与 litigation_render 同一条收尾（sendRefreshFilesAction + sendOpenFileAction），
+    // 同一个理由标 LOWA。
     @ToolMeta(displayName = "生成案件时间轴", category = "litigation-visual", fileEffect = "ADDED",
-            fileArg = "diagramName", refreshFiles = true)
+            fileArg = "diagramName", refreshFiles = true, requiresHost = ToolMeta.Host.LOWA)
     @Tool("Render the timeline and save it into the project. Requires the pipeline to have reached "
             + "the items stage (items.json submitted here via modelFilesJson or in a previous step). "
             + "Every head text must be a pure-deletion subsequence of its source sentences — the "

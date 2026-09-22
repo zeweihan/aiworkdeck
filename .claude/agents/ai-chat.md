@@ -125,9 +125,26 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
 - **LEGACY_DEFAULTS 只许给「可选参数」代填，绝不许给必填参数代填**（审计 A4）：`bindArguments` 的顺序是**先补缺省再转换**，所以这里填了值、方法里的 null 守卫就永远走不到——等于把一处写好的防护重新打开。踩过的坑：`doc_get_paragraph.paragraphIndex` 与 `doc_modify_paragraph.paragraphIndex` 曾缺省 1，而 `DocumentEditTools.rejectBadParagraphIndex` 正是为「模型漏传段落号」写的守卫，结果 doc_modify_paragraph 漏传时不报错、而是对**第 2 段**（0 基 index=1）做一次模型从未主张过的整段替换（修订模式下用户还很可能直接接受）。两条已删；`doc_find_replace.replaceAll` 也搬回工具自身（口径不变：不传即替换全部，只想改第一处必须显式 false）。留下的四条都是真·可选参数。回归 `ToolRegistryLegacyDefaultsTest`（走整条 execute→bindArguments→方法 的链路；直接调方法的 `ParagraphIndexBaseTest` 绕过 bindArguments，证明不了这件事）。
-- **工具可见性是三层闸，判据分别在三个地方**（改任一层前先分清是哪一层）：
+- **工具可见性是五层闸，判据分别在五个地方**（改任一层前先分清是哪一层）：
   ① **会话客户端能力**（`ClientCapabilityService.isToolVisible`）：LOWA 会话只见 doc_/sheet_/slide_，
      Office 插件会话只见 office_* 且按宿主 Word/Excel/PowerPoint 再分，none 两者皆无；
+  ①b **工具自报的宿主依赖**（dev-board#799，`@ToolMeta.requiresHost = NONE|LOWA|OFFICE`）：
+     叠在前缀链**之上**的声明层，**只收窄、绝不放宽**（两层都通过才可见）。前缀链是既有公开契约、
+     一行没动；无前缀的工具从此自己声明，不再往 `ClientCapabilityService` 里塞名字清单。
+     **判据是收尾经不经 `EditorBridgeService` 的四个文档级 UI 指令**——`sendOpenFileAction` /
+     `sendReloadFileAction` / `sendTextReloadFileAction` / `sendPptConfigAction`，这四条都指名
+     一份文档、要求桌面前端把它打开或重载。`sendRefreshFilesAction`（刷文件树）与
+     `sendComponentRequiredAction`（引导下载组件）**刻意不算**：它们是环境通知不是交付物，
+     按它们判会把 `write_docx` / `create_folder` 一并锁进 LOWA，Office 会话里连新建文件都做不了。
+     今天声明 LOWA 的 12 个：`pptx_open_file` / `pptx_generate` / `pptx_apply_format` /
+     `litigation_render` / `litigation_timeline_render` / `pdf_to_word` / `pdf_highlight` /
+     `pdf_annotate` / `pdf_redact` / `pdf_replace_text` / `text_write_file` / `text_find_replace`。
+     **代价是真的**：后两族（pdf_* 与 text_*）的写入本身是纯服务端的，声明 LOWA 等于在
+     Office/none 会话里一并收走那份能力——这是按审计口径做的取舍（那些会话里用户既没有文件树
+     也没有预览，拿不到结果，而工具还在承诺「编辑器会重载」），不是顺手扩大的。
+     **只读面没动**：`pdf_list_files` / `pdf_inspect` / `pptx_inspect_format` / `pptx_list_files`
+     在任务窗格会话里照常可见——收窄的是「改」不是「读」。
+     声明清单与「谁在发那四个 send」的绊线都在 `ToolDeclarationContractTest`（逐名钉住 + 扫源码对拍）。
   ② **活跃文档类型**（dev-board#729 ①，同一个方法的三参重载 + `visibleForDocKind`）：
      docx 隐藏全部 slide_* 与除 `sheet_create_file` 外的 sheet_*；xlsx/pptx 反过来隐藏 doc_*，
      但 `KIND_AGNOSTIC_LOWA_TOOLS` 里的**六个工具永远保留**——判据是
@@ -137,7 +154,37 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      Calc/Impress 也没有后悔药了）；**「新建并打开一份新文档」**的 sheet_create_file 与
      doc_start_stream（作用在新建出来的那份文件上，不是活跃文档）。
      **判不准一律倒向全集**：kind 为 null / 空 / "text" / 未知值都不裁。
-  ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节；
+     另有一张**按类型逐个放行**的小表 `EXTRA_DOC_KINDS_BY_TOOL`（dev-board#799）：
+     `doc_undo` / `doc_redo` **只放给 xlsx，不放给 pptx**。审计（A3/B-03）主张两类都放，
+     理由是「Calc 与 Impress 都没有修订痕迹、撤销是仅剩的细粒度安全网，而这两个工具只是
+     `executeEditorCommand("undo")`、与文档类型无关」——前半句对，后半句只对一半。
+     lowa-e2e 真引擎逐条验过（`frontend/tests/lowa-e2e/undo-redo-kinds.mjs`，**判据是回读
+     文档内容而不是返回值**）：Calc 上 `sheet_write_cells` 之后 undo 真的把 A1 改回原值、
+     redo 再回到新值；**Impress 上 undo 返回 `{"success":false,"undone":0,"message":"nothing to undo"}`，
+     内容一个字没变**——Impress 的写入原语全是 UNO API 直写（`shape.getText().setString()` /
+     `XDrawPages.insertNewByIndex()`），这条路在本引擎上一条撤销条目都不记，直接调 `um.undo()`
+     抛 `EmptyUndoStackException`。差别在引擎模块，不在 worker 的 `undoStep`。
+     更糟的是 `slide_add_page` 内部「insertNewByIndex（不记）+ `.uno:MovePageUp/Down`（记）」
+     只有后半段进撤销栈，撤一次可能把插页撤成「新页留在错位置」的半成品。
+     引擎哪天记了撤销栈，那条 e2e 用例会先红——它锁的就是今天这个现状。
+  ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节。
+     **裁不裁是 skill 自愿声明的**（dev-board#799，审计 A2）：skill.yml 的
+     `tool_policy: passthrough | restrict`，**缺省 passthrough = 不裁**。改之前裁剪与否只看
+     `allowed_tools` 有没有内容，而它的缺省是空 ArrayList——于是「本身不带工具」的 skill
+     （`desensitize` / `text-to-speech`，作用是把用户引导去左栏面板）一旦被触发词命中，
+     整轮工具从一百多个塌缩成 base-tools ∪ 编排类工具十来个、`doc_*` 全部消失，模型只能回
+     「我无法修改文档」；`text-to-speech` 还是 `enabled_by_default: true`。误配置回退救不了它：
+     那条判据是「filtered 里是不是只剩编排类工具」，而 base-tools 的三个恰好让它为假。
+     **多个 skill 同时生效时，任一 passthrough 就整轮不裁**——收窄必须全体同意，否则裁掉的
+     正是那个 skill 没机会用白名单申报的能力。`restrict` 却没写 `allowed_tools` 同样按
+     passthrough 兜（加载期 warn）。八个自带 skill 里六个显式写了 `restrict`（= 保持现状），
+     `desensitize` / `text-to-speech` 不写（= 本次要修的那两个）。
+     **已知风险，留给维护者拍板**：`meeting-recorder`（默认开、触发词「会议纪要」「整理会议」很宽）
+     与 `listing-pathway`（触发词有「IPO」「VIE」「红筹」这种短词，匹配是对整条输入做 contains）
+     的白名单里一个 `doc_*` / `office_*` 都没有，命中即失去全部编辑能力——与 A2 同一形态，
+     只是清单非空所以更隐蔽。本次刻意没有单方面改（回放用例 `skill-listing-pathway-trigger-trim-xml`
+     与 `skill-orchestration-tools-not-trimmed` 都钉着 listing-pathway 会裁剪），两条 skill.yml 里
+     各留了一段说明；要修得先把编辑面补进清单或把触发词收紧。
   ④ **运行期可用性**（dev-board#750）：账户没连时那些必然回「尚未连接 AI WorkDeck 账户」的工具不下发。
      判据链是 `AgentToolComponent.currentlyUnusableTools()` → `ToolRegistry.unusableToolNames()`
      → 起跑时存进 `RunGuard.unusableTools` → **在编排器里**做最后一道过滤（与 skill 白名单、
@@ -155,7 +202,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      **一轮内不变**：与 activeDocKind 同一条契约，而且这一个连中途放宽的口子都没有。
   - **为什么值得做②**：工具规格**每一轮都要重发**，一条消息跑三五个往返就付三五遍。
     本机实测 202 个工具 59045 prompt token / 首轮 26.4s，裁到 16 个 18854 token / 6.1s；
-    本仓离线实测（`ToolSchemaBudgetTest`）docx 省 26.7%、xlsx 省 38.9%、pptx 省 39.7% 的 schema 体量。
+    本仓离线实测（`ToolSchemaBudgetTest`）docx 省 26.7%、xlsx 省 37.8%、pptx 省 38.8% 的 schema 体量。
+    ①b 的收益全在**换一类客户端**那一档（同测试的第三个用例，dev-board#799 实测）：
+    Word 任务窗格 127 个 / 56435 字符 → 114 个 / 48880 字符；Excel 117 → 104；
+    PowerPoint 105 → 92；纯对话（none）87 → 74。LOWA 全集 200 → 198（少的两个是 offerToModel=false）。
   - **一轮内工具集必须不变**：kind 在 `beginRun` 时算一次存进 `RunGuard.activeDocKind`，
     runLoop 每次递归都读同一个值。每轮重算的话，模型上一轮已经宣布要调的工具这一轮可能就没了，
     通道直接 400。**改写点只有 `dispatchTool` 里的两处，且都只放宽不收窄**：
@@ -179,8 +229,16 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
     于是针对它们的 `offeredToolsExclude` 全是空断言（工具名没注册，排除断言恒过）——
     已于 dev-board#729 补齐，`EvalToolBeanParityTest.KNOWN_MISSING` 现在是空集，别再往里加名字。
 - **组件级可用性闸（dev-board#396）**：`AgentToolComponent.isAvailable()`（default true）。返回 false 的组件**仍然登记进 builtinTools**（resolve/execute 照常命中），但**它的 spec 不进 builtinSpecifications**——模型看不见即不会去试，而万一被 XML 兜底路径调到，拿到的是工具自己那句可行动的错误（远好过 "tool not found"）。探测在 `ToolRegistry.init` 的 @PostConstruct 上跑，所以实现**必须自己缓存且绝不抛异常**（抛了也被 `componentAvailable` 兜成"可用"，最坏多下发一个工具，但不许让后端起不来）。今天唯一的使用者是 `PythonTools`：`run_python` 无条件 `docker run python:3.9-slim`，判据是「docker 可执行文件在 **且** `docker version` 成功」（Docker Desktop 装了没开的机器上 CLI 在、守护进程不在，run 一样起不来），3 秒超时、输出 DISCARD（接了管道又不读会把子进程卡在 write 上）、**进程级**缓存（不是每实例一份：eval 里每个 harness 都会新建一个 PythonTools，逐个 fork docker 子进程会把测试拖慢几分钟）。护栏 `ToolRegistryAvailabilityTest` / `PythonToolsDockerGateTest`。
+- **永久不下发的工具（dev-board#799，审计 A15）**：`@ToolMeta(offerToModel = false)`。与
+  `isAvailable()`（**进程级**，本机有没有 Docker）和 `currentlyUnusableTools()`（**运行期**，
+  账户连没连）同一口径——**只裁 spec、不裁 resolve/execute**，但这一个是**永久的**：工具本身
+  已经停用或者压根不该出现在律师面前，与环境无关，所以写成声明而不是每次现算。
+  今天两个使用者：`delete_file`（永久停用，实现就是一句拒绝；每轮白付一份 schema，而且用户说
+  「把这个文件删掉」时模型会先调一次再转述拒绝，白烧一个往返）与 `doc_debug_revisions`
+  （调试工具，与 `doc_list_revisions` 功能重合，不该进用户的过程卡）。护栏
+  `ToolDeclarationContractTest`（逐名钉住 + 断言登记仍在）。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
-- tools/：FileTools(13，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(2，dev-board #53：task_create/task_list，项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。
+- tools/：FileTools(13，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(2，dev-board #53：task_create/task_list，项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。**PptxTools / PdfTools / TextFileEditTools / Litigation* 里共 12 个工具已用 `@ToolMeta(requiresHost = LOWA)` 声明桌面前端依赖**（dev-board#799，见上文①b）——「Office 会话看得到 pptx_generate 并被它的『等待用户操作…』卡住整轮」这条地雷**已修**。
 
 **记忆/证据/MCP/子 Agent**
 - memory/：MemoryPipelineService（轮次结束异步触发写侧管线）、MemoryManager（检索）、AgenticRetriever、MemCellExtractor、ProjectMemoryExtractor、MemoryEvidenceFormatter（证据账本：时间锚点/来源/更新信号，PR#155）。记忆五作用域 + 拟人化排序（重要性×衰减×随机）。
@@ -719,10 +777,18 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，**13 组**）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）、cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）与 **cases-question**（反问停机：awaiting_input / 执行日志随停机落库 / 同轮工具+反问不递归 / 计划审批优先于反问）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文；`expect.checkpointForFileId` 断言本轮为活跃文档建过检查点——判据是 `@ToolMeta(fileEffect="MODIFIED")`，所以漏标注解的写入原语会在这里现形（`cases-revision.json` 的 `insert-at-cursor-creates-checkpoint-xml` 就是一轮只用 doc_insert_at_cursor 的最小复现，审计 B-02）。
   - **地雷：`eval/RealToolBeans.instantiateAll()` 的清单必须与生产 `AgentToolComponent` 集合同步。** TodoTools 曾长期漏列，于是 `todo_write` 在整个回放评测里根本没注册——`offeredToolsInclude` 永远失败、`offeredToolsExclude` 永远通过，相关可见性断言全是空的（已补 TodoTools）。**目前仍缺 CheckpointTools 与 SlideEditTools**，补时要同时复核各用例的 offeredToolsExclude。
   - **跨类 `public static final` 常量在编译期内联**：只跑 `mvn test` 的增量编译会留下「源码一致、字节码不一致」的假失败，验证阶段一律 `mvn clean test`。
-  - **`mvn clean test` 里有 15 条 skip 是常态**（2026-09-20 实测：Tests run 4321 / Skipped 15；2026-09-09 时是 3410 / 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；WritingLiveEvaluationTest **1** 条同样要 key；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
+  - **`mvn clean test` 里有 15 条 skip 是常态**（2026-09-22 实测：Tests run 4676 / Skipped 15；2026-09-20 是 4321 / 15，2026-09-09 是 3410 / 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；WritingLiveEvaluationTest **1** 条同样要 key；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
   - **Mockito 陷阱（踩过）**：`String.valueOf(inv.getArgument(n))` 会被 Java 重载决议挑成 `String.valueOf(char[])`（泛型 `<T> T` 推成 `char[]`），运行时抛 ClassCastException；若该 mock 的调用方把异常吞掉只 log（如 `SubAgentService.sendProgress`），表现就是「队列永远空、断言说没收到事件」，看着像生产代码不发事件。写 `inv.getArgument(n, String.class)`。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
 - 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。
+- 工具可见性声明化 / skill tool_policy（dev-board#799）：
+  `mvn test -Dtest=ToolDeclarationContractTest,ClientCapabilityServiceTest,ClientCapabilityDocKindTest,SkillRouterTest,BuiltinSkillsTest,ToolSchemaBudgetTest,OrchestratorReplayEvalTest`。
+  Calc/Impress 的 undo 真机判据：`cd frontend && npm run test:lowa-undo-redo`
+  （借 `/Applications/AI WorkDeck.app` 的引擎载荷，本树 `npm run build:zetaoffice` 出 glue，无头）。
+  **写新 skill 或改 skill.yml 的 tool_policy 会撞到两处**：`BuiltinSkillsTest.toolPolicyOfEveryBuiltinSkillIsPinned`
+  （八个自带 skill 的 policy 逐个钉住）与那些**自己造 skill 夹具**的测试——夹具不写
+  `tool_policy: restrict` 就根本没有裁剪可言，针对裁剪的断言会变成空断言
+  （`SkillRouterTest` 与 `AgentOrchestratorConcurrentTurnsTest` 的 writeSkill 都已补上）。
 - 并发轮次隔离：`mvn test -Dtest=AgentOrchestratorConcurrentTurnsTest`（五条：两轮并发各占一行消息、「停止后立刻再发」只停旧轮、两轮各自命中各自的 skill、旧轮次被取代后 `text_delta` / `reasoning_delta` / `doc_stream_data` 全部静默而新轮次照常、chat 返回后循环起跑前发来的 cancel 不落空；交错点全用 CountDownLatch 钉死，不靠 sleep 赌时序——最后一条用一个只在放行后才跑任务的假 executor 卡住「已提交未起跑」这个窗口）。
 - 状态持久化/启动回收：`mvn test -Dtest=AgentRunRecoveryServiceTest`（mark 写透、RUNNING→INTERRUPTED+补标记、幂等、续跑翻回 RUNNING）。
 - 工具空输出与崩溃轮落库：`mvn test -Dtest=AgentOrchestratorBlankToolOutputTest,ReadDocumentOfficeFormatTest`

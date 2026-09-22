@@ -105,7 +105,12 @@ public class PdfTools implements AgentToolComponent {
 
     // ==================== 高亮 / 批注 ====================
 
-    @ToolMeta(displayName = "高亮PDF文本", category = "pdf", fileEffect = "MODIFIED")
+    // 这四个修改类工具的收尾都走 finishModification 里的 sendReloadFileAction（文档级 UI 指令），
+    // 任务窗格会话里那一步不会发生，而工具描述还在承诺「预览中直接可见」——审计 A9 的同一族。
+    // 注意：它们改的是磁盘上那份 PDF，写入本身是纯服务端的；收窄的代价见 ToolMeta.requiresHost 的
+    // 「代价要想清楚再标」一段。只读面（pdf_list_files / pdf_inspect）没有声明，照常可见。
+    @ToolMeta(displayName = "高亮PDF文本", category = "pdf", fileEffect = "MODIFIED",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("在 PDF 中高亮指定文本（所有匹配处）。写入标准 PDF 高亮注释，预览中直接可见。" +
           "text 必须与原文逐字一致（先用 pdf_inspect 核对）；原文跨行也能匹配。" +
           "仅适用于有文本层的页面（非扫描件）、未加密的 PDF。")
@@ -128,7 +133,8 @@ public class PdfTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "添加PDF批注", category = "pdf", fileEffect = "MODIFIED")
+    @ToolMeta(displayName = "添加PDF批注", category = "pdf", fileEffect = "MODIFIED",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("在 PDF 的指定文本旁添加便签批注（锚定第一处匹配）。批注以标准 PDF 注释写入，" +
           "预览中显示为可点开的便签图标，署名 AI WorkDeck。anchorText 必须与原文逐字一致。")
     public String pdf_annotate(
@@ -154,7 +160,8 @@ public class PdfTools implements AgentToolComponent {
 
     // ==================== 脱敏 ====================
 
-    @ToolMeta(displayName = "PDF脱敏", category = "pdf", fileEffect = "MODIFIED")
+    @ToolMeta(displayName = "PDF脱敏", category = "pdf", fileEffect = "MODIFIED",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("对 PDF 做真脱敏：黑框覆盖指定文本，并把涉及的页面转为图片页、彻底移除该页文字层" +
           "（黑框下的内容无法再复制或提取——单纯画黑框是伪脱敏）。代价是被处理的页面文字不可再选中，" +
           "其余页面保持原样。此操作不可逆，务必确认目标文本无误后执行。" +
@@ -192,7 +199,8 @@ public class PdfTools implements AgentToolComponent {
 
     // ==================== 短文本替换 ====================
 
-    @ToolMeta(displayName = "替换PDF文本", category = "pdf", fileEffect = "MODIFIED")
+    @ToolMeta(displayName = "替换PDF文本", category = "pdf", fileEffect = "MODIFIED",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("PDF 短文本原位替换（白底覆盖+按原字号覆写）。适合改日期、金额、人名等不跨行的短文本。" +
           "限制必须如实告知用户：1) PDF 没有排版回流，新文本过长会超出原区域；2) 匹配文本不能跨行；" +
           "3) 只覆盖显示层，底层旧文字仍可被提取，需要彻底清除请用 pdf_redact。" +
@@ -222,7 +230,10 @@ public class PdfTools implements AgentToolComponent {
 
     // ==================== 转 Word ====================
 
-    @ToolMeta(displayName = "PDF转Word", category = "pdf", fileEffect = "ADDED", refreshFiles = true)
+    // 三条分支的收尾都是 sendOpenFileAction，返回文案三处都写着「已在编辑器中打开」，
+    // 还接着让模型「用 doc_* 编辑该 docx」——而 doc_* 在任务窗格会话里恰恰是隐藏的。
+    @ToolMeta(displayName = "PDF转Word", category = "pdf", fileEffect = "ADDED", refreshFiles = true,
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("把 PDF 转换为可编辑的 Word 文档，自动选择最佳路径：" +
           "1) 文本型 PDF 优先版式级转换（pdf2docx：段落/表格/图片/分栏尽量保留原排版），转换服务不可用时" +
           "自动回退为结构级转换（保留文字与段落，不保版式）；" +

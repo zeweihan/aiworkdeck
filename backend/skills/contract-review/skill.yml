@@ -70,6 +70,12 @@ prompt: prompt.md
 # （工作台 LOWA 会话见 doc_*，Word 插件会话见 office_*），这里不需要也不能替它挑。
 # 编排类工具（todo_write / dispatch_subtask）恒定可见，不要为「保险」抄进来——
 # 回放用例 skill-orchestration-tools-not-trimmed 靠「不在清单里却仍可见」守这条不变式。
+# 本 skill 是一个聚焦模式，要限制本轮可见工具（dev-board#799）：审查的每一处改动都必须
+# 带修订痕迹，放开全集等于把 doc_start_stream / text_write_file 这类整篇覆写的原语
+# 也摆到模型面前。下面这份清单已经覆盖「看/找/选/改/批注/安全网」以及 law_*、search_web、
+# 附件对照，LOWA 与 Word 插件两族都列全了，所以限制不会挡住任何审查要做的动作。
+tool_policy: restrict
+
 allowed_tools:
   # 看：通读、条款结构、机械审计、既有修订与批注
   - doc_get_clauses

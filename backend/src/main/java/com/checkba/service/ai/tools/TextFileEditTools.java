@@ -55,7 +55,10 @@ public class TextFileEditTools implements AgentToolComponent {
     /** 大文件熔断：纯文本超过这个尺寸基本是日志/导出物，整篇改写没有意义还吃内存。 */
     private static final long MAX_TEXT_BYTES = 5L * 1024 * 1024;
 
-    @ToolMeta(displayName = "写入文本文件", category = "file", fileEffect = "MODIFIED")
+    // writeBack 收尾发 sendTextReloadFileAction，工具描述也明写「同步刷新用户已打开的文本标签」；
+    // 任务窗格既没有文本标签也没有文件树，改完的纯文本文件在那里没有任何去处——审计 A9。
+    @ToolMeta(displayName = "写入文本文件", category = "file", fileEffect = "MODIFIED",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("整篇覆盖写入一个纯文本/代码文件（txt/md/json/js/html/css/yml 等，UTF-8）。docx/xlsx/pptx 等 Office 文档"
             + "禁止用本工具，那些走 doc_* / sheet_* / slide_* 编辑原语。读取纯文本用 extract_file_text。"
             + "写入即生效（纯文本没有修订机制），并自动进入版本记录、同步刷新用户已打开的文本标签。")
@@ -88,7 +91,9 @@ public class TextFileEditTools implements AgentToolComponent {
                 + "未找到 \"" + abbreviate(find) + "\"（文件共 " + length + " 字符）。";
     }
 
-    @ToolMeta(displayName = "文本查找替换", category = "file", fileEffect = "MODIFIED")
+    // 与 text_write_file 共用 writeBack（同一条 text_reload_file 收尾），同一个理由。
+    @ToolMeta(displayName = "文本查找替换", category = "file", fileEffect = "MODIFIED",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("在纯文本/代码文件（txt/md/json/js/html/css/yml 等）中做字面量查找替换（非正则）。"
             + "replaceAll=true 替换全部命中，false 只替换第一处；返回命中次数。"
             + "docx 等 Office 文档禁止用本工具（用 doc_find_replace）。改动直接生效并进入版本记录。")

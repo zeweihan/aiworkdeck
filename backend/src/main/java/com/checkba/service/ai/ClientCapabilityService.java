@@ -3,6 +3,7 @@
 
 package com.checkba.service.ai;
 
+import com.checkba.service.ai.tools.ToolMeta;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -172,6 +173,37 @@ public class ClientCapabilityService {
             "doc_start_stream");
 
     /**
+     * 按活跃文档类型逐个放行的例外：工具名 → 额外放行的活跃文档类型
+     *（{@link #KIND_AGNOSTIC_LOWA_TOOLS} 是「对哪一类都放行」，这里是「只对某几类放行」）。
+     *
+     * <p><b>doc_undo / doc_redo 只放给 Calc，不放给 Impress</b>（dev-board#799，审计 A3/B-03）。
+     * 审计的主张是「Calc 与 Impress 都没有修订痕迹、写入即生效，撤销是它们仅剩的细粒度安全网，
+     * 而这两个工具的实现只是 {@code executeEditorCommand("undo")}、与文档类型无关」——
+     * 前半句对，后半句只对了一半。lowa-e2e 真引擎逐条验过
+     *（{@code frontend/tests/lowa-e2e/undo-redo-kinds.mjs}，判据是回读文档内容而不是返回值）：
+     * <ul>
+     *   <li><b>Calc 生效</b>：{@code sheet_write_cells} 改 A1 之后 undo 回读到原值、redo 回读到新值；
+     *       探针直读撤销栈能看到 {@code cell.setString} 压进去的那条条目。</li>
+     *   <li><b>Impress 不生效</b>：{@code slide_set_shape_text} / {@code slide_add_page} 之后
+     *       undo 返回 {@code {"success":false,"undone":0,"message":"nothing to undo"}}，
+     *       回读内容一个字没变。Impress 的写入原语全是 UNO API 直写
+     *       （{@code shape.getText().setString()} / {@code XDrawPages.insertNewByIndex()}），
+     *       这条路在本引擎上一条撤销条目都不记，直接调 {@code um.undo()} 抛
+     *       {@code EmptyUndoStackException}。差别在引擎模块，不在 worker 的 undo 实现。</li>
+     * </ul>
+     * 所以 slide 会话里放出 doc_undo 只会换来一个必然失败的往返；更糟的是
+     * {@code slide_add_page} 内部「insertNewByIndex（不记）+ .uno:MovePageUp/Down（记）」两段
+     * 只有后半段进撤销栈，撤一次可能把插页撤成「新页留在错位置」的半成品。
+     *
+     * <p>哪天 Impress 的写入原语改走 dispatch（或引擎开始记 API 写入），
+     * 把 slide 加进来即可——上面那条 e2e 用例会先红，它锁的就是今天这个现状。
+     */
+    private static final java.util.Map<String, java.util.Set<String>> EXTRA_DOC_KINDS_BY_TOOL =
+            java.util.Map.of(
+                    "doc_undo", java.util.Set.of(DOC_KIND_SHEET),
+                    "doc_redo", java.util.Set.of(DOC_KIND_SHEET));
+
+    /**
      * 工具对该会话是否可见。
      * doc_* / sheet_* / slide_* 是 LOWA 专属远端执行工具（经 EditorBridgeService 等前端回执）；
      * office_* 是 Office 插件专属（经 OfficeBridgeService 等插件回执），且按宿主再细分——
@@ -179,8 +211,16 @@ public class ClientCapabilityService {
      * 其余 office_*（Word 面）只对 Word 会话可见；
      * ref_*（参考来源：读其他文件、改其他打开的文档，dev-board#717）只对 OFFICE 会话可见——
      * 它们是纯后端工具，按前缀规则会落进「所有会话可见」，但只为任务窗格服务，LOWA 会话已有项目文件工具；
-     * 其余工具（纯后端执行）对所有能力档位可见——包括 text_*（纯文本直读直写，
-     * 后端 StorageService 落盘、无客户端执行器依赖，dev-board#37），刻意不过滤。
+     * 其余工具（纯后端执行）对所有能力档位可见，<b>除非它自己用
+     * {@code @ToolMeta.requiresHost} 声明了宿主依赖</b>（dev-board#799）——那是叠加在
+     * 前缀链之上的第二层闸，见 {@link #satisfiesDeclaredHost}。前缀链是既有公开契约，
+     * 一行不动；无前缀工具的宿主依赖从此写在工具自己身上，不再往本服务里塞名字清单。
+     *
+     * <p><b>text_* 的口径已随之改变</b>（原 dev-board#37「纯文本直读直写、无客户端执行器依赖，
+     * 刻意不过滤」）：它们的写入确实是纯后端的，但 {@code writeBack} 收尾发
+     * {@code text_reload_file}、工具描述也明写「同步刷新用户已打开的文本标签」，
+     * 而任务窗格既没有文本标签也没有文件树——改完的纯文本文件在那里没有任何去处。
+     * 两个 text_* 因此声明了 LOWA（审计 A9）。
      */
     public boolean isToolVisible(String toolName, String conversationId) {
         return isToolVisible(toolName, conversationId, null);
@@ -203,6 +243,9 @@ public class ClientCapabilityService {
         if (toolName == null) {
             return false;
         }
+        if (!satisfiesDeclaredHost(toolName, conversationId)) {
+            return false;
+        }
         boolean lowaOnly = isLowaTool(toolName);
         boolean officeOnly = toolName.startsWith("office_");
         // ref_ 这一闸刻意放在两个前缀判定之后、总放行之前：它与 lowaOnly 那一行之间隔着一整行，
@@ -218,6 +261,55 @@ public class ClientCapabilityService {
             case LOWA -> lowaOnly && visibleForDocKind(toolName, activeDocKind);
             case OFFICE -> officeOnly && hostOfTool(toolName) == officeHostOf(conversationId);
             case NONE -> false;
+        };
+    }
+
+    /**
+     * 工具自己声明的宿主依赖（{@code @ToolMeta.requiresHost}），由 {@link ToolRegistry}
+     * 在 {@code @PostConstruct} 扫描时推进来（dev-board#799，审计 A9）。
+     *
+     * <p><b>为什么是推而不是拉</b>：拉就要让本服务反向依赖 ToolRegistry，而 ToolRegistry
+     * 已经依赖本服务（它的三个消费点 getAllSpecifications / resolve / execute 都问这里），
+     * 成环。推进来之后所有既有调用点自动获得这一闸，不必给 {@code isToolVisible} 再加一个
+     * 形参——加形参的坏处是新调用点忘了传就悄悄少一层闸。
+     *
+     * <p>空表 = 一个声明都没有 = 行为与改动前逐字一致（测试里直接
+     * {@code new ClientCapabilityService()} 的地方就是这个状态）。插件工具永远不在表里：
+     * 第三方工具没有桌面前端依赖，判不准一律放行。
+     */
+    private final ConcurrentHashMap<String, ToolMeta.Host> hostRequirements = new ConcurrentHashMap<>();
+
+    /**
+     * 登记一个工具的宿主声明。{@code NONE} 与空值一律视为「不声明」，不入表——
+     * 表里只放真正挑宿主的那些，读的时候 miss 即放行。
+     *
+     * <p>幂等：同名重复登记按最后一次为准（工具名重复时 ToolRegistry 自己会 warn）。
+     */
+    public void declareHostRequirement(String toolName, ToolMeta.Host requiredHost) {
+        if (toolName == null || toolName.isBlank() || requiredHost == null
+                || requiredHost == ToolMeta.Host.NONE) {
+            return;
+        }
+        hostRequirements.put(toolName, requiredHost);
+    }
+
+    /** 这个工具声明的宿主依赖；没声明过返回 {@link ToolMeta.Host#NONE}。 */
+    public ToolMeta.Host hostRequirementOf(String toolName) {
+        if (toolName == null) {
+            return ToolMeta.Host.NONE;
+        }
+        return hostRequirements.getOrDefault(toolName, ToolMeta.Host.NONE);
+    }
+
+    /**
+     * 声明层闸：<b>只收窄、绝不放宽</b>。没声明过的工具（绝大多数）恒为真，
+     * 后面的前缀链照旧决定可见性。
+     */
+    private boolean satisfiesDeclaredHost(String toolName, String conversationId) {
+        return switch (hostRequirementOf(toolName)) {
+            case NONE -> true;
+            case LOWA -> capabilityOf(conversationId) == Capability.LOWA;
+            case OFFICE -> capabilityOf(conversationId) == Capability.OFFICE;
         };
     }
 
@@ -300,6 +392,10 @@ public class ClientCapabilityService {
             return true;
         }
         if (KIND_AGNOSTIC_LOWA_TOOLS.contains(toolName)) {
+            return true;
+        }
+        java.util.Set<String> extraKinds = EXTRA_DOC_KINDS_BY_TOOL.get(toolName);
+        if (extraKinds != null && extraKinds.contains(activeDocKind)) {
             return true;
         }
         return switch (activeDocKind) {

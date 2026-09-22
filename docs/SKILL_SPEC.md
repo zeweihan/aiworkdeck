@@ -13,8 +13,9 @@
 
 1. 把 Skill 的 prompt 模板注入本轮系统消息（由 `ContextAssemblerService` 在组装时追加，
    ASK 模式跳过——Skill 指引以工具流程为主，与 ASK 禁用工具的约束冲突）；
-2. 把本轮 LLM 可见的工具集裁剪为 `allowed_tools ∪ 基础工具集`
-   （复用 Phase 3A 的可见性出口：对 `ToolRegistry.getAllSpecifications()` 的结果做白名单过滤）。
+2. **当且仅当它声明了 `tool_policy: restrict`**，把本轮 LLM 可见的工具集裁剪为
+   `allowed_tools ∪ 基础工具集 ∪ 编排类工具`（复用 Phase 3A 的可见性出口：对
+   `ToolRegistry.getAllSpecifications()` 的结果做白名单过滤）。缺省 `passthrough` 不裁剪。
 
 未命中任何 Skill 时行为与无 Skill 体系时**完全一致**（不注入、不裁剪）。
 
@@ -48,6 +49,7 @@ triggers:
   - IPO
   - 科创板
 prompt: prompt.md
+tool_policy: restrict
 allowed_tools:
   - law_search
   - search_web
@@ -63,7 +65,8 @@ output: |
 | `description` | string | 否 | 一句话描述，展示在管理页卡片上。 |
 | `triggers` | string[] | **是** | 触发条件：关键词列表（v1 只支持关键词）。用户输入**包含**任一关键词即命中，不区分大小写。为空则跳过（永远不可能命中）。 |
 | `prompt` | string | 否 | prompt 模板文件名（相对 skill 目录），默认 `prompt.md`。文件缺失则整个 skill 跳过。 |
-| `allowed_tools` | string[] | 否 | 工具白名单（真实注册的工具名，见 `ToolRegistry`）。命中后本轮 LLM 可见工具 = `allowed_tools ∪ ai.skills.base-tools`；白名单与已注册工具零交集时回退为不裁剪（误配置保护）。缺省 `[]` = 只剩基础工具集。 |
+| `tool_policy` | string | 否 | `passthrough`（缺省）或 `restrict`。`restrict` = 本 skill 是一个聚焦模式，命中它的那一轮把可见工具裁到 `allowed_tools ∪ ai.skills.base-tools ∪ 编排类工具`；`passthrough` = 本 skill 不管工具这件事，不裁剪。写了 `restrict` 却没写 `allowed_tools` 按 `passthrough` 处理并在加载期 warn（真按它裁会把整轮工具集塌缩成基础工具）。无法识别的值同样回落 `passthrough`。**多个 skill 同时生效时，只要有一个是 `passthrough`，整轮就不裁剪**——收窄必须全体同意，否则裁掉的正是那个 skill 没机会用白名单申报的能力。 |
+| `allowed_tools` | string[] | 否 | 工具白名单（真实注册的工具名，见 `ToolRegistry`）。仅在 `tool_policy: restrict` 下参与裁剪，否则只是说明本 skill 能力边界的文档。白名单与已注册工具零交集时回退为不裁剪（误配置保护）。<br>**缺省 `[]` 不再意味着"只剩基础工具集"**（dev-board#799）：改之前，刻意不带工具的 skill（`desensitize` / `text-to-speech`，它们的作用是把用户引导去左栏面板）一旦被触发词命中，整轮工具会从一百多个塌缩成十来个、`doc_*` 全部消失，模型只能回一句「我无法修改文档」；而 `text-to-speech` 还是 `enabled_by_default: true`。不报错、不告警，表现只是「AI 突然不会改文档了」。 |
 | `output` | string | 否 | 输出结构约定（自然语言），随 prompt 模板一起注入系统消息。 |
 | `requires` | string[] | 否 | 声明依赖的能力契约（如 `evidence.retrieve.v1`，见 `docs/EVIDENCE_CONTRACT.md`）。v1 仅声明不阻断加载：Skill 描述"需要什么能力"，插件/内置实现负责提供，实现缺失时相关工具自然不可见。 |
 | `enabled_by_default` | boolean | 否 | 默认 `true`。为 `false` 时，**只在这个 id 第一次被扫描到**（从未装过）时把它加入禁用名单；之后用户改过的启停状态不会被下一次扫描/重启打回去（"是否已种过"持久化在 `ai.skills.seeded`，做法同 `ai.skills.disabled`，见 `SkillRegistry.seedDefaultDisabledIfNeeded`）。用于"随包分发但需要用户手动打开"的 skill——如引擎体积较大的 `litigation-visual`：文件始终随包分发，"安装"就是启用、"卸载"就是禁用，不涉及下载/删除。 |

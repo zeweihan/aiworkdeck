@@ -317,16 +317,34 @@ public class SkillRouter {
     }
 
     /**
-     * 工具可见性裁剪：命中 skill 时把传给 LLM 的工具规格过滤为
-     * allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（{@link #ORCHESTRATION_TOOLS}）；
-     * 未命中时原样返回。
+     * 工具可见性裁剪：本轮生效的 skill <b>全部</b>声明了 {@code tool_policy: restrict} 时，
+     * 才把传给 LLM 的工具规格过滤为 allowed_tools ∪ 基础工具集（ai.skills.base-tools）
+     * ∪ 编排类工具（{@link #ORCHESTRATION_TOOLS}）；一个 skill 都没命中、
+     * 或其中任一是 {@code passthrough} 时原样返回。
      *
-     * 白名单过滤结果为空（allowed_tools 全部拼错等误配置）时回退为不裁剪并告警，
-     * 避免把 Agent 裁成"无工具可用"。
+     * <p><b>为什么「任一 passthrough 就整轮不裁」</b>（dev-board#799 / 审计 A2）：
+     * passthrough 的 skill 没有用白名单表达过自己需要什么工具，按另一个 skill 的白名单去裁，
+     * 裁掉的就是它没机会申报的那些能力。裁剪是收窄，收窄必须全体同意。
+     *
+     * <p>{@code restrict} 却没写 allowed_tools 的也按 passthrough 处理：那是声明错误，
+     * 真按它裁会把整轮工具集塌缩成 base-tools ∪ 编排类工具（A2 那个 P1 的形态）。
+     * 加载期已经 warn 过一次（{@code SkillRegistry.applyToolPolicy}）。
+     *
+     * <p>白名单过滤结果为空（allowed_tools 全部拼错等误配置）时回退为不裁剪并告警，
+     * 避免把 Agent 裁成"无工具可用"——这条判据保留不动。
      */
     public List<ToolSpecification> visibleTools(String runId, List<ToolSpecification> all) {
         List<ActiveSkill> active = activeSkills(runId);
         if (active.isEmpty()) {
+            return all;
+        }
+        List<String> passthroughIds = active.stream()
+                .map(ActiveSkill::definition)
+                .filter(def -> !restrictsTools(def))
+                .map(SkillDefinition::getId)
+                .toList();
+        if (!passthroughIds.isEmpty()) {
+            log.debug("Skills {} 不限制工具集（tool_policy: passthrough），本轮不裁剪", passthroughIds);
             return all;
         }
         // 多个 skill 同时生效时取白名单并集：手动选了 A 又自动命中 B，两边的能力都得在。
@@ -352,6 +370,16 @@ public class SkillRouter {
         }
         log.info("Skills {} trimmed visible tools: {} -> {}", activeIds, all.size(), filtered.size());
         return filtered;
+    }
+
+    /**
+     * 这个 skill 是否真的要裁剪本轮工具集：声明了 {@code restrict} <b>且</b>
+     * 白名单非空。两个条件缺一不可——只声明不列清单等于没说裁到哪，见 {@link #visibleTools}。
+     */
+    private static boolean restrictsTools(SkillDefinition def) {
+        return def.getToolPolicy() == SkillDefinition.ToolPolicy.RESTRICT
+                && def.getAllowedTools() != null
+                && !def.getAllowedTools().isEmpty();
     }
 
     /** 组装注入块：skill 的 prompt 模板 + 输出约定（由 ContextAssemblerService 追加到系统消息） */

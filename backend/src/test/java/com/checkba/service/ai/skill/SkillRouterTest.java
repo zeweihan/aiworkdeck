@@ -54,11 +54,26 @@ class SkillRouterTest {
                 null);
     }
 
+    /**
+     * 裁剪工具集的 skill（{@code tool_policy: restrict}）——本文件里绝大多数用例问的都是
+     * 「裁剪对不对」，所以夹具默认写 restrict。裁剪自 dev-board#799 起是<b>自愿声明</b>，
+     * 不再是「写了 allowed_tools 就自动裁」：passthrough 的形态见
+     * {@link #writeSkill(String, List, List, String)} 与下面 tool_policy 那一组用例。
+     */
     private void writeSkill(String id, List<String> triggers, List<String> allowedTools) throws IOException {
+        writeSkill(id, triggers, allowedTools, "restrict");
+    }
+
+    /** @param toolPolicy 写进 skill.yml 的 {@code tool_policy}；null = 整个字段不写（= 缺省 passthrough） */
+    private void writeSkill(String id, List<String> triggers, List<String> allowedTools, String toolPolicy)
+            throws IOException {
         Path dir = tempDir.resolve(id);
         Files.createDirectories(dir);
         StringBuilder yml = new StringBuilder("id: " + id + "\nname: " + id + "\ntriggers:\n");
         triggers.forEach(t -> yml.append("  - ").append(t).append("\n"));
+        if (toolPolicy != null) {
+            yml.append("tool_policy: ").append(toolPolicy).append("\n");
+        }
         yml.append("allowed_tools:\n");
         allowedTools.forEach(t -> yml.append("  - ").append(t).append("\n"));
         Files.writeString(dir.resolve("skill.yml"), yml.toString());
@@ -220,6 +235,96 @@ class SkillRouterTest {
         registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
         router.activateForTurn("conv-y", "run-y", "公司考虑IPO", "skill-b");
         assertEquals("skill-a", router.activeSkill("run-y").orElseThrow().getId());
+    }
+
+    // ==== tool_policy（dev-board#799 / 审计 A2）====
+
+    @Test
+    @DisplayName("缺省 passthrough：不写 tool_policy 的 skill 命中后不裁剪，allowed_tools 只作说明")
+    void passthroughIsTheDefaultAndNeverTrims() throws IOException {
+        writeSkill("skill-pass", List.of("特殊触发词pass"), List.of("law_search"), null);
+        registry.rescan();
+        router.activateForTurn("conv-pass", "run-pass", "包含特殊触发词pass的请求");
+
+        List<ToolSpecification> all = specs("law_search", "doc_find_replace", "doc_insert_at_cursor");
+        assertSame(all, router.visibleTools("run-pass", all),
+                "没声明 restrict 就不该裁剪——哪怕它写了 allowed_tools");
+    }
+
+    @Test
+    @DisplayName("本身不带工具的 skill（脱敏 / 语音合成那一类）绝不能把整轮工具集塌缩掉")
+    void toollessSkillDoesNotCollapseTheToolSet() throws IOException {
+        // 病灶复刻（审计 A2）：desensitize 与 text-to-speech 刻意不带工具——它们的作用是把
+        // 用户引导去左栏面板。改之前 allowed_tools 缺省是空 ArrayList，裁剪照跑，
+        // 本轮可见工具从一百多个塌缩成 base-tools ∪ 编排类工具，doc_* 全部消失，
+        // 模型只能回一句「我无法修改文档」。误配置回退救不了它：base-tools 的三个
+        // 恰好让「是不是只剩编排类工具」这条判据为假。
+        Path dir = tempDir.resolve("skill-toolless");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("skill.yml"),
+                "id: skill-toolless\nname: 脱敏\ntriggers:\n  - 脱敏\n");
+        Files.writeString(dir.resolve("prompt.md"), "去左栏面板做脱敏");
+        registry.rescan();
+        router.activateForTurn("conv-toolless", "run-toolless", "把这份合同脱敏后再帮我改第三条");
+
+        List<ToolSpecification> all = specs("doc_find_replace", "doc_insert_at_cursor",
+                "read_document", "todo_write");
+        List<String> names = router.visibleTools("run-toolless", all).stream()
+                .map(ToolSpecification::name).toList();
+        assertTrue(names.contains("doc_find_replace"), "编辑工具不能因为命中一个不带工具的 skill 就消失：" + names);
+        assertTrue(names.contains("doc_insert_at_cursor"), names.toString());
+    }
+
+    @Test
+    @DisplayName("restrict 但没写 allowed_tools = 声明错误，按 passthrough 兜（不许裁成只剩基础工具）")
+    void restrictWithoutAWhitelistFallsBackToPassthrough() throws IOException {
+        Path dir = tempDir.resolve("skill-restrict-empty");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("skill.yml"),
+                "id: skill-restrict-empty\nname: 空清单\ntool_policy: restrict\ntriggers:\n  - 特殊触发词empty\n");
+        Files.writeString(dir.resolve("prompt.md"), "p");
+        registry.rescan();
+        router.activateForTurn("conv-re", "run-re", "包含特殊触发词empty的请求");
+
+        List<ToolSpecification> all = specs("doc_find_replace", "read_document");
+        assertSame(all, router.visibleTools("run-re", all));
+    }
+
+    @Test
+    @DisplayName("无法识别的 tool_policy 按 passthrough 兜（判不准时不裁剪）")
+    void unknownToolPolicyFallsBackToPassthrough() throws IOException {
+        writeSkill("skill-bogus", List.of("特殊触发词bogus"), List.of("law_search"), "strict");
+        registry.rescan();
+        router.activateForTurn("conv-bogus", "run-bogus", "包含特殊触发词bogus的请求");
+
+        List<ToolSpecification> all = specs("law_search", "doc_find_replace");
+        assertSame(all, router.visibleTools("run-bogus", all));
+    }
+
+    @Test
+    @DisplayName("并集语义：restrict 与 passthrough 同时生效时整轮不裁——收窄必须全体同意")
+    void onePassthroughSkillDisablesTrimmingForTheWholeTurn() throws IOException {
+        writeSkill("skill-pass2", List.of("特殊触发词pass2"), List.of("law_search"), null);
+        registry.rescan();
+        // skill-a 是 restrict（夹具缺省），手动再选上 passthrough 的 skill-pass2
+        router.activateForTurn("conv-mix", "run-mix", "公司考虑IPO", null, List.of("skill-pass2"));
+        assertEquals(2, router.activeSkills("run-mix").size());
+
+        List<ToolSpecification> all = specs("law_search", "write_docx", "doc_find_replace", "read_document");
+        assertSame(all, router.visibleTools("run-mix", all),
+                "passthrough 的 skill 没用白名单申报过需求，按另一个 skill 的白名单裁就是裁掉它没机会说的能力");
+    }
+
+    @Test
+    @DisplayName("两个都是 restrict 时照旧裁到白名单并集（行为保持）")
+    void twoRestrictingSkillsStillTrimToTheUnion() {
+        router.activateForTurn("conv-rr", "run-rr", "帮我分析上市路径", null, List.of("skill-a"));
+        List<String> names = router.visibleTools("run-rr",
+                        specs("law_search", "search_web", "doc_find_replace", "read_document"))
+                .stream().map(ToolSpecification::name).toList();
+        assertTrue(names.contains("law_search"));
+        assertTrue(names.contains("search_web"));
+        assertFalse(names.contains("doc_find_replace"), "两边白名单外的业务工具仍应被裁掉：" + names);
     }
 
     // ==== 手动选择（对话面板的 skill 选择器 / POST /chat 的 skillIds）====

@@ -20,7 +20,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **尽调（DD，旧）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。**与新的尽调报告模块（dev-board#100，EvidenceLink 驱动的底稿驱动起草）无关**——这是旧的面向客户协作的「尽调清单」插件，两者只是都译作「尽调/DD」，代码上零关联。新模块的交付件导出（底稿目录/查验计划/缺口清单，`service/DdExportService.java` + `controller/DdExportController.java` + `service/ai/tools/DdExportTools.java`）内置在主仓、不是插件，详见 `.claude/agents/ai-doc-bridge.md`「EvidenceLink 契约」节的「P2 交付件导出」小节；尽调插件本体（`dd_ingest`/句式库/表格模板/skill）仍按 P1 设计（`docs/superpowers/specs/2026-08-21-dd-p1-drafting-design.md`）规划在私有仓 `aiworkdeck-dd-plugin`，尚未落地。P3 的网核 zip 接入（`service/evidence/webverify/`，SPI `WebVerifyProvider` + 离线实现 `ManualWebVerifyProvider` + `WebVerifyImportService` + `controller/WebVerifyController.java` + `service/ai/tools/WebVerifyTools.java`）同样内置在主仓、不门控——原方案 §7 把「网核适配层」划给尽调插件，落地时按 EvidenceLink 的分层口径改为内置：它只是往 EvidenceLink 里塞 target 的又一个来源。**红线**：网核只留接口，不做自动爬取、不碰验证码与合规风险（维护者 2026-08-21 拍板），任何联网抓取的实现都不许进这个包，详见 `.claude/agents/ai-doc-bridge.md`「P3 网核 zip 接入」节。
 
-**脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDF 走 PDFBox PDFTextStripper 定位坐标涂黑，Word 走 XWPFDocument 段落级文本遮蔽）+ OcrService 辅助。**skill 型门控（2026-08-19）**：`backend/skills/desensitize/`（`enabled_by_default:false`，广场启停），`leftSidebarPlugins.js` 的 `desensitize` 条目带 `requiresSkill: 'desensitize'`——照搬诉讼可视化那套模式，装了才在左栏出现。**这个 skill 背后没有 AI 编排注入的能力**（无 `allowed_tools`）：命中触发词「脱敏」时 prompt.md 只引导模型把用户指向面板手动操作，不假装能在对话里完成脱敏；面板本身仍是直连 `/api/sensitive` 的老路径，和 AI 编排无关。`languages` 只给 `zh-CN`——`DesensitizePane.vue` 本身已 i18n 化，但策略勾选项文案来自 `SensitiveType` 枚举（label/description 只有中文，`SensitiveController` 直接拼 `"label (example)"` 无语言分支），面板核心内容英文版下会露出中文，等 `SensitiveType` 补英文文案（需要改 `.java`）再解禁双语。
+**脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDF 走 PDFBox PDFTextStripper 定位坐标涂黑，Word 走 XWPFDocument 段落级文本遮蔽）+ OcrService 辅助。**skill 型门控（2026-08-19）**：`backend/skills/desensitize/`（`enabled_by_default:false`，广场启停），`leftSidebarPlugins.js` 的 `desensitize` 条目带 `requiresSkill: 'desensitize'`——照搬诉讼可视化那套模式，装了才在左栏出现。**这个 skill 背后没有 AI 编排注入的能力**（无 `allowed_tools`，因此也不写 `tool_policy` = passthrough，命中它不裁剪本轮工具集——dev-board#799 之前这里会把 `doc_*` 全部裁掉，用户说「把这份合同脱敏后再帮我改第三条」时模型只能回「我无法修改文档」）：命中触发词「脱敏」时 prompt.md 只引导模型把用户指向面板手动操作，不假装能在对话里完成脱敏；面板本身仍是直连 `/api/sensitive` 的老路径，和 AI 编排无关。`languages` 只给 `zh-CN`——`DesensitizePane.vue` 本身已 i18n 化，但策略勾选项文案来自 `SensitiveType` 枚举（label/description 只有中文，`SensitiveController` 直接拼 `"label (example)"` 无语言分支），面板核心内容英文版下会露出中文，等 `SensitiveType` 补英文文案（需要改 `.java`）再解禁双语。
 
 **中文姓名自动识别（2026-09-11，dev-board#599，取代 #531 的手填唯一入口口径）**：用户明确要求“百家姓规则＋上下文规则”。`CHINESE_NAME` 恢复为自动类型并默认勾选；`ChineseNameRecognizer` 结合单姓/复姓、人物字段、称谓/动作、名单与独立姓名行，排除普通词、公司和地址。同文已识别姓名在其他段落复用，但公司/地址中的同名片段不跟着替换，即便这些类别未勾选。不要恢复任意 2–4 汉字全遮蔽。识别与预览、DOCX、PDF、文本处理共用 `SensitiveTextEngine`，全程本地规则，不调用模型。
 
@@ -43,7 +43,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **会议录音**：面板 + skill + 专用工具三层齐备（2026-08-14）。前端 `frontend/src/components/MeetingRecordingPanel.vue`（一键录音/列表/转写稿/说话人改名/生成纪要）+ **模块级录音单例** `frontend/src/utils/meetingRecorder.js`（MediaRecorder 5s 分片边录边追加上传，页面跳转不断录）+ 跨页面浮动指示器 `utils/recordingIndicator.js`→`MeetingRecordingIndicator.vue`（body 级挂载，feedbackWidget 同模式）；后端 `controller/MeetingRecordingController.java`（/api/meetings）+ `service/meeting/`（MeetingRecordingService 生命周期、MeetingTranscriptionService 转写编排：JavaCV 转码 mp3 → OSS 签名 URL → 通义听悟 CreateTask（说话人分离 SpeakerCount=0 + 章节/摘要/待办）→ **poll-on-read** 收结果、TingwuClient/MeetingOssClient 接口+SDK 实现、MeetingTranscriptParser 纯函数解析）；工具 `service/ai/tools/MeetingTools.java`（meeting_list_recordings/meeting_get_transcript）；skill `backend/skills/meeting-recorder/`（`enabled_by_default:false`，广场启停，触发词「会议纪要」）。凭证五件套（AK/SK/听悟 AppKey/OSS bucket/endpoint）存 system_setting `meeting.asr.*`/`meeting.oss.*`，admin 页「会议转写」卡片可改（AdminConfigController TingwuConfig）；未配置时录音存档可用、转写降级提示。转写三档（`external.asr.provider` = platform | byok | local，分档在 `MeetingTranscriptionService` 编排层）：platform 走网关、byok 用自己的听悟凭证、**local 走本机 `asr-service`（faster-whisper，音频零出网，没有说话人分离）**，档位与就绪判定见 `.claude/agents/licensing-billing.md` 地雷 36-39。**地雷**：听悟只收公网 URL（必须 OSS 中转，转写完即删）；kick-off prompt 以「会议纪要」开头；录音单例绝不能搬进页面组件（reLaunch 即断录）；local 档全程没有 taskId，「转写中」的自愈判据是进程内 `inFlight` 集合而不是 taskId。
 
-**语音合成**：前端 `frontend/src/components/EasyVoicePane.vue`，与会议录音同占 rail `voice` 位、面板内两个 tab（`project-overview.vue` 的 `effectiveVoiceTab` 计算属性解出实际渲染哪个）。skill `backend/skills/text-to-speech/`——**默认启用**（`enabled_by_default: true`：语音合成此前无门控，老用户升级后入口不能消失，装了广场里能停用即可）。和脱敏同配方：无 `allowed_tools`，命中触发词时 prompt 只引导去用面板，不假装能在对话里合成语音；模型下载走 desktop `modelManager`（约 300MB，本机离线引擎），与广场安装动作解耦——广场「安装」只是 `enable` 翻启用位。`leftSidebarPlugins.js` 的 `PANEL_SKILL_IDS` 里手工列了这个 id（和 `meeting-recorder` 一样，因为 `voice` rail 位本身没有 `requiresSkill` 字段，两个 tab 的门控都在面板内部做）。
+**语音合成**：前端 `frontend/src/components/EasyVoicePane.vue`，与会议录音同占 rail `voice` 位、面板内两个 tab（`project-overview.vue` 的 `effectiveVoiceTab` 计算属性解出实际渲染哪个）。skill `backend/skills/text-to-speech/`——**默认启用**（`enabled_by_default: true`：语音合成此前无门控，老用户升级后入口不能消失，装了广场里能停用即可）。和脱敏同配方：无 `allowed_tools`（也不写 `tool_policy` = passthrough，不裁工具；本 skill 默认启用、触发词含「朗读文档」，dev-board#799 之前它是那条静默故障影响面最大的一个），命中触发词时 prompt 只引导去用面板，不假装能在对话里合成语音；模型下载走 desktop `modelManager`（约 300MB，本机离线引擎），与广场安装动作解耦——广场「安装」只是 `enable` 翻启用位。`leftSidebarPlugins.js` 的 `PANEL_SKILL_IDS` 里手工列了这个 id（和 `meeting-recorder` 一样，因为 `voice` rail 位本身没有 `requiresSkill` 字段，两个 tab 的门控都在面板内部做）。
 
 **「语音」合并插件（dev-board#66，2026-08-20）**：概念模型「左栏一个图标 = 一个插件，skill 只在 AI 对话生效」——text-to-speech 与 meeting-recorder 两个成员 skill 在广场三处 UI 里合并成**一个**「语音」条目（分组定义 `VOICE_PLUGIN_GROUP` + 合成视图 `buildVoiceGroupSkill()`，都在 `leftSidebarPlugins.js`），启停一体：前端开关一次翻全部成员，后端 `SkillRegistry.convergeVoiceMergedSkills()` 每次扫描后把分裂态收敛为「任一启用 → 全部启用」（防「tab 可见但生成纪要 kick-off 命不中 skill」的静默断裂）；meeting-recorder 的 `enabled_by_default` 因此也改为 true。两个 skill 文件本身、AI 对话行为、触发词都没动。
 
@@ -164,7 +164,7 @@ admin 同 PluginDevController 口径）+ `service/ai/tools/CapabilityTools`（�
 
 ## skill 文件格式（docs/SKILL_SPEC.md、docs/PLUGIN_SPEC.md）
 
-目录式：`skills/<id>/skill.yml + prompt.md`。skill.yml 字段：`id`（必需，kebab-case，启停键）、`name`、`description`、`triggers`（必需，关键词数组，用户输入"包含"即命中）、`prompt`（默认 prompt.md）、`allowed_tools`（须为 ToolRegistry 真实工具名）、`output`、`requires`（如 evidence.retrieve.v1，v1 仅声明）。未知字段忽略；解析失败跳过不阻断。
+目录式：`skills/<id>/skill.yml + prompt.md`。skill.yml 字段：`id`（必需，kebab-case，启停键）、`name`、`description`、`triggers`（必需，关键词数组，用户输入"包含"即命中）、`prompt`（默认 prompt.md）、`tool_policy`（`passthrough`（缺省，不裁工具）/ `restrict`）、`allowed_tools`（须为 ToolRegistry 真实工具名；只在 `restrict` 下参与裁剪）、`output`、`requires`（如 evidence.retrieve.v1，v1 仅声明）。未知字段忽略；解析失败跳过不阻断。
 
 **应用语言字段（EN 版 PR5，全部可选）**：`languages`（数组，可用的应用语言；**缺省 = 只在 zh-CN 可用**——存量第三方 skill 没这个字段，英文版自动隐藏，方向安全）、`name_en` / `triggers_en` / `output_en`（英文侧文本；triggers_en 只在 en-US 参与匹配，zh-CN 匹配行为不变）、目录下可放 `prompt.en.md`（存在即加载，英文注入优先用它，缺省回退 prompt.md）。语言过滤收口在 `SkillRegistry.isAvailable`（match/钉选/注入三条路径共用，不会只滤列表不滤注入）；内置三 skill：股东大会核查与上市路径 `languages: [zh-CN]`（中国法深度绑定，且后者触发词含 IPO/SPAC/VIE 会命中英文输入，必须真隐藏），诉讼可视化双语（带 triggers_en + prompt.en.md）。守卫在 BuiltinSkillsTest / SkillRouterTest 的语言组测试。注意 `/api/skills/list` 与广场列表**不做**语言过滤（管理面照常展示，只是英文模式下 zh-only skill 永不注入）。**因此该列表带了 `available` 字段（= `SkillRegistry.isAvailable`）与 `nameEn`**：对话面板那个「主动加载技能」选择器必须自己按 `available` 滤一道，否则英文界面下用户能勾中一个 zh-only skill，勾了永远不生效也没有提示。
 
@@ -175,7 +175,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 ## skill 注入对话链路（backend/src/main/java/com/checkba/service/ai/skill/）
 
 - `SkillRegistry.java` — 发现/加载：扫内置 skills/ 目录 + 插件携带目录，SnakeYAML 解析，id 去重（先扫到优先）；`isAvailable` = 自身启用 且 所属插件未禁用。
-- `SkillRouter.java` — `match(userInput)` 取最长命中关键词（自动匹配仍是单选）；`activateForTurn(conv, input, pinnedSkillId, manualSkillIds)` 每条用户消息刷新一次**生效集合**；`activeSkills(conv)` 返回 `List<ActiveSkill(definition, displayName, source)>`（`activeSkill` 是它的单值出口）；`visibleTools` 按整个集合的 allowed_tools 并集 ∪ baseTools ∪ `ORCHESTRATION_TOOLS` 裁剪（业务工具零命中则不裁剪）；`promptInjectionFor(skill)` 拼一个 skill 的注入块；`displayName(skill)` 按应用语言解析展示名。
+- `SkillRouter.java` — `match(userInput)` 取最长命中关键词（自动匹配仍是单选）；`activateForTurn(conv, input, pinnedSkillId, manualSkillIds)` 每条用户消息刷新一次**生效集合**；`activeSkills(conv)` 返回 `List<ActiveSkill(definition, displayName, source)>`（`activeSkill` 是它的单值出口）；`visibleTools` 先看 `tool_policy`——**任一生效 skill 是 passthrough 就整轮不裁**，全体 restrict 时才按整个集合的 allowed_tools 并集 ∪ baseTools ∪ `ORCHESTRATION_TOOLS` 裁剪（业务工具零命中则不裁剪）；`promptInjectionFor(skill)` 拼一个 skill 的注入块；`displayName(skill)` 按应用语言解析展示名。
 - **生效集合 = 手动选择 ∪ 触发词自动命中**（2026-08 AI 面板 skill 可见性改造）：
   - 手动选择来自 `POST /api/agent/chat` 的 `skillIds`（旧字段 `pinnedSkillId` 收编为「只有一项的手动列表」，已 `@Deprecated`）。**无状态**，前端每轮携带，后端不持久化。
   - **并集而不是覆盖**：手动选择表达的是「这轮务必带上它」，不是「只准用它」。集合顺序把手动放在前面，于是 `activeSkill` 这个单值出口仍返回用户明确选的那个（旧的「钉选优先于触发词匹配」语义因此保持）。
@@ -185,9 +185,33 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - **地雷已修（别改回去）**：`ContextAssemblerService` 原来在注入处自己 `match(userPrompt)` 重新匹配了一遍，判据与编排器裁工具用的那套不是同一个——于是 pinnedSkillId **只裁工具不注入 prompt**，`enabled_by_default` 之外最阴险的一类静默故障。现在两者同源读 `skillRouter.activeSkills(conversationId)`。**注入侧一律不许再 match 一次。**
 - 配置：`SkillProperties.java`（ai.skills.dir / base-tools / disabled-cache-ttl-ms / registry-url）。
 
-### allowed_tools、base-tools 与编排类工具（写 skill 前必读）
+### tool_policy、allowed_tools、base-tools 与编排类工具（写 skill 前必读）
 
-命中 skill 后模型可见的工具 = **allowed_tools ∪ base-tools ∪ 编排类工具**，三份来源语义不同，别合并：
+**裁不裁工具是 skill 自愿声明的**（dev-board#799，审计 A2）：skill.yml 的
+`tool_policy: passthrough | restrict`，**缺省 passthrough = 不裁剪**，`allowed_tools` 这时只是
+说明能力边界的文档。改之前裁剪与否只看 `allowed_tools` 有没有内容，而它的缺省是空 ArrayList——
+于是「本身不带工具」的 skill（`desensitize` / `text-to-speech`，它们的作用是把用户引导去左栏面板，
+**刻意不带工具是有意设计**）一旦被触发词命中，整轮可见工具从一百多个塌缩成 base-tools ∪ 编排类
+工具十来个、`doc_*` 全部消失，模型只能回一句「我无法修改文档」；而 `text-to-speech` 还是
+`enabled_by_default: true`，默认对所有用户生效。误配置回退救不了它：那条判据是「filtered 里是不是
+只剩编排类工具」，base-tools 的三个恰好让它为假。不报错、不告警，表现只是「AI 突然不会改文档了」。
+
+三条配套规则：
+- **多个 skill 同时生效时，任一 `passthrough` 就整轮不裁**——收窄必须全体同意，否则裁掉的正是
+  那个 skill 没机会用白名单申报的能力。
+- **`restrict` 却没写 `allowed_tools`** 按 passthrough 兜（加载期 warn）：真按它裁就是上面那个 P1。
+- 无法识别的 `tool_policy` 值同样回落 passthrough（判不准时不裁剪）。
+
+八个自带 skill 里六个显式写了 `tool_policy: restrict`（= 保持现状，各自 yml 里有一段理由），
+`desensitize` / `text-to-speech` 不写（= 本次要修的那两个）。**已知风险留给维护者拍板**：
+`meeting-recorder`（默认开、触发词「会议纪要」「整理会议」很宽）与 `listing-pathway`（触发词有
+「IPO」「VIE」「红筹」这种短词，匹配是对整条输入做 contains）的白名单里一个 `doc_*` / `office_*`
+都没有，命中即失去全部编辑能力——与上面同一形态，只是清单非空所以更隐蔽。本次刻意没有单方面改
+（回放用例 `skill-listing-pathway-trigger-trim-xml` 与 `skill-orchestration-tools-not-trimmed` 都钉着
+listing-pathway 会裁剪），两条 skill.yml 里各留了一段说明。
+
+命中一个 `restrict` 的 skill 后模型可见的工具 = **allowed_tools ∪ base-tools ∪ 编排类工具**，
+三份来源语义不同，别合并：
 
 - `allowed_tools`（skill.yml）——本 skill 的业务能力清单。**不是**「常用工具默认都在」，需要的每个工具都得逐个列出，漏一个就等于对模型隐藏了这个能力。
 - `base-tools`（application.yml `ai.skills.base-tools`，只有三个：`read_document / list_files / query_memory`）——业务能力兜底，随部署形态可调。
@@ -231,7 +255,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - 新增面板型插件三步缺一不可：leftSidebarPlugins.js 注册 + project-overview.vue 面板区加 v-else-if 分支 + 组件本身；漏第二步就是"加载中..."占位符（股东大会曾长期如此，现已实现）。
 - **下线一个面板型插件只删 rail 那一条就够**：`v-else-if` 分支与组件留着不会被渲染（`leftPaneKey` 永远取不到那个值），删了反而让恢复变成重写。股东大会核查就是这么下的。
 - **面板不要自画标题**：左栏标题由外壳的 `.sidebar-header` 统一出，面板里再画一份就是同屏出现两次（诉讼可视化/会议录音/股东大会核查都犯过）。面板内部只画分组头，密度用 `App.vue` 的 `--awd-panel-*` 令牌，见 sidebar-shell.md。
-- skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。**部分**写错更阴险：剩下的名字还能命中，裁剪照常生效，写错的那个工具就静默消失了。
+- skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。**部分**写错更阴险：剩下的名字还能命中，裁剪照常生效，写错的那个工具就静默消失了。（前提是这个 skill 写了 `tool_policy: restrict`；没写的话 allowed_tools 压根不参与裁剪，写错也毫无症状。）
 - `RealToolBeans.instantiateAll()`（评测用的工具 bean 清单）与生产的 `AgentToolComponent` 实现集**不是自动同步的**：`TodoTools` 就不在里面，所以 `todo_write` 在回放评测里根本没注册，评测断言不到它的可见性。新增工具组件时要顺手补进去。
 - 插件启停语义只影响可见性，不拦截历史工具调用回放。
 - **Web 插件的 `frontendEntry` 校验失败是静默降级**：指到 `web/` 之外或文件不存在时 `PluginService` 把它置空并记 WARN，前端表现为「未配置入口地址」的空面板——面板空白先查后端日志的这条 WARN，别去前端找。

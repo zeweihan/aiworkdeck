@@ -45,6 +45,17 @@ prompt: prompt.md
 # 编排类工具（todo_write / dispatch_subtask）恒定可见、裁剪碰不到，**不要**为了"保险"
 # 把 todo_write 也抄进下面的清单：回放评测用例 skill-orchestration-tools-not-trimmed 正是靠
 # 「todo_write 不在本清单里却仍可见」来守这条不变式，抄进来会让那条断言变成空断言。
+# 聚焦模式，限制本轮可见工具（dev-board#799）。这里写 restrict 是保持现状：
+# 裁剪自本次起改成自愿声明，不写就等于把本 skill 的既有行为悄悄改掉
+#（回放用例 skill-listing-pathway-trigger-trim-xml 与 skill-orchestration-tools-not-trimmed
+# 都钉着本 skill 会裁剪）。
+#
+# 已知风险，留给维护者拍板（本次刻意没有单方面改）：触发词里有「IPO」「VIE」「红筹」
+#「借壳」「证券化」这种短词，匹配是对整条用户输入做 contains——「帮我把这段 IPO 条款
+# 改一下」也会命中；而下面这份清单里没有任何 doc_* / office_*，命中即失去编辑能力。
+# 要么把编辑面补进清单，要么把过宽的触发词收窄。
+tool_policy: restrict
+
 allowed_tools:
   - law_search
   - law_search_keyword

@@ -246,11 +246,18 @@ class AgentOrchestratorConcurrentTurnsTest {
                 new OfficePassStateStore());
     }
 
+    /**
+     * 写一个<b>会裁剪工具集</b>的 skill。{@code tool_policy: restrict} 是必须的：
+     * 裁剪自 dev-board#799 起改成自愿声明（缺省 passthrough 不裁），而 ③ 那条用例问的正是
+     * 「两轮并发时各自的可见工具会不会串」——不声明 restrict 就根本没有裁剪可言，
+     * 两轮都看到全集，断言变成空断言。
+     */
     private void writeSkill(String id, List<String> triggers, List<String> allowedTools) throws IOException {
         Path dir = tempDir.resolve(id);
         Files.createDirectories(dir);
         StringBuilder yml = new StringBuilder("id: " + id + "\nname: " + id + "\ntriggers:\n");
         triggers.forEach(t -> yml.append("  - ").append(t).append("\n"));
+        yml.append("tool_policy: restrict\n");
         yml.append("allowed_tools:\n");
         allowedTools.forEach(t -> yml.append("  - ").append(t).append("\n"));
         Files.writeString(dir.resolve("skill.yml"), yml.toString());

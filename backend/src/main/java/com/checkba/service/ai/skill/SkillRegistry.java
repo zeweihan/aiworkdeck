@@ -448,6 +448,7 @@ public class SkillRegistry {
         skill.setDescription(asString(raw.get("description")));
         skill.setTriggers(asStringList(raw.get("triggers")));
         skill.setAllowedTools(asStringList(raw.get("allowed_tools")));
+        applyToolPolicy(skill, raw.get("tool_policy"));
         skill.setOutput(asString(raw.get("output")));
         skill.setRequires(asStringList(raw.get("requires")));
         skill.setCategory(asString(raw.get("category")));
@@ -496,6 +497,38 @@ public class SkillRegistry {
             skill.setPromptTemplateEn(Files.readString(promptEn.toPath(), StandardCharsets.UTF_8));
         }
         return skill;
+    }
+
+    /**
+     * 解析 {@code tool_policy}（dev-board#799 / 审计 A2）。缺省与无法识别的值一律
+     * {@code passthrough}——判不准时不裁剪，方向与「藏掉一个能用的工具比失败一次严重得多」一致。
+     *
+     * <p>顺带在加载期点名两类可疑声明，两条都是静默故障的前身：
+     * <ul>
+     *   <li>{@code restrict} 却没写 allowed_tools —— 声明要裁却没说裁到哪，
+     *       {@code SkillRouter} 会按 passthrough 处理（否则本轮工具集当场塌缩成
+     *       base-tools ∪ 编排类工具，正是 A2 那个 P1）；</li>
+     *   <li>写了 allowed_tools 却没写 tool_policy —— 这份清单从此只是文档，
+     *       不参与裁剪。作者多半以为它还在裁。</li>
+     * </ul>
+     */
+    private static void applyToolPolicy(SkillDefinition skill, Object raw) {
+        String text = asString(raw);
+        java.util.Optional<SkillDefinition.ToolPolicy> parsed = SkillDefinition.ToolPolicy.parse(text);
+        if (text != null && !text.isBlank() && parsed.isEmpty()) {
+            log.warn("Skill '{}' 的 tool_policy 值 '{}' 无法识别（只认 passthrough / restrict），"
+                    + "按 passthrough 处理（不裁剪本轮工具集）", skill.getId(), text);
+        }
+        skill.setToolPolicy(parsed.orElse(SkillDefinition.ToolPolicy.PASSTHROUGH));
+        boolean restrict = skill.getToolPolicy() == SkillDefinition.ToolPolicy.RESTRICT;
+        boolean hasList = !skill.getAllowedTools().isEmpty();
+        if (restrict && !hasList) {
+            log.warn("Skill '{}' 声明了 tool_policy: restrict 却没有 allowed_tools —— "
+                    + "按 passthrough 处理，否则命中它的那一轮模型会只剩基础工具", skill.getId());
+        } else if (!restrict && hasList) {
+            log.info("Skill '{}' 有 allowed_tools 但 tool_policy 是 passthrough："
+                    + "这份清单只作说明，不裁剪本轮工具集", skill.getId());
+        }
     }
 
     private static String asString(Object v) {

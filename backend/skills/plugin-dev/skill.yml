@@ -33,6 +33,10 @@ triggers:
 # 业务闭环所需工具全集（base-tools 的 read_document/list_files/query_memory 与
 # 编排类工具恒定可见，不必列；这里逐个列出的是本 skill 的能力边界，漏一个
 # 就等于对模型隐藏了这个能力——见 plugin-system.md「allowed_tools 必读」）。
+# 聚焦模式，限制本轮可见工具（dev-board#799）：插件开发是 enabled_by_default: false
+# 的按需技能，触发词具体（开发插件/写个插件），下面这份清单就是它的能力边界。
+tool_policy: restrict
+
 allowed_tools:
   - plugin_dev_scaffold
   - plugin_dev_install

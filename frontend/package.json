@@ -63,6 +63,7 @@
     "test:lowa-escape-chrome": "node tests/lowa-e2e/escape-chrome.mjs",
     "test:lowa-ime-underline": "node tests/lowa-e2e/ime-underline.mjs",
     "test:lowa-redline-author": "node tests/lowa-e2e/redline-author.mjs",
+    "test:lowa-undo-redo": "node tests/lowa-e2e/undo-redo-kinds.mjs",
     "test:lowa-big": "LOWA_E2E_BIG=1 node tests/lowa-e2e/big-doc.mjs",
     "test:app-e2e": "node tests/app-e2e/run.mjs",
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",

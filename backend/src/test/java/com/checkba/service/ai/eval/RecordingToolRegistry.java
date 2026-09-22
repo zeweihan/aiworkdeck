@@ -28,10 +28,26 @@ public class RecordingToolRegistry extends ToolRegistry {
 
     private final List<Dispatch> dispatches = new ArrayList<>();
     private Map<String, String> stubs = Map.of();
+    private final com.checkba.service.ai.ClientCapabilityService capabilities;
 
     public RecordingToolRegistry(List<AgentToolComponent> components, PluginService pluginService) {
         // 评测里不声明 clientCapability：默认 LOWA 能力（与存量主前端一致），office_* 不下发
-        super(components, pluginService, new com.checkba.service.ai.ClientCapabilityService());
+        this(components, pluginService, new com.checkba.service.ai.ClientCapabilityService());
+    }
+
+    private RecordingToolRegistry(List<AgentToolComponent> components, PluginService pluginService,
+                                  com.checkba.service.ai.ClientCapabilityService capabilities) {
+        super(components, pluginService, capabilities);
+        this.capabilities = capabilities;
+    }
+
+    /**
+     * 本注册表用的那一个能力登记簿。要登记别的会话能力（Office / none）时得拿到它——
+     * init() 会把工具的 ToolMeta.requiresHost 声明推进去，另外 new 一个的话
+     * 那些声明就不在里面（dev-board#799）。
+     */
+    public com.checkba.service.ai.ClientCapabilityService capabilities() {
+        return capabilities;
     }
 
     /** 设置工具桩输出（key = 别名解析后的工具名） */
