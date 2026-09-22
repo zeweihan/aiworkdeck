@@ -260,8 +260,11 @@ public class LitigationVisualTools implements AgentToolComponent {
 
     // ==================== 出图 ====================
 
+    // 出图收尾是 sendRefreshFilesAction + sendOpenFileAction：图画出来之后要在桌面端
+    // 当场打开给用户看（返回文案也这么说）。任务窗格既没有文件树也没有 SVG 预览，
+    // 那里的用户拿不到这份交付物——审计 A9。
     @ToolMeta(displayName = "生成诉讼图", category = "litigation-visual", fileEffect = "ADDED",
-            fileArg = "diagramName", refreshFiles = true)
+            fileArg = "diagramName", refreshFiles = true, requiresHost = ToolMeta.Host.LOWA)
     @Tool("Draw a litigation diagram (timeline / flowchart / party-relationship) from a semantic map and "
             + "save it into the project. NEVER hand-write SVG coordinates or lay out nodes by eye — emit "
             + "the JSON map and this tool computes ALL geometry. Layouts: numbered_point_timeline (order "

@@ -62,6 +62,15 @@ prompt: prompt.md
 # 基础工具集只有 read_document / list_files / query_memory 三个，
 # 本 skill 要用的工具必须逐个列出——漏了就是「模型看不见 = 不会调用」。
 # todo_write 已被编排类工具集恒定放行，显式声明是自文档。
+# 聚焦模式，限制本轮可见工具（dev-board#799）。这里写 restrict 是保持现状：
+# 裁剪自本次起改成自愿声明，不写就等于把本 skill 的既有行为悄悄改掉。
+#
+# 已知风险，留给维护者拍板（本次刻意没有单方面改）：本 skill enabled_by_default: true，
+# 触发词「会议纪要」「整理会议」在普通对话里很容易被 contains 命中，而下面这份清单里
+# 一个 doc_* / office_* 都没有——用户说「把会议纪要整理进这份文档」时模型会当场
+# 失去全部编辑能力。要么把编辑面补进清单，要么把触发词收窄，两条路都比留着强。
+tool_policy: restrict
+
 allowed_tools:
   - meeting_list_recordings
   - meeting_get_transcript

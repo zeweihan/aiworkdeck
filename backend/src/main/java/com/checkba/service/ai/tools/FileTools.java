@@ -564,7 +564,12 @@ public class FileTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "删除文件", category = "file")
+    // 永久停用的工具不下发规格（审计 A15）：本仓的口径一直是「只裁 spec、不裁
+    // resolve/execute」，delete_file 正是这条口径的教科书案例——登记该留（模型经 XML 兜底
+    // 路径调到时拿的是下面那句可行动的拒绝，好过 "Tool not found" 让它以为删文件这件事
+    // 整个不存在），规格该裁（每轮白付一份 schema，而且用户说「把这个文件删掉」时
+    // 模型会先调一次再转述拒绝，白烧一个往返）。
+    @ToolMeta(displayName = "删除文件", category = "file", offerToModel = false)
     @Tool("Delete a file. DISABLED: AI Agent is not allowed to delete files.")
     public String delete_file(String filePath) {
         log.info("Tool: delete_file called for {} - DENIED (AI Agent cannot delete files)", filePath);

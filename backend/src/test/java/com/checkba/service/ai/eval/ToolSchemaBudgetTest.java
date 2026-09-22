@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -80,9 +81,56 @@ class ToolSchemaBudgetTest {
                 ClientCapabilityService.DOC_KIND_SLIDE}) {
             List<ToolSpecification> trimmed = registry.getAllSpecifications("conv", kind);
             double saved = 1.0 - (double) weight(trimmed) / allWeight;
-            System.out.printf("[dev-board#729 ①] %s 裁剪后 %d 个工具，省下 %.1f%%%n",
-                    kind, trimmed.size(), saved * 100);
+            System.out.printf("[dev-board#729 ①] %s 裁剪后 %d 个工具 / %d 字符，省下 %.1f%%%n",
+                    kind, trimmed.size(), weight(trimmed), saved * 100);
             assertTrue(saved > 0.15, kind + " 省下的 schema 体量不足 15%");
+        }
+    }
+
+    /**
+     * 任务窗格与纯对话会话的体量（dev-board#799）。
+     *
+     * <p>前一条量的是「同一个 LOWA 会话按活跃文档类型裁多少」，这一条量的是
+     * 「换一类客户端之后还剩多少」——{@code @ToolMeta.requiresHost} 的收益全在这一档：
+     * 改之前 pptx_* / pdf_* / litigation_* / text_* 既不是 doc_/sheet_/slide_ 也不是 office_，
+     * 在 Office 与 none 会话里恒可见，而它们的收尾都要桌面前端配合，在那里是纯空转
+     * （pptx_generate 还会回一句「已唤起 PPT 生成配置界面…等待用户操作」，模型就此停住）。
+     */
+    @Test
+    @DisplayName("Office / none 会话：桌面专属工具按声明退出，规格体量随之下降")
+    void officeAndHeadlessSessionsDropDesktopOnlyTools() {
+        RecordingToolRegistry registry = registry();
+        registry.capabilities().record("conv-word", "office");
+        registry.capabilities().record("conv-excel", "office", "excel");
+        registry.capabilities().record("conv-ppt", "office", "powerpoint");
+        registry.capabilities().record("conv-none", "none");
+
+        // 改动前在这些会话里同样下发的「桌面专属 + 永久停用」工具。它们一个前缀都不带，
+        // 所以旧规则下每种会话都放行；这里按名字取回规格，算出改动前的体量做对照。
+        List<String> hiddenByDeclaration = List.of(
+                "pptx_open_file", "pptx_generate", "pptx_apply_format",
+                "litigation_render", "litigation_timeline_render",
+                "pdf_to_word", "pdf_highlight", "pdf_annotate", "pdf_redact", "pdf_replace_text",
+                "text_write_file", "text_find_replace",
+                "delete_file");
+        List<ToolSpecification> hiddenSpecs = hiddenByDeclaration.stream()
+                .map(n -> registry.resolve(n).orElseThrow(
+                        () -> new AssertionError("登记必须保留（只裁 spec、不裁 resolve）：" + n)).spec())
+                .toList();
+
+        for (String conv : new String[]{"conv-word", "conv-excel", "conv-ppt", "conv-none"}) {
+            List<ToolSpecification> specs = registry.getAllSpecifications(conv, null);
+            System.out.printf("[dev-board#799] %s 会话：改后 %d 个工具 / %d 字符；改前 %d 个 / %d 字符%n",
+                    conv, specs.size(), weight(specs),
+                    specs.size() + hiddenSpecs.size(), weight(specs) + weight(hiddenSpecs));
+            List<String> names = specs.stream().map(ToolSpecification::name).toList();
+            // 逐名断言在 ToolDeclarationContractTest（那份清单是唯一事实来源），
+            // 这里只挑三个最能说明问题的：发 UI 指令的、发配置界面的、改纯文本的。
+            assertFalse(names.contains("pptx_generate"), conv + "：" + names);
+            assertFalse(names.contains("litigation_render"), conv + "：" + names);
+            assertFalse(names.contains("text_write_file"), conv + "：" + names);
+            // 只读面必须留着：收窄的是"改"，不是"读"
+            assertTrue(names.contains("pdf_inspect"), conv + " 的 PDF 读取面不该跟着消失：" + names);
         }
     }
 }

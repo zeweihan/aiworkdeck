@@ -190,6 +190,9 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
+    // 交付物就是「在桌面编辑器里打开」（sendOpenFileAction），没有 LOWA 前端时这一步
+    // 一个字节都不会发生，而返回文案还在说「已发送打开文件指令」——审计 A9。
+    @ToolMeta(displayName = "打开PPT文件", category = "pptx", requiresHost = ToolMeta.Host.LOWA)
     @Tool("打开指定的 PPTX 文件进行编辑。文件会在用户的文档编辑器中打开。")
     public String pptx_open_file(
             @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId
@@ -280,7 +283,10 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "生成PPT演示文稿", category = "pptx", fileEffect = "ADDED", fileArg = "fileName")
+    // 发完 sendPptConfigAction 就返回「等待用户操作...」，而那个配置界面只存在于桌面前端：
+    // 插件会话里模型会停在这里等一个永远不会来的确认，整轮空转（审计 A9 最严重的一条）。
+    @ToolMeta(displayName = "生成PPT演示文稿", category = "pptx", fileEffect = "ADDED", fileArg = "fileName",
+              requiresHost = ToolMeta.Host.LOWA)
     @Tool("根据主题一键生成 PPTX 演示文稿。AI 将自动生成大纲、内容描述和幻灯片图片，最终输出可编辑的 PPTX 文件。默认保存到项目根目录（parentId 不传或传 null），只有用户明确指定保存位置时才需要查询文件夹。")
     public String pptx_generate(
             @P("PPT 主题或详细描述，如：'AI 在法律行业的应用' 或 '公司年度总结报告，包含业绩、成就和未来规划'") String topic,
@@ -660,7 +666,11 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "设置PPT格式", category = "pptx", fileEffect = "MODIFIED")
+    // 收尾三步的最后一步是 sendReloadFileAction，返回文案也明说「编辑器将自动重新加载」；
+    // 而且 PowerPoint 任务窗格会话里有 office_ppt_* 作用在真正打开的那份 deck 上，
+    // 本工具改的是服务端磁盘上的另一份，两套同时可见还会索引打架（审计 B-09）。
+    @ToolMeta(displayName = "设置PPT格式", category = "pptx", fileEffect = "MODIFIED",
+              requiresHost = ToolMeta.Host.LOWA)
     @Tool("对 PPTX 文件批量执行文本与格式修改（直接改文件；完成后编辑器自动重载显示结果）。" +
           "使用顺序：先 pptx_inspect_format 获取 0 起的定位索引，再调用本工具。opsJson 是 JSON 数组，每项一个操作，六种 action：\n" +
           "1. {\"action\":\"set_run_format\",\"slide\":0,\"shape\":1,\"paragraph\":0,\"run\":0,\"format\":{…}}（省略 run 作用于该段全部 run，省略 paragraph 作用于全部段落）\n" +

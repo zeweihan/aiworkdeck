@@ -19,7 +19,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -107,6 +109,41 @@ class BuiltinSkillsTest {
         }
         assertTrue(bogus.isEmpty(),
                 "allowed_tools 里有不存在的工具名（白名单零命中会静默回退成不裁剪）：" + bogus);
+    }
+
+    @Test
+    @DisplayName("每个内置 skill 的 tool_policy 逐个钉住（dev-board#799 / 审计 A2）")
+    void toolPolicyOfEveryBuiltinSkillIsPinned() {
+        // 裁不裁工具从「写了 allowed_tools 就自动裁」改成了自愿声明，缺省不裁。
+        // 六个显式写 restrict = 保持现状；两个刻意不写的正是本次要修的那条静默故障：
+        // desensitize 与 text-to-speech 本来就不带工具（作用是把用户引导去左栏面板），
+        // 改之前它们一命中就把整轮工具集塌缩成基础工具、doc_* 全消失，
+        // 模型只能回「我无法修改文档」——而 text-to-speech 还是默认启用的。
+        Map<String, SkillDefinition.ToolPolicy> expected = new TreeMap<>(Map.of(
+                "contract-review", SkillDefinition.ToolPolicy.RESTRICT,
+                "listing-pathway", SkillDefinition.ToolPolicy.RESTRICT,
+                "litigation-visual", SkillDefinition.ToolPolicy.RESTRICT,
+                "meeting-recorder", SkillDefinition.ToolPolicy.RESTRICT,
+                "plugin-dev", SkillDefinition.ToolPolicy.RESTRICT,
+                "shareholder-meeting-verification", SkillDefinition.ToolPolicy.RESTRICT,
+                "desensitize", SkillDefinition.ToolPolicy.PASSTHROUGH,
+                "text-to-speech", SkillDefinition.ToolPolicy.PASSTHROUGH));
+        Map<String, SkillDefinition.ToolPolicy> actual = new TreeMap<>();
+        for (SkillDefinition skill : registry.getSkills()) {
+            actual.put(skill.getId(), skill.getToolPolicy());
+        }
+        assertEquals(expected, actual,
+                "新增 skill 或改了某个 skill 的 tool_policy 就来改这份清单——"
+                        + "写 restrict 前先确认它的 allowed_tools 覆盖了命中场景下用户会要求的全部动作，"
+                        + "尤其是文档编辑面；漏了就是「命中这个 skill 之后 AI 突然不会改文档了」。");
+
+        // restrict 而白名单为空 = 声明错误（SkillRouter 会按 passthrough 兜，但别让它出现）
+        for (SkillDefinition skill : registry.getSkills()) {
+            if (skill.getToolPolicy() == SkillDefinition.ToolPolicy.RESTRICT) {
+                assertFalse(skill.getAllowedTools().isEmpty(),
+                        skill.getId() + " 声明了 restrict 却没有 allowed_tools");
+            }
+        }
     }
 
     @Test

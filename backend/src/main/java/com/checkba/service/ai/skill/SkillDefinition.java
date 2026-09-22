@@ -32,8 +32,51 @@ public class SkillDefinition {
     /** prompt 模板内容（扫描时加载进内存） */
     private String promptTemplate = "";
 
-    /** 工具白名单：命中后本轮 LLM 可见工具 = allowedTools ∪ 基础工具集 */
+    /**
+     * 工具白名单：{@code tool_policy: restrict} 时命中本 skill 的那一轮，
+     * LLM 可见工具 = allowedTools ∪ 基础工具集 ∪ 编排类工具。
+     * {@code passthrough}（缺省）下本清单<b>不参与裁剪</b>，只作为文档说明本 skill 的能力边界。
+     */
     private List<String> allowedTools = new ArrayList<>();
+
+    /**
+     * 本 skill 要不要限制本轮可见工具（skill.yml: {@code tool_policy}，dev-board#799 / 审计 A2）。
+     *
+     * <p><b>缺省是 {@link ToolPolicy#PASSTHROUGH}（不裁剪）</b>，这是本次改掉的默认值。
+     * 改之前：裁剪与否只看 allowed_tools 有没有内容，而它的缺省是空 ArrayList——于是
+     * 「本身不带工具」的 skill（desensitize / text-to-speech，它们的作用是把用户引导去
+     * 左栏面板，刻意不带工具）一旦被触发词命中，整轮可见工具会从一百多个塌缩成
+     * base-tools ∪ 编排类工具十来个，doc_* 全部消失，模型只能回一句「我无法修改文档」。
+     * {@code SkillRouter} 里那条误配置回退救不了它：回退判据是「filtered 里是不是只剩
+     * 编排类工具」，而 base-tools 的三个恰好让这条判据为假。text-to-speech 还是
+     * {@code enabled_by_default: true}，默认对所有用户生效——不报错、不告警，
+     * 表现只是「AI 突然不会改文档了」。
+     *
+     * <p>换成显式声明之后，「不声明 = 不管工具这件事」，要裁剪必须自己写
+     * {@code tool_policy: restrict}。方向是安全的：判不准时多给工具，而不是把能用的藏起来。
+     */
+    private ToolPolicy toolPolicy = ToolPolicy.PASSTHROUGH;
+
+    /** {@link #toolPolicy} 的取值。 */
+    public enum ToolPolicy {
+        /** 不裁剪本轮工具集（缺省）：本 skill 只管 prompt，不管模型能看见哪些工具。 */
+        PASSTHROUGH,
+        /** 裁到 allowed_tools ∪ base-tools ∪ 编排类工具：本 skill 是一个聚焦模式。 */
+        RESTRICT;
+
+        /** 解析 skill.yml 的 {@code tool_policy}；空值与无法识别的值返回 empty（调用方决定怎么兜）。 */
+        public static java.util.Optional<ToolPolicy> parse(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return java.util.Optional.empty();
+            }
+            try {
+                return java.util.Optional.of(
+                        ToolPolicy.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT)));
+            } catch (IllegalArgumentException e) {
+                return java.util.Optional.empty();
+            }
+        }
+    }
 
     /** 输出结构约定（自然语言描述，随 prompt 一起注入） */
     private String output;
@@ -119,6 +162,10 @@ public class SkillDefinition {
     public void setPromptTemplate(String promptTemplate) { this.promptTemplate = promptTemplate; }
     public List<String> getAllowedTools() { return allowedTools; }
     public void setAllowedTools(List<String> allowedTools) { this.allowedTools = allowedTools; }
+    public ToolPolicy getToolPolicy() { return toolPolicy; }
+    public void setToolPolicy(ToolPolicy toolPolicy) {
+        this.toolPolicy = toolPolicy == null ? ToolPolicy.PASSTHROUGH : toolPolicy;
+    }
     public String getOutput() { return output; }
     public void setOutput(String output) { this.output = output; }
     public List<String> getRequires() { return requires; }

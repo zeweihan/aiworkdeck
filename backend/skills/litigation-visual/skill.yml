@@ -97,6 +97,12 @@ prompt: prompt.md
 # dispatch_subtask：材料多时抽取是典型长程任务（逐份读判决书/证据再汇总成一份语义地图），
 # 正是 prompts/system_prompt.md 第 6.5 节要委派子 Agent 的场景。两个既有 skill 曾漏列，
 # 这里照它们的惯例带上。
+# 聚焦模式，限制本轮可见工具（dev-board#799）：出图必须走 litigation_* 管线算几何，
+# 放开全集会让模型退回去手写 SVG 坐标（prompt 里三令五申禁止的那件事）。
+# 本 skill 是 enabled_by_default: false 的按需技能、触发词也很具体，
+# 命中即表示用户明确要出图，限制的代价可控。
+tool_policy: restrict
+
 allowed_tools:
   - litigation_reference
   - litigation_checkpoint

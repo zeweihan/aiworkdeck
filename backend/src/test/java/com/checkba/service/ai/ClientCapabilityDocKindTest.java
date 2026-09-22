@@ -95,6 +95,33 @@ class ClientCapabilityDocKindTest {
     }
 
     @Test
+    @DisplayName("撤销/重做只放给 Calc，不放给 Impress——判据是 lowa-e2e 真引擎验过的那一半")
+    void undoIsHandedBackToCalcOnly() {
+        // 审计 A3/B-03 主张把 doc_undo / doc_redo 一并放给 xlsx 与 pptx，理由是
+        // 「Calc 与 Impress 都没有修订痕迹，撤销是仅剩的细粒度安全网，而这两个工具
+        // 只是 executeEditorCommand("undo")、与文档类型无关」。前半句对，后半句只对一半：
+        // lowa-e2e（frontend/tests/lowa-e2e/undo-redo-kinds.mjs，判据是回读文档内容）实测
+        // Calc 上 undo/redo 真的把 A1 改回原值，Impress 上返回 "nothing to undo"、内容一字未动
+        // （Impress 的写入原语是 UNO API 直写，本引擎不记撤销栈）。
+        // 放一个必然失败的工具进去只会换来一个白烧的往返，所以只放验过的那一半。
+        String sheet = ClientCapabilityService.DOC_KIND_SHEET;
+        assertTrue(caps.isToolVisible("doc_undo", "conv", sheet),
+                "Calc 写入即生效、没有修订痕迹，撤销是它唯一的细粒度后悔药");
+        assertTrue(caps.isToolVisible("doc_redo", "conv", sheet));
+
+        String slide = ClientCapabilityService.DOC_KIND_SLIDE;
+        assertFalse(caps.isToolVisible("doc_undo", "conv", slide),
+                "Impress 上 undo 撤不动任何东西——引擎哪天记了撤销栈，先改 lowa-e2e 那条用例");
+        assertFalse(caps.isToolVisible("doc_redo", "conv", slide));
+
+        // Writer 会话本来就看得见（doc_ 前缀），不受影响
+        assertTrue(caps.isToolVisible("doc_undo", "conv", ClientCapabilityService.DOC_KIND_WRITER));
+        // 例外只对这两个工具生效，不许顺手放宽整族
+        assertFalse(caps.isToolVisible("doc_find_replace", "conv", sheet));
+        assertFalse(caps.isToolVisible("doc_collapse_cursor", "conv", sheet));
+    }
+
+    @Test
     @DisplayName("没有活跃文档或类型未知时保持全集（不许裁）")
     void unknownKindKeepsEverything() {
         for (String kind : new String[]{null, "", "text", "whatever"}) {

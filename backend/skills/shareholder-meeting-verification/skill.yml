@@ -37,6 +37,10 @@ prompt: prompt.md
 # dispatch_subtask 曾经漏列：本 skill 是 system_prompt.md 第 6.5 节明确要委派的长程任务
 #（逐份文件抽取字段本身就是「会产生大量中间产物、只需要结论」的典型），裁剪把它藏起来后，
 # 能不能用 sub-agent 变成了「模型走原生 function calling 还是 XML 兜底协议」的偶然结果。
+# 聚焦模式，限制本轮可见工具（dev-board#799）：enabled_by_default: false 的按需技能，
+# 触发词很窄（股东大会核查 / 见证法律意见书），下面这份清单覆盖了核查要做的全部动作。
+tool_policy: restrict
+
 allowed_tools:
   - extract_file_text
   - read_file

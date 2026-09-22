@@ -2621,7 +2621,10 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 调试工具 ====================
 
-    @ToolMeta(displayName = "检查修订记录", category = "document")
+    // 调试工具不下发规格（审计 A15）：它与 doc_list_revisions 功能重合、描述自称
+    // 「用于分析和诊断修订模式下的文本操作问题」，不该出现在律师面前的过程卡里。
+    // 同样只裁 spec：维护者排障时经 XML 兜底路径仍调得到。
+    @ToolMeta(displayName = "检查修订记录", category = "document", offerToModel = false)
     @Tool("调试工具：获取文档中所有修订记录的详细信息，包括修订类型、位置、内容等。用于分析和诊断修订模式下的文本操作问题。")
     public String doc_debug_revisions() {
         log.info("Tool: doc_debug_revisions called");
