@@ -5,6 +5,7 @@ package com.checkba.service.ai.context;
 
 import com.checkba.config.AiContextProperties;
 import com.checkba.service.OcrService;
+import com.checkba.service.file.PdfTextLayer;
 import com.checkba.service.ocr.OcrResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,11 +83,15 @@ public class FileContentExtractorService {
     }
 
     /**
-     * Extract text from image or PDF files using Aliyun OCR.
-     * For multimodal-capable models, prefer sending raw file instead of OCR text.
-     * 
-     * @param file The image or PDF file
-     * @return Extracted text via OCR, or error message
+     * 图片与 PDF 的正文抽取。
+     *
+     * <p>图片没有文字层，直接云端 OCR；<b>PDF 先抽文字层，抽不出（扫描件）才 OCR</b>
+     *（dev-board#800，判据见 {@link PdfTextLayer}）。多模态模型优先直送原图，见
+     * {@code ContextAssemblerService} 的视觉通道。
+     *
+     * @param file 图片或 PDF
+     * @return 抽出的正文；失败以「[System: …]」形态返回（<b>非空、无 Error 前缀</b>，
+     *         调用方必须自己判，直接透传会被当成正文喂给模型）
      */
     public String extractTextWithOcr(File file) {
         if (file == null || !file.exists() || file.isDirectory()) {
@@ -108,10 +113,10 @@ public class FileContentExtractorService {
 
         try {
             if ("pdf".equals(ext)) {
-                // PDF: 使用 PDFBox 渲染为图片后 OCR
-                log.info("Starting PDF OCR for file: {} (size={} bytes)", fileName, file.length());
+                // PDF：先 PDFBox 抽文字层，抽不出才逐页渲染 + OCR
+                log.info("Extracting PDF text for file: {} (size={} bytes)", fileName, file.length());
                 String result = extractTextFromPdfWithOcr(file);
-                log.info("Completed PDF OCR for file: {}. Result length: {}", fileName, result.length());
+                log.info("Completed PDF extraction for file: {}. Result length: {}", fileName, result.length());
                 return result;
             } else {
                 // Image: 直接 OCR
@@ -129,19 +134,33 @@ public class FileContentExtractorService {
     }
     
     /**
-     * Extract text from PDF by rendering pages to images and OCR each.
-     * Uses Apache PDFBox for rendering.
+     * PDF 抽取：<b>先看文字层，抽不出才逐页渲染 + 云端 OCR</b>（dev-board#800）。
+     *
+     * <p>改动前这里是无条件 OCR——绝大多数合同、裁判文书、招股书都带完整文字层，
+     * 却被逐页渲染成 150DPI 的 PNG 送去识别：慢一到两个数量级、平台档按页扣 Credits、
+     * 识别误差还专挑法律文书最怕的数字与主体名，而且只看前 20 页。
+     * 「够不够用」的判据是 {@link PdfTextLayer#isUsable}，与 ProjectFileTextExtractor 同一份。
+     *
+     * <p>文字层与 OCR 共用同一次 {@code Loader.loadPDF}：扫描件上多跑一次 PDFTextStripper
+     * 的代价是毫秒级（没有文字层可抽），换掉的是整条 OCR 链路。
      */
     private String extractTextFromPdfWithOcr(File pdfFile) throws Exception {
         StringBuilder allText = new StringBuilder();
-        
+
         try (org.apache.pdfbox.pdmodel.PDDocument document = org.apache.pdfbox.Loader.loadPDF(pdfFile)) {
+            String textLayer = readTextLayer(document, pdfFile.getName());
+            if (PdfTextLayer.isUsable(textLayer)) {
+                log.info("PDF {} has a usable text layer ({} chars), skipping OCR entirely",
+                        pdfFile.getName(), textLayer.length());
+                return textLayer;
+            }
+
             org.apache.pdfbox.rendering.PDFRenderer renderer = new org.apache.pdfbox.rendering.PDFRenderer(document);
             int pageCount = document.getNumberOfPages();
-            
-            // 限制最多处理 20 页，避免超大 PDF
-            int maxPages = Math.min(pageCount, 20);
-            
+
+            // 只有 OCR 路径有页数上限：按页花时间、按页花钱，几百页的扫描件能把一轮对话拖死
+            int maxPages = Math.min(pageCount, Math.max(1, contextProperties.getOcrMaxPdfPages()));
+
             for (int page = 0; page < maxPages; page++) {
                 try {
                     // 渲染为 150 DPI 的图片（平衡质量和性能）
@@ -165,11 +184,28 @@ public class FileContentExtractorService {
             }
             
             if (pageCount > maxPages) {
-                allText.append("[System: PDF 共 ").append(pageCount).append(" 页，仅处理前 ").append(maxPages).append(" 页]\n");
+                // 明写「识别」两个字：模型极易把「我看到的就是全部」当成事实，
+                // 而这份正文既是转写（可能有识别误差）、又只是前 M 页
+                allText.append("[System: 这是没有文字层的扫描件，以上正文由文字识别（OCR）得到，可能有识别误差；")
+                       .append("该 PDF 共 ").append(pageCount).append(" 页，仅识别前 ").append(maxPages)
+                       .append(" 页，第 ").append(maxPages + 1).append(" 页及其后的内容不在上文中，不要当作全文。]\n");
+            } else if (allText.length() > 0) {
+                allText.append("[System: 这是没有文字层的扫描件，以上正文由文字识别（OCR）得到，可能有识别误差。]\n");
             }
         }
-        
+
         return allText.toString();
+    }
+
+    /** PDF 自带的文字层；抽不出（扫描件）或解析失败都返回空串，由调用方决定走不走 OCR。 */
+    private String readTextLayer(org.apache.pdfbox.pdmodel.PDDocument document, String fileName) {
+        try {
+            String text = new org.apache.pdfbox.text.PDFTextStripper().getText(document);
+            return text == null ? "" : text;
+        } catch (Exception e) {
+            log.warn("Failed to read the text layer of {}, falling back to OCR: {}", fileName, e.toString());
+            return "";
+        }
     }
 
     public boolean isTextFile(String fileName) {

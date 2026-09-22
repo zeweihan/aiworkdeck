@@ -39,7 +39,7 @@ class ExtractFileTextOcrTest {
     private final FileTools tools =
             new FileTools(projectFileService, repo, null, extractor, null, documentTextService, null, null,
                     new com.checkba.service.file.ProjectFileTextExtractor(
-                            documentTextService, extractor, projectFileService));
+                            documentTextService, extractor, projectFileService, null));
 
     @AfterEach
     void clearContext() {
@@ -110,12 +110,30 @@ class ExtractFileTextOcrTest {
     void textPdfDoesNotHitOcr() throws Exception {
         registerFile(14L, "合同.pdf", "pdf");
         Mockito.when(extractor.isOcrSupported("合同.pdf")).thenReturn(true);
-        Mockito.when(documentTextService.extractText(Mockito.any())).thenReturn("第一条 定义");
+        // 正文要有实际体量：判据是 PdfTextLayer.isUsable（实义字符数），
+        // 几个字的文字层在真实世界里是扫描件的残留页码，该走 OCR 而不是当成全文
+        Mockito.when(documentTextService.extractText(Mockito.any()))
+                .thenReturn("第一条 定义 本协议中下列用语的含义如下：甲方指出让方，乙方指受让方。");
 
         String out = tools.extract_file_text(14L);
 
         Mockito.verify(extractor, Mockito.never()).extractTextWithOcr(Mockito.any(File.class));
         assertTrue(out.contains("第一条 定义"), out);
+    }
+
+    @Test
+    @DisplayName("扫描件残留的几个字符不算文字层，照样走 OCR（dev-board#800）")
+    void residualNoiseInAScannedPdfStillGoesToOcr() throws Exception {
+        registerFile(16L, "扫描的判决书.pdf", "pdf");
+        Mockito.when(extractor.isOcrSupported("扫描的判决书.pdf")).thenReturn(true);
+        Mockito.when(documentTextService.extractText(Mockito.any())).thenReturn("1\n2\n3");
+        Mockito.when(extractor.extractTextWithOcr(Mockito.any(File.class)))
+                .thenReturn("本院认为，被告应当承担违约责任。");
+
+        String out = tools.extract_file_text(16L);
+
+        Mockito.verify(extractor).extractTextWithOcr(Mockito.any(File.class));
+        assertTrue(out.contains("本院认为"), "把三个页码当成判决书全文是最坏的一种坏法：" + out);
     }
 
     @Test

@@ -36,7 +36,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   - 启动回收（`AgentRunRecoveryService`）只捞 RUNNING（→INTERRUPTED）与 INTERRUPTED（塞回内存），**AWAITING_APPROVAL/AWAITING_INPUT 跨重启保持 DB 原样、不进内存**：问题卡与审批卡由历史消息渲染，用户回来点选项照样有效；代价是重启后会话列表的「待回答」圆点会消失（`AiChatController` 的 runStatus 只读内存）。要改这条得连 AWAITING_APPROVAL 一起改，别只给一个状态开后门。
 - `service/ai/TodoListService.java` — 任务清单（`todo_write` → `plan_update` 事件）。与 run 状态同款「内存 map 快路径 + 写透 DB」：新表 `agent_todo_list`（entity `model/entity/AgentTodoList`，整表 JSON 一行，ddl-auto 自动建表；写失败只 log 不阻断——进度卡坏掉不该让对话中断）。唯一读路径 `currentList()` 未命中时按 conversationId **惰性回填**：此前清单是纯内存的、进程重启即丢，而 run 状态却能回收成 INTERRUPTED 并给用户「继续」按钮，点下去清单已经没了——是个假承诺。空 list 是「查过 DB 确实没有」的**负缓存**占位（`reminder()` 每轮工具执行都调，不占位会每轮打库）；读失败刻意不写负缓存（留恢复窗口）。`purgeStaleLists()` 每日清 30 天未更新的行并摘掉内存条目。**清单刻意不并进 `agent_run_record`**：两条写路径各自 findByConversationId→save 会互相盖字段（lost update），且清理口径不同。`plan_update` 事件形状未变。
 - `service/ai/AgentRunRecoveryService.java` — 启动回收（harness 二期）：ApplicationReadyEvent 把 DB 里遗留的 RUNNING 全部翻成 INTERRUPTED 并塞回内存 map（/connect 的 run_state 只读内存），同时给该会话最后一条半截 ASSISTANT 消息追加 `> **[进程中断]** …`（按「含 [进程中断] 即跳过」幂等）。前端 run_state=INTERRUPTED → `agentPaused={reason:'process_interrupted'}` → 复用「继续」按钮（发一条「继续」消息，编排器起跑照常翻回 RUNNING）。**刻意不做 runLoop 快照重放**：工具副作用无法保证幂等；恢复粒度就是「从已持久化的轮次级执行日志继续」，丢失窗口只有最后一个未完成的 LLM 轮。
-- `service/ai/ContextAssemblerService.java` — assemble()：prompts/system_prompt.md + enforcement 段 + 模式约束 + Skill 注入 + 记忆 + 文件上下文 + 历史栈。**应用语言二选一（EN 版 PR5）**：注入 AppLanguageService，en-US 时基底 prompt 换 `prompts/system_prompt.en.md`（缺失回退中文版），enforcement/模式约束/系统时间格式（Locale.ENGLISH，时区仍 Asia/Shanghai）/活跃文档指引/readHint/末位提醒全部切英文文本（文件尾部的 EN_* 常量与 *En 方法）；zh-CN 路径代码与文本一字未动。**两版协议面（标签/停机条件/工具规则）必须逐条一致**——改中文版任一硬编码段时必须同步对应英文段与 system_prompt.en.md（en 文件里有 zh § 行号对照注释）。语言切换测试在 ContextAssemblerServiceTest 的「应用语言切换」组。activeContext 正文来源二选一：ContextItem.inlineContent（Office 插件等外部客户端随请求内联携带，200k 截断）优先，否则 read_document(fileId)——见 resolveActiveDocumentContent；末位 [系统提醒] 两条路径共用不变。 **工具的失败回执不是正文**（dev-board#779 K8）：`read_document` 读不到时不抛异常，而是把一句英文说明当返回值交回来（`Error: File not found.` / `Error reading document: …` / `Warning: no text extracted from …`），这些串非空，原来直接通过 `content != null && !content.isBlank()` 的守卫写进 `<active_document>` 的 CDATA——模型读到的是「当前打开的文档，正文如下：Error reading document: For input string: "artifact-12"」，而末位 [系统提醒] 还在说「其正文已内联注入」。现在注入前先过 `isToolFailureText(content)`（只看首行、只认那三种前缀），认出来就落到既有的 readHint 分支明说「正文暂不可读」。前端同批在源头挡了一道（虚拟标签不再当活跃文档，见 sidebar-shell.md 的 `activeTabContext.js`）。**`<file>` 段（显式附件）同批也上了这道**：命中即**不进 CDATA**，改成 `<file id=… name=…>该附件内容暂不可读：<失败首行></file>`（英文 `This attachment could not be read: `），让模型能把「这份附件读不出来」转述给用户，而不是「引用」一句 Java 异常文案当合同原文；首行取 `toolFailureHeadline`（首个非空行，超 200 字符截断）。OCR 降级那段（`appendOcrFallbackFile`）也补了同一判据——它的 CDATA 顶着一句「以下正文由 OCR 转写而来」的横幅，失败回执落进去就成了「识别结果是这句英文」，那里保留横幅、正文位置换成 `[Empty or unreadable file]`。护栏 `ContextAssemblerServiceTest` 的五条（活跃文档 Error / Warning / 正文首行恰好以 Error 开头的不误杀，附件 Error 不进 CDATA / 附件正常正文照常注入）。
+- `service/ai/ContextAssemblerService.java` — assemble()：prompts/system_prompt.md + enforcement 段 + 模式约束 + Skill 注入 + 记忆 + 文件上下文 + 历史栈。**应用语言二选一（EN 版 PR5）**：注入 AppLanguageService，en-US 时基底 prompt 换 `prompts/system_prompt.en.md`（缺失回退中文版），enforcement/模式约束/系统时间格式（Locale.ENGLISH，时区仍 Asia/Shanghai）/活跃文档指引/readHint/末位提醒全部切英文文本（文件尾部的 EN_* 常量与 *En 方法）；zh-CN 路径代码与文本一字未动。**两版协议面（标签/停机条件/工具规则）必须逐条一致**——改中文版任一硬编码段时必须同步对应英文段与 system_prompt.en.md（en 文件里有 zh § 行号对照注释）。语言切换测试在 ContextAssemblerServiceTest 的「应用语言切换」组。activeContext 正文来源二选一：ContextItem.inlineContent（Office 插件等外部客户端随请求内联携带，200k 截断）优先，否则 read_document(fileId)（dev-board#800 起它走 ProjectFileTextExtractor + 落库缓存，桌面端活跃文档不再每轮整篇重抽/重 OCR）——见 resolveActiveDocumentContent；末位 [系统提醒] 两条路径共用不变。 **工具的失败回执不是正文**（dev-board#779 K8）：`read_document` 读不到时不抛异常，而是把一句英文说明当返回值交回来（`Error: File not found.` / `Error reading document: …` / `Warning: no text extracted from …`），这些串非空，原来直接通过 `content != null && !content.isBlank()` 的守卫写进 `<active_document>` 的 CDATA——模型读到的是「当前打开的文档，正文如下：Error reading document: For input string: "artifact-12"」，而末位 [系统提醒] 还在说「其正文已内联注入」。现在注入前先过 `isToolFailureText(content)`（只看首行、只认那三种前缀），认出来就落到既有的 readHint 分支明说「正文暂不可读」。前端同批在源头挡了一道（虚拟标签不再当活跃文档，见 sidebar-shell.md 的 `activeTabContext.js`）。**`<file>` 段（显式附件）同批也上了这道**：命中即**不进 CDATA**，改成 `<file id=… name=…>该附件内容暂不可读：<失败首行></file>`（英文 `This attachment could not be read: `），让模型能把「这份附件读不出来」转述给用户，而不是「引用」一句 Java 异常文案当合同原文；首行取 `toolFailureHeadline`（首个非空行，超 200 字符截断）。OCR 降级那段（`appendOcrFallbackFile`）也补了同一判据——它的 CDATA 顶着一句「以下正文由 OCR 转写而来」的横幅，失败回执落进去就成了「识别结果是这句英文」，那里保留横幅、正文位置换成 `[Empty or unreadable file]`。护栏 `ContextAssemblerServiceTest` 的五条（活跃文档 Error / Warning / 正文首行恰好以 Error 开头的不误杀，附件 Error 不进 CDATA / 附件正常正文照常注入）。
   - **法域与字形规则（dev-board#375，2026-09-02）**：zh 版基底 prompt 的「Simplified Chinese / Mainland China」是产品语言与人设，**不是法域断言**——身份段之后加了一段「适用法域以文档为准」（繁體 + 台灣法源 = 台灣法；禁止跨法域套概念；`law_*` 只覆盖内地法；**写进文档的文字跟随文档字形与用语**，「简体中文」只约束对用户的回答）。en 版对应段落在 jurisdiction-neutral 之后，措辞刻意避开 "Simplified Chinese" 字样（`ContextAssemblerServiceTest.englishModeAssemblesEnglishSystemPrompt` 断言英文模式不含它）。enforcement 段的 Language 小节两版各加一行同义规则（弱模型对 system prompt 中段视而不见，末位 enforcement 才管用）。病灶：台湾认购合约被按内地法审、简体句子插进繁體正文。
   - **enforcement 段与模式约束是「比 system_prompt.md 更末位」的文本，两边打架时它赢**（本仓实证：末位注意力最高，只写在 system prompt 里的约束被弱模型稳定无视，PR#209）。所以给模型加任何新的停机/输出形态时，**必须同时改这里**，否则功能整条是死的。反问那次就踩了三处：① Stop Conditions 原文是「**STOP ONLY** when you output implementation_plan」——把反问停机明确排除在外了，已改成 STOP + 补一条 **ALSO STOP** for `<question>`；② Output Structure 第 5 项「`<final>` REQUIRED for all non-chitchat」会让模型为了满足 REQUIRED 而在问完之后硬编一段答案，已补「以 `<question>` 收尾时不要求 `<final>`」的例外；③ AGENT 模式约束第 1 条「自动执行，无需等待用户确认」已补「但缺少影响成果正确性的前提时先用 `<question>` 问」。
 - `service/ai/ChatModelFactory.java` — 供应商路由，2026-08 起收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`（本地，实验档）。**GEMINI 档已下线**（手写的 GeminiChatLanguageModel 不支持 tools 也没有流式，AGENT/PLAN 下是死路；Gemini 系列模型改由 OpenRouter 的 `google/*` 提供），存量库里的 `ai.activeProvider=GEMINI` 由 `migrateRetiredGeminiProvider()`（ApplicationReadyEvent，幂等）改写成 OLLAMA——不迁移的话 `resolveProvider()` 只 warn 一句就静默回退 yml，用户的选择被改掉而设置页显示的又是另一回事。provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。公有解析 API：`resolveProvider()` / `resolveDefaultModel()`（DB `ai.defaultModel` → yml `open-router.default-model`）/ `getAuxChatModel()`（辅助模型，非白名单抛 `FeatureNotConfiguredException(feature="ai-aux-model")`，不静默回落）/ `resolveOllamaModelName()` / `resolveOllamaBaseUrl()`。**判定顺序不许改**：平台通道短路 → 白名单短路 → provider 分流（由 ChatModelFactoryTest 固化）。`AllowedModels.java` 白名单（分档单价，见下节）。
@@ -462,12 +462,35 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   失败给纠错指令。**同一分支还补了原生分支早就有的空输出归一**（空白 → `BLANK_TOOL_OUTPUT` + FAILURE）：
   模板包裹让它不会像原生分支那样抛 `ensureNotBlank`，但「Output: 空 + 断言成功」照样把模型骗去收尾。
   回归用例 `AgentOrchestratorXmlToolFeedbackTest`。
-- **读取类工具的 OCR 路由：图片与扫描件一律走云端 OCR，三个工具口径必须一致**（dev-board#396）。
+- **读取类工具的 OCR 路由：一条路由、一份判据、一份缓存**（dev-board#396 + #800）。
   `read_file`（按路径）、`read_document`（按 fileId，LegalTools）、`extract_file_text`（按 fileId，FileTools）
-  三条读取路都是 `isOcrSupported(fileName)` → `extractTextWithOcr(File)` → `OcrService`
-  → 平台网关（阿里云 OCR，按页扣 Credits），扩展名表是 `ai.context.ocr-extensions`
-  （jpg/jpeg/png/gif/bmp/webp/pdf）。**图片直接 OCR、PDF 先抽文字层抽不出才 OCR**——
+  与**文件夹上下文**（`FileContextLoader.extractForFolder`）全部收敛到
+  `service/file/ProjectFileTextExtractor`：扩展名表 `ai.context.ocr-extensions`
+  （jpg/jpeg/png/gif/bmp/webp/pdf），**图片直接 OCR、PDF 先抽文字层抽不出（扫描件）才 OCR**——
   图片抽 Tika 是纯浪费，文本型 PDF 走 OCR 是白花钱。
+  「文字层够不够用」的判据**全仓只有 `service/file/PdfTextLayer.isUsable`** 一份
+  （实义字符 ≥16；只判 `hasText` 会把扫描件残留的几个页码当成整份判决书的全文）。
+  - **#800 之前 pdf 在 ocr-extensions 里就等于「一律 OCR」**：`read_document` / `read_file` 把每一份
+    PDF 都逐页 150DPI 渲染送云端识别、只看前 20 页，而 `extract_file_text` 走文字层不设页数上限，
+    **同一份 PDF 走不同入口得到的正文与账单完全不同**，文件夹里的那份又是第三种。现已统一。
+  - **页数上限 `ai.context.ocr-max-pdf-pages`（默认 20）只约束 OCR 路径**；文字层整篇抽取不设限，
+    触发上限时正文末尾明写「这是扫描件、以上由文字识别得到、共 N 页仅识别前 M 页、不要当作全文」。
+  - **扣费点全仓只有 `OcrService.recognizeGeneral`（按次，PDF 每页一次）**，所以
+    `verify(ocr, never()).recognizeGeneral(...)` 就是「这份文件没花钱」的断言。文本型 PDF 零调用。
+  - **抽取结果落库缓存**：表 `project_file_text_cache`（实体 `ProjectFileTextCache`，ddl-auto 建表），
+    键 fileId，**失效判据是物理文件的 mtime+size**（不是 project_file.updatedAt——编辑器保存、
+    版本回退、插件写回都可能只动磁盘不动那一行），配置 `ai.context.text-cache.*`
+    （enabled / max-text-chars 100 万 / max-entries 2000）。写入与查询失败一律只 log、按未命中处理。
+    与 `DocumentTextService` 那份 32 条内存 LRU **并存不替代**：内存那层吃「同一轮里的重复抽取」，
+    落库这层吃「跨轮次、跨重启」——扫描件的 OCR 结果没有内存缓存兜底，只有它救得了重复扣费。
+    读回来时还会校验 `text_chars` 与实际长度是否一致（MySQL 档的 TEXT 只有 64KB），对不上当未命中重抽。
+  - **参考材料入口（`extract` / `extractBytes`）仍然不走 OCR**（`NEEDS_OCR`，PRIVACY.md 承诺参考材料
+    不产生 Credits 扣费）；但**命中缓存照样返回正文**——那正是 NEEDS_OCR 那句话许诺的结果，且不花钱。
+  - **文件夹上下文刻意不做 OCR**（批量路径，拖一个照片文件夹进来不该默默花一笔钱），
+    但从此在 unreadable 名单里**逐条写明原因**（「请先做一次文字识别」等），不再只给一个光秃秃的文件名。
+  - 实测（dev-board#800，本机隔离后端 + nda.pdf 附件连问两轮）：第一轮 `[Timing] prep total=274ms`
+    （assemble 254ms，其中 files=223ms）；第二轮 `prep total=25ms`（assemble 16ms，files=3ms），
+    `project_file_text_cache` 落一行 `source=text`，OCR 网关零调用。
   `extract_file_text` 此前<b>没有</b>这条分支（只有 Tika），项目里的 jpg 恒抽不出正文，
   返回的提示又只说「try read_file with OCR for **image PDFs**」——模型据此认定图片读不了，
   转头调 `run_python` 想自己跑 OCR，撞上 "Cannot run program docker" 后**自己下结论**
@@ -494,13 +517,15 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   `extract_file_text / read_file / read_document` 这类读**项目文件**的工具，而 doc_* 读的是编辑器里那一份，
   PDF/xlsx 这类还没有分页读取原语的类型只能走后半句。`OversizedToolResultRecoveryTest` 现在反射
   DocumentEditTools 的真实 @Tool 名单，核对文案点名的工具确实存在。
-- **文件夹上下文要走 `DocumentTextService`，不是 `FileContentExtractorService.extractText`**：
+- **文件夹上下文要走 `ProjectFileTextExtractor.extract`，不是 `FileContentExtractorService.extractText`**：
   后者的白名单（java/js/md/txt/csv…）不含 docx/xlsx/pptx/doc/pdf，恒返回空串，
   `buildFolderContext` 随后 `if (!text.isEmpty())` 把这些文件**静默跳过**——
   上下文里「### Folder Document Contents」标题下一个字都没有。17ca80d7 修的是**单文件**路径
-  （`read_document` 改走 Tika）与 `<file>` 段守卫，**文件夹路径当时漏了**。
-  抽不出正文的文件现在会在 `[System Note: ...]` 里点名留痕，不再凭空消失。
-  回归用例 `FolderContextOfficeFormatTest`。
+  （`read_document` 改走 Tika）与 `<file>` 段守卫，**文件夹路径当时漏了**；
+  dev-board#800 起两条路径收敛到同一个抽取器（同一份文字层判据、同一份落库缓存），
+  所以「直接拖一份 PDF」与「把它放在文件夹里拖」现在逐字得到同一份正文。
+  抽不出正文的文件在 `[System Note: ...]` 里**带原因**点名留痕，不再凭空消失、也不再只给文件名。
+  回归用例 `FolderContextOfficeFormatTest` + `PdfExtractionParityTest`。
   （同文件的 `extractFileText` / `collectFolderContent` 有同样的白名单缺陷，但**零生产调用方**，
   本次刻意没动——要用它们之前先照 `buildFolderContext` 改。）
 - **工具失败判据只认前缀，中英文各一个**：`ToolRegistry.ToolResult.success()` 认
@@ -721,7 +746,7 @@ spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md`。Office/WPS
 - `service/ai/ref/CaseRefClient.java` — 案件库内部口的出站客户端；`controller/internal/InternalRefController.java` 是案件库那一侧的入站端点（见 version-control.md）。
 - `service/addin/PaneRegistry.java` + `controller/addin/AddinPaneController.java` — 窗格登记簿与心跳/告别端点。
 - `service/addin/{GitProviderClient,GitTokenCipher}.java` + `controller/addin/AddinGitLinkController.java` + `model/entity/AddinGitRepoLink.java` — 关联 GitHub/Gitee 仓库。
-- `service/file/ProjectFileTextExtractor.java` — 从 `FileTools.extract_file_text` 抽出的抽文字路由，现在三个使用方共用（工具、云端项目来源、桌面端参考读取）。
+- `service/file/ProjectFileTextExtractor.java` — 从 `FileTools.extract_file_text` 抽出的抽文字路由，现在**五个**使用方共用（`extract_file_text` / `read_document`(dev-board#800) / 文件夹上下文 / 云端项目来源 / 桌面端参考读取），并在这里挂着 `ProjectFileTextCacheService` 落库缓存。
 - 改：`OfficeBridgeService.executeOnPane`、`ClientCapabilityService.isToolVisible`、`ContextAssemblerService` 的 Office 末位硬规则、`ProjectFileService.{findByRelativePath,listRelativePaths}`。
 
 ### 工具契约
@@ -767,7 +792,7 @@ dev-board#285 那条「**本会话能直接编辑的只有上面这一份打开�
 2b. **心跳里的 `conversationId` 不信任请求体**（`AddinPaneController` 的 `canUseConversation`，与 `OfficeResultController` 同一条线）。登记簿是跨窗格下发链路上**唯一**一处 conversationId 来自客户端的地方——`executeOnPane` 直接往 `target.conversationId()` 那条连接推 `client_action`，`OpenDocSource.target` 只校验 paneId 在**调用者自己**名下（那是调用者自己造的）。不校验的话，任何登录用户把别人的 conversationId 登记到自己名下，`ref_read`/`ref_edit ref=open:<自己的paneId>` 就落到别人开着的文档上；结果回传那一闸也拦不住，受害者自己的窗格是合法投递者。护栏 `AddinPaneControllerTest.heartbeatWithSomeoneElsesConversationIsRejectedAndNotRegistered`。没带会话 id 的心跳照常登记（窗格只是暂时不可被下发）。
 3. **参考材料的正文一个字都不许进日志**：五个来源 + service 的日志只记 scheme / 长度 / 耗时 / 异常类名。git 那条尤其严——**Gitee v5 的令牌在查询串里**，把 URL 或上游响应体拼进 message 就等于写进一次日志（`GitProviderClient` 的类注释把这条写死了）。
 4. **参考材料不计费**：不走 `TransferBillingClient`，与整份文件的 PULL/PUSH 账目完全分离。**OCR 也算计费**（2026-09-20 修）：平台代采档的 OCR 按页扣 Credits，所以参考入口（`ProjectFileTextExtractor.extract` / `extractBytes`）走到 OCR 分支时改为回一句「参考读取不做文字识别，请先在工作台里识别」，而不是默默扣钱——`legal/PRIVACY.md` 中英两版都写着参考材料「不产生 Credits 扣费」。
-5. **`ProjectFileTextExtractor` 是从 `FileTools.extract_file_text` 抽出来的同一条路由**（图片直接 OCR / PDF 先抽文字层抽不出才 OCR / 其余 Tika，dev-board#396 口径），三个使用方共用；**但只有工具入口 `extractText(pf)` 真走 OCR**，两个参考入口按上一条拒绝。改它等于同时改 `extract_file_text`，`ExtractFileText*Test` 与 `ProjectFileTextExtractorTest` 要一起跑。OCR 的「[System: …]」形态失败一律转成 `OcrFailedException`，**绝不能被当成正文**。
+5. **`ProjectFileTextExtractor` 是从 `FileTools.extract_file_text` 抽出来的同一条路由**（图片直接 OCR / PDF 先抽文字层抽不出才 OCR / 其余 Tika，dev-board#396 口径；文字层判据 `PdfTextLayer.isUsable`），dev-board#800 起 `read_document` 与文件夹上下文也走它；**但只有工具入口 `extractText(pf)` 真走 OCR**，两个参考入口按上一条拒绝（**缓存命中除外**——返回一条早先由 OCR 得到的正文不花钱，正是 NEEDS_OCR 那句话许诺的结果）。改它等于同时改 `extract_file_text`，`ExtractFileText*Test` 与 `ProjectFileTextExtractorTest` 要一起跑。OCR 的「[System: …]」形态失败一律转成 `OcrFailedException`，**绝不能被当成正文**。
 6. **`cloud:` 的 fileId 是模型抄来的参数**：读之前一律 `hasReadPermission`，判不过与「不存在」回**同一句话**，不回显别人项目的文件名。`case:` / `git:` 同理。
 
 ### 验证（参考来源面）

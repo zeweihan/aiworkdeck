@@ -29,7 +29,11 @@ public class LegalTools implements AgentToolComponent {
     private final ProjectFileService projectFileService;
     private final com.checkba.service.legal.PkulawChannel pkulawChannel;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
-    private final com.checkba.service.DocumentTextService documentTextService;
+    /**
+     * 抽取路由（PDF 文字层优先、扫描件才 OCR）与抽取结果缓存，与 {@code extract_file_text}
+     * 是同一个 bean（dev-board#800）——{@code read_document} 不再自建第二条分支。
+     */
+    private final com.checkba.service.file.ProjectFileTextExtractor textExtractor;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.service.platform.ExternalServiceAvailability externalServiceAvailability;
@@ -57,27 +61,32 @@ public class LegalTools implements AgentToolComponent {
     /**
      * 读取项目文件正文。
      *
-     * <p>三条抽取路径，缺一条就有一整类文件读不出来：
+     * <p>两条抽取路径：
      * <ul>
-     *   <li>图片 / PDF → OCR（{@code ai.context.ocr-extensions}）；</li>
-     *   <li>纯文本类（java/js/md/txt/csv…）→ 直接按字符集解码；</li>
-     *   <li>其余（<b>docx/xlsx/pptx/doc 等 Office 格式</b>）→ Tika（{@link com.checkba.service.DocumentTextService}，
-     *       与 extract_file_text 同一套）。</li>
+     *   <li>纯文本类（java/js/md/txt/csv…）→ 直接按字符集解码（UTF-8，失败回退 GBK）；</li>
+     *   <li>其余一切（图片、PDF、<b>docx/xlsx/pptx/doc 等 Office 格式</b>）→
+     *       {@link com.checkba.service.file.ProjectFileTextExtractor}，与 {@code extract_file_text}
+     *       同一条路：图片直接云端 OCR，<b>PDF 先抽文字层、抽不出（扫描件）才 OCR</b>，其余 Tika。</li>
      * </ul>
      *
-     * <p>第三条曾经不存在：docx 两个白名单都不在，恒定落进
+     * <p>Office 那条曾经不存在：docx 两个白名单都不在，恒定落进
      * {@code FileContentExtractorService.extractText} 的 else 分支返回空串——
      * 而空串会被 {@code ToolExecutionResultMessage.from} 的 ensureNotBlank 抛出来掀翻整轮
      * （用户看到「Callback Error: text cannot be null or blank」），
      * 同时 Active Document 注入的正文也恒为空，模型转头自己再调一次本工具。
      *
-     * <p>抽不出正文时<b>绝不返回空白</b>，而是给一句可行动的说明（口径抄 extract_file_text）。
+     * <p>PDF 那条在 dev-board#800 之前是<b>无条件逐页 150DPI 渲染 + 云端 OCR、只看前 20 页</b>：
+     * 带文字层的合同与裁判文书本来毫秒级就能读，却每轮都要等完整 OCR、每轮按页扣 Credits，
+     * 而且同一份 PDF 走 {@code extract_file_text} 得到的正文与账单完全不同。现在三条入口同一口径。
+     *
+     * <p>抽不出正文时<b>绝不返回空白</b>，而是给一句可行动的说明（口径抄 extract_file_text）；
+     * OCR 失败一律 {@code Error:} 开头并带上底层原因——此前它以「[System: OCR 识别失败…]」形态
+     * 返回，非空且无 Error 前缀，会被当成正文原样注进上下文。
      */
     @ToolMeta(displayName = "读取文档", category = "file")
     @Tool("Read document content. Use this to read files from the project. Provide fileId.")
     public String read_document(String fileId) {
         log.info("Tool: read_document called for fileId={}", fileId);
-        java.nio.file.Path tempPath = null;
         try {
             Long fId = Long.parseLong(fileId);
             ProjectFile file = projectFileService.getFile(fId);
@@ -85,24 +94,17 @@ public class LegalTools implements AgentToolComponent {
             String denied = ToolFileGuard.rejectIfOutsideProject(file);
             if (denied != null) return denied;
 
-            byte[] bytes = projectFileService.getFileBytes(fId);
-            if (bytes == null || bytes.length == 0) return "File is empty.";
-
             String name = file.getName();
-            boolean ocr = fileContentExtractorService.isOcrSupported(name);
             String result;
-            if (ocr || fileContentExtractorService.isTextFile(name)) {
-                // Create temp file for extractor (needed for OCR / charset decoding)
-                String ext = file.getFileType() != null ? "." + file.getFileType() : ".tmp";
-                tempPath = java.nio.file.Files.createTempFile("checkba_legal_" + fId + "_", ext);
-                java.nio.file.Files.write(tempPath, bytes);
-                java.io.File tempFile = tempPath.toFile();
-                result = ocr
-                        ? fileContentExtractorService.extractTextWithOcr(tempFile)
-                        : fileContentExtractorService.extractText(tempFile);
+            if (!fileContentExtractorService.isOcrSupported(name)
+                    && fileContentExtractorService.isTextFile(name)) {
+                result = readPlainText(fId, file);
             } else {
-                // Office 格式（docx/xlsx/pptx/doc…）：Tika，与 extract_file_text 同一条路
-                result = documentTextService.extractText(file);
+                try {
+                    result = textExtractor.extractText(file);
+                } catch (com.checkba.service.file.ProjectFileTextExtractor.OcrFailedException e) {
+                    return "Error: " + e.getMessage();
+                }
             }
 
             if (!StringUtils.hasText(result)) {
@@ -117,6 +119,22 @@ public class LegalTools implements AgentToolComponent {
         } catch (Exception e) {
             log.error("Failed to read document {}", fileId, e);
             return "Error reading document: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 纯文本类走临时文件 + 字符集解码，<b>刻意不并进抽取器</b>：抽取器对非 OCR 格式走 Tika，
+     * 而 Tika 对 GBK 编码的中文 txt/csv 的字符集猜测不如这里的「UTF-8 严格解码失败即 GBK」稳。
+     */
+    private String readPlainText(Long fId, ProjectFile file) throws java.io.IOException {
+        byte[] bytes = projectFileService.getFileBytes(fId);
+        if (bytes == null || bytes.length == 0) return "";
+        java.nio.file.Path tempPath = null;
+        try {
+            String ext = file.getFileType() != null ? "." + file.getFileType() : ".tmp";
+            tempPath = java.nio.file.Files.createTempFile("checkba_legal_" + fId + "_", ext);
+            java.nio.file.Files.write(tempPath, bytes);
+            return fileContentExtractorService.extractText(tempPath.toFile());
         } finally {
             if (tempPath != null) {
                 try {

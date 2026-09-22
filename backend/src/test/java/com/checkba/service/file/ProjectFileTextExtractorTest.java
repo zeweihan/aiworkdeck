@@ -53,7 +53,7 @@ class ProjectFileTextExtractorTest {
     private final ProjectFileService fileService = mock(ProjectFileService.class);
     private final DocumentTextService documentTextService = new DocumentTextService(storageFactory);
     private final ProjectFileTextExtractor extractor =
-            new ProjectFileTextExtractor(documentTextService, ocr, fileService);
+            new ProjectFileTextExtractor(documentTextService, ocr, fileService, null);
 
     private static ProjectFile file(long id, String name, String type, String path, Long size) {
         ProjectFile pf = new ProjectFile();

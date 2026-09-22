@@ -43,39 +43,57 @@ public class FileContextLoader {
     private final FileContentExtractorService fileContentExtractorService;
     private final AiContextProperties contextProperties;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
-    /** Office/PDF 正文抽取（Tika + PDFBox），与 read_document / extract_file_text 同一套 */
-    private final com.checkba.service.DocumentTextService documentTextService;
+    /**
+     * 正文抽取路由（Tika + PDFBox + 按需 OCR）与落库缓存，与 read_document / extract_file_text
+     * 是同一个 bean（dev-board#800）。文件夹路径走它的<b>不含 OCR</b> 的入口 {@code extract}。
+     */
+    private final com.checkba.service.file.ProjectFileTextExtractor textExtractor;
 
     public FileContextLoader(ProjectFileService projectFileService,
                              FileContentExtractorService fileContentExtractorService,
                              AiContextProperties contextProperties,
                              com.checkba.storage.ProjectStorageResolver storageResolver,
-                             com.checkba.service.DocumentTextService documentTextService) {
+                             com.checkba.service.file.ProjectFileTextExtractor textExtractor) {
         this.projectFileService = projectFileService;
         this.fileContentExtractorService = fileContentExtractorService;
         this.contextProperties = contextProperties;
         this.storageResolver = storageResolver;
-        this.documentTextService = documentTextService;
+        this.textExtractor = textExtractor;
     }
 
     /**
      * 文件夹上下文里单个文件的正文抽取。
      *
-     * <p>纯文本类（java/js/md/txt/csv…）直读；<b>其余（docx/xlsx/pptx/doc/pdf）走
-     * {@link com.checkba.service.DocumentTextService}</b>——与 {@code read_document} /
-     * {@code extract_file_text} 同一套 Tika+PDFBox。
+     * <p>纯文本类（java/js/md/txt/csv…）直读；<b>其余（docx/xlsx/pptx/doc/pdf/图片）走
+     * {@link com.checkba.service.file.ProjectFileTextExtractor#extract}</b>——与 {@code read_document} /
+     * {@code extract_file_text} 同一条路由、共用同一份落库缓存（dev-board#800）。
+     * 带文字层的 PDF 因此与「直接拖进对话」得到逐字相同的正文。
      *
      * <p>此前这里只有 {@code FileContentExtractorService.extractText} 一条路，而它的
      * 白名单不含 Office 格式，恒返回空串，于是「文件夹里的 Word/PDF」在上下文里
      * 一个字都没有——单文件路径在 17ca80d7 已修（走 read_document），文件夹路径漏了。
-     * 图片仍不在此处做 OCR：文件夹扫描是批量路径，逐张走 OCR 的代价不在本次修复范围内。
+     *
+     * <p><b>图片与扫描件仍不在此处做 OCR</b>（拍板过：文件夹扫描是批量路径，逐张 OCR
+     * 既慢又按页扣 Credits，用户拖一个照片文件夹进来不该默默花掉一笔钱）。
+     * 但从此<b>要说清楚原因</b>：{@code extract} 抛出的那句「请先做一次文字识别」原样进
+     * unreadable 名单，而不是像以前那样只给一个光秃秃的文件名。
+     * 缓存里已经有 OCR 结果时（用户此前在工作台或用工具识别过）照常命中，不花钱也读得到。
+     *
+     * @return 正文；读不出来时返回空串，{@code reason} 里带上可转述的原因
      */
-    private String extractForFolder(ProjectFile f, java.io.File physicalFile) {
+    private String extractForFolder(ProjectFile f, java.io.File physicalFile, StringBuilder reason) {
         if (fileContentExtractorService.isTextFile(f.getName())) {
             return fileContentExtractorService.extractText(physicalFile);
         }
         try {
-            return documentTextService.extractText(f);
+            return textExtractor.extract(f);
+        } catch (java.io.IOException e) {
+            // extract 的 IOException message 就是写给用户看的原因（NEEDS_OCR / 超大 / 抽取失败）
+            if (StringUtils.hasText(e.getMessage())) {
+                reason.append(e.getMessage());
+            }
+            log.info("Folder context: no text from {}: {}", f.getName(), e.getMessage());
+            return "";
         } catch (Exception e) {
             log.warn("Folder context: failed to extract text from {}: {}", f.getName(), e.getMessage());
             return "";
@@ -216,7 +234,8 @@ public class FileContextLoader {
                     // 改走 resolver 才真正读到文件（localRoot 感知）
                     java.io.File physicalFile = storageResolver.resolve(f.getFilePath()).toFile();
                     if (physicalFile.exists() && physicalFile.length() < maxFileSize) {
-                        String text = extractForFolder(f, physicalFile);
+                        StringBuilder reason = new StringBuilder();
+                        String text = extractForFolder(f, physicalFile, reason);
                         if (text != null && !text.isBlank()) {
                             if (text.length() > maxChars) text = text.substring(0, maxChars) + "...[Truncated]";
 
@@ -224,28 +243,40 @@ public class FileContextLoader {
                             sb.append("```\n").append(text).append("\n```\n");
                             reads++;
                         } else {
-                            unreadable.add(f.getName());
+                            unreadable.add(withReason(f.getName(), reason.toString()));
                         }
                     } else {
-                        unreadable.add(f.getName());
+                        unreadable.add(withReason(f.getName(), physicalFile.exists()
+                                ? "超过单文件大小上限" : "文件不在磁盘上"));
                     }
                 } catch (Exception e) {
-                    unreadable.add(f.getName());
+                    unreadable.add(withReason(f.getName(), e.getMessage()));
                 }
             }
             if (!unreadable.isEmpty()) {
                 int shown = Math.min(unreadable.size(), UNREADABLE_NAMES_SHOWN);
                 sb.append("\n[System Note: ").append(unreadable.size())
-                  .append(" file(s) in this folder have no extractable text (scanned image, unsupported type, or too large): ")
-                  .append(String.join(", ", unreadable.subList(0, shown)));
-                if (unreadable.size() > shown) sb.append(", ...");
-                sb.append(". Use extract_file_text or read_file with OCR if you need their content.]\n");
+                  .append(" file(s) in this folder yielded no text, with the reason after each name: ")
+                  .append(String.join("; ", unreadable.subList(0, shown)));
+                if (unreadable.size() > shown) sb.append("; ...");
+                sb.append(". Scanned images and scanned PDFs are NOT OCR'd during a folder scan — "
+                        + "call extract_file_text on the one you actually need and it will be recognised then.]\n");
             }
 
         } catch (Exception e) {
             sb.append("\n[Error reading folder: ").append(e.getMessage()).append("]\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * 「读不出来」的条目要带上原因。
+     *
+     * <p>只给文件名的话，模型与用户只能猜：是扫描件没识别、是太大、还是压根没读到？
+     * 猜错的方向都很糟——模型会去编内容，或者告诉用户「这个文件是空的」。
+     */
+    private static String withReason(String name, String reason) {
+        return StringUtils.hasText(reason) ? name + "（" + reason.trim() + "）" : name;
     }
 
     private void listFilesRecursive(Long projectId, Long parentId, List<ProjectFile> collector, int depth) {

@@ -86,12 +86,15 @@ class FolderContextOfficeFormatTest {
         Mockito.when(resolver.resolve(Mockito.anyString()))
                 .thenAnswer(inv -> Path.of(inv.getArgument(0, String.class)));
 
+        FileContentExtractorService extractor =
+                new FileContentExtractorService(Mockito.mock(OcrService.class), new AiContextProperties());
         return new FileContextLoader(
                 fileService,
-                new FileContentExtractorService(Mockito.mock(OcrService.class), new AiContextProperties()),
+                extractor,
                 new AiContextProperties(),
                 resolver,
-                new DocumentTextService(factory));
+                new com.checkba.service.file.ProjectFileTextExtractor(
+                        new DocumentTextService(factory), extractor, fileService, null));
     }
 
     @Test
@@ -132,8 +135,10 @@ class FolderContextOfficeFormatTest {
                 .buildFolderContext(String.valueOf(FOLDER_ID), String.valueOf(PROJECT_ID), 0);
 
         assertTrue(out.contains("扫描件.jpg"), "文件名要出现，实际是：" + out);
-        assertTrue(out.contains("no extractable text"),
+        assertTrue(out.contains("yielded no text"),
                 "读不出来要明说，静默跳过等于骗模型，实际是：" + out);
+        // dev-board#800：只给文件名还不够，要说清是「扫描件、文件夹扫描不做识别」
+        assertTrue(out.contains("文字识别"), "要写明原因，实际是：" + out);
         assertFalse(out.contains("```"), "没有正文就不该出现空的代码块，实际是：" + out);
     }
 }

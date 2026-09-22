@@ -4,6 +4,7 @@
 package com.checkba.service.file;
 
 import com.checkba.model.entity.ProjectFile;
+import com.checkba.model.entity.ProjectFileTextCache;
 import com.checkba.service.DocumentTextService;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.context.FileContentExtractorService;
@@ -24,11 +25,18 @@ import java.util.Set;
 /**
  * 项目文件的纯文本抽取（dev-board#718，从 FileTools.extract_file_text 抽出）。
  *
- * <p>一条路由、三个使用方：AI 工具 {@code extract_file_text}、云端项目参考来源、桌面端参考读取。
+ * <p>一条路由、四个使用方（dev-board#800 起 {@code read_document} 也走这里，于是附件正文、
+ * 活跃文档正文与文件夹上下文都收敛到同一口径）：AI 工具 {@code extract_file_text} /
+ * {@code read_document}、云端项目参考来源、桌面端参考读取、文件夹上下文。
  * 路由与 extract_file_text 一直以来的口径逐条相同（dev-board#396）：
  * 图片没有文字层，直接走云端 OCR；PDF 先抽文字层，抽不出（扫描件）才 OCR；其余格式走 Tika。
+ * 「文字层够不够用」的判据在 {@link PdfTextLayer}，全仓只有那一份。
  * OCR 的失败以「[System: …]」形态返回（非空、无 Error 前缀），这里一律转成 {@link OcrFailedException}，
  * 绝不能被当成正文。
+ *
+ * <p>抽取结果经 {@link ProjectFileTextCacheService} 落库缓存（键 fileId，失效判据是物理文件的
+ * mtime+size）：附件与活跃文档的正文是<b>每一轮都要重新注入</b>的，没有这层缓存时，
+ * 同一份扫描件在一条会话里会被反复 OCR、反复按页扣 Credits。
  *
  * <p><b>只有工具入口 {@link #extractText(ProjectFile)} 走 OCR。</b>参考入口
  * （{@link #extract}、{@link #extractBytes}）走到 OCR 分支时改为报 {@link #NEEDS_OCR}：
@@ -61,13 +69,17 @@ public class ProjectFileTextExtractor {
     private final DocumentTextService documentTextService;
     private final FileContentExtractorService fileContentExtractorService;
     private final ProjectFileService projectFileService;
+    /** 抽取结果的跨重启缓存；单测传 null 即退化成「每次重抽」的旧行为。 */
+    private final ProjectFileTextCacheService textCache;
 
     public ProjectFileTextExtractor(DocumentTextService documentTextService,
                                     FileContentExtractorService fileContentExtractorService,
-                                    ProjectFileService projectFileService) {
+                                    ProjectFileService projectFileService,
+                                    ProjectFileTextCacheService textCache) {
         this.documentTextService = documentTextService;
         this.fileContentExtractorService = fileContentExtractorService;
         this.projectFileService = projectFileService;
+        this.textCache = textCache;
     }
 
     /**
@@ -99,19 +111,46 @@ public class ProjectFileTextExtractor {
         return extractText(pf, true);
     }
 
+    /**
+     * 抽取路由 + 缓存（dev-board#800）。
+     *
+     * <p>缓存对两个入口都生效，包括不走 OCR 的参考入口——<b>命中一条早先由 OCR 得到的正文
+     * 不花一分钱</b>，而且这正是 {@link #NEEDS_OCR} 那句话许诺给用户的结果
+     *（「在工作台里做一次文字识别后再引用」）。
+     */
     private String extractText(ProjectFile pf, boolean allowOcr) throws IOException {
         String name = pf.getName();
         boolean ocrSupported = isOcrSupported(name);
-        String text = ocrSupported && !isPdf(name, pf.getFileType())
-                ? null
-                : extractTextLayer(pf);
-        if (!StringUtils.hasText(text) && ocrSupported) {
+        boolean pdf = isPdf(name, pf.getFileType());
+
+        DocumentTextService.FileStamp stamp = stampOf(pf);
+        String cached = textCache == null ? null : textCache.find(pf.getId(), stamp);
+        if (cached != null) {
+            return cached;
+        }
+
+        String text = ocrSupported && !pdf ? null : extractTextLayer(pf);
+        // PDF 的「文字层够不够用」判据只此一份（PdfTextLayer）：扫描件常带几个残留字符，
+        // 按 hasText 判会把那几个字符当全文返回。非 PDF 维持原判据，别一起收紧——
+        // 一份只有两个字的 txt 是合法的短文件，不该被赶去 OCR。
+        boolean usable = pdf ? PdfTextLayer.isUsable(text) : StringUtils.hasText(text);
+        String source = ProjectFileTextCache.SOURCE_TEXT;
+        if (!usable && ocrSupported) {
             if (!allowOcr) {
                 throw new IOException(NEEDS_OCR);
             }
             text = ocrProjectFile(pf);
+            source = ProjectFileTextCache.SOURCE_OCR;
         }
-        return text == null ? "" : text;
+        String result = text == null ? "" : text;
+        if (textCache != null) {
+            textCache.store(pf.getId(), stamp, source, result);
+        }
+        return result;
+    }
+
+    private DocumentTextService.FileStamp stampOf(ProjectFile pf) {
+        return textCache == null || pf.getId() == null ? null : documentTextService.stampOf(pf);
     }
 
     /**
@@ -143,7 +182,9 @@ public class ProjectFileTextExtractor {
                 throw new IOException(e.getMessage(), e);
             }
         }
-        if (!StringUtils.hasText(text) && ocrSupported) {
+        // 与 extractText 同一份判据（PdfTextLayer）：扫描件残留的几个字符不算正文
+        boolean usable = pdf ? PdfTextLayer.isUsable(text) : StringUtils.hasText(text);
+        if (!usable && ocrSupported) {
             throw new IOException(NEEDS_OCR);
         }
         return text == null ? "" : text;

@@ -310,7 +310,15 @@ HTML 再断言——模板里 class 名写错、v-if 挂错分支、i18n 键打�
   **AI 读项目文件也走同一个 `OcrService`**：`read_file` / `read_document` / `extract_file_text`
   三个工具都按 `ai.context.ocr-extensions`（jpg/jpeg/png/gif/bmp/webp/pdf）判定，
   图片直接 OCR、PDF 先抽文字层抽不出（扫描件）才 OCR，走的都是
-  `FileContentExtractorService.extractTextWithOcr`。**改 OcrService 的失败语义要同时看 AI 这一侧**：
+  `FileContentExtractorService.extractTextWithOcr`。
+  **扣费点全仓只有一个**：`OcrService.recognizeGeneral`（平台代采档 → `PlatformGatewayClient.call("ocr","recognize")`，
+  <b>按次</b>；PDF 每页一次）。所以「这份文件花没花钱」的唯一判据是它被调了几次——
+  带文字层的 PDF 自 dev-board#800 起一次都不调（判据 `service/file/PdfTextLayer.isUsable`），
+  测试里用 `verify(ocr, never()).recognizeGeneral(...)` 断言的就是这件事。
+  页数上限 `ai.context.ocr-max-pdf-pages`（默认 20）**只约束 OCR 路径**，文字层整篇抽取不设限；
+  触发时正文末尾会明写「仅识别前 N 页」。抽取结果按 fileId + 物理文件 mtime/size
+  落库缓存（`project_file_text_cache`），同一份扫描件跨重启只识别一次。
+  **改 OcrService 的失败语义要同时看 AI 这一侧**：
   那边把 `[System: ...]` 形态的失败翻译成 `Error:` 并把原因原样透给模型
   （Credits 不足 / OCR 未开通要如实报给用户，不能让模型自己推断）。契约与病灶见
   `.claude/agents/ai-chat.md` 的「读取类工具的 OCR 路由」。
