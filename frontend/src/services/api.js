@@ -959,18 +959,26 @@ export function exportAiDocx(payload) {
 }
 
 /**
- * 回退对话历史到指定消息
- * 删除该消息之后的所有对话记录
+ * 回退对话历史到指定消息并编辑重发（edit-and-resend）。
+ *
+ * 语义：目标消息**连同其后**的全部记录一起删（前端把目标正文回填输入框让用户改了重发，
+ * 留着它库里会出现两条连着的 USER 行）。后端 truncateHistory 与本注释同源，改一处要改两处。
+ * 删之前后端会先把原路径整条存成一条「… · 回退前存档」的会话，所以这不是不可恢复的操作。
+ *
  * @param conversationId 对话ID
- * @param messageId 消息ID（回退到此消息之前，此消息也会被删除）
+ * @param locator 定位键 { messageId, clientRequestId }，至少给一个：
+ *   messageId 是 project_ai_message 主键（从 GET /api/ai/history 回灌的气泡才有），
+ *   clientRequestId 是本次会话内发出时生成的幂等键（live 气泡靠它，主键那时还不存在）。
+ * @returns {Promise<{status, archivedConversationId}>}
  */
-export function rollbackConversation(conversationId, messageId) {
+export function rollbackConversation(conversationId, locator = {}) {
   return request({
     url: '/api/agent/history/rollback',
     method: 'POST',
     data: {
       conversationId,
-      messageId
+      messageId: locator.messageId == null ? null : String(locator.messageId),
+      clientRequestId: locator.clientRequestId || null
     },
     header: {
       'Content-Type': 'application/json',

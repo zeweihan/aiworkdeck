@@ -33,14 +33,17 @@ export default {
   uploadFailed: '上传失败',
   // ---- 回退 ----
   rollbackConfirmTitle: '确认回退',
-  rollbackWarning: '此操作将删除该消息以及之后的所有对话记录，且无法恢复。',
+  rollbackWarning: '将先把当前对话存为分支，再回退到这条消息并编辑重发。',
+  rollbackArchiveNote: '存档会出现在「近期对话」里，名字是原标题加「· 回退前存档」，随时可以回去看。',
   rollbackDocTip: '如果助手在后续对话中修改了文档（Word/PPT），文件内容不会自动回退。',
   rollbackDocTipLink: 'AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。',
   rollbackPreviewLabel: '将回退到并编辑：',
   rollbackBtn: '回退',
   rollbackBtnTitle: '回退到此消息（修改重发）',
+  rollbackUnavailable: '这条消息还没保存完成，暂时无法回退，稍候或刷新后再试',
   waitCurrentChat: '请等待当前对话完成',
   rollbackDone: '已回退',
+  rollbackDoneArchived: '已回退，原对话已存为分支',
   rollbackFailed: '回退失败: {error}',
   unknownError: '未知错误',
   // ---- PPT 生成 ----

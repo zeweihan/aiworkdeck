@@ -15,7 +15,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   - **`/ppt/generate` 的 runAsync 现在会落一条 ASSISTANT 消息**（原来整段成功文本被丢弃：文件生成了但历史里一个字都没有，主 Agent 下一轮不知道这个文件存在、刷新页面用户也看不出发生过什么）。走契约 D 双通道：`content` = 工具原样全文（fileId / PPTX 服务项目 ID / 可编辑与否都在里面，模型需要），`displayContent` = 一句人话。落库失败只 log。
   - **`POST /chat` 的 `skillIds`（可选字符串数组）= 用户主动选择的 skill，本轮强制生效**（`AgentChatRequest.skillIds`）。与触发词自动命中取**并集**；无效 id（不存在/已停用/所属插件停用/当前应用语言不可用）静默忽略——SSE `skill_update` 下发的是真正生效的清单，用户看得见它没被点亮。**无状态**：后端不持久化，前端每次请求携带。旧字段 `pinnedSkillId` 已 `@Deprecated`，语义收编成「只有一项的 skillIds」（仍受理，供不发 skillIds 的存量客户端）。ASK 模式下整体不参与。
     - **必须同时注入 prompt 与参与工具可见性**——这两件事的判据现在同源收敛在 `SkillRouter.activateForTurn`。旧的 pinnedSkillId 静默 bug 就出在这里：编排器按钉选裁工具，而 `ContextAssemblerService` 自己又 `match(userPrompt)` 重新匹配了一遍，于是钉选的 skill 被裁了工具却拿不到 prompt。**组装器一律读 `skillRouter.activeSkills(conversationId)`，不许再 match 一次。**
-- **契约 D「发送内容 ≠ 显示内容」**：`model/entity/ProjectAiMessage` 的可空列 `displayContent`（TEXT，ddl-auto 自动建列）。**语义红线：模型永远只看 `content`，用户看 `displayContent`、为空回退 `content`**——`ContextAssemblerService` 的历史栈与所有上下文组装一律读 `content`，一个字都不许改成读 `displayContent`（否则模型丢掉计划审批卡回喂的修订版全文、PPT 结果里的 fileId 这类它真正需要的细节）。写入口：`ProjectAiMessageService.saveMessage(...)` 的六参重载（五参版本 = displayContent 传 null），空白一律归一为 null——「缺省 = 与今天行为完全一致」是存量兼容前提。请求侧：`POST /api/agent/chat` 可选字段 `displayText`；读侧：`GET /api/ai/history` 直接序列化实体，自动带上 `displayContent`，前端渲染 `displayContent || content`。用途是「点一个按钮时用户气泡里不该出现代拟的机器口吻长句」（病灶：计划审批卡把「我已修订计划（共 N 处改动…）」当用户消息发出去）。
+- **契约 D「发送内容 ≠ 显示内容」**：`model/entity/ProjectAiMessage` 的可空列 `displayContent`（TEXT，ddl-auto 自动建列）。**语义红线：模型永远只看 `content`，用户看 `displayContent`、为空回退 `content`**——`ContextAssemblerService` 的历史栈与所有上下文组装一律读 `content`，一个字都不许改成读 `displayContent`（否则模型丢掉计划审批卡回喂的修订版全文、PPT 结果里的 fileId 这类它真正需要的细节）。写入口：`ProjectAiMessageService.saveMessage(...)` 的六参重载（五参版本 = displayContent 传 null；另有七参版本再带回退定位键 clientRequestId，见下文「回退」一节），空白一律归一为 null——「缺省 = 与今天行为完全一致」是存量兼容前提。请求侧：`POST /api/agent/chat` 可选字段 `displayText`；读侧：`GET /api/ai/history` 直接序列化实体，自动带上 `displayContent`，前端渲染 `displayContent || content`。用途是「点一个按钮时用户气泡里不该出现代拟的机器口吻长句」（病灶：计划审批卡把「我已修订计划（共 N 处改动…）」当用户消息发出去）。
 - `controller/ai/AiChatController.java` — 已不含任何对话端点，只剩会话周边：`GET /history`、`GET /conversations`（合并 AgentRunStateService 运行状态）、`GET /conversation/{id}/metadata`、`GET /config`、`POST /export-docx`。**v1 同步端点 `POST /api/ai/chat` 已于 2026-08 供应商三档改造中删除**，连带 `AiChatService`、`MultiModalContentService`、`GeminiChatLanguageModel`、`GeminiCacheService` 与三个 DTO（AiChatRequest/AiChatResponse/AiChatContext）。删除依据：端点虽仍映射，但前端唯一调用方（project-overview.vue 的 handleAiSend）在 AI 面板换成 ChatInterface 组件后模板里已无任何绑定，且 `api.js` 的 payload 还漏传 contexts 与 assistantId——双重死。随之废弃的 system_setting 键：`ai.systemPrompt.OLLAMA`、`ai.systemPrompt.GEMINI`（唯一读者是 AiChatService，且它按**模型名字符串**而非 provider 选 key，所以那两个 admin 提示词 tab 对全部通道早已失效）。**今天真正生效的 system prompt 由 `ContextAssemblerService` 拼装、provider 无关、admin 无入口。**
 - **项目级会话列表（2026-08 项目概览页 A 期）**：`GET /api/projects/{projectId}/conversations`，控制器在 `controller/ProjectOverviewController.java`（**不在 ai 包下**——它是概览页那一组端点之一），业务落既有 `service/ProjectAiMessageService.listProjectConversations(...)`（**`com.checkba.service`，没有 `.ai` 子包**；放这里是为了就地复用它的 private `cleanTitle` / `extractPreview` / `truncatePreview`，不新起服务）。仓储是新增的 `ProjectAiMessageRepository.findProjectConversationSummaries(projectId, before, beforeId)`，**与既有 `findConversationSummaries` 并存、后者一行不改**（那条服务 `/api/ai/conversations`，动了会牵动整个 AI 面板）。
   - **与 `/api/ai/conversations` 是两条独立通道，别合并**：既有那条是 user-scoped（同时按 projectId 与 userId 过滤，「我在这个项目里的会话」）且返回**裸数组**；新这条去掉 userId 条件变成「这个项目的全部会话」且返回**信封** `{code:0,data:{conversations:[...],nextBefore,nextBeforeId}}`。
@@ -550,12 +550,65 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   两条会话列表通道的 summary 都多了 `sourceChannel` 尾列（JPQL 各加一个标量子查询）。
   **镜像会话在桌面端只读**：`/api/agent/chat` 对 `isMirroredConversation` 的会话回 409
   （插件那头还在续写，双头写会交错）；续聊走 `POST /api/ai/conversation/{id}/fork`
-  （`forkConversation`：整条复制成 conv-毫秒 新会话，标题加「（分支）」、来源字段清空、
-  userId 改发起者、原始时间保留）。前端只读态在 ChatInterface 的 `externalReadOnly` prop
+  （`forkConversation`：整条复制成新会话，标题加「（分支）」、来源字段清空、
+  userId 改发起者、原始时间保留；新 id 是 `conv-<毫秒>-<8位随机>`，随机尾巴是
+  dev-board#779 K1 加的——纯 conv-<毫秒> 在同一毫秒里 fork 两次会落进同一条会话、
+  后一份把前一份吞掉，而回退存档正是为了不丢数据）。前端只读态在 ChatInterface 的 `externalReadOnly` prop
   （值=来源文案，`utils/conversationSource.js` 是 sourceChannel→文案的唯一映射）。
   `officeFamily`（office/wps）随 chat 请求上送，ClientCapabilityService 内存登记，
   只用于镜像来源标注、不参与工具过滤。护栏：`ProjectAiMessageImportForkTest` /
   `AddinConvSyncServiceTest` / `MobileRelayClientHttpTest` 的对话镜像组。
+
+## 回退 = edit-and-resend + 自动存档（dev-board#779 K1，审查 D-02/D-03/D-06）
+
+`POST /api/agent/history/rollback`。一句话：**目标消息连同其后一起删，但删之前先把原路径整条存档**。
+
+- **语义只有一种，两边同源**：前端把目标正文回填输入框让用户改了重发，所以后端也必须连目标一起删。
+  改造前后端只删「严格晚于目标」的行、把目标留着（DTO 注释原文 `keep this one, delete newer`），
+  于是库里留下「原始提问 + 改过的提问」两条连着的 USER 行——刷新页面那条本以为撤销掉的提问会复活，
+  而 `ContextAssemblerService` 的历史栈直接读库，**模型会把旧要求也一起执行**。
+  `api.js` 的 JSDoc 当时写的又是与后端字面相反的定义；三处（控制器注释 / api.js 注释 / 实现）现在同源，改一处要改三处。
+- **删除判据是显示顺序 (createdAt, id) 的字典序**，不是单独的 createdAt：
+  `ProjectAiMessageRepository.deleteFromMessageOnwards`。只按 `createdAt >` 会让与目标**同刻**落库的
+  那条助手回复幸存（同毫秒、MySQL 秒级截断都造得出）；只按 `id >=` 则假设 id 与时间同序，
+  fork / 镜像导入的行不保证。`@Modifying` 带 `flushAutomatically + clearAutomatically`——
+  批量 JPQL 绕过一级缓存，同事务里前面刚 insert 的存档必须先落地，删完也不许有人从缓存读到已删行。
+- **定位键有两个，`project_ai_message.clientRequestId` 是主角**（新增可空列，ddl-auto 自动建）。
+  **主键在这里用不了**：`POST /api/agent/chat` 的回执由 `AgentInboxService.receipt` 在**控制器线程**上拼出，
+  而 USER 行要等 `AgentOrchestrator.handleUserMessageInScope` 在 **turnExecutor 线程**上跑起来才落库——
+  回执序列化的那一刻它还不存在；`input_applied` 同理（在 `claim` 里发，且发起的那条 POST 还显式压掉了它）。
+  clientRequestId 反过来是**发之前就有**的，气泡从出生那一刻起就握着它。
+  写入口是 `saveMessage(...)` 的**七参**重载（六参 = clientRequestId 传 null），
+  编排器两处 USER 落库点都要带（`handleUserMessageInScope` 与 `applyPendingSteering`，
+  后者取 `input.getClientRequestId()`）——漏了哪一处，那条路径发出的消息就回退不了。
+  读侧 `GET /api/ai/history` 直接序列化实体，自动带上它，所以 live 与 replay 两种气泡共用同一个定位键。
+- **`RollbackRequest.messageId` 是 String 不是 Long**：声明成 Long 时，前端自造的气泡 id
+  （`msg-<毫秒>-<序号>`，`bubbleId.js`）会让 Jackson 在**进 handler 之前**就把请求拒掉，
+  用户看到「回退失败: 服务器内部错误」，而前端的界面回退、回填输入框、刷新历史三步全部跳过。
+  现在非数字走到 handler 里拿一句可读的 400；定位不到也是 400（`resolveRollbackTarget` 抛可读文案）。
+  **跨会话的 id 一律当「定位不到」**，不回显它属于谁。
+- **身份解析交给 `AuthController.getUserIdFromSession(sessionId)`，不许在端点里短路**：
+  这里原本是 `sessionId != null ? … : null`，而 local-mode（整个桌面端）根本不发这个头，
+  于是回退恒 403。这是与 D-02/D-03 彼此独立的第三个缺陷，同一个端点上。
+- **存档在服务端、与截断同一个事务**（`ProjectAiMessageService.rollbackWithArchive`）：
+  刻意不做成「前端先调 fork 再调回退」——那样存档失败时前端若照样截断，数据就真没了；
+  服务端做，任何客户端（Office 插件等）走这个端点都有同样的保护。
+  端点回 `{"status":"ok","archivedConversationId":"conv-…"}`，前端据此把 toast 换成「原对话已存为分支」。
+- **`ai_conversation` 表不存在**，别去找：会话是隐式的（一组共享 conversation_id 的 `project_ai_message` 行），
+  会话级元数据一律挂**首条消息**（`conversationTitle` / `sourceChannel` 就是这么存的）。
+  K1 新增的 `parentConversationId` / `branchFromMessageId` 同样写在 fork 产物的首行，
+  本批 UI 不展示，先落库是给 K18「从此分叉」把分支串成树用。
+- **前端**：气泡上是 `dbMessageId`（history 回灌才有）+ `clientRequestId`（live 才有），
+  两者都在 `createUserBubble` 里**预声明**（不预声明按仓里惯例不是响应式的）；
+  `ChatInterface.rollbackLocator(msg)` 是唯一判据，返回 null 时回退按钮置灰并用
+  `chat.rollbackUnavailable` 说明原因——**别让用户点一个注定失败的按钮**。
+  **回填输入框必须 `await nextTick()`**：模板里有**两个** `ref="richInput"` 的 contenteditable
+  （空状态的欢迎输入框、有对话时的底部输入框），回退到第一条时 bubbles 变空、两者互换，
+  紧接着同步写 innerHTML 只会写进马上被销毁的那一个（表现：回退了但输入框是空的，原文没了）。
+- 护栏：`ProjectAiMessageRollbackTest`（语义 / 定位键 / 存档先于截断 / 存档失败不截断 / 两次存档不撞号 /
+  父子字段）、`AiAgentControllerRollbackTest`（字符串 messageId 的 400、两种定位键、无 session 头、403）、
+  `AgentOrchestratorQuestionStopTest` 与 `AgentOrchestratorInboxTest` 各一条钉住两处 USER 落库点带上
+  clientRequestId、`frontend/tests/chat-presentation-ui/run.mjs` 的按钮可用性一段。
 
 ## 辅助模型、子 Agent 与身份作用域（2026-08 供应商三档改造）
 

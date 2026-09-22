@@ -218,7 +218,14 @@ export function useAgentStream() {
         clientRequestId: null,
         receiptState: '',
         submissionMode: '',
-        wasPendingInbox: false
+        wasPendingInbox: false,
+        // 回退（edit-and-resend）的定位键（clientRequestId 与上面共用同一字段），预声明是为了它们一开始就是响应式的
+        //（按钮的可用性直接读它们）。dbMessageId = project_ai_message 主键，只有从
+        // GET /api/ai/history 回灌的气泡有——本次会话内新发的消息，主键要等编排器在
+        // turnExecutor 线程上落库才生成，POST /api/agent/chat 的回执与 input_applied
+        // 都赶在它前面，带不上（审查 D-02）。live 气泡因此靠 clientRequestId 定位，
+        // 那个发之前就有，见后端 ProjectAiMessage#clientRequestId。
+        dbMessageId: null
     })
 
     const resetInboxState = () => {
@@ -2064,8 +2071,10 @@ export function useAgentStream() {
     const titleUpdateHandler = ref(null)
 
     /**
-     * 回退到指定消息
-     * 删除该消息及其之后的所有bubbles，返回被回退消息的内容
+     * 回退到指定消息（edit-and-resend）
+     * 删除该消息及其之后的所有bubbles，返回被回退消息的内容（供调用方回填输入框）。
+     * 后端 truncateHistory 与这里同语义——目标连同其后一起删（dev-board#779 K1）。
+     * 改造前后端只删「严格晚于目标」的行、把目标留着，刷新页面那条已撤销的提问会复活。
      * @param messageIndex 要回退到的消息在bubbles数组中的索引
      * @returns 被回退消息的内容（用于放入输入框）
      */

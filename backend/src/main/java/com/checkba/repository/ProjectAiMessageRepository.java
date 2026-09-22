@@ -73,7 +73,30 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
             @org.springframework.data.repository.query.Param("before") java.time.LocalDateTime before,
             @org.springframework.data.repository.query.Param("beforeId") String beforeId);
 
-    void deleteByConversationIdAndCreatedAtAfter(String conversationId, java.time.LocalDateTime timestamp);
+    /**
+     * 回退（edit-and-resend）：删掉目标消息<b>及其之后</b>的全部消息。
+     *
+     * <p>判据是显示顺序 (createdAt, id) 的字典序，不是单独的 createdAt。老实现用
+     * {@code deleteByConversationIdAndCreatedAtAfter}（严格大于）有两处毛病：目标自己不删
+     * （与前端「回填输入框改了重发」的语义相反，库里会留下两条连着的 USER 行），
+     * 以及与目标同刻的那条助手回复会幸存下来——同毫秒落库、MySQL 秒级截断都造得出这种行。
+     * 只按 {@code id >=} 也不行：那假设 id 与时间同序，fork/镜像导入的行不保证。
+     */
+    // 批量 JPQL 删除绕过一级缓存：flushAutomatically 保证同一事务里先落地的写（回退前的
+    // 存档就是一批 insert）已经发出去，clearAutomatically 保证删完之后没人从缓存里
+    // 读到已经删掉的行（OSIV 下持久化上下文一直活到响应写完）。
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true, clearAutomatically = true)
+    @org.springframework.data.jpa.repository.Query(
+        "DELETE FROM ProjectAiMessage m WHERE m.conversationId = :conversationId " +
+        "AND (m.createdAt > :createdAt OR (m.createdAt = :createdAt AND m.id >= :messageId))")
+    void deleteFromMessageOnwards(
+            @org.springframework.data.repository.query.Param("conversationId") String conversationId,
+            @org.springframework.data.repository.query.Param("createdAt") java.time.LocalDateTime createdAt,
+            @org.springframework.data.repository.query.Param("messageId") Long messageId);
+
+    /** 回退定位键（见 ProjectAiMessage#clientRequestId）：同会话内按客户端幂等键取最早一条。 */
+    java.util.Optional<ProjectAiMessage> findFirstByConversationIdAndClientRequestIdOrderByCreatedAtAscIdAsc(
+            String conversationId, String clientRequestId);
 
     void deleteByConversationId(String conversationId);
     

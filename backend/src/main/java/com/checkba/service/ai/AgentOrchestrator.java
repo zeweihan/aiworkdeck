@@ -492,8 +492,10 @@ public class AgentOrchestrator {
 
         for (com.checkba.model.entity.AgentInboxItem input : inputs) {
             AiAgentController.AgentChatRequest request = inbox.requestOf(input);
+            // clientRequestId 一起落库：它是「回退到这条消息」的定位键，而主键要到这一刻才生成、
+            // 回执与 input_applied 都赶在它前面（见 ProjectAiMessage#clientRequestId）
             messageService.saveMessage(projectId, userId, guard.conversationId, "USER",
-                    input.getMessage(), input.getDisplayText());
+                    input.getMessage(), input.getDisplayText(), input.getClientRequestId());
             dev.langchain4j.data.message.ChatMessage augmented = null;
             try {
                 java.util.List<dev.langchain4j.data.message.ChatMessage> assembled = contextAssemblerService.assemble(
@@ -1003,8 +1005,11 @@ public class AgentOrchestrator {
             // displayText 是「发送内容 ≠ 显示内容」通道（契约 D）：content 留给模型（计划审批卡
             // 回喂的修订版全文这类细节必须给全），displayContent 才是用户气泡里那句人话。
             // 缺省 null = 与本通道不存在时完全一致；上下文组装一律只读 content。
+            // clientRequestId 是本条 USER 行的回退定位键：主键在这一行执行完才存在，而
+            // POST /api/agent/chat 的回执早在控制器线程上就发走了，带不上主键（K1 / 审查 D-02）。
             messageService.saveMessage(
-                projectId, userId, conversationId, "USER", request.getMessage(), request.getDisplayText()
+                projectId, userId, conversationId, "USER", request.getMessage(), request.getDisplayText(),
+                request.getClientRequestId()
             );
             
             // 1.1 首次对话时异步生成对话标题。

@@ -37,6 +37,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -266,9 +268,29 @@ class AgentOrchestratorQuestionStopTest {
         request.setModel(MODEL);
         orchestrator.handleUserMessage(request, 7L);
 
-        // content 给模型（含细节），displayContent 给用户；缺省时第 6 个参数为 null（存量行为）
+        // content 给模型（含细节），displayContent 给用户；缺省时第 6 个参数为 null（存量行为）。
+        // 第 7 个是回退定位键 clientRequestId，本用例没给，落 null。
         verify(messageService).saveMessage(any(), any(), any(), any(),
-                contains("修订版全文"), contains("已修订计划"));
+                contains("修订版全文"), contains("已修订计划"), isNull());
+    }
+
+    @Test
+    @DisplayName("clientRequestId 随 USER 行落库：它是「回退到这条消息」唯一在落库前就存在的定位键")
+    void persistsClientRequestIdAsTheRollbackLocator() {
+        when(chatModelFactory.getStreamingChatModel(MODEL))
+                .thenReturn(new ScriptModel(List.of(AiMessage.from("<final>好的。</final>"))));
+        AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
+        request.setProjectId(1L);
+        request.setConversationId("conv-locator");
+        request.setMessage("帮我看看这份合同");
+        request.setClientRequestId("req-abc");
+        request.setModel(MODEL);
+        orchestrator.handleUserMessage(request, 7L);
+
+        // 主键在这一行执行完才生成，而 POST /api/agent/chat 的回执早在控制器线程上就发走了——
+        // 前端气泡拿不到主键，回退只能靠这个键（审查 D-02）
+        verify(messageService).saveMessage(any(), any(), eq("conv-locator"), eq("USER"),
+                any(), any(), eq("req-abc"));
     }
 
     @Test
