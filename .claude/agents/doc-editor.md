@@ -274,6 +274,10 @@ HOUSE 不再是常量：`buildHouse(profile)` 从画像 JSON 派生写端常量�
 - `adopt_legacy_links` 不能把 TextPortion 直接喂 `insertTextContent`（抛 IllegalArgumentException），要 `createTextCursorByRange(start)` + `gotoRange(end, true)` 在正文上造区间游标；且先收集目标再插书签，枚举中改段落会让 portion 枚举失效。
 - `headingChainOf` 用 `XTextRangeCompare` 定位段落，表格单元格内的书签跨 story 比较会抛 → `sectionPath` 空、`paragraphIndex -1`（P0 接受）。
 
+**`__ai_anchor_*`（AI 定位锚点）与 `EVID_*` 的寿命相反，别混为一谈**（K9 锚点错位，2026-09-22 真机实证，lowa-e2e 组 35）：`EVID_*` 是**要存进 docx 的**长期关联，`__ai_anchor_*` 是 `find_text_locations` 为一次对话临时造的定位句柄。
+- **LO 对重名书签不报错，静默改名**：`bm.setName('__ai_anchor_1')` 后 `insertTextContent` 到一份已有同名书签的文档里，新书签被引擎改成 `__ai_anchor_1 副本 1`（zh-CN 引擎实测，名字随语言包变）。`anchorBookmark()` 原先返回**申请的**名字而不是 `bm.getName()` 回读的真名，`anchorRange()` 于是解析到那枚**旧**书签——真机表现就是 find 报对了正文首段、紧接着的 `set_selection` / `insert_at_cursor` 落到文末签章页里重复出现的同名标题上（证据 `~/aiworkdeck-qa/reports/ai-chat-audit-2026-09-22/ui/t3.json`）。**任何按名字建书签的新原语都要回读引擎给的真名**（`bookmark_selection` 走 `hasByName` 精确拒绝那条路，不受影响）。
+- **同名从哪来**：锚点书签跟着 docx 存盘（上一条已实证书签经往返存活），自动保存每隔几秒就写一遍；而 `anchorSeq` 是 worker 级模块变量，**每开一个 webview 都从 0 重来**——新会话的第一枚锚点必然与上一次留下的 `__ai_anchor_1` 撞名。现在 `load_document` 的 `retarget` 里 `dropAiAnchors()` 把全部 `__ai_anchor_*` 清场（`clear_anchors` 与它共用同一份实现）：换文档后上一份文档的 anchorId 本来就全部失效，没人能合法引用它们，顺带也不再往用户的 docx 里攒垃圾书签。**别把这条清场挪到 `export_document` 上**——那会把会话中途还活着的锚点一并摘掉。
+
 ## 三方合并的引擎原语（dev-board#630/#632，office_thread.js）
 
 律师版三方合并的引擎半边：后端算出「哪几处两边都动了、另一侧该怎么重放」，引擎把它做成一份
@@ -369,7 +373,7 @@ lowa-e2e 组 34 最后一项就是篡改一条 `baseUnits.norm` 后断言必须�
 
 - 装载失败分类 / relay 超时自愈判据 / 探活预算：`cd frontend && npm run test:lowa-unit`（node --test，不需要引擎；`tests/lowa-unit/editorLoadFailure.test.mjs`）。
 - Esc / 原生 chrome 回归：`npm run test:lowa-escape-chrome`（真引擎，`tests/lowa-e2e/escape-chrome.mjs`）——Esc 之后顶层窗口仍与画布同尺寸、Esc 仍取消选区、光标进表格单元格不冒 `tableobjectbar`、画布聚焦时 Backspace 恰好删一个字（防「引擎也在处理 DOM 按键」的双改）。候选可见时的键盘归属由 `npm run test:completion` 里的 `tests/completion/key-routing.test.mjs` 守（jsdom，真覆盖层 + 真补全模块）。
-- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，34 组人机模拟，2026-09-14 基线 576 步——组 34 是三方合并那一组，`build_merge_draft` / `merge_take_other` / `sheet_get_active_cell` / `slide_get_current`，夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
+- 核心回归：`cd frontend && npm run test:lowa-e2e`（真引擎 puppeteer-core 无头，35 组人机模拟，2026-09-22 基线 588 步（组 35「锚点错位」12 步，见上「EvidenceLink 书签原语」末的 `__ai_anchor_*` 寿命一节）——组 34 是三方合并那一组，`build_merge_draft` / `merge_take_other` / `sheet_get_active_cell` / `slide_get_current`，夹具由 `tests/lowa-e2e/fixtures/merge/gen.mjs` 现造；前置 `npm run build:zetaoffice` + `node ../desktop/scripts/fetch-lowa-assets.js` 或设 LOWA_ENGINE_DIR）。
 - 修订视图三态的接线契约（白名单 / 三态命令序列 / 换文档复位）：`npm run test:revision-view`（node --test，不需要引擎）。
 - 修订署名（空 authorName → 引擎兜底「未知作者」/ 只改署名不动文档 / `__agent` 同命令切换）：`npm run test:lowa-redline-author`（真引擎无头，`tests/lowa-e2e/redline-author.mjs`）。
 - 滚动稳定性（dev-board#604）：`npm run test:lowa-scroll`（真引擎，`tests/lowa-e2e/scroll-stability.mjs`）。真滚轮滚到第三页后逐条打只读命令（`get_review_context` / `get_completion_context` / `__agent` 读取 / 客体页自发的 180ms 刷新），断言 `get_review_layout().view.top` 一动不动；每步前先断言视口确实已离开文首，防空断言。同一组后半段管**横向**稳定性（dev-board#725）：光标放进带 `<w:del>` 的段落，40 次只读取上下文后 `view.caretX` 必须一个值都不变，再逐字键入 3 次核对「打完字紧接着读」不把光标拽走；末尾把修订全接受，复核无修订文档整段跳过守卫后语义与光标都照旧。防空断言：先断言该段内联正文里真看得见被删的旧字。

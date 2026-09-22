@@ -95,7 +95,31 @@ function anchorBookmark(range) {
   // story）里时 body.insertTextContent(range,…) 抛 RuntimeException，find_text_locations
   // 的 anchorId 就成了 null，AI 的 set_selection / replace_at_position 在表格里够不着。
   range.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
+  // 必须回读引擎真正给的名字，不能把「申请的名字」当成「拿到的名字」（dev-board#788）：
+  // 文档里已存在同名书签时 LO 不报错，而是**静默改名**（zh-CN 引擎实测改成
+  // 「__ai_anchor_1 副本 1」），此时 anchorRange('__ai_anchor_1') 解析到的是那个**旧**
+  // 书签——find 报对了位置，紧接着的 set_selection / replace_at_position 却落在别处。
+  // 同名从哪来：锚点书签会跟着 docx 存盘（书签经 export/load 往返存活），而 anchorSeq
+  // 是 worker 级计数器、每开一个 webview 都从 0 重来。下面 dropAiAnchors() 在换文档时
+  // 清掉陈旧锚点是主闸，这里的回读是第二道闸。
+  try { const real = bm.getName(); if (real) return String(real); } catch (e) {}
   return name;
+}
+// 摘掉文档里全部 __ai_anchor_* 书签，返回摘掉的个数。锚点是一次会话内的临时定位
+// 句柄（§0.2），不该留在用户的 docx 里——clear_anchors（housekeeping）与换文档
+// 时的清场共用这一份。摘除与插入不同源：removeTextContent 本引擎实测容得下别的
+// story 的书签（单元格锚点用正文 XText 照样摘得掉，table-retype 的锚点组守着）。
+function dropAiAnchors() {
+  const bms = xModel.getBookmarks();
+  const names = (bms.getElementNames && bms.getElementNames()) || [];
+  const xText = xModel.getText();
+  let n = 0;
+  for (let i = 0; i < names.length; i++) {
+    if (names[i].indexOf(ANCHOR_PREFIX) === 0) {
+      try { xText.removeTextContent(bms.getByName(names[i])); n++; } catch (e) {}
+    }
+  }
+  return n;
 }
 function anchorRange(name) {
   const bms = xModel.getBookmarks();
@@ -4187,6 +4211,12 @@ const EXEC = {
       // 此前对非 Writer 文档也无条件调用，靠 try/catch 兜住但会白抛异常 + 打噪声日志
       // （Impress 场景尤其误导：看起来像"修订功能坏了"）。改成前置类型判定。
       if (isWriterDoc()) {
+        // 陈旧锚点清场（dev-board#788）：__ai_anchor_* 是一次会话内的临时定位句柄，
+        // 却会跟着 docx 存盘，而 anchorSeq 每开一个 webview 都从 0 重来——不清掉，
+        // 新会话的第一枚锚点就与上一次留下的同名，LO 静默给新书签改名，
+        // anchorRange() 于是解析到上一次那处，find 对了、set_selection 落别处。
+        // 换文档后上一份文档的 anchorId 本来就全部失效，没人能合法引用它们。
+        try { dropAiAnchors(); } catch (e) {}
         // Revisions default ON for the real document too (same as bootDoc).
         try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
         resetRevisionView();
@@ -8201,19 +8231,7 @@ const EXEC = {
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
-    const bms = xModel.getBookmarks();
-    const names = (bms.getElementNames && bms.getElementNames()) || [];
-    // 摘除与插入不同源：removeTextContent 本引擎实测容得下别的 story 的书签
-    // （单元格锚点用正文 XText 照样摘得掉，table-retype 的锚点组守着），
-    // 所以这里保留 xModel.getText()，不跟着 anchorBookmark 一起改。
-    const xText = xModel.getText();
-    let n = 0;
-    for (let i = 0; i < names.length; i++) {
-      if (names[i].indexOf(ANCHOR_PREFIX) === 0) {
-        try { xText.removeTextContent(bms.getByName(names[i])); n++; } catch (e) {}
-      }
-    }
-    return { success: true, cleared: n };
+    return { success: true, cleared: dropAiAnchors() };
   },
 };
 

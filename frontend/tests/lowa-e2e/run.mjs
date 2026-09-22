@@ -85,6 +85,12 @@ const DEBUG_ACTIONS = `
     xModel.setPropertyValue('RecordChanges', !!p.on);
     return { success: true, recordChanges: xModel.getPropertyValue('RecordChanges') };
   },
+  // 组 35 探针：把 worker 级锚点计数器归零。anchorSeq 是模块级变量，每开一个
+  // webview 都从 0 重来——「换一个 webview 打开同一份文件」在一页里没法真造出
+  // 第二个 worker，这条探针就是那件事的等价物（文档那一半是真的：锚点书签确实
+  // 随 docx 存盘）。没有它，组 35 里新会话的 find 拿到的是 __ai_anchor_3，撞不上
+  // 文件里存着的 __ai_anchor_1，真机病灶就复现不出来。
+  debug_reset_anchor_seq() { anchorSeq = 0; return { success: true, anchorSeq: anchorSeq }; },
   // 组 30 探针：读回当前配色方案的 AppBackground（set_app_theme 的落点）
   debug_app_bg() {
     try {
@@ -348,8 +354,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info','debug_app_bg','debug_revision_view_raw','debug_try_write_show_changes'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info","debug_app_bg","debug_revision_view_raw","debug_try_write_show_changes"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop','debug_lock_state','debug_modified_count','debug_footer_info','debug_para_style_info','debug_app_bg','debug_revision_view_raw','debug_try_write_show_changes','debug_reset_anchor_seq'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop","debug_lock_state","debug_modified_count","debug_footer_info","debug_para_style_info","debug_app_bg","debug_revision_view_raw","debug_try_write_show_changes","debug_reset_anchor_seq"'),
       'utf8')
   }
   return content
@@ -2617,6 +2623,83 @@ try {
     await exec('slide_goto', { slideNumber: 2 })
     const cur = await exec('slide_get_current')
     check('slide_get_current 回报当前页码（1 基）', cur.success === true && cur.slideNumber === 2, JSON.stringify(cur))
+  }
+
+  console.log('== 35) 锚点错位：find → set_selection → insert_at_cursor 三步必须落在同一处（dev-board#788） ==')
+  {
+    // 真机病灶（ai-chat-audit-2026-09-22/ui/t3.json）：find_text_locations 报对了正文
+    // 首段，紧接着同一 requestId 链里的 set_selection {anchor:'__ai_anchor_1'} 却选中了
+    // 文末签章页的标题，insert_at_cursor 于是把字插到了签章页。
+    // 病灶机理：锚点书签会跟着 docx 存盘，而 anchorSeq 是 worker 级计数器、每开一个
+    // webview 都从 0 重来 —— 新会话第一枚锚点与上一次留下的同名，LO 不报错而是**静默
+    // 改名**（zh-CN 引擎实测改成「__ai_anchor_1 副本 1」），anchorBookmark 却把「申请的
+    // 名字」当成「拿到的名字」返回，anchorRange 于是解析到上一次那枚旧书签。
+    // 夹具关键点：标题文本在文末签章页重复出现（真实协议的固定格式）。
+    await exec('debug_fresh_document', { visible: true })
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    const K9_TITLE = '某某公司股份认购协议'
+    const K9_BODY = '本协议由下列协议方于2025年11月18日签署：'
+    await exec('replace_selection', { text: K9_TITLE + '\n' + K9_BODY + '\n（本页无正文，为《' + K9_TITLE + '》之签章页）' })
+
+    // (1) 上一次会话：AI 搜整篇标题 —— 正文首行与签章页各命中一处，各落一枚锚点。
+    const k9a = await exec('find_text_locations', { keyword: K9_TITLE })
+    const k9names = (k9a.matches || []).map((m) => m.anchorId)
+    check('上一次会话搜标题命中两处并落两枚锚点', k9a.success === true && k9a.count === 2 && k9names.every((n) => /^__ai_anchor_\d+$/.test(n)), JSON.stringify(k9a).slice(0, 200))
+
+    // (2) 自动保存：锚点书签跟着 docx 存盘（组 27 已实证书签经往返存活）。
+    const k9bytes = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', { name: 'k9-anchor.docx' })
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('导出字节非空', !!k9bytes && k9bytes.length > 0)
+
+    // (3) 新会话打开同一份文件：anchorSeq 随新 webview 归零（探针代劳，见 DEBUG_ACTIONS），
+    //     换文档必须把陈旧锚点清场 —— 上一份文档的 anchorId 本来就全部失效，
+    //     留着只会与新会话的名字撞上。
+    check('新会话锚点计数器归零', (await exec('debug_reset_anchor_seq')).anchorSeq === 0)
+    const k9ld = await exec('load_document', { bytes: k9bytes, name: 'k9-anchor.docx', authorName: '测试用户' })
+    check('重新载入成功', k9ld.success === true, JSON.stringify(k9ld).slice(0, 160))
+    const k9stale = await exec('check_link_anchors', { names: k9names })
+    check('换文档后陈旧锚点已清场（不再残留在用户的 docx 里）',
+      k9stale.success === true && (k9stale.items || []).length === k9names.length && (k9stale.items || []).every((x) => x.exists === false),
+      JSON.stringify(k9stale))
+
+    // (4) 本次会话：搜正文首段 → 锚点必须唯一命中该处，且不许解析到签章页那处标题。
+    const k9f = await exec('find_text_locations', { keyword: '本协议由下列协议方' })
+    check('find_text_locations 命中正文首段（唯一一处）',
+      k9f.success === true && k9f.count === 1 && (k9f.matches[0] || {}).text === '本协议由下列协议方' && k9f.matches[0].paragraph === K9_BODY,
+      JSON.stringify(k9f).slice(0, 240))
+    const k9anchor = k9f.matches[0].anchorId
+    const k9sel = await exec('set_selection', { anchor: k9anchor })
+    check('set_selection 选中的就是 find 报的那一处（不是文末签章页的标题）',
+      k9sel.success === true && k9sel.text.indexOf('本协议由下列协议方') === 0 && (k9sel.contextBefore || '').indexOf('签章页') < 0,
+      JSON.stringify(k9sel))
+    // (5) 第三步落点：插入必须发生在正文首段，不是签章页。
+    await exec('collapse_selection', { to: 'start' })
+    const k9ins = await exec('insert_at_cursor', { text: '内部资料 请勿外传\n\n' })
+    check('insert_at_cursor 落在正文首段（paragraphAfterEdit 不是签章页）',
+      k9ins.success === true && (k9ins.paragraphAfterEdit || '').indexOf('本协议由下列协议方') === 0 && (k9ins.paragraphAfterEdit || '').indexOf('签章页') < 0,
+      JSON.stringify(k9ins))
+
+    // (6) 第二道闸：万一文档里仍有同名书签（历史文件、别的来路），anchorBookmark 也必须
+    //     回读引擎真正给的名字，而不是把「申请的名字」当结果返回。这里手动把**下一枚**
+    //     锚点会用到的名字先占掉，坐实引擎的静默改名行为被正确处理。
+    const nextName = '__ai_anchor_' + (Number(String(k9anchor).replace(/^\D+/, '')) + 1)
+    await exec('select_paragraph', { index: 0 }) // 诱饵 = 标题段，不经锚点选取
+    const k9seed = await exec('bookmark_selection', { name: nextName })
+    check('把下一枚锚点名先占在诱饵（标题段）上', k9seed.success === true && k9seed.name === nextName && k9seed.text === K9_TITLE, JSON.stringify(k9seed))
+    const k9f2 = await exec('find_text_locations', { keyword: '之签章页' })
+    const k9anchor2 = (k9f2.matches || [])[0] && k9f2.matches[0].anchorId
+    check('重名情况下 find 仍回一个可用的 anchorId', k9f2.success === true && k9f2.count === 1 && !!k9anchor2, JSON.stringify(k9f2).slice(0, 200))
+    const k9sel3 = await exec('set_selection', { anchor: k9anchor2 })
+    check('重名不劫持：set_selection 解析到本次 find 的那一处，不是被占名的诱饵',
+      k9sel3.success === true && k9sel3.text === '之签章页',
+      JSON.stringify(k9sel3))
+    const k9keep = await exec('check_link_anchors', { names: [nextName] })
+    check('被占名的那枚书签仍覆盖诱饵（标题段），没被新锚点顶掉',
+      k9keep.success === true && ((k9keep.items || [])[0] || {}).text === K9_TITLE,
+      JSON.stringify(k9keep))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
