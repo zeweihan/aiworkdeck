@@ -245,6 +245,8 @@
 | K35 文档漂移 | #815 | 3 | docs | 已合并（关卡） | #926 |
 | K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 已合并 | #937 |
 | K37 skill 白名单补编辑面 | #818 | 2 | skills yml/回放用例 | 已合并 | #925 |
+| K38 doc_stream_data 裸 Map 序列化回归 | #819 | 3 | AO/UAS | 已合并 | #937 |
+| K39 CloudStatusAuthorsTest JGit gc 竞态 | #820 | 3 | version 测试夹具 | 进行中 | |
 
 ## 派工模板（主会话给每个实施代理的任务书骨架）
 
