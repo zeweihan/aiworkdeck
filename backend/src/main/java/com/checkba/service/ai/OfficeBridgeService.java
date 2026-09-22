@@ -96,7 +96,10 @@ public class OfficeBridgeService {
             // 遍历全篇每页每个形状（含组合与表格递归）找命中，再逐处从右到左替换
             Map.entry("ppt_replace_text", 120),
             // 与 ppt_replace_text 同一条全篇遍历，只是把替换换成设字体
-            Map.entry("ppt_format_text", 120));
+            Map.entry("ppt_format_text", 120),
+            // 表格批量替换（dev-board#804）：一次调用要把整片已用区域读回、逐格比对再回写，
+            // 几千行的台账远超 30 秒——平超时会让后端先放弃、模型重发一次把替换做两遍。
+            Map.entry("excel_replace", 120));
 
     static int timeoutSecondsFor(String command) {
         if (command == null) return OFFICE_ACTION_TIMEOUT_SECONDS; // Map.of 对 null 键抛 NPE

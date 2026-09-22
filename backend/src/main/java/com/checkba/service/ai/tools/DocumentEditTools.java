@@ -2485,7 +2485,9 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "表格内查找", category = "document")
     @Tool("【表格·看】在电子表格区域内查找文本（逐格比对字符串值，含公式计算结果）。区域不传则用整个已用区域；" +
-          "上限 50 条命中、20000 格扫描，超限需缩小 range 分块查找。与 doc_find_text 分开——本工具仅对表格文档有效。")
+          "上限 50 条命中、20000 格扫描，超限需缩小 range 分块查找。与 doc_find_text 分开——本工具仅对表格文档有效。" +
+          "要成批改写命中的内容，直接用 sheet_find_replace，不要「查出坐标再 sheet_write_cells 回写」" +
+          "——后者按矩形区域写，会把区域内不该动的格子一起覆盖掉。")
     public String sheet_search(
             @P("查找内容") String query,
             @P("区域，如 'A1:D100'；不传用整个已用区域") String range,
@@ -2505,6 +2507,64 @@ public class DocumentEditTools implements AgentToolComponent {
             return editorBridgeService.executeEditorCommand("sheet_search", params);
         } catch (Exception e) {
             log.error("Failed to search sheet", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * sheet_find_replace 单次替换的硬顶。worker（office_thread.js 的 sheet_find_replace）
+     * 与 Office/WPS 插件（{@code OfficeEditTools.MAX_EXCEL_REPLACEMENTS}）同值——
+     * 同一个上限在三个宿主上必须一样，否则模型换个宿主就撞到不同的墙。
+     */
+    public static final int MAX_SHEET_REPLACEMENTS = 2000;
+
+    @ToolMeta(displayName = "表格内替换", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·写】在电子表格区域内查找并替换文本，只改命中的那些格——区域内其他格一个字都不动。" +
+          "成批改写一律用本工具，不要「sheet_search 查坐标 + sheet_write_cells 回写」：" +
+          "后者按矩形区域写，会把区域内不该动的格子一起覆盖掉。区域不传则用整个已用区域；" +
+          "缺省是包含匹配、不区分大小写，wholeCell=true 时要求整格内容与 find 完全相等。" +
+          "只动纯文本格：公式格与数值格即使显示出来的文本命中也跳过不改" +
+          "（改了会毁掉公式、或把数字变成文本），跳过多少格在返回值里如实交代。" +
+          "返回 {replaced 改了几格, occurrences 共替换几处, cells 前若干个坐标, truncated}。" +
+          "上限 20000 格扫描、单次最多替换 " + MAX_SHEET_REPLACEMENTS + " 格，超限先缩小 range 分块做。" +
+          "电子表格没有修订机制，写入即刻生效、不留修订痕迹——改错了立刻用 doc_undo 撤销。" +
+          "仅对表格文档有效（Word 文档用 doc_find_replace）。")
+    public String sheet_find_replace(
+            @P("查找内容（字面量，不是正则）") String find,
+            @P("替换成什么；传空字符串表示删除命中的文本。不能省略") String replace,
+            @P("区域，如 'A1:D100'；不传用整个已用区域") String range,
+            @P("区分大小写，默认不区分") Boolean matchCase,
+            @P("整格匹配：true 时要求整格内容与 find 完全相等才替换，默认 false（包含匹配）") Boolean wholeCell,
+            @P("最多替换多少格，不传按上限；命中更多时提前停下并在返回值里标 truncated") Integer maxReplacements,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_find_replace called find={}, maxReplacements={}", find, maxReplacements);
+        if (find == null || find.isBlank()) {
+            return "Error: 缺少 find 参数";
+        }
+        // 省略 replace 不等于「替换成空串」：那会把命中的内容静默删掉。要删就显式传空串。
+        if (replace == null) {
+            return "Error: 缺少 replace 参数（要把命中的文本删掉，请显式传空字符串 \"\"）";
+        }
+        if (find.equals(replace)) {
+            return "Error: find 与 replace 相同，这次替换不会改变任何内容";
+        }
+        if (maxReplacements != null && (maxReplacements < 1 || maxReplacements > MAX_SHEET_REPLACEMENTS)) {
+            return "Error: maxReplacements 需在 1 到 " + MAX_SHEET_REPLACEMENTS + " 之间（不传则按上限 "
+                    + MAX_SHEET_REPLACEMENTS + "）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("find", find);
+            params.put("replace", replace);
+            if (range != null && !range.isBlank()) params.put("range", range);
+            if (matchCase != null) params.put("matchCase", matchCase);
+            if (wholeCell != null) params.put("wholeCell", wholeCell);
+            if (maxReplacements != null) params.put("maxReplacements", maxReplacements);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_find_replace", params);
+        } catch (Exception e) {
+            log.error("Failed to find and replace in sheet", e);
             return "Error: " + e.getMessage();
         }
     }

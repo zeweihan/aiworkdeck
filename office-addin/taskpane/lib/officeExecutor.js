@@ -37,6 +37,14 @@ import { t } from './i18n.js'
 // 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
 // houseProfile.test.js 断言与后端源 sha256 一致。
 import houseProfile from './house-default.json' with { type: 'json' }
+// excel_replace（表格内查找替换）的纯函数层，Office 与 WPS 两族共用同一份判定，
+// 保证同一条指令在 Excel 和 WPS 表格上给出一样的结果。
+import {
+  MAX_REPORTED_CELLS,
+  planCellReplacement,
+  normalizeReplaceArgs,
+  buildReplaceResult
+} from './excelReplace.js'
 
 // 与后端 ContextAssemblerService.MAX_INLINE_CONTENT_CHARS 一致的截断上限
 const MAX_TEXT_CHARS = 200_000
@@ -2277,6 +2285,63 @@ const HANDLERS = {
     })
   },
 
+  /**
+   * 区域内查找替换（dev-board#804 / 审查 A16·B-04）：**只重写命中的那些格**。
+   *
+   * Excel 面此前只有只读的 excel_search，成批改写只能退回 excel_set_values——那是按
+   * 矩形区域写的，散点命中整块回写会把区域内不该动的格子一起覆盖掉（静默数据错误）。
+   * 刻意不用 Range.replaceAll（它按区域整体处理，公式格与数值格都会被卷进去，
+   * 也拿不到「改了哪几格」的账）。
+   */
+  async excel_replace(args) {
+    const { find, replace, matchCase, wholeCell, cap } = normalizeReplaceArgs(args)
+    const sheetName = String((args && args.sheetName) || '')
+    const rangeAddress = String((args && args.rangeAddress) || '')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      sheet.load('name')
+      const target = rangeAddress ? sheet.getRange(rangeAddress) : sheet.getUsedRangeOrNullObject(true)
+      target.load('values,formulas,rowIndex,columnIndex,rowCount,columnCount,address,isNullObject')
+      await context.sync()
+      if (target.isNullObject) {
+        return buildReplaceResult({
+          sheet: sheet.name, address: '', find, replace, cells: [],
+          replaced: 0, occurrences: 0, skippedFormula: 0, skippedNumeric: 0, truncated: false, cap
+        })
+      }
+      const values = target.values || []
+      const formulas = target.formulas || []
+      const cells = []
+      let replaced = 0
+      let occurrences = 0
+      let skippedFormula = 0
+      let skippedNumeric = 0
+      let truncated = false
+      for (let r = 0; r < values.length && !truncated; r++) {
+        const row = values[r] || []
+        for (let c = 0; c < row.length; c++) {
+          const plan = planCellReplacement({
+            value: row[c], formula: (formulas[r] || [])[c], find, replace, matchCase, wholeCell
+          })
+          if (!plan) continue
+          if (plan.skip === 'formula') { skippedFormula++; continue }
+          if (plan.skip === 'numeric') { skippedNumeric++; continue }
+          // 逐格写：整块回写会覆盖掉区域内不该动的格子，正是本原语要解决的问题
+          sheet.getRangeByIndexes(target.rowIndex + r, target.columnIndex + c, 1, 1).values = [[plan.next]]
+          occurrences += plan.occurrences
+          if (cells.length < MAX_REPORTED_CELLS) cells.push(cellAddress(target.rowIndex + r, target.columnIndex + c))
+          replaced++
+          if (replaced >= cap) { truncated = true; break }
+        }
+      }
+      if (replaced) await context.sync()
+      return buildReplaceResult({
+        sheet: sheet.name, address: localAddress(target.address), find, replace,
+        cells, replaced, occurrences, skippedFormula, skippedNumeric, truncated, cap
+      })
+    })
+  },
+
   // ==================== Excel 格式/结构（批次6，excel_*） ====================
 
   async excel_format_cells(args) {
@@ -3827,6 +3892,7 @@ export const COMMAND_DISPLAY_KEYS = {
   excel_get_range: 'cmdExcelGetRange',
   excel_set_values: 'cmdExcelSetValues',
   excel_search: 'cmdExcelSearch',
+  excel_replace: 'cmdExcelReplace',
   excel_format_cells: 'cmdExcelFormatCells',
   excel_set_borders: 'cmdExcelSetBorders',
   excel_edit_rows_cols: 'cmdExcelEditRowsCols',
@@ -3913,6 +3979,7 @@ const COMMAND_HOSTS = {
   excel_get_range: 'excel',
   excel_set_values: 'excel',
   excel_search: 'excel',
+  excel_replace: 'excel',
   excel_format_cells: 'excel',
   excel_set_borders: 'excel',
   excel_edit_rows_cols: 'excel',
@@ -4053,7 +4120,7 @@ async function listWorksheetNames() {
  * PPT 的定位是位置式的（第几页第几个文本框）：结构变过之后读到的是「某个框」，但文字对不上
  * 改后值，撤销按冲突拒绝——冲突比对就是这里的安全阀。
  */
-const EXCEL_UNDOABLE_COMMANDS = new Set(['excel_set_values', 'excel_set_formulas', 'excel_sort_range'])
+const EXCEL_UNDOABLE_COMMANDS = new Set(['excel_set_values', 'excel_set_formulas', 'excel_sort_range', 'excel_replace'])
 
 function limitOf(limits, key) {
   const v = limits && limits[key]
@@ -4080,16 +4147,19 @@ export async function captureOfficeState(command, args, limits) {
 
 async function captureExcelState(command, args, limits) {
   const rangeAddress = String(args.rangeAddress || '')
-  if (!rangeAddress) return null
+  // excel_replace 的 rangeAddress 可以留空（= 整片已用区域）；不跟着走一遍已用区域，
+  // 最常用的那次「全表替换」就没有撤销点了。其余命令仍要求显式地址。
+  if (!rangeAddress && command !== 'excel_replace') return null
   const data = command === 'excel_set_values' ? args.values
     : command === 'excel_set_formulas' ? args.formulas : null
   if (data && (!Array.isArray(data) || !data.length || !Array.isArray(data[0]))) return null
   return Excel.run(async (context) => {
     const sheet = resolveSheet(context, String(args.sheetName || ''))
     sheet.load('name')
-    let range = sheet.getRange(rangeAddress)
-    range.load('rowCount,columnCount,address')
+    let range = rangeAddress ? sheet.getRange(rangeAddress) : sheet.getUsedRangeOrNullObject(true)
+    range.load('rowCount,columnCount,address,isNullObject')
     await context.sync()
+    if (range.isNullObject) return null
     let rows = range.rowCount
     let cols = range.columnCount
     if (data) {

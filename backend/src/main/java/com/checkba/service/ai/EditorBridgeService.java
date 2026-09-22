@@ -117,6 +117,9 @@ public class EditorBridgeService {
             Map.entry("stream_insert", 120),
             Map.entry("stream_flush", 120),
             Map.entry("apply_style_profile", 120),
+            // 表格批量替换（dev-board#804）：一次调用要扫到 20000 格、逐格落笔，
+            // 与 find_replace 同量级预算。
+            Map.entry("sheet_find_replace", 120),
             Map.entry("export_document", 180),
             Map.entry("build_merge_draft", 180),
             // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，
