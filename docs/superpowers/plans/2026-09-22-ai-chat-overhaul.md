@@ -204,15 +204,15 @@
 | 卡 | dev-board# | 批次 | 冲突组 | 状态 | PR |
 |---|---|---|---|---|---|
 | K1 回退修复 | #780 | 1 | CI/UAS/后端 | 未开始 | |
-| K2 LEGACY_DEFAULTS | #781 | 1 | ToolRegistry | 未开始 | |
-| K3 doc_read_paragraphs | #782 | 1 | ToolFileGuard | 未开始 | |
-| K4 取消真正生效 | #783 | 1 | AO/OpenRouter/Bridge | 未开始 | |
-| K5 菜单停止 | #784 | 1 | CI | 未开始 | |
-| K6 拖拽 | #785 | 1 | PO/CI | 未开始 | |
-| K7 待处理同步+角标+恢复会话 | #786 | 1 | CI/UAS/Inbox | 未开始 | |
-| K8 虚拟标签 | #787 | 1 | PO/CAS | 未开始 | |
-| K9 锚点错位 | #788 | 1 | office_thread/DET | 未开始 | |
-| K10 ToolMeta 补齐 | #789 | 1 | DET | 未开始 | |
+| K2 LEGACY_DEFAULTS | #781 | 1 | ToolRegistry | 已合并 | #911 |
+| K3 doc_read_paragraphs | #782 | 1 | ToolFileGuard | 已合并 | #911 |
+| K4 取消真正生效 | #783 | 1 | AO/OpenRouter/Bridge | 待合并 | #915 |
+| K5 菜单停止 | #784 | 1 | CI | 已合并 | #913 |
+| K6 拖拽 | #785 | 1 | PO/CI | 已合并 | #914 |
+| K7 待处理同步+角标+恢复会话 | #786 | 1 | CI/UAS/Inbox | 已合并 | #913 |
+| K8 虚拟标签 | #787 | 1 | PO/CAS | 已合并 | #914 |
+| K9 锚点错位 | #788 | 1 | office_thread/DET | 已合并 | #912 |
+| K10 ToolMeta 补齐 | #789 | 1 | DET | 已合并 | #911 |
 | K11 复制+重新生成 | #790 | 2 | RootBubble/CI | 未开始 | |
 | K12 钢琴键 | #791 | 2 | CI | 未开始 | |
 | K13 状态条+token | #792 | 2 | RootBubble/CI | 未开始 | |
