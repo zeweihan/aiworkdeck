@@ -1717,18 +1717,52 @@
             <!-- 3. History Dropdown (Unified style) -->
             <view v-if="showHistoryDrawer" class="ai-dropdown-panel" @tap.stop style="top: 36px; border-radius: 0 0 8px 8px;">
                 <view class="menu-item header">{{ $t('workbench.historyConversations') }}</view>
+                <!-- 过滤框（dev-board#796）：纯前端，列表本来就全量在 chatHistoryList 里。
+                     案子跑上几十轮之后只靠自动起的标题和时间根本认不出来是哪一次。 -->
+                <view v-if="!loadingHistory && chatHistoryList.length > 0" class="history-filter-row" @tap.stop>
+                    <input
+                        v-model="historyFilter"
+                        class="history-filter-input"
+                        type="text"
+                        :maxlength="60"
+                        :placeholder="$t('workbench.historyFilterPlaceholder')"
+                    />
+                    <text v-if="historyFilter" class="history-filter-clear" @tap.stop="historyFilter = ''">×</text>
+                </view>
                 <scroll-view scroll-y class="drawer-list" style="max-height: 350px;">
                     <view v-if="loadingHistory" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.loadingText') }}</view>
                     <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.noHistory') }}</view>
-                    <view v-else v-for="chat in chatHistoryList" :key="chat.id" class="menu-item" @tap="loadHistoryChat(chat)">
+                    <view v-else-if="filteredChatHistoryList.length === 0" class="menu-item" style="color:var(--awd-text-3);">{{ $t('workbench.historyFilterEmpty') }}</view>
+                    <view v-else v-for="chat in filteredChatHistoryList" :key="chat.id" class="menu-item conv-row" @tap="loadHistoryChat(chat)">
                         <view v-if="convDotClass(chat)" class="conv-dot" :class="convDotClass(chat)"></view>
                         <view style="flex:1; overflow:hidden;">
                             <view style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
-                                <text class="item-title" style="font-size:13px; color:var(--awd-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
+                                <!-- 行内重命名。uni 的 v-model 有 100ms 节流，打完字立刻点保存会丢改动，
+                                     所以提交时优先读 confirm 事件自带的值（同 AgentInbox 的取值口径）。 -->
+                                <input
+                                    v-if="renamingConversationId === chat.conversationId"
+                                    v-model="renameDraft"
+                                    class="conv-rename-input"
+                                    type="text"
+                                    :maxlength="60"
+                                    :focus="true"
+                                    @tap.stop
+                                    @confirm="commitRenameConversation(chat, $event)"
+                                    @blur="commitRenameConversation(chat, $event)"
+                                />
+                                <text v-else-if="chat.pinned" class="conv-pin-mark">{{ $t('workbench.conversationPinnedMark') }}</text>
+                                <text v-if="renamingConversationId !== chat.conversationId" class="item-title" style="font-size:13px; color:var(--awd-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
                                 <!-- 插件镜像会话来源角标（dev-board#298） -->
-                                <text v-if="chat.sourceChannel" class="conv-source-chip">{{ convSourceLabel(chat) }}</text>
+                                <text v-if="chat.sourceChannel && renamingConversationId !== chat.conversationId" class="conv-source-chip">{{ convSourceLabel(chat) }}</text>
                             </view>
                             <text class="item-preview" style="display:block; font-size:11px; color:var(--awd-text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
+                        </view>
+                        <!-- 悬停才出的行内操作（dev-board#796）。@tap.stop 是硬要求：
+                             整行点击就是打开会话，不拦住的话点「删除」会先把它打开一遍。 -->
+                        <view v-if="renamingConversationId !== chat.conversationId" class="conv-actions" @tap.stop>
+                            <text class="conv-action" @tap.stop="beginRenameConversation(chat)">{{ $t('workbench.conversationRename') }}</text>
+                            <text class="conv-action" @tap.stop="togglePinConversation(chat)">{{ chat.pinned ? $t('workbench.conversationUnpin') : $t('workbench.conversationPin') }}</text>
+                            <text class="conv-action danger" @tap.stop="confirmDeleteConversation(chat)">{{ $t('workbench.conversationDelete') }}</text>
                         </view>
                         <view style="display:flex; flex-direction:column; align-items:flex-end; margin-left:8px; flex-shrink:0;">
                             <text class="item-time" style="font-size:10px; color:var(--awd-text-3);">{{ formatTime(chat.updatedAt) }}</text>
@@ -2202,6 +2236,9 @@ import {
 
   getAiConversations,
   forkAiConversation, // 插件镜像会话「另起分支继续」（dev-board#298）
+  renameAiConversation, // 历史下拉的重命名 / 置顶 / 删除（dev-board#796）
+  pinAiConversation,
+  deleteAiConversation,
   getPlugins, // Added
   resolvePluginEntryUrl,
   getSkills,
@@ -2477,6 +2514,13 @@ export default {
       showHistoryDrawer: false,
       loadingHistory: false,
       chatHistoryList: [],
+      // 历史下拉的纯前端过滤（dev-board#796）：按标题/预览子串匹配，不发请求
+      historyFilter: '',
+      // 正在行内重命名的会话 id（null = 没有），与它的草稿
+      renamingConversationId: null,
+      renameDraft: '',
+      // 重命名/置顶/删除请求在飞时防连点（与 forkingConversation 同口径）
+      historyActionBusy: false,
       currentConversationId: null, // Added for tracking current session
       // 刷新后只试一次「回到上次那段对话」（dev-board#779 K7④）。之后用户自己
       // 新开/切换的会话不再被抢占——关掉面板再打开不该把人拽回旧会话。
@@ -2766,6 +2810,23 @@ export default {
       if (this.ttsEnabled) return 'tts'
       if (this.meetingRecorderEnabled) return 'recorder'
       return null
+    },
+    /**
+     * 历史下拉里过滤后的会话（dev-board#796）。
+     *
+     * 纯前端子串匹配（标题 + 末条预览），不区分大小写；列表本来就全量在内存里，
+     * 不值得为它加一个后端搜索端点。过滤只影响展示，chatHistoryList 本身不动——
+     * historyBadge、未读判定、深链查找读的都是全量那份。
+     */
+    filteredChatHistoryList() {
+      const list = this.chatHistoryList || []
+      const keyword = (this.historyFilter || '').trim().toLowerCase()
+      if (!keyword) return list
+      return list.filter((chat) => {
+        const title = (chat.title || '').toLowerCase()
+        const preview = (chat.lastMessage || '').toLowerCase()
+        return title.includes(keyword) || preview.includes(keyword)
+      })
     },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
@@ -6746,6 +6807,8 @@ export default {
               runStatus: item.runStatus || null,
               // 插件镜像会话来源（dev-board#298）：null=本地会话，非空=office-word 等通道值
               sourceChannel: item.sourceChannel || null,
+              // 置顶（dev-board#796）：后端已把置顶项排在前面，这里只保留标记用于渲染与切换
+              pinned: !!item.pinned,
               unread: this.unreadConversations.includes(item.conversationId)
           }))
           // 只读态跟列表刷新对齐：深链/onLoad 会先 loadHistoryChat 后拿到列表，
@@ -6808,6 +6871,108 @@ export default {
     /** 历史抽屉里的来源角标文案（映射唯一出处：utils/conversationSource.js）。 */
     convSourceLabel(chat) {
         return sourceChannelLabel(chat && chat.sourceChannel)
+    },
+
+    // ---- 历史下拉的行内管理：重命名 / 置顶 / 删除（dev-board#796）----
+    // 三个端点后端早就有（AiChatController 的 title / pin / delete），一直缺的只是前端接线。
+
+    beginRenameConversation(chat) {
+        if (!chat || !chat.conversationId) return
+        this.renamingConversationId = chat.conversationId
+        this.renameDraft = chat.title || ''
+    },
+
+    /**
+     * 提交重命名。confirm 与 blur 都会走到这里，所以必须自己防重入——
+     * 回车触发 confirm 之后紧接着就是 blur，不拦的话同一个标题会发两遍。
+     *
+     * uni 的 v-model 有 100ms 节流：打完字立刻回车时 renameDraft 还是旧值，改动会整个丢掉。
+     * 取值优先级与 AgentInbox.saveEdit 一致：事件自带的值 → v-model 的值。
+     */
+    async commitRenameConversation(chat, event) {
+        if (!chat || this.renamingConversationId !== chat.conversationId) return
+        const submitted = event && event.detail ? event.detail.value : undefined
+        const raw = typeof submitted === 'string' ? submitted : this.renameDraft
+        const title = (raw || '').trim()
+        this.renamingConversationId = null
+        this.renameDraft = ''
+        // 没改或清空了就当取消：后端对空标题回 400，把它当成「用户想清掉标题」去报错很蠢
+        if (!title || title === chat.title) return
+        if (title.length > 60) {
+            uni.showToast({ title: this.$t('workbench.conversationTitleTooLong'), icon: 'none' })
+            return
+        }
+        if (this.historyActionBusy) return
+        this.historyActionBusy = true
+        try {
+            await renameAiConversation(chat.conversationId, title)
+            // 本地先落，列表刷新回来会覆盖成服务端的权威值
+            chat.title = title
+            await this.fetchChatHistory(true)
+        } catch (e) {
+            console.error('Rename conversation failed', e)
+            uni.showToast({ title: (e && e.message) || this.$t('workbench.conversationRenameFailed'), icon: 'none' })
+        } finally {
+            this.historyActionBusy = false
+        }
+    },
+
+    async togglePinConversation(chat) {
+        if (!chat || !chat.conversationId || this.historyActionBusy) return
+        const next = !chat.pinned
+        this.historyActionBusy = true
+        try {
+            await pinAiConversation(chat.conversationId, next)
+            chat.pinned = next
+            // 置顶要的就是列表顺序变了，必须重拉一次（排序在后端）
+            await this.fetchChatHistory(true)
+        } catch (e) {
+            console.error('Pin conversation failed', e)
+            uni.showToast({ title: (e && e.message) || this.$t('workbench.conversationPinFailed'), icon: 'none' })
+        } finally {
+            this.historyActionBusy = false
+        }
+    },
+
+    /**
+     * 删除整条会话。确认框要说清删掉的是什么、留下的是什么——后端只删消息本体，
+     * 这条对话里生成的文件与文档检查点都还在项目里，不写明白用户不敢点。
+     * 进行中的会话后端回 409（先停再删），这里把它的中文提示原样透出。
+     */
+    async confirmDeleteConversation(chat) {
+        if (!chat || !chat.conversationId || this.historyActionBusy) return
+        const confirmed = await new Promise((resolve) => {
+            uni.showModal({
+                title: this.$t('workbench.conversationDeleteTitle'),
+                content: this.$t('workbench.conversationDeleteConfirm', {
+                    name: chat.title || this.$t('workbench.unnamedConversation')
+                }),
+                confirmText: this.$t('workbench.conversationDelete'),
+                cancelText: this.$t('common.cancel'),
+                success: (res) => resolve(!!res.confirm),
+                fail: () => resolve(false)
+            })
+        })
+        if (!confirmed) return
+        this.historyActionBusy = true
+        try {
+            await deleteAiConversation(chat.conversationId)
+            const wasCurrent = this.currentConversationId === chat.conversationId
+            await this.fetchChatHistory(true)
+            // 删掉的正是面板里开着的那条：留在原地会是一个指向已不存在会话的空壳，
+            // 再发一条消息还会把它复活。回到空会话。
+            if (wasCurrent) {
+                this.startNewChat()
+                if (this.$refs.chatInterface && typeof this.$refs.chatInterface.startNewChat === 'function') {
+                    this.$refs.chatInterface.startNewChat()
+                }
+            }
+        } catch (e) {
+            console.error('Delete conversation failed', e)
+            uni.showToast({ title: (e && e.message) || this.$t('workbench.conversationDeleteFailed'), icon: 'none' })
+        } finally {
+            this.historyActionBusy = false
+        }
     },
     /**
      * 插件镜像会话「另起分支继续」（dev-board#298）：把当前只读会话复制成一条

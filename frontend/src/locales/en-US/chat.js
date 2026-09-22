@@ -128,6 +128,7 @@ export default {
   inboxDelete: 'Delete',
   inboxSendNow: 'Send now',
   inboxUpdateFailed: 'Could not update the pending message',
+  inboxIdleNotice: 'No run is in progress, so these messages will not go out on their own. Use "Send now" to have the AI handle one immediately.',
   inboxInStream: 'View in conversation',
   receiptPendingSteer: 'Not read yet · steering',
   receiptPendingQueued: 'Queued',
@@ -181,6 +182,8 @@ export default {
   continueRun: 'Resume',
   // SSE reconnect bar (dev-board#364): heartbeat timed out or the stream ended unexpectedly
   linkReconnecting: 'Connection to the server was lost; reconnecting automatically (attempt {attempt}). The AI keeps running in the background and will resume once reconnected.',
+  // Session taken over by another window (dev-board#803): this window stopped reconnecting
+  linkSuperseded: 'This conversation is now open in another window, so this one has stopped receiving updates. Send a message here to take it back.',
   continueHintInterrupted: 'The app was closed during the last run. The task was interrupted.',
   continueHintPaused: 'Step limit reached for this run. The task is paused.',
   continuePrompt: 'Continue',

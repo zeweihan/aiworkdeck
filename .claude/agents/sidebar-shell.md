@@ -85,6 +85,22 @@ filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bri
   litigation-visual、动态插件→PluginPane）、拖拽手柄。
 - :595-911 workbench：Tab 栏（左:602 / 右:639 仅 splitMode）、编辑器区:676（左窗格:688、右窗格:762）、bottom-panel:833（v-if showToolsPanel **且 bottomToolsList 非空**，activeToolKey：停在 bottom 档的面板，见「面板停靠」一节）。
 - :912-983 ai-panel（v-if showAiPanel，内容整块交 ChatInterface:924，历史下拉:961）。
+
+**AI 历史下拉（`.ai-dropdown-panel`，dev-board#796）**：顶部过滤框 + 每行悬停出「重命名 / 置顶 / 删除」。
+- 过滤是**纯前端**的（computed `filteredChatHistoryList`，标题 + 末条预览子串匹配，忽略大小写），不发请求。
+  **只影响展示**：`historyBadge`、未读判定、深链查找读的都是全量的 `chatHistoryList`，别改成读过滤后的那份。
+- 三个端点后端一直都有（`AiChatController` 的 `POST /conversation/{id}/title`、
+  新增的 `POST /conversation/{id}/pin`、`DELETE /conversation/{id}`），F10 说的「用户改不了标题」
+  是**前端没接线**，不是能力缺失。
+- **行内操作必须 `@tap.stop`**：整行点击就是打开会话，不拦住的话点「删除」会先把它打开一遍。
+- 重命名是行内 input：`:maxlength="60"`（后端校验 1-60），提交走 `@confirm` + `@blur` 两个入口，
+  所以 `commitRenameConversation` 自带防重入（回车之后紧跟一次 blur）；取值优先读事件自带的
+  `detail.value`——uni 的 v-model 有 100ms 节流，打完字立刻回车时 `renameDraft` 还是旧值。
+- 置顶排序**在后端做**（`ProjectAiMessageService.listConversations` 稳定排序，置顶项在前），
+  前端只渲染 `chat.pinned` 标记并在切换后重拉列表，不自己排。
+- 删除确认框要写明「产物与检查点不随删」（后端 `deleteConversation` 只删消息本体）。
+  删的是当前打开的那条时，页面与 ChatInterface 都要回到空会话——留在原地会是一个指向已不存在
+  会话的空壳，再发一条消息还会把它复活。
 - :984-1213 根级弹窗层（AI导出Word/图片预览/截图保存/OCR浮层/文件关联/拖拽蒙层）。
 
 **script**

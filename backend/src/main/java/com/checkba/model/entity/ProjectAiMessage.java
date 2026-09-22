@@ -76,6 +76,15 @@ public class ProjectAiMessage {
     private String conversationTitle;
 
     /**
+     * 会话置顶（dev-board#796，可空 = 未置顶，与本字段不存在时行为一致）。
+     *
+     * <p>与 {@link #conversationTitle} 同一存储位——挂在会话的首条消息上，读取时按
+     * 「首条非空值」取。会话列表把置顶项排在最前；除排序外不影响任何行为。
+     */
+    @Column(name = "conversation_pinned")
+    private Boolean conversationPinned;
+
+    /**
      * 来源通道（dev-board#298，可空 = 本地产生）。插件对话镜像导入的会话在首条消息上带
      * office-word / wps-excel 等值，桌面端据此渲染来源角标并把会话置为只读（续聊走 fork）。
      */
@@ -143,6 +152,8 @@ public class ProjectAiMessage {
     public void setConversationId(String conversationId) { this.conversationId = conversationId; }
     public String getConversationTitle() { return conversationTitle; }
     public void setConversationTitle(String conversationTitle) { this.conversationTitle = conversationTitle; }
+    public Boolean getConversationPinned() { return conversationPinned; }
+    public void setConversationPinned(Boolean conversationPinned) { this.conversationPinned = conversationPinned; }
     public String getSourceChannel() { return sourceChannel; }
     public void setSourceChannel(String sourceChannel) { this.sourceChannel = sourceChannel; }
     public Long getSourceMessageId() { return sourceMessageId; }

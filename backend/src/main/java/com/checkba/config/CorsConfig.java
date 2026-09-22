@@ -112,7 +112,12 @@ public class CorsConfig {
             // X-App-Language：客户端声明的界面语言（AppLanguageRequestFilter）。插件任务窗格
             // 与后端同源时不触发预检，但私有部署可以把窗格与后端分域，漏了它整条链在那种
             // 部署下会卡在预检上。
-            response.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Session-Id, X-App-Language, Cache-Control, Pragma, X-File-Offset, X-File-Total-Size");
+            // X-Client-Instance / Last-Event-ID：SSE 建连的窗口身份与断点续传游标
+            // （AiAgentController.connect，dev-board#803）。桌面端前端与后端是两个 origin
+            // （页面在 dev/打包端口上，后端在 127.0.0.1:52xx），带自定义头一定触发预检——
+            // 漏了这两个名字，**整条 SSE 建连会被浏览器拦在预检上**，表现是对话完全不出字，
+            // 而后端日志里干干净净（请求根本没到）。实测就是这么撞上的。
+            response.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Session-Id, X-App-Language, X-Client-Instance, Last-Event-ID, Cache-Control, Pragma, X-File-Offset, X-File-Total-Size");
             response.setHeader("Access-Control-Max-Age", "3600");
             response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-Suggested-Filename");
 

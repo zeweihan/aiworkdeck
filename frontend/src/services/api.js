@@ -452,6 +452,40 @@ export function getConversationMetadata(conversationId) {
 }
 
 /**
+ * 重命名会话（dev-board#796）。写会话首条消息的 conversationTitle，
+ * 与 LLM 自动起名同一存储位；后端校验 1-60 字。
+ */
+export function renameAiConversation(conversationId, title) {
+  return request({
+    url: `/api/ai/conversation/${conversationId}/title`,
+    method: 'POST',
+    data: { title }
+  });
+}
+
+/**
+ * 置顶 / 取消置顶会话（dev-board#796）。只影响列表排序。
+ */
+export function pinAiConversation(conversationId, pinned) {
+  return request({
+    url: `/api/ai/conversation/${conversationId}/pin`,
+    method: 'POST',
+    data: { pinned: !!pinned }
+  });
+}
+
+/**
+ * 删除整条会话（dev-board#796）。后端只删消息本体——文件产物、检查点、
+ * token 用量记录都不随删；进行中的会话后端回 409（先停再删）。
+ */
+export function deleteAiConversation(conversationId) {
+  return request({
+    url: `/api/ai/conversation/${conversationId}`,
+    method: 'DELETE'
+  });
+}
+
+/**
  * 把一条插件镜像会话（sourceChannel 非空，只读）整体复制成一条可写的本地会话
  * （dev-board#298）。后端返回 {code:0, data:{conversationId}}，这里剥掉信封
  * 直接给 {conversationId}。

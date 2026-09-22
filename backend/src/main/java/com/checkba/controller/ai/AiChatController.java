@@ -143,6 +143,26 @@ public class AiChatController {
     }
 
     /**
+     * 置顶 / 取消置顶（dev-board#796）。写会话首条消息的 conversationPinned，与重命名同一存储位；
+     * 列表把置顶项排在最前（{@link ProjectAiMessageService#listConversations}）。
+     *
+     * <p>请求体 {@code {"pinned": true|false}}，缺省按 false（取消置顶）——这条只改排序，
+     * 没有破坏性，不值得为了缺字段回 400。
+     */
+    @PostMapping("/conversation/{conversationId}/pin")
+    public ResponseEntity<?> pinConversation(@PathVariable String conversationId,
+                                             @RequestBody(required = false) java.util.Map<String, Object> body,
+                                             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
+        }
+        boolean pinned = body != null && Boolean.TRUE.equals(body.get("pinned"));
+        projectAiMessageService.updateConversationPinned(conversationId, pinned);
+        return ResponseEntity.ok(java.util.Map.of("code", 0, "data", java.util.Map.of("pinned", pinned)));
+    }
+
+    /**
      * fork-from-here（dev-board#298）：整条会话复制成新的本地会话继续聊。
      * 镜像导入的插件会话在桌面端只读，续聊走这条——分叉显式、原件不被污染。
      * 归属校验同 history；返回 {code:0, data:{conversationId}}。
@@ -194,6 +214,9 @@ public class AiChatController {
             Map<String, Object> result = new java.util.HashMap<>();
             result.put("fileChanges", fileChangesDto);
             result.put("tokenUsage", tokenUsage);
+            // 置顶态（dev-board#796）：列表自己带这个字段，这里是给「只拿到一个会话 id」
+            // 的调用方（深链、插件历史面板）的单查口径，两处取值必须同源。
+            result.put("pinned", projectAiMessageService.isConversationPinned(conversationId));
 
             return ResponseEntity.ok(result);
         } catch (Exception e) {

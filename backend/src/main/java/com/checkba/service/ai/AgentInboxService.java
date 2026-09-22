@@ -128,10 +128,6 @@ public class AgentInboxService {
         return view(require(id));
     }
 
-    public String submissionMode(String conversationId, String id) {
-        return requireOwned(conversationId, id).getSubmissionMode();
-    }
-
     public AiAgentController.AgentChatRequest requestOf(AgentInboxItem row) {
         try {
             return mapper.readValue(row.getRequestJson(), AiAgentController.AgentChatRequest.class);

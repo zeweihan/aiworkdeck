@@ -228,4 +228,71 @@ class ProjectAiMessageServiceTest {
         assertTrue(localMode.canUseConversation("conv-1754400000000", 7L),
                 "local-mode（单机免登、回环监听）不强制签发，前端自造 ID 照常可用");
     }
+
+    // ---- 会话置顶（dev-board#796）----
+
+    /** 仓储汇总行：[conversationId, updatedAt, lastContent, title, firstUserMessage, sourceChannel, pinned] */
+    private Object[] summaryRow(String conversationId, String title, Object pinned) {
+        return new Object[]{conversationId, java.time.LocalDateTime.now(), "AI 的回复正文",
+                title, "用户的第一句话", null, pinned};
+    }
+
+    @Test
+    void 置顶的会话排在最前_组内仍按仓储给的最后活跃时间倒序() {
+        when(repository.findConversationSummaries(1L, 2L)).thenReturn(List.of(
+                summaryRow("conv-new", "最近聊的", null),
+                summaryRow("conv-pinned-a", "钉住的甲", Boolean.TRUE),
+                summaryRow("conv-old", "更早的", Boolean.FALSE),
+                summaryRow("conv-pinned-b", "钉住的乙", Boolean.TRUE)));
+
+        List<java.util.Map<String, Object>> list = service.listConversations(1L, 2L);
+
+        assertEquals(List.of("conv-pinned-a", "conv-pinned-b", "conv-new", "conv-old"),
+                list.stream().map(m -> m.get("conversationId")).toList(),
+                "置顶项在前；两组内部保持仓储原序（稳定排序）");
+        assertEquals(true, list.get(0).get("pinned"));
+        assertEquals(false, list.get(2).get("pinned"));
+    }
+
+    /**
+     * JPQL 标量子查询的返回类型按方言而异（H2 回 Boolean，部分 MySQL 驱动把 BIT(1) 回成 Number）。
+     * 按 Boolean 强转会在某一端静默失败——表现是「置顶点了没反应」，而没有任何地方报错。
+     */
+    @Test
+    void 置顶标记同时认Boolean与数字_方言差异不会让置顶静默失效() {
+        when(repository.findConversationSummaries(1L, 2L)).thenReturn(List.of(
+                summaryRow("conv-bit", "MySQL 的 BIT(1)", 1),
+                summaryRow("conv-zero", "数字 0 = 未置顶", 0),
+                summaryRow("conv-bool", "H2 的 Boolean", Boolean.TRUE)));
+
+        List<java.util.Map<String, Object>> list = service.listConversations(1L, 2L);
+
+        assertEquals(List.of("conv-bit", "conv-bool", "conv-zero"),
+                list.stream().map(m -> m.get("conversationId")).toList());
+        assertEquals(false, list.get(2).get("pinned"));
+    }
+
+    @Test
+    void 置顶写在会话首条消息上_与标题同一存储位() {
+        ProjectAiMessage first = new ProjectAiMessage();
+        when(repository.findFirstByConversationId("conv-1")).thenReturn(Optional.of(first));
+
+        service.updateConversationPinned("conv-1", true);
+        assertEquals(Boolean.TRUE, first.getConversationPinned());
+        assertTrue(service.isConversationPinned("conv-1"));
+
+        service.updateConversationPinned("conv-1", false);
+        assertEquals(Boolean.FALSE, first.getConversationPinned());
+        assertFalse(service.isConversationPinned("conv-1"));
+    }
+
+    @Test
+    void 还没有任何消息的会话置顶是空操作_不抛异常() {
+        when(repository.findFirstByConversationId("conv-empty")).thenReturn(Optional.empty());
+
+        service.updateConversationPinned("conv-empty", true);
+
+        assertFalse(service.isConversationPinned("conv-empty"));
+        verify(repository, never()).save(any(ProjectAiMessage.class));
+    }
 }

@@ -28,6 +28,42 @@ if (typeof window !== 'undefined' && !window.__awdSseNetworkHooks) {
     }
 }
 
+/**
+ * 本客户端实例的身份（dev-board#803，SSE 请求头 X-Client-Instance）。
+ *
+ * <p>后端据它判断「同一会话上的新连接是不是同一个窗口」：不是就做一次性移交——
+ * 给旧连接发一条 superseded 再关，而不是无声顶掉。不上送这个头（改造前的桌面端）时
+ * 那段逻辑整块不触发，两个窗口开同一条会话会互相把对方顶下线：旧窗口 45 秒心跳判死、
+ * 退避重连、又把新窗口顶掉，来回无限循环（Office 任务窗格那边实测过 1 Hz 打满 9 分钟）。
+ *
+ * <p>存放位置是 sessionStorage：它按标签页/窗口隔离，所以两个窗口天然拿到两个不同的 id
+ * （这正是要区分的东西），而同一个窗口刷新后沿用同一个 id——刷新是「同一个窗口重连」，
+ * 不该触发移交。sessionStorage 不可用（隐私模式、被禁）时退回模块级变量，
+ * 语义在单个页面生命周期内完全一致。
+ */
+const CLIENT_INSTANCE_STORAGE_KEY = 'awd_sse_client_instance'
+let clientInstanceIdCache = null
+const clientInstanceId = () => {
+    if (clientInstanceIdCache) return clientInstanceIdCache
+    try {
+        const stored = typeof sessionStorage !== 'undefined' && sessionStorage.getItem(CLIENT_INSTANCE_STORAGE_KEY)
+        if (stored) {
+            clientInstanceIdCache = stored
+            return clientInstanceIdCache
+        }
+    } catch (e) { /* 隐私模式/被禁：退回模块级变量 */ }
+    let fresh
+    try {
+        fresh = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null
+    } catch (e) { fresh = null }
+    if (!fresh) fresh = `awd-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    clientInstanceIdCache = fresh
+    try {
+        if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(CLIENT_INSTANCE_STORAGE_KEY, fresh)
+    } catch (e) { /* 存不进去也不影响本页面内的一致性 */ }
+    return clientInstanceIdCache
+}
+
 // 模型偶尔把整段协议裹进 ```xml。剥离只对流式正文做，历史回灌不做。
 // PARTIAL_FENCE = 结尾那截「再来几个字符就可能是完整围栏」的文本（``` 或 ```xml 的前缀）。
 const PARTIAL_FENCE = /`{1,3}[A-Za-z]*$/
@@ -113,6 +149,22 @@ export function useAgentStream() {
     // 所以「这条是不是断线截断的」只能在断开那一刻记下来，不能事后推断。
     let disconnectedBubble = null
 
+    // --- 断点续传游标（dev-board#803）---
+    // 收到的最后一个事件 id（后端按 connectionId 自增，见 SseEmitterService.send）。
+    // 重连时经 Last-Event-ID 上送，后端补发断线空档里漏掉的事件——正文有 state_recovery
+    // 全量快照兜底，而 client_action（编辑器指令）与 file_change 没有任何兜底：重连正好卡在
+    // AI 往文档里写东西的时候，那条指令就丢了，表现是「AI 说改好了，文档里没动」。
+    // id 按 conversationId 计数，所以切会话（resetSSE）必须清零，否则新会话的前几条
+    // 会被下面的去重当成「已经收过」丢掉。
+    let lastSseEventId = ''
+    let lastSseEventSeq = 0
+    // 游标属于哪条会话。`setConversationIdWithReset` 只在 id 真的变了时才 resetSSE，
+    // 所以不能只靠它清零；把归属记下来，建连时对不上就一个字都不带——
+    // 拿 A 会话的游标去连 B，后端会按 `id > since` 把 B 前面的事件整段跳过（静默丢事件）。
+    let lastSseEventConversationId = null
+    // 本会话已被同一账号的另一个窗口接管：置起后不再重连（继续重连就是互顶循环的另一半）
+    let supersededByOtherClient = false
+
     const stopHeartbeatMonitor = () => {
         if (heartbeatMonitor) { clearInterval(heartbeatMonitor); heartbeatMonitor = null }
     }
@@ -135,6 +187,8 @@ export function useAgentStream() {
     const scheduleReconnect = (reason) => {
         if (reconnectTimer) return
         if (!currentConversationId.value) return
+        // 被另一个窗口接管后就此收手：再连回去只会把对面顶掉，两边轮流互顶
+        if (supersededByOtherClient) return
         const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts))
         reconnectAttempts++
         linkStatus.value = { state: 'reconnecting', attempt: reconnectAttempts }
@@ -164,6 +218,8 @@ export function useAgentStream() {
     // Event parser state
     let currentEventName = null
     let currentEventData = ''
+    // 当前事件的 id: 字段（SSE 规范的断点续传游标，后端只给可补发的事件打）
+    let currentEventId = null
 
     // --- HELPER: Create a new Assistant Bubble Structure ---
     const createAssistantBubble = () => ({
@@ -274,6 +330,13 @@ export function useAgentStream() {
         // Reset event parser state
         currentEventName = null
         currentEventData = ''
+        currentEventId = null
+        // 断点续传游标按会话计数，切会话必须清零，否则新会话的前几条事件会被
+        // 「id 不大于已收」的去重当成补发丢掉（dev-board#803）
+        lastSseEventId = ''
+        lastSseEventSeq = 0
+        lastSseEventConversationId = null
+        supersededByOtherClient = false
         // Reset Token Usage (start fresh for new chat context? Or keep per session? Usually per chat.)
         // Ideally we keep it during the chat session. resetSSE is called when switching conversations.
         tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
@@ -471,9 +534,21 @@ export function useAgentStream() {
             }, 15000)
             try {
                 console.log('[AgentStream] Connecting SSE:', url)
+                // X-Client-Instance / Last-Event-ID 与 Office 任务窗格同一口径
+                // （office-addin/taskpane/lib/sse.js 的 requestHeaders），见 dev-board#803。
+                // Last-Event-ID 为空（首连、或切完会话的第一次）时整个头不带，
+                // 后端 replaySince 对缺省值什么都不补，与改造前行为一致。
+                const headers = {
+                    'Content-Type': 'application/json',
+                    'X-Session-Id': sessionId || '',
+                    'X-Client-Instance': clientInstanceId()
+                }
+                if (lastSseEventId && lastSseEventConversationId === conversationId) {
+                    headers['Last-Event-ID'] = lastSseEventId
+                }
                 const response = await fetch(url, {
                     method: 'GET',
-                    headers: { 'Content-Type': 'application/json', 'X-Session-Id': sessionId || '' },
+                    headers,
                     signal: myController.signal
                 })
 
@@ -482,6 +557,9 @@ export function useAgentStream() {
 
                 isConnected.value = true
                 reconnectAttempts = 0
+                // 建连成功 = 本窗口现在持有这条流：把「已被接管」的闸放掉，否则用户在
+                // 这个窗口里主动发消息把会话抢回来之后，此后任何一次断线都不会再重连了。
+                supersededByOtherClient = false
                 linkStatus.value = { state: 'live', attempt: 0 }
                 lastSseActivityAt = Date.now()
                 startHeartbeatMonitor()
@@ -903,15 +981,34 @@ export function useAgentStream() {
     const parseSSELineFull = (line) => {
         if (!line.trim()) {
             if (currentEventData) {
-                handleEvent(currentEventName, currentEventData)
+                // 断点续传游标（dev-board#803）：后端的 id 是按会话自增的序号，
+                // 补发时只发 id 大于 Last-Event-ID 的那些，所以理论上不会重。
+                // 这里仍按 id 去重，是因为「重复投递一条 text_delta」的代价是
+                // 正文里凭空多出一段、「重复投递一条 bubble_end」会把新一轮的气泡当场结束掉——
+                // 两种都不报错、只是内容错了，而防住它只要一个比较。
+                // 游标在派发之前推进：handleEvent 抛异常也不该让同一条事件在下次重连时再来一遍。
+                const seq = currentEventId ? Number(currentEventId) : NaN
+                let duplicate = false
+                if (Number.isFinite(seq)) {
+                    if (seq <= lastSseEventSeq) duplicate = true
+                    else {
+                        lastSseEventSeq = seq
+                        lastSseEventId = currentEventId
+                        lastSseEventConversationId = currentConversationId.value
+                    }
+                }
+                if (!duplicate) handleEvent(currentEventName, currentEventData)
             }
             currentEventName = null
             currentEventData = ''
+            currentEventId = null
             return
         }
 
         if (line.startsWith('event:')) {
             currentEventName = line.substring(6).trim()
+        } else if (line.startsWith('id:')) {
+            currentEventId = line.substring(3).trim()
         } else if (line.startsWith('data:')) {
             let val = line.substring(5)
             if (val.startsWith(' ')) val = val.substring(1)
@@ -922,6 +1019,19 @@ export function useAgentStream() {
     const handleEvent = (evt, dataStr) => {
         // 这里同样是逐 token 的热路径（每个 text_delta 都要过一次），不要在此加日志：
         // 见上面 SSE 读取循环里的说明（dev-board#750）。
+
+        // 本会话已被另一个窗口接管（dev-board#803）。后端紧接着就关流，所以这里要做的
+        // 只有两件事：立刻停掉重连（继续重连就是互顶循环的另一半），以及把状态告诉用户——
+        // 否则他看到的是一个不停「正在重连（第 N 次）」却永远连不上的窗口。
+        // 与 plan_update 同理放在气泡守卫之前：切回会话/重连时气泡指针为 null。
+        if (evt === 'superseded') {
+            supersededByOtherClient = true
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+            stopHeartbeatMonitor()
+            linkStatus.value = { state: 'superseded', attempt: 0 }
+            console.warn('[AgentStream] 本会话已在另一个窗口打开，停止重连')
+            return
+        }
 
         // 任务清单更新：不依赖活跃气泡（重连恢复时也要能收到），放在气泡守卫之前
         if (evt === 'plan_update') {

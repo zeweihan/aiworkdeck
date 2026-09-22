@@ -240,9 +240,15 @@ public class ProjectAiMessageService {
                 .orElseGet(() -> registeredOwner != null || !conversationIssuanceService.enforceIssuance());
     }
 
+    /**
+     * AI 面板的历史会话列表（user-scoped）。
+     *
+     * <p>置顶项排在最前（dev-board#796）：排序用<b>稳定</b>排序，所以两组内部仍是
+     * 仓储给的「最后活跃时间倒序」。置顶只影响这一个顺序，不影响任何别的行为。
+     */
     public List<java.util.Map<String, Object>> listConversations(Long projectId, Long userId) {
         List<Object[]> results = repository.findConversationSummaries(projectId, userId);
-        return results.stream()
+        List<java.util.Map<String, Object>> rows = results.stream()
                 .filter(row -> row[0] != null) // Filter out items with null conversationId
                 .map(row -> {
                     java.util.Map<String, Object> map = new java.util.HashMap<>();
@@ -262,9 +268,27 @@ public class ProjectAiMessageService {
                     map.put("lastMessage", preview);
                     // 来源通道（首条消息的）：镜像导入的会话非空，前端据此渲染角标 + 只读态
                     map.put("sourceChannel", row.length > 5 && row[5] != null ? row[5].toString() : null);
+                    map.put("pinned", row.length > 6 && truthy(row[6]));
                     return map;
                 })
-                .collect(java.util.stream.Collectors.toList());
+                // toCollection 而不是 toList()：后者不保证可变，而下面要就地排序
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        rows.sort(java.util.Comparator.comparing(
+                (java.util.Map<String, Object> r) -> Boolean.TRUE.equals(r.get("pinned")) ? 0 : 1));
+        return rows;
+    }
+
+    /**
+     * 会话置顶标记的取值归一。
+     *
+     * <p>JPQL 标量子查询的返回类型在不同方言下不完全一致（H2 回 Boolean，
+     * 部分 MySQL 驱动把 BIT(1)/TINYINT 回成 Number），按 Boolean 强转会在某一端
+     * 静默失败——表现是「置顶点了没反应」，而没有任何地方报错。
+     */
+    private static boolean truthy(Object value) {
+        if (value instanceof Boolean b) return b;
+        if (value instanceof Number n) return n.intValue() != 0;
+        return value != null && "true".equalsIgnoreCase(value.toString());
     }
 
     /**
@@ -519,6 +543,27 @@ public class ProjectAiMessageService {
         } catch (Exception e) {
             return LangText.of("新对话", "New chat");
         }
+    }
+
+    /**
+     * 置顶 / 取消置顶（dev-board#796）。与标题同一存储位——写会话首条消息。
+     *
+     * <p>会话还没有任何消息时什么都不做（与 {@link #updateConversationTitle} 同口径）：
+     * 空会话在列表里本来就不存在，没有可置顶的行。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void updateConversationPinned(String conversationId, boolean pinned) {
+        repository.findFirstByConversationId(conversationId).ifPresent(first -> {
+            first.setConversationPinned(pinned);
+            repository.save(first);
+        });
+    }
+
+    /** 会话是否置顶（列表之外的单查，给 metadata 端点用）。 */
+    public boolean isConversationPinned(String conversationId) {
+        return repository.findFirstByConversationId(conversationId)
+                .map(m -> Boolean.TRUE.equals(m.getConversationPinned()))
+                .orElse(false);
     }
 
     /**

@@ -88,4 +88,35 @@ class AiChatConversationAdminTest {
         assertEquals(200, c.renameConversation("c-1", Map.of("title", " 尽调要点讨论 "), null).getStatusCode().value());
         verify(svc).updateConversationTitle("c-1", "尽调要点讨论");
     }
+
+    @Test
+    @DisplayName("置顶：归属校验不过 → 403，不碰 service")
+    void pinForbiddenWhenNotOwner() {
+        ProjectAiMessageService svc = mock(ProjectAiMessageService.class);
+        when(svc.canUseConversation(any(), any())).thenReturn(false);
+
+        ResponseEntity<?> resp = controller(svc, mock(com.checkba.service.ai.AgentRunStateService.class))
+                .pinConversation("c-x", Map.of("pinned", true), null);
+
+        assertEquals(403, resp.getStatusCode().value());
+        verify(svc, never()).updateConversationPinned(any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("置顶：true/false/缺字段 都落到 service，缺字段按取消置顶")
+    void pinHappyPath() {
+        ProjectAiMessageService svc = mock(ProjectAiMessageService.class);
+        when(svc.canUseConversation(any(), any())).thenReturn(true);
+        AiChatController c = controller(svc, mock(com.checkba.service.ai.AgentRunStateService.class));
+
+        assertEquals(200, c.pinConversation("c-1", Map.of("pinned", true), null).getStatusCode().value());
+        verify(svc).updateConversationPinned("c-1", true);
+
+        assertEquals(200, c.pinConversation("c-1", Map.of("pinned", false), null).getStatusCode().value());
+        verify(svc).updateConversationPinned("c-1", false);
+
+        // 这条只改排序，没有破坏性；缺字段回 400 是无谓的摩擦
+        assertEquals(200, c.pinConversation("c-1", null, null).getStatusCode().value());
+        verify(svc, times(2)).updateConversationPinned("c-1", false);
+    }
 }
