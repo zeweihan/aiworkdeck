@@ -8,7 +8,12 @@
 // 按 parentId 分组建 Map（groupByParent，一次 O(N)），递归只在分组表里取子集
 // （buildTreeFromGroups，不再 filter 全量数组）。
 
-const HIDDEN_NAMES = new Set(['.stagezone', '__staging_area__'])
+/**
+ * 隐藏的系统文件夹。它们是产品内部实现（文件暂存区），不该出现在任何「挑一份文件」
+ * 的界面里——文件树、Cmd+P 快速打开、AI 的 `@` 引用与「从项目选择」都读这一份。
+ */
+export const HIDDEN_SYSTEM_FOLDER_NAMES = new Set(['.stagezone', '__staging_area__'])
+const HIDDEN_NAMES = HIDDEN_SYSTEM_FOLDER_NAMES
 
 /** parentId 归一化：null/undefined/0 统一当「根」处理，与既有语义一致。 */
 function normalizeParentId(parentId) {

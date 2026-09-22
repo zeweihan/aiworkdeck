@@ -672,6 +672,7 @@
             @file-history="onFileHistory"
             @reveal-file="onRevealFile"
             @share-file="onShareFile"
+            @add-to-ai="onAddFileToAiContext"
             :transcribe-enabled="meetingRecorderEnabled"
             @transcribe-audio="onTranscribeAudio"
           />
@@ -2173,6 +2174,7 @@ import { flushActiveDocument } from './flushActiveDocument.js'
 import { isTabVisibleInPane } from './tabVisibility.js'
 import { pickActiveContextTab, isContextEligibleTab } from './activeTabContext.js'
 import { nativeDataTransfer } from '@/utils/fileTreeExternalDrop.js'
+import { AI_CONTEXT_FOLDER_FILE_LIMIT, countDescendantFiles } from '@/utils/aiContextFiles.js'
 import { saveSensitiveInput } from './sensitiveWorkflow.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
@@ -6367,25 +6369,11 @@ export default {
     addDraggedFileToAiContext(file) {
         if (!file || !file.id) return
 
-        // Check for folder file count limit (>10)
+        // 文件夹整体挂进来时的后代文件数上限：判据在 utils/aiContextFiles.js，
+        // 与 ChatInterface 那三个入口（@ 引用 / 从项目选择 / 右键）同一份
         if (file.isDir && this.$refs.fileTree && Array.isArray(this.$refs.fileTree.allFiles)) {
-            const allFiles = this.$refs.fileTree.allFiles
-            // Helper to count non-folder files recursively
-            const countDescendants = (pid) => {
-                let count = 0
-                const children = allFiles.filter(f => f.parentId == pid) // use fuzzy match for potential string/int diff
-                for (const child of children) {
-                    if (!child.isFolder) {
-                        count++
-                    } else {
-                        count += countDescendants(child.id)
-                    }
-                }
-                return count
-            }
-
-            const totalFiles = countDescendants(file.id)
-            if (totalFiles > 10) {
+            const totalFiles = countDescendantFiles(this.$refs.fileTree.allFiles, file.id)
+            if (totalFiles > AI_CONTEXT_FOLDER_FILE_LIMIT) {
                 uni.showToast({ title: this.$t('workbench.folderTooManyFiles', { count: totalFiles }), icon: 'none' })
                 return
             }
@@ -6397,6 +6385,23 @@ export default {
 
         // Note: Visual tag display is now handled within ChatInterface
         uni.showToast({ title: this.$t('workbench.fileAdded', { name: file.name }), icon: 'none' })
+    },
+    /**
+     * 文件树右键「加入 AI 对话」（dev-board#794 K15 ②）。
+     * 与拖拽不同的是 AI 面板此刻可能根本没开：先 resolveChatInterface 把面板拉出来
+     * 并切回对话页签，否则 $refs.chatInterface 不在，点了没有任何反应。
+     */
+    async onAddFileToAiContext(item) {
+        if (!item || !item.id) return
+        const chat = await this.resolveChatInterface()
+        if (!chat) return
+        this.addDraggedFileToAiContext({
+            id: item.id,
+            name: item.name,
+            fileType: item.fileType,
+            wpsFileId: item.wpsFileId,
+            isDir: !!(item.isFolder || item.isDir),
+        })
     },
     /** 已打开的标签（两侧窗格）按 id 查一条；id 统一按字符串比较 */
     findOpenTab(fileId) {

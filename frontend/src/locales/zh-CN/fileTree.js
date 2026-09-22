@@ -40,6 +40,7 @@ export default {
   fileHistory: '这份文件的历史',
   revealInFinder: '在访达中显示',
   sendFile: '发送…',
+  addToAiChat: '加入 AI 对话',
   delete: '删除',
   copy: '复制',
   // 回收站

@@ -450,6 +450,123 @@ try {
     '重发不该在历史里留下两条一样的提问')
   assert.equal(await page.evaluate(() => document.querySelector('.chat-input-rich').textContent), '', '重新生成不碰输入框——用户此刻可能已经在里面打了别的')
 
+  // ---- `@` 引用选择器（dev-board#794 K15）与输入框键位（#795 K16）----
+  // 这一段全部走真按键：@ 触发靠的是 contenteditable 的 selection + input 事件，
+  // 直接改 state 证明不了接线。
+  await page.evaluate(() => { window.inboxItems = []; window.nextReceiptState = 'applied' })
+  await page.evaluate(() => window.loadFixture('single'))
+  const draftText = () => page.$eval('.chat-input-rich', el => el.innerText)
+  // 标签以外的正文（`@股份` 那截清没清掉，只能这样量——标签自己也画着一个 @ 和文件名）
+  const draftTextOutsideTags = () => page.$eval('.chat-input-rich', el => {
+    const clone = el.cloneNode(true)
+    clone.querySelectorAll('[data-file-id]').forEach(t => t.remove())
+    return clone.textContent.replace(/ /g, ' ').trim()
+  })
+  const clearDraftDom = () => page.evaluate(() => {
+    const el = document.querySelector('.chat-input-rich')
+    el.innerHTML = ''
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  await page.click('.chat-input-rich')
+  await page.keyboard.type('@股份')
+  await wait(() => document.querySelector('.mention-picker'))
+  assert.deepEqual(await page.$$eval('.mention-picker .mp-name', els => els.map(e => e.textContent)),
+    ['股份认购协议-附件清单.xlsx', '股份认购协议.docx'], '@ 弹出的是项目文件的模糊匹配')
+  assert.equal(await page.$eval('.mention-picker .mp-item.is-active .mp-name', el => el.textContent), '股份认购协议-附件清单.xlsx')
+  await page.screenshot({ path: `${shots}/k15-mention-picker.png` })
+  await page.keyboard.press('ArrowDown')
+  assert.equal(await page.$eval('.mention-picker .mp-item.is-active .mp-name', el => el.textContent), '股份认购协议.docx',
+    '方向键在浮层里走，不去翻历史')
+  await page.keyboard.press('Enter')
+  await wait(() => !document.querySelector('.mention-picker'))
+  assert.equal(await page.$eval('.chat-input-rich .context-tag-inline', el => el.getAttribute('title')), '股份认购协议.docx',
+    '选中后插的是既有的内联标签')
+  assert.equal(await page.evaluate(() => window.chatState.contextFiles.map(f => f.id).join(',')), '11',
+    'contextFiles 跟着标签走')
+  assert.equal(await draftTextOutsideTags(), '', '输入的 `@股份` 那一段被删掉，不会连同标签一起发出去')
+
+  // Esc：浮层开着先收浮层，其次才轮到别的（否则第一下 Esc 会去停 AI 或清草稿）
+  await page.keyboard.type(' @公司')
+  await wait(() => document.querySelector('.mention-picker'))
+  await page.keyboard.press('Escape')
+  await wait(() => !document.querySelector('.mention-picker'))
+  assert.ok((await draftText()).includes('@公司'), '收浮层不该顺手改掉用户打的字')
+
+  // Esc 清草稿要按两次：清空会把附件标签一起带走，静默清掉就是销毁用户已经做的事
+  await page.keyboard.press('Escape')
+  assert.equal(await page.evaluate(() => window.lastToast), '再按一次 Esc 清空草稿')
+  assert.notEqual(await draftTextOutsideTags(), '', '第一次 Esc 只给提示')
+  await page.keyboard.press('Escape')
+  await wait(() => document.querySelector('.chat-input-rich').innerText.trim() === '')
+  assert.equal(await page.evaluate(() => window.chatState.contextFiles.length), 0, '草稿清了，挂在草稿上的附件也跟着清')
+
+  // Esc 在流式中 = 停止（不进 config/commands，只是输入框局部监听）
+  const cancelsBeforeEsc = await page.evaluate(() => window.cancelCalls || 0)
+  await page.evaluate(() => { window.chatState.isStreaming = true })
+  await page.click('.chat-input-rich')
+  await page.keyboard.press('Escape')
+  await wait(() => window.chatState.isStreaming === false)
+  assert.equal(await page.evaluate(() => window.cancelCalls || 0), cancelsBeforeEsc + 1, '流式中的 Esc 真的发了取消')
+
+  // 上箭头翻历史：空输入框才起步，到顶停住，下箭头翻回空草稿
+  await page.evaluate(() => window.loadFixture('single'))
+  await clearDraftDom()
+  await page.click('.chat-input-rich')
+  await page.keyboard.press('ArrowUp')
+  await wait(() => document.querySelector('.chat-input-rich').innerText.includes('请审查这份采购合同'))
+  await page.keyboard.press('ArrowUp')
+  assert.ok((await draftText()).includes('请审查这份采购合同'), '到顶就停住，不绕回最新那条')
+  await page.keyboard.press('ArrowDown')
+  await wait(() => document.querySelector('.chat-input-rich').innerText.trim() === '')
+
+  // Cmd+Enter 发送（Enter 仍发送、Shift+Enter 换行的老行为由 handleEnterKey 保持）。
+  // 故意在引用浮层开着的时候按：Cmd+Enter 是明确的「发出去」，要压过「再选一个文件」，
+  // 这也是这条分支唯一与普通 Enter 不同的地方——不这么测等于什么都没测。
+  await page.keyboard.type('这一条用 Cmd+Enter 发出去 @股')
+  await wait(() => document.querySelector('.mention-picker'))
+  await page.keyboard.down('Meta')
+  await page.keyboard.press('Enter')
+  await page.keyboard.up('Meta')
+  await wait(() => !document.querySelector('.mention-picker'))
+  assert.equal(await page.evaluate(() => window.chatState.contextFiles.length), 0, 'Cmd+Enter 不该顺手挑一个文件进来')
+  await wait(() => window.chatState.bubbles.filter(b => b.role === 'USER').at(-1)?.content === '这一条用 Cmd+Enter 发出去 @股')
+  await wait(() => document.querySelector('.chat-input-rich').innerText.trim() === '') // 发完草稿清空
+
+  // 发送 / 停止是真 <button>：能 Tab 到、能回车按（K16 ④）
+  assert.equal(await page.$eval('.send-btn', el => el.tagName), 'BUTTON', '发送键是 button 不是 view')
+  assert.equal(await page.$eval('.send-btn', el => el.tabIndex), 0, '发送键在 Tab 序里')
+  assert.ok(await page.$eval('.send-btn', el => !!el.getAttribute('aria-label')), '发送键有无障碍名')
+  await page.focus('.send-btn')
+  assert.ok(await page.evaluate(() => document.activeElement.classList.contains('send-btn')), '发送键可聚焦')
+  await page.evaluate(() => { window.chatState.isStreaming = true })
+  await wait(() => document.querySelector('.stop-btn'))
+  assert.equal(await page.$eval('.stop-btn', el => el.tagName), 'BUTTON', '停止键同样是 button')
+  await page.evaluate(() => { window.chatState.isStreaming = false })
+
+  // 三个下拉的选项进 Tab 序并报 role（K16 ⑤）
+  await page.evaluate(() => { window.chatState.showModeDropdown = true })
+  await wait(() => document.querySelector('.mode-option'))
+  assert.ok(await page.$$eval('.mode-option', els => els.every(e => e.getAttribute('role') === 'option' && e.tabIndex === 0)),
+    '模式下拉的每个选项都能 Tab 到')
+  assert.equal(await page.$eval('.mode-dropdown', el => el.getAttribute('role')), 'listbox')
+  await page.evaluate(() => { window.chatState.showModeDropdown = false })
+
+  // 「+」对话框的「从项目选择」页签：与 @ 同一份候选集、同一个检索（K15 ③）
+  await page.evaluate(() => window.chatState.triggerFileSelect())
+  await wait(() => document.querySelector('.pick-tabs'))
+  await tap('.pick-tabs .pick-tab:last-child')
+  await wait(() => document.querySelector('.pick-row'))
+  assert.equal(await page.$$eval('.pick-row .pick-name', els => els.length), 4, '页签里列的是整份项目清单（含文件夹）')
+  await page.screenshot({ path: `${shots}/k15-project-pick-tab.png` })
+  await page.evaluate(() => { window.chatState.projectPickQuery = '章程' })
+  await wait(() => document.querySelectorAll('.pick-row').length === 1)
+  await tap('.pick-row')
+  await wait(() => window.chatState.contextFiles.some(f => String(f.id) === '13'))
+  assert.ok(await page.$('.pick-row.picked'), '已经加过的那条标出来，别让人重复点')
+  await page.evaluate(() => window.chatState.cancelUpload())
+  await wait(() => !document.querySelector('.pick-tabs'))
+
   await page.evaluate(() => window.loadFixture('single'))
   await page.screenshot({ path: `${shots}/k11-copy-actions.png` })
   await page.screenshot({ path: '/tmp/awd-chat-646-light.png' })
@@ -478,7 +595,7 @@ try {
   ]), ['Copy', 'Regenerate', 'Copy', 'Copy call'], 'English labels for copy/regenerate')
   await page.screenshot({ path: `${shots}/k11k13-english.png` })
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, @ mention picker and the project-pick tab, composer key bindings (Esc/Cmd+Enter/history recall) and focusable send-stop buttons, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

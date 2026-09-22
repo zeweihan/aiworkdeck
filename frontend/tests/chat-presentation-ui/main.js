@@ -6,6 +6,14 @@
 // 只有 DELETED 被过滤掉）。
 window.inboxItems = []
 window.nextReceiptState = 'applied'
+// 项目文件清单：`@` 引用选择器与「从项目选择」页签都从这里来（dev-board#794 K15）。
+// 形状照 GET /api/projects/{id}/files?tree=true 的真实返回：扁平、带 parentId 与 isFolder。
+window.projectFiles = [
+  { id: 1, name: '交易文件', parentId: null, isFolder: true },
+  { id: 11, name: '股份认购协议.docx', fileType: 'docx', parentId: 1, isFolder: false },
+  { id: 12, name: '股份认购协议-附件清单.xlsx', fileType: 'xlsx', parentId: 1, isFolder: false },
+  { id: 13, name: '公司章程.docx', fileType: 'docx', parentId: null, isFolder: false },
+]
 window.uni = {
   getStorageSync: key => key === 'awd_app_language' ? new URLSearchParams(location.search).get('lang') || 'zh-CN' : '',
   setStorageSync() {}, removeStorageSync() {}, $on() {}, $off() {}, $emit() {},
@@ -49,6 +57,9 @@ window.uni = {
         window.inboxItems = window.inboxItems.filter(item => item.id !== messageId)
       }
       return success?.({ statusCode: 200, data: { code: 0, data: { items: window.inboxItems, runId: 'fixture-run', status: 'RUNNING' } } })
+    }
+    if (/\/api\/projects\/[^/]+\/files/.test(String(url))) {
+      return success?.({ statusCode: 200, data: window.projectFiles })
     }
     return success?.({ statusCode: 200, data: [] })
   }
