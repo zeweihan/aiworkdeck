@@ -195,6 +195,68 @@ class BuiltinSkillsTest {
                 "output_en 缺失会让英文模式注入中文产出约定");
     }
 
+    /**
+     * restrict 的 skill 必须自带编辑面（dev-board#818 / 审计 A2 同形态）。
+     *
+     * <p>裁剪只影响可见性、不报错：白名单里没有 doc_* / office_* 时，命中这个 skill 的那一轮
+     * 模型看不见任何编辑原语，表现就是「AI 突然不会改文档了」。而这两个 skill 恰恰是
+     * 最容易在「顺手写进当前文档」的语境里被命中的——会议录音默认启用、触发词「会议纪要」很宽，
+     * 上市路径的触发词含 IPO/VIE 这种短词。
+     *
+     * <p>两族都要列：{@code ClientCapabilityService} 按会话客户端只放行其中一族
+     *（工作台 LOWA 会话见 doc_*，Office/WPS 任务窗格会话见 office_*），skill.yml 不能替它挑。
+     */
+    @Test
+    @DisplayName("restrict 的 skill 必须带编辑面：doc_* 与 office_* 两族都要列（dev-board#818）")
+    void restrictingSkillsCarryTheEditingSurface() {
+        List<String> docFloor = List.of("doc_get_document_text", "doc_get_outline",
+                "doc_find_text", "doc_insert_at_cursor", "doc_insert_under_heading",
+                "doc_find_replace", "doc_replace_selection", "doc_undo");
+        List<String> officeFloor = List.of("office_get_text", "office_search",
+                "office_insert_text", "office_replace_text");
+
+        for (String id : List.of("meeting-recorder", "listing-pathway", "contract-review")) {
+            SkillDefinition s = registry.getSkill(id)
+                    .orElseThrow(() -> new AssertionError(id + " 未注册"));
+            assertEquals(SkillDefinition.ToolPolicy.RESTRICT, s.getToolPolicy(),
+                    id + " 本条用例只对 restrict 的 skill 有意义");
+            for (String tool : docFloor) {
+                // contract-review 用 doc_replace_at_anchor / doc_replace_nth_match 那套带修订痕迹的改法，
+                // doc_replace_selection 不在它的清单里，其余下限一致
+                if ("contract-review".equals(id) && "doc_replace_selection".equals(tool)) {
+                    continue;
+                }
+                assertTrue(s.getAllowedTools().contains(tool),
+                        id + " 的 allowed_tools 缺 " + tool + "：命中即失去这项编辑能力（不报错不告警）");
+            }
+            for (String tool : officeFloor) {
+                assertTrue(s.getAllowedTools().contains(tool),
+                        id + " 的 allowed_tools 缺 " + tool + "：Office/WPS 任务窗格会话下无编辑能力");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("触发词收紧：短到会误触发的词换成短语（dev-board#818）")
+    void overBroadTriggersAreTightened() {
+        SkillDefinition lp = registry.getSkill("listing-pathway").orElseThrow();
+        for (String tooShort : List.of("红筹", "借壳", "证券化")) {
+            assertFalse(lp.getTriggers().contains(tooShort),
+                    "「" + tooShort + "」太短，「改一下红筹架构协议里这条」这类请求会被它劫持："
+                            + lp.getTriggers());
+        }
+        assertTrue(lp.getTriggers().containsAll(List.of("红筹架构", "借壳上市", "证券化路径")),
+                "收紧后的短语必须在：" + lp.getTriggers());
+        assertTrue(lp.getTriggers().contains("IPO"),
+                "IPO 保留——整词匹配（SkillRouter）已经挡掉 VIPO/IPOS 这类同形前后缀");
+
+        SkillDefinition mr = registry.getSkill("meeting-recorder").orElseThrow();
+        assertFalse(mr.getTriggers().contains("整理会议"),
+                "「整理会议」会命中「整理会议室」「整理会议资料」：" + mr.getTriggers());
+        assertTrue(mr.getTriggers().containsAll(List.of("整理会议录音", "整理会议记录")),
+                "换成更明确的短语：" + mr.getTriggers());
+    }
+
     @Test
     @DisplayName("prompt 守住那条铁律：模型抽取、脚本画图")
     void promptCarriesTheGoldenRule() {

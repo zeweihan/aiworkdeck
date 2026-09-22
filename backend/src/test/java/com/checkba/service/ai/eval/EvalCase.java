@@ -44,6 +44,14 @@ public class EvalCase {
      * 决定编排器下发哪一套编辑原语（dev-board#729 ①：docx 不下发 sheet_* / slide_*）。
      */
     public ActiveDocument activeDocument;
+    /**
+     * 可选：本轮会话的客户端能力（lowa / office / none，值同 chat 请求的 clientCapability）。
+     * 缺省 null = 不登记 = 沿用 LOWA（存量主前端），office_* 不下发。
+     * 写 "office" 才能断言 Office/WPS 任务窗格那一族的可见性（dev-board#818）。
+     */
+    public String clientCapability;
+    /** 可选：Office 会话的宿主（word / excel / powerpoint），仅 clientCapability=office 时有意义，缺省 word */
+    public String officeHost;
     /** 非 null 时该用例进入真实 LLM 冒烟集（RealLlmSmokeTest） */
     public Smoke smoke;
     /** 预录的模型输出，按轮次回放 */

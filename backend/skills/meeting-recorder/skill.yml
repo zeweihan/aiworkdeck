@@ -34,12 +34,16 @@ languages:
 
 name_en: Meeting Recording
 
-# 触发条件：用户输入包含任一关键词即命中（面板 kick-off prompt 以「会议纪要」开头）
+# 触发条件：用户输入包含任一关键词即命中（面板 kick-off prompt 以「会议纪要」开头）。
+# 匹配口径见 SkillRouter.containsTrigger：中文是子串匹配，拉丁串两端要求整词。
+# 「整理会议」已经换成两条更明确的短语（dev-board#818）——它太短，
+# 「整理会议室」「整理会议资料」「整理会议桌」都会被它命中，而命中就意味着注入一整套纪要指引。
 triggers:
   - 会议纪要
   - 会议录音
   - 生成纪要
-  - 整理会议
+  - 整理会议录音
+  - 整理会议记录
   - 会议转写
   - 谈判纪要
 
@@ -65,19 +69,41 @@ prompt: prompt.md
 # 聚焦模式，限制本轮可见工具（dev-board#799）。这里写 restrict 是保持现状：
 # 裁剪自本次起改成自愿声明，不写就等于把本 skill 的既有行为悄悄改掉。
 #
-# 已知风险，留给维护者拍板（本次刻意没有单方面改）：本 skill enabled_by_default: true，
-# 触发词「会议纪要」「整理会议」在普通对话里很容易被 contains 命中，而下面这份清单里
-# 一个 doc_* / office_* 都没有——用户说「把会议纪要整理进这份文档」时模型会当场
-# 失去全部编辑能力。要么把编辑面补进清单，要么把触发词收窄，两条路都比留着强。
+# 编辑面必须在清单里（dev-board#818）：本 skill enabled_by_default: true、触发词「会议纪要」很宽，
+# 而「把会议纪要整理进这份文档」是它最常见的落地形态。清单里没有 doc_* / office_* 的话，
+# 命中的那一轮模型看不见任何编辑原语，表现是「AI 突然不会改文档了」——不报错、不告警。
+# doc_* 与 office_* 两族同时列出：ClientCapabilityService 按会话客户端只放行其中一族
+#（工作台 LOWA 会话见 doc_*，Office/WPS 任务窗格会话见 office_*），这里不需要也不能替它挑。
 tool_policy: restrict
 
 allowed_tools:
+  # 录音与转写稿
   - meeting_list_recordings
   - meeting_get_transcript
+  # 新起一份纪要交付物
   - write_docx
   - read_file
   - search_project_files
   - todo_write
+  # 写进用户正打开的那份文档：先看结构再定落点
+  - doc_get_document_text
+  - doc_get_outline
+  - doc_find_text
+  - doc_get_cursor_context
+  # 改
+  - doc_insert_at_cursor
+  - doc_insert_under_heading
+  - doc_insert_table
+  - doc_find_replace
+  - doc_replace_selection
+  # 安全网
+  - doc_undo
+  # Office/WPS 任务窗格会话的对应面
+  - office_get_text
+  - office_search
+  - office_insert_text
+  - office_replace_text
+  - office_insert_table
 
 # 输出结构约定（随 prompt 注入）
 output: |

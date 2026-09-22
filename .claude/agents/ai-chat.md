@@ -179,12 +179,17 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      正是那个 skill 没机会用白名单申报的能力。`restrict` 却没写 `allowed_tools` 同样按
      passthrough 兜（加载期 warn）。八个自带 skill 里六个显式写了 `restrict`（= 保持现状），
      `desensitize` / `text-to-speech` 不写（= 本次要修的那两个）。
-     **已知风险，留给维护者拍板**：`meeting-recorder`（默认开、触发词「会议纪要」「整理会议」很宽）
-     与 `listing-pathway`（触发词有「IPO」「VIE」「红筹」这种短词，匹配是对整条输入做 contains）
-     的白名单里一个 `doc_*` / `office_*` 都没有，命中即失去全部编辑能力——与 A2 同一形态，
-     只是清单非空所以更隐蔽。本次刻意没有单方面改（回放用例 `skill-listing-pathway-trigger-trim-xml`
-     与 `skill-orchestration-tools-not-trimmed` 都钉着 listing-pathway 会裁剪），两条 skill.yml 里
-     各留了一段说明；要修得先把编辑面补进清单或把触发词收紧。
+     **`restrict` 的 skill 白名单必须含编辑面**（dev-board#818，2026-09-22 已修）：
+     `meeting-recorder`（默认开、触发词「会议纪要」很宽）与 `listing-pathway`（触发词含
+     IPO/VIE/SPAC）的白名单里一个 `doc_*` / `office_*` 都没有，命中即失去全部编辑能力——
+     与 A2 同一形态，只是清单非空所以更隐蔽。两件事一起做的：白名单补读写基本面（两族都列，
+     `ClientCapabilityService` 按会话只放行一族）+ 触发词收紧（短词换短语，且
+     `SkillRouter.containsTrigger` 现在对拉丁串两端要求整词，「VIPO」「IPOS」不再命中 `IPO`）。
+     `skill-listing-pathway-trigger-trim-xml` 仍断言裁剪发生，判据换成「`doc_open_file` /
+     `doc_start_stream` / `doc_apply_standard_format` 仍在白名单外」；新增
+     `skill-meeting-recorder-doc-editing-surface-visible` 与
+     `skill-listing-pathway-office-editing-surface-visible` 各守一族（后者靠用例新字段
+     `clientCapability: office` 让 `EvalHarness` 登记 Word 任务窗格会话）。详见 plugin-system.md。
   ④ **运行期可用性**（dev-board#750）：账户没连时那些必然回「尚未连接 AI WorkDeck 账户」的工具不下发。
      判据链是 `AgentToolComponent.currentlyUnusableTools()` → `ToolRegistry.unusableToolNames()`
      → 起跑时存进 `RunGuard.unusableTools` → **在编排器里**做最后一道过滤（与 skill 白名单、

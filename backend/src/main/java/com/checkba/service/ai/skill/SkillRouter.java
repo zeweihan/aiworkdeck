@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Skill 路由器（Phase 3B，规范见 docs/SKILL_SPEC.md）。
  *
  * 按触发条件（关键词，忽略大小写）匹配用户输入：
+ * - 匹配口径是"子串 + 拉丁串两端整词"，见 {@link #containsTrigger}；
  * - 命中多个 skill 时取"最长命中关键词"的那个（更长的关键词 = 更 specific 的意图）；
  * - 命中后：a) prompt 模板由 ContextAssemblerService 在组装系统消息时注入（{@link #promptInjectionFor}）；
  *   b) 本轮 LLM 可见工具集裁剪为 allowed_tools ∪ 基础工具集 ∪ 编排类工具（{@link #visibleTools}，
@@ -150,13 +151,62 @@ public class SkillRouter {
                 if (trigger == null || trigger.isBlank()) {
                     continue;
                 }
-                if (normalized.contains(trigger.toLowerCase()) && trigger.length() > bestLen) {
+                if (containsTrigger(normalized, trigger.toLowerCase()) && trigger.length() > bestLen) {
                     best = skill;
                     bestLen = trigger.length();
                 }
             }
         }
         return Optional.ofNullable(best);
+    }
+
+    /**
+     * 触发词匹配口径（dev-board#818）：<b>子串匹配 + 拉丁串两端整词</b>，两个参数都已小写。
+     *
+     * <p>为什么不是全局整词：中文没有词分隔符。「上市路径」在「公司上市路径选择怎么做」里
+     * 就是紧贴着中文出现的，套用 {@code \b} 那套规则会让绝大多数中文触发词一个都匹配不上。
+     *
+     * <p>为什么不是纯 contains：触发词里有 {@code IPO} / {@code VIE} / {@code SPAC} 这类
+     * 三四个字母的缩写，纯 contains 会把「VIPO 品牌升级」「IPOS 收银系统」
+     * 「view / space」这种<b>别的单词的一截</b>也算命中，而命中一个 {@code tool_policy: restrict}
+     * 的 skill 是有代价的（注入一整套无关指引 + 把可见工具裁到它的白名单）。
+     *
+     * <p>所以规则只作用在<b>触发词本身是拉丁字母/数字的那一端</b>：
+     * 该端相邻的那个字符不能也是 ASCII 字母或数字。中文、空白、标点、串首串尾都算边界。
+     * 于是「IPO」「明年启动 IPO，」「公司考虑IPO进程」照旧命中，「VIPO」「IPOS」不再命中；
+     * 两端都是中文的触发词（「上市路径」「会议纪要」）行为逐字节不变。
+     *
+     * <p><b>它治不了什么</b>：「帮我把这段 IPO 条款改一下」两端是空格与中文，仍然命中——
+     * 中文语境下的过宽只能靠把触发词写成短语来收，以及靠白名单带上编辑面
+     * 让误命中退化成「指引不对但能力还在」。两条都在本次一起做了。
+     */
+    private static boolean containsTrigger(String normalizedInput, String normalizedTrigger) {
+        boolean leftBounded = isLatinWordChar(normalizedTrigger.charAt(0));
+        boolean rightBounded = isLatinWordChar(normalizedTrigger.charAt(normalizedTrigger.length() - 1));
+        if (!leftBounded && !rightBounded) {
+            return normalizedInput.contains(normalizedTrigger);
+        }
+        int from = 0;
+        while (true) {
+            int at = normalizedInput.indexOf(normalizedTrigger, from);
+            if (at < 0) {
+                return false;
+            }
+            int end = at + normalizedTrigger.length();
+            boolean leftOk = !leftBounded || at == 0 || !isLatinWordChar(normalizedInput.charAt(at - 1));
+            boolean rightOk = !rightBounded || end == normalizedInput.length()
+                    || !isLatinWordChar(normalizedInput.charAt(end));
+            if (leftOk && rightOk) {
+                return true;
+            }
+            // 同一个触发词在一条输入里可能出现多次，只要有一次落在词边界上就算命中
+            from = at + 1;
+        }
+    }
+
+    /** ASCII 字母或数字——只有这类字符构成"词的内部"，中文/空白/标点一律算词边界。 */
+    private static boolean isLatinWordChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
     }
 
     /**

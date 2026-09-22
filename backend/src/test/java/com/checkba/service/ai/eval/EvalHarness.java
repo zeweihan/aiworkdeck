@@ -227,6 +227,12 @@ public final class EvalHarness {
         request.setMessage(c.userInput);
         request.setModel("anthropic/claude-3.5-sonnet");
         request.setMode(c.mode);
+        if (c.clientCapability != null && !c.clientCapability.isBlank()) {
+            // 会话级客户端能力：决定下发 doc_*（LOWA）还是 office_*（任务窗格）那一族。
+            // 必须用 registry 自己那一个登记簿——init() 把工具的 ToolMeta.requiresHost 声明推进去了，
+            // 另 new 一个拿不到那些声明（dev-board#799）。
+            registry.capabilities().record(request.getConversationId(), c.clientCapability, c.officeHost);
+        }
         if (c.activeDocument != null) {
             AiAgentController.ContextItem active = new AiAgentController.ContextItem();
             active.setId(c.activeDocument.id);

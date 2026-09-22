@@ -164,7 +164,7 @@ admin 同 PluginDevController 口径）+ `service/ai/tools/CapabilityTools`（�
 
 ## skill 文件格式（docs/SKILL_SPEC.md、docs/PLUGIN_SPEC.md）
 
-目录式：`skills/<id>/skill.yml + prompt.md`。skill.yml 字段：`id`（必需，kebab-case，启停键）、`name`、`description`、`triggers`（必需，关键词数组，用户输入"包含"即命中）、`prompt`（默认 prompt.md）、`tool_policy`（`passthrough`（缺省，不裁工具）/ `restrict`）、`allowed_tools`（须为 ToolRegistry 真实工具名；只在 `restrict` 下参与裁剪）、`output`、`requires`（如 evidence.retrieve.v1，v1 仅声明）。未知字段忽略；解析失败跳过不阻断。
+目录式：`skills/<id>/skill.yml + prompt.md`。skill.yml 字段：`id`（必需，kebab-case，启停键）、`name`、`description`、`triggers`（必需，关键词数组，用户输入"包含"即命中；拉丁串两端要求整词，口径见下文「触发词匹配口径」）、`prompt`（默认 prompt.md）、`tool_policy`（`passthrough`（缺省，不裁工具）/ `restrict`）、`allowed_tools`（须为 ToolRegistry 真实工具名；只在 `restrict` 下参与裁剪）、`output`、`requires`（如 evidence.retrieve.v1，v1 仅声明）。未知字段忽略；解析失败跳过不阻断。
 
 **应用语言字段（EN 版 PR5，全部可选）**：`languages`（数组，可用的应用语言；**缺省 = 只在 zh-CN 可用**——存量第三方 skill 没这个字段，英文版自动隐藏，方向安全）、`name_en` / `triggers_en` / `output_en`（英文侧文本；triggers_en 只在 en-US 参与匹配，zh-CN 匹配行为不变）、目录下可放 `prompt.en.md`（存在即加载，英文注入优先用它，缺省回退 prompt.md）。语言过滤收口在 `SkillRegistry.isAvailable`（match/钉选/注入三条路径共用，不会只滤列表不滤注入）；内置三 skill：股东大会核查与上市路径 `languages: [zh-CN]`（中国法深度绑定，且后者触发词含 IPO/SPAC/VIE 会命中英文输入，必须真隐藏），诉讼可视化双语（带 triggers_en + prompt.en.md）。守卫在 BuiltinSkillsTest / SkillRouterTest 的语言组测试。注意 `/api/skills/list` 与广场列表**不做**语言过滤（管理面照常展示，只是英文模式下 zh-only skill 永不注入）。**因此该列表带了 `available` 字段（= `SkillRegistry.isAvailable`）与 `nameEn`**：对话面板那个「主动加载技能」选择器必须自己按 `available` 滤一道，否则英文界面下用户能勾中一个 zh-only skill，勾了永远不生效也没有提示。
 
@@ -203,12 +203,42 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - 无法识别的 `tool_policy` 值同样回落 passthrough（判不准时不裁剪）。
 
 八个自带 skill 里六个显式写了 `tool_policy: restrict`（= 保持现状，各自 yml 里有一段理由），
-`desensitize` / `text-to-speech` 不写（= 本次要修的那两个）。**已知风险留给维护者拍板**：
-`meeting-recorder`（默认开、触发词「会议纪要」「整理会议」很宽）与 `listing-pathway`（触发词有
-「IPO」「VIE」「红筹」这种短词，匹配是对整条输入做 contains）的白名单里一个 `doc_*` / `office_*`
-都没有，命中即失去全部编辑能力——与上面同一形态，只是清单非空所以更隐蔽。本次刻意没有单方面改
-（回放用例 `skill-listing-pathway-trigger-trim-xml` 与 `skill-orchestration-tools-not-trimmed` 都钉着
-listing-pathway 会裁剪），两条 skill.yml 里各留了一段说明。
+`desensitize` / `text-to-speech` 不写。
+
+**`restrict` 的 skill 白名单必须含编辑面**（dev-board#818，2026-09-22）：裁剪只影响可见性、
+不报错也不告警，白名单里没有 `doc_*` / `office_*` 时，命中那一轮模型看不见任何编辑原语，
+表现就是「AI 突然不会改文档了」——与 A2 同一形态，只是清单非空所以更隐蔽。
+`meeting-recorder`（默认开、触发词「会议纪要」很宽）与 `listing-pathway`（触发词含 IPO/VIE/SPAC）
+此前正是这样，已补齐读写基本面（`doc_get_document_text` / `doc_get_outline` / `doc_find_text` /
+`doc_get_cursor_context` / `doc_insert_at_cursor` / `doc_insert_under_heading` / `doc_insert_table` /
+`doc_find_replace` / `doc_replace_selection` / `doc_undo`）。
+**两族都要列**：`ClientCapabilityService` 按会话客户端只放行其中一族（工作台 LOWA 会话见 `doc_*`，
+Office/WPS 任务窗格会话见 `office_*`），skill.yml 不能替它挑；只列一族等于对另一类客户端完全失能。
+守卫：`BuiltinSkillsTest.restrictingSkillsCarryTheEditingSurface` 给三个 restrict skill 钉了下限，
+回放用例 `skill-meeting-recorder-doc-editing-surface-visible`（LOWA 会话）与
+`skill-listing-pathway-office-editing-surface-visible`（Word 任务窗格会话，用例里写
+`clientCapability: office` 让 `EvalHarness` 登记会话能力）各守一族。
+`skill-listing-pathway-trigger-trim-xml` 仍断言裁剪发生——判据换成了「`doc_open_file` /
+`doc_start_stream` / `doc_apply_standard_format` 仍在白名单外」，别把它改成整族放开。
+
+### 触发词匹配口径（`SkillRouter.containsTrigger`）
+
+**子串匹配 + 拉丁串两端整词**（dev-board#818）。用户输入与触发词都先转小写，然后：
+- 触发词那一端是 ASCII 字母/数字时，输入里相邻的那个字符不能也是 ASCII 字母/数字；
+  中文、空白、标点、串首串尾都算边界。同一触发词在输入里出现多次，有一次落在边界上就算命中。
+- 触发词两端都不是拉丁字母数字（绝大多数中文触发词）时退化为纯 `contains`，**行为逐字节不变**。
+
+为什么不是全局整词：中文没有词分隔符，「上市路径」在「公司上市路径选择」里就是紧贴中文出现的，
+套 `\b` 会让中文触发词一个都匹配不上。为什么不是纯 `contains`：`IPO` / `VIE` / `SPAC` 这类
+三四字母缩写会把「VIPO 品牌」「IPOS 系统」「view」「space」也算命中，而命中一个 `restrict` 的
+skill 是有代价的（注入无关指引 + 裁工具）。
+
+**它治不了中文语境的过宽**：「帮我把这段 IPO 条款改一下」两端是空格与中文，照样命中。
+这一半只能靠两件事兜——把短词写成短语（`红筹`→`红筹架构`/`红筹上市`，`借壳`→`借壳上市`，
+`证券化`→`证券化路径`/`实现证券化`，`整理会议`→`整理会议录音`/`整理会议记录`），
+以及上面那条「白名单带编辑面」，让误命中退化成「指引不对但能力还在」。
+单测 `SkillRouterTest.latinTriggersMatchWholeWordOnly` / `chineseTriggersStayContainsMatching`，
+触发词清单守卫 `BuiltinSkillsTest.overBroadTriggersAreTightened`。
 
 命中一个 `restrict` 的 skill 后模型可见的工具 = **allowed_tools ∪ base-tools ∪ 编排类工具**，
 三份来源语义不同，别合并：

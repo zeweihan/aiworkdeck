@@ -96,6 +96,31 @@ class SkillRouterTest {
     }
 
     @Test
+    @DisplayName("拉丁触发词按整词匹配：IPO 单独出现命中，VIPO / IPOS 这类同形前后缀不命中（dev-board#818）")
+    void latinTriggersMatchWholeWordOnly() {
+        // 命中：串两端是串首/串尾、空白、中文或标点——都不是拉丁字母数字
+        assertEquals("skill-a", router.match("IPO").orElseThrow().getId(), "整条输入就是触发词本身");
+        assertEquals("skill-a", router.match("明年启动 IPO，需要准备什么").orElseThrow().getId(),
+                "左空格右中文标点");
+        assertEquals("skill-a", router.match("公司考虑IPO进程").orElseThrow().getId(),
+                "紧贴中文（中文没有词边界，贴着也算整词）");
+        assertEquals("skill-a", router.match("走ipo还是并购").orElseThrow().getId(), "大小写不敏感");
+
+        // 不命中：相邻位置还是拉丁字母/数字，说明它只是别的单词的一截
+        assertEquals(Optional.empty(), router.match("VIPO 品牌升级方案"), "左边紧贴字母 V");
+        assertEquals(Optional.empty(), router.match("IPOS 收银系统选型"), "右边紧贴字母 S");
+        assertEquals(Optional.empty(), router.match("代号 X1IPO2 的内部项目"), "两边都是字母数字");
+    }
+
+    @Test
+    @DisplayName("中文触发词仍是子串匹配：中文没有词边界，整词规则只作用在拉丁串的两端（dev-board#818）")
+    void chineseTriggersStayContainsMatching() {
+        assertEquals("skill-b", router.match("公司上市路径选择怎么做").orElseThrow().getId(),
+                "「上市路径」夹在中文中间照样命中");
+        assertEquals("skill-a", router.match("这家公司要上市了").orElseThrow().getId());
+    }
+
+    @Test
     @DisplayName("多命中取最长触发词：'上市路径' 同时命中 A(上市) 与 B(上市路径)，B 胜出")
     void longestTriggerWins() {
         assertEquals("skill-b", router.match("比较一下上市路径怎么选").orElseThrow().getId());
