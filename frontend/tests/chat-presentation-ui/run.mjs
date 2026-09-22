@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import puppeteer from 'puppeteer-core'
+import { measureStreaming, report } from './perf.mjs'
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const fixture = fileURLToPath(new URL('./', import.meta.url))
 const source = readFileSync(`${root}src/App.vue`, 'utf8')
@@ -371,6 +372,66 @@ try {
   await page.mouse.move(10, 10)
   await wait(() => !document.querySelector('.rail-panel'))
 
+
+  // ---- 长会话性能（dev-board#811 K31 / 审查 C-05、C-10、F12）----
+  // 病灶：`chatTurns` 挂在深响应式 bubbles 上，流式回答每个 token 都让它全量重建，
+  // 模板又把 200 轮的用户气泡子树（两个 SVG 按钮 + 页脚）跟着重建一遍；MarkdownPreview
+  // 则每帧整篇重解析、整段重写 v-html。改造前本机实测：200 轮 + 3000 token 的回答
+  // 每 token 14.5ms、墙钟 44.6 秒、13 个长任务共 826ms；改造后 1.7ms / 5.2 秒 / 0 个长任务。
+  //
+  // **阈值刻意宽松**：这里要拦的是整片回归（有人把 v-memo 拿掉、把 turn 复用去掉、
+  // 把 markdown 改回整篇重渲），不是守住某台机器上的具体毫秒数。
+  await page.setViewport({ width: 420, height: 860 })
+  await page.evaluate(() => window.loadManyTurns(200))
+  await wait(() => window.chatState.chatTurns.length === 200)
+  const perf = await measureStreaming(page, { tokens: 800 })
+  report('200 轮 + 800 token', perf)
+  const perToken = perf.wall / 800
+  assert.ok(perToken < 8, `长会话流式每 token 的主线程占用（实测 ${perToken.toFixed(2)}ms）整片退化了`)
+  assert.ok(perf.parsedChars < 800 * 4000,
+    `markdown 不该每帧整篇重解析（实测喂进解析器 ${perf.parsedChars} 字符）`)
+  assert.ok(perf.worstFrame < 200, `最坏一帧 ${perf.worstFrame.toFixed(0)}ms：长会话流式不得整片掉帧`)
+
+  // 流式中正文选区不被清（审查 C-10 的用户可见面）：改造前每帧整段重写 innerHTML，
+  // 在已经输出的正文里选中文字会被下一个 token 当场清掉，生成过程中根本没法复制。
+  await page.evaluate(() => window.loadFixture('long'))
+  await wait(() => window.chatState.chatTurns.length === 2)
+  // 逐帧长出来，而不是一次性塞进去：分段是在「正文变长」这条路上做的，
+  // 挂载那一刻就已经很长的静态消息本来也不需要分段（没有 DOM 要保住）。
+  await page.evaluate(async () => {
+    const bubble = window.chatState.bubbles.at(-1)
+    bubble.isStreaming = true
+    for (let i = 0; i < 140; i += 1) {
+      bubble.content += `\n\n### 第 ${i + 1} 项\n本项说明付款期限与违约责任，建议补充验收标准。`
+      if (i % 10 === 9) await new Promise(r => requestAnimationFrame(r))
+    }
+    await new Promise(r => requestAnimationFrame(r))
+  })
+  await new Promise(resolve => setTimeout(resolve, 120))
+  const selection = await page.evaluate(async () => {
+    const stable = document.querySelector('.message-row.assistant .markdown-stable')
+    if (!stable) return { ok: false, why: '正文没有切出定稿前缀' }
+    const target = stable.querySelector('p')
+    if (!target) return { ok: false, why: '定稿前缀里没有段落' }
+    const range = document.createRange()
+    range.selectNodeContents(target)
+    const sel = window.getSelection()
+    sel.removeAllRanges()
+    sel.addRange(range)
+    const before = sel.toString()
+    // 继续流式若干帧
+    for (let i = 0; i < 20; i += 1) {
+      window.chatState.bubbles.at(-1).content += '继续输出的正文。'
+      await new Promise(r => requestAnimationFrame(r))
+    }
+    return { ok: true, before, after: window.getSelection().toString() }
+  })
+  assert.ok(selection.ok, `选区用例前置条件不成立：${selection.why}`)
+  assert.ok(selection.before.length > 0, '用例本身要先选中一段文字')
+  assert.equal(selection.after, selection.before,
+    '流式期间已定稿的正文不许被重写——重写会把用户正在选的文字当场清掉')
+  await page.evaluate(() => { window.getSelection().removeAllRanges(); window.chatState.bubbles.at(-1).isStreaming = false })
+
   // ---- 复制（dev-board#790 / 审查 F2、F6、D-07）----
   // 全仓此前一处剪贴板调用都没有，而复制是对话类产品里点击率最高的那颗按钮。
   // 无头 Chrome 读不回剪贴板（异步 API 恒 NotAllowedError，execCommand('paste') 也被拒，
@@ -595,7 +656,7 @@ try {
   ]), ['Copy', 'Regenerate', 'Copy', 'Copy call'], 'English labels for copy/regenerate')
   await page.screenshot({ path: `${shots}/k11k13-english.png` })
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, @ mention picker and the project-pick tab, composer key bindings (Esc/Cmd+Enter/history recall) and focusable send-stop buttons, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, @ mention picker and the project-pick tab, composer key bindings (Esc/Cmd+Enter/history recall) and focusable send-stop buttons, long-conversation streaming cost and selection survival, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

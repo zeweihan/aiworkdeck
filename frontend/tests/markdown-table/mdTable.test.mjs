@@ -15,6 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { renderMarkdown } from '../../src/utils/markdownRenderer.js'
+import { nextStableLength } from '../../src/utils/markdownStableSplit.js'
 
 const SRC = readFileSync(new URL('../../src/components/MarkdownPreview.vue', import.meta.url), 'utf8')
 
@@ -23,9 +24,11 @@ function makeVm(content) {
     renderMarkdown,
     getFileDownloadUrl: async () => '',
     getAuthHeaders: () => ({}),
-    // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790）
+    // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790），
+    // nextStableLength 供流式分段渲染（dev-board#811 K31）
     t: (k) => k,
     copyToClipboard: () => true,
+    nextStableLength,
   }
   const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '')
@@ -43,6 +46,10 @@ function makeVm(content) {
   return vm
 }
 
+// 正文现在分成「已定稿前缀 + 尾巴」两段各自 v-html（dev-board#811 K31），
+// 用户看到的是两段拼起来的那一整篇。
+const shown = (vm) => (vm.stableHtml || '') + (vm.tailHtml || '')
+
 const TABLE_MD = `# 核查表
 
 | 序号 | 核查事项 | 核查依据 | 核查方法 | 核查结论 | 补充核查建议 |
@@ -58,7 +65,7 @@ const x = 1
 `
 
 test('markdown-it 渲染出的每个 <table> 都被 <div class="md-table-scroll"> 直接包裹', () => {
-  const html = makeVm(TABLE_MD).renderedHtml
+  const html = shown(makeVm(TABLE_MD))
   const tableCount = (html.match(/<table>/g) || []).length
   assert.equal(tableCount, 1, '用例本身要包含一张表格')
   // 每个 <table> 前紧邻 wrapper 开标签
@@ -70,14 +77,14 @@ test('markdown-it 渲染出的每个 <table> 都被 <div class="md-table-scroll"
 })
 
 test('非表格内容渲染形态不受影响（标题、代码块照常）', () => {
-  const html = makeVm(TABLE_MD).renderedHtml
+  const html = shown(makeVm(TABLE_MD))
   assert.match(html, /<h1>核查表<\/h1>/)
   assert.match(html, /<pre><code class="language-js">/)
 })
 
 test('多张表格：每张各自被单独包裹，不会串包', () => {
   const twoTables = `${TABLE_MD}\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n`
-  const html = makeVm(twoTables).renderedHtml
+  const html = shown(makeVm(twoTables))
   const tableCount = (html.match(/<table>/g) || []).length
   assert.equal(tableCount, 2)
   const openMatches = [...html.matchAll(/<div class="md-table-scroll"><table>/g)]

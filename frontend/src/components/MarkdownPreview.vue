@@ -7,12 +7,19 @@
     </view>
     <!-- 代码块复制用事件委托：正文每帧整段重写 innerHTML，给每颗按钮单独绑监听
          会在流式过程中反复建了又丢（dev-board#790）。 -->
-    <view v-else class="markdown-body" v-html="renderedHtml" @click="handleBodyClick"></view>
+    <!-- 两段 v-html（dev-board#811 K31）：前一段是已经定稿的前缀，字符串不变 Vue 就不碰它的
+         DOM——用户在那里选中的文字不会被下一个 token 清掉，也不用重新解析。切点规则见
+         utils/markdownStableSplit.js。正文短的时候 stableHtml 恒为空串，形态与改造前一致。 -->
+    <view v-else class="markdown-body" @click="handleBodyClick">
+      <view v-if="stableHtml" class="markdown-stable" v-html="stableHtml"></view>
+      <view v-if="tailHtml" class="markdown-tail" v-html="tailHtml"></view>
+    </view>
   </view>
 </template>
 
 <script>
 import { renderMarkdown } from '@/utils/markdownRenderer.js'
+import { nextStableLength } from '@/utils/markdownStableSplit.js'
 import { copyToClipboard } from '@/utils/chatClipboard.js'
 import { t } from '@/i18n'
 import { getFileDownloadUrl } from '@/services/api.js'
@@ -50,7 +57,9 @@ export default {
       // 首屏同步渲染一次：静态预览（文件、历史消息、计划卡）挂载后立刻就要有内容，
       // 之后的变更才开始合帧
       // 代码块复制键的文字随渲染一起生成（见 utils/markdownRenderer.js 为什么不在那边 import i18n）
-      renderedHtml: renderMarkdown(this.content || '', { copyLabel: t('chat.copyCode') }),
+      // 已定稿前缀的 HTML（流式期间不重算、不重写 DOM）与还在长的尾巴
+      stableHtml: '',
+      tailHtml: renderMarkdown(this.content || '', { copyLabel: t('chat.copyCode') }),
       loadedContent: '',
       loading: false
     }
@@ -80,6 +89,10 @@ export default {
       cancelFrame(this.renderFrame)
       this.renderFrame = null
     }
+    if (this.settleTimer != null) {
+      clearTimeout(this.settleTimer)
+      this.settleTimer = null
+    }
   },
   methods: {
     /**
@@ -107,8 +120,54 @@ export default {
         this.renderNow()
       })
     },
+    /**
+     * 流式渲染的分段口径（dev-board#811 K31）。
+     * 前缀只在它真的前进时重新解析一段新的，尾巴每帧重解析——尾巴由 STABLE_STEP 封顶，
+     * 所以单帧成本不再随正文长度上涨。
+     *
+     * 非单调的正文变化（重新生成把正文清空、回灌换了一条消息）一律推倒重来：判据是
+     * 「长度变短」或「前缀末尾那 32 个字符对不上」，两条都是 O(1)。
+     */
     renderNow() {
-      this.renderedHtml = renderMarkdown(this.sourceText, { copyLabel: t('chat.copyCode') })
+      const env = { copyLabel: t('chat.copyCode') }
+      const text = this.sourceText
+      if (!this.stableLength) this.stableLength = 0
+      if (text.length < this.stableLength ||
+          (this.stableLength > 0 && text.slice(this.stableLength - 32, this.stableLength) !== this.stableMark)) {
+        this.stableLength = 0
+        this.stableParts = []
+        this.stableMark = ''
+        this.stableHtml = ''
+      }
+      const advanced = nextStableLength(text, this.stableLength)
+      if (advanced > this.stableLength) {
+        if (!this.stableParts) this.stableParts = []
+        this.stableParts.push(renderMarkdown(text.slice(this.stableLength, advanced), env))
+        this.stableLength = advanced
+        this.stableMark = text.slice(advanced - 32, advanced)
+        this.stableHtml = this.stableParts.join('')
+      }
+      this.tailHtml = renderMarkdown(text.slice(this.stableLength), env)
+      this.scheduleSettle()
+    },
+    /**
+     * 定稿校正：正文不再变化之后整篇重渲一次，只有与分段结果不同才写回 DOM。
+     * 切点规则挡住了绝大多数分段差异，挡不住的（尾巴里才出现的链接引用定义之类）
+     * 在这里被改正；结果相同就一个字节都不动，用户刚选中的文字也就不会被清掉。
+     */
+    scheduleSettle() {
+      if (!this.stableLength) return
+      if (this.settleTimer != null) clearTimeout(this.settleTimer)
+      this.settleTimer = setTimeout(() => {
+        this.settleTimer = null
+        const whole = renderMarkdown(this.sourceText, { copyLabel: t('chat.copyCode') })
+        if (whole === this.stableHtml + this.tailHtml) return
+        this.stableParts = [whole]
+        this.stableLength = this.sourceText.length
+        this.stableMark = this.sourceText.slice(-32)
+        this.stableHtml = whole
+        this.tailHtml = ''
+      }, 400)
     },
     async loadFileContent() {
       if (!this.file) return
@@ -166,6 +225,13 @@ export default {
   overflow-wrap: break-word;
   user-select: text; /* Allow text selection for copying */
   -webkit-user-select: text;
+}
+
+/* 两段容器不生成盒子：正文被切成「定稿前缀 + 尾巴」两个 v-html 之后，
+   段落外边距要能照常穿过它们合并，否则切点处会多出一截空白（dev-board#811 K31）。 */
+.markdown-body > .markdown-stable,
+.markdown-body > .markdown-tail {
+  display: contents;
 }
 
 .markdown-body :deep(h1),

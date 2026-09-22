@@ -954,18 +954,15 @@ class ContextAssemblerServiceTest {
     @Test
     @DisplayName("修复：历史里一条空白 content 的消息被跳过，不再让整轮 assemble 抛异常")
     void blankHistoryMessageIsSkippedNotThrown() {
-        com.checkba.model.entity.ProjectAiMessage blank = new com.checkba.model.entity.ProjectAiMessage();
-        blank.setId(1L);
-        blank.setRole("USER");
-        blank.setContent(""); // 存量脏数据：曾经落库的空白 message
-
-        com.checkba.model.entity.ProjectAiMessage ok = new com.checkba.model.entity.ProjectAiMessage();
-        ok.setId(2L);
-        ok.setRole("USER");
-        ok.setContent("这是一条正常的历史消息");
+        // 存量脏数据：曾经落库的空白 message
+        com.checkba.repository.ProjectAiMessageRepository.HistoryLine blank =
+                new com.checkba.repository.ProjectAiMessageRepository.HistoryLine("USER", "");
+        com.checkba.repository.ProjectAiMessageRepository.HistoryLine ok =
+                new com.checkba.repository.ProjectAiMessageRepository.HistoryLine("USER", "这是一条正常的历史消息");
 
         ProjectAiMessageService msgSvc = mock(ProjectAiMessageService.class);
-        when(msgSvc.listByConversationId("conv-1")).thenReturn(List.of(blank, ok));
+        // 组装走的是两列投影（dev-board#811 K31）：只有 role 与 content，不查附件
+        when(msgSvc.listHistoryForAssembly("conv-1")).thenReturn(List.of(blank, ok));
 
         ContextAssemblerService withBlankHistory = new ContextAssemblerService(
                 legalTools, msgSvc, mock(FileContextLoader.class),

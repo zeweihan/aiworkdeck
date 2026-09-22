@@ -294,10 +294,31 @@
       <div
         class="message-list"
         ref="messageList"
-        @scroll="handleMessageScroll"
+        @scroll="handleHistoryScroll"
       >
       <view ref="messageContent" class="message-list-content">
-        <view v-for="turn in chatTurns" :key="turn.key" :data-turn-key="turn.key" class="conversation-turn">
+        <view
+          v-for="turn in chatTurns"
+          :key="turn.key"
+          v-memo="[turn, isStreaming, bubbles.length,
+                   turn.user && turn.user.bubble.contentHtml,
+                   turn.user && turn.user.bubble.content,
+                   turn.user && turn.user.bubble.displayContent,
+                   turn.user && turn.user.bubble.timestamp,
+                   turn.user && turn.user.bubble.receiptState,
+                   turn.user && turn.user.bubble.submissionMode,
+                   turn.user && turn.user.bubble.wasPendingInbox,
+                   turn.user && turn.user.bubble.dbMessageId,
+                   turn.user && turn.user.bubble.clientRequestId,
+                   turn.user && turn.user.bubble.images,
+                   turn.user && turn.user.bubble.images && turn.user.bubble.images.length,
+                   turn.user && turn.user.bubble.contextFiles,
+                   turn.user && turn.user.bubble.contextFiles && turn.user.bubble.contextFiles.length,
+                   turn.user && turn.user.bubble.contextNotices,
+                   turn.user && turn.user.bubble.contextNotices && turn.user.bubble.contextNotices.length]"
+          :data-turn-key="turn.key"
+          class="conversation-turn"
+        >
         <view
           v-for="{ bubble: msg, index } in (turn.user ? [turn.user, ...turn.assistants] : turn.assistants)"
           :key="msg.id || index"
@@ -862,7 +883,7 @@ import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
 import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
@@ -1127,8 +1148,12 @@ export default {
     const inboxRunActive = computed(() => isStreaming.value)
     const messageList = ref(null)
     const messageContent = ref(null)
+    // 内容没变的轮次要保持同一个 turn 对象（dev-board#811 K31）：模板上那条 v-memo
+    // 以它为第一依赖，身份一变就整棵重建。**这个 cache 必须是普通对象，不能进响应式数据**
+    // ——它每次求值都会被写一遍，放进 ref/reactive 会让 computed 自己把自己弄脏。
+    const turnCache = {}
     const chatTurns = computed(() => buildChatTurns(bubbles.value, {
-      isStreaming: isStreaming.value, runStatus: agentRunStatus.value
+      isStreaming: isStreaming.value, runStatus: agentRunStatus.value, cache: turnCache
     }))
     // 待处理定位条：长会话里反问卡/审批卡会被滚出视野，用户既看不见也回不去（#663）。
     // 只在「确实测量到它不在可视区」时出现——看得见的卡再挂一条提示只是噪音。
@@ -2425,18 +2450,17 @@ export default {
     }
 
     // --- History Loading Logic ---
-    const loadMessages = (conversationId, loadedMsgs) => {
-       console.log('[ChatInterface] Loading history...', loadedMsgs.length)
-       setConversationId(conversationId)  // This triggers resetSSE internally
-       clearBubbles()  // Clear existing using composable method
-       selectedSkillIds.value = [] // 切会话即重置手动选择：技能是按轮携带的，不该跨会话粘住
-       clearAttachmentDraft()      // 同理：上一段对话挂着的材料不该跟进这一段
-
-       loadedMsgs.forEach(msg => {
+    /**
+     * 历史消息 → 气泡。首屏与「向上翻更早」两条路共用同一份映射：各写一份的话
+     * 翻上去的那几轮会和首屏那几轮长得不一样（附件、回退键、时间戳都在这里补）。
+     */
+    const historyBubbles = (loadedMsgs) => {
+       const built = []
+       ;(loadedMsgs || []).forEach(msg => {
           const role = msg.role?.toUpperCase() || 'USER'
 
           if (role === 'USER') {
-              bubbles.value.push({
+              built.push({
                   id: msg.id,
                   // 回退定位键：回灌的气泡有真正的主键，用它；clientRequestId 是本字段上线后
                   // 落库的行才有（存量行为 null），两者任给其一就够（见 rollbackLocator）
@@ -2471,19 +2495,52 @@ export default {
                   const planIndex = bubble.timeline.findLastIndex(entry => entry.type === 'process' && entry.data.items.some(isPlanSnapshotCall))
                   bubble.timeline.splice(planIndex < 0 ? bubble.timeline.length : planIndex + 1, 0, { type: 'plan', data: recoveredTodos })
               }
-              bubbles.value.push(bubble)
+              built.push(bubble)
           }
        })
+       return built
+    }
 
-       // 问题卡的已回答判定：这条助手消息后面还有用户消息，说明那一问已经答过了。
-       // 只写 answered（历史态徽标），不靠它控制可操作性——那条链仍是 RootBubble 的
-       // isLatest（仅最新一条助手消息可操作）。两者一致：真正未答的那一问必然是末条。
+    // 问题卡的已回答判定：这条助手消息后面还有用户消息，说明那一问已经答过了。
+    // 只写 answered（历史态徽标），不靠它控制可操作性——那条链仍是 RootBubble 的
+    // isLatest（仅最新一条助手消息可操作）。两者一致：真正未答的那一问必然是末条。
+    const markAnsweredQuestions = () => {
        let seenLaterUser = false
        for (let i = bubbles.value.length - 1; i >= 0; i--) {
           const b = bubbles.value[i]
           if (b.role === 'USER') { seenLaterUser = true; continue }
           if (b.question && seenLaterUser) b.question.answered = true
        }
+    }
+
+    // 历史分页（dev-board#811 K31，审查 C-12）。首屏只取最近一页，向上滚再补更早的。
+    // hasMore 为假时这三个状态恒定，翻页那条链整条不参与——旧后端（不认 limit，回裸数组）
+    // 与夹具直接传数组的调用一样落在这一档。
+    // 首屏取多少条。60 ≈ 30 轮问答，桌面端一屏往上翻两三次的量；再大就退回「打开历史
+    // 先卡一下」，再小则几乎每次打开都要立刻补一页。
+    const HISTORY_PAGE_SIZE = 60
+    const historyHasMore = ref(false)
+    const historyBefore = ref(null)
+    const historyLoadingOlder = ref(false)
+
+    /**
+     * @param loaded 整条会话的数组（旧调用形态、夹具、旧后端），或
+     *   `{ messages, hasMore, nextBefore }` 信封（带 limit 请求时后端回的形状）
+     */
+    const loadMessages = (conversationId, loaded) => {
+       const page = Array.isArray(loaded) ? { messages: loaded, hasMore: false, nextBefore: null } : (loaded || {})
+       const loadedMsgs = page.messages || []
+       console.log('[ChatInterface] Loading history...', loadedMsgs.length)
+       setConversationId(conversationId)  // This triggers resetSSE internally
+       clearBubbles()  // Clear existing using composable method
+       selectedSkillIds.value = [] // 切会话即重置手动选择：技能是按轮携带的，不该跨会话粘住
+       clearAttachmentDraft()      // 同理：上一段对话挂着的材料不该跟进这一段
+       historyHasMore.value = !!page.hasMore
+       historyBefore.value = page.nextBefore ?? null
+       historyLoadingOlder.value = false
+
+       bubbles.value.push(...historyBubbles(loadedMsgs))
+       markAnsweredQuestions()
 
        // 后台续跑关键一步：切回会话时重连 SSE。后端 connect 会推 run_state
        // （运行中还会推 state_recovery 全量续流 + plan_update 恢复任务清单），
@@ -2491,6 +2548,58 @@ export default {
        reattachSSE(conversationId)
 
        scrollToBottom()
+    }
+
+    /**
+     * 向上补一页更早的消息。
+     *
+     * **补完必须把阅读位置钉回原处**：prepend 会把内容整体往下推，不补偿的话用户每翻一页
+     * 就被弹到一段完全不相干的对话上。先量高度，插完再把 scrollTop 加上长出来的那一截。
+     */
+    const loadOlderMessages = async () => {
+       const conversationId = currentConversationId.value
+       if (!historyHasMore.value || historyLoadingOlder.value || !conversationId) return
+       historyLoadingOlder.value = true
+       const list = messageList.value?.$el || messageList.value
+       const heightBefore = list ? list.scrollHeight : 0
+       try {
+          const page = await getAiHistory({
+             projectId: props.projectId,
+             conversationId,
+             limit: HISTORY_PAGE_SIZE,
+             before: historyBefore.value
+          })
+          // 竞态防护：翻页途中切了会话，这一页就不是这条会话的了，插进去会串会话
+          if (currentConversationId.value !== conversationId) return
+          // 旧后端不认 limit，回的是整条会话的裸数组——那就是已经全在手上了，收起翻页
+          if (Array.isArray(page)) {
+             historyHasMore.value = false
+             historyBefore.value = null
+             return
+          }
+          const older = (page && page.messages) || []
+          if (older.length) {
+             bubbles.value.unshift(...historyBubbles(older))
+             markAnsweredQuestions()
+          }
+          historyHasMore.value = !!(page && page.hasMore)
+          historyBefore.value = (page && page.nextBefore) ?? historyBefore.value
+          await nextTick()
+          if (list) list.scrollTop += list.scrollHeight - heightBefore
+       } catch (e) {
+          console.error('[ChatInterface] load older history failed', e)
+       } finally {
+          historyLoadingOlder.value = false
+       }
+    }
+
+    // 滚到顶就补上一页。判据用「离顶不到一屏」而不是 scrollTop===0：等撞到顶再拉，
+    // 用户必然先看到一下空白。
+    const handleHistoryScroll = (event) => {
+       handleMessageScroll(event)
+       if (!historyHasMore.value || historyLoadingOlder.value) return
+       const list = messageList.value?.$el || messageList.value
+       if (list && list.scrollTop < list.clientHeight) loadOlderMessages()
     }
 
     // 近期对话列表的状态点（数据字段由宿主 fetchChatHistory 映射）
@@ -3684,7 +3793,8 @@ export default {
        handleInboxSendNow,
        tokenUsage,
        messageList, messageContent, chatTurns,
-       followLatest, handleMessageScroll, scrollToBottom, attentionNotice, jumpToAttention,
+       followLatest, handleMessageScroll, handleHistoryScroll, scrollToBottom, attentionNotice, jumpToAttention,
+       historyHasMore, historyLoadingOlder, loadOlderMessages,
        activeTurnKey, handleTurnJump,
        receiptLabel, inboxStreamIds, inboxRunActive, handleInboxLocate,
        contextFiles,

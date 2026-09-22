@@ -6870,9 +6870,14 @@ export default {
         if (unreadIdx >= 0) this.unreadConversations.splice(unreadIdx, 1)
         this.loadingHistory = true // Reuse loading state or local
         try {
+            // 只取最近一页（dev-board#811 K31，审查 C-12）：跑了几十轮、带大量工具过程的
+            // 会话，整条正文可以是几 MB，全量拉一次既慢又白费——更早的那些由
+            // ChatInterface 向上滚动时按游标补。后端不认 limit（旧版本）时仍回裸数组，
+            // loadMessages 两种形状都吃。
             const msgs = await getAiHistory({
                 projectId: this.projectId,
-                conversationId: chat.conversationId
+                conversationId: chat.conversationId,
+                limit: 60
             })
             // 竞态防护：快速切换会话时，丢弃已不是当前选中会话的旧响应，避免旧数据覆盖新会话
             if (this.currentConversationId !== chat.conversationId) return
@@ -6886,7 +6891,7 @@ export default {
             } else {
                 // Fallback for legacy - populate aiMessages directly
                 // 契约 D：用户看 displayContent、为空回退 content（模型永远只看 content）
-                this.aiMessages = (msgs || []).map(m => ({
+                this.aiMessages = ((Array.isArray(msgs) ? msgs : (msgs && msgs.messages)) || []).map(m => ({
                     id: m.id,
                     role: m.role ? m.role.toLowerCase() : 'user',
                     content: m.displayContent || m.content

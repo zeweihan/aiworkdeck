@@ -30,17 +30,65 @@ export function recoverPlanTodos(processes = []) {
   return snapshot
 }
 
-export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null } = {}) {
+// 提问那一行的摘要：剥标签 + 压空白 + 截断。用户气泡的正文落定后就不再变，而这个函数
+// 每个 token 都会被整条会话跑一遍（200 轮 = 200 次全串正则），所以按气泡缓存一份
+// （dev-board#811 K31）。WeakMap 的键是 Vue 给同一个原始对象的那个代理，身份稳定；
+// 气泡被丢弃时条目自己消失。src 一并存下来是因为回退/重新生成会就地改写正文。
+const labelCache = new WeakMap()
+function turnLabel(bubble) {
+  const source = bubble.displayContent || bubble.content || ''
+  const cached = labelCache.get(bubble)
+  if (cached && cached.source === source) return cached.label
+  const label = source.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120)
+  labelCache.set(bubble, { source, label })
+  return label
+}
+
+// 没有清单的轮次共用同一个空数组：todos 按身份比较（它是 planTodos 那个响应式数组本身），
+// 每次现造一个 [] 会让第一轮永远命中不了复用。
+const NO_TODOS = Object.freeze([])
+
+const sameList = (a, b, equal) => a.length === b.length && a.every((item, i) => equal(item, b[i]))
+const sameMember = (a, b) => a.bubble === b.bubble && a.index === b.index
+
+/**
+ * 两个 turn 对象是不是「同一轮、且渲染出来一模一样」。用于复用上一次的对象身份
+ * （见 buildChatTurns 的 cache 参数）。
+ *
+ * **只比派生字段与成员清单，不比气泡内部的正文。** 气泡本身是响应式代理，
+ * ConversationTurn 读 `turn.user.bubble.content` 时会自己登记依赖、正文一变它自己重渲；
+ * 这里要保证的只是「派生出来的东西没变」与「这一轮还是这几条气泡」。
+ */
+function sameTurn(a, b) {
+  return a.key === b.key
+    && a.label === b.label
+    && a.answerIndex === b.answerIndex
+    && a.attentionIndex === b.attentionIndex
+    && a.attentionKind === b.attentionKind
+    && a.status === b.status
+    && a.todos === b.todos
+    && (a.user === b.user || (!!a.user && !!b.user && sameMember(a.user, b.user)))
+    && sameList(a.assistants, b.assistants, sameMember)
+    && sameList(a.processes, b.processes, (x, y) => x === y)
+    && sameList(a.thoughts, b.thoughts, (x, y) => x.key === y.key && x.content === y.content && x.status === y.status)
+}
+
+/**
+ * @param cache 调用方持有的一个普通对象（**不要放进响应式数据**）。给了它，内容没变的
+ *   轮次会原样返回上一次那个对象——这正是 ConversationTurn 能在流式期跳过 200 棵历史
+ *   子树的前提：props 身份不变，Vue 才会整棵跳过。不给就是原来的纯函数行为。
+ */
+export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null, cache = null } = {}) {
   const turns = []
   let turn
   bubbles.forEach((bubble, index) => {
     if (bubble.role === 'USER' || !turn) {
-      turn = { key: String(bubble.id ?? index), user: null, assistants: [], label: '', todos: turn?.todos || [], thoughts: [], processes: [], answerIndex: -1, attentionIndex: -1, attentionKind: '', status: 'idle' }
+      turn = { key: String(bubble.id ?? index), user: null, assistants: [], label: '', todos: turn?.todos || NO_TODOS, thoughts: [], processes: [], answerIndex: -1, attentionIndex: -1, attentionKind: '', status: 'idle' }
       turns.push(turn)
     }
     if (bubble.role === 'USER') {
       turn.user = { bubble, index }
-      turn.label = (bubble.displayContent || bubble.content || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120)
+      turn.label = turnLabel(bubble)
       return
     }
     if (bubble.role !== 'ASSISTANT') return
@@ -75,7 +123,17 @@ export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null 
     }
     if (latest.status !== 'queued') latest.status = (runStatus || (isStreaming ? 'RUNNING' : pendingQuestion ? 'AWAITING_INPUT' : latest.attentionIndex >= 0 ? 'AWAITING_APPROVAL' : 'IDLE')).toLowerCase()
   }
-  return turns
+  if (!cache) return turns
+  const previous = cache.byKey || new Map()
+  const next = new Map()
+  const stable = turns.map(fresh => {
+    const old = previous.get(fresh.key)
+    const kept = old && sameTurn(old, fresh) ? old : fresh
+    next.set(fresh.key, kept)
+    return kept
+  })
+  cache.byKey = next
+  return stable
 }
 
 // The locator bar must point only at cards the user can still act on, so it reads the

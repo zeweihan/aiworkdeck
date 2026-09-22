@@ -85,7 +85,12 @@ window.fetch = async (url, options = {}) => {
   if (String(url).includes('/connect/')) return new Response(new ReadableStream({ start(controller) { window.sseController = controller } }), { headers: { 'Content-Type': 'text/event-stream' } })
   return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json' } })
 }
-const { createApp, h, ref, nextTick } = await import('vue')
+const { createApp, h, ref, nextTick, watch } = await import('vue')
+// 性能用例（perf.mjs）跑在 page.evaluate 里，那段代码不经 vite 转译，`import 'vue'` /
+// `import '@/…'` 都解析不了裸说明符。所以在这里把它要用的两样东西挂出去。
+window.__vueWatch = watch
+window.__markdownInstance = (await import('@/utils/markdownRenderer.js')).markdownInstance
+window.__chatTurnsUrl = new URL('../../src/components/AgentMessage/chatTurns.mjs', import.meta.url).href
 const { default: ChatInterface } = await import('../../src/components/ChatInterface.vue')
 const { i18n } = await import('../../src/i18n/index.js')
 const chat = ref()
