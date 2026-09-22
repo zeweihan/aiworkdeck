@@ -31,6 +31,7 @@ import {
 import { minimalEdits, substringEdits } from './minimalEdit.js'
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
+import { pageText } from './textPaging.js'
 import { t } from './i18n.js'
 // 律所标准格式（HOUSE）单源：backend/src/main/resources/style-profiles/house-default.json 的字节副本，
 // 由 frontend/scripts/sync-house-profile.mjs 同步（npm run build 前自动跑），构建时内联进产物；
@@ -106,6 +107,31 @@ function wordApiDesktop13Supported() {
 function trackedChangesSupported() {
   try {
     return Office.context.requirements.isSetSupported('WordApi', '1.6')
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * Range.insertField + Word.FieldType.toc + Field.updateResult 属 **WordApi 1.5**——
+ * 与 footnoteApiSupported 同一版本号、不同语义（域 vs 脚注），分开命名以免误读
+ * （与 farEastFontSupported / wordApiDesktop13Supported 那对同一条惯例）。
+ */
+function fieldApiSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApi', '1.5')
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * Word.PageSetup（页边距/纸张/方向）属 **WordApiDesktop 1.3**：桌面版专属，Word 网页版没有。
+ * 与 farEastFontSupported / wordApiDesktop13Supported 同一版本号、不同语义，分开命名以免误读。
+ */
+function pageSetupSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApiDesktop', '1.3')
   } catch (e) {
     return false
   }
@@ -567,6 +593,37 @@ const PARAGRAPH_POINT_FIELDS = [
   'lineSpacing', 'spaceBefore', 'spaceAfter', 'firstLineIndent', 'leftIndent', 'rightIndent'
 ]
 
+/* ---- 页面设置（dev-board#806）---- */
+
+/**
+ * 页面设置里按磅取值的字段：命令参数名 → Word.PageSetup 属性名。
+ * 参数名带 Pt 后缀是刻意的——Word 面其余格式工具也一律用磅，
+ * 而 LOWA 面的 doc_set_page_setup 用的是毫米，两边在各自家族内自洽比互相看齐重要。
+ */
+const PAGE_SETUP_POINT_FIELDS = [
+  ['marginTopPt', 'topMargin'],
+  ['marginBottomPt', 'bottomMargin'],
+  ['marginLeftPt', 'leftMargin'],
+  ['marginRightPt', 'rightMargin']
+]
+
+/** Word.PageOrientation（枚举写死成字面量，与本文件其余映射表同一口径） */
+const PAGE_ORIENTATIONS = {
+  portrait: 'Portrait',
+  landscape: 'Landscape'
+}
+
+/** Word.PaperSize 里法律文书真正用得上的几种（全集有四十多项，不必都摆给模型） */
+const PAPER_SIZES = {
+  a3: 'A3',
+  a4: 'A4',
+  a5: 'A5',
+  b4: 'B4',
+  b5: 'B5',
+  letter: 'Letter',
+  legal: 'Legal'
+}
+
 /* ---- 自动编号 ---- */
 
 /** 后端下发的编号类型（chinese 没有 Office.js 枚举，只能手写编号文字） */
@@ -744,12 +801,13 @@ function buildParagraphPatch(args) {
 }
 
 const HANDLERS = {
-  async get_text() {
+  // 分页读取（dev-board#806）：切法与上限在 textPaging.js 单源，与 WPS 文字面同一份口径
+  async get_text(args) {
     return Word.run(async (context) => {
       const body = context.document.body
       body.load('text')
       await context.sync()
-      return truncate(body.text)
+      return pageText(body.text, args)
     })
   },
 
@@ -1754,6 +1812,150 @@ const HANDLERS = {
       target.resolved = resolved
       await context.sync()
       return { resolved }
+    })
+  },
+
+  /**
+   * 删除批注及其全部回复（dev-board#806，审计 B-16）。
+   *
+   * 「把这些批注处理掉」是审阅收尾的标准动作；只有 resolve（标已解决）没有 delete 时，
+   * 文档里会留下一堆已解决的气泡，用户还得自己一条条右键删。
+   * Comment.delete() 与既有的 comment.resolved 同属 WordApi 1.4，不需要更高门槛。
+   * 批注不是修订：删批注不经 withTracking（开着修订也不会给它留痕），
+   * 所以本命令与 reply/resolve 一样在 crossDocWrite 的 WORD_UNTRACKABLE_COMMANDS 名单里。
+   */
+  async delete_comment(args) {
+    const commentId = String(args.commentId || '')
+    const commentIndex = args.commentIndex
+    if (!commentId && (commentIndex == null || commentIndex < 0)) {
+      throw new Error('缺少批注定位参数（commentId 或 commentIndex）')
+    }
+    if (!trackingSupported()) throw new Error('当前 Word 版本不支持批注（需要 WordApi 1.4）')
+    return Word.run(async (context) => {
+      const comments = context.document.body.getComments()
+      comments.load('items')
+      await context.sync()
+      const items = comments.items
+      if (commentId) items.forEach((c) => c.load('id'))
+      await context.sync()
+      const target = commentId
+        ? items.find((c) => c.id === commentId) || null
+        : (commentIndex >= 0 && commentIndex < items.length ? items[commentIndex] : null)
+      if (!target) throw new Error('未找到指定批注，请先用 office_get_comments 核对 commentId/commentIndex')
+      target.delete()
+      await context.sync()
+      // 序号会随删除塌缩：告诉模型别拿旧序号接着删
+      return { deleted: true, note: '批注序号在删除后会重排，要再删下一条请重新调用 office_get_comments' }
+    })
+  },
+
+  // ==================== 目录与页面设置（dev-board#806，审计 B-16） ====================
+
+  /**
+   * 插入真正的目录域（TOC field），不是一段静态文字——用户之后更新域就能刷新页码。
+   *
+   * Range.insertField + Word.FieldType.toc 属 **WordApi 1.5**（官方文档核实），
+   * 比 WordApiDesktop 1.4 的 document.tablesOfContents 门槛低、覆盖面广，所以走域这条路。
+   * 文档里的标题要先标好级别（office_apply_style / office_set_paragraph_format），
+   * 否则目录是空的——这句话在工具描述里也对模型说了。
+   */
+  async insert_toc(args) {
+    let levels = Math.floor(Number(args.levels))
+    if (!Number.isFinite(levels) || levels < 1) levels = 3
+    if (levels > 9) levels = 9
+    const title = args.title == null ? '目录' : String(args.title)
+    const position = args.position === 'start' ? 'start' : 'cursor'
+    if (!fieldApiSupported()) {
+      throw new Error('当前 Word 版本不支持插入目录域（需要 WordApi 1.5）')
+    }
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const anchor = position === 'start'
+          ? context.document.body.getRange(Word.RangeLocation.start)
+          : context.document.getSelection()
+        let host = anchor
+        if (title) {
+          const titleParagraph = anchor.insertParagraph(title, Word.InsertLocation.after)
+          await context.sync()
+          host = titleParagraph.getRange(Word.RangeLocation.after)
+        }
+        // \o "1-N" 收 N 级标题、\h 条目做成超链接、\z 屏蔽网页视图页码、\u 用大纲级别
+        const switches = '\\o "1-' + levels + '" \\h \\z \\u'
+        const field = host.insertField(Word.InsertLocation.after, Word.FieldType.toc, switches, false)
+        await context.sync()
+        // 刚插进去的域结果是空的，要更新一次才出条目与页码（updateResult 同属 WordApi 1.5）
+        let updated = false
+        try {
+          field.updateResult()
+          await context.sync()
+          updated = true
+        } catch (e) {
+          updated = false
+        }
+        return {
+          inserted: true,
+          levels,
+          title: title || null,
+          position,
+          updated,
+          note: updated
+            ? null
+            : '目录域已插入但未能自动刷新，请在 Word 里右键目录选「更新域」'
+        }
+      })
+    })
+  },
+
+  /**
+   * 页面设置：纸张、方向、四边页边距（dev-board#806，审计 B-16）。
+   *
+   * **单位是磅**，与 Word 面其余格式工具一致（1 毫米 ≈ 2.835 磅，常用的 2.54 厘米边距 = 72 磅）。
+   * Word.PageSetup 属 WordApiDesktop 1.3：桌面版专属，Word 网页版直接报错而不是静默不生效。
+   * 页面设置不是修订：Word 不会给它留痕，所以不经 withTracking，
+   * 并在 crossDocWrite 的 WORD_UNTRACKABLE_COMMANDS 名单里（跨文档写入一律拒绝）。
+   */
+  async set_page_setup(args) {
+    const patch = {}
+    for (const [argName, prop] of PAGE_SETUP_POINT_FIELDS) {
+      if (args[argName] == null) continue
+      const value = Number(args[argName])
+      if (!Number.isFinite(value) || value < 0) throw new Error(`${argName} 须为非负数（单位：磅）`)
+      patch[prop] = value
+    }
+    if (args.orientation != null) {
+      patch.orientation = toEnumValue(PAGE_ORIENTATIONS, args.orientation, 'orientation')
+    }
+    if (args.paperSize != null) {
+      patch.paperSize = toEnumValue(PAPER_SIZES, args.paperSize, 'paperSize')
+    }
+    if (!Object.keys(patch).length) {
+      throw new Error('没有给任何页面参数（marginTopPt/marginBottomPt/marginLeftPt/marginRightPt/orientation/paperSize 至少一个）')
+    }
+    if (!pageSetupSupported()) {
+      throw new Error('当前 Word 版本不支持页面设置（需要较新的桌面版 Word，WordApiDesktop 1.3；Word 网页版不支持）')
+    }
+    return Word.run(async (context) => {
+      const pageSetup = context.document.pageSetup
+      // 纸张先落：换纸张会把页边距按新纸张重算，之后再落边距才不会被顶掉
+      const entries = Object.entries(patch)
+      entries.filter(([prop]) => prop === 'paperSize').forEach(([prop, value]) => { pageSetup[prop] = value })
+      entries.filter(([prop]) => prop !== 'paperSize').forEach(([prop, value]) => { pageSetup[prop] = value })
+      await context.sync()
+      // 回读一遍：交底给模型的是宿主真正生效的值，不是我们请求的值
+      pageSetup.load('topMargin,bottomMargin,leftMargin,rightMargin,orientation,paperSize')
+      await context.sync()
+      return {
+        applied: entries
+          .filter(([prop]) => prop === 'paperSize')
+          .concat(entries.filter(([prop]) => prop !== 'paperSize'))
+          .map(([prop]) => prop),
+        marginTopPt: pageSetup.topMargin,
+        marginBottomPt: pageSetup.bottomMargin,
+        marginLeftPt: pageSetup.leftMargin,
+        marginRightPt: pageSetup.rightMargin,
+        orientation: pageSetup.orientation,
+        paperSize: pageSetup.paperSize
+      }
     })
   },
 
@@ -3610,6 +3812,9 @@ export const COMMAND_DISPLAY_KEYS = {
   get_comments: 'cmdGetComments',
   reply_comment: 'cmdReplyComment',
   resolve_comment: 'cmdResolveComment',
+  delete_comment: 'cmdDeleteComment',
+  insert_toc: 'cmdInsertToc',
+  set_page_setup: 'cmdSetPageSetup',
   get_revisions: 'cmdGetRevisions',
   accept_revision: 'cmdAcceptRevision',
   reject_revision: 'cmdRejectRevision',
@@ -3693,6 +3898,9 @@ const COMMAND_HOSTS = {
   get_comments: 'word',
   reply_comment: 'word',
   resolve_comment: 'word',
+  delete_comment: 'word',
+  insert_toc: 'word',
+  set_page_setup: 'word',
   get_revisions: 'word',
   accept_revision: 'word',
   reject_revision: 'word',

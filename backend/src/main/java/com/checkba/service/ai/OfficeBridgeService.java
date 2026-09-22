@@ -56,10 +56,47 @@ public class OfficeBridgeService {
      * 跑得比单处修改久（批量改写要在一个 Word.run 里定位并落笔几十处，
      * 整篇套用标准格式是逐段落笔）。新增这类原语忘了加，症状不是报错而是
      * 内容被写两遍，最难查。
+     *
+     * <p><b>漏登记是沉默的，所以这张表有护栏</b>（dev-board#806，审计 B-06）：
+     * {@code OfficeBridgeTimeoutCoverageTest} 扫 OfficeEditTools 源码，凡带
+     * {@code ...Json} 批量参数的工具不在表里即转红；参数看不出批量、实现却要遍历整篇的，
+     * 在那条用例的「判断档」里逐条列了理由。在它之前这张表只有前两条，
+     * insert_table / excel_set_values / ppt_add_table 这些明显的批量原语全在 30 秒上吊着。
+     *
+     * <p><b>读取类刻意不进表</b>：LOWA 桥把读取类抬到 120 秒是 dev-board#729 ③ 拿真机
+     * telemetry 换来的（86 次超时里 79 次是读命令），插件桥这边没有同等证据；
+     * 而读取超时只是白等一轮，不会造成双写。等有真机数据再说，不跟着抄。
      */
-    static final Map<String, Integer> ACTION_TIMEOUT_SECONDS = Map.of(
-            "replace_batch", 120,
-            "apply_standard_format", 120);
+    static final Map<String, Integer> ACTION_TIMEOUT_SECONDS = Map.ofEntries(
+            // ===== Word 面 =====
+            // 一个 Word.run 里定位并落笔最多 50 处
+            Map.entry("replace_batch", 120),
+            // 整篇按律所标准格式落笔（按 run 合并后仍是逐段区间）
+            Map.entry("apply_standard_format", 120),
+            // 一次建整张表并逐格落字；LOWA 桥的同名原语也是 120
+            Map.entry("insert_table", 120),
+            // 从锚点起给连续 N 段套编号；旧宿主没有 List API 时退化成逐段手写编号前缀
+            Map.entry("set_numbering", 120),
+            // 整张表逐格设边框/底纹，格数随表大小线性增长
+            Map.entry("format_table", 120),
+            // 单图上限 2MB，经 base64 过桥后体积再膨胀约三分之一
+            Map.entry("insert_image", 120),
+            // ===== Excel 面 =====
+            // 上限 2000 格一次写入
+            Map.entry("excel_set_values", 120),
+            // 2000 格公式写入后还要回读一遍、再用 SpecialCells 扫错误格
+            Map.entry("excel_set_formulas", 120),
+            // 建缓存 → 建透视表 → 逐个映射字段 → 字段对不上还要把刚建的表删掉
+            Map.entry("excel_add_pivot_table", 120),
+            // ===== PPT 面 =====
+            // 追加空白页 + moveTo 挪位置 + 标题/正文两个文本框，一条命令里四次 sync
+            Map.entry("ppt_add_slide", 120),
+            // 建表并逐格落字
+            Map.entry("ppt_add_table", 120),
+            // 遍历全篇每页每个形状（含组合与表格递归）找命中，再逐处从右到左替换
+            Map.entry("ppt_replace_text", 120),
+            // 与 ppt_replace_text 同一条全篇遍历，只是把替换换成设字体
+            Map.entry("ppt_format_text", 120));
 
     static int timeoutSecondsFor(String command) {
         if (command == null) return OFFICE_ACTION_TIMEOUT_SECONDS; // Map.of 对 null 键抛 NPE

@@ -90,6 +90,20 @@ const ACTION_BUDGET_MS = {
   sheet_get_comments: 120000,
   slide_get_overview: 120000, slide_get_page: 120000, slide_read_notes: 120000,
   slide_table_read: 120000,
+  // sheet_/slide_ 写入类（dev-board#806）：与 libreofficeExecutorClient 同表，理由见那边。
+  sheet_write_cells: 120000, sheet_format_cells: 120000, sheet_set_borders: 120000,
+  sheet_edit_rows_cols: 120000, sheet_merge_cells: 120000, sheet_sort_range: 120000,
+  sheet_manage_sheets: 120000, sheet_freeze_panes: 120000, sheet_set_row_col: 120000,
+  sheet_set_autofilter: 120000, sheet_conditional_format: 120000, sheet_add_comment: 120000,
+  sheet_delete_comment: 120000, sheet_set_data_validation: 120000, sheet_add_chart: 120000,
+  sheet_define_name: 120000, sheet_protect_sheet: 120000, sheet_group_rows_cols: 120000,
+  sheet_add_pivot_table: 120000,
+  slide_add_page: 120000, slide_delete_page: 120000, slide_move_page: 120000,
+  slide_set_layout: 120000, slide_add_text_box: 120000, slide_set_shape_text: 120000,
+  slide_format_text: 120000, slide_format_shape: 120000, slide_add_shape: 120000,
+  slide_delete_shape: 120000, slide_set_shape_geometry: 120000, slide_replace_text: 120000,
+  slide_add_table: 120000, slide_table_set_cell: 120000, slide_table_set_style: 120000,
+  slide_set_hyperlink: 120000, slide_write_notes: 120000,
 }
 
 // 探活（dev-board#539）：备胎过继前先问一声「这个 guest 还活着吗」。用最便宜的

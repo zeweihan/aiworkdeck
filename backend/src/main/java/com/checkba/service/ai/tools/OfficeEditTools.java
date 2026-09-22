@@ -219,13 +219,35 @@ public class OfficeEditTools implements AgentToolComponent {
 
     // ==================== 读取 ====================
 
-    @Tool("读取当前 Word 文档的全文纯文本。超长文档会被截断（约 20 万字符）。")
+    /** office_get_text 一次最多给多少字符（与插件端 textPaging.GET_TEXT_MAX_CHARS 同值）。 */
+    private static final int GET_TEXT_MAX_CHARS = 80_000;
+
+    /** 不传 maxChars 时一次给多少字符（与插件端 textPaging.GET_TEXT_DEFAULT_CHARS 同值）。 */
+    private static final int GET_TEXT_DEFAULT_CHARS = 50_000;
+
+    @Tool("读取当前 Word 文档的正文纯文本，**分页返回**。startChar 是本次从第几个字符开始读"
+            + "（0 开始，缺省 0），maxChars 是本次最多读多少字符（缺省 " + GET_TEXT_DEFAULT_CHARS
+            + "，上限 " + GET_TEXT_MAX_CHARS + "）。"
+            + "返回值里 totalChars 是全文长度；**nextStart 有值就表示还没读完，用它作为下一次的 startChar 接着读**，"
+            + "没有 nextStart 就是已经读到文末。"
+            + "长文档不要为了「先看全」而一页页读到底——那要烧掉一连串执行步；"
+            + "先用 office_search 定位，或用 office_pass_step 分段过卷。")
     @ToolMeta(displayName = "读取文档", category = "office")
     public String office_get_text(
-            @P("会话ID（系统自动注入）") String conversationId
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("起始字符位置（0 开始，缺省 0；续读时填上一次返回的 nextStart）") Integer startChar,
+            @P("本次最多读取的字符数（缺省 " + GET_TEXT_DEFAULT_CHARS + "，上限 " + GET_TEXT_MAX_CHARS + "）") Integer maxChars
     ) {
-        log.info("Tool: office_get_text called");
-        return officeBridgeService.executeOfficeCommand(conversationId, "get_text", Map.of());
+        log.info("Tool: office_get_text called, startChar={}, maxChars={}", startChar, maxChars);
+        // 上限在后端也夹一道：插件端已经夹过，但工具结果的 80k 口径是后端的事
+        // （ToolFileGuard.MAX_TOOL_TEXT_CHARS 立的规矩，此前一处都没覆盖 office_*）。
+        int start = startChar == null || startChar < 0 ? 0 : startChar;
+        int limit = maxChars == null || maxChars <= 0 ? GET_TEXT_DEFAULT_CHARS : maxChars;
+        if (limit > GET_TEXT_MAX_CHARS) limit = GET_TEXT_MAX_CHARS;
+        Map<String, Object> args = new HashMap<>();
+        args.put("startChar", start);
+        args.put("maxChars", limit);
+        return officeBridgeService.executeOfficeCommand(conversationId, "get_text", args);
     }
 
     @Tool("读取用户当前在 Word 中选中的文本内容。未选中时返回空文本。")
@@ -1244,6 +1266,105 @@ public class OfficeEditTools implements AgentToolComponent {
         if (commentIndex != null) args.put("commentIndex", commentIndex);
         args.put("resolved", resolved == null || resolved);
         return officeBridgeService.executeOfficeCommand(conversationId, "resolve_comment", args);
+    }
+
+    @Tool("删除当前 Word 文档中的一条批注（连同它的全部回复）。用 office_get_comments 返回的 id 或 "
+            + "index（0 开始）定位，两者给一个即可（id 优先）。"
+            + "审阅收尾时「把这些批注处理掉」用本工具；只想标记为已处理、保留痕迹请用 office_resolve_comment。"
+            + "删除后批注序号会重排，要接着删下一条必须重新调用 office_get_comments。需要 WordApi 1.4。")
+    @ToolMeta(displayName = "删除批注", category = "office", fileEffect = "MODIFIED")
+    public String office_delete_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标批注的 id（来自 office_get_comments 的返回值，与 commentIndex 二选一，id 优先）") String commentId,
+            @P("目标批注的序号（0 开始，来自 office_get_comments 的返回值，与 commentId 二选一）") Integer commentIndex
+    ) {
+        log.info("Tool: office_delete_comment called, id={}, index={}", commentId, commentIndex);
+        if ((commentId == null || commentId.isBlank()) && (commentIndex == null || commentIndex < 0)) {
+            return "Error: 缺少批注定位参数（commentId 或 commentIndex，先调用 office_get_comments 拿到）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("commentId", commentId == null ? "" : commentId.trim());
+        if (commentIndex != null) args.put("commentIndex", commentIndex);
+        return officeBridgeService.executeOfficeCommand(conversationId, "delete_comment", args);
+    }
+
+    // ==================== 目录与页面设置（dev-board#806） ====================
+
+    /** office_insert_toc 收几级标题的上限（Word 的 TOC 开关最多到 9 级）。 */
+    private static final int MAX_TOC_LEVELS = 9;
+
+    @Tool("在当前 Word 文档中插入目录——插入的是**真正的目录域**（TOC field），"
+            + "用户之后在 Word 里「更新域」就能刷新条目与页码，不是一段死文字。"
+            + "levels 收几级标题（默认 3，上限 " + MAX_TOC_LEVELS + "）；title 目录标题（默认「目录」，"
+            + "传空字符串表示不要标题段）；position 取 cursor（光标处，默认）或 start（文首）。"
+            + "**前提**：文档里的标题要先标好级别（用 office_apply_style 套 Heading 1/2/3，"
+            + "或 office_set_paragraph_format 的 headingLevel），否则目录是空的。"
+            + "需要 WordApi 1.5；插入以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "插入目录", category = "office", fileEffect = "MODIFIED")
+    public String office_insert_toc(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("收入目录的标题级数 1-" + MAX_TOC_LEVELS + "，默认 3") Integer levels,
+            @P("目录标题文本，默认「目录」；传空字符串则不插标题段") String title,
+            @P("插入位置：cursor=光标处（默认）/ start=文首") String position
+    ) {
+        log.info("Tool: office_insert_toc called, levels={}, position={}", levels, position);
+        if (levels != null && (levels < 1 || levels > MAX_TOC_LEVELS)) {
+            return "Error: levels 只能是 1-" + MAX_TOC_LEVELS;
+        }
+        Map<String, Object> args = new HashMap<>();
+        if (levels != null) args.put("levels", levels);
+        // title 传空串是「不要标题段」这个合法意图，与「没给」不同，所以按 null 判而不是按 isBlank
+        if (title != null) args.put("title", title);
+        if (position != null && !position.isBlank()) {
+            String normalized = normalizeEnum(position, java.util.Set.of("cursor", "start"), "position");
+            args.put("position", normalized);
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "insert_toc", args);
+    }
+
+    @Tool("设置当前 Word 文档的页面：纸张、方向、四边页边距。**单位一律是磅**"
+            + "（1 毫米 ≈ 2.835 磅；常用的 2.54 厘米边距 = 72 磅，3.17 厘米 = 90 磅）。"
+            + "只传要改的项，不传的保持原样；至少要给一项。"
+            + "orientation 取 portrait/landscape；paperSize 取 a3/a4/a5/b4/b5/letter/legal。"
+            + "**需要较新的桌面版 Word（WordApiDesktop 1.3），Word 网页版不支持**，不支持时会明确报错。"
+            + "注意：Word 不会把页面设置记成修订，本操作没有痕迹，改之前先跟用户确认。")
+    @ToolMeta(displayName = "页面设置", category = "office", fileEffect = "MODIFIED")
+    public String office_set_page_setup(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("上边距（磅），不改则不传") Double marginTopPt,
+            @P("下边距（磅），不改则不传") Double marginBottomPt,
+            @P("左边距（磅），不改则不传") Double marginLeftPt,
+            @P("右边距（磅），不改则不传") Double marginRightPt,
+            @P("页面方向：portrait / landscape，不改则不传") String orientation,
+            @P("纸张：a3/a4/a5/b4/b5/letter/legal，不改则不传") String paperSize
+    ) {
+        log.info("Tool: office_set_page_setup called, orientation={}, paperSize={}", orientation, paperSize);
+        Map<String, Object> args = new HashMap<>();
+        try {
+            putPositive(args, "marginTopPt", marginTopPt);
+            putPositive(args, "marginBottomPt", marginBottomPt);
+            putPositive(args, "marginLeftPt", marginLeftPt);
+            putPositive(args, "marginRightPt", marginRightPt);
+            String o = normalizeEnum(orientation, java.util.Set.of("portrait", "landscape"), "orientation");
+            if (o != null) args.put("orientation", o);
+            String p = normalizeEnum(paperSize,
+                    java.util.Set.of("a3", "a4", "a5", "b4", "b5", "letter", "legal"), "paperSize");
+            if (p != null) args.put("paperSize", p);
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (args.isEmpty()) {
+            return "Error: 没有给任何页面参数（marginTopPt/marginBottomPt/marginLeftPt/marginRightPt/"
+                    + "orientation/paperSize 至少一个）";
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "set_page_setup", args);
+    }
+
+    /** 页边距这类长度参数：负数在后端就拦下，比等 30 秒桥往返再报错便宜。 */
+    private static void putPositive(Map<String, Object> args, String key, Double value) {
+        if (value == null) return;
+        if (value < 0) throw new IllegalArgumentException(key + " 须为非负数（单位：磅）");
+        args.put(key, value);
     }
 
     // ==================== Excel（office_excel_*，仅 Excel 会话可见） ====================

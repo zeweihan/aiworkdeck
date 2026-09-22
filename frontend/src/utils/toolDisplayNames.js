@@ -265,6 +265,9 @@ const NAMES = {
   office_get_comments: { zh: '读取批注', en: 'Read comments' },
   office_reply_comment: { zh: '回复批注', en: 'Reply to comment' },
   office_resolve_comment: { zh: '解决批注', en: 'Resolve comment' },
+  office_delete_comment: { zh: '删除批注', en: 'Delete comment' },
+  office_insert_toc: { zh: '插入目录', en: 'Insert table of contents' },
+  office_set_page_setup: { zh: '页面设置', en: 'Page setup' },
   // Office 插件（批次 9：Word 修订/脚注尾注/图片/样式/内容控件/文档属性）
   office_get_revisions: { zh: '读取修订', en: 'Read revisions' },
   office_accept_revision: { zh: '接受修订', en: 'Accept revision' },

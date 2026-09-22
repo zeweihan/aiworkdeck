@@ -360,6 +360,17 @@ test('get_text：返回全文与截断标记', async () => {
   assert.equal(data.totalChars, 8)
 })
 
+test('get_text：分页参数真的被 handler 用上（dev-board#806，接线而不是只在纯函数里成立）', async () => {
+  const long = Array.from({ length: 60000 }, (_, i) => String(i % 10)).join('')
+  installWps({ text: long })
+  const first = await H.get_text({})
+  assert.equal(first.returned, 50000, '不传参数时给缺省的 5 万字')
+  assert.equal(first.nextStart, 50000)
+  const next = await H.get_text({ startChar: first.nextStart, maxChars: 1000 })
+  assert.equal(next.text, long.slice(50000, 51000))
+  assert.equal(next.startChar, 50000)
+})
+
 test('get_selection：光标态（wdSelectionIP）按空处理', async () => {
   installWps({ text: '正文', selType: 1 })
   const data = await H.get_selection({})
@@ -1059,3 +1070,71 @@ test('edit_header_footer：text 与 alignment 都不给时报错，而不是静�
   installWps({ text: '正文\r', headerText: '某某律师事务所' })
   await assert.rejects(H.edit_header_footer({ part: 'header' }), /至少给 text.*或 alignment/)
 })
+
+/* ==================== Word 面补齐：删批注 / 目录 / 页面设置（dev-board#806） ==================== */
+
+test('delete_comment：按序号删中那一条（WPS 批注无 GUID，id 就是序号）', async () => {
+  const deleted = []
+  const comments = {
+    Count: 3,
+    Item: (i) => ({ Delete: () => deleted.push(i) })
+  }
+  installWps({ text: '正文', comments })
+  const r = await H.delete_comment({ commentIndex: 1 })
+  assert.equal(r.deleted, true)
+  assert.deepEqual(deleted, [2], 'WPS 集合是 1 基：index 1 对应 Item(2)')
+  assert.match(r.note, /重排/)
+})
+
+test('delete_comment：序号越界报可读错误，一条都不删', async () => {
+  const deleted = []
+  installWps({ text: '正文', comments: { Count: 1, Item: (i) => ({ Delete: () => deleted.push(i) }) } })
+  await assert.rejects(() => H.delete_comment({ commentIndex: 5 }), /越界/)
+  assert.deepEqual(deleted, [])
+})
+
+test('insert_toc：插的是目录域（TablesOfContents.Add），levels 传到下界参数', async () => {
+  const calls = []
+  const { state } = installWps({
+    text: '第一章 总则\r',
+    docExtras: { TablesOfContents: { Add: (...a) => calls.push(a) } }
+  })
+  const r = await H.insert_toc({ levels: 2, position: 'start' })
+  assert.equal(r.inserted, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][3], 2, 'LowerHeadingLevel = levels')
+  assert.ok(state.text.startsWith('目录\r'), '标题段插在目录域之前')
+})
+
+test('insert_toc：宿主不支持目录域时明确报错，不静默报成功', async () => {
+  installWps({
+    text: '正文',
+    docExtras: { TablesOfContents: { Add: () => { throw new Error('mock：不支持') } } }
+  })
+  await assert.rejects(() => H.insert_toc({}), /插入目录失败/)
+})
+
+test('set_page_setup：只改给了的那几项，纸张先落再落页边距', async () => {
+  const writes = []
+  const pageSetup = new Proxy(
+    { TopMargin: 72, BottomMargin: 72, LeftMargin: 90, RightMargin: 90, Orientation: 0, PaperSize: 2 },
+    { set(t, prop, v) { writes.push([prop, v]); t[prop] = v; return true } }
+  )
+  installWps({ text: '正文', docExtras: { PageSetup: pageSetup } })
+  const r = await H.set_page_setup({ marginTopPt: 56.7, paperSize: 'a4' })
+  assert.deepEqual(writes.map(([p]) => p), ['PaperSize', 'TopMargin'],
+    '换纸张会把页边距按新纸张重算，所以纸张必须先落')
+  assert.equal(r.marginTopPt, 56.7)
+  assert.equal(r.marginLeftPt, 90, '没给的项原样不动')
+})
+
+test('set_page_setup：一个参数都不给 / 非法枚举 → 报错，且一个字都不写', async () => {
+  const writes = []
+  const pageSetup = new Proxy({}, { set(t, prop, v) { writes.push([prop, v]); t[prop] = v; return true } })
+  installWps({ text: '正文', docExtras: { PageSetup: pageSetup } })
+  await assert.rejects(() => H.set_page_setup({}), /至少一个/)
+  await assert.rejects(() => H.set_page_setup({ orientation: '横版' }), /orientation/)
+  await assert.rejects(() => H.set_page_setup({ marginTopPt: -1 }), /非负数/)
+  assert.deepEqual(writes, [])
+})
+

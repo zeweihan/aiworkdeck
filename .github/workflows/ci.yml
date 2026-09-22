@@ -23,6 +23,12 @@ jobs:
       # WCAG 对比度复算与硬闸。零依赖，跟 SPDX 检查共用这个轻量 job。
       - name: Check color palette and generated tokens
         run: node scripts/check-palette.mjs
+      # 两族编辑工具对拍（dev-board#806）：同一件事在工作台（doc_/sheet_/slide_）与
+      # Office/WPS 任务窗格（office_*）各有一套工具名，会话按客户端只放行一族——
+      # 一族缺了什么，那件事在那个客户端上就是沉默地做不了。同时查 skill 白名单，
+      # 审计 A10 就是 contract-review 列了 doc_reply_comment 却漏了 office_reply_comment。
+      - name: Check tool parity between LOWA and Office families
+        run: node scripts/check-tool-parity.mjs
 
   backend:
     name: Backend (mvn test)

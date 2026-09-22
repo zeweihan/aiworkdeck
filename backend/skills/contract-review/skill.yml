@@ -105,6 +105,9 @@ allowed_tools:
   # 批注：说明与风险提示的唯一去处
   - doc_add_comment
   - doc_reply_comment
+  - doc_resolve_comment
+  # 标记改过的法律用语（与 office_format_text 成对，dev-board#806）
+  - doc_format_selection
   # 安全网
   - doc_undo
   - doc_restore_checkpoint
@@ -118,6 +121,17 @@ allowed_tools:
   - office_get_revisions
   - office_table_read
   - office_table_set_cell
+  # 与 LOWA 面逐条对齐（dev-board#806，审计 A10）：少了它们，同一个 skill 在 Word 插件里
+  # 就比在工作台里弱一截——回复对方律师的批注、标记改过的用语都做不了。
+  - office_reply_comment
+  - office_resolve_comment
+  - office_format_text
+  # 插件面专属，没有 doc_ 对应物：Office.js 每处改动要一次宿主往返，整篇合同逐处调用
+  # office_replace_text 会在十几处之后撞上单轮步数上限（用户看到的是「审到一半停了」）。
+  # office_replace_batch 一批最多 50 处，office_pass_step 把整篇按块推进——
+  # 整篇逐处修改正是合同审查的常态，这两个原语就是为它存在的。
+  - office_replace_batch
+  - office_pass_step
   # 法源核实：law_* 只覆盖中国大陆法；其他法域用 search_web / browse_url 查权威来源
   - law_search
   - law_search_keyword
