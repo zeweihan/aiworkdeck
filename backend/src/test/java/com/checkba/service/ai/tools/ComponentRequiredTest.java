@@ -46,6 +46,24 @@ import static org.mockito.Mockito.when;
  */
 class ComponentRequiredTest {
 
+    /**
+     * 这些用例直接调工具方法，绕过了 {@code ToolRegistry.execute}——而项目上下文正是在那里设的。
+     *
+     * <p>{@code PdfTools.getPdfFile} 现在会过 {@code ToolFileGuard.rejectIfOutsideProject}
+     * （dev-board#805），没有项目上下文时 fail closed。生产路径上 ToolRegistry 每次调用前
+     * 都会设，所以这里把那个前提补齐；不补的话 pdf_to_word 会在取文件那一步就被挡下来，
+     * 表现成「一次 component_required 都没发」，与本用例真正要验的东西无关。
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void enterProjectContext() {
+        com.checkba.service.ai.context.ProjectContextHolder.setProjectId("3");   // 与 pdfFile() 同一个项目
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void leaveProjectContext() {
+        com.checkba.service.ai.context.ProjectContextHolder.clear();
+    }
+
     /** PptxTools 的依赖里只有三样与本用例相关，其余按 Lombok 构造器顺序补 null。 */
     private static PptxTools pptxTools(PptxServiceClient client, EditorBridgeService bridge,
                                        NativePackService packs) {

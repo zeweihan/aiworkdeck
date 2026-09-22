@@ -316,6 +316,13 @@ const NAMES = {
   pdf_redact: { zh: 'PDF脱敏', en: 'Redact PDF' },
   pdf_replace_text: { zh: '替换PDF文本', en: 'Replace PDF text' },
   pdf_to_word: { zh: 'PDF转Word', en: 'Convert PDF to Word' },
+  // 页级组织（dev-board#805）：都产出项目内新文件、原件不动
+  pdf_merge: { zh: '合并PDF', en: 'Merge PDFs' },
+  pdf_split: { zh: '拆分PDF', en: 'Split PDF' },
+  pdf_extract_pages: { zh: '提取PDF页', en: 'Extract PDF pages' },
+  pdf_delete_pages: { zh: '删除PDF页', en: 'Delete PDF pages' },
+  pdf_rotate_pages: { zh: '旋转PDF页', en: 'Rotate PDF pages' },
+  pdf_add_page_numbers: { zh: 'PDF编页码', en: 'Add page numbers' },
   // 诉讼可视化
   litigation_reference: { zh: '查阅制图规范', en: 'Read diagram standard' },
   litigation_checkpoint: { zh: '出图前确认', en: 'Confirm before drawing' },
