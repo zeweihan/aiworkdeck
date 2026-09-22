@@ -22,6 +22,9 @@ class ProjectRepoRemoteTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         ProjectRepoService s = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         s.init(7L, "韩泽伟", "hzw@example.com");
+        try (var r = s.open(7L)) {
+            BareHub.quiesceAutoGc(r); // 本地仓库后面要做 fetch，见 BareHub 类注释
+        }
         return s;
     }
 
@@ -53,6 +56,7 @@ class ProjectRepoRemoteTest {
 
         // 第二个"同事"仓库把远端 master 推进一步
         try (Git peer = Git.cloneRepository().setURI(url).setDirectory(other.toFile()).call()) {
+            BareHub.quiesceAutoGc(peer.getRepository()); // clone 本身就是一次 fetch，见 BareHub 类注释
             Files.writeString(other.resolve("合同.txt"), "同事的第二稿");
             peer.add().addFilepattern(".").call();
             peer.commit().setMessage("同事修改").setAuthor("同事", "p@example.com").call();

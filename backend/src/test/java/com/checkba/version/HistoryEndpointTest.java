@@ -67,6 +67,9 @@ class HistoryEndpointTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         repoSvc = new ProjectRepoService(new ProjectStorageResolver(props, null));
         repoSvc.init(PROJECT, "韩泽伟", MY_EMAIL);
+        try (var r = repoSvc.open(PROJECT)) {
+            BareHub.quiesceAutoGc(r); // 本地仓库后面要做多次 fetch，见 BareHub 类注释
+        }
 
         sessionService = mock(WorkSessionService.class);
         when(sessionService.listDrafts(PROJECT)).thenReturn(List.of());

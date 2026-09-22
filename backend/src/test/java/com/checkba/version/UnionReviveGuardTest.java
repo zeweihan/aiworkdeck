@@ -63,6 +63,9 @@ class UnionReviveGuardTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         repoSvc.init(7L, "韩泽伟", "hzw@example.com");
+        try (var r = repoSvc.open(7L)) {
+            BareHub.quiesceAutoGc(r); // peer 直推本地仓库，见 BareHub 类注释
+        }
 
         db = new HashMap<>();
         nextFileId = 100L;
