@@ -65,6 +65,16 @@ class ToolRegistryTest {
             return findText + ">" + replaceText + ":" + replaceAll;
         }
 
+        @Tool("Legacy default test for a genuinely optional parameter")
+        public String list_files(@P("sub path") String subPath) {
+            return "list:" + subPath;
+        }
+
+        @Tool("Required-parameter test: the registry must not fill this in")
+        public String doc_modify_paragraph(@P("paragraph index") Integer paragraphIndex, @P("new text") String newText) {
+            return "modify:" + paragraphIndex + ":" + newText;
+        }
+
         @Tool("ThreadLocal holder population test")
         public String holder_probe() {
             return "holder:" + ProjectContextHolder.getProjectIdAsLong() + "|" + ProjectContextHolder.getUserId();
@@ -94,7 +104,7 @@ class ToolRegistryTest {
     @Test
     @DisplayName("注册：@Tool 方法全部进入规格列表")
     void registersAllTools() {
-        assertEquals(9, registry.getAllSpecifications().size());
+        assertEquals(11, registry.getAllSpecifications().size());
         assertTrue(registry.hasTool("echo"));
         assertTrue(registry.hasTool("doc_find_replace"));
         assertFalse(registry.hasTool("nonexistent"));
@@ -179,11 +189,30 @@ class ToolRegistryTest {
     }
 
     @Test
-    @DisplayName("行为保持：doc_find_replace 缺省 replaceAll=true")
+    @DisplayName("行为保持：list_files 缺省 subPath=\".\"（真·可选参数才代填）")
     void appliesLegacyDefaults() {
+        ToolRegistry.ToolResult r = registry.execute("list_files", "{}", ctx);
+        assertEquals("list:.", r.output());
+    }
+
+    @Test
+    @DisplayName("注册表不再给 doc_find_replace.replaceAll 代填：缺省贴着工具自己放（审计 A4）")
+    void doesNotFillDefaultsForToolsThatOwnTheirOwn() {
         ToolRegistry.ToolResult r = registry.execute("doc_find_replace",
                 "{\"findText\":\"甲\",\"replaceText\":\"乙\"}", ctx);
-        assertEquals("甲>乙:true", r.output());
+        assertEquals("甲>乙:null", r.output(),
+                "缺省值一旦在两个地方各写一份就会漂；真实的 doc_find_replace 自己兜 true，"
+                        + "口径见 ToolRegistryLegacyDefaultsTest");
+    }
+
+    @Test
+    @DisplayName("注册表不再给段落号代填：漏传就得是 null，方法里的守卫才拦得住（审计 A4）")
+    void doesNotFillRequiredParagraphIndex() {
+        ToolRegistry.ToolResult r = registry.execute("doc_modify_paragraph",
+                "{\"newText\":\"新条款\"}", ctx);
+        assertEquals("modify:null:新条款", r.output(),
+                "代填缺省值 1 会让 rejectBadParagraphIndex 永远走不到，"
+                        + "漏传段落号于是变成「改第 2 段」");
     }
 
     @Test

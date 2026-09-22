@@ -60,14 +60,26 @@ public final class ToolFileGuard {
      * 都必然再撞同一个 400，用户侧表现为「这份文件永远读不了」。
      *
      * <p>截断说明写成模型能据以行动的一句话：告诉它还有多少、以及用哪个工具分段读。
+     *
+     * <p><b>点名的工具必须真的存在</b>：这里曾点名一个注册表里从来没有过的分段读取工具
+     * （审计 A5/B-01，全仓 5 处引用、0 处定义）——模型照着调只会拿到「Tool not found」，白烧一整个 LLM 往返，
+     * 弱模型还会据此判定「这份文档读不完」而放弃。分页读的正解是
+     * {@code doc_get_document_text(startParagraph, maxParagraphs)}，它返回的
+     * {@code nextStartParagraph} 就是下一段的起点。
+     *
+     * <p>措辞上给 {@code doc_get_document_text} 加了「已在编辑器中打开」的前提：本方法服务的是
+     * {@code extract_file_text / read_file / read_document} 这类读<b>项目文件</b>的工具，
+     * 而 doc_* 读的是编辑器里那一份。对 PDF / xlsx 之类还没有分页读取原语的类型，
+     * 剩下的那半句「先检索定位再读该段」才是它们的出路。
      */
     public static String capToolText(String fileName, String text) {
         if (text == null || text.length() <= MAX_TOOL_TEXT_CHARS) {
             return text;
         }
         return "[文件 " + fileName + "，全文 " + text.length() + " 字符，已截断至前 "
-                + MAX_TOOL_TEXT_CHARS + " 字符。需要后续内容请用 doc_read_paragraphs 分段读取，"
-                + "或先检索定位再读该段。]\n"
+                + MAX_TOOL_TEXT_CHARS + " 字符。该文档若已在编辑器中打开，用 "
+                + "doc_get_document_text(startParagraph=…, maxParagraphs=…) 从上次读到的段落号继续分段读取"
+                + "（返回值里的 nextStartParagraph 就是下一段的起点）；否则先检索定位再读该段。]\n"
                 + text.substring(0, MAX_TOOL_TEXT_CHARS);
     }
 }

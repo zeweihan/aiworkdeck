@@ -115,5 +115,44 @@
       ],
       "bubbleEndStatus": "finished"
     }
+  },
+  {
+    "id": "insert-at-cursor-creates-checkpoint-xml",
+    "title": "只用 doc_insert_at_cursor 的一轮也要留下可退回的快照",
+    "category": "revision",
+    "protocol": "xml",
+    "userInput": "在光标处补一条保密条款",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "text": "<process name=\"插入保密条款\"><tool_code>doc_insert_at_cursor(text=\"第八条 保密　双方对本协议内容及因履行本协议知悉的对方商业秘密负有保密义务。\")</tool_code></process>"
+      },
+      {
+        "text": "<final>已在光标处插入保密条款，改动以修订形式呈现，可在审阅面板接受或拒绝。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_insert_at_cursor": "{\"success\":true,\"inserted\":42}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_insert_at_cursor",
+          "argsContain": {
+            "text": "保密"
+          }
+        }
+      ],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished",
+      "checkpointForFileId": "1001"
+    }
   }
 ]

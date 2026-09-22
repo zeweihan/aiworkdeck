@@ -115,6 +115,14 @@ public class EvalCase {
         public String renamedTitleContains;
         /** 应在某次 LLM 调用的上下文中出现的子串（断言编排器回喂了某条系统提醒；空 = 不断言） */
         public List<String> promptContains = new ArrayList<>();
+        /**
+         * 本轮应为哪个文件建过检查点（活跃文档的 id，字符串；null = 不断言）。
+         *
+         * <p>钉的是「写入类工具 ⇒ 有快照可退」这条产品承诺：编排器只对
+         * {@code @ToolMeta(fileEffect="MODIFIED")} 的工具建检查点，漏标注解的写入原语
+         * 会让 {@code doc_restore_checkpoint} 无从恢复（dev-board 审计 B-02）。
+         */
+        public String checkpointForFileId;
     }
 
     /** artifact 落盘断言 */

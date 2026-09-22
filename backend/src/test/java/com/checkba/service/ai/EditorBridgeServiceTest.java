@@ -111,7 +111,7 @@ class EditorBridgeServiceTest {
         // dev-board#729 ③：旧文案让模型「去调 doc_get_document_text 确认」，而读取命令
         // 与超时的那条在同一个编辑器上排队，十有八九跟着一起超时——一次超时变成两次，
         // 白烧一整个 LLM 往返。不许再在超时回执里点名任何读取工具。
-        assertTrue(!payload.contains("doc_get_document_text") && !payload.contains("doc_read_paragraphs"),
+        assertTrue(!payload.contains("doc_get_document_text") && !payload.contains("doc_get_paragraph"),
                 "超时回执不得引导模型立刻整篇读回（连锁超时），实际: " + payload);
     }
 

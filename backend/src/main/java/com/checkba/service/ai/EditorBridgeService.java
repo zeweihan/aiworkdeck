@@ -225,7 +225,7 @@ public class EditorBridgeService {
         log.warn("拦下本轮重复整段插入: action={}, conversationId={}", action, conversationId);
         return "{\"error\": \"相同内容本轮已插入过（" + action + "），不要重复插入。"
                 + "若上一次调用返回超时，内容很可能已经写入文档——"
-                + "请先用 doc_get_document_text / doc_read_paragraphs 读回确认，确认没写入再重试。\"}";
+                + "请先用 doc_get_document_text(startParagraph=…, maxParagraphs=…) 读回确认，确认没写入再重试。\"}";
     }
 
     /**

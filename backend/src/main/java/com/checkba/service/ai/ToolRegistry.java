@@ -61,15 +61,28 @@ public class ToolRegistry {
             "parentFolderId", List.of("parentId", "parent_folder_id", "parent_id")
     );
 
-    /** 旧编排器为部分工具提供的缺省参数值（行为保持；键为别名解析后的真实工具名） */
+    /**
+     * 旧编排器为部分工具提供的缺省参数值（行为保持；键为别名解析后的真实工具名）。
+     *
+     * <p><b>只许给「可选参数」代填，绝不许给必填参数代填。</b>
+     * {@link #bindArguments} 的顺序是<b>先补缺省再转换</b>，所以这里填了值，方法里的
+     * null 守卫就永远走不到——等于把一处已经写好的防护重新打开。
+     *
+     * <p>踩过的坑（dev-board 审计 A4）：这里曾给 {@code doc_get_paragraph.paragraphIndex}
+     * 与 {@code doc_modify_paragraph.paragraphIndex} 设缺省值 1，而
+     * {@code DocumentEditTools.rejectBadParagraphIndex} 正是为「模型漏传段落号」写的守卫。
+     * 结果 doc_modify_paragraph 漏传 paragraphIndex 时不报错，而是对文档的**第 2 段**
+     * （0 基 index=1）做一次模型从未主张过的整段替换，用户还很可能直接接受这条修订。
+     * 两条已删；{@code doc_find_replace.replaceAll} 也一并搬回工具自身（口径不变：缺省替换全部），
+     * 缺省值贴着工具描述放才不会两头漂。回归 {@code ToolRegistryLegacyDefaultsTest}。
+     *
+     * <p>还留在这里的四条都是真·可选参数：给不给都不会改错东西。
+     */
     private static final Map<String, Object> LEGACY_DEFAULTS = Map.of(
-            "doc_find_replace.replaceAll", Boolean.TRUE,
             "doc_find_text.matchCase", Boolean.FALSE,
             "doc_delete_text.deleteAll", Boolean.FALSE,
             "list_files.subPath", ".",
             "query_memory.type", "all",
-            "doc_get_paragraph.paragraphIndex", 1,
-            "doc_modify_paragraph.paragraphIndex", 1,
             "doc_replace_nth_match.matchIndex", 1,
             "doc_delete_match.matchIndex", 1
     );
