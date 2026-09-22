@@ -153,7 +153,53 @@ public class EditorBridgeService {
             Map.entry("slide_get_overview", 120),
             Map.entry("slide_get_page", 120),
             Map.entry("slide_read_notes", 120),
-            Map.entry("slide_table_read", 120));
+            Map.entry("slide_table_read", 120),
+            // ===== sheet_/slide_ 写入类（dev-board#806，审计 B-17）=====
+            // 上一批（dev-board#729 ③）只把这两族的读取类抬进了表，写入类一条没进、全部吊在
+            // 30 秒默认值上：sheet_write_cells 一次最多两千格、sheet_add_pivot_table 要先建缓存
+            // 再建表、slide_add_page 插入前拍全篇标题快照、插入后逐页核对补回——
+            // 没有一个是「瞬时交互」。而写入类比读取类危险得多：读取超时只是白等一轮，
+            // 写入超时会让模型拿到「失败」重发一次、内容写两遍，
+            // 且去重闸 BULK_INSERT_TEXT_PARAM 只覆盖四个 doc_ 插入 action，这两族完全不在闸内。
+            // 立的规矩是**整族登记**而不是挑几个——挑着登记必然重演 B-17：
+            // 漏一条不报错，只在真机上偶发双写。只挪光标的 sheet_select_range / slide_goto
+            // 留在默认值上，由 EditorBridgeSheetSlideTimeoutTest 的白名单守着。
+            Map.entry("sheet_write_cells", 120),
+            Map.entry("sheet_format_cells", 120),
+            Map.entry("sheet_set_borders", 120),
+            Map.entry("sheet_edit_rows_cols", 120),
+            Map.entry("sheet_merge_cells", 120),
+            Map.entry("sheet_sort_range", 120),
+            Map.entry("sheet_manage_sheets", 120),
+            Map.entry("sheet_freeze_panes", 120),
+            Map.entry("sheet_set_row_col", 120),
+            Map.entry("sheet_set_autofilter", 120),
+            Map.entry("sheet_conditional_format", 120),
+            Map.entry("sheet_add_comment", 120),
+            Map.entry("sheet_delete_comment", 120),
+            Map.entry("sheet_set_data_validation", 120),
+            Map.entry("sheet_add_chart", 120),
+            Map.entry("sheet_define_name", 120),
+            Map.entry("sheet_protect_sheet", 120),
+            Map.entry("sheet_group_rows_cols", 120),
+            Map.entry("sheet_add_pivot_table", 120),
+            Map.entry("slide_add_page", 120),
+            Map.entry("slide_delete_page", 120),
+            Map.entry("slide_move_page", 120),
+            Map.entry("slide_set_layout", 120),
+            Map.entry("slide_add_text_box", 120),
+            Map.entry("slide_set_shape_text", 120),
+            Map.entry("slide_format_text", 120),
+            Map.entry("slide_format_shape", 120),
+            Map.entry("slide_add_shape", 120),
+            Map.entry("slide_delete_shape", 120),
+            Map.entry("slide_set_shape_geometry", 120),
+            Map.entry("slide_replace_text", 120),
+            Map.entry("slide_add_table", 120),
+            Map.entry("slide_table_set_cell", 120),
+            Map.entry("slide_table_set_style", 120),
+            Map.entry("slide_set_hyperlink", 120),
+            Map.entry("slide_write_notes", 120));
 
     /**
      * 超时回执（dev-board#464）。「后端不再等」不等于「没执行」——worker 打不断，

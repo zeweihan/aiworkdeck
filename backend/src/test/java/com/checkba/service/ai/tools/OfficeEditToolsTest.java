@@ -1495,4 +1495,49 @@ class OfficeEditToolsTest {
         assertTrue(out.contains("超时"), "桥的原始错误必须原样交给模型");
         assertEquals(before, passStateStore.get("conv-1").cursor(), "落笔没成功就不能吃掉一块");
     }
+
+    // ==================== office_get_text 分页（dev-board#806，审计 B-05）====================
+
+    @Test
+    @DisplayName("office_get_text：不传参数时也带上分页参数下发，缺省 5 万字符")
+    void getTextDispatchesDefaultPaging() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("get_text"), anyMap()))
+                .thenReturn("{\"text\":\"\u7b2c\u4e00\u6761\",\"totalChars\":3,\"truncated\":false}");
+
+        tools.office_get_text("conv-1", null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("get_text"), args.capture());
+        assertEquals(0, args.getValue().get("startChar"));
+        assertEquals(50_000, args.getValue().get("maxChars"));
+    }
+
+    @Test
+    @DisplayName("office_get_text：续读把 nextStart 原样当 startChar 下发")
+    void getTextDispatchesContinuation() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("get_text"), anyMap())).thenReturn("{}");
+
+        tools.office_get_text("conv-1", 50_000, 20_000);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("get_text"), args.capture());
+        assertEquals(50_000, args.getValue().get("startChar"));
+        assertEquals(20_000, args.getValue().get("maxChars"));
+    }
+
+    @Test
+    @DisplayName("office_get_text：maxChars 被夹到 8 万——这是「单条工具结果交给模型」的既有口径")
+    void getTextClampsMaxChars() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("get_text"), anyMap())).thenReturn("{}");
+
+        tools.office_get_text("conv-1", -5, 500_000);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("get_text"), args.capture());
+        assertEquals(0, args.getValue().get("startChar"), "\u8d1f\u8d77\u70b9\u6309 0 \u5904\u7406");
+        assertEquals(80_000, args.getValue().get("maxChars"));
+    }
 }

@@ -35,6 +35,7 @@
 import { minimalEdits } from './minimalEdit.js'
 import { findAllNormalized, describeAnchorFailure } from './textMatch.js'
 import { normalizeBatchItems, sortByIndex } from './batchEdits.js'
+import { pageText } from './textPaging.js'
 import {
   parseLocator, findHeadingSpan, capReferenceText, blankPageText, unsupportedLocatorError
 } from './referenceRead.js'
@@ -82,6 +83,26 @@ const wdSectionBreakNextPage = 2
 const wdPageBreak = 7
 // WdHeaderFooterIndex
 const wdHeaderFooterPrimary = 1
+/** 页面设置按磅取值的字段：命令参数名 → WPS PageSetup 属性名（dev-board#806） */
+const WPS_PAGE_SETUP_POINT_FIELDS = [
+  ['marginTopPt', 'TopMargin'],
+  ['marginBottomPt', 'BottomMargin'],
+  ['marginLeftPt', 'LeftMargin'],
+  ['marginRightPt', 'RightMargin']
+]
+// WdOrientation（页面方向）
+const wdOrientPortrait = 0
+const wdOrientLandscape = 1
+// WdPaperSize：法律文书用得上的几种（全集四十多项，不必都摆给模型）
+const WPS_PAPER_SIZES = {
+  a3: 6,
+  a4: 7,
+  a5: 8,
+  b4: 12,
+  b5: 13,
+  letter: 2,
+  legal: 4
+}
 // WdRowAlignment
 const wdAlignRowLeft = 0
 const wdAlignRowCenter = 1
@@ -998,8 +1019,9 @@ export async function locateInWpsDocument(text) {
 /* ==================== HANDLERS ==================== */
 
 export const WPS_WORD_HANDLERS = {
-  async get_text() {
-    return truncate(bodyText(activeDoc()))
+  // 分页读取（dev-board#806）：切法与上限在 textPaging.js 单源，与 Office 面同一份口径
+  async get_text(args) {
+    return pageText(bodyText(activeDoc()), args)
   },
 
   async get_selection() {
@@ -1965,6 +1987,109 @@ export const WPS_WORD_HANDLERS = {
     const idx = resolveCommentIndex(args, cs.Count)
     cs.Item(idx + 1).Done = resolved // Done 可读写，可反向设 false 重开
     return { resolved }
+  },
+
+  /**
+   * 删除批注及其回复（dev-board#806，审计 B-16）。
+   *
+   * WPS 的 Comment.Delete() 是 VBA 同名方法；序号在删除后会塌缩重排，
+   * 所以每次操作前都重新读集合（与 reply/resolve 同一条纪律）。
+   * 批注不是修订：不经 withTracking，命令也在 WORD_UNTRACKABLE_COMMANDS 名单里。
+   */
+  async delete_comment(args) {
+    const doc = activeDoc()
+    const cs = doc.Comments
+    const idx = resolveCommentIndex(args, cs.Count)
+    cs.Item(idx + 1).Delete()
+    return { deleted: true, note: '批注序号在删除后会重排，要再删下一条请重新调用 office_get_comments' }
+  },
+
+  // ==================== 目录与页面设置（dev-board#806，审计 B-16） ====================
+
+  /**
+   * 插入真正的目录域（TOC），不是一段静态文字。
+   *
+   * WPS 文字的 TablesOfContents.Add 是 VBA 同名接口（UseHeadingStyles / UpperHeadingLevel /
+   * LowerHeadingLevel / RightAlignPageNumbers / UseHyperlinks）。**未经真机验证**：
+   * 真机不通时按本文件其余降级路的惯例抛可读错误，不静默成功。
+   */
+  async insert_toc(args) {
+    let levels = Math.floor(Number(args.levels))
+    if (!Number.isFinite(levels) || levels < 1) levels = 3
+    if (levels > 9) levels = 9
+    const title = args.title == null ? '目录' : String(args.title)
+    const position = args.position === 'start' ? 'start' : 'cursor'
+    const doc = activeDoc()
+    return withTracking(doc, () => {
+      const pos = position === 'start' ? 0 : app().Selection.Range.End
+      let insertAt = pos
+      if (title) {
+        const titleRange = doc.Range(pos, pos)
+        titleRange.InsertAfter(title + '\r')
+        insertAt = pos + title.length + 1
+      }
+      const tocRange = doc.Range(insertAt, insertAt)
+      try {
+        doc.TablesOfContents.Add(tocRange, true, 1, levels, false, '', true, true)
+      } catch (e) {
+        throw new Error(`插入目录失败：${(e && e.message) || String(e)}（当前 WPS 版本可能不支持目录域）`)
+      }
+      return { inserted: true, levels, title: title || null, position }
+    })
+  },
+
+  /**
+   * 页面设置：纸张、方向、四边页边距（**单位是磅**，与 Office 面同口径）。
+   *
+   * WPS 的 Document.PageSetup 属性名与 VBA 一致（TopMargin / Orientation / PaperSize），
+   * 单位本来就是磅，所以不需要换算。页面设置不留修订痕迹：不经 withTracking，
+   * 命令也在 WORD_UNTRACKABLE_COMMANDS 名单里（跨文档写入一律拒绝）。
+   */
+  async set_page_setup(args) {
+    const patch = []
+    for (const [argName, prop] of WPS_PAGE_SETUP_POINT_FIELDS) {
+      if (args[argName] == null) continue
+      const value = Number(args[argName])
+      if (!Number.isFinite(value) || value < 0) throw new Error(`${argName} 须为非负数（单位：磅）`)
+      patch.push([prop, value])
+    }
+    if (args.orientation != null) {
+      const raw = String(args.orientation).trim().toLowerCase()
+      if (raw !== 'portrait' && raw !== 'landscape') {
+        throw new Error(`orientation 值非法：${args.orientation}（合法值：portrait/landscape）`)
+      }
+      patch.push(['Orientation', raw === 'landscape' ? wdOrientLandscape : wdOrientPortrait])
+    }
+    if (args.paperSize != null) {
+      const raw = String(args.paperSize).trim().toLowerCase()
+      const code = WPS_PAPER_SIZES[raw]
+      if (code == null) {
+        throw new Error(`paperSize 值非法：${args.paperSize}（合法值：${Object.keys(WPS_PAPER_SIZES).join('/')}）`)
+      }
+      patch.push(['PaperSize', code])
+    }
+    if (!patch.length) {
+      throw new Error('没有给任何页面参数（marginTopPt/marginBottomPt/marginLeftPt/marginRightPt/orientation/paperSize 至少一个）')
+    }
+    const ps = activeDoc().PageSetup
+    // 纸张先设：换纸张会把页边距按新纸张重算，之后再落边距才不会被顶掉
+    for (const [prop, value] of patch.filter(([prop]) => prop === 'PaperSize')) ps[prop] = value
+    for (const [prop, value] of patch.filter(([prop]) => prop !== 'PaperSize')) ps[prop] = value
+    const read = (prop) => {
+      try {
+        return Number(ps[prop])
+      } catch (e) {
+        return null
+      }
+    }
+    return {
+      applied: patch.map(([prop]) => prop),
+      marginTopPt: read('TopMargin'),
+      marginBottomPt: read('BottomMargin'),
+      marginLeftPt: read('LeftMargin'),
+      marginRightPt: read('RightMargin'),
+      orientation: read('Orientation') === wdOrientLandscape ? 'landscape' : 'portrait'
+    }
   },
 
   // ==================== 修订读取/接受/拒绝 ====================
