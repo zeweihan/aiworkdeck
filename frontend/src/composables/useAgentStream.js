@@ -1390,12 +1390,23 @@ export function useAgentStream() {
             } catch (e) {
                 console.error('Failed to parse title_update', e)
             }
-        } else if (evt === 'doc_stream_data' || evt === 'wps_stream_data') {
-            // Live document streaming. Dual-track migration (AI_ARCHITECTURE.md
-            // Phase 3): new backends emit doc_stream_data first then the legacy
-            // wps_stream_data with the same content; both are routed up the
-            // client_action seam and deduped there by the "new-name-first" latch.
+        } else if (evt === 'doc_stream_data') {
+            // Live document streaming. Single-name since dev-board#816: the legacy
+            // wps_stream_data twin (and the "new-name-first" dedup latch that ate it
+            // downstream) are gone — every token used to be pushed twice.
+            // 解析成功之后才置「正在写入」态。反过来（先置位再 parse）出过事：后端一度把裸
+            // Map 交给 SseEmitterService.send，载荷是 {content=正文} 而不是 JSON，parse 抛错
+            // 被这里的 catch 吞成一行 console.error，而气泡已经被改成「正在向文档流式写入内容…」
+            // 并挂上 isEditorStreaming（此后正文会被 appendText 一路吞掉）——用户拿到一份空白
+            // 文档、对话永远停在「正在写入」，前后端谁都不报错。坏载荷必须表现为「什么都没发生」，
+            // 不能表现为「看起来正在写」。
+            let d = null
             try {
+                d = JSON.parse(dataStr)
+            } catch (e) {
+                console.error('Failed to handle ' + evt, e)
+            }
+            if (d) {
                 // Mark current bubble as doc-streaming to suppress chat duplication
                 if (currentAssistantBubble.value && !currentAssistantBubble.value.isEditorStreaming) {
                     currentAssistantBubble.value.isEditorStreaming = true
@@ -1404,13 +1415,9 @@ export function useAgentStream() {
                         currentAssistantBubble.value.content = t('agentStream.docStreamingPlaceholder')
                     }
                 }
-
-                const d = JSON.parse(dataStr)
                 if (clientActionHandler.value) {
                     clientActionHandler.value({ action: evt, content: d.content || '' })
                 }
-            } catch (e) {
-                console.error('Failed to handle ' + evt, e)
             }
         } else if (evt === 'doc_stream_end') {
             // 流式写入结束信号：让消费端冲缓冲并命令 worker 收尾（写尾行/建尾表/复位）。

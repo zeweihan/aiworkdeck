@@ -46,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -434,7 +435,7 @@ class AgentOrchestratorConcurrentTurnsTest {
     @Test
     @DisplayName("旧轮次被取代后继续吐 token：text_delta / reasoning_delta / doc_stream_data 都不再出现，新一轮照常")
     void supersededTurnStopsStreamingDeltas() throws Exception {
-        // 编辑器流式写入打开：doc_stream_data / wps_stream_data 这条增量通道也要一并守住
+        // 编辑器流式写入打开：doc_stream_data 这条增量通道也要一并守住
         when(editorBridge.isStreamingMode(CONV)).thenReturn(true);
 
         CountDownLatch oldStreaming = new CountDownLatch(1);
@@ -458,7 +459,7 @@ class AgentOrchestratorConcurrentTurnsTest {
 
         String textDeltas = payloadsOf("text_delta");
         String reasoningDeltas = payloadsOf("reasoning_delta");
-        String docStream = payloadsOf("doc_stream_data") + payloadsOf("wps_stream_data");
+        String docStream = payloadsOf("doc_stream_data");
 
         // 取代之前旧轮次流出的那一段是合法的，不该被误伤
         assertTrue(textDeltas.contains("OLD-BEFORE-TAKEOVER"),
@@ -474,6 +475,44 @@ class AgentOrchestratorConcurrentTurnsTest {
                 "旧轮次被取代后仍在往 emitter 发 reasoning_delta：" + reasoningDeltas);
         assertFalse(docStream.contains("OLD-AFTER-TAKEOVER"),
                 "旧轮次被取代后仍在往编辑器流式写入，正文会插进新一轮正在写的文档：" + docStream);
+    }
+
+    @Test
+    @DisplayName("doc_stream_data 的载荷必须是合法 JSON，content 等于流出去的那段正文")
+    void editorStreamPayloadIsValidJson() throws Exception {
+        // 病灶（#663 引入，2026-08-30）：这一行曾把裸 Map.of("content", token) 交给
+        // SseEmitterService.send，而 send 里是 String.valueOf(data) —— Map 的 toString
+        // 出来是 {content=正文}，不是 JSON。前端 useAgentStream 的 doc_stream_data 分支
+        // JSON.parse 直接抛错被 catch 吞成 console.error，clientActionHandler 再也不会被调用：
+        // AI 流式写入新建文档的正文一个字都到不了编辑器，而气泡上还挂着「正在写入…」。
+        // 改前 send 走的是 SseEmitter.event().data(Object)，Spring 用 Jackson 转换器
+        // 序列化，所以这是那次改造踩出来的回归，不是一直如此。
+        when(editorBridge.isStreamingMode(CONV)).thenReturn(true);
+
+        GatedModel model = GatedModel.ungated(AiMessage.from("第一条\t甲方\"乙方\"应当依约履行。"));
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(model);
+        join(runAsync("起草一份协议", model));
+
+        String raw = payloadsOf("doc_stream_data");
+        assertFalse(raw.isBlank(), "这一轮压根没往编辑器流里发东西，用例失去意义");
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        StringBuilder streamed = new StringBuilder();
+        for (String line : raw.split("\n")) {
+            if (line.isBlank()) continue;
+            com.fasterxml.jackson.databind.JsonNode node = null;
+            try {
+                node = mapper.readTree(line);
+            } catch (Exception e) {
+                fail("doc_stream_data 的载荷不是合法 JSON，前端 JSON.parse 必然抛错：" + line);
+            }
+            assertTrue(node.has("content"), "载荷里没有 content 字段：" + line);
+            streamed.append(node.get("content").asText());
+        }
+        // 制表符与引号原样送达（信封转义交给 Jackson，不是手拼字符串）
+        assertTrue(streamed.toString().contains("第一条\t甲方\"乙方\"应当依约履行。"),
+                "流出去的正文被转义坏了：" + streamed);
     }
 
     // =====================================================================================

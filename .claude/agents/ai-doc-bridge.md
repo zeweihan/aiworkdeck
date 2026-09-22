@@ -87,15 +87,15 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
   **`TIMEOUT_RESULT_JSON` 里不许再点名任何读取工具**：旧文案让模型「去调 doc_get_document_text 确认」，
   而读取命令与超时的那条在同一个编辑器上排队，十有八九跟着一起超时——一次超时变成两次。
 - `backend/src/main/java/com/checkba/controller/ai/EditorResultController.java` — `POST /editor-result`（旧别名 `/wps-result`）回调解锁 Future。
-- `backend/src/main/java/com/checkba/service/ai/AgentOrchestrator.java` — dispatchTool 在首个 MODIFIED 工具前建检查点（~:168）；doc_open_file 后切 activeFileId（~:179）；流式 token 双发 doc_stream_data/wps_stream_data（~:371-376）。
+- `backend/src/main/java/com/checkba/service/ai/AgentOrchestrator.java` — dispatchTool 在首个 MODIFIED 工具前建检查点（~:168）；doc_open_file 后切 activeFileId（~:179）；流式 token 单发 doc_stream_data（~:1371，旧名 wps_stream_data 已摘）。
 - `backend/src/main/java/com/checkba/service/ai/AgentStreamHandler.java` — 流式写入编辑器的过滤逻辑（~:69 起）。
 - `backend/src/main/java/com/checkba/service/ai/DocumentCheckpointService.java` — run 级快照 `ensureCheckpoint/restore/clearForNewRun`，存 `checkpoints/{conversationId}/{fileId}_{ts}`，恢复后 sendReloadFileAction。
 
 **前端桥接消费**
 - `frontend/src/composables/useEditorBridge.js` — 编辑器无关的分发接缝（薄封装），执行器可插拔。
 - `frontend/src/composables/libreofficeExecutorClient.js` — **EDITOR_ACTIONS 白名单定义处**（:15-174，2026-09-22 复核行号：数组早已超出旧标注的 :67，实测以 `grep -n '^]'` 收在 :174）+ reqId 关联的 worker port 客户端；白名单外 action 直接拒绝。
-- `frontend/src/composables/useAgentStream.js` — SSE 消费：`client_action`（~:447）；doc_stream_data/wps_stream_data 双轨去重（~:467-488）。
-- `frontend/src/pages/project-overview/project-overview.vue` — 命令路由中枢：`handleClientAction`（~:5546，双轨去重 latch `_editorContractV2`）→ `handleEditorCommand`（~:5819，打 `__agent:true` 标记后调 executor）。
+- `frontend/src/composables/useAgentStream.js` — SSE 消费：`client_action`（~:1368）；`doc_stream_data`（~:1393，单名）。
+- `frontend/src/pages/project-overview/agentClientActions.js` — 命令路由中枢：`handleClientAction`（按 `action.action` / `action.tool` 分派，单名）→ `handleEditorCommand`（打 `__agent:true` 标记后调 executor）。
 - `frontend/src/zetaoffice/public/office_thread.js` — worker 端所有 action 的真实 UNO 实现 + UI_COMMANDS 白名单（:321-332）+ 修订机制。
 - `frontend/src/utils/toolDisplayNames.js` — 工具名→中文显示名映射表（NAMES 表 :8-97）。**新增工具必须同步加中文名**。
 
@@ -116,8 +116,8 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
 
 1. `DocumentEditTools.doc_find_replace` 校验参数 → `executeEditorCommand("find_replace", …)`。
 2. 编排器在此前已因 `fileEffect="MODIFIED"` 对 activeFileId 建检查点（幂等，一轮一次）。
-3. EditorBridgeService 生成 requestId、Future 入 pendingRequests，经 SSE client_action **双轨各发一份**（先 `tool=editor_command` 后 `tool=wps_command`），然后阻塞 30s。
-4. 前端 useAgentStream → project-overview.vue `handleClientAction`（latch 去重）→ `handleEditorCommand` 附 `__agent:true` → executor。
+3. EditorBridgeService 生成 requestId、Future 入 pendingRequests，经 SSE client_action **发一份**（`tool=editor_command`），然后按 `timeoutSecondsFor(action)` 阻塞。
+4. 前端 useAgentStream → `agentClientActions.handleClientAction` → `handleEditorCommand` 附 `__agent:true` → executor。
 5. executor 校验 EDITOR_ACTIONS → worker postMessage → office_thread.js 执行（RecordChanges=true → 逐处 applyMinimalRedline，失败回退 setString）。
 6. 结果按 reqId 回流 → `POST /api/ai/agent/editor-result` → completeEditorAction 解锁 Future → 工具返回给模型。
 
@@ -177,7 +177,7 @@ Impress **没有 redline**：`slide_write_notes`/`slide_set_shape_text`/`slide_r
 txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue，见 doc-editor.md「纯文本分流」），doc_* 桥对它们不适用。AI 改这类文件走 `backend/.../tools/TextFileEditTools.java`：
 
 - `text_write_file`（整篇覆盖）、`text_find_replace`（字面量替换，replaceAll 可选，返回命中数）；读取复用 `extract_file_text`。均按扩展名校验（`PLAIN_TEXT_TYPES`，与前端 fileOpenTabs.js 的同名表对齐），docx 等一律拒绝并指回 doc_*。
-- 实现：StorageService 读写（存储键 filePath 优先、回退 wpsFileId，与 DocumentTextService 同口径；UTF-8 直读直写，**不走 Tika**）+ 回写 fileSize/updatedAt + `WorkSessionService.onChangeSignal`（与 FileController.uploadFile 同款版本信号）+ SSE 单向 `client_action {action:'text_reload_file', fileId}`（EditorBridgeService.sendTextReloadFileAction，单名无 wps_* 双轨）。
+- 实现：StorageService 读写（存储键 filePath 优先、回退 wpsFileId，与 DocumentTextService 同口径；UTF-8 直读直写，**不走 Tika**）+ 回写 fileSize/updatedAt + `WorkSessionService.onChangeSignal`（与 FileController.uploadFile 同款版本信号）+ SSE 单向 `client_action {action:'text_reload_file', fileId}`（EditorBridgeService.sendTextReloadFileAction）。
 - 前端消费：agentClientActions.js `handleTextReloadFile` → `reloadPlainTextInstances(fileId)` 就地重载打开中的文本标签（丢本地未保存态）；未打开不硬拉。
 - **能力过滤刻意不收 text_ 前缀**：这是纯后端执行工具（无客户端执行器依赖，SSE 刷新是 fire-and-forget），按 ClientCapabilityService 的既有语义对所有能力档位可见（与 extract_file_text 同口径）——不要把它加进 lowaOnly，那会让 office/none 会话白白失去纯文本编辑能力。
 - 上下文侧：ContextAssemblerService 的 `lowaDocKind` 新增 `"text"` 分支（txt/md/markdown），active-document 指引/末位提醒/readHint 三处（含英文版）都指向 extract_file_text + text_*，并禁止对其调 doc_*/sheet_*/slide_*；DocumentEditTools.doc_open_file 对纯文本返回指路错误。
@@ -317,9 +317,13 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - A7 纪要散行根因是 flexmark 单元格引用 `TableHeading`/`TableContents`，而 styles.xml 缺这两个定义；LOWA 24.2 导入时已将单元格文字移到表外，甚至把前一标题移进末格。`DocxStyleHelper.addMissingStyles` 必须在 render 前补齐两个基于 Normal 的段落样式。真实原件 A/B：只补定义恢复18格；只补 tblGrid、tcW 或 compatibilityMode 都无效。已有网格完整，不要误改边框/列宽。合成 `fixtures/flexmark-table.docx` 经生产渲染链生成，专项同时检查导入和导出后的格内容归属及标题位置。
 - 真实引擎导出专项：`LOWA_E2E_PORT=8914 node frontend/tests/lowa-e2e/generated-docx.mjs`（需先 build:zetaoffice 和准备引擎）。覆盖 17×7 尾表、默认网格（LOWA 导出使用各单元格 `tcBorders`，没有 `tblBorders` 不等于无网格）、新旧兼容级别、完整插入串流与失败清理、项目符号图注清除。后端回读：`GeneratedDocxCompatibilityTest`；模型指引契约：`NumberingRemovalContractTest`。
 
-## 命名双轨现状（PR#192；2026-09-22 复核：仍双发，摘旧名是 K36/dev-board#816，未开始）
+## 命名双轨已摘（PR#192 起双发，dev-board#816 / K36 摘除；出站一律单名）
 
-仍活着的 wps_* 旧名：后端 `sendDualNamedAction`（doc_open_file/wps_open_file、doc_reload_file/wps_reload_file）、executeEditorCommand 双发 editor_command/wps_command、doc_open_file_sync↔wps_open_file_sync、doc_stream_data/wps_stream_data 双发、`/wps-result` 路由别名；前端 handleClientAction 显式识别全部旧名+latch 去重、toolDisplayNames 把 wps_* 归一为 doc_*。
+**出站 SSE 一条指令只发一份**，旧名全部摘除：`editor_command`（不再有 `wps_command`）、`doc_open_file`、`doc_reload_file`、`doc_open_file_sync`、`doc_stream_data`。后端侧 `sendDualNamedAction` 已删，两个调用点改走既有的单名 `sendClientAction(action, conversationId, fields)`；前端 `agentClientActions.handleClientAction` 的 latch `_editorContractV2` 与全部 `wps_*` 分支一并删除。
+- **判据**：旧名的唯一消费者是桌面端自己（`agentClientActions.js`），与后端同一个安装包一起发版；Office/WPS 任务窗格 `office-addin/taskpane/lib/chatSession.js` 的 `handleClientAction` 第一行就 `action.tool !== 'office_command'` 直接 return，从不读 `editor_command`，更不读 `wps_command`（`office-addin/wps/` 只有 ribbon + manifest，没有独立的 SSE 消费者）。没有会掉队的已发布客户端。
+- **代价收益**：双发把整份载荷推两遍，正文有多长就白推多长——实测一条 5000 字的 `doc_insert_at_cursor`，client_action 从 30518 字节降到 15259 字节（`EditorBridgeSingleDispatchTest`）。
+- **两样仍保留、别顺手删**：入站路由别名 `POST /api/ai/agent/wps-result`（`EditorResultController` 的第二个 `@PostMapping` 值，出站改单名不影响它）；`toolDisplayNames.js` 把 `wps_*` 归一为 `doc_*`（服务的是**历史会话**里落库的工具名，与 SSE 无关）。
+- 护栏：`EditorBridgeSingleDispatchTest`（单发 + 后端源码里不许再出现 `"wps_command"`/`"wps_open_file"`/`"wps_reload_file"`/`"wps_stream_data"`/`"wps_open_file_sync"` 字面量）、`frontend/tests/project-home/editor-command-legacy-names-removed.test.mjs`（新名照常分发 + 旧名一律不再被识别 + latch 不许回来）。
 **`wpsFileId` 不属于命令双轨**——是持久化字段名（ProjectFile 实体），贯穿前后端，无改名计划，别动。
 
 ## 已知地雷

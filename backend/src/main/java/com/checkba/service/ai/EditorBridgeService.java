@@ -32,10 +32,10 @@ import java.util.concurrent.TimeoutException;
  * 4. EditorResultController 调用 completeEditorAction 解锁 CompletableFuture
  * 5. executeEditorCommand 获取结果并返回给 DocumentEditTools
  *
- * 历史沿革：原名 WpsActionService（WPS WebOffice 时代）。SSE 事件与路由中的
- * wps_* 字符串是前后端契约（见 docs/ai_agent_dev.md §2.2），当前处于双轨迁移期：
- * 每条指令按"新名在前、旧名在后"各发一份（doc_* 与 editor_command + wps_*），前端凭
- * "先见新名"判定新后端并丢弃旧名去重；兼容一个发布周期后摘旧名（AI_ARCHITECTURE.md Phase 3）。
+ * 历史沿革：原名 WpsActionService（WPS WebOffice 时代）。SSE 出站事件曾处于双轨迁移期，
+ * 每条指令按"新名在前、旧名在后"各发一份（editor_command + wps_command、doc_open_file +
+ * wps_open_file 等），前端凭"先见新名"判定新后端并丢弃旧名去重。旧名已于 dev-board#816
+ * 摘除（出站一律单名），入站的 /wps-result 路由别名仍在 EditorResultController 上保留。
  */
 @Service
 @RequiredArgsConstructor
@@ -394,7 +394,7 @@ public class EditorBridgeService {
             Map<String, Object> profile = styleProfileFor(file);
             if (profile != null) fields.put("styleProfile", profile);
             noteActiveDocument(conversationId, file.getId());
-            sendDualNamedAction("doc_open_file", "wps_open_file", conversationId, fields);
+            sendClientAction("doc_open_file", conversationId, fields);
             log.info("Sent doc_open_file action for file: {} (id={}, styleProfile={})", file.getName(), file.getId(), profile != null);
 
         } catch (Exception e) {
@@ -420,7 +420,7 @@ public class EditorBridgeService {
                     "fileType", file.getFileType(),
                     "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : ""
             );
-            sendDualNamedAction("doc_reload_file", "wps_reload_file", conversationId, fields);
+            sendClientAction("doc_reload_file", conversationId, fields);
             log.info("Sent doc_reload_file action for file: {} (id={})", file.getName(), file.getId());
 
         } catch (Exception e) {
@@ -453,20 +453,7 @@ public class EditorBridgeService {
     }
 
     /**
-     * 双轨迁移期的单向 client_action 发送：同一份载荷按"新名在前、旧名在后"各发一次。
-     * 顺序是契约的一部分——前端凭"先见新名"判定新后端并丢弃随后的旧名事件去重。
-     */
-    private void sendDualNamedAction(String newAction, String legacyAction,
-                                     String conversationId, Map<String, Object> fields) throws Exception {
-        java.util.Map<String, Object> payloadMap = new java.util.HashMap<>(fields);
-        payloadMap.put("action", newAction);
-        sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
-        payloadMap.put("action", legacyAction);
-        sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
-    }
-
-    /**
-     * 单名 client_action（无双轨旧名）：显式指定会话，不依赖 ThreadLocal 的当前会话——
+     * 单名 client_action：显式指定会话，不依赖 ThreadLocal 的当前会话——
      * 插件后台任务跑在自己的线程池上，这里拿不到 currentConversationId。
      * 载荷 = fields + {action}。
      */
@@ -602,19 +589,15 @@ public class EditorBridgeService {
         long bridgeStartMs = System.currentTimeMillis();
 
         try {
-            // 构建并发送 SSE 事件（双轨：新名 editor_command 在前、旧名 wps_command 在后，
-            // requestId 相同；action 中仅 doc_open_file_sync 有旧名 wps_open_file_sync 需映射）
-            String legacyAction = "doc_open_file_sync".equals(action) ? "wps_open_file_sync" : action;
+            // 构建并发送 SSE 事件。单名（dev-board#816）：双轨期这里对每条命令把整份载荷
+            // 按 editor_command / wps_command 各推一遍，正文有多长就白推多长——一条 5000 字的
+            // insert_at_cursor 推两万多字节，其中一半注定被前端的 latch 扔掉。
             java.util.Map<String, Object> payloadMap = new java.util.HashMap<>();
             payloadMap.put("action", action);
             payloadMap.put("params", params != null ? params : Map.of());
             payloadMap.put("requestId", requestId);
             payloadMap.put("conversationId", conversationId);
-
             payloadMap.put("tool", "editor_command");
-            sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
-            payloadMap.put("tool", "wps_command");
-            payloadMap.put("action", legacyAction);
             sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
             log.info("Sent editor command: action={}, requestId={}", action, requestId);
 

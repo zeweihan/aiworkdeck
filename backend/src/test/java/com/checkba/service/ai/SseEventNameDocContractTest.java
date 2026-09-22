@@ -29,7 +29,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * 下一个人照着文档写客户端，那个事件对他就不存在。
  *
  * <p>只做<b>单向</b>对拍（代码里发的都要在文档里）：文档里可以多出已经摘掉的旧名
- *（比如 wps_stream_data 那条双轨），反过来不行。
+ *（比如 wps_stream_data 那条双轨，dev-board#816 已摘），反过来不行。
+ * 「摘掉的旧名不许回来」由 {@code EditorBridgeSingleDispatchTest} 守。
  */
 class SseEventNameDocContractTest {
 
