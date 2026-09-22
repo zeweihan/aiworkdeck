@@ -221,29 +221,29 @@
 | K11 复制+重新生成 | #790 | 2 | RootBubble/CI | 已合并 | #920 |
 | K12 钢琴键 | #791 | 2 | CI | 已合并 | #918 |
 | K13 状态条+token | #792 | 2 | RootBubble/CI | 已合并 | #920 |
-| K14 上下文层 | #793 | 2 | CI/UAS/CAS/新表 | 待合并（解冲突中） |  |
-| K15 @ 引用 | #794 | 2 | CI/FileTree | 进行中 |  |
-| K16 键位 | #795 | 2 | CI | 进行中 |  |
+| K14 上下文层 | #793 | 2 | CI/UAS/CAS/新表 | 已合并 | #928 |
+| K15 @ 引用 | #794 | 2 | CI/FileTree | 已合并 | #932 |
+| K16 键位 | #795 | 2 | CI | 已合并 | #932 |
 | K17 会话管理 | #796 | 2 | PO | 已合并 | #923 |
 | K18 从此分叉 | #798 | 2 | CI/fork | 已合并 | #924 |
 | K19 工具可见性声明化 | #799 | 2 | ToolMeta/Capability/SkillRouter | 已合并 | #921 |
 | K20 PDF 文字层 | #800 | 2 | LegalTools/Extractor/CAS | 已合并 | #919 |
-| K21 降级与上限可见 | #801 | 2 | Config/CI/CAS | 待合并（解冲突中） |  |
+| K21 降级与上限可见 | #801 | 2 | Config/CI/CAS | 已合并 | #928 |
 | K22 steer 立即发送 | #802 | 2 | Inbox | 已合并 | #923 |
 | K23 X-Client-Instance | #803 | 2 | UAS | 已合并 | #923 |
-| K24 Excel 替换 | #804 | 3 | DET/office_thread/Office | 进行中 |  |
-| K25 PDF 页操作 | #805 | 3 | PdfTools | 进行中 |  |
-| K26 Office 桥超时+分页 | #806 | 3 | Bridge/OfficeEditTools | 进行中 |  |
-| K27 工具描述清理 | #807 | 3 | 多 tool 组件 | 进行中 |  |
-| K28 PPTX 权威面 | #808 | 3 | PptxTools | 进行中 |  |
-| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 未开始 | |
-| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 未开始 | |
-| K31 长会话性能 | #811 | 3 | CI/Markdown | 未开始 | |
-| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 未开始 | |
-| K33 Office Word 面 | #813 | 3 | OfficeEditTools/skill | 进行中 |  |
-| K34 音频附件 | #814 | 3 | LegalTools | 进行中 |  |
+| K24 Excel 替换 | #804 | 3 | DET/office_thread/Office | 待合并 | #934 |
+| K25 PDF 页操作 | #805 | 3 | PdfTools | 待合并 | #929 |
+| K26 Office 桥超时+分页 | #806 | 3 | Bridge/OfficeEditTools | 已合并 | #930 |
+| K27 工具描述清理 | #807 | 3 | 多 tool 组件 | 待合并 | #933 |
+| K28 PPTX 权威面 | #808 | 3 | PptxTools | 待合并 | #933 |
+| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 进行中 |  |
+| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 进行中 |  |
+| K31 长会话性能 | #811 | 3 | CI/Markdown | 进行中 |  |
+| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 进行中 |  |
+| K33 Office Word 面 | #813 | 3 | OfficeEditTools/skill | 已合并 | #930 |
+| K34 音频附件 | #814 | 3 | LegalTools | 已合并 | #931 |
 | K35 文档漂移 | #815 | 3 | docs | 已合并（关卡） | #926 |
-| K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 未开始 | |
+| K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 进行中 |  |
 | K37 skill 白名单补编辑面 | #818 | 2 | skills yml/回放用例 | 已合并 | #925 |
 
 ## 派工模板（主会话给每个实施代理的任务书骨架）
