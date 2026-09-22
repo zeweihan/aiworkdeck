@@ -197,32 +197,37 @@
 ### K36 SSE 双轨摘 wps_command 旧名
 - 依据：B-15。前置：确认无旧客户端。任务：只发 editor_command，前端 latch 分支删除。验收：desktop-e2e 保存链路。
 
+### K37 meeting-recorder / listing-pathway 白名单补编辑面 + 触发词收紧
+- 依据：K19 实施时发现（与 A2 同形态更隐蔽）。冲突组：backend/skills yml / cases-skill.json。
+- 任务：白名单补 doc_*/office_* 读写基本面；短触发词改整词/短语匹配；删 yml 里「已知风险」段。
+- 验收：回放评测「命中后仍可见 doc_insert_at_cursor / office_insert_text」；触发词单测。
+
 ---
 
 ## 状态表（主会话每合一张卡就更新；新 session 从第一张非「已合并」的卡接着做）
 
 | 卡 | dev-board# | 批次 | 冲突组 | 状态 | PR |
 |---|---|---|---|---|---|
-| K1 回退修复 | #780 | 1 | CI/UAS/后端 | 未开始 | |
+| K1 回退修复 | #780 | 1 | CI/UAS/后端 | 已合并 | #917 |
 | K2 LEGACY_DEFAULTS | #781 | 1 | ToolRegistry | 已合并 | #911 |
 | K3 doc_read_paragraphs | #782 | 1 | ToolFileGuard | 已合并 | #911 |
-| K4 取消真正生效 | #783 | 1 | AO/OpenRouter/Bridge | 待合并 | #915 |
+| K4 取消真正生效 | #783 | 1 | AO/OpenRouter/Bridge | 已合并 | #915 |
 | K5 菜单停止 | #784 | 1 | CI | 已合并 | #913 |
 | K6 拖拽 | #785 | 1 | PO/CI | 已合并 | #914 |
 | K7 待处理同步+角标+恢复会话 | #786 | 1 | CI/UAS/Inbox | 已合并 | #913 |
 | K8 虚拟标签 | #787 | 1 | PO/CAS | 已合并 | #914 |
 | K9 锚点错位 | #788 | 1 | office_thread/DET | 已合并 | #912 |
 | K10 ToolMeta 补齐 | #789 | 1 | DET | 已合并 | #911 |
-| K11 复制+重新生成 | #790 | 2 | RootBubble/CI | 未开始 | |
-| K12 钢琴键 | #791 | 2 | CI | 未开始 | |
-| K13 状态条+token | #792 | 2 | RootBubble/CI | 未开始 | |
+| K11 复制+重新生成 | #790 | 2 | RootBubble/CI | 已合并 | #920 |
+| K12 钢琴键 | #791 | 2 | CI | 已合并 | #918 |
+| K13 状态条+token | #792 | 2 | RootBubble/CI | 已合并 | #920 |
 | K14 上下文层 | #793 | 2 | CI/UAS/CAS/新表 | 未开始 | |
 | K15 @ 引用 | #794 | 2 | CI/FileTree | 未开始 | |
 | K16 键位 | #795 | 2 | CI | 未开始 | |
 | K17 会话管理 | #796 | 2 | PO | 未开始 | |
 | K18 从此分叉 | #798 | 2 | CI/fork | 未开始 | |
-| K19 工具可见性声明化 | #799 | 2 | ToolMeta/Capability/SkillRouter | 未开始 | |
-| K20 PDF 文字层 | #800 | 2 | LegalTools/Extractor/CAS | 未开始 | |
+| K19 工具可见性声明化 | #799 | 2 | ToolMeta/Capability/SkillRouter | 待合并 | #921 |
+| K20 PDF 文字层 | #800 | 2 | LegalTools/Extractor/CAS | 已合并 | #919 |
 | K21 降级与上限可见 | #801 | 2 | Config/CI/CAS | 未开始 | |
 | K22 steer 立即发送 | #802 | 2 | Inbox | 未开始 | |
 | K23 X-Client-Instance | #803 | 2 | UAS | 未开始 | |
@@ -239,6 +244,7 @@
 | K34 音频附件 | #814 | 3 | LegalTools | 未开始 | |
 | K35 文档漂移 | #815 | 3 | docs | 未开始 | |
 | K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 未开始 | |
+| K37 skill 白名单补编辑面 | #818 | 2 | skills yml/回放用例 | 进行中 | |
 
 ## 派工模板（主会话给每个实施代理的任务书骨架）
 
