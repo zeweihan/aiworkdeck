@@ -46,7 +46,7 @@ class LegalToolsValidationTest {
                         mcpClientService, externalProviderResolver, platformGatewayClient),
                 fileContentExtractorService,
                 new com.checkba.service.file.ProjectFileTextExtractor(
-                        documentTextService, fileContentExtractorService, projectFileService, null));
+                        documentTextService, fileContentExtractorService, projectFileService, null, null));
     }
 
     @Test

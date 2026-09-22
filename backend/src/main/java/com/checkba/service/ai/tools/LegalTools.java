@@ -79,6 +79,10 @@ public class LegalTools implements AgentToolComponent {
      * 带文字层的合同与裁判文书本来毫秒级就能读，却每轮都要等完整 OCR、每轮按页扣 Credits，
      * 而且同一份 PDF 走 {@code extract_file_text} 得到的正文与账单完全不同。现在三条入口同一口径。
      *
+     * <p>音频（mp3/m4a/wav…）在 dev-board#814 之前落进 Tika 抽出空串，于是回的是下面那句
+     * 指向 OCR 与 extract_file_text 的 Warning——对音频三条建议没有一条成立。现在走抽取器的
+     * 音频分支：已转写的直接返回转写稿，没转写的回一句「先转写、右键『转写音频』」。
+     *
      * <p>抽不出正文时<b>绝不返回空白</b>，而是给一句可行动的说明（口径抄 extract_file_text）；
      * OCR 失败一律 {@code Error:} 开头并带上底层原因——此前它以「[System: OCR 识别失败…]」形态
      * 返回，非空且无 Error 前缀，会被当成正文原样注进上下文。
@@ -102,6 +106,12 @@ public class LegalTools implements AgentToolComponent {
             } else {
                 try {
                     result = textExtractor.extractText(file);
+                } catch (com.checkba.service.file.ProjectFileTextExtractor
+                        .AudioNotTranscribedException e) {
+                    // 音频没有转写稿不是错误，文件本身好好的（dev-board#814）。用 Warning:
+                    // 而不是 Error:，两者都会被 ContextAssembler 的失败回执守卫认出来、
+                    // 不进 <file> 的 CDATA，但对模型（以及过程卡里的用户）语气不同。
+                    return "Warning: " + e.getMessage();
                 } catch (com.checkba.service.file.ProjectFileTextExtractor.OcrFailedException e) {
                     return "Error: " + e.getMessage();
                 }

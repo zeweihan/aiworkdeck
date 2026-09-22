@@ -174,6 +174,13 @@ public class FileTools implements AgentToolComponent {
             // Office 格式）走 Tika——第三条以前不存在，Office 文件恒返回空串，
             // 而空串会被 ToolExecutionResultMessage 的 ensureNotBlank 抛出来掀翻整轮
             File file = path.toFile();
+            // 音频（dev-board#814）：Tika 对 mp3 抽回来的是 ID3 标签里的标题/艺术家/专辑，
+            // 非空，于是会被当成「文件正文」原样喂给模型。按路径查不到转写稿，所以这里
+            // 只说事实并指向查得到的那个入口（extract_file_text + fileId）。
+            if (com.checkba.service.meeting.MeetingRecordingService.isAudioFileName(file.getName())) {
+                return "Warning: " + com.checkba.service.file.ProjectFileTextExtractor
+                        .audioNoticeByPath(file.getName());
+            }
             String content;
             if (fileContentExtractorService.isOcrSupported(file.getName())) {
                 content = fileContentExtractorService.extractTextWithOcr(file);
@@ -299,6 +306,11 @@ public class FileTools implements AgentToolComponent {
             String text;
             try {
                 text = textExtractor.extractText(pf);
+            } catch (com.checkba.service.file.ProjectFileTextExtractor
+                    .AudioNotTranscribedException e) {
+                // 音频要先转写（dev-board#814）：已转写的抽取器直接给转写稿，
+                // 没转写的这里回一句可行动的下一步，而不是一句指向 OCR 的误导。
+                return "Warning: " + e.getMessage();
             } catch (com.checkba.service.file.ProjectFileTextExtractor.OcrFailedException e) {
                 return "Error: " + e.getMessage();
             }

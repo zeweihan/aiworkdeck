@@ -212,6 +212,20 @@ NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示�
 **录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写三档 platform / byok / local，详见 `.claude/agents/licensing-billing.md`「平台服务网关」与 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
   **`recorderState.projectId` 必须与 `status='starting'` 同步写入**（`startRecording()`）：不能等 `getUserMedia`+`createMeetingRecording` 两个 await 都过了才赋值——`MeetingRecordingPanel.vue` 的 `recordingHere` 计算属性同时判 `isRecordingActive()` 与 `recState.projectId === this.projectId`，projectId 还是 null 的窗口期会被误判成"别的项目在录音"（新机首次要等系统麦克风授权弹窗，窗口被拉长到必现；e2e 的假麦克风走 `--use-fake-device-for-media-stream` 秒过，覆盖不到这段）。`MeetingRecordingIndicator.vue` 的 `visible()` 也不许手写状态枚举，统一复用 `isRecordingActive()`——之前它漏了 `'starting'`，会出现"面板让你去顶部胶囊停止，胶囊却还没出现"的假象。
 
+**音频进 AI 上下文靠的是转写稿，不是音频（dev-board#814）**：`meeting_recording.audio_file_id`
+就是「音频 ↔ 转写稿」那条关联——面板录音建档与资源管理器右键「转写音频」
+（`registerExisting`，`ownsAudioFile=false`）两条路径都写这一列，**不要另建关联表或在
+project_file 上加列**。AI 侧读文件时经 `MeetingRecordingService.findByAudioFile(projectId, fileId)`
+反查：已转写（且转写稿非空）的直接把 `renderTranscriptText` 的结果当正文注入（顶一句
+「机器转写、可能有误差、你听不到音频本身」的横幅），否则回一句按状态分档的
+「先转写、右键『转写音频』」。判据与落点见 `.claude/agents/ai-chat.md` 的 OCR 路由一节。
+两件事别踩：① 音频分支必须排在 `project_file_text_cache` 之前——转写完成时音频字节没变、
+mtime+size 指纹没变，缓存里那句「请先转写」会永久生效且不报错；② 扩展名表全仓只有
+`MeetingRecordingService.AUDIO_EXTENSIONS`（前端那份在 `frontend/src/utils/audioAttachment.js`，
+由 `tests/project-home/audio-attachment.test.mjs` 读 Java 源码对拍），`FileTree` 右键与
+`ChatInterface` 的未转写提示条共用它。`meeting_get_transcript` / `meeting_list_recordings`
+是模型**主动**读会议的入口（按 meetingId），与这条「附件自动注入」互不替代。
+
 **会议录音实测回归（dev-board#478/#483/#487）**：麦克风面板每次初开优先浏览器
 `deviceId='default'`，不再恢复历史 `awd_meeting_mic_device_id`；设备变化按当前选中的
 **设备 ID** 保留选择，离线才回默认，重新出现不能抢回来。两个改名输入框走 uni-input 的

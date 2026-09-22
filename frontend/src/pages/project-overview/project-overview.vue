@@ -1603,6 +1603,7 @@
                 @menu-state="pushMenuState"
                 @artifact-open-tab="handleArtifactOpenTab"
                 @open-file="handleOpenFileFromChat"
+                @transcribe-audio="onTranscribeAudio"
               />
             </view>
 
