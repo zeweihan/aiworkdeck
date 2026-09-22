@@ -167,6 +167,25 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         sseEmitterService.send(conversationId, eventName, payload);
     }
 
+    /**
+     * 本轮是否已被用户停止（计划 K4 ②）。默认恒 false——不设闸的调用方
+     * （既有单测、回放评测）行为一字不变。
+     *
+     * <p>为什么光掐断 HTTP 请求不够：okhttp 的 {@code call.cancel()} 不是瞬时的，
+     * 在途那一段响应体已经在本机缓冲里，取消之后 {@code onNext} 还会被回调几次。
+     * 闸不加在这里的话，这几段会继续打进用户的气泡、继续进断线恢复快照、
+     * 继续往文档里流式写——用户点了停止，画面却还在动。
+     */
+    private volatile java.util.function.BooleanSupplier cancellationCheck = () -> false;
+
+    public void setCancellationCheck(java.util.function.BooleanSupplier cancellationCheck) {
+        this.cancellationCheck = cancellationCheck == null ? () -> false : cancellationCheck;
+    }
+
+    private boolean cancelled() {
+        return cancellationCheck.getAsBoolean();
+    }
+
     // Callback for each token generated (for real-time tracking)
     private java.util.function.Consumer<String> onToken;
     private java.util.function.Consumer<String> onEditorStream;
@@ -182,8 +201,9 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     @Override
     public void onNext(String token) {
         log.trace("Token for {}: [{}]", conversationId, token);
-        // 终态后到达的迟到 token 丢弃（看门狗已终止本轮时，底层流可能还在吐）
-        if (terminated.get()) return;
+        // 终态后到达的迟到 token 丢弃（看门狗已终止本轮时，底层流可能还在吐）；
+        // 用户停止之后同理——在途缓冲里那几段不该再往前端、快照与文档里走
+        if (terminated.get() || cancelled()) return;
         lastActivityNanos = System.nanoTime();
         if (token != null && !token.isEmpty()) {
             streamedAnyToken = true;
@@ -210,17 +230,21 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
      */
     @Override
     public void onReasoning(String reasoningDelta) {
-        if (terminated.get() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
+        if (terminated.get() || cancelled() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
         lastActivityNanos = System.nanoTime();
         streamedAnyReasoning = true;
         noteFirstByte("reasoning");
         sendSse("reasoning_delta", "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
     }
 
-    /** 传输层保活注释：只刷新看门狗，不产生任何事件。 */
+    /**
+     * 传输层保活注释：只刷新看门狗，不产生任何事件。
+     *
+     * <p>取消之后不再刷新——这一轮正在收尾，没有理由再替它续命。
+     */
     @Override
     public void onKeepAlive() {
-        if (terminated.get()) return;
+        if (terminated.get() || cancelled()) return;
         lastActivityNanos = System.nanoTime();
     }
 

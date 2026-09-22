@@ -794,21 +794,38 @@ export function useAgentStream() {
         }
     }
 
+    /**
+     * 停止后等后端那条 cancelled 事件的兜底时限。取消真正生效之后（计划 K4：掐断在途
+     * HTTP 请求 + 释放编辑器桥上的等待）实测在 2 秒内就回来了，这里给的是「SSE 恰好也死了」
+     * 那一档的兜底，不是正常等待时长。
+     */
+    const STOP_CONFIRM_TIMEOUT_MS = 15000
+    let pendingStopBubble = null
+    let stopConfirmTimer = null
+
+    /**
+     * 后端的 cancelled 事件到了：把「正在停止…」落成终态文案。
+     * 两条事件分支都要调（气泡指针为 null 的兜底分支也算数）。
+     */
+    const noteStopConfirmed = () => {
+        if (stopConfirmTimer) { clearTimeout(stopConfirmTimer); stopConfirmTimer = null }
+        const bubble = pendingStopBubble
+        pendingStopBubble = null
+        if (bubble) bubble.stopNotice = t('agentStream.stopConfirmed')
+    }
+
     const abort = async () => {
         const conversationId = currentConversationId.value
-        // 先结束本地等待。断网时取消请求本身也可能挂起，不能让停止按钮一起失效。
         const stoppedBubble = currentAssistantBubble.value
-        // 2. 中断前端连接
+        // 1. 发送中的 POST /chat 立刻放弃——它只是投递，不是这条流
         if (messageAbortController) messageAbortController.abort()
-        if (sseAbortController) sseAbortController.abort()
 
-        // 3. 更新状态
+        // 2. 本地先解锁，不等网络。断网时取消请求本身也可能挂起，停止按钮不能跟着失效。
         isStreaming.value = false
         if (stoppedBubble) {
             stoppedBubble.isStreaming = false
-            // 顶层 thinking 归位：abort 在上面第 2 步已经掐断了本地 SSE，后端随后
-            // 发出的 cancelled 事件永远到不了前端，正常收尾路径里的这段归零逻辑
-            // 不会再有人执行——漏掉它计时器就永远读秒（dev-board#211）。
+            // 顶层 thinking 归位：下面那条 cancelled 事件正常情况下会自己做一遍，
+            // 但它可能因为 SSE 死了而永远不到——漏掉这一下计时器就永远读秒（dev-board#211）。
             const thinking = stoppedBubble.thinking
             if (thinking.status === 'thinking') {
                 thinking.status = 'done'
@@ -820,6 +837,13 @@ export function useAgentStream() {
             finalizeProcesses('error')
             stoppedBubble.stopNotice = t('agentStream.stopPending')
         }
+
+        // 3. 本地 SSE **不拆**（计划 K4 ⑥，与 dev-board#211 时期的顺序相反）。
+        //    当时先拆流是为了「断网时停止键不失效」，但上面第 2 步已经就地解决了那件事，
+        //    而拆流的代价是后端随后发出的 cancelled 事件永远到不了前端——于是
+        //    「停止到底生效没有」这件事前端永远不知道，只能一直显示「已发送停止指令」。
+        //    留着这条流，收到 cancelled 才把文案落成「已停止生成」；后端每轮收尾本来
+        //    就会关流、前端退避重连，这是轮次之间的常态，不额外占用连接。
         if (!conversationId) return
         const cancelController = new AbortController()
         const cancelTimer = setTimeout(() => cancelController.abort(), 10000)
@@ -830,7 +854,32 @@ export function useAgentStream() {
                 signal: cancelController.signal
             })
             if (!response.ok) throw new Error(`Cancel request failed: ${response.status}`)
-            if (stoppedBubble) stoppedBubble.stopNotice = t('agentStream.stopRequested')
+            // cancelled=false = 没打中任何活跃轮次（那一轮恰好自己收尾了）。
+            // 旧后端不带这个字段，按「打中了」处理，行为与改造前一致。
+            let cancelled = true
+            try {
+                const body = await response.json()
+                if (body && body.cancelled === false) cancelled = false
+            } catch (parseError) {
+                // 响应体读不出来不改变结论：停止请求本身是成功的
+            }
+            if (!stoppedBubble) return
+            if (!cancelled) {
+                stoppedBubble.stopNotice = t('agentStream.stopAlreadyFinished')
+                return
+            }
+            // 供应商那头会不会继续计费我们承诺不了，所以在收到 cancelled 之前
+            // 口径一律停在「正在停止」，不写「已停止」。
+            stoppedBubble.stopNotice = t('agentStream.stopPending')
+            pendingStopBubble = stoppedBubble
+            if (stopConfirmTimer) clearTimeout(stopConfirmTimer)
+            stopConfirmTimer = setTimeout(() => {
+                stopConfirmTimer = null
+                const bubble = pendingStopBubble
+                pendingStopBubble = null
+                // 指令确实发出去了，只是没等到回执（多半是这条 SSE 也断了）
+                if (bubble) bubble.stopNotice = t('agentStream.stopRequested')
+            }, STOP_CONFIRM_TIMEOUT_MS)
         } catch (e) {
             console.warn('[AgentStream] Failed to confirm cancel request:', e)
             if (stoppedBubble) stoppedBubble.stopNotice = t('agentStream.stopUnconfirmed')
@@ -1084,6 +1133,7 @@ export function useAgentStream() {
             // 永久禁用（F-06/F-07 确定性 hang）。这里至少要解锁全局状态。
             if (evt === 'bubble_end' || evt === 'error' || evt === 'cancelled') {
                 isStreaming.value = false
+                if (evt === 'cancelled') noteStopConfirmed()
                 try {
                     const d = JSON.parse(dataStr || '{}')
                     agentPaused.value = (evt === 'bubble_end' && d.status === 'paused')
@@ -1250,7 +1300,9 @@ export function useAgentStream() {
                 }
             }
             finalizeProcesses('error')
-            // 停止提示不在这里写：abort() 已经设置了 bubble.stopNotice
+            // 停止提示的终态文案在这里落定：abort() 之后一直停在「正在停止…」，
+            // 收到这条事件才说明后端确实停下来了（计划 K4 ⑦）。
+            noteStopConfirmed()
             isStreaming.value = false
         } else if (evt === 'bubble_end' || evt === 'error') {
             // Flush any remaining content in parserBuffer before ending

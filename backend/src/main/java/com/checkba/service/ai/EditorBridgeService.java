@@ -4,6 +4,7 @@
 package com.checkba.service.ai;
 
 import com.checkba.model.entity.ProjectFile;
+import com.checkba.service.LangText;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -589,6 +590,14 @@ public class EditorBridgeService {
             recordBridge(action, "timeout", conversationId, bridgeStartMs);
             return TIMEOUT_RESULT_JSON;
 
+        } catch (java.util.concurrent.CancellationException e) {
+            // 用户点了停止：不再等这次回包（最长档位 180 秒）。必须排在下面的
+            // catch (Exception) 之前——CancellationException 是 RuntimeException。
+            log.info("Editor command abandoned because the user stopped generation: action={}, requestId={}",
+                    action, requestId);
+            recordBridge(action, "cancelled", conversationId, bridgeStartMs);
+            return cancelledResultJson();
+
         } catch (Exception e) {
             log.error("Failed to execute editor command: action={}", action, e);
             recordBridge(action, "error", conversationId, bridgeStartMs);
@@ -597,6 +606,46 @@ public class EditorBridgeService {
         } finally {
             pendingRequests.remove(requestId);
         }
+    }
+
+    /**
+     * 用户停止时的桥回执（计划 K4 ③）。与 {@link #TIMEOUT_RESULT_JSON} 同一个口径：
+     * <b>后端不再等，不等于没执行</b>——worker 打不断，这条命令很可能已经落进文档了。
+     * 用 {@code "error"} 键是为了让 {@code ToolRegistry.ToolResult.success()} 判成失败
+     * （否则面板给这次调用打绿勾），{@code outcomeUnknown} 让模型如实转述而不是原样重发。
+     */
+    static String cancelledResultJson() {
+        return "{\"error\": \"" + LangText.of(
+                "用户已停止本轮生成，后端不再等待这条命令的结果。编辑器可能仍在执行它，内容可能已写入。"
+                        + "不要重发这条命令，把「这一步已被用户停止、结果未知」如实告诉用户。",
+                "The user stopped this run, so the backend is no longer waiting for this command. "
+                        + "The editor may still be executing it and the content may already be written. "
+                        + "Do not resend it; tell the user this step was stopped and its outcome is unknown.")
+                + "\", \"code\": \"EDITOR_RESULT_CANCELLED\", \"outcomeUnknown\": true, \"retryable\": false}";
+    }
+
+    /**
+     * 释放该会话所有正卡在桥上的等待（由 {@code AgentOrchestrator.setCancelled} 调）。
+     *
+     * <p>不这么做的话，「停止」在桥调用中间完全不生效：取消检查点在每个工具执行<b>之前</b>，
+     * 而 {@code executeEditorCommand} 正死等在 {@code future.get(timeout)} 上，
+     * 超时档位最长 180 秒——实测用户点完停止要再干等三分钟。
+     *
+     * @return 实际释放掉的在途调用数
+     */
+    public int cancelPendingActions(String conversationId) {
+        if (conversationId == null) return 0;
+        int released = 0;
+        for (PendingAction pending : pendingRequests.values()) {
+            if (conversationId.equals(pending.conversationId()) && pending.future().cancel(false)) {
+                released++;
+            }
+        }
+        if (released > 0) {
+            log.info("Released {} pending editor action(s) of {} because generation was stopped",
+                    released, conversationId);
+        }
+        return released;
     }
 
     private String errorJson(String message) {
