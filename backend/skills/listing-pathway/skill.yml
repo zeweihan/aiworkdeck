@@ -12,7 +12,13 @@ category: 资本市场证券
 languages:
   - zh-CN
 
-# 触发条件：用户输入包含任一关键词即命中（不区分大小写）
+# 触发条件：用户输入包含任一关键词即命中（不区分大小写）。
+# 匹配口径见 SkillRouter.containsTrigger：中文是子串匹配，**拉丁串两端要求整词**——
+# 所以 IPO / VIE / SPAC 这三个缩写可以保留，「VIPO 品牌」「IPOS 系统」「view」「space」
+# 不会再误命中（dev-board#818）。
+# 中文那一端没有词边界可言，短到会被别的语境夹带的只能换成短语：
+# 「红筹」→ 红筹架构 / 红筹上市，「借壳」→ 借壳上市，「证券化」→ 证券化路径 / 实现证券化
+#（「证券化」原样留着会被「资产证券化」命中，那是 ABS，和上市路径无关）。
 triggers:
   - 上市路径
   - 上市板块
@@ -21,10 +27,12 @@ triggers:
   - 北交所
   - 创业板上市
   - 主板上市
-  - 红筹
+  - 红筹架构
+  - 红筹上市
   - VIE
-  - 借壳
-  - 证券化
+  - 借壳上市
+  - 证券化路径
+  - 实现证券化
   - 港股上市
   - 美股上市
   - SPAC
@@ -50,21 +58,45 @@ prompt: prompt.md
 #（回放用例 skill-listing-pathway-trigger-trim-xml 与 skill-orchestration-tools-not-trimmed
 # 都钉着本 skill 会裁剪）。
 #
-# 已知风险，留给维护者拍板（本次刻意没有单方面改）：触发词里有「IPO」「VIE」「红筹」
-#「借壳」「证券化」这种短词，匹配是对整条用户输入做 contains——「帮我把这段 IPO 条款
-# 改一下」也会命中；而下面这份清单里没有任何 doc_* / office_*，命中即失去编辑能力。
-# 要么把编辑面补进清单，要么把过宽的触发词收窄。
+# 编辑面必须在清单里（dev-board#818）：触发词里仍有 IPO / VIE / SPAC 这类短缩写，
+# 整词匹配挡得住「VIPO」却挡不住「帮我把这段 IPO 条款改一下」——中文语境的误命中无法根治。
+# 清单里带上编辑面，误命中就从「AI 突然不会改文档了」退化成「指引不对但能力还在」，
+# 而这个 skill 本来就常被要求「把比较结论写进当前这份备忘录」。
+# doc_* 与 office_* 两族同时列出：ClientCapabilityService 按会话客户端只放行其中一族
+#（工作台 LOWA 会话见 doc_*，Office/WPS 任务窗格会话见 office_*），这里不需要也不能替它挑。
 tool_policy: restrict
 
 allowed_tools:
+  # 法源核实
   - law_search
   - law_search_keyword
   - get_law_article
   - law_recognition
+  # 监管口径、交易所问答、境外规则
   - search_web
   - browse_url
+  # 新起一份比较分析备忘录
   - write_docx
   - dispatch_subtask
+  # 写进用户正打开的那份文档：先看结构再定落点
+  - doc_get_document_text
+  - doc_get_outline
+  - doc_find_text
+  - doc_get_cursor_context
+  # 改
+  - doc_insert_at_cursor
+  - doc_insert_under_heading
+  - doc_insert_table
+  - doc_find_replace
+  - doc_replace_selection
+  # 安全网
+  - doc_undo
+  # Office/WPS 任务窗格会话的对应面
+  - office_get_text
+  - office_search
+  - office_insert_text
+  - office_replace_text
+  - office_insert_table
 
 # 输出结构约定（随 prompt 注入）
 output: |

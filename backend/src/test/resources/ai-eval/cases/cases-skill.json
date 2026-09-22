@@ -1,7 +1,7 @@
 [
   {
     "id": "skill-listing-pathway-trigger-trim-xml",
-    "title": "上市路径 Skill 命中：法律检索照常分发 + 可见工具裁剪为白名单∪基础工具",
+    "title": "上市路径 Skill 命中：法律检索照常分发 + 可见工具裁剪为白名单∪基础工具（白名单含编辑面，dev-board#818）",
     "category": "skill",
     "protocol": "xml",
     "userInput": "我们是一家芯片设计公司，尚未盈利，目前是纯境内架构没有红筹搭建，帮我比较一下走科创板还是港股18C的上市路径哪个更合适？",
@@ -37,14 +37,132 @@
         "search_web",
         "write_docx",
         "read_document",
-        "dispatch_subtask"
+        "dispatch_subtask",
+        "doc_insert_at_cursor",
+        "doc_insert_under_heading",
+        "doc_find_replace",
+        "doc_get_document_text"
       ],
       "offeredToolsExclude": [
         "doc_open_file",
+        "doc_start_stream",
+        "doc_apply_standard_format",
         "pptx_generate",
         "write_file",
         "run_python"
       ]
+    }
+  },
+  {
+    "id": "skill-listing-pathway-office-editing-surface-visible",
+    "title": "上市路径 Skill 命中（Word 任务窗格会话）：office_insert_text 等编辑面仍可见——白名单两族都列，doc_* 由客户端能力自行隐藏（dev-board#818）",
+    "category": "skill",
+    "protocol": "xml",
+    "clientCapability": "office",
+    "officeHost": "word",
+    "userInput": "帮我把这家公司的上市路径比较结论写进当前这份备忘录",
+    "turns": [
+      {
+        "text": "<process name=\"读取备忘录正文\"><tool_code>office_get_text()</tool_code></process>"
+      },
+      {
+        "text": "<final>已把可行路径筛选与逐维度比较的结论追加到备忘录末尾：候选路径为科创板第五套标准与港股18C，推荐排序与前置动作见文末。</final>"
+      }
+    ],
+    "toolStubs": {
+      "office_get_text": "第一章 企业概况\n本公司为芯片设计企业，尚未盈利……"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "office_get_text"
+        }
+      ],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": [
+        "office_get_text",
+        "office_search",
+        "office_insert_text",
+        "office_replace_text",
+        "law_search",
+        "write_docx",
+        "read_document",
+        "todo_write",
+        "dispatch_subtask"
+      ],
+      "offeredToolsExclude": [
+        "doc_insert_at_cursor",
+        "pptx_generate",
+        "run_python",
+        "write_file"
+      ]
+    }
+  },
+  {
+    "id": "skill-meeting-recorder-doc-editing-surface-visible",
+    "title": "会议录音 Skill 命中：doc_insert_at_cursor 等编辑面仍可见——「把纪要整理进当前文档」不能因为命中 skill 就没了编辑能力（dev-board#818）",
+    "category": "skill",
+    "protocol": "xml",
+    "activeDocument": {
+      "id": "1001",
+      "name": "项目周会纪要.docx",
+      "fileType": "docx"
+    },
+    "userInput": "把刚才那场会议的会议纪要整理好，直接写进我现在打开的这份文档里",
+    "turns": [
+      {
+        "text": "<process name=\"读取转写稿\"><tool_code>meeting_get_transcript(recordingId=\"42\")</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"写入当前文档\"><tool_code>doc_insert_at_cursor(text=\"一、议题与讨论要点\")</tool_code></process>"
+      },
+      {
+        "text": "<final>已把纪要写进当前文档：3 项决议、5 项待办，另有 1 处融资金额口径需要向财务核实。</final>"
+      }
+    ],
+    "toolStubs": {
+      "meeting_get_transcript": "说话人1：先过一下融资节奏……\n说话人2：法务这边下周出意见。",
+      "doc_insert_at_cursor": "{\"success\":true}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "meeting_get_transcript"
+        },
+        {
+          "name": "doc_insert_at_cursor"
+        }
+      ],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": [
+        "meeting_get_transcript",
+        "meeting_list_recordings",
+        "write_docx",
+        "doc_insert_at_cursor",
+        "doc_insert_under_heading",
+        "doc_get_document_text",
+        "doc_find_replace",
+        "doc_undo",
+        "read_document",
+        "todo_write",
+        "dispatch_subtask"
+      ],
+      "offeredToolsExclude": [
+        "law_search",
+        "pptx_generate",
+        "run_python",
+        "doc_open_file",
+        "doc_start_stream"
+      ],
+      "checkpointForFileId": "1001"
     }
   },
   {
