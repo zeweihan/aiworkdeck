@@ -84,7 +84,7 @@ const NAMES = {
   dispatch_subtask: { zh: '委派子任务', en: 'Delegate subtask' },
   run_python: { zh: '执行Python代码', en: 'Run Python' },
   // 文档编辑（LibreOffice 拟人式原语）
-  doc_list_project_files: { zh: '列出可编辑文档', en: 'List documents' },
+  doc_list_project_files: { zh: '列出项目文件', en: 'List project files' },
   doc_open_file: { zh: '打开文档', en: 'Open document' },
   doc_start_stream: { zh: '流式写入文档', en: 'Stream to document' },
   doc_get_document_text: { zh: '通读文档', en: 'Read document text' },

@@ -22,6 +22,8 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -77,7 +79,7 @@ class MemoryToolsScopeTest {
         when(memoryManager.retrieveFileMemories(1L, 42L)).thenReturn(List.of(fileScopedEntry()));
         when(memoryManager.formatAsEvidenceLedger(any())).thenReturn("[EVIDENCE:99]");
 
-        String result = tools.query_memory("随便什么不相关的词", null, "file", 42L);
+        String result = tools.query_memory("随便什么不相关的词", null, "file", 42L, null, null);
 
         assertFalse(result.contains("未找到相关记忆"), "明确按文件 scope 查找时不该说没找到: " + result);
         assertTrue(result.contains("[EVIDENCE:99]"));
@@ -89,7 +91,7 @@ class MemoryToolsScopeTest {
     void queryMemoryWithoutScopeIsUnaffected() {
         when(memoryManager.retrieveMemories(eq(1L), any(), any(), anyInt())).thenReturn(List.of());
 
-        String result = tools.query_memory("随便什么不相关的词", null, null, null);
+        String result = tools.query_memory("随便什么不相关的词", null, null, null, null, null);
 
         assertTrue(result.contains("未找到相关记忆"));
     }
@@ -106,7 +108,7 @@ class MemoryToolsScopeTest {
 
         String result = tools.search_knowledge_base("不相关的词", 5, "conversation", null);
 
-        assertFalse(result.contains("未在知识库中找到相关信息"), "明确按对话 scope 查找时不该说没找到: " + result);
+        assertFalse(result.contains("未在项目记忆中找到相关信息"), "明确按对话 scope 查找时不该说没找到: " + result);
         assertTrue(result.contains("本次对话讨论的要点"));
         verify(memoryManager).retrieveConversationMemories(1L, "conv-1");
     }
@@ -118,7 +120,60 @@ class MemoryToolsScopeTest {
 
         String result = tools.deep_search("不相关的词", 10, "file", 42L);
 
-        assertFalse(result.contains("深度搜索未找到相关信息"), "明确按文件 scope 查找时不该说没找到: " + result);
+        assertFalse(result.contains("未在项目记忆中找到相关信息"), "明确按文件 scope 查找时不该说没找到: " + result);
         assertTrue(result.contains("该合同第 5 条存在争议"));
+    }
+
+    // ==================== depth 三档（dev-board#807，审计 A13） ====================
+
+    @Test
+    @DisplayName("depth=hybrid 走 RRF 融合，与旧 search_knowledge_base 同一条算法")
+    void hybridDepthRunsTheRrfSearch() {
+        when(memoryManager.hybridSearch(eq(1L), any(), anyInt())).thenReturn(List.of(fileScopedEntry()));
+
+        String result = tools.query_memory("争议", null, null, null, "hybrid", 5);
+
+        assertTrue(result.contains("RRF 融合"), result);
+        assertTrue(result.contains("该合同第 5 条存在争议"), result);
+        verify(memoryManager).hybridSearch(eq(1L), any(), anyInt());
+        verify(memoryManager, never()).retrieveMemories(anyLong(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("depth=deep 才起 Agentic 多轮召回——这一档要额外花一次辅助模型调用，不该被误触发")
+    void deepDepthIsTheOnlyOneThatSpendsAnExtraModelCall() {
+        when(agenticRetriever.agenticRetrieve(eq(1L), any(), anyInt())).thenReturn(List.of(fileScopedEntry()));
+
+        String result = tools.query_memory("争议", null, null, null, "deep", null);
+
+        assertTrue(result.contains("Agentic 多轮召回"), result);
+        verify(agenticRetriever).agenticRetrieve(eq(1L), any(), anyInt());
+
+        // 另外两档一次都不许碰它
+        tools.query_memory("争议", null, null, null, null, null);
+        tools.query_memory("争议", null, null, null, "hybrid", null);
+        verify(agenticRetriever, times(1)).agenticRetrieve(anyLong(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("depth 填错不报错，回落 quick——检索档位写错绝不该让整次调用失败")
+    void unknownDepthFallsBackToQuick() {
+        when(memoryManager.retrieveMemories(eq(1L), any(), any(), anyInt())).thenReturn(List.of());
+
+        String result = tools.query_memory("随便什么不相关的词", null, null, null, "超级深度", null);
+
+        assertTrue(result.contains("未找到相关记忆"), result);
+        verify(memoryManager).retrieveMemories(eq(1L), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("兼容入口仍然可执行，并在结果末尾指路 query_memory")
+    void compatEntriesStillRunAndPointAtQueryMemory() {
+        when(memoryManager.hybridSearch(eq(1L), any(), anyInt())).thenReturn(List.of(fileScopedEntry()));
+
+        String result = tools.search_knowledge_base("争议", 5, null, null);
+
+        assertTrue(result.contains("该合同第 5 条存在争议"), "兼容入口必须照常把结果给出来: " + result);
+        assertTrue(result.contains("query_memory"), "末尾要指路，否则模型会一直照抄旧名字: " + result);
     }
 }

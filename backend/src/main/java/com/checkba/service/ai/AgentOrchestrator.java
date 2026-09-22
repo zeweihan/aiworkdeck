@@ -1660,9 +1660,12 @@ public class AgentOrchestrator {
                     } else {
                         toolResult = dispatchTool(call.toolName(), call.argsJson(),
                                 Long.parseLong(projectId), conversationId, userId, modelId, guard);
+                        // 未知工具：注册表那句指路（审计 A11，如 search_laws → law_search）
+                        // 必须原样带给模型——只回一句 "Unknown tool" 它无从纠正，
+                        // 下一轮多半换个同样不存在的名字再试一遍。
                         result = toolResult.found()
                                 ? toolResult.output()
-                                : "Unknown tool in custom parser: " + code;
+                                : "Unknown tool in custom parser: " + code + "\n" + toolResult.output();
                         xmlToolSuccess = toolResult.found() && toolResult.success();
                     }
                     // 空输出归一（与原生分支同口径，见上）：XML 兜底路径不会因空白抛
@@ -2502,6 +2505,10 @@ public class AgentOrchestrator {
      */
     private static final Set<String> RESULT_HEAVY_TOOLS =
             Set.of("dispatch_subtask", "extract_file_text", "pdf_inspect",
+                    // read_document 与 extract_file_text 是同一条抽取链路的两个入口（按 fileId 读全文），
+                    // 只给其中一个放宽展示上限，用户会看到「同一个动作，有时看得到全文、有时被砍掉」——
+                    // 而他自己并不知道模型这两次挑了不同的工具（审计 A14）
+                    "read_document",
                     // 结构审计报告本身就是给用户核对的成果（编号/引用/算术/修订清单），砍到 4000 用户看不到后半
                     "doc_audit_structure");
 

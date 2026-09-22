@@ -30,12 +30,25 @@ import java.util.Optional;
  * 
  * 工具列表：
  * 1. save_memory - 保存重要信息到项目记忆
- * 2. query_memory - 查询项目相关记忆
+ * 2. query_memory - 查询项目记忆（三档算法由 depth 参数选，见下）
  * 3. get_project_context - 获取项目核心信息
  * 4. update_project_info - 更新项目信息
- * 5. search_knowledge_base - 智能混合搜索知识库（RRF 融合）
- * 6. get_conversation_summary - 获取对话摘要
- * 7. deep_search - Agentic 深度搜索（多轮召回）
+ * 5. get_conversation_summary - 获取对话摘要
+ * 6. search_knowledge_base / deep_search - query_memory 的旧入口，只登记不下发
+ *
+ * <p><b>「从记忆里找东西」只剩一个工具</b>（dev-board#807，审计 A13）。此前
+ * query_memory / search_knowledge_base / deep_search 三个的入参几乎一样，
+ * 三段描述里关于「什么时候用我」的话又只有「回顾之前的决策」「结合关键词和语义理解」
+ * 「需要更全面的信息时」——模型没有可操作的判据，实测就是随机挑一个，召回质量因此
+ * 不可预期；更糟的是它往往连着调两三个，把步数预算和 token 一起花掉，而 deep_search
+ * 每次还要额外起一次辅助模型做查询扩展（真实的时延与费用）。
+ *
+ * <p>现在三档算法收敛成 {@code query_memory} 的一个 {@code depth} 参数：
+ * quick（关键词，今天 query_memory 的行为）/ hybrid（RRF 融合，原 search_knowledge_base）/
+ * deep（Agentic 多轮召回，原 deep_search）。「要不要多花一次 LLM」从一道选工具的谜题
+ * 变成一个模型能明确判断的参数。两个旧名保留为 {@code offerToModel = false} 的兼容入口：
+ * 规格不下发（模型看不见即不会去试），但老会话回放 / XML 兜底路径调到时照常执行，
+ * 并在结果里附一句指路——好过一句 "Tool not found" 让模型以为这个能力整个不存在。
  */
 @Component
 @Slf4j
@@ -48,6 +61,17 @@ public class MemoryTools implements AgentToolComponent {
 
     @Autowired(required = false)
     private MemoryDocumentService memoryDocumentService;
+
+    /**
+     * 两个兼容入口在结果末尾附的指路（审计 A13）。
+     *
+     * <p>放在<b>末尾</b>而不是开头：模型读到的最后一句最管用，而这句的作用是
+     * 「这次的结果照收，下次别再找这个名字」。不写的话模型会继续在历史里照抄旧名字，
+     * 而旧名字的规格已经不下发了——它只是在不停地撞一个自己看不见的门。
+     */
+    private static final String MERGED_INTO_QUERY_MEMORY =
+            "\n(提示：本工具已并入 query_memory，下次请直接调 "
+                    + "query_memory(query=..., depth=\"hybrid\"/\"deep\")。)";
 
     /**
      * 保存结构化记忆
@@ -168,31 +192,59 @@ public class MemoryTools implements AgentToolComponent {
     /**
      * 查询项目记忆
      */
-    @Tool("查询项目相关的记忆信息，支持按关键词和类型检索。用于回顾之前的决策、结论或重要事实。" +
-          "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，" +
-          "请传 scope（与 sourceFileId）——否则只能靠关键词碰运气，可能命中不了。")
+    @Tool("在本项目的记忆里找此前的决策、结论、事实与约定。**这是检索项目记忆的唯一工具**，"
+            + "三档检索算法用 depth 选，不要再去找别的记忆检索工具：\n"
+            + "- depth=quick（默认）：关键词精确召回。最快最省，什么都不花。"
+            + "用户用的词很可能就是当初存下来的词时（人名、公司名、条款名、金额）选它。\n"
+            + "- depth=hybrid：关键词 + 语义 RRF 融合。quick 没找到、或者用户是用自己的说法转述"
+            + "（「当时怎么定的价」而记忆里写的是「对价」）时选它。仍然不花额外的模型调用。\n"
+            + "- depth=deep：多轮召回，**会额外起一次辅助模型做查询扩展**（真实的时延与费用）。"
+            + "只在 quick/hybrid 都没捞到、且这件事确实值得多花一次调用时选它；"
+            + "不要一上来就用 deep，也不要三档挨个试一遍。\n"
+            + "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，"
+            + "请传 scope（与 sourceFileId）——否则三档都只能靠相关性碰运气，可能命中不了。")
     public String query_memory(
             @P("查询关键词，用于搜索相关记忆") String query,
             @P("记忆类型过滤(可选): decision/conclusion/fact/reference/preference/all，默认为all") String type,
             @P("按作用域精确定位(可选): file(需配 sourceFileId)/conversation(取当前对话)，"
                     + "不传则和此前一样只按关键词在全项目范围检索") String scope,
-            @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId
+            @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId,
+            @P("检索档位(可选): quick(默认,关键词)/hybrid(关键词+语义融合)/deep(多轮召回，额外一次模型调用)") String depth,
+            @P("返回条数(可选,1-20)；不传按档位取默认值") Integer limit
     ) {
-        log.info("Tool: query_memory called query='{}', type='{}', scope='{}'", query, type, scope);
+        log.info("Tool: query_memory called query='{}', type='{}', scope='{}', depth='{}'", query, type, scope, depth);
+        return retrieveWithDepth(query, type, scope, sourceFileId, depth, limit);
+    }
 
+    /** 三档检索的唯一实现。depth 认不出来一律回落 quick——检索档位填错绝不该让整次调用失败。 */
+    private String retrieveWithDepth(String query, String type, String scope, Long sourceFileId,
+                                     String depth, Integer limit) {
         Long projectId = ProjectContextHolder.getProjectIdAsLong();
 
         if (projectId == null) {
             return "错误：无法获取当前项目ID。";
         }
 
+        String mode = depth == null ? "quick" : depth.trim().toLowerCase();
         try {
+            if ("hybrid".equals(mode)) {
+                return formatFlatList("混合检索结果 (RRF 融合，",
+                        memoryManager.hybridSearch(projectId, query, boundedLimit(limit, 5)),
+                        projectId, scope, sourceFileId, 200, false);
+            }
+            if ("deep".equals(mode)) {
+                return formatFlatList("深度检索结果 (Agentic 多轮召回，",
+                        agenticRetriever.agenticRetrieve(projectId, query, boundedLimit(limit, 10)),
+                        projectId, scope, sourceFileId, 300, true);
+            }
             String memoryType = "all".equalsIgnoreCase(type) || type == null ? null : type.toLowerCase();
-            List<MemoryEntry> memories = memoryManager.retrieveMemories(projectId, query, memoryType, 10);
+            List<MemoryEntry> memories = memoryManager.retrieveMemories(
+                    projectId, query, memoryType, boundedLimit(limit, 10));
             memories = withScopedMemories(memories, projectId, scope, sourceFileId);
 
             if (memories.isEmpty()) {
-                return "未找到相关记忆。可以使用 save_memory 工具保存重要信息。";
+                return "未找到相关记忆。可以先用 depth=hybrid 再试一次；"
+                        + "仍然没有就用 save_memory 把这次的结论存下来。";
             }
 
             StringBuilder sb = new StringBuilder("找到 ").append(memories.size()).append(" 条相关记忆:\n\n");
@@ -200,9 +252,42 @@ public class MemoryTools implements AgentToolComponent {
 
             return sb.toString();
         } catch (Exception e) {
-            log.error("Failed to query memory: {}", e.getMessage(), e);
+            log.error("Failed to query memory (depth={}): {}", mode, e.getMessage(), e);
             return "查询记忆时出错: " + e.getMessage();
         }
+    }
+
+    /** limit 只在 1-20 之间取值，其余一律回落档位默认值（口径与改动前逐个工具里写的一致）。 */
+    private int boundedLimit(Integer limit, int fallback) {
+        return (limit == null || limit <= 0 || limit > 20) ? fallback : limit;
+    }
+
+    /** hybrid / deep 两档的平铺输出（形状与改动前 search_knowledge_base / deep_search 一致）。 */
+    private String formatFlatList(String header, List<MemoryEntry> found, Long projectId,
+                                  String scope, Long sourceFileId, int valueCap, boolean markProtected) {
+        List<MemoryEntry> results = withScopedMemories(found, projectId, scope, sourceFileId);
+        if (results.isEmpty()) {
+            return "未在项目记忆中找到相关信息。可以换一组关键词，或用 save_memory 保存新信息。";
+        }
+        StringBuilder sb = new StringBuilder(header).append(results.size()).append(" 条):\n\n");
+        int index = 1;
+        for (MemoryEntry mem : results) {
+            sb.append(index++).append(". ");
+            sb.append("[").append(mem.getMemoryType().toUpperCase()).append("] ");
+            if (mem.getMemoryKey() != null) {
+                sb.append(markProtected ? "**" + mem.getMemoryKey() + "**" : mem.getMemoryKey()).append(": ");
+            }
+            String value = mem.getMemoryValue();
+            if (value != null && value.length() > valueCap) {
+                value = value.substring(0, valueCap) + "...";
+            }
+            sb.append(value);
+            if (markProtected && Boolean.TRUE.equals(mem.getIsProtected())) {
+                sb.append(" [受保护]");
+            }
+            sb.append("\n\n");
+        }
+        return sb.toString();
     }
 
     /**
@@ -306,12 +391,14 @@ public class MemoryTools implements AgentToolComponent {
     }
 
     /**
-     * 智能混合搜索知识库（RRF 融合）
-     * 结合关键词检索和语义检索，使用 RRF 算法融合结果，获得更准确的搜索结果
+     * 兼容入口：原「智能混合搜索知识库（RRF 融合）」。
+     *
+     * <p>{@code offerToModel = false}——规格不下发，模型看不见即不会在三个同义工具之间摇摆
+     * （审计 A13）。老会话回放 / XML 兜底路径调到时仍然照常执行，等价于
+     * {@code query_memory(query, depth="hybrid")}，并在结果末尾附一句指路。
      */
-    @Tool("在项目知识库中进行智能混合搜索，结合关键词和语义理解，查找与查询相关的记忆和信息。" +
-          "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，" +
-          "请传 scope（与 sourceFileId）——否则只能靠语义相关性碰运气，可能命中不了。")
+    @ToolMeta(offerToModel = false)
+    @Tool("[已并入 query_memory(depth=\"hybrid\")] 兼容入口，请改用 query_memory。")
     public String search_knowledge_base(
             @P("搜索查询，描述你想查找的信息") String query,
             @P("返回结果数量，默认5") int limit,
@@ -319,57 +406,21 @@ public class MemoryTools implements AgentToolComponent {
                     + "不传则和此前一样只按语义相关性在全项目范围检索") String scope,
             @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId
     ) {
-        log.info("Tool: search_knowledge_base (hybrid RRF) called query='{}', limit={}, scope='{}'",
+        log.info("Tool: search_knowledge_base (compat -> query_memory depth=hybrid) query='{}', limit={}, scope='{}'",
                 query, limit, scope);
-
-        Long projectId = ProjectContextHolder.getProjectIdAsLong();
-
-        if (projectId == null) {
-            return "错误：无法获取当前项目ID。";
-        }
-
-        if (limit <= 0 || limit > 20) {
-            limit = 5;
-        }
-
-        try {
-            // 使用 RRF 混合检索替代单纯的语义检索
-            List<MemoryEntry> results = memoryManager.hybridSearch(projectId, query, limit);
-            results = withScopedMemories(results, projectId, scope, sourceFileId);
-
-            if (results.isEmpty()) {
-                return "未在知识库中找到相关信息。";
-            }
-            
-            StringBuilder sb = new StringBuilder("混合搜索结果 (RRF 融合，").append(results.size()).append(" 条):\n\n");
-            int index = 1;
-            for (MemoryEntry mem : results) {
-                sb.append(index++).append(". ");
-                sb.append("[").append(mem.getMemoryType().toUpperCase()).append("] ");
-                if (mem.getMemoryKey() != null) {
-                    sb.append(mem.getMemoryKey()).append(": ");
-                }
-                sb.append(mem.getMemoryValue());
-                if (mem.getMemoryValue().length() > 200) {
-                    sb.append("...");
-                }
-                sb.append("\n\n");
-            }
-            
-            return sb.toString();
-        } catch (Exception e) {
-            log.error("Failed to search knowledge base: {}", e.getMessage(), e);
-            return "搜索知识库时出错: " + e.getMessage();
-        }
+        return retrieveWithDepth(query, null, scope, sourceFileId, "hybrid", limit)
+                + MERGED_INTO_QUERY_MEMORY;
     }
 
     /**
-     * Agentic 深度搜索（多轮召回）
-     * 当普通搜索结果不足时，自动生成补充查询并融合结果
+     * 兼容入口：原「Agentic 深度搜索（多轮召回）」。
+     *
+     * <p>同上，等价于 {@code query_memory(query, depth="deep")}。这一档会额外起一次辅助模型
+     * 做查询扩展，把它做成参数而不是一个单独的工具，正是为了让「要不要多花这一次调用」
+     * 成为模型能明确判断的事。
      */
-    @Tool("在项目知识库中进行深度智能搜索。当您需要更全面的信息时使用，会自动扩展查询范围。" +
-          "若要可靠地找回某次 save_memory 明确绑定过的 file/conversation 作用域记忆，" +
-          "请传 scope（与 sourceFileId）——否则只能靠多轮召回碰运气，可能命中不了。")
+    @ToolMeta(offerToModel = false)
+    @Tool("[已并入 query_memory(depth=\"deep\")] 兼容入口，请改用 query_memory。")
     public String deep_search(
             @P("搜索查询，描述你想查找的信息") String query,
             @P("返回结果数量，默认10") int limit,
@@ -377,52 +428,10 @@ public class MemoryTools implements AgentToolComponent {
                     + "不传则和此前一样只按多轮召回在全项目范围检索") String scope,
             @P("来源文件ID(可选)，scope=file 时必填") Long sourceFileId
     ) {
-        log.info("Tool: deep_search (agentic) called query='{}', limit={}, scope='{}'", query, limit, scope);
-
-        Long projectId = ProjectContextHolder.getProjectIdAsLong();
-
-        if (projectId == null) {
-            return "错误：无法获取当前项目ID。";
-        }
-
-        if (limit <= 0 || limit > 20) {
-            limit = 10;
-        }
-
-        try {
-            // 使用 Agentic 多轮召回检索
-            List<MemoryEntry> results = agenticRetriever.agenticRetrieve(projectId, query, limit);
-            results = withScopedMemories(results, projectId, scope, sourceFileId);
-
-            if (results.isEmpty()) {
-                return "深度搜索未找到相关信息。建议尝试不同的查询词或使用 save_memory 保存新信息。";
-            }
-            
-            StringBuilder sb = new StringBuilder("深度搜索结果 (Agentic 多轮召回，")
-                    .append(results.size()).append(" 条):\n\n");
-            int index = 1;
-            for (MemoryEntry mem : results) {
-                sb.append(index++).append(". ");
-                sb.append("[").append(mem.getMemoryType().toUpperCase()).append("] ");
-                if (mem.getMemoryKey() != null) {
-                    sb.append("**").append(mem.getMemoryKey()).append("**: ");
-                }
-                String value = mem.getMemoryValue();
-                if (value.length() > 300) {
-                    value = value.substring(0, 300) + "...";
-                }
-                sb.append(value);
-                if (Boolean.TRUE.equals(mem.getIsProtected())) {
-                    sb.append(" [受保护]");
-                }
-                sb.append("\n\n");
-            }
-            
-            return sb.toString();
-        } catch (Exception e) {
-            log.error("Failed to deep search: {}", e.getMessage(), e);
-            return "深度搜索时出错: " + e.getMessage();
-        }
+        log.info("Tool: deep_search (compat -> query_memory depth=deep) query='{}', limit={}, scope='{}'",
+                query, limit, scope);
+        return retrieveWithDepth(query, null, scope, sourceFileId, "deep", limit)
+                + MERGED_INTO_QUERY_MEMORY;
     }
 
     /**

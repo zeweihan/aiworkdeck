@@ -22,7 +22,7 @@ import java.util.Optional;
  */
 public class RecordingToolRegistry extends ToolRegistry {
 
-    /** 一次分发记录。resolvedName 是别名解析后的工具名（如 search_laws -> search_web） */
+    /** 一次分发记录。resolvedName 是别名解析后的工具名（别名表现已为空，两者通常相同） */
     public record Dispatch(String rawName, String resolvedName, String argsJson) {
     }
 
@@ -65,8 +65,8 @@ public class RecordingToolRegistry extends ToolRegistry {
         dispatches.add(new Dispatch(name, resolved, argsJson));
         Optional<RegisteredTool> tool = resolve(resolved);
         if (tool.isEmpty()) {
-            // 与生产行为一致：未注册工具返回 found=false
-            return new ToolResult("Tool not found or arguments invalid.", null, false);
+            // 与生产行为一致：未注册工具返回 found=false，并带上那句指路（审计 A11）
+            return new ToolResult(ToolRegistry.unknownToolMessage(resolved), null, false);
         }
         String output = stubs.getOrDefault(resolved, "OK (eval stub)");
         return new ToolResult(output, tool.get(), true);

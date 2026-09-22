@@ -233,11 +233,29 @@ class ToolRegistryTest {
     }
 
     @Test
-    @DisplayName("别名：search_laws 等工具名别名可分发")
-    void resolvesToolNameAlias() {
-        // search_laws → search_web 不在 FakeTools 中，验证别名解析不误报 found
+    @DisplayName("别名表是空的：search_laws 不再被静默改道成公网搜索（审计 A11）")
+    void searchLawsIsNoLongerSilentlyReroutedToWebSearch() {
+        assertTrue(ToolRegistry.TOOL_NAME_ALIASES.isEmpty(),
+                "别名的代价是静默改道：模型以为调了 A、实际跑的是 B，而回喂里一个字都没提。"
+                        + "要容错写错的名字请改 not-found 的指路文案，不要往别名表里加："
+                        + ToolRegistry.TOOL_NAME_ALIASES);
+
         ToolRegistry.ToolResult r = registry.execute("search_laws", "{\"query\":\"q\"}", ctx);
-        assertFalse(r.found());
+        assertFalse(r.found(), "search_laws 不是注册工具，不该命中任何东西");
+        assertFalse(r.success());
+        assertTrue(r.output().contains("law_search"),
+                "未知工具的反馈必须指出该改用哪个法源工具，否则模型下一轮只会再换个不存在的名字："
+                        + r.output());
+        assertTrue(r.output().contains("不是法源"),
+                "必须点明 search_web 是公网搜索而不是法源——把网页摘要当法条原文引用"
+                        + "正是这条别名造成的正确性风险：" + r.output());
+    }
+
+    @Test
+    @DisplayName("未知工具没有指路条目时，反馈保持原样那一句")
+    void unknownToolWithoutHintKeepsThePlainMessage() {
+        assertEquals("Tool not found or arguments invalid.",
+                ToolRegistry.unknownToolMessage("totally_made_up_tool"));
     }
 
     @Test

@@ -110,9 +110,9 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @Tool("PPTX 专用清单，也是 PPTX 文件 ID 的来源：所有 pptx_* 工具的 fileId 从这里或 pptx_search_files 获取"
-            + "（doc_list_project_files 也列 pptx，但 pptx_* 工具请以本清单为准）。"
-            + "列出项目中的所有 PPTX 演示文稿文件，返回文件 ID、名称和位置信息。")
+    @Tool("PPTX 专用清单：等价于 doc_list_project_files 只保留 .pptx 的那一份结果，返回文件 ID、名称和位置信息。"
+            + "**要看项目里有哪些文件（含 Word / Excel / PDF / 文本 / 图片）请直接用 doc_list_project_files，一次列全**；"
+            + "只有在结果太多、确实只想看演示文稿时才用本工具。")
     public String pptx_list_files(
             @P("项目 ID") Long projectId
     ) {
@@ -192,8 +192,14 @@ public class PptxTools implements AgentToolComponent {
 
     // 交付物就是「在桌面编辑器里打开」（sendOpenFileAction），没有 LOWA 前端时这一步
     // 一个字节都不会发生，而返回文案还在说「已发送打开文件指令」——审计 A9。
-    @ToolMeta(displayName = "打开PPT文件", category = "pptx", requiresHost = ToolMeta.Host.LOWA)
-    @Tool("打开指定的 PPTX 文件进行编辑。文件会在用户的文档编辑器中打开。")
+    //
+    // offerToModel = false（审计 B-09，dev-board#808）：打开一份 PPTX 只需要 doc_open_file
+    // 这一个入口，它开完之后活跃文档类型变成 pptx，slide_* 那套权威编辑面随之放出来。
+    // 两个「打开 PPT」的工具并存，模型走哪条决定了它接下来拿到哪一套索引基数（0 基 vs 1 基），
+    // 而选错不会报错、只会静默改错页。登记保留：老会话回放照常执行。
+    @ToolMeta(displayName = "打开PPT文件", category = "pptx",
+              requiresHost = ToolMeta.Host.LOWA, offerToModel = false)
+    @Tool("[已由 doc_open_file 取代] 打开指定的 PPTX 文件进行编辑。文件会在用户的文档编辑器中打开。")
     public String pptx_open_file(
             @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId
     ) {
@@ -287,7 +293,11 @@ public class PptxTools implements AgentToolComponent {
     // 插件会话里模型会停在这里等一个永远不会来的确认，整轮空转（审计 A9 最严重的一条）。
     @ToolMeta(displayName = "生成PPT演示文稿", category = "pptx", fileEffect = "ADDED", fileArg = "fileName",
               requiresHost = ToolMeta.Host.LOWA)
-    @Tool("根据主题一键生成 PPTX 演示文稿。AI 将自动生成大纲、内容描述和幻灯片图片，最终输出可编辑的 PPTX 文件。默认保存到项目根目录（parentId 不传或传 null），只有用户明确指定保存位置时才需要查询文件夹。")
+    @Tool("根据主题一键生成 PPTX 演示文稿。AI 将自动生成大纲、内容描述和幻灯片图片，最终输出可编辑的 PPTX 文件。"
+            + "默认保存到项目根目录（parentId 不传或传 null），只有用户明确指定保存位置时才需要查询文件夹。"
+            + "**生成之后要改内容或格式，一律用 doc_open_file 打开它，再用 slide_* 那套原语编辑**"
+            + "（slide_get_overview 看结构、slide_set_shape_text 改文字、slide_format_text 改格式，页码都是 1 起）；"
+            + "不要为了改几个字重新生成一遍——重新生成会换掉整份文件，用户此前的手工修改全部丢失。")
     public String pptx_generate(
             @P("PPT 主题或详细描述，如：'AI 在法律行业的应用' 或 '公司年度总结报告，包含业绩、成就和未来规划'") String topic,
             @P("项目 ID，生成的 PPTX 将关联到此项目") Long projectId,
@@ -669,9 +679,16 @@ public class PptxTools implements AgentToolComponent {
     // 收尾三步的最后一步是 sendReloadFileAction，返回文案也明说「编辑器将自动重新加载」；
     // 而且 PowerPoint 任务窗格会话里有 office_ppt_* 作用在真正打开的那份 deck 上，
     // 本工具改的是服务端磁盘上的另一份，两套同时可见还会索引打架（审计 B-09）。
+    //
+    // offerToModel = false（审计 B-09，dev-board#808）：PPTX 的权威编辑面是 slide_*。
+    // 本工具改的是**磁盘上的字节**然后强制编辑器 reload，而编辑器里可能有尚未保存的修改
+    // （AI 刚用 slide_set_shape_text 改过、或用户手工改过）——reload 会把它们直接丢掉，
+    // 没有任何提示。再加上两套索引基数相反（这里 0 起、slide_* 1 起），模型在同一轮里
+    // 混用必然错页，而错页既不报错也不会被任何返回值戳穿。登记保留：老会话回放照常执行。
     @ToolMeta(displayName = "设置PPT格式", category = "pptx", fileEffect = "MODIFIED",
-              requiresHost = ToolMeta.Host.LOWA)
-    @Tool("对 PPTX 文件批量执行文本与格式修改（直接改文件；完成后编辑器自动重载显示结果）。" +
+              requiresHost = ToolMeta.Host.LOWA, offerToModel = false)
+    @Tool("[已由 slide_* 取代，改幻灯片请用 slide_set_shape_text / slide_replace_text / slide_format_text] " +
+          "对 PPTX 文件批量执行文本与格式修改（直接改文件；完成后编辑器自动重载显示结果）。" +
           "使用顺序：先 pptx_inspect_format 获取 0 起的定位索引，再调用本工具。opsJson 是 JSON 数组，每项一个操作，六种 action：\n" +
           "1. {\"action\":\"set_run_format\",\"slide\":0,\"shape\":1,\"paragraph\":0,\"run\":0,\"format\":{…}}（省略 run 作用于该段全部 run，省略 paragraph 作用于全部段落）\n" +
           "2. {\"action\":\"set_paragraph_format\",\"slide\":0,\"shape\":1,\"paragraph\":0,\"format\":{…}}（省略 paragraph 作用于全部段落）\n" +
@@ -758,7 +775,12 @@ public class PptxTools implements AgentToolComponent {
 
     // ==================== PPTX 编辑工具 ====================
 
-    @Tool("使用自然语言编辑 PPT 页面图片。可以用口语化的方式描述修改需求，如'把标题改成红色'、'换成饼图'、'增大字体'等。这是基于 AI 图片编辑的能力，适合对已生成的 PPT 页面进行微调。")
+    // offerToModel = false（审计 B-09，dev-board#808）：它改的是 pptx-service 里那份**页面图片**，
+    // 不是项目文件树里的 PPTX，与 slide_* 改的根本不是同一个东西；而描述里「把标题改成红色」
+    // 这类例子恰好和 slide_format_text 的职责重合，模型据此挑错工具时，改动落在一份
+    // 用户根本没在看的中间产物上，然后报告「已完成」。登记保留：老会话回放照常执行。
+    @ToolMeta(offerToModel = false)
+    @Tool("[已由 slide_* 取代] 使用自然语言编辑 PPT 页面图片（改的是 pptx-service 中的生成产物，不是项目文件树里的 PPTX）。")
     public String pptx_edit_page(
             @P("PPTX 服务中的项目 ID（通过 pptx_generate 生成 PPT 时返回）") String serviceProjectId,
             @P("页面 ID（从 pptx_get_project_pages 获取）") String pageId,

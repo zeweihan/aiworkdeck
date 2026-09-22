@@ -1036,7 +1036,8 @@ public class OfficeEditTools implements AgentToolComponent {
     public String office_table_add_row(
             @P("会话ID（系统自动注入）") String conversationId,
             @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
-            @P("插入位置行号（0 开始，新行插在该行之前），不传或 -1 则追加到表尾") Integer rowIndex,
+            @P("插入位置行号，**0 开始**（第一行 = 0；doc_table_* 那一族是 1 开始，别把上一次的行号直接搬过来），"
+                    + "新行插在该行之前；不传或 -1 则追加到表尾") Integer rowIndex,
             @P("插入几行，默认 1") Integer count
     ) {
         log.info("Tool: office_table_add_row called, tableIndex={}, rowIndex={}, count={}", tableIndex, rowIndex, count);
@@ -1052,7 +1053,7 @@ public class OfficeEditTools implements AgentToolComponent {
     public String office_table_delete_row(
             @P("会话ID（系统自动注入）") String conversationId,
             @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
-            @P("要删的行号（0 开始，必填）") Integer rowIndex,
+            @P("要删的行号，**0 开始**（第一行 = 0；doc_table_* 那一族是 1 开始，别把上一次的行号直接搬过来）") Integer rowIndex,
             @P("连删几行，默认 1") Integer count
     ) {
         log.info("Tool: office_table_delete_row called, tableIndex={}, rowIndex={}, count={}", tableIndex, rowIndex, count);
@@ -2017,7 +2018,9 @@ public class OfficeEditTools implements AgentToolComponent {
     }
 
     @Tool("在当前 PowerPoint 演示文稿中新增一页幻灯片，可选写入标题与正文文本框。" +
-          "position 指定新页插入后成为第几页（1 起，即插在原第 position 页之前；不传则追加到末尾）——PowerPoint JS API 只能把新页加到末尾" +
+          "position 指定新页插入后成为第几页（1 起，即插在原第 position 页**之前**；不传则追加到末尾）。" +
+          "注意方向：本工具是「插在第 N 页之前」，而桌面编辑器里的 slide_add_page 是「插在第 N 页之后」——" +
+          "同一句「插在第 3 页」在两族里差一页，而错页不报错、要用户自己翻页才发现。——PowerPoint JS API 只能把新页加到末尾" +
           "再挪动位置，挪动需要 PowerPointApi 1.8（较新 Microsoft 365），旧版宿主上会追加到末尾但不挪动位置，" +
           "返回值 moved/note 字段说明实际情况。title/body 用文本框承载（需要 PowerPointApi 1.4），位置尺寸用固定默认值。")
     @ToolMeta(displayName = "新增幻灯片", category = "office", fileEffect = "MODIFIED")

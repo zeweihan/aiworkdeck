@@ -199,21 +199,26 @@ public class SlideEditTools implements AgentToolComponent {
     // ==================== Phase 2：页与形状结构 ====================
 
     @ToolMeta(displayName = "插入幻灯片", category = "document", fileEffect = "MODIFIED")
-    @Tool("【幻灯片·写】插入一页新幻灯片。position 指插到第 N 页之后（1 开始，不传则插到末尾，" +
-          "插到末尾时可能连带让另一对既有页的相对顺序也换一次，不丢内容只是顺序细节）；" +
+    @Tool("【幻灯片·写】插入一页新幻灯片。insertAfterPage 指插到第 N 页**之后**（页码 1 开始；" +
+          "不传则插到末尾，插到末尾时可能连带让另一对既有页的相对顺序也换一次，不丢内容只是顺序细节）。" +
+          "注意方向：这里是「插在第 N 页之后」，而 Office 任务窗格里的 office_ppt_add_slide 是" +
+          "「插在第 N 页之前」——同一句「插在第 3 页」在两族里差一页，而错页不报错、" +
+          "要用户自己翻页才发现，所以按页码插入前先用 slide_get_overview 核对当前页序；" +
           "title/body 可选，写在新页的标题/内容占位符；layout（版式常量）是独立参数，与 title/body " +
           "无关联，谨慎使用（多页文档上给已有页设置版式，真机实测过有清空相邻页占位符内容的风险，" +
           "改前后建议用 slide_get_overview 核对）。" + NO_REVISION_NOTE)
     public String slide_add_page(
-            @P("插到第 N 页之后，1 开始；不传则插到末尾") Integer position,
+            @P("【已弃用，等价于 insertAfterPage】插到第 N 页之后，1 开始") Integer position,
             @P("版式常量（可选，独立生效，与 title/body 无关；多页文档上谨慎使用，见工具说明）") Integer layout,
             @P("标题文字（可选，以文本框形式写在新页顶部）") String title,
-            @P("正文文字（可选，以文本框形式写在新页中部）") String body
+            @P("正文文字（可选，以文本框形式写在新页中部）") String body,
+            @P("新页插到第几页**之后**（页码 1 开始）；不传则插到末尾") Integer insertAfterPage
     ) {
-        log.info("Tool: slide_add_page called position={}, layout={}", position, layout);
+        Integer after = insertAfterPage != null ? insertAfterPage : position;
+        log.info("Tool: slide_add_page called insertAfterPage={}, layout={}", after, layout);
         try {
             Map<String, Object> params = new HashMap<>();
-            if (position != null) params.put("position", position);
+            if (after != null) params.put("position", after);
             if (layout != null) params.put("layout", layout);
             if (title != null) params.put("title", title);
             if (body != null) params.put("body", body);
