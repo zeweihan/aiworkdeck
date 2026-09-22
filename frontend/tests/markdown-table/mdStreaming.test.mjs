@@ -20,6 +20,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { renderMarkdown, markdownInstance } from '../../src/utils/markdownRenderer.js'
+import { nextStableLength } from '../../src/utils/markdownStableSplit.js'
 
 const SRC = readFileSync(new URL('../../src/components/MarkdownPreview.vue', import.meta.url), 'utf8')
 
@@ -29,9 +30,11 @@ function loadComponent(render = renderMarkdown) {
     renderMarkdown: render,
     getFileDownloadUrl: async () => '',
     getAuthHeaders: () => ({}),
-    // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790）
+    // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790），
+    // nextStableLength 供流式分段渲染（dev-board#811 K31）
     t: (k) => k,
     copyToClipboard: () => true,
+    nextStableLength,
   }
   const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '')
@@ -60,6 +63,10 @@ function feed(component, vm, text) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// 正文现在分成「已定稿前缀 + 尾巴」两段各自 v-html（dev-board#811 K31），
+// 用户看到的是两段拼起来的那一整篇。
+const shown = (vm) => (vm.stableHtml || '') + (vm.tailHtml || '')
+
 test('markdown-it 实例不在 data() 里（放进去会被 Vue 做成响应式代理，解析慢 3.7 倍）', () => {
   const component = loadComponent()
   const state = component.data.call({ content: '# hi' })
@@ -83,7 +90,7 @@ test('renderMarkdown 用的是模块级单例（两次取到同一个实例）',
 test('首屏同步渲染：data() 返回时就已经有 HTML，不用等一帧', () => {
   const component = loadComponent()
   const vm = makeVm(component, '# 标题')
-  assert.match(vm.renderedHtml, /<h1>标题<\/h1>/, '静态预览/历史消息挂载后必须立刻有内容')
+  assert.match(shown(vm), /<h1>标题<\/h1>/, '静态预览/历史消息挂载后必须立刻有内容')
 })
 
 test('流式期间多次变更只渲染一次，且渲染的是最后一次的内容', async () => {
@@ -105,7 +112,7 @@ test('流式期间多次变更只渲染一次，且渲染的是最后一次的�
 
   await sleep(60)
   assert.equal(calls, firstRender + 1, `40 个 token 只该合并成一次渲染，实际 ${calls - firstRender} 次`)
-  assert.match(vm.renderedHtml, /第 39 段。/, '合帧不能丢最后一次内容')
+  assert.match(shown(vm), /第 39 段。/, '合帧不能丢最后一次内容')
 })
 
 test('帧回调跑完后再来的变更会重新排帧（不会从此不再渲染）', async () => {
@@ -120,7 +127,7 @@ test('帧回调跑完后再来的变更会重新排帧（不会从此不再渲�
   feed(component, vm, 'A B')
   await sleep(60)
   assert.equal(calls, afterFirst + 1, '新一帧必须重新排上')
-  assert.match(vm.renderedHtml, /A B/)
+  assert.match(shown(vm), /A B/)
 })
 
 test('卸载时取消待执行的帧（组件没了就不该再渲染）', async () => {
@@ -134,4 +141,91 @@ test('卸载时取消待执行的帧（组件没了就不该再渲染）', async
   await sleep(60)
   assert.equal(calls, before, '卸载后不该再有渲染发生')
   assert.equal(vm.renderFrame, null)
+})
+
+// ---- 分段增量渲染（dev-board#811 K31，审查 C-10）----
+//
+// 病灶：renderNow 原先是 `renderMarkdown(整篇)`，结果整段写进一个 v-html。长回答后期
+// 每帧的解析成本随正文长度线性上涨，而且**每次整段重写都会把用户在正文里选中的文字清掉**。
+// 现在正文被切成「已定稿前缀」与「还在长的尾巴」两段各自 v-html：前缀的字符串不变，
+// Vue 就不碰它的 DOM。
+//
+// 这里钉三件事：分段结果必须与整篇渲染逐字相同；前缀真的不再重算；围栏不许被切开。
+
+const longBody = (paragraphs) => Array.from({ length: paragraphs },
+  (_, i) => `## 第 ${i + 1} 节\n\n本节说明付款期限与违约责任，建议补充验收标准与逾期解除条件。`).join('\n\n')
+
+test('分段渲染的结果与整篇渲染逐字相同', () => {
+  const component = loadComponent()
+  const text = longBody(400)
+  assert.ok(text.length > 4000, '用例正文要够长才会触发分段')
+  const vm = makeVm(component, '')
+  vm.content = text
+  vm.renderNow()
+  assert.ok(vm.stableHtml.length > 0, '够长的正文必须真的切出了定稿前缀')
+  assert.equal(shown(vm), renderMarkdown(text, { copyLabel: 'chat.copyCode' }),
+    '分段拼起来必须与整篇渲染一模一样，否则用户在流式期间看到的排版是错的')
+})
+
+test('前缀定稿后不再重新解析：喂进解析器的字符数不再随正文长度上涨', () => {
+  let fed = 0
+  const component = loadComponent((text, env) => { fed += (text || '').length; return renderMarkdown(text, env) })
+  const vm = makeVm(component, '')
+  const text = longBody(400)
+  const frames = 30
+  fed = 0
+  // 分 30 帧把正文喂完（模拟一条长回答的流式过程）
+  let wholeEveryFrame = 0
+  for (let i = 1; i <= frames; i += 1) {
+    const slice = text.slice(0, Math.floor(text.length * i / frames))
+    wholeEveryFrame += slice.length   // 改造前每帧要把这么多字符重新解析一遍
+    vm.content = slice
+    vm.renderNow()
+  }
+  assert.ok(fed < wholeEveryFrame / 3,
+    `分段之后喂进解析器的总字符数应当远小于「每帧整篇」（实测 ${fed}，每帧整篇 ${wholeEveryFrame}）`)
+  console.log(`  [K31] 30 帧流式：分段喂进解析器 ${fed} 字符，每帧整篇则是 ${wholeEveryFrame} 字符`)
+})
+
+test('围栏里的空行不许当切点：代码块不会被劈成两半', () => {
+  const component = loadComponent()
+  const filler = longBody(200)
+  const text = `${filler}\n\n\`\`\`js\nconst a = 1\n\nconst b = 2\n\nconst c = 3\n\`\`\`\n`
+  const vm = makeVm(component, '')
+  vm.content = text
+  vm.renderNow()
+  assert.equal(shown(vm), renderMarkdown(text, { copyLabel: 'chat.copyCode' }))
+  assert.equal((shown(vm).match(/<code class="language-js">/g) || []).length, 1, '代码块只该有一个')
+})
+
+test('松散列表不许被切开：切点之后必须是一个肯定独立的顶层块', () => {
+  const component = loadComponent()
+  const filler = longBody(200)
+  const list = ['- 第一项', '', '- 第二项', '', '- 第三项'].join('\n')
+  const text = `${filler}\n\n${list}\n`
+  const vm = makeVm(component, '')
+  vm.content = text
+  vm.renderNow()
+  assert.equal(shown(vm), renderMarkdown(text, { copyLabel: 'chat.copyCode' }),
+    '在松散列表的空行处切开会把一张清单渲染成两张')
+})
+
+test('正文被换掉（重新生成 / 换一条消息）时推倒重来，不会把两篇拼在一起', () => {
+  const component = loadComponent()
+  const vm = makeVm(component, '')
+  vm.content = longBody(400)
+  vm.renderNow()
+  assert.ok(vm.stableHtml.length > 0)
+  vm.content = '# 换了一篇'
+  vm.renderNow()
+  assert.equal(shown(vm), renderMarkdown('# 换了一篇', { copyLabel: 'chat.copyCode' }))
+})
+
+test('短正文不分段：形态与改造前一致（stableHtml 恒为空串）', () => {
+  const component = loadComponent()
+  const vm = makeVm(component, '')
+  vm.content = '# 标题\n\n一小段正文。'
+  vm.renderNow()
+  assert.equal(vm.stableHtml, '')
+  assert.match(vm.tailHtml, /<h1>标题<\/h1>/)
 })

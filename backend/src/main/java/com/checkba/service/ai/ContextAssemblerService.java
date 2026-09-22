@@ -793,13 +793,17 @@ public class ContextAssemblerService {
         timings.mark("systemPrompt", systemText.length());
 
         // 3. 加载对话历史并进行智能压缩
-        List<com.checkba.model.entity.ProjectAiMessage> historyEntities = messageService.listByConversationId(conversationId);
+        // 只读 role + content 两列、不查附件（dev-board#811 K31，审查 C-12）：这一段就卡在
+        // 用户等待首 token 的关键路径上，而 displayContent / conversationTitle / 附件
+        // 一个都不参与组装。**条数一条不少**——压缩器读的是整条历史，砍行会静默改掉摘要。
+        List<com.checkba.repository.ProjectAiMessageRepository.HistoryLine> historyEntities =
+                messageService.listHistoryForAssembly(conversationId);
         timings.mark("historyLoad", historyEntities.size());
 
         // 转换为 ChatMessage 列表
         java.util.List<dev.langchain4j.data.message.ChatMessage> historyMessages = new java.util.ArrayList<>();
-        for (com.checkba.model.entity.ProjectAiMessage entity : historyEntities) {
-            String content = entity.getContent();
+        for (com.checkba.repository.ProjectAiMessageRepository.HistoryLine entity : historyEntities) {
+            String content = entity.content();
             if (content == null || content.isBlank()) {
                 // 容错存量脏数据：langchain4j 的 UserMessage/AiMessage.from(text) 对 null/空白
                 // 一律抛 IllegalArgumentException("text cannot be null or blank")。入口现在已经
@@ -807,13 +811,13 @@ public class ContextAssemblerService {
                 // 不跳过的话，只要该会话曾经存过一条空内容消息，此后每一轮 assemble 都会在这里
                 // 抛出异常，被兜底 catch 变成 SSE error，整个 conversationId 永久报废。
                 // 存量数据修不回来，只能在回放时跳过这一条，不能掀翻整轮上下文组装。
-                log.warn("Skipping blank history message id={} role={} in conversation={} during context assembly",
-                        entity.getId(), entity.getRole(), conversationId);
+                log.warn("Skipping blank history message role={} in conversation={} during context assembly",
+                        entity.role(), conversationId);
                 continue;
             }
-            if ("USER".equalsIgnoreCase(entity.getRole())) {
+            if ("USER".equalsIgnoreCase(entity.role())) {
                 historyMessages.add(dev.langchain4j.data.message.UserMessage.from(content));
-            } else if ("ASSISTANT".equalsIgnoreCase(entity.getRole())) {
+            } else if ("ASSISTANT".equalsIgnoreCase(entity.role())) {
                 historyMessages.add(dev.langchain4j.data.message.AiMessage.from(content));
             }
         }

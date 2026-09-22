@@ -27,6 +27,43 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
     long countByConversationId(String conversationId);
 
     /**
+     * 上下文组装专用的历史投影（dev-board#811 K31，审查 C-12）。
+     *
+     * <p>{@code ContextAssemblerService} 每一轮都要把整条会话读一遍，而它只用到 role 与 content
+     * 两个字段（契约 D：模型永远只看 content）。走 {@code findByConversationIdOrderByCreatedAtAsc}
+     * 会把 displayContent / conversationTitle / clientRequestId / sourceChannel 一起拖回来，
+     * 再由服务层顺手补一次附件查询——三样东西都不参与上下文组装，而这一整段就卡在用户等待
+     * 首 token 的关键路径上。
+     *
+     * <p><b>刻意不加行数上限。</b> 看上去「只取最近 N 条」更省，但 {@code ContextCompressor} 的
+     * 第二到第五层（去冗余 / 压工具结果 / 摘要旧消息 / 激进压缩）读的是整条历史，砍掉前面的行
+     * 会静默改变摘要内容——省下的那点读取远不值得让模型「忘掉」会话开头。要做行数上限，
+     * 得先把压缩器改成按游标回溯，那是另一张卡。
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT new com.checkba.repository.ProjectAiMessageRepository$HistoryLine(m.role, m.content) " +
+            "FROM ProjectAiMessage m WHERE m.conversationId = :conversationId ORDER BY m.createdAt ASC, m.id ASC")
+    List<HistoryLine> findHistoryForAssembly(@org.springframework.data.repository.query.Param("conversationId") String conversationId);
+
+    /** 上下文组装要的两列。 */
+    record HistoryLine(String role, String content) {
+    }
+
+    /**
+     * 历史分页（dev-board#811 K31，审查 C-12）：取 id 小于游标的最近 limit 条。
+     *
+     * <p>倒序取、调用方反转。按 id 而不是 createdAt 走游标：同一轮里插入的几条消息
+     * createdAt 可能同毫秒（MySQL 还会按秒截断），用时间戳当游标会永久丢条——与项目级会话
+     * 列表那条复合游标同一个教训，只是这里同一会话内 id 单调，单列就够。
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT m FROM ProjectAiMessage m WHERE m.conversationId = :conversationId " +
+            "AND (:before IS NULL OR m.id < :before) ORDER BY m.id DESC")
+    List<ProjectAiMessage> findPageBefore(@org.springframework.data.repository.query.Param("conversationId") String conversationId,
+                                          @org.springframework.data.repository.query.Param("before") Long before,
+                                          org.springframework.data.domain.Pageable pageable);
+
+    /**
      * 获取会话列表，包含 conversationTitle 和用户第一条消息
      * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel,
      *           pinned, parentConversationId]

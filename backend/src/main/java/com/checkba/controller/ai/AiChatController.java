@@ -62,10 +62,20 @@ public class AiChatController {
         this.aiContextProperties = aiContextProperties;
     }
 
+    /**
+     * 会话历史。
+     *
+     * <p><b>分页是可选的（dev-board#811 K31，审查 C-12）</b>：不带 {@code limit} 时原样返回
+     * 整条会话的裸数组——Office/WPS 任务窗格与旧桌面端都按裸数组解析，改成信封会当场打断它们。
+     * 带了 {@code limit} 才返回 {@code {messages, hasMore, nextBefore}} 信封；
+     * {@code before} 传上一页里最早那条的 id，向上翻。
+     */
     @GetMapping("/history")
     public ResponseEntity<?> getChatHistory(
             @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String conversationId,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) Long before,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
 
         // 越权校验：conversationId 分支此前在读 session 之前就返回了消息，
@@ -83,7 +93,18 @@ public class AiChatController {
              if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
                  return ResponseEntity.status(403).body(LangText.of("无权查看该会话", "You do not have permission to view this conversation"));
              }
-             return ResponseEntity.ok(projectAiMessageService.listByConversationId(conversationId));
+             if (limit == null) {
+                 return ResponseEntity.ok(projectAiMessageService.listByConversationId(conversationId));
+             }
+             java.util.List<com.checkba.model.entity.ProjectAiMessage> page =
+                     projectAiMessageService.listByConversationIdPage(conversationId, before, limit);
+             Long earliest = page.isEmpty() ? before : page.get(0).getId();
+             java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+             body.put("messages", page);
+             body.put("hasMore", projectAiMessageService.hasMoreBefore(conversationId, earliest));
+             // 下一页的游标；这一页空就把原游标原样回去，前端不必自己记
+             body.put("nextBefore", earliest);
+             return ResponseEntity.ok(body);
         }
 
         // Fallback (or deprecated): List all messages for project/user if conversationId is missing

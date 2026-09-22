@@ -251,6 +251,44 @@ public class ProjectAiMessageService {
     }
 
     /**
+     * 上下文组装用的历史（dev-board#811 K31）：只有 role 与 content 两列，不查附件。
+     *
+     * <p>与 {@link #listByConversationId} 的区别只在读多少列：**条数一条不少**，
+     * 所以压缩器看到的历史与改造前完全一致（不许在这里加行数上限，原委见
+     * {@code ProjectAiMessageRepository#findHistoryForAssembly}）。
+     */
+    public List<ProjectAiMessageRepository.HistoryLine> listHistoryForAssembly(String conversationId) {
+        return repository.findHistoryForAssembly(conversationId);
+    }
+
+    /**
+     * 历史分页（dev-board#811 K31）：最近 {@code limit} 条，或 {@code before} 这条之前的
+     * {@code limit} 条。返回按时间正序（与全量读同口径），调用方直接往前面拼。
+     *
+     * @param before 上一页里最早那条的主键；null = 取最新的一页
+     * @return 这一页的消息（正序）；{@code hasMore} 由调用方按「是否恰好取满」判断
+     */
+    public List<ProjectAiMessage> listByConversationIdPage(String conversationId, Long before, int limit) {
+        int capped = Math.max(1, Math.min(limit, 500));
+        // 多取一条只为了回答「还有没有更早的」，返回前去掉
+        List<ProjectAiMessage> page = new java.util.ArrayList<>(repository.findPageBefore(
+                conversationId, before, org.springframework.data.domain.PageRequest.of(0, capped + 1)));
+        if (page.size() > capped) {
+            page = new java.util.ArrayList<>(page.subList(0, capped));
+        }
+        java.util.Collections.reverse(page);
+        attachAttachments(page);
+        return page;
+    }
+
+    /** 这一页之前还有没有更早的消息。 */
+    public boolean hasMoreBefore(String conversationId, Long earliestId) {
+        if (earliestId == null) return false;
+        return !repository.findPageBefore(conversationId, earliestId,
+                org.springframework.data.domain.PageRequest.of(0, 1)).isEmpty();
+    }
+
+    /**
      * 一次把整条会话的附件取回来挂到各条消息上（N+1 防护）。
      *
      * <p>失败只 log：附件 chip 没有比「历史打不开」更重要。
