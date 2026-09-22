@@ -369,6 +369,19 @@ public class ContextAssemblerService {
                 } else {
                     // Single File Logic
                     String content = legalTools.read_document(item.getId());
+                    if (isToolFailureText(content)) {
+                        // 工具的失败回执不是正文（dev-board#779 K8）：不进 CDATA，改成一句
+                        // 模型能直接转述给用户的说明。原来它照样被当成附件正文写进 CDATA，
+                        // 于是模型会「引用」一句 Java 异常文案当合同原文。
+                        systemText.append("<file id=\"").append(item.getId())
+                                  .append("\" name=\"").append(attrSafe(item.getName())).append("\">")
+                                  .append(english ? "This attachment could not be read: "
+                                                  : "该附件内容暂不可读：")
+                                  .append(attrSafe(toolFailureHeadline(content)))
+                                  .append("</file>\n");
+                        totalFileCount++;
+                        continue;
+                    }
                     // Truncate if too long
                     if (content != null && content.length() > maxCharsPerFile) {
                         content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
@@ -559,8 +572,9 @@ public class ContextAssemblerService {
             } // end zh active-document guidance
 
             // 同 <file> 段：空白正文等于没读到，走下面的 readHint 分支明说「内容暂不可读」，
-            // 别注入一段空 CDATA 让模型以为文档本身是空的
-            if (content != null && !content.isBlank()) {
+            // 别注入一段空 CDATA 让模型以为文档本身是空的。
+            // 工具返回的错误/警告文案同样不是正文（dev-board#779 K8）——见 isToolFailureText。
+            if (!isToolFailureText(content) && content != null && !content.isBlank()) {
                 // Truncate if too long
                 int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
                 if (content.length() > maxCharsPerFile) {
@@ -937,7 +951,9 @@ public class ContextAssemblerService {
                         + "so ask the user to check the original whenever a key number or name matters]\n"
                 : "[以下正文由文字识别（OCR）从图片转写而来，" + reason
                         + "；你看不到图像本身，识别结果可能有误，涉及关键数字/名称时请提示用户核对原图]\n");
-        systemText.append(content != null && !content.isBlank()
+        // 同上：OCR 一个字都没认出来时 read_document 回的是 "Warning: no text extracted…"，
+        // 顶着上面那句「以下正文由 OCR 转写而来」的横幅进 CDATA，就成了「识别结果是这句英文」。
+        systemText.append(content != null && !content.isBlank() && !isToolFailureText(content)
                 ? fenceSafe(content) : "[Empty or unreadable file]");
         systemText.append("\n]]></file>\n");
     }
@@ -960,6 +976,41 @@ public class ContextAssemblerService {
         };
     }
     
+    /**
+     * 判断一段「正文」其实是工具的失败回执（dev-board#779 K8，审查发现 E-3）。
+     *
+     * {@code LegalTools.read_document} 读不到时不抛异常，而是把一句英文说明当返回值交回来
+     * （{@code "Error: File not found."} / {@code "Error reading document: …"} /
+     * {@code "Warning: no text extracted from …"}）。这些串非空，只判 {@code isBlank()}
+     * 的守卫会让它们原样写进 {@code <active_document>} / {@code <file>} 的 CDATA——模型读到的是
+     * 「当前打开的文档，正文如下：Error reading document: For input string: "artifact-12"」。
+     * 认出来后按「正文读不到」处理：活跃文档落到 readHint 分支（那条分支本来就是为此准备的），
+     * 显式附件改成一句「该附件内容暂不可读：&lt;首行&gt;」的说明。
+     *
+     * 只看首行、只认这三种前缀：真正的正文首行恰好长这样的概率极低，而误判的代价也只是
+     * 退到「读不到」的说法（模型仍可用读取类工具自己读一遍）。
+     */
+    static boolean isToolFailureText(String content) {
+        if (content == null) return false;
+        String head = content.strip();
+        int nl = head.indexOf('\n');
+        if (nl >= 0) head = head.substring(0, nl).strip();
+        return head.startsWith("Error: ")
+                || head.startsWith("Error reading document:")
+                || head.startsWith("Warning: ");
+    }
+
+    /** 失败回执里能给用户看的那一句：首个非空行，过长截断（异常里可能拖着一长串堆栈式信息）。 */
+    static String toolFailureHeadline(String content) {
+        if (content == null) return "";
+        for (String line : content.strip().split("\n", -1)) {
+            String one = line.strip();
+            if (one.isEmpty()) continue;
+            return one.length() > 200 ? one.substring(0, 200) + "…" : one;
+        }
+        return "";
+    }
+
     /**
      * 嵌进 system message 的文档正文是不可信输入（对方律师产出的 docx、共享目录里的来件）。
      * 正文里出现 "]]>" 会提前闭合自己的 CDATA，其后的文字在模型看来与本服务自己拼的

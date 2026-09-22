@@ -162,6 +162,89 @@ class ContextAssemblerServiceTest {
         assertTrue(systemText.contains("已在编辑器中打开"), "正文读不到也应声明该文档已打开");
     }
 
+    // 工具返回的错误/警告文案不是正文（dev-board#779 K8，审查发现 E-3）。
+    // read_document 对非数字 fileId 会抛 NumberFormatException 并把 "Error reading document: …"
+    // 当返回值交回来；这个串非空，原来直接通过 isBlank 守卫被写进 <active_document> CDATA，
+    // 模型于是读到「当前打开的文档，正文如下：Error reading document: ...」。
+    @Test
+    @DisplayName("活跃文档读到的是工具错误文案时，不当正文注入，落回「正文暂不可读」提示")
+    void activeContextToolErrorIsNotInjectedAsBody() {
+        when(legalTools.read_document("123"))
+                .thenReturn("Error reading document: For input string: \"artifact-12\"");
+
+        String systemText = assembleSystemText(activeDoc());
+
+        assertFalse(systemText.contains("For input string"),
+                "工具异常文案不该出现在 system prompt 里");
+        assertFalse(systemText.contains("<active_document id=\"123\" name=\"合作框架协议.docx\"><![CDATA["),
+                "不该把异常文案当正文写进 active_document 的 CDATA");
+        assertTrue(systemText.contains("[正文暂不可读"),
+                "应落到 readHint 分支明说正文读不到");
+        assertTrue(systemText.contains("合作框架协议.docx"), "文档标识仍要保留");
+    }
+
+    @Test
+    @DisplayName("read_document 的 Warning 文案（抽不出正文）同样不当正文注入")
+    void activeContextToolWarningIsNotInjectedAsBody() {
+        when(legalTools.read_document("123")).thenReturn(
+                "Warning: no text extracted from '合作框架协议.docx' — the file may be empty");
+
+        String systemText = assembleSystemText(activeDoc());
+
+        assertFalse(systemText.contains("no text extracted"),
+                "工具警告文案不该出现在 system prompt 里");
+        assertTrue(systemText.contains("[正文暂不可读"), "应落到 readHint 分支");
+    }
+
+    @Test
+    @DisplayName("正文本身以 Error 开头的普通句子（不是工具错误前缀）照常注入")
+    void plainBodyStartingWithErrorWordIsStillInjected() {
+        when(legalTools.read_document("123"))
+                .thenReturn("Error Handling 条款\n第一条 甲方应当……");
+
+        String systemText = assembleSystemText(activeDoc());
+
+        assertTrue(systemText.contains("第一条 甲方应当"), "真正的正文不该被误杀");
+    }
+
+    // 同一条病灶的另一半：显式附件的 <file> 段（dev-board#779 K8 收尾）。
+    // 这里原来也只判 isBlank，工具失败回执照样被当成附件正文写进 CDATA——模型于是
+    // 「引用」一句 Java 异常文案当合同原文。现在不进 CDATA，改成一句能转述给用户的说明。
+    private static AiAgentController.ContextItem attachment(String id, String name) {
+        AiAgentController.ContextItem item = new AiAgentController.ContextItem();
+        item.setId(id);
+        item.setName(name);
+        item.setFileType(name.substring(name.lastIndexOf('.') + 1));
+        return item;
+    }
+
+    @Test
+    @DisplayName("附件读到的是工具错误文案时，不进 <file> CDATA，改成「该附件内容暂不可读」")
+    void attachmentToolErrorIsNotInjectedAsBody() {
+        when(legalTools.read_document("777")).thenReturn("Error: File not found.");
+
+        String systemText = assembleSystemTextWith(List.of(attachment("777", "股权转让协议.docx")));
+
+        assertFalse(systemText.contains("<file id=\"777\" name=\"股权转让协议.docx\"><![CDATA["),
+                "不该把失败回执当正文写进 <file> 的 CDATA");
+        assertTrue(systemText.contains("该附件内容暂不可读：Error: File not found."),
+                "应改成一句模型能转述给用户的说明，并带上失败首行");
+        assertTrue(systemText.contains("股权转让协议.docx"), "附件标识仍要保留");
+    }
+
+    @Test
+    @DisplayName("附件正文正常时照常注入 CDATA（这条守住不误杀）")
+    void attachmentNormalBodyIsStillInjected() {
+        when(legalTools.read_document("777")).thenReturn("第一条 转让标的……");
+
+        String systemText = assembleSystemTextWith(List.of(attachment("777", "股权转让协议.docx")));
+
+        assertTrue(systemText.contains("<file id=\"777\" name=\"股权转让协议.docx\"><![CDATA["),
+                "正常正文仍走 CDATA");
+        assertTrue(systemText.contains("第一条 转让标的"), "正文本身要在");
+        assertFalse(systemText.contains("该附件内容暂不可读"), "正常正文不该被判成读不出来");
+    }
+
     // ==== 模板画像事实（dev-board#729 ②）====
     // 「本项目有没有模板画像」模型自己判断不了，真机上它会先花一整轮去 list_files(_模板) 探一探。
     // 服务端本来就知道答案（StyleProfileResolver 的解析链），直接写进末位提醒。

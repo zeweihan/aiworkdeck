@@ -326,10 +326,7 @@
 
        <!-- Center: Input -->
        <view class="empty-middle-section">
-          <view class="input-card centered-style">
-              <view v-if="isDragging" class="drop-overlay">
-                 <text>Drop files here</text>
-              </view>
+          <view class="input-card centered-style" :class="{ 'is-drop-target': dragActive }">
                <!-- Image Thumbnails Preview (top-left) -->
                <view v-if="pastedImages.length > 0" class="input-images-preview">
                   <view v-for="(img, index) in pastedImages" :key="index" class="preview-image-item">
@@ -557,10 +554,7 @@
          @send-now="handleInboxSendNow"
          @locate="handleInboxLocate"
        />
-       <view class="input-card">
-          <view v-if="isDragging" class="drop-overlay">
-             <text>Drop files here</text>
-          </view>
+       <view class="input-card" :class="{ 'is-drop-target': dragActive }">
            <!-- Image Thumbnails Preview (top-left) -->
            <view v-if="pastedImages.length > 0" class="input-images-preview">
               <view v-for="(img, index) in pastedImages" :key="index" class="preview-image-item">
@@ -775,6 +769,12 @@ export default {
     externalReadOnly: {
       type: String,
       default: ''
+    },
+    // 宿主（project-overview 的 .side-panel-ai）正在被拖拽悬停。高亮画在输入框卡片上，
+    // 与占位文案「拖拽文件/文件夹至此」指向同一处（dev-board#779 K6 ④）。
+    dragActive: {
+      type: Boolean,
+      default: false
     }
   },
   setup(props, { emit, expose }) {
@@ -979,8 +979,6 @@ export default {
     // 刻意不加 immediate：挂载那一刻 currentConversationId 还是 null，立刻回写会把
     // 工作台正要读的那条记录当场抹掉——恢复永远不会发生，而且一点报错都没有。
     watch(currentConversationId, (id) => saveLastConversation(uni, props.projectId, id))
-
-    const isDragging = ref(false)
 
     // Context Files (for drag-drop file context)
     const contextFiles = ref([])
@@ -2427,6 +2425,24 @@ export default {
         return
       }
 
+      const parentId = selectedUploadParent.value
+      const filesToUpload = [...uploadSelectedFiles.value]
+
+      // Close dialog
+      showUploadDialog.value = false
+      uploadSelectedFiles.value = []
+
+      await uploadFilesAndAttach(filesToUpload, parentId)
+    }
+
+    /**
+     * 上传一批文件到项目里，再把它们挂进本轮上下文。
+     * 入参形状 { name, size, fileObject }——上传对话框与「本机文件拖进对话区」
+     * （dev-board#779 K6 ③）共用这一条路，不另起一套。
+     */
+    const uploadFilesAndAttach = async (filesToUpload, parentId) => {
+      if (!filesToUpload || filesToUpload.length === 0) return
+
       if (!props.projectId) {
         uni.showToast({ title: t('chat.projectIdMissing'), icon: 'none' })
         return
@@ -2434,12 +2450,6 @@ export default {
 
       isUploading.value = true
       const projectId = typeof props.projectId === 'string' ? Number(props.projectId) : props.projectId
-      const parentId = selectedUploadParent.value
-      const filesToUpload = [...uploadSelectedFiles.value]
-
-      // Close dialog
-      showUploadDialog.value = false
-      uploadSelectedFiles.value = []
 
       // 字节上传失败的文件名：这些不并入附件，收尾时要点名告诉用户
       const failedUploads = []
@@ -2507,6 +2517,24 @@ export default {
       } finally {
         isUploading.value = false
       }
+    }
+
+    /**
+     * 把本机文件（Finder / 资源管理器拖进对话区）上传进项目并挂上下文（dev-board#779 K6 ③）。
+     * 宿主 project-overview 的 handleAiDrop 在三种应用内格式都落空、dataTransfer 里
+     * 确实有文件时调这里，走的就是上传对话框那一条路（createFile + uploadFileContent +
+     * addFile），不另起一套。
+     *
+     * 落点固定项目根目录：工作台里没有「当前文件夹」这个概念（文件树的选中项跟着编辑器
+     * 标签走，是一份文件不是一个目录），跟着它走会把拖进来的材料随机塞到某份文档旁边。
+     * 根目录是上传对话框的默认值，也是用户一眼能找到的地方；toast 里点名落点。
+     */
+    const uploadLocalFilesAndAddContext = async (fileList) => {
+      const files = Array.from(fileList || [])
+        .filter(f => f && f.name)
+        .map(f => ({ name: f.name, size: f.size, fileObject: f }))
+      if (!files.length) return
+      await uploadFilesAndAttach(files, null)
     }
 
     // Upload file content to storage
@@ -2663,6 +2691,7 @@ export default {
     expose({
       addFile, loadMessages, loadConversationMetadata, sendExternalPrompt,
       startNewChat, menuSetMode, menuStop, menuState,
+      uploadLocalFilesAndAddContext,
     })
 
     return {
@@ -2687,7 +2716,6 @@ export default {
        messageList, messageContent, chatTurns,
        followLatest, handleMessageScroll, scrollToBottom, attentionNotice, jumpToAttention,
        receiptLabel, inboxStreamIds, handleInboxLocate,
-       isDragging,
        contextFiles,
        pastedImages,
        isUploadingPasted,
@@ -3170,6 +3198,13 @@ export default {
   position: relative;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+/* 拖拽悬停时的落点提示：虚线描边 + 淡底，告诉用户松手就进上下文 */
+.input-card.is-drop-target {
+  border-color: var(--awd-accent);
+  border-style: dashed;
+  background: var(--awd-accent-soft);
+}
+
 /* 输入区获得焦点时整卡亮起：品牌绿描边 + mint 光晕（浅色，不做深色 chrome） */
 .input-card:focus-within {
   border-color: var(--awd-accent);

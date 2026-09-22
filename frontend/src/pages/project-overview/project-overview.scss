@@ -4323,23 +4323,10 @@ $color-accent: var(--awd-mint); // Mint Green
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-/* AI Context Drag & Drop */
-.side-panel-ai.drag-over {
-  background-color: var(--awd-accent-soft);
-
-  &::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    border: 2px dashed var(--awd-accent);
-    pointer-events: none;
-    z-index: 100;
-    box-sizing: border-box;
-  }
-}
+/* AI Context Drag & Drop：落点提示画在输入框卡片上（ChatInterface 的
+   .input-card.is-drop-target，由 :drag-active 驱动），不再整块面板描边——
+   输入框占位文案写的就是「拖拽文件/文件夹至此」，提示与高亮要指同一处
+   （dev-board#779 K6 ④） */
 
 .ai-context-tags-row {
   display: flex;

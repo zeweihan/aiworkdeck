@@ -65,7 +65,8 @@ flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editor
 `agentClientActions` / `clipboardBridge` / `evidenceLinkActions`（拖到编辑器建链、
 filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bridge.md「EvidenceLink 契约 → 前端」）/
 `fileOpenTabs` / `librePool` / `ocrActions` / `ocrCapture` / `panelSwitching` / `stagingArea` /
-`tabDragSplit`（都以 mixin 形式并进页面）。侧栏原 `FileLinkDropZone` 已删，拖拽关联的落点是编辑器画布。
+`tabDragSplit`（都以 mixin 形式并进页面）。另有零依赖纯函数模块
+`activeTabContext.js`（哪个标签能当活跃文档 / 能拖进 AI 上下文，见下面「非文件标签不能当活跃文档」一节）。侧栏原 `FileLinkDropZone` 已删，拖拽关联的落点是编辑器画布。
 布局是四列：常驻 rail（Activity Bar）→ 可收起左栏 sidebar-left → 中间 workbench（含底部工具抽屉）→ 右侧 AI 面板。
 
 **template**
@@ -260,6 +261,34 @@ xhr 只给一句 `Network Error`，后端看到 `ClientAbortException`），三�
 后置钩子（RAG 增量索引 + 自动打标签）与上传完成时同源。
 **这条路径不插乐观行**——没有传输阶段，返回时字节已经在目录里，`loadFiles()` 一刷即最终形态。
 后端测试 `ProjectFileServiceImportLocalTest` / `ProjectFileControllerImportLocalTest`。
+
+**拖进 AI 对话区是另一条路，别与文件树那条混用（dev-board#779 K6，2026-09-22）**：
+落点是整块 `.side-panel-ai`（`handleAiDrop`），但**高亮画在输入框卡片上**——
+ChatInterface 的 `.input-card.is-drop-target`，由新 prop `:drag-active="dragOverAiPanel"`
+驱动；原来是整块面板描边，而输入框占位文案写的是「拖拽文件/文件夹至此」，提示与高亮
+指两处。ChatInterface 里那两块 `isDragging` 的 `Drop files here` 浮层是**永不为真的死 UI**
+（全文没有赋值点也没绑 drag 事件），连同 ref 一并删了，别照着它推断组件自己处理拖拽。
+`handleAiDrop` 现在按四种来源依次判：
+1. **编辑器标签页**（`this.draggingTab`，排在最前）——标签拖拽写的是 `application/json` +
+   `draggingTab`，与下面三种文件树格式全对不上，原来一路落到 else 弹「未获取到拖拽数据」。
+   按 fileId 在 `leftFiles/rightFiles` 里取那条 tab；**非文件标签静默忽略**（同 dev-board#220
+   的口径），判据是 `activeTabContext.js` 的 `isContextEligibleTab`。
+2. `application/x-checkba-file` / 3. `text/checkba-file-json` / 4. 全局兜底
+   `document.__checkbaDraggedFile`——**全局这一条消费后必须立刻置 null**（`// Consume`，
+   同 FileTree.vue / LibreOfficeEditor.vue 两处既有消费点）。不清的话下一次落空的 drop
+   会捡到上一个文件，用户拖了别的东西却看见「已添加: 上一个文件」（实测复现过）。
+5. **本机文件**（Finder / 资源管理器）：三种应用内格式都落空才轮到它，`dataTransfer` 走
+   `utils/fileTreeExternalDrop.js` 的 `nativeDataTransfer(e)` 取（uni 重建 `<view>` 事件对象
+   的老地雷）。**走的是 HTTP 上传路而不是资源管理器那条 `import-local`**：对话区加材料的
+   落点是「项目里多一份文件 + 挂进本轮上下文」，复用 ChatInterface 暴露的
+   `uploadLocalFilesAndAddContext(fileList)`（内部与上传对话框共用 `uploadFilesAndAttach`：
+   createFile + uploadFileContent + addFile）。**落点固定项目根目录**——工作台没有「当前
+   文件夹」这个概念（文件树的选中项跟着编辑器标签走，是一份文件不是一个目录），toast 里
+   点名落点。目录条目在 `dataTransfer.files` 里是 0 字节空壳，照传会在项目里建出空文件，
+   所以先用 `webkitGetAsEntry` 挡一道，请用户拖到左侧资源管理器（那条有整套递归导入）。
+全都落空时不再说「未获取到拖拽数据」（用户看不懂、也不知道下一步），改
+`workbench.dragUnsupported`。`handleAiDragOver` 也照 drop 的口径排掉 rail 排序 /
+面板停靠的拖拽——高亮画在输入框上就是一句「松手即进上下文」的承诺，不能对不接收的拖拽亮。
 
 **资源管理器的「上传」概念整体撤除（dev-board#513，2026-09-09）**：上传对话框（含文件夹
 上传）、`btn-upload` 底栏按钮与面板头快捷键、分片/断点续传队列（`confirmUpload` /
@@ -730,6 +759,27 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   加类型：`fileKind.js` 加映射 + App.vue 加两处令牌 + scss 加一行 `&.kind-x`，
   单测 `frontend/tests/tab-visibility/file-kind.test.mjs` 里那条「三处一一对上」的
   断言会拦下只改一头的改法（`npm run test:tab-visibility`）。
+
+## 非文件标签不能当活跃文档（dev-board#779 K8，2026-09-22）
+
+`currentActiveTab()` 是交给 AI 的「用户此刻正在看的文档」，现在只是
+`pages/project-overview/activeTabContext.js` 里 `pickActiveContextTab()` 的一行转发
+（零依赖纯函数，单测 `frontend/tests/tab-visibility/active-tab-context.test.mjs`，
+跟着 `npm run test:tab-visibility` 跑）。取值规则与原来逐条对应（聚焦窗格优先，
+否则 `left || right`），只是**不合格的标签当作「这一侧没开文档」**。
+
+判据以 **id 形态为主**：真实项目文件的 id 是后端 Long 主键，字符串化后整串是数字；
+虚拟标签一律不是（`web_xxx` / `artifact-<id>` / `vcmp-…` / `commit-history_<pid>` /
+`merge-review_<pid>_<path>` / `insight-entity_<kind>_<id>` …）。**`NON_FILE_TAB_TYPES`
+那道只是第二层**：AI 计划 artifact 标签的 `tabType` 是 `'markdown'`、`fileType` 是
+`'md'`，光看类型它就是一份正常的 md，只有 id 认得出来——所以**新增虚拟标签时不要
+指望在 fileKind 的名单里加一行就够，id 形态那一条才是承重的**。
+
+病灶：AI 刚输出完计划、artifact 标签自动打开并激活，用户紧接着说「按这个改」，
+后端 `read_document` 对 `artifact-12` 走 `Long.parseLong` 抛异常，把
+`Error reading document: For input string: "artifact-12"` 当返回值交回来；那个串非空，
+通过了 `ContextAssemblerService` 只判 `isBlank()` 的守卫，被当成文档正文写进
+`<active_document>` CDATA。后端同批补了第二道（`isToolFailureText`，见 ai-chat.md）。
 
 ## 非文件标签 `insight-entity`（dev-board#541）
 

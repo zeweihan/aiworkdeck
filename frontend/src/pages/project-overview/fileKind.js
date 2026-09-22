@@ -14,7 +14,7 @@
 // 'merge-review'（合并比对稿，dev-board#630）标签名里带的是那份 docx 的文件名，
 // 但它是一份临时比对稿、不是那份文件本身——跟着 Word 蓝走会让律师以为自己开的
 // 就是正文，保存/关闭的心智全错。
-const NON_FILE_TAB_TYPES = ['web', 'browser', 'market-detail', 'admin-settings', 'insight-entity', 'commit-history', 'merge-review']
+export const NON_FILE_TAB_TYPES = ['web', 'browser', 'market-detail', 'admin-settings', 'insight-entity', 'commit-history', 'merge-review']
 
 // 分组口径与 config/icons.js 的 fileGlyph 保持一致（csv 跟着 Excel 走）。
 const KIND_BY_EXT = {
