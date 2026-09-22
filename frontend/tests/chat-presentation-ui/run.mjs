@@ -112,6 +112,77 @@ try {
   await wait(() => [...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.message-actions'))
   await page.evaluate(() => { window.chatState.bubbles.at(-1).documentEdited = true })
   await wait(() => ![...document.querySelectorAll('.message-row.assistant')].at(-1).querySelector('.message-actions'))
+  // 插话的送达状态、两处对账、以及菜单停止（dev-board#779 K5 / K7）。
+  // 这三件事都只在「AI 正在跑、用户又插了一句」这个真实形态下才成立，所以从
+  // 回答问题进入生成中开始，一路用真的 handleSubmit / AgentInbox DOM 驱动。
+  await page.evaluate(() => { window.inboxItems = []; window.nextReceiptState = 'applied' })
+  await page.evaluate(() => window.loadFixture('question'))
+  await wait(() => document.querySelector('.question-card .btn-option'))
+  await page.click('.question-card .btn-option')
+  await wait(() => window.chatState.isStreaming)
+  const interject = (text) => page.evaluate(async (text) => {
+    document.querySelector('.chat-input-rich').textContent = text
+    await window.chatState.handleSubmit('steer')
+  }, text)
+  const lastReceipt = () => page.$$eval('.user-bubble', (els) =>
+    els[els.length - 1]?.querySelector('.bubble-receipt')?.textContent.trim() || '')
+  // 待处理区用的是 uni 的 @tap。这个夹具只跑 @vitejs/plugin-vue，没有 uni 的模板
+  // 编译器把 tap 映射成 click，所以这里直接派发 tap——测的是处理函数的接线，
+  // 而 tap→click 的映射由 uni 自己保证。
+  const tap = (selector) => page.$eval(selector, (el) => el.dispatchEvent(new CustomEvent('tap', { bubbles: true })))
+
+  await page.evaluate(() => { window.nextReceiptState = 'pending' })
+  await interject('顺带核对一下签署页')
+  await wait(() => window.chatState.pendingInbox.length === 1)
+  const steered = await page.evaluate(() => window.chatState.pendingInbox[0].id)
+  // 模型还没读到的插话：整条气泡淡一档 + 一行说明。数据一直在 SSE 里传，此前一处不渲染。
+  assert.ok(await page.$('.user-bubble.is-unread'), 'pending interjection is visibly unread')
+  assert.equal(await lastReceipt(), '尚未读取 · 立即调整', 'the badge says what it is waiting for')
+  // 同一句话同时出现在对话流和输入框上方，没有关联的话第一次用的人会以为发重了：
+  // 对话流留完整气泡，待处理区退成引用行 + 一个跳回去的入口。
+  assert.ok(await page.$('.agent-inbox-row.is-quote .inbox-action.locate'), 'the queued row quotes the bubble in the transcript')
+  await page.evaluate(() => { document.querySelector('.message-list').scrollTop = 0 })
+  await tap('.agent-inbox-row .inbox-action.locate')
+  assert.ok(await page.$('.message-row.chat-inbox-flash'), 'locating highlights that very bubble')
+
+  // 被模型读取后转为「已送达」，淡态收掉。
+  await send('input_applied', { messageId: steered, runId: 'fixture-run', sequence: 2, message: '顺带核对一下签署页' })
+  await page.evaluate((id) => { window.inboxItems = window.inboxItems.map(i => i.id === id ? { ...i, state: 'applied' } : i) }, steered)
+  await wait(() => window.chatState.bubbles.some(b => b.receiptState === 'applied' && b.wasPendingInbox))
+  assert.equal(await page.$('.user-bubble.is-unread'), null, 'a read interjection is no longer dimmed')
+  assert.ok(await page.$$eval('.bubble-receipt', els => els.some(el => el.textContent.trim() === '已送达')), 'delivery is acknowledged once')
+
+  // 排队档（followUpMode=queue）说的是另一句话，判据同样只从 submissionMode 取。
+  await page.evaluate(() => {
+    const bubble = window.chatState.bubbles.filter(b => b.role === 'USER').at(-1)
+    bubble.receiptState = 'pending'; bubble.submissionMode = 'queue'
+  })
+  await wait(() => [...document.querySelectorAll('.bubble-receipt')].some(el => el.textContent.trim() === '排队中'))
+  await page.evaluate(() => {
+    const bubble = window.chatState.bubbles.filter(b => b.role === 'USER').at(-1)
+    bubble.receiptState = 'applied'; bubble.submissionMode = 'steer'
+  })
+
+  // 删掉待处理项，对话流里那条气泡必须跟着消失——此前删了之后气泡还在，更乱。
+  await interject('再补一句：附件三也要看')
+  await wait(() => window.chatState.pendingInbox.length === 1)
+  const doomed = await page.evaluate(() => window.chatState.pendingInbox[0].id)
+  assert.equal(await page.evaluate((id) => window.chatState.bubbles.filter(b => b.inboxMessageId === id).length, doomed), 1)
+  await tap('.agent-inbox-row .inbox-action.danger')
+  await wait(() => window.chatState.pendingInbox.length === 0)
+  assert.equal(await page.evaluate((id) => window.chatState.bubbles.filter(b => b.inboxMessageId === id).length, doomed), 0,
+    'deleting a pending message also removes its bubble')
+  assert.ok(await page.evaluate(() => window.chatState.bubbles.some(b => b.receiptState === 'applied' && b.wasPendingInbox)),
+    'the interjection the model already read survives the cleanup')
+
+  // 菜单「停止当前任务」必须真能停下 AI（K5）：此前它只遍历后台任务，于是最常见的
+  // 「只有 AI 在生成」点了毫无反应，模型照样在跑。
+  const cancelsBefore = await page.evaluate(() => window.cancelCalls || 0)
+  assert.equal(await page.evaluate(() => window.chat.menuState().aiRunning), true, 'the menu item is enabled while generating')
+  assert.equal(await page.evaluate(() => window.chat.menuStop()), 1, 'menuStop reports it stopped the AI turn')
+  assert.equal(await page.evaluate(() => window.chatState.isStreaming), false)
+  assert.equal(await page.evaluate(() => window.cancelCalls || 0), cancelsBefore + 1, 'menuStop really posts the cancel')
+
   await page.evaluate(() => window.loadFixture('single'))
   await page.screenshot({ path: '/tmp/awd-chat-646-light.png' })
   await page.focus('.thinking-card .header')
@@ -127,7 +198,7 @@ try {
   await wait(() => window.ready)
   assert.ok(await page.$eval('.message-list', el => el.textContent.includes('Ran 17 operations')), 'English controls interpolate')
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, interjection receipts and inbox/transcript reconciliation, menu stop, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

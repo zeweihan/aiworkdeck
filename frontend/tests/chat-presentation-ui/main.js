@@ -1,16 +1,43 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Isolated rendering fixture: real chat components, synthetic conversations, no live AI calls.
+// 待处理消息（插话）夹具：receipt 的 state 由测试现场决定，DELETE 回一份去掉该条的
+// 快照——这正是后端 AgentInboxService.snapshot() 的形状（applied 留在 items 里，
+// 只有 DELETED 被过滤掉）。
+window.inboxItems = []
+window.nextReceiptState = 'applied'
 window.uni = {
   getStorageSync: key => key === 'awd_app_language' ? new URLSearchParams(location.search).get('lang') || 'zh-CN' : '',
   setStorageSync() {}, removeStorageSync() {}, $on() {}, $off() {}, $emit() {}, showToast() {},
   getSystemInfoSync: () => ({ platform: 'mac', windowWidth: innerWidth }),
-  request: ({ success }) => success?.({ statusCode: 200, data: [] })
+  request: ({ url, method, success }) => {
+    if (String(url).includes('/api/agent/inbox/')) {
+      if ((method || 'GET').toUpperCase() === 'DELETE') {
+        const messageId = decodeURIComponent(String(url).split('?')[0].split('/').pop())
+        window.inboxItems = window.inboxItems.filter(item => item.id !== messageId)
+      }
+      return success?.({ statusCode: 200, data: { code: 0, data: { items: window.inboxItems, runId: 'fixture-run', status: 'RUNNING' } } })
+    }
+    return success?.({ statusCode: 200, data: [] })
+  }
 }
 window.fetch = async (url, options = {}) => {
   if (String(url).endsWith('/api/agent/chat')) {
     const payload = JSON.parse(options.body)
-    return new Response(JSON.stringify({ status: 'accepted', messageId: payload.clientRequestId, state: 'applied', submissionMode: payload.submissionMode, runId: 'fixture-run', sequence: 1 }), { headers: { 'Content-Type': 'application/json' } })
+    const state = window.nextReceiptState
+    const receipt = { status: 'accepted', messageId: payload.clientRequestId, state, submissionMode: payload.submissionMode, runId: 'fixture-run', sequence: 1 }
+    if (state === 'pending') {
+      window.inboxItems = [...window.inboxItems, {
+        id: payload.clientRequestId, message: payload.message, displayText: '',
+        submissionMode: payload.submissionMode, state: 'pending', position: window.inboxItems.length,
+        revision: 0, clientRequestId: payload.clientRequestId, runId: 'fixture-run'
+      }]
+    }
+    return new Response(JSON.stringify(receipt), { headers: { 'Content-Type': 'application/json' } })
+  }
+  if (String(url).includes('/api/agent/cancel/')) {
+    window.cancelCalls = (window.cancelCalls || 0) + 1
+    return new Response('{}', { headers: { 'Content-Type': 'application/json' } })
   }
   if (String(url).includes('/connect/')) return new Response(new ReadableStream({ start(controller) { window.sseController = controller } }), { headers: { 'Content-Type': 'text/event-stream' } })
   return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json' } })
