@@ -13,8 +13,46 @@
             <text class="awd-dialog-title">{{ $t('chat.uploadFileTitle') }}</text>
             <text class="awd-dialog-subtitle">{{ $t('chat.uploadFileSubtitle') }}</text>
           </view>
+          <!-- 两个来源：传一份新的 / 从项目里挑一份已有的（dev-board#794 K15 ③） -->
+          <view class="pick-tabs" role="tablist">
+            <view class="pick-tab" :class="{ active: uploadTab === 'local' }" role="tab" tabindex="0"
+                  :aria-selected="uploadTab === 'local' ? 'true' : 'false'"
+                  @tap="uploadTab = 'local'"
+                  @keydown.enter="onOptionKey($event, () => (uploadTab = 'local'))"
+                  @keydown.space="onOptionKey($event, () => (uploadTab = 'local'))">
+              {{ $t('chat.uploadTabLocal') }}
+            </view>
+            <view class="pick-tab" :class="{ active: uploadTab === 'project' }" role="tab" tabindex="0"
+                  :aria-selected="uploadTab === 'project' ? 'true' : 'false'"
+                  @tap="uploadTab = 'project'"
+                  @keydown.enter="onOptionKey($event, () => (uploadTab = 'project'))"
+                  @keydown.space="onOptionKey($event, () => (uploadTab = 'project'))">
+              {{ $t('chat.uploadTabProject') }}
+            </view>
+          </view>
         </view>
-        <view class="awd-dialog-body">
+        <view v-if="uploadTab === 'project'" class="awd-dialog-body">
+          <input class="pick-search" type="text" :maxlength="-1"
+                 :placeholder="$t('chat.projectPickPlaceholder')"
+                 :value="projectPickQuery" @input="onProjectPickInput" />
+          <scroll-view v-if="projectPickMatches.length" class="pick-list" scroll-y>
+            <view v-for="item in projectPickMatches" :key="item.id" class="pick-row"
+                  :class="{ picked: isPicked(item) }" role="option"
+                  :aria-selected="isPicked(item) ? 'true' : 'false'" tabindex="0"
+                  @tap="pickProjectFile(item)"
+                  @keydown.enter="onOptionKey($event, () => pickProjectFile(item))"
+                  @keydown.space="onOptionKey($event, () => pickProjectFile(item))">
+              <image class="pick-icon" :src="item.isDir ? '/static/folder-closed.png' : '/static/document.png'" mode="aspectFit" />
+              <text class="pick-name">{{ item.name }}</text>
+              <text v-if="item.dirLabel" class="pick-path">{{ item.dirLabel }}</text>
+              <text v-if="isPicked(item)" class="pick-done">{{ $t('chat.projectPickAdded') }}</text>
+            </view>
+          </scroll-view>
+          <view v-else class="pick-empty">
+            <text>{{ projectPickQuery ? $t('files.noMatchingFiles') : $t('chat.projectPickEmpty') }}</text>
+          </view>
+        </view>
+        <view v-else class="awd-dialog-body">
           <view class="form-group">
             <text class="form-label">{{ $t('chat.uploadLocation') }}</text>
             <view class="awd-field clickable" @tap="openFolderSelector">
@@ -55,14 +93,17 @@
           </view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">{{ $t('chat.cancel') }}</view>
-          <view
-            class="awd-btn awd-btn-primary"
-            :class="{ disabled: !uploadSelectedFiles.length }"
-            @tap="uploadSelectedFiles.length ? confirmUploadAndAddContext() : null"
-          >
-            {{ $t('chat.confirmUpload') }}
-          </view>
+          <view v-if="uploadTab === 'project'" class="awd-btn awd-btn-primary" @tap="cancelUpload">{{ $t('chat.projectPickDone') }}</view>
+          <template v-else>
+            <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">{{ $t('chat.cancel') }}</view>
+            <view
+              class="awd-btn awd-btn-primary"
+              :class="{ disabled: !uploadSelectedFiles.length }"
+              @tap="uploadSelectedFiles.length ? confirmUploadAndAddContext() : null"
+            >
+              {{ $t('chat.confirmUpload') }}
+            </view>
+          </template>
         </view>
       </view>
     </view>
@@ -393,10 +434,13 @@
                 contenteditable="true"
                 @input="handleRichInput"
                 @paste="handlePaste"
-                @keydown.enter="handleEnterKey"
+                @keydown="handleInputKeydown"
                 @click="handleInputClick"
                 :data-placeholder="$t('chat.inputPlaceholderEmpty')"
               ></div>
+              <!-- `@` 引用选择器（dev-board#794 K15）：浮在输入卡上沿 -->
+              <MentionPicker v-if="mentionOpen" ref="mentionPicker" :files="mentionCandidates"
+                             :query="mentionQuery" :loading="mentionLoading" @select="chooseMentionFile" />
               <!-- Note: Context files are now shown as inline tags inside the rich input -->
               <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
               <view v-if="skillChips.length" class="skill-chip-row">
@@ -418,10 +462,13 @@
                        <text class="mode-icon" v-if="currentModeIcon">{{ currentModeIcon }}</text>
                        <text class="mode-name">{{ currentModeName }}</text>
                        <text class="dropdown-arrow">▼</text>
-                       <view v-if="showModeDropdown" class="mode-dropdown down">
+                       <view v-if="showModeDropdown" class="mode-dropdown down" role="listbox">
                           <view v-for="mode in availableModes" :key="mode.id"
                                 class="mode-option"
                                 :class="{ active: currentModeId === mode.id }"
+                                role="option" tabindex="0" :aria-selected="currentModeId === mode.id ? 'true' : 'false'"
+                                @keydown.enter.stop="onOptionKey($event, () => selectMode(mode))"
+                                @keydown.space.stop="onOptionKey($event, () => selectMode(mode))"
                                 @tap.stop="selectMode(mode)">
                             <text class="mode-option-icon" v-if="mode.icon">{{ mode.icon }}</text>
                              <view class="mode-option-text">
@@ -436,7 +483,7 @@
                     <view class="model-selector" @tap="toggleModelDropdown">
                        <text class="model-name">{{ currentModelName }}</text>
                        <text class="dropdown-arrow">▼</text>
-                       <view v-if="showModelDropdown" class="model-dropdown down">
+                       <view v-if="showModelDropdown" class="model-dropdown down" role="listbox">
                           <view v-for="g in modelGroups" :key="g.key" class="model-group">
                              <view class="model-group-head">
                                 <text class="model-group-vendor">{{ g.vendor }}</text>
@@ -445,6 +492,9 @@
                              <view v-for="m in g.models" :key="m.id"
                                    class="model-option"
                                    :class="{ active: currentModelId === m.id }"
+                                   role="option" tabindex="0" :aria-selected="currentModelId === m.id ? 'true' : 'false'"
+                                   @keydown.enter.stop="onOptionKey($event, () => selectModel(m))"
+                                   @keydown.space.stop="onOptionKey($event, () => selectModel(m))"
                                    @tap.stop="selectModel(m)">
                                 <view class="model-option-head">
                                    <text class="model-option-name">{{ m.name }}</text>
@@ -465,7 +515,7 @@
                           <path v-for="(d, gi) in ICONS.skill" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                        </svg>
                        <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
-                       <view v-if="showSkillDropdown" class="skill-dropdown down">
+                       <view v-if="showSkillDropdown" class="skill-dropdown down" role="listbox">
                           <view class="skill-dropdown-head">
                              <text class="skill-dropdown-title">{{ $t('chat.skillPickerTitle') }}</text>
                              <text class="skill-dropdown-hint">{{ skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillPickerHint') }}</text>
@@ -474,6 +524,9 @@
                           <view v-for="s in availableSkills" :key="s.id"
                                 class="skill-option"
                                 :class="{ active: selectedSkillIds.includes(s.id), muted: skillDisabledByMode }"
+                                role="option" tabindex="0" :aria-selected="selectedSkillIds.includes(s.id) ? 'true' : 'false'"
+                                @keydown.enter.stop="onOptionKey($event, () => (skillDisabledByMode ? null : toggleSkillSelection(s.id)))"
+                                @keydown.space.stop="onOptionKey($event, () => (skillDisabledByMode ? null : toggleSkillSelection(s.id)))"
                                 @tap.stop="skillDisabledByMode ? null : toggleSkillSelection(s.id)">
                              <text class="skill-check">{{ selectedSkillIds.includes(s.id) ? '✓' : '' }}</text>
                              <view class="skill-option-text">
@@ -494,10 +547,10 @@
                     <view v-if="isStreaming" class="alternate-send" @tap="handleSubmit(followUpMode === 'steer' ? 'queue' : 'steer')">
                        {{ followUpMode === 'steer' ? $t('chat.queueInstead') : $t('chat.steerInstead') }}
                     </view>
-                    <view v-if="isStreaming" class="stop-btn" @tap="handleAbort"><text>■</text></view>
-                    <view class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" @tap="handleSubmit(followUpMode)">
+                    <button v-if="isStreaming" type="button" class="stop-btn" :aria-label="$t('chat.stop')" @click="handleAbort"><text>■</text></button>
+                    <button type="button" class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" :aria-label="$t('chat.sendAria')" @click="handleSubmit(followUpMode)">
                        <text class="send-icon">↑</text>
-                    </view>
+                    </button>
                  </view>
               </view>
           </view>
@@ -635,10 +688,13 @@
             contenteditable="true"
             @input="handleRichInput"
             @paste="handlePaste"
-            @keydown.enter="handleEnterKey"
+            @keydown="handleInputKeydown"
             @click="handleInputClick"
             :data-placeholder="$t('chat.inputPlaceholder')"
           ></div>
+          <!-- `@` 引用选择器（dev-board#794 K15）：浮在输入卡上沿 -->
+          <MentionPicker v-if="mentionOpen" ref="mentionPicker" :files="mentionCandidates"
+                         :query="mentionQuery" :loading="mentionLoading" @select="chooseMentionFile" />
           <!-- Note: Context files are now shown as inline tags inside the rich input -->
           <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
           <view v-if="skillChips.length" class="skill-chip-row">
@@ -660,10 +716,13 @@
                    <text class="mode-icon" v-if="currentModeIcon">{{ currentModeIcon }}</text>
                    <text class="mode-name">{{ currentModeName }}</text>
                    <text class="dropdown-arrow">▲</text>
-                   <view v-if="showModeDropdown" class="mode-dropdown up">
+                   <view v-if="showModeDropdown" class="mode-dropdown up" role="listbox">
                       <view v-for="mode in availableModes" :key="mode.id"
                             class="mode-option"
                             :class="{ active: currentModeId === mode.id }"
+                            role="option" tabindex="0" :aria-selected="currentModeId === mode.id ? 'true' : 'false'"
+                            @keydown.enter.stop="onOptionKey($event, () => selectMode(mode))"
+                            @keydown.space.stop="onOptionKey($event, () => selectMode(mode))"
                             @tap.stop="selectMode(mode)">
                          <text class="mode-option-icon" v-if="mode.icon">{{ mode.icon }}</text>
                          <view class="mode-option-text">
@@ -678,7 +737,7 @@
                 <view class="model-selector" @tap="toggleModelDropdown">
                    <text class="model-name">{{ currentModelName }}</text>
                    <text class="dropdown-arrow">▲</text>
-                   <view v-if="showModelDropdown" class="model-dropdown up">
+                   <view v-if="showModelDropdown" class="model-dropdown up" role="listbox">
                       <view v-for="g in modelGroups" :key="g.key" class="model-group">
                          <view class="model-group-head">
                             <text class="model-group-vendor">{{ g.vendor }}</text>
@@ -687,6 +746,9 @@
                          <view v-for="m in g.models" :key="m.id"
                                class="model-option"
                                :class="{ active: currentModelId === m.id }"
+                               role="option" tabindex="0" :aria-selected="currentModelId === m.id ? 'true' : 'false'"
+                               @keydown.enter.stop="onOptionKey($event, () => selectModel(m))"
+                               @keydown.space.stop="onOptionKey($event, () => selectModel(m))"
                                @tap.stop="selectModel(m)">
                             <view class="model-option-head">
                                <text class="model-option-name">{{ m.name }}</text>
@@ -707,7 +769,7 @@
                       <path v-for="(d, gi) in ICONS.skill" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                    </svg>
                    <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
-                   <view v-if="showSkillDropdown" class="skill-dropdown up">
+                   <view v-if="showSkillDropdown" class="skill-dropdown up" role="listbox">
                       <view class="skill-dropdown-head">
                          <text class="skill-dropdown-title">{{ $t('chat.skillPickerTitle') }}</text>
                          <text class="skill-dropdown-hint">{{ skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillPickerHint') }}</text>
@@ -716,6 +778,9 @@
                       <view v-for="s in availableSkills" :key="s.id"
                             class="skill-option"
                             :class="{ active: selectedSkillIds.includes(s.id), muted: skillDisabledByMode }"
+                            role="option" tabindex="0" :aria-selected="selectedSkillIds.includes(s.id) ? 'true' : 'false'"
+                            @keydown.enter.stop="onOptionKey($event, () => (skillDisabledByMode ? null : toggleSkillSelection(s.id)))"
+                            @keydown.space.stop="onOptionKey($event, () => (skillDisabledByMode ? null : toggleSkillSelection(s.id)))"
                             @tap.stop="skillDisabledByMode ? null : toggleSkillSelection(s.id)">
                          <text class="skill-check">{{ selectedSkillIds.includes(s.id) ? '✓' : '' }}</text>
                          <view class="skill-option-text">
@@ -736,10 +801,10 @@
                 <view v-if="isStreaming" class="alternate-send" @tap="handleSubmit(followUpMode === 'steer' ? 'queue' : 'steer')">
                    {{ followUpMode === 'steer' ? $t('chat.queueInstead') : $t('chat.steerInstead') }}
                 </view>
-                <view v-if="isStreaming" class="stop-btn" @tap="handleAbort"><text>■</text></view>
-                <view class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" @tap="handleSubmit(followUpMode)">
+                <button v-if="isStreaming" type="button" class="stop-btn" :aria-label="$t('chat.stop')" @click="handleAbort"><text>■</text></button>
+                <button type="button" class="send-btn" :class="{ disabled: !inputPrompt.trim() || isUploadingPasted }" :aria-label="$t('chat.sendAria')" @click="handleSubmit(followUpMode)">
                    <text class="send-icon">↑</text>
-                </view>
+                </button>
              </view>
           </view>
           <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
@@ -780,6 +845,7 @@
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
 import ChatTurnRail from './AgentMessage/ChatTurnRail.vue'
+import MentionPicker from './AgentMessage/MentionPicker.vue'
 import { buildChatTurns, isPlanSnapshotCall, pendingAttention, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
 import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
@@ -808,6 +874,13 @@ import {
 } from '@/utils/chatContextLimits.js'
 import { attachmentRecord, attachmentsFromHistory, fileListFromBubble } from '@/utils/chatAttachments.js'
 import {
+  AI_CONTEXT_FOLDER_FILE_LIMIT,
+  countDescendantFiles,
+  dirLabelOf,
+  excludeSystemFolders,
+  matchProjectFiles,
+} from '@/utils/aiContextFiles.js'
+import {
   beginChatSubmission,
   failChatSubmission,
   receiptChatSubmission,
@@ -817,7 +890,7 @@ import {
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, ChatTurnRail, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
+  components: { RootBubble, ChatTurnRail, MentionPicker, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -1529,6 +1602,9 @@ export default {
 
     // Upload Dialog State
     const showUploadDialog = ref(false)
+    // 「+」对话框的两个页签：上传本机文件 / 从项目里挑一份已有的（dev-board#794 K15 ③）
+    const uploadTab = ref('local') // 'local' | 'project'
+    const projectPickQuery = ref('')
     const uploadSelectedFiles = ref([])
     const selectedUploadParent = ref(null)
     const isFolderUpload = ref(false)
@@ -2175,6 +2251,11 @@ export default {
       const draftUnchanged = shouldClearChatDraft(attempt, currentDraft)
       if (draftUnchanged) {
         inputPrompt.value = ''
+        // 草稿没了，挂在草稿上的三个瞬态也一并复位（K15/K16）
+        closeMention()
+        disarmEsc()
+        historyRecall.value = { index: -1, text: '' }
+        // 附件不在这里清（K14 附件跨轮保留，见下方注释）。
         // 粘贴图发后即清：它们已经被上传成项目文件，要继续用就从文件树拖回来
         // （contextFiles 那条路），把 base64 缩略图一直挂在输入框里既占内存又没有摘除入口
         pastedImages.value = pastedImages.value.filter((image) => !pastedBatch.includes(image))
@@ -2464,6 +2545,13 @@ export default {
         // Sync inline tags with contextFiles ref
         // When user deletes a tag from the input, also remove it from contextFiles
         syncContextFilesWithInlineTags()
+
+        // 用户自己改了字 → 退出「翻历史」态、撤掉待确认的 Esc、重算 `@` 引用（K15/K16）
+        if (historyRecall.value.index >= 0 && inputPrompt.value !== historyRecall.value.text) {
+          historyRecall.value = { index: -1, text: '' }
+        }
+        disarmEsc()
+        detectMention()
     }
 
     const handleInputClick = (e) => {
@@ -2595,6 +2683,275 @@ export default {
         // Shift+Enter -> New line (default behavior, do not prevent)
       }
     }
+
+    // ================= `@` 引用选择器（dev-board#794 K15） =================
+    // 输入框里敲 `@` 再接字符 → 弹项目文件浮层；选中后删掉 `@查询` 那一段、调 addFile
+    // 插内联标签并同步 contextFiles。范围只到项目文件（记忆 / 参考来源另议）。
+    const mentionOpen = ref(false)
+    const mentionQuery = ref('')
+    const mentionLoading = ref(false)
+    const mentionPicker = ref(null)
+    // `@查询` 在 DOM 里的位置。鼠标点选会把光标带走，所以必须提前记下来而不是选中时现取；
+    // 浮层的行用 @mousedown.prevent 正是为了别让 contenteditable 先 blur。
+    let mentionAnchor = null
+
+    const projectFileIndexKey = ref('')
+    const ensureProjectFileIndex = async (force = false) => {
+      if (!props.projectId) return
+      if (!force && projectFileIndexKey.value === String(props.projectId) && allProjectFiles.value.length) return
+      mentionLoading.value = true
+      try {
+        await loadProjectFolders()
+      } finally {
+        mentionLoading.value = false
+      }
+    }
+
+    // 项目文件与文件夹的扁平候选集（两处共用：`@` 浮层与上传对话框的「从项目选择」页签）
+    const mentionCandidates = computed(() => {
+      // 文件暂存区是产品内部实现，不该出现在「挑一份文件」的清单里（真机实测第一行就是它）
+      const all = excludeSystemFolders(allProjectFiles.value)
+      const byId = new Map(all.map((f) => [f.id, f]))
+      return all
+        .filter((f) => f && f.id != null && !f.isDeleted)
+        .map((f) => ({
+          id: f.id,
+          name: f.name,
+          fileType: f.fileType,
+          wpsFileId: f.wpsFileId,
+          parentId: f.parentId,
+          isDir: !!(f.isFolder || f.isDir),
+          dirLabel: dirLabelOf(f, byId),
+        }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
+    })
+
+    const closeMention = () => {
+      mentionOpen.value = false
+      mentionQuery.value = ''
+      mentionAnchor = null
+    }
+
+    // 光标前那段 `@xxx`：必须落在同一个文本节点里，且 `@` 前面是行首或空白
+    //（插完标签补的那个 &nbsp; 也算空白，所以「标签后面接着打 @」照样能触发）。
+    // 内联标签里画出来的那个 `@` 在 contenteditable=false 的 span 里，光标进不去，不会误触发。
+    const detectMention = () => {
+      if (!richInput.value) return closeMention()
+      const sel = typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null
+      if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return closeMention()
+      const node = sel.anchorNode
+      if (!node || node.nodeType !== 3 || !richInput.value.contains(node)) return closeMention()
+      const before = String(node.textContent || '').slice(0, sel.anchorOffset)
+      const m = before.match(/(^|\s)@([^\s@]{0,40})$/)
+      if (!m) return closeMention()
+      mentionAnchor = { node, start: before.length - m[2].length - 1, end: sel.anchorOffset }
+      mentionQuery.value = m[2]
+      if (!mentionOpen.value) {
+        mentionOpen.value = true
+        ensureProjectFileIndex()
+      }
+    }
+
+    // 文件夹整体挂进来时的后代文件数上限：与文件树拖拽那条路同一个判据
+    //（utils/aiContextFiles.js），不然同一个文件夹在两个入口给出两种结论。
+    const addFileWithLimit = (file) => {
+      if (!file || file.id == null) return false
+      if (file.isDir) {
+        const total = countDescendantFiles(allProjectFiles.value, file.id)
+        if (total > AI_CONTEXT_FOLDER_FILE_LIMIT) {
+          uni.showToast({ title: t('workbench.folderTooManyFiles', { count: total }), icon: 'none' })
+          return false
+        }
+      }
+      addFile(file)
+      return true
+    }
+
+    const chooseMentionFile = (file) => {
+      const anchor = mentionAnchor
+      closeMention()
+      if (!file) return
+      // 先把 `@查询` 那段删掉并把光标留在原处——addFile → insertContextTagToInput
+      // 正是往当前 Range 插标签，位置天然对得上。
+      if (anchor && anchor.node && anchor.node.isConnected && richInput.value && richInput.value.contains(anchor.node)) {
+        try {
+          const len = String(anchor.node.textContent || '').length
+          const range = document.createRange()
+          range.setStart(anchor.node, Math.min(anchor.start, len))
+          range.setEnd(anchor.node, Math.min(anchor.end, len))
+          range.deleteContents()
+          richInput.value.focus()
+          const sel = window.getSelection()
+          sel.removeAllRanges()
+          sel.addRange(range)
+        } catch (err) {
+          // 锚点失效（用户在浮层开着时改了结构）：退化成「标签追加到末尾」，
+          // 不因为一次定位失败就把选中的文件整个丢掉
+          console.warn('[ChatInterface] mention anchor removal failed', err)
+        }
+      }
+      addFileWithLimit(file)
+      if (richInput.value) inputPrompt.value = richInput.value.innerText
+    }
+
+    // ================= 输入框局部键位（dev-board#795 K16） =================
+    // Esc 只挂在输入框上，**不进 config/commands**：那条硬规则说 Esc 一旦成为菜单
+    // 加速键就会吞掉编辑器和所有输入框的 Esc（config/commands/ai.js:6）。
+    const historyRecall = ref({ index: -1, text: '' })
+    const escArmed = ref(false)
+    let escArmTimer = null
+    const disarmEsc = () => {
+      escArmed.value = false
+      if (escArmTimer) {
+        clearTimeout(escArmTimer)
+        escArmTimer = null
+      }
+    }
+
+    const clearDraft = () => {
+      if (richInput.value) richInput.value.innerHTML = ''
+      inputPrompt.value = ''
+      // 内联标签没了 → contextFiles 跟着空掉（附件本来就是草稿的一部分）。
+      // 粘进来的图片刻意不动：它们各自有 × 可以摘，清草稿不该顺手销毁。
+      syncContextFilesWithInlineTags()
+      historyRecall.value = { index: -1, text: '' }
+      closeMention()
+      uni.showToast({ title: t('chat.escCleared'), icon: 'none' })
+    }
+
+    // 清空草稿是会丢东西的动作，所以要按两次：第一次只给提示并上闩，3 秒内再按才真清。
+    const handleEscape = () => {
+      if (mentionOpen.value) {
+        closeMention()
+        return
+      }
+      if (isStreaming.value) {
+        disarmEsc()
+        handleAbort()
+        return
+      }
+      const draft = richInput.value ? richInput.value.innerText : ''
+      if (!draft.trim() && contextFiles.value.length === 0) {
+        disarmEsc()
+        return
+      }
+      if (!escArmed.value) {
+        escArmed.value = true
+        uni.showToast({ title: t('chat.escClearArmed'), icon: 'none' })
+        escArmTimer = setTimeout(() => {
+          escArmed.value = false
+          escArmTimer = null
+        }, 3000)
+        return
+      }
+      disarmEsc()
+      clearDraft()
+    }
+
+    // 上箭头翻历史：只在输入框为空时起步，之后只要草稿还等于刚回填的那条就继续翻，
+    // 用户一改字就退出（handleRichInput 里重置）——不能把人正在写的东西顶掉。
+    const recallableUserMessages = () =>
+      bubbles.value
+        .filter((b) => b && b.role === 'USER')
+        .map((b) => String(b.displayContent || b.content || ''))
+        .filter((s) => s.trim())
+
+    const applyRecall = (text) => {
+      if (!richInput.value) return
+      richInput.value.textContent = text
+      inputPrompt.value = text
+      syncContextFilesWithInlineTags()
+      try {
+        const range = document.createRange()
+        range.selectNodeContents(richInput.value)
+        range.collapse(false)
+        const sel = window.getSelection()
+        sel.removeAllRanges()
+        sel.addRange(range)
+        richInput.value.focus()
+      } catch (err) {
+        console.warn('[ChatInterface] recall caret placement failed', err)
+      }
+    }
+
+    const recallHistory = (direction) => {
+      const list = recallableUserMessages()
+      if (!list.length) return false
+      const cur = historyRecall.value
+      const draft = richInput.value ? richInput.value.innerText : ''
+      const navigating = cur.index >= 0 && draft === cur.text
+      if (!navigating) {
+        if (direction !== 'older') return false
+        if (draft.trim()) return false
+        const text = list[list.length - 1]
+        historyRecall.value = { index: list.length - 1, text }
+        applyRecall(text)
+        return true
+      }
+      const next = cur.index + (direction === 'older' ? -1 : 1)
+      if (next < 0) return true // 已经到最上面，停住（别绕回最新那条）
+      if (next > list.length - 1) {
+        historyRecall.value = { index: -1, text: '' }
+        applyRecall('')
+        return true
+      }
+      historyRecall.value = { index: next, text: list[next] }
+      applyRecall(list[next])
+      return true
+    }
+
+    // 输入框上唯一的 keydown 入口：Enter 仍走 handleEnterKey（isComposing 闩在那里），
+    // 这里只多接管 Esc / Cmd+Enter / 上下箭头 / 引用浮层的键盘导航。
+    const handleInputKeydown = (e) => {
+      if (e.isComposing || e.keyCode === 229) return
+      const key = e.key
+      if (key !== 'Escape') disarmEsc()
+      if (key === 'Escape') {
+        e.preventDefault()
+        handleEscape()
+        return
+      }
+      const pickerItem = mentionOpen.value && mentionPicker.value ? mentionPicker.value.activeItem() : null
+      if (key === 'Enter') {
+        // Cmd/Ctrl+Enter 是明确的「发出去」，排在引用浮层之前：浮层开着时按它，
+        // 用户要的是发送而不是再选一个文件。
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault()
+          closeMention()
+          handleSubmit(followUpMode.value)
+          return
+        }
+        if (pickerItem) {
+          e.preventDefault()
+          chooseMentionFile(pickerItem)
+          return
+        }
+        handleEnterKey(e)
+        return
+      }
+      if (key === 'Tab' && pickerItem) {
+        e.preventDefault()
+        chooseMentionFile(pickerItem)
+        return
+      }
+      if (key === 'ArrowUp' || key === 'ArrowDown') {
+        if (mentionOpen.value && mentionPicker.value) {
+          e.preventDefault()
+          mentionPicker.value.moveActive(key === 'ArrowDown' ? 1 : -1)
+          return
+        }
+        if (recallHistory(key === 'ArrowUp' ? 'older' : 'newer')) e.preventDefault()
+      }
+    }
+
+    // 下拉选项的键盘选择（K16 ⑤）：选项本身是 uni <view>，靠 tabindex + role=option
+    // 进 Tab 序，Enter/空格等同点击。
+    const onOptionKey = (e, handler) => {
+      e.preventDefault()
+      handler()
+    }
+
+    onBeforeUnmount(() => disarmEsc())
 
     // --- Truncate filename for display ---
     const truncateName = (name, maxLen = 15) => {
@@ -2775,6 +3132,8 @@ export default {
       await loadProjectFolders()
 
       // Reset state
+      uploadTab.value = 'local'
+      projectPickQuery.value = ''
       uploadSelectedFiles.value = []
       selectedUploadParent.value = null
       isFolderUpload.value = false
@@ -2790,10 +3149,24 @@ export default {
       try {
         const files = await getProjectFiles(props.projectId, null, true) // tree=true
         allProjectFiles.value = files || []
+        projectFileIndexKey.value = String(props.projectId)
         console.log('[ChatInterface] Loaded project files for folder selector:', files?.length)
       } catch (e) {
         console.error('[ChatInterface] Failed to load project folders:', e)
         allProjectFiles.value = []
+      }
+    }
+
+    // 「从项目选择」页签：与 `@` 浮层同一份候选集、同一个检索（utils/aiContextFiles.js）
+    const projectPickMatches = computed(() => matchProjectFiles(mentionCandidates.value, projectPickQuery.value, 60))
+    const isPicked = (file) => contextFiles.value.some((f) => String(f.id) === String(file.id))
+    const onProjectPickInput = (e) => {
+      projectPickQuery.value = (e.detail && e.detail.value) || ''
+    }
+    const pickProjectFile = (file) => {
+      if (isPicked(file)) return
+      if (addFileWithLimit(file)) {
+        uni.showToast({ title: t('workbench.fileAdded', { name: file.name }), icon: 'none' })
       }
     }
 
@@ -3293,6 +3666,15 @@ export default {
        handleInputClick,
        handlePaste,
        handleEnterKey,
+       // `@` 引用选择器与输入框键位（dev-board#794 K15 / #795 K16）
+       mentionOpen,
+       mentionQuery,
+       mentionLoading,
+       mentionCandidates,
+       mentionPicker,
+       chooseMentionFile,
+       handleInputKeydown,
+       onOptionKey,
        startNewChat,
        loadMessages,
        formatTime,
@@ -3392,6 +3774,12 @@ export default {
        },
        // Upload Dialog
        showUploadDialog,
+       uploadTab,
+       projectPickQuery,
+       projectPickMatches,
+       isPicked,
+       onProjectPickInput,
+       pickProjectFile,
        uploadSelectedFiles,
        selectedUploadParent,
        selectedUploadParentName,
@@ -4258,6 +4646,22 @@ export default {
   line-height: 1.5;
 }
 
+/* 发送 / 停止改成真 <button>（K16 ④）：能 Tab 到、能回车按。uni-h5 的 button 自带
+   一套默认样式与 ::after 边框，这里整片打平——照 .return-to-latest button 的既有写法。 */
+.send-btn,
+.stop-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  line-height: 1;
+  overflow: visible;
+}
+.send-btn::after,
+.stop-btn::after { border: 0; }
+
 .send-btn {
   background: var(--awd-accent);
   color: var(--awd-text-on-accent);
@@ -5107,6 +5511,78 @@ export default {
 }
 .form-group:last-child {
   margin-bottom: 0;
+}
+
+/* 「+」对话框的两个来源页签与「从项目选择」列表（dev-board#794 K15 ③） */
+.pick-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 12px;
+}
+.pick-tab {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--awd-text-2);
+  cursor: pointer;
+}
+.pick-tab:hover { background: var(--awd-surface-2); }
+.pick-tab.active {
+  background: var(--awd-accent-soft);
+  color: var(--awd-accent-text);
+  font-weight: 500;
+}
+.pick-search {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  font-size: 13px;
+  border: 1px solid var(--awd-border);
+  border-radius: 6px;
+  color: var(--awd-text);
+}
+.pick-list {
+  max-height: 44vh;
+  margin-top: 10px;
+}
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pick-row:hover { background: var(--awd-surface-2); }
+.pick-row.picked { cursor: default; opacity: 0.65; }
+.pick-icon { width: 14px; height: 14px; flex-shrink: 0; }
+.pick-name {
+  font-size: 13px;
+  color: var(--awd-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pick-path {
+  font-size: 11px;
+  color: var(--awd-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+.pick-done {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--awd-accent-text);
+  white-space: nowrap;
+}
+.pick-empty {
+  padding: 22px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--awd-text-3);
 }
 
 .form-label {

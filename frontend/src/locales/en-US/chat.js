@@ -11,7 +11,21 @@ export default {
   railTurnIndex: 'Turn {n}',
   railUntitled: '(no question text)',
 
-  // ---- Upload dialog ----
+  // ---- @ mention picker and composer key bindings (dev-board#794 K15 / #795 K16) ----
+  mentionTitle: 'Reference a project file',
+  mentionHint: 'Up/Down to choose, Enter to confirm, Esc to close',
+  mentionNoMatch: 'No matching project files',
+  uploadTabLocal: 'Upload from this device',
+  uploadTabProject: 'Pick from project',
+  projectPickPlaceholder: 'Search files and folders in this project',
+  projectPickAdded: 'Added',
+  projectPickEmpty: 'This project has no files yet',
+  projectPickDone: 'Done',
+  escClearArmed: 'Press Esc again to clear the draft',
+  escCleared: 'Draft cleared',
+  sendAria: 'Send',
+
+  // ---- Upload file dialog ----
   uploadFileTitle: 'Upload Files',
   uploadFileSubtitle: 'Choose a destination and select documents to upload',
   uploadLocation: 'Destination',

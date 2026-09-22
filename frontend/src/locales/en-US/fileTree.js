@@ -40,6 +40,7 @@ export default {
   fileHistory: 'File History',
   revealInFinder: 'Reveal in Finder',
   sendFile: 'Send…',
+  addToAiChat: 'Add to AI chat',
   delete: 'Delete',
   copy: 'Copy',
   // Recycle bin

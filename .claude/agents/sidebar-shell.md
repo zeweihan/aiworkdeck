@@ -418,6 +418,10 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 
 **文件「发送…」（dev-board#382，2026-09-02）**：FileTree 右键（仅文件）`share-file` → overview `onShareFile` → 同一个 `/local-path` 端点 → `host.fs.shareFile(path)`（`fs:shareFile` IPC，`desktop/main/file-service.js` 的 `shareFile(platform, path, win)`）；菜单「文件 > 发送…」（`file.share` → `wb:shareFile` → `menuShareFile`）复用同一条。分平台：macOS `new ShareMenu({filePaths})` 弹系统分享面板（隔空投送/信息/邮件/微信/QQ/钉钉……都在里面，选微信后由微信自己弹对话选择器）；Windows 微信没有任何第三方接口也不是系统分享目标，退化为 PowerShell `Set-Clipboard -LiteralPath` 放剪贴板 + 按注册表拉起微信 + toast 提示 Ctrl+V；其他平台返回 `unsupported`。两个地雷：(1) 第三方分享扩展要用户在「系统设置 > 通用 > 登录项与扩展 > 共享」里勾选后才出现在面板里，未勾选时面板只有苹果自家项；(2) 被 WeChatTweak 之类 ad-hoc 重签过的微信，其 WeChatMacShare.appex 无法向 pluginkit 登记，面板里永远没有微信——排查用 `pluginkit -m -v -p com.apple.share-services`。测试 `desktop/tests/share-file.test.js`。
 
+**文件右键「加入 AI 对话」（dev-board#794 K15，2026-09-22）**：FileTree 右键（文件与文件夹都给）`add-to-ai` → overview `onAddFileToAiContext` → **先 `await this.resolveChatInterface()`** → 既有的 `addDraggedFileToAiContext`。那一步 await 是必须的：AI 面板此刻可能根本没开（或右侧停在别的面板上），`$refs.chatInterface` 不在就等于「点了菜单什么都没发生」——拖拽那条路没有这个问题是因为用户正拖在面板上。文件夹的 10 文件上限判据已收进 `frontend/src/utils/aiContextFiles.js`（`countDescendantFiles` + `AI_CONTEXT_FOLDER_FILE_LIMIT`），overview 里那段手写递归删了；同一份判据还服务 AI 输入框的 `@` 引用与「+」对话框的「从项目选择」页签，见 ai-chat.md。
+
+**隐藏系统文件夹的单一名单**：`frontend/src/utils/fileTreeBuild.js` 的 `HIDDEN_SYSTEM_FOLDER_NAMES`（`.stagezone` / `__staging_area__`）。文件树只要不展示那个文件夹就够了（`groupByParent` 跳过它，子树自然到不了），但**凡是扁平清单都必须连子树一起剔**——`aiContextFiles.excludeSystemFolders` 干这件事，Cmd+P 快速打开与 AI 的两个「挑一份文件」入口都过它。不这么做的话暂存区里的文件会一条条列出来（真机实测：「从项目选择」页签第一行就是 `__staging_area__`）。
+
 ## 窗口外壳与菜单栏（2026-08-16）
 
 **没有系统标题栏了。** `main.js` 的 `titleBarStyle:'hidden'`：mac 用

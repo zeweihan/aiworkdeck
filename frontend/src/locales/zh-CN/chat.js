@@ -11,6 +11,20 @@ export default {
   railTurnIndex: '第 {n} 轮',
   railUntitled: '（无提问文字）',
 
+  // ---- @ 引用选择器与输入框键位（dev-board#794 K15 / #795 K16）----
+  mentionTitle: '引用项目文件',
+  mentionHint: '上下键选择 · 回车确认 · Esc 关闭',
+  mentionNoMatch: '没有匹配的项目文件',
+  uploadTabLocal: '上传本机文件',
+  uploadTabProject: '从项目选择',
+  projectPickPlaceholder: '搜索项目里的文件或文件夹',
+  projectPickAdded: '已加入',
+  projectPickEmpty: '这个项目里还没有文件',
+  projectPickDone: '完成',
+  escClearArmed: '再按一次 Esc 清空草稿',
+  escCleared: '草稿已清空',
+  sendAria: '发送',
+
   // ---- 上传文件对话框 ----
   uploadFileTitle: '上传文件',
   uploadFileSubtitle: '选择目标位置并选择要上传的文档',

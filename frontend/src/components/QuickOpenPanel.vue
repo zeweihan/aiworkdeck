@@ -36,8 +36,7 @@
 // IDE 化 Cmd+P 快速打开：按名字模糊匹配项目文件，方向键 + 回车打开。
 // 宿主（project-overview）负责挂载时机与全局快捷键；本组件只管列表与键盘交互。
 import { getProjectFiles } from '@/services/api.js'
-
-const MAX_RESULTS = 30
+import { MENTION_MAX_RESULTS, dirLabelOf, excludeSystemFolders, matchProjectFiles } from '@/utils/aiContextFiles.js'
 
 export default {
   name: 'QuickOpenPanel',
@@ -55,23 +54,9 @@ export default {
   },
   computed: {
     matches() {
-      const q = this.query.trim().toLowerCase()
-      let list
-      if (!q) {
-        list = this.files.slice(0, MAX_RESULTS)
-      } else {
-        // 前缀命中优先于包含命中；同级按名字短的在前（更可能是想要的那个）
-        const starts = []
-        const includes = []
-        for (const f of this.files) {
-          const name = f.name.toLowerCase()
-          if (name.startsWith(q)) starts.push(f)
-          else if (name.includes(q)) includes.push(f)
-          if (starts.length >= MAX_RESULTS) break
-        }
-        list = starts.concat(includes).slice(0, MAX_RESULTS)
-      }
-      return list
+      // 前缀命中优先于包含命中。判据与 AI 对话的 `@` 引用选择器同一份
+      // （utils/aiContextFiles.js），两处各写一遍必然漂移。
+      return matchProjectFiles(this.files, this.query, MENTION_MAX_RESULTS)
     },
   },
   watch: {
@@ -86,11 +71,12 @@ export default {
     document.addEventListener('keydown', this._keydownHandler, true)
     try {
       const resp = await getProjectFiles(this.projectId)
-      const all = Array.isArray(resp) ? resp : (resp && resp.data) || []
+      // 文件暂存区是产品内部实现，不该在「快速打开」里被当成一份可打开的文件
+      const all = excludeSystemFolders(Array.isArray(resp) ? resp : (resp && resp.data) || [])
       const byId = new Map(all.map((f) => [f.id, f]))
       this.files = all
         .filter((f) => !f.isFolder && !f.isDeleted)
-        .map((f) => ({ ...f, dirLabel: this.dirLabelOf(f, byId) }))
+        .map((f) => ({ ...f, dirLabel: dirLabelOf(f, byId) }))
         .sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
     } catch (e) {
       console.warn('[QuickOpen] 加载文件列表失败', e)
@@ -105,19 +91,6 @@ export default {
     }
   },
   methods: {
-    dirLabelOf(f, byId) {
-      const parts = []
-      let pid = f.parentId
-      let depth = 0
-      while (pid && depth < 10) {
-        const parent = byId.get(pid)
-        if (!parent) break
-        parts.unshift(parent.name)
-        pid = parent.parentId
-        depth++
-      }
-      return parts.join(' / ')
-    },
     onInput(e) {
       this.query = (e.detail && e.detail.value) || ''
     },
