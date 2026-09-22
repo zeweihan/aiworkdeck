@@ -231,7 +231,11 @@ export default {
   replaceFailed: '替换失败',
   folderTooManyFiles: '文件夹含{count}个文件(超出10个限制)，请减少数量',
   fileAdded: '已添加: {name}',
-  noDragData: '未获取到拖拽数据',
+  // 拖进 AI 对话区（dev-board#779 K6 ⑤）：原来所有落空都弹「未获取到拖拽数据」，
+  // 用户看不懂那是什么意思，也不知道下一步该干什么。
+  dragUnsupported: '不支持拖入这类内容，可拖入文件、编辑器标签页或本机文件',
+  dragFolderUnsupported: '对话区只接收文件；整个文件夹请拖到左侧资源管理器',
+  dragUploadingToRoot: '正在上传到项目根目录…',
   // EvidenceLink：拖到编辑器建链 / method 小条 / 链接定位（evidenceLinkActions.js、EvidenceMethodBar.vue、LibreOfficeEditor.vue）
   evidence: {
     selectFirst: '先选中要关联的文字',

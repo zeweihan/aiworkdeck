@@ -1544,7 +1544,6 @@
             v-if="showAiPanel"
             ref="aiPanel"
             class="side-panel side-panel-ai"
-            :class="{ 'drag-over': dragOverAiPanel }"
             :style="{ width: aiPanelWidth + 'px' }"
             @dragover.prevent="handleAiDragOver"
             @dragleave="handleAiDragLeave"
@@ -1589,6 +1588,7 @@
                 :history-badge="historyBadge"
                 :active-tab="currentActiveTab"
                 :active-tab-pane="focusedPane"
+                :drag-active="dragOverAiPanel"
                 :external-read-only="pluginReadOnlyLabel"
                 @fork-conversation="forkPluginConversation"
                 @close="toggleAiPanel"
@@ -2131,6 +2131,8 @@
 import { defineAsyncComponent } from 'vue'
 import { flushDirtyEditors } from './flushDirtyEditors.js'
 import { isTabVisibleInPane } from './tabVisibility.js'
+import { pickActiveContextTab, isContextEligibleTab } from './activeTabContext.js'
+import { nativeDataTransfer } from '@/utils/fileTreeExternalDrop.js'
 import { saveSensitiveInput } from './sensitiveWorkflow.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
@@ -3037,12 +3039,15 @@ export default {
       return this.rightFiles.filter(f => this.isBrowserTab(f) &&
         (f.id === this.activeFileIdRight || this.webKeepAliveKeys.includes('right:' + f.id)))
     },
-    // NEW: Current active tab for AI context (prioritizes focused pane)
+    // 交给 AI 的「当前活跃文档」：聚焦窗格优先，虚拟标签（浏览器 / AI 计划 artifact /
+    // 设置 / 广场详情 / 版本对比…）一律不算——判据与取值规则都在 activeTabContext.js
+    // （dev-board#779 K8 ①，病灶见那份文件的注释）。
     currentActiveTab() {
-      if (this.focusedPane === 'right' && this.activeFileRight) {
-        return this.activeFileRight
-      }
-      return this.activeFileLeft || this.activeFileRight
+      return pickActiveContextTab({
+        focusedPane: this.focusedPane,
+        activeFileLeft: this.activeFileLeft,
+        activeFileRight: this.activeFileRight
+      })
     },
     computedActiveToolName() {
       const target = this.getActiveAiTargetFile()
@@ -6180,6 +6185,9 @@ export default {
     // --- AI Context Drag & Drop ---
     handleAiDragOver(e) {
         if (e && e.preventDefault) e.preventDefault()
+        // rail 排序 / 面板停靠的拖拽不会被 handleAiDrop 接收，别给它亮落点
+        // ——高亮画在输入框上就是一句「松手即进上下文」的承诺（dev-board#779 K6 ④）
+        if (this.draggingRailKey || this.draggingPanelKey) return
         this.dragOverAiPanel = true
     },
     handleAiDragLeave(e) {
@@ -6193,6 +6201,27 @@ export default {
         // rail 排序 / 面板停靠的拖拽松在对话区属于误落，静默忽略——
         // 否则会被当成「拖文件进对话」而弹「未获取到拖拽数据」（dev-board#220）
         if (this.draggingRailKey || this.draggingPanelKey) return
+
+        // 0. 编辑器标签页拖过来（dev-board#779 K6 ②）。标签拖拽起手写的是 this.draggingTab
+        //    与 dataTransfer 的 application/json，与下面三种文件树格式全对不上，原来一路
+        //    落到 else 分支弹「未获取到拖拽数据」——而标签页恰恰是律师手边最现成的那份文件。
+        //    放在最前面是因为它是「这次拖拽从哪儿起手」的确证，不依赖 dataTransfer
+        //    （uni-h5 把 <view> 上的 drag 事件重建成普通对象，dataTransfer 常常是空的）。
+        if (this.draggingTab) {
+             const dragged = this.findOpenTab(this.draggingTab.fileId)
+             // 非文件标签（浏览器 / 设置 / 广场详情 / 依据实体 / 版本对比 / AI 计划…）
+             // 不是能交给模型的文档，静默忽略（同 dev-board#220 的口径，不弹错误提示）
+             if (dragged && isContextEligibleTab(dragged)) {
+                  this.addDraggedFileToAiContext({
+                      id: dragged.id,
+                      name: dragged.name,
+                      fileType: dragged.fileType,
+                      wpsFileId: dragged.wpsFileId,
+                      isDir: false
+                  })
+             }
+             return
+        }
 
         let fileData = null
         try {
@@ -6210,53 +6239,100 @@ export default {
         }
 
         // 3. Try global fallback (WebView/Browser safe)
+        //    **消费即清**：不清的话下一次落空的 drop 会捡到上一个文件，用户拖了别的东西
+        //    却看见「已添加: 上一个文件」（实测复现，dev-board#779 K6 ①）。同
+        //    FileTree.vue / LibreOfficeEditor.vue 两处既有消费点的写法。
         if (!fileData && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
              fileData = { ...document.__checkbaDraggedFile }
+             document.__checkbaDraggedFile = null // Consume
         }
 
         if (fileData) {
-             const file = {
+             this.addDraggedFileToAiContext({
                  id: fileData.fileId || fileData.id,
                  name: fileData.name || fileData.fileName,
                  fileType: fileData.fileType,
                  wpsFileId: fileData.wpsFileId,
                  isDir: fileData.fileType === 'folder' || fileData.isDir
-             }
-
-             // Check for folder file count limit (>10)
-             if (file.isDir && this.$refs.fileTree && Array.isArray(this.$refs.fileTree.allFiles)) {
-                 const allFiles = this.$refs.fileTree.allFiles
-                 // Helper to count non-folder files recursively
-                 const countDescendants = (pid) => {
-                     let count = 0
-                     const children = allFiles.filter(f => f.parentId == pid) // use fuzzy match for potential string/int diff
-                     for (const child of children) {
-                         if (!child.isFolder) {
-                             count++
-                         } else {
-                             count += countDescendants(child.id)
-                         }
-                     }
-                     return count
-                 }
-
-                 const totalFiles = countDescendants(file.id)
-                 if (totalFiles > 10) {
-                     uni.showToast({ title: this.$t('workbench.folderTooManyFiles', { count: totalFiles }), icon: 'none' })
-                     return
-                 }
-             }
-
-             if (this.$refs.chatInterface) {
-                 this.$refs.chatInterface.addFile(file)
-             }
-
-             // Note: Visual tag display is now handled within ChatInterface
-             uni.showToast({ title: this.$t('workbench.fileAdded', { name: fileData.name }), icon: 'none' })
-
-        } else {
-             uni.showToast({ title: this.$t('workbench.noDragData'), icon: 'none' })
+             })
+             return
         }
+
+        // 4. 本机文件（Finder / 资源管理器 / 微信）拖进对话区（dev-board#779 K6 ③）。
+        //    应用内三种格式都落空才轮到这里。dataTransfer 要从正在派发的原生事件上取
+        //    （uni-h5 重建 <view> 事件对象时把 drag 系字段全丢了，utils/fileTreeExternalDrop.js）。
+        const dt = nativeDataTransfer(e)
+        const dropped = dt && dt.files ? Array.from(dt.files) : []
+        if (dropped.length) {
+             // 文件夹在 dataTransfer.files 里是一个 0 字节、无类型的条目，照上传会在项目里
+             // 建出一份空壳文件。资源管理器有整套目录导入（import-local），这里只收文件。
+             if (this.droppedEntriesHaveDirectory(dt)) {
+                 uni.showToast({ title: this.$t('workbench.dragFolderUnsupported'), icon: 'none' })
+                 return
+             }
+             if (this.$refs.chatInterface && this.$refs.chatInterface.uploadLocalFilesAndAddContext) {
+                 // 落点固定项目根目录（工作台没有「当前文件夹」这个概念），先把落点说清楚
+                 uni.showToast({ title: this.$t('workbench.dragUploadingToRoot'), icon: 'none' })
+                 this.$refs.chatInterface.uploadLocalFilesAndAddContext(dropped)
+             }
+             return
+        }
+
+        uni.showToast({ title: this.$t('workbench.dragUnsupported'), icon: 'none' })
+    },
+    /** 把一份项目文件挂进 AI 上下文（文件树、暂存区、编辑器标签三种来源共用） */
+    addDraggedFileToAiContext(file) {
+        if (!file || !file.id) return
+
+        // Check for folder file count limit (>10)
+        if (file.isDir && this.$refs.fileTree && Array.isArray(this.$refs.fileTree.allFiles)) {
+            const allFiles = this.$refs.fileTree.allFiles
+            // Helper to count non-folder files recursively
+            const countDescendants = (pid) => {
+                let count = 0
+                const children = allFiles.filter(f => f.parentId == pid) // use fuzzy match for potential string/int diff
+                for (const child of children) {
+                    if (!child.isFolder) {
+                        count++
+                    } else {
+                        count += countDescendants(child.id)
+                    }
+                }
+                return count
+            }
+
+            const totalFiles = countDescendants(file.id)
+            if (totalFiles > 10) {
+                uni.showToast({ title: this.$t('workbench.folderTooManyFiles', { count: totalFiles }), icon: 'none' })
+                return
+            }
+        }
+
+        if (this.$refs.chatInterface) {
+            this.$refs.chatInterface.addFile(file)
+        }
+
+        // Note: Visual tag display is now handled within ChatInterface
+        uni.showToast({ title: this.$t('workbench.fileAdded', { name: file.name }), icon: 'none' })
+    },
+    /** 已打开的标签（两侧窗格）按 id 查一条；id 统一按字符串比较 */
+    findOpenTab(fileId) {
+        const key = String(fileId)
+        return this.leftFiles.find(f => String(f.id) === key)
+            || this.rightFiles.find(f => String(f.id) === key)
+            || null
+    },
+    /** 这次外部拖拽里有没有目录条目（dragover 阶段读不到，只有 drop 时可用） */
+    droppedEntriesHaveDirectory(dt) {
+        if (!dt || !dt.items) return false
+        for (const item of Array.from(dt.items)) {
+            if (!item || item.kind !== 'file' || typeof item.webkitGetAsEntry !== 'function') continue
+            try {
+                const entry = item.webkitGetAsEntry()
+                if (entry && entry.isDirectory) return true
+            } catch (err) { /* 拿不到就当文件处理，后端会拒空文件 */ }
+        }
+        return false
     },
     removeContextFile(index) {
         this.manualContextFiles.splice(index, 1)
