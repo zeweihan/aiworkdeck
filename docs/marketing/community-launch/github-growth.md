@@ -237,3 +237,51 @@ fork 均在 zeweihan 名下，分支 add-ai-workdeck；被要求修改时直接�
 - 阮一峰周刊 #11482、HelloGitHub #3632：0 回复。
 - HN：账号 karma 1，帖子仍 dead，还没收到版主申诉结果。
 - awesome-selfhosted：09-17 以后投。
+
+## 2026-09-22 跟进：两个榜单都该投，但提交被账号层面拦住
+
+| 日期 | 09-03 | 09-11 | 09-14 | 09-21 | 09-22 |
+|---|---|---|---|---|---|
+| 星 | 79 | 127 | 152 | 148 | 149 |
+| 14 天独立访客 | 104 | 129 | 127 | 128 | 132 |
+
+刷星在 09-11 至 09-14 又进约 25 颗，之后停止；GitHub 随后清理，星数由 152 回落到 148。
+
+### 收回 09-11 的「自然星约 97」估算
+
+该估算把零粉丝、当年注册的账号一概记为可疑，但同期维护者有市场活动，新用户本就多为新号。
+估算不可靠，**不再作为任何门槛或决策依据**。农场指纹（抽查账号在数日内批量 star 数十个互相重叠的仓库）
+仍然成立，但据此推不出可靠的自然星数字。显示星数就是仓库星数，我方未买未换，按显示值提交是诚实的。
+
+### 两处门槛判断纠错
+
+- **awesome-selfhosted 的四个月门槛在 09-17 已过。** 首个 release 是 v0.1.0 / 2026-05-17，
+  它在 `releases` 的**第二页**；`per_page=100` 单页只回 100 条，不翻页会误判为 v0.2.1 / 06-16，
+  进而错推到 10-16。**查 release 最早时间一律用 `gh api --paginate`。**
+- **awesome-electron 的 100 星门槛已达标**（149）。
+
+### 提交失败的真实原因：账号被限制跨仓库贡献（推断，非确证）
+
+- awesome-selfhosted-data：条目 `software/ai-workdeck.yml` 已按模板写好并推到 fork 分支 `add-ai-workdeck`，
+  创建 PR 返回 `User is blocked`。
+- awesome-electron：创建 PR 返回 `does not have the correct permissions to execute CreatePullRequest`。
+
+排除性证据：
+
+1. 四个目标仓库的 GraphQL `interactionAbility.limit` 全为 null，**没有仓库级互动限制**。
+2. 令牌 scope 含 `repo`，权限充足（`gh auth status` 确认）。
+3. **对照实验**：在自己的 fork 内部创建 PR 成功（zeweihan/awesome-selfhosted-data#1，已关闭），
+   说明 PR 创建能力本身正常，受阻的只是向外部上游提交。
+4. 账号 public events 与 `gh search prs --author` 里，09-03 以来对外部仓库的 PR 一条都不可见，
+   而 `gh pr view` 直接访问能看到 —— 外部贡献未进入公开索引。
+5. 时间吻合：09-04 至 09-14 刷星，09-14 后 GitHub 清理星数。
+
+GitHub 对涉嫌 star manipulation 的账号会施加此类限制，且不公开状态。以上是推断。
+
+### 处置
+
+- **暂停全部外部榜单提交**，提交也会失败。条目与分支保留在 fork 上，解除后一条命令即可提交。
+- **需要维护者本人向 GitHub Support 申诉**：https://support.github.com/contact
+  说明未购买或交换星标、星是第三方所为，账号现无法向外部仓库提交 PR，请求核查并解除限制。
+- 已有的 awesome-mcp-clients#301、awesome-ai-agents#1497 仍 OPEN，保持不动。
+- HN 账号仍 karma 1、帖子 dead，申诉邮件仍未见结果。
