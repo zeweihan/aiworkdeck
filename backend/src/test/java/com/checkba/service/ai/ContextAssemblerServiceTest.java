@@ -1272,6 +1272,30 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("渐进披露关着时 system prompt 一个字都不变（默认行为 = 今天的行为）")
+    void toolCatalogRuleIsAbsentWhileDisclosureIsOff() {
+        String withoutPolicy = assembleSystemText(null);
+        assembler.setToolDisclosurePolicy(new ToolDisclosurePolicy(false));
+        assertEquals(withoutPolicy, assembleSystemText(null),
+                "开关关着却改了 system prompt，等于让所有存量用户白付一次缓存重写");
+        assertFalse(withoutPolicy.contains("list_tools"));
+    }
+
+    @Test
+    @DisplayName("渐进披露开着时补一段目录规则，且落在被缓存的稳定段里")
+    void toolCatalogRuleLivesInTheCachedPrefixWhenDisclosureIsOn() {
+        assembler.setToolDisclosurePolicy(new ToolDisclosurePolicy(true));
+        String systemText = assembleSystemText(null);
+
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+        String stable = systemText.substring(0, systemText.indexOf(sep));
+        assertTrue(stable.contains("## 工具目录"), "目录规则应落在稳定段：开关不随轮次变，放易变段是白白多一次缓存未命中");
+        assertTrue(stable.contains("list_tools()"), stable);
+        // 这一句是整段里唯一真正要紧的：它失效的表现是模型谎报能力缺失（dev-board#396 那种形状）
+        assertTrue(stable.contains("做不到"), "「说做不到之前先查目录」这条硬规则不能丢：" + stable);
+    }
+
+    @Test
     @DisplayName("同一会话连续两次组装：标记之前的字节完全相同（缓存命中的充分条件）")
     void stablePrefixIsByteIdenticalAcrossTurns() {
         when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");

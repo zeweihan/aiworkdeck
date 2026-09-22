@@ -164,8 +164,7 @@ public class FileTools implements AgentToolComponent {
             + "'unregistered', or a file you just wrote with write_file. "
             + "**When you have a fileId (from doc_list_project_files), use extract_file_text instead**: "
             + "same extraction and same truncation, but it also accepts a FOLDER id and lists its children. "
-            + "Images (jpg/png/bmp/webp...) and scanned PDFs are recognised automatically by the cloud OCR "
-            + "service — no local OCR setup, no Docker and no script is needed to read them. "
+            + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script). "
             + "Max 10MB; very long text is truncated.")
     public String read_file(String filePath) {
         log.info("Tool: read_file called for {}", filePath);
@@ -279,7 +278,13 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "提取文档全文", category = "file")
-    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc, images etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Images (jpg/png/bmp/webp...) and scanned PDFs with no text layer are recognised automatically by the cloud OCR service — no local OCR setup, no Docker and no script is needed to read them. Returns extracted text (may be truncated for very large files). If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error, so you can then read each file in turn. This is the fileId entry point; read_file is the same extraction addressed BY PATH, for files that have no database id yet.")
+    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc, images etc.) by its database file ID. "
+            + "Use this to read Word/Excel/PDF documents from the project file tree. "
+            + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script). "
+            + "Returns extracted text (may be truncated for very large files). "
+            + "If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error. "
+            + "This is the fileId entry point; read_file is the same extraction addressed BY PATH, "
+            + "for files that have no database id yet.")
     public String extract_file_text(
             @P("Project file database ID (from doc_list_project_files / material list). May also be a folder ID — you get its contents listed.") Long fileId
     ) {
@@ -658,9 +663,8 @@ public class FileTools implements AgentToolComponent {
             "movesJson is a JSON array of {\"sourcePath\":\"a.docx\",\"destPath\":\"01 Pleadings/a.docx\"}, " +
             "at most " + MAX_BATCH_MOVES + " entries per batch; paths are relative to the project root. " +
             "[Organising a folder, archiving, sorting several files into categories MUST go through this tool in one call - " +
-            "do NOT call move_file / move_project_file / create_folder once per file] " +
-            "because every single-item call costs a whole execution step (about 30 steps per turn), so a dozen files " +
-            "run out of budget half way and the task is paused. " +
+            "do NOT call move_file / move_project_file / create_folder once per file] - " +
+            "one call per file runs out of the turn's step budget half way. " +
             "Missing destination folders are created automatically - you do NOT need create_folder first. " +
             "If destPath is an existing folder the file keeps its name; otherwise the last segment becomes the new name " +
             "(so a move can rename at the same time). " +

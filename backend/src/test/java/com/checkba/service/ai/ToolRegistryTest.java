@@ -9,6 +9,7 @@ import com.checkba.service.ai.tools.ToolContext;
 import com.checkba.service.ai.tools.ToolMeta;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -126,6 +127,32 @@ class ToolRegistryTest {
         ToolRegistry.ToolResult r = registry.execute("context_probe",
                 "{\"marker\":\"m\",\"projectId\":999,\"conversationId\":\"hacked\",\"userId\":666}", ctx);
         assertEquals("5|conv-1|7|m", r.output());
+    }
+
+    @Test
+    @DisplayName("瘦身：服务端强注入参数不进规格（模型看不到就不会去猜），但传了照样绑得上")
+    void serverContextParamsAreNotAdvertisedButStillBind() {
+        ToolSpecification probe = registry.getAllSpecifications().stream()
+                .filter(s -> s.name().equals("context_probe")).findFirst().orElseThrow();
+        String properties = String.valueOf(probe.parameters().properties());
+        // dev-board#810 A 档：这三个参数 bindArguments 一律从上下文取，下发它们既白花 token，
+        // 又是个诱饵——模型会去猜一个 projectId，而猜错没有任何返回值会戳穿。
+        assertFalse(properties.contains("projectId"), properties);
+        assertFalse(properties.contains("conversationId"), properties);
+        assertFalse(properties.contains("userId"), properties);
+        assertTrue(properties.contains("marker"), "真正要模型填的参数必须还在：" + properties);
+
+        // 行为一个字都不能变：上面那条 serverContextOverridesLlmArgs 仍然成立
+        assertEquals("5|conv-1|7|m", registry.execute("context_probe",
+                "{\"marker\":\"m\",\"projectId\":999}", ctx).output());
+    }
+
+    @Test
+    @DisplayName("瘦身：全部入参都是服务端注入时，规格退化成无参（与本来就零参的工具同形态）")
+    void specsWhoseOnlyParamsAreServerInjectedBecomeParameterless() {
+        ToolSpecification probe = registry.getAllSpecifications().stream()
+                .filter(s -> s.name().equals("scope_probe")).findFirst().orElseThrow();
+        assertNull(probe.parameters(), "零参工具的 parameters() 本来就是 null，摘空后要回到同一形态");
     }
 
     @Test

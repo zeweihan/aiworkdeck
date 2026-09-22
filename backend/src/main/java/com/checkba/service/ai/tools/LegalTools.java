@@ -89,8 +89,8 @@ public class LegalTools implements AgentToolComponent {
      */
     @ToolMeta(displayName = "读取文档", category = "file")
     @Tool("Read a project file's full plain text by its database fileId (from doc_list_project_files). "
-            + "Handles Word/Excel/PowerPoint, PDF and plain text; images and scanned PDFs with no text layer "
-            + "are recognised automatically by the cloud OCR service — no local OCR setup, no Docker, no script. "
+            + "Handles Word/Excel/PowerPoint, PDF and plain text; images and scanned PDFs are OCR'd "
+            + "automatically in the cloud (no local setup, no Docker, no script). "
             + "Very long documents are truncated (the reply says so; ask for a specific section instead of "
             + "re-reading the whole file). "
             + "**If the id might be a FOLDER, call extract_file_text instead** — it is the same extractor but "

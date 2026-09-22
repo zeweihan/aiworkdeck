@@ -1,0 +1,169 @@
+[
+  {
+    "id": "disclosure-catalog-lookup-brings-the-category-back-next-round",
+    "title": "渐进披露：核心集里没有排版工具，查一次目录后下一轮 doc_format_table 回到可见集（dev-board#810）",
+    "category": "files",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "userInput": "把这份合同里的表格套成标准格式",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "list_tools",
+            "arguments": {
+              "category": "format,table"
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "doc_format_table",
+            "arguments": {
+              "applyStandard": "true"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已按标准表格式重排该表：Grid 1.5 磅边框、10 号字、首行加粗居中。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_tools"
+        },
+        {
+          "name": "doc_format_table"
+        }
+      ],
+      "offeredToolsInclude": [
+        "list_tools"
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "doc_format_table",
+        "doc_table_add_row",
+        "litigation_render",
+        "pdf_highlight"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "doc_format_table",
+        "doc_table_add_row"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-core-set-alone-finishes-an-ordinary-reading-turn",
+    "title": "渐进披露：常规「找材料 → 读全文 → 答」一轮走完，不需要查目录（dev-board#810）",
+    "category": "files",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "userInput": "项目里那份尽调报告讲了什么？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "extract_file_text",
+            "arguments": {
+              "fileId": "1001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>该报告的核心结论是目标公司股权清晰、无对外担保。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "1. 尽调报告.docx (fileId=1001)",
+      "extract_file_text": "目标公司股权清晰，无对外担保。"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_list_project_files"
+        },
+        {
+          "name": "extract_file_text",
+          "argsContain": {
+            "fileId": "1001"
+          }
+        }
+      ],
+      "offeredToolsInclude": [
+        "doc_list_project_files",
+        "extract_file_text",
+        "read_document",
+        "doc_get_document_text",
+        "law_search",
+        "query_memory",
+        "todo_write"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-xml-fallback-can-call-an-undisclosed-tool-in-the-same-turn",
+    "title": "渐进披露：没下发规格的工具经 XML 兜底当轮就能调（只裁 spec、不裁 execute）（dev-board#810）",
+    "category": "files",
+    "protocol": "xml",
+    "progressiveDisclosure": true,
+    "userInput": "把正文里的表格整体加一行",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "text": "先看看还有哪些表格工具。\n<tool_code>list_tools(category=\"table\")</tool_code>"
+      },
+      {
+        "text": "<tool_code>doc_table_add_row(count=1)</tool_code>"
+      },
+      {
+        "text": "<final>已在表尾追加一行。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_tools"
+        },
+        {
+          "name": "doc_table_add_row"
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "doc_table_add_row"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

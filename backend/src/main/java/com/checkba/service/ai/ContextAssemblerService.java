@@ -252,6 +252,47 @@ public class ContextAssemblerService {
         }
     }
 
+    /**
+     * 工具渐进披露（dev-board#810）。同上：字段注入 + required=false，
+     * 为 null 或开关关着时整段不注入，system prompt 与改动前逐字一致。
+     */
+    @Autowired(required = false)
+    private ToolDisclosurePolicy toolDisclosurePolicy;
+
+    /** 供测试直接装配。 */
+    void setToolDisclosurePolicy(ToolDisclosurePolicy policy) {
+        this.toolDisclosurePolicy = policy;
+    }
+
+    /**
+     * 渐进披露开着时补的一段硬规则。
+     *
+     * <p>挂在 enforcement 与模式约束之后（仍在稳定段里，不进 volatileText——开关不随轮次变，
+     * 写进易变段会白白多一次提示缓存未命中）。位置是刻意的：本仓的实证是
+     * 只写在 system prompt 中段的约束会被弱模型无视，而这一条正是
+     * 「别急着告诉用户做不了」——它失效的表现恰恰是最贵的那种（模型谎报能力缺失）。
+     */
+    private String toolDisclosureRule(boolean english) {
+        ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
+        if (policy == null || !policy.isEnabled()) {
+            return "";
+        }
+        return english
+                ? "\n\n## Tool Catalog\n"
+                + "Your tool list is a working subset, not everything this product can do. "
+                + "`list_tools()` prints every other tool by category; `list_tools(category=\"x\")` prints their full "
+                + "signatures and adds them to your tool list from the next turn on (call one right away with "
+                + "`<tool_code>name(arg=\"value\")</tool_code>`).\n"
+                + "- Before you tell the user something is impossible or unsupported, call `list_tools()`. "
+                + "Saying \"I can't\" about a capability that is one catalog lookup away is a serious error.\n"
+                : "\n\n## 工具目录\n"
+                + "你手上这份工具清单是常用子集，不是本产品能做的全部。"
+                + "`list_tools()` 按类目列出其余工具；`list_tools(category=\"x\")` 给出它们的完整签名，"
+                + "并从下一轮起并入你的工具清单（想当轮就用，写成 `<tool_code>name(arg=\"value\")</tool_code>`）。\n"
+                + "- **在告诉用户「做不到 / 不支持」之前，先调一次 `list_tools()`。** "
+                + "一个查一次目录就能拿到的能力被你说成没有，是最严重的一类错误。\n";
+    }
+
     // 应用语言（EN 版 PR5）：en-US 时选英文 system prompt 与各硬编码段的英文文本；
     // zh-CN 路径的代码与文本一字不动（中文版行为保持逐字节一致是硬约束）。
     private final com.checkba.service.AppLanguageService appLanguageService;
@@ -459,6 +500,9 @@ public class ContextAssemblerService {
 
         // [Injection] Mode-Specific Constraints (CRITICAL)
         systemText.append(english ? getModeConstraintsEn(agentMode) : getModeConstraints(agentMode));
+
+        // [Injection] 工具渐进披露的硬规则（dev-board#810）。开关关着时是空串。
+        systemText.append(toolDisclosureRule(english));
 
         // [Injection] Skill（Phase 3B，规范见 docs/SKILL_SPEC.md）：
         // 把本轮生效的每个 skill 的 prompt 模板注入系统消息。

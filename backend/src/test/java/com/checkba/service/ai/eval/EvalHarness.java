@@ -220,6 +220,16 @@ public final class EvalHarness {
                 telemetry, turnTracker,
                 mock(com.checkba.service.telemetry.MatterClassifierService.class),
                 new com.checkba.service.ai.OfficePassStateStore());
+        // 工具渐进披露（dev-board#810）。默认关 = 与改动前逐字一致；
+        // -Dai.tools.progressive-disclosure.enabled=true 时整套回放在核心集模式下重跑一遍，
+        // 这是 B 档「回放不降」唯一的验证方式。
+        com.checkba.service.ai.ToolDisclosurePolicy disclosurePolicy =
+                new com.checkba.service.ai.ToolDisclosurePolicy(
+                        c.progressiveDisclosure
+                                || Boolean.getBoolean("ai.tools.progressive-disclosure.enabled"));
+        // ContextAssemblerService 在本 harness 里是 mock，system prompt 段不走这条路；
+        // 那一段的护栏在 ContextAssemblerServiceTest。
+        orchestrator.setToolDisclosurePolicy(disclosurePolicy);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);

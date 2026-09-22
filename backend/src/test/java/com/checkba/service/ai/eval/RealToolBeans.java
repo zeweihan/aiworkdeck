@@ -31,6 +31,7 @@ import com.checkba.service.ai.tools.TaskTools;
 import com.checkba.service.ai.tools.TemplateTools;
 import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
+import com.checkba.service.ai.tools.ToolDiscoveryTools;
 import com.checkba.service.ai.tools.WebTools;
 import com.checkba.service.ai.tools.WebVerifyTools;
 
@@ -54,8 +55,28 @@ final class RealToolBeans {
     private RealToolBeans() {
     }
 
-    /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
+    /**
+     * 渐进披露开关，只影响 {@link ToolDiscoveryTools#isAvailable()}（也就是 list_tools 下不下发规格）。
+     * 默认 true：绝大多数测试要么不在乎它，要么正是要断言目录工具在场。
+     * 想量「生产默认（披露关着）到底下发多少工具」时用 {@link #instantiateAll(boolean)}。
+     */
     static List<AgentToolComponent> instantiateAll() {
+        return instantiateAll(true);
+    }
+
+    /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
+    static List<AgentToolComponent> instantiateAll(boolean disclosureEnabled) {
+        DISCLOSURE_ENABLED.set(disclosureEnabled);
+        try {
+            return instantiateComponents();
+        } finally {
+            DISCLOSURE_ENABLED.set(true);
+        }
+    }
+
+    private static final ThreadLocal<Boolean> DISCLOSURE_ENABLED = ThreadLocal.withInitial(() -> true);
+
+    private static List<AgentToolComponent> instantiateComponents() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
                 CapabilityTools.class,
                 // 与 TodoTools 同一个坑：CheckpointTools（doc_restore_checkpoint）与
@@ -91,6 +112,10 @@ final class RealToolBeans {
                 // offeredToolsInclude 永远失败、offeredToolsExclude 永远通过）。
                 // 补进来后 skill-orchestration-tools-not-trimmed 才真正有意义。
                 TodoTools.class,
+                // list_tools：工具目录（dev-board#810）。渐进披露默认关着，它也照常下发——
+                // 多一个便宜的目录入口不会改变任何既有用例的工具选择，而漏列它会让
+                // ToolDisclosurePolicyTest 的覆盖面断言全部变成空断言。
+                ToolDiscoveryTools.class,
                 TagTools.class,
                 TaskTools.class,
                 TemplateTools.class,
@@ -121,6 +146,11 @@ final class RealToolBeans {
     }
 
     private static Object defaultValue(Class<?> t) {
+        // 渐进披露策略是无状态的纯逻辑，给个真的：ToolDiscoveryTools 拿到 null 就只会
+        // 回一句错误，list_tools 在回放里等于没接上（dev-board#810）。
+        if (t == com.checkba.service.ai.ToolDisclosurePolicy.class) {
+            return new com.checkba.service.ai.ToolDisclosurePolicy(DISCLOSURE_ENABLED.get());
+        }
         if (!t.isPrimitive()) {
             return null;
         }

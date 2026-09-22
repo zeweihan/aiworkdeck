@@ -262,9 +262,12 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      **只判「平台档 + 没连账户」这一种**，BYOK/LOCAL 档与判不出来的一律当可用——
      藏掉一个能用的工具比失败一次严重得多。云后端 `resolve()` 恒不返回 PLATFORM，这道闸天然空转。
      **一轮内不变**：与 activeDocKind 同一条契约，而且这一个连中途放宽的口子都没有。
+  ⑤ **渐进披露**（dev-board#810，`ToolDisclosurePolicy`，**默认关**）：只下发核心集 + 本轮已展开的类目。
+     见下文「工具规格瘦身与渐进披露」一节。
   - **为什么值得做②**：工具规格**每一轮都要重发**，一条消息跑三五个往返就付三五遍。
     本机实测 202 个工具 59045 prompt token / 首轮 26.4s，裁到 16 个 18854 token / 6.1s；
-    本仓离线实测（`ToolSchemaBudgetTest`）docx 省 26.7%、xlsx 省 37.8%、pptx 省 38.8% 的 schema 体量。
+    本仓离线实测（`ToolSchemaBudgetTest`）docx 省 27.6%、xlsx 省 38.8%、pptx 省 39.7% 的 schema 体量
+    （dev-board#810 摘掉服务端注入与弃用参数后重测；改动前分别是 26.7% / 37.8% / 38.8%）。
     ①b 的收益全在**换一类客户端**那一档（同测试的第三个用例，dev-board#799 实测）：
     Word 任务窗格 127 个 / 56435 字符 → 114 个 / 48880 字符；Excel 117 → 104；
     PowerPoint 105 → 92；纯对话（none）87 → 74。LOWA 全集 200 → 198（少的两个是 offerToModel=false）。
@@ -283,6 +286,64 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   - 判文档类型的**单一判据**是 `ContextAssemblerService.lowaDocKind(ContextItem)` /
     `lowaDocKindOf(fileType, fileName)`（prompt 文案与工具白名单必须同源，各写一份的表现是
     「提醒说这是表格、下发的却是 Writer 工具集」，两边都不报错）。
+  - **工具规格瘦身与渐进披露（dev-board#810）**——先记住两件事：schema 体量有**两个**口径，
+    而瘦身有**两档**，能省的量差一个数量级。
+    - **两个口径别混用**。`ToolSchemaBudgetTest.weight()` 量的是 `properties()` 的 Java toString，
+      里头将近一半是 `JsonStringSchema {description = …}` 这种**不会上线**的样板；历史断言都挂在它上面，
+      所以它留着只做同口径前后对比。真要估 token 与钱，用同一个类里的 `wireBytes()`——
+      它走 `InternalOpenAiHelper.toTools` + openai4j `Json`，与 `OpenRouterStreamingChatModel`
+      发出去的那份逐字节一致。两个数字在本仓恰好给出接近的百分比，但**绝对值差三成**（docx：55716 vs 72501）。
+    - **A 档：不改模型行为的瘦身**（已合入，默认生效）。`ToolRegistry.offerable(spec)` 在注册时
+      从规格里摘掉两类参数，**只摘规格、不摘方法签名**，所以模型真传了照样绑得上：
+      ① **服务端强注入参数**（projectId / conversationId / userId）——`bindArguments` 一律
+      `fromContext(...)`，模型传什么都被覆盖，下发它们纯属白花钱，而且是个诱饵（模型会去猜一个
+      projectId，猜错没有任何返回值会戳穿）。XML 兜底的位置映射**早就**按 `isServerContextParam`
+      跳过它们，所以两条调用路径都一字未变。② **保位弃用的旧参数**（说明以 `【已弃用` 开头，K27/A12 的产物）。
+      实测 docx 会话 147 个工具：58519 → 55716 字符（-4.8%）、75348 → 72501 上线路字节（-3.8%）。
+    - **A 档到不了 -20%，这是量过的结论，不要再去砍描述**：docx 的 147 份描述共 29271 字符，
+      其中**完全重复的句子只有 568 字符（1.9%）**，且那 568 里有 5 处是「修订颗粒度 / 未改动部分逐字照抄」
+      这类**刻意按工具重复**的判据句（末位原则：per-tool 判据必须长在工具上）。描述 >400 字符的 16 个里，
+      绝大多数是 K27（#807/#808）上周刚写进去、把工具选择正确率从 5/9 抬到 9/9 的判据句。
+      再要 -20% 就只能砍判据，那是拿准确率换 token，方向反了。
+    - **B 档：渐进披露**（`ToolDisclosurePolicy` + `ToolDiscoveryTools.list_tools`，
+      开关 `ai.tools.progressive-disclosure.enabled`，**默认 false**）。每轮只下发**核心集**
+      （一份人工清单，按「把一条完整的活干完需要哪些工具」挑，不按调用次数），其余按**类目**收进目录；
+      模型调 `list_tools()` 看类目、`list_tools(category="format,table")` 拿全签名。
+      离线实测 docx：148 → **41 个工具**，56703 → 14827 字符、73474 → 19028 上线路字节（**-74%**）；
+      真实模型上首轮 promptTokens **-56%**（见下「真实模型 A/B」——差额是 system prompt 与历史，
+      不是工具，所以 -74% 的 schema 折成整段前缀只剩 -56%）。
+      - **展开只在下一轮生效**，这是它与「一轮内工具集不变」相容的全部理由：展开记在
+        `RunGuard.expandedToolCategories`（`dispatchTool` 里 `noteToolCategoryExpansion` 写、
+        下一次递归 runLoop 读），而且**只做加法**——模型已宣布要调的工具永远不会消失。
+        与 `widenDocKindAfterDocumentSwitch` 是同一种「只放宽」的改写。
+      - **当轮就能用 XML 调**：没下发规格的工具仍然登记着，`XmlToolCallParser` 按名字解析注册表。
+        `list_tools` 的描述必须把这条说清楚，否则模型查完目录直接原生调用 → "Tool not found"
+        → 转头告诉用户这个功能不存在（dev-board#396 那次 OCR 事故的形状）。
+      - **三条安全性质**，缺一条就会变成静默的能力丢失：`categoryOf` 是**全函数**（认不出落 `misc`，
+        `list_tools()` 一定列得出来，新增工具不改策略类也在目录里）；`list_tools` 自己恒在核心集；
+        **skill 已经裁过就不再裁**（判据在编排器：`skillRouter.visibleTools` 返回的集合比候选集小即视为已裁）。
+      - **核心集是一份集中清单而不是 `@ToolMeta` 上的布尔**：「算不算高频」不是工具自身属性，
+        是一次横切取舍——要判断它得把四十个候选放在一起看覆盖面，散在三十四个文件里没人看得出
+        「读一份合同」这条链断没断。清单与覆盖面断言都在 `ToolDisclosurePolicy(Test)`。
+      - **开关关着时连 `list_tools` 自己都不下发**（`ToolDiscoveryTools.isAvailable()`）：
+        模型手上已是全集，再挂个目录只会每轮白付约一千字符。
+      - **真实模型 A/B（2026-09-22，隔离后端 + deepseek-v4-flash，每档 2 场景 × 3 次）**：
+        首轮 promptTokens **50692 → 22296（-56%）**，纯对话 T4 中位 11692 → 8048ms；
+        「读文件总结」3 次里 2 次与基线同路径（`doc_list_project_files` → `read_document`/
+        `extract_file_text`，3 轮，T4 37614 → 23643ms 更快），**1 次跑偏**：7 轮、300s 内没收尾，
+        模型在 `doc_open_file` / `doc_get_document_text` 之间打转。**那两个工具在两种模式下
+        都在核心集里**，所以不是「工具被藏起来」造成的，是多出来的目录提示段 + 模型变异；
+        而且无头后端没有 LOWA，`doc_get_document_text` 必然超时，真实桌面会话里这条路是通的。
+        n=3 说明不了因果，但「3 次里 1 次不收尾」本身就够让开关保持关着。
+      - **为什么默认关**：回放评测用的是**脚本模型**，它永远按剧本调对工具，证明不了真实模型
+        找不找得到 `list_tools`。绿的回放只说明编排器没做坏事。翻开它之前要先有真实模型的
+        对照数据（同一批任务的完成率 / 轮数 / promptTokens），而上面那组数据里
+        **完成率这一项恰恰是退的**。
+      - 护栏：`ToolDisclosurePolicyTest`（9 条）+ `cases-tool-disclosure.json`（3 例，
+        用例字段 `progressiveDisclosure: true` 单独开，**进默认 `mvn test`**——只能靠命令行开关跑的
+        验证等于没有护栏）+ `ContextAssemblerServiceTest` 的两条 prompt 段断言。
+        整套回放在披露模式下重跑：`mvn test -Dtest=OrchestratorReplayEvalTest
+        -Dai.tools.progressive-disclosure.enabled=true`。
   - 回放护栏 `cases-tool-visibility.json`（5 例，起跑时的裁剪）+ `cases-tool-visibility-widening.json`
     （3 例，中途放回全集；用 `expect.offeredToolsExcludeFirstCall` / `offeredToolsIncludeLastCall`
     这对**逐轮**断言——全轮次的 `offeredToolsExclude` 在这种形态下必然自相矛盾）

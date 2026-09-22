@@ -248,6 +248,22 @@ public class AgentOrchestrator {
          * 上一轮宣布要调的工具这一轮消失，通道直接 400。
          */
         java.util.Set<String> unusableTools = java.util.Set.of();
+        /**
+         * 本轮已经被 {@code list_tools} 展开的工具类目（dev-board#810）。
+         *
+         * <p><b>只增不减</b>，这是它能与「一轮内工具集不变」相容的全部理由：
+         * 展开发生在工具分发时（模型已经把这条消息说完了），下一次递归 runLoop 才重算可见集，
+         * 所以模型宣布要调的工具永远不会在下一轮消失——与
+         * {@link #widenDocKindAfterDocumentSwitch} 是同一种「只放宽」的改写。
+         *
+         * <p>写在分发线程、读在下一轮的组装处，故用并发集合。
+         */
+        final java.util.Set<String> expandedToolCategories = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        /**
+         * 本轮候选工具集（三层闸过完、渐进披露收窄之前）。{@code list_tools} 要列的
+         * 正是「你没看见但确实有」的那些，而这份名单只有编排器算得出来。
+         */
+        volatile List<ToolSpecification> roundCandidates = List.of();
         // LLM 往返轮数与首轮 promptTokens（埋点 ai.turn；只由当前轮次记账）
         int llmRounds;
         boolean promptTokensRecorded;
@@ -801,9 +817,13 @@ public class AgentOrchestrator {
         }
 
         com.checkba.service.ai.tools.ToolContext ctx =
-                new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId);
+                new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId,
+                        guard == null ? List.of() : guard.roundCandidates);
         long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
+        // 目录展开只在下一轮生效：本轮的工具集已经发给模型了，中途加进去会让
+        // 「一轮内工具集不变」那条契约失效（只加不减，所以不会让已宣布的工具消失）。
+        noteToolCategoryExpansion(guard, toolName, argsJson, result);
         recordToolTelemetry(toolName, result, conversationId, System.currentTimeMillis() - toolStartMs);
         applyToolSideEffects(result, argsJson, conversationId);
 
@@ -1040,6 +1060,18 @@ public class AgentOrchestrator {
     void setTurnExecutor(@org.springframework.beans.factory.annotation.Qualifier("taskExecutor")
                          java.util.concurrent.Executor turnExecutor) {
         this.turnExecutor = turnExecutor;
+    }
+
+    /**
+     * 工具渐进披露策略（dev-board#810）。为空 = 不披露、下发候选全集，
+     * 也就是各单元测试与回放评测里直接 {@code new AgentOrchestrator(...)} 的既有行为。
+     * 同 {@link #turnExecutor}：走 setter 而不是构造器，免得再触一次 EvalHarness 那颗地雷。
+     */
+    private volatile ToolDisclosurePolicy toolDisclosurePolicy;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setToolDisclosurePolicy(ToolDisclosurePolicy toolDisclosurePolicy) {
+        this.toolDisclosurePolicy = toolDisclosurePolicy;
     }
 
     /**
@@ -2118,12 +2150,21 @@ public class AgentOrchestrator {
                     .filter(s -> !guard.unusableTools.contains(s.name()))
                     .toList();
         }
+        // list_tools 要列的是「本轮本来能用、只是没下发」的工具，所以记的是收窄之前的候选集。
+        if (guard != null) {
+            guard.roundCandidates = registered;
+        }
         List<ToolSpecification> visible;
         if (agentMode == AgentMode.ASK) {
             visible = registered.stream().filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();
             log.info("Ask mode: generating with {} read-only memory tools", visible.size());
         } else {
-            visible = new java.util.ArrayList<>(skillRouter.visibleTools(guard.runId, registered));
+            List<ToolSpecification> afterSkill = skillRouter.visibleTools(guard.runId, registered);
+            // skill 的 allowed_tools 本身已经是一次披露；两层叠起来会把 skill 精心挑出来的
+            // 工具又藏掉一半，所以这里只在「skill 没裁过」时才做渐进披露（dev-board#810）。
+            boolean narrowedBySkill = afterSkill.size() < registered.size();
+            visible = new java.util.ArrayList<>(
+                    narrowedBySkill ? afterSkill : discloseProgressively(afterSkill, guard));
             // Memory remains available even when a skill restricts other tools.
             for (ToolSpecification spec : registered) {
                 if (MEMORY_TOOLS.contains(spec.name())
@@ -2153,6 +2194,43 @@ public class AgentOrchestrator {
             // 同步抛错与异步失败共用终态闸：取消看门狗并执行有限重试 / 模型切换。
             handler.onError(e);
         }
+    }
+
+    /**
+     * 模型调过 {@code list_tools(category)} 之后，把那个类目记进本轮的展开集（dev-board#810）。
+     *
+     * <p>展开记在编排器而不是工具里：它是<b>轮次级</b>状态，只有 {@link RunGuard} 拿得到，
+     * 和 {@code guard.unusableTools} / {@code guard.activeDocKind} 是同一类东西。
+     * 失败的调用不记——模型拿到的是一句错误，没看到任何签名。
+     */
+    private void noteToolCategoryExpansion(RunGuard guard, String toolName, String argsJson,
+                                           ToolRegistry.ToolResult result) {
+        ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
+        if (guard == null || policy == null || !policy.isEnabled()
+                || !ToolDisclosurePolicy.CATALOG_TOOL.equals(toolName)
+                || result == null || !result.success()) {
+            return;
+        }
+        java.util.Set<String> expanded = policy.parseCategories(extractArg(argsJson, "category"));
+        if (!expanded.isEmpty() && guard.expandedToolCategories.addAll(expanded)) {
+            log.info("[Disclosure] conv={} 展开类目 {}（下一轮生效），当前展开集 {}",
+                    guard.conversationId, expanded, guard.expandedToolCategories);
+        }
+    }
+
+    /**
+     * 渐进披露（dev-board#810）：只下发核心集 + 本轮已展开的类目。
+     * 策略未注入或开关关着时原样返回——这是默认行为，也是全部既有测试走的那条路。
+     */
+    private List<ToolSpecification> discloseProgressively(List<ToolSpecification> candidates, RunGuard guard) {
+        ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
+        if (policy == null || !policy.isEnabled() || guard == null) {
+            return candidates;
+        }
+        List<ToolSpecification> disclosed = policy.narrow(candidates, guard.expandedToolCategories);
+        log.info("[Disclosure] conv={} candidates={} disclosed={} expanded={}",
+                guard.conversationId, candidates.size(), disclosed.size(), guard.expandedToolCategories);
+        return disclosed;
     }
 
     /**
