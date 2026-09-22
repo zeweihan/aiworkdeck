@@ -156,8 +156,38 @@ public class AgentOrchestrator {
             assistantMessageId = null;
         }
 
+        /**
+         * 本轮在途 LLM 请求的取消句柄（okhttp Call::cancel）。取消时立刻掐断它，
+         * 否则上游会把这一轮生成完、输出 token 全额计费（审计 C-03）。
+         * 写在流式线程、读在控制器线程，故 volatile；不可取消的通道（本地 Ollama、
+         * 脚本模型）恒为 null，行为与改造前一致。
+         */
+        private volatile Runnable inflightCanceller;
+
+        /**
+         * 记下本轮刚发出的那次请求。<b>登记之后必须再查一次取消标志</b>：
+         * 「发请求」与「点停止」是两个线程，标志可能恰好落在这两步之间——
+         * 不补这一下，那一次请求就永远没人去掐。
+         */
+        void trackInflight(Runnable canceller) {
+            this.inflightCanceller = canceller;
+            if (canceller != null && cancelled.get()) cancelInflight();
+        }
+
         void cancel() {
             cancelled.set(true);
+            cancelInflight();
+        }
+
+        private void cancelInflight() {
+            Runnable canceller = inflightCanceller;
+            if (canceller == null) return;
+            try {
+                canceller.run();
+            } catch (Exception e) {
+                // 掐不断只是省不下钱，绝不能让「停止」这条路本身失败
+                log.warn("Failed to cancel the in-flight LLM request of run {}", runId, e);
+            }
         }
 
         boolean isCancelled() {
@@ -343,15 +373,46 @@ public class AgentOrchestrator {
      * 用户「停止后立刻再发」的新一轮会被上一轮的标志误杀，而新一轮开头的无条件清标志
      * 又会把上一轮真正的取消擦掉——两头都错。没有活跃轮次时本方法是 no-op：
      * 没有正在跑的东西可停，也绝不能给下一轮留下一个定时炸弹。
+     *
+     * <p>置位之外还做两件「让停止当场生效」的事（计划 K4）：掐断在途的 LLM 请求
+     * （否则上游照样把这一轮写完、token 全额计费），以及释放正卡在编辑器桥上的等待
+     * （否则要等满最长 180 秒的超时档位才会有任何反应）。
+     *
+     * @return 是否打中了一个活跃轮次。控制器把它原样下发（{@code "cancelled"}），
+     *         前端据此区分「正在停止」与「该轮次已经结束」——恒回 ok 会把
+     *         「停止根本没生效」这类真实失效一起掩盖掉（审计 D-10）。
      */
-    public void setCancelled(String conversationId) {
+    public boolean setCancelled(String conversationId) {
         RunGuard guard = activeRuns.get(conversationId);
         if (guard == null) {
             log.info("Cancel requested for {} but no run is active, ignoring", conversationId);
-            return;
+            return false;
         }
         log.info("Cancelling conversation {} (run {})", conversationId, guard.runId);
         guard.cancel();
+        // 桥上的等待与 LLM 请求是两条独立的阻塞，缺一条停止就还是「按了要等」
+        editorBridgeService.cancelPendingActions(conversationId);
+        return true;
+    }
+
+    /**
+     * 发起一次流式生成，并交回「怎么掐断它」——不可取消的通道交回 null。
+     *
+     * <p>{@code StreamingChatLanguageModel} 接口本身给不出返回值，而我们自有的
+     * OpenRouter 通道握着 okhttp 的 Call。包级可见是为了能被直接测到：这三行是
+     * 「停止到底掐不掐得断」的分派点，藏在 runLoop 里就只能靠端到端间接覆盖。
+     */
+    static Runnable startGeneration(StreamingChatLanguageModel model,
+                                    java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                    List<ToolSpecification> tools,
+                                    dev.langchain4j.model.StreamingResponseHandler<
+                                            dev.langchain4j.data.message.AiMessage> handler) {
+        if (model instanceof OpenRouterStreamingChatModel cancellable) {
+            okhttp3.Call call = cancellable.generateTracked(messages, tools, handler);
+            return call::cancel;
+        }
+        model.generate(messages, tools, handler);
+        return null;
     }
 
     /**
@@ -434,20 +495,29 @@ public class AgentOrchestrator {
     }
 
     /**
-     * 处理取消：保存已生成的部分内容
+     * 处理取消：把这一轮<b>已经发生过的事</b>原样留在历史里，再收尾。
+     *
+     * <p>执行日志与模型正文是两条独立的流，必须一起落（与 {@link #finishWithError}
+     * 和 {@code pauseForNoProgress} 逐字对齐）。只落正文的旧写法在 AGENT 模式下等于什么都不落：
+     * 模型第一件事就是发工具调用、一个正文 token 都没有，于是「用户中途点停止」那一轮
+     * 在历史里完全不存在——刷新后只剩用户那条提问，而文件其实已经被改过了。
+     * 律师需要能回看「AI 当时动了哪几个文件」，这条不是锦上添花。
      */
-    private void handleCancellation(RunGuard guard, String projectId, Long userId) {
+    private void handleCancellation(RunGuard guard, String projectId, Long userId,
+                                    StringBuilder executionLog) {
         String conversationId = guard.conversationId;
         log.info("Handling cancellation for run {} of conversation {}", guard.runId, conversationId);
 
-        // 获取已生成的部分内容
+        // 已生成的部分正文 + 本轮的工具过程卡
         String partialContent = guard.streamSnapshot();
+        String logText = executionLog != null ? executionLog.toString() : "";
 
-        // 如果有部分内容，保存并标记为已中断
-        if (!partialContent.isEmpty()) {
-            String contentToSave = partialContent + LangText.of("\n\n[已中断]", "\n\n[Interrupted]");
-            saveAssistantMessage(guard, projectId, userId, contentToSave);
-            log.info("Saved partial content ({} chars) for cancelled conversation: {}", partialContent.length(), conversationId);
+        if (!partialContent.isEmpty() || !logText.isEmpty()) {
+            String contentToSave = logText + partialContent
+                    + LangText.of("\n\n[已中断]", "\n\n[Interrupted]");
+            saveAssistantMessageQuietly(guard, projectId, userId, contentToSave);
+            log.info("Saved interrupted round ({} log chars + {} body chars) for cancelled conversation: {}",
+                    logText.length(), partialContent.length(), conversationId);
         }
 
         markRunState(guard, AgentRunStateService.RunStatus.CANCELLED);
@@ -1164,7 +1234,7 @@ public class AgentOrchestrator {
         // 检查是否被取消
         if (guard.isCancelled()) {
             log.info("Conversation {} was cancelled, stopping loop at depth {}", conversationId, depth);
-            handleCancellation(guard, projectId, userId);
+            handleCancellation(guard, projectId, userId, executionLog);
             return;
         }
 
@@ -1192,6 +1262,11 @@ public class AgentOrchestrator {
             () -> isCurrentRun(guard)
         );
         
+
+        // 取消闸（计划 K4 ②）：okhttp 的 cancel 不是瞬时的，在途那一段响应体已经在本机缓冲里，
+        // 取消之后 onNext 还会被回调几次。闸不加在 handler 上的话，这几段会继续打进用户的气泡、
+        // 继续进恢复快照、继续往文档里流式写——用户点了停止，画面却还在动。
+        handler.setCancellationCheck(guard::isCancelled);
 
         // 实时更新当前生成的内容 (用于断线重连恢复)
         handler.setOnToken(guard::appendStream);
@@ -1253,7 +1328,7 @@ public class AgentOrchestrator {
             // 检查是否被取消
             if (guard.isCancelled()) {
                 log.info("Conversation {} was cancelled during streaming", conversationId);
-                handleCancellation(guard, projectId, userId);
+                handleCancellation(guard, projectId, userId, executionLog);
                 return;
             }
             
@@ -1345,7 +1420,7 @@ public class AgentOrchestrator {
                     if (guard.isCancelled()) {
                         log.info("Conversation {} cancelled before tool {}, skipping remaining tools",
                                 conversationId, req.name());
-                        handleCancellation(guard, projectId, userId);
+                        handleCancellation(guard, projectId, userId, executionLog);
                         return;
                     }
                     // 面板可见性：原生工具调用复用 <process> XML 协议推送给前端，
@@ -1485,7 +1560,7 @@ public class AgentOrchestrator {
                     if (guard.isCancelled()) {
                         log.info("Conversation {} cancelled before XML tool {}, skipping remaining tools",
                                 conversationId, call.toolName());
-                        handleCancellation(guard, projectId, userId);
+                        handleCancellation(guard, projectId, userId, executionLog);
                         return;
                     }
                     String code = call.rawCode();
@@ -1825,7 +1900,12 @@ public class AgentOrchestrator {
         // 同 onComplete：错误回调也在 HTTP 线程上，换模型要取平台密钥，身份必须重建
         handler.setOnError(err -> PlatformAiUserScope.run(userId, () -> {
             if (guard.isCancelled()) {
-                handleStreamErrorTerminal(guard, projectId, userId, err, null);
+                // 我们自己掐断在途请求换来的那个 IOException 不是故障（计划 K4 ①）：
+                // 按错误处置会打 ERROR 状态点、发 error 事件、还可能白白切一次模型，
+                // 用户看到的是「点了停止却报错了」。走取消收尾，执行日志一并落库。
+                log.info("Stream of run {} ended after cancellation, finishing as cancelled: {}",
+                        guard.runId, String.valueOf(err));
+                handleCancellation(guard, projectId, userId, executionLog);
                 return;
             }
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
@@ -1858,7 +1938,7 @@ public class AgentOrchestrator {
                                 depth, executionLog, agentMode, guard);
                     } catch (Exception retryEx) {
                         log.error("Retry runLoop failed for {}", conversationId, retryEx);
-                        handleStreamErrorTerminal(guard, projectId, userId, retryEx, null);
+                        handleStreamErrorTerminal(guard, projectId, userId, retryEx, null, executionLog);
                     }
                 }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
                 return;
@@ -1882,7 +1962,7 @@ public class AgentOrchestrator {
                                 depth, executionLog, agentMode, guard);
                     } catch (Exception retryEx) {
                         log.error("Post-compaction retry failed for {}", conversationId, retryEx);
-                        handleStreamErrorTerminal(guard, projectId, userId, retryEx, null);
+                        handleStreamErrorTerminal(guard, projectId, userId, retryEx, null, executionLog);
                     }
                     return;
                 }
@@ -1908,7 +1988,7 @@ public class AgentOrchestrator {
                     return;
                 }
             }
-            handleStreamErrorTerminal(guard, projectId, userId, err, kind);
+            handleStreamErrorTerminal(guard, projectId, userId, err, kind, executionLog);
         }));
 
         // 先完成本地压缩和工具准备，再计模型请求的首字等待时间。
@@ -1954,7 +2034,10 @@ public class AgentOrchestrator {
         log.info("[Round] conv={} depth={} round={} tools={} messages={}",
                 conversationId, depth, guard == null ? -1 : guard.llmRounds, visible.size(), messages.size());
         try {
-            model.generate(messages, visible, handler);
+            // 在途请求的句柄交给本轮的 RunGuard，「停止」才掐得断它（计划 K4 ①）。
+            // trackInflight 自己会补查一次取消标志：请求刚发出、标志恰好落在这两步之间时，
+            // 不补这一下那次请求就永远没人去掐。
+            guard.trackInflight(startGeneration(model, messages, visible, handler));
         } catch (Exception e) {
             // 同步抛错与异步失败共用终态闸：取消看门狗并执行有限重试 / 模型切换。
             handler.onError(e);
@@ -2040,7 +2123,7 @@ public class AgentOrchestrator {
                     depth, executionLog, agentMode, guard);
         } catch (Exception e) {
             log.error("Failover runLoop failed for {}", conversationId, e);
-            handleStreamErrorTerminal(guard, projectId, userId, e, null);
+            handleStreamErrorTerminal(guard, projectId, userId, e, null, executionLog);
         }
         return true;
     }
@@ -2056,11 +2139,16 @@ public class AgentOrchestrator {
      *             （见 useAgentStream.js 的 includes 检测）。不带标记的话前端只能显示英文原文——
      *             断网时那句原文常常只有一个主机名（dev-board#602）。kind 为 null 的路径同样要过
      *             这一遍：重放失败/取消收尾也可能是断网导致的。
+     * @param executionLog 本轮已执行工具的过程卡。<b>必须是真的那一份，不许传 null</b>——
+     *             与 D-01 同源：这条路是「模型先调了几个工具、然后流式出错」的收尾，
+     *             丢掉执行日志的后果和取消那条路一模一样（刷新后历史里只剩用户那条提问，
+     *             而文件其实已经被改过了）。六个调用点作用域里都有它，没有一个需要传 null。
      */
     private void handleStreamErrorTerminal(RunGuard guard, String projectId, Long userId,
-                                           Throwable err, LlmErrorClassifier.Kind kind) {
+                                           Throwable err, LlmErrorClassifier.Kind kind,
+                                           StringBuilder executionLog) {
         String message = LlmErrorClassifier.taggedErrorMessage(kind, err);
-        finishWithError(guard, projectId, userId, "Stream Error: " + message, null);
+        finishWithError(guard, projectId, userId, "Stream Error: " + message, executionLog);
     }
 
     /**
@@ -2172,7 +2260,7 @@ public class AgentOrchestrator {
                             depth, executionLog, agentMode, guard);
                 } catch (Exception retryEx) {
                     log.error("Empty-response retry failed for {}", conversationId, retryEx);
-                    handleStreamErrorTerminal(guard, projectId, userId, retryEx, null);
+                    handleStreamErrorTerminal(guard, projectId, userId, retryEx, null, executionLog);
                 }
             }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
             return;
@@ -2180,7 +2268,8 @@ public class AgentOrchestrator {
         log.error("Empty LLM response persisted after retries for {}", conversationId);
         handleStreamErrorTerminal(guard, projectId, userId,
                 new IllegalStateException(LangText.of("模型连续返回空响应，请稍后重发这条消息",
-                        "The model kept returning empty responses; please resend this message later")), kind);
+                        "The model kept returning empty responses; please resend this message later")),
+                kind, executionLog);
     }
 
     /**

@@ -12,9 +12,16 @@ export default {
   // Stream connection markers (markdown fragments appended to bubble content)
   connectionInterrupted: '*[Connection lost]*',
   // Stop notice (rendered from the separate bubble.stopNotice field, plain text)
-  stopPending: 'Sending stop request…',
+  // "Stopping" is the wording until the cancelled event arrives: we cannot promise
+  // the provider stops billing the moment the request is dropped.
+  stopPending: 'Stopping…',
   stopUnconfirmed: 'Local waiting has ended, but the server stop was not confirmed. Check the task status after reconnecting.',
-  stopRequested: 'Stop requested',
+  // The request went out but no server confirmation came back (usually this stream died too)
+  stopRequested: 'Stop requested, no server confirmation received',
+  // The cancelled event arrived: this run really did stop
+  stopConfirmed: 'Generation stopped',
+  // The run had already finished on its own when Stop was pressed (/cancel returned cancelled=false)
+  stopAlreadyFinished: 'This run had already finished; there was nothing to stop',
   // Re-entrancy guard toast on send
   alreadyStreamingToast: 'AI is still running. Wait for it to finish or click Stop.',
   // Error messages

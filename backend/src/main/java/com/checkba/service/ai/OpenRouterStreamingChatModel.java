@@ -144,7 +144,22 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     @Override
     public void generate(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
                          StreamingResponseHandler<AiMessage> handler) {
-        send(messages, toolSpecifications, null, handler);
+        generateTracked(messages, toolSpecifications, handler);
+    }
+
+    /**
+     * 聊天主链路的流式生成：与 {@link #generate(List, List, StreamingResponseHandler)}
+     * <b>完全同一条路</b>，唯一的差别是把在途的 okhttp {@link Call} 交回给调用方。
+     *
+     * <p>没有它「停止」就只是一个布尔（计划 K4 / 审计 C-03）：上游会把这一轮生成完，
+     * 输出 token 全额计费（平台通道花平台的钱，BYOK 花用户的钱，思考型模型尤其贵），
+     * 而且被放弃的那次 AsyncCall 一直占着 Dispatcher 的请求槽位直到上游自己写完。
+     * {@code StreamingChatLanguageModel} 接口给不出返回值，所以只能另开这个口子；
+     * 编排器按 {@code instanceof} 分派，拿不到句柄的通道（本地 Ollama、脚本模型）行为不变。
+     */
+    public Call generateTracked(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
+                                StreamingResponseHandler<AiMessage> handler) {
+        return send(messages, toolSpecifications, null, handler);
     }
 
     private Call send(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,

@@ -223,8 +223,13 @@ public class AiAgentController {
         log.info("Cancel request received: conv={}, user={}", conversationId, userId);
         
         try {
-            agentOrchestrator.setCancelled(conversationId);
-            return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"Cancellation requested\"}");
+            // cancelled=false 表示「没打中任何活跃轮次」——那一轮恰好自己收尾了。
+            // 这不是错误（不能回 404：前端的错误分支会写成「未能确认后台停止」，更吓人），
+            // 但也不能像以前那样恒回 ok 让前端写「已发送停止指令」——那会把
+            // 「停止根本没生效」这类真实失效一起掩盖掉（审计 D-10）。
+            boolean cancelled = agentOrchestrator.setCancelled(conversationId);
+            return ResponseEntity.ok().body("{\"status\":\"ok\", \"cancelled\":" + cancelled
+                    + ", \"message\":\"Cancellation requested\"}");
         } catch (Exception e) {
             log.error("Cancel failed", e);
             return ResponseEntity.status(500).body("{\"status\":\"error\", \"message\":\"Cancel failed\"}");
