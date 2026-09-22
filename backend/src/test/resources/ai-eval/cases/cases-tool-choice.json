@@ -20,6 +20,7 @@
       "law_search": "《中华人民共和国公司法》第八十八条：股东转让已认缴出资但未届出资期限的股权的，由受让人承担缴纳该出资的义务……"
     },
     "expect": {
+      "allowUnresolvedTools": true,
       "toolCalls": [
         { "name": "search_laws" },
         { "name": "law_search", "argsContain": { "query": "股东出资责任" } }

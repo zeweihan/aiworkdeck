@@ -20,7 +20,8 @@ class NumberingRemovalContractTest {
 
     @Test
     void bothPromptLanguagesExposeRemovalAndVerification() throws Exception {
-        for (String path : new String[]{"prompts/system_prompt.md", "prompts/system_prompt.en.md"}) {
+        // doc_* 工具表自 dev-board#809（K29）起在按客户端能力拼装的 LOWA 片段里，不在基底 prompt
+        for (String path : new String[]{"prompts/tools-lowa.md", "prompts/tools-lowa.en.md"}) {
             try (var in = getClass().getClassLoader().getResourceAsStream(path)) {
                 assertNotNull(in);
                 String prompt = new String(in.readAllBytes(), StandardCharsets.UTF_8);

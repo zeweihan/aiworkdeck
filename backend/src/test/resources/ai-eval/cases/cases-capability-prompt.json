@@ -1,0 +1,253 @@
+[
+  {
+    "id": "capability-none-first-round-is-not-wasted-on-a-missing-tool",
+    "title": "纯对话会话：首轮用的是本会话真有的工具，没有一次 Tool not found（dev-board#809 实测「发现 A」）",
+    "category": "files",
+    "protocol": "native",
+    "clientCapability": "none",
+    "userInput": "帮我总结一下项目里那份合同",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "search_project_files",
+            "arguments": {
+              "fileNamePattern": "合同"
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "read_document",
+            "arguments": {
+              "fileId": "1001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>这份《股权转让协议》共 12 条，核心是……</final>"
+      }
+    ],
+    "toolStubs": {
+      "search_project_files": "[{\"fileId\": 1001, \"name\": \"股权转让协议.docx\"}]",
+      "read_document": "第一条 转让标的……"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "search_project_files"
+        },
+        {
+          "name": "read_document"
+        }
+      ],
+      "offeredToolsInclude": [
+        "search_project_files",
+        "read_document",
+        "extract_file_text",
+        "write_docx",
+        "pdf_inspect",
+        "pptx_inspect_format"
+      ],
+      "offeredToolsExclude": [
+        "doc_list_project_files",
+        "doc_open_file",
+        "sheet_get_overview",
+        "office_get_text",
+        "ref_list",
+        "pdf_highlight",
+        "pptx_apply_format",
+        "text_write_file"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "capability-none-calling-an-editor-tool-burns-a-whole-round",
+    "title": "纯对话会话调 doc_list_project_files 的代价：Tool not found，整轮白烧——这就是提示不该教它的原因（dev-board#809）",
+    "category": "files",
+    "protocol": "native",
+    "clientCapability": "none",
+    "userInput": "帮我总结一下项目里那份合同",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "search_project_files",
+            "arguments": {
+              "fileNamePattern": "合同"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>这份《股权转让协议》共 12 条，核心是……</final>"
+      }
+    ],
+    "toolStubs": {
+      "search_project_files": "[{\"fileId\": 1001, \"name\": \"股权转让协议.docx\"}]"
+    },
+    "expect": {
+      "allowUnresolvedTools": true,
+      "toolCalls": [
+        {
+          "name": "doc_list_project_files"
+        },
+        {
+          "name": "search_project_files"
+        }
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "capability-office-word-first-round-is-not-wasted-on-a-missing-tool",
+    "title": "Word 任务窗格会话：首轮用的是本宿主的 office_*，没有一次 Tool not found（dev-board#809）",
+    "category": "files",
+    "protocol": "native",
+    "clientCapability": "office",
+    "officeHost": "word",
+    "userInput": "帮我把这份合同里的「甲方」都改成「买方」",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "office_search",
+            "arguments": {
+              "query": "甲方"
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "office_replace_batch",
+            "arguments": {
+              "editsJson": "[{\"find\":\"甲方\",\"replace\":\"买方\"}]"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已把全文 12 处「甲方」改为「买方」，均以 Word 修订形式呈现。</final>"
+      }
+    ],
+    "toolStubs": {
+      "office_search": "{\"matches\": 12}",
+      "office_replace_batch": "{\"replaced\": 12, \"failed\": []}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "office_search"
+        },
+        {
+          "name": "office_replace_batch"
+        }
+      ],
+      "offeredToolsInclude": [
+        "office_search",
+        "office_replace_batch",
+        "office_pass_step",
+        "ref_list",
+        "read_document",
+        "pdf_inspect"
+      ],
+      "offeredToolsExclude": [
+        "doc_list_project_files",
+        "doc_find_replace",
+        "office_excel_get_range",
+        "office_ppt_get_slides",
+        "pdf_highlight",
+        "pptx_open_file",
+        "text_write_file"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "capability-lowa-still-gets-the-full-editor-tool-face",
+    "title": "桌面编辑器会话：分段后工具面一个不少，doc_*/sheet_* 照常可用（dev-board#809 的不回归面）",
+    "category": "files",
+    "protocol": "native",
+    "clientCapability": "lowa",
+    "userInput": "打开项目里那份股权转让协议，把「甲方」都改成「买方」",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "doc_find_replace",
+            "arguments": {
+              "findText": "甲方",
+              "replaceText": "买方",
+              "replaceAll": true
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已把全文 12 处「甲方」改为「买方」，均以修订形式呈现。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "[{\"fileId\": 1001, \"name\": \"股权转让协议.docx\"}]",
+      "doc_find_replace": "{\"success\": true, \"replaced\": 12}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_list_project_files"
+        },
+        {
+          "name": "doc_find_replace"
+        }
+      ],
+      "offeredToolsInclude": [
+        "doc_list_project_files",
+        "doc_find_replace",
+        "sheet_create_file",
+        "write_docx",
+        "pdf_highlight",
+        "text_write_file"
+      ],
+      "offeredToolsExclude": [
+        "office_search",
+        "office_replace_batch",
+        "ref_list"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

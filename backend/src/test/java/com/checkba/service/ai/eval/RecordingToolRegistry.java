@@ -22,8 +22,14 @@ import java.util.Optional;
  */
 public class RecordingToolRegistry extends ToolRegistry {
 
-    /** 一次分发记录。resolvedName 是别名解析后的工具名（别名表现已为空，两者通常相同） */
-    public record Dispatch(String rawName, String resolvedName, String argsJson) {
+    /**
+     * 一次分发记录。resolvedName 是别名解析后的工具名（别名表现已为空，两者通常相同）。
+     *
+     * @param found 这次分发有没有解析到工具。false = 模型调了一个本会话里不存在或不可见的工具，
+     *              拿回的是 {@link ToolRegistry#unknownToolMessage} 那句——白烧一整轮
+     *              （dev-board#809 实测「发现 A」的那个形态）。
+     */
+    public record Dispatch(String rawName, String resolvedName, String argsJson, boolean found) {
     }
 
     private final List<Dispatch> dispatches = new ArrayList<>();
@@ -62,10 +68,17 @@ public class RecordingToolRegistry extends ToolRegistry {
     @Override
     public ToolResult execute(String name, String argsJson, ToolContext ctx) {
         String resolved = TOOL_NAME_ALIASES.getOrDefault(name, name);
-        dispatches.add(new Dispatch(name, resolved, argsJson));
-        Optional<RegisteredTool> tool = resolve(resolved);
+        // 会话能力过滤必须和生产走同一条：生产的 ToolRegistry.execute 用的是
+        // resolve(name, conversationId)，能力档下不可见的工具按「不存在」拒绝。
+        // 这里原来调的是单参 resolve(name)，把那一层闸整个跳过了——于是
+        // 「none 会话调 doc_list_project_files」在回放里会拿到桩输出 OK，
+        // 生产里拿到的却是 "Tool not found or arguments invalid."，
+        // 正是 dev-board#809 要治的那个白烧一轮（dev-board#809 / K29）。
+        Optional<RegisteredTool> tool = resolve(resolved, ctx != null ? ctx.conversationId() : null);
+        dispatches.add(new Dispatch(name, resolved, argsJson, tool.isPresent()));
         if (tool.isEmpty()) {
-            // 与生产行为一致：未注册工具返回 found=false，并带上那句指路（审计 A11）
+            // 与生产行为一致：未注册 / 本会话不可见的工具返回 found=false，
+            // 并带上那句指路（审计 A11）
             return new ToolResult(ToolRegistry.unknownToolMessage(resolved), null, false);
         }
         String output = stubs.getOrDefault(resolved, "OK (eval stub)");

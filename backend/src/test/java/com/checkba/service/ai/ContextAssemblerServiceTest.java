@@ -682,8 +682,9 @@ class ContextAssemblerServiceTest {
         assertTrue(systemText.contains("office_get_text"), "应指引用 office_* 工具读取");
         assertTrue(systemText.contains("office_set_paragraph_format"), "活跃文档段应点名排版工具");
         assertTrue(systemText.contains("office_set_numbering"), "活跃文档段应点名自动编号工具");
-        // 基底 system_prompt.md 里仍有 doc_* 工具表（会话工具过滤才是硬闸门），
-        // 这里只断言活跃文档段自身的 LOWA 口径语句没有出现
+        // 这里断言的是活跃文档段自身的 LOWA 口径语句没有出现。
+        // （doc_* 工具表自 dev-board#809 / K29 起也不在基底 prompt 里了，整段提示一个 doc_ 都没有——
+        //  那一条由 toolGuidanceIsSplicedPerClientCapability 断言，不在本用例的范围内。）
         assertFalse(systemText.contains("**无需也不要**调用"), "活跃文档段不应再是 doc_* 口径");
     }
 
@@ -1283,5 +1284,86 @@ class ContextAssemblerServiceTest {
         String stableSecond = second.substring(0, second.indexOf(sep));
         assertEquals(stableFirst, stableSecond,
                 "标记之前只要差一个字节，Anthropic/Qwen 就整段重新写缓存");
+    }
+
+    // ==== 系统提示按客户端能力分段（dev-board#809 / K29）====
+    // 基底 prompt 只留与能力无关的通用规则，文档工具指引按能力拼片段。
+    // 「片段里的工具在那一档真的可见」由 SystemPromptToolVisibilityContractTest 逐名钉住；
+    // 这里钉的是**拼装本身**：占位标记被消掉、拼进去的是对的那一份、而且仍在稳定段里。
+
+    @Test
+    @DisplayName("三档能力拿到三份不同的工具指引，占位标记一律不留给模型")
+    void toolGuidanceIsSplicedPerClientCapability() {
+        capabilityService.record("conv-1", "lowa");
+        String lowa = assembleSystemText(null);
+        capabilityService.record("conv-1", "none");
+        String none = assembleSystemText(null);
+        capabilityService.record("conv-1", "office", "word");
+        String office = assembleSystemText(null);
+
+        for (String systemText : new String[] {lowa, none, office}) {
+            assertFalse(systemText.contains(ContextAssemblerService.TOOL_GUIDANCE_PLACEHOLDER),
+                    "占位标记必须被片段替换掉，不能原样发给模型");
+        }
+
+        // LOWA 保持现状：仍然教嵌入式编辑器那一整套
+        assertTrue(lowa.contains("doc_get_document_text"), "lowa 会话应仍教 doc_* 读取原语");
+        assertTrue(lowa.contains("sheet_get_overview"), "lowa 会话应仍教 sheet_* 原语");
+
+        // 实测「发现 A」的病灶：none 会话曾被教 doc_list_project_files，每轮白烧一次 Tool not found
+        assertFalse(none.contains("doc_"), "纯对话会话的系统提示里一个 doc_ 都不该有");
+        assertFalse(none.contains("sheet_"), "纯对话会话的系统提示里不该有 sheet_");
+        assertFalse(none.contains("office_"), "纯对话会话的系统提示里不该有 office_");
+        assertTrue(none.contains("read_document"), "none 会话仍要知道怎么读项目文件");
+
+        // Office 会话教的是本宿主的 office_*，不教嵌入式编辑器那一套
+        assertTrue(office.contains("office_replace_batch"), "word 会话应教批量替换");
+        assertFalse(office.contains("doc_get_document_text"), "word 会话不该被教 doc_* 读取原语");
+        assertFalse(office.contains("office_excel_"), "word 会话不该被教 Excel 面的工具");
+    }
+
+    @Test
+    @DisplayName("Office 三宿主各拿各的片段，不会拿到别的宿主那一份")
+    void officeHostsGetTheirOwnFragment() {
+        capabilityService.record("conv-1", "office", "excel");
+        String excel = assembleSystemText(null);
+        capabilityService.record("conv-1", "office", "powerpoint");
+        String ppt = assembleSystemText(null);
+
+        assertTrue(excel.contains("office_excel_get_overview"), "excel 会话应教 office_excel_*");
+        assertFalse(excel.contains("office_ppt_"), "excel 会话不该被教 PowerPoint 面的工具");
+        assertTrue(ppt.contains("office_ppt_get_slides"), "powerpoint 会话应教 office_ppt_*");
+        assertFalse(ppt.contains("office_excel_"), "powerpoint 会话不该被教 Excel 面的工具");
+    }
+
+    @Test
+    @DisplayName("片段拼在稳定段里：分段之后缓存前缀仍然逐字节稳定")
+    void splicedToolGuidanceStaysInsideTheCacheableStablePrefix() {
+        capabilityService.record("conv-1", "none");
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+
+        String first = assembleSystemText(null);
+        String second = assembleSystemText(null);
+        String stableFirst = first.substring(0, first.indexOf(sep));
+
+        assertTrue(stableFirst.contains("# 文档工具（按本会话的客户端能力）"),
+                "片段必须落在标记之前，否则它每轮都要重新写进缓存");
+        assertEquals(stableFirst, second.substring(0, second.indexOf(sep)),
+                "拼片段不能引入任何逐轮变化的内容");
+    }
+
+    @Test
+    @DisplayName("英文会话拿英文片段，且不掺中文")
+    void englishSessionsGetTheEnglishFragment() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        capabilityService.record("conv-1", "none");
+
+        String systemText = assembleSystemText(null);
+
+        assertTrue(systemText.contains("# Document Tools (for this session's client)"),
+                "英文会话应拼英文片段");
+        assertFalse(systemText.contains("# 文档工具（按本会话的客户端能力）"),
+                "英文会话不该同时拼进中文片段");
+        assertFalse(systemText.contains("doc_"), "英文纯对话会话同样不该出现 doc_");
     }
 }

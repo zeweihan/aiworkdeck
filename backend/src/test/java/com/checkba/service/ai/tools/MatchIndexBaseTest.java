@@ -153,10 +153,12 @@ class MatchIndexBaseTest {
     @Test
     @DisplayName("system prompt（中/英）工具表的 doc_find_text 一行同样点明 matchIndex 1 基")
     void systemPromptFindTextRowStatesOneBasedMatchIndex() throws Exception {
-        String zh = readResource("prompts/system_prompt.md");
-        String en = readResource("prompts/system_prompt.en.md");
-        assertTrue(zh.contains("matchIndex（序号，从 1 开始"), "system_prompt.md 的 doc_find_text 一行缺 matchIndex 1 基说明");
-        assertTrue(en.contains("matchIndex (1-based"), "system_prompt.en.md doc_find_text row lacks the 1-based matchIndex note");
+        // doc_* 工具表自 dev-board#809（K29）起不在基底 prompt 里，而在按客户端能力拼装的
+        // LOWA 片段里——基底是三档能力共用的，不能点名只有桌面编辑器会话才有的工具
+        String zh = readResource("prompts/tools-lowa.md");
+        String en = readResource("prompts/tools-lowa.en.md");
+        assertTrue(zh.contains("matchIndex（序号，从 1 开始"), "tools-lowa.md 的 doc_find_text 一行缺 matchIndex 1 基说明");
+        assertTrue(en.contains("matchIndex (1-based"), "tools-lowa.en.md doc_find_text row lacks the 1-based matchIndex note");
     }
 
     private static String readResource(String path) throws Exception {
