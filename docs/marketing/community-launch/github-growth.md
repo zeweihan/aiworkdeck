@@ -305,3 +305,13 @@ GitHub，账号新、零粉丝、零仓库，画像与农场号重合，按画�
 3. 会后 24 小时内跟进一次。
 
 物料可复用于律协、法学院、律所内训；六周计划里的 45 分钟 PPT 按本次实讲内容改通用版。
+
+### GitHub Support 工单（2026-09-22 提交）
+
+- 工单号 **#4780225**，标题 "Cannot open pull requests to any external repository from my account"，
+  Open / Normal，提交人 zeweihan（hanzewei@gmail.com）。
+- 分类走 Repositories → Repository access issues → issue type 选 **Errors, problems**（非 General question，后者排队更慢）。
+- 提交前 GitHub 的自助答复已独立确认同一结论：症状超出仓库级互动限制，账号级限制无自助查看或解除途径，必须人工审核。
+- 正文要点：两条失败示例与原始报错、09-04 起始时间、fork 内 PR 成功的对照、目标仓 interactionAbility 为 null、
+  09-03 旧 PR 仍可按 URL 打开但不进公开索引，并主动说明刷星非我方所为及 09-03 律协讲座带来真实新注册用户。
+- 等待期间：暂停全部外部榜单提交；条目与分支保留在 fork 的 add-ai-workdeck 上。
