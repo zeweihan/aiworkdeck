@@ -261,7 +261,7 @@
           :class="msg.role.toLowerCase()"
         >
           <!-- User Message -->
-          <div v-if="msg.role === 'USER'" class="user-bubble">
+          <div v-if="msg.role === 'USER'" class="user-bubble" :class="{ 'is-unread': msg.receiptState === 'pending' }">
             <!-- Image Thumbnails (above message) -->
             <view v-if="msg.images && msg.images.length > 0" class="user-bubble-images">
                <image v-for="(img, idx) in msg.images" :key="idx" :src="img.path" mode="aspectFill" class="bubble-image-thumb" />
@@ -285,6 +285,10 @@
                  </div>
                  <text class="rollback-text">{{ $t('chat.rollbackBtn') }}</text>
               </view>
+              <!-- 送达状态（dev-board#779 K7②）：判据只从 receiptState / submissionMode 取，
+                   不另起一份状态。AI 正在跑工具时插话，消息立刻以普通气泡出现，和一条
+                   模型已经读过的消息长得一模一样——真正被读取要等到下一个工具边界。 -->
+              <span v-if="receiptLabel(msg)" class="bubble-receipt" :class="{ 'is-pending': msg.receiptState === 'pending' }">{{ receiptLabel(msg) }}</span>
               <span v-if="msg.timestamp" class="bubble-timestamp user">{{ msg.timestamp }}</span>
             </div>
           </div>
@@ -546,10 +550,12 @@
        </view>
        <AgentInbox
          :items="pendingInbox"
+         :stream-ids="inboxStreamIds"
          @edit="handleInboxEdit"
          @delete="handleInboxDelete"
          @move="handleInboxMove"
          @send-now="handleInboxSendNow"
+         @locate="handleInboxLocate"
        />
        <view class="input-card">
           <view v-if="isDragging" class="drop-overlay">
@@ -730,6 +736,7 @@ import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
 import { componentDownloads } from '@/services/componentDownloads.js'
 import { createComponentRequiredHandler, shouldAutoResend } from '@/composables/useComponentRequired.js'
 import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
+import { saveLastConversation } from '@/utils/lastConversation.js'
 import {
   beginChatSubmission,
   failChatSubmission,
@@ -966,6 +973,12 @@ export default {
       syncAttentionLocator()
     }
     watch(currentConversationId, () => { followLatest.value = true })
+    // 刷新后回到上次那段对话（dev-board#779 K7④）：会话 id 归本组件所有——新会话是
+    // handleSubmit 现造的，工作台页那边的 currentConversationId 只在点历史时才更新，
+    // 所以写在这里、读在工作台。清空（点了「新对话」）即抹掉记录。
+    // 刻意不加 immediate：挂载那一刻 currentConversationId 还是 null，立刻回写会把
+    // 工作台正要读的那条记录当场抹掉——恢复永远不会发生，而且一点报错都没有。
+    watch(currentConversationId, (id) => saveLastConversation(uni, props.projectId, id))
 
     const isDragging = ref(false)
 
@@ -1772,9 +1785,11 @@ export default {
     // 停止本轮生成：仍走既有 abort（POST /api/agent/cancel/{cid} + 断前端连接），
     // 这里只补一句诚实的提示。慢工具（dispatch_subtask 能跑 630 秒、AI PPT 十几分钟）
     // 中间的取消响应点已由编排器在每个工具前检查 isCancelled 提供。
+    // 返回 abort 的 promise：菜单栏那条「停止当前任务」要等它真发完取消请求再去收
+    // 后台任务，两个入口必须是同一条路（menuStop 复用本函数）。
     const handleAbort = () => {
       uni.showToast({ title: t('chat.abortToast'), icon: 'none' })
-      abort()
+      return abort()
     }
 
     const toggleFollowUpMode = () => {
@@ -1796,6 +1811,40 @@ export default {
       updateInbox(item.id, { position, expectedRevision: item.revision }))
     const handleInboxSendNow = (item) => inboxAction(() =>
       updateInbox(item.id, { submissionMode: 'steer', expectedRevision: item.revision }))
+
+    /**
+     * 用户气泡下那行送达状态（dev-board#779 K7②）。
+     *
+     * 判据只有 receiptState / submissionMode 这两个既有字段，不另起一份状态机。
+     * 只有「曾经排过队」的插话在被读取后才报「已送达」：普通消息发出去就是 applied，
+     * 每条下面都挂一行回执只是噪音。历史回灌出来的气泡没有 receiptState，自然无角标。
+     */
+    const receiptLabel = (msg) => {
+      if (!msg || msg.role !== 'USER') return ''
+      if (msg.receiptState === 'pending') {
+        return msg.submissionMode === 'queue' ? t('chat.receiptPendingQueued') : t('chat.receiptPendingSteer')
+      }
+      return msg.wasPendingInbox && msg.receiptState === 'applied' ? t('chat.receiptApplied') : ''
+    }
+
+    // 待处理区与对话流的关联（dev-board#779 K7③）：正文留在对话流（那是阅读主场，
+    // 这条被读取后待处理区就消失了，正文只放在那里等于一读即丢），待处理区退成引用行
+    // ——它是操作台（编辑/排序/立即发送/删除），就在输入框上方，越矮越好。
+    // 这里只告诉 AgentInbox 哪几条在流里已经有完整气泡了。
+    const inboxStreamIds = computed(() => bubbles.value
+      .filter((b) => b.role === 'USER' && b.inboxMessageId)
+      .map((b) => b.inboxMessageId))
+    const handleInboxLocate = (item) => {
+      const index = bubbles.value.findIndex((b) => b.role === 'USER' && b.inboxMessageId === item.id)
+      if (index < 0) return
+      const row = navigateToMessage({ index })
+      if (!row) return
+      // 滚到位还不够：长会话里自己那条插话和上下文长得一样，不闪一下仍要自己找
+      // （同 jumpToAttention 的手法，闪的类名不同是因为那套样式在 RootBubble 的
+      // scoped style 里，这里闪的是 ChatInterface 自己渲染的 .message-row）。
+      row.classList.add('chat-inbox-flash')
+      setTimeout(() => row.classList.remove('chat-inbox-flash'), 1600)
+    }
 
     // 只列还在跑的：已完成/失败的条目留在浮窗里供用户核对结果，控制条不该再给停止按钮
     const runningTasks = computed(() =>
@@ -2582,11 +2631,23 @@ export default {
       selectMode(m)
       return true
     }
-    /** 停止：取消所有在跑的后台任务。没有在跑的就什么都不做（菜单那条已置灰）。 */
+    /**
+     * 停止：先停掉正在生成的那一轮 AI，再取消所有在跑的后台任务。
+     *
+     * 菜单项的置灰判据 `aiRunning` 把流式生成也算作「在跑」（见下面的 menuState），
+     * 所以这里必须真能停下 AI。此前只遍历 runningTasks，于是最常见的那一种情形
+     * ——AI 正在生成、没有任何后台任务——菜单是亮的、点得下去，循环却零次，
+     * 模型照样在跑、在改文档、在烧 token，而用户以为自己已经停了。
+     *
+     * 停 AI 走 handleAbort（输入区那个停止键用的同一条路，附带那句诚实的提示）。
+     * @returns {Promise<number>} 实际停掉的条数：AI 轮次算 1，加上取消掉的后台任务数。
+     */
     const menuStop = async () => {
+      const stoppedAi = isStreaming.value
+      if (stoppedAi) await handleAbort()
       const list = runningTasks.value.slice()
       for (const t of list) await handleCancelTask(t)
-      return list.length
+      return (stoppedAi ? 1 : 0) + list.length
     }
     /** 菜单读勾选/置灰用的状态快照。全是布尔或短枚举，不放计数器。 */
     const menuState = () => ({
@@ -2625,6 +2686,7 @@ export default {
        tokenUsage,
        messageList, messageContent, chatTurns,
        followLatest, handleMessageScroll, scrollToBottom, attentionNotice, jumpToAttention,
+       receiptLabel, inboxStreamIds, handleInboxLocate,
        isDragging,
        contextFiles,
        pastedImages,
@@ -3017,6 +3079,34 @@ export default {
   /* margin-top: 4px; */
 }
 .user-bubble .bubble-timestamp { text-align: right; }
+
+/* 送达状态（dev-board#779 K7②）：模型还没读到的插话先淡一档，让它和已经被读过的
+   消息一眼分得开；一行小字说明它在等什么。浅色外壳不变，只降不透明度。 */
+.user-bubble.is-unread {
+  opacity: 0.62;
+  border-style: dashed;
+}
+.bubble-receipt {
+  margin-right: 8px;
+  font-size: 11px;
+  color: var(--awd-text-3);
+  white-space: nowrap;
+}
+.bubble-receipt.is-pending { color: var(--awd-text-2); }
+
+/* 从待处理区「在对话中查看」跳过来时闪一下（K7③）。跳转目标是 .message-row，
+   由本组件渲染，所以样式必须写在这里——RootBubble 那套 chat-attention-flash
+   的 scoped 选择器匹配不到这一层。 */
+.message-row.chat-inbox-flash .user-bubble {
+  animation: chat-inbox-flash 1.6s ease-out;
+}
+@keyframes chat-inbox-flash {
+  0%, 60% { box-shadow: 0 0 0 2px var(--awd-accent); }
+  100% { box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-row.chat-inbox-flash .user-bubble { animation: none; box-shadow: 0 0 0 2px var(--awd-accent); }
+}
 
 /* Empty State & Input Styles */
 .empty-flow-container {

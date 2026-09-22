@@ -6,7 +6,7 @@
       <text class="agent-inbox-title">{{ $t('chat.inboxTitle') }}</text>
       <text class="agent-inbox-count">{{ items.length }}</text>
     </view>
-    <view v-for="(item, index) in items" :key="item.id" class="agent-inbox-row">
+    <view v-for="(item, index) in items" :key="item.id" class="agent-inbox-row" :class="{ 'is-quote': inStream(item) }">
       <view class="agent-inbox-main">
         <input
           v-if="editingId === item.id"
@@ -18,6 +18,7 @@
           @confirm="saveEdit(item, $event)"
         />
         <text v-else class="agent-inbox-message">{{ item.displayText || item.message }}</text>
+        <text v-if="inStream(item)" class="inbox-action locate" @tap="$emit('locate', item)">{{ $t('chat.inboxInStream') }}</text>
         <text class="agent-inbox-mode">{{ item.submissionMode === 'steer' ? $t('chat.inboxSteer') : $t('chat.inboxQueued') }}</text>
       </view>
       <view class="agent-inbox-actions">
@@ -35,14 +36,21 @@
 <script>
 export default {
   name: 'AgentInbox',
-  emits: ['edit', 'delete', 'move', 'send-now'],
+  emits: ['edit', 'delete', 'move', 'send-now', 'locate'],
   props: {
     items: { type: Array, default: () => [] },
+    // 这条插话在对话流里已经有完整气泡了（dev-board#779 K7③）。同一句话同时出现在
+    // 对话流和输入框上方，没有任何视觉关联，第一次用的人会以为发重了。正文留在对话流，
+    // 这里退成一行引用 + 一个跳过去的入口——这一行本来就是单行省略号形态。
+    streamIds: { type: Array, default: () => [] },
   },
   data() {
     return { editingId: null, editText: '' }
   },
   methods: {
+    inStream(item) {
+      return !!item && this.streamIds.includes(item.id)
+    },
     beginEdit(item) {
       this.editingId = item.id
       this.editText = item.message || ''
@@ -72,6 +80,10 @@ export default {
 .agent-inbox-count { min-width: 18px; padding: 1px 5px; border-radius: 9px; background: var(--awd-accent-soft); color: var(--awd-accent-text); font-size: 10px; text-align: center; }
 .agent-inbox-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 0; border-top: 1px solid var(--awd-border-subtle); }
 .agent-inbox-row:first-of-type { border-top: 0; }
+/* 引用行：对话流里已经有完整气泡的那条，这里只给一条竖线 + 截断正文（K7③） */
+.agent-inbox-row.is-quote .agent-inbox-main { padding-left: 6px; border-left: 2px solid var(--awd-border); }
+.agent-inbox-row.is-quote .agent-inbox-message { color: var(--awd-text-2); }
+.inbox-action.locate { flex-shrink: 0; color: var(--awd-accent-text); }
 .agent-inbox-main { min-width: 0; flex: 1 1 130px; display: flex; align-items: center; gap: 6px; }
 .agent-inbox-message { min-width: 0; flex: 1; color: var(--awd-text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-inbox-mode { flex-shrink: 0; color: var(--awd-text-3); font-size: 10px; }

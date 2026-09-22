@@ -208,7 +208,17 @@ export function useAgentStream() {
         displayContent: displayContent || '',
         contentHtml: contentHtml, // HTML with inline file tags for display
         images: images,
-        contextFiles: contextFiles
+        contextFiles: contextFiles,
+        // 送达状态（dev-board#779 K7②）。预声明才是响应式的——运行时才挂上去的字段
+        // Vue 3 追踪不到，角标会渲染成「第一次对、之后再也不变」。
+        // inboxMessageId/clientRequestId 是对账用的定位键，receiptState/submissionMode
+        // 是渲染判据，wasPendingInbox 记住「这条曾经排过队」（只有排过队的才值得报
+        // 「已送达」，否则每条普通消息下面都挂一行噪音）。
+        inboxMessageId: null,
+        clientRequestId: null,
+        receiptState: '',
+        submissionMode: '',
+        wasPendingInbox: false
     })
 
     const resetInboxState = () => {
@@ -360,12 +370,40 @@ export function useAgentStream() {
     const canApplyInboxResponse = (request) => isCurrentInboxRequest(request)
         && inboxState.eventEpoch === request.eventEpoch
 
+    // 待处理项与对话流气泡对账（dev-board#779 K7①）。
+    //
+    // 病灶：在待处理区删掉一条插话，对话流里那条用户气泡还在——用户看到的是
+    // 「删了个寂寞」，甚至以为自己发重了。删除是这条消息离开 inbox 的唯一出口：
+    // 后端 snapshot() 只过滤 DELETED，applied 的条目仍然留在 items 里（state='applied'），
+    // 所以「气泡还标着 pending、而它的 id 已经不在快照里」等价于「它被删了」。
+    //
+    // 只摘 pending 的：已经 applied 的插话模型真读过，它属于这段对话的事实历史，
+    // 再怎么整理待处理区都不该把它从记录里抹掉（长期原则 1：永不静默销毁用户数据）。
+    // 历史回灌出来的气泡没有 inboxMessageId，天然不受影响。
+    const pruneRemovedInboxBubbles = () => {
+        const alive = new Set(inboxState.items.map((entry) => entry.id).filter(Boolean))
+        for (let i = bubbles.value.length - 1; i >= 0; i -= 1) {
+            const bubble = bubbles.value[i]
+            if (bubble.role !== 'USER' || !bubble.inboxMessageId) continue
+            if (bubble.receiptState !== 'pending') continue
+            if (alive.has(bubble.inboxMessageId)) continue
+            bubbles.value.splice(i, 1)
+        }
+    }
+
+    // 快照是权威的：凡是整表覆写 inbox 的地方都走这里，别再直接调 applyInboxSnapshot——
+    // 漏一处就是「另一个标签页/插件端删了条目，这边气泡还挂着」。
+    const syncInboxSnapshot = (snapshot) => {
+        applyInboxSnapshot(inboxState, snapshot || {})
+        pruneRemovedInboxBubbles()
+    }
+
     const restoreInbox = async (conversationId) => {
         if (!conversationId || currentConversationId.value !== conversationId) return
         const request = captureInboxRequest(conversationId)
         try {
             const snapshot = await getAgentInbox(conversationId)
-            if (canApplyInboxResponse(request)) applyInboxSnapshot(inboxState, snapshot || {})
+            if (canApplyInboxResponse(request)) syncInboxSnapshot(snapshot)
         } catch (e) {
             console.warn('[AgentStream] Failed to restore inbox:', e)
         }
@@ -550,6 +588,7 @@ export function useAgentStream() {
         bubble.clientRequestId = entry.clientRequestId || bubble.clientRequestId || null
         bubble.receiptState = entry.state
         bubble.submissionMode = entry.submissionMode
+        if (entry.state === 'pending') bubble.wasPendingInbox = true
         bubble.content = entry.message
         bubble.displayContent = entry.displayText || ''
         return bubble
@@ -735,6 +774,7 @@ export function useAgentStream() {
                     optimistic.inboxMessageId = receipt.messageId
                     optimistic.receiptState = receipt.state
                     optimistic.submissionMode = receipt.submissionMode
+                    if (receipt.state === 'pending') optimistic.wasPendingInbox = true
                 }
             }
             return receipt
@@ -883,7 +923,7 @@ export function useAgentStream() {
             try {
                 const snapshot = JSON.parse(dataStr)
                 markInboxEvent(inboxState)
-                applyInboxSnapshot(inboxState, snapshot || {})
+                syncInboxSnapshot(snapshot)
             } catch (e) {
                 console.error('Failed to parse inbox_updated', e)
             }
@@ -2091,8 +2131,11 @@ export function useAgentStream() {
         try {
             const snapshot = await deleteAgentInboxItem(conversationId, messageId, expectedRevision)
             if (!canApplyInboxResponse(request)) return
-            if (snapshot && Array.isArray(snapshot.items)) applyInboxSnapshot(inboxState, snapshot)
-            else removeInboxItem(inboxState, messageId)
+            if (snapshot && Array.isArray(snapshot.items)) syncInboxSnapshot(snapshot)
+            else {
+                removeInboxItem(inboxState, messageId)
+                pruneRemovedInboxBubbles()
+            }
         } catch (e) {
             if (e && e.status === 409 && isCurrentInboxRequest(request)) await restoreInbox(conversationId)
             throw e

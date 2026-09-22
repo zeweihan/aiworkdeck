@@ -2279,6 +2279,7 @@ import { fitPanelWidths } from './panelWidthLimits.js'
 import { panelDockingData, panelDockingMethods } from './panelDocking.js'
 import { railSortData, railSortMethods } from './railSort.js'
 import { loadSidebarCollapsed, saveSidebarCollapsed } from './sidebarCollapse.js'
+import { loadLastConversation } from '@/utils/lastConversation.js'
 import { themeSwitchData, themeSwitchMethods, themeSwitchComputed } from './themeSwitch.js'
 import { fileOpenTabsMethods } from './fileOpenTabs.js'
 import { useDocumentMerge } from '@/composables/useDocumentMerge.js'
@@ -2475,6 +2476,9 @@ export default {
       loadingHistory: false,
       chatHistoryList: [],
       currentConversationId: null, // Added for tracking current session
+      // 刷新后只试一次「回到上次那段对话」（dev-board#779 K7④）。之后用户自己
+      // 新开/切换的会话不再被抢占——关掉面板再打开不该把人拽回旧会话。
+      restoredLastConversation: false,
       // 插件镜像会话只读态（dev-board#298）：当前会话的 sourceChannel（null=本地可写）。
       // 状态跟着会话走：loadHistoryChat/startNewChat 都会重设，不做全局粘住。
       pluginReadOnlySource: null,
@@ -3354,6 +3358,8 @@ export default {
       // 与上面 openFileId 同一手法，不另造一套时序。
       if (query.conversationId) {
         const pendingConversationId = String(query.conversationId)
+        // 深链指定了会话：它赢过「恢复上次」，否则两条路会同时调 loadHistoryChat
+        this.restoredLastConversation = true
         if (!this.showAiPanel) this.toggleAiPanel()
         setTimeout(() => this.loadHistoryChat({ conversationId: pendingConversationId }), 600)
       }
@@ -4089,6 +4095,7 @@ export default {
     /** 概览标签里点某条历史对话：已经在工作台里了，就地切会话，不跳页 */
     openConversationInPanel(conversationId) {
       if (!conversationId) return
+      this.restoredLastConversation = true // 指定了要开哪一条，别让恢复再抢一次
       const wasOpen = this.showAiPanel
       if (!wasOpen) this.toggleAiPanel()
       // loadHistoryChat 要 $refs.chatInterface；面板刚打开时它还没挂上，
@@ -4551,6 +4558,7 @@ export default {
      * 上限 ~3s（30 × 100ms）：比固定 600ms 宽容，又不会在真出问题时把人挂住。
      */
     async resolveChatInterface() {
+      this.restoredLastConversation = true // 马上要往当前会话发 prompt，不能中途被换掉
       if (!this.showAiPanel) this.toggleAiPanel()
       // 右侧面板可能停着别的面板（dev-board#180）：要发 prompt 就得先切回对话 tab，
       // 否则消息发出去了、用户看着的还是变量库
@@ -5493,8 +5501,42 @@ export default {
           this.refreshAiContextPreview()
           // Auto-load recent chat history when panel opens
           this.fetchChatHistory()
+          // 刷新后第一次打开面板 = 恢复上次那段对话的唯一时机（dev-board#779 K7④）：
+          // 面板默认收起且 ChatInterface 挂在 v-if 上，onLoad 时它还不存在。
+          this.restoreLastConversation()
         }
       })
+    },
+
+    /**
+     * 刷新后回到上次那段对话（dev-board#779 K7④）。
+     *
+     * 病灶（实测 t4-after-reload.png）：打断一次、刷新一次，回来就是一段空会话，
+     * 刚才那段上下文只能自己去历史抽屉里翻。
+     *
+     * 三条闸，缺一条都会变成「把人拽到不想去的地方」：
+     *   1. 每个页面实例只试一次（restoredLastConversation），关掉面板再打开不再恢复；
+     *   2. 会话必须还在这个项目的列表里（已删除/换账号/存量脏值一律静默放弃）；
+     *   3. 等待期间用户已经自己开了一段就让开，绝不覆盖正在进行的会话。
+     * 全程不弹任何提示：恢复是便利，失败就是今天的行为，不该用报错打扰人。
+     */
+    async restoreLastConversation() {
+      if (this.restoredLastConversation) return
+      this.restoredLastConversation = true
+      const conversationId = loadLastConversation(uni, this.projectId)
+      if (!conversationId) return
+      if (!this.chatHistoryList.length) await this.fetchChatHistory(true)
+      if (!this.chatHistoryList.some((c) => c.conversationId === conversationId)) return
+      if (this.currentConversationId) return
+      // loadHistoryChat 要 $refs.chatInterface：面板刚打开时它还没挂上。有界轮询
+      // （同 resolveChatInterface 的手法，上限 ~3s），等不到就静默放弃。
+      for (let i = 0; i < 30; i++) {
+        if (this.$refs.chatInterface && this.$refs.chatInterface.loadMessages) break
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      if (!this.$refs.chatInterface || !this.$refs.chatInterface.loadMessages) return
+      if (this.currentConversationId) return
+      await this.loadHistoryChat({ conversationId })
     },
 
     toggleToolsPanel() {
