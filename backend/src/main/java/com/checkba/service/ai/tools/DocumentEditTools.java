@@ -59,6 +59,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 文件管理工具 ====================
 
+    @ToolMeta(displayName = "列出可编辑文档", category = "document")
     @Tool("文件树里可编辑文档的权威清单，也是文件 ID 的主要来源：doc_open_file、extract_file_text 的 fileId，"
             + "以及 rename_project_file / move_project_file / create_folder 的 fileId 与 parentFolderId 都从这里取。"
             + "不含 PDF（用 pdf_list_files）与文件夹（用 list_project_folders）；只要物理路径不要 ID 才用 list_files。"
@@ -93,6 +94,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "打开文档", category = "document")
     @Tool("打开指定文档进行编辑。文档会在编辑器中打开，之后可以使用其他文档编辑工具进行操作。")
     public String doc_open_file(
             @P("文件ID（从 doc_list_project_files 获取）") Long fileId
@@ -226,6 +228,7 @@ public class DocumentEditTools implements AgentToolComponent {
         return folder.getId();
     }
 
+    @ToolMeta(displayName = "流式写入文档", category = "document", fileEffect = "MODIFIED")
     @Tool("开始实时流式写入文档。使用此工具后，模型生成的后续内容将直接写入打开的文档中。" +
           "**重要：创建新文件时必须提供 fileName 和 projectId 参数。** " +
           "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID，再作为 parentFolderId 传进来；" +
@@ -323,6 +326,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 选区和光标操作 ====================
 
+    @ToolMeta(displayName = "读取选区", category = "document")
     @Tool("获取文档中当前选区的文本内容和位置信息。用于了解用户当前光标位置和选中的文本。")
     public String doc_get_selection() {
         log.info("Tool: doc_get_selection called");
@@ -337,6 +341,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // 只宣告编辑器真的实现了的两种：office_thread.js 的 goto() 只处理 start/end，
     // paragraph/bookmark/line 一律返回 "goto type not supported yet"。
     // 描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算。
+    @ToolMeta(displayName = "跳转光标", category = "document")
     @Tool("把光标移到文档开头或结尾。只支持 start/end；要定位到某一段用 doc_select_paragraph，"
           + "要定位到某处文本用 doc_find_text 拿 anchorId 再 doc_select_anchor。")
     public String doc_goto(
@@ -353,6 +358,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "设置选区", category = "document")
     @Tool("设置文档的选区范围（精确控制光标/选区）。Start 和 End 是字符索引位置。")
     public String doc_set_selection(
             @P("选区开始位置 (0-based 字符索引)") Integer start,
@@ -370,6 +376,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 查找和替换 ====================
 
+    @ToolMeta(displayName = "查找定位", category = "document")
     @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始，可直接作为 doc_replace_nth_match / doc_delete_match 的 matchIndex）、anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
@@ -420,7 +427,7 @@ public class DocumentEditTools implements AgentToolComponent {
     public String doc_find_replace(
             @P("要查找的文本") String findText,
             @P("替换为的文本") String replaceText,
-            @P("是否替换全部匹配项，默认 true") Boolean replaceAll
+            @P("是否替换全部匹配项；不传即替换全部。只想改第一处必须显式传 false") Boolean replaceAll
     ) {
         log.info("Tool: doc_find_replace called find={}, replace={}", findText, replaceText);
         if (findText == null || findText.isEmpty() || replaceText == null) {
@@ -439,6 +446,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "替换指定匹配", category = "document", fileEffect = "MODIFIED")
     @Tool("将文档中第 N 个可见匹配项替换为新文本。" +
           "索引从 1 开始，只计算用户可见的匹配（排除修订模式下被删除的内容）。" +
           "如果要删除文本，将 replaceText 设置为空字符串即可。" +
@@ -468,6 +476,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "删除匹配文本", category = "document", fileEffect = "MODIFIED")
     @Tool("删除文档中第 N 个可见的匹配文本。专门用于删除操作，通过查找文本并执行删除。")
     public String doc_delete_match(
             @P("要删除的文本内容") String findText,
@@ -490,6 +499,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "删除文本", category = "document", fileEffect = "MODIFIED")
     @Tool("删除文档中的文本内容。可以删除所有匹配项，或只删除第一个匹配项。")
     public String doc_delete_text(
             @P("要删除的文本内容") String text,
@@ -508,6 +518,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "替换选区", category = "document", fileEffect = "MODIFIED")
     @Tool("替换当前选区（或光标位置）的文本内容。如果选区非空，则替换选区；如果只是光标，则插入文本。" +
           REDLINE_GRANULARITY_NOTE)
     public String doc_replace_selection(
@@ -525,6 +536,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 插入和修改 ====================
 
+    @ToolMeta(displayName = "插入文本", category = "document", fileEffect = "MODIFIED")
     @Tool("在文档的当前光标位置插入文本内容。修改将以修订模式进行。")
     public String doc_insert_at_cursor(
             @P("要插入的文本内容") String text
@@ -554,7 +566,7 @@ public class DocumentEditTools implements AgentToolComponent {
     private static String rejectBadParagraphIndex(Integer paragraphIndex) {
         if (paragraphIndex == null) {
             return "Error: paragraphIndex is required. It is 0-based — use the `index` values returned by "
-                    + "doc_get_document_text / doc_read_paragraphs.";
+                    + "doc_get_document_text(startParagraph=…, maxParagraphs=…).";
         }
         if (paragraphIndex < 0) {
             return "Error: paragraphIndex must be >= 0 (0-based). Received: " + paragraphIndex;
@@ -562,9 +574,10 @@ public class DocumentEditTools implements AgentToolComponent {
         return null;
     }
 
+    @ToolMeta(displayName = "读取段落", category = "document")
     @Tool("获取文档中指定段落的文本内容。")
     public String doc_get_paragraph(
-            @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex
+            @P("段落号（0 开始，用 doc_get_document_text 返回的 index）") Integer paragraphIndex
     ) {
         log.info("Tool: doc_get_paragraph called index={}", paragraphIndex);
         String rejected = rejectBadParagraphIndex(paragraphIndex);
@@ -582,7 +595,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
           REDLINE_GRANULARITY_NOTE)
     public String doc_modify_paragraph(
-            @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex,
+            @P("段落号（0 开始，用 doc_get_document_text 返回的 index）") Integer paragraphIndex,
             @P("新的段落文本") String newText
     ) {
         log.info("Tool: doc_modify_paragraph called index={}, new text length={}",
@@ -603,6 +616,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 文档结构 ====================
 
+    @ToolMeta(displayName = "获取文档大纲", category = "document")
     @Tool("获取文档的大纲结构，包括各级标题及其位置。")
     public String doc_get_outline() {
         log.info("Tool: doc_get_outline called");
@@ -614,6 +628,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "标题下插入", category = "document", fileEffect = "MODIFIED")
     @Tool("在文档的指定标题下方插入新内容。修改将以修订模式进行。")
     public String doc_insert_under_heading(
             @P("标题文本，用于定位插入位置") String headingText,
@@ -631,6 +646,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 智能搜索 ====================
 
+    @ToolMeta(displayName = "搜索相关文档", category = "document")
     @Tool("搜索项目中可能需要修改的相关文档。根据关键词在文件名和文档内容中搜索。")
     public String doc_search_related_docs(
             @P("搜索关键词，如'交易方案'、'股东决议'等") String keyword,
@@ -688,6 +704,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // 定位一律使用 doc_find_text 返回的 anchorId（书签锚点，随文档编辑自动跟随），
     // 禁止使用整数字符偏移（跨富文本必然错位）。
 
+    @ToolMeta(displayName = "通读文档", category = "document")
     @Tool("【看】分段读取文档正文。返回带编号的段落列表（含标题级别），是了解文档内容的首选工具。" +
           "文档很长时结果会分页：返回 truncated=true 和 nextStartParagraph，用它继续读下一段。")
     public String doc_get_document_text(
@@ -722,6 +739,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "查看光标位置", category = "document")
     @Tool("【看】查看当前光标/选区周围的文本（选中内容、前后文、所在段落）。在插入或格式化之前先确认光标位置。")
     public String doc_get_cursor_context() {
         log.info("Tool: doc_get_cursor_context called");
@@ -733,6 +751,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "选中定位点", category = "document")
     @Tool("【选】选中 doc_find_text 返回的某个匹配（按 anchorId）。编辑器会滚动到该处并高亮选区，用户能看到 AI 正在操作哪里。" +
           "选中后可接 doc_replace_selection / doc_delete_selection / doc_format_selection / doc_collapse_cursor。")
     public String doc_select_anchor(
@@ -748,6 +767,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "选中段落", category = "document")
     @Tool("【选】按段落号选中整个段落（0 开始，配合 doc_get_document_text 的编号）。编辑器会滚动到该段落并高亮。")
     public String doc_select_paragraph(
             @P("段落号（0 开始）") Integer index
@@ -762,6 +782,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "收起光标", category = "document")
     @Tool("【选】把光标落到当前选区的开头或结尾（取消选中）。要在某处'之前/之后'插入文本时：先选中目标，再 collapse 到 start/end，然后 doc_insert_at_cursor。")
     public String doc_collapse_cursor(
             @P("start=选区开头, end=选区结尾") String to
@@ -776,6 +797,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "锚点替换", category = "document", fileEffect = "MODIFIED")
     @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。会自动把编辑器视图滚动到该处；返回改动后所在段落的实际文本，核对该返回值即完成验证——不需要先 doc_select_anchor，也不需要改后再读文档。" +
           "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。" +
           REDLINE_GRANULARITY_NOTE)
@@ -795,6 +817,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "删除选区", category = "document", fileEffect = "MODIFIED")
     @Tool("【改】删除当前选中的文本（以修订模式）。先用 doc_select_anchor / doc_select_paragraph 选中要删的内容。没有选区时会报错。")
     public String doc_delete_selection() {
         log.info("Tool: doc_delete_selection called");
@@ -806,6 +829,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "设置文字格式", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】给当前选中的文本设置字符格式：加粗/斜体/下划线/删除线/高亮/字色/字号/字体。只传需要改的参数。" +
           "必须先选中文本（doc_select_anchor / doc_select_paragraph）。高亮支持 yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB；none 取消高亮。")
     public String doc_format_selection(
@@ -838,6 +862,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "设置段落格式", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】设置当前选区所在段落的段落格式：对齐、标题级别、行距、段前段后间距、缩进。只传需要改的参数。" +
           "headingLevel: 1-9 设为对应级别标题，0 恢复正文。alignment: left/right/center/justify。" +
           "行距 lineSpacingMode: single/1.5/double 直接传；proportional 配 lineSpacingValue=百分比（如 120）；" +
@@ -1113,6 +1138,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "读取格式", category = "document")
     @Tool("【看/格式】读取当前光标或选区处的完整格式信息：字体（中西文）、字号、加粗/斜体/下划线/删除线、" +
           "颜色、高亮、段落样式、对齐、行距、段前段后、缩进、编号状态、所在表格（表名/行列数/单元格）。" +
           "改格式前先用本工具看清现状。")
@@ -1240,6 +1266,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "撤销修改", category = "document", fileEffect = "MODIFIED")
     @Tool("【验/撤销】撤销最近的编辑操作。改错了（核对返回的段落文本发现不对）就用它退回，再重新操作。")
     public String doc_undo(
             @P("撤销步数，默认 1") Integer steps
@@ -1255,6 +1282,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "重做修改", category = "document", fileEffect = "MODIFIED")
     @Tool("【验/撤销】重做刚撤销的操作。")
     public String doc_redo(
             @P("重做步数，默认 1") Integer steps
@@ -1913,6 +1941,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // Calc 没有修订（redline）机制，写入即生效；纠错用 doc_undo，
     // 首次修改前的文档检查点（fileEffect=MODIFIED）仍是最后防线。
 
+    @ToolMeta(displayName = "查看工作表结构", category = "document")
     @Tool("【表格·看】查看当前打开的电子表格（xlsx）的工作表结构：每张工作表的名称、序号、已用区域和行列数。" +
           "打开 xlsx 后先用本工具了解结构，再决定读哪个区域。Word 文档请用 doc_* 工具，本工具仅对表格文档有效。")
     public String sheet_get_overview() {
@@ -1925,6 +1954,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "读取单元格区域", category = "document")
     @Tool("【表格·看】读取电子表格指定区域的单元格内容。返回二维数组 rows（文本为字符串、数值/公式结果为数字，日期是序列数）" +
           "和公式清单 formulas。range 不传则读整个已用区域；区域过大会截断并提示分块读取。")
     public String sheet_read_range(
@@ -1983,6 +2013,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "选中单元格区域", category = "document")
     @Tool("【表格·选】选中电子表格的一个区域（视图滚动到该处并高亮，用户能看到 AI 正在操作哪里）。" +
           "选中后可接 sheet_format_cells / sheet_set_borders 等格式操作。")
     public String sheet_select_range(
@@ -2340,6 +2371,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "查看单元格批注", category = "document")
     @Tool("【表格·批注】列出当前工作表的全部单元格批注（单元格地址/作者/日期/内容）。" +
           "Calc 批注无解决/未解决状态，返回值不含 resolved 字段。")
     public String sheet_get_comments(
@@ -2451,6 +2483,7 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "表格内查找", category = "document")
     @Tool("【表格·看】在电子表格区域内查找文本（逐格比对字符串值，含公式计算结果）。区域不传则用整个已用区域；" +
           "上限 50 条命中、20000 格扫描，超限需缩小 range 分块查找。与 doc_find_text 分开——本工具仅对表格文档有效。")
     public String sheet_search(
@@ -2588,6 +2621,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 调试工具 ====================
 
+    @ToolMeta(displayName = "检查修订记录", category = "document")
     @Tool("调试工具：获取文档中所有修订记录的详细信息，包括修订类型、位置、内容等。用于分析和诊断修订模式下的文本操作问题。")
     public String doc_debug_revisions() {
         log.info("Tool: doc_debug_revisions called");

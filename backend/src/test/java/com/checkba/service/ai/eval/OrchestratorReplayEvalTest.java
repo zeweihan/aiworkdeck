@@ -142,6 +142,16 @@ class OrchestratorReplayEvalTest {
                             + " 次调用里都没有出现");
         }
 
+        // 5.3 本轮检查点（dev-board 审计 B-02）：写入类工具执行前必须为活跃文档留下快照，
+        // 否则 doc_restore_checkpoint 无从恢复。判据是 @ToolMeta(fileEffect="MODIFIED")，
+        // 所以漏标注解的写入原语会在这里现形。
+        if (c.expect.checkpointForFileId != null) {
+            assertTrue(r.checkpointFileIds().contains(Long.valueOf(c.expect.checkpointForFileId)),
+                    "本轮应为 fileId=" + c.expect.checkpointForFileId + " 建检查点，实际建过的是: "
+                            + r.checkpointFileIds()
+                            + "（空清单通常意味着这一轮用到的写入原语漏了 @ToolMeta(fileEffect=\"MODIFIED\")）");
+        }
+
         // 6. <title> 协议：会话文件夹重命名
         if (c.expect.renamedTitleContains != null) {
             assertTrue(r.folderRenames().stream().anyMatch(t -> t.contains(c.expect.renamedTitleContains)),

@@ -124,6 +124,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
+- **LEGACY_DEFAULTS 只许给「可选参数」代填，绝不许给必填参数代填**（审计 A4）：`bindArguments` 的顺序是**先补缺省再转换**，所以这里填了值、方法里的 null 守卫就永远走不到——等于把一处写好的防护重新打开。踩过的坑：`doc_get_paragraph.paragraphIndex` 与 `doc_modify_paragraph.paragraphIndex` 曾缺省 1，而 `DocumentEditTools.rejectBadParagraphIndex` 正是为「模型漏传段落号」写的守卫，结果 doc_modify_paragraph 漏传时不报错、而是对**第 2 段**（0 基 index=1）做一次模型从未主张过的整段替换（修订模式下用户还很可能直接接受）。两条已删；`doc_find_replace.replaceAll` 也搬回工具自身（口径不变：不传即替换全部，只想改第一处必须显式 false）。留下的四条都是真·可选参数。回归 `ToolRegistryLegacyDefaultsTest`（走整条 execute→bindArguments→方法 的链路；直接调方法的 `ParagraphIndexBaseTest` 绕过 bindArguments，证明不了这件事）。
 - **工具可见性是三层闸，判据分别在三个地方**（改任一层前先分清是哪一层）：
   ① **会话客户端能力**（`ClientCapabilityService.isToolVisible`）：LOWA 会话只见 doc_/sheet_/slide_，
      Office 插件会话只见 office_* 且按宿主 Word/Excel/PowerPoint 再分，none 两者皆无；
@@ -330,7 +331,7 @@ connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的
 **`bubble_end.documentEdited`（本轮动过文档没有，dev-board#728）**：布尔，**六个发送点全部带上**，载荷形如 `{"status":"finished","documentEdited":true}`（paused 那两条仍是 `{"status":"paused","reason":"…","documentEdited":…}`，字段顺序 status → reason → documentEdited）。
 - **语义**：本轮**成功**调用过 `doc_`/`sheet_`/`slide_` 里的**写入类**工具。判据 `ClientCapabilityService.isDocumentWritingTool`，记在 `AgentOrchestrator.dispatchTool` 这一个 funnel 上（原生与 XML 两条工具循环都经过它），状态挂 `RunGuard.documentEdited`（轮次级，置位后不清零）。
 - **两个判据必须分开，别合并**：`isLowaTool`（宽前缀，回答「要不要 LOWA 编辑器」）给 `isToolVisible` 用——Office 会话里连 `doc_get_document_text` 都执行不了，读取工具必须仍算 LOWA 工具；`isDocumentWritingTool`（前缀 **且** 不匹配只读名模式）给 `documentEdited` 用。合过一次就出过事：按宽前缀判，「先读文档、再起草一条条款」那一轮因为调过 `doc_get_document_text` 被判成「改过文档」，回复下方的按钮被误藏，而那恰恰是最该出按钮的场景。
-- **判据是工具名而不是 `@ToolMeta.fileEffect`**：最常用的写入原语（doc_insert_at_cursor / doc_replace_selection / doc_start_stream / doc_delete_text …）压根没声明 fileEffect（113 个里 45 个没有），按它判会把真正的编辑漏成「没动过」。
+- **判据是工具名而不是 `@ToolMeta.fileEffect`**：这条不因注解补齐而改。历史上最常用的写入原语（doc_insert_at_cursor / doc_replace_selection / doc_delete_text …）压根没声明 fileEffect，按它判会把真正的编辑漏成「没动过」；审计 B-02 后 DocumentEditTools 已全部补齐（doc_/sheet_/slide_ 共 113 个，现只剩 SlideEditTools 的 5 个**只读**工具没有注解，对副作用无影响），但判据仍**不许**改成读 fileEffect——① 分类不能依赖注解纪律，漏标一个就静默错判；② 两者语义本就不重合：`doc_collapse_cursor` 按名算写入侧（拿不准算写入）却不该建检查点，`doc_start_stream` 反过来要 MODIFIED 但真正落字的是流。
 - **只读名模式里有两个真实的坑，改之前先看这两条**：① `doc_find_replace` 以 `find_` 开头却是全仓最常用的**写入**原语，所以 `find` 不能做词头，只有 `find_text` 进精确名单；② `doc_set_selection` 只挪选区（只读）而 `doc_replace_selection` / `doc_delete_selection` / `doc_format_selection` 都是写入，所以 `selection` 不能做子串匹配，只有 `set_selection` 进精确名单。词头一律 `(?:_|$)` 收尾（`inspect` 松绑会咬到 `insert_*`、`list` 会咬到 `link_`）。**拿不准的一律算写入**（doc_undo / doc_redo / doc_restore_checkpoint / doc_collapse_cursor 都在写入侧）。
 - **归类的权威清单在 `DocumentWritingToolClassificationTest.EXPECTED_READ_ONLY`（31 条只读 / 113 条总计）**，那条测试扫真实工具类的方法名逐名对拍——**新增 doc_/sheet_/slide_ 工具而没人归类就会当场红**，逼着加卡的人自己决定它改不改文档。
 - **新增 bubble_end 发送点必须走 `bubbleEndPayload(guard, status[, reason])`**，不要再手写 JSON。漏一个的表现是前端在那条路径上读到 undefined、按「没编辑过」把按钮放出来，而那恰恰是编辑最多的几条路径之一。
@@ -437,6 +438,14 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   同一份文档每次重试都必然再撞同一个 400。两道防线都要在：工具侧截断 +
   `forceCompact` 兜底剪尾（**只在 force 下**；非 force 的尾部豁免是刻意设计，别一起改掉）。
   回归用例 `OversizedToolResultRecoveryTest`。
+- **截断说明里点名的工具必须真的注册着**（审计 A5/B-01）：这条说明每次超长读取都会回给模型，
+  它曾点名一个注册表里从来没有过的分段读取工具（`doc_read_paragraphs`，全仓 5 处引用、0 处定义），
+  模型照做只会拿到「Tool not found」，白烧一整个 LLM 往返，弱模型还会据此判定「这份文档读不完」而放弃。
+  现在写的是 `doc_get_document_text(startParagraph=…, maxParagraphs=…)`（返回值的 `nextStartParagraph`
+  就是下一段起点），并保留「否则先检索定位再读该段」那半句——`capToolText` 服务的是
+  `extract_file_text / read_file / read_document` 这类读**项目文件**的工具，而 doc_* 读的是编辑器里那一份，
+  PDF/xlsx 这类还没有分页读取原语的类型只能走后半句。`OversizedToolResultRecoveryTest` 现在反射
+  DocumentEditTools 的真实 @Tool 名单，核对文案点名的工具确实存在。
 - **文件夹上下文要走 `DocumentTextService`，不是 `FileContentExtractorService.extractText`**：
   后者的白名单（java/js/md/txt/csv…）不含 docx/xlsx/pptx/doc/pdf，恒返回空串，
   `buildFolderContext` 随后 `if (!text.isEmpty())` 把这些文件**静默跳过**——
@@ -572,7 +581,7 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 ## 验证
 
-- `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，**13 组**）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）、cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）与 **cases-question**（反问停机：awaiting_input / 执行日志随停机落库 / 同轮工具+反问不递归 / 计划审批优先于反问）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
+- `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，**13 组**）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）、cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）与 **cases-question**（反问停机：awaiting_input / 执行日志随停机落库 / 同轮工具+反问不递归 / 计划审批优先于反问）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文；`expect.checkpointForFileId` 断言本轮为活跃文档建过检查点——判据是 `@ToolMeta(fileEffect="MODIFIED")`，所以漏标注解的写入原语会在这里现形（`cases-revision.json` 的 `insert-at-cursor-creates-checkpoint-xml` 就是一轮只用 doc_insert_at_cursor 的最小复现，审计 B-02）。
   - **地雷：`eval/RealToolBeans.instantiateAll()` 的清单必须与生产 `AgentToolComponent` 集合同步。** TodoTools 曾长期漏列，于是 `todo_write` 在整个回放评测里根本没注册——`offeredToolsInclude` 永远失败、`offeredToolsExclude` 永远通过，相关可见性断言全是空的（已补 TodoTools）。**目前仍缺 CheckpointTools 与 SlideEditTools**，补时要同时复核各用例的 offeredToolsExclude。
   - **跨类 `public static final` 常量在编译期内联**：只跑 `mvn test` 的增量编译会留下「源码一致、字节码不一致」的假失败，验证阶段一律 `mvn clean test`。
   - **`mvn clean test` 里有 15 条 skip 是常态**（2026-09-20 实测：Tests run 4321 / Skipped 15；2026-09-09 时是 3410 / 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；WritingLiveEvaluationTest **1** 条同样要 key；AllowedModelsLiveContractTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。

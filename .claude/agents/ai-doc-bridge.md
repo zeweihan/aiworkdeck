@@ -21,6 +21,15 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 `Number(p.index) || 0` 会把 null／非数字静默当成第 0 段，「没给段落号」于是变成「改第一段」。
 回归用例 `ParagraphIndexBaseTest`（反射扫 `@P`，写成 1 基即转红）。
 
+**缺参守卫只写在方法里还不够，还要确认 `ToolRegistry.LEGACY_DEFAULTS` 没有替它代填**（审计 A4，
+2026-09-22 修掉）。`bindArguments` 是**先补缺省再转换**，所以 LEGACY_DEFAULTS 里
+`doc_get_paragraph.paragraphIndex` / `doc_modify_paragraph.paragraphIndex` 的缺省值 1 让
+`rejectBadParagraphIndex` 永远走不到：漏传段落号不报错，而是对**第 2 段**（0 基 index=1）
+做一次模型从未主张过的整段替换——同一份代码库里两处互相取消的防护。两条已删，
+`doc_find_replace.replaceAll` 一并搬回工具自身（口径不变：不传即替换全部，只想改第一处必须显式 `false`，
+已写进 `@P`）。回归 `ToolRegistryLegacyDefaultsTest`——它走**整条 execute→bindArguments→方法**的链路，
+`ParagraphIndexBaseTest` 直接调方法、绕过 bindArguments，那一层的病它看不见。
+
 **matchIndex 是唯一的例外：模型面 1 基、worker 0 基，在后端归一**（2026-09-02 顺带修掉）。`doc_replace_nth_match` / `doc_delete_match` 的描述、system prompt 第 7 节第 3 条、`ToolRegistry.LEGACY_DEFAULTS`（缺省 1）都对模型说「第 N 处，从 1 开始」，而 worker 的 `replace_nth_match` / `delete_match` 与它的其它整数定位一样从 `i = 0` 起数——原先后端原样透传，模型说第 1 处改的是第 2 处。归一落在 `DocumentEditTools` 下发前减 1，**不改 worker**：JAR/Web 插件经 `PluginHostImpl.DOC_ACTIONS` / `pluginDocActions.js` 直接按 worker 契约调这两个 action。回归 `MatchIndexBaseTest`（后端换算）+ lowa-e2e 组 11 末两步（worker 0 基钉住）。
 **归一必须两个方向都做**（dev-board#369）：worker 的 `find_text_locations` 返回的 `matchIndex` 同样 0 起，
 `doc_find_text` 回给模型前在 `DocumentEditTools.oneBasedMatchIndexes` 加 1——否则模型从查找结果看到
@@ -60,7 +69,7 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
 - `backend/src/main/java/com/checkba/service/ai/tools/TemplateTools.java` — `docx_inspect_template(fileIds, options?)`：学习团队模板 → styleProfile v1 JSON，并**自己写进项目 `_模板/画像.json`**（同名就地覆盖，返回值带 `savedProfileFileId`/`savedProfilePath`，失败带 `saveError`）——写端只认这个文件，别让模型转抄；`.doc` 返回「另存 docx 或编辑器打开后学习」提示不报错。
 - `backend/src/main/java/com/checkba/service/ai/StyleProfileResolver.java` — 写端画像解析顺序：工具显式 `styleProfileJson` > 项目 `_模板/画像.json` > SystemSetting `dd.styleProfile.default` > house-default；选中的画像总 merge 到 house-default 上补齐缺省叶子。
 - `backend/src/main/java/com/checkba/service/ai/tools/CheckpointTools.java` — `doc_restore_checkpoint`。
-- `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。
+- `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。**DocumentEditTools 的每个 `@Tool` 都必须带 `@ToolMeta`**（`DocumentEditToolsToolMetaContractTest` 钉着，见下方地雷「@ToolMeta 是四件套之外的第五件」）。
 
 **桥接服务**
 - `backend/src/main/java/com/checkba/service/ai/EditorBridgeService.java` — 核心桥接：生成 requestId、经 SSE `client_action` 下发、CompletableFuture 阻塞等前端结果。曾名 WpsActionService。
@@ -317,6 +326,8 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - **AI 新建文件一律带上目的地**：新增「在项目里建文件」的工具时必须有可选 `parentFolderId` 并走 `createAgentFile`，否则用户指定的文件夹在结构上就无法表达（dev-board#465 的症状：文件默默出现在项目根目录、无任何报错）。`NewFileFolderContractTest` 反射扫 `@P`，漏了即转红。
 - **流式写入这条路没有 ack**：`doc_stream_data` 是单向 SSE，后端拿不到落字结果。任何「不写就 return」的分支都必须留下缓冲 + 记原因 + 最终报到对话里，否则症状恒为「文件建好了、正文空白、谁都没报错」。回归 `frontend/tests/project-home/doc-stream-failure-surfaced.test.mjs`。
 - **新增 doc_* 工具四件套**：DocumentEditTools 加 @Tool + EDITOR_ACTIONS 白名单加 action + office_thread.js 加实现 + toolDisplayNames.js 加中文名。漏任何一环都是静默失败（PR#180 教训）。
+- **@ToolMeta 是四件套之外的第五件，写入类必须写 `fileEffect = "MODIFIED"`**（审计 B-02，2026-09-22 修掉）。编排器只对 MODIFIED 的工具在执行前建本轮检查点（`AgentOrchestrator.dispatchTool`），而 `applyToolSideEffects` 在 `meta() == null` 时**直接提前返回**——连 `refresh_files` 与 `file_change` 也一并不发。该文件里最常用的十个写入原语（doc_replace_nth_match / doc_delete_match / doc_delete_text / doc_replace_selection / doc_insert_at_cursor / doc_insert_under_heading / doc_replace_at_anchor / doc_delete_selection / doc_format_selection / doc_set_paragraph_format，另加 doc_undo / doc_redo / doc_start_stream）曾**一个注解都没有**：一轮对话只用它们（「选中这句改成 X」「在光标处插入这段条款」正是最常见的用法）的话，`doc_restore_checkpoint` 因为没有快照而无法恢复，前端也不知道文档被 AI 改过——「恢复本轮快照」这条产品承诺在最常用的路径上是空的。现已全部补齐，**每个 @Tool 都要有 @ToolMeta**（读取类只填 displayName/category，`fileEffect` 留空；**不要**给 doc_* 配 `fileArg`，它们改的是编辑器里当前那一份，副作用层会回落成 "Current Document"）。两道回归：`DocumentEditToolsToolMetaContractTest`（每个 @Tool 都有 @ToolMeta + 十二个写入原语必须 MODIFIED + **只读工具不许声明 fileEffect**；只读判定复用 `ClientCapabilityService.isDocumentWritingTool` 但**只用单向**——反方向会把 `doc_collapse_cursor` 这类纯光标操作误判成漏标）+ 回放评测 `insert-at-cursor-creates-checkpoint-xml`（`expect.checkpointForFileId`，一轮只用 doc_insert_at_cursor 也必须留下快照）。
+- **文案里点名的工具必须真的注册着**（审计 A5/B-01，2026-09-22 修掉）：`doc_read_paragraphs` 从来没有被实现过，却在 5 处生产代码里被当作推荐工具点名——最要命的是 `ToolFileGuard.capToolText` 的截断说明（每次超长读取必定回给模型）与 `EditorBridgeService.duplicateInsertRejection`（去重闸拦下时必定回给模型）。全部改成 `doc_get_document_text(startParagraph=…, maxParagraphs=…)`。注意 `EditorBridgeService` 里两条相邻的失败文案策略**相反**，别顺手统一：`TIMEOUT_RESULT_JSON`（超时）**不许**点名任何读取工具——读取命令会与超时的那条在同一编辑器上排队连锁超时（dev-board#729 ③，`EditorBridgeServiceTest` 钉着）；`duplicateInsertRejection` 是分发层直接拦下、一个 worker 命令都没发出去，编辑器没被占住，点名读回是对的。
 - **worker 失败返回必须带 `error` 字段**：前端 `handleEditorCommand` 只把 `result.error` 回传后端（`result.message` 不看），只写 `message` 的话模型收到 `{"error": "null"}`——判得出失败但拿不到原因，白白浪费一轮。`doc_table_*` 用 `tableFail()` 统一写两个字段。
 - **表格删行/删列不进修订**（真机实测 LO 24.2）：`XTableRows/XTableColumns.removeByIndex` 走 API 路线直接删除，RecordChanges 开着也是 `redlineDelta=0`——AI 删表格行的安全网是 doc_undo 与文档检查点，不是修订面板，工具描述里已对模型明说。生效判定仍按"行列数变化 OR 修订条数变化"双口径（防将来引擎改口径），别只看 `getRows().getCount()`。
 - **区间批注必须走 `.uno:InsertAnnotation` 派发**；LO API 路线（addAnnotation）会抛虚假异常且只批注锚点（PR#191）。派发要在 RecordChanges 关闭下做（worker `withRecordChangesOff`，dev-board#367）：否则引擎把批注字段记成一条空插入修订，Word 里多出一条作者 AI WorkDeck、正文为空的幽灵气泡。

@@ -120,8 +120,14 @@ class OversizedToolResultRecoveryTest {
 
         assertTrue(capped.length() < huge.length(), "必须真的截断");
         assertTrue(capped.contains("已截断"), "要告诉模型被截断了，实际开头是：" + capped.substring(0, 120));
-        assertTrue(capped.contains("doc_read_paragraphs"),
+        assertTrue(capped.contains("doc_get_document_text"),
                 "要给模型下一步（分段读），否则它只会原地重试，实际开头是：" + capped.substring(0, 120));
+        assertTrue(capped.contains("startParagraph"),
+                "只给工具名不够，得告诉它用哪个参数续读，实际开头是：" + capped.substring(0, 120));
+        // 审计 A5/B-01：这条断言曾把一个注册表里根本不存在的工具名钉死在截断文案里，
+        // 模型照着调必然拿到「Tool not found」。点名的工具必须真的注册着。
+        assertTrue(realToolNames().contains(recommendedToolName(capped)),
+                "截断文案点名的工具必须是 DocumentEditTools 里真实存在的 @Tool，实际文案：" + capped.substring(0, 160));
         assertTrue(capped.length() <= ToolFileGuard.MAX_TOOL_TEXT_CHARS + 300,
                 "截断后长度应贴近上限，实际 " + capped.length());
     }
@@ -131,5 +137,22 @@ class OversizedToolResultRecoveryTest {
     void shortToolTextIsUntouched() {
         String small = "第一条 转让标的";
         assertSame(small, ToolFileGuard.capToolText("a.docx", small));
+    }
+
+    /** 截断文案里第一个形如 {@code doc_xxx(} 的工具名。 */
+    private static String recommendedToolName(String notice) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(doc_[a-z_]+)\\(")
+                .matcher(notice);
+        return m.find() ? m.group(1) : "<文案里没有点名任何 doc_* 工具>";
+    }
+
+    /** DocumentEditTools 上真实注册着的 @Tool 方法名。 */
+    private static java.util.Set<String> realToolNames() {
+        return java.util.Arrays
+                .stream(com.checkba.service.ai.tools.DocumentEditTools.class.getDeclaredMethods())
+                .filter(m -> m.getAnnotation(dev.langchain4j.agent.tool.Tool.class) != null)
+                .map(java.lang.reflect.Method::getName)
+                .collect(java.util.stream.Collectors.toSet());
     }
 }

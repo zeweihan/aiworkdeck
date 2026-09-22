@@ -67,6 +67,7 @@ public final class EvalHarness {
             List<Boolean> toolsOfferedPerLlmCall,
             List<List<String>> toolNamesOfferedPerLlmCall,
             List<String> promptTexts,
+            List<Long> checkpointFileIds,
             int remainingScriptTurns) {
 
         /** 最终保存的 ASSISTANT 消息（含 executionLog 前缀） */
@@ -190,7 +191,14 @@ public final class EvalHarness {
         ConversationFileChangeService fileChange = mock(ConversationFileChangeService.class);
 
         com.checkba.service.ai.TodoListService todoListService = mock(com.checkba.service.ai.TodoListService.class);
+        // 本轮检查点：编排器只对 @ToolMeta(fileEffect="MODIFIED") 的工具在执行前建快照。
+        // 记下它到底为哪个 fileId 建过，用例才断言得了「只用 doc_insert_at_cursor 也会建」。
+        List<Long> checkpointFileIds = new CopyOnWriteArrayList<>();
         com.checkba.service.ai.DocumentCheckpointService checkpointService = mock(com.checkba.service.ai.DocumentCheckpointService.class);
+        doAnswer(inv -> {
+            checkpointFileIds.add(inv.getArgument(1));
+            return null;
+        }).when(checkpointService).ensureCheckpoint(any(), any());
         com.checkba.version.WorkSessionService workSessionService = mock(com.checkba.version.WorkSessionService.class);
 
         // 故障转移与自动 compaction 用真实配置默认值：备选链默认为空（不会在回放里切模型），
@@ -232,7 +240,7 @@ public final class EvalHarness {
         return new RunResult(c, registry.dispatches(), List.copyOf(sseEvents), List.copyOf(savedMessages),
                 List.copyOf(artifactSaves), List.copyOf(folderRenames),
                 scripted.toolsOfferedPerCall(), scripted.toolNamesOfferedPerCall(),
-                scripted.promptTextPerCall(), scripted.remainingTurns());
+                scripted.promptTextPerCall(), List.copyOf(checkpointFileIds), scripted.remainingTurns());
     }
 
     /** 内置 skills 目录（与 EvalCase.casesDir 同思路：兼容从 backend/ 或仓库根目录跑测试） */
