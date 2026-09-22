@@ -621,6 +621,42 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   - 实测（dev-board#800，本机隔离后端 + nda.pdf 附件连问两轮）：第一轮 `[Timing] prep total=274ms`
     （assemble 254ms，其中 files=223ms）；第二轮 `prep total=25ms`（assemble 16ms，files=3ms），
     `project_file_text_cache` 落一行 `source=text`，OCR 网关零调用。
+  - **音频走第三条分支，且它排在缓存之前**（dev-board#814）。mp3/m4a/wav/aac/flac/ogg/opus/amr/wma/webm
+    既不在 `ocr-extensions` 也不在纯文本白名单，改动前落进 Tika 抽出空串或 ID3 标签里的艺术家/专辑，
+    `read_document` 于是回一句「the file may be empty, or an image whose OCR recognised nothing …
+    try extract_file_text」——对音频这三条建议**没有一条成立**，模型据此告诉用户「我看不到这个文件」，
+    而这个产品自己就带着会议录音、听悟转写与文件树右键「转写音频」。现在：
+    - **扩展名表全仓只有 `MeetingRecordingService.AUDIO_EXTENSIONS` 一份**（`isAudioFileName` 是它的
+      唯一判据），抽取器直接引用它；前端那份在 `frontend/src/utils/audioAttachment.js`，由
+      `tests/project-home/audio-attachment.test.mjs` 读 Java 源码逐项对拍——两边判错都不报错，
+      前端漏判 = 右键没有「转写音频」也不提示，前端多判 = 点了转写后端回「该文件不是音频文件」。
+    - **音频的「正文」就是它的转写稿**。关联用既有的 `meeting_recording.audio_file_id`（面板录音建档与
+      右键「转写音频」两条路径都写这一列），**没有在 project_file 上新开字段**；查询是
+      `MeetingRecordingRepository.findByProjectIdAndAudioFileIdOrderByCreatedAtDesc`
+      → `MeetingRecordingService.findByAudioFile(projectId, fileId)`，带 projectId 是防越界。
+      注入时顶一句横幅（口径同 OCR 降级的「明示」）：这是机器语音识别、可能有误差、你听不到音频本身——
+      不写的话模型会把识别误差当成庭审原话来引用。
+    - 没有转写稿时抛 `ProjectFileTextExtractor.AudioNotTranscribedException`（`extends IOException`，
+      与 `OcrFailedException` 同一套路数），message 按会议状态分档（尚未转写 / 转写进行中 /
+      上次失败可重试 / 未识别到人声 / 录音未结束 / 已转写但转写稿是空的）并指向真实入口。
+      `read_document` 与 `extract_file_text` 把它转成 **`Warning: ` 前缀**而不是 `Error: `——
+      文件本身好好的，只是这一步还没做；两种前缀都会被 `isToolFailureText` 认出来、
+      **不进 `<file>` 的 CDATA**（K8 守卫路径，ContextAssembler 一行没改）。
+    - **必须排在 `textCache.find` 之前**：转写稿是会后才出现的，而音频字节一个都没变、
+      mtime+size 指纹也就一个字节都没变。把「请先转写」写进 `project_file_text_cache`，
+      用户转写完成之后这份文件在本机**永远**读不到转写稿——而且不报错。
+      护栏 `ProjectFileTextExtractorTest.audioNeverTouchesTheTextCacheInEitherDirection`。
+    - 参考入口（`extract` / `extractBytes`）走同一条分支：裸字节查不到转写稿，但同样不交给 Tika。
+    - **`read_file`（按路径）另有一份说法 `audioNoticeByPath`**，别套用上面那句。它拿不到 fileId
+      也就查不到会议记录，说「尚未转写」会在音频其实早就转写完时直接说反；它只陈述事实
+      （这是音频、正文是转写稿）再指向 `extract_file_text` + fileId。**这条不是可选的**：
+      Tika 对 mp3 抽回来的是 ID3 标签里的标题/艺术家/专辑，**非空**，会被当成「文件正文」
+      原样喂给模型——比那句误导性 Warning 更坏。
+    - 前端在**发送之前**就说：`ChatInterface` 的 `.audio-transcribe-bar`（输入框正上方，
+      判据 `audioNeedingTranscription`，已转写的不提示），「转写」按钮 `emit('transcribe-audio')`
+      → 工作台 `onTranscribeAudio`，**与文件树右键是同一条动作**（register-file + 打开录音面板）。
+      已转写集合来自既有的 `GET /api/meetings/projects/{id}`，只在真挂了音频附件时拉一次，
+      **不新增任何出站请求**；拉不到就按「都没转写」提示（多说一次好过让用户以为 AI 听过录音）。
   `extract_file_text` 此前<b>没有</b>这条分支（只有 Tika），项目里的 jpg 恒抽不出正文，
   返回的提示又只说「try read_file with OCR for **image PDFs**」——模型据此认定图片读不了，
   转头调 `run_python` 想自己跑 OCR，撞上 "Cannot run program docker" 后**自己下结论**

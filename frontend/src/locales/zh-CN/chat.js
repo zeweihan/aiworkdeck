@@ -216,6 +216,11 @@ export default {
   contextNoticeImageTooLarge: '{name} 按文字识别（OCR）处理：这张图超过体积上限',
   contextNoticeUnreadable: '{name} 没有可提取的文字，AI 读不到它的内容',
   contextNoticeGeneric: '{name} 在本轮做了降级处理',
+  // 音频附件（dev-board#814）：模型读的是转写稿，没有转写稿它只拿得到一个文件名。
+  // 发送之前就说清楚，别让用户以为 AI 听了这段录音——这是能不能信任回答的分界。
+  audioNotTranscribed: '「{name}」尚未转写，AI 只能看到文件名、读不到里面说了什么。',
+  audioNotTranscribedMore: '「{name}」等 {count} 个音频尚未转写，AI 只能看到文件名。',
+  audioTranscribeAction: '转写',
   pastedImageName: '粘贴图片-{stamp}',
   pastedImageUploadFailed: '{count} 张粘贴图片上传失败，未随本条消息发送',
   gotIt: '知道了',

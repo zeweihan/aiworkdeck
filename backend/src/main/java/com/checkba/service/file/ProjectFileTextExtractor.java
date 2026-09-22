@@ -3,11 +3,14 @@
 
 package com.checkba.service.file;
 
+import com.checkba.model.entity.MeetingRecording;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.model.entity.ProjectFileTextCache;
 import com.checkba.service.DocumentTextService;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.context.FileContentExtractorService;
+import com.checkba.service.meeting.MeetingRecordingService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.exception.TikaException;
 import org.springframework.stereotype.Service;
@@ -30,6 +33,11 @@ import java.util.Set;
  * {@code read_document}、云端项目参考来源、桌面端参考读取、文件夹上下文。
  * 路由与 extract_file_text 一直以来的口径逐条相同（dev-board#396）：
  * 图片没有文字层，直接走云端 OCR；PDF 先抽文字层，抽不出（扫描件）才 OCR；其余格式走 Tika。
+ * <b>音频没有任何「文字」可抽</b>（dev-board#814）：交给 Tika 得到的是空串或 ID3 标签里的
+ * 艺术家/专辑，于是 {@code read_document} 回一句指向 OCR 与 extract_file_text 的 Warning——
+ * 对音频三条建议没有一条成立，模型据此告诉用户「我看不到这个文件」。音频改走
+ * {@link #audioText}：已转写的返回转写稿，没转写的抛 {@link AudioNotTranscribedException}，
+ * 消息是一句可行动的下一步。
  * 「文字层够不够用」的判据在 {@link PdfTextLayer}，全仓只有那一份。
  * OCR 的失败以「[System: …]」形态返回（非空、无 Error 前缀），这里一律转成 {@link OcrFailedException}，
  * 绝不能被当成正文。
@@ -71,15 +79,22 @@ public class ProjectFileTextExtractor {
     private final ProjectFileService projectFileService;
     /** 抽取结果的跨重启缓存；单测传 null 即退化成「每次重抽」的旧行为。 */
     private final ProjectFileTextCacheService textCache;
+    /**
+     * 音频的转写稿从哪儿来（dev-board#814）。传 null 即退化成「音频一律按未转写处理」——
+     * 那仍然比改动前好：至少说的是「先转写」，而不是把模型指向对音频无用的 OCR。
+     */
+    private final MeetingRecordingService meetings;
 
     public ProjectFileTextExtractor(DocumentTextService documentTextService,
                                     FileContentExtractorService fileContentExtractorService,
                                     ProjectFileService projectFileService,
-                                    ProjectFileTextCacheService textCache) {
+                                    ProjectFileTextCacheService textCache,
+                                    MeetingRecordingService meetings) {
         this.documentTextService = documentTextService;
         this.fileContentExtractorService = fileContentExtractorService;
         this.projectFileService = projectFileService;
         this.textCache = textCache;
+        this.meetings = meetings;
     }
 
     /**
@@ -120,6 +135,12 @@ public class ProjectFileTextExtractor {
      */
     private String extractText(ProjectFile pf, boolean allowOcr) throws IOException {
         String name = pf.getName();
+        // 音频必须排在缓存之前：转写稿是会后才出现的，而音频字节一个都没变，
+        // mtime+size 指纹也就一个字节都没变。把「请先转写」写进缓存，用户转写完成之后
+        // 这份文件在本机永远读不到转写稿——而且不报错。见 audioText 的注释。
+        if (MeetingRecordingService.isAudioFileName(name)) {
+            return audioText(pf);
+        }
         boolean ocrSupported = isOcrSupported(name);
         boolean pdf = isPdf(name, pf.getFileType());
 
@@ -166,6 +187,11 @@ public class ProjectFileTextExtractor {
         }
         if (bytes.length > MAX_BYTES) {
             throw new IOException(TOO_LARGE);
+        }
+        if (MeetingRecordingService.isAudioFileName(displayName(fileName))) {
+            // 案件库/git 的裸字节查不到转写稿（那边没有 project_file），但同样不能交给
+            // Tika——抽回来的是 ID3 标签里的艺术家与专辑，模型会把它当文件正文引用。
+            throw new AudioNotTranscribedException(audioNotice(displayName(fileName), null));
         }
         String ext = extension(fileName);
         if (PLAIN_TEXT_EXTENSIONS.contains(ext)) {
@@ -279,6 +305,106 @@ public class ProjectFileTextExtractor {
         String name = fileName == null ? "" : fileName;
         int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
         return slash >= 0 ? name.substring(slash + 1) : name;
+    }
+
+    /**
+     * 音频的「正文」就是它的转写稿（dev-board#814）。
+     *
+     * <p>关联用的是既有的 {@code meeting_recording.audio_file_id}——面板录音建档与资源管理器
+     * 右键「转写音频」两条路径都写这一列，所以不需要在 project_file 上新开字段。
+     *
+     * <p>注入转写稿时顶一句横幅，口径同 OCR 降级那段（「降级必须明示」）：模型必须知道
+     * 这是机器语音识别的产物、它听不到音频本身，否则会把识别误差当成庭审原话来引用。
+     *
+     * @return 带横幅的转写稿
+     * @throws AudioNotTranscribedException 还没有转写稿，message 是一句可行动的下一步
+     */
+    private String audioText(ProjectFile pf) throws AudioNotTranscribedException {
+        MeetingRecording meeting = meetings == null
+                ? null
+                : meetings.findByAudioFile(pf.getProjectId(), pf.getId()).orElse(null);
+        if (meeting != null && MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())) {
+            String transcript = meetings.renderTranscriptText(meeting);
+            if (StringUtils.hasText(transcript)) {
+                return transcriptBanner(pf.getName()) + transcript;
+            }
+        }
+        throw new AudioNotTranscribedException(audioNotice(pf.getName(), meeting));
+    }
+
+    private static String transcriptBanner(String name) {
+        return LangText.of(
+                "[以下为音频「" + name + "」的转写稿，由机器语音识别生成，可能有识别误差；"
+                        + "你听不到音频本身。引用时以转写稿原文为准，不要臆测听不清的部分。]\n\n",
+                "[The following is the machine transcript of the audio \"" + name + "\". It was produced by "
+                        + "speech recognition and may contain errors; you cannot hear the audio itself. "
+                        + "Quote the transcript as written and do not guess at unclear passages.]\n\n");
+    }
+
+    /**
+     * 「这是音频，先去转写」——一句话说清是什么、为什么读不了、下一步点哪里。
+     *
+     * <p>刻意不提 OCR、也不提 extract_file_text：改动前那句 Warning 把模型指向这两条路，
+     * 对音频没有一条走得通，模型在它们之间空转几轮之后告诉用户文件读不了。
+     */
+    public static String audioNotice(String name, MeetingRecording meeting) {
+        String state = LangText.of("尚未转写", "it has not been transcribed yet");
+        if (meeting != null) {
+            state = switch (meeting.getStatus()) {
+                case MeetingRecording.STATUS_TRANSCRIBING ->
+                        LangText.of("转写进行中，请等它完成", "transcription is still running; wait for it to finish");
+                case MeetingRecording.STATUS_FAILED ->
+                        LangText.of("上一次转写失败，可以让用户重试转写",
+                                "the last transcription failed; the user can retry it");
+                case MeetingRecording.STATUS_EMPTY ->
+                        LangText.of("转写完成但没有识别到人声", "transcription finished but no speech was recognised");
+                case MeetingRecording.STATUS_RECORDING ->
+                        LangText.of("录音还没结束", "the recording has not finished yet");
+                // 状态是「已转写」却走到这里 = 转写稿是空的（落库损坏/被清过）。
+                // 说「尚未转写」会和面板上那个「已转写」徽标直接打架，用户只会以为 AI 在胡说。
+                case MeetingRecording.STATUS_TRANSCRIBED ->
+                        LangText.of("记录显示已转写，但转写稿是空的，需要重新转写",
+                                "it is marked as transcribed but the transcript is empty; it needs transcribing again");
+                default -> LangText.of("尚未转写", "it has not been transcribed yet");
+            };
+        }
+        return LangText.of(
+                "「" + name + "」是音频文件，需要先转写成文字才能读："
+                        + state + "。请用户在文件树里右键该文件选「转写音频」（或在左栏「会议录音」面板里转写）；"
+                        + "如果手头已经有转写稿，让用户把转写稿文件作为附件发过来。",
+                "'" + name + "' is an audio file and must be transcribed before it can be read: "
+                        + state + ". Ask the user to right-click the file in the file tree and choose "
+                        + "\"Transcribe audio\" (or transcribe it in the Meeting Recording panel in the sidebar). "
+                        + "If they already have a transcript, ask them to attach the transcript file instead.");
+    }
+
+    /**
+     * 按<b>路径</b>读到音频时的说法（{@code read_file}）。
+     *
+     * <p>与 {@link #audioNotice} 分开，是因为这条路拿不到 fileId，也就查不到会议记录——
+     * 套用那句「尚未转写」会在音频其实早就转写完的时候直接说反。这里只说事实
+     *（这是音频、正文是转写稿），再把模型指向真正查得到转写稿的入口。
+     */
+    public static String audioNoticeByPath(String name) {
+        return LangText.of(
+                "「" + name + "」是音频文件，正文是它的转写稿，按路径读不到。"
+                        + "如果它已经转写过，用 extract_file_text 配它的数据库 fileId 就能拿到转写稿；"
+                        + "还没转写的话，请用户在文件树里右键该文件选「转写音频」。",
+                "'" + name + "' is an audio file; its readable content is its transcript, which cannot be "
+                        + "reached by path. If it has already been transcribed, call extract_file_text with its "
+                        + "database fileId to get the transcript; if not, ask the user to right-click the file "
+                        + "in the file tree and choose \"Transcribe audio\".");
+    }
+
+    /**
+     * 音频还没有转写稿。<b>不是错误</b>——文件本身好好的，只是这一步还没做，
+     * 所以调用方把它转成 {@code Warning:} 而不是 {@code Error:}（两者都会被
+     * {@code ContextAssemblerService.isToolFailureText} 认出来、不进 &lt;file&gt; 的 CDATA）。
+     */
+    public static class AudioNotTranscribedException extends IOException {
+        public AudioNotTranscribedException(String message) {
+            super(message);
+        }
     }
 
     /**

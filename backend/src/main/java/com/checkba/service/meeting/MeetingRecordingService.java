@@ -145,6 +145,19 @@ public class MeetingRecordingService {
         return AUDIO_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase());
     }
 
+    /**
+     * 音频文件 → 它的会议记录（dev-board#814）。关联是既有的 {@code audioFileId} 外键，
+     * 面板录音与右键「转写音频」两条建档路径都写它，所以这一个查询覆盖两种来源。
+     *
+     * @return 最新的一条；从没注册过转写返回 empty
+     */
+    public Optional<MeetingRecording> findByAudioFile(Long projectId, Long audioFileId) {
+        if (projectId == null || audioFileId == null) return Optional.empty();
+        return meetingRepository
+                .findByProjectIdAndAudioFileIdOrderByCreatedAtDesc(projectId, audioFileId)
+                .stream().findFirst();
+    }
+
     public List<MeetingRecording> list(Long projectId) {
         return meetingRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
     }

@@ -739,6 +739,7 @@ import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import { nativeDataTransfer, isExternalFileDrag, claimExternalDrop } from '@/utils/fileTreeExternalDrop.js'
+import { isAudioFile as isAudioFileName } from '@/utils/audioAttachment.js'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
@@ -2150,13 +2151,12 @@ export default {
     },
 
     /**
-     * 右键「转写」项的判定：扩展名在音频集合内（与后端 MeetingRecordingService
-     * 的 AUDIO_EXTENSIONS 白名单保持一致）
+     * 右键「转写」项的判定。表在 utils/audioAttachment.js（dev-board#814 起前端只此一份，
+     * 与后端 MeetingRecordingService.AUDIO_EXTENSIONS 由测试逐项对拍）——AI 对话那边
+     * 判「这个附件要不要提示先转写」用的是同一个判据。
      */
     isAudioFile(item) {
-      if (!item || item.isFolder) return false
-      const audioTypes = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'amr', 'wma', 'webm']
-      return audioTypes.includes((item.fileType || '').toLowerCase())
+      return isAudioFileName(item)
     },
 
     /**

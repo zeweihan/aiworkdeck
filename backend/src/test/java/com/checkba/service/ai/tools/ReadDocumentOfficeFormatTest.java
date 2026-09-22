@@ -82,7 +82,7 @@ class ReadDocumentOfficeFormatTest {
         DocumentTextService documentTextService = new DocumentTextService(factory);
         return new LegalTools(fileService, null, extractor,
                 new com.checkba.service.file.ProjectFileTextExtractor(
-                        documentTextService, extractor, fileService, null));
+                        documentTextService, extractor, fileService, null, null));
     }
 
     @Test

@@ -245,6 +245,40 @@ class ContextAssemblerServiceTest {
         assertFalse(systemText.contains("该附件内容暂不可读"), "正常正文不该被判成读不出来");
     }
 
+    // 音频附件（dev-board#814）：抽取器把「先转写」这句话包成 Warning 回执交回来，
+    // 于是它走的就是上面那条 K8 守卫路径——正文位置不该出现任何东西，模型拿到的是
+    // 一句能直接转给用户的下一步，而不是一段空 CDATA 或一句指向 OCR 的误导。
+    @Test
+    @DisplayName("音频附件未转写：不进 <file> CDATA，说明改成「先转写」")
+    void audioAttachmentWithoutTranscriptIsNotInjectedAsBody() {
+        when(legalTools.read_document("888")).thenReturn(
+                "Warning: 这是音频文件，需要先转写；已有转写稿请附转写稿，或在文件树右键「转写音频」。");
+
+        String systemText = assembleSystemTextWith(List.of(attachment("888", "开庭录音.mp3")));
+
+        assertFalse(systemText.contains("<file id=\"888\" name=\"开庭录音.mp3\"><![CDATA["),
+                "音频不该带着一段空 CDATA 进上下文");
+        String fileSegment = systemText.substring(systemText.indexOf("<file id=\"888\""));
+        fileSegment = fileSegment.substring(0, fileSegment.indexOf("</file>"));
+        assertTrue(fileSegment.contains("需要先转写"), "要把可行动的下一步交给模型：" + fileSegment);
+        // 只看这一段，不看整篇 system——别处（视觉降级说明等）本来就该提 OCR
+        assertFalse(fileSegment.contains("OCR"),
+                "不许再把模型指向对音频无用的 OCR：" + fileSegment);
+    }
+
+    @Test
+    @DisplayName("音频附件已转写：正文位置换成转写稿，照常进 CDATA")
+    void transcribedAudioAttachmentInjectsTheTranscript() {
+        when(legalTools.read_document("888")).thenReturn(
+                "[以下为音频「开庭录音.mp3」的转写稿]\n[00:00] 说话人1：现在开庭。");
+
+        String systemText = assembleSystemTextWith(List.of(attachment("888", "开庭录音.mp3")));
+
+        assertTrue(systemText.contains("<file id=\"888\" name=\"开庭录音.mp3\"><![CDATA["),
+                "转写稿是正文，照常走 CDATA");
+        assertTrue(systemText.contains("现在开庭。"), "转写稿正文要在");
+    }
+
     // ==== 模板画像事实（dev-board#729 ②）====
     // 「本项目有没有模板画像」模型自己判断不了，真机上它会先花一整轮去 list_files(_模板) 探一探。
     // 服务端本来就知道答案（StyleProfileResolver 的解析链），直接写进末位提醒。

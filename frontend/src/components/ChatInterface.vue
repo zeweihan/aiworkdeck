@@ -666,6 +666,15 @@
          @send-now="handleInboxSendNow"
          @locate="handleInboxLocate"
        />
+       <!-- 音频附件没有转写稿（dev-board#814）：模型读的是转写稿，不是音频本身。
+            不说的话用户会以为 AI 听过这段录音，然后照着一个凭空的回答往下走。
+            「转写」走的就是文件树右键那条动作，用户不必先去把文件找出来。 -->
+       <view v-if="pendingAudioFiles.length > 0" class="audio-transcribe-bar">
+          <text class="audio-transcribe-hint">{{ pendingAudioFiles.length > 1
+             ? $t('chat.audioNotTranscribedMore', { name: pendingAudioFiles[0].name, count: pendingAudioFiles.length - 1 })
+             : $t('chat.audioNotTranscribed', { name: pendingAudioFiles[0].name }) }}</text>
+          <view class="audio-transcribe-btn" @tap="handleTranscribeAudio(pendingAudioFiles[0])">{{ $t('chat.audioTranscribeAction') }}</view>
+       </view>
        <view class="input-card" :class="{ 'is-drop-target': dragActive }">
            <!-- Image Thumbnails Preview (top-left) -->
            <view v-if="pastedImages.length > 0" class="input-images-preview">
@@ -853,7 +862,8 @@ import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
+import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
@@ -3004,6 +3014,8 @@ export default {
         isDir: file.isDir || file.fileType === 'folder'
       }
       contextFiles.value.push(fileData)
+      // 只有真挂了音频才去问「它转写过没有」（dev-board#814 K34）
+      if (isAudioFile(fileData)) refreshTranscribedAudio()
 
       // Insert inline tag into rich input
       insertContextTagToInput(fileData)
@@ -3121,6 +3133,32 @@ export default {
     const removeContextFile = (index) => {
       contextFiles.value.splice(index, 1)
     }
+
+    // --- 音频附件（dev-board#814）---------------------------------------------------
+    //
+    // 模型读的是转写稿，不是音频。没有转写稿时后端只会回一句「先转写」，用户却已经把
+    // 问题问出去、等着一个基于录音内容的回答。所以判定要提前到发送之前。
+    //
+    // 判据来自既有的会议记录（audioFileId 就是音频↔转写稿的关联），走既有的
+    // GET /api/meetings/projects/{id}，不新增任何出站请求；只在真的挂了音频附件时才拉一次。
+    const transcribedAudioIds = ref(new Set())
+    const refreshTranscribedAudio = async () => {
+      if (!props.projectId) return
+      try {
+        // 载荷是 { meetings, configured }（MeetingRecordingController.list），
+        // 与 MeetingRecordingPanel.loadMeetings 读的是同一个字段
+        const res = await getMeetingRecordings(props.projectId)
+        transcribedAudioIds.value = transcribedAudioFileIds(res && res.meetings)
+      } catch (e) {
+        // 拉不到就按「都没转写」处理：多提示一次，好过让用户以为 AI 听过这段录音
+        console.warn('[ChatInterface] 会议记录拉取失败，音频附件按未转写提示', e)
+      }
+    }
+    const pendingAudioFiles = computed(
+      () => audioNeedingTranscription(contextFiles.value, transcribedAudioIds.value))
+    // 「转写」复用文件树右键那条动作（project-overview 的 onTranscribeAudio）：
+    // 同一个 register-file 接口、同一个面板落点，不另起一套流程。
+    const handleTranscribeAudio = (file) => emit('transcribe-audio', file)
 
     const removePastedImage = (index) => {
       pastedImages.value.splice(index, 1)
@@ -3650,6 +3688,8 @@ export default {
        activeTurnKey, handleTurnJump,
        receiptLabel, inboxStreamIds, inboxRunActive, handleInboxLocate,
        contextFiles,
+       pendingAudioFiles,
+       handleTranscribeAudio,
        pastedImages,
        carriedFileIds,
        // 「重新生成」按用户气泡上的附件记录重建 fileList（dev-board#793 K14 ④）：
@@ -5795,6 +5835,46 @@ export default {
 .link-hint {
   font-size: 11px;
   color: var(--awd-warning-text);
+}
+
+/* 音频附件未转写（dev-board#814）：外形与 link-bar 一组，用警示色——
+   它说的是「你以为 AI 听了，其实没有」，这一条错过了，后面整段回答都是凭空的 */
+.audio-transcribe-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 6px;
+  padding: 6px 12px;
+  background: var(--awd-bg);
+  border: 1px solid var(--awd-warning);
+  border-radius: 8px;
+}
+
+.audio-transcribe-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--awd-warning-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-transcribe-btn {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--awd-text);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  border-radius: 6px;
+  padding: 3px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.audio-transcribe-btn:hover {
+  border-color: var(--awd-mint);
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 /* 后台任务控制条（停止）：外形对齐 continue-bar，但用中性底色——

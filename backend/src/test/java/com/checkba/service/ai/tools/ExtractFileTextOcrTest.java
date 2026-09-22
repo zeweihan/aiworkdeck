@@ -39,7 +39,7 @@ class ExtractFileTextOcrTest {
     private final FileTools tools =
             new FileTools(projectFileService, repo, null, extractor, null, documentTextService, null, null,
                     new com.checkba.service.file.ProjectFileTextExtractor(
-                            documentTextService, extractor, projectFileService, null));
+                            documentTextService, extractor, projectFileService, null, null));
 
     @AfterEach
     void clearContext() {

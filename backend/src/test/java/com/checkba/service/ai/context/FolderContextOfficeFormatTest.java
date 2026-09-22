@@ -94,7 +94,7 @@ class FolderContextOfficeFormatTest {
                 new AiContextProperties(),
                 resolver,
                 new com.checkba.service.file.ProjectFileTextExtractor(
-                        new DocumentTextService(factory), extractor, fileService, null));
+                        new DocumentTextService(factory), extractor, fileService, null, null));
     }
 
     @Test
