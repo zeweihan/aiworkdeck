@@ -80,7 +80,7 @@ class InternalRefControllerTest {
         extractor = new ProjectFileTextExtractor(
                 new DocumentTextService(mock(StorageServiceFactory.class)),
                 mock(FileContentExtractorService.class),
-                mock(ProjectFileService.class));
+                mock(ProjectFileService.class), null);
     }
 
     private MockMvc mvc(boolean serve, String secret) {

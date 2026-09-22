@@ -92,6 +92,56 @@ public class AiContextProperties {
     /** 支持 OCR 的文件扩展名列表 */
     private List<String> ocrExtensions = Arrays.asList("jpg", "jpeg", "png", "gif", "bmp", "webp", "pdf");
 
+    /**
+     * 扫描件 PDF 走 OCR 时最多识别几页。
+     *
+     * <p><b>只约束 OCR 路径</b>：带文字层的 PDF 由 PDFBox 整篇抽取，没有页数上限
+     *（dev-board#800 之前所有 PDF 都走 OCR，于是一份 300 页的招股书只有前 20 页进了上下文）。
+     * OCR 这条留上限是因为它按页花时间、平台档还按页扣 Credits，一份几百页的扫描件
+     * 能把一轮对话拖死；触发时会在正文末尾明写「仅识别前 N 页」，不让模型把看到的当全部。
+     */
+    private int ocrMaxPdfPages = 20;
+
+    /** 正文抽取结果的跨重启缓存 */
+    private TextCache textCache = new TextCache();
+
+    /**
+     * 正文抽取结果缓存（dev-board#800，表 project_file_text_cache）。
+     *
+     * <p>键是 fileId，失效判据是物理文件的 mtime + size。缓存的是抽取结果本身，
+     * 与「一轮里的重复抽取」那层 32 条内存 LRU（DocumentTextService）并存、互不替代。
+     */
+    public static class TextCache {
+
+        /** 关掉就是回到每次重抽的旧行为（排障用；正常不该关）。 */
+        private boolean enabled = true;
+
+        /**
+         * 单条正文的字符上限，超出不缓存。
+         *
+         * <p>100 万字符约 2MB（Java String 的 UTF-16 在库里按 UTF-8 存约 1-3MB）。
+         * 取这个数的理由：注入上下文的单文件上限是 {@code files.max-chars-per-file}=5 万，
+         * 工具输出上限 8 万，都远在其下；真正会超的是「整篇几百页」那种，
+         * 而它们本来就会被截断后才用，缓存全文只是白占库容。
+         */
+        private int maxTextChars = 1_000_000;
+
+        /**
+         * 总行数上限，超出按 created_at 淘汰最旧的。
+         *
+         * <p>2000 × 平均几十 KB ≈ 几十到一百 MB 量级，桌面端 H2 单文件库也扛得住；
+         * 同时 2000 份文件足够覆盖一个活跃项目的全部材料，日常命中率不会被淘汰打断。
+         */
+        private int maxEntries = 2000;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public int getMaxTextChars() { return maxTextChars; }
+        public void setMaxTextChars(int maxTextChars) { this.maxTextChars = maxTextChars; }
+        public int getMaxEntries() { return maxEntries; }
+        public void setMaxEntries(int maxEntries) { this.maxEntries = maxEntries; }
+    }
+
     /** 图片视觉直送（多模态）配置 */
     private Vision vision = new Vision();
 
@@ -323,6 +373,10 @@ public class AiContextProperties {
     public void setFiles(Files files) { this.files = files; }
     public List<String> getOcrExtensions() { return ocrExtensions; }
     public void setOcrExtensions(List<String> ocrExtensions) { this.ocrExtensions = ocrExtensions; }
+    public int getOcrMaxPdfPages() { return ocrMaxPdfPages; }
+    public void setOcrMaxPdfPages(int ocrMaxPdfPages) { this.ocrMaxPdfPages = ocrMaxPdfPages; }
+    public TextCache getTextCache() { return textCache; }
+    public void setTextCache(TextCache textCache) { this.textCache = textCache; }
     public Vision getVision() { return vision; }
     public void setVision(Vision vision) { this.vision = vision; }
 }

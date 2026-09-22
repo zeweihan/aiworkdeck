@@ -56,6 +56,14 @@ public class DocumentTextService {
      */
     private record CachedText(long lastModified, long size, String text) {}
 
+    /**
+     * 物理文件的指纹：mtime + 字节数。
+     *
+     * <p>失效判据在本仓只有这一份（内存 LRU 与 project_file_text_cache 落库缓存共用），
+     * 各写一份的后果是两层缓存对「文件改没改」给出不同答案。
+     */
+    public record FileStamp(long lastModified, long size) {}
+
     private final Map<String, CachedText> textCache = java.util.Collections.synchronizedMap(
             new java.util.LinkedHashMap<>(16, 0.75f, true) {
                 @Override
@@ -77,15 +85,7 @@ public class DocumentTextService {
      *（某些 Resource 实现不支持）时一律当缓存未命中处理，宁可重抽一次也不给出陈旧正文。
      */
     public String extractText(ProjectFile file) throws IOException, TikaException {
-        String filePath = file.getFilePath();
-        if (!StringUtils.hasText(filePath)) {
-            // 尝试使用 wpsFileId 作为路径
-            filePath = file.getWpsFileId();
-        }
-
-        if (!StringUtils.hasText(filePath)) {
-            throw new IOException("文件路径为空: " + file.getId());
-        }
+        String filePath = resolvePath(file);
 
         boolean isPdf = "pdf".equalsIgnoreCase(file.getFileType())
                 || (file.getName() != null && file.getName().toLowerCase().endsWith(".pdf"));
@@ -93,19 +93,10 @@ public class DocumentTextService {
         try {
             Resource resource = storageServiceFactory.getStorageService().load(filePath);
             String key = file.getId() != null ? "id:" + file.getId() : "path:" + filePath;
-            long stampMtime = -1L;
-            long stampSize = -1L;
-            try {
-                stampMtime = resource.lastModified();
-                stampSize = resource.contentLength();
-            } catch (Exception e) {
-                // 拿不到指纹就不缓存（远端存储/特殊 Resource）：只是少一层加速
-                log.debug("无法读取 {} 的 mtime/size，本次不走抽取缓存: {}", filePath, e.getMessage());
-            }
-            boolean cacheable = stampMtime > 0 && stampSize >= 0;
-            if (cacheable) {
+            FileStamp stamp = stampOf(resource, filePath);
+            if (stamp != null) {
                 CachedText hit = textCache.get(key);
-                if (hit != null && hit.lastModified() == stampMtime && hit.size() == stampSize) {
+                if (hit != null && hit.lastModified() == stamp.lastModified() && hit.size() == stamp.size()) {
                     return hit.text();
                 }
             }
@@ -113,8 +104,8 @@ public class DocumentTextService {
             try (InputStream is = resource.getInputStream()) {
                 text = isPdf ? parsePdf(is) : parse(is);
             }
-            if (cacheable && text != null && text.length() <= CACHE_MAX_TEXT_CHARS) {
-                textCache.put(key, new CachedText(stampMtime, stampSize, text));
+            if (stamp != null && text != null && text.length() <= CACHE_MAX_TEXT_CHARS) {
+                textCache.put(key, new CachedText(stamp.lastModified(), stamp.size(), text));
             }
             return text;
         } catch (StorageException e) {
@@ -122,6 +113,47 @@ public class DocumentTextService {
         }
     }
 
+
+    /**
+     * 取物理文件的指纹，供落库缓存（project_file_text_cache）判失效。
+     *
+     * <p>返回 null 表示「拿不到指纹」（远端存储、特殊 Resource、文件不存在），
+     * 调用方一律按<b>不缓存</b>处理——宁可每次重抽，也不能给出陈旧正文。
+     */
+    public FileStamp stampOf(ProjectFile file) {
+        try {
+            String filePath = resolvePath(file);
+            Resource resource = storageServiceFactory.getStorageService().load(filePath);
+            return stampOf(resource, filePath);
+        } catch (Exception e) {
+            log.debug("无法取得 fileId={} 的文件指纹: {}", file == null ? null : file.getId(), e.toString());
+            return null;
+        }
+    }
+
+    private FileStamp stampOf(Resource resource, String filePath) {
+        try {
+            long mtime = resource.lastModified();
+            long size = resource.contentLength();
+            return mtime > 0 && size >= 0 ? new FileStamp(mtime, size) : null;
+        } catch (Exception e) {
+            // 拿不到指纹就不缓存（远端存储/特殊 Resource）：只是少一层加速
+            log.debug("无法读取 {} 的 mtime/size，本次不走抽取缓存: {}", filePath, e.getMessage());
+            return null;
+        }
+    }
+
+    private static String resolvePath(ProjectFile file) throws IOException {
+        String filePath = file.getFilePath();
+        if (!StringUtils.hasText(filePath)) {
+            // 尝试使用 wpsFileId 作为路径
+            filePath = file.getWpsFileId();
+        }
+        if (!StringUtils.hasText(filePath)) {
+            throw new IOException("文件路径为空: " + file.getId());
+        }
+        return filePath;
+    }
 
     /**
      * 非 PDF 格式的通用抽取（docx/xlsx/pptx/txt 等）。

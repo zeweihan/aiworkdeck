@@ -368,8 +368,22 @@ ai:
       chat-context-max-chars: 6000
       chat-folder-context-max-chars: 50000
       chat-selection-max-chars: 1500
-    # 支持 OCR 的文件扩展名
+    # 支持 OCR 的文件扩展名。**pdf 在这张表里不等于「一律 OCR」**：带文字层的 PDF 由 PDFBox
+    # 整篇抽取（零 Credits、无页数上限），只有抽不出文字层的扫描件才逐页渲染送 OCR（dev-board#800）。
     ocr-extensions: [jpg, jpeg, png, gif, bmp, webp, pdf]
+    # 扫描件 PDF 走 OCR 时最多识别几页；只约束 OCR 路径，文字层路径没有页数上限。
+    # 触发时正文末尾会明写「仅识别前 N 页」，不让模型把看到的当成全文。
+    ocr-max-pdf-pages: 20
+    # 正文抽取结果的跨重启缓存（表 project_file_text_cache，键 fileId，
+    # 失效判据是物理文件的 mtime+size）。附件与活跃文档的正文是每一轮都要重新注入的，
+    # 没有这层缓存时同一份扫描件在一条会话里会被反复 OCR、反复按页扣 Credits。
+    text-cache:
+      enabled: true
+      # 单条正文字符上限，超出不缓存：注入上下文的单文件上限是 5 万、工具输出上限 8 万，
+      # 都远在其下；会超的是「整篇几百页」那种，而它们本来就截断后才用。
+      max-text-chars: 1000000
+      # 总行数上限，超出按写入时间淘汰最旧的。2000 份文件足够覆盖一个活跃项目的全部材料。
+      max-entries: 2000
     # 图片视觉直送（模型支持视觉输入时，图片作为 image 内容块直接给模型看，不再转 OCR 文本）。
     # 模型是否支持视觉由 AllowedModels 的 vision 位决定，不支持时自动降级回 ocr-extensions 那条路。
     vision:
