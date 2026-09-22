@@ -43,14 +43,22 @@ public class AgentInboxController {
         if (denied != null) return denied;
         if (request.expectedRevision == null) return error(400, "expectedRevision is required");
         try {
-            String previousMode = inbox.submissionMode(conversationId, messageId);
             AgentInboxService.ItemView edited = inbox.edit(conversationId, messageId, request.message,
                     request.submissionMode, request.position, request.expectedRevision);
-            // "Send now" is an explicit queue -> steer transition. When no run is active this must
-            // create one; with an active run the durable steer is picked up at its next boundary.
-            if (AgentInboxService.QUEUE.equals(previousMode)
-                    && request.submissionMode != null
-                    && AgentInboxService.STEER.equals(AgentInboxService.normalizeMode(request.submissionMode))) {
+            // 「立即发送」的判据是「目标模式是 steer 且当前没有活跃轮次」：没有活跃轮次时必须由
+            // 这里起一条新轮次，否则这条插话没有任何人会来 claim 它；有活跃轮次时它会在那一轮的
+            // 下一个工具边界被捞走，这里什么都不用做。
+            //
+            // 判据此前写的是「模式发生过 queue -> steer 的转变」，把**本来就是 steer** 的待处理项
+            // 整个排除在外（dev-board#802）：那一轮若以取消 / 出错 / 待审批 / 待回答 / 无进展暂停
+            // 收尾（这几种按设计都不 drain 队列），这条 steer 就永久卡在 pending 里——界面上只剩
+            // 编辑 / 上移 / 下移 / 删除，没有任何办法把它发出去，而它看着像还会被处理。
+            //
+            // acceptInboxSubmission 自身幂等（进去先查 activeRuns，有就原样返回），
+            // activeRunId 判空只是省掉一次无谓调用、并把意图写在脸上。
+            boolean sendNow = request.submissionMode != null
+                    && AgentInboxService.STEER.equals(AgentInboxService.normalizeMode(request.submissionMode));
+            if (sendNow && orchestrator.activeRunId(conversationId) == null) {
                 orchestrator.acceptInboxSubmission(messageId);
                 edited = inbox.view(messageId);
             }

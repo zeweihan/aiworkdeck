@@ -1365,6 +1365,75 @@ $color-accent: var(--awd-mint); // Mint Green
     color: var(--awd-accent-text);
     background: var(--awd-accent-soft);
 }
+/* 历史下拉：过滤框与行内管理（dev-board#796） */
+.history-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 8px;
+    border-bottom: 1px solid var(--awd-border-subtle);
+}
+.history-filter-input {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--awd-border);
+    border-radius: 5px;
+    background: var(--awd-surface);
+    color: var(--awd-text);
+    font-size: 12px;
+}
+.history-filter-input:focus { border-color: var(--awd-accent); }
+.history-filter-clear {
+    flex-shrink: 0;
+    padding: 0 4px;
+    color: var(--awd-text-3);
+    font-size: 14px;
+    cursor: pointer;
+}
+.history-filter-clear:hover { color: var(--awd-text); }
+/* 悬停才出的行内操作：常驻会把本来就窄的一行挤没，而这三个都不是高频动作 */
+.conv-row { position: relative; }
+.conv-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    /* 右边留出空档：紧贴着时间戳时「删除 1小时前」会连成一串读不开 */
+    margin: 0 10px 0 10px;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.conv-row:hover .conv-actions { opacity: 1; }
+.conv-action {
+    font-size: 11px;
+    color: var(--awd-text-3);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.conv-action:hover { color: var(--awd-accent-text); }
+.conv-action.danger:hover { color: var(--awd-danger-text); }
+.conv-pin-mark {
+    flex-shrink: 0;
+    font-size: 10px;
+    line-height: 14px;
+    padding: 0 5px;
+    border-radius: 3px;
+    color: var(--awd-text-2);
+    background: var(--awd-surface-2);
+}
+.conv-rename-input {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid var(--awd-accent);
+    border-radius: 4px;
+    background: var(--awd-surface);
+    color: var(--awd-text);
+    font-size: 13px;
+}
 .conv-status-label.dot-running { color: var(--awd-accent-text); background: transparent; animation: none; }
 .conv-status-label.dot-attention { color: var(--awd-warning-text); background: transparent; }
 .conv-status-label.dot-unread { color: var(--awd-info-text); background: transparent; }

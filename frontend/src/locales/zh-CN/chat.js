@@ -130,6 +130,7 @@ export default {
   inboxDelete: '删除',
   inboxSendNow: '立即发送',
   inboxUpdateFailed: '更新待处理消息失败',
+  inboxIdleNotice: '当前没有正在运行的任务，这些消息不会自动发出。点「立即发送」让 AI 现在就处理。',
   inboxInStream: '在对话中查看',
   receiptPendingSteer: '尚未读取 · 立即调整',
   receiptPendingQueued: '排队中',
@@ -183,6 +184,8 @@ export default {
   continueRun: '继续执行',
   // SSE 断连提示条（dev-board#364）：心跳超时或流意外结束，后台在自动重连
   linkReconnecting: '与服务器的连接已断开，正在自动重连（第 {attempt} 次）。AI 仍在后台运行，重连后会续上。',
+  // 会话被另一个窗口接管（dev-board#803）：本窗口已停止重连
+  linkSuperseded: '该会话已在另一个窗口打开，本窗口不再接收更新。在这里继续发消息即可把它接回来。',
   continueHintInterrupted: '上次任务执行中应用被关闭，任务已中断',
   continueHintPaused: '已达单轮执行步数上限，任务已暂停',
   continuePrompt: '继续',

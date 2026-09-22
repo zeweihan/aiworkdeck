@@ -503,6 +503,11 @@
        <view v-if="linkStatus && linkStatus.state === 'reconnecting'" class="link-bar">
           <text class="link-hint">{{ $t('chat.linkReconnecting', { attempt: linkStatus.attempt }) }}</text>
        </view>
+       <!-- 同一条会话被另一个窗口接上了（dev-board#803）：这里已经停止重连，
+            不说一句的话用户看到的是一个永远不再更新、也不报错的窗口 -->
+       <view v-else-if="linkStatus && linkStatus.state === 'superseded'" class="link-bar">
+          <text class="link-hint">{{ $t('chat.linkSuperseded') }}</text>
+       </view>
        <!-- 长任务可控：进度条在浮窗里（BackgroundTaskIndicator），控制放在输入框上方——
             用户想停的时候手在输入区，不该先去浮窗里找按钮。
             文案只说「正在停止」：取消打不断已经发出去的调用（PPT 服务那边还会跑完）。 -->
@@ -562,6 +567,7 @@
        <AgentInbox
          :items="pendingInbox"
          :stream-ids="inboxStreamIds"
+         :run-active="inboxRunActive"
          @edit="handleInboxEdit"
          @delete="handleInboxDelete"
          @move="handleInboxMove"
@@ -955,6 +961,20 @@ export default {
       followUpMode.value = uni.getStorageSync('awd_agent_follow_up_mode') === 'queue' ? 'queue' : 'steer'
     } catch (e) { /* storage unavailable */ }
     const pendingInbox = computed(() => pendingInboxItems(inboxState))
+    /**
+     * 「这条会话现在有没有轮次在跑」（dev-board#802），决定 steer 项要不要露出「立即发送」。
+     *
+     * 判据就是 isStreaming：切回一条后台仍在跑的会话时，后端 connect 必发的
+     * run_state=RUNNING 会把它置起（见 useAgentStream 的 run_state 分支），所以它不只是
+     * 「本窗口从头看到尾的那一轮」。
+     *
+     * **刻意不再与 agentRunStatus === 'RUNNING' 取或**：用户点停止之后，本地 isStreaming
+     * 立刻置 false，而 agentRunStatus 要等后端的 cancelled 事件才落终态——SSE 正好死了的话
+     * 它会永远停在 RUNNING。而「点了停止，插话卡住」恰恰是本卡要修的那条链，用一个可能
+     * 永远不归位的状态去挡救命按钮，等于把病灶换了个地方。宁可多显示一次：真有轮次在跑时
+     * 点它，后端 acceptInboxSubmission 是幂等的（进去先查活跃轮次，有就原样返回）。
+     */
+    const inboxRunActive = computed(() => isStreaming.value)
     const messageList = ref(null)
     const messageContent = ref(null)
     const chatTurns = computed(() => buildChatTurns(bubbles.value, {
@@ -2877,7 +2897,7 @@ export default {
        messageList, messageContent, chatTurns,
        followLatest, handleMessageScroll, scrollToBottom, attentionNotice, jumpToAttention,
        activeTurnKey, handleTurnJump,
-       receiptLabel, inboxStreamIds, handleInboxLocate,
+       receiptLabel, inboxStreamIds, inboxRunActive, handleInboxLocate,
        contextFiles,
        pastedImages,
        isUploadingPasted,

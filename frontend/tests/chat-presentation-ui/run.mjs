@@ -180,11 +180,30 @@ try {
 
   // 菜单「停止当前任务」必须真能停下 AI（K5）：此前它只遍历后台任务，于是最常见的
   // 「只有 AI 在生成」点了毫无反应，模型照样在跑。
+  // 这一条 steer 插话要活到停止之后：K22 要看的就是「轮次没了，它还挂在那里」。
+  await interject('停之前再插一句')
+  await wait(() => window.chatState.pendingInbox.length === 1)
+  assert.equal(await page.evaluate(() => window.chatState.pendingInbox[0].submissionMode), 'steer')
+  // 轮次还在跑时 steer 项不出「立即发送」：它已经排在下一个工具边界上了，
+  // 再给一个按钮只会让人以为点了才发。
+  assert.equal(await page.$('.agent-inbox-row .inbox-action.primary'), null,
+    'a steer item needs no send-now button while a run is consuming it')
+  assert.equal(await page.$('.agent-inbox-idle'), null, 'no idle notice while the run is live')
+
   const cancelsBefore = await page.evaluate(() => window.cancelCalls || 0)
   assert.equal(await page.evaluate(() => window.chat.menuState().aiRunning), true, 'the menu item is enabled while generating')
   assert.equal(await page.evaluate(() => window.chat.menuStop()), 1, 'menuStop reports it stopped the AI turn')
   assert.equal(await page.evaluate(() => window.chatState.isStreaming), false)
   assert.equal(await page.evaluate(() => window.cancelCalls || 0), cancelsBefore + 1, 'menuStop really posts the cancel')
+
+  // K22（dev-board#802）：轮次被停掉之后，这条 steer 再没有人会来 claim 它。
+  // 改造前界面上只剩编辑/上移/下移/删除，它看着像还会被处理，其实永远不会。
+  await wait(() => window.chatState.pendingInbox.length === 1 && window.chatState.isStreaming === false)
+  await wait(() => document.querySelector('.agent-inbox-row .inbox-action.primary'))
+  assert.equal(await page.$eval('.agent-inbox-row .inbox-action.primary', el => el.textContent.trim()), '立即发送',
+    'a stranded steer item gets a way out')
+  assert.ok(await page.$eval('.agent-inbox-idle', el => el.textContent.includes('不会自动发出')),
+    'the box says plainly that nothing will pick these up on its own')
 
   // 回退按钮的可用性（dev-board#779 K1 / 审查 D-02）。回退要么按数据库主键定位（历史回灌的
   // 气泡有），要么按 clientRequestId（本次会话内发出的气泡有）；两个都没有的气泡点下去注定
@@ -423,7 +442,7 @@ try {
   ]), ['Copy', 'Regenerate', 'Copy', 'Copy call'], 'English labels for copy/regenerate')
   await page.screenshot({ path: `${shots}/k11k13-english.png` })
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

@@ -76,23 +76,85 @@ class AgentInboxControllerTest {
         }
     }
 
+    private AgentInboxService.ItemView pendingSteer() {
+        return new AgentInboxService.ItemView(
+                "m-1", "later", null, "steer", "pending", 0, 2,
+                "key", null, null, null, null);
+    }
+
+    private AgentInboxController.EditRequest sendNowRequest() {
+        AgentInboxController.EditRequest sendNow = new AgentInboxController.EditRequest();
+        sendNow.submissionMode = "steer";
+        sendNow.expectedRevision = 1L;
+        return sendNow;
+    }
+
     @Test
-    void explicitQueueToSteerTransitionStartsAnIdleConsumer() {
+    void sendNowStartsAConsumerWhenNoRunIsActive() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
             when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
-            when(inbox.submissionMode("conv-1", "m-1")).thenReturn(AgentInboxService.QUEUE);
-            AgentInboxService.ItemView pending = new AgentInboxService.ItemView(
-                    "m-1", "later", null, "steer", "pending", 0, 2,
-                    "key", null, null, null, null);
+            AgentInboxService.ItemView pending = pendingSteer();
             when(inbox.edit("conv-1", "m-1", null, "steer", null, 1L)).thenReturn(pending);
             when(inbox.view("m-1")).thenReturn(pending);
-            AgentInboxController.EditRequest sendNow = new AgentInboxController.EditRequest();
-            sendNow.submissionMode = "steer";
-            sendNow.expectedRevision = 1L;
+            when(orchestrator.activeRunId("conv-1")).thenReturn(null);
 
-            assertEquals(200, controller.edit("conv-1", "m-1", sendNow, "mine").getStatusCode().value());
+            assertEquals(200, controller.edit("conv-1", "m-1", sendNowRequest(), "mine").getStatusCode().value());
             verify(orchestrator).acceptInboxSubmission("m-1");
+        }
+    }
+
+    /**
+     * dev-board#802：判据是「目标模式 steer 且当前无活跃轮次」，不是「模式发生过 queue -> steer 的转变」。
+     *
+     * <p>本来就是 steer 的待处理项，在那一轮以取消 / 出错 / 待审批 / 待回答 / 无进展暂停收尾之后
+     * （这几种都不 drain 队列）永久卡在 pending 里——界面上只剩编辑 / 上移 / 下移 / 删除，
+     * 没有任何办法把它发出去。旧判据下这里的 acceptInboxSubmission 一次都不会被调到。
+     */
+    @Test
+    void sendNowAlsoRevivesAnAlreadySteerItemThatNoRunWillEverClaim() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
+            when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
+            AgentInboxService.ItemView pending = pendingSteer();
+            // 关键：这一项此前就是 steer（旧判据要求 previousMode == QUEUE，这里不成立）
+            when(inbox.edit("conv-1", "m-1", null, "steer", null, 1L)).thenReturn(pending);
+            when(inbox.view("m-1")).thenReturn(pending);
+            when(orchestrator.activeRunId("conv-1")).thenReturn(null);
+
+            assertEquals(200, controller.edit("conv-1", "m-1", sendNowRequest(), "mine").getStatusCode().value());
+            verify(orchestrator).acceptInboxSubmission("m-1");
+        }
+    }
+
+    @Test
+    void sendNowDoesNotStartASecondRunWhileOneIsAlreadyActive() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
+            when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
+            when(inbox.edit("conv-1", "m-1", null, "steer", null, 1L)).thenReturn(pendingSteer());
+            when(orchestrator.activeRunId("conv-1")).thenReturn("run-9");
+
+            assertEquals(200, controller.edit("conv-1", "m-1", sendNowRequest(), "mine").getStatusCode().value());
+            verify(orchestrator, never()).acceptInboxSubmission(any());
+        }
+    }
+
+    /** 纯改正文（不带 submissionMode）永远不许起跑：「我改了一下措辞」不是「现在就发」。 */
+    @Test
+    void editingTheTextAloneNeverStartsARun() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
+            when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
+            when(inbox.edit("conv-1", "m-1", "reworded", null, null, 1L)).thenReturn(pendingSteer());
+            when(orchestrator.activeRunId("conv-1")).thenReturn(null);
+
+            AgentInboxController.EditRequest edit = new AgentInboxController.EditRequest();
+            edit.message = "reworded";
+            edit.expectedRevision = 1L;
+
+            assertEquals(200, controller.edit("conv-1", "m-1", edit, "mine").getStatusCode().value());
+            verify(orchestrator, never()).acceptInboxSubmission(any());
         }
     }
 }

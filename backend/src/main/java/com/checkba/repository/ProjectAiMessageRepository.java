@@ -28,15 +28,18 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
 
     /**
      * 获取会话列表，包含 conversationTitle 和用户第一条消息
-     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel]
+     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel, pinned]
      * sourceChannel 取首条消息的（镜像导入的会话在首条上带 office-word 等值，dev-board#298）。
+     * pinned 同理取「首条非空值」（与 conversationTitle 同一存储位，dev-board#796）；
+     * 置顶排序在 Java 层做——这里再套一层同样的标量子查询只为排序不划算。
      */
     @org.springframework.data.jpa.repository.Query(
         "SELECT m.conversationId, MAX(m.createdAt), " +
         "(SELECT m2.content FROM ProjectAiMessage m2 WHERE m2.conversationId = m.conversationId ORDER BY m2.createdAt DESC LIMIT 1), " +
         "(SELECT m3.conversationTitle FROM ProjectAiMessage m3 WHERE m3.conversationId = m.conversationId AND m3.conversationTitle IS NOT NULL ORDER BY m3.createdAt ASC LIMIT 1), " +
         "(SELECT m4.content FROM ProjectAiMessage m4 WHERE m4.conversationId = m.conversationId AND m4.role = 'USER' ORDER BY m4.createdAt ASC LIMIT 1), " +
-        "(SELECT m6.sourceChannel FROM ProjectAiMessage m6 WHERE m6.conversationId = m.conversationId ORDER BY m6.createdAt ASC LIMIT 1) " +
+        "(SELECT m6.sourceChannel FROM ProjectAiMessage m6 WHERE m6.conversationId = m.conversationId ORDER BY m6.createdAt ASC LIMIT 1), " +
+        "(SELECT m7.conversationPinned FROM ProjectAiMessage m7 WHERE m7.conversationId = m.conversationId AND m7.conversationPinned IS NOT NULL ORDER BY m7.createdAt ASC LIMIT 1) " +
         "FROM ProjectAiMessage m WHERE m.projectId = :projectId AND m.userId = :userId " +
         "GROUP BY m.conversationId ORDER BY MAX(m.createdAt) DESC")
     List<Object[]> findConversationSummaries(@org.springframework.data.repository.query.Param("projectId") Long projectId, @org.springframework.data.repository.query.Param("userId") Long userId);
