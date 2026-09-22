@@ -610,6 +610,28 @@ dragover 实时改 `railOrderDraft` 草稿、dragend 提交并持久化。
 4. 跑 `npm run test:panel-dock`（注册表自洽断言会拦下 defaultDock 不在 allowedDocks、
    缺图标一类错误）+ `check:emits` + `check:nav` + 一次真构建。
 
+## AI 面板里的钢琴键导航列（2026-09-22，dev-board#791）
+
+长会话（律师一轮尽调常有二三十问）靠 `components/AgentMessage/ChatTurnRail.vue` 变成可寻址的：
+贴在 AI 面板消息区右缘的一列 12px 刻度，每轮一格，hover / 键盘聚焦展开成 200px 浮层逐轮列出提问。
+**它在 AI 面板内部，不是工作台的第五列**——面板默认 360px、下限 240px，再切一列会把正文压到 200 以下。
+数据与跳转契约见 `.claude/agents/ai-chat.md` 的前端消费段，外壳这一侧只有三条：
+
+- **它需要一个可定位的容器，而滚动容器自己给不了**：`.message-list` 没有 `position: relative`
+  且 `overflow-y:auto` + `overflow-x:hidden`，`.message-list-content` 再叠一层 `overflow:hidden`——
+  绝对定位的浮层挂在里面会随内容滚走、展开的部分被两层 overflow 裁掉。所以 `ChatInterface.vue`
+  给 `.message-list` 加了**兄弟包裹层 `.message-area`**（`position: relative; display: flex;
+  flex: 1; min-height: 0;`），rail 与 `.message-list` 是它的两个 flex 子元素，浮层按 `.message-area`
+  定位。形制与同文件 `.return-to-latest`（挂在滚动容器之外）同源。
+- **静息刻度占一个真的 12px 列，不覆盖在消息上**：覆盖会把 `.message-list` 右缘的滚动条一起吃掉
+  （macOS 的浮层滚动条就在那条线上，点不到）。展开层才是 `position: absolute` 的覆盖层，
+  `max-width: calc(100% - 12px)` 让窄面板（<300px）自动收窄——**百分比按 `.message-area` 算，
+  这就是浮层必须挂在包裹层而不是 12px 的 rail 根节点上的原因**。
+- **z-index 6**：要盖住 `.return-to-latest` 的 5，否则「回到最新」会从展开层里透出来。
+
+改这块时 `node tests/chat-presentation-ui/run.mjs` 有一整段真渲染断言守着（刻度数 = 用户轮数、
+点第 N 格后那一轮进视口顶部、滚动时当前轮跟随、单轮不渲染、键盘 Enter 可跳、窄面板浮层收在消息区内）。
+
 ## 左栏面板的标题与密度（2026-08-17）
 
 **左栏标题只有一个出处**：外壳的 `.sidebar-header`（`project-overview.vue`，渲染

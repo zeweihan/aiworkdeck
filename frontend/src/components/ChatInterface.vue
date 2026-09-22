@@ -245,15 +245,17 @@
        </view>
     </view>
 
-    <!-- Thinking, tools and replies stay in chronological order in the transcript. -->
-    <div
-      v-if="bubbles.length > 0 || isStreaming"
-      class="message-list"
-      ref="messageList"
-      @scroll="handleMessageScroll"
-    >
+    <!-- Thinking, tools and replies stay in chronological order in the transcript.
+         .message-area 是为钢琴键导航列加的定位层（dev-board#791）：滚动容器自己
+         overflow 两层全裁，浮层只能挂在它外面。 -->
+    <div v-if="bubbles.length > 0 || isStreaming" class="message-area">
+      <div
+        class="message-list"
+        ref="messageList"
+        @scroll="handleMessageScroll"
+      >
       <view ref="messageContent" class="message-list-content">
-        <view v-for="turn in chatTurns" :key="turn.key" class="conversation-turn">
+        <view v-for="turn in chatTurns" :key="turn.key" :data-turn-key="turn.key" class="conversation-turn">
         <view
           v-for="{ bubble: msg, index } in (turn.user ? [turn.user, ...turn.assistants] : turn.assistants)"
           :key="msg.id || index"
@@ -314,6 +316,8 @@
         </view>
       </view>
       </view>
+      </div>
+      <ChatTurnRail :turns="chatTurns" :active-key="activeTurnKey" @jump="handleTurnJump" />
     </div>
     <view v-if="bubbles.length && (attentionNotice || !followLatest)" class="return-to-latest">
       <view class="locator-row">
@@ -720,6 +724,7 @@
 
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
+import ChatTurnRail from './AgentMessage/ChatTurnRail.vue'
 import { buildChatTurns, isPlanSnapshotCall, pendingAttention, recoverPlanTodos } from './AgentMessage/chatTurns.mjs'
 import { useChatReadingPosition } from '@/composables/useChatReadingPosition.js'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
@@ -747,7 +752,7 @@ import {
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
+  components: { RootBubble, ChatTurnRail, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -977,6 +982,53 @@ export default {
       card.classList.add('chat-attention-flash')
       setTimeout(() => card.classList.remove('chat-attention-flash'), 1600)
       syncAttentionLocator()
+    }
+    // 钢琴键会话导航（dev-board#791 K12）：当前在看哪一轮。
+    // observer 只观察轮级元素（几十个），**不观察每条消息**，更不在 scroll 回调里逐轮量
+    // getBoundingClientRect——那正是长会话掉帧的写法。root 取滚动容器本身，当前轮 =
+    // 视口内最靠上的那一轮（律师读到哪儿，哪一轮就顶在屏幕上沿）；顶边内缩 8% 是为了
+    // 让只剩一条边还挂在上沿的上一轮及时让位给真正在读的那一轮。
+    const activeTurnKey = ref('')
+    const visibleTurnEls = new Map()
+    let turnObserver = null
+    const syncTurnObserver = () => {
+      turnObserver?.disconnect()
+      turnObserver = null
+      visibleTurnEls.clear()
+      const list = messageList.value?.$el || messageList.value
+      if (!list || typeof IntersectionObserver === 'undefined') return
+      turnObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const key = entry.target.getAttribute('data-turn-key')
+          if (!key) continue
+          if (entry.isIntersecting) visibleTurnEls.set(key, entry.target)
+          else visibleTurnEls.delete(key)
+        }
+        // 取「最靠上的那一轮」。这里现读 rect 而不是用回调里那份快照：仍然在屏的条目
+        // 不会再来回调，存下来的坐标滚两下就过期了。命中的通常只有一两条。
+        let best = null
+        for (const [key, el] of visibleTurnEls) {
+          const top = el.getBoundingClientRect().top
+          if (!best || top < best.top) best = { key, top }
+        }
+        if (best) activeTurnKey.value = best.key
+      }, { root: list, rootMargin: '-8% 0px 0px 0px', threshold: 0 })
+      for (const el of list.querySelectorAll('[data-turn-key]')) turnObserver.observe(el)
+    }
+    // 轮次集合真的变了才重挂：chatTurns 每个 token 都会重算，跟着它重挂 200 个 observer
+    // 就等于把「不在 scroll 里量 rect」这条纪律从另一头丢掉。
+    const turnSignature = computed(() => {
+      const turns = chatTurns.value
+      return `${turns.length}|${turns[0]?.key || ''}|${turns.at(-1)?.key || ''}`
+    })
+    watch([turnSignature, messageList], () => nextTick(syncTurnObserver), { flush: 'post' })
+    onBeforeUnmount(() => { turnObserver?.disconnect(); turnObserver = null })
+    // 跳转必须复用 navigateToMessage：它和 isMessageOffscreen 共用同一个元素解析，
+    // 自己 scrollTo 会变成「量一张卡、滚到另一张」。
+    const handleTurnJump = ({ key, index }) => {
+      if (!(index >= 0)) return
+      activeTurnKey.value = key
+      navigateToMessage({ index, target: 'turn' })
     }
     watch(currentConversationId, () => { followLatest.value = true })
     // 刷新后回到上次那段对话（dev-board#779 K7④）：会话 id 归本组件所有——新会话是
@@ -2753,6 +2805,7 @@ export default {
        tokenUsage,
        messageList, messageContent, chatTurns,
        followLatest, handleMessageScroll, scrollToBottom, attentionNotice, jumpToAttention,
+       activeTurnKey, handleTurnJump,
        receiptLabel, inboxStreamIds, handleInboxLocate,
        contextFiles,
        pastedImages,
@@ -3046,6 +3099,13 @@ export default {
 }
 .icon-btn.file-add-btn:hover {
   border-color: var(--awd-accent);
+}
+
+.message-area {
+  position: relative; /* 钢琴键展开层的包含块，见 ChatTurnRail.vue 的定位契约 */
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .message-list {

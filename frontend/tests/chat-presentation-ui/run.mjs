@@ -219,6 +219,100 @@ try {
   assert.equal(await page.$('.awd-dialog'), null, '拿不到定位键时打不开确认框')
   assert.ok(await page.$eval(rollbackBtn, el => (el.getAttribute('title') || '').length > 0),
     '置灰要说明原因，不能只是点不动')
+
+  // 钢琴键会话导航（dev-board#791 K12）。数据源与跳转原语都是既有的，这里测的是
+  // 「刻度 -> 当前轮 -> 跳转」这一整条接线，它只有在真渲染里看得见。
+  await page.setViewport({ width: 420, height: 860 })
+  await page.evaluate(() => window.loadFixture('single'))
+  await wait(() => window.chatState.chatTurns.length === 1)
+  assert.equal(await page.$('.chat-turn-rail'), null, '单轮会话不渲染导航列')
+  await page.evaluate(() => window.loadManyTurns(200))
+  await wait(() => window.chatState.chatTurns.length === 200)
+  await wait(() => document.querySelectorAll('.chat-turn-rail .rail-tick').length === 200)
+  assert.equal(await page.$$eval('.conversation-turn[data-turn-key]', els => els.length), 200, '每一轮都可寻址')
+  assert.equal(await page.$$eval('.chat-turn-rail .rail-tick', els => els.length),
+    await page.evaluate(() => window.chatState.bubbles.filter(b => b.role === 'USER').length), '刻度数 = 用户提问轮数')
+  assert.ok(await page.$eval('.message-list', el => el.scrollWidth <= el.clientWidth + 1), '导航列不撑出横向滚动')
+  // 当前轮跟随滚动：IntersectionObserver 只观察轮级元素。
+  await page.evaluate(() => { document.querySelector('.message-list').scrollTop = 0 })
+  await wait(() => window.chatState.activeTurnKey === 'mu1')
+  await page.evaluate(() => { const el = document.querySelector('.message-list'); el.scrollTop = el.scrollHeight / 2 })
+  await wait(() => window.chatState.activeTurnKey && window.chatState.activeTurnKey !== 'mu1')
+  // 静息刻度 + 展开浮层：浮层覆盖在消息区上，不挤压消息流（窄面板同理，见下）。
+  const listWidthBefore = await page.$eval('.message-list', el => el.getBoundingClientRect().width)
+  await page.hover('.chat-turn-rail')
+  await wait(() => document.querySelector('.rail-panel'))
+  assert.equal(await page.$$eval('.rail-panel .rail-item', els => els.length), 200, '浮层逐轮列出提问')
+  assert.ok(await page.$eval('.rail-panel .rail-item.is-active', el => el.textContent.trim().length > 0), '当前轮在浮层里被标出')
+  assert.equal(await page.$eval('.message-list', el => el.getBoundingClientRect().width), listWidthBefore, '浮层覆盖而不挤压消息流')
+  await page.screenshot({ path: '/Users/zewei/aiworkdeck-qa/reports/ai-chat-audit-2026-09-22/k12/shots/k12-rail-expanded.png' })
+  // 点第 N 格：那一轮进入视口顶部（对齐口径与 navigateToMessage 一致：列表顶 12px）。
+  const jump = await page.evaluate(() => {
+    const t0 = performance.now()
+    document.querySelector('.rail-panel .rail-item[data-rail-key="mu120"]').click()
+    const list = document.querySelector('.message-list')
+    const row = document.querySelector('.conversation-turn[data-turn-key="mu120"]')
+    // 读 rect 会强制同步布局，所以这个数字含样式+布局，不只是事件处理函数本身。
+    const offset = row.getBoundingClientRect().top - list.getBoundingClientRect().top
+    return { ms: performance.now() - t0, offset }
+  })
+  assert.ok(Math.abs(jump.offset - 12) < 4, `点击把该轮送到视口顶部（实测偏移 ${jump.offset}）`)
+  console.log(`  200 轮会话单次跳转耗时 ${jump.ms.toFixed(2)}ms`)
+  assert.ok(jump.ms < 100, `跳转必须在一两帧内完成（实测 ${jump.ms.toFixed(2)}ms）`)
+  // 滚动跟随的代价：逐帧滚 20 步，量最坏的一帧。IntersectionObserver 在帧边界才跑，
+  // 同步循环量不到它，所以必须一帧一步。observer 只挂轮级元素（200 个），改成挂每条
+  // 消息或改回 scroll 里逐轮量 rect，这个数字会立刻爆掉。
+  const follow = await page.evaluate(async () => {
+    const list = document.querySelector('.message-list')
+    const step = list.scrollHeight / 24
+    let worst = 0
+    let prev = performance.now()
+    for (let i = 1; i <= 20; i += 1) {
+      list.scrollTop = step * i
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      const now = performance.now()
+      worst = Math.max(worst, now - prev)
+      prev = now
+    }
+    return worst
+  })
+  console.log(`  200 轮会话滚动跟随最坏一帧 ${follow.toFixed(2)}ms`)
+  assert.ok(follow < 100, `滚动跟随不得整片掉帧（实测最坏一帧 ${follow.toFixed(2)}ms）`)
+  // 键盘可达：Tab 到导航列 -> 上下箭头选轮 -> Enter 跳转。
+  // 先把指针移开：悬停展开与键盘展开是同一个 open，指针不走的话光标停在刚点过的那一格。
+  await page.mouse.move(10, 10)
+  await wait(() => !document.querySelector('.rail-panel'))
+  await page.evaluate(() => { document.querySelector('.message-list').scrollTop = 0 })
+  await wait(() => window.chatState.activeTurnKey === 'mu1')
+  await page.focus('.chat-turn-rail')
+  await wait(() => document.querySelector('.rail-panel'))
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await wait(() => window.chatState.activeTurnKey === 'mu3')
+  assert.ok(await page.evaluate(() => {
+    const list = document.querySelector('.message-list')
+    const row = document.querySelector('.conversation-turn[data-turn-key="mu3"]')
+    return Math.abs(row.getBoundingClientRect().top - list.getBoundingClientRect().top - 12) < 4
+  }), 'Enter 真的跳过去了')
+  await page.keyboard.press('Escape')
+  await wait(() => !document.querySelector('.rail-panel'))
+  await page.screenshot({ path: '/Users/zewei/aiworkdeck-qa/reports/ai-chat-audit-2026-09-22/k12/shots/k12-rail-resting.png' })
+  // 窄面板（<300px）：静息刻度仍在，浮层收窄后仍整块落在消息区内。
+  await page.setViewport({ width: 280, height: 860 })
+  await wait(() => document.querySelectorAll('.chat-turn-rail .rail-tick').length === 200)
+  assert.ok(await visible('.chat-turn-rail'), '窄面板仍显示静息刻度')
+  await page.hover('.chat-turn-rail')
+  await wait(() => document.querySelector('.rail-panel'))
+  assert.ok(await page.evaluate(() => {
+    const area = document.querySelector('.message-area').getBoundingClientRect()
+    const panel = document.querySelector('.rail-panel').getBoundingClientRect()
+    return panel.left >= area.left - 1 && panel.right <= area.right + 1 && panel.width < area.width
+  }), '窄面板里浮层收在消息区内')
+  await page.setViewport({ width: 420, height: 860 })
+  await page.mouse.move(10, 10)
+  await wait(() => !document.querySelector('.rail-panel'))
+
   await page.evaluate(() => window.loadFixture('single'))
   await page.screenshot({ path: '/tmp/awd-chat-646-light.png' })
   await page.focus('.thinking-card .header')
@@ -234,7 +328,7 @@ try {
   await wait(() => window.ready)
   assert.ok(await page.$eval('.message-list', el => el.textContent.includes('Ran 17 operations')), 'English controls interpolate')
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, interjection receipts and inbox/transcript reconciliation, menu stop, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))
