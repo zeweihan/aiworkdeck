@@ -335,6 +335,9 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 
 ## 已知地雷
 
+- **新增 doc_*/sheet_*/slide_* 编辑原语要同步四处，漏一处 CI 就红**（2026-09-22 K24 实证，PR#934 连红三次）：① `PluginHostImpl.DOC_ACTIONS` 白名单（`PluginHostImplTest.docActionsCoverDocumentEditToolsDispatch` 扫 DocumentEditTools 源码）；② `docs/PLUGIN_SPEC.md` §11 清单；③ `frontend/src/config/pluginDocActions.js` 镜像（`tests/plugin-sdk/doc-actions-parity.test.mjs` 与后端逐项对拍）；④ `scripts/check-tool-parity.mjs` 的 MATRIX（两族对拍，CI 的 spdx-check job 里跑）。
+
+
 - **AI 新建文件一律带上目的地**：新增「在项目里建文件」的工具时必须有可选 `parentFolderId` 并走 `createAgentFile`，否则用户指定的文件夹在结构上就无法表达（dev-board#465 的症状：文件默默出现在项目根目录、无任何报错）。`NewFileFolderContractTest` 反射扫 `@P`，漏了即转红。
 - **流式写入这条路没有 ack**：`doc_stream_data` 是单向 SSE，后端拿不到落字结果。任何「不写就 return」的分支都必须留下缓冲 + 记原因 + 最终报到对话里，否则症状恒为「文件建好了、正文空白、谁都没报错」。回归 `frontend/tests/project-home/doc-stream-failure-surfaced.test.mjs`。
 - **新增 doc_* 工具四件套**：DocumentEditTools 加 @Tool + EDITOR_ACTIONS 白名单加 action + office_thread.js 加实现 + toolDisplayNames.js 加中文名。漏任何一环都是静默失败（PR#180 教训）。

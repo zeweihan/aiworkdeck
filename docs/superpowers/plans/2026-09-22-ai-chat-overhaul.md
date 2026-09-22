@@ -231,19 +231,19 @@
 | K21 降级与上限可见 | #801 | 2 | Config/CI/CAS | 已合并 | #928 |
 | K22 steer 立即发送 | #802 | 2 | Inbox | 已合并 | #923 |
 | K23 X-Client-Instance | #803 | 2 | UAS | 已合并 | #923 |
-| K24 Excel 替换 | #804 | 3 | DET/office_thread/Office | 待合并 | #934 |
-| K25 PDF 页操作 | #805 | 3 | PdfTools | 待合并 | #929 |
+| K24 Excel 替换 | #804 | 3 | DET/office_thread/Office | 已合并 | #934 |
+| K25 PDF 页操作 | #805 | 3 | PdfTools | 已合并 | #929 |
 | K26 Office 桥超时+分页 | #806 | 3 | Bridge/OfficeEditTools | 已合并 | #930 |
-| K27 工具描述清理 | #807 | 3 | 多 tool 组件 | 待合并 | #933 |
-| K28 PPTX 权威面 | #808 | 3 | PptxTools | 待合并 | #933 |
-| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 进行中 |  |
-| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 进行中 |  |
-| K31 长会话性能 | #811 | 3 | CI/Markdown | 进行中 |  |
-| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 进行中 |  |
+| K27 工具描述清理 | #807 | 3 | 多 tool 组件 | 已合并 | #933 |
+| K28 PPTX 权威面 | #808 | 3 | PptxTools | 已合并 | #933 |
+| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 待合并 | #938 |
+| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 已提交待链式合并 |  |
+| K31 长会话性能 | #811 | 3 | CI/Markdown | 已合并 | #936 |
+| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 已提交待链式合并 |  |
 | K33 Office Word 面 | #813 | 3 | OfficeEditTools/skill | 已合并 | #930 |
 | K34 音频附件 | #814 | 3 | LegalTools | 已合并 | #931 |
 | K35 文档漂移 | #815 | 3 | docs | 已合并（关卡） | #926 |
-| K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 进行中 |  |
+| K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 已合并 | #937 |
 | K37 skill 白名单补编辑面 | #818 | 2 | skills yml/回放用例 | 已合并 | #925 |
 
 ## 派工模板（主会话给每个实施代理的任务书骨架）
