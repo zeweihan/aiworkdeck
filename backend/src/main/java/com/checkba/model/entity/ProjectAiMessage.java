@@ -136,6 +136,23 @@ public class ProjectAiMessage {
     @Column
     private LocalDateTime createdAt;
 
+    /**
+     * 本条消息带走的附件（dev-board#793 K14 ④）。<b>不是表列</b>——
+     * {@code GET /api/ai/history} 直接序列化本实体，加一个 {@code @Transient} 字段
+     * 是「只增不改」地把附件清单带给前端的最小改动（响应形状纯追加，老客户端忽略即可）。
+     *
+     * <p>由 {@code ProjectAiMessageService.listByConversationId} 批量填充（一次查完，不 N+1）；
+     * 其它读路径不填，此时为 null——前端一律按「空即无附件」处理。
+     *
+     * <p>刻意不做成 {@code @OneToMany}：那会给每一条历史消息挂一个懒加载代理，
+     * 而历史接口是没有事务边界的 REST 序列化，代理在序列化时才初始化正是本仓 OSIV 那一串坑的来源。
+     */
+    @Transient
+    private java.util.List<ProjectAiMessageAttachment> attachments;
+
+    public java.util.List<ProjectAiMessageAttachment> getAttachments() { return attachments; }
+    public void setAttachments(java.util.List<ProjectAiMessageAttachment> attachments) { this.attachments = attachments; }
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public Long getProjectId() { return projectId; }

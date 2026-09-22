@@ -15,6 +15,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ProjectAiMessageService {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(ProjectAiMessageService.class);
+
     private final ProjectAiMessageRepository repository;
     private final com.checkba.service.ai.ConversationIssuanceService conversationIssuanceService;
     /** 概览页会话列表的运行状态来源：读表不读 AgentRunStateService 的内存 Map。 */
@@ -29,6 +32,54 @@ public class ProjectAiMessageService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.service.addin.AddinConvSyncService addinConvSyncService;
+
+    /**
+     * 消息 ↔ 附件关联（dev-board#793 K14 ④）。同 {@link #addinConvSyncService} 的理由走 field 注入：
+     * 本类是 {@code @RequiredArgsConstructor}，往构造器里加参数要牵动五处手工 new 的测试。
+     * 生产环境 Spring 必然注入；为 null 只会发生在没有调 {@link #setAttachmentRepositoryForTest}
+     * 的手工构造里，此时整条旁路关闭（历史照常，只是没有附件 chip）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.repository.ProjectAiMessageAttachmentRepository attachmentRepository;
+
+    void setAttachmentRepositoryForTest(com.checkba.repository.ProjectAiMessageAttachmentRepository repo) {
+        this.attachmentRepository = repo;
+    }
+
+    /** 一条待落库的附件关联（{@link com.checkba.service.ai.ContextTurnSink} 的账本条目）。 */
+    public record AttachmentRecord(String fileId, String name, String fileType, String kind, boolean visionUsed) {
+    }
+
+    /**
+     * 把本轮的附件挂到刚落库的那条消息上。
+     *
+     * <p><b>失败只 log</b>：附件 chip 是锦上添花，写不进去绝不能掀翻这一轮对话
+     *（同 {@code TodoListService} 写透 DB 的口径）。
+     */
+    public void recordAttachments(Long messageId, List<AttachmentRecord> records) {
+        if (messageId == null || records == null || records.isEmpty() || attachmentRepository == null) {
+            return;
+        }
+        try {
+            List<com.checkba.model.entity.ProjectAiMessageAttachment> rows = new java.util.ArrayList<>();
+            LocalDateTime now = LocalDateTime.now();
+            for (AttachmentRecord r : records) {
+                com.checkba.model.entity.ProjectAiMessageAttachment row =
+                        new com.checkba.model.entity.ProjectAiMessageAttachment();
+                row.setMessageId(messageId);
+                row.setFileId(r.fileId());
+                row.setName(r.name());
+                row.setKind(r.kind());
+                row.setFileType(r.fileType());
+                row.setVisionUsed(r.visionUsed());
+                row.setCreatedAt(now);
+                rows.add(row);
+            }
+            attachmentRepository.saveAll(rows);
+        } catch (Exception e) {
+            log.warn("Failed to record {} attachment(s) for message {}", records.size(), messageId, e);
+        }
+    }
 
     private void mirror(ProjectAiMessage msg) {
         if (addinConvSyncService != null) {
@@ -79,8 +130,8 @@ public class ProjectAiMessageService {
      * Used for streaming scenarios where assistant response comes after user message.
      * 总是插入新行；同一轮次内 ASSISTANT 消息的增量更新请用 {@link #upsertAssistantMessage}。
      */
-    public void saveMessage(String projectIdStr, Long userId, String conversationId, String role, String content) {
-        saveMessage(projectIdStr, userId, conversationId, role, content, null);
+    public Long saveMessage(String projectIdStr, Long userId, String conversationId, String role, String content) {
+        return saveMessage(projectIdStr, userId, conversationId, role, content, null);
     }
 
     /**
@@ -92,10 +143,14 @@ public class ProjectAiMessageService {
      * 的回退判断在不同客户端上会有分歧。
      *
      * <p>模型侧读取一律走 content（见 ProjectAiMessage#displayContent 的红线说明）。
+     *
+     * @return 落库后的行 id；参数非法而没落库时返回 null。
+     *         调用方拿它把本轮附件挂上去（{@link #recordAttachments}）——
+     *         返回值是追加的，忽略它的既有调用方行为完全不变。
      */
-    public void saveMessage(String projectIdStr, Long userId, String conversationId, String role,
+    public Long saveMessage(String projectIdStr, Long userId, String conversationId, String role,
                             String content, String displayContent) {
-        saveMessage(projectIdStr, userId, conversationId, role, content, displayContent, null);
+        return saveMessage(projectIdStr, userId, conversationId, role, content, displayContent, null);
     }
 
     /**
@@ -105,17 +160,20 @@ public class ProjectAiMessageService {
      * 它是「回退到这条消息」唯一在消息落库前就存在的定位键（原委见
      * {@link ProjectAiMessage#getClientRequestId()}）。ASSISTANT 行不需要，传 null。
      * 空白一律落 null，与 displayContent 同口径。
+     *
+     * <p>这一个是真正落库的实现，另外两个重载都委托到它。
+     * <b>返回行 id</b>（dev-board#793 K14 ④）：附件关联要挂在这一行上，而主键到落库这一刻才生成。
      */
-    public void saveMessage(String projectIdStr, Long userId, String conversationId, String role,
+    public Long saveMessage(String projectIdStr, Long userId, String conversationId, String role,
                             String content, String displayContent, String clientRequestId) {
         if (projectIdStr == null || role == null) {
-            return;
+            return null;
         }
         Long projectId;
         try {
             projectId = Long.parseLong(projectIdStr);
         } catch (NumberFormatException e) {
-            return;
+            return null;
         }
         ProjectAiMessage msg = new ProjectAiMessage();
         msg.setProjectId(projectId);
@@ -128,6 +186,7 @@ public class ProjectAiMessageService {
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);
         mirror(msg);
+        return msg.getId();
     }
 
     /**
@@ -186,7 +245,36 @@ public class ProjectAiMessageService {
     }
 
     public List<ProjectAiMessage> listByConversationId(String conversationId) {
-        return repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        List<ProjectAiMessage> messages = repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        attachAttachments(messages);
+        return messages;
+    }
+
+    /**
+     * 一次把整条会话的附件取回来挂到各条消息上（N+1 防护）。
+     *
+     * <p>失败只 log：附件 chip 没有比「历史打不开」更重要。
+     */
+    private void attachAttachments(List<ProjectAiMessage> messages) {
+        if (attachmentRepository == null || messages == null || messages.isEmpty()) return;
+        try {
+            List<Long> ids = messages.stream().map(ProjectAiMessage::getId)
+                    .filter(java.util.Objects::nonNull).toList();
+            if (ids.isEmpty()) return;
+            java.util.Map<Long, List<com.checkba.model.entity.ProjectAiMessageAttachment>> byMessage =
+                    new java.util.HashMap<>();
+            for (com.checkba.model.entity.ProjectAiMessageAttachment a
+                    : attachmentRepository.findByMessageIdInOrderByIdAsc(ids)) {
+                byMessage.computeIfAbsent(a.getMessageId(), k -> new java.util.ArrayList<>()).add(a);
+            }
+            if (byMessage.isEmpty()) return;
+            for (ProjectAiMessage m : messages) {
+                List<com.checkba.model.entity.ProjectAiMessageAttachment> mine = byMessage.get(m.getId());
+                if (mine != null) m.setAttachments(mine);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load attachments for conversation history", e);
+        }
     }
 
     /**

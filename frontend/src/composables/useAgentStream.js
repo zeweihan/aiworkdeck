@@ -281,7 +281,12 @@ export function useAgentStream() {
         // turnExecutor 线程上落库才生成，POST /api/agent/chat 的回执与 input_applied
         // 都赶在它前面，带不上（审查 D-02）。live 气泡因此靠 clientRequestId 定位，
         // 那个发之前就有，见后端 ProjectAiMessage#clientRequestId。
-        dbMessageId: null
+        dbMessageId: null,
+        // 本轮附件的降级/截断/丢弃（SSE context_notice，dev-board#801 K21 ⑦）。
+        // 挂在**用户气泡**上：这些事说的是「你发的这些材料被怎么处理了」，
+        // 而且重连/切回会话时 currentAssistantBubble 可能为 null，末条用户气泡永远在。
+        // 同样要预声明——运行时才挂上去的字段 Vue 3 追踪不到，提示会渲染成「第一次对、之后不变」。
+        contextNotices: []
     })
 
     const resetInboxState = () => {
@@ -808,7 +813,11 @@ export function useAgentStream() {
                     id: String(activeContext.id),
                     name: activeContext.name || 'Unknown',
                     fileType: activeContext.fileType || '',
-                    wpsFileId: activeContext.wpsFileId || null
+                    wpsFileId: activeContext.wpsFileId || null,
+                    // 没能在发送前把编辑器里的改动落盘（dev-board#793 K14 ⑤）：
+                    // 磁盘上那份正文已经不是用户眼前看到的那份，让后端只带壳、
+                    // 由模型走编辑器桥读实时正文，别拿旧版本给结论
+                    staleBody: activeContext.staleBody === true
                 } : null,
                 // 用户主动选择的 Skill；为空则后端只走触发词自动匹配
                 skillIds: Array.isArray(skillIds) && skillIds.length ? skillIds : null
@@ -1085,6 +1094,39 @@ export function useAgentStream() {
                 }
             } catch (e) {
                 console.error('Failed to parse skill_update', e)
+            }
+            return
+        }
+
+        // 附件降级/截断/丢弃（dev-board#801 K21 ⑦）。与 plan_update 同理放在气泡守卫之前：
+        // 它在 assemble 期间就发出来了，而切回会话/重连时助手气泡指针为 null。
+        //
+        // 落到**最后一条用户气泡**上——这些事说的是「你刚发的那几份材料被怎么处理了」，
+        // 挂在助手气泡上等于把「你的附件被丢了」说成模型的输出。
+        // 历史回灌不重放（GET /api/ai/history 不带这些，气泡里就是空数组）：
+        // 降级是「这一轮发生的事」，刷新之后再弹一次只是噪音。
+        if (evt === 'context_notice') {
+            try {
+                const d = JSON.parse(dataStr)
+                if (!d || !d.kind) return
+                for (let i = bubbles.value.length - 1; i >= 0; i--) {
+                    const b = bubbles.value[i]
+                    if (b.role !== 'USER') continue
+                    if (!Array.isArray(b.contextNotices)) b.contextNotices = []
+                    // 同一条消息重发（重试/续跑）时不要堆成两份一样的提示
+                    const dup = b.contextNotices.some((n) => n.kind === d.kind && n.fileId === d.fileId)
+                    if (!dup) {
+                        b.contextNotices.push({
+                            kind: String(d.kind),
+                            fileId: d.fileId == null ? '' : String(d.fileId),
+                            name: d.name == null ? '' : String(d.name),
+                            detail: d.detail == null ? '' : String(d.detail)
+                        })
+                    }
+                    break
+                }
+            } catch (e) {
+                console.error('Failed to parse context_notice', e)
             }
             return
         }

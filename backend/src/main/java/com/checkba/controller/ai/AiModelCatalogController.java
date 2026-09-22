@@ -44,6 +44,9 @@ import java.util.Map;
 @RequestMapping("/api/ai")
 public class AiModelCatalogController {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(AiModelCatalogController.class);
+
     private final NetworkRegionService networkRegionService;
     private final ChatModelFactory chatModelFactory;
 
@@ -64,6 +67,24 @@ public class AiModelCatalogController {
 
         AllowedModels.Region region = networkRegionService.effectiveRegion();
 
+        // 本地 Ollama 档下 vision 位一律归一为 false（dev-board#801 K21 ⑨，审查 E-15）。
+        //
+        // 病灶：这个端点只按区域过滤白名单、不感知当前 provider，而
+        // ChatModelFactory.effectiveModelSupportsVision 对 OLLAMA 档**恒返回 false**
+        // （langchain4j-ollama 是另一套图片编组，本仓没接）。于是用户把供应商切到本地
+        // Ollama 后，模型下拉里仍是云端白名单，选中一个 vision:true 的条目时前端认为
+        // 「能读图」——既不弹提示也不显示 OCR 降级说明，而后端实际一律降级走 OCR。
+        // 「显示与实际不一致」正是本仓治理过一轮的老毛病，判据收敛在后端这一处。
+        boolean visionDisabledByProvider = false;
+        try {
+            visionDisabledByProvider =
+                    chatModelFactory.resolveProvider() == com.checkba.config.AiModelProperties.Provider.OLLAMA;
+        } catch (Exception e) {
+            // 供应商解析不出来时不改写能力位：宁可维持白名单原值，也不要凭一次异常
+            // 把所有模型都标成读不了图（那是对全体云端用户的误报）
+            log.warn("[Models] Provider probe failed; keeping AllowedModels vision flags as-is", e);
+        }
+
         List<Map<String, Object>> models = new ArrayList<>();
         for (AllowedModels m : AllowedModels.availableIn(region)) {
             // 价格取首档：选择器里展示的是「起步单价」，分档模型靠 tiered 让 UI 提示
@@ -79,7 +100,7 @@ public class AiModelCatalogController {
             dto.put("contextLength", m.getContextLength());
             // 视觉能力：前端在「选模型的那一刻」就据此提示「这个模型看不了图，图片会按 OCR 文本处理」。
             // 不下发这个字段，前端只能自己维护一张模型 → 支持视觉的表，正好踩回上面那条历史债。
-            dto.put("vision", m.isVision());
+            dto.put("vision", !visionDisabledByProvider && m.isVision());
             dto.put("inputPricePerM", first.inputPricePerM());
             dto.put("outputPricePerM", first.outputPricePerM());
             dto.put("tiered", m.getPriceTiers().size() > 1);

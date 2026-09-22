@@ -41,6 +41,7 @@ public class AiChatController {
     private final com.checkba.repository.TokenUsageRepository tokenUsageRepository;
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
     private final com.checkba.service.ai.PlatformAiChannel platformAiChannel;
+    private final com.checkba.config.AiContextProperties aiContextProperties;
 
     public AiChatController(
             ProjectAiMessageService projectAiMessageService,
@@ -49,7 +50,8 @@ public class AiChatController {
             com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService,
             com.checkba.repository.TokenUsageRepository tokenUsageRepository,
             com.checkba.service.ai.AgentRunStateService agentRunStateService,
-            com.checkba.service.ai.PlatformAiChannel platformAiChannel) {
+            com.checkba.service.ai.PlatformAiChannel platformAiChannel,
+            com.checkba.config.AiContextProperties aiContextProperties) {
         this.projectAiMessageService = projectAiMessageService;
         this.aiDocxExportService = aiDocxExportService;
         this.chatModelFactory = chatModelFactory;
@@ -57,6 +59,7 @@ public class AiChatController {
         this.tokenUsageRepository = tokenUsageRepository;
         this.agentRunStateService = agentRunStateService;
         this.platformAiChannel = platformAiChannel;
+        this.aiContextProperties = aiContextProperties;
     }
 
     @GetMapping("/history")
@@ -279,7 +282,34 @@ public class AiChatController {
         // 让没直连账户的租户看到一个选了就报错的供应商。
         config.put("platformAiAvailable",
                 platformAiChannel.availableFor(AuthController.getUserIdFromSession(sessionId)));
+        config.put("contextLimits", contextLimits());
         return ResponseEntity.ok(config);
+    }
+
+    /**
+     * 上下文层的各项上限（dev-board#801 K21 ⑧，长期原则 5「单一事实来源」）。
+     *
+     * <p><b>为什么必须下发而不是前端写死</b>：这些值只有后端配置说了算
+     *（{@code ai.context.files.*} / {@code ai.context.vision.*}），前端复制一份就是
+     * 第二处事实来源——改了后端配置之后，界面上仍按旧值拦截或放行，两边说的话对不上。
+     *
+     * <p><b>为什么要让前端知道</b>：原来这些上限全是<b>事后</b>生效的——用户拖了 15 份材料、
+     * 界面上 15 个标签都在，后端静默只读前 10 份；贴第 5 张图，那一张悄悄降级成 OCR。
+     * 按原则 2「任何上限在触发前拦截并明示」，前端必须在<b>加进来的那一刻</b>就拦住并说明。
+     *
+     * <p><b>visionCountsTowardFileQuota</b>：直送的图片<b>也占</b> maxFilesPerContext 的配额
+     *（dev-board#801 统一口径）。不写明这一条，前端就会按「文件 10 份 + 图片 4 张」分开算，
+     * 与后端实际口径差出 4 份。
+     */
+    private Map<String, Object> contextLimits() {
+        Map<String, Object> limits = new java.util.LinkedHashMap<>();
+        limits.put("maxFilesPerContext", aiContextProperties.getFiles().getMaxFilesPerContext());
+        limits.put("maxCharsPerFile", aiContextProperties.getFiles().getMaxCharsPerFile());
+        limits.put("maxCharsActiveDocument", aiContextProperties.getFiles().getMaxCharsActiveDocument());
+        limits.put("maxImagesPerTurn", aiContextProperties.getVision().getMaxImagesPerTurn());
+        limits.put("maxImageBytes", aiContextProperties.getVision().getMaxImageBytes());
+        limits.put("visionCountsTowardFileQuota", true);
+        return limits;
     }
 
     /**

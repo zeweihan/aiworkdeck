@@ -195,7 +195,39 @@ public class FileContextLoader {
      *
      * @param currentTotalCount 已消耗的文件配额（跨多个 context item 共享上限）
      */
+    /**
+     * 一个文件夹读出来的上下文，以及它<b>实际消耗掉的配额</b>。
+     *
+     * @param text            注入 system prompt 的那段文字
+     * @param filesRead       真正读出正文的文件数——调用方必须把它加进 totalFileCount
+     * @param unreadableCount 扫到了但一个字都抽不出来的文件数（供降级提示用）
+     */
+    public record FolderContext(String text, int filesRead, int unreadableCount) {
+    }
+
+    /**
+     * 与 {@link #buildFolderContext} 同一段逻辑，但把<b>实际读了几份</b>一并交回调用方。
+     *
+     * <p><b>为什么非有不可</b>（dev-board#801，审查 verify.missed 第一条）：调用方
+     * {@code ContextAssemblerService} 拿到的只是一个字符串，于是它从来没有递增过
+     * {@code totalFileCount}（源码里留着一段自认的注释「Better: Pass proper AtomicInteger」），
+     * 而本方法每次都按 {@code maxFilesPerContext - currentTotalCount} 重算余额——
+     * 结果是<b>拖 3 个文件夹 = 每个都拿到满额 10 份，一次注入最多 30 份正文</b>。
+     * 这不是「少读了」而是「多读了」，直接把上下文预算与 token 成本吹上去。
+     */
+    public FolderContext buildFolderContextCounted(String folderIdStr, String projectIdStr, int currentTotalCount) {
+        int[] counters = new int[2];
+        String text = buildFolderContextInternal(folderIdStr, projectIdStr, currentTotalCount, counters);
+        return new FolderContext(text, counters[0], counters[1]);
+    }
+
+    /** 老签名保留：只要文本、不关心配额的调用方（三个既有测试）一行不用改。 */
     public String buildFolderContext(String folderIdStr, String projectIdStr, int currentTotalCount) {
+        return buildFolderContextInternal(folderIdStr, projectIdStr, currentTotalCount, new int[2]);
+    }
+
+    private String buildFolderContextInternal(String folderIdStr, String projectIdStr,
+                                              int currentTotalCount, int[] counters) {
         StringBuilder sb = new StringBuilder();
         try {
             Long folderId = Long.parseLong(folderIdStr);
@@ -262,6 +294,8 @@ public class FileContextLoader {
                 sb.append(". Scanned images and scanned PDFs are NOT OCR'd during a folder scan — "
                         + "call extract_file_text on the one you actually need and it will be recognised then.]\n");
             }
+            counters[0] = reads;
+            counters[1] = unreadable.size();
 
         } catch (Exception e) {
             sb.append("\n[Error reading folder: ").append(e.getMessage()).append("]\n");

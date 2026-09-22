@@ -29,7 +29,8 @@ class AiChatConversationAdminTest {
                 mock(com.checkba.service.ai.ConversationFileChangeService.class),
                 mock(com.checkba.repository.TokenUsageRepository.class),
                 runState,
-                mock(com.checkba.service.ai.PlatformAiChannel.class));
+                mock(com.checkba.service.ai.PlatformAiChannel.class),
+                new com.checkba.config.AiContextProperties());
     }
 
     @Test

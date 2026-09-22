@@ -1589,6 +1589,7 @@
                 :active-tab="currentActiveTab"
                 :active-tab-pane="focusedPane"
                 :drag-active="dragOverAiPanel"
+                :flush-active-document="flushActiveDocumentForChat"
                 :external-read-only="pluginReadOnlyLabel"
                 @fork-conversation="forkPluginConversation"
                 @fork-from-message="branchConversationFromMessage"
@@ -2168,6 +2169,7 @@
 <script>
 import { defineAsyncComponent } from 'vue'
 import { flushDirtyEditors } from './flushDirtyEditors.js'
+import { flushActiveDocument } from './flushActiveDocument.js'
 import { isTabVisibleInPane } from './tabVisibility.js'
 import { pickActiveContextTab, isContextEligibleTab } from './activeTabContext.js'
 import { nativeDataTransfer } from '@/utils/fileTreeExternalDrop.js'
@@ -6052,6 +6054,22 @@ export default {
       } catch (e) {
         return false
       }
+    },
+    /**
+     * 发 AI 消息前把当前活跃文档落盘（dev-board#793 K14 ⑤）。
+     *
+     * 与 prepareInsightDocument 的区别只有两处：绑定的是**活跃文档**而不是解析面板那一份，
+     * 超时 1.5 秒而不是 10 秒（这一步串在用户按回车到消息发出之间，等不起）。
+     * 判据本身共用同一套 usable() + dirty 校验，实现在 flushActiveDocument.js。
+     *
+     * 返回 false 时 ChatInterface 把 activeContext 降级成「只带壳」，消息照发。
+     */
+    flushActiveDocumentForChat(fileId, options) {
+      return flushActiveDocument(this._libreRefs || {}, {
+        side: this.focusedPane,
+        fileId,
+        timeoutMs: (options && options.timeoutMs) || 1500,
+      })
     },
     /** 写作辅助打开既有资料；全文在线核验由面板中的显式按钮单独触发。 */
     onOpenInsight(payload, pane) {

@@ -278,6 +278,19 @@
               class="user-bubble-content"
               v-html="msg.contentHtml || escapeHtml(msg.displayContent || msg.content)"
             ></div>
+            <!-- 历史里那一轮带过的附件（dev-board#793 K14 ④）。
+                 只在没有 contentHtml 时渲染：手打输入那条路的附件是**内联标签**，
+                 已经在正文里了，再挂一排就是显示两遍。历史回灌拿到的是纯 content，
+                 附件清单来自 GET /api/ai/history 的 attachments。 -->
+            <view v-if="!msg.contentHtml && msg.contextFiles && msg.contextFiles.length" class="bubble-attachments">
+              <text v-for="(f, fi) in msg.contextFiles" :key="fi" class="bubble-attachment">{{ '@' + (f.name || f.id) }}</text>
+            </view>
+            <!-- 本轮附件的降级/截断/丢弃（dev-board#801 K21 ⑦）。
+                 一行小字，不弹 toast——它说的是既成事实，不需要用户点确认；
+                 历史回灌不重放（刷新后再弹一次只是噪音）。 -->
+            <view v-if="msg.contextNotices && msg.contextNotices.length" class="context-notices">
+              <text v-for="(n, ni) in msg.contextNotices" :key="ni" class="context-notice">{{ contextNoticeText(n) }}</text>
+            </view>
             <div class="bubble-footer">
               <!-- 从此分叉（dev-board#779 K18，审查 D-06/F4）：非破坏。原对话一个字不动，
                    只把「到这条为止」复制成一条新对话并切过去。可用性判据与回退同源
@@ -365,9 +378,15 @@
                      <image v-if="img.path" :src="img.path" mode="aspectFill" class="preview-thumb" />
                      <text class="preview-remove" @tap="removePastedImage(index)">×</text>
                   </view>
-                  <!-- 能力未知时不出这行：只有明确 vision===false 才说会降级 -->
-                  <text v-if="currentModelVision === false" class="input-images-note">{{ $t('chat.imageOcrFallbackNote') }}</text>
                </view>
+               <!-- 当前文档 chip（K14 ①）：看得见、摘得掉。摘掉只对这一轮生效 -->
+               <view v-if="activeDocChip" class="active-doc-chip" :title="$t('chat.activeDocChipTitle')">
+                  <text class="active-doc-label">{{ $t('chat.activeDocChipLabel') }}</text>
+                  <text class="active-doc-name">{{ activeDocChip.name }}</text>
+                  <text class="active-doc-remove" @tap.stop="dismissActiveDoc">×</text>
+               </view>
+               <!-- 「模型看不了图」常驻提示（K21 ⑨）：粘的、拖的图片都覆盖；能力未知一律不提示 -->
+               <text v-if="visionNotice" class="input-images-note">{{ $t(visionNotice) }}</text>
               <div
                 ref="richInput"
                 class="chat-input-rich"
@@ -601,9 +620,15 @@
                  <image v-if="img.path" :src="img.path" mode="aspectFill" class="preview-thumb" />
                  <text class="preview-remove" @tap="removePastedImage(index)">×</text>
               </view>
-              <!-- 能力未知时不出这行：只有明确 vision===false 才说会降级 -->
-              <text v-if="currentModelVision === false" class="input-images-note">{{ $t('chat.imageOcrFallbackNote') }}</text>
            </view>
+           <!-- 当前文档 chip（K14 ①）：看得见、摘得掉。摘掉只对这一轮生效 -->
+           <view v-if="activeDocChip" class="active-doc-chip" :title="$t('chat.activeDocChipTitle')">
+              <text class="active-doc-label">{{ $t('chat.activeDocChipLabel') }}</text>
+              <text class="active-doc-name">{{ activeDocChip.name }}</text>
+              <text class="active-doc-remove" @tap.stop="dismissActiveDoc">×</text>
+           </view>
+           <!-- 「模型看不了图」常驻提示（K21 ⑨）：粘的、拖的图片都覆盖；能力未知一律不提示 -->
+           <text v-if="visionNotice" class="input-images-note">{{ $t(visionNotice) }}</text>
           <div
             ref="richInput"
             class="chat-input-rich"
@@ -772,6 +797,16 @@ import { componentDownloads } from '@/services/componentDownloads.js'
 import { createComponentRequiredHandler, shouldAutoResend } from '@/composables/useComponentRequired.js'
 import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
 import { saveLastConversation } from '@/utils/lastConversation.js'
+import { isContextEligibleTab } from '@/pages/project-overview/activeTabContext.js'
+import {
+  DEFAULT_CONTEXT_LIMITS,
+  normalizeContextLimits,
+  visionNoticeKey,
+  admitFileToContext,
+  admitPastedImage,
+  formatBytes,
+} from '@/utils/chatContextLimits.js'
+import { attachmentRecord, attachmentsFromHistory, fileListFromBubble } from '@/utils/chatAttachments.js'
 import {
   beginChatSubmission,
   failChatSubmission,
@@ -816,6 +851,18 @@ export default {
     dragActive: {
       type: Boolean,
       default: false
+    },
+    /**
+     * 发消息前把当前活跃文档落盘（dev-board#793 K14 ⑤）。宿主传进来的函数，
+     * 签名 `(fileId, { timeoutMs }) => Promise<boolean>`，返回 false = 没能落盘。
+     *
+     * 做成 prop 而不是 emit：emit 拿不到结果，而这里必须知道成没成
+     * （没成就把活跃文档降级成「只带壳」，让模型走编辑器桥读实时正文）。
+     * 不传（插件/测试宿主）时整段跳过，行为与改动前一致。
+     */
+    flushActiveDocument: {
+      type: Function,
+      default: null
     }
   },
   setup(props, { emit, expose }) {
@@ -1085,10 +1132,71 @@ export default {
     // Context Files (for drag-drop file context)
     const contextFiles = ref([])
 
+    // 上一轮已经带走、本轮继续沿用的附件 id（dev-board#793 K14 ③）。
+    //
+    // 病灶（审查 E-2）：原来收到 receipt 就把本次带走的 contextFiles 从草稿里过滤掉、
+    // 连输入框里的内联标签一起清空。于是「把这份合同发给 AI → 它答了 → 再问一句
+    // 『第 8 条有没有问题』」这个最自然的两轮交互里，第二轮的 system prompt 里
+    // 已经没有任何 <file> 段——模型既看不到原文，也不知道那份文件的 fileId。
+    // Office 插件那一侧的 attachedFiles 本来就跨轮保留，两端行为分叉。
+    //
+    // 现在：附件留着（下一轮照样带上，这才是 E-2 要的），只是渲染成淡态让用户知道
+    // 「这是上一轮带过的」，随时可以点 × 摘掉、或点标签本体确认沿用（回到常态）。
+    const carriedFileIds = ref([])
+
     // Pasted Images (for paste/drop images)
     const pastedImages = ref([])
     // 发送时把粘贴图片上传成项目文件的那一小段窗口（此时 isStreaming 还是 false）
     const isUploadingPasted = ref(false)
+
+    // 上下文层的各项上限（GET /api/ai/config 下发，长期原则 5「单一事实来源」）。
+    // 拉不到时用与后端一致的兜底值——前端写死一份就是第二处事实来源。
+    const contextLimits = ref({ ...DEFAULT_CONTEXT_LIMITS })
+
+    // 当前文档 chip 是否被用户摘掉（dev-board#793 K14 ①，审查 E-8）。
+    // **只活在组件里、不持久化**：摘除是「这一轮别带」的意思，不是一项设置。
+    // 换会话/换项目时跟着组件状态一起复位。
+    const activeDocDismissed = ref(false)
+    watch(() => props.activeTab && props.activeTab.id, () => { activeDocDismissed.value = false })
+    // 换项目：附件草稿里的 fileId 属于上一个项目，带过去后端 ToolFileGuard 必拒
+    watch(() => props.projectId, () => { clearAttachmentDraft() })
+
+    /**
+     * 输入框上方那枚「当前文档 · <名称>」chip 的数据（null = 不显示）。
+     *
+     * 合格性判据复用 activeTabContext.js 的 isContextEligibleTab（#914 K8）：
+     * 浏览器标签、AI 计划 artifact、设置页这些虚拟标签不是文档，带给后端只会让
+     * read_document 抛 NumberFormatException，异常文案被当成正文注进 <active_document>。
+     */
+    const activeDocChip = computed(() => {
+      if (activeDocDismissed.value) return null
+      const tab = props.activeTab
+      if (!isContextEligibleTab(tab)) return null
+      return { id: String(tab.id), name: tab.name || '' }
+    })
+
+    const dismissActiveDoc = () => { activeDocDismissed.value = true }
+
+    /**
+     * 一条 context_notice 的人话（dev-board#801 K21 ⑦）。
+     *
+     * 六种 kind 对用户是六句不同的话，混成一句「未能处理」等于什么都没说：
+     * 该换模型的、该少贴几张的、该压缩图片的、该删掉几份材料的，处置完全不同。
+     * 认不出的 kind 回退成一句通用说明——后端将来加新 kind 时，
+     * 老前端也不该把它整条吞掉（那就又变回静默降级了）。
+     */
+    const contextNoticeText = (n) => {
+      const name = n && n.name ? n.name : t('chat.contextNoticeThisFile')
+      switch (n && n.kind) {
+        case 'truncated': return t('chat.contextNoticeTruncated', { name, chars: n.detail || '' })
+        case 'dropped': return t('chat.contextNoticeDropped', { name, max: n.detail || '' })
+        case 'ocr_fallback': return t('chat.contextNoticeOcrFallback', { name })
+        case 'image_limit': return t('chat.contextNoticeImageLimit', { name, max: n.detail || '' })
+        case 'image_too_large': return t('chat.contextNoticeImageTooLarge', { name })
+        case 'unreadable': return t('chat.contextNoticeUnreadable', { name })
+        default: return t('chat.contextNoticeGeneric', { name })
+      }
+    }
 
     // Model Selection
     const showModelDropdown = ref(false)
@@ -1171,6 +1279,21 @@ export default {
       if (!hit || typeof hit.vision !== 'boolean') return null
       return hit.vision
     })
+
+    /**
+     * 「当前模型看不了图」的常驻提示文案键（空串 = 不提示）。
+     *
+     * 判据在 chatContextLimits.js，与 Office 插件的 visionNotice 同一套：
+     * **只要附件里有图就恒提示**。原来这条提示嵌在 `v-if="pastedImages.length > 0"`
+     * 的缩略图块里，从文件树拖进来的项目图片（走 contextFiles）完全不触发——
+     * 用户把一张现场照片拖进对话、模型读不了图时界面上没有任何线索，
+     * 而模型收到的是 OCR 转写文本，回答里的数字可能是识别错的（审查 E-6）。
+     */
+    const visionNotice = computed(() => visionNoticeKey({
+      modelVision: currentModelVision.value,
+      pastedImages: pastedImages.value,
+      contextFiles: contextFiles.value,
+    }))
 
     // 选中读不了图的模型时说一声：降级是后端自动做的，不说用户会以为模型看到了图
     const noticeIfNoVision = (m) => {
@@ -1273,10 +1396,14 @@ export default {
       try {
         const res = await getAiConfig()
         activeProvider.value = res?.activeProvider || ''
+        // 上下文上限随同一条配置下发（dev-board#801 K21 ⑧）：前端拦截用的数字
+        // 与后端真正执行的必须是同一份，各写一份的表现是「界面说还能加、后端已经在丢」
+        contextLimits.value = normalizeContextLimits(res?.contextLimits)
       } catch (e) {
         // 取不到供应商时按云端处理（不缩减模式），避免误把云端用户锁成只能 Ask
         console.warn('[ChatInterface] 加载 AI 供应商配置失败:', e)
         activeProvider.value = ''
+        contextLimits.value = { ...DEFAULT_CONTEXT_LIMITS }
       }
       // 供应商是本地档时把当前模式收回 ASK：默认值是 AGENT，不收就会一发即报错
       if (isLocalOnlyProvider.value && currentModeId.value !== 'ASK') {
@@ -1701,12 +1828,17 @@ export default {
       const content = rollbackTargetContent.value
       // 「重新生成」与「回退」的唯一分叉点，先取下来：下面重置状态时它会被清掉
       const resend = rollbackResend.value
-      // 重发要用的两份文本必须在截断之前取：rollbackToMessage 会把这条气泡摘掉。
+      // 这条气泡上的东西**必须在截断之前全部取下来**：rollbackToMessage 会把它摘掉。
       // prompt 取 content（模型当初读到的那份），displayText 取 displayContent，
       // 契约 D 的两条通道各归各位。
-      const source = resend ? bubbles.value[targetIndex] : null
-      const resendPrompt = source ? (source.content || '') : ''
-      const resendDisplay = source ? (source.displayContent || '') : ''
+      const source = bubbles.value[targetIndex] || null
+      const resendPrompt = resend && source ? (source.content || '') : ''
+      const resendDisplay = resend && source ? (source.displayContent || '') : ''
+      // 那一轮带过的材料（dev-board#793 K14 ④）。两条路都要它：
+      // 回退要把 @附件标签 还原回输入框——只还原文字的话，用户改一个字重发材料就悄悄少了；
+      // 重新生成要原样再带一次——同一个问题重问一次而材料没跟着走，模型当然给出不一样的答案，
+      // 用户却以为这是「换一份回答」的正常波动。
+      const rolledBackAttachments = fileListFromBubble(source)
 
       // 关闭对话框
       showRollbackDialog.value = false
@@ -1723,8 +1855,9 @@ export default {
         // 2. 在前端删除bubbles（目标一起删——与后端同语义，用户接着在输入框里改了重发）
         const rolledBackContent = rollbackToMessage(targetIndex)
 
-        // 3. 回退：把原文放回输入框等用户改；重新生成：原样再问一次，不碰输入框
-        //    （用户此刻可能已经在里面打了别的东西，覆盖掉就是丢他的字）。
+        // 3. 回退：把原文连同那一轮带过的附件标签放回输入框等用户改；
+        //    重新生成：原样再问一次，不碰输入框（用户此刻可能已经在里面打了别的东西，
+        //    覆盖掉就是丢他的字）。
         //    回填必须等重渲染落地：模板里有两个 ref="richInput" 的 contenteditable
         //    （空状态的欢迎输入框、有对话时的底部输入框）。回退到第一条时 bubbles 变空、
         //    两者互换，紧接着同步写 innerHTML 只会写进马上被销毁的那一个——
@@ -1734,6 +1867,7 @@ export default {
           richInput.value.innerHTML = escapeHtml(content)
           inputPrompt.value = content
         }
+        if (!resend) restoreAttachmentsToInput(rolledBackAttachments)
 
         // 4. 通知父组件刷新历史（存档会话要在「近期对话」里立刻看得见）
         emit('refresh-history')
@@ -1754,7 +1888,9 @@ export default {
           await sendMessage({
             prompt: resendPrompt,
             displayText: resendDisplay,
-            fileList: [],
+            // 原问带过的材料原样再带一次（dev-board#793 K14 ④）：传空数组的话
+            // 「重新生成」就成了「换一个问题」——模型手上没有当初那几份材料
+            fileList: rolledBackAttachments,
             projectId: props.projectId,
             modelId: currentModelId.value,
             mode: currentModeId.value,
@@ -1774,12 +1910,31 @@ export default {
       rollbackResend.value = false
     }
 
+    /**
+     * 清掉输入框里的附件草稿（dev-board#793 K14 ③）。
+     *
+     * **附件跨轮保留只在同一段对话里成立**：换会话/换项目时必须清干净。
+     * 不清的话，上一段对话挂着的材料会跟着进下一段——换项目更糟，
+     * 那个 fileId 属于别的项目，后端 ToolFileGuard 会拒，用户看到的是
+     * 「该附件内容暂不可读」，而他压根不知道自己带了这份东西。
+     */
+    const clearAttachmentDraft = () => {
+      contextFiles.value = []
+      carriedFileIds.value = []
+      pastedImages.value = []
+      if (richInput.value) {
+        richInput.value.querySelectorAll('[data-file-id]').forEach((el) => el.remove())
+        inputPrompt.value = richInput.value.innerText
+      }
+    }
+
     const startNewChat = () => {
       // New conversation detaches this panel from the old SSE. The server run keeps working
       // and remains visible from history; Stop is the explicit cancellation action.
       setConversationId(null)  // This now triggers resetSSE internally
       clearBubbles()           // Use composable method
       selectedSkillIds.value = [] // 手动选的技能属于这一段对话，新会话从干净状态开始
+      clearAttachmentDraft()   // 附件跨轮保留只在同一段对话里成立
       emit('new-chat')
     }
 
@@ -1830,8 +1985,14 @@ export default {
       const hasImages = pastedImages.value.length > 0
       const hasFiles = contextFiles.value.length > 0
 
+      // 附件跨轮保留之后，「只剩上一轮带过的附件、没有任何新内容」也算空消息
+      // （dev-board#793 K14 ③）：否则发完一轮之后误按一次回车，就会把同一批材料
+      // 顶着一句空 prompt 再发一遍——白烧一轮钱，用户还不知道自己按了什么。
+      const onlyCarriedAttachments = hasFiles && !hasImages
+        && contextFiles.value.every((f) => carriedFileIds.value.includes(String(f.id)))
+
       // 禁止发送纯空消息：必须有文本、图片或文件上下文至少其一
-      if (!text && !hasImages && !hasFiles) {
+      if (!text && !hasImages && (!hasFiles || onlyCarriedAttachments)) {
         if (isStreaming.value) {
           // 如果正在流式传输，允许中断操作
           return
@@ -1866,12 +2027,44 @@ export default {
       // 先定住本次要带走的那几张，再去上传：上传要走网络，其间用户还可能继续粘贴，
       // 拿 pastedImages 的实时值会一边漏掉新贴的、一边把它顺手清掉。
       const pastedBatch = pastedImages.value.slice()
-      const activeContext = (!hasFiles && !hasImages && props.activeTab) ? {
-        id: String(props.activeTab.id || props.activeTab.wpsFileId),
-        name: props.activeTab.name,
+
+      // 发消息之前先把当前文档落盘（dev-board#793 K14 ⑤，审查 E-9）。
+      //
+      // 病灶：桌面端只上送 activeContext 的 id/name，后端回落到 read_document 去读
+      // **磁盘上已保存的那一版**；而 LOWA 的自动保存是防抖的（最长 2.5 秒 + 一次导出上传）。
+      // 用户敲完一段话立刻回车问「我刚改的这段有没有问题」，模型看到的是改动之前的版本，
+      // 而末位提醒还斩钉截铁地说「其正文已内联注入…可直接阅读分析」。
+      //
+      // 超时 1.5 秒：这一步串在用户按下回车到消息发出之间，等不起 10 秒。
+      // **失败不阻断发送**——落不了盘也要把消息发出去，只是活跃文档降级成「只带壳」，
+      // 让模型用 doc_get_document_text 走编辑器桥拿实时正文（那条路读的是内存里的当前状态）。
+      const chipTab = activeDocChip.value
+      let activeDocFlushed = true
+      if (chipTab && typeof props.flushActiveDocument === 'function') {
+        try {
+          activeDocFlushed = await props.flushActiveDocument(chipTab.id, { timeoutMs: 1500 }) !== false
+        } catch (e) {
+          console.warn('[ChatInterface] flush active document failed', e)
+          activeDocFlushed = false
+        }
+      }
+
+      // 互斥已去除（审查 E-4）：挂了附件也照样带上当前文档。
+      // 原来的判据是 `(!hasFiles && !hasImages && props.activeTab)`——只要有任何附件，
+      // 活跃文档就是 null，后端整个 # Active Document 段与末位 [系统提醒] 都不生成，
+      // 「对照这份对方发来的 docx 改一下当前文档第 3 条」这类跨材料工作流整条被切断。
+      // 有附件时后端只注入 id/name + readHint 不注入正文（控 token），判据在后端一处。
+      //
+      // chip 被用户摘掉时 activeDocChip 为 null，本轮就真的不带——
+      // 「帮我查一下最新的司法解释」这类与文档无关的提问不该每轮都拖着几万字的合同。
+      const activeContext = chipTab ? {
+        id: chipTab.id,
+        name: chipTab.name,
         fileType: props.activeTab.fileType,
         wpsFileId: props.activeTab.wpsFileId,
-        pane: props.activeTabPane
+        pane: props.activeTabPane,
+        // 没能落盘：告诉后端别用磁盘上那份旧正文，改走 readHint 分支
+        staleBody: !activeDocFlushed
       } : null
       const attempt = beginChatSubmission(submissionTracker, {
         prompt,
@@ -1931,11 +2124,10 @@ export default {
 
       // Save images and context files for user bubble display
       const imagesToShow = pastedBatch.map(img => ({ path: img.path }))
-      const contextFilesToShow = contextFiles.value.map(f => ({
-        id: f.id,
-        name: f.name,
-        isDir: f.isDir
-      }))
+      // 挂到用户气泡上的**完整**附件记录（dev-board#793 K14 ④）。
+      // 原来只存 {id,name,isDir} 的精简副本，于是「重新生成」（K11）只能传 fileList: []——
+      // 同一个问题重问一次、材料却没跟着走，模型当然给出不一样的答案。
+      const contextFilesToShow = contextFiles.value.map(attachmentRecord).filter(Boolean)
 
       if (activeContext) {
         console.log('[ChatInterface] Auto-attaching active context:', activeContext.name)
@@ -1980,12 +2172,26 @@ export default {
         skillIds: currentSkillIds(),
         activeContext: attempt.activeContext,
       }
-      if (shouldClearChatDraft(attempt, currentDraft)) {
-        if (richInput.value) richInput.value.innerHTML = ''
+      const draftUnchanged = shouldClearChatDraft(attempt, currentDraft)
+      if (draftUnchanged) {
         inputPrompt.value = ''
-        contextFiles.value = contextFiles.value.filter((file) => !contextFilesToShow.some((sent) => sent.id === file.id))
+        // 粘贴图发后即清：它们已经被上传成项目文件，要继续用就从文件树拖回来
+        // （contextFiles 那条路），把 base64 缩略图一直挂在输入框里既占内存又没有摘除入口
         pastedImages.value = pastedImages.value.filter((image) => !pastedBatch.includes(image))
       }
+
+      // 附件跨轮保留（dev-board#793 K14 ③，审查 E-2）：清文字，**不清附件**。
+      //
+      // 「把这份合同发给 AI → 它答了 → 再问一句『第 8 条有没有问题』」是最自然的两轮交互，
+      // 而原来收到 receipt 就把本轮 contextFiles 过滤掉、连输入框里的内联标签一起清空，
+      // 第二轮的 system prompt 里一个 <file> 段都没有——模型既看不到原文、
+      // 也不知道那份文件的 fileId（那个 id 只出现在上一轮的 system prompt 里）。
+      // Office 插件那一侧本来就跨轮保留，两端行为分叉。
+      //
+      // **必须挂在 draftUnchanged 外面**：首条消息发出去时输入卡片整块被 v-if 换掉
+      //（空状态 ⇄ 有对话），editorHtml 已经变成空串、指纹必然不匹配。挂在里面的话，
+      // 表现就是「第一条之后附件全没了，第二条之后才正常」（真机实测到的形态）。
+      await restoreCarriedTags(contextFilesToShow, { clearText: draftUnchanged })
 
       scrollToBottom()
     }
@@ -2133,6 +2339,7 @@ export default {
        setConversationId(conversationId)  // This triggers resetSSE internally
        clearBubbles()  // Clear existing using composable method
        selectedSkillIds.value = [] // 切会话即重置手动选择：技能是按轮携带的，不该跨会话粘住
+       clearAttachmentDraft()      // 同理：上一段对话挂着的材料不该跟进这一段
 
        loadedMsgs.forEach(msg => {
           const role = msg.role?.toUpperCase() || 'USER'
@@ -2151,6 +2358,14 @@ export default {
                   // 助手消息刻意不走这条回退：那边的 content 是协议 XML，要解析而不是直显，
                   // 而 displayContent 只会写在用户消息上。
                   displayContent: msg.displayContent || '',
+                  // 消息 ↔ 附件持久关联（dev-board#793 K14 ④）：后端
+                  // GET /api/ai/history 带 attachments（可空）。没有这个字段时是空数组，
+                  // 与今天完全一致；有的话历史里就能看见「这一轮我发过哪几份材料」。
+                  // 形状必须与 live 那条路一致（attachmentRecord），否则会变成
+                  // 「刷新前能重新生成、刷新后不能」，而这种差别不会有任何东西报错
+                  contextFiles: attachmentsFromHistory(msg.attachments),
+                  // 降级提示刻意不回放：它说的是「那一轮发生的事」
+                  contextNotices: [],
                   timestamp: formatTime(msg.createdAt)
               })
           } else {
@@ -2256,13 +2471,24 @@ export default {
       if (e.target.classList.contains('tag-close')) {
         const tag = e.target.closest('.context-tag-inline')
         if (tag) {
+          const removedId = tag.getAttribute('data-file-id')
           tag.remove()
+          if (removedId) {
+            carriedFileIds.value = carriedFileIds.value.filter((x) => x !== String(removedId))
+          }
           syncContextFilesWithInlineTags()
           // Update text model
           if (richInput.value) {
             inputPrompt.value = richInput.value.innerText
           }
         }
+        return
+      }
+      // 点淡态标签本体 = 「是的，这份继续用」，回到常态（dev-board#793 K14 ③ 的「一键沿用」）。
+      // 它本来就还在带着，这一下只是把「上一轮带过的」这层提示摘掉。
+      const carriedTag = e.target.closest && e.target.closest('.context-tag-inline.is-carried')
+      if (carriedTag) {
+        confirmCarriedFile(carriedTag.getAttribute('data-file-id'))
       }
     }
 
@@ -2302,6 +2528,30 @@ export default {
             const file = items[i].getAsFile()
             if (file) {
               hasProcessedImage = true
+              // 张数/体积上限在**贴进来的那一刻**就说（dev-board#801 K21 ⑧，审查 E-7）。
+              // 原来这两种情况都是静默的：贴 6 张图，第 5、6 张在后端悄悄变成 OCR 文本；
+              // 贴一张 12MB 的扫描件，模型拿到的「正文」是一句 [System: 文件超过大小限制]，
+              // 却包在「以下正文由 OCR 从图片转写而来」的前言里。
+              const verdict = admitPastedImage({
+                size: file.size,
+                pastedImages: pastedImages.value,
+                contextFiles: contextFiles.value,
+                limits: contextLimits.value,
+              })
+              if (!verdict.ok) {
+                if (typeof uni !== 'undefined') {
+                  uni.showToast({
+                    title: verdict.reason === 'imageBytes'
+                      ? t('chat.imageTooLargeToast', { size: formatBytes(verdict.max) })
+                      : verdict.reason === 'imageCount'
+                        ? t('chat.imageCountCapToast', { max: verdict.max })
+                        : t('chat.contextFileCapReached', { max: verdict.max }),
+                    icon: 'none',
+                    duration: 3000,
+                  })
+                }
+                continue
+              }
               // 同步先占位、再异步补 path：path 只用来画缩略图，真正要发出去的是 file 这份 blob。
               // 原来整条 push 都压在 FileReader.onload 里，粘完立刻回车时 onload 还没触发，
               // 这张图就整个丢了——以前丢的只是一张缩略图，现在丢的是要发给模型的附件。
@@ -2366,36 +2616,59 @@ export default {
 
     // --- File Context Methods ---
     const addFile = (file) => {
-      // Check if file already exists by ID
-      if (!contextFiles.value.find(f => f.id === file.id)) {
-        const fileData = {
-          id: file.id,
-          name: file.name,
-          fileType: file.fileType,
-          wpsFileId: file.wpsFileId,
-          isDir: file.isDir || file.fileType === 'folder'
+      // 上限在**加进来的那一刻**就拦住（dev-board#801 K21 ⑧，审查 E-14）。
+      //
+      // 病灶：前端对 contextFiles 的长度没有任何检查，后端超过 maxFilesPerContext 就 break
+      // 并在 prompt 里写一句英文 System Note。用户拖了 15 份材料、界面上 15 个标签都在，
+      // 模型只看到前 10 份，而且是按顺序静默砍掉后面的——对「把这批合同交叉比对一下」
+      // 这种诉求是直接的错误输出。上限值随 /api/ai/config 下发，不写死。
+      const verdict = admitFileToContext({
+        file,
+        contextFiles: contextFiles.value,
+        pastedImages: pastedImages.value,
+        limits: contextLimits.value,
+      })
+      if (!verdict.ok) {
+        if (verdict.reason === 'cap' && typeof uni !== 'undefined') {
+          uni.showToast({
+            title: t('chat.contextFileCapReached', { max: verdict.max }),
+            icon: 'none',
+            duration: 3000,
+          })
         }
-        contextFiles.value.push(fileData)
-
-        // Insert inline tag into rich input
-        insertContextTagToInput(fileData)
-
-        console.log('[ChatInterface] File added as context:', file.name)
+        // duplicate 静默：同一份拖两遍是常见误操作，弹提示只是噪音
+        return
       }
+      const fileData = {
+        id: file.id,
+        name: file.name,
+        fileType: file.fileType,
+        wpsFileId: file.wpsFileId,
+        isDir: file.isDir || file.fileType === 'folder'
+      }
+      contextFiles.value.push(fileData)
+
+      // Insert inline tag into rich input
+      insertContextTagToInput(fileData)
+
+      console.log('[ChatInterface] File added as context:', file.name)
     }
 
     // --- Insert inline tag into contenteditable ---
-    const insertContextTagToInput = (file) => {
+    const insertContextTagToInput = (file, carried = false, { append = false } = {}) => {
       if (!richInput.value) return
 
       const icon = file.isDir ? '/static/folder-closed.png' : '/static/document.png'
       const displayName = truncateName(file.name)
       // 文件名由项目成员自由命名（后端只挡路径分隔符），这段字符串会直接进 DOM，必须转义
-      const safeName = escapeHtml(file.name)
       const safeDisplayName = escapeHtml(displayName)
+      // 淡态 = 上一轮带过的，仍然会继续带上（这才是 E-2 要的跨轮保留）；
+      // title 里明说这件事，否则用户会以为淡态是「已失效」
+      const carriedClass = carried ? ' is-carried' : ''
+      const tagTitle = escapeHtml(carried ? t('chat.carriedAttachmentTitle', { name: file.name }) : file.name)
 
       const tagHtml = `
-        <span class="context-tag-inline" contenteditable="false" data-file-id="${file.id}" data-is-dir="${file.isDir ? 'true' : 'false'}" title="${safeName}">
+        <span class="context-tag-inline${carriedClass}" contenteditable="false" data-file-id="${file.id}" data-is-dir="${file.isDir ? 'true' : 'false'}" title="${tagTitle}">
           <img src="${icon}" class="tag-icon"/>
           <span class="tag-at">@</span>
           <span class="tag-name">${safeDisplayName}</span>
@@ -2403,7 +2676,9 @@ export default {
         </span>&nbsp;`.replace(/\s+/g, ' ').trim()
 
       // Insert at cursor or append to end
-      const sel = window.getSelection()
+      // append=true：强制挂到末尾。发送后补挂淡态标签走这条——此刻光标可能落在
+      // 用户刚打的新字中间，插到那儿会把他的句子从中劈开。
+      const sel = append ? null : window.getSelection()
       if (sel && sel.rangeCount > 0) {
         const range = sel.getRangeAt(0)
         if (richInput.value.contains(range.commonAncestorContainer)) {
@@ -2420,6 +2695,70 @@ export default {
 
       // Update text model
       inputPrompt.value = richInput.value.innerText
+    }
+
+    /**
+     * 发送后重建输入框：文字清掉，本轮带走的附件标签留下并置成淡态（dev-board#793 K14 ③）。
+     *
+     * 为什么要整段重建而不是「只删文字节点」：输入框是 contenteditable，
+     * 用户敲进去的内容形态五花八门（div/br/裸文本节点混排），逐节点删既啰嗦又容易删漏；
+     * 而标签本身是我们自己生成的、可以按 contextFiles 原样重新插一遍。
+     *
+     * carriedFileIds 记住「哪些是上一轮带过的」，供 is-carried 淡态与
+     * 「只有旧附件、没有新内容」的空发守卫用。
+     */
+    const restoreCarriedTags = async (sentFiles, { clearText }) => {
+      const kept = contextFiles.value.filter((f) =>
+        (sentFiles || []).some((sent) => String(sent.id) === String(f.id)))
+      carriedFileIds.value = kept.map((f) => String(f.id))
+      // 眼前这个输入框先清掉文字（用户刚按下回车，文字不能还杵在那儿）
+      if (clearText && richInput.value) richInput.value.innerHTML = ''
+      // **必须等重渲染落地再插标签**：模板里有两个 ref="richInput" 的 contenteditable
+      // （空状态的欢迎输入框 v-if / 有对话时的底部输入框 v-else）。本会话第一条消息发出去之后
+      // bubbles 由空变非空，两者整块互换成一个全新的空 div——同步写只会写进马上被销毁的那一个。
+      // （这同时也是 shouldClearChatDraft 在首条消息上恒为 false 的原因：它的指纹含 editorHtml，
+      //  而此刻元素已经换了、innerHTML 已经是空串。所以「把附件挂回去」不能挂在那个分支下面。）
+      await nextTick()
+      if (!richInput.value) return
+      // 只补缺的、不重建：用户可能在这一小段时间里已经打了新的字，
+      // 整段重写会把他刚打的东西抹掉。
+      const present = new Map([...richInput.value.querySelectorAll('[data-file-id]')]
+        .map((e) => [e.getAttribute('data-file-id'), e]))
+      for (const f of kept) {
+        const existing = present.get(String(f.id))
+        // 已经在框里的（用户在途中又打了字、没触发清空那一支）只补淡态，
+        // 不然 carriedFileIds 说它是上一轮的、界面上却还是常态，两边对不上
+        if (existing) existing.classList.add('is-carried')
+        else insertContextTagToInput(f, true, { append: true })
+      }
+      inputPrompt.value = richInput.value.innerText
+    }
+
+    /**
+     * 把一份附件记录还原成输入框里的 @标签 + contextFiles（dev-board#793 K14 ④）。
+     *
+     * 用在「回退到这条消息」的回填上：只还原文字、附件不回来的话，用户改一个字重发，
+     * 材料就悄悄少了——而他以为自己只是改了个措辞。
+     * 「重新生成」不走这里（它不碰输入框，直接把 fileListFromBubble 的结果发出去）。
+     *
+     * @param fileList fileListFromBubble 的结果（{id, fileName, fileType, wpsFileId, isDir}）
+     */
+    const restoreAttachmentsToInput = (fileList) => {
+      if (!Array.isArray(fileList) || !fileList.length) return
+      carriedFileIds.value = []
+      for (const f of fileList) {
+        addFile({ id: f.id, name: f.fileName, fileType: f.fileType, wpsFileId: f.wpsFileId, isDir: f.isDir })
+      }
+      if (richInput.value) inputPrompt.value = richInput.value.innerText
+    }
+
+    /** 点淡态标签本体 = 确认沿用，回到常态（× 仍然是移除）。 */
+    const confirmCarriedFile = (fileId) => {
+      const id = String(fileId)
+      carriedFileIds.value = carriedFileIds.value.filter((x) => x !== id)
+      if (!richInput.value) return
+      const el = richInput.value.querySelector(`[data-file-id="${CSS.escape(id)}"]`)
+      if (el) el.classList.remove('is-carried')
     }
 
     const removeContextFile = (index) => {
@@ -2939,6 +3278,14 @@ export default {
        receiptLabel, inboxStreamIds, inboxRunActive, handleInboxLocate,
        contextFiles,
        pastedImages,
+       carriedFileIds,
+       // 「重新生成」按用户气泡上的附件记录重建 fileList（dev-board#793 K14 ④）：
+       // 同一个问题重问一次，带的材料要和当初一模一样，否则那不是「换一份回答」而是「换一个问题」
+       fileListFromBubble,
+       activeDocChip,
+       dismissActiveDoc,
+       visionNotice,
+       contextNoticeText,
        isUploadingPasted,
        handleSubmit,
        handleAbort,
@@ -4062,6 +4409,82 @@ export default {
   font-size: 11px;
   line-height: 1.5;
   color: var(--awd-text-3);
+  /* 从缩略图块里挪到输入卡片底部常驻（K21 ⑨）：拖进来的项目图片也要覆盖，
+     而它们不在 pastedImages 里。display:block 是因为现在它是卡片的直接子元素。 */
+  display: block;
+  padding: 2px 2px 0;
+}
+
+/* 当前文档 chip（K14 ①）：与 @ 附件标签同一行高，但刻意不同色——
+   一个是「系统自动带上的」，一个是「你自己挑的」，看一眼要能分清。 */
+.active-doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0 0 4px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 4px;
+  border: 1px dashed var(--awd-border);
+  background: var(--awd-bg-2);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--awd-text-2);
+}
+.active-doc-label {
+  color: var(--awd-text-3);
+  flex-shrink: 0;
+}
+.active-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--awd-text-1);
+}
+.active-doc-remove {
+  flex-shrink: 0;
+  padding: 0 2px;
+  color: var(--awd-text-3);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.active-doc-remove:hover { color: var(--awd-text-1); }
+
+/* 历史里那一轮带过的附件（K14 ④）：只在历史气泡上出现——
+   手打输入那条路的附件是正文里的内联标签，再挂一排就是显示两遍。 */
+.bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.bubble-attachment {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--awd-border);
+  color: var(--awd-text-2);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 本轮附件的降级/截断/丢弃（K21 ⑦）：一行小字挂在用户气泡下方。
+   刻意不做成警告色——降级是后端自动完成的正常路径，用户只是有权知道。 */
+.context-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.context-notice {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--awd-text-3);
+  text-align: left;
 }
 
 .preview-image-item {
@@ -4122,6 +4545,16 @@ export default {
    border: 1px solid var(--awd-accent);
    transition: all 0.15s ease;
    position: relative;
+ }
+
+ /* 上一轮带过的附件（K14 ③）。淡态只是「这是上一轮的」，它**仍然会继续带上**——
+    点标签本体确认沿用（回到常态），点 × 移除。 */
+ :deep(.context-tag-inline.is-carried) {
+   opacity: 0.55;
+   border-style: dashed;
+ }
+ :deep(.context-tag-inline.is-carried:hover) {
+   opacity: 1;
  }
 
  :deep(.context-tag-inline:hover) {

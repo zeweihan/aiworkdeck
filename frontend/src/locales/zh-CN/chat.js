@@ -183,6 +183,25 @@ export default {
   imageNeedsCaptionTitle: '图片需要配一句说明',
   imageNeedsCaptionContent: '图片会随消息一起发送：当前模型支持读图时模型直接看图，不支持时按文字识别（OCR）处理。补充一句要做什么（例如「把这张图里的条款整理成表格」），再发送。',
   imageOcrFallbackNote: '当前模型不支持直接读图，图片将按文字识别（OCR）处理',
+
+  // ---- 上下文层：当前文档 chip / 附件跨轮 / 上限与降级（dev-board#793 K14、#801 K21）----
+  activeDocChipLabel: '当前文档',
+  activeDocChipTitle: '这份文档会随本条消息一起给 AI。点 × 可让这一轮不带它。',
+  carriedAttachmentTitle: '{name}（上一轮带过，本轮仍会带上；点一下确认沿用，点 × 移除）',
+  contextFileCapReached: '本轮最多带 {max} 份材料（含图片），请先移除一些再添加',
+  imageCountCapToast: '本轮最多直送 {max} 张图，多出来的会按文字识别（OCR）处理',
+  imageTooLargeToast: '这张图超过 {size}，会按文字识别（OCR）处理，建议压缩后重发',
+  contextNoticeThisFile: '这份材料',
+  contextNoticeTruncated: '{name} 太长，AI 本轮只读了前 {chars} 字',
+  contextNoticeDropped: '{name} 没有进入本轮上下文：一轮最多带 {max} 份材料',
+  // 刻意不在这句里断言原因（「当前模型看不了图」）：真正的原因由后端写进 prompt，
+  // 而这条通道也覆盖「读盘失败后改走 OCR」——说错原因比不说更糟。
+  // 「模型看不了图」这件事由输入框上方的常驻提示负责。
+  contextNoticeOcrFallback: '{name} 按文字识别（OCR）处理，识别结果可能有误',
+  contextNoticeImageLimit: '{name} 按文字识别（OCR）处理：本轮最多直送 {max} 张图',
+  contextNoticeImageTooLarge: '{name} 按文字识别（OCR）处理：这张图超过体积上限',
+  contextNoticeUnreadable: '{name} 没有可提取的文字，AI 读不到它的内容',
+  contextNoticeGeneric: '{name} 在本轮做了降级处理',
   pastedImageName: '粘贴图片-{stamp}',
   pastedImageUploadFailed: '{count} 张粘贴图片上传失败，未随本条消息发送',
   gotIt: '知道了',

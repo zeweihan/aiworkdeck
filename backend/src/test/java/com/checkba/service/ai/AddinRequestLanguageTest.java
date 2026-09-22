@@ -102,7 +102,7 @@ class AddinRequestLanguageTest {
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenReturn(1L);
 
         ContextAssemblerService assembler = mock(ContextAssemblerService.class);
-        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(assembler.assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     seen[0] = appLanguage.language();
                     return new ArrayList<ChatMessage>(List.of(

@@ -323,6 +323,21 @@ public class AiContextProperties {
         /** 单文件注入的最大字符数（超出截断） */
         private int maxCharsPerFile = 50000;
 
+        /**
+         * <b>活跃文档</b>正文注入的最大字符数，与普通附件解耦（dev-board#793 K14 ⑥，审查 E-10）。
+         *
+         * <p>病灶：{@code resolveActiveDocumentContent} 按 200000 截一刀（并按这个长度做
+         * 内联缓存与 hash 省传），结果紧接着在注入处又被 {@link #maxCharsPerFile}（50000）
+         * 截了第二刀。于是实际生效的活跃文档上限只有 5 万字符（约 2.5 万汉字，一份 40 页上下的合同），
+         * 而 Office 插件每轮上传的那份完整正文有一大半是白传的带宽与 hash 计算，
+         * 领域文档里写的「含最长 20 万字符的内联正文」也与实际不符。
+         *
+         * <p>取值与 {@code MAX_INLINE_CONTENT_CHARS} 一致（200000）：活跃文档是用户此刻
+         * 正在看的那一份，「帮我通篇审一下」是它最常见的用法，按附件的标准砍掉三分之二
+         * 换来的是一个只审了前三分之一、却说得像通篇审过的结论。
+         */
+        private int maxCharsActiveDocument = 200000;
+
         /** 文件夹扫描时单文件的最大字符数（超出截断） */
         private int folderFileMaxChars = 20000;
 
@@ -341,6 +356,8 @@ public class AiContextProperties {
         public void setMaxFilesPerContext(int maxFilesPerContext) { this.maxFilesPerContext = maxFilesPerContext; }
         public int getMaxCharsPerFile() { return maxCharsPerFile; }
         public void setMaxCharsPerFile(int maxCharsPerFile) { this.maxCharsPerFile = maxCharsPerFile; }
+        public int getMaxCharsActiveDocument() { return maxCharsActiveDocument; }
+        public void setMaxCharsActiveDocument(int maxCharsActiveDocument) { this.maxCharsActiveDocument = maxCharsActiveDocument; }
         public int getFolderFileMaxChars() { return folderFileMaxChars; }
         public void setFolderFileMaxChars(int folderFileMaxChars) { this.folderFileMaxChars = folderFileMaxChars; }
         public int getChatContextMaxChars() { return chatContextMaxChars; }
