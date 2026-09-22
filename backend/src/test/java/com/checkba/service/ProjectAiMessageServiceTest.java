@@ -232,9 +232,10 @@ class ProjectAiMessageServiceTest {
     // ---- 会话置顶（dev-board#796）----
 
     /** 仓储汇总行：[conversationId, updatedAt, lastContent, title, firstUserMessage, sourceChannel, pinned] */
+    /** 列序与 findConversationSummaries 一致；末列是分叉出身（dev-board#779 K18），本组用例用不到。 */
     private Object[] summaryRow(String conversationId, String title, Object pinned) {
         return new Object[]{conversationId, java.time.LocalDateTime.now(), "AI 的回复正文",
-                title, "用户的第一句话", null, pinned};
+                title, "用户的第一句话", null, pinned, null};
     }
 
     @Test

@@ -122,6 +122,10 @@ export default {
   conversationPinFailed: '置顶操作失败',
   conversationDeleteFailed: '删除对话失败',
   conversationTitleTooLong: '标题最多 60 个字符',
+  // 「从此分叉」产物的来源角标（dev-board#779 K18）。父会话还没起标题时用后一条兜底，
+  // 不把父会话的正文当标题显示。
+  branchedFrom: '分支自 {title}',
+  branchedFromUnknown: '分支',
   statusRunning: '运行中',
   statusPaused: '待继续',
   statusInterrupted: '已中断',

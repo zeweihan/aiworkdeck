@@ -44,8 +44,15 @@ export default {
   rollbackDocTipLink: 'AI document edits are recorded as tracked changes; use Reject Changes in the editor to restore the original text.',
   rollbackPreviewLabel: 'Will roll back to and edit:',
   rollbackBtn: 'Roll Back',
-  rollbackBtnTitle: 'Roll back to this message (edit and resend)',
+  // The two buttons must spell out the difference: rolling back changes this conversation, branching does not.
+  rollbackBtnTitle: 'Roll back to this message and edit it — this message and everything after it leaves the current conversation (the original is saved as a branch)',
   rollbackUnavailable: 'This message has not finished saving yet, so it cannot be rolled back. Try again in a moment or refresh.',
+  // ---- Branch from here ----
+  branchBtn: 'Branch',
+  branchBtnTitle: 'Continue in a new conversation branched from this message — the current one stays unchanged',
+  branchUnavailable: 'This message has not finished saving yet, so it cannot be branched. Try again in a moment or refresh.',
+  branchDone: 'Branched into a new conversation; the original is unchanged',
+  branchFailed: 'Branching failed: {error}',
   waitCurrentChat: 'Please wait for the current reply to finish',
   rollbackDone: 'Rolled back',
   rollbackDoneArchived: 'Rolled back; the original conversation was saved as a branch',

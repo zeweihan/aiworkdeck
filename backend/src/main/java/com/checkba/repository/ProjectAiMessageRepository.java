@@ -28,10 +28,14 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
 
     /**
      * 获取会话列表，包含 conversationTitle 和用户第一条消息
-     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel, pinned]
+     * Returns: [conversationId, updatedAt, lastContent, conversationTitle, firstUserMessage, sourceChannel,
+     *           pinned, parentConversationId]
      * sourceChannel 取首条消息的（镜像导入的会话在首条上带 office-word 等值，dev-board#298）。
      * pinned 同理取「首条非空值」（与 conversationTitle 同一存储位，dev-board#796）；
      * 置顶排序在 Java 层做——这里再套一层同样的标量子查询只为排序不划算。
+     * parentConversationId 同样取首条（会话级元数据一律挂首行，本仓没有 ai_conversation 表），
+     * 「从此分叉」的产物才非空，前端据此渲染「分支自 …」角标（dev-board#779 K18）。
+     * <b>加列只许追加在尾部</b>：服务层按下标取值。
      */
     @org.springframework.data.jpa.repository.Query(
         "SELECT m.conversationId, MAX(m.createdAt), " +
@@ -39,10 +43,30 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
         "(SELECT m3.conversationTitle FROM ProjectAiMessage m3 WHERE m3.conversationId = m.conversationId AND m3.conversationTitle IS NOT NULL ORDER BY m3.createdAt ASC LIMIT 1), " +
         "(SELECT m4.content FROM ProjectAiMessage m4 WHERE m4.conversationId = m.conversationId AND m4.role = 'USER' ORDER BY m4.createdAt ASC LIMIT 1), " +
         "(SELECT m6.sourceChannel FROM ProjectAiMessage m6 WHERE m6.conversationId = m.conversationId ORDER BY m6.createdAt ASC LIMIT 1), " +
-        "(SELECT m7.conversationPinned FROM ProjectAiMessage m7 WHERE m7.conversationId = m.conversationId AND m7.conversationPinned IS NOT NULL ORDER BY m7.createdAt ASC LIMIT 1) " +
+        "(SELECT m7.conversationPinned FROM ProjectAiMessage m7 WHERE m7.conversationId = m.conversationId AND m7.conversationPinned IS NOT NULL ORDER BY m7.createdAt ASC LIMIT 1), " +
+        "(SELECT m8.parentConversationId FROM ProjectAiMessage m8 WHERE m8.conversationId = m.conversationId ORDER BY m8.createdAt ASC LIMIT 1) " +
         "FROM ProjectAiMessage m WHERE m.projectId = :projectId AND m.userId = :userId " +
         "GROUP BY m.conversationId ORDER BY MAX(m.createdAt) DESC")
     List<Object[]> findConversationSummaries(@org.springframework.data.repository.query.Param("projectId") Long projectId, @org.springframework.data.repository.query.Param("userId") Long userId);
+
+    /**
+     * 一批会话的标题素材（dev-board#779 K18）：给「分支自 &lt;父标题&gt;」角标解析父会话的标题。
+     *
+     * <p>为什么要单独一条：父会话不一定在当前这页列表里（可能是别人发起的、可能已经滚出视野），
+     * 而逐条 findFirstByConversationId 是 N+1。这条一次把这一页用到的父会话全查回来。
+     * 空集合别调它——JPQL 的 {@code IN ()} 在多数方言上是语法错误，调用方负责先判空。
+     *
+     * Returns: [conversationId, conversationTitle（首个非空）, firstUserMessage]
+     * 两列都给是为了与 forkConversation 取标题同口径：storedTitle 优先，没有就用用户第一问
+     * （取最后一条通常是助手整段回答，截断后连后缀都看不见）。
+     */
+    @org.springframework.data.jpa.repository.Query(
+        "SELECT m.conversationId, " +
+        "(SELECT m2.conversationTitle FROM ProjectAiMessage m2 WHERE m2.conversationId = m.conversationId AND m2.conversationTitle IS NOT NULL ORDER BY m2.createdAt ASC LIMIT 1), " +
+        "(SELECT m3.content FROM ProjectAiMessage m3 WHERE m3.conversationId = m.conversationId AND m3.role = 'USER' ORDER BY m3.createdAt ASC LIMIT 1) " +
+        "FROM ProjectAiMessage m WHERE m.conversationId IN :conversationIds GROUP BY m.conversationId")
+    List<Object[]> findConversationTitleCandidates(
+            @org.springframework.data.repository.query.Param("conversationIds") java.util.Collection<String> conversationIds);
 
     /**
      * 项目级会话汇总（概览页用）：与上面的 findConversationSummaries 唯一的差别是
