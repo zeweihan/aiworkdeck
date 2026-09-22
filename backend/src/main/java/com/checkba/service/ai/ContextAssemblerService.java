@@ -121,7 +121,37 @@ public class ContextAssemblerService {
             AgentMode agentMode,
             Long userId,
             String modelKey) {
+        return assemble(conversationId, runId, userPrompt, contextItems, activeContext,
+                taskListId, planId, projectId, agentMode, userId, modelKey, ContextTurnSink.NOOP);
+    }
 
+    /**
+     * 带账本的组装（dev-board#793 K14 / #801 K21）。
+     *
+     * <p>多出来的 {@code sink} 收本轮每个附件的最终处置与每一次降级/截断/丢弃：
+     * 编排器据此发 SSE {@code context_notice} 并把附件关联落库。
+     * 上面那个不带 sink 的重载保留给既有测试与回放评测（行为完全一致）。
+     *
+     * <p><b>mock 本服务时要 stub 的是这一个</b>：编排器调的是带 sink 的重载，
+     * 只 stub 了 11 参那个的话 Mockito 对本方法返回 null，表现是「组装出来什么都没有」。
+     *
+     * @param sink 账本；为 null 时当 {@link ContextTurnSink#NOOP}
+     */
+    public java.util.List<dev.langchain4j.data.message.ChatMessage> assemble(
+            String conversationId,
+            String runId,
+            String userPrompt,
+            java.util.List<com.checkba.controller.ai.AiAgentController.ContextItem> contextItems,
+            com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+            String taskListId,
+            String planId,
+            String projectId,
+            AgentMode agentMode,
+            Long userId,
+            String modelKey,
+            ContextTurnSink sink) {
+
+        final ContextTurnSink ledger = sink == null ? ContextTurnSink.NOOP : sink;
         java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
 
         // 组装分段计时（DEBUG 才计，默认零开销零输出）：这一整段都串在用户等首 token 的时间里
@@ -326,7 +356,11 @@ public class ContextAssemblerService {
                 if (totalFileCount >= maxFiles) {
                     systemText.append("\n[System Note: Context limit reached (").append(maxFiles)
                               .append(" files max). Remaining items ignored.]\n");
-                    break;
+                    // 被丢掉的**每一条**都点名报出去：只报第一条的话，用户拖了 15 份材料、
+                    // 界面上 15 个标签都在，他仍然不知道自己关心的那份在不在被砍掉的 5 份里。
+                    ledger.notice(ContextTurnSink.DROPPED, item.getId(), item.getName(),
+                            String.valueOf(maxFiles));
+                    continue;
                 }
 
                 if (item.isDir()) {
@@ -334,22 +368,29 @@ public class ContextAssemblerService {
                     systemText.append("\n## Folder: ").append(item.getName())
                               .append(" (ID: ").append(item.getId()).append(")\n");
 
-                    String folderContent = fileContextLoader.buildFolderContext(item.getId(), projectId, totalFileCount);
-                    systemText.append(folderContent);
-
-                    // Update count based on how many files were read in folder?
-                    // buildFolderContext returns string, we need to pass counter reference or approximate.
-                    // Let's refine buildFolderContext to assume it consumes remaining slots.
-                    // Actually, simpler: just let buildFolderContext run and we don't strictly update 'totalFileCount'
-                    // precisely here unless we return a count object.
-                    // For simplicity, we assume a folder consumes slots.
-                    // Better: Pass proper AtomicInteger to buildFolderContext.
+                    // 配额必须真的扣掉：老实现只把 totalFileCount 传进去算余额、回来从不递增，
+                    // 于是每个文件夹都拿到满额（拖 3 个 = 一次注入最多 30 份正文）。
+                    FileContextLoader.FolderContext folder =
+                            fileContextLoader.buildFolderContextCounted(item.getId(), projectId, totalFileCount);
+                    systemText.append(folder.text());
+                    totalFileCount += folder.filesRead();
+                    ledger.attachment(item.getId(), item.getName(), item.getFileType(), "folder", false);
+                    if (folder.unreadableCount() > 0) {
+                        // 文件夹里的扫描件/图片抽不出正文是常态（批量路径不逐张 OCR），
+                        // 静默的话用户看到的是「标签正常」、模型收到的是一串文件名
+                        ledger.notice(ContextTurnSink.UNREADABLE, item.getId(), item.getName(),
+                                String.valueOf(folder.unreadableCount()));
+                    }
                 } else if (isVisionCandidate(item)) {
                     // 图片：能直送就直送，直送不了（模型不支持 / 超张数或体积上限 / 读盘失败）
                     // 一律落回 OCR，绝不静默丢弃——用户挂了附件却什么都没发生是最坏的形态。
-                    VisionAttachment attachment = visionCapable
-                                    && visionAttachments.size() < contextProperties.getVision().getMaxImagesPerTurn()
-                            ? loadVisionAttachment(item)
+                    boolean overPerTurnLimit = visionCapable
+                            && visionAttachments.size() >= contextProperties.getVision().getMaxImagesPerTurn();
+                    // 降级原因要分得清：三种原因对用户是三句不同的话（换模型 / 少贴几张 / 压缩图片），
+                    // 混成一句「未能直送（超出本轮张数或单张体积上限，或读取失败）」等于什么都没说。
+                    boolean[] tooLarge = new boolean[1];
+                    VisionAttachment attachment = (visionCapable && !overPerTurnLimit)
+                            ? loadVisionAttachment(item, tooLarge)
                             : null;
                     if (attachment != null) {
                         visionAttachments.add(attachment);
@@ -359,17 +400,37 @@ public class ContextAssemblerService {
                                   .append("\" name=\"").append(attrSafe(item.getName()))
                                   .append("\" note=\"").append(english ? VISION_NOTE_EN : VISION_NOTE_ZH)
                                   .append("\"/>\n");
+                        ledger.attachment(item.getId(), item.getName(), item.getFileType(), "image", true);
+                        // 直送的图**也占**文件配额：原来这条分支不递增，于是同一轮实际可注入
+                        // 4 张图 + 10 份文件，前端按 10 拦就会与后端口径对不上（审查 verify.missed ④）。
+                        totalFileCount++;
                     } else {
-                        appendOcrFallbackFile(systemText, item, maxCharsPerFile, english
-                                ? (visionCapable ? OCR_FALLBACK_LIMIT_EN : OCR_FALLBACK_NO_VISION_EN)
-                                : (visionCapable ? OCR_FALLBACK_LIMIT_ZH : OCR_FALLBACK_NO_VISION_ZH),
-                                english);
+                        String noticeKind = overPerTurnLimit ? ContextTurnSink.IMAGE_LIMIT
+                                : tooLarge[0] ? ContextTurnSink.IMAGE_TOO_LARGE
+                                : ContextTurnSink.OCR_FALLBACK;
+                        String detail = overPerTurnLimit
+                                ? String.valueOf(contextProperties.getVision().getMaxImagesPerTurn())
+                                : tooLarge[0] ? String.valueOf(contextProperties.getVision().getMaxImageBytes())
+                                : null;
+                        // 写进 prompt 的原因必须与 notice 的 kind 一一对应：模型会把它转述给用户，
+                        // 说错原因比不说更糟（用户会去压缩一张其实不大的图）。
+                        String reason = !visionCapable ? (english ? OCR_FALLBACK_NO_VISION_EN : OCR_FALLBACK_NO_VISION_ZH)
+                                : overPerTurnLimit ? (english ? OCR_FALLBACK_COUNT_EN : OCR_FALLBACK_COUNT_ZH)
+                                : tooLarge[0] ? (english ? OCR_FALLBACK_SIZE_EN : OCR_FALLBACK_SIZE_ZH)
+                                : (english ? OCR_FALLBACK_READ_EN : OCR_FALLBACK_READ_ZH);
+                        boolean ocrReadable = appendOcrFallbackFile(systemText, item, maxCharsPerFile,
+                                reason, english, ledger);
+                        ledger.attachment(item.getId(), item.getName(), item.getFileType(), "image", false);
+                        // 一个附件只说一件事：OCR 也没读出字时「读不到内容」盖过「怎么降级的」——
+                        // 两条都发的话，一次贴 6 张图界面上就是 12 行小字，用户反而看不到重点。
+                        ledger.notice(ocrReadable ? noticeKind : ContextTurnSink.UNREADABLE,
+                                item.getId(), item.getName(), ocrReadable ? detail : null);
                         totalFileCount++;
                     }
                 } else {
                     // Single File Logic
                     String content = legalTools.read_document(item.getId());
-                    if (isToolFailureText(content)) {
+                    if (isToolFailureText(content) || content == null || content.isBlank()) {
                         // 工具的失败回执不是正文（dev-board#779 K8）：不进 CDATA，改成一句
                         // 模型能直接转述给用户的说明。原来它照样被当成附件正文写进 CDATA，
                         // 于是模型会「引用」一句 Java 异常文案当合同原文。
@@ -377,23 +438,26 @@ public class ContextAssemblerService {
                                   .append("\" name=\"").append(attrSafe(item.getName())).append("\">")
                                   .append(english ? "This attachment could not be read: "
                                                   : "该附件内容暂不可读：")
-                                  .append(attrSafe(toolFailureHeadline(content)))
+                                  .append(attrSafe(isToolFailureText(content)
+                                          ? toolFailureHeadline(content)
+                                          : (english ? "no extractable text" : "没有可提取的文字")))
                                   .append("</file>\n");
+                        ledger.attachment(item.getId(), item.getName(), item.getFileType(), "file", false);
+                        ledger.notice(ContextTurnSink.UNREADABLE, item.getId(), item.getName(), null);
                         totalFileCount++;
                         continue;
                     }
                     // Truncate if too long
-                    if (content != null && content.length() > maxCharsPerFile) {
+                    if (content.length() > maxCharsPerFile) {
                         content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
+                        ledger.notice(ContextTurnSink.TRUNCATED, item.getId(), item.getName(),
+                                String.valueOf(maxCharsPerFile));
                     }
                     systemText.append("<file id=\"").append(item.getId())
                               .append("\" name=\"").append(attrSafe(item.getName())).append("\"><![CDATA[\n");
-                    // 判空白而不只判 null：抽不出正文时（扫描件、抽取失败）拿到的是空串，
-                    // 原来会往上下文里注入一段空 CDATA——模型看到「文件在这儿但里面什么都没有」，
-                    // 于是转头自己再调一次读取工具。可见地写明读不出来才有下一步。
-                    systemText.append(content != null && !content.isBlank()
-                            ? fenceSafe(content) : "[Empty or unreadable file]");
+                    systemText.append(fenceSafe(content));
                     systemText.append("\n]]></file>\n");
+                    ledger.attachment(item.getId(), item.getName(), item.getFileType(), "file", false);
                     totalFileCount++;
                 }
             }
@@ -409,7 +473,10 @@ public class ContextAssemblerService {
                      activeContext.getId(), activeContext.getName(),
                      activeContext.getInlineContent() != null && !activeContext.getInlineContent().isEmpty());
 
-            String content = resolveActiveDocumentContent(activeContext, conversationId);
+            // 只带壳还是连正文一起注入：判据单独一个方法，别在下面那串条件里再长出一条 if
+            String content = injectActiveDocumentBody(contextItems, activeContext)
+                    ? resolveActiveDocumentContent(activeContext, conversationId)
+                    : null;
             ClientCapabilityService.Capability capability = clientCapabilityService.capabilityOf(conversationId);
 
             if (english) {
@@ -575,10 +642,18 @@ public class ContextAssemblerService {
             // 别注入一段空 CDATA 让模型以为文档本身是空的。
             // 工具返回的错误/警告文案同样不是正文（dev-board#779 K8）——见 isToolFailureText。
             if (!isToolFailureText(content) && content != null && !content.isBlank()) {
-                // Truncate if too long
-                int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
-                if (content.length() > maxCharsPerFile) {
-                    content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
+                // 截断上限与普通附件解耦（审查 E-10）：附件是「顺手带一份参考」，
+                // 活跃文档是「用户此刻正在看的那一份」，按 5 万砍会把「通篇审一下」
+                // 变成只审前三分之一却说得像通篇审过
+                int maxChars = contextProperties.getFiles().getMaxCharsActiveDocument();
+                if (content.length() > maxChars) {
+                    // 内联路径已经截过并留了自己的标记时不再截第二刀（会把那个标记切掉），
+                    // 但提示照发——对用户来说「只读了前 N 字」是同一件事
+                    if (!content.endsWith(INLINE_TRUNCATION_MARKER)) {
+                        content = truncateAtCharBoundary(content, maxChars) + "\n... [TRUNCATED - File too long]";
+                    }
+                    ledger.notice(ContextTurnSink.TRUNCATED, activeContext.getId(),
+                            activeContext.getName(), String.valueOf(maxChars));
                 }
 
                 systemText.append("<active_document id=\"").append(activeContext.getId())
@@ -825,6 +900,46 @@ public class ContextAssemblerService {
     }
 
     /**
+     * 活跃文档这一轮要不要连正文一起注入（dev-board#793 K14 ②，审查 E-4）。
+     *
+     * <p><b>只有两种形态，没有第三种</b>：
+     * <ul>
+     *   <li><b>带正文</b>（本轮没有显式附件）：{@code <active_document>} 里塞整份正文，
+     *       模型直接读，行为与改动前完全一致。</li>
+     *   <li><b>只带壳</b>（本轮有显式附件）：仍然写出 {@code # Active Document} 段、
+     *       id、name 与全套工具指引，但正文走 readHint 分支——
+     *       告诉模型「正文没内联给你，用 doc_get_document_text / office_get_text 自取」。</li>
+     * </ul>
+     *
+     * <p><b>为什么不是原来那样整段不给</b>：前端原本的判据是
+     * {@code (!hasFiles && !hasImages && activeTab)}——只要挂了任何附件，
+     * 活跃文档就是 null，后端整个 {@code # Active Document} 段与末位 {@code [系统提醒]} 都不生成。
+     * 于是最常见的跨材料工作流被整条切断：「这张图里的违约金条款，加进我正在写的这份合同」
+     * 「对照这份对方发来的 docx，改一下当前文档第 3 条」——模型既不知道有活跃文档、
+     * 也不知道该往哪儿写，只能去 {@code doc_list_project_files} 摸索，
+     * 或者干脆新建一个文件（dev-board#244 记录过同类病灶）。
+     *
+     * <p><b>为什么有附件时只带壳</b>：纯粹是控 token。一轮里已经有 N 份附件正文了，
+     * 再无条件叠一份几万字的活跃文档正文，压缩会提前触发（首 token 之前多插一次同步 LLM 摘要）。
+     * 「只带壳」不是降级成什么都没有——模型知道它存在、知道它的 id、也知道怎么自己读，
+     * 该编辑的时候照样直接编辑。
+     *
+     * <p><b>第三个「只带壳」的理由</b>：客户端说它没能把文档落盘（{@code staleBody}）。
+     * 此时磁盘上那份正文已经不是用户眼前看到的那份，注入它比不注入更坏——
+     * 模型会拿着改动之前的版本给结论，而末位提醒还说「正文已内联注入，可直接阅读分析」。
+     */
+    private boolean injectActiveDocumentBody(
+            java.util.List<com.checkba.controller.ai.AiAgentController.ContextItem> contextItems,
+            com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        if (activeContext != null && activeContext.isStaleBody()
+                && (activeContext.getInlineContent() == null || activeContext.getInlineContent().isEmpty())) {
+            // 内联正文是客户端随请求带上来的**当前**正文，它在手时 staleBody 无所谓
+            return false;
+        }
+        return contextItems == null || contextItems.isEmpty();
+    }
+
+    /**
      * 本轮真正生效的模型支不支持视觉。
      *
      * <p><b>必须问工厂，不能直接拿 modelKey 去查白名单。</b>请求里的 modelId 不等于实际发出去的
@@ -883,7 +998,7 @@ public class ContextAssemblerService {
      * ④ 任何失败只 log + 返回 null，绝不掀翻整轮组装。
      */
     private VisionAttachment loadVisionAttachment(
-            com.checkba.controller.ai.AiAgentController.ContextItem item) {
+            com.checkba.controller.ai.AiAgentController.ContextItem item, boolean[] tooLarge) {
         try {
             Long fileId = Long.parseLong(item.getId().trim());
             com.checkba.model.entity.ProjectFile file = projectFileService.getFile(fileId);
@@ -906,6 +1021,9 @@ public class ContextAssemblerService {
             if (bytes.length > limit) {
                 log.info("[Vision] Image {} is {} bytes (> {}), falling back to OCR",
                         item.getName(), bytes.length, limit);
+                // 告诉调用方「是体积超了」：这一种降级对用户的话是「压缩后重发」，
+                // 与「换个能读图的模型」「少贴几张」都不一样
+                if (tooLarge != null && tooLarge.length > 0) tooLarge[0] = true;
                 return null;
             }
             return new VisionAttachment(item.getId(), item.getName(), imageMimeType(item.getName()),
@@ -925,21 +1043,34 @@ public class ContextAssemblerService {
             "Provided to you as an image with this message. Look at it directly; do not call any read tool.";
     private static final String OCR_FALLBACK_NO_VISION_ZH = "当前模型不支持视觉输入";
     private static final String OCR_FALLBACK_NO_VISION_EN = "the current model does not accept image input";
-    private static final String OCR_FALLBACK_LIMIT_ZH =
-            "这一张图未能直送（超出本轮张数或单张体积上限，或读取失败）";
-    private static final String OCR_FALLBACK_LIMIT_EN =
-            "this image could not be sent directly (per-turn count or per-image size limit, or a read failure)";
+    // 三种降级各说各的原因：混成一句「超出本轮张数或单张体积上限，或读取失败」等于什么都没说——
+    // 实测里模型据此告诉用户「因超出单张体积限制」，而真实原因是这一轮的张数上限（dev-board#801）。
+    // 处置完全不同：该少贴几张 / 该压缩图片 / 该换个能读图的模型。
+    private static final String OCR_FALLBACK_COUNT_ZH = "超出本轮可直送的图片张数上限";
+    private static final String OCR_FALLBACK_COUNT_EN = "it exceeds the number of images that can be sent directly this turn";
+    private static final String OCR_FALLBACK_SIZE_ZH = "这张图超过单张体积上限";
+    private static final String OCR_FALLBACK_SIZE_EN = "this image exceeds the per-image size limit";
+    private static final String OCR_FALLBACK_READ_ZH = "这张图读取失败";
+    private static final String OCR_FALLBACK_READ_EN = "this image could not be read";
 
     /**
      * 图片降级走 OCR 时的 {@code <file>} 段：与普通附件同形，但**必须明写降级原因**。
      * 不写的话模型会把 OCR 的识别误差当成原文事实，用户也不知道自己看到的结论是基于转写文本。
      */
-    private void appendOcrFallbackFile(StringBuilder systemText,
+    private boolean appendOcrFallbackFile(StringBuilder systemText,
                                        com.checkba.controller.ai.AiAgentController.ContextItem item,
-                                       int maxCharsPerFile, String reason, boolean english) {
+                                       int maxCharsPerFile, String reason, boolean english,
+                                       ContextTurnSink ledger) {
         String content = legalTools.read_document(item.getId());
-        if (content != null && content.length() > maxCharsPerFile) {
+        // `[System: 文件超过大小限制]` 这类系统提示非空、也不带 Error/Warning 前缀，
+        // 原来会顶着「以下正文由 OCR 转写而来」的横幅进 CDATA——模型据此说
+        // 「这张图我读到的内容是：文件超过大小限制」。它不是识别结果，按读不出来处理。
+        boolean readable = content != null && !content.isBlank()
+                && !isToolFailureText(content) && !content.strip().startsWith("[System:");
+        if (readable && content.length() > maxCharsPerFile) {
             content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
+            ledger.notice(ContextTurnSink.TRUNCATED, item.getId(), item.getName(),
+                    String.valueOf(maxCharsPerFile));
         }
         systemText.append("<file id=\"").append(item.getId())
                   .append("\" name=\"").append(attrSafe(item.getName()))
@@ -953,9 +1084,9 @@ public class ContextAssemblerService {
                         + "；你看不到图像本身，识别结果可能有误，涉及关键数字/名称时请提示用户核对原图]\n");
         // 同上：OCR 一个字都没认出来时 read_document 回的是 "Warning: no text extracted…"，
         // 顶着上面那句「以下正文由 OCR 转写而来」的横幅进 CDATA，就成了「识别结果是这句英文」。
-        systemText.append(content != null && !content.isBlank() && !isToolFailureText(content)
-                ? fenceSafe(content) : "[Empty or unreadable file]");
+        systemText.append(readable ? fenceSafe(content) : "[Empty or unreadable file]");
         systemText.append("\n]]></file>\n");
+        return readable;
     }
 
     /** 扩展名 → image/* MIME。jpg 必须归一化成 image/jpeg，拼成 image/jpg 上游不认。 */
@@ -1241,8 +1372,12 @@ public class ContextAssemblerService {
         return "doc";
     }
 
-    /** 内联正文防滥用上限：超出即截断（客户端可随请求直接携带正文，不能无限吃内存）。 */
-    private static final int MAX_INLINE_CONTENT_CHARS = 200_000;
+    /**
+     * 内联正文被截断时留下的尾巴。**注入处据它判「这段已经截过了」**，
+     * 不然会被按活跃文档上限再截一刀，把这个更具体的标记本身切掉、换成通用的那个
+     *（客户端上传的正文太长 vs 文件本身太长，对用户是两件事）。
+     */
+    private static final String INLINE_TRUNCATION_MARKER = "\n... [TRUNCATED - Inline content too long]";
 
     /**
      * 活跃文档正文来源三选一：
@@ -1259,10 +1394,13 @@ public class ContextAssemblerService {
             String conversationId) {
         String inline = activeContext.getInlineContent();
         if (inline != null && !inline.isEmpty()) {
-            if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
-                // 超限正文不入缓存：缓存的内存上界按每条 200k 字符估算
-                return truncateAtCharBoundary(inline, MAX_INLINE_CONTENT_CHARS)
-                        + "\n... [TRUNCATED - Inline content too long]";
+            // 上限与「活跃文档正文上限」是同一个概念，走同一个配置项（dev-board#793 K14 ⑥）。
+            // 两处各写一个数的后果就是 E-10 那条：这里按 20 万截、注入处再按 5 万砍一刀，
+            // 实际生效的是小的那个，而插件每轮上传的正文有一大半是白传的。
+            int inlineMax = contextProperties.getFiles().getMaxCharsActiveDocument();
+            if (inline.length() > inlineMax) {
+                // 超限正文不入缓存：缓存的内存上界按每条上限字符估算
+                return truncateAtCharBoundary(inline, inlineMax) + INLINE_TRUNCATION_MARKER;
             }
             inlineContentCache.put(conversationId, inline);
             return inline;

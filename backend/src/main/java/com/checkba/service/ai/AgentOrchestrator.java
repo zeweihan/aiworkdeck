@@ -467,6 +467,77 @@ public class AgentOrchestrator {
     }
 
     /**
+     * 本轮上下文账本的编排器侧实现（dev-board#793 K14 ④ / #801 K21 ⑦）。
+     *
+     * <p>两个消费者，一条来源：
+     * <ul>
+     *   <li>{@link #notice} → 立刻发 SSE {@code context_notice}，让用户当场看见
+     *       「这份被丢了 / 这张图降级成 OCR 了 / 这篇只读了前 N 字」。
+     *       原来这些全是静默的——界面上标签都在，模型手里没有。</li>
+     *   <li>{@link #attachment} → 攒起来，assemble 之后一次性挂到刚落库的 USER 消息上。</li>
+     * </ul>
+     *
+     * <p><b>两个方法都不许抛</b>：组装跑在用户等首 token 的关键路径上，
+     * 一条提示发不出去绝不能掀翻整轮对话。
+     */
+    private final class TurnContextLedger implements ContextTurnSink {
+        private final RunGuard guard;
+        private final java.util.List<ProjectAiMessageService.AttachmentRecord> records =
+                new java.util.ArrayList<>();
+
+        TurnContextLedger(RunGuard guard) {
+            this.guard = guard;
+        }
+
+        @Override
+        public void attachment(String fileId, String name, String fileType, String kind, boolean visionUsed) {
+            records.add(new ProjectAiMessageService.AttachmentRecord(fileId, name, fileType, kind, visionUsed));
+        }
+
+        @Override
+        public void notice(String kind, String fileId, String name, String detail) {
+            try {
+                StringBuilder json = new StringBuilder("{\"kind\":\"").append(kind).append('"');
+                if (fileId != null) json.append(",\"fileId\":\"").append(jsonEscape(fileId)).append('"');
+                if (name != null) json.append(",\"name\":\"").append(jsonEscape(name)).append('"');
+                if (detail != null) json.append(",\"detail\":\"").append(jsonEscape(detail)).append('"');
+                json.append('}');
+                sendRunEvent(guard, "context_notice", json.toString());
+            } catch (Exception e) {
+                log.warn("Failed to send context_notice kind={} file={}", kind, fileId, e);
+            }
+        }
+
+        void persistTo(Long messageId) {
+            try {
+                messageService.recordAttachments(messageId, records);
+            } catch (Exception e) {
+                log.warn("Failed to persist {} attachment(s) for message {}", records.size(), messageId, e);
+            }
+        }
+    }
+
+    /** 文件名由项目成员自由命名，直接拼进 JSON 会被一个引号或反斜杠打断整条事件。 */
+    private static String jsonEscape(String raw) {
+        StringBuilder out = new StringBuilder(raw.length() + 8);
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            switch (c) {
+                case '"' -> out.append("\\\"");
+                case '\\' -> out.append("\\\\");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20) out.append(String.format("\\u%04x", (int) c));
+                    else out.append(c);
+                }
+            }
+        }
+        return out.toString();
+    }
+
+    /**
      * bubble_end 载荷。status 是跨端契约字面量（前端两处解析 + run_state 分支 + Office 插件的
      * 状态分档），reason 沿用原有位置，documentEdited 追加在最后。
      *
@@ -563,17 +634,22 @@ public class AgentOrchestrator {
         for (com.checkba.model.entity.AgentInboxItem input : inputs) {
             AiAgentController.AgentChatRequest request = inbox.requestOf(input);
             // clientRequestId 一起落库：它是「回退到这条消息」的定位键，而主键要到这一刻才生成、
-            // 回执与 input_applied 都赶在它前面（见 ProjectAiMessage#clientRequestId）
-            messageService.saveMessage(projectId, userId, guard.conversationId, "USER",
+            // 回执与 input_applied 都赶在它前面（见 ProjectAiMessage#clientRequestId）。
+            // 返回的行 id 用来挂本轮附件（K14 ④）——两件事都要，缺一个就各丢一半。
+            Long steeredMessageId = messageService.saveMessage(projectId, userId, guard.conversationId, "USER",
                     input.getMessage(), input.getDisplayText(), input.getClientRequestId());
             dev.langchain4j.data.message.ChatMessage augmented = null;
             try {
+                // 插话也带附件，账本同一条路——两个落库口少一个，刷新之后插话那条消息
+                // 就变成「什么都没带」，而它恰恰是最容易带材料的一条
+                TurnContextLedger ledger = new TurnContextLedger(guard);
                 java.util.List<dev.langchain4j.data.message.ChatMessage> assembled = contextAssemblerService.assemble(
                         guard.conversationId, guard.runId, input.getMessage(),
                         request.getContextItems() != null ? request.getContextItems()
                                 : convertFileIdsToContextItems(request.getFileIds()),
                         request.getActiveContext(), null, null, projectId,
-                        agentMode, userId, modelId);
+                        agentMode, userId, modelId, ledger);
+                ledger.persistTo(steeredMessageId);
                 for (int i = assembled.size() - 1; i >= 0; i--) {
                     if (assembled.get(i) instanceof dev.langchain4j.data.message.UserMessage) {
                         augmented = assembled.get(i);
@@ -1077,11 +1153,12 @@ public class AgentOrchestrator {
             // 缺省 null = 与本通道不存在时完全一致；上下文组装一律只读 content。
             // clientRequestId 是本条 USER 行的回退定位键：主键在这一行执行完才存在，而
             // POST /api/agent/chat 的回执早在控制器线程上就发走了，带不上主键（K1 / 审查 D-02）。
-            messageService.saveMessage(
+            // 返回的行 id 是附件关联的挂载点（K14 ④）——两件事都要，缺一个就各丢一半。
+            Long userMessageId = messageService.saveMessage(
                 projectId, userId, conversationId, "USER", request.getMessage(), request.getDisplayText(),
                 request.getClientRequestId()
             );
-            
+
             // 1.1 首次对话时异步生成对话标题。
             // 只要一个数字就用 count 查（dev-board#729 ⑤）：原先这里 listByConversationId 把整条
             // 会话的全部消息（正文 + executionLog，长会话轻松几十万字符）读出来映射成实体，
@@ -1137,11 +1214,12 @@ public class AgentOrchestrator {
             String taskListId = null; 
             String planId = null;
             
+            TurnContextLedger ledger = new TurnContextLedger(guard);
             java.util.List<dev.langchain4j.data.message.ChatMessage> messages = contextAssemblerService.assemble(
                 conversationId,
                 guard.runId,
-                request.getMessage(), 
-                request.getContextItems() != null ? request.getContextItems() : 
+                request.getMessage(),
+                request.getContextItems() != null ? request.getContextItems() :
                     convertFileIdsToContextItems(request.getFileIds()),
                 request.getActiveContext(), // NEW: Pass active document context
                 taskListId,
@@ -1149,9 +1227,11 @@ public class AgentOrchestrator {
                 projectId,
                 agentMode,
                 userId,
-                request.getModel()
+                request.getModel(),
+                ledger
             );
-            
+            ledger.persistTo(userMessageId);
+
             timings.mark("assemble", messages.size());
             log.info("Message assembly complete. Total messages: {}", messages.size());
             log.debug("Detailed Message Stack:");

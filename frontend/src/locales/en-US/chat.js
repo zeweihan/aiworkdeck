@@ -181,6 +181,24 @@ export default {
   imageNeedsCaptionTitle: 'Add a note to your image',
   imageNeedsCaptionContent: 'Images are sent along with your message: if the current model can read images, it sees them directly; if not, they are processed as recognized text (OCR). Add a sentence describing what to do (for example, "Turn the clauses in this image into a table"), then send.',
   imageOcrFallbackNote: 'The current model cannot read images directly. Images will be processed as recognized text (OCR).',
+
+  // ---- Context layer: active-document chip / carried attachments / limits and downgrades ----
+  activeDocChipLabel: 'Current document',
+  activeDocChipTitle: 'This document is sent to the AI with your message. Click x to leave it out of this turn.',
+  carriedAttachmentTitle: '{name} (carried over from the previous turn and still attached; click to keep it, click x to remove)',
+  contextFileCapReached: 'Up to {max} items (images included) per turn. Remove some before adding more.',
+  imageCountCapToast: 'Up to {max} images are sent directly per turn; the rest are processed as recognized text (OCR).',
+  imageTooLargeToast: 'This image is over {size} and will be processed as recognized text (OCR). Compress it and send again.',
+  contextNoticeThisFile: 'This item',
+  contextNoticeTruncated: '{name} is long; the AI read only the first {chars} characters this turn.',
+  contextNoticeDropped: '{name} did not make it into this turn: at most {max} items per turn.',
+  // Deliberately does not assert the cause here (see the zh-CN note): the real reason goes
+  // into the prompt, and this channel also covers "read failed, fell back to OCR".
+  contextNoticeOcrFallback: '{name} was processed as recognized text (OCR); recognition may be wrong.',
+  contextNoticeImageLimit: '{name} was processed as recognized text (OCR): at most {max} images are sent directly per turn.',
+  contextNoticeImageTooLarge: '{name} was processed as recognized text (OCR): the image is over the size limit.',
+  contextNoticeUnreadable: '{name} has no extractable text, so the AI cannot read its content.',
+  contextNoticeGeneric: '{name} was downgraded this turn.',
   pastedImageName: 'pasted-image-{stamp}',
   pastedImageUploadFailed: '{count} pasted image(s) failed to upload and were not sent with this message.',
   gotIt: 'Got it',

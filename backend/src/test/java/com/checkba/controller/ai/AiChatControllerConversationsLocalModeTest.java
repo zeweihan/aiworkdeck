@@ -75,7 +75,8 @@ class AiChatControllerConversationsLocalModeTest {
                 mock(com.checkba.service.ai.ConversationFileChangeService.class),
                 mock(com.checkba.repository.TokenUsageRepository.class),
                 agentRunStateService,
-                mock(com.checkba.service.ai.PlatformAiChannel.class));
+                mock(com.checkba.service.ai.PlatformAiChannel.class),
+                new com.checkba.config.AiContextProperties());
 
         List<Map<String, Object>> result = controller.getConversations(42L, null);
 

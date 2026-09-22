@@ -48,7 +48,8 @@ class AiChatControllerForkTest {
                 mock(com.checkba.service.ai.ConversationFileChangeService.class),
                 mock(com.checkba.repository.TokenUsageRepository.class),
                 mock(com.checkba.service.ai.AgentRunStateService.class),
-                mock(com.checkba.service.ai.PlatformAiChannel.class));
+                mock(com.checkba.service.ai.PlatformAiChannel.class),
+                new com.checkba.config.AiContextProperties());
         when(messageService.canUseConversation(anyString(), any())).thenReturn(true);
     }
 

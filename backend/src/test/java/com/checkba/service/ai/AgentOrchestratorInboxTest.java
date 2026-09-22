@@ -84,7 +84,7 @@ class AgentOrchestratorInboxTest {
             String prompt = inv.getArgument(2);
             return new ArrayList<ChatMessage>(List.of(SystemMessage.from("system"),
                     UserMessage.from(prompt == null ? "original" : prompt)));
-        }).when(assembler).assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }).when(assembler).assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
 
         tools = mock(ToolRegistry.class);
         when(tools.getAllSpecifications(any(), any())).thenReturn(List.of());
@@ -171,7 +171,7 @@ class AgentOrchestratorInboxTest {
                             ? "AUGMENTED_ATTACHMENT:88" : inv.getArgument(2, String.class);
                     return new ArrayList<ChatMessage>(List.of(SystemMessage.from("system"),
                             UserMessage.from(text == null ? "original" : text)));
-                }).when(assembler).assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+                }).when(assembler).assemble(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
                 AiMessage.from(List.of(tool("read", "r1"))), AiMessage.from("done")));
 

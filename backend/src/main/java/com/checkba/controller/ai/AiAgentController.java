@@ -634,6 +634,19 @@ public class AiAgentController {
          * 后端凭它从 InlineContentCache 取回上一轮的正文；未命中即按「无内联正文」处理。
          */
         private String inlineContentHash;
+        /**
+         * 可选，只对 activeContext 有意义（dev-board#793 K14 ⑤）：客户端没能把当前文档落盘，
+         * 磁盘上那份正文已经不是用户眼前看到的那份。
+         *
+         * <p>桌面端的自动保存是防抖的（最长 2.5 秒 + 一次导出上传），用户敲完一段话立刻回车问
+         * 「我刚改的这段有没有问题」时，发送前的 flushSave 可能超时。此时注入磁盘上那份旧正文
+         * 比不注入更坏——末位提醒还斩钉截铁地说「其正文已内联注入…可直接阅读分析」，
+         * 模型会拿着改动之前的版本给结论。置 true 即只带壳，让模型走编辑器桥读实时正文。
+         */
+        private boolean staleBody;
+
+        public boolean isStaleBody() { return staleBody; }
+        public void setStaleBody(boolean staleBody) { this.staleBody = staleBody; }
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
