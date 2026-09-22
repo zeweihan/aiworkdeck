@@ -54,10 +54,31 @@
             </div>
           </template>
 
-            <!-- 5b. Message Actions：插入/替换/导出收进一个图标，点开再选（用户反馈三个
-                 平铺按钮太占地方）。菜单向上弹，透明遮罩点外即收。
-                 按需展示：本轮已经改过文档、正在反问、或只是一句回执时都不出
-                 （判据在 utils/useInDocumentVisibility.js，dev-board#728）。 -->
+            <!-- 5b. 气泡底部操作条。
+                 「复制」与「重新生成」刻意<b>不</b>挂在 showUseInDocument 那条判据上：
+                 那条判据管的是「这段话值不值得放进当前文书」，而复制的去处是邮件、微信、
+                 另一份文档——恰恰是 AI 刚写过文档的那一轮（showUseInDocument 判 false）
+                 用户最想把修改说明拷走（审查 D-07 / F2）。判据只要「有正文、流已结束」。
+                 「重新生成」只给最新一条：回退会连带删掉它之后的所有对话，
+                 对着历史中间某条点下去会静默毁掉后面好几轮（dev-board#790）。 -->
+            <div v-if="showCopy || showRegenerate || showUseInDocument" class="bubble-toolbar">
+               <div v-if="showCopy" class="msg-act-trigger msg-copy-btn" :title="$t('chat.copyAnswer')" @click.stop="copyAnswer">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>{{ $t('chat.copyAnswer') }}</span>
+               </div>
+               <div v-if="showRegenerate" class="msg-act-trigger msg-regen-btn" :title="$t('chat.regenerateTitle')" @click.stop="$emit('regenerate')">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                     <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+                     <polyline points="21 3 21 9 15 9"></polyline>
+                  </svg>
+                  <span>{{ $t('chat.regenerate') }}</span>
+               </div>
+            <!-- 插入/替换/导出收进一个图标，点开再选（用户反馈三个平铺按钮太占地方）。
+                 菜单向上弹，透明遮罩点外即收。按需展示：本轮已经改过文档、正在反问、
+                 或只是一句回执时都不出（判据在 utils/useInDocumentVisibility.js，dev-board#728）。 -->
             <div v-if="showUseInDocument" class="message-actions">
                <div class="msg-act-trigger" :class="{ active: showActions }" @click.stop="showActions = !showActions">
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -73,6 +94,7 @@
                   <div class="msg-act-item" @click="pickAction('export')">{{ $t('chat.exportAsWord') }}</div>
                </div>
                <div v-if="showActions" class="msg-act-mask" @click.stop="showActions = false"></div>
+            </div>
             </div>
 
             <!-- 5c. 反问卡（<question>）：模型缺关键前提时停机等回答。
@@ -108,7 +130,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ThinkingCard from './ThinkingCard.vue'
 import TodoProgressCard from './TodoProgressCard.vue'
 import ProcessCard from './ProcessCard.vue'
@@ -118,6 +140,8 @@ import MarkdownPreview from '../MarkdownPreview.vue'
 import { t } from '@/i18n'
 import { visibleChatTimeline, isTimelineEntryActive } from './chatTimeline.mjs'
 import { shouldShowUseInDocument } from '@/utils/useInDocumentVisibility.js'
+import { answerPlainText, copyToClipboard } from '@/utils/chatClipboard.js'
+import { toolDisplayName } from '@/utils/toolDisplayNames.js'
 
 const props = defineProps({
   bubble: { type: Object, required: true },
@@ -125,7 +149,7 @@ const props = defineProps({
   isLatest: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question'])
+const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question', 'regenerate'])
 
 // 载荷形状对齐 project-overview.handleChatInterfaceAction({ type, msg })，msg 只需 content
 function sendAction(type) {
@@ -138,6 +162,51 @@ const showUseInDocument = computed(() => shouldShowUseInDocument(props.bubble))
 function pickAction(type) {
   showActions.value = false
   sendAction(type)
+}
+
+// ---- 复制 / 重新生成（dev-board#790）----
+// 复制拿的是纯文本化之后的正文：粘进邮件里的不该是 **加粗** 与 <final>（见 utils/chatClipboard.js）。
+// 这里同时当作可见性判据——纯文本化后为空（整条只有工具执行、没有一个字的回答）就不出按钮，
+// 出一颗点下去什么都没复制走的按钮比没有按钮更糟。
+const copyableText = computed(() => (props.bubble.isStreaming ? '' : answerPlainText(props.bubble.content)))
+const showCopy = computed(() => !!copyableText.value)
+const showRegenerate = computed(() => props.isLatest && !props.bubble.isStreaming && !!props.bubble.content)
+function copyAnswer() {
+  copyToClipboard(copyableText.value)
+}
+
+// ---- 运行状态条的秒表（dev-board#792）----
+// 只在本条气泡还在流式时走，1 秒一跳；写法与 ThinkingCard 的思考秒表同源。
+// beforeUnmount 必须清：气泡在切换会话 / 回退时会整片销毁，留着的 interval
+// 会一直持有已销毁组件的 ref。
+const now = ref(Date.now())
+let ticker = null
+const stopTicker = () => {
+  if (ticker) {
+    clearInterval(ticker)
+    ticker = null
+  }
+}
+const startTicker = () => {
+  stopTicker()
+  now.value = Date.now()
+  ticker = setInterval(() => { now.value = Date.now() }, 1000)
+}
+watch(() => props.bubble.isStreaming, streaming => (streaming ? startTicker() : stopTicker()), { immediate: true })
+onBeforeUnmount(stopTicker)
+
+/**
+ * 这一段执行里最后一个仍在跑的工具。
+ * items 只追加不重排，所以倒着找到的第一个 loading 就是当前这个。
+ */
+const runningTool = entry => {
+  for (let p = entry.procs.length - 1; p >= 0; p--) {
+    const items = entry.procs[p].items || []
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'tool' && items[i].status === 'loading') return items[i]
+    }
+  }
+  return null
 }
 
 const timeline = computed(() => visibleChatTimeline(props.bubble))
@@ -155,6 +224,17 @@ const hasError = entry => entry.type === 'execution' && entry.procs.some(proc =>
 const activityLabel = (entry, index) => {
   if (entry.type === 'plan') return t('chat.timelinePlan', { done: entry.data.filter(todo => todo.status === 'completed').length, total: entry.data.length })
   const count = entry.procs.reduce((n, proc) => n + (proc.items || []).filter(item => item.type === 'tool').length, 0) || entry.procs.length
+  // 正在跑某个工具时先报工具名与秒数：「正在执行 3 项操作」分不清 AI 是在读合同、
+  // 在查企查查、还是卡在某个超时的外部调用上，用户只能盯着一个不动的计数干等（审查 F5）。
+  // 先于 hasError 判：前面某一步失败了、现在又在跑下一个，说「有操作未完成」既不准也没信息量——
+  // 那个红色徽章展开就在里面。没有工具在跑时才退回原来的两条文案，行为一字未变。
+  const running = isActive(entry, index) ? runningTool(entry) : null
+  if (running) {
+    return t('chat.timelineExecutingTool', {
+      name: toolDisplayName(running.code) || t('chat.toolCallFallback'),
+      sec: running.startTime ? Math.max(0, Math.round((now.value - running.startTime) / 1000)) : 0
+    })
+  }
   if (hasError(entry)) return t('chat.timelineExecutionError', { n: count })
   return t(isActive(entry, index) ? 'chat.timelineExecuting' : 'chat.timelineExecuted', { n: count })
 }
@@ -254,6 +334,14 @@ function isApprovalPending(art) {
   font-size: 13px;
   line-height: 1.7;
   color: var(--awd-text); /* Gray-Dark */
+}
+
+/* 气泡底部操作条：复制 / 重新生成 / 用到文档，横排在一行 */
+.bubble-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .message-actions {

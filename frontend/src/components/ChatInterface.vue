@@ -138,11 +138,12 @@
     <view v-if="showRollbackDialog" class="awd-dialog-mask" style="z-index: 3100;" @tap="cancelRollback">
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header warning-header">
-          <text class="awd-dialog-title warning-title">{{ $t('chat.rollbackConfirmTitle') }}</text>
+          <text class="awd-dialog-title warning-title">{{ rollbackResend ? $t('chat.regenerateConfirmTitle') : $t('chat.rollbackConfirmTitle') }}</text>
         </view>
         <view class="awd-dialog-body">
           <view class="rollback-warning-content">
-            <text class="warning-text">{{ $t('chat.rollbackWarning') }}</text>
+            <text class="warning-text">{{ rollbackResend ? $t('chat.regenerateWarning') : $t('chat.rollbackWarning') }}</text>
+            <!-- 存档说明对两种用法都成立：重新生成走的就是这条截断通道（dev-board#790） -->
             <text class="warning-text rollback-archive-note">{{ $t('chat.rollbackArchiveNote') }}</text>
             <view class="doc-tip-box">
               <svg class="doc-tip-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -155,14 +156,14 @@
               </view>
             </view>
             <view class="rollback-preview">
-              <text class="preview-label">{{ $t('chat.rollbackPreviewLabel') }}</text>
+              <text class="preview-label">{{ rollbackResend ? $t('chat.regeneratePreviewLabel') : $t('chat.rollbackPreviewLabel') }}</text>
               <text class="preview-content">"{{ truncateName(rollbackTargetContent, 50) }}"</text>
             </view>
           </view>
         </view>
         <view class="awd-dialog-footer">
           <view class="awd-btn awd-btn-secondary" @tap="cancelRollback">{{ $t('chat.cancel') }}</view>
-          <view class="awd-btn awd-btn-danger" @tap="confirmRollback">{{ $t('chat.rollbackConfirmTitle') }}</view>
+          <view class="awd-btn awd-btn-danger" data-rollback-confirm @tap="confirmRollback">{{ rollbackResend ? $t('chat.regenerateConfirmTitle') : $t('chat.rollbackConfirmTitle') }}</view>
         </view>
       </view>
     </view>
@@ -310,6 +311,7 @@
                @approve="handleArtifactApprove"
                @answer-question="handleQuestionAnswer"
                @message-action="$emit('message-action', $event)"
+               @regenerate="openRegenerateDialog(index)"
              />
              <!-- <span v-if="msg.timestamp" class="bubble-timestamp assistant">{{ msg.timestamp }}</span> -->
           </div>
@@ -548,12 +550,14 @@
                </view>
            </view>
 
-           <!-- Right: Token Usage -->
-           <!-- <view v-if="tokenUsage && tokenUsage.totalTokens > 0" class="status-bar-right">
-               <text class="token-label">Tokens</text>
-               <text class="token-value">{{ tokenUsage.totalTokens.toLocaleString() }}</text>
-               <text class="token-detail">({{ tokenUsage.promptTokens.toLocaleString() }} / {{ tokenUsage.completionTokens.toLocaleString() }})</text>
-           </view> -->
+           <!-- Right: Token Usage
+                本轮用量（dev-board#792 / 审查 F3①）。采集一直都在，此前整块被注释掉，
+                于是「这一轮花了多少」用户完全看不见——而 Credits 是站内唯一计价单位。
+                低调一行、只在有数时出现：为 0 说明后端还没回 token_usage（Ollama 档不回），
+                挂一个 0 会像是「这一轮不要钱」。 -->
+           <view v-if="tokenUsage && tokenUsage.totalTokens > 0" class="status-bar-right">
+               <text class="token-value">{{ $t('chat.tokenUsageLine', { n: tokenUsage.totalTokens.toLocaleString() }) }}</text>
+           </view>
        </view>
        <AgentInbox
          :items="pendingInbox"
@@ -1352,6 +1356,9 @@ export default {
     const rollbackTargetIndex = ref(-1)
     const rollbackTargetContent = ref('')
     const rollbackTargetId = ref(null)
+    // 这次确认框是「重新生成」而不是「回退」：只改结尾那一步（重发 vs 回填输入框）
+    // 与三处文案，截断与存档完全共用（见 openRegenerateDialog）
+    const rollbackResend = ref(false)
 
     // Upload Dialog State
     const showUploadDialog = ref(false)
@@ -1591,17 +1598,56 @@ export default {
       showRollbackDialog.value = true
     }
 
+    /**
+     * 「重新生成」：换一份回答，走的是和「回退到这条消息」<b>完全同一条链路</b>——
+     * 同一个确认框、同一次 rollbackConversation（后端先把原路径整条存成一条存档会话再截断），
+     * 唯一的区别在结尾：确认之后不是把原文回填输入框等用户改，而是原样重发一次（审查 D-07）。
+     *
+     * <p>刻意不另起一条「重放这一轮」的通道：那会变成第二份截断语义，
+     * 而截断是会删用户数据的动作，两份实现迟早在存档这件事上漂移。
+     *
+     * @param assistantIndex 被点的那条助手气泡在 bubbles 里的下标
+     */
+    const openRegenerateDialog = (assistantIndex) => {
+      if (isStreaming.value) {
+        uni.showToast({ title: t('chat.waitCurrentChat'), icon: 'none' })
+        return
+      }
+      // 往回找这条回答对应的提问。找不到（开场白、系统确认气泡）就不做——
+      // 没有提问就没有「再问一次」可言。
+      let userIndex = Number(assistantIndex)
+      while (userIndex >= 0 && bubbles.value[userIndex] && bubbles.value[userIndex].role !== 'USER') userIndex--
+      const target = userIndex >= 0 ? bubbles.value[userIndex] : null
+      if (!target) {
+        uni.showToast({ title: t('chat.regenerateNoSource'), icon: 'none' })
+        return
+      }
+      openRollbackDialog(target, userIndex)
+      // 只有对话框真开了才算数：openRollbackDialog 可能在流式中 / 定位不到时提前返回，
+      // 那时把标志留成 true，下一次普通回退就会莫名其妙地自动重发。
+      rollbackResend.value = showRollbackDialog.value
+    }
+
     const cancelRollback = () => {
       showRollbackDialog.value = false
       rollbackTargetIndex.value = -1
       rollbackTargetContent.value = ''
       rollbackTargetId.value = null
+      rollbackResend.value = false
     }
 
     const confirmRollback = async () => {
       const targetIndex = rollbackTargetIndex.value
       const locator = rollbackTargetId.value
       const content = rollbackTargetContent.value
+      // 「重新生成」与「回退」的唯一分叉点，先取下来：下面重置状态时它会被清掉
+      const resend = rollbackResend.value
+      // 重发要用的两份文本必须在截断之前取：rollbackToMessage 会把这条气泡摘掉。
+      // prompt 取 content（模型当初读到的那份），displayText 取 displayContent，
+      // 契约 D 的两条通道各归各位。
+      const source = resend ? bubbles.value[targetIndex] : null
+      const resendPrompt = source ? (source.content || '') : ''
+      const resendDisplay = source ? (source.displayContent || '') : ''
 
       // 关闭对话框
       showRollbackDialog.value = false
@@ -1618,13 +1664,14 @@ export default {
         // 2. 在前端删除bubbles（目标一起删——与后端同语义，用户接着在输入框里改了重发）
         const rolledBackContent = rollbackToMessage(targetIndex)
 
-        // 3. 将回退的消息内容放入输入框。
-        //    必须等重渲染落地：模板里有两个 ref="richInput" 的 contenteditable
+        // 3. 回退：把原文放回输入框等用户改；重新生成：原样再问一次，不碰输入框
+        //    （用户此刻可能已经在里面打了别的东西，覆盖掉就是丢他的字）。
+        //    回填必须等重渲染落地：模板里有两个 ref="richInput" 的 contenteditable
         //    （空状态的欢迎输入框、有对话时的底部输入框）。回退到第一条时 bubbles 变空、
         //    两者互换，紧接着同步写 innerHTML 只会写进马上被销毁的那一个——
         //    表现是「回退了，但输入框是空的，原文没了」。
         await nextTick()
-        if (richInput.value && content) {
+        if (!resend && richInput.value && content) {
           richInput.value.innerHTML = escapeHtml(content)
           inputPrompt.value = content
         }
@@ -1632,7 +1679,30 @@ export default {
         // 4. 通知父组件刷新历史（存档会话要在「近期对话」里立刻看得见）
         emit('refresh-history')
 
-        uni.showToast({ title: archived ? t('chat.rollbackDoneArchived') : t('chat.rollbackDone'), icon: 'none' })
+        uni.showToast({
+          title: resend
+            ? t('chat.regenerateSending')
+            : (archived ? t('chat.rollbackDoneArchived') : t('chat.rollbackDone')),
+          icon: 'none'
+        })
+
+        // 5. 重新生成：重发原提问。放在最后——前面任何一步抛异常都不该再发出去
+        //    （历史没截断就重发，等于同一个问题在库里问了两遍）。
+        //    发的是 resendPrompt 而不是 content：content 是「用户看到的那份」
+        //    （displayContent 优先，回填输入框用），而重发要给模型的是它当初读到的那份
+        //    （契约 D）。点计划审批卡产生的那类消息两者差一整篇修订稿。
+        if (resend && resendPrompt) {
+          await sendMessage({
+            prompt: resendPrompt,
+            displayText: resendDisplay,
+            fileList: [],
+            projectId: props.projectId,
+            modelId: currentModelId.value,
+            mode: currentModeId.value,
+            skillIds: currentSkillIds()
+          })
+          scrollToBottom()
+        }
       } catch (err) {
         console.error('[ChatInterface] Rollback failed:', err)
         uni.showToast({ title: t('chat.rollbackFailed', { error: err.message || t('chat.unknownError') }), icon: 'none' })
@@ -1642,6 +1712,7 @@ export default {
       rollbackTargetIndex.value = -1
       rollbackTargetContent.value = ''
       rollbackTargetId.value = null
+      rollbackResend.value = false
     }
 
     const startNewChat = () => {
@@ -2833,6 +2904,8 @@ export default {
        showRollbackDialog,
        rollbackTargetContent,
        rollbackLocator,
+       rollbackResend,
+       openRegenerateDialog,
        openRollbackDialog,
        cancelRollback,
        confirmRollback,
@@ -4845,6 +4918,13 @@ export default {
   gap: 4px;
   opacity: 0.6;
   font-size: 11px;
+}
+
+/* 本轮用量是一句说明，不是要盯着看的数字面板：去掉等宽加粗，与左侧改动/新增同重 */
+.status-bar-right .token-value {
+  font-family: inherit;
+  font-weight: 400;
+  color: var(--awd-text-2);
 }
 
 /* Status Buttons */

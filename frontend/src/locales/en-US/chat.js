@@ -50,6 +50,14 @@ export default {
   rollbackDone: 'Rolled back',
   rollbackDoneArchived: 'Rolled back; the original conversation was saved as a branch',
   rollbackFailed: 'Rollback failed: {error}',
+  // ---- Regenerate (dev-board#790) ----
+  regenerate: 'Regenerate',
+  regenerateTitle: 'Ask the same question again for a new answer',
+  regenerateConfirmTitle: 'Regenerate',
+  regenerateWarning: 'This saves the current conversation as a branch, then asks your original question again for a new answer.',
+  regeneratePreviewLabel: 'Will regenerate from:',
+  regenerateSending: 'Regenerating',
+  regenerateNoSource: 'No question found for this answer',
   unknownError: 'Unknown error',
   // ---- PPT generation ----
   pptConfigTitle: 'PPT Generation Options',
@@ -211,10 +219,19 @@ export default {
   stepN: 'Step {n}',
   timelinePlan: 'Plan · {done}/{total}',
   timelineExecuting: 'Running {n} operations',
+  timelineExecutingTool: '{name}... {sec}s',
   timelineExecuted: 'Ran {n} operations',
   timelineExecutionError: '{n} operations · Needs attention',
   stepsGroup: 'Steps',
   approvalNeededFlag: 'Action Needed',
+  // ---- Copy (dev-board#790) ----
+  copyAnswer: 'Copy',
+  copyCode: 'Copy',
+  copyToolCall: 'Copy call',
+  copyToolOutput: 'Copy output',
+  copyFailed: 'Copy failed',
+  // ---- Status bar usage ----
+  tokenUsageLine: '{n} tokens this turn',
   // ---- ProcessCard ----
   statusError: 'Error',
   statusSuccess: 'Success',

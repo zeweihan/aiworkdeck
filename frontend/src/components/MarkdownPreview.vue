@@ -5,12 +5,16 @@
     <view v-if="loading" class="markdown-loading">
       <text>{{ $t('files.loadingDots') }}</text>
     </view>
-    <view v-else class="markdown-body" v-html="renderedHtml"></view>
+    <!-- 代码块复制用事件委托：正文每帧整段重写 innerHTML，给每颗按钮单独绑监听
+         会在流式过程中反复建了又丢（dev-board#790）。 -->
+    <view v-else class="markdown-body" v-html="renderedHtml" @click="handleBodyClick"></view>
   </view>
 </template>
 
 <script>
 import { renderMarkdown } from '@/utils/markdownRenderer.js'
+import { copyToClipboard } from '@/utils/chatClipboard.js'
+import { t } from '@/i18n'
 import { getFileDownloadUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
@@ -45,7 +49,8 @@ export default {
     return {
       // 首屏同步渲染一次：静态预览（文件、历史消息、计划卡）挂载后立刻就要有内容，
       // 之后的变更才开始合帧
-      renderedHtml: renderMarkdown(this.content || ''),
+      // 代码块复制键的文字随渲染一起生成（见 utils/markdownRenderer.js 为什么不在那边 import i18n）
+      renderedHtml: renderMarkdown(this.content || '', { copyLabel: t('chat.copyCode') }),
       loadedContent: '',
       loading: false
     }
@@ -77,6 +82,20 @@ export default {
     }
   },
   methods: {
+    /**
+     * 代码块右上角那颗复制键（按钮由 markdownRenderer 的 fence/code_block 规则渲染）。
+     * 取的是同一个 .md-code-block 里 <pre> 的 textContent——渲染出来的转义实体
+     * （&lt; &amp;）在 textContent 里已经还原成原字符，复制走的就是代码原文。
+     */
+    handleBodyClick(event) {
+      const button = event.target && event.target.closest && event.target.closest('[data-md-copy]')
+      if (!button) return
+      event.preventDefault()
+      event.stopPropagation()
+      const block = button.closest('.md-code-block')
+      const pre = block && block.querySelector('pre')
+      copyToClipboard(pre ? pre.textContent : '')
+    },
     scheduleRender() {
       // 已有待执行的帧时不重复排：回调里读的是当时最新的 sourceText，
       // 所以最后一次变更一定会被渲染出来（不会丢尾巴）。
@@ -89,7 +108,7 @@ export default {
       })
     },
     renderNow() {
-      this.renderedHtml = renderMarkdown(this.sourceText)
+      this.renderedHtml = renderMarkdown(this.sourceText, { copyLabel: t('chat.copyCode') })
     },
     async loadFileContent() {
       if (!this.file) return
@@ -213,6 +232,39 @@ export default {
   margin: 12px 0;
   color: var(--awd-text-2);
   font-style: italic;
+}
+
+/* 代码块 + 右上角复制键。按钮浮在块内右上角，不占正文宽度；
+   代码块自身可能横向滚动，所以定位挂在外层 wrapper 上而不是 <pre> 上。 */
+.markdown-body :deep(.md-code-block) {
+  position: relative;
+}
+
+.markdown-body :deep(.md-copy-btn) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1.6;
+  color: var(--awd-text-2);
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.markdown-body :deep(.md-code-block:hover .md-copy-btn) {
+  opacity: 1;
+}
+
+.markdown-body :deep(.md-copy-btn:hover) {
+  color: var(--awd-accent-text);
+  border-color: var(--awd-mint);
 }
 
 .markdown-body :deep(.md-table-scroll) {

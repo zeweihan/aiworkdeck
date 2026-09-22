@@ -30,9 +30,36 @@ const md = new MarkdownIt({
 md.renderer.rules.table_open = () => '<div class="md-table-scroll"><table>'
 md.renderer.rules.table_close = () => '</table></div>'
 
-/** 把 Markdown 渲染成 HTML 字符串。 */
-export function renderMarkdown(text) {
-  return md.render(text || '')
+// 代码块右上角的复制键（dev-board#790）。AI 给的条款、模板、脚本经常整块落在代码块里，
+// 而流式渲染期 MarkdownPreview 每帧重写整段 v-html，手工框选会被当场清掉——
+// 代码块是最需要一颗按钮的地方。
+//
+// 按钮只是标记：真正的复制由 MarkdownPreview 的事件委托做（读同一个 wrapper 里 <pre> 的
+// textContent）。**不把代码原文塞进 data-* 属性**——那要再转义一遍，且会让整段 HTML 翻倍。
+//
+// 按钮文字由调用方随 env 传进来（renderMarkdown 的第二个参数），**本模块刻意不 import i18n**：
+// 它被 node --test 直接 import（tests/markdown-table/*），而 `@/` 别名只有 vite 认得，
+// 加一个 import 就会让那两份用例整个跑不起来。没给 copyLabel 就不渲染按钮——
+// 兜底成一句硬编码英文会在英文以外的界面里露出来，宁可不出这颗按钮。
+const wrapWithCopy = (html, env) => {
+  const label = env && typeof env.copyLabel === 'string' ? env.copyLabel.trim() : ''
+  if (!label) return html
+  return `<div class="md-code-block"><button type="button" class="md-copy-btn" data-md-copy>${md.utils.escapeHtml(label)}</button>${html}</div>`
+}
+const defaultFence = md.renderer.rules.fence
+const defaultCodeBlock = md.renderer.rules.code_block
+md.renderer.rules.fence = (tokens, idx, options, env, self) =>
+  wrapWithCopy((defaultFence || self.renderToken.bind(self))(tokens, idx, options, env, self), env)
+md.renderer.rules.code_block = (tokens, idx, options, env, self) =>
+  wrapWithCopy((defaultCodeBlock || self.renderToken.bind(self))(tokens, idx, options, env, self), env)
+
+/**
+ * 把 Markdown 渲染成 HTML 字符串。
+ * @param text 源文本
+ * @param env markdown-it 的 env。目前只认 copyLabel：给了才在代码块右上角渲染复制键。
+ */
+export function renderMarkdown(text, env) {
+  return md.render(text || '', env || {})
 }
 
 /** 只供测试断言用：确认拿到的是同一个、未被代理的实例。 */

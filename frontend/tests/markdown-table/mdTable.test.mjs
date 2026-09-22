@@ -23,6 +23,9 @@ function makeVm(content) {
     renderMarkdown,
     getFileDownloadUrl: async () => '',
     getAuthHeaders: () => ({}),
+    // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790）
+    t: (k) => k,
+    copyToClipboard: () => true,
   }
   const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '')
