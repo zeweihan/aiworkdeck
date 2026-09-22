@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// project-overview.vue 的 AI 指令路由：SSE client_action 分发（含 doc_*/wps_* 双轨去重）、
+// project-overview.vue 的 AI 指令路由：SSE client_action 分发、
 // doc 流式写入缓冲、编辑器打开/重载/命令执行与结果回传。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 import { sendEditorResult, getFileDetail } from '@/services/api.js'
@@ -28,15 +28,10 @@ export const agentClientActionMethods = {
     handleClientAction(action) {
         console.log('[ProjectOverview] Client Action:', action)
 
-        // 双轨迁移（docs/AI_ARCHITECTURE.md Phase 3）：新后端对每条指令按"新名在前、旧名在后"
-        // 各发一份。一旦见到任一新名即判定为新后端（SSE 单连接有序），此后丢弃所有旧名事件，
-        // 保证新旧后端搭配下每条指令都恰好执行一次。
-        const isNewName = action.tool === 'editor_command' ||
-            ['doc_open_file', 'doc_reload_file', 'doc_stream_data'].includes(action.action)
-        const isLegacyName = action.tool === 'wps_command' ||
-            ['wps_open_file', 'wps_reload_file', 'wps_stream_data'].includes(action.action)
-        if (isNewName) this._editorContractV2 = true
-        if (isLegacyName && this._editorContractV2) return
+        // 事件名单轨（dev-board#816）：后端曾对每条指令按"新名在前、旧名在后"各发一份，
+        // 这里靠「先见新名」的 latch 丢掉后一份。旧名已随后端一并摘除——桌面端与后端是同一个
+        // 安装包，Office/WPS 任务窗格从来只认 office_command，没有会掉队的已发布客户端。
+        // 护栏 tests/project-home/editor-command-legacy-names-removed.test.mjs。
 
         // 插件后台任务进度（规范 v2.4 §11 Jobs）：状态已在 useAgentStream 的 client_action 入口
         // 写进 backgroundTasks（ChatInterface 的 BackgroundTaskIndicator 消费），页面这层无事可做。
@@ -66,29 +61,29 @@ export const agentClientActionMethods = {
             }
         }
         // AI Agent 请求打开文件
-        else if (action.action === 'doc_open_file' || action.action === 'wps_open_file') {
+        else if (action.action === 'doc_open_file') {
             this.handleEditorOpenFile(action)
         }
         // AI Agent 请求重新加载文件（用于后端修改文件后刷新编辑器）
-        else if (action.action === 'doc_reload_file' || action.action === 'wps_reload_file') {
+        else if (action.action === 'doc_reload_file') {
             this.handleEditorReloadFile(action)
         }
         // AI 后端直改了纯文本文件（text_write_file / text_find_replace，dev-board#37）：
-        // 刷新打开中的文本标签。单名新契约，无 wps_* 旧名双轨。
+        // 刷新打开中的文本标签。
         else if (action.action === 'text_reload_file') {
             this.handleTextReloadFile(action)
         }
         // AI Agent 请求执行编辑器命令
-        else if (action.tool === 'editor_command' || action.tool === 'wps_command') {
+        else if (action.tool === 'editor_command') {
             // 特殊处理同步打开命令（新建文件流式写入）
-            if (action.action === 'doc_open_file_sync' || action.action === 'wps_open_file_sync') {
+            if (action.action === 'doc_open_file_sync') {
                 this.handleEditorOpenFileSync(action)
             } else {
                 this.handleEditorCommand(action)
             }
         }
         // 后端流式写入数据（doc_start_stream 工具）：缓冲后经 LibreOffice 执行器落字
-        else if (action.action === 'doc_stream_data' || action.action === 'wps_stream_data') {
+        else if (action.action === 'doc_stream_data') {
             this.handleDocStreamData(action.content || '')
         }
         // 后端流式写入结束：冲掉本地缓冲后让 worker 收尾（写掉尾行/尾表并复位状态机）。

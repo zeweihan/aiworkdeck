@@ -1356,10 +1356,10 @@ public class AgentOrchestrator {
         // 实时更新当前生成的内容 (用于断线重连恢复)
         handler.setOnToken(guard::appendStream);
 
-        // 编辑器实时流式写入拦截（双轨迁移：新名 doc_stream_data 必须先于旧名 wps_stream_data 发出，
-        // 前端以"先见新名"判定新后端并丢弃旧名去重；一个发布周期后摘旧名，见 docs/AI_ARCHITECTURE.md Phase 3）
+        // 编辑器实时流式写入拦截（单名 doc_stream_data；旧名 wps_stream_data 的双发已随
+        // dev-board#816 摘除——每个 token 都推两遍，其中一半注定被前端的 latch 扔掉）
         handler.setOnEditorStream(token -> {
-            // 同上：编辑器实时流也是会话级的一条通道（doc_stream_data / wps_stream_data
+            // 同上：编辑器实时流也是会话级的一条通道（doc_stream_data
             // 与 noteStreamContent 的「确实写过正文」标记都按 conversationId 寻址）。
             // 被取代的旧轮次继续往里写，正文会插进新一轮正在写的那份文档。
             if (!isCurrentRun(guard)) return;
@@ -1368,8 +1368,12 @@ public class AgentOrchestrator {
                 // 等标签时 AgentStreamHandler 会整段吞掉，这里只剩标签之间漏出的空白——
                 // 收尾时据此判定「一个字都没进文档」并如实报错，而不是静默 finished
                 editorBridgeService.noteStreamContent(conversationId, token);
-                sseEmitterService.send(conversationId, "doc_stream_data", java.util.Map.of("content", token));
-                sseEmitterService.send(conversationId, "wps_stream_data", java.util.Map.of("content", token));
+                // 载荷必须是**自己序列化好的字符串**：SseEmitterService.send 里是 String.valueOf(data)，
+                // 裸 Map 出来的是 Java 的 toString（{content=正文}）而不是 JSON，前端 JSON.parse
+                // 当场抛错、被 catch 吞成一行 console.error——流式写入的正文一个字都到不了编辑器，
+                // 气泡上却还挂着「正在向文档流式写入内容…」（#663 引入的回归，契约测试
+                // SseEventPayloadJsonContractTest 守着不让第三处再犯）。信封转义交给 Jackson。
+                sseEmitterService.send(conversationId, "doc_stream_data", jsonContentEnvelope(token));
             }
         });
         

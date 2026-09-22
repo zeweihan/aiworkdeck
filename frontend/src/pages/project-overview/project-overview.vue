@@ -2676,7 +2676,7 @@ export default {
       // 网页标签保活 LRU：'pane:tabId'，最近激活在前（同 libreLruKeys 的形制）。
       // 只在 Web/H5 用得上——见 leftWebTabs 与 WEB_KEEPALIVE_MAX。
       webKeepAliveKeys: [],
-      // 后端 doc_stream_data（旧名 wps_stream_data）流式写入的本地缓冲（#79：LibreOffice 消费端）
+      // 后端 doc_stream_data 流式写入的本地缓冲（#79：LibreOffice 消费端）
       _docStreamBuffer: '',
       _docStreamTimer: null,
       _docStreamBusy: false,
