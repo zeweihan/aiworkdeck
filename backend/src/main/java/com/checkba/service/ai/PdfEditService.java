@@ -8,6 +8,7 @@ import cn.hutool.json.JSONObject;
 import org.apache.fontbox.ttf.TrueTypeCollection;
 import org.apache.fontbox.ttf.TrueTypeFont;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.multipdf.PDFMergerUtility;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -26,6 +27,7 @@ import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.pdfbox.text.TextPosition;
+import org.apache.pdfbox.util.Matrix;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -96,13 +98,34 @@ public class PdfEditService {
 
     // ==================== 读取 ====================
 
+    /** 见 {@link #inspect(Path, Integer, int, int)}；offset 默认 0（从页首读）。 */
+    public String inspect(Path pdfPath, Integer pageIndex, int maxCharsPerPage) {
+        return inspect(pdfPath, pageIndex, maxCharsPerPage, 0);
+    }
+
     /**
      * 结构化概览：页数 + 每页文本（截断）。供 AI 引用原文做定位锚点。
      *
+     * <p><b>offset 续读</b>（dev-board#805，审计 B-13）：每页上限只有 3000 字符，
+     * 而中文 A4 密排合同页单页两三千字很常见——原文落在上限之后的那一段，
+     * 在没有 offset 之前<b>整个够不着</b>：工具描述又要求「改之前先核对原文的准确写法」，
+     * 模型只能凭记忆写 find 串，然后命中 0 处。所以截断时回一个 {@code next_offset}，
+     * 下一次带着它再读同一页。
+     *
+     * <p>{@code char_count} 始终是<b>整页</b>的字符数（不是本次返回的那一段），
+     * 模型据它判断还剩多少、以及 offset 是不是给过头了。
+     *
      * @param pageIndex 0 起页码；null 返回全部页
-     * @param maxCharsPerPage 每页文本截断长度
+     * @param maxCharsPerPage 每页单次返回的文本上限
+     * @param offset 该页正文的起始字符位置（0 起）；&gt;0 时必须指定 pageIndex
      */
-    public String inspect(Path pdfPath, Integer pageIndex, int maxCharsPerPage) {
+    public String inspect(Path pdfPath, Integer pageIndex, int maxCharsPerPage, int offset) {
+        if (offset < 0) {
+            throw new PdfEditException("offset 不能为负数");
+        }
+        if (offset > 0 && pageIndex == null) {
+            throw new PdfEditException("续读位点是按页算的：给 offset 时必须同时指定 pageIndex（0 起）。");
+        }
         try (PDDocument doc = load(pdfPath)) {
             int pageCount = doc.getNumberOfPages();
             if (pageIndex != null && (pageIndex < 0 || pageIndex >= pageCount)) {
@@ -124,11 +147,15 @@ public class PdfEditService {
                 p.set("char_count", text.length());
                 p.set("has_text_layer", !text.isEmpty());
                 p.set("rotation", doc.getPage(i).getRotation());
-                if (text.length() > maxCharsPerPage) {
-                    p.set("text", text.substring(0, maxCharsPerPage));
+                if (offset > 0) {
+                    p.set("offset", offset);
+                }
+                int start = Math.min(offset, text.length());
+                int end = Math.min(start + maxCharsPerPage, text.length());
+                p.set("text", text.substring(start, end));
+                if (end < text.length()) {
                     p.set("truncated", true);
-                } else {
-                    p.set("text", text);
+                    p.set("next_offset", end);
                 }
                 pages.add(p);
             }
@@ -408,15 +435,9 @@ public class PdfEditService {
 
             PDFont font;
             if (needsCjk) {
-                if (fontFile.getName().toLowerCase().endsWith(".ttc")) {
-                    ttc = new TrueTypeCollection(fontFile);
-                    TrueTypeFont[] first = new TrueTypeFont[1];
-                    ttc.processAllFonts(f -> { if (first[0] == null) first[0] = f; });
-                    if (first[0] == null) throw new PdfEditException("字体集合为空: " + fontFile);
-                    font = PDType0Font.load(doc, first[0], true);
-                } else {
-                    font = PDType0Font.load(doc, fontFile);
-                }
+                TrueTypeCollection[] holder = new TrueTypeCollection[1];
+                font = loadEmbeddedCjkFont(doc, fontFile, holder);
+                ttc = holder[0];
             } else {
                 font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
             }
@@ -445,6 +466,410 @@ public class PdfEditService {
         } finally {
             if (ttc != null) {
                 try { ttc.close(); } catch (IOException ignored) { }
+            }
+        }
+    }
+
+    // ==================== 页级操作：合并 / 提页 / 删页 / 旋转 / 编页码 ====================
+
+    /*
+     * dev-board#805（审计 A17 / B-12）。这一组与上面几个的根本区别是**不改原件**：
+     * 每个方法都是 src -> target 两条路径，原件一个字节都不动。证据卷宗的组织操作
+     * 一旦做成原位修改，用户丢的就是证据原件本身，而 PDF 没有修订痕迹、项目里也没有
+     * 针对 PDF 的检查点——没有任何东西能把它捞回来。
+     *
+     * 「PDF 大范围修改不做原位编辑、统一引导 pdf_to_word」那条刻意设计仍然成立：
+     * 页级组织不是改内容，两者不冲突。
+     */
+
+    /** 一次合并允许的最多份数：防一条模型指令把整个项目的 PDF 全读进内存。 */
+    private static final int MAX_MERGE_SOURCES = 50;
+
+    private static final float PAGE_NUMBER_FONT_SIZE = 9f;
+    private static final float PAGE_NUMBER_BOTTOM_MARGIN = 28f;
+    private static final float PAGE_NUMBER_SIDE_MARGIN = 42f;
+
+    /** {@code {n}} 或 {@code {n:6}}（零填充到 6 位，贝茨编号要靠它才排得了序）。 */
+    private static final java.util.regex.Pattern PAGE_NUMBER_TOKEN =
+            java.util.regex.Pattern.compile("\\{n(?::(\\d{1,3}))?}");
+
+    /** 零填充最多几位：贝茨编号实务上不超过 10 位左右，再长只是印出一串没意义的 0。 */
+    private static final int MAX_PAGE_NUMBER_PAD = 12;
+
+    /** 一段连续页码。{@code raw} 保留用户书写的原串（如 "1-3"、"8-"），用于给拆分产物命名。 */
+    public record PageRange(String raw, List<Integer> pages) {}
+
+    /**
+     * 解析页码范围串，展平成<b>升序去重</b>的 0 基下标。
+     *
+     * <p>语法（1 基，与用户在阅读器里看到的页码一致）：{@code N}、{@code N-M}、{@code N-}
+     * （到最后一页），逗号分隔，例如 {@code "1-3,5,8-"}。
+     *
+     * <p>越界 / 倒序 / 0 页 / 空串一律<b>报错</b>，不做就近夹取：夹取会静默产出一份
+     * 看着正常、内容却少一页的卷宗，而工具返回的仍是「成功」。
+     */
+    public static List<Integer> parsePageRanges(String ranges, int pageCount) {
+        Set<Integer> all = new java.util.TreeSet<>();
+        for (PageRange seg : parsePageRangeSegments(ranges, pageCount)) {
+            all.addAll(seg.pages());
+        }
+        return List.copyOf(all);
+    }
+
+    /** 同 {@link #parsePageRanges}，但保留逗号分段——{@code pdf_split} 一段产出一份文件。 */
+    public static List<PageRange> parsePageRangeSegments(String ranges, int pageCount) {
+        String normalized = ranges == null ? "" : ranges
+                .replace('，', ',')
+                .replace('、', ',')
+                .replace('－', '-')
+                .replace('–', '-')
+                .replace('—', '-')
+                .trim();
+        List<PageRange> out = new ArrayList<>();
+        for (String raw : normalized.split(",")) {
+            String seg = raw.trim();
+            if (seg.isEmpty()) continue;
+            out.add(new PageRange(seg, parseOneSegment(seg, pageCount)));
+        }
+        if (out.isEmpty()) {
+            throw new PdfEditException(rangeSyntaxError("页码范围不能为空"));
+        }
+        return out;
+    }
+
+    private static List<Integer> parseOneSegment(String seg, int pageCount) {
+        int dash = seg.indexOf('-');
+        String startText = dash < 0 ? seg : seg.substring(0, dash);
+        String endText = dash < 0 ? seg : seg.substring(dash + 1);
+        if (dash >= 0 && endText.indexOf('-') >= 0) {
+            throw new PdfEditException(rangeSyntaxError("『" + seg + "』里有多个连字符"));
+        }
+        if (startText.isBlank()) {
+            throw new PdfEditException(rangeSyntaxError("『" + seg + "』缺少起始页"));
+        }
+        int start = parseOneBasedPage(startText, seg, pageCount);
+        int end = (dash >= 0 && endText.isBlank())
+                ? pageCount
+                : parseOneBasedPage(endText, seg, pageCount);
+        if (start > end) {
+            throw new PdfEditException(String.format(
+                    "范围『%s』的起始页大于结束页。页码范围要从小到大写；提页不会改变页序，需要重排请另行说明。", seg));
+        }
+        List<Integer> pages = new ArrayList<>();
+        for (int i = start; i <= end; i++) {
+            pages.add(i - 1);
+        }
+        return pages;
+    }
+
+    private static int parseOneBasedPage(String text, String seg, int pageCount) {
+        int value;
+        try {
+            value = Integer.parseInt(text.trim());
+        } catch (NumberFormatException e) {
+            throw new PdfEditException(rangeSyntaxError("『" + seg + "』不是有效的页码"));
+        }
+        if (value < 1) {
+            throw new PdfEditException(String.format(
+                    "页码从 1 开始（『%s』写成了 %d）。注意 pdf_inspect 的 pageIndex 是 0 基，页码范围是 1 基。",
+                    seg, value));
+        }
+        if (value > pageCount) {
+            throw new PdfEditException(String.format(
+                    "页码 %d 越界：该 PDF 共 %d 页（页码范围用 1 基页码）。", value, pageCount));
+        }
+        return value;
+    }
+
+    private static String rangeSyntaxError(String why) {
+        return why + "。页码范围写法：\"1-3,5,8-\"（1 基页码，逗号分隔，N- 表示到最后一页）。";
+    }
+
+    /** 这份 PDF 有多少页（顺带做加密件校验）。 */
+    public int pageCount(Path pdfPath) {
+        try (PDDocument doc = load(pdfPath)) {
+            return doc.getNumberOfPages();
+        } catch (IOException e) {
+            throw new PdfEditException("读取 PDF 失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 按给定顺序把多份 PDF 接成一册，写到 {@code target}；原件不动。
+     *
+     * @return 合并后的总页数
+     */
+    public int merge(List<Path> sources, Path target) {
+        if (sources == null || sources.size() < 2) {
+            throw new PdfEditException("合并至少需要 2 份 PDF。");
+        }
+        if (sources.size() > MAX_MERGE_SOURCES) {
+            throw new PdfEditException("一次最多合并 " + MAX_MERGE_SOURCES + " 份 PDF，本次给了 " + sources.size() + " 份。");
+        }
+        List<PDDocument> opened = new ArrayList<>();
+        try (PDDocument dest = new PDDocument()) {
+            PDFMergerUtility merger = new PDFMergerUtility();
+            for (Path source : sources) {
+                PDDocument src = load(source);   // 加密件在这里就被挡住
+                opened.add(src);
+                merger.appendDocument(dest, src);
+            }
+            // 必须在源文档还开着的时候保存：appendDocument 之后 dest 里仍引用着源的对象树
+            dest.save(target.toFile());
+            return dest.getNumberOfPages();
+        } catch (IOException e) {
+            throw new PdfEditException("合并 PDF 失败: " + e.getMessage());
+        } finally {
+            for (PDDocument d : opened) {
+                try {
+                    d.close();
+                } catch (IOException ignore) {
+                    // 关闭失败不影响已经落盘的结果
+                }
+            }
+        }
+    }
+
+    /**
+     * 只保留指定页，写到 {@code target}；原件不动。
+     *
+     * <p>做法是「加载 → 删掉其余页 → 另存」，不是重新 importPage 组装：前者把注释、
+     * 书签、表单域原样带过去，后者会在重建页对象时丢掉一部分。代价是<b>不支持重排</b>，
+     * 产物永远保持原文档页序——这与工具名（提页）一致。
+     *
+     * @param pages 0 基页下标
+     * @return 产物页数
+     */
+    public int extractPages(Path src, Path target, List<Integer> pages) {
+        Set<Integer> keep = requirePages(pages);
+        try (PDDocument doc = load(src)) {
+            validateIndices(keep, doc.getNumberOfPages());
+            for (int i = doc.getNumberOfPages() - 1; i >= 0; i--) {
+                if (!keep.contains(i)) {
+                    doc.removePage(i);
+                }
+            }
+            doc.save(target.toFile());
+            return doc.getNumberOfPages();
+        } catch (IOException e) {
+            throw new PdfEditException("提取 PDF 页失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 删掉指定页，写到 {@code target}；原件不动。
+     *
+     * @param pages 0 基页下标
+     * @return 产物页数
+     */
+    public int deletePages(Path src, Path target, List<Integer> pages) {
+        Set<Integer> drop = requirePages(pages);
+        try (PDDocument doc = load(src)) {
+            int total = doc.getNumberOfPages();
+            validateIndices(drop, total);
+            if (drop.size() >= total) {
+                throw new PdfEditException("这会删掉全部 " + total + " 页，产物将是一份空 PDF。请改用更小的页码范围。");
+            }
+            for (int i = total - 1; i >= 0; i--) {
+                if (drop.contains(i)) {
+                    doc.removePage(i);
+                }
+            }
+            doc.save(target.toFile());
+            return doc.getNumberOfPages();
+        } catch (IOException e) {
+            throw new PdfEditException("删除 PDF 页失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 旋转指定页，写到 {@code target}；原件不动。
+     *
+     * <p>角度是<b>相对当前角度</b>叠加的，不是设成绝对值：用户说「把这几页转正」时
+     * 心里想的是「再转 90 度」，而同一份扫描件里各页的当前角度常常不一样，
+     * 设绝对值会把本来就正的页转歪。当前角度可从 {@code pdf_inspect} 的 rotation 字段读到。
+     *
+     * @param pages 0 基页下标
+     * @param degrees 只接受 90 / 180 / 270（顺时针）
+     * @return 实际旋转的页数
+     */
+    public int rotatePages(Path src, Path target, List<Integer> pages, int degrees) {
+        if (degrees != 90 && degrees != 180 && degrees != 270) {
+            throw new PdfEditException("旋转角度只支持 90 / 180 / 270（顺时针），收到 " + degrees + "。");
+        }
+        Set<Integer> targets = requirePages(pages);
+        try (PDDocument doc = load(src)) {
+            validateIndices(targets, doc.getNumberOfPages());
+            for (int i : targets) {
+                PDPage page = doc.getPage(i);
+                page.setRotation(normalizeRotation(page.getRotation() + degrees));
+            }
+            doc.save(target.toFile());
+            return targets.size();
+        } catch (IOException e) {
+            throw new PdfEditException("旋转 PDF 页失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 逐页写入页码 / 贝茨编号，写到 {@code target}；原件不动。
+     *
+     * <p>模板里 {@code {n}} 是本页号、{@code {total}} 是总页数，{@code {n:6}} 是零填充到 6 位
+     * （贝茨编号要靠它才排得了序）。含中文时走与短文本替换同一条 CJK 字体探测链。
+     *
+     * <p>页码跟着<b>页面的显示方向</b>走：/Rotate 非 0 的页（{@code pdf_rotate_pages} 之后
+     * 就是这样）如果按未旋转的坐标画，页码会横着印在纸的侧边——而「先转正、再编页码」
+     * 恰恰是这套工具最常见的连用方式。
+     *
+     * @param position {@code bottom-center} 或 {@code bottom-right}
+     * @param startAt 第一页印的号
+     * @return 实际写入页码的页数
+     */
+    public int addPageNumbers(Path src, Path target, String position, int startAt, String format) {
+        String pos = position == null || position.isBlank() ? "bottom-center" : position.trim().toLowerCase();
+        if (!pos.equals("bottom-center") && !pos.equals("bottom-right")) {
+            throw new PdfEditException("页码位置只支持 bottom-center 或 bottom-right，收到『" + position + "』。");
+        }
+        if (format == null || format.isBlank()) {
+            throw new PdfEditException("页码模板不能为空，例如 \"第 {n} 页 / 共 {total} 页\" 或贝茨编号 \"AWD{n:6}\"。");
+        }
+        if (!PAGE_NUMBER_TOKEN.matcher(format).find()) {
+            throw new PdfEditException("页码模板『" + format + "』里没有 {n}，整册会印上同一个数。"
+                    + "用 {n} 表示本页号、{total} 表示总页数，{n:6} 表示零填充到 6 位。");
+        }
+        if (startAt < 0) {
+            throw new PdfEditException("起始页号不能为负数。");
+        }
+
+        TrueTypeCollection ttc = null;
+        try (PDDocument doc = load(src)) {
+            int total = doc.getNumberOfPages();
+            List<String> labels = new ArrayList<>(total);
+            boolean needsCjk = false;
+            for (int i = 0; i < total; i++) {
+                String label = renderPageNumber(format, startAt + i, total);
+                labels.add(label);
+                needsCjk |= label.chars().anyMatch(c -> c > 127);
+            }
+
+            PDFont font;
+            if (needsCjk) {
+                File fontFile = resolveCjkFontFile();
+                if (fontFile == null) {
+                    throw new PdfEditException("页码模板含中文但未找到可用的 CJK 字体。"
+                            + "请改用纯英数模板（如 \"{n} / {total}\"），或配置 external.pdf-edit.cjk-font-path。");
+                }
+                TrueTypeCollection[] holder = new TrueTypeCollection[1];
+                font = loadEmbeddedCjkFont(doc, fontFile, holder);
+                ttc = holder[0];
+            } else {
+                font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            }
+
+            for (int i = 0; i < total; i++) {
+                stampPageNumber(doc, doc.getPage(i), labels.get(i), font, pos);
+            }
+            doc.save(target.toFile());
+            return total;
+        } catch (IOException e) {
+            throw new PdfEditException("写入页码失败: " + e.getMessage());
+        } finally {
+            if (ttc != null) {
+                try {
+                    ttc.close();
+                } catch (IOException ignore) {
+                    // 字体集合关闭失败不影响已经落盘的结果
+                }
+            }
+        }
+    }
+
+    /**
+     * 把模板渲染成这一页真正印上去的字符串。
+     *
+     * <p>零填充位数<b>夹在 1..{@link #MAX_PAGE_NUMBER_PAD} 之间</b>：{@code {n:0}} 会让
+     * {@code String.format("%00d")} 抛 DuplicateFormatFlagsException（模型看到的是一句
+     * 「Flags = '0'」，无从下手），{@code {n:99}} 则会印出 99 位数字。两头都夹掉，
+     * 结果就是「写了个没意义的位数 → 按最接近的合法位数印」，不炸也不出怪东西。
+     */
+    static String renderPageNumber(String format, int n, int total) {
+        java.util.regex.Matcher m = PAGE_NUMBER_TOKEN.matcher(format);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String width = m.group(1);
+            String value;
+            if (width == null) {
+                value = String.valueOf(n);
+            } else {
+                int pad = Math.max(1, Math.min(MAX_PAGE_NUMBER_PAD, Integer.parseInt(width)));
+                value = String.format("%0" + pad + "d", n);
+            }
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(value));
+        }
+        m.appendTail(sb);
+        return sb.toString().replace("{total}", String.valueOf(total));
+    }
+
+    /**
+     * 把 label 画到这一页<b>显示方向</b>的底部。
+     *
+     * <p>/Rotate 把内容顺时针转了 R 度再显示，所以要先把「显示坐标」换回 user space：
+     * R=90 时 user(x,y) 显示在 (y, w-x)，反解得 x=w-dy, y=dx，文字本身再逆时针转 90 度
+     * 才与显示的水平方向一致。另外三档同理。
+     */
+    private void stampPageNumber(PDDocument doc, PDPage page, String label, PDFont font, String position)
+            throws IOException {
+        PDRectangle box = page.getCropBox();
+        float w = box.getWidth();
+        float h = box.getHeight();
+        int rotation = normalizeRotation(page.getRotation());
+        float displayWidth = (rotation == 90 || rotation == 270) ? h : w;
+
+        float textWidth = font.getStringWidth(label) / 1000f * PAGE_NUMBER_FONT_SIZE;
+        float dx = position.equals("bottom-right")
+                ? displayWidth - PAGE_NUMBER_SIDE_MARGIN - textWidth
+                : (displayWidth - textWidth) / 2f;
+        float dy = PAGE_NUMBER_BOTTOM_MARGIN;
+
+        float x;
+        float y;
+        double angle;
+        switch (rotation) {
+            case 90 -> { x = w - dy; y = dx;     angle = 90; }
+            case 180 -> { x = w - dx; y = h - dy; angle = 180; }
+            case 270 -> { x = dy;     y = h - dx; angle = 270; }
+            default -> { x = dx;      y = dy;     angle = 0; }
+        }
+        x += box.getLowerLeftX();
+        y += box.getLowerLeftY();
+
+        try (PDPageContentStream cs = new PDPageContentStream(doc, page,
+                PDPageContentStream.AppendMode.APPEND, true, true)) {
+            cs.beginText();
+            cs.setFont(font, PAGE_NUMBER_FONT_SIZE);
+            cs.setNonStrokingColor(0f, 0f, 0f);
+            cs.setTextMatrix(Matrix.getRotateInstance(Math.toRadians(angle), x, y));
+            cs.showText(label);
+            cs.endText();
+        }
+    }
+
+    private static int normalizeRotation(int rotation) {
+        return ((rotation % 360) + 360) % 360;
+    }
+
+    private static Set<Integer> requirePages(List<Integer> pages) {
+        if (pages == null || pages.isEmpty()) {
+            throw new PdfEditException(rangeSyntaxError("没有指定任何页"));
+        }
+        return new java.util.TreeSet<>(pages);
+    }
+
+    private static void validateIndices(Set<Integer> pages, int pageCount) {
+        for (int i : pages) {
+            if (i < 0 || i >= pageCount) {
+                throw new PdfEditException(String.format(
+                        "页码越界：该 PDF 共 %d 页（页码范围用 1 基页码）。", pageCount));
             }
         }
     }
@@ -627,6 +1052,30 @@ public class PdfEditService {
     }
 
     /**
+     * 把探测到的字体文件子集嵌入 {@code doc}。
+     *
+     * <p>{@code .ttc} 字体集合必须在文档<b>保存之后</b>才能关闭（子集化是惰性的），
+     * 所以这里不自己 close，而是把它交回给调用方的 finally——
+     * {@code ttcOut[0]} 只在确实打开了集合时被写入。
+     */
+    private PDFont loadEmbeddedCjkFont(PDDocument doc, File fontFile, TrueTypeCollection[] ttcOut)
+            throws IOException {
+        if (!fontFile.getName().toLowerCase().endsWith(".ttc")) {
+            return PDType0Font.load(doc, fontFile);
+        }
+        TrueTypeCollection collection = new TrueTypeCollection(fontFile);
+        ttcOut[0] = collection;
+        TrueTypeFont[] first = new TrueTypeFont[1];
+        collection.processAllFonts(f -> {
+            if (first[0] == null) first[0] = f;
+        });
+        if (first[0] == null) {
+            throw new PdfEditException("字体集合为空: " + fontFile);
+        }
+        return PDType0Font.load(doc, first[0], true);
+    }
+
+    /**
      * CJK 字体探测：配置覆盖 → 仓内字体（dev 态）→ 操作系统字体。
      * 找不到返回 null（调用方给出配置指引）。
      */
@@ -652,12 +1101,31 @@ public class PdfEditService {
         candidates.add("C:\\Windows\\Fonts\\msyh.ttc");
         for (String c : candidates) {
             File f = new File(c);
-            if (f.isFile()) {
-                log.info("PDF replace font resolved: {}", f);
-                return f;
+            if (!f.isFile()) continue;
+            if (hasCffOutlines(f)) {
+                // 「存在」不等于「能用」：PDFBox 只能子集嵌入 glyf 轮廓的 TrueType。
+                // 仓内的 NotoSansSC-Regular.ttf 其实是 CFF 轮廓的 OpenType（扩展名骗人），
+                // 早先这里只判 isFile()，于是在没有 LOWA 字体产物的机器上，带中文的
+                // pdf_replace_text 会把 PDFBox 那句英文原文
+                // 「True Type fonts using CFF outlines are not supported」直接甩给用户。
+                log.debug("Skipping CFF-outline font (PDFBox cannot embed it): {}", f);
+                continue;
             }
+            log.info("PDF CJK font resolved: {}", f);
+            return f;
         }
-        log.warn("No CJK font found for PDF text replacement, candidates tried: {}", candidates.size());
+        log.warn("No embeddable CJK font found for PDF text output, candidates tried: {}", candidates.size());
         return null;
+    }
+
+    /** sfnt 版本标签为 {@code OTTO} 即 CFF 轮廓；读不出来一律当不可用，继续找下一个候选。 */
+    private static boolean hasCffOutlines(File font) {
+        try (java.io.InputStream in = new java.io.FileInputStream(font)) {
+            byte[] tag = in.readNBytes(4);
+            return tag.length < 4
+                    || (tag[0] == 'O' && tag[1] == 'T' && tag[2] == 'T' && tag[3] == 'O');
+        } catch (IOException e) {
+            return true;
+        }
     }
 }

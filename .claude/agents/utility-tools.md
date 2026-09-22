@@ -282,6 +282,16 @@ NORMAL `#3B82F6`，`tagTypes.js` 与 TagService 两处同值）。分组展示�
   阅读器里查找（内置引擎没有可编程的查找接口）。要做真正的页内高亮，只有两条路：引 pdf.js
   自己渲染页面，或让后端用已有的 PDFBox（`PdfEditService` 里已经有找文字算 quad 的机器）
   出「页面 PNG + 引文 rects」——两条都不是「在现有预览之上加一层」能糊出来的。
+- **PDF 的页级操作在后端，不在预览层**（dev-board#805）。合卷 / 拆分 / 提页 / 删页 / 转正 /
+  编页码与贝茨号是 `PdfTools` 的六个工具（`pdf_merge` / `pdf_split` / `pdf_extract_pages` /
+  `pdf_delete_pages` / `pdf_rotate_pages` / `pdf_add_page_numbers`），底层 `PdfEditService`（PDFBox）。
+  契约是**产出项目内新 PDF、原件一个字节都不动**，收尾只刷文件树、不发 reload_file，
+  所以预览这一侧什么都不用改——用户在文件树里看到的是一份新文件。
+  页码范围用 **1 基**（`pdf_inspect` 的 `pageIndex` 仍是 0 基），完整契约与地雷见
+  `.claude/agents/ai-chat.md` 的「PDF 页级操作」。
+  顺带：`PdfEditService.resolveCjkFontFile()` 现在会跳过 CFF 轮廓（sfnt 标签 `OTTO`）的字体——
+  仓内那份 `NotoSansSC-Regular.ttf` 就是，PDFBox 嵌不进去，早先带中文的 `pdf_replace_text`
+  会因此直接失败。
 - **图片画框要跟着缩放/平移/旋转走**。`imageTx/imageTy` 的口径是**旋转后外接框的左上角**，
   `imageTransform` 按角度补一段平移把外接框推回该处，`imageRectBox` 用同一套口径算框——
   三处（居中摆放 `applyImageView`、缩放锚点 `zoomImageTo`、画框）共用一份 tx/ty，别在组件里
