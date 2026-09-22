@@ -1591,6 +1591,7 @@
                 :drag-active="dragOverAiPanel"
                 :external-read-only="pluginReadOnlyLabel"
                 @fork-conversation="forkPluginConversation"
+                @fork-from-message="branchConversationFromMessage"
                 @close="toggleAiPanel"
                 @toggle-history="toggleHistoryDrawer"
                 @new-chat="startNewChat"
@@ -1754,6 +1755,9 @@
                                 <text v-if="renamingConversationId !== chat.conversationId" class="item-title" style="font-size:13px; color:var(--awd-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
                                 <!-- 插件镜像会话来源角标（dev-board#298） -->
                                 <text v-if="chat.sourceChannel && renamingConversationId !== chat.conversationId" class="conv-source-chip">{{ convSourceLabel(chat) }}</text>
+                                <!-- 「从此分叉」产物的来源角标（dev-board#779 K18）。与来源角标一样，
+                                     行内重命名时让位给输入框，否则窄行里输入框会被挤没。 -->
+                                <text v-if="chat.parentConversationId && renamingConversationId !== chat.conversationId" class="conv-source-chip">{{ convBranchLabel(chat) }}</text>
                             </view>
                             <text class="item-preview" style="display:block; font-size:11px; color:var(--awd-text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
                         </view>
@@ -6809,6 +6813,10 @@ export default {
               sourceChannel: item.sourceChannel || null,
               // 置顶（dev-board#796）：后端已把置顶项排在前面，这里只保留标记用于渲染与切换
               pinned: !!item.pinned,
+              // 「从此分叉」的出身（dev-board#779 K18）：非空即渲染「分支自 <父标题>」角标。
+              // 父标题由服务端解析后下发，这里原样透传——不在前端再清洗一次。
+              parentConversationId: item.parentConversationId || null,
+              parentTitle: item.parentTitle || null,
               unread: this.unreadConversations.includes(item.conversationId)
           }))
           // 只读态跟列表刷新对齐：深链/onLoad 会先 loadHistoryChat 后拿到列表，
@@ -6975,6 +6983,17 @@ export default {
         }
     },
     /**
+     * 「分支自 <父标题>」角标（dev-board#779 K18）。父标题由服务端解析后随列表下发
+     * （前端不许再清洗一次，仓里已经有两套并行漂移的正则）；父会话还没起标题时
+     * 只说「分支」——绝不拿父会话的正文当标题显示。
+     */
+    convBranchLabel(chat) {
+        const parentTitle = chat && chat.parentTitle
+        return parentTitle
+            ? this.$t('workbench.branchedFrom', { title: parentTitle })
+            : this.$t('workbench.branchedFromUnknown')
+    },
+    /**
      * 插件镜像会话「另起分支继续」（dev-board#298）：把当前只读会话复制成一条
      * 可写本地会话，切过去并解除只读。ChatInterface 的 readonly-bar 按钮触发。
      */
@@ -6995,6 +7014,48 @@ export default {
         } catch (e) {
             console.error('Fork conversation failed', e)
             uni.showToast({ title: (e && e.message) || this.$t('workbench.forkConversationFailed'), icon: 'none' })
+        } finally {
+            this.forkingConversation = false
+        }
+    },
+    /**
+     * 从此分叉（dev-board#779 K18，审查 D-06/F4）：把源会话「到这条消息为止」复制成
+     * 一条新会话并切过去。<b>原会话一个字都不动</b>——这正是它与回退的全部区别，
+     * 所以不弹确认框、也不需要任何补救。
+     *
+     * 切换那一段刻意与 forkPluginConversation 同一条路（先 quiet 刷历史列表，
+     * 再 loadHistoryChat），列表里要先有这条新会话，loadHistoryChat 才查得到它的
+     * sourceChannel（本地分支恒为 null，即可写）。
+     */
+    async branchConversationFromMessage(payload) {
+        // 源会话以 ChatInterface 报上来的为准：本页的 currentConversationId 只由
+        // loadHistoryChat / startNewChat 维护，**在面板里新起的对话它一直是 null**
+        // （最常见的那条路）。
+        const sourceId = (payload && payload.conversationId) || this.currentConversationId
+        if (!sourceId || this.forkingConversation) return
+        this.forkingConversation = true
+        // 竞态防护要拿同一个量前后比：本页不知道会话 id 时（上面那条注释）就没有可比的东西，
+        // 此时不设防——照 forkPluginConversation 那样无条件比，会把「面板里新起的对话」
+        // 这条主路完全挡死（fork 成功了、界面却不切过去）。
+        const knownBefore = this.currentConversationId
+        try {
+            const data = await forkAiConversation(sourceId, {
+                messageId: payload && payload.messageId,
+                clientRequestId: payload && payload.clientRequestId
+            })
+            const newId = data && data.conversationId
+            if (!newId) throw new Error(this.$t('chat.branchFailed', { error: this.$t('workbench.forkConversationFailed') }))
+            await this.fetchChatHistory(true)
+            // 用户等 fork 的间隙切走了会话就不抢占（同 loadHistoryChat 的竞态口径）
+            if (knownBefore && this.currentConversationId !== knownBefore) return
+            await this.loadHistoryChat({ conversationId: newId })
+            uni.showToast({ title: this.$t('chat.branchDone'), icon: 'none' })
+        } catch (e) {
+            console.error('Branch conversation failed', e)
+            uni.showToast({
+                title: this.$t('chat.branchFailed', { error: (e && e.message) || this.$t('chat.unknownError') }),
+                icon: 'none'
+            })
         } finally {
             this.forkingConversation = false
         }

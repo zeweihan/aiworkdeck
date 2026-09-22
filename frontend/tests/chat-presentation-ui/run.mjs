@@ -227,6 +227,37 @@ try {
   await page.screenshot({ path: '/tmp/awd-chat-779-rollback-dialog.png' })
   await page.evaluate(() => window.chatState.cancelRollback())
   await wait(() => !document.querySelector('.awd-dialog'))
+
+  // 「从此分叉」（dev-board#779 K18 / 审查 D-06、F4）：回退旁边的非破坏入口。
+  // 改造前普通对话里想换个思路只有回退一条路，而回退会把这条之后的全部对话删掉——
+  // 律师要在一份合同上试两种改法时，试第二种就等于销毁第一种的全过程。
+  const branchBtn = '.message-row.user .branch-btn'
+  assert.ok(await visible(branchBtn), '用户气泡上有「从此分叉」入口')
+  assert.equal(await page.$(`${branchBtn}.is-disabled`), null, '有定位键就不该置灰')
+  const [branchTitle, rollbackTitle] = await page.evaluate((b, r) => [
+    document.querySelector(b).getAttribute('title'),
+    document.querySelector(r).getAttribute('title')
+  ], branchBtn, rollbackBtn)
+  // 两个按钮的区别必须在 title 里说清：分叉不改当前对话，回退会改
+  assert.ok(branchTitle.includes('当前对话保持不变'), `分叉要说明它不动当前对话：${branchTitle}`)
+  assert.ok(rollbackTitle.includes('移除'), `回退要说明它会改当前对话：${rollbackTitle}`)
+  // 点了之后只 emit，由宿主去 fork 并切会话；这里钉住载荷带的是定位键而不是气泡自造 id
+  const branchPayload = await page.evaluate(() => {
+    let captured = null
+    const s = window.chatState
+    const vm = window.chat.$
+    const originalEmit = vm.emit
+    vm.emit = (event, ...args) => { if (event === 'fork-from-message') captured = args[0]; return originalEmit(event, ...args) }
+    s.branchFromMessage(s.bubbles.find(b => b.role === 'USER'))
+    vm.emit = originalEmit
+    return captured
+  })
+  assert.ok(branchPayload, '分叉必须把动作交给宿主（fork + 切会话）')
+  assert.equal(branchPayload.messageId, 'u1', '带的是落库主键，不是前端自造的气泡 id')
+  assert.ok(String(branchPayload.conversationId || '').length > 0, '带上源会话 id')
+  assert.equal(await page.$('.awd-dialog'), null, '分叉是非破坏的，不弹确认框')
+  await page.screenshot({ path: '/tmp/awd-chat-798-branch-button.png' })
+
   await page.evaluate(() => {
     const user = window.chatState.bubbles.find(b => b.role === 'USER')
     user.dbMessageId = null
@@ -234,6 +265,11 @@ try {
     user.clientRequestId = ''
   })
   await wait(() => document.querySelector('.message-row.user .rollback-btn.is-disabled'))
+  // 分叉与回退用的是同一套定位键，所以置灰也必须同步——否则用户会在同一条气泡上
+  // 看到「回退不可用、分叉可用」，点了分叉却照样失败
+  assert.ok(await page.$(`${branchBtn}.is-disabled`), '拿不到定位键时分叉一起置灰')
+  assert.ok(await page.$eval(branchBtn, el => (el.getAttribute('title') || '').length > 0),
+    '分叉置灰同样要说明原因')
   await page.evaluate(() => {
     const s = window.chatState
     s.openRollbackDialog(s.bubbles.find(b => b.role === 'USER'), 0)
@@ -442,7 +478,7 @@ try {
   ]), ['Copy', 'Regenerate', 'Copy', 'Copy call'], 'English labels for copy/regenerate')
   await page.screenshot({ path: `${shots}/k11k13-english.png` })
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))

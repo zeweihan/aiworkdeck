@@ -166,17 +166,48 @@ public class AiChatController {
      * fork-from-here（dev-board#298）：整条会话复制成新的本地会话继续聊。
      * 镜像导入的插件会话在桌面端只读，续聊走这条——分叉显式、原件不被污染。
      * 归属校验同 history；返回 {code:0, data:{conversationId}}。
+     *
+     * <p>「从此分叉」（dev-board#779 K18）给它加了可选 body：
+     * {@code {untilMessageId, untilClientRequestId}} —— 与回退端点同一套定位键
+     * （历史回灌的气泡有主键，本次会话内刚发出的只有 clientRequestId），
+     * 给了就只复制到该条为止，原会话不动。两个键都不给 = 老行为，整条复制。
      */
     @PostMapping("/conversation/{conversationId}/fork")
     public ResponseEntity<?> forkConversation(@PathVariable String conversationId,
+                                              @RequestBody(required = false) Map<String, String> body,
                                               @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
             return ResponseEntity.status(403).body(LangText.of("无权操作该会话", "You do not have permission to modify this conversation"));
         }
-        String newConversationId = projectAiMessageService.forkConversation(conversationId, userId);
-        return ResponseEntity.ok(java.util.Map.of("code", 0,
-                "data", java.util.Map.of("conversationId", newConversationId)));
+        String rawMessageId = body == null ? null : body.get("untilMessageId");
+        String clientRequestId = body == null ? null : body.get("untilClientRequestId");
+        boolean branching = StringUtils.hasText(rawMessageId) || StringUtils.hasText(clientRequestId);
+        try {
+            String newConversationId;
+            if (branching) {
+                Long untilMessageId;
+                try {
+                    untilMessageId = StringUtils.hasText(rawMessageId) ? Long.valueOf(rawMessageId.trim()) : null;
+                } catch (NumberFormatException bad) {
+                    // 前端自造的 msg-<毫秒>-<序号> 走到这里：这条消息还没落库。回一句用户读得懂的
+                    // 话，别让它变成「服务器内部错误」——与 /api/agent/history/rollback 同口径。
+                    log.info("Fork with a non-numeric untilMessageId: conv={}, raw={}", conversationId, rawMessageId);
+                    return ResponseEntity.badRequest().body(java.util.Map.of("code", 1, "message", LangText.of(
+                            "无法定位这条消息，请刷新后重试",
+                            "Could not locate that message. Refresh and try again.")));
+                }
+                newConversationId = projectAiMessageService.forkFromMessage(
+                        conversationId, userId, untilMessageId, clientRequestId);
+            } else {
+                newConversationId = projectAiMessageService.forkConversation(conversationId, userId);
+            }
+            return ResponseEntity.ok(java.util.Map.of("code", 0,
+                    "data", java.util.Map.of("conversationId", newConversationId)));
+        } catch (IllegalArgumentException e) {
+            // 定位不到 / 会话为空：可读的 400，不是 500
+            return ResponseEntity.badRequest().body(java.util.Map.of("code", 1, "message", e.getMessage()));
+        }
     }
 
     /**

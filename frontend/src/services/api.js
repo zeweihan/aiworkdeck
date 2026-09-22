@@ -486,14 +486,28 @@ export function deleteAiConversation(conversationId) {
 }
 
 /**
- * 把一条插件镜像会话（sourceChannel 非空，只读）整体复制成一条可写的本地会话
- * （dev-board#298）。后端返回 {code:0, data:{conversationId}}，这里剥掉信封
- * 直接给 {conversationId}。
+ * 把一条会话复制成一条新的可写本地会话。后端返回 {code:0, data:{conversationId}}，
+ * 这里剥掉信封直接给 {conversationId}。
+ *
+ * 两种用法：
+ * - 不给 until（dev-board#298）：整条复制。插件镜像会话（sourceChannel 非空、只读）
+ *   的「另起分支继续」走这条。
+ * - 给 until（dev-board#779 K18「从此分叉」）：只复制到那条消息为止（含该条），
+ *   原会话一个字都不动。定位键与回退同一套——历史回灌的气泡有主键（untilMessageId），
+ *   本次会话内刚发出的只有 untilClientRequestId（主键要等编排器落库才生成）。
+ *
+ * @param {string} conversationId 源会话
+ * @param {{messageId?: string|null, clientRequestId?: string|null}} [until] 分叉点定位键
  */
-export function forkAiConversation(conversationId) {
+export function forkAiConversation(conversationId, until) {
+  const data = {};
+  if (until && until.messageId) data.untilMessageId = String(until.messageId);
+  if (until && until.clientRequestId) data.untilClientRequestId = String(until.clientRequestId);
   return request({
     url: `/api/ai/conversation/${conversationId}/fork`,
-    method: 'POST'
+    method: 'POST',
+    data,
+    header: { 'Content-Type': 'application/json' }
   }).then(unwrapEnvelope);
 }
 

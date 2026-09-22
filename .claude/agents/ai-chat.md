@@ -695,7 +695,21 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   只用于镜像来源标注、不参与工具过滤。护栏：`ProjectAiMessageImportForkTest` /
   `AddinConvSyncServiceTest` / `MobileRelayClientHttpTest` 的对话镜像组。
 
-## 回退 = edit-and-resend + 自动存档（dev-board#779 K1，审查 D-02/D-03/D-06）
+## 回退与分叉（dev-board#779 K1/K18，审查 D-02/D-03/D-06/F4）
+
+同一条历史上的两个动作，**共用一套定位键与同一个 fork 实现**，差别只有三处：复制到哪里为止、
+标题后缀、原会话截不截断。
+
+| | 回退（edit-and-resend） | 从此分叉 |
+|---|---|---|
+| 端点 | `POST /api/agent/history/rollback` | `POST /api/ai/conversation/{id}/fork`（带 body） |
+| 服务 | `rollbackWithArchive` | `forkFromMessage` |
+| 原会话 | 目标及其后**被删** | **一个字不动** |
+| 产物 | 「… · 回退前存档」（整条） | 「… · 分支」（只到分叉点） |
+| 确认框 | 有 | **没有**（非破坏，没有要用户承担的后果） |
+| 收尾 | 回填输入框让用户改了重发 | 宿主切到新会话 |
+
+### 回退 = edit-and-resend + 自动存档（K1）
 
 `POST /api/agent/history/rollback`。一句话：**目标消息连同其后一起删，但删之前先把原路径整条存档**。
 
@@ -745,6 +759,51 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   父子字段）、`AiAgentControllerRollbackTest`（字符串 messageId 的 400、两种定位键、无 session 头、403）、
   `AgentOrchestratorQuestionStopTest` 与 `AgentOrchestratorInboxTest` 各一条钉住两处 USER 落库点带上
   clientRequestId、`frontend/tests/chat-presentation-ui/run.mjs` 的按钮可用性一段。
+
+### 从此分叉（K18）
+
+`POST /api/ai/conversation/{id}/fork`，**可选 body** `{untilMessageId, untilClientRequestId}`。
+一句话：**把「到这条为止」复制成一条新会话，原会话一个字不动**。
+
+- **改造前普通对话里唯一的改写入口就是破坏式回退**（审查 D-06/F4）。fork 的服务端能力早就在了，
+  但前端唯一的调用点是插件镜像只读会话顶部那条 `externalReadOnly` 说明栏里的「另起分支继续」。
+  律师常要对同一份合同试两种改法再比较——试第二种就等于销毁第一种的全部过程与产物。
+- **两个键都不给 = 老行为整条复制**，插件镜像那条路一行不改（`AiChatControllerForkTest` 钉住）。
+  **body 整个可空**（`@RequestBody(required = false)`）：老客户端连 `Content-Type` 都不发。
+- **截断判据是显示顺序 (createdAt, id) 的字典序 ≤ 分叉点**（`ProjectAiMessageService.cutAt`），
+  与回退的删除判据互为镜像。只按 `createdAt <=` 会让与分叉点**同刻**落库的那条助手回复也跟过来——
+  那恰恰是用户想岔开的那一答，而同毫秒落库、MySQL 秒级截断都造得出这种行；只按 `id` 则假设
+  id 与时间同序，fork / 镜像导入的行不保证。
+- **非数字 `untilMessageId` 回可读 400，与回退端点同口径**（前端自造的 `msg-<毫秒>-<序号>`
+  说明这条消息还没落库）。定位不到（服务层抛 `IllegalArgumentException`）也是 400 —— 这个端点
+  **不能让异常漏给 `GlobalExceptionHandler`**：那里对 `IllegalArgumentException` 回的是
+  HTTP 200 + `code=1`，而 `api.js` 的 `request` 只在 HTTP≠200 时取 `res.data.message`，
+  用户会看到一句无关的通用报错。
+- **列表角标**：`findConversationSummaries` 尾部加第七列 `parentConversationId`（取**首条**消息的，
+  与 `sourceChannel` 同款——本仓没有 `ai_conversation` 表，会话级元数据一律挂首行）。
+  父标题由新增的 `findConversationTitleCandidates(ids)` **一次批量查回**（父会话不一定在这一页里，
+  逐条查是 N+1），取标题口径与 fork 一致：storedTitle 优先，没有就用用户第一问。
+  服务层落成 `parentConversationId` / `parentTitle` 两个字段，`project-overview.vue` 的
+  `convBranchLabel` 渲染「分支自 …」；**前端不许再清洗一次**（仓里已有两套并行漂移的正则）。
+  父会话查不到标题时只说「分支」，**绝不拿父会话的正文当标题显示**。
+  **只加在 `/api/ai/conversations`（AI 面板历史下拉）这一条通道上**，项目概览页那条
+  `findProjectConversationSummaries` 未动——两条通道的 SQL / 鉴权 / 返回形状本来就不同。
+- **前端**：`ChatInterface` 用户气泡 footer 里 `.branch-btn` 排在 `.rollback-btn` **左边**
+  （不销毁任何东西的动作应该先被读到），可用性判据同为 `rollbackLocator(msg)` ——
+  两者用的是同一套定位键，**置灰必须同步**，否则会出现「回退不可用、分叉可用，点了照样失败」。
+  点击**不弹确认框**，只 `emit('fork-from-message', {conversationId, messageId, clientRequestId})`；
+  宿主 `project-overview.vue` 的 `branchConversationFromMessage` 走的是
+  `forkPluginConversation` 同一条切换路（先 `fetchChatHistory(true)` 刷列表，再 `loadHistoryChat`
+  ——列表里要先有这条新会话，`loadHistoryChat` 才查得到它的 `sourceChannel`，本地分支恒 null 即可写），
+  并带同一条竞态防护（等 fork 的间隙用户切走了会话就不抢占）。
+- **两个按钮的区别写在 `title` 里**：`chat.rollbackBtnTitle` 说「这条及之后的内容会从当前对话移除」，
+  `chat.branchBtnTitle` 说「当前对话保持不变」。回退确认框里那句
+  `chat.rollbackArchiveNote`（存档会出现在「近期对话」）保留不动。
+- 护栏：`ForkConversationBranchTest`（截断到分叉点 / 原会话不动 / 父子字段 / 标题后缀 /
+  两种定位键 / 连点不撞号 / 不给截断点仍整条复制 / 列表角标两条）、
+  `AiChatControllerForkTest`（无 body 兼容、两种定位键、非数字 400、定位不到 400、403）、
+  `ConversationBranchSummaryQueryTest`（真 H2 跑那两条 JPQL）、
+  `frontend/tests/chat-presentation-ui/run.mjs` 的分叉按钮一段。
 
 ## 辅助模型、子 Agent 与身份作用域（2026-08 供应商三档改造）
 

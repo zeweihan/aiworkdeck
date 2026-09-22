@@ -248,6 +248,13 @@ public class ProjectAiMessageService {
      */
     public List<java.util.Map<String, Object>> listConversations(Long projectId, Long userId) {
         List<Object[]> results = repository.findConversationSummaries(projectId, userId);
+        // 「分支自 <父标题>」角标的素材（dev-board#779 K18）：父会话不一定在这一页里，
+        // 逐条查是 N+1，所以先把这一页引用到的父会话 id 收齐，一次查回标题。
+        java.util.Set<String> parentIds = results.stream()
+                .filter(row -> row[0] != null && row.length > 7 && row[7] != null)
+                .map(row -> row[7].toString())
+                .collect(java.util.stream.Collectors.toSet());
+        java.util.Map<String, String> parentTitles = resolveConversationTitles(parentIds);
         List<java.util.Map<String, Object>> rows = results.stream()
                 .filter(row -> row[0] != null) // Filter out items with null conversationId
                 .map(row -> {
@@ -269,6 +276,10 @@ public class ProjectAiMessageService {
                     // 来源通道（首条消息的）：镜像导入的会话非空，前端据此渲染角标 + 只读态
                     map.put("sourceChannel", row.length > 5 && row[5] != null ? row[5].toString() : null);
                     map.put("pinned", row.length > 6 && truthy(row[6]));
+                    // 分叉出身（首条消息的）：「从此分叉」的产物非空，前端据此渲染「分支自 …」
+                    String parentId = row.length > 7 && row[7] != null ? row[7].toString() : null;
+                    map.put("parentConversationId", parentId);
+                    map.put("parentTitle", parentId == null ? null : parentTitles.get(parentId));
                     return map;
                 })
                 // toCollection 而不是 toList()：后者不保证可变，而下面要就地排序
@@ -289,6 +300,26 @@ public class ProjectAiMessageService {
         if (value instanceof Boolean b) return b;
         if (value instanceof Number n) return n.intValue() != 0;
         return value != null && "true".equalsIgnoreCase(value.toString());
+    }
+
+    /**
+     * 一批会话 id → 显示标题（dev-board#779 K18）。取标题的口径与 {@link #forkConversation}
+     * 一致：storedTitle 优先，没有就用用户第一问（助手那整段回答在角标里只会被截成一团）。
+     * 查不到的会话根本不进返回 map——调用方据此渲染成「无标题的父会话」而不是编一个。
+     */
+    private java.util.Map<String, String> resolveConversationTitles(java.util.Set<String> conversationIds) {
+        if (conversationIds == null || conversationIds.isEmpty()) return java.util.Map.of();
+        java.util.Map<String, String> titles = new java.util.HashMap<>();
+        for (Object[] row : repository.findConversationTitleCandidates(conversationIds)) {
+            if (row == null || row.length == 0 || row[0] == null) continue;
+            String storedTitle = row.length > 1 && row[1] != null ? row[1].toString() : null;
+            String firstUserMessage = row.length > 2 && row[2] != null ? row[2].toString() : null;
+            String title = storedTitle != null && !storedTitle.isBlank()
+                    ? storedTitle
+                    : (firstUserMessage != null && !firstUserMessage.isBlank() ? cleanTitle(firstUserMessage) : null);
+            if (title != null && !title.isBlank()) titles.put(row[0].toString(), title);
+        }
+        return titles;
     }
 
     /**
@@ -368,10 +399,25 @@ public class ProjectAiMessageService {
     @org.springframework.transaction.annotation.Transactional
     public String forkConversation(String conversationId, Long userId, String titleSuffix,
                                    String parentConversation, Long branchFromMessage) {
-        List<ProjectAiMessage> source = repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
-        if (source.isEmpty()) {
+        return forkConversation(conversationId, userId, titleSuffix, parentConversation, branchFromMessage, null);
+    }
+
+    /**
+     * fork 的按消息截断版本（dev-board#779 K18「从此分叉」）。
+     *
+     * @param untilMessage 只复制到这条为止（含该条）；null = 整条复制。判据与回退的删除判据
+     *                     互为镜像：显示顺序 (createdAt, id) 的字典序 &lt;= 目标。只按 createdAt
+     *                     会让与分叉点<b>同刻</b>落库的那条助手回复也跟过来——那正是用户想岔开的
+     *                     那一答；只按 id 则假设 id 与时间同序，fork / 镜像导入的行不保证。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public String forkConversation(String conversationId, Long userId, String titleSuffix,
+                                   String parentConversation, Long branchFromMessage, Long untilMessage) {
+        List<ProjectAiMessage> all = repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        if (all.isEmpty()) {
             throw new IllegalArgumentException(LangText.of("会话不存在或为空", "Conversation not found or empty"));
         }
+        final List<ProjectAiMessage> source = untilMessage == null ? all : cutAt(all, untilMessage);
         // 随机尾巴防撞号：原来是纯 conv-<毫秒>，同一毫秒里 fork 两次会落进同一条会话，
         // 后一份存档把前一份吞掉——而存档恰恰是为了不丢数据（回退连点两下就能触发）。
         // 形状仍是 conv-…，与签发端点的 conv-<毫秒>-<随机> 同构，没有任何解析方依赖格式。
@@ -421,6 +467,26 @@ public class ProjectAiMessageService {
             repository.save(copy);
         }
         return newConversationId;
+    }
+
+    /**
+     * 「到这条为止（含该条）」（dev-board#779 K18）：判据是显示顺序 (createdAt, id) 的字典序，
+     * 与回退的删除判据互为镜像。只按 createdAt 会让与分叉点<b>同刻</b>落库的那条助手回复
+     * 也跟过来——那正是用户想岔开的那一答；只按 id 则假设 id 与时间同序，
+     * fork / 镜像导入的行不保证。
+     */
+    private List<ProjectAiMessage> cutAt(List<ProjectAiMessage> ordered, Long untilMessage) {
+        ProjectAiMessage cutoff = ordered.stream()
+                .filter(m -> untilMessage.equals(m.getId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of(
+                        "无法定位这条消息，可能它已被删除或还没保存完成，请刷新后重试",
+                        "Could not locate that message: it may already be gone, or not finished saving. Refresh and try again.")));
+        return ordered.stream()
+                .filter(m -> m.getCreatedAt().isBefore(cutoff.getCreatedAt())
+                        || (m.getCreatedAt().equals(cutoff.getCreatedAt())
+                            && m.getId() != null && m.getId() <= cutoff.getId()))
+                .toList();
     }
 
     /**
@@ -663,6 +729,27 @@ public class ProjectAiMessageService {
                 LangText.of(" · 回退前存档", " · before rollback"), conversationId, targetId);
         truncateHistory(conversationId, targetId);
         return archived;
+    }
+
+    /**
+     * 从此分叉（dev-board#779 K18，审查 D-06 / F4）：把「到这条为止」复制成一条新会话，
+     * <b>原会话一个字都不动</b>。
+     *
+     * <p>这是回退的非破坏形态。律师常要对同一份合同试两种改法再比较——改造前想换个思路
+     * 只有回退一条路，而回退会把这条之后的全部对话从库里删掉（K1 之后至少有自动存档，
+     * 但仍是「先破坏再补救」）。分叉不需要任何补救。
+     *
+     * <p>定位键与回退共用 {@link #resolveRollbackTarget}：历史回灌的气泡有主键，
+     * 本次会话内刚发出的只有 clientRequestId。定位不到时抛可读文案，此时原会话与
+     * 新会话都不会被创建——失败是干净的。
+     *
+     * @return 新会话 id
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public String forkFromMessage(String conversationId, Long userId, Long messageId, String clientRequestId) {
+        Long targetId = resolveRollbackTarget(conversationId, messageId, clientRequestId);
+        return forkConversation(conversationId, userId,
+                LangText.of(" · 分支", " · branch"), conversationId, targetId, targetId);
     }
 
     /**

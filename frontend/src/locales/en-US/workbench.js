@@ -122,6 +122,10 @@ export default {
   conversationPinFailed: 'Failed to change the pinned state',
   conversationDeleteFailed: 'Failed to delete the conversation',
   conversationTitleTooLong: 'The title can be at most 60 characters',
+  // Origin chip on a "branch from here" conversation (dev-board#779 K18). Falls back to the
+  // second key when the parent has no title yet — never shows the parent's message text.
+  branchedFrom: 'Branched from {title}',
+  branchedFromUnknown: 'Branch',
   statusRunning: 'Running',
   statusPaused: 'Paused',
   statusInterrupted: 'Interrupted',

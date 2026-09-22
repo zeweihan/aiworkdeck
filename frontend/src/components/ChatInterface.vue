@@ -279,6 +279,26 @@
               v-html="msg.contentHtml || escapeHtml(msg.displayContent || msg.content)"
             ></div>
             <div class="bubble-footer">
+              <!-- 从此分叉（dev-board#779 K18，审查 D-06/F4）：非破坏。原对话一个字不动，
+                   只把「到这条为止」复制成一条新对话并切过去。可用性判据与回退同源
+                   （rollbackLocator），因为两者用的是同一套定位键。排在回退左边：
+                   不销毁任何东西的那个动作应该先被读到。 -->
+              <view v-if="!isStreaming" class="branch-btn"
+                    :class="{ 'is-disabled': !rollbackLocator(msg) }"
+                    @tap.stop="branchFromMessage(msg)"
+                    :title="rollbackLocator(msg) ? $t('chat.branchBtnTitle') : $t('chat.branchUnavailable')">
+                 <!-- 内层沿用 rollback-icon-svg / rollback-text 两个类：两个键在 footer 里
+                      是同一种视觉物件，另起一套一模一样的 CSS 只会多一处要同步的地方 -->
+                 <div class="rollback-icon-svg">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="6" y1="3" x2="6" y2="15"></line>
+                        <circle cx="18" cy="6" r="3"></circle>
+                        <circle cx="6" cy="18" r="3"></circle>
+                        <path d="M18 9a9 9 0 0 1-9 9"></path>
+                    </svg>
+                 </div>
+                 <text class="rollback-text">{{ $t('chat.branchBtn') }}</text>
+              </view>
               <!-- Rollback Button -->
               <!-- 拿不到定位键（消息还没落库、也没有客户端幂等键）时置灰：点下去注定失败，
                    而那恰恰是最想用它的时刻——刚发现自己问错了（审查 D-02） -->
@@ -1598,6 +1618,25 @@ export default {
       const messageId = msg.dbMessageId == null ? null : String(msg.dbMessageId)
       const clientRequestId = msg.clientRequestId || null
       return (messageId || clientRequestId) ? { messageId, clientRequestId } : null
+    }
+
+    /**
+     * 从此分叉（dev-board#779 K18）：非破坏，所以<b>不弹确认框</b>——原对话一个字不动，
+     * 没有什么需要用户点头承担的后果。真正的动作在宿主：fork 出新会话再切过去
+     * （复用插件镜像「另起分支继续」那条已有的切换路径）。
+     */
+    const branchFromMessage = (msg) => {
+      if (isStreaming.value) {
+        uni.showToast({ title: t('chat.waitCurrentChat'), icon: 'none' })
+        return
+      }
+      const locator = rollbackLocator(msg)
+      if (!locator) {
+        uni.showToast({ title: t('chat.branchUnavailable'), icon: 'none' })
+        return
+      }
+      if (!currentConversationId.value) return
+      emit('fork-from-message', { conversationId: currentConversationId.value, ...locator })
     }
 
     const openRollbackDialog = (msg, index) => {
@@ -2926,6 +2965,7 @@ export default {
        rollbackLocator,
        rollbackResend,
        openRegenerateDialog,
+       branchFromMessage,
        openRollbackDialog,
        cancelRollback,
        confirmRollback,
@@ -5101,7 +5141,8 @@ export default {
   min-width: 134px;
 }
 
-.rollback-btn {
+.rollback-btn,
+.branch-btn {
   display: flex;
   align-items: center;
   margin-left: 8px;
@@ -5114,17 +5155,20 @@ export default {
   /* border: 1px solid rgba(46, 90, 80, 0.1); */
 }
 
-.user-bubble:hover .rollback-btn {
+.user-bubble:hover .rollback-btn,
+.user-bubble:hover .branch-btn {
   opacity: 1;
 }
 
 /* 定位不到这条消息时置灰：仍然显示（要让用户看到有这么个动作），但点了什么都不会发生，
    title 里写清原因——一个点了注定失败的按钮比没有按钮更糟 */
-.rollback-btn.is-disabled {
+.rollback-btn.is-disabled,
+.branch-btn.is-disabled {
   cursor: not-allowed;
 }
 
-.user-bubble:hover .rollback-btn.is-disabled {
+.user-bubble:hover .rollback-btn.is-disabled,
+.user-bubble:hover .branch-btn.is-disabled {
   opacity: 0.4;
 }
 

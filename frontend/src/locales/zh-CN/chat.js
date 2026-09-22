@@ -44,8 +44,15 @@ export default {
   rollbackDocTipLink: 'AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。',
   rollbackPreviewLabel: '将回退到并编辑：',
   rollbackBtn: '回退',
-  rollbackBtnTitle: '回退到此消息（修改重发）',
+  // 两个按钮的差别必须在 title 里说清：回退改当前对话，分叉不改（dev-board#779 K18）
+  rollbackBtnTitle: '回退到此消息并修改重发——这条及之后的内容会从当前对话移除（原对话自动存为分支）',
   rollbackUnavailable: '这条消息还没保存完成，暂时无法回退，稍候或刷新后再试',
+  // ---- 从此分叉 ----
+  branchBtn: '分叉',
+  branchBtnTitle: '从这条分叉出一条新对话继续——当前对话保持不变',
+  branchUnavailable: '这条消息还没保存完成，暂时无法分叉，稍候或刷新后再试',
+  branchDone: '已分叉到新对话，原对话保持不变',
+  branchFailed: '分叉失败: {error}',
   waitCurrentChat: '请等待当前对话完成',
   rollbackDone: '已回退',
   rollbackDoneArchived: '已回退，原对话已存为分支',
