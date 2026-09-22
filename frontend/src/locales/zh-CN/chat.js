@@ -6,6 +6,11 @@ export default {
   attentionLocatorQuestion: '有 {n} 条待你回答',
   attentionLocatorApproval: '有 {n} 条待审批',
 
+  // ---- 钢琴键会话导航（ChatTurnRail）----
+  railLabel: '对话导航',
+  railTurnIndex: '第 {n} 轮',
+  railUntitled: '（无提问文字）',
+
   // ---- 上传文件对话框 ----
   uploadFileTitle: '上传文件',
   uploadFileSubtitle: '选择目标位置并选择要上传的文档',

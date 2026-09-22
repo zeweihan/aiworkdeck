@@ -6,6 +6,11 @@ export default {
   attentionLocatorQuestion: '{n} awaiting your answer',
   attentionLocatorApproval: '{n} awaiting approval',
 
+  // ---- Piano-key conversation rail (ChatTurnRail) ----
+  railLabel: 'Conversation navigation',
+  railTurnIndex: 'Turn {n}',
+  railUntitled: '(no question text)',
+
   // ---- Upload dialog ----
   uploadFileTitle: 'Upload Files',
   uploadFileSubtitle: 'Choose a destination and select documents to upload',

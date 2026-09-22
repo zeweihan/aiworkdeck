@@ -291,6 +291,29 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
     ① **判据只此一处**。`chatTurns.mjs` 导出的 `pendingAttention(turns)` 读 `buildChatTurns` 已经算好的 `attentionIndex` / 新增的 `attentionKind`（`'question'|'approval'`），**不许再写一份判定**——那条判定含 `isLatest && !isStreaming`，与 RootBubble 给卡片 `actionable` 的是同一条链，另起一份的表现是「定位条把用户送到一张点了没反应的卡上」。返回 `{index, kind, count}`，最早一条 + 计数；今天 `attentionIndex` 只在最新一轮设置，所以 count 恒为 1，聚合是给判定放宽留的（`attention-locator.test.mjs` 直接喂合成 turns 钉住这条）。
     ② **只在测量到不可见时出现**。`useChatReadingPosition` 新增 `isMessageOffscreen`（与 `navigateToMessage` 共用私有 `locate`，两者必须解析同一个元素，否则会「测量一张卡、滚到另一张」），**元素没渲染出来时返回 false**——「查不到」不是「不可见」的证据，返 true 会让每张刚到的卡都闪一下浮条。刷新时机是新增的第三个参数 `onViewportChange`（滚动、ResizeObserver、跳转后各调一次），写进一个 ref 而不是让 computed 直接读 DOM：computed 每次滚动都产生新对象会把整个 ChatInterface 模板拖进重渲染。
     ③ 文案键 `chat.attentionLocatorQuestion` / `chat.attentionLocatorApproval`（`{n}` 计数，两语成对）。
+  - **钢琴键会话导航（dev-board#791 K12）**：`AgentMessage/ChatTurnRail.vue`，props `turns`（直接收
+    `chatTurns`）+ `activeKey`，emits `jump({key, index})`。静息是消息区右缘一列 12px 刻度（每轮一格，
+    `turn.status` 定色：running → `--awd-gold`、awaiting_input/awaiting_approval → `--awd-danger`、
+    queued → `--awd-gold-line`、其余 → `--awd-text-3`；当前轮加长加粗换 `--awd-accent`，且当前/运行中/
+    待处理这三格 `flex: 0 0 auto` 不参与压缩——200 轮时其余格被压到 2.7px，跟着压就糊成一条灰线），
+    hover 或键盘聚焦展开 200px 浮层逐轮列出 `turn.label`。**轮数 ≤ 1 不渲染。** 四条契约：
+    ① **数据零新造**：`turn.label` / `turn.status` 是 `buildChatTurns` 早就算好的两个字段（在这之前零消费），
+      组件不重算任何一轮的状态——另起一份判定就会和定位条、RootBubble 的 `actionable` 链各说各话。
+    ② **跳转必须转调 `navigateToMessage({index, target:'turn'})`**，不许自己 scrollTo（同定位条那条
+      「跳转和『是否在屏』必须解析同一个元素」）。`index` 取那一轮**第一条用户消息**的全局下标
+      （`turn.user.index`，历史里开头就是助手的老会话退到 `turn.assistants[0].index`），因为
+      `navigateToMessage` 认的是 `[data-message-index]`。
+    ③ **当前轮靠 IntersectionObserver，观察的是轮级元素**（`.conversation-turn` 新加的 `:data-turn-key`，
+      几十到两百个），`root` 取 `.message-list`、`rootMargin: '-8% 0px 0px 0px'`，命中的里取 rect.top
+      最小的那一轮 = 视口内最靠上的那一轮（顶边内缩 8% 是让只剩一条边挂在上沿的上一轮及时让位）。
+      **不许改成 scroll 回调里逐轮量 `getBoundingClientRect`，也不许改成观察每条消息**——那正是长会话
+      掉帧的两种写法。重挂 observer 的判据是 `turnSignature`（长度 + 首尾 key）而不是 `chatTurns` 本身：
+      后者每个 token 都重算，跟着它重挂 200 个 observer 等于把这条纪律从另一头丢掉。
+      回调里现读 rect 而不是用 entry 里那份快照：仍在屏的条目不会再来回调，存下来的坐标滚两下就过期。
+    ④ 文案键 `chat.railLabel` / `chat.railTurnIndex` / `chat.railUntitled`（两语成对）。
+      容器定位（`.message-area`）与 12px 列不覆盖滚动条的理由见 `sidebar-shell.md` 同名段。
+    实测（`tests/chat-presentation-ui`，200 轮夹具 `window.loadManyTurns(200)`）：单次跳转 0.3–0.5ms，
+    滚动跟随最坏一帧 17.5ms。
   - **两个函数就是全部契约**。`captureChatTimeline(bubble)` 只在 **useAgentStream 的解析器边界**调用（标签开/闭前后、尾部 flush、flushRemainingBuffer、artifact、plan_update、step、reasoning 增量、以及每次新建助手段），只往 `bubble.timeline` **追加**——记录时机放在渲染期就会让后到的正文跑到先发生的工具上面去。`visibleChatTimeline(bubble)` 派生渲染列表：相邻 process 条目并成一个 `execution` 组（RootBubble 渲成可折叠的 `.activity-summary` / `.activity-details`）、空 thinking 与空 plan 过滤掉、末尾按 `content.length` 补一条 `key:'tail'` 的正文条目（错误提示与编辑器状态行是绕过解析器直接追加到 `content` 的）。`isTimelineEntryActive` 只让「最后一条非 plan/title 条目」有活动态。
   - **text 条目存的是 `bubble.content` 的绝对下标（start/end），所以 `content` 只许 append、不许整段替换**。这是整套机制里唯一的隐式约束，违反它不报错、只是正文错位或整段消失。要清空必须**连 `timeline` 一起清**（`state_recovery` 那条路就是两者一起置空的，改那里时别只清一个）。`visibleChatTimeline` 对 `end > content.length` 做降级截断兜底，但那是兜底不是许可。
   - **兜底分支的判据必须是 `bubble.timeline?.length`**：没经过解析器的气泡（PPT 取消/开始那两条系统确认、更早的内存气泡）走兜底按字段拼一份时间线，而**空数组是 truthy**——写成 `bubble.timeline || [...]` 的话，刚建好还没收到 token 的气泡会渲染成空白。同理，**每一处新建助手段都必须先 `captureChatTimeline(next)` 再 push**（`sendMessage` / `bubble_start` / `input_applied` 续跑三处），漏掉的那一处表现是「插话续跑后首 token 之前什么都不显示」。

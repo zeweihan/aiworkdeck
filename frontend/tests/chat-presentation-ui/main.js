@@ -72,5 +72,20 @@ window.loadFixture = async (kind = 'long') => {
   await nextTick()
   await new Promise(resolve => requestAnimationFrame(resolve))
 }
+// 钢琴键导航的长会话夹具（dev-board#791 K12）：每轮都是「一问 + 一段思考 + 一次工具
+// + 一段正文」，历史执行段默认折叠，DOM 规模与真实长会话同量级。
+window.loadManyTurns = async (count = 200) => {
+  const history = []
+  for (let i = 1; i <= count; i += 1) {
+    history.push({ id: `mu${i}`, role: 'USER', content: `第 ${i} 问：请核对第 ${i} 份材料的付款与违约责任。` })
+    history.push({
+      id: `ma${i}`, role: 'ASSISTANT',
+      content: `<thinking>核对第 ${i} 份材料。</thinking><process name="读取第 ${i} 份材料"><tool_code>read_document({"fileId":${i}})</tool_code><tool_output status="SUCCESS">第 ${i} 份材料付款期限为30日。</tool_output></process><final>第 ${i} 份材料：付款期限30日，逾期按万分之五计违约金，建议补充验收标准与逾期解除条件。</final>`
+    })
+  }
+  chat.value.loadMessages(`fixture-many-${count}`, history)
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
+}
 await window.loadFixture()
 window.ready = true
