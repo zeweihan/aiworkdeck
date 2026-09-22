@@ -62,6 +62,23 @@ public class SseEmitterService {
     private final Map<String, java.util.concurrent.atomic.AtomicLong> eventSeq = new ConcurrentHashMap<>();
     /** 上一次建连补发了多少条（日志与回归用例的观察口，别拿它做业务判断）。 */
     private final Map<String, Integer> lastReplayCount = new ConcurrentHashMap<>();
+    /**
+     * 「这个会话已经真正送达过某个 emitter 的最大事件 id」（dev-board#812 C-04）。
+     *
+     * <p>用来回答一个此前无解的问题：<b>客户端不带 Last-Event-ID 连上来时，缓冲里那些事件
+     * 到底是「它错过的」还是「它早就收到过的」</b>。前者必须补发，后者补发就是重复内容。
+     *
+     * <p>为什么现在需要它：前端不再等建连完成就发 POST /chat（建连与 POST 并行，省掉每条
+     * 消息一次完整的建连 RTT），于是本轮最早的几个事件——{@code bubble_start} 与
+     * 头几条 {@code text_delta}——真有可能在 emitter 还没挂上时就发出去了。
+     * 它们已经进了补发缓冲（{@link #send} 里 emitter 为 null 的那条分支），
+     * 但**一条会话的第一轮没有任何 Last-Event-ID 可带**，
+     * 旧的 {@link #replaySince} 对空游标一律返回 0，于是这几条就永远留在缓冲里了。
+     *
+     * <p>水位只在 {@link #emitTo} 写成功后推进，所以它的语义严格是「送出去了」而不是
+     * 「发过了」——写失败（客户端已断开）的那条仍然算未送达，重连时会被补上。
+     */
+    private final Map<String, Long> deliveredHighWater = new ConcurrentHashMap<>();
 
     /** 不进缓冲的事件：补发它们没有意义，只会挤掉真正需要补的内容。 */
     private static boolean bufferable(String eventName) {
@@ -245,6 +262,8 @@ public class SseEmitterService {
             // id 是 SSE 规范里的断点续传游标，客户端原样经 Last-Event-ID 送回
             if (id > 0) ev = ev.id(Long.toString(id));
             emitter.send(ev);
+            // 送达水位只在写成功之后推进：写失败的那条仍算「没送到」，重连时要补
+            if (id > 0) deliveredHighWater.merge(connectionId, id, Math::max);
         } catch (Exception e) {
             // IOException：客户端断开；IllegalStateException：emitter 已 complete（与 close() 竞态）。
             // 两种情况该 emitter 都已失效，一并丢弃，避免异常逃逸打断推事件的调用线程。
@@ -277,18 +296,35 @@ public class SseEmitterService {
     }
 
     /**
-     * 重连补发：把 id 大于 lastEventId 的缓冲事件按序补给新连接。
-     * lastEventId 解析不出来（空/非数字/旧客户端不带）时什么都不补，行为与改造前一致。
+     * 重连补发：把 id 大于游标的缓冲事件按序补给新连接。
+     *
+     * <p><b>游标有两个来源，优先级不能反</b>：
+     * <ol>
+     *   <li>客户端自己报的 {@code Last-Event-ID}——它最清楚自己收到哪儿了，有就用它；</li>
+     *   <li>没有（一条会话的第一轮、或不跟踪 id 的旧客户端）时退回
+     *       {@link #deliveredHighWater}：补发「这个会话从来没有真正送出去过」的那些。</li>
+     * </ol>
+     *
+     * <p>第二条是 dev-board#812 C-04 加的，治的是「前端不等建连就发 POST」之后
+     * 本轮最早几个事件的去处：它们进了缓冲却没有任何游标能把它们捞回来，
+     * 用户看到的是一个开头缺了几个字、甚至连 {@code bubble_start} 都没有的气泡。
+     *
+     * <p><b>刻意不是「没游标就把整个缓冲倒出来」</b>：那样刷新页面会把已经从
+     * {@code /api/ai/history} 读到的内容再收一遍，变成重复正文。水位保证了
+     * 「送达过的绝不重发」——刷新场景下水位就是缓冲里的最大 id，补发数恒为 0。
      *
      * @return 补发的条数
      */
     private int replaySince(String connectionId, SseEmitter emitter, String lastEventId) {
-        if (lastEventId == null || lastEventId.isBlank()) return 0;
         long since;
-        try {
-            since = Long.parseLong(lastEventId.trim());
-        } catch (NumberFormatException e) {
-            return 0;
+        if (lastEventId != null && !lastEventId.isBlank()) {
+            try {
+                since = Long.parseLong(lastEventId.trim());
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        } else {
+            since = deliveredHighWater.getOrDefault(connectionId, 0L);
         }
         java.util.ArrayDeque<BufferedEvent> q = replayBuffers.get(connectionId);
         if (q == null) return 0;
@@ -326,6 +362,9 @@ public class SseEmitterService {
         replayBytes.keySet().removeIf(id -> !replayBuffers.containsKey(id));
         eventSeq.keySet().removeIf(id -> !replayBuffers.containsKey(id));
         lastReplayCount.keySet().removeIf(id -> !replayBuffers.containsKey(id));
+        // 水位必须与缓冲同生共死：缓冲还在、水位被单独清掉的话，
+        // 空游标会把「其实都送达过」的那一段当成漏发内容再倒一遍
+        deliveredHighWater.keySet().removeIf(id -> !replayBuffers.containsKey(id));
     }
     
     /**

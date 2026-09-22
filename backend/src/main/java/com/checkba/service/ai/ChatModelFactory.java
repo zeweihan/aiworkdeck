@@ -263,7 +263,8 @@ public class ChatModelFactory {
         String key = platform ? platformApiKey() : resolveOpenRouterApiKey();
         String baseUrl = platform ? aiModelProperties.getOpenRouter().getBaseUrl() : resolveOpenRouterBaseUrl();
         recordModelUse(target.channel().name(), target.modelId(), true);
-        return new OpenRouterStreamingChatModel(key, baseUrl, target.modelId(), remainingTimeout(timeout, started));
+        return new OpenRouterStreamingChatModel(key, baseUrl, target.modelId(), remainingTimeout(timeout, started),
+                aiModelProperties.getOpenRouter().getMaxRequestsPerHost());
     }
 
     private static java.time.Duration remainingTimeout(java.time.Duration budget, long started) {
@@ -509,6 +510,19 @@ public class ChatModelFactory {
         return new OpenRouterStreamingChatModel(apiKey, baseUrl, modelId, timeout);
     }
 
+    /**
+     * 带并发上限的构建口径（dev-board#812 K32 ⑤）。
+     *
+     * <p>OkHttp 的 Dispatcher 挂在 client 上，而 client 被本工厂按 (模型 id, key) 缓存复用，
+     * 所以这个值必须在构建时给定——换句话说，改 {@code ai.model.open-router.max-requests-per-host}
+     * 之后要 {@code clearCache()} 才生效，与既有的超时/密钥口径一致。
+     */
+    static dev.langchain4j.model.chat.StreamingChatLanguageModel
+            streamingModel(String apiKey, String baseUrl, String modelId, java.time.Duration timeout,
+                           int maxRequestsPerHost) {
+        return new OpenRouterStreamingChatModel(apiKey, baseUrl, modelId, timeout, maxRequestsPerHost);
+    }
+
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreatePlatformStreamingModel(String modelId) {
         recordModelUse("AWD_CLOUD", modelId, true);
         String apiKey = platformApiKey();
@@ -516,7 +530,8 @@ public class ChatModelFactory {
         return streamingModelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new AWD Cloud StreamingChatModel for: {}", modelId);
             AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
-            return streamingModel(apiKey, config.getBaseUrl(), modelId, config.getTimeout());
+            return streamingModel(apiKey, config.getBaseUrl(), modelId, config.getTimeout(),
+                    config.getMaxRequestsPerHost());
         });
     }
 
@@ -561,7 +576,8 @@ public class ChatModelFactory {
             String baseUrl = resolveOpenRouterBaseUrl();
             requireByokKey(apiKey);
             
-            return streamingModel(apiKey, baseUrl, modelId, config.getTimeout());
+            return streamingModel(apiKey, baseUrl, modelId, config.getTimeout(),
+                    config.getMaxRequestsPerHost());
         });
     }
 

@@ -786,7 +786,24 @@ export function useAgentStream() {
         const conversationId = currentConversationId.value
 
         try {
-            await connectSSE(conversationId)
+            // 建连与 POST **并行**（dev-board#812 C-04）。
+            //
+            // 病灶：后端每轮收尾会主动关流（endRunAndDrain），而 connectSSE 只在
+            // `sseAbortController && isConnected` 时短路——上一轮关流后 isConnected 已是 false，
+            // 于是**第二条及以后的每一条消息**都要先付一次完整的建连往返（鉴权 +
+            // canUseConversation 查库 + getRecoverySnapshot + 重发待办/任务），
+            // 而且它整段串在「按下发送 → 首字」这个用户最敏感的时刻里。
+            //
+            // 不 await 是安全的，两头都有兜底：
+            //   · 后端：emitter 还没挂上时事件照样进补发缓冲（SseEmitterService.send），
+            //     建连时按 Last-Event-ID 补发；一条会话的第一轮没有游标可带，
+            //     由后端的「已送达水位」兜住（同卡的后端改动）。
+            //   · 前端：POST 成功后仍然 await 这个 promise（见下），建连失败照旧抛出去，
+            //     错误处置与改造前完全一致——只是不再让它挡在 POST 前面。
+            const connectPromise = connectSSE(conversationId)
+            // 建连失败会在下面 await 时统一处置；这里先挂一个空 catch，
+            // 免得它在 await 之前就变成 unhandledrejection 打到控制台。
+            connectPromise.catch(() => {})
 
             // 4. Send POST
             messageAbortController = new AbortController()
@@ -834,6 +851,10 @@ export function useAgentStream() {
                 throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
             }
             const responseBody = await chatResp.json()
+            // POST 已经受理，现在才等建连——多半早就连上了（两件事是并行跑的）。
+            // 仍然要等：建连失败必须照旧抛出去走同一条错误处置，
+            // 否则用户会看到「消息发出去了，但界面永远停在等待」。
+            await connectPromise
             const receipt = responseBody && responseBody.data ? responseBody.data : responseBody
             if (!receipt || receipt.status !== 'accepted' || !receipt.messageId) {
                 throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))

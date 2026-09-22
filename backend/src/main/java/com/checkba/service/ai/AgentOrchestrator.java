@@ -517,6 +517,21 @@ public class AgentOrchestrator {
         }
     }
 
+    /**
+     * 一条不挂在任何附件上的 {@code context_notice}（今天只有 {@link ContextTurnSink#OVERFLOW}）。
+     *
+     * <p>与 {@link TurnContextLedger#notice} 走同一个事件名与同一条轮次闸，只是没有
+     * fileId / name / detail——它描述的是整轮的处境而不是某一份材料。
+     * 不许抛：一条提示发不出去绝不能影响这一轮的终态处置。
+     */
+    private void sendContextNotice(RunGuard guard, String kind) {
+        try {
+            sendRunEvent(guard, "context_notice", "{\"kind\":\"" + kind + "\"}");
+        } catch (Exception e) {
+            log.warn("Failed to send context_notice kind={}", kind, e);
+        }
+    }
+
     /** 文件名由项目成员自由命名，直接拼进 JSON 会被一个引号或反斜杠打断整条事件。 */
     private static String jsonEscape(String raw) {
         StringBuilder out = new StringBuilder(raw.length() + 8);
@@ -2060,6 +2075,10 @@ public class AgentOrchestrator {
                 }
                 log.warn("Context overflow for {} but compaction could not shrink the stack, giving up",
                         conversationId);
+                // 压不动 = 这个会话此后每发一条消息都会再撞同一堵墙（dev-board#812 K32 ⑥）。
+                // 原来这条路只有上面这行 warn，用户看到的是「又失败了」，而唯一的出路
+                // （去掉几份附件）没有任何东西指向它——界面上附件标签还好端端挂着。
+                sendContextNotice(guard, ContextTurnSink.OVERFLOW);
             }
 
             if (replayable && failoverProperties.isEnabled() && kind.failoverable()) {

@@ -79,6 +79,15 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     /** 只用于读 reasoning 与 error 两个 openai4j 不认识的字段；DTO 本身仍交给 openai4j 的注解解析。 */
     private static final ObjectMapper LENIENT = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    /**
+     * 请求体的紧凑序列化器（dev-board#812 K32 ⑧）。
+     *
+     * <p><b>必须与 openai4j 的 {@code Json.OBJECT_MAPPER} 配置一致、只差缩进</b>：
+     * 那个是 {@code new ObjectMapper().enable(INDENT_OUTPUT)}（字节码实证），
+     * 所以这里就是一个不开缩进的默认 mapper。DTO 的命名与 NON_NULL 约定都在它们自己的
+     * 注解上，不受 mapper 影响。改动它等于改变发出去的报文，先看 compactJson 的 javadoc。
+     */
+    private static final ObjectMapper COMPACT = new ObjectMapper();
 
     private final OkHttpClient client;
     private final String endpoint;
@@ -99,7 +108,31 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         public TokenUsage tokenUsage() { return tokenUsage; }
     }
 
+    /**
+     * OkHttp 每个 host 的并发请求上限（{@code ai.model.open-router.max-requests-per-host}）。
+     *
+     * <p>不配就是 OkHttp 的默认值 <b>5</b>——而我们所有流量都打同一个 host，
+     * 也就是说全进程同时最多 5 轮对话在途。桌面单用户感觉不到，云后端
+     * （addin.aiworkdeck.com 服务多个插件用户）会在第 6 个并发会话上开始排队：
+     * 请求停在 {@code readyAsyncCalls} 里根本没发出去，用户看到的是「一直转圈、没有报错」，
+     * 而看门狗的首字节 60s 还会先把它判成死流去重试/切模型，把排队进一步放大。
+     *
+     * <p>更要命的是这个槽位在<b>整轮工具执行期间</b>都被占着：工具执行与递归 runLoop
+     * 都跑在 OkHttp 的回调线程里（{@code consume} 在 {@code onResponse} 的
+     * try-with-resources 内），编辑器桥最长 180s、{@code dispatch_subtask} 630s、
+     * AI PPT 十几分钟——一轮长任务就吃掉五分之一的全局并发。
+     *
+     * <p>默认 32。注意 OkHttp 还有一个全局 {@code maxRequests}（默认 64）没有改，
+     * 它是外层上限——32 在它之下，两者不冲突。
+     */
+    static final int DEFAULT_MAX_REQUESTS_PER_HOST = 32;
+
     public OpenRouterStreamingChatModel(String apiKey, String baseUrl, String modelName, Duration timeout) {
+        this(apiKey, baseUrl, modelName, timeout, DEFAULT_MAX_REQUESTS_PER_HOST);
+    }
+
+    public OpenRouterStreamingChatModel(String apiKey, String baseUrl, String modelName, Duration timeout,
+                                        int maxRequestsPerHost) {
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.explicitPromptCache = requiresExplicitPromptCache(modelName);
@@ -109,11 +142,14 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         Duration t = timeout == null ? Duration.ofSeconds(60) : timeout;
         // 四个超时同值，与 openai4j 0.23 的 OpenAiClient 口径一致：callTimeout 是整通墙钟上限，
         // readTimeout 靠 OpenRouter 的保活注释刷新，不会在模型静默思考时误触发
+        okhttp3.Dispatcher dispatcher = new okhttp3.Dispatcher();
+        dispatcher.setMaxRequestsPerHost(Math.max(1, maxRequestsPerHost));
         this.client = new OkHttpClient.Builder()
                 .callTimeout(t)
                 .connectTimeout(t)
                 .readTimeout(t)
                 .writeTimeout(t)
+                .dispatcher(dispatcher)
                 .build();
     }
 
@@ -189,7 +225,7 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         // 约 90ms/轮；链路越慢省得越多，而目标用户恰恰在慢链路那一头。
         // 语义上与缩进版完全等价（JSON 解析器看不出区别），token 计费也不受影响——
         // 上游是按解析后的结构重新渲染进模型 prompt 的，不是按我们的原始字节。
-        String body = compact(Json.toJson(rb.build()));
+        String body = compactJson(rb.build());
         if (explicitPromptCache) {
             body = markSystemForCaching(body);
         }
@@ -275,12 +311,36 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     }
 
     /**
+     * 紧凑序列化请求对象——<b>一遍</b>（dev-board#812 K32 ⑧，审查 perf.missed ②）。
+     *
+     * <p>原来是三遍：{@code Json.toJson} 序列化（带缩进）→ {@code readTree} 解析
+     * → {@code writeValueAsString} 再序列化。对象是约 160KB、工具 schema 嵌套很深的请求体，
+     * 每轮都做。dev-board#750 当时只量了「紧凑比缩进省 90ms 网络」，没量这两三遍
+     * Jackson 全量往返的 CPU。
+     *
+     * <p><b>为什么现在敢直接换 mapper</b>：openai4j 0.23 的 {@code Json.OBJECT_MAPPER}
+     * 经字节码确认就是 {@code new ObjectMapper().enable(INDENT_OUTPUT)}——
+     * 没有命名策略、没有 mapper 级的 NON_NULL，那些约定全在 DTO 自己的注解上，
+     * 换 mapper 不会动它们。所以「默认 mapper 不开缩进」的输出与
+     * {@code compact(Json.toJson(x))} 逐字节相同，由
+     * {@code OpenRouterPromptCacheTest.compactSerializationMatchesTheOldThreePassPipeline} 钉住。
+     *
+     * <p>失败一律退回老三遍管线：序列化不出来只是多传一点，绝不能让本轮对话发不出去。
+     */
+    static String compactJson(Object requestObject) {
+        try {
+            return COMPACT.writeValueAsString(requestObject);
+        } catch (IOException e) {
+            log.warn("Compact serialization failed, falling back to the indent-then-compact path", e);
+            return compact(Json.toJson(requestObject));
+        }
+    }
+
+    /**
      * 去掉 {@link Json#toJson} 加的缩进，其余一字不改。
      *
-     * <p>走「解析回来再紧凑写出去」而不是自建 ObjectMapper 直接序列化请求对象：openai4j 的
-     * DTO 上挂着它自己的命名策略与 NON_NULL 之类的注解，换一个 mapper 就等于把那些约定
-     * 重新赌一遍；按它的输出做树等价的改写，结果必然与它一致。这一趟解析+重写对 200KB
-     * 的报文是毫秒级，换回来的是几十到几百毫秒的上传时间。
+     * <p>{@link #compactJson} 取代了它在发送路径上的位置；保留它作为兜底，
+     * 以及给对拍测试提供「老口径」的参照。
      *
      * <p>失败一律原样返回：压不小只是多传一点，绝不能让本轮对话发不出去。
      */
@@ -453,10 +513,31 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
      * <p>那两个 403 的原文是 {@code "This model is not available in your region."}——
      * <b>是本机出口被地域拦，不是拒收多条 system</b>（单条 system 的最小请求同样 403，
      * 换走本机系统代理仍 403）。也就是说它们是<b>「未能验证」而不是「验证失败」</b>，
-     * 按「没有正面证据就不拆」一律退回拼接。哪天在能访问国际模型的出口上补验过，
-     * 把 id 加进来并在上表补一行即可。Google 另有一条独立理由：它的原生接口只有一个
-     * {@code system_instruction}，多条 system 要靠 OpenRouter 代为合并，合并之后就是今天的形态，
-     * 本来就没有收益。
+     * 按「没有正面证据就不拆」一律退回拼接。
+     *
+     * <h3>2026-09-22 复验（dev-board#812 K32 ④）：两条都能连上了，但仍然不加</h3>
+     * 本机出口的地域拦截已经没有了，两个候选<b>都通过了接受性探针</b>
+     * （HTTP 200 + 答得出只写在第二条 system 里的事实，见
+     * {@code MultiSystemSplitLiveProbeTest}，可用
+     * {@code RUN_LIVE_MODEL_CHECK=1 OPENROUTER_API_KEY=… mvn test -Dtest=MultiSystemSplitLiveProbeTest} 重跑）。
+     *
+     * <p><b>但名单的判据不是「能不能拆」，而是「拆了省不省钱」</b>，于是补了一次
+     * A/B 缓存对拍（56260 字符稳定段 + 每轮变化的易变段，各 4 轮，读
+     * {@code usage.prompt_tokens_details.cached_tokens}）：
+     * <pre>
+     *   openai/gpt-5.6-terra     A 拼接 cached=0,0,0,0          B 拆开 cached=0,0,0,0
+     *                            （prompt 12261 vs 12266：上游确实看到了两条消息，但两种形态都不缓存）
+     *   google/gemini-3.6-flash  A 拼接 cached=0,8170,8170,8170 B 拆开 cached=8170,8170,8170,8170
+     *                            （prompt 两种形态都是 13801——<b>逐 token 相同</b>，
+     *                              证实 OpenRouter 把多条 system 合并成了一个 system_instruction，
+     *                              拆开在线上是一个不折不扣的空操作）
+     * </pre>
+     * 结论：两条都是<b>零收益</b>，一个还要多付几个 token 的消息信封。
+     * 「没有正面证据就不拆」这条口径对它们依然成立——只是从前是「连不上所以不知道」，
+     * 现在是「连上了，量过了，确实没用」。Google 那条原本推测性的理由
+     * （原生接口只有一个 {@code system_instruction}）也由 prompt_tokens 完全相等得到了证实。
+     *
+     * <p>要改变这个结论，需要的是新的 A/B 数字而不是又一次接受性探针。
      *
      * <p>Anthropic / Qwen 不在此列是另一回事：它们走显式断点（{@link #markSystemForCaching}），
      * system 已经被拆成两个 content block，再动消息边界是多此一举——

@@ -41,6 +41,10 @@ class RunLoopCompactorTest {
     @BeforeEach
     void setUp() {
         properties = new AiContextProperties();
+        // 这一组用例测的是**剪枝/折叠的机制**（保护区、配对、摘要合并），不是预算算术。
+        // system 预留清零，阈值就回到干净的「历史预算 × 触发比例」——
+        // 预算算术本身由 triggerThreshold* 那几条专门的用例守（dev-board#812 K32 ⑥）。
+        properties.setSystemPromptReserve(0);
         compressor = mock(ContextCompressor.class);
         // 历史可用预算 1000 token，触发比例 0.8 → 阈值 800 token（chars-per-token=2 → 1600 字符）
         when(compressor.getAvailableTokensForHistory(any())).thenReturn(1000);
@@ -324,5 +328,65 @@ class RunLoopCompactorTest {
         List<ChatMessage> messages = List.of(SystemMessage.from("系统"), withImage("看图"));
         assertSame(messages, compactor.compact(messages, null),
                 "未超阈值时应原样返回，更不该摘图");
+    }
+
+    // ==================== K32 ⑥：阈值不再把 system 预留扣两遍 ====================
+
+    @Test
+    @DisplayName("阈值只扣一次 system 预留：estimateTokens 已经把 system 算进去了")
+    void theTriggerThresholdDoesNotDeductTheSystemReserveTwice() {
+        AiContextProperties props = new AiContextProperties();
+        props.setSystemPromptReserve(60000);
+        ContextCompressor c = mock(ContextCompressor.class);
+        // 历史预算 = 总窗口 − 60000 − 5000 − 8000，这里直接给 100000
+        when(c.getAvailableTokensForHistory(any())).thenReturn(100000);
+        RunLoopCompactor sut = new RunLoopCompactor(props, c);
+
+        // 旧口径： 100000 × 0.8 = 80000（system 被扣了两遍：一次在预算里，一次在 estimate 里）
+        // 新口径：(100000 + 60000) × 0.8 = 128000
+        assertEquals(128000, sut.triggerThreshold(null),
+                "整个消息栈（含 system）的预算 = 历史预算 + 之前为 system 扣掉的那一份");
+    }
+
+    @Test
+    @DisplayName("带大附件的会话不再每轮都白跑一次压缩")
+    void aTurnWithBigAttachmentsNoLongerTriggersCompactionOnEveryRound() {
+        AiContextProperties props = new AiContextProperties();
+        props.setSystemPromptReserve(60000);
+        ContextCompressor c = mock(ContextCompressor.class);
+        when(c.getAvailableTokensForHistory(any())).thenReturn(100000);
+        RunLoopCompactor sut = new RunLoopCompactor(props, c);
+
+        // system 里塞了 12 万字符的附件正文（= 6 万 token），历史只有短短两条。
+        // 旧口径下 estimate(≈60050) 已经逼近 80000，再多几轮历史就恒超阈值；
+        // 新口径下离 128000 还很远，不该触发。
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(filler(120000)));
+        messages.add(UserMessage.from("帮我看看这几份合同"));
+        messages.add(AiMessage.from("好的"));
+
+        assertSame(messages, sut.compact(messages, null),
+                "system 装着大附件不等于历史该被压缩——system 本来就在保护区里，压了也不会变小");
+    }
+
+    @Test
+    @DisplayName("system 真的把窗口撑爆时，阈值仍然会触发（不是一味放宽）")
+    void aTrulyOversizedSystemStillTripsTheThreshold() {
+        AiContextProperties props = new AiContextProperties();
+        props.setSystemPromptReserve(60000);
+        ContextCompressor c = mock(ContextCompressor.class);
+        when(c.getAvailableTokensForHistory(any())).thenReturn(100000);
+        RunLoopCompactor sut = new RunLoopCompactor(props, c);
+
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(filler(400000))); // 20 万 token，远超 128000
+        messages.add(UserMessage.from("第一条用户消息"));
+        for (int i = 0; i < 8; i++) {
+            messages.add(AiMessage.from(filler(2000)));
+            messages.add(UserMessage.from(filler(2000)));
+        }
+        assertTrue(sut.estimateTokens(messages) > sut.triggerThreshold(null),
+                "用例前提：整个栈必须超阈值");
+        assertNotSame(messages, sut.compact(messages, null), "超阈值时仍然要压");
     }
 }

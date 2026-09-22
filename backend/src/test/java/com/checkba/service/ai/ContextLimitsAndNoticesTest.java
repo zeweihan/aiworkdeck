@@ -408,6 +408,64 @@ class ContextLimitsAndNoticesTest {
         assertTrue(sink.attachments.contains("folder:100:证据:false"));
     }
 
+    // ---------- K32 ⑦：本轮附件正文的合计总闸 ----------
+
+    @Test
+    @DisplayName("附件正文合计超过总闸时，后面的文件按顺序被截断而不是照单全收")
+    void attachmentBodiesShareOneTotalCharacterBudget() {
+        // 三份各 50000 字符的长文；总闸设 60000，够第一份满额 + 第二份一点点
+        properties.getFiles().setMaxTotalAttachmentChars(60000);
+        String long1 = "甲".repeat(50000);
+        String long2 = "乙".repeat(50000);
+        String long3 = "丙".repeat(50000);
+        when(legalTools.read_document("1")).thenReturn(long1);
+        when(legalTools.read_document("2")).thenReturn(long2);
+        when(legalTools.read_document("3")).thenReturn(long3);
+
+        RecordingSink sink = new RecordingSink();
+        String systemText = systemTextOf(
+                List.of(file("1", "一.docx"), file("2", "二.docx"), file("3", "三.docx")), null, sink);
+
+        // 第一份满额进去
+        assertTrue(systemText.contains("甲".repeat(1000)), "第一份应当完整注入");
+        // 第二份被总闸截断（只剩 10000 额度）
+        assertTrue(sink.hasNotice(ContextTurnSink.TRUNCATED, "2"),
+                "第二份应当因为总闸被截断并报出来，实际 notices=" + sink.notices);
+        // 第三份一个字都进不去，但壳还在、且有专门的 notice
+        assertTrue(sink.hasNotice(ContextTurnSink.BUDGET_EXHAUSTED, "3"),
+                "第三份应当报 budget_exhausted，实际 notices=" + sink.notices);
+        assertTrue(systemText.contains("<file id=\"3\""), "第三份的 <file> 壳要留着，模型才知道它存在");
+        assertFalse(systemText.contains("丙".repeat(100)), "第三份的正文一个字都不该进去");
+
+        // 总量真的被压住了：三份原本 150000 字符，现在 CDATA 里的正文合计不超过总闸。
+        // **只数 CDATA 段**：基底 system prompt 自己就带「甲方/乙方」这类字样，
+        // 在整段 system 上数字符会把提示词的内容算进来（第一版就是这么假红的）。
+        int cdataChars = 0;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<!\\[CDATA\\[(.*?)\\]\\]>", java.util.regex.Pattern.DOTALL)
+                .matcher(systemText);
+        while (m.find()) {
+            cdataChars += m.group(1).length();
+        }
+        assertTrue(cdataChars <= 60000 + 200,
+                "附件正文合计应当不超过总闸（含少量截断标记），实际 " + cdataChars);
+        assertTrue(cdataChars > 55000, "也不该压过头，实际 " + cdataChars);
+    }
+
+    @Test
+    @DisplayName("总闸够用时行为与改造前完全一致（不截断、不报 notice）")
+    void theTotalBudgetIsInvisibleWhenItIsNotReached() {
+        when(legalTools.read_document("1")).thenReturn("短正文一");
+        when(legalTools.read_document("2")).thenReturn("短正文二");
+
+        RecordingSink sink = new RecordingSink();
+        String systemText = systemTextOf(List.of(file("1", "一.docx"), file("2", "二.docx")), null, sink);
+
+        assertTrue(systemText.contains("短正文一"));
+        assertTrue(systemText.contains("短正文二"));
+        assertTrue(sink.notices.isEmpty(), "没触发任何上限时不该有 notice，实际 " + sink.notices);
+    }
+
     @Test
     @DisplayName("不传 sink 的旧调用方一行不用改（NOOP 不抛）")
     void theLegacyOverloadStillWorks() {

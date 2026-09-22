@@ -41,6 +41,33 @@ public class AsyncExecutorConfig {
         return executor;
     }
 
+    /**
+     * 上下文组装的扇出池（dev-board#812 K32 ①）：{@code ContextAssemblerService.assemble}
+     * 把彼此独立的几段（记忆索引 / 项目记忆 / 关键词记忆 / 用户级记忆 / 历史加载）
+     * 并发发出去，再按原顺序拼字符串。
+     *
+     * <p><b>为什么不复用 taskExecutor</b>：assemble 本身就跑在 taskExecutor 的线程上
+     * （编排器的轮次循环）。在同一个池里提交子任务再阻塞等它，是教科书式的池内死锁——
+     * 32 个线程全在 join、子任务全堵在队列里，谁也出不来。而且那个池是 AbortPolicy：
+     * 队列满时提交会抛 RejectedExecutionException，直接把一轮正常对话掀翻。
+     *
+     * <p>所以单独开一个池，并且用 <b>CallerRunsPolicy</b>：池子排满时就在调用线程上
+     * 就地跑掉，退化成今天的串行执行——慢一点，但绝不会死锁、绝不会抛。
+     * 这里的任务全是「发一次 DB 查询等结果」，线程数按 IO 等待给，不按 CPU 核数给。
+     */
+    @Bean("contextExecutor")
+    public ThreadPoolTaskExecutor contextExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(8);
+        executor.setMaxPoolSize(16);
+        executor.setQueueCapacity(64);
+        executor.setThreadNamePrefix("awd-context-");
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
+    }
+
     @Bean("memoryExecutor")
     public ThreadPoolTaskExecutor memoryExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();

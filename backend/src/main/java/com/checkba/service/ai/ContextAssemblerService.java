@@ -127,6 +127,131 @@ public class ContextAssemblerService {
         this.styleProfileResolver = resolver;
     }
 
+    /**
+     * 组装扇出池（dev-board#812 K32 ①）：记忆三段与历史加载彼此独立，各自发出去并行等。
+     *
+     * <p>字段注入 + required=false，与 {@link #memoryDocumentService} 同一口径
+     * （本类是 {@code @RequiredArgsConstructor}，加 final 字段要牵动一批手工 new 的测试）。
+     * <b>为 null 时全部就地串行执行</b>，拼出来的文本与并行版逐字节相同——
+     * 各单元测试与回放评测走的就是这条路。
+     *
+     * <p>池的选型（为什么不是 taskExecutor）见 {@code AsyncExecutorConfig#contextExecutor}：
+     * assemble 自己就跑在 taskExecutor 上，在同一个池里提交再阻塞等 = 池内死锁。
+     */
+    @Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Qualifier("contextExecutor")
+    private java.util.concurrent.Executor contextExecutor;
+
+    /** 供测试直接装配。 */
+    void setContextExecutorForTest(java.util.concurrent.Executor executor) {
+        this.contextExecutor = executor;
+    }
+
+    /**
+     * 基底 system prompt 按语言各缓存一份（dev-board#812 K32 ③，审查 C-13）。
+     *
+     * <p>原来每一轮都 new 一个 {@code ClassPathResource} 读 28926（中）/54095（英）字符的
+     * 文件——打成 jar 之后这是每轮一次 zip entry 解压，而它串在用户等首 token 的路上。
+     * 内容在一个进程的生命周期内不会变（资源打在包里），所以读一次就够。
+     *
+     * <p>{@code computeIfAbsent} 的取值函数<b>不缓存失败</b>：读不出来时返回兜底文案但
+     * 不写进 map（下一轮再试一次），免得一次偶发的 IO 故障把整个进程的 prompt 钉死成
+     * 「You are a helpful AI Assistant.」。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Boolean, String> BASE_PROMPT_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 兜底文案：资源缺失或读失败时用它，且<b>不</b>进缓存。 */
+    private static final String FALLBACK_BASE_PROMPT = "You are a helpful AI Assistant.";
+
+    private static String loadBasePrompt(boolean english) {
+        String cached = BASE_PROMPT_CACHE.get(english);
+        if (cached != null) return cached;
+        String loaded = readBasePromptResource(english);
+        if (loaded != null) {
+            BASE_PROMPT_CACHE.put(english, loaded);
+            return loaded;
+        }
+        return FALLBACK_BASE_PROMPT;
+    }
+
+    /**
+     * 把一段独立的读取提交到 {@link #contextExecutor}，返回一个「到注入点再等」的取值器。
+     *
+     * <p>三条契约，缺一不可：
+     * <ol>
+     *   <li><b>ThreadLocal 要显式重放</b>。池线程继承的是创建者而不是提交者，
+     *       {@link ProjectContextHolder}（{@code ToolFileGuard} 的项目归属）与
+     *       {@link PlatformAiUserScope}（「这次调用花谁的额度」）都不会自己跟过去。
+     *       今天这几个任务全是纯 DB 读，但把它们裸着提交等于给后人埋一颗雷——
+     *       哪天有人往 {@code contextIndexes} 里加一条走 {@code ToolFileGuard} 的路径，
+     *       它会 fail closed 返回一句 Error 而不是抛异常，静默注进上下文。
+     *       任务跑完必须 {@code clear}：池是复用的，留着值下一轮可能拿到<b>上一个项目</b>的 id。</li>
+     *   <li><b>异常语义不变</b>。串行版里这几段的异常是直接往外抛的，
+     *       {@code join} 会包一层 {@code CompletionException}——这里拆掉包装把原异常原样抛回，
+     *       否则上层按异常类型分支的代码会全部落空。</li>
+     *   <li><b>池没注入就地执行</b>（返回一个直接调用的 Supplier，连 future 都不建）。
+     *       各单元测试、回放评测与手工 new 出来的实例走这条，行为与并行版逐字节一致。</li>
+     * </ol>
+     *
+     * @param task 为 null 时返回 null（调用点本来就不该执行这一段）
+     */
+    private <T> java.util.function.Supplier<T> fanOut(java.util.function.Supplier<T> task,
+                                                      String projectId, String conversationId, Long userId) {
+        if (task == null) return null;
+        java.util.concurrent.Executor pool = this.contextExecutor;
+        if (pool == null) {
+            // 串行退化：到注入点再跑，顺序与改造前完全一致
+            return task;
+        }
+        Long platformUser = PlatformAiUserScope.current();
+        java.util.concurrent.CompletableFuture<T> future;
+        try {
+            future = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try {
+                    ProjectContextHolder.setProjectId(projectId);
+                    ProjectContextHolder.setConversationId(conversationId);
+                    if (userId != null) ProjectContextHolder.setUserId(userId);
+                    return PlatformAiUserScope.call(platformUser, task);
+                } finally {
+                    ProjectContextHolder.clear();
+                }
+            }, pool);
+        } catch (Exception e) {
+            // 池拒收（理论上不会——CallerRunsPolicy）：就地退化，绝不把一轮对话搞崩
+            log.warn("Context fan-out could not be scheduled, running inline: {}", e.getMessage());
+            return task;
+        }
+        return () -> {
+            try {
+                return future.join();
+            } catch (java.util.concurrent.CompletionException ce) {
+                Throwable cause = ce.getCause() == null ? ce : ce.getCause();
+                if (cause instanceof RuntimeException re) throw re;
+                if (cause instanceof Error err) throw err;
+                throw new IllegalStateException(cause);
+            }
+        };
+    }
+
+    /** 读不到返回 null（调用方据此决定不缓存）。 */
+    private static String readBasePromptResource(boolean english) {
+        try {
+            org.springframework.core.io.ClassPathResource resource = new org.springframework.core.io.ClassPathResource(
+                    english ? "prompts/system_prompt.en.md" : "prompts/system_prompt.md");
+            if (english && !resource.exists()) {
+                // 英文资源缺失时回退中文版：协议面（标签/停机条件/工具约定）不能丢
+                resource = new org.springframework.core.io.ClassPathResource("prompts/system_prompt.md");
+            }
+            if (!resource.exists()) return null;
+            return org.springframework.util.StreamUtils.copyToString(
+                    resource.getInputStream(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.error("Failed to load system prompt for assembly", e);
+            return null;
+        }
+    }
+
     // 应用语言（EN 版 PR5）：en-US 时选英文 system prompt 与各硬编码段的英文文本；
     // zh-CN 路径的代码与文本一字不动（中文版行为保持逐字节一致是硬约束）。
     private final com.checkba.service.AppLanguageService appLanguageService;
@@ -217,28 +342,55 @@ public class ContextAssemblerService {
         // 应用语言：本次组装全程按它二选一（协议面 zh/en 完全一致，只有措辞与 Language 行不同）
         final boolean english = appLanguageService.isEnglish();
 
+        // 本轮的 projectId 数值形态。**必须在扇出之前解析**：下面几个后台任务都按它查库。
+        // 纯本地解析、无副作用，提前到这里不改变任何行为。
+        Long projectIdLong = null;
+        try {
+            projectIdLong = projectId != null ? Long.parseLong(projectId) : null;
+        } catch (NumberFormatException e) {
+            // ignore
+        }
+
+        // ==================== 扇出（dev-board#812 K32 ①） ====================
+        // 下面这几段彼此之间没有任何依赖，却全部串在用户等首 token 的时间里：
+        // 记忆索引（可能要向共享记忆服务发 HTTP）、项目记忆、关键词记忆检索、用户级记忆、
+        // 全量历史读取——约五次独立的 DB/网络往返。现在先把它们发出去，
+        // 让它们与紧接着的「逐个附件抽取」（最慢的一段，带 OCR 时是秒级）重叠，
+        // 到各自的注入点再 join。
+        //
+        // **拼接顺序与文本一字不变**：join 的位置就是原来调用的位置，
+        // 变的只是「什么时候开始等」。护栏见 ContextAssemblerServiceTest 的
+        // parallelAssemblyProducesByteIdenticalOutput。
+        final Long projectIdForTasks = projectIdLong;
+        final int memoryIndexChars = (int) Math.min(16_000,
+                Math.max(0, contextProperties.getMemoryReserve() * contextProperties.getCharsPerToken()));
+        java.util.function.Supplier<String> memIndexTask =
+                (memoryDocumentService != null && userId != null)
+                        ? () -> memoryDocumentService.contextIndexes(userId, projectIdForTasks, memoryIndexChars)
+                        : null;
+        java.util.function.Supplier<Optional<ProjectMemory>> projectMemoryTask =
+                projectIdForTasks != null ? () -> memoryManager.getProjectMemory(projectIdForTasks) : null;
+        java.util.function.Supplier<List<MemoryEntry>> relevantMemoryTask =
+                projectIdForTasks != null ? () -> memoryManager.retrieveMemories(projectIdForTasks, userPrompt, null, 5) : null;
+        java.util.function.Supplier<List<MemoryEntry>> userMemoryTask =
+                userId != null ? () -> memoryManager.retrieveUserMemories(userId, 5) : null;
+
+        java.util.function.Supplier<String> memIndexFuture = fanOut(memIndexTask, projectId, conversationId, userId);
+        java.util.function.Supplier<Optional<ProjectMemory>> projectMemoryFuture =
+                fanOut(projectMemoryTask, projectId, conversationId, userId);
+        java.util.function.Supplier<List<MemoryEntry>> relevantMemoryFuture =
+                fanOut(relevantMemoryTask, projectId, conversationId, userId);
+        java.util.function.Supplier<List<MemoryEntry>> userMemoryFuture =
+                fanOut(userMemoryTask, projectId, conversationId, userId);
+        java.util.function.Supplier<List<com.checkba.repository.ProjectAiMessageRepository.HistoryLine>> historyFuture =
+                fanOut(() -> messageService.listHistoryForAssembly(conversationId), projectId, conversationId, userId);
+
         // 1. Build Dynamic System Prompt
         StringBuilder systemText = new StringBuilder();
 
-        // Load Base Prompt
-        try {
-            org.springframework.core.io.ClassPathResource resource = new org.springframework.core.io.ClassPathResource(
-                    english ? "prompts/system_prompt.en.md" : "prompts/system_prompt.md");
-            if (english && !resource.exists()) {
-                // 英文资源缺失时回退中文版：协议面（标签/停机条件/工具约定）不能丢
-                resource = new org.springframework.core.io.ClassPathResource("prompts/system_prompt.md");
-            }
-            if (resource.exists()) {
-                String basePrompt = org.springframework.util.StreamUtils.copyToString(
-                        resource.getInputStream(), java.nio.charset.StandardCharsets.UTF_8);
-                systemText.append(spliceToolGuidance(basePrompt, conversationId, english));
-            } else {
-                systemText.append("You are a helpful AI Assistant.");
-            }
-        } catch (Exception e) {
-            log.error("Failed to load system prompt for assembly", e);
-            systemText.append("You are a helpful AI Assistant.");
-        }
+        // Load Base Prompt（按语言各缓存一份，见 loadBasePrompt——原来是每轮一次 classpath 读盘；
+        // 缓存的是基底原文，工具指引片段按会话能力在 spliceToolGuidance 里拼，dev-board#809/#812）
+        systemText.append(spliceToolGuidance(loadBasePrompt(english), conversationId, english));
 
         // Determine current phase based on state
         String currentPhase = determinePhase(planId, taskListId);
@@ -394,6 +546,10 @@ public class ContextAssemblerService {
             int maxFiles = contextProperties.getFiles().getMaxFilesPerContext();
             int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
             int totalFileCount = 0; // Limit files max across all items
+            // 本轮附件正文的**合计**额度（dev-board#812 K32 ⑦）：按 contextItems 的顺序发放。
+            // 单文件闸 × 文件数闸没有总闸，十份长合同 = 50 万字符全部进 system，
+            // 而 system 在压缩的保护区里——一旦它自己超窗，这个会话此后每条消息都必死。
+            int attachmentCharBudget = contextProperties.getFiles().getMaxTotalAttachmentChars();
 
             for (com.checkba.controller.ai.AiAgentController.ContextItem item : contextItems) {
                 log.info("[Context] Processing item: id={}, name={}, isDir={}, fileType={}",
@@ -420,6 +576,10 @@ public class ContextAssemblerService {
                             fileContextLoader.buildFolderContextCounted(item.getId(), projectId, totalFileCount);
                     systemText.append(folder.text());
                     totalFileCount += folder.filesRead();
+                    // 文件夹正文同样计入本轮合计额度（它已有自己的 folderFileMaxChars 逐文件闸，
+                    // 这里只扣账，不二次截断——文件夹的文本是 FileContextLoader 整段拼好的，
+                    // 从中间切一刀会把某份文件的 <file> 标签拦腰截断）
+                    attachmentCharBudget -= folder.text() == null ? 0 : folder.text().length();
                     ledger.attachment(item.getId(), item.getName(), item.getFileType(), "folder", false);
                     if (folder.unreadableCount() > 0) {
                         // 文件夹里的扫描件/图片抽不出正文是常态（批量路径不逐张 OCR），
@@ -464,13 +624,17 @@ public class ContextAssemblerService {
                                 : overPerTurnLimit ? (english ? OCR_FALLBACK_COUNT_EN : OCR_FALLBACK_COUNT_ZH)
                                 : tooLarge[0] ? (english ? OCR_FALLBACK_SIZE_EN : OCR_FALLBACK_SIZE_ZH)
                                 : (english ? OCR_FALLBACK_READ_EN : OCR_FALLBACK_READ_ZH);
-                        boolean ocrReadable = appendOcrFallbackFile(systemText, item, maxCharsPerFile,
+                        // OCR 转写稿同样吃本轮合计额度（一张扫描件能转出几万字）
+                        int ocrCap = Math.min(maxCharsPerFile, Math.max(0, attachmentCharBudget));
+                        int beforeOcr = systemText.length();
+                        boolean ocrReadable = appendOcrFallbackFile(systemText, item, ocrCap,
                                 reason, english, ledger);
                         ledger.attachment(item.getId(), item.getName(), item.getFileType(), "image", false);
                         // 一个附件只说一件事：OCR 也没读出字时「读不到内容」盖过「怎么降级的」——
                         // 两条都发的话，一次贴 6 张图界面上就是 12 行小字，用户反而看不到重点。
                         ledger.notice(ocrReadable ? noticeKind : ContextTurnSink.UNREADABLE,
                                 item.getId(), item.getName(), ocrReadable ? detail : null);
+                        attachmentCharBudget -= systemText.length() - beforeOcr;
                         totalFileCount++;
                     }
                 } else {
@@ -493,12 +657,32 @@ public class ContextAssemblerService {
                         totalFileCount++;
                         continue;
                     }
-                    // Truncate if too long
-                    if (content.length() > maxCharsPerFile) {
-                        content = truncateAtCharBoundary(content, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
-                        ledger.notice(ContextTurnSink.TRUNCATED, item.getId(), item.getName(),
-                                String.valueOf(maxCharsPerFile));
+                    // 两道闸：单文件上限，以及本轮正文的合计上限（先到先得，见 attachmentCharBudget）。
+                    // 合计额度已经用完时一个字都不注入，但**仍然留下 <file> 壳**——
+                    // 模型据此知道这份材料存在、可以主动 read_document 去读，
+                    // 比整条消失好（消失的那份在界面上标签还在，模型却从不提它）。
+                    int effectiveCap = Math.min(maxCharsPerFile, Math.max(0, attachmentCharBudget));
+                    if (effectiveCap <= 0) {
+                        systemText.append("<file id=\"").append(item.getId())
+                                  .append("\" name=\"").append(attrSafe(item.getName())).append("\">")
+                                  .append(english
+                                          ? "Body omitted: this turn's combined attachment budget is used up. "
+                                            + "Call read_document with this id if you need its content."
+                                          : "正文未注入：本轮材料正文的合计字数已用完。"
+                                            + "需要它的内容时用这个 id 调 read_document。")
+                                  .append("</file>\n");
+                        ledger.attachment(item.getId(), item.getName(), item.getFileType(), "file", false);
+                        ledger.notice(ContextTurnSink.BUDGET_EXHAUSTED, item.getId(), item.getName(),
+                                String.valueOf(contextProperties.getFiles().getMaxTotalAttachmentChars()));
+                        totalFileCount++;
+                        continue;
                     }
+                    if (content.length() > effectiveCap) {
+                        content = truncateAtCharBoundary(content, effectiveCap) + "\n... [TRUNCATED - File too long]";
+                        ledger.notice(ContextTurnSink.TRUNCATED, item.getId(), item.getName(),
+                                String.valueOf(effectiveCap));
+                    }
+                    attachmentCharBudget -= content.length();
                     systemText.append("<file id=\"").append(item.getId())
                               .append("\" name=\"").append(attrSafe(item.getName())).append("\"><![CDATA[\n");
                     systemText.append(fenceSafe(content));
@@ -739,17 +923,9 @@ public class ContextAssemblerService {
         // 留在稳定前缀里等于「有记忆的项目永远命中不了缓存」——正是本次要治的病。
         // 位置仍是 system 末尾，模型读到的相对顺序没变。
         timings.mark("activeDoc");
-        Long projectIdLong = null;
-        try {
-            projectIdLong = projectId != null ? Long.parseLong(projectId) : null;
-        } catch (NumberFormatException e) {
-            // ignore
-        }
 
-        if (memoryDocumentService != null && userId != null) {
-            int memoryIndexChars = (int) Math.min(16_000,
-                    Math.max(0, contextProperties.getMemoryReserve() * contextProperties.getCharsPerToken()));
-            String indexes = memoryDocumentService.contextIndexes(userId, projectIdLong, memoryIndexChars);
+        if (memIndexFuture != null) {
+            String indexes = memIndexFuture.get();
             if (indexes != null && !indexes.isBlank()) {
                 volatileText.append(english ? "\n\n# Markdown Memory Indexes\n" : "\n\n# Markdown 记忆索引\n");
                 volatileText.append(english
@@ -761,17 +937,21 @@ public class ContextAssemblerService {
         
         timings.mark("memIndex");
 
-        if (projectIdLong != null) {
-            Optional<ProjectMemory> projectMemoryOpt = memoryManager.getProjectMemory(projectIdLong);
+        // 本轮的项目记忆只读一次（dev-board#812 K32 ③，审查 C-13）：下面压缩那一段
+        // 原来又调了一次 getProjectMemory，同一行数据一轮读两遍。
+        ProjectMemory projectMemory = null;
+        if (projectMemoryFuture != null) {
+            Optional<ProjectMemory> projectMemoryOpt = projectMemoryFuture.get();
             if (projectMemoryOpt.isPresent()) {
                 ProjectMemory pm = projectMemoryOpt.get();
+                projectMemory = pm;
                 volatileText.append(english ? "\n\n# Project Memory (long-term)\n" : "\n\n# 项目记忆（长期记忆）\n");
                 volatileText.append(pm.toCoreContext());
             }
-            
+        }
+        if (relevantMemoryFuture != null) {
             // 注入相关的结构化记忆
-            List<MemoryEntry> relevantMemories = memoryManager.retrieveMemories(
-                    projectIdLong, userPrompt, null, 5);
+            List<MemoryEntry> relevantMemories = relevantMemoryFuture.get();
             if (!relevantMemories.isEmpty()) {
                 volatileText.append(english ? "\n\n# Relevant Memories (evidence ledger)\n" : "\n\n# 相关记忆（证据账本）\n");
                 volatileText.append(memoryManager.formatAsEvidenceLedger(relevantMemories));
@@ -779,8 +959,8 @@ public class ContextAssemblerService {
         }
 
         // 3. 注入用户级记忆（跨项目：偏好、行文习惯、常用表达）
-        if (userId != null) {
-            List<MemoryEntry> userMemories = memoryManager.retrieveUserMemories(userId, 5);
+        if (userMemoryFuture != null) {
+            List<MemoryEntry> userMemories = userMemoryFuture.get();
             if (!userMemories.isEmpty()) {
                 volatileText.append(english
                         ? "\n\n# User Preferences and Habits (cross-project memory)\n"
@@ -846,8 +1026,9 @@ public class ContextAssemblerService {
         // 只读 role + content 两列、不查附件（dev-board#811 K31，审查 C-12）：这一段就卡在
         // 用户等待首 token 的关键路径上，而 displayContent / conversationTitle / 附件
         // 一个都不参与组装。**条数一条不少**——压缩器读的是整条历史，砍行会静默改掉摘要。
+        // 查询本身在 assemble 开头就已经发出去了（K32 ①），这里只是等它（多半已经好了）。
         List<com.checkba.repository.ProjectAiMessageRepository.HistoryLine> historyEntities =
-                messageService.listHistoryForAssembly(conversationId);
+                historyFuture.get();
         timings.mark("historyLoad", historyEntities.size());
 
         // 转换为 ChatMessage 列表
@@ -882,8 +1063,8 @@ public class ContextAssemblerService {
                     .orElse(null);
 
             // 获取项目记忆
-            ProjectMemory pm = projectIdLong != null ?
-                    memoryManager.getProjectMemory(projectIdLong).orElse(null) : null;
+            // 项目记忆：复用上面注入时已经读到的那一份，不再查第二遍（审查 C-13）
+            ProjectMemory pm = projectMemory;
 
             // 执行压缩
             historyMessages = contextCompressor.compress(

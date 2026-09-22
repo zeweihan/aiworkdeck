@@ -212,6 +212,8 @@ export default {
   contextNoticeImageLimit: '{name} was processed as recognized text (OCR): at most {max} images are sent directly per turn.',
   contextNoticeImageTooLarge: '{name} was processed as recognized text (OCR): the image is over the size limit.',
   contextNoticeUnreadable: '{name} has no extractable text, so the AI cannot read its content.',
+  contextNoticeBudgetExhausted: "{name}'s body did not make it into this turn: attachment bodies are capped at {max} characters in total (the AI can still open it on demand).",
+  contextNoticeOverflow: "This turn exceeds the model's context window and cannot be compacted any further. Remove some attachments, or start a new conversation, and try again.",
   contextNoticeGeneric: '{name} was downgraded this turn.',
   // Audio attachments (dev-board#814): the model reads the transcript, not the audio.
   // Without one it only gets a file name — say so before sending, not after the answer.
