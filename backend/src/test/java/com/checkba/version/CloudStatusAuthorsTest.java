@@ -69,6 +69,9 @@ class CloudStatusAuthorsTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         repoSvc.init(PROJECT, "韩泽伟", MY_LIBRARY_ACCOUNT + "@collab.aiworkdeck.local");
+        try (var r = repoSvc.open(PROJECT)) {
+            BareHub.quiesceAutoGc(r); // 本地仓库后面要做多次 fetch，见 BareHub 类注释
+        }
 
         CloudConnection conn = new CloudConnection();
         conn.setId(3L);
