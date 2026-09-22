@@ -183,6 +183,42 @@ try {
   assert.equal(await page.evaluate(() => window.chatState.isStreaming), false)
   assert.equal(await page.evaluate(() => window.cancelCalls || 0), cancelsBefore + 1, 'menuStop really posts the cancel')
 
+  // 回退按钮的可用性（dev-board#779 K1 / 审查 D-02）。回退要么按数据库主键定位（历史回灌的
+  // 气泡有），要么按 clientRequestId（本次会话内发出的气泡有）；两个都没有的气泡点下去注定
+  // 失败——改造前那正是「刚发现自己问错了」的时刻，按钮看着能点、点了只弹一句服务器内部错误。
+  await page.evaluate(() => window.loadFixture('single'))
+  const rollbackBtn = '.message-row.user .rollback-btn'
+  assert.ok(await visible(rollbackBtn), '历史回灌的用户气泡有主键，按钮可用')
+  assert.equal(await page.$(`${rollbackBtn}.is-disabled`), null, '有主键就不该置灰')
+  // 确认框的文案。这里走 setup 状态而不是真点按钮：本夹具是纯 vite + @vitejs/plugin-vue，
+  // 没有 uni 插件，模板里的 @tap 不会被编译成 click，真点没有反应（真点这条路由 K1 的
+  // 后端联调 e2e 覆盖）。这里要钉住的是「弹窗说了什么」。
+  await page.evaluate(() => {
+    const s = window.chatState
+    s.openRollbackDialog(s.bubbles.find(b => b.role === 'USER'), 0)
+  })
+  await wait(() => document.querySelector('.awd-dialog'))
+  const rollbackCopy = await page.$eval('.awd-dialog', el => el.innerText)
+  // 回退不再销毁历史：先存分支再截断，所以不许再吓唬用户说「无法恢复」（dev-board#779 K1）
+  assert.ok(!rollbackCopy.includes('无法恢复'), '回退确认框不该再说无法恢复')
+  assert.ok(rollbackCopy.includes('存为分支') && rollbackCopy.includes('回退前存档'), '要说清先存档再回退')
+  await page.screenshot({ path: '/tmp/awd-chat-779-rollback-dialog.png' })
+  await page.evaluate(() => window.chatState.cancelRollback())
+  await wait(() => !document.querySelector('.awd-dialog'))
+  await page.evaluate(() => {
+    const user = window.chatState.bubbles.find(b => b.role === 'USER')
+    user.dbMessageId = null
+    user.id = 'msg-1790065781790-1'
+    user.clientRequestId = ''
+  })
+  await wait(() => document.querySelector('.message-row.user .rollback-btn.is-disabled'))
+  await page.evaluate(() => {
+    const s = window.chatState
+    s.openRollbackDialog(s.bubbles.find(b => b.role === 'USER'), 0)
+  })
+  assert.equal(await page.$('.awd-dialog'), null, '拿不到定位键时打不开确认框')
+  assert.ok(await page.$eval(rollbackBtn, el => (el.getAttribute('title') || '').length > 0),
+    '置灰要说明原因，不能只是点不动')
   await page.evaluate(() => window.loadFixture('single'))
   await page.screenshot({ path: '/tmp/awd-chat-646-light.png' })
   await page.focus('.thinking-card .header')

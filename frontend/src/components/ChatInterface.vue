@@ -143,6 +143,7 @@
         <view class="awd-dialog-body">
           <view class="rollback-warning-content">
             <text class="warning-text">{{ $t('chat.rollbackWarning') }}</text>
+            <text class="warning-text rollback-archive-note">{{ $t('chat.rollbackArchiveNote') }}</text>
             <view class="doc-tip-box">
               <svg class="doc-tip-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
@@ -276,7 +277,12 @@
             ></div>
             <div class="bubble-footer">
               <!-- Rollback Button -->
-              <view v-if="!isStreaming" class="rollback-btn" @tap.stop="openRollbackDialog(msg, index)" :title="$t('chat.rollbackBtnTitle')">
+              <!-- 拿不到定位键（消息还没落库、也没有客户端幂等键）时置灰：点下去注定失败，
+                   而那恰恰是最想用它的时刻——刚发现自己问错了（审查 D-02） -->
+              <view v-if="!isStreaming" class="rollback-btn"
+                    :class="{ 'is-disabled': !rollbackLocator(msg) }"
+                    @tap.stop="openRollbackDialog(msg, index)"
+                    :title="rollbackLocator(msg) ? $t('chat.rollbackBtnTitle') : $t('chat.rollbackUnavailable')">
                  <div class="rollback-icon-svg">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9 14 4 9l5-5"></path>
@@ -1500,16 +1506,36 @@ export default {
     }
 
     // --- Rollback Functions ---
+    /**
+     * 「回退到这条消息」的定位键，拿不到就返回 null（按钮据此置灰）。
+     *
+     * 两种气泡两种键：从 GET /api/ai/history 回灌的有 dbMessageId（project_ai_message 主键），
+     * 本次会话内发出的只有 clientRequestId——主键要等编排器在 turnExecutor 线程上落库才生成，
+     * 而 POST /api/agent/chat 的回执早就发走了。气泡自己的 id 是前端自造的 msg-<毫秒>-<序号>，
+     * 任何时候都不许拿它当定位键（那正是 D-02：请求在进 handler 之前就被 Jackson 拒掉）。
+     */
+    const rollbackLocator = (msg) => {
+      if (!msg) return null
+      const messageId = msg.dbMessageId == null ? null : String(msg.dbMessageId)
+      const clientRequestId = msg.clientRequestId || null
+      return (messageId || clientRequestId) ? { messageId, clientRequestId } : null
+    }
+
     const openRollbackDialog = (msg, index) => {
       if (isStreaming.value) {
         uni.showToast({ title: t('chat.waitCurrentChat'), icon: 'none' })
+        return
+      }
+      const locator = rollbackLocator(msg)
+      if (!locator) {
+        uni.showToast({ title: t('chat.rollbackUnavailable'), icon: 'none' })
         return
       }
       rollbackTargetIndex.value = index
       // 预览与「回填到输入框重发」都用用户看到的那份（契约 D）：把回喂给模型的
       // 长文案塞回输入框，用户没法在上面继续编辑，只会一头雾水
       rollbackTargetContent.value = msg.displayContent || msg.content || ''
-      rollbackTargetId.value = msg.id
+      rollbackTargetId.value = locator
       showRollbackDialog.value = true
     }
 
@@ -1522,31 +1548,39 @@ export default {
 
     const confirmRollback = async () => {
       const targetIndex = rollbackTargetIndex.value
-      const targetId = rollbackTargetId.value
+      const locator = rollbackTargetId.value
       const content = rollbackTargetContent.value
 
       // 关闭对话框
       showRollbackDialog.value = false
 
       try {
-        // 1. 调用后端API删除数据库中的消息
-        if (targetId && currentConversationId.value) {
-          await rollbackConversation(currentConversationId.value, targetId)
+        // 1. 后端：先把原路径整条存档（不可丢），再删掉目标及其之后的记录。
+        //    两步在服务端同一个事务里——存档没成就不截断。
+        let archived = null
+        if (locator && currentConversationId.value) {
+          const res = await rollbackConversation(currentConversationId.value, locator)
+          archived = res && (res.archivedConversationId || (res.data && res.data.archivedConversationId))
         }
 
-        // 2. 在前端删除bubbles
+        // 2. 在前端删除bubbles（目标一起删——与后端同语义，用户接着在输入框里改了重发）
         const rolledBackContent = rollbackToMessage(targetIndex)
 
-        // 3. 将回退的消息内容放入输入框
+        // 3. 将回退的消息内容放入输入框。
+        //    必须等重渲染落地：模板里有两个 ref="richInput" 的 contenteditable
+        //    （空状态的欢迎输入框、有对话时的底部输入框）。回退到第一条时 bubbles 变空、
+        //    两者互换，紧接着同步写 innerHTML 只会写进马上被销毁的那一个——
+        //    表现是「回退了，但输入框是空的，原文没了」。
+        await nextTick()
         if (richInput.value && content) {
           richInput.value.innerHTML = escapeHtml(content)
           inputPrompt.value = content
         }
 
-        // 4. 通知父组件刷新历史
+        // 4. 通知父组件刷新历史（存档会话要在「近期对话」里立刻看得见）
         emit('refresh-history')
 
-        uni.showToast({ title: t('chat.rollbackDone'), icon: 'success' })
+        uni.showToast({ title: archived ? t('chat.rollbackDoneArchived') : t('chat.rollbackDone'), icon: 'none' })
       } catch (err) {
         console.error('[ChatInterface] Rollback failed:', err)
         uni.showToast({ title: t('chat.rollbackFailed', { error: err.message || t('chat.unknownError') }), icon: 'none' })
@@ -1924,6 +1958,10 @@ export default {
           if (role === 'USER') {
               bubbles.value.push({
                   id: msg.id,
+                  // 回退定位键：回灌的气泡有真正的主键，用它；clientRequestId 是本字段上线后
+                  // 落库的行才有（存量行为 null），两者任给其一就够（见 rollbackLocator）
+                  dbMessageId: msg.id,
+                  clientRequestId: msg.clientRequestId || null,
                   role: 'USER',
                   content: msg.content,
                   // 契约 D：后端 GET /api/ai/history 带 displayContent（可空）。
@@ -2741,6 +2779,7 @@ export default {
        // Rollback
        showRollbackDialog,
        rollbackTargetContent,
+       rollbackLocator,
        openRollbackDialog,
        cancelRollback,
        confirmRollback,
@@ -4919,6 +4958,16 @@ export default {
   opacity: 1;
 }
 
+/* 定位不到这条消息时置灰：仍然显示（要让用户看到有这么个动作），但点了什么都不会发生，
+   title 里写清原因——一个点了注定失败的按钮比没有按钮更糟 */
+.rollback-btn.is-disabled {
+  cursor: not-allowed;
+}
+
+.user-bubble:hover .rollback-btn.is-disabled {
+  opacity: 0.4;
+}
+
 .rollback-btn:hover {
   /* background-color: var(--awd-mint); Mint Green */
   /* border-color: var(--awd-accent-text); */
@@ -5093,6 +5142,13 @@ export default {
   font-weight: 500;
   display: block;
   margin-top: 4px;
+}
+
+/* 存档说明是次要信息：与上一句同色系但不抢，避免两行一样重 */
+.rollback-archive-note {
+  color: var(--awd-text-2);
+  font-weight: 400;
+  font-size: 13px;
 }
 
 .highlight-text {

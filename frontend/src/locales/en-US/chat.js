@@ -33,14 +33,17 @@ export default {
   uploadFailed: 'Upload failed',
   // ---- Rollback ----
   rollbackConfirmTitle: 'Confirm Rollback',
-  rollbackWarning: 'This will delete this message and every later message in the conversation. It cannot be undone.',
+  rollbackWarning: 'The current conversation will be saved as a branch first, then rolled back to this message for you to edit and resend.',
+  rollbackArchiveNote: 'The archive appears under Recent chats as the original title plus " · before rollback", and stays available.',
   rollbackDocTip: 'If the assistant modified documents (Word/PPT) in later turns, file contents will not be rolled back automatically.',
   rollbackDocTipLink: 'AI document edits are recorded as tracked changes; use Reject Changes in the editor to restore the original text.',
   rollbackPreviewLabel: 'Will roll back to and edit:',
   rollbackBtn: 'Roll Back',
   rollbackBtnTitle: 'Roll back to this message (edit and resend)',
+  rollbackUnavailable: 'This message has not finished saving yet, so it cannot be rolled back. Try again in a moment or refresh.',
   waitCurrentChat: 'Please wait for the current reply to finish',
   rollbackDone: 'Rolled back',
+  rollbackDoneArchived: 'Rolled back; the original conversation was saved as a branch',
   rollbackFailed: 'Rollback failed: {error}',
   unknownError: 'Unknown error',
   // ---- PPT generation ----

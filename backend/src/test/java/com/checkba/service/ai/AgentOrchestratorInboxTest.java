@@ -44,6 +44,7 @@ class AgentOrchestratorInboxTest {
     private ChatModelFactory modelFactory;
     private ToolRegistry tools;
     private ContextAssemblerService assembler;
+    private ProjectAiMessageService messageService;
     private XmlToolCallParser xml;
 
     @BeforeEach
@@ -68,7 +69,7 @@ class AgentOrchestratorInboxTest {
         inbox = new AgentInboxService(repo, sse, runState);
 
         modelFactory = mock(ChatModelFactory.class);
-        ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
+        messageService = mock(ProjectAiMessageService.class);
         // dev-board#729 ⑤：编排器改用 countByConversationId 判首轮；mock 默认回 0 会误判首轮、起异步标题线程
         // 与下一次 when(...) 打架（CI 上 Mockito WrongTypeOfReturnValue）。计数跟随 list 桩，保持各用例原语义。
         when(messageService.countByConversationId(any())).thenAnswer(inv -> (long) messageService.listByConversationId(inv.getArgument(0)).size());
@@ -148,6 +149,11 @@ class AgentOrchestratorInboxTest {
         assertEquals(1, next.stream().filter(m -> text(m).contains("change direction")).count());
         assertTrue(next.stream().filter(m -> m instanceof ToolExecutionResultMessage)
                 .anyMatch(m -> text(m).contains("superseded")), "skipped native write must have a paired result");
+        // 两条 USER 行都要带着 clientRequestId 落库：它是「回退到这条消息」唯一在
+        // 消息落库前就存在的定位键（dev-board#779 K1）。插话进来的那条同样要有——
+        // 运行中发出的消息最可能被用户回过头来改。
+        verify(messageService).saveMessage(any(), any(), eq(CONV), eq("USER"), eq("original"), any(), eq("initial"));
+        verify(messageService).saveMessage(any(), any(), eq(CONV), eq("USER"), eq("change direction"), any(), eq("steer-key"));
     }
 
     @Test

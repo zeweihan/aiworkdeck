@@ -95,6 +95,19 @@ public class ProjectAiMessageService {
      */
     public void saveMessage(String projectIdStr, Long userId, String conversationId, String role,
                             String content, String displayContent) {
+        saveMessage(projectIdStr, userId, conversationId, role, content, displayContent, null);
+    }
+
+    /**
+     * 带回退定位键的保存（dev-board#779 K1）。
+     *
+     * <p>{@code clientRequestId} 是客户端为这次提交生成的幂等键，USER 行必须带上——
+     * 它是「回退到这条消息」唯一在消息落库前就存在的定位键（原委见
+     * {@link ProjectAiMessage#getClientRequestId()}）。ASSISTANT 行不需要，传 null。
+     * 空白一律落 null，与 displayContent 同口径。
+     */
+    public void saveMessage(String projectIdStr, Long userId, String conversationId, String role,
+                            String content, String displayContent, String clientRequestId) {
         if (projectIdStr == null || role == null) {
             return;
         }
@@ -110,6 +123,7 @@ public class ProjectAiMessageService {
         msg.setRole(role.toUpperCase());
         msg.setContent(content);
         msg.setDisplayContent(displayContent == null || displayContent.isBlank() ? null : displayContent);
+        msg.setClientRequestId(clientRequestId == null || clientRequestId.isBlank() ? null : clientRequestId.trim());
         msg.setConversationId(conversationId);
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);
@@ -312,11 +326,33 @@ public class ProjectAiMessageService {
      */
     @org.springframework.transaction.annotation.Transactional
     public String forkConversation(String conversationId, Long userId) {
+        return forkConversation(conversationId, userId, LangText.of("（分支）", " (branch)"), null, null);
+    }
+
+    /**
+     * fork 的带出身信息版本（dev-board#779 K1，K18 复用）。
+     *
+     * <p>{@code parentConversationId} 与 {@code branchFromMessageId} 写在<b>首条复制行</b>上——
+     * 与 conversationTitle / sourceChannel 同款，因为本仓没有 ai_conversation 表，
+     * 会话级元数据一律挂首行。本批 UI 不展示这两个字段，先落库是「数据模型先于 UI」：
+     * 没有它们，「这条存档是从哪儿岔出来的」将来只能靠标题里的字符串猜。
+     *
+     * @param titleSuffix        追加在原标题后的后缀（如「（分支）」「· 回退前存档」）
+     * @param parentConversation 父会话 id；null = 不记出身
+     * @param branchFromMessage  分叉点消息主键；null = 整条复制、没有特定分叉点
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public String forkConversation(String conversationId, Long userId, String titleSuffix,
+                                   String parentConversation, Long branchFromMessage) {
         List<ProjectAiMessage> source = repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
         if (source.isEmpty()) {
             throw new IllegalArgumentException(LangText.of("会话不存在或为空", "Conversation not found or empty"));
         }
-        String newConversationId = "conv-" + System.currentTimeMillis();
+        // 随机尾巴防撞号：原来是纯 conv-<毫秒>，同一毫秒里 fork 两次会落进同一条会话，
+        // 后一份存档把前一份吞掉——而存档恰恰是为了不丢数据（回退连点两下就能触发）。
+        // 形状仍是 conv-…，与签发端点的 conv-<毫秒>-<随机> 同构，没有任何解析方依赖格式。
+        String newConversationId = "conv-" + System.currentTimeMillis() + "-"
+                + java.util.UUID.randomUUID().toString().substring(0, 8);
         String baseTitle = null;
         for (ProjectAiMessage m : source) {
             if (baseTitle == null && m.getConversationTitle() != null && !m.getConversationTitle().isBlank()) {
@@ -324,9 +360,19 @@ public class ProjectAiMessageService {
             }
         }
         if (baseTitle == null || baseTitle.isBlank()) {
-            baseTitle = cleanTitle(source.get(source.size() - 1).getContent());
+            // 还没来得及起标题时（LLM 起标题是异步的，回退往往发生在它落库之前）用
+            // 用户第一条消息 —— 与 listConversations 的预览回退同口径。原来取的是
+            // 最后一条消息，那通常是助手的整段回答：剥完标签仍是几十上百字，
+            // 在「近期对话」里被截断后连后缀都看不见，用户根本认不出哪条是存档。
+            baseTitle = source.stream()
+                    .filter(m -> "USER".equalsIgnoreCase(m.getRole()))
+                    .map(ProjectAiMessage::getContent)
+                    .filter(c -> c != null && !c.isBlank())
+                    .findFirst()
+                    .map(this::cleanTitle)
+                    .orElseGet(() -> cleanTitle(source.get(source.size() - 1).getContent()));
         }
-        String suffix = LangText.of("（分支）", " (branch)");
+        String suffix = titleSuffix == null ? "" : titleSuffix;
         String forkTitle = baseTitle + suffix;
         if (forkTitle.length() > 100) {
             forkTitle = baseTitle.substring(0, Math.max(0, 100 - suffix.length())) + suffix;
@@ -339,10 +385,13 @@ public class ProjectAiMessageService {
             copy.setRole(m.getRole());
             copy.setContent(m.getContent());
             copy.setDisplayContent(m.getDisplayContent());
+            copy.setClientRequestId(m.getClientRequestId());
             copy.setConversationId(newConversationId);
             copy.setCreatedAt(m.getCreatedAt());
             if (first) {
                 copy.setConversationTitle(forkTitle);
+                copy.setParentConversationId(parentConversation);
+                copy.setBranchFromMessageId(branchFromMessage);
                 first = false;
             }
             repository.save(copy);
@@ -498,16 +547,77 @@ public class ProjectAiMessageService {
         return repository.findById(id);
     }
 
+    /**
+     * 把「回退到这条消息」的两种定位键解析成主键（dev-board#779 K1）。
+     *
+     * <p>为什么要两种：会话内<b>刚发出</b>的那条消息，前端手上只有自造的气泡 id
+     * （{@code msg-<毫秒>-<序号>}）——真正的主键要等 turnExecutor 线程落库才存在，
+     * POST /api/agent/chat 的回执与 input_applied 都赶在它前面，带不上。所以 live 气泡
+     * 用 clientRequestId（发之前就有）；从 GET /api/ai/history 回灌的气泡有主键，用主键。
+     * 两个都给时以主键为准（精确），主键定位不到再退到 clientRequestId。
+     *
+     * @throws IllegalArgumentException 定位不到时抛可读文案（控制器据此回 400，不是 500）
+     */
+    public Long resolveRollbackTarget(String conversationId, Long messageId, String clientRequestId) {
+        if (messageId != null) {
+            ProjectAiMessage byId = repository.findById(messageId).orElse(null);
+            // 跨会话的 id 一律当「定位不到」处理：不回显它属于谁，免得成了探测别人会话的接口
+            if (byId != null && conversationId != null && conversationId.equals(byId.getConversationId())) {
+                return byId.getId();
+            }
+        }
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            ProjectAiMessage byKey = repository
+                    .findFirstByConversationIdAndClientRequestIdOrderByCreatedAtAscIdAsc(
+                            conversationId, clientRequestId.trim())
+                    .orElse(null);
+            if (byKey != null) return byKey.getId();
+        }
+        throw new IllegalArgumentException(LangText.of(
+                "无法定位这条消息，可能它已被删除或还没保存完成，请刷新后重试",
+                "Could not locate that message: it may already be gone, or not finished saving. Refresh and try again."));
+    }
+
+    /**
+     * 回退（edit-and-resend）：删掉目标消息<b>及其之后</b>的全部消息。
+     *
+     * <p>语义与前端一致——前端把目标正文回填输入框让用户改了重发，目标要是留在库里，
+     * 历史里就会出现「原始提问 + 改过的提问」两条连着的 USER 行：刷新页面那条本以为撤销掉的
+     * 提问会复活，而 ContextAssemblerService 的历史栈直接读库，模型会把旧要求也一起执行。
+     *
+     * <p><b>破坏性，调用方通常应该用 {@link #rollbackWithArchive}</b>——那条会先把原路径整条
+     * 存档再截断。本方法留给「确实只想删」的内部调用与测试。
+     */
     @org.springframework.transaction.annotation.Transactional
     public void truncateHistory(String conversationId, Long messageId) {
         ProjectAiMessage message = repository.findById(messageId)
                 .orElseThrow(() -> new IllegalArgumentException("Message not found: " + messageId));
-        
+
         if (!message.getConversationId().equals(conversationId)) {
             throw new IllegalArgumentException("Message does not belong to conversation: " + conversationId);
         }
 
-        repository.deleteByConversationIdAndCreatedAtAfter(conversationId, message.getCreatedAt());
+        repository.deleteFromMessageOnwards(conversationId, message.getCreatedAt(), message.getId());
+    }
+
+    /**
+     * 回退前先存档（dev-board#779 K1）：整条会话 fork 成一条「…· 回退前存档」的新会话，
+     * 然后才截断。<b>永不静默销毁用户数据</b>——律师常要对同一份合同试两种方案再比较，
+     * 原来那条探索路径一旦删掉就找不回来了。
+     *
+     * <p>两步刻意放在<b>同一个事务、同一个服务方法</b>里，而不是让前端先调 fork 再调回退：
+     * 那样存档成功而截断失败只是多一份存档（无害），但存档失败时前端若照样截断，
+     * 数据就真没了；而且服务端做，任何客户端（Office 插件等）走这个端点都有同样的保护。
+     *
+     * @return 存档会话 id（前端据此告诉用户「原对话已存为分支」）
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public String rollbackWithArchive(String conversationId, Long messageId, String clientRequestId, Long userId) {
+        Long targetId = resolveRollbackTarget(conversationId, messageId, clientRequestId);
+        String archived = forkConversation(conversationId, userId,
+                LangText.of(" · 回退前存档", " · before rollback"), conversationId, targetId);
+        truncateHistory(conversationId, targetId);
+        return archived;
     }
 
     /**

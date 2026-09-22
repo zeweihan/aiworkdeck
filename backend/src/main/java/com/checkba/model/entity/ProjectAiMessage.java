@@ -89,6 +89,41 @@ public class ProjectAiMessage {
     @Column(name = "source_message_id")
     private Long sourceMessageId;
 
+    /**
+     * 客户端为这次提交生成的幂等键（可空 = 该客户端没送，或是本字段上线前的存量行）。
+     *
+     * <p><b>它是「回退到这条消息」的定位键。</b>数据库主键在这里用不了：POST /api/agent/chat
+     * 的回执由 {@code AgentInboxService.receipt} 在控制器线程上拼出，而这一行要等
+     * {@code AgentOrchestrator.handleUserMessageInScope} 在 turnExecutor 线程上跑起来才落库——
+     * 回执序列化的那一刻它还不存在；{@code input_applied} 同理（在 claim 里发，且发起的那条
+     * POST 还显式压掉了它）。clientRequestId 反过来是<b>发之前就有</b>的，前端气泡从出生
+     * 那一刻起就握着它，刷新后经 GET /api/ai/history 原样回来，live 与 replay 两种气泡
+     * 因此共用同一个定位键。
+     *
+     * <p>同一会话内唯一：一个 inbox 条目对应一条 USER 行，而 inbox 本身按
+     * (conversationId, userId, clientRequestId) 做幂等。解析时仍按最早一条取，宁可保守。
+     */
+    @Column(name = "client_request_id", length = 64)
+    private String clientRequestId;
+
+    /**
+     * 这条会话是从哪条会话分叉出来的（可空 = 不是分叉产物）。与 conversationTitle /
+     * sourceChannel 同款：<b>只写在会话首条消息上</b>——本仓没有 ai_conversation 表，
+     * 会话级元数据一律挂首行。
+     *
+     * <p>回退前的自动存档也是一次 fork，所以存档会话同样带这两个字段。本批 UI 不展示，
+     * 先落库是为了「数据模型先于 UI」：K18「从此分叉」要靠它们把分支串成树。
+     */
+    @Column(name = "parent_conversation_id", length = 64)
+    private String parentConversationId;
+
+    /**
+     * 分叉点：父会话里的哪条消息（project_ai_message.id）。回退存档时 = 被回退掉的那条。
+     * 可空 = 整条复制、没有特定分叉点（dev-board#298 的镜像会话 fork 就是这种）。
+     */
+    @Column(name = "branch_from_message_id")
+    private Long branchFromMessageId;
+
     @Column
     private LocalDateTime createdAt;
 
@@ -112,6 +147,12 @@ public class ProjectAiMessage {
     public void setSourceChannel(String sourceChannel) { this.sourceChannel = sourceChannel; }
     public Long getSourceMessageId() { return sourceMessageId; }
     public void setSourceMessageId(Long sourceMessageId) { this.sourceMessageId = sourceMessageId; }
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+    public String getParentConversationId() { return parentConversationId; }
+    public void setParentConversationId(String parentConversationId) { this.parentConversationId = parentConversationId; }
+    public Long getBranchFromMessageId() { return branchFromMessageId; }
+    public void setBranchFromMessageId(Long branchFromMessageId) { this.branchFromMessageId = branchFromMessageId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 

@@ -322,29 +322,54 @@ public class AiAgentController {
     }
 
     /**
-     * Rollback history to a specific message.
-     * Everything after this message will be deleted.
+     * 回退到某条消息并编辑重发（edit-and-resend）：目标消息<b>连同其后</b>一起删。
+     *
+     * <p>删之前先把原路径整条存成一条「… · 回退前存档」的新会话——永不静默销毁用户数据。
+     * 存档与截断在服务层同一个事务里，存档没成就不截断。
      */
     @PostMapping("/history/rollback")
     public ResponseEntity<?> rollbackHistory(@RequestBody RollbackRequest request,
                                              @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = (sessionId != null) ? AuthController.getUserIdFromSession(sessionId) : null;
+        // 解析一律交给 AuthController：它自己处理 null（local-mode 免登时解析为本机用户）。
+        // 这里原本写成 sessionId != null ? … : null，于是整个桌面端——local-mode 根本不发
+        // 这个头——回退恒 403。这条与 D-02/D-03 是彼此独立的第三个缺陷，同一个端点上。
+        Long userId = AuthController.getUserIdFromSession(sessionId);
         // 归属校验：此前 userId 为 null 也会执行截断（破坏性），且不校验会话归属
         if (userId == null || !messageService.isConversationOwnedBy(request.getConversationId(), userId)) {
             return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
                     LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
-        log.info("Rollback request: conv={}, msgId={}, user={}", request.getConversationId(), request.getMessageId(), userId);
+        Long messageId;
+        try {
+            messageId = parseMessageId(request.getMessageId());
+        } catch (NumberFormatException bad) {
+            // 前端自造的 msg-<毫秒>-<序号> 走到这里：说明这条消息还没落库，而调用方也没给
+            // clientRequestId。回一句用户读得懂的话，别让它变成「服务器内部错误」。
+            log.info("Rollback with a non-numeric messageId: conv={}, raw={}",
+                    request.getConversationId(), request.getMessageId());
+            return ResponseEntity.badRequest().body("{\"status\":\"error\", \"message\":\"" + LangText.of(
+                    "无法定位这条消息，请刷新后重试",
+                    "Could not locate that message. Refresh and try again.") + "\"}");
+        }
+        log.info("Rollback request: conv={}, msgId={}, clientReq={}, user={}", request.getConversationId(),
+                messageId, request.getClientRequestId(), userId);
 
         try {
-            messageService.truncateHistory(request.getConversationId(), request.getMessageId());
-            return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"History rolled back\"}");
+            String archived = messageService.rollbackWithArchive(request.getConversationId(), messageId,
+                    request.getClientRequestId(), userId);
+            return ResponseEntity.ok().body("{\"status\":\"ok\", \"archivedConversationId\":\"" + archived + "\"}");
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body("{\"status\":\"error\", \"message\":\"" + e.getMessage() + "\"}");
         } catch (Exception e) {
             log.error("Rollback failed", e);
             return ResponseEntity.status(500).body("{\"status\":\"error\", \"message\":\"Internal Error\"}");
         }
+    }
+
+    /** 空白 = 没给（交给 clientRequestId 定位）；非数字 = 前端自造的气泡 id，抛给调用方回 400。 */
+    private static Long parseMessageId(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        return Long.valueOf(raw.trim());
     }
 
     /**
@@ -457,15 +482,29 @@ public class AiAgentController {
         private boolean exportEditable;
     }
 
+    /**
+     * 回退（edit-and-resend）请求体。两个定位键任给其一，都给时主键优先。
+     *
+     * <p><b>messageId 是 String 而不是 Long</b>：本次会话内刚发出的气泡，前端手上只有自造的
+     * {@code msg-<毫秒>-<序号>}，声明成 Long 时 Jackson 在进 handler 之前就把整个请求拒了，
+     * 用户看到的是「回退失败: 服务器内部错误」，而前端的界面回退、回填输入框、刷新历史
+     * 三步全部跳过——最想用这个按钮的时刻它必定失灵（审查 D-02）。现在非数字会走到
+     * handler 里，拿到一句说明白的 400。
+     */
     @Data
     public static class RollbackRequest {
         private String conversationId;
-        private Long messageId; // The ID of the message to revert TO (keep this one, delete newer)
+        /** 目标消息的 project_ai_message 主键（十进制串）；本次会话内刚发的消息还没有主键，留空用下面那个。 */
+        private String messageId;
+        /** 客户端幂等键：发之前就有，live 气泡靠它定位（见 ProjectAiMessage#clientRequestId）。 */
+        private String clientRequestId;
 
         public String getConversationId() { return conversationId; }
         public void setConversationId(String conversationId) { this.conversationId = conversationId; }
-        public Long getMessageId() { return messageId; }
-        public void setMessageId(Long messageId) { this.messageId = messageId; }
+        public String getMessageId() { return messageId; }
+        public void setMessageId(String messageId) { this.messageId = messageId; }
+        public String getClientRequestId() { return clientRequestId; }
+        public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
     }
     
     public static class AgentChatRequest {
