@@ -614,11 +614,22 @@ ChatInterface.handleSubmit（~:927）→ useAgentStream.sendMessage（确保 SSE
 
 ## SSE 事件名清单
 
-connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的 reasoning 增量，`{"content":"…"}`，只进思考卡、不进正文与历史；state_recovery 快照不含它，重连后思考文本不回放）/ artifact / token_usage / bubble_end（status: finished|paused|awaiting_approval|awaiting_input；外加 **documentEdited**，见下）/ error / cancelled / file_change / client_action / title_update / doc_stream_data（旧名 wps_stream_data 已于 dev-board#816 摘除，出站单名）/ doc_stream_end（编辑器流式写入收尾，前端据此落盘并报失败）/ state_recovery（断线重连快照）/ run_state / plan_update / **skill_update** / background_task_start / background_task_complete / task_progress / heartbeat / subtask_progress / **pass_progress**（整篇分段过卷进度，dev-board#422）/ **context_notice**（附件降级/截断/丢弃 + 上下文超窗，见下）/ inbox_updated / input_applied / **superseded**（本连接已被同会话的另一个客户端实例接管，见下）。前端分派均在 useAgentStream.handleEvent。超限 paused 契约见 PR#172。
+connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的 reasoning 增量，`{"content":"…"}`，只进思考卡、不进正文与历史；state_recovery 快照不含它，重连后思考文本不回放）/ artifact / token_usage / bubble_end（status: finished|paused|awaiting_approval|awaiting_input；外加 **documentEdited**，见下）/ error / cancelled / **file_change**（见下）/ client_action / title_update / doc_stream_data（旧名 wps_stream_data 已于 dev-board#816 摘除，出站单名）/ doc_stream_end（编辑器流式写入收尾，前端据此落盘并报失败）/ state_recovery（断线重连快照）/ run_state / plan_update / **skill_update** / background_task_start / background_task_complete / task_progress / heartbeat / subtask_progress / **pass_progress**（整篇分段过卷进度，dev-board#422）/ **context_notice**（附件降级/截断/丢弃 + 上下文超窗，见下）/ inbox_updated / input_applied / **superseded**（本连接已被同会话的另一个客户端实例接管，见下）。前端分派均在 useAgentStream.handleEvent。超限 paused 契约见 PR#172。
 
 **载荷一律由调用方自己序列化成字符串**：`SseEmitterService.send(cid, event, data)` 里是 `String.valueOf(data)`，**不替谁转 JSON**。传裸 `Map.of(...)` 出来的是 Java 的 `toString()`（`{content=正文}`），客户端 `JSON.parse` 当场抛错——而抛错往往被 catch 吞成一行 console.error，于是表现为「功能整条静默失效、前后端都不报错」。#663（2026-08-30）把 `send` 从 `SseEmitter.event().data(Object)`（Spring 用 Jackson 转换器序列化）改成 `String.valueOf` 时，全仓只有 `doc_stream_data` / `wps_stream_data` 两行传的是裸 Map，AI 流式写入新建文档的正文因此三周多一个字都没到过编辑器（dev-board#465 描述的症状）。现已改用既有的 `AgentOrchestrator.jsonContentEnvelope(token)`（与 `text_delta` 同一个信封，转义交给 Jackson）。护栏 `SseEventPayloadJsonContractTest` 扫源码，任何 `sseEmitterService.send` 传裸容器即红；前端侧 `useAgentStream` 的 `doc_stream_data` 分支**先 parse 成功再置 `isEditorStreaming` 与占位符**（反过来会让坏载荷表现成「看起来正在写」），护栏 `tests/project-home/doc-stream-bad-payload.test.mjs`。
 
 **事件名与本清单的对拍有测试守着**（`SseEventNameDocContractTest`）：后端发出的每个字面量事件名都必须在这一节里出现——「加了事件、文档没加」不会有任何东西报错，下一个照着文档写客户端的人只会认为那个事件不存在。反向不校验（清单里可以留已经摘掉的旧名，如 wps_stream_data 那条双轨）。
+
+**`file_change` 载荷** `{fileName, changeType: ADDED|MODIFIED, fileId: Long|null}`（`fileId` 是 dev-board#852 新增字段，只加不改，旧客户端不读它）。
+由 `AgentOrchestrator.applyToolSideEffects` 按 `@ToolMeta` 发出：有 `fileArg` 取参数里的文件名、`fileId` 为 null；
+没有 `fileArg` 的 doc_\*/sheet_\*/slide_\*（`actsOnActiveDocument`，排除 `sheet_create_file`/`doc_start_stream` 这两个新建类）
+用本轮活跃文档（`RunGuard.activeFileId/activeFileName`，名字为空时按 id 查 `ProjectFileService.getFile`）的**真名 + fileId**；
+其余没有 `fileArg` 的工具（pdf_\* / text_\* 一族）参数里有数字型 `fileId` 时按它查回**真名 + 该 id**（`fileByIdArg`），查不到则当作不知道；
+都说不出时文件名报「当前文档」（`activeDocDisplayName(null)` 口径）、`fileId` 为 null，**仍要发**——改动卡片与检查点依赖这条 MODIFIED。
+**不许再出现字面量 `"Current Document"`**：它曾让改动卡片按名字找文件，在用户刚改完的那份表格上弹「未找到文件: Current Document」。
+历史落库 `conversation_file_change` 没有 id 列，只存名字（未做 DDL）；前端 `utils/chatFileChange.js` 把旧字面量与「当前文档」
+都当占位处理（有活跃标签就切过去，没有就提示先打开文档），`handleOpenFileFromChat` 按 fileId 优先、名字其次，
+命中当前活跃标签只 `activateTab` 不重开。回归：`AgentOrchestratorFileChangeTargetTest`、`frontend/tests/project-home/chat-file-change-target.test.mjs`。
 
 **断点续传与窗口移交（`X-Client-Instance` / `Last-Event-ID` / `superseded`，dev-board#803）**：后端 `/connect` 一直支持这两个可选请求头（`AiAgentController.connect` → `SseEmitterService.createConnection`），**桌面端 2026-09-22 起才开始上送**，此前只有 Office 任务窗格带。
 - `X-Client-Instance` = 客户端实例身份。换了实例时后端给旧连接发一条 `superseded` 再关（`{"reason":"another_pane"}`），**不带这个头时那段移交逻辑整块不触发**：旧窗口只看到流断了，45 秒心跳判死后退避重连，又把新窗口顶掉，两边无限互顶。桌面端的实例 id 在 `useAgentStream` 模块级的 `clientInstanceId()` 里，存 `sessionStorage`（按标签页/窗口隔离，所以两个窗口天然不同；同一个窗口刷新沿用同一个 id——刷新是同一个窗口重连，不该触发移交）。

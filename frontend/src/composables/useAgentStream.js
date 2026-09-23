@@ -8,6 +8,7 @@ import { t } from '@/i18n'
 import { captureChatTimeline } from '@/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from './bubbleId.js'
 import { documentEditedFromProcesses } from '@/utils/useInDocumentVisibility.js'
+import { isSameFileChange } from '@/utils/chatFileChange.js'
 import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
@@ -93,7 +94,7 @@ export function useAgentStream() {
     const tokenUsage = ref({ promptTokens: 0, completionTokens: 0, totalTokens: 0 })
 
     // STATE: File Changes Tracking (Current Turn)
-    const fileChanges = ref([]) // Array of { fileName, changeType }
+    const fileChanges = ref([]) // Array of { fileName, changeType, fileId? }
 
     // STATE: Background task tracking for long-running operations
     const backgroundTasks = ref({}) // taskId -> { type, progress, message, stage, startedAt, estimatedDuration }
@@ -1595,11 +1596,12 @@ export function useAgentStream() {
         if (evt === 'file_change') {
             try {
                 const d = JSON.parse(dataStr)
-                // d: { fileName: "...", changeType: "ADDED" | "MODIFIED" }
-                // Avoid duplicates?
-                const exists = fileChanges.value.some(f => f.fileName === d.fileName && f.changeType === d.changeType)
+                // d: { fileName: "...", changeType: "ADDED" | "MODIFIED", fileId: 42 | null }
+                // fileId（dev-board#852）：后端知道是哪份文件时带上，卡片按 id 打开；旧后端没有这个字段。
+                const change = { fileName: d.fileName, changeType: d.changeType, fileId: d.fileId ?? null }
+                const exists = fileChanges.value.some(f => isSameFileChange(f, change))
                 if (!exists) {
-                    fileChanges.value.push(d)
+                    fileChanges.value.push(change)
                 }
                 console.log('[AgentStream] File Change:', d)
             } catch (e) {

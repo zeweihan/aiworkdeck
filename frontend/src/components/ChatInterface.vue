@@ -647,7 +647,7 @@
                    <view v-if="showModifiedPopup && modifiedFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in modifiedFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
                            <image src="/static/file.png" class="file-icon-mini"/>
-                           <text class="file-name-text">{{ f.fileName }}</text>
+                           <text class="file-name-text">{{ fileChangeLabel(f) }}</text>
                        </view>
                    </view>
                    <view v-if="showModifiedPopup && modifiedFiles.length > 0" class="popup-mask-transparent" @tap.stop="showModifiedPopup = false"></view>
@@ -662,7 +662,7 @@
                    <view v-if="showNewPopup && createdFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
                            <image src="/static/file.png" class="file-icon-mini"/>
-                           <text class="file-name-text">{{ f.fileName }}</text>
+                           <text class="file-name-text">{{ fileChangeLabel(f) }}</text>
                        </view>
                    </view>
                    <view v-if="showNewPopup && createdFiles.length > 0" class="popup-mask-transparent" @tap.stop="showNewPopup = false"></view>
@@ -899,6 +899,7 @@ import { createComponentRequiredHandler, shouldAutoResend } from '@/composables/
 import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
 import { saveLastConversation } from '@/utils/lastConversation.js'
 import { isContextEligibleTab } from '@/pages/project-overview/activeTabContext.js'
+import { isCurrentDocSentinel } from '@/utils/chatFileChange.js'
 import {
   DEFAULT_CONTEXT_LIMITS,
   normalizeContextLimits,
@@ -1783,14 +1784,19 @@ export default {
         if (showNewPopup.value) showModifiedPopup.value = false
     }
 
+    // 「当前文档」占位（含历史会话里的 "Current Document"）按界面语言显示
+    const fileChangeLabel = (f) => isCurrentDocSentinel(f && f.fileName)
+        ? t('chat.activeDocChipLabel') : (f && f.fileName)
+
     const handleOpenFile = (f) => {
         // Emit open-file event to parent
         // f.fileName is the name. Backend might need full path if it's nested.
         // But for now we just emit what we have.
         // Assuming parent can handle opening by name or request details if needed.
         // Or send { name: f.fileName, path: f.fileName }
-        console.log('Opening file:', f.fileName)
-        emit('open-file', { name: f.fileName })
+        console.log('Opening file:', f.fileName, f.fileId)
+        // fileId（dev-board#852）一并抛出：父级按 id 优先找，找不到再按名字
+        emit('open-file', { name: f.fileName, fileId: f.fileId ?? null })
         showModifiedPopup.value = false
         showNewPopup.value = false
     }
@@ -4032,6 +4038,7 @@ export default {
        stoppingTasks,
        handleCancelTask,
        modifiedFiles,
+       fileChangeLabel,
        createdFiles,
        showModifiedPopup,
        showNewPopup,
