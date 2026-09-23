@@ -94,6 +94,30 @@ public class TokenUsageService {
         });
     }
 
+    /**
+     * Decision usage freezes the dispatched channel. BYOK stores the provider receipt under the existing
+     * local-statistics label (estimate); platform cost stays null until cumulative reconciliation,
+     * which already includes this request and must not have the receipt added a second time.
+     */
+    @Transactional
+    public void recordDecisionUsage(Long projectId, Long userId, String conversationId, String model,
+                                    int inputTokens, int outputTokens, BigDecimal providerCost, boolean platform) {
+        com.checkba.model.entity.TokenUsage entity = new com.checkba.model.entity.TokenUsage();
+        entity.setProjectId(projectId);
+        entity.setUserId(userId);
+        entity.setConversationId(conversationId);
+        entity.setModel(model);
+        entity.setPromptTokens(inputTokens);
+        entity.setCompletionTokens(outputTokens);
+        entity.setTotalTokens(inputTokens + outputTokens);
+        // Platform cumulative reconciliation already includes this request. Never add its receipt twice.
+        entity.setCost(platform ? null : providerCost);
+        entity.setCostSource(platform ? PlatformUsageAccountant.SOURCE_PLATFORM
+                : PlatformUsageAccountant.SOURCE_ESTIMATE);
+        tokenUsageRepository.save(entity);
+        if (platform) scheduleReconcile(entity.getId(), userId);
+    }
+
     /** 当前是否走平台通道。供应商解析失败按 BYOK 处理——记账问题不该拖垮对话。 */
     private boolean isPlatformChannel() {
         try {

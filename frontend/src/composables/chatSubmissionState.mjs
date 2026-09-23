@@ -15,6 +15,8 @@ export const submissionFingerprint = (draft = {}) => JSON.stringify({
   mode: draft.mode || '',
   skillIds: Array.isArray(draft.skillIds) ? draft.skillIds.map(String) : [],
   activeContext: draft.activeContext || null,
+  decisionAssistEnabled: draft.decisionAssistEnabled === true,
+  decisionAssistOwner: draft.decisionAssistOwner || '',
 })
 
 export const shouldClearChatDraft = (sent, current) => submissionFingerprint(sent) === submissionFingerprint(current)

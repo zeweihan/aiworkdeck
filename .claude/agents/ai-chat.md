@@ -7,6 +7,16 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 职责边界：AI 对话功能本身（编排循环、工具注册分发、记忆、SSE、前端聊天 UI、评测）。AI→编辑器指令链路属 ai-doc-bridge 领域；skill 机制属 plugin-system 领域（但 SkillRouter 在编排循环里有两处旁路接入点）。
 
+## 智能决策辅助（实验性，dev-board#824，2026-09-23）
+
+- **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。
+- **默认关闭、显式授权、每次发送冻结**：`AgentChatRequest.decisionAssistEnabled` 只接受 JSON boolean；旧客户端缺字段为 false。Inbox 的 `requestJson` 保存整份请求，排队/编辑/重新载入不得丢字段，重复 `clientRequestId` 保持原快照。前端 `DecisionAssistControl.vue` 在空会话与常规输入框下都显示开关和 On/Off 文案；偏好按服务器+用户分别保存，`ChatInterface` 在异步落盘/上传前冻结、发送前复核身份，`chatSubmissionState.mjs` 的重试指纹含开关与归属。重新生成是按当次选择发送的新请求。
+- **出站数据最小化**：仅本次输入及可用工具类目/工具名送入 Jev；不为它额外附带历史、附件或文档正文。本次输入本身包含的粘贴材料仍属于发送范围。不得把整份上下文 `messages`、工具参数/输出、文档读取结果传给该判断。界面常驻提示 token/费用收益与等待取舍，展开说明交代数据范围；`legal/PRIVACY.md` 中英同步。辅助服务不记录问题/响应正文或供应商异常体。
+- **候选与兜底**：沿用 `ToolDisclosurePolicy` 的核心工具与类目、现有权限/客户端能力/skill 约束；只有已有安全 `list_tools` 发现路径时才缩小披露范围，并保留后续类目展开能力。低置信、未知类目、无效响应、超时或不可用回到原工具路径；预选不等于授权，不得把原本不可见/无权的业务工具放回来。静态渐进披露总开关与本次 Jev 授权分开，关闭 Jev 仍保留系统原有行为。
+- **生命周期与限额**：`DecisionAssistContext` 属于单次提交，不能跨会话/轮次共享；`DecisionAssistService` 无重试，单次总等待上限 2.5 秒（包括排队与凭据解析），队列有界。停止、轮次被替换或新的 steer 到达时撤销当前预选，不将迟到结果应用到新上下文；queue 保留自己的请求快照。迟到/失败判断不阻断原回复，也不能悄悄再次尝试。收窄工具后主模型仍可通过 `list_tools` 展开需要的类目。
+- **通道/计费**：仅当前 OpenRouter 平台或 BYOK 通道可用，本地 Ollama 不外发，不为 Jev 自动换供应商。关闭时在凭据解析/平台 Key 配发前短路，零 Jev 请求/费用；开启但本次不适合预选（如 ASK）同样跳过。平台用既有累计用量对账，BYOK 可记 Jev 返回的实际 cost；不要把平台累计差额与 Jev 响应 cost 叠加双算。主模型选择不变。
+- **验证入口**：`frontend/tests/chat-presentation-ui/decision-assist.mjs` 用真实组件+合成 HTTP 验开关、键盘、窄窗、中英、POST/queue/steer/重新生成、发送期间切换及身份隔离；`frontend/tests/project-home/decision-assist-preference.test.mjs` 验默认关闭/脏值/重试。后端须覆盖 DTO 严格布尔、Inbox 持久化、候选收窄/发现兜底、取消/迟到、默认零调用及平台/BYOK/本地边界；不能只用 POST 字段存在断言代替执行链验证。真实模型对照只用合成材料，比较完成质量、端到端总耗时和完整费用。
+
 ## 关键文件（后端包根 backend/src/main/java/com/checkba/）
 
 **编排核心**
@@ -580,7 +590,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 - `AgentInboxService` / `AgentInboxController` / `AgentInboxItem` 以 DB 保存输入、完整附件上下文、幂等键及 revision。`POST /api/agent/chat` 返回 receipt，正在运行时默认 steer，可选 queue；编辑/排序/删除只针对 pending。删除保留幂等 tombstone。每会话锁覆盖 claim/register/finalize，模型执行在锁外；目前单后端消费，不能将进程锁当成多实例租约。
 - `inbox_updated` 是权威快照；`input_applied` 携带 messageId/runId/sequence。最初 POST 靠 receipt 显示，不重复发 applied；自动接续先发新 run 快照再发 applied。原生/XML 工具批次在安全边界应用新指令，未开始的旧工具回填取消结果；已经执行的副作用保留。取消/错误/待审批/待回答/无进展均暂停队列；只有明确“立即发送”才主动启动暂停队列中的该项。
-- **「立即发送」的判据是「目标模式是 steer 且当前无活跃轮次」**（`AgentInboxController.edit`，dev-board#802），不是「模式发生过 queue→steer 的转变」。后者把**本来就是 steer** 的待处理项整个排除在外：那一轮以取消/出错/待审批/待回答/无进展暂停收尾之后（这几种都不 drain 队列），这条 steer 永久卡在 pending 里，界面上只剩编辑/上移/下移/删除。`acceptInboxSubmission` 自身幂等（进去先查 `activeRuns`，有就原样返回），控制器额外判 `activeRunId(conversationId) == null` 只是省一次调用并把意图写在脸上。**纯改正文（不带 `submissionMode`）永远不起跑**——「我改了一下措辞」不是「现在就发」。
+- **显式提交 `submissionMode=steer` 就通知幂等入口 `acceptInboxSubmission`**（`AgentInboxController.edit`，dev-board#802/#824），不再由控制器要求 `activeRunId == null`，也不要求曾经 queue→steer。无活跃轮次时启动这条 pending 输入；有活跃轮次时不另开 run，而是取消尚在等待/进行的 Jev 预选，让插话按既有安全边界应用，返回当前 runId。这样，原本已是 steer、但在取消/出错/待审批/待回答/无进展暂停之后留在 pending 的项，仍可通过「立即发送」继续。**纯改正文（不带 `submissionMode`）与显式 queue 都不主动启动，也不触发该 steer 通知**——修改措辞或保留排队不是立即执行。
 - 前端 `AgentInbox.vue` 的 `run-active` prop 决定 steer 项露不露「立即发送」（`canSendNow`：queue 项恒露，steer 项只在没轮次在跑时露），并在没轮次时多渲一行 `chat.inboxIdleNotice`。判据取 `ChatInterface.inboxRunActive` = **`isStreaming` 单一来源**：切回一条后台仍在跑的会话时 `run_state=RUNNING` 会把它置起，所以它不只是「本窗口从头看到尾的那一轮」。**刻意不与 `agentRunStatus === 'RUNNING'` 取或**——用户点停止后 `isStreaming` 立刻 false，而 `agentRunStatus` 要等后端 `cancelled` 事件才落终态，SSE 正好死了就永远停在 RUNNING；用一个可能永不归位的状态去挡救命按钮，等于把病灶换了个地方。护栏在 `tests/chat-presentation-ui/run.mjs`（真组件渲染，停止前后各断一次）。
 - 前端 `AgentInbox.vue`、`agentInboxState.mjs` 与 `chatSubmissionState.mjs` 管理队列、事件去重和提交事务。发送与停止分开，执行中可输入；新会话只断开本地视图，旧会话继续。迟到 receipt 不得清空新会话草稿；附件草稿按原始 HTML 快照比较。
 - `service/ai/memory/document/*`、`MemoryDocumentController`、`MemoryDocument`/`MemoryDocumentSpace` 是 Markdown 记忆真源。`/api/ai/memory/{spaces,files,file,download}`；个人/项目使用权限校验后的 opaque spaceId，团队/律所由官网共享服务校验成员/管理员。每空间 remember.md 自动维护 topic 链接；UTF-8 128 KiB、路径校验、expectedRevision 冲突及删除墓碑由后端负责。legacy 读写/同步向同一文档服务收敛，不保留可独立写入的副本。

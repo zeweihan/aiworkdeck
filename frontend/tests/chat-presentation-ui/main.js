@@ -14,9 +14,13 @@ window.projectFiles = [
   { id: 12, name: '股份认购协议-附件清单.xlsx', fileType: 'xlsx', parentId: 1, isFolder: false },
   { id: 13, name: '公司章程.docx', fileType: 'docx', parentId: null, isFolder: false },
 ]
+window.fixtureStorage = JSON.parse(sessionStorage.getItem('chat-fixture-storage') || 'null') || { checkba_user: { id: 1001 }, checkba_session_id: 'synthetic-session' }
+window.chatPosts = []
 window.uni = {
-  getStorageSync: key => key === 'awd_app_language' ? new URLSearchParams(location.search).get('lang') || 'zh-CN' : '',
-  setStorageSync() {}, removeStorageSync() {}, $on() {}, $off() {}, $emit() {},
+  getStorageSync: key => key === 'awd_app_language' ? new URLSearchParams(location.search).get('lang') || 'zh-CN' : window.fixtureStorage[key],
+  setStorageSync(key, value) { window.fixtureStorage[key] = value; sessionStorage.setItem('chat-fixture-storage', JSON.stringify(window.fixtureStorage)) },
+  removeStorageSync(key) { delete window.fixtureStorage[key]; sessionStorage.setItem('chat-fixture-storage', JSON.stringify(window.fixtureStorage)) },
+  $on() {}, $off() {}, $emit() {},
   showToast(options) { window.lastToast = options && options.title },
   // 照 uni-app H5 的真实实现走：先试 navigator.clipboard，被拒再退回隐藏 textarea +
   // execCommand('copy')。成功/失败两条分支因此是真的由平台决定的，不是这里写死的。
@@ -46,6 +50,9 @@ window.uni = {
   },
   getSystemInfoSync: () => ({ platform: 'mac', windowWidth: innerWidth }),
   request: ({ url, method, data, success }) => {
+    if (String(url).includes('/api/ai/config') && new URLSearchParams(location.search).get('provider') === 'local') {
+      return success?.({ statusCode: 200, data: { activeProvider: 'OLLAMA' } })
+    }
     // 回退/重新生成走的是同一条后端通道，记下来供用例断言「确实先截断了才重发」
     if (String(url).includes('/api/agent/history/rollback')) {
       window.rollbackCalls = [...(window.rollbackCalls || []), data]
@@ -67,6 +74,7 @@ window.uni = {
 window.fetch = async (url, options = {}) => {
   if (String(url).endsWith('/api/agent/chat')) {
     const payload = JSON.parse(options.body)
+    window.chatPosts.push(payload)
     const state = window.nextReceiptState
     const receipt = { status: 'accepted', messageId: payload.clientRequestId, state, submissionMode: payload.submissionMode, runId: 'fixture-run', sequence: 1 }
     if (state === 'pending') {
@@ -85,7 +93,7 @@ window.fetch = async (url, options = {}) => {
   if (String(url).includes('/connect/')) return new Response(new ReadableStream({ start(controller) { window.sseController = controller } }), { headers: { 'Content-Type': 'text/event-stream' } })
   return new Response(JSON.stringify([]), { headers: { 'Content-Type': 'application/json' } })
 }
-const { createApp, h, ref, nextTick, watch } = await import('vue')
+const { createApp, h, ref, reactive, nextTick, watch } = await import('vue')
 // 性能用例（perf.mjs）跑在 page.evaluate 里，那段代码不经 vite 转译，`import 'vue'` /
 // `import '@/…'` 都解析不了裸说明符。所以在这里把它要用的两样东西挂出去。
 window.__vueWatch = watch
@@ -94,7 +102,8 @@ window.__chatTurnsUrl = new URL('../../src/components/AgentMessage/chatTurns.mjs
 const { default: ChatInterface } = await import('../../src/components/ChatInterface.vue')
 const { i18n } = await import('../../src/i18n/index.js')
 const chat = ref()
-const app = createApp({ setup: () => () => h(ChatInterface, { ref: chat, projectId: '1', projectName: '合同审查 · 对话展示' }) })
+window.chatFixtureProps = reactive({ projectId: '1', projectName: '合同审查 · 对话展示' })
+const app = createApp({ setup: () => () => h(ChatInterface, { ref: chat, ...window.chatFixtureProps }) })
 app.use(i18n)
 app.mount('#app')
 await nextTick()

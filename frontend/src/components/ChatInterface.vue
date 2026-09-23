@@ -575,6 +575,7 @@
                  </view>
               </view>
           </view>
+          <DecisionAssistControl :enabled="decisionAssistEnabled" :local-only="isLocalOnlyProvider" @toggle="toggleDecisionAssist" />
           <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask model-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
        </view>
 
@@ -839,6 +840,7 @@
           </view>
           <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
        </view>
+          <DecisionAssistControl :enabled="decisionAssistEnabled" :local-only="isLocalOnlyProvider" @toggle="toggleDecisionAssist" />
        </template>
     </view>
 
@@ -885,7 +887,9 @@ import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
 import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
-import { getAuthHeaders } from '@/utils/auth.js'
+import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
+import DecisionAssistControl from './DecisionAssistControl.vue'
+import { decisionAssistPreferenceKey, readDecisionAssistPreference, writeDecisionAssistPreference } from '@/utils/decisionAssistPreference.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 import { ICONS } from '@/config/icons.js'
@@ -921,7 +925,7 @@ import {
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, ChatTurnRail, MentionPicker, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
+  components: { DecisionAssistControl, RootBubble, ChatTurnRail, MentionPicker, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -973,7 +977,7 @@ export default {
     const {
       bubbles,
       isStreaming,
-      sendMessage,
+      sendMessage: sendAgentMessage,
       abort,
       setConversationId,
       clearBubbles,
@@ -1123,6 +1127,41 @@ export default {
         emit('title-update', title)
         emit('refresh-history') // Trigger history refresh to show new title
     })
+    const decisionAssistEnabled = ref(false)
+    const decisionAssistIdentity = () => decisionAssistPreferenceKey(getCurrentUser(), getApiBaseUrl())
+    let decisionAssistOwner = decisionAssistIdentity()
+    decisionAssistEnabled.value = readDecisionAssistPreference(uni, decisionAssistOwner)
+    const syncDecisionAssistPreference = (reload = false) => {
+      const owner = decisionAssistIdentity()
+      if (owner !== decisionAssistOwner || reload === true) {
+        decisionAssistOwner = owner
+        decisionAssistEnabled.value = readDecisionAssistPreference(uni, owner)
+      }
+      return decisionAssistEnabled.value
+    }
+    const toggleDecisionAssist = () => {
+      // Re-read the identity before writing: switching accounts must never inherit consent.
+      syncDecisionAssistPreference()
+      if (!decisionAssistOwner) return
+      decisionAssistEnabled.value = !decisionAssistEnabled.value
+      writeDecisionAssistPreference(uni, decisionAssistOwner, decisionAssistEnabled.value)
+    }
+    const sendMessage = (options) => sendAgentMessage({
+      ...options,
+      decisionAssistEnabled: Object.prototype.hasOwnProperty.call(options, 'decisionAssistEnabled')
+        ? options.decisionAssistEnabled === true && options.decisionAssistOwner === decisionAssistIdentity()
+        : syncDecisionAssistPreference(),
+    })
+    const refreshDecisionAssistPreference = () => syncDecisionAssistPreference(true)
+    onMounted(() => {
+      window.addEventListener('focus', refreshDecisionAssistPreference)
+      window.addEventListener('storage', refreshDecisionAssistPreference)
+    })
+    onBeforeUnmount(() => {
+      window.removeEventListener('focus', refreshDecisionAssistPreference)
+      window.removeEventListener('storage', refreshDecisionAssistPreference)
+    })
+
     const inputPrompt = ref('')
     const richInput = ref(null)
     const showMemoryBrowser = ref(false)
@@ -1941,6 +1980,8 @@ export default {
     }
 
     const confirmRollback = async () => {
+      const resendDecisionAssist = syncDecisionAssistPreference()
+      const resendDecisionAssistOwner = decisionAssistOwner
       const targetIndex = rollbackTargetIndex.value
       const locator = rollbackTargetId.value
       const content = rollbackTargetContent.value
@@ -2005,6 +2046,8 @@ export default {
         if (resend && resendPrompt) {
           await sendMessage({
             prompt: resendPrompt,
+            decisionAssistEnabled: resendDecisionAssist,
+            decisionAssistOwner: resendDecisionAssistOwner,
             displayText: resendDisplay,
             // 原问带过的材料原样再带一次（dev-board#793 K14 ④）：传空数组的话
             // 「重新生成」就成了「换一个问题」——模型手上没有当初那几份材料
@@ -2139,6 +2182,8 @@ export default {
       const submissionMode = isStreaming.value && requestedMode === 'queue' ? 'queue' : 'steer'
       const editorHtml = richInput.value ? richInput.value.innerHTML : ''
       const selectedSkillSnapshot = currentSkillIds()
+      const decisionAssistSnapshot = syncDecisionAssistPreference()
+      const decisionAssistOwnerSnapshot = decisionAssistOwner
       const conversationId = currentConversationId.value || `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`
       if (!currentConversationId.value) setConversationId(conversationId)
 
@@ -2196,6 +2241,8 @@ export default {
         modelId: currentModelId.value,
         mode: currentModeId.value,
         skillIds: selectedSkillSnapshot,
+        decisionAssistEnabled: decisionAssistSnapshot,
+        decisionAssistOwner: decisionAssistOwnerSnapshot,
         activeContext,
       }, () => {
         try { return crypto.randomUUID() } catch (e) { return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}` }
@@ -2261,6 +2308,8 @@ export default {
         activeContext: attempt.activeContext, // NEW: Auto-detected active tab context
         // ASK 模式下 skill 不生效，一律不带——省得后端与面板的状态各说各话
         skillIds: attempt.skillIds,
+        decisionAssistEnabled: attempt.decisionAssistEnabled,
+        decisionAssistOwner: attempt.decisionAssistOwner,
         submissionMode,
         clientRequestId: attempt.clientRequestId,
         // Pass for user bubble display
@@ -2289,6 +2338,8 @@ export default {
         mode: currentModeId.value,
         skillIds: currentSkillIds(),
         activeContext: attempt.activeContext,
+        decisionAssistEnabled: syncDecisionAssistPreference(),
+        decisionAssistOwner,
       }
       const draftUnchanged = shouldClearChatDraft(attempt, currentDraft)
       if (draftUnchanged) {
@@ -3791,6 +3842,7 @@ export default {
        inputPrompt,
        richInput,
        showMemoryBrowser,
+       decisionAssistEnabled, toggleDecisionAssist, isLocalOnlyProvider,
        followUpMode,
        toggleFollowUpMode,
        pendingInbox,

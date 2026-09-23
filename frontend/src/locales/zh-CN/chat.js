@@ -2,6 +2,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // AI 对话面板（ChatInterface + AgentMessage 卡片族 + ArtifactCard + BackgroundTaskIndicator）
 export default {
+  decisionAssistLabel: '智能决策辅助（实验性）',
+  decisionAssistOn: '已开启',
+  decisionAssistOff: '已关闭',
+  decisionAssistOnHint: '尝试减少工具说明 token 和总费用；会增加少量 Jev 费用，回复可能稍慢。',
+  decisionAssistOffHint: '后续发送无 Jev 请求或费用。开启后尝试省 token 和总费用，回复可能稍慢。',
+  decisionAssistNextSend: '对下次发送生效；已提交的任务保持原设置。',
+  decisionAssistDetails: '数据与费用说明',
+  decisionAssistData: '开启后，本次输入与可用工具类目、工具名会经当前 OpenRouter 通道发送至 TypeSafe Jev，按平台额度或自带密钥计费。',
+  decisionAssistMaterials: '不会为 Jev 额外附带附件、历史会话或文档正文；你粘贴或写在本次输入里的内容仍会发送。',
+  decisionAssistFallback: '只辅助预选工具类目，不更换你选定的主模型。单次判断最多等待 2.5 秒；低置信度、超时或不可用时按原流程处理。',
+  decisionAssistLocal: '当前使用本地模型，不向 Jev 发送内容，也不产生 Jev 费用。',
+
   activityBackToLatest: '回到最新',
   attentionLocatorQuestion: '有 {n} 条待你回答',
   attentionLocatorApproval: '有 {n} 条待审批',

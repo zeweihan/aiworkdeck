@@ -178,6 +178,22 @@ public class ChatModelFactory {
         return getSetting(SETTING_OPENROUTER_BASE_URL, aiModelProperties.getOpenRouter().getBaseUrl());
     }
 
+    /** A turn's frozen channel cannot migrate to another provider while its decision is queued. */
+    public DecisionCredentials decisionCredentials(String selectedModel, AiModelProperties.Provider expectedChannel) {
+        if (expectedChannel != AiModelProperties.Provider.AWD_CLOUD
+                && expectedChannel != AiModelProperties.Provider.OPENROUTER) return null;
+        ResolvedTarget target = resolveTarget(selectedModel, false);
+        if (target.channel() != expectedChannel) return null;
+        boolean platform = target.channel() == AiModelProperties.Provider.AWD_CLOUD;
+        return new DecisionCredentials(platform ? platformApiKey() : resolveOpenRouterApiKey(),
+                platform ? aiModelProperties.getOpenRouter().getBaseUrl() : resolveOpenRouterBaseUrl(), platform);
+    }
+
+    /** Deliberately redacted: credentials must never appear in record-generated toString/logging. */
+    public record DecisionCredentials(String apiKey, String baseUrl, boolean platform) {
+        @Override public String toString() { return "DecisionCredentials[redacted]"; }
+    }
+
     /**
      * 清空模型实例缓存。管理后台/向导保存 API key、baseUrl 等配置后必须调用，
      * 否则旧配置构建的实例会一直用到进程重启。

@@ -2,6 +2,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // AI chat panel (ChatInterface + AgentMessage cards + ArtifactCard + BackgroundTaskIndicator)
 export default {
+  decisionAssistLabel: 'Decision assistance (experimental)',
+  decisionAssistOn: 'On',
+  decisionAssistOff: 'Off',
+  decisionAssistOnHint: 'Tries to reduce tool-description tokens and total cost. Adds a small Jev charge and may make replies slightly slower.',
+  decisionAssistOffHint: 'Future sends have no Jev requests or charges. Enabling may save tokens and total cost, with slightly slower replies.',
+  decisionAssistNextSend: 'Applies to your next send. Submitted tasks retain their original setting.',
+  decisionAssistDetails: 'Data and cost details',
+  decisionAssistData: 'When enabled, your current input and available tool categories and names are sent to TypeSafe Jev through your current OpenRouter channel, using platform credits or your own key.',
+  decisionAssistMaterials: 'Attachments, chat history and document bodies are not separately included for Jev. Content you paste or write into the current input is still sent.',
+  decisionAssistFallback: 'Only helps preselect tool categories; your chosen main model stays the same. Each decision waits at most 2.5 seconds. Low confidence, timeouts or unavailability keep the original workflow.',
+  decisionAssistLocal: 'A local model is selected: no content is sent to Jev and no Jev charges apply.',
+
   activityBackToLatest: 'Back to latest',
   attentionLocatorQuestion: '{n} awaiting your answer',
   attentionLocatorApproval: '{n} awaiting approval',

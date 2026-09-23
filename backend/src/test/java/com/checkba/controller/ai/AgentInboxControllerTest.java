@@ -128,15 +128,37 @@ class AgentInboxControllerTest {
     }
 
     @Test
-    void sendNowDoesNotStartASecondRunWhileOneIsAlreadyActive() {
+    void sendNowNotifiesTheExistingRunSoItsPendingDecisionCanBeCancelled() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
             when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
-            when(inbox.edit("conv-1", "m-1", null, "steer", null, 1L)).thenReturn(pendingSteer());
+            AgentInboxService.ItemView pending = pendingSteer();
+            when(inbox.edit("conv-1", "m-1", null, "steer", null, 1L)).thenReturn(pending);
+            when(inbox.view("m-1")).thenReturn(pending);
             when(orchestrator.activeRunId("conv-1")).thenReturn("run-9");
+            when(orchestrator.acceptInboxSubmission("m-1")).thenReturn("run-9");
 
-            assertEquals(200, controller.edit("conv-1", "m-1", sendNowRequest(), "mine").getStatusCode().value());
-            verify(orchestrator, never()).acceptInboxSubmission(any());
+            ResponseEntity<?> response = controller.edit("conv-1", "m-1", sendNowRequest(), "mine");
+            assertEquals(200, response.getStatusCode().value());
+            assertEquals(pending, response.getBody());
+            var order = inOrder(inbox, orchestrator);
+            order.verify(inbox).edit("conv-1", "m-1", null, "steer", null, 1L);
+            order.verify(orchestrator).acceptInboxSubmission("m-1");
+            order.verify(inbox).view("m-1");
+            verify(orchestrator, times(1)).acceptInboxSubmission("m-1");
+        }
+    }
+
+    @Test
+    void queueModeDoesNotNotifyOrCancelTheActiveRun() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("mine")).thenReturn(7L);
+            when(messages.canUseConversation("conv-1", 7L)).thenReturn(true);
+            when(inbox.edit("conv-1", "m-1", null, "queue", null, 1L)).thenReturn(pendingSteer());
+            AgentInboxController.EditRequest request = sendNowRequest();
+            request.submissionMode = "queue";
+            assertEquals(200, controller.edit("conv-1", "m-1", request, "mine").getStatusCode().value());
+            verifyNoInteractions(orchestrator);
         }
     }
 

@@ -757,7 +757,7 @@ export function useAgentStream() {
     const sendMessage = async ({
         prompt, displayText = '', contentHtml = '', fileList = [], projectId,
         modelId = 'default', mode = 'AGENT', activeContext = null, skillIds = [],
-        submissionMode = 'steer', clientRequestId = '',
+        submissionMode = 'steer', clientRequestId = '', decisionAssistEnabled = false,
         _userImages = [], _userContextFiles = []
     }) => {
         const continuingRun = isStreaming.value || agentRunStatus.value === 'RUNNING'
@@ -833,6 +833,7 @@ export function useAgentStream() {
                 mode: mode, // Agent 模式: ASK, PLAN, AGENT
                 submissionMode: continuingRun && submissionMode === 'queue' ? 'queue' : 'steer',
                 clientRequestId: requestId,
+                decisionAssistEnabled: decisionAssistEnabled === true,
                 // Send full context metadata for folder support
                 contextItems: fileList.map(f => ({
                     id: String(f.id),
