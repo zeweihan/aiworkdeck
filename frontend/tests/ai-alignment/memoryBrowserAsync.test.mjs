@@ -13,28 +13,35 @@ function deferred() {
   return { promise, resolve }
 }
 
-function loadOptions(api, uni) {
+function loadOptions(api, uni, setGlobalOverlay) {
   const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/import\s*\{[\s\S]*?\}\s*from\s*'@\/services\/api\.js'\s*/, '')
     .replace(/import\s*\{\s*markdownFileLinks\s*\}\s*from\s*'@\/composables\/memoryBrowserState\.mjs'\s*/, '')
+    .replace(/import\s*\{\s*setGlobalOverlay\s*\}\s*from\s*'@\/utils\/overlayState\.js'\s*/, '')
     .replace(/export\s+default/, 'return')
   return new Function(
     'deleteMemoryFile', 'downloadMemoryFile', 'getMemoryFile', 'getMemoryFiles',
-    'getMemorySpaces', 'saveMemoryFile', 'markdownFileLinks', 'uni', script,
+    'getMemorySpaces', 'saveMemoryFile', 'markdownFileLinks', 'setGlobalOverlay', 'uni', script,
   )(
     api.deleteMemoryFile, api.downloadMemoryFile, api.getMemoryFile, api.getMemoryFiles,
-    api.getMemorySpaces, api.saveMemoryFile, () => [], uni,
+    api.getMemorySpaces, api.saveMemoryFile, () => [], setGlobalOverlay, uni,
   )
 }
 
-function makeVm(api, uni = { showToast() {}, showModal() {} }) {
-  const options = loadOptions(api, uni)
-  const vm = Object.assign({ open: true, projectId: 7, $t: (key) => key }, options.data())
+// setGlobalOverlay 默认是空操作：大多数用例不关心弹窗态的全局 overlay 计数，
+// 只有专门测它的用例（见文末）才会传入一个能记录调用的 spy。
+function makeVm(api, uni = { showToast() {}, showModal() {} }, setGlobalOverlay = () => {}) {
+  const options = loadOptions(api, uni, setGlobalOverlay)
+  const vm = Object.assign({ open: true, projectId: 7, inline: false, $t: (key) => key }, options.data())
   for (const [name, method] of Object.entries(options.methods)) vm[name] = method.bind(vm)
   for (const [name, computed] of Object.entries(options.computed)) {
     Object.defineProperty(vm, name, { get: computed.bind(vm) })
   }
   vm.watchers = options.watch
+  // mounted/beforeUnmount 不像 methods 那样被自动绑定进 vm——只有明确测生命周期钩子
+  // 的用例（见文末的 overlay 组）才需要它们，这里只是把它们暴露出来供按需调用。
+  if (options.mounted) vm.mounted = options.mounted.bind(vm)
+  if (options.beforeUnmount) vm.beforeUnmount = options.beforeUnmount.bind(vm)
   return vm
 }
 
@@ -242,4 +249,83 @@ test('unsaved edits are flagged until the save lands', async () => {
   assert.equal(vm.hasUnsavedChanges, false)
   vm.draft = 'personal content edited'
   assert.equal(vm.hasUnsavedChanges, true)
+})
+
+// dev-board#879: 设置页「记忆」栏目从「点按钮才弹窗」改成内嵌编辑（inline），
+// 而 ChatInterface 里的原弹窗保留不变。inline 态既不该有背景遮罩/关闭钮，
+// 也不该去接管桌面端 BrowserView 的遮挡（那是给「盖住全屏」的弹窗用的，
+// 内嵌态根本不盖任何东西）。
+
+test('inline mode never emits close on backdrop tap and never touches the global overlay', async () => {
+  const calls = []
+  const vm = makeVm({ getMemorySpaces: async () => [] }, undefined, (active) => calls.push(active))
+  let closed = false
+  vm.$emit = (name) => { if (name === 'close') closed = true }
+  vm.inline = true
+
+  vm.open = true
+  vm.mounted()
+  vm.onBackdropTap()
+  await vm.watchers.open.call(vm, false)
+  vm.beforeUnmount()
+
+  assert.equal(closed, false)
+  assert.deepEqual(calls, [])
+})
+
+test('popup mode emits close on backdrop tap', () => {
+  const vm = makeVm({ getMemorySpaces: async () => [] })
+  let closed = false
+  vm.$emit = (name) => { if (name === 'close') closed = true }
+  vm.inline = false
+
+  vm.onBackdropTap()
+
+  assert.equal(closed, true)
+})
+
+test('popup mode holds the global overlay while open, once per open/close transition', async () => {
+  const calls = []
+  const vm = makeVm({ getMemorySpaces: async () => [] }, undefined, (active) => calls.push(active))
+  vm.inline = false
+  vm.open = false
+
+  vm.mounted() // mounted closed: must not touch the overlay
+  assert.deepEqual(calls, [])
+
+  vm.open = true
+  await vm.watchers.open.call(vm, true)
+  assert.deepEqual(calls, [true])
+
+  // re-firing the same value (e.g. a redundant watcher tick) must not double-count
+  await vm.watchers.open.call(vm, true)
+  assert.deepEqual(calls, [true])
+
+  vm.open = false
+  await vm.watchers.open.call(vm, false)
+  assert.deepEqual(calls, [true, false])
+})
+
+test('popup mode releases the overlay on unmount even if it was never explicitly closed first', async () => {
+  const calls = []
+  const vm = makeVm({ getMemorySpaces: async () => [] }, undefined, (active) => calls.push(active))
+  vm.inline = false
+  vm.open = true
+  vm.mounted()
+  assert.deepEqual(calls, [true])
+
+  vm.beforeUnmount()
+  assert.deepEqual(calls, [true, false])
+
+  // unmounting again (or any further release) must not drive another false call
+  // for a slot this instance no longer holds
+  vm.beforeUnmount()
+  assert.deepEqual(calls, [true, false])
+})
+
+test('the template gates the mask, header, and close button on !inline so the settings-page embed renders no dialog chrome', () => {
+  const template = source.match(/<template>([\s\S]*?)<\/template>/)[1]
+  assert.match(template, /:class="inline \? 'memory-inline' : 'memory-mask'"/)
+  assert.match(template, /:class="inline \? 'memory-panel-inline' : 'memory-dialog'"/)
+  assert.match(template, /<view v-if="!inline" class="memory-header">/)
 })

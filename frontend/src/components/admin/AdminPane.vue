@@ -1057,7 +1057,8 @@
               <text class="section-subtitle">{{ $t('chat.memorySubtitle') }}</text>
             </view>
             <view class="section-body">
-              <button class="comp-btn primary" @tap="showMemoryBrowser = true">{{ $t('chat.memoryButton') }}</button>
+              <!-- 内嵌编辑，不再是「点一个按钮才弹窗」——设置页打开即可直接改（dev-board#879）。 -->
+              <MemoryBrowser inline :open="true" :project-id="projectId" />
             </view>
           </view>
         </scroll-view>
@@ -1069,7 +1070,6 @@
 
     <!-- 充值弹窗（dev-board#184）：会员钱包卡的「充值」按钮打开 -->
     <RechargeDialog v-model:visible="showRecharge" />
-    <MemoryBrowser :open="showMemoryBrowser" :project-id="projectId" @close="showMemoryBrowser = false" />
 
   </view>
 </template>
@@ -1097,7 +1097,6 @@ import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, siteLinks, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
 import { signOut } from '@/utils/signOut.js'
-import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import { loadIdentityProfile, readNudgeDismissed, markNudgeDismissed, PROFILE_SOURCE } from '@/services/accountProfile.js'
 import { shouldPromptNameNudge } from '@/utils/identityProfile.js'
@@ -1316,7 +1315,6 @@ export default {
       // 而不是显示「未加入」（那是在拿「不知道」冒充一个事实）
       teamLine: { loaded: false, teamName: '', firmName: '' },
       showRecharge: false,
-      showMemoryBrowser: false,
       tierRulesOpen: false,
       accountKeyInput: '',
       accountBusy: false,
@@ -1591,9 +1589,8 @@ export default {
     }
   },
   beforeUnmount() {
-    // 关标签时弹窗还开着的话，那个全局 overlay 标志会永远留在 true，
-    // 桌面端的 BrowserView 从此再也不显示
-    setGlobalOverlay(false)
+    // 记忆改为内嵌后本组件不再持有全局 overlay（dev-board#879）；弹窗态的
+    // MemoryBrowser 自己按实例键释放，这里不能再无条件清空别的浮层的持有。
     if (this._onWalletRefresh) {
       uni.$off('awd:wallet-refresh', this._onWalletRefresh)
       this._onWalletRefresh = null
