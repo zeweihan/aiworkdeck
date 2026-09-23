@@ -708,6 +708,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   setBounds`，这是「窗口超出屏幕」唯一的代码成因。护栏 `desktop/tests/main-window-bounds.test.js`
   （源码级断言，已挂进 `desktop/package.json` 的 test 脚本；main.js 一 require 就建窗拉服务，
   只能照 `native-theme-light.test.js` 的口径测）。
+- **Windows 右上角原生窗控跟随主题（dev-board#865）**：`titleBarOverlay` 是系统画的覆盖层，不吃 CSS。`main.js` 的 `titleBarOverlayFor(dark)` 出取值（浅色 `#ffffff/#3c4043` 保持改造前原值；深色 = 色源 `roles.dark.surface` / `roles.dark.text-2`，即顶栏 `.project-header` 的 `--awd-surface` 与图标色），`syncTitleBarOverlay()` 按 `nativeTheme.shouldUseDarkColors` 调 `setTitleBarOverlay`，**只在 win32**。两个触发点：`applyNativeTheme`（渲染层 `checkba:set-theme` 每次推主题都经过它）与 `nativeTheme.on('updated')`（「跟随系统」时用户在系统设置里切深浅）。改配色色源时主进程这两个字面量要跟着改，`desktop/tests/titlebar-overlay-theme.test.js` 对拍色源。**不要为此把 `themeSource` 改成按平台分流**：nativeTheme 本来就是应用主题的镜像，mac 交通灯那条不变式照旧。
 - **编辑器标签（`.tab-item`）在 project-overview.scss 里只有一份定义了**。此前有两份：
   靠前那份是 VS Code 式贴合标签，被靠后那份整个覆盖成死代码，实际生效的是一排
   10px 全圆角 + 四面描边 + `min-width:100px` 的「筛选 chip」，与下方编辑器完全断开。

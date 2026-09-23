@@ -406,6 +406,8 @@ function attachDownloadListener(session) {
 function applyNativeTheme(mode) {
   const m = ['light', 'dark', 'system'].includes(mode) ? mode : 'light'
   try { nativeTheme.themeSource = m } catch (e) { /* ignore */ }
+  // Windows 右上角原生窗控不归 CSS 管，得跟着主题另推一次（dev-board#865）
+  syncTitleBarOverlay()
   try { return { systemDark: !!nativeTheme.shouldUseDarkColors } } catch (e) { return { systemDark: false } }
 }
 
@@ -435,8 +437,9 @@ function createMainWindow() {
     // 不用 hiddenInset——那个按系统默认标题栏高度摆，压不准我们的 42px。
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 18, y: 13 } } : {}),
     // win：原生最小化/最大化/关闭覆盖在右上角，高度对齐顶栏
+    // 配色随主题，运行中切换由 syncTitleBarOverlay 接手（dev-board#865）
     ...(process.platform === 'win32'
-      ? { titleBarOverlay: { color: '#ffffff', symbolColor: '#3c4043', height: 42 } }
+      ? { titleBarOverlay: titleBarOverlayFor(nativeTheme.shouldUseDarkColors) }
       : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
@@ -600,6 +603,30 @@ function createMainWindow() {
   attachDownloadListener(mainWindow.webContents.session)
 
   startClipboardWatcher()
+}
+
+// Windows 原生窗控（titleBarOverlay）配色（dev-board#865）。
+// 最小化/最大化/关闭三颗按钮由系统画在一块覆盖层上，不吃渲染层的 CSS——主题切到
+// 深色后顶栏变深，这一块若不跟着推就还是白底黑字。底色对齐顶栏 .project-header
+// 的 --awd-surface，符号色对齐顶栏图标的 --awd-text-2；深色取值必须与色源
+// design/tokens/awd-palette.json 的 roles.dark 一致（主进程读不到 CSS 变量，只能是
+// 字面量，desktop/tests/titlebar-overlay-theme.test.js 对拍色源）。浅色保持改造前的
+// 取值不动。mac 是交通灯、没有覆盖层，一律不碰。
+const TITLE_BAR_OVERLAY = {
+  light: { color: '#ffffff', symbolColor: '#3c4043', height: 42 },
+  dark: { color: '#221F1A', symbolColor: '#B0AA9C', height: 42 },
+}
+function titleBarOverlayFor(dark) {
+  return Object.assign({}, dark ? TITLE_BAR_OVERLAY.dark : TITLE_BAR_OVERLAY.light)
+}
+// 按 nativeTheme 的当前深浅刷新覆盖层。nativeTheme 是应用主题的镜像
+// （applyNativeTheme 写 themeSource），'system' 态下它就是系统真话，所以这里不必
+// 再认识三态。
+function syncTitleBarOverlay() {
+  if (process.platform !== 'win32') return
+  const win = mainWindow
+  if (!win || win.isDestroyed() || typeof win.setTitleBarOverlay !== 'function') return
+  try { win.setTitleBarOverlay(titleBarOverlayFor(!!nativeTheme.shouldUseDarkColors)) } catch (e) { /* ignore */ }
 }
 
 function syncOcrSelectWinBounds() {
@@ -1684,6 +1711,8 @@ app.whenReady().then(() => {
   // 为 0，整组按钮凭空消失）。启动先按浅色（渲染层未上报前的安全默认，也是
   // 主题设置的出厂值），随后由渲染层经 checkba:set-theme 推来真实主题。
   applyNativeTheme('light')
+  // 「跟随系统」时用户在系统设置里切深浅，渲染层靠 matchMedia 跟上，原生窗控靠这里
+  try { nativeTheme.on('updated', () => syncTitleBarOverlay()) } catch (e) { /* ignore */ }
   initLocalFileService()
   // IDE 化应用菜单（File 全套 + 最近打开；动作发回渲染层处理）
   try {
