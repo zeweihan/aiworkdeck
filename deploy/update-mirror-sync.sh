@@ -193,6 +193,24 @@ EOF
 TAG=$(python3 -c "import json;print(json.load(open('$TMP/release.json'))['tag_name'])")
 echo "[mirror-sync] latest release: $TAG"
 
+# GitHub 的 releases 列表接口对刚发布的 release 会回一份陈旧的 `assets: []`
+# （v0.47.0 实测：上传完 25 分钟后列表里仍是空数组，而 releases/<id>/assets 已是 7 个）。
+# 列表为空就按 id 再取一次资产清单；仍为空才是真的没有资产。
+RELEASE_ID=$(python3 -c "import json;print(json.load(open('$TMP/release.json'))['id'])")
+ASSET_COUNT=$(python3 -c "import json;print(len(json.load(open('$TMP/release.json')).get('assets', [])))")
+if [ "$ASSET_COUNT" = "0" ]; then
+  echo "[mirror-sync] 列表里 $TAG 的 assets 为空，按 id 重取 releases/$RELEASE_ID/assets"
+  if curl -sfL "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?per_page=50" -o "$TMP/assets.json"; then
+    python3 - "$TMP/release.json" "$TMP/assets.json" <<'EOF'
+import json, sys
+rel = json.load(open(sys.argv[1]))
+rel['assets'] = json.load(open(sys.argv[2]))
+json.dump(rel, open(sys.argv[1], 'w'))
+print(f"[mirror-sync] 重取后 assets = {len(rel['assets'])}")
+EOF
+  fi
+fi
+
 # 逐个下载 patch-*.tar.gz 与 manifest（已存在且大小一致的 asset 跳过）
 python3 - "$TMP/release.json" <<'EOF' > "$TMP/assets.tsv"
 import json, sys
