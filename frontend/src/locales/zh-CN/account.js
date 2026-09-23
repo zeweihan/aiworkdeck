@@ -14,8 +14,10 @@ export default {
 
   // ---- 统一「设置」页「个人」组的三个栏目名（2026-08-20 由个人中心并入）----
   tabWorkLog: '工作记录',
-  tabFavorites: '我的收藏',
-  tabTodos: '我的代办',
+  // dev-board#872：改名「全部收藏」/「我的待办」，与内容重做（跨项目汇总）配套；
+  // 「代办」是错别字，这里一并改成「待办」（这个键只在本命名空间内被引用，直接改值）。
+  tabFavorites: '全部收藏',
+  tabTodos: '我的待办',
 
   // ---- userprofile.vue：工作记录 ----
   defaultUserName: '用户',
@@ -35,15 +37,36 @@ export default {
   allProjectsOption: '全部项目',
   unassociatedProjectOption: '未关联项目',
 
-  // ---- userprofile.vue：我的收藏 / 我的代办占位 ----
+  // ---- 设置页「全部收藏」（dev-board#872：跨项目汇总，按项目分组）----
+  favoritesSubtitle: '汇总你在所有项目里收藏的内容；工作台左栏的收藏夹只看当前项目，并可直接插入文档',
+  favoritesSearchPlaceholder: '搜索标题、内容或项目',
   emptyFavoritesDesc: '暂无收藏内容',
+  emptyFavoritesHow: '在浏览器面板里收藏网页或选中文字，或截图时勾选收藏，都会汇总到这里',
+  favoritesNoMatch: '没有匹配的收藏',
+  favoritesNoProject: '已删除的项目',
   untitledExcerpt: '未命名摘录',
-  emptyTodosDesc: '暂无待办事项',
+  openProjectAction: '打开项目',
+  openSourceAction: '打开来源',
+  copyContentAction: '复制内容',
+  copiedToast: '已复制',
   loadFavoritesFailed: '加载收藏失败',
   deleteFavoriteTitle: '确认删除',
   deleteFavoriteContent: '确定要删除该收藏吗？',
   deleteSuccessToast: '删除成功',
   deleteFailedToast: '删除失败',
+
+  // ---- 设置页「我的待办」（dev-board#872：跨项目任务清单，读写 /api/calendar 与 /api/tasks）----
+  todosSubtitle: '汇总你在所有项目里的任务；也可以直接在这里新增',
+  addTodoAction: '新增',
+  todosGroupOverdue: '已逾期',
+  todosGroupToday: '今天',
+  todosGroupUpcoming: '之后',
+  todosGroupNoDate: '无日期',
+  todosGroupDone: '已完成',
+  emptyTodosDesc: '暂无待办事项',
+  emptyTodosHow: '在项目日历里新增，或在文件上右键「设置截止日」，都会汇总到这里',
+  deleteTodoConfirm: '确定要删除该待办吗？',
+  todoUpdateFailed: '更新失败，请重试',
 
   // ---- userprofile.vue：设置 - 基本信息 ----
   basicInfoGroupTitle: '基本信息',

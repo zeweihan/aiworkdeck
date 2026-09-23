@@ -55,6 +55,10 @@ window.uni = {
     if (String(url).includes('/api/ai/models') && window.__modelsFixture) {
       return success?.({ statusCode: 200, data: window.__modelsFixture })
     }
+    // 桌面 local-mode：checkba_user 为空，身份只能从 GET /api/auth/me 拿（dev-board#877）
+    if (String(url).includes('/api/auth/me') && new URLSearchParams(location.search).get('localUser')) {
+      return success?.({ statusCode: 200, data: { code: 0, data: { id: Number(new URLSearchParams(location.search).get('localUser')) } } })
+    }
     if (String(url).includes('/api/ai/config') && new URLSearchParams(location.search).get('provider') === 'local') {
       return success?.({ statusCode: 200, data: { activeProvider: 'OLLAMA' } })
     }

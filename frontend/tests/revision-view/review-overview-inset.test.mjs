@@ -26,7 +26,7 @@ function editorComponent() {
 
 test('概览的 v-if 与让位 class 共用 reviewOverviewShown，判据与原 v-if 一致', () => {
   assert.match(template, /<ReviewPanel\s+class="libre-review-overview"\s+v-if="reviewOverviewShown"/)
-  assert.match(template, /<view class="libre-body" :class="\{ 'review-overview-open': reviewOverviewShown \}">/)
+  assert.match(template, /<view class="libre-body" :class="\{ 'review-overview-open': reviewOverviewShown, 'review-en': reviewPanelEn \}">/)
   const shown = editorComponent().computed.reviewOverviewShown
   for (const reviewOpen of [true, false]) {
     for (const ready of [true, false]) {
@@ -55,4 +55,19 @@ test('画布上的宿主浮层都在让位规则里，且都是 .libre-canvas-wr
   assert.match(rule('.libre-evidence-drop'), new RegExp('right: ' + panelWidth + 'px'))
   // 基线：.libre-float 平时的 right 仍是 16px，让位只在概览打开时生效
   assert.match(style, /\n\.libre-float \{[^}]*right: 16px/)
+})
+
+test('英文面板更宽（dev-board#874），让位宽度跟着 ReviewPanel .rp.rp-en 走', () => {
+  const enWidth = Number(PANEL.match(/\.rp\.rp-en \{[^}]*?\bwidth: (\d+)px/)[1])
+  assert.ok(enWidth > 320, '前置条件：读到了英文面板宽度')
+  const rule = (selector) => {
+    const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const m = style.match(new RegExp('\\.libre-body\\.review-overview-open\\.review-en ' + esc + '[^{]*\\{([^}]*)\\}'))
+    assert.ok(m, '缺少英文让位规则：' + selector)
+    return m[1]
+  }
+  assert.match(rule('.libre-float'), new RegExp('right: calc\\(' + enWidth + 'px \\+ 16px\\)'))
+  assert.match(rule('.libre-stale-bar'), new RegExp('right: ' + enWidth + 'px'))
+  assert.match(rule('.libre-evidence-drop'), new RegExp('right: ' + enWidth + 'px'))
+  assert.match(PANEL, /<view class="rp" :class="\{ 'rp-en': isEn \}">/)
 })

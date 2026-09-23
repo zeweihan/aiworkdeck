@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view v-if="open" class="memory-mask" @tap="$emit('close')">
-    <view class="memory-dialog" @tap.stop>
-      <view class="memory-header">
+  <view v-if="open" :class="inline ? 'memory-inline' : 'memory-mask'" @tap="onBackdropTap">
+    <view :class="inline ? 'memory-panel-inline' : 'memory-dialog'" @tap.stop>
+      <view v-if="!inline" class="memory-header">
         <view>
           <text class="memory-title">{{ $t('chat.memoryTitle') }}</text>
           <text class="memory-subtitle">{{ $t('chat.memorySubtitle') }}</text>
@@ -29,7 +29,7 @@
         <text>{{ loadError }}</text>
         <text class="memory-link" @tap="loadSpaces">{{ $t('chat.memoryRetry') }}</text>
       </view>
-      <view v-else class="memory-body">
+      <view v-else :class="inline ? 'memory-body memory-body-inline' : 'memory-body'">
         <view class="memory-files">
           <view class="memory-files-head">
             <text>{{ $t('chat.memoryFiles') }}</text>
@@ -99,8 +99,11 @@ import {
   saveMemoryFile,
 } from '@/services/api.js'
 import { markdownFileLinks } from '@/composables/memoryBrowserState.mjs'
+import { setGlobalOverlay } from '@/utils/overlayState.js'
 
 const MAX_MEMORY_BYTES = 128 * 1024
+// 弹窗态持有全局 overlay 的实例键序号（每个 MemoryBrowser 实例一个）
+let overlayInstanceSeq = 0
 
 export default {
   name: 'MemoryBrowser',
@@ -108,6 +111,10 @@ export default {
   props: {
     open: { type: Boolean, default: false },
     projectId: { type: [String, Number], default: null },
+    // 内嵌态（设置页「记忆」栏目直接嵌入）：不带遮罩、不带关闭钮，也不接管桌面端
+    // BrowserView 遮挡——它不是全屏浮层，本来就不挡任何东西。
+    // 弹窗态（默认，ChatInterface 的「记忆」浮层）：保留原有全屏遮罩行为。
+    inline: { type: Boolean, default: false },
   },
   data() {
     return {
@@ -115,6 +122,11 @@ export default {
       loading: false, saving: false, loadError: '', conflict: false,
       showCreate: false, newTopic: '',
       viewGeneration: 0, currentSpaceId: null,
+      // 弹窗态是否正持有全局 overlay：只在这个标志与目标状态不同的那一刻才调用
+      // setGlobalOverlay。持有者键按实例唯一（ChatInterface 与设置页各有一个实例），
+      // 见 utils/overlayState.js 的按持有者记账。
+      overlayHeld: false,
+      overlayKey: `memory-browser:${++overlayInstanceSeq}`,
     }
   },
   computed: {
@@ -139,6 +151,7 @@ export default {
     open(value) {
       if (value) this.loadSpaces()
       else this.viewGeneration += 1
+      this.syncOverlay(value)
     },
     projectId() {
       if (this.open) this.loadSpaces()
@@ -146,8 +159,27 @@ export default {
   },
   mounted() {
     if (this.open) this.loadSpaces()
+    this.syncOverlay(this.open)
+  },
+  beforeUnmount() {
+    // 面板卸载时弹窗仍开着的话（切标签/切会话把组件整个销毁），持有的那一份
+    // 计数必须还回去，否则 BrowserView 会永远被藏着。
+    this.syncOverlay(false)
   },
   methods: {
+    // 内嵌态从不接触全局 overlay；弹窗态只在目标值与当前持有状态不同时才调用
+    // setGlobalOverlay，天然幂等——重复的 open→open 或 close→close 不会
+    // 误多算/误多减一次引用计数（见 utils/overlayState.js）。
+    syncOverlay(active) {
+      if (this.inline) return
+      const want = !!active
+      if (want === this.overlayHeld) return
+      setGlobalOverlay(want, this.overlayKey)
+      this.overlayHeld = want
+    },
+    onBackdropTap() {
+      if (!this.inline) this.$emit('close')
+    },
     scopeLabel(scope) {
       return this.$t(`chat.memoryScope${String(scope || '').replace(/^./, (c) => c.toUpperCase())}`)
     },
@@ -377,6 +409,12 @@ export default {
 <style scoped>
 .memory-mask { position: fixed; inset: 0; z-index: 3200; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--awd-overlay); backdrop-filter: blur(2px); }
 .memory-dialog { width: min(900px, 92vw); height: min(680px, 88vh); display: flex; flex-direction: column; overflow: hidden; border-radius: 12px; background: var(--awd-surface); box-shadow: 0 20px 50px rgba(0,0,0,.18); }
+/* 内嵌态：设置页「记忆」栏目直接嵌入，不是全屏浮层——不设遮罩、不设固定定位，
+   高度随内容区自适应，只保证编辑器区域至少 360px 高（见 .memory-body-inline）。 */
+.memory-inline { display: block; width: 100%; }
+.memory-panel-inline { width: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--awd-surface); }
+.memory-body-inline { min-height: 360px; }
+.memory-body-inline .memory-textarea { min-height: 360px; }
 .memory-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 18px 20px 12px; border-bottom: 1px solid var(--awd-border); }
 .memory-title { display: block; color: var(--awd-text); font-size: 18px; font-weight: 600; }
 .memory-subtitle { display: block; margin-top: 3px; color: var(--awd-text-3); font-size: 12px; }
@@ -420,7 +458,7 @@ export default {
   .memory-header { padding: 12px; }
   .memory-spaces { padding: 8px 12px; overflow-x: auto; }
   .memory-space { flex-shrink: 0; }
-  .memory-body { flex-direction: column; }
+  .memory-body,.memory-body-inline { flex-direction: column; }
   .memory-files { width: auto; max-height: 150px; border-right: 0; border-bottom: 1px solid var(--awd-border); }
   .memory-editor { padding: 10px; }
   .memory-meta { flex-direction: column; gap: 3px; }

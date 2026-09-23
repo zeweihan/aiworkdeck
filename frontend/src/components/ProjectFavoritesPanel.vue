@@ -70,6 +70,7 @@ import { getProjectFavorites, deleteFavorite, getFavoriteImageUrl } from '@/serv
 import { ICONS } from '@/config/icons.js'
 import { isDesktopHost } from '@/services/host.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import { favoriteKind } from '@/utils/personalCollections.js'
 
 export default {
 
@@ -112,15 +113,15 @@ export default {
     }
   },
   methods: {
+    // 类型判定与设置页「全部收藏」共用 utils/personalCollections.js 的 favoriteKind
     getTypeLabel(fav) {
-      if (fav.sourceUrl) return this.$t('panels.pfTypeWeb')
-      if (fav.imagePath) return this.$t('panels.pfTypeImage')
+      const kind = favoriteKind(fav)
+      if (kind === 'web') return this.$t('panels.pfTypeWeb')
+      if (kind === 'image') return this.$t('panels.pfTypeImage')
       return this.$t('panels.pfTypeText')
     },
     getTypeClass(fav) {
-      if (fav.sourceUrl) return 'type-web'
-      if (fav.imagePath) return 'type-image'
-      return 'type-text'
+      return 'type-' + favoriteKind(fav)
     },
     insertFav(fav) {
       // 图片收藏（网页摘录截图）content 为空串，按纯文本 emit 会被上层静默丢弃

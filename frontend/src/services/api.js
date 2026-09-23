@@ -1816,6 +1816,14 @@ export function getMyProjects() {
   });
 }
 
+// 新建任务时的项目下拉选项（设置页「我的待办」，dev-board#872）：只要 id/name。
+// 单独一个封装是刻意的——scripts/check-navigation-contract.mjs 禁止个人组栏目
+// 再引用 getMyProjects（防止把整摊项目列表页拖回设置页），这里只取选项、不渲染项目。
+export async function getTaskProjectOptions() {
+  const list = await request({ url: '/api/projects/my', method: 'GET' });
+  return (Array.isArray(list) ? list : []).map((p) => ({ id: p.id, name: p.name }));
+}
+
 // 删除项目
 export function deleteProject(projectId) {
   return request({

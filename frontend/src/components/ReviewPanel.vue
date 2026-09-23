@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="rp">
+  <view class="rp" :class="{ 'rp-en': isEn }">
     <view class="rp-head">
       <!-- 收起（dev-board#753）：面板左上角一个向右的箭头，指向它收起的方向。
            原先是右端一行 12px 灰字「收起」，真机上没人看得见。 -->
@@ -245,6 +245,7 @@ import {
   groupRevisions, countByAuthorKind, filterByAuthorKind, linkCommentsToRevisions, authorKind,
 } from '@/utils/reviewGrouping.js'
 import { provenanceLabel } from '@/utils/provenanceAlign.js'
+import { isEnglish } from '@/utils/appLanguage.js'
 
 // RedlineType 归一后的显示键 → i18n 键。插入/删除沿用旧键（文案不变）。
 const TYPE_I18N = {
@@ -320,6 +321,8 @@ export default {
     }
   },
   computed: {
+    // 切语言是整页 reload，这里取一次就够（dev-board#874）。
+    isEn() { return isEnglish() },
     isMerge() { return this.mode === 'merge' },
     mainSideLabel() { return this.mainLabel || this.$t('version.mergeSideMainDefault') },
     otherSideLabel() { return this.otherLabel || this.$t('version.mergeSideOtherDefault') },
@@ -705,6 +708,17 @@ export default {
    uni-h5 下 <text> 的内容真正落在内层 span 里，外层的 gap 够不着它。 */
 .rp-tab-n { margin-left: 3px; font-size: 10.5px; color: var(--awd-text-3); }
 .rp-tab.on .rp-tab-n { color: var(--awd-accent-text); }
+/* 英文（dev-board#874）：五个英文标签 + 计数在 320px 里要约 385px（无头 Chrome 实测，
+   -apple-system/Segoe UI 字体），横滚之后「AI Review」「Origin」被截在面板外、用户
+   看不到还有标签（真机 puppeteer 截图复现，见 tests/review-panel-ui）。英文面板放宽到
+   432px，标签内边距 7→6、间距 2px 不变，五个标签一行放全，且最后一个标签右边界离
+   面板边缘留出约 14px 安全余量——408px 一度卡到刚好 0px 富余（.rp-tabs 是 flex:1，
+   scrollWidth 只能证明「没溢出」不能证明有余量），字体度量一变（Windows Segoe UI 等）
+   就会退回溢出，故加宽到 432px 留出实测 >=8px 的缓冲。中文不受影响（五个标签 271px，
+   320px 下可用 277px，原本就有余量）。432 与 LibreOfficeEditor 里浮层让位的英文宽度
+   是同一个数，改这里要一起改那边；溢出时仍退回横滚兜底。 */
+.rp.rp-en { width: 432px; }
+.rp-en .rp-tab { padding: 3px 6px; }
 .rp-bulk { display: flex; gap: 6px; padding: 8px 10px 0; }
 .rp-bulk-btn { flex: 1; text-align: center; padding: 4px 0; border: 1px solid var(--awd-border); border-radius: 6px;
   font-size: 12px; color: var(--awd-text-2); background: var(--awd-surface); }
