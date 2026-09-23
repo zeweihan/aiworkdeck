@@ -643,7 +643,7 @@ class WorkSessionServiceTest {
     void commitAiRoundAttributesToAiWorkdeck() throws Exception {
         svc.onChangeSignal(7L, 1L, "韩泽伟");
         Files.writeString(root.resolve("projects/7/合同.txt"), "AI 改的");
-        String sha = svc.commitAiRound(7L, 1L);
+        String sha = svc.commitAiRound(7L, 1L, false);
 
         assertNotNull(sha);
         VersionEntry head = repoSvc.log(7L, "HEAD", 1).get(0);
@@ -656,7 +656,68 @@ class WorkSessionServiceTest {
     void commitAiRoundWithNoChangesReturnsNull() {
         svc.onChangeSignal(7L, 1L, "韩泽伟");
         String first = svc.commitNow(7L, 1L, "韩泽伟", null);
-        assertNull(svc.commitAiRound(7L, 1L));
+        assertNull(svc.commitAiRound(7L, 1L, false));
+    }
+
+    /**
+     * dev-board#822：只读的 AI 提问不得给案卷开一段「工作」。
+     *
+     * <p>律师只问了一句话（本轮只调了 doc_list_project_files 这类只读工具），工作区一个
+     * 字节都没变；旧实现照样 ensureSession，案卷进「工作中」，随后「取回最新稿」「交稿」
+     * 被 CloudSyncService.requireCleanForCloudOps 当场挡掉。
+     */
+    @Test
+    void readOnlyAiRoundDoesNotOpenAWorkSession() {
+        primeManifestIntoHistory();
+        assertTrue(svc.activeSession(7L).isEmpty(), "前提：还没有任何进行中的工作");
+
+        assertNull(svc.commitAiRound(7L, 1L, false), "只读轮没有任何改动，不该落版");
+
+        assertTrue(svc.activeSession(7L).isEmpty(), "只读的 AI 提问不得开工作段");
+        assertEquals("master", repoSvc.currentBranch(7L), "也不该被切到工作分支上去");
+    }
+
+    /**
+     * dev-board#822 的另一半：真写了东西的那一轮照旧开段并落版。
+     * 这里走的是「服务端直接落盘」那条判据（write_file / text_* 等），
+     * documentEdited 仍为 false，判据靠工作区真的脏了。
+     */
+    @Test
+    void aiRoundThatWroteFilesStillOpensASessionAndCommits() throws Exception {
+        Files.writeString(root.resolve("projects/7/合同.txt"), "AI 改的");
+
+        String sha = svc.commitAiRound(7L, 1L, false);
+
+        assertNotNull(sha, "工作区脏了就该落版");
+        assertTrue(svc.activeSession(7L).isPresent(), "真动了文件的那一轮照旧开工作段");
+        assertEquals("AI WorkDeck", repoSvc.log(7L, "HEAD", 1).get(0).authorName());
+    }
+
+    /**
+     * dev-board#822 最容易漏的一档：编辑器桥上的写入（doc_insert_at_cursor 等）先落在前端
+     * 编辑器里，字节要等自动保存才回到服务端——落版这一刻工作区还是干净的。
+     * 所以 documentEdited 必须能单独把工作段开出来，否则这一段编辑会无处归属。
+     */
+    @Test
+    void editorBridgeWriteOpensASessionEvenBeforeTheBytesLand() {
+        primeManifestIntoHistory();
+        assertTrue(svc.activeSession(7L).isEmpty(), "前提：还没有任何进行中的工作");
+
+        svc.commitAiRound(7L, 1L, true);
+
+        assertTrue(svc.activeSession(7L).isPresent(),
+                "编辑器桥写过东西，即使字节还没回来也要开段，后续自动保存才有归属");
+    }
+
+    /**
+     * 把 .awd/tree.json 先落进历史——本类的 setUp 直接调 repoSvc.init，绕过了
+     * enableVersionRecording 里「先写清单再落初始版本」那一步，于是每个用例开局清单
+     * 都还是未跟踪状态，工作区天然是脏的。生产里不会这样，这里补齐，让「只读轮」
+     * 这几个用例测的真是判据本身，而不是夹具的这点差异。
+     */
+    private void primeManifestIntoHistory() {
+        manifestSvc.writeToWorkTree(7L, manifestSvc.capture(7L));
+        repoSvc.commitAll(7L, "初始版本", "session", null, "韩泽伟", "hzw@example.com");
     }
 
     /**

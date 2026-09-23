@@ -838,8 +838,27 @@ public class WorkSessionService {
      * 但清单写入与提交照旧，稿上的 AI 轮次也必须正常落版。
      * 已知局限（与文档检查点同源）：编辑器自动保存是异步的，轮次结束时未 flush 的
      * 改动不在本笔里，会随后续保存进入普通存档。
+     *
+     * <p><b>只读轮不开工作段（dev-board#822）。</b>这里的 {@link #ensureSession} 是为了让
+     * AI 那笔自动存档落进一段工作里（时间线按工作段分组），不是「问一句 AI 就等于开了一段活」。
+     * 旧实现无条件开段，于是律师只问了一句纯只读的话（本轮只调了 doc_list_project_files），
+     * 案卷也进了「工作中」，随后「取回最新稿」「交稿」被
+     * {@code CloudSyncService.requireCleanForCloudOps} 当场挡掉——v0.46.3 发版门的
+     * app-e2e J14-准备就是这么确定性红的。
+     *
+     * <p>判据两条，任一成立就算「这一轮动了文件」，缺一不可：
+     * <ol>
+     *   <li>{@code documentEdited}——编辑器桥上的写入（{@code doc_*}/{@code sheet_*}/{@code slide_*}，
+     *       判据见 {@code ClientCapabilityService.isDocumentWritingTool}）。这类改动先落在前端
+     *       编辑器里，字节要等自动保存才回到服务端，此刻工作区往往还是干净的，只能靠编排器
+     *       在本轮记下的这个标志；</li>
+     *   <li>工作区真的脏了——服务端直接落盘的那些工具（{@code write_file} / {@code text_*} /
+     *       pptx / 导出类）。它们本来就各自 {@code signalChange} 过、段早开好了，这一条兜住的是
+     *       「脏但无段」的路径（AI artifact 落盘等），顺带覆盖只动了文件树清单的软删除。</li>
+     * </ol>
+     * 读取待提交变更失败时按「有改动」处理：版本记录是保险，宁可多开一段也不能漏掉一次落版。
      */
-    public String commitAiRound(long projectId, Long userId) {
+    public String commitAiRound(long projectId, Long userId, boolean documentEdited) {
         if (!repoService.isInitialized(projectId)) return null;
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
@@ -848,11 +867,28 @@ public class WorkSessionService {
                 log.info("采纳裁决进行中，跳过这次 AI 轮次落版: project={}", projectId);
                 return null;
             }
+            // 清单要在判据之前写：只动了文件树的那种改动（软删除进回收站不碰磁盘文件）
+            // 只体现在 .awd/tree.json 上，先写才看得见。
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            List<FileChange> changes;
+            boolean changesKnown;
+            try {
+                changes = repoService.pendingChanges(projectId);
+                changesKnown = true;
+            } catch (Exception e) {
+                log.warn("读取 AI 轮次待提交变更失败，按「有改动」处理: project={}", projectId, e);
+                changes = List.of();
+                changesKnown = false;
+            }
+            if (changesKnown && changes.isEmpty() && !documentEdited) {
+                log.debug("AI 轮次没有任何文件改动，不开工作段也不落版: project={}", projectId);
+                return null;
+            }
             if (!onDraftBranch(projectId)) {
                 ensureSession(projectId, userId, AI_AUTHOR_NAME);
             }
-            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-            String msg = describePendingChanges(projectId);
+            String msg = changesKnown ? describeChanges(changes)
+                    : LangText.of("修改了项目文件", "Edited project files");
             return repoService.commitAll(projectId, msg, "auto", null,
                     AI_AUTHOR_NAME, AI_AUTHOR_EMAIL);
         } finally {

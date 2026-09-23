@@ -123,7 +123,7 @@ class DraftSessionGuardTest {
         repoSvc.checkoutBranch(7L, "draft/1001");
         Files.writeString(root.resolve("projects/7/合同.txt"), "稿上被 AI 改了");
 
-        String sha = svc.commitAiRound(7L, 1L);
+        String sha = svc.commitAiRound(7L, 1L, false);
 
         assertNotNull(sha, "AI 轮次结束在稿上也要落版");
         assertEquals("draft/1001", repoSvc.currentBranch(7L), "不得被切走");

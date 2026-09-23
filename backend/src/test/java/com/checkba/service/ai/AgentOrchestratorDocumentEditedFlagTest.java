@@ -65,6 +65,7 @@ class AgentOrchestratorDocumentEditedFlagTest {
     private ToolRegistry toolRegistry;
     private List<String> sseEvents;
     private List<String> sseData;
+    private com.checkba.version.WorkSessionService workSessions;
     private AgentOrchestrator orchestrator;
 
     /** 按脚本逐轮吐内容的模型（与 AgentOrchestratorQuestionStopTest 同款） */
@@ -130,6 +131,7 @@ class AgentOrchestratorDocumentEditedFlagTest {
         XmlToolCallParser parser = mock(XmlToolCallParser.class);
         when(parser.containsToolCall(any())).thenReturn(false);
 
+        workSessions = mock(com.checkba.version.WorkSessionService.class);
         AiContextProperties contextProperties = new AiContextProperties();
         orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, mock(TokenUsageService.class), assembler,
@@ -140,7 +142,7 @@ class AgentOrchestratorDocumentEditedFlagTest {
                 new AgentRunStateService(
                         mock(com.checkba.repository.AgentRunRecordRepository.class),
                         mock(com.checkba.service.telemetry.TelemetryTurnTracker.class)),
-                mock(com.checkba.version.WorkSessionService.class), new AiFailoverProperties(),
+                workSessions, new AiFailoverProperties(),
                 new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)),
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
@@ -268,5 +270,27 @@ class AgentOrchestratorDocumentEditedFlagTest {
                 "读取工具仍然需要 LOWA，可见性判据不能跟着收窄");
         assertFalse(ClientCapabilityService.isDocumentWritingTool("search_project_files"));
         assertFalse(ClientCapabilityService.isDocumentWritingTool("office_replace_batch"));
+    }
+
+    @Test
+    @DisplayName("只读轮：commitAiRound 收到 documentEdited=false —— 不许给案卷开一段「工作」（dev-board#822）")
+    void readOnlyTurnTellsVersionRecordingNothingWasWritten() {
+        run("conv-readonly-version",
+                callsTool("doc_list_project_files"),
+                AiMessage.from("<final>这个项目里有 3 份文件。</final>"));
+
+        // 只问一句话就进「工作中」，随后「取回最新稿」「交稿」会被
+        // CloudSyncService.requireCleanForCloudOps 当场挡掉（v0.46.3 发版门 J14-准备的确定性红）。
+        org.mockito.Mockito.verify(workSessions).commitAiRound(1L, 7L, false);
+    }
+
+    @Test
+    @DisplayName("写入轮：commitAiRound 收到 documentEdited=true —— 编辑器桥的字节还没回服务端，只能靠这个标志")
+    void writingTurnTellsVersionRecordingToOpenASession() {
+        run("conv-write-version",
+                callsTool("doc_insert_at_cursor"),
+                AiMessage.from("<final>条款已写入。</final>"));
+
+        org.mockito.Mockito.verify(workSessions).commitAiRound(1L, 7L, true);
     }
 }
