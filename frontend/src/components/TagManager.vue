@@ -231,7 +231,7 @@ export default {
         content: this.$t('files.deleteTagConfirm', { name: tag.name }),
         confirmText: this.$t('common.delete'),
         cancelText: this.$t('common.cancel'),
-        confirmColor: '#B5483C',
+        danger: true,
         success: async (res) => {
           if (res.confirm) {
             try {

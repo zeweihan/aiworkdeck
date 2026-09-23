@@ -3229,10 +3229,10 @@ try {
           await j13ClickTextIn('.msb', '诉讼可视化')
           await j13WaitTextIn('.mdp', '已启用', 15000)
           await j13ClickSel('.mdp .mdp-btn.danger')
-          // uni.showModal 在 H5 目标下渲染成 .uni-modal，确认按钮是 .uni-modal__btn_primary
-          // （不是文案「卸载」本身——那个词在卸载按钮与确认按钮上各出现一次，
-          // 覆盖态下用文本点击会点到底下被遮住的原按钮，本轮调试实测踩过）。
-          await j13ClickSel('.uni-modal__btn_primary')
+          // uni.showModal 已转发给应用内对话框 AwdDialog（dev-board#849），确认按钮是
+          // .awd-dlg-mask .awd-dlg__confirm（不是文案「卸载」本身——那个词在卸载按钮与
+          // 确认按钮上各出现一次，覆盖态下用文本点击会点到底下被遮住的原按钮，实测踩过）。
+          await j13ClickSel('.awd-dlg-mask .awd-dlg__confirm')
           let railGone = false
           for (let i = 0; i < 15; i++) {
             if (!(await j13Page.$('[title="诉讼可视化"]'))) { railGone = true; break }

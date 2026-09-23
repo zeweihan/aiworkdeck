@@ -444,7 +444,7 @@ export default {
         uni.showModal({
             title: this.$t('panels.ddConfirmDeleteTitle'),
             content: this.$t('panels.ddDeleteRequestConfirmBody'),
-            confirmColor: '#DC3545',
+            danger: true,
             success: async (res) => {
                 if (res.confirm) {
                     try {
