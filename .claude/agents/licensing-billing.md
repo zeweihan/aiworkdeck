@@ -469,7 +469,7 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 
 (*) `ai-usage` 是唯一一条**权威文档也没收录**的端点：官网仓的 `doc/desktop-contract.md` 与
 `scripts/contract-check.mts` 里都搜不到它，实现只在官网仓 `app/api/account/ai-usage/route.ts`
-（那里还多返回 `exchangeRate` / `marginMultiplier` / `disabled` 三个字段，桌面端没用）。
+（那里还多返回 `exchangeRate` / `marginMultiplier` / `disabled` 三个字段；**2026-09 起桌面端读前两个**——`ModelPriceDisplayService` 用它们把模型选择器的价格折成「实付价」，官网新版还会多给 `currency` / `exchangeRateSource` / `exchangeRateUpdatedAt`，缺 `currency` 时按汇率推断币种、判不出就退回美元标价，绝不编造汇率；口径细节见 ai-chat.md「模型价格显示口径」）。
 上表这一行的字段以该 route 为准；官网仓补齐这条端点 + contract-check 之前，改它两侧不会有任何护栏提醒。
 
 三处与总 Spec §9 字面不同、**以实现与官网契约为准**：`verify-key` 的 `plan` 是 `paid|free`（不是 `trial|paid`）；

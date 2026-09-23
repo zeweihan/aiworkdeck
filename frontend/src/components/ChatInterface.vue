@@ -504,31 +504,10 @@
                     <view class="model-selector" @tap="toggleModelDropdown">
                        <text class="model-name">{{ currentModelName }}</text>
                        <text class="dropdown-arrow">▼</text>
-                       <view v-if="showModelDropdown" class="model-dropdown down" role="listbox">
-                          <view v-for="g in modelGroups" :key="g.key" class="model-group">
-                             <view class="model-group-head">
-                                <text class="model-group-vendor">{{ g.vendor }}</text>
-                                <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">{{ $t('chat.intlNetworkRequired') }}</text>
-                             </view>
-                             <view v-for="m in g.models" :key="m.id"
-                                   class="model-option"
-                                   :class="{ active: currentModelId === m.id }"
-                                   role="option" tabindex="0" :aria-selected="currentModelId === m.id ? 'true' : 'false'"
-                                   @keydown.enter.stop="onOptionKey($event, () => selectModel(m))"
-                                   @keydown.space.stop="onOptionKey($event, () => selectModel(m))"
-                                   @tap.stop="selectModel(m)">
-                                <view class="model-option-head">
-                                   <text class="model-option-name">{{ m.name }}</text>
-                                   <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
-                                   <!-- 严格判 false：vision 缺字段是「未知」，标出来等于造谣 -->
-                                   <text v-if="m.vision === false" class="model-novision-tag">{{ $t('chat.noVisionTag') }}</text>
-                                </view>
-                                <text class="model-option-price">{{ priceLabel(m) }}</text>
-                             </view>
-                          </view>
-                          <view v-if="!modelGroups.length" class="model-empty">{{ $t('chat.noModels') }}</view>
-                          <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
-                       </view>
+                       <ModelSelectorDropdown v-if="showModelDropdown" placement="down"
+                          :groups="modelGroups" :current-model-id="currentModelId"
+                          :price-display="modelPriceDisplay" :network-region-basis="networkRegionBasis"
+                          @select="selectModel" />
                     </view>
                     <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
                     <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
@@ -768,31 +747,10 @@
                 <view class="model-selector" @tap="toggleModelDropdown">
                    <text class="model-name">{{ currentModelName }}</text>
                    <text class="dropdown-arrow">▲</text>
-                   <view v-if="showModelDropdown" class="model-dropdown up" role="listbox">
-                      <view v-for="g in modelGroups" :key="g.key" class="model-group">
-                         <view class="model-group-head">
-                            <text class="model-group-vendor">{{ g.vendor }}</text>
-                            <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">{{ $t('chat.intlNetworkRequired') }}</text>
-                         </view>
-                         <view v-for="m in g.models" :key="m.id"
-                               class="model-option"
-                               :class="{ active: currentModelId === m.id }"
-                               role="option" tabindex="0" :aria-selected="currentModelId === m.id ? 'true' : 'false'"
-                               @keydown.enter.stop="onOptionKey($event, () => selectModel(m))"
-                               @keydown.space.stop="onOptionKey($event, () => selectModel(m))"
-                               @tap.stop="selectModel(m)">
-                            <view class="model-option-head">
-                               <text class="model-option-name">{{ m.name }}</text>
-                               <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
-                               <!-- 严格判 false：vision 缺字段是「未知」，标出来等于造谣 -->
-                               <text v-if="m.vision === false" class="model-novision-tag">{{ $t('chat.noVisionTag') }}</text>
-                            </view>
-                            <text class="model-option-price">{{ priceLabel(m) }}</text>
-                         </view>
-                      </view>
-                      <view v-if="!modelGroups.length" class="model-empty">{{ $t('chat.noModels') }}</view>
-                      <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
-                   </view>
+                   <ModelSelectorDropdown v-if="showModelDropdown" placement="up"
+                      :groups="modelGroups" :current-model-id="currentModelId"
+                      :price-display="modelPriceDisplay" :network-region-basis="networkRegionBasis"
+                      @select="selectModel" />
                 </view>
                 <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
                 <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
@@ -889,6 +847,7 @@ import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConve
 import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import DecisionAssistControl from './DecisionAssistControl.vue'
+import ModelSelectorDropdown from './ModelSelectorDropdown.vue'
 import { decisionAssistPreferenceKey, readDecisionAssistPreference, writeDecisionAssistPreference } from '@/utils/decisionAssistPreference.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
@@ -926,7 +885,7 @@ import {
 
 export default {
   name: 'ChatInterface',
-  components: { DecisionAssistControl, RootBubble, ChatTurnRail, MentionPicker, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
+  components: { DecisionAssistControl, ModelSelectorDropdown, RootBubble, ChatTurnRail, MentionPicker, BackgroundTaskIndicator, AgentInbox, MemoryBrowser, OptionalComponentCard },
   props: {
     projectId: String,
     projectName: String,
@@ -1363,6 +1322,9 @@ export default {
     // 网络区域判定依据（后端本机 JVM 信号判的，不是官网回传、也不是 navigator.language）：
     // 境内清单里不含国际档模型，这句人读的判据用来解释「国际模型为什么不见了」
     const networkRegionBasis = ref('')
+    // 价格显示口径（dev-board#853）：实付价（平台通道，站点币种）还是厂商美元标价，
+    // 由后端按供应商与官网扣费汇率决定，前端只负责写出来（见 ModelSelectorDropdown）
+    const modelPriceDisplay = ref(null)
 
     const currentModelId = ref('')
     const currentModelName = ref(t('chat.selectModel'))
@@ -1389,17 +1351,6 @@ export default {
         console.warn('[ChatInterface] 保存模型选择失败:', e)
       }
     }
-
-    // 单价跨度从 0.02 到 15 美元/百万 tokens，固定两位小数会把便宜模型显示成 0.00
-    const formatPrice = (v) => {
-      const n = Number(v)
-      if (!isFinite(n) || n < 0) return '-'
-      if (n === 0) return '0'
-      return (n < 1 ? n.toFixed(3) : n.toFixed(2)).replace(/0+$/, '').replace(/\.$/, '')
-    }
-
-    // 下拉里的价格标签：让用户在切模型之前就知道自己在花什么钱
-    const priceLabel = (m) => t('chat.priceLabel', { input: formatPrice(m.inputPricePerM), output: formatPrice(m.outputPricePerM) })
 
     // 按厂商分组；region=INTERNATIONAL 的组排在后面并标注「需国际网络」
     const modelGroups = computed(() => {
@@ -1472,6 +1423,7 @@ export default {
         availableModels.value = list
         defaultModelId.value = res?.defaultModel || ''
         networkRegionBasis.value = res?.networkRegionBasis || ''
+        modelPriceDisplay.value = res?.priceDisplay || null
 
         if (!list.length) {
           // 清单为空只有配置异常一种可能，此时不要伪造一个 id 发出去
@@ -3923,7 +3875,7 @@ export default {
        selectModel,
        showModelDropdown,
        modelGroups,
-       priceLabel,
+       modelPriceDisplay,
        networkRegionBasis,
        currentModelVision,
        // Agent Mode
@@ -4567,34 +4519,7 @@ export default {
   color: var(--awd-text-2);
 }
 
-.model-dropdown {
-  position: absolute;
-  /* 锚点是 .input-card（position:relative，见上方定义）而不是 .model-selector
-     自己——固定 268px 的 min-width 摆在只有内容宽的选择器上，AI 面板收到最窄
-     240px 时无论往哪边对齐都放不下，会被 .chat-interface 的 overflow:hidden
-     裁掉一截。改成跟随输入卡自身宽度（left/right 都钉到 0），永不溢出。 */
-  left: 0;
-  right: 0;
-  background: var(--awd-surface);
-  border: 1px solid var(--awd-border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  z-index: 1001;
-  min-width: 0;
-  max-height: 320px;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-/* 向下展开 (新对话页面) */
-.model-dropdown.down {
-  top: calc(100% + 4px);
-}
-
-/* 向上展开 (对话中) */
-.model-dropdown.up {
-  bottom: calc(100% + 4px);
-}
+/* .model-dropdown 及其内部样式随组件搬到 ModelSelectorDropdown.vue（dev-board#853） */
 
 /* ============= Mode Selector (Agent/Ask/Plan) ============= */
 .mode-selector {
@@ -4774,92 +4699,6 @@ export default {
   bottom: 0;
   z-index: 999;
   background: transparent;
-}
-
-.model-option {
-  padding: 8px 14px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--awd-text);
-  transition: background 0.15s ease;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.model-option:hover {
-  background: var(--awd-accent-soft);
-}
-.model-option.active {
-  color: var(--awd-accent-text);
-  font-weight: 500;
-  background: var(--awd-accent-wash);
-}
-
-/* ===== 模型下拉：按厂商分组，国际档在后并标注需国际网络 ===== */
-.model-group + .model-group {
-  border-top: 1px solid var(--awd-border-subtle);
-}
-.model-group-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px 2px;
-}
-.model-group-vendor {
-  font-size: 11px;
-  color: var(--awd-text-3);
-  letter-spacing: 0.5px;
-}
-.model-region-tag {
-  font-size: 10px;
-  color: var(--awd-warning-text);
-  background: var(--awd-warning-soft);
-  border-radius: 3px;
-  padding: 1px 4px;
-}
-.model-option-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  /* 下拉现在跟随输入卡宽度，窄面板下模型名 + 单价 tag 放不下一行——允许换行，
-     不许把 tag 裁掉。 */
-  flex-wrap: wrap;
-}
-.model-option-name {
-  font-size: 13px;
-}
-.model-tier-tag {
-  font-size: 10px;
-  color: var(--awd-text-2);
-  background: var(--awd-surface-3);
-  border-radius: 3px;
-  padding: 1px 4px;
-}
-/* 与 tier tag 同一档中性灰，刻意不用告警色：读不了图会自动降级 OCR，是能力差异不是错误 */
-.model-novision-tag {
-  font-size: 10px;
-  color: var(--awd-text-2);
-  background: var(--awd-surface-3);
-  border-radius: 3px;
-  padding: 1px 4px;
-}
-.model-option-price {
-  font-size: 11px;
-  color: var(--awd-text-3);
-  font-weight: 400;
-}
-.model-empty {
-  padding: 10px 14px;
-  font-size: 12px;
-  color: var(--awd-text-3);
-}
-.model-region-basis {
-  border-top: 1px solid var(--awd-border-subtle);
-  margin-top: 4px;
-  padding: 6px 14px 2px;
-  font-size: 10px;
-  color: var(--awd-text-3);
-  line-height: 1.5;
 }
 
 /* 发送 / 停止改成真 <button>（K16 ④）：能 Tab 到、能回车按。uni-h5 的 button 自带

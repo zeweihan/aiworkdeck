@@ -50,6 +50,11 @@ window.uni = {
   },
   getSystemInfoSync: () => ({ platform: 'mac', windowWidth: innerWidth }),
   request: ({ url, method, data, success }) => {
+    // 模型目录：用例在页面脚本执行前把合成的 GET /api/ai/models 响应挂到 window.__modelsFixture
+    // （model-pricing.mjs）；没挂时维持原来的空清单，不影响其它用例
+    if (String(url).includes('/api/ai/models') && window.__modelsFixture) {
+      return success?.({ statusCode: 200, data: window.__modelsFixture })
+    }
     if (String(url).includes('/api/ai/config') && new URLSearchParams(location.search).get('provider') === 'local') {
       return success?.({ statusCode: 200, data: { activeProvider: 'OLLAMA' } })
     }
