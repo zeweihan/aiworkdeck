@@ -85,7 +85,7 @@
     </view>
     <!-- review-overview-open：审阅概览现在浮在画布右侧（不挤宽画布），画布上的
          宿主浮层据此让出面板宽度，见样式 .libre-review-overview 之后那一段。 -->
-    <view class="libre-body" :class="{ 'review-overview-open': reviewOverviewShown }">
+    <view class="libre-body" :class="{ 'review-overview-open': reviewOverviewShown, 'review-en': reviewPanelEn }">
       <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
            外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
       <view class="libre-canvas-wrap">
@@ -179,6 +179,7 @@ import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceA
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
 import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
+import { isEnglish } from '@/utils/appLanguage.js'
 import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
 import { createInlineReviewHost } from '@/composables/inlineReviewHost.js'
@@ -347,6 +348,8 @@ export default {
     reviewOverviewShown() {
       return this.reviewOpen && this.ready && this.showsReview
     },
+    // 英文界面下审阅面板是 432px 而不是 320px（dev-board#874，见 ReviewPanel 的 .rp-en）。
+    reviewPanelEn() { return isEnglish() },
     // 「AI 审校」此刻开着没有（dev-board#749：开关在正文浮球与审阅面板上，
     // 工具栏不再有按钮）。host 还没建起来时按默认（开启但安静）显示。
     aiReviewEnabled() {
@@ -1951,6 +1954,10 @@ export default {
 .libre-body.review-overview-open .libre-float { right: calc(320px + 16px); }
 .libre-body.review-overview-open .libre-stale-bar,
 .libre-body.review-overview-open .libre-evidence-drop { right: 320px; }
+/* 英文面板 432px（dev-board#874，= ReviewPanel .rp.rp-en）。 */
+.libre-body.review-overview-open.review-en .libre-float { right: calc(432px + 16px); }
+.libre-body.review-overview-open.review-en .libre-stale-bar,
+.libre-body.review-overview-open.review-en .libre-evidence-drop { right: 432px; }
 /* EvidenceLink 拖放：整个编辑器描一圈边，画布上铺透明接收层；悬停时加深 */
 .libre-editor-wrapper.evidence-drop-armed { box-shadow: inset 0 0 0 2px var(--awd-accent); }
 .libre-evidence-drop { position: absolute; inset: 0; z-index: 25; display: flex; align-items: flex-end; justify-content: center;
