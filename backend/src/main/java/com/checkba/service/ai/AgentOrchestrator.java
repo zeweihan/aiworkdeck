@@ -116,6 +116,20 @@ public class AgentOrchestrator {
         /** 本轮的取消标志。只有 {@link AgentOrchestrator#setCancelled} 解析到的那一轮会被置位。 */
         private final java.util.concurrent.atomic.AtomicBoolean cancelled =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        /** One optional decision on the original input; never include later steering text. */
+        private volatile DecisionAssistContext decisionContext;
+        private String decisionInput;
+        private volatile boolean decisionAttempted;
+        private volatile boolean decisionAbandoned;
+        private volatile boolean assistedDisclosure;
+
+        synchronized void abandonDecision() {
+            decisionAbandoned = true;
+            decisionAttempted = true;
+            assistedDisclosure = false;
+            DecisionAssistContext context = decisionContext;
+            if (context != null) context.cancel();
+        }
         /**
          * 本轮是否成功调用过文档编辑工具（doc_/sheet_/slide_）。随 bubble_end 下发给前端，
          * 决定「用到文档」那组手动操作还要不要出（dev-board#728）。
@@ -176,6 +190,7 @@ public class AgentOrchestrator {
 
         void cancel() {
             cancelled.set(true);
+            abandonDecision();
             cancelInflight();
         }
 
@@ -329,7 +344,8 @@ public class AgentOrchestrator {
     private RunGuard beginRun(String conversationId) {
         RunGuard guard = new RunGuard(conversationId, java.util.UUID.randomUUID().toString(),
                 sseEmitterService.currentEpoch(conversationId));
-        activeRuns.put(conversationId, guard);
+        RunGuard previous = activeRuns.put(conversationId, guard);
+        if (previous != null) previous.abandonDecision();
         return guard;
     }
 
@@ -354,6 +370,7 @@ public class AgentOrchestrator {
     /** 轮次收尾：把自己从当前轮次登记里摘掉（若已被取代则什么都不做），并释放 skill 的轮次记录。 */
     private void endRun(RunGuard guard) {
         if (guard == null) return;
+        guard.abandonDecision();
         activeRuns.remove(guard.conversationId, guard);
         skillRouter.clearRun(guard.runId);
     }
@@ -376,6 +393,7 @@ public class AgentOrchestrator {
             // 先关再接续的话，前端收不到接续那一轮的任何事件，已执行的条目一直挂在「待处理」里。
             // 必须在摘掉本轮登记之前判断：closeSse 只对当前轮次生效。
             if (next.isEmpty()) closeSse(guard);
+            guard.abandonDecision();
             activeRuns.remove(guard.conversationId, guard);
             skillRouter.clearRun(guard.runId);
             next.ifPresent(item -> acceptInboxSubmission(item.getId()));
@@ -655,6 +673,9 @@ public class AgentOrchestrator {
         java.util.List<com.checkba.model.entity.AgentInboxItem> inputs =
                 inbox.claimPendingSteering(guard.conversationId, guard.runId);
         if (inputs.isEmpty()) return false;
+
+        // A new submission has its own consent. Do not classify or narrow it using the old input.
+        guard.abandonDecision();
 
         String streamed = guard.takeStreamSnapshot();
         String segment = executionLog.toString() + streamed;
@@ -1074,6 +1095,9 @@ public class AgentOrchestrator {
         this.toolDisclosurePolicy = toolDisclosurePolicy;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ToolDecisionPolicy toolDecisionPolicy;
+
     /**
      * 处理用户消息 (入口)。
      *
@@ -1112,7 +1136,10 @@ public class AgentOrchestrator {
                 return item.getRunId() != null ? item.getRunId() : activeRunId(item.getConversationId());
             }
             RunGuard current = activeRuns.get(item.getConversationId());
-            if (current != null) return current.runId;
+            if (current != null) {
+                if (AgentInboxService.STEER.equals(item.getSubmissionMode())) current.abandonDecision();
+                return current.runId;
+            }
 
             guard = beginRun(item.getConversationId());
             claimed = inbox.claim(itemId, guard.runId, emitApplied);
@@ -1192,6 +1219,18 @@ public class AgentOrchestrator {
         TurnTimings timings = TurnTimings.start(log, "prep", conversationId);
 
         try {
+            if (request.isDecisionAssistEnabled() && toolDecisionPolicy != null && agentMode != AgentMode.ASK) {
+                // Resolve the real channel once for this run; never promote a local run to cloud later.
+                try {
+                    guard.decisionContext = new DecisionAssistContext(true, request.getProjectId(), userId,
+                            conversationId, request.getModel(),
+                            chatModelFactory.resolveTarget(request.getModel(), false).channel());
+                    guard.decisionInput = request.getMessage();
+                    if (guard.isCancelled() || guard.decisionAttempted) guard.abandonDecision();
+                } catch (Exception ignored) {
+                    guard.abandonDecision();
+                }
+            }
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
             
             // 1. 保存用户消息 (Save only user message first; assistant saved after stream completes)
@@ -2179,6 +2218,11 @@ public class AgentOrchestrator {
         }
         roundTimings.mark("tools", visible.size());
         roundTimings.done(log);
+        // Cancellation/steering may arrive during the bounded decision call, before main generation starts.
+        if (guard.isCancelled()) {
+            handleCancellation(guard, projectId, userId, executionLog);
+            return;
+        }
         handler.armInactivityWatchdog(STREAM_FIRST_TOKEN_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS);
         // 埋点 ai.turn 的 rounds（dev-board#729 ⑥）：一条消息到底跑了几个 LLM 往返，
         // 是「慢在哪」的第一判据（91% 的墙钟在推理上，轮数直接决定总时长）。
@@ -2210,7 +2254,7 @@ public class AgentOrchestrator {
     private void noteToolCategoryExpansion(RunGuard guard, String toolName, String argsJson,
                                            ToolRegistry.ToolResult result) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
-        if (guard == null || policy == null || !policy.isEnabled()
+        if (guard == null || policy == null || (!policy.isEnabled() && !guard.assistedDisclosure)
                 || !ToolDisclosurePolicy.CATALOG_TOOL.equals(toolName)
                 || result == null || !result.success()) {
             return;
@@ -2228,13 +2272,46 @@ public class AgentOrchestrator {
      */
     private List<ToolSpecification> discloseProgressively(List<ToolSpecification> candidates, RunGuard guard) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
-        if (policy == null || !policy.isEnabled() || guard == null) {
+        if (policy == null || guard == null) {
             return candidates;
         }
+        prepareToolDecision(candidates, guard);
+        if (guard.decisionContext != null && guard.decisionAbandoned) return candidates;
+        if (!policy.isEnabled() && !guard.assistedDisclosure) return candidates;
         List<ToolSpecification> disclosed = policy.narrow(candidates, guard.expandedToolCategories);
+        // The static rollout may be off: expose only this safe catalog, not other unavailable tools.
+        if (guard.assistedDisclosure && disclosed.stream().noneMatch(s -> ToolDisclosurePolicy.CATALOG_TOOL.equals(s.name()))) {
+            toolRegistry.resolve(ToolDisclosurePolicy.CATALOG_TOOL, guard.conversationId)
+                    .ifPresent(tool -> disclosed.add(tool.spec()));
+        }
         log.info("[Disclosure] conv={} candidates={} disclosed={} expanded={}",
                 guard.conversationId, candidates.size(), disclosed.size(), guard.expandedToolCategories);
-        return disclosed;
+        return guard.decisionContext != null && guard.decisionAbandoned ? candidates : disclosed;
+    }
+
+    private void prepareToolDecision(List<ToolSpecification> candidates, RunGuard guard) {
+        if (guard.decisionAttempted || guard.decisionContext == null || toolDecisionPolicy == null) return;
+        guard.decisionAttempted = true;
+        if (guard.isCancelled() || !isCurrentRun(guard) || guard.decisionContext.isCancelled()) return;
+        java.util.Optional<ToolRegistry.RegisteredTool> catalog =
+                toolRegistry.resolve(ToolDisclosurePolicy.CATALOG_TOOL, guard.conversationId);
+        if (catalog.isEmpty()) return; // Narrowing is safe only with an available discovery path.
+        var offered = new java.util.ArrayList<>(candidates);
+        if (offered.stream().noneMatch(s -> ToolDisclosurePolicy.CATALOG_TOOL.equals(s.name()))) {
+            offered.add(catalog.get().spec());
+        }
+        try {
+            java.util.Optional<String> selected = toolDecisionPolicy.select(guard.decisionContext, guard.decisionInput, offered);
+            synchronized (guard) {
+                if (guard.isCancelled() || !isCurrentRun(guard) || guard.decisionContext.isCancelled()) return;
+                if (selected.isPresent()) {
+                    if (!"core".equals(selected.get())) guard.expandedToolCategories.add(selected.get());
+                    guard.assistedDisclosure = true;
+                }
+            }
+        } catch (Exception ignored) {
+            // Optional preparation must never interrupt the original generation path.
+        }
     }
 
     /**

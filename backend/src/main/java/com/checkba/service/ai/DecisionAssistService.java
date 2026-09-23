@@ -92,7 +92,7 @@ public class DecisionAssistService {
 
     private Optional<Decision> request(DecisionAssistContext context, Map<String, ?> state,
                                        String instructions, Map<String, String> criteria) throws Exception {
-        if (criteria == null || criteria.size() < 2 || criteria.size() > 20) return Optional.empty();
+        if (criteria == null || criteria.size() < 2 || criteria.size() > 32) return Optional.empty();
         byte[] body = mapper.writeValueAsBytes(Map.of("model", MODEL, "state", state,
                 "questions", Map.of("decision", Map.of("type", "choice", "instructions", instructions,
                         "criteria", criteria))));

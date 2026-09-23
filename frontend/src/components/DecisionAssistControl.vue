@@ -10,6 +10,12 @@
     </button>
     <text class="decision-assist-hint">{{ $t(localOnly ? 'chat.decisionAssistLocal' : enabled ? 'chat.decisionAssistOnHint' : 'chat.decisionAssistOffHint') }}</text>
     <text v-if="!localOnly" class="decision-assist-hint">{{ $t('chat.decisionAssistNextSend') }}</text>
+    <details v-if="!localOnly" class="decision-assist-details">
+      <summary>{{ $t('chat.decisionAssistDetails') }}</summary>
+      <text class="decision-assist-hint">{{ $t('chat.decisionAssistData') }}</text>
+      <text class="decision-assist-hint">{{ $t('chat.decisionAssistMaterials') }}</text>
+      <text class="decision-assist-hint">{{ $t('chat.decisionAssistFallback') }}</text>
+    </details>
   </view>
 </template>
 
@@ -34,4 +40,7 @@ export default {
 .decision-assist-track > span { width: 12px; height: 12px; border-radius: 50%; background: var(--awd-surface, white); }
 .enabled .decision-assist-track { justify-content: flex-end; background: var(--awd-accent); }
 .decision-assist-hint { display: block; margin-top: 4px; color: var(--awd-text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.decision-assist-details { margin-top: 4px; font-size: 11px; line-height: 1.5; }
+.decision-assist-details > summary { color: var(--awd-accent-text); cursor: pointer; }
+.decision-assist-details > summary:focus-visible { outline: 2px solid var(--awd-accent); outline-offset: 2px; }
 </style>

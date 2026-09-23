@@ -6,6 +6,8 @@ package com.checkba.service.ai;
 import com.checkba.controller.ai.AiAgentController;
 import com.checkba.model.entity.AgentInboxItem;
 import com.checkba.repository.AgentInboxItemRepository;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -160,6 +162,69 @@ class AgentInboxServiceTest {
 
         assertEquals(AgentInboxService.PENDING, table.get(pending.getId()).getState());
         assertEquals(AgentInboxService.INTERRUPTED, table.get(applied.getId()).getState());
+    }
+
+    @Test
+    void decisionOptInRequiresLiteralJsonBooleanWithoutChangingOtherDtoCoercion() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        assertTrue(mapper.readValue("{\"decisionAssistEnabled\":true}",
+                AiAgentController.AgentChatRequest.class).isDecisionAssistEnabled());
+        for (String body : List.of("{}", "{\"decisionAssistEnabled\":false}", "{\"decisionAssistEnabled\":null}")) {
+            assertFalse(mapper.readValue(body, AiAgentController.AgentChatRequest.class).isDecisionAssistEnabled());
+        }
+        for (String value : List.of("\"true\"", "\"false\"", "1", "0", "\"\"", "{}", "[]")) {
+            assertThrows(JsonMappingException.class, () -> mapper.readValue(
+                    "{\"decisionAssistEnabled\":" + value + "}", AiAgentController.AgentChatRequest.class), value);
+        }
+        assertTrue(mapper.readValue("{\"isDir\":\"true\"}", AiAgentController.ContextItem.class).isDir(),
+                "strict consent must not alter Jackson coercion for unrelated DTO properties");
+    }
+
+    @Test
+    void decisionOptInSurvivesDurableSerializationPendingEditAndRestart() throws Exception {
+        for (boolean enabled : List.of(false, true)) {
+            var request = request("queued", "consent-" + enabled, "queue");
+            request.setDecisionAssistEnabled(enabled);
+            AgentInboxItem row = service.submit(request, 7L);
+            assertEquals(enabled, new ObjectMapper().readTree(row.getRequestJson()).path("decisionAssistEnabled").booleanValue());
+
+            service.edit("conv-1", row.getId(), "edited text", "steer", null, row.getRevision());
+            AgentInboxService restarted = new AgentInboxService(repository, sse, mock(AgentRunStateService.class));
+            var restored = restarted.requestOf(restarted.require(row.getId()));
+            assertEquals("edited text", restored.getMessage());
+            assertEquals("steer", restored.getSubmissionMode());
+            assertEquals(enabled, restored.isDecisionAssistEnabled(),
+                    "editing text/mode and restarting must not change the submission's consent");
+        }
+    }
+
+    @Test
+    void idempotentRetryCannotUpgradeOrDowngradeTheOriginalConsent() {
+        for (boolean originallyEnabled : List.of(false, true)) {
+            var original = request("original", "retry-consent-" + originallyEnabled, "queue");
+            original.setDecisionAssistEnabled(originallyEnabled);
+            var row = service.submit(original, 7L);
+            var retry = request("changed retry", original.getClientRequestId(), "steer");
+            retry.setDecisionAssistEnabled(!originallyEnabled);
+            var same = service.submit(retry, 7L);
+            assertEquals(row.getId(), same.getId());
+            assertEquals(originallyEnabled, service.requestOf(same).isDecisionAssistEnabled());
+            assertEquals("original", service.requestOf(same).getMessage());
+        }
+        assertEquals(2, table.size());
+    }
+
+    @Test
+    void newDisabledSubmissionAndLegacyPayloadDoNotInheritEarlierConsent() {
+        var enabled = request("enabled", "on", "queue");
+        enabled.setDecisionAssistEnabled(true);
+        service.submit(enabled, 7L);
+        var disabled = service.submit(request("off", "off", "queue"), 7L);
+        assertFalse(service.requestOf(disabled).isDecisionAssistEnabled());
+        var legacy = new AgentInboxItem();
+        legacy.setId("legacy");
+        legacy.setRequestJson("{\"projectId\":42,\"conversationId\":\"conv-1\",\"message\":\"older client\"}");
+        assertFalse(service.requestOf(legacy).isDecisionAssistEnabled());
     }
 
     private void awaitThenSubmit(CountDownLatch start, List<AgentInboxItem> out,

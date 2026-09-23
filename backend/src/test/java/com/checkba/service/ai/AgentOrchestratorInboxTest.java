@@ -38,6 +38,7 @@ class AgentOrchestratorInboxTest {
 
     private final Map<String, AgentInboxItem> rows = new ConcurrentHashMap<>();
     private final List<List<ChatMessage>> modelRequests = new CopyOnWriteArrayList<>();
+    private final List<List<String>> modelToolNames = new CopyOnWriteArrayList<>();
     private final List<String> sseEvents = new CopyOnWriteArrayList<>();
     private AgentInboxService inbox;
     private AgentOrchestrator orchestrator;
@@ -379,6 +380,158 @@ class AgentOrchestratorInboxTest {
         assertNull(orchestrator.activeRunId(CONV));
     }
 
+    private ToolDecisionPolicy installDecision() {
+        var policy = mock(ToolDecisionPolicy.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(orchestrator, "toolDecisionPolicy", policy);
+        orchestrator.setToolDisclosurePolicy(new ToolDisclosurePolicy(false));
+        when(modelFactory.resolveTarget(any(), eq(false))).thenReturn(new ChatModelFactory.ResolvedTarget(
+                com.checkba.config.AiModelProperties.Provider.OPENROUTER, MODEL));
+        var specs = List.of("read_document", "read_file", "doc_set_font", "doc_accept_revision", "memory_search")
+                .stream().map(n -> ToolSpecification.builder().name(n).description(n).build()).toList();
+        when(tools.getAllSpecifications(any(), any())).thenReturn(specs);
+        var catalog = ToolSpecification.builder().name("list_tools").description("catalog").build();
+        when(tools.resolve(eq("list_tools"), eq(CONV))).thenReturn(Optional.of(
+                new ToolRegistry.RegisteredTool(null, null, catalog, null, false)));
+        when(tools.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult("ok", null, true));
+        return policy;
+    }
+
+    @Test void decisionOffAndAskKeepOriginalPathWithoutCalls() {
+        var decision = installDecision();
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(AiMessage.from("done")));
+        orchestrator.handleUserMessage(request("off", "off", "steer"), 7L);
+        var ask = request("ask", "ask", "steer");
+        ask.setDecisionAssistEnabled(true);
+        ask.setMode("ASK");
+        orchestrator.handleUserMessage(ask, 7L);
+        verifyNoInteractions(decision);
+        assertTrue(modelToolNames.get(0).contains("doc_set_font"));
+        assertFalse(modelToolNames.get(0).contains("list_tools"));
+    }
+
+    @Test void decisionFallbackKeepsAllToolsAndDoesNotRetryNextRound() {
+        var decision = installDecision();
+        when(decision.select(any(), any(), any())).thenReturn(Optional.empty());
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
+                AiMessage.from(List.of(tool("read_document", "read"))), AiMessage.from("done")));
+        var request = request("synthetic original input", "fallback", "steer");
+        request.setDecisionAssistEnabled(true);
+        orchestrator.handleUserMessage(request, 7L);
+        assertEquals(2, modelToolNames.size());
+        assertEquals(modelToolNames.get(0), modelToolNames.get(1));
+        assertTrue(modelToolNames.get(0).contains("doc_set_font"));
+        verify(decision, times(1)).select(any(), eq("synthetic original input"), any());
+    }
+
+    @Test void optedInDecisionKeepsCatalogMemoryAndMonotonicallyExpandsCategories() {
+        var decision = installDecision();
+        when(decision.select(any(), any(), any())).thenReturn(Optional.of("files"));
+        var expand = ToolExecutionRequest.builder().name("list_tools").id("expand")
+                .arguments("{\"category\":\"format\"}").build();
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
+                AiMessage.from(List.of(expand)), AiMessage.from("done")));
+        var request = request("synthetic original input", "enabled", "steer");
+        request.setDecisionAssistEnabled(true);
+        orchestrator.handleUserMessage(request, 7L);
+        assertEquals(2, modelToolNames.size());
+        assertTrue(modelToolNames.get(0).containsAll(List.of("read_document", "read_file", "memory_search", "list_tools")));
+        assertFalse(modelToolNames.get(0).contains("doc_set_font"));
+        assertTrue(modelToolNames.get(1).containsAll(modelToolNames.get(0)));
+        assertTrue(modelToolNames.get(1).contains("doc_set_font"));
+        verify(decision, times(1)).select(any(), eq("synthetic original input"), any());
+        verify(modelFactory, times(1)).getStreamingChatModel(MODEL);
+    }
+
+    @Test void cancelledDecisionCannotStartMainGenerationOrAffectNextRun() throws Exception {
+        var decision = installDecision();
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        var context = new java.util.concurrent.atomic.AtomicReference<DecisionAssistContext>();
+        when(decision.select(any(), any(), any())).thenAnswer(inv -> {
+            context.set(inv.getArgument(0)); entered.countDown(); await(release); return Optional.of("files");
+        });
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(AiMessage.from("done")));
+        var request = request("old", "old", "steer"); request.setDecisionAssistEnabled(true);
+        var thread = new Thread(() -> orchestrator.handleUserMessage(request, 7L)); thread.start();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        orchestrator.setCancelled(CONV);
+        assertTrue(context.get().isCancelled());
+        release.countDown(); thread.join(5000);
+        assertFalse(thread.isAlive());
+        assertTrue(modelRequests.isEmpty());
+        orchestrator.handleUserMessage(request("new off", "new", "steer"), 7L);
+        assertEquals(1, modelRequests.size());
+        assertTrue(modelToolNames.get(0).contains("doc_set_font"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void offSteeringCancelsDecisionAndIsNeverSentToJev(boolean globalDisclosure) throws Exception {
+        var decision = installDecision();
+        orchestrator.setToolDisclosurePolicy(new ToolDisclosurePolicy(globalDisclosure));
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        var context = new java.util.concurrent.atomic.AtomicReference<DecisionAssistContext>();
+        when(decision.select(any(), any(), any())).thenAnswer(inv -> {
+            context.set(inv.getArgument(0)); entered.countDown(); await(release); return Optional.of("files");
+        });
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
+                AiMessage.from(List.of(tool("read_document", "read"))), AiMessage.from("done")));
+        var initial = request("initial consent", "initial", "steer"); initial.setDecisionAssistEnabled(true);
+        var row = inbox.submit(initial, 7L);
+        var thread = new Thread(() -> orchestrator.acceptInboxSubmission(row.getId())); thread.start();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        var next = inbox.submit(request("private steering off", "off", "steer"), 7L);
+        orchestrator.acceptInboxSubmission(next.getId());
+        assertTrue(context.get().isCancelled());
+        release.countDown(); thread.join(5000);
+        assertFalse(thread.isAlive());
+        verify(decision, times(1)).select(any(), eq("initial consent"), any());
+        assertTrue(modelToolNames.stream().allMatch(names -> names.contains("doc_set_font")));
+        assertTrue(modelRequests.stream().flatMap(List::stream).anyMatch(m -> text(m).contains("private steering off")));
+    }
+
+    @Test void globalDisclosureRemainsUnchangedForOffAndFailedDecisions() {
+        var decision = installDecision();
+        orchestrator.setToolDisclosurePolicy(new ToolDisclosurePolicy(true));
+        when(decision.select(any(), any(), any())).thenReturn(Optional.empty());
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(AiMessage.from("done")));
+        orchestrator.handleUserMessage(request("off", "off", "steer"), 7L);
+        var enabled = request("on fallback", "on", "steer"); enabled.setDecisionAssistEnabled(true);
+        orchestrator.handleUserMessage(enabled, 7L);
+        assertEquals(2, modelToolNames.size());
+        assertEquals(modelToolNames.get(0), modelToolNames.get(1));
+        assertFalse(modelToolNames.get(0).contains("doc_set_font"));
+        verify(decision, times(1)).select(any(), eq("on fallback"), any());
+    }
+
+    @Test void queuedRunsUseTheirOwnConsentAndOnlyTheirOwnInput() throws Exception {
+        var decision = installDecision();
+        when(decision.select(any(), any(), any())).thenReturn(Optional.of("files"));
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        when(tools.execute(eq("read_document"), any(), any())).thenAnswer(inv -> {
+            entered.countDown(); await(release); return new ToolRegistry.ToolResult("synthetic file", null, true);
+        });
+        when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
+                AiMessage.from(List.of(tool("read_document", "read"))), AiMessage.from("first done"),
+                AiMessage.from("off done"), AiMessage.from("on done")));
+        var first = request("first on", "first", "steer"); first.setDecisionAssistEnabled(true);
+        var row = inbox.submit(first, 7L);
+        var thread = new Thread(() -> orchestrator.acceptInboxSubmission(row.getId())); thread.start();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        var off = inbox.submit(request("queued off", "off", "queue"), 7L);
+        var onRequest = request("queued on", "on", "queue"); onRequest.setDecisionAssistEnabled(true);
+        var on = inbox.submit(onRequest, 7L);
+        orchestrator.acceptInboxSubmission(off.getId());
+        orchestrator.acceptInboxSubmission(on.getId());
+        release.countDown(); thread.join(5000);
+        assertFalse(thread.isAlive());
+        verify(decision, times(1)).select(any(), eq("first on"), any());
+        verify(decision, times(1)).select(any(), eq("queued on"), any());
+        verify(decision, never()).select(any(), eq("queued off"), any());
+        assertEquals(4, modelToolNames.size());
+        assertTrue(modelToolNames.get(2).contains("doc_set_font"));
+        assertFalse(modelToolNames.get(3).contains("doc_set_font"));
+    }
+
     private StreamingChatLanguageModel scripted(AiMessage... script) {
         AtomicInteger call = new AtomicInteger();
         return new StreamingChatLanguageModel() {
@@ -387,6 +540,7 @@ class AgentOrchestratorInboxTest {
             }
             @Override public void generate(List<ChatMessage> messages, List<ToolSpecification> specifications,
                                            StreamingResponseHandler<AiMessage> handler) {
+                modelToolNames.add(specifications.stream().map(ToolSpecification::name).toList());
                 complete(messages, handler);
             }
             private void complete(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {

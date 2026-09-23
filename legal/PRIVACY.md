@@ -1,6 +1,6 @@
 # AI WorkDeck 隐私说明
 
-更新日期：2026-09-20
+更新日期：2026-09-23
 
 本说明描述 AI WorkDeck 桌面应用的两件事：
 
@@ -22,6 +22,10 @@
 - **「AI WorkDeck 云端」**：我们的服务器只参与密钥签发与用量结算，对话内容仍由你的机器直连模型服务商。
 
 因此文档正文、合同内容、AI 对话文本在任何一档下都不流经 AI WorkDeck 的服务器。选用云端模型时内容会发往该第三方服务商，涉及执业保密义务的场合请据此判断；当前使用的模型与提供商在产品内可见，可随时更换或停用。
+
+**智能决策辅助（实验性，可选）。** 对话输入框下方显示开启/关闭状态，默认关闭，偏好按本机的登录用户和服务器分别保存。开启后，本次输入及可用工具的类目、工具名会经当前 OpenRouter 通道发送给 **TypeSafe Jev**，仅用于预选工具类目，尝试减少提供给主模型的工具说明 token 和总费用；它不更换你选定的主模型。Jev 调用本身会产生少量费用，按当前平台额度或自带密钥结算，回复可能稍慢；单次判断最多等待 2.5 秒，低置信度、超时或不可用时沿用原流程，不保证每次更快或更省。
+
+这项判断**不会额外附带附件、历史会话或文档正文**，但你粘贴或直接写在本次输入中的材料仍属于发送内容。Jev 的问题文本及响应正文不会写入该辅助服务的日志；调用用量按既有模型计费流程记录。使用本地模型时不请求 Jev，不向它外发内容，也不产生 Jev 费用。关闭后，后续发送不请求 Jev、无 Jev 费用；已提交任务保留发送时的选择。此开关不影响原有主模型对话的数据流。
 
 ## 二、平台代采档下会经过我们服务器的内容
 
@@ -154,11 +158,15 @@
 
 # AI WorkDeck Privacy Note
 
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Part 1 — Platform services
 
 **AI conversations never pass through our servers.** Whichever provider tier you choose, conversation content goes straight from your machine to the model provider: with local Ollama it stays on the device; with your own key you connect to that provider directly; with the "AI WorkDeck cloud" tier our servers only issue the key and settle usage, while the conversation itself still goes from your machine to the model provider. Document text, contract content, and AI conversation text therefore never flow through AI WorkDeck servers under any tier. Content sent to a cloud model does reach that third-party provider — judge accordingly where a duty of confidentiality applies. The model and provider in use are visible in the product and can be changed or disabled at any time.
+
+**Decision assistance (experimental, optional).** An on/off control below the chat input is off by default. Its preference is stored separately for each signed-in user and server on this device. When enabled, your current input and the available tool categories and names are sent to **TypeSafe Jev** through your current OpenRouter channel, solely to preselect tool categories. It tries to reduce tool-description tokens and total cost without changing your chosen main model. The Jev call itself adds a small charge, billed through your platform credits or your own key, and replies may be slightly slower. Each decision waits at most 2.5 seconds; low confidence, timeouts or unavailability keep the original workflow. Faster or cheaper replies are not guaranteed.
+
+This decision **does not separately include attachments, chat history or document bodies**. Material you paste or write directly into the current input is still included. This auxiliary service does not log Jev question text or response bodies; usage is recorded through the existing model-billing process. Local models make no Jev requests, send it no content and incur no Jev charges. When off, subsequent sends make no Jev requests or charges; submitted tasks retain their setting at submission. This control does not change the existing data flow to your main conversation model.
 
 **What does pass through our servers.** On a fresh desktop install the services below default to the "platform-sourced" tier: AI WorkDeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed. In that tier, the content each call requires is relayed to the vendor through our servers.
 

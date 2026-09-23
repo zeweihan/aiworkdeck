@@ -45,20 +45,18 @@ public class AgentInboxController {
         try {
             AgentInboxService.ItemView edited = inbox.edit(conversationId, messageId, request.message,
                     request.submissionMode, request.position, request.expectedRevision);
-            // 「立即发送」的判据是「目标模式是 steer 且当前没有活跃轮次」：没有活跃轮次时必须由
-            // 这里起一条新轮次，否则这条插话没有任何人会来 claim 它；有活跃轮次时它会在那一轮的
-            // 下一个工具边界被捞走，这里什么都不用做。
+            // 显式「立即发送」一律通知编排器：空闲时启动消费者；已有轮次时仍需立刻取消其
+            // 待返回的 Jev 判断，插话正文随后在安全边界应用。acceptInboxSubmission 自身幂等，
+            // 不会为活跃会话再开一轮。纯改正文（不带 submissionMode）不启动也不通知。
             //
             // 判据此前写的是「模式发生过 queue -> steer 的转变」，把**本来就是 steer** 的待处理项
             // 整个排除在外（dev-board#802）：那一轮若以取消 / 出错 / 待审批 / 待回答 / 无进展暂停
             // 收尾（这几种按设计都不 drain 队列），这条 steer 就永久卡在 pending 里——界面上只剩
             // 编辑 / 上移 / 下移 / 删除，没有任何办法把它发出去，而它看着像还会被处理。
             //
-            // acceptInboxSubmission 自身幂等（进去先查 activeRuns，有就原样返回），
-            // activeRunId 判空只是省掉一次无谓调用、并把意图写在脸上。
             boolean sendNow = request.submissionMode != null
                     && AgentInboxService.STEER.equals(AgentInboxService.normalizeMode(request.submissionMode));
-            if (sendNow && orchestrator.activeRunId(conversationId) == null) {
+            if (sendNow) {
                 orchestrator.acceptInboxSubmission(messageId);
                 edited = inbox.view(messageId);
             }
