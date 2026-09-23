@@ -181,4 +181,73 @@ class SseEmitterServiceTest {
                 "只补第二轮那两条；第一轮已经渲染过的重发就是重复正文");
     }
 
+
+    // ==================== 客户端实例身份与「移交」判定（dev-board#803 / #821 K40） ====================
+    //
+    // 桌面端从 v0.47 起也上送 X-Client-Instance（此前只有 Office 任务窗格上送）。
+    // 这条判定错一边就是一种确定性故障：
+    //   · 把「同一个窗口断线重连」误判成移交 → 给自己发一条 superseded，前端随即停止重连，
+    //     用户看到的是一条再也接不上的会话；
+    //   · 把「另一个窗口来抢」漏判成普通重连 → 旧窗口只看到流断了，1 秒后重连回来把新窗口顶掉，
+    //     两边 1 Hz 无限互顶（dev-board#285 的生产实证）。
+    // superseded 不进补发缓冲，所以这里用一个记录 send 调用的子类来观察决定本身。
+
+    private static final class RecordingSseEmitterService extends SseEmitterService {
+        final java.util.List<String> events = new java.util.ArrayList<>();
+
+        @Override
+        public void send(String connectionId, String eventName, Object data) {
+            events.add(eventName + "=" + data);
+            super.send(connectionId, eventName, data);
+        }
+
+        java.util.List<String> supersededPayloads() {
+            return events.stream().filter(e -> e.startsWith("superseded=")).toList();
+        }
+    }
+
+    @Test
+    void reconnectFromTheSameClientInstanceIsNotATakeover() {
+        RecordingSseEmitterService svc = new RecordingSseEmitterService();
+        String id = "conv-client-same";
+
+        svc.createConnection(id, "pane-A");
+        // 后端每轮收尾都会关流，桌面端随即退避重连——同一个窗口、同一个实例 id
+        svc.close(id, svc.currentEpoch(id));
+        svc.createConnection(id, "pane-A");
+        svc.createConnection(id, "pane-A");
+
+        assertEquals(java.util.List.of(), svc.supersededPayloads(),
+                "同一个客户端实例的重连是常态（每轮收尾都会关流），绝不能当成被另一个窗口接管");
+    }
+
+    @Test
+    void aDifferentClientInstanceTakesOverAndTheOldConnectionIsToldWhy() {
+        RecordingSseEmitterService svc = new RecordingSseEmitterService();
+        String id = "conv-client-swap";
+
+        svc.createConnection(id, "pane-A");
+        svc.createConnection(id, "pane-B");
+
+        assertEquals(java.util.List.of("superseded={\"reason\":\"another_pane\"}"),
+                svc.supersededPayloads(),
+                "换了客户端实例必须先给旧连接交代一句再关，否则旧窗口会立刻重连回来无限互顶");
+    }
+
+    @Test
+    void clientsThatSendNoInstanceHeaderAreNeverSupersededEitherWay() {
+        RecordingSseEmitterService svc = new RecordingSseEmitterService();
+        String id = "conv-client-none";
+
+        // 不上送 X-Client-Instance 的客户端（旧版插件、v0.47 之前的桌面端）
+        svc.createConnection(id);
+        svc.createConnection(id);
+        // 缺省值不许污染登记簿：后面真有另一个窗格带着 id 连上来时，
+        // 它是这条会话上第一个报出身份的，同样不算「换了实例」
+        svc.createConnection(id, "pane-A");
+
+        assertEquals(java.util.List.of(), svc.supersededPayloads(),
+                "身份缺省时行为必须与改造前完全一致：不判移交");
+    }
+
 }

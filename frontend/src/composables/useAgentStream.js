@@ -533,6 +533,13 @@ export function useAgentStream() {
 
         return new Promise(async (resolve, reject) => {
             let connectTimedOut = false
+            // 这条流有没有真的建起来过（响应头到手 = isConnected 置起那一刻）。
+            // 建连阶段就失败的不算「断流」，那条路由 sendMessage 的错误处置负责。
+            let streamOpened = false
+            // 「本轮还在跑，流却自己断了」——finally 里判断要不要自动重连靠它。
+            // 不能直接读 isStreaming：catch 里为了立刻解锁界面会先把它清掉，
+            // 于是 finally 那条重连分支永远走不到（dev-board#821，v0.46.2 起就是死代码）。
+            let abnormalEndWhileStreaming = false
             const connectTimer = setTimeout(() => {
                 connectTimedOut = true
                 myController.abort()
@@ -561,6 +568,7 @@ export function useAgentStream() {
                 if (!response.ok) throw new Error(`SSE Connection Failed: ${response.status}`)
 
                 isConnected.value = true
+                streamOpened = true
                 reconnectAttempts = 0
                 // 建连成功 = 本窗口现在持有这条流：把「已被接管」的闸放掉，否则用户在
                 // 这个窗口里主动发消息把会话抢回来之后，此后任何一次断线都不会再重连了。
@@ -608,13 +616,21 @@ export function useAgentStream() {
                 // 关键：若本连接已被替换（切换会话后新连接已建立），不得清理全局状态
                 const isCurrent = sseAbortController === myController
                 if (connectTimedOut) err = new Error(t('agentStream.connectionInterrupted'))
+                // 记账必须排在下面清 isStreaming 之前。AbortError 排除在外：那是我们自己
+                // 拆的流（切会话 / 组件卸载 / 心跳判死——心跳那条自己已经安排了重连）。
+                abnormalEndWhileStreaming = isCurrent && streamOpened
+                    && isStreaming.value && err.name !== 'AbortError'
                 // 初始发送时 isStreaming 已经为 true；不能据此跳过 reject 留下悬空 Promise。
                 // 已建立的连接对应 Promise 已 resolve，重复 reject 无副作用。
                 reject(err)
                 if (err.name !== 'AbortError') {
                     console.error('[AgentStream] SSE Error:', err)
-                    // SSE 连接出错时，确保结束当前 bubble 的加载状态
-                    if (isCurrent && currentAssistantBubble.value && currentAssistantBubble.value.isStreaming) {
+                    // SSE 连接出错时，确保结束当前 bubble 的加载状态。
+                    // 要重连的那一档不在这里写提示：重连之后正文由 state_recovery 补回来，
+                    // 真没接上（重连拿到的 run_state 已是终态）时由 disconnectedBubble 那条
+                    // 提示兜底；两边都写会让同一个气泡上挂两句互相矛盾的话。
+                    if (!abnormalEndWhileStreaming && isCurrent
+                            && currentAssistantBubble.value && currentAssistantBubble.value.isStreaming) {
                         currentAssistantBubble.value.isStreaming = false
                         currentAssistantBubble.value.content += '\n\n' + t('agentStream.connectionInterrupted')
                     }
@@ -631,7 +647,7 @@ export function useAgentStream() {
                     isConnected.value = false
                     stopHeartbeatMonitor()
                     // SSE 连接结束时（包括正常结束），确保状态正确
-                    if (isStreaming.value) {
+                    if (isStreaming.value || abnormalEndWhileStreaming) {
                         // 仍在流式状态但连接已结束 = 意外断开。后台 @Async 循环并不依赖
                         // SSE，多半还在跑——自动重连续流（run_state/state_recovery 恢复气泡）。
                         console.warn('[AgentStream] SSE connection ended while still streaming, scheduling reconnect')
