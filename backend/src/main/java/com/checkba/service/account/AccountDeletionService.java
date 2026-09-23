@@ -120,7 +120,8 @@ public class AccountDeletionService {
     @Transactional
     public Result deleteAccount(Long userId) {
         if (userId == null || userRepository.findById(userId).isEmpty()) {
-            throw new IllegalArgumentException("账号不存在或已注销");
+            throw new IllegalArgumentException(LangText.of("账号不存在或已注销",
+                    "The account does not exist or has already been deleted"));
         }
 
         // 官网侧先删（dev-board#434）：失败即中止，本地一行都不动
@@ -129,7 +130,8 @@ public class AccountDeletionService {
         // 与 CompletionService.learn 的 scope 父行锁一致：等在途学习完成，再清词库与账号；
         // 此锁释放前新的学习也无法越过父行校验留下 u:<id> 孤儿。
         if (entityManager.find(com.checkba.model.entity.User.class, userId, LockModeType.PESSIMISTIC_WRITE) == null) {
-            throw new IllegalArgumentException("账号不存在或已注销");
+            throw new IllegalArgumentException(LangText.of("账号不存在或已注销",
+                    "The account does not exist or has already been deleted"));
         }
 
         List<MobileMediaInbox> items = inboxRepository.findByUserId(userId);

@@ -94,7 +94,8 @@ public class AuthAbuseGuard {
     public void requireRegistrationOpen() {
         if (localMode) return;
         if (!"closed".equalsIgnoreCase(registrationMode)) return;
-        throw new IllegalArgumentException("本服务器未开放自助注册，请联系服务器管理员开通账号");
+        throw new IllegalArgumentException(LangText.of("本服务器未开放自助注册，请联系服务器管理员开通账号",
+                "Self-service registration is not open on this server; please ask the server administrator to create an account for you"));
     }
 
     // ==================== 登录失败锁定 ====================
@@ -104,8 +105,10 @@ public class AuthAbuseGuard {
         if (localMode) return;
         FailureState state = loginFailures.get(loginKey(ip, username));
         if (state != null && state.lockedUntil > nowMillis.getAsLong()) {
-            throw new IllegalArgumentException(
-                    "尝试次数过多，该账号已临时锁定，" + LOCKOUT.toMinutes() + " 分钟后自动解除");
+            throw new IllegalArgumentException(LangText.of(
+                    "尝试次数过多，该账号已临时锁定，" + LOCKOUT.toMinutes() + " 分钟后自动解除",
+                    "Too many attempts. This account is temporarily locked and will unlock automatically in "
+                            + LOCKOUT.toMinutes() + " minutes"));
         }
     }
 
@@ -141,7 +144,8 @@ public class AuthAbuseGuard {
         if (counter != null
                 && now - counter.windowStart <= REGISTRATION_WINDOW.toMillis()
                 && counter.count >= MAX_REGISTRATIONS_PER_WINDOW) {
-            throw new IllegalArgumentException("注册过于频繁，请稍后再试");
+            throw new IllegalArgumentException(LangText.of("注册过于频繁，请稍后再试",
+                    "Too many sign-ups, please try again later"));
         }
     }
 
@@ -168,7 +172,8 @@ public class AuthAbuseGuard {
         if (counter != null
                 && now - counter.windowStart <= CODE_WINDOW.toMillis()
                 && counter.count >= MAX_CODE_SENDS_PER_WINDOW) {
-            throw new IllegalArgumentException("验证码发送过于频繁，请稍后再试");
+            throw new IllegalArgumentException(LangText.of("验证码发送过于频繁，请稍后再试",
+                    "Verification codes are being requested too often, please try again later"));
         }
     }
 

@@ -8,6 +8,7 @@ import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.account.AccountService;
+import com.checkba.service.LangText;
 import com.checkba.service.LocalIdentityService;
 import com.checkba.storage.StorageServiceFactory;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -648,7 +649,7 @@ public class MobileRelayClientService {
         Long projectId = parseLongOrNull(cmd.path("projectKey").asText());
         Project project = projectId == null ? null : projectRepository.findById(projectId).orElse(null);
         if (project == null || !userId.equals(project.getUserId())) {
-            failTransfer(id, "项目不存在或已删除");
+            failTransfer(id, LangText.of("项目不存在或已删除", "The project does not exist or has been deleted"));
             return;
         }
         List<ProjectFile> tree = projectFileService.getFileTree(projectId);
@@ -718,7 +719,7 @@ public class MobileRelayClientService {
         boolean valid = file != null && project != null && userId.equals(project.getUserId())
                 && projectId.equals(file.getProjectId()) && !Boolean.TRUE.equals(file.getIsFolder());
         if (!valid) {
-            failTransfer(id, "文件不存在或已移动");
+            failTransfer(id, LangText.of("文件不存在或已移动", "The file does not exist or has been moved"));
             return;
         }
         String fileName = cmd.path("fileName").asText(file.getName());
@@ -765,7 +766,7 @@ public class MobileRelayClientService {
         Long projectId = parseLongOrNull(cmd.path("projectKey").asText());
         Project project = projectId == null ? null : projectRepository.findById(projectId).orElse(null);
         if (project == null || !userId.equals(project.getUserId())) {
-            failTransfer(id, "项目不存在或已删除");
+            failTransfer(id, LangText.of("项目不存在或已删除", "The project does not exist or has been deleted"));
             return;
         }
         String token = currentToken();

@@ -3,6 +3,7 @@
 
 package com.checkba.service.auth;
 
+import com.checkba.service.LangText;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -69,7 +70,8 @@ public class VerificationCodeStore {
         codes.compute(key(scene, target), (k, existing) -> {
             long now = nowMillis.getAsLong();
             if (existing != null && now - existing.issuedAt < RESEND_COOLDOWN.toMillis()) {
-                throw new IllegalArgumentException("验证码发送过于频繁，请稍后再试");
+                throw new IllegalArgumentException(LangText.of("验证码发送过于频繁，请稍后再试",
+                        "Verification codes are being requested too often, please try again later"));
             }
             // 嵌套 compute 的是另一张表（dailySends），CHM 只禁止在 compute 里改「本表」；
             // 全局只有这一处按 codes -> dailySends 的顺序取锁，不存在反向路径。
@@ -79,7 +81,8 @@ public class VerificationCodeStore {
                     c.windowStart = now;
                 }
                 if (c.count >= MAX_PER_TARGET_PER_DAY) {
-                    throw new IllegalArgumentException("该账号今日验证码条数已达上限，请明天再试");
+                    throw new IllegalArgumentException(LangText.of("该账号今日验证码条数已达上限，请明天再试",
+                            "This account has reached today's verification code limit, please try again tomorrow"));
                 }
                 c.count++;
                 return c;

@@ -513,7 +513,7 @@ public class AuthController {
                 Long userId = getUserIdFromSession(sessionId);
                 if (userId == null) {
                     result.put("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED);
-                    result.put("message", "未登录");
+                    result.put("message", LangText.of("未登录", "Not signed in"));
                     return result;
                 }
                 phoneMasked = smsAuthService.sendBindCode(userId, request.getPhone());
@@ -559,7 +559,7 @@ public class AuthController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) {
-            return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+            return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         }
         try {
             var r = accountDeletionService.deleteAccount(userId);
@@ -576,7 +576,7 @@ public class AuthController {
     public Map<String, Object> totpSetup(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
-        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         try {
             var setup = secondFactorService.startSetup(userId, TOTP_ISSUER);
             return Map.of("code", 0, "data", Map.of(
@@ -593,7 +593,7 @@ public class AuthController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
-        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         try {
             secondFactorService.activate(userId, body == null ? null : body.get("code"));
             return Map.of("code", 0, "message", LangText.of("认证器已绑定", "Authenticator linked"));
@@ -608,7 +608,7 @@ public class AuthController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
-        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         try {
             secondFactorService.disable(userId, body == null ? null : body.get("code"));
             return Map.of("code", 0, "message", LangText.of("认证器已解绑", "Authenticator unlinked"));
@@ -623,7 +623,7 @@ public class AuthController {
             @PathVariable Long targetUserId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
-        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         if (!adminAccessService.isAdmin(userService.getUserById(userId))) {
             return Map.of("code", 1, "message", LangText.of("仅系统管理员可执行该操作", "Only a system administrator can perform this action"));
         }
@@ -643,7 +643,7 @@ public class AuthController {
         Map<String, Object> result = new HashMap<>();
         if (userId == null) {
             result.put("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED);
-            result.put("message", "未登录");
+            result.put("message", LangText.of("未登录", "Not signed in"));
             return result;
         }
         try {
@@ -680,7 +680,7 @@ public class AuthController {
                 Long userId = getUserIdFromSession(sessionId);
                 if (userId == null) {
                     result.put("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED);
-                    result.put("message", "未登录");
+                    result.put("message", LangText.of("未登录", "Not signed in"));
                     return result;
                 }
                 emailMasked = mailAuthService.sendBindCode(userId, request.getEmail());
@@ -715,7 +715,7 @@ public class AuthController {
         Map<String, Object> result = new HashMap<>();
         if (userId == null) {
             result.put("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED);
-            result.put("message", "未登录");
+            result.put("message", LangText.of("未登录", "Not signed in"));
             return result;
         }
         try {
@@ -999,7 +999,7 @@ public class AuthController {
         if (userId == null) {
             Map<String, Object> result = new HashMap<>();
             result.put("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED);
-            result.put("message", "未登录");
+            result.put("message", LangText.of("未登录", "Not signed in"));
             return result;
         }
 
@@ -1196,7 +1196,7 @@ public class AuthController {
     public Map<String, Object> listDeviceTokens(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
-        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         var items = deviceTokenService.listMine(userId).stream()
                 .map(t -> {
                     Map<String, Object> item = new HashMap<>();
@@ -1215,7 +1215,7 @@ public class AuthController {
             @PathVariable Long id,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
-        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
+        if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", LangText.of("未登录", "Not signed in"));
         deviceTokenService.revoke(userId, id);
         return Map.of("code", 0, "message", LangText.of("已撤销", "Revoked"));
     }
