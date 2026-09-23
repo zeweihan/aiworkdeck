@@ -750,7 +750,7 @@ class DraftAdoptTest {
 
         svc.onChangeSignal(7L, 1L, "韩泽伟");
         assertNull(svc.commitNow(7L, 1L, "韩泽伟", null), "裁决期间不能落自动存档");
-        assertNull(svc.commitAiRound(7L, 1L), "裁决期间 AI 轮次也不能落版");
+        assertNull(svc.commitAiRound(7L, 1L, false), "裁决期间 AI 轮次也不能落版");
 
         assertTrue(svc.activeSession(7L).isEmpty(), "裁决期间不能凭空开出一段工作");
         assertTrue(repoSvc.repositoryMerging(7L), "合并状态不能被自动存档清掉");

@@ -2004,9 +2004,13 @@ public class AgentOrchestrator {
             } catch (Exception memEx) {
                 log.warn("Failed to trigger memory pipeline for {}", conversationId, memEx);
             }
-            // 版本记录：AI 轮次真正结束后落一笔 AI 署名存档（失败绝不阻断）
+            // 版本记录：AI 轮次真正结束后落一笔 AI 署名存档（失败绝不阻断）。
+            // documentEdited 是「编辑器桥上写过东西」的唯一同步证据——那些字节要等前端
+            // 自动保存才回到服务端，落版这一刻工作区还是干净的。只读轮两条判据都不成立，
+            // commitAiRound 因此既不开工作段也不提交（dev-board#822）。
             try {
-                workSessionService.commitAiRound(Long.parseLong(projectId), userId);
+                workSessionService.commitAiRound(Long.parseLong(projectId), userId,
+                        guard != null && guard.documentEdited());
             } catch (Exception vEx) {
                 log.warn("AI 轮次版本落档失败: project={}", projectId, vEx);
             }
