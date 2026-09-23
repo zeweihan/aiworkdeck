@@ -285,8 +285,9 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   前端 `DrawioEditor.fileRef()` 也改成优先用数字主键。
 - **对话里的文件卡按「基名」兜底**：`@ToolMeta(fileArg = "diagramName")` 报给
   `file_change` 的是**图名**（也是文件夹名），项目里真正存在的是 `<图名>.drawio` 等。
-  `fileOpenTabs.handleOpenFileFromChat` 精确名找不到时再按 `图名.` 前缀找一轮，
-  并按 drawio > svg > png 排序；没有这条兜底，对话里的文件卡点了只会弹「文件不存在」。
+  `fileOpenTabs.handleOpenFileFromChat`（匹配规则已抽到 `utils/chatFileChange.js` 的 `findChatFile`，
+  dev-board#852）精确名找不到时再按 `图名.` 前缀找一轮，并按 drawio > svg > png 排序；
+  没有这条兜底，对话里的文件卡点了只会弹「文件不存在」。
 - **手工改过的图再「换风格」会被语义地图覆盖**。判据是 `.drawio` 比 `.map.json` 新
   （`DiagramView.handEdited`），面板据此先弹确认框。
 - **触发词必须原样出现在 prompt 正文里**才命中 skill 注入（pinnedSkillId 只裁工具

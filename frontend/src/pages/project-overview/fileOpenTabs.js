@@ -8,6 +8,7 @@ import { getProjectFiles } from '@/services/api.js'
 import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 import { fileKindClass } from './fileKind.js'
+import { findChatFile, isCurrentDocSentinel, matchesActiveTab } from '@/utils/chatFileChange.js'
 
 // 轻量文本编辑器（PlainTextEditor.vue）承接的扩展名（dev-board#37）。
 // dev-board#61 插件开发形态起收纳代码文件（js/json/html/css 等），供律师直改插件源码。
@@ -76,9 +77,29 @@ export const fileOpenTabsMethods = {
     },
 
     // Handle file open request from ChatInterface (file changes popup)
-    async handleOpenFileFromChat({ name }) {
-      if (!name) return
-      console.log('[project-overview] Open file from chat:', name)
+    // { name, fileId }：fileId 是后端 file_change 带来的（dev-board#852），按 id 优先、名字其次；
+    // 匹配规则在 utils/chatFileChange.js（纯函数，有单测）。
+    async handleOpenFileFromChat({ name, fileId } = {}) {
+      const hasFileId = fileId !== null && fileId !== undefined && fileId !== ''
+      if (!name && !hasFileId) return
+      console.log('[project-overview] Open file from chat:', name, fileId)
+
+      // 卡片指的就是眼前这份：只切到它，不重开、不拉列表、不弹提示。
+      const active = this.currentActiveTab
+      if (matchesActiveTab({ name, fileId }, active)) {
+        const pane = (this.rightFiles || []).includes(active) ? 'right' : 'left'
+        this.activateTab(active, pane)
+        return
+      }
+      // 「当前文档」占位（含历史会话里的 "Current Document"）而此刻没有打开的文档：
+      // 说不出是哪份，提示先打开，别报「未找到文件」。
+      if (isCurrentDocSentinel(name) && !hasFileId) {
+        uni.showToast({
+          title: this.$t('workbenchOps.openDocumentFirst', { name: this.$t('chat.activeDocChipLabel') }),
+          icon: 'none'
+        })
+        return
+      }
 
       // Refresh project files first to ensure we have latest
       try {
@@ -87,39 +108,18 @@ export const fileOpenTabsMethods = {
         const files = Array.isArray(resp) ? resp : (resp?.data || [])
         console.log('[project-overview] Got files for search:', files.length)
 
-        // Find file by name (case-insensitive, match basename)
-        let targetFile = files.find(f => {
-          if (f.isFolder) return false
-          // Match exact name or name without extension
-          return f.name === name || f.name.toLowerCase() === name.toLowerCase()
-        })
-
-        // 精确名找不到时按「基名 + 扩展名」再找一轮。
-        // 有些工具报上来的"变更文件名"其实是一组产物的基名而不是某一个文件：
-        // 诉讼可视化的 file_change 带的是图名（litigation_render 的 diagramName），
-        // 项目里真正存在的是同名文件夹下的 <图名>.drawio / .svg / .png。
-        // 没有这条兜底，对话里的文件卡点了只会弹"文件不存在"——一个死掉的入口。
-        // 也认 -draft：语义地图未确认时引擎按设计给产物加这个后缀（草稿闸），
-        // 而工具报上来的名字里没有它——第一次出图必然走这一支。
-        if (!targetFile) {
-          const bases = [name.toLowerCase() + '.', name.toLowerCase() + '-draft.']
-          const candidates = files.filter(f =>
-            !f.isFolder && bases.some(b => f.name.toLowerCase().startsWith(b)))
-          // 一组产物里优先给可继续编辑的那份，其次是能看的母版。
-          const rank = ['drawio', 'svg', 'png']
-          targetFile = candidates.sort((a, b) => {
-            const ra = rank.indexOf((a.fileType || '').toLowerCase())
-            const rb = rank.indexOf((b.fileType || '').toLowerCase())
-            return (ra < 0 ? rank.length : ra) - (rb < 0 ? rank.length : rb)
-          })[0]
-        }
-
+        const targetFile = findChatFile(files, { name, fileId })
         if (targetFile) {
           console.log('[project-overview] Found file:', targetFile.id, targetFile.name)
           this.openFile(targetFile)
+        } else if (isCurrentDocSentinel(name)) {
+          uni.showToast({
+            title: this.$t('workbenchOps.openDocumentFirst', { name: this.$t('chat.activeDocChipLabel') }),
+            icon: 'none'
+          })
         } else {
-          console.warn('File not found:', name, 'in', files.map(f => f.name))
-          uni.showToast({ title: this.$t('workbenchOps.fileNotFoundNamed', { name }), icon: 'none' })
+          console.warn('File not found:', name, fileId, 'in', files.map(f => f.name))
+          uni.showToast({ title: this.$t('workbenchOps.fileNotFoundNamed', { name: name || fileId }), icon: 'none' })
         }
       } catch (e) {
         console.error('Failed to fetch files for open:', e)

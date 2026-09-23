@@ -5,6 +5,7 @@
 export default {
   // fileOpenTabs.js
   fileNotFoundNamed: '未找到文件: {name}',
+  openDocumentFirst: '{name}没有打开，请先打开文档',
   fetchFileListFailed: '获取文件列表失败',
   cannotOpenFileTitle: '无法打开文件',
   unsupportedFileContent: '暂不支持打开此类型文件：{name}\n\n文件类型：{fileType}\n\n支持的文件类型：\n• 文档：doc, docx, xls, xlsx, ppt, pptx, pdf\n• 图片：jpg, jpeg, png, gif, bmp, webp, svg\n• 视频：mp4, webm, ogg, mov, mkv, avi\n• 音频：mp3, wav, m4a, flac, aac\n• 文本：txt, md, json, xml, html等',

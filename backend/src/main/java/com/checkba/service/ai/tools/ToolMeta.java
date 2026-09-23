@@ -33,7 +33,10 @@ public @interface ToolMeta {
     String fileEffect() default "";
 
     /**
-     * 携带受影响文件名的参数名；fileEffect 非空但此项为空时，前端显示为"Current Document"。
+     * 携带受影响文件名的参数名。fileEffect 非空但此项为空时（doc_* / sheet_* / slide_* 改的是编辑器里
+     * 当前打开的那份），编排器用本轮活跃文档的真名并在 file_change 里带上它的 fileId（dev-board#852）；
+     * 其它工具参数里有数字型 fileId 时（pdf_* / text_*），按该 id 查回真名并带上 id；
+     * 连活跃文档都没有时文件名报「当前文档」、fileId 为 null，前端据此切回当前标签而不是按名字去找。
      */
     String fileArg() default "";
 

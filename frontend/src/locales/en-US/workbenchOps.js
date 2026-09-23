@@ -5,6 +5,7 @@
 export default {
   // fileOpenTabs.js
   fileNotFoundNamed: 'File not found: {name}',
+  openDocumentFirst: '{name} is not open. Open the document first.',
   fetchFileListFailed: 'Failed to load file list',
   cannotOpenFileTitle: 'Cannot Open File',
   unsupportedFileContent: 'This file type cannot be opened yet: {name}\n\nFile type: {fileType}\n\nSupported file types:\n• Documents: doc, docx, xls, xlsx, ppt, pptx, pdf\n• Images: jpg, jpeg, png, gif, bmp, webp, svg\n• Video: mp4, webm, ogg, mov, mkv, avi\n• Audio: mp3, wav, m4a, flac, aac\n• Text: txt, md, json, xml, html, etc.',

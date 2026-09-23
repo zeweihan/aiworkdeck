@@ -846,7 +846,7 @@ public class AgentOrchestrator {
         // 「一轮内工具集不变」那条契约失效（只加不减，所以不会让已宣布的工具消失）。
         noteToolCategoryExpansion(guard, toolName, argsJson, result);
         recordToolTelemetry(toolName, result, conversationId, System.currentTimeMillis() - toolStartMs);
-        applyToolSideEffects(result, argsJson, conversationId);
+        applyToolSideEffects(result, toolName, argsJson, conversationId, guard);
 
         // 模型仍去列文件时，把活跃文档钉在结果里，让它下一轮自己纠回来（不阻断跨文档场景）
         if (guard != null && guard.activeFileId != null
@@ -1020,7 +1020,8 @@ public class AgentOrchestrator {
     /**
      * 根据 @ToolMeta 元数据处理工具副作用（取代原先散落在手写分发链里的硬编码通知）。
      */
-    private void applyToolSideEffects(ToolRegistry.ToolResult result, String argsJson, String conversationId) {
+    private void applyToolSideEffects(ToolRegistry.ToolResult result, String toolName, String argsJson,
+                                      String conversationId, RunGuard guard) {
         if (!result.success() || result.tool() == null || result.tool().meta() == null) {
             return;
         }
@@ -1032,11 +1033,73 @@ public class AgentOrchestrator {
         // 用户会被告知本轮改了这个文件，去找却找不到任何改动。
         if (!meta.fileEffect().isEmpty() && result.fileChanged()) {
             String fileName = meta.fileArg().isEmpty() ? null : extractArg(argsJson, meta.fileArg());
-            if (fileName == null || fileName.isEmpty()) {
-                fileName = "Current Document";
+            Long fileId = null;
+            if ((fileName == null || fileName.isEmpty()) && guard != null && guard.activeFileId != null
+                    && actsOnActiveDocument(toolName)) {
+                // doc_* / sheet_* / slide_* 改的就是编辑器里那份活跃文档（dev-board#852）：
+                // 报它的真名与 id，前端改动卡片才能把用户带回这份文件
+                fileId = guard.activeFileId;
+                fileName = activeFileNameOrLookup(guard);
+            } else if ((fileName == null || fileName.isEmpty()) && !actsOnActiveDocument(toolName)) {
+                // pdf_* / text_* 一族没有 fileArg，但参数里指名了 fileId：按 id 查回真名。
+                // 查不到就当不知道，不把一个查无此文件的 id 发给前端
+                com.checkba.model.entity.ProjectFile target = fileByIdArg(argsJson);
+                if (target != null) {
+                    fileId = target.getId();
+                    fileName = target.getName();
+                }
             }
-            notifyFileChange(conversationId, fileName, meta.fileEffect());
+            if (fileName == null || fileName.isEmpty()) {
+                // 说不出是哪份文件时用与给模型的反馈同一口径的「当前文档」；
+                // 它仍要发出去——检查点与改动卡片都靠这条 MODIFIED
+                fileName = activeDocDisplayName(null);
+            }
+            notifyFileChange(conversationId, fileName, fileId, meta.fileEffect());
         }
+    }
+
+    /**
+     * 这个工具改的是不是编辑器里当前打开的那份文档：LOWA 三族编辑原语是，
+     * 但「新建并打开一份新文档」的那两个不是——把新文件的改动记在旧文档头上，
+     * 改动卡片会把用户带去一份根本没动过的文件。
+     */
+    static boolean actsOnActiveDocument(String toolName) {
+        if (toolName == null || NEW_DOCUMENT_TOOL_KINDS.containsKey(toolName)) {
+            return false;
+        }
+        return toolName.startsWith("doc_") || toolName.startsWith("sheet_") || toolName.startsWith("slide_");
+    }
+
+    /** 参数里的数字型 fileId 对应的项目文件；参数缺失、不是数字、查不到或没有名字都返回 null。 */
+    private com.checkba.model.entity.ProjectFile fileByIdArg(String argsJson) {
+        String raw = extractArg(argsJson, "fileId");
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            com.checkba.model.entity.ProjectFile f = projectFileService.getFile(Long.parseLong(raw.trim()));
+            return f != null && f.getId() != null && f.getName() != null && !f.getName().isBlank() ? f : null;
+        } catch (Exception e) {
+            log.debug("file_change 按 fileId={} 取名失败，回落「当前文档」: {}", raw, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 活跃文档名：guard 里有就用；中途 doc_open_file 换了文档后名字是 null，按 id 查回来。 */
+    private String activeFileNameOrLookup(RunGuard guard) {
+        if (guard.activeFileName != null && !guard.activeFileName.isBlank()) {
+            return guard.activeFileName;
+        }
+        try {
+            com.checkba.model.entity.ProjectFile f = projectFileService.getFile(guard.activeFileId);
+            if (f != null && f.getName() != null && !f.getName().isBlank()) {
+                guard.activeFileName = f.getName();
+                return f.getName();
+            }
+        } catch (Exception e) {
+            log.debug("活跃文档 {} 取名失败，file_change 只带 id: {}", guard.activeFileId, e.getMessage());
+        }
+        return null;
     }
 
 
@@ -2860,7 +2923,7 @@ public class AgentOrchestrator {
     // =================================================================================
     // Helper to notify frontend of file changes (Added/Modified)
     // =================================================================================
-    private void notifyFileChange(String conversationId, String fileName, String changeType) {
+    private void notifyFileChange(String conversationId, String fileName, Long fileId, String changeType) {
         try {
             // Determine pure filename if path is given
             String name = fileName;
@@ -2868,12 +2931,16 @@ public class AgentOrchestrator {
                 java.nio.file.Path p = java.nio.file.Paths.get(name);
                 name = p.getFileName().toString();
             }
-            
-            // Send SSE event to frontend
-            String json = String.format("{\"fileName\":\"%s\", \"changeType\":\"%s\"}", 
-                name.replace("\"", "\\\""), changeType);
-            sseEmitterService.send(conversationId, "file_change", json);
-            
+
+            // Send SSE event to frontend. fileId（dev-board#852）：知道是哪份文件时带上，
+            // 前端按 id 打开，不再靠文件名去猜；说不出来时为 null。只加字段，旧客户端不受影响。
+            // 用 Jackson 序列化（与 skill_update 共用那个无状态 mapper）：手拼 JSON 遇到文件名里的反斜杠会坏。
+            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("fileName", name);
+            payload.put("changeType", changeType);
+            payload.put("fileId", fileId);
+            sseEmitterService.send(conversationId, "file_change", SKILL_UPDATE_MAPPER.writeValueAsString(payload));
+
             // Persist to database for history retrieval
             conversationFileChangeService.saveFileChange(conversationId, name, changeType);
         } catch (Exception e) {
