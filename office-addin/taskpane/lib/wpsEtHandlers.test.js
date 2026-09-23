@@ -166,7 +166,8 @@ test('excel_set_values：二维数组整体经 Value2 写入', async () => {
   try {
     const out = await WPS_ET_HANDLERS.excel_set_values({ rangeAddress: 'A1:B2', values: [[1, 2], [3, 4]] })
     assert.deepEqual(rng.Value2, [[1, 2], [3, 4]])
-    assert.deepEqual(out, { written: 4, address: 'A1:B2' })
+    // 第 1 行起写入，上方没有既有数据行，不沿用任何格式
+    assert.deepEqual(out, { written: 4, address: 'A1:B2', formatInherited: [] })
   } finally { restore() }
 })
 

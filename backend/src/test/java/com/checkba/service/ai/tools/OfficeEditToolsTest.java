@@ -542,13 +542,43 @@ class OfficeEditToolsTest {
     void excelGetRangeDefaults() {
         when(bridge.executeOfficeCommand(any(), eq("excel_get_range"), anyMap())).thenReturn("{}");
 
-        tools.office_excel_get_range("conv-1", null, null);
+        tools.office_excel_get_range("conv-1", null, null, null);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
         verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_get_range"), args.capture());
         assertEquals("", args.getValue().get("sheetName"));
         assertEquals("", args.getValue().get("rangeAddress"));
+        assertFalse(args.getValue().containsKey("withFormat"), "缺省不要格式：不下发 withFormat");
+    }
+
+    @Test
+    @DisplayName("office_excel_get_range：withFormat=true 透传给插件端（dev-board#844）")
+    void excelGetRangeWithFormat() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_get_range"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_get_range("conv-1", null, "A1:D20", true);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_get_range"), args.capture());
+        assertEquals(Boolean.TRUE, args.getValue().get("withFormat"));
+    }
+
+    @Test
+    @DisplayName("office_excel_set_values：inheritFormat 缺省不下发（插件端默认沿用），显式 false 才下发（dev-board#844）")
+    void excelSetValuesInheritFormat() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_set_values"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_set_values("conv-1", null, "A5", "[[1]]", null);
+        tools.office_excel_set_values("conv-1", null, "A5", "[[1]]", false);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_set_values"), args.capture());
+        assertFalse(args.getAllValues().get(0).containsKey("inheritFormat"));
+        assertEquals(Boolean.FALSE, args.getAllValues().get(1).get("inheritFormat"));
     }
 
     @Test
@@ -556,7 +586,7 @@ class OfficeEditToolsTest {
     void excelSetValuesDispatches() {
         when(bridge.executeOfficeCommand(any(), eq("excel_set_values"), anyMap())).thenReturn("{}");
 
-        tools.office_excel_set_values("conv-1", "Sheet1", "B2", "[[\"名称\",\"金额\"],[\"甲\",100]]");
+        tools.office_excel_set_values("conv-1", "Sheet1", "B2", "[[\"名称\",\"金额\"],[\"甲\",100]]", null);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
@@ -574,16 +604,16 @@ class OfficeEditToolsTest {
     @DisplayName("Excel/PPT 参数校验失败：返回 Error 前缀且不触碰桥")
     void excelPptValidationFailuresDoNotTouchBridge() {
         // 非法区域地址（带工作表名/乱写）
-        assertTrue(tools.office_excel_get_range("conv-1", null, "Sheet1!A1").startsWith("Error"));
-        assertTrue(tools.office_excel_set_values("conv-1", null, "", "[[1]]").startsWith("Error"));
-        assertTrue(tools.office_excel_set_values("conv-1", null, "not-a-range", "[[1]]").startsWith("Error"));
+        assertTrue(tools.office_excel_get_range("conv-1", null, "Sheet1!A1", null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "", "[[1]]", null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "not-a-range", "[[1]]", null).startsWith("Error"));
         // valuesJson 非法/非矩形/元素类型非法/超上限
-        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "not json").startsWith("Error"));
-        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "[]").startsWith("Error"));
-        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "[[1,2],[3]]").startsWith("Error"));
-        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "[[{\"a\":1}]]").startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "not json", null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "[]", null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "[[1,2],[3]]", null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", "[[{\"a\":1}]]", null).startsWith("Error"));
         String huge = "[[" + "1,".repeat(2000) + "1]]";
-        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", huge).startsWith("Error"));
+        assertTrue(tools.office_excel_set_values("conv-1", null, "A1", huge, null).startsWith("Error"));
         // 查找与替换
         assertTrue(tools.office_excel_search("conv-1", null, " ").startsWith("Error"));
         assertTrue(tools.office_excel_search("conv-1", null, "长".repeat(256)).startsWith("Error"));

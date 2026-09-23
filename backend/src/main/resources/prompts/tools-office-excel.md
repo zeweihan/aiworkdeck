@@ -23,6 +23,9 @@
 - 结构：`office_excel_manage_sheets` 管理工作表，`office_excel_edit_rows_cols` 插删整行整列，`office_excel_merge_cells` 合并/取消合并，`office_excel_group_rows_cols` 分组。
 - 阅读体验：`office_excel_freeze_panes` 冻结表头，`office_excel_set_autofilter` 加筛选，`office_excel_conditional_format` 按条件自动标色，`office_excel_select_range` 把用户视图定位到某处。
 - 进阶：`office_excel_define_name` 命名区域、`office_excel_set_data_validation` 数据验证、`office_excel_protect_sheet` 保护工作表、`office_excel_add_chart` 插图表、`office_excel_add_pivot_table` 基础透视表。
+- **新增的行、列要与相邻的既有内容长得一样**（字体、字号、对齐、边框、填充、数字格式），不能一眼看出是后加的：
+  - 追加到表格下方时，`office_excel_set_values` 会自动沿用上一行的格式——看返回值里的 `formatInherited`，列出了的行就不用再补格式；
+  - 其他情形（新增一列、在表头下写第一条数据、`formatInherited` 为空）先用 `office_excel_get_range` 并传 `withFormat=true` 看相邻行列的格式，再用 `office_excel_format_cells` / `office_excel_set_borders` 补齐。
 - **先写数据再做格式**：同一轮里先 `office_excel_set_values`，再接格式类调用。彼此不依赖结果的调用要放在同一轮批量发出，一轮一个地挤牙膏会白白烧掉步数预算。
 
 ### 解释类文字用批注，不进单元格
