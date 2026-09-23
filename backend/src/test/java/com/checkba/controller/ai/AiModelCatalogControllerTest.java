@@ -4,7 +4,9 @@
 package com.checkba.controller.ai;
 
 import com.checkba.service.ai.AllowedModels;
+import com.checkba.config.AiModelProperties;
 import com.checkba.service.ai.ChatModelFactory;
+import com.checkba.service.ai.ModelPriceDisplayService;
 import com.checkba.service.ai.NetworkRegionService;
 import com.checkba.controller.AuthController;
 import org.junit.jupiter.api.DisplayName;
@@ -17,9 +19,12 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -109,6 +114,102 @@ class AiModelCatalogControllerTest {
             ResponseEntity<?> response = new AiModelCatalogController(regionService, factory)
                     .listModels(null);
             assertEquals(401, response.getStatusCode().value());
+        }
+    }
+
+    // ==================== 价格显示口径（dev-board#853）====================
+
+    private static final ModelPriceDisplayService.ChargedRate CNY_RATE =
+            new ModelPriceDisplayService.ChargedRate("CNY", 7.1, 1.2, "reported", "live", "2026-09-23T02:00:00Z");
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> pricedBody(AiModelProperties.Provider provider, ModelPriceDisplayService priceService) {
+        NetworkRegionService regionService = mock(NetworkRegionService.class);
+        when(regionService.effectiveRegion()).thenReturn(AllowedModels.Region.INTERNATIONAL);
+        when(regionService.mode()).thenReturn("auto");
+        when(regionService.detectionBasis()).thenReturn("测试固定值");
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.resolveDefaultModel()).thenReturn(AllowedModels.DEEPSEEK_V4_FLASH.getModelId());
+        when(factory.resolveProvider()).thenReturn(provider);
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("session-ok")).thenReturn(1L);
+            ResponseEntity<?> response = new AiModelCatalogController(regionService, factory, priceService)
+                    .listModels("session-ok");
+            return (Map<String, Object>) response.getBody();
+        }
+    }
+
+    private static ModelPriceDisplayService rateService(ModelPriceDisplayService.ChargedRate rate) {
+        ModelPriceDisplayService svc = mock(ModelPriceDisplayService.class);
+        when(svc.currentRate()).thenReturn(rate);
+        return svc;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("平台通道 + 取到汇率：display 单价 = 美元标价 × 汇率 × 毛利乘数，口径标 charged")
+    void platformChannelShowsChargedPrice() {
+        Map<String, Object> body = pricedBody(AiModelProperties.Provider.AWD_CLOUD, rateService(CNY_RATE));
+        Map<String, Object> pd = (Map<String, Object>) body.get("priceDisplay");
+        assertEquals("charged", pd.get("basis"));
+        assertEquals("platform", pd.get("channel"));
+        assertEquals("CNY", pd.get("currency"));
+        assertEquals(8.52, (Double) pd.get("factor"), 1e-9);
+        assertEquals("live", pd.get("rateSource"));
+        assertEquals("2026-09-23T02:00:00Z", pd.get("rateUpdatedAt"));
+
+        for (Map<String, Object> dto : (List<Map<String, Object>>) body.get("models")) {
+            AllowedModels m = AllowedModels.fromId((String) dto.get("id"));
+            AllowedModels.PriceTier first = m.getPriceTiers().get(0);
+            assertEquals(first.inputPricePerM() * 7.1 * 1.2, (Double) dto.get("displayInputPerM"), 1e-6, m.name());
+            assertEquals(first.outputPricePerM() * 7.1 * 1.2, (Double) dto.get("displayOutputPerM"), 1e-6, m.name());
+            // 原有字段不删不改名：仍是厂商美元标价
+            assertEquals(first.inputPricePerM(), dto.get("inputPricePerM"));
+            assertEquals(first.outputPricePerM(), dto.get("outputPricePerM"));
+            assertEquals(m.priceLevel(), dto.get("priceLevel"));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("平台通道但取不到汇率：退回美元标价，factor=1，不编造")
+    void platformWithoutRateFallsBackToList() {
+        Map<String, Object> body = pricedBody(AiModelProperties.Provider.AWD_CLOUD, rateService(null));
+        Map<String, Object> pd = (Map<String, Object>) body.get("priceDisplay");
+        assertEquals("list", pd.get("basis"));
+        assertEquals("platform", pd.get("channel"));
+        assertEquals("USD", pd.get("currency"));
+        assertEquals(1.0, pd.get("factor"));
+        assertNull(pd.get("rateUpdatedAt"));
+        for (Map<String, Object> dto : (List<Map<String, Object>>) body.get("models")) {
+            assertEquals(dto.get("inputPricePerM"), dto.get("displayInputPerM"));
+            assertEquals(dto.get("outputPricePerM"), dto.get("displayOutputPerM"));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("自备 Key：用户按标价直接付给 OpenRouter，不许乘平台汇率，也不去问官网")
+    void byokNeverUsesPlatformRate() {
+        ModelPriceDisplayService svc = rateService(CNY_RATE);
+        Map<String, Object> body = pricedBody(AiModelProperties.Provider.OPENROUTER, svc);
+        Map<String, Object> pd = (Map<String, Object>) body.get("priceDisplay");
+        assertEquals("list", pd.get("basis"));
+        assertEquals("byok", pd.get("channel"));
+        verify(svc, never()).currentRate();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("旧构造器（无价格服务）照常可用：一律标价口径，每条仍带 priceLevel")
+    void legacyConstructorStillServesList() {
+        Map<String, Object> body = body(AllowedModels.Region.GLOBAL);
+        Map<String, Object> pd = (Map<String, Object>) body.get("priceDisplay");
+        assertEquals("list", pd.get("basis"));
+        for (Map<String, Object> dto : (List<Map<String, Object>>) body.get("models")) {
+            Object level = dto.get("priceLevel");
+            assertTrue(level instanceof Integer && (Integer) level >= 1 && (Integer) level <= AllowedModels.PRICE_LEVEL_COUNT,
+                    dto.get("id") + " 的 priceLevel 越界: " + level);
         }
     }
 }

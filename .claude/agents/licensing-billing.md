@@ -36,8 +36,8 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   mode 永远停在 trial，界面判「试用版/正式版」**一律读 edition 不读 mode**（userprofile 授权行、顶栏 chip 已改）。
   组合是只读的，**绝不回写 license.json**（改写会抹掉试用码票据，断开账户即掉回未解锁）；
   非 local-mode 不查 AccountService（机器级状态 + 本端点匿名，照查等于泄露给匿名请求），edition 恒 paid。
-- 前端：`frontend/src/pages/launch/launch.vue`（启动分流页）、`pages/unlock/unlock.vue`（解锁页）、
-  `pages/identity/identity.vue`（本机工作区选择页）。
+- 前端：`frontend/src/pages/launch/launch.vue`（启动分流页）、`pages/unlock/unlock.vue`（解锁页，
+  左栏品牌展示复用 `components/BrandShowcase.vue`）、`pages/identity/identity.vue`（本机工作区选择页）。
 
 **本机免登身份（PR-A + #250）**
 - `backend/src/main/java/com/checkba/service/LocalIdentityService.java` — local-mode 下「本机用户」的解析：
@@ -313,10 +313,27 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `service/site/SiteSwitchService.java` — 切站编排，**是 `persistSelection` 的唯一合法调用方**。
 - `controller/SiteController.java` — `GET /api/site`、`POST /api/site/select`，**匿名端点**
   （选站发生在解锁之前），靠 `LocalModeAccessFilter` 兜着，做法同 `POST /api/license/deactivate`。
-- `ai.account.sites.*`（application.yml）— 站点表；`intl.enabled` 在国际站上线前为 false，
-  可选站点 < 2 时前端整个不渲染站点 UI。
+- `ai.account.sites.*`（application.yml）— 站点表；**`intl.enabled` 自 2026-09-23 起为 true**
+  （国际站上线，dev-board#846，PR#955；`SiteProfileServiceTest` 钉住），可选站点 < 2 时前端
+  整个不渲染站点 UI（这一条判据不变，只是现在两站都开着，常态就会渲染）。
 - 前端：`frontend/src/utils/siteLinks.js`（官网链接的唯一出口，替代 7 处硬编码）、
-  `pages/unlock/unlock.vue`（站点行 + 错配一键救济）、`pages/admin/admin.vue`「账户与用量」的站点子区。
+  `pages/unlock/unlock.vue`（解锁页重做，2026-09-23，dev-board#846-848，设计
+  `docs/superpowers/specs/2026-09-23-desktop-login-and-dialog-redesign-design.md`）、
+  `pages/admin/admin.vue`「账户与用量」的站点子区。**解锁页新结构**：站点分段控件
+  （`unlock-site-seg`，`multiSite=false` 整个不渲染，`pinned` 时渲染但不可点，标识符按站点切换
+  ——cn 用手机号、intl 用邮箱，两个输入框各自保留互不覆盖）；**登录与注册合一**为一个入口
+  （官网验证码端点「不存在即注册」，回包带 `isNewUser`，页面上没有单独的注册页/注册按钮）；
+  `onSiteSegTap` 切站**只有本机确实有东西会被清掉才二次确认**（`needsSwitchConfirm`：已连账户
+  或用账户 Key 解锁），解锁页常态两样都没有，切站只是换登录目标，不弹确认；首装按界面语言
+  自动预选站点（非中文 → 国际站，否则大陆站，且仅在不会清掉本机东西时做）**只做一次**，
+  落盘标记 `awd_site_preselected`——与选国际站顺带切英文（用户没亲手选过语言时才生效）用的
+  `utils/appLanguage.js` 的 `awd_app_language_manual`（用户亲手选过界面语言，程序自动切换
+  不打这个标记，`{ auto: true }`）是两个独立的本机存储标记，分别管「站点只自动预选一次」与
+  「语言是否被用户亲手定过」；试用码/手工粘 `awdk_` Key 那条路**只在 `trialCodeEnabled`
+  时才有**，由卡片底部链接进入（官方发布版关闭，见「必须账户登录」一节），不再是常驻的页签。
+  品牌文案（十类工作来源、标语等）唯一来源是 `design/copy/brand-copy.json`，与
+  `onboarding.unlock.brand.*` 的 i18n 值逐字对拍（`frontend/scripts/check-brand-copy.mjs`，
+  已并入 `npm run check:locales`）——改文案先改 json，别直接改组件里的字符串。
 - **国际站人机验证（Cloudflare Turnstile）必须走官网托管页，不能在本页 render**（2026-09-23）：
   Turnstile 按域名放行 sitekey，打包版主窗口是 `file://`，直接 `turnstile.render` 必报 110200
   （真实 sitekey 实测），拿不到 token 官网 `send-code` 就回 `captcha_failed`。`utils/captcha.js` 的
@@ -480,7 +497,7 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 
 (*) `ai-usage` 是唯一一条**权威文档也没收录**的端点：官网仓的 `doc/desktop-contract.md` 与
 `scripts/contract-check.mts` 里都搜不到它，实现只在官网仓 `app/api/account/ai-usage/route.ts`
-（那里还多返回 `exchangeRate` / `marginMultiplier` / `disabled` 三个字段，桌面端没用）。
+（那里还多返回 `exchangeRate` / `marginMultiplier` / `disabled` 三个字段；**2026-09 起桌面端读前两个**——`ModelPriceDisplayService` 用它们把模型选择器的价格折成「实付价」，官网新版还会多给 `currency` / `exchangeRateSource` / `exchangeRateUpdatedAt`，缺 `currency` 时按汇率推断币种、判不出就退回美元标价，绝不编造汇率；口径细节见 ai-chat.md「模型价格显示口径」）。
 上表这一行的字段以该 route 为准；官网仓补齐这条端点 + contract-check 之前，改它两侧不会有任何护栏提醒。
 
 三处与总 Spec §9 字面不同、**以实现与官网契约为准**：`verify-key` 的 `plan` 是 `paid|free`（不是 `trial|paid`）；

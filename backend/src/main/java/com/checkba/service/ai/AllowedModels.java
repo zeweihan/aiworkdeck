@@ -277,6 +277,55 @@ public enum AllowedModels {
         return applicable;
     }
 
+    // ==================== 贵贱档位（dev-board#853，模型选择器的视觉层级）====================
+
+    /**
+     * 综合单价里输入价的权重。agent 场景每一轮都重发整段 system + 工具规格 + 历史，
+     * 实测每轮 promptTokens 约 5 万，而输出通常只有几百到几千 token——输入占绝大多数，
+     * 所以不能像厂商宣传那样只看输出价，也不能简单取平均。
+     */
+    public static final double BLENDED_INPUT_WEIGHT = 0.8;
+
+    /**
+     * 档位上界（美元 / 百万 tokens，综合单价，不含）：{@code < 0.3} 经济、{@code < 1.0} 标准、
+     * {@code < 3.0} 高端、其余旗舰。<b>按美元标价算</b>，不按折算后的站点币种：
+     * 两站看到的档位必须一致，而折算系数随汇率与站点变。
+     *
+     * <p>阈值依据 2026-09 白名单的实际分布（首档，0.8×输入 + 0.2×输出）：
+     * 千问 3.7 Flash 0.05、DeepSeek V4 Flash 0.10 ｜ MiniMax M3 0.48、Seed 2.0 Lite 0.60、
+     * DeepSeek V4 Pro 0.85 ｜ Gemini 3.6 Flash 1.35、Kimi K2.6 1.56、GLM-5.2 1.70、
+     * Claude Haiku 4.5 1.80、千问 3.8 Max 2.80、Grok 4.5 2.80 ｜ Claude Sonnet 5 3.60、
+     * GPT-5.6 Terra 4.00、Kimi K3 5.40。
+     * 相邻阈值约差 3 倍（对数等距），落在分布里自然的断层上；关键约束是<b>境内只剩 GLOBAL 9 条时
+     * 四档仍然都有模型</b>（2/3/3/1），否则境内用户看到的就只有三档，档位失去意义。
+     * 改价或加模型后由 {@code AllowedModelsTest} 的档位用例守住这条。
+     */
+    static final double[] PRICE_LEVEL_UPPER_BOUNDS = {0.3, 1.0, 3.0};
+
+    /** 档位数。前端按 1..PRICE_LEVEL_COUNT 渲染，改档数要同步前端文案。 */
+    public static final int PRICE_LEVEL_COUNT = PRICE_LEVEL_UPPER_BOUNDS.length + 1;
+
+    /** 首档的综合单价（美元 / 百万 tokens）。分档模型只看首档，长上下文的涨价由 tiered 标签单独提示。 */
+    public double blendedPricePerM() {
+        PriceTier first = priceTiers.get(0);
+        return BLENDED_INPUT_WEIGHT * first.inputPricePerM()
+                + (1 - BLENDED_INPUT_WEIGHT) * first.outputPricePerM();
+    }
+
+    /** 贵贱档位，1 = 经济 … 4 = 旗舰。 */
+    public int priceLevel() {
+        return priceLevelOf(blendedPricePerM());
+    }
+
+    /** 综合单价 → 档位。负数、NaN 一律按最低档（不会发生，但不许抛异常拖垮模型目录）。 */
+    public static int priceLevelOf(double blendedPricePerM) {
+        int level = 1;
+        for (double bound : PRICE_LEVEL_UPPER_BOUNDS) {
+            if (blendedPricePerM >= bound) level++;
+        }
+        return level;
+    }
+
     public static boolean isAllowed(String modelId) {
         return fromId(modelId) != null;
     }
