@@ -132,7 +132,7 @@
 </template>
 
 <script>
-import { getCalendarTasks, getMyProjects, updateTask, deleteTask } from '@/services/api.js'
+import { getCalendarTasks, getTaskProjectOptions, updateTask, deleteTask } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { isDone, dueBadge } from '@/components/calendar/taskUtils.js'
 import { groupTodos, writableProjects } from '@/utils/personalCollections.js'
@@ -187,7 +187,7 @@ export default {
     async loadAll() {
       this.loading = true
       try {
-        const [taskRes, projects] = await Promise.all([getCalendarTasks(), getMyProjects()])
+        const [taskRes, projects] = await Promise.all([getCalendarTasks(), getTaskProjectOptions()])
         this.tasks = (taskRes && taskRes.data && taskRes.data.tasks) || []
         this.myProjects = projects || []
       } catch (e) {
