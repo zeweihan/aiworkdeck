@@ -90,6 +90,16 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    国际站同步；声明了更高 `minHostVersion` 的要等桌面正式版发出后再上。LOWA：`desktop-build.yml`
    的 `LOWA_BASE_URL` 变了 → `publish-lowa-engine.sh publish/verify` 先于打 tag。
    内置 skill（`backend/skills/*`，脱敏等）随安装包/补丁走，不在此列。
+4.8. **官网版本记录是发版硬步骤（2026-09-23 维护者定，dev-board#862）**：
+   每发一个 0.X 大版本，就在官网仓 `zeweihan/aiworkdeck_website`（本机 `1-1 aiworkdeckweb`）的
+   `content/releases.ts` 数组头部加一条：`version`（0.X.0）、`date`（tag 日期）、`headline` 一句、
+   `items` 三到五条，中英双语。**补丁版 0.X.Y 并入所在大版本那条**，不单独立卡。写给律师看——
+   「这一版你能多做什么 / 什么不再烦你」，不写内部重构、测试、CI、文档、营销件；口吻照该文件
+   既有条目，不用营销腔。合并后按官网仓惯例 `gh workflow run ci.yml --ref master -f target=both`
+   部署，`/zh/updates` 与 `/en/updates` 顶部出现本次版本号才算完。
+   **判据：`https://www.aiworkdeck.com/zh/updates` 顶部版本号 ≠ 本次 tag → 这步没做。**
+   断更实锤：0.16.0（08-15）到 0.46.3（09-23）三十个大版本官网一条没写，维护者原话
+   「发版每次要写啊」（dev-board#861 一次性补齐）。
 5. **EN 走查（打 tag 前必过）**：① 以英文语言设置跑 app-e2e 全量（含 J12 英文旅程：切 en-US 断言工作台四列英文锚点 + AI 过程卡工具名无中文，语言键 `awd_app_language`，切语言必须整页 reload）；② 编辑器 boot 用 `?uilang=en-US` 并以 office_thread.js 的 ooLocale 诊断确认 en-US 生效（issue #66 的诊断口径）；③ 人工过一遍英文主界面截图（工作台/设置/AI 面板）。
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；默认窗口尺寸由 `build.dmg.window` 显式钉在 660x420（**外框**，含约 32pt 标题栏，dmgbuild 写进 `.DS_Store` 的 `bwsp.WindowBounds`；不写就拿背景图 1x 尺寸当窗口）。**背景图刻意比窗口大（dev-board#580）**：Finder 按原尺寸把背景贴在左上角、不拉伸，图外是白底，用户拉大窗口就露白；所以画布 3840x2160（2x 7680x4320），设计主体只占左上 660x420，其余是同一组渐变的 px 锚定延续（DMG 只多约 1.5MB，代价是打开时 Finder 多吃约 140MB 解码内存）。Office 插件 DMG（`office-addin/installer/art/dmg-background.html`，`render-art.mjs` 的 `DMG_CANVAS`）同一做法。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位；改 HTML 的渐变别写回百分比（会随画布尺寸漂移，主体区跟着变）。
 6.5. **win 安装器美术管线**（`desktop/scripts/render-win-installer-art.mjs`，安装器 UI 重设计新增）：`build/win/*.html`（美术源文件）→ headless Chrome 截图 → ImageMagick 转 24 位 BMP3 入库为 `installerSidebar.bmp`/`installerHeader.bmp`。**sips 只能出 32 位 BMP，NSIS/MUI2 只认无 alpha 的经典 BMP，必须用 `magick`**——这是个地雷，脚本会校验 BM 头与色深不合格宁可失败也不入库。只有维护者改美术时手动跑一次，产物入库后 CI 与用户构建都不需要 Chrome/ImageMagick。
