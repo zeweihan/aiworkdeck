@@ -3,18 +3,22 @@
 import { cursorRectToPixels, nativeCursorRectToPixels } from './zetaOfficeImeOverlay.js'
 import { isFresh, visibleFindings } from '../utils/inlineReviewGrouping.js'
 
+// 贴边把手：宽度够点中（16px，hover 再宽 4px），高度与浮球同量级。右侧留出引擎
+// 自画的纵向滚动条那一条，把手不压滚动条。
+const DOCK_WIDTH = 16, DOCK_HEIGHT = 48, SCROLLBAR_GUTTER = 18
+
 const LABELS = {
   zh: {
     title: 'AI 审校', icon: '审', checking: '正在检查', stale: '正文已变化，等待重新检查', error: '检查暂不可用',
     open: '打开 AI 审校清单', count: n => `${n} 条提示`,
-    menu: 'AI 审校设置', aiOn: '关闭 AI 审校', aiOff: '开启 AI 审校', runNow: '立即 AI 审校', hide: '隐藏正文浮球',
+    menu: 'AI 审校设置', aiOn: '关闭 AI 审校', aiOff: '开启 AI 审校', runNow: '立即 AI 审校', collapse: '收起到边缘', expand: '展开 AI 审校浮球',
     aiBusy: 'AI 审校中', aiOffState: 'AI 审校已关闭（规则检查照常）',
     blocked: { DEEP_QUOTA: 'AI 审校已暂停：账户额度不足', DEEP_RATE_LIMITED: 'AI 审校已暂停：模型服务限流', DEEP_MODEL_UNAVAILABLE: 'AI 审校已暂停：当前辅助模型不可用', DEEP_REGION: 'AI 审校已暂停：服务商按地域拒绝' },
   },
   en: {
     title: 'AI review', icon: 'R', checking: 'Checking…', stale: 'Text changed. Waiting for a fresh check.', error: 'Checks are unavailable',
     open: 'Open the AI review list', count: n => `${n} suggestions`,
-    menu: 'AI review settings', aiOn: 'Turn AI review off', aiOff: 'Turn AI review on', runNow: 'Run AI review now', hide: 'Hide the floating ball',
+    menu: 'AI review settings', aiOn: 'Turn AI review off', aiOff: 'Turn AI review on', runNow: 'Run AI review now', collapse: 'Collapse to edge', expand: 'Expand the AI review ball',
     aiBusy: 'AI review running', aiOffState: 'AI review is off (rule checks still run)',
     blocked: { DEEP_QUOTA: 'AI review paused: the account is out of credit', DEEP_RATE_LIMITED: 'AI review paused: the model service is rate limiting', DEEP_MODEL_UNAVAILABLE: 'AI review paused: the auxiliary model is unavailable', DEEP_REGION: 'AI review paused: the provider rejected this network region' },
   },
@@ -31,6 +35,11 @@ const LABELS = {
  * 开关必须和它控制的那个东西待在一起。浮球主体仍是「打开清单」，右半边的 ▾
  * 弹出三项小菜单（开/关、立即跑一次、隐藏浮球）。**浮球不再随开关消失**：
  * 关掉之后还得有地方再打开它。规则检查始终在跑，所以计数在关闭态照常显示。
+ *
+ * dev-board#866：「隐藏正文浮球」改成「收起到边缘」。真隐藏之后唯一的找回入口在右栏
+ * 面板里，面板关着的人根本不知道去哪找。现在收起 = 浮球贴到它所在那一侧的边缘，
+ * 只露一截可点的把手（.awd-ir-dock），点一下就展开回原位。持久化沿用原来的
+ * hidden 偏好（协议字段与存储键都没改，只是语义从「不挂」变成「贴边」）。
  */
 export function attachInlineReview({ canvas, input, execute, transport, language = 'zh-CN' }) {
   const doc = canvas.ownerDocument, view = doc.defaultView
@@ -39,14 +48,14 @@ export function attachInlineReview({ canvas, input, execute, transport, language
   let state = { session: '', ai: true, hidden: false, revision: null, status: 'disabled', findings: [], deepStatus: 'idle', autoBlocked: '' }
   let generation = 0, sequence = 0, timer = 0, disposed = false, composing = false, inFlight = false, again = false
   let anchor = null, click = null, context = null
-  let ballPosition = null, drag = null, storageKey = ''
+  let ballPosition = null, ballSize = { width: 64, height: 32 }, drag = null, storageKey = ''
   const root = doc.createElement('div'); root.className = 'awd-inline-review'
   // 色值全部走 editor.html 头部那套 --awd-*：本 composable 注入的是编辑器页自己的
   // document（canvas.ownerDocument，桌面壳里是 <webview> 的独立文档），宿主 App.vue
   // 的 :root 令牌继承不进来，所以令牌表由 editor.html 自带一份。深浅两套靠
   // html.theme-dark 上的令牌取值切换，这里不再写 .theme-dark 分支。
   const style = doc.createElement('style')
-  style.textContent = `.awd-inline-review{position:fixed;inset:0;z-index:9998;pointer-events:none;font:13px/1.5 system-ui,sans-serif;color:var(--awd-text)}.awd-inline-review button{font:inherit;color:inherit;border:1px solid var(--awd-border);border-radius:6px;background:var(--awd-surface);padding:5px 9px;cursor:pointer}.awd-inline-review button:focus-visible{outline:2px solid var(--awd-accent-text);outline-offset:2px}.awd-ir-ball{pointer-events:auto;position:absolute;left:18px;bottom:64px;display:flex;align-items:center;border:1px solid var(--awd-border);border-radius:999px;background:var(--awd-surface);box-shadow:var(--awd-shadow-md);cursor:pointer;user-select:none}.awd-ir-ball.busy{opacity:.7}.awd-ir-ball.off{opacity:.6}.awd-inline-review .awd-ir-ball button{border:0;background:none;border-radius:999px;padding:6px 9px}.awd-ir-open{display:flex;align-items:center;gap:5px}.awd-ir-more{padding-left:4px!important;opacity:.75}.awd-ir-ball-i{font-weight:600}.awd-ir-ball-n{min-width:17px;padding:0 5px;border-radius:999px;background:var(--awd-accent);color:var(--awd-text-on-accent);font-size:11px;text-align:center}.awd-ir-ball.off .awd-ir-ball-n{background:var(--awd-surface-3);color:var(--awd-text-2)}.awd-ir-menu{pointer-events:auto;position:absolute;display:flex;flex-direction:column;gap:2px;min-width:160px;padding:4px;border:1px solid var(--awd-border);border-radius:8px;background:var(--awd-surface);box-shadow:var(--awd-shadow-md)}.awd-inline-review .awd-ir-menu button{border:0;background:none;text-align:left;white-space:nowrap}.awd-inline-review .awd-ir-menu button:hover{background:var(--awd-surface-2)}.awd-ir-chip{pointer-events:auto;position:absolute;box-shadow:var(--awd-shadow-md);white-space:nowrap}.awd-inline-review [hidden]{display:none!important}`
+  style.textContent = `.awd-inline-review{position:fixed;inset:0;z-index:9998;pointer-events:none;font:13px/1.5 system-ui,sans-serif;color:var(--awd-text)}.awd-inline-review button{font:inherit;color:inherit;border:1px solid var(--awd-border);border-radius:6px;background:var(--awd-surface);padding:5px 9px;cursor:pointer}.awd-inline-review button:focus-visible{outline:2px solid var(--awd-accent-text);outline-offset:2px}.awd-ir-ball{pointer-events:auto;position:absolute;left:18px;bottom:64px;display:flex;align-items:center;border:1px solid var(--awd-border);border-radius:999px;background:var(--awd-surface);box-shadow:var(--awd-shadow-md);cursor:pointer;user-select:none}.awd-ir-ball.busy{opacity:.7}.awd-ir-ball.off{opacity:.6}.awd-inline-review .awd-ir-ball button{border:0;background:none;border-radius:999px;padding:6px 9px}.awd-ir-open{display:flex;align-items:center;gap:5px}.awd-ir-more{padding-left:4px!important;opacity:.75}.awd-ir-ball-i{font-weight:600}.awd-ir-ball-n{min-width:17px;padding:0 5px;border-radius:999px;background:var(--awd-accent);color:var(--awd-text-on-accent);font-size:11px;text-align:center}.awd-ir-ball.off .awd-ir-ball-n{background:var(--awd-surface-3);color:var(--awd-text-2)}.awd-ir-menu{pointer-events:auto;position:absolute;display:flex;flex-direction:column;gap:2px;min-width:160px;padding:4px;border:1px solid var(--awd-border);border-radius:8px;background:var(--awd-surface);box-shadow:var(--awd-shadow-md)}.awd-inline-review .awd-ir-menu button{border:0;background:none;text-align:left;white-space:nowrap}.awd-inline-review .awd-ir-menu button:hover{background:var(--awd-surface-2)}.awd-ir-chip{pointer-events:auto;position:absolute;box-shadow:var(--awd-shadow-md);white-space:nowrap}.awd-inline-review .awd-ir-dock{pointer-events:auto;position:absolute;display:flex;align-items:center;justify-content:center;width:${DOCK_WIDTH}px;height:${DOCK_HEIGHT}px;padding:0;border:1px solid var(--awd-border-strong);background:var(--awd-surface);box-shadow:var(--awd-shadow-md);transition:width .12s ease,background-color .12s ease,border-color .12s ease}.awd-inline-review .awd-ir-dock.left{left:0;border-left:0;border-radius:0 12px 12px 0}.awd-inline-review .awd-ir-dock.right{border-right:0;border-radius:12px 0 0 12px}.awd-inline-review .awd-ir-dock:hover{width:${DOCK_WIDTH + 4}px;background:var(--awd-surface-2);border-color:var(--awd-accent-text)}.awd-ir-dock-g{display:block;width:3px;height:20px;border-radius:2px;background:var(--awd-accent-text);transition:height .12s ease}.awd-inline-review .awd-ir-dock:hover .awd-ir-dock-g{height:26px}.awd-ir-dock.has .awd-ir-dock-g{box-shadow:0 0 0 2px var(--awd-accent-soft)}.awd-inline-review [hidden]{display:none!important}`
   doc.head.appendChild(style); doc.body.appendChild(root)
   function button(label, action, parent) {
     const b = doc.createElement('button'); b.type = 'button'; b.textContent = label
@@ -67,9 +76,12 @@ export function attachInlineReview({ canvas, input, execute, transport, language
   // 三项都是真 <button>：Tab 能走到、Enter/空格能按、Esc 关闭并把焦点还给 ▾。
   const menuAi = button('', () => { request('preferences', { ai: state.ai === false }); closeMenu() }, menu)
   const menuRun = button(t.runNow, () => { request('deep'); closeMenu() }, menu)
-  const menuHide = button(t.hide, () => { request('preferences', { hidden: true }); closeMenu() }, menu)
+  const menuHide = button(t.collapse, () => { request('preferences', { hidden: true }); closeMenu() }, menu)
   for (const item of [menuAi, menuRun, menuHide]) item.setAttribute('role', 'menuitem')
   const chip = button('', openPanel, root); chip.className = 'awd-ir-chip'; chip.hidden = true
+  // 收起态的把手：一个真 <button>（Tab 走得到、Enter 按得动），点一下展开回原位。
+  const dock = button('', () => request('preferences', { hidden: false }), root); dock.className = 'awd-ir-dock left'; dock.hidden = true
+  const dockGrip = doc.createElement('span'); dockGrip.className = 'awd-ir-dock-g'; dock.appendChild(dockGrip)
   function findings() { return visibleFindings(state.findings, null) }
   function currentFindings() { return findings().filter(f => f.paragraphIndex === context?.paragraphIndex && (!f.expectedParagraph || f.expectedParagraph === context.text)) }
   function invalidate(markStale = true) {
@@ -115,12 +127,21 @@ export function attachInlineReview({ canvas, input, execute, transport, language
   }
   function renderBall() {
     // 浮球不再随开关消失（dev-board#749）：开关就在它身上，藏了就没地方再打开。
-    // 只有用户明确「隐藏正文浮球」或者这份文档没有审校（会话结束）时才不挂。
-    const on = !!state.session && state.status !== 'disabled' && state.hidden !== true
-    ball.hidden = !on
-    if (!on) { closeMenu(); return }
+    // 只有这份文档没有审校（会话结束）时才整个不挂；用户「收起」只是贴边（dev-board#866）。
+    const live = !!state.session && state.status !== 'disabled'
+    const docked = live && state.hidden === true
+    ball.hidden = !live || docked
+    dock.hidden = !docked
+    if (!live || docked) closeMenu()
+    if (!live) return
     // 规则检查始终在跑，所以计数在 AI 关闭态照常显示。
     const count = findings().length
+    if (docked) {
+      const label = `${t.expand}（${statusLabel()}）`
+      dock.title = label; dock.setAttribute('aria-label', label)
+      dock.classList.toggle('has', count > 0)
+      placeDock(); return
+    }
     ballCount.textContent = count ? String(count) : ''
     ballCount.hidden = !count
     ball.classList.toggle('busy', state.status === 'checking' || state.deepStatus === 'checking')
@@ -148,9 +169,29 @@ export function attachInlineReview({ canvas, input, execute, transport, language
     if (!ballPosition || ball.hidden) return
     ballPosition = clampPosition(ballPosition)
     ball.style.left = ballPosition.x + 'px'; ball.style.top = ballPosition.y + 'px'; ball.style.bottom = 'auto'
+    if (ball.offsetWidth) ballSize = { width: ball.offsetWidth, height: ball.offsetHeight }
+  }
+  /**
+   * 把手贴在浮球所在那一侧（浮球在右就吸右边），纵向对着浮球的中线；没拖过的浮球
+   * 在默认的左下角，把手也在左下。右侧让开滚动条那一条。
+   */
+  function placeDock() {
+    if (dock.hidden) return
+    const right = !!ballPosition && ballPosition.x + ballSize.width / 2 >= view.innerWidth / 2
+    dock.classList.toggle('right', right); dock.classList.toggle('left', !right)
+    // 左侧靠 .left 的 left:0；右侧用 right 定位，hover 变宽时向正文一侧长，不压滚动条。
+    dock.style.right = right ? SCROLLBAR_GUTTER + 'px' : ''
+    if (ballPosition) {
+      const top = ballPosition.y + (ballSize.height - DOCK_HEIGHT) / 2
+      dock.style.top = Math.max(8, Math.min(top, view.innerHeight - DOCK_HEIGHT - 8)) + 'px'; dock.style.bottom = 'auto'
+    } else {
+      // 与 .awd-ir-ball 的默认 bottom:64px 同一条中线。
+      dock.style.top = 'auto'; dock.style.bottom = Math.max(8, 64 + (ballSize.height - DOCK_HEIGHT) / 2) + 'px'
+    }
   }
   function renderChip() {
     chip.hidden = true
+    // 收起到边缘就是「别打扰我」：行旁标记一起安静，计数只在把手的提示里。
     if (state.hidden === true) return
     if ((!anchor && !context?.cursorRectRaw?.nativeCaret) || !context?.available || context.hasSelection || context.revision !== state.revision || !isFresh(state) || composing || !currentFindings().length) return
     if (!doc.querySelector('.awd-wa-panel')?.hidden && doc.querySelector('.awd-wa-panel')) return
@@ -206,6 +247,7 @@ export function attachInlineReview({ canvas, input, execute, transport, language
     if (next === lastViewport) return
     lastViewport = next; onScroll()
     if (ballPosition) { ballPosition = snapPosition(ballPosition); placeBall() }
+    placeDock()
   }
   const onCompositionStart = () => { composing = true; click = null; invalidate(false) }
   const onCompositionEnd = () => { composing = false; schedule() }

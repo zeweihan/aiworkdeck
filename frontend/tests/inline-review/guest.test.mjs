@@ -23,13 +23,14 @@ function harness(t, override, language) {
   const menu = () => doc.querySelector('.awd-ir-menu')
   const menuItems = () => [...doc.querySelectorAll('.awd-ir-menu button')]
   const chip = () => doc.querySelector('.awd-ir-chip')
+  const dock = () => doc.querySelector('.awd-ir-dock')
   const drag = (from, to) => {
     ball().dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true, button: 0, clientX: from[0], clientY: from[1] }))
     dom.window.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: to[0], clientY: to[1] }))
     dom.window.dispatchEvent(new dom.window.MouseEvent('mouseup'))
   }
   t.after(() => { api.destroy(); dom.window.close() })
-  return { doc, dom, input, canvas, api, calls, messages, state, click, ball, open, more, menu, menuItems, chip, drag, setResult: r => { result = r } }
+  return { doc, dom, input, canvas, api, calls, messages, state, click, ball, open, more, menu, menuItems, chip, dock, drag, setResult: r => { result = r } }
 }
 
 test('正文里只有浮球和行旁标记，不再有可压住正文的大浮窗', async t => {
@@ -69,6 +70,7 @@ test('会话结束（宿主 destroy）才把正文里的东西全摘掉，也不
   const h = harness(t); h.state({ status: 'disabled', findings: [] }); h.click(); await tick()
   assert.equal(h.ball().hidden, true)
   assert.equal(h.chip().hidden, true)
+  assert.equal(h.dock().hidden, true, '会话结束连贴边把手也不留')
   assert.equal(h.doc.body.textContent.includes('已关闭'), false, '正文里不许留「已关闭」的提示')
   const count = h.calls.length
   h.api.cursorMoved(); await tick()
@@ -80,7 +82,7 @@ test('浮球菜单三项各发一条请求，点完即关；Esc 关闭并把焦�
   assert.equal(h.menu().hidden, true)
   h.more().click(); await Promise.resolve()
   assert.equal(h.menu().hidden, false)
-  assert.deepEqual(h.menuItems().map(b => b.textContent), ['关闭 AI 审校', '立即 AI 审校', '隐藏正文浮球'])
+  assert.deepEqual(h.menuItems().map(b => b.textContent), ['关闭 AI 审校', '立即 AI 审校', '收起到边缘'])
   assert.equal(h.doc.activeElement, h.menuItems()[0], '打开就把焦点放进菜单')
   h.menuItems()[1].click(); await Promise.resolve()
   assert.equal(h.messages.at(-1).action, 'deep')
@@ -114,12 +116,41 @@ test('额度一类的暂停在浮球上说清原因', async t => {
   assert.ok(h.open().title.includes('额度不足'), h.open().title)
 })
 
-test('hidden 偏好只藏浮球，检查照跑、宿主面板照收', async t => {
+// dev-board#866：「隐藏正文浮球」之后就找不回来了——显示开关只在右栏面板里，面板关着的
+// 人不知道去哪找。hidden 偏好现在的语义是「贴边收起」：正文里始终留一截可点的把手。
+test('收起（hidden 偏好）只把浮球贴到边缘，把手可见，点一下即请求展开', async t => {
   const h = harness(t); h.state({ hidden: true }); h.click(); await tick()
-  assert.equal(h.ball().hidden, true)
-  assert.equal(h.chip().hidden, true, '藏浮球时行旁标记一起安静')
+  assert.equal(h.ball().hidden, true, '收起后浮球本体不占正文')
+  assert.equal(h.dock().hidden, false, '收起不是消失：边缘必须留着把手')
+  assert.equal(h.dock().tagName, 'BUTTON', '把手是真按钮，键盘也够得着')
+  assert.ok(h.dock().classList.contains('left'), '没拖过的浮球在左下，把手也在左边')
+  assert.equal(h.dock().style.right, '')
+  assert.ok(h.dock().title.includes('展开 AI 审校浮球'), h.dock().title)
+  assert.ok(h.dock().title.includes('1 条提示'), '收起态也能看到有几条')
+  assert.ok(h.dock().classList.contains('has'))
+  assert.equal(h.chip().hidden, true, '收起时行旁标记一起安静')
+  h.dock().click(); await Promise.resolve()
+  assert.equal(h.messages.at(-1).action, 'preferences')
+  assert.deepEqual(h.messages.at(-1).data, { hidden: false })
+  // 宿主回写偏好之后回到展开态
   h.state({ hidden: false }); h.click(); await tick()
   assert.equal(h.ball().hidden, false)
+  assert.equal(h.dock().hidden, true)
+  assert.equal(h.chip().hidden, false)
+})
+
+test('把手跟着浮球所在那一侧：拖到右边再收起就吸右边，并让开滚动条', async t => {
+  const h = harness(t); h.state(); await tick()
+  h.drag([10, 10], [520, 300])
+  h.state({ hidden: true })
+  assert.equal(h.dock().hidden, false)
+  assert.ok(h.dock().classList.contains('right'))
+  assert.equal(h.dock().classList.contains('left'), false)
+  assert.equal(h.dock().style.right, '18px', '右侧那一条留给引擎的纵向滚动条')
+  assert.equal(h.dock().style.top, '282px', '纵向对着浮球的中线（290 + (32 - 48) / 2）')
+  h.state({ hidden: false })
+  assert.equal(h.ball().style.left, '948px', '展开后回到原来的位置')
+  assert.equal(h.ball().style.top, '290px')
 })
 
 test('浮球可拖、松手靠边吸附、位置按用户键落 localStorage；拖完那一下不算点击', async t => {
@@ -211,5 +242,5 @@ test('English ball label is localized', async t => {
   assert.ok(h.open().title.includes('AI review'), h.open().title)
   assert.ok(h.open().title.includes('suggestions'), h.open().title)
   h.more().click(); await Promise.resolve()
-  assert.deepEqual(h.menuItems().map(b => b.textContent), ['Turn AI review off', 'Run AI review now', 'Hide the floating ball'])
+  assert.deepEqual(h.menuItems().map(b => b.textContent), ['Turn AI review off', 'Run AI review now', 'Collapse to edge'])
 })
