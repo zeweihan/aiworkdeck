@@ -81,9 +81,15 @@
                   {{ codeBtnLabel }}
                 </button>
               </view>
-              <!-- 人机验证控件挂点。Turnstile 是隐形的、阿里云是点了才弹拼图，
-                   所以平时这里不占版面；未启用时整块不渲染。 -->
-              <view v-show="captcha" class="unlock-captcha-holder">
+              <!-- 人机验证控件挂点。阿里云（大陆站）是点了才弹拼图，平时不占版面；
+                   Turnstile（国际站）走官网托管页 iframe（file:// 下没法直接 render），
+                   managed 模式平时就是一个 300x65 的小框，is-embed 给它留位置。
+                   未启用时整块不渲染。 -->
+              <view
+                v-show="captcha"
+                class="unlock-captcha-holder"
+                :class="{ 'is-embed': captcha && captcha.provider === 'turnstile' }"
+              >
                 <view id="unlock-captcha"></view>
                 <!-- 阿里云 SDK 要一个它能挂点击事件的元素；Turnstile 用不到但留着无害 -->
                 <button id="unlock-captcha-trigger" class="unlock-captcha-trigger" type="button"></button>
@@ -170,7 +176,7 @@
 
 <script>
 import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount, getAccountCaptchaConfig, getWizardStatus, submitWizard, acceptLegalAgreement } from '@/services/api.js'
-import { setupCaptcha } from '@/utils/captcha.js'
+import { setupCaptcha, teardownCaptcha } from '@/utils/captcha.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 import { getAppLanguage, setAppLanguage, isEnglish, isLanguageManuallyChosen } from '@/utils/appLanguage.js'
@@ -235,6 +241,8 @@ export default {
   beforeUnmount() {
     // 不清的话切走这一页还留着一个每秒跑的定时器
     if (this.cooldownTimer) clearInterval(this.cooldownTimer)
+    // 托管页 iframe 的 message 监听挂在 window 上，页面走了也要摘
+    teardownCaptcha()
   },
   computed: {
     /**
@@ -340,7 +348,9 @@ export default {
       const gen = ++this.captchaGen
       this.captcha = null
       // #ifdef H5
-      // 重新装配（切站后）先清空挂点，免得新旧两套控件叠在同一个元素里
+      // 重新装配（切站后）先拆掉托管页控件（连同 message 监听）再清空挂点，
+      // 免得新旧两套控件叠在同一个元素里
+      teardownCaptcha()
       try {
         const holder = document.getElementById('unlock-captcha')
         if (holder) holder.innerHTML = ''
@@ -723,6 +733,16 @@ export default {
   border: 0;
   opacity: 0;
   position: absolute;
+}
+
+/* 国际站托管页 iframe（300x65，随 size 消息长高）：宽度不超过表单列，
+   窄卡片下 iframe 自身 max-width:100% 收窄而不是把卡片撑出横向滚动；
+   大陆站（阿里云弹窗）不带 is-embed，挂点保持零占位。 */
+.unlock-captcha-holder.is-embed {
+  margin-top: 12px;
+  min-height: 65px;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 /* 整页一块底（§2.1）：暖底渐变 + 左下一团极淡竹月青光晕，左右两栏之间没有可见分界 */

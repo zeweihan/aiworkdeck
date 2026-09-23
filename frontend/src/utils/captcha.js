@@ -15,10 +15,26 @@
  * - **阿里云的 `prefix`/`region` 要在脚本加载之前挂到全局 `AliyunCaptchaConfig`**，
  *   传进 `initAliyunCaptcha` 不生效，而且**不报错**（2026-08-18 浏览器实测）。
  * - **token 一次性**，每次取之前先 reset；不 reset 的话「重发验证码」会带上已核销的那枚。
+ *
+ * ## Turnstile 走官网托管页（iframe），不在本页 render
+ * Turnstile 按域名放行 sitekey，打包版主窗口是 `file://`，直接 render 必报 110200。
+ * 所以国际站嵌 `{官网}/captcha-embed`，控件在官网域名下跑、token 经 postMessage 交回；
+ * 消息过滤与状态机在 `captchaEmbedCore.js`（有 node 单测）。阿里云在 `file://` 下
+ * 今天就是好的，那条分支不动。
  */
 
+import { loadSiteLinks } from '@/utils/siteLinks.js'
+import { getAppLanguage } from '@/utils/appLanguage.js'
+import {
+  EMBED_WIDTH,
+  EMBED_DEFAULT_HEIGHT,
+  acceptMessage,
+  buildEmbedUrl,
+  createEmbedController,
+  originOf,
+} from '@/utils/captchaEmbedCore.js'
+
 const SCRIPTS = {
-  turnstile: 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
   aliyun: 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js',
 }
 
@@ -37,8 +53,73 @@ function loadScript(src) {
   return p
 }
 
+// 当前挂着的托管页（iframe + message 监听）。一个页面同时只有一套：
+// 解锁页切站会重新装配，旧的必须连同监听器一起拆掉。
+let activeEmbed = null
+// 装配代次：setupCaptcha 中途要 await 站点地址，两次装配交错时只让最后一次落地
+let setupGen = 0
+
+/** 拆掉当前托管页控件（iframe 与 message 监听），在等的 getToken 回空串。可重复调用。 */
+export function teardownCaptcha() {
+  if (!activeEmbed) return
+  const cur = activeEmbed
+  activeEmbed = null
+  cur.destroy()
+}
+
+function currentTheme() {
+  try {
+    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+  } catch (e) {
+    return 'light'
+  }
+}
+
+async function setupEmbedCaptcha(holderId, gen) {
+  const links = await loadSiteLinks()
+  if (gen !== setupGen) return null
+  const el = document.getElementById(holderId)
+  if (!el) return null
+  const baseUrl = (links && links.baseUrl) || ''
+  const expectedOrigin = originOf(baseUrl)
+  if (!expectedOrigin) return null
+
+  const iframe = document.createElement('iframe')
+  iframe.src = buildEmbedUrl(baseUrl, { lang: getAppLanguage(), theme: currentTheme() })
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups')
+  iframe.setAttribute('title', 'captcha')
+  iframe.setAttribute('scrolling', 'no')
+  iframe.className = 'awd-captcha-embed'
+  iframe.style.cssText = `display:block;width:${EMBED_WIDTH}px;height:${EMBED_DEFAULT_HEIGHT}px;` +
+    'max-width:100%;border:0;background:transparent;color-scheme:normal;'
+
+  const controller = createEmbedController({
+    // targetOrigin 钉死官网：框被跳走后，消息不会送到别人的页面里
+    post: (msg) => {
+      try { iframe.contentWindow && iframe.contentWindow.postMessage(msg, expectedOrigin) } catch (e) { /* 框已拆 */ }
+    },
+    onSize: (h) => { iframe.style.height = h + 'px' },
+    onDisabled: () => { iframe.style.display = 'none' },
+  })
+  const onMessage = (event) => {
+    const data = acceptMessage(event, { expectedSource: iframe.contentWindow, expectedOrigin })
+    if (data) controller.handle(data)
+  }
+  window.addEventListener('message', onMessage)
+  el.appendChild(iframe)
+
+  activeEmbed = {
+    destroy() {
+      window.removeEventListener('message', onMessage)
+      controller.destroy()
+      if (iframe.parentNode) iframe.parentNode.removeChild(iframe)
+    },
+  }
+  return { provider: 'turnstile', getToken: () => controller.getToken() }
+}
+
 /**
- * 装配控件。
+ * 装配控件。重复调用会先拆掉上一次的托管页控件。
  *
  * @param {object} config 官网下发的公开配置（`GET /api/account/captcha-config`）
  * @param {string} holderId 页面上一个空 div 的 id，控件挂在里面
@@ -47,32 +128,11 @@ function loadScript(src) {
  *          与官网此刻确实不校验是同一个判断。
  */
 export async function setupCaptcha(config, holderId) {
+  const gen = ++setupGen
+  teardownCaptcha()
   if (!config || !config.provider) return null
 
-  if (config.provider === 'turnstile') {
-    await loadScript(SCRIPTS.turnstile)
-    const el = document.getElementById(holderId)
-    if (!el || !window.turnstile) return null
-    const widgetId = window.turnstile.render(el, {
-      sitekey: config.siteKey,
-      appearance: 'interaction-only',
-    })
-    return {
-      provider: 'turnstile',
-      getToken: () => new Promise((resolve) => {
-        try { window.turnstile.reset(widgetId) } catch (e) { /* 未就绪时忽略 */ }
-        if (window.turnstile.execute) window.turnstile.execute(widgetId)
-        const started = Date.now()
-        const tick = () => {
-          const token = window.turnstile.getResponse ? window.turnstile.getResponse(widgetId) : ''
-          if (token) return resolve(token)
-          if (Date.now() - started > 60000) return resolve('')
-          setTimeout(tick, 200)
-        }
-        tick()
-      }),
-    }
-  }
+  if (config.provider === 'turnstile') return setupEmbedCaptcha(holderId, gen)
 
   // 阿里云：必须在 loadScript 之前设全局，脚本读的是加载那一刻的值
   window.AliyunCaptchaConfig = { region: 'cn', prefix: config.prefix }
