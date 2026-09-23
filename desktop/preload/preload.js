@@ -228,6 +228,10 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   // 构建没烙 draw.io 资源，调用点应退回下载。
   drawio: {
     getEditor: () => ipcRenderer.invoke('checkba:drawio-editor')
+  },
+  // 国际站人机验证托管页挂 <webview> 用（dev-board#863）：getConfig() 返回 { preload }。
+  captchaEmbed: {
+    getConfig: () => ipcRenderer.invoke('checkba:captcha-embed')
   }
 })
 

@@ -38,3 +38,12 @@ export const i18n = createI18n({
 export function t(key, params) {
   return i18n.global.t(key, params)
 }
+
+/**
+ * 就地切换 vue-i18n 的全局语言（不 reload）。目前只有解锁页用（dev-board#864）：
+ * 那一页的文案全部走 $t，切完同一帧整页换语言；它离开时再整页重载一次，
+ * 让模块顶层取过的静态文案（见文件头注释）按新语言重建。其余页面切语言仍走整页 reload。
+ */
+export function applyI18nLocale(lang) {
+  i18n.global.locale = lang
+}

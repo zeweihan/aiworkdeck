@@ -326,10 +326,17 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   `onSiteSegTap` 切站**只有本机确实有东西会被清掉才二次确认**（`needsSwitchConfirm`：已连账户
   或用账户 Key 解锁），解锁页常态两样都没有，切站只是换登录目标，不弹确认；首装按界面语言
   自动预选站点（非中文 → 国际站，否则大陆站，且仅在不会清掉本机东西时做）**只做一次**，
-  落盘标记 `awd_site_preselected`——与选国际站顺带切英文（用户没亲手选过语言时才生效）用的
+  落盘标记 `awd_site_preselected`——与切站时界面语言随动（用户没亲手选过语言时才生效）用的
   `utils/appLanguage.js` 的 `awd_app_language_manual`（用户亲手选过界面语言，程序自动切换
   不打这个标记，`{ auto: true }`）是两个独立的本机存储标记，分别管「站点只自动预选一次」与
-  「语言是否被用户亲手定过」；试用码/手工粘 `awdk_` Key 那条路**只在 `trialCodeEnabled`
+  「语言是否被用户亲手定过」。**切站语言随动（dev-board#864）两个方向都跟**：国际站 → 英文、
+  大陆站 → 中文，判定是 `utils/siteLanguage.js` 的 `siteLanguageToApply`（护栏 `npm run test:unlock`）；
+  解锁页上切语言（随动与底部「中文 · English」）是**就地切**——`setAppLanguage` + `i18n/index.js` 的
+  `applyI18nLocale` + 页面响应式 `uiLang`，同一帧整页换语言，不再 600ms 后整页 reload（闪屏、切回大陆
+  不回中文都是旧实现的毛病）；本页切过语言时离开走 `goLaunch()` 整页重载进启动分流（模块顶层取过的
+  静态文案要按新语言重建），没切过照旧 `reLaunch`。本页新增读语言的地方一律读 `this.uiLang` /
+  `$i18n.locale`，别读 `isEnglish()`——它不是响应式的，就地切换后不跟（BrandShowcase 的 `is-en` 踩过）。
+  试用码/手工粘 `awdk_` Key 那条路**只在 `trialCodeEnabled`
   时才有**，由卡片底部链接进入（官方发布版关闭，见「必须账户登录」一节），不再是常驻的页签。
   品牌文案（十类工作来源、标语等）唯一来源是 `design/copy/brand-copy.json`，与
   `onboarding.unlock.brand.*` 的 i18n 值逐字对拍（`frontend/scripts/check-brand-copy.mjs`，
@@ -345,6 +352,24 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   父发消息的 targetOrigin 钉官网 origin。取 token 先 `reset` 再 `get-token`，8 秒超时回空串，
   等待中的空串 token 不收口（reset 回调）。阿里云（大陆站）在 `file://` 下本来就好，那条分支没动。
   切站重装配前必须 `teardownCaptcha()`，否则旧 iframe 的 message 监听留在 window 上。
+- **桌面壳里托管页挂 `<webview>`，不挂 iframe**（dev-board#863，2026-09-23 真桌面壳实测）：主窗口
+  `webPreferences.webSecurity=false`，嵌在这种 WebContents 里的 Turnstile 挑战帧会被 Chromium 以
+  `Terminating renderer for bad IPC message, reason 1` 杀掉渲染进程，控件卡死（`[Cloudflare Turnstile]
+  Error: 300030`，约 43 秒一轮重试、永远不出 token）——用户看到的是「发送中」转 8 秒后报「请完成人机验证」，
+  界面上什么都不出现（interaction-only 本来就隐形）。同一个 file:// 父页只把 webSecurity 改成 true，
+  6 秒出 token。**别拿「把主窗口 webSecurity 打开」当修法**（那一位牵连跨域 Cookie 等历史行为）。
+  现形态：主进程 `ipcMain.handle('checkba:captcha-embed')` 只回 `{ preload }`，preload 暴露为
+  `host.captchaEmbed.getConfig()`；`utils/captcha.js` 有这条能力就建 `<webview>`（preload =
+  `desktop/preload/captcha-webview-preload.js`，web security 默认开），否则（Web 版、老壳）退回 iframe。
+  托管页在 webview 里是顶层页，`window.parent` 就是它自己，preload 在同一个 window 上截住
+  `source===window && origin===location.origin` 的协议消息经 `sendToHost('awd-captcha')` 交宿主，
+  宿主 `wv.send('awd-captcha', {reset|get-token})` 由 preload 投回页面（托管页的 `e.source === window.parent`
+  在顶层页恰好成立，官网侧一行不用改）；宿主端过滤走 `acceptBridgeMessage`（origin 仍卡官网）。
+  频道名两端都是字面量 `awd-captcha`，`test:captcha` 对拍。**排查这条链别挂 CDP**：Cloudflare 会探测
+  DevTools（Runtime.enable 序列化带 getter 的对象，控制台刷 `%c%d font-size:0` 就是它），挂着 puppeteer
+  取不到 token 是测试自己造成的；用主进程 `executeJavaScript` + `capturePage` 驱动。
+  另：托管页判定需要人点勾选框时会发 `size` 且高度 > 0，控制器此时把在等的请求放宽到 60 秒
+  （`interactiveTimeoutMs`），否则 8 秒一到回空串、用户点完再按发送又 reset 出新挑战，永远绕不出去。
 
 **配置**
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。

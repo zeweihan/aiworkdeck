@@ -167,6 +167,9 @@ jobs:
       - name: Test local redaction panel
         working-directory: frontend
         run: node --test tests/desensitize/*.test.mjs
+      - name: "Captcha embed + unlock site language (dev-board#863 #864)"
+        working-directory: frontend
+        run: npm run test:captcha && npm run test:unlock
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5

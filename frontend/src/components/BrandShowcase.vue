@@ -33,7 +33,6 @@
 
 <script>
 import { host } from '@/services/host.js'
-import { isEnglish } from '@/utils/appLanguage.js'
 
 // 十类工作来源，与官网 ConvergenceHero 同名同序（顺序由 check-brand-copy 钉住）。
 // tone 是来源类别的色点：文档蓝 / 珊瑚 / 研究淡紫 / 暖金 / 竹月青，与官网 hero 的角色配色同族。
@@ -75,7 +74,8 @@ export default {
   },
   computed: {
     en() {
-      return isEnglish()
+      // 读 $i18n.locale 而不是 isEnglish()：后者不是响应式的，解锁页就地切语言后排版类不跟
+      return String(this.$i18n.locale || '').startsWith('en')
     },
     isIntl() {
       return this.site === 'intl'

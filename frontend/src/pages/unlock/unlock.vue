@@ -179,7 +179,9 @@ import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccou
 import { setupCaptcha, teardownCaptcha } from '@/utils/captcha.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
-import { getAppLanguage, setAppLanguage, isEnglish, isLanguageManuallyChosen } from '@/utils/appLanguage.js'
+import { getAppLanguage, setAppLanguage, isLanguageManuallyChosen } from '@/utils/appLanguage.js'
+import { siteLanguageToApply } from '@/utils/siteLanguage.js'
+import { applyI18nLocale } from '@/i18n/index.js'
 import BrandShowcase from '@/components/BrandShowcase.vue'
 
 // 与站点无关（GitHub README），不走 siteBaseUrl()
@@ -236,6 +238,10 @@ export default {
       // 两项同意都绝不预勾选：预勾选的同意无效（跨境那枚还是个保法 39 条的单独同意）
       agreementChecked: false,
       crossBorderChecked: false,
+      // 界面语言的响应式副本（appLanguage 的缓存不是响应式的）。本页切语言是就地切（dev-board#864）
+      uiLang: getAppLanguage(),
+      // 本页切过语言：离开时整页重载进启动分流，而不是 reLaunch（见 goLaunch）
+      langSwitchedHere: false,
     }
   },
   beforeUnmount() {
@@ -268,7 +274,7 @@ export default {
       return this.isPhoneSite ? '¥99.99' : '$9.90'
     },
     isEn() {
-      return isEnglish()
+      return this.uiLang === 'en-US'
     },
     codeBtnLabel() {
       if (this.cooldown > 0) return this.$t('onboarding.unlock.resendIn', { n: this.cooldown })
@@ -556,14 +562,12 @@ export default {
             success: (r) => {
               if (r.confirm) this.openOfficialSite()
             },
-            complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
+            complete: () => this.goLaunch(),
           })
         }, 900)
         return
       }
-      setTimeout(() => {
-        uni.reLaunch({ url: '/pages/launch/launch' })
-      }, 800)
+      setTimeout(() => this.goLaunch(), 800)
     },
     async handleUnlock() {
       if (!this.consentGatePassed()) return
@@ -603,14 +607,12 @@ export default {
             showCancel: false,
             confirmText: this.$t('onboarding.unlock.gotIt'),
             // 提示不阻断进入产品：无论怎么关掉都继续走启动分流
-            complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
+            complete: () => this.goLaunch(),
           })
         }, 900)
         return
       }
-      setTimeout(() => {
-        uni.reLaunch({ url: '/pages/launch/launch' })
-      }, 800)
+      setTimeout(() => this.goLaunch(), 800)
     },
     /** 分段控件的名字按站点 id 取；未知 id 回落后端的 displayName。 */
     siteSegLabel(site) {
@@ -653,31 +655,53 @@ export default {
       // 验证码只对发给的那个手机号/邮箱有效，换了站就是换了收件目标
       this.smsCode = ''
       this.stopCooldown()
-      if (this.followSiteLanguage(target.id)) return
+      // 先切语言再装配：国际站托管页的语言随 URL 参数定
+      this.followSiteLanguage(target.id)
       // 两站的人机验证配置各自独立（官网各配各的），切站后按新站重新装配。
       // 不 await：控件脚本走外网加载，等它会让分段控件在这段时间里点不动
       this.setupCaptchaWidget()
     },
     /**
-     * 选国际站时，用户从没亲手选过界面语言就顺带切到英文（§2.4）；选过就尊重用户。
-     * 切语言必须整页 reload（i18n 单例与各处静态 label 都要重建）。返回 true 表示即将 reload。
+     * 切站后界面语言随动（dev-board#864）：国际站英文、大陆站中文，两个方向都跟；
+     * 用户亲手选过界面语言就尊重用户（判定见 utils/siteLanguage.js）。
+     * 就地切，不整页 reload：本页文案全部走 $t，vue-i18n 换 locale 后同一帧整页换语言，
+     * 没有白屏/闪屏，也不会先露一眼旧语言。程序替用户切的不留「手动选过」标记。
      */
     followSiteLanguage(siteId) {
-      if (siteId !== 'intl' || isEnglish() || isLanguageManuallyChosen()) return false
-      setAppLanguage('en-US', { auto: true })
-      setTimeout(() => {
-        try { window.location.reload() } catch (e) { /* 非浏览器环境忽略 */ }
-      }, 600)
-      return true
+      const lang = siteLanguageToApply({ siteId, current: this.uiLang, manual: isLanguageManuallyChosen() })
+      if (lang) this.applyLanguage(lang, { auto: true })
     },
-    /** 底部语言切换：用户亲手选的，之后选站不再替他改语言。 */
+    /** 底部语言切换：用户亲手选的，之后切站不再替他改语言。 */
     pickLanguage(lang) {
-      if (lang === getAppLanguage()) return
-      setAppLanguage(lang)
-      // 延迟给 App.vue 的镜像同步（主进程 IPC + 后端 POST）留出发出的窗口，再整页 reload
-      setTimeout(() => {
-        try { window.location.reload() } catch (e) { /* 非浏览器环境忽略 */ }
-      }, 600)
+      if (lang === this.uiLang) return
+      this.applyLanguage(lang)
+      // 托管页（国际站 Turnstile）的语言随 URL 参数定，跟着重新装配一次
+      if (this.captcha && this.captcha.provider === 'turnstile') this.setupCaptchaWidget()
+    },
+    /**
+     * 就地切语言：持久化 + 广播（App.vue 据此写透主进程菜单与后端 system_setting）、
+     * vue-i18n 全局 locale、本页的响应式副本三处一起改。
+     */
+    applyLanguage(lang, opts = {}) {
+      setAppLanguage(lang, opts)
+      applyI18nLocale(lang)
+      this.uiLang = lang
+      this.langSwitchedHere = true
+    },
+    /**
+     * 离开解锁页进启动分流。本页就地切过语言时整页重载：各模块顶层取过的静态文案
+     * （i18n/index.js 文件头注释）是按启动时的语言算的，reLaunch 不会重建它们。
+     * 用 replaceState 改地址再 reload：直接改 hash 会先触发一次路由跳转。
+     */
+    goLaunch() {
+      if (this.langSwitchedHere) {
+        try {
+          window.history.replaceState(null, '', window.location.href.split('#')[0] + '#/pages/launch/launch')
+          window.location.reload()
+          return
+        } catch (e) { /* 非浏览器环境退回 reLaunch */ }
+      }
+      uni.reLaunch({ url: '/pages/launch/launch' })
     },
     /** 失败救济：这条路不再二次确认，错误文案本身就是上下文 */
     handleRescue() {
