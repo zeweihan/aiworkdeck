@@ -148,7 +148,8 @@ const SCAN_FILES = [
   '../components/SettingsView.vue',
   '../components/TransferPanel.vue',
   '../components/RevisionLogPanel.vue',
-  '../components/GitLinkPanel.vue'
+  '../components/GitLinkPanel.vue',
+  '../components/AskUserCard.vue'
 ]
 
 const HAN_RE = /[一-鿿]/

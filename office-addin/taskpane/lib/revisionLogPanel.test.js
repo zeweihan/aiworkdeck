@@ -55,7 +55,8 @@ const VUE_FILES = [
   '../components/ChatView.vue',
   '../components/SettingsView.vue',
   '../components/TransferPanel.vue',
-  '../components/RevisionLogPanel.vue'
+  '../components/RevisionLogPanel.vue',
+  '../components/AskUserCard.vue'
 ]
 
 for (const rel of VUE_FILES) {

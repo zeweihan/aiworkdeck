@@ -150,6 +150,11 @@ export const ZH = {
   done: '已完成',
   doneWithDuration: '已完成 · {seconds} 秒',
   answered: '已回答',
+  // ask_user 问题卡（dev-board#868），与桌面端 chat.askUser* 同文
+  askUserOther: '其他',
+  askUserOtherPlaceholder: '写下你的要求，回车发送',
+  askUserSubmit: '发送回答',
+  askUserOtherAnswer: '补充：{text}',
 
   // ---- ChatView.vue：历史面板 ----
   historyTitle: '历史对话',
@@ -594,6 +599,10 @@ export const EN = {
   done: 'Done',
   doneWithDuration: 'Done in {seconds}s',
   answered: 'Answered',
+  askUserOther: 'Other',
+  askUserOtherPlaceholder: 'Describe what you want, press Enter to send',
+  askUserSubmit: 'Send answer',
+  askUserOtherAnswer: 'Note: {text}',
 
   // ---- ChatView.vue：历史面板 ----
   historyTitle: 'History',
