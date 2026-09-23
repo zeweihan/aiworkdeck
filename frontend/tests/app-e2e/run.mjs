@@ -331,11 +331,11 @@ try {
 
   /**
    * 等这一轮落定：发送键退出停止态（DOM 判据），或后端已把助手消息写进历史（落库判据）。
-   * 两条都不成立才判红。先给流式一个起跑窗口，否则点完发送的那一拍 .send-btn.stopping
+   * 两条都不成立才判红。先给流式一个起跑窗口，否则点完发送的那一拍 .stop-btn
    * 还没挂上，会被误判成「已经跑完了」。
    */
   const settleAiTurn = async (prompt, { timeoutMs = 240000, startMs = 15000 } = {}) => {
-    const streaming = () => page.evaluate(() => !!document.querySelector('.send-btn.stopping'))
+    const streaming = () => page.evaluate(() => !!document.querySelector('.stop-btn'))
     const t0 = Date.now()
     while (Date.now() - t0 < startMs) {
       if (await streaming()) break
@@ -350,7 +350,7 @@ try {
       if (hist.landed) return { via: 'history', hist }
       await sleep(2000)
     }
-    throw new Error('这一轮 ' + Math.round(timeoutMs / 1000) + 's 后既没退出停止态（.send-btn.stopping 还在），'
+    throw new Error('这一轮 ' + Math.round(timeoutMs / 1000) + 's 后既没退出停止态（.stop-btn 还在），'
       + '历史里也没有助手消息（' + (hist.why || '') + '）')
   }
 
@@ -2972,7 +2972,7 @@ try {
       await page.mouse.click(hit.x, hit.y)
       // 发出去的判据：进入流式（发送键变停止键），或输入框已清空且提问落进了消息区
       await page.waitForFunction((p) => {
-        if (document.querySelector('.send-btn.stopping')) return true
+        if (document.querySelector('.stop-btn')) return true
         const input = document.querySelector('.chat-input-rich')
         const inputEmpty = !input || !(input.innerText || '').trim()
         return inputEmpty && (document.body.innerText || '').includes(p)
