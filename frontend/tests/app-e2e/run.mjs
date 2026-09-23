@@ -282,6 +282,168 @@ try {
     catch (e) { stepFails++; note('step-fail', name + ': ' + String(e.message || e).slice(0, 180)); await shot('FAIL-' + name.replace(/[^\w一-龥]/g, '_')); return false }
   }
 
+  // ---------- AI 一轮的落定与过程卡取样（dev-board#823；中文 J6.5 与英文 J12 共用） ----------
+  // 病灶：J12「过程卡工具名不含中文」恒走 skip——它在「发送键退出停止态」那一拍就去数
+  // .activity-summary，而过程卡要再等几秒才落 DOM（探针实测 t+2s 计 0、t+10s 计 1），
+  // 于是永远取到 0、静默 skip，EN 发版门唯一有鉴别力的那一面等于空转。同一形态的空覆盖
+  // J6.5 也有：waitText('测试通过') 匹配的是用户提问原文（eng-infra 红线①），模型一个字
+  // 不回也绿。两处的取样口径因此收敛到下面三个函数里，各写一份就会各错一次。
+  //
+  // 取样口径：DOM 只是呈现，**判据以历史落库为准**——SSE 断流时 DOM 可能什么都不长，
+  // 而后端早就把这一轮写进 project_ai_message 了。skip 只认「历史证明这一轮零工具调用」，
+  // 其余任何取不到的情形一律判红。
+  /**
+   * 从 GET /api/ai/history 取「提问是 prompt 的那一轮」。
+   *
+   * 助手消息的 content 是协议正文，工具调用在里面是 <tool_code> 块——这就是「这一轮到底
+   * 调没调工具」的权威判据：UI 的过程卡正是由它解析出来的（useAgentStream 的
+   * parseAssistantHistory → handleTag 的 tool_code 分支），所以两者对不上必是回归。
+   * 返回 { reachable, landed, text, tools, toolCount }；reachable=false 表示接口没读到。
+   */
+  const aiTurnHistory = async (prompt) => {
+    let list = []
+    try {
+      const r = await fetch(BACKEND + '/api/ai/history?projectId=' + QA.projectId + '&limit=200',
+        { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })
+      const body = await r.json()
+      // projectId 分支回裸数组（limit 在这条分支上不生效），conversationId 分支带 limit
+      // 回 {messages,hasMore,nextBefore} 信封——两种形状都接住，见 AiChatController#getChatHistory
+      list = Array.isArray(body) ? body : (body && Array.isArray(body.messages) ? body.messages : [])
+    } catch (e) {
+      return { reachable: false, landed: false, text: '', tools: false, toolCount: 0, why: 'GET /api/ai/history 读不到: ' + String((e && e.message) || e).slice(0, 120) }
+    }
+    const roleOf = (m) => String((m && m.role) || '').toUpperCase()
+    let at = -1
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (roleOf(list[i]) === 'USER' && String(list[i].content || '').includes(prompt)) { at = i; break }
+    }
+    if (at < 0) return { reachable: true, landed: false, text: '', tools: false, toolCount: 0, why: '历史里还没有这一轮的提问（共 ' + list.length + ' 条消息）' }
+    // 这一轮的边界：下一条用户消息之前的全部助手消息
+    const parts = []
+    for (let i = at + 1; i < list.length; i++) {
+      if (roleOf(list[i]) === 'USER') break
+      parts.push(String(list[i].content || ''))
+    }
+    const text = parts.join('\n')
+    const toolCount = (text.match(/<tool_code[\s>]/g) || []).length
+    return { reachable: true, landed: parts.length > 0, text, tools: toolCount > 0, toolCount, why: '' }
+  }
+
+  /**
+   * 等这一轮落定：发送键退出停止态（DOM 判据），或后端已把助手消息写进历史（落库判据）。
+   * 两条都不成立才判红。先给流式一个起跑窗口，否则点完发送的那一拍 .send-btn.stopping
+   * 还没挂上，会被误判成「已经跑完了」。
+   */
+  const settleAiTurn = async (prompt, { timeoutMs = 240000, startMs = 15000 } = {}) => {
+    const streaming = () => page.evaluate(() => !!document.querySelector('.send-btn.stopping'))
+    const t0 = Date.now()
+    while (Date.now() - t0 < startMs) {
+      if (await streaming()) break
+      const h = await aiTurnHistory(prompt)
+      if (h.landed) return { via: 'history', hist: h }
+      await sleep(500)
+    }
+    let hist = { reachable: false, landed: false, why: '（还没读到）' }
+    while (Date.now() - t0 < timeoutMs) {
+      if (!(await streaming())) return { via: 'dom', hist: await aiTurnHistory(prompt) }
+      hist = await aiTurnHistory(prompt)
+      if (hist.landed) return { via: 'history', hist }
+      await sleep(2000)
+    }
+    throw new Error('这一轮 ' + Math.round(timeoutMs / 1000) + 's 后既没退出停止态（.send-btn.stopping 还在），'
+      + '历史里也没有助手消息（' + (hist.why || '') + '）')
+  }
+
+  /**
+   * 这一轮的过程卡工具名。返回 { names, skip }：skip 非空表示「历史证明这一轮确实零工具
+   * 调用」（此时 names 为空，调用方记 skip 信号）；其余任何取不到的情形一律抛错判红。
+   *
+   * dev-board#646 之后过程卡在消息流里：每条助手消息的执行记录收在自己的 .activity-summary
+   * 活动条下（默认收起，点开是 .activity-details）。TurnActivityPanel 与 .turn-activity/
+   * .turn-status/.turn-activity-link 已整体删除，别再按那套选择器等。
+   */
+  const sampleTurnToolNames = async (prompt, { settleMs = 30000 } = {}) => {
+    // 每次都按提问原文重新定位这一轮：DOM 标记会被 Vue 重渲染弄丢，行内重复这四行最稳
+    const turnState = () => page.evaluate((p) => {
+      const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+        const u = t.querySelector('.user-bubble-content')
+        return u && (u.innerText || '').includes(p)
+      }).pop()
+      if (!turn) return { turn: false, assistant: false, summaries: 0 }
+      return {
+        turn: true,
+        assistant: !!turn.querySelector('.message-row.assistant'),
+        summaries: turn.querySelectorAll('.message-row.assistant .activity-summary').length
+      }
+    }, prompt)
+
+    // ① 轮询取样：等活动条真的落 DOM，或历史证明这一轮零工具调用（那就不用再等了）
+    const t0 = Date.now()
+    let st = await turnState()
+    let hist = await aiTurnHistory(prompt)
+    while (Date.now() - t0 < settleMs && !(st.turn && st.summaries)) {
+      if (hist.reachable && hist.landed && !hist.tools) break
+      await sleep(1000)
+      st = await turnState()
+      hist = await aiTurnHistory(prompt)
+    }
+    const histWhy = hist.reachable
+      ? (hist.landed ? '历史里这一轮有 ' + hist.toolCount + ' 处 <tool_code>' : '历史里还没有这一轮的助手消息（' + (hist.why || '') + '）')
+      : (hist.why || '历史接口读不到')
+    if (!st.turn) throw new Error('找不到这一轮的 .conversation-turn（提问没落进消息区？）；' + histWhy)
+    if (!st.assistant) throw new Error('这一轮没有助手回复（.message-row.assistant 不存在）；' + histWhy)
+    if (!st.summaries) {
+      // ③ skip 只在「历史证明这一轮确实零工具调用」时才允许
+      if (hist.reachable && hist.landed && !hist.tools) {
+        return { names: [], skip: '本轮模型未产出工具调用（历史里这一轮的助手消息没有一处 <tool_code>），过程卡工具名断言未执行' }
+      }
+      throw new Error('轮询 ' + Math.round(settleMs / 1000) + 's 后这一轮仍没有 .activity-summary 活动条，而' + histWhy)
+    }
+
+    // ② 展开每一条活动条
+    for (let i = 0; i < st.summaries; i++) {
+      const hit = await page.evaluate((p, idx) => {
+        const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+          const u = t.querySelector('.user-bubble-content')
+          return u && (u.innerText || '').includes(p)
+        }).pop()
+        const btn = turn && turn.querySelectorAll('.message-row.assistant .activity-summary')[idx]
+        if (!btn) return { ok: false, top: '（第 ' + idx + ' 条活动条不见了）' }
+        btn.scrollIntoView({ block: 'center' })
+        const r = btn.getBoundingClientRect()
+        const x = r.x + r.width / 2
+        const y = r.y + r.height / 2
+        const top = document.elementFromPoint(x, y)
+        return { ok: !!top && (top === btn || btn.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
+      }, prompt, i)
+      if (!hit.ok) throw new Error('这一轮第 ' + i + ' 条 .activity-summary 中心被遮挡，elementFromPoint 命中 ' + hit.top)
+      await page.mouse.click(hit.x, hit.y)
+      await sleep(200)
+    }
+
+    const state = await page.evaluate((p) => {
+      const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
+        const u = t.querySelector('.user-bubble-content')
+        return u && (u.innerText || '').includes(p)
+      }).pop()
+      if (!turn) return { details: 0, cards: 0, names: [] }
+      return {
+        details: turn.querySelectorAll('.activity-details').length,
+        cards: turn.querySelectorAll('.activity-details .process-card').length,
+        names: [...turn.querySelectorAll('.activity-details .process-card .tool-name')].map((e) => (e.innerText || '').trim()).filter(Boolean)
+      }
+    }, prompt)
+    if (!state.details) throw new Error('点了这一轮的 ' + st.summaries + ' 条 .activity-summary，.activity-details 一个都没展开')
+    if (!state.cards) {
+      if (hist.reachable && hist.landed && !hist.tools) {
+        return { names: [], skip: '本轮活动条里没有过程卡（只有任务清单，历史里也没有一处 <tool_code>），过程卡工具名断言未执行' }
+      }
+      throw new Error('展开了 ' + state.details + ' 条 .activity-details 却一张 .process-card 都没有，而' + histWhy)
+    }
+    if (!state.names.length) throw new Error('展开了 ' + state.cards + ' 张 .process-card，却找不到 .process-card .tool-name')
+    return { names: state.names, skip: null }
+  }
+
   // ============ J1 首启解锁 → 直达（商业化改造 PR-A 后的启动链） ============
   // 旧 J1「登录页真实打字登录」已随桌面去登录整体移除：login.vue 只剩浏览器访问
   // 团队服务器的场景（不在本套件覆盖面内）。issue #200「J1 登录抖动」（登录输入
@@ -1167,18 +1329,28 @@ try {
   // $0.09/M tokens，一条消息成本可忽略；AI_E2E=0 跳过） ============
   if (process.env.AI_E2E !== '0') {
     console.log('== J6.5 AI 对话 ==')
+    // 提问原文要在两个步骤里复用（定位这一轮），提到外面来
+    const J65_PROMPT = '这是自动化测试。请只回复四个字：测试通过'
     await step('AI 面板发送并收到流式回复', async () => {
       if (!(await page.$('.chat-input-rich'))) await mouseClickSel('[title="AI 助手"]')
       await page.waitForSelector('.chat-input-rich', { timeout: 10000 })
       await mouseClickSel('.chat-input-rich')
-      await page.keyboard.type('这是自动化测试。请只回复四个字：测试通过', { delay: 10 })
+      await page.keyboard.type(J65_PROMPT, { delay: 10 })
       await mouseClickSel('.send-btn')
-      await waitText('测试通过', 90000) // 流式回复落进气泡
+      // 旧写法 waitText('测试通过', 90000) 是空断言：这四个字就在提问原文里，模型一个字
+      // 不回也立刻命中（eng-infra 红线①，与 J12 的恒 skip 同形态）。改成等这一轮真的
+      // 落定——发送键退出停止态，或后端已把助手消息写进历史（SSE 断流时 DOM 可能不动）。
+      await settleAiTurn(J65_PROMPT, { timeoutMs: 120000 })
     })
     await step('对话历史落库（#153 轮次回归）', async () => {
-      const r = await fetch(BACKEND + '/api/ai/history?projectId=' + QA.projectId, { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })
-      const body = await r.text()
-      if (!body.includes('测试通过')) throw new Error('历史中未见 AI 回复内容: ' + body.slice(0, 150))
+      // 判据必须落在**助手**那条消息上：整份历史里搜「测试通过」会命中用户自己的提问，
+      // 模型没回也绿（同上，红线①）。
+      const hist = await aiTurnHistory(J65_PROMPT)
+      if (!hist.reachable) throw new Error(hist.why)
+      if (!hist.landed) throw new Error('历史里这一轮没有助手消息：' + (hist.why || ''))
+      if (!hist.text.includes('测试通过')) {
+        throw new Error('历史里这一轮的助手回复不含「测试通过」: ' + hist.text.replace(/\s+/g, ' ').slice(0, 150))
+      }
     })
   }
 
@@ -2809,77 +2981,27 @@ try {
 
     if (j12Sent) await step('J12 英文指令过程卡工具名不含中文', async () => {
       // 工具名是否出现取决于模型这一轮选不选工具——这是 LLM 不确定性，不该让发版门
-      // 因此变红。所以这一步是「出现了就必须英文」：等到有工具名就断言无 CJK；
-      // 一直没有则记 skip 信号（人工按信号复看），不判失败。
-      // 已实测过一种会稳定落进 skip 的既有故障，别误判成英文特有问题：AGENT 模式
-      // 下带工具定义的流式请求会零字节停滞 180s 直到 watchdog 兜底（后端日志伴随
-      // OkHttp "Cannot invoke Response.code() because response is null" 的 NPE）。
-      // 中文模式发同样需要调工具的指令一样会停滞——语言不是变量。
+      // 因此变红。所以这一步是「出现了就必须英文」。
+      // 但 skip 的门槛必须钉死（dev-board#823）：以前在「发送键退出停止态」那一拍就数
+      // .activity-summary，过程卡还要几秒才落 DOM，于是恒取到 0、恒 skip，发版门里唯一
+      // 有鉴别力的英文断言从来没真跑过。现在取样交给 settleAiTurn + sampleTurnToolNames：
+      // 轮询到活动条真的出现，**skip 只在历史证明这一轮零 <tool_code> 时**才允许，其余
+      // 一律判红。
       //
-      // dev-board#646 之后过程卡回到了消息流里：每条助手消息按时间线渲染，执行记录收在
-      // 自己的 .activity-summary 活动条下（默认收起，点开是 .activity-details）。
-      // TurnActivityPanel 与 .turn-activity/.turn-status/.turn-activity-link 已整体删除，
-      // 别再按那套选择器等——等不到只会空跑满超时。现在：等这一轮跑完（发送键不再是
-      // 停止态）→ 展开 J12 这一轮助手消息上的每一条活动条 → 在过程卡工具名上断言无 CJK。
-      // skip 只认「这一轮压根没有活动条 / 活动条里没有过程卡」；这一轮没有助手回复、
-      // 活动条被遮挡点不中、展不开、有过程卡却找不到工具名，一律判红。
-      // 240s 覆盖上面那个 180s watchdog。
-      const ended = await page.waitForFunction(() => !document.querySelector('.send-btn.stopping'),
-        { timeout: 240000, polling: 500 }).catch(() => null)
-      if (!ended) throw new Error('J12 这一轮 240s 后仍未结束（发送键仍停在停止态 .send-btn.stopping）')
-      // 每次都按提问原文重新定位这一轮：DOM 标记会被 Vue 重渲染弄丢，行内重复这四行最稳
-      const found = await page.evaluate((p) => {
-        const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
-          const u = t.querySelector('.user-bubble-content')
-          return u && (u.innerText || '').includes(p)
-        }).pop()
-        if (!turn) return { ok: false, why: '找不到 J12 这一轮的 .conversation-turn（提问没落进消息区？）' }
-        if (!turn.querySelector('.message-row.assistant')) return { ok: false, why: 'J12 这一轮没有助手回复（.message-row.assistant 不存在）' }
-        return { ok: true, summaries: turn.querySelectorAll('.message-row.assistant .activity-summary').length }
-      }, J12_PROMPT)
-      if (!found.ok) throw new Error(found.why)
-      if (!found.summaries) {
-        note('skip', 'J12 本轮模型未产出工具调用（这一轮助手消息里没有 .activity-summary 活动条），过程卡工具名断言未执行')
+      // 既有故障别误判成英文特有问题：AGENT 模式下带工具定义的流式请求会零字节停滞
+      // 180s 直到 watchdog 兜底（后端日志伴随 OkHttp "Cannot invoke Response.code()
+      // because response is null" 的 NPE）。中文模式发同样需要调工具的指令一样会停滞
+      // ——语言不是变量。240s 覆盖那个 watchdog；停滞时 DOM 可能永远不动，所以
+      // settleAiTurn 同时认「助手消息已落库」这条判据。
+      await settleAiTurn(J12_PROMPT, { timeoutMs: 240000 })
+      const { names, skip } = await sampleTurnToolNames(J12_PROMPT, { settleMs: 30000 })
+      if (skip) {
+        note('skip', 'J12 ' + skip)
         return
       }
-      for (let i = 0; i < found.summaries; i++) {
-        const hit = await page.evaluate((p, idx) => {
-          const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
-            const u = t.querySelector('.user-bubble-content')
-            return u && (u.innerText || '').includes(p)
-          }).pop()
-          const btn = turn && turn.querySelectorAll('.message-row.assistant .activity-summary')[idx]
-          if (!btn) return { ok: false, top: '（第 ' + idx + ' 条活动条不见了）' }
-          btn.scrollIntoView({ block: 'center' })
-          const r = btn.getBoundingClientRect()
-          const x = r.x + r.width / 2
-          const y = r.y + r.height / 2
-          const top = document.elementFromPoint(x, y)
-          return { ok: !!top && (top === btn || btn.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
-        }, J12_PROMPT, i)
-        if (!hit.ok) throw new Error('J12 这一轮第 ' + i + ' 条 .activity-summary 中心被遮挡，elementFromPoint 命中 ' + hit.top)
-        await page.mouse.click(hit.x, hit.y)
-        await sleep(200)
-      }
-      const state = await page.evaluate((p) => {
-        const turn = [...document.querySelectorAll('.conversation-turn')].filter((t) => {
-          const u = t.querySelector('.user-bubble-content')
-          return u && (u.innerText || '').includes(p)
-        }).pop()
-        return {
-          details: turn.querySelectorAll('.activity-details').length,
-          cards: turn.querySelectorAll('.activity-details .process-card').length,
-          names: [...turn.querySelectorAll('.activity-details .process-card .tool-name')].map((e) => (e.innerText || '').trim()).filter(Boolean)
-        }
-      }, J12_PROMPT)
-      if (!state.details) throw new Error('点了 J12 这一轮的 ' + found.summaries + ' 条 .activity-summary，.activity-details 一个都没展开')
-      if (!state.cards) {
-        note('skip', 'J12 本轮活动条里没有过程卡（只有任务清单，没有工具调用），过程卡工具名断言未执行')
-        return
-      }
-      if (!state.names.length) throw new Error('展开了 ' + state.cards + ' 张 .process-card，却找不到 .process-card .tool-name')
-      const bad = state.names.filter((t) => /[一-鿿]/.test(t))
+      const bad = names.filter((t) => /[一-鿿]/.test(t))
       if (bad.length) throw new Error('en-US 下过程卡工具名仍含中文: ' + JSON.stringify(bad))
+      console.log('    J12 过程卡工具名（全部无 CJK）: ' + JSON.stringify(names))
       await shot('j12-en-process-card')
     })
   } else {
