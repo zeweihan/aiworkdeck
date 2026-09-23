@@ -384,7 +384,7 @@ MarketSidebarPanel / CloudAcceptDialog / api.js 的 401 兜底）同样原样保
 
 顶栏项目名区在 `.work-status-chip` 旁新增 `.collab-chip`（`collab-chip-green/-blue/-amber` 三态），底部 `.status-bar` 同源加一格，两处都 `v-if="collabLinked"`——**只有这份案卷真的放进过团队案件库才渲染任何协作元素**，没连案件库的律师在界面上看不到一个协作字样（「以自己工作为主」的定位要求零打扰）。点开的是页面级 `components/collab/CollabDialog.vue`（**两 tab**：这份案卷 / 案件参与人；第三个 tab「团队案件库」连同连库表单随 dev-board#440 撤掉），交稿、取回最新稿、放进案件库、加人全部收在这里，是**唯一**动作入口；版本面板的 `CloudSyncBar` 只剩一行只读状态 + 一个 `open-collab` 链接。admin 页的「团队案件库」分区同期整块撤掉（见本文件 admin 分区那一节）。
 没有动 rail 配置、没有动 `leftPaneKey` 状态机、没有拆 `VersionPanel` 组件树——`LEFT_SIDEBAR_PLUGINS` 仍是纯静态数组，rail 上有哪些入口不依赖运行时状态。角色展示文案的唯一来源是 `frontend/src/config/memberRoles.js`（`ROLE_LABELS`/`ASSIGNABLE_ROLES`/`MEMBER_GROUP_LABELS`），`CloudSyncBar`/`InviteMemberDialog`/`groupedMembers` 三处各写各的历史已清；**枚举键名是后端 `ProjectMember.Role` 的值也是接口字段值，只改 label 不改 key**。协作状态口径与刷新机制见 `.claude/agents/version-control.md`。
-**「加人」的两条轨（本机参与人表 / 团队案件库成员表）现在由 `InviteMemberDialog` 自己按环境选**（dev-board#527，2026-09-09）：自建多用户服务器走本机轨；桌面 local-mode 且案卷已入库走云端轨（与协作抽屉「案件参与人」同一张表）；桌面 local-mode 且未入库只给「放进团队案件库」按钮。原来常驻的「案卷进了案件库还要在顶栏协作里再加一次」那句只在本机轨且 `linked` 时显示。判定与查人规则见 `.claude/agents/version-control.md` 的 `InviteMemberDialog.vue` 条目。**成员堆栈**（`loadProjectMembers`）在 `collabCloud.linked` 时并入 `getCloudMembers` 的名单（按 username 去重、id 加 `cloud-` 前缀、**userId 抹成 null**——云端 userId 与本机 `user.id` 是两个 id 空间，撞上会让 `canWriteProject` 把别人的角色当成自己的）。**uni 弹层层级修正**（`uni-modal, uni-toast { z-index: 10000 }`，style id `awd-uni-modal-zfix`）已从 `VersionNodeDetail.vue` 搬到 `App.vue` 模块级，所有页面生效；本仓自绘弹窗遮罩是 9999，任何在弹窗里弹的 toast / showModal 都靠它。
+**「加人」的两条轨（本机参与人表 / 团队案件库成员表）现在由 `InviteMemberDialog` 自己按环境选**（dev-board#527，2026-09-09）：自建多用户服务器走本机轨；桌面 local-mode 且案卷已入库走云端轨（与协作抽屉「案件参与人」同一张表）；桌面 local-mode 且未入库只给「放进团队案件库」按钮。原来常驻的「案卷进了案件库还要在顶栏协作里再加一次」那句只在本机轨且 `linked` 时显示。判定与查人规则见 `.claude/agents/version-control.md` 的 `InviteMemberDialog.vue` 条目。**成员堆栈**（`loadProjectMembers`）在 `collabCloud.linked` 时并入 `getCloudMembers` 的名单（按 username 去重、id 加 `cloud-` 前缀、**userId 抹成 null**——云端 userId 与本机 `user.id` 是两个 id 空间，撞上会让 `canWriteProject` 把别人的角色当成自己的）。**uni 弹层层级修正**（style id `awd-uni-modal-zfix`，挂在 `App.vue` 模块级，所有页面生效）现在只覆盖 `uni-toast { z-index: 10001 !important }`——`uni-modal` 那半已经不需要了：`uni.showModal` 整个转发给 AwdDialog，`<uni-modal>` 不会再出现，详见「应用内对话框（AwdDialog，dev-board#849）」一节。
 **邀请话术里的每一步都要指向收件人真看得见的入口**：`CollabDialog.inviteText` 是发给一个此刻手上还没有这份案卷的人的，他打开软件停在项目列表页——那里的协作入口只有「从团队案件库取一份案卷」（空项目态与有项目态都渲染）。dev-board#440 之后话术只剩官方那一版（同事用自己的 AI WorkDeck 账号登录桌面端就有这个库，不必连任何服务器），带「填地址」的两个键已删；「去连一个」那条路也没了（目的地是已撤的连库表单）。别写「打开左下角设置」：项目列表页左侧的「设置」面板里没有团队案件库。
 
 ## 页面路由（frontend/src/pages.json，全部 navigationStyle: custom）
@@ -677,7 +677,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 ## CSS 体系
 
 - **外壳形态（2026-08 IDE 布局升级；配色维持原浅色体系）**：曾整体深绿化（PR#243）但**维护者明确否决深色配色、已回退**——布局件保留：26px 底部状态条 `.status-bar`（等宽字体；左=variables/favorites/clipboard 工具入口 openToolFromStatusBar()，与底部抽屉联动；右=活跃文件/分屏/录制/版本工作状态真实信号）、顶栏/侧栏图标 SVG 化（config/icons.js ICONS + leftSidebarPlugins svgPaths，双态 PNG 不再新增）、插件广场 workbench 内嵌 tab。**配色现状（2026-08 更新）**：PR#243 那轮硬编码深绿 chrome 被否决回退，但 2026-08-26 起走的是另一条路——PR#625（dev-board#223）落地**颜色语义令牌化 + 浅色/深色双主题**：全部颜色收敛到 `App.vue` 里 `html[data-theme]` 上的 `--awd-*` 令牌，`utils/appTheme.js` 管三态切换（light/dark/system，默认 light）。写样式一律用 `var(--awd-*)`，**禁止再写硬编码浅色背景/深色文字**（uni.scss 的 `$uni-*`/`$brand-*` 是编译期静态值，不响应主题，别用在颜色上）；固定彩底（mint 选中条、深色 tooltip 气泡、登录页深色设备插画）的配对文字保持固定值，专用令牌 `--awd-text-on-mint`。新增令牌要同时更新 `appTheme.js` 的 `THEME_TOKEN_NAMES`（插件 iframe 主题注入的名单，dev-board#274）。
-- 全局覆盖：`frontend/src/App.vue`（:15-65 只覆盖 uni-modal/uni-toast）。
+- 全局覆盖：`frontend/src/App.vue`（:15-65 只覆盖 uni-toast——uni-modal 已被 AwdDialog 接管，见「应用内对话框（AwdDialog，dev-board#849）」一节）。
 - **awd-\* 类名约定**（King IDE 品牌清零后的通用弹窗/按钮样式，PR#171）：awd-dialog/-mask/-header/-title/-body/-footer、awd-btn/-primary/-secondary/-danger、awd-field/awd-input。**没有集中定义**——在 project-overview.vue（~:10180-10300）、ChatInterface.vue（~:2869 起）、FileTree.vue 各自 scoped 重复定义；改样式要多处同步。
 - 外壳布局类：.header-tools:6904、.rail-btn:7009、.sidebar-left:7403/7905、.workbench:7455、.bottom-panel:7283/7510、.compact-mode:7478、.is-resizing:7927。
 - **面板拖拽的跟手守卫是三件一套，删一件拖拽就会退化**（2026-08-20）：① `.is-resizing` 禁 transition；② `.is-resizing :deep(iframe)/:deep(webview)` 关 pointer-events——光标滑进嵌入文档父窗口就收不到 mousemove，拖拽会冻住；③ 桌面端浏览器 BrowserView 是原生层 CSS 管不到，靠 `desktopOverlayActive` 里那条 `resizing.active` 在拖拽期间隐藏。另外 `startResize/stopResize`（tabDragSplit.js）会锁/还原 body 的 cursor 与 user-select。编辑器窗格 `.editor-pane`/`.pane-content` 已拉平成方角（圆角卡片残留会在标签栏下沿与分栏缝露出底色弧口），别再给它们加 border-radius。
@@ -801,6 +801,49 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   加类型：`fileKind.js` 加映射 + App.vue 加两处令牌 + scss 加一行 `&.kind-x`，
   单测 `frontend/tests/tab-visibility/file-kind.test.mjs` 里那条「三处一一对上」的
   断言会拦下只改一头的改法（`npm run test:tab-visibility`）。
+
+## 应用内对话框（AwdDialog，dev-board#849）
+
+`utils/dialog.js` 的 `showDialog`/`showSheet` 两个 Promise 入口 + 对 `uni.showModal`/
+`uni.showActionSheet` 的全局接管，纯逻辑拆在同目录零依赖的 `dialogCore.js`（好让单测
+`tests/dialog/awd-dialog.test.mjs` 用 node 直接 import）。
+
+- **接管方式是 `uni.addInterceptor`，不是直接改写 `uni.showModal`——这是地雷**：发行构建
+  默认开摇树（manifest 没关 `h5.optimization.treeShaking`），uni 的 vite 插件
+  （`@dcloudio/uni-h5-vite/dist/plugins/inject.js`）会把源码里每一处 `uni.showModal`
+  静态改写成 `import { showModal } from '@dcloudio/uni-h5'` 的直接引用，而 `window.uni`
+  在发行包里只是个空对象（`plugins/pagesJson.js` 的 `registerGlobalCode`）——运行时去改
+  `uni.showModal` 这个属性，开发服务器上看着生效，打出来的桌面包里一处都不生效。
+  拦截器表是两条路径共用查询点：uni 的 `promisify` → `invokeApi` 每次调用都会查它，
+  `invoke` 返回 `false` 即放弃原生弹窗（`uni-h5.es.js` 的 `queue()`）。所以现有 71 处
+  调用点**一行不改**，开发与发行两种构建行为一致。装配入口 `installUniDialogBridge()`
+  只在 `main.js` 调一次。
+- **宿主挂 body，不写进 App.vue 模板**：uni-h5 的 `setupApp` 会把 `App` 组件的 `render`
+  整个换成 `LayoutComponent`（`comp2.render = render`），App.vue 模板里写的任何元素都不会
+  被渲染。所以 `AwdDialogHost.vue` 照 `utils/feedbackWidget.js` 的先例，由 `dialog.js` 的
+  `ensureHost()` 在 `document.body` 下单独 `createApp` 挂载（容器 id `awd-dialog-host`），
+  全应用一个实例；同一时刻只显示队首那一个，关掉后下一个接上（uni 原生是后一个直接覆盖
+  前一个、前一个的回调永远不回）。
+- **调用点零改动**：缺省按钮走 `common.confirm`/`common.cancel`（i18n），修的病灶是
+  uni-h5 原生缺省给的是写死的英文 OK/Cancel；传空串也按缺省处理。`danger:true` 或
+  `confirmColor` 命中 `dialogCore.js` 的 `DANGER_COLORS` 集合（几种历史写法 + `red`/
+  `var(--awd-danger)`）映射危险态样式。
+- **键位语义**（`resolveDialogKey`）：Esc → 取消（`showCancel:false` 也照样关，回包按
+  取消）；Enter 且焦点在对话框内某个按钮上 → 按那个按钮（danger 打开时焦点在「取消」，
+  回车因此是安全的取消而不是确认）；Enter 且焦点不在按钮上 → confirm（sheet 没有确认）；
+  Tab/Shift+Tab → 组件内循环焦点；输入法组字中的回车不算（是上屏不是提交）。
+- **新代码想直接用就不必经 uni.showModal**：`import { showDialog, showSheet } from
+  '@/utils/dialog.js'`，两个 Promise 入口直接返回 `{confirm, cancel, content?}` /
+  `{tapIndex}`。
+- **全局字体令牌与 `<html lang>` 同步**（同一轮 dev-board#849 顺带修的）：App.vue 的
+  `--awd-font-serif/-sans/-mono` 与 `uni.scss` 的 `$awd-font-serif/-sans/-mono` 逐字一致，
+  `html, body { font-family: var(--awd-font-sans) }`——此前只有正文元素吃令牌，`uni.showModal`
+  生成的 `<uni-modal>` 却直接掉到浏览器默认衬线字。`index.html` 的 `<html lang="zh-CN">`
+  只是首帧写死值，运行时由 `utils/appLanguage.js` 的 `syncDocumentLang()` 跟应用语言走
+  （浏览器按 `lang` 选 CJK 字形与断行规则，标成 en 时中文会落到日文/西文字形回退上）。
+- **toast 仍是原生弹层，只改样式**：`App.vue` 挂的 `awd-uni-modal-zfix` style 现在只剩
+  `uni-toast { z-index: 10001 !important; }`——`uni-modal` 那一半已经不需要了，
+  `uni.showModal` 整个转发给 AwdDialog，`<uni-modal>` 不会再出现。
 
 ## 非文件标签不能当活跃文档（dev-board#779 K8，2026-09-22）
 
