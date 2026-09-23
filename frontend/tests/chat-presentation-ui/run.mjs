@@ -53,6 +53,53 @@ try {
   await page.waitForFunction(() => document.querySelector('.message-list').textContent.includes('继续输出'))
   assert.equal(await page.$eval('.message-list', el => el.scrollTop), before, 'stream must not steal reading position')
   assert.ok(await visible('.return-to-latest .back-to-latest'))
+  // 「回到最新」浮钮不许压住消息（dev-board#870）：它原来绝对定位在消息列表底边之上
+  // 10px，列表往上滚时正好盖住那一截过程卡/正文。现在它住在列表与输入区之间的留白带里。
+  // 判据按「列表可视区内实际露出来的那一截」算：滚出可视区的行本来就看不见，不算被遮。
+  const locatorOverlaps = () => page.evaluate(() => {
+    const view = document.querySelector('.message-list').getBoundingClientRect()
+    const shell = document.querySelector('.chat-interface').getBoundingClientRect()
+    const hits = []
+    for (const button of document.querySelectorAll('.return-to-latest button')) {
+      const b = button.getBoundingClientRect()
+      if (b.left < shell.left - 0.5 || b.right > shell.right + 0.5) hits.push(`${button.className} overflows the panel (${Math.round(b.left)}..${Math.round(b.right)} vs ${Math.round(shell.left)}..${Math.round(shell.right)})`)
+      for (const el of document.querySelectorAll('.message-list .process-card, .message-list .message-row')) {
+        const r = el.getBoundingClientRect()
+        const top = Math.max(r.top, view.top), bottom = Math.min(r.bottom, view.bottom)
+        const left = Math.max(r.left, view.left), right = Math.min(r.right, view.right)
+        if (bottom <= top || right <= left) continue
+        if (b.left < right && b.right > left && b.top < bottom && b.bottom > top) hits.push(`${button.className} covers ${el.className.split(' ').slice(0, 2).join('.')} (button ${Math.round(b.top)}..${Math.round(b.bottom)}, row ${Math.round(top)}..${Math.round(bottom)})`)
+      }
+    }
+    return hits
+  })
+  // 把一张展开的过程卡停在列表底边上（最容易被压住的位置），再做判定
+  await page.click(summary)
+  await wait(() => document.querySelector('.message-list .process-card'))
+  await page.evaluate(() => {
+    const list = document.querySelector('.message-list')
+    const card = [...list.querySelectorAll('.process-card')].at(-1)
+    list.scrollTop += card.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom + 16
+    list.dispatchEvent(new Event('scroll'))
+  })
+  await wait(() => window.chatState.followLatest === false && document.querySelector('.return-to-latest .back-to-latest'))
+  assert.ok(await page.$eval('.message-list', el => {
+    const view = el.getBoundingClientRect()
+    const card = [...el.querySelectorAll('.process-card')].at(-1).getBoundingClientRect()
+    return card.top < view.bottom && card.bottom > view.bottom - 40
+  }), 'fixture: a process card sits right at the bottom edge of the list')
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.setAttribute('data-theme', theme), theme)
+    assert.deepEqual(await locatorOverlaps(), [], `${theme}: back-to-latest must not cover any message row or process card`)
+    await page.screenshot({ path: `${shots}/k870-back-to-latest-${theme}.png` })
+  }
+  await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
+  for (const width of [320, 420]) {
+    await page.setViewport({ width, height: 860 })
+    assert.deepEqual(await locatorOverlaps(), [], `${width}px: back-to-latest stays clear of messages and inside the panel`)
+  }
+  await page.setViewport({ width: 420, height: 860 })
+  await page.click(summary)
   await page.click('.return-to-latest .back-to-latest')
   await wait(() => window.chatState.followLatest)
   // Interactive question and approval remain in the transcript, and stay reachable after
@@ -67,6 +114,11 @@ try {
     await page.evaluate(() => { const el = document.querySelector('.message-list'); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
     await wait(() => document.querySelector('.attention-locator'))
     assert.ok(await page.$eval('.attention-locator', el => el.textContent.trim()).then(text => text.includes(label) && text.includes('1')), `${kind}: locator names what is waiting`)
+    // 两颗定位钮同时出现时，最窄的 320px 窗格里也不许压消息、不许撑出窗格（dev-board#870）
+    for (const width of [320, 420]) {
+      await page.setViewport({ width, height: 860 })
+      assert.deepEqual(await locatorOverlaps(), [], `${kind} @${width}px: both locator buttons stay clear of messages and inside the panel`)
+    }
     await page.click('.attention-locator')
     assert.ok(await page.$eval('[data-chat-attention]', el => {
       const view = document.querySelector('.message-list').getBoundingClientRect()
