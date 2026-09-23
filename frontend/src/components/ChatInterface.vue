@@ -416,8 +416,12 @@
       </div>
       <ChatTurnRail :turns="chatTurns" :active-key="activeTurnKey" @jump="handleTurnJump" />
     </div>
-    <view v-if="bubbles.length && (attentionNotice || !followLatest)" class="return-to-latest">
-      <view class="locator-row">
+    <!-- 定位条住在消息列表与输入区之间的留白带里（dev-board#870）：原来是贴着列表底边的
+         0 高度浮层，列表一往上滚按钮就压在过程卡/正文上。留白带常驻（有消息就在），
+         按钮出现/消失不改列表高度——列表高度一变就会夹紧 scrollTop，反过来把
+         followLatest 打回 false，按钮在「跟随/不跟随」之间来回闪。 -->
+    <view v-if="bubbles.length" class="return-to-latest">
+      <view v-if="attentionNotice || !followLatest" class="locator-row">
         <button v-if="attentionNotice" class="attention-locator" @click="jumpToAttention">{{ $t(attentionNotice.key, { n: attentionNotice.n }) }}</button>
         <button v-if="!followLatest" class="back-to-latest" @click="scrollToBottom">{{ $t('chat.activityBackToLatest') }} ↓</button>
       </view>
@@ -4196,7 +4200,7 @@ export default {
 }
 
 .message-list-content {
-  padding-bottom: 20px;
+  padding-bottom: 4px; /* 底部留白改由下方常驻的定位条留白带提供（dev-board#870） */
   max-width: 100%; /* Use full available width */
   width: 100%;
   box-sizing: border-box;
@@ -4206,28 +4210,42 @@ export default {
 
 .conversation-turn { margin-bottom: 18px; }
 .return-to-latest button::after { border: 0; }
-.return-to-latest { position: relative; flex-shrink: 0; height: 0; z-index: 5; }
+.return-to-latest {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  box-sizing: border-box;
+}
 .return-to-latest .locator-row {
-  position: absolute;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   gap: 8px;
   align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
 }
 .return-to-latest button {
+  margin: 0;
+  min-width: 0;
   border: 1px solid var(--awd-border);
   border-radius: 20px;
   padding: 5px 14px;
   color: var(--awd-accent-text);
   background: var(--awd-surface);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .08);
+  box-shadow: var(--awd-shadow-sm);
   font-size: 12px;
   line-height: 1.6;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
+/* 窄窗格（320px）两颗同时出现时让待处理那颗省略，「回到最新」保持完整 */
+.return-to-latest button.back-to-latest { flex-shrink: 0; }
 .return-to-latest button.attention-locator {
   border-color: var(--awd-warning);
   color: var(--awd-warning-text);

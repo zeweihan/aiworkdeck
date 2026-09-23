@@ -647,7 +647,7 @@ dragover 实时改 `railOrderDraft` 草稿、dragend 提交并持久化。
   （macOS 的浮层滚动条就在那条线上，点不到）。展开层才是 `position: absolute` 的覆盖层，
   `max-width: calc(100% - 12px)` 让窄面板（<300px）自动收窄——**百分比按 `.message-area` 算，
   这就是浮层必须挂在包裹层而不是 12px 的 rail 根节点上的原因**。
-- **z-index 6**：要盖住 `.return-to-latest` 的 5，否则「回到最新」会从展开层里透出来。
+- **z-index 6**：历史上是为了盖住 `.return-to-latest` 的 5。dev-board#870 起 `.return-to-latest` 已改成 `.message-area` **之下**的常驻留白带（36px，在流内、无 z-index），两者不再重叠，6 保留无害。
 
 改这块时 `node tests/chat-presentation-ui/run.mjs` 有一整段真渲染断言守着（刻度数 = 用户轮数、
 点第 N 格后那一轮进视口顶部、滚动时当前轮跟随、单轮不渲染、键盘 Enter 可跳、窄面板浮层收在消息区内）。
