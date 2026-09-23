@@ -3,6 +3,7 @@
 
 package com.checkba.service.mail;
 
+import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -45,7 +46,7 @@ public class MailRouter {
     public MailGateway gatewayFor(String email) {
         List<MailGateway> on = gateways.stream().filter(MailGateway::enabled).toList();
         if (on.isEmpty()) {
-            throw new IllegalArgumentException("邮件通道未配置");
+            throw new IllegalArgumentException(LangText.of("邮件通道未配置", "Email delivery is not configured"));
         }
         return on.stream()
                 .filter(g -> g.supports(email))
@@ -70,7 +71,7 @@ public class MailRouter {
     public static String normalize(String email) {
         String trimmed = email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
         if (!EMAIL.matcher(trimmed).matches()) {
-            throw new IllegalArgumentException("邮箱格式不正确");
+            throw new IllegalArgumentException(LangText.of("邮箱格式不正确", "Invalid email address"));
         }
         return trimmed;
     }

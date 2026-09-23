@@ -3,6 +3,7 @@
 
 package com.checkba.service.mail;
 
+import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -80,7 +81,7 @@ abstract class SmtpMailGateway implements MailGateway {
     @Override
     public void send(String to, String subject, String text) {
         if (!enabled()) {
-            throw new IllegalArgumentException("邮件通道未配置");
+            throw new IllegalArgumentException(LangText.of("邮件通道未配置", "Email delivery is not configured"));
         }
         try {
             MimeMessage message = sender.createMimeMessage();
@@ -93,7 +94,8 @@ abstract class SmtpMailGateway implements MailGateway {
         } catch (Exception e) {
             // 服务商原始文案（含主机名、账号、限流细节）不外露给调用方
             log.warn("[mail] {} 发信失败 to={} err={}", name(), mask(to), e.toString());
-            throw new IllegalArgumentException("邮件发送失败，请稍后重试");
+            throw new IllegalArgumentException(LangText.of("邮件发送失败，请稍后重试",
+                    "Failed to send the email, please try again later"));
         }
     }
 

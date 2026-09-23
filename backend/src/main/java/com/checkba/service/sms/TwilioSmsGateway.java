@@ -3,6 +3,7 @@
 
 package com.checkba.service.sms;
 
+import com.checkba.service.LangText;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -86,7 +87,8 @@ public class TwilioSmsGateway implements SmsGateway {
     @Override
     public void sendVerificationCode(String phone, String code) {
         if (!enabled()) {
-            throw new IllegalArgumentException("国际短信通道未配置");
+            throw new IllegalArgumentException(LangText.of("国际短信通道未配置",
+                    "International SMS delivery is not configured"));
         }
         String body = "To=" + enc(phone)
                 + "&MessagingServiceSid=" + enc(messagingServiceSid)
@@ -111,9 +113,11 @@ public class TwilioSmsGateway implements SmsGateway {
         }
         // 21611 = 目的地被限流/超出配额；其余一律通用文案（Twilio 原始文案不外露）
         if ("21611".equals(twilioCode)) {
-            throw new IllegalArgumentException("短信发送过于频繁，请稍后再试");
+            throw new IllegalArgumentException(LangText.of("短信发送过于频繁，请稍后再试",
+                    "Too many text messages sent, please try again later"));
         }
-        throw new IllegalArgumentException("短信发送失败，请稍后重试");
+        throw new IllegalArgumentException(LangText.of("短信发送失败，请稍后重试",
+                "Failed to send the text message, please try again later"));
     }
 
     private static String enc(String value) {

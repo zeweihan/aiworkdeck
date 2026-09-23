@@ -388,6 +388,7 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
 14. **「最后在线」表要收口**：`deviceId` 是客户端自带的，一个已登录用户反复换 deviceId 连流就能把它撑大——7 天 TTL + 1000 条上限淘汰（当前连着的键不淘汰），建连与每轮 `ping` 各收一次。
 15. **取件不许在读流的那条线程上跑**（`dispatchNudge`）。一次 PULL/PUSH 的 request 超时给到 10 分钟（200MB），在门铃线程上直接 `pollTransferCommands()` 就等于这十分钟里后来的每一条 nudge 都读不到；而云端 `ReferenceRequestStore.TTL_MS` 只有 60 秒、`isOnline` 仍报在线，于是参考读取被照常受理、然后白等到超时，律师看到的是「桌面端 60 秒内未响应」——桌面端明明连着。按种类各一条任务（`nudgeQueued` 收敛：同种最多一条在跑、一条在排），**固定单线程池同样不行**，那只是把参考读取排到传输后面。护栏 `MobileRelayClientDoorbellTest`。
 16. **换账号必须重建门铃流**（`accountSwitched`）。云端只在**建连那一刻**把流登记在 `(userId, deviceId)` 名下，之后不再鉴权；其余出站都经 `currentToken()` 的换账号守卫自动改投新账号，唯独这条流留在旧账号上，新账号那边 `isOnline` 恒为假，`desk:` 来源整块失效，而且报的是「多半是版本较旧」这种完全不对的诊断。判据是每读到一行比一次 `accountFingerprintOrNull()`（云端 15 秒一个 `ping`，至多晚一个 ping），变了就断开重连，退避按 `REBIND` 走下限。护栏同上。
+17. **手机端能碰到的用户可见报错一律 `LangText.of(zh, en)`**（dev-board#843）。国际版账号的请求带 `X-App-Language: en-US`（#837），`AppLanguageRequestFilter` 只在这一次请求里切英文；写死的中文串会原样漏给英文用户（原始复现：`MailRouter.normalize` 的「邮箱格式不正确」）。登录/发码链路的共享文案在 `AuthAbuseGuard`、`VerificationCodeStore`、`MailRouter`、`SmtpMailGateway`、`TwilioSmsGateway`，新增报错照此包。**例外：「未登录」「请先登录」在抛出点保持中文字面量**——`GlobalExceptionHandler` 靠精确匹配这两个字面量判 4010，翻译放在出口的 `localizedAuthMessage`。面向模型的参考读取结果（`DesktopRefHandler`、`ReferenceRequestStore`）不在此列。护栏 `MobileApiLanguageTest`。
 
 ## 验证
 

@@ -5,6 +5,7 @@ package com.checkba.config;
 
 import com.checkba.exception.FeatureNotConfiguredException;
 import com.checkba.exception.UnauthorizedException;
+import com.checkba.service.LangText;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -34,7 +35,7 @@ public class GlobalExceptionHandler {
         log.warn("GlobalExceptionHandler caught UnauthorizedException: {}", e.getMessage());
         Map<String, Object> result = new HashMap<>();
         result.put("code", CODE_UNAUTHENTICATED);
-        result.put("message", e.getMessage() != null ? e.getMessage() : "请先登录");
+        result.put("message", localizedAuthMessage(e.getMessage() != null ? e.getMessage() : "请先登录"));
         // 统一返回 HTTP 200，通过 code 字段表示失败
         return ResponseEntity.ok().body(result);
     }
@@ -135,7 +136,8 @@ public class GlobalExceptionHandler {
         // 只做精确匹配，不做子串——「请先选择文件」这类业务提示必须仍是 code=1。
         boolean isAuthFailure = "未登录".equals(e.getMessage()) || "请先登录".equals(e.getMessage());
         result.put("code", isAuthFailure ? CODE_UNAUTHENTICATED : 1);
-        result.put("message", e.getMessage() != null ? e.getMessage() : "请求参数错误");
+        result.put("message", isAuthFailure ? localizedAuthMessage(e.getMessage())
+                : e.getMessage() != null ? e.getMessage() : LangText.of("请求参数错误", "Invalid request parameters"));
         // 统一返回 HTTP 200，通过 code 字段表示失败
         return ResponseEntity.ok().body(result);
     }
@@ -146,9 +148,18 @@ public class GlobalExceptionHandler {
         Map<String, Object> result = new HashMap<>();
         result.put("code", 1);
         // 不回显内部异常 message（可能含 SQL/表名/文件路径/SDK 细节等），统一通用文案；详情仅进日志
-        result.put("message", "服务器内部错误");
+        result.put("message", LangText.of("服务器内部错误", "Internal server error"));
         // 统一返回 HTTP 200，通过 code 字段表示失败
         return ResponseEntity.ok().body(result);
     }
-}
 
+    /**
+     * 未登录的两个中文字面量在出口处按请求语言翻译。抛出点保持中文字面量不动：
+     * 上面的 4010 判定靠精确匹配它们，在抛出点就翻成英文会让判定落空。
+     */
+    private static String localizedAuthMessage(String message) {
+        if ("未登录".equals(message)) return LangText.of("未登录", "Not signed in");
+        if ("请先登录".equals(message)) return LangText.of("请先登录", "Please sign in first");
+        return message;
+    }
+}
