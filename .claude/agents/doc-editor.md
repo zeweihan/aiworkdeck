@@ -86,7 +86,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 ## 画布配色（知识存档：深色化已否决回退，勿再启用）
 
 - PR#243 曾做「深绿画布上浮纸页」并已随配色回退撤销（维护者否决深色）。**引擎画布保持默认浅色**。
-- 应用配色（dev-board#273 已落地）：`set_app_theme` 命令（office_thread.js，非 AI 白名单，宿主经 lo-relay `set-theme` 消息触发）用 ConfigurationUpdateAccess 写 `/org.openoffice.Office.UI/ColorScheme` 的 AppBackground——深浅主题下纸外工作区分别 #101214/#E4E0D4（与宿主 `--awd-canvas` 同源，改一处必须同步 editor.html 的 CSS 与 office_thread 的常量）；DocColor（纸张）刻意不动，深色下纸仍是纸白。初值走 editor URL `?theme=` 参数（editor.html 头部内联脚本防白闪），ready 后 LibreOfficeEditor.pushTheme() 补发一次盖住保活池过继的旧参数。工具栏 chrome 精确配色 LO 24.2 无注册表口，须 QPalette 补丁重烧（未做）。
+- 应用配色（dev-board#273 已落地）：`set_app_theme` 命令（office_thread.js，非 AI 白名单，宿主经 lo-relay `set-theme` 消息触发）用 ConfigurationUpdateAccess 写 `/org.openoffice.Office.UI/ColorScheme` 的 AppBackground——深浅主题下纸外工作区分别 #141210/#E4E0D4（与宿主 `--awd-canvas` 同源，改一处必须同步 editor.html 的 CSS 与 office_thread 的常量）；DocColor（纸张）刻意不动，深色下纸仍是纸白。初值走 editor URL `?theme=` 参数（editor.html 头部内联脚本防白闪），ready 后 LibreOfficeEditor.pushTheme() 补发一次盖住保活池过继的旧参数。工具栏 chrome 精确配色 LO 24.2 无注册表口，须 QPalette 补丁重烧（未做）。**深色下仍是浅色的只剩 Qt 画的那几块**（dev-board#865，2026-09-23 mac dev Electron 实测：启动即深色与运行中切深色两条路，宿主工具栏与纸外工作区都正确变深）：右侧竖排图标栏（LO 侧栏的标签条）、画布竖向滚动条，以及用户点开「原生菜单」后的菜单栏/两排工具栏/标尺/状态栏——这些是 Qt5 for wasm（5.15，allotropia/qt5）的默认 Fusion 浅色调色板，UNO 配置改不到。**别走 `/org.openoffice.Office.Common/Misc/ApplicationAppearance`**：本引擎实测写 2（深色）读得回、但 Qt chrome 纹丝不动，反倒把**纸张**（自动配色方案的 DocColor）一起染成深色，正违反「纸永远是纸白」。要真正修只能在引擎里补 QPalette（qt5 5.15 没有 prefers-color-scheme 联动），属于重烧 r6 的活。
 
 ## zetajs 编组硬规则（office_thread.js，PR#107）
 
