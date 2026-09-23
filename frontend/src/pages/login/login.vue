@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="login-page" @mousemove="handleMouseMove">
+  <view class="login-page">
     <!-- Background Elements -->
     <view class="bg-gradient"></view>
     <view class="bg-mesh"></view>
@@ -19,77 +19,10 @@
     </view>
 
     <view class="main-layout">
-      <!-- Left Column: 3D Device Showcase -->
+      <!-- 左栏：与桌面解锁页同一套品牌展示（BrandShowcase，文案以 design/copy/brand-copy.json 为准）。
+           只换视觉，登录逻辑一行不动（设计 2026-09-23 §2.5）。 -->
       <view class="showcase-section">
-        <view 
-          class="device-wrapper"
-          :style="{ transform: deviceTransform }"
-        >
-          <view class="device-frame">
-            <!-- Simulated IDE Interface -->
-            <view class="ide-window">
-              <view class="ide-titlebar">
-                <view class="window-controls">
-                  <view class="control red"></view>
-                  <view class="control yellow"></view>
-                  <view class="control green"></view>
-                </view>
-                <text class="window-title">AI WorkDeck - Professional Workspace</text>
-              </view>
-              <view class="ide-body">
-                <view class="ide-sidebar">
-                  <view class="sidebar-icon active"></view>
-                  <view class="sidebar-icon"></view>
-                  <view class="sidebar-icon"></view>
-                </view>
-                <view class="ide-explorer">
-                  <view class="explorer-item">Project Alpha</view>
-                  <view class="explorer-item indent">{{ $t('account.demoCaseFiles') }}</view>
-                  <view class="explorer-item indent active">{{ $t('account.demoDueDiligence') }}</view>
-                  <view class="explorer-item indent">{{ $t('account.demoLegalOpinion') }}</view>
-                </view>
-                <view class="ide-editor">
-                  <view class="editor-tabs">
-                    <view class="tab active">{{ $t('account.demoDiligenceReportDoc') }}</view>
-                    <view class="tab">{{ $t('account.demoEvidenceListXlsx') }}</view>
-                  </view>
-                  <view class="doc-area">
-                    <view class="doc-title">{{ $t('account.demoDocTitle') }}</view>
-                    <view class="doc-meta">
-                      <text>{{ $t('account.demoDocTo') }}</text>
-                      <text style="margin-left: 20px;">{{ $t('account.demoDocDate') }}</text>
-                    </view>
-                    <view class="doc-content">
-                      <view class="doc-paragraph">
-                        <text>{{ $t('account.demoChapterTitle') }}</text>
-                      </view>
-                      <view class="doc-paragraph text-body">
-                        <text>{{ $t('account.demoParagraph1') }}</text>
-                      </view>
-                      <view class="doc-paragraph text-body">
-                        <text>{{ $t('account.demoParagraph2') }}</text>
-                      </view>
-                      <!-- Skeleton lines for "blank" look -->
-                      <view class="skeleton-line" style="width: 90%"></view>
-                      <view class="skeleton-line" style="width: 95%"></view>
-                      <view class="skeleton-line" style="width: 80%"></view>
-                      <view class="skeleton-line" style="width: 85%"></view>
-                    </view>
-                  </view>
-                  
-                  <!-- Subtle Monogram Watermark inside IDE -->
-                  <image class="ide-watermark" src="/static/monochrome.png" mode="aspectFit" />
-                </view>
-              </view>
-            </view>
-            <!-- Screen Reflection/Gloss -->
-            <view class="screen-gloss"></view>
-          </view>
-          <!-- Device Edge Highlight -->
-          <view class="device-edge"></view>
-          <!-- Shadow -->
-          <view class="device-shadow"></view>
-        </view>
+        <BrandShowcase />
       </view>
 
       <!-- Right Column: Glassmorphism Login Card -->
@@ -192,9 +125,11 @@
 import { login, register, clientLogin, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
+import BrandShowcase from '@/components/BrandShowcase.vue'
 
 export default {
   name: 'Login',
+  components: { BrandShowcase },
   onLoad() {
     // 首启向导已下线（2026-08-27）：初始化由桌面解锁页承担，浏览器/团队服务器
     // 场景直接尝试恢复会话回到上次的工作现场
@@ -203,7 +138,6 @@ export default {
   data() {
     return {
       activeTab: 'login',
-      mouseXPercent: 0, // 0 to 1
       loginForm: {
         username: '',
         password: '',
@@ -240,26 +174,6 @@ export default {
       if (this.smsMethod === 'mail') return this.$t('account.mailVerificationLabel');
       return this.$t('account.smsVerificationLabel');
     },
-    deviceTransform() {
-      // Logic:
-      // When mouse is at left (low %), device is tilted: rotateY(25deg) rotateX(5deg) scale(0.9)
-      // When mouse is at right (high %), device is facing front: rotateY(0deg) rotateX(0deg) scale(1)
-      // User Request: Reach "straight" state when mouse reaches the login card (approx 60% width)
-      
-      // Define a threshold (e.g., 0.6 means 60% of screen width)
-      const threshold = 0.6;
-      let rawP = this.mouseXPercent / threshold;
-      
-      // Clamp between 0 and 1
-      const p = Math.min(Math.max(rawP, 0), 1);
-      
-      const rotY = 25 * (1 - p); // 25deg -> 0deg
-      const rotX = 10 * (1 - p);  // 10deg -> 0deg
-      const scale = 0.95 + (0.05 * p); // 0.95 -> 1.0
-      const translateX = -50 * (1 - p); // Slide in slightly from left
-      
-      return `perspective(2000px) rotateY(${rotY}deg) rotateX(${rotX}deg) scale(${scale}) translateX(${translateX}px)`;
-    },
     indicatorStyle() {
       // Simple logic to move the tab indicator
       const index = ['login', 'register', 'client'].indexOf(this.activeTab);
@@ -294,14 +208,6 @@ export default {
       } catch (e) {
         console.warn('会话恢复失败，停留登录页:', e && e.message)
       }
-    },
-    handleMouseMove(e) {
-      // #ifdef H5
-      // On H5 we can track mouse. On App/Mobile touch might be different, but request is Desktop-like
-      const width = window.innerWidth;
-      const x = e.pageX; // or clientX
-      this.mouseXPercent = x / width;
-      // #endif
     },
     switchTab(tab) {
       this.activeTab = tab;
@@ -556,201 +462,12 @@ $glass-border: var(--awd-glass-border);
   padding: 0 4vw;
 }
 
-/* 3D Showcase Section */
+/* 左栏：品牌展示（BrandShowcase 自带排版，这里只给它一块满高的容器） */
 .showcase-section {
   flex: 1.2;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  perspective: 2000px; // Deep perspective
-}
-
-.device-wrapper {
+  align-self: stretch;
   position: relative;
-  width: 680px;
-  height: 460px;
-  transition: transform 0.1s linear; // Smooth follow
-  transform-style: preserve-3d;
-}
-
-.device-frame {
-  width: 100%;
-  height: 100%;
-  background: #2a2f34;
-  border-radius: 12px;
-  padding: 12px;
-  box-shadow: 
-    inset 0 0 0 2px #444,
-    0 20px 50px rgba(0,0,0,0.3);
-  position: relative;
-  overflow: hidden;
-  transform: translateZ(20px); // Pop out
-  background-clip: padding-box;
-}
-
-.ide-window {
-  width: 100%;
-  height: 100%;
-  background: #1e1e1e;
-  border-radius: 6px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  font-family: 'Fira Code', 'Monaco', monospace;
-}
-
-.ide-titlebar {
-  height: 32px;
-  background: #252526;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  border-bottom: 1px solid #333;
-}
-
-.window-controls {
-  display: flex;
-  gap: 6px;
-  margin-right: 16px;
-  .control { width: 10px; height: 10px; border-radius: 50%; }
-  .red { background: var(--awd-danger); }
-  .yellow { background: var(--awd-warning); }
-  .green { background: var(--awd-accent); }
-}
-
-.window-title {
-  color: var(--awd-text-3);
-  font-size: 12px;
-}
-
-.ide-body {
-  flex: 1;
-  display: flex;
-}
-
-.ide-sidebar {
-  width: 48px;
-  background: #333333;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 10px;
-  gap: 15px;
-  .sidebar-icon {
-    width: 24px; height: 24px; background: #666; border-radius: 4px;
-    &.active { background: var(--awd-mint); }
-  }
-}
-
-.ide-explorer {
-  width: 160px;
-  background: #252526;
-  border-right: 1px solid #333;
-  padding: 10px;
-  .explorer-item {
-    color: var(--awd-text-3); font-size: 12px; line-height: 24px;
-    &.indent { padding-left: 15px; }
-    &.active { background: #37373d; color: var(--awd-text-on-accent); }
-  }
-}
-
-.ide-editor {
-  flex: 1;
-  background: #1e1e1e;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-.editor-tabs {
-  height: 30px;
-  background: #252526;
-  display: flex;
-  .tab {
-    padding: 0 15px;
-    font-size: 12px; color: var(--awd-text-3);
-    display: flex; align-items: center;
-    background: #2d2d2d;
-    &.active { background: #1e1e1e; color: var(--awd-text-on-accent); border-top: 2px solid var(--awd-mint); }
-  }
-}
-
-.doc-area {
-  padding: 30px 40px;
-  background: var(--awd-surface); /* White paper background for doc view */
-  flex: 1;
-  color: var(--awd-text);
-  font-family: 'Times New Roman', serif; /* Serif for legal docs */
-  overflow: hidden;
-  position: relative;
-}
-
-.doc-title {
-  font-size: 16px;
-  font-weight: bold;
-  text-align: center;
-  margin-bottom: 20px;
-  color: var(--awd-text);
-}
-
-.doc-meta {
-  font-size: 10px;
-  color: var(--awd-text-2);
-  margin-bottom: 24px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.doc-paragraph {
-  font-size: 11px;
-  line-height: 1.8;
-  margin-bottom: 12px;
-  font-weight: bold;
-  
-  &.text-body {
-    font-weight: normal;
-    text-indent: 2em;
-    color: var(--awd-text);
-  }
-}
-
-.skeleton-line {
-  height: 8px;
-  background: var(--awd-bg);
-  margin-bottom: 12px;
-  border-radius: 2px;
-}
-
-// Ensure watermark blends with white background
-.ide-watermark {
-  position: absolute;
-  bottom: 20px;
-  right: 20px;
-  width: 100px;
-  height: 100px;
-  opacity: 0.05;
-  pointer-events: none;
-  mix-blend-mode: multiply;
-}
-
-.device-edge {
-  position: absolute;
-  top: 0; left: 0; width: 100%; height: 100%;
-  border-radius: 12px;
-  box-shadow: 
-    inset 2px 2px 4px rgba(255,255,255,0.1),
-    inset -2px -2px 4px rgba(0,0,0,0.5);
-  pointer-events: none;
-  z-index: 10;
-}
-
-.screen-gloss {
-  position: absolute;
-  top: 0; left: 0; right: 0; height: 60%;
-  background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, transparent 60%);
-  pointer-events: none;
-  z-index: 5;
+  min-width: 0;
 }
 
 /* Glass Login Card */

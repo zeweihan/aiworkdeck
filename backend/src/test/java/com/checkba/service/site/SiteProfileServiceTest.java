@@ -6,6 +6,11 @@ package com.checkba.service.site;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.io.ClassPathResource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -159,5 +164,22 @@ class SiteProfileServiceTest {
         assertFalse(svc.multiSite());
         assertThrows(IllegalArgumentException.class,
                 () -> SiteProfileService.pinnedTo("http://www.aiworkdeck.com"));
+    }
+    @Test
+    @DisplayName("发版默认配置（application.yml）→ 国际站已开启，multiSite=true，解锁页据此渲染站点分段控件")
+    void shippedDefaultsExposeBothSites() throws Exception {
+        // 读真实的 application.yml 而不是手搓 SiteProperties：这条要钉的正是「发出去的默认值」。
+        // intl.enabled 退回 false 时站点选择器整个不渲染，海外用户就找不到邮箱登录的入口（dev-board#846）。
+        List<PropertySource<?>> sources = new YamlPropertySourceLoader()
+                .load("application.yml", new ClassPathResource("application.yml"));
+        Binder binder = new Binder(ConfigurationPropertySources.from(sources));
+        SiteProperties shipped = binder.bind("ai.account", SiteProperties.class)
+                .orElseThrow(() -> new AssertionError("application.yml 缺 ai.account 段"));
+        assertTrue(shipped.getSites().get("intl").isEnabled(), "application.yml 的 ai.account.sites.intl.enabled 必须为 true");
+
+        SiteProfileService svc = new SiteProfileService(true, CN, "", tempDir.toString(), shipped);
+        assertEquals("cn", svc.currentSite(), "site.json 缺失时仍落国内站（存量兼容）");
+        assertTrue(svc.multiSite());
+        assertEquals(List.of("cn", "intl"), svc.availableSites().stream().map(SiteProfile::id).toList());
     }
 }

@@ -278,9 +278,10 @@ ai:
         telemetry-ingest-url: https://www.aiworkdeck.com/api/telemetry
         account-page-url: https://www.aiworkdeck.com/zh/account
       intl:
-        # 国际站上线前保持 false：站点选择器只在可选站点 >= 2 时出现，
-        # 置 false 时用户看不到任何与站点有关的界面变化
-        enabled: false
+        # 国际站已上线（2026-09-23 起开启，dev-board#846）：两个站点都可选，
+        # 解锁页据此渲染「中国大陆 / 国际」分段控件。置 false 会退回单站形态，
+        # 选择器整个不渲染——海外用户就再也找不到邮箱登录的入口。
+        enabled: true
         display-name: AI WorkDeck International
         base-url: https://www.workdeck.ai
         registry-base-url: https://www.workdeck.ai/api/registry

@@ -1331,7 +1331,9 @@ export function getAccountCaptchaConfig() {
   return request({ url: '/api/account/captcha-config', method: 'GET' }).then(unwrapEnvelope);
 }
 
-// 账户登录：{ phone, code }（大陆站）或 { account, password }（国际站）。
+// 账户登录（验证码即登录，未注册的号码/邮箱由官网自动建账户）：
+//   { phone, code }（大陆站，短信验证码）或 { email, code }（国际站，邮箱验证码）；
+//   { account, password } 只剩两站存量口令账号在用，解锁页已不再提供这个入口。
 // 成功后本机已连接账户，返回体同 getAccountStatus 再加 isNewUser / mustBindPhone。
 export function loginAccount(payload) {
   return request({
