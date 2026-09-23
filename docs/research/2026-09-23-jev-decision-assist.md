@@ -13,7 +13,7 @@ The user accepted a speed/cost tradeoff on 2026-09-23: modest extra latency is a
 
 ## Validation and limits
 
-A comprehensive audit covered context assembly, memory, tools, subagents, runtime guards and evaluation Harnesses. Context omission did not demonstrate latency gains; summary gating lost to a simpler local tail-window baseline; one shadow delivery check did not establish reduced rework. Those candidates are not enabled by this switch.
+A comprehensive audit covered context assembly, memory, tools, subagents, runtime guards and evaluation Harnesses. Context omission did not demonstrate latency gains; summary gating did not establish a need for remote classification over a simpler local tail-window design (that deterministic baseline was not implemented); one shadow delivery check did not establish reduced rework. Those candidates are not enabled by this switch.
 
 Initial tool experiments compared full schemas, existing progressive disclosure, and Jev pre-expansion on two synthetic file tasks. Every group actually read the synthetic file and produced the predefined correct facts. Full-schema totals were 17.122 seconds / $0.005912625; progressive disclosure 41.375 seconds / $0.003213988; Jev pre-expansion 18.904 seconds / $0.001747995. These used production schemas with a safe Python file reader, not Java production execution. The files-specific prompt and simple path rule could produce the same narrowed set; do not attribute all narrowing savings to Jev or present those numbers as general product performance.
 
@@ -24,3 +24,5 @@ A gated live Java test (`DecisionAssistLiveWorkflowTest`) exercises the actual d
 Offline regression covers default-off behavior, invalid consent, durable inbox state, cancellation/late completion, queue/steer isolation, catalog expansion, local routing, total timeout and separate cost attribution. The frontend test renders the real composer and checks visible on/off states, keyboard controls, both languages, narrow widths, persistence and outgoing request snapshots.
 
 All live inputs are synthetic. Credentials stay at their existing location and are passed only in process memory. Live tests are explicitly opt-in and skipped by normal CI. The feature remains experimental: neither speed gains nor production-wide quality equivalence are established by this small sample.
+
+Final local backend regression: 5,014 tests, zero failures/errors, 18 expected skips. This includes the original concurrent-turn contract test: replacing a run revokes its decision advice but must still let that old main run finish its own messages/tools. Frontend build, actual composer browser checks, and SPDX/tool-parity checks passed. CI and merge evidence are tracked in [PR #950](https://github.com/zeweihan/aiworkdeck/pull/950).
