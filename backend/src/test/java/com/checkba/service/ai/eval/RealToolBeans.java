@@ -4,6 +4,7 @@
 package com.checkba.service.ai.eval;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
+import com.checkba.service.ai.tools.AskUserTools;
 import com.checkba.service.ai.tools.DdExportTools;
 import com.checkba.service.ai.tools.DocumentAuditTools;
 import com.checkba.service.ai.tools.DocumentEditTools;
@@ -78,6 +79,8 @@ final class RealToolBeans {
 
     private static List<AgentToolComponent> instantiateComponents() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
+                // ask_user（dev-board#868）：会结束本轮的提问工具，编排器按它停机
+                AskUserTools.class,
                 CapabilityTools.class,
                 // 与 TodoTools 同一个坑：CheckpointTools（doc_restore_checkpoint）与
                 // SlideEditTools（slide_* 全族）长期漏列，于是所有针对它们的

@@ -1,0 +1,139 @@
+[
+  {
+    "id": "ask-user-native-stops-and-awaits-input",
+    "title": "ask_user（原生）：校验通过即停机，awaiting_input，问题标记随本轮落库，不再调用模型",
+    "category": "question",
+    "protocol": "native",
+    "userInput": "你能帮我清理已经打开的这个文档么",
+    "activeDocument": { "id": "1001", "name": "股份认购协议.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "ask_user",
+            "arguments": {
+              "question": "「清理」具体指哪一种？",
+              "header": "清理范围",
+              "options": [
+                { "label": "删除混入的审查报告", "description": "只删第 12-21 段那段审查意见，其余不动" },
+                { "label": "清理格式", "description": "统一字体段落、删多余空行，不改文字" },
+                { "label": "接受全部修订", "description": "接受现有修订并删除批注" }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "toolCalls": [ { "name": "ask_user", "argsContain": { "question": "清理" } } ],
+      "structureContains": [
+        "<question kind=\"ask_user\"",
+        "header=\"清理范围\"",
+        "<option description=",
+        "删除混入的审查报告</option>"
+      ],
+      "bubbleEndStatus": "awaiting_input",
+      "offeredToolsInclude": [ "ask_user" ]
+    }
+  },
+  {
+    "id": "ask-user-native-skips-later-calls-in-batch",
+    "title": "ask_user 与写入同批：写入不执行（那正是还没被授权的动作），本轮照样停机",
+    "category": "question",
+    "protocol": "native",
+    "userInput": "你能帮我清理已经打开的这个文档么",
+    "activeDocument": { "id": "1001", "name": "股份认购协议.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "ask_user",
+            "arguments": {
+              "question": "「清理」具体指哪一种？",
+              "options": [ "删除混入的审查报告", "清理格式" ],
+              "multi_select": true
+            }
+          },
+          { "name": "doc_delete_text", "arguments": { "text": "审查报告" } }
+        ]
+      }
+    ],
+    "expect": {
+      "toolCalls": [ { "name": "ask_user" } ],
+      "structureContains": [ "multi=\"true\"" ],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "ask-user-xml-fallback-stops",
+    "title": "ask_user（XML 兜底，JSON 风格参数）：弱模型主路径同样停机",
+    "category": "question",
+    "protocol": "xml",
+    "userInput": "帮我优化一下这份合同",
+    "activeDocument": { "id": "1001", "name": "采购合同.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "text": "<thinking>「优化」没说标准，可能是改措辞、补条款或调格式，先问。</thinking>\n<process name=\"向用户提问\"><tool_code>ask_user({\"question\":\"想从哪方面优化？\",\"options\":[\"对我方更有利\",\"补全缺失条款\",\"只调整格式\"]})</tool_code></process>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [ { "name": "ask_user", "argsContain": { "question": "优化" } } ],
+      "structureContains": [ "<question kind=\"ask_user\"", "<option>对我方更有利</option>" ],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "ask-user-invalid-args-corrected-then-stops",
+    "title": "ask_user 参数不合格（只给一个选项）：不停机、按普通工具回喂，模型改参数重发后才停",
+    "category": "question",
+    "protocol": "native",
+    "userInput": "帮我整理一下这份文件",
+    "turns": [
+      { "toolCalls": [ { "name": "ask_user", "arguments": { "question": "要怎么整理？", "options": [ "只有一个选项" ] } } ] },
+      { "toolCalls": [ { "name": "ask_user", "arguments": { "question": "要怎么整理？", "options": [ "按条款顺序重排", "统一格式" ] } } ] }
+    ],
+    "expect": {
+      "toolCalls": [ { "name": "ask_user" }, { "name": "ask_user" } ],
+      "structureContains": [ "<option>按条款顺序重排</option>" ],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "ask-user-answer-continues-the-task",
+    "title": "用户回答（<ask_user_answer>）：作为普通用户消息进下一轮，模型据此直接执行、正常收尾",
+    "category": "question",
+    "protocol": "native",
+    "userInput": "<ask_user_answer id=\"ask-demo1\">\nQuestion: 「清理」具体指哪一种？\nSelected:\n- 删除混入的审查报告\n</ask_user_answer>",
+    "activeDocument": { "id": "1001", "name": "股份认购协议.docx", "fileType": "docx" },
+    "turns": [
+      { "toolCalls": [ { "name": "doc_delete_text", "arguments": { "text": "审查报告" } } ] },
+      { "text": "<final>已删除混入的审查报告段落。</final>" }
+    ],
+    "expect": {
+      "toolCalls": [ { "name": "doc_delete_text" } ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "ask-user-clear-instruction-executes-directly",
+    "title": "指令明确（删第 12-21 段）：直接执行，工具集里有 ask_user 但不调用",
+    "category": "question",
+    "protocol": "native",
+    "userInput": "把第 12 到 21 段删掉",
+    "activeDocument": { "id": "1001", "name": "股份认购协议.docx", "fileType": "docx" },
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "doc_select_paragraph", "arguments": { "index": 11 } },
+          { "name": "doc_delete_selection", "arguments": {} }
+        ]
+      },
+      { "text": "<final>已删除第 12 至 21 段。</final>" }
+    ],
+    "expect": {
+      "toolCalls": [ { "name": "doc_select_paragraph" }, { "name": "doc_delete_selection" } ],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": [ "ask_user" ]
+    }
+  }
+]

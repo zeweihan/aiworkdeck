@@ -16,6 +16,7 @@ import {
   removeInboxItem,
   replaceInboxItem,
 } from '../../src/composables/agentInboxState.mjs'
+import { ASK_USER_KIND, decodeAttr, normalizeAskUserEvent } from '../../src/utils/askUserAnswer.mjs'
 import { captureChatTimeline, visibleChatTimeline } from '../../src/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from '../../src/composables/bubbleId.js'
 import { documentEditedFromProcesses } from '../../src/utils/useInDocumentVisibility.js'
@@ -31,6 +32,8 @@ function stream(overrides = {}) {
     'documentEditedFromProcesses',
     'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
     'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
+    // ask_user（dev-board#868）：<question> 标签的解析会读 kind/description 属性
+    'ASK_USER_KIND', 'decodeAttr', 'normalizeAskUserEvent',
     body + '\nreturn useAgentStream()')
   const value = factory(ref, reactive, nextTick, () => {}, () => null,
     createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental, key => key, nextBubbleId, captureChatTimeline,
@@ -40,7 +43,8 @@ function stream(overrides = {}) {
     overrides.getAgentInbox || (async () => ({ items: [], runId: null, status: null })),
     overrides.updateAgentInboxItem || (async () => null),
     overrides.deleteAgentInboxItem || (async () => ({ items: [] })),
-    async () => null)
+    async () => null,
+    ASK_USER_KIND, decodeAttr, normalizeAskUserEvent)
   const bubble = value.createAssistantBubble()
   bubble.isStreaming = true
   value.bubbles.value.push(bubble)

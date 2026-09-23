@@ -9,6 +9,7 @@ import { captureChatTimeline } from '@/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from './bubbleId.js'
 import { documentEditedFromProcesses } from '@/utils/useInDocumentVisibility.js'
 import { isSameFileChange } from '@/utils/chatFileChange.js'
+import { ASK_USER_KIND, decodeAttr, normalizeAskUserEvent } from '@/utils/askUserAnswer.mjs'
 import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
@@ -1137,6 +1138,33 @@ export function useAgentStream() {
             return
         }
 
+        // ask_user 提问（dev-board#868）：结构化的问题卡数据。后端先把同一问题以
+        // <question kind="ask_user"> 标记流过来（解析器已据此拼出一份），这条事件紧随其后、
+        // 以它为准整块覆盖——字段更全（选项说明、多选），也不受标记转义影响。
+        // 与 plan_update 同理放在气泡守卫之前：断线重连补发时气泡指针可能为 null。
+        if (evt === 'ask_user') {
+            try {
+                const q = normalizeAskUserEvent(JSON.parse(dataStr))
+                if (!q) return
+                let target = currentAssistantBubble.value
+                if (!target) {
+                    const last = bubbles.value[bubbles.value.length - 1]
+                    if (last && last.role === 'ASSISTANT') target = last
+                }
+                if (target) {
+                    // 已作答的状态不能被一条补发的事件冲掉
+                    if (target.question && target.question.id === q.id) {
+                        q.answered = !!target.question.answered
+                        q.answer = target.question.answer || null
+                    }
+                    target.question = q
+                }
+            } catch (e) {
+                console.error('Failed to parse ask_user', e)
+            }
+            return
+        }
+
         // 附件降级/截断/丢弃（dev-board#801 K21 ⑦）。与 plan_update 同理放在气泡守卫之前：
         // 它在 assemble 期间就发出来了，而切回会话/重连时助手气泡指针为 null。
         //
@@ -2171,16 +2199,35 @@ export function useAgentStream() {
             if (isClose) {
                 // 收尾去掉正文两端空白：模型习惯在标签后换行，问题卡首行会多一个空行
                 if (bubble.question) {
-                    bubble.question.text = (bubble.question.text || '').trim()
-                    bubble.question.options = bubble.question.options
-                        .map(o => (o || '').trim())
-                        .filter(o => o.length > 0)
+                    const q = bubble.question
+                    const askUser = q.kind === ASK_USER_KIND
+                    // 后端对 ask_user 的正文/选项做了协议标签中和（AskUserQuestion.toMarkup），这里还原
+                    const clean = (t) => (askUser ? decodeProtocolTags(t || '') : (t || '')).trim()
+                    q.text = clean(q.text)
+                    // 选项与说明按下标成对，过滤空选项时必须一起过滤
+                    const pairs = q.options.map((o, i) => [clean(o), (q.descriptions || [])[i] || ''])
+                        .filter(([o]) => o.length > 0)
+                    q.options = pairs.map(([o]) => o)
+                    if (Array.isArray(q.descriptions)) q.descriptions = pairs.map(([, d]) => d)
+                    if (askUser && !q.options.length) q.multiSelect = false
                 }
                 activeTag = null
             } else {
                 settleRootThinking(bubble)
                 // 一轮内出现第二个 <question> 时整块覆盖：只保留可作答的最后一问
                 bubble.question = { text: '', options: [], answered: false }
+                // ask_user 工具落的标记（dev-board#868）：<question kind="ask_user" id header multi>。
+                // 历史回灌与实时流走同一条解析，属性在这里读成问题卡要的结构化字段
+                if (attributes.kind === ASK_USER_KIND) {
+                    Object.assign(bubble.question, {
+                        kind: ASK_USER_KIND,
+                        id: decodeAttr(attributes.id || ''),
+                        header: decodeAttr(attributes.header || ''),
+                        multiSelect: attributes.multi === 'true',
+                        descriptions: [],
+                        answer: null
+                    })
+                }
                 activeTag = 'question'
             }
         } else if (tagName === 'option') {
@@ -2191,6 +2238,10 @@ export function useAgentStream() {
                 activeTag = 'question' // 回到问题体作用域，后续正文继续拼在 text 上
             } else {
                 bubble.question.options.push('')
+                // ask_user 的选项说明在属性里；descriptions 与 options 按下标对齐
+                if (Array.isArray(bubble.question.descriptions)) {
+                    bubble.question.descriptions.push(decodeAttr(attributes.description || ''))
+                }
                 activeTag = 'option'
             }
         } else if (tagName === 'artifact') {

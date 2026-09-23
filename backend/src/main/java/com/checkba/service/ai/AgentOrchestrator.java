@@ -1689,6 +1689,11 @@ public class AgentOrchestrator {
                         result = BLANK_TOOL_OUTPUT;
                         success = false;
                     }
+                    // ask_user（dev-board#868）：校验通过即结束本轮。过程卡里给一句人话而不是工具回执。
+                    AskUserQuestion askUser = success ? askUserFrom(req.name(), req.arguments()) : null;
+                    if (askUser != null) {
+                        result = askUserProcessNote();
+                    }
                     StuckDetector.Verdict verdict = guard.stuck.record(
                             req.name(), req.arguments(), result, success);
                     boolean pauseForNoProgress = verdict == StuckDetector.Verdict.CIRCUIT_BREAK;
@@ -1718,6 +1723,17 @@ public class AgentOrchestrator {
                             AgentTagProtocol.escape(truncate(result, toolOutputDisplayLimit(req.name())))));
 
                     messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, result));
+                    if (askUser != null) {
+                        // 本批里排在它后面的调用一律不执行：模型刚说了「这件事要先问用户」，
+                        // 同一批里紧跟着的写入恰恰是那个还没被授权的动作。
+                        if (nativeIndex + 1 < nativeRequests.size()) {
+                            log.warn("ask_user for {} ends the turn; skipping {} later tool call(s) in the same batch",
+                                    conversationId, nativeRequests.size() - nativeIndex - 1);
+                        }
+                        stopForAskUser(guard, projectId, userId,
+                                (aiContent != null ? aiContent : "") + "\n" + executionLog, askUser);
+                        return;
+                    }
                     if (pauseForNoProgress) {
                         cancelPendingNativeTools(nativeRequests, nativeIndex + 1, messages, executionLog, guard);
                         pauseForNoProgress(guard, projectId, userId, executionLog);
@@ -1828,6 +1844,11 @@ public class AgentOrchestrator {
                         result = BLANK_TOOL_OUTPUT;
                         xmlToolSuccess = false;
                     }
+                    // ask_user（同原生分支）：XML 兜底是弱模型的主路径，只接原生分支等于换个模型就不停机
+                    AskUserQuestion xmlAskUser = xmlToolSuccess ? askUserFrom(call.toolName(), call.argsJson()) : null;
+                    if (xmlAskUser != null) {
+                        result = askUserProcessNote();
+                    }
                     StuckDetector.Verdict verdict = guard.stuck.record(
                             call.toolName(), call.argsJson(), result, xmlToolSuccess);
                     boolean pauseForNoProgress = verdict == StuckDetector.Verdict.CIRCUIT_BREAK;
@@ -1888,6 +1909,15 @@ public class AgentOrchestrator {
                     // 走 sendTextDelta 而不是自己拼 JSON：此处原来的手写转义漏了反斜杠，
                     // 输出里带 Windows 路径或 JSON 字符串时整条 text_delta 在前端 JSON.parse 失败
                     sendTextDelta(guard, toolOutputXml);
+
+                    if (xmlAskUser != null) {
+                        if (xmlIndex + 1 < xmlCalls.size()) {
+                            log.warn("ask_user for {} ends the turn; skipping {} later XML tool call(s)",
+                                    conversationId, xmlCalls.size() - xmlIndex - 1);
+                        }
+                        stopForAskUser(guard, projectId, userId, content + "\n" + executionLog, xmlAskUser);
+                        return;
+                    }
 
                     toolExecuted = true;
                     if (pauseForNoProgress) {
@@ -2824,6 +2854,46 @@ public class AgentOrchestrator {
         sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "awaiting_input"));
         closeSse(guard);
         endRun(guard);
+    }
+
+    /**
+     * ask_user 工具的停机（dev-board#868）。形态与 {@link #stopForUserQuestion} 完全一致
+     * （AWAITING_INPUT、不递归、答案是下一轮普通用户消息），只多两件事：
+     * <ol>
+     *   <li>把问题以 {@code <question kind="ask_user" ...>} 标记流给前端并随本轮落库——历史回灌、
+     *       Office/WPS 任务窗格（只认文本流）与模型下一轮读到的历史都靠这一份；</li>
+     *   <li>再发一条结构化的 SSE {@code ask_user} 事件（带版本号），桌面端问题卡以它为准。</li>
+     * </ol>
+     * 两者顺序固定：标记在前、事件在后，事件到达时覆盖解析器从标记里拼出的那份。
+     */
+    private void stopForAskUser(RunGuard guard, String projectId, Long userId,
+                                String persistedPrefix, AskUserQuestion question) {
+        String markup = question.toMarkup();
+        sendTextDelta(guard, markup);
+        sendRunEvent(guard, AskUserQuestion.SSE_EVENT, question.toEventJson());
+        log.info("ask_user {} for {}: {} option(s), multi={}", question.id(), guard.conversationId,
+                question.options().size(), question.multiSelect());
+        stopForUserQuestion(guard, projectId, userId, persistedPrefix + markup);
+    }
+
+    /**
+     * 这次工具调用是不是一次有效的 ask_user。按<b>参数</b>重建问题而不是读工具输出：
+     * 工具方法只做校验（生产里它与这里用同一个 {@link AskUserQuestion#of}），回放评测里
+     * 工具输出是桩。参数解析不了（只可能出现在桩掉校验的回放里）时按普通工具处理、不停机。
+     */
+    static AskUserQuestion askUserFrom(String toolName, String argsJson) {
+        if (!AskUserQuestion.TOOL_NAME.equals(toolName)) return null;
+        try {
+            return AskUserQuestion.fromArgsJson(argsJson, AskUserQuestion.newId());
+        } catch (IllegalArgumentException e) {
+            log.warn("ask_user arguments rejected after a successful dispatch: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 过程卡里 ask_user 那一行的输出：给人看的一句话，不是工具回执。 */
+    static String askUserProcessNote() {
+        return LangText.of("已向你提问，等你回答后继续。", "Asked you a question; will continue after your answer.");
     }
 
     /**

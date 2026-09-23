@@ -22,6 +22,7 @@ import {
   shouldShowUseInDocument,
 } from '../../src/utils/useInDocumentVisibility.js'
 import { createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental } from '../../src/composables/agentTagProtocol.mjs'
+import { ASK_USER_KIND, decodeAttr, normalizeAskUserEvent } from '../../src/utils/askUserAnswer.mjs'
 import { captureChatTimeline } from '../../src/components/AgentMessage/chatTimeline.mjs'
 import { nextBubbleId } from '../../src/composables/bubbleId.js'
 import {
@@ -200,13 +201,16 @@ function stream() {
     'documentEditedFromProcesses',
     'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
     'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
+    // ask_user（dev-board#868）：<question> 标签的解析会读 kind/description 属性
+    'ASK_USER_KIND', 'decodeAttr', 'normalizeAskUserEvent',
     body + '\nreturn useAgentStream()')
   const value = factory(ref, reactive, nextTick, () => {}, () => null,
     createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental, key => key, nextBubbleId, captureChatTimeline,
     documentEditedFromProcesses,
     createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
     () => 'http://test.local', () => 'test-session',
-    async () => ({ items: [], runId: null, status: null }), async () => null, async () => ({ items: [] }), async () => null)
+    async () => ({ items: [], runId: null, status: null }), async () => null, async () => ({ items: [] }), async () => null,
+    ASK_USER_KIND, decodeAttr, normalizeAskUserEvent)
   const bubble = value.createAssistantBubble()
   bubble.isStreaming = true
   value.bubbles.value.push(bubble)

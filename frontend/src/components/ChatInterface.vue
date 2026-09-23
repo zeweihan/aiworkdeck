@@ -868,6 +868,8 @@ import {
   formatBytes,
 } from '@/utils/chatContextLimits.js'
 import { attachmentRecord, attachmentsFromHistory, fileListFromBubble } from '@/utils/chatAttachments.js'
+import { formatAskUserAnswer, parseAskUserAnswer } from '@/utils/askUserAnswer.mjs'
+import { isEnglish } from '@/utils/appLanguage.js'
 import {
   AI_CONTEXT_FOLDER_FILE_LIMIT,
   countDescendantFiles,
@@ -2522,10 +2524,21 @@ export default {
     // isLatest（仅最新一条助手消息可操作）。两者一致：真正未答的那一问必然是末条。
     const markAnsweredQuestions = () => {
        let seenLaterUser = false
+       let nextUser = null
        for (let i = bubbles.value.length - 1; i >= 0; i--) {
           const b = bubbles.value[i]
-          if (b.role === 'USER') { seenLaterUser = true; continue }
-          if (b.question && seenLaterUser) b.question.answered = true
+          if (b.role === 'USER') { seenLaterUser = true; nextUser = b; continue }
+          if (b.question && seenLaterUser) {
+             b.question.answered = true
+             // ask_user（dev-board#868）：紧跟着的那条用户消息就是回答，读回「当时选了什么」
+             // 给只读态高亮。id 对不上（用户没点卡、自己打了一句）就不高亮，只显示已作答
+             if (b.question.kind === 'ask_user' && !b.question.answer && nextUser) {
+                const parsed = parseAskUserAnswer(nextUser.content)
+                if (parsed && (!b.question.id || parsed.id === b.question.id)) {
+                   b.question.answer = { selected: parsed.selected, other: parsed.other }
+                }
+             }
+          }
        }
     }
 
@@ -3927,6 +3940,32 @@ export default {
        // **不传 displayText**（同值等于不传）。刻意不拼「我选择了 X」这类机器口吻长句——
        // 那正是契约 D 要消灭的东西。
        handleQuestionAnswer: async (option) => {
+          // ask_user 的问题卡（dev-board#868）交上来的是结构化选择：拼成以 <ask_user_answer id=…>
+          // 开头的消息让模型知道答的是哪一问（后端据此把末位提醒换成「按回答继续」），
+          // 用户气泡里只显示所选的那几项（契约 D：displayText）
+          if (option && typeof option === 'object' && option.kind === 'ask_user') {
+             const formatted = formatAskUserAnswer(option, { english: isEnglish() })
+             if (!formatted) return
+             // 先把选择记到卡上：发出去的那一刻卡就变只读，高亮要立刻对得上
+             for (let i = bubbles.value.length - 1; i >= 0; i--) {
+                const q = bubbles.value[i].question
+                if (q && q.kind === 'ask_user' && q.id === option.id) {
+                   q.answer = { selected: option.selected || [], other: option.other || '' }
+                   break
+                }
+             }
+             await sendMessage({
+                prompt: formatted.prompt,
+                displayText: formatted.displayText,
+                fileList: [],
+                projectId: props.projectId,
+                modelId: currentModelId.value,
+                mode: currentModeId.value,
+                skillIds: currentSkillIds()
+             })
+             scrollToBottom()
+             return
+          }
           const text = typeof option === 'string' ? option.trim() : ''
           if (!text) return
           await sendMessage({

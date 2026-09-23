@@ -467,6 +467,10 @@ public class ContextAssemblerService {
   tools and do NOT keep drafting in the same turn - the user's answer arrives as a new
   message. Use it only when a missing premise would make the deliverable wrong
   (see the Clarification section for exactly when to ask and when not to).
+- **ALSO STOP** once you call the `ask_user` tool: the system shows the question with
+  clickable options and ends the turn. Do NOT put other tool calls after it in the same
+  response. The user's answer arrives as a new message starting with `<ask_user_answer>`;
+  continue the ORIGINAL task from that answer and do not ask the same thing again.
 - **DO NOT STOP** for `<artifact type="task_list">` - continue execution immediately after.
 - `<walkthrough>` does NOT trigger stop. It is only a brief summary.
 
@@ -476,8 +480,8 @@ public class ContextAssemblerService {
 3. `<process>` - Tool invocations (if any)
 4. `<artifact>` - Only `implementation_plan` or `task_list` (if applicable)
 5. `<final>` - **MAIN ANSWER** (REQUIRED for all non-chitchat responses)
-   - EXCEPTION: when the turn ends with `<question>`, `<final>` is NOT required and you
-     SHOULD omit it. Do NOT invent an answer just to satisfy this rule - you are asking
+   - EXCEPTION: when the turn ends with `<question>` or an `ask_user` call, `<final>` is
+     NOT required and you SHOULD omit it. Do NOT invent an answer just to satisfy this rule - you are asking
      precisely because you do not have one yet.
 6. `<walkthrough>` - Brief 3-5 sentence past-tense summary (OPTIONAL)
 
@@ -1138,7 +1142,8 @@ public class ContextAssemblerService {
         String userText = userPrompt + activeDocumentReminder(activeContext,
                 clientCapabilityService.capabilityOf(conversationId),
                 clientCapabilityService.officeHostOf(conversationId))
-                + templateProfileFact(activeContext, clientCapabilityService.capabilityOf(conversationId), projectId);
+                + templateProfileFact(activeContext, clientCapabilityService.capabilityOf(conversationId), projectId)
+                + clarificationReminder(agentMode, userPrompt, english);
 
         if (visionAttachments.isEmpty()) {
             // 没有图片时**保持旧构造**。语义上「只含一个 TextContent 的 list」与纯文本等价
@@ -1519,6 +1524,49 @@ public class ContextAssemblerService {
     }
 
     /**
+     * 「拿不准先问」的末位提醒（dev-board#868），拼在用户消息的<b>最末尾</b>。
+     *
+     * <p>为什么非挂末位不可：同样的规则在基底 prompt 的 Clarification 一节与 AGENT 模式约束里
+     * 都写了，但弱模型对 system prompt 中段的行为约束稳定无视（PR#209 实证，本仓的
+     * 「末位原则」）。真机病灶：「你能帮我清理已经打开的这个文档么」——一句疑问句、
+     * 「清理」没说标准——模型思考 12 秒后直接读全文、自己判定哪些段落是「混入的审查报告」
+     * 并开始删改，干了很久。
+     *
+     * <p>规则必须两头都说：只说「拿不准就问」会把模型推成事事反问（「把第 12 到 21 段删掉」
+     * 也要确认一遍），所以同一句里给出「指令明确就直接做」的反例。
+     *
+     * <p>只在 AGENT 模式挂：ASK 模式不下发工具（ask_user 不可见），PLAN 模式本来就先出计划
+     * 等审批。用户这条消息本身就是对 ask_user 的回答时换一句「按回答继续，别再问同一件事」——
+     * 否则模型拿着回答又被末位提醒催去再问一遍。
+     */
+    static String clarificationReminder(AgentMode mode, String userPrompt, boolean english) {
+        if (mode != null && mode != AgentMode.AGENT) {
+            return "";
+        }
+        if (AskUserQuestion.isAnswerMessage(userPrompt)) {
+            return english
+                    ? "\n\n[System reminder] This message is the user's answer to your ask_user question. "
+                            + "Continue the original task according to it; do not ask about the same point again."
+                    : "\n\n[系统提醒] 这条消息是用户对你上一轮 ask_user 提问的回答。按回答继续完成原任务，"
+                            + "不要再就同一件事提问。";
+        }
+        return english
+                ? "\n\n[System reminder] Before acting, check whether this request is clear. In any of these cases, "
+                        + "call the ask_user tool (not just a <question> tag) with 2-4 concrete options and stop there - "
+                        + "do not edit the document or write a task list before the user answers: (1) the user is asking "
+                        + "\"can you / could you ...?\" and what to actually do is unclear; (2) the key verb has no stated "
+                        + "standard (\"clean up\", \"tidy up\", \"improve\"); (3) it would delete or rewrite a large part of a "
+                        + "document without the user explicitly authorising that scope. If it already says what to change "
+                        + "and how (e.g. \"delete paragraphs 12 to 21\"), just do it - do not ask back."
+                : "\n\n[系统提醒] 动手前先判断这条要求是否明确。以下任一情形，先调用 ask_user 工具"
+                        + "（不要只写 <question> 标签）提一个带 2-4 个具体选项的问题，本轮到此为止——用户回答之前"
+                        + "不要改文档、不要写任务清单：① 用户是在问「能不能 / 可不可以帮我…」（句末是「吗」「么」「？」）"
+                        + "而具体做法不清楚；② 动作词没说标准（如「清理」「整理」「优化一下」「规范一下」）；"
+                        + "③ 会大范围删改文档而用户没有明确授权这个范围。"
+                        + "如果要求已经说清改哪里、怎么改（如「把第 12 到 21 段删掉」），直接执行，不要反问。";
+    }
+
+    /**
      * 活跃文档的末位提醒（拼在用户消息尾部），文案按会话客户端能力切换（Phase C）：
      * lowa=doc_* 口径（现状）；office=office_* 口径（正文已内联注入，改动经 office_* 落到宿主，
      * 按宿主 Word/Excel/PowerPoint 点名对应工具集）；none=只读口径。无活跃文档时返回空串。
@@ -1881,8 +1929,12 @@ public class ContextAssemblerService {
 当前处于 Agent 模式，这是默认的完整功能模式：
 
 1. **自动执行**: 可以自动调用工具完成任务，无需等待用户确认。但**缺少影响成果正确性的
-   前提时用 `<question>` 先问**（判据见 Clarification 一节：能从文档/项目文件/历史/记忆里
-   查到的先用工具查，别问；只有猜错会让整份产出作废的前提才问）
+   前提时先问**（判据见 Clarification 一节：能从文档/项目文件/历史/记忆里
+   查到的先用工具查，别问；只有猜错会让整份产出作废的前提才问）。
+   **要求本身含糊时也先问**：用户用疑问句问「能不能帮我 X」而 X 的做法不明确、
+   动作词没说标准（「清理」「整理」「优化一下」「规范一下」）、或者一个动作会大范围
+   删改文档而用户没有明确授权这个范围——先调 `ask_user` 给 2-4 个具体选项，再动手。
+   指令明确（说清了改哪里、怎么改，如「把第 12 到 21 段删掉」）就直接执行，不要反问。
 2. **智能规划**: 对于复杂任务可以生成 `task_list`（但不会停止等待确认）
 3. **工具使用**: 可以使用所有可用工具（搜索、读写文件、法律研究等）
 4. **正常流程**: 按照标准的 [Thought -> Action -> Observation] 循环执行
@@ -1923,6 +1975,10 @@ public class ContextAssemblerService {
   tools and do NOT keep drafting in the same turn - the user's answer arrives as a new
   message. Use it only when a missing premise would make the deliverable wrong
   (see the Clarification section for exactly when to ask and when not to).
+- **ALSO STOP** once you call the `ask_user` tool: the system shows the question with
+  clickable options and ends the turn. Do NOT put other tool calls after it in the same
+  response. The user's answer arrives as a new message starting with `<ask_user_answer>`;
+  continue the ORIGINAL task from that answer and do not ask the same thing again.
 - **DO NOT STOP** for `<artifact type="task_list">` - continue execution immediately after.
 - `<walkthrough>` does NOT trigger stop. It is only a brief summary.
 
@@ -1932,8 +1988,8 @@ public class ContextAssemblerService {
 3. `<process>` - Tool invocations (if any)
 4. `<artifact>` - Only `implementation_plan` or `task_list` (if applicable)
 5. `<final>` - **MAIN ANSWER** (REQUIRED for all non-chitchat responses)
-   - EXCEPTION: when the turn ends with `<question>`, `<final>` is NOT required and you
-     SHOULD omit it. Do NOT invent an answer just to satisfy this rule - you are asking
+   - EXCEPTION: when the turn ends with `<question>` or an `ask_user` call, `<final>` is
+     NOT required and you SHOULD omit it. Do NOT invent an answer just to satisfy this rule - you are asking
      precisely because you do not have one yet.
 6. `<walkthrough>` - Brief 3-5 sentence past-tense summary (OPTIONAL)
 
@@ -2038,10 +2094,16 @@ You are in Agent mode, the default full-capability mode:
 
 1. **Autonomous execution**: you may call tools to complete the task without waiting for
    user confirmation. BUT **when a premise that affects the correctness of the deliverable
-   is missing, ask first with `<question>`** (the standard is in the Clarification section:
+   is missing, ask first** (the standard is in the Clarification section:
    anything you can find in the document / project files / history / memory, look up with
    tools instead of asking; ask only about premises where a wrong guess would void the
-   entire deliverable)
+   entire deliverable).
+   **Also ask first when the request itself is ambiguous**: the user asks "can you X?" and
+   what X means is unclear, the key verb has no stated standard ("clean up", "tidy up",
+   "improve", "polish"), or the action would delete or rewrite a large part of a document
+   without the user explicitly authorising that scope - call `ask_user` with 2-4 concrete
+   options first, then act. When the instruction is specific (it says what to change and how,
+   e.g. "delete paragraphs 12 to 21"), just do it - do not ask back.
 2. **Smart planning**: for complex tasks you may produce a `task_list` (which does NOT stop and wait for confirmation)
 3. **Tool use**: all available tools may be used (search, file read/write, legal research, etc.)
 4. **Normal flow**: follow the standard [Thought -> Action -> Observation] loop

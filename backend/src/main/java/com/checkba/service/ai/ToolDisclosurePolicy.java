@@ -68,8 +68,9 @@ public class ToolDisclosurePolicy {
      * 每一组后面的注释写的是这组保证哪条链不断。
      */
     static final Set<String> CORE = Set.of(
-            // —— 目录入口与编排：少了 list_tools 整套机制就没有入口 ——
-            CATALOG_TOOL, "todo_write", "dispatch_subtask",
+            // —— 目录入口与编排：少了 list_tools 整套机制就没有入口；ask_user 是「拿不准先问」
+            //    的唯一入口（dev-board#868），藏进目录里等于让模型先查目录才能想起来问 ——
+            CATALOG_TOOL, "todo_write", "dispatch_subtask", "ask_user",
 
             // —— 项目材料：找文件 → 拿 fileId → 读全文 → 落一份新文件 ——
             "doc_list_project_files", "search_project_files", "extract_file_text", "read_document",

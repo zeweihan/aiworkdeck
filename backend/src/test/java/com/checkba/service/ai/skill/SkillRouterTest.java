@@ -159,12 +159,14 @@ class SkillRouterTest {
         // 这条断言是防"下一个新 skill 再踩一次"的唯一屏障，不要因为自带 skill 已显式声明就删掉它。
         router.activateForTurn("conv-orch", "run-orch", "公司考虑IPO");
         List<ToolSpecification> all = specs("law_search", "write_docx", "doc_open_file",
-                "read_document", "todo_write", "dispatch_subtask");
+                "read_document", "todo_write", "dispatch_subtask", "ask_user");
 
         List<String> names = router.visibleTools("run-orch", all).stream()
                 .map(ToolSpecification::name).toList();
         assertTrue(names.contains("todo_write"), "编排类工具 todo_write 必须恒定可见");
         assertTrue(names.contains("dispatch_subtask"), "编排类工具 dispatch_subtask 必须恒定可见");
+        // ask_user（dev-board#868）：skill 命中的往往正是改动面最大的活，拿不准先问的入口不许被裁
+        assertTrue(names.contains("ask_user"), "编排类工具 ask_user 必须恒定可见");
         // 裁剪本身照旧生效：不在白名单里的业务工具仍然看不见
         assertFalse(names.contains("doc_open_file"), "白名单外的业务工具仍应被裁掉");
     }
