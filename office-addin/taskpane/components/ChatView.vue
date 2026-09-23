@@ -58,12 +58,14 @@
           <!-- 首 token 前不再是「空气泡+光标」：给一句状态，别让人以为卡死了。
                工具参数生成期（toolPrep，<tool_code> 内逐 token 出整篇写入内容，可长达
                一两分钟）优先明示，此前这段是渲染盲区、伪装成卡死 -->
-          <div v-if="msg.streaming && !msg.text" class="bubble assistant-bubble pending-bubble">
+          <div v-if="msg.streaming && !msg.text && !isAskUserQuestion(msg.question)" class="bubble assistant-bubble pending-bubble">
             {{ pendingStatusText(msg) }}
           </div>
           <!-- Markdown 渲染（dev-board#197）：加粗/列表/代码不再以星号裸奔；
-               renderMarkdown 先整体 HTML 转义再套标签，v-html 无注入面 -->
-          <div v-else class="bubble assistant-bubble">
+               renderMarkdown 先整体 HTML 转义再套标签，v-html 无注入面。
+               ask_user 的正文在问题卡里（解析器不把它并进主文本），模型没说别的话时
+               不留一个空气泡在卡片上面 -->
+          <div v-else-if="msg.text || !isAskUserQuestion(msg.question)" class="bubble assistant-bubble">
             <div class="md" :class="{ 'md-streaming': msg.streaming }" v-html="renderMarkdown(msg.text)"></div>
             <div v-if="msg.streaming && toolPrep" class="prep-line">{{ t('preparingDocumentContent') }}</div>
           </div>
@@ -87,7 +89,15 @@
                看得到问题、看不到备选项。窄栏纵向堆叠；选项之间不分主次——它们是
                互斥的平级候选，给一个主色按钮会诱导用户点第一个。
                只有最末一条未作答的可点（sealStaleQuestions 已封掉旧的）。 -->
-          <div v-if="msg.question && msg.question.options.length" class="question-options">
+          <!-- ask_user 工具的提问（dev-board#868）：带说明的选项、多选、「其他」自由输入，
+               作答后只读并高亮所选。旧的 <question> 反问仍走下面那组按钮，行为不变。 -->
+          <AskUserCard
+            v-if="isAskUserQuestion(msg.question)"
+            :question="msg.question"
+            :actionable="!msg.question.answered && !streaming && i === messages.length - 1"
+            @answer="answerAskUser"
+          />
+          <div v-else-if="msg.question && msg.question.options.length" class="question-options">
             <button
               v-for="(opt, oi) in msg.question.options"
               :key="oi"
@@ -346,12 +356,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, TransitionG
 import {
   messages, input, streaming, toolPrep, passProgress, reconnecting, banner, notice, includeDocument, scrollSignal,
   activateSession, send as sendMessage, stop as stopRun, newConversation,
-  answerQuestion, modelCatalog, selectedModel, chooseModel, skillList, selectedSkillIds,
+  answerQuestion, answerAskUser, modelCatalog, selectedModel, chooseModel, skillList, selectedSkillIds,
   toggleSkill, loadConversationList, switchConversation, attachedFiles, toggleAttachedFile,
   loadProjectFiles, removeConversation, retitleConversation,
   uploadingFiles, uploadLocalFiles, removeUpload, retryUpload,
   activeModelVision, defaultModelInfo, visionNotice, isImageAttachment
 } from '../lib/chatSession.js'
+import { isAskUserQuestion } from '../lib/askUser.js'
+import AskUserCard from './AskUserCard.vue'
 import { openTransfer } from '../lib/transfer.js'
 import { readDocumentMeta, detectHost, locateInDocument, commandDisplayName } from '../lib/hostBridge.js'
 import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.js'

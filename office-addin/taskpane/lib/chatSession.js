@@ -18,7 +18,11 @@ import {
   loadArchiveLinks
 } from './settings.js'
 import { isReadOnlyCommand, captureDocumentBytes, sha256Hex } from './docSnapshot.js'
-import { t, getLangTag } from './i18n.js'
+import { t, getLang, getLangTag } from './i18n.js'
+import {
+  questionFromParsed, normalizeAskUserEvent, formatAskUserAnswer, parseAskUserAnswer,
+  answerDisplayText, linkAskUserAnswers, isAskUserQuestion
+} from './askUser.js'
 import { runCrossDocWrite, mergeCrossDocBanner } from './crossDocWrite.js'
 import { record as recordRevision } from './revisionLog.js'
 
@@ -404,7 +408,7 @@ export async function activateSession({ settings, projectId }) {
     // 服务端有落库消息 = 这条会话是真实存在的，之后再 403 就不是「已失效」而是归属问题
     conversationPersisted = history.length > 0
     if (history.length) {
-      messages.value = history.map(toLocalMessage)
+      messages.value = historyToMessages(history)
       sealStaleQuestions()
       bumpScroll()
     }
@@ -701,7 +705,7 @@ export async function switchConversation(convId) {
   if (gen !== generation) return
   conversationPersisted = history.length > 0
   if (history.length) {
-    messages.value = history.map(toLocalMessage)
+    messages.value = historyToMessages(history)
     sealStaleQuestions()
     bumpScroll()
   }
@@ -825,6 +829,13 @@ function toLocalMessage(row) {
   const role = row && row.role ? String(row.role).toUpperCase() : 'USER'
   if (role === 'USER') {
     const display = row && row.displayContent ? String(row.displayContent) : ''
+    // ask_user 的结构化回答（dev-board#868）：读回当时选了什么，给上一问的只读态高亮
+    // （linkAskUserAnswers）。显示文本缺失时（旧后端不存 displayContent）从回答里拼一句，
+    // 绝不把 <ask_user_answer id=…> 原文摆进用户气泡
+    const askAnswer = parseAskUserAnswer(content)
+    if (askAnswer) {
+      return { role: 'user', text: display || answerDisplayText(askAnswer, getLang() === 'en'), askAnswer }
+    }
     return { role: 'user', text: display || content }
   }
   let text = ''
@@ -836,13 +847,21 @@ function toLocalMessage(row) {
     // 首个非空块自带的前导空白同样裁掉——"\n\n正文" 混合块曾让气泡顶部先空一截（dev-board#197）
     onMainText: (t) => { if (!text) { t = t.replace(/^\s+/, ''); if (!t) return } text += t },
     onThinkingText: (t) => { if (!thinking) { t = t.replace(/^\s+/, ''); if (!t) return } thinking += t },
-    onQuestion: (q) => { question = q.options.length ? { options: q.options, answered: false } : null },
+    onQuestion: (q) => { question = questionFromParsed(q) },
     onArtifact: (c) => { artifact = artifact ? artifact + '\n\n' + c : c }
   })
   p.feed(content)
   p.flush()
   text = text.replace(/\s+$/, '')
   return reactive({ role: 'assistant', text, thinking, streaming: false, error: '', tools: [], question, artifact })
+}
+
+/**
+ * 一整页历史 → 插件消息列表。ask_user 的问题与紧跟着的那条结构化回答在这里对上
+ * （回灌后的旧问题卡是只读的，并高亮当时的选择）。
+ */
+function historyToMessages(history) {
+  return linkAskUserAnswers(history.map(toLocalMessage))
 }
 
 // ==================== SSE ====================
@@ -981,8 +1000,11 @@ function attachParser(assistant) {
     },
     // 反问的选项：正文已经流进气泡，这里只挂备选答案给界面做按钮（无选项则不挂，
     // 用户直接在输入框回答）。一轮里问第二次时后一次覆盖前一次——可点的只有最后一问。
+    // ask_user 的提问（dev-board#868）带 id/header/说明/多选，无选项也挂（卡片里直接给文本框）；
+    // 紧随其后的 SSE ask_user 事件会再整块覆盖一次（handleAskUserEvent）
     onQuestion: (q) => {
-      assistant.question = q.options.length ? { options: q.options, answered: false } : null
+      assistant.question = questionFromParsed(q)
+      bumpScroll()
     },
     // 工具参数生成期（<tool_code> 进/出）：期间没有任何可见正文，据此点亮
     // 「正在准备文档内容」提示（历史回灌用的 toLocalMessage 解析器刻意不传本回调）
@@ -1120,6 +1142,34 @@ function handlePassProgress(dataStr) {
   }
 }
 
+/**
+ * SSE `ask_user` 事件（dev-board#868）：结构化的问题卡数据。后端先把同一问题以
+ * `<question kind="ask_user">` 标记流过来（解析器已据此拼出一份），这条事件紧随其后、
+ * 以它为准整块覆盖——不受标记转义影响（与桌面端 useAgentStream 同口径）。
+ * 气泡指针为空（断线重连补发时）落到最后一条助手消息上；已作答的状态不能被补发冲掉。
+ */
+function handleAskUserEvent(dataStr) {
+  let q = null
+  try { q = normalizeAskUserEvent(JSON.parse(dataStr)) } catch (e) {
+    console.warn('[Addin] ask_user 载荷无法解析', e)
+    return
+  }
+  if (!q) return
+  let target = currentAssistant
+  if (!target) {
+    const last = messages.value[messages.value.length - 1]
+    if (last && last.role === 'assistant') target = last
+  }
+  if (!target) return
+  const prev = target.question
+  if (isAskUserQuestion(prev) && prev.id === q.id) {
+    q.answered = !!prev.answered
+    q.answer = prev.answer || null
+  }
+  target.question = q
+  bumpScroll()
+}
+
 function handleEvent(evt, dataStr) {
   if (evt === 'text_delta') {
     let content = dataStr
@@ -1194,6 +1244,8 @@ function handleEvent(evt, dataStr) {
     finishStreaming()
   } else if (evt === 'pass_progress') {
     handlePassProgress(dataStr)
+  } else if (evt === 'ask_user') {
+    handleAskUserEvent(dataStr)
   } else if (evt === 'client_action') {
     handleClientAction(dataStr)
   } else if (evt === 'state_recovery') {
@@ -1481,9 +1533,17 @@ function buildActiveContext(doc, hash) {
  * 发一条消息。overrideText 非空字符串时这条消息不来自输入框（点反问选项作答），
  * 此时不清空输入框——用户可能正打着别的内容，点个选项不该把草稿吞掉。
  * 类型判断是必需的：模板里若直接把本函数绑到 @click，第一个实参会是事件对象。
+ *
+ * sendOpts（只给 answerAskUser 用）：
+ *   - displayText：「显示内容 ≠ 发送内容」通道（契约 D）——模型收到 overrideText，
+ *     用户气泡与落库的 displayContent 是这一句；
+ *   - onAccepted：消息确定要发出（过了所有前置守卫、用户气泡已入列）的那一刻回调，
+ *     问题卡据此把选择记成只读态。前置守卫没过就不调，卡片仍可再点。
  */
-export async function send(overrideText) {
+export async function send(overrideText, sendOpts) {
   const override = typeof overrideText === 'string' ? overrideText : null
+  const opts = override !== null && sendOpts && typeof sendOpts === 'object' ? sendOpts : {}
+  const displayText = typeof opts.displayText === 'string' ? opts.displayText.trim() : ''
   banner.value = ''
   // 「等你回答/等你确认」的提示随本轮发送作废，别悬在下一轮的流式过程里
   notice.value = ''
@@ -1500,7 +1560,8 @@ export async function send(overrideText) {
   if (override === null) input.value = ''
   // 用户已经作答（不管是点选项还是自己打字）：所有反问的按钮就此封掉
   sealStaleQuestions(true)
-  messages.value.push({ role: 'user', text: prompt })
+  messages.value.push({ role: 'user', text: displayText || prompt })
+  if (typeof opts.onAccepted === 'function') opts.onAccepted()
 
   currentAssistant = null
   parser = null
@@ -1538,6 +1599,8 @@ export async function send(overrideText) {
       projectId: parseInt(projectId, 10),
       conversationId,
       message: prompt,
+      // 契约 D：用户看的那一句（ask_user 的回答只显示所选各项）。空值不上送，同值等于不传
+      ...(displayText && displayText !== prompt ? { displayText } : {}),
       mode: 'AGENT',
       activeContext: context,
       // 按次指定模型与手选 skill（后端 AgentChatRequest 原生字段；空值不上送走默认）
@@ -1614,6 +1677,36 @@ export async function answerQuestion(optionText) {
   const text = (optionText || '').trim()
   if (!text || streaming.value) return { needSettings: false }
   return send(text)
+}
+
+/**
+ * 在 ask_user 问题卡上作答（dev-board#868）。
+ *
+ * 与旧反问（answerQuestion，选项原文当消息）不同：这里发给模型的是以
+ * `<ask_user_answer id="…">` 开头的结构化回答（后端 AskUserQuestion.isAnswerMessage 据此认出
+ * 「这是对哪一问的回答」），用户气泡只显示所选各项（displayText）。
+ * 消息确定发出的那一刻把选择记到卡上，卡随即变只读并高亮所选。
+ *
+ * @param {{id: string, question: string, selected: string[], other: string}} answer
+ */
+export async function answerAskUser(answer) {
+  if (!answer || streaming.value) return { needSettings: false }
+  const formatted = formatAskUserAnswer(answer, { english: getLang() === 'en' })
+  if (!formatted) return { needSettings: false }
+  let target = null
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const q = messages.value[i].question
+    if (isAskUserQuestion(q) && q.id === (answer.id || '')) { target = q; break }
+  }
+  return send(formatted.prompt, {
+    displayText: formatted.displayText,
+    onAccepted: () => {
+      if (target) {
+        target.answered = true
+        target.answer = { selected: [...(answer.selected || [])], other: answer.other || '' }
+      }
+    }
+  })
 }
 
 export async function stop() {

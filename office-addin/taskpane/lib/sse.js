@@ -25,6 +25,8 @@
  * - `superseded` 事件：后端告知本连接已被同会话的另一个窗格接管。这时**必须停止重连**
  *   （继续重连就是互顶循环的另一半），交给调用方提示用户。
  */
+import { decodeAttr } from './askUser.js'
+
 const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30000
 // 心跳周期 15s（后端 HEARTBEAT_INTERVAL_SECONDS）x2 + 余量
@@ -396,6 +398,14 @@ export function createSseConnection({ baseUrl, token, conversationId, clientId, 
  * 反问 <question>：正文进主文本（与桌面端 useAgentStream 同语义），内含的
  * <option> 子标签是备选答案，不进正文，闭合时整块经 onQuestion 交给界面做按钮。
  *
+ * ask_user 工具的提问（dev-board#868）也走 <question>，但带属性：
+ * `<question kind="ask_user" id=".." header=".." multi="true">问题<option description="..">标签</option></question>`。
+ * 这一种的正文**不进主文本**，收进 question.text 由问题卡渲染（卡片里有 header 小标签，
+ * 正文再在气泡里出现一次就是同一句话显示两遍）；属性值做了实体转义，这里用 decodeAttr 还原，
+ * 正文/选项文字的协议标签中和由 askUser.questionFromParsed 还原。onQuestion 交出去的是
+ * `{options, descriptions, text, kind, id, header, multiSelect}`；旧 <question>（无 kind）
+ * 的正文照旧进主文本，按钮行为逐字不变。
+ *
  * 未知标签的默认从「当正文放行」改成「只吞标记」：默认放行意味着后端每新增一个
  * 标签，插件都比桌面端慢一步，而代价是用户当场看到裸的 XML 源码。判据收紧到
  * 「协议标签的形状」而不是「所有尖括号」，详见 step() 里的取舍说明。
@@ -416,6 +426,15 @@ const PARTIAL_TAG_RE = /^<\/?[a-zA-Z_]?[\w-]*(\s[^>]*)?$/
 // 协议标签的形状：全小写 ASCII 的短 snake_case 名（协议里全部标签都长这样）。
 // 未知但符合这个形状的标签按「像协议标签」处理，其余尖括号一律当正文。
 const PROTOCOL_TAG_SHAPE_RE = /^[a-z][a-z0-9_]{0,23}$/
+// 标签属性：key="value"（后端 AskUserQuestion.attr 保证值里没有裸双引号）
+const ATTR_RE = /([a-zA-Z_][\w-]*)="([^"]*)"/g
+
+function parseAttrs(raw) {
+  const out = {}
+  if (!raw) return out
+  for (const m of raw.matchAll(ATTR_RE)) out[m[1]] = decodeAttr(m[2])
+  return out
+}
 
 export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, onArtifact, onToolPrep }) {
   let pending = ''
@@ -436,10 +455,18 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, 
   // 兜底缓冲的上限：只是为了不让空气泡，不是第二条渲染通道
   const SALVAGE_MAX = 20000
 
+  // 当前 <option> 的说明（ask_user 的 description 属性）；与 options 按下标成对入列
+  let optionDesc = ''
+
   const finishOption = () => {
     const text = optionBuf.trim()
+    const desc = optionDesc
     optionBuf = ''
-    if (question && text) question.options.push(text)
+    optionDesc = ''
+    if (question && text) {
+      question.options.push(text)
+      question.descriptions.push(desc)
+    }
   }
 
   const emitQuestion = () => {
@@ -453,6 +480,13 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, 
     // <option> 内容是按钮文案，不能混进正文
     if (stack.includes('option')) { optionBuf += text; return }
     if (stack.includes('artifact')) { artifactBuf += text; return }
+    // ask_user 的正文归问题卡，不进气泡正文（见文件头）。它本身就是可见产出，
+    // 所以同样算「本气泡产出过内容」，别让 flush() 的兜底再把 process 散文捞进气泡
+    if (question && question.kind === 'ask_user' && stack.includes('question')) {
+      question.text += text
+      if (/\S/.test(text)) mainEmitted = true
+      return
+    }
     if (stack.includes('final') || stack.includes('question') || stack.length === 0) {
       // **只有非空白才算「本气泡产出过正文」**（dev-board#768）：协议标签之间的裸换行
       // （`</process>\n<process>`、模型在末尾多打的一个 \n）也走这一支，把它算成正文
@@ -505,8 +539,21 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion, 
       } else if (!candidate.endsWith('/>')) {
         if (name === 'tool_code' && onToolPrep && !stack.includes('tool_code')) onToolPrep(true)
         stack.push(name)
-        if (name === 'question') question = { options: [] }
-        else if (name === 'option') optionBuf = ''
+        if (name === 'question') {
+          const attrs = parseAttrs(m[3])
+          question = { options: [], descriptions: [], text: '' }
+          if (attrs.kind === 'ask_user') {
+            Object.assign(question, {
+              kind: 'ask_user',
+              id: attrs.id || '',
+              header: attrs.header || '',
+              multiSelect: attrs.multi === 'true'
+            })
+          }
+        } else if (name === 'option') {
+          optionBuf = ''
+          optionDesc = parseAttrs(m[3]).description || ''
+        }
       }
     } else if (m && PROTOCOL_TAG_SHAPE_RE.test(m[2])) {
       // 未知标签、但形状像协议标签：只吞掉标记本身，内容按外层上下文继续渲染。
