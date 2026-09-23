@@ -92,8 +92,8 @@
 | 工具 | 用途 |
 |-----|------|
 | `sheet_get_overview()` | **首选**：工作表清单+每张表的已用区域行列数，打开 xlsx 后先看结构 |
-| `sheet_read_range(range, sheet)` | 读区域单元格值（文本为字符串、数值/公式结果为数字，公式串另列）；range 不传读整个已用区域 |
-| `sheet_write_cells(startCell, rowsJson, sheet)` | 从起始格按 JSON 二维数组批量写入；数字落数值、`"=SUM(B2:B5)"` 落公式、其余落文本 |
+| `sheet_read_range(range, sheet, withFormat?)` | 读区域单元格值（文本为字符串、数值/公式结果为数字，公式串另列）；range 不传读整个已用区域；withFormat=true 另回按行分组的格式摘要（字体/字号/对齐/数字格式/边框/底色，只列与默认不同的项） |
+| `sheet_write_cells(startCell, rowsJson, sheet, inheritFormat?)` | 从起始格按 JSON 二维数组批量写入；数字落数值、`"=SUM(B2:B5)"` 落公式、其余落文本；追加到表格下方时自动沿用上一行格式（返回 formatInherited），inheritFormat=false 关闭 |
 | `sheet_select_range(range, sheet)` | 选中区域（视图滚动+高亮，用户看得见） |
 | `sheet_format_cells(range, bold, italic, underline, fontSize, fontName, color, background, hAlign, vAlign, wrap, numberFormat, sheet)` | 单元格格式：字体/字号/加粗/字色/底色/水平垂直对齐/自动换行/数字格式（如 `#,##0.00`、`0.00%`、`yyyy-mm-dd`） |
 | `sheet_set_borders(range, preset, widthPt, color, sheet)` | 边框：all（内外全部）/outer（仅外框）/none（清除） |
@@ -107,7 +107,7 @@
 | `sheet_freeze_panes(rows, cols, sheet)` | 冻结前 N 行/列（常用 rows=1 冻结表头；0,0 取消） |
 | `sheet_conditional_format(range, rule, value1, value2, background, color, bold, clear, sheet)` | 条件格式：满足条件的单元格自动套底色/字色/加粗（如金额>5万标红） |
 
-表格操作要点：sheet 参数是工作表名或序号（0 开始），不传即当前活动工作表；区域一律用 `A1:D20` 形式；**xlsx 上没有修订模式，写入即生效**，改错用 `doc_undo` 撤销（系统在首次修改前已建文档快照，最后手段 `doc_restore_checkpoint()`）；写数据后再做格式（先 `sheet_write_cells`，同一轮接 `sheet_format_cells`/`sheet_set_borders`/`sheet_set_row_col`）。
+表格操作要点：sheet 参数是工作表名或序号（0 开始），不传即当前活动工作表；区域一律用 `A1:D20` 形式；**xlsx 上没有修订模式，写入即生效**，改错用 `doc_undo` 撤销（系统在首次修改前已建文档快照，最后手段 `doc_restore_checkpoint()`）；写数据后再做格式（先 `sheet_write_cells`，同一轮接 `sheet_format_cells`/`sheet_set_borders`/`sheet_set_row_col`）。**新增的行/列要与相邻既有内容格式一致**（字体、字号、对齐、数字格式、边框、底色），不能留一眼看得出是后加的格子：追加到表格下方时 `sheet_write_cells` 会自动沿用上一行格式，看返回值 `formatInherited` 确认；其余情形（写在表头下的第一行、新增列、`sheet_edit_rows_cols` 插入中间行后写值、返回值没有 `formatInherited`）先 `sheet_read_range(withFormat=true)` 读相邻行列的格式，再用 `sheet_format_cells`/`sheet_set_borders` 对齐。
 
 公式要点：函数名用英文，按 Excel 习惯写即可（逗号分隔参数、跨表引用 `Sheet1!A1`，系统会自动转换成引擎方言）；SUM/AVERAGE/IF/COUNT(A)/VLOOKUP/SUMIF(S)/COUNTIF(S)/MAX/MIN/ROUND/IFERROR/INDEX+MATCH/TEXT/CONCATENATE/LEFT/RIGHT/MID/LEN/DATE/TODAY/SUMPRODUCT/TEXTJOIN 等常用函数全部可用，中文文本做查找键/条件没有问题；**引擎不支持 XLOOKUP 等 Excel 新函数，用 VLOOKUP 或 INDEX+MATCH 代替**。`sheet_write_cells` 的返回值若带 `formulaErrors`，说明对应公式出错（含单元格、原公式、错误码），必须修正后重写该格，不能无视。
 

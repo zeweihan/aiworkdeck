@@ -1663,6 +1663,186 @@ function countLiteral(text, find, matchCase) {
   }
 }
 
+// ---- sheet_write_cells 的「沿用上一行格式」与 sheet_read_range 的格式读回（dev-board#844）----
+// 病灶：往表格末尾追加一行时，新格是引擎默认格式（无边框、默认字体、数字右对齐），
+// 与既有行一眼可分。Excel 手工输入有「扩展数据区域格式」；这里是它的对等物：
+// 写入前该行在写入列跨度内全空、上方两行都有内容且格式模式一致（表头紧贴标题行
+// 那种格式不同的两行不算）→ 把紧邻上方一行对应列的格式逐属性抄过来再写值。
+// **不走剪贴板/PasteSpecial**：那会覆盖用户剪贴板。
+// 属性表：[名字, 类型]。类型决定写回时怎么编组（short 要 shortAny、枚举读回可能是
+// 裸数字要映射回枚举成员、边框是 BorderLine2 结构体要重建）。CellStyle 必须排第一：
+// 先套样式再叠直接格式，否则样式会把刚抄的直接格式的「基准」换掉。
+const SHEET_FMT_PROPS = (function () {
+  const out = [['CellStyle', 'string']];
+  for (const sfx of ['', 'Asian', 'Complex']) {
+    out.push(['CharFontName' + sfx, 'string'], ['CharFontStyleName' + sfx, 'string'],
+      ['CharFontFamily' + sfx, 'short'], ['CharFontCharSet' + sfx, 'short'], ['CharFontPitch' + sfx, 'short'],
+      ['CharHeight' + sfx, 'number'], ['CharWeight' + sfx, 'number'], ['CharPosture' + sfx, 'enum:FontSlant']);
+  }
+  out.push(['CharColor', 'number'], ['CharUnderline', 'short'], ['CharStrikeout', 'short'],
+    ['CellBackColor', 'number'], ['IsCellBackgroundTransparent', 'bool'],
+    ['HoriJustify', 'enum:CellHoriJustify'], ['VertJustify', 'vert'],
+    ['NumberFormat', 'number'], ['IsTextWrapped', 'bool'], ['ShrinkToFit', 'bool'],
+    ['ParaIndent', 'short'], ['RotateAngle', 'number'],
+    ['TopBorder2', 'border'], ['BottomBorder2', 'border'], ['LeftBorder2', 'border'], ['RightBorder2', 'border']);
+  return out;
+})();
+// 枚举成员按数值排好（UNO idl 顺序），读回是裸数字时据此映射回枚举对象。
+const SHEET_ENUM_MEMBERS = {
+  FontSlant: ['NONE', 'OBLIQUE', 'ITALIC', 'DONTKNOW', 'REVERSE_OBLIQUE', 'REVERSE_ITALIC'],
+  CellHoriJustify: ['STANDARD', 'LEFT', 'CENTER', 'RIGHT', 'BLOCK', 'REPEAT'],
+};
+function sheetEnumMember(kind, v) {
+  if (v != null && typeof v === 'object') return v;
+  const name = kind === 'FontSlant' ? 'awt' : 'table';
+  const key = (SHEET_ENUM_MEMBERS[kind] || [])[Number(v)];
+  try { return key ? css[name][kind][key] : v; } catch (e) { return v; }
+}
+// 可比较的归一值（枚举取数值、结构体拼字段串、浮点保留两位）。
+function sheetFmtNorm(type, v) {
+  if (v == null) return v;
+  if (type === 'border') return [v.Color, v.InnerLineWidth, v.OuterLineWidth, v.LineDistance, unoEnumVal(v.LineStyle), v.LineWidth].join('/');
+  if (type === 'number') return Math.round(Number(v) * 100) / 100;
+  if (type.indexOf('enum:') === 0 || type === 'vert' || type === 'short') return unoEnumVal(v);
+  return v;
+}
+function sheetFmtSet(cell, name, type, v) {
+  if (type === 'short') {
+    try { cell.setPropertyValue(name, shortAny(unoEnumVal(v))); return; } catch (e) {}
+    cell.setPropertyValue(name, unoEnumVal(v)); return;
+  }
+  if (type === 'vert') { // VertJustify：声明 long、个别引擎按 short 校验（同 sheet_format_cells）
+    try { cell.setPropertyValue(name, unoEnumVal(v)); return; } catch (e) {}
+    cell.setPropertyValue(name, shortAny(unoEnumVal(v))); return;
+  }
+  if (type.indexOf('enum:') === 0) { cell.setPropertyValue(name, sheetEnumMember(type.slice(5), v)); return; }
+  if (type === 'border') {
+    cell.setPropertyValue(name, new css.table.BorderLine2({
+      Color: v.Color, InnerLineWidth: v.InnerLineWidth, OuterLineWidth: v.OuterLineWidth,
+      LineDistance: v.LineDistance, LineStyle: unoEnumVal(v.LineStyle), LineWidth: v.LineWidth,
+    }));
+    return;
+  }
+  cell.setPropertyValue(name, v);
+}
+// 把 src 单元格的格式抄到 dst：只写不同的属性（每条写入都是一次引擎往返），单条
+// 失败吞掉继续——宁可少抄一项，也不能让整次写入失败。返回实际写了几项。
+function copyCellFormat(src, dst) {
+  let n = 0;
+  for (let i = 0; i < SHEET_FMT_PROPS.length; i++) {
+    const name = SHEET_FMT_PROPS[i][0], type = SHEET_FMT_PROPS[i][1];
+    let sv;
+    try { sv = src.getPropertyValue(name); } catch (e) { continue; }
+    if (sv == null) continue;
+    try { if (sheetFmtNorm(type, dst.getPropertyValue(name)) === sheetFmtNorm(type, sv)) continue; } catch (e) {}
+    try { sheetFmtSet(dst, name, type, sv); n++; } catch (e) { /* 个别属性写不进去：跳过 */ }
+  }
+  return n;
+}
+function sheetCellEmpty(sheet, col, row) {
+  try { return enumEq(sheet.getCellByPosition(col, row).getType(), css.table.CellContentType.EMPTY); }
+  catch (e) { return true; }
+}
+function sheetRowSpanEmpty(sheet, row, c0, c1) {
+  for (let c = c0; c <= c1; c++) if (!sheetCellEmpty(sheet, c, row)) return false;
+  return true;
+}
+// 判定「上方两行是同一种数据行」用的格式签名：字体/字号/粗细/水平对齐/数字格式/
+// 四边有无边框。刻意不含字色与底色——状态列标红、隔行底纹都是数据行里的常态，
+// 算进去会让正常的表判成「不一致」而不沿用。
+function sheetCellSig(cell) {
+  const parts = [];
+  for (const x of [['CharFontName', 'string'], ['CharFontNameAsian', 'string'], ['CharHeight', 'number'],
+    ['CharWeight', 'number'], ['HoriJustify', 'enum:CellHoriJustify'], ['NumberFormat', 'number']]) {
+    try { parts.push(sheetFmtNorm(x[1], cell.getPropertyValue(x[0]))); }
+    catch (e) { parts.push('?'); }
+  }
+  for (const b of ['TopBorder2', 'BottomBorder2', 'LeftBorder2', 'RightBorder2']) {
+    try { const v = cell.getPropertyValue(b); parts.push(v && v.LineWidth > 0 ? 1 : 0); } catch (e) { parts.push('?'); }
+  }
+  return parts.join('|');
+}
+// 目标行 row（写入前在 [c0,c1] 全空）是否应沿用 row-1 的格式：上方两行在跨度内
+// 都有内容，且格式签名至少一半的列一致。对标 Excel 扩展格式「要有既有模式」的
+// 思路——只有表头一行在上（表头下的第一条数据）时不扩，免得把表头格式抄进数据行。
+function shouldInheritRowFormat(sheet, row, c0, c1) {
+  if (row < 2) return false;
+  if (sheetRowSpanEmpty(sheet, row - 1, c0, c1) || sheetRowSpanEmpty(sheet, row - 2, c0, c1)) return false;
+  let same = 0;
+  const total = c1 - c0 + 1;
+  for (let c = c0; c <= c1; c++) {
+    try {
+      if (sheetCellSig(sheet.getCellByPosition(c, row - 1)) === sheetCellSig(sheet.getCellByPosition(c, row - 2))) same++;
+    } catch (e) {}
+  }
+  return same * 2 >= total;
+}
+// 行高：上方行不是自动行高（OptimalHeight=false）时连行高一起抄。
+function copyRowHeight(sheet, fromRow, toRow) {
+  try {
+    const rows = sheet.getRows();
+    const src = rows.getByIndex(fromRow);
+    if (src.getPropertyValue('OptimalHeight')) return;
+    const dst = rows.getByIndex(toRow);
+    dst.setPropertyValue('OptimalHeight', false);
+    dst.setPropertyValue('Height', src.getPropertyValue('Height'));
+  } catch (e) {}
+}
+
+// sheet_read_range(withFormat) 的格式摘要：每格只列与「Default」单元格样式不同的
+// 关键项，键名与 sheet_format_cells 的参数同名（读回来可以原样喂回去）。
+const SHEET_HALIGN_NAMES = ['standard', 'left', 'center', 'right', 'block', 'repeat'];
+const SHEET_VALIGN_NAMES = ['standard', 'top', 'center', 'bottom', 'block'];
+function sheetHex(c) { return '#' + ('000000' + (Number(c) >>> 0).toString(16)).slice(-6).toUpperCase(); }
+function sheetNumFmtString(key) {
+  try { return String(xModel.getNumberFormats().getByKey(key).getPropertyValue('FormatString')); } catch (e) { return null; }
+}
+function sheetRawFormat(ps) {
+  const g = function (n) { try { return ps.getPropertyValue(n); } catch (e) { return undefined; } };
+  const f = {};
+  f.fontName = g('CharFontName');
+  f.fontNameAsian = g('CharFontNameAsian');
+  const h = g('CharHeight'); if (h != null) f.fontSize = Math.round(Number(h) * 10) / 10;
+  const w = g('CharWeight'); if (w != null) f.bold = Number(w) > 100;
+  const it = g('CharPosture'); if (it != null) f.italic = unoEnumVal(it) === 2 || unoEnumVal(it) === 1;
+  const col = g('CharColor'); if (col != null) f.color = Number(col) === -1 ? 'auto' : sheetHex(col);
+  const bg = g('CellBackColor'); const tr = g('IsCellBackgroundTransparent');
+  if (bg != null) f.background = (tr === true || Number(bg) === -1) ? 'none' : sheetHex(bg);
+  const ha = g('HoriJustify'); if (ha != null) f.hAlign = SHEET_HALIGN_NAMES[unoEnumVal(ha)] || String(unoEnumVal(ha));
+  const va = g('VertJustify'); if (va != null) f.vAlign = SHEET_VALIGN_NAMES[unoEnumVal(va)] || String(unoEnumVal(va));
+  const nf = g('NumberFormat'); if (nf != null) f.numberFormat = sheetNumFmtString(nf);
+  const wr = g('IsTextWrapped'); if (wr != null) f.wrap = !!wr;
+  let bs = '';
+  [['t', 'TopBorder2'], ['b', 'BottomBorder2'], ['l', 'LeftBorder2'], ['r', 'RightBorder2']].forEach(function (x) {
+    const v = g(x[1]); if (v && v.LineWidth > 0) bs += x[0];
+  });
+  f.borders = bs === 'tblr' ? 'all' : (bs || 'none');
+  const cs = g('CellStyle'); if (cs != null) f.cellStyle = String(cs);
+  return f;
+}
+function sheetDefaultFormat() {
+  try {
+    const st = xModel.getStyleFamilies().getByName('CellStyles').getByName('Default');
+    const f = sheetRawFormat(st);
+    f.borders = 'none';
+    f.cellStyle = 'Default';
+    return f;
+  } catch (e) { return { borders: 'none', cellStyle: 'Default' }; }
+}
+// 与默认值相同的项一律去掉；numberFormat 'General'/'Standard' 视为默认。
+function sheetFormatDiff(f, def) {
+  const out = {};
+  Object.keys(f).forEach(function (k) {
+    const v = f[k];
+    if (v == null || v === def[k]) return;
+    if (k === 'numberFormat' && /^(General|Standard|常规)$/i.test(String(v))) return;
+    out[k] = v;
+  });
+  // fontName 已报出且与中文字体相同：sheet_format_cells(fontName) 本就三种文字一起设，不再重复列。
+  if (out.fontNameAsian != null && out.fontName != null && out.fontNameAsian === out.fontName) delete out.fontNameAsian;
+  return out;
+}
+
 // ---- Impress（演示文稿 slide_*）原语 helpers --------------------------------
 // 引擎自 r4 起含 Impress 模块（doc-editor.md 待 r4 验收更新口径）；pptx/odp 经
 // load_document 打开后由 Impress 承载，doc_*（xModel.getText()）/sheet_*
@@ -6493,6 +6673,7 @@ const EXEC = {
   },
   // [表格·看] 读取区域单元格值。数值/公式结果返回 number（日期是序列数），公式串
   // 另列在 formulas。range 缺省 = 该表已用区域。超上限窗口化返回，提示分块读。
+  // withFormat=true 另回 format（按行分组的格式摘要），供新增内容对齐既有格式。
   sheet_read_range(p) {
     const r0 = resolveSheet(p);
     if (r0.error) return { success: false, message: r0.error };
@@ -6532,11 +6713,50 @@ const EXEC = {
       res.truncated = true;
       res.note = '区域超过上限（' + MAX_CELLS + ' 格），只返回前 ' + rowCap + ' 行 × ' + colCap + ' 列，请缩小 range 分块读取';
     }
+    // withFormat：按「格式相同的连续行」分组给出每列与默认格式不同的关键项。表格天然
+    // 是「表头一组 + 数据行一组」，分组后几十行数据只占一条，比逐格列省一个量级；
+    // 不按整列压缩——表头与数据行同列格式必然不同，整列一致几乎不成立。
+    if (p && p.withFormat) {
+      const MAX_FMT_CELLS = 400;
+      const fmtRows = Math.min(rowCap, Math.max(1, Math.floor(MAX_FMT_CELLS / colCap)));
+      const def = sheetDefaultFormat();
+      const groups = [];
+      let prev = null;
+      for (let r = 0; r < fmtRows; r++) {
+        const absRow = addr.StartRow + r;
+        const cols = {};
+        for (let c = 0; c < colCap; c++) {
+          const d = sheetFormatDiff(sheetRawFormat(range.getCellByPosition(c, r)), def);
+          if (Object.keys(d).length) cols[colLetterOf(addr.StartColumn + c)] = d;
+        }
+        let heightPt = null;
+        try {
+          const rowObj = sheet.getRows().getByIndex(absRow);
+          if (!rowObj.getPropertyValue('OptimalHeight')) heightPt = Math.round(Number(rowObj.getPropertyValue('Height')) * 72 / 2540 * 10) / 10;
+        } catch (e) {}
+        const key = JSON.stringify([cols, heightPt]);
+        if (prev && prev.key === key && prev.last === absRow - 1) { prev.last = absRow; continue; }
+        prev = { key: key, first: absRow, last: absRow, cols: cols, heightPt: heightPt };
+        groups.push(prev);
+      }
+      res.format = groups
+        .filter(function (g) { return Object.keys(g.cols).length || g.heightPt != null; })
+        .map(function (g) {
+          const o = { rows: g.first === g.last ? String(g.first + 1) : (g.first + 1) + '-' + (g.last + 1), cols: g.cols };
+          if (g.heightPt != null) o.rowHeightPt = g.heightPt;
+          return o;
+        });
+      res.formatNote = '按格式相同的连续行分组，每列只列与默认格式不同的项（键名同 sheet_format_cells 参数；borders 为 all/none 或 t/b/l/r 子集）；未列出的行或列即默认格式。';
+      if (fmtRows < rowCap) {
+        res.formatTruncated = true;
+        res.formatNote += '格式只读了前 ' + fmtRows + ' 行（上限 ' + MAX_FMT_CELLS + ' 格），需要更多请缩小 range。';
+      }
+    }
     return res;
   },
   // [表格·写] 从 startCell 起按二维数组批量写入。number/数字样式字符串落数值，
   // '=' 开头落公式，其余落文本；null 跳过不动，'' 清空该格。写完选中写过的区域
-  // 并回读首行做验证回路。
+  // 并回读首行做验证回路。追加到表格下方的空行沿用上一行格式（inheritFormat=false 关）。
   sheet_write_cells(p) {
     const r0 = resolveSheet(p);
     if (r0.error) return { success: false, message: r0.error };
@@ -6552,8 +6772,31 @@ const EXEC = {
     if (nCols > 100) return { success: false, message: '一次最多写 100 列，请分批写入' };
     let written = 0;
     const formulaCells = []; // 写完统一验错：解析失败/求值出错的公式要报给 AI 自纠
+    // 追加到表格下方时沿用上一行格式（dev-board#844，判定见 shouldInheritRowFormat）。
+    // inheritFormat 缺省开，显式 false 才关。逐行判定、逐行级联：多行追加时第 2 行
+    // 看的「上一行」就是刚写好的第 1 行。
+    const inherit = !(p && p.inheritFormat === false);
+    const formatInherited = [];
+    // 抄格式是一串属性写入：摘下修改监听器（每条写入一次 35ms 回调，见
+    // suspendModifyListener），并把值和格式收进同一个撤销组——撤销一次，新行连同
+    // 它的格式一起退掉，不留一行空着但带边框的格子。
+    let um = null;
+    try { um = xModel.getUndoManager(); um.enterUndoContext('写入单元格'); } catch (e) { um = null; }
+    lockModel();
+    try {
     for (let r = 0; r < rows.length; r++) {
       const line = Array.isArray(rows[r]) ? rows[r] : [rows[r]];
+      const rowAbs = a0.StartRow + r;
+      if (inherit && line.length) {
+        const c0 = a0.StartColumn, c1 = a0.StartColumn + line.length - 1;
+        if (sheetRowSpanEmpty(sheet, rowAbs, c0, c1) && shouldInheritRowFormat(sheet, rowAbs, c0, c1)) {
+          for (let c = c0; c <= c1; c++) {
+            try { copyCellFormat(sheet.getCellByPosition(c, rowAbs - 1), sheet.getCellByPosition(c, rowAbs)); } catch (e) {}
+          }
+          copyRowHeight(sheet, rowAbs - 1, rowAbs);
+          formatInherited.push({ row: rowAbs + 1, from: rowAbs });
+        }
+      }
       for (let c = 0; c < line.length; c++) {
         const v = line[c];
         if (v == null) continue;
@@ -6571,6 +6814,10 @@ const EXEC = {
         }
         written++;
       }
+    }
+    } finally {
+      unlockModel();
+      if (um) { try { um.leaveUndoContext(); } catch (e) {} }
     }
     const formulaErrors = [];
     for (let i = 0; i < formulaCells.length && formulaErrors.length < 20; i++) {
@@ -6590,6 +6837,10 @@ const EXEC = {
       for (let c = 0; c < Math.min(nCols, 10); c++) firstRowAfterWrite.push(readCellOut(vr.getCellByPosition(c, 0)));
     } catch (e) {}
     const res = { success: true, sheet: sheet.getName(), range: wrote, cellsWritten: written, firstRowAfterWrite: firstRowAfterWrite };
+    if (formatInherited.length) {
+      res.formatInherited = formatInherited;
+      res.formatNote = '新写入的行位于表格下方且原本为空，已沿用上一行的格式（字体/字号/对齐/数字格式/边框/底色/行高）；from 是被沿用的行号。不需要时传 inheritFormat=false。';
+    }
     if (formulaErrors.length) {
       res.formulaErrors = formulaErrors;
       res.note = formulaErrors.length + ' 个公式出错（引擎为 LibreOffice 24.2：不支持 XLOOKUP 等新函数，用 VLOOKUP 或 INDEX+MATCH 改写；函数名必须是英文）。请修正后用 sheet_write_cells 重写这些单元格。';

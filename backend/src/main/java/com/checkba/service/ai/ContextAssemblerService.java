@@ -1541,6 +1541,7 @@ public class ContextAssemblerService {
                         + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
                         + "office_excel_set_values / office_excel_search / office_excel_replace），写入直接生效（Excel 没有修订机制）；"
                         + "成批改写用 office_excel_replace（只改命中的格），不要「查出地址再整块回写」；"
+                        + "新增的行/列要与相邻既有内容格式一致（字体/边框/对齐/数字格式），写完用 office_excel_get_range(withFormat=true) 回读核对；"
                         + "表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式/筛选/条件格式）用对应 office_excel_* 工具"
                         + "（office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / "
                         + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
@@ -1587,6 +1588,8 @@ public class ContextAssemblerService {
                         + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前表格」「改一下」等都指它——"
                         + "直接调用 sheet_* 工具操作（Calc 没有修订机制，写入直接生效），"
+                        // dev-board#844：追加行只写值，新行格式与原表明显不同。
+                        + "新增的行/列要与相邻既有内容格式一致（字体/边框/对齐/数字格式），写完用 sheet_read_range(withFormat=true) 回读核对；"
                         + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
                 case "slide" -> "\n\n[系统提醒] 编辑器中当前已打开演示文稿" + docLabel + "（id="
                         + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
@@ -2199,6 +2202,8 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "and the like refer to this workbook - read and modify it exclusively via the office_excel_* tools "
                         + "(office_excel_get_range / office_excel_set_values / office_excel_search / office_excel_replace); "
                         + "for bulk edits use office_excel_replace, which rewrites only the matching cells; "
+                        + "new rows/columns must match the formatting of the adjacent existing content (font / borders / "
+                        + "alignment / number format) - after writing, re-read with office_excel_get_range(withFormat=true) to check; "
                         + "writes take effect immediately (Excel has no track-changes mechanism); "
                         + "formatting and structural changes (cell formats / borders / rows and columns / merging / sorting / "
                         + "worksheets / freezing / formulas / filters / conditional formats) use the corresponding office_excel_* tools "
@@ -2254,6 +2259,8 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "<active_document>. Unless the user names another document, \"this\", \"the current spreadsheet\", "
                         + "\"change it\", and the like refer to it - operate on it directly with the sheet_* tools "
                         + "(Calc has no track-changes mechanism; writes take effect immediately). "
+                        + "New rows/columns must match the formatting of the adjacent existing content (font / borders / "
+                        + "alignment / number format); after writing, re-read with sheet_read_range(withFormat=true) to check. "
                         + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**.";
                 case "slide" -> "\n\n[System reminder] The editor currently has the presentation " + docLabel
                         + " (id=" + activeContext.getId() + ") open; its structure and content are in the system prompt's "

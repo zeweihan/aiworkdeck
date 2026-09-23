@@ -2067,16 +2067,22 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "读取单元格区域", category = "document")
     @Tool("【表格·看】读取电子表格指定区域的单元格内容。返回二维数组 rows（文本为字符串、数值/公式结果为数字，日期是序列数）" +
-          "和公式清单 formulas。range 不传则读整个已用区域；区域过大会截断并提示分块读取。")
+          "和公式清单 formulas。range 不传则读整个已用区域；区域过大会截断并提示分块读取。" +
+          "withFormat=true 时另返回 format：按「格式相同的连续行」分组，每列只列与默认格式不同的项" +
+          "（fontName/fontNameAsian/fontSize/bold/italic/color/background/hAlign/vAlign/numberFormat/wrap/borders，" +
+          "键名与 sheet_format_cells 参数同名，可原样套回去；borders 为 all/none 或 t/b/l/r 子集），上限 400 格。" +
+          "新增行列或往表里插内容前，用它看清相邻格式，再用 sheet_format_cells/sheet_set_borders 对齐。")
     public String sheet_read_range(
             @P("区域，如 'A1:D20' 或单个单元格 'B3'；不传则读整个已用区域") String range,
-            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet,
+            @P(value = "是否同时返回格式摘要（字体/字号/对齐/数字格式/边框/底色等），默认 false", required = false) Boolean withFormat
     ) {
-        log.info("Tool: sheet_read_range called range={}, sheet={}", range, sheet);
+        log.info("Tool: sheet_read_range called range={}, sheet={}, withFormat={}", range, sheet, withFormat);
         try {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             if (range != null && !range.isBlank()) params.put("range", range);
             if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            if (Boolean.TRUE.equals(withFormat)) params.put("withFormat", true);
             return editorBridgeService.executeEditorCommand("sheet_read_range", params);
         } catch (Exception e) {
             log.error("Failed to read sheet range", e);
@@ -2091,13 +2097,19 @@ public class DocumentEditTools implements AgentToolComponent {
           "公式用英文函数名，按 Excel 习惯写即可（逗号分隔、跨表 Sheet!A1 会自动归一为引擎方言）；" +
           "SUM/AVERAGE/IF/COUNT/VLOOKUP/SUMIF/COUNTIF/INDEX+MATCH/IFERROR/TEXT/日期函数等均可用，" +
           "但引擎是 LibreOffice 24.2，**不支持 XLOOKUP 等新函数**（用 VLOOKUP 或 INDEX+MATCH 代替）。" +
-          "任何公式出错都会在返回值 formulaErrors 里列出（单元格/公式/错误码），看到后必须修正并重写该格。")
+          "任何公式出错都会在返回值 formulaErrors 里列出（单元格/公式/错误码），看到后必须修正并重写该格。" +
+          "**往表格末尾追加行时自动沿用上一行格式**：某行写入前在写入列范围内全空、且上方两行都有内容并格式一致时，" +
+          "先把紧邻上一行对应列的格式（字体/字号/加粗/对齐/数字格式/边框/底色/行高）抄过来再写值，" +
+          "返回值 formatInherited 列出沿用了哪几行（如 [{row:9, from:8}]）。表头下第一条数据、新增列、中间插入等情形不会自动沿用，" +
+          "需先 sheet_read_range(withFormat=true) 看相邻格式再用 sheet_format_cells/sheet_set_borders 对齐。inheritFormat=false 可关闭沿用。")
     public String sheet_write_cells(
             @P("起始单元格，如 'A1'") String startCell,
             @P("写入内容，JSON 二维数组") String rowsJson,
-            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet,
+            @P(value = "追加到表格下方时是否沿用上一行格式，默认 true；只有明确不要沿用时才传 false", required = false) Boolean inheritFormat
     ) {
-        log.info("Tool: sheet_write_cells called startCell={}, json length={}", startCell, rowsJson != null ? rowsJson.length() : 0);
+        log.info("Tool: sheet_write_cells called startCell={}, json length={}, inheritFormat={}",
+                startCell, rowsJson != null ? rowsJson.length() : 0, inheritFormat);
         if (startCell == null || startCell.isBlank()) {
             return "Error: 缺少 startCell 参数（如 'A1'）";
         }
@@ -2115,6 +2127,7 @@ public class DocumentEditTools implements AgentToolComponent {
             params.put("startCell", startCell);
             params.put("rows", rows);
             if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            if (Boolean.FALSE.equals(inheritFormat)) params.put("inheritFormat", false);
             return editorBridgeService.executeEditorCommand("sheet_write_cells", params);
         } catch (com.fasterxml.jackson.core.JacksonException je) {
             return "Error: rowsJson 不是合法的 JSON 二维数组: " + je.getOriginalMessage();

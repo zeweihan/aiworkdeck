@@ -1378,14 +1378,19 @@ public class OfficeEditTools implements AgentToolComponent {
     // ==================== Excel（office_excel_*，仅 Excel 会话可见） ====================
 
     @Tool("读取当前 Excel 工作表的区域值。不指定 rangeAddress 时读取已用区域（used range）。" +
-          "sheetName 缺省为当前活动工作表。返回二维数组与区域地址。")
+          "sheetName 缺省为当前活动工作表。返回二维数组与区域地址。" +
+          "withFormat=true 时另回 format：baseFont（区域内最常见的字体名/字号）、columns（各列数据区共有的格式）、" +
+          "cells（与所在列不同的单元格，如表头），字段为 fontName/fontSize/bold/italic/color/background/" +
+          "hAlign/vAlign/numberFormat/borders/wrap，只列与默认不同的项；最多扫 400 格。" +
+          "要让新增的行列与既有表格格式一致时用它看格式。")
     @ToolMeta(displayName = "读取区域", category = "office")
     public String office_excel_get_range(
             @P("会话ID（系统自动注入）") String conversationId,
             @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
-            @P("区域地址，A1 表示法如 A1:D20（可选；为空取已用区域）") String rangeAddress
+            @P("区域地址，A1 表示法如 A1:D20（可选；为空取已用区域）") String rangeAddress,
+            @P("是否同时返回单元格格式（可选，缺省 false）") Boolean withFormat
     ) {
-        log.info("Tool: office_excel_get_range called, sheet={}, range={}", sheetName, rangeAddress);
+        log.info("Tool: office_excel_get_range called, sheet={}, range={}, withFormat={}", sheetName, rangeAddress, withFormat);
         String addr = rangeAddress == null ? "" : rangeAddress.trim();
         if (!addr.isEmpty() && !RANGE_ADDRESS.matcher(addr).matches()) {
             return "Error: 区域地址格式非法（应为 A1 表示法，如 A1 或 A1:D20，不带工作表名——工作表用 sheetName 参数指定）";
@@ -1393,18 +1398,25 @@ public class OfficeEditTools implements AgentToolComponent {
         Map<String, Object> args = new HashMap<>();
         args.put("sheetName", sheetName == null ? "" : sheetName.trim());
         args.put("rangeAddress", addr);
+        if (Boolean.TRUE.equals(withFormat)) args.put("withFormat", true);
         return officeBridgeService.executeOfficeCommand(conversationId, "excel_get_range", args);
     }
 
     @Tool("向当前 Excel 工作表的区域写入值（直接生效，Excel 没有修订机制）。" +
           "valuesJson 是 JSON 二维数组（按行），如 [[\"名称\",\"金额\"],[\"甲\",100]]。" +
-          "rangeAddress 为单元格（如 B2）时按 values 尺寸向右下展开写入；为区域时尺寸必须与 values 一致。")
+          "rangeAddress 为单元格（如 B2）时按 values 尺寸向右下展开写入；为区域时尺寸必须与 values 一致。" +
+          "默认沿用上一行格式：某行写入前在写入列内全空、上方至少两行连续数据、且这两行格式一致" +
+          "（字体/字号/加粗/水平对齐/数字格式/边框，至少一半的列相同；字色与底色不算）时，先把上一行的格式" +
+          "（字体/填充/对齐/边框/数字格式/行高）复制过来再写值，一次追加多行逐行沿用；非空行的格式不动。" +
+          "返回值 formatInherited 列出沿用了格式的行 [{row, from}]。表头下第一行不会沿用" +
+          "（上方只有表头，或标题行紧贴表头、两行格式不一致）。")
     @ToolMeta(displayName = "写入区域", category = "office", fileEffect = "MODIFIED")
     public String office_excel_set_values(
             @P("会话ID（系统自动注入）") String conversationId,
             @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
             @P("起始单元格或区域地址，A1 表示法如 B2 或 B2:C4") String rangeAddress,
-            @P("要写入的值，JSON 二维数组（按行），元素为字符串/数字/布尔") String valuesJson
+            @P("要写入的值，JSON 二维数组（按行），元素为字符串/数字/布尔") String valuesJson,
+            @P("空行是否沿用上一行格式（可选，缺省 true；只想写值、不动格式时传 false）") Boolean inheritFormat
     ) {
         log.info("Tool: office_excel_set_values called, sheet={}, range={}", sheetName, rangeAddress);
         String addr = rangeAddress == null ? "" : rangeAddress.trim();
@@ -1441,6 +1453,8 @@ public class OfficeEditTools implements AgentToolComponent {
         args.put("sheetName", sheetName == null ? "" : sheetName.trim());
         args.put("rangeAddress", addr);
         args.put("values", values);
+        // 缺省沿用（插件端 inheritFormat !== false 即沿用），只有显式关掉才下发
+        if (Boolean.FALSE.equals(inheritFormat)) args.put("inheritFormat", false);
         return officeBridgeService.executeOfficeCommand(conversationId, "excel_set_values", args);
     }
 

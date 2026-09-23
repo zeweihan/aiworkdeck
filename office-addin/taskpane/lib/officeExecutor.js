@@ -45,6 +45,14 @@ import {
   normalizeReplaceArgs,
   buildReplaceResult
 } from './excelReplace.js'
+// 表格格式的判定层（dev-board#844：追加行沿用上一行格式、get_range 带回格式摘要），两族共用
+import {
+  planFormatInheritance,
+  formatCheckRows,
+  normalizeOfficeCellProps,
+  summarizeCellFormats,
+  formatScanShape
+} from './excelFormat.js'
 
 // 与后端 ContextAssemblerService.MAX_INLINE_CONTENT_CHARS 一致的截断上限
 const MAX_TEXT_CHARS = 200_000
@@ -2215,7 +2223,7 @@ const HANDLERS = {
         : range
       target.load('values')
       await context.sync()
-      return {
+      const out = {
         sheet: sheet.name,
         address: range.address,
         rows: totalRows,
@@ -2223,6 +2231,20 @@ const HANDLERS = {
         values: target.values || [],
         truncated
       }
+      if (args.withFormat === true) {
+        // 格式只扫前 MAX_FORMAT_CELLS 格（dev-board#844）：模型要的是「这张表长什么样」，
+        // 表头加几行数据足够看出来；逐格格式是重载荷，不能跟着 500 行一起搬
+        const shape = formatScanShape(Math.min(totalRows, MAX_EXCEL_RESULT_ROWS), range.columnCount)
+        const scan = rangeByA1(sheet, range.rowIndex, range.columnIndex, shape.rows, shape.cols)
+        const formats = await readOfficeCellFormats(context, scan, shape.rows, shape.cols)
+        out.format = {
+          scanned: cellAddress(range.rowIndex, range.columnIndex) + ':'
+            + cellAddress(range.rowIndex + shape.rows - 1, range.columnIndex + shape.cols - 1),
+          ...summarizeCellFormats(formats, range.rowIndex, range.columnIndex)
+        }
+        if (shape.truncated) out.format.truncated = true
+      }
+      return out
     })
   },
 
@@ -2234,10 +2256,11 @@ const HANDLERS = {
     if (!Array.isArray(values) || !values.length || !Array.isArray(values[0])) {
       throw new Error('values 必须是非空二维数组')
     }
+    const inheritFormat = args.inheritFormat !== false
     return Excel.run(async (context) => {
       const sheet = resolveSheet(context, sheetName)
       let range = sheet.getRange(rangeAddress)
-      range.load('rowCount,columnCount,address')
+      range.load('rowCount,columnCount,address,rowIndex,columnIndex')
       await context.sync()
       const rows = values.length
       const cols = values[0].length
@@ -2247,10 +2270,23 @@ const HANDLERS = {
       } else if (range.rowCount !== rows || range.columnCount !== cols) {
         throw new Error(`区域尺寸（${range.rowCount}x${range.columnCount}）与 values 尺寸（${rows}x${cols}）不一致`)
       }
+      // 追加到表格下方的空行先沿用上一行格式，再写值（dev-board#844）。沿用是尽力而为：
+      // 失败只在返回值里交代，值照写——写值才是这条命令的本职，不能被格式拖下水
+      let formatInherited = []
+      let formatNote = ''
+      if (inheritFormat) {
+        try {
+          formatInherited = await inheritOfficeRowFormats(context, sheet, range.rowIndex, range.columnIndex, rows, cols, values)
+        } catch (e) {
+          formatNote = `沿用上一行格式失败，本次只写了值：${e && e.message ? e.message : e}`
+        }
+      }
       range.values = values
       range.load('address')
       await context.sync()
-      return { written: rows * cols, address: range.address }
+      const out = { written: rows * cols, address: range.address, formatInherited }
+      if (formatNote) out.formatNote = formatNote
+      return out
     })
   },
 
@@ -3633,6 +3669,193 @@ function columnLetter(colIndex) {
     n = Math.floor((n - 1) / 26)
   }
   return col
+}
+
+/* ==================== 表格格式：沿用上一行 / 读回格式（dev-board#844） ==================== */
+
+/** getCellProperties 要取的格式项（ExcelApi 1.9）；与 excelFormat.normalizeOfficeCellProps 的入参同形 */
+const CELL_FORMAT_LOAD = {
+  format: {
+    font: { name: true, size: true, bold: true, italic: true, color: true },
+    fill: { color: true, pattern: true },
+    horizontalAlignment: true,
+    verticalAlignment: true,
+    wrapText: true,
+    borders: { style: true, weight: true, color: true }
+  }
+}
+
+/**
+ * 按 0 起行列号取区域，走 A1 字符串的 getRange（ExcelApi 1.1）而不是 getRangeByIndexes（1.7）：
+ * 沿用格式要覆盖到 2016 永久版这类老宿主，不能在取区域这一步就先失败。
+ */
+function rangeByA1(sheet, rowIndex, colIndex, rows, cols) {
+  return sheet.getRange(cellAddress(rowIndex, colIndex) + ':' + cellAddress(rowIndex + rows - 1, colIndex + cols - 1))
+}
+
+/** 四条外边：Excel.BorderIndex ↔ getCellProperties 里 borders 的键名 */
+const CELL_EDGES = [['EdgeTop', 'top'], ['EdgeBottom', 'bottom'], ['EdgeLeft', 'left'], ['EdgeRight', 'right']]
+
+/**
+ * ExcelApi 1.9 以下没有 getCellProperties / copyFrom：逐格排队 load（一次 sync 取回）。
+ * 返回 rows x cols 的代理对象网格，sync 之后用 legacyProxyToProps 读。
+ */
+function loadLegacyCellProxies(rng, rows, cols) {
+  const grid = []
+  for (let r = 0; r < rows; r++) {
+    const line = []
+    for (let c = 0; c < cols; c++) {
+      const cell = rng.getCell(r, c)
+      cell.format.load('horizontalAlignment,verticalAlignment,wrapText')
+      cell.format.font.load('name,size,bold,italic,color')
+      cell.format.fill.load('color')
+      const edges = {}
+      for (const [id, key] of CELL_EDGES) {
+        const b = cell.format.borders.getItem(id)
+        b.load('style,weight,color')
+        edges[key] = b
+      }
+      line.push({ cell, edges })
+    }
+    grid.push(line)
+  }
+  return grid
+}
+
+/** 逐格代理 → 与 getCellProperties 单格结果同形的普通对象 */
+function legacyProxyToProps(p) {
+  const f = p.cell.format
+  const borders = {}
+  for (const [, key] of CELL_EDGES) {
+    const b = p.edges[key]
+    borders[key] = { style: b.style, weight: b.weight, color: b.color }
+  }
+  return {
+    format: {
+      font: { name: f.font.name, size: f.font.size, bold: f.font.bold, italic: f.font.italic, color: f.font.color },
+      fill: { color: f.fill.color },
+      horizontalAlignment: f.horizontalAlignment,
+      verticalAlignment: f.verticalAlignment,
+      wrapText: f.wrapText,
+      borders
+    }
+  }
+}
+
+/** 读一块区域逐格的统一格式（1.9 走 getCellProperties 一次取回，以下逐格 load） */
+async function readOfficeCellFormats(context, rng, rows, cols) {
+  rng.load('numberFormat')
+  const nfAt = (r, c) => (rng.numberFormat && rng.numberFormat[r] ? rng.numberFormat[r][c] : null)
+  if (excelApiSupported('1.9') && typeof rng.getCellProperties === 'function') {
+    const props = rng.getCellProperties(CELL_FORMAT_LOAD)
+    await context.sync()
+    return (props.value || []).map((line, r) => line.map((cp, c) => normalizeOfficeCellProps(cp, nfAt(r, c))))
+  }
+  const grid = loadLegacyCellProxies(rng, rows, cols)
+  await context.sync()
+  return grid.map((line, r) => line.map((p, c) => normalizeOfficeCellProps(legacyProxyToProps(p), nfAt(r, c))))
+}
+
+/**
+ * ExcelApi 1.9 以下把一格代理的格式逐项写到目标格上（copyFrom 的降级路径）。
+ * **只画有线的边、不写 None**：Excel 的相邻格共用一条边，给新行的上边写 None 会把上一行
+ * 的下边框一起擦掉；新增的空行本来就没有边框，少写 None 几乎不丢信息。
+ * 无填充在 1.9 以下读回来是 #FFFFFF：按「无填充」清掉，而不是涂一层白（白底会盖住网格线）。
+ */
+function applyLegacyCellFormat(dst, p, numberFormat) {
+  const src = p.cell.format
+  const f = dst.format
+  if (src.font.name != null) f.font.name = src.font.name
+  if (src.font.size != null) f.font.size = src.font.size
+  if (src.font.bold != null) f.font.bold = src.font.bold
+  if (src.font.italic != null) f.font.italic = src.font.italic
+  if (src.font.color != null) f.font.color = src.font.color
+  const fill = src.fill.color
+  if (fill == null || String(fill).toUpperCase() === '#FFFFFF') f.fill.clear()
+  else f.fill.color = fill
+  if (src.horizontalAlignment != null) f.horizontalAlignment = src.horizontalAlignment
+  if (src.verticalAlignment != null) f.verticalAlignment = src.verticalAlignment
+  if (src.wrapText != null) f.wrapText = src.wrapText
+  if (numberFormat != null) dst.numberFormat = [[numberFormat]]
+  for (const [id, key] of CELL_EDGES) {
+    const b = p.edges[key]
+    if (!b || b.style == null || String(b.style) === 'None') continue
+    const out = f.borders.getItem(id)
+    out.style = b.style
+    if (b.weight != null) out.weight = b.weight
+    if (b.color != null) out.color = b.color
+  }
+}
+
+/**
+ * excel_set_values 的「沿用上一行格式」（dev-board#844）：判定见 excelFormat.planFormatInheritance。
+ *
+ * - ExcelApi 1.9：`Range.copyFrom(源行, RangeCopyType.formats)`，与 Excel 界面「选择性粘贴-格式」
+ *   同一语义，不经过系统剪贴板；
+ * - 1.9 以下（Excel 2016/2019 永久版）：逐格读源行的字体/填充/对齐/换行/数字格式/边框再写到目标行。
+ *   不做「低版本直接跳过」：律所里 2016/2019 永久版不少，跳过等于这批用户的病照旧。
+ * 行高另外对齐（ExcelApi 1.2）：源行开了自动换行时不抄——固定行高会把新行里更长的文字截掉，
+ * 留给 Excel 按内容自动撑高。
+ *
+ * 级联的多行一律从链条最上端那行既有数据行（plan.root）复制：它的格式在本次调用里不会被改，
+ * 效果与逐行往下复制相同，却可以一次 sync 排完。
+ *
+ * @returns {Promise<Array<{row:number, from:number}>>}
+ */
+async function inheritOfficeRowFormats(context, sheet, rowIndex, colIndex, rows, cols, values) {
+  const k = Math.min(2, rowIndex)
+  const around = rangeByA1(sheet, rowIndex - k, colIndex, k + rows, cols)
+  around.load('values')
+  await context.sync()
+  const all = around.values || []
+  const input = {
+    startRow: rowIndex + 1,
+    aboveRows: all.slice(0, k),
+    targetRows: all.slice(k),
+    values
+  }
+  // 条件 b 要比上方两行的格式签名（标题行紧贴表头时不能把表头抄进数据行）。
+  // 只在有候选行时才读格式：绝大多数写入（改既有数据、写在空白处）一格都不多读
+  const checkRows = formatCheckRows(input)
+  if (checkRows.length) {
+    const first = checkRows[0]
+    const span = checkRows[checkRows.length - 1] - first + 1
+    const grid = await readOfficeCellFormats(context, rangeByA1(sheet, first - 1, colIndex, span, cols), span, cols)
+    input.rowFormats = new Map(checkRows.map((r) => [r, grid[r - first]]))
+  }
+  const plan = planFormatInheritance(input)
+  if (!plan.length) return []
+  const canCopy = excelApiSupported('1.9')
+  const heightOk = excelApiSupported('1.2')
+  const rowRange = (sheetRow) => rangeByA1(sheet, sheetRow - 1, colIndex, 1, cols)
+  const roots = new Map()
+  for (const { root } of plan) {
+    if (roots.has(root)) continue
+    const range = rowRange(root)
+    if (heightOk) range.format.load('rowHeight,wrapText')
+    let proxies = null
+    if (!canCopy) {
+      range.load('numberFormat')
+      proxies = loadLegacyCellProxies(range, 1, cols)[0]
+    }
+    roots.set(root, { range, proxies })
+  }
+  if (heightOk || !canCopy) await context.sync()
+  const copyType = (Excel.RangeCopyType && Excel.RangeCopyType.formats) || 'Formats'
+  for (const p of plan) {
+    const src = roots.get(p.root)
+    const dst = rowRange(p.row)
+    if (canCopy) {
+      dst.copyFrom(src.range, copyType)
+    } else {
+      const nf = src.range.numberFormat && src.range.numberFormat[0]
+      src.proxies.forEach((proxy, c) => applyLegacyCellFormat(dst.getCell(0, c), proxy, nf ? nf[c] : null))
+    }
+    const fmt = src.range.format
+    if (heightOk && fmt.wrapText === false && Number(fmt.rowHeight) > 0) dst.format.rowHeight = fmt.rowHeight
+  }
+  await context.sync()
+  return plan.map(({ row, from }) => ({ row, from }))
 }
 
 /** ExcelApi 需求集守卫（merge/sort/columnWidth/rowHeight 属 1.2，freezePanes 属 1.7） */

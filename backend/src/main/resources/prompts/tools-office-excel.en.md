@@ -27,6 +27,9 @@ client cannot execute, so do not try it**.
 - Structure: `office_excel_manage_sheets` for worksheets, `office_excel_edit_rows_cols` to insert or delete whole rows and columns, `office_excel_merge_cells` to merge or unmerge, `office_excel_group_rows_cols` to group.
 - Readability: `office_excel_freeze_panes` for the header row, `office_excel_set_autofilter` for filter dropdowns, `office_excel_conditional_format` to colour cells by rule, `office_excel_select_range` to scroll the user's view somewhere.
 - Advanced: `office_excel_define_name` for named ranges, `office_excel_set_data_validation` for validation, `office_excel_protect_sheet` for protection, `office_excel_add_chart` for charts, `office_excel_add_pivot_table` for a basic pivot table.
+- **New rows and columns must look like the existing content next to them** (font, size, alignment, borders, fill, number format) - nobody should be able to tell at a glance that they were added later:
+  - When you append below a table, `office_excel_set_values` carries the previous row's formatting over automatically - check `formatInherited` in its result; rows listed there need no further formatting;
+  - In every other case (a new column, the first data row under a header, an empty `formatInherited`), call `office_excel_get_range` with `withFormat=true` to see the neighbouring rows' or columns' formatting first, then match it with `office_excel_format_cells` / `office_excel_set_borders`.
 - **Write the data first, then format it**: in the same turn, `office_excel_set_values` followed by the formatting calls. Calls that do not depend on each other's results belong in the SAME turn; dribbling out one call per turn burns the step budget.
 
 ### Explanations belong in comments, not in cells

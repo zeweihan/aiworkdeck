@@ -39,6 +39,14 @@ import {
   normalizeReplaceArgs,
   buildReplaceResult
 } from './excelReplace.js'
+// 表格格式的判定层（dev-board#844：追加行沿用上一行格式、get_range 带回格式摘要），与 Office 版共用
+import {
+  planFormatInheritance,
+  formatCheckRows,
+  normalizeEtCell,
+  summarizeCellFormats,
+  formatScanShape
+} from './excelFormat.js'
 
 /* ==================== 入口与通用 helper ==================== */
 
@@ -371,6 +379,142 @@ function collectFormulaErrors(rng) {
 /** colorScale 默认三色刻度色（低到高：红-黄-绿），与 Office 版视觉口径一致 */
 const ET_CF_COLOR_SCALE_HEX = ['#F8696B', '#FFEB84', '#63BE7B']
 
+/* ==================== 表格格式：沿用上一行 / 读回格式（dev-board#844） ==================== */
+
+/** 四条外边：契约键名 → XlBordersIndex */
+const ET_CELL_EDGES = [['top', 8], ['bottom', 9], ['left', 7], ['right', 10]]
+/** 字体上逐项复制的属性（与 Office 版 copyFrom 覆盖的字体面对齐） */
+const ET_FONT_PROPS = ['Name', 'Size', 'Bold', 'Italic', 'Underline', 'Color']
+/** xlColorIndexNone：Interior 无填充 */
+const xlColorIndexNone = -4142
+
+/**
+ * 读一格的格式原值（交给 excelFormat.normalizeEtCell 归一）。
+ * 每组属性各自 try：某个版本的 WPS 没暴露某一项，只少这一项，不拖垮整格。
+ */
+function readEtCellFormat(cell) {
+  const raw = { borders: {} }
+  try {
+    const f = cell.Font
+    raw.fontName = f.Name
+    raw.fontSize = f.Size
+    raw.bold = f.Bold
+    raw.italic = f.Italic
+    raw.fontColor = f.Color
+  } catch (e) { /* 读不到字体就不报字体 */ }
+  try {
+    const it = cell.Interior
+    raw.interiorColorIndex = it.ColorIndex
+    raw.interiorColor = it.Color
+  } catch (e) { /* 同上 */ }
+  try { raw.hAlign = cell.HorizontalAlignment } catch (e) { /* 同上 */ }
+  try { raw.vAlign = cell.VerticalAlignment } catch (e) { /* 同上 */ }
+  try { raw.numberFormat = cell.NumberFormat } catch (e) { /* 同上 */ }
+  try { raw.wrap = cell.WrapText } catch (e) { /* 同上 */ }
+  for (const [key, idx] of ET_CELL_EDGES) {
+    try {
+      const b = cell.Borders.Item(idx)
+      raw.borders[key] = { lineStyle: b.LineStyle, weight: b.Weight, color: b.Color }
+    } catch (e) { /* 同上 */ }
+  }
+  return raw
+}
+
+/**
+ * 把源格的格式逐属性抄到目标格（WPS 面「沿用上一行格式」的落笔）。
+ *
+ * **刻意不用 Copy + PasteSpecial**：那条路会占用并改写用户的系统剪贴板——用户刚复制了
+ * 一段合同条款，AI 加一行表格就把它冲掉了。`Range.Copy(Destination)` 虽不经剪贴板，
+ * 却会连值、批注、数据验证一起搬过去，而且 WPS 上没有实测过。逐属性复制慢一点
+ * （每格二三十次跨桥调用，一行十来列也就几十毫秒），但只动格式、行为可预期。
+ *
+ * 边框**只画有线的边、不写 xlNone**：相邻格共用一条边，给新行的上边写 xlNone 会把
+ * 上一行的下边框一起擦掉；新增的空行本来就没有边框，少写 xlNone 几乎不丢信息。
+ *
+ * @returns {{wrap:boolean, skipped:number}} wrap = 源格开了自动换行；skipped = 抄失败的属性数
+ */
+function copyEtCellFormat(src, dst) {
+  let skipped = 0
+  let wrap = false
+  const tryCopy = (fn) => {
+    try { fn() } catch (e) { skipped++ }
+  }
+  for (const prop of ET_FONT_PROPS) tryCopy(() => { dst.Font[prop] = src.Font[prop] })
+  tryCopy(() => {
+    const ci = src.Interior.ColorIndex
+    if (Number(ci) === xlColorIndexNone) dst.Interior.ColorIndex = xlColorIndexNone
+    else dst.Interior.Color = src.Interior.Color
+  })
+  tryCopy(() => { dst.HorizontalAlignment = src.HorizontalAlignment })
+  tryCopy(() => { dst.VerticalAlignment = src.VerticalAlignment })
+  tryCopy(() => { dst.NumberFormat = src.NumberFormat })
+  tryCopy(() => {
+    const w = src.WrapText
+    wrap = !!w
+    dst.WrapText = w
+  })
+  for (const [, idx] of ET_CELL_EDGES) {
+    tryCopy(() => {
+      const sb = src.Borders.Item(idx)
+      const ls = sb.LineStyle
+      if (ls == null || Number(ls) === xlLineStyleNone) return
+      const db = dst.Borders.Item(idx)
+      db.LineStyle = ls
+      db.Weight = sb.Weight
+      db.Color = sb.Color
+    })
+  }
+  return { wrap, skipped }
+}
+
+/**
+ * excel_set_values 的「沿用上一行格式」WPS 版（判定与 Office 版共用
+ * excelFormat.planFormatInheritance）。级联的多行一律从链条最上端那行既有数据行（root）
+ * 复制，效果与逐行往下复制相同。行高另外对齐；源行有自动换行的格时不抄行高，
+ * 留给 WPS 按内容撑高（固定行高会截掉新行里更长的文字）。
+ *
+ * @returns {{inherited: Array<{row:number, from:number}>, skipped:number}}
+ */
+function inheritEtRowFormats(sheet, rng, rows, cols, values) {
+  const r0 = Number(rng.Row)
+  const c0 = Number(rng.Column)
+  const k = Math.min(2, Math.max(0, r0 - 1))
+  // 写入前的状态：目标区域连同上方至多两行，一次 Value2 批量取回
+  const around = k > 0 ? sheet.Cells.Item(r0 - k, c0).Resize(k + rows, cols) : rng
+  const all = read2D(around)
+  const input = {
+    startRow: r0,
+    aboveRows: all.slice(0, k),
+    targetRows: all.slice(k),
+    values
+  }
+  // 条件 b 要比上方两行的格式签名（标题行紧贴表头时不能把表头抄进数据行）。
+  // 只在有候选行时才逐格读格式：绝大多数写入一格都不多读
+  const checkRows = formatCheckRows(input)
+  if (checkRows.length) {
+    input.rowFormats = new Map(checkRows.map((r) => [
+      r,
+      Array.from({ length: cols }, (_, c) => normalizeEtCell(readEtCellFormat(sheet.Cells.Item(r, c0 + c)), bgrToHex))
+    ]))
+  }
+  const plan = planFormatInheritance(input)
+  let skipped = 0
+  for (const p of plan) {
+    let wrapAny = false
+    for (let c = 0; c < cols; c++) {
+      const res = copyEtCellFormat(sheet.Cells.Item(p.root, c0 + c), sheet.Cells.Item(p.row, c0 + c))
+      skipped += res.skipped
+      if (res.wrap) wrapAny = true
+    }
+    if (!wrapAny) {
+      try {
+        sheet.Cells.Item(p.row, c0).RowHeight = sheet.Cells.Item(p.root, c0).RowHeight
+      } catch (e) { skipped++ }
+    }
+  }
+  return { inherited: plan.map(({ row, from }) => ({ row, from })), skipped }
+}
+
 /* ==================== HANDLERS ==================== */
 
 export const WPS_ET_HANDLERS = {
@@ -395,7 +539,7 @@ export const WPS_ET_HANDLERS = {
     const truncated = totalRows > MAX_EXCEL_RESULT_ROWS
     const source = truncated ? rng.Resize(MAX_EXCEL_RESULT_ROWS, totalCols) : rng
     const values = read2D(source)
-    return {
+    const out = {
       sheet: name,
       address: rng.Address(false, false),
       rows: totalRows,
@@ -403,6 +547,26 @@ export const WPS_ET_HANDLERS = {
       values,
       truncated
     }
+    if (args.withFormat === true) {
+      // 与 Office 版同一口径（dev-board#844）：只扫前 MAX_FORMAT_CELLS 格，压成列级摘要 + 例外格
+      const shape = formatScanShape(Math.min(totalRows, MAX_EXCEL_RESULT_ROWS), totalCols)
+      const r0 = Number(rng.Row)
+      const c0 = Number(rng.Column)
+      const formats = []
+      for (let r = 0; r < shape.rows; r++) {
+        const line = []
+        for (let c = 0; c < shape.cols; c++) {
+          line.push(normalizeEtCell(readEtCellFormat(sheet.Cells.Item(r0 + r, c0 + c)), bgrToHex))
+        }
+        formats.push(line)
+      }
+      out.format = {
+        scanned: cellAddress(r0 - 1, c0 - 1) + ':' + cellAddress(r0 + shape.rows - 2, c0 + shape.cols - 2),
+        ...summarizeCellFormats(formats, r0 - 1, c0 - 1)
+      }
+      if (shape.truncated) out.format.truncated = true
+    }
+    return out
   },
 
   async excel_set_values(args) {
@@ -425,9 +589,24 @@ export const WPS_ET_HANDLERS = {
     } else if (rngRows !== rows || rngCols !== cols) {
       throw new Error(`区域尺寸（${rngRows}x${rngCols}）与 values 尺寸（${rows}x${cols}）不一致`)
     }
+    // 追加到表格下方的空行先沿用上一行格式，再写值（dev-board#844）。尽力而为：
+    // 失败只在返回值里交代，值照写
+    let formatInherited = []
+    let formatNote = ''
+    if (args.inheritFormat !== false) {
+      try {
+        const res = inheritEtRowFormats(sheet, rng, rows, cols, values)
+        formatInherited = res.inherited
+        if (res.skipped) formatNote = `沿用上一行格式时有 ${res.skipped} 项格式属性未能复制（宿主不支持），其余已沿用`
+      } catch (e) {
+        formatNote = `沿用上一行格式失败，本次只写了值：${e && e.message ? e.message : e}`
+      }
+    }
     // 赋值只能走 Value2（JSAPI 里 Value 是只读方法）；二维数组一次性写入
     rng.Value2 = values
-    return { written: rows * cols, address: rng.Address(false, false) }
+    const out = { written: rows * cols, address: rng.Address(false, false), formatInherited }
+    if (formatNote) out.formatNote = formatNote
+    return out
   },
 
   async excel_search(args) {
