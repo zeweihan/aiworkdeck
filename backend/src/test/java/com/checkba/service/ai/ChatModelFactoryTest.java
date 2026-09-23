@@ -515,6 +515,57 @@ class ChatModelFactoryTest {
         } finally { release.countDown(); server.stop(0); executor.shutdownNow(); }
     }
 
+    @Test
+    void decisionsFrozenAsLocalNeverResolveCloudCredentialsAfterSettingsChange() {
+        setDbProvider("OPENROUTER");
+        clearInvocations(systemSettingService);
+        assertNull(factory.decisionCredentials("deepseek/deepseek-v4-flash", AiModelProperties.Provider.OLLAMA));
+        verifyNoInteractions(systemSettingService, platformAiChannel, creditsGate, usageAccountant);
+    }
+
+    @Test
+    void decisionChannelChangeFallsBackBeforeResolvingAnyKey() {
+        setDbProvider("AWD_CLOUD");
+        assertNull(factory.decisionCredentials("deepseek/deepseek-v4-flash", AiModelProperties.Provider.OPENROUTER));
+        verifyNoInteractions(platformAiChannel, creditsGate, usageAccountant);
+        verify(systemSettingService, never()).get(eq(ChatModelFactory.SETTING_OPENROUTER_API_KEY), any());
+        setDbProvider("OLLAMA");
+        assertNull(factory.decisionCredentials("deepseek/deepseek-v4-flash", AiModelProperties.Provider.AWD_CLOUD));
+        verifyNoInteractions(platformAiChannel, creditsGate, usageAccountant);
+    }
+
+    @Test
+    void decisionByokUsesOwnSettingsAndNeverPlatformProvisioning() {
+        setDbProvider("OPENROUTER");
+        when(systemSettingService.get(eq(ChatModelFactory.SETTING_OPENROUTER_API_KEY), any()))
+                .thenReturn("synthetic-byok");
+        when(systemSettingService.get(eq(ChatModelFactory.SETTING_OPENROUTER_BASE_URL), any()))
+                .thenReturn("https://example.test/relay/api/v1");
+        var credentials = factory.decisionCredentials("deepseek/deepseek-v4-flash", AiModelProperties.Provider.OPENROUTER);
+        assertEquals("synthetic-byok", credentials.apiKey());
+        assertEquals("https://example.test/relay/api/v1", credentials.baseUrl());
+        assertFalse(credentials.platform());
+        assertFalse(credentials.toString().contains("synthetic-byok"));
+        verifyNoInteractions(platformAiChannel, creditsGate, usageAccountant);
+    }
+
+    @Test
+    void decisionPlatformPreservesUserScopeAndDoesNotBorrowByokKey() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.apiKey()).thenAnswer(invocation -> {
+            assertEquals(9L, PlatformAiUserScope.current());
+            return "synthetic-platform";
+        });
+        var credentials = PlatformAiUserScope.call(9L, () -> factory.decisionCredentials(
+                "deepseek/deepseek-v4-flash", AiModelProperties.Provider.AWD_CLOUD));
+        assertTrue(credentials.platform());
+        assertEquals("synthetic-platform", credentials.apiKey());
+        assertNull(PlatformAiUserScope.current());
+        verify(creditsGate).ensureCredits(9L);
+        verify(usageAccountant).ensureBaselineAsync(9L);
+        verify(systemSettingService, never()).get(eq(ChatModelFactory.SETTING_OPENROUTER_API_KEY), any());
+    }
+
     /**
      * 2026-09-16 国际站云后端事故：system_setting 里没有 ai.activeProvider，静态默认值
      * open-router 生效，而云后端本就不该配 BYOK key。非流式那条路当场被 openai4j 拦下

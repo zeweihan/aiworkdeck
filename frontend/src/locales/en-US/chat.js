@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // AI chat panel (ChatInterface + AgentMessage cards + ArtifactCard + BackgroundTaskIndicator)
 export default {
+  decisionAssistLabel: 'Decision assistance (experimental)',
+  decisionAssistOn: 'On',
+  decisionAssistOff: 'Off',
+  decisionAssistOnHint: 'Selected conversation and material excerpts may be sent to TypeSafe Jev through your current OpenRouter channel, using platform credits or your own key. If unavailable, the original workflow continues.',
+  decisionAssistOffHint: 'Future sends: no Jev requests or charges. Enabling sends selected conversation and material excerpts to TypeSafe Jev and adds a small cost.',
+  decisionAssistNextSend: 'Applies to your next send. Submitted tasks retain their original setting.',
+  decisionAssistLocal: 'A local model is selected: no content is sent to Jev and no Jev charges apply.',
+
   activityBackToLatest: 'Back to latest',
   attentionLocatorQuestion: '{n} awaiting your answer',
   attentionLocatorApproval: '{n} awaiting approval',

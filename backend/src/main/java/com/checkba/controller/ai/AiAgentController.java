@@ -541,6 +541,8 @@ public class AiAgentController {
          * ASK 模式下整体不生效（该模式不传工具、也不注入 skill 指引）。
          */
         private java.util.List<String> skillIds;
+        /** Explicit per-submission opt-in; persisted with inbox payload, absent on old clients means off. */
+        private boolean decisionAssistEnabled;
         /**
          * 可选：客户端文档编辑能力（lowa / office / none，Phase C）。
          * 缺省按 lowa 处理，兼容不发送该字段的存量主前端。
@@ -600,6 +602,8 @@ public class AiAgentController {
         public void setPinnedSkillId(String pinnedSkillId) { this.pinnedSkillId = pinnedSkillId; }
         public java.util.List<String> getSkillIds() { return skillIds; }
         public void setSkillIds(java.util.List<String> skillIds) { this.skillIds = skillIds; }
+        public boolean isDecisionAssistEnabled() { return decisionAssistEnabled; }
+        public void setDecisionAssistEnabled(boolean decisionAssistEnabled) { this.decisionAssistEnabled = decisionAssistEnabled; }
         public String getClientCapability() { return clientCapability; }
         public void setClientCapability(String clientCapability) { this.clientCapability = clientCapability; }
         public String getOfficeHost() { return officeHost; }
