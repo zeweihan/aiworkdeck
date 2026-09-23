@@ -317,6 +317,17 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   可选站点 < 2 时前端整个不渲染站点 UI。
 - 前端：`frontend/src/utils/siteLinks.js`（官网链接的唯一出口，替代 7 处硬编码）、
   `pages/unlock/unlock.vue`（站点行 + 错配一键救济）、`pages/admin/admin.vue`「账户与用量」的站点子区。
+- **国际站人机验证（Cloudflare Turnstile）必须走官网托管页，不能在本页 render**（2026-09-23）：
+  Turnstile 按域名放行 sitekey，打包版主窗口是 `file://`，直接 `turnstile.render` 必报 110200
+  （真实 sitekey 实测），拿不到 token 官网 `send-code` 就回 `captcha_failed`。`utils/captcha.js` 的
+  turnstile 分支改嵌 iframe `{siteBaseUrl}/captcha-embed?lang=zh|en&theme=light|dark`，
+  纯逻辑在 `utils/captchaEmbedCore.js`（护栏 `npm run test:captcha`）。契约要点：消息都带
+  `source:'awd-captcha'`；页面 → 父 `ready/token/error/size/disabled`，父 → 页面 `reset`、`get-token`；
+  父页过滤**两道都要**——`event.source === iframe.contentWindow`（父页 origin 是 `null`，只认这个窗口）
+  且 `event.origin === 官网 origin`（框被导航走时窗口对象不变，只有 origin 能识破）；
+  父发消息的 targetOrigin 钉官网 origin。取 token 先 `reset` 再 `get-token`，8 秒超时回空串，
+  等待中的空串 token 不收口（reset 回调）。阿里云（大陆站）在 `file://` 下本来就好，那条分支没动。
+  切站重装配前必须 `teardownCaptcha()`，否则旧 iframe 的 message 监听留在 window 上。
 
 **配置**
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。
