@@ -6,11 +6,20 @@ import {
 import App from "./App.vue";
 import { recordFrontendError } from "./utils/errorBuffer.js";
 import { i18n } from "./i18n/index.js";
+// #ifdef H5
+import { installUniDialogBridge } from "./utils/dialog.js";
+// #endif
 
 export function createApp() {
 	const app = createSSRApp(App);
 	// i18n（EN 版）：locale 由 utils/appLanguage.js 决定；语言切换走整页 reload
 	app.use(i18n);
+	// #ifdef H5
+	// uni.showModal / uni.showActionSheet 转发到应用内对话框 AwdDialog（dev-board#849）：
+	// uni-h5 自带的弹窗缺省按钮是写死的英文 OK/Cancel、字体掉到衬线字。
+	// 走拦截器而不是改写属性，理由见 utils/dialog.js 顶部注释。小程序端不接管。
+	installUniDialogBridge();
+	// #endif
 	
 	// 全局错误处理：捕获未处理的 Promise rejection
 	if (typeof window !== 'undefined') {

@@ -15,24 +15,22 @@ import { initAppTheme } from '@/utils/appTheme.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
 // ==================== uni 弹层的层级修正（全应用一次） ====================
-// uni 的 showModal / showToast 生成的 <uni-modal> / <uni-toast> 由框架直接挂到
-// document.body，不在任何组件的渲染树里，SFC 的 scoped <style> 加不上 data-v 属性
-// 也够不到它们（试过，编译结果两个 <style> 块都被强行套了同一个 data-v 选择器，
-// 未 scoped 的那块形同虚设）。而框架给这两者写死的 z-index 都是 999
-// （node_modules/@dcloudio/uni-h5/style/api/modal.css、同目录 toast.css），本仓所有
-// 自绘弹窗的遮罩是 9999（.awd-mask / .workdeck-dialog-mask，且带 backdrop-filter）
-// ——于是弹窗开着时弹出的确认框与提示全部画在遮罩后面：
-//   · uni-modal：VersionNodeDetail 的「退回到这一版」二次确认按钮点不到，
-//     document.elementFromPoint 在按钮坐标上返回的是 .awd-footer（app-e2e J9 实测）；
-//   · uni-toast：InviteMemberDialog 的「没有这个用户」「已加进来」等提示一律看不见，
-//     表现成「输入账号没反应、点加进来也没反应」（dev-board 协作加人流程那次报障）。
-// 这段原先长在 VersionNodeDetail.vue 里（只覆盖 uni-modal，且只在加载了 version
-// 组件链的页面生效）。InviteMemberDialog 在项目列表页也会用到，那一页不加载 version
-// 组件链，所以必须搬到这个所有页面都早加载的公共入口。
+// uni 的 showToast / showLoading 生成的 <uni-toast> 由框架直接挂到 document.body，
+// 不在任何组件的渲染树里，SFC 的 scoped <style> 加不上 data-v 属性也够不到它
+// （试过，编译结果两个 <style> 块都被强行套了同一个 data-v 选择器，未 scoped 的那块
+// 形同虚设）。而框架给它写死的 z-index 是 999（node_modules/@dcloudio/uni-h5/style/api/
+// toast.css），本仓所有自绘弹窗的遮罩是 9999（.awd-mask / .workdeck-dialog-mask，
+// 且带 backdrop-filter）——于是弹窗开着时弹出的提示全部画在遮罩后面：
+// InviteMemberDialog 的「没有这个用户」「已加进来」等提示一律看不见，表现成「输入账号
+// 没反应、点加进来也没反应」（dev-board 协作加人流程那次报障）。
+// 取 10001：还要高过应用内对话框 AwdDialog 的遮罩（10000），在确认框里触发的提示也看得见。
+//
+// uni-modal 那一半已经不需要了：uni.showModal 整个转发给了 AwdDialog（dev-board#849，
+// 见 utils/dialog.js），<uni-modal> 不再出现。
 if (typeof document !== 'undefined' && !document.getElementById('awd-uni-modal-zfix')) {
   const zfix = document.createElement('style')
   zfix.id = 'awd-uni-modal-zfix'
-  zfix.textContent = 'uni-modal, uni-toast { z-index: 10000 !important; }'
+  zfix.textContent = 'uni-toast { z-index: 10001 !important; }'
   document.head.appendChild(zfix)
 }
 
@@ -155,53 +153,38 @@ export default {
 
 <style>
 /* AI WorkDeck Global Overrides */
-/* uni.showModal Style Override (Web/H5) */
-uni-modal .uni-modal {
-    border-radius: 12px;
-    box-shadow: var(--awd-shadow-lg);
-    overflow: hidden;
+
+/* ============ 全局字体（dev-board#849） ============
+   此前全仓没有 html/body 字体规则：页面里的组件各自带字体没露馅，挂在 document.body
+   上的 uni 弹层（<uni-toast>，以及接管前的 <uni-modal>）却直接掉到浏览器默认衬线字。
+   字栈与 uni.scss 的 $awd-font-serif / $awd-font-sans / $awd-font-mono 逐字一致
+   （字体不属于配色体系，不进 generate-tokens / check-palette，改一处要手动同步另一处）。 */
+:root {
+    --awd-font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+    --awd-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    --awd-font-mono: 'JetBrains Mono', 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
 }
 
-uni-modal .uni-modal__title {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--awd-accent-text); /* Forest Green */
-    padding-top: 24px;
+html,
+body,
+uni-modal,
+uni-toast {
+    font-family: var(--awd-font-sans);
 }
 
-uni-modal .uni-modal__content {
-    font-size: 15px;
-    color: var(--awd-text-2);
-    padding-bottom: 24px;
-}
-
-uni-modal .uni-modal__ft {
-    border-top: 1px solid var(--awd-border);
-}
-
-uni-modal .uni-modal__btn {
-    font-size: 16px;
-    font-weight: 500;
-}
-
-/* Cancel Button */
-uni-modal .uni-modal__btn_default {
-    color: var(--awd-text-2) !important;
-}
-
-/* Confirm Button */
-uni-modal .uni-modal__btn_primary {
-    color: var(--awd-mint) !important; /* Mint Green */
-    font-weight: 600;
-}
-
-/* Toast Override */
+/* uni.showToast 仍用原生（uni.showModal / showActionSheet 已转给 AwdDialog）。
+   .uni-toast 是带图标的那种，.uni-simple-toast__text 是 icon:'none' 的纯文字那种。 */
 uni-toast .uni-toast {
    background: var(--awd-accent);
-   border-radius: 8px;
+   border-radius: 10px;
+   box-shadow: var(--awd-shadow-md);
 }
 uni-toast .uni-toast__content {
     color: var(--awd-text-on-accent);
+}
+uni-toast .uni-simple-toast__text {
+    border-radius: 10px;
+    box-shadow: var(--awd-shadow-md);
 }
 
 /* ============ 颜色语义令牌（浅色/深色两套取值） ============
@@ -569,6 +552,7 @@ html.is-desktop .project-header .avatar-menu-mask {
    会扫出漏掉的那个。真不吃鼠标事件的层（pointer-events: none）才进那份 EXEMPT。 */
 html.is-desktop .amb-mask,
 html.is-desktop .awd-dialog-mask,
+html.is-desktop .awd-dlg-mask,
 html.is-desktop .awd-mask,
 html.is-desktop .awd-select-mask,
 html.is-desktop .awdfb-mask,

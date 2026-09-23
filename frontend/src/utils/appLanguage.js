@@ -46,11 +46,24 @@ export function getAppLanguage() {
   const stored = readStorage(APP_LANGUAGE_KEY)
   if (SUPPORTED_LANGUAGES.includes(stored)) {
     cached = stored
+    syncDocumentLang(cached)
     return cached
   }
   cached = guessLanguage()
   try { uni.setStorageSync(APP_LANGUAGE_KEY, cached) } catch (e) { /* ignore */ }
+  syncDocumentLang(cached)
   return cached
+}
+
+/**
+ * 把 <html lang> 跟到应用语言上（dev-board#849）。index.html 写死的只是首帧的值；
+ * 浏览器按 lang 挑 CJK 字形与断行规则，标成 en 时中文会落到日文/西文字形回退上。
+ * 启动时（首次解析语言）与 setAppLanguage 各调一次。
+ */
+function syncDocumentLang(lang) {
+  try {
+    if (typeof document !== 'undefined' && document.documentElement) document.documentElement.lang = lang
+  } catch (e) { /* ignore */ }
 }
 
 export function isEnglish() {
@@ -65,6 +78,7 @@ export function setAppLanguage(lang) {
   if (!SUPPORTED_LANGUAGES.includes(lang)) return getAppLanguage()
   const changed = lang !== getAppLanguage()
   cached = lang
+  syncDocumentLang(lang)
   try { uni.setStorageSync(APP_LANGUAGE_KEY, lang) } catch (e) { console.warn('[appLanguage] persist failed:', e) }
   if (changed) {
     try { uni.$emit(APP_LANGUAGE_EVENT, lang) } catch (e) { /* ignore */ }
