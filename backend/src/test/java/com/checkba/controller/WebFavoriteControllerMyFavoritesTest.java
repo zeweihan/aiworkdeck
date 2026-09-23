@@ -3,7 +3,9 @@
 
 package com.checkba.controller;
 
+import com.checkba.model.entity.Project;
 import com.checkba.model.entity.WebFavorite;
+import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.WebFavoriteService;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,8 @@ class WebFavoriteControllerMyFavoritesTest {
     private WebFavoriteService webFavoriteService;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private ProjectRepository projectRepository;
 
     @InjectMocks
     private WebFavoriteController controller;
@@ -90,6 +94,29 @@ class WebFavoriteControllerMyFavoritesTest {
             assertEquals(10, items(controller.myFavorites(10, "s")).size());
             assertEquals(500, items(controller.myFavorites(9999, "s")).size());
             assertEquals(1, items(controller.myFavorites(0, "s")).size());
+        }
+    }
+
+    /** dev-board#872：列表项带 projectId + projectName，项目名一次批量查出，查不到的留 null。 */
+    @Test
+    void attachesProjectIdAndName() {
+        WebFavorite a = row(1L, "{}");
+        a.setProjectId(11L);
+        WebFavorite b = row(2L, "{}");
+        b.setProjectId(12L);
+        when(webFavoriteService.listMyFavorites(7L)).thenReturn(List.of(a, b));
+        Project p = new Project();
+        p.setId(11L);
+        p.setName("某并购项目");
+        when(projectRepository.findAllById(org.mockito.ArgumentMatchers.anyIterable())).thenReturn(List.of(p));
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
+            List<WebFavoriteController.WebFavoriteListItem> body = items(controller.myFavorites(null, "s"));
+            assertEquals(11L, body.get(0).getProjectId());
+            assertEquals("某并购项目", body.get(0).getProjectName());
+            assertEquals(12L, body.get(1).getProjectId());
+            assertNull(body.get(1).getProjectName());
         }
     }
 

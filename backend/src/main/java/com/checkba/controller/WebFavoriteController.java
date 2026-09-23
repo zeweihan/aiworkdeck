@@ -3,8 +3,10 @@
 
 package com.checkba.controller;
 
+import com.checkba.model.entity.Project;
 import com.checkba.model.entity.User;
 import com.checkba.model.entity.WebFavorite;
+import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.WebFavoriteService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 收藏接口：
@@ -31,6 +34,7 @@ public class WebFavoriteController {
 
     private final WebFavoriteService webFavoriteService;
     private final UserRepository userRepository;
+    private final ProjectRepository projectRepository;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** 我的收藏返回条数上限：个人中心那一栏没有搜索框，比项目内收藏的 80 放宽一些 */
@@ -47,8 +51,22 @@ public class WebFavoriteController {
         }
         // 性能关键：与项目内收藏同口径——限量 + 返回轻量列表（meta 可能包含 html 快照，体积巨大）
         int lim = (limit == null ? MY_FAVORITES_DEFAULT_LIMIT : Math.max(1, Math.min(MY_FAVORITES_MAX_LIMIT, limit)));
-        List<WebFavorite> list = webFavoriteService.listMyFavorites(userId);
-        return ResponseEntity.ok(list.stream().limit(lim).map(WebFavoriteListItem::from).toList());
+        List<WebFavorite> list = webFavoriteService.listMyFavorites(userId).stream().limit(lim).toList();
+        // dev-board#872：设置页「全部收藏」按项目分组，项目名在这里一次 IN 查出来补上，
+        // 前端不必为每条收藏再拉一次项目。项目已不存在时 projectName 留 null。
+        List<Long> projectIds = list.stream().map(WebFavorite::getProjectId)
+                .filter(Objects::nonNull).distinct().toList();
+        Map<Long, String> projectNames = new HashMap<>();
+        if (!projectIds.isEmpty()) {
+            for (Project p : projectRepository.findAllById(projectIds)) {
+                projectNames.put(p.getId(), p.getName());
+            }
+        }
+        return ResponseEntity.ok(list.stream().map(fav -> {
+            WebFavoriteListItem it = WebFavoriteListItem.from(fav);
+            it.setProjectName(projectNames.get(fav.getProjectId()));
+            return it;
+        }).toList());
     }
 
     @GetMapping("/api/projects/{projectId}/favorites")
@@ -140,6 +158,9 @@ public class WebFavoriteController {
         // 从 meta 中提取的轻量字段（前端展示用）
         private String sourceHost;
         private String docFileName;
+        // 所属项目（dev-board#872）：projectId 两个列表端点都带；projectName 只有 /api/favorites/my 填
+        private Long projectId;
+        private String projectName;
 
         public static WebFavoriteListItem from(WebFavorite fav) {
             WebFavoriteListItem it = new WebFavoriteListItem();
@@ -148,6 +169,7 @@ public class WebFavoriteController {
             it.setSourceUrl(fav.getSourceUrl());
             it.setContent(fav.getContent());
             it.setImagePath(fav.getImagePath());
+            it.setProjectId(fav.getProjectId());
             it.setCreatedAt(fav.getCreatedAt());
             // 尝试解析 meta，提取必要字段，丢弃大字段（如 html）
             try {
@@ -182,6 +204,10 @@ public class WebFavoriteController {
         public void setSourceHost(String sourceHost) { this.sourceHost = sourceHost; }
         public String getDocFileName() { return docFileName; }
         public void setDocFileName(String docFileName) { this.docFileName = docFileName; }
+        public Long getProjectId() { return projectId; }
+        public void setProjectId(Long projectId) { this.projectId = projectId; }
+        public String getProjectName() { return projectName; }
+        public void setProjectName(String projectName) { this.projectName = projectName; }
     }
 
     public static class CreateFavoriteRequest {

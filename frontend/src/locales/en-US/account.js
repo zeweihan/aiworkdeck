@@ -15,7 +15,9 @@ export default {
 
   // ---- Personal group entries in the unified Settings page (merged 2026-08-20) ----
   tabWorkLog: 'Activity Log',
-  tabFavorites: 'My Favorites',
+  // dev-board#872: renamed to "All Favorites" / "My To-dos" alongside the rewrite
+  // (cross-project roll-up).
+  tabFavorites: 'All Favorites',
   tabTodos: 'My To-dos',
 
   // ---- userprofile.vue: activity log ----
@@ -36,15 +38,36 @@ export default {
   allProjectsOption: 'All Projects',
   unassociatedProjectOption: 'No Project',
 
-  // ---- userprofile.vue: favorites / to-dos placeholder ----
+  // ---- Settings page: All Favorites (dev-board#872: cross-project roll-up, grouped by project) ----
+  favoritesSubtitle: 'A roll-up of everything you have favorited across all projects. The favorites drawer in the workbench sidebar only shows the current project, and lets you insert directly into a document.',
+  favoritesSearchPlaceholder: 'Search title, content, or project',
   emptyFavoritesDesc: 'No favorites yet',
+  emptyFavoritesHow: 'Favorite a page or selected text from the browser panel, or check Favorite when saving a screenshot, and it will show up here.',
+  favoritesNoMatch: 'No matching favorites',
+  favoritesNoProject: 'Deleted project',
   untitledExcerpt: 'Untitled excerpt',
-  emptyTodosDesc: 'No to-dos yet',
+  openProjectAction: 'Open Project',
+  openSourceAction: 'Open Source',
+  copyContentAction: 'Copy Content',
+  copiedToast: 'Copied',
   loadFavoritesFailed: 'Failed to load favorites',
   deleteFavoriteTitle: 'Confirm Delete',
   deleteFavoriteContent: 'Delete this favorite?',
   deleteSuccessToast: 'Deleted',
   deleteFailedToast: 'Delete failed',
+
+  // ---- Settings page: My To-dos (dev-board#872: cross-project task list, backed by /api/calendar and /api/tasks) ----
+  todosSubtitle: 'A roll-up of tasks across all your projects. You can also add one directly here.',
+  addTodoAction: 'Add',
+  todosGroupOverdue: 'Overdue',
+  todosGroupToday: 'Today',
+  todosGroupUpcoming: 'Upcoming',
+  todosGroupNoDate: 'No Date',
+  todosGroupDone: 'Done',
+  emptyTodosDesc: 'No to-dos yet',
+  emptyTodosHow: 'Add one from a project calendar, or right-click a file and choose Set Due Date, and it will show up here.',
+  deleteTodoConfirm: 'Delete this to-do?',
+  todoUpdateFailed: 'Update failed, please try again',
 
   // ---- userprofile.vue: settings - basic info ----
   basicInfoGroupTitle: 'Basic Information',
