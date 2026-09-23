@@ -5,8 +5,11 @@ package com.checkba.controller.ai;
 
 import com.checkba.controller.AuthController;
 import com.checkba.service.ai.AllowedModels;
+import com.checkba.config.AiModelProperties;
 import com.checkba.service.ai.ChatModelFactory;
+import com.checkba.service.ai.ModelPriceDisplayService;
 import com.checkba.service.ai.NetworkRegionService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -49,11 +52,21 @@ public class AiModelCatalogController {
 
     private final NetworkRegionService networkRegionService;
     private final ChatModelFactory chatModelFactory;
+    /** 可空：为 null 时一律按厂商美元标价显示（既有单测与不关心价格口径的调用方走这条）。 */
+    private final ModelPriceDisplayService priceDisplayService;
 
     public AiModelCatalogController(NetworkRegionService networkRegionService,
                                     ChatModelFactory chatModelFactory) {
+        this(networkRegionService, chatModelFactory, null);
+    }
+
+    @Autowired
+    public AiModelCatalogController(NetworkRegionService networkRegionService,
+                                    ChatModelFactory chatModelFactory,
+                                    ModelPriceDisplayService priceDisplayService) {
         this.networkRegionService = networkRegionService;
         this.chatModelFactory = chatModelFactory;
+        this.priceDisplayService = priceDisplayService;
     }
 
     @GetMapping("/models")
@@ -75,15 +88,25 @@ public class AiModelCatalogController {
         // Ollama 后，模型下拉里仍是云端白名单，选中一个 vision:true 的条目时前端认为
         // 「能读图」——既不弹提示也不显示 OCR 降级说明，而后端实际一律降级走 OCR。
         // 「显示与实际不一致」正是本仓治理过一轮的老毛病，判据收敛在后端这一处。
-        boolean visionDisabledByProvider = false;
+        AiModelProperties.Provider provider = null;
         try {
-            visionDisabledByProvider =
-                    chatModelFactory.resolveProvider() == com.checkba.config.AiModelProperties.Provider.OLLAMA;
+            provider = chatModelFactory.resolveProvider();
         } catch (Exception e) {
             // 供应商解析不出来时不改写能力位：宁可维持白名单原值，也不要凭一次异常
             // 把所有模型都标成读不了图（那是对全体云端用户的误报）
             log.warn("[Models] Provider probe failed; keeping AllowedModels vision flags as-is", e);
         }
+        boolean visionDisabledByProvider = provider == AiModelProperties.Provider.OLLAMA;
+
+        // 价格显示口径（dev-board#853）。只有平台通道才有「实付价」：那条路按官网扣费汇率 × 毛利乘数
+        // 从 Credits 里扣钱；自备 Key 的用户直接按厂商美元标价付给 OpenRouter，本地 Ollama 不计费——
+        // 这两档乘上平台汇率就是在给用户报一个他根本不会付的价。
+        // 取不到汇率（未连接账户 / 官网不可达 / 字段缺失 / 超时）同样退回标价，绝不编造。
+        ModelPriceDisplayService.ChargedRate rate = null;
+        if (provider == AiModelProperties.Provider.AWD_CLOUD && priceDisplayService != null) {
+            rate = priceDisplayService.currentRate();
+        }
+        double factor = rate != null ? rate.factor() : 1.0;
 
         List<Map<String, Object>> models = new ArrayList<>();
         for (AllowedModels m : AllowedModels.availableIn(region)) {
@@ -104,6 +127,12 @@ public class AiModelCatalogController {
             dto.put("inputPricePerM", first.inputPricePerM());
             dto.put("outputPricePerM", first.outputPricePerM());
             dto.put("tiered", m.getPriceTiers().size() > 1);
+            // 显示口径下的首档单价（已乘好 factor）。原来那两个美元字段保留不动：
+            // 旧前端还在读，且它们是「厂商标价」这个事实本身，不随口径变。
+            dto.put("displayInputPerM", roundPrice(first.inputPricePerM() * factor));
+            dto.put("displayOutputPerM", roundPrice(first.outputPricePerM() * factor));
+            // 贵贱档位按美元综合单价算，两站一致，见 AllowedModels.PRICE_LEVEL_UPPER_BOUNDS
+            dto.put("priceLevel", m.priceLevel());
             models.add(dto);
         }
 
@@ -114,7 +143,41 @@ public class AiModelCatalogController {
         // 默认模型必须由工厂解析：DB 的 ai.defaultModel 优先于 yml，
         // 前端自己挑「清单第一条」会和实际发出去的模型不一致
         body.put("defaultModel", chatModelFactory.resolveDefaultModel());
+        body.put("priceDisplay", priceDisplay(provider, rate));
         body.put("models", models);
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * {@code priceDisplay}：告诉前端 display* 两个数是什么口径，脚注据此说明。
+     * <ul>
+     *   <li>{@code basis}：{@code charged} 实付价 / {@code list} 厂商美元标价</li>
+     *   <li>{@code channel}：{@code platform} / {@code byok} / {@code local} / {@code unknown}（供应商解析失败）——list 口径下脚注要说清楚
+     *       「实际怎么扣钱」，三档说法不同（平台按 Credits 扣、自备 Key 按标价付给 OpenRouter、本地不计费）</li>
+     *   <li>{@code currency} / {@code factor}：list 口径恒为 USD / 1</li>
+     * </ul>
+     */
+    private static Map<String, Object> priceDisplay(AiModelProperties.Provider provider,
+                                                    ModelPriceDisplayService.ChargedRate rate) {
+        Map<String, Object> pd = new LinkedHashMap<>();
+        pd.put("basis", rate != null ? "charged" : "list");
+        String channel = "unknown";
+        if (provider == AiModelProperties.Provider.AWD_CLOUD) channel = "platform";
+        else if (provider == AiModelProperties.Provider.OPENROUTER) channel = "byok";
+        else if (provider == AiModelProperties.Provider.OLLAMA) channel = "local";
+        pd.put("channel", channel);
+        pd.put("currency", rate != null ? rate.currency() : "USD");
+        pd.put("factor", rate != null ? roundPrice(rate.factor()) : 1.0);
+        pd.put("exchangeRate", rate != null ? rate.exchangeRate() : null);
+        pd.put("marginMultiplier", rate != null ? rate.marginMultiplier() : null);
+        pd.put("currencyBasis", rate != null ? rate.currencyBasis() : null);
+        pd.put("rateSource", rate != null ? rate.rateSource() : null);
+        pd.put("rateUpdatedAt", rate != null ? rate.rateUpdatedAt() : null);
+        return pd;
+    }
+
+    /** 去掉浮点乘法的尾巴（8.76 × 0.08596 = 0.7530096000000001），保留 6 位小数足够任何显示规则。 */
+    static double roundPrice(double v) {
+        return Math.round(v * 1_000_000d) / 1_000_000d;
     }
 }
