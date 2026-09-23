@@ -16,18 +16,30 @@
  *   传进 `initAliyunCaptcha` 不生效，而且**不报错**（2026-08-18 浏览器实测）。
  * - **token 一次性**，每次取之前先 reset；不 reset 的话「重发验证码」会带上已核销的那枚。
  *
- * ## Turnstile 走官网托管页（iframe），不在本页 render
+ * ## Turnstile 走官网托管页，不在本页 render
  * Turnstile 按域名放行 sitekey，打包版主窗口是 `file://`，直接 render 必报 110200。
- * 所以国际站嵌 `{官网}/captcha-embed`，控件在官网域名下跑、token 经 postMessage 交回；
+ * 所以国际站嵌 `{官网}/captcha-embed`，控件在官网域名下跑、token 交回本页；
  * 消息过滤与状态机在 `captchaEmbedCore.js`（有 node 单测）。阿里云在 `file://` 下
  * 今天就是好的，那条分支不动。
+ *
+ * ## 桌面壳里托管页挂 <webview>，不挂 iframe（dev-board#863）
+ * 主窗口 webPreferences.webSecurity=false。嵌在这种 WebContents 里的 Turnstile 挑战帧会被
+ * Chromium 以「bad IPC message, reason 1」杀掉渲染进程，控件卡死（300030）、永远拿不到
+ * token——表现就是「发送中」转 8 秒后报「请完成人机验证」，界面上什么都不出现
+ * （2026-09-23 真桌面壳实测；同一页放进 web security 开着的 WebContents 6 秒出 token）。
+ * webview 是独立的 guest WebContents，web security 默认开着；托管页往 window.parent 发的
+ * 消息在 webview 里投给它自己，由 `desktop/preload/captcha-webview-preload.js` 截住转交。
+ * 没有这条能力的宿主（Web 版、没带这条 IPC 的老壳）照旧挂 iframe——Web 版的父页是
+ * 正常网页，iframe 本来就好。
  */
 
 import { loadSiteLinks } from '@/utils/siteLinks.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
+import { host } from '@/services/host.js'
 import {
   EMBED_WIDTH,
   EMBED_DEFAULT_HEIGHT,
+  acceptBridgeMessage,
   acceptMessage,
   buildEmbedUrl,
   createEmbedController,
@@ -59,7 +71,7 @@ let activeEmbed = null
 // 装配代次：setupCaptcha 中途要 await 站点地址，两次装配交错时只让最后一次落地
 let setupGen = 0
 
-/** 拆掉当前托管页控件（iframe 与 message 监听），在等的 getToken 回空串。可重复调用。 */
+/** 拆掉当前托管页控件（iframe/webview 与它们的监听），在等的 getToken 回空串。可重复调用。 */
 export function teardownCaptcha() {
   if (!activeEmbed) return
   const cur = activeEmbed
@@ -75,23 +87,71 @@ function currentTheme() {
   }
 }
 
-async function setupEmbedCaptcha(holderId, gen) {
-  const links = await loadSiteLinks()
-  if (gen !== setupGen) return null
-  const el = document.getElementById(holderId)
-  if (!el) return null
-  const baseUrl = (links && links.baseUrl) || ''
-  const expectedOrigin = originOf(baseUrl)
-  if (!expectedOrigin) return null
+// 与 desktop/preload/captcha-webview-preload.js 的 CHANNEL 必须一致
+const BRIDGE_CHANNEL = 'awd-captcha'
 
+/** 桌面壳给的 webview 消息桥配置 `{ preload }`；拿不到（Web 版 / 老壳 / IPC 出错）回 null。 */
+async function webviewBridgeConfig() {
+  try {
+    const cap = host.captchaEmbed
+    if (!cap || typeof cap.getConfig !== 'function') return null
+    const cfg = await cap.getConfig()
+    return cfg && typeof cfg.preload === 'string' && cfg.preload ? cfg : null
+  } catch (e) {
+    return null
+  }
+}
+
+const EMBED_STYLE = `display:block;width:${EMBED_WIDTH}px;height:${EMBED_DEFAULT_HEIGHT}px;` +
+  'max-width:100%;border:0;background:transparent;color-scheme:normal;'
+
+function mountWebviewEmbed(el, src, expectedOrigin, preload) {
+  const wv = document.createElement('webview')
+  wv.setAttribute('preload', preload)
+  // 页面拿不到 ipcRenderer（桥只在 preload 的隔离世界里）；不带 allowpopups，控件里的链接不弹窗
+  wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,sandbox=yes')
+  wv.className = 'awd-captcha-embed'
+  // Electron 要求 webview 保持 flex 布局（内部 iframe 靠它撑满），行内摆放用 inline-flex
+  wv.style.cssText = EMBED_STYLE.replace('display:block', 'display:inline-flex')
+  let attached = false
+  wv.addEventListener('dom-ready', () => { attached = true })
+
+  const controller = createEmbedController({
+    // guest 没起来之前 send 会抛；controller 只在收到 ready（guest 早已起来）之后才发
+    post: (msg) => {
+      if (!attached) return
+      try { wv.send(BRIDGE_CHANNEL, msg) } catch (e) { /* 已拆 */ }
+    },
+    onSize: (h) => { wv.style.height = h + 'px' },
+    onDisabled: () => { wv.style.display = 'none' },
+  })
+  wv.addEventListener('ipc-message', (e) => {
+    if (!e || e.channel !== BRIDGE_CHANNEL) return
+    const data = acceptBridgeMessage(e.args && e.args[0], { expectedOrigin })
+    if (data) controller.handle(data)
+  })
+  // guest 渲染进程没了（被杀/崩溃）：在等的请求立刻回空串，不让按钮干等到超时
+  wv.addEventListener('render-process-gone', () => controller.handle({ type: 'error', code: 'render-process-gone' }))
+  wv.setAttribute('src', src)
+  el.appendChild(wv)
+
+  return {
+    controller,
+    destroy() {
+      controller.destroy()
+      if (wv.parentNode) wv.parentNode.removeChild(wv)
+    },
+  }
+}
+
+function mountIframeEmbed(el, src, expectedOrigin) {
   const iframe = document.createElement('iframe')
-  iframe.src = buildEmbedUrl(baseUrl, { lang: getAppLanguage(), theme: currentTheme() })
+  iframe.src = src
   iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups')
   iframe.setAttribute('title', 'captcha')
   iframe.setAttribute('scrolling', 'no')
   iframe.className = 'awd-captcha-embed'
-  iframe.style.cssText = `display:block;width:${EMBED_WIDTH}px;height:${EMBED_DEFAULT_HEIGHT}px;` +
-    'max-width:100%;border:0;background:transparent;color-scheme:normal;'
+  iframe.style.cssText = EMBED_STYLE
 
   const controller = createEmbedController({
     // targetOrigin 钉死官网：框被跳走后，消息不会送到别人的页面里
@@ -108,14 +168,31 @@ async function setupEmbedCaptcha(holderId, gen) {
   window.addEventListener('message', onMessage)
   el.appendChild(iframe)
 
-  activeEmbed = {
+  return {
+    controller,
     destroy() {
       window.removeEventListener('message', onMessage)
       controller.destroy()
       if (iframe.parentNode) iframe.parentNode.removeChild(iframe)
     },
   }
-  return { provider: 'turnstile', getToken: () => controller.getToken() }
+}
+
+async function setupEmbedCaptcha(holderId, gen) {
+  const [links, bridge] = await Promise.all([loadSiteLinks(), webviewBridgeConfig()])
+  if (gen !== setupGen) return null
+  const el = document.getElementById(holderId)
+  if (!el) return null
+  const baseUrl = (links && links.baseUrl) || ''
+  const expectedOrigin = originOf(baseUrl)
+  if (!expectedOrigin) return null
+
+  const src = buildEmbedUrl(baseUrl, { lang: getAppLanguage(), theme: currentTheme() })
+  const embed = bridge
+    ? mountWebviewEmbed(el, src, expectedOrigin, bridge.preload)
+    : mountIframeEmbed(el, src, expectedOrigin)
+  activeEmbed = embed
+  return { provider: 'turnstile', getToken: () => embed.controller.getToken() }
 }
 
 /**

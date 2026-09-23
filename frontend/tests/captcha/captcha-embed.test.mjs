@@ -12,6 +12,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   MESSAGE_SOURCE,
+  acceptBridgeMessage,
   acceptMessage,
   buildEmbedUrl,
   createEmbedController,
@@ -22,6 +23,7 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const SRC = path.resolve(HERE, '../../src')
 const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8')
+const readDesktop = (rel) => fs.readFileSync(path.resolve(HERE, '../../../desktop', rel), 'utf8')
 
 /** 可手动推进的假定时器 */
 function fakeTimers() {
@@ -204,4 +206,75 @@ test('接线：turnstile 分支不再本页 render，走 iframe + 两道过滤 +
   const unlock = read('pages/unlock/unlock.vue')
   assert.match(unlock, /teardownCaptcha\(\)/)
   assert.match(unlock, /'is-embed': captcha && captcha\.provider === 'turnstile'/)
+})
+
+// ---- dev-board#863：桌面壳里托管页改挂 <webview>，消息经 preload 桥（ipc-message）过来 ----
+
+test('webview 桥消息过滤：origin 必须是官网，协议字段照旧校验', () => {
+  const opts = { expectedOrigin: 'https://www.workdeck.ai' }
+  const ok = { origin: 'https://www.workdeck.ai', data: msg('token', { token: 't' }) }
+  assert.deepEqual(acceptBridgeMessage(ok, opts), msg('token', { token: 't' }))
+  // guest 被跳到别的站：preload 报上来的是它此刻的 origin
+  assert.equal(acceptBridgeMessage({ ...ok, origin: 'https://evil.example' }, opts), null)
+  assert.equal(acceptBridgeMessage({ ...ok, origin: 'null' }, opts), null)
+  assert.equal(acceptBridgeMessage({ ...ok, data: { source: 'x', type: 'token' } }, opts), null)
+  assert.equal(acceptBridgeMessage({ ...ok, data: null }, opts), null)
+  assert.equal(acceptBridgeMessage(null, opts), null)
+  assert.equal(acceptBridgeMessage('awd-captcha', opts), null)
+  assert.equal(acceptBridgeMessage(ok, { expectedOrigin: '' }), null)
+})
+
+test('交互式挑战：等待中控件长出来（size>0），超时放宽到交互上限，人点完拿到的 token 照收', async () => {
+  const { c, t } = makeController({ interactiveTimeoutMs: 60000 })
+  c.handle(msg('ready'))
+  const p = c.getToken()
+  c.handle(msg('size', { height: 140 }))
+  let done = false
+  p.then(() => { done = true })
+  t.advance(30000)
+  await Promise.resolve()
+  assert.equal(done, false, '人还在点勾选框，8 秒一到就回空串等于永远过不去')
+  c.handle(msg('token', { token: 'human' }))
+  assert.equal(await p, 'human')
+  assert.equal(t.pending(), 0)
+})
+
+test('交互式挑战：控件已经是展开态时发起的请求直接按交互上限等；到点照样收口', async () => {
+  const { c, t } = makeController({ interactiveTimeoutMs: 60000 })
+  c.handle(msg('ready'))
+  c.handle(msg('size', { height: 140 }))
+  const p = c.getToken()
+  t.advance(59999)
+  let done = false
+  p.then(() => { done = true })
+  await Promise.resolve()
+  assert.equal(done, false)
+  t.advance(1)
+  assert.equal(await p, '')
+  // 挑战收起（高度回 0）之后恢复短超时
+  c.handle(msg('size', { height: 0 }))
+  const q = c.getToken()
+  t.advance(8000)
+  assert.equal(await q, '')
+})
+
+test('接线：桌面壳有 captchaEmbed 时托管页挂 <webview>（主窗口 webSecurity=false 会杀掉 Turnstile 挑战帧）', () => {
+  const src = read('utils/captcha.js')
+  assert.match(src, /createElement\('webview'\)/)
+  assert.match(src, /host\.captchaEmbed/)
+  assert.match(src, /setAttribute\('preload'/)
+  assert.match(src, /addEventListener\('ipc-message'/)
+  assert.match(src, /acceptBridgeMessage\(/)
+  assert.match(src, /\.send\(BRIDGE_CHANNEL, msg\)/)
+  // 老壳 / Web 版没有这条能力时退回 iframe
+  assert.match(src, /createElement\('iframe'\)/)
+
+  const main = readDesktop('main/main.js')
+  assert.match(main, /ipcMain\.handle\('checkba:captcha-embed'/)
+  assert.match(main, /captcha-webview-preload\.js/)
+  const preload = readDesktop('preload/preload.js')
+  assert.match(preload, /captchaEmbed:\s*\{\s*getConfig: \(\) => ipcRenderer\.invoke\('checkba:captcha-embed'\)/)
+  const bridge = readDesktop('preload/captcha-webview-preload.js')
+  assert.match(bridge, /const CHANNEL = 'awd-captcha'/)
+  assert.match(src, /const BRIDGE_CHANNEL = 'awd-captcha'/, '两端频道名必须一致')
 })

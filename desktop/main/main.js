@@ -1672,6 +1672,15 @@ ipcMain.handle('checkba:drawio-editor', async () => {
   return { available: true, kind: 'iframe', origin, url: drawioUrl(origin) }
 })
 
+// 国际站人机验证托管页（官网 /captcha-embed）改挂在 <webview> 里（dev-board#863）：
+// 主窗口 webSecurity=false，在这里面嵌的 Cloudflare Turnstile 挑战帧会被 Chromium
+// 以「bad IPC message, reason 1」杀掉渲染进程、控件卡死（300030），永远拿不到 token。
+// webview 是独立的 guest WebContents，web security 默认开着。渲染层只需要知道消息桥
+// preload 的路径；老壳没有这条 IPC 时渲染层退回 iframe（行为同修复前）。
+ipcMain.handle('checkba:captcha-embed', async () => ({
+  preload: require('url').pathToFileURL(path.join(__dirname, '../preload/captcha-webview-preload.js')).href,
+}))
+
 // 应用语言：渲染层是权威源（uni storage + 后端 system_setting），启动与切换时
 // send 过来；app-language.js 持久化并通知订阅方（应用菜单重建等）。
 ipcMain.on('checkba:app-language', (_evt, lang) => {

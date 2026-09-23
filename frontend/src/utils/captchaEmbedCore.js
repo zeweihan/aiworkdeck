@@ -58,6 +58,28 @@ export function acceptMessage(event, { expectedSource, expectedOrigin }) {
   return data
 }
 
+// webview 桥消息的「来源」哨兵：preload 经 ipc-message 交过来的消息只可能出自我们挂的那个
+// webview（页面拿不到 ipcRenderer），source 那一半天然成立，origin 那一半仍要判。
+const BRIDGE_SOURCE = Object.freeze({ bridge: MESSAGE_SOURCE })
+
+/**
+ * 过滤一条 webview 桥消息（`{ origin, data }`，由 `desktop/preload/captcha-webview-preload.js`
+ * 经 sendToHost 交来），合格时返回 data，否则 null。
+ *
+ * 为什么桌面壳走 webview（dev-board#863）：主窗口 webPreferences.webSecurity=false，
+ * 嵌在这种 WebContents 里的 Turnstile 挑战帧会被 Chromium 以「bad IPC message, reason 1」
+ * 杀掉渲染进程，控件卡死（300030），永远拿不到 token；webview 是 web security 开着的
+ * 独立 guest。`origin` 是 preload 在 guest 里读到的 `location.origin`——guest 被跳走时
+ * 它跟着变，所以这里仍按官网 origin 卡一道，与 iframe 那条的 origin 判据同义。
+ */
+export function acceptBridgeMessage(payload, { expectedOrigin }) {
+  if (!payload || typeof payload !== 'object') return null
+  return acceptMessage(
+    { source: BRIDGE_SOURCE, origin: payload.origin, data: payload.data },
+    { expectedSource: BRIDGE_SOURCE, expectedOrigin },
+  )
+}
+
 /** size 消息的高度：非有限数/非正数回 null（不改尺寸），过大截断。 */
 export function normalizeHeight(h) {
   const n = Number(h)
@@ -72,6 +94,10 @@ export function normalizeHeight(h) {
  *   托管页加载不出来时不让「获取验证码」按钮永远转圈。
  * - 每次取 token 先发 `reset` 再发 `get-token`：token 一次性，不 reset 的话重发会带上已核销的那枚。
  * - 请求发出后 `timeoutMs`（默认 8 秒）内没拿到非空 token 回空串。
+ * - **交互式挑战**：Turnstile 平时隐形（interaction-only），判定可疑时才长出勾选框要人点
+ *   （托管页发 `size` 且高度 > 0）。这时 8 秒对人来说根本不够——到点回空串、用户点完勾选框
+ *   再按「发送」又会 reset 出一道新挑战，永远绕不出去。所以控件处于展开态时，在等的请求
+ *   放宽到 `interactiveTimeoutMs`（默认 60 秒，与托管页自己轮询 token 的上限一致）。
  * - 等待期间收到的**空串 token 不结束等待**：reset 之后控件可能先回一枚空串（重置回调），
  *   把它当「未通过」会让每次取 token 都立刻失败；真失败由 `error` 消息或超时收口。
  * - 没人在等时自动产出的 token 不留存——下一次 getToken 反正先 reset，它已作废。
@@ -83,6 +109,7 @@ export function normalizeHeight(h) {
  * @param {() => void} [opts.onDisabled]
  * @param {number} [opts.timeoutMs=8000]
  * @param {number} [opts.readyTimeoutMs=15000]
+ * @param {number} [opts.interactiveTimeoutMs=60000]
  * @param {Function} [opts.setTimer=setTimeout]
  * @param {Function} [opts.clearTimer=clearTimeout]
  */
@@ -93,11 +120,12 @@ export function createEmbedController(opts) {
     onDisabled = () => {},
     timeoutMs = 8000,
     readyTimeoutMs = 15000,
+    interactiveTimeoutMs = 60000,
     setTimer = (fn, ms) => setTimeout(fn, ms),
     clearTimer = (id) => clearTimeout(id),
   } = opts || {}
 
-  const state = { ready: false, disabled: false, destroyed: false, provider: '' }
+  const state = { ready: false, disabled: false, destroyed: false, provider: '', interactive: false }
   let inflight = null // { promise, resolve, timer, requested }
 
   function settle(token) {
@@ -112,7 +140,7 @@ export function createEmbedController(opts) {
     if (!inflight || inflight.requested) return
     inflight.requested = true
     if (inflight.timer != null) clearTimer(inflight.timer)
-    inflight.timer = setTimer(() => settle(''), timeoutMs)
+    inflight.timer = setTimer(() => settle(''), state.interactive ? interactiveTimeoutMs : timeoutMs)
     post({ source: MESSAGE_SOURCE, type: 'reset' })
     post({ source: MESSAGE_SOURCE, type: 'get-token' })
   }
@@ -136,6 +164,13 @@ export function createEmbedController(opts) {
       case 'size': {
         const h = normalizeHeight(data.height)
         if (h != null) onSize(h)
+        const wasInteractive = state.interactive
+        state.interactive = h != null
+        // 控件在等待中长出来了：人要点勾选框，把在等的请求放宽到交互上限
+        if (state.interactive && !wasInteractive && inflight && inflight.requested) {
+          if (inflight.timer != null) clearTimer(inflight.timer)
+          inflight.timer = setTimer(() => settle(''), interactiveTimeoutMs)
+        }
         break
       }
       case 'disabled':
