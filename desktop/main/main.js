@@ -11,6 +11,7 @@ const { createAsrDescriptor } = require('./services/asr-service')
 const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 const { createBrowserViewRegistry } = require('./browser-views')
+const { createClipboardPoller, startChangeCounter } = require('./clipboard-watch')
 
 // 单实例锁：必须在文件最开头、任何 app.whenReady()/服务拉起逻辑之前拿。
 //
@@ -200,122 +201,56 @@ let lastClipboardFingerprint = ''
 // 首个 tick 只记指纹不推送：启动前就躺在剪贴板里的内容（尤其图片）不算“新复制”，
 // 否则每次重启应用都会把同一张图再入库一次
 let clipboardPrimed = false
+// macOS 剪贴板变更序号读取器（dev-board#869，见 clipboard-watch.js）
+let clipboardChangeCounter = null
+
+function sendClipboardCopied(payload) {
+  if (mainWindow) {
+    mainWindow.webContents.send('checkba:clipboard-copied', { ...payload, ts: Date.now(), source: 'system' })
+  }
+}
+
+const clipboardPoller = createClipboardPoller({
+  clipboard,
+  getChangeCount: () => (clipboardChangeCounter ? clipboardChangeCounter.get() : null),
+  fingerprint: {
+    get: () => lastClipboardFingerprint,
+    set: (fp) => { lastClipboardFingerprint = fp },
+  },
+  onImage: (dataUrl) => {
+    console.log('[Clipboard] Image detected, size:', dataUrl.length)
+    sendClipboardCopied({ type: 'IMAGE', data: dataUrl })
+  },
+  // 渲染层读不了任意本地路径：只推路径，并登记读取授权，前端再经 checkba:fs-read-file 取内容
+  onFile: (filePath) => {
+    grantReadPath(filePath)
+    sendClipboardCopied({ type: 'FILE', filePath })
+  },
+  onText: (text) => emitClipboard(text, 'system'),
+})
 
 function startClipboardWatcher() {
   if (clipboardWatchTimer) return
   clipboardPrimed = false
+  if (!clipboardChangeCounter) clipboardChangeCounter = startChangeCounter()
 
   // 系统级：轮询剪贴板内容变化
   clipboardWatchTimer = setInterval(() => {
     const priming = !clipboardPrimed
     clipboardPrimed = true
     try {
-      const formats = clipboard.availableFormats()
-
-      const hasImage = formats.some(f => f.includes('image'))
-      const hasText = formats.includes('text/plain')
-
-      // LOG formats for debugging
-      // console.log('[Clipboard] Formats:', formats) 
-
-      // Relaxed: if hasImage, try it.
-      if (hasImage) {
-        const img = clipboard.readImage()
-        if (img && !img.isEmpty()) {
-          // 用原始 bitmap（BGRA buffer，无 PNG+base64 编码开销）算指纹，避免每秒对大图 toDataURL 烧 CPU；
-          // 仅当指纹变化（新图）时才做一次昂贵的 toDataURL。
-          const bitmap = img.toBitmap()
-          const size = img.getSize()
-          const sample = bitmap.length > 64
-            ? bitmap.subarray(0, 32).toString('hex') + bitmap.subarray(bitmap.length - 32).toString('hex')
-            : bitmap.toString('hex')
-          const fingerprint = 'IMG_' + size.width + 'x' + size.height + '_' + bitmap.length + '_' + sample
-          if (fingerprint !== lastClipboardFingerprint) {
-            lastClipboardFingerprint = fingerprint
-            if (priming) return
-            const dataUrl = img.toDataURL()
-            console.log('[Clipboard] Image detected, size:', dataUrl.length)
-            if (mainWindow) {
-              mainWindow.webContents.send('checkba:clipboard-copied', {
-                type: 'IMAGE',
-                data: dataUrl,
-                ts: Date.now(),
-                source: 'system'
-              })
-            }
-          }
-          // If user copied "Mixed Content", we prefer Image.
-          return
-        }
-      }
-
-
-      // 2. 检查文件 (File) - macOS public.file-url
-      // 暂时仅支持单文件路径读取，需根据操作系统适配
-      // user requested: "other files"
-      // Electron clipboard usually has 'public.file-url' on Mac
-      if (process.platform === 'darwin' && formats.includes('public.file-url')) {
-        const filePath = clipboard.read('public.file-url')
-        if (filePath) {
-          // filePath gets returned as file:// URL usually, need to decode
-          let cleanPath = filePath
-          try { cleanPath = decodeURIComponent(filePath.replace('file://', '')) } catch (e) { }
-
-          const fingerprint = 'FILE_' + cleanPath
-          if (fingerprint !== lastClipboardFingerprint) {
-            lastClipboardFingerprint = fingerprint
-            if (priming) return
-            grantReadPath(cleanPath)
-            if (mainWindow) {
-              mainWindow.webContents.send('checkba:clipboard-copied', {
-                type: 'FILE',
-                filePath: cleanPath, // Front-end needs to read this file or we read it here?
-                // Browser/Renderer cannot read arbitrary file path easily without user interaction or enabling nodeIntegration (which we have disabled/isolated)
-                // But we can read it here in Main and send buffer? Or simply notify frontend to trigger a logic?
-                // Better: Send event, and let frontend decide. 
-                // Since frontend is remote (or local server), it can't read local path `filePath` if it is a browser.
-                // But here we are in Electron. 
-                // Solution: Send 'FILE' type with `filePath`. Frontend `onCopied` will receive it.
-                // But frontend `project-overview.vue` runs in Renderer. 
-                // If we want to upload, we need the file data.
-                // Let's read file here and send as Blob/Buffer? No, too big.
-                // Let's send `filePath` and let Frontend invoke `checkbaDesktop.fs.readFile`?
-                // We don't have `checkbaDesktop.fs`.
-                // We can add `checkbaDesktop.clipboard.readFile(path)`?
-                // Or just read tiny files here?
-                // For now, let's just send the path. The user requirement is "record OTHER FILES". 
-                // If we just record the path text, that's not "recording the file".
-                // Let's try to send basic meta first.
-                ts: Date.now(),
-                source: 'system'
-              })
-            }
-          }
-          return
-        }
-      }
-
-      // 3. 文本 (Text)
-      if (hasText) {
-        const t = clipboard.readText() || ''
-        // trim 与 emitClipboard 保持一致，否则两处指纹对不上会反复推送
-        const tt = String(t || '').trim()
-        if (!tt) return
-        const fingerprint = 'TXT_' + tt
-        if (fingerprint !== lastClipboardFingerprint) {
-          lastClipboardFingerprint = fingerprint
-          if (priming) return
-          emitClipboard(tt, 'system') // reuse emitClipboard for text to keep compat
-        }
-      }
-
+      clipboardPoller.tick(priming)
     } catch (e) {
       // ignore
     }
-  }, 1000) // Increase interval to 1s to save CPU on image processing
+  }, 1000)
 }
 
 function stopClipboardWatcher() {
+  if (clipboardChangeCounter) {
+    clipboardChangeCounter.stop()
+    clipboardChangeCounter = null
+  }
   if (!clipboardWatchTimer) return
   clearInterval(clipboardWatchTimer)
   clipboardWatchTimer = null
