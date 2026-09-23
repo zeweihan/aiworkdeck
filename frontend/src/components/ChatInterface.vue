@@ -847,12 +847,12 @@ import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, getCurrentUser as getCurrentUserApi, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
 import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import DecisionAssistControl from './DecisionAssistControl.vue'
 import ModelSelectorDropdown from './ModelSelectorDropdown.vue'
-import { decisionAssistPreferenceKey, readDecisionAssistPreference, writeDecisionAssistPreference } from '@/utils/decisionAssistPreference.js'
+import { createDecisionAssistState, decisionAssistPreferenceKey, decisionAssistUser } from '@/utils/decisionAssistPreference.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 import { ICONS } from '@/config/icons.js'
@@ -1094,38 +1094,55 @@ export default {
         emit('refresh-history') // Trigger history refresh to show new title
     })
     const decisionAssistEnabled = ref(false)
-    const decisionAssistIdentity = () => decisionAssistPreferenceKey(getCurrentUser(), getApiBaseUrl())
-    let decisionAssistOwner = decisionAssistIdentity()
-    decisionAssistEnabled.value = readDecisionAssistPreference(uni, decisionAssistOwner)
+    // local-mode 免登下 checkba_user 永远为空（dev-board#877）：用 GET /api/auth/me 解析出的
+    // 真实用户补上身份，不把它写回 checkba_user（那是浏览器登录态的判别位）。
+    let decisionAssistResolvedUser = null
+    const decisionAssistIdentity = () => decisionAssistPreferenceKey(decisionAssistUser(getCurrentUser(), decisionAssistResolvedUser), getApiBaseUrl())
+    const decisionAssistState = createDecisionAssistState({
+      storage: uni,
+      identity: decisionAssistIdentity,
+      onChange: (value) => { decisionAssistEnabled.value = value },
+    })
+    decisionAssistEnabled.value = decisionAssistState.enabled
+    let decisionAssistOwner = decisionAssistState.owner
     const syncDecisionAssistPreference = (reload = false) => {
-      const owner = decisionAssistIdentity()
-      if (owner !== decisionAssistOwner || reload === true) {
-        decisionAssistOwner = owner
-        decisionAssistEnabled.value = readDecisionAssistPreference(uni, owner)
-      }
-      return decisionAssistEnabled.value
+      const value = decisionAssistState.sync(reload)
+      decisionAssistOwner = decisionAssistState.owner
+      return value
     }
     const toggleDecisionAssist = () => {
-      // Re-read the identity before writing: switching accounts must never inherit consent.
+      // 先翻转界面（身份未解析时只留在内存，解析后由该身份落盘）；换账号绝不继承同意。
+      decisionAssistState.toggle()
+      decisionAssistOwner = decisionAssistState.owner
+    }
+    const resolveDecisionAssistUser = async () => {
+      // 浏览器登录态已有缓存身份时不必再问服务端
+      if (decisionAssistUser(getCurrentUser(), null)) return syncDecisionAssistPreference()
+      try {
+        const res = await getCurrentUserApi()
+        decisionAssistResolvedUser = res && res.code === 0 && res.data ? res.data : null
+      } catch (e) {
+        decisionAssistResolvedUser = null
+      }
       syncDecisionAssistPreference()
-      if (!decisionAssistOwner) return
-      decisionAssistEnabled.value = !decisionAssistEnabled.value
-      writeDecisionAssistPreference(uni, decisionAssistOwner, decisionAssistEnabled.value)
     }
     const sendMessage = (options) => sendAgentMessage({
       ...options,
       decisionAssistEnabled: Object.prototype.hasOwnProperty.call(options, 'decisionAssistEnabled')
-        ? options.decisionAssistEnabled === true && options.decisionAssistOwner === decisionAssistIdentity()
+        ? options.decisionAssistEnabled === true && decisionAssistState.ownerStillCurrent(options.decisionAssistOwner)
         : syncDecisionAssistPreference(),
     })
     const refreshDecisionAssistPreference = () => syncDecisionAssistPreference(true)
     onMounted(() => {
       window.addEventListener('focus', refreshDecisionAssistPreference)
       window.addEventListener('storage', refreshDecisionAssistPreference)
+      uni.$on('awd:identity-updated', resolveDecisionAssistUser)
+      resolveDecisionAssistUser()
     })
     onBeforeUnmount(() => {
       window.removeEventListener('focus', refreshDecisionAssistPreference)
       window.removeEventListener('storage', refreshDecisionAssistPreference)
+      uni.$off('awd:identity-updated', resolveDecisionAssistUser)
     })
 
     const inputPrompt = ref('')
