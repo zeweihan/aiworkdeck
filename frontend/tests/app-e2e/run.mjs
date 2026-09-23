@@ -498,6 +498,11 @@ try {
     // 全新 profile 在英文 locale 机器/CI 上会整套翻成英文导致中文断言全线假红。
     // 显式写语言键（uni h5 的 getStorageSync 兼容裸字符串）。
     try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ }
+    // 视为用户亲手选过中文：解锁页选国际站时「从没选过语言就顺带切英文」（设计 2026-09-23 §2.4）
+    // 会整页 reload 成英文，中文断言全线假红。同理钉住「首装按语言预选站点」已做过，
+    // 套件全程不让页面替用户切站（长驻后端的站点状态由套件自己管）。
+    try { localStorage.setItem('awd_app_language_manual', '1') } catch (e) { /* ignore */ }
+    try { localStorage.setItem('awd_site_preselected', '1') } catch (e) { /* ignore */ }
   }, BACKEND)
 
   // 后端的解锁门形态。trialCodeEnabled=false 是发版默认值（官方版必须账户登录）；
@@ -523,57 +528,102 @@ try {
       note('skip', 'J1 破坏性解锁链路（坏码报错 / 真码解锁 / 向导巡检）本轮未覆盖')
     }
 
-    await step('unlock 页给得出解锁门的出路', async () => {
+    // 站点形态：国际站开放（2026-09-23）后发版默认是双站，解锁页顶部有分段控件
+    const site0 = await api('/api/site')
+    const multiSite = !!(site0 && site0.multiSite)
+
+    await step('unlock 页是「登录或注册」一个入口（无页签）', async () => {
       await page.goto(BASE + '/#/pages/unlock/unlock', { waitUntil: 'domcontentloaded', timeout: 30000 })
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-      await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
+      await page.waitForSelector('.unlock-btn', { timeout: 20000 })
+      // 登录与注册是同一条链路（官网验证码端点「不存在即注册」），页签整个撤掉（dev-board#846）
+      if (await page.$('.unlock-tab')) throw new Error('解锁门仍留着「登录 / 注册」页签')
+      await page.waitForFunction(() => {
+        const btn = document.querySelector('.unlock-btn')
+        return !!btn && btn.textContent.trim() === '继续'
+      }, { timeout: 10000 })
+      const title = await page.$eval('.unlock-title', (e) => e.textContent.trim())
+      if (title !== '登录或注册') throw new Error('标题不是「登录或注册」：' + title)
+      if (multiSite) {
+        await page.waitForSelector('.unlock-site-seg', { timeout: 10000 })
+        const segs = await page.$$eval('.unlock-site-seg-item', (els) => els.map((e) => e.textContent.trim()))
+        if (segs.length !== 2 || segs[0] !== '中国大陆' || segs[1] !== '国际 · International') {
+          throw new Error('站点分段控件文案不对：' + JSON.stringify(segs))
+        }
+      } else {
+        note('skip', '后端为单站形态（multiSite=false），站点分段控件断言本轮未覆盖')
+      }
       if (!trialGateOpen) {
-        // 等 trialCodeEnabled 拉回来（异步）：第三个页签（试用码 / Key）整条撤掉，只剩登录与注册
+        // 等 trialCodeEnabled 拉回来（异步）：Key 入口整条撤掉
         await page.waitForFunction(
-          () => document.querySelectorAll('.unlock-tab').length === 2,
+          () => !document.querySelector('.unlock-foot-link'),
           { timeout: 15000 },
         )
       }
-      const tabs = await page.$$eval('.unlock-tab', (els) => els.map((e) => ({
-        text: e.textContent.trim(), active: e.className.includes('is-active'),
-      })))
-      // PR#408 的契约（账户登录必须在、且是默认落点）在页签改成「登录 / 注册」之后照旧
-      if (tabs[0].text !== '登录') throw new Error('第一个标签不是「登录」：' + tabs[0].text)
-      if (!tabs[0].active) throw new Error('「登录」必须是默认标签，否则新用户进来先看到的是一条走不通的路')
-      // 注册必须在页面上：桌面端允许注册之后，没有这个入口的新用户在这里是死路
-      if (tabs[1].text !== '注册') throw new Error('第二个标签不是「注册」：' + tabs[1].text)
       const t = await textOf()
+      // 官方版自 2026-08-18 起不再有「解锁正式版」的概念（dev-board#848）
+      if (t.includes('正式版已解锁')) throw new Error('解锁门仍在说「正式版已解锁」')
+      if (t.includes('获取正式版')) throw new Error('解锁门仍留着「获取正式版」外链')
       // 账号密码那条路已从解锁门撤掉（官网验证码端点「不存在即注册」，口令是存量遗留）
       if (t.includes('用账号密码登录')) throw new Error('解锁门仍留着「用账号密码登录」入口')
-      // 注册即正式版，「获取正式版」这条外链现在是错的指路
-      if (t.includes('获取正式版')) throw new Error('解锁门仍留着「获取正式版」外链')
       if (!trialGateOpen) {
-        for (const tab of tabs) {
-          if (tab.text.includes('试用码')) throw new Error('试用码已关闭，页签不该还叫「试用码」：' + tab.text)
-        }
+        if (t.includes('使用账户 Key')) throw new Error('试用码已关闭，页面仍留着「使用账户 Key」入口')
         // 「获取试用码」外链指向 README 里已经撤掉的那枚码，必须一并消失
         if (t.includes('获取试用码')) throw new Error('试用码已关闭，页面仍留着「获取试用码」外链')
       }
     })
 
-    // 试用码关掉之后，原先「粘试用码被后端拒掉」那一步已经没有落点可点
-    // （官方版整条 Key 页签都不渲染，PR#420）。换成钉住新增的注册页签：
-    // 切过去必须真的换成注册口径，否则「允许注册」只是一个改不动任何东西的装饰页签。
-    await step('注册页签换成注册口径', async () => {
-      await mouseClickSel('.unlock-tab:nth-child(2)')
-      await page.waitForFunction(() => {
-        const btn = document.querySelector('.unlock-btn')
-        return !!btn && btn.textContent.includes('注册')
-      }, { timeout: 10000 })
-      const t = await textOf()
-      if (!t.includes('未注册过的')) throw new Error('注册页签没有说清「未注册即创建账户」这件事')
-      // 切回登录页签，主按钮要变回登录口径（两边都得真的换，不能只单向生效）
-      await mouseClickSel('.unlock-tab:nth-child(1)')
-      await page.waitForFunction(() => {
-        const btn = document.querySelector('.unlock-btn')
-        return !!btn && btn.textContent.trim() === '登录'
-      }, { timeout: 10000 })
-    })
+    // 切站在解锁页上是非破坏性的前提：本机没有账户连接、也不是账户 Key 解锁
+    //（否则切站会清掉账户票据，长驻后端还原不回来）。满足时点一下「国际」，
+    // 标识符必须换成邮箱口径且**不弹确认框**（§2.2），再切回来并确认后端回到 cn。
+    const siteSwitchSafe = multiSite && !(site0 && site0.pinned)
+      && !(lic0 && lic0.accountConnected) && !(lic0 && lic0.mode === 'account')
+    if (!siteSwitchSafe) {
+      note('skip', multiSite
+        ? '本机已连账户或为账户 Key 解锁（切站会清票据），站点切换断言本轮未覆盖'
+        : '单站形态，站点切换断言本轮未覆盖')
+    } else {
+      const identPlaceholder = () => page.evaluate(() => {
+        const el = document.querySelector('.unlock-field-box .uni-input-placeholder')
+        return el ? el.textContent.trim() : ''
+      })
+      try {
+        await step('站点分段控件切到国际站换成邮箱口径（未登录不弹确认）', async () => {
+          await mouseClickSel('.unlock-site-seg-item:nth-child(2)')
+          await page.waitForFunction(() => {
+            const el = document.querySelector('.unlock-field-box .uni-input-placeholder')
+            return !!el && el.textContent.trim() === '邮箱'
+          }, { timeout: 15000 })
+          const modal = await page.evaluate(() => {
+            const m = document.querySelector('.uni-modal')
+            return !!m && getComputedStyle(m).display !== 'none' && m.offsetParent !== null
+          })
+          if (modal) throw new Error('未登录态切站不该弹确认框')
+          const s1 = await api('/api/site')
+          if (!s1 || s1.current !== 'intl') throw new Error('后端站点没有切到 intl：' + JSON.stringify(s1 && s1.current))
+          const t = await textOf()
+          if (!t.includes('未注册的邮箱会自动创建账户')) throw new Error('国际站说明没有换成邮箱口径')
+          // 已手动选过中文，选国际站不该顺带切英文
+          const title = await page.$eval('.unlock-title', (e) => e.textContent.trim())
+          if (title !== '登录或注册') throw new Error('手动选过中文后选国际站，界面被切成了：' + title)
+        })
+        await step('切回中国大陆恢复手机号口径', async () => {
+          await mouseClickSel('.unlock-site-seg-item:nth-child(1)')
+          await page.waitForFunction(() => {
+            const el = document.querySelector('.unlock-field-box .uni-input-placeholder')
+            return !!el && el.textContent.trim() === '手机号'
+          }, { timeout: 15000 })
+          const ph = await identPlaceholder()
+          if (ph !== '手机号') throw new Error('标识符占位没有回到手机号：' + ph)
+        })
+      } finally {
+        // 无论断言成败，都把长驻后端的站点还原成进来时的样子
+        const s2 = await api('/api/site')
+        if (site0 && s2 && s2.current !== site0.current) {
+          await api('/api/site/select', { method: 'POST', body: { site: site0.current } })
+        }
+      }
+    }
 
     await step('后端授权状态未被 J1 改动', async () => {
       const after = await api('/api/license/status')
@@ -598,11 +648,12 @@ try {
     }
   }
 
-  // 解锁门的默认落点是「登录」页签（PR#408 起），试用码在第三个页签上——
-  // 破坏性链路每次进页面都得先切过去，否则根本没有 .unlock-input 可打字。
+  // 解锁门的默认落点是验证码登录；试用码 / Key 由卡片底部「使用账户 Key」进入
+  //（2026-09-23 页签撤掉之后）——破坏性链路每次进页面都得先切过去，否则根本没有
+  // .unlock-input 可打字。
   const openTrialCodeTab = async () => {
-    await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
-    await mouseClickSel('.unlock-tab:nth-child(3)')
+    await page.waitForSelector('.unlock-card-foot .unlock-foot-link', { timeout: 20000 })
+    await mouseClickSel('.unlock-card-foot .unlock-foot-link')
     // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
     await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
     await ensureConsentChecked()

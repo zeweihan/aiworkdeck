@@ -153,21 +153,10 @@ export default {
   logoutGroupTitle: 'Sign-in',
   logoutGroupHint: 'Returns to the sign-in screen so you can use a different account. Your local projects and files stay where they are.',
 
-  // ---- login.vue: top nav / 3D showcase decorative copy ----
+  // ---- login.vue: top nav ----
   guideNav: 'Guide',
   helpCenterNav: 'Help Center',
   officialSiteNav: 'Website',
-  demoCaseFiles: 'Case Intake Files',
-  demoDueDiligence: 'Due Diligence',
-  demoLegalOpinion: 'Legal Opinion',
-  demoDiligenceReportDoc: 'Due Diligence Report.doc',
-  demoEvidenceListXlsx: 'Evidence List.xlsx',
-  demoDocTitle: 'Legal Due Diligence Report on Project Alpha',
-  demoDocTo: 'To: Client Committee',
-  demoDocDate: 'Date: 2025-12-17',
-  demoChapterTitle: 'Chapter 1: Overview of Legal Due Diligence',
-  demoParagraph1: "This due diligence review comprehensively assesses the target company's legal compliance, including but not limited to incorporation and standing, key assets, material liabilities, and tax compliance.",
-  demoParagraph2: 'We reviewed the corporate registration files, contracts, and government approvals provided by the target company, and interviewed key management…',
 
   // ---- login.vue: login card ----
   productSubtitle: 'All-in-One AI Document Workbench',

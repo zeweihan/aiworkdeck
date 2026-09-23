@@ -1320,7 +1320,7 @@ ipcMain.handle('checkba:ping', async () => {
   return { ok: true, pid: process.pid }
 })
 
-// 用系统浏览器打开站外链接（解锁页「获取试用码/获取正式版」等场景）。
+// 用系统浏览器打开站外链接（解锁页的《服务条款》《隐私政策》、未绑手机号时前往官网等场景）。
 // 注意：setWindowOpenHandler 只把 http(s) 转发给工作区浏览器 tab 的消费者，
 // 解锁门等未加载 project-overview 的页面无人消费——必须走这条显式通道。
 ipcMain.handle('checkba:shell-open-external', async (_evt, payload) => {

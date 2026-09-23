@@ -154,21 +154,10 @@ export default {
   logoutGroupTitle: '登录',
   logoutGroupHint: '退出后回到登录页，可换一个账户登录。本机的项目与文件保留在原处。',
 
-  // ---- login.vue：顶部导航 / 3D 展示区装饰文案 ----
+  // ---- login.vue：顶部导航 ----
   guideNav: '使用指引',
   helpCenterNav: '帮助中心',
   officialSiteNav: '官网',
-  demoCaseFiles: '立案文件',
-  demoDueDiligence: '尽职调查',
-  demoLegalOpinion: '法律意见书',
-  demoDiligenceReportDoc: '尽职调查报告.doc',
-  demoEvidenceListXlsx: '证据清单.xlsx',
-  demoDocTitle: '关于 Project Alpha 的法律尽职调查报告',
-  demoDocTo: '致：客户委员会',
-  demoDocDate: '日期：2025-12-17',
-  demoChapterTitle: '第一章 法律尽职调查概述',
-  demoParagraph1: '本次尽职调查旨在全面评估目标公司的法律合规性，包括但不限于公司设立与存续、主要资产、重大债权债务、税务合规等方面。',
-  demoParagraph2: '我们查阅了目标公司提供的工商档案、合同文件及相关的政府批文，并对关键管理人员进行了访谈...',
 
   // ---- login.vue：登录卡片 ----
   productSubtitle: '一站式AI文档工作台',

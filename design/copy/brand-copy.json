@@ -1,0 +1,43 @@
+{
+  "version": "1.0.0",
+  "name": "AI WorkDeck 品牌文案 Brand copy",
+  "authority": "本文件是 AI WorkDeck 各端品牌文案（眉标、主标题、导语、十类工作来源、核心价值）的唯一真源，与 design/tokens/awd-palette.json 同一机制。改文案只改这里，再同步各端副本；桌面端 locale 的 onboarding.unlock.brand.* 由 frontend/scripts/check-brand-copy.mjs 逐字对拍。",
+  "source": "tagline / lead / sources 逐字取自官网仓 master（Codex 2026-09-23 定稿）：components/sections/EditionHome.tsx、Hero.tsx、ConvergenceHero.tsx。valueStatement 为维护者拍板的核心价值，本轮登录页不展示，供各端后续统一引用。",
+  "consumers": [
+    "checkba_cloud: frontend/src/locales/{zh-CN,en-US}/onboarding.js 的 unlock.brand.*（桌面解锁页与云端浏览器登录页左栏共用，组件 frontend/src/components/BrandShowcase.vue）"
+  ],
+  "copy": {
+    "brand": { "zh": "AI WorkDeck", "en": "AI WorkDeck" },
+    "edition": { "zh": "社区版", "en": "Community Edition" },
+    "tagline": {
+      "zh": "让工作，回到一处。",
+      "en": "Bring your work together.",
+      "_accent": "主标题中以主色着色的尾段，必须是 tagline 的后缀",
+      "accent": { "zh": "回到一处。", "en": "together." }
+    },
+    "lead": {
+      "zh": "为法律人与文档工作者打造的 AI 工作台。文档、沟通、研究，在同一个空间里有序展开。",
+      "en": "The AI workspace for lawyers and document professionals. Documents, conversations and research, all in one place."
+    },
+    "sources": [
+      { "key": "document", "zh": "Word 文档", "en": "Word documents" },
+      { "key": "mail", "zh": "邮件", "en": "Email" },
+      {
+        "key": "chat",
+        "zh": "微信与沟通",
+        "en": "Team conversations",
+        "_intl": "国际站显示口径（与官网 ConvergenceHero 的 mainland 分叉一致）",
+        "intl": { "zh": "团队沟通", "en": "Team conversations" }
+      },
+      { "key": "data", "zh": "数据表", "en": "Data tables" },
+      { "key": "recorder", "zh": "录音笔", "en": "Voice recorder" },
+      { "key": "phone", "zh": "手机", "en": "Mobile" },
+      { "key": "camera", "zh": "相机", "en": "Camera" },
+      { "key": "pdf", "zh": "PDF 材料", "en": "PDF files" },
+      { "key": "law", "zh": "法规与案例库", "en": "Legal research" },
+      { "key": "folder", "zh": "案件文件夹", "en": "Matter files" }
+    ],
+    "sourcesCaption": { "zh": "十类工作来源，汇聚到同一张案头", "en": "Ten kinds of work, gathered onto one desk" },
+    "valueStatement": { "zh": "帮法律人聚焦专业判断", "en": "Keep lawyers focused on professional judgment" }
+  }
+}

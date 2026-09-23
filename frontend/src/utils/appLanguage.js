@@ -14,6 +14,10 @@
 // host → appLanguage → api → host 的循环引用。
 
 export const APP_LANGUAGE_KEY = 'awd_app_language'
+// 「用户亲手选过语言」的标记。APP_LANGUAGE_KEY 在首启猜测时就会落盘，
+// 不能拿它的存在与否判断「选过没有」——解锁页选国际站时要据此决定
+// 是否顺手切到英文（设计 2026-09-23 §2.4：用户手动选过就尊重用户）。
+export const APP_LANGUAGE_MANUAL_KEY = 'awd_app_language_manual'
 export const APP_LANGUAGE_EVENT = 'awd-language-changed'
 export const SUPPORTED_LANGUAGES = ['zh-CN', 'en-US']
 
@@ -70,16 +74,26 @@ export function isEnglish() {
   return getAppLanguage() === 'en-US'
 }
 
+/** 用户是否亲手选过界面语言（设置页、应用菜单、解锁页底部切换都算）。 */
+export function isLanguageManuallyChosen() {
+  return !!readStorage(APP_LANGUAGE_MANUAL_KEY)
+}
+
 /**
  * 设置语言并广播。镜像写透（后端 system_setting、桌面主进程）由 App.vue
  * 的 APP_LANGUAGE_EVENT 监听器完成，调用方不需要关心。
+ * 默认视为用户亲手选择；程序替用户切换（如选国际站顺带切英文）传 { auto: true }，
+ * 不留「手动选过」的标记。
  */
-export function setAppLanguage(lang) {
+export function setAppLanguage(lang, opts = {}) {
   if (!SUPPORTED_LANGUAGES.includes(lang)) return getAppLanguage()
   const changed = lang !== getAppLanguage()
   cached = lang
   syncDocumentLang(lang)
   try { uni.setStorageSync(APP_LANGUAGE_KEY, lang) } catch (e) { console.warn('[appLanguage] persist failed:', e) }
+  if (!(opts && opts.auto)) {
+    try { uni.setStorageSync(APP_LANGUAGE_MANUAL_KEY, '1') } catch (e) { /* ignore */ }
+  }
   if (changed) {
     try { uni.$emit(APP_LANGUAGE_EVENT, lang) } catch (e) { /* ignore */ }
   }
