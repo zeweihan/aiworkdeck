@@ -329,13 +329,16 @@ try {
     return { reachable: true, landed: parts.length > 0, text, tools: toolCount > 0, toolCount, why: '' }
   }
 
+  /** 这一页是不是还在流式：发送键变成停止键就是在流。全文件只此一份判据。 */
+  const aiStreaming = () => page.evaluate(() => !!document.querySelector('.stop-btn'))
+
   /**
    * 等这一轮落定：发送键退出停止态（DOM 判据），或后端已把助手消息写进历史（落库判据）。
    * 两条都不成立才判红。先给流式一个起跑窗口，否则点完发送的那一拍 .stop-btn
    * 还没挂上，会被误判成「已经跑完了」。
    */
   const settleAiTurn = async (prompt, { timeoutMs = 240000, startMs = 15000 } = {}) => {
-    const streaming = () => page.evaluate(() => !!document.querySelector('.stop-btn'))
+    const streaming = aiStreaming
     const t0 = Date.now()
     while (Date.now() - t0 < startMs) {
       if (await streaming()) break
@@ -352,6 +355,42 @@ try {
     }
     throw new Error('这一轮 ' + Math.round(timeoutMs / 1000) + 's 后既没退出停止态（.stop-btn 还在），'
       + '历史里也没有助手消息（' + (hist.why || '') + '）')
+  }
+
+  /**
+   * 离开当前页面之前，先等这一轮流式真正结束（dev-board#826）。
+   *
+   * settleAiTurn 的「历史落库」判据会在**多轮工具调用的中间一轮**就返回：第 N 轮的助手
+   * 消息已经写进 project_ai_message，编排器还在跑第 N+1 轮。此刻整页 reload 走掉，页面
+   * 的 JS 上下文连同 SSE 一起消失（重连无从发生，服务端那一轮照样跑完落库），后端日志
+   * 留下一次 `removing emitter`——发版门里「断流计数应为 0」的那条信号就不再是 0/1 开关。
+   * 判据与 settleAiTurn 同源（aiStreaming：.stop-btn 还在就是还在流）。
+   *
+   * 这是离开页面的卫生动作、不是断言：超时不判红，只记一条 note 说明这次导航确实掐了流。
+   */
+  const quiesceAiStream = async ({ timeoutMs = 120000 } = {}) => {
+    // 页面正在导航/上下文已被换掉时 evaluate 会抛，那就不存在「还在流」这回事
+    const streaming = () => aiStreaming().catch(() => false)
+    if (!(await streaming())) return
+    const t0 = Date.now()
+    while (Date.now() - t0 < timeoutMs) {
+      await sleep(500)
+      if (!(await streaming())) {
+        console.log('    [quiesce] 离开页面前等这一轮流式结束，用了 ' + Math.round((Date.now() - t0) / 1000) + 's')
+        return
+      }
+    }
+    note('ai-quiesce', '离开页面前等了 ' + Math.round(timeoutMs / 1000) + 's，这一轮仍在流式（.stop-btn 还在），'
+      + '本次导航会掐断 SSE（后端日志会多一次 removing emitter）')
+  }
+
+  // 任何整页 reload / 跳转都先让在跑的那一轮落地。走猴补丁而不是改四十来处调用点：
+  // 「先等流式结束」是离开页面这个动作固有的前置条件，漏一处就会重新长出 dev-board#826
+  // 那次 removing emitter，而漏了哪一处在日志里只表现为一个计数，极难回溯。
+  // （J13 另起的 j13Page 不跑 AI，不需要这层。）
+  for (const m of ['goto', 'reload']) {
+    const orig = page[m].bind(page)
+    page[m] = async (...args) => { await quiesceAiStream(); return orig(...args) }
   }
 
   /**
