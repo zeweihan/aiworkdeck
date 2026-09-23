@@ -439,9 +439,12 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
-    @DisplayName("无活跃文档时用户消息保持原样，不夹带提醒")
+    @DisplayName("无活跃文档时用户消息不夹带活跃文档提醒")
     void noReminderWhenNoActiveContext() {
-        assertEquals("帮我修订一下", assembleLastUserText(null), "无活跃文档时用户消息不应被改写");
+        // 末尾只剩 AGENT 模式通用的「拿不准先问」一句（dev-board#868，ContextAssemblerAskUserTest 守），
+        // 活跃文档那段提醒一个字都不许出现
+        assertEquals("帮我修订一下" + ContextAssemblerService.clarificationReminder(AgentMode.AGENT, "帮我修订一下", false),
+                assembleLastUserText(null), "无活跃文档时不应夹带活跃文档提醒");
     }
 
     // ==== 内联正文（inlineContent，Office 插件路径）====
@@ -1197,7 +1200,8 @@ class ContextAssemblerServiceTest {
                 null, null, "88", AgentMode.AGENT, 1L, null);
         dev.langchain4j.data.message.UserMessage last =
                 (dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1);
-        assertEquals("帮我修订一下", last.singleText(),
+        // singleText() 本身就是断言：多模态消息它会抛。末尾的 ask_user 规则见 ContextAssemblerAskUserTest
+        assertTrue(last.singleText().startsWith("帮我修订一下"),
                 "无图片时必须仍是单文本消息——全仓还有一批 singleText() 调用点靠这条");
     }
 

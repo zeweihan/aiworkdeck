@@ -12,6 +12,7 @@ import { isEnglish } from '@/utils/appLanguage.js'
 const NAMES = {
   // 计划 / 项目
   todo_write: { zh: '更新任务清单', en: 'Update plan' },
+  ask_user: { zh: '向用户提问', en: 'Ask the user' },
   get_project_context: { zh: '获取项目信息', en: 'Get project context' },
   update_project_info: { zh: '更新项目信息', en: 'Update project info' },
   get_conversation_summary: { zh: '回顾会话记录', en: 'Recall conversation' },

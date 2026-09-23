@@ -108,6 +108,12 @@
               :options="bubble.question.options || []"
               :answered="!!bubble.question.answered"
               :actionable="isLatest && !bubble.isStreaming && !bubble.question.answered"
+              :kind="bubble.question.kind || ''"
+              :question-id="bubble.question.id || ''"
+              :header="bubble.question.header || ''"
+              :descriptions="bubble.question.descriptions || []"
+              :multi-select="!!bubble.question.multiSelect"
+              :answer="bubble.question.answer || null"
               @answer="$emit('answer-question', $event)"
             />
 

@@ -54,9 +54,12 @@ public class SkillRouter {
      * 表现只是"模型不写任务清单了 / 不派子任务了"（#323 给两个自带 skill 补了 allowed_tools，
      * 但结构性问题还在：下一个新 skill 会再踩一次）。
      *
-     * 反问（{@code <question>} 标签）不在此列：它走标签而不是工具，工具可见性裁剪根本碰不到它。
+     * 反问（{@code <question>} 标签）不需要进来：它走标签而不是工具，工具可见性裁剪根本碰不到它。
+     * 但 {@code ask_user}（dev-board#868）是工具，<b>必须</b>进来：它是「拿不准就先问」的入口，
+     * 被 skill 白名单裁掉的表现是模型在最该问的时候只能自己猜着动手（而 skill 命中的往往
+     * 正是改动面最大的活——审查、清理、整篇起草）。
      */
-    static final Set<String> ORCHESTRATION_TOOLS = Set.of("todo_write", "dispatch_subtask");
+    static final Set<String> ORCHESTRATION_TOOLS = Set.of("todo_write", "dispatch_subtask", "ask_user");
 
     private final SkillRegistry skillRegistry;
     private final SkillProperties properties;

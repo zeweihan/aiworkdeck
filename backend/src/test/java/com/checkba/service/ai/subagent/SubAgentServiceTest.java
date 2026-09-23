@@ -163,6 +163,20 @@ class SubAgentServiceTest {
     }
 
     @Test
+    @DisplayName("ask_user 在子 Agent 里不可用：子任务没有用户可问，也停不了父轮次（dev-board#868）")
+    void askUserRefusedInsideSubAgent() {
+        when(model.generate(anyList(), anyList())).thenReturn(
+                toolCallTurn("ask_user", "{\"question\":\"清理指什么？\",\"options\":[\"A\",\"B\"]}"),
+                textTurn("最终结果"));
+
+        SubAgentResult result = newService().dispatch("任务", "结果", List.of(), PARENT_CTX);
+
+        assertTrue(result.success());
+        verify(registry, never()).execute(eq("ask_user"), any(), any());
+        assertTrue(result.toolsUsed().isEmpty(), "拒绝的调用不计入 toolsUsed");
+    }
+
+    @Test
     @DisplayName("子 Agent 没有 6 轮硬停止，可完成超过 100 个生产性轮次")
     void productiveRoundsAreUnlimited() {
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();

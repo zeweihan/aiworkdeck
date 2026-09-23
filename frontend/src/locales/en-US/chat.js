@@ -339,6 +339,11 @@ export default {
   questionTitle: 'Confirmation Needed',
   answeredBadge: 'Answered',
   answerHint: 'Reply in the input box below and the AI will continue from this question.',
+  // ask_user question card (dev-board#868)
+  askUserOther: 'Other',
+  askUserOtherPlaceholder: 'Describe what you want, press Enter to send',
+  askUserSubmit: 'Send answer',
+  askUserOtherAnswer: 'Note: {text}',
   // ---- SubtaskResultCard ----
   subtaskResultTitle: 'Subtask Result',
   subtaskProduced: 'Delivered',

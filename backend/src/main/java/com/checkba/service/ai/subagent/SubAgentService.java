@@ -421,6 +421,11 @@ public class SubAgentService {
         if (DISPATCH_TOOL_NAME.equals(resolved)) {
             return "Error: dispatch_subtask is not available inside a sub-agent (nested delegation refused).";
         }
+        // ask_user 会结束「本轮」并等用户回答——子 Agent 既没有用户可问，也停不了父轮次（dev-board#868）
+        if (com.checkba.service.ai.AskUserQuestion.TOOL_NAME.equals(resolved)) {
+            return "Error: ask_user is not available inside a sub-agent. Finish with what you have and "
+                    + "state the open question in your result; the main agent will ask the user.";
+        }
         if (!allowed.contains(resolved)) {
             return "Error: tool '" + resolved + "' is outside this sub-agent's tool scope.";
         }
@@ -452,6 +457,7 @@ public class SubAgentService {
             }
         }
         allowed.remove(DISPATCH_TOOL_NAME);
+        allowed.remove(com.checkba.service.ai.AskUserQuestion.TOOL_NAME);
         return allowed;
     }
 

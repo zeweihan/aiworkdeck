@@ -346,6 +346,11 @@ export default {
   questionTitle: '需要你确认',
   answeredBadge: '已回答',
   answerHint: '在下方输入框回答即可，AI 会接着这一问继续。',
+  // ask_user 问题卡（dev-board#868）
+  askUserOther: '其他',
+  askUserOtherPlaceholder: '写下你的要求，回车发送',
+  askUserSubmit: '发送回答',
+  askUserOtherAnswer: '补充：{text}',
   // ---- SubtaskResultCard ----
   subtaskResultTitle: '子任务结果',
   subtaskProduced: '已产出',
