@@ -65,11 +65,16 @@ function harness(platform = 'darwin') {
     setInterval: fn => { intervals.push(fn); return intervals.length }, clearInterval: () => {},
     views: { layoutAll() {} }, restoreViewsVisibility() {}, syncOcrSelectWinBounds() {},
     attachCopyListener() {}, attachDownloadListener() {}, attachAvatarCorpRelaxation() {},
+    // 轮询逻辑用真模块；变更序号 helper（osascript）不起，走无序号的逐 tick 读取（dev-board#869）
+    createClipboardPoller: require('../main/clipboard-watch').createClipboardPoller,
+    startChangeCounter: () => null,
   })
   vm.runInContext(`let mainWindow = null; let mainWindowStartupReady = false;
     let services = { ports: { backend: 9799 } }; const IS_DEV = false;
     let clipboardWatchTimer = null; let clipboardPrimed = false; let lastClipboardFingerprint = '';
+    let clipboardChangeCounter = null;
     ${section('function emitClipboard(', 'function closeOcrSelectWin(')}
+    ${section('function sendClipboardCopied(', 'function startClipboardWatcher()')}
     ${section('function startClipboardWatcher()', 'function stopClipboardWatcher()')}
     ${section('function createMainWindow()', 'function syncOcrSelectWinBounds()')}
     ${section("app.on('activate'", "app.on('before-quit'")}

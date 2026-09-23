@@ -107,7 +107,7 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
 **截图**：入口 `checkbaDesktop.ocr.captureScreen`；desktop main.js 透明覆盖框选窗 ~:389-571（BrowserView 模式仅限其区域内框选 ~:426）、capturePage 抓取 ~:577/:585/:709、IPC：ocr-capture-screen/desktop/window/view + ocr-start-selection。**推荐链路是 ocr-capture-view（当前 BrowserView，免 macOS 录屏权限）**；无独立后端端点，产物统一走 OCR。
   渲染层浮层（project-overview.vue `.ocr-overlay`，样式在 project-overview.scss）的底图是一张冻结帧截图，叠在上面的 `.ocr-selection` / 提示条**必须用半透明字面量**，不能引用 `--awd-*-soft` 这类主题令牌（浅色下是不透明色，PR#657 令牌化曾把选区变成一整块 #EFF6FF，框住的内容全没了，dev-board#474）；提示条贴底居中，别钉左上角压交通灯与项目名。契约测试 `npm run test:ocr-overlay`。
 
-**剪贴板**：`ClipboardPanel.vue`；desktop main.js 轮询监听 clipboardWatchTimer ~:117-232（指纹去重 ~:110，首 tick 只记指纹）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
+**剪贴板**：`ClipboardPanel.vue`；desktop 主进程 1 秒轮询：定时器与推送在 main.js `startClipboardWatcher`，单次 tick 的判定逻辑在 `desktop/main/clipboard-watch.js`（指纹去重与 main.js `emitClipboard` 共用，首 tick 只记指纹、图文混合优先图）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
   **重启后采集又停住（2026-09-07，dev-board#455）**：先区分「页面没订阅」与「主窗引用丢失」。
   实机 0.35 已有 IPC 订阅但本会话无事件，既有窗口截图接口却报 `window not ready`：
   macOS `activate` 可抢在异步启动链之前建窗，随后又建第二个；旧窗关闭回调无条件把
@@ -390,6 +390,12 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - **给网页标签加保活池要分宿主**：Web 走组件池，桌面走 BrowserView detach；两边都开等于
   桌面端把多个 BrowserView 同时挂上窗口。
 - 剪贴板去重靠指纹+window 级状态，改动监听逻辑先读 PR#148/#151 教训。
+- **剪贴板轮询不许每 tick 整图解码（dev-board#869）**：`readImage()` 在 macOS 上是「TIFF 解码 → PNG 编码 → PNG 解码」整一趟
+  （2010x1466 实测 71ms/次），图躺在剪贴板里时旧轮询让主进程空闲 CPU 常驻 7–11%。现在 macOS 由常驻
+  `/usr/bin/osascript`（JXA，`clipboard-watch.js` 的 `startChangeCounter`）每 0.5 秒读 `NSPasteboard.changeCount`，
+  序号没变就不读图；Windows/Linux 或 helper 退出时 `getChangeCount()` 为 null，走兜底：`availableFormats()` 与上一 tick 相同则整图
+  每 `IMAGE_RECHECK_TICKS`（5）个 tick 才重读一次，格式集一变当 tick 重读——代价是「图换图且格式集不变」最多晚 5 秒被发现。
+  helper 父进程没了会自己退；`stopClipboardWatcher` 负责杀它。回归 `desktop/tests/clipboard-watch.test.js`。
 - **`checkba_user` 在桌面免登下恒空，不是登录态判据**：拿它当闸门会静默关掉整个功能，
   而后端在 local-mode 无视 header 一律解析本机用户，读接口照常有数据，症状伪装成
   「数据停在某一天」而不是「未登录」。剪贴板采集就这么断了半个月（dev-board#455），
@@ -438,7 +444,7 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 
 ## 验证
 
-- desktop 服务栈：`cd desktop && npm test`（service-manager/model-manager/pysvc-runtime/**browser-views**）。
+- desktop 服务栈：`cd desktop && npm test`（service-manager/model-manager/pysvc-runtime/**browser-views**/**clipboard-watch**）。
   `browser-views.test.js` 钉住的就是上面那套记账：复用不重载、detach 不销毁、隐藏恢复只挂回前台、双开计数。
 - 后端相关单测：TtsServiceTest、FileControllerChunkedUploadTest、ProjectFileService*Test、
   **BrowserProxyControllerTest**（SSRF 例外名单默认关、注入脚本能解析、proxify 绝对地址 +
