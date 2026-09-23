@@ -35,8 +35,27 @@ class ToolSchemaBudgetTest {
         return registry;
     }
 
+    /**
+     * 真正上线路的字节数：与 {@code OpenRouterStreamingChatModel} 同一条编组
+     *（{@code InternalOpenAiHelper.toTools} + openai4j 的 {@code Json}），空白按发出去的形态剔除。
+     *
+     * <p>和下面那个 {@link #weight} 的分工要说清楚，不然两个数字会打架：weight 量的是
+     * {@code properties()} 的 Java toString，里头有将近一半是
+     * {@code JsonStringSchema {description = ...}} 这种<b>不会上线</b>的样板，
+     * 所以它只能用来做同口径的前后对比（历史断言都挂在它上面，不动）；
+     * 真要估 token、估钱，看这一个。
+     */
+    static int wireBytes(List<ToolSpecification> specs) {
+        if (specs.isEmpty()) {
+            return 0;
+        }
+        String json = dev.ai4j.openai4j.Json.toJson(
+                dev.langchain4j.model.openai.InternalOpenAiHelper.toTools(specs, false));
+        return json.replaceAll("[ \\t\\n\\r]", "").length();
+    }
+
     /** 粗估一份工具规格的体量：名字 + 描述 + 每个参数的名字与说明。与真实 JSON schema 同量级。 */
-    private static int weight(List<ToolSpecification> specs) {
+    static int weight(List<ToolSpecification> specs) {
         int n = 0;
         for (ToolSpecification s : specs) {
             n += s.name() == null ? 0 : s.name().length();
@@ -62,6 +81,8 @@ class ToolSchemaBudgetTest {
 
         System.out.printf("[dev-board#729 ①] 全集 %d 个工具 / %d 字符；docx 裁剪后 %d 个 / %d 字符；省下 %.1f%%%n",
                 all.size(), allWeight, writer.size(), writerWeight, saved * 100);
+        System.out.printf("[dev-board#810] 上线路字节：全集 %d；docx %d（这个才是真正付 token 的那份）%n",
+                wireBytes(all), wireBytes(writer));
 
         assertTrue(writer.size() < all.size(), "裁剪后工具数必须变少");
         assertTrue(saved > 0.15,

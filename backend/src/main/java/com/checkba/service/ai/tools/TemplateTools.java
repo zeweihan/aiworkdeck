@@ -50,13 +50,12 @@ public class TemplateTools implements AgentToolComponent {
     private final ProjectFileService projectFileService;
 
     @ToolMeta(displayName = "学习模板格式", category = "file")
-    @Tool("Learn the formatting profile (styleProfile v1 JSON) of one or more team template .docx files: body/heading "
-            + "fonts (eastAsia + western), sizes, alignment, spacing, line spacing, first-line indent, heading numbering "
-            + "(auto numPr vs literal text like 一、（一）1.), table borders (table vs cell level), column widths, header row, "
-            + "page setup, header/footer page-number pattern, TOC field. Pass the database fileIds of the templates "
-            + "(comma-separated for several; the majority value wins and a confidence is reported). The profile is saved "
-            + "automatically as the project's _模板/画像.json (that is the file doc_apply_style_profile and write_docx read), "
-            + "so you never need to write it yourself; the returned JSON carries savedProfileFileId/savedProfilePath.")
+    @Tool("Learn the formatting profile (styleProfile v1 JSON) of one or more team template .docx files — fonts, sizes, "
+            + "spacing, indents, heading numbering, table borders, page setup, header/footer and TOC. "
+            + "Pass the database fileIds of the templates (comma-separated for several; the majority value wins and a "
+            + "confidence is reported). The profile is saved automatically as the project's _模板/画像.json (that is the "
+            + "file doc_apply_style_profile and write_docx read), so you never need to write it yourself; "
+            + "the returned JSON carries savedProfileFileId/savedProfilePath.")
     public String docx_inspect_template(
             @P("Template file database IDs, comma-separated, e.g. \"123\" or \"123,456\"") String fileIds,
             @P(value = "Optional JSON options, e.g. {\"name\":\"某律所尽调报告模板\"}", required = false) String options

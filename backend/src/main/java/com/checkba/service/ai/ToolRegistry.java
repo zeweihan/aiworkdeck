@@ -262,7 +262,7 @@ public class ToolRegistry {
                 continue;
             }
             try {
-                ToolSpecification spec = ToolSpecifications.toolSpecificationFrom(method);
+                ToolSpecification spec = offerable(ToolSpecifications.toolSpecificationFrom(method));
                 ToolMeta meta = method.getAnnotation(ToolMeta.class);
                 RegisteredTool previous = builtinTools.put(spec.name(),
                         new RegisteredTool(bean, method, spec, meta, false));
@@ -285,6 +285,109 @@ public class ToolRegistry {
         }
     }
 
+    /** 参数说明以它开头 = 这个参数只为兼容旧调用保位，不再向模型推荐（dev-board#810 A 档）。 */
+    private static final List<String> RETIRED_PARAM_MARKERS = List.of("【已弃用", "[deprecated");
+
+    /**
+     * 把「模型不该看见」的参数从规格里摘掉（dev-board#810 A 档的不改行为瘦身）。
+     *
+     * <p>两类，判据都不靠名字清单：
+     * <ul>
+     *   <li><b>服务端强注入参数</b>（{@link #SERVER_CONTEXT_PARAMS}）：{@link #bindArguments}
+     *       对它们一律 {@code fromContext(...)}，模型传什么都被覆盖。下发它们既白花 token，
+     *       又是个货真价实的诱饵——模型会去猜一个 projectId，而猜错也没有任何返回值会戳穿。
+     *       XML 兜底路径早就按 {@link #isServerContextParam} 跳过它们做位置映射，
+     *       所以摘掉规格里的这几项，两条调用路径的行为都一个字不变。</li>
+     *   <li><b>保位弃用的旧参数</b>（说明以 {@code 【已弃用} 开头，K27/A12 的产物）：
+     *       签名里留着是为了让旧调用仍能绑定并拿到那句可行动的拒绝，但把它和取代它的新参数
+     *       一起摆在模型面前，选哪个就成了随机变量——A12 要治的正是这个。
+     *       <b>只摘规格、不摘签名</b>：模型真按旧名传了照样绑得上。</li>
+     * </ul>
+     *
+     * <p>摘空了就让 {@code parameters()} 回到 null——这与本来就没有入参的工具
+     *（doc_get_clauses、doc_audit_structure 等）是同一种形态，
+     * {@code InternalOpenAiHelper.toOpenAiParameters} 对两者生成同一个空 schema。
+     */
+    static ToolSpecification offerable(ToolSpecification spec) {
+        dev.langchain4j.model.chat.request.json.JsonObjectSchema params = spec.parameters();
+        if (params == null || params.properties() == null || params.properties().isEmpty()) {
+            return spec;
+        }
+        Map<String, dev.langchain4j.model.chat.request.json.JsonSchemaElement> kept =
+                new java.util.LinkedHashMap<>();
+        params.properties().forEach((name, schema) -> {
+            if (!isServerContextParam(name) && !isRetiredParam(schema)) {
+                kept.put(name, schema);
+            }
+        });
+        if (kept.size() == params.properties().size()) {
+            return spec;
+        }
+        ToolSpecification.Builder rebuilt = ToolSpecification.builder()
+                .name(spec.name())
+                .description(spec.description());
+        if (!kept.isEmpty()) {
+            dev.langchain4j.model.chat.request.json.JsonObjectSchema.Builder schema =
+                    dev.langchain4j.model.chat.request.json.JsonObjectSchema.builder()
+                            .description(params.description())
+                            .properties(kept);
+            if (params.required() != null) {
+                List<String> required = params.required().stream().filter(kept::containsKey).toList();
+                if (!required.isEmpty()) {
+                    schema.required(required);
+                }
+            }
+            if (params.definitions() != null && !params.definitions().isEmpty()) {
+                schema.definitions(params.definitions());
+            }
+            if (params.additionalProperties() != null) {
+                schema.additionalProperties(params.additionalProperties());
+            }
+            rebuilt.parameters(schema.build());
+        }
+        return rebuilt.build();
+    }
+
+    private static boolean isRetiredParam(
+            dev.langchain4j.model.chat.request.json.JsonSchemaElement schema) {
+        String description = describedBy(schema);
+        if (description == null) {
+            return false;
+        }
+        String trimmed = description.stripLeading();
+        return RETIRED_PARAM_MARKERS.stream().anyMatch(trimmed::startsWith);
+    }
+
+    /**
+     * 读一个 JSON schema 元素的 description。langchain4j 0.36 的
+     * {@code JsonSchemaElement} 接口上<b>没有</b> description()，各具体类型才各有一个，
+     * 所以这里按已知类型取——取不到就当没有说明（保守：不摘）。
+     */
+    private static String describedBy(dev.langchain4j.model.chat.request.json.JsonSchemaElement schema) {
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonStringSchema s) {
+            return s.description();
+        }
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonIntegerSchema s) {
+            return s.description();
+        }
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonNumberSchema s) {
+            return s.description();
+        }
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonBooleanSchema s) {
+            return s.description();
+        }
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonEnumSchema s) {
+            return s.description();
+        }
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonArraySchema s) {
+            return s.description();
+        }
+        if (schema instanceof dev.langchain4j.model.chat.request.json.JsonObjectSchema s) {
+            return s.description();
+        }
+        return null;
+    }
+
     /**
      * 全部工具规格（内置 + 已启用插件），传给 LLM 做原生 function calling。
      * 禁用插件的工具规格不下发——LLM 看不到即不会调用。
@@ -293,7 +396,7 @@ public class ToolRegistry {
         List<ToolSpecification> all = new ArrayList<>(builtinSpecifications);
         for (ToolSpecification spec : pluginService.getToolSpecifications()) {
             if (pluginToolEnabled(spec.name())) {
-                all.add(spec);
+                all.add(offerable(spec));
             }
         }
         return all;

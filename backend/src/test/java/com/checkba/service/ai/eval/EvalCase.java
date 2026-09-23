@@ -52,6 +52,15 @@ public class EvalCase {
     public String clientCapability;
     /** 可选：Office 会话的宿主（word / excel / powerpoint），仅 clientCapability=office 时有意义，缺省 word */
     public String officeHost;
+    /**
+     * 可选：本用例强制打开工具渐进披露（dev-board#810）。
+     *
+     * <p>缺省 false = 与生产默认一致（开关关着），存量 64 条用例一条都不受影响。
+     * 写成用例字段而不是只靠 {@code -Dai.tools.progressive-disclosure.enabled=true}，
+     * 是为了让「查目录 → 下一轮工具回来」这条链<b>进默认的 mvn test</b>：
+     * 只能靠命令行开关跑的验证，等于没有护栏。
+     */
+    public boolean progressiveDisclosure;
     /** 非 null 时该用例进入真实 LLM 冒烟集（RealLlmSmokeTest） */
     public Smoke smoke;
     /** 预录的模型输出，按轮次回放 */

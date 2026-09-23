@@ -82,6 +82,8 @@ const NAMES = {
   get_user_profile: { zh: '获取用户画像', en: 'Get user profile' },
   // 子任务 / Python
   dispatch_subtask: { zh: '委派子任务', en: 'Delegate subtask' },
+  // 工具目录（dev-board#810 渐进披露）：模型查「还有哪些工具」时走它
+  list_tools: { zh: '查看工具目录', en: 'Browse tool catalog' },
   run_python: { zh: '执行Python代码', en: 'Run Python' },
   // 文档编辑（LibreOffice 拟人式原语）
   doc_list_project_files: { zh: '列出项目文件', en: 'List project files' },
