@@ -204,7 +204,7 @@
 
 ---
 
-## 状态表（主会话每合一张卡就更新；新 session 从第一张非「已合并」的卡接着做）
+## 状态表（2026-09-23 08:20 收尾：39 张卡 38 张已合入 master，K30 #942 等 CI；全部进入维护者复测阶段）
 
 | 卡 | dev-board# | 批次 | 冲突组 | 状态 | PR |
 |---|---|---|---|---|---|
@@ -236,17 +236,17 @@
 | K26 Office 桥超时+分页 | #806 | 3 | Bridge/OfficeEditTools | 已合并 | #930 |
 | K27 工具描述清理 | #807 | 3 | 多 tool 组件 | 已合并 | #933 |
 | K28 PPTX 权威面 | #808 | 3 | PptxTools | 已合并 | #933 |
-| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 待合并 | #938 |
-| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 已提交待链式合并 |  |
+| K29 提示按能力分段 | #809 | 3 | CAS/prompts | 已合并 | #938 |
+| K30 渐进披露 | #810 | 3 | ToolRegistry/AO | 待合并 | #942 |
 | K31 长会话性能 | #811 | 3 | CI/Markdown | 已合并 | #936 |
-| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 已提交待链式合并 |  |
+| K32 准备链并行化 | #812 | 3 | CAS/Memory/OpenRouter | 已合并 | #940 |
 | K33 Office Word 面 | #813 | 3 | OfficeEditTools/skill | 已合并 | #930 |
 | K34 音频附件 | #814 | 3 | LegalTools | 已合并 | #931 |
 | K35 文档漂移 | #815 | 3 | docs | 已合并（关卡） | #926 |
 | K36 SSE 摘旧名 | #816 | 3 | Bridge/UAS | 已合并 | #937 |
 | K37 skill 白名单补编辑面 | #818 | 2 | skills yml/回放用例 | 已合并 | #925 |
 | K38 doc_stream_data 裸 Map 序列化回归 | #819 | 3 | AO/UAS | 已合并 | #937 |
-| K39 CloudStatusAuthorsTest JGit gc 竞态 | #820 | 3 | version 测试夹具 | 进行中 | |
+| K39 CloudStatusAuthorsTest JGit gc 竞态 | #820 | 3 | version 测试夹具 | 已合并（关卡） | #941 |
 
 ## 派工模板（主会话给每个实施代理的任务书骨架）
 
