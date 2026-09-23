@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="irp">
-    <!-- 顶栏：这轮检查的状态 + AI 开关/重新检查/立即 AI 审校/浮球显隐。
+    <!-- 顶栏：这轮检查的状态 + AI 开关/重新检查/立即 AI 审校/浮球收起与展开。
          开关只管 AI 那一层：规则检查始终在跑，它不调模型也不花钱（dev-board#749）。 -->
     <view class="irp-top">
       <text class="irp-note">{{ noteText }}</text>
@@ -15,7 +15,7 @@
           {{ deepBusy ? $t('editor.inlineReview.deepBusy') : $t('editor.inlineReview.deep') }}
         </text>
         <text class="irp-act" @tap="toggleBall">
-          {{ ballHidden ? $t('editor.inlineReview.showBall') : $t('editor.inlineReview.hideBall') }}
+          {{ ballCollapsed ? $t('editor.inlineReview.expandBall') : $t('editor.inlineReview.collapseBall') }}
         </text>
       </view>
     </view>
@@ -117,7 +117,9 @@ export default {
     BUCKETS: () => REVIEW_BUCKETS,
     aiEnabled() { return !this.state || this.state.ai !== false },
     writable() { return !this.state || this.state.writable !== false },
-    ballHidden() { return !!(this.state && this.state.hidden) },
+    // 协议字段仍叫 hidden（持久化偏好沿用），语义自 dev-board#866 起是「贴边收起」：
+    // 正文里只剩一截把手，点把手或点这里都能展开，两处读的是同一份状态。
+    ballCollapsed() { return !!(this.state && this.state.hidden) },
     checking() { return !!(this.state && this.state.status === 'checking') },
     deepBusy() { return !!(this.state && this.state.deepStatus === 'checking') },
     fresh() { return isFresh(this.state) },
@@ -212,7 +214,7 @@ export default {
     refresh() { if (!this.checking) this.$emit('action', { action: 'refresh' }) },
     runDeep() { if (!this.deepBusy) this.$emit('action', { action: 'deep' }) },
     toggleAi() { this.$emit('action', { action: 'ai', value: !this.aiEnabled }) },
-    toggleBall() { this.$emit('action', { action: 'hidden', value: !this.ballHidden }) },
+    toggleBall() { this.$emit('action', { action: 'hidden', value: !this.ballCollapsed }) },
   },
 }
 </script>

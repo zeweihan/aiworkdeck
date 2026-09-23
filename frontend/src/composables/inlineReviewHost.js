@@ -43,6 +43,7 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
   const layoutKey = `awd_inline_review_layout_${hashKey(userId)}`
   // 默认开启但安静（dev-board#723 拍板，#749 收窄到只管 AI 那一层）。
   // hidden 只管正文里的浮球，与 ai 是两件事——不想被浮球打扰 ≠ 不想要 AI 审校。
+  // 字段名沿用（已落盘的偏好照读），语义自 dev-board#866 起是「贴边收起」不是「不挂」。
   let ai = true, hidden = false
   try {
     const saved = storage?.get(key)

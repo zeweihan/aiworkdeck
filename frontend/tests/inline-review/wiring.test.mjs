@@ -60,6 +60,12 @@ test('两种语言的 AI 审校文案齐全且互相对齐', () => {
   for (const key of ['aiEnable', 'aiDisable', 'autoPaused', 'deep', 'offTitle', 'offHint']) {
     assert.ok(zh.inlineReview[key] && en.inlineReview[key], key)
   }
+  // dev-board#866：「隐藏/显示」改成「收起到边缘/展开」，旧键不许残留。
+  for (const key of ['collapseBall', 'expandBall']) assert.ok(zh.inlineReview[key] && en.inlineReview[key], key)
+  assert.equal(zh.inlineReview.hideBall, undefined)
+  assert.equal(zh.inlineReview.showBall, undefined)
+  const panelSrc = read('../../src/components/InlineReviewPanel.vue')
+  assert.ok(panelSrc.includes("editor.inlineReview.collapseBall") && panelSrc.includes("editor.inlineReview.expandBall"))
   assert.equal(zh.inlineReview.enable, undefined, '旧的「开启即时检查」不再有人用')
   assert.equal(zh.inlineReview.disable, undefined)
   assert.equal(zh.toolbar.inlineReview, undefined)
