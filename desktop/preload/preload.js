@@ -70,6 +70,19 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
       ipcRenderer.on('checkba:browser-url-updated', listener)
       return () => ipcRenderer.removeListener('checkba:browser-url-updated', listener)
     },
+    // 加载失败（dev-board#889）：DNS 解析失败/连接超时/证书错误等，主进程按
+    // errorCode 原样转发，文案映射交给渲染层
+    onLoadError: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:browser-load-error', listener)
+      return () => ipcRenderer.removeListener('checkba:browser-load-error', listener)
+    },
+    // 加载中状态，用于跟失败态、正常态区分开
+    onLoadingChange: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:browser-loading-state', listener)
+      return () => ipcRenderer.removeListener('checkba:browser-loading-state', listener)
+    },
     getSnapshot: (payload) => ipcRenderer.invoke('checkba:browser-get-snapshot', payload),
     setUA: (payload) => ipcRenderer.invoke('checkba:browser-set-ua', payload)
   }

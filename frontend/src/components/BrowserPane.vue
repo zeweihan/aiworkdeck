@@ -45,6 +45,11 @@
       <view class="browser-btn" :class="{ primary: isMobileMode }" @tap="toggleMobileMode" :title="isMobileMode ? $t('panels.bpSwitchToDesktop') : $t('panels.bpSwitchToMobile')">
         <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in (isMobileMode ? ICONS.phone : ICONS.desktop)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
       </view>
+
+      <!-- 加载中提示：必须钉在工具栏而不是内容区——BrowserView 是原生层，恒盖住
+           .browser-body 同区域的 DOM（toast/OCR 遮挡的老规矩），只有工具栏这块
+           DOM 区域不在原生视图的绘制范围内，放这里才真的看得见。 -->
+      <view v-if="isDesktopBrowser && isLoading" class="browser-loading-bar"></view>
     </view>
 
     <!-- 收藏夹/快捷方式抽屉（shelf）。第一红线：必须参与文档流、挤压 .browser-body
@@ -108,6 +113,19 @@
         <view class="bce-retry" @tap="retryDesktopCreate"><text>{{ $t('panels.bpRetry') }}</text></view>
       </view>
 
+      <!-- 加载失败态（dev-board#889）：did-fail-load 转发过来的错误，此前完全没有
+           反馈，用户只看到空白（Electron 的兜底页 chrome-error://chromewebdata/
+           渲染成一片白）。DNS/超时/拒绝/证书按 errorCode 映射成具体原因，原始
+           code+description 放小字兜底，方便反馈时截图。
+           展示这层的同时必须把原生 BrowserView 缩到 0x0（见 syncDesktopBounds）——
+           否则它仍然盖在同一块区域上，这层 DOM 永远看不见，等于白修。 -->
+      <view v-if="isDesktopBrowser && !desktopCreateError && loadError" class="browser-load-error">
+        <text class="ble-title">{{ $t('panels.bpErrorTitle') }}</text>
+        <text class="ble-reason">{{ $t('panels.' + loadErrorKey) }}</text>
+        <text class="ble-detail">{{ $t('panels.bpErrorCodeLabel') }}: {{ loadError.errorCode }} {{ loadError.errorDescription }}</text>
+        <view class="ble-retry" @tap="retryLoadError"><text>{{ $t('panels.bpRetry') }}</text></view>
+      </view>
+
       <!-- H5: 使用 iframe 做最小可用网页展示 -->
       <!-- #ifdef H5 -->
       <!-- 代理把第三方 HTML 以本应用同源的形式返回，sandbox 绝不能带 allow-same-origin：
@@ -136,6 +154,7 @@
 import { getApiBaseUrl, createProjectFavorite, getProjectFavorites, getMyFavorites } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { host } from '@/services/host.js'
+import { shouldShowLoadError, loadErrorMessageKey } from '@/utils/browserLoadError.js'
 
 // 快捷方式存本机（uni 本地存储，全局共享、不分项目）：桌面单机形态够用
 const SHORTCUTS_STORAGE_KEY = 'awd_browser_shortcuts'
@@ -182,6 +201,15 @@ export default {
       viewCanGoForward: false,
       isMobileMode: false,
       desktopCreateError: '',
+      // 加载失败态（dev-board#889）：did-fail-load 转发过来的 {errorCode,
+      // errorDescription, validatedURL}，null 表示当前没有失败。新导航开始
+      // （did-start-loading）会清掉它，不能让重试之后还叠着上一次的错误文案。
+      loadError: null,
+      // 加载中：与 loadError 一起区分「正在加载/失败/正常」三态，避免用户在
+      // 空白与卡住之间猜
+      isLoading: false,
+      _desktopLoadErrorUnsub: null,
+      _desktopLoadingUnsub: null,
       // 当前页面标题（桌面端由主进程 title-updated / adoptViewState 喂进来；
       // H5 代理只回报 URL_CHANGED，拿不到标题，收藏时退回域名）
       pageTitle: '',
@@ -214,6 +242,10 @@ export default {
       } catch (e) {
         return false
       }
+    },
+    loadErrorKey() {
+      if (!this.loadError) return ''
+      return loadErrorMessageKey(this.loadError.errorCode)
     },
     iframeSrc() {
       // iframe 永远加载 proxy 地址（保证可拦截 _blank / window.open，且导航保持在工作区内）。
@@ -384,6 +416,35 @@ export default {
         this.adoptViewState(data)
       }) : null
 
+      // 加载失败（dev-board#889）：DNS 解析失败/连接超时/证书错误等此前只在主进程
+      // console.warn，面板永远不知道——AX 能看到 chrome-error://chromewebdata/，
+      // 界面却完全空白。是否要展示（过滤 ERR_ABORTED 等误报）交给纯函数判断。
+      this._desktopLoadErrorUnsub = api.onLoadError ? api.onLoadError((data) => {
+        if (!data) return
+        if (data.id && String(data.id) !== String(this._desktopViewId)) return
+        if (!shouldShowLoadError(data.errorCode)) return
+        this.loadError = {
+          errorCode: data.errorCode,
+          errorDescription: data.errorDescription || '',
+          validatedURL: data.validatedURL || ''
+        }
+        // 立刻把原生视图缩到 0x0，否则它还盖在刚渲染出来的 .browser-load-error 上面
+        this.syncDesktopBounds()
+      }) : null
+
+      // 加载中状态：新导航一开始就清掉上一次的失败态，否则重试/改地址之后界面
+      // 会叠着旧错误文案，看着像是又失败了一次；同时把被缩过的原生视图尺寸复原，
+      // 不然新页面加载出来也是 0x0、什么都看不见。
+      this._desktopLoadingUnsub = api.onLoadingChange ? api.onLoadingChange((data) => {
+        if (!data) return
+        if (data.id && String(data.id) !== String(this._desktopViewId)) return
+        this.isLoading = !!data.loading
+        if (data.loading && this.loadError) {
+          this.loadError = null
+          this.syncDesktopBounds()
+        }
+      }) : null
+
       // 创建（已有同 id 的保活 view 时是复用，主进程不会重新加载）
       await this.createDesktopView()
       this._desktopReady = true
@@ -437,6 +498,18 @@ export default {
         // ignore
       }
       this._desktopUrlUnsub = null
+      try {
+        if (this._desktopLoadErrorUnsub) this._desktopLoadErrorUnsub()
+      } catch (e) {
+        // ignore
+      }
+      this._desktopLoadErrorUnsub = null
+      try {
+        if (this._desktopLoadingUnsub) this._desktopLoadingUnsub()
+      } catch (e) {
+        // ignore
+      }
+      this._desktopLoadingUnsub = null
       this._desktopReady = false
 
       // 只从窗口摘下，不销毁：切走再切回来时同一个 view 原样接着用，页内跳转、
@@ -507,10 +580,14 @@ export default {
         const rect = el.getBoundingClientRect()
         // eslint-disable-next-line no-console
         console.log('[DesktopBrowserView] bounds', this._desktopViewId, rect.left, rect.top, rect.width, rect.height)
-        api.setBounds({
-          id: this._desktopViewId,
-          bounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
-        })
+        // 失败态下把原生视图缩到 0x0：BrowserView 是原生层，恒盖住 .browser-body
+        // 同区域的 DOM（toast/OCR 遮挡的老规矩），.browser-load-error 那层 DOM
+        // 提示要露出来，唯一办法是让原生层暂时不占这块地方。位置不用管，尺寸
+        // 归零后不会画出任何东西。retryLoadError/新导航开始时会把尺寸复原。
+        const bounds = this.loadError
+          ? { x: rect.left, y: rect.top, width: 0, height: 0 }
+          : { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+        api.setBounds({ id: this._desktopViewId, bounds })
         // 不在 resize/bounds 同步时反复 setActive：会导致 BrowserView 频繁重挂载，从而打断导航/右键事件
       } catch (e) {
         // ignore
@@ -527,6 +604,13 @@ export default {
       this.currentUrl = next
       this.inputUrl = next === 'about:blank' ? '' : next
       this.pageTitle = ''
+      // 主动发起的导航先乐观清掉上一次的失败态：did-start-loading 稍后也会清一次，
+      // 这里是为了不让用户在点了「打开」之后还盯着旧的错误文案看。清了就要把被
+      // 缩过的原生视图尺寸复原，否则新地址加载出来还是 0x0、继续空白。
+      if (this.loadError) {
+        this.loadError = null
+        this.syncDesktopBounds()
+      }
 
       // Desktop：直接导航 BrowserView。历史由 view 自己维护（见 goBack/goForward），
       // 组件里那份 history 数组只服务 H5 的 iframe 模式。
@@ -573,6 +657,14 @@ export default {
       } catch (e) {
         return false
       }
+    },
+    // 失败态里的「重试」：wc.reload() 重新发起的是失败时那次导航的原地址（Chromium
+    // 的导航条目记的是被请求的地址，不是 chrome-error:// 那个兜底页），不需要另外
+    // 记一份「上次想去的地址」。
+    retryLoadError() {
+      this.loadError = null
+      this.syncDesktopBounds()
+      this.reload()
     },
     reload() {
       if (this.isDesktopBrowser) {
@@ -772,6 +864,7 @@ export default {
 }
 
 .browser-toolbar {
+  position: relative;
   height: 40px;
   flex-shrink: 0;
   display: flex;
@@ -780,6 +873,17 @@ export default {
   padding: 0 10px;
   border-bottom: 1px solid var(--awd-border);
   background: var(--awd-surface);
+}
+
+/* 钉在工具栏底边（覆盖 border-bottom 那一线），不落进 .browser-body——那里恒被
+   原生 BrowserView 盖住，放那儿等于看不见 */
+.browser-loading-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--awd-accent);
 }
 
 .browser-btn {
@@ -1029,6 +1133,54 @@ export default {
 }
 
 .bce-retry:hover {
+  border-color: var(--awd-accent);
+  background: var(--awd-accent-soft);
+}
+
+.browser-load-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--awd-surface);
+  padding: 24px;
+  text-align: center;
+}
+
+.ble-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+
+.ble-reason {
+  font-size: 13px;
+  color: var(--awd-text-2);
+  max-width: 420px;
+}
+
+.ble-detail {
+  font-size: 12px;
+  color: var(--awd-text-3);
+  word-break: break-all;
+  max-width: 420px;
+}
+
+.ble-retry {
+  margin-top: 4px;
+  padding: 7px 18px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 8px;
+  background: var(--awd-surface);
+  color: var(--awd-accent-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ble-retry:hover {
   border-color: var(--awd-accent);
   background: var(--awd-accent-soft);
 }
