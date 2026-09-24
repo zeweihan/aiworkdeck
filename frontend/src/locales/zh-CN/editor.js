@@ -12,6 +12,10 @@ export default {
   discardAndClose: '放弃并关闭',
   moveTabSaveFailed: '保存尚未完成，标签暂不移动到另一侧',
   keepEditing: '继续编辑',
+  // 原生「导出为 PDF」入口（dev-board#886）
+  pdfExporting: '正在导出 PDF…',
+  pdfExported: '已导出 PDF：{name}',
+  pdfExportFailed: 'PDF 导出失败：{reason}',
 
   status: {
     booting: '启动中…',

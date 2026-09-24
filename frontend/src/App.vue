@@ -12,6 +12,7 @@ import { mountGlobalBack, refreshGlobalBack } from '@/utils/globalBack.js'
 import { initAppMenuBridge } from '@/utils/appMenuBridge.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { initAppTheme } from '@/utils/appTheme.js'
+import { installModalFocusGuard } from '@/utils/modalFocusGuard.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
 export default {
@@ -38,6 +39,9 @@ export default {
     try { uni.$on(APP_LANGUAGE_EVENT, syncLanguageMirrors) } catch (e) { /* ignore */ }
     // 常驻反馈浮窗：挂在页面树之外，全应用一个实例（见 utils/feedbackWidget.js）
     mountFeedbackWidget()
+    // 弹窗开着时键盘不许溜进被遮住的编辑器（dev-board#883）：自绘弹窗只有遮罩没有
+    // 焦点圈，Tab 会把焦点送进编辑器 webview，字写进背景文档（见 utils/modalFocusGuard.js）
+    installModalFocusGuard()
     // 会议「录音中」浮动指示器：同一模式，录音时才显形（见 utils/recordingIndicator.js）
     mountRecordingIndicator()
     // 全局返回键：页面栈深度 > 1 时出现在顶部拖拽条里（见 utils/globalBack.js）

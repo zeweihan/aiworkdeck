@@ -574,6 +574,17 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   canvas.addEventListener('mouseup', onMouseUp)
 
   const focus = () => { try { input.focus() } catch (e) {} }
+  // 宿主把焦点还给编辑器框体（弹窗关掉后，dev-board#883 / AwdDialog 的焦点归还）时，
+  // 客体页窗口拿回焦点但页内没有任何元素聚焦（activeElement 是 body），键盘无处可去，
+  // 用户得再点一下画布才能接着打字。此时交给覆盖层——它是唯一的键盘入口。
+  // 画布或别的客体输入框聚焦着时 activeElement 不是 body，不碰。
+  const view = doc.defaultView
+  const onWindowFocus = () => {
+    if (disposed) return
+    const a = doc.activeElement
+    if (!a || a === doc.body || a === doc.documentElement) focus()
+  }
+  if (view) view.addEventListener('focus', onWindowFocus)
   focus()
   reposition()
   log(phaseB
@@ -588,6 +599,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     destroy() {
       disposed = true; positionSequence++; clearTimeout(trailingTimer)
       canvas.removeEventListener('mouseup', onMouseUp)
+      if (view) view.removeEventListener('focus', onWindowFocus)
       doc.removeEventListener('keydown', onDocKeyDownCapture, true)
       input.remove()
       preview.remove()

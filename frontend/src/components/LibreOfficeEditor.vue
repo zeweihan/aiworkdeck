@@ -746,6 +746,44 @@ export default {
       })
       return { ok: true }
     },
+    // 原生「文件→导出为→直接导出 PDF / 导出为 PDF…」与原生工具栏 PDF 图标（dev-board#886）。
+    // 引擎在 WASM 里起不来文件选择器，派发静默结束；worker 拦下这两条命令转成
+    // export-pdf-request，这里取 PDF 字节走应用自己的下载链路（与脱敏复敏包同一条：
+    // blob + a[download]，桌面主进程接管成「另存为」），成功失败都有提示。
+    async exportPdf() {
+      if (this._pdfExporting) return
+      if (!this.executor || !this.ready) return
+      this._pdfExporting = true
+      const base = String((this.file && this.file.name) || 'document').replace(/\.[^.]+$/, '') || 'document'
+      const name = base + '.pdf'
+      try { uni.showLoading({ title: this.$t('editor.pdfExporting'), mask: false }) } catch (e) { /* ignore */ }
+      let res = null, reason = ''
+      try { res = await this.executor.executeCommand('export_pdf', {}) }
+      catch (e) { reason = (e && e.message) || String(e) }
+      try { uni.hideLoading() } catch (e) { /* ignore */ }
+      this._pdfExporting = false
+      // 字节经 relay 两跳结构化克隆后形态不定，同 saveDocument 的归一
+      const raw = res && res.success ? res.bytes : null
+      let bytes = null
+      if (raw instanceof Uint8Array) bytes = raw
+      else if (raw instanceof ArrayBuffer) bytes = new Uint8Array(raw)
+      else if (raw && raw.buffer instanceof ArrayBuffer) bytes = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength)
+      else if (Array.isArray(raw)) bytes = new Uint8Array(raw)
+      if (!bytes || !bytes.length) {
+        reason = reason || (res && (res.message || res.error)) || 'empty'
+        this.appendLog('PDF 导出失败 / export_pdf failed: ' + reason)
+        uni.showToast({ title: this.$t('editor.pdfExportFailed', { reason }), icon: 'none' })
+        return false
+      }
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      uni.showToast({ title: this.$t('editor.pdfExported', { name }), icon: 'none' })
+      return true
+    },
     async onCommentRequest(msg = {}) {
       const tb = this.$refs.toolbar, executor = this.executor
       if (!this.ready || !tb || !executor || this._commentRequestPending) return
@@ -1003,6 +1041,8 @@ export default {
           this.onDocModified()
         } else if (msg.type === 'comment-request') {
           this.onCommentRequest(msg)
+        } else if (msg.type === 'export-pdf-request') {
+          this.exportPdf()
         } else if (msg.type === 'review-overview') {
           this.reviewOpen = true
         } else if (msg.type === 'review-focus') {
@@ -1348,6 +1388,17 @@ export default {
         // "新建空白文档"——那会让后续编辑以空文档覆盖真文件。按加载失败走。
         if (f.fileSize > 0) throw new Error('文件非空（' + f.fileSize + ' bytes）但下载到 0 字节，拒绝按空白文档打开')
         this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
+        // 署名仍然要下发（dev-board#881）：worker 的修订作者只由 load_document 设置，
+        // 这条分支不发 load_document，引擎就一直端着 boot 时的空作者，用户在新建文档里
+        // 打的每一个字都署引擎兜底「未知作者」，审阅面板「我」这一桶恒为 0。
+        // 不带 bytes 的 load_document 只记 authorName、不动文档（redline-author.mjs 组 2）。
+        if (seq !== (this._docLoadSeq || 0)) throw new Error('装载已被更晚的一次尝试取代 / load superseded')
+        // 署名下发失败不算装载失败（空白文档照样可编辑，只是署名退回引擎兜底）。
+        const blankAuthor = currentAuthorName()
+        if (blankAuthor) {
+          try { await this.executor.executeCommand('load_document', { authorName: blankAuthor }) }
+          catch (e) { this.appendLog('修订署名下发失败 / redline author push failed: ' + (e && e.message ? e.message : e)) }
+        }
         return false
       }
       // office 是单线程消息循环，两条 load_document 会按到达顺序依次执行，后到的

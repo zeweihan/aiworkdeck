@@ -15,6 +15,7 @@
 // Run:  npm run test:lowa-redline-author        (from frontend/)
 // 前置与 env 同 run.mjs（dist/zetaoffice + 引擎 + Chrome，见 _boot.mjs）。
 import { preflight, loadPuppeteer, startServer, launchBrowser, openEditor } from './_boot.mjs'
+import { groupRevisions, countByAuthorKind } from '../../src/utils/reviewGrouping.js'
 
 // 引擎自己的空作者兜底串（SwModule::GetRedlineAuthor → STR_REDLINE_UNKNOWN_AUTHOR），
 // 本引擎固定在 24.2.8-zhcn-r5。引擎换了这条会红——那正是提醒，用户看到的就是这四个字。
@@ -82,6 +83,30 @@ try {
   await exec('find_replace', { findText: '确认无误', replaceText: '确认有效', replaceAll: true })
   check('紧随其后的用户替换回到用户名，不残留 AI WorkDeck',
     (await rows()).some((r) => r[1] === USER && r[2] === '有效'), JSON.stringify(await rows()))
+
+  // dev-board#881：新建 DOCX 后端给 0 字节，宿主保留 boot 出来的空白文档、不发带字节的
+  // load_document。修复后那条分支改发「只带 authorName」的 load_document——这里按宿主
+  // 两种走法各跑一遍，读的是审阅面板实际用的 list_revisions + 面板的分桶纯函数。
+  console.log('== 5) 新建文档（空白 boot 文档）：审阅面板「我」这一桶 ==')
+  const panelCounts = async () => {
+    const lr = await exec('list_revisions', { limit: 500 })
+    const revs = (lr && lr.revisions) || []
+    return { authors: [...new Set(revs.map((r) => r.author))], counts: countByAuthorKind(groupRevisions(revs, { selfAuthor: USER })) }
+  }
+  // 修复前的走法：boot 后从未收到署名（humanAuthor 仍是 boot 时的空串）
+  await exec('load_document', { authorName: '' })
+  await reset('')
+  await exec('insert_at_cursor', { text: '新建文档里打的字' })
+  const pre = await panelCounts()
+  check('基线：空白分支不下发署名 → 引擎兜底作者、「我 0」（即真机现象）',
+    pre.authors.join() === ENGINE_FALLBACK && pre.counts.me === 0 && pre.counts.other === 1, JSON.stringify(pre))
+  // 修复后的走法：空白分支补一条不带 bytes 的 load_document
+  await reset('')
+  await exec('load_document', { authorName: USER })
+  await exec('insert_at_cursor', { text: '新建文档里打的字' })
+  const post = await panelCounts()
+  check('修复后：新建文档里的修订署用户名，面板「我 1 / 其他人 0」',
+    post.authors.join() === USER && post.counts.me === 1 && post.counts.other === 0, JSON.stringify(post))
 } finally {
   await browser.close()
   server.close()

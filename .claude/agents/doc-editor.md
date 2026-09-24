@@ -185,6 +185,10 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 ## 已知地雷
 
+- **宿主弹窗挡不住键盘，焦点会 Tab 进编辑器 webview（dev-board#883，S1）**：自绘弹窗（.awd-mask / .awd-dialog-mask …）只有 fixed 遮罩没有焦点圈，按钮多是 <view>（不可聚焦），Tab 沿宿主文档顺序落到 <webview>/<iframe>，字带修订写进背景文档并被自动保存。公共层修在 `utils/modalFocusGuard.js`（App.vue onLaunch 装一次）：只认几何——可见框体被一个 position:fixed 的层五点全盖住，就把 Tab 圈在那一层、把闯进框体的焦点拉回、弹窗在打字中弹出时把焦点拉出框体并在关闭后还回。监听挂 document 捕获段，AwdDialog（window 捕获段自带焦点圈）先处理即让路。客体侧 `zetaOfficeImeOverlay` 在窗口拿回焦点且页内无焦点时把键盘交给覆盖层（否则还回框体后打字无处可去）。**别改成隐藏 webview**（#539/#503）。回归 `npm run test:lowa-modal-keyboard`（真引擎 iframe 壳，Electron webview 未覆盖）+ `tests/lowa-unit/modalFocusGuardWiring.test.mjs`。
+- **新建文档（后端 0 字节）也要下发署名（dev-board#881）**：worker 的 humanAuthor 只由 load_document 设置，`loadDocument()` 的空字节分支原来一条命令都不发，新建文档里用户的修订全署「未知作者」、面板「我 0」。现在该分支补一条不带 bytes 的 `load_document {authorName}`。回归 `tests/project-home/libre-redline-author.test.mjs` + redline-author.mjs 组 5。
+- **原生「直接导出 PDF / 导出为 PDF…」与工具栏 PDF 图标在 WASM 里静默失败（dev-board#886）**：派发不弹文件选择器也不出文件（探针：ExportDirectToPDF State=FAILURE、ExportToPDF Result=false）。worker 派发拦截器（installReviewCommentInterceptor）把两条命令转成 `export-pdf-request` → editor-main 转发 → `LibreOfficeEditor.exportPdf()` 调 `export_pdf`（writer/calc/impress_pdf_Export，private:stream，复原 modified）→ blob + a[download] 下载 + 提示。`export_pdf` 已入 EDITOR_ACTIONS 与三处超时表（180s）。回归 `npm run test:lowa-pdf-export`。
+
 - **Writer 缓存光标的屏幕坐标，只在「读正文」时按当时的视图几何重算（dev-board#725，2026-09-20 真机 r5 实测）**：`ctrl.getViewData()` 的 caretX / `get_cursor_rect().nativeCaret` 都读这份缓存。光切视图**不会**重算（`set_revision_view final` 前后 caretX 纹丝不动），`xModel.refresh()` 也**不会**；真正触发重算的是段落枚举 / `getString()` 这类正文读取，用的是**那一刻**的视图几何。后果：任何「切视图 → 读正文 → 切回来」的包装，命令返回之后光标就停在另一种几何里——带删除修订的段落上实测左移 2142 twip，而 IME 输入框、系统候选窗、预览条全按这个坐标摆。所以这类包装**必须在还原视图之后补一次正文读**（`paragraphTextOf(ctrl.getViewCursor())` 就够，一段而已）。别指望 `refresh()` 顺带把它带回来——实测不带。
 - **改 `runAgentCommandInMarginView` 的跳过条件，必须同步改 `completionGuard()`（同上，改造时自己踩的）**：守卫负责把视图切到最终文本语义，`completionGuard()` 负责「不是最终文本语义就拒绝」。给守卫加了「没有修订就整段跳过」之后，无修订文档的 `mode` 一直是 `'all'`，`completionGuard()` 照旧拒绝，于是**起草场景下补全与即时审校全部回 `inline-revisions`**。两者是一对，判据必须一致。
 
