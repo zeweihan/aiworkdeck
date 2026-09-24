@@ -258,12 +258,38 @@ def attach_text(prims, W=None, H=None):
     directly instead of inferring it from an area ratio that framing can
     quietly invalidate. The area heuristic stays as a fallback for SVGs (e.g.
     the sibling redraw engine's own render.py) that never emit that marker
-    but whose paper background is always sized to exactly fill the canvas."""
+    but whose paper background is always sized to exactly fill the canvas.
+    [AWD-PATCH 7] On top of both, a shape that CONTAINS every other primitive
+    (bigger backdrops aside) is a backdrop too, whatever its area or marker —
+    this also covers renderers whose content backdrop carries no data-role.
+    """
     shapes = [p for p in prims if p["k"] in ("rect", "ellipse", "poly")]
     shapes = [s for s in shapes if s.get("role") != "canvas-bg"]     # [AWD-PATCH 6]
     if W and H:
         canvas = W * H
         shapes = [s for s in shapes if s["w"] * s["h"] < 0.9 * canvas]
+    # [AWD-PATCH 7 · 见 litviz/PATCHES.md] paper.frame() puts the timeline's own
+    # canvas-bg rect inside a larger white sheet, so it drops under the 90% line
+    # above and swallowed the centred title. A shape that contains every other
+    # primitive (bigger backdrops aside) is a backdrop too, whatever its area.
+    def _box(p):
+        if p["k"] == "text":
+            return p["x"], p["y"], p["x"], p["y"]
+        if p["k"] == "conn":
+            xs = [q[0] for q in p["pts"]]; ys = [q[1] for q in p["pts"]]
+            return min(xs), min(ys), max(xs), max(ys)
+        return p["x"], p["y"], p["x"] + p["w"], p["y"] + p["h"]
+
+    def _inside(p, b):
+        a = _box(p)
+        return b[0] - 1 <= a[0] and b[1] - 1 <= a[1] and a[2] <= b[2] + 1 and a[3] <= b[3] + 1
+
+    backdrops = []
+    for s in sorted((p for p in prims if p["k"] in ("rect", "ellipse", "poly")),
+                    key=lambda p: p["w"] * p["h"], reverse=True):
+        if all(p is s or any(p is d for d in backdrops) or _inside(p, _box(s)) for p in prims):
+            backdrops.append(s)
+    shapes = [s for s in shapes if not any(s is d for d in backdrops)]
     for p in prims:
         if p["k"] != "text":
             continue
