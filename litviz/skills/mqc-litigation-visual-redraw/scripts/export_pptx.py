@@ -191,7 +191,9 @@ def parse_svg(svg):
             prims.append({"k": "rect", "x": _f(a, "x") + ox, "y": _f(a, "y") + oy, "w": w, "h": h,
                           "rx": _f(a, "rx"), "fill": _clean(raw_fill),
                           "pattern": pat.group(1) if pat else None,
-                          "stroke": _clean(a.get("stroke")), "sw": _f(a, "stroke-width", 1)})
+                          "stroke": _clean(a.get("stroke")), "sw": _f(a, "stroke-width", 1),
+                          # [AWD-PATCH 6] 保留 data-role，attach_text() 靠它认出画布背景。
+                          "role": a.get("data-role")})
         elif kind == "circle":
             r = _f(a, "r")
             prims.append({"k": "ellipse", "x": _f(a, "cx") - r + ox, "y": _f(a, "cy") - r + oy,
@@ -229,8 +231,36 @@ def attach_text(prims, W=None, H=None):
     The canvas BACKGROUND rect is never a host. It contains everything
     geometrically, so without this it would swallow the title and every free
     label — and the lawyer clicking the title would select the whole backdrop
-    instead of the words. Those stay independent text boxes."""
+    instead of the words. Those stay independent text boxes.
+
+    [AWD-PATCH 6] The "area >= 90% of canvas" heuristic below is what excludes
+    that background rect — and it silently stops working the moment a caller
+    hands this function a FRAMED svg whose outer <svg width height> is bigger
+    than the renderer's own inner content-background rect. dev-board#888:
+    mqc-timeline-master's render_vcolumns.py draws its own
+    `<rect data-role="canvas-bg" width=... height=...>` sized to the UNFRAMED
+    canvas, then paper.frame() wraps the whole thing in a translate group and
+    enlarges the outer <svg> for the white border. The background rect's
+    absolute area does not change, but the ratio against the now-bigger W*H
+    denominator can drop under 0.9 — so the background stops looking like a
+    background, gets treated as an ordinary shape, and (being the widest thing
+    on the canvas and centred under the title) adopts the title text. The
+    title then renders as a giant box spanning most of the slide instead of a
+    small caption at the top. mqc-timeline-master's own export_formats.py
+    already discovered this exact failure and works around it for its own
+    pptx/vsdx calls by stripping the `data-role="canvas-bg"` rect out of the
+    SVG before handing it to this module (see `_svg_for_export()` there) —
+    but that is a caller-side band-aid, so any OTHER caller that hands this
+    function a framed timeline SVG directly (as this project's own test
+    fixture and dev-board#888's repro script both do) still hits the bug.
+    The renderer already tells us which rect is the background — it is the
+    one the SVG itself marks `data-role="canvas-bg"` — so trust that marker
+    directly instead of inferring it from an area ratio that framing can
+    quietly invalidate. The area heuristic stays as a fallback for SVGs (e.g.
+    the sibling redraw engine's own render.py) that never emit that marker
+    but whose paper background is always sized to exactly fill the canvas."""
     shapes = [p for p in prims if p["k"] in ("rect", "ellipse", "poly")]
+    shapes = [s for s in shapes if s.get("role") != "canvas-bg"]     # [AWD-PATCH 6]
     if W and H:
         canvas = W * H
         shapes = [s for s in shapes if s["w"] * s["h"] < 0.9 * canvas]
