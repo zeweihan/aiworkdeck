@@ -808,7 +808,7 @@ try {
     // 只看侧栏导航本身（.nav-list .nav-text），不看整页 innerText
     const labels = await page.evaluate(
       () => [...document.querySelectorAll('.nav-list .nav-text')].map((e) => e.innerText.trim()))
-    for (const want of ['工作记录', '我的收藏', '我的代办', '账户与安全']) {
+    for (const want of ['工作记录', '全部收藏', '我的待办', '账户与安全']) {
       if (!labels.includes(want)) {
         throw new Error('「个人」组缺栏目「' + want + '」: ' + JSON.stringify(labels))
       }
@@ -828,8 +828,8 @@ try {
   // 四个栏目依次点开，每个都要真渲染出自己的面板（不是一片空白）
   for (const [tab, sel] of [
     ['工作记录', '.panel-work-log'],
-    ['我的收藏', '.panel-favorites'],
-    ['我的代办', '.panel-placeholder'],
+    ['全部收藏', '.panel-favorites'],
+    ['我的待办', '.panel-todos'],
     ['账户与安全', '.panel-settings'],
   ]) {
     await step('个人组栏目 ' + tab, async () => {
