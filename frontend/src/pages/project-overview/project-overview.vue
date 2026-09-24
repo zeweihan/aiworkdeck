@@ -669,6 +669,7 @@
             @compare-documents="onCompareDocumentsRequest"
             @files-changed="loadStagingFiles"
             @file-deleted="handleFileDeleted"
+            @file-renamed="handleFileRenamed"
             @file-history="onFileHistory"
             @reveal-file="onRevealFile"
             @share-file="onShareFile"
@@ -5646,6 +5647,55 @@ export default {
 
     // --- 文件管理逻辑 ---
     // 文件打开与标签页方法组已外置 → ./fileOpenTabs.js（Phase 2）
+
+    // 按 id 把新名同步进两侧标签与窗口标题（dev-board#882）：文件树只是「文件名」的
+    // 其中一处存放点，已开的标签（leftFiles/rightFiles）、document.title、AI 面板
+    // 「当前文档」chip（经 currentActiveTab → activeFileLeft/Right 这条计算属性链）
+    // 都各自持有同一个响应式文件对象——直接改它的 name 就够，不需要分别处理；
+    // 唯独 document.title 是命令式写入，只在 activeFileIdLeft 变化时才重算
+    // （见 watch），改名不换 id，必须在这里显式补一次 updateWindowTitle()。
+    // 两个入口都走它：FileTree 右键重命名成功后 emit('file-renamed', ...)；
+    // AI/WPS 等其它改名路径不知道具体是哪个文件，走下面 syncOpenTabsFromFileTree 兜底。
+    handleFileRenamed({ id, name } = {}) {
+      if (id == null || !name) return
+      let changed = false
+      const sync = (files) => {
+        (files || []).forEach(f => {
+          if (f && String(f.id) === String(id) && f.name !== name) {
+            f.name = name
+            changed = true
+          }
+        })
+      }
+      sync(this.leftFiles)
+      sync(this.rightFiles)
+      if (changed) this.updateWindowTitle()
+    },
+
+    // refresh_files（AI 工具改名/移动/新建等触发的通用刷新信号）不带具体的
+    // 「谁被改成了什么」，只能等文件树重新拉完之后，拿它的最新清单把已开标签的
+    // 名字整批对齐一遍——树在这一刻就是权威源。
+    syncOpenTabsFromFileTree() {
+      const tree = this.$refs.fileTree
+      const list = tree && Array.isArray(tree.allFiles) ? tree.allFiles : null
+      if (!list || !list.length) return
+      const byId = new Map()
+      list.forEach(f => { if (f && f.id != null) byId.set(String(f.id), f) })
+      let changed = false
+      const sync = (files) => {
+        (files || []).forEach(f => {
+          if (!f) return
+          const src = byId.get(String(f.id))
+          if (src && src.name && f.name !== src.name) {
+            f.name = src.name
+            changed = true
+          }
+        })
+      }
+      sync(this.leftFiles)
+      sync(this.rightFiles)
+      if (changed) this.updateWindowTitle()
+    },
 
     // 处理文件重命名（历史：WPS 时代由文件信息轮询触发；现无调用方，保留为通用逻辑）
     async handleFileRename(pane, data) {

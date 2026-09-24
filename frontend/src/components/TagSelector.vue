@@ -17,7 +17,7 @@
       </text>
     </view>
     
-    <view v-if="showDropdown" class="dropdown-menu">
+    <view v-if="showDropdown" class="dropdown-menu" :class="{ 'is-inline': inline }">
       <!-- Color Picker Mode -->
       <view v-if="isCreatingTag" class="color-picker-mode">
         <view class="picker-header">
@@ -123,6 +123,14 @@ export default {
     projectId: {
       type: [String, Number],
       required: true
+    },
+    // dev-board#884：默认 false 保持其它调用点（普通搜索场景）不变——下拉仍是浮层。
+    // 「管理标签」弹窗（FileTree.vue）这种场景里，下拉本来就是弹窗正文的一部分，
+    // 不该悬浮：创建表单展开多高，弹窗就该跟着长多高，而不是把表单塞进一个
+    // 170px 高的浮层窗口、外面还留一截空白（dev-board#884 复测意见）。
+    inline: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
@@ -180,6 +188,20 @@ export default {
     startCreate() {
       this.pendingTagName = this.searchText;
       this.isCreatingTag = true;
+      // dev-board#884：inline 模式下下拉已经参与正常流，弹窗（.awd-dialog）会跟着
+      // 表单自然长高，多数窗口高度下根本不需要滚；只有窗口矮到弹窗撞上
+      // .awd-dialog 的 85vh 上限时，.awd-dialog-body 才会真的出现滚动条，这时
+      // 用户不会自己想到要去滚一个看起来已经"到底"的弹窗——这里当兜底，展开就把
+      // 操作按钮那一行滚到看得见的地方。整块 color-picker-mode 可能比可视区域
+      // 本身还高，scrollIntoView 打在它身上做不到"整块可见"，只对准操作按钮才有意义。
+      // 非 inline 场景（普通浮层下拉）里 .dropdown-menu 自身也可能顶到 280px 上限，
+      // 同一份兜底同样适用。
+      this.$nextTick(() => {
+        const actions = this.$el && this.$el.querySelector('.picker-actions-compact');
+        if (actions && typeof actions.scrollIntoView === 'function') {
+          actions.scrollIntoView({ block: 'nearest' });
+        }
+      });
     },
     selectColor(color) {
       this.selectedColor = color;
@@ -277,7 +299,28 @@ export default {
   flex-direction: column;
   overflow: hidden;
   /* Prevent it from being too tall and getting cut off */
-  max-height: 280px; 
+  max-height: 280px;
+}
+
+/* dev-board#884：inline 场景（FileTree.vue「管理标签」弹窗）——退掉整套浮层样式，
+   改回正常流。宿主弹窗（.awd-dialog）自己已经有 max-height:85vh +
+   .awd-dialog-body { overflow-y: auto }，超高时该滚的是宿主弹窗整体，不该由这里
+   再单独截出一个 280px/无 max-height 但内部又滚不动的小窗口。 */
+.dropdown-menu.is-inline {
+  position: static;
+  top: auto;
+  left: auto;
+  right: auto;
+  margin-top: 8px;
+  padding-top: 8px;
+  border: none;
+  border-top: 1px solid var(--awd-border-subtle);
+  border-radius: 0;
+  box-shadow: none;
+  z-index: auto;
+  overflow: visible;
+  max-height: none;
+  background: transparent;
 }
 
 .tag-list {

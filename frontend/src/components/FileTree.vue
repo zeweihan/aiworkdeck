@@ -86,6 +86,7 @@
                 :available-tags="projectTags"
                 :existing-tag-ids="(targetFileForTags && targetFileForTags.tags) ? targetFileForTags.tags.map(t => t.id) : []"
                 :project-id="projectId"
+                inline
                 @select="handleAddTag"
                 @create="handleCreateNewTag"
                 @manage="showTagManager = true"
@@ -1422,8 +1423,12 @@ export default {
 
       try {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-        await renameFile(projectId, fileId, newName)
+        const updated = await renameFile(projectId, fileId, newName)
+        const finalName = (updated && updated.name) || newName
         await this.loadFiles()
+        // 树只是这份文件名的其中一处：已开的标签、窗口标题、底栏、AI「当前文档」
+        // 都各自持有自己的一份文件对象，只刷树不会让它们跟着变（dev-board#882）。
+        this.$emit('file-renamed', { id: fileId, name: finalName })
         uni.showToast({ title: this.$t('fileTree.renameSuccess'), icon: 'success' })
       } catch (error) {
         console.error('重命名失败:', error)
@@ -1453,11 +1458,15 @@ export default {
         if (isNaN(projectId)) {
           throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
-        await renameFile(projectId, this.renamingFile.id, this.renameValue.trim())
+        const fileId = this.renamingFile.id
+        const newName = this.renameValue.trim()
+        const updated = await renameFile(projectId, fileId, newName)
+        const finalName = (updated && updated.name) || newName
         this.showRenameDialog = false
         this.renamingFile = null
         this.renameValue = ''
         await this.loadFiles()
+        this.$emit('file-renamed', { id: fileId, name: finalName })
         uni.showToast({
           title: this.$t('fileTree.renameSuccess'),
           icon: 'success'
@@ -4165,6 +4174,13 @@ export default {
 .awd-dialog {
   width: 618px; /* Golden Ratio-ish Width */
   max-width: 90vw;
+  /* dev-board#884：内嵌的「创建新标签」表单（TagSelector.vue 的下拉，position:absolute）
+     不参与本盒子的正常流布局，所以本盒子的高度只按标题/当前标签/输入框这些正常流内容
+     撑出来——表单展开后经常比这份"自然高度"还高，又撞上下面的 overflow: hidden，
+     结果是创建/取消按钮被裁在盒子外，且没有任何容器能滚（真机走查：两个区域滚动
+     都没有位移）。给盒子一个视口相对的高度上限，逼 .awd-dialog-body 在超高时改用
+     滚动而不是让盒子无限长高。 */
+  max-height: 85vh;
   background-color: var(--awd-surface);
   border-radius: 12px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
@@ -4215,6 +4231,7 @@ export default {
   padding: 0 24px 24px;
   flex: 1;
   min-height: 0; /* Allow scrolling */
+  overflow-y: auto; /* dev-board#884：min-height:0 只是让 flex 允许收缩，真正要滚起来还得靠这一行 */
 }
 
 .scrollable-body {
