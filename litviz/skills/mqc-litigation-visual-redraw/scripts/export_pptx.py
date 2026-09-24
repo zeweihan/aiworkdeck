@@ -229,11 +229,35 @@ def attach_text(prims, W=None, H=None):
     The canvas BACKGROUND rect is never a host. It contains everything
     geometrically, so without this it would swallow the title and every free
     label — and the lawyer clicking the title would select the whole backdrop
-    instead of the words. Those stay independent text boxes."""
+    instead of the words. Those stay independent text boxes. A backdrop is
+    recognised by area (>= 90% of the canvas) and by containment (it holds
+    every other primitive), since a framed sheet can carry a smaller second one."""
     shapes = [p for p in prims if p["k"] in ("rect", "ellipse", "poly")]
     if W and H:
         canvas = W * H
         shapes = [s for s in shapes if s["w"] * s["h"] < 0.9 * canvas]
+    # [AWD-PATCH 6 · 见 litviz/PATCHES.md] paper.frame() puts the timeline's own
+    # canvas-bg rect inside a larger white sheet, so it drops under the 90% line
+    # above and swallowed the centred title. A shape that contains every other
+    # primitive (bigger backdrops aside) is a backdrop too, whatever its area.
+    def _box(p):
+        if p["k"] == "text":
+            return p["x"], p["y"], p["x"], p["y"]
+        if p["k"] == "conn":
+            xs = [q[0] for q in p["pts"]]; ys = [q[1] for q in p["pts"]]
+            return min(xs), min(ys), max(xs), max(ys)
+        return p["x"], p["y"], p["x"] + p["w"], p["y"] + p["h"]
+
+    def _inside(p, b):
+        a = _box(p)
+        return b[0] - 1 <= a[0] and b[1] - 1 <= a[1] and a[2] <= b[2] + 1 and a[3] <= b[3] + 1
+
+    backdrops = []
+    for s in sorted((p for p in prims if p["k"] in ("rect", "ellipse", "poly")),
+                    key=lambda p: p["w"] * p["h"], reverse=True):
+        if all(p is s or any(p is d for d in backdrops) or _inside(p, _box(s)) for p in prims):
+            backdrops.append(s)
+    shapes = [s for s in shapes if not any(s is d for d in backdrops)]
     for p in prims:
         if p["k"] != "text":
             continue

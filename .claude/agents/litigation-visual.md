@@ -28,7 +28,7 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
   `../../mqc-litigation-visual-redraw/scripts` 兄弟目录硬引用（共享内核机制），
   保持原名即原生成立，升级零补丁。
 - `litviz/UPSTREAM.md` — vendor 来源、commit、升级步骤。
-- `litviz/PATCHES.md` — 三条本地补丁（代码里搜 `[AWD-PATCH n]`）。升级时逐条复核。
+- `litviz/PATCHES.md` — 本地补丁清单（代码里搜 `[AWD-PATCH n]`；PATCH 6 是 pptx 导出的背景判定）。升级时逐条复核。
 - `litviz/README.md` — 分工、命令、依赖矩阵。
 
 **我们写的**
