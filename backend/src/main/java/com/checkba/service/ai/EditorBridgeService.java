@@ -121,6 +121,8 @@ public class EditorBridgeService {
             // 与 find_replace 同量级预算。
             Map.entry("sheet_find_replace", 120),
             Map.entry("export_document", 180),
+            // 原生「导出为 PDF」入口转宿主导出（dev-board#886），与 export_document 同量级。
+            Map.entry("export_pdf", 180),
             Map.entry("build_merge_draft", 180),
             // 整段插入类（dev-board#464）：一份十几页的报告经修订逐行落字远超 30s，
             // worker 那边照旧写完，后端却已经放弃等待。

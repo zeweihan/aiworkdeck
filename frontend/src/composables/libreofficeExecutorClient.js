@@ -68,6 +68,9 @@ export const EDITOR_ACTIONS = [
   // [Track E] export the current document as bytes (host-initiated save):
   // {name} -> storeToURL into MEMFS -> {bytes, size}; the host uploads them.
   'export_document',
+  // [dev-board#886] 导出 PDF 字节（宿主发起：原生「导出为 PDF」入口被 worker 拦下后
+  // 经 export-pdf-request 请宿主执行，宿主拿字节走应用自己的下载链路）。
+  'export_pdf',
   // [diagnostic #66] report resolved UI locale (ooLocale) to confirm zh-CN took effect.
   'get_ui_lang',
   // [diagnostic] which app modules (swriter/scalc/simpress/sdraw) the engine build contains.
@@ -180,7 +183,7 @@ export const EDITOR_ACTIONS = [
 // 与 zetaOfficeRelay.js 的 ACTION_BUDGET_MS 和后端 EditorBridgeService
 // ACTION_TIMEOUT_SECONDS 三处同表，改一处要同步另两处。
 export const ACTION_BUDGET_MS = {
-  load_document: 180000, export_document: 180000,
+  load_document: 180000, export_document: 180000, export_pdf: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
   apply_style_profile: 120000,
   // 表格批量替换（dev-board#804）：一次扫到 20000 格、逐格落笔，同 find_replace 量级。

@@ -66,7 +66,7 @@ export function serveExecutor({ executor, send, subscribe }) {
 // 按 action 分级的等待预算（ms）——与 libreofficeExecutorClient.js 的
 // ACTION_BUDGET_MS、后端 EditorBridgeService.ACTION_TIMEOUT_SECONDS 三处同表。
 const ACTION_BUDGET_MS = {
-  load_document: 180000, export_document: 180000,
+  load_document: 180000, export_document: 180000, export_pdf: 180000,
   find_replace: 120000, apply_house_style: 120000, resolve_all_revisions: 120000, insert_table: 120000,
   apply_style_profile: 120000,
   // 流式 chunk 和收尾都可能一次写完整表格；完整回答插入也复用 stream_insert。

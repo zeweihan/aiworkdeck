@@ -2557,6 +2557,18 @@ function installReviewCommentInterceptor(controller) {
           removeStatusListener(listener, command) { native.removeStatusListener(listener, command); },
         });
       }
+      // 原生「文件→导出为→直接导出 PDF / 导出为 PDF…」与标准工具栏的 PDF 图标（dev-board#886）：
+      // 本 WASM 构建里这两条命令要的文件选择器 / PDF 选项对话框起不来，派发静默结束
+      // （真机探针：ExportDirectToPDF 回 State=FAILURE、ExportToPDF 回 Result=false，
+      // 不弹任何窗口、不产出文件）——用户点了没有任何结果。改由宿主接手：worker 只
+      // 发一条请求，宿主经 export_pdf 取 PDF 字节，走应用自己的下载链路（另存为）。
+      if (url.Complete === '.uno:ExportDirectToPDF' || url.Complete === '.uno:ExportToPDF') {
+        return zetajs.unoObject([css.frame.XDispatch], {
+          dispatch() { if (controller === ctrl) post('export-pdf-request', { documentSeq: docSeq, source: url.Complete }); },
+          addStatusListener(listener, command) { if (native) native.addStatusListener(listener, command); },
+          removeStatusListener(listener, command) { if (native) native.removeStatusListener(listener, command); },
+        });
+      }
       if (!native || url.Complete !== '.uno:InsertAnnotation') return native;
       return zetajs.unoObject([css.frame.XDispatch], {
         dispatch(command, args) {
@@ -2580,7 +2592,7 @@ function installReviewCommentInterceptor(controller) {
     };
     state.interceptor = zetajs.unoObject([css.frame.XDispatchProviderInterceptor, css.frame.XInterceptorInfo], {
       // Avoid a JS callback for every menu/toolbar command queried by Writer.
-      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo']; },
+      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo', '.uno:ExportDirectToPDF', '.uno:ExportToPDF']; },
       queryDispatch: query,
       queryDispatches(requests) {
         return requests.map(function (r) { return query(r.FeatureURL, r.FrameName, r.SearchFlags); });
@@ -4529,6 +4541,40 @@ const EXEC = {
     for (const c of chunks) { u8.set(c, off); off += c.length; }
     log('export_document: 已导出「' + name + '」/ exported (' + u8.length + ' bytes, filter=' + (filter || 'auto') + ')');
     return { success: true, name: name, size: u8.length, bytes: u8 };
+  },
+  // 导出当前文档为 PDF 字节（dev-board#886，宿主发起：原生「导出为 PDF」入口经
+  // export-pdf-request 转到这里）。同 export_document 的 private:stream 写法——不落
+  // MEMFS（pthread 读不回），也同样复原 modified 标志、导出期间闭掉 modified 上报，
+  // 否则一次导出就触发一轮自动保存。版面按用户当前看到的显示方式导出，与原生一致。
+  export_pdf() {
+    const filter = { writer: 'writer_pdf_Export', calc: 'calc_pdf_Export', impress: 'impress_pdf_Export' }[docKindOf()];
+    if (!filter) return { success: false, error: '当前文档类型不支持导出 PDF', message: '当前文档类型不支持导出 PDF' };
+    const chunks = [];
+    let total = 0;
+    const sink = zetajs.unoObject([css.io.XOutputStream], {
+      writeBytes(seq) {
+        const u8 = new Uint8Array(seq.buffer ? seq.buffer.slice(seq.byteOffset, seq.byteOffset + seq.byteLength) : seq);
+        chunks.push(u8); total += u8.length;
+      },
+      flush() {},
+      closeOutput() {},
+    });
+    const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
+    exportInFlight = true;
+    try {
+      xModel.storeToURL('private:stream', [mkProp('OutputStream', sink), mkProp('Overwrite', true), mkProp('FilterName', filter)]);
+    } catch (e) {
+      return { success: false, error: 'PDF 导出失败：' + errStr(e), message: 'PDF 导出失败：' + errStr(e) };
+    } finally {
+      try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* ignore */ }
+      exportInFlight = false;
+    }
+    if (total === 0) return { success: false, error: 'PDF 导出结果为空', message: 'PDF 导出结果为空' };
+    const u8 = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { u8.set(c, off); off += c.length; }
+    log('export_pdf: 已导出 PDF / exported (' + u8.length + ' bytes, filter=' + filter + ')');
+    return { success: true, size: u8.length, bytes: u8 };
   },
   // [diagnostic #66] report the resolved UI locale (ooLocale) so the host/verify
   // panel can confirm whether the injected zh-CN langpack took effect.

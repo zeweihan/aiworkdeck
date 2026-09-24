@@ -12,6 +12,9 @@ export default {
   discardAndClose: 'Discard and Close',
   moveTabSaveFailed: 'Saving has not completed - the tab was not moved to the other pane',
   keepEditing: 'Keep Editing',
+  pdfExporting: 'Exporting PDF…',
+  pdfExported: 'PDF exported: {name}',
+  pdfExportFailed: 'PDF export failed: {reason}',
 
   status: {
     booting: 'Starting…',

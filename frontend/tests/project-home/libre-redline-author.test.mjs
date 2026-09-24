@@ -30,11 +30,12 @@ function makeVm({ cached = null, remote = null, fail = false, endpointUp = true 
   const sent = []
   const options = new Function(
     'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
-    'getCurrentUser', 'fetchAuthUser', 'createAuthorNameResolver', BODY)(
+    'getCurrentUser', 'fetchAuthUser', 'createAuthorNameResolver', 'getFileDownloadUrl', BODY)(
     null, null, null,
     () => cached,
     async () => { if (fail) throw new Error('401'); return remote ? { code: 0, data: remote } : null },
-    createAuthorNameResolver)
+    createAuthorNameResolver,
+    (id) => '/api/files/' + id + '/download')
   const vm = {
     selfAuthor: options.data().selfAuthor,
     _endpointUp: endpointUp,
@@ -79,4 +80,49 @@ test('引擎还没起来：只更新 selfAuthor，不往 executor 发命令', as
 test('mounted 必须真的去解析一次（不然上面几条永远不会被触发）', () => {
   const mounted = SRC.match(/async mounted\(\) \{([\s\S]*?)\n  \},/)[1]
   assert.match(mounted, /this\.resolveRedlineAuthor\(\)/)
+})
+
+// dev-board#881：新建的 DOCX 后端给 0 字节，loadDocument 走「保留 boot 出来的空白文档」
+// 分支——原来这条分支一条 load_document 都不发，而 worker 的修订作者**只**由
+// load_document 设置，于是新建文档里用户打的每个字都署引擎兜底「未知作者」，
+// 审阅面板「我 0 / 其他人 1」。上面第二条「loadDocument 自己会带上同一个名字」的
+// 前提在这条分支上不成立。还原病灶（删掉空字节分支里的署名下发）本用例即转红。
+function blankDocVm(opts) {
+  const made = makeVm(opts)
+  Object.assign(made.vm, {
+    file: { id: 42, name: 'newdocument.docx', fileType: 'docx', fileSize: null },
+    _bytesPromise: Promise.resolve(new ArrayBuffer(0)),
+    _docLoadSeq: 1,
+  })
+  return made
+}
+
+test('新建文档（后端 0 字节）：空白分支也要把署名下发给引擎', async () => {
+  const { vm, sent } = blankDocVm({ cached: { displayName: '韩泽伟' } })
+  const loaded = await vm.loadDocument()
+  assert.equal(loaded, false, '0 字节仍按新建空白文档处理，不换文档')
+  assert.deepEqual(sent, [['load_document', { authorName: '韩泽伟' }]],
+    '只补署名、不带 bytes——否则引擎一直端着 boot 时的空作者')
+  assert.equal(vm.selfAuthor, '韩泽伟', '引擎署名与审阅面板「我」这一桶必须同串')
+})
+
+test('新建文档且名字要问后端：mounted 的解析先完成时，空白分支用解析到的名字', async () => {
+  const { vm, sent } = blankDocVm({ cached: null, remote: { displayName: '本机用户' }, endpointUp: false })
+  await vm.resolveRedlineAuthor() // 引擎未起：只更新 selfAuthor
+  assert.deepEqual(sent, [])
+  vm._endpointUp = true
+  await vm.loadDocument()
+  assert.deepEqual(sent, [['load_document', { authorName: '本机用户' }]])
+})
+
+test('新建文档、拿不到名字：不发空名字（保持引擎兜底），也不算装载失败', async () => {
+  const { vm, sent } = blankDocVm({ cached: null, fail: true })
+  assert.equal(await vm.loadDocument(), false)
+  assert.deepEqual(sent, [])
+})
+
+test('新建文档、署名下发失败：不把空白文档判成装载失败', async () => {
+  const { vm } = blankDocVm({ cached: { displayName: '韩泽伟' } })
+  vm.executor = { executeCommand: async () => { throw new Error('relay timeout') } }
+  assert.equal(await vm.loadDocument(), false)
 })

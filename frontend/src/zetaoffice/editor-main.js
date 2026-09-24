@@ -231,6 +231,11 @@ function relayCommentRequest(documentSeq) {
 function relayModified(d) {
   if (!d || !d.cmd) return
   if (d.cmd === 'comment-request') { relayCommentRequest(d.documentSeq); return }
+  // 原生「导出为 PDF」入口被 worker 拦下（dev-board#886）：宿主取字节并下载
+  if (d.cmd === 'export-pdf-request') {
+    try { hostTransport.send({ __lo: 'lo-relay', type: 'export-pdf-request', source: d.source || '' }) } catch (e) { /* ignore */ }
+    return
+  }
   if (d.cmd === 'sel_changed') { relaySelection(); return }
   if (d.cmd !== 'modified') return
   reviewBalloons?.documentChanged()

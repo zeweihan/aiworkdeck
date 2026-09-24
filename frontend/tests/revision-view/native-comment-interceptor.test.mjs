@@ -65,7 +65,24 @@ test('comments with supplied text and unrelated commands retain native dispatch 
   assert.deepEqual(e.calls, [{ command: '.uno:InsertAnnotation', args }, { command: '.uno:Bold', args: [] }])
   assert.deepEqual(e.status, [['add', listener, url], ['remove', listener, url]])
   assert.equal(e.events.length, 0)
-  assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo'])
+  assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo', '.uno:ExportDirectToPDF', '.uno:ExportToPDF'])
+})
+
+// dev-board#886：原生「直接导出 PDF / 导出为 PDF…」在 WASM 里起不来文件选择器，派发静默结束。
+// 拦下来转成宿主请求，绝不再交给原生派发；状态监听仍转给原生（菜单/图标的可用态照旧）。
+test('native PDF export commands become a host request instead of the silent native dispatch', () => {
+  const e = environment(); e.install()
+  for (const command of ['.uno:ExportDirectToPDF', '.uno:ExportToPDF']) {
+    const d = e.query(command), listener = {}
+    d.addStatusListener(listener, { Complete: command })
+    d.dispatch({ Complete: command }, [])
+  }
+  assert.equal(e.calls.length, 0, 'native dispatch must not run (it ends silently in WASM)')
+  assert.deepEqual(e.events, [
+    { cmd: 'export-pdf-request', documentSeq: 4, source: '.uno:ExportDirectToPDF' },
+    { cmd: 'export-pdf-request', documentSeq: 4, source: '.uno:ExportToPDF' },
+  ])
+  assert.equal(e.status.length, 2)
 })
 
 test("Writer's own undo/redo go through the worker's undo step; other commands do not", () => {
