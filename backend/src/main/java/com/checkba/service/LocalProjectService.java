@@ -228,6 +228,10 @@ public class LocalProjectService {
         for (ProjectFile f : rows) byId.put(f.getId(), f);
         for (ProjectFile f : rows) {
             if (Boolean.TRUE.equals(f.getIsDeleted())) continue;
+            // 文件缓存区是应用内部文件夹，空着的时候磁盘上本就没有目录——不能判成「律师删了它」，
+            // 否则工作台每打开一次就懒建一个、对账又送一个进回收站（dev-board#885 现场的
+            // .awd/tree.json 里已经攒了两条）。
+            if (ProjectFileService.isRootStagingFolder(f)) continue;
             Path physical;
             boolean isFolder = Boolean.TRUE.equals(f.getIsFolder());
             if (isFolder) {

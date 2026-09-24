@@ -77,6 +77,8 @@ class LocalProjectServiceTest {
                 mock(com.checkba.service.telemetry.TelemetryService.class),
                 mock(com.checkba.service.evidence.EvidenceLinkService.class));
 
+        projectFileService.setStorageResolverForTest(resolver);
+
         ProjectMemberService memberService = mock(ProjectMemberService.class);
         when(memberService.hasReadPermission(anyLong(), anyLong())).thenReturn(true);
 
@@ -435,6 +437,121 @@ class LocalProjectServiceTest {
                 .toList();
         assertEquals(1, live.size(), "同一个文件夹在资源管理器里只能有一个节点: " + live);
         assertNull(live.get(0).getParentId(), "它就该是一条普通的根行，parent_id 必须是 null");
+    }
+
+    // ---- dev-board#885：应用里建的文件夹必须真的落到磁盘上 ----
+    // 对账以磁盘为真相源：「行在库、目录不在盘」= 律师在 Finder 里删了它 → 软删除。
+    // 应用里新建的文件夹此前只落库不建目录，空的那种在下一次任意磁盘变化（新建文档、
+    // 保存、版本记录写 .awd/）触发的对账里就被当成「已删除」送进回收站；恢复也不建目录，
+    // 于是下一轮又进去一次。有文件的文件夹不中招，只因为写文件时顺手建了父目录。
+
+    private static ProjectFile live(List<ProjectFile> rows, String name) {
+        return rows.stream().filter(f -> name.equals(f.getName()))
+                .filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
+                .findFirst().orElse(null);
+    }
+
+    @Test
+    void emptyFolderCreatedInAppSurvivesReconcile(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "x");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        ProjectFile dir = projectFileService.createFolder(pid, null, "QA空目录", 1L);
+        ProjectFile sub = projectFileService.createFolder(pid, dir.getId(), "子目录", 1L);
+        // 任意一次磁盘变化（这里模拟「新建文档」落了一个文件）都会触发对账
+        Files.writeString(folder.resolve("newdocument.docx"), "y");
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertNotNull(live(rows, "QA空目录"), "没人删过的空文件夹不得进回收站: " + rows);
+        assertNotNull(live(rows, "子目录"), "嵌套的空文件夹同理: " + rows);
+        assertTrue(projectFileService.getRecycleBinFiles(pid).isEmpty(), "回收站应为空");
+        assertTrue(Files.isDirectory(folder.resolve("QA空目录/子目录")), "文件夹应在磁盘上真实存在");
+        assertEquals(1, rows.stream().filter(f -> "QA空目录".equals(f.getName())).count(), "不得产生重复行");
+        assertEquals(dir.getId(), live(rows, "子目录").getParentId());
+        assertEquals(sub.getId(), live(rows, "子目录").getId());
+    }
+
+    @Test
+    void restoredEmptyFolderStaysOutOfRecycleBin(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "x");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        // 修复前落下的存量：库里有、盘上没有、已经被对账送进回收站的空文件夹
+        ProjectFile ghost = new ProjectFile();
+        ghost.setProjectId(pid);
+        ghost.setIsFolder(true);
+        ghost.setName("QA目录刷新复验");
+        ghost.setSortOrder(9);
+        ghost.setUserId(1L);
+        ghost.setIsDeleted(true);
+        ghost.setDeletedAt(java.time.LocalDateTime.now());
+        ghost = projectFileRepository.save(ghost);
+
+        projectFileService.restore(ghost.getId(), 1L);
+        Files.writeString(folder.resolve("newdocument (3).docx"), "y");
+        svc.reconcileProject(pid);
+
+        assertNotNull(live(projectFileRepository.findByProjectId(pid), "QA目录刷新复验"),
+                "律师亲手恢复的文件夹，下一轮对账不得再送回回收站");
+        assertTrue(Files.isDirectory(folder.resolve("QA目录刷新复验")));
+    }
+
+    @Test
+    void renamedFolderKeepsItsNameAndContentsAfterReconcile(@TempDir Path folder) throws Exception {
+        Files.createDirectories(folder.resolve("旧名"));
+        Files.writeString(folder.resolve("旧名/证据.docx"), "x");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        ProjectFile dir = live(projectFileRepository.findByProjectId(pid), "旧名");
+
+        projectFileService.rename(dir.getId(), "新名", 1L);
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertNotNull(live(rows, "新名"), "改名后的文件夹不得被对账送进回收站: " + rows);
+        assertNull(live(rows, "旧名"), "不得从旧目录再导入一个幽灵文件夹: " + rows);
+        ProjectFile doc = live(rows, "证据.docx");
+        assertNotNull(doc);
+        assertEquals(dir.getId(), doc.getParentId());
+        assertEquals("projects/" + pid + "/新名/证据.docx", doc.getFilePath());
+        assertTrue(Files.isRegularFile(folder.resolve("新名/证据.docx")));
+        assertFalse(Files.exists(folder.resolve("旧名")));
+        assertTrue(projectFileService.getRecycleBinFiles(pid).isEmpty());
+    }
+
+    @Test
+    void movedFolderWithEmptySubfolderSurvivesReconcile(@TempDir Path folder) throws Exception {
+        Files.createDirectories(folder.resolve("甲/空的"));
+        Files.writeString(folder.resolve("甲/a.txt"), "1");
+        Files.createDirectories(folder.resolve("乙"));
+        Files.writeString(folder.resolve("乙/b.txt"), "2");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        List<ProjectFile> before = projectFileRepository.findByProjectId(pid);
+
+        projectFileService.move(live(before, "甲").getId(), live(before, "乙").getId(), null, 1L);
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertNotNull(live(rows, "空的"), "随父文件夹移动的空子文件夹不得进回收站: " + rows);
+        assertEquals(1, rows.stream().filter(f -> "甲".equals(f.getName())).count(), "不得在原位置导入幽灵: " + rows);
+        assertEquals(live(rows, "乙").getId(), live(rows, "甲").getParentId());
+        assertTrue(Files.isDirectory(folder.resolve("乙/甲/空的")));
+        assertEquals("projects/" + pid + "/乙/甲/a.txt", live(rows, "a.txt").getFilePath());
+        assertTrue(projectFileService.getRecycleBinFiles(pid).isEmpty());
+    }
+
+    @Test
+    void stagingFolderNeitherLandsOnDiskNorBouncesIntoRecycleBin(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "x");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        projectFileService.createFolder(pid, null, "__staging_area__", 1L);
+        Files.writeString(folder.resolve("newdocument.docx"), "y");
+        svc.reconcileProject(pid);
+
+        assertFalse(Files.exists(folder.resolve("__staging_area__")), "律师的文件夹里不该凭空多出一个空的缓存区目录");
+        assertNotNull(live(projectFileRepository.findByProjectId(pid), "__staging_area__"),
+                "缓存区文件夹不得被对账送进回收站");
     }
 
     @Test

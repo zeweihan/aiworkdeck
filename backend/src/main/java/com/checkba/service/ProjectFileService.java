@@ -39,6 +39,18 @@ public class ProjectFileService {
     /** 彻底删除时级联清 evidence_link_target（单向依赖：EvidenceLinkService 不注入本类）。 */
     private final com.checkba.service.evidence.EvidenceLinkService evidenceLinkService;
 
+    /**
+     * 本地文件夹项目（{@code Project.localRoot} 非空）的物理路径解析。字段注入而不是构造器参数：
+     * 本类的构造器被多个测试类手工 new，缺席时（那些测试）物理目录维护整体跳过，行为同旧。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.storage.ProjectStorageResolver storageResolver;
+
+    /** 手工 new 出来的实例（测试）补上解析器。 */
+    void setStorageResolverForTest(com.checkba.storage.ProjectStorageResolver resolver) {
+        this.storageResolver = resolver;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
                               ProjectRagService projectRagService,
@@ -114,6 +126,7 @@ public class ProjectFileService {
         folder.setUpdatedAt(LocalDateTime.now());
 
         ProjectFile savedFolder = projectFileRepository.save(folder);
+        materializeLocalFolder(savedFolder);
         signalChange(projectId, userId);
         return savedFolder;
     }
@@ -627,6 +640,9 @@ public class ProjectFileService {
 
         String oldName = file.getName();
         String oldFilePath = file.getFilePath();
+        // 本地文件夹项目里的文件夹：改名前记下它在磁盘上的目录，落库后整体搬过去（dev-board#885）
+        java.nio.file.Path oldLocalDir = Boolean.TRUE.equals(file.getIsFolder())
+                ? localFolderDir(file.getProjectId(), file.getParentId(), oldName) : null;
         
         // 处理文件名：如果是文件，确保保留文件后缀
         String finalNewName = newName.trim();
@@ -679,6 +695,9 @@ public class ProjectFileService {
         }
 
         ProjectFile renamed = projectFileRepository.save(file);
+        if (oldLocalDir != null) {
+            relocateLocalFolder(oldLocalDir, renamed);
+        }
         signalChange(renamed.getProjectId(), userId);
         return renamed;
     }
@@ -797,6 +816,8 @@ public class ProjectFileService {
         file.setIsDeleted(false);
         file.setDeletedAt(null);
         projectFileRepository.save(file);
+        // 本地文件夹项目：恢复出来的文件夹若在磁盘上没有目录，下一轮对账会把它再送回回收站
+        materializeLocalFolder(file);
         
         // 递归还原所有子文件
         if (Boolean.TRUE.equals(file.getIsFolder())) {
@@ -861,6 +882,8 @@ public class ProjectFileService {
 
         String oldFilePath = file.getFilePath();
         Long oldParentId = file.getParentId();
+        java.nio.file.Path oldLocalDir = Boolean.TRUE.equals(file.getIsFolder())
+                ? localFolderDir(file.getProjectId(), oldParentId, file.getName()) : null;
         
         // 更新父文件夹和排序序号
         file.setParentId(newParentId);
@@ -878,6 +901,12 @@ public class ProjectFileService {
 
         // 文件夹移动：需要同步更新子文件的 filePath，并移动所有子文件的物理文件
         ProjectFile savedFolder = projectFileRepository.save(file);
+        if (oldLocalDir != null) {
+            // 本地文件夹项目：整个目录一次搬走（空子文件夹也跟着走，原位置不留空壳）
+            relocateLocalFolder(oldLocalDir, savedFolder);
+            signalChange(savedFolder.getProjectId(), userId);
+            return savedFolder;
+        }
         try {
             moveFolderDescendantPhysicalFiles(savedFolder);
         } catch (Exception e) {
@@ -1038,6 +1067,7 @@ public class ProjectFileService {
             newFolder.setCreatedAt(LocalDateTime.now());
             newFolder.setUpdatedAt(LocalDateTime.now());
             ProjectFile savedFolder = projectFileRepository.save(newFolder);
+            materializeLocalFolder(savedFolder);
 
             List<ProjectFile> children = projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, source.getId());
             for (ProjectFile child : children) {
@@ -1135,6 +1165,104 @@ public class ProjectFileService {
         } catch (Exception e) {
             log.error("物理文件移动/重命名失败: {} -> {}", oldPath, newPath, e);
             throw e;
+        }
+    }
+
+    // ===== 本地文件夹项目的物理目录（dev-board#885）=====================================
+    // 本地文件夹项目（Project.localRoot 非空）的对账（LocalProjectService.reconcileProject）
+    // 以磁盘为真相源：「行在库、目录不在盘」= 律师在 Finder 里删了它 → 软删除进回收站。
+    // 所以应用里对文件夹做的每一件事都必须同步落到磁盘上，否则下一次任意磁盘变化触发的
+    // 对账就会把它当成「已删除」。此前新建/恢复/复制只落库不建目录——空文件夹在新建文档、
+    // 保存、版本记录写 .awd/ 之后必进回收站，恢复了还会再进；改名/移动也不动目录，
+    // 于是改名被对账撤回、移动在原位置导回一个幽灵。托管项目不走对账，这里一律不碰。
+
+    /** 本地文件夹项目里这个文件夹对应的磁盘目录；托管项目或解析器缺席时回 null。 */
+    private java.nio.file.Path localFolderDir(Long projectId, Long parentId, String name) {
+        if (storageResolver == null || projectId == null || !StringUtils.hasText(name)
+                || !storageResolver.hasLocalRoot(projectId)) {
+            return null;
+        }
+        try {
+            return storageResolver.resolve(buildPhysicalPath(projectId, parentId, name));
+        } catch (Exception e) {
+            log.warn("解析本地文件夹目录失败: project={}, name={} ({})", projectId, name, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 本地文件夹项目：确保文件夹在磁盘上有目录。失败只记日志——行已经在库里了。
+     * 根下的文件缓存区（{@code __staging_area__}）例外：它是工作台每次打开都会懒建的应用内部
+     * 文件夹，律师自己的文件夹里不该凭空多出一个空的它（有文件移进来时写文件自会带出目录）；
+     * 对账那侧同样不因它不在盘上而把它送进回收站，见 LocalProjectService.reconcileProject。
+     */
+    private void materializeLocalFolder(ProjectFile folder) {
+        if (folder == null || !Boolean.TRUE.equals(folder.getIsFolder())) return;
+        if (isRootStagingFolder(folder)) return;
+        java.nio.file.Path dir = localFolderDir(folder.getProjectId(), folder.getParentId(), folder.getName());
+        if (dir == null) return;
+        try {
+            java.nio.file.Files.createDirectories(dir);
+        } catch (Exception e) {
+            log.warn("本地文件夹项目：建目录失败 folderId={}, dir={} ({})", folder.getId(), dir, e.getMessage());
+        }
+    }
+
+    /**
+     * 本地文件夹项目：文件夹改名/移动后，把磁盘上的整个目录搬到新位置，再把子孙文件的
+     * filePath 改到新前缀。搬不动时抛错让事务回滚——数据库与磁盘一旦分叉，下一轮对账会把
+     * 新名字那一行连同子孙一起送进回收站，比「这次没改成」糟得多。
+     */
+    private void relocateLocalFolder(java.nio.file.Path oldDir, ProjectFile folder) {
+        java.nio.file.Path newDir = localFolderDir(folder.getProjectId(), folder.getParentId(), folder.getName());
+        if (newDir == null) return;
+        try {
+            if (!oldDir.equals(newDir) && java.nio.file.Files.isDirectory(oldDir)) {
+                java.nio.file.Files.createDirectories(newDir.getParent());
+                boolean caseOnly = oldDir.getParent().equals(newDir.getParent())
+                        && oldDir.getFileName().toString().equalsIgnoreCase(newDir.getFileName().toString());
+                if (caseOnly) {
+                    // 大小写不敏感的文件系统上 Files.move("A","a") 判为同一个文件、什么都不做，借一个临时名过渡
+                    java.nio.file.Path hop = oldDir.resolveSibling(".awd-rename-" + UUID.randomUUID());
+                    java.nio.file.Files.move(oldDir, hop);
+                    java.nio.file.Files.move(hop, newDir);
+                } else {
+                    java.nio.file.Files.move(oldDir, newDir);
+                }
+            } else {
+                java.nio.file.Files.createDirectories(newDir);
+            }
+        } catch (Exception e) {
+            log.warn("本地文件夹项目：搬目录失败 {} -> {} ({})", oldDir, newDir, e.getMessage());
+            throw new IllegalArgumentException(LangText.of(
+                    "文件夹在磁盘上没能改名或移动，可能有文件正被其他程序占用，请关闭后重试",
+                    "The folder could not be renamed or moved on disk; a file inside may be in use by another program. Close it and try again"));
+        }
+        rewriteDescendantFilePaths(folder);
+    }
+
+    /** 根下的文件缓存区文件夹（应用内部，磁盘上可以没有目录）。 */
+    public static boolean isRootStagingFolder(ProjectFile f) {
+        return f != null && Boolean.TRUE.equals(f.getIsFolder()) && f.getParentId() == null
+                && com.checkba.service.quota.StageQuotaService.STAGING_FOLDER_NAME.equals(f.getName());
+    }
+
+    /** 目录整体搬走后，子孙文件（含回收站里的，它们的字节也跟着搬了）的 filePath 跟上新前缀。 */
+    private void rewriteDescendantFilePaths(ProjectFile folder) {
+        List<ProjectFile> children = projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(
+                folder.getProjectId(), folder.getId());
+        for (ProjectFile child : children) {
+            if (Boolean.TRUE.equals(child.getIsFolder())) {
+                rewriteDescendantFilePaths(child);
+                continue;
+            }
+            if (!StringUtils.hasText(child.getFilePath())) continue;
+            String newPath = buildPhysicalPath(child.getProjectId(), child.getParentId(), child.getName());
+            if (!newPath.equals(child.getFilePath())) {
+                child.setFilePath(newPath);
+                child.setUpdatedAt(LocalDateTime.now());
+                projectFileRepository.save(child);
+            }
         }
     }
 
@@ -1425,7 +1553,9 @@ public class ProjectFileService {
         folder.setUpdatedAt(LocalDateTime.now());
         folder.setWpsFileId(conversationId); // CRITICAL: Link ID to Folder
         
-        return projectFileRepository.save(folder);
+        ProjectFile saved = projectFileRepository.save(folder);
+        materializeLocalFolder(saved);
+        return saved;
     }
     
     @Transactional

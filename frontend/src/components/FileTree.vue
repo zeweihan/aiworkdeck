@@ -1205,6 +1205,19 @@ export default {
        ... moved to below ...
     }
     */
+    // 新建（文件夹 / 文档 / 模板文档）的落点：当前选中的文件夹，或选中文件所在的文件夹；
+    // 没有选中时是当前浏览层级。选中的那个文件夹后来进了回收站（或已不在树里）时退回当前
+    // 层级——后端会拒收一个已删除的父节点，律师只会看到一句「创建失败」。
+    createTargetParentId() {
+      const id = this.activeFolderId
+      if (id != null && id !== 0) {
+        const inBin = (this.recycleBin || []).some(f => f && f.id === id)
+        const all = this.allFiles || []
+        const known = all.length === 0 || all.some(f => f && f.id === id && f.isFolder)
+        if (!inBin && known) return id
+      }
+      return this.parentId
+    },
     showCreateFolderDialog() {
       this.newFolderName = ''
       this.showCreateDialog = true
@@ -1242,8 +1255,7 @@ export default {
         if (isNaN(projectId)) {
           throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
-        // Use activeFolderId or parentId
-        const parentId = this.activeFolderId || this.parentId
+        const parentId = this.createTargetParentId()
         await createFolder(projectId, parentId, this.newFolderName.trim())
         this.showCreateDialog = false
         this.newFolderName = ''
@@ -1286,7 +1298,7 @@ export default {
           const t = shown[r.tapIndex - 1]
           try {
             const res2 = await createFileFromContributedTemplate(
-              t.pluginId, t.id, Number(this.projectId), this.parentId || null, null)
+              t.pluginId, t.id, Number(this.projectId), this.createTargetParentId() || null, null)
             const body2 = res2 && res2.code !== undefined ? res2 : (res2 && res2.data) || {}
             if (body2.code !== 0) {
               throw new Error(body2.message || this.$t('fileTree.templateCreateFailed'))
@@ -1325,7 +1337,14 @@ export default {
         let name = baseName + ext
         let counter = 1
 
+        // 落点与「新建文件夹」同一个：选中的文件夹（或选中文件所在的文件夹），没选中才是当前层级
+        // （dev-board#885：此前这里只认 parentId，树模式下恒为根，选中文件夹也落到根目录）。
+        const targetParentId = this.createTargetParentId()
         const existingNames = new Set(this.displayFiles.map(f => f.name))
+        // 目标文件夹折叠着时它的子项不在 displayFiles 里，同名要从全量里补上，否则后端按 FAIL 拒收
+        for (const f of (this.allFiles || [])) {
+          if (f && (f.parentId ?? null) === (targetParentId ?? null)) existingNames.add(f.name)
+        }
         while (existingNames.has(name)) {
            name = `${baseName} (${counter})${ext}`
            counter++
@@ -1337,7 +1356,7 @@ export default {
         // 创建Word文件
         await createFile(
           projectId,
-          this.parentId,
+          targetParentId,
           name,
           'docx',
           null, // fileSize
@@ -1345,6 +1364,9 @@ export default {
           wpsFileId
         )
 
+        if (targetParentId != null && this.showTree && this.expandedFolders) {
+          this.expandedFolders.add(targetParentId)
+        }
         await this.loadFiles()
         uni.showToast({
           title: this.$t('fileTree.createSuccess'),
