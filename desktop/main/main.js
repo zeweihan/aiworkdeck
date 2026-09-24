@@ -832,10 +832,45 @@ function makeBrowserView(id) {
     // ignore
   }
 
-  // 调试：捕获加载失败（用户看到的 ERR_ABORTED/SSL handshake failed 等）
-  view.webContents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
+  // 加载失败：Electron 对主帧失败的兜底是跳到 chrome-error://chromewebdata/（一个
+  // 空白页），此前这里只 console.warn 一声，从没告诉渲染层——面板因此永远不知道
+  // 加载失败了，表现为「无加载中、无错误、内容区一片空白」（dev-board#889）。
+  // isMainFrame===false 的子资源/子 frame 失败（图片、埋点、iframe 广告等）不代表
+  // 整页失败，不转发；errorCode 是否要展示、展示成哪句话交给渲染层的纯函数判断
+  // （browserLoadError.js，其中 ERR_ABORTED=-3 会被过滤——重定向/用户中断的常见误报）。
+  view.webContents.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
     // eslint-disable-next-line no-console
-    console.warn(`[BrowserView] did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL}`)
+    console.warn(`[BrowserView] did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL} isMainFrame=${isMainFrame}`)
+    if (isMainFrame === false) return
+    try {
+      if (mainWindow) {
+        mainWindow.webContents.send('checkba:browser-load-error', {
+          id,
+          errorCode,
+          errorDescription: String(errorDescription || ''),
+          validatedURL: String(validatedURL || '')
+        })
+      }
+    } catch (e) {
+      // ignore
+    }
+  })
+
+  // 加载中状态：与上面的失败态一起，让面板能区分「正在加载」「失败」「正常」三种
+  // 状态——此前完全没有加载中提示，空白与加载中在界面上无法区分。
+  view.webContents.on('did-start-loading', () => {
+    try {
+      if (mainWindow) mainWindow.webContents.send('checkba:browser-loading-state', { id, loading: true })
+    } catch (e) {
+      // ignore
+    }
+  })
+  view.webContents.on('did-stop-loading', () => {
+    try {
+      if (mainWindow) mainWindow.webContents.send('checkba:browser-loading-state', { id, loading: false })
+    } catch (e) {
+      // ignore
+    }
   })
 
   // 页面标题变化：同步给渲染层，用于 tab 标题展示

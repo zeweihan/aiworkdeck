@@ -96,7 +96,8 @@
     "test:identity": "node --test tests/identity/*.test.mjs",
     "test:optional-components": "node --test tests/optional-components/*.test.mjs",
     "test:window-chrome": "node --test tests/window-chrome/*.test.mjs",
-    "test:desensitize": "node --test tests/desensitize/*.test.mjs"
+    "test:desensitize": "node --test tests/desensitize/*.test.mjs",
+    "test:browser": "node --test tests/browser/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
