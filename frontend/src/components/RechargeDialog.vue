@@ -266,39 +266,51 @@ export default {
 </script>
 
 <style scoped>
+/* 视觉对齐 AwdDialog.vue（dev-board#849）的 mask/panel/按钮令牌与间距——
+   同一套弹窗质感，两处各自 scoped 不合并成一个组件。
+   dev-board#890：单位统一改用 px（本仓 uni-h5 rpx 恒按 375 设计宽换算，
+   1rpx=0.5px；rpx 混着写在这个弹窗上正是自定义金额输入框被裁掉的病灶之一，
+   见 .recharge-custom-input 的说明）。 */
 .awd-mask {
-  position: fixed; inset: 0; background: rgba(33, 38, 41, .45);
-  display: flex; align-items: center; justify-content: center; z-index: 999;
+  position: fixed; inset: 0; z-index: 999;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; box-sizing: border-box;
+  background: var(--awd-overlay);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
 }
 .awd-dialog {
-  width: 660rpx; max-height: 74vh; display: flex; flex-direction: column;
-  background: var(--awd-surface); border-radius: 16rpx; overflow: hidden;
-  box-shadow: 0 24rpx 64rpx rgba(33, 38, 41, .18);
+  width: 420px; max-width: calc(100vw - 32px); max-height: calc(100vh - 64px);
+  display: flex; flex-direction: column;
+  background: var(--awd-surface); color: var(--awd-text);
+  border-radius: 16px; overflow: hidden;
+  box-shadow: var(--awd-shadow-lg);
 }
-.awd-header { padding: 28rpx 32rpx 20rpx; border-bottom: 1px solid var(--awd-info-soft); }
-.recharge-header { display: flex; flex-direction: column; gap: 6rpx; }
-.awd-title { font-size: 30rpx; font-weight: 600; color: var(--awd-text); }
-.recharge-subtitle { font-size: 22rpx; color: var(--awd-text-2); }
-.awd-body { padding: 28rpx 32rpx; overflow-y: auto; flex: 1; }
+.awd-header { padding: 22px 24px 16px; border-bottom: 1px solid var(--awd-border); }
+.recharge-header { display: flex; flex-direction: column; gap: 4px; }
+.awd-title { font: 600 17px/1.35 var(--awd-font-sans); letter-spacing: -0.01em; color: var(--awd-text); }
+.recharge-subtitle { font: 400 13px/1.5 var(--awd-font-sans); color: var(--awd-text-2); }
+.awd-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
 .awd-footer {
-  display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 32rpx 24rpx; border-top: 1px solid var(--awd-info-soft);
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 16px 24px 20px; border-top: 1px solid var(--awd-border);
 }
 .awd-btn {
-  padding: 14rpx 28rpx; border-radius: 8rpx; font-size: 25rpx; cursor: pointer;
-  transition: background .15s ease;
+  height: 38px; min-width: 88px; box-sizing: border-box;
+  padding: 0 18px; border: 1px solid transparent; border-radius: 9px;
+  font: 500 14px/36px var(--awd-font-sans); text-align: center; white-space: nowrap;
+  cursor: pointer; transition: background .15s ease, border-color .15s ease;
 }
-.awd-btn-primary { background: var(--awd-accent); color: var(--awd-text-on-accent); font-weight: 500; }
+.awd-btn-primary { background: var(--awd-accent); color: var(--awd-text-on-accent); }
 .awd-btn-primary:hover { background: var(--awd-accent-hover); }
-.awd-btn-secondary { background: transparent; color: var(--awd-text-2); border: 1px solid var(--awd-border); }
-.awd-btn-secondary:hover { background: var(--awd-bg); color: var(--awd-text); }
+.awd-btn-secondary { background: transparent; color: var(--awd-text); border-color: var(--awd-border); }
+.awd-btn-secondary:hover { background: var(--awd-surface-2); }
 .awd-btn-disabled { opacity: .4; pointer-events: none; }
 
-.recharge-label { font-size: 24rpx; color: var(--awd-text-2); }
-.recharge-presets { display: flex; gap: 16rpx; margin: 16rpx 0 24rpx; }
+.recharge-label { font: 400 13px/1.5 var(--awd-font-sans); color: var(--awd-text-2); }
+.recharge-presets { display: flex; gap: 10px; margin: 10px 0 18px; }
 .recharge-preset {
-  flex: 1; display: flex; align-items: baseline; justify-content: center; gap: 4rpx;
-  padding: 28rpx 0; border: 1.5px solid var(--awd-border); border-radius: 12rpx; cursor: pointer;
+  flex: 1; display: flex; align-items: baseline; justify-content: center; gap: 2px;
+  padding: 16px 0; border: 1.5px solid var(--awd-border); border-radius: 10px; cursor: pointer;
   transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
 }
 .recharge-preset:hover { border-color: var(--awd-mint); }
@@ -306,37 +318,58 @@ export default {
   border-color: var(--awd-accent); background: var(--awd-accent-soft);
   box-shadow: 0 0 0 1px var(--awd-accent) inset;
 }
-.recharge-preset-cur { font-size: 24rpx; font-weight: 600; color: var(--awd-accent-text); }
-.recharge-preset-text { font-size: 40rpx; font-weight: 700; color: var(--awd-accent-text); font-variant-numeric: tabular-nums; }
-.recharge-custom-label { display: block; margin-bottom: 10rpx; }
+.recharge-preset-cur { font: 600 13px var(--awd-font-sans); color: var(--awd-accent-text); }
+.recharge-preset-text { font: 700 22px var(--awd-font-sans); color: var(--awd-accent-text); font-variant-numeric: tabular-nums; }
+.recharge-custom-label { display: block; margin-bottom: 6px; }
 .recharge-custom-row {
-  display: flex; align-items: center; gap: 10rpx;
-  padding: 0 20rpx; border: 1.5px solid var(--awd-border); border-radius: 12rpx;
+  display: flex; align-items: center; gap: 6px;
+  height: 38px; box-sizing: border-box; padding: 0 12px;
+  border: 1.5px solid var(--awd-border); border-radius: 9px;
   transition: border-color .15s ease;
 }
 .recharge-custom-row:focus-within, .recharge-custom-row.filled { border-color: var(--awd-accent); }
-.recharge-custom-prefix { font-size: 28rpx; font-weight: 600; color: var(--awd-text-2); }
+.recharge-custom-prefix { flex: none; font: 600 14px var(--awd-font-sans); color: var(--awd-text-2); }
 .recharge-custom-row.filled .recharge-custom-prefix { color: var(--awd-accent-text); }
+/* dev-board#890 根因：<input> 被 uni-h5 编译成 <uni-input> 宿主元素，
+   @dcloudio/uni-components/style/input.css 给 uni-input 写死
+   `height:1.4em; min-height:1.4em; overflow:hidden`。旧样式把
+   `box-sizing:border-box` + `padding:18rpx 0`（=9px 上下）也落在这同一个宿主上：
+   18px padding 吃掉 21px 上下（10000 情形下宿主净高约 18.9px 已经 <18px padding），
+   overflow:hidden 一裁，输入的数字只剩不到 1px 的细边，看起来就是一排灰点
+   （已用真实浏览器复现：BEFORE 内容区仅 0.9px 高）。
+   修法：把高度与内边距移到父级 `.recharge-custom-row`（普通 view，不受
+   uni-input.css 影响）；这里只留 `flex:1` + `height:100%`——
+   `.recharge-custom-input` 的类选择器 + scoped 属性选择器（specificity 0,2,0）
+   本就压得过 `uni-input` 的类型选择器（0,0,1），height:100% 直接覆盖掉
+   uni-input.css 的 1.4em，撑满 row 的 38px 高度，不再依赖 border-box 去抵消
+   自身 padding。同时给数字一个明确的 color 与等宽数字，别再指望继承。 */
 .recharge-custom-input {
-  flex: 1; box-sizing: border-box; padding: 18rpx 0;
-  border: none; font-size: 27rpx; background: transparent;
+  flex: 1; height: 100%;
+  border: none; background: transparent;
+  font: 400 14px var(--awd-font-sans);
+  color: var(--awd-text);
+  font-variant-numeric: tabular-nums;
 }
-.recharge-error { display: block; margin-top: 10rpx; font-size: 22rpx; color: var(--awd-danger-text); }
-.recharge-qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 18rpx; padding: 16rpx 0 8rpx; }
+.recharge-error { display: block; margin-top: 6px; font: 400 12px var(--awd-font-sans); color: var(--awd-danger-text); }
+.recharge-qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0 4px; }
 .recharge-qr-frame {
-  padding: 16rpx; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 12rpx;
-  box-shadow: 0 4rpx 16rpx rgba(33, 38, 41, .05);
+  padding: 10px; background: var(--awd-surface); border: 1px solid var(--awd-border); border-radius: 12px;
+  box-shadow: var(--awd-shadow-md);
 }
-.recharge-qr { width: 340rpx; height: 340rpx; display: block; }
-.recharge-hint { font-size: 26rpx; color: var(--awd-text); text-align: center; }
-.recharge-waiting-row { display: flex; align-items: center; gap: 8rpx; }
+.recharge-qr { width: 170px; height: 170px; display: block; }
+.recharge-hint { font: 400 14px/1.5 var(--awd-font-sans); color: var(--awd-text); text-align: center; }
+.recharge-waiting-row { display: flex; align-items: center; gap: 6px; }
 .recharge-waiting-dot {
-  width: 10rpx; height: 10rpx; border-radius: 50%; background: var(--awd-mint);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--awd-mint);
   animation: recharge-pulse 1.2s ease-in-out infinite;
 }
 @keyframes recharge-pulse {
   0%, 100% { opacity: .35; transform: scale(.85); }
   50% { opacity: 1; transform: scale(1); }
 }
-.recharge-waiting { font-size: 22rpx; color: var(--awd-info-text); }
+.recharge-waiting { font: 400 12px var(--awd-font-sans); color: var(--awd-info-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  .recharge-waiting-dot { animation: none; }
+}
 </style>
