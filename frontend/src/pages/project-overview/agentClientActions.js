@@ -56,7 +56,11 @@ export const agentClientActionMethods = {
         if (action.action === 'refresh_files') {
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
                 console.log('[ProjectOverview] Refreshing File Tree...')
-                this.$refs.fileTree.loadFiles()
+                // refresh_files 不带"谁被改成了什么"（AI 改名/移动/新建都走这一条通用
+                // 信号），树重新拉完之后拿它的最新清单把已开标签的名字整批对齐一遍
+                // （dev-board#882）：不这样做的话 AI 把打开中的文档改名之后，树是新的，
+                // 标签/窗口标题/AI「当前文档」还停在旧名。
+                this.$refs.fileTree.loadFiles().then(() => this.syncOpenTabsFromFileTree())
                 uni.showToast({ title: this.$t('workbenchOps.fileUpdated'), icon: 'none' })
             }
         }
