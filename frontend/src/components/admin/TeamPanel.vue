@@ -129,27 +129,22 @@
       <!-- 数据共享开关 + 立即上报：看板顶部（设计 §10.4 第 6 条）。
            它决定「这个团队有没有数据可看」，压在最底下等于让用户滚过两张空表
            才发现自己一直没开。 -->
-      <view class="section-card">
-        <view class="section-body">
-          <view class="switch-row">
-            <view class="switch-info">
-              <text class="switch-name">{{ $t('team.sharingTitle') }}</text>
-              <!-- 说明文案，不是把标题再抄一遍：同一张卡上出现两遍同一句话，
-                   用户会以为这是两个不同的开关 -->
-              <text class="switch-desc">{{ sharingHint }}</text>
-            </view>
+      <SettingsSection :title="$t('team.usageSharingSectionTitle')" :description="$t('team.sharingDesc')">
+          <SettingsRow :label="$t('team.sharingTitle')" :hint="sharingHint">
             <AwdSwitch
               :checked="!!sharing.enabled"
               :disabled="busy || sharing.available === false"
               @change="onToggleSharing"
             />
-          </view>
-          <view class="team-row">
-            <view class="team-btn" :class="{ 'is-busy': busy }" @tap="onUploadNow">
-              {{ $t('team.uploadNow') }}
+          </SettingsRow>
+          <SettingsRow :label="$t('team.lastUploadLabel')">
+            <view class="awd-set-row-spread">
+              <text class="team-footnote">{{ lastUploadValueText }}</text>
+              <view class="team-btn" :class="{ 'is-busy': busy }" @tap="onUploadNow">
+                {{ $t('team.uploadNow') }}
+              </view>
             </view>
-            <text class="team-footnote">{{ lastUploadText }}</text>
-          </view>
+          </SettingsRow>
           <!-- 项目名上云前的一次性确认（C4）。待确认时后台上报正卡在这一关上，
                必须给一个看得见的入口——否则用户只会看到看板一直是空的，无从下手。
                决定过之后如实显示当前档位，并留一条「更改」的路：误点一次不该没有回头路。 -->
@@ -163,8 +158,7 @@
             <text class="team-footnote">{{ projectNamesStateText }}</text>
             <text class="link-action" @tap="onReviewProjectNames">{{ $t('team.projectNamesChange') }}</text>
           </view>
-        </view>
-      </view>
+      </SettingsSection>
 
       <view class="section-card">
         <view class="section-header">
@@ -504,6 +498,8 @@
 <script>
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
+import SettingsSection from '@/components/settings/SettingsSection.vue'
+import SettingsRow from '@/components/settings/SettingsRow.vue'
 import {
   getAccountStatus,
   getTeam, createTeam, updateTeam,
@@ -520,7 +516,7 @@ const ROLE_KEYS = ['ADMIN', 'MEMBER']
 
 export default {
   name: 'TeamPanel',
-  components: { AwdSwitch, AwdSelect },
+  components: { AwdSwitch, AwdSelect, SettingsSection, SettingsRow },
   emits: ['go-account'],
   data() {
     return {
@@ -637,10 +633,12 @@ export default {
       }
       return this.$t('team.savedFormula', { perAgentEdit: f.perAgentEdit, perAiTurn: f.perAiTurn })
     },
-    lastUploadText() {
+    // dev-board#892：「上次上报」行拆成 label + 值两半，值这里只要时间本身
+    // （或「尚未上报过」），「上次上报」四个字已经在 SettingsRow 的 label 里说过一遍
+    lastUploadValueText() {
       const at = this.sharing.lastUploadAt
       if (!at) return this.$t('team.lastUploadNever')
-      return this.$t('team.lastUploadAt', { time: String(at).replace('T', ' ').slice(0, 16) })
+      return String(at).replace('T', ' ').slice(0, 16)
     },
     // 开关行的说明。不可用时说明原因，其余时候说这个开关到底会做什么——
     // 绝不把上面那行标题原样再念一遍
@@ -1106,7 +1104,7 @@ export default {
 .team-pane {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   /* 右下角的反馈浮窗是全局元素，会压住页面最后一行。这里给它让出高度，
      保证面板最后一个可点控件不被盖住（改这个值前先看反馈浮窗的实际高度）。 */
   padding-bottom: 72px;
@@ -1133,7 +1131,7 @@ export default {
 }
 
 .section-header {
-  padding: 14px 18px 10px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--awd-border-subtle);
 }
 
@@ -1153,7 +1151,7 @@ export default {
 }
 
 .section-body {
-  padding: 14px 18px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1188,10 +1186,10 @@ export default {
 
 .stat-value {
   display: block;
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--awd-accent-text);
-  line-height: 22px;
+  line-height: 24px;
 }
 
 /* 1280 宽下这一列只有 86.4px 可用，而「节约时间（估算）」是 8 个全角字符：
@@ -1222,6 +1220,19 @@ export default {
   font-size: 11px;
   color: var(--awd-text-3);
   line-height: 16px;
+}
+
+/* SettingsRow 控件列里「左边值、右边动作」两端对齐（「上次上报」行）。
+   与 components/settings/settings.scss 的 .awd-set-row-spread 同名同形——
+   这个文件是纯 CSS（没有 lang="scss"），@import 一个 .scss 文件进纯 CSS
+   块不会被预处理，只能就地抄一份。 */
+.awd-set-row-spread {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
 }
 
 .team-days-row {

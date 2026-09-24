@@ -126,6 +126,10 @@ export default {
   firmTeamsTableTitle: 'By team',
   colTeamMinutes: 'Time invested',
 
+  // dev-board#892: section title + "last upload" row label added when this
+  // block got wrapped in SettingsSection
+  usageSharingSectionTitle: 'Usage stats reporting',
+  lastUploadLabel: 'Last upload',
   sharingTitle: 'Share my usage stats with the team',
   sharingSwitchDesc: 'When on, one row of counts is uploaded once a day',
   sharingDesc: 'Uploads one row of counts a day (time invested, AI turns, edit actions, anonymous project codes). No document content. Off by default.',

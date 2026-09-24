@@ -10,17 +10,14 @@
      标签里，不清会跨标签泄漏（这是修过的坑，别回退）。
 -->
 <template>
-  <view class="panel-settings">
-    <view class="settings-form">
-      <view class="form-group">
-        <text class="group-title">{{ $t('account.basicInfoGroupTitle') }}</text>
+  <view class="panel-settings awd-set-container">
+      <SettingsSection :title="$t('account.basicInfoGroupTitle')">
         <!-- 姓名引导（Spec §6）：手机号注册的默认展示名是打码手机号，
              而同事在案卷参与人列表、时间线、批注作者里看到的就是这个字段 -->
         <view v-if="accountProfile.displayNameIsDefault" class="name-nudge" @tap="focusDisplayName">
           <text class="name-nudge-text">{{ $t('account.nameNudgeText') }}</text>
         </view>
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.avatarLabel') }}</text>
+        <SettingsRow :label="$t('account.avatarLabel')">
           <view class="avatar-preview tappable" @tap="onAvatarTap">
             <image v-if="userInfo.avatarUrl" class="avatar-image" :src="userInfo.avatarUrl" mode="aspectFill" />
             <text v-else class="avatar-char">{{ getInitial(userInfo.displayName) || 'U' }}</text>
@@ -30,9 +27,8 @@
           <text v-if="canEditProfile && userInfo.avatarUrl" class="bind-link" @tap="onRemoveAvatar">
             {{ $t('account.avatarRemoveAction') }}
           </text>
-        </view>
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.nicknameLabel') }}</text>
+        </SettingsRow>
+        <SettingsRow :label="$t('account.nicknameLabel')">
           <!-- 自建服务器（非 local-mode / 未连接账户）服务端没有改名接口，保持只读 -->
           <input
             v-if="canEditProfile"
@@ -47,32 +43,27 @@
           />
           <text v-else class="form-value">{{ userInfo.displayName }}</text>
           <text v-if="displayNameSaving" class="bind-link">{{ $t('account.nicknameSaving') }}</text>
-        </view>
+        </SettingsRow>
         <text v-if="displayNameError" class="form-error">{{ displayNameError }}</text>
-      </view>
+      </SettingsSection>
 
       <!-- 账号安全（server 模式；认证器恒可用，短信取决于通道配置） -->
-      <view v-if="!isDesktop" class="form-group">
-        <text class="group-title">{{ $t('account.accountSecurityGroupTitle') }}</text>
-
+      <SettingsSection v-if="!isDesktop" :title="$t('account.accountSecurityGroupTitle')">
         <!-- 认证器（TOTP）：零成本、无国界，登录二次验证优先走它 -->
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.authenticatorLabel') }}</text>
+        <SettingsRow :label="$t('account.authenticatorLabel')">
           <text class="form-value">{{ userInfo.totpEnabled ? $t('account.bound') : $t('account.unbound') }}</text>
           <text class="bind-link" @tap="toggleTotpPanel">{{ userInfo.totpEnabled ? $t('account.unbindAction') : $t('account.bindAction') }}</text>
-        </view>
+        </SettingsRow>
         <view v-if="showTotpPanel" class="bind-phone-form">
           <template v-if="!userInfo.totpEnabled">
             <text class="bind-tip">{{ $t('account.totpSetupTip') }}</text>
             <image v-if="totpQrDataUrl" class="totp-qr" :src="totpQrDataUrl" mode="widthFix" />
-            <view class="form-row">
-              <text class="form-label">{{ $t('account.secretKeyLabel') }}</text>
+            <SettingsRow :label="$t('account.secretKeyLabel')">
               <text class="totp-secret">{{ totpSecret }}</text>
-            </view>
-            <view class="form-row">
-              <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+            </SettingsRow>
+            <SettingsRow :label="$t('account.verificationCodeLabel')">
               <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" :placeholder="$t('account.appCodePlaceholder')" />
-            </view>
+            </SettingsRow>
             <view class="bind-actions">
               <button class="btn-bind-confirm" :disabled="totpSubmitting" @tap="confirmTotpBind">{{ $t('account.finishBindBtn') }}</button>
               <text class="bind-link" @tap="cancelTotpPanel">{{ $t('common.cancel') }}</text>
@@ -80,10 +71,9 @@
           </template>
           <template v-else>
             <text class="bind-tip">{{ $t('account.unbindTotpTip') }}</text>
-            <view class="form-row">
-              <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+            <SettingsRow :label="$t('account.verificationCodeLabel')">
               <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" :placeholder="$t('account.appCodePlaceholder')" />
-            </view>
+            </SettingsRow>
             <view class="bind-actions">
               <button class="btn-bind-confirm" :disabled="totpSubmitting" @tap="confirmTotpDisable">{{ $t('account.confirmUnbindBtn') }}</button>
               <text class="bind-link" @tap="cancelTotpPanel">{{ $t('common.cancel') }}</text>
@@ -91,23 +81,20 @@
           </template>
         </view>
 
-        <view v-if="userInfo.smsAuthEnabled" class="form-row">
-          <text class="form-label">{{ $t('account.phoneLabel') }}</text>
+        <SettingsRow v-if="userInfo.smsAuthEnabled" :label="$t('account.phoneLabel')">
           <text class="form-value">{{ userInfo.phoneMasked || $t('account.unbound') }}</text>
           <text class="bind-link" @tap="showBindPhone = !showBindPhone">{{ userInfo.phoneMasked ? $t('account.changeAction') : $t('account.bindAction') }}</text>
-        </view>
+        </SettingsRow>
         <view v-if="showBindPhone" class="bind-phone-form">
-          <view class="form-row">
-            <text class="form-label">{{ $t('account.newPhoneLabel') }}</text>
+          <SettingsRow :label="$t('account.newPhoneLabel')">
             <input class="bind-input" type="number" maxlength="11" v-model="bindPhoneInput" :placeholder="$t('account.phoneInputPlaceholder')" />
-          </view>
-          <view class="form-row">
-            <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+          </SettingsRow>
+          <SettingsRow :label="$t('account.verificationCodeLabel')">
             <input class="bind-input code" type="number" maxlength="6" v-model="bindCodeInput" :placeholder="$t('account.sixDigitCodePlaceholder')" />
             <button class="btn-send-code" :disabled="bindCountdown > 0" @tap="sendBindPhoneCode">
               {{ bindCountdown > 0 ? bindCountdown + 's' : $t('account.getCodeBtn') }}
             </button>
-          </view>
+          </SettingsRow>
           <view class="bind-actions">
             <button class="btn-bind-confirm" :disabled="bindSubmitting" @tap="confirmBindPhone">{{ $t('account.confirmBindBtn') }}</button>
             <text class="bind-link" @tap="cancelBindPhone">{{ $t('common.cancel') }}</text>
@@ -115,96 +102,83 @@
           <text class="bind-tip">{{ $t('account.bindPhoneTip') }}</text>
         </view>
 
-        <view v-if="userInfo.mailAuthEnabled" class="form-row">
-          <text class="form-label">{{ $t('account.emailLabel') }}</text>
+        <SettingsRow v-if="userInfo.mailAuthEnabled" :label="$t('account.emailLabel')">
           <text class="form-value">{{ userInfo.emailMasked || $t('account.unbound') }}</text>
           <text class="bind-link" @tap="showBindEmail = !showBindEmail">{{ userInfo.emailMasked ? $t('account.changeAction') : $t('account.bindAction') }}</text>
-        </view>
+        </SettingsRow>
         <view v-if="showBindEmail" class="bind-phone-form">
-          <view class="form-row">
-            <text class="form-label">{{ $t('account.newEmailLabel') }}</text>
+          <SettingsRow :label="$t('account.newEmailLabel')">
             <input class="bind-input" v-model="bindEmailInput" :placeholder="$t('account.emailInputPlaceholder')" />
-          </view>
-          <view class="form-row">
-            <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+          </SettingsRow>
+          <SettingsRow :label="$t('account.verificationCodeLabel')">
             <input class="bind-input code" type="number" maxlength="6" v-model="bindEmailCodeInput" :placeholder="$t('account.sixDigitCodePlaceholder')" />
             <button class="btn-send-code" :disabled="bindEmailCountdown > 0" @tap="sendBindEmailCode">
               {{ bindEmailCountdown > 0 ? bindEmailCountdown + 's' : $t('account.getCodeBtn') }}
             </button>
-          </view>
+          </SettingsRow>
           <view class="bind-actions">
             <button class="btn-bind-confirm" :disabled="bindEmailSubmitting" @tap="confirmBindEmail">{{ $t('account.confirmBindBtn') }}</button>
             <text class="bind-link" @tap="cancelBindEmail">{{ $t('common.cancel') }}</text>
           </view>
           <text class="bind-tip">{{ $t('account.bindEmailTip') }}</text>
         </view>
-      </view>
+      </SettingsSection>
 
       <!-- 授权（桌面端）：当前模式 / 激活时间 / 解除授权 -->
-      <view v-if="isDesktop && licenseInfo.unlocked" class="form-group">
-        <text class="group-title">{{ $t('account.licenseGroupTitle') }}</text>
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.currentModeLabel') }}</text>
+      <SettingsSection v-if="isDesktop && licenseInfo.unlocked" :title="$t('account.licenseGroupTitle')">
+        <SettingsRow :label="$t('account.currentModeLabel')">
           <!-- 读 edition 不读 mode：mode 只是授权票据，先用试用码解锁、
                后连账户的用户 mode 永远停在 trial（后端已把两条状态组合成 edition） -->
           <text class="form-value">{{ licenseInfo.edition === 'paid' ? $t('account.paidEdition') : $t('account.trialEdition') }}</text>
-        </view>
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.activatedAtLabel') }}</text>
+        </SettingsRow>
+        <SettingsRow :label="$t('account.activatedAtLabel')">
           <text class="form-value">{{ licenseInfo.activatedAt ? formatTime(licenseInfo.activatedAt) : '—' }}</text>
-        </view>
+        </SettingsRow>
         <!-- 与「退出登录」分工（dev-board#205）：退出登录管账户连接（换账号用它），
              这里只清本机的解锁票据、回到启动解锁页——给文案说清楚，别让用户猜 -->
         <text class="bind-tip">{{ $t('account.deactivateHint') }}</text>
-        <button class="btn-logout-settings" @tap="handleDeactivate">{{ $t('account.deactivateBtn') }}</button>
-      </view>
+        <view class="awd-set-actions-end">
+          <button class="awd-set-btn-danger-text" @tap="handleDeactivate">{{ $t('account.deactivateBtn') }}</button>
+        </view>
+      </SettingsSection>
 
       <!-- 插件访问令牌（桌面端）：Office 插件等外部客户端连接本机后端的凭据 -->
-      <view v-if="isDesktop" class="form-group">
-        <text class="group-title">{{ $t('account.deviceTokenGroupTitle') }}</text>
-        <text class="bind-tip">{{ $t('account.deviceTokenTip') }}</text>
-        <view class="form-row">
-          <text class="form-label">{{ $t('account.tokenNameLabel') }}</text>
+      <SettingsSection v-if="isDesktop" :title="$t('account.deviceTokenGroupTitle')" :description="$t('account.deviceTokenTip')">
+        <SettingsRow :label="$t('account.tokenNameLabel')">
           <input class="bind-input" v-model="tokenNameInput" maxlength="30" :placeholder="$t('account.tokenNamePlaceholder')" />
           <button class="btn-send-code" :disabled="tokenIssuing" @tap="handleIssueToken">{{ $t('account.issueTokenBtn') }}</button>
-        </view>
-        <view v-for="t in deviceTokens" :key="t.id" class="form-row">
-          <view class="token-info">
-            <text class="token-name">{{ t.name || $t('account.unnamedToken') }}</text>
-            <text class="token-meta">
-              {{ $t('account.tokenMeta', { createdAt: formatTime(t.createdAt) || '—', lastUsed: t.lastUsedAt ? formatTime(t.lastUsedAt) : $t('account.never') }) }}
-            </text>
-          </view>
+        </SettingsRow>
+        <SettingsRow v-for="t in deviceTokens" :key="t.id" :label="t.name || $t('account.unnamedToken')">
+          <text class="token-meta">
+            {{ $t('account.tokenMeta', { createdAt: formatTime(t.createdAt) || '—', lastUsed: t.lastUsedAt ? formatTime(t.lastUsedAt) : $t('account.never') }) }}
+          </text>
           <text class="bind-link" @tap="handleRevokeToken(t)">{{ $t('account.revokeAction') }}</text>
-        </view>
+        </SettingsRow>
         <text v-if="!deviceTokens.length" class="bind-tip">{{ $t('account.noTokensYet') }}</text>
-      </view>
+      </SettingsSection>
 
       <!-- 文档属性里的产品标识（可溯源性设计规范附录 B4）。默认开：Word / WPS /
            LibreOffice 保存文档时都会写这个标准字段，我们此前是唯一不写的那个。
            只写产品名与版本，不写作者/单位/机器名——所以它不是隐私项，是「交付前
            要不要清元数据」的开关。 -->
-      <view class="form-group">
-        <text class="group-title">{{ $t('account.docGeneratorGroupTitle') }}</text>
-        <view class="form-row doc-generator-row">
-          <text class="form-label doc-generator-label">{{ $t('account.docGeneratorLabel') }}</text>
+      <SettingsSection :title="$t('account.docGeneratorGroupTitle')">
+        <SettingsRow :label="$t('account.docGeneratorLabel')">
           <AwdSwitch
             :checked="docGeneratorEnabled"
             :disabled="docGeneratorBusy"
             @change="onToggleDocGenerator"
           />
-        </view>
+        </SettingsRow>
         <text class="bind-tip">{{ $t('account.docGeneratorHint') }}</text>
         <text v-if="docGeneratorEnabled && docGeneratorApplication" class="bind-tip">
           {{ $t('account.docGeneratorCurrent', { application: docGeneratorApplication }) }}
         </text>
-      </view>
+      </SettingsSection>
 
       <!-- 界面语言。2026-08-18 从设置页「系统配置」搬来：语言是每个人自己的
            偏好（storage 权威源、人人可改、不要 admin 权限）。
            独立保存链（setAppLanguage 直写），与本栏其它字段无关。 -->
-      <view class="form-group">
-        <text class="group-title">{{ appLanguage === 'en-US' ? 'Language' : '语言 / Language' }}</text>
+      <SettingsSection :title="appLanguage === 'en-US' ? 'Language' : '语言 / Language'">
         <text class="bind-tip">
           {{ appLanguage === 'en-US'
             ? 'Applies to the interface, document editor, and AI replies. Newly opened editors use the new language; restart the app for full effect.'
@@ -222,17 +196,16 @@
             <text class="lang-label">{{ opt.label }}</text>
           </view>
         </view>
-      </view>
+      </SettingsSection>
 
       <!-- 退出登录。**桌面端也要有**：此前这一块写着 v-if="!isDesktop"，
            于是桌面端全应用没有一个登出入口，想换账号只能去设置页把
            「断开连接」和「解除授权」各点一遍。两件事已收进 utils/signOut.js。 -->
-      <view class="form-group">
-        <text class="group-title">{{ $t('account.logoutGroupTitle') }}</text>
-        <text class="bind-tip">{{ $t('account.logoutGroupHint') }}</text>
-        <button class="btn-logout-settings" @tap="handleLogout">{{ $t('account.logoutBtn') }}</button>
-      </view>
-    </view>
+      <SettingsSection :title="$t('account.logoutGroupTitle')" :description="$t('account.logoutGroupHint')">
+        <view class="awd-set-actions-end">
+          <button class="awd-set-btn-danger-text" @tap="handleLogout">{{ $t('account.logoutBtn') }}</button>
+        </view>
+      </SettingsSection>
   </view>
 </template>
 
@@ -249,6 +222,8 @@ import { submittedInputValue } from '@/utils/identityProfile.js'
 import { getDocumentGeneratorSettings, updateDocumentGeneratorSettings } from '@/services/api.js'
 import { resetDocumentStampCache } from '@/utils/documentGeneratorSetting.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
+import SettingsSection from '@/components/settings/SettingsSection.vue'
+import SettingsRow from '@/components/settings/SettingsRow.vue'
 import { isDesktopHost } from '@/services/host.js'
 import { getCurrentUser, setSessionUser } from '@/utils/auth.js'
 import { signOut } from '@/utils/signOut.js'
@@ -258,7 +233,7 @@ import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 
 export default {
   name: 'PersonalSettingsPanel',
-  components: { AwdSwitch },
+  components: { AwdSwitch, SettingsSection, SettingsRow },
   computed: {
     isDesktop() {
       return isDesktopHost()
@@ -840,50 +815,15 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+@import '@/components/settings/settings.scss';
+
 $brand-dark: #221F1A;
 $text-secondary: var(--awd-text-2);
 
 .panel-settings {
-  background: var(--awd-surface);
-  border-radius: 12px;
-  padding: 32px;
-  box-shadow: 0 2px 12px rgba(18, 52, 77, 0.04);
-  box-sizing: border-box;
-}
-
-.group-title {
-  display: block;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--awd-text);
-  margin-bottom: 24px;
-  padding-left: 12px;
-  border-left: 4px solid var(--awd-accent);
-}
-
-.form-group {
-  margin-bottom: 40px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
-}
-
-.form-row {
   display: flex;
-  align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--awd-border-subtle);
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.form-label {
-  width: 100px;
-  font-size: 14px;
-  color: var(--awd-text-2);
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .form-value {
@@ -986,26 +926,6 @@ $text-secondary: var(--awd-text-2);
     color: var(--awd-text);
 }
 
-.btn-logout-settings {
-    background: var(--awd-surface);
-    border: 1px solid var(--awd-border);
-    color: var(--awd-text-2);
-    height: 44px;
-    line-height: 42px; /* Adjust for border */
-    border-radius: 8px;
-    font-size: 14px;
-    width: 100%;
-    margin-top: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-
-    &:hover {
-        border-color: $text-secondary;
-        color: var(--awd-text);
-        background: var(--awd-bg);
-    }
-}
-
 /* 手机号 / 邮箱 / 认证器绑定 */
 .bind-link {
     color: var(--awd-accent-text);
@@ -1059,29 +979,11 @@ $text-secondary: var(--awd-text-2);
     font-size: 13px;
     cursor: pointer;
 }
-.doc-generator-row {
-    justify-content: space-between;
-}
-.doc-generator-label {
-    width: auto;
-    flex: 1;
-    color: var(--awd-text);
-}
 .bind-tip {
     display: block;
     margin-top: 8px;
     font-size: 12px;
     color: var(--awd-text-2);
-}
-.token-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-.token-name {
-    font-size: 14px;
-    color: var(--awd-text);
-    font-weight: 500;
 }
 .token-meta {
     margin-top: 2px;

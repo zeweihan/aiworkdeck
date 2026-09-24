@@ -15,6 +15,9 @@ export default {
 
   // ---- Personal group entries in the unified Settings page (merged 2026-08-20) ----
   tabWorkLog: 'Activity Log',
+  // dev-board#892: added when the panel got wrapped in SettingsSection, same
+  // naming rule as favoritesSubtitle/todosSubtitle (<field>Subtitle)
+  workLogSubtitle: 'Your activity across every project — filter by date, project, or keyword.',
   // dev-board#872: renamed to "All Favorites" / "My To-dos" alongside the rewrite
   // (cross-project roll-up).
   tabFavorites: 'All Favorites',

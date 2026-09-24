@@ -19,31 +19,28 @@
     <view class="admin-container">
       <!-- Sidebar -->
       <view class="admin-sidebar">
-        <!-- 用户信息卡取代了原来的纯 logo 头部（2026-08-20 个人中心并进本页）：
-             这一页现在同时是「我的」和「系统的」，顶上摆的应该是「我是谁」。
-             头像可点：local-mode 且已连接账户时写官网（展示名与头像的唯一权威源），
-             自建服务器仍走原来那条 uni.chooseImage + uploadAvatar。 -->
-        <view class="sidebar-user">
-          <view class="user-avatar-wrapper" @tap="triggerAvatarUpload">
-            <image
-              v-if="userInfo.avatarUrl"
-              class="user-avatar"
-              :src="userInfo.avatarUrl"
-              mode="aspectFill"
-            />
-            <view v-else class="user-avatar-placeholder">
-              <text class="avatar-text">{{ getInitial(userInfo.displayName) || 'U' }}</text>
-            </view>
-          </view>
-          <text class="user-name">{{ userInfo.displayName || $t('account.defaultUserName') }}</text>
-          <view class="user-role-tag">
-            <text class="role-text">{{ $t('account.standardUserRole') }}</text>
-          </view>
-        </view>
-
         <view class="nav-card">
-            <view class="nav-card-header">
-                <text class="nav-card-title">{{ $t('admin.navCardTitle') }}</text>
+            <!-- 紧凑用户行取代了原来单独一张大居中头像卡（dev-board#892）：
+                 头像可点：local-mode 且已连接账户时写官网（展示名与头像的唯一权威源），
+                 自建服务器仍走原来那条 uni.chooseImage + uploadAvatar。 -->
+            <view class="sidebar-user-row" @tap="triggerAvatarUpload">
+              <view class="user-avatar-wrapper">
+                <image
+                  v-if="userInfo.avatarUrl"
+                  class="user-avatar"
+                  :src="userInfo.avatarUrl"
+                  mode="aspectFill"
+                />
+                <view v-else class="user-avatar-placeholder">
+                  <text class="avatar-text">{{ getInitial(userInfo.displayName) || 'U' }}</text>
+                </view>
+              </view>
+              <view class="sidebar-user-info">
+                <text class="user-name">{{ userInfo.displayName || $t('account.defaultUserName') }}</text>
+                <view class="user-role-tag">
+                  <text class="role-text">{{ $t('account.standardUserRole') }}</text>
+                </view>
+              </view>
             </view>
             <!-- 两组：「个人」（原个人中心四栏）与「系统」（原系统设置各分区）。
                  分组只是排版，可见性仍由 visibleNavItems 一处决定
@@ -85,7 +82,7 @@
       </view>
 
       <!-- 右侧内容 -->
-      <view class="admin-main">
+      <view class="admin-main awd-set-container">
         <!-- 配置管理 -->
         <!-- 「系统配置」这个分区已整体撤掉（2026-08-18）。它到最后只剩两样东西，
              各自都有更该待的地方：
@@ -101,37 +98,28 @@
           scroll-y
           class="config-scroll"
         >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.aiSectionTitle') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.aiSectionSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.aiSectionTitle')" :description="$t('admin.aiSectionSubtitle')">
               <!-- 2026-08-21 起产品只有官方版：AI 一律走平台 Credits 通道（AWD_CLOUD），
                    供应商单选、OpenRouter 自备 Key、本地 Ollama 三块都不再在界面上出现
                    （后端三档枚举与设置键原样保留）。老用户以前切过别的档位时，
                    这里给一条提示 + 一键切回；否则整块不渲染。 -->
-              <view v-if="legacyProvider" class="platform-banner platform-banner-warn">
-                <text class="platform-banner-title">{{ $t('admin.legacyProviderTitle') }}</text>
-                <text class="platform-banner-body">{{ $t('admin.legacyProviderBody') }}</text>
+              <view v-if="legacyProvider" class="awd-set-note warn">
+                <text class="awd-set-note-title">{{ $t('admin.legacyProviderTitle') }}</text>
+                <text>{{ $t('admin.legacyProviderBody') }}</text>
                 <text class="platform-link" @tap="switchToOfficialChannel">{{ $t('admin.switchToOfficialChannel') }}</text>
               </view>
 
               <!-- 跨境传输的单独同意（个保法第三十九条）。官方通道会把内容送往境外，
                    所以它恒显示。绝不预勾选——预勾选的同意是无效的。 -->
-              <view class="form-row consent-row">
-                <view class="consent-box">
-                  <text class="consent-title">{{ $t('admin.consentTitle') }}</text>
-                  <text class="consent-body">{{ $t('admin.consentBodyPrefix') }}<text class="consent-em">{{ $t('admin.consentEntity') }}</text>{{ $t('admin.consentBodySuffix') }}</text>
-                  <view class="consent-check" @tap="toggleCrossBorderConsent">
-                    <view class="consent-box-mark" :class="{ checked: crossBorderConsented }"></view>
-                    <text class="consent-check-label">{{ $t('admin.consentCheckLabel') }}</text>
-                  </view>
-                  <text v-if="crossBorderConsentAt" class="consent-meta">{{ $t('admin.consentAt', { time: formatConsentAt }) }}</text>
-                  <text class="consent-link" @tap="openPrivacyCrossBorder">{{ $t('admin.consentPrivacyLink') }}</text>
+              <view class="consent-box">
+                <text class="consent-title">{{ $t('admin.consentTitle') }}</text>
+                <text class="consent-body">{{ $t('admin.consentBodyPrefix') }}<text class="consent-em">{{ $t('admin.consentEntity') }}</text>{{ $t('admin.consentBodySuffix') }}</text>
+                <view class="consent-check" @tap="toggleCrossBorderConsent">
+                  <view class="consent-box-mark" :class="{ checked: crossBorderConsented }"></view>
+                  <text class="consent-check-label">{{ $t('admin.consentCheckLabel') }}</text>
                 </view>
+                <text v-if="crossBorderConsentAt" class="consent-meta">{{ $t('admin.consentAt', { time: formatConsentAt }) }}</text>
+                <text class="consent-link" @tap="openPrivacyCrossBorder">{{ $t('admin.consentPrivacyLink') }}</text>
               </view>
 
               <!-- 模型选择。清单唯一来源是后端模型目录（GET /api/ai/models）——
@@ -148,40 +136,30 @@
                 {{ $t('admin.modelSelectionNote') }}
               </text>
               <text v-if="modelCatalogError" class="field-note field-note-warn">{{ modelCatalogError }}</text>
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.defaultModelLabel') }}</text>
+              <SettingsRow :label="$t('admin.defaultModelLabel')" :hint="catalogDefaultModel ? $t('admin.effectiveDefaultModel', { model: catalogDefaultModel }) : ''">
                 <AwdSelect
                   class="mode-picker"
                   :range="modelLabels('defaultModel')"
                   :value="modelIndex('defaultModel')"
                   @change="onModelPick('defaultModel', $event)"
                 />
-              </view>
-              <text v-if="catalogDefaultModel" class="field-note">
-                {{ $t('admin.effectiveDefaultModel', { model: catalogDefaultModel }) }}
-              </text>
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.auxModelLabel') }}</text>
+              </SettingsRow>
+              <SettingsRow :label="$t('admin.auxModelLabel')" :hint="$t('admin.auxModelNote')">
                 <AwdSelect
                   class="mode-picker"
                   :range="modelLabels('auxModel')"
                   :value="modelIndex('auxModel')"
                   @change="onModelPick('auxModel', $event)"
                 />
-              </view>
-              <text class="field-note">
-                {{ $t('admin.auxModelNote') }}
-              </text>
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.subagentModelLabel') }}</text>
+              </SettingsRow>
+              <SettingsRow :label="$t('admin.subagentModelLabel')" :hint="$t('admin.subagentModelNote')">
                 <AwdSelect
                   class="mode-picker"
                   :range="modelLabels('subagentModel')"
                   :value="modelIndex('subagentModel')"
                   @change="onModelPick('subagentModel', $event)"
                 />
-              </view>
-              <text class="field-note">{{ $t('admin.subagentModelNote') }}</text>
+              </SettingsRow>
 
               <!-- 网络区域。手动覆盖是一等设置不是隐藏兜底：本地判定（系统国家 + 时区）
                    对出差、挂代理、公司专线出境的用户必然判错，手动指定是唯一出路。 -->
@@ -192,8 +170,7 @@
               <text class="field-note">
                 {{ $t('admin.networkRegionNote') }}
               </text>
-              <view class="form-row">
-                <text class="form-label">{{ $t('admin.regionModeLabel') }}</text>
+              <SettingsRow :label="$t('admin.regionModeLabel')">
                 <view class="provider-radio-group">
                   <view
                     v-for="opt in networkRegionOptions"
@@ -206,11 +183,9 @@
                     <text class="radio-label">{{ opt.label }}</text>
                   </view>
                 </view>
-              </view>
-              <text class="field-note">{{ networkRegionSummary }}</text>
-
-            </view>
-          </view>
+              </SettingsRow>
+              <text class="field-note region-summary-note">{{ networkRegionSummary }}</text>
+          </SettingsSection>
 
           <!-- 保存按钮 -->
           <view class="fixed-footer">
@@ -239,33 +214,20 @@
                没有这一行他无从知道是转写占住的。
                ② 余额低于用户设定的阈值。只在**确知**余额时出现（读不到给 null，
                不拿「不知道」编一个数出来），阈值为 0 表示用户没启用这条提醒。 -->
-          <view v-if="pendingHoldNotice" class="platform-banner">
-            <text class="platform-banner-body">{{ pendingHoldNotice }}</text>
+          <view v-if="pendingHoldNotice" class="awd-set-note info">
+            <text>{{ pendingHoldNotice }}</text>
           </view>
-          <view v-if="lowBalanceNotice" class="platform-banner platform-banner-warn">
-            <text class="platform-banner-body">{{ lowBalanceNotice }}</text>
+          <view v-if="lowBalanceNotice" class="awd-set-note warn">
+            <text>{{ lowBalanceNotice }}</text>
           </view>
 
           <!-- 当前站点。摆在账户连接之前：账户 Key 是站点签发的，
                连接之前先知道自己在哪个站，才不会拿着另一个站的 Key 连不上。 -->
-          <view v-if="site.displayName" class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.siteSectionTitle') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.siteSectionSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
-              <view class="provider-card">
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.siteLabel') }}</text>
+          <SettingsSection v-if="site.displayName" :title="$t('admin.siteSectionTitle')" :description="$t('admin.siteSectionSubtitle')">
+              <SettingsRow :label="$t('admin.siteLabel')">
+                <view class="awd-set-row-spread">
                   <text class="site-name">{{ site.displayName }}</text>
-                </view>
-                <text v-if="site.pinned" class="account-note">
-                  {{ $t('admin.sitePinnedNote') }}
-                </text>
-                <template v-else-if="siteSwitchTargets.length">
-                  <view class="account-connect-actions">
+                  <view v-if="!site.pinned && siteSwitchTargets.length" class="awd-set-row-spread-actions">
                     <button
                       v-for="target in siteSwitchTargets"
                       :key="target.id"
@@ -276,57 +238,43 @@
                       {{ siteBusy ? $t('admin.siteSwitching') : $t('admin.switchToSite', { name: target.displayName }) }}
                     </button>
                   </view>
-                  <text class="account-note">
-                    {{ $t('admin.siteSwitchNote') }}
-                  </text>
-                </template>
-              </view>
-            </view>
-          </view>
+                </view>
+              </SettingsRow>
+              <text v-if="site.pinned" class="awd-set-note info">
+                {{ $t('admin.sitePinnedNote') }}
+              </text>
+              <text v-else-if="siteSwitchTargets.length" class="awd-set-note info">
+                {{ $t('admin.siteSwitchNote') }}
+              </text>
+          </SettingsSection>
 
           <!-- 未连接：引导去官网取 Key -->
-          <view v-if="!account.connected" class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navAccount') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.accountSectionSubtitle') }}
+          <SettingsSection v-if="!account.connected" :title="$t('admin.navAccount')" :description="$t('admin.accountSectionSubtitle')">
+              <text class="account-intro">
+                {{ $t('admin.accountIntro') }}
               </text>
-            </view>
-            <view class="section-body">
-              <view class="provider-card">
-                <text class="account-intro">
-                  {{ $t('admin.accountIntro') }}
-                </text>
-                <view class="account-link-row">
-                  <button class="comp-btn" @tap="openAccountSite">{{ $t('admin.getKeyButton') }}</button>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.accountKeyLabel') }}</text>
-                  <input
-                    v-model="accountKeyInput"
-                    class="form-input"
-                    :placeholder="$t('admin.accountKeyPlaceholder')"
-                  />
-                </view>
-                <view class="account-connect-actions">
-                  <button class="btn-primary" :disabled="accountBusy" @tap="onConnectAccount">
-                    {{ accountBusy ? $t('admin.accountConnecting') : $t('admin.connectAccountButton') }}
-                  </button>
-                </view>
+              <view class="account-link-row">
+                <button class="comp-btn" @tap="openAccountSite">{{ $t('admin.getKeyButton') }}</button>
               </view>
-            </view>
-          </view>
+              <SettingsRow :label="$t('admin.accountKeyLabel')">
+                <input
+                  v-model="accountKeyInput"
+                  class="form-input"
+                  :placeholder="$t('admin.accountKeyPlaceholder')"
+                />
+              </SettingsRow>
+              <view class="account-connect-actions">
+                <button class="btn-primary" :disabled="accountBusy" @tap="onConnectAccount">
+                  {{ accountBusy ? $t('admin.accountConnecting') : $t('admin.connectAccountButton') }}
+                </button>
+              </view>
+          </SettingsSection>
 
           <!-- 已连接：账户信息 + 余额 + 本地用量明细 -->
           <template v-else>
             <!-- 会员钱包卡（dev-board#183）：余额 + 充值 + 等级/成长值/升档进度。
                  原「余额」小指标行（account-metrics）已收进本卡，别再加回去。 -->
-            <view class="section-card">
-              <view class="section-header">
-                <text class="section-title">{{ $t('admin.walletCardTitle') }}</text>
-                <text class="section-subtitle">{{ $t('admin.walletCardSubtitle') }}</text>
-              </view>
-              <view class="section-body">
+            <SettingsSection :title="$t('admin.walletCardTitle')" :description="$t('admin.walletCardSubtitle')">
                 <view class="provider-card">
                   <view class="wallet-main">
                     <view class="wallet-left">
@@ -382,15 +330,9 @@
                     </view>
                   </view>
                 </view>
-              </view>
-            </view>
+            </SettingsSection>
 
-            <view class="section-card">
-              <view class="section-header">
-                <text class="section-title">{{ $t('admin.accountTitle') }}</text>
-                <text class="section-subtitle">{{ $t('admin.accountConnectedSubtitle') }}</text>
-              </view>
-              <view class="section-body">
+            <SettingsSection :title="$t('admin.accountTitle')" :description="$t('admin.accountConnectedSubtitle')">
                 <!-- 账户卡（dev-board#200/#205）：一行排布——左边身份（头像/展示名），
                      右边两个动作按齐。「断开连接」已统一成「退出登录」（utils/signOut.js
                      唯一编排：摘账户连接，账户模式顺带清授权票据，回启动页重跑分流）。
@@ -434,17 +376,9 @@
                     </text>
                   </view>
                 </view>
-              </view>
-            </view>
+            </SettingsSection>
 
-            <view class="section-card">
-              <view class="section-header">
-                <text class="section-title">{{ $t('admin.recentUsageTitle') }}</text>
-                <text class="section-subtitle">
-                  {{ $t('admin.recentUsageSubtitle') }}
-                </text>
-              </view>
-              <view class="section-body">
+            <SettingsSection :title="$t('admin.recentUsageTitle')" :description="$t('admin.recentUsageSubtitle')">
                 <view v-if="!accountUsageRows.length" class="empty">
                   <text class="empty-text">{{ $t('admin.noUsage') }}</text>
                 </view>
@@ -465,8 +399,7 @@
                     <text class="usage-cost">{{ usageCostText(row) }}</text>
                   </view>
                 </view>
-              </view>
-            </view>
+            </SettingsSection>
           </template>
 
           <!-- 文件缓存区存储位置。
@@ -475,69 +408,51 @@
                此时若把整块藏起来，用户就看不到自己的文件在哪，也看不到下面那句
                「该目录当前不可访问」——而那是文件突然打不开时唯一的指路牌。
                未解锁时藏的是「更改位置」这个付费动作，不是信息本身。 -->
-          <view v-if="storageLocation.path" class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.storageSectionTitle') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.storageSectionSubtitle') }}
+          <SettingsSection v-if="storageLocation.path" :title="$t('admin.storageSectionTitle')" :description="$t('admin.storageSectionSubtitle')">
+              <SettingsRow :label="$t('admin.storageCurrentLabel')">
+                <text class="storage-path">{{ storageLocation.path }}</text>
+              </SettingsRow>
+              <text v-if="!storageLocation.available" class="storage-warn">
+                {{ $t('admin.storageUnavailableWarn') }}
               </text>
-            </view>
-            <view class="section-body">
-              <view class="provider-card">
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.storageCurrentLabel') }}</text>
-                  <text class="storage-path">{{ storageLocation.path }}</text>
-                </view>
-                <text v-if="!storageLocation.available" class="storage-warn">
-                  {{ $t('admin.storageUnavailableWarn') }}
-                </text>
-                <text v-else-if="!storageLocation.custom" class="account-note">
-                  {{ $t('admin.storageDefaultNote') }}
-                </text>
-                <UnlockHint
-                  v-if="!storageCanMove"
-                  :text="$t('admin.unlockHintStorage')"
-                  sku-id="feature:stage.unlimited"
-                />
-                <view class="account-connect-actions">
-                  <button
-                    v-if="storageCanMove"
-                    class="comp-btn"
-                    :disabled="storageBusy"
-                    @tap="onChangeStorageLocation"
-                  >
-                    {{ storageBusy ? $t('admin.migrating') : $t('admin.changeLocationButton') }}
-                  </button>
-                  <!-- 恢复默认不设权益闸：这是退回免费版的默认状态，不发放任何付费能力。
-                       锁在付费墙后面会让「权益失效 + 外置盘拔掉」的用户彻底出不来。 -->
-                  <button
-                    v-if="storageLocation.custom"
-                    class="comp-btn"
-                    :disabled="storageBusy"
-                    @tap="onResetStorageLocation"
-                  >
-                    {{ $t('admin.resetLocationButton') }}
-                  </button>
-                </view>
-                <text v-if="storageCanMove" class="account-note">
-                  {{ $t('admin.storageMoveNotePrefix') }}<text class="storage-emph">{{ $t('admin.storageMoveNoteEm') }}</text>{{ $t('admin.storageMoveNoteSuffix') }}
-                </text>
+              <text v-else-if="!storageLocation.custom" class="account-note">
+                {{ $t('admin.storageDefaultNote') }}
+              </text>
+              <UnlockHint
+                v-if="!storageCanMove"
+                :text="$t('admin.unlockHintStorage')"
+                sku-id="feature:stage.unlimited"
+              />
+              <view class="account-connect-actions">
+                <button
+                  v-if="storageCanMove"
+                  class="comp-btn"
+                  :disabled="storageBusy"
+                  @tap="onChangeStorageLocation"
+                >
+                  {{ storageBusy ? $t('admin.migrating') : $t('admin.changeLocationButton') }}
+                </button>
+                <!-- 恢复默认不设权益闸：这是退回免费版的默认状态，不发放任何付费能力。
+                     锁在付费墙后面会让「权益失效 + 外置盘拔掉」的用户彻底出不来。 -->
+                <button
+                  v-if="storageLocation.custom"
+                  class="comp-btn"
+                  :disabled="storageBusy"
+                  @tap="onResetStorageLocation"
+                >
+                  {{ $t('admin.resetLocationButton') }}
+                </button>
               </view>
-            </view>
-          </view>
+              <text v-if="storageCanMove" class="account-note">
+                {{ $t('admin.storageMoveNotePrefix') }}<text class="storage-emph">{{ $t('admin.storageMoveNoteEm') }}</text>{{ $t('admin.storageMoveNoteSuffix') }}
+              </text>
+          </SettingsSection>
 
           <!-- 本机工作区（免登身份）。只在本机确实有一个以上账号时出现——
                绝大多数安装只有一个，摆一张永远只有一行的卡片是噪音。
                这里是选错工作区之后的补救入口：老安装的库里常有多个历史账号，
                启动时的选择页只出现一次。 -->
-          <view v-if="identityCandidates.length > 1" class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.identitySectionTitle') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.identitySectionSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
+          <SettingsSection v-if="identityCandidates.length > 1" :title="$t('admin.identitySectionTitle')" :description="$t('admin.identitySectionSubtitle')">
               <view
                 v-for="item in identityCandidates"
                 :key="item.userId"
@@ -561,48 +476,37 @@
                   </button>
                 </view>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
 
           <!-- 花费闸门。原属已撤销的「平台服务」分区，官方版全部外部服务统一平台代采后
                那个分区已无实际作用；这张卡是其中仍然真实的功能，随通知一起搬来本分区末尾
                （刻意放在最后，减少与本分区其它改动的冲突面）。
                设计 §4.9 的用户闸：超过上限时问一句「是否继续」，是可恢复的确认而不是失败。
                刻意不做「每次调用前弹确认」——与「零配置、少打扰」的产品目标冲突，设计里明确否了。 -->
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('platform.budgetTitle') }}</text>
-              <text class="section-subtitle">{{ $t('platform.budgetSubtitle') }}</text>
-            </view>
-            <view class="section-body">
-              <view class="provider-card">
-                <view v-if="usageTotalText" class="provider-header platform-row-head">
-                  <text class="platform-usage">{{ usageTotalText }}</text>
-                </view>
-
-                <view class="form-row">
-                  <text class="form-label">{{ $t('platform.budgetLowBalanceLabel') }}</text>
-                  <input
-                    v-model="budgetForm.lowBalance"
-                    class="form-input"
-                    type="digit"
-                    :placeholder="$t('platform.budgetUnit')"
-                  />
-                </view>
-                <text class="field-note">{{ $t('platform.budgetLowBalanceNote') }}</text>
-
-                <text v-if="!platformRemote.pricingAvailable" class="field-note">
-                  {{ $t('platform.usageUnavailable') }}
-                </text>
-
-                <view class="platform-budget-actions">
-                  <button class="comp-btn primary" :disabled="budgetBusy" @tap="onSaveBudget">
-                    {{ $t('platform.budgetSave') }}
-                  </button>
-                </view>
+          <SettingsSection :title="$t('platform.budgetTitle')" :description="$t('platform.budgetSubtitle')">
+              <view v-if="usageTotalText" class="platform-row-head">
+                <text class="platform-usage">{{ usageTotalText }}</text>
               </view>
-            </view>
-          </view>
+
+              <SettingsRow :label="$t('platform.budgetLowBalanceLabel')" :hint="$t('platform.budgetLowBalanceNote')">
+                <input
+                  v-model="budgetForm.lowBalance"
+                  class="form-input"
+                  type="digit"
+                  :placeholder="$t('platform.budgetUnit')"
+                />
+              </SettingsRow>
+
+              <text v-if="!platformRemote.pricingAvailable" class="field-note">
+                {{ $t('platform.usageUnavailable') }}
+              </text>
+
+              <view class="platform-budget-actions">
+                <button class="comp-btn primary" :disabled="budgetBusy" @tap="onSaveBudget">
+                  {{ $t('platform.budgetSave') }}
+                </button>
+              </view>
+          </SettingsSection>
         </scroll-view>
 
         <!-- 组件管理（仅桌面端：本地模型下载与服务启用） -->
@@ -611,16 +515,9 @@
           scroll-y
           class="config-scroll"
         >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navComponents') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.componentsSubtitle') }}
-              </text>
-            </view>
-            <!-- 与首次登录面板共用同一张卡片：两处口径漂移的代价是用户在一处看到
-                 「已就绪」、另一处看到「未安装」，谁都不知道该信哪个。 -->
-            <view class="section-body">
+          <!-- 与首次登录面板共用同一张卡片：两处口径漂移的代价是用户在一处看到
+               「已就绪」、另一处看到「未安装」，谁都不知道该信哪个。 -->
+          <SettingsSection :title="$t('admin.navComponents')" :description="$t('admin.componentsSubtitle')">
               <view v-if="optional.state.loading" class="empty">
                 <text class="empty-text">{{ $t('admin.loadingDots') }}</text>
               </view>
@@ -638,8 +535,7 @@
                   </button>
                 </view>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
         </scroll-view>
 
         <!-- 软件更新（仅桌面端）：小版本补丁应用内更新，大版本引导官网下载全量包
@@ -649,14 +545,7 @@
           scroll-y
           class="config-scroll"
         >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navUpdates') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.updatesSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.navUpdates')" :description="$t('admin.updatesSubtitle')">
               <view class="comp-row">
                 <view class="comp-main">
                   <text class="comp-name">{{ $t('admin.currentVersion', { version: update.effectiveVersion || '-' }) }}</text>
@@ -708,8 +597,7 @@
                   <button class="comp-btn primary" @tap="handleUpdateOpenDownload">{{ $t('admin.goDownloadButton') }}</button>
                 </view>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
         </scroll-view>
 
         <!-- 数据统计（匿名使用统计开关 + 本地使用统计） -->
@@ -718,14 +606,7 @@
           scroll-y
           class="config-scroll"
         >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.navTelemetry') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.telemetrySubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.navTelemetry')" :description="$t('admin.telemetrySubtitle')">
               <view class="provider-card">
                 <view class="provider-header telemetry-switch-row">
                   <view class="telemetry-switch-info">
@@ -760,66 +641,61 @@
                 <text class="telemetry-privacy-title">{{ $t('admin.telemetryPrivacyTitle') }}</text>
                 <text class="telemetry-privacy-line">{{ $t('admin.telemetryPrivacyLine') }}</text>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
 
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.localStatsTitle') }}</text>
-              <text class="section-subtitle">{{ $t('admin.localStatsSubtitle') }}</text>
-              <view class="telemetry-days-row">
-                <text
-                  v-for="d in [7, 30, 90]"
-                  :key="d"
-                  class="telemetry-days-btn"
-                  :class="{ active: telemetryDays === d }"
-                  @tap="setTelemetryDays(d)"
-                >{{ $t('admin.lastNDays', { n: d }) }}</text>
-              </view>
-            </view>
-            <view class="section-body" v-if="telemetrySummary">
-              <view class="telemetry-kpi-row">
-                <view class="telemetry-kpi">
-                  <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.turn'] || 0 }}</text>
-                  <text class="telemetry-kpi-label">{{ $t('admin.kpiTurns') }}</text>
+          <SettingsSection :title="$t('admin.localStatsTitle')" :description="$t('admin.localStatsSubtitle')">
+              <template #actions>
+                <view class="telemetry-days-row">
+                  <text
+                    v-for="d in [7, 30, 90]"
+                    :key="d"
+                    class="telemetry-days-btn"
+                    :class="{ active: telemetryDays === d }"
+                    @tap="setTelemetryDays(d)"
+                  >{{ $t('admin.lastNDays', { n: d }) }}</text>
                 </view>
-                <view class="telemetry-kpi">
-                  <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.tool'] || 0 }}</text>
-                  <text class="telemetry-kpi-label">{{ $t('admin.kpiTools') }}</text>
-                </view>
-                <view class="telemetry-kpi">
-                  <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.agent || 0 }}</text>
-                  <text class="telemetry-kpi-label">{{ $t('admin.kpiAgentEdits') }}</text>
-                </view>
-                <view class="telemetry-kpi">
-                  <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.human || 0 }}</text>
-                  <text class="telemetry-kpi-label">{{ $t('admin.kpiHumanEdits') }}</text>
-                </view>
-              </view>
-              <view
-                v-if="telemetrySummary.byMatterCategory.length || telemetrySummary.byTool.length"
-                class="telemetry-list-columns"
-              >
-                <view v-if="telemetrySummary.byMatterCategory.length" class="telemetry-list">
-                  <text class="telemetry-list-title">{{ $t('admin.matterCategoryTitle') }}</text>
-                  <view v-for="item in telemetrySummary.byMatterCategory" :key="'m-' + item.name" class="telemetry-list-row">
-                    <text class="telemetry-list-name">{{ item.name }}</text>
-                    <text class="telemetry-list-count">{{ item.count }}</text>
+              </template>
+              <template v-if="telemetrySummary">
+                <view class="telemetry-kpi-row">
+                  <view class="telemetry-kpi">
+                    <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.turn'] || 0 }}</text>
+                    <text class="telemetry-kpi-label">{{ $t('admin.kpiTurns') }}</text>
+                  </view>
+                  <view class="telemetry-kpi">
+                    <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.tool'] || 0 }}</text>
+                    <text class="telemetry-kpi-label">{{ $t('admin.kpiTools') }}</text>
+                  </view>
+                  <view class="telemetry-kpi">
+                    <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.agent || 0 }}</text>
+                    <text class="telemetry-kpi-label">{{ $t('admin.kpiAgentEdits') }}</text>
+                  </view>
+                  <view class="telemetry-kpi">
+                    <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.human || 0 }}</text>
+                    <text class="telemetry-kpi-label">{{ $t('admin.kpiHumanEdits') }}</text>
                   </view>
                 </view>
-                <view v-if="telemetrySummary.byTool.length" class="telemetry-list">
-                  <text class="telemetry-list-title">{{ $t('admin.topToolsTitle') }}</text>
-                  <view v-for="item in telemetrySummary.byTool.slice(0, 8)" :key="'t-' + item.name" class="telemetry-list-row">
-                    <text class="telemetry-list-name">{{ item.name }}</text>
-                    <text class="telemetry-list-count">{{ item.count }}</text>
+                <view
+                  v-if="telemetrySummary.byMatterCategory.length || telemetrySummary.byTool.length"
+                  class="telemetry-list-columns"
+                >
+                  <view v-if="telemetrySummary.byMatterCategory.length" class="telemetry-list">
+                    <text class="telemetry-list-title">{{ $t('admin.matterCategoryTitle') }}</text>
+                    <view v-for="item in telemetrySummary.byMatterCategory" :key="'m-' + item.name" class="telemetry-list-row">
+                      <text class="telemetry-list-name">{{ item.name }}</text>
+                      <text class="telemetry-list-count">{{ item.count }}</text>
+                    </view>
+                  </view>
+                  <view v-if="telemetrySummary.byTool.length" class="telemetry-list">
+                    <text class="telemetry-list-title">{{ $t('admin.topToolsTitle') }}</text>
+                    <view v-for="item in telemetrySummary.byTool.slice(0, 8)" :key="'t-' + item.name" class="telemetry-list-row">
+                      <text class="telemetry-list-name">{{ item.name }}</text>
+                      <text class="telemetry-list-count">{{ item.count }}</text>
+                    </view>
                   </view>
                 </view>
-              </view>
-            </view>
-            <view class="section-body" v-else>
-              <text class="telemetry-empty">{{ $t('admin.telemetryEmpty') }}</text>
-            </view>
-          </view>
+              </template>
+              <text v-else class="telemetry-empty">{{ $t('admin.telemetryEmpty') }}</text>
+          </SettingsSection>
         </scroll-view>
 
         <!-- 用户反馈：谁在什么时候提了什么，以及优化者把它办到哪一步了 -->
@@ -830,14 +706,7 @@
         >
           <!-- 优化者是维护者侧能力：只有这台机器的后端配了 optimizer.* 才展示；
                普通用户的机器 enabled 恒为 false，只看得到下面的反馈记录 -->
-          <view v-if="optimizer.enabled" class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.optimizerTitle') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.optimizerSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
+          <SettingsSection v-if="optimizer.enabled" :title="$t('admin.optimizerTitle')" :description="$t('admin.optimizerSubtitle')">
               <view class="fb-status-row">
                 <view class="fb-status-cell">
                   <text class="fb-status-label">{{ $t('admin.statusLabelText') }}</text>
@@ -873,24 +742,20 @@
                 >{{ $t('admin.runNowButton') }}</text>
               </view>
               <text v-if="optimizer.lastReportText" class="fb-report">{{ optimizer.lastReportText }}</text>
-            </view>
-          </view>
+          </SettingsSection>
 
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.feedbackRecordsTitle') }}</text>
-              <text class="section-subtitle">{{ $t('admin.feedbackRecordsSubtitle') }}</text>
-              <view class="telemetry-days-row">
-                <text
-                  v-for="f in feedbackFilters"
-                  :key="'ff-' + f.key"
-                  class="telemetry-days-btn"
-                  :class="{ active: feedbackFilter === f.key }"
-                  @tap="setFeedbackFilter(f.key)"
-                >{{ f.label }}</text>
-              </view>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.feedbackRecordsTitle')" :description="$t('admin.feedbackRecordsSubtitle')">
+              <template #actions>
+                <view class="telemetry-days-row">
+                  <text
+                    v-for="f in feedbackFilters"
+                    :key="'ff-' + f.key"
+                    class="telemetry-days-btn"
+                    :class="{ active: feedbackFilter === f.key }"
+                    @tap="setFeedbackFilter(f.key)"
+                  >{{ f.label }}</text>
+                </view>
+              </template>
               <view v-if="!feedbackList.length" class="telemetry-empty">
                 <text>{{ feedbackLoading ? $t('common.loading') : $t('admin.noFeedbackYet') }}</text>
               </view>
@@ -937,8 +802,7 @@
                   <text class="fb-detail-pre">{{ feedbackDetail.contextText }}</text>
                 </view>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
         </scroll-view>
 
         <!-- 「个人」组四栏（2026-08-20 从个人中心并进来）。四段内容各自成组件，
@@ -960,12 +824,7 @@
              切换即生效、可回滚。粘一个 GitHub 链接让 AI 去装，是这里唯一的写入口。
              分支必须接在这条 v-if/v-else-if 长链的**末尾**，不能动链头。 -->
         <scroll-view v-else-if="activeNav === 'capabilities'" scroll-y class="config-scroll">
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.capabilityUpgradeTitle') }}</text>
-              <text class="section-subtitle">{{ $t('admin.capabilityUpgradeSubtitle') }}</text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.capabilityUpgradeTitle')" :description="$t('admin.capabilityUpgradeSubtitle')">
               <view class="cap-form">
                 <input
                   v-model="capabilityUrl"
@@ -986,15 +845,9 @@
                 >{{ $t('admin.capabilityAskAi') }}</button>
               </view>
               <text class="cap-hint">{{ $t('admin.capabilityAskAiHint') }}</text>
-            </view>
-          </view>
+          </SettingsSection>
 
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.capabilitySlotsTitle') }}</text>
-              <text class="section-subtitle">{{ $t('admin.capabilitySlotsSubtitle') }}</text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.capabilitySlotsTitle')" :description="$t('admin.capabilitySlotsSubtitle')">
               <!-- 拉失败时不能一直挂着「加载中…」——那是在骗人 -->
               <view v-if="!capabilitySlots.length" class="empty">
                 <text class="empty-text">{{ capabilityError || $t('admin.loadingDots') }}</text>
@@ -1022,15 +875,9 @@
                   >{{ $t('admin.capabilityRollback') }}</button>
                 </view>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
 
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.capabilityDevModeTitle') }}</text>
-              <text class="section-subtitle">{{ $t('admin.capabilityDevModeSubtitle') }}</text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('admin.capabilityDevModeTitle')" :description="$t('admin.capabilityDevModeSubtitle')">
               <view class="provider-card">
                 <view class="provider-header telemetry-switch-row">
                   <view class="telemetry-switch-info">
@@ -1044,23 +891,16 @@
                   />
                 </view>
               </view>
-            </view>
-          </view>
+          </SettingsSection>
         </scroll-view>
 
         <!-- 团队（dev-board#496）。接在链尾：这条 v-if/v-else-if 长链的链头是
              activeNav === 'ai'，动链头会拿到「v-else 没有相邻 v-if」的编译错。 -->
         <scroll-view v-else-if="activeNav === 'memory'" scroll-y class="config-scroll">
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('chat.memoryTitle') }}</text>
-              <text class="section-subtitle">{{ $t('chat.memorySubtitle') }}</text>
-            </view>
-            <view class="section-body">
+          <SettingsSection :title="$t('chat.memoryTitle')" :description="$t('chat.memorySubtitle')">
               <!-- 内嵌编辑，不再是「点一个按钮才弹窗」——设置页打开即可直接改（dev-board#879）。 -->
               <MemoryBrowser inline :open="true" :project-id="projectId" />
-            </view>
-          </view>
+          </SettingsSection>
         </scroll-view>
         <scroll-view v-else-if="activeNav === 'team'" scroll-y class="config-scroll">
           <TeamPanel @go-account="onNavTap({ key: 'account' })" />
@@ -1112,6 +952,8 @@ import PersonalSettingsPanel from '@/components/userprofile/PersonalSettingsPane
 import TeamPanel from '@/components/admin/TeamPanel.vue'
 import OptionalComponentCard from '@/components/OptionalComponentCard.vue'
 import MemoryBrowser from '@/components/MemoryBrowser.vue'
+import SettingsSection from '@/components/settings/SettingsSection.vue'
+import SettingsRow from '@/components/settings/SettingsRow.vue'
 import { componentDownloads } from '@/services/componentDownloads.js'
 
 /**
@@ -1132,6 +974,7 @@ export default {
     UnlockHint, RechargeDialog, AwdSelect, AwdSwitch,
     PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
     TeamPanel, OptionalComponentCard, MemoryBrowser,
+    SettingsSection, SettingsRow,
   },
   /**
    * ai-prompt：把一句话交给工作台的 AI 对话（「能力升级」的「让 AI 升级」按钮）。
@@ -2738,6 +2581,8 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+@import '@/components/settings/settings.scss';
+
 /* AI WorkDeck Color System */
 $brand-mint: var(--awd-mint);
 
@@ -2780,28 +2625,29 @@ $brand-accent: $brand-mint;
   flex-direction: column;
 }
 
-/* 侧栏顶部的用户卡（取代原来的 logo 头部）。样式沿用原个人中心那张卡，
-   只是不再单独占一张白卡片——它就是侧栏的头。 */
-.sidebar-user {
+/* 紧凑用户行（dev-board#892），取代原来单独一张大居中头像卡——头像 36px +
+   展示名 13px/600 + 角色小胶囊，坐在导航卡顶部，对齐插件广场侧栏的密度。 */
+.sidebar-user-row {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    padding: 20px 16px 24px;
-    margin-bottom: 16px;
-    background: var(--awd-surface);
-    border-radius: 16px;
-    box-shadow: 0 4px 16px rgba(18, 52, 77, 0.05);
-    border: 1px solid rgba(0, 0, 0, 0.02);
+    gap: 10px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--awd-border);
+    cursor: pointer;
+
+    &:hover {
+        background: var(--awd-surface-2);
+    }
 }
 
 .user-avatar-wrapper {
-    width: 72px;
-    height: 72px;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
     border-radius: 50%;
     overflow: hidden;
-    margin-bottom: 14px;
     background-color: var(--awd-bg);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
     cursor: pointer;
 }
 
@@ -2813,50 +2659,59 @@ $brand-accent: $brand-mint;
 .user-avatar-placeholder {
     width: 100%;
     height: 100%;
-    background: #221F1A;
+    background: var(--awd-accent);
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
 .avatar-text {
-    font-size: 28px;
-    color: #EDE9DF;
+    font-size: 14px;
+    color: var(--awd-text-on-accent);
     font-weight: 500;
 }
 
+.sidebar-user-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
 .user-name {
-    font-size: 18px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--awd-text);
-    /* 10px 原本由 @username 那一行的下边距提供，那行随「用户名不当名字显示」去掉了 */
-    margin-bottom: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .user-role-tag {
-    background: var(--awd-bg);
-    padding: 4px 12px;
-    border-radius: 4px;
-    border: 1px solid var(--awd-border);
+    align-self: flex-start;
+    background: var(--awd-surface-2);
+    padding: 1px 8px;
+    border-radius: 999px;
 }
 
 .role-text {
-    font-size: 12px;
-    color: var(--awd-accent-text);
+    font-size: 10px;
+    color: var(--awd-text-2);
     font-weight: 500;
 }
 
 /* 关于（AGPL §0 告示）。次级文字色 + 小字：不抢眼，但常在、不可关闭、可选中可点。
    外壳保持浅色，颜色一律走既有令牌，不自带任何深色 chrome。 */
 .legal-notice {
-  margin-top: 16px;
-  padding: 14px 16px;
-  border-radius: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
   border: 1px solid var(--awd-border);
   background: var(--awd-surface);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .legal-line {
@@ -2882,55 +2737,40 @@ $brand-accent: $brand-mint;
 
 .nav-card {
   background: var(--awd-surface);
-  border-radius: 16px;
-  box-shadow: 0 4px 16px rgba(18, 52, 77, 0.05);
-  border: 1px solid rgba(0,0,0,0.02);
+  border-radius: 8px;
+  border: 1px solid var(--awd-border);
   overflow: hidden;
-  padding: 24px 0 16px;
+  padding: 4px 0 8px;
   display: flex;
   flex-direction: column;
 }
 
-.nav-card-header {
-    padding: 0 24px 16px;
-    border-bottom: 1px solid var(--awd-border);
-    margin-bottom: 12px;
-}
-
-.nav-card-title {
-   font-size: 13px;
-   font-weight: 600;
-   color: var(--awd-text-2);
-   text-transform: uppercase;
-   letter-spacing: 0.5px;
-}
-
 /* 分组（个人 / 系统）。组标题只是排版，别把它做成可点的东西 */
 .nav-group + .nav-group {
-    margin-top: 16px;
+    margin-top: 10px;
 }
 
 .nav-group-title {
     display: block;
-    padding: 0 24px 6px;
+    padding: 8px 14px 4px;
     font-size: 11px;
     font-weight: 700;
     color: var(--awd-text-3);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.04em;
 }
 
 .nav-list {
-    padding: 0 12px;
+    padding: 0 6px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
 }
 
 .nav-item {
-  padding: 12px 16px;
-  border-radius: 8px;
-  transition: all 0.2s ease;
+  height: 28px;
+  padding: 0 10px 0 12px;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2938,15 +2778,16 @@ $brand-accent: $brand-mint;
 }
 
 .nav-item:hover {
-    background-color: var(--awd-bg);
+    background-color: var(--awd-surface-2);
 }
 
 .nav-item.active {
-  background: var(--awd-bg);
+  background: var(--awd-accent-soft);
+  border-left-color: var(--awd-accent);
 }
 
 .nav-text {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--awd-text-2);
   font-weight: 500;
 }
@@ -2967,77 +2808,31 @@ $brand-accent: $brand-mint;
   height: calc(100vh - 140px);
 }
 
-.section-card {
-  background: var(--awd-surface);
-  border-radius: 12px;
-  border: 1px solid var(--awd-border);
-  margin-bottom: 24px;
-  overflow: hidden;
-}
-
-.section-header {
-  padding: 24px 24px 16px;
-  border-bottom: 1px solid var(--awd-border);
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--awd-text);
-}
-
-.section-subtitle {
-  display: block;
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--awd-text-2);
-}
-
-.section-body {
-  padding: 24px;
-}
-
 .provider-card {
   border: 1px solid var(--awd-border);
-  border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 16px;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
   background-color: var(--awd-bg);
 }
 
 .provider-header {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .provider-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--awd-text);
 }
 
-.form-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 16px;
-  &:last-child {
-      margin-bottom: 0;
-  }
-}
-
-.form-label {
-  width: 100px;
-  font-size: 13px;
-  color: var(--awd-text);
-  font-weight: 500;
-}
-
 .form-input {
   flex: 1;
-  height: 38px;
-  padding: 0 12px;
+  height: 30px;
+  padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--awd-border);
-  font-size: 13px;
+  font-size: 12.5px;
   background-color: var(--awd-surface);
   transition: border-color 0.2s;
   
@@ -3054,6 +2849,13 @@ $brand-accent: $brand-mint;
   color: var(--awd-text-2);
   line-height: 1.7;
   margin: -4px 0 12px;
+}
+
+/* 判定方式行下面的状态说明：紧跟在 SettingsRow 的底边线之后，不能沿用
+   .field-note 给标题用的负上边距——那是为了贴紧标题，贴在一条分隔线下方
+   反而会顶到线上。 */
+.region-summary-note {
+  margin: 8px 0 0;
 }
 
 .field-note-warn {
@@ -3109,11 +2911,11 @@ $brand-accent: $brand-mint;
     flex-direction: row; /* Ensure row layout */
     justify-content: flex-start;
     align-items: center;
-    gap: 16px; /* Explicit gap */
-    margin-bottom: 16px;
+    gap: 12px;
+    margin-bottom: 8px;
 }
 .section-title-sm {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--awd-text);
 }
@@ -3121,17 +2923,19 @@ $brand-accent: $brand-mint;
 .section-divider {
     height: 1px;
     background: var(--awd-surface-3);
-    margin: 24px 0;
+    margin: 14px 0;
 }
 
 .btn-primary {
-    font-size: 14px;
+    height: 28px;
+    font-size: 12.5px;
+    font-weight: 500;
     background: var(--awd-accent);
     color: var(--awd-text-on-accent);
     border: none;
-    padding: 6px 16px;
+    padding: 0 14px;
     border-radius: 6px;
-    line-height: 1.5;
+    line-height: 28px;
      &:after { border: none; }
 }
 
@@ -3146,29 +2950,28 @@ $brand-accent: $brand-mint;
 }
 
 .fixed-footer {
-  padding: 24px 0;
+  padding: 12px 0 0;
   display: flex;
   justify-content: flex-end;
 }
 
 .btn-save {
-  min-width: 140px;
-  height: 40px;
-  line-height: 40px;
+  min-width: 120px;
+  height: 28px;
+  line-height: 28px;
   background: var(--awd-accent);
   color: var(--awd-text-on-accent);
-  border-radius: 6px; // Slightly rounded
-  font-size: 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
   font-weight: 500;
   border: none;
   cursor: pointer;
-  box-shadow: 0 2px 4px rgba(46, 90, 80, 0.2);
   transition: background 0.2s;
-  
+
   &:active {
       background: var(--awd-accent-hover);
   }
-  
+
   &[loading] {
       opacity: 0.8;
   }
@@ -3249,21 +3052,25 @@ $brand-accent: $brand-mint;
 }
 
 .comp-btn {
-  font-size: 12px;
-  line-height: 1;
-  padding: 8px 14px;
+  height: 28px;
+  line-height: 26px;
+  font-size: 12.5px;
+  padding: 0 12px;
   border-radius: 6px;
-  background: var(--awd-surface-2);
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
   color: var(--awd-text);
 }
 
 .comp-btn.primary {
+  border-color: var(--awd-accent);
   background: var(--awd-accent);
   color: var(--awd-text-on-accent);
 }
 
 .comp-btn.danger {
-  background: var(--awd-bg);
+  border: none;
+  background: transparent;
   color: var(--awd-danger-text);
 }
 
@@ -3671,36 +3478,6 @@ $brand-accent: $brand-mint;
 }
 
 /* 平台服务（P5 配置面收敛） */
-.platform-banner {
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  background: var(--awd-accent-soft);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.platform-banner-warn {
-  background: var(--awd-bg);
-}
-
-.platform-banner-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--awd-accent-text);
-}
-
-.platform-banner-warn .platform-banner-title {
-  color: var(--awd-warning-text);
-}
-
-.platform-banner-body {
-  font-size: 12px;
-  color: var(--awd-text-2);
-  line-height: 1.7;
-}
-
 .platform-link {
   align-self: flex-start;
   font-size: 12px;

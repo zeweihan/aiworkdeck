@@ -14,6 +14,9 @@ export default {
 
   // ---- 统一「设置」页「个人」组的三个栏目名（2026-08-20 由个人中心并入）----
   tabWorkLog: '工作记录',
+  // dev-board#892：工作记录栏目套 SettingsSection 后补的一句描述，与 favoritesSubtitle/
+  // todosSubtitle 同一命名规则（<字段名>Subtitle）
+  workLogSubtitle: '你在各项目里的操作记录，可按日期、项目或关键词筛选',
   // dev-board#872：改名「全部收藏」/「我的待办」，与内容重做（跨项目汇总）配套；
   // 「代办」是错别字，这里一并改成「待办」（这个键只在本命名空间内被引用，直接改值）。
   tabFavorites: '全部收藏',
