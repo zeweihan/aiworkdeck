@@ -222,9 +222,9 @@ export default {
 <style lang="scss" scoped>
 .panel-favorites {
   background: var(--awd-surface);
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 4px 16px rgba(18, 52, 77, 0.04);
+  border-radius: 8px;
+  border: 1px solid var(--awd-border);
+  padding: 14px;
   box-sizing: border-box;
   width: 100%;
 }
@@ -235,8 +235,8 @@ export default {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  padding-bottom: 16px;
-  margin-bottom: 20px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
   border-bottom: 1px solid var(--awd-border-subtle);
 }
 
@@ -252,7 +252,7 @@ export default {
 }
 
 .pf-title {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--awd-text);
 }
@@ -280,10 +280,10 @@ export default {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 34px;
+  height: 30px;
   padding: 0 10px;
   border: 1px solid var(--awd-border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--awd-bg);
   box-sizing: border-box;
 

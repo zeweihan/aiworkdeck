@@ -137,6 +137,9 @@ export default {
   colTeamMinutes: '投入时长',
 
   // ---- 数据共享 ----
+  // dev-board#892：这块套 SettingsSection 后补的分节标题 + 「上次上报」行标签
+  usageSharingSectionTitle: '使用统计上报',
+  lastUploadLabel: '上次上报',
   sharingTitle: '向团队共享我的使用统计',
   sharingSwitchDesc: '开启后每天上传一次当日计数',
   sharingDesc: '每天上传一条计数（投入时长、AI 轮次、编辑动作数、匿名项目编号），不含任何文档内容。默认关闭。',

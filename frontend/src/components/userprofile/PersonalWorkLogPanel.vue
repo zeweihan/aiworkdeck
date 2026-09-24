@@ -10,53 +10,56 @@
   时才渲染，自己的 mounted 就是那一次加载。
 -->
 <template>
-  <view class="panel-work-log">
-    <view class="log-filter-bar">
-      <input class="filter-input" v-model="activityFilter.date" :placeholder="$t('account.filterDatePlaceholder')" />
-      <AwdSelect
-        class="filter-project-select"
-        :range="projectFilterLabels"
-        :value="projectFilterIndex"
-        @change="onProjectFilterChange"
-      />
-      <input class="filter-input" v-model="activityFilter.content" :placeholder="$t('account.filterContentPlaceholder')" />
-      <button class="btn-export" @tap="exportLogsToExcel">{{ $t('account.exportExcelBtn') }}</button>
-    </view>
-
-    <view class="log-table-container">
-      <view class="log-table-header">
-        <text class="th th-project">{{ $t('account.thProject') }}</text>
-        <text class="th th-action">{{ $t('account.thAction') }}</text>
-        <text class="th th-object">{{ $t('account.thObject') }}</text>
-        <text class="th th-start">{{ $t('account.thStart') }}</text>
-        <text class="th th-end">{{ $t('account.thEnd') }}</text>
-        <text class="th th-duration">{{ $t('account.thDuration') }}</text>
-        <text class="th th-idle">{{ $t('account.thIdle') }}</text>
-      </view>
-      <view v-if="activityLoading" class="loading-row">{{ $t('account.loadingEllipsis') }}</view>
-      <view v-else-if="getFilteredLogs().length === 0" class="empty-row">{{ $t('account.noRecords') }}</view>
-      <scroll-view v-else scroll-y class="log-table-body">
-        <view v-for="log in getFilteredLogs()" :key="log.id" class="log-table-row">
-          <text class="td td-project" :title="getLogProject(log)"><text class="project-badge">{{ getLogProject(log) }}</text></text>
-          <text class="td td-action">{{ log.actionType }}</text>
-          <text class="td td-object" :title="getLogObject(log)">{{ getLogObject(log) }}</text>
-          <text class="td td-start">{{ getLogStartTime(log) }}</text>
-          <text class="td td-end">{{ getLogEndTime(log) }}</text>
-          <text class="td td-duration">{{ getLogDuration(log) }}</text>
-          <text class="td td-idle" :title="getLogIdleTime(log)">{{ getLogIdleTime(log) }}</text>
+  <SettingsSection :title="$t('account.tabWorkLog')" :description="$t('account.workLogSubtitle')">
+      <template #actions>
+        <view class="log-filter-bar">
+          <input class="filter-input" v-model="activityFilter.date" :placeholder="$t('account.filterDatePlaceholder')" />
+          <AwdSelect
+            class="filter-project-select"
+            :range="projectFilterLabels"
+            :value="projectFilterIndex"
+            @change="onProjectFilterChange"
+          />
+          <input class="filter-input" v-model="activityFilter.content" :placeholder="$t('account.filterContentPlaceholder')" />
+          <button class="btn-export" @tap="exportLogsToExcel">{{ $t('account.exportExcelBtn') }}</button>
         </view>
-      </scroll-view>
-    </view>
-  </view>
+      </template>
+
+      <view class="log-table-container">
+        <view class="log-table-header">
+          <text class="th th-project">{{ $t('account.thProject') }}</text>
+          <text class="th th-action">{{ $t('account.thAction') }}</text>
+          <text class="th th-object">{{ $t('account.thObject') }}</text>
+          <text class="th th-start">{{ $t('account.thStart') }}</text>
+          <text class="th th-end">{{ $t('account.thEnd') }}</text>
+          <text class="th th-duration">{{ $t('account.thDuration') }}</text>
+          <text class="th th-idle">{{ $t('account.thIdle') }}</text>
+        </view>
+        <view v-if="activityLoading" class="loading-row">{{ $t('account.loadingEllipsis') }}</view>
+        <view v-else-if="getFilteredLogs().length === 0" class="empty-row">{{ $t('account.noRecords') }}</view>
+        <scroll-view v-else scroll-y class="log-table-body">
+          <view v-for="log in getFilteredLogs()" :key="log.id" class="log-table-row">
+            <text class="td td-project" :title="getLogProject(log)"><text class="project-badge">{{ getLogProject(log) }}</text></text>
+            <text class="td td-action">{{ log.actionType }}</text>
+            <text class="td td-object" :title="getLogObject(log)">{{ getLogObject(log) }}</text>
+            <text class="td td-start">{{ getLogStartTime(log) }}</text>
+            <text class="td td-end">{{ getLogEndTime(log) }}</text>
+            <text class="td td-duration">{{ getLogDuration(log) }}</text>
+            <text class="td td-idle" :title="getLogIdleTime(log)">{{ getLogIdleTime(log) }}</text>
+          </view>
+        </scroll-view>
+      </view>
+  </SettingsSection>
 </template>
 
 <script>
 import { getUserActivityHistory } from '@/services/api.js'
 import AwdSelect from '@/components/AwdSelect.vue'
+import SettingsSection from '@/components/settings/SettingsSection.vue'
 
 export default {
   name: 'PersonalWorkLogPanel',
-  components: { AwdSelect },
+  components: { AwdSelect, SettingsSection },
   data() {
     return {
       activityLogs: [],
@@ -243,30 +246,23 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-$brand-dark: #221F1A;
+@import '@/components/settings/settings.scss';
 
-.panel-work-log {
-  width: 100%;
-  background: var(--awd-surface);
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 4px 16px rgba(18, 52, 77, 0.04);
-  box-sizing: border-box;
-}
-
+/* 筛选条并成一条 32px 工具栏，挂在 SettingsSection 的头部 #actions 里 */
 .log-filter-bar {
   display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
+  align-items: center;
+  gap: 8px;
 }
 
 .filter-input {
   flex: 1;
-  height: 36px;
+  height: 30px;
   border: 1px solid var(--awd-border);
   border-radius: 6px;
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  background: var(--awd-surface);
 }
 
 .filter-project-select {
@@ -274,71 +270,83 @@ $brand-dark: #221F1A;
 }
 
 .btn-export {
-  height: 36px;
-  line-height: 36px;
-  padding: 0 20px;
-  background: $brand-dark;
-  color: #EDE9DF;
-  font-size: 13px;
-  border-radius: 6px;
-  border: none;
-  cursor: pointer;
-
-  &:hover {
-    background: lighten($brand-dark, 5%);
-  }
+  @extend .awd-set-btn-secondary;
+  flex-shrink: 0;
 }
 
+/* 表格用固定列宽（含末列），配合 overflow-x 横向滚动——容器比列宽总和窄时
+   横向滚动，而不是把最后一列挤到逐字竖排换行（dev-board#892 走查）。 */
 .log-table-container {
   border: 1px solid var(--awd-border);
-  border-radius: 8px;
-  overflow: hidden;
+  border-radius: 6px;
+  /* 容器比列宽总和窄时整块横向滚动（表头与行一起动），而不是把末列挤到
+     逐字竖排换行（dev-board#892 走查）。 */
+  overflow-x: auto;
+}
+
+.log-table-header,
+.log-table-row {
+  display: flex;
+  /* 120(项目) + 96(操作) + 120(对象 min-width) + 150(开始) + 150(结束) +
+     80(累计时长) + 150(连续无动作时间) = 866 */
+  min-width: 866px;
 }
 
 .log-table-header {
-  display: flex;
   background: var(--awd-bg);
   border-bottom: 1px solid var(--awd-border);
-  padding: 12px 16px;
+  height: 32px;
+  align-items: center;
 }
 
 .th {
-  font-size: 13px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--awd-text-2);
+  white-space: nowrap;
 }
 
 .th-project { width: 120px; }
-.th-action { width: 80px; }
-.th-object { width: 150px; }
-.th-start { width: 140px; }
-.th-end { width: 140px; }
-.th-duration { width: 80px; }
-.th-idle { flex: 1; }
+.th-action { width: 96px; }
+/* 对象列是唯一允许省略的列——其余列一律定宽 + nowrap 不截断（dev-board#892
+   二次走查：开始/结束时间戳被截成「2026-09-23 10:0…」、操作截成「OPEN…」，
+   时间戳/枚举值截断等于信息丢失；超宽时整表横向滚动兜底，容器已有 overflow-x）。 */
+.th-object { flex: 1 1 120px; width: auto; min-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.th-start, .th-end { width: 150px; }
+.th-duration { width: 80px; text-align: right; }
+.th-idle { width: 150px; }
 
 .log-table-body {
   max-height: 500px;
 }
 
 .log-table-row {
-  display: flex;
-  padding: 12px 16px;
+  height: 32px;
+  align-items: center;
   border-bottom: 1px solid var(--awd-border-subtle);
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--awd-text);
 
   &:last-child {
     border-bottom: none;
   }
 
-  &:hover {
+  &:nth-child(even) {
     background: var(--awd-bg);
+  }
+
+  &:hover {
+    background: var(--awd-surface-2);
   }
 }
 
 .td {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 12px;
   white-space: nowrap;
 }
 
@@ -354,15 +362,31 @@ $brand-dark: #221F1A;
   border-radius: 999px;
   background: var(--awd-surface-2);
   color: var(--awd-text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
 }
-.td-action { width: 80px; font-weight: 500; }
-.td-object { width: 150px; color: var(--awd-text); }
-.td-start { width: 140px; color: var(--awd-text-2); font-size: 12px; }
-.td-end { width: 140px; color: var(--awd-text-2); font-size: 12px; }
-.td-duration { width: 80px; color: var(--awd-text-3); }
-.td-idle { flex: 1; color: var(--awd-text-2); }
+.td-action { width: 96px; font-weight: 500; }
+.td-object {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--awd-text);
+}
+.td-start, .td-end {
+  width: 150px;
+  color: var(--awd-text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.td-duration {
+  width: 80px;
+  color: var(--awd-text-3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.td-idle { width: 150px; color: var(--awd-text-2); }
 
 .loading-row, .empty-row {
   padding: 40px;

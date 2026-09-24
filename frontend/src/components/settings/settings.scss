@@ -1,0 +1,183 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// 设置页共享的「控件」原语（dev-board#892）：按钮/胶囊/输入框/提示条统一尺寸，
+// 对齐插件广场侧栏 MarketSidebarPanel 的 .msb-* 密度（12-13px 正文、28px 控件高）。
+// 只提供 CSS 类，不含标记结构——各面板的 <style lang="scss" scoped> 里
+// `@import '@/components/settings/settings.scss';` 后直接用这些类名。
+// 用 --awd-* 语义令牌，深浅两套主题都要能看，不写死颜色。
+
+.awd-set-container {
+  container-type: inline-size;
+  container-name: awd-settings;
+}
+
+// 右对齐的动作行——「解除授权」一类不该通栏，靠右一个小按钮就够
+.awd-set-actions-end {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+// SettingsRow 控件列里「左边值、右边动作」两端对齐——站点名/上次上报时间
+// 这类「一个值 + 一个动作」的行，别把动作也挤到左边堆成一坨。
+.awd-set-row-spread {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.awd-set-row-spread-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+// 按钮：28px 高、12.5-13px 字，三种语气
+.awd-set-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 26px;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
+  color: var(--awd-text);
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    border-color: var(--awd-border-strong);
+  }
+
+  &[disabled],
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+.awd-set-btn-primary {
+  @extend .awd-set-btn;
+  border-color: var(--awd-accent);
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
+
+  &:hover {
+    background: var(--awd-accent-hover);
+    border-color: var(--awd-accent-hover);
+  }
+}
+
+.awd-set-btn-secondary {
+  @extend .awd-set-btn;
+}
+
+// 危险动作：文字按钮而不是通栏描边——「解除授权」一类不该抢视觉权重
+.awd-set-btn-danger-text {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--awd-danger-text);
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--awd-danger-soft);
+  }
+
+  &[disabled],
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+// 胶囊状态（同 MarketSidebarPanel 的 .msb-row-state）
+.awd-set-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-2);
+  white-space: nowrap;
+
+  &.ok {
+    background: var(--awd-accent-soft);
+    color: var(--awd-accent-text);
+  }
+
+  &.warn {
+    background: var(--awd-warning-soft);
+    color: var(--awd-warning-text);
+  }
+}
+
+// 输入框：28-30px 高
+.awd-set-input {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--awd-border);
+  font-size: 12.5px;
+  background: var(--awd-surface);
+  color: var(--awd-text);
+
+  &:focus {
+    border-color: var(--awd-accent);
+    outline: none;
+  }
+}
+
+// 提示条：警示块与同意块统一样式，左侧 3px 色条 + 12px 正文
+.awd-set-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid var(--awd-border-strong);
+  background: var(--awd-surface-2);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--awd-text-2);
+  margin-bottom: 10px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.awd-set-note-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+
+.awd-set-note.info {
+  border-left-color: var(--awd-accent);
+  background: var(--awd-accent-wash);
+}
+
+.awd-set-note.warn {
+  border-left-color: var(--awd-warning-text);
+  background: var(--awd-warning-soft);
+
+  .awd-set-note-title {
+    color: var(--awd-warning-text);
+  }
+}
