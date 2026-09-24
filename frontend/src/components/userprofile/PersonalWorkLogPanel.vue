@@ -10,7 +10,7 @@
   时才渲染，自己的 mounted 就是那一次加载。
 -->
 <template>
-  <SettingsSection :title="$t('account.tabWorkLog')" :description="$t('account.workLogSubtitle')">
+  <SettingsSection class="panel-work-log" :title="$t('account.tabWorkLog')" :description="$t('account.workLogSubtitle')">
       <template #actions>
         <view class="log-filter-bar">
           <input class="filter-input" v-model="activityFilter.date" :placeholder="$t('account.filterDatePlaceholder')" />
