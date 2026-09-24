@@ -495,6 +495,34 @@ def render(m, out_path, target_w=None, min_card=None, fs_body=None, fs_date=None
     if lane_band:
         band = {e["id"]: lane_band.get(e.get("lane"), 0) for e in evs}
         max_bands = max(band.values()) + 1
+        # [AWD-PATCH 5] 泳道号覆盖了几何算出的层号之后，同一条泳道的事件全部被摁进
+        # 同一条横带——覆盖只保证"同一类主体永远在同一条带"，从没检查那条带内部
+        # 挨不挨得下。dev-board#888 实测：三方对读时，一条泳道六项里五项落在这一
+        # 条带上，其中两项在轴上只隔一个列距（约 140px）却要摆 214px 宽的卡，
+        # 卡片横向真重叠了 74px——PPTX/PNG/SVG 三种格式原样带着这个重叠一起出，
+        # 因为它们都是照抄这张母版的几何，不是各自算错。
+        # 按这份引擎一贯的做法（render_dated_v2.py 的「collision: refuse, do not
+        # invent」、[D5]/[D6] 那两条同侧净空门禁）：排不下要拒绝，不能悄悄画出
+        # 重叠。拒绝之后 render_figure 的阶梯会自动改试纵向（render_vcolumns），
+        # 不会因此就没有图可交。
+        _lane_of = {e["id"]: e.get("lane") for e in evs}
+        for _side in ("up", "dn"):
+            _by_band = {}
+            for _i, _e in enumerate(evs):
+                if side_of(_e) != _side:
+                    continue
+                _by_band.setdefault(band[_e["id"]], []).append((xof[_i], _e["id"]))
+            for _b, _pts in _by_band.items():
+                _pts.sort()
+                _bw = CW_BY_BAND.get(_b, CARD_W)
+                for (_x0, _id0), (_x1, _id1) in zip(_pts, _pts[1:]):
+                    _gap = _x1 - _x0
+                    if _gap < _bw + CARD_CLEAR:
+                        raise ValueError(
+                            f"泳道「{_lane_of.get(_id0, '?')}」把 {_id0} 与 {_id1} "
+                            f"都放在同一条横带上，但它们在轴上只隔 {_gap:.0f}px，"
+                            f"卡宽却要 {_bw:.0f}px——横向排不下，请改用纵向"
+                            f"（vertical_single_column）或合并/精简该泳道内过近的事项。")
 
     need = CARD_W + 2 * CARD_CLEAR
     fits = (stride * pitch >= need)
