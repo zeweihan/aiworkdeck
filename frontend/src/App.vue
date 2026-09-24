@@ -14,26 +14,6 @@ import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { initAppTheme } from '@/utils/appTheme.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
-// ==================== uni 弹层的层级修正（全应用一次） ====================
-// uni 的 showToast / showLoading 生成的 <uni-toast> 由框架直接挂到 document.body，
-// 不在任何组件的渲染树里，SFC 的 scoped <style> 加不上 data-v 属性也够不到它
-// （试过，编译结果两个 <style> 块都被强行套了同一个 data-v 选择器，未 scoped 的那块
-// 形同虚设）。而框架给它写死的 z-index 是 999（node_modules/@dcloudio/uni-h5/style/api/
-// toast.css），本仓所有自绘弹窗的遮罩是 9999（.awd-mask / .workdeck-dialog-mask，
-// 且带 backdrop-filter）——于是弹窗开着时弹出的提示全部画在遮罩后面：
-// InviteMemberDialog 的「没有这个用户」「已加进来」等提示一律看不见，表现成「输入账号
-// 没反应、点加进来也没反应」（dev-board 协作加人流程那次报障）。
-// 取 10001：还要高过应用内对话框 AwdDialog 的遮罩（10000），在确认框里触发的提示也看得见。
-//
-// uni-modal 那一半已经不需要了：uni.showModal 整个转发给了 AwdDialog（dev-board#849，
-// 见 utils/dialog.js），<uni-modal> 不再出现。
-if (typeof document !== 'undefined' && !document.getElementById('awd-uni-modal-zfix')) {
-  const zfix = document.createElement('style')
-  zfix.id = 'awd-uni-modal-zfix'
-  zfix.textContent = 'uni-toast { z-index: 10001 !important; }'
-  document.head.appendChild(zfix)
-}
-
 export default {
   onLaunch: function () {
     console.log('App Launch')
@@ -170,21 +150,6 @@ body,
 uni-modal,
 uni-toast {
     font-family: var(--awd-font-sans);
-}
-
-/* uni.showToast 仍用原生（uni.showModal / showActionSheet 已转给 AwdDialog）。
-   .uni-toast 是带图标的那种，.uni-simple-toast__text 是 icon:'none' 的纯文字那种。 */
-uni-toast .uni-toast {
-   background: var(--awd-accent);
-   border-radius: 10px;
-   box-shadow: var(--awd-shadow-md);
-}
-uni-toast .uni-toast__content {
-    color: var(--awd-text-on-accent);
-}
-uni-toast .uni-simple-toast__text {
-    border-radius: 10px;
-    box-shadow: var(--awd-shadow-md);
 }
 
 /* ============ 颜色语义令牌（浅色/深色两套取值） ============

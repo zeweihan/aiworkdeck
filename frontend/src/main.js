@@ -8,6 +8,7 @@ import { recordFrontendError } from "./utils/errorBuffer.js";
 import { i18n } from "./i18n/index.js";
 // #ifdef H5
 import { installUniDialogBridge } from "./utils/dialog.js";
+import { installUniToastBridge } from "./utils/toast.js";
 // #endif
 
 export function createApp() {
@@ -19,6 +20,10 @@ export function createApp() {
 	// uni-h5 自带的弹窗缺省按钮是写死的英文 OK/Cancel、字体掉到衬线字。
 	// 走拦截器而不是改写属性，理由见 utils/dialog.js 顶部注释。小程序端不接管。
 	installUniDialogBridge();
+	// uni.showToast / hideToast / showLoading / hideLoading 转发到统一 toast 体系
+	// AwdToast（dev-board#891）：三种语义一套视觉、多条纵向堆叠不互相覆盖。
+	// 同样走拦截器，理由见 utils/toast.js 顶部注释。
+	installUniToastBridge();
 	// #endif
 	
 	// 全局错误处理：捕获未处理的 Promise rejection
