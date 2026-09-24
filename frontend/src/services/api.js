@@ -1821,7 +1821,8 @@ export function getMyProjects() {
 // 再引用 getMyProjects（防止把整摊项目列表页拖回设置页），这里只取选项、不渲染项目。
 export async function getTaskProjectOptions() {
   const list = await request({ url: '/api/projects/my', method: 'GET' });
-  return (Array.isArray(list) ? list : []).map((p) => ({ id: p.id, name: p.name }));
+  // myRole 要带上：弹窗按 writableProjects 过滤可写项目，缺了它清单会被滤成空
+  return (Array.isArray(list) ? list : []).map((p) => ({ id: p.id, name: p.name, myRole: p.myRole }));
 }
 
 // 删除项目
@@ -3380,17 +3381,36 @@ export function getProjectConversations(projectId, options = {}) {
   });
 }
 
-/** B 期（日历/任务系统）起返回真实任务列表，响应形状 {code:0,data:{tasks:[...]}} 不变。 */
-export function getProjectTasks(projectId) {
+/**
+ * B 期（日历/任务系统）起返回真实任务列表，响应形状 {code:0,data:{tasks:[...]}} 不变。
+ * options.fileId（dev-board#896）：只要关联了该文件的事项（file_id 列与关联表任一命中）。
+ */
+export function getProjectTasks(projectId, options = {}) {
+  const params = {}
+  if (options.fileId != null) params.fileId = options.fileId
+  if (options.from) params.from = options.from
+  if (options.to) params.to = options.to
   return request({
     url: `/api/projects/${projectId}/tasks`,
+    method: 'GET',
+    ...(Object.keys(params).length ? { params } : {})
+  });
+}
+
+/** 单个项目的事项概览 {code:0,data:{overdue,today,week,nextDue}}（工作台 rail 徽标用，dev-board#896）。 */
+export function getProjectTaskSummary(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/tasks/summary`,
     method: 'GET'
   });
 }
 
 // ==================== 日历/任务（B 期，spec: docs/superpowers/specs/2026-08-20-calendar-view-design.md） ====================
 
-/** data: {projectId, fileId?, title, dueDate(ISO 日期), dueTime?(HH:mm)}，source 由后端定为 user。 */
+/**
+ * data: {projectId, title, dueDate(ISO 日期), dueTime?(HH:mm), type?, priority?, notes?, assigneeId?,
+ * remindBefore?, fileIds?:[]}（旧 fileId 仍接受），source 由后端定为 user。
+ */
 export function createTask(data) {
   return request({
     url: '/api/tasks',
@@ -3399,7 +3419,10 @@ export function createTask(data) {
   });
 }
 
-/** data 可含 title/dueDate/dueTime/status(OPEN|DONE) 的任意子集；dueTime 传 null 表示清空。 */
+/**
+ * data 可含 title/dueDate/dueTime/status(OPEN|DONE)/type/priority/notes/assigneeId/remindBefore/fileIds
+ * 的任意子集；显式 null 清空 dueTime/notes/assigneeId/remindBefore；fileIds 出现即整体替换关联集合。
+ */
 export function updateTask(taskId, data) {
   return request({
     url: `/api/tasks/${taskId}`,
@@ -3421,6 +3444,17 @@ export function getCalendarTasks(from, to) {
     url: '/api/calendar',
     method: 'GET',
     params: { from, to }
+  });
+}
+
+/**
+ * 当前用户可见项目内未完成事项的概览（dev-board#896）：
+ * {code:0,data:{overdue,today,week,nextDue}}，week = 今天起 7 天内（含今天），nextDue 为事项或 null。
+ */
+export function getCalendarSummary() {
+  return request({
+    url: '/api/calendar/summary',
+    method: 'GET'
   });
 }
 

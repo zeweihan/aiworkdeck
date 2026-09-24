@@ -174,30 +174,48 @@ rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版�
 **shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)；meeting-recorder(会议录音→MeetingRecordingPanel，**2026-08-19 起不占 rail 位，是「语音」面板里的一个 tab**，skill 启用才出现；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（数组里找不到再找 OFF_RAIL_PLUGINS，都没有才回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件，返回 DD_FILES_PLUGIN）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。**设置入口不在 rail 上了**，见顶栏头像下拉那一节；admin 页/接口后端仍 requireAdmin（用户名 admin）。
 **插件广场入口（2026-08 二改：VS Code 扩展栏形态；三改：rail 按钮升成数组里的 market 项，动作不变）**：rail market 项 → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
 
-## 日历/任务系统的外壳挂载点（2026-08-20，dev-board #48-#53）
+## 事项（任务/日程）系统的外壳挂载点（2026-08-20 建，2026-09-25 重做，dev-board #48-#53 / #895-#901）
 
-数据模型是后端 `project_task`（`ProjectTaskService`/`TaskController(/api/tasks)`/
-`CalendarController(/api/calendar)`，概览页 `GET /api/projects/{id}/tasks` 的 B 期真实现）。
-外壳侧三个挂载点 + 一个全局页：
+产品语言：条目叫**事项**，日历视图叫**日程**；「任务」只留在代码与 AI 工具名里，AI 单轮的 todo_write 叫「进度」。
+spec：`docs/superpowers/specs/2026-09-25-task-calendar-redesign.md`（数据模型、组件契约、入口三层、提醒口径都在这里，先读它）。
 
-- **全局日历页 `pages/calendar/calendar`**：与 project-list 平级的全局页（列表页顶栏
-  「日历」按钮 `navigateTo` 过去，同旧个人中心按钮模式）。FullCalendar v6 组件式集成
-  （@fullcalendar/vue3，月历为主/周/listMonth 可切），`chinese-days` 标法定节假日
-  「休」/调休「班」（`components/calendar/holidayMarks.js`，带按天 Map 缓存）。
-  「进入项目」是工作台跳转，用 reLaunch；返回项目列表按栈深分流（navigateBack /
-  栈底 redirectTo）。
-- **rail `calendar` 面板**：`ProjectCalendarPane.vue`（listMonth 列表视图，窄栏放不下
-  月历网格）。**在 project-overview.vue 里必须保持 defineAsyncComponent 懒加载**——
-  静态 import 会把 FullCalendar 整包拖进工作台主 chunk。
-- **文件右键「设置截止日」**（FileTree.vue，照「管理标签」弹窗模式，任务锚 fileId）。
-- **概览页 TaskSchedule**（B 期真数据，读走 ProjectHomePane 的 loadTasks，写 emit 给宿主）。
+数据模型是后端 `project_task`（`ProjectTaskService`/`TaskController(/api/tasks)`/`CalendarController(/api/calendar,
+/api/calendar/summary)`，项目级 `GET /api/projects/{id}/tasks?fileId=` 与 `/tasks/summary`）；2026-09-25 起有
+type/priority/notes/assigneeId/remindBefore 与多文件关联表 `project_task_file`（旧 fileId = 关联首个，保留）。
+错误走 `{code:1,message}`（HTTP 200），前端看 code。
 
-共享逻辑单一出处 `components/calendar/taskUtils.js`（isDone/daysUntil/dueBadge/
-toEventStart），五个消费组件都从这里拿，别再各写一份。
+**前端只有一套事项组件，四处清单全部复用，别再各画一份**（`components/calendar/`）：
+- `TaskDialog.vue`：唯一的事项弹窗（标题 @ 关联、类型分段、日期/时间/提醒、项目/负责人、关联文件芯片、备注、Esc 关、Cmd/Ctrl+Enter 存）。
+  新建时 type=DEADLINE/HEARING 默认「提前 1 天」提醒（`taskUtils.defaultRemindFor`）。
+- `TaskRow.vue`：唯一的事项行（根类 `task-row`，锚点 `data-task-id`）。已完成行右侧显灰色日期不显「逾期」；唯一文件与标题同名时不重复显示芯片。
+- `MentionInput.vue` + `mentionText.js`：原生 textarea 的 `@` 选择器（复用 `AgentMessage/MentionPicker.vue`，加了 `item.kind='member'` 分支）；
+  选文件 emit `mention-file`（加入关联），选成员 emit `mention-member`（设负责人）；文字里只留 `@名字` 纯文本。
+- `AgendaPanel.vue`：日程页右栏议程（已逾期/今天/本周/之后 + 已完成折叠 + 空态引导）。
+- `taskUtils.js`：仍是唯一出处（typeMeta/groupByDue/dueBadge/remindAtOf/REMIND_OPTIONS…）；`personalCollections.groupTodos` 只是 re-export。
+- `utils/taskStore.js`：模块级响应式缓存，**所有读写都经它**（loadProjectTasks/loadGlobal/loadSummary/createTask/updateTask/deleteTask/tasksForFile/subscribe），
+  写后就地更新，徽标与四处清单靠它同步；别再直接调 api.js 的任务函数。
+- `utils/taskReminders.js`：本机提醒调度（HTML5 Notification，Electron 直通；每 5 分钟一轮；localStorage 去重；超过 24h 的旧提醒静默；
+  不可用时降级应用内 toast）+ `todayDigest()` 当日摘要（每天一次）。**不新增任何出站请求**。工作台与项目列表页挂载时各调一次 `startTaskReminders()`，幂等。
+
+入口三层：
+- **项目列表页**：概览条 `项目 N | 已逾期 N | 今天 N | 本周 N` + 「查看日程」（数据 `/api/calendar/summary`；沿用 `.projects-stats-row`/`.stat-card` 类名，
+  `check:nav` 断言它们存在）；顶栏「日程」按钮带徽标；客户角色不显示。
+- **工作台**：rail `calendar` 项标签「日程」+ `.rail-badge` 徽标（当前项目 overdue+today，逾期>0 变红，直读 `taskStore` 响应式缓存）；
+  `ProjectCalendarPane.vue` 是议程式面板（**不再用 FullCalendar**，可静态 import；`fileFilter` prop 支持只看某文件）；
+  `project-overview.vue` 挂**一个**全局 `<TaskDialog>`（`openTaskDialog`），面板/文件树/命令/概览页共用；
+  头像下拉「我的日程」与命令 `go.calendar` 都走 `leaveWorkbench` 再 reLaunch 日程页（`check:nav` 守着，下拉动作项恰好三项）；命令 `task.new` 开弹窗。
+- **文件树**：右键「添加事项…」（presetFileIds）/「查看事项 (N)」（打开日程面板并按文件过滤）；文件名右侧到期徽标按 `fileDueIndex` 一次建索引，
+  名字省略号优先于徽标。旧的内联「设置截止日」弹窗已删。
+- **全局日程页 `pages/calendar/calendar`**：自绘页头（`headerToolbar:false`），FullCalendar 主题接 `--awd-*` 令牌，`eventContent` 自定义；
+  `?focus=<id>` 定位并开编辑，`?group=overdue|today|week` 议程滚到分组；页头自带「返回」，所以在 `utils/globalBack.js` 的 `SELF_NAV_ROUTES` 里。
+  `loadSeq` 竞态护栏保留（`tests/project-home/calendar-load-race.test.mjs` 现在注入 `loadGlobal`）。
+- **概览页 `TaskSchedule.vue` / 设置页 `PersonalTodosPanel.vue`**：都是 TaskRow + 全局/锁定项目的 TaskDialog；根类名 `task-schedule` / `panel-todos` 是 app-e2e 锚点。
+
+测试：`npm run test:calendar`（tests/calendar/）、`test:project-home` 里的 project-calendar-pane / workbench-task-entries / task-schedule / calendar-load-race。
 
 **地雷：uni-h5 的 `<input>` 把 type 收窄成白名单**（text/number/idcard/digit/password/tel），
 `type="date"/"time"` 会静默降级成文本框。日期/时间输入一律用 `components/AwdDatePicker.vue`
-（mounted 手工挂真原生 input 绕开 uni 模板劫持；只监听 change 防中间值上抛）。
+（mounted 手工挂真原生 input 绕开 uni 模板劫持；只监听 change 防中间值上抛）。同理 `MentionInput` 用 `<component :is="'textarea'">` 绕开 uni 的 textarea（140 字上限/100ms 节流/不透传 keydown）。
 
 ## 地雷：uni-app H5 把 `<view>` 上的事件重建成普通对象，`button` 一类字段全丢
 

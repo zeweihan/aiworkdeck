@@ -50,7 +50,11 @@ public class ProjectTask {
     @Column(name = "project_id", nullable = false)
     private Long projectId;
 
-    /** 锚定文件（ProjectFile.id）；项目级事件为 null */
+    /**
+     * 锚定文件（ProjectFile.id）；项目级事件为 null。
+     * dev-board#895 起关联文件改由 project_task_file 表承载多个，本列继续维护为「关联集合里的第一个」，
+     * 供 FileTree 右键、旧客户端与 fileId 过滤向后兼容。
+     */
     @Column(name = "file_id")
     private Long fileId;
 
@@ -77,6 +81,29 @@ public class ProjectTask {
     /** 创建者 */
     @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    /**
+     * 事项类型（dev-board#895）：DEADLINE 截止日 / HEARING 开庭 / MEETING 会议 / TODO 待办 / OTHER 其他。
+     * 可空——加列前的旧行为 null，服务层按 DEADLINE 解释。
+     */
+    @Column(length = 20)
+    private String type;
+
+    /** 优先级：NORMAL / HIGH。可空，null 按 NORMAL 解释。 */
+    @Column(length = 10)
+    private String priority;
+
+    /** 备注纯文本，可含「@名字」；结构化关系落 assigneeId 与关联文件表，不从文字里解析。 */
+    @Column(length = 4000)
+    private String notes;
+
+    /** 负责人 userId，必须是项目成员或 owner；null=未指派。 */
+    @Column(name = "assignee_id")
+    private Long assigneeId;
+
+    /** 提前多少分钟提醒；null=不提醒。全天事项以当天 09:00 为基准（前端计算，服务端只存）。 */
+    @Column(name = "remind_before")
+    private Integer remindBefore;
 
     @CreationTimestamp
     @Column(updatable = false)
@@ -163,6 +190,46 @@ public class ProjectTask {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public String getPriority() {
+        return priority;
+    }
+
+    public void setPriority(String priority) {
+        this.priority = priority;
+    }
+
+    public String getNotes() {
+        return notes;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
+    }
+
+    public Long getAssigneeId() {
+        return assigneeId;
+    }
+
+    public void setAssigneeId(Long assigneeId) {
+        this.assigneeId = assigneeId;
+    }
+
+    public Integer getRemindBefore() {
+        return remindBefore;
+    }
+
+    public void setRemindBefore(Integer remindBefore) {
+        this.remindBefore = remindBefore;
     }
 
     public LocalDateTime getCreatedAt() {

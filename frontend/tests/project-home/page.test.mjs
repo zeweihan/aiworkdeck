@@ -83,7 +83,7 @@ test('轮询纪律：不起定时器，不调 /version/status', () => {
 test('timeline 失败落 unavailable 引导态而不是 toast', () => {
   const i = PANE.indexOf('async loadActivity(')
   assert.ok(i > 0)
-  const body = PANE.slice(i, PANE.indexOf('async loadTasks('))
+  const body = PANE.slice(i, PANE.indexOf('async loadConversations('))
   assert.match(body, /this\.activityUnavailable\s*=\s*true/)
   assert.ok(!body.includes('showToast'), 'timeline 失败不许弹 toast')
 })
@@ -108,7 +108,7 @@ test('getMyProjects 按裸数组解（不许照抄 admin.vue 的 res.data）', (
 test('信封端点一律再取一层 data', () => {
   assert.ok(PANE.includes('res.data.fields'))
   assert.ok(PANE.includes('res.data.versions'))
-  assert.ok(PANE.includes('res.data.tasks'))
+  // 事项不再由 Pane 取：TaskSchedule 自己读 utils/taskStore（dev-board#898），信封在 store 里解
 })
 
 test('导航出口：工作台 reLaunch、列表按页面栈分流', () => {
@@ -189,11 +189,10 @@ test('loadProjectCard / loadProfile 写回前比对请求代', () => {
   }
 })
 
-test('loadStats / loadActivity / loadTasks 的成功与失败两个分支都要比对请求代', () => {
+test('loadStats / loadActivity 的成功与失败两个分支都要比对请求代', () => {
   for (const [name, next] of [
     ['async loadStats(', 'async loadActivity('],
-    ['async loadActivity(', 'async loadTasks('],
-    ['async loadTasks(', 'async loadConversations('],
+    ['async loadActivity(', 'async loadConversations('],
   ]) {
     const body = methodBody(name, next)
     const catchIdx = body.indexOf('catch')

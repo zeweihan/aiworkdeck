@@ -98,7 +98,7 @@ class ProjectOverviewStatsAuthTest {
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(false);
 
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> controller.tasks(7L, null, null, "sess"));
+                    () -> controller.tasks(7L, null, null, null, "sess"));
             assertEquals("无权访问该项目", e.getMessage());
         }
     }
@@ -111,7 +111,7 @@ class ProjectOverviewStatsAuthTest {
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
             when(projectTaskService.listByProject(7L, null, null)).thenReturn(List.of());
 
-            Map<String, Object> body = controller.tasks(7L, null, null, "sess").getBody();
+            Map<String, Object> body = controller.tasks(7L, null, null, null, "sess").getBody();
 
             assertNotNull(body);
             assertEquals(0, body.get("code"));
@@ -119,6 +119,39 @@ class ProjectOverviewStatsAuthTest {
             Map<String, Object> data = (Map<String, Object>) body.get("data");
             assertEquals(List.of(), data.get("tasks"));
             verify(projectMemberService, never()).isClient(anyLong(), anyLong());
+        }
+    }
+
+    /** dev-board#895：fileId 过滤透传到服务层 4 参重载。 */
+    @Test
+    void tasksPassesFileIdFilter() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            when(projectTaskService.listByProject(7L, null, null, 42L)).thenReturn(List.of());
+
+            controller.tasks(7L, null, null, 42L, "sess");
+            verify(projectTaskService).listByProject(7L, null, null, 42L);
+        }
+    }
+
+    /** dev-board#895：单项目概览计数同 /tasks 读权限口径，非成员拒。 */
+    @Test
+    void tasksSummaryRequiresReadAndDelegates() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(false);
+            assertThrows(IllegalArgumentException.class, () -> controller.tasksSummary(7L, "sess"));
+
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            Map<String, Object> summary = new java.util.LinkedHashMap<>();
+            summary.put("overdue", 0);
+            summary.put("today", 1);
+            summary.put("week", 1);
+            summary.put("nextDue", null);
+            when(projectTaskService.summarize(List.of(7L))).thenReturn(summary);
+            Map<String, Object> body = controller.tasksSummary(7L, "sess").getBody();
+            assertEquals(summary, body.get("data"));
         }
     }
 }

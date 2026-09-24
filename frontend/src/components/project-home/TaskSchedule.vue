@@ -4,142 +4,182 @@
   <view class="task-schedule">
     <view class="task-header">
       <view class="task-spacer"></view>
-      <view class="task-add-btn" @tap="toggleQuickCreate">
-        <text>{{ $t('calendar.addQuick') }}</text>
-      </view>
-    </view>
-
-    <view v-if="quickCreateOpen" class="task-quick-create">
-      <input
-        v-model="quickTitle"
-        class="task-quick-input"
-        :placeholder="$t('calendar.taskTitlePlaceholder')"
-        @confirm="submitQuickCreate"
-      />
-      <AwdDatePicker v-model="quickDate" type="date" />
-      <view class="task-quick-actions">
-        <view class="task-quick-btn" @tap="quickCreateOpen = false">{{ $t('calendar.cancel') }}</view>
-        <view class="task-quick-btn task-quick-btn-primary" @tap="submitQuickCreate">{{ $t('calendar.save') }}</view>
+      <view class="task-add-btn" @tap="openCreate">
+        <text>+ {{ $t('calendar.addQuick') }}</text>
       </view>
     </view>
 
     <view v-if="loading" class="task-hint">{{ $t('projects.tasksLoadingHint') }}</view>
 
-    <view v-else-if="!openTasks.length && !doneTasks.length" class="task-guide">
+    <view v-else-if="!tasks.length" class="task-guide">
       <text class="task-guide-title">{{ $t('projects.noTasksTitle') }}</text>
       <text class="task-guide-desc">{{ $t('projects.noTasksDesc') }}</text>
     </view>
 
     <template v-else>
-      <view v-if="openTasks.length" class="task-rows">
-        <view v-for="t in openTasks" :key="t.uid || t.id" class="task-row">
-          <view class="task-check" @tap="$emit('toggle', t)">
-            <svg v-if="isDone(t)" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-              <polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </view>
-          <text class="task-title">{{ t.title }}</text>
-          <text v-if="dueBadge(t)" class="task-due-badge" :class="dueBadgeClass(t)">{{ dueBadge(t) }}</text>
+      <view v-for="grp in openGroups" :key="grp.key" class="task-group" :class="'task-group-' + grp.key">
+        <view class="task-group-head">
+          <text class="task-group-name">{{ grp.label }}</text>
+          <text class="task-group-count">{{ grp.items.length }}</text>
         </view>
+        <TaskRow
+          v-for="t in grp.items"
+          :key="t.uid || t.id"
+          :task="t"
+          :show-project="false"
+          :show-files="true"
+          :density="compact ? 'compact' : 'normal'"
+          @toggle="onToggle"
+          @open="openEdit"
+          @open-file="$emit('open-file', $event)"
+          @delete="onDelete"
+        />
       </view>
 
-      <view class="task-done-toggle" @tap="showDone = !showDone">
-        <AwdSwitch :checked="showDone" @change="showDone = $event" />
-        <text class="task-done-toggle-label">{{ $t('calendar.showDone') }}</text>
+      <view v-if="groups.done.length" class="task-done-toggle" @tap="showDone = !showDone">
+        <svg class="task-done-caret" :class="{ 'is-open': showDone }" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        <text class="task-done-toggle-label">{{ $t('calendar.groupDoneCount', { count: groups.done.length }) }}</text>
       </view>
 
-      <view v-if="showDone && doneTasks.length" class="task-rows task-rows-done">
-        <view v-for="t in doneTasks" :key="t.uid || t.id" class="task-row">
-          <view class="task-check is-done" @tap="$emit('toggle', t)">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-              <polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </view>
-          <text class="task-title task-title-done">{{ t.title }}</text>
-          <text class="task-due">{{ t.dueDate || '' }}</text>
-        </view>
+      <view v-if="showDone && groups.done.length" class="task-group task-group-done">
+        <TaskRow
+          v-for="t in groups.done"
+          :key="t.uid || t.id"
+          :task="t"
+          :show-project="false"
+          :show-files="true"
+          :density="compact ? 'compact' : 'normal'"
+          @toggle="onToggle"
+          @open="openEdit"
+          @open-file="$emit('open-file', $event)"
+          @delete="onDelete"
+        />
       </view>
     </template>
+
+    <TaskDialog
+      :visible="dialogOpen"
+      :mode="dialogTask ? 'edit' : 'create'"
+      :task="dialogTask"
+      :project-id="projectId"
+      @open-file="$emit('open-file', $event)"
+      @close="closeDialog"
+    />
   </view>
 </template>
 
 <script>
-import AwdDatePicker from '@/components/AwdDatePicker.vue'
-import AwdSwitch from '@/components/AwdSwitch.vue'
-import { isDone, dueBadge } from '@/components/calendar/taskUtils.js'
+import TaskRow from '@/components/calendar/TaskRow.vue'
+import TaskDialog from '@/components/calendar/TaskDialog.vue'
+import { isDone, groupByDue } from '@/components/calendar/taskUtils.js'
+import { taskStore, loadProjectTasks, updateTask, deleteTask } from '@/utils/taskStore.js'
 
-// 概览页「日程与任务」块。B 期起 tasks 是 ProjectHomePane 从真实的
-// GET /api/projects/{id}/tasks 拉回来的数据，本组件只管展示与交互，
-// 写操作（完成/新建）一律 emit 给宿主——宿主持有 tasks 数组，乐观更新与
-// 失败回滚都在那一层做（跟 onProfileSave 同一个套路）。
+// 概览页「日程与任务」块（dev-board#898，spec 2026-09-25-task-calendar-redesign E2）。
+// 数据直接读 utils/taskStore 的项目缓存（taskStore.byProject[projectId].list），
+// 完成/删除直接调 store，新建与编辑走统一的 TaskDialog（锁定本项目）——
+// 写成功后 store 就地更新并广播，工作台日程面板、文件树徽标、rail 徽标一起跟上，
+// 宿主 ProjectHomePane 不再持有 tasks 数组。
 //
-// 用词边界：项目级里程碑叫「任务」，AI 单次工作的步骤条叫「进度」
+// 用词边界：项目级里程碑叫「任务 / 事项」，AI 单次工作的步骤条叫「进度」
 // （那是 todo_write 的东西），两个词不能混。
 export default {
   name: 'TaskSchedule',
-  components: { AwdDatePicker, AwdSwitch },
+  components: { TaskRow, TaskDialog },
   props: {
-    tasks: { type: Array, default: () => [] },
-    loading: { type: Boolean, default: false },
+    projectId: { type: [Number, String], required: true },
+    /** 工作台左栏窄栏形态：行用 compact 密度 */
+    compact: { type: Boolean, default: false },
   },
-  emits: ['toggle', 'quick-create'],
+  emits: ['open-file'],
   data() {
     return {
+      loadingOwn: false,
       showDone: false,
-      quickCreateOpen: false,
-      quickTitle: '',
-      quickDate: '',
+      dialogOpen: false,
+      dialogTask: null,
     }
   },
   computed: {
-    openTasks() {
-      return this.tasks
-        .filter((t) => !this.isDone(t))
-        .slice()
-        .sort((a, b) => {
-          // 没有日期的排最后，其余按 dueDate 升序（越紧迫越靠前）
-          if (!a.dueDate && !b.dueDate) return 0
-          if (!a.dueDate) return 1
-          if (!b.dueDate) return -1
-          return a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0
-        })
+    entry() {
+      return taskStore.byProject[String(this.projectId)] || null
     },
-    doneTasks() {
-      return this.tasks.filter((t) => this.isDone(t))
+    tasks() {
+      return (this.entry && this.entry.list) || []
+    },
+    // 只有「还没拿到过这个项目的数据」时才显示加载态；刷新期间保留旧列表不闪
+    loading() {
+      return this.loadingOwn && !(this.entry && this.entry.loadedAt)
+    },
+    groups() {
+      return groupByDue(this.tasks)
+    },
+    openGroups() {
+      const g = this.groups
+      return [
+        { key: 'overdue', label: this.$t('calendar.groupOverdue'), items: g.overdue },
+        { key: 'today', label: this.$t('calendar.groupToday'), items: g.today },
+        { key: 'week', label: this.$t('calendar.groupWeek'), items: g.week },
+        { key: 'later', label: this.$t('calendar.groupLater'), items: g.later },
+      ].filter((d) => d.items.length)
     },
   },
+  watch: {
+    // 工作台里换项目不会重建组件，换了 id 就重取
+    projectId() {
+      this.reload()
+    },
+  },
+  mounted() {
+    this.reload()
+  },
   methods: {
-    isDone(task) {
-      return isDone(task)
-    },
-    dueBadge(task) {
-      return dueBadge(task, (k, p) => this.$t(k, p)).text
-    },
-    dueBadgeClass(task) {
-      const kind = dueBadge(task, (k, p) => this.$t(k, p)).kind
-      if (kind === 'overdue') return 'is-overdue'
-      if (kind === 'today' || kind === 'soon') return 'is-soon'
-      return ''
-    },
-    toggleQuickCreate() {
-      this.quickCreateOpen = !this.quickCreateOpen
-      if (this.quickCreateOpen) {
-        this.quickTitle = ''
-        this.quickDate = ''
+    /** 宿主显式刷新的入口（ProjectHomePane.refresh）：强制重拉，列表在此期间不清空 */
+    async reload() {
+      if (this.projectId == null || this.projectId === '') return
+      this.loadingOwn = true
+      try {
+        await loadProjectTasks(this.projectId, { force: true })
+      } catch (e) {
+        console.warn('[TaskSchedule] 读取事项失败', e)
+      } finally {
+        this.loadingOwn = false
       }
     },
-    submitQuickCreate() {
-      const title = (this.quickTitle || '').trim()
-      if (!title) {
-        uni.showToast({ title: this.$t('calendar.requiredTitle'), icon: 'none' })
-        return
+    openCreate() {
+      this.dialogTask = null
+      this.dialogOpen = true
+    },
+    openEdit(task) {
+      this.dialogTask = task
+      this.dialogOpen = true
+    },
+    closeDialog() {
+      this.dialogOpen = false
+      this.dialogTask = null
+    },
+    async onToggle(task) {
+      const nextStatus = isDone(task) ? 'OPEN' : 'DONE'
+      try {
+        await updateTask(task.id, { status: nextStatus })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
       }
-      if (!this.quickDate) {
-        uni.showToast({ title: this.$t('calendar.requiredDate'), icon: 'none' })
-        return
-      }
-      this.$emit('quick-create', { title, dueDate: this.quickDate })
-      this.quickCreateOpen = false
+    },
+    onDelete(task) {
+      uni.showModal({
+        title: this.$t('calendar.deleteConfirmTitle'),
+        content: this.$t('calendar.deleteConfirmContent', { title: task.title || '' }),
+        cancelText: this.$t('calendar.cancel'),
+        confirmText: this.$t('calendar.delete'),
+        success: async (res) => {
+          if (!res.confirm) return
+          try {
+            await deleteTask(task.id)
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || this.$t('calendar.deleteFailed'), icon: 'none' })
+          }
+        },
+      })
     },
   },
 }
@@ -170,48 +210,6 @@ export default {
   background: var(--awd-accent-soft);
 }
 
-.task-quick-create {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px;
-  margin-bottom: 8px;
-  border: 1px solid var(--awd-border);
-  border-radius: 6px;
-  background: var(--awd-bg);
-}
-
-.task-quick-input {
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--awd-border);
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--awd-text);
-  background: var(--awd-surface);
-  box-sizing: border-box;
-}
-
-.task-quick-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.task-quick-btn {
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  color: var(--awd-text-2);
-  background: var(--awd-surface-2);
-  cursor: pointer;
-}
-
-.task-quick-btn-primary {
-  color: var(--awd-text-on-accent);
-  background: var(--awd-accent);
-}
-
 .task-hint {
   font-size: 13px;
   color: var(--awd-text-2);
@@ -232,86 +230,57 @@ export default {
   color: var(--awd-text-2);
 }
 
-.task-row {
+.task-group + .task-group {
+  margin-top: 10px;
+}
+
+.task-group-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--awd-border-subtle);
+  gap: 6px;
+  margin-bottom: 2px;
 }
 
-.task-row:last-child {
-  border-bottom: none;
-}
-
-.task-check {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--awd-border-strong);
-  border-radius: 4px;
-  color: var(--awd-text-on-accent);
-  cursor: pointer;
-}
-
-.task-check:hover {
-  border-color: var(--awd-mint);
-}
-
-.task-check.is-done {
-  background: var(--awd-accent);
-  border-color: var(--awd-accent);
-}
-
-.task-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  color: var(--awd-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-title-done {
-  color: var(--awd-text-3);
-  text-decoration: line-through;
-}
-
-.task-due {
-  flex: none;
-  font-size: 11px;
+.task-group-name {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--awd-text-2);
 }
 
-.task-due-badge {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 10px;
-  font-size: 11px;
-  color: var(--awd-text-2);
-  background: var(--awd-surface-2);
-}
-
-.task-due-badge.is-soon {
+.task-group-overdue .task-group-name {
   color: var(--awd-danger-text);
-  background: var(--awd-bg);
 }
 
-.task-due-badge.is-overdue {
-  color: var(--awd-text-on-accent);
-  background: var(--awd-danger);
+.task-group-today .task-group-name {
+  color: var(--awd-accent-text);
+}
+
+.task-group-count {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--awd-surface-2);
+  color: var(--awd-text-3);
 }
 
 .task-done-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 4px;
+  margin-top: 10px;
   cursor: pointer;
+}
+
+.task-done-caret {
+  width: 12px;
+  height: 12px;
+  color: var(--awd-text-3);
+  transition: transform 0.15s;
+}
+
+.task-done-caret.is-open {
+  transform: rotate(90deg);
 }
 
 .task-done-toggle-label {
@@ -319,24 +288,14 @@ export default {
   color: var(--awd-text-2);
 }
 
-.task-rows-done {
-  margin-top: 6px;
+.task-group-done {
+  margin-top: 4px;
 }
 
 /* 响应祖先 .project-home-pane 的实际渲染宽度，见 project-home-pane.scss 的注释 */
 @container home-pane (max-width: 359px) {
-  .task-row {
-    gap: 8px;
-    padding: 6px 0;
-  }
-
-  .task-title {
-    font-size: 12px;
-  }
-
-  .task-due,
-  .task-due-badge {
-    font-size: 10px;
+  .task-group-name {
+    font-size: 11px;
   }
 }
 </style>

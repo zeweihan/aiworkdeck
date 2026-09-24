@@ -96,3 +96,23 @@ test('新增待办的项目下拉只留可写项目（只读成员与客户不�
   assert.deepEqual(writableProjects(projects).map((p) => p.id), [1, 2, 3])
   assert.deepEqual(writableProjects(null), [])
 })
+
+// 设置页「我的待办」换统一事项行（dev-board#898）：源码断言，组件带 @/ 别名进不了 node。
+test('我的待办：读写走 taskStore，行用 TaskRow（显示项目），分组用 groupByDue，锚点不变', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(
+    new URL('../../src/components/userprofile/PersonalTodosPanel.vue', import.meta.url), 'utf8')
+  const code = src.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert.ok(code.includes('<view class="panel-todos">'), '.panel-todos 是 app-e2e 锚点（#872/#981）')
+  assert.ok(code.includes("$t('account.todosSubtitle')"), '副标题保留')
+  assert.ok(code.includes("from '@/utils/taskStore.js'"))
+  assert.ok(code.includes('taskStore.global.list'))
+  assert.ok(code.includes('loadGlobal({ force: true })'), '全量加载（不带 from/to）')
+  assert.ok(!/getCalendarTasks|from '@\/services\/api\.js'[^\n]*(updateTask|deleteTask)/.test(code), '写操作不再直接调接口')
+  assert.ok(code.includes('groupByDue(this.tasks)'))
+  assert.ok(!code.includes('groupTodos'), '已从旧 groupTodos 迁走（无日期桶已不存在）')
+  assert.match(code, /<TaskRow[\s\S]*?:show-project="true"/)
+  assert.ok(code.includes('showDone && doneTasks.length'), '已完成默认折叠')
+  assert.match(code, /<TaskDialog[\s\S]*?:projects="writableMyProjects"/, '新增开统一弹窗，只给可写项目')
+  assert.ok(code.includes("$t('calendar.viewFullSchedule')"), '「查看全盘日程」链接保留')
+})

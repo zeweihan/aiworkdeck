@@ -59,7 +59,7 @@
 		{
 			"path": "pages/calendar/calendar",
 			"style": {
-				"navigationBarTitleText": "日历",
+				"navigationBarTitleText": "日程",
 				"navigationStyle": "custom"
 			}
 		},

@@ -162,6 +162,8 @@ export const menuCommandsMethods = {
       case 'commandPalette': this.commandPaletteVisible = true; break
       case 'goProjectHome': this.goProjectHome(); break
       case 'goAllProjects': this.goAllProjects(); break
+      case 'goCalendar': this.goCalendar(); break
+      case 'newTask': this.openTaskDialog({ mode: 'create' }); break
 
       // —— 工具
       case 'ocrCapture': this.startOcrCapture(); break

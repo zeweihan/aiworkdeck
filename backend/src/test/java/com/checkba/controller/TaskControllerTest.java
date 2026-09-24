@@ -8,6 +8,7 @@ import com.checkba.service.ProjectMemberService;
 import com.checkba.service.task.ProjectTaskService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -16,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -80,7 +82,7 @@ class TaskControllerTest {
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                     () -> controller.create(body, null));
             assertEquals("未登录", e.getMessage());
-            verify(taskService, never()).createTask(any(), any(), any(), any(), any(), any());
+            verify(taskService, never()).createTask(any(), any(ProjectTaskService.TaskDraft.class), any());
         }
     }
 
@@ -94,7 +96,7 @@ class TaskControllerTest {
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                     () -> controller.create(body, "sess"));
             assertEquals("无权修改该项目", e.getMessage());
-            verify(taskService, never()).createTask(any(), any(), any(), any(), any(), any());
+            verify(taskService, never()).createTask(any(), any(ProjectTaskService.TaskDraft.class), any());
         }
     }
 
@@ -113,7 +115,7 @@ class TaskControllerTest {
             Map<String, Object> body = Map.of("projectId", 7, "title", 123, "dueDate", "2026-09-01");
 
             assertThrows(IllegalArgumentException.class, () -> controller.create(body, "sess"));
-            verify(taskService, never()).createTask(any(), any(), any(), any(), any(), any());
+            verify(taskService, never()).createTask(any(), any(ProjectTaskService.TaskDraft.class), any());
         }
     }
 
@@ -126,7 +128,7 @@ class TaskControllerTest {
             Map<String, Object> body = Map.of("projectId", 7, "title", "任务", "dueDate", "2026-09-01");
 
             assertThrows(IllegalArgumentException.class, () -> controller.create(body, "sess"));
-            verify(taskService, never()).createTask(any(), any(), any(), any(), any(), any());
+            verify(taskService, never()).createTask(any(), any(ProjectTaskService.TaskDraft.class), any());
         }
     }
 
@@ -145,8 +147,9 @@ class TaskControllerTest {
             body.put("dueTime", "09:30");
 
             ProjectTask created = stubTask(100L, 7L);
-            when(taskService.createTask(eq(7L), eq(42L), eq("起诉状截止"),
-                    eq(LocalDate.of(2026, 9, 1)), eq(LocalTime.of(9, 30)), eq(1L)))
+            // 旧 fileId 等价于 fileIds:[fileId]；新字段缺席时 draft 里为 null（默认值由服务层落）
+            when(taskService.createTask(eq(7L), eq(new ProjectTaskService.TaskDraft("起诉状截止",
+                    LocalDate.of(2026, 9, 1), LocalTime.of(9, 30), null, null, null, null, null, List.of(42L))), eq(1L)))
                     .thenReturn(created);
             when(taskService.toResponseMap(created)).thenReturn(responseMapOf(created));
 
@@ -221,6 +224,108 @@ class TaskControllerTest {
             Map<String, Object> resp = controller.delete(100L, "sess").getBody();
             assertEquals(0, resp.get("code"));
             verify(taskService).deleteTask(100L);
+        }
+    }
+
+    // ==================== dev-board#895 ====================
+
+    private void allowWrite() {
+        when(projectMemberService.hasWritePermission(7L, 1L)).thenReturn(true);
+        when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+    }
+
+    @Test
+    void createPassesNewFieldsAndFileIdsToService() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            allowWrite();
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("projectId", 7);
+            body.put("title", "开庭");
+            body.put("dueDate", "2026-10-12");
+            body.put("type", "HEARING");
+            body.put("priority", "HIGH");
+            body.put("notes", "带原件");
+            body.put("assigneeId", 2);
+            body.put("remindBefore", 1440);
+            body.put("fileIds", List.of(2391, "2400"));
+            body.put("fileId", 9); // 与 fileIds 同传时以 fileIds 为准
+
+            ProjectTask created = stubTask(100L, 7L);
+            ArgumentCaptor<ProjectTaskService.TaskDraft> captor = ArgumentCaptor.forClass(ProjectTaskService.TaskDraft.class);
+            when(taskService.createTask(eq(7L), captor.capture(), eq(1L))).thenReturn(created);
+            when(taskService.toResponseMap(created)).thenReturn(responseMapOf(created));
+
+            assertEquals(0, controller.create(body, "sess").getBody().get("code"));
+            ProjectTaskService.TaskDraft d = captor.getValue();
+            assertEquals("HEARING", d.type());
+            assertEquals("HIGH", d.priority());
+            assertEquals("带原件", d.notes());
+            assertEquals(2L, d.assigneeId());
+            assertEquals(1440, d.remindBefore());
+            assertEquals(List.of(2391L, 2400L), d.fileIds());
+            assertEquals(null, d.dueTime());
+        }
+    }
+
+    @Test
+    void createRejectsMalformedNewFieldsBeforeService() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            allowWrite();
+
+            Map<String, Object> notArray = new LinkedHashMap<>();
+            notArray.put("projectId", 7);
+            notArray.put("title", "x");
+            notArray.put("dueDate", "2026-10-12");
+            notArray.put("fileIds", "2391");
+            assertThrows(IllegalArgumentException.class, () -> controller.create(notArray, "sess"));
+
+            Map<String, Object> typeNotText = new LinkedHashMap<>(notArray);
+            typeNotText.remove("fileIds");
+            typeNotText.put("type", 3);
+            assertThrows(IllegalArgumentException.class, () -> controller.create(typeNotText, "sess"));
+
+            verify(taskService, never()).createTask(any(), any(ProjectTaskService.TaskDraft.class), any());
+        }
+    }
+
+    @Test
+    void createSurfacesServiceValidationAsIllegalArgument() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            allowWrite();
+            when(taskService.createTask(eq(7L), any(ProjectTaskService.TaskDraft.class), eq(1L)))
+                    .thenThrow(new IllegalArgumentException("负责人不是该项目成员"));
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("projectId", 7);
+            body.put("title", "x");
+            body.put("dueDate", "2026-10-12");
+            body.put("assigneeId", 99);
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> controller.create(body, "sess"));
+            assertEquals("负责人不是该项目成员", e.getMessage());
+        }
+    }
+
+    @Test
+    void updatePassesNewFieldsThroughIncludingExplicitNulls() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            when(taskService.getTask(100L)).thenReturn(stubTask(100L, 7L));
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            allowWrite();
+
+            Map<String, Object> body = new java.util.HashMap<>();
+            body.put("fileIds", List.of(5, 6));
+            body.put("assigneeId", null);
+            body.put("type", "MEETING");
+            ProjectTask updated = stubTask(100L, 7L);
+            when(taskService.updateTask(100L, body)).thenReturn(updated);
+            when(taskService.toResponseMap(updated)).thenReturn(responseMapOf(updated));
+
+            assertEquals(0, controller.update(100L, body, "sess").getBody().get("code"));
+            verify(taskService).updateTask(eq(100L), eq(body));
         }
     }
 }

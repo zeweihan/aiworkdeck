@@ -114,4 +114,67 @@ class CalendarControllerTest {
             assertTrue(idsCaptor.getValue().containsAll(List.of(1L, 2L)));
         }
     }
+
+    // ==================== dev-board#895 summary ====================
+
+    @Test
+    void summaryRejectsAnonymous() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession(null)).thenReturn(null);
+            assertThrows(IllegalArgumentException.class, () -> controller.summary(null));
+            verify(taskService, never()).summarize(any());
+        }
+    }
+
+    @Test
+    void summaryCountsVisibleProjectsAndFillsNextDueProjectName() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectService.getUserProjects(1L)).thenReturn(List.of(project(1L, "金冠纾困"), project(2L, "另一个项目")));
+
+            Map<String, Object> next = new LinkedHashMap<>();
+            next.put("id", 10L);
+            next.put("projectId", 2L);
+            next.put("title", "开庭");
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("overdue", 1);
+            summary.put("today", 2);
+            summary.put("week", 3);
+            summary.put("nextDue", next);
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<List<Long>> idsCaptor = ArgumentCaptor.forClass(List.class);
+            when(taskService.summarize(idsCaptor.capture())).thenReturn(summary);
+
+            Map<String, Object> resp = controller.summary("sess").getBody();
+            assertEquals(0, resp.get("code"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) resp.get("data");
+            assertEquals(1, data.get("overdue"));
+            assertEquals(2, data.get("today"));
+            assertEquals(3, data.get("week"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nextDue = (Map<String, Object>) data.get("nextDue");
+            assertEquals("另一个项目", nextDue.get("projectName"));
+            assertTrue(idsCaptor.getValue().containsAll(List.of(1L, 2L)));
+        }
+    }
+
+    @Test
+    void summaryWithNoNextDueKeepsNull() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectService.getUserProjects(1L)).thenReturn(List.of());
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("overdue", 0);
+            summary.put("today", 0);
+            summary.put("week", 0);
+            summary.put("nextDue", null);
+            when(taskService.summarize(List.of())).thenReturn(summary);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) controller.summary("sess").getBody().get("data");
+            assertTrue(data.containsKey("nextDue"));
+            assertEquals(null, data.get("nextDue"));
+        }
+    }
 }

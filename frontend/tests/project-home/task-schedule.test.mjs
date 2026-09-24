@@ -25,9 +25,10 @@ test('e2e 锚点：根节点类名是 task-schedule', () => {
   assert.ok(SRC.includes('class="task-schedule"'))
 })
 
-test('props 契约', () => {
-  assert.match(SRC, /tasks:\s*\{\s*type:\s*Array,\s*default:\s*\(\)\s*=>\s*\[\]\s*\}/)
-  assert.match(SRC, /loading:\s*\{\s*type:\s*Boolean,\s*default:\s*false\s*\}/)
+test('props 契约：只收 projectId（数据自己读 taskStore），compact 给窄栏', () => {
+  assert.match(SRC, /projectId:\s*\{\s*type:\s*\[Number,\s*String\],\s*required:\s*true\s*\}/)
+  assert.match(SRC, /compact:\s*\{\s*type:\s*Boolean,\s*default:\s*false\s*\}/)
+  assert.ok(!/\btasks:\s*\{\s*type:\s*Array/.test(SRC), '不再由宿主传 tasks 数组')
 })
 
 test('空态文案存在（A 期唯一会渲染的分支）', () => {
@@ -35,16 +36,39 @@ test('空态文案存在（A 期唯一会渲染的分支）', () => {
   assert.ok(SRC.includes('noTasksTitle'), '组件要引用该 key')
 })
 
-test('列表分支已落地（B 期真数据：未完成/已完成两个分支，写操作 emit 给宿主）', () => {
-  // 2026-08-20 B 期落地（dev-board #52）：渲染分支从单一 tasks 拆成
-  // openTasks（按 dueDate 升序）+ doneTasks（开关折叠），字段契约来自真实的
-  // project_task 表（GET /api/projects/{id}/tasks）。
-  assert.match(SRC, /v-for="t in openTasks"/)
-  assert.match(SRC, /v-for="t in doneTasks"/)
-  assert.ok(SRC.includes('t.title'))
-  // 写操作不落在本组件：完成勾选/快捷创建一律 emit 给 ProjectHomePane
-  assert.ok(SRC.includes("$emit('toggle', t)"))
-  assert.ok(SRC.includes("'quick-create'"))
+test('读写统一走 taskStore，行用 TaskRow，按到期分组 + 已完成折叠（dev-board#898）', () => {
+  assert.ok(SRC.includes("from '@/utils/taskStore.js'"))
+  assert.ok(CODE.includes('taskStore.byProject[String(this.projectId)]'), '读项目缓存')
+  assert.ok(CODE.includes('loadProjectTasks(this.projectId'), '挂载/刷新时经 store 取数')
+  assert.ok(CODE.includes('updateTask(task.id, { status: nextStatus })'), '完成勾选直接调 store')
+  assert.ok(CODE.includes('deleteTask(task.id)'), '删除直接调 store')
+  assert.ok(!/from '@\/services\/api\.js'/.test(SRC), '不再自己调接口')
+  assert.ok(!CODE.includes('$emit(\'toggle\''), '写操作不再 emit 给宿主')
+  assert.match(SRC, /<TaskRow[\s\S]*?:show-project="false"[\s\S]*?:show-files="true"/)
+  assert.ok(CODE.includes('groupByDue(this.tasks)'))
+  for (const k of ['groupOverdue', 'groupToday', 'groupWeek', 'groupLater', 'groupDoneCount']) {
+    assert.ok(CODE.includes("'calendar." + k + "'"), '分组标题 ' + k)
+  }
+  assert.ok(CODE.includes('showDone && groups.done.length'), '已完成默认折叠')
+})
+
+test('「+ 添加」开统一弹窗并锁定本项目，不再内联两个输入框', () => {
+  assert.match(SRC, /<TaskDialog[\s\S]*?:project-id="projectId"/)
+  assert.ok(CODE.includes('@tap="openCreate"'))
+  assert.ok(!CODE.includes('quick-create'), '内联快捷创建已撤')
+  assert.ok(!CODE.includes('<input'), '不再有内联输入框')
+  assert.ok(!CODE.includes('AwdDatePicker'))
+})
+
+test('宿主 ProjectHomePane 不再持有 tasks 数组，只把刷新转给日程块', () => {
+  const PANE = stripComments(readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/ProjectHomePane.vue'),
+    'utf8'))
+  assert.match(PANE, /<TaskSchedule[\s\S]*?:project-id="projectId"/)
+  for (const gone of ['onTaskToggle', 'onTaskQuickCreate', 'loadTasks', 'getProjectTasks', 'tasksLoading']) {
+    assert.ok(!PANE.includes(gone), '宿主残留 ' + gone)
+  }
+  assert.ok(PANE.includes('this.$refs.taskSchedule.reload()'), 'refresh() 要让日程块强制重拉')
 })
 
 test('不混用 AI 步骤条的词', () => {

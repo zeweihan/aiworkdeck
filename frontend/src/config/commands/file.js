@@ -27,6 +27,14 @@ export const FILE_COMMANDS = [
   // 「打开最近」是动态子菜单，由 appMenuBridge 用 state.recent 现场生成，
   // 不在这张静态表里——它的条目数随用户走。占位靠 buildMenus 的 group 顺序。
 
+  // 新建事项（dev-board#899）：开工作台唯一的 TaskDialog，项目锁定为当前项目
+  {
+    id: 'task.new',
+    label: { zh: '新建事项…', en: 'New Task…' },
+    menu: 'file', group: 3,
+    when: ['workbench', 'project'],
+    run: 'wb:newTask',
+  },
   {
     id: 'file.importFiles',
     label: { zh: '导入文件到项目…', en: 'Import Files…' },

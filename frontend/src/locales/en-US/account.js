@@ -68,7 +68,7 @@ export default {
   todosGroupNoDate: 'No Date',
   todosGroupDone: 'Done',
   emptyTodosDesc: 'No to-dos yet',
-  emptyTodosHow: 'Add one from a project calendar, or right-click a file and choose Set Due Date, and it will show up here.',
+  emptyTodosHow: 'Click Add above, or right-click a file and choose "Add Task…", and it will show up here.',
   deleteTodoConfirm: 'Delete this to-do?',
   todoUpdateFailed: 'Update failed, please try again',
 

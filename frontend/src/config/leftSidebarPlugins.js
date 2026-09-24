@@ -160,8 +160,10 @@ export const LEFT_SIDEBAR_PLUGINS = [
     // 日历：内置功能（文件右键「设置截止日」/概览页日程块 落的同一张 project_task 表
     // 在这里再开一个入口），不做 requiresSkill 门控。放在数组末位——rail 上它紧挨着
     // 底部单独渲染的「版本记录」，视觉上与版本相邻。
+    // label 用「日程」（dev-board#899：产品口径里「日程」= 日历视图、「事项」= 条目）；
+    // config.sidebar.calendar 键保留给旧引用，不再在 rail 上显示。
     key: 'calendar',
-    label: t('config.sidebar.calendar'),
+    label: t('calendar.railSchedule'),
     svgPaths: [
       { d: 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z' },
       { d: 'M16 2v4' },
