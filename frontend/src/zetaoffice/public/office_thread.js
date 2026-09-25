@@ -837,6 +837,62 @@ const CHROME_URLS = {
   ],
 };
 
+// 「显示」侧也永远不放出来的工具栏（BUG-33 / v0.49.0 真机 C4 观察 8）：fullscreenbar 就是
+// 左上角那条只有一个「全屏」按钮的浮条——顶层窗口被 ensureFullScreen() 钉成全屏，引擎认为
+// 该给用户一个退出全屏的把手；点它等于把画布退回带标题栏的小窗（见 ensureFullScreen 注释）。
+// 原生菜单逃生开关要的是经典菜单栏和两排工具栏，不是这条。它仍留在 CHROME_URLS 里，藏的一侧照旧 create+hide。
+const CHROME_NEVER_SHOWN = ['private:resource/toolbar/fullscreenbar'];
+
+// NATIVE_MENU_BLOCKED（下面 pruneMenuContainer 要用）定义在「Native comment requests」段里：
+// 派发拦截器也读它，而那一段会被单测整段抠出来单独跑（tests/revision-view/native-comment-interceptor.test.mjs）。
+
+// 菜单条目是 PropertyValue 序列：CommandURL / Label / Type（1 = 分隔线）/ ItemDescriptorContainer（子菜单）。
+function menuEntryProp(entry, name) {
+  const props = zetajs.fromAny(entry) || [];
+  for (let i = 0; i < props.length; i++) {
+    if (props[i] && props[i].Name === name) return zetajs.fromAny(props[i].Value);
+  }
+  return null;
+}
+
+// 递归删掉 NATIVE_MENU_BLOCKED 里的条目；删过东西的那一层顺手收拾开头、结尾与连续的分隔线。返回删掉的条数。
+function pruneMenuContainer(container) {
+  let removed = 0, here = 0;
+  for (let i = container.getCount() - 1; i >= 0; i--) {
+    let entry = null;
+    try { entry = container.getByIndex(i); } catch (e) { continue; }
+    const cmd = String(menuEntryProp(entry, 'CommandURL') || '');
+    if (NATIVE_MENU_BLOCKED.indexOf(cmd) >= 0) {
+      try { container.removeByIndex(i); here++; } catch (e) {}
+      continue;
+    }
+    const sub = menuEntryProp(entry, 'ItemDescriptorContainer');
+    if (sub) { try { removed += pruneMenuContainer(sub); } catch (e) {} }
+  }
+  if (here > 0) {
+    const isSep = (i) => { try { return Number(menuEntryProp(container.getByIndex(i), 'Type')) === 1; } catch (e) { return false; } };
+    for (let i = container.getCount() - 1; i >= 0; i--) {
+      const last = i === container.getCount() - 1;
+      if (isSep(i) && (i === 0 || last || isSep(i + 1))) { try { container.removeByIndex(i); } catch (e) {} }
+    }
+  }
+  return removed + here;
+}
+
+// 裁的是本 frame 菜单栏元素自己的一份 settings（XUIElementSettings），不动模块级 UI 配置。
+// 菜单栏元素还没创建、或引擎不接这套接口时静默返回 0——藏不成顶多多几条菜单，不能把 set_chrome 带崩。
+function pruneNativeMenu(lm) {
+  try {
+    const el = lm.getElement(CHROME_URLS.menubar);
+    if (!el) return 0;
+    const settings = el.getSettings(true);
+    if (!settings) return 0;
+    const n = pruneMenuContainer(settings);
+    if (n > 0) el.setSettings(settings);
+    return n;
+  } catch (e) { return 0; }
+}
+
 // Desktop-keyboard parity set for the IME overlay's ui_command action — an
 // ALLOWLIST map (name -> .uno: slot), deliberately NOT a raw dispatch
 // passthrough. Toggles (bold/italic/underline) are the engine's own, so
@@ -2575,6 +2631,12 @@ function withRecordChangesOff(fn) {
 }
 
 // ---- Native comment requests ---------------------------------------------
+// 原生菜单里不该给律师看到的引擎自带项（BUG-33 / v0.49.0 真机 C4 观察 3）：
+// 「退出 ZetaOffice (Ctrl+Q)」会把 webview 里的引擎整个关掉，「打开远程文档」「在浏览器中预览」
+// 在本 WASM 构建里没有可用的落点，且都把引擎品牌露给用户。两道闸：pruneNativeMenu 从本 frame
+// 的菜单栏里删掉条目；installReviewCommentInterceptor 在派发层把它们拦成 null（快捷键同样失效，
+// 菜单没裁掉时也只是灰掉）。
+const NATIVE_MENU_BLOCKED = ['.uno:Quit', '.uno:OpenRemote', '.uno:WebHtml'];
 // Native InsertAnnotation without Text focuses its own editor. The external
 // gutter hides that editor, so open the existing host form BEFORE insertion.
 let reviewCommentInterceptor = null;
@@ -2590,6 +2652,8 @@ function installReviewCommentInterceptor(controller) {
   try {
     state.frame = controller.getFrame();
     const query = function (url, target, flags) {
+      // 引擎自带的「退出 / 打开远程文档 / 在浏览器中预览」一律没有派发对象（BUG-33）。
+      if (NATIVE_MENU_BLOCKED.indexOf(url.Complete) >= 0) return null;
       const native = state.slave ? state.slave.queryDispatch(url, target, flags) : null;
       // Writer's own Ctrl+Z (canvas focused) follows the worker's undo/redo rule
       // (see undoStep): the inline detour only for a remembered resolution.
@@ -2637,7 +2701,7 @@ function installReviewCommentInterceptor(controller) {
     };
     state.interceptor = zetajs.unoObject([css.frame.XDispatchProviderInterceptor, css.frame.XInterceptorInfo], {
       // Avoid a JS callback for every menu/toolbar command queried by Writer.
-      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo', '.uno:ExportDirectToPDF', '.uno:ExportToPDF']; },
+      getInterceptedURLs() { return ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo', '.uno:ExportDirectToPDF', '.uno:ExportToPDF'].concat(NATIVE_MENU_BLOCKED); },
       queryDispatch: query,
       queryDispatches(requests) {
         return requests.map(function (r) { return query(r.FeatureURL, r.FrameName, r.SearchFlags); });
@@ -4312,12 +4376,16 @@ const EXEC = {
       try { out.applied.all = !!lm.isVisible(); } catch (e) {}
     }
     if (req.menubar != null) out.applied.menubar = setOne(CHROME_URLS.menubar, !!req.menubar);
+    // 放出菜单栏时把引擎自带的「退出 / 打开远程文档 / 在浏览器中预览」裁掉（BUG-33）。
+    // load_document 之后菜单栏会被重建，宿主的 reapplyChrome 会再走到这里裁一次。
+    if (req.menubar) out.applied.menuPruned = pruneNativeMenu(lm);
     if (req.statusbar != null) out.applied.statusbar = setOne(CHROME_URLS.statusbar, !!req.statusbar);
     if (req.toolbars != null) {
       const states = {};
       for (let i = 0; i < CHROME_URLS.toolbars.length; i++) {
         const u = CHROME_URLS.toolbars[i];
-        states[u.slice(u.lastIndexOf('/') + 1)] = setOne(u, !!req.toolbars);
+        // fullscreenbar 永不放出来（「全屏」浮条，见 CHROME_NEVER_SHOWN）。
+        states[u.slice(u.lastIndexOf('/') + 1)] = setOne(u, !!req.toolbars && CHROME_NEVER_SHOWN.indexOf(u) < 0);
       }
       out.applied.toolbars = states;
     }

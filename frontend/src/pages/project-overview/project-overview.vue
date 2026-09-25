@@ -3337,6 +3337,10 @@ export default {
       uni.$off('awd:open-settings', this._onOpenSettings)
       this._onOpenSettings = null
     }
+    if (this._onFilesChangedSyncTabs) {
+      uni.$off('awd:files-changed', this._onFilesChangedSyncTabs)
+      this._onFilesChangedSyncTabs = null
+    }
     if (this._onEntitlementsChanged) {
       uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
       this._onEntitlementsChanged = null
@@ -3713,6 +3717,15 @@ export default {
       this.openSettingsTab(opts || {})
     }
     uni.$on('awd:open-settings', this._onOpenSettings)
+    // 外部改名（Finder 里改已打开的文档，BUG-14 / v0.49.0 C4-03）：后端对账原地改了那一行
+    // 的名字（id 不变），但这条路不经过应用内的 file-renamed 广播。文件树每次重载（聚焦兜底、
+    // SSE refresh_files、用户增删改）都经 awd:files-changed 汇聚，重载完按 id 把已开标签、
+    // 状态栏与窗口标题对齐到新名。只让活跃实例对齐（页面栈多实例地雷）。
+    this._onFilesChangedSyncTabs = () => {
+      if (!this.isActiveOverviewInstance()) return
+      this.syncOpenTabsFromFileTree()
+    }
+    uni.$on('awd:files-changed', this._onFilesChangedSyncTabs)
     this.setupResponsiveListener()
     // IDE 化：窗口重新聚焦时刷新文件树——外部改动（Finder 增删改）都发生在
     // 用户切出去的时候，后端 watcher 已把数据库对齐，聚焦拉一次即可见。

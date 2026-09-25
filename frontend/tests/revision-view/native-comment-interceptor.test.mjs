@@ -65,7 +65,20 @@ test('comments with supplied text and unrelated commands retain native dispatch 
   assert.deepEqual(e.calls, [{ command: '.uno:InsertAnnotation', args }, { command: '.uno:Bold', args: [] }])
   assert.deepEqual(e.status, [['add', listener, url], ['remove', listener, url]])
   assert.equal(e.events.length, 0)
-  assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo', '.uno:ExportDirectToPDF', '.uno:ExportToPDF'])
+  assert.deepEqual(Array.from(e.registrations[0].getInterceptedURLs()), ['.uno:InsertAnnotation', '.uno:Undo', '.uno:Redo', '.uno:ExportDirectToPDF', '.uno:ExportToPDF',
+    '.uno:Quit', '.uno:OpenRemote', '.uno:WebHtml'])
+})
+
+// BUG-33：引擎自带的「退出 ZetaOffice / 打开远程文档 / 在浏览器中预览」在派发层没有派发对象
+// （菜单项灰掉、Ctrl+Q 失效），且绝不落到原生派发。
+test('engine-only menu commands (quit / open remote / preview in browser) get no dispatch at all', () => {
+  const e = environment(); e.install()
+  for (const command of ['.uno:Quit', '.uno:OpenRemote', '.uno:WebHtml']) {
+    assert.equal(e.query(command), null, command)
+  }
+  assert.deepEqual(e.registrations[0].queryDispatches([{ FeatureURL: { Complete: '.uno:Quit' } }, { FeatureURL: { Complete: '.uno:Bold' } }])
+    .map(d => d === null), [true, false])
+  assert.equal(e.calls.length, 0)
 })
 
 // dev-board#886：原生「直接导出 PDF / 导出为 PDF…」在 WASM 里起不来文件选择器，派发静默结束。

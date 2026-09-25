@@ -362,6 +362,24 @@ public class FileController {
                 return ResponseEntity.status(404).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("文件不存在", "File not found")));
             }
 
+            // 编辑器保存带 mustExist=1（它装载的就是磁盘上已有的这份文件，BUG-14 / v0.49.0 C4-03）：
+            // 文件在 Finder 里被改名 / 移走后，这一行要么已进回收站、要么还指着旧路径；下面的
+            // save() 是 createDirectories + REPLACE_EXISTING，会在旧路径把旧文件名重新建出来——
+            // 磁盘上一新一旧两份，改名那份停在旧内容。这里一律 409，由编辑器提示「已被移动或改名」
+            // 并保留未保存的改动；对账把这一行改指到新路径之后，重试就会落到新文件上。
+            // 不带参数的上传（新建文件先建行再传第一笔字节、录音分片）照旧，不受影响。
+            if ("1".equals(request.getParameter("mustExist")) && (offset == null || offset == 0)) {
+                ProjectFile target = projectFileOpt.get();
+                boolean gone = Boolean.TRUE.equals(target.getIsDeleted())
+                        || (StringUtils.hasText(target.getFilePath()) && !getStorageService().exists(target.getFilePath()));
+                if (gone) {
+                    log.warn("拒绝保存到已不存在的路径（外部改名/移动/删除）: fileId={}, path={}", fileId, target.getFilePath());
+                    return ResponseEntity.status(409).body(Map.of("code", -1, "reason", "FILE_MOVED",
+                            "message", com.checkba.service.LangText.of("文件已被移动、改名或删除，本次改动尚未保存",
+                                    "The file was moved, renamed or deleted; your changes have not been saved")));
+                }
+            }
+
             String contentType = request.getContentType();
             log.info("文件上传请求: fileId={}, offset={}, contentType={}, multipartFile={}", 
                 fileId, offset, contentType, multipartFile != null ? multipartFile.getOriginalFilename() : "null");

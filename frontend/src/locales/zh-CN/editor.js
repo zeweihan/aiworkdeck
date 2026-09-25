@@ -16,6 +16,10 @@ export default {
   pdfExporting: '正在导出 PDF…',
   pdfExported: '已导出 PDF：{name}',
   pdfExportFailed: 'PDF 导出失败：{reason}',
+  // 文件已被外部移动 / 改名、重试保存落不下去时的出口（BUG-14）
+  saveCopyAs: '另存为…',
+  savedCopyAs: '已另存：{name}（项目里的这份仍未更新）',
+  saveCopyAsFailed: '另存失败：{reason}',
 
   status: {
     booting: '启动中…',
@@ -33,6 +37,7 @@ export default {
     reloadFailed: '重新加载失败，内容已过期',
     saving: '保存中…',
     saveFailed: '保存失败',
+    movedSaveFailed: '文件已被移动或改名，改动尚未保存',
     desktopOnly: '仅桌面版可用',
   },
   boot: {

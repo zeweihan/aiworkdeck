@@ -214,7 +214,11 @@ public class LocalProjectService {
         }
         Long ownerId = project.getUserId();
 
-        ImportStats stats = importFolder(projectId, root, ownerId);
+        // 外部改名 / 移动的旧身份候选：库里活着、磁盘上已经不在的文件行（BUG-14）。
+        // 导入时遇到「没有对应行的新文件」先拿它来认领，认上了就原地改这一行（id 不变），
+        // 而不是「新建一行 + 旧行进回收站」——已打开的编辑器按 id 保存，id 一换就写回旧路径。
+        Map<Long, ProjectFile> vanished = vanishedFileRows(projectId);
+        ImportStats stats = importFolder(projectId, root, ownerId, vanished);
         int changed = stats.changed;
         if (stats.truncated) {
             // 此前 stats.truncated 只在 openLocalFolder 那侧被读取，watcher 触发的
@@ -426,6 +430,10 @@ public class LocalProjectService {
      *   等一并覆盖），以及 Office 打开文档时落在同目录的 {@code ~$} 锁文件。
      */
     private ImportStats importFolder(Long projectId, Path root, Long userId) {
+        return importFolder(projectId, root, userId, java.util.Collections.emptyMap());
+    }
+
+    private ImportStats importFolder(Long projectId, Path root, Long userId, Map<Long, ProjectFile> vanished) {
         ImportStats stats = new ImportStats();
         Map<Path, Long> dirIds = new HashMap<>();
         dirIds.put(root, null);
@@ -523,6 +531,22 @@ public class LocalProjectService {
                             return FileVisitResult.CONTINUE; // 无变化不动行
                         }
                     }
+                    if (row == null) {
+                        ProjectFile moved = claimMovedRow(vanished, parentId, fileName, attrs.size());
+                        if (moved != null) {
+                            try {
+                                ProjectFile saved = projectFileService.relinkExternallyMoved(
+                                        moved.getId(), parentId, fileName, logicalPath, userId);
+                                vanished.remove(moved.getId());
+                                rowIndex.put(rowKey(parentId, fileName), saved);
+                                stats.imported++;
+                                stats.changed++;
+                                return FileVisitResult.CONTINUE;
+                            } catch (Exception e) {
+                                log.warn("外部改名对齐失败，按新文件导入: {} ({})", file, e.getMessage());
+                            }
+                        }
+                    }
                     int dot = fileName.lastIndexOf('.');
                     String ext = dot > 0 ? fileName.substring(dot + 1).toLowerCase() : "";
                     try {
@@ -547,6 +571,49 @@ public class LocalProjectService {
             log.warn("扫描文件夹失败（已导入 {} 项）: {}", stats.imported, e.getMessage());
         }
         return stats;
+    }
+
+    /** 库里活着、按 filePath 在磁盘上已找不到的文件行（按 id 索引，可变：认领后移除）。 */
+    private Map<Long, ProjectFile> vanishedFileRows(Long projectId) {
+        Map<Long, ProjectFile> out = new HashMap<>();
+        for (ProjectFile f : projectFileRepository.findByProjectId(projectId)) {
+            if (Boolean.TRUE.equals(f.getIsDeleted()) || Boolean.TRUE.equals(f.getIsFolder())) continue;
+            if (!StringUtils.hasText(f.getFilePath())) continue;
+            try {
+                if (!Files.exists(storageResolver.resolve(f.getFilePath()))) out.put(f.getId(), f);
+            } catch (Exception ignored) {
+                // 路径异常的行不参与认领
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 给一个「没有对应行的新文件」找它的旧身份：大小相同、扩展名相同，且要么同目录
+     * （改名）、要么同名（移到别的目录）。<b>恰好一个候选才认</b>——认不准就退回
+     * 「新建 + 旧行进回收站」的旧语义，宁可多一条回收站记录也不把两份文件认成一份。
+     * （不存 inode：库里没有这一列，而旧文件已经不在，事后也 stat 不到。）
+     */
+    static ProjectFile claimMovedRow(Map<Long, ProjectFile> vanished, Long parentId, String fileName, long size) {
+        if (vanished == null || vanished.isEmpty()) return null;
+        String ext = extensionOf(fileName);
+        ProjectFile hit = null;
+        for (ProjectFile f : vanished.values()) {
+            if (f.getFileSize() == null || f.getFileSize() != size) continue;
+            if (!ext.equals(extensionOf(f.getName()))) continue;
+            boolean sameDir = java.util.Objects.equals(f.getParentId(), parentId);
+            boolean sameName = fileName.equals(f.getName());
+            if (!sameDir && !sameName) continue;
+            if (hit != null) return null; // 不止一个候选：有歧义，不认
+            hit = f;
+        }
+        return hit;
+    }
+
+    private static String extensionOf(String name) {
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(dot + 1).toLowerCase() : "";
     }
 
     private static String rowKey(Long parentId, String name) {
