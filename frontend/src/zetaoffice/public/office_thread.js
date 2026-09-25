@@ -1854,6 +1854,51 @@ function isImpressDoc() {
   catch (e) { return false; }
 }
 const NOT_PRESENTATION_MSG = '当前打开的不是演示文稿：slide_* 原语仅对 pptx/ppt/odp 生效。Word 文档请用 doc_* 原语，表格请用 sheet_* 原语；要操作演示文稿请先用 doc_open_file 打开它。';
+
+// ---- 表格 / 演示文稿的键盘通道（v0.49.0 BUG-05）-----------------------------
+// IME 覆盖层把按键转成 insert_at_cursor / insert_paragraph / move_cursor /
+// delete_* / tab_key / ui_command，这些原语都从 Writer 的视图光标起步；Calc 与
+// Impress 的控制器没有 getViewCursor（真引擎：「ctrl.getViewCursor is not a
+// function」），命令被 execCommand 吞成 success:false——xlsx 里打字没反应。
+// 这两类文档改由引擎自己的按键处理接手：XToolkitRobot 把按键投递给文档组件窗口，
+// VCL 交给该帧的焦点子窗（单元格网格 / 公式栏 / 文本框），编辑态、公式栏同步、
+// 提交与撤销都是引擎原生语义。投递是异步的（进 VCL 事件队列，本条命令返回后才
+// 处理），先后顺序保持。真引擎实测（r5，无头）：
+//   · 回车在 Calc 里提交并下移（用户点过格子之后；唯独紧跟在 UNO select() 之后
+//     只提交不移动，引擎自己的行为，不补「下」——补了用户点格子后就会跳两格），
+//     Impress 文本框里回车就是换段。
+//   · 非编辑态的 Backspace 不弹「删除内容」对话框，Delete 直接清格；而原先的
+//     .uno:SwBackspace 在表格里是哑弹、.uno:Delete 在 Calc 是那个对话框。
+//   · Calc 非编辑态的 Esc 会把顶层帧退出全屏（同 .uno:Escape，见 ensureFullScreen），
+//     编辑态的 Esc 取消输入；worker 分不清两态，所以 Esc 之后排一次全屏复位。
+// Writer 一律不走这里。
+function nativeKeyDoc() { return isCalcDoc() || isImpressDoc(); }
+const NATIVE_ARROWS = { left: 'LEFT', right: 'RIGHT', up: 'UP', down: 'DOWN' };
+const NATIVE_UI_KEYS = { line_start: 'HOME', line_end: 'END', line_start_sel: 'HOME', line_end_sel: 'END', page_up: 'PAGEUP', page_down: 'PAGEDOWN', escape: 'ESCAPE' };
+let keyRobot = null;
+// keys: [{key:'RETURN'|..., shift, ch}]；key 缺省 = 纯字符（KeyCode 0）。
+function postNativeKeys(keys) {
+  if (!keyRobot) keyRobot = css.awt.Toolkit.create(context);
+  const source = ctrl.getFrame().getComponentWindow();
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const ev = new css.awt.KeyEvent({ Source: source, KeyCode: k.key ? css.awt.Key[k.key] : 0,
+      KeyChar: k.ch || String.fromCharCode(0), Modifiers: k.shift ? css.awt.KeyModifier.SHIFT : 0, KeyFunc: 0 });
+    keyRobot.keyPress(ev);
+    keyRobot.keyRelease(ev);
+  }
+  return { success: true, native: true, keys: keys.length };
+}
+// 全屏标志在引擎处理完投递的 Esc 之后才翻（异步，时点不定），所以 1.5 秒内每
+// 100ms 看一眼，翻了就补回（Calc 实测只翻标志、帧尺寸不变，补标志即复原）。
+function restoreFullScreenSoon() {
+  let left = 15;
+  const tick = function () {
+    try { if (!ctrl.getFrame().getContainerWindow().FullScreen) ensureFullScreen(); } catch (e) {}
+    if (--left > 0) setTimeout(tick, 100);
+  };
+  setTimeout(tick, 100);
+}
 // 当前文档内核类型——get_doc_kind 诊断 action 与 load_document 返回值共用，宿主
 // 据此按 kind 隐藏「审阅」按钮/ReviewPanel（Calc/Impress 都没有修订机制）。
 function docKindOf() {
@@ -3599,6 +3644,21 @@ const EXEC = {
   // 带 markdown 标记的文本走剥离转换（**→真粗体、行首 # 剥掉），字体沿用现场格式；
   // 纯文本走原路径不动。
   insert_at_cursor(p) {
+    if (nativeKeyDoc()) {
+      const text = String(p.text || '');
+      // Array.from 按码点切分（split('') 按 UTF-16 code unit，会把 emoji/扩展
+      // B 区汉字这类代理对拆成两个孤立半字，逐个投递引擎会收到非法字符）。
+      // '\n' 不能当普通字符投递——KeyChar 是 \n 的 KeyEvent 被引擎静默吞掉
+      // （success:true 但内容没变），改投 RETURN 键（同 insert_paragraph）；
+      // Calc 里 RETURN 会提交当前格并下移一格，所以插入的多段文本在 Calc 里
+      // 会落进连续多个格子而不是同一格的多行——这是引擎原生行为，不是 bug。
+      const keys = [];
+      Array.from(text).forEach(function (ch) {
+        if (ch === '\n') keys.push({ key: 'RETURN', ch: '\r' });
+        else keys.push({ ch: ch });
+      });
+      return Object.assign(postNativeKeys(keys), { inserted: text });
+    }
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
     const text = String(p.text || '');
@@ -3899,6 +3959,7 @@ const EXEC = {
   // the IME overlay routes here — the overlay's single-line <input> can't make a
   // newline itself). Append, leave cursor collapsed after the break.
   insert_paragraph() {
+    if (nativeKeyDoc()) return postNativeKeys([{ key: 'RETURN', ch: '\r' }]);
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
     const xText = vc.getText();   // 同 insertTextAtCursor：单元格里必须用光标自己的 XText
@@ -3912,9 +3973,13 @@ const EXEC = {
   // up/down are visual lines (XViewCursor.goUp/goDown). extend=true (Shift+arrow)
   // grows the selection. No content change, so no RecordChanges.
   move_cursor(p) {
-    const vc = ctrl.getViewCursor();
     const dir = String(p.dir || '');
     const ex = !!p.extend;
+    if (nativeKeyDoc()) {
+      if (!NATIVE_ARROWS[dir]) return { success: false, message: 'move_cursor: unsupported dir: ' + dir };
+      return Object.assign(postNativeKeys([{ key: NATIVE_ARROWS[dir], shift: ex }]), { dir: dir, extend: ex });
+    }
+    const vc = ctrl.getViewCursor();
     switch (dir) {
       case 'left': vc.goLeft(1, ex); break;
       case 'right': vc.goRight(1, ex); break;
@@ -3933,10 +3998,12 @@ const EXEC = {
   // verified). The engine dispatch owns revision semantics: mark + step past for
   // original text, hard-delete for own unaccepted inserts, selection-aware.
   delete_backward() {
+    if (nativeKeyDoc()) return postNativeKeys([{ key: 'BACKSPACE', ch: '\b' }]);
     dispatchUno('.uno:SwBackspace');
     return { success: true };
   },
   delete_forward() {
+    if (nativeKeyDoc()) return postNativeKeys([{ key: 'DELETE', ch: String.fromCharCode(127) }]);
     dispatchUno('.uno:Delete');
     return { success: true };
   },
@@ -3947,6 +4014,7 @@ const EXEC = {
   // vc.getText() 之后它会真插进去，修订态下还多一条修订）。
   tab_key(p) {
     const shift = !!(p && p.shift);
+    if (nativeKeyDoc()) return Object.assign(postNativeKeys([{ key: 'TAB', ch: '\t', shift: shift }]), { shift: shift });
     const vc = ctrl.getViewCursor();
     let cell = null;
     try { cell = vc.getPropertyValue('Cell'); } catch (e) {}
@@ -3962,6 +4030,11 @@ const EXEC = {
   // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
   ui_command(p) {
     const name = String(p.name || '');
+    if (NATIVE_UI_KEYS[name] && nativeKeyDoc()) {
+      const r = postNativeKeys([{ key: NATIVE_UI_KEYS[name], shift: /_sel$/.test(name) }]);
+      if (name === 'escape' && isCalcDoc()) restoreFullScreenSoon();
+      return Object.assign(r, { name: name });
+    }
     if (name === 'escape') return deselect();
     const url = UI_COMMANDS[name];
     if (!url) return { success: false, message: 'ui_command not allowed: ' + (p.name || '') };
