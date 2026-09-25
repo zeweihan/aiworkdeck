@@ -3624,7 +3624,8 @@ export default {
   onHide() {
     // 菜单栏：本页被盖住（去了个人中心/设置页）就交出去。实例还活着，
     // onShow 会重新接管——但期间菜单不能继续亮着工作台那一堆条目。
-    this.unregisterMenuCommands()
+    // 窗口最小化/被遮挡/锁屏也会触发 onHide，那时本页仍是当前页，不交（见 menuCommands.js）。
+    this.releaseMenuOnHide()
     this.stopActivityTracking()
 
     // Desktop：离开工作区页面（如去个人中心）必须隐藏 BrowserView

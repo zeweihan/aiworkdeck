@@ -28,13 +28,24 @@ function guessFromSystem() {
   return loc.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US'
 }
 
-function getAppLanguage() {
-  if (current) return current
+/**
+ * 只读落盘的那份语言，读不到（首启无文件 / 文件坏了）返回 null。**不猜、不写缓存。**
+ *
+ * 专给 app ready 之前用（main.js 的 Chromium --lang 开关，v0.49.0 BUG-28）：ready 之前
+ * app.getLocale() 返回空串，走 getAppLanguage() 会把「猜不出 → en-US」写进 current
+ * 缓存，中文系统的新装机整个界面（菜单/原生对话框）因此变成英文。
+ */
+function getPersistedAppLanguage() {
   try {
     const parsed = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
-    if (SUPPORTED.includes(parsed && parsed.language)) current = parsed.language
+    if (SUPPORTED.includes(parsed && parsed.language)) return parsed.language
   } catch (e) { /* 首启无文件 */ }
-  if (!current) current = guessFromSystem()
+  return null
+}
+
+function getAppLanguage() {
+  if (current) return current
+  current = getPersistedAppLanguage() || guessFromSystem()
   return current
 }
 
@@ -62,4 +73,4 @@ function t(pair) {
   return getAppLanguage() === 'en-US' ? pair.en : pair.zh
 }
 
-module.exports = { getAppLanguage, setAppLanguage, onAppLanguageChange, t, SUPPORTED }
+module.exports = { getAppLanguage, getPersistedAppLanguage, setAppLanguage, onAppLanguageChange, t, SUPPORTED }

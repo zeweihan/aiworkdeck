@@ -174,3 +174,36 @@ test('英文语境下取英文文案', () => {
   const en = buildMenuPayload({ page: 'workbench', flags: {} }, 'en-US')
   assert.equal(en.menus.find((m) => m.id === 'document').label, 'Document')
 })
+
+// ---------- v0.49.0 BUG-30 / BUG-34 ----------
+
+test('BUG-34：「文件」菜单补了「导出为 PDF…」，只在文档标签激活时可用', () => {
+  const cmd = COMMAND_BY_ID.get('file.exportPdf')
+  assert.ok(cmd, '缺少 file.exportPdf 命令——应用自己的「文件」菜单原来没有导出/保存项')
+  assert.equal(cmd.menu, 'file')
+  assert.deepEqual(cmd.when, ['workbench', 'docTab'])
+  const on = isEnabled(cmd, { page: 'workbench', flags: { isDocTab: true } })
+  const off = isEnabled(cmd, { page: 'workbench', flags: { isDocTab: false } })
+  assert.equal(on, true)
+  assert.equal(off, false)
+})
+
+test('BUG-30：buildMenuPayload 顶层带 flags.isDocTab，供主进程判断撤销/重做要不要转发', () => {
+  const on = buildMenuPayload({ page: 'workbench', flags: { isDocTab: true } }, 'zh-CN')
+  const off = buildMenuPayload({ page: 'workbench', flags: { isDocTab: false } }, 'zh-CN')
+  assert.equal(on.flags.isDocTab, true)
+  assert.equal(off.flags.isDocTab, false)
+  assert.equal(buildMenuPayload({ page: 'workbench' }, 'zh-CN').flags.isDocTab, false, '没给 flags 时不能报 true')
+})
+
+// ---------- v0.49.0 BUG-52 ----------
+
+test('BUG-52：draw.io 标签（真实文件 id，tabType 为空）激活时「文件>关闭标签」不置灰', () => {
+  const cmd = COMMAND_BY_ID.get('file.closeTab')
+  assert.ok(cmd, '缺少 file.closeTab 命令')
+  // hasTab 只看「有没有活跃标签」（activeFileIdLeft/Right 是否有值），不看
+  // fileType/tabType——draw.io 是真实文件（fileType:'drawio'，tabType 为空），
+  // 走的是跟 docx/xlsx 完全一样的 hasTab 判据，不该被单独挡下。
+  const drawioActive = isEnabled(cmd, { page: 'workbench', flags: { hasTab: true } })
+  assert.equal(drawioActive, true, 'draw.io 标签激活（hasTab:true）时关闭标签应可用')
+})

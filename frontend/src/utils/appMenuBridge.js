@@ -19,6 +19,7 @@ import { host, isDesktopHost } from '@/services/host.js'
 import { COMMAND_BY_ID, COMMANDS, buildMenuPayload, isEnabled, labelOf } from '@/config/commands/index.js'
 import { getAppLanguage, setAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
+import { runMenuUndoRedo } from '@/utils/undoRouting.js'
 
 /** 工作台命令的事件名。project-overview 侧监听，自带活跃实例守卫。 */
 export const COMMAND_EVENT = 'awd:command'
@@ -202,6 +203,18 @@ async function handleAction(action) {
   }
   if (action.startsWith('view.open:')) {
     uni.$emit(COMMAND_EVENT, { id: action, run: 'wb:openView', arg: action.slice('view.open:'.length) })
+    return
+  }
+  // BUG-30：菜单栏「编辑 > 撤销/重做」在文档标签激活时转发过来的动作（见
+  // desktop/main/app-menu.js 的 routeUndoRedo）。不进 COMMAND_BY_ID——它不是一条固定
+  // 下发的菜单项。按焦点分流（utils/undoRouting.js）：输入框里就撤销输入框，焦点在
+  // 编辑器画布上才转给工作台走跟工具栏撤销同一条 .uno: 通道。
+  if (action === 'edit.undo' || action === 'edit.redo') {
+    const verb = action.slice('edit.'.length)
+    runMenuUndoRedo(verb, {
+      docTab: !!(state.flags && state.flags.isDocTab),
+      runEditor: () => uni.$emit(COMMAND_EVENT, { id: action, run: 'wb:' + verb, verb }),
+    })
     return
   }
   // Dock/访达「打开方式」进来的路径：主进程直发，不是命令表里的条目

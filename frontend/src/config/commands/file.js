@@ -57,6 +57,16 @@ export const FILE_COMMANDS = [
     run: 'wb:shareFile',
   },
 
+  // 导出为 PDF…（dev-board#886/BUG-34）：应用自己的「文件」菜单原来没有导出/
+  // 保存项，只能靠工具栏 PDF 图标或引擎自己的原生菜单——薄转发到已经接通的
+  // LibreOfficeEditor.exportPdf()，跟工具栏那颗图标走同一条代码路径。
+  {
+    id: 'file.exportPdf',
+    label: { zh: '导出为 PDF…', en: 'Export as PDF…' },
+    menu: 'file', group: 4,
+    when: ['workbench', 'docTab'],
+    run: 'wb:exportPdf',
+  },
   {
     id: 'file.closeTab',
     label: { zh: '关闭标签', en: 'Close Tab' },
