@@ -104,3 +104,16 @@ test('文案：两套语言键成对', async () => {
   assert.ok(keys.length >= 8, `价格文案键太少: ${keys}`)
   for (const k of keys) assert.ok(typeof en[k] === 'string' && en[k], `en-US 缺 ${k}`)
 })
+
+// BUG-43（v0.49.0 真机测试 C5 观察）：自备 Key 档的脚注只写「由你自己的 OpenRouter 账户按此计费」，
+// 看着像官方版在按美元收钱。自备 Key 是旧配置（官方口径是 Credits 统一结算，见 admin.legacyProviderBody），
+// 美元标价对这档用户仍是事实、不能折成 Credits（那是报一个他不会付的价），但脚注要说清是旧设置、
+// 以及切回官方通道后按 Credits 扣费。
+test('自备 Key 档脚注：点明是旧的自备 Key 设置，并说明官方通道按 Credits 扣费', async () => {
+  const zh = (await import('../../src/locales/zh-CN/chat.js')).default
+  const en = (await import('../../src/locales/en-US/chat.js')).default
+  assert.match(zh.modelPriceListByok, /旧的自备 Key/)
+  assert.match(zh.modelPriceListByok, /Credits/)
+  assert.match(en.modelPriceListByok, /legacy own-key/i)
+  assert.match(en.modelPriceListByok, /Credits/)
+})

@@ -69,11 +69,19 @@ const clientInstanceId = () => {
 // 模型偶尔把整段协议裹进 ```xml。剥离只对流式正文做，历史回灌不做。
 // PARTIAL_FENCE = 结尾那截「再来几个字符就可能是完整围栏」的文本（``` 或 ```xml 的前缀）。
 const PARTIAL_FENCE = /`{1,3}[A-Za-z]*$/
-const stripCodeFences = (text) => text
-    .replace(/^```(?:xml|html|markdown)?\s*\n?/gm, '')
-    .replace(/\n?```\s*$/gm, '')
-    .replace(/```(?:xml|html|markdown)?\s*\n/g, '')
-    .replace(/\n```/g, '')
+// 只剥「裹协议的外壳」：裸 ``` 或 ```xml/html/markdown。正文里真正的代码块（```json、```js……）
+// 连同它的收尾 ``` 原样留着（BUG-17：以前一律剥掉，```json 块渲染成一段以「json」开头的普通文字）。
+// fenceState.open = 当前正处在一个正文代码块里，下一个 ``` 是它的收尾。流式按分片进来，状态跨调用保留。
+// 带状态就不幂等：同一段文字只许过一遍。fenceState.pending = parserBuffer 结尾还没剥过的那截长度
+// （PARTIAL_FENCE 扣下的半截围栏）；前面的部分已经剥过，parserBuffer 因半截 '<' 留下的尾巴、
+// flushRemainingBuffer 收尾时都不许再剥（复核实测：再剥一遍会把收尾 ``` 当成新开的代码块，
+// 后面整段渲染成代码，而且结果随分片大小变）。
+const PROTOCOL_FENCE_LANG = /^(?:xml|html|markdown)?$/
+const stripCodeFences = (text, fenceState) => text.replace(/(\n?)```([^\s`]*)([ \t]*\n?)/g, (m, pre, lang, post) => {
+    if (fenceState.open) { fenceState.open = false; return m }
+    if (!PROTOCOL_FENCE_LANG.test(lang)) { fenceState.open = true; return m }
+    return pre && post.includes('\n') ? '\n' : ''
+})
 
 export function useAgentStream() {
     // STATE: List of all bubbles (history + active)
@@ -223,6 +231,7 @@ export function useAgentStream() {
     let activeToolItem = null
     // 围栏剥离开关：历史回灌时关掉（历史正文里的 ``` 是真的代码块，不是协议外壳）
     let stripFences = true
+    const fenceState = { open: false, pending: 0 }
     // Event parser state
     let currentEventName = null
     let currentEventData = ''
@@ -316,6 +325,8 @@ export function useAgentStream() {
         thinkingParentProcessId = null
         activeToolItem = null
         stripFences = true
+        fenceState.open = false
+        fenceState.pending = 0
     }
 
     // --- RESET SSE CONNECTION STATE ---
@@ -1786,10 +1797,16 @@ export function useAgentStream() {
             console.log('[AgentStream] Flushing remaining buffer:', parserBuffer.length, 'chars')
             // 结尾那截围栏是 processTextStream 特意留在缓冲区里的（见 PARTIAL_FENCE），
             // 流已经结束就不会再长了，这里补上剥离，否则收尾的 ``` 会原样显示给用户
-            flushContent(stripFences ? stripCodeFences(parserBuffer) : parserBuffer)
+            let rest = parserBuffer
+            if (stripFences) {
+                const from = parserBuffer.length - Math.min(fenceState.pending, parserBuffer.length)
+                rest = parserBuffer.slice(0, from) + stripCodeFences(parserBuffer.slice(from), fenceState)
+            }
+            flushContent(rest)
             parserBuffer = ''
             captureChatTimeline(currentAssistantBubble.value)
         }
+        fenceState.pending = 0
     }
 
     const handleArtifactEvent = (evt) => {
@@ -2298,6 +2315,7 @@ export function useAgentStream() {
             }
         }
 
+        const appendedFrom = parserBuffer.length
         parserBuffer += text
         stripFences = !history
 
@@ -2306,8 +2324,13 @@ export function useAgentStream() {
             // 结尾那截「还可能长成完整围栏」的文本必须原样留在缓冲区里再剥：本函数末尾
             // 会把缓冲区抽干到只剩半截标签，跨分片的 ``` 于是永远拼不起来，按半截剥会
             // 让 ```xml 原样漏进正文（分片 '``' / '`xml\n' 实测）。
-            const hold = parserBuffer.length - (parserBuffer.match(PARTIAL_FENCE)?.[0].length || 0)
-            parserBuffer = stripCodeFences(parserBuffer.slice(0, hold)) + parserBuffer.slice(hold)
+            // 只剥没剥过的那段：上一轮扣下的半截围栏 + 这一片新到的
+            const from = Math.max(0, appendedFrom - fenceState.pending)
+            const hold = Math.max(from, parserBuffer.length - (parserBuffer.match(PARTIAL_FENCE)?.[0].length || 0))
+            fenceState.pending = parserBuffer.length - hold
+            parserBuffer = parserBuffer.slice(0, from) + stripCodeFences(parserBuffer.slice(from, hold), fenceState) + parserBuffer.slice(hold)
+        } else {
+            fenceState.pending = 0
         }
 
         // 标签清单在 agentTagProtocol.mjs（与后端 AgentTagProtocol.TAGS 同一份）：
@@ -2363,21 +2386,37 @@ export function useAgentStream() {
 
 
 
-    const parseAssistantHistory = (content) => {
-        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, stripFences, handler: clientActionHandler.value }
+    // BUG-42：后端取消/出错路径把中断标记拼在落库正文末尾（AgentOrchestrator.handleCancellation /
+    // 出错收尾，模型下一轮读历史要知道上一轮被截断）。回灌时摘出正文、改走 stopNotice 独立字段，
+    // 复制 / 用到文档都读 content，就不会把它带走。只认正文最末尾那一个，正文中间出现的同样字样不动。
+    const HISTORY_INTERRUPT_TAIL = [
+        ['\n\n[已中断]', 'agentStream.stopConfirmed'],
+        ['\n\n[Interrupted]', 'agentStream.stopConfirmed'],
+        ['\n\n[生成出错，已中断]', 'agentStream.stoppedWithError'],
+        ['\n\n[Generation error, interrupted]', 'agentStream.stoppedWithError'],
+    ]
+
+    const parseAssistantHistory = (rawContent) => {
+        let content = rawContent || ''
+        let stopNoticeKey = ''
+        for (const [tail, key] of HISTORY_INTERRUPT_TAIL) {
+            if (content.endsWith(tail)) { content = content.slice(0, -tail.length); stopNoticeKey = key; break }
+        }
+        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, stripFences, fenceOpen: fenceState.open, fencePending: fenceState.pending, handler: clientActionHandler.value }
         const bubble = createAssistantBubble()
         bubble.planTodos = []
         try {
             currentAssistantBubble.value = bubble
             clientActionHandler.value = null
             resetParser()
-            processTextStream(content || '', true)
+            processTextStream(content, true)
             flushRemainingBuffer()
             settleRootThinking(bubble)
             finalizeProcesses('success')
             // 历史回灌补 documentEdited：GET /api/ai/history 回的是原始协议正文，
             // 没有 bubble_end 那个字段。不补的话刷新一次按钮就全回来了，看着像没修
             bubble.documentEdited = documentEditedFromProcesses(bubble.processes)
+            if (stopNoticeKey) bubble.stopNotice = t(stopNoticeKey)
             for (const entry of bubble.timeline) {
                 if (entry.type === 'thinking') Object.assign(entry.data, { status: 'done', duration: 0, startTime: 0 })
             }
@@ -2390,6 +2429,8 @@ export function useAgentStream() {
             thinkingParentProcessId = saved.thinkingParentProcessId
             activeToolItem = saved.activeToolItem
             stripFences = saved.stripFences
+            fenceState.open = saved.fenceOpen
+            fenceState.pending = saved.fencePending
             clientActionHandler.value = saved.handler
         }
     }

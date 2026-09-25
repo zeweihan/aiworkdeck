@@ -178,6 +178,30 @@ test('重新挂回附件这件事不许挂在 shouldClearChatDraft 分支里（�
   assert.ok(fn.includes('present.get'), '只补缺的、不整段重建——用户可能已经打了新的字')
 })
 
+// BUG-19（v0.49.0 真机测试 C5-04）：用户看不懂虚线标签是什么。跨轮携带是 K14 ③ 的刻意设计，
+// 修法是把可发现性做足（常驻一句提示 + × 常显 + title），而不是发后即清。
+test('上轮附件的虚线标签：常驻提示、× 常显、× 能移除', () => {
+  const zh = readFileSync(new URL('../../src/locales/zh-CN/chat.js', import.meta.url), 'utf8')
+  const en = readFileSync(new URL('../../src/locales/en-US/chat.js', import.meta.url), 'utf8')
+  assert.match(zh, /carriedAttachmentHint: '[^']*上轮附件[^']*下一条继续使用[^']*点 × 移除/)
+  assert.match(en, /carriedAttachmentHint: '[^']*Click x to remove/)
+  assert.equal((CI.match(/v-if="carriedHintVisible" class="carried-attachment-hint">\{\{ \$t\('chat\.carriedAttachmentHint'\) \}\}/g) || []).length, 2,
+    '空态与常态两张输入卡片各挂一份提示')
+  const hint = CI.slice(CI.indexOf('const carriedHintVisible'), CI.indexOf('const carriedHintVisible') + 200)
+  assert.ok(hint.includes('carriedFileIds.value') && hint.includes('contextFiles.value'),
+    '提示只在输入框里还挂着上轮附件时出现，移除后自然消失')
+  assert.ok(/\.context-tag-inline\.is-carried \.tag-close\)\s*\{\s*display: flex;/.test(CI), '虚线标签的 × 不等悬停就显示')
+  assert.ok(CI.includes("t('chat.carriedAttachmentTitle'"), '虚线标签带 title 说明')
+
+  // × 的点击分支必须排在「点本体确认沿用」之前并且 return，否则点 × 只会把淡态摘掉、附件还在
+  const click = CI.slice(CI.indexOf('const handleInputClick'), CI.indexOf('const syncContextFilesWithInlineTags'))
+  const close = click.indexOf("classList.contains('tag-close')")
+  assert.ok(close > 0 && close < click.indexOf('confirmCarriedFile('), '× 分支先于确认沿用')
+  const closeBranch = click.slice(close, click.indexOf('confirmCarriedFile('))
+  for (const step of ['tag.remove()', 'carriedFileIds.value = carriedFileIds.value.filter', 'syncContextFilesWithInlineTags()', 'return'])
+    assert.ok(closeBranch.includes(step), '× 分支缺少：' + step)
+})
+
 test('附件跨轮保留只在同一段对话里成立：换会话/换项目必须清干净', () => {
   // 不清的话上一段对话挂着的材料会跟进下一段；换项目更糟——那个 fileId 属于别的项目，
   // 后端 ToolFileGuard 会拒，用户看到「该附件内容暂不可读」而不知道自己带了这份东西。
