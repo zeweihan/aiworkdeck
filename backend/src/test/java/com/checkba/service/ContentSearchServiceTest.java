@@ -61,7 +61,7 @@ class ContentSearchServiceTest {
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
 
         DocumentTextService documentTextService = new DocumentTextService(storageServiceFactory);
-        service = new ContentSearchService(projectFileRepository, fileTagRepository, tagRepository, documentTextService);
+        service = new ContentSearchService(projectFileRepository, fileTagRepository, tagRepository, documentTextService, null);
     }
 
     private static ProjectFile file(long id, String name, String fileType, String filePath) {
