@@ -33,6 +33,11 @@ const APP_DISPLAY_NAME = 'AI WorkDeck'
 let getWindow = () => null
 // 渲染层最近一次下发的业务菜单。null = 渲染层还没就绪，先只挂骨架。
 let pushed = null
+// 重载前销毁所有内嵌浏览器面板 BrowserView 的钩子（dev-board BUG-01）。
+// 整页 reload 不会带走已 addBrowserView 的视图，也不会触发 BrowserPane.vue 的
+// beforeUnmount，两头都不清就会一直浮在重载后的新页面上方。main.js 通过
+// initAppMenu 的第二个参数注入真实实现；测试/未注入时是安全的空操作。
+let destroyAllBrowserViews = () => {}
 
 function send(action) {
   const win = getWindow()
@@ -118,7 +123,13 @@ function confirmAndReload() {
     // 弹不出来就什么都不做——宁可不重载，也不能在没问过用户的情况下关掉他所有标签
     return
   }
-  if (choice === 1) win.webContents.reload()
+  if (choice !== 1) return
+  // 先销毁所有内嵌浏览器面板的 BrowserView，再重载——否则它们会浮在重载后的
+  // 新页面上方，直到进程重启（dev-board BUG-01）。确认框文案承诺「关闭所有
+  // 已打开的标签页」，这一步是兑现它的另一半（渲染层那一半靠整页 reload 本身
+  // 重起 Vue 树自动做到）。
+  try { destroyAllBrowserViews() } catch (e) { /* 清不掉也不能挡住重载 */ }
+  win.webContents.reload()
 }
 
 function buildTemplate() {
@@ -251,8 +262,9 @@ function applyAboutPanel() {
   }
 }
 
-function initAppMenu(mainWindowGetter) {
+function initAppMenu(mainWindowGetter, opts) {
   getWindow = mainWindowGetter
+  destroyAllBrowserViews = (opts && opts.destroyAllBrowserViews) || (() => {})
   applyAboutPanel()
   rebuild()
   // 语言切换只影响骨架文案；业务菜单的文案由渲染层重新下发（它自己也在换 i18n）。

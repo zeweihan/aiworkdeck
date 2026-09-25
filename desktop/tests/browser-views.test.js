@@ -107,6 +107,26 @@ test('同一个标签被左右双开：关掉一侧不该把另一侧正看的�
   assert.strictEqual(registry.has('tab1'), true, '摘下不等于销毁')
 })
 
+test('destroyAll：整页重新加载前清空注册表，不留任何浮在新页面上方的 view（dev-board BUG-01）', () => {
+  const { registry, made, shownIds } = harness()
+  for (const id of ['front', 'background']) registry.ensure(id)
+  registry.attach('front')
+  registry.attach('background')
+  registry.detach('background') // background 保活但不显示，front 正显示
+
+  registry.destroyAll()
+
+  assert.deepStrictEqual(shownIds(), [], '重载前必须把所有 view 从窗口摘干净')
+  assert.strictEqual(registry.has('front'), false)
+  assert.strictEqual(registry.has('background'), false)
+  for (const view of made) assert.strictEqual(view.destroyed, true, view.id + ' 没有被真正销毁')
+  assert.deepStrictEqual(registry._state().wanted, [], 'wanted 计数留着，恢复可见时会把幽灵 view 挂回来')
+  assert.deepStrictEqual(registry._state().attached, [])
+
+  // 重载后是全新的 Vue 树，之前的标签不该复用旧 view
+  assert.strictEqual(registry.ensure('front').created, true)
+})
+
 test('bounds 只更新不重挂（避免打断导航），destroy 后清掉', () => {
   const { registry } = harness()
   const { view } = registry.ensure('tab1')
