@@ -1182,14 +1182,27 @@ export default {
   background: var(--awd-bg);
   border-left: 3px solid var(--awd-mint);
   border-radius: 4px;
+  /* dev-board BUG-46：给 .stat-value 的 clamp() 提供以磁贴自身宽度为准的
+     容器查询上下文（cqi），同时兜底——字号缩到下限仍装不下的极端情况直接
+     裁切，不许溢出磁贴边界（复核者否决过纯 nowrap 会溢出的做法）。 */
+  container-type: inline-size;
+  overflow: hidden;
 }
 
 .stat-value {
   display: block;
-  font-size: 18px;
   font-weight: 600;
   color: var(--awd-accent-text);
-  line-height: 24px;
+  line-height: 1.3;
+  /* dev-board BUG-46：1100px 窗口下五列磁贴可用宽度不足，「0.0 小时」这种
+     数字+单位组合固定 18px + nowrap 会溢出磁贴。改用 clamp() 按磁贴自身
+     宽度（cqi）连续缩字号——18px 是宽磁贴时的上限（不变形），11px 是可读
+     下限；仍是 nowrap，但配 overflow:hidden + text-overflow 兜底极端窄宽度，
+     不再允许可见溢出，也不发明新的响应式断点。 */
+  font-size: clamp(11px, 9cqi, 18px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 1280 宽下这一列只有 86.4px 可用，而「节约时间（估算）」是 8 个全角字符：

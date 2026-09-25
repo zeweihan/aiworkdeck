@@ -252,8 +252,11 @@ function applyAboutPanel() {
       applicationName: APP_DISPLAY_NAME,
       applicationVersion: app.getVersion(),
       version: app.getVersion(),
+      // dev-board BUG-49：copyright 与 credits 曾经被设成同一份文本，macOS
+      // 原生「关于」面板会分别渲染标准版权行与 Credits 区块，两处内容一样
+      // 就是视觉上重复了一遍。不设置 credits，AGPL 许可告示（源码/许可证/
+      // 商标说明链接）仍完整保留在 copyright 里，只出现一次。
       copyright,
-      credits: copyright,
       website: 'https://github.com/zeweihan/aiworkdeck',
     })
   } catch (e) {

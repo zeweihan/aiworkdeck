@@ -33,6 +33,7 @@ export default {
   membersColumn: '成员',
   createdAtShort: '创建于 {time}',
   rename: '重命名',
+  renameHint: '点击重命名',
   // project-list.vue：卡片
   delete: '删除',
   managerLabel: '项目负责人: {name}',

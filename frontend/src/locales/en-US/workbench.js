@@ -58,6 +58,7 @@ export default {
   closeSplit: 'Close Split View',
   ocrCapture: 'Screenshot Capture (OCR)',
   browser: 'Browser',
+  browserNewTabHint: 'New browser tab',
   recordActivity: 'Record Activity',
   logout: 'Log Out',
   // Left rail

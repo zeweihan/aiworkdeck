@@ -217,11 +217,12 @@
             </svg>
           </view>
 
-          <!-- 6. Browser (New Web) -->
+          <!-- 6. Browser (New Web)：这是「新建标签」动作，不是开关，
+               不挂 :class="{active}"，靠 tooltip 明确语义，避免与旁边的分屏/录制开关混同 -->
           <view
             class="top-bar-btn"
             @tap="openBrowserTab()"
-            :title="$t('workbench.browser')"
+            :title="$t('workbench.browserNewTabHint')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.web" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />

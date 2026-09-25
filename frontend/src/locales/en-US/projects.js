@@ -32,6 +32,7 @@ export default {
   membersColumn: 'Members',
   createdAtShort: 'Created {time}',
   rename: 'Rename',
+  renameHint: 'Click to rename',
   // project-list.vue: cards
   delete: 'Delete',
   managerLabel: 'Lead: {name}',

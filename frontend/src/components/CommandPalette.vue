@@ -86,7 +86,11 @@ export default {
   },
   mounted() {
     const lang = getAppLanguage()
-    const menuLabel = new Map(MENU_ORDER.map((m) => [m.id, m.label ? labelOf(m, lang) : 'App']))
+    // dev-board BUG-65：'app' 菜单在原生菜单栏里没有 label（macOS 用应用名
+    // 自动渲染），命令面板之前给它兜底成英文单词 'App'，跟旁边「文件」
+    // 「视图」这些中文分类标签混排。'AI WorkDeck' 是品牌名，两种语言都一样，
+    // 用它顶上去既不是误译也不会看起来像漏翻的英文词。
+    const menuLabel = new Map(MENU_ORDER.map((m) => [m.id, m.label ? labelOf(m, lang) : 'AI WorkDeck']))
     this.items = listAvailableCommands().map((c) => ({
       ...c,
       menuLabel: menuLabel.get(c.menu) || c.menu,

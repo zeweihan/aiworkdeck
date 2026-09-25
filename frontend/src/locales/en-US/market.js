@@ -193,7 +193,6 @@ export default {
   // ---- MarketSidebarPanel ----
   searchPlaceholder: 'Search Skills and plugins',
   rescanTooltip: 'Rescan local Skills and plugins',
-  noMatchingInstalled: 'No matching installed items',
   noInstalledYet: 'No Skills or plugins installed yet',
   installedShort: 'Installed',
   noMatchingPlugin: 'No matching plugins',

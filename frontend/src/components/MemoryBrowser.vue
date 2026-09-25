@@ -19,7 +19,7 @@
           :class="{ active: activeSpace && activeSpace.id === space.id, unavailable: !space.available }"
           @tap="space.available && selectSpace(space)"
         >
-          <text>{{ space.label || scopeLabel(space.scope) }}</text>
+          <text>{{ spaceLabel(space) }}</text>
           <text v-if="!space.available" class="space-reason">{{ space.reason || $t('chat.memoryUnavailable') }}</text>
         </view>
       </view>
@@ -54,7 +54,7 @@
         <view class="memory-editor">
           <template v-if="current">
             <view class="memory-meta">
-              <text>{{ activeSpace.label || scopeLabel(activeSpace.scope) }} / {{ current.path }}</text>
+              <text>{{ spaceLabel(activeSpace) }} / {{ current.path }}</text>
               <text>
                 <text v-if="hasUnsavedChanges" class="memory-unsaved">{{ $t('chat.memoryUnsaved') }} · </text>{{ $t('chat.memoryRevision', { revision: current.revision }) }} · {{ formatUpdated(current.updatedAt) }}
               </text>
@@ -182,6 +182,12 @@ export default {
     },
     scopeLabel(scope) {
       return this.$t(`chat.memoryScope${String(scope || '').replace(/^./, (c) => c.toUpperCase())}`)
+    },
+    // BUG-44：user/team/firm 是固定词汇，一律走 i18n（忽略后端下发的中文
+    // label），跟随界面语言切换；project 空间的 label 是真实项目名，原样展示。
+    spaceLabel(space) {
+      if (!space) return ''
+      return space.scope === 'project' ? (space.label || this.scopeLabel(space.scope)) : this.scopeLabel(space.scope)
     },
     formatUpdated(value) {
       if (!value) return this.$t('chat.memoryUnknownTime')

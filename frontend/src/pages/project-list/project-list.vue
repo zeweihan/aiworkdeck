@@ -197,7 +197,7 @@
                     />
                   </view>
                   <view v-else class="title-row-flex">
-                    <text class="project-title-new" @tap.stop="startRename(project)">{{ project.name }}</text>
+                    <text class="project-title-new" @tap.stop="startRename(project)" :title="$t('projects.renameHint')">{{ project.name }}</text>
                     <view class="project-role-badge" :class="getRoleClass(project.myRole)">
                       <text class="role-text">{{ getRoleLabel(project.myRole) }}</text>
                     </view>

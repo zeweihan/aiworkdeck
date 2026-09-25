@@ -41,7 +41,7 @@
           </view>
         </view>
         <view v-if="!activeInstalledRows.length" class="msb-empty">
-          <text>{{ searchText ? $t('market.noMatchingInstalled') : $t('market.noInstalledYet') }}</text>
+          <text>{{ searchText ? activeInstalledEmptyText : $t('market.noInstalledYet') }}</text>
         </view>
         <view
           v-for="row in activeInstalledRows"
@@ -342,6 +342,13 @@ export default {
     },
     activeInstalledRows() {
       return this.installedTab === 'skill' ? this.installedSkillRows : this.installedPluginRows
+    },
+    /** dev-board BUG-51：已安装分组的空搜索文案原来永远是笼统的「没有匹配的
+     * 已安装项」，跟在线广场里「没有匹配的 Skill」/「没有匹配的插件」这种
+     * 按当前子分组具体命名的措辞不一致。改成跟随 installedTab 复用同一套
+     * noMatchingSkill/noMatchingPlugin 文案，两边说法统一。 */
+    activeInstalledEmptyText() {
+      return this.installedTab === 'skill' ? this.$t('market.noMatchingSkill') : this.$t('market.noMatchingPlugin')
     },
     skillRows() {
       const kw = this.searchText.trim().toLowerCase()
