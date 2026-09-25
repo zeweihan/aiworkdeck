@@ -453,6 +453,8 @@
                </view>
                <!-- 「模型看不了图」常驻提示（K21 ⑨）：粘的、拖的图片都覆盖；能力未知一律不提示 -->
                <text v-if="visionNotice" class="input-images-note">{{ $t(visionNotice) }}</text>
+               <!-- 上一轮带过的附件（虚线标签）会继续带上：常驻一句说清楚，不靠用户自己去悬停（BUG-19） -->
+               <text v-if="carriedHintVisible" class="carried-attachment-hint">{{ $t('chat.carriedAttachmentHint') }}</text>
               <div
                 ref="richInput"
                 class="chat-input-rich"
@@ -696,6 +698,8 @@
            </view>
            <!-- 「模型看不了图」常驻提示（K21 ⑨）：粘的、拖的图片都覆盖；能力未知一律不提示 -->
            <text v-if="visionNotice" class="input-images-note">{{ $t(visionNotice) }}</text>
+           <!-- 上一轮带过的附件（虚线标签）会继续带上：常驻一句说清楚，不靠用户自己去悬停（BUG-19） -->
+           <text v-if="carriedHintVisible" class="carried-attachment-hint">{{ $t('chat.carriedAttachmentHint') }}</text>
           <div
             ref="richInput"
             class="chat-input-rich"
@@ -1273,6 +1277,9 @@ export default {
     // 现在：附件留着（下一轮照样带上，这才是 E-2 要的），只是渲染成淡态让用户知道
     // 「这是上一轮带过的」，随时可以点 × 摘掉、或点标签本体确认沿用（回到常态）。
     const carriedFileIds = ref([])
+    // 输入框里还挂着上一轮带过的附件时才出提示；× 摘掉 / 退格删掉 / 点一下确认沿用后自然消失
+    const carriedHintVisible = computed(() => carriedFileIds.value.some((id) =>
+      contextFiles.value.some((f) => String(f.id) === id)))
 
     // Pasted Images (for paste/drop images)
     const pastedImages = ref([])
@@ -1493,9 +1500,9 @@ export default {
     // Agent Mode Selection (Ask, Plan, Agent)
     const showModeDropdown = ref(false)
     const ALL_MODES = [
-      { id: 'AGENT', name: 'Agent', icon: '', desc: t('chat.modeAgentDesc') },
-      { id: 'ASK', name: 'Ask', icon: '', desc: t('chat.modeAskDesc') },
-      { id: 'PLAN', name: 'Plan', icon: '', desc: t('chat.modePlanDesc') }
+      { id: 'AGENT', name: t('chat.modeAgentName'), icon: '', desc: t('chat.modeAgentDesc') },
+      { id: 'ASK', name: t('chat.modeAskName'), icon: '', desc: t('chat.modeAskDesc') },
+      { id: 'PLAN', name: t('chat.modePlanName'), icon: '', desc: t('chat.modePlanDesc') }
     ]
     // 当前供应商（GET /api/ai/config 的 activeProvider）：模型目录端点不回 provider，
     // 而模式可选范围是按供应商定的，只能另取这个信号
@@ -3853,6 +3860,7 @@ export default {
        handleTranscribeAudio,
        pastedImages,
        carriedFileIds,
+       carriedHintVisible,
        // 「重新生成」按用户气泡上的附件记录重建 fileList（dev-board#793 K14 ④）：
        // 同一个问题重问一次，带的材料要和当初一模一样，否则那不是「换一份回答」而是「换一个问题」
        fileListFromBubble,
@@ -4578,6 +4586,15 @@ export default {
   border-radius: 6px;
   transition: background 0.15s ease, border-color 0.15s ease;
   white-space: nowrap;
+  /* 右栏窄时让模型名省略号截断，不把整行撑宽（BUG-41） */
+  min-width: 0;
+}
+/* uni 的 <text> 不继承父级的 nowrap 效果，窄栏下「Kimi K3」会折成两行（BUG-41） */
+.model-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .model-selector:hover {
   background: var(--awd-accent-wash);
@@ -4805,11 +4822,6 @@ export default {
   flex-shrink: 0;
 }
 .composer-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: auto; max-width: 100%; }
-.centered-style .composer-actions {
-  flex-basis: calc(100% - 56px);
-  justify-content: flex-end;
-  margin-right: 56px;
-}
 .follow-mode,.alternate-send { padding: 4px 6px; border-radius: 5px; color: var(--awd-text-2); font-size: 10px; cursor: pointer; }
 .follow-mode { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 .alternate-send:hover { background: var(--awd-surface-2); }
@@ -4937,6 +4949,13 @@ export default {
 
 /* flex-basis 100% 让它在缩略图行下面另起一行，紧贴着图走（预览区自己的
    margin-bottom 在整块之外，说明与图之间只隔容器的 gap） */
+.carried-attachment-hint {
+  display: block;
+  padding: 2px 2px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--awd-text-3);
+}
 .input-images-note {
   flex-basis: 100%;
   font-size: 11px;
@@ -5088,6 +5107,13 @@ export default {
  }
  :deep(.context-tag-inline.is-carried:hover) {
    opacity: 1;
+ }
+ /* 虚线标签的 × 常显（不等悬停）：提示里说了「点 × 移除」，就得一眼看得到 × 在哪（BUG-19） */
+ :deep(.context-tag-inline.is-carried) {
+   padding-right: 22px;
+ }
+ :deep(.context-tag-inline.is-carried .tag-close) {
+   display: flex;
  }
 
  :deep(.context-tag-inline:hover) {

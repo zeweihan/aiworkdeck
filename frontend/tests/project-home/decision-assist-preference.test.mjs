@@ -104,3 +104,15 @@ test('each resolved identity keeps its own stored choice', () => {
   id = 'awd_decision_assist:srv:7'
   assert.equal(state.sync(), true)
 })
+
+// BUG-25（v0.49.0 真机测试 C2-01）：常驻提示里写「无 Jev 请求或费用」，律师用户不认识 Jev。
+// 服务名只在展开的「数据与费用说明」里作为数据去向点名一次（隐私告示要求），且要带解释。
+test('智能决策辅助的常驻提示不暴露服务名 Jev，说明里点名时带上「工具预选」解释', async () => {
+  for (const locale of ['zh-CN', 'en-US']) {
+    const { default: chat } = await import(`../../src/locales/${locale}/chat.js`)
+    for (const key of ['decisionAssistOnHint', 'decisionAssistOffHint', 'decisionAssistMaterials', 'decisionAssistLocal']) {
+      assert.ok(!/Jev/.test(chat[key]), `${locale} ${key} 仍写着 Jev: ${chat[key]}`)
+    }
+    assert.match(chat.decisionAssistData, locale === 'zh-CN' ? /工具预选.*TypeSafe Jev/ : /tool-preselection.*TypeSafe Jev/)
+  }
+})

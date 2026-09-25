@@ -20,6 +20,8 @@ export default {
   stopRequested: 'Stop requested, no server confirmation received',
   // The cancelled event arrived: this run really did stop
   stopConfirmed: 'Generation stopped',
+  // Interrupt marker saved by the backend error path, moved out of the body on history load (BUG-42)
+  stoppedWithError: 'Generation error, interrupted',
   // The run had already finished on its own when Stop was pressed (/cancel returned cancelled=false)
   stopAlreadyFinished: 'This run had already finished; there was nothing to stop',
   // Re-entrancy guard toast on send

@@ -18,6 +18,8 @@ export default {
   stopRequested: '已发送停止指令，未收到后台确认',
   // 后端的 cancelled 事件到了：这一轮确实停下来了
   stopConfirmed: '已停止生成',
+  // 后端出错收尾时存下的中断标记，历史回灌时从正文摘出来改成这个状态标签（BUG-42）
+  stoppedWithError: '生成出错，已中断',
   // 点停止时那一轮恰好已经自己收尾（/cancel 回 cancelled=false）
   stopAlreadyFinished: '该轮次已经结束，无需停止',
   // 发送防重入 toast

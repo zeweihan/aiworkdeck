@@ -1387,7 +1387,13 @@ $color-accent: var(--awd-mint); // Mint Green
 .conv-status-label { font-size: 10px; margin-top: 2px; }
 /* 插件镜像会话来源角标（dev-board#298）：如「Word 插件」「WPS 文字」 */
 .conv-source-chip {
-    flex-shrink: 0;
+    /* 「分支自 <父标题>」可能很长：角标自己省略号截断，不许把会话标题挤成 0 宽（BUG-41） */
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 50%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 10px;
     line-height: 14px;
     padding: 0 5px;
