@@ -11,8 +11,8 @@
       <!-- 标签行（dev-board#754）：五个标签排一行、谁都不许折行，计数是同一行里
            的小号数字（文案本身不带 {count}，否则会连着标签一起被折行）。 -->
       <view v-if="!isMerge" ref="tabs" class="rp-tabs awd-hairline-scroll">
-        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab') }}<text class="rp-tab-n">{{ allGroups.length }}</text></text>
-        <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab') }}<text class="rp-tab-n">{{ comments.length }}</text></text>
+        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab') }}<text v-if="revLoaded" class="rp-tab-n">{{ allGroups.length }}</text></text>
+        <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab') }}<text v-if="cmtLoaded" class="rp-tab-n">{{ comments.length }}</text></text>
         <text class="rp-tab" :class="{ on: tab === 'evd' }" @tap="tab = 'evd'">{{ $t('editor.review.evidenceTab') }}<text class="rp-tab-n">{{ evidenceCount }}</text></text>
         <!-- 「AI 审校」（dev-board#723/#724，改名见 #749）：规则检查 + AI 审校的
              同一张清单。inlineReview 为 null（非 Writer / 没有项目 / 引擎没起来）
@@ -104,7 +104,7 @@
       <!-- ② 修订按两侧作者分组 -->
       <view class="rp-sec">
         <text class="rp-sec-h">{{ $t('version.mergeBlockRevisions', { count: allGroups.length }) }}</text>
-        <view v-if="!allGroups.length" class="rp-empty">
+        <view v-if="revLoaded && !allGroups.length" class="rp-empty">
           <text class="rp-empty-t">{{ $t('version.mergeNoPendingRevisions') }}</text>
         </view>
         <view v-for="side in mergeSideGroups" :key="'ms-' + side.side" class="rp-sub">
@@ -146,7 +146,11 @@
     <scroll-view v-show="!isMerge && tab !== 'evd' && tab !== 'chk'" class="rp-list" scroll-y :scroll-into-view="activeCardId" scroll-with-animation>
       <!-- 修订 -->
       <template v-if="tab === 'rev'">
-        <view v-if="!revisions.length" class="rp-empty">
+        <!-- 第一次读回来之前是加载中，不是「没有修订」（BUG-39：每次打开先闪一下 0） -->
+        <view v-if="!revLoaded" class="rp-empty">
+          <text class="rp-empty-t">{{ $t('editor.review.loading') }}</text>
+        </view>
+        <view v-else-if="!revisions.length" class="rp-empty">
           <text class="rp-empty-t">{{ $t('editor.review.emptyRevTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyRevSub') }}</text>
         </view>
@@ -181,7 +185,10 @@
 
       <!-- 批注 -->
       <template v-else-if="tab === 'cmt'">
-        <view v-if="!comments.length" class="rp-empty">
+        <view v-if="!cmtLoaded" class="rp-empty">
+          <text class="rp-empty-t">{{ $t('editor.review.loading') }}</text>
+        </view>
+        <view v-else-if="!comments.length" class="rp-empty">
           <text class="rp-empty-t">{{ $t('editor.review.emptyCmtTitle') }}</text>
           <text class="rp-empty-s">{{ $t('editor.review.emptyCmtSub') }}</text>
         </view>
@@ -194,9 +201,17 @@
           </view>
           <text class="rp-text">{{ c.content }}</text>
           <text v-if="c.anchorText" class="rp-ctx">{{ $t('editor.review.anchor', { text: c.anchorText }) }}</text>
-          <!-- 编辑和删除在随正文滚动的批注卡片中操作；此处保留汇总处置。 -->
+          <!-- 编辑和删除在随正文滚动的批注卡片中操作；此处保留汇总处置与回复（BUG-37）。 -->
           <view class="rp-acts">
+            <text class="rp-act" @tap.stop="startReply(c)">{{ $t('editor.review.reply') }}</text>
             <text class="rp-act" @tap.stop="toggleResolved(c)">{{ c.resolved ? $t('editor.review.reopen') : $t('editor.review.resolve') }}</text>
+          </view>
+          <view v-if="replyingId === c.id" class="rp-reply" @tap.stop>
+            <textarea class="rp-reply-input" v-model="replyText" :maxlength="-1" auto-height :placeholder="$t('editor.review.replyPlaceholder')" />
+            <view class="rp-acts">
+              <text class="rp-act" @tap.stop="cancelReply">{{ $t('editor.review.replyCancel') }}</text>
+              <text class="rp-act ok" @tap.stop="submitReply(c)">{{ $t('editor.review.replySend') }}</text>
+            </view>
           </view>
         </view>
       </template>
@@ -314,6 +329,11 @@ export default {
     return {
       tab: 'rev', revisions: [], comments: [], error: '', resolving: false, evidenceCount: 0, inlineReviewCount: 0,
       reviewRevision: null, reviewDocumentSeq: null,
+      // 第一次读成功之前两份清单都算「还没读」，空态与计数不渲染（BUG-39）。
+      // 读失败不置位——同 reload() 的「读失败不许清零」。
+      revLoaded: false, cmtLoaded: false,
+      // 批注回复（BUG-37）：同一时刻只展开一张卡片的回复框，按批注 id 认。
+      replyingId: null, replyText: '',
       authorFilter: 'all',
       // 合并模式的两笔账：块 1 每处选了哪一边，块 2 每条修订怎么处置的。
       // 「完成裁决」时由宿主用 collectDecisions 合成尾注清单。
@@ -601,8 +621,12 @@ export default {
             this.revisions = rv.revisions || []
             this.reviewRevision = rv.revision ?? null
             this.reviewDocumentSeq = rv.documentSeq ?? null
+            this.revLoaded = true
           }
-          if (cm) this.comments = (cm.comments || []).map(c => ({ ...c, revision: cm.revision, documentSeq: cm.documentSeq }))
+          if (cm) {
+            this.comments = (cm.comments || []).map(c => ({ ...c, revision: cm.revision, documentSeq: cm.documentSeq }))
+            this.cmtLoaded = true
+          }
         } while (this._again)
       } finally {
         this._loading = false
@@ -671,9 +695,86 @@ export default {
         await this.run('set_comment_resolved', { id: c.id, index: c.index, resolved: true, ...(c.documentSeq == null ? {} : { documentSeq: c.documentSeq }) })
       }
     },
+    // 「全部接受/拒绝」跟着作者筛选走（BUG-18）：筛到「AI」时点全部接受，
+    // 只处置 AI 的修订——旧实现无视筛选直接整份文档 AcceptAll，把「我」的修订
+    // 也一并接受了，还没有任何确认。筛选不是「全部」时先确认条数，再按降序索引
+    // 一次交给批量原语（同 resolveGroup / resolveMergeSide）。
+    // 两条纪律（复核打回的病灶）：
+    // ① **确认之后再采集**。确认框开着期间 AI 可能还在流式改文档，框前采的 indices
+    //    是枚举序，新修订一插进来就整体错位，批量会落到「我」的修订上。确认后先
+    //    reload 拿新清单，只处置确认时列出的那些修订（按 identifier 认），并带上
+    //    与 resolveGroup 同款的快照围栏，reload 与下发之间再变也由 worker 拒掉。
+    // ② 处置命中后同 resolveGroup，把关联的理由批注一并标为已解决。
     async resolveAll(action) {
-      const res = await this.run('resolve_all_revisions', { action })
-      if (res) this.$emit('changed')
+      if (this.authorFilter === 'all' || this.isMerge) {
+        const res = await this.run('resolve_all_revisions', { action })
+        if (res) this.$emit('changed')
+        await this.reload()
+        return
+      }
+      if (this.resolving) return
+      const shown = this.revisionGroups.flatMap((g) => g.items)
+      if (!shown.length) return
+      this.resolving = true
+      try {
+        const ok = await this.confirmBulk(action, this.revisionGroups.length, this.allGroups.length - this.revisionGroups.length)
+        if (!ok) return
+        const confirmedIds = new Set(shown.map((r) => r.identifier))
+        await this.reload()
+        const groups = this.revisionGroups
+          .map((g) => ({ ...g, items: g.items.filter((r) => confirmedIds.has(r.identifier)) }))
+          .filter((g) => g.items.length)
+        const items = groups.flatMap((g) => g.items)
+        if (!items.length) return
+        const indices = items.map((r) => r.index).sort((a, b) => b - a)
+        const fence = groups[0].documentSeq == null ? {} : {
+          revision: groups[0].revision, documentSeq: groups[0].documentSeq,
+          expectedRevisions: items.map((r) => fenceSnapshot(r, REVISION_FENCE_FIELDS)),
+        }
+        const res = await this.run('resolve_revisions', { indices, action, ...fence })
+        const done = ((res && res.results) || []).filter((r) => r && r.success).length
+        if (done) {
+          // 理由批注按本次真正下发的修订取（不用整组的 g.reasons：组里若混进了确认后
+          // 才出现、这次没处置的修订，它的理由不该被一起关掉）。
+          const byRev = this.links.reasons
+          const reasons = [...new Set(items.flatMap((r) => byRev.get(r.index) || []))]
+          await this.resolveReasons(reasons)
+          this.$emit('changed')
+        }
+        if (res && done < indices.length) this.error = this.$t('editor.review.groupPartialFail', { total: indices.length, failed: indices.length - done })
+        await this.reload()
+      } finally {
+        this.resolving = false
+      }
+    },
+    confirmBulk(action, count, rest) {
+      const bucket = this.$t('editor.review.bucket_' + this.authorFilter)
+      return new Promise((resolve) => {
+        uni.showModal({
+          title: this.$t(action === 'accept' ? 'editor.review.bulkAcceptTitle' : 'editor.review.bulkRejectTitle', { bucket }),
+          content: this.$t(action === 'accept' ? 'editor.review.bulkAcceptBody' : 'editor.review.bulkRejectBody', { bucket, count, rest }),
+          success: (r) => resolve(!!(r && r.confirm)),
+          fail: () => resolve(false),
+        })
+      })
+    },
+    startReply(c) {
+      this.replyingId = c.id
+      this.replyText = ''
+    },
+    cancelReply() {
+      this.replyingId = null
+      this.replyText = ''
+    },
+    // 走引擎已有的 reply_comment（父批注同一锚点上追加一条「回复 X：」批注）。
+    // asUser：按当前登录用户署名，不署 AI WorkDeck。
+    async submitReply(c) {
+      const text = String(this.replyText || '').trim()
+      if (!text) return
+      const res = await this.run('reply_comment', { id: c.id, index: c.index, text, asUser: true })
+      if (!res) return // 失败已写进红条；回复框留着，草稿不丢
+      this.cancelReply()
+      this.$emit('changed')
       await this.reload()
     },
     async toggleResolved(c) {
@@ -764,6 +865,9 @@ export default {
 .rp-reason-h { display: block; font-size: 10px; color: var(--awd-text-3); margin-bottom: 2px; }
 .rp-reason-t { display: block; font-size: 12px; color: var(--awd-text-2); line-height: 1.45; }
 .rp-acts { display: flex; gap: 6px; margin-top: 7px; }
+.rp-reply { margin-top: 7px; }
+.rp-reply-input { width: 100%; min-height: 48px; box-sizing: border-box; padding: 5px 7px; border: 1px solid var(--awd-border);
+  border-radius: 6px; font-size: 12px; line-height: 1.45; color: var(--awd-text); background: var(--awd-surface); }
 .rp-act { padding: 2px 10px; border: 1px solid var(--awd-border); border-radius: 6px; font-size: 12px; color: var(--awd-text-2); }
 .rp-act.ok { border-color: var(--awd-mint); color: var(--awd-accent-text); }
 .rp-act.no { border-color: var(--awd-danger); color: var(--awd-danger-text); }

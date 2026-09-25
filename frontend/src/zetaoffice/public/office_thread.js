@@ -6333,6 +6333,8 @@ const EXEC = {
   // ParentId/ParentName 两个候选属性名，成功与否都不影响主流程（失败静默吞掉，
   // 因为这只是锦上添花的原生线程标记，不是功能是否可用的判据）。
   reply_comment(p) {
+    // 审阅面板里用户亲手回复（asUser，BUG-37）：只读文档不许写，署名按登录用户。
+    if (p && p.asUser && !isReviewWritable()) return tableFail('文档为只读状态');
     const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
     const parent = commentAt(ref);
     if (!parent) return tableFail('未找到要回复的批注: ' + ref);
@@ -6353,10 +6355,11 @@ const EXEC = {
       }
     } catch (e) {}
     const replyContent = (parentAuthor ? ('回复 ' + parentAuthor + '：') : '') + text;
+    const author = replyCommentAuthor(p, humanAuthor, AI_AUTHOR);
     withRecordChangesOff(function () {
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-        [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+        [mkProp('Text', replyContent), mkProp('Author', author)]);
     });
     let newField = null, newName = '';
     try {
@@ -6371,7 +6374,7 @@ const EXEC = {
     if (!newField) return tableFail('回复未生效（引擎未产生新批注）');
     try { newField.setPropertyValue('ParentId', parentId); } catch (e) {}
     try { const name = parent.getPropertyValue('Name'); if (name) newField.setPropertyValue('ParentName', name); } catch (e) {}
-    return { success: true, id: newName, parentId: parentId, author: AI_AUTHOR, text: text };
+    return { success: true, id: newName, parentId: parentId, author: author, text: text };
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
   // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；
@@ -8809,6 +8812,13 @@ function matchCommentSnapshot(p) {
   p.index = matches[0].index;
   p.revision = currentReviewRevision();
   return true;
+}
+// reply_comment 的署名：审阅面板里用户亲手回复时带 asUser，署当前登录用户
+// （与 add_comment_at_selection 同源 humanAuthor）；AI 工具面（__agent）与不带
+// asUser 的调用一律署 AI WorkDeck——asUser 不许被 AI 下发的命令借去冒充用户。
+function replyCommentAuthor(p, human, aiAuthor) {
+  if (p && p.asUser && !p.__agent) return String(human || '');
+  return aiAuthor;
 }
 // A view-only native notification can arrive after its command has returned and
 // advance the global revision. Snapshot-backed cards remain usable if the same

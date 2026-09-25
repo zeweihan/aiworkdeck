@@ -114,8 +114,25 @@ export default {
   },
   mounted() {
     this.load()
+    // Esc 关闭（BUG-31），约定同 AwdDialog / TaskDialog：挂 window 捕获段，
+    // 免得工作台自己的快捷键先把 Esc 吃掉。
+    window.addEventListener('keydown', this.onKeydown, true)
+  },
+  beforeUnmount() {
+    window.removeEventListener('keydown', this.onKeydown, true)
   },
   methods: {
+    onKeydown(e) {
+      if (e.key !== 'Escape') return
+      // 全局确认框（「退回到这一版」的二次确认）开着时让它先处理
+      if (document.querySelector('.awd-dlg-mask')) return
+      e.preventDefault()
+      e.stopPropagation()
+      // 内层命名小框开着时只关内层
+      if (this.milestoneNaming) this.milestoneNaming = false
+      else if (this.draftNaming) this.draftNaming = false
+      else this.$emit('close')
+    },
     async load() {
       try {
         const res = await getVersionChanges(this.projectId, this.version.sha)
