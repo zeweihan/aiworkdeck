@@ -1875,7 +1875,13 @@ public class AgentOrchestrator {
                     // 「AI 说做完了，其实什么都没发生」。失败时改成纠错指令，与原生分支语义一致。
                     String instruction = xmlToolSuccess
                             ? "(CRITICAL INSTRUCTION: The tool executed successfully. Now compare with the ORIGINAL user request. If the SPECIFIC task the user asked for is complete, output `<final>` IMMEDIATELY. DO NOT perform additional operations unless the user EXPLICITLY requested them. For example, if user asked to 'delete the 3rd z' and you deleted it, you are DONE - do not delete other z's.)"
-                            : "(CRITICAL INSTRUCTION: The tool FAILED - the operation did NOT take effect. Do NOT claim the task is done. Read the Output above, then either fix the call (correct arguments, or verify state with a read-only tool) or use `<final>` to tell the user plainly what failed and why. Never report success for a failed tool.)";
+                            // dev-board BUG-55（v0.48 BUG-007 未修）：Output 里的原始错误常常直接
+                            // 带着内部工具名/参数名/调用语法（例如插件工具吐出的
+                            // "请用 xxx_tool(paramName=[...]) 重跑" 这类给模型自纠用的提示），
+                            // 模型此前会把这句话原样念给用户，暴露实现细节。这条指令只管住
+                            // 「说给用户听」的那一步：原文仍然完整留在 Output/日志里，模型自己
+                            // 纠错时还是要看得到真实参数名。
+                            : "(CRITICAL INSTRUCTION: The tool FAILED - the operation did NOT take effect. Do NOT claim the task is done. Read the Output above, then either fix the call (correct arguments, or verify state with a read-only tool) or use `<final>` to tell the user plainly what failed and why. When explaining to the user, describe the failure in plain language for a non-technical audience — never quote internal tool/function names, parameter names, or call syntax (e.g. `tool_name(param=...)`) from the Output; paraphrase what went wrong and what you will do next instead. Never report success for a failed tool.)";
                     String feedbackMsg = String.format("[System Tool Execution Log]\nTool: %s\nStatus: %s\nOutput: %s\n\n%s",
                         code, statusPrefix, result, instruction);
 
