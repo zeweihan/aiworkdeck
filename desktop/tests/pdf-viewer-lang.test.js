@@ -34,7 +34,7 @@ function freshLang() {
 }
 const storeFile = path.join(userDataDir, 'app-language.json')
 
-const SRC = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8')
+const SRC = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8').replace(/\r\n/g, '\n') // Windows 检出可能是 CRLF，正则按 \n 匹配
 const BLOCK = (SRC.match(/\n\{\n\s*const startupLang = require\('\.\/app-language'\)\.getPersistedAppLanguage\(\)\n[\s\S]*?\n\}\n/) || [])[0]
 
 /** 把 main.js 的启动块原文放进假 app 里真执行，返回追加了哪些开关。 */
