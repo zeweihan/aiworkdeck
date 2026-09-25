@@ -652,7 +652,11 @@ class LocalProjectServiceTest {
         ProjectFile c = live(rows, "c.docx");
         assertNotNull(c);
         assertFalse(before.stream().anyMatch(f -> f.getId().equals(c.getId())), "有歧义时 c.docx 必须是新行: " + rows);
-        assertEquals(2, projectFileService.getRecycleBinFiles(pid).size(), "a/b 两条旧行照旧进回收站");
+        // 认不准就退回「外部删除 + 新建」的语义：a/b 两条旧行出索引（外部删除不进回收站，dev-board#903）
+        assertNull(live(rows, "a.docx"), "a.docx 旧行应出索引: " + rows);
+        assertNull(live(rows, "b.docx"), "b.docx 旧行应出索引: " + rows);
+        assertEquals(1, rows.size(), rows.toString());
+        assertTrue(projectFileService.getRecycleBinFiles(pid).isEmpty());
     }
 
     /** 大小不同的「一删一增」是两件事，不能被认成改名。 */
@@ -668,7 +672,7 @@ class LocalProjectServiceTest {
 
         List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
         assertNotEquals(old.getId(), live(rows, "新合同.docx").getId());
-        assertEquals(1, projectFileService.getRecycleBinFiles(pid).size());
+        assertEquals(1, rows.size(), "旧合同那一行按外部删除出索引，不被新文件认领: " + rows);
     }
 
     @Test

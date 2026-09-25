@@ -120,6 +120,8 @@
             <view v-if="!isError && !ready" class="libre-spin"></view>
             <text>{{ displayStatus }}</text>
             <text v-if="(statusKey === 'saveFailed' || statusKey === 'movedSaveFailed') && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
+            <!-- 对账认不出新位置时重试永远 409：给一条「另存为…」出口，让律师自选位置留住改动（BUG-14） -->
+            <text v-if="statusKey === 'movedSaveFailed' && !saving" class="libre-save-retry" @tap="saveCopyAs">{{ $t('editor.saveCopyAs') }}</text>
           </view>
           <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
                Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。
@@ -441,6 +443,11 @@ export default {
     // 宿主 openFile(file, {locator}) 把定位符挂在 tab 对象上；已打开的标签再次被
     // 链接点中时是原地换对象，靠这个路径 watch 触发。
     'file.pendingLocator'(loc) { if (loc) this.consumeLocator() },
+    // 外部改名被对账认领后（BUG-14），工作台按 id 把新名同步进这个 file 对象——
+    // 这时后端那一行已改指到新路径，卡在「已被移动或改名」的那笔改动自动重试即可落到新文件。
+    'file.name'(n, o) {
+      if (n && o && n !== o && this.statusKey === 'movedSaveFailed' && !this.saving) this.retrySave()
+    },
   },
   async mounted() {
     this._onEvidenceDragStart = () => { this.evidenceDropArmed = true }
@@ -1929,7 +1936,9 @@ export default {
       } catch (e) {
         // 409 = 文件已被移动 / 改名 / 删除（后端 mustExist 围栏）：单独一个状态，让律师知道
         // 不是网络问题；改动留脏，对账把这一行改指到新路径之后「重试保存」即可落到新文件。
-        this.statusKey = e && e.status === 409 ? 'movedSaveFailed' : 'saveFailed'
+        // 404 = 对账认不出新位置、这一行已出索引（外部删除不进回收站，dev-board#903）——
+        // 对已装载的文档同样是「被移走了」，落到同一状态才有「另存为…」出口。
+        this.statusKey = e && (e.status === 409 || e.status === 404) ? 'movedSaveFailed' : 'saveFailed'
         this.appendLog('save failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
@@ -1938,6 +1947,42 @@ export default {
         // 只收回自己挂上去的「保存中…」；失败态是 catch 里刚设的，必须留着
         if (this.statusKey === 'saving') this.statusKey = prevStatusKey
       }
+    },
+    // 「另存为…」（BUG-14）：目标文件已被外部移走 / 改名且对账认不出新位置时，重试保存
+    // 永远 409。导出当前内容，走与 exportPdf 同一条下载链路（桌面主进程接管成系统
+    // 「另存为」对话框，用户自选位置）；绝不上传——旧路径已不存在。项目里那份没有更新，
+    // 所以改动仍按未保存算，状态保持不变。
+    async saveCopyAs() {
+      const f = this.file
+      if (!f || !this.executor || !this.ready || this._copyExporting) return false
+      this._copyExporting = true
+      const name = f.name || 'document.' + String(f.fileType || 'docx')
+      let res = null, reason = ''
+      try { res = await this.executor.executeCommand('export_document', { name }) }
+      catch (e) { reason = (e && e.message) || String(e) }
+      const raw = res && res.success ? res.bytes : null
+      let u8 = null
+      if (raw instanceof Uint8Array) u8 = raw
+      else if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw)
+      else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength)
+      else if (Array.isArray(raw)) u8 = new Uint8Array(raw)
+      if (!u8 || !u8.length) {
+        this._copyExporting = false
+        reason = reason || (res && (res.message || res.error)) || 'empty'
+        this.appendLog('save copy failed: ' + reason)
+        uni.showToast({ title: this.$t('editor.saveCopyAsFailed', { reason }), icon: 'none' })
+        return false
+      }
+      u8 = await this.stampGeneratorMetadata(u8)
+      this._copyExporting = false
+      const url = URL.createObjectURL(new Blob([u8], { type: 'application/octet-stream' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      uni.showToast({ title: this.$t('editor.savedCopyAs', { name }), icon: 'none' })
+      return true
     },
     // 文档 Generator 元数据（可溯源性设计规范附录 B4）：把导出件 docProps/app.xml 的
     // <Application> 换成「AI WorkDeck <版本>」。引擎 API 改不到这个字段（oox 导出器硬写

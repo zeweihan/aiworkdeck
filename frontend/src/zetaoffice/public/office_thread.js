@@ -843,12 +843,8 @@ const CHROME_URLS = {
 // 原生菜单逃生开关要的是经典菜单栏和两排工具栏，不是这条。它仍留在 CHROME_URLS 里，藏的一侧照旧 create+hide。
 const CHROME_NEVER_SHOWN = ['private:resource/toolbar/fullscreenbar'];
 
-// 原生菜单里不该给律师看到的引擎自带项（BUG-33 / v0.49.0 真机 C4 观察 3）：
-// 「退出 ZetaOffice (Ctrl+Q)」会把 webview 里的引擎整个关掉，「打开远程文档」「在浏览器中预览」
-// 在本 WASM 构建里没有可用的落点，且都把引擎品牌露给用户。两道闸：pruneNativeMenu 从本 frame
-// 的菜单栏里删掉条目；installReviewCommentInterceptor 在派发层把它们拦成 null（快捷键同样失效，
-// 菜单没裁掉时也只是灰掉）。
-const NATIVE_MENU_BLOCKED = ['.uno:Quit', '.uno:OpenRemote', '.uno:WebHtml'];
+// NATIVE_MENU_BLOCKED（下面 pruneMenuContainer 要用）定义在「Native comment requests」段里：
+// 派发拦截器也读它，而那一段会被单测整段抠出来单独跑（tests/revision-view/native-comment-interceptor.test.mjs）。
 
 // 菜单条目是 PropertyValue 序列：CommandURL / Label / Type（1 = 分隔线）/ ItemDescriptorContainer（子菜单）。
 function menuEntryProp(entry, name) {
@@ -2635,6 +2631,12 @@ function withRecordChangesOff(fn) {
 }
 
 // ---- Native comment requests ---------------------------------------------
+// 原生菜单里不该给律师看到的引擎自带项（BUG-33 / v0.49.0 真机 C4 观察 3）：
+// 「退出 ZetaOffice (Ctrl+Q)」会把 webview 里的引擎整个关掉，「打开远程文档」「在浏览器中预览」
+// 在本 WASM 构建里没有可用的落点，且都把引擎品牌露给用户。两道闸：pruneNativeMenu 从本 frame
+// 的菜单栏里删掉条目；installReviewCommentInterceptor 在派发层把它们拦成 null（快捷键同样失效，
+// 菜单没裁掉时也只是灰掉）。
+const NATIVE_MENU_BLOCKED = ['.uno:Quit', '.uno:OpenRemote', '.uno:WebHtml'];
 // Native InsertAnnotation without Text focuses its own editor. The external
 // gutter hides that editor, so open the existing host form BEFORE insertion.
 let reviewCommentInterceptor = null;

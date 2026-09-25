@@ -15,6 +15,9 @@ export default {
   pdfExporting: 'Exporting PDF…',
   pdfExported: 'PDF exported: {name}',
   pdfExportFailed: 'PDF export failed: {reason}',
+  saveCopyAs: 'Save As…',
+  savedCopyAs: 'Saved a copy: {name} (the project file is still not updated)',
+  saveCopyAsFailed: 'Save As failed: {reason}',
 
   status: {
     booting: 'Starting…',
