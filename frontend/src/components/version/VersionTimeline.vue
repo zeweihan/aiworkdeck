@@ -119,6 +119,7 @@
 <script>
 import { getVersionTimeline, getDraftTimeline } from '@/services/api.js'
 import VersionNodeDetail from './VersionNodeDetail.vue'
+import { formatDateTime } from '@/utils/projectHomeFormat.js'
 
 export default {
   name: 'VersionTimeline',
@@ -241,12 +242,10 @@ export default {
     titleOf(v) {
       return v.note || v.message
     },
+    // BUG-64：与项目概览/合并审阅共用 formatDateTime，不再自己拼 common.dateTimeMdHm 的参数
+    //（键加了 {year} 后这里漏传，渲染成「-9-25 06:58」）。
     timeOf(v) {
-      const d = new Date(v.when)
-      const pad = (n) => String(n).padStart(2, '0')
-      return this.$t('common.dateTimeMdHm', {
-        month: d.getMonth() + 1, day: d.getDate(), time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
-      })
+      return formatDateTime(v.when)
     },
     toggle(sha) {
       this.expanded = { ...this.expanded, [sha]: !this.expanded[sha] }

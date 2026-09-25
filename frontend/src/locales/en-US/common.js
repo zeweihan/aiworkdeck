@@ -43,7 +43,7 @@ export default {
   open: 'Open',
   cannotResolveParentFolder: 'Cannot determine the folder containing this file',
   // ---- utils/projectHomeFormat.js ----
-  dateTimeMdHm: '{month}/{day} {time}',
+  dateTimeMdHm: '{year}-{month}-{day} {time}',
   registeredItems: '{count} items registered',
   filesCount: '{count} files',
   statusRunning: 'Running',

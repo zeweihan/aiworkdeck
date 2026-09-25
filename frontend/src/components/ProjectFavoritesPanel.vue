@@ -6,8 +6,14 @@
       <view v-if="loading" class="loading">
         <text class="loading-text">{{ $t('panels.pfLoading') }}</text>
       </view>
+      <!-- BUG-68：改成与文档主区域一致的图标+双行文案空态（见 project-overview.scss 的
+           .empty-workspace/.empty-logo-tile 范式），不再是一行纯文字。 -->
       <view v-else-if="items.length === 0" class="empty">
-        <text class="empty-text">{{ $t('panels.pfEmpty') }}</text>
+        <view class="empty-logo-tile">
+          <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
+        </view>
+        <text class="empty-title">{{ $t('panels.pfEmpty') }}</text>
+        <text class="empty-sub">{{ $t('panels.pfEmptyHint') }}</text>
       </view>
       <view v-else class="list-grid">
         <view v-for="fav in items" :key="fav.id" class="fav-card" :id="getCardDomId(fav.id)" :class="{ 'card--highlight': highlightId === fav.id }">
@@ -18,15 +24,17 @@
                <view class="type-badge" :class="getTypeClass(fav)">{{ getTypeLabel(fav) }}</view>
                <text class="card-time">{{ formatTime(fav.createdAt) }}</text>
              </view>
+             <!-- BUG-67：与 ClipboardPanel 统一为「插入到文档 / 复制 / 删除」的固定顺序，
+                  避免两处卡片同样三图标布局但位置语义不同、容易凭记忆点错。
+                  「新标签页打开」只在网页收藏上出现，放在统一三件套之后，不占用前三位。 -->
              <view class="header-right">
-                <view v-if="fav.sourceUrl" class="favo-btn" @tap.stop="openUrl(fav.sourceUrl)" :title="$t('panels.pfOpenNewTabTitle')">
-                  <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.link" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </view>
                 <!-- Insert Button -->
                 <view class="favo-btn" @tap.stop="insertFav(fav)" :title="$t('panels.pfInsertTitle')">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                </view>
+                <!-- Copy -->
+                <view class="favo-btn" @tap.stop="copyFav(fav)" :title="$t('panels.pfCopyTitle')">
+                  <text class="icon">⧉</text>
                 </view>
                 <!-- Delete -->
                 <view class="del-wrapper" style="position: relative;">
@@ -41,6 +49,11 @@
                       <view class="pop-btn danger" @tap.stop="confirmDelete(fav.id)">{{ $t('panels.pfConfirm') }}</view>
                     </view>
                   </view>
+                </view>
+                <view v-if="fav.sourceUrl" class="favo-btn" @tap.stop="openUrl(fav.sourceUrl)" :title="$t('panels.pfOpenNewTabTitle')">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, gi) in ICONS.link" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
                 </view>
              </view>
           </view>
@@ -131,6 +144,27 @@ export default {
         return
       }
       this.$emit('insert', { type: 'TEXT', content: fav.content })
+    },
+    // BUG-67：与 ClipboardPanel.copy() 同样的写剪贴板方式——网页收藏复制来源链接，
+    // 其它收藏复制正文内容，两者都没有就什么都不做。
+    async copyFav(fav) {
+      const t = (fav.sourceUrl || fav.content || fav.title || '').trim()
+      if (!t) return
+      // #ifdef H5
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(t)
+        } else {
+          uni.setClipboardData({ data: t })
+        }
+        uni.showToast({ title: this.$t('panels.pfCopied'), icon: 'success' })
+      } catch (e) {
+        uni.setClipboardData({ data: t })
+      }
+      // #endif
+      // #ifndef H5
+      uni.setClipboardData({ data: t })
+      // #endif
     },
     openUrl(url) {
       if (!url) return
@@ -410,11 +444,52 @@ export default {
   color: var(--awd-danger-text);
 }
 
-.loading, .empty {
+.loading {
   padding: 20px;
   text-align: center;
   color: var(--awd-text-3);
   font-size: 13px;
+}
+
+/* 空态（BUG-68）：与文档主区域 .empty-workspace 同一套图标+双行文案范式，
+   贴着抽屉尺寸缩小一档。 */
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.empty-logo-tile {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--awd-surface);
+  border: 1px solid var(--awd-border);
+  border-radius: 18px;
+  box-shadow: 0 1px 2px rgba(33, 38, 41, 0.04), 0 10px 24px rgba(46, 90, 80, 0.08);
+}
+
+.empty-state-img {
+  width: 32px;
+  height: 32px;
+}
+
+.empty-title {
+  margin-top: 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--awd-text);
+}
+
+.empty-sub {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--awd-text-2);
 }
 
 /* Inline Delete Popover */

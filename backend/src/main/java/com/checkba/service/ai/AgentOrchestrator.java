@@ -2057,10 +2057,22 @@ public class AgentOrchestrator {
                 }
                 
                 log.info("Artifact detected: type={}, name={}, contentLength={}", type, filename, artifactContent.length());
-                
+
                 try {
-                     projectFileService.saveArtifactFile(Long.valueOf(projectId), conversationId, filename, artifactContent, userId);
+                     com.checkba.model.entity.ProjectFile saved = projectFileService.saveArtifactFile(
+                             Long.valueOf(projectId), conversationId, filename, artifactContent, userId);
                      log.info("Artifact Saved: path=AI Assistant Files/{}/{}", conversationId, filename);
+                     if (saved != null) {
+                         // BUG-40：落盘成功后必须在对话里留下可见提示——此前只有 log.info，
+                         // 用户在资源管理器里突然多出一个「AI Assistant Files」文件夹却毫无预警。
+                         // 子目录取实际文件夹名（可能已被用户改名），回落到 conversationId。
+                         String folderName = projectFileService.findFile(saved.getParentId())
+                                 .map(com.checkba.model.entity.ProjectFile::getName)
+                                 .orElse(conversationId);
+                         String savedNotice = artifactSavedNoticeDelta(folderName, saved.getName());
+                         sendTextDelta(guard, savedNotice);
+                         content = content + savedNotice;
+                     }
                 } catch (Exception e) {
                      log.error("Failed to save artifact file", e);
                 }
@@ -2717,6 +2729,20 @@ public class AgentOrchestrator {
                         + "meant for the document is pasted into the tool arguments. Ask me to split that step "
                         + "into smaller writes, or to retry with a tool that writes into the document directly.")
                 + "</final>";
+    }
+
+    /**
+     * BUG-40：Plan 模式与任务清单的产物落盘到项目根「AI Assistant Files/&lt;会话文件夹&gt;/」，
+     * 此前对话里只有一条 log.info，用户在资源管理器里突然多出一个文件夹却毫无预警。
+     *
+     * <p>给完整相对路径（根目录 / 会话子目录 / 文件名），用户照着能找到；根目录的中文名与
+     * FileTree.vue::displayName() 的展示别名一致。同一条流也发到 Office/WPS 任务窗格，
+     * 所以文案不引用任何界面位置（「左侧资源管理器」在窗格里不成立）。
+     */
+    static String artifactSavedNoticeDelta(String folderName, String fileName) {
+        return LangText.of(
+                "\n\n> 已保存到项目文件：AI 助手文件/" + folderName + "/" + fileName,
+                "\n\n> Saved to project file: AI Assistant Files/" + folderName + "/" + fileName);
     }
 
     static String truncate(String s, int max) {

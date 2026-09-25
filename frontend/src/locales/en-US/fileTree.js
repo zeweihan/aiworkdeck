@@ -51,6 +51,8 @@ export default {
   recycleBin: 'Recycle Bin',
   back: 'Back',
   recycleBinEmpty: 'Recycle bin is empty',
+  // BUG-40: display-layer alias only; the physical folder name stays "AI Assistant Files" (backend contract).
+  aiAssistantFilesFolder: 'AI Assistant Files',
   restore: 'Restore',
   // Sorting
   sortName: 'Name',
