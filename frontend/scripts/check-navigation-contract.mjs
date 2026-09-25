@@ -417,11 +417,21 @@ check('login 四处落点全改项目列表页', () => {
   return null
 })
 
-check('newproject 返回项目列表页且仍用 navigateTo', () => {
+// v0.49.0 BUG-07：newproject 既会被列表页 navigateTo 进来，也会被菜单「文件 > 新建项目…」
+// reLaunch 进来（栈里只有它自己）。无脑 navigateTo 回列表要么堆出第二个列表实例，要么把栈
+// 压成两层——两种情形全局返回键都会残留。与概览薄壳页 goProjectList 同一分流。
+check('newproject 返回项目列表页按页面栈分流（navigateBack / redirectTo，不许 navigateTo）', () => {
   const src = readVue('src/pages/newproject/index.vue')
   if (src.includes(USERPROFILE_ROUTE)) return '还指着个人中心'
-  if (!src.includes("navigateTo({ url: '/pages/project-list/project-list' })")) {
-    return '两端都不是工作台，应当 navigateTo 到项目列表页'
+  if (src.includes("navigateTo({ url: '/pages/project-list/project-list' })")) {
+    return 'navigateTo 回列表会堆实例或把 reLaunch 进来的单页栈压成两层，全局返回键残留'
+  }
+  const i = src.indexOf('goToProjectList() {')
+  if (i < 0) return '缺 goToProjectList()'
+  const body = src.slice(i, i + 1200)
+  if (!body.includes('getCurrentPages') || !body.includes('navigateBack') ||
+      !body.includes("redirectTo({ url: '/pages/project-list/project-list' })")) {
+    return '必须两条分支：栈里上一页是列表页就 navigateBack，否则 redirectTo'
   }
   if (src.includes('goToUserProfile')) return '方法名还叫 goToUserProfile，与它现在的去向不符'
   if (countOf(src, 'goToProjectList') !== 3) {

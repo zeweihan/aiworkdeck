@@ -172,9 +172,21 @@ export default {
     },
   },
   methods: {
-    // 两端都不是工作台，用 navigateTo（工作台参与的跳转才 reLaunch）
+    // 两端都不是工作台（工作台参与的跳转才 reLaunch）；与 project-home.vue 的 goProjectList 同一分流
     goToProjectList() {
-      uni.navigateTo({ url: '/pages/project-list/project-list' })
+      // 从项目列表页 navigateTo 进本页时，双向 navigateTo 会在页面栈里堆出
+      // 多个列表实例（页面栈多实例地雷），全局返回键的可见性判据是「栈深度 > 1」，
+      // 堆出的多余实例会让它在真正回到列表后仍然显示，点击又弹回本页——
+      // 上一页就是列表时改用 navigateBack 弹出本页；否则（菜单「文件 > 新建项目…」经
+      // appMenuBridge.js 用 reLaunch 进来，栈里只有本页）redirectTo 同级替换，不压栈——
+      // navigateTo 会把栈变成两层，全局返回键随之出现（BUG-07 真机复现路径）。
+      const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
+      const prev = pages.length >= 2 ? pages[pages.length - 2] : null
+      if (prev && prev.route === 'pages/project-list/project-list') {
+        uni.navigateBack({ delta: 1 })
+      } else {
+        uni.redirectTo({ url: '/pages/project-list/project-list' })
+      }
     },
 
     // ---- IDE 化入口（桌面） ----

@@ -119,7 +119,21 @@ public class LocalRootWatchService {
             DirectoryWatcher watcher = DirectoryWatcher.builder()
                     .path(root)
                     .fileHasher(WATCH_FILE_HASHER)   // 见 WATCH_FILE_HASHER：默认值会读穿整个文件夹
-                    .listener(event -> scheduleReconcile(projectId))
+                    .listener(event -> {
+                        // 噪声条目（.DS_Store/.git/~$ 锁文件等，同 LocalProjectService.isIgnoredEntryName
+                        // 一套口径）本来就不会被 importFolder 收录，让它们也能触发一次对账没有意义，
+                        // 只是白跑一次全量扫描（dev-board#903 一类现场：系统「选择文件夹」对话框浏览到
+                        // 已跟踪的项目目录时，Finder 视图会在目录里落一个 .DS_Store，被监听器当成
+                        // 「有改动」排一次对账）。OVERFLOW 不带具体路径，仍然要对账（宁可多扫，不能漏）。
+                        // 注意（v0.49.0 BUG-06，partial）：这里只去掉了噪声条目触发的空对账；真机上
+                        // 「浏览到项目目录后 .awd/tree.json 被写」的完整因果链未坐实（没在真机上抓到
+                        // 是哪一次对账/哪条写路径落的盘），不能据此宣称该现象已根治。
+                        Path changed = event.path();
+                        if (changed != null && LocalProjectService.isIgnoredEntryName(changed.getFileName().toString())) {
+                            return;
+                        }
+                        scheduleReconcile(projectId);
+                    })
                     .build();
             DirectoryWatcher prev = watchers.putIfAbsent(projectId, watcher);
             if (prev != null) {

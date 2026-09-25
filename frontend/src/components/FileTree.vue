@@ -32,28 +32,6 @@
       </view>
     </view>
 
-    <!-- 2. New Folder Modal -->
-    <view v-if="showCreateDialog" class="awd-dialog-mask" @tap="showCreateDialog = false">
-      <view class="awd-dialog" @tap.stop>
-        <view class="awd-dialog-header">
-          <text class="awd-dialog-title">{{ $t('fileTree.newFolder') }}</text>
-        </view>
-        <view class="awd-dialog-body">
-          <input
-            v-model="newFolderName"
-            class="awd-input"
-            :placeholder="$t('fileTree.folderNamePlaceholder')"
-            @confirm="handleCreateFolder"
-            :focus="true"
-          />
-        </view>
-        <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="showCreateDialog = false">{{ $t('fileTree.cancel') }}</view>
-          <view class="awd-btn awd-btn-primary" @tap="handleCreateFolder">{{ $t('fileTree.confirm') }}</view>
-        </view>
-      </view>
-    </view>
-
     <!-- 4. Manage Tags Modal -->
     <view v-if="showTagEditDialog" class="awd-dialog-mask" @tap="showTagEditDialog = false">
       <view class="awd-dialog" @tap.stop>
@@ -729,6 +707,7 @@
 import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl, getContributedTemplates, createFileFromContributedTemplate, importLocalFile } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
+import { showDialog } from '@/utils/dialog.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults, collapseToTopmostSelected } from '@/utils/fileTreeRecycle.js'
 import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
@@ -801,7 +780,6 @@ export default {
       files: [],
       loading: false,
       selectedFileId: null,
-      showCreateDialog: false,
       showRenameDialog: false,
       newFolderName: '',
       renameValue: '',
@@ -1245,9 +1223,23 @@ export default {
       }
       return this.parentId
     },
-    showCreateFolderDialog() {
-      this.newFolderName = ''
-      this.showCreateDialog = true
+    // 命名框走应用内对话框 AwdDialog（utils/dialog.js 的 showDialog）：它挂在 <body> 下、
+    // 不在 .file-tree 根节点内，方向键不会被本组件的 handleKeyDown 抢去折叠文件夹/改选中项
+    // （选中项就是新建落点）；Esc 取消、Enter 确认、打开时全选输入框由 AwdDialog 负责。
+    // 以前这里是内联的 awd-dialog-mask，上述键盘行为一样都没有（BUG-27 复核）。
+    async showCreateFolderDialog(initial = '') {
+      const r = await showDialog({
+        title: this.$t('fileTree.newFolder'),
+        editable: true,
+        content: initial,
+        placeholderText: this.$t('fileTree.folderNamePlaceholder'),
+      })
+      if (!r || !r.confirm) return
+      this.newFolderName = r.content || ''
+      // 名字不合法：提示后带着用户刚填的内容重开，让他接着改
+      if ((await this.handleCreateFolder()) === false) {
+        return this.showCreateFolderDialog(this.newFolderName)
+      }
     },
     async handleCreateFolder() {
       if (!this.newFolderName.trim()) {
@@ -1255,7 +1247,7 @@ export default {
           title: this.$t('fileTree.folderNamePlaceholder'),
           icon: 'none'
         })
-        return
+        return false
       }
 
       // 检查是否使用了系统保留名称
@@ -1265,7 +1257,7 @@ export default {
           title: this.$t('fileTree.reservedNameNotAllowed'),
           icon: 'none'
         })
-        return
+        return false
       }
 
       if (!this.projectId) {
@@ -1284,7 +1276,6 @@ export default {
         }
         const parentId = this.createTargetParentId()
         await createFolder(projectId, parentId, this.newFolderName.trim())
-        this.showCreateDialog = false
         this.newFolderName = ''
         await this.loadFiles()
         uni.showToast({
@@ -1300,7 +1291,8 @@ export default {
       }
     },
     // 「新建 Word」入口（规范 v2.9 P4）：装了带模板的插件时先给选择，「空白文档」永远第一项；
-    // 没有贡献模板/清单拉取失败则与老行为逐字一致（直接建空白）。
+    // 没有贡献模板/清单拉取失败则与老行为逐字一致（直接建空白，只是现在会先弹命名对话框——
+    // BUG-27：此前静默用英文默认名 newdocument.docx，与「新建文件夹」的命名体验不一致）。
     async handleCreateWord() {
       let templates = []
       try {
@@ -1311,7 +1303,7 @@ export default {
         templates = []
       }
       if (!templates.length) {
-        return this.createBlankWord()
+        return this.openCreateFileDialog()
       }
       // actionsheet 项数有限：只列前 5 份，更多模板走 AI 对话（list_contributed_templates）
       const shown = templates.slice(0, 5)
@@ -1319,7 +1311,7 @@ export default {
         itemList: [this.$t('fileTree.blankDocOption'), ...shown.map(t => t.name || t.id)],
         success: async (r) => {
           if (r.tapIndex === 0) {
-            this.createBlankWord()
+            this.openCreateFileDialog()
             return
           }
           const t = shown[r.tapIndex - 1]
@@ -1342,7 +1334,26 @@ export default {
       })
     },
 
-    async createBlankWord() {
+    // 「新建文件」命名对话框（BUG-27）：与「新建文件夹」同一个 AwdDialog（键盘行为见
+    // showCreateFolderDialog 的注释），默认填好本地化默认名（打开即全选，直接打字就是改名），
+    // Esc/取消不创建任何文件；确认后走 createBlankWord(name) 落地。
+    async openCreateFileDialog(initial) {
+      const r = await showDialog({
+        title: this.$t('fileTree.newFileDialogTitle'),
+        editable: true,
+        content: initial === undefined ? this.$t('fileTree.defaultDocumentName') : initial,
+        placeholderText: this.$t('fileTree.fileNamePlaceholder'),
+      })
+      if (!r || !r.confirm) return
+      const name = (r.content || '').trim()
+      if (!name) {
+        uni.showToast({ title: this.$t('fileTree.fileNamePlaceholder'), icon: 'none' })
+        return this.openCreateFileDialog('')
+      }
+      return this.createBlankWord(name)
+    },
+
+    async createBlankWord(desiredName) {
       if (!this.projectId) {
         uni.showToast({
           title: this.$t('fileTree.projectIdMissingCreateFile'),
@@ -1359,8 +1370,13 @@ export default {
         }
 
         // Auto Rename Logic: Check displayFiles for collisions
-        let baseName = 'newdocument'
         const ext = '.docx'
+        // desiredName 来自命名对话框，用户可能已经带了 .docx 后缀，去重避免出现 "xx.docx.docx"
+        let baseName = (desiredName || this.$t('fileTree.defaultDocumentName')).trim()
+        if (baseName.toLowerCase().endsWith(ext)) {
+          baseName = baseName.slice(0, -ext.length)
+        }
+        if (!baseName) baseName = this.$t('fileTree.defaultDocumentName')
         let name = baseName + ext
         let counter = 1
 

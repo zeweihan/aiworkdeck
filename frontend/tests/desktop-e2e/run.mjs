@@ -749,6 +749,13 @@ try {
     for (let attempt = 0; attempt < 3 && !created; attempt++) {
       attempts++
       inputOk = await clickCounted('新建文档', () => mouseClickSel('[title="新建文档"]'))
+      // BUG-27 起「新建文档」先弹 AwdDialog 命名框（默认名「新建文档」、打开即全选）：
+      // 这里填回 newdocument 再回车确认，后面按名字找文件、打开的步骤不用改
+      const dlg = await page.waitForSelector('.awd-dlg__input', { timeout: 8000 }).catch(() => null)
+      if (dlg) {
+        await page.keyboard.type('newdocument')
+        await page.keyboard.press('Enter')
+      }
       created = await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
         .then(() => true).catch(() => false)
     }
