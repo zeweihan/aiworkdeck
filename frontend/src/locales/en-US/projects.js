@@ -22,6 +22,13 @@ export default {
   clientInferred: 'inferred',
   createdColumn: 'Created',
   updatedColumn: 'Last modified',
+  // project-list.vue: name search and sort (BUG-09)
+  searchPlaceholder: 'Search matters by name',
+  noMatch: 'No matters match that name',
+  sortLabel: 'Sort',
+  sortByName: 'Name',
+  sortByCreated: 'Created',
+  sortByUpdated: 'Last modified',
   membersColumn: 'Members',
   createdAtShort: 'Created {time}',
   rename: 'Rename',

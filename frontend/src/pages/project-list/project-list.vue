@@ -115,6 +115,22 @@
             </view>
           </view>
 
+          <!-- 名称搜索与排序（v0.49.0 BUG-09）：纯前端过滤。列表视图点表头排序，
+               方块视图没有表头，给一个排序下拉。排序选择记在本机。 -->
+          <view v-if="!projectsLoading && projects.length > 0" class="project-list-toolbar">
+            <input
+              class="project-search-input"
+              type="text"
+              :value="searchQuery"
+              :placeholder="$t('projects.searchPlaceholder')"
+              @input="e => { searchQuery = (e.detail && e.detail.value) || '' }"
+            />
+            <view v-if="viewMode === 'grid'" class="project-sort">
+              <text class="project-sort-label">{{ $t('projects.sortLabel') }}</text>
+              <AwdSelect class="project-sort-select" :range="sortOptionLabels" :value="sortOptionIndex" @change="onSortPick" />
+            </view>
+          </view>
+
           <view v-if="projectsLoading" class="loading-state">
             <text class="loading-text">{{ $t('projects.loading') }}</text>
           </view>
@@ -142,9 +158,15 @@
             </template>
           </view>
 
+          <view v-else-if="visibleProjects.length === 0" class="empty-state-dashed search-empty">
+            <view class="dashed-content">
+              <text class="dashed-text">{{ $t('projects.noMatch') }}</text>
+            </view>
+          </view>
+
           <view v-else-if="viewMode === 'grid'" class="project-grid">
             <view
-              v-for="project in projects"
+              v-for="project in visibleProjects"
               :key="project.id"
               class="project-item-card"
               :class="getProjectCardClass(project.projectType)"
@@ -250,16 +272,16 @@
                列名与方块视图承载的是同一批字段，没有哪个视图独占信息。 -->
           <view v-else class="project-table">
             <view class="ptable-head">
-              <text class="ptable-col col-name">{{ $t('projects.nameColumn') }}</text>
+              <text class="ptable-col col-name is-sortable" :class="{ 'is-sorted': sort.key === 'name' }" @tap="toggleSort('name')">{{ $t('projects.nameColumn') }}{{ sortArrow('name') }}</text>
               <text class="ptable-col col-client">{{ $t('projects.clientColumn') }}</text>
-              <text class="ptable-col col-time col-created">{{ $t('projects.createdColumn') }}</text>
-              <text class="ptable-col col-time col-updated">{{ $t('projects.updatedColumn') }}</text>
+              <text class="ptable-col col-time col-created is-sortable" :class="{ 'is-sorted': sort.key === 'created' }" @tap="toggleSort('created')">{{ $t('projects.createdColumn') }}{{ sortArrow('created') }}</text>
+              <text class="ptable-col col-time col-updated is-sortable" :class="{ 'is-sorted': sort.key === 'updated' }" @tap="toggleSort('updated')">{{ $t('projects.updatedColumn') }}{{ sortArrow('updated') }}</text>
               <text class="ptable-col col-members">{{ $t('projects.membersColumn') }}</text>
               <text class="ptable-col col-ops"></text>
             </view>
             <!-- 外层 .ptable-item 挂悬停与下边框，.ptable-row 只管一行内容的排布 -->
             <view
-              v-for="project in projects"
+              v-for="project in visibleProjects"
               :key="project.id"
               class="ptable-item"
             >
@@ -392,6 +414,8 @@ import { formatMonthDay, timeOf } from '@/components/calendar/taskUtils.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
+import AwdSelect from '@/components/AwdSelect.vue'
+import { SORT_KEYS, DEFAULT_SORT, SORT_STORAGE_KEY, normalizeSort, nextSort, filterAndSortProjects } from '@/utils/projectListSort.js'
 import { optionalComponents } from '@/services/api.js'
 import {
   shouldPromptOptionalComponents,
@@ -412,6 +436,7 @@ export default {
     InviteMemberDialog,
     CloudAcceptDialog,
     OptionalComponentsDialog,
+    AwdSelect,
   },
   computed: {
     ICONS() {
@@ -419,6 +444,22 @@ export default {
     },
     SHOW_CLOUD_ACCEPT() {
       return SHOW_CLOUD_ACCEPT
+    },
+    // 两个视图渲染的都是它：名称搜索 + 排序之后的结果（this.projects 原样不动）
+    visibleProjects() {
+      return filterAndSortProjects(this.projects, this.searchQuery, this.sort)
+    },
+    // 方块视图的排序下拉：三列 × 两个方向摊平成六项（AwdSelect 点当前项不发 change，
+    // 没法靠「再点一次」翻方向）
+    sortOptions() {
+      return SORT_KEYS.flatMap((key) => (key === 'name' ? ['asc', 'desc'] : ['desc', 'asc']).map((dir) => ({ key, dir })))
+    },
+    sortOptionLabels() {
+      const label = { name: 'projects.sortByName', created: 'projects.sortByCreated', updated: 'projects.sortByUpdated' }
+      return this.sortOptions.map((o) => this.$t(label[o.key]) + (o.dir === 'asc' ? ' ↑' : ' ↓'))
+    },
+    sortOptionIndex() {
+      return Math.max(0, this.sortOptions.findIndex((o) => o.key === this.sort.key && o.dir === this.sort.dir))
     },
     isDesktop() {
       // 判据是「有没有系统文件夹对话框」而不是「是不是桌面壳」：新建入口用的正是它，
@@ -484,6 +525,9 @@ export default {
       // 视图模式：'grid' 方块 / 'list' 列表。默认方块（与改造前形态一致），
       // 选择记在本机，不进后端——它是这台机器上这个人的习惯，不是账户设置。
       viewMode: 'grid',
+      // 名称搜索关键词（不记住：回到列表页该看到全部案卷）与排序（记在本机）
+      searchQuery: '',
+      sort: { ...DEFAULT_SORT },
 
       // 新建项目文件夹（原 newproject 页的流程，随新建入口一起搬过来）
       busy: false,
@@ -502,6 +546,7 @@ export default {
   onLoad() {
     if (!this.ensureLoggedIn()) return
     this.restoreViewMode()
+    this.restoreSort()
     this.loadUserInfo()
     this.maybePromptOptionalComponents()
   },
@@ -643,6 +688,29 @@ export default {
       if (mode !== 'grid' && mode !== 'list') return
       this.viewMode = mode
       try { uni.setStorageSync(VIEW_MODE_KEY, mode) } catch (e) { /* ignore */ }
+    },
+
+    // ---- 排序 ----
+    restoreSort() {
+      try {
+        this.sort = normalizeSort(uni.getStorageSync(SORT_STORAGE_KEY))
+      } catch (e) { /* 存储不可用就用默认值，不拦路 */ }
+    },
+    setSort(sort) {
+      this.sort = normalizeSort(sort)
+      try { uni.setStorageSync(SORT_STORAGE_KEY, this.sort) } catch (e) { /* ignore */ }
+    },
+    // 点表头：同一列翻转方向，换列用该列默认方向（名称升序、时间倒序）
+    toggleSort(key) {
+      this.setSort(nextSort(this.sort, key))
+    },
+    onSortPick(index) {
+      const opt = this.sortOptions[index]
+      if (opt) this.setSort(opt)
+    },
+    sortArrow(key) {
+      if (this.sort.key !== key) return ''
+      return this.sort.dir === 'asc' ? ' ↑' : ' ↓'
     },
 
     // ---- 成员 ----
