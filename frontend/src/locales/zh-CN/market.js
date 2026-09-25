@@ -195,7 +195,6 @@ export default {
   // ---- MarketSidebarPanel ----
   searchPlaceholder: '搜索 Skill 与插件',
   rescanTooltip: '重新扫描本机 Skill 与插件',
-  noMatchingInstalled: '没有匹配的已安装项',
   noInstalledYet: '还没有安装任何 Skill 或插件',
   installedShort: '已装',
   noMatchingPlugin: '没有匹配的插件',

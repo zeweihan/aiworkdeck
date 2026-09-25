@@ -58,6 +58,7 @@ export default {
   closeSplit: '关闭分屏',
   ocrCapture: '截图摘录（OCR）',
   browser: '浏览器',
+  browserNewTabHint: '新建浏览器标签',
   recordActivity: '录制活动',
   logout: '退出登录',
   // 左侧常驻栏
