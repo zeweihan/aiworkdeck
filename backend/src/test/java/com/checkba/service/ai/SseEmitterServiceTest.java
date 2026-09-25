@@ -124,6 +124,18 @@ class SseEmitterServiceTest {
     }
 
     @Test
+    void heartbeatStopsOnceTheRunClosesItsConnection() {
+        // v0.49.0 BUG-16：每轮收尾后端主动关流是设计内行为，关掉的连接必须同时退出心跳名单——
+        // 否则 15s 后的心跳会往一个已 complete 的 emitter 上写，日志里就是一条
+        // AsyncRequestNotUsableException / removing emitter，看着像异常断线。
+        SseEmitterService svc = new SseEmitterService();
+        svc.createConnection("conv-hb-done", "paneA");
+        svc.createConnection("conv-hb-idle", "paneA");
+        svc.close("conv-hb-done", svc.currentEpoch("conv-hb-done"));
+        assertEquals(1, svc.heartbeatSweep(), "本轮已收尾关流的连接不该再收心跳，只剩另一条在线连接");
+    }
+
+    @Test
     void noLastEventIdReplaysNothing() {
         SseEmitterService svc = new SseEmitterService();
         String id = "conv-replay-4";

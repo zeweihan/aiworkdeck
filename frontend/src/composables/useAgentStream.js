@@ -166,6 +166,12 @@ export function useAgentStream() {
     let lastSseEventConversationId = null
     // 本会话已被同一账号的另一个窗口接管：置起后不再重连（继续重连就是互顶循环的另一半）
     let supersededByOtherClient = false
+    // 本轮是否已正常收尾（收到 bubble_end / error / cancelled，或重连拿到的 run_state 不是 RUNNING）。
+    // 后端每轮收尾都主动关流（AgentOrchestrator.endRunAndDrain / closeSse），这之后「流已关」
+    // 是轮次之间的常态、不是断线：回前台/网络恢复时的补连照做，但不挂「连接已断开，
+    // AI 仍在后台运行」的横幅——那句话此时是假的（v0.49.0 BUG-16，每轮结束都闪一次）。
+    // 新一轮开始（sendMessage / input_applied 接续 / run_state RUNNING / state_recovery）时清掉。
+    let roundSettled = true
 
     const stopHeartbeatMonitor = () => {
         if (heartbeatMonitor) { clearInterval(heartbeatMonitor); heartbeatMonitor = null }
@@ -193,7 +199,7 @@ export function useAgentStream() {
         if (supersededByOtherClient) return
         const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts))
         reconnectAttempts++
-        linkStatus.value = { state: 'reconnecting', attempt: reconnectAttempts }
+        if (!roundSettled) linkStatus.value = { state: 'reconnecting', attempt: reconnectAttempts }
         console.warn(`[AgentStream] SSE 断开（${reason}），${delay}ms 后自动重连（第 ${reconnectAttempts} 次）`)
         reconnectTimer = setTimeout(async () => {
             reconnectTimer = null
@@ -344,6 +350,7 @@ export function useAgentStream() {
         lastSseEventSeq = 0
         lastSseEventConversationId = null
         supersededByOtherClient = false
+        roundSettled = true
         // Reset Token Usage (start fresh for new chat context? Or keep per session? Usually per chat.)
         // Ideally we keep it during the chat session. resetSSE is called when switching conversations.
         tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
@@ -746,6 +753,7 @@ export function useAgentStream() {
         bubbles.value.push(next)
         currentAssistantBubble.value = next
         isStreaming.value = true
+        roundSettled = false
     }
 
     const acceptAppliedInput = (event, draft = {}) => {
@@ -794,6 +802,7 @@ export function useAgentStream() {
             bubbles.value.push(newBubble)
             currentAssistantBubble.value = newBubble
             isStreaming.value = true
+            roundSettled = false
             resetParser()
         }
 
@@ -1226,6 +1235,7 @@ export function useAgentStream() {
             try {
                 const d = JSON.parse(dataStr)
                 agentRunStatus.value = d.status || null
+                roundSettled = d.status !== 'RUNNING'
                 if (d.status === 'RUNNING') {
                     isStreaming.value = true // 后台在跑：封发送框，等续流
                 } else if (d.status === 'PAUSED') {
@@ -1363,6 +1373,7 @@ export function useAgentStream() {
             // 永久禁用（F-06/F-07 确定性 hang）。这里至少要解锁全局状态。
             if (evt === 'bubble_end' || evt === 'error' || evt === 'cancelled') {
                 isStreaming.value = false
+                roundSettled = true
                 if (evt === 'cancelled') noteStopConfirmed()
                 try {
                     const d = JSON.parse(dataStr || '{}')
@@ -1616,7 +1627,12 @@ export function useAgentStream() {
                 }
             }
         }
-        if (evt === 'bubble_end' || evt === 'cancelled') isStreaming.value = false
+        // error 与另两个一样是终态（后端发完即关流），漏掉它的话关流落到 finally 会被当成
+        // 「流式中意外断开」去重连，挂断线横幅（v0.49.0 BUG-16）
+        if (evt === 'bubble_end' || evt === 'error' || evt === 'cancelled') {
+            isStreaming.value = false
+            roundSettled = true
+        }
 
         // heartbeat 与三个后台任务事件已在气泡守卫之前处理（见上）
 
@@ -1675,6 +1691,7 @@ export function useAgentStream() {
                 currentAssistantBubble.value = bubble
                 currentAssistantBubble.value.isStreaming = true
                 isStreaming.value = true
+                roundSettled = false
                 // 快照续流已把这条气泡整段重填，断线截断的账在这里一笔勾销
                 disconnectedBubble = null
 
