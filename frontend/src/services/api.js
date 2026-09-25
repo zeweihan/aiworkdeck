@@ -172,7 +172,20 @@ function isOnLoginPage() {
   }
 }
 
+// options.signal（AbortSignal，可选）：取消时断开底层 uni.request 并以 AbortError 拒绝。
+// 调用方主动取消不是网络故障，不打「网络请求失败」那一大串诊断日志（v0.49.0 BUG-12：
+// 搜索面板每次新查询都要取消上一次在途请求，否则连续输入会在后端叠成一长队）。
 function request(options) {
+  const { signal, ...uniOptions } = options;
+  const abortError = () => {
+    const e = new Error('aborted');
+    e.name = 'AbortError';
+    e.aborted = true;
+    return e;
+  };
+  if (signal && signal.aborted) {
+    return Promise.reject(abortError());
+  }
   const baseUrl = getApiBaseUrl();
   const url = options.url.startsWith('http')
     ? options.url
@@ -204,8 +217,8 @@ function request(options) {
   }
 
   return new Promise((resolve, reject) => {
-    uni.request({
-      ...options,
+    const task = uni.request({
+      ...uniOptions,
       url,
       // uni.request expects query params in 'data' for GET requests
       data: (options.method === 'GET' && options.params) ? { ...options.data, ...options.params } : options.data,
@@ -355,6 +368,10 @@ function request(options) {
         }
       },
       fail(err) {
+        if (signal && signal.aborted) {
+          reject(abortError());
+          return;
+        }
         // 完整打印网络请求失败的错误信息
         console.error('网络请求失败:', err)
         console.error('错误详情:', {
@@ -385,6 +402,12 @@ function request(options) {
         reject(err);
       },
     });
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        try { if (task && typeof task.abort === 'function') task.abort(); } catch (e) { /* ignore */ }
+        reject(abortError());
+      }, { once: true });
+    }
   });
 }
 
@@ -3182,13 +3205,14 @@ export function removeTagFromFile(projectId, fileId, tagId) {
   })
 }
 
-// 全文搜索
-export function searchProjectContent(projectId, payload) {
+// 全文搜索。opts.signal 可选：新查询发起时由 SearchPanel 取消上一次在途请求
+export function searchProjectContent(projectId, payload, opts = {}) {
   return request({
     url: `/api/projects/${projectId}/search`,
     method: 'POST',
     data: payload,
-    header: { 'Content-Type': 'application/json' }
+    header: { 'Content-Type': 'application/json' },
+    signal: opts.signal
   })
 }
 

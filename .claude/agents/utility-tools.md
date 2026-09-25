@@ -160,6 +160,15 @@ API），不再自建 `new Tika()` 解析 PDF——项目 classpath 锁 PDFBox 3
 PDFParser 调 PDFBox2 已删除的 `PDDocument.load` 会抛 `NoSuchMethodError`（Error，能穿透
 `catch(Exception)`），一个 PDF 曾经就能把整个搜索请求打挂；`AutoTaggingService` 的自动打标签
 抽取同款同因，一并改掉了。逐文件循环的 catch 也收紧为 `catch(Throwable)` 做防御。
+性能（v0.49.0 BUG-12）：抽取结果走 `ProjectFileTextCacheService`（`project_file_text_cache`，
+键 fileId、失效判据物理 mtime+size，与 AI 读文件共用），未命中的文件在服务内一个共用的有界线程池
+（2-4 线程）里并行抽取+匹配，结果按文件原顺序收集再按匹配数稳定排序。**写缓存判据必须与
+`ProjectFileTextExtractor` 一致**：PDF 文字层 `PdfTextLayer.isUsable` 为假（扫描件残渣）不写，
+否则 AI 读这份文件会拿残渣顶替 OCR。前端 `SearchPanel` 防抖 300ms，`performSearch` 先撤防抖、
+再 `abort()` 上一次在途请求（`searchProjectContent(..., { signal })` → `request()` 的
+`options.signal` → `uni.request` 的 `RequestTask.abort()`，以 `AbortError` 拒绝且不打「网络请求失败」
+日志），`beforeUnmount` 收尾。守护：`ContentSearchServiceCacheTest`、
+`frontend/tests/project-home/search-panel-debounce-abort.test.mjs`。
 标签筛选区默认折叠、按命中频次排序——**那不是排版偏好，是给一个数据 bug 兜底**：
 `/api/files/{id}/upload` 同时是编辑器自动保存的落点，挂在 legacy 分支上的
 `AutoTaggingService.autoTagFile` 因此每存一次盘就跑一次 LLM，每轮 5 个措辞不同的新词，

@@ -10,13 +10,22 @@ import com.checkba.model.dto.SearchResult.MatchInfo;
 import com.checkba.model.entity.FileTag;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.model.entity.Tag;
+import com.checkba.model.entity.ProjectFileTextCache;
 import com.checkba.repository.FileTagRepository;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.file.PdfTextLayer;
+import com.checkba.service.file.ProjectFileTextCacheService;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -26,6 +35,12 @@ import java.util.stream.Collectors;
  *
  * 复用 {@link DocumentTextService} 提取文档内容进行全文搜索
  * 支持: DOCX, PDF, PPTX, XLSX, TXT, MD
+ *
+ * <p>性能（v0.49.0 BUG-12）：此前每次请求都把每个文件从头抽一遍、逐个串行，
+ * 100 个文件一次 8-15 秒；DocumentTextService 那层 32 条的 LRU 对「按同一顺序扫
+ * 100 个文件」命中率是 0。现在抽取结果走 {@link ProjectFileTextCacheService}
+ *（键 fileId，失效判据是物理文件 mtime+size，与 AI 读文件共用同一份判据与同一张表），
+ * 未命中的文件在一个有界线程池里并行抽取与匹配。
  */
 @Slf4j
 @Service
@@ -36,6 +51,28 @@ public class ContentSearchService {
     private final FileTagRepository fileTagRepository;
     private final com.checkba.repository.TagRepository tagRepository;
     private final DocumentTextService documentTextService;
+    /** 抽取结果的跨重启缓存；单测传 null 即退化成「每次重抽」。 */
+    private final ProjectFileTextCacheService textCache;
+
+    /**
+     * 抽取与匹配的有界线程池，所有搜索请求共用。
+     *
+     * <p>共用而不是每个请求各开一组：用户连续输入叠出来的多个请求会在这里排队，
+     * 而不是各自再乘上 N 个线程去抢 CPU；排在后面的请求轮到时，前一个请求已经把
+     * 抽取结果写进缓存，自然就命中了。任务里不再向池子提交任务，所以不会自锁。
+     */
+    private final ExecutorService searchPool = Executors.newFixedThreadPool(
+            Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())),
+            new java.util.concurrent.ThreadFactory() {
+                private final AtomicInteger seq = new AtomicInteger();
+
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "content-search-" + seq.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
 
     private static final Set<String> SEARCHABLE_TYPES = Set.of(
         "docx", "doc", "pdf", "pptx", "ppt", "xlsx", "xls", "txt", "md", "csv"
@@ -43,6 +80,11 @@ public class ContentSearchService {
 
     private static final int MAX_CONTEXT_CHARS = 100;
     private static final int MAX_MATCHES_PER_FILE = 50;
+
+    @PreDestroy
+    public void shutdown() {
+        searchPool.shutdownNow();
+    }
 
     /**
      * 在项目中搜索内容
@@ -134,60 +176,28 @@ public class ContentSearchService {
         // 构建搜索模式 (仅当有查询词时)
         Pattern searchPattern = hasQuery ? buildSearchPattern(query, request) : null;
 
+        // 逐文件并行：抽取（先查缓存）+ 匹配。按文件原顺序收集，结果顺序不随线程调度变化。
+        List<Future<FileSearchResult>> futures = new ArrayList<>(files.size());
         for (ProjectFile file : files) {
+            futures.add(searchPool.submit(() -> searchOneFile(file, hasQuery, query, queryLower,
+                    searchPattern, request, fileTagsMap)));
+        }
+        for (int i = 0; i < futures.size(); i++) {
+            FileSearchResult fileResult;
             try {
-                List<MatchInfo> matches = new ArrayList<>();
-                boolean fileNameMatches = false;
-                
-                // 1. 检查文件名是否匹配
-                String fileName = file.getName();
-                if (hasQuery && fileName != null) {
-                    if (request.isCaseSensitive()) {
-                        fileNameMatches = fileName.contains(query);
-                    } else {
-                        fileNameMatches = fileName.toLowerCase().contains(queryLower);
-                    }
-                }
-                
-                // 2. 提取内容并搜索 (仅当有查询词时)
-                if (hasQuery) {
-                    String content = extractContent(file);
-                    if (content != null && !content.isEmpty()) {
-                        log.info("[Search] File {} - extracted {} chars, searching for: {}", 
-                            file.getName(), content.length(), query);
-                        matches = findMatches(content, searchPattern, query);
-                        log.info("[Search] File {} - found {} matches", file.getName(), matches.size());
-                    } else {
-                        log.debug("[Search] File {} has no extractable content", file.getName());
-                    }
-                }
-                
-                // 3. 如果文件名匹配或内容匹配，或者没有查询词（纯标签过滤），都加入结果
-                if (!hasQuery || fileNameMatches || !matches.isEmpty()) {
-                    FileSearchResult fileResult = FileSearchResult.builder()
-                        .fileId(file.getId())
-                        .wpsFileId(file.getWpsFileId())
-                        .fileName(file.getName())
-                        .filePath(file.getFilePath())
-                        .fileType(file.getFileType())
-                        .matchCount(matches.size())
-                        .matches(matches.size() > MAX_MATCHES_PER_FILE 
-                            ? matches.subList(0, MAX_MATCHES_PER_FILE) 
-                            : matches)
-                        .tags(fileTagsMap.getOrDefault(file.getId(), Collections.emptyList()))
-                        .build();
-                    results.add(fileResult);
-                    totalMatches += matches.size();
-                    
-                    if (fileNameMatches && matches.isEmpty()) {
-                        log.info("[Search] File {} matched by filename only", file.getName());
-                    }
-                }
-            } catch (Throwable e) {
-                // Throwable 而非 Exception：某些格式解析库在 classpath 不兼容时抛的是
-                // Error（如 NoSuchMethodError），一旦漏挡就会打断整个搜索请求、
-                // 连带丢掉本该找到的其它文件命中。
-                log.warn("Failed to search file {}: {}", file.getName(), e.getMessage(), e);
+                fileResult = futures.get(i).get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                futures.forEach(f -> f.cancel(true));
+                break;
+            } catch (ExecutionException e) {
+                // searchOneFile 自己已经兜住 Throwable，走到这里只会是池子被关等极端情况
+                log.warn("Failed to search file {}: {}", files.get(i).getName(), e.getMessage());
+                continue;
+            }
+            if (fileResult != null) {
+                results.add(fileResult);
+                totalMatches += fileResult.getMatchCount();
             }
         }
 
@@ -199,6 +209,61 @@ public class ContentSearchService {
             .totalFiles(results.size())
             .results(results)
             .build();
+    }
+
+    /**
+     * 单个文件的搜索：文件名匹配 + 内容匹配。不命中返回 null。在 {@link #searchPool} 里跑。
+     */
+    private FileSearchResult searchOneFile(ProjectFile file, boolean hasQuery, String query, String queryLower,
+                                           Pattern searchPattern, SearchRequest request,
+                                           Map<Long, List<Tag>> fileTagsMap) {
+        try {
+            List<MatchInfo> matches = new ArrayList<>();
+            boolean fileNameMatches = false;
+
+            // 1. 检查文件名是否匹配
+            String fileName = file.getName();
+            if (hasQuery && fileName != null) {
+                if (request.isCaseSensitive()) {
+                    fileNameMatches = fileName.contains(query);
+                } else {
+                    fileNameMatches = fileName.toLowerCase().contains(queryLower);
+                }
+            }
+
+            // 2. 提取内容并搜索 (仅当有查询词时)
+            if (hasQuery) {
+                String content = extractContent(file);
+                if (content != null && !content.isEmpty()) {
+                    matches = findMatches(content, searchPattern, query);
+                    log.debug("[Search] File {} - {} chars, {} matches", file.getName(), content.length(), matches.size());
+                } else {
+                    log.debug("[Search] File {} has no extractable content", file.getName());
+                }
+            }
+
+            // 3. 如果文件名匹配或内容匹配，或者没有查询词（纯标签过滤），都加入结果
+            if (!hasQuery || fileNameMatches || !matches.isEmpty()) {
+                return FileSearchResult.builder()
+                    .fileId(file.getId())
+                    .wpsFileId(file.getWpsFileId())
+                    .fileName(file.getName())
+                    .filePath(file.getFilePath())
+                    .fileType(file.getFileType())
+                    .matchCount(matches.size())
+                    .matches(matches.size() > MAX_MATCHES_PER_FILE
+                        ? matches.subList(0, MAX_MATCHES_PER_FILE)
+                        : matches)
+                    .tags(fileTagsMap.getOrDefault(file.getId(), Collections.emptyList()))
+                    .build();
+            }
+        } catch (Throwable e) {
+            // Throwable 而非 Exception：某些格式解析库在 classpath 不兼容时抛的是
+            // Error（如 NoSuchMethodError），一旦漏挡就会打断整个搜索请求、
+            // 连带丢掉本该找到的其它文件命中。
+            log.warn("Failed to search file {}: {}", file.getName(), e.getMessage(), e);
+        }
+        return null;
     }
 
     /**
@@ -214,14 +279,33 @@ public class ContentSearchService {
         }
 
         try {
+            // 先查落库缓存（dev-board#800 那张表，AI 读文件也写它）：文件没改就不再跑 Tika/PDFBox。
+            // 命中的可能是早先 OCR 得到的正文——扫描件因此也能被搜到，且不花一分钱。
+            DocumentTextService.FileStamp stamp =
+                    textCache == null || file.getId() == null ? null : documentTextService.stampOf(file);
+            String cached = textCache == null ? null : textCache.find(file.getId(), stamp);
+            if (cached != null) {
+                return cached;
+            }
             String extracted = documentTextService.extractText(file);
-            log.info("[Search] extracted {} chars from {}",
+            log.debug("[Search] extracted {} chars from {}",
                 extracted != null ? extracted.length() : 0, filePath);
+            // 写缓存的判据与 ProjectFileTextExtractor 一致：PDF 文字层不可用（扫描件残渣）
+            // 不写——那张表是共用的，写进去 AI 读这份文件时会拿残渣顶替 OCR。
+            if (textCache != null && isUsableText(file, extracted)) {
+                textCache.store(file.getId(), stamp, ProjectFileTextCache.SOURCE_TEXT, extracted);
+            }
             return extracted;
         } catch (Exception e) {
             log.warn("Failed to extract content from {}: {}", file.getName(), e.getMessage());
             return null;
         }
+    }
+
+    private static boolean isUsableText(ProjectFile file, String text) {
+        boolean pdf = "pdf".equalsIgnoreCase(file.getFileType())
+                || (file.getName() != null && file.getName().toLowerCase().endsWith(".pdf"));
+        return pdf ? PdfTextLayer.isUsable(text) : text != null && !text.isBlank();
     }
 
     /**

@@ -170,6 +170,8 @@ import { TAG_TYPE_PARTY, TAG_TYPE_ISSUE, TAG_TYPE_NORMAL, normalizeTagType } fro
 const TAG_FILTER_THRESHOLD = 12
 // 展开后先只铺这么多，剩下的走「显示全部」——一个项目可能有几百个自动标签
 const TAG_MAX_COLLAPSED = 24
+// 输入停顿多久才发搜索（v0.49.0 BUG-12）
+const SEARCH_DEBOUNCE_MS = 300
 
 export default {
   name: 'SearchPanel',
@@ -256,6 +258,13 @@ export default {
   mounted() {
     this.fetchTags()
   },
+  beforeUnmount() {
+    // 面板关掉后不许再有待发的防抖或在途请求（后端还在为它逐个抽文件）
+    if (this.debounceTimer) clearTimeout(this.debounceTimer)
+    this.debounceTimer = null
+    if (this._searchAbort) this._searchAbort.abort()
+    this._searchAbort = null
+  },
   methods: {
     async fetchTags() {
       try {
@@ -334,8 +343,9 @@ export default {
     onSearchInput() {
       if (this.debounceTimer) clearTimeout(this.debounceTimer)
       this.debounceTimer = setTimeout(() => {
+        this.debounceTimer = null
         this.performSearch()
-      }, 500)
+      }, SEARCH_DEBOUNCE_MS)
     },
     toggleOption(option) {
       this.searchOptions[option] = !this.searchOptions[option]
@@ -344,11 +354,19 @@ export default {
       }
     },
     async performSearch() {
+      // 回车/点标签/清空都会直接调到这里：撤掉还没到点的防抖，免得同一次输入再发一遍
+      if (this.debounceTimer) clearTimeout(this.debounceTimer)
+      this.debounceTimer = null
+      // 竞态防护：快速连点标签/选项会并发多次搜索，只让最新一次的结果落地
+      const seq = (this._searchSeq = (this._searchSeq || 0) + 1)
+      // 旧请求不只是丢结果，还要真的断开（v0.49.0 BUG-12：否则连续输入在后端叠成长队）
+      if (this._searchAbort) this._searchAbort.abort()
+      this._searchAbort = null
+
       // Allow search if query is non-empty OR if tags are selected
       this.loading = true
       this.hasSearched = true
-      // 竞态防护：快速连点标签/选项会并发多次搜索，只让最新一次的结果落地
-      const seq = (this._searchSeq = (this._searchSeq || 0) + 1)
+      const controller = (this._searchAbort = new AbortController())
 
       try {
         const response = await searchProjectContent(this.projectId, {
@@ -356,7 +374,7 @@ export default {
           ...this.searchOptions,
           tagIds: this.selectedTagIds,
           fileTypes: ['docx', 'pdf', 'pptx', 'xlsx', 'txt', 'md'] // Explicitly support these types
-        })
+        }, { signal: controller.signal })
 
         if (seq !== this._searchSeq) return // 已有更新的搜索发起，丢弃本次陈旧结果
 
@@ -368,11 +386,16 @@ export default {
         // Expand all by default
         this.collapsedFiles = {}
       } catch (e) {
+        // 被新查询/清空/卸载主动取消的请求不是失败：不打日志、不弹提示
+        if (controller.signal.aborted) return
         console.error('Search failed:', e)
         // 失败提示同样按 seq 收口：陈旧请求的迟到失败不该盖在新结果上弹「搜索失败」
         if (seq === this._searchSeq) uni.showToast({ title: 'Search failed', icon: 'none' })
       } finally {
-        if (seq === this._searchSeq) this.loading = false
+        if (seq === this._searchSeq) {
+          this.loading = false
+          this._searchAbort = null
+        }
       }
     },
     refreshSearch() {
