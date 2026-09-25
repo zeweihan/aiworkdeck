@@ -39,6 +39,14 @@ export default {
   minutesSuffix: '{count}分',
   allProjectsOption: '全部项目',
   unassociatedProjectOption: '未关联项目',
+  // dev-board BUG-45：「操作」列/CSV 导出原来直接显示后端枚举值，改成中文文案
+  actionLogin: '登录',
+  actionOpenFile: '打开文件',
+  actionCloseFile: '关闭文件',
+  actionPageView: '访问页面',
+  actionOpenUrl: '打开网页',
+  actionCloseUrl: '关闭网页',
+  actionWork: '工作',
 
   // ---- 设置页「全部收藏」（dev-board#872：跨项目汇总，按项目分组）----
   favoritesSubtitle: '汇总你在所有项目里收藏的内容；工作台左栏的收藏夹只看当前项目，并可直接插入文档',

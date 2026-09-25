@@ -40,6 +40,15 @@ export default {
   minutesSuffix: '{count} min',
   allProjectsOption: 'All Projects',
   unassociatedProjectOption: 'No Project',
+  // dev-board BUG-45: the Action column / CSV export used to show the raw
+  // backend enum value; map it to readable text.
+  actionLogin: 'Login',
+  actionOpenFile: 'Opened File',
+  actionCloseFile: 'Closed File',
+  actionPageView: 'Viewed Page',
+  actionOpenUrl: 'Opened URL',
+  actionCloseUrl: 'Closed URL',
+  actionWork: 'Work',
 
   // ---- Settings page: All Favorites (dev-board#872: cross-project roll-up, grouped by project) ----
   favoritesSubtitle: 'A roll-up of everything you have favorited across all projects. The favorites drawer in the workbench sidebar only shows the current project, and lets you insert directly into a document.',

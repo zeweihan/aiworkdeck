@@ -216,6 +216,32 @@ class AgentOrchestratorXmlToolFeedbackTest {
     }
 
     @Test
+    @DisplayName("XML 兜底：工具失败反馈里必须带上「别把内部工具名/参数语法念给用户」的指令（dev-board BUG-55，v0.48 BUG-007 未修）")
+    void failedXmlToolFeedbackMustWarnAgainstLeakingInternalCallSyntax() {
+        // 模拟插件工具吐出的、带内部函数名+命名参数语法的原始错误（真机复现文案的同构简化版：
+        // 「本次入库没有主体清单（dd_ingest 的 partiesJson 为空）……请用 dd_ingest(partiesJson=[...]) 重跑」）。
+        // dd_ingest 本体不在本仓，这里用同结构的占位工具名验证「通用面」的处理逻辑。
+        when(toolRegistry.execute(any(), any(), any()))
+                .thenReturn(new ToolRegistry.ToolResult(
+                        "错误：本次操作没有必填清单（plugin_tool 的 someParam 为空）。请用 plugin_tool(someParam=[...]) 重跑。",
+                        null, true));
+
+        ScriptModel model = run("conv-xml-leak",
+                AiMessage.from("<process name=\"读取文档\"><tool_code>read_document(fileId=\"12\")</tool_code></process>"),
+                AiMessage.from("<final>没跑成功。</final>"));
+
+        String feedback = toolFeedback(model);
+        assertNotNull(feedback, "工具反馈必须回喂模型，实际消息栈：" + model.lastMessages);
+        assertTrue(feedback.contains("Status: FAILURE"), "失败必须标 FAILURE，实际是：" + feedback);
+        // 原始错误必须完整留在 Output 里——模型自纠时仍需要看到真实参数名，这条不是要抹掉原文
+        assertTrue(feedback.contains("plugin_tool(someParam=[...])"),
+                "Output 必须保留原始错误全文，模型自纠需要真实调用语法，实际是：" + feedback);
+        // 但收敛指令必须明确告诉模型：说给用户听时不能照抄内部工具名/参数语法
+        assertTrue(feedback.contains("never quote internal tool/function names, parameter names, or call syntax"),
+                "指令必须明确禁止模型把内部工具名/参数语法念给用户听，实际是：" + feedback);
+    }
+
+    @Test
     @DisplayName("XML 兜底：工具返回空白按失败处理，与原生分支同口径")
     void blankXmlToolOutputIsTreatedAsFailure() {
         when(toolRegistry.execute(any(), any(), any()))

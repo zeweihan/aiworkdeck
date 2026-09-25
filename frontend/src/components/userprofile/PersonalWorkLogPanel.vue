@@ -40,7 +40,7 @@
         <scroll-view v-else scroll-y class="log-table-body">
           <view v-for="log in getFilteredLogs()" :key="log.id" class="log-table-row">
             <text class="td td-project" :title="getLogProject(log)"><text class="project-badge">{{ getLogProject(log) }}</text></text>
-            <text class="td td-action">{{ log.actionType }}</text>
+            <text class="td td-action">{{ getLogActionLabel(log) }}</text>
             <text class="td td-object" :title="getLogObject(log)">{{ getLogObject(log) }}</text>
             <text class="td td-start">{{ getLogStartTime(log) }}</text>
             <text class="td td-end">{{ getLogEndTime(log) }}</text>
@@ -56,6 +56,19 @@
 import { getUserActivityHistory } from '@/services/api.js'
 import AwdSelect from '@/components/AwdSelect.vue'
 import SettingsSection from '@/components/settings/SettingsSection.vue'
+
+// dev-board BUG-45：actionType → i18n key。取值范围见 backend
+// UserActivityLog.actionType 的文档注释（LOGIN/OPEN_FILE/CLOSE_FILE/PAGE_VIEW/
+// OPEN_URL/CLOSE_URL）+ activityTracker.js 目前实际会发的 WORK。
+const ACTION_TYPE_I18N_KEYS = {
+  LOGIN: 'account.actionLogin',
+  OPEN_FILE: 'account.actionOpenFile',
+  CLOSE_FILE: 'account.actionCloseFile',
+  PAGE_VIEW: 'account.actionPageView',
+  OPEN_URL: 'account.actionOpenUrl',
+  CLOSE_URL: 'account.actionCloseUrl',
+  WORK: 'account.actionWork',
+}
 
 export default {
   name: 'PersonalWorkLogPanel',
@@ -146,6 +159,14 @@ export default {
       if (log.actionType === 'WORK' && log.targetName) return log.targetName
       return this.$t('account.unassociatedProjectOption')
     },
+    getLogActionLabel(log) {
+      // dev-board BUG-45：表格与 CSV 导出原来直接渲染后端枚举
+      // （OPEN_FILE/OPEN_URL/...），对律师用户不可读；这里映射成 i18n 文案。
+      // 枚举取值见 backend UserActivityLog.actionType 文档注释 + activityTracker.js
+      // 里实际在发的 WORK/OPEN_FILE/OPEN_URL 三种；未知值原样展示，不吞掉信息。
+      const key = ACTION_TYPE_I18N_KEYS[log.actionType]
+      return key ? this.$t(key) : log.actionType
+    },
     getLogObject(log) {
       if (log.actionType === 'OPEN_FILE' || log.actionType === 'CLOSE_FILE') return log.targetName
       if (log.actionType === 'WORK') return '-'
@@ -196,7 +217,7 @@ export default {
 
       logs.forEach(log => {
         const project = (this.getLogProject(log) || '').replace(/,/g, ' ')
-        const action = log.actionType
+        const action = this.getLogActionLabel(log)
         const object = (this.getLogObject(log) || '').replace(/,/g, ' ')
         const start = this.getLogStartTime(log)
         const end = this.getLogEndTime(log)
@@ -248,15 +269,41 @@ export default {
 <style lang="scss" scoped>
 @import '@/components/settings/settings.scss';
 
+/* dev-board BUG-04：SettingsSection 头部默认 head-text flex:1 + min-width:0，
+   actions 侧 flex-shrink:0；本栏目的筛选行（4 个控件）比其它分节的 actions 宽
+   得多，中栏（~1000px 宽，右栏开着）下 actions 占满自然宽度不收缩，标题区被
+   挤到 0 附近，中文逐字竖排。给标题区一个下限宽度，并允许头部整行换行——
+   容器不够宽时筛选行掉到第二行，标题独占一行，而不是被压扁。 */
+.panel-work-log :deep(.awd-set-section-head) {
+  flex-wrap: wrap;
+}
+
+.panel-work-log :deep(.awd-set-section-head-text) {
+  min-width: 220px;
+}
+
+/* dev-board BUG-04 复核缺口：折到第二行后，actions 容器（SettingsSection
+   共用的 .awd-set-section-actions）本身仍是 flex-shrink:0 + 自然宽度
+   （筛选行 4 个控件约 517px），右栏开着、区块约 410px 宽时超出
+   .awd-set-section 的 overflow:hidden 被裁掉，导出按钮和关键词输入框一部分
+   看不见也点不到。让 actions 容器可收缩到区块宽度内，内部筛选行再允许换行。 */
+.panel-work-log :deep(.awd-set-section-actions) {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* 筛选条并成一条 32px 工具栏，挂在 SettingsSection 的头部 #actions 里 */
 .log-filter-bar {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .filter-input {
   flex: 1;
+  min-width: 0;
   height: 30px;
   border: 1px solid var(--awd-border);
   border-radius: 6px;
@@ -267,6 +314,7 @@ export default {
 
 .filter-project-select {
   flex: 1;
+  min-width: 0;
 }
 
 .btn-export {
