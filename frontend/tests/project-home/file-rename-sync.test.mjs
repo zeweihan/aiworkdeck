@@ -152,7 +152,8 @@ const acaMethods = new Function(
   acaBody
 )(
   () => {}, () => {}, () => ({ enqueue: (fn) => fn() }), 'awd:doc-mutated', 300, () => true,
-  { showToast() {} }
+  // $emit：树没挂载时 refresh_files 会补发 awd:files-changed（dev-board BUG-21）
+  { showToast() {}, $emit() {} }
 )
 
 function agentWorkspace() {
