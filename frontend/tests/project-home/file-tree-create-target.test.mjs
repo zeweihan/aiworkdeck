@@ -23,6 +23,7 @@ const IMPORT_NAMES = [
   'TagManager', 'AwdDatePicker', 'ICONS', 'getProjectTags', 'addTagToFile', 'removeTagFromFile',
   'createTag', 'createTask', 'importLocalFile',
   'nativeDataTransfer', 'isExternalFileDrag', 'claimExternalDrop', 'isAudioFileName',
+  'showDialog',
 ]
 
 function makeVm() {
@@ -70,7 +71,9 @@ test('选中文件夹里的文件后新建文档，落在该文件所在的文�
   const vm = makeVm()
   vm.allFiles = [folder, doc, inner]
   vm.handleItemClick(inner, {})
-  await vm.createBlankWord()
+  // BUG-27 修复后 createBlankWord 接收命名对话框给的名字，这里显式传入以隔离本测试关心的
+  // 落点逻辑，不依赖 $t 桩对默认名的翻译产出。
+  await vm.createBlankWord('newdocument')
   assert.equal(vm.calls.createFile[0][1], 7)
   // 目标文件夹里已有 newdocument.docx（折叠着、不在 displayFiles 里）也要避开重名
   assert.equal(vm.calls.createFile[0][2], 'newdocument (1).docx')
@@ -102,7 +105,7 @@ test('没有选中任何东西时仍落在当前浏览层级', async () => {
   const vm = makeVm()
   vm.allFiles = [folder, doc]
   vm.displayFiles = [folder, doc]
-  await vm.createBlankWord()
+  await vm.createBlankWord('newdocument')
   assert.equal(vm.calls.createFile[0][1], null)
   assert.equal(vm.calls.createFile[0][2], 'newdocument (1).docx')
 })

@@ -19,6 +19,9 @@ export default {
   // 新建文件夹
   newFolder: '新建文件夹',
   folderNamePlaceholder: '请输入文件夹名称',
+  newFileDialogTitle: '新建文档',
+  fileNamePlaceholder: '请输入文档名称',
+  defaultDocumentName: '新建文档',
   rootDirectory: '根目录',
   // 标签管理
   manageTags: '管理标签',

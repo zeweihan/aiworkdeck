@@ -8,6 +8,7 @@ import io.methvin.watcher.hashing.FileHasher;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 
@@ -18,6 +19,9 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 /**
  * 文件夹监听的性能契约：**建立监听时不许读文件内容**。
@@ -70,6 +74,35 @@ class LocalRootWatchServiceTest {
 
             svc.stopWatch(2L);
             assertFalse(svc.isWatching(2L), "停掉之后不能还报在监听");
+        } finally {
+            svc.shutdown();
+        }
+    }
+
+    /**
+     * BUG-06（v0.49.0 真机批次 H，dev-board#903 现场）：系统「选择文件夹」对话框浏览到一个
+     * 已跟踪的本地项目目录时，macOS Finder 视图会在目录里落一个 {@code .DS_Store}；监听器
+     * 此前对任何文件系统事件都无差别排一次全量对账，哪怕改动的只是这类从不进文件树的噪声
+     * 条目（{@link LocalProjectService#isIgnoredEntryName}），造成"只是路过看了一眼就被
+     * 写脏"的静默副作用。listener 现在按同一份口径先过滤一次。
+     */
+    @Test
+    void noiseOnlyChangesDoNotTriggerReconcile(@TempDir Path dir) throws Exception {
+        com.checkba.repository.ProjectRepository repo = mock(com.checkba.repository.ProjectRepository.class);
+        LocalProjectService projectService = mock(LocalProjectService.class);
+        LocalRootWatchService svc = new LocalRootWatchService(repo, projectService);
+        try {
+            assertTrue(svc.ensureWatch(1L, dir.toString()));
+
+            // 只落一个 .DS_Store：不该触发任何对账
+            Files.writeString(dir.resolve(".DS_Store"), "noise");
+            Thread.sleep(LocalRootWatchService.DEBOUNCE_MILLIS + 700);
+            verify(projectService, never()).reconcileProject(1L);
+
+            // 真实文档改动仍然要触发对账（不能把过滤做过头）
+            Files.writeString(dir.resolve("起诉状.docx"), "real change");
+            verify(projectService, timeout(LocalRootWatchService.DEBOUNCE_MILLIS + 2000).atLeastOnce())
+                    .reconcileProject(1L);
         } finally {
             svc.shutdown();
         }

@@ -19,6 +19,9 @@ export default {
   // New folder
   newFolder: 'New Folder',
   folderNamePlaceholder: 'Enter a folder name',
+  newFileDialogTitle: 'New Document',
+  fileNamePlaceholder: 'Enter a document name',
+  defaultDocumentName: 'New document',
   rootDirectory: 'Root Directory',
   // Tag management
   manageTags: 'Manage Tags',
