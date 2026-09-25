@@ -428,7 +428,7 @@ public class VersionController {
     private List<ProjectRepoService.HistoryRoot> historyRoots(long projectId) {
         List<ProjectRepoService.HistoryRoot> roots = new ArrayList<>();
         roots.add(new ProjectRepoService.HistoryRoot(
-                repoService.mainBranch(), "mainline", LangText.of("主线", "Mainline")));
+                repoService.mainBranch(), "mainline", LangText.of("主稿", "Main copy")));
         for (WorkSession d : sessionService.listDrafts(projectId)) {
             if (d.getBranchName() == null) continue;
             roots.add(new ProjectRepoService.HistoryRoot(

@@ -157,8 +157,6 @@
                   <text class="ch-author">{{ authorText(row.entry) }}</text>
                   <text class="ch-sep">·</text>
                   <text class="ch-time">{{ timeOf(row.entry.when) }}</text>
-                  <text class="ch-sep">·</text>
-                  <text class="ch-shortid">{{ row.entry.shortId || row.entry.sha.slice(0, 7) }}</text>
                   <text
                     v-if="row.entry.autoCount"
                     class="ch-autos"
@@ -200,8 +198,7 @@
         <template v-else-if="selectedEntry">
           <view class="ch-detail-title">{{ titleOf(selectedEntry) }}</view>
           <view class="ch-detail-meta">
-            {{ authorText(selectedEntry) }} · {{ timeOf(selectedEntry.when) }} ·
-            {{ selectedEntry.shortId || selectedEntry.sha.slice(0, 7) }}
+            {{ authorText(selectedEntry) }} · {{ timeOf(selectedEntry.when) }}
           </view>
           <view v-if="selectedEntry.refs && selectedEntry.refs.length" class="ch-detail-row">
             <text class="ch-detail-key">{{ $t('version.detailTags') }}</text>
@@ -857,9 +854,12 @@ export default {
       const n = Number(count) || 0
       return this.$t(n === 1 ? 'version.autoFoldedCountOne' : 'version.autoFoldedCount', { count: n })
     },
+    // 对比两版时两侧叫什么：「9 月 25 日 18:09」，不露短哈希（BUG-56，零 Git 术语红线）。
+    // 找不到这一行时给空串，对比标签页会退回「上一版 / 这一版」。
     shortOf(sha) {
       const e = this.entries.find((x) => x.sha === sha)
-      return (e && e.shortId) || String(sha).slice(0, 7)
+      if (!e) return ''
+      return `${this.dayLabel(e.when)} ${this.timeOf(e.when)}`.trim()
     },
     visibleRefs(e) {
       return (e.refs || []).slice(0, 3)
@@ -1120,8 +1120,7 @@ export default {
 }
 .ch-author { font-size: 11px; color: var(--awd-text-2); flex-shrink: 0; }
 .ch-sep { font-size: 11px; color: var(--awd-text-3); flex-shrink: 0; }
-.ch-time, .ch-shortid { font-size: 11px; color: var(--awd-text-3); flex-shrink: 0; }
-.ch-shortid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ch-time { font-size: 11px; color: var(--awd-text-3); flex-shrink: 0; }
 .ch-autos { font-size: 11px; color: var(--awd-accent-text); text-decoration: underline; flex-shrink: 0; }
 .ch-entry-merge {
   font-size: 11px; color: var(--awd-text-3); line-height: 16px;
