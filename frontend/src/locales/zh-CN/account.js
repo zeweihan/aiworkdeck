@@ -67,7 +67,7 @@ export default {
   todosGroupNoDate: '无日期',
   todosGroupDone: '已完成',
   emptyTodosDesc: '暂无待办事项',
-  emptyTodosHow: '在项目日历里新增，或在文件上右键「设置截止日」，都会汇总到这里',
+  emptyTodosHow: '点右上角「新增」，或在文件上右键「添加事项…」，都会汇总到这里',
   deleteTodoConfirm: '确定要删除该待办吗？',
   todoUpdateFailed: '更新失败，请重试',
 

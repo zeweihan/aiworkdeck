@@ -113,36 +113,135 @@ $brand-dark: #221F1A;    /* Dark BG */
 }
 
 /* 概览统计 */
-.projects-stats-row {
-  display: flex;
-  flex-direction: row;
-  gap: 16px;
+.task-overview {
   margin-bottom: 24px;
 }
 
-.stat-card {
-  flex: 1;
-  background: var(--awd-surface);
-  border-radius: 12px;
-  padding: 16px 20px;
-  box-shadow: var(--awd-shadow-sm);
+.projects-stats-row {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: stretch;
+  background: var(--awd-surface);
   border: 1px solid var(--awd-border);
+  border-radius: 10px;
+  box-shadow: var(--awd-shadow-sm);
+  padding: 4px;
 }
 
-.stat-value {
-  font-size: 24px;
+.stat-card,
+.ov-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 7px;
+
+  & + .ov-cell {
+    position: relative;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 12px;
+      bottom: 12px;
+      width: 1px;
+      background: var(--awd-border-subtle);
+    }
+  }
+
+  &.is-link {
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+      background: var(--awd-accent-wash);
+    }
+  }
+}
+
+.ov-value {
+  font-size: 22px;
   font-weight: 600;
+  line-height: 1.2;
   color: var(--awd-accent-text);
-  margin-bottom: 4px;
   font-family: 'Inter', sans-serif;
+  font-variant-numeric: tabular-nums;
+
+  &.is-alert {
+    color: var(--awd-danger-text);
+  }
 }
 
-.stat-label {
+.ov-label {
   font-size: 13px;
   color: var(--awd-text-2);
+}
+
+.ov-spacer {
+  flex: 1;
+}
+
+.ov-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+  margin-right: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--awd-accent-text);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--awd-accent-soft);
+  }
+}
+
+.ov-link-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.ov-next {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 0 4px;
+  cursor: pointer;
+
+  &:hover .ov-next-text {
+    color: var(--awd-accent-text);
+  }
+}
+
+.ov-next-text {
+  font-size: 12px;
+  color: var(--awd-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 顶栏「日程」按钮的徽标：已逾期 + 今天 */
+.btn-schedule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  color: var(--awd-text-on-accent);
+  background: var(--awd-danger);
 }
 
 /* 项目列表 Grid */
@@ -640,8 +739,9 @@ $brand-dark: #221F1A;    /* Dark BG */
     flex-wrap: wrap;
   }
 
-  .stat-card {
-    min-width: 45%;
+  .stat-card,
+  .ov-cell {
+    padding: 8px 12px;
   }
 }
 

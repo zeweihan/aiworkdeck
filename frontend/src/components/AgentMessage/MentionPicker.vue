@@ -1,16 +1,21 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="mention-picker" role="listbox" :aria-label="$t('chat.mentionTitle')">
+  <view
+    class="mention-picker"
+    :class="{ 'is-below': placement === 'bottom' }"
+    role="listbox"
+    :aria-label="title || $t('chat.mentionTitle')"
+  >
     <view class="mp-head">
-      <text class="mp-title">{{ $t('chat.mentionTitle') }}</text>
-      <text class="mp-hint">{{ $t('chat.mentionHint') }}</text>
+      <text class="mp-title">{{ title || $t('chat.mentionTitle') }}</text>
+      <text class="mp-hint">{{ hint || $t('chat.mentionHint') }}</text>
     </view>
     <scroll-view v-if="matches.length" class="mp-list" scroll-y :scroll-into-view="'mp-item-' + activeIndex">
       <view
         v-for="(item, idx) in matches"
         :id="'mp-item-' + idx"
-        :key="item.id"
+        :key="(item.kind || 'file') + ':' + item.id"
         class="mp-item"
         :class="{ 'is-active': idx === activeIndex }"
         role="option"
@@ -18,13 +23,20 @@
         @mousedown.prevent="$emit('select', item)"
         @mousemove="activeIndex = idx"
       >
-        <image class="mp-icon" :src="item.isDir ? '/static/folder-closed.png' : '/static/document.png'" mode="aspectFit" />
-        <text class="mp-name">{{ item.name }}</text>
-        <text v-if="item.dirLabel" class="mp-path">{{ item.dirLabel }}</text>
+        <template v-if="item.kind === 'member'">
+          <text class="mp-avatar">{{ memberInitial(item) }}</text>
+          <text class="mp-name">{{ memberName(item) }}</text>
+          <text v-if="item.roleLabel || item.role" class="mp-path">{{ item.roleLabel || item.role }}</text>
+        </template>
+        <template v-else>
+          <image class="mp-icon" :src="item.isDir ? '/static/folder-closed.png' : '/static/document.png'" mode="aspectFit" />
+          <text class="mp-name">{{ item.name }}</text>
+          <text v-if="item.dirLabel" class="mp-path">{{ item.dirLabel }}</text>
+        </template>
       </view>
     </scroll-view>
     <view v-else class="mp-empty">
-      <text>{{ loading ? $t('files.loadingFileList') : $t('chat.mentionNoMatch') }}</text>
+      <text>{{ loading ? $t('files.loadingFileList') : (emptyText || $t('chat.mentionNoMatch')) }}</text>
     </view>
   </view>
 </template>
@@ -39,7 +51,12 @@
 // QuickOpenPanel 那样在 document 捕获段拦键）；宿主经 ref 调 moveActive / activeItem。
 // 行点击走 @mousedown.prevent 而不是 @tap：点一下先 blur 掉 contenteditable 的话，
 // 记着 `@查询` 在哪的那个 Range 就没了，标签会插到文档末尾去。
+//
+// 事项弹窗（dev-board#896）复用本组件：额外传 members 时，成员条目排在文件前面，条目带
+// kind:'member'（头像首字 + 姓名 + 角色）；文件条目的形状与 chat 用法完全一样。members
+// 缺省为空数组，chat 的两处调用不传，行为不变。title/hint/emptyText/placement 同理可选。
 import { matchProjectFiles } from '@/utils/aiContextFiles.js'
+import { matchMembers, memberName } from '@/components/calendar/mentionText.js'
 
 export default {
   name: 'MentionPicker',
@@ -47,6 +64,13 @@ export default {
     files: { type: Array, default: () => [] },
     query: { type: String, default: '' },
     loading: { type: Boolean, default: false },
+    /** 可选：项目成员 [{userId, displayName, username, role, roleLabel?}]，匹配到的排在文件前 */
+    members: { type: Array, default: () => [] },
+    title: { type: String, default: '' },
+    hint: { type: String, default: '' },
+    emptyText: { type: String, default: '' },
+    /** 'top'（默认，浮在输入框上方，chat 用法）| 'bottom'（浮在下方） */
+    placement: { type: String, default: 'top' },
   },
   emits: ['select'],
   data() {
@@ -54,7 +78,11 @@ export default {
   },
   computed: {
     matches() {
-      return matchProjectFiles(this.files, this.query)
+      const files = matchProjectFiles(this.files, this.query)
+      if (!this.members.length) return files
+      const members = matchMembers(this.members, this.query)
+        .map((m) => ({ ...m, kind: 'member', id: m.userId }))
+      return members.concat(files)
     },
   },
   watch: {
@@ -67,6 +95,12 @@ export default {
       const n = this.matches.length
       if (!n) return
       this.activeIndex = (this.activeIndex + delta + n) % n
+    },
+    memberName(item) {
+      return memberName(item)
+    },
+    memberInitial(item) {
+      return memberName(item).slice(0, 1).toUpperCase()
     },
     activeItem() {
       return this.matches[this.activeIndex] || null
@@ -87,6 +121,26 @@ export default {
   border-radius: 10px;
   box-shadow: 0 8px 28px rgba(18, 52, 77, 0.14);
   overflow: hidden;
+}
+
+.mention-picker.is-below {
+  top: calc(100% + 4px);
+  bottom: auto;
+  left: 0;
+  right: 0;
+}
+
+.mp-avatar {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  border-radius: 50%;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--awd-accent-text);
+  background: var(--awd-accent-soft);
 }
 
 .mp-head {

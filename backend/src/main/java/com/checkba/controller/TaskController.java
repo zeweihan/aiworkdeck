@@ -19,6 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -57,7 +60,11 @@ public class TaskController {
         return userId;
     }
 
-    /** body: {projectId, fileId?, title, dueDate, dueTime?} */
+    /**
+     * body: {projectId, title, dueDate, dueTime?, type?, priority?, notes?, assigneeId?, remindBefore?,
+     * fileIds?:[], fileId?}。旧 fileId 仍接受，等价于 fileIds:[fileId]（两者同传时以 fileIds 为准）。
+     * type/priority 枚举、负责人是项目成员、每个文件属于项目这三条校验在 ProjectTaskService 里做。
+     */
     @PostMapping
     public ResponseEntity<Map<String, Object>> create(
             @RequestBody Map<String, Object> body,
@@ -65,16 +72,34 @@ public class TaskController {
         Long projectId = toLong(body == null ? null : body.get("projectId"));
         Long userId = requireWrite(projectId, sessionId);
 
-        Long fileId = toLong(body.get("fileId"));
         String title = toText(body.get("title"));
         LocalDate dueDate = toLocalDate(body.get("dueDate"));
         LocalTime dueTime = toLocalTime(body.get("dueTime"));
+        List<Long> fileIds;
+        if (body.get("fileIds") != null) {
+            fileIds = toLongList(body.get("fileIds"));
+        } else {
+            Long fileId = toLong(body.get("fileId"));
+            fileIds = fileId == null ? null : List.of(fileId);
+        }
+        Long remind = toLong(body.get("remindBefore"));
+        ProjectTaskService.TaskDraft draft = new ProjectTaskService.TaskDraft(
+                title, dueDate, dueTime,
+                toField(body.get("type"), "type"),
+                toField(body.get("priority"), "priority"),
+                toField(body.get("notes"), "notes"),
+                toLong(body.get("assigneeId")),
+                toInt(remind),
+                fileIds);
 
-        ProjectTask task = taskService.createTask(projectId, fileId, title, dueDate, dueTime, userId);
+        ProjectTask task = taskService.createTask(projectId, draft, userId);
         return ok(taskService.toResponseMap(task));
     }
 
-    /** body: {title?, dueDate?, dueTime?, status?}——任意子集，缺席字段不动。 */
+    /**
+     * body: {title?, dueDate?, dueTime?, status?, type?, priority?, notes?, assigneeId?, remindBefore?, fileIds?}
+     * ——任意子集，缺席字段不动；fileIds 出现即整体替换；显式 null 清空 dueTime/notes/assigneeId/remindBefore。
+     */
     @PutMapping("/{id}")
     public ResponseEntity<Map<String, Object>> update(
             @PathVariable Long id,
@@ -115,12 +140,43 @@ public class TaskController {
         throw new IllegalArgumentException(LangText.of("标题必须是文本", "The title must be text"));
     }
 
+    /** 非标题的文本字段（type/priority/notes），同样不许裸强转，理由同 {@link #toText}。 */
+    private String toField(Object v, String field) {
+        if (v == null) return null;
+        if (v instanceof String str) return str;
+        throw new IllegalArgumentException(LangText.of(field + " 必须是文本", field + " must be text"));
+    }
+
     private Long toLong(Object v) {
         if (v == null) return null;
         if (v instanceof Number) return ((Number) v).longValue();
         String s = String.valueOf(v).trim();
         if (s.isEmpty()) return null;
-        return Long.parseLong(s);
+        try {
+            return Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(LangText.of("数字参数格式不合法", "Invalid numeric parameter"));
+        }
+    }
+
+    private Integer toInt(Long v) {
+        if (v == null) return null;
+        if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) {
+            throw new IllegalArgumentException(LangText.of("remindBefore 超出范围", "remindBefore is out of range"));
+        }
+        return v.intValue();
+    }
+
+    private List<Long> toLongList(Object v) {
+        if (!(v instanceof Collection<?> c)) {
+            throw new IllegalArgumentException(LangText.of("fileIds 必须是数组", "fileIds must be an array"));
+        }
+        List<Long> result = new ArrayList<>(c.size());
+        for (Object o : c) {
+            Long l = toLong(o);
+            if (l != null) result.add(l);
+        }
+        return result;
     }
 
     private LocalDate toLocalDate(Object v) {

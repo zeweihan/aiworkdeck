@@ -11,6 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import * as taskUtils from '../../src/components/calendar/taskUtils.js'
 
 const SRC = readFileSync(
   new URL('../../src/pages/calendar/calendar.vue', import.meta.url), 'utf8')
@@ -20,22 +21,24 @@ function loadOptions(getCalendarTasks, uniStub) {
     .replace(/^\s*import[\s\S]*?from\s*'[^']*'\s*$/gm, '')
     .replace(/export\s+default/, 'return')
   const stub = {}
-  const factory = new Function(
-    'FullCalendar', 'dayGridPlugin', 'timeGridPlugin', 'listPlugin', 'interactionPlugin',
-    'zhCnLocale', 'getCalendarTasks', 'getMyProjects', 'updateTask', 'getAppLanguage',
-    'colorForProject', 'getDayMarkType', 'isDone', 'toEventStart', 'TaskDialog',
-    'UpcomingList', 'uni', body)
-  return factory(stub, stub, stub, stub, stub, stub,
-    getCalendarTasks,
-    () => Promise.resolve([]),
-    () => Promise.resolve({}),
-    () => 'zh-CN',
-    () => ({ bg: '#000', text: '#fff' }),
-    () => 'workday',
-    () => false,
-    (t) => t.dueDate,
-    stub, stub,
-    uniStub || { showToast() {} })
+  // dev-board#897 起页面经 utils/taskStore 读：loadGlobal({from,to}) 回事项数组。
+  // 这里把它接到按 from 分闸的假接口上，乱序语义不变。taskUtils 零依赖，直接用真的。
+  const deps = {
+    ...taskUtils,
+    FullCalendar: stub, dayGridPlugin: stub, timeGridPlugin: stub, listPlugin: stub,
+    interactionPlugin: stub, zhCnLocale: stub, TaskDialog: stub, AgendaPanel: stub, AwdSwitch: stub,
+    getTaskProjectOptions: () => Promise.resolve([]),
+    getAppLanguage: () => 'zh-CN',
+    getDayMarkType: () => 'none',
+    taskStore: { global: { list: [] } },
+    loadGlobal: ({ from, to }) => getCalendarTasks(from, to).then((res) => res.data.tasks),
+    updateTask: () => Promise.resolve({}),
+    deleteTask: () => Promise.resolve({}),
+    subscribe: () => () => {},
+    uni: uniStub || { showToast() {} },
+  }
+  const names = Object.keys(deps)
+  return new Function(...names, body)(...names.map((n) => deps[n]))
 }
 
 function makeVm(options) {

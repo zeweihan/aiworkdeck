@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 设置页「个人」组里「全部收藏」「我的待办」两栏的纯函数（dev-board#872）。
-// 零依赖（不 import @/ 别名、Vue、uni），好让 node --test 直接导入：
+// 零依赖（不 import @/ 别名、Vue、uni；唯一的相对导入 taskUtils.js 同样零依赖），好让 node --test 直接导入：
 //   cd frontend && npm run test:project-home
 
 /**
@@ -64,51 +64,10 @@ export function groupFavoritesByProject(list) {
   return out
 }
 
-/** 本地时区的 YYYY-MM-DD（不能用 toISOString：东八区零点前后会差一天）。 */
-export function localDateKey(date = new Date()) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-function isDoneStatus(task) {
-  return String((task && task.status) || '').toUpperCase() === 'DONE'
-}
-
-function compareDue(a, b) {
-  const da = a.dueDate || ''
-  const db = b.dueDate || ''
-  if (da !== db) return da < db ? -1 : 1
-  // 同一天：全天事项（无时间）在前，其余按时间
-  const ta = a.dueTime || ''
-  const tb = b.dueTime || ''
-  if (ta !== tb) return ta < tb ? -1 : 1
-  return (a.id || 0) - (b.id || 0)
-}
-
-/**
- * 待办分组：overdue（截止日早于今天且未完成）/ today / upcoming / noDate / done。
- * today 传 YYYY-MM-DD 字符串（默认本机今天），方便测试。
- * 未完成的各组按截止日升序；已完成按截止日倒序（最近完成的在前）。
- */
-export function groupTodos(tasks, today = localDateKey()) {
-  const groups = { overdue: [], today: [], upcoming: [], noDate: [], done: [] }
-  for (const t of Array.isArray(tasks) ? tasks : []) {
-    if (!t) continue
-    if (isDoneStatus(t)) groups.done.push(t)
-    else if (!t.dueDate) groups.noDate.push(t)
-    else if (t.dueDate < today) groups.overdue.push(t)
-    else if (t.dueDate === today) groups.today.push(t)
-    else groups.upcoming.push(t)
-  }
-  groups.overdue.sort(compareDue)
-  groups.today.sort(compareDue)
-  groups.upcoming.sort(compareDue)
-  groups.noDate.sort((a, b) => (a.id || 0) - (b.id || 0))
-  groups.done.sort((a, b) => -compareDue(a, b))
-  return groups
-}
+// 待办分组与本地日期键已并入事项系统的唯一出处 components/calendar/taskUtils.js
+// （dev-board#896），这里只 re-export，保持既有调用方与测试的导入路径不变。
+// 用相对路径而不是 @/ 别名：node --test 直接导入本文件时不认别名。
+export { localDateKey, groupTodos } from '../components/calendar/taskUtils.js'
 
 /** 新增待办时能选的项目：只留当前用户能写的（与后端 TaskController.requireWrite 同口径）。 */
 const WRITABLE_ROLES = new Set(['OWNER', 'MANAGER', 'ADMIN', 'PARTICIPANT'])

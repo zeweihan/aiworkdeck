@@ -756,6 +756,36 @@ $color-accent: var(--awd-mint); // Mint Green
   transition: stroke 0.2s ease;
 }
 
+/* rail 计数徽标（dev-board#899，目前只有「日程」用：逾期 + 今天）。
+   rail 上此前没有任何计数徽标，按 16px 高小圆角数字标新做；有逾期时转朱砂红。 */
+.left-rail .rail-btn {
+  position: relative;
+}
+
+.rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1.5px solid var(--awd-bg);
+  background: var(--awd-accent);
+  color: var(--awd-text-on-accent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+
+  &.is-overdue {
+    background: var(--awd-danger);
+  }
+}
+
 .rail-icon-img {
     width: 18px; /* Resized to 3/4 of 24px */
     height: 18px;

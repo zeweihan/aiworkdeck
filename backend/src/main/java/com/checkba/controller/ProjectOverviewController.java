@@ -122,9 +122,26 @@ public class ProjectOverviewController {
             @PathVariable Long projectId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Long fileId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireRead(projectId, sessionId);
-        return ok(Map.of("tasks", projectTaskService.listByProject(projectId, from, to)));
+        // fileId 可选（dev-board#895）：旧列 file_id 或关联表任一命中即返回，文件树「查看事项」用
+        List<Map<String, Object>> tasks = fileId == null
+                ? projectTaskService.listByProject(projectId, from, to)
+                : projectTaskService.listByProject(projectId, from, to, fileId);
+        return ok(Map.of("tasks", tasks));
+    }
+
+    /**
+     * 单项目事项概览计数（dev-board#895）：{overdue, today, week, nextDue}，形状同 GET /api/calendar/summary。
+     * 工作台 rail「日程」徽标用。读权限，不拒 CLIENT（与 /tasks 同口径）。
+     */
+    @GetMapping("/tasks/summary")
+    public ResponseEntity<Map<String, Object>> tasksSummary(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireRead(projectId, sessionId);
+        return ok(projectTaskService.summarize(List.of(projectId)));
     }
 
     // ==================== 项目档案 ====================

@@ -21,6 +21,7 @@ const NAMES = {
   // AI 单次工作步骤条是两个概念，不要合并成一个分组。
   task_create: { zh: '创建日程任务', en: 'Create task' },
   task_list: { zh: '查询日程任务', en: 'List tasks' },
+  task_update: { zh: '修改日程任务', en: 'Update task' },
   // 网络
   search_web: { zh: '网络搜索', en: 'Web search' },
   browse_url: { zh: '浏览网页', en: 'Browse page' },

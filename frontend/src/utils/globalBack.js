@@ -26,6 +26,8 @@ const SELF_NAV_ROUTES = new Set([
   'pages/project-overview/project-overview',
   // 项目概览顶栏第一个元素就是「返回列表」，位置完全重合
   'pages/project-home/project-home',
+  // 日程页页头第一个元素就是「返回」（dev-board#897）
+  'pages/calendar/calendar',
 ])
 
 let el = null

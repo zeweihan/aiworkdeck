@@ -99,36 +99,6 @@
       </view>
     </view>
 
-    <!-- 4b. Set Deadline Modal（project_task，文件/文件夹右键「设置截止日」） -->
-    <view v-if="showDeadlineDialog" class="awd-dialog-mask" @tap="showDeadlineDialog = false">
-      <view class="awd-dialog" @tap.stop>
-        <view class="awd-dialog-header">
-          <text class="awd-dialog-title">{{ $t('calendar.deadlineDialogTitle') }}</text>
-        </view>
-        <view class="awd-dialog-body">
-          <text class="awd-dialog-text" style="display: block; margin-bottom: 12px;">
-            {{ $t('calendar.deadlineForFile', { name: deadlineTargetItem ? deadlineTargetItem.name : '' }) }}
-          </text>
-          <view class="form-group">
-            <text class="form-label">{{ $t('calendar.taskTitleLabel') }}</text>
-            <input v-model="deadlineTitle" class="awd-input" :placeholder="$t('calendar.taskTitlePlaceholder')" />
-          </view>
-          <view class="form-group">
-            <text class="form-label">{{ $t('calendar.dateLabel') }}</text>
-            <AwdDatePicker v-model="deadlineDate" type="date" />
-          </view>
-          <view class="form-group">
-            <text class="form-label">{{ $t('calendar.timeLabel') }}</text>
-            <AwdDatePicker v-model="deadlineTime" type="time" />
-          </view>
-        </view>
-        <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="showDeadlineDialog = false">{{ $t('calendar.cancel') }}</view>
-          <view class="awd-btn awd-btn-primary" @tap="confirmSetDeadline">{{ $t('calendar.save') }}</view>
-        </view>
-      </view>
-    </view>
-
     <!-- 5. Tag Manager (Global) -->
     <view v-if="showTagManager" class="awd-dialog-mask" style="z-index: 3100;" @tap="showTagManager = false">
        <view @tap.stop>
@@ -282,7 +252,9 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.manageTags') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="openDeadlineDialog(contextMenu.targetItem); closeContextMenu()">
+        <!-- 事项（dev-board#900）：「添加事项…」交给宿主开工作台唯一的 TaskDialog（预置关联这份文件）；
+             这份文件有未完成事项时多一项「查看事项 (N)」，宿主打开 rail 日程面板并按文件过滤 -->
+        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="$emit('add-task', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" stroke-linecap="round" stroke-linejoin="round"/>
@@ -291,7 +263,16 @@
               <path d="M3 10h18" stroke-linecap="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">{{ $t('calendar.setDeadline') }}</text>
+          <text class="context-menu-text">{{ $t('calendar.fileAddTask') }}</text>
+        </view>
+        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder && openTaskCount(contextMenu.targetItem.id) > 0" class="context-menu-item" @tap="$emit('view-tasks', contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 6h11M9 12h11M9 18h11" stroke-linecap="round"/>
+              <path d="M4 6h.01M4 12h.01M4 18h.01" stroke-linecap="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">{{ $t('calendar.fileViewTasks', { count: openTaskCount(contextMenu.targetItem.id) }) }}</text>
         </view>
         <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item"
           @tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()">
@@ -482,6 +463,13 @@
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
             </text>
+            <!-- 最近到期徽标（dev-board#900）：这份文件未完成事项里最早的那条 -->
+            <text
+              v-if="!item.isFolder && renamingId !== item.id && viewMode !== 'recycle' && fileDueIndex[item.id] && fileDueIndex[item.id].text"
+              class="tree-item-due"
+              :class="'is-' + fileDueIndex[item.id].kind"
+              :title="fileDueIndex[item.id].title"
+            >{{ fileDueIndex[item.id].text }}</text>
             <view v-if="viewMode === 'recycle'" class="tree-item-actions" @tap.stop>
                 <view
                   class="action-btn icon-btn"
@@ -603,6 +591,13 @@
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
             </text>
+            <!-- 最近到期徽标（dev-board#900）：这份文件未完成事项里最早的那条 -->
+            <text
+              v-if="!item.isFolder && renamingId !== item.id && viewMode !== 'recycle' && fileDueIndex[item.id] && fileDueIndex[item.id].text"
+              class="tree-item-due"
+              :class="'is-' + fileDueIndex[item.id].kind"
+              :title="fileDueIndex[item.id].title"
+            >{{ fileDueIndex[item.id].text }}</text>
             <view v-if="viewMode === 'recycle'" class="tree-item-actions" @tap.stop>
                               <view
                   class="action-btn icon-btn"
@@ -745,14 +740,14 @@ import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
 import TagManager from '@/components/TagManager.vue'
-import AwdDatePicker from '@/components/AwdDatePicker.vue'
+import { taskStore, loadProjectTasks } from '@/utils/taskStore.js'
+import { isDone, dueBadge, compareDue, taskFileIds } from '@/components/calendar/taskUtils.js'
 import { ICONS } from '@/config/icons.js'
 import {
   getProjectTags,
   addTagToFile,
   removeTagFromFile,
-  createTag,
-  createTask
+  createTag
 } from '@/services/api.js'
 
 // 移动接口失败时会在服务端把 parentId 回滚再照常返回成功（物理文件被占用，常见于
@@ -770,8 +765,7 @@ export default {
     FileTypeIcon,
     TagChip,
     TagSelector,
-    TagManager,
-    AwdDatePicker
+    TagManager
   },
   props: {
     projectId: {
@@ -901,20 +895,50 @@ export default {
       showTagEditDialog: false,
       projectTags: [],
       targetFileForTags: null,
-      editingFileId: null, // ID of file currently editing tags for
-
-      // 设置截止日（project_task，文件/文件夹右键）
-      showDeadlineDialog: false,
-      deadlineTargetItem: null,
-      deadlineTitle: '',
-      deadlineDate: '',
-      deadlineTime: '',
-      deadlineSaving: false
+      editingFileId: null // ID of file currently editing tags for
     }
 
   },
   computed: {
     ICONS() { return ICONS },
+    /**
+     * 文件 id → 最近到期的未完成事项徽标 { text, kind, title, count }（dev-board#900）。
+     * 按项目事项清单一次性建索引（O(事项数 × 关联文件数)），每行渲染只查表——
+     * 文件树几百个节点时逐行调 tasksForFile 会变成 O(节点 × 事项)。
+     * 数据是 taskStore 的响应式缓存，事项增删改后自动重算。
+     */
+    fileDueIndex() {
+      const entry = taskStore.byProject[String(this.projectId)]
+      const list = (entry && entry.list) || []
+      const best = {}
+      const counts = {}
+      for (const t of list) {
+        if (!t || isDone(t)) continue
+        for (const id of taskFileIds(t)) {
+          counts[id] = (counts[id] || 0) + 1
+          if (!t.dueDate) continue
+          if (!best[id] || compareDue(t, best[id]) < 0) best[id] = t
+        }
+      }
+      const out = {}
+      const tr = (k, p) => this.$t(k, p)
+      for (const id of Object.keys(counts)) {
+        const t = best[id]
+        const badge = t ? dueBadge(t, tr) : null
+        if (!badge || !badge.text) {
+          // 有未完成事项但都没日期：不画徽标，但右键「查看事项 (N)」仍要计数
+          out[id] = { text: '', kind: '', title: '', count: counts[id] }
+          continue
+        }
+        out[id] = {
+          text: badge.text,
+          kind: badge.kind,
+          title: t.title + ' · ' + badge.text + (badge.time ? ' ' + badge.time : ''),
+          count: counts[id],
+        }
+      }
+      return out
+    },
     isDesktopShell() {
       return !!(host.fs && host.fs.showItemInFolder)
     },
@@ -1070,6 +1094,8 @@ export default {
         this.revealCounts = {}
         this.refCounts = {}
         this.loadFiles()
+        // 到期徽标的数据（taskStore 有缓存与在途合并，工作台 onLoad 已预热时不会重发）
+        if (this.projectId) loadProjectTasks(this.projectId).catch(() => {})
       }
     },
     parentId: {
@@ -2881,41 +2907,10 @@ export default {
       this.executeBatchAction()
     },
 
-    // 设置截止日（project_task）
-    openDeadlineDialog(item) {
-      this.deadlineTargetItem = item
-      this.deadlineTitle = item ? item.name : ''
-      this.deadlineDate = ''
-      this.deadlineTime = ''
-      this.showDeadlineDialog = true
-    },
-    async confirmSetDeadline() {
-      if (this.deadlineSaving) return
-      const title = (this.deadlineTitle || '').trim()
-      if (!title) {
-        uni.showToast({ title: this.$t('calendar.requiredTitle'), icon: 'none' })
-        return
-      }
-      if (!this.deadlineDate) {
-        uni.showToast({ title: this.$t('calendar.requiredDate'), icon: 'none' })
-        return
-      }
-      this.deadlineSaving = true
-      try {
-        await createTask({
-          projectId: this.projectId,
-          fileId: this.deadlineTargetItem ? this.deadlineTargetItem.id : null,
-          title,
-          dueDate: this.deadlineDate,
-          dueTime: this.deadlineTime || null
-        })
-        this.showDeadlineDialog = false
-        uni.showToast({ title: this.$t('calendar.deadlineSet'), icon: 'none' })
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
-      } finally {
-        this.deadlineSaving = false
-      }
+    // 这份文件的未完成事项数（右键「查看事项 (N)」）
+    openTaskCount(fileId) {
+      const hit = this.fileDueIndex[fileId]
+      return hit ? hit.count : 0
     },
 
     // Tag Methods
@@ -3867,6 +3862,44 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 最近到期徽标（dev-board#900），kind 色同 TaskRow 的 .tr-due：逾期红 / 今天绿 / 7 天内琥珀 / 更远灰。
+   让位规则：空间不够时先让文件名出省略号（名字基数大，按比例收缩主要落在名字上），
+   名字收到 36px 下限后才轮到徽标被裁——不能把文件名挤没。 */
+.tree-item-name:has(+ .tree-item-due) {
+  min-width: 36px;
+}
+
+.tree-item-due {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 5px;
+  margin-right: 6px;
+  border-radius: 4px;
+  color: var(--awd-text-2);
+  background: var(--awd-surface-2);
+
+  &.is-overdue {
+    color: var(--awd-danger-text);
+    background: var(--awd-danger-soft);
+  }
+
+  &.is-today {
+    color: var(--awd-accent-text);
+    background: var(--awd-accent-soft);
+  }
+
+  &.is-soon {
+    color: var(--awd-warning-text);
+    background: var(--awd-warning-soft);
+  }
 }
 
 /* 「被引用 N 次」角标（dev-board#107 单元 F3） */

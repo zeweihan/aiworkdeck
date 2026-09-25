@@ -79,6 +79,7 @@
     "test:meeting-e2e": "node tests/meeting-e2e/run.mjs",
     "test:ai-alignment-e2e": "node tests/ai-alignment-e2e/run.mjs",
     "test:project-home": "node --test tests/project-home/*.test.mjs",
+    "test:calendar": "node --test tests/calendar/*.test.mjs",
     "test:auth-redirect": "node --test tests/auth-redirect/*.test.mjs",
     "test:commands": "node --test tests/commands/*.test.mjs",
     "test:zeta-relay": "node --test tests/zeta-relay/*.test.mjs",

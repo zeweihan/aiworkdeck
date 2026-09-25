@@ -14,6 +14,7 @@ import com.checkba.model.entity.ProjectMemory;
 import com.checkba.model.entity.ProjectProfileField;
 import com.checkba.model.entity.ProjectRemote;
 import com.checkba.model.entity.ProjectTask;
+import com.checkba.model.entity.ProjectTaskFile;
 import com.checkba.model.entity.ProjectVariable;
 import com.checkba.repository.EvidenceLinkRepository;
 import com.checkba.repository.EvidenceLinkTargetRepository;
@@ -25,6 +26,7 @@ import com.checkba.repository.ProjectMemoryRepository;
 import com.checkba.repository.ProjectProfileFieldRepository;
 import com.checkba.repository.ProjectRemoteRepository;
 import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.ProjectTaskFileRepository;
 import com.checkba.repository.ProjectTaskRepository;
 import com.checkba.repository.ProjectVariableRepository;
 import com.checkba.model.entity.MemoryRemote;
@@ -76,6 +78,7 @@ class ProjectDeleteCascadeTest {
     @Autowired private ProjectInvitationRepository invitationRepository;
     @Autowired private ProjectRemoteRepository remoteRepository;
     @Autowired private ProjectTaskRepository taskRepository;
+    @Autowired private ProjectTaskFileRepository taskFileRepository;
     @Autowired private ProjectAiMessageRepository aiMessageRepository;
     @Autowired private EvidenceLinkRepository evidenceLinkRepository;
     @Autowired private EvidenceLinkTargetRepository evidenceLinkTargetRepository;
@@ -107,6 +110,7 @@ class ProjectDeleteCascadeTest {
         assertTrue(invitationRepository.findByProjectIdAndType(projectId, "CLIENT").isEmpty(), "project_invitation 残留孤儿行");
         assertTrue(remoteRepository.findByProjectId(projectId).isEmpty(), "project_remote 残留孤儿行");
         assertTrue(taskRepository.findAll().stream().noneMatch(t -> projectId.equals(t.getProjectId())), "project_task 残留孤儿行");
+        assertTrue(taskFileRepository.findAll().stream().noneMatch(f -> seededTaskId.equals(f.getTaskId())), "project_task_file 残留孤儿行（没有 project_id，要按 task id 级联）");
         assertTrue(aiMessageRepository.findByProjectIdOrderByCreatedAtAsc(projectId).isEmpty(), "project_ai_message 残留孤儿行");
         assertTrue(evidenceLinkRepository.findByProjectIdAndDocFileIdOrderByIdAsc(projectId, seededDocFileId).isEmpty(), "evidence_link 残留孤儿行");
         assertTrue(evidenceLinkTargetRepository.findByFileId(seededEvidenceFileId).isEmpty(), "evidence_link_target 残留孤儿行（没有 project_id，要按 link id 级联）");
@@ -214,6 +218,7 @@ class ProjectDeleteCascadeTest {
 
     private Long seededDocFileId;
     private Long seededEvidenceFileId;
+    private Long seededTaskId;
 
     private Long seedProject() {
         Project project = new Project();
@@ -301,6 +306,8 @@ class ProjectDeleteCascadeTest {
         task.setSource("user");
         task.setUserId(9000L);
         taskRepository.save(task);
+        seededTaskId = task.getId();
+        taskFileRepository.save(new ProjectTaskFile(task.getId(), seededDocFileId));
 
         ProjectAiMessage message = new ProjectAiMessage();
         message.setProjectId(projectId);

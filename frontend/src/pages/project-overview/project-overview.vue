@@ -283,6 +283,10 @@
               </view>
               <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
             </view>
+            <!-- 我的日程（dev-board#899）：跨项目的全局日程页，走 leaveWorkbench 先落盘再离开 -->
+            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSchedule">
+              <text>{{ $t('calendar.mySchedule') }}</text>
+            </view>
             <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
               <text>{{ $t('workbench.settingsTabName') }}</text>
             </view>
@@ -344,6 +348,13 @@
             </svg>
           </view>
           <text v-else class="rail-icon">{{ p.icon }}</text>
+          <!-- 日程徽标（dev-board#899）：当前项目 逾期 + 今天 的未完成事项数，0 不显；有逾期时转朱砂红 -->
+          <text
+            v-if="p.key === 'calendar' && railScheduleCount > 0"
+            class="rail-badge"
+            :class="{ 'is-overdue': railScheduleSummary.overdue > 0 }"
+            :aria-label="$t('calendar.railScheduleTitle', railScheduleSummary)"
+          >{{ railScheduleCount > 99 ? '99+' : railScheduleCount }}</text>
         </view>
 
         <!-- 整理模式开关已挪到顶栏 header-tools（dev-board#221，原在 rail 上太显眼） -->
@@ -674,6 +685,8 @@
             @reveal-file="onRevealFile"
             @share-file="onShareFile"
             @add-to-ai="onAddFileToAiContext"
+            @add-task="onFileTreeAddTask"
+            @view-tasks="onFileTreeViewTasks"
             :transcribe-enabled="meetingRecorderEnabled"
             @transcribe-audio="onTranscribeAudio"
           />
@@ -703,6 +716,7 @@
             :project-id="Number(projectId)"
             compact
             @open-conversation="openConversationInPanel"
+            @open-task-file="onTaskOpenFile"
           />
           <!-- 语音：语音合成 + 会议录音合并成一个入口，面板内部两个 tab。
                两个组件本身一行没改，这里只做宿主（tab 条 + v-if）。
@@ -782,7 +796,13 @@
           <ProjectCalendarPane
             v-else-if="leftPaneKey === 'calendar'"
             :project-id="projectId"
+            :file-filter="calendarFileFilter"
+            :file-filter-name="calendarFileFilterName"
             @leave-workbench="leaveWorkbench"
+            @new-task="openTaskDialog({ mode: 'create', presetFileIds: $event && $event.presetFileIds })"
+            @open-task="openTaskDialog({ mode: 'edit', task: $event })"
+            @open-file="onTaskOpenFile"
+            @clear-file-filter="calendarFileFilter = null; calendarFileFilterName = ''"
           />
           <PluginDevPanel
             v-else-if="leftPaneKey === 'dev'"
@@ -2053,6 +2073,19 @@
         @close="commandPaletteVisible = false"
       />
 
+      <!-- 工作台唯一的事项弹窗（dev-board#899）：日程面板、文件树右键「添加事项…」、
+           命令「新建事项…」共用。项目锁定为当前项目；写操作走 taskStore，
+           保存/删除后面板与徽标靠它的广播自己更新，这里不用重拉。 -->
+      <TaskDialog
+        :visible="taskDialog.visible"
+        :mode="taskDialog.mode"
+        :task="taskDialog.task"
+        :project-id="projectId"
+        :preset-file-ids="taskDialog.presetFileIds"
+        @open-file="onTaskOpenFile"
+        @close="taskDialog.visible = false"
+      />
+
       <!-- 试用版 / 宽限预警说明弹窗（同一个壳，文案与主按钮随 graceKind 切换） -->
       <view v-if="showTrialInfo" class="awd-dialog-mask" @tap="showTrialInfo = false">
         <view class="awd-dialog" @tap.stop>
@@ -2211,8 +2244,11 @@ import InsightEntityDetailPane from '@/components/InsightEntityDetailPane.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
 import CommitHistoryTab from '@/components/version/CommitHistoryTab.vue'
-// 异步组件：ProjectCalendarPane 静态 import 会把 FullCalendar 整包拖进工作台主
-// chunk（工作台是全应用最热路由），懒加载让只有真点开「日历」面板的会话付这个成本。
+// 异步组件：历史上是为了不把 FullCalendar 拖进工作台主 chunk；dev-board#899 重做后面板
+// 已不依赖 FullCalendar，懒加载保留（只有点开「日程」面板的会话才付这份代码的成本）。
+import TaskDialog from '@/components/calendar/TaskDialog.vue'
+import { taskStore, loadProjectTasks } from '@/utils/taskStore.js'
+import { startTaskReminders } from '@/utils/taskReminders.js'
 const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
@@ -2403,7 +2439,8 @@ export default {
     SearchPanel,
     VersionPanel,
     CommitHistoryTab,
-    ProjectCalendarPane
+    ProjectCalendarPane,
+    TaskDialog
   },
   data() {
     return {
@@ -2454,6 +2491,11 @@ export default {
       voiceTab: 'tts',
       // 顶栏右上角头像下拉（设置 / 退出登录，dev-board#205）
       avatarMenuOpen: false,
+      // 工作台唯一的 TaskDialog 的状态（dev-board#899），见 openTaskDialog
+      taskDialog: { visible: false, mode: 'create', task: null, presetFileIds: [] },
+      // 日程面板按文件过滤（文件右键「查看事项 (N)」），null = 不过滤
+      calendarFileFilter: null,
+      calendarFileFilterName: '',
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
       // 右键转写后要在会议录音面板里定位/展开的会议 id（dev-board#227）
@@ -2766,6 +2808,17 @@ export default {
     // ---------- Credits 余额 chip（dev-board#187） ----------
     walletChipVisible() {
       return this.wallet.loaded && this.wallet.connected
+    },
+    // ---------- rail 日程徽标（dev-board#899） ----------
+    // 读 taskStore 的响应式缓存：弹窗/面板/AI 以外的写操作都经 taskStore 就地更新，
+    // 徽标跟着变，不必自己订阅。项目事项在 onLoad 里 loadProjectTasks 预热。
+    railScheduleSummary() {
+      const entry = this.projectId != null ? taskStore.byProject[String(this.projectId)] : null
+      const s = entry && entry.summary
+      return { overdue: (s && s.overdue) || 0, today: (s && s.today) || 0 }
+    },
+    railScheduleCount() {
+      return this.railScheduleSummary.overdue + this.railScheduleSummary.today
     },
     walletChipText() {
       // 官网不可达：余额未知，显示「—」而不是 0
@@ -3415,6 +3468,8 @@ export default {
       this.loadProjectInfo()
       this.loadProjectMembers()
       this.checkAdoptConflict()
+      // rail 日程徽标与文件树到期徽标的数据（dev-board#899）；失败只是没徽标，不打扰
+      loadProjectTasks(this.projectId).catch((e) => console.warn('[project-overview] 读取事项失败', e))
       // 协作状态：先读本地快照（立刻有结果），再走一次联网检查，之后交给定时器保鲜
       this.fetchCollabState().then(() => {
         if (!this.collabLinked) return
@@ -3590,6 +3645,8 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
+    // 本机事项提醒（dev-board#899）：模块级单例、幂等，项目列表页也调
+    startTaskReminders()
     // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
     // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
     this.$nextTick(() => this.rebindTabsWheel())
@@ -4210,6 +4267,50 @@ export default {
     goAllProjects() {
       this.projectSwitcherOpen = false
       this.leaveWorkbench('/pages/project-list/project-list')
+    },
+    // 全局日程页（命令「日程」、头像菜单「我的日程」）。同日程面板底部「查看全盘日程」
+    // 一样走 leaveWorkbench：先落盘再 reLaunch（工作台参与的跳转一律 reLaunch）。
+    goCalendar() {
+      this.leaveWorkbench('/pages/calendar/calendar')
+    },
+    // ---------- 事项（dev-board#899）：工作台唯一的 TaskDialog ----------
+    openTaskDialog({ mode = 'create', task = null, presetFileIds = [] } = {}) {
+      if (!this.projectId) return
+      this.taskDialog = {
+        visible: true,
+        mode: mode === 'edit' && task ? 'edit' : 'create',
+        task: mode === 'edit' ? task : null,
+        presetFileIds: Array.isArray(presetFileIds) ? presetFileIds.filter((id) => id != null) : [],
+      }
+    },
+    onFileTreeAddTask(file) {
+      if (!file || file.id == null) return
+      this.openTaskDialog({ mode: 'create', presetFileIds: [file.id] })
+    },
+    // 文件右键「查看事项 (N)」：打开 rail 日程面板并按这份文件过滤
+    onFileTreeViewTasks(file) {
+      if (!file || file.id == null) return
+      this.calendarFileFilter = file.id
+      this.calendarFileFilterName = file.name || ''
+      if (this.leftPaneKey !== 'calendar' || this.sidebarCollapsed) this.toggleLeftPane('calendar')
+    },
+    // 事项上的文件芯片 → 在工作台里打开该文件。以服务端为准查文件（文件树可能没展开到那一层）；
+    // 查不到（已删除/不属于本项目）就提示，不静默。
+    async onTaskOpenFile(payload) {
+      const fileId = payload && payload.fileId
+      if (fileId == null) return
+      let file = null
+      try {
+        file = await getFileDetail(Number(this.projectId), fileId)
+      } catch (e) {
+        file = null
+      }
+      if (!file || !file.id || file.isDeleted || file.deleted) {
+        uni.showToast({ title: this.$t('calendar.fileMissing'), icon: 'none' })
+        return
+      }
+      this.taskDialog.visible = false
+      this.openFile(file)
     },
     // Cmd+P 快速打开面板选中文件
     onQuickOpenFile(file) {
@@ -5490,6 +5591,10 @@ export default {
     onAvatarMenuAccount() {
       this.avatarMenuOpen = false
       this.goToAccountPanel()
+    },
+    onAvatarMenuSchedule() {
+      this.avatarMenuOpen = false
+      this.goCalendar()
     },
     onAvatarMenuSettings() {
       this.avatarMenuOpen = false

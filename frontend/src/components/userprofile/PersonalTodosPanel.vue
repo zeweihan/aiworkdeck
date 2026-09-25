@@ -1,18 +1,16 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
-  「我的待办」栏目（设置页「个人」组，dev-board#872 重做）。2026-08-20 曾是纯占位
-  （后端当时还没有待办实体），B 期（dev-board#49）落地 project_task 后这里改为真实数据：
+  「我的待办」栏目（设置页「个人」组，dev-board#872 重做，#898 换统一事项行）。
 
-  - 数据源 GET /api/calendar（不传 from/to 取全部，含无日期任务），跨当前用户可见的
-    全部项目；写操作复用既有 POST/PUT/DELETE /api/tasks（TaskController）。
-  - 完成勾选、删除都是本组件直接调接口的乐观更新；「新增」复用日历页同款的
-    components/calendar/TaskDialog.vue（标题 + 项目下拉 + 日期），避免另写一套表单。
-  - 分组/排序逻辑是纯函数 utils/personalCollections.js 的 groupTodos/writableProjects，
-    与 node --test 用例共用同一份实现。
-  - 完成态判定与「剩余天数」徽标复用 components/calendar/taskUtils.js（isDone/dueBadge）——
-    这是全站任务展示的唯一出处（project-home/TaskSchedule 等五个消费方共用），这里不再写一份。
-  - 右上角「在日历中查看」跳全局日历页（与工作台无关的独立页面，直接 navigateTo）。
+  - 数据源 utils/taskStore 的跨项目缓存：挂载时 loadGlobal()（不带 from/to = 全量，
+    跨当前用户可见的全部项目），读 taskStore.global.list；完成/删除直接调 store，
+    写成功后 store 就地更新并广播，日程页、工作台面板、徽标一起跟上。
+  - 行是全产品唯一的事项行 components/calendar/TaskRow.vue（显示项目芯片）；点行开
+    统一弹窗 TaskDialog 编辑，「新增」开同一个弹窗（项目下拉只给可写项目）。
+  - 分组用 taskUtils.groupByDue（已逾期 / 今天 / 本周 / 之后，已完成折叠）——与日程页
+    议程同一套口径。
+  - 右上角「查看全盘日程」跳全局日程页（与工作台无关的独立页面，直接 navigateTo）。
   加载时机仍是本组件的 mounted——它只在这一栏被选中时渲染。
 -->
 <template>
@@ -27,7 +25,7 @@
       </view>
       <view class="pt-actions">
         <view class="pt-link-btn" @tap="openCalendar">
-          <text>{{ $t('calendar.openGlobalCalendar') }}</text>
+          <text>{{ $t('calendar.viewFullSchedule') }}</text>
           <svg class="pt-link-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.arrowUpRight" :key="gi" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </view>
         <view class="pt-add-btn" @tap="openCreate">
@@ -55,118 +53,97 @@
           <text class="pt-group-count">{{ grp.items.length }}</text>
         </view>
         <view class="pt-rows">
-          <view v-for="task in grp.items" :key="task.id" class="pt-row">
-            <view class="pt-check" @tap="toggleDone(task)">
-              <svg v-if="isTaskDone(task)" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </view>
-            <view class="pt-row-main">
-              <text class="pt-row-title">{{ task.title }}</text>
-              <view class="pt-row-meta">
-                <text v-if="task.projectName" class="pt-meta-chip">{{ task.projectName }}</text>
-                <text v-if="task.fileName" class="pt-meta-chip pt-meta-file">{{ task.fileName }}</text>
-              </view>
-            </view>
-            <text v-if="badgeOf(task).text" class="pt-due-badge" :class="'is-' + badgeOf(task).kind">{{ badgeOf(task).text }}</text>
-            <view class="pt-del-wrap">
-              <view class="pt-icon-btn danger" :title="$t('common.delete')" @tap.stop="requestDelete(task.id)">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              </view>
-              <view v-if="confirmDeleteId === task.id" class="pt-popover" @tap.stop>
-                <text class="pt-pop-text">{{ $t('account.deleteTodoConfirm') }}</text>
-                <view class="pt-pop-row">
-                  <view class="pt-pop-btn" @tap.stop="cancelDelete">{{ $t('common.cancel') }}</view>
-                  <view class="pt-pop-btn danger" @tap.stop="handleDeleteTask(task.id)">{{ $t('common.delete') }}</view>
-                </view>
-              </view>
-            </view>
-          </view>
+          <TaskRow
+            v-for="task in grp.items"
+            :key="task.uid || task.id"
+            :task="task"
+            :show-project="true"
+            :show-files="true"
+            @toggle="toggleDone"
+            @open="openEdit"
+            @open-project="openProject"
+            @open-file="openFile"
+            @delete="requestDelete"
+          />
         </view>
       </view>
 
       <view v-if="doneTasks.length" class="pt-done-toggle" @tap="showDone = !showDone">
-        <AwdSwitch :checked="showDone" @change="showDone = $event" />
-        <text class="pt-done-toggle-label">{{ $t('calendar.showDone') }} ({{ doneTasks.length }})</text>
+        <svg class="pt-done-caret" :class="{ 'is-open': showDone }" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        <text class="pt-done-toggle-label">{{ $t('calendar.groupDoneCount', { count: doneTasks.length }) }}</text>
       </view>
 
       <view v-if="showDone && doneTasks.length" class="pt-group pt-group-done">
         <view class="pt-rows">
-          <view v-for="task in doneTasks" :key="task.id" class="pt-row">
-            <view class="pt-check is-done" @tap="toggleDone(task)">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </view>
-            <view class="pt-row-main">
-              <text class="pt-row-title pt-row-title-done">{{ task.title }}</text>
-              <view class="pt-row-meta">
-                <text v-if="task.projectName" class="pt-meta-chip">{{ task.projectName }}</text>
-                <text v-if="task.fileName" class="pt-meta-chip pt-meta-file">{{ task.fileName }}</text>
-              </view>
-            </view>
-            <view class="pt-del-wrap">
-              <view class="pt-icon-btn danger" :title="$t('common.delete')" @tap.stop="requestDelete(task.id)">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              </view>
-              <view v-if="confirmDeleteId === task.id" class="pt-popover" @tap.stop>
-                <text class="pt-pop-text">{{ $t('account.deleteTodoConfirm') }}</text>
-                <view class="pt-pop-row">
-                  <view class="pt-pop-btn" @tap.stop="cancelDelete">{{ $t('common.cancel') }}</view>
-                  <view class="pt-pop-btn danger" @tap.stop="handleDeleteTask(task.id)">{{ $t('common.delete') }}</view>
-                </view>
-              </view>
-            </view>
-          </view>
+          <TaskRow
+            v-for="task in doneTasks"
+            :key="task.uid || task.id"
+            :task="task"
+            :show-project="true"
+            :show-files="true"
+            @toggle="toggleDone"
+            @open="openEdit"
+            @open-project="openProject"
+            @open-file="openFile"
+            @delete="requestDelete"
+          />
         </view>
       </view>
     </view>
 
     <TaskDialog
-      v-model:visible="createOpen"
-      :task="null"
+      :visible="dialogOpen"
+      :mode="dialogTask ? 'edit' : 'create'"
+      :task="dialogTask"
       :projects="writableMyProjects"
-      @saved="onTaskSaved"
+      @open-project="openProject"
+      @open-file="openFile"
+      @close="closeDialog"
     />
   </view>
 </template>
 
 <script>
-import { getCalendarTasks, getTaskProjectOptions, updateTask, deleteTask } from '@/services/api.js'
+import { getTaskProjectOptions } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
-import { isDone, dueBadge } from '@/components/calendar/taskUtils.js'
-import { groupTodos, writableProjects } from '@/utils/personalCollections.js'
+import { isDone, groupByDue } from '@/components/calendar/taskUtils.js'
+import { writableProjects } from '@/utils/personalCollections.js'
+import { taskStore, loadGlobal, updateTask, deleteTask } from '@/utils/taskStore.js'
 import TaskDialog from '@/components/calendar/TaskDialog.vue'
-import AwdSwitch from '@/components/AwdSwitch.vue'
+import TaskRow from '@/components/calendar/TaskRow.vue'
 
 export default {
   name: 'PersonalTodosPanel',
-  components: { TaskDialog, AwdSwitch },
+  components: { TaskDialog, TaskRow },
   data() {
     return {
       loading: false,
-      tasks: [],
+      // 全量加载完成之前 taskStore.global.list 可能只是提醒调度拉的一段区间，不能当「全部待办」显示
+      loaded: false,
       myProjects: [],
       showDone: false,
-      createOpen: false,
-      confirmDeleteId: null,
+      dialogOpen: false,
+      dialogTask: null,
     }
   },
   computed: {
     ICONS() { return ICONS },
+    tasks() {
+      return this.loaded ? taskStore.global.list : []
+    },
     writableMyProjects() {
       return writableProjects(this.myProjects)
     },
     groups() {
-      return groupTodos(this.tasks)
+      return groupByDue(this.tasks)
     },
     openGroups() {
       const g = this.groups
       const defs = [
-        { key: 'overdue', label: this.$t('account.todosGroupOverdue'), items: g.overdue },
-        { key: 'today', label: this.$t('account.todosGroupToday'), items: g.today },
-        { key: 'upcoming', label: this.$t('account.todosGroupUpcoming'), items: g.upcoming },
-        { key: 'noDate', label: this.$t('account.todosGroupNoDate'), items: g.noDate },
+        { key: 'overdue', label: this.$t('calendar.groupOverdue'), items: g.overdue },
+        { key: 'today', label: this.$t('calendar.groupToday'), items: g.today },
+        { key: 'week', label: this.$t('calendar.groupWeek'), items: g.week },
+        { key: 'later', label: this.$t('calendar.groupLater'), items: g.later },
       ]
       return defs.filter((d) => d.items.length)
     },
@@ -180,15 +157,12 @@ export default {
   mounted() {
     this.loadAll()
   },
-  beforeUnmount() {
-    if (this._deleteTimer) clearTimeout(this._deleteTimer)
-  },
   methods: {
     async loadAll() {
       this.loading = true
       try {
-        const [taskRes, projects] = await Promise.all([getCalendarTasks(), getTaskProjectOptions()])
-        this.tasks = (taskRes && taskRes.data && taskRes.data.tasks) || []
+        const [, projects] = await Promise.all([loadGlobal({ force: true }), getTaskProjectOptions()])
+        this.loaded = true
         this.myProjects = projects || []
       } catch (e) {
         console.error('加载待办失败:', e)
@@ -197,59 +171,61 @@ export default {
         this.loading = false
       }
     },
-    isTaskDone(task) {
-      return isDone(task)
-    },
-    badgeOf(task) {
-      return dueBadge(task, (k, p) => this.$t(k, p))
-    },
     openCreate() {
-      this.createOpen = true
+      this.dialogTask = null
+      this.dialogOpen = true
     },
-    onTaskSaved() {
-      this.loadAll()
+    openEdit(task) {
+      this.dialogTask = task
+      this.dialogOpen = true
+    },
+    closeDialog() {
+      this.dialogOpen = false
+      this.dialogTask = null
+    },
+    // 设置页不在工作台里（没有编辑器要 flush）；进工作台一律 reLaunch
+    openProject(task) {
+      if (!task || task.projectId == null) return
+      this.closeDialog()
+      uni.reLaunch({ url: '/pages/project-overview/project-overview?id=' + task.projectId })
+    },
+    openFile(payload) {
+      const task = payload && payload.task
+      if (!task || task.projectId == null || payload.fileId == null) return
+      this.closeDialog()
+      uni.reLaunch({
+        url: '/pages/project-overview/project-overview?id=' + task.projectId + '&openFileId=' + payload.fileId,
+      })
     },
     openCalendar() {
       uni.navigateTo({ url: '/pages/calendar/calendar' })
     },
     async toggleDone(task) {
       const nextStatus = isDone(task) ? 'OPEN' : 'DONE'
-      const prevStatus = task.status
-      task.status = nextStatus
       try {
         await updateTask(task.id, { status: nextStatus })
       } catch (e) {
         console.error('更新待办状态失败:', e)
-        task.status = prevStatus
         uni.showToast({ title: this.$t('account.todoUpdateFailed'), icon: 'none' })
       }
     },
-    requestDelete(id) {
-      if (this.confirmDeleteId === id) {
-        this.cancelDelete()
-        return
-      }
-      this.confirmDeleteId = id
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-      // 五秒不点就自己收起，免得气泡一直挂着（同「全部收藏」栏目）
-      this._deleteTimer = setTimeout(() => {
-        if (this.confirmDeleteId === id) this.confirmDeleteId = null
-      }, 5000)
-    },
-    cancelDelete() {
-      this.confirmDeleteId = null
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-    },
-    async handleDeleteTask(id) {
-      this.cancelDelete()
-      try {
-        await deleteTask(id)
-        this.tasks = this.tasks.filter((t) => t.id !== id)
-        uni.showToast({ title: this.$t('account.deleteSuccessToast'), icon: 'success' })
-      } catch (e) {
-        console.error('删除待办失败:', e)
-        uni.showToast({ title: this.$t('account.deleteFailedToast'), icon: 'none' })
-      }
+    requestDelete(task) {
+      uni.showModal({
+        title: this.$t('calendar.deleteConfirmTitle'),
+        content: this.$t('calendar.deleteConfirmContent', { title: task.title || '' }),
+        cancelText: this.$t('common.cancel'),
+        confirmText: this.$t('common.delete'),
+        success: async (res) => {
+          if (!res.confirm) return
+          try {
+            await deleteTask(task.id)
+            uni.showToast({ title: this.$t('account.deleteSuccessToast'), icon: 'success' })
+          } catch (e) {
+            console.error('删除待办失败:', e)
+            uni.showToast({ title: this.$t('account.deleteFailedToast'), icon: 'none' })
+          }
+        },
+      })
     },
   },
 }
@@ -441,192 +417,39 @@ export default {
   flex-direction: column;
 }
 
-.pt-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 4px;
-  border-bottom: 1px solid var(--awd-border-subtle);
 
-  &:hover {
-    background: var(--awd-bg);
-  }
-}
 
-.pt-rows .pt-row:last-child {
-  border-bottom: none;
-}
 
-.pt-check {
-  flex: none;
-  width: 17px;
-  height: 17px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--awd-border-strong);
-  border-radius: 4px;
-  color: var(--awd-text-on-accent);
-  cursor: pointer;
 
-  &:hover {
-    border-color: var(--awd-mint);
-  }
 
-  &.is-done {
-    background: var(--awd-accent);
-    border-color: var(--awd-accent);
-  }
-}
 
-.pt-row-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
 
-.pt-row-title {
-  font-size: 13px;
-  color: var(--awd-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 1;
-}
 
-.pt-row-title-done {
-  color: var(--awd-text-3);
-  text-decoration: line-through;
-}
 
-.pt-row-meta {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
-.pt-meta-chip {
-  font-size: 11px;
-  line-height: 16px;
-  padding: 0 6px;
-  border-radius: 4px;
-  background: var(--awd-surface-2);
-  color: var(--awd-text-3);
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.pt-meta-file {
-  color: var(--awd-text-2);
-}
 
-.pt-due-badge {
-  flex: none;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  color: var(--awd-text-2);
-  background: var(--awd-surface-2);
 
-  &.is-today,
-  &.is-soon {
-    color: var(--awd-danger-text);
-    background: var(--awd-bg);
-  }
 
-  &.is-overdue {
-    color: var(--awd-text-on-accent);
-    background: var(--awd-danger);
-  }
-}
 
-.pt-icon-btn {
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  color: var(--awd-text-3);
-  cursor: pointer;
-  flex-shrink: 0;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &.danger:hover {
-    background: var(--awd-danger-soft);
-    color: var(--awd-danger-text);
-  }
-}
-
-.pt-del-wrap {
-  position: relative;
-  flex: none;
-}
-
-.pt-popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 6px;
-  z-index: 20;
-  min-width: 160px;
-  padding: 10px;
-  background: var(--awd-surface);
-  border: 1px solid var(--awd-border);
-  border-radius: 8px;
-  box-shadow: var(--awd-shadow-md);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pt-pop-text {
-  font-size: 12px;
-  color: var(--awd-text);
-  text-align: center;
-}
-
-.pt-pop-row {
-  display: flex;
-  gap: 8px;
-}
-
-.pt-pop-btn {
-  flex: 1;
-  font-size: 12px;
-  padding: 4px 0;
-  text-align: center;
-  border-radius: 6px;
-  cursor: pointer;
-  background: var(--awd-bg);
-  color: var(--awd-text-2);
-
-  &:hover {
-    background: var(--awd-surface-3);
-    color: var(--awd-text);
-  }
-
-  &.danger {
-    background: var(--awd-danger-soft);
-    color: var(--awd-danger-text);
-  }
-}
 
 .pt-done-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-top: 20px;
   cursor: pointer;
+}
+
+.pt-done-caret {
+  width: 12px;
+  height: 12px;
+  color: var(--awd-text-3);
+  transition: transform 0.15s;
+
+  &.is-open {
+    transform: rotate(90deg);
+  }
 }
 
 .pt-done-toggle-label {

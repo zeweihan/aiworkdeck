@@ -42,6 +42,10 @@
 | 账户与安全 | Account & Security | 个人组里原「个人中心 → 设置」那一栏 |
 | 工作记录 | Activity Log | |
 | 代办/待办 | To-dos | |
+| 事项 | Task | 日程系统的条目（dev-board#896）；「新建事项」 → New Task；「任务」一词只留在代码与 AI 工具名 |
+| 日程 | Schedule | 日历视图与入口（rail/头像菜单/页标题）；「我的日程」 → My Schedule |
+| 截止日 / 开庭 / 会议 / 待办（事项类型） | Deadline / Hearing / Meeting / To-do | 事项类型芯片 |
+| 负责人（事项） | Assignee | 事项的指派人；与项目「负责人 Lead」区分 |
 | 向导 | Setup Wizard | |
 | 解锁 | Unlock | |
 | 试用码 | Trial Code | |

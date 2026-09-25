@@ -61,6 +61,31 @@ public class CalendarController {
         return ok(Map.of("tasks", tasks));
     }
 
+    /**
+     * 事项概览计数（dev-board#895）：{overdue, today, week, nextDue}，范围同 GET /api/calendar
+     * （当前用户可见的全部项目），只算 OPEN；nextDue 补 projectName，与列表口径一致。
+     * 给项目列表页概览条与日程徽标用。
+     */
+    @GetMapping("/summary")
+    public ResponseEntity<Map<String, Object>> summary(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) throw new IllegalArgumentException("未登录");
+
+        Map<Long, String> projectNames = new HashMap<>();
+        for (Project p : projectService.getUserProjects(userId)) {
+            projectNames.put(p.getId(), p.getName());
+        }
+        Map<String, Object> summary = taskService.summarize(List.copyOf(projectNames.keySet()));
+        Object next = summary.get("nextDue");
+        if (next instanceof Map<?, ?>) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nextDue = (Map<String, Object>) next;
+            nextDue.put("projectName", projectNames.get(nextDue.get("projectId")));
+        }
+        return ResponseEntity.ok(Map.of("code", 0, "data", summary));
+    }
+
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {
         return ResponseEntity.ok(Map.of("code", 0, "data", data));
     }

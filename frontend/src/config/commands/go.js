@@ -41,6 +41,14 @@ export const GO_COMMANDS = [
     when: ['workbench'],
     run: 'wb:goAllProjects',
   },
+  // 全局日程页（dev-board#899）。wb: 而不是 app:——离开工作台前要先落盘编辑器（leaveWorkbench）
+  {
+    id: 'go.calendar',
+    label: { zh: '日程', en: 'Schedule' },
+    menu: 'go', group: 2,
+    when: ['workbench'],
+    run: 'wb:goCalendar',
+  },
   // 「切换项目」动态子菜单由 appMenuBridge 用 state.recent 生成（group 3）
 
   {

@@ -467,7 +467,7 @@ check('工作台「全部项目」用 reLaunch 去项目列表页，且离开前
   return null
 })
 
-check('顶栏头像下拉恰好两项：设置 + 退出登录（2026-08-27，dev-board#205）', () => {
+check('顶栏头像下拉恰好三项：我的日程 + 设置 + 退出登录（dev-board#205 / #899）', () => {
   // 沿革：2026-08-20 个人中心并进设置后下拉只剩一项，2026-08-21（dev-board#96）撤下拉、
   // 点头像直开设置；2026-08-27（dev-board#205）「退出登录」要有一级入口，下拉恢复成
   // 两项——恢复的判据正是当年撤它的判据（不止一项了）。个人中心标签那套仍然是死代码。
@@ -484,9 +484,17 @@ check('顶栏头像下拉恰好两项：设置 + 退出登录（2026-08-27，dev
   // 2026-08-27（dev-board#225）：顶栏余额 chip 并进下拉，菜单顶部多了一块账户抬头。
   // 判据因此从「字符窗口里找得到两个动作」改成「动作项恰好两项」——抬头不是动作项，
   // 不占这两项的名额，但也不许再多出第三个动作把退出登录挤下去。
-  const menu = src.slice(menuIdx, menuIdx + 1800)
+  // 2026-09-25（dev-board#899）：「我的日程」加在「设置」上方（spec 2026-09-25-task-calendar-redesign
+  // 第四节 E1），它走 leaveWorkbench 离开工作台。名额从两项放宽到三项，仍不许再多。
+  const menu = src.slice(menuIdx, menuIdx + 2200)
   const actions = menu.match(/class="avatar-menu-item/g) || []
-  if (actions.length !== 2) return `下拉动作项应恰好两项，实际 ${actions.length} 项`
+  if (actions.length !== 3) return `下拉动作项应恰好三项，实际 ${actions.length} 项`
+  if (!menu.includes('onAvatarMenuSchedule')) return '下拉里没有「我的日程」项（onAvatarMenuSchedule）'
+  const sched = extractMethodBody(src, 'onAvatarMenuSchedule() {')
+  const goCal = extractMethodBody(src, 'goCalendar() {')
+  if (!sched || !(sched.includes('this.leaveWorkbench(') || (sched.includes('this.goCalendar(') && goCal && goCal.includes('this.leaveWorkbench(')))) {
+    return '「我的日程」没有走 leaveWorkbench（离开工作台前要先落盘编辑器）'
+  }
   if (!menu.includes('onAvatarMenuSettings')) return '下拉里没有「设置」项（onAvatarMenuSettings）'
   if (!menu.includes('onAvatarMenuSignOut')) return '下拉里没有「退出登录」项（onAvatarMenuSignOut）'
   // 退出必须走唯一编排，不许在页面里自拼 disconnect/deactivate

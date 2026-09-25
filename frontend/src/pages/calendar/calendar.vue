@@ -1,28 +1,117 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
-  全局日历页（跨项目日程/截止日）。dev-board #50，spec:
-  docs/superpowers/specs/2026-08-20-calendar-view-design.md
+  全局日程页（跨项目事项）。dev-board #50 起步，#897 重做；
+  spec: docs/superpowers/specs/2026-09-25-task-calendar-redesign.md 第三节。
 
-  不是工作台，路由用 navigateTo/navigateBack/redirectTo（工作台参与的跳转才 reLaunch，
-  「进入项目」按钮除外——那一跳落进工作台）。不自绘顶栏，用默认 38px 拖拽条。
+  不是工作台，路由用 navigateTo/navigateBack/redirectTo（工作台参与的跳转才 reLaunch：
+  「进入项目」与文件芯片落进工作台）。页头自绘（左返回 + 标题 / 中间翻页 + 月份 /
+  右侧视图分段 + 筛选 + 新建），FullCalendar 自带 headerToolbar 关掉，导航调 calendarApi。
+  全局返回键在本页豁免（utils/globalBack.js 的 SELF_NAV_ROUTES），否则压在页头上。
 
-  FullCalendar 集成选型：@fullcalendar/vue3 组件式（<FullCalendar :options="...">），
-  不是命令式 Calendar 类。理由：uni-app H5 平台下 .vue 单文件组件本质就是标准 Vue3
-  SFC，第三方 Vue 组件按 components 选项注册后可直接当普通标签用，没有 uni 模板编译器
-  不认第三方标签的问题（真正的坑只出现在小程序/App 端的 uni 组件编译，本产品只出 H5）。
-  组件式还换来了官方文档的响应式契约：options.events 是「复杂选项」，vue3 适配器对它
-  做 deep watch + calendar.resetOptions 增量更新（见 node_modules/@fullcalendar/vue3/dist/FullCalendar.js
-  的 buildWatchers/OPTION_IS_COMPLEX），直接 this.calendarOptions.events = [...] 赋值即可,
-  不需要手动调用 addEvent/removeAllEvents 这类命令式 API。
+  数据：所有读写经 utils/taskStore。进页先全量拉一次（议程要逾期与之后，不跟视图区间走），
+  日历翻页时按视图区间 loadGlobal（已覆盖则直接回缓存）；写操作由 TaskDialog / 本页经
+  taskStore 完成，本页订阅 store 广播就地重画，不自己重拉。筛选（项目 / 类型 / 含已完成）
+  日历与议程共用。
+
+  深链：?focus=<id> 定位到事项所在月并打开编辑；?group=overdue|today|week 议程滚到该组。
+
+  FullCalendar 集成：@fullcalendar/vue3 组件式，options.events 是「复杂选项」，vue3 适配器
+  deep watch + resetOptions 增量更新，直接给 calendarOptions.events 赋新数组即可。
 -->
 <template>
   <view class="page-calendar">
     <view class="calendar-container">
-      <view class="content-header">
-        <text class="header-title">{{ $t('calendar.pageTitle') }}</text>
-        <view class="header-actions">
-          <button class="btn-secondary-small" @tap="goBack">{{ $t('calendar.backToProjects') }}</button>
+      <view class="content-header cal-header">
+        <view class="cal-header-left">
+          <view class="cal-back" @tap="goBack">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            <text>{{ $t('calendar.back') }}</text>
+          </view>
+          <text class="header-title">{{ $t('calendar.schedulePageTitle') }}</text>
+        </view>
+
+        <view class="cal-header-center">
+          <view class="cal-nav">
+            <view class="cal-nav-btn" :title="$t('calendar.prevPeriod')" @tap="navPrev">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </view>
+            <view class="cal-today-btn" @tap="navToday">{{ $t('calendar.today') }}</view>
+            <view class="cal-nav-btn" :title="$t('calendar.nextPeriod')" @tap="navNext">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </view>
+          </view>
+          <text class="cal-period">{{ periodTitle }}</text>
+        </view>
+
+        <view class="header-actions cal-header-right">
+          <view class="cal-seg">
+            <view
+              v-for="v in VIEWS"
+              :key="v.type"
+              class="cal-seg-btn"
+              :class="{ active: viewType === v.type }"
+              @tap="changeView(v.type)"
+            >{{ $t(v.labelKey) }}</view>
+          </view>
+
+          <view class="cal-filter-wrap">
+            <view class="cal-filter-btn" :class="{ 'is-active': activeFilterCount > 0, 'is-open': filterOpen }" @tap="filterOpen = !filterOpen">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16l-6 7.5V19l-4 1.5v-8L4 5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /></svg>
+              <text>{{ $t('calendar.filter') }}</text>
+              <text v-if="activeFilterCount" class="cal-filter-count">{{ activeFilterCount }}</text>
+            </view>
+            <view v-if="filterOpen" class="cal-filter-mask" @tap="filterOpen = false"></view>
+            <view v-if="filterOpen" class="cal-filter-pop" @tap.stop>
+              <view class="fp-section">
+                <text class="fp-label">{{ $t('calendar.filterProjects') }}</text>
+                <view class="fp-list">
+                  <view class="fp-option" :class="{ checked: !filter.projectIds.length }" @tap="filter.projectIds = []">
+                    <view class="fp-box"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
+                    <text class="fp-option-text">{{ $t('calendar.filterAllProjects') }}</text>
+                  </view>
+                  <view
+                    v-for="p in filterProjects"
+                    :key="p.id"
+                    class="fp-option"
+                    :class="{ checked: filter.projectIds.includes(String(p.id)) }"
+                    @tap="toggleProjectFilter(p.id)"
+                  >
+                    <view class="fp-box"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
+                    <text class="fp-option-text" :title="p.name">{{ p.name }}</text>
+                  </view>
+                </view>
+              </view>
+              <view class="fp-section">
+                <text class="fp-label">{{ $t('calendar.filterTypes') }}</text>
+                <view class="fp-chips">
+                  <view
+                    v-for="m in typeMetas"
+                    :key="m.key"
+                    class="fp-chip"
+                    :class="{ checked: filter.types.includes(m.key) }"
+                    :style="filter.types.includes(m.key) ? { borderColor: m.color, background: m.soft } : null"
+                    @tap="toggleTypeFilter(m.key)"
+                  >
+                    <text class="fp-chip-dot" :style="{ background: m.color }"></text>
+                    <text>{{ m.label }}</text>
+                  </view>
+                </view>
+              </view>
+              <view class="fp-row">
+                <text class="fp-row-label">{{ $t('calendar.filterIncludeDone') }}</text>
+                <AwdSwitch :checked="filter.includeDone" @change="setIncludeDone" />
+              </view>
+              <view class="fp-foot">
+                <text class="fp-reset" :class="{ disabled: !activeFilterCount }" @tap="resetFilter">{{ $t('calendar.filterReset') }}</text>
+              </view>
+            </view>
+          </view>
+
+          <view class="cal-primary-btn" @tap="openCreate()">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+            <text>{{ $t('calendar.newTask') }}</text>
+          </view>
         </view>
       </view>
 
@@ -31,19 +120,32 @@
           <FullCalendar ref="fc" class="fc-host" :options="calendarOptions" />
         </view>
         <view class="calendar-sidebar">
-          <UpcomingList :tasks="upcomingTasks" @select="onUpcomingSelect" />
+          <AgendaPanel
+            ref="agenda"
+            :tasks="agendaTasks"
+            :empty="agendaEmpty"
+            :today="todayKey"
+            @open="openEdit"
+            @toggle="onToggle"
+            @open-file="onOpenFile"
+            @open-project="(t) => goToProject(t && t.projectId)"
+            @delete="onDelete"
+            @create="openCreate()"
+          />
         </view>
       </view>
     </view>
 
     <TaskDialog
-      v-model:visible="dialogVisible"
+      :visible="dialogVisible"
+      :mode="dialogMode"
       :task="editingTask"
-      :default-date="defaultDate"
       :projects="projects"
-      @saved="refresh"
-      @deleted="refresh"
-      @open-project="goToProject"
+      :preset-date="presetDate"
+      :preset-time="presetTime"
+      @close="dialogVisible = false"
+      @open-project="(t) => goToProject(t && t.projectId)"
+      @open-file="onOpenFile"
     />
   </view>
 </template>
@@ -56,16 +158,24 @@ import listPlugin from '@fullcalendar/list'
 import interactionPlugin from '@fullcalendar/interaction'
 import zhCnLocale from '@fullcalendar/core/locales/zh-cn'
 
-import { getCalendarTasks, getMyProjects, updateTask } from '@/services/api.js'
+import { getTaskProjectOptions } from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
-import { colorForProject } from '@/components/calendar/eventColors.js'
 import { getDayMarkType } from '@/components/calendar/holidayMarks.js'
-import { isDone, toEventStart } from '@/components/calendar/taskUtils.js'
+import {
+  TASK_TYPES, typeMeta, isDone, isHigh, timeOf, toEventStart, taskFiles, addDaysKey, localDateKey,
+} from '@/components/calendar/taskUtils.js'
+import { taskStore, loadGlobal, updateTask, deleteTask, subscribe } from '@/utils/taskStore.js'
 import TaskDialog from '@/components/calendar/TaskDialog.vue'
-import UpcomingList from '@/components/calendar/UpcomingList.vue'
+import AgendaPanel from '@/components/calendar/AgendaPanel.vue'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 
-const DONE_BG = 'var(--awd-surface-2)'
-const DONE_TEXT = 'var(--awd-text-3)'
+const VIEWS = [
+  { type: 'dayGridMonth', labelKey: 'calendar.viewMonth' },
+  { type: 'timeGridWeek', labelKey: 'calendar.viewWeek' },
+  { type: 'listMonth', labelKey: 'calendar.viewList' },
+]
+
+const FLAG_SVG = '<svg class="fc-awd-flag" viewBox="0 0 24 24" fill="none"><path d="M5 21V4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M5 4h11l-2 4 2 4H5" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>'
 
 function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -75,30 +185,90 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;')
 }
 
+function defaultFilter() {
+  return { projectIds: [], types: [], includeDone: true }
+}
+
 export default {
   name: 'CalendarPage',
-  components: { FullCalendar, TaskDialog, UpcomingList },
+  components: { FullCalendar, TaskDialog, AgendaPanel, AwdSwitch },
   data() {
     return {
+      VIEWS,
       calendarOptions: {},
+      // 当前视图区间内的事项（日历用）；议程直接读 taskStore.global.list
       tasks: [],
-      // 「近期截止」侧栏的数据源，固定锚在「今天起 90 天」，与日历视图区间解耦——
-      // 用户翻到别的月份浏览时，侧栏不能跟着漂移（漂了会把本周真正紧迫的截止日藏掉）。
-      upcomingTasks: [],
+      allLoaded: false,
       projects: [],
+      filter: defaultFilter(),
+      filterOpen: false,
+      viewType: 'dayGridMonth',
+      periodTitle: '',
+      todayKey: '',
       dialogVisible: false,
+      dialogMode: 'create',
       editingTask: null,
-      defaultDate: '',
+      presetDate: '',
+      presetTime: '',
       currentFrom: '',
       currentTo: '',
       // loadTasks 的请求序号，见该方法里的乱序说明
       loadSeq: 0,
+      // 深链参数（onLoad 收）
+      focusId: '',
+      focusGroup: '',
     }
   },
+  computed: {
+    typeMetas() {
+      return TASK_TYPES.map((k) => typeMeta(k, (key) => this.$t(key)))
+    },
+    // 筛选里的项目：我的项目 + 事项里出现过但不在清单里的（被移出的项目也能筛）
+    filterProjects() {
+      const out = this.projects.map((p) => ({ id: p.id, name: p.name }))
+      const seen = new Set(out.map((p) => String(p.id)))
+      for (const t of taskStore.global.list) {
+        if (t && t.projectId != null && !seen.has(String(t.projectId))) {
+          seen.add(String(t.projectId))
+          out.push({ id: t.projectId, name: t.projectName || String(t.projectId) })
+        }
+      }
+      return out
+    },
+    activeFilterCount() {
+      let n = 0
+      if (this.filter.projectIds.length) n++
+      if (this.filter.types.length) n++
+      if (!this.filter.includeDone) n++
+      return n
+    },
+    agendaTasks() {
+      return taskStore.global.list.filter((t) => this.matchesFilter(t))
+    },
+    agendaEmpty() {
+      return this.allLoaded && taskStore.global.list.length === 0
+    },
+  },
+  watch: {
+    filter: {
+      deep: true,
+      handler() { this.rebuildEvents() },
+    },
+  },
+  onLoad(query) {
+    const q = query || {}
+    this.focusId = q.focus ? String(q.focus) : ''
+    this.focusGroup = ['overdue', 'today', 'week', 'later'].includes(q.group) ? q.group : ''
+  },
   created() {
+    this.todayKey = localDateKey()
     this.buildCalendarOptions()
     this.loadProjects()
-    this.loadUpcoming()
+    this.loadAll()
+    this.unsubscribe = subscribe(this.onStoreEvent)
+  },
+  beforeUnmount() {
+    if (this.unsubscribe) this.unsubscribe()
   },
   methods: {
     buildCalendarOptions() {
@@ -106,28 +276,28 @@ export default {
       this.calendarOptions = {
         plugins: [dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin],
         initialView: 'dayGridMonth',
-        headerToolbar: {
-          left: 'prev,next today',
-          center: 'title',
-          right: 'dayGridMonth,timeGridWeek,listMonth',
-        },
-        buttonText: {
-          today: this.$t('calendar.today'),
-          month: this.$t('calendar.viewMonth'),
-          week: this.$t('calendar.viewWeek'),
-          list: this.$t('calendar.viewList'),
-        },
+        headerToolbar: false,
         locale: isZh ? zhCnLocale : undefined,
         firstDay: isZh ? 1 : 0,
         height: '100%',
         editable: true,
-        dayMaxEvents: true,
+        eventDurationEditable: false,
+        dayMaxEvents: 3,
+        eventDisplay: 'block',
+        // 月/周视图的时刻由 eventContent 自己画；列表视图用 FullCalendar 的时间列
+        displayEventTime: false,
+        views: { listMonth: { displayEventTime: true } },
+        nowIndicator: true,
+        scrollTime: '08:00:00',
+        slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+        eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
         events: [],
         datesSet: this.onDatesSet,
         dateClick: this.onDateClick,
         eventClick: this.onEventClick,
         eventDrop: this.onEventDrop,
         eventContent: this.renderEventContent,
+        eventDidMount: this.onEventDidMount,
         dayCellClassNames: this.dayCellClassNames,
         dayCellContent: this.renderDayCellContent,
         dayHeaderClassNames: this.dayHeaderClassNames,
@@ -135,25 +305,43 @@ export default {
       }
     },
 
+    getApi() {
+      return this.$refs.fc && this.$refs.fc.getApi ? this.$refs.fc.getApi() : null
+    },
+
     async loadProjects() {
       try {
-        this.projects = (await getMyProjects()) || []
+        this.projects = (await getTaskProjectOptions()) || []
       } catch (e) {
         console.error('[calendar] 加载项目列表失败', e)
       }
     },
 
+    // 议程要全部事项（逾期、之后、无日期），与日历视图区间解耦：翻到别的月份浏览时
+    // 议程不能跟着漂移（漂了会把本周真正紧迫的事项藏掉）。进页强制重拉一次。
+    async loadAll() {
+      try {
+        await loadGlobal({ force: true })
+      } catch (e) {
+        console.error('[calendar] 加载事项失败', e)
+        uni.showToast({ title: this.$t('calendar.loadFailed'), icon: 'none' })
+      }
+      this.allLoaded = true
+      this.syncFromStore()
+      this.applyDeepLinks()
+    },
+
     async loadTasks(from, to) {
       // 连点翻月/切视图会连发请求，先发的（旧区间）响应可能后到。FullCalendar 只画
       // 落在当前视图区间内的事件，旧结果落地的表现是当前月份大面积空白（只剩两个
-      // 区间重叠的那几条），直到再翻一次或保存/删除触发 refresh 才恢复。只认最后
-      // 一次请求的结果，被放弃的那次连失败提示也一并咽掉。
+      // 区间重叠的那几条）。只认最后一次请求的结果，被放弃的那次连失败提示也一并咽掉。
+      // FullCalendar 的 end 是开区间，loadGlobal 的 to 含端点，减一天。
       const seq = ++this.loadSeq
       try {
-        const res = await getCalendarTasks(from, to)
+        const list = await loadGlobal({ from, to: addDaysKey(to, -1) })
         if (seq !== this.loadSeq) return
-        this.tasks = (res.data && res.data.tasks) || []
-        this.calendarOptions.events = this.buildEvents()
+        this.tasks = list || []
+        this.rebuildEvents()
       } catch (e) {
         if (seq !== this.loadSeq) return
         console.error('[calendar] 加载日程失败', e)
@@ -161,59 +349,117 @@ export default {
       }
     },
 
-    async loadUpcoming() {
-      try {
-        const today = new Date()
-        const from = today.toISOString().slice(0, 10)
-        const to = new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10)
-        const res = await getCalendarTasks(from, to)
-        this.upcomingTasks = (res.data && res.data.tasks) || []
-      } catch (e) {
-        console.error('[calendar] 加载近期截止失败', e)
-      }
+    // store 广播（新建/修改/删除/任一区间加载完）→ 从缓存里重取当前视图区间。
+    // 缓存按区间合并，取出来的一定是当前区间的最新状态，不存在乱序问题。
+    onStoreEvent(ev) {
+      if (!ev || ev.kind === 'summary-loaded' || ev.kind === 'project-loaded') return
+      this.syncFromStore()
     },
 
-    refresh() {
-      if (this.currentFrom && this.currentTo) this.loadTasks(this.currentFrom, this.currentTo)
-      this.loadUpcoming()
+    syncFromStore() {
+      if (!this.currentFrom || !this.currentTo) return
+      const from = this.currentFrom
+      const to = this.currentTo
+      this.tasks = taskStore.global.list.filter((t) => t && t.dueDate && t.dueDate >= from && t.dueDate < to)
+      this.rebuildEvents()
+    },
+
+    matchesFilter(t) {
+      if (!t) return false
+      const f = this.filter
+      if (!f.includeDone && isDone(t)) return false
+      if (f.projectIds.length && !f.projectIds.includes(String(t.projectId))) return false
+      if (f.types.length && !f.types.includes(typeMeta(t.type).key)) return false
+      return true
+    },
+
+    rebuildEvents() {
+      this.calendarOptions.events = this.buildEvents()
     },
 
     buildEvents() {
-      return this.tasks.map((t) => {
-        const done = isDone(t)
-        const color = done ? { bg: DONE_BG, text: DONE_TEXT } : colorForProject(t.projectId)
-        const classNames = done ? ['fc-event-done'] : []
-        return {
-          id: String(t.id),
-          title: t.title,
-          start: toEventStart(t),
-          allDay: !t.dueTime,
-          backgroundColor: color.bg,
-          borderColor: color.bg,
-          textColor: color.text,
-          classNames,
-          extendedProps: { task: t },
-        }
-      })
+      return this.tasks
+        .filter((t) => t && t.dueDate && this.matchesFilter(t))
+        .map((t) => {
+          const done = isDone(t)
+          const meta = typeMeta(t.type)
+          return {
+            id: String(t.id),
+            title: t.title,
+            start: toEventStart(t),
+            allDay: !timeOf(t),
+            backgroundColor: done ? 'var(--awd-surface-2)' : meta.soft,
+            borderColor: done ? 'var(--awd-border-strong)' : meta.color,
+            textColor: done ? 'var(--awd-text-3)' : 'var(--awd-text)',
+            classNames: done ? ['fc-awd-done'] : [],
+            extendedProps: { task: t },
+          }
+        })
     },
 
     onDatesSet(info) {
       this.currentFrom = info.startStr.slice(0, 10)
       this.currentTo = info.endStr.slice(0, 10)
+      this.viewType = info.view.type
+      this.periodTitle = this.formatPeriod(info.view.currentStart)
       this.loadTasks(this.currentFrom, this.currentTo)
     },
 
-    onDateClick(info) {
+    formatPeriod(date) {
+      if (!date) return ''
+      const isZh = getAppLanguage() === 'zh-CN'
+      const month = isZh
+        ? date.getMonth() + 1
+        : date.toLocaleString('en-US', { month: 'long' })
+      return this.$t('calendar.monthTitle', { year: date.getFullYear(), month })
+    },
+
+    navPrev() { const api = this.getApi(); if (api) api.prev() },
+    navNext() { const api = this.getApi(); if (api) api.next() },
+    navToday() { const api = this.getApi(); if (api) api.today() },
+    changeView(type) {
+      const api = this.getApi()
+      if (api && this.viewType !== type) api.changeView(type)
+    },
+
+    toggleProjectFilter(id) {
+      const key = String(id)
+      const list = this.filter.projectIds
+      this.filter.projectIds = list.includes(key) ? list.filter((x) => x !== key) : list.concat([key])
+    },
+    toggleTypeFilter(type) {
+      const list = this.filter.types
+      this.filter.types = list.includes(type) ? list.filter((x) => x !== type) : list.concat([type])
+    },
+    setIncludeDone(v) { this.filter.includeDone = !!v },
+    resetFilter() { this.filter = defaultFilter() },
+
+    openCreate(date = '', time = '') {
       this.editingTask = null
-      this.defaultDate = info.dateStr.slice(0, 10)
+      this.dialogMode = 'create'
+      this.presetDate = date
+      this.presetTime = time
       this.dialogVisible = true
     },
 
-    onEventClick(info) {
-      const task = info.event.extendedProps.task
+    openEdit(task) {
       if (!task) return
       this.editingTask = task
+      this.dialogMode = 'edit'
+      this.presetDate = ''
+      this.presetTime = ''
       this.dialogVisible = true
+    },
+
+    onDateClick(info) {
+      // 周视图点时间格带时刻；月视图/全天行只有日期
+      const time = !info.allDay && info.dateStr.length > 10 ? info.dateStr.slice(11, 16) : ''
+      this.openCreate(info.dateStr.slice(0, 10), time)
+    },
+
+    onEventClick(info) {
+      if (info.jsEvent) info.jsEvent.preventDefault()
+      this.openEdit(info.event.extendedProps.task)
     },
 
     async onEventDrop(info) {
@@ -221,14 +467,13 @@ export default {
       if (!task) return
       const startStr = info.event.startStr || ''
       const newDate = startStr.slice(0, 10)
-      // 周视图里纵向拖拽会改时刻，startStr 带 T 时以新时刻为准；
-      // 月视图/全天事件的 startStr 只有日期，时刻保持原值。
-      const newTime = startStr.length > 10 ? startStr.slice(11, 16) : (task.dueTime || null)
+      // 周视图里纵向拖拽会改时刻，startStr 带 T 时以新时刻为准；拖进全天行清掉时刻；
+      // 月视图拖拽保持原时刻。
+      let newTime = timeOf(task) || null
+      if (startStr.length > 10) newTime = startStr.slice(11, 16)
+      else if (info.event.allDay && info.oldEvent && !info.oldEvent.allDay && info.view.type === 'timeGridWeek') newTime = null
       try {
         await updateTask(task.id, { dueDate: newDate, dueTime: newTime })
-        task.dueDate = newDate
-        task.dueTime = newTime
-        this.loadUpcoming()
       } catch (e) {
         console.error('[calendar] 拖拽改期失败', e)
         uni.showToast({ title: this.$t('calendar.saveFailed'), icon: 'none' })
@@ -236,21 +481,88 @@ export default {
       }
     },
 
-    onUpcomingSelect(task) {
-      const api = this.$refs.fc && this.$refs.fc.getApi()
-      if (api && task.dueDate) api.gotoDate(task.dueDate)
+    async onToggle(task) {
+      if (!task) return
+      try {
+        await updateTask(task.id, { status: isDone(task) ? 'OPEN' : 'DONE' })
+      } catch (e) {
+        console.error('[calendar] 切换完成状态失败', e)
+        uni.showToast({ title: this.$t('calendar.saveFailed'), icon: 'none' })
+      }
+    },
+
+    onDelete(task) {
+      if (!task) return
+      uni.showModal({
+        title: this.$t('calendar.deleteConfirmTitle'),
+        content: this.$t('calendar.deleteConfirmContent', { title: task.title || '' }),
+        cancelText: this.$t('calendar.cancel'),
+        confirmText: this.$t('calendar.delete'),
+        success: async (res) => {
+          if (!res.confirm) return
+          try {
+            await deleteTask(task.id)
+            uni.showToast({ title: this.$t('calendar.deleted'), icon: 'success' })
+          } catch (e) {
+            console.error('[calendar] 删除事项失败', e)
+            uni.showToast({ title: this.$t('calendar.deleteFailed'), icon: 'none' })
+          }
+        },
+      })
+    },
+
+    onOpenFile(payload) {
+      const task = payload && payload.task
+      const fileId = payload && payload.fileId
+      if (!task || !task.projectId || fileId == null) return
+      uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${task.projectId}&openFileId=${fileId}` })
+    },
+
+    applyDeepLinks() {
+      if (this.focusId) {
+        const id = this.focusId
+        this.focusId = ''
+        const task = taskStore.global.list.find((t) => t && String(t.id) === id)
+        if (task) {
+          const api = this.getApi()
+          if (api && task.dueDate) api.gotoDate(task.dueDate)
+          this.openEdit(task)
+        }
+      }
+      if (this.focusGroup) {
+        const group = this.focusGroup
+        this.focusGroup = ''
+        this.$nextTick(() => {
+          const agenda = this.$refs.agenda
+          if (agenda && agenda.scrollToGroup) agenda.scrollToGroup(group)
+        })
+      }
     },
 
     renderEventContent(arg) {
       const task = arg.event.extendedProps.task || {}
-      let html = '<div class="fc-awd-event">'
-      if (arg.timeText) html += `<span class="fc-awd-event-time">${escapeHtml(arg.timeText)}</span>`
-      html += `<span class="fc-awd-event-title">${escapeHtml(arg.event.title)}</span>`
-      if (task.source === 'ai') {
-        html += `<span class="fc-awd-event-ai">${escapeHtml(this.$t('calendar.aiSourceTag'))}</span>`
-      }
+      const meta = typeMeta(task.type)
+      const time = timeOf(task)
+      const isList = arg.view && String(arg.view.type).startsWith('list')
+      let html = `<div class="fc-awd-ev${isList ? ' is-list' : ''}">`
+      if (!isList) html += `<span class="fc-awd-ev-bar" style="background:${meta.color}"></span>`
+      if (time && !isList) html += `<span class="fc-awd-ev-time">${escapeHtml(time)}</span>`
+      if (isHigh(task)) html += FLAG_SVG
+      html += `<span class="fc-awd-ev-title">${escapeHtml(arg.event.title)}</span>`
+      if (isList && task.projectName) html += `<span class="fc-awd-ev-project">${escapeHtml(task.projectName)}</span>`
       html += '</div>'
       return { html }
+    },
+
+    // hover 原生 title：标题 + 「项目 · 文件名」
+    onEventDidMount(info) {
+      const task = info.event.extendedProps.task || {}
+      const parts = []
+      if (task.projectName) parts.push(task.projectName)
+      for (const f of taskFiles(task)) parts.push(f.fileName == null ? this.$t('calendar.fileMissing') : f.fileName)
+      const meta = typeMeta(task.type, (k) => this.$t(k))
+      const head = `[${meta.label}] ${task.title || ''}`
+      info.el.title = parts.length ? `${head}\n${parts.join(' · ')}` : head
     },
 
     dayCellClassNames(arg) {
@@ -266,12 +578,15 @@ export default {
       // 已经给每一天单独挂了角标，全天行再挂一遍是同一件事说两遍，只在月视图里挂。
       if (arg.view && arg.view.type !== 'dayGridMonth') return true
       const mark = getDayMarkType(arg.date)
-      let html = `<span class="fc-daynum">${escapeHtml(arg.dayNumberText)}</span>`
+      let html = ''
       if (mark === 'holiday') {
         html += `<span class="fc-holiday-badge fc-holiday-badge-rest">${escapeHtml(this.$t('calendar.holidayRest'))}</span>`
       } else if (mark === 'makeup') {
         html += `<span class="fc-holiday-badge fc-holiday-badge-work">${escapeHtml(this.$t('calendar.holidayWork'))}</span>`
       }
+      // zh-cn locale 的 dayNumberText 是「25日」，格子里只要数字
+      const num = String(arg.dayNumberText || '').replace(/[^0-9]/g, '') || arg.dayNumberText
+      html += `<span class="fc-daynum">${escapeHtml(num)}</span>`
       return { html }
     },
 
@@ -290,7 +605,10 @@ export default {
     renderDayHeaderContent(arg) {
       if (!arg.view || arg.view.type !== 'timeGridWeek') return true
       const mark = getDayMarkType(arg.date)
-      let html = `<span class="fc-daynum">${escapeHtml(arg.text)}</span>`
+      // 「周一 21」：星期 + 日，比 locale 默认的「9/21周一」好扫
+      const lang = getAppLanguage() === 'zh-CN' ? 'zh-CN' : 'en-US'
+      const weekday = arg.date.toLocaleDateString(lang, { weekday: 'short' })
+      let html = `<span class="fc-dh-weekday">${escapeHtml(weekday)}</span><span class="fc-dh-day">${arg.date.getDate()}</span>`
       if (mark === 'holiday') {
         html += `<span class="fc-holiday-badge fc-holiday-badge-rest">${escapeHtml(this.$t('calendar.holidayRest'))}</span>`
       } else if (mark === 'makeup') {

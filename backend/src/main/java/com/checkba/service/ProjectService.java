@@ -297,6 +297,11 @@ public class ProjectService {
                         "delete from EvidenceLinkTarget t where t.linkId in (select l.id from EvidenceLink l where l.projectId = :pid)")
                 .setParameter("pid", id)
                 .executeUpdate();
+        // project_task_file（dev-board#895）同理：没有 project_id 列，按所属事项子查询删，必须在删 project_task 之前。
+        entityManager.createQuery(
+                        "delete from ProjectTaskFile f where f.taskId in (select t.id from ProjectTask t where t.projectId = :pid)")
+                .setParameter("pid", id)
+                .executeUpdate();
         for (String entity : PROJECT_SCOPED_ENTITIES) {
             entityManager.createQuery("delete from " + entity + " e where e.projectId = :pid")
                     .setParameter("pid", id)

@@ -50,10 +50,10 @@
       <view class="home-section">
         <text class="home-section-title">{{ $t('projects.taskSectionTitle') }}</text>
         <TaskSchedule
-          :tasks="tasks"
-          :loading="tasksLoading"
-          @toggle="onTaskToggle"
-          @quick-create="onTaskQuickCreate"
+          ref="taskSchedule"
+          :project-id="projectId"
+          :compact="compact"
+          @open-file="$emit('open-task-file', $event)"
         />
       </view>
 
@@ -83,9 +83,6 @@ import {
   getProjectProfile,
   saveProjectProfileField,
   getProjectConversations,
-  getProjectTasks,
-  createTask,
-  updateTask,
   getVersionTimeline,
   getProjectFiles,
   getFileText,
@@ -104,7 +101,8 @@ export default {
     /** true = 嵌在工作台左栏里（窄栏形态：铺满并自己滚动，内容收成单列） */
     compact: { type: Boolean, default: false },
   },
-  emits: ['open-conversation'],
+  // open-task-file：日程块里点了事项关联的文件芯片（{task, fileId}），由宿主决定怎么打开
+  emits: ['open-conversation', 'open-task-file'],
   data() {
     return {
       projectName: '',
@@ -115,8 +113,6 @@ export default {
       versions: [],
       activityLoading: true,
       activityUnavailable: false,
-      tasks: [],
-      tasksLoading: true,
       conversations: [],
       conversationsLoading: true,
       nextBefore: null,
@@ -160,7 +156,8 @@ export default {
       this.loadProfile()
       this.loadStats()
       this.loadActivity()
-      this.loadTasks()
+      // 日程块自己读 taskStore（挂载与换项目时自取）；这里只在宿主显式刷新时让它强制重拉
+      if (this.$refs.taskSchedule) this.$refs.taskSchedule.reload()
       this.loadConversations({ reset: true })
       this.loadTemplateProfile()
     },
@@ -253,21 +250,6 @@ export default {
         this.activityLoading = false
       }
     },
-    async loadTasks() {
-      const gen = this.loadGeneration
-      this.tasksLoading = true
-      try {
-        const res = await getProjectTasks(this.projectId)
-        if (gen !== this.loadGeneration) return
-        this.tasks = (res && res.data && res.data.tasks) || []
-      } catch (e) {
-        console.warn('[ProjectHomePane] 读取任务失败', e)
-        if (gen !== this.loadGeneration) return
-        this.tasks = []
-      } finally {
-        this.tasksLoading = false
-      }
-    },
     async loadConversations(options) {
       const reset = !!(options && options.reset)
       // 翻页（reset=false）不自增代号，只记下发起时的代号：响应回来时代号变了，
@@ -295,27 +277,6 @@ export default {
         this.nextBeforeId = null
       } finally {
         this.conversationsLoading = false
-      }
-    },
-    /** 行内勾选框标记完成/恢复未完成：乐观更新，失败回滚（跟 onProfileSave 同一个套路）。 */
-    async onTaskToggle(task) {
-      const prevStatus = task.status
-      const nextStatus = String(prevStatus || '').toUpperCase() === 'DONE' ? 'OPEN' : 'DONE'
-      task.status = nextStatus
-      try {
-        await updateTask(task.id, { status: nextStatus })
-      } catch (e) {
-        task.status = prevStatus
-        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
-      }
-    },
-    /** 顶部「添加」快捷创建：项目级事项，不带 fileId。创建后整轮重取，拿到后端生成的 id/uid。 */
-    async onTaskQuickCreate(payload) {
-      try {
-        await createTask({ projectId: this.projectId, title: payload.title, dueDate: payload.dueDate })
-        this.loadTasks()
-      } catch (e) {
-        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
       }
     },
     onLoadMoreConversations() {

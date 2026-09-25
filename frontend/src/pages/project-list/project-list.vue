@@ -39,7 +39,11 @@
             <template v-if="SHOW_CLOUD_ACCEPT && !isClientUser && projects.length > 0">
               <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
             </template>
-            <button class="btn-secondary-small" @tap="goToCalendar">{{ $t('projects.calendarEntry') }}</button>
+            <!-- 日程入口（dev-board#898）：徽标 = 已逾期 + 今天，0 不显；CLIENT 看不到事项，不给徽标 -->
+            <button class="btn-secondary-small btn-schedule" @tap="goToCalendar">
+              <text>{{ $t('calendar.schedulePageTitle') }}</text>
+              <text v-if="scheduleBadge > 0" class="schedule-badge">{{ scheduleBadge > 99 ? '99+' : scheduleBadge }}</text>
+            </button>
             <!-- 反馈：本页没有 rail（工作台的入口在 rail 底部），而它是启动的唯一落点，
                  浮钮撤掉后这里必须有一处，否则浏览器端连报问题的地方都没有。 -->
             <button class="btn-secondary-small" :title="$t('feedback.launcherTitle')" @tap="openFeedback">{{ $t('feedback.launcherLabel') }}</button>
@@ -80,12 +84,34 @@
         </view>
 
         <view class="panel-projects">
-          <!-- 只留「全部项目」一张卡：原先的「进行中」「已完成」是写死的字面量 0，
-               Project 实体根本没有状态字段，搬迁时按 spec §4.3 删掉，不把假数字带过来 -->
-          <view class="projects-stats-row">
-            <view class="stat-card">
-              <text class="stat-value">{{ projects.length }}</text>
-              <text class="stat-label">{{ $t('projects.allProjects') }}</text>
+          <!-- 事项概览条（dev-board#898，spec 2026-09-25-task-calendar-redesign E2）：取代原来那张
+               「N 全部项目」大统计卡。后三格可点，进日程页并滚到对应分组。
+               CLIENT 看不到事项（TaskController 拒客户），整条不渲染。 -->
+          <view v-if="!isClientUser" class="task-overview">
+            <!-- 类名沿用 projects-stats-row / stat-card：scripts/check-navigation-contract.mjs 守着 -->
+            <view class="projects-stats-row">
+              <view class="stat-card">
+                <text class="ov-value">{{ projects.length }}</text>
+                <text class="ov-label">{{ $t('calendar.overviewProjects') }}</text>
+              </view>
+              <view
+                v-for="cell in overviewCells"
+                :key="cell.key"
+                class="ov-cell is-link"
+                :class="'ov-' + cell.key"
+                @tap="goToScheduleGroup(cell.key)"
+              >
+                <text class="ov-value" :class="{ 'is-alert': cell.key === 'overdue' && cell.count > 0 }">{{ cell.count }}</text>
+                <text class="ov-label">{{ cell.label }}</text>
+              </view>
+              <view class="ov-spacer"></view>
+              <view class="ov-link" @tap="goToCalendar">
+                <text>{{ $t('calendar.viewSchedule') }}</text>
+                <svg class="ov-link-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </view>
+            </view>
+            <view v-if="nextDueText" class="ov-next" @tap="goToNextDue">
+              <text class="ov-next-text">{{ nextDueText }}</text>
             </view>
           </view>
 
@@ -360,6 +386,9 @@ import { isDesktopHost, host } from '@/services/host.js'
 import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { ICONS } from '@/config/icons.js'
 import { openFeedbackWidget } from '@/utils/feedbackWidget.js'
+import { taskStore, loadSummary } from '@/utils/taskStore.js'
+import { startTaskReminders, todayDigest } from '@/utils/taskReminders.js'
+import { formatMonthDay, timeOf } from '@/components/calendar/taskUtils.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
@@ -403,6 +432,32 @@ export default {
     // CLIENT 看得见别人分享给他的案卷（ProjectService.getUserProjects 把成员身份的项目
     // 也算进去），但建项目/取案卷/删除/重命名/邀请全部对他隐藏。
     // 角色在一次会话里不会变，computed 无响应式依赖只算一次正合适。
+    taskSummary() {
+      return taskStore.global.summary || {}
+    },
+    overviewCells() {
+      const s = this.taskSummary
+      return [
+        { key: 'overdue', label: this.$t('calendar.overviewOverdue'), count: Number(s.overdue) || 0 },
+        { key: 'today', label: this.$t('calendar.overviewToday'), count: Number(s.today) || 0 },
+        { key: 'week', label: this.$t('calendar.overviewWeek'), count: Number(s.week) || 0 },
+      ]
+    },
+    scheduleBadge() {
+      if (this.isClientUser) return 0
+      const s = this.taskSummary
+      return (Number(s.overdue) || 0) + (Number(s.today) || 0)
+    },
+    /** 概览条下方一行：「最近：M月D日 HH:mm 事项标题 · 项目名」，没有待到期事项不渲染 */
+    nextDueText() {
+      const t = this.taskSummary.nextDue
+      if (!t || !t.dueDate) return ''
+      const tr = (k, p) => this.$t(k, p)
+      const time = timeOf(t)
+      const when = formatMonthDay(t.dueDate, tr) + (time ? ' ' + time : '')
+      const text = this.$t('calendar.overviewNextDue', { when, title: t.title || '' })
+      return t.projectName ? text + ' · ' + t.projectName : text
+    },
     isClientUser() {
       const u = getCurrentUser()
       return !!u && u.role === 'CLIENT'
@@ -450,10 +505,22 @@ export default {
     this.loadUserInfo()
     this.maybePromptOptionalComponents()
   },
+  mounted() {
+    // 事项提醒调度（幂等，工作台也会调）+ 当日摘要 toast（每天一次，顺带写入 taskStore.global.summary）。
+    // CLIENT 看不到事项，两样都不起。
+    if (this.isClientUser) return
+    startTaskReminders()
+    todayDigest().catch((e) => console.warn('[project-list] 事项摘要读取失败', e))
+  },
   onShow() {
     // 从概览页 navigateBack、从新建项目页回来都要看到最新结果（改名/删除都在这一页做）
     if (!this.ensureLoggedIn()) return
     this.loadProjects()
+    // 从日程页回来时概览数字要跟上（首次进入由 mounted 里的 todayDigest 取过，这里不重复打）
+    if (!this.isClientUser && this._shownOnce) {
+      loadSummary().catch((e) => console.warn('[project-list] 事项概览刷新失败', e))
+    }
+    this._shownOnce = true
   },
   methods: {
     // 浏览器端未登录直接回登录页；桌面 local-mode 免登，跳过该检查（同 userprofile.vue:565-578）
@@ -812,6 +879,15 @@ export default {
     // 日历页同样不是工作台，同一模式
     goToCalendar() {
       uni.navigateTo({ url: '/pages/calendar/calendar' })
+    },
+    // 概览条的逾期/今天/本周格：进日程页并滚到对应分组
+    goToScheduleGroup(group) {
+      uni.navigateTo({ url: '/pages/calendar/calendar?group=' + group })
+    },
+    goToNextDue() {
+      const t = this.taskSummary.nextDue
+      if (!t || t.id == null) return
+      uni.navigateTo({ url: '/pages/calendar/calendar?focus=' + t.id })
     },
     // 反馈入口（dev-board#755）。本页没有 rail，而它是启动的唯一落点——浮钮撤掉后
     // 这里要是没入口，浏览器端（没有应用菜单）就彻底报不了问题了。
