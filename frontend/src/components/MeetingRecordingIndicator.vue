@@ -24,6 +24,8 @@
 import {
   recorderState, stopRecording, pauseRecording, resumeRecording, formatSeconds, isRecordingActive
 } from '@/utils/meetingRecorder.js'
+// 挂在页面树之外（独立 app 实例），不保证有 this.$t，用模块级翻译入口
+import { t } from '@/i18n'
 
 export default {
   name: 'MeetingRecordingIndicator',
@@ -48,6 +50,17 @@ export default {
     },
     async stop() {
       const meeting = await stopRecording()
+      // 过短 / 全程无声没有自动提交转写（BUG-57），与面板同一句说明
+      const skipped = this.state.autoTranscribeSkipped
+      if (meeting && skipped) {
+        try {
+          uni.showToast({
+            title: t(skipped === 'silent' ? 'meeting.autoTranscribeSkippedSilent' : 'meeting.autoTranscribeSkippedShort'),
+            icon: 'none',
+            duration: 4000,
+          })
+        } catch (e) { /* ignore */ }
+      }
       // 面板（若开着）靠这个事件刷新列表；uni.* API 在页面树外可用
       try { uni.$emit('awd:meeting-recording-stopped', meeting) } catch (e) { /* ignore */ }
     }

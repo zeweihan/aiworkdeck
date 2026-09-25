@@ -61,6 +61,21 @@ export const librePoolMethods = {
         }
         return null
     },
+    // 把键盘焦点还给这份 executor 所属的编辑器（BUG-61）：侧栏面板点「插入」之后焦点
+    // 留在宿主 DOM 上，Cmd+Z 到不了引擎（DOM 键盘事件进不去画布），插入就「撤不掉」。
+    focusLibreEditorFor(executor) {
+        if (!executor) return
+        const map = this.getLibreExecutorMap()
+        const refs = this._libreRefs || {}
+        for (const k of Object.keys(map)) {
+            if (map[k] !== executor) continue
+            const ed = refs[k]
+            if (ed && typeof ed.focusEditor === 'function') {
+                try { ed.focusEditor() } catch (e) { /* ignore */ }
+            }
+            return
+        }
+    },
     setLibreRef(pane, fileId, el) {
         const refs = this._libreRefs || (this._libreRefs = {})
         const key = pane + ':' + fileId

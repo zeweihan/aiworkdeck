@@ -14,7 +14,13 @@ export const getAuthHeaders = () => ({ 'X-Test': '1' })
 export const createMeetingRecording = async () => ({
   meeting: { id: 'm1', audioFileId: 'f1' }, configured: true,
 })
-export const finishMeetingRecording = async () => { finishCalls += 1; return { id: 'm1', status: 'RECORDED' } }
+const finishArgList = []
+export const finishMeetingRecording = async (meetingId, durationMs, transcribe) => {
+  finishCalls += 1
+  finishArgList.push({ meetingId, durationMs, transcribe })
+  return { id: 'm1', status: 'RECORDED' }
+}
+export const finishArgs = () => finishArgList
 export const finishCallCount = () => finishCalls
 // 断言里要能读出 attempt，所以把参数一起编进返回值
 export const t = (key, params) => (params ? key + JSON.stringify(params) : key)

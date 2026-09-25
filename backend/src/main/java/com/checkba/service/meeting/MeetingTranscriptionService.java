@@ -910,7 +910,8 @@ public class MeetingTranscriptionService {
             if ("failed".equals(status)) {
                 meeting.setStatus(MeetingRecording.STATUS_FAILED);
                 String message = textOrNull(res, "message");
-                meeting.setError("转写失败: " + (message == null ? "未知原因" : message));
+                meeting.setError("转写失败: " + (message == null ? "未知原因" : message)
+                        + gatewayReleaseNotice(res));
                 return meetingRepository.save(meeting);
             }
             return meeting; // processing，下次再看
@@ -991,8 +992,51 @@ public class MeetingTranscriptionService {
                     textOrNull(res, "summarization"),
                     textOrNull(res, "meetingAssistance"));
         } catch (Exception e) {
-            return failFromResults(meeting, e);
+            MeetingRecording failed = failFromResults(meeting, e);
+            failed.setError(failed.getError() + " " + gatewayChargeNotice(res));
+            return meetingRepository.save(failed);
         }
+    }
+
+    /**
+     * 平台档「网关已完成、本机读不出结果」时的计费说明（BUG-57）。客户端<b>不能也不去</b>自行退款，
+     * 只如实转述网关回的 {@code billing.chargedCents}，并且<b>不能把 0 读成「没扣费」</b>：
+     * 网关（官网仓 {@code app/api/gateway/asr/task/[id]/route.ts}）只在 hold 仍是 {@code held}
+     * 的那一次请求里结算并回真实金额；hold 已结算后的重复拉取（上一次响应没送达本机、
+     * 下一轮轮询再取）照样回 {@code completed} 但 {@code chargedCents=0}。completed 响应里
+     * 没有「已结算 / 已退还」标记可区分这两种 0，所以 0 与缺字段一律让用户以账户用量记录为准。
+     * 重试走正常提交路径（非「待确认」），会新建任务，所以一并写明可能再次计费。
+     */
+    static String gatewayChargeNotice(JsonNode res) {
+        JsonNode charged = res == null ? null : res.path("billing").path("chargedCents");
+        if (charged == null || !charged.isNumber() || charged.asLong() <= 0) {
+            return LangText.of("本次扣费以「系统管理 - 账户与用量」中的记录为准；"
+                            + "重试会重新提交转写，可能再次计费。",
+                    "Check System settings - Account & Usage for whether this task was charged; "
+                            + "retrying resubmits the transcription and may be charged again.");
+        }
+        String credits = java.math.BigDecimal.valueOf(charged.asLong(), 2).toPlainString();
+        return LangText.of("平台已按本次任务结算 " + credits + " Credits，不会自动退还；"
+                        + "重试会重新提交转写，可能再次计费。如需核对请通过反馈联系我们。",
+                "The platform has already charged " + credits + " Credits for this task; it is not refunded "
+                        + "automatically. Retrying resubmits the transcription and may be charged again. "
+                        + "Contact us via Feedback if you need this checked.");
+    }
+
+    /**
+     * 网关回 {@code status:"failed"} 是唯一明确的「预扣已退还」信号：网关在回这个状态之前
+     * 已经 {@code releaseHold}（上游终态失败，或 hold 早已被释放/超时回收），并带
+     * {@code billing.chargedCents=0}。两者同时成立才说「已退还」，形态对不上就什么都不补，
+     * 不替网关做承诺。
+     */
+    static String gatewayReleaseNotice(JsonNode res) {
+        JsonNode charged = res == null ? null : res.path("billing").path("chargedCents");
+        if (res == null || !"failed".equals(res.path("status").asText(""))
+                || charged == null || !charged.isNumber() || charged.asLong() != 0) {
+            return "";
+        }
+        return LangText.of("（预扣的 Credits 已由平台退还，本次未扣费。）",
+                " (The Credits held for this task have been returned; nothing was charged.)");
     }
 
     /** 解析 + 落库，云端两档共用。 */

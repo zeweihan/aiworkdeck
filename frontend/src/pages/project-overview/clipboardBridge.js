@@ -223,6 +223,9 @@ export const clipboardBridgeMethods = {
       }
       // 2) 兜底：如果面板当前可见，做一次 refresh 对齐服务端（避免时间/格式差异）
       this.triggerClipboardRefresh()
+      // 3) 全局广播（BUG-62）：抢到这次复制的可能是页面栈里另一个实例、或面板挂在别的坞位，
+      //    上面经 $refs 的通知会落空。开着的 ClipboardPanel 各自订阅它重拉。
+      uni.$emit('awd:clipboard-saved', item)
     },
     triggerClipboardRefresh() {
       if (!this.pendingClipboardRefresh) return

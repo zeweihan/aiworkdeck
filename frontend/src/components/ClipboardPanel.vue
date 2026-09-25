@@ -13,7 +13,7 @@
       <view v-if="loading" class="loading">{{ $t('panels.cpLoading') }}</view>
       <view v-else-if="items.length === 0" class="empty">{{ $t('panels.cpEmpty') }}</view>
       <view v-else class="list-grid">
-        <view v-for="it in items" :key="it.id" class="clip-card" @tap="copy(it.text)">
+        <view v-for="it in items" :key="it.id" class="clip-card" @tap="onCardTap(it)">
           <view class="card-header">
             <view class="header-left">
               <view class="type-line">
@@ -104,6 +104,8 @@ export default {
       // 免费额度下被隐藏（注意：不是被删除）的历史记录条数。解锁后这些记录会原样回来。
       hiddenCount: 0,
       confirmDeleteId: null,
+      // 已点「确定」、DELETE 与重拉还没回来的那一条：期间卡片不再响应复制（BUG-63）
+      deletingId: null,
       _refreshSeq: 0
     }
   },
@@ -113,11 +115,18 @@ export default {
     // 不重拉的话横幅会停在购买前的旧值上（dev-board#201）
     this._onEntitlementsChanged = () => this.refresh()
     uni.$on('awd:entitlements-changed', this._onEntitlementsChanged)
+    // 采集桥入库成功（主进程 1 秒轮询系统剪贴板推过来的）即重拉，面板开着时新内容实时出现（BUG-62）
+    this._onClipboardSaved = () => this.refreshSilently()
+    uni.$on('awd:clipboard-saved', this._onClipboardSaved)
   },
   beforeUnmount() {
     if (this._onEntitlementsChanged) {
       uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
       this._onEntitlementsChanged = null
+    }
+    if (this._onClipboardSaved) {
+      uni.$off('awd:clipboard-saved', this._onClipboardSaved)
+      this._onClipboardSaved = null
     }
   },
   watch: {
@@ -136,9 +145,17 @@ export default {
     // 节流都没有），每敲一下键就发一次 listClipboard。响应到达顺序不保证跟敲键顺序
     // 一致，先敲的（陈旧）关键字若后回，会把已经渲染好的最新结果和「N 条被免费额度
     // 隐藏」提示一起盖成陈旧值。只认"此刻最新一次"发出的那份。
+    // 采集后的实时重拉：不切「加载中」、失败不弹 toast——复制是机器级高频事件，
+    // 每次都闪一下加载态或弹一次失败提示都是打扰（BUG-62）
+    refreshSilently() {
+      this._silentNext = true
+      return this.refresh()
+    },
     async refresh() {
+      const silent = !!this._silentNext
+      this._silentNext = false
       const seq = ++this._refreshSeq
-      this.loading = true
+      if (!silent) this.loading = true
       try {
         const res = await listClipboard(this.query, 80)
         if (!shouldAcceptResponse(seq, this._refreshSeq)) return
@@ -154,7 +171,7 @@ export default {
       } catch (e) {
         if (!shouldAcceptResponse(seq, this._refreshSeq)) return
         console.error('加载剪贴板失败:', e)
-        uni.showToast({ title: this.$t('panels.cpLoadFailed'), icon: 'none' })
+        if (!silent) uni.showToast({ title: this.$t('panels.cpLoadFailed'), icon: 'none' })
       } finally {
         if (shouldAcceptResponse(seq, this._refreshSeq)) this.loading = false
       }
@@ -205,6 +222,16 @@ export default {
     // 「确定」，点到的是卡片本身的 @tap="copy(it.text)"——表现正是「卡片仍在、
     // 什么也没发生」（dev-board#455）。取消靠再点一次 ×、点「取消」，
     // 或者点另一张卡片的 ×（confirmDeleteId 只认一个 id）。
+    // 卡片本体的点击（BUG-63）：删除气泡开着时，点偏落到卡片上只收起气泡、不复制；
+    // 已确认删除、还没重拉完的那张卡也不复制——两种情况下的「复制」都不是用户本意。
+    onCardTap(it) {
+      if (this.confirmDeleteId !== null) {
+        this.cancelDelete()
+        return
+      }
+      if (it && this.deletingId === it.id) return
+      return this.copy(it && it.text)
+    },
     requestDelete(id) {
       if (this.confirmDeleteId === id) {
         this.confirmDeleteId = null
@@ -219,6 +246,7 @@ export default {
 
     async confirmDelete(id) {
       this.cancelDelete()
+      this.deletingId = id
       try {
         await deleteClipboardItem(id)
         await this.refresh()
@@ -230,6 +258,8 @@ export default {
         } else {
           uni.showToast({ title: (e && e.message) || this.$t('panels.cpDeleteFailed'), icon: 'none' })
         }
+      } finally {
+        if (this.deletingId === id) this.deletingId = null
       }
     },
     getImageUrl(it) {

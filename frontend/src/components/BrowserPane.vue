@@ -309,6 +309,9 @@ export default {
     this.loadShortcuts()
     // 星形按钮的实心态要在抽屉从未打开过时也正确，进来先拉一次收藏列表（轻量端点）
     this.loadFavorites()
+    // 收藏在别处（收藏面板、设置页全部收藏）被删/改后重拉，星形态跟着变（BUG-60）
+    this._onFavoritesChanged = () => this.loadFavorites()
+    uni.$on('awd:favorites-changed', this._onFavoritesChanged)
     if (this.isDesktopBrowser) {
       this._desktopViewId = (this.tabId || this.iframeToken || '').toString()
       this.setupDesktopBrowser()
@@ -343,6 +346,10 @@ export default {
     }
   },
   beforeUnmount() {
+    if (this._onFavoritesChanged) {
+      uni.$off('awd:favorites-changed', this._onFavoritesChanged)
+      this._onFavoritesChanged = null
+    }
     if (this.isDesktopBrowser) {
       this.teardownDesktopBrowser()
       return
@@ -667,6 +674,8 @@ export default {
       this.reload()
     },
     reload() {
+      // 刷新页面时顺带重拉收藏：别处删掉的收藏不能让星形一直亮着（BUG-60）
+      this.loadFavorites()
       if (this.isDesktopBrowser) {
         this.desktopHistory('reload')
         return
@@ -738,17 +747,26 @@ export default {
       }
     },
     async loadFavorites() {
-      if (this.favLoading) return
+      // 正在拉的那一份可能早于刚发生的删除，排队再拉一次，不能直接丢掉这次请求
+      if (this.favLoading) { this._favReloadPending = true; return }
       this.favLoading = true
+      // localFavUrls 只是「刚收藏、列表还没拉回来」这段窗口的占位：请求发出前就在的
+      // 条目，以这次拉回来的服务端列表为准，不再单独点亮星形（否则删了也一直亮，BUG-60）
+      const pendingBefore = this.localFavUrls.slice()
       try {
         const pid = this.projectId ? (typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId) : null
         const list = pid ? await getProjectFavorites(pid, '', 80) : await getMyFavorites()
         const arr = Array.isArray(list) ? list : ((list && list.data) || [])
         this.favorites = arr.filter(f => f && f.sourceUrl)
+        this.localFavUrls = this.localFavUrls.filter(k => !pendingBefore.includes(k))
       } catch (e) {
         // 列表拉不到只影响星形态与抽屉展示，静默（抽屉里显示空态）
       } finally {
         this.favLoading = false
+        if (this._favReloadPending) {
+          this._favReloadPending = false
+          this.loadFavorites()
+        }
       }
     },
     async favoriteCurrentPage() {

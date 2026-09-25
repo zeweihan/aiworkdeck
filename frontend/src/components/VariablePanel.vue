@@ -465,19 +465,13 @@ export default {
         this.confirmDeleteKey = null // toggle off
         return
       }
+      // 确认态不自动收起（同 ClipboardPanel，dev-board#455 / BUG-63）：超时收起后用户点「确定」
+      // 点到的是气泡底下的卡片。取消靠再点一次 ×、点「取消」或点另一张卡片的 ×。
       this.confirmDeleteKey = it.key
-      // Auto-hide after 3 seconds if not confirmed
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-      this._deleteTimer = setTimeout(() => {
-        if (this.confirmDeleteKey === it.key) {
-          this.confirmDeleteKey = null
-        }
-      }, 5000)
     },
 
     cancelDelete() {
       this.confirmDeleteKey = null
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
     },
 
     async confirmDelete(it) {

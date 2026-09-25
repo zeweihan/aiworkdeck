@@ -82,14 +82,31 @@ public final class MeetingTranscriptParser {
         return segments;
     }
 
-    /** 听悟静音结果会只保留 TaskId/AudioInfo；不能把错误信封或损坏的段落字段吞成空稿。 */
+    /**
+     * 听悟静音结果会只保留 TaskId/AudioInfo；不能把错误信封或损坏的段落字段吞成空稿。
+     *
+     * <p>AudioInfo 有两种落点：根上，或听悟结果文件的正式形态 {@code Transcription.AudioInfo}
+     * （同层可能还有空的 AudioSegments）。后者此前被判成「形状不对」，7 秒无人声录音在平台档
+     * 被结算后落 FAILED（BUG-57）。Transcription 里除这两个键外出现任何别的键仍按形状不对处理。
+     */
     private static boolean isSilentAudioResult(JsonNode root) {
         if (root == null || !root.isObject() || !root.path("TaskId").isTextual()
                 || root.path("TaskId").asText("").isBlank()
                 || root.has("error") || root.has("Error") || root.has("ErrorCode") || root.has("Code")) return false;
         JsonNode transcription = root.path("Transcription");
-        if (!transcription.isMissingNode() && !(transcription.isObject() && transcription.isEmpty())) return false;
         JsonNode audio = root.path("AudioInfo");
+        if (!transcription.isMissingNode()) {
+            if (!transcription.isObject()) return false;
+            var names = transcription.fieldNames();
+            while (names.hasNext()) {
+                String name = names.next();
+                if ("AudioInfo".equals(name)) continue;
+                if ("AudioSegments".equals(name) && transcription.path(name).isArray()
+                        && transcription.path(name).isEmpty()) continue;
+                return false;
+            }
+            if (transcription.has("AudioInfo")) audio = transcription.path("AudioInfo");
+        }
         return audio.isObject() && audio.path("Duration").isNumber() && audio.path("Duration").asLong() > 0
                 && audio.path("Size").isNumber() && audio.path("Size").asLong() > 0
                 && audio.path("SampleRate").isNumber() && audio.path("SampleRate").asLong() > 0;

@@ -131,8 +131,15 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
   **删除失败提示走 `host.app.confirm` 原生弹窗**（同收藏面板：toast 在 DOM 层、被原生
   BrowserView 整个盖住），删除确认气泡也**不再 5 秒自动收起**——超时后用户点「确定」
   点到的是卡片本身的 `@tap="copy(it.text)"`，表现正是「卡片仍在、什么也没发生」。
-  注意 `ProjectFavoritesPanel.vue` / `VariablePanel.vue` 的删除气泡仍是同款 5 秒自动收起，
-  是同一个坑的未修实例。回归用例 `frontend/tests/clipboard/`（`npm run test:clipboard`）。
+  `ProjectFavoritesPanel.vue` / `VariablePanel.vue` / `userprofile/PersonalFavoritesPanel.vue`
+  的同款气泡也已去掉自动收起（BUG-63，`tests/clipboard/deleteConfirmSiblings.test.mjs`）。
+  **卡片本体的点击走 `onCardTap`**：确认气泡开着时点偏落到卡片上只收起气泡、不复制；
+  已点「确定」、DELETE 与重拉未回的那张卡（`deletingId`）也不复制。
+  **实时刷新（BUG-62）**：采集桥入库成功后 `uni.$emit('awd:clipboard-saved')`，面板订阅后
+  `refreshSilently()`（不切加载态、失败不弹 toast）——不能只靠 `$refs.clipboardPanel`，
+  抢到这次复制的可能是页面栈里另一个实例。**同文本去重在后端 `ClipboardService.saveText`**：
+  最近 `DEDUP_WINDOW` 条里有同文本的 TEXT 记录就只把它的 `createdAt` 顶到现在，不新增、不删除。
+  回归用例 `frontend/tests/clipboard/`（`npm run test:clipboard`）、`ClipboardDedupTest`。
   **免费额度（PR-C）**：未拥有 `clipboard.unlimited` 时 GET / 只返回「最近 20 条 且 3 天内」，两条同时生效取更严者。**实现是查询侧过滤，绝不删除记录**——超出的行留在库里，解锁后原样可见。GET / 返回体从裸数组改为 `{items, limited, hiddenCount, maxItems, retentionDays}`（`ClipboardListResult`），hiddenCount 只算「因额度看不见」的（= 总数 − min(3天内条数, 20)），不含被分页 limit 挡住的。常量在 `ClipboardService.FREE_MAX_ITEMS/FREE_RETENTION_DAYS`。**额度只在 local-mode（桌面单机版）执行**：`EntitlementService` 是按本机的（无 userId 维度），团队案件库服务器上权益恒为空集，照执行会把每个接入成员截到 20 条且永远无法解锁。
 
 **收藏夹**：`ProjectFavoritesPanel.vue`；网页选中收藏经 `checkba:webmark`（preload ~:26）→ project-overview 订阅入库（~:2003）；后端 `controller/WebFavoriteController.java`（/api/favorites/my、/api/projects/{id}/favorites、DELETE、image）。
@@ -141,7 +148,10 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
   中心恒落在 view 区域内），只弹 toast 的现象就是「点了没反应」。右键收藏与 OCR 摘录收藏
   （`ocrDoFavorite`）现在同用这个模式；失败提示同理走 `host.app.confirm`（原生弹窗，不被遮挡）。
   卡片右下角的来源域名读的是 `meta.sourceHost`（`WebFavoriteListItem.from` 从 meta JSON 提取），
-  新增收藏入口时 meta 里不写 sourceHost 就永远空白。面板 `refresh(force)`：新增收藏后的刷新
+  新增收藏入口时 meta 里不写 sourceHost 就永远空白。删除收藏（收藏面板、设置页全部收藏）成功后
+  `uni.$emit('awd:favorites-changed')`，BrowserPane 订阅重拉收藏列表、刷新按钮也会重拉；
+  `localFavUrls` 只是「刚收藏、列表未回」的占位，每次列表拉回即以服务端为准（BUG-60，
+  `tests/browser/favorite-star-sync.test.mjs`）。面板 `refresh(force)`：新增收藏后的刷新
   要传 `force=true` 绕过 1.2s 节流，否则新卡片可能刷不出来、高亮落空。
 
 **搜索**：`SearchPanel.vue`；后端 `controller/SearchController.java`（POST /api/projects/{id}/search）。
@@ -237,6 +247,15 @@ mtime+size 指纹没变，缓存里那句「请先转写」会永久生效且不
 **不承诺静音免扣**（结算在官网网关）；EMPTY 提示按落库 `gatewayTaskId` 判断，不能按当前
 档位推断那次任务是否收费。回归：`node --test frontend/tests/meeting-recorder/*.test.mjs`、
 `MeetingTranscriptParserTest` / `MeetingTranscriptionServiceTest`。
+**空录音与读不出的结果（BUG-57）**：静音结果的 AudioInfo 也可能嵌在 `Transcription.AudioInfo`
+（同层只允许空 `AudioSegments`），同样落 `EMPTY`。平台档网关已 `completed` 但本机读不出结果时，
+FAILED 文案按网关回的 `billing.chargedCents`：>0 写「已结算 N Credits、不会自动退还、重试可能再计费」；
+**0 或缺字段不许说「没扣费」**——网关对已 settled 的 hold 重复拉取（上次响应没送达本机）照样回
+`completed` + `chargedCents=0`，completed 响应里没有区分标记，只能写「以系统管理 - 账户与用量为准」。
+唯一的「预扣已退还」信号是 `status:"failed"` 且 `chargedCents=0`（网关回之前已 `releaseHold`）。
+**客户端不发起退款请求**（结算与退款在官网网关）。录音引擎在结束时按
+`decideAutoTranscribe`（`utils/meetingRecorderStatus.js`：不足 2 秒或整场电平峰值 < 0.02）决定
+finish 是否带 `transcribe:false`，跳过时面板/胶囊 toast 说明，会议留在「未转写」可手动提交。
 
 **转写卡死判定与进度提示（dev-board#532，2026-09-09 维护者拍板）**：会议进入 `TRANSCRIBING`
 之后只有上游给终态才会离开，上游永不给终态（听悟任务被清理、网关任务被回收）就永远卡着，

@@ -321,6 +321,43 @@ class MeetingTranscriptionPlatformPathTest {
     }
 
     @Test
+    @DisplayName("平台已结算但结果读不出来：FAILED 文案要写明本次已扣多少 Credits、不会自动退还、重试会再计费（BUG-57）")
+    void unreadableResultAfterSettlementStatesCharge() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_bad");
+        transport.task.add(new PlatformGatewayTransport.Reply(200, """
+                {"status":"completed","taskId":"asr_bad","transcription":%s,
+                 "billing":{"chargedCents":1}}
+                """.formatted(quote("{\"error\":\"private-meeting-content\"}"))));
+        MeetingRecording out = service().refreshIfNeeded(m);
+        assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
+        String error = out.getError();
+        assertTrue(error.contains("0.01 Credits"), error);
+        assertTrue(error.contains("不会自动退还"), error);
+        assertTrue(error.contains("可能再次计费"), error);
+        assertTrue(!error.contains("private-meeting-content"), error);
+        assertEquals(1, transport.calls.size(), "客户端不自行发起退款或重建任务");
+    }
+
+    @Test
+    @DisplayName("重复拉取已结算任务（chargedCents=0）：不许说「没扣费」，让用户以账户用量为准（BUG-57）")
+    void unreadableResultOnRepeatFetchDoesNotClaimNoCharge() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_bad0");
+        // 网关对 hold 已 settled 的任务再取一次：照样 completed，但 chargedCents 固定回 0
+        transport.task.add(new PlatformGatewayTransport.Reply(200, """
+                {"status":"completed","taskId":"asr_bad0","transcription":"not json",
+                 "billing":{"chargedCents":0}}
+                """));
+        MeetingRecording out = service().refreshIfNeeded(m);
+        assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
+        String error = out.getError();
+        assertTrue(error.contains("账户与用量"), error);
+        assertTrue(!error.contains("没有扣费") && !error.contains("未扣费") && !error.contains("退还"), error);
+        assertEquals(1, transport.calls.size(), "客户端不自行发起退款或重建任务");
+    }
+
+    @Test
     @DisplayName("轮询失败：落 FAILED 带网关给的原因，一分钱不扣由服务端保证")
     void pollFailedIsTerminal() {
         MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
@@ -332,6 +369,21 @@ class MeetingTranscriptionPlatformPathTest {
 
         assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
         assertTrue(out.getError().contains("音频损坏"));
+        assertTrue(out.getError().contains("预扣的 Credits 已由平台退还"), out.getError());
+    }
+
+    @Test
+    @DisplayName("failed 却带非零或缺失的 chargedCents：形态对不上就不替网关承诺已退还（BUG-57）")
+    void pollFailedWithoutZeroChargeMakesNoRefundClaim() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_odd");
+        transport.task.add(new PlatformGatewayTransport.Reply(200,
+                "{\"status\":\"failed\",\"taskId\":\"asr_odd\",\"message\":\"音频损坏\"}"));
+
+        MeetingRecording out = service().refreshIfNeeded(m);
+
+        assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
+        assertTrue(!out.getError().contains("退还"), out.getError());
     }
 
     @Test

@@ -30,7 +30,7 @@ function makePanel(deps) {
 }
 
 function makeVm(over = {}) {
-  const calls = { list: [], del: [], toasts: [], native: [], timers: [] }
+  const calls = { list: [], del: [], toasts: [], native: [], timers: [], copied: [] }
   let rows = over.rows || [{ id: 1, type: 'TEXT', text: 'a' }, { id: 2, type: 'TEXT', text: 'b' }]
   const deps = {
     listClipboard: async (q, limit) => {
@@ -39,6 +39,7 @@ function makeVm(over = {}) {
     },
     deleteClipboardItem: async (id) => {
       calls.del.push(id)
+      if (over.deleteGate) await over.deleteGate
       if (over.deleteFails) throw new Error('boom')
       rows = rows.filter((r) => r.id !== id)
       return { code: 0 }
@@ -50,7 +51,7 @@ function makeVm(over = {}) {
     UnlockHint: {},
     shouldAcceptResponse,
     host: { app: { confirm: async (p) => { calls.native.push(p) } } },
-    uni: { showToast: (o) => calls.toasts.push(o), $on: () => {}, $off: () => {}, setClipboardData: () => {} },
+    uni: { showToast: (o) => calls.toasts.push(o), $on: () => {}, $off: () => {}, setClipboardData: (o) => calls.copied.push(o.data) },
     setTimeout: (fn, ms) => { calls.timers.push([fn, ms]); return calls.timers.length },
     clearTimeout: () => {},
   }
@@ -100,4 +101,37 @@ test('删除失败走原生弹窗（toast 会被原生 BrowserView 整个盖住�
   await vm.confirmDelete(1)
   assert.equal(calls.native.length, 1, '失败必须用 host.app.confirm 这类原生弹窗提示')
   assert.deepEqual(calls.toasts, [], '不该再退回 uni.showToast')
+})
+
+// BUG-63：真机上「确定」约六成点成了卡片的「复制」。整张卡片本身绑着 @tap 复制，
+// 气泡开着时点偏一点、或者确认后到重拉完成前补点一下，都会落在卡片上变成复制。
+test('卡片本体的点击走 onCardTap（不是直接 copy）', () => {
+  const card = SRC.match(/<view[^>]*class="clip-card"[^>]*>/)[0]
+  assert.match(card, /@tap="onCardTap\(it\)"/, '卡片 @tap 必须经过确认态守卫')
+})
+
+test('确认气泡开着时点卡片本体：不复制，只收起气泡', async () => {
+  const { vm, calls } = makeVm()
+  await vm.refresh()
+  vm.requestDelete(2)
+  await vm.onCardTap(vm.items[1])
+  assert.deepEqual(calls.copied, [], '气泡开着时点偏落到卡片上不该变成复制')
+  assert.equal(vm.confirmDeleteId, null, '点卡片其它地方应收起气泡')
+  await vm.onCardTap(vm.items[0])
+  // 条件编译注释在 node 里不生效，H5 与非 H5 两支都会写一次，只看写进去的内容
+  assert.ok(calls.copied.length > 0 && calls.copied.every((t) => t === 'a'), '气泡收起后卡片照常可点复制')
+})
+
+test('确认删除后、重拉完成前补点该卡片：不复制', async () => {
+  let release
+  const gate = new Promise((r) => { release = r })
+  const { vm, calls } = makeVm({ deleteGate: gate })
+  await vm.refresh()
+  vm.requestDelete(2)
+  const pending = vm.confirmDelete(2)
+  await vm.onCardTap(vm.items.find((i) => i.id === 2))
+  assert.deepEqual(calls.copied, [], '删除进行中的卡片不该再响应复制')
+  release()
+  await pending
+  assert.deepEqual(vm.items.map((i) => i.id), [1])
 })
