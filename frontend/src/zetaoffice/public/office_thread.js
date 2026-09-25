@@ -6459,7 +6459,7 @@ const EXEC = {
     // ② 主线侧 vs 共同的上一版：主线的改动成为带作者的字符级修订。
     t = Date.now();
     ld = EXEC.load_document({ bytes: p && p.mainBytes, name: name });
-    if (!ld || ld.success !== true || ld.empty) return fail('load-main', (ld && ld.message) || '主线那一版是空的');
+    if (!ld || ld.success !== true || ld.empty) return fail('load-main', (ld && ld.message) || '主稿那一版是空的');
     elapsedMs.loadMain = Date.now() - t;
     t = Date.now();
     try { setRedlineAuthor(mainAuthor); } catch (e) {}

@@ -1235,7 +1235,7 @@ public class CloudSyncService {
             throw VersionException.userFacing(LangText.of("请先结束或丢弃手头这段工作，再取回最新稿", "Please finish or discard your current work session before pulling the latest draft"));
         }
         if (sessionService.onDraftBranch(projectId)) {
-            throw VersionException.userFacing(LangText.of("请先回到主线工作，再取回最新稿", "Please return to Mainline before pulling the latest draft"));
+            throw VersionException.userFacing(LangText.of("请先回到主稿工作，再取回最新稿", "Please return to the main copy before pulling the latest draft"));
         }
     }
 

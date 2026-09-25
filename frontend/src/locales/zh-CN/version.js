@@ -72,7 +72,7 @@ export default {
 
   // ---- WorkSessionBar.vue ----
   workingOnDraft: '正在稿《{name}》上修改',
-  returnToMainline: '回到主线工作',
+  returnToMainline: '回到主稿工作',
   adoptDraft: '采纳这一稿',
   abandonDraft: '放弃这一稿',
   working: '工作中',
@@ -83,7 +83,7 @@ export default {
   nameSessionTitle: '给这次工作起个名字',
   sessionNamePlaceholder: '例如：发客户第一稿（不填也可以）',
   finish: '完成',
-  returnMainlineFailed: '回到主线工作失败，请稍后重试',
+  returnMainlineFailed: '回到主稿工作失败，请稍后重试',
   adoptFailed: '采纳失败，请稍后重试',
   abandonDraftConfirmContent: '这一稿的所有改动都会被丢掉，确定吗？',
   abandonFailed: '放弃失败，请稍后重试',
@@ -333,9 +333,9 @@ export default {
   remoteAheadOne: '{name}交了新稿 · {count} 版',
   remoteAheadMany: '{name}等 {people} 人交了新稿 · {count} 版',
 
-  historyTabName: '提交历史',
+  historyTabName: '完整历史',
   openFullHistory: '完整历史',
-  viewCommitHistory: '查看提交历史',
+  viewCommitHistory: '查看完整历史',
   filterAuthor: '参与人',
   filterFile: '文件',
   filterKeywordPlaceholder: '搜标题或说明',
@@ -356,7 +356,7 @@ export default {
   authorYou: '{name}（你）',
   autoFoldedCountOne: '自动存档 1 次',
   autoFoldedCount: '自动存档 {count} 次',
-  refMainline: '主线',
+  refMainline: '主稿',
   refRemote: '案件库',
   refLocal: '本机',
   refDraft: '稿',
@@ -375,7 +375,7 @@ export default {
   detailSelectPrompt: '选一行看这一版改了什么。按住 Cmd/Ctrl 点两行可以对比这两版。',
   // 三方合并与逐段溯源（dev-board#630 / #632）。两侧怎么称呼按 mergeContext 走，
   // 判定全在 utils/historyMerges.js——MAIN 在结束工作撞车语境里是**同事**那边。
-  mergeSideMainline: '主线',
+  mergeSideMainline: '主稿',
   mergeSideDraft: '这一稿',
   // 两侧的人分不开时（同一个账号两边都是自己）稿这一侧带上名字，主线那侧用上面那句。
   mergeSideDraftNamed: '稿《{name}》',
@@ -451,7 +451,7 @@ export default {
   mergeViewOtherVersion: '查看{side}那一版',
   mergeUnitParagraph: '第 {n} 段',
   mergeUnitInTable: '表格里的一格',
-  mergeSideMainDefault: '主线那边',
+  mergeSideMainDefault: '主稿那边',
   mergeSideOtherDefault: '另一边',
   mergeFinish: '完成裁决',
   mergeFinishBlocked: '还有 {count} 处要你先决定',

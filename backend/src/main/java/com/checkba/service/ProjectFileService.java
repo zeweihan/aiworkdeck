@@ -46,6 +46,13 @@ public class ProjectFileService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.storage.ProjectStorageResolver storageResolver;
 
+    /**
+     * 改动信号的署名查不到人时（AI 路径的占位 userId 10001 等）退到项目负责人（BUG-59）。
+     * 字段注入，理由同上：手工 new 的测试实例缺席时行为同旧。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.repository.ProjectRepository projectRepository;
+
     /** 手工 new 出来的实例（测试）补上解析器。 */
     void setStorageResolverForTest(com.checkba.storage.ProjectStorageResolver resolver) {
         this.storageResolver = resolver;
@@ -1820,21 +1827,44 @@ public class ProjectFileService {
         // 埋点：仅计数，不带任何文件/项目信息
         telemetryService.record("file.changed", null);
         try {
-            workSessionService.onChangeSignal(projectId, userId, resolveUserName(userId));
+            String name = signatureNameOrNull(userId);
+            if (name == null) {
+                // 查不到人（AI 路径的占位 userId 10001、异步任务没有会话用户）：退到项目负责人，
+                // userId 一并换掉——否则这一笔成了工作段最后的操作者，空闲自动结束时
+                // 整段署成泛称「用户」，邮箱也对不上「是不是我」（BUG-59）。
+                Long ownerId = projectOwnerId(projectId);
+                String ownerName = ownerId == null || ownerId.equals(userId) ? null : signatureNameOrNull(ownerId);
+                if (ownerName != null) {
+                    userId = ownerId;
+                    name = ownerName;
+                }
+            }
+            workSessionService.onChangeSignal(projectId, userId,
+                    name != null ? name : LangText.of("用户", "User"));
         } catch (Exception e) {
             log.warn("发送版本变更信号失败: project={}", projectId, e);
         }
     }
 
-    private String resolveUserName(Long userId) {
-        if (userId == null) return LangText.of("用户", "User");
+    private String signatureNameOrNull(Long userId) {
+        if (userId == null) return null;
         try {
-            String name = UserService.signatureName(userService.getUserById(userId));
-            if (name != null) return name;
+            return UserService.signatureName(userService.getUserById(userId));
         } catch (Exception e) {
             log.warn("解析用户名失败: userId={}", userId, e);
+            return null;
         }
-        return LangText.of("用户", "User");
+    }
+
+    private Long projectOwnerId(Long projectId) {
+        if (projectRepository == null) return null;
+        try {
+            return projectRepository.findById(projectId)
+                    .map(com.checkba.model.entity.Project::getUserId).orElse(null);
+        } catch (Exception e) {
+            log.warn("读取项目负责人失败: project={}", projectId, e);
+            return null;
+        }
     }
 }
 

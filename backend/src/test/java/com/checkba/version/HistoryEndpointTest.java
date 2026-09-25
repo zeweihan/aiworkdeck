@@ -288,7 +288,7 @@ class HistoryEndpointTest {
         assertEquals(Set.of("mainline", "local"), refTypes(row(data, mainTip)));
         assertEquals(Set.of("draft"), refTypes(row(data, draftTip)));
         assertEquals("试验稿", refName(row(data, draftTip), "draft"));
-        assertEquals("主线", refName(row(data, mainTip), "mainline"));
+        assertEquals("主稿", refName(row(data, mainTip), "mainline"));
         // 案件库还停在两边齐平那一版上
         assertEquals(Set.of("remote"), refTypes(row(data, oldMain)));
         assertEquals("案件库", refName(row(data, oldMain), "remote"));

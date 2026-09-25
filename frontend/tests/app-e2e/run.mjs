@@ -1877,7 +1877,7 @@ try {
 
   await step('回到主线工作后稿态消失', async () => {
     await mouseClickSel('[title="版本"]')
-    await mouseClickText('回到主线工作')
+    await mouseClickText('回到主稿工作')
     await page.waitForFunction(
       () => !!document.querySelector('.session-bar .session-idle'),
       { timeout: 10000 },
@@ -1915,7 +1915,7 @@ try {
   //         → 断言三选一弹窗出现且列出该文件（认 AdoptConflictDialog 选择器） ----
   await step('回到主线工作', async () => {
     await mouseClickSel('[title="版本"]')
-    await mouseClickText('回到主线工作')
+    await mouseClickText('回到主稿工作')
     await page.waitForFunction(
       () => !!document.querySelector('.session-bar .session-idle'),
       { timeout: 10000 },
