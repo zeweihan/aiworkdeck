@@ -119,6 +119,28 @@ export const panelDockingMethods = {
     this.$nextTick(() => this.triggerWorkbenchResize())
   },
 
+  /**
+   * 这个面板已经开着时把它收起来（dev-board#980 BUG-69「解析」按钮再点一次的落点）：
+   * left 收整个侧栏（同 rail 图标再点一次的既有语义），right/bottom 只切回该 dock 的
+   * 默认视图——右栏恒有 AI 对话，收起 insight 不该把 AI 面板一起关掉；底栏同理走既有
+   * 的 toggleToolsPanel 收起。没开着时是空操作，调用方不用自己判断当前是不是开着。
+   */
+  closeDockedPanel(key) {
+    const dock = resolveDock(key, this.panelDockOverrides)
+    if (!this.isPanelOpenIn(key, dock)) return
+    if (dock === 'left') this.toggleLeftPane(key)
+    else if (dock === 'right') this.rightPaneKey = 'ai'
+    else if (dock === 'bottom') this.toggleToolsPanel()
+    this.$nextTick(() => this.triggerWorkbenchResize())
+  },
+
+  /** 打开这个面板；已经开着就收起（工具栏「点开/点关」类入口共用，见 closeDockedPanel）。 */
+  toggleDockedPanel(key) {
+    const dock = resolveDock(key, this.panelDockOverrides)
+    if (this.isPanelOpenIn(key, dock)) this.closeDockedPanel(key)
+    else this.openPanelInItsDock(key)
+  },
+
   /** 右键菜单与拖拽投放的落点：把面板搬到另一个 dock。 */
   movePanelToDock(key, dock) {
     this.closeDockMenu()

@@ -250,6 +250,15 @@
       <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
         <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
+      <!-- 解析（dev-board#182）：AI 通读全文抽实体 + 打外部库 + 一致性校验，联动打开
+           「依据」窗格。这条工具栏只在 docKind==='writer' 时渲染，所以不用再判文档类型。
+           dev-board#980（BUG-69）：#794 把这颗按钮当"死链接"清掉过一次——其实它是唯一
+           入口，「依据」窗格从此只能靠顶栏右侧面板开关摸进去，两轮真机测试都没找到，
+           这次常显补回来。按下态跟着 insightOpen；已经开着再点一次收起（宿主按当前
+           停靠位切回默认视图，不清空用户的拖拽停靠选择）。 -->
+      <view class="etb-btn wide" :class="{ on: insightOpen }" :title="$t('editor.toolbar.insightPanel')" @tap.stop="$emit('toggle-insight')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.insightShort') }}</text>
+      </view>
       <!-- 「审校」按钮已随 dev-board#749 撤掉：开关归正文那颗浮球（开关必须和它
            控制的东西待在一起），工具栏这里只留「审阅」。 -->
       <!-- 写作一组：「有据续写」（dev-board#748）与「自动补全」（dev-board#755）。
@@ -392,13 +401,15 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state'],
+  emits: ['toggle-review', 'toggle-insight', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
     // 宿主在「选区/光标动了」「文档改了」时自增，驱动激活态刷新。
     refreshKey: { type: Number, default: 0 },
     reviewOpen: { type: Boolean, default: false },
+    // 「依据」窗格（dev-board#182）此刻开着没有、且绑在本文档上——按钮按下态跟着它。
+    insightOpen: { type: Boolean, default: false },
     // 有据续写面板此刻开着没有 / 这份文档有没有这项能力（两者都由客体页上报）。
     semanticWritingOn: { type: Boolean, default: false },
     semanticWritingAvailable: { type: Boolean, default: false },

@@ -1109,8 +1109,10 @@
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
                       :insight-subscribed="insightSubscribedFor(file)"
+                      :insight-open="insightOpenFor(file)"
                       :active="!!(activeFileLeft && activeFileLeft.id === file.id)"
                       @open-insight="onOpenInsight($event, 'left')"
+                      @toggle-insight-panel="onToggleInsightPanel($event, 'left')"
                       @cursor-context="onEditorCursorContext"
                       @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
@@ -1139,8 +1141,10 @@
                       @evidence-drop="onEvidenceDrop($event, 'left')"
                       @locator-consumed="onLocatorConsumed"
                       :insight-subscribed="insightSubscribedFor(sp.file)"
+                      :insight-open="insightOpenFor(sp.file)"
                       :active="!!(sp.file && activeFileLeft && activeFileLeft.id === sp.file.id)"
                       @open-insight="onOpenInsight($event, 'left')"
+                      @toggle-insight-panel="onToggleInsightPanel($event, 'left')"
                       @cursor-context="onEditorCursorContext"
                       @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
@@ -1337,8 +1341,10 @@
                       @evidence-drop="onEvidenceDrop($event, 'right')"
                       @locator-consumed="onLocatorConsumed"
                       :insight-subscribed="insightSubscribedFor(file)"
+                      :insight-open="insightOpenFor(file)"
                       :active="!!(activeFileRight && activeFileRight.id === file.id)"
                       @open-insight="onOpenInsight($event, 'right')"
+                      @toggle-insight-panel="onToggleInsightPanel($event, 'right')"
                       @cursor-context="onEditorCursorContext"
                       @open-history="openCommitHistoryTab({ focusSha: $event && $event.sha })"
                     />
@@ -6260,6 +6266,18 @@ export default {
       if (!target || (fileId && Number(fileId) !== Number(target))) return
       this.openPanelInItsDock('insight')
     },
+    /**
+     * 工具栏「解析」按钮的点开/点关（dev-board#980 BUG-69）。跟 onOpenInsight 分开一条：
+     * 那条永远是「打开」（正文浮球/审校面板的「查看依据」不该被这颗按钮的当前开关态
+     * 带偏），这条才是真正的 toggle——已经开着且绑在本文档上再点一次收起。
+     */
+    onToggleInsightPanel(payload, pane) {
+      const fileId = payload && payload.fileId
+      if (pane && this.focusedPane !== pane) this.focusedPane = pane
+      const target = this.insightDocFileId
+      if (!target || (fileId && Number(fileId) !== Number(target))) return
+      this.toggleDockedPanel('insight')
+    },
     /** 窗格把实体清单同步上来（宿主据此在正文点击时做匹配）。 */
     onInsightEntities(payload) {
       const id = payload && payload.docFileId
@@ -6282,6 +6300,10 @@ export default {
       if (!file || !file.id) return false
       if (this.insightPaneOpen && Number(this.insightDocFileId) === Number(file.id)) return true
       return !!this.insightEntityCounts[file.id]
+    },
+    /** 工具栏「解析」按钮的按下态：窗格开着且当前绑的就是这份文档。 */
+    insightOpenFor(file) {
+      return !!file && !!file.id && this.insightPaneOpen && Number(this.insightDocFileId) === Number(file.id)
     },
     /**
      * 文档标签激活时预取一次实体清单（dev-board#541）。窗格是 v-if 挂载的，

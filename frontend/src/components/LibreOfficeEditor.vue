@@ -64,7 +64,9 @@
       :semantic-writing-available="semanticWritingAvailable"
       :writing-assistance-on="writingAssistanceOpen"
       :writing-assistance-available="writingAssistanceAvailable"
+      :insight-open="insightOpen"
       @toggle-review="reviewOpen = !reviewOpen"
+      @toggle-insight="onInsightToolbarToggle"
       @toggle-semantic-writing="toggleSemanticWriting"
       @toggle-writing-assistance="toggleWritingAssistance"
       @changed="onDocModified"
@@ -223,7 +225,7 @@ export default {
   // open-insight：行内写作提示 → 宿主打开「依据」窗格；不自动调用 AI 或外部库。
   // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
   //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
-  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context', 'open-history'],
+  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'toggle-insight-panel', 'cursor-context', 'open-history'],
   // 写作辅助卡片遇到配置类检索失败时要指一条真路（dev-board#688 D3）。设置在工作台里是
   // 一个标签（dev-board#582），组件拿不到页面实例，只能靠宿主注入——与 MarketDetailPane 同口径。
   inject: { openSettingsTab: { default: null } },
@@ -240,9 +242,12 @@ export default {
     canWrite: { type: Boolean, default: true },
     // 「依据」窗格此刻是不是绑在这份文档上（dev-board#182）。这个开关会往客体页
     // 下发订阅——**不订阅时客体页一次 get_cursor_context 都不打**，常态零开销。
-    // （原来还有一个 insightOpen 只管工具栏按钮的按下态；那个按钮早已不在工具栏上，
-    //   dev-board#723 顺手把这条死链从工具栏、本组件与工作台三处一起摘掉。）
+    // （dev-board#723 曾把工具栏「解析」按钮当死链一起摘掉，dev-board#980/BUG-69
+    //   真机两轮都摸不到窗格入口，证实不是死链——insightOpen prop 补回来了。）
     insightSubscribed: { type: Boolean, default: false },
+    // 「依据」窗格此刻是不是开着且绑在本文档上（dev-board#182/#980 BUG-69）——工具栏
+    // 「解析」按钮的按下态；由宿主按 panelRegistry 的停靠位算出来，本组件不关心停在哪。
+    insightOpen: { type: Boolean, default: false },
     // 这个实例此刻是不是用户正在看的那一个（保活池里后台标签为 false）。
     // 即时审校只给激活实例跑——后台标签既不发 worker 命令也不发 HTTP（dev-board#724）。
     active: { type: Boolean, default: true },
@@ -695,6 +700,15 @@ export default {
      */
     onToggleInsight() {
       this.$emit('open-insight', { fileId: this.file && this.file.id })
+    },
+    /**
+     * 工具栏「解析」按钮点击（dev-board#980 BUG-69）。与 onToggleInsight 的区别：
+     * 这里是「点开/点关」的显式切换，已经开着再点一次要收起来，所以另起一个事件，
+     * 不复用 open-insight——正文浮球/审校面板那条「查看依据」链路永远是「打开」，
+     * 不该被工具栏这颗按钮的当前开关态影响。
+     */
+    onInsightToolbarToggle() {
+      this.$emit('toggle-insight-panel', { fileId: this.file && this.file.id })
     },
     /**
      * 把「依据」窗格的订阅开关下发给客体页。不订阅时客体页一条 cursor-context 都不发，
