@@ -138,6 +138,49 @@ test('打包态点菜单：确认后才真的重载', () => {
   assert.equal(win.__reloads.length, 1, '确认之后必须真能重载，否则自救入口是摆设')
 })
 
+// dev-board BUG-01：确认框文案承诺「关闭所有已打开的标签页」，但只 reload() 渲染层
+// 不会带走已 addBrowserView 的内嵌浏览器面板——它们会一直浮在重载后的新页面上方
+// 直到进程重启。main.js 通过 initAppMenu 第二个参数注入销毁钩子，点击确认必须
+// 在 reload() 之前调用它。
+test('打包态点菜单确认重载：先销毁所有 BrowserView，再 reload；顺序不能反', () => {
+  fakeApp.isPackaged = true
+  const win = fakeWindow()
+  const order = []
+  win.webContents.reload = () => order.push('reload')
+  const destroyAllBrowserViews = () => order.push('destroyAllBrowserViews')
+  initAppMenu(() => win, { destroyAllBrowserViews })
+  const item = reloadItemOf(builtTemplate)
+  dialogCalls.length = 0
+  dialogChoice = 1 // 重新加载
+  item.click()
+  assert.deepStrictEqual(order, ['destroyAllBrowserViews', 'reload'],
+    '标签页对应的 BrowserView 必须在 reload() 之前清空，且真的被调用了')
+})
+
+test('打包态点菜单取消重载：不销毁 BrowserView，也不重载', () => {
+  fakeApp.isPackaged = true
+  const win = fakeWindow()
+  let destroyed = false
+  initAppMenu(() => win, { destroyAllBrowserViews: () => { destroyed = true } })
+  const item = reloadItemOf(builtTemplate)
+  dialogCalls.length = 0
+  dialogChoice = 0 // 取消
+  item.click()
+  assert.equal(destroyed, false, '取消了却把用户还开着的标签销毁了')
+  assert.equal(win.__reloads.length, 0)
+})
+
+test('没有注入销毁钩子（未接线/旧调用点）：确认重载不报错，安全空操作', () => {
+  fakeApp.isPackaged = true
+  const win = fakeWindow()
+  initAppMenu(() => win) // 不传 opts
+  const item = reloadItemOf(builtTemplate)
+  dialogCalls.length = 0
+  dialogChoice = 1
+  assert.doesNotThrow(() => item.click())
+  assert.equal(win.__reloads.length, 1)
+})
+
 // ── before-input-event 兜底 ───────────────────────────────────────────────
 test('reload 快捷键识别：⌘R / Ctrl+R / ⇧⌘R / F5 算，⌘C 与裸 r 不算', () => {
   assert.ok(isReloadShortcut({ type: 'keyDown', key: 'r', meta: true }))
@@ -205,4 +248,10 @@ test('主窗口建出来就挂上兜底拦截，且按 app.isPackaged 判档', (
     '主窗口没挂重载兜底')
   assert.ok(!/did-attach-webview/.test(CODE),
     'preventDefault 连页面自己的 keydown 一起挡，挂到编辑器 <webview> 上等于吞掉 Writer 的右对齐')
+})
+
+test('main.js 的 initAppMenu 接线里真的注入了 BrowserView 销毁钩子（dev-board BUG-01）', () => {
+  const SRC = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8')
+  assert.match(SRC, /initAppMenu\(\s*\(\)\s*=>\s*mainWindow\s*,\s*\{\s*destroyAllBrowserViews:\s*\(\)\s*=>\s*views\.destroyAll\(\)\s*\}\s*\)/,
+    'confirmAndReload 之前若不清空 views 注册表，重载后网页面板会一直浮在新页面上方')
 })

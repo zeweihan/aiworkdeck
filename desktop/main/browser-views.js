@@ -150,6 +150,17 @@ function createBrowserViewRegistry({ createView, getWindow }) {
     ids() { return [...views.keys()] },
     layoutAll,
 
+    /**
+     * 全部销毁（整页重新加载前用）。渲染层整页 reload 不是路由级卸载，不会触发
+     * BrowserPane.vue 的 beforeUnmount 去调 detach，主进程这边如果不主动清，
+     * BrowserView 会一直挂在窗口上，浮在重载后的新页面上方直到进程重启
+     * （dev-board BUG-01）。这里直接调用 destroy 而不是 detach——reload 之后
+     * 渲染层是全新的 Vue 树，没有任何标签可以「保活」，留着 view 只会变成幽灵。
+     */
+    destroyAll() {
+      for (const id of [...views.keys()]) this.destroy(id)
+    },
+
     // 仅供测试与排查
     _state() {
       return { visible, wanted: [...wanted.keys()], attached: [...attached] }

@@ -1695,7 +1695,7 @@ app.whenReady().then(() => {
   initLocalFileService()
   // IDE 化应用菜单（File 全套 + 最近打开；动作发回渲染层处理）
   try {
-    require('./app-menu').initAppMenu(() => mainWindow)
+    require('./app-menu').initAppMenu(() => mainWindow, { destroyAllBrowserViews: () => views.destroyAll() })
   } catch (e) {
     console.error('[app-menu]', e)
   }
