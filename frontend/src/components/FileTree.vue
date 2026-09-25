@@ -458,7 +458,7 @@
               />
             </view>
             <text v-else class="tree-item-name">
-               {{ item.name }}
+               {{ displayName(item) }}
                <text v-if="!item.isFolder && refCounts[item.id] > 0" class="tree-item-ref-count">
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
@@ -586,7 +586,7 @@
               />
             </view>
             <text v-else class="tree-item-name">
-               {{ item.name }}
+               {{ displayName(item) }}
                <text v-if="!item.isFolder && refCounts[item.id] > 0" class="tree-item-ref-count">
                  {{ $t('fileTree.referencedCount', { count: refCounts[item.id] }) }}
                </text>
@@ -1140,6 +1140,17 @@ export default {
     uni.$off('file-drag-end', this._onDragEnd)
   },
   methods: {
+    // BUG-40：Plan 模式落盘的根目录物理名是英文 "AI Assistant Files"（后端契约，
+    // ProjectOverviewService.AI_ARTIFACT_FOLDER_NAME，改物理名要动落盘路径/统计条剔除
+    // 逻辑等多处后端代码，风险不小）。这里只在文件树的展示层加一个中文别名，
+    // 不改物理文件夹名、不影响任何按名字匹配的后端逻辑。只认项目根级那一个（与后端
+    // saveArtifactFile 的 ensureFolder(projectId, null, ...) 对应），子目录里同名的不动。
+    displayName(item) {
+      if (item && item.isFolder && item.name === 'AI Assistant Files' && item.parentId == null) {
+        return this.$t('fileTree.aiAssistantFilesFolder')
+      }
+      return item ? item.name : ''
+    },
     // 让文件树容器可聚焦，接收键盘事件（H5）
     focusTree() {
       try {

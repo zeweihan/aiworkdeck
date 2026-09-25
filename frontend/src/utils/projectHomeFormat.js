@@ -33,15 +33,23 @@ function pad2(n) {
   return String(n).padStart(2, '0')
 }
 
-/** ISO 串（Instant 带 Z 或 LocalDateTime 不带 Z）→「8 月 8 日 10:11」；坏值返回空串。 */
+/**
+ * ISO 串（Instant 带 Z 或 LocalDateTime 不带 Z）→「2026-08-08 10:11」；坏值返回空串。
+ *
+ * BUG-64：同一个项目概览面板里，头部字段是 ISO「2026-09-25」、这里此前是中文自然语言
+ * 「8 月 8 日 10:11」、日程输入还是原生 mm/dd/yyyy，三种格式混用。统一改成与头部
+ * 同一种 yyyy-MM-dd 数字格式，只是多一段 HH:mm——全仓通过这一个函数下发，
+ * ActivityFeed/ConversationList/MergeReviewTab 三处引用点无需各自改。
+ */
 export function formatDateTime(value) {
   if (!value) return ''
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return ''
-  const month = d.getMonth() + 1
-  const day = d.getDate()
+  const year = d.getFullYear()
+  const month = pad2(d.getMonth() + 1)
+  const day = pad2(d.getDate())
   const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-  return tr('common.dateTimeMdHm', { month, day, time }, `${month} 月 ${day} 日 ${time}`)
+  return tr('common.dateTimeMdHm', { year, month, day, time }, `${year}-${month}-${day} ${time}`)
 }
 
 /**

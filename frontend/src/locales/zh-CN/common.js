@@ -43,7 +43,7 @@ export default {
   open: '打开',
   cannotResolveParentFolder: '无法识别该文件的所在文件夹',
   // ---- utils/projectHomeFormat.js ----
-  dateTimeMdHm: '{month} 月 {day} 日 {time}',
+  dateTimeMdHm: '{year}-{month}-{day} {time}',
   registeredItems: '已登记 {count} 项',
   filesCount: '{count} 个文件',
   statusRunning: '运行中',

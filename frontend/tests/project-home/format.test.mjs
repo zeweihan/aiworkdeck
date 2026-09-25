@@ -28,15 +28,17 @@ test('MATTER_TYPES 与后端分类表逐字一致', () => {
   assert.deepEqual(backend, MATTER_TYPES)
 })
 
-test('formatDateTime 吃 LocalDateTime 串，坏值返回空串', () => {
-  assert.equal(formatDateTime('2026-08-08T10:11:12'), '8 月 8 日 10:11')
-  assert.equal(formatDateTime('2026-08-08T09:05:00'), '8 月 8 日 09:05')
+test('formatDateTime 吃 LocalDateTime 串，坏值返回空串（BUG-64：与头部 ISO 字段统一成 yyyy-MM-dd HH:mm，不再是中文自然语言）', () => {
+  assert.equal(formatDateTime('2026-08-08T10:11:12'), '2026-08-08 10:11')
+  assert.equal(formatDateTime('2026-08-08T09:05:00'), '2026-08-08 09:05')
   assert.equal(formatDateTime(''), '')
   assert.equal(formatDateTime(null), '')
   assert.equal(formatDateTime('not-a-date'), '')
   // VersionEntry.when 是 Instant，Spring Boot 默认序列化成带 Z 的 ISO 串。
-  // 不断言具体值（会跟着 CI 机器时区飘），只断言能解析出东西。
-  assert.notEqual(formatDateTime('2026-08-08T02:11:12Z'), '')
+  // 不断言具体值（会跟着 CI 机器时区飘），只断言能解析出东西、且是 yyyy-MM-dd HH:mm 形状。
+  const withZ = formatDateTime('2026-08-08T02:11:12Z')
+  assert.notEqual(withZ, '')
+  assert.match(withZ, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
 })
 
 test('versionTitle 容纳 6 种文案形状且不动空白', () => {

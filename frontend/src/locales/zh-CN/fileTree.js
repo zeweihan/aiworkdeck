@@ -48,6 +48,8 @@ export default {
   recycleBin: '回收站',
   back: '返回',
   recycleBinEmpty: '回收站为空',
+  // BUG-40：文件树展示层别名，物理文件夹名仍是英文 "AI Assistant Files"（后端契约不改）。
+  aiAssistantFilesFolder: 'AI 助手文件',
   restore: '还原',
   // 排序
   sortName: '名称',
