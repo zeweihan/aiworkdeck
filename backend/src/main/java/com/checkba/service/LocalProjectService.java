@@ -184,12 +184,14 @@ public class LocalProjectService {
     /**
      * 磁盘 ↔ 数据库文件树对账（watcher 触发；幂等，只写数据库、绝不写磁盘）：
      * ① 导入新增/变化的文件（无变化的行一字不动，避免 DB 行翻搅与版本记录噪声）；
-     * ② 磁盘上已消失的行软删除（进回收站语义，signalChange 由服务方法自带）。
+     * ② 磁盘上已消失的行直接出索引（{@link ProjectFileService#forgetVanished}，不进回收站——
+     * 回收站只收律师在应用里亲手删的东西，外部删掉的字节已经不在，进回收站只会留下还原不了、
+     * 彻底删除又失败的幽灵，v0.49.0 BUG-02；signalChange 由服务方法自带，内容可从版本记录找回）。
      * 根目录整个不可达（外置盘拔出/文件夹被移走）时整体跳过——绝不把「暂时看不见」
-     * 当成「都被删了」，否则一次误判就把整棵文件树扫进回收站。
+     * 当成「都被删了」，否则一次误判就把整棵文件树从索引里摘光。
      *
      * 本方法故意不带 @Transactional：它调的 ProjectFileService.createFolder /
-     * createOrUpdateFile / delete 各自都是独立 bean 上的 @Transactional（REQUIRED）方法。
+     * createOrUpdateFile / forgetVanished 各自都是独立 bean 上的 @Transactional（REQUIRED）方法。
      * 如果这里也开一个外层事务，内层就会"参与"进来共享同一个事务——某一条目录/文件
      * 因为同名冲突等原因抛异常时（比如磁盘上出现一个和库里"活着"的文件同名的目录，
      * createFolder 内部的查重不看 isFolder 类型），Spring 对参与型事务抛异常默认标记
@@ -222,7 +224,7 @@ public class LocalProjectService {
                     projectId, root, maxImportEntries, stats.truncatedCount);
         }
 
-        // 删除同步：行在库、物理不存在 → 软删除（文件按 filePath 解析，文件夹按父链拼相对路径）
+        // 删除同步：行在库、物理不存在 → 出索引（文件按 filePath 解析，文件夹按父链拼相对路径）
         java.util.List<ProjectFile> rows = projectFileRepository.findByProjectId(projectId);
         Map<Long, ProjectFile> byId = new HashMap<>();
         for (ProjectFile f : rows) byId.put(f.getId(), f);
@@ -253,7 +255,7 @@ public class LocalProjectService {
                 // 那侧因为 rowKey 按大小写敏感比对，已经在同一轮对账里为新大小写建了一个新行，
                 // 于是旧行成为再也清不掉的永久幽灵行。toRealPath() 能拿到磁盘上的真实大小写；
                 // 与库里存的名字不一致，说明这一行对应的物理目录已经不是"这个大小写"了，
-                // 按缺失处理，交给下面的软删除（下一轮对账会让新大小写那行成为唯一存活的行）。
+                // 按缺失处理，交给下面的出索引（新大小写那行成为唯一存活的行）。
                 try {
                     String realName = physical.toRealPath().getFileName().toString();
                     if (!realName.equals(f.getName())) {
@@ -264,12 +266,13 @@ public class LocalProjectService {
                 }
             }
             if (missing) {
-                // 父级已被软删除的行会随递归一起处理，重复调用无害（幂等）
+                // 父级已先出索引的行会随递归一起带走，这里再调一次回 false（幂等）
                 try {
-                    projectFileService.delete(f.getId(), ownerId);
-                    changed++;
+                    if (projectFileService.forgetVanished(f.getId(), ownerId)) {
+                        changed++;
+                    }
                 } catch (Exception e) {
-                    log.warn("对账软删除失败: file={} ({})", f.getId(), e.getMessage());
+                    log.warn("对账移除失败: file={} ({})", f.getId(), e.getMessage());
                 }
             }
         }

@@ -729,7 +729,7 @@
 import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl, getContributedTemplates, createFileFromContributedTemplate, importLocalFile } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
-import { findTopmostDeletedAncestor, summarizeDeleteResults } from '@/utils/fileTreeRecycle.js'
+import { findTopmostDeletedAncestor, summarizeDeleteResults, collapseToTopmostSelected } from '@/utils/fileTreeRecycle.js'
 import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
@@ -1605,6 +1605,8 @@ export default {
             if (idx > -1) {
               this.recycleBin.splice(idx, 1)
             }
+            // 文件夹在服务端级联带走了子孙，回收站里那些子行要跟着消失：以服务端为准重拉
+            if (item.isFolder && this.viewMode === 'recycle') await this.loadFiles()
             uni.showToast({ title: this.$t('fileTree.permDeleteSuccess'), icon: 'success' })
             this.$emit('file-deleted', { ids: [item.id] })
         } catch (e) {
@@ -1630,8 +1632,11 @@ export default {
             // Batch Perm Delete：逐条调用结果先收集，不能循环完就无条件当全体成功——
             // 否则某一条服务端真的失败时，界面显示全部删除成功且行全部消失，
             // 但服务端其实还留着那份文档。404（服务端已经没有这条）按成功处理。
+            // 勾选的文件夹在服务端会级联带走子孙：祖先也被勾选的子孙不再单独请求，
+            // 结果跟着祖先走（v0.49.0 BUG-03：否则子行请求全部「文件不存在」→ 100/104 失败）。
+            const { roots, coveredBy } = collapseToTopmostSelected(ids, this.recycleBin)
             const results = []
-            for (const id of ids) {
+            for (const id of roots) {
                  try {
                    await deleteFilePerm(projectId, id)
                    results.push({ id, ok: true })
@@ -1643,10 +1648,15 @@ export default {
                    results.push({ id, ok: isMissing })
                  }
             }
+            const okById = new Map(results.map(r => [r.id, r.ok]))
+            coveredBy.forEach((rootId, id) => results.push({ id, ok: okById.get(rootId) === true }))
             const { succeededIds, failedIds } = summarizeDeleteResults(results)
             // Update local state：只把真正删掉的从本地列表摘掉，失败的原样留着
             const deletedSet = new Set(succeededIds.map(Number));
             this.recycleBin = this.recycleBin.filter(f => !deletedSet.has(f.id));
+            // 级联还会带走没勾选的子孙，本地清单对不上服务端——以服务端为准重拉一遍，
+            // 陈旧行不会永远卡在回收站里
+            if (this.viewMode === 'recycle') await this.loadFiles()
             if (failedIds.length > 0) {
               uni.showToast({ title: this.$t('fileTree.permDeletePartialFail', { failed: failedIds.length, total: ids.length }), icon: 'none' })
             } else {

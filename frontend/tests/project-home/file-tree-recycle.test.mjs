@@ -3,7 +3,8 @@
 // 审计（dev-board#74）确认的 FileTree.vue 回收站两处缺陷的回归断言。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { findTopmostDeletedAncestor, summarizeDeleteResults } from '../../src/utils/fileTreeRecycle.js'
+import { findTopmostDeletedAncestor, summarizeDeleteResults, collapseToTopmostSelected } from '../../src/utils/fileTreeRecycle.js'
+import { readFileSync } from 'node:fs'
 
 // ---------- 1. 还原嵌套文件时，祖先仍被删除的判定 ----------
 //
@@ -80,4 +81,54 @@ test('404（服务端已经没有这条）在调用方应按成功传入，本�
 test('空输入不抛错', () => {
   assert.deepEqual(summarizeDeleteResults([]), { succeededIds: [], failedIds: [] })
   assert.deepEqual(summarizeDeleteResults(undefined), { succeededIds: [], failedIds: [] })
+})
+
+// ---------- 3. 批量彻底删除：勾选的文件夹会级联带走子孙（v0.49.0 BUG-03） ----------
+//
+// 真机：回收站里是 1 个文件夹 + 它的 100 个子文件，全选彻底删除。先删的文件夹在服务端
+// 级联带走了 100 个子行，紧接着对子行逐条请求全部「文件不存在」→ toast「100/104 项彻底
+// 删除失败」，本地列表不刷新，重试次次同样失败。已被勾选祖先覆盖的子孙不该再单独请求，
+// 结果跟着祖先走。
+
+test('子孙与祖先同时被勾选：只对最上层发请求，子孙记在祖先名下', () => {
+  const bin = [
+    { id: 1, parentId: null, name: 'perf100' },
+    { id: 2, parentId: 1, name: 'a.txt' },
+    { id: 3, parentId: 1, name: 'sub' },
+    { id: 4, parentId: 3, name: 'b.txt' },
+    { id: 9, parentId: null, name: '长文件名.txt' }
+  ]
+  const { roots, coveredBy } = collapseToTopmostSelected([1, 2, 3, 4, 9], bin)
+  assert.deepEqual(roots, [1, 9])
+  assert.equal(coveredBy.get(2), 1)
+  assert.equal(coveredBy.get(4), 1, '孙辈要一路归到最上层被勾选的祖先，中间那层也被勾选了也一样')
+  assert.equal(coveredBy.get(3), 1)
+})
+
+test('祖先在回收站里但没被勾选：子孙照常单独删', () => {
+  const bin = [
+    { id: 1, parentId: null, name: 'perf100' },
+    { id: 2, parentId: 1, name: 'a.txt' }
+  ]
+  const { roots, coveredBy } = collapseToTopmostSelected([2], bin)
+  assert.deepEqual(roots, [2])
+  assert.equal(coveredBy.size, 0)
+})
+
+test('字符串与数字 id 混用、空输入不抛错', () => {
+  const bin = [{ id: 1, parentId: null }, { id: 2, parentId: '1' }]
+  const { roots, coveredBy } = collapseToTopmostSelected(['1', 2], bin)
+  assert.deepEqual(roots, ['1'])
+  assert.equal(coveredBy.get(2), '1')
+  assert.deepEqual(collapseToTopmostSelected(undefined, null).roots, [])
+})
+
+test('FileTree 批量彻底删除接了 collapseToTopmostSelected，删完从服务端重拉回收站', () => {
+  const src = readFileSync(new URL('../../src/components/FileTree.vue', import.meta.url), 'utf8')
+  const start = src.indexOf('async executeBatchDelete()')
+  assert.ok(start > 0, '找不到 executeBatchDelete')
+  const body = src.slice(start, src.indexOf('// Soft Batch Delete', start))
+  assert.match(body, /collapseToTopmostSelected\(ids,\s*this\.recycleBin\)/, '必须先把被勾选祖先覆盖的子孙折叠掉')
+  assert.match(body, /for \(const id of roots\)/, '只对最上层逐条请求')
+  assert.match(body, /await this\.loadFiles\(\)/, '删完要从服务端重拉回收站，不能让本地陈旧行永远卡着')
 })
