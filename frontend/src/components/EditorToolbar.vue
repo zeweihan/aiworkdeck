@@ -171,7 +171,7 @@
 
             <!-- 批注 -->
             <view v-else-if="insertMode === 'comment'" class="etb-form">
-              <text class="etb-form-t">{{ $t('editor.toolbar.commentTitle', { sel: selPreview }) }}</text>
+              <text class="etb-form-t">{{ commentFormTitle }}</text>
               <textarea class="etb-input ta" v-model="commentText" :placeholder="$t('editor.toolbar.commentPlaceholder')" @click.stop />
               <view class="etb-form-acts">
                 <text class="etb-form-b" @tap.stop="insertMode = ''">{{ $t('editor.toolbar.cancel') }}</text>
@@ -437,6 +437,12 @@ export default {
       const t = this.selText || ''
       return t.length > 12 ? t.slice(0, 12) + '…' : t
     },
+    // 取不到被批注文字时不套引号壳——「对「」批注」读起来像出错了（BUG-29）
+    commentFormTitle() {
+      return this.selPreview
+        ? this.$t('editor.toolbar.commentTitle', { sel: this.selPreview })
+        : this.$t('editor.toolbar.commentTitleNoSel')
+    },
     findStatus() {
       if (!this.findText) return ''
       if (this.findTotal === null) return '…'
@@ -602,7 +608,10 @@ export default {
     },
     startComment() {
       if (this.noSelection) return
-      this.commentText = ''; this.insertErr = ''; this.insertMode = 'comment'
+      this.commentText = ''; this.insertErr = ''; this.insertMode = 'comment'; this.selText = ''
+      // 选区文字进表单时现读（BUG-29）：文档菜单「插入批注」不经 openInsert，
+      // 只靠下拉打开时那一次读数，标题要么是空串、要么是上一次的旧选区。
+      this.call('get_selection', {}).then((r) => { this.selText = (r && r.text) || '' })
     },
     // 失败必须说出来。工具栏上「点了没反应」和「点了偷偷失败」一样糟。
     async finishInsert(res, okMsg) {

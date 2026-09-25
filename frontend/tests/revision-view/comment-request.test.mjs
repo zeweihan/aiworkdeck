@@ -62,7 +62,9 @@ test('native request refreshes stale selection, opens and focuses the existing f
   assert.equal(f.toolbar.insertMode, 'comment')
   assert.ok(f.toolbar.popPos)
   assert.equal(f.dom.window.document.activeElement.tagName, 'TEXTAREA')
-  assert.deepEqual(f.calls.map(c => c.action), ['get_ui_state'])
+  // 先刷新陈旧选区（get_ui_state），再现读被批注文字给表单标题（get_selection，BUG-29）；
+  // 两者都只读，确认前不得出现任何写入。
+  assert.deepEqual(f.calls.map(c => c.action), ['get_ui_state', 'get_selection'])
   f.toolbar.commentText = '核对付款期限'
   await f.toolbar.doComment()
   assert.deepEqual(f.calls.find(c => c.action === 'add_comment_at_selection'), {
