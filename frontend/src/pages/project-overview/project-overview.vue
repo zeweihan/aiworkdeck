@@ -1568,8 +1568,12 @@
           </view>
 
           <!-- 右侧 AI 面板（可拖拽宽度） -->
+          <!-- 懒挂载 + v-show（v0.49.0 BUG-20）：第一次打开才挂，之后开关只切显隐。
+               原来整块挂在 v-if="showAiPanel" 上，关一下右栏就把 ChatInterface 连同
+               当前会话、消息和进行中的流一起卸掉，再打开是空白新对话。 -->
           <view
-            v-if="showAiPanel"
+            v-if="aiPanelMounted"
+            v-show="showAiPanel"
             ref="aiPanel"
             class="side-panel side-panel-ai"
             :style="{ width: aiPanelWidth + 'px' }"
@@ -2529,6 +2533,8 @@ export default {
 
       // 右侧 AI 面板（IDE 右侧窗格）
       showAiPanel: false,
+      // 右栏第一次打开后置真且不再回落：AI 面板懒挂载、之后只切 v-show（BUG-20）
+      aiPanelMounted: false,
       aiPanelWidth: 360,
       aiContextPreview: null,
       aiContextLoading: false,
@@ -5699,6 +5705,7 @@ export default {
 
     toggleAiPanel() {
       this.showAiPanel = !this.showAiPanel
+      if (this.showAiPanel) this.aiPanelMounted = true
       this.$nextTick(() => {
         this.triggerWorkbenchResize()
         if (this.showAiPanel) {
