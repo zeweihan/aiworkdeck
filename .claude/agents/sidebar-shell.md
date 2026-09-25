@@ -84,7 +84,7 @@ filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bri
   MeetingRecordingPanel）、desensitize、search、version、market→MarketSidebarPanel、
   litigation-visual、动态插件→PluginPane）、拖拽手柄。
 - :595-911 workbench：Tab 栏（左:602 / 右:639 仅 splitMode）、编辑器区:676（左窗格:688、右窗格:762）、bottom-panel:833（v-if showToolsPanel **且 bottomToolsList 非空**，activeToolKey：停在 bottom 档的面板，见「面板停靠」一节）。
-- :912-983 ai-panel（v-if showAiPanel，内容整块交 ChatInterface:924，历史下拉:961）。
+- :912-983 ai-panel（`v-if="aiPanelMounted" v-show="showAiPanel"`：第一次打开才挂、之后只切显隐，**不许改回 v-if showAiPanel**——关右栏会卸掉 ChatInterface，当前会话与进行中的流一起丢，v0.49.0 BUG-20，`tests/project-home/ai-panel-toggle-keeps-conversation.test.mjs` 守着；内容整块交 ChatInterface:924，历史下拉:961）。
 
 **AI 历史下拉（`.ai-dropdown-panel`，dev-board#796）**：顶部过滤框 + 每行悬停出「重命名 / 置顶 / 删除」。
 - 过滤是**纯前端**的（computed `filteredChatHistoryList`，标题 + 末条预览子串匹配，忽略大小写），不发请求。
