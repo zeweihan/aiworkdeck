@@ -30,6 +30,7 @@ export default {
     reloadFailed: 'Reload failed; the content is out of date',
     saving: 'Saving…',
     saveFailed: 'Failed to save',
+    movedSaveFailed: 'File was moved or renamed; changes not saved yet',
     desktopOnly: 'Desktop app only',
   },
   boot: {

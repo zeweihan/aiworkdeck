@@ -710,6 +710,27 @@ public class ProjectFileService {
     }
 
     /**
+     * 本地文件夹项目里，文件已在 Finder 里被改名 / 移动（磁盘上已经是新位置）：
+     * 只把这一行改指到新位置，<b>不碰磁盘</b>、id 不变（BUG-14 / v0.49.0 C4-03）。
+     * 与 {@link #rename} 的区别：那条是应用发起的改名，要自己搬物理文件；这里物理文件
+     * 已经被外部搬好了，再 move 一次只会失败并把 filePath 回滚到旧路径。
+     * 保留 id 是关键：已打开的编辑器按 id 保存，id 不变保存才会落到新路径。
+     */
+    @Transactional
+    public ProjectFile relinkExternallyMoved(Long fileId, Long newParentId, String newName, String logicalPath, Long userId) {
+        ProjectFile file = projectFileRepository.findById(fileId)
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
+        file.setParentId(newParentId);
+        file.setName(newName);
+        file.setFilePath(requireProjectScopedPath(file.getProjectId(), logicalPath));
+        file.setUpdatedAt(LocalDateTime.now());
+        ProjectFile saved = projectFileRepository.save(file);
+        log.info("外部改名/移动已对齐: fileId={}, newPath={}", fileId, saved.getFilePath());
+        signalChange(saved.getProjectId(), userId);
+        return saved;
+    }
+
+    /**
      * 软删除文件或文件夹（移入回收站）
      */
     @Transactional

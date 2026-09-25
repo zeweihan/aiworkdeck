@@ -591,6 +591,86 @@ class LocalProjectServiceTest {
                 "缓存区文件夹不得被对账送进回收站");
     }
 
+    // ---------- BUG-14（v0.49.0 真机 C4-03）：Finder 里改名/移动已打开的文档 ----------
+    // 旧对账把改名拆成「旧行进回收站 + 新名建一条新行」：编辑器手里还是旧 fileId，
+    // 下一次保存按旧行的旧路径把文件重新建出来，磁盘上一新一旧两份、回收站里挂着一个
+    // 其实还在磁盘上的旧名。改名/移动必须原地改那一行（id 不变），保存才会落到新路径。
+
+    @Test
+    void externalRenameKeepsTheRowIdAndRepointsItsPath(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("C4-long80.docx"), "0123456789");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        ProjectFile before = live(projectFileRepository.findByProjectId(pid), "C4-long80.docx");
+
+        Files.move(folder.resolve("C4-long80.docx"), folder.resolve("C4-long80-改名.docx"));
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertEquals(1, rows.size(), "改名不得变成「删一条 + 建一条」: " + rows);
+        ProjectFile after = rows.get(0);
+        assertEquals(before.getId(), after.getId(), "编辑器手里的 fileId 必须继续有效");
+        assertEquals("C4-long80-改名.docx", after.getName());
+        assertEquals("projects/" + pid + "/C4-long80-改名.docx", after.getFilePath());
+        assertFalse(Boolean.TRUE.equals(after.getIsDeleted()));
+        assertTrue(projectFileService.getRecycleBinFiles(pid).isEmpty(), "回收站里不该出现旧名");
+    }
+
+    @Test
+    void externalMoveIntoSubfolderKeepsTheRowId(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "0123456789");
+        Files.createDirectories(folder.resolve("归档"));
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        List<ProjectFile> before = projectFileRepository.findByProjectId(pid);
+        ProjectFile doc = live(before, "合同.docx");
+
+        Files.move(folder.resolve("合同.docx"), folder.resolve("归档/合同.docx"));
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        ProjectFile moved = live(rows, "合同.docx");
+        assertNotNull(moved);
+        assertEquals(doc.getId(), moved.getId());
+        assertEquals(live(rows, "归档").getId(), moved.getParentId());
+        assertEquals("projects/" + pid + "/归档/合同.docx", moved.getFilePath());
+        assertEquals(1, rows.stream().filter(f -> "合同.docx".equals(f.getName())).count(), "不得留下旧行: " + rows);
+        assertTrue(projectFileService.getRecycleBinFiles(pid).isEmpty());
+    }
+
+    /** 认不准就不认：同目录两份同样大小的文件一起消失、只出现一份新文件，不猜是谁改的名。 */
+    @Test
+    void ambiguousRenameCandidatesFallBackToDeletePlusCreate(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("a.docx"), "12345");
+        Files.writeString(folder.resolve("b.docx"), "abcde");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        List<ProjectFile> before = projectFileRepository.findByProjectId(pid);
+
+        Files.delete(folder.resolve("a.docx"));
+        Files.move(folder.resolve("b.docx"), folder.resolve("c.docx"));
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        ProjectFile c = live(rows, "c.docx");
+        assertNotNull(c);
+        assertFalse(before.stream().anyMatch(f -> f.getId().equals(c.getId())), "有歧义时 c.docx 必须是新行: " + rows);
+        assertEquals(2, projectFileService.getRecycleBinFiles(pid).size(), "a/b 两条旧行照旧进回收站");
+    }
+
+    /** 大小不同的「一删一增」是两件事，不能被认成改名。 */
+    @Test
+    void unrelatedDeleteAndCreateAreNotPairedAsRename(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("旧合同.docx"), "12345");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        ProjectFile old = live(projectFileRepository.findByProjectId(pid), "旧合同.docx");
+
+        Files.delete(folder.resolve("旧合同.docx"));
+        Files.writeString(folder.resolve("新合同.docx"), "123456789");
+        svc.reconcileProject(pid);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(pid);
+        assertNotEquals(old.getId(), live(rows, "新合同.docx").getId());
+        assertEquals(1, projectFileService.getRecycleBinFiles(pid).size());
+    }
+
     @Test
     void rejectsRelativeAndRootPaths() {
         assertThrows(IllegalArgumentException.class, () -> svc.openLocalFolder("relative/path", false, null, null, 1L));

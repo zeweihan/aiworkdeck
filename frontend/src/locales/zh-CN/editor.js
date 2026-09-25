@@ -33,6 +33,7 @@ export default {
     reloadFailed: '重新加载失败，内容已过期',
     saving: '保存中…',
     saveFailed: '保存失败',
+    movedSaveFailed: '文件已被移动或改名，改动尚未保存',
     desktopOnly: '仅桌面版可用',
   },
   boot: {

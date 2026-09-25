@@ -119,7 +119,7 @@
           <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
             <view v-if="!isError && !ready" class="libre-spin"></view>
             <text>{{ displayStatus }}</text>
-            <text v-if="statusKey === 'saveFailed' && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
+            <text v-if="(statusKey === 'saveFailed' || statusKey === 'movedSaveFailed') && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
           </view>
           <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
                Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。
@@ -1914,7 +1914,12 @@ export default {
         }
         u8 = await this.stampGeneratorMetadata(u8)
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
-        await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
+        // mustExist=1（BUG-14 / v0.49.0 C4-03）：这份文件磁盘上本来就有（元数据非空，或本会话
+        // 已经存过一次），目标路径不在了只能是被外部改名 / 移走——后端据此回 409，
+        // 而不是在旧路径把旧文件名重新建出来。新建空白文档的第一笔不带：那时它还不在磁盘上。
+        const mustExist = f.fileSize > 0 || this._savedOnce
+        await this.uploadBytes(getFileUploadUrl(fileId) + (mustExist ? '?mustExist=1' : ''), u8, name)
+        this._savedOnce = true
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         this._savePaused = false
         this.statusKey = prevStatusKey
@@ -1922,7 +1927,9 @@ export default {
         this.scheduleProvenanceReload()
         return true
       } catch (e) {
-        this.statusKey = 'saveFailed'
+        // 409 = 文件已被移动 / 改名 / 删除（后端 mustExist 围栏）：单独一个状态，让律师知道
+        // 不是网络问题；改动留脏，对账把这一行改指到新路径之后「重试保存」即可落到新文件。
+        this.statusKey = e && e.status === 409 ? 'movedSaveFailed' : 'saveFailed'
         this.appendLog('save failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
@@ -1962,7 +1969,7 @@ export default {
         xhr.open('POST', url, true)
         xhr.timeout = 60000
         Object.keys(headers).forEach((k) => { if (k.toLowerCase() !== 'content-type') xhr.setRequestHeader(k, headers[k]) })
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response) : reject(Object.assign(new Error('HTTP ' + xhr.status), { status: xhr.status })))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
         xhr.ontimeout = () => reject(new Error(this.$t('editor.saveTimeout')))
         xhr.onabort = () => reject(new Error(this.$t('editor.saveCancelled')))
