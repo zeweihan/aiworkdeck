@@ -477,7 +477,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **工具输出的面板展示上限按工具分档**（`AgentOrchestrator.toolOutputDisplayLimit`）：默认 4000 字符，`RESULT_HEAVY_TOOLS`（dispatch_subtask / extract_file_text / pdf_inspect）16000。理由：这三个的输出本身就是要给用户核验的成果，且 dispatch_subtask 是 JSON——截断后前端结构化子任务卡直接解析失败退回裸文本。只影响 SSE 载荷大小，**不进上下文、不影响 token 与计费**（executionLog 落库存的一直是全文）。前端截断提示按 `...(截断)` 后缀判定，文案里不要写死字数。
 - `ToolResult.success()` 除 "Error" 前缀外还识别 `{"error"...}` JSON 形态（编辑器桥超时曾被判 SUCCESS 致绿勾空转 30 步）；工具参数 JSON 解析失败返回可行动错误回喂模型，不再静默空参硬跑。
 - connect 端点：run_state=RUNNING 时**无条件**发 state_recovery（哪怕快照为空）——前端靠它重建气泡指针，否则终态事件被守卫吞掉、isStreaming 永久锁死。
-- 前端 `useAgentStream`：心跳 45s 无字节判死 + 指数退避自动重连（1s→30s 封顶）+ online/visibilitychange 钩子（模块级单例，防页面栈多实例重复订阅）；bubble_end/error/cancelled 在气泡指针为 null 时也解锁 isStreaming；sendMessage 防重入有 toast 提示。
+- 前端 `useAgentStream`：心跳 45s 无字节判死 + 指数退避自动重连（1s→30s 封顶）+ online/visibilitychange 钩子（模块级单例，防页面栈多实例重复订阅）；bubble_end/error/cancelled 在气泡指针为 null 时也解锁 isStreaming；sendMessage 防重入有 toast 提示。**后端每轮收尾主动关流不是断线**（v0.49.0 BUG-16）：`roundSettled` 在收到 bubble_end/error/cancelled（或重连拿到非 RUNNING 的 run_state）时置位、新一轮开始时清掉；置位期间 `scheduleReconnect` 照常补连但不把 `linkStatus` 置 reconnecting——否则每轮结束后一回前台（visibilitychange/online 恢复钩子）就闪「连接已断开，AI 仍在后台运行」。主分支的 error 也要清 isStreaming（它同样是终态），漏掉就会在关流时走「流式中意外断开」的重连。护栏 `agent-stream-round-end-link.test.mjs`（整段跑真 composable）。
 - 线程池：`config/AsyncExecutorConfig.java` 显式 taskExecutor(16/32/队列200) + memoryExecutor(2/4)——MemoryPipelineService 的同步 LLM 调用已隔离，别再挂回 taskExecutor。
 - 进程重启续跑（二期）：run 状态持久化 + 启动回收，见上文 AgentRunStateService / AgentRunRecoveryService。只有 RUNNING 跨重启复活（回收成 INTERRUPTED），FINISHED/ERROR/CANCELLED 仍是进程内状态，避免僵尸状态。
 
