@@ -405,6 +405,8 @@ export default {
   provenanceEarlier: '更早的版本',
   // 小条（dev-board#672 复测）：这份文件还没进过任何命名版本时说这一句
   provenanceFileInitial: '初始版本',
+  // 编辑器顶上版本小条：文件已落盘、但还没进版本记录（与逐段的 provenanceUnsaved 分开）
+  provenanceFileUncommitted: '已保存，尚未存为版本',
   provenanceEmpty: '这份文件还没有版本记录，暂时查不到每一段的来历。',
   provenanceSummary: '本稿 {total} 段：{parts}',
   provenanceSummaryPart: '{name} {count} 段',

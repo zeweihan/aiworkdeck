@@ -11,6 +11,7 @@
 
 import { track } from '@/utils/telemetryClient.js'
 import { getThemeMode, getResolvedTheme, setThemeMode, APP_THEME_EVENT } from '@/utils/appTheme.js'
+import { themeMenuKeyAction } from './themeMenuKeys.js'
 
 export const themeSwitchData = () => ({
   themeMode: getThemeMode(),
@@ -39,6 +40,75 @@ export const themeSwitchMethods = {
     this.themeMode = getThemeMode()
     this.resolvedTheme = getResolvedTheme()
     try { track('ui.themeMode', { mode }) } catch (e) { /* ignore */ }
+  },
+
+  // ---- 键盘与辅助技术（v0.49.0 BUG-53）----
+  // 菜单项原来是没有角色的 <view>：AXPress 落到可点的祖先（触发按钮的开合开关）上，
+  // 菜单收起而主题不变；键盘完全够不着。角色/tabindex 在模板上，这里管按键与焦点。
+  // uni-h5 包装后的键盘事件只转发 key/code 与 preventDefault/stopPropagation，够用。
+  themeCurrentIndex() {
+    const i = (this.themeOptions || []).findIndex((o) => o.value === this.themeMode)
+    return i < 0 ? 0 : i
+  },
+
+  openThemeMenu(focusIndex) {
+    this.themeMenuOpen = true
+    this.$nextTick(() => this.focusThemeItem(focusIndex))
+  },
+
+  closeThemeMenu() {
+    this.themeMenuOpen = false
+    this.focusThemeTrigger()
+  },
+
+  onThemeTriggerKey(e) {
+    const k = e && e.key
+    if (k === 'Enter' || k === ' ' || k === 'Spacebar' || k === 'ArrowDown' || k === 'ArrowUp') {
+      if (e.preventDefault) e.preventDefault()
+      if (this.themeMenuOpen && (k === 'Enter' || k === ' ' || k === 'Spacebar')) {
+        this.closeThemeMenu()
+        return
+      }
+      const n = (this.themeOptions || []).length
+      this.openThemeMenu(k === 'ArrowUp' ? n - 1 : this.themeCurrentIndex())
+    } else if ((k === 'Escape' || k === 'Esc') && this.themeMenuOpen) {
+      if (e.preventDefault) e.preventDefault()
+      this.closeThemeMenu()
+    }
+  },
+
+  onThemeItemKey(e, index) {
+    const opts = this.themeOptions || []
+    const act = themeMenuKeyAction(e && e.key, index, opts.length)
+    if (!act) return
+    if (!act.keepDefault && e.preventDefault) e.preventDefault()
+    if (act.type === 'move') {
+      this.focusThemeItem(act.index)
+    } else if (act.type === 'pick') {
+      const opt = opts[act.index]
+      if (opt) this.pickTheme(opt.value)
+      this.focusThemeTrigger()
+    } else if (act.type === 'close') {
+      if (act.keepDefault) this.themeMenuOpen = false
+      else this.closeThemeMenu()
+    }
+  },
+
+  focusThemeItem(index) {
+    try {
+      const root = (this.$el && this.$el.querySelectorAll) ? this.$el : document
+      const items = root.querySelectorAll('.theme-menu .theme-menu-item')
+      const el = items[index] || items[0]
+      if (el && el.focus) el.focus()
+    } catch (e) { /* ignore */ }
+  },
+
+  focusThemeTrigger() {
+    try {
+      const root = (this.$el && this.$el.querySelector) ? this.$el : document
+      const el = root.querySelector('.theme-btn')
+      if (el && el.focus) el.focus()
+    } catch (e) { /* ignore */ }
   },
 }
 

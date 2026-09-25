@@ -196,8 +196,10 @@ export function provenanceLabel(t, unit, opts = {}) {
  * 三态，顺序有意义：
  * 1. 没开版本记录（`versioned` 假）→ 整条不出现。这时说「初始版本」或「本机未保存的
  *    改动」都是胡说。
- * 2. 这份文件磁盘上的内容领先版本记录（`dirty`）→ 「本机未保存的改动」。它排在版本名
- *    前面：律师此刻要知道的是「还没进版本记录」，而不是上一版叫什么。
+ * 2. 这份文件磁盘上的内容领先版本记录（`dirty`）→ 「已保存，尚未存为版本」。它排在版本名
+ *    前面：律师此刻要知道的是「还没进版本记录」，而不是上一版叫什么。dirty 是 git 工作区
+ *    状态，自动保存落盘之后照样为真，所以不能说「未保存」（v0.49.0 真机 BUG-32：保存成功
+ *    后还挂着「本机未保存的改动」，律师以为没存上）。
  * 3. 否则报最近一次**有名字**的版本（自动存档的折叠在后端做，见
  *    `ProjectRepoService.latestNamedVersionForPath`）；这份文件还没进过任何命名版本时
  *    落到「初始版本」。
@@ -211,7 +213,7 @@ export function provenanceLabel(t, unit, opts = {}) {
 export function fileVersionBar(t, state, opts = {}) {
   const st = state || {}
   if (!st.versioned) return { visible: false, text: '', sha: '' }
-  if (st.dirty) return { visible: true, text: t('version.provenanceUnsaved'), sha: '' }
+  if (st.dirty) return { visible: true, text: t('version.provenanceFileUncommitted'), sha: '' }
   const fv = st.fileVersion || null
   if (!fv || !fv.sha) return { visible: true, text: t('version.provenanceFileInitial'), sha: '' }
   return { visible: true, text: provenanceLabel(t, fv, opts), sha: String(fv.sha) }

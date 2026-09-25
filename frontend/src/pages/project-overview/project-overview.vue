@@ -122,17 +122,22 @@
         <view class="header-tools" v-if="!isClientView">
           <!-- 外观主题（dev-board#223）：浅色/深色/跟随系统三选一。
                图标显示的是**当前生效**的外观（跟随系统时也显示解析后的那个）。 -->
-          <view class="top-bar-btn theme-btn" :class="{ active: themeMenuOpen }" @tap.stop="themeMenuOpen = !themeMenuOpen" :title="$t('workbench.appearance')">
+          <!-- 键盘/辅助技术可达（v0.49.0 BUG-53）：角色 + tabindex + 上下/Enter/Esc，见 themeSwitch.js -->
+          <view class="top-bar-btn theme-btn" :class="{ active: themeMenuOpen }" role="button" tabindex="0" aria-haspopup="menu" :aria-expanded="themeMenuOpen ? 'true' : 'false'" :aria-label="$t('workbench.appearance')" @tap.stop="themeMenuOpen = !themeMenuOpen" @keydown="onThemeTriggerKey" :title="$t('workbench.appearance')">
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in (resolvedTheme === 'dark' ? GLYPHS.moon : GLYPHS.sun)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <view v-if="themeMenuOpen" class="theme-menu" @tap.stop>
+            <view v-if="themeMenuOpen" class="theme-menu" role="menu" :aria-label="$t('workbench.appearance')" @tap.stop>
               <view
-                v-for="opt in themeOptions"
+                v-for="(opt, i) in themeOptions"
                 :key="opt.value"
                 class="theme-menu-item"
                 :class="{ on: themeMode === opt.value }"
+                role="menuitemradio"
+                tabindex="-1"
+                :aria-checked="themeMode === opt.value ? 'true' : 'false'"
                 @tap="pickTheme(opt.value)"
+                @keydown.stop="onThemeItemKey($event, i)"
               >
                 <text class="theme-menu-text">{{ opt.label }}</text>
               </view>

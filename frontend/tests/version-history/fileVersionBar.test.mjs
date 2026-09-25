@@ -7,7 +7,7 @@
  * 那件事——「我现在看的这份文件，存进版本记录了吗？是哪一版？」：光标随便一动
  * 那句话就换一个名字，落在表格里还整条消失。现在改成文件级：这份文件最近一次
  * **有名字**的版本（自动存档折进它所属的那一版），磁盘内容领先版本记录时说
- * 「本机未保存的改动」。逐段归属一个字没动，仍在审阅面板的「溯源」标签里。
+ * 「已保存，尚未存为版本」（v0.49.0 BUG-32 之前说「本机未保存的改动」，误导）。逐段归属一个字没动，仍在审阅面板的「溯源」标签里。
  *
  * 跑法：cd frontend && node --test tests/version-history/*.test.mjs
  */
@@ -64,16 +64,25 @@ test('这份文件还没进过任何命名版本：显示「初始版本」，�
 
 // ---------------- 未保存态（文件级） ----------------
 
-test('磁盘内容领先版本记录：整条说「本机未保存的改动」，点不动', () => {
+test('磁盘内容领先版本记录：说「已保存，尚未存为版本」，点不动', () => {
+  // v0.49.0 真机 BUG-32：dirty 的意思是「磁盘已存、还没进版本记录」，不是「没保存」。
+  // 保存成功后还挂着「本机未保存的改动」会让律师以为没存上。
   const bar = fileVersionBar(t, state({ dirty: true }))
   assert.equal(bar.visible, true)
-  assert.equal(bar.text, '本机未保存的改动')
+  assert.equal(bar.text, '已保存，尚未存为版本')
+  assert.ok(!bar.text.includes('未保存'), '文件级小条不许再说「未保存」')
   assert.equal(bar.sha, '', '这时候没有「那一版」可打开')
+})
+
+test('「未保存改动」与「未存为版本」是两个文案：逐段溯源里没对上的段落仍说本机未保存的改动', () => {
+  assert.ok(zh.provenanceFileUncommitted, '缺文案 provenanceFileUncommitted')
+  assert.notEqual(zh.provenanceFileUncommitted, zh.provenanceUnsaved)
+  assert.equal(zh.provenanceUnsaved, '本机未保存的改动')
 })
 
 test('落版之后（结束工作 / 采纳 / 重载）脏位灭掉，换回版本名', () => {
   // version-landed → loadProvenance → 后端回 dirty:false，同一个纯函数换一个答案
-  assert.equal(fileVersionBar(t, state({ dirty: true })).text, '本机未保存的改动')
+  assert.equal(fileVersionBar(t, state({ dirty: true })).text, '已保存，尚未存为版本')
   assert.equal(fileVersionBar(t, state({ dirty: false })).text, '你 · 9 月 15 日 · 初始版本')
 })
 
@@ -137,7 +146,7 @@ function barOf(ed, over = {}) {
 test('组件的三个 computed 全部读文件级状态', () => {
   const ed = editorWith({})
   assert.deepEqual(barOf(ed), { visible: true, text: '你 · 9 月 15 日 · 初始版本', sha: 'abc1234def' })
-  assert.equal(barOf(ed, { provDirty: true }).text, '本机未保存的改动')
+  assert.equal(barOf(ed, { provDirty: true }).text, '已保存，尚未存为版本')
   assert.equal(barOf(ed, { provVersioned: false }).visible, false)
   assert.equal(barOf(ed, { ready: false }).visible, false)
   assert.equal(barOf(ed, { file: null }).visible, false)

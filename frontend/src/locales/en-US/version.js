@@ -398,6 +398,7 @@ export default {
   provenanceUnsaved: 'Unsaved change on this computer',
   provenanceEarlier: 'An earlier version',
   provenanceFileInitial: 'Initial version',
+  provenanceFileUncommitted: 'Saved, not yet a version',
   provenanceEmpty: 'This file has no version history yet, so the origin of each passage is unavailable.',
   provenanceSummary: '{total} paragraphs: {parts}',
   provenanceSummaryPart: '{name} {count}',

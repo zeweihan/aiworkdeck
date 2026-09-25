@@ -23,6 +23,13 @@ export default {
   clientInferred: '推断',
   createdColumn: '创建时间',
   updatedColumn: '最近修改',
+  // project-list.vue：名称搜索与排序（BUG-09）
+  searchPlaceholder: '按名称搜索案卷',
+  noMatch: '没有名称匹配的案卷',
+  sortLabel: '排序',
+  sortByName: '名称',
+  sortByCreated: '创建时间',
+  sortByUpdated: '最近修改',
   membersColumn: '成员',
   createdAtShort: '创建于 {time}',
   rename: '重命名',
