@@ -797,6 +797,15 @@ export default {
     async onStopRecording() {
       if (this.recState.status === 'stopping') return
       const meeting = await stopRecording()
+      // 过短 / 全程无声的录音没有自动提交转写（BUG-57），说清原因，免得用户以为转写卡住
+      const skipped = recorderState.autoTranscribeSkipped
+      if (meeting && skipped) {
+        uni.showToast({
+          title: this.$t(skipped === 'silent' ? 'meeting.autoTranscribeSkippedSilent' : 'meeting.autoTranscribeSkippedShort'),
+          icon: 'none',
+          duration: 4000,
+        })
+      }
       await this.loadMeetings()
       if (meeting && meeting.id) this.expandedId = meeting.id
     },

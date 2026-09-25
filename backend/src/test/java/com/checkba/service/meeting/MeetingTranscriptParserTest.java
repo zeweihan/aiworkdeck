@@ -87,6 +87,25 @@ class MeetingTranscriptParserTest {
     }
 
     @Test
+    @DisplayName("听悟真实静音结果把 AudioInfo 放在 Transcription 里、没有 Paragraphs：也是合法空结果（BUG-57）")
+    void silenceWithNestedAudioInfoIsEmpty() {
+        String nested = "{\"TaskId\":\"silent-task\",\"Transcription\":{\"AudioInfo\":"
+                + "{\"Size\":112629,\"Duration\":7012,\"SampleRate\":16000,\"Language\":\"cn\"}";
+        assertTrue(MeetingTranscriptParser.parseSegments(nested + "}}").isEmpty());
+        assertTrue(MeetingTranscriptParser.parseSegments(nested + ",\"AudioSegments\":[]}}").isEmpty());
+        // 嵌套形态下错误信号照样不能被吞
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments(nested + ",\"Paragraphs\":\"broken\"}}"));
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments(nested + "},\"error\":\"expired\"}"));
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments(
+                        "{\"TaskId\":\"x\",\"Transcription\":{\"AudioInfo\":{\"Duration\":7012}}}"));
+        assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,
+                () -> MeetingTranscriptParser.parseSegments(nested + ",\"Unexpected\":1}}"));
+    }
+
+    @Test
     @DisplayName("坏结果报错不回显上游 JSON、任务号或正文")
     void malformedResultDoesNotExposePayload() {
         var error = assertThrows(MeetingTranscriptParser.UnparseableTranscriptException.class,

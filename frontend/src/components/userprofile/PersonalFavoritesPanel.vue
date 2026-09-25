@@ -130,9 +130,6 @@ export default {
   mounted() {
     this.loadFavorites()
   },
-  beforeUnmount() {
-    if (this._deleteTimer) clearTimeout(this._deleteTimer)
-  },
   methods: {
     async loadFavorites() {
       this.favoritesLoading = true
@@ -184,22 +181,20 @@ export default {
         this.cancelDelete()
         return
       }
+      // 确认态不自动收起（同 ClipboardPanel，dev-board#455 / BUG-63）：超时收起后用户点「确定」
+      // 点到的是气泡底下的卡片。取消靠再点一次 ×、点「取消」或点另一张卡片的 ×。
       this.confirmDeleteId = id
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-      // 五秒不点就自己收起，免得气泡一直挂着（同左栏收藏夹）
-      this._deleteTimer = setTimeout(() => {
-        if (this.confirmDeleteId === id) this.confirmDeleteId = null
-      }, 5000)
     },
     cancelDelete() {
       this.confirmDeleteId = null
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
     },
     async handleDeleteFavorite(id) {
       this.cancelDelete()
       try {
         await deleteFavorite(id)
         this.favorites = this.favorites.filter((f) => f.id !== id)
+        // 浏览器面板的「收藏本页」星形靠它重拉（BUG-60）
+        uni.$emit('awd:favorites-changed', { deletedId: id })
         uni.showToast({ title: this.$t('account.deleteSuccessToast'), icon: 'success' })
       } catch (e) {
         console.error('删除收藏失败:', e)

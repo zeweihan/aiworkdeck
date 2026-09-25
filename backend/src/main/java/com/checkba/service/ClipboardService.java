@@ -27,6 +27,8 @@ public class ClipboardService {
     public static final int FREE_MAX_ITEMS = 20;
     /** 免费版保留天数（Spec §5）。与条数上限**同时**生效，取更严者。 */
     public static final int FREE_RETENTION_DAYS = 3;
+    /** 同文本去重的比对范围：最近这么多条（BUG-62）。 */
+    static final int DEDUP_WINDOW = 200;
 
     private final ClipboardItemRepository repository;
     private final com.checkba.storage.StorageServiceFactory storageServiceFactory;
@@ -100,6 +102,15 @@ public class ClipboardService {
     public ClipboardItem saveText(Long userId, String text) {
         if (userId == null) throw new IllegalArgumentException(LangText.of("userId 不能为空", "userId must not be empty"));
         if (!StringUtils.hasText(text)) throw new IllegalArgumentException(LangText.of("text 不能为空", "text must not be empty"));
+
+        // 同一段文字再复制一次：合并到已有那一条、把时间戳顶到现在，不再多出一张一样的卡片（BUG-62）。
+        // 在最近 DEDUP_WINDOW 条里比对（text 是 TEXT/CLOB 列，不走 SQL 等值比较）；只改时间戳，不删任何记录。
+        for (ClipboardItem existing : repository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, DEDUP_WINDOW))) {
+            if ("TEXT".equals(existing.getType()) && text.equals(existing.getText())) {
+                existing.setCreatedAt(LocalDateTime.now());
+                return repository.save(existing);
+            }
+        }
 
         ClipboardItem item = new ClipboardItem();
         item.setUserId(userId);

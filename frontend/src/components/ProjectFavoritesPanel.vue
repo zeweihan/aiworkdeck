@@ -208,18 +208,13 @@ export default {
         this.confirmDeleteId = null
         return
       }
+      // 确认态不自动收起（同 ClipboardPanel，dev-board#455 / BUG-63）：超时收起后用户点「确定」
+      // 点到的是气泡底下的卡片。取消靠再点一次 ×、点「取消」或点另一张卡片的 ×。
       this.confirmDeleteId = id
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
-      this._deleteTimer = setTimeout(() => {
-        if (this.confirmDeleteId === id) {
-          this.confirmDeleteId = null
-        }
-      }, 5000)
     },
 
     cancelDelete() {
       this.confirmDeleteId = null
-      if (this._deleteTimer) clearTimeout(this._deleteTimer)
     },
 
     async confirmDelete(id) {
@@ -230,6 +225,8 @@ export default {
         // 吞掉——列表不更新但成功提示照弹，用户再点一次删除时后端已无此 id，
         // 弹出的失败提示与刚才的成功提示直接矛盾。
         await this.refresh(true)
+        // 浏览器面板的「收藏本页」星形靠它重拉，否则删完仍显示已收藏（BUG-60）
+        uni.$emit('awd:favorites-changed', { deletedId: id })
         uni.showToast({ title: this.$t('panels.pfDeleteSuccess'), icon: 'success' })
       } catch (e) {
         console.error('删除收藏失败:', e)

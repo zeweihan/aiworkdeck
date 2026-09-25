@@ -105,6 +105,8 @@ export default {
   transcribeFailed: 'Transcription failed',
   submitTranscribeFailed: 'Could not submit for transcription: {message}',
   resultUnreadable: 'The transcript could not be read. Try again later; the original recording is still saved.',
+  autoTranscribeSkippedSilent: 'No sound was detected, so this recording was not transcribed automatically to avoid charges. Tap "Start Transcription" if there was speech.',
+  autoTranscribeSkippedShort: 'The recording is too short, so it was not transcribed automatically. Tap "Start Transcription" if you still need it.',
   emptyTranscriptBillingHint: 'Platform transcription may still charge Credits for processing time. Retrying submits a new task and may incur another charge.',
   emptyTranscriptHint: "No speech was detected. Check the selected microphone, input volume and connection, then play the recording to check for sound. If it contains conversation, you can retry transcription.",
 

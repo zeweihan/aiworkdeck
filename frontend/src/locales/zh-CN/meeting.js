@@ -109,6 +109,9 @@ export default {
   transcribeFailed: '转写失败',
   submitTranscribeFailed: '提交转写失败：{message}',
   resultUnreadable: '未能读取转写结果，请稍后重试。原始录音仍然保留。',
+  // 结束录音时没有自动提交转写（BUG-57）：会议留在「未转写」，可手动点「开始转写」
+  autoTranscribeSkippedSilent: '这段录音没有检测到声音，未自动转写以免产生费用；确有对话可点「开始转写」。',
+  autoTranscribeSkippedShort: '录音太短，未自动转写；如需转写可点「开始转写」。',
   emptyTranscriptBillingHint: '平台转写可能仍按处理时长扣除 Credits；重试会再次提交并可能再次计费。',
   emptyTranscriptHint: '未检测到有效语音。请检查麦克风选择、输入音量与连接，播放录音确认是否有声音；若确有对话，可重新转写。',
 

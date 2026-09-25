@@ -5318,6 +5318,8 @@ export default {
          try {
            await this.libreOfficeExecutor.executeCommand('insert_at_cursor', { text: t })
            uni.showToast({ title: this.$t('workbench.insertedToDoc'), icon: 'success' })
+           // 焦点还给编辑器，Cmd+Z 才能撤掉这次插入（BUG-61）；存盘仍走正常自动保存节奏
+           this.focusLibreEditorFor(this.libreOfficeExecutor)
          } catch (e) {
            console.error(e)
            uni.showToast({ title: this.$t('workbench.insertFailed'), icon: 'none' })
@@ -5347,6 +5349,7 @@ export default {
            const r = await this.libreOfficeExecutor.executeCommand('insert_image', { dataUrl })
            if (!r || !r.success) throw new Error((r && r.message) || this.$t('workbench.insertImageFailed'))
            uni.showToast({ title: this.$t('workbench.imageInserted'), icon: 'success' })
+           this.focusLibreEditorFor(this.libreOfficeExecutor)
          } catch (e) {
            console.error(e)
            uni.showToast({ title: e.message || this.$t('workbench.insertImageFailed'), icon: 'none' })

@@ -723,6 +723,12 @@ export default {
         this._transportSend({ __lo: 'lo-relay', type: 'set-theme', theme: getResolvedTheme() })
       } catch (e) { /* 通道没起来：ready 时还会补发一次 */ }
     },
+    // 宿主把键盘焦点交回编辑器（BUG-61，侧栏「插入」之后）。聚焦 webview/iframe 容器即可：
+    // 客体窗口拿回焦点且页内无焦点时，IME 覆盖层会接住键盘（zetaOfficeImeOverlay onWindowFocus），
+    // Cmd+Z 由覆盖层转成引擎的 undo。
+    focusEditor() {
+      try { if (this.webviewEl && this.webviewEl.focus) this.webviewEl.focus() } catch (e) { /* ignore */ }
+    },
     menuOpenFind() {
       const tb = this.$refs.toolbar
       if (tb && !tb.findOpen) return tb.toggleFind()

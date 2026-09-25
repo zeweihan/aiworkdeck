@@ -15,7 +15,7 @@ import { getAuthHeaders } from '@/utils/auth.js'
 // 报错直接显示在会议录音面板里（recorderState.error 与 throw 出去的 message 都是），
 // 所以文案与面板同一个命名空间。非组件模块的翻译入口是 t()，且只能在函数体内取值。
 import { t } from '@/i18n'
-import { resolveTrackEndedStatus } from '@/utils/meetingRecorderStatus.js'
+import { resolveTrackEndedStatus, decideAutoTranscribe } from '@/utils/meetingRecorderStatus.js'
 
 const CHUNK_TIMESLICE_MS = 5000
 const UPLOAD_TIMEOUT_MS = 60000
@@ -33,6 +33,8 @@ export const recorderState = reactive({
   uploadedBytes: 0,
   error: '',
   configured: null, // 后端是否已配转写凭证（create 时回报，null=未知）
+  // 最近一次结束录音时没有自动提交转写的原因：null | 'too-short' | 'silent'（BUG-57）
+  autoTranscribeSkipped: null,
 })
 
 let mediaRecorder = null
@@ -42,6 +44,9 @@ let analyser = null
 let secondsTimer = null
 let levelTimer = null
 let stopResolve = null
+// 整场录音的电平峰值与电平计是否真的跑起来了（decideAutoTranscribe 的输入）
+let peakLevel = 0
+let meterAvailable = false
 
 // 顺序上传队列：offset 必须严格递增，绝不能并发发块
 let uploadQueue = []
@@ -144,6 +149,9 @@ export async function startRecording(projectId, deviceId) {
     recorderState.configured = res.configured !== undefined ? !!res.configured : null
     recorderState.seconds = 0
     recorderState.uploadedBytes = 0
+    recorderState.autoTranscribeSkipped = null
+    peakLevel = 0
+    meterAvailable = false
     uploadQueue = []
     uploadOffset = 0
     uploading = false
@@ -207,6 +215,7 @@ export async function stopRecording() {
   recorderState.status = 'stopping'
   const durationMs = recorderState.seconds * 1000
   const meetingId = recorderState.meetingId
+  const decision = decideAutoTranscribe({ seconds: recorderState.seconds, peakLevel, meterAvailable })
 
   const stopped = new Promise((resolve) => { stopResolve = resolve })
   try {
@@ -221,7 +230,9 @@ export async function stopRecording() {
   cleanupMedia()
   let meeting = null
   try {
-    meeting = await finishMeetingRecording(meetingId, durationMs)
+    // 过短 / 全程无声：只不自动提交，会议留在「未转写」，用户可手动点「开始转写」
+    meeting = await finishMeetingRecording(meetingId, durationMs, decision.transcribe ? undefined : false)
+    recorderState.autoTranscribeSkipped = decision.reason
   } catch (e) {
     console.error('[meeting] finish 失败', e)
     recorderState.error = t('meeting.finishWriteBackFailed', { message: (e && e.message) || e })
@@ -333,6 +344,7 @@ function startLevelMeter() {
     analyser.fftSize = 256
     source.connect(analyser)
     const buf = new Uint8Array(analyser.frequencyBinCount)
+    meterAvailable = true
     levelTimer = setInterval(() => {
       if (!analyser || recorderState.status === 'paused') { recorderState.level = 0; return }
       analyser.getByteTimeDomainData(buf)
@@ -343,6 +355,7 @@ function startLevelMeter() {
       }
       // RMS 放大到肉眼可见的范围，封顶 1
       recorderState.level = Math.min(1, Math.sqrt(sum / buf.length) * 4)
+      if (recorderState.level > peakLevel) peakLevel = recorderState.level
     }, LEVEL_INTERVAL_MS)
   } catch (e) {
     // 电平只是视觉反馈，拿不到不影响录音
