@@ -1082,6 +1082,14 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   就是这么栽的：不归一的话兜底查同级永远查空，本该复用同名文件夹变成硬报错）。
   存量脏行由启动期对账 `service/maintenance/OrphanParentReconciler` 一次性修复
   （归位 / 并进根下同名文件夹 / 去掉指向同一份字节的重复行，只动数据库不碰磁盘）。
+- **回收站只收应用内亲手删的东西（v0.49.0 BUG-02/03）**：本地文件夹项目对账
+  （`LocalProjectService.reconcileProject`）发现「行在库、盘上没了」走
+  `ProjectFileService.forgetVanished`——连子孙（含其中回收站行）直接出索引、不碰磁盘、照发版本信号，
+  **不再**软删进回收站（此前 Finder 一次删 100 个文件，回收站多 100 条还原不了的幽灵）。
+  彻底删除对「记录已不在」幂等成功：`permDelete` 服务层与控制器 `/{fileId}/permanent` 都先查
+  `findFile`，不存在直接回 `code:0`。前端批量彻底删除先用 `fileTreeRecycle.collapseToTopmostSelected`
+  折叠掉被勾选祖先覆盖的子孙，删完从服务端重拉回收站。别再写「按 HTTP 404 判已不存在」——
+  全站 HTTP 恒 200，那个分支永远不会走到。
 - **左栏面板要给 AI 面板发 prompt，一律走 `resolveChatInterface()`**（工作台 methods）。
   它做三件事：`showAiPanel` 为 false 时先走既有的 `toggleAiPanel()`（顺带刷 AI 上下文 +
   拉历史，不能绕过去直接改标志位）→ 有界轮询 ~3s（30×100ms）等 `$refs.chatInterface`

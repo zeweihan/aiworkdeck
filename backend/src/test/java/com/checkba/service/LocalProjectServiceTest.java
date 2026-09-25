@@ -198,7 +198,7 @@ class LocalProjectServiceTest {
     // ---- 对账（watcher 触发的 reconcileProject）----
 
     @Test
-    void reconcileImportsNewAndSoftDeletesVanished(@TempDir Path folder) throws Exception {
+    void reconcileImportsNewAndForgetsVanished(@TempDir Path folder) throws Exception {
         Files.writeString(folder.resolve("a.txt"), "1");
         Files.createDirectories(folder.resolve("sub"));
         Files.writeString(folder.resolve("sub/b.txt"), "2");
@@ -218,10 +218,47 @@ class LocalProjectServiceTest {
         assertFalse(Boolean.TRUE.equals(a.getIsDeleted()));
         ProjectFile c = rows.stream().filter(f -> f.getName().equals("c.txt")).findFirst().orElseThrow();
         assertFalse(Boolean.TRUE.equals(c.getIsDeleted()));
-        ProjectFile sub = rows.stream().filter(f -> f.getName().equals("sub")).findFirst().orElseThrow();
-        assertTrue(Boolean.TRUE.equals(sub.getIsDeleted()), "磁盘上消失的文件夹应进回收站");
-        ProjectFile b = rows.stream().filter(f -> f.getName().equals("b.txt")).findFirst().orElseThrow();
-        assertTrue(Boolean.TRUE.equals(b.getIsDeleted()));
+        // 回收站只收律师在应用里亲手删的东西：Finder 里删掉的，字节已经不在了，
+        // 进回收站既还原不出内容、彻底删除又撞「文件不存在」（v0.49.0 BUG-02/03）——直接出索引
+        assertTrue(rows.stream().noneMatch(f -> f.getName().equals("sub")), "磁盘上消失的文件夹应直接出索引: " + rows);
+        assertTrue(rows.stream().noneMatch(f -> f.getName().equals("b.txt")), "消失文件夹里的文件随之出索引: " + rows);
+        assertTrue(projectFileService.getRecycleBinFiles(projectId).isEmpty(), "外部删除不得进回收站");
+    }
+
+    /**
+     * v0.49.0 真机 BUG-02（0.48 BUG-005 同源）：在 Finder/终端里一次删掉 100 个文件 + 一个文件夹，
+     * 后台对账把它们全当成「律师在应用里删的」软删进回收站，回收站瞬间多出 100+ 条，
+     * 而且那些行的字节已经不在盘上，还原不出东西、彻底删除又失败。
+     */
+    @Test
+    void externalBulkDeletionLeavesRecycleBinEmpty(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("合同.docx"), "keep");
+        Files.createDirectories(folder.resolve("perf100"));
+        for (int i = 0; i < 100; i++) {
+            Files.writeString(folder.resolve("perf100/qa-perf-" + i + ".txt"), "x" + i);
+        }
+        Files.writeString(folder.resolve("这是一个很长的文件名.txt"), "y");
+        Long pid = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        assertEquals(103, projectFileRepository.findByProjectId(pid).size());
+
+        // 应用里先删一份（回收站语义：字节留盘），外部清理不得牵连它
+        ProjectFile keptInBin = live(projectFileRepository.findByProjectId(pid), "合同.docx");
+        projectFileService.delete(keptInBin.getId(), 1L);
+
+        for (int i = 0; i < 100; i++) {
+            Files.delete(folder.resolve("perf100/qa-perf-" + i + ".txt"));
+        }
+        Files.delete(folder.resolve("perf100"));
+        Files.delete(folder.resolve("这是一个很长的文件名.txt"));
+
+        LocalProjectService.ReconcileResult r = svc.reconcileProject(pid);
+        assertTrue(r.changed() > 0, "外部删除是一次真实变化，要触发版本信号");
+
+        List<ProjectFile> bin = projectFileService.getRecycleBinFiles(pid);
+        assertEquals(1, bin.size(), "回收站只该有律师在应用里删的那一份: " + bin);
+        assertEquals(keptInBin.getId(), bin.get(0).getId());
+        assertEquals(1, projectFileRepository.findByProjectId(pid).size(),
+                "外部删掉的 102 行应全部出索引: " + projectFileRepository.findByProjectId(pid));
     }
 
     @Test

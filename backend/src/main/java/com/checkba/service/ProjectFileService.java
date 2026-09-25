@@ -738,7 +738,9 @@ public class ProjectFileService {
     }
 
     /**
-     * 彻底删除文件或文件夹（物理删除 + 数据库删除）
+     * 彻底删除文件或文件夹（物理删除 + 数据库删除）。
+     * 幂等：行已经不在（同一批里先删的父文件夹级联带走了它）就是目标已达成，直接返回——
+     * 此前这里抛「文件不存在」，回收站批量彻底删除 100/104 失败、重试次次失败（v0.49.0 BUG-03）。
      */
     @Transactional
     public void permDelete(Long fileId, Long userId) {
@@ -746,20 +748,47 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("文件 ID 不能为空", "File ID must not be empty"));
         }
 
-        ProjectFile file = projectFileRepository.findById(fileId)
-                // 如果文件找不到，可能已经被删除了，这是幂等操作，可以直接返回，但为了明确反馈，这里还是查一下
-                // 注意：findById 默认查所有（包括 isDeleted=true）
-                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
+        // 注意：findById 默认查所有（包括 isDeleted=true）
+        ProjectFile file = projectFileRepository.findById(fileId).orElse(null);
+        if (file == null) {
+            log.info("彻底删除：记录已不存在，按已删除处理 fileId={}", fileId);
+            return;
+        }
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
+        purgeRecursive(file, true);
+    }
 
+    /**
+     * 本地文件夹项目对账专用：磁盘上已经不存在的行直接出索引（连同子孙，含其中回收站里的行），
+     * <b>不进回收站、不碰磁盘</b>。回收站只收律师在应用里亲手删的东西——软删除不动磁盘，
+     * 还原得回来；Finder 里删掉的字节已经不在了，进回收站既还原不出内容、彻底删除又撞
+     * 「文件不存在」，一次外部清理 100 个文件就在回收站里留 100 条幽灵（v0.49.0 BUG-02，
+     * 0.48 BUG-005 同源）。内容若要找回，走版本记录（本次变化照常发版本信号）。
+     *
+     * @return 行确实存在并被移除时为 true；已经不在（父文件夹先被移除时级联带走）为 false
+     */
+    @Transactional
+    public boolean forgetVanished(Long fileId, Long userId) {
+        ProjectFile file = fileId == null ? null : projectFileRepository.findById(fileId).orElse(null);
+        if (file == null) {
+            return false;
+        }
+        purgeRecursive(file, false);
+        signalChange(file.getProjectId(), userId);
+        return true;
+    }
+
+    /** 递归移除行（子孙含已软删除的，否则删不干净）；deletePhysical=false 时一个字节都不碰磁盘。 */
+    private void purgeRecursive(ProjectFile file, boolean deletePhysical) {
+        Long fileId = file.getId();
         // 如果是文件夹，递归彻底删除所有子文件
         if (Boolean.TRUE.equals(file.getIsFolder())) {
             // 这里要查出所有子文件（包括已软删除的，否则删不干净）
             // 使用自定义查询查所有 parentId = id 的
-             List<ProjectFile> children = getAllChildrenIncludingDeleted(file.getProjectId(), fileId);
+            List<ProjectFile> children = getAllChildrenIncludingDeleted(file.getProjectId(), fileId);
             for (ProjectFile child : children) {
-                permDelete(child.getId(), userId);
+                purgeRecursive(child, deletePhysical);
             }
         }
 
@@ -772,7 +801,7 @@ public class ProjectFileService {
              filePath = buildPhysicalPath(file.getProjectId(), file.getParentId(), file.getName());
         }
 
-        if (StringUtils.hasText(filePath)) {
+        if (deletePhysical && StringUtils.hasText(filePath)) {
             try {
                 storageServiceFactory.getStorageService().delete(filePath);
                 log.info("物理文件/文件夹彻底删除成功: fileId={}, path={}", fileId, filePath);
@@ -816,7 +845,7 @@ public class ProjectFileService {
         file.setIsDeleted(false);
         file.setDeletedAt(null);
         projectFileRepository.save(file);
-        // 本地文件夹项目：恢复出来的文件夹若在磁盘上没有目录，下一轮对账会把它再送回回收站
+        // 本地文件夹项目：恢复出来的文件夹若在磁盘上没有目录，下一轮对账会把它当成外部删除摘出索引
         materializeLocalFolder(file);
         
         // 递归还原所有子文件
@@ -1170,7 +1199,7 @@ public class ProjectFileService {
 
     // ===== 本地文件夹项目的物理目录（dev-board#885）=====================================
     // 本地文件夹项目（Project.localRoot 非空）的对账（LocalProjectService.reconcileProject）
-    // 以磁盘为真相源：「行在库、目录不在盘」= 律师在 Finder 里删了它 → 软删除进回收站。
+    // 以磁盘为真相源：「行在库、目录不在盘」= 律师在 Finder 里删了它 → 出索引（forgetVanished，不进回收站）。
     // 所以应用里对文件夹做的每一件事都必须同步落到磁盘上，否则下一次任意磁盘变化触发的
     // 对账就会把它当成「已删除」。此前新建/恢复/复制只落库不建目录——空文件夹在新建文档、
     // 保存、版本记录写 .awd/ 之后必进回收站，恢复了还会再进；改名/移动也不动目录，
@@ -1211,7 +1240,7 @@ public class ProjectFileService {
     /**
      * 本地文件夹项目：文件夹改名/移动后，把磁盘上的整个目录搬到新位置，再把子孙文件的
      * filePath 改到新前缀。搬不动时抛错让事务回滚——数据库与磁盘一旦分叉，下一轮对账会把
-     * 新名字那一行连同子孙一起送进回收站，比「这次没改成」糟得多。
+     * 新名字那一行连同子孙一起从索引里摘掉，比「这次没改成」糟得多。
      */
     private void relocateLocalFolder(java.nio.file.Path oldDir, ProjectFile folder) {
         java.nio.file.Path newDir = localFolderDir(folder.getProjectId(), folder.getParentId(), folder.getName());
@@ -1292,6 +1321,11 @@ public class ProjectFileService {
     public ProjectFile getFile(Long fileId) {
         return projectFileRepository.findById(fileId)
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
+    }
+
+    /** 按 id 查行（含回收站里的）；不存在时回空，不抛错。 */
+    public Optional<ProjectFile> findFile(Long fileId) {
+        return fileId == null ? Optional.empty() : projectFileRepository.findById(fileId);
     }
 
     /**

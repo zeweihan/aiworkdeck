@@ -524,8 +524,15 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileWriteAccess(projectId, userId);
-        checkFileInProject(fileId, projectId);
-        projectFileService.permDelete(fileId, userId);
+        // 记录已经不在 = 彻底删除的目标已经达成，回成功（幂等）。常见于回收站批量彻底删除：
+        // 先删的父文件夹级联带走了子行，紧接着对子行的请求此前在 checkFileInProject 就抛
+        // 「文件不存在」——全站 HTTP 恒 200 + code:1，前端等的 404 永远不来，于是 100/104 失败、
+        // 重试次次失败、回收站永远清不空（v0.49.0 BUG-03）。不存在的行没有可越权的东西；
+        // 仍存在的行照旧先过归属校验。
+        if (projectFileService.findFile(fileId).isPresent()) {
+            checkFileInProject(fileId, projectId);
+            projectFileService.permDelete(fileId, userId);
+        }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("message", com.checkba.service.LangText.of("彻底删除成功", "Permanently deleted successfully"));

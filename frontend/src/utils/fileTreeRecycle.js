@@ -55,3 +55,40 @@ export function summarizeDeleteResults(results) {
   }
   return { succeededIds, failedIds }
 }
+
+/**
+ * 批量彻底删除前，把「祖先也被勾选了」的子孙折叠掉。
+ *
+ * 病灶（v0.49.0 BUG-03）：后端彻底删除文件夹会级联带走全部子孙行。回收站里 1 个文件夹 +
+ * 它的 100 个子文件全选彻底删除时，先删的文件夹已经带走了子行，紧接着对子行的 100 次请求
+ * 全部「文件不存在」→ 提示 100/104 失败，本地列表原样留着，重试次次一样。
+ * 被勾选祖先覆盖的子孙不单独请求，结果跟着祖先走。
+ *
+ * @param {Array<number|string>} ids 勾选的 id
+ * @param {Array<{id: number|string, parentId: number|string|null}>} recycleBinList 当前回收站列表
+ * @returns {{roots: Array, coveredBy: Map}} roots=要真正发请求的 id（保持原顺序）；
+ *   coveredBy=子孙 id → 覆盖它的最上层被勾选祖先 id
+ */
+export function collapseToTopmostSelected(ids, recycleBinList) {
+  const list = Array.isArray(ids) ? ids : []
+  const key = (v) => String(v)
+  const selected = new Map(list.map((id) => [key(id), id]))
+  const byId = new Map((Array.isArray(recycleBinList) ? recycleBinList : []).map((f) => [key(f.id), f]))
+  const roots = []
+  const coveredBy = new Map()
+  for (const id of list) {
+    let top = null
+    const seen = new Set()
+    let parentId = byId.get(key(id))?.parentId
+    while (parentId !== null && parentId !== undefined && parentId !== 0 && !seen.has(key(parentId))) {
+      seen.add(key(parentId))
+      if (selected.has(key(parentId))) top = selected.get(key(parentId))
+      const parent = byId.get(key(parentId))
+      if (!parent) break
+      parentId = parent.parentId
+    }
+    if (top === null) roots.push(id)
+    else coveredBy.set(id, top)
+  }
+  return { roots, coveredBy }
+}

@@ -20,7 +20,7 @@ const stripComments = (s) =>
 
 test('restoreFile 接了 findTopmostDeletedAncestor，且在真的调用还原接口之前检查', () => {
   const src = stripComments(read('components/FileTree.vue'))
-  assert.match(src, /import\s*\{\s*findTopmostDeletedAncestor,\s*summarizeDeleteResults\s*\}\s*from\s*'@\/utils\/fileTreeRecycle\.js'/,
+  assert.match(src, /import\s*\{\s*findTopmostDeletedAncestor,\s*summarizeDeleteResults(?:,\s*\w+)*\s*\}\s*from\s*'@\/utils\/fileTreeRecycle\.js'/,
     'FileTree.vue 必须从 utils/fileTreeRecycle.js 引入这两个判定函数')
 
   const start = src.indexOf('async restoreFile(item)')
