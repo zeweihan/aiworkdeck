@@ -147,6 +147,17 @@ export default {
     }
   },
   methods: {
+    // draw.io 默认开「页面视图」：画布只把一张纸（按图里的 pageWidth，通常 A4/Letter）
+    // 画成白底网格，纸外全灰——编辑区再宽，能画的也只有左边那一张纸宽
+    // （dev-board BUG-22：iframe 本身已铺满主区域，窄的是 draw.io 内部的页面）。
+    // 诉讼图按内容定尺寸、不是排版到纸上的，关掉页面视图让网格铺满整个编辑区。
+    // 用 URL 参数 pv=0 而不是 invokeAction('pageView')：后者是开关切换，状态不确定。
+    // 网页与桌面两个宿主的 URL 各自拼（host.js / drawio-server.js），统一在这里补。
+    withEditorParams(url) {
+      if (!url || /[?&]pv=/.test(url)) return url
+      return url + (url.includes('?') ? '&' : '?') + 'pv=0'
+    },
+
     matchesDiagram(event) {
       return this.file && String(event.projectId) === String(this.projectId)
         && String(event.folderId) === String(this.file.parentId)
@@ -199,7 +210,7 @@ export default {
           return
         }
         this.xml = await this.loadXml()
-        this.editorUrl = info.url
+        this.editorUrl = this.withEditorParams(info.url)
         this.phase = 'ready'
       } catch (e) {
         this.errorText = (e && e.message) || this.$t('editor.drawio.openFailed')
@@ -262,7 +273,12 @@ export default {
       if (!msg || !msg.event) return
 
       if (msg.event === 'init') {
-        this.post({ action: 'load', autosave: 0, xml: this.xml, title: (this.file && this.file.name) || '' })
+        // fit：载入后按编辑区宽度缩放一次（maxFitScale 1＝只缩不放，小图保持 100%），
+        // 宽时间轴一打开就能看全，不用先手动点「适应」
+        this.post({
+          action: 'load', autosave: 0, xml: this.xml, title: (this.file && this.file.name) || '',
+          fit: 1, border: 16, maxFitScale: 1
+        })
         return
       }
       if (msg.event === 'change') {

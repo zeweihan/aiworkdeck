@@ -62,6 +62,12 @@ export const agentClientActionMethods = {
                 // 标签/窗口标题/AI「当前文档」还停在旧名。
                 this.$refs.fileTree.loadFiles().then(() => this.syncOpenTabsFromFileTree())
                 uni.showToast({ title: this.$t('workbenchOps.fileUpdated'), icon: 'none' })
+            } else {
+                // 左栏是 v-if/v-else-if 互斥链：停在别的面板（诉讼可视化、插件等）时 FileTree
+                // 根本没挂载，平时由 FileTree.loadFiles() 发出的 awd:files-changed 也就不会发，
+                // 订阅它的面板永远收不到「文件变了」。这里替它补发同一个事件（树挂着时不发，
+                // 避免重复）。dev-board BUG-21：出第二张图后诉讼可视化画廊停在旧计数。
+                uni.$emit('awd:files-changed', { projectId: this.projectId })
             }
         }
         // AI Agent 请求打开文件

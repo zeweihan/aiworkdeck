@@ -216,10 +216,16 @@ export default {
   },
   mounted() {
     uni.$on('awd:litviz-restyled', this.onDiagramChanged)
+    // 换风格事件只覆盖「已有图被重画」这一种情形。AI 出新图落盘后后端发 refresh_files，
+    // 本面板显示时左栏互斥链里 FileTree 没挂载，由 agentClientActions.js 替它补发
+    // 'awd:files-changed'（树挂着时则由 FileTree.loadFiles() 发）。画廊靠它才知道该重拉，
+    // 不然计数永远停在第一张（dev-board BUG-21）。
+    uni.$on('awd:files-changed', this.onFilesChanged)
     this.refreshPackStatus()
   },
   beforeUnmount() {
     uni.$off('awd:litviz-restyled', this.onDiagramChanged)
+    uni.$off('awd:files-changed', this.onFilesChanged)
     this.stopPackPoll()
   },
   methods: {
@@ -334,6 +340,11 @@ export default {
 
     onDiagramChanged(event) {
       if (String(event.projectId) === String(this.projectId) && !event.failed) this.reload()
+    },
+
+    // 'awd:files-changed'：AI 出图（或任何文件树变更）落盘后的通用刷新信号
+    onFilesChanged(event) {
+      if (event && String(event.projectId) === String(this.projectId)) this.reload()
     },
 
     async restyle(d, mode) {
