@@ -4,33 +4,9 @@
   <view class="file-tree" tabindex="0" @keydown="handleKeyDown" @mousedown="focusTree">
 
     <!-- AI WorkDeck Style Modals System -->
-
-    <!-- 1. Delete Confirmation Modal -->
-    <view v-if="showDeleteDialog" class="awd-dialog-mask" @tap="showDeleteDialog = false">
-      <view class="awd-dialog" @tap.stop>
-        <view class="awd-dialog-header">
-          <text class="awd-dialog-title">{{ deleteMode === 'hard' ? $t('fileTree.hardDeleteTitle') : $t('fileTree.softDeleteTitle') }}</text>
-        </view>
-        <view class="awd-dialog-body">
-          <text class="awd-dialog-text">
-            <template v-if="!deleteIsBatch && deleteTargetItem">
-              {{ $t(deleteMode === 'hard' ? 'fileTree.deleteConfirmItemHard' : 'fileTree.deleteConfirmItemSoft', { kind: deleteTargetItem.isFolder ? $t('fileTree.folder') : $t('fileTree.file'), name: deleteTargetItem.name }) }}
-              {{ deleteTargetItem.isFolder && deleteMode !== 'hard' ? $t('fileTree.folderSoftDeleteNote') : '' }}
-              {{ deleteMode === 'hard' ? $t('fileTree.irreversibleNote') : '' }}
-            </template>
-            <template v-else-if="deleteIsBatch">
-              {{ $t(deleteMode === 'hard' ? 'fileTree.deleteConfirmBatchHard' : 'fileTree.deleteConfirmBatchSoft', { count: deleteBatchIds.length }) }}
-              {{ deleteMode === 'hard' ? $t('fileTree.irreversibleNote') : '' }}
-            </template>
-          </text>
-        </view>
-        <view class="awd-dialog-footer">
-           <view class="awd-btn awd-btn-secondary" @tap="showDeleteDialog = false">{{ $t('fileTree.cancel') }}</view>
-           <!-- Use Danger (Red) for Delete Actions -->
-           <view class="awd-btn awd-btn-danger" @tap="confirmDelete">{{ $t('fileTree.confirmDeleteBtn') }}</view>
-        </view>
-      </view>
-    </view>
+    <!-- 删除确认（单个/批量、软删/硬删）走应用内对话框 AwdDialog（showDeleteConfirmDialog
+         方法里的 showDialog 调用），不再是这里内联的 awd-dialog-mask：这块以前只认 @tap，
+         Esc 不关（BUG-10，v0.49.0 真机批次 I）。 -->
 
     <!-- 4. Manage Tags Modal -->
     <view v-if="showTagEditDialog" class="awd-dialog-mask" @tap="showTagEditDialog = false">
@@ -845,8 +821,8 @@ export default {
       showSortMenu: false,
 
 
-      // Delete Confirmation
-      showDeleteDialog: false,
+      // Delete Confirmation：这几个只是待确认的删除意图状态，确认框本身走 AwdDialog
+      // （showDeleteConfirmDialog），不再有本地的弹窗开关
       deleteTargetItem: null, // The item being deleted
       deleteMode: 'soft', // 'soft' | 'hard'
       deleteIsBatch: false,
@@ -1562,11 +1538,42 @@ export default {
       this.deleteTargetItem = item
       this.deleteMode = 'soft'
       this.deleteIsBatch = false
-      this.showDeleteDialog = true
+      await this.showDeleteConfirmDialog()
     },
 
-    async confirmDelete() {
-      this.showDeleteDialog = false
+    // 删除确认框（单个/批量、软删/硬删共用）：走应用内对话框 AwdDialog（utils/dialog.js
+    // 的 showDialog），danger:true 给红色确认按钮、默认焦点落在取消——Esc 取消、Enter 只在
+    // 焦点在按钮上时才触发对应按钮，都是 AwdDialog 内置的键位语义（resolveDialogKey）。
+    // 以前这里是内联的 awd-dialog-mask，只认鼠标 @tap，Esc 关不掉（BUG-10）。
+    async showDeleteConfirmDialog() {
+      const isHard = this.deleteMode === 'hard'
+      const title = isHard ? this.$t('fileTree.hardDeleteTitle') : this.$t('fileTree.softDeleteTitle')
+      let content = ''
+      if (this.deleteIsBatch) {
+        content = this.$t(isHard ? 'fileTree.deleteConfirmBatchHard' : 'fileTree.deleteConfirmBatchSoft', { count: this.deleteBatchIds.length })
+        if (isHard) content += this.$t('fileTree.irreversibleNote')
+      } else if (this.deleteTargetItem) {
+        const item = this.deleteTargetItem
+        content = this.$t(isHard ? 'fileTree.deleteConfirmItemHard' : 'fileTree.deleteConfirmItemSoft', {
+          kind: item.isFolder ? this.$t('fileTree.folder') : this.$t('fileTree.file'),
+          name: item.name
+        })
+        if (item.isFolder && !isHard) content += this.$t('fileTree.folderSoftDeleteNote')
+        if (isHard) content += this.$t('fileTree.irreversibleNote')
+      }
+
+      const r = await showDialog({
+        title,
+        content,
+        danger: true,
+        confirmText: this.$t('fileTree.confirmDeleteBtn'),
+        cancelText: this.$t('fileTree.cancel')
+      })
+      if (!r || !r.confirm) {
+        this.deleteTargetItem = null
+        this.deleteBatchIds = []
+        return
+      }
 
       try {
         if (this.deleteIsBatch) {
@@ -1616,11 +1623,11 @@ export default {
     },
 
     // Wrapper for perm delete with dialog
-    permDeleteFile(item) {
+    async permDeleteFile(item) {
        this.deleteTargetItem = item
        this.deleteMode = 'hard'
        this.deleteIsBatch = false
-       this.showDeleteDialog = true
+       await this.showDeleteConfirmDialog()
     },
 
     async executePermDelete(item) {
@@ -2100,7 +2107,7 @@ export default {
         this.deleteBatchIds = ids
         this.deleteMode = this.viewMode === 'recycle' ? 'hard' : 'soft'
         this.deleteIsBatch = true
-        this.showDeleteDialog = true
+        this.showDeleteConfirmDialog()
         return
       }
 
