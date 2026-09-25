@@ -171,10 +171,11 @@ import { classifyLoadFailure, shouldSelfHealLoadFailure } from '@/utils/editorLo
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
 import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
-import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser } from '@/services/api.js'
+import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { createAuthorNameResolver } from '@/utils/editorAuthor.js'
 import { host } from '@/services/host.js'
+import { watchDownloadDone, displayName } from '@/utils/downloadDone.js'
 import { anchorHash } from '@/utils/anchorHash.js'
 import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
 import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceAnchors.js'
@@ -740,6 +741,17 @@ export default {
       const tb = this.$refs.toolbar
       if (tb && !tb.findOpen) return tb.toggleFind()
     },
+    // BUG-30：菜单栏「编辑 > 撤销/重做」薄转发到工具栏已有的方法——跟工具栏
+    // 撤销按钮点的是同一行代码（tb.run('undo')/tb.run('redo') → .uno:Undo/
+    // Redo），不是另起一套。
+    menuUndo() {
+      const tb = this.$refs.toolbar
+      return tb ? tb.run('undo') : null
+    },
+    menuRedo() {
+      const tb = this.$refs.toolbar
+      return tb ? tb.run('redo') : null
+    },
     /**
      * 插入批注。批注表单长在工具栏「插入」下拉里，所以要先把下拉打开再进表单，
      * 否则 startComment() 只是改了个不可见的状态 = 点了没反应。
@@ -769,6 +781,17 @@ export default {
       this._pdfExporting = true
       const base = String((this.file && this.file.name) || 'document').replace(/\.[^.]+$/, '') || 'document'
       const name = base + '.pdf'
+      // BUG-34：存盘对话框默认开在这份文档所在的目录，不是系统「上次用过的目录」。
+      // 报的是**源文件绝对路径**，目录由主进程用平台 path.dirname 取（渲染层按 `/`
+      // 截目录在 Windows 反斜杠路径上会截坏），一次性消费，见
+      // desktop/main/export-download.js。浏览器态没有这座桥，跳过。
+      if (host.fs && host.fs.setNextExportSource && this.file && this.file.id) {
+        try {
+          const r = await getFileLocalPath(this.file.id)
+          const abs = r && r.data && r.data.path
+          if (abs) await host.fs.setNextExportSource(String(abs))
+        } catch (e) { /* 拿不到就让它退回系统默认目录，不阻塞导出 */ }
+      }
       try { uni.showLoading({ title: this.$t('editor.pdfExporting'), mask: false }) } catch (e) { /* ignore */ }
       let res = null, reason = ''
       try { res = await this.executor.executeCommand('export_pdf', {}) }
@@ -792,9 +815,26 @@ export default {
       const link = document.createElement('a')
       link.href = url
       link.download = name
+      // BUG-34：桌面端 click() 之后弹的是「另存为」，此刻说「已导出」太早——1.5 秒的
+      // 提示在用户选目录时就没了，取消了也照样说成功。先订阅下载完成回报再 click，
+      // 真存完才提示；浏览器态没有回报（null），照旧立刻提示。
+      const done = watchDownloadDone(host.fs, name)
       document.body.appendChild(link); link.click(); link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 60000)
-      uni.showToast({ title: this.$t('editor.pdfExported', { name }), icon: 'none' })
+      if (!done) {
+        uni.showToast({ title: this.$t('editor.pdfExported', { name }), icon: 'none' })
+        return true
+      }
+      done.then((r) => {
+        if (!r) return
+        if (r.state === 'completed') {
+          uni.showToast({ title: this.$t('editor.pdfExported', { name: displayName(r.savePath, name) }), icon: 'none', duration: 3000 })
+        } else if (r.state === 'interrupted') {
+          this.appendLog('PDF 存盘中断 / download interrupted: ' + name)
+          uni.showToast({ title: this.$t('editor.pdfExportFailed', { reason: r.state }), icon: 'none' })
+        }
+        // cancelled：用户自己关了对话框，什么都不说
+      })
       return true
     },
     async onCommentRequest(msg = {}) {

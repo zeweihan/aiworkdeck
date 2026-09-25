@@ -378,6 +378,13 @@ export default {
       'List': '列表',
       'Caption': '题注',
       'First line indent': '首行缩进',
+      // BUG-36：这三个引擎内置样式名（program name，跨语言固定）原来没有
+      // 走本地化表，退到 office_thread.js 的 DisplayName——那份显示名在同一
+      // 会话内新建样式定义时可能沿用还没绑定完 UI locale 的取值，重开文档才对，
+      // 表现就是英文「Table Contents」。补进表后不再依赖引擎那次绑定时机。
+      'Table Contents': '表格内容',
+      'Table Heading': '表格标题',
+      'Contents Heading': '目录标题',
     },
     colors: {
       auto: '自动', red: '红', ink: '墨绿', blue: '蓝', brown: '棕',

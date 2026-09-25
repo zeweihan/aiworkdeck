@@ -4,9 +4,10 @@
 // electron-builder 的 afterPack 钩子（安装包瘦身 dev-board#528）。
 //
 // ── 为什么需要它 ──
-// package.json 的 `electronLanguages: ["en-US", "zh-CN"]` 在 mac 上**只裁**
+// package.json 的 `electronLanguages` 在 mac 上**只裁**
 // `Contents/Resources/*.lproj`——那批目录里除了 InfoPlist.strings 什么都没有，
-// 删掉几乎不省体积。真正的语言包在
+// 删掉几乎不省体积（但它们决定 macOS 给应用定的语言，mac 段必须按目录名写
+// ["en", "zh_CN"]，见 tests/mac-lproj-locale.test.js，v0.49.0 BUG-28）。真正的语言包在
 // `Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/*.lproj`
 // 里（每个 lproj 一份 locale.pak），Electron 30.5.1 上是 55 个、合计约 37 MB，
 // electron-builder 的 electronLanguages 完全不碰它。

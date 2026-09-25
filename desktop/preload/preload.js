@@ -198,6 +198,16 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     // 「发送…」：macOS 唤起系统分享面板（微信/邮件/隔空投送），Windows 退化为剪贴板粘贴
     // （dev-board#382）。返回 { ok, mode: 'share-sheet' | 'clipboard', reason? }。
     shareFile: (path) => ipcRenderer.invoke('fs:shareFile', { path }),
+    // BUG-34：导出 PDF 前报一次源文件的绝对路径，存盘对话框默认展开到它所在的目录
+    // （而不是系统「上次用过的目录」）。一次性消费，见 main/export-download.js。
+    setNextExportSource: (filePath) => ipcRenderer.invoke('fs:setNextExportSource', { filePath }),
+    // BUG-34：下载项结束（completed / cancelled / interrupted）的回报，导出成功提示等它。
+    // 载荷 { filename, savePath, state }；返回退订函数。
+    onDownloadDone: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:download-done', listener)
+      return () => ipcRenderer.removeListener('checkba:download-done', listener)
+    },
     // 拖放的 File 对象 → 绝对路径（Electron 32 起 File.path 移除，webUtils 是正途）
     getPathForFile: (file) => {
       try {

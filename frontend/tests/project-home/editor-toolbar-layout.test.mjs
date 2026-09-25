@@ -135,3 +135,41 @@ test('主命令区与右侧常驻区在同一行里居中对齐', () => {
   assert.ok(h && /calc\(100% - 8px\)/.test(h[1]),
     '.etb-scroll 的高度要跟着 .etb 那一行走（calc(100% - 8px)），实际 ' + (h && h[1]))
 })
+
+// ---------- v0.49.0 BUG-13：横滚无溢出提示 ----------
+
+test('BUG-13：主命令区还能滚时露出两端渐隐遮罩，遮罩本身不挡点击', () => {
+  assert.match(TEMPLATE, /v-if="canScrollLeft"[^>]*class="[^"]*etb-fade/,
+    '模板里没有由 canScrollLeft 控制显隐的渐隐遮罩')
+  assert.match(TEMPLATE, /v-if="canScrollRight"[^>]*class="[^"]*etb-fade/,
+    '模板里没有由 canScrollRight 控制显隐的渐隐遮罩')
+  assert.ok(declares('etb-fade', 'pointer-events', 'none'),
+    '.etb-fade 没有 pointer-events:none，渐隐遮罩会挡住底下按钮的点击')
+})
+
+test('BUG-13：canScrollLeft/canScrollRight 走 watchScrollEdges（量真正滚动的内层 div）', () => {
+  assert.match(SRC, /canScrollLeft\s*:\s*false/, 'data() 里缺 canScrollLeft 初值')
+  assert.match(SRC, /canScrollRight\s*:\s*false/, 'data() 里缺 canScrollRight 初值')
+  // 行为（内层滚动驱动两端状态）由 editor-toolbar-overflow.test.mjs 真挂载验证，这里只守接线
+  assert.match(SRC, /watchScrollEdges\(el,/, 'bindToolbarWheel 没有经 watchScrollEdges 订阅两端余量')
+})
+
+// ---------- v0.49.0 BUG-15：手写下拉 Esc/点外部关不掉 ----------
+
+test('BUG-15：Esc、点工具栏外部、画布抢走窗口焦点都要收掉手写下拉', () => {
+  assert.match(SRC, /onDocKeydown\(e\)\s*\{\s*if\s*\(e\.key\s*===\s*'Escape'/,
+    '缺少 Esc 关闭手写下拉的处理')
+  assert.match(SRC, /onDocMouseDown\(e\)\s*\{[\s\S]{0,200}?root\.contains\(e\.target\)/,
+    '缺少「点到工具栏 DOM 树之外就关」的处理，且必须用 root.contains 而不是猜测选择器')
+  assert.match(SRC, /addEventListener\('blur',\s*this\.closeMenus\)/,
+    '缺少 window blur（文档画布 webview 抢走焦点）时关闭下拉的处理')
+  assert.match(SRC, /mounted\(\)[\s\S]{0,900}?addEventListener\('mousedown',\s*this\.onDocMouseDown,\s*true\)/,
+    'mounted 里没有挂 document 级 mousedown 收口')
+  assert.match(SRC, /beforeUnmount\(\)[\s\S]{0,600}?removeEventListener\('mousedown',\s*this\.onDocMouseDown,\s*true\)/,
+    'beforeUnmount 里没有摘掉 document 级 mousedown 收口，会造成组件销毁后的监听泄漏')
+})
+
+test('BUG-15：工具栏横滚时也要收掉手写下拉（只在 scrollLeft 真变了时）', () => {
+  assert.match(SRC, /onScrolled:\s*\(\)\s*=>\s*\{\s*if\s*\(this\.menu\)\s*this\.closeMenus\(\)/,
+    'watchScrollEdges 的 onScrolled 没有收起仍打开的手写下拉')
+})

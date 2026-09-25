@@ -375,6 +375,11 @@ export default {
       'List': 'List',
       'Caption': 'Caption',
       'First line indent': 'First Line Indent',
+      // BUG-36：中文版同样的补丁——同步补上，避免只有 zh-CN 有兜底表（见
+      // zh-CN/editor.js 的注释）。
+      'Table Contents': 'Table Contents',
+      'Table Heading': 'Table Heading',
+      'Contents Heading': 'Contents Heading',
     },
     colors: {
       auto: 'Automatic', red: 'Red', ink: 'Ink green', blue: 'Blue', brown: 'Brown',

@@ -40,6 +40,19 @@ app.on('second-instance', () => {
   }
 })
 
+// BUG-28：Chromium 内置 PDF 查看器的「更多」菜单（Two page view / Annotations /
+// Document properties）字符串来自 Chromium 自己那份 .pak 本地化资源，只认启动期
+// 的 --lang 开关，运行期用 IPC 通知改不动它，必须在 app ready 之前设好。
+// **只在落盘文件里有明确语言时才追加**：新装机没有 app-language.json，这时
+// 不能调 getAppLanguage()——ready 之前 app.getLocale() 返回空串，它会猜成 en-US
+// 并写进缓存，中文系统首次启动整个界面变英文（J1 复核抓到的阻断级回归）。
+// 没有落盘语言就什么都不追加，Chromium 按系统语言选 .pak，与系统一致即可；
+// 渲染层启动后同步过来的语言下次启动生效。
+{
+  const startupLang = require('./app-language').getPersistedAppLanguage()
+  if (startupLang) app.commandLine.appendSwitch('lang', startupLang)
+}
+
 const DEV_SERVER_URL = process.env.CHECKBA_DEV_SERVER_URL || 'http://localhost:5173'
 const IS_DEV = process.env.AIWORKDECK_DESKTOP_DEV === '1'
 
@@ -311,6 +324,11 @@ function attachAvatarCorpRelaxation(ses) {
 // 默认走的是共享的 session.defaultSession，不去重的话每 reopen 一次就多挂一个
 // will-download 监听器，永久累积、从不释放，重开够多次会打出
 // MaxListenersExceededWarning，且以后每次下载都会把已经死掉的旧回调重复触发一遍。
+// BUG-34：导出 PDF 的存盘对话框默认开在这份文档所在的目录——渲染层
+// （LibreOfficeEditor.vue 的 exportPdf）导出前经 fs:setNextExportSource 报一次源文件
+// 绝对路径，will-download 一次性消费掉，不影响其它下载（见 main/export-download.js）。
+let nextExportSource = null
+
 function attachDownloadListener(session) {
   if (!session || session.__checkbaDownloadBound) return
   session.__checkbaDownloadBound = true
@@ -323,16 +341,31 @@ function attachDownloadListener(session) {
       documentsDir: (() => { try { return app.getPath('documents') } catch (e) { return '' } })(),
       language: lang.getAppLanguage()
     })
+    // 一次性消费：读出来立刻清空，否则下一次跟导出无关的下载会被上一次的目录带偏。
+    const sourceFilePath = nextExportSource
+    nextExportSource = null
+    const exportDownload = require('./export-download')
     // Set options for the save dialog
     item.setSaveDialogOptions({
       title: lang.t({ zh: '保存文件', en: 'Save File' }),
-      defaultPath: recoveryPath || item.getFilename() // Use the default filename suggestion
+      // 复敏映射固定目录 > 导出源文件所在目录 > 裸文件名（系统默认目录）
+      defaultPath: exportDownload.exportDefaultPath({ filename: item.getFilename(), recoveryPath, sourceFilePath })
     })
+    // 存盘真正完成（或取消/失败）时告诉渲染层——导出成功提示要等这一刻，不能在
+    // 对话框刚弹出时就说「已导出」。
+    exportDownload.reportDownloadDone(item, webContents)
     // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog
     // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
     // To strictly FORCE it, we would need to check existing configuration, but usually this is enough.
   })
 }
+
+// BUG-34：渲染层导出 PDF 前报一次源文件的绝对路径（fs:setNextExportSource）。目录由
+// 主进程用平台的 path.dirname 取（Windows 反斜杠路径在渲染层截不对）。不是字符串一律
+// 当没收到，不能把 undefined/对象拼进 path 崩主进程。
+ipcMain.handle('fs:setNextExportSource', (_evt, { filePath } = {}) => {
+  nextExportSource = (typeof filePath === 'string' && filePath) ? filePath : null
+})
 
 // 原生外观：把渲染层的主题 mode 写进 nativeTheme。
 // 'system' 必须原样传下去而不是自己解析成 light/dark——themeSource 一旦被设成

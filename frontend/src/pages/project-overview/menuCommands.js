@@ -111,6 +111,22 @@ export const menuCommandsMethods = {
     this.menuBarRefreshKey++
   },
 
+  /**
+   * onHide 时交出菜单——**只在本页真被别的页面盖住时**（v0.49.0 BUG-52）。
+   *
+   * uni-h5 把 document visibilitychange 也映射成当前页的 onHide/onShow
+   * （uni-h5.es.js 的 onVisibilityChange → onAppEnterBackground → invokeHook(page, ON_HIDE)）。
+   * Electron 在窗口最小化、被别的窗口整块盖住、锁屏时都会把 visibilityState 置 hidden，
+   * 于是 onHide → setMenuPage('') → 工作台条目全部置灰：窗口最小化后从菜单栏点
+   * 「文件 > 关闭标签」是灰的；测试员那一幕（长时间锁屏后 draw.io 标签开着、截图拿的
+   * 还是锁屏前的旧帧）正是这个状态。这种「后台」本页仍是当前页，不该交出菜单；
+   * 回到前台时 onShow 的 registerMenuCommands 见到仍在注册就什么都不做。
+   */
+  releaseMenuOnHide() {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    this.unregisterMenuCommands()
+  },
+
   // ---- 命令执行 ---------------------------------------------------------
 
   menuToast(title) {
@@ -171,6 +187,16 @@ export const menuCommandsMethods = {
       case 'toggleRecording': this.toggleRecording(); break
 
       // —— 文档（都要活跃 Writer 实例）
+      // BUG-30：菜单栏「编辑 > 撤销/重做」只在文档标签激活时才会转发到这里
+      // （见 appMenuBridge.js 的 edit.undo/edit.redo），薄转发到工具栏的
+      // run('undo'/'redo')——跟工具栏撤销按钮走同一条 .uno: 命令通道，不是
+      // Electron 的浏览器原生编辑历史。
+      case 'undo': { const ed = this.requireEditor(); if (ed) ed.menuUndo(); break }
+      case 'redo': { const ed = this.requireEditor(); if (ed) ed.menuRedo(); break }
+      // BUG-34：应用自己的「文件」菜单补上「导出为 PDF…」，薄转发到已经接通
+      // 的 exportPdf()——跟工具栏 PDF 图标同一条代码路径，成功/失败提示与
+      // 存盘默认目录的处理都在那一处，这里不重复。
+      case 'exportPdf': { const ed = this.requireEditor(); if (ed) await ed.exportPdf(); break }
       case 'find': { const ed = this.requireEditor(); if (ed) ed.menuOpenFind(); break }
       case 'toggleTrackChanges': { const ed = this.requireEditor(); if (ed) await ed.menuToggleTrackChanges(); break }
       case 'toggleReviewPanel': { const ed = this.requireEditor(); if (ed) ed.menuToggleReviewPanel(); break }

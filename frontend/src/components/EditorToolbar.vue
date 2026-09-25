@@ -12,6 +12,7 @@
          currentTarget 不是 DOM、连 delta 都没有，整条是死的（dev-board#543 复发的
          正是这一步）——改在 mounted 里用原生 addEventListener 挂，见
          utils/horizontalWheel.js 与本组件的 bindToolbarWheel。 -->
+    <view class="etb-scroll-wrap">
     <scroll-view class="etb-scroll awd-hairline-scroll" scroll-x>
       <view class="etb-row">
         <!-- 撤销 / 重做 -->
@@ -213,6 +214,13 @@
         </template>
       </view>
     </scroll-view>
+    <!-- 两端渐隐提示：主命令区还能往左/右滚时露出，遮罩不接收点击（
+         BUG-13：1400 宽下对齐/列表/缩进/插入/¶/表格组全被滚出视口却没有任何提示）。
+         有没有滚动余量由 bindToolbarWheel 里挂的原生 scroll/resize 监听实时量，
+         不能反过来靠这两块遮罩自己猜。 -->
+    <view v-if="canScrollLeft" class="etb-fade etb-fade-l"></view>
+    <view v-if="canScrollRight" class="etb-fade etb-fade-r"></view>
+    </view>
 
     <!-- 右侧常驻区：不参与滚动 -->
     <view class="etb-right">
@@ -314,6 +322,7 @@
 // 没有轮询：以上三路已经覆盖了用户能让光标动起来的所有途径。
 
 import { bindHorizontalWheel } from '@/utils/horizontalWheel.js'
+import { watchScrollEdges } from '@/utils/scrollEdges.js'
 
 const ICONS = {
   undo: ['M9 14 4 9l5-5', 'M4 9h10a6 6 0 0 1 0 12h-3'],
@@ -400,6 +409,9 @@ export default {
   data() {
     return {
       state: EMPTY(), styleList: [], fontList: [], menu: '', popPos: null, formattingMarks: false,
+      // BUG-13：主命令区还能不能往左/右滚，驱动两端渐隐遮罩；由 bindToolbarWheel
+      // 里的原生 scroll/resize 监听实时更新，不是一次性算好就不变。
+      canScrollLeft: false, canScrollRight: false,
       // 插入菜单：'' | 'table' | 'link' | 'comment'
       insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', formText: '', selText: '',
       // 查找替换
@@ -487,10 +499,27 @@ export default {
     // 滚轮横滚只能在真实 DOM 上挂（见 methods.bindToolbarWheel）。工具栏自己不会
     // 重建 .etb-scroll，挂一次即可；组件被父级 v-if 掉时走 beforeUnmount 摘掉。
     this.$nextTick(() => this.bindToolbarWheel())
+    // BUG-15：手写下拉（menu）原来只靠 .etb 根节点的 @tap 收口，点文档画布
+    // （webview，不在这棵 DOM 树里）或右栏 AI 面板都够不到；补一层 document 级
+    // 收口——mousedown 走到工具栏外面就关，Esc 也关，画布拿到焦点（webview
+    // 抢走 window focus）时同样关，一套处理盖住五个 fixed 弹层（style/font/
+    // color/hl/insert/revview 共用同一个 menu 状态）。
+    // Esc 只在焦点还在宿主页时由 onDocKeydown 接住；焦点在画布里（webview 客体 /
+    // 浏览器态 iframe）时按键进的是客体自己的 document，宿主一个 keydown 都收不到，
+    // 客体里的 Esc 另有用途（关引擎原生弹窗，见 doc-editor.md 覆盖层那条），不能去抢。
+    // 这个组合靠 blur 那条盖住：焦点要进画布只能先点画布，那一下宿主 window 就 blur，
+    // 下拉已经收掉了——「下拉开着、焦点却在画布里」不是一个到得了的状态。
+    document.addEventListener('mousedown', this.onDocMouseDown, true)
+    document.addEventListener('keydown', this.onDocKeydown, true)
+    window.addEventListener('blur', this.closeMenus)
   },
 
   beforeUnmount() {
     if (this._toolbarWheelOff) { this._toolbarWheelOff(); this._toolbarWheelOff = null }
+    if (this._toolbarEdgesOff) { this._toolbarEdgesOff(); this._toolbarEdgesOff = null }
+    document.removeEventListener('mousedown', this.onDocMouseDown, true)
+    document.removeEventListener('keydown', this.onDocKeydown, true)
+    window.removeEventListener('blur', this.closeMenus)
   },
 
   methods: {
@@ -548,6 +577,18 @@ export default {
       return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
     },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
+    // BUG-15：点在工具栏 DOM 树之外（文档画布是独立的 webview，够不到；右栏
+    // AI 面板是同页面的另一棵子树）都要关掉手写下拉。捕获阶段挂，免得目标元素
+    // 自己的 @tap.stop 先把冒泡吃掉。
+    onDocMouseDown(e) {
+      if (!this.menu) return
+      const root = this.$el
+      if (root && typeof root.contains === 'function' && root.contains(e.target)) return
+      this.closeMenus()
+    },
+    onDocKeydown(e) {
+      if (e.key === 'Escape' && this.menu) this.closeMenus()
+    },
     // 纵向滚轮映射成横向滚动，否则窄窗口下右半截命令只能靠拖那条 4px 细滑轨
     // （dev-board#502 / #543，与标签栏 rebindTabsWheel 同一实现）。必须用原生
     // addEventListener 挂在 uni 渲染出的真实元素上——模板上的 @wheel 收到的是
@@ -555,7 +596,19 @@ export default {
     bindToolbarWheel() {
       const root = this.$el
       const el = root && typeof root.querySelector === 'function' ? root.querySelector('.etb-scroll') : null
-      if (el) this._toolbarWheelOff = bindHorizontalWheel(el)
+      if (!el) return
+      this._toolbarWheelOff = bindHorizontalWheel(el)
+      // BUG-13：两端渐隐遮罩跟着**真正滚动的内层 div** 量（uni-h5 的 scroll-view 是
+      // uni-scroll-view > div > div(overflow-x:auto) > .uni-scroll-view-content，scroll
+      // 事件只在倒数第二层派发、也不冒泡——挂在 el 上是死代码，见 utils/scrollEdges.js）。
+      // 横滚、窗口尺寸变化、按钮组进出（表格组随光标出现）都会重新量。
+      // BUG-15：popStyle 是打开那一刻的 getBoundingClientRect 快照，工具栏一滚触发器就
+      // 跟弹层脱开——只在 scrollLeft 真变了时收掉下拉（内容宽度变化不算，否则「插入」
+      // 下拉打开时顺手刷新状态、表格组一进出，下拉就被自己关掉）。
+      this._toolbarEdgesOff = watchScrollEdges(el, {
+        onEdges: ({ left, right }) => { this.canScrollLeft = left; this.canScrollRight = right },
+        onScrolled: () => { if (this.menu) this.closeMenus() },
+      })
     },
 
     // ---- 插入菜单 ----
@@ -821,8 +874,20 @@ export default {
    dev-board#543 走查实测）。
    这里刻意不设 z-index：会造出层叠上下文，把工具栏下拉那些 fixed 弹层框住（同
    .etb-wrap 那条）。 */
-.etb-scroll { flex: 1; min-width: 0; white-space: nowrap; height: calc(100% - 8px); margin-bottom: -4px; }
+/* BUG-13：包一层 wrap 才能把两端渐隐遮罩绝对定位对齐到横滚容器的可见区域
+   （横滚容器自己就在滚，直接在它里面塞 fixed/absolute 兄弟节点对不上它的滚动
+   窗口边界）。这里的 height:100% 不能写成 auto：外层那一行是 align-items:center，
+   不会把 flex 子项拉满高度，必须显式取那一行（定高 38px）的高度，横滚容器自己
+   那句 calc(100% - 8px) 才有一个「百分之百」可以算。 */
+.etb-scroll-wrap { flex: 1; min-width: 0; height: 100%; position: relative; }
+.etb-scroll { white-space: nowrap; height: calc(100% - 8px); margin-bottom: -4px; }
 .etb-row { display: flex; align-items: center; gap: 2px; }
+/* 两端渐隐：宽度 16px，指向内侧（真实内容那一边）淡出，pointer-events:none 不
+   挡点击。z 高于 .etb-menu/.etb-palette 的 40，避免自己的渐隐把弹层的边角盖花，
+   但依然低于 popStyle 用的 fixed 弹层（900）——两者本来就不在同一层叠上下文里。 */
+.etb-fade { position: absolute; top: 0; bottom: 4px; width: 16px; pointer-events: none; z-index: 41; }
+.etb-fade-l { left: 0; background: linear-gradient(to right, var(--awd-bg), rgba(0,0,0,0)); }
+.etb-fade-r { right: 0; background: linear-gradient(to left, var(--awd-bg), rgba(0,0,0,0)); }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
   border-left: 1px solid var(--awd-border); }
 .etb-group-t { flex-shrink: 0; padding: 0 4px; font-size: 11px; color: var(--awd-text-3); }

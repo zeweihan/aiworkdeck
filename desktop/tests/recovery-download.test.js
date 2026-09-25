@@ -80,7 +80,9 @@ test('will-download 真的用上了这个默认路径', () => {
   const handler = CODE.match(/session\.on\('will-download'[\s\S]*?\n {2}\}\)/)
   assert.ok(handler, "截不到 will-download 监听器")
   assert.match(handler[0], /recovery-download/, '没接上就仍然开在上次用过的目录')
-  assert.match(handler[0], /defaultPath: recoveryPath \|\| item\.getFilename\(\)/,
-    '复敏文件走固定目录，其它下载保持原行为')
+  // BUG-34：默认路径改由 export-download.js 的 exportDefaultPath 统一算（复敏固定目录
+  // 优先级最高，见 pdf-export-download-dir.test.js 的优先级用例）。
+  assert.match(handler[0], /exportDefaultPath\(\{ filename: item\.getFilename\(\), recoveryPath, sourceFilePath \}\)/,
+    '复敏文件走固定目录，其它下载看导出源目录，都没有才退回原行为')
   assert.match(handler[0], /app\.getPath\('documents'\)/)
 })

@@ -194,5 +194,9 @@ export function buildMenuPayload(state, appLang) {
       items: withSeparators(entries),
     })
   }
-  return { menus }
+  // BUG-30：主进程的「编辑 > 撤销/重做」要知道当前是不是在文档标签上——LOWA
+  // 引擎是画布渲染，Electron 的 role:'undo' 只认浏览器原生编辑历史，对它没用，
+  // 文档标签激活时得转发给渲染层走跟工具栏撤销同一条命令通道（见 app-menu.js）。
+  // 只给这一个布尔，不是整份 flags：菜单树以外的运行时细节不该越过这条边界。
+  return { menus, flags: { isDocTab: !!(s.flags && s.flags.isDocTab) } }
 }

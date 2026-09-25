@@ -76,6 +76,49 @@ function pushedLabel(menuId, fallback) {
   return (m && m.label) || fallback
 }
 
+/**
+ * BUG-30：当前是不是在一个文档标签上（渲染层的 `flags.isDocTab`，见
+ * frontend/src/config/commands/index.js 的 buildMenuPayload）。LOWA 引擎是画布
+ * 渲染，Electron 的 `role: 'undo'/'redo'` 只认浏览器原生编辑历史（textarea/
+ * contentEditable），对它完全无效——菜单栏「编辑 > 撤销」在文档里因此没反应。
+ */
+function isDocTabActive() {
+  return !!(pushed && pushed.flags && pushed.flags.isDocTab)
+}
+
+/**
+ * 撤销/重做该落到哪儿。文档标签激活时菜单项不再用 role，但也**不能一律转成文档撤销**
+ * （J1 复核：焦点在 AI 输入框/查找替换/批注/重命名时 ⌘Z 也会去撤销文档）：
+ *  - 焦点在主窗口之外的 webContents（浏览器面板的 BrowserView 等）→ 原样对它做原生
+ *    undo/redo，与 role 的行为一致；
+ *  - 焦点在主窗口自己或它的 <webview> 客体里 → 交给渲染层，由它看 document.activeElement
+ *    决定：输入框/可编辑元素走原生 execCommand，编辑器画布才发 .uno:Undo
+ *    （frontend/src/utils/undoRouting.js）。
+ */
+function routeUndoRedo(kind) {
+  const win = getWindow()
+  if (!win || win.isDestroyed()) return
+  const main = win.webContents
+  let focused = null
+  try { focused = require('electron').webContents.getFocusedWebContents() } catch (e) { focused = null }
+  const ownedByRenderer = !focused || focused === main || focused.hostWebContents === main
+  if (!ownedByRenderer) {
+    try { if (typeof focused[kind] === 'function') focused[kind]() } catch (e) { /* 失焦/已销毁：什么都不做 */ }
+    return
+  }
+  send('edit.' + kind)
+}
+
+/** 撤销/重做菜单项：文档标签激活时按焦点分流（见 routeUndoRedo），否则原样保留 Electron role。 */
+function undoRedoMenuItem(kind) {
+  const label = kind === 'undo' ? t({ zh: '撤销', en: 'Undo' }) : t({ zh: '重做', en: 'Redo' })
+  if (isDocTabActive()) {
+    const accelerator = kind === 'undo' ? 'CmdOrCtrl+Z' : 'Shift+CmdOrCtrl+Z'
+    return { label, accelerator, click: () => routeUndoRedo(kind) }
+  }
+  return { role: kind, label }
+}
+
 /** 有内容才成为一个顶级菜单——渲染层没就绪时不该出现一堆空菜单。 */
 function optionalMenu(menuId, fallbackLabel) {
   const items = pushedItems(menuId)
@@ -160,8 +203,8 @@ function buildTemplate() {
   template.push({
     label: pushedLabel('edit', t({ zh: '编辑', en: 'Edit' })),
     submenu: [
-      { role: 'undo', label: t({ zh: '撤销', en: 'Undo' }) },
-      { role: 'redo', label: t({ zh: '重做', en: 'Redo' }) },
+      undoRedoMenuItem('undo'),
+      undoRedoMenuItem('redo'),
       { type: 'separator' },
       { role: 'cut', label: t({ zh: '剪切', en: 'Cut' }) },
       { role: 'copy', label: t({ zh: '复制', en: 'Copy' }) },
