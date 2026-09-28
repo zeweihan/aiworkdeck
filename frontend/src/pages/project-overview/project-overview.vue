@@ -6552,8 +6552,8 @@ export default {
         uni.showToast({ title: this.$t('workbench.dragUnsupported'), icon: 'none' })
     },
     /** 把一份项目文件挂进 AI 上下文（文件树、暂存区、编辑器标签三种来源共用） */
-    addDraggedFileToAiContext(file) {
-        if (!file || !file.id) return
+    addDraggedFileToAiContext(file, opts = {}) {
+        if (!file || !file.id) return false
 
         // 文件夹整体挂进来时的后代文件数上限：判据在 utils/aiContextFiles.js，
         // 与 ChatInterface 那三个入口（@ 引用 / 从项目选择 / 右键）同一份
@@ -6561,7 +6561,7 @@ export default {
             const totalFiles = countDescendantFiles(this.$refs.fileTree.allFiles, file.id)
             if (totalFiles > AI_CONTEXT_FOLDER_FILE_LIMIT) {
                 uni.showToast({ title: this.$t('workbench.folderTooManyFiles', { count: totalFiles }), icon: 'none' })
-                return
+                return false
             }
         }
 
@@ -6570,24 +6570,35 @@ export default {
         }
 
         // Note: Visual tag display is now handled within ChatInterface
-        uni.showToast({ title: this.$t('workbench.fileAdded', { name: file.name }), icon: 'none' })
+        if (!opts.silent) uni.showToast({ title: this.$t('workbench.fileAdded', { name: file.name }), icon: 'none' })
+        return true
     },
     /**
      * 文件树右键「加入 AI 对话」（dev-board#794 K15 ②）。
      * 与拖拽不同的是 AI 面板此刻可能根本没开：先 resolveChatInterface 把面板拉出来
      * 并切回对话页签，否则 $refs.chatInterface 不在，点了没有任何反应。
      */
+    // 多选右键时 item 是数组（v0.49.0 BUG-73）：逐个挂进上下文，只弹一条「已加入 N 个文件」
     async onAddFileToAiContext(item) {
-        if (!item || !item.id) return
+        const list = (Array.isArray(item) ? item : [item]).filter(it => it && it.id)
+        if (!list.length) return
         const chat = await this.resolveChatInterface()
         if (!chat) return
-        this.addDraggedFileToAiContext({
-            id: item.id,
-            name: item.name,
-            fileType: item.fileType,
-            wpsFileId: item.wpsFileId,
-            isDir: !!(item.isFolder || item.isDir),
+        const multi = Array.isArray(item) && list.length > 1
+        let count = 0
+        list.forEach(it => {
+            const ok = this.addDraggedFileToAiContext({
+                id: it.id,
+                name: it.name,
+                fileType: it.fileType,
+                wpsFileId: it.wpsFileId,
+                isDir: !!(it.isFolder || it.isDir),
+            }, { silent: multi })
+            if (ok) count++
         })
+        if (multi && count > 0) {
+            uni.showToast({ title: this.$t('workbench.filesAdded', { count }), icon: 'none' })
+        }
     },
     /** 已打开的标签（两侧窗格）按 id 查一条；id 统一按字符串比较 */
     findOpenTab(fileId) {

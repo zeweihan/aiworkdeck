@@ -37,6 +37,7 @@
            <view class="form-group">
               <text class="form-label">{{ $t('fileTree.addTag') }}</text>
               <TagSelector
+                ref="tagSelector"
                 :available-tags="projectTags"
                 :existing-tag-ids="(targetFileForTags && targetFileForTags.tags) ? targetFileForTags.tags.map(t => t.id) : []"
                 :project-id="projectId"
@@ -149,7 +150,12 @@
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
         @tap.stop
       >
-        <view v-if="canCompareDocuments()" class="context-menu-item" @tap="startDocumentCompare">
+        <!-- 多选（批量选择态的勾选 / ⌘ 加选）时：标题行点明作用范围，只留能批量作用的项
+             （v0.49.0 BUG-73）；单文件项一律带 !isContextMulti() -->
+        <view v-if="isContextMulti()" class="context-menu-header">
+          <text class="context-menu-header-text">{{ $t('fileTree.selectedCount', { count: contextMenu.selectionIds.length }) }}</text>
+        </view>
+        <view v-if="isContextMulti() && canCompareDocuments()" class="context-menu-item" @tap="startDocumentCompare">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 19V5M15 19V5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -158,7 +164,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.compareDocuments') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="handleDownload(contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti() && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="handleDownload(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -168,7 +174,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.download') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && transcribeEnabled && isAudioFile(contextMenu.targetItem)" class="context-menu-item" @tap="$emit('transcribe-audio', contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti() && transcribeEnabled && isAudioFile(contextMenu.targetItem)" class="context-menu-item" @tap="$emit('transcribe-audio', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-linecap="round" stroke-linejoin="round"/>
@@ -180,7 +186,7 @@
         </view>
         <!-- 加入 AI 对话（dev-board#794 K15 ②）：与拖到 AI 面板同一条路，
              文件夹同样受 10 个文件的上限约束（宿主 addDraggedFileToAiContext 判） -->
-        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="$emit('add-to-ai', contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleContextAddToAi">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" stroke-linecap="round" stroke-linejoin="round"/>
@@ -188,7 +194,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.addToAiChat') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleRename(contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti()" class="context-menu-item" @tap="handleRename(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -197,7 +203,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.rename') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="openTagEditDialog(contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti() && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="openTagEditDialog(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" stroke-linecap="round" stroke-linejoin="round"/>
@@ -208,7 +214,7 @@
         </view>
         <!-- 事项（dev-board#900）：「添加事项…」交给宿主开工作台唯一的 TaskDialog（预置关联这份文件）；
              这份文件有未完成事项时多一项「查看事项 (N)」，宿主打开 rail 日程面板并按文件过滤 -->
-        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="$emit('add-task', contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti() && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="$emit('add-task', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" stroke-linecap="round" stroke-linejoin="round"/>
@@ -219,7 +225,7 @@
           </view>
           <text class="context-menu-text">{{ $t('calendar.fileAddTask') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder && openTaskCount(contextMenu.targetItem.id) > 0" class="context-menu-item" @tap="$emit('view-tasks', contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti() && !contextMenu.targetItem.isFolder && openTaskCount(contextMenu.targetItem.id) > 0" class="context-menu-item" @tap="$emit('view-tasks', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 6h11M9 12h11M9 18h11" stroke-linecap="round"/>
@@ -228,7 +234,7 @@
           </view>
           <text class="context-menu-text">{{ $t('calendar.fileViewTasks', { count: openTaskCount(contextMenu.targetItem.id) }) }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item"
+        <view v-if="contextMenu.targetItem && !isContextMulti() && !contextMenu.targetItem.isFolder" class="context-menu-item"
           @tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -237,7 +243,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.fileHistory') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && isDesktopShell" class="context-menu-item"
+        <view v-if="contextMenu.targetItem && !isContextMulti() && isDesktopShell" class="context-menu-item"
           @tap="$emit('reveal-file', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -246,7 +252,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.revealInFinder') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder && canShareFile" class="context-menu-item"
+        <view v-if="contextMenu.targetItem && !isContextMulti() && !contextMenu.targetItem.isFolder && canShareFile" class="context-menu-item"
           @tap="$emit('share-file', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -256,16 +262,16 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.sendFile') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleCopy(contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleContextDuplicate">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">{{ $t('fileTree.copy') }}</text>
+          <text class="context-menu-text">{{ $t('fileTree.duplicate') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleDelete(contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleContextDelete">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -839,7 +845,8 @@ export default {
         visible: false,
         x: 0,
         y: 0,
-        targetItem: null
+        targetItem: null,
+        selectionIds: []
       },
       // Global Drag Support
       isAnyDragging: false,
@@ -1088,10 +1095,15 @@ export default {
     this._onDragEnd = () => { this.isAnyDragging = false }
     uni.$on('file-drag-start', this._onDragStart)
     uni.$on('file-drag-end', this._onDragEnd)
+    // 「管理标签」「标签管理」两个内联弹窗的 Esc（v0.49.0 BUG-74）：它们是 awd-dialog-mask，
+    // 不走 AwdDialog，只认鼠标；捕获段挂 window，与 TaskDialog 的 attachKeys 同法。
+    this._onTagDialogKeydown = (e) => this.onTagDialogKeydown(e)
+    if (typeof window !== 'undefined') window.addEventListener('keydown', this._onTagDialogKeydown, true)
   },
   beforeUnmount() {
     uni.$off('file-drag-start', this._onDragStart)
     uni.$off('file-drag-end', this._onDragEnd)
+    if (typeof window !== 'undefined') window.removeEventListener('keydown', this._onTagDialogKeydown, true)
   },
   methods: {
     // BUG-40：Plan 模式落盘的根目录物理名是英文 "AI Assistant Files"（后端契约，
@@ -1413,20 +1425,25 @@ export default {
         this.commitRename()
       }
     },
-    async handleCopy(item) {
+    // 右键「创建副本」：在原位置建「【副本】xxx」。资源管理器没有文件粘贴，所以不写剪贴板——
+    // 以前这里叫「复制」还调 uni.setClipboardData，它自带一条「Content copied」toast，
+    // 与下面这条叠成中英两条（v0.49.0 BUG-80）。多项时按父目录分组，各建在各自原位置。
+    async handleDuplicate(items) {
        if (!this.projectId) return
+       const list = (Array.isArray(items) ? items : [items]).filter(Boolean)
+       if (!list.length) return
        try {
          const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-         // Duplicate file in same directory
-         await batchCopyFiles(projectId, [item.id], item.parentId)
-
-         // Set clipboard
-         uni.setClipboardData({
-             data: item.name,
-             success: () => {
-                 uni.showToast({ title: this.$t('fileTree.copiedAndDuplicated'), icon: 'none' })
-             }
+         const byParent = new Map()
+         list.forEach(it => {
+           const key = it.parentId == null ? null : it.parentId
+           if (!byParent.has(key)) byParent.set(key, [])
+           byParent.get(key).push(it.id)
          })
+         for (const [parentId, ids] of byParent) {
+           await batchCopyFiles(projectId, ids, parentId)
+         }
+         uni.showToast({ title: this.$t('fileTree.duplicateCreated'), icon: 'none' })
 
          await this.loadFiles()
        } catch (error) {
@@ -2033,9 +2050,18 @@ export default {
 
       // Cmd/Ctrl 多选逻辑
       // 使用 try-catch 包裹事件属性访问，避免 WPS iframe 的跨域错误
+      // uni-h5 把 <view> 上的 click 重建成普通对象、只补坐标，metaKey/ctrlKey 不在里面
+      // （@dcloudio/uni-h5 normalizeClickEvent）——回调里没有就读正在派发的原生事件
+      // window.event（同 fileOpenTabs.js 的 mouseButtonOf），否则 ⌘+点击一路走单选分支
+      // 把文件打开了（v0.49.0 BUG-73）。兜底只认 click：handleKeyDown 方向键移动也调本方法
+      // （不带 event），那时 window.event 是 keydown，按住 ⌘ 按方向键不能变成加选。
       let isMultiSelect = false
       try {
-        isMultiSelect = event && (event.metaKey || event.ctrlKey)
+        let native = (event && typeof event.metaKey === 'boolean') ? event : null
+        if (!native && typeof window !== 'undefined' && window.event && window.event.type === 'click') {
+          native = window.event
+        }
+        isMultiSelect = !!(native && (native.metaKey || native.ctrlKey))
       } catch (e) {
         // 忽略跨域访问错误（WPS iframe 可能会拦截事件）
         console.warn('检测多选键时出错:', e)
@@ -2216,8 +2242,12 @@ export default {
         event.preventDefault()
         event.stopPropagation()
 
-        // 如果右键点击的项不在多选列表中，则将其加入
-        if (!this.multiSelectedIds.includes(item.id)) {
+        // 右键落在当前多选（批量选择态的勾选 / ⌘ 加选）里的一项上：菜单作用于整组；
+        // 否则只作用于这一项（v0.49.0 BUG-73：批量选择态的勾选在 checkedMap，
+        // 以前这里只看 multiSelectedIds，右键一下就把多选重置成了单项）。
+        const current = this.currentSelectedIds()
+        const inSelection = current.length > 1 && current.some(id => String(id) === String(item.id))
+        if (!inSelection && !this.multiSelectedIds.includes(item.id)) {
           this.multiSelectedIds = [item.id]
           this.selectedFileId = item.id
         }
@@ -2226,7 +2256,8 @@ export default {
           visible: true,
           x: event.clientX || event.pageX || 0,
           y: event.clientY || event.pageY || 0,
-          targetItem: item
+          targetItem: item,
+          selectionIds: inSelection ? current.slice() : [item.id]
         }
       }
     },
@@ -2239,16 +2270,68 @@ export default {
       this.contextMenu.targetItem = null
     },
 
+    /** 当前多选：批量选择态读勾选（checkedMap），否则读 ⌘ 加选（multiSelectedIds） */
+    currentSelectedIds() {
+      return this.selectionMode ? this.checkedIds : this.multiSelectedIds
+    },
+
+    /** 右键菜单是否作用于多项（决定显示「已选 N 项」与只留批量项） */
+    isContextMulti() {
+      const ids = this.contextMenu && this.contextMenu.selectionIds
+      return Array.isArray(ids) && ids.length > 1
+    },
+
+    /** 右键菜单作用的条目：文件夹连子孙都勾上时只算文件夹本身，子孙不重复作用 */
+    contextTargetItems() {
+      const ids = (this.contextMenu && this.contextMenu.selectionIds) || []
+      const list = this.allFiles || []
+      const { roots } = collapseToTopmostSelected(ids, list)
+      return roots.map(id => list.find(f => String(f.id) === String(id))).filter(Boolean)
+    },
+
+    // 多选时整组一次交给宿主（数组），宿主逐个挂进上下文、只弹一条汇总提示；
+    // 逐个 emit 会让「已添加: X」一条条互相顶掉只剩最后一条
+    handleContextAddToAi() {
+      const items = this.contextTargetItems()
+      if (items.length > 1) this.$emit('add-to-ai', items)
+      else if (items.length === 1) this.$emit('add-to-ai', items[0])
+      this.closeContextMenu()
+    },
+
+    async handleContextDuplicate() {
+      const items = this.contextTargetItems()
+      this.closeContextMenu()
+      await this.handleDuplicate(items)
+    },
+
+    async handleContextDelete() {
+      const multi = this.isContextMulti()
+      const ids = ((this.contextMenu && this.contextMenu.selectionIds) || []).slice()
+      const item = this.contextMenu && this.contextMenu.targetItem
+      this.closeContextMenu()
+      if (!multi) {
+        if (item) await this.handleDelete(item)
+        return
+      }
+      if (!this.projectId) {
+        uni.showToast({ title: this.$t('fileTree.projectIdMissing'), icon: 'none' })
+        return
+      }
+      this.deleteBatchIds = ids
+      this.deleteMode = this.viewMode === 'recycle' ? 'hard' : 'soft'
+      this.deleteIsBatch = true
+      await this.showDeleteConfirmDialog()
+    },
+
     /**
      * 检查是否可以进行文档对比（选中恰好 2 个文档文件）
      */
     canCompareDocuments() {
-      if (this.multiSelectedIds.length !== 2) return false
+      const ids = this.currentSelectedIds()
+      if (ids.length !== 2) return false
       const docTypes = ['doc', 'docx']
-      const selectedFiles = this.multiSelectedIds.map(id =>
-        this.allFiles.find(f => f.id === id)
-      ).filter(Boolean)
-      return selectedFiles.every(f => !f.isFolder && docTypes.includes((f.fileType || '').toLowerCase()))
+      const selectedFiles = this.getSelectedDocumentFiles()
+      return selectedFiles.length === 2 && selectedFiles.every(f => !f.isFolder && docTypes.includes((f.fileType || '').toLowerCase()))
     },
 
     /**
@@ -2264,8 +2347,8 @@ export default {
      * 获取选中的两个文档文件
      */
     getSelectedDocumentFiles() {
-      return this.multiSelectedIds.map(id =>
-        this.allFiles.find(f => f.id === id)
+      return this.currentSelectedIds().map(id =>
+        this.allFiles.find(f => String(f.id) === String(id))
       ).filter(Boolean)
     },
 
@@ -2967,6 +3050,26 @@ export default {
         console.error('Failed to load project tags', e)
       }
     },
+    // Esc 关标签弹窗，逐层退：标签管理（上层）→ 新建标签子表单（等于点取消）→ 管理标签。
+    // 输入框里有字也照关（等于取消）；AwdDialog（删除标签的确认框）开着时让它先处理，
+    // 否则两个监听都在 window 捕获段，一次 Esc 会把确认框和底下的弹窗一起关掉。
+    onTagDialogKeydown(e) {
+      if (!e || e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return
+      if (!this.showTagManager && !this.showTagEditDialog) return
+      if (typeof document !== 'undefined' && document.querySelector('.awd-dlg-mask')) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (this.showTagManager) {
+        this.showTagManager = false
+        return
+      }
+      const selector = this.$refs && this.$refs.tagSelector
+      if (selector && selector.isCreatingTag) {
+        selector.cancelCreate()
+        return
+      }
+      this.showTagEditDialog = false
+    },
     openTagEditDialog(file) {
        this.targetFileForTags = file
        this.showTagEditDialog = true
@@ -3343,6 +3446,18 @@ export default {
   padding: 4px 0;
   z-index: 10000;
   border: 1px solid var(--awd-border);
+}
+
+.context-menu-header {
+  padding: 6px 12px 4px;
+  border-bottom: 1px solid var(--awd-border);
+  margin-bottom: 4px;
+}
+
+.context-menu-header-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--awd-text-2);
 }
 
 .context-menu-item {

@@ -250,6 +250,7 @@ export default {
   replaceFailed: '替换失败',
   folderTooManyFiles: '文件夹含{count}个文件(超出10个限制)，请减少数量',
   fileAdded: '已添加: {name}',
+  filesAdded: '已加入 {count} 个文件',
   // 拖进 AI 对话区（dev-board#779 K6 ⑤）：原来所有落空都弹「未获取到拖拽数据」，
   // 用户看不懂那是什么意思，也不知道下一步该干什么。
   dragUnsupported: '不支持拖入这类内容，可拖入文件、编辑器标签页或本机文件',
