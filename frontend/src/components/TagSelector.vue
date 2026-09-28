@@ -470,6 +470,7 @@ export default {
 
 .color-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 4px 2px;
 }

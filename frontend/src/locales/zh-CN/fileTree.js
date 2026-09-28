@@ -45,7 +45,7 @@ export default {
   sendFile: '发送…',
   addToAiChat: '加入 AI 对话',
   delete: '删除',
-  copy: '复制',
+  duplicate: '创建副本',
   // 回收站
   recycleBinCount: '回收站 ({count})',
   recycleBin: '回收站',
@@ -73,6 +73,8 @@ export default {
   // 文档对比
   twoDocsSelected: '已选择 2 个文档',
   compareDocsBtn: '对比文档',
+  // 右键菜单多选标题行（v0.49.0 BUG-73）
+  selectedCount: '已选 {count} 项',
   // 底部工具栏
   newWord: '新建Word',
   // 重命名弹窗
@@ -88,7 +90,7 @@ export default {
   templateCreateFailed: '从模板创建失败',
   projectIdMissingCreateFile: '项目ID未设置，无法创建文件',
   createFileFailedRetry: '文件创建失败，请重试',
-  copiedAndDuplicated: '已复制并创建副本',
+  duplicateCreated: '已创建副本',
   copyFileFailedRetry: '文件复制失败，请重试',
   copyFailed: '复制失败',
   nameEmpty: '名称不能为空',

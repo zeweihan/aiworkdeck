@@ -45,7 +45,7 @@ export default {
   sendFile: 'Send…',
   addToAiChat: 'Add to AI chat',
   delete: 'Delete',
-  copy: 'Copy',
+  duplicate: 'Duplicate',
   // Recycle bin
   recycleBinCount: 'Recycle Bin ({count})',
   recycleBin: 'Recycle Bin',
@@ -73,6 +73,8 @@ export default {
   // Document compare
   twoDocsSelected: '2 documents selected',
   compareDocsBtn: 'Compare Documents',
+  // Context-menu header when several items are selected (v0.49.0 BUG-73)
+  selectedCount: '{count} selected',
   // Bottom toolbar
   newWord: 'New Word Document',
   // Rename dialog
@@ -88,7 +90,7 @@ export default {
   templateCreateFailed: 'Failed to create from template',
   projectIdMissingCreateFile: 'Project ID not set, cannot create a file',
   createFileFailedRetry: 'Failed to create the file, please try again',
-  copiedAndDuplicated: 'Duplicate created',
+  duplicateCreated: 'Duplicate created',
   copyFileFailedRetry: 'Failed to copy the file, please try again',
   copyFailed: 'Failed to copy',
   nameEmpty: 'Name cannot be empty',
