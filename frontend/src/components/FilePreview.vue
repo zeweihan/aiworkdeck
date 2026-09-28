@@ -1551,6 +1551,8 @@ export default {
   left: 50%;
   bottom: 24rpx;
   transform: translateX(-50%);
+  /* 窄窗格（分屏 / 开着 AI 面板）下 left:50% 只剩一半可用宽度，不加这行会把「适应窗口」挤成「适」 */
+  width: max-content;
   display: flex;
   align-items: center;
   gap: 4rpx;
