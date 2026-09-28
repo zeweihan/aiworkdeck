@@ -512,6 +512,12 @@ export default {
     document.addEventListener('mousedown', this.onDocMouseDown, true)
     document.addEventListener('keydown', this.onDocKeydown, true)
     window.addEventListener('blur', this.closeMenus)
+    // v0.49.0 C9-01：popStyle 是打开那一刻的 fixed 快照。分屏开关、标签跨窗格、
+    // 左右栏/底栏开合、窗口缩放都会让工具栏换位置，而菜单加速键开分屏、程序化开
+    // 右侧文件都不经过上面的 mousedown——弹层悬在另一窗格上，点下去却改的是这份
+    // 文档（真机插进了分页符）。工作台里所有布局变化都经 triggerWorkbenchResize
+    // 派发 window resize，收口挂在这里。
+    window.addEventListener('resize', this.closeMenus)
   },
 
   beforeUnmount() {
@@ -520,6 +526,7 @@ export default {
     document.removeEventListener('mousedown', this.onDocMouseDown, true)
     document.removeEventListener('keydown', this.onDocKeydown, true)
     window.removeEventListener('blur', this.closeMenus)
+    window.removeEventListener('resize', this.closeMenus)
   },
 
   methods: {

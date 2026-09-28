@@ -403,8 +403,45 @@ export const tabDragSplitMethods = {
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
 
-    toggleSplitMode() {
-      this.splitMode = !this.splitMode
+    async toggleSplitMode() {
+      // 右侧落盘最多等 10 秒，期间双击 / 菜单加速键连发会再进来一次；重入直接放过，
+      // 否则第二次末尾的开关会把第一次刚关掉的分屏又翻回开启。
+      if (this._closingSplit) return
+      if (this.splitMode) {
+        this._closingSplit = true
+        try {
+          // 关闭分屏（v0.49.0 C9-02）：右窗格是 v-if="splitMode"，只置 false 的话右侧标签
+          // 看不见却仍开着——AI「当前文档」会指向它，资源管理器点它又会把分屏自己打开。
+          // 对齐 VS Code：右侧标签并入左窗格末尾。右侧编辑器会随之卸载，先落盘，
+          // 落不下来就不关（同 commitTabDrop 那道闸）。
+          for (const f of this.rightFiles.slice()) {
+            if (!(await this.flushTabBeforePaneMove(f.id, 'right'))) {
+              uni.showToast({ title: this.$t('editor.closeSplitSaveFailed'), icon: 'none' })
+              return
+            }
+          }
+          const sameId = (a, b) => String(a.id) === String(b.id)
+          const rightActive = this.activeFileRight
+          for (const f of this.rightFiles) {
+            // 左右双开同一份（Alt 拖拽）只留左侧那一个
+            if (!this.leftFiles.some(l => sameId(l, f))) this.leftFiles.push(f)
+          }
+          if (rightActive && (this.focusedPane === 'right' || !this.activeFileIdLeft)) {
+            this.activeFileIdLeft = this.leftFiles.find(l => sameId(l, rightActive)).id
+          }
+          this.rightFiles.splice(0)
+          this.activeFileIdRight = null
+          const mode = this.leftPaneKey || 'files'
+          this.lastActiveIdsByMode.left[mode] = this.activeFileIdLeft
+          this.lastActiveIdsByMode.right[mode] = null
+          this.saveActiveIdsByMode()
+          this.splitMode = false
+        } finally {
+          this._closingSplit = false
+        }
+      } else {
+        this.splitMode = true
+      }
 
       // 关键修复：触发 resize 事件通知 WPS SDK 调整布局
       // WPS SDK 监听 window resize 来调整内部 iframe 大小

@@ -227,3 +227,81 @@ test('焦点在画布 iframe 里时 Esc 进的是客体 document，宿主收不�
   const SFC = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
   assert.match(SFC, /window\.addEventListener\('blur', this\.closeMenus\)/)
 })
+
+// ---- v0.49.0 C9-01（BUG-70）：下拉开着时分屏 / 标签跨窗格 / 窗格重排 ----
+// popStyle 是打开那一刻的 fixed 快照。上面几条收口都靠「鼠标点在工具栏外」「横滚」
+// 「焦点进画布」，而菜单栏（⌥⌘ 加速键 / 原生 NSMenu）开分屏、程序化开分屏
+// （证据链接 / 依据实体 / 资源管理器打开右侧文件）、真实窗口缩放都不经过宿主
+// document 的 mousedown：窗格一重排，下拉就脱开按钮悬在右窗格上，点下去却对左侧
+// 文档执行命令（真机插进一个分页符）。工作台里所有布局变化都经 triggerWorkbenchResize
+// 派发 window resize（编辑器/iframe 靠它重排），所以收口挂在 window resize 上。
+function loadSplitMethods() {
+  const SRC = readFileSync(new URL('../../src/pages/project-overview/tabDragSplit.js', import.meta.url), 'utf8')
+  const body = SRC
+    .replace(/^\s*import[\s\S]*?from\s*'[^']*'\s*$/gm, '')
+    .replace(/export const tabDragSplitMethods = \{/, 'return {')
+  // eslint-disable-next-line no-new-func
+  return new Function('activityTracker', 'rightPanelMaxWidth', 'leftPanelMaxWidth', 'bindHorizontalWheelAll', 'uni', 'window', body)(
+    { trackActivePage: () => {} }, () => 0, () => 0, () => {}, { showToast: () => {} }, window)
+}
+
+// 与 project-overview.vue 的 triggerWorkbenchResize 同一个动作（下面那条断言钉住原文）
+function makeWorkbench() {
+  const vm = {
+    splitMode: false, focusedPane: 'left', leftPaneKey: 'files',
+    leftFiles: [{ id: '1', name: 'a.docx' }, { id: '2', name: 'b.xlsx' }], rightFiles: [],
+    activeFileIdLeft: '1', activeFileIdRight: null,
+    lastActiveIdsByMode: { left: {}, right: {} }, _libreRefs: {}, _plainTextRefs: {},
+    saveActiveIdsByMode() {}, useLibreEditor: () => false, isPlainTextFile: () => false,
+    triggerWorkbenchResize() { window.dispatchEvent(new dom.window.Event('resize')) },
+    $t: (k) => k, $nextTick(fn) { fn && fn() },
+    get activeFileRight() { return this.rightFiles.find(f => f.id === this.activeFileIdRight) || null },
+  }
+  const methods = loadSplitMethods()
+  for (const k of Object.keys(methods)) vm[k] = methods[k].bind(vm)
+  return vm
+}
+
+test('BUG-70 链路前提：工作台的 triggerWorkbenchResize 派发的就是 window resize', () => {
+  const SFC = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
+  const i = SFC.indexOf('triggerWorkbenchResize() {')
+  assert.ok(i > 0)
+  assert.match(SFC.slice(i, i + 400), /window\.dispatchEvent\(new Event\('resize'\)\)/)
+})
+
+test('BUG-70：下拉开着时开分屏（菜单加速键，不经 mousedown）要收起', async () => {
+  const { vm, app } = await mountToolbar()
+  const wb = makeWorkbench()
+  vm.menu = 'insert'; vm.insertMode = 'table'
+  await wb.toggleSplitMode()
+  assert.equal(wb.splitMode, true)
+  assert.equal(vm.menu, '', '分屏重排后 fixed 弹层与按钮脱开，悬在右窗格上，必须收起')
+  assert.equal(vm.insertMode, '')
+  app.unmount()
+})
+
+test('BUG-70：下拉开着时把标签移到另一窗格 / 关分屏也要收起', async () => {
+  const { vm, app } = await mountToolbar()
+  const wb = makeWorkbench()
+  wb.splitMode = true
+  vm.menu = 'insert'
+  wb.moveTabTo('2', 'left', 'right', null)
+  assert.deepEqual(wb.rightFiles.map(f => f.id), ['2'])
+  assert.equal(vm.menu, '', '标签跨窗格移动会重排窗格')
+  vm.menu = 'style'
+  await wb.toggleSplitMode()
+  assert.equal(wb.splitMode, false)
+  assert.equal(vm.menu, '')
+  app.unmount()
+})
+
+test('BUG-70：真实窗口缩放同样收起；卸载后 resize 监听摘干净', async () => {
+  const { vm, app } = await mountToolbar()
+  vm.menu = 'font'
+  window.dispatchEvent(new dom.window.Event('resize'))
+  assert.equal(vm.menu, '')
+  app.unmount()
+  vm.menu = 'font'
+  window.dispatchEvent(new dom.window.Event('resize'))
+  assert.equal(vm.menu, 'font', '组件卸载后 window resize 监听必须摘掉')
+})
