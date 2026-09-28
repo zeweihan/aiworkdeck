@@ -26,8 +26,11 @@ on:
 # release for a v* tag, which needs write access to repository contents. The
 # default GITHUB_TOKEN is read-only, so without this the tag build fails with
 # "403 Resource not accessible by integration".
+# id-token: write 供 Windows 代码签名的 azure/login 走 GitHub OIDC 换 Azure 令牌
+# （dev-board#1011，不存 client secret）。
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   # 小版本发布纪律守门（增量更新设计 §2.3）：tag v0.X.Y（Y>0）时校验变更没有
@@ -58,6 +61,10 @@ jobs:
         # workflow_dispatch runs.
         os: ${{ fromJSON((startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && '["macos-latest", "windows-latest"]' || '["windows-latest"]') }}
     runs-on: ${{ matrix.os }}
+    # Windows 代码签名的 OIDC 主体固定为 repo:zeweihan/aiworkdeck:environment:windows-signing
+    # （Azure 侧联合凭据只认这一条），所以 job 必须挂这个 environment；tag 每版不同，
+    # 按 ref 建凭据要靠通配的预览功能，用 environment 绕开。环境本身无保护规则。
+    environment: windows-signing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -420,10 +427,57 @@ jobs:
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
           exit 1
+      - name: Detect Windows signing credentials
+        # Azure Artifact Signing（dev-board#1011）。只在 tag 发版与手动触发时签：
+        # 普通 PR 不签（公开仓库，PR 分支上的代码不该拿到公开信任签名，也不占签名配额），
+        # fork PR 本来就拿不到 secrets。三个 AZURE_SIGNING_* 写进 GITHUB_ENV 后，
+        # 后面两次 electron-builder 调用里的 win.sign 钩子（desktop/scripts/sign-win.js）
+        # 才会真签；不写就打印跳过、产物未签名、步骤不红。
+        id: winsign
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          AZURE_SIGNING_CLIENT_ID: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          SHOULD_SIGN: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ "$SHOULD_SIGN" != "true" ]; then
+            echo "Not a release/manual build — skipping Windows code signing"
+            exit 0
+          fi
+          if [ -z "$AZURE_SIGNING_CLIENT_ID" ]; then
+            echo "No Azure signing credentials (fork PR) — skipping Windows code signing"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "AZURE_SIGNING_ENDPOINT=https://eus.codesigning.azure.net/"
+            echo "AZURE_SIGNING_ACCOUNT=zsmglus"
+            echo "AZURE_SIGNING_PROFILE=aiworkdeck-public"
+          } >> "$GITHUB_ENV"
+      - name: Azure login for code signing (Windows, OIDC)
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SIGNING_SUBSCRIPTION_ID }}
+      - name: Install ArtifactSigning PowerShell module (Windows)
+        # 微软文档现只指向 ArtifactSigning 模块（TrustedSigning 0.5.8 已停更，参数完全相同）。
+        # 版本写死 0.1.20（PSGallery 2026-09-09）。模块首次调用 Invoke-ArtifactSigning 时才把
+        # signtool / dlib 依赖装进 %LOCALAPPDATA%
+        #（从 nuget.org 下），所以签名钩子必须串行，见 sign-win.js 头注释。
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          Install-Module -Name ArtifactSigning -RequiredVersion 0.1.20 -Repository PSGallery -Scope CurrentUser -Force
+          Import-Module ArtifactSigning -RequiredVersion 0.1.20
+          Get-Module ArtifactSigning | Format-Table Name, Version
       - name: Build arm64 Electron shell overlay (Windows)
         # Windows 单包双架构（dev-board#341）：产出纯 arm64 壳目录供 NSIS
         # customInstall 覆盖用。app.asar 无原生依赖双架构通用，剪掉 resources/
         #（几 GB 的 x64 重资源）后只剩 Electron 运行时约 120MB。
+        # 壳里的 AI WorkDeck.exe 由这次 --dir 构建的 win.sign 钩子签好，installer.nsh
+        # 随后用 File /r 原样塞进安装器，不会再经过签名。
         if: runner.os == 'Windows'
         working-directory: desktop
         env:
@@ -445,13 +499,41 @@ jobs:
         run: |
           $v = node -p "require('./desktop/package.json').version"
           node desktop/scripts/render-oneclick-art.mjs --product desktop --out desktop/build/win/generated --version $v
-      - name: Package installers (Windows, unsigned)
+      - name: Package installers (Windows)
         if: runner.os == 'Windows'
         working-directory: desktop
         env:
-          # Windows code signing not set up yet (issue #12)
+          # 签名走 win.sign 钩子（desktop/scripts/sign-win.js，Azure Artifact Signing，
+          # dev-board#1011）：应用 exe、卸载器、安装器逐个签 + RFC3161 时间戳；
+          # 未设 AZURE_SIGNING_*（普通 PR / fork PR）时钩子跳过，产物未签名。
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --publish never
+      - name: Verify Windows signatures
+        # 对安装器、解包后的 x64 应用 exe、ARM64 壳 exe 做 signtool verify /pa；
+        # 还要求带时间戳，否则证书到期（Artifact Signing 证书只有几天有效期）后签名即失效。
+        # 卸载器编在安装器里取不出来，它的校验由 sign-win.js 签完即回读兜底。
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signtool = Get-ChildItem $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'x64' -and $_.Directory.Parent.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found under $kits" }
+          "signtool: $($signtool.FullName)"
+          $files = @(Get-ChildItem 'release\*.exe' | ForEach-Object FullName)
+          if ($files.Count -eq 0) { throw 'no installer exe in release/' }
+          $files += (Resolve-Path 'release\win-unpacked\AI WorkDeck.exe').Path
+          $files += (Resolve-Path 'build\win\arm64-shell\AI WorkDeck.exe').Path
+          foreach ($f in $files) {
+            "=== $f"
+            $out = & $signtool.FullName verify /pa /v $f 2>&1 | Out-String
+            $out
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed: $f" }
+            if ($out -notmatch 'The signature is timestamped') { throw "signature not timestamped: $f" }
+          }
       - name: Build patch assets + signed manifest (tag only)
         # 补丁产物平台无关（业务 jar / h5 / 壳层 js 均无原生二进制，mac/win 共
         # 用），只在 windows runner 生成一次（快、且 tag 构建两平台都在矩阵里）。
@@ -522,7 +604,7 @@ jobs:
 
             ### 下载 / Downloads
             - **macOS · Apple Silicon (M 系列)** — `AI WorkDeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
-            - **Windows · x64** — `AI WorkDeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
+            - **Windows · x64** — `AI WorkDeck Setup <ver>.exe`（已代码签名；SmartScreen 信誉随下载量累积，首批用户仍可能见到提示，点「更多信息 → 仍要运行」即可 / code-signed; SmartScreen reputation builds up with downloads, so early users may still see a prompt — choose "More info → Run anyway"）
 
             > 不提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件，2026-07-03 起）。/ No Intel Mac build (upstream dependencies no longer ship x86_64 binaries; since 2026-07-03).
 
