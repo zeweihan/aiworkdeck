@@ -112,6 +112,16 @@ export default {
   // 结束录音时没有自动提交转写（BUG-57）：会议留在「未转写」，可手动点「开始转写」
   autoTranscribeSkippedSilent: '这段录音没有检测到声音，未自动转写以免产生费用；确有对话可点「开始转写」。',
   autoTranscribeSkippedShort: '录音太短，未自动转写；如需转写可点「开始转写」。',
+  autoTranscribeSkippedDeclined: '未确认转写费用，录音已保存但未提交转写；需要时可点「开始转写」。',
+  // ---- 付费转写的提交前确认（dev-board#968）：每次提交都问，不做「不再提示」 ----
+  paidConfirmTitle: '提交云端转写',
+  paidConfirmBody: '本次由 AI WorkDeck 代为转写，按音频时长折算 Credits 从账户余额扣除，提交时即预扣；未识别到人声也可能按处理时长计费。',
+  paidConfirmDuration: '音频时长：{duration}',
+  paidConfirmEstimate: '预计费用：约 {credits} Credits（按分钟向上取整估算，以实际结算为准）',
+  paidConfirmPerMinute: '单价：每分钟约 {credits} Credits（以实际结算为准）',
+  paidConfirmBalance: '当前余额：{credits} Credits',
+  paidConfirmLocalHint: '不想让音频离开本机、也不扣 Credits：取消后在「语音 > 会议录音」打开「录音不出本机」，改用本机转写。',
+  paidConfirmOk: '确定转写',
   emptyTranscriptBillingHint: '平台转写可能仍按处理时长扣除 Credits；重试会再次提交并可能再次计费。',
   emptyTranscriptHint: '未检测到有效语音。请检查麦克风选择、输入音量与连接，播放录音确认是否有声音；若确有对话，可重新转写。',
 

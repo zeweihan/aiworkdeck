@@ -20,6 +20,7 @@ function buildModuleUrl(tag) {
     .replace(/from '@\/services\/api\.js'/, `from '${stubsUrl}'`)
     .replace(/from '@\/utils\/auth\.js'/, `from '${stubsUrl}'`)
     .replace(/from '@\/i18n'/, `from '${stubsUrl}'`)
+    .replace(/from '@\/utils\/paidTranscribeGate\.js'/, `from '${stubsUrl}'`)
     .replace(/from '@\/utils\/meetingRecorderStatus\.js'/,
       `from '${new URL('../../src/utils/meetingRecorderStatus.js', import.meta.url).href}'`)
   const out = join(tmpdir(), `meeting-recorder-skip-${tag}-${process.pid}.mjs`)
@@ -87,4 +88,26 @@ test('有声音的正常录音照旧自动转写', async () => {
   const { rec, args } = await recordAndStop('voice', { amplitude: 40, seconds: 7 })
   assert.notEqual(args.transcribe, false)
   assert.equal(rec.recorderState.autoTranscribeSkipped, null)
+})
+
+// dev-board#968（BUG-72）：有声音的录音结束时会自动提交转写，平台档那一下就预扣 Credits。
+// 提交前必须经付费确认；用户取消 → finish 带 transcribe=false，会议留在「未转写」。
+test('自动转写前先经付费确认：取消则不提交，并留下 declined 给面板说明', async () => {
+  stubs.setPaidConfirmResult(false)
+  try {
+    const before = stubs.paidConfirmArgs().length
+    const { rec, args } = await recordAndStop('declined', { amplitude: 40, seconds: 7 })
+    assert.equal(stubs.paidConfirmArgs().length, before + 1, '结束录音时应询问一次')
+    assert.deepEqual(stubs.paidConfirmArgs()[before], { durationMs: 7000, projectId: 'p1' })
+    assert.equal(args.transcribe, false, '用户取消后不应自动提交，实际参数 ' + JSON.stringify(args))
+    assert.equal(rec.recorderState.autoTranscribeSkipped, 'declined')
+  } finally {
+    stubs.setPaidConfirmResult(true)
+  }
+})
+
+test('过短 / 静音本来就不自动提交，不必再问', async () => {
+  const before = stubs.paidConfirmArgs().length
+  await recordAndStop('silent-noask', { amplitude: 0, seconds: 7 })
+  assert.equal(stubs.paidConfirmArgs().length, before)
 })

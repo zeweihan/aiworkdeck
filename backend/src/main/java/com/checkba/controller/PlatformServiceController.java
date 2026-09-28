@@ -123,6 +123,10 @@ public class PlatformServiceController {
         // **单价表没取到就不再问用量**：两条打的是同一个主机，前者失败意味着网关不可达，
         // 后者只会把同样的超时再等一遍（各自还会重试一次）。
         data.put("usage", pricing == null ? null : fetchUsageQuietly());
+        // 平台档转写的单价（{unit, creditsPerUnit}，creditsPerUnit 与 balanceCents 同为「分」），
+        // 供付费转写确认框估算「约 N Credits」（dev-board#968）。只作展示，扣费以网关结算为准；
+        // 取不到或没有 asr 行时为 null，前端就不显示估算。
+        data.put("asrPrice", pricing == null ? null : pricing.asrPrice());
 
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
@@ -292,7 +296,8 @@ public class PlatformServiceController {
     }
 
     /** 官网单价表的一次快照：哪几家开放了、余额多少、有多少钱被未结算的预扣占着。 */
-    private record PlatformPricing(Map<String, Boolean> enabled, Integer balanceCents, Integer pendingHoldCents) {}
+    private record PlatformPricing(Map<String, Boolean> enabled, Integer balanceCents, Integer pendingHoldCents,
+                                   Map<String, Object> asrPrice) {}
 
     /** 单价表的取数超时。这是设置页的一次装载，用户在等着，不值得为它挂很久。 */
     private static final int PRICING_TIMEOUT_SECONDS = 8;
@@ -314,17 +319,33 @@ public class PlatformServiceController {
         try {
             JsonNode root = platformGatewayClient.getPricing(PRICING_TIMEOUT_SECONDS);
             Map<String, Boolean> enabled = new HashMap<>();
+            Map<String, Object> asrPrice = null;
+            boolean asrPriceExact = false;
             for (JsonNode row : root.path("pricing")) {
                 String service = row.path("service").asText("");
                 if (service.isEmpty()) continue;
                 // 同一服务可能有多行（通配 + 精确 op）。只要有一行开着就算这项服务可用——
                 // 用户在设置页关心的是「这项功能能不能用」，不是某个具体 op 的开关。
                 enabled.merge(service, row.path("enabled").asBoolean(false), (a, b) -> a || b);
+                // 转写的单价：与网关 findPricing 一致，精确 op=transcribe 优先，没有再取通配 *；
+                // 只认开着、带单位与正单价的行
+                String op = row.path("op").asText("");
+                boolean exact = "transcribe".equals(op);
+                if (!asrPriceExact && (exact || (asrPrice == null && "*".equals(op)))
+                        && "asr".equals(service) && row.path("enabled").asBoolean(false)
+                        && row.hasNonNull("unit") && row.path("creditsPerUnit").isNumber()
+                        && row.path("creditsPerUnit").asDouble() > 0) {
+                    asrPrice = new HashMap<>();
+                    asrPrice.put("unit", row.path("unit").asText());
+                    asrPrice.put("creditsPerUnit", row.path("creditsPerUnit").numberValue());
+                    asrPriceExact = exact;
+                }
             }
             return new PlatformPricing(
                     enabled,
                     root.hasNonNull("balanceCents") ? root.get("balanceCents").asInt() : null,
-                    root.hasNonNull("pendingHoldCents") ? root.get("pendingHoldCents").asInt() : null);
+                    root.hasNonNull("pendingHoldCents") ? root.get("pendingHoldCents").asInt() : null,
+                    asrPrice);
         } catch (RuntimeException e) {
             log.debug("取单价表失败，平台服务页降级显示: {}", e.toString());
             return null;

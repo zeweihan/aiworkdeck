@@ -304,6 +304,15 @@ public class MeetingTranscriptionService {
     }
 
     /**
+     * 生效档位的设置值（platform / byok / local），给项目成员能读的会议列表带出去：
+     * 前端付费转写确认据此判断会不会扣 Credits（dev-board#968）——团队服务器上的非管理员
+     * 读不到机器级的 /api/platform-services，但同样需要知道「服务器模式根本没有平台档」。
+     */
+    public String tierValue() {
+        return tier().settingValue();
+    }
+
+    /**
      * 「转写能不能用」。<b>判据按档位分</b>：
      * platform 档只要连了账户就算配好（那 5 个阿里云凭证是我们出的）；
      * byok 档仍然要求用户自己那 5 项齐全；

@@ -309,6 +309,7 @@ import {
 } from '@/config/platformServices.js'
 import { host } from '@/services/host.js'
 import { componentDownloads } from '@/services/componentDownloads.js'
+import { confirmPaidTranscription } from '@/utils/paidTranscribeGate.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 
@@ -801,7 +802,8 @@ export default {
       const skipped = recorderState.autoTranscribeSkipped
       if (meeting && skipped) {
         uni.showToast({
-          title: this.$t(skipped === 'silent' ? 'meeting.autoTranscribeSkippedSilent' : 'meeting.autoTranscribeSkippedShort'),
+          title: this.$t(skipped === 'silent' ? 'meeting.autoTranscribeSkippedSilent'
+            : skipped === 'declined' ? 'meeting.autoTranscribeSkippedDeclined' : 'meeting.autoTranscribeSkippedShort'),
           icon: 'none',
           duration: 4000,
         })
@@ -885,6 +887,8 @@ export default {
         uni.showToast({ title: NOTICE_COPY.blockBeforeUpload, icon: 'none' })
         return
       }
+      // 平台档一提交就预扣 Credits：每次都先确认（dev-board#968）
+      if (!(await confirmPaidTranscription({ durationMs: m.durationMs, projectId: this.projectId }))) return
       try {
         await transcribeMeetingRecording(m.id)
         await this.loadMeetings()

@@ -22,6 +22,7 @@
 import { createApp, reactive } from 'vue'
 import AwdDialogHost from '@/components/AwdDialogHost.vue'
 import { t } from '@/i18n'
+import { setGlobalOverlay } from '@/utils/overlayState.js'
 import {
   normalizeModalOptions,
   normalizeSheetOptions,
@@ -55,13 +56,33 @@ function ensureHost() {
   return hostMounted
 }
 
+// 桌面端的 BrowserView 是原生层、永远盖在 DOM 上（见 overlayState.js）：对话框开着时
+// 必须持有全局浮层，让工作台把网页视图藏起来，否则框被盖住、遮罩点不到、Esc 进不来，
+// 等它结果的调用方就永远挂着（dev-board#968）。队列非空即持有，清空才释放；
+// 持有者键只用 'awd-dialog'，不碰别的浮层的持有。
+const OVERLAY_HOLDER = 'awd-dialog'
+
 function enqueue(kind, opts, fallback) {
   return new Promise((resolve) => {
     if (!ensureHost()) {
       resolve(fallback)
       return
     }
-    state.queue.push({ id: ++seq, kind, opts, resolve })
+    state.queue.push({
+      id: ++seq,
+      kind,
+      opts,
+      // AwdDialogHost 先把自己 shift 出队再调 resolve，所以这里看到的就是剩下的队列。
+      // 释放推迟一个宏任务：调用方常在上一个框的结果里同步弹下一个，立刻释放的话
+      // 工作台的 watcher 会先把网页视图亮出来一帧再藏回去（闪一下）。
+      resolve: (result) => {
+        if (state.queue.length === 0) {
+          setTimeout(() => { if (state.queue.length === 0) setGlobalOverlay(false, OVERLAY_HOLDER) }, 0)
+        }
+        resolve(result)
+      },
+    })
+    setGlobalOverlay(true, OVERLAY_HOLDER)
   })
 }
 
