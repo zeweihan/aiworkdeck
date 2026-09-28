@@ -70,7 +70,8 @@ export default {
     this._keydownHandler = (e) => this.onKeydown(e)
     document.addEventListener('keydown', this._keydownHandler, true)
     try {
-      const resp = await getProjectFiles(this.projectId)
+      // 必须带 tree=true：不带时后端只回根目录一层，子文件夹里的文件一个都搜不到（dev-board#977）
+      const resp = await getProjectFiles(this.projectId, null, true)
       // 文件暂存区是产品内部实现，不该在「快速打开」里被当成一份可打开的文件
       const all = excludeSystemFolders(Array.isArray(resp) ? resp : (resp && resp.data) || [])
       const byId = new Map(all.map((f) => [f.id, f]))

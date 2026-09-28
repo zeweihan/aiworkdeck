@@ -431,7 +431,8 @@ export default {
       if (String(this.loadedProjectId) === String(pid)) return
       this.loadedProjectId = pid
       this.filesLoading = true
-      const [filesRes, membersRes] = await Promise.allSettled([getProjectFiles(pid), getProjectMembers(pid)])
+      // tree=true：不带时后端只回根目录一层，子文件夹里的文件挑不到（dev-board#985）
+      const [filesRes, membersRes] = await Promise.allSettled([getProjectFiles(pid, null, true), getProjectMembers(pid)])
       // 请求期间切了项目：丢弃旧结果
       if (String(this.loadedProjectId) !== String(pid)) return
       this.filesLoading = false

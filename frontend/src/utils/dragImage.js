@@ -30,7 +30,8 @@ export function warmDragImage() {
       readyImage = src
     }
   }
-  src.src = '/static/Drag.png'
+  // 裸 Image 不经过 uni <image> 的路径换算：file:// 页面里 /static/x 会落到磁盘根（dev-board#975 同族）
+  src.src = './static/Drag.png'
 }
 
 /** dragstart 里调用：徽标已就绪则设为拖拽影像，未就绪保持默认（下次就有了） */
