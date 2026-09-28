@@ -472,13 +472,38 @@ public class ProjectRepoService {
         }
     }
 
+    /**
+     * 从 {@code start} 往回、新在前地列出最多 {@code limit} 笔提交，**并且拓扑有序**：
+     * 子提交一定排在它的父提交之前（口径同 {@link #history} 的 COMMIT_TIME_DESC + TOPO）。
+     *
+     * <p>只按提交时间倒序（{@code git.log()} 的默认）不够：Git 的提交时间只精确到秒，
+     * 同一秒里「甲结束一段工作（NO_FF 合并）」与「乙在它上面落的自动存档」时间戳相同，
+     * 父提交就可能排到子提交前面。{@code ProvenanceService.foldMap} 与前端
+     * {@code VersionTimeline.grouped} 都按「新在前、session 开组、其后的 auto 归它」折叠，
+     * 这一错位会把乙的自动存档折进甲那段工作——逐段溯源把乙改的段落署成甲
+     * （dev-board#1012 / #762，app-e2e J14-③ 的间歇红）。
+     */
+    private static List<RevCommit> newestFirst(Repository repo, ObjectId start, int limit) throws IOException {
+        List<RevCommit> out = new ArrayList<>();
+        try (RevWalk walk = new RevWalk(repo)) {
+            walk.sort(RevSort.COMMIT_TIME_DESC);
+            walk.sort(RevSort.TOPO, true);
+            walk.markStart(walk.parseCommit(start));
+            for (RevCommit c : walk) {
+                if (limit > 0 && out.size() >= limit) break;
+                out.add(c);
+            }
+        }
+        return out;
+    }
+
     public List<VersionEntry> log(long projectId, String ref, int limit) {
         List<VersionEntry> out = new ArrayList<>();
-        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+        try (Repository repo = open(projectId)) {
             ObjectId start = repo.resolve(ref);
             if (start == null) return out;
             Map<String, String> milestones = milestonesIn(repo);
-            for (RevCommit c : git.log().add(start).setMaxCount(limit).call()) {
+            for (RevCommit c : newestFirst(repo, start, limit)) {
                 out.add(toEntry(c, milestones));
             }
             return out;
@@ -534,7 +559,7 @@ public class ProjectRepoService {
             if (start == null) return out;
             Map<String, String> milestones = milestonesIn(repo);
             TreeFilter pathFilter = PathFilter.create(relPath);
-            for (RevCommit c : git.log().add(start).setMaxCount(limit).call()) {
+            for (RevCommit c : newestFirst(repo, start, limit)) {
                 RevCommit commit = walk.parseCommit(c.getId());
                 // 根提交没有父版本 → 与空树比较，它自己带进来的文件也算「触及」。
                 ObjectId firstParent = commit.getParentCount() == 0
@@ -576,7 +601,7 @@ public class ProjectRepoService {
             if (start == null) return null;
             Map<String, String> milestones = milestonesIn(repo);
             TreeFilter pathFilter = PathFilter.create(relPath);
-            for (RevCommit c : git.log().add(start).setMaxCount(Math.max(1, maxScan)).call()) {
+            for (RevCommit c : newestFirst(repo, start, Math.max(1, maxScan))) {
                 // kind 缺失按 auto 处理，与 toEntry 同口径
                 String kind = extractTrailer(c.getFullMessage(), KIND_TRAILER);
                 if (kind == null || "auto".equals(kind)) continue;
