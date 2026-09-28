@@ -795,7 +795,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   也会把整条抽一下）。
   **`tabDomId` 刻意不 export**：`tab-middle-click-close` 一类测试用
   `new Function` 把整个 mixin 源码包起来跑，模块级 `export` 会让那个工厂语法出错。
-- **标签跨窗格拖拽 = 移动，按住 Alt/Option 才是复制（2026-09-09，dev-board#542）**：
+- **标签跨窗格拖拽 = 移动，按住 Alt/Option 才是复制，可编辑文档除外（2026-09-09，dev-board#542；#987）**：
   `moveTabTo(fileId, fromPane, toPane, beforeFileId, opts = { copy: false })`。
   默认从源列表 splice 掉再插进目标（源侧若移走的是活动标签，按 `closeFile` 同一条
   `min(idx, len-1)` 规则让相邻的顶上，空了置 null）；`copy:true` 才 `{ ...source }`
@@ -806,6 +806,13 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   `commitTabDrop` 调它）：移动会把源侧的编辑器实例卸掉，而
   `LibreOfficeEditor.beforeUnmount` 自己写着「export 需要活的 webview，从这里保存
   已经太晚」——落不下来就不搬，toast `editor.moveTabSaveFailed`。
+  **可编辑文档不许双开（dev-board#987）**：`commitTabDrop` 经 `canDualOpenTab` 判，
+  会各自整份写回的实例（`useLibreEditor` / `isPlainTextFile` / `isDrawioFile` /
+  非只读的 `merge-review` 标签）Alt 拖拽一律降成移动
+  （照样先落盘）并 toast `editor.dualOpenEditableBlocked`；只读类（pdf / 图片 / 浏览器等）
+  照旧双开。理由：两侧各一个活实例，一侧落盘后另一侧仍是旧内容、再保存就整份覆盖；
+  `reloadFromBackend` 无条件丢本地未保存态且不保留光标，不能充当同步。
+  单测 `tests/project-home/tab-dual-open-editable.test.mjs`。
 - **关闭分屏 = 右窗格标签并入左窗格末尾（v0.49.0 C9-02）**：`toggleSplitMode` 关分屏时
   先对右侧每个标签走 `flushTabBeforePaneMove`（落不下就不关分屏，toast
   `editor.closeSplitSaveFailed`），再把右侧标签追加进 `leftFiles`（左右双开同一份只留左侧那个）、
