@@ -508,19 +508,19 @@ try {
       if (window.__awdBrowserBtnHits) return
       window.__awdBrowserBtnHits = 0
       document.addEventListener('click', (e) => {
-        const el = e.target && e.target.closest ? e.target.closest('[title="浏览器"]') : null
+        const el = e.target && e.target.closest ? e.target.closest('[title="新建浏览器标签"]') : null
         if (el) window.__awdBrowserBtnHits++
       }, true)
     })
     let opened = []
     for (let round = 0; round < 8 && opened.length < 2; round++) {
-      await mouseClickSel('[title="浏览器"]')
+      await mouseClickSel('[title="新建浏览器标签"]')
       await sleep(1200)
       opened = (await webTabs()) || []
     }
     if (opened.length < 2) {
       const snap = await page.evaluate(() => {
-        const el = document.querySelector('[title="浏览器"]')
+        const el = document.querySelector('[title="新建浏览器标签"]')
         const r = el ? el.getBoundingClientRect() : null
         return {
           domTabs: document.querySelectorAll('.tabs-pane-left .tab-item').length,
