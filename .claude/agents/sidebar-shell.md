@@ -806,6 +806,19 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   `commitTabDrop` 调它）：移动会把源侧的编辑器实例卸掉，而
   `LibreOfficeEditor.beforeUnmount` 自己写着「export 需要活的 webview，从这里保存
   已经太晚」——落不下来就不搬，toast `editor.moveTabSaveFailed`。
+- **关闭分屏 = 右窗格标签并入左窗格末尾（v0.49.0 C9-02）**：`toggleSplitMode` 关分屏时
+  先对右侧每个标签走 `flushTabBeforePaneMove`（落不下就不关分屏，toast
+  `editor.closeSplitSaveFailed`），再把右侧标签追加进 `leftFiles`（左右双开同一份只留左侧那个）、
+  清空 `rightFiles`/`activeFileIdRight`；焦点在右或左侧没有活动标签时，右侧活动标签接任左侧活动标签。
+  **不许退回「只置 splitMode=false」**：右窗格是 v-if，留着的标签看不见却仍被
+  `pickActiveContextTab` 当成 AI「当前文档」，资源管理器点它还会让 `openFile` 把分屏自己打开。
+  单测 `frontend/tests/project-home/split-close-merge.test.mjs`。
+- **工具栏下拉在布局变化时收起（v0.49.0 C9-01）**：`EditorToolbar` 的下拉是打开瞬间的
+  `position:fixed` 快照；除 #999 的 mousedown/Esc/blur/横滚四路收口外，另挂 `window resize`
+  → `closeMenus`。工作台布局变化（分屏开关、标签跨窗格、面板开合）经 `triggerWorkbenchResize`
+  派发 window resize，真实窗口缩放本身也是 window resize，菜单加速键开分屏这类不经 mousedown
+  的路径靠它收口。已知、可接受：`triggerWorkbenchResize` 250ms 后的补派发会把这 250ms 内刚打开的下拉关掉。
+  单测在 `frontend/tests/project-home/editor-toolbar-overflow.test.mjs` 的 BUG-70 段。
 - **标签按文件类型着色（2026-09-09，dev-board#504）**：Word 蓝 / PPT 橙 / Excel 绿 /
   PDF 红 / Markdown 灰 / 图片紫，六色令牌 `--awd-file-*` 在 App.vue 里浅深各一套
   （也进了 `appTheme.js` 的 `THEME_TOKEN_NAMES`）。fileType → kind key 的**唯一出处**
