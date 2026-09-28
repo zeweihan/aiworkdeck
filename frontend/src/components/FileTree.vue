@@ -1113,6 +1113,7 @@ export default {
     if (typeof window !== 'undefined') window.addEventListener('keydown', this._onTagDialogKeydown, true)
   },
   beforeUnmount() {
+    if (this._marqueeRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._marqueeRaf)
     uni.$off('file-drag-start', this._onDragStart)
     uni.$off('file-drag-end', this._onDragEnd)
     if (typeof window !== 'undefined') window.removeEventListener('keydown', this._onTagDialogKeydown, true)
@@ -1978,32 +1979,51 @@ export default {
         return this.isChecked(item.id) ? 'checked' : 'unchecked'
       }
 
-      const ids = this.getDescendantIds(item.id, true) // 包含自身
+      // 显示态按子孙里的叶子（文件与空文件夹）推，不看文件夹自己的 id（dev-board#988）：
+      // 逐个勾满子项时集合里没有文件夹 id，但界面要显示已勾；空文件夹没有叶子，看它自己
+      const index = this.buildChildIndex()
+      let total = 0
       let checked = 0
-      ids.forEach(id => {
-        if (this.isChecked(id)) checked++
-      })
+      const stack = [String(item.id)]
+      while (stack.length) {
+        const kids = index.get(stack.pop()) || []
+        kids.forEach(k => {
+          const key = String(k.id)
+          if (k.isFolder && index.has(key)) { stack.push(key); return }
+          total++
+          if (this.isChecked(key)) checked++
+        })
+      }
+      if (!total) return this.isChecked(item.id) ? 'checked' : 'unchecked'
       if (checked === 0) return 'unchecked'
-      if (checked === ids.length) return 'checked'
+      if (checked === total) return 'checked'
       return 'indeterminate'
     },
-    getDescendantIds(folderId, includeSelf = false) {
-      const all = Array.isArray(this.allFiles) && this.allFiles.length ? this.allFiles : (Array.isArray(this.files) ? this.files : [])
-      const childrenMap = new Map()
-      all.forEach(f => {
-        const pid = f.parentId == null ? null : f.parentId
-        if (!childrenMap.has(pid)) childrenMap.set(pid, [])
-        childrenMap.get(pid).push(f)
+    // 勾选树用的节点表：回收站视图的节点只在 recycleBin 里（allFiles 来自 getFileTree，
+    // 后端只给未删除的），否则回收站里勾文件夹不带子孙、取消子项找不到祖先（dev-board#988）
+    checkTreeNodes() {
+      if (this.viewMode === 'recycle') return Array.isArray(this.recycleBin) ? this.recycleBin : []
+      return Array.isArray(this.allFiles) && this.allFiles.length ? this.allFiles : (Array.isArray(this.files) ? this.files : [])
+    },
+    // 子项索引：String(parentId) → children（根为 null）。同一次计算里建一次、各处复用
+    buildChildIndex(nodes = this.checkTreeNodes()) {
+      const index = new Map()
+      nodes.forEach(f => {
+        const pid = f.parentId == null ? null : String(f.parentId)
+        if (!index.has(pid)) index.set(pid, [])
+        index.get(pid).push(f)
       })
+      return index
+    },
+    getDescendantIds(folderId, includeSelf = false, index = this.buildChildIndex()) {
       const result = []
       if (includeSelf) result.push(folderId)
-      const stack = [folderId]
+      const stack = [String(folderId)]
       while (stack.length) {
-        const cur = stack.pop()
-        const kids = childrenMap.get(cur) || []
+        const kids = index.get(stack.pop()) || []
         kids.forEach(k => {
           result.push(k.id)
-          if (k.isFolder) stack.push(k.id)
+          if (k.isFolder) stack.push(String(k.id))
         })
       }
       return result
@@ -2015,13 +2035,15 @@ export default {
       // 文件夹：联动勾选/取消其全部子孙
       if (item.isFolder) {
         const state = this.getCheckState(item)
-        const ids = this.getDescendantIds(item.id, true)
+        const index = this.buildChildIndex()
+        const ids = this.getDescendantIds(item.id, true, index)
         const next = { ...this.checkedMap }
         if (state === 'checked') {
           ids.forEach(id => delete next[String(id)])
         } else {
           ids.forEach(id => { next[String(id)] = true })
         }
+        this.normalizeFolderChecks(next, index)
         this.checkedMap = next
         this.$emit('checked-change', this.checkedIds)
         return
@@ -2034,8 +2056,33 @@ export default {
       } else {
         next[key] = true
       }
+      this.normalizeFolderChecks(next)
       this.checkedMap = next
       this.$emit('checked-change', this.checkedIds)
+    },
+    // 子项没勾满的文件夹退出 checkedMap（dev-board#988）。checkedMap 里有文件夹 id =
+    // 「整个文件夹」：批量删除 / 移动 / 创建副本 / 加入 AI 对话都拿它当根、后端按文件夹级联，
+    // 半选的文件夹若还留着自己的 id，用户特意取消的子项会被一起带走。
+    // 只删不补：逐个勾满子项时不把文件夹加进来——用户勾的是那几份文件，不是容器（补进来会让
+    // 复制多出一份「文件夹副本」、移动把子项从文件夹里拔出、回收站彻底删除带走没勾的文件夹）。
+    // 「已勾」的显示态由 getCheckState 按子孙推出，不依赖这里。
+    normalizeFolderChecks(next, index = this.buildChildIndex()) {
+      const nodes = index
+      const covered = (node, seen) => {
+        const key = String(node.id)
+        if (!next[key]) return false
+        const kids = nodes.get(key)
+        if (!node.isFolder || !kids || seen.has(key)) return true
+        seen.add(key)
+        let all = true
+        kids.forEach(c => { if (!covered(c, seen)) all = false })
+        if (!all) delete next[key]
+        return all
+      }
+      const seen = new Set()
+      nodes.forEach(kids => kids.forEach(f => {
+        if (f.isFolder && next[String(f.id)] && !seen.has(String(f.id))) covered(f, seen)
+      }))
     },
     handleItemClick(item, event) {
       if (!item) return
@@ -2137,8 +2184,16 @@ export default {
       this.batchTargetParentId = null
       this.$emit('checked-change', [])
     },
+    // 发批量请求前按当前文件树再核一次：整个文件夹勾着之后 loadFiles / 外部同步加进来的新文件
+    // 没勾，文件夹 id 却还在 checkedMap 里，不核的话批量操作会带上它们（dev-board#988）
+    normalizedCheckedIds() {
+      const map = {}
+      this.checkedIds.forEach(id => { map[String(id)] = true })
+      this.normalizeFolderChecks(map)
+      return this.checkedIds.filter(id => map[String(id)])
+    },
     openBatchAction(action) {
-      const ids = this.checkedIds
+      const ids = this.normalizedCheckedIds()
       if (!ids.length) return
 
       if (action === 'delete') {
@@ -2199,7 +2254,9 @@ export default {
     },
     async executeBatchAction() {
       const action = this.pendingBatchAction
-      const ids = this.checkedIds
+      // 文件夹连子孙都勾着时只发文件夹本身（与右键 contextTargetItems 一致）：
+      // 原样发 [F,a,b] 复制会多出单独的 a、b，移动会把 a、b 从 F 里拔出来
+      const ids = collapseToTopmostSelected(this.normalizedCheckedIds(), this.checkTreeNodes()).roots
       if (!action || !ids.length) return
       try {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
@@ -2296,7 +2353,7 @@ export default {
     /** 右键菜单作用的条目：文件夹连子孙都勾上时只算文件夹本身，子孙不重复作用 */
     contextTargetItems() {
       const ids = (this.contextMenu && this.contextMenu.selectionIds) || []
-      const list = this.allFiles || []
+      const list = this.checkTreeNodes()
       const { roots } = collapseToTopmostSelected(ids, list)
       return roots.map(id => list.find(f => String(f.id) === String(id))).filter(Boolean)
     },
@@ -2487,26 +2544,47 @@ export default {
       const y1 = this.marquee.startY
       const x2 = e.clientX
       const y2 = e.clientY
-      const left = Math.min(x1, x2)
-      const top = Math.min(y1, y2)
-      const w = Math.abs(x2 - x1)
-      const h = Math.abs(y2 - y1)
-      this.marquee.x = left
-      this.marquee.y = top
-      this.marquee.w = w
-      this.marquee.h = h
-
+      this.marquee.x = Math.min(x1, x2)
+      this.marquee.y = Math.min(y1, y2)
+      this.marquee.w = Math.abs(x2 - x1)
+      this.marquee.h = Math.abs(y2 - y1)
+      // 命中计算一帧只算一次（mousemove 远比帧率密，大树上每次都算会卡）；没有 rAF 的环境同步算
+      if (typeof requestAnimationFrame !== 'function') {
+        this.applyMarqueeHits()
+        return
+      }
+      if (this._marqueeRaf) return
+      this._marqueeRaf = requestAnimationFrame(() => {
+        this._marqueeRaf = null
+        this.applyMarqueeHits()
+      })
+    },
+    applyMarqueeHits() {
+      // rAF 回调：拖动中途退出了选择模式 / 框选已结束，这一帧不再写勾选
+      if (!this.marquee.active || !this.selectionMode) return
+      const left = this.marquee.x
+      const top = this.marquee.y
+      const w = this.marquee.w
+      const h = this.marquee.h
       try {
         const items = typeof document !== 'undefined' ? document.querySelectorAll('.file-tree .tree-item') : []
         const next = {}
+        const nodes = this.checkTreeNodes()
+        const byId = new Map(nodes.map(f => [String(f.id), f]))
+        const index = this.buildChildIndex(nodes)
         items.forEach(el => {
           const rect = el.getBoundingClientRect()
           const hit = !(rect.right < left || rect.left > left + w || rect.bottom < top || rect.top > top + h)
           if (hit) {
             const id = el.getAttribute('data-file-id')
-            if (id) next[String(id)] = true
+            if (!id) return
+            next[String(id)] = true
+            // 框到文件夹 = 整个文件夹（折叠时子项不在视图里，也要一起勾上），与 selectAll 一致
+            const node = byId.get(String(id))
+            if (node && node.isFolder) this.getDescendantIds(node.id, false, index).forEach(did => { next[String(did)] = true })
           }
         })
+        this.normalizeFolderChecks(next, index)
         this.checkedMap = next
         this.$emit('checked-change', this.checkedIds)
       } catch (err) {
@@ -2515,6 +2593,12 @@ export default {
     },
     onMarqueeEnd() {
       if (!this.marquee.active) return
+      // 还有一帧没算就在松手时补算，保证最终勾选与最后的框一致
+      if (this._marqueeRaf) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._marqueeRaf)
+        this._marqueeRaf = null
+        this.applyMarqueeHits()
+      }
       this.marquee.active = false
     },
 

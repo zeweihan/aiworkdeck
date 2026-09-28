@@ -18,7 +18,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { collapseToTopmostSelected } from '../../src/utils/fileTreeRecycle.js'
+import { collapseToTopmostSelected, summarizeDeleteResults } from '../../src/utils/fileTreeRecycle.js'
 
 const SRC = readFileSync(new URL('../../src/components/FileTree.vue', import.meta.url), 'utf8')
 const TAG_SELECTOR = readFileSync(new URL('../../src/components/TagSelector.vue', import.meta.url), 'utf8')
@@ -46,13 +46,16 @@ const FILES = [
 ]
 
 function makeVm({ replies = [] } = {}) {
-  const calls = { batchDeleteFiles: [], batchCopyFiles: [], dialogs: [], emits: [], toasts: [], clipboard: [] }
+  const calls = { batchDeleteFiles: [], batchCopyFiles: [], batchMoveFiles: [], deleteFilePerm: [], dialogs: [], emits: [], toasts: [], clipboard: [] }
   const queue = [...replies]
   const stubs = {
     batchDeleteFiles: async (...a) => { calls.batchDeleteFiles.push(a) },
     batchCopyFiles: async (...a) => { calls.batchCopyFiles.push(a) },
+    batchMoveFiles: async (...a) => { calls.batchMoveFiles.push(a) },
     deleteFile: async () => {},
+    deleteFilePerm: async (...a) => { calls.deleteFilePerm.push(a) },
     collapseToTopmostSelected,
+    summarizeDeleteResults,
     showDialog: async (opts) => {
       calls.dialogs.push(opts)
       return queue.length ? queue.shift() : { confirm: false, cancel: true }
@@ -340,4 +343,301 @@ test('BUG-73 复核：单项加入 AI 对话保持原提示', async () => {
   assert.deepEqual(added, [13])
   assert.equal(toasts.length, 1)
   assert.equal(toasts[0].title, 'workbench.fileAdded:{"name":"README.txt"}')
+})
+
+// ---------------- dev-board#988：勾文件夹后取消其中一个子文件 ----------------
+// 勾文件夹会把自身连子孙一起写进 checkedMap；以前取消其中一个子文件只删那一项，文件夹自己的 id
+// 还留着——界面是半选，批量删除 / 创建副本 / 加入 AI 对话却按「整个文件夹」作用（软删与副本都是
+// 后端按文件夹级联），把用户特意取消的那份也带上了。复核探针：batchDelete ids=[[1,12]]。
+
+const DEEP = [
+  { id: 1, name: '合同', isFolder: true, parentId: null },
+  { id: 11, name: 'a.docx', fileType: 'docx', isFolder: false, parentId: 1 },
+  { id: 12, name: 'b.docx', fileType: 'docx', isFolder: false, parentId: 1 },
+  { id: 2, name: '附件', isFolder: true, parentId: 1 },
+  { id: 21, name: 'c.docx', fileType: 'docx', isFolder: false, parentId: 2 },
+  { id: 22, name: 'd.docx', fileType: 'docx', isFolder: false, parentId: 2 },
+  { id: 13, name: 'README.txt', fileType: 'txt', isFolder: false, parentId: null },
+]
+
+function selectionVm(files = FILES, replies = []) {
+  const vm = makeVm({ replies })
+  vm.allFiles = files
+  vm.files = files
+  vm.selectionMode = true
+  return vm
+}
+
+test('#988 勾文件夹再取消一个子文件：文件夹半选且不再作为操作根，批量删除只删剩下的子文件', async () => {
+  const vm = selectionVm(FILES, [{ confirm: true, cancel: false }])
+  vm.toggleChecked(FILES[0]) // 勾「合同」= 1, 11, 12
+  vm.toggleChecked(FILES[1]) // 取消 11
+  assert.equal(vm.getCheckState(FILES[0]), 'indeterminate')
+  assert.deepEqual(vm.checkedIds.sort(), [12], '半选的文件夹自己不能留在勾选集合里')
+
+  vm.openBatchAction('delete')
+  await tick(); await tick()
+  assert.equal(vm.calls.dialogs.length, 1)
+  assert.match(vm.calls.dialogs[0].content, /"count":1/, '确认框数量 = 实际作用数')
+  assert.equal(vm.calls.batchDeleteFiles.length, 1)
+  assert.deepEqual(vm.calls.batchDeleteFiles[0][1].map(Number), [12], '不能带上文件夹 1（后端级联会删掉被取消的 11）')
+})
+
+test('#988 多级：取消孙文件后，所有祖先都退出勾选；右键创建副本 / 加入 AI 对话不含被取消项与半选祖先，计数一致', async () => {
+  const vm = selectionVm(DEEP)
+  vm.toggleChecked(DEEP[0]) // 勾「合同」= 1, 11, 12, 2, 21, 22
+  vm.toggleChecked(DEEP[5]) // 取消 22
+  assert.equal(vm.getCheckState(DEEP[0]), 'indeterminate')
+  assert.equal(vm.getCheckState(DEEP[3]), 'indeterminate')
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 12, 21])
+
+  vm.handleContextMenu(DEEP[1], rightClick())
+  assert.equal(vm.isContextMulti(), true)
+  assert.equal(vm.contextMenu.selectionIds.length, vm.checkedIds.length, '「已选 N 项」= 底部工具栏计数')
+  vm.handleContextAddToAi()
+  const added = vm.calls.emits.find(e => e[0] === 'add-to-ai')[1].map(f => f.id).sort((a, b) => a - b)
+  assert.deepEqual(added, [11, 12, 21])
+
+  vm.handleContextMenu(DEEP[1], rightClick())
+  await vm.handleContextDuplicate()
+  const copied = vm.calls.batchCopyFiles.flatMap(c => c[1]).map(Number).sort((a, b) => a - b)
+  assert.deepEqual(copied, [11, 12, 21], '副本不能按整个文件夹建')
+})
+
+test('#988 取消子文件夹时，勾选中的父文件夹同样退出；子文件夹之外的兄弟仍勾着', () => {
+  const vm = selectionVm(DEEP)
+  vm.toggleChecked(DEEP[0])
+  vm.toggleChecked(DEEP[3]) // 取消「附件」整棵
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 12])
+  assert.equal(vm.getCheckState(DEEP[0]), 'indeterminate')
+})
+
+test('#988 整个文件夹勾着（未取消任何子项）时仍只按文件夹本身作用', () => {
+  const vm = selectionVm(DEEP)
+  vm.toggleChecked(DEEP[0])
+  vm.toggleChecked(DEEP[6]) // 再勾根下的 README
+  vm.handleContextMenu(DEEP[6], rightClick())
+  vm.handleContextAddToAi()
+  const added = vm.calls.emits.find(e => e[0] === 'add-to-ai')[1].map(f => f.id).sort((a, b) => a - b)
+  assert.deepEqual(added, [1, 13])
+})
+
+test('#988 子项取消后再勾回：文件夹显示已勾，但集合不含文件夹 id，操作只作用于子项', async () => {
+  const vm = selectionVm(FILES)
+  vm.toggleChecked(FILES[0])
+  vm.toggleChecked(FILES[1])
+  assert.equal(vm.getCheckState(FILES[0]), 'indeterminate')
+  vm.toggleChecked(FILES[1])
+  assert.equal(vm.getCheckState(FILES[0]), 'checked', '子项勾满时显示已勾（三态树惯例）')
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 12], '不自动把文件夹补进集合')
+
+  vm.handleContextMenu(FILES[1], rightClick())
+  await vm.handleContextDuplicate()
+  assert.deepEqual(vm.calls.batchCopyFiles.flatMap(c => c[1]).map(Number).sort((a, b) => a - b), [11, 12])
+})
+
+test('#988 逐个勾满子项（多级）：各级文件夹显示已勾；工具栏复制 / 移动只发子项，不多出「文件夹副本」也不拔出子项', async () => {
+  const vm = selectionVm(DEEP)
+  for (const f of [DEEP[1], DEEP[2], DEEP[4]]) vm.toggleChecked(f)
+  assert.equal(vm.getCheckState(DEEP[0]), 'indeterminate')
+  vm.toggleChecked(DEEP[5])
+  assert.equal(vm.getCheckState(DEEP[3]), 'checked')
+  assert.equal(vm.getCheckState(DEEP[0]), 'checked')
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 12, 21, 22])
+
+  const snapshot = { ...vm.checkedMap }
+  vm.pendingBatchAction = 'copy'
+  vm.batchTargetParentId = null
+  await vm.executeBatchAction()
+  assert.deepEqual(vm.calls.batchCopyFiles[0][1].map(Number).sort((a, b) => a - b), [11, 12, 21, 22])
+
+  vm.checkedMap = snapshot
+  vm.pendingBatchAction = 'move'
+  await vm.executeBatchAction()
+  assert.deepEqual(vm.calls.batchMoveFiles[0][1].map(Number).sort((a, b) => a - b), [11, 12, 21, 22])
+})
+
+test('#988 勾文件夹本身后工具栏批量复制 / 移动只发文件夹 [F]，不再 [F,a,b] 重复（既有问题）', async () => {
+  const vm = selectionVm(FILES)
+  vm.toggleChecked(FILES[0])
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [1, 11, 12])
+  const snapshot = { ...vm.checkedMap }
+  vm.pendingBatchAction = 'copy'
+  vm.batchTargetParentId = null
+  await vm.executeBatchAction()
+  assert.deepEqual(vm.calls.batchCopyFiles[0][1].map(Number), [1])
+
+  vm.checkedMap = snapshot
+  vm.pendingBatchAction = 'move'
+  await vm.executeBatchAction()
+  assert.deepEqual(vm.calls.batchMoveFiles[0][1].map(Number), [1])
+})
+
+// 回收站的节点只在 recycleBin 里（allFiles 来自 getFileTree，后端只给未删除的）
+const BIN = [
+  { id: 1, name: 'A', isFolder: true, parentId: null },
+  { id: 2, name: 'B', isFolder: true, parentId: 1 },
+  { id: 3, name: 'c.docx', fileType: 'docx', isFolder: false, parentId: 2 },
+  { id: 4, name: 'd.docx', fileType: 'docx', isFolder: false, parentId: 2 },
+]
+
+test('#988 回收站：勾文件夹连子孙一起勾；取消孙文件后祖先全部退出，彻底删除不带走被取消项', async () => {
+  const vm = selectionVm([], [{ confirm: true, cancel: false }])
+  vm.allFiles = [] // 回收站里的节点不在 allFiles
+  vm.files = []
+  vm.viewMode = 'recycle'
+  vm.recycleBin = BIN.slice()
+  vm.toggleChecked(BIN[0])
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [1, 2, 3, 4], '勾 A 时子孙也要进集合，界面与级联一致')
+  assert.equal(vm.getCheckState(BIN[2]), 'checked')
+
+  vm.toggleChecked(BIN[2]) // 取消 c
+  assert.equal(vm.getCheckState(BIN[0]), 'indeterminate')
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [4])
+
+  vm.openBatchAction('delete')
+  await tick(); await tick()
+  assert.equal(vm.deleteMode, 'hard')
+  assert.match(vm.calls.dialogs[0].content, /"count":1/)
+  assert.deepEqual(vm.calls.deleteFilePerm.map(c => Number(c[1])), [4], '彻底删除只删 d，不能按 A 或 B 级联带走 c')
+})
+
+test('#988 回收站：逐个勾 c、d 后文件夹显示已勾但集合只有 c、d，彻底删除不带走没勾的 A、B；多选右键能找到节点', async () => {
+  const vm = selectionVm([], [{ confirm: true, cancel: false }])
+  vm.allFiles = []
+  vm.files = []
+  vm.viewMode = 'recycle'
+  vm.recycleBin = BIN.slice()
+  vm.toggleChecked(BIN[2])
+  vm.toggleChecked(BIN[3])
+  assert.equal(vm.getCheckState(BIN[0]), 'checked')
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [3, 4])
+
+  vm.handleContextMenu(BIN[2], rightClick())
+  vm.handleContextAddToAi()
+  const added = vm.calls.emits.find(e => e[0] === 'add-to-ai')[1].map(f => f.id).sort((a, b) => a - b)
+  assert.deepEqual(added, [3, 4], '回收站节点不在 allFiles，右键作用项要从 recycleBin 找')
+
+  vm.openBatchAction('delete')
+  await tick(); await tick()
+  assert.match(vm.calls.dialogs[0].content, /"count":2/, '确认框数量 = 用户勾的 2 项')
+  assert.deepEqual(vm.calls.deleteFilePerm.map(c => Number(c[1])).sort((a, b) => a - b), [3, 4])
+})
+
+function marqueeOver(vm, hitIds) {
+  const els = hitIds.map((id, i) => ({
+    getAttribute: () => String(id),
+    getBoundingClientRect: () => ({ left: 0, right: 100, top: i * 20, bottom: i * 20 + 18 }),
+  }))
+  globalThis.document = { querySelectorAll: () => els }
+  vm.marquee = { ...vm.marquee, active: true, startX: 0, startY: 0 }
+  try { vm.onMarqueeMove({ clientX: 100, clientY: hitIds.length * 20 }) } finally { delete globalThis.document }
+}
+
+test('#988 框选到折叠的文件夹：连子孙一起勾上（与 selectAll 一致）', () => {
+  const vm = selectionVm(DEEP)
+  vm.expandedFolders = new Set()
+  marqueeOver(vm, [1, 13])
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [1, 2, 11, 12, 13, 21, 22])
+  assert.equal(vm.getCheckState(DEEP[0]), 'checked')
+})
+
+test('#988 框选只框到部分子项：文件夹不进集合，批量操作不按整个文件夹作用', () => {
+  const vm = selectionVm(DEEP)
+  marqueeOver(vm, [11, 21])
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 21])
+  assert.equal(vm.getCheckState(DEEP[0]), 'indeterminate')
+})
+
+test('#988 框选框住展开文件夹的全部子行但没框住文件夹行：集合只含子项，文件夹显示已勾', () => {
+  const vm = selectionVm(FILES)
+  marqueeOver(vm, [11, 12])
+  assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 12])
+  assert.equal(vm.getCheckState(FILES[0]), 'checked')
+})
+
+test('#988 框选 rAF 合并：一帧只算一次，松手时补算最后一次', () => {
+  const vm = selectionVm(FILES)
+  const frames = []
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length }
+  globalThis.cancelAnimationFrame = () => {}
+  let rows = [11]
+  const els = () => rows.map((id, i) => ({
+    getAttribute: () => String(id),
+    getBoundingClientRect: () => ({ left: 0, right: 100, top: i * 20, bottom: i * 20 + 18 }),
+  }))
+  globalThis.document = { querySelectorAll: () => els() }
+  try {
+    vm.marquee = { ...vm.marquee, active: true, startX: 0, startY: 0 }
+    vm.onMarqueeMove({ clientX: 100, clientY: 20 })
+    vm.onMarqueeMove({ clientX: 100, clientY: 30 })
+    assert.equal(frames.length, 1, '同一帧里多次 mousemove 只排一次计算')
+    frames.shift()()
+    assert.deepEqual(vm.checkedIds, [11])
+    rows = [11, 12]
+    vm.onMarqueeMove({ clientX: 100, clientY: 40 })
+    assert.equal(frames.length, 1)
+    vm.onMarqueeEnd() // 帧还没到就松手
+    assert.deepEqual(vm.checkedIds.sort((a, b) => a - b), [11, 12], '松手时补算')
+    assert.equal(vm.marquee.active, false)
+  } finally {
+    delete globalThis.document
+    delete globalThis.requestAnimationFrame
+    delete globalThis.cancelAnimationFrame
+  }
+})
+
+test('#988 rAF 回调执行前已退出选择模式：这一帧不写勾选、不 emit', () => {
+  const vm = selectionVm(FILES)
+  const frames = []
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length }
+  globalThis.cancelAnimationFrame = () => {}
+  const els = [11, 12].map((id, i) => ({
+    getAttribute: () => String(id),
+    getBoundingClientRect: () => ({ left: 0, right: 100, top: i * 20, bottom: i * 20 + 18 }),
+  }))
+  globalThis.document = { querySelectorAll: () => els }
+  try {
+    vm.marquee = { ...vm.marquee, active: true, startX: 0, startY: 0 }
+    vm.onMarqueeMove({ clientX: 100, clientY: 40 })
+    vm.selectionMode = false
+    vm.checkedMap = {}
+    frames.shift()()
+    assert.deepEqual(vm.checkedIds, [])
+    assert.equal(vm.calls.emits.filter(e => e[0] === 'checked-change').length, 0)
+  } finally {
+    delete globalThis.document
+    delete globalThis.requestAnimationFrame
+    delete globalThis.cancelAnimationFrame
+  }
+})
+
+test('#988 整个文件夹勾着后文件树新增了文件：批量删除不带上文件夹（否则级联删掉没勾的新文件）', async () => {
+  const vm = selectionVm(FILES.slice(), [{ confirm: true, cancel: false }])
+  vm.toggleChecked(FILES[0]) // [1, 11, 12]
+  const grown = [...FILES, { id: 14, name: 'new.docx', fileType: 'docx', isFolder: false, parentId: 1 }]
+  vm.allFiles = grown // loadFiles / 外部同步带来的新文件
+  vm.files = grown
+  assert.equal(vm.getCheckState(FILES[0]), 'indeterminate')
+  vm.openBatchAction('delete')
+  await tick(); await tick()
+  assert.match(vm.calls.dialogs[0].content, /"count":2/)
+  assert.deepEqual(vm.calls.batchDeleteFiles[0][1].map(Number).sort((a, b) => a - b), [11, 12])
+})
+
+test('#988 整个文件夹勾着后文件树新增了文件：工具栏复制 / 移动发子项而不是整个文件夹', async () => {
+  const vm = selectionVm(FILES.slice())
+  vm.toggleChecked(FILES[0])
+  const snapshot = { ...vm.checkedMap }
+  const grown = [...FILES, { id: 14, name: 'new.docx', fileType: 'docx', isFolder: false, parentId: 1 }]
+  vm.allFiles = grown
+  vm.files = grown
+  vm.pendingBatchAction = 'copy'
+  vm.batchTargetParentId = null
+  await vm.executeBatchAction()
+  assert.deepEqual(vm.calls.batchCopyFiles[0][1].map(Number).sort((a, b) => a - b), [11, 12])
+  vm.checkedMap = snapshot
+  vm.pendingBatchAction = 'move'
+  await vm.executeBatchAction()
+  assert.deepEqual(vm.calls.batchMoveFiles[0][1].map(Number).sort((a, b) => a - b), [11, 12])
 })
