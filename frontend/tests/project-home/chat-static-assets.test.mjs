@@ -11,14 +11,6 @@ import { fileURLToPath } from 'node:url'
 
 const SRC = fileURLToPath(new URL('../../src/', import.meta.url))
 
-// 已知缺失、由另一批次修掉的引用。PR #1005（批次 U）删掉了 FileStagingArea.vue 的
-// file.png / word.png / pdf.png 三处引用——PR #1005 合入后删除白名单。
-const ALLOW_MISSING = new Set([
-  'components/FileStagingArea.vue:file.png',
-  'components/FileStagingArea.vue:word.png',
-  'components/FileStagingArea.vue:pdf.png',
-])
-
 function walk(dir, out = []) {
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, ent.name)
@@ -54,16 +46,8 @@ test('frontend/src 引用的 static 图片全部存在', () => {
   assert.ok(refs.length >= 20, '扫描范围不对，只扫到 ' + refs.length + ' 处')
   const missing = refs
     .filter((r) => !existsSync(join(SRC, 'static', r.ref)))
-    .filter((r) => !ALLOW_MISSING.has(r.file + ':' + r.ref))
     .map((r) => r.file + ' -> static/' + r.ref)
   assert.deepEqual([...new Set(missing)], [], 'frontend/src/static 下不存在')
-})
-
-test('白名单里的条目仍然缺失（修掉之后要把白名单一起删掉）', () => {
-  const stillMissing = new Set(scan()
-    .filter((r) => !existsSync(join(SRC, 'static', r.ref)))
-    .map((r) => r.file + ':' + r.ref))
-  for (const k of ALLOW_MISSING) assert.ok(stillMissing.has(k), '白名单已过期：' + k)
 })
 
 test('裸 Image 对象的拖拽徽标在 file:// 打包页面下解析到包内（dev-board#975 同族）', () => {
