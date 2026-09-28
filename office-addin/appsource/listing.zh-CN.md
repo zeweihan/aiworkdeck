@@ -61,7 +61,7 @@ AI WorkDeck
 <h3>安装前须知：账户与付费</h3>
 <p>本加载项是 AI WorkDeck 服务的 Office 客户端，不能独立使用。</p>
 <ul>
-  <li><strong>需要 AI WorkDeck 账户。</strong>在任务窗格内用手机号或邮箱＋验证码登录。账户可在 <a href="https://www.workdeck.ai">https://www.workdeck.ai</a> 免费注册。</li>
+  <li><strong>需要 AI WorkDeck 账户，任何人都可以注册。</strong>本加载项面向个人用户：不需要企业协议，不需要管理员审批，也没有最低席位数。可在 <a href="https://www.workdeck.ai/zh/account">https://www.workdeck.ai/zh/account</a> 免费注册；也可以直接在任务窗格里填写邮箱和收到的验证码登录，首次登录即自动创建免费账户。登录、注册、退出登录都可以在任务窗格内完成。</li>
   <li><strong>AI 用量需要额外付费。</strong>每次 AI 请求都会扣减账户里的 Credits，余额用尽后 AI 功能停止工作。Credits 在 <a href="https://www.workdeck.ai">https://www.workdeck.ai</a> 的账户页充值。加载项本身免费安装、内部没有收银台，只在账户菜单里显示剩余额度，需要充值时跳转到官网。</li>
 </ul>
 <p>服务条款：<a href="https://www.aiworkdeck.com/legal/terms">https://www.aiworkdeck.com/legal/terms</a>；隐私政策：<a href="https://www.aiworkdeck.com/legal/privacy">https://www.aiworkdeck.com/legal/privacy</a>。</p>
@@ -75,6 +75,9 @@ AI WorkDeck
 <h3>技术支持</h3>
 <p><a href="https://www.workdeck.ai">https://www.workdeck.ai</a></p>
 ```
+
+1,669 字符，按上面整段 HTML（含标签）计（2026-09-28，按政策 1100.5.7.3 改写「任何人都可以注册」之后）。
+在 4,000 以内。注册链接指国际站的中文账户页（/zh/account），理由见下一段。
 
 **账户与充值链接为什么跟英文列表一样指向 workdeck.ai**
 

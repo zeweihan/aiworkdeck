@@ -40,6 +40,7 @@ This add-in is the Office client for the AI WorkDeck service. All AI work happen
 service, so a sign-in is required. The value proposition is stated on the task pane's first
 screen before any sign-in is requested. There is no SSO and no Microsoft Entra ID dependency,
 so there is no SSO fallback flow to test.
+This is not an enterprise-only add-in. Individual users self-register for free at https://www.workdeck.ai/en/account; the task pane itself offers Sign in, Sign up and Sign out.
 
 ADDITIONAL PURCHASES
 AI usage consumes Credits from the signed-in AI WorkDeck account. The add-in contains no
@@ -62,8 +63,10 @@ STEP 1 - OPEN THE TASK PANE  (Word)
    on Mac.) The same fallback applies to Steps 6 and 7 below.
 
 STEP 2 - SIGN IN
-3. The pane opens on a welcome card that explains what the add-in does. Choose the
-   sign-in entry on that card (there is no control labelled "Sign in" in the header).
+3. The pane opens on a welcome card that first explains what the add-in does (three short
+   points), followed by two entries: "Sign in" and "Create a free account". Choose
+   "Sign in" and use the test account above. Do NOT choose "Create a free account" - it
+   opens the website sign-up page in your browser, and the test account already exists.
 4. The sign-in form shows an Email field and a Verification code field (on this
    international site the phone-number method is not offered, so there is no tab to pick).
 5. Enter {{REVIEW_EMAIL}} in the Email field and {{REVIEW_CODE}} in the Verification code
@@ -73,6 +76,8 @@ STEP 2 - SIGN IN
 6. Choose "Sign in and connect". The pane returns to the chat view and an avatar
    appears at the top right. The sign-in form is deliberately not reachable again once
    signed in; use the avatar menu to sign out first if you need to sign in a second time.
+   Sign-out is in the avatar menu at the top right. Below the sign-in form there is a
+   "Sign up for free" link that opens the AI WorkDeck sign-up page in the system browser.
 
 STEP 3 - SELECT A PROJECT
 7. Use the project dropdown at the top of the pane. The test account already has a project;

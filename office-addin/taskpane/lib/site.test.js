@@ -9,7 +9,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { rechargeUrl } from './site.js'
+import { legalUrl, rechargeUrl, signUpUrl } from './site.js'
 
 test('官方两站映射到各自的 /account 账户页', () => {
   assert.equal(rechargeUrl('https://addin.aiworkdeck.com'), 'https://aiworkdeck.com/account')
@@ -23,4 +23,28 @@ test('私有部署 / 桌面本机 / 空地址一律回空串（入口隐藏）',
   assert.equal(rechargeUrl('http://127.0.0.1:5269'), '')
   assert.equal(rechargeUrl(''), '')
   assert.equal(rechargeUrl('not a url'), '')
+})
+
+test('注册页：官方两站指向各自账户页（验证码即登录，账户页就是注册页）', () => {
+  assert.equal(signUpUrl('https://addin.aiworkdeck.com'), 'https://aiworkdeck.com/account')
+  assert.equal(signUpUrl('https://addin.workdeck.ai/'), 'https://workdeck.ai/account')
+})
+
+test('注册页：非官方后端回空串（入口隐藏）', () => {
+  assert.equal(signUpUrl('https://addin.yourfirm.com'), '')
+  assert.equal(signUpUrl('http://127.0.0.1:5269'), '')
+  assert.equal(signUpUrl(''), '')
+})
+
+test('法律文件：官方两站派生服务条款与隐私政策', () => {
+  assert.equal(legalUrl('https://addin.aiworkdeck.com', 'terms'), 'https://aiworkdeck.com/legal/terms')
+  assert.equal(legalUrl('https://addin.aiworkdeck.com', 'privacy'), 'https://aiworkdeck.com/legal/privacy')
+  assert.equal(legalUrl('https://addin.workdeck.ai', 'terms'), 'https://workdeck.ai/legal/terms')
+  assert.equal(legalUrl('https://addin.workdeck.ai', 'privacy'), 'https://workdeck.ai/legal/privacy')
+})
+
+test('法律文件：非官方后端或未知 kind 回空串', () => {
+  assert.equal(legalUrl('https://addin.yourfirm.com', 'terms'), '')
+  assert.equal(legalUrl('', 'privacy'), '')
+  assert.equal(legalUrl('https://addin.workdeck.ai', 'cookies'), '')
 })

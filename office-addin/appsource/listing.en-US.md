@@ -63,7 +63,7 @@ the brand name is not repeated (the docs call repeating the name a "don't").
 <h3>Before you install — account and paid usage</h3>
 <p>This add-in is the Office client for the AI WorkDeck service; it does not work on its own.</p>
 <ul>
-  <li><strong>An AI WorkDeck account is required.</strong> You sign in inside the task pane with your email address or mobile number and a one-time code. Accounts are free to create at <a href="https://www.workdeck.ai">https://www.workdeck.ai</a>.</li>
+  <li><strong>An AI WorkDeck account is required, and anyone can create one.</strong> This add-in is for individual users: there is no enterprise agreement, no administrator approval and no minimum seat count. Sign up free at <a href="https://www.workdeck.ai/en/account">https://www.workdeck.ai/en/account</a>, or simply sign in inside the task pane with your email address and the one-time code we send you: a free account is created the first time you sign in. Sign in, sign up and sign out are all available inside the task pane.</li>
   <li><strong>AI usage requires an additional purchase.</strong> Every AI request draws Credits from your AI WorkDeck account balance, and AI features stop working when the balance runs out. Credits are bought on the account page at <a href="https://www.workdeck.ai">https://www.workdeck.ai</a>. The add-in itself is free to install and contains no checkout — it shows your remaining balance in the account menu and links out to the website when you need to top up.</li>
 </ul>
 <p>Terms of service: <a href="https://www.aiworkdeck.com/en/legal/terms">https://www.aiworkdeck.com/en/legal/terms</a>. Privacy policy: <a href="https://www.aiworkdeck.com/en/legal/privacy">https://www.aiworkdeck.com/en/legal/privacy</a>.</p>
@@ -77,6 +77,9 @@ the brand name is not repeated (the docs call repeating the name a "don't").
 <h3>Support</h3>
 <p><a href="https://www.workdeck.ai">https://www.workdeck.ai</a></p>
 ```
+
+3,602 characters, counted over the whole HTML block above including tags (2026-09-28, after the
+"anyone can create one" rewrite for policy 1100.5.7.3). Under the 4,000 limit.
 
 ---
 

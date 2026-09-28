@@ -109,6 +109,18 @@
 
       <p v-if="loginStatus" class="status" :class="loginStatusKind">{{ loginStatus }}</p>
 
+      <!--
+        注册入口（AppSource 1100.5.7.1：登录页必须能注册）。官网账户页就是注册页；
+        两站又都是「验证码即登录」，所以验证码模式下直接登录也会自动建号，第二行把这点说出来。
+        口令模式只能登录不能注册，第二行不显示。非官方后端（私有部署）没有官网，整块不渲染。
+      -->
+      <div v-if="signUpHref" class="signup">
+        <p class="signup-line">{{ t('noAccountYet') }}<button class="linklike strong" @click="openExternal(signUpHref)">{{ t('signUpFree') }}</button></p>
+        <p v-if="mode === 'email'" class="signup-line">{{ t('signUpByEmailCode') }}</p>
+        <p v-else-if="mode === 'phone'" class="signup-line">{{ t('signUpByPhoneCode') }}</p>
+        <p class="signup-line agree">{{ t('agreePrefix') }}<button class="linklike" @click="openExternal(termsHref)">{{ t('termsOfService') }}</button>{{ t('agreeMiddle') }}<button class="linklike" @click="openExternal(privacyHref)">{{ t('privacyPolicy') }}</button>{{ t('agreeSuffix') }}</p>
+      </div>
+
       <details class="advanced">
         <summary>{{ t('advancedSettings') }}</summary>
 
@@ -183,6 +195,7 @@ import { setupCaptcha } from '../lib/captcha.js'
 import { accountIdentityOf, defaultMode, isModeAvailable, visibleCodeTabs } from '../lib/loginTabs.js'
 import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
 import { t } from '../lib/i18n.js'
+import { legalUrl, openExternal, signUpUrl } from '../lib/site.js'
 
 const props = defineProps({
   initialServerUrl: { type: String, default: '' },
@@ -225,6 +238,11 @@ let captchaReady = null
 
 /** 当前连接状态摘要：只读本地设置，不发请求 */
 const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || t('noAddressSet'))
+
+/** 官网注册页与法律文件（仅官方两站；私有部署为空串，注册区块整块不渲染） */
+const signUpHref = computed(() => signUpUrl(serverUrl.value))
+const termsHref = computed(() => legalUrl(serverUrl.value, 'terms'))
+const privacyHref = computed(() => legalUrl(serverUrl.value, 'privacy'))
 
 /** 本站点支持的验证码 tab（未知时两个都给） */
 const codeTabs = computed(() => visibleCodeTabs(identity.value))
@@ -525,6 +543,23 @@ function save() {
 }
 
 .linklike:hover { color: var(--awd-primary); }
+
+.linklike.strong { color: var(--awd-primary); }
+
+.signup {
+  margin-top: 12px;
+}
+
+.signup-line {
+  margin: 0 0 6px;
+  color: var(--awd-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.signup-line .linklike { vertical-align: baseline; padding: 0; }
+
+.signup-line.agree { font-size: 11px; }
 
 .code-btn {
   flex: none;
