@@ -1113,15 +1113,24 @@ try {
   // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
   // 2026-08-21（dev-board#96）：只剩一项时下拉撤掉、点头像直开设置。
   // 2026-08-27（dev-board#205）：下拉恢复成两项（设置 / 退出登录）。
+  // 2026-09-25（dev-board#899，PR#982）：最前面加「我的日程」，动作项恰好三项
+  // （我的日程 / 设置 / 退出登录，sidebar-shell.md 与 check:nav 同口径）。
   console.log('== J6.3 头像与设置标签 ==')
-  await step('点头像开两项下拉，点「设置」开中栏标签、不跳页', async () => {
+  await step('点头像开三项下拉，点「设置」开中栏标签、不跳页', async () => {
     await mouseClickSel('.avatar-btn')
     await page.waitForSelector('.avatar-menu', { timeout: 8000 })
     const items = await page.$$eval('.avatar-menu .avatar-menu-item', (els) => els.map((e) => e.textContent.trim()))
-    if (items.length !== 2) throw new Error('头像下拉应当恰好两项（设置/退出登录），实际: ' + JSON.stringify(items))
-    if (!items[0].includes('设置')) throw new Error('下拉第一项不是「设置」: ' + items[0])
-    if (!items[1].includes('退出登录')) throw new Error('下拉第二项不是「退出登录」: ' + items[1])
-    await mouseClickSel('.avatar-menu .avatar-menu-item')
+    if (items.length !== 3) throw new Error('头像下拉应当恰好三项（我的日程/设置/退出登录），实际: ' + JSON.stringify(items))
+    if (!items[0].includes('我的日程')) throw new Error('下拉第一项不是「我的日程」: ' + items[0])
+    if (!items[1].includes('设置')) throw new Error('下拉第二项不是「设置」: ' + items[1])
+    if (!items[2].includes('退出登录')) throw new Error('下拉第三项不是「退出登录」: ' + items[2])
+    // 按序号点第二项（「设置」）——第一项「我的日程」会 reLaunch 离开工作台
+    const settingsBox = await page.$$eval('.avatar-menu .avatar-menu-item', (els) => {
+      const r = els[1].getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    })
+    await page.mouse.click(settingsBox.x, settingsBox.y)
+    await sleep(700)
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
     if (await page.$('.avatar-menu')) throw new Error('点完菜单项下拉没有收起')
     const h = await page.evaluate(() => location.hash)
@@ -1285,7 +1294,9 @@ try {
     await step('开两个网页标签并把第一个导航到测试站', async () => {
       let opened = []
       for (let round = 0; round < 6 && opened.length < 2; round++) {
-        await mouseClickSel('[title="浏览器"]')
+        // 顶栏按钮 tooltip 2026-09-25 起由「浏览器」改为「新建浏览器标签」（dev-board#945，PR#992；
+        // 真源 locales/zh-CN/workbench.js 的 browserNewTabHint）
+        await mouseClickSel('[title="新建浏览器标签"]')
         await sleep(600)
         opened = (await webTabs()) || []
       }
@@ -2677,13 +2688,15 @@ try {
       await shot('J11-history-chip-colleague')
     })
 
-    await step('J11-历史：点 chip 打开中栏「提交历史」标签且它是激活标签', async () => {
+    // 标签名 2026-09-25 起由「提交历史」改为「完整历史」（dev-board#957，PR#987 去 Git 术语；
+    // 真源 locales/zh-CN/version.js 的 historyTabName）
+    await step('J11-历史：点 chip 打开中栏「完整历史」标签且它是激活标签', async () => {
       await openHistoryTabByChip()
       const tab = await page.evaluate(() => {
         const el = document.querySelector('.tab-item.active .tab-name')
         return el ? (el.innerText || '').trim() : ''
       })
-      if (tab !== '提交历史') throw new Error('激活标签不是「提交历史」，实际是: ' + JSON.stringify(tab))
+      if (tab !== '完整历史') throw new Error('激活标签不是「完整历史」，实际是: ' + JSON.stringify(tab))
       await shot('J11-history-tab-open')
     })
 
