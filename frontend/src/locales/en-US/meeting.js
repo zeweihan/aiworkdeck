@@ -107,6 +107,16 @@ export default {
   resultUnreadable: 'The transcript could not be read. Try again later; the original recording is still saved.',
   autoTranscribeSkippedSilent: 'No sound was detected, so this recording was not transcribed automatically to avoid charges. Tap "Start Transcription" if there was speech.',
   autoTranscribeSkippedShort: 'The recording is too short, so it was not transcribed automatically. Tap "Start Transcription" if you still need it.',
+  autoTranscribeSkippedDeclined: 'The transcription charge was not confirmed. The recording is saved but was not submitted; tap "Start Transcription" when you need it.',
+  // ---- Confirmation before a paid transcription (dev-board#968): asked every time, no "don't ask again" ----
+  paidConfirmTitle: 'Submit cloud transcription',
+  paidConfirmBody: 'AI WorkDeck will transcribe this for you and bill Credits from your account balance by audio duration. The charge is held as soon as it is submitted, and processing may still be charged when no speech is detected.',
+  paidConfirmDuration: 'Audio length: {duration}',
+  paidConfirmEstimate: 'Estimated cost: about {credits} Credits (rounded up to whole minutes; the final charge may differ)',
+  paidConfirmPerMinute: 'Rate: about {credits} Credits per minute (the final charge may differ)',
+  paidConfirmBalance: 'Current balance: {credits} Credits',
+  paidConfirmLocalHint: 'To keep the audio on this device and spend no Credits, cancel, then turn on "Keep recordings on this device" under Voice > Meeting Recording to transcribe locally.',
+  paidConfirmOk: 'Transcribe',
   emptyTranscriptBillingHint: 'Platform transcription may still charge Credits for processing time. Retrying submits a new task and may incur another charge.',
   emptyTranscriptHint: "No speech was detected. Check the selected microphone, input volume and connection, then play the recording to check for sound. If it contains conversation, you can retry transcription.",
 

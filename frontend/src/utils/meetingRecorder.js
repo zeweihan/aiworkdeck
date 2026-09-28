@@ -16,6 +16,7 @@ import { getAuthHeaders } from '@/utils/auth.js'
 // 所以文案与面板同一个命名空间。非组件模块的翻译入口是 t()，且只能在函数体内取值。
 import { t } from '@/i18n'
 import { resolveTrackEndedStatus, decideAutoTranscribe } from '@/utils/meetingRecorderStatus.js'
+import { confirmPaidTranscription } from '@/utils/paidTranscribeGate.js'
 
 const CHUNK_TIMESLICE_MS = 5000
 const UPLOAD_TIMEOUT_MS = 60000
@@ -34,6 +35,7 @@ export const recorderState = reactive({
   error: '',
   configured: null, // 后端是否已配转写凭证（create 时回报，null=未知）
   // 最近一次结束录音时没有自动提交转写的原因：null | 'too-short' | 'silent'（BUG-57）
+  // | 'declined'（平台档付费确认被取消，dev-board#968）
   autoTranscribeSkipped: null,
 })
 
@@ -216,6 +218,11 @@ export async function stopRecording() {
   const durationMs = recorderState.seconds * 1000
   const meetingId = recorderState.meetingId
   const decision = decideAutoTranscribe({ seconds: recorderState.seconds, peakLevel, meterAvailable })
+  // 自动转写在平台档会当场预扣 Credits，提交前先确认（dev-board#968）。
+  // 与收尾上传并行问：用户看弹窗的这几秒里最后几块照常落库。
+  const consent = decision.transcribe
+    ? confirmPaidTranscription({ durationMs, projectId: recorderState.projectId }).catch(() => false)
+    : Promise.resolve(false)
 
   const stopped = new Promise((resolve) => { stopResolve = resolve })
   try {
@@ -228,11 +235,12 @@ export async function stopRecording() {
   await stopped // 队列全部落库后 resolve（见 drainUploadQueue）
 
   cleanupMedia()
+  const transcribe = decision.transcribe && await consent
   let meeting = null
   try {
-    // 过短 / 全程无声：只不自动提交，会议留在「未转写」，用户可手动点「开始转写」
-    meeting = await finishMeetingRecording(meetingId, durationMs, decision.transcribe ? undefined : false)
-    recorderState.autoTranscribeSkipped = decision.reason
+    // 过短 / 全程无声 / 用户没确认付费：只不自动提交，会议留在「未转写」，用户可手动点「开始转写」
+    meeting = await finishMeetingRecording(meetingId, durationMs, transcribe ? undefined : false)
+    recorderState.autoTranscribeSkipped = decision.transcribe && !transcribe ? 'declined' : decision.reason
   } catch (e) {
     console.error('[meeting] finish 失败', e)
     recorderState.error = t('meeting.finishWriteBackFailed', { message: (e && e.message) || e })

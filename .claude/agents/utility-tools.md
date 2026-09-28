@@ -266,6 +266,24 @@ FAILED 文案按网关回的 `billing.chargedCents`：>0 写「已结算 N Credi
 `decideAutoTranscribe`（`utils/meetingRecorderStatus.js`：不足 2 秒或整场电平峰值 < 0.02）决定
 finish 是否带 `transcribe:false`，跳过时面板/胶囊 toast 说明，会议留在「未转写」可手动提交。
 
+**付费转写的提交前确认（dev-board#968，BUG-72）**：三个会提交转写的入口——资源管理器右键「转写」
+（project-overview `onTranscribeAudio`，确认在调 register-file **之前**，因为那个接口会当场提交并预扣）、
+面板「开始转写 / 重试转写」（`MeetingRecordingPanel.onTranscribe`）、结束录音的自动转写
+（`meetingRecorder.stopRecording`，与收尾上传并行问，取消则 finish 带 `transcribe:false`，
+`autoTranscribeSkipped='declined'`）——都经 `utils/paidTranscribeGate.js`（接线）→
+`utils/paidTranscribeConfirm.js`（零依赖纯逻辑）弹 AwdDialog。**每次都问，不做「不再提示」**
+（Credits 扣费必须显式）。只有确定不花 Credits 的档位才放行不问：`local` / `byok` /
+`platformAvailable=false`、会议列表 `configured=false`、这份音频已有记录且状态不在 RECORDED/FAILED/EMPTY（与 register-file 的提交条件逐字对齐）；
+档位读不到按可能扣费处理照样问。**档位优先读 `GET /api/meetings/projects/{id}` 的 `tier`**（项目成员可读；
+团队服务器的非管理员读不到机器级 `/api/platform-services`），没有才退回后者。框里是计费方式 + 时长（已知时）
++ 预计费用（`/api/platform-services/remote` 的 `asrPrice {unit, creditsPerUnit}`，creditsPerUnit 与
+balanceCents 同为「分」，只认 `unit=minute`，精确 op=transcribe 优先于通配 `*`；估算 = ceil(带小数分钟 × 单价)，与网关结算同算法；文案必带「约」）+ 余额（顶栏 chip 同端点，
+cents/100 显示为 Credits）。余额与单价各有 1.5 秒竞速上限，超时就不显示那一行。
+AwdDialog 队列非空时持有 `overlayState` 的 `'awd-dialog'`（`utils/dialog.js`），让工作台把 BrowserView 藏起来——
+否则网页开着时框被原生层盖住、Esc 进不来，录音收尾会永远卡在等确认。
+后端没有取消进行中转写的接口（只有 DELETE 会议），转写中条目因此没有「取消」。
+回归 `frontend/tests/meeting-recorder/paid-transcribe-confirm.test.mjs`。
+
 **转写卡死判定与进度提示（dev-board#532，2026-09-09 维护者拍板）**：会议进入 `TRANSCRIBING`
 之后只有上游给终态才会离开，上游永不给终态（听悟任务被清理、网关任务被回收）就永远卡着，
 而 `startTranscription` 对 `TRANSCRIBING` 是幂等返回，用户连「重试转写」都点不动。

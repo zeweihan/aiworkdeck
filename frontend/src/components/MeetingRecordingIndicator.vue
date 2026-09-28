@@ -55,7 +55,8 @@ export default {
       if (meeting && skipped) {
         try {
           uni.showToast({
-            title: t(skipped === 'silent' ? 'meeting.autoTranscribeSkippedSilent' : 'meeting.autoTranscribeSkippedShort'),
+            title: t(skipped === 'silent' ? 'meeting.autoTranscribeSkippedSilent'
+              : skipped === 'declined' ? 'meeting.autoTranscribeSkippedDeclined' : 'meeting.autoTranscribeSkippedShort'),
             icon: 'none',
             duration: 4000,
           })

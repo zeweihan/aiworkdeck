@@ -92,6 +92,8 @@ public class MeetingRecordingController {
         Map<String, Object> result = new HashMap<>();
         result.put("meetings", meetings);
         result.put("configured", transcriptionService.isConfigured());
+        // 生效档位（platform/byok/local）：前端付费转写确认只在 platform 档弹框（dev-board#968）
+        result.put("tier", transcriptionService.tierValue());
         return result;
     }
 

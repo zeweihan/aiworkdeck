@@ -166,6 +166,55 @@ class PlatformServiceControllerTest {
         assertNull(enabled(res).get("pkulaw"));
     }
 
+    @Test
+    @DisplayName("asr 单价透给付费转写确认框：取开着的 asr 行的 unit 与 creditsPerUnit（dev-board#968）")
+    @SuppressWarnings("unchecked")
+    void exposesAsrPriceFromPricingRows() throws Exception {
+        Fixture f = fixture(true, true);
+        when(f.gateway().getPricing(anyInt())).thenReturn(MAPPER.readTree("""
+                {"pricing":[
+                  {"service":"ocr","op":"*","unit":"page","creditsPerUnit":5,"enabled":true},
+                  {"service":"asr","op":"*","unit":"minute","creditsPerUnit":12,"enabled":true}
+                ],"balanceCents":100}"""));
+
+        Map<String, Object> price = (Map<String, Object>) data(f.controller().remote(null)).get("asrPrice");
+
+        assertNotNull(price);
+        assertEquals("minute", price.get("unit"));
+        assertEquals(12, ((Number) price.get("creditsPerUnit")).intValue());
+    }
+
+    @Test
+    @DisplayName("asr 单价精确 op=transcribe 优先于排在前面的通配行（与网关 findPricing 一致）")
+    @SuppressWarnings("unchecked")
+    void asrPricePrefersExactTranscribeRow() throws Exception {
+        Fixture f = fixture(true, true);
+        when(f.gateway().getPricing(anyInt())).thenReturn(MAPPER.readTree("""
+                {"pricing":[
+                  {"service":"asr","op":"*","unit":"minute","creditsPerUnit":20,"enabled":true},
+                  {"service":"asr","op":"transcribe","unit":"minute","creditsPerUnit":12,"enabled":true},
+                  {"service":"asr","op":"*","unit":"minute","creditsPerUnit":30,"enabled":true}
+                ]}"""));
+
+        Map<String, Object> price = (Map<String, Object>) data(f.controller().remote(null)).get("asrPrice");
+
+        assertEquals(12, ((Number) price.get("creditsPerUnit")).intValue());
+    }
+
+    @Test
+    @DisplayName("没有开着的 asr 行 / 单价表取不到：asrPrice 为 null，前端不显示估算")
+    void asrPriceIsNullWhenUnknown() throws Exception {
+        Fixture f = fixture(true, true);
+        when(f.gateway().getPricing(anyInt())).thenReturn(MAPPER.readTree("""
+                {"pricing":[{"service":"asr","op":"*","unit":"minute","creditsPerUnit":12,"enabled":false}]}"""));
+        assertNull(data(f.controller().remote(null)).get("asrPrice"));
+
+        Fixture down = fixture(true, true);
+        when(down.gateway().getPricing(anyInt()))
+                .thenThrow(new GatewayException(GatewayException.Kind.GATEWAY_UNREACHABLE, "平台服务暂时不可用"));
+        assertNull(data(down.controller().remote(null)).get("asrPrice"));
+    }
+
     // ==================== 本月分服务用量 ====================
 
     @SuppressWarnings("unchecked")

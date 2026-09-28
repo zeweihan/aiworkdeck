@@ -24,3 +24,13 @@ export const finishArgs = () => finishArgList
 export const finishCallCount = () => finishCalls
 // 断言里要能读出 attempt，所以把参数一起编进返回值
 export const t = (key, params) => (params ? key + JSON.stringify(params) : key)
+// 付费转写确认（dev-board#968）。默认「用户确认」，保持既有用例的前提不变；
+// 需要模拟取消的用例用 setPaidConfirmResult(false)。
+let paidConfirmResult = true
+const paidConfirmArgList = []
+export const confirmPaidTranscription = async (opts) => {
+  paidConfirmArgList.push(opts)
+  return paidConfirmResult
+}
+export const setPaidConfirmResult = (v) => { paidConfirmResult = v }
+export const paidConfirmArgs = () => paidConfirmArgList

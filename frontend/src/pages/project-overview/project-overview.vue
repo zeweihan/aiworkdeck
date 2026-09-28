@@ -2323,6 +2323,7 @@ import {
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { signOut } from '@/utils/signOut.js'
 import { loadSiteLinks, siteBaseUrl, siteLinks } from '@/utils/siteLinks.js'
+import { confirmPaidTranscription } from '@/utils/paidTranscribeGate.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { mergeMembers } from '@/utils/mergeMembers.js'
 import { remoteAheadText } from '@/utils/collabWording.js'
@@ -4181,7 +4182,9 @@ export default {
     },
     // 右键「转写」：注册成会议记录（凭证已配则后端顺手提交转写），跳会议录音面板定位到它
     // （dev-board#227）。菜单项本身已按 meetingRecorderEnabled 门控，这里不再重复判。
+    // register-file 会当场提交并在平台档预扣 Credits，所以先确认；取消则什么都不做（dev-board#968）。
     async onTranscribeAudio(file) {
+      if (!(await confirmPaidTranscription({ projectId: this.projectId, audioFileId: file.id }))) return
       try {
         const res = await registerMeetingFromFile(this.projectId, file.id)
         this.meetingFocusId = res && res.meeting ? res.meeting.id : null
