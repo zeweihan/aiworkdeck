@@ -121,6 +121,10 @@
             "x64"
           ]
         }
+      ],
+      "sign": "scripts/sign-win.js",
+      "signingHashAlgorithms": [
+        "sha256"
       ]
     },
     "nsis": {
