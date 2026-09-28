@@ -87,3 +87,18 @@ Upload order in Partner Center is the display order, so the numbers are the orde
 重拍时注意：修订气泡会打印 Word 用户的真实姓名，截图前把该窗口切成行内修订
 （`osascript -e 'tell application "Microsoft Word" to set revisions mode of view of active window to in line revisions'`），
 截完再切回去。
+
+## 2026-09-28 按认证驳回 100.3.2.2 修图（dev-board#1007）
+
+审核意见：`Please try to hide other addins Icons from the ribbon`。上架的五张（01 / 02 / 03 / 04 / 06）
+没有重拍，用 ImageMagick 在像素层处理，尺寸与文件大小仍满足 1366x768 / ≤1024 KB：
+
+- Mac 三宿主四张：把「打开 AI WorkDeck」按钮块（含左侧分隔线）整体左移到最后一个 Office 原生按钮
+  （编辑器 / 加载项 / 设计器）之后，再用 ribbon 底色（Word 浅色 245 / Excel 40 / PowerPoint 28）
+  填平原来 Ghostwriter、GPT for Excel Word、Claude 所在区域。
+- `06-word-web.png`：抹掉浏览器工具栏的扩展图标（用同一行干净底色横向拉伸覆盖），关掉第二个标签页
+  并把「+」挪回第一个标签页旁；Word 网页版自身的功能区没有第三方加载项，未动。
+- `05-word-windows-tracked-changes.png`（备用第六张）**没有处理**：Windows 功能区同样有第三方加载项，
+  Windows 任务栏也带一堆图标，要用它必须先重拍或照上面的办法修。
+
+维护者在 Partner Center 两种语言的 Marketplace listings 里把旧的五张全部删除后按 ../SUBMIT.md §4.4 的顺序重传。

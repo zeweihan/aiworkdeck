@@ -119,7 +119,7 @@ npx office-addin-manifest validate dist-deploy-intl/manifest.xml
 | SourceLocation 指向有效网址 | — | 合规 | `https://addin.workdeck.ai/office-addin/taskpane.html`，§1 里有逐条 200 自检 |
 | office.js 必须用微软托管的最新版 | `https://appsforoffice.microsoft.com/lib/1/hosted/office.js` | 合规**当且仅当不用 `--china` 出包** | `taskpane.html` 源文件永远指全球版；`--china` 只在世纪互联私有分发里换 CDN。**提交包不许带 `--china`** |
 | 用最新正式版（非 preview）清单 schema | — | 合规 | add-in only 清单，`appforoffice/1.1` + `VersionOverridesV1_0` |
-| 更新要递增版本号 | — | 待办 | 当前 `<Version>1.0.0`。每次重新提交必须 +1 |
+| 更新要递增版本号 | — | 已递增到 1.0.1（2026-09-28 第二次提交） | `manifest.xml` 的 `<Version>`；之后每次重新提交仍须 +1 |
 
 ### 1120.2 Mobile requirements
 
@@ -144,7 +144,9 @@ npx office-addin-manifest validate dist-deploy-intl/manifest.xml
 |---|---|---|---|
 | 1100.1 额外收费必须在描述里披露 | `Your offer description must disclose any app or add-in features or content that require an extra charge` | 合规 | 两份 listing 的 Description 都有「安装前须知 / Before you install」整段，写明需要账户、AI 用量扣 Credits、充值链接 |
 | 1100.1 必须勾 in-app purchase 复选框 | Product setup 的 `requires purchase of a service or offers additional in-app purchases` | 待勾 | §0 与 §2 的 Product setup 行 |
-| 1100.1 首次使用体验 | 要求用户登录之前，价值主张必须已经说清 | 合规 | 未登录空态是欢迎卡，先讲能做什么再请登录（`i18n.js` 的 `signInWelcomeTitle` / `signInWelcomeHint`） |
+| 1100.1 首次使用体验（1100.1.5） | 要求用户登录之前，价值主张必须已经说清 | 合规（2026-09-28 按驳回意见重做） | 未登录空态是价值卡（`ChatView.vue` 的 `.welcome`）：标题一句话讲清定位，下面三条收益（修订形式改文档 / 逐条处理批注与分段校对 / 基于自己项目文件作答，三宿主通用），再给「Sign in」主按钮与「Create a free account」次级入口，末尾一行脚注说明免费安装、AI 用量扣 Credits。文案 key 为 `i18n.js` 的 `welcomeTitle` / `welcomeBenefit1-3` / `createFreeAccount` / `welcomeFootnote` |
+| 1100.5.7.1 登录页要有注册入口 | 登录界面必须给出 Sign up | 合规（2026-09-28 补） | `SettingsView.vue` 登录按钮下方的注册区块：「No account yet? Sign up for free」（`site.js` 的 `signUpUrl`，官方两站的 `/account` 账户页即注册页）+ 验证码模式下说明首次登录自动建号 + 服务条款/隐私政策同意句（`legalUrl`）。私有部署后端没有官网，整块不渲染 |
+| 1100.5.7.3 企业插件要在描述里写明 | 非企业插件要说明个人可自助注册 | 合规（2026-09-28 补） | 两份 listing 的「Before you install」第一条写明面向个人用户、无企业协议/管理员审批/最低席位，给出注册链接 `https://www.workdeck.ai/en/account`；审核说明「WHY AN ACCOUNT IS NEEDED」同步 |
 | 1100.5 HTTPS | — | 合规 | 同 1120.3 |
 | 1100.5 不得申请过高权限 | 不得 full-control | 合规 | `<Permissions>ReadWriteDocument</Permissions>`，是编辑文档所需的最低档；不是 `ReadWriteMailbox` 那类 |
 | 1100.5 图标尺寸正确 | — | 合规 | 32x32 / 64x64，见 §2 图片表 |
@@ -164,6 +166,8 @@ npx office-addin-manifest validate dist-deploy-intl/manifest.xml
   往 `<Resources>` 里加任何 `bt:String`，都必须同时加 en-US Override，否则测试红。
 - 改商店文案时**两份 listing 一起改**，并回来核字数（脚本见每份文件头部的上限表）。
 - 重新提交前把 `<Version>` 递增（1120.1）。
+- **欢迎卡与登录页注册入口是认证要求，不是装饰**：改 `ChatView.vue` 的 `.welcome` 或
+  `SettingsView.vue` 的注册区块前，先回看 §3 政策表的 1100.1.5 / 1100.5.7.1 两行。
 
 ## 5. 未验证 / 待办
 
@@ -177,3 +181,17 @@ npx office-addin-manifest validate dist-deploy-intl/manifest.xml
 - 清单里**没有 `<Requirements>` 元素**，所以校验器判定支持面一直到 Office 2013 与 iPad。
   代码里各 API 都有运行时降级守卫，但「全平台都要能用」这条（1120.3）在老版本上没有实测覆盖。
   真被审核员在 Office 2016 上打回时，正确做法是补 `<Requirements>` 收窄声明面，而不是改代码。
+
+## 6. 2026-09-27 首次驳回与修复
+
+首次提交的认证报告（2026-09-27）列了四条，2026-09-28 逐条处理：
+
+| 政策 | 驳回意见 | 改了什么 |
+|---|---|---|
+| 1100.1.5 First Run Experience | 任务窗格首屏没说清价值主张 | `taskpane/components/ChatView.vue` 的未登录欢迎卡改成价值卡（标题 + 三条收益 + Sign in + Create a free account + 脚注）；文案在 `taskpane/lib/i18n.js`，旧的 `signInWelcomeTitle` / `signInWelcomeHint` 两个 key 已删 |
+| 1100.5.7.1 | 登录页缺 Sign up 入口（审核附图是 `SettingsView.vue` 的登录表单） | `taskpane/components/SettingsView.vue` 登录按钮下加注册区块与条款同意句；`taskpane/lib/site.js` 新增 `signUpUrl` / `legalUrl`，`site.test.js` 加用例；`loginHint` 改写 |
+| 1100.5.7.3 | 企业插件须在描述里写明 | 我们不是企业插件：`listing.en-US.md` / `listing.zh-CN.md` 的「Before you install」第一条改写为个人可自助免费注册并给链接；`certification-notes.en.md` 同步（WHY AN ACCOUNT IS NEEDED + STEP 2） |
+| 1120.1（版本号） | 重新提交前 `<Version>` 必须递增 | `manifest.xml` 的 `<Version>` 1.0.0 → 1.0.1 |
+| 100.3.2.2（截图） | 截图问题 | 见 `screenshots/README.md`，主会话处理 |
+
+Partner Center 上要重做的动作见 `SUBMIT.md` §9。

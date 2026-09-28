@@ -7,9 +7,17 @@
         <!-- 未登录空态（dev-board#192）：品牌化欢迎卡替代一句红字 -->
         <div v-if="!configured" class="welcome">
           <img class="welcome-logo" :src="logoSrc" alt="AI WorkDeck" />
-          <div class="welcome-title">{{ t('signInWelcomeTitle') }}</div>
-          <p class="welcome-hint">{{ t('signInWelcomeHint') }}</p>
+          <!-- AppSource 1100.1.5 首次使用体验：首屏先讲清能做什么，再给登录与注册两个入口 -->
+          <div class="welcome-title">{{ t('welcomeTitle') }}</div>
+          <ul class="welcome-benefits">
+            <li>{{ t('welcomeBenefit1') }}</li>
+            <li>{{ t('welcomeBenefit2') }}</li>
+            <li>{{ t('welcomeBenefit3') }}</li>
+          </ul>
           <button class="welcome-btn" @click="goSignIn">{{ t('login') }}</button>
+          <!-- AppSource 1100.5.7.1：注册入口。非官方后端（私有部署）没有官网注册页，整颗按钮不渲染 -->
+          <button v-if="siteSignUp" class="welcome-secondary" @click="openExternal(siteSignUp)">{{ t('createFreeAccount') }}</button>
+          <p class="welcome-foot">{{ t('welcomeFootnote') }}</p>
         </div>
         <template v-else>
           <p>{{ t('emptyHint') }}</p>
@@ -370,7 +378,7 @@ import { micSupported, startRecording, MAX_RECORD_MS } from '../lib/wavRecorder.
 import { postDictate } from '../lib/api.js'
 import { t } from '../lib/i18n.js'
 import { renderMarkdown } from '../lib/markdown.js'
-import { rechargeUrl, openExternal } from '../lib/site.js'
+import { rechargeUrl, signUpUrl, openExternal } from '../lib/site.js'
 import { riseIn, panelUp, popIn, staggerIn } from '../lib/motion.js'
 
 /**
@@ -410,6 +418,9 @@ const canSend = computed(() =>
 
 /** 官网充值页（仅官方云后端有；私有部署/桌面本机为空串，入口隐藏） */
 const siteRecharge = computed(() => rechargeUrl(props.settings.serverUrl))
+
+/** 官网注册页（同上白名单；空串时欢迎卡不渲染注册按钮） */
+const siteSignUp = computed(() => signUpUrl(props.settings.serverUrl))
 
 /**
  * 吸底守卫（dev-board#197）：只有用户本来就贴着底部时，流式增量才继续吸底；
@@ -814,7 +825,7 @@ async function confirmDelete(c) {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  max-width: 260px;
+  max-width: 300px;
   margin: 24px auto 0;
   padding: 26px 20px 22px;
   background: var(--awd-surface);
@@ -833,13 +844,38 @@ async function confirmDelete(c) {
 .welcome-title {
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.5;
   color: var(--awd-text);
 }
 
-.welcome-hint {
+.welcome-benefits {
   margin: 0;
+  padding-left: 16px;
+  align-self: stretch;
+  text-align: left;
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.6;
+  color: var(--awd-text-secondary);
+}
+
+.welcome-benefits li + li { margin-top: 4px; }
+
+.welcome-secondary {
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--awd-primary);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.welcome-secondary:hover { color: var(--awd-primary-hover); }
+
+.welcome-foot {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
   color: var(--awd-text-secondary);
 }
 

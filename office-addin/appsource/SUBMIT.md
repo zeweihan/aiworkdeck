@@ -92,4 +92,20 @@
 
 - 发布者名 `AI_WorkDeck` 与清单 `ProviderName` 「AI WorkDeck」差一个下划线：微软要求 identical or very similar，已按此提交；若以此被打回再改清单。
 - 截图上传报尺寸错误：必须精确 1366x768、PNG、1MB 以内，`screenshots/` 里的都已处理成这个规格。
-- Description 粘进去后字符超限：英文 3,317 字符、中文 1,562 字符，都在 4,000 以内；若表单按别的口径报超，删掉「Before you install」之后的段落最后一句即可。
+- Description 粘进去后字符超限：英文 3,602 字符、中文 1,669 字符（2026-09-28 第二次提交的版本），都在 4,000 以内；若表单按别的口径报超，删掉「Before you install」之后的段落最后一句即可。
+
+## 9. 2026-09-28 第二次提交
+
+首次提交 2026-09-27 被驳回，原因与仓库里的修复见 `README.md` §6。Partner Center 上只需要重做下面这些动作，
+其余页面（Product setup / Properties / Availability）不动：
+
+1. **Packages**：删掉旧的 manifest，重新上传 `dist-deploy-intl/manifest.xml`（`<Version>1.0.1</Version>`；
+   先按 `README.md` §1 重新出包并把 `dist-deploy-intl/` 整份部署到 `addin.workdeck.ai/office-addin/`，
+   线上清单与上传的这份必须是同一份）。
+2. **Marketplace listings → English (United States)**：Description 整段替换为 `listing.en-US.md` 的新版本。
+3. **Marketplace listings → Chinese (Simplified)**：Description 整段替换为 `listing.zh-CN.md` 的新版本。
+4. **Screenshots**（两种语言各一遍）：五张全部删除，按 `screenshots/README.md` 的新顺序与 caption 重传。
+5. **Review and publish → Notes for certification**：整段替换为 `certification-notes.en.md` 的新版本
+   （照旧把 `{{REVIEW_EMAIL}}` / `{{REVIEW_CODE}}` 换成真值）。
+6. 点 **Publish**。
+

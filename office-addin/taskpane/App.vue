@@ -246,7 +246,10 @@ import {
 
 const settings = reactive(loadSettings())
 const configured = computed(() => isConfigured(settings))
-const view = ref(configured.value ? 'chat' : 'settings')
+// 未登录也从对话视图进入：ChatView 的欢迎卡先讲清插件能做什么，再给登录 / 注册入口。
+// 原先未登录直接落在登录表单，AppSource 审核按 1100.1.5「首次使用体验未说明价值」驳回
+// （2026-09-27，dev-board#1008）——价值卡必须是第一屏，不能藏在「返回」后面。
+const view = ref('chat')
 const projects = ref([])
 /** 项目列表拉取失败（网络不通/服务端 500）：下拉渲染不出来时给用户一个可读提示 + 重试入口 */
 const projectsError = ref(false)

@@ -33,6 +33,30 @@ export function rechargeUrl(serverUrl) {
 }
 
 /**
+ * 官网注册页（AppSource 政策 1100.5.7.1：登录页必须给出注册入口）。
+ *
+ * 与充值是同一页：官网账户页 `/account` 未登录时就是 Sign in / Register 两个页签，
+ * 而且两站都是「验证码即登录」——首次用邮箱/手机号验证码登录会自动建号，所以不存在
+ * 一个单独的注册 URL。非官方后端回空串（私有部署的账户体系不在我们手里，入口隐藏）。
+ */
+export function signUpUrl(serverUrl) {
+  return rechargeUrl(serverUrl)
+}
+
+/**
+ * 官网法律文件（服务条款 / 隐私政策），同站根 `/legal/terms`、`/legal/privacy`，
+ * 路径按 locale 自动跳转。白名单同 rechargeUrl；kind 不认识或非官方后端回空串。
+ *
+ * @param kind 'terms' | 'privacy'
+ */
+export function legalUrl(serverUrl, kind) {
+  if (kind !== 'terms' && kind !== 'privacy') return ''
+  const account = rechargeUrl(serverUrl)
+  if (!account) return ''
+  return account.replace(/\/account$/, '/legal/' + kind)
+}
+
+/**
  * 在系统浏览器打开外链。Office 任务窗格里 window.open 在部分宿主（Mac Word 的
  * WKWebView）会被吞，官方姿势是 Office.context.ui.openBrowserWindow；
  * WPS 任务窗格的对应姿势是 wps.OAAssist.ShellExecute（官方 wpsjs 模板 util.js
