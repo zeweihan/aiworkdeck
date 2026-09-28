@@ -1510,6 +1510,9 @@ export default {
   height: 100%;
   overflow: hidden;
   padding: 24rpx;
+  /* uni 的 <view> 是 content-box：不收进来的话 100% + 上下 padding 会撑出 .preview-body，
+     贴底的缩放工具条被推到状态栏下面（dev-board#972） */
+  box-sizing: border-box;
   background: #282828;
   cursor: grab;
 }

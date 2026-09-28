@@ -67,6 +67,8 @@ export default {
   noFiles: '暂无文件',
   dropToRoot: '拖拽到此处移至根目录',
   dropFilesToRoot: '松开即导入到项目根目录',
+  dropInvalidTarget: '无法识别拖入的内容，请从资源管理器或暂存区拖动文件',
+  dropInRecycleBin: '回收站里不能放入文件，请先返回资源管理器',
   // 窗口化渲染 + 引用角标（dev-board#107 单元 F3）
   loadMoreItems: '展开更多（还有 {count} 项）',
   referencedCount: '引用 {count}',

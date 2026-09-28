@@ -85,7 +85,8 @@
                   <text v-if="selectedIds.includes(file.id)" class="check-mark">√</text>
                 </view>
               </view>
-              <image class="file-icon" :src="getFileIcon(file)" mode="aspectFit" />
+              <!-- 与资源管理器文件行同一个图标组件（dev-board#973） -->
+              <view class="file-icon"><FileTypeIcon :type="file.fileType" /></view>
               <text class="file-name" :title="file.name">{{ file.name }}</text>
               <text class="remove-btn" @tap.stop="$emit('remove', file.id)">×</text>
            </view>
@@ -112,9 +113,10 @@
 import { ICONS } from '@/config/icons.js'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
+import FileTypeIcon from '@/components/FileTypeIcon.vue'
 export default {
   name: 'FileStagingArea',
-  components: { UnlockHint },
+  components: { UnlockHint, FileTypeIcon },
   props: {
     visible: {
       type: Boolean,
@@ -192,13 +194,6 @@ export default {
       if (n >= 1024) return Math.round(n / 1024) + 'KB'
       return n + 'B'
     },
-    getFileIcon(file) {
-      if (!file) return '/static/file.png'
-      const name = file.name.toLowerCase()
-      if (name.endsWith('.doc') || name.endsWith('.docx')) return '/static/word.png'
-      if (name.endsWith('.pdf')) return '/static/pdf.png'
-      return '/static/file.png' // Default
-    },
     isWordFile(file) {
       if (!file || !file.name) return false
       const n = file.name.toLowerCase()
@@ -272,6 +267,10 @@ export default {
       uni.$emit('file-drag-start')
     },
     onDragEnd() {
+      // 拖拽被取消（拖出窗口 / Esc / 落空）时全局兜底没人消费，留着会被下一次
+      // 落在文件夹行上的 drop 当成这份文件移过去（dev-board#974）。drop 先于 dragend
+      // 派发，且各 drop 处理器都在首个 await 前同步读取，这里清掉是安全的。
+      if (typeof document !== 'undefined') document.__checkbaDraggedFile = null
       uni.$emit('file-drag-end')
     },
     // Drag & Drop
@@ -575,10 +574,14 @@ export default {
 }
 
 .file-icon {
-    width: 16px;
-    height: 16px;
+    /* FileTypeIcon 自身是 19x19，与资源管理器文件行同尺寸 */
+    width: 19px;
+    height: 19px;
     margin-right: 8px;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .file-name {
