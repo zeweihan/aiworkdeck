@@ -67,6 +67,8 @@ export default {
   noFiles: 'No files yet',
   dropToRoot: 'Drop here to move to the root directory',
   dropFilesToRoot: 'Release to import into the project root',
+  dropInvalidTarget: 'Unrecognized drop. Drag a file from the explorer or the staging area',
+  dropInRecycleBin: 'Files cannot be dropped into the recycle bin. Go back to the explorer first',
   // Windowed rendering + reference count badge (dev-board#107 unit F3)
   loadMoreItems: 'Show more ({count} more items)',
   referencedCount: 'Referenced {count}',

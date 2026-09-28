@@ -285,7 +285,7 @@
 
     <view
       class="tree-content"
-      :class="{ 'external-drag-over': externalDragActive, 'view-mode-recycle': viewMode === 'recycle' }"
+      :class="{ 'external-drag-over': externalDragActive || stagingDragOver, 'view-mode-recycle': viewMode === 'recycle' }"
       @mousedown="onMarqueeStart" @mousemove="onMarqueeMove" @mouseup="onMarqueeEnd" @tap="closeContextMenu"
       @dragenter="onTreeDragEnter" @dragover="onTreeDragOver" @dragleave="onTreeDragLeave" @drop="onTreeDrop"
     >
@@ -812,6 +812,9 @@ export default {
       rootDropActive: false,
       // 外部（Finder/资源管理器/微信）文件正拖在树上：根投放区据此出现、容器点亮（dev-board#363）
       externalDragActive: false,
+      // 暂存区文件拖过树时点亮容器（与外部文件拖入同一样式类，dev-board#974）。
+      // 不复用 externalDragActive：那个还决定根投放区显示「导入」文案。
+      stagingDragOver: false,
       activeFolderId: null,
       lastClickTime: 0,
       lastClickItemId: null,
@@ -1092,7 +1095,7 @@ export default {
     // 具名 handler + Vue3 的 beforeUnmount（beforeDestroy 在 Vue3 不触发，导致监听泄漏）；
     // $off 必须带 handler，否则会连带移除其它 FileTree 实例（FileStagingArea 内嵌）的同名监听。
     this._onDragStart = () => { this.isAnyDragging = true }
-    this._onDragEnd = () => { this.isAnyDragging = false }
+    this._onDragEnd = () => { this.isAnyDragging = false; this.stagingDragOver = false }
     uni.$on('file-drag-start', this._onDragStart)
     uni.$on('file-drag-end', this._onDragEnd)
     // 「管理标签」「标签管理」两个内联弹窗的 Esc（v0.49.0 BUG-74）：它们是 awd-dialog-mask，
@@ -2741,6 +2744,9 @@ export default {
                 console.error('从暂存区移动失败:', error)
                 uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
              }
+          } else {
+             // 认不出拖进来的是哪份文件（如编辑器标签），提示而不是静默（dev-board#974）
+             uni.showToast({ title: this.$t('fileTree.dropInvalidTarget'), icon: 'none' })
           }
       }
 
@@ -2752,6 +2758,8 @@ export default {
       this.draggedIndex = -1
       this.draggedFileId = null
       this.dragOverIndex = -1
+      // 同 FileStagingArea.onDragEnd：取消的拖拽不许留下全局兜底残留（dev-board#974）
+      if (typeof document !== 'undefined') document.__checkbaDraggedFile = null
       this.$emit('file-drag-end')
       uni.$emit('file-drag-end')
     },
@@ -2840,6 +2848,8 @@ export default {
                 console.error('从外部移动到根目录失败:', error)
                 uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
              }
+          } else {
+             uni.showToast({ title: this.$t('fileTree.dropInvalidTarget'), icon: 'none' })
           }
       }
     },
@@ -2851,15 +2861,25 @@ export default {
       if (isExternalFileDrag(nativeDataTransfer(e))) this.externalDragActive = true
     },
     onTreeDragOver(e) {
-      if (this.viewMode === 'recycle') return
       const dt = nativeDataTransfer(e)
-      if (!isExternalFileDrag(dt)) return
+      if (!isExternalFileDrag(dt)) {
+        // 暂存区拖回来的文件（dev-board#974）：空白区也要 preventDefault，否则浏览器
+        // 不派发 drop，只有临时出现的根投放区能接住，其余位置静默无效。回收站视图同样
+        // 放行 drop，由 onTreeDrop 给提示。
+        if (this.isStagingFileDrag()) {
+          if (this.viewMode !== 'recycle') this.stagingDragOver = true
+          if (e.preventDefault) e.preventDefault()
+          try { dt.dropEffect = 'move' } catch (err) { /* ignore */ }
+        }
+        return
+      }
+      if (this.viewMode === 'recycle') return
       this.externalDragActive = true
       if (e.preventDefault) e.preventDefault()
       try { dt.dropEffect = 'copy' } catch (err) { /* ignore */ }
     },
     onTreeDragLeave(e) {
-      if (!this.externalDragActive) return
+      if (!this.externalDragActive && !this.stagingDragOver) return
       // dragleave 在每个子元素边界都会触发；只有 relatedTarget 不在容器里（或为 null =
       // 拖出了窗口）才算真正离开。取不到容器时只认 null 那一档，误判会在下一次 dragover 自愈。
       const native = (e && 'relatedTarget' in e) ? e : (typeof window !== 'undefined' ? window.event : null)
@@ -2872,6 +2892,20 @@ export default {
     },
     async onTreeDrop(e) {
       const dt = nativeDataTransfer(e)
+      if (!isExternalFileDrag(dt) && this.isStagingFileDrag()) {
+        this.resetExternalDrag()
+        if (this.viewMode === 'recycle') {
+          if (typeof document !== 'undefined') document.__checkbaDraggedFile = null
+          uni.showToast({ title: this.$t('fileTree.dropInRecycleBin'), icon: 'none' })
+          return
+        }
+        // 落在文件/文件夹节点或根投放区上：那一层自己的 drop 已处理（文件夹 = 移入），
+        // 这里是冒泡上来的同一次 drop，不再重复处理
+        if (this.isNodeDropTarget(e)) return
+        // 树空白区 = 项目根（与根投放区同一条路径）
+        await this.onRootDrop(e)
+        return
+      }
       if (this.viewMode === 'recycle' || !isExternalFileDrag(dt)) {
         this.resetExternalDrag()
         return
@@ -2880,8 +2914,25 @@ export default {
       // 树空白区 = 项目根（与 onRootDrop 同口径）
       await this.importExternalDrop(dt, null)
     },
+    // 应用内、且不是本树自己发起的文件拖拽（暂存区 → 树）。判据是 uni 的 file-drag-start
+    // （暂存区 onDragStart 会发，dragend 发 file-drag-end 复位）：暂存区条目是 <view>，
+    // dragstart 拿不到 dataTransfer，types 里常常什么都没有，只能靠这个信号；也不能只看
+    // document.__checkbaDraggedFile——落在不消费它的地方时可能是上一次的残留。
+    // 本树内的拖拽有 draggedIndex，走各节点与根投放区的原有逻辑。
+    isStagingFileDrag() {
+      return this.draggedIndex === -1 && this.isAnyDragging
+    },
+    // 原生 drop 的 target 是否落在有自己 drop 处理器的节点上（uni 重建的事件 target 不是 DOM，
+    // 从 window.event 取）。「加载更多」行也是 .tree-item 但没有 drop 处理器，算空白区。
+    isNodeDropTarget(e) {
+      const native = typeof window !== 'undefined' ? window.event : null
+      const t = (native && native.target) || (e && e.target)
+      if (!t || typeof t.closest !== 'function') return false
+      return !!t.closest('.tree-item:not(.tree-item-load-more), .root-drop-zone, .root-drop-zone-empty')
+    },
     resetExternalDrag() {
       this.externalDragActive = false
+      this.stagingDragOver = false
       this.rootDropActive = false
       this.dragOverIndex = -1
     },

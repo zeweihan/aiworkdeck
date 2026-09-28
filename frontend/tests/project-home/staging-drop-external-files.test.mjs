@@ -30,8 +30,8 @@ function loadOptions() {
   const body = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, '')
     .replace(/export default \{/, 'return {')
-  const factory = new Function('ICONS', 'UnlockHint', body)
-  return factory({}, {})
+  const factory = new Function('ICONS', 'UnlockHint', 'FileTypeIcon', body)
+  return factory({}, {}, {})
 }
 
 function makeVm() {
