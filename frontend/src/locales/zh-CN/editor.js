@@ -11,6 +11,7 @@ export default {
   unsavedCloseBody: '保存未能完成。你可以继续编辑并重试保存，或放弃尚未保存的更改并关闭。已保存到磁盘的内容会保留。',
   discardAndClose: '放弃并关闭',
   moveTabSaveFailed: '保存尚未完成，标签暂不移动到另一侧',
+  dualOpenEditableBlocked: '可编辑文档不能在两侧同时打开，已移动到另一侧',
   closeSplitSaveFailed: '右侧文档保存尚未完成，暂不关闭分屏',
   keepEditing: '继续编辑',
   // 原生「导出为 PDF」入口（dev-board#886）

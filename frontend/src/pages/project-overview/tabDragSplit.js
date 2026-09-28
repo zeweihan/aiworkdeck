@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // project-overview.vue 的标签页拖拽与分栏布局：tab 跨窗格拖拽（普通拖拽是"移动"，
-// 按住 Alt/Option 才是"在另一侧再开一份"，dev-board#542）、
+// 按住 Alt/Option 才是"在另一侧再开一份"，dev-board#542；可编辑文档除外，#987）、
 // 三向面板拖拽改尺寸（rAF 节流 + 直接改 DOM，停手时才同步回 Vue 状态）、分屏开关与窗格聚焦。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
 
@@ -65,8 +65,14 @@ export const tabDragSplitMethods = {
 
     // 两个 drop 落点共用的收尾：先按需落盘，再改列表。
     async commitTabDrop(payload, targetPane, beforeFileId) {
-      const copy = !!payload.copy
-      if (!copy && payload.fromPane !== targetPane) {
+      const crossPane = payload.fromPane !== targetPane
+      // 可编辑文档不许左右双开（dev-board#987）：两侧会各有一个活的编辑器实例，
+      // 一侧落盘后另一侧手里仍是旧内容，它再一保存就把前者的改动整份覆盖。
+      // reloadFromBackend 会丢掉本地未保存态、不保留光标，不能拿来做同步——
+      // 所以 Alt 拖拽这类标签按普通移动处理，只读类型照旧可以双开。
+      const blockDual = !!payload.copy && crossPane && !this.canDualOpenTab(payload.fileId, payload.fromPane)
+      const copy = !!payload.copy && !blockDual
+      if (!copy && crossPane) {
         const ok = await this.flushTabBeforePaneMove(payload.fileId, payload.fromPane)
         if (!ok) {
           uni.showToast({ title: this.$t('editor.moveTabSaveFailed'), icon: 'none' })
@@ -75,7 +81,19 @@ export const tabDragSplitMethods = {
         }
       }
       this.moveTabTo(payload.fileId, payload.fromPane, targetPane, beforeFileId, { copy })
+      if (blockDual) uni.showToast({ title: this.$t('editor.dualOpenEditableBlocked'), icon: 'none' })
       this.onTabDragEnd()
+    },
+
+    // 能否在另一侧再开一份：会各自整份写回的可编辑实例都不行——Libre 引擎、纯文本
+    // 编辑器、draw.io（两个 iframe 各自存整份 xml）、非只读的合并比对稿（两侧各自
+    // 「完成裁决」会互相覆盖）；只读预览类（pdf / 图片 / 浏览器等）可以。
+    canDualOpenTab(fileId, fromPane) {
+      const list = fromPane === 'left' ? this.leftFiles : this.rightFiles
+      const file = (list || []).find(f => f.id === fileId)
+      if (!file) return true
+      if (this.isMergeReviewTab(file)) return !!(file.mergeSpec && file.mergeSpec.readonly)
+      return !this.useLibreEditor(file) && !this.isPlainTextFile(file) && !this.isDrawioFile(file)
     },
 
     // 跨窗格「移动」会把源侧那个编辑器实例卸掉，而 LibreOfficeEditor.beforeUnmount
@@ -133,8 +151,8 @@ export const tabDragSplitMethods = {
     },
 
     // opts.copy=true：跨窗格时「在另一侧再开一份」（左右双开，.tab-dual-open 那套），
-    // 由拖拽时按住 Alt/Option 触发。默认（普通拖拽）是**移动**：从源列表摘掉再插进
-    // 目标列表（dev-board#542）。同窗格换序永远是移动，与 opts 无关。
+    // 由拖拽时按住 Alt/Option 触发；可编辑文档在 commitTabDrop 里已降成移动（#987）。
+    // 默认（普通拖拽）是**移动**：从源列表摘掉再插进目标列表（dev-board#542）。同窗格换序永远是移动，与 opts 无关。
     moveTabTo(fileId, fromPane, toPane, beforeFileId, opts = {}) {
       if (!fileId || !fromPane || !toPane) return
       if (!this.splitMode && toPane === 'right') return
