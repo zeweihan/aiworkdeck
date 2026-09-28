@@ -7,6 +7,7 @@ import com.checkba.storage.ProjectStorageResolver;
 import com.checkba.storage.StorageProperties;
 import com.checkba.version.MergeOutcome;
 import com.checkba.version.ProjectRepoService;
+import org.eclipse.jgit.util.SystemReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -228,6 +229,57 @@ class ProvenanceServiceTest {
         assertEquals("session", units.get("p1").type());
         assertEquals(named, units.get("p2").sha(), "本来就归命名版本的那一段不受影响");
         assertEquals(first, units.get("p0").sha(), "没被这段工作动过的段落照旧归更早那一版");
+    }
+
+    /**
+     * 同一秒里落下的两段工作（dev-board#1012 / #762，app-e2e J14-③ 间歇红的真因）。
+     *
+     * <p>律师甲结束一段工作（NO_FF 合并 M1，第二父是甲那笔自动存档），同一秒里律师乙
+     * 在它上面改了第二段、也结束一段工作（M2，第二父是乙那笔自动存档）。Git 的提交时间
+     * 只精确到秒，两边时间戳相同。按提交时间倒序走历史时，同秒的 M1 会被排在它自己的
+     * 子提交——乙那笔自动存档——前面，于是折叠把乙的自动存档归到甲那一段工作名下，
+     * 乙改的那一段就署成了甲。折叠依赖的「新在前」必须是拓扑序（子一定在父之前）。
+     */
+    @Test
+    void autosaveFoldsIntoItsOwnSessionEvenWhenBothSessionsLandInTheSameSecond(@TempDir Path root)
+            throws Exception {
+        SystemReader original = SystemReader.getInstance();
+        long frozen = original.getCurrentTime() / 1000 * 1000;
+        SystemReader.setInstance(new SystemReader.Delegate(original) {
+            @Override
+            public long getCurrentTime() {
+                return frozen; // 所有提交落在同一秒
+            }
+        });
+        try {
+            ProjectRepoService repo = svc(root);
+            init(root, repo);
+
+            repo.createBranch(PID, "work/a", "master");
+            repo.checkoutBranch(PID, "work/a");
+            writeDoc(root, "合同.docx", "第一条 甲方", "第二条 三十日内付款", "第三条 期限");
+            commit(repo, "修改了《合同》", "auto");
+            repo.checkoutBranch(PID, "master");
+            MergeOutcome a = repo.merge(PID, "work/a", "甲起草了合同", "律师甲", "a@local");
+            assertTrue(a.success());
+
+            repo.createBranch(PID, "work/b", "master");
+            repo.checkoutBranch(PID, "work/b");
+            writeDoc(root, "合同.docx", "第一条 甲方", "第二条 七日内付款", "第三条 期限");
+            commit(repo, "修改了《合同》", "auto");
+            repo.checkoutBranch(PID, "master");
+            MergeOutcome b = repo.merge(PID, "work/b", "乙核对了期限条款", "律师乙", "b@local");
+            assertTrue(b.success());
+
+            Map<String, ProvenanceUnit> units = unitsOf(service(repo).provenance(PID, UID, "合同.docx", "HEAD"));
+
+            assertEquals(b.mergeSha(), units.get("p1").sha(),
+                    "乙改的那一段要报乙那一段工作，不能因为同一秒被折进甲那一段");
+            assertEquals("乙核对了期限条款", units.get("p1").title());
+            assertEquals(a.mergeSha(), units.get("p0").sha(), "没被乙动过的段落仍归甲那一段工作");
+        } finally {
+            SystemReader.setInstance(original);
+        }
     }
 
     // ------------------------ 文件级版本身份（dev-board#672 复测，2026-09-16） ----
