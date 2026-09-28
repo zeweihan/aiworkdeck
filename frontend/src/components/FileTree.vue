@@ -711,6 +711,9 @@ import {
   createTag
 } from '@/services/api.js'
 
+// 空白区落根的最小拖动位移（dev-board#989）
+const DRAG_MOVE_THRESHOLD_PX = 8
+
 // 移动接口失败时会在服务端把 parentId 回滚再照常返回成功（物理文件被占用，常见于
 // Windows 上文件正被 Word/编辑器打开，见 ProjectFileService.moveSingleFileWithPhysical）——
 // 前端只能靠比对响应里的 parentId 与本次请求的目标 parentId 识别"其实没移成"。
@@ -812,9 +815,13 @@ export default {
       rootDropActive: false,
       // 外部（Finder/资源管理器/微信）文件正拖在树上：根投放区据此出现、容器点亮（dev-board#363）
       externalDragActive: false,
-      // 暂存区文件拖过树时点亮容器（与外部文件拖入同一样式类，dev-board#974）。
+      // 暂存区文件拖过树时点亮容器（与外部文件拖入同一样式类，dev-board#974）；
+      // 树内文件拖到空白区时也用它（dev-board#989）。
       // 不复用 externalDragActive：那个还决定根投放区显示「导入」文案。
       stagingDragOver: false,
+      // 本次应用内拖拽的起点 {x, y}（dragstart 的原生事件坐标）。空白区落根前按位移
+      // 判误拖（dev-board#916：2px 微拖也会形成完整的 drag-drop，dev-board#989）。
+      dragStartPoint: null,
       activeFolderId: null,
       lastClickTime: 0,
       lastClickItemId: null,
@@ -1094,8 +1101,10 @@ export default {
     // Listen for global drag events to show/hide root drop zone
     // 具名 handler + Vue3 的 beforeUnmount（beforeDestroy 在 Vue3 不触发，导致监听泄漏）；
     // $off 必须带 handler，否则会连带移除其它 FileTree 实例（FileStagingArea 内嵌）的同名监听。
-    this._onDragStart = () => { this.isAnyDragging = true }
-    this._onDragEnd = () => { this.isAnyDragging = false; this.stagingDragOver = false }
+    // 暂存区的 dragstart 只经 uni 的 file-drag-start 通知本树：$emit 是同步的，此刻
+    // window.event 就是那次原生 dragstart，起点从它上面取。
+    this._onDragStart = () => { this.isAnyDragging = true; this.recordDragStartPoint() }
+    this._onDragEnd = () => { this.isAnyDragging = false; this.stagingDragOver = false; this.dragStartPoint = null }
     uni.$on('file-drag-start', this._onDragStart)
     uni.$on('file-drag-end', this._onDragEnd)
     // 「管理标签」「标签管理」两个内联弹窗的 Esc（v0.49.0 BUG-74）：它们是 awd-dialog-mask，
@@ -2549,6 +2558,7 @@ export default {
       console.log('拖拽开始:', index)
       this.draggedIndex = index
       this.draggedFileId = (item && item.id != null) ? item.id : null
+      this.recordDragStartPoint(e)
       uni.$emit('file-drag-start')
       // 向外部暴露“拖拽文件开始”（用于 WPS 文档建立关联）
       try {
@@ -2660,6 +2670,9 @@ export default {
             this.draggedFileId = null
             return
           }
+          // 误拖（位移 < 8px，dev-board#916/#989）：不移入、不提示，只清高亮。
+          // 冒泡到容器的那次由 onTreeDrop 的 isNodeDropTarget 挡掉。
+          if (this.isAccidentalDrag(e)) { this.dragOverIndex = -1; return }
 
           try {
             // BUGFIX（原用 displayFiles[this.draggedIndex]，仍会撞上同一类竞态）：
@@ -2722,6 +2735,8 @@ export default {
           }
 
           if (droppedFileId) {
+             // 同 Case 1 的误拖判据（暂存区拖回落到节点上）
+             if (this.isAccidentalDrag(e)) { this.dragOverIndex = -1; return }
              try {
                  const moved = await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
                  await this.loadFiles()
@@ -2758,6 +2773,7 @@ export default {
       this.draggedIndex = -1
       this.draggedFileId = null
       this.dragOverIndex = -1
+      this.dragStartPoint = null
       // 同 FileStagingArea.onDragEnd：取消的拖拽不许留下全局兜底残留（dev-board#974）
       if (typeof document !== 'undefined') document.__checkbaDraggedFile = null
       this.$emit('file-drag-end')
@@ -2789,6 +2805,8 @@ export default {
 
       // Case 1: Internal FileTree Drag
       if (this.draggedIndex !== -1) {
+          // 误拖（位移 < 8px，dev-board#916/#989）：不移动、不提示（高亮已在上面清掉）
+          if (this.isAccidentalDrag(e)) return
           try {
             // 同 handleDrop 的 BUGFIX：按 dragstart 时记下的 id 重新定位，不用可能
             // 已经因后台重载而过期的下标。
@@ -2835,6 +2853,7 @@ export default {
           }
 
           if (droppedFileId) {
+             if (this.isAccidentalDrag(e)) return
              try {
                  const moved = await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
                  await this.loadFiles()
@@ -2870,6 +2889,17 @@ export default {
           if (this.viewMode !== 'recycle') this.stagingDragOver = true
           if (e.preventDefault) e.preventDefault()
           try { dt.dropEffect = 'move' } catch (err) { /* ignore */ }
+        } else if (this.draggedIndex !== -1 && this.viewMode !== 'recycle') {
+          // 树内拖拽经过空白区 = 放到项目根（dev-board#989，同 VS Code / Finder）。
+          // 经过节点时节点自己的 dragOverIndex 在亮，容器不亮。
+          if (this.isNodeDropTarget(e)) {
+            this.stagingDragOver = false
+            return
+          }
+          this.stagingDragOver = true
+          this.dragOverIndex = -1
+          if (e.preventDefault) e.preventDefault()
+          try { dt.dropEffect = 'move' } catch (err) { /* ignore */ }
         }
         return
       }
@@ -2902,7 +2932,22 @@ export default {
         // 落在文件/文件夹节点或根投放区上：那一层自己的 drop 已处理（文件夹 = 移入），
         // 这里是冒泡上来的同一次 drop，不再重复处理
         if (this.isNodeDropTarget(e)) return
+        // 位移不足阈值 = 误拖，不动也不提示（全局兜底留给源的 dragend 清）
+        if (this.isAccidentalDrag(e)) return
         // 树空白区 = 项目根（与根投放区同一条路径）
+        await this.onRootDrop(e)
+        return
+      }
+      // 树内拖拽落到空白区 = 移到项目根（dev-board#989）
+      if (!isExternalFileDrag(dt) && this.draggedIndex !== -1 && this.viewMode !== 'recycle') {
+        this.resetExternalDrag()
+        if (this.isNodeDropTarget(e)) return
+        if (e.preventDefault) e.preventDefault()
+        if (this.isAccidentalDrag(e)) return
+        // 已在根目录：原地不动，不发请求也不提示
+        const draggedItem = this.displayFiles.find(f => f.id === this.draggedFileId)
+        // （parentId 的 0 与 null 都是根，同 utils/fileTreeBuild.js 的 normalizeParentId）
+        if (draggedItem && (Number(draggedItem.parentId) === 0 || parentIdsEqual(draggedItem.parentId, null))) return
         await this.onRootDrop(e)
         return
       }
@@ -2921,6 +2966,25 @@ export default {
     // 本树内的拖拽有 draggedIndex，走各节点与根投放区的原有逻辑。
     isStagingFileDrag() {
       return this.draggedIndex === -1 && this.isAnyDragging
+    },
+    // 取拖拽事件的视口坐标：回调自带优先，否则从正在派发的原生事件取（uni 重建的 <view>
+    // drag 事件没有 clientX/clientY）。取不到返回 null。
+    dragPointOf(e) {
+      const pick = (ev) => (ev && typeof ev.clientX === 'number' && typeof ev.clientY === 'number')
+        ? { x: ev.clientX, y: ev.clientY } : null
+      return pick(e) || pick(typeof window !== 'undefined' ? window.event : null)
+    },
+    recordDragStartPoint(e) {
+      this.dragStartPoint = this.dragPointOf(e)
+    },
+    // 落点移动前的误拖判定（dev-board#916/#989）：起点到落点位移 < 8px 视为误拖。
+    // 任一端取不到坐标时不判误拖、按原行为放行——节点 drop / 根投放区原本就能用，
+    // 把它们变成静默失效比偶发误移更糟。
+    isAccidentalDrag(e) {
+      const start = this.dragStartPoint
+      const end = this.dragPointOf(e)
+      if (!start || !end) return false
+      return Math.hypot(end.x - start.x, end.y - start.y) < DRAG_MOVE_THRESHOLD_PX
     },
     // 原生 drop 的 target 是否落在有自己 drop 处理器的节点上（uni 重建的事件 target 不是 DOM，
     // 从 window.event 取）。「加载更多」行也是 .tree-item 但没有 drop 处理器，算空白区。

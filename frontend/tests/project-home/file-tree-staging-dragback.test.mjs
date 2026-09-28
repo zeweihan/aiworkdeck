@@ -119,7 +119,9 @@ test('暂存区文件拖过树的空白区：dragover 要 preventDefault，否�
   } finally { restore() }
 })
 
-test('树内自己的拖拽（draggedIndex 有值）在空白区不改原有行为：不当成暂存区拖回', () => {
+// dev-board#989 起树内拖拽在空白区也放行（= 移到根，见 file-tree-blank-drop.test.mjs），
+// 这里只守「不当成暂存区拖回」。
+test('树内自己的拖拽（draggedIndex 有值）在空白区不当成暂存区拖回', () => {
   const restore = installGlobals()
   try {
     const vm = makeVm()
@@ -127,9 +129,7 @@ test('树内自己的拖拽（draggedIndex 有值）在空白区不改原有行�
     vm.draggedFileId = 1
     vm.isAnyDragging = true
     globalThis.window.event = { dataTransfer: stagingDataTransfer(), target: targetInside(null) }
-    const e = wrappedEvent()
-    vm.onTreeDragOver(e)
-    assert.equal(e.prevented, false)
+    assert.equal(vm.isStagingFileDrag(), false)
   } finally { restore() }
 })
 
