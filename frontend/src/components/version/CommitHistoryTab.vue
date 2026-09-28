@@ -303,6 +303,7 @@ import { historyMergeLines, resolutionLine } from '@/utils/historyMerges.js'
 import { createVersionActions } from '@/composables/useVersionActions.js'
 import { submitNeedsGuide } from '@/utils/submitGuide.js'
 import { roleLabel } from '@/config/memberRoles.js'
+import { excludeSystemFolders } from '@/utils/aiContextFiles.js'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdDatePicker from '@/components/AwdDatePicker.vue'
 
@@ -605,8 +606,10 @@ export default {
     },
     async loadFileOptions() {
       try {
-        const res = await getProjectFiles(this.projectId)
-        const all = Array.isArray(res) ? res : ((res && res.data) || [])
+        // tree=true：不带时后端只回根目录一层，子文件夹里的文件筛不了（dev-board#985）；
+        // 全量之后暂存区里的文件也会进来，它是产品内部实现，照快速打开的口径剔掉
+        const res = await getProjectFiles(this.projectId, null, true)
+        const all = excludeSystemFolders(Array.isArray(res) ? res : ((res && res.data) || []))
         this.files = all
           .filter((f) => f && !f.isFolder && f.name)
           .map((f) => ({ id: f.id, name: f.name }))

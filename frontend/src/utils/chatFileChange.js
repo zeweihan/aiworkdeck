@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 对话里「改动 / 新增」卡片（SSE file_change）怎么落到一份文件上（dev-board#852）。
 //
-// 零依赖纯函数（不 import Vue / uni / '@/' 别名），node --test 可直接导入；
+// 纯函数（不 import Vue / uni / '@/' 别名，只相对引用同为纯函数的 aiContextFiles.js），node --test 可直接导入；
 // 单测在 frontend/tests/project-home/chat-file-change-target.test.mjs。
 //
 // 病灶：doc_* / sheet_* / slide_* 改的是编辑器里当前打开的那份文档，后端原先把
@@ -11,6 +11,8 @@
 // 现在后端带上 fileId 并报真名；这里按 id 优先、名字其次去找。历史会话里落了库的
 // 旧记录仍是 "Current Document"，与后端新口径「当前文档」（说不出是哪份时）一样，
 // 当成「当前文档」处理：有活跃标签就切过去，没有就提示先打开文档。
+
+import { excludeSystemFolders } from './aiContextFiles.js'
 
 // 后端说不出具体文件时的占位名：旧版字面量 + 现行口径（AgentOrchestrator.activeDocDisplayName(null)）。
 export const CURRENT_DOC_SENTINELS = ['Current Document', '当前文档']
@@ -67,7 +69,12 @@ export function findChatFile(files, { name, fileId } = {}) {
   }
   if (!name || isCurrentDocSentinel(name)) return null
 
-  const exact = list.find(f => sameName(f.name, name))
+  // 按名字找时候选是全项目（dev-board#985 起取 tree=true）：暂存区是产品内部实现，剔掉；
+  // 同名多份时根目录那份优先（全量行按各目录内的 sortOrder 交错，谁先出现不代表什么）。
+  const rootFirst = (a, b) => (a.parentId == null ? 0 : 1) - (b.parentId == null ? 0 : 1)
+  const named = excludeSystemFolders(files).filter(f => f && !f.isFolder)
+
+  const exact = named.filter(f => sameName(f.name, name)).sort(rootFirst)[0]
   if (exact) return exact
 
   // 有些工具报上来的"变更文件名"其实是一组产物的基名而不是某一个文件：
@@ -77,13 +84,13 @@ export function findChatFile(files, { name, fileId } = {}) {
   // 而工具报上来的名字里没有它——第一次出图必然走这一支。
   const lower = name.toLowerCase()
   const bases = [lower + '.', lower + '-draft.']
-  const candidates = list.filter(f =>
+  const candidates = named.filter(f =>
     typeof f.name === 'string' && bases.some(b => f.name.toLowerCase().startsWith(b)))
-  // 一组产物里优先给可继续编辑的那份，其次是能看的母版。
+  // 一组产物里优先给可继续编辑的那份，其次是能看的母版；同档根目录优先。
   const rank = ['drawio', 'svg', 'png']
   return candidates.sort((a, b) => {
     const ra = rank.indexOf((a.fileType || '').toLowerCase())
     const rb = rank.indexOf((b.fileType || '').toLowerCase())
-    return (ra < 0 ? rank.length : ra) - (rb < 0 ? rank.length : rb)
+    return ((ra < 0 ? rank.length : ra) - (rb < 0 ? rank.length : rb)) || rootFirst(a, b)
   })[0] || null
 }

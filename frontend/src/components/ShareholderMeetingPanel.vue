@@ -176,7 +176,9 @@ export default {
     // 材料只存 fileId，从项目文件列表里解析名称
     async resolveFileNames() {
       try {
-        const res = await api.getProjectFiles(this.projectId)
+        // tree=true：不带时后端只回根目录一层，子文件夹里的材料解析不出名字（dev-board#985）。
+        // 回来的是扁平行（带 parentId、无 children），下面的 walk 逐行登记即可
+        const res = await api.getProjectFiles(this.projectId, null, true)
         const list = Array.isArray(res) ? res : (res.data || res.files || [])
         const map = {}
         const walk = (nodes) => {

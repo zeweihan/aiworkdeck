@@ -57,7 +57,8 @@ export const fileOpenTabsMethods = {
     async openPendingLocalFile(fileId) {
       if (!fileId) return
       try {
-        const resp = await getProjectFiles(this.projectId)
+        // tree=true：不带时后端只回根目录一层，子文件夹里的文件找不到（dev-board#985）
+        const resp = await getProjectFiles(this.projectId, null, true)
         const files = Array.isArray(resp) ? resp : (resp?.data || [])
         const target = files.find(f => f.id === fileId && !f.isFolder)
         if (target) {
@@ -103,7 +104,8 @@ export const fileOpenTabsMethods = {
 
       // Refresh project files first to ensure we have latest
       try {
-        const resp = await getProjectFiles(this.projectId)
+        // tree=true：不带时后端只回根目录一层，卡片点子文件夹里的文件会报「未找到文件」（dev-board#985）
+        const resp = await getProjectFiles(this.projectId, null, true)
         // Normalize response: API returns { code: 0, data: [...] } or possibly just array
         const files = Array.isArray(resp) ? resp : (resp?.data || [])
         console.log('[project-overview] Got files for search:', files.length)

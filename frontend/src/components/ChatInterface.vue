@@ -631,7 +631,7 @@
                     </view>
                    <view v-if="showModifiedPopup && modifiedFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in modifiedFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
-                           <image src="/static/file.png" class="file-icon-mini"/>
+                           <image src="/static/document.png" class="file-icon-mini"/>
                            <text class="file-name-text">{{ fileChangeLabel(f) }}</text>
                        </view>
                    </view>
@@ -646,7 +646,7 @@
                    </view>
                    <view v-if="showNewPopup && createdFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
-                           <image src="/static/file.png" class="file-icon-mini"/>
+                           <image src="/static/document.png" class="file-icon-mini"/>
                            <text class="file-name-text">{{ fileChangeLabel(f) }}</text>
                        </view>
                    </view>
@@ -3193,7 +3193,9 @@ export default {
     const insertContextTagToInput = (file, carried = false, { append = false } = {}) => {
       if (!richInput.value) return
 
-      const icon = file.isDir ? '/static/folder-closed.png' : '/static/document.png'
+      // 裸 HTML 的 <img> 不经过 uni <image> 的路径换算：桌面端是 file:// 页面，/static/x 会落到磁盘根
+      // （file:///static/x，裂图，dev-board#975）。写成 ./static/x，与 uni 在 router.base='./' 下换算的结果一致。
+      const icon = file.isDir ? './static/folder-closed.png' : './static/document.png'
       const displayName = truncateName(file.name)
       // 文件名由项目成员自由命名（后端只挡路径分隔符），这段字符串会直接进 DOM，必须转义
       const safeDisplayName = escapeHtml(displayName)
@@ -5086,7 +5088,7 @@ export default {
    gap: 3px;
    background: transparent;
    color: var(--awd-accent-text);
-   padding: 3px 8px;
+   padding: 3px 22px 3px 8px; /* 右侧给常显的 × 留位 */
    border-radius: 4px;
    margin: 0 4px 2px 0;
    font-size: 12px;
@@ -5119,7 +5121,6 @@ export default {
  :deep(.context-tag-inline:hover) {
    background: var(--awd-accent-soft);
    border-color: var(--awd-accent);
-   padding-right: 22px; /* Make room for close button */
  }
 
  :deep(.tag-icon) {
@@ -5143,8 +5144,9 @@ export default {
    color: var(--awd-accent-text);
  }
 
+ /* × 常显，不等悬停（对齐标签页 ×、暂存区 ×；触控板用户找不到悬停才出的删除，dev-board#975 / BUG-19） */
  :deep(.tag-close) {
-   display: none;
+   display: flex;
    position: absolute;
    right: 6px;
    top: 50%;
@@ -5159,10 +5161,6 @@ export default {
    font-size: 10px;
    cursor: pointer;
    transition: all 0.1s ease;
- }
-
- :deep(.context-tag-inline:hover .tag-close) {
-   display: flex;
  }
 
  :deep(.tag-close:hover) {
@@ -5212,6 +5210,15 @@ export default {
   text-overflow: ellipsis;
   max-width: 100px;
   color: var(--awd-accent-text);
+}
+
+/* 气泡里的标签是输入框 HTML 的快照（v-html，不带 scoped 属性，故走 :deep），× 随之带过来；
+   已发出的消息没有「移除」可言 */
+.user-bubble :deep(.context-tag-inline .tag-close) { /* 与 .is-carried .tag-close 同权重、排在后面，淡态标签也压得住 */
+  display: none;
+}
+.user-bubble :deep(.context-tag-inline) {
+  padding-right: 8px; /* 输入框里给 × 留的右侧位，气泡里不需要 */
 }
 
 /* =============================================
