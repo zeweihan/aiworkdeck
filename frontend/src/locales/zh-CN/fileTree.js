@@ -33,7 +33,7 @@ export default {
   selectFolder: '选择文件夹',
   noOtherFolders: '暂无其他文件夹',
   // 右键菜单
-  compareDocuments: '比较文档',
+  compareDocuments: '对比文档',
   download: '下载',
   transcribe: '转写',
   transcribeSubmitted: '已提交转写，请在会议录音面板查看进度',
