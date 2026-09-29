@@ -271,7 +271,7 @@ You can highlight, annotate, redact, make short in-place text replacements in, a
 | `pdf_annotate(fileId, anchorText, comment, pageIndex)` | Add a sticky-note comment next to the anchor text (signed AI WorkDeck) |
 | `pdf_redact(fileId, textsJson, pageIndex)` | True redaction: black boxes over the text, converts affected pages to image pages, and strips those pages' text layer entirely. textsJson is a JSON string array |
 | `pdf_replace_text(fileId, find, replace, pageIndex)` | Short in-place text replacement (dates/amounts/names - small edits that do not wrap lines) |
-| `pdf_to_word(fileId, parentId)` | Convert to editable Word: text-based PDFs take the layout-level route (pdf2docx - paragraphs/tables/images keep the original layout as far as possible; falls back to structure-level if the service is unavailable); scanned PDFs automatically take local MinerU OCR (the document never leaves the machine). The result opens in the editor automatically; the return message states the actual path |
+| `pdf_to_word(fileId, parentId)` | Convert to editable Word: text-based PDFs take the layout-level route (pdf2docx - paragraphs/tables/images keep the original layout as far as possible; if the local component is missing it asks the user to download it and ends the turn, then reruns automatically once installed - do not produce the document some other way yourself; if the component is installed and conversion still fails, the text-only structural conversion loses tables, so get the user's consent before calling again with `allowStructuralFallback=true`); scanned PDFs automatically take local MinerU OCR (the document never leaves the machine). The result opens in the editor automatically; the return message states the actual path |
 
 ### PDF Rules
 

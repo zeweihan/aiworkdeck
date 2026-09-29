@@ -1694,14 +1694,18 @@ public class AgentOrchestrator {
                     if (askUser != null) {
                         result = askUserProcessNote();
                     }
+                    // 编辑器还在启动（dev-board#1017）：这一步没执行但不算失败，等就绪重试同一步
+                    boolean editorBooting = !success && EditorBridgeService.isEditorBootingOutput(result);
                     StuckDetector.Verdict verdict = guard.stuck.record(
                             req.name(), req.arguments(), result, success);
                     boolean pauseForNoProgress = verdict == StuckDetector.Verdict.CIRCUIT_BREAK;
                     if (verdict == StuckDetector.Verdict.INTERVENE) {
                         log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
-                        stuckNudge = guard.stuck.lastPattern();
+                        stuckNudge = editorBooting ? EDITOR_BOOTING_STUCK_PATTERN : guard.stuck.lastPattern();
                     }
-                    result = appendFailureNudge(guard, result, success);
+                    result = appendFailureNudge(guard, result, success, editorBooting);
+                    // 工具刚请用户下载组件（dev-board#1016）：本轮到此为止，等用户装好后自动重发
+                    boolean awaitingComponent = editorBridgeService.consumeComponentWait(conversationId);
 
                     // Determine status for history and display
                     String nativeToolStatus = success ? "SUCCESS" : "FAILURE";
@@ -1732,6 +1736,15 @@ public class AgentOrchestrator {
                         }
                         stopForAskUser(guard, projectId, userId,
                                 (aiContent != null ? aiContent : "") + "\n" + executionLog, askUser);
+                        return;
+                    }
+                    if (awaitingComponent) {
+                        if (nativeIndex + 1 < nativeRequests.size()) {
+                            log.warn("component_required for {} ends the turn; skipping {} later tool call(s)",
+                                    conversationId, nativeRequests.size() - nativeIndex - 1);
+                        }
+                        stopForComponent(guard, projectId, userId,
+                                (aiContent != null ? aiContent : "") + "\n" + executionLog);
                         return;
                     }
                     if (pauseForNoProgress) {
@@ -1849,14 +1862,16 @@ public class AgentOrchestrator {
                     if (xmlAskUser != null) {
                         result = askUserProcessNote();
                     }
+                    boolean xmlEditorBooting = !xmlToolSuccess && EditorBridgeService.isEditorBootingOutput(result);
                     StuckDetector.Verdict verdict = guard.stuck.record(
                             call.toolName(), call.argsJson(), result, xmlToolSuccess);
                     boolean pauseForNoProgress = verdict == StuckDetector.Verdict.CIRCUIT_BREAK;
                     if (verdict == StuckDetector.Verdict.INTERVENE) {
                         log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
-                        stuckNudge = guard.stuck.lastPattern();
+                        stuckNudge = xmlEditorBooting ? EDITOR_BOOTING_STUCK_PATTERN : guard.stuck.lastPattern();
                     }
-                    result = appendFailureNudge(guard, result, xmlToolSuccess);
+                    result = appendFailureNudge(guard, result, xmlToolSuccess, xmlEditorBooting);
+                    boolean xmlAwaitingComponent = editorBridgeService.consumeComponentWait(conversationId);
 
                     // Add Result to History
                     String statusPrefix = xmlToolSuccess ? "SUCCESS" : "FAILURE";
@@ -1922,6 +1937,14 @@ public class AgentOrchestrator {
                                     conversationId, xmlCalls.size() - xmlIndex - 1);
                         }
                         stopForAskUser(guard, projectId, userId, content + "\n" + executionLog, xmlAskUser);
+                        return;
+                    }
+                    if (xmlAwaitingComponent) {
+                        if (xmlIndex + 1 < xmlCalls.size()) {
+                            log.warn("component_required for {} ends the turn; skipping {} later XML tool call(s)",
+                                    conversationId, xmlCalls.size() - xmlIndex - 1);
+                        }
+                        stopForComponent(guard, projectId, userId, content + "\n" + executionLog);
                         return;
                     }
 
@@ -2889,6 +2912,32 @@ public class AgentOrchestrator {
     }
 
     /**
+     * 等待组件的停机（dev-board#1016）：工具刚发出 component_required、请用户下载本机组件。
+     *
+     * <p>此前只靠工具返回文案让模型自己停下，而 pdf_to_word 那条路径还一边弹下载提示、
+     * 一边照做结构级转换——模型拿到一份丢了表格的 docx 接着干，组件装完前端又自动重发原消息，
+     * 同一件事做两遍。现在一律在编排器收尾：落库、状态记 AWAITING_INPUT（等用户在下载卡片上做选择，
+     * 与反问同一种「等人」状态，前端解锁输入区），bubble_end 带 reason=component_required。
+     * 组件装好后由前端自动把原消息重发一次，那是新的一轮。
+     *
+     * <p>刻意复用 AWAITING_INPUT 而不新增状态：新增状态要同步四处（见 ai-chat.md），
+     * 而这里的语义（后台没东西在跑、在等用户操作）与反问完全相同。
+     */
+    private void stopForComponent(RunGuard guard, String projectId, Long userId, String persistedPrefix) {
+        String notice = LangText.of(
+                "\n\n> 这一步需要先安装本机组件，已在界面上请你确认下载。装好后会自动继续这一步。",
+                "\n\n> This step needs a local component first; you have been asked to confirm the download. "
+                        + "It will continue automatically once the component is installed.");
+        sendTextDelta(guard, notice);
+        log.info("component_required for {}: ending the turn and waiting for the download", guard.conversationId);
+        saveAssistantMessage(guard, projectId, userId, persistedPrefix + notice);
+        markRunState(guard, AgentRunStateService.RunStatus.AWAITING_INPUT);
+        sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "awaiting_input", "component_required"));
+        closeSse(guard);
+        endRun(guard);
+    }
+
+    /**
      * ask_user 工具的停机（dev-board#868）。形态与 {@link #stopForUserQuestion} 完全一致
      * （AWAITING_INPUT、不递归、答案是下一轮普通用户消息），只多两件事：
      * <ol>
@@ -2933,6 +2982,11 @@ public class AgentOrchestrator {
      * 会被弱模型稳定无视（PR#209 真机实证）。
      */
     static String stuckInterventionMessage(String pattern) {
+        if (EDITOR_BOOTING_STUCK_PATTERN.equals(pattern)) {
+            return "[系统提醒] 编辑器已连续多次仍在启动、这一步一直没有执行。再等一等重试同一步；"
+                    + "如果一直起不来，就停下来如实告诉用户「编辑器还没加载好」，请用户确认文档已经打开。"
+                    + "不要改用新建文件、生成副本或其它通道去完成同一件事。";
+        }
         return "[系统提醒] 你" + (pattern == null ? "在重复相同的操作序列" : pattern)
                 + "，再这样下去无法推进任务。请换一种思路：改用其他工具、调整参数，"
                 + "或先用读取类工具确认当前真实状态；如果任务其实已经完成，请直接输出最终总结。";
@@ -3009,18 +3063,37 @@ public class AgentOrchestrator {
      * 连续失败计数：失败累计到阈值时在工具结果后追加收敛提示，成功则清零。
      */
     private String appendFailureNudge(RunGuard guard, String result, boolean success) {
+        return appendFailureNudge(guard, result, success, false);
+    }
+
+    /**
+     * @param retryableWait 这次失败是「对方还没准备好」（编辑器仍在启动，dev-board#1017）：
+     *                      这一步没执行、等一等重试同一步就对了，不计入连续失败，也不发收敛提示。
+     *                      计入的话三次启动中就会触发提示，模型读成「换条路」，
+     *                      转头用 write_docx / doc_start_stream 另建一份同名文档。
+     */
+    String appendFailureNudge(RunGuard guard, String result, boolean success, boolean retryableWait) {
         if (success) {
             guard.consecutiveFailures = 0;
             return result;
         }
+        if (retryableWait) {
+            return result;
+        }
         guard.consecutiveFailures++;
         if (guard.consecutiveFailures >= CONSECUTIVE_FAILURE_NUDGE) {
-            return result + String.format("\n\n(System Note: 已连续 %d 次工具执行失败。请停止当前思路，" +
-                    "先用读取类工具确认文档当前状态，或输出 <final> 向用户说明遇到的问题，不要继续盲目重试。)",
+            // 措辞刻意不说「停止当前思路 / 换条路」：那句话曾被读成「改用新建文件去完成同一件事」，
+            // 一轮下来项目里多出四份同名文档（dev-board#1017）。
+            return result + String.format("\n\n(System Note: 已连续 %d 次工具执行失败。先读失败原因：" +
+                    "参数错了就改正参数重试同一步；确认这一步做不到，就输出 <final> 如实向用户说明遇到的问题。" +
+                    "不要为了绕开失败改用新建文件、生成副本等其它通道去完成同一件事，也不要原样盲目重试。)",
                     guard.consecutiveFailures);
         }
         return result;
     }
+
+    /** 打转检出时若是编辑器一直起不来：给一句不诱导换路的提醒（见 {@link #stuckInterventionMessage}）。 */
+    static final String EDITOR_BOOTING_STUCK_PATTERN = "__editor_booting__";
 
     // =================================================================================
     // Helper to notify frontend of file changes (Added/Modified)

@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createComponentRequiredHandler } from '../../src/composables/useComponentRequired.js'
+import { createComponentRequiredHandler, shouldAutoResend } from '../../src/composables/useComponentRequired.js'
 
 const payload = {
   action: 'component_required', packId: 'pptx-runtime', service: 'pptx-service',
@@ -74,6 +74,58 @@ test('同一轮里重复收到同一个 packId 只处理一次（工具可能连
   const h = createComponentRequiredHandler(d)
   await Promise.all([h.onAction(payload), h.onAction(payload)])
   assert.equal(d.calls.filter((c) => c.startsWith('install:')).length, 1)
+})
+
+// ---------- dev-board#1016：生成中装完不重发，挂成「组件已就绪，继续」 ----------
+
+test('生成中装完：不自动重发（会变成插话把这一轮打断），挂成待继续并提示可继续', async () => {
+  let streaming = true
+  const notices = []
+  const d = deps({
+    mark: () => 1,
+    shouldResend: () => shouldAutoResend({
+      alive: true, backgrounded: false, streaming, userCountAtGate: 1, userCountNow: 1,
+    }),
+    readyNotice: (item, opts) => notices.push([item.packId, opts]),
+  })
+  const h = createComponentRequiredHandler(d)
+  const r = await h.onAction(payload)
+  assert.deepEqual(r, { installed: true, resent: false, pending: true })
+  assert.deepEqual(d.calls, ['install:pptx-runtime'], '生成中绝不能自动重发')
+  assert.deepEqual(notices, [['pptx-runtime', { canContinue: true }]])
+  const p = h.pendingContinue()
+  assert.equal(p.text, '帮我做一份关于并购尽调的 PPT')
+  assert.equal(p.packId, 'pptx-runtime')
+  assert.equal(p.localeKey, 'pptxRuntime')
+
+  // 仍在生成时点「继续」：兜住，不发，待继续保留
+  assert.equal(await h.continuePending({ streaming: true }), false)
+  assert.deepEqual(d.calls, ['install:pptx-runtime'])
+  assert.ok(h.pendingContinue())
+
+  // 生成结束后点「继续」：发出原消息，且只发一次
+  streaming = false
+  assert.equal(await h.continuePending({ streaming }), true)
+  assert.deepEqual(d.calls, ['install:pptx-runtime', 'resend:帮我做一份关于并购尽调的 PPT'])
+  assert.equal(h.pendingContinue(), null)
+  assert.equal(await h.continuePending(), false)
+})
+
+test('待继续可以放弃（用户发了新消息 / 换了会话）', async () => {
+  const d = deps({ shouldResend: () => false })
+  const h = createComponentRequiredHandler(d)
+  await h.onAction(payload)
+  assert.ok(h.pendingContinue())
+  h.dismissPending()
+  assert.equal(h.pendingContinue(), null)
+  assert.equal(await h.continuePending(), false)
+  assert.deepEqual(d.calls, ['install:pptx-runtime'])
+})
+
+test('自动重发成功时不留待继续', async () => {
+  const h = createComponentRequiredHandler(deps())
+  await h.onAction(payload)
+  assert.equal(h.pendingContinue(), null)
 })
 
 const chatSrc = readFileSync(new URL('../../src/components/ChatInterface.vue', import.meta.url), 'utf8')

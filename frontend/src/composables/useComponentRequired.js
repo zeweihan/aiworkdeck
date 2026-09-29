@@ -12,6 +12,10 @@
 // 例外（dev-board#581）：用户点了「后台下载」收起卡片、继续用对话之后，装完时
 // 对话里已经有了新消息或正在生成——这时重发会插进用户正在进行的事情里，
 // 只提示「组件已就绪，可以重试」（判据见 shouldAutoResend）。
+// 例外二（dev-board#1016）：装完那一刻**正在生成中**，不论卡片在不在前台都不自动重发——
+// 生成中发出的消息按插话（steer）处理，后端会把这一轮里还没执行的工具回填成「被用户打断」，
+// 模型读到后把整件事再做一遍。这时把原消息挂成「待继续」（pendingContinue），
+// 由界面给一个「组件已就绪，继续」的动作，用户点了才发（continuePending）。
 //
 // 依赖同样全部注入（与 useOptionalComponents 同源），单测不需要真后端与 Electron。
 // 这里用相对路径 import 而不是 @/ 别名：node --test 不认那个别名。
@@ -26,12 +30,40 @@ import { PACK_LOCALE_KEY } from './useOptionalComponents.js'
  */
 export function shouldAutoResend({ alive, backgrounded, streaming, userCountAtGate, userCountNow }) {
   if (!alive) return false
+  // 生成中一律不重发（dev-board#1016）：那条消息会变成插话，把正在跑的这一轮打断
+  if (streaming) return false
   if (!backgrounded) return true
-  return !streaming && userCountNow === userCountAtGate
+  return userCountNow === userCountAtGate
 }
 
 export function createComponentRequiredHandler(deps) {
   const inFlight = new Set()
+  // 装好了但没自动重发的原消息：{ text, packId, localeKey }。只留最近一条——
+  // 用户点「继续」时要发的就是拦截那一刻的那句话，更早的已经没有意义。
+  let pending = null
+
+  /** 当前有没有「组件已就绪，继续」可点；没有返回 null。 */
+  function pendingContinue() {
+    return pending ? { ...pending } : null
+  }
+
+  /** 放弃待继续（用户发了新消息 / 换了会话 / 关掉提示）。 */
+  function dismissPending() {
+    pending = null
+  }
+
+  /**
+   * 用户点了「继续」：把挂着的原消息发出去。调用方要先确认此刻不在生成中，
+   * 否则同样会变成插话——这里再兜一次，生成中返回 false 且保留待继续。
+   * @returns {Promise<boolean>} 真的发出去了才是 true
+   */
+  async function continuePending({ streaming = false } = {}) {
+    if (!pending || streaming) return false
+    const { text, item } = pending
+    pending = null
+    await deps.resend(text, item)
+    return true
+  }
 
   function itemFromPayload(p) {
     return {
@@ -81,9 +113,11 @@ export function createComponentRequiredHandler(deps) {
       }
       if (!text) return { installed: true, resent: false }
       if (deps.shouldResend && !deps.shouldResend(mark, item)) {
-        if (deps.readyNotice) deps.readyNotice(item)
-        return { installed: true, resent: false }
+        pending = { text, packId: item.packId, localeKey: item.localeKey, item }
+        if (deps.readyNotice) deps.readyNotice(item, { canContinue: true })
+        return { installed: true, resent: false, pending: true }
       }
+      pending = null
       await deps.resend(text, item)
       return { installed: true, resent: true }
     } finally {
@@ -91,5 +125,5 @@ export function createComponentRequiredHandler(deps) {
     }
   }
 
-  return { itemFromPayload, onAction }
+  return { itemFromPayload, onAction, pendingContinue, continuePending, dismissPending }
 }
