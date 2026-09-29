@@ -52,7 +52,11 @@ public class AgentOrchestrator {
 
     /** ASK remains read-only but can inspect the user's durable memory. */
     static final Set<String> ASK_MEMORY_TOOLS = Set.of("memory_list", "memory_read", "memory_search");
-    /** Ordinary Agent/Plan turns retain the complete memory capability despite skill narrowing. */
+    /**
+     * Agent/Plan 回合里 skill 收窄时仍补回的 Markdown 记忆工具（dev-board#798 的原始语义：
+     * skill 白名单不许把记忆能力藏掉）。没被 skill 收窄的回合只补只读的三个（{@link #ASK_MEMORY_TOOLS}，
+     * 每轮注入的记忆索引点名要 memory_read），写入三个归 memory 类目走渐进披露放回（dev-board#1073）。
+     */
     static final Set<String> MEMORY_TOOLS = Set.of(
             "memory_list", "memory_read", "memory_search", "memory_write", "memory_edit", "memory_delete");
     static final int STREAM_RECOVERY_LIMIT = 256 * 1024;
@@ -2420,10 +2424,16 @@ public class AgentOrchestrator {
             boolean narrowedBySkill = afterSkill.size() < registered.size();
             visible = new java.util.ArrayList<>(
                     narrowedBySkill ? afterSkill : discloseProgressively(afterSkill, guard));
-            // Memory remains available even when a skill restricts other tools.
+            // 记忆兜底（dev-board#1073）：只读三个（list/read/search）每轮都补——每轮注入的 Markdown
+            // 记忆索引点名要 memory_read；写入三个（write/edit/delete）只在 skill 收窄时补（skill 白名单
+            // 不许藏掉记忆能力，这是这条兜底的原始语义），平时归 memory 类目，由关键词 / skill /
+            // list_tools / 点名四条路放回。上一轮已经下发过的照补，一轮内只增不减。
+            java.util.Set<String> offeredBefore = guard.roundOffered == null ? java.util.Set.of() : guard.roundOffered;
             for (ToolSpecification spec : registered) {
-                if (MEMORY_TOOLS.contains(spec.name())
-                        && visible.stream().noneMatch(v -> v.name().equals(spec.name()))) {
+                String name = spec.name();
+                boolean keep = ASK_MEMORY_TOOLS.contains(name)
+                        || (MEMORY_TOOLS.contains(name) && (narrowedBySkill || offeredBefore.contains(name)));
+                if (keep && visible.stream().noneMatch(v -> v.name().equals(name))) {
                     visible.add(spec);
                 }
             }

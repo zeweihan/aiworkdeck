@@ -483,6 +483,13 @@ class ToolDisclosurePolicyTest {
         assertEquals(Set.of("legal"), TRIM.categoriesHintedBy("《劳动合同法》里经济补偿的标准在哪一条？"));
         assertEquals(Set.of("meeting"), TRIM.categoriesHintedBy("把昨天的录音整理一下"), "「整理」不许把文件整理类放回");
         assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("记住我喜欢用仿宋"));
+        // memory 类目只剩写入三个工具（只读三个编排器每轮都补，dev-board#1073），这几种说法都要把它放回
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("把这条约定记下来"));
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("忘掉上次说的称呼"));
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("Please remember that I sign as the managing partner"));
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("clean up my memory files"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("别忘了在末尾加上日期"),
+                "「别忘了」是叮嘱不是记忆，不收");
         assertEquals(Set.of(), TRIM.categoriesHintedBy("把第三条里的「五日」改成「十日」"),
                 "edit 不收关键词：「改成 / 替换 / 删除」几乎每句都有，常用删改原语本来就在核心集");
         // 拉丁词两端整词（SkillRouter.containsTrigger 同一口径）：别的单词的一截不算

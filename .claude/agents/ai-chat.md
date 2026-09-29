@@ -456,7 +456,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
       | PowerPoint 任务窗格 | 85 | 23 | 52286 → 18568（-64.5%） |
       | 纯对话（none） | 67 | 19 | 42128 → 16288（-61.3%） |
 
-      （「全集」含 list_tools；编排器另按 `MEMORY_TOOLS` 规则补 memory_* 六个，不在这张表里。）
+      （「全集」含 list_tools；编排器每轮另补只读的 memory_list/read/search 三个（约 1.2k 上线路字节），不在这张表里。写入的 memory_write/edit/delete（约 1.7k）自 dev-board#1073 起不再每轮兜底：只在 skill 收窄时补（`AgentOrchestrator.MEMORY_TOOLS` 的原始语义——skill 白名单不许藏掉记忆能力）、或本轮已下发过时照补（只增不减），平时归 memory 类目，由关键词「记住/记忆/偏好/记下/忘掉/remember/memory」、skill、`list_tools`、XML 点名四条路放回；回放 `cases-tool-disclosure.json` 的三条 `disclosure-memory-*` 守着。）
       - **展开只在下一轮生效**，这是它与「一轮内工具集不变」相容的全部理由：展开记在
         `RunGuard.expandedToolCategories`（`dispatchTool` 里 `noteToolCategoryExpansion` 写、
         下一次递归 runLoop 读），而且**只做加法**——模型已宣布要调的工具永远不会消失。
@@ -868,7 +868,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - 前端 `AgentInbox.vue` 的 `run-active` prop 决定 steer 项露不露「立即发送」（`canSendNow`：queue 项恒露，steer 项只在没轮次在跑时露），并在没轮次时多渲一行 `chat.inboxIdleNotice`。判据取 `ChatInterface.inboxRunActive` = **`isStreaming` 单一来源**：切回一条后台仍在跑的会话时 `run_state=RUNNING` 会把它置起，所以它不只是「本窗口从头看到尾的那一轮」。**刻意不与 `agentRunStatus === 'RUNNING'` 取或**——用户点停止后 `isStreaming` 立刻 false，而 `agentRunStatus` 要等后端 `cancelled` 事件才落终态，SSE 正好死了就永远停在 RUNNING；用一个可能永不归位的状态去挡救命按钮，等于把病灶换了个地方。护栏在 `tests/chat-presentation-ui/run.mjs`（真组件渲染，停止前后各断一次）。
 - 前端 `AgentInbox.vue`、`agentInboxState.mjs` 与 `chatSubmissionState.mjs` 管理队列、事件去重和提交事务。发送与停止分开，执行中可输入；新会话只断开本地视图，旧会话继续。迟到 receipt 不得清空新会话草稿；附件草稿按原始 HTML 快照比较。
 - `service/ai/memory/document/*`、`MemoryDocumentController`、`MemoryDocument`/`MemoryDocumentSpace` 是 Markdown 记忆真源。`/api/ai/memory/{spaces,files,file,download}`；个人/项目使用权限校验后的 opaque spaceId，团队/律所由官网共享服务校验成员/管理员。每空间 remember.md 自动维护 topic 链接；UTF-8 128 KiB、路径校验、expectedRevision 冲突及删除墓碑由后端负责。legacy 读写/同步向同一文档服务收敛，不保留可独立写入的副本。
-- `MemoryTools` 暴露 memory_list/read/search/write/edit/delete；Agent/Plan 的 skill 白名单不能隐藏这些基础工具，ASK 只允许前三个。ContextAssembler 每轮注入有权限的限量索引，正文按需由模型读取。`MemoryBrowser.vue` 从对话与设置进入，支持索引跳转、编辑、下载及冲突提示。
+- `MemoryTools` 暴露 memory_list/read/search/write/edit/delete；Agent/Plan 的 skill 白名单不能隐藏这些基础工具，ASK 只允许前三个。没被 skill 收窄的 Agent/Plan 回合里只读三个每轮必下发（每轮注入的索引点名要 memory_read），写入三个归渐进披露的 memory 类目（dev-board#1073，详见「工具规格瘦身与渐进披露」那张核心集表下的注）。ContextAssembler 每轮注入有权限的限量索引，正文按需由模型读取。`MemoryBrowser.vue` 从对话与设置进入，支持索引跳转、编辑、下载及冲突提示。
 - 桌面共享记忆使用已连接账户 Bearer；服务器使用专用 `memory.shared.base-url`/`memory.shared.secret` 与绑定账户 ID，不能复用只读协作目录密钥。官网配套契约与 PR 见 `doc/ai-alignment/memory-report.md`；无账户/服务未配置的共享空间显示不可用，不能伪装成本地共享。
 - 测试与实际结果：`doc/ai-alignment/validation-report.md`；隔离运行配方：`doc/ai-alignment/test-environment.md`。不可将模拟 provider E2E 称为真实模型测试。
 
