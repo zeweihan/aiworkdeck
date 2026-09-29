@@ -81,7 +81,8 @@ import static org.mockito.Mockito.when;
  *
  * <p>律师放进案件库 → 本机旧清单首读时迁上去（含附件，走 multipart 原字节转发）→ 代理签码 →
  * 客户在案件库凭码登录 → 只看得到这一份 → 代理再建一条清单 → 客户读得到、上传、留言 →
- * 客户删清单 403 → 律师经代理取到客户传的文件 → 撤销后码失效、会话看不到案卷。
+ * 客户删清单 403 → 律师经代理取到客户传的文件 → 律师审核（驳回带理由 / 客户重传回待审核 / 通过 / 撤回）
+ * → 撤销后码失效、会话看不到案卷。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {"security.local-mode=false"})
@@ -285,6 +286,16 @@ class ClientPortalRoundTripTest {
         return resp;
     }
 
+    /** 律师在桌面端点「通过 / 驳回 / 撤回」：PUT /api/dd/items/{id}/status?projectId=7 经代理到案件库。 */
+    private MockHttpServletResponse review(DdCloudProxyFilter filter, long itemId, String status, String reason)
+            throws Exception {
+        Map<String, Object> body = new HashMap<>();
+        body.put("status", status);
+        if (reason != null) body.put("reason", reason);
+        return viaDesktop(filter, "PUT", "/api/dd/items/" + itemId + "/status", "projectId=7",
+                JSONUtil.toJsonStr(body).getBytes(StandardCharsets.UTF_8), "application/json");
+    }
+
     // ---- 案件库侧（客户直连） -------------------------------------------------
 
     private HttpResponse clientCall(cn.hutool.http.Method method, String path, String session, String json) {
@@ -410,6 +421,44 @@ class ClientPortalRoundTripTest {
                     "projectId=7", null, null);
             assertEquals(200, got.getStatus());
             assertArrayEquals(clientFile, got.getContentAsByteArray());
+
+            // ⑦½ 律师审核（dev-board#1057）：经代理驳回（带理由）→ 客户读到状态与理由 → 客户改状态 403
+            //     → 客户重传回到待审核 → 律师通过 → 客户不能再传 → 律师撤回通过；没上传的条目不能通过（400）
+            long untouchedItem = detail.getJSONArray("items").getJSONObject(1).getLong("id");
+            MockHttpServletResponse early = review(filter, untouchedItem, "APPROVED", null);
+            assertEquals(400, early.getStatus(), early.getContentAsString(StandardCharsets.UTF_8));
+            assertEquals(400, review(filter, itemId, "REJECTED", "  ").getStatus(), "驳回必须带理由");
+            MockHttpServletResponse rejected = review(filter, itemId, "REJECTED", "章程缺最后一页");
+            assertEquals(200, rejected.getStatus(), rejected.getContentAsString(StandardCharsets.UTF_8));
+            assertEquals("REJECTED", JSONUtil.parseObj(rejected.getContentAsString(StandardCharsets.UTF_8)).getStr("status"));
+
+            JSONObject clientSees = JSONUtil.parseObj(clientCall(cn.hutool.http.Method.GET,
+                    "/api/dd/requests/" + requestId, clientSession, null).body());
+            JSONObject seenItem = clientSees.getJSONArray("items").stream().map(o -> (JSONObject) o)
+                    .filter(o -> o.getLong("id") == itemId).findFirst().orElseThrow();
+            assertEquals("REJECTED", seenItem.getStr("status"));
+            assertEquals("章程缺最后一页", clientSees.getJSONObject("rejectReasons").getStr(String.valueOf(itemId)),
+                    clientSees.toString());
+            JSONArray seenComments = JSONUtil.parseArray(clientCall(cn.hutool.http.Method.GET,
+                    "/api/dd/items/" + itemId + "/comments", clientSession, null).body());
+            assertTrue(seenComments.stream().map(o -> ((JSONObject) o).getStr("content"))
+                    .anyMatch("驳回：章程缺最后一页"::equals), seenComments.toString());
+
+            assertEquals(403, clientCall(cn.hutool.http.Method.PUT, "/api/dd/items/" + itemId + "/status",
+                    clientSession, JSONUtil.toJsonStr(Map.of("status", "UPLOADED"))).getStatus());
+
+            HttpResponse reUp = HttpRequest.post(serverUrl() + "/api/dd/items/" + itemId + "/upload")
+                    .header("X-Session-Id", clientSession).form("file", tmp.toFile()).execute();
+            assertEquals(200, reUp.getStatus(), reUp.body());
+            assertEquals("UPLOADED", JSONUtil.parseObj(reUp.body()).getStr("status"), "驳回后重传回到待审核");
+
+            assertEquals(200, review(filter, itemId, "APPROVED", null).getStatus());
+            HttpResponse afterApprove = HttpRequest.post(serverUrl() + "/api/dd/items/" + itemId + "/upload")
+                    .header("X-Session-Id", clientSession).form("file", tmp.toFile()).execute();
+            assertEquals(400, afterApprove.getStatus(), "已通过的条目不再收材料: " + afterApprove.body());
+            MockHttpServletResponse withdrawn = review(filter, itemId, "UPLOADED", null);
+            assertEquals(200, withdrawn.getStatus());
+            assertEquals("UPLOADED", JSONUtil.parseObj(withdrawn.getContentAsString(StandardCharsets.UTF_8)).getStr("status"));
 
             // ⑧ 撤销：案件库上移出客户 → 码失效、旧会话看不到案卷
             ResponseEntity<Map<String, Object>> removed = cloudController.removeMember(LOCAL_PROJECT, clientUserId, "s");

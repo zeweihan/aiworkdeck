@@ -92,7 +92,7 @@ class DdControllerClientWhitelistTest {
         verify(ddService, never()).updateRequest(any(), any());
         verify(ddService, never()).addItem(any(), any());
         verify(ddService, never()).moveItem(any(), any());
-        verify(ddService, never()).updateItemStatus(any(), any());
+        verify(ddService, never()).updateItemStatus(any(), any(), any(), any());
         verify(ddService, never()).updateItemInfo(any(), any(), any());
         verify(ddService, never()).deleteItem(anyLong(), any());
         verify(ddService, never()).deleteRequest(anyLong(), any());
@@ -121,6 +121,20 @@ class DdControllerClientWhitelistTest {
         when(pms.isClient(PROJECT, CLIENT)).thenReturn(false);
         assertDoesNotThrow(() -> controller.deleteRequest(REQUEST, "c"));
         verify(ddService).deleteRequest(REQUEST, CLIENT);
+    }
+
+    @Test
+    @DisplayName("律师审核：带理由与操作人交给业务层；非法流转映射成真 400")
+    void staffReviewPassesReasonAndMaps400() {
+        when(pms.isClient(PROJECT, CLIENT)).thenReturn(false);
+        DdController.UpdateStatusDto dto = new DdController.UpdateStatusDto();
+        dto.setStatus("REJECTED");
+        dto.setReason("扫描件不清晰");
+        assertDoesNotThrow(() -> controller.updateStatus(ITEM, dto, "c"));
+        verify(ddService).updateItemStatus(ITEM, "REJECTED", "扫描件不清晰", CLIENT);
+        var resp = controller.onIllegalTransition(new DdService.IllegalTransitionException("x"));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertEquals(400, resp.getBody().get("code"));
     }
 
     @Test

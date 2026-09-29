@@ -125,11 +125,17 @@ public class DdCloudMigrationService {
                     call(projectId, "PUT", "/items/" + remoteItemId + "/info", JSONUtil.toJsonStr(info));
 
                     boolean uploaded = item.getUploadedFileId() != null && uploadFile(projectId, item, remoteItemId);
+                    // 审核结论只能落在已有附件的条目上（案件库的状态机，dev-board#1057）：附件没迁上去的
+                    // 条目停在 PENDING；UPLOADED 由上传本身设好；驳回要带理由——本机从来没有驳回
+                    // 界面、也不迁留言，只能写一句说明，免得整条清单迁移被 400 卡住、每次读列表都重试。
                     String status = item.getStatus();
-                    boolean statusSetByUpload = uploaded && "UPLOADED".equals(status);
-                    if (status != null && !"PENDING".equals(status) && !statusSetByUpload) {
-                        call(projectId, "PUT", "/items/" + remoteItemId + "/status",
-                                JSONUtil.toJsonStr(Map.of("status", status)));
+                    if (uploaded && ("APPROVED".equals(status) || "REJECTED".equals(status))) {
+                        Map<String, Object> body = new HashMap<>();
+                        body.put("status", status);
+                        if ("REJECTED".equals(status)) {
+                            body.put("reason", "迁入案件库前已驳回（原理由未记录）");
+                        }
+                        call(projectId, "PUT", "/items/" + remoteItemId + "/status", JSONUtil.toJsonStr(body));
                     }
                 }
                 left.removeAll(ready);
@@ -146,7 +152,7 @@ public class DdCloudMigrationService {
         }
     }
 
-    /** 附件走案件库既有的上传口；本机文件找不到就跳过（清单项仍迁，状态照原样设）。 */
+    /** 附件走案件库既有的上传口；本机文件找不到就跳过（清单项仍迁，停在待上传）。 */
     private boolean uploadFile(long projectId, DdItem item, long remoteItemId) throws Exception {
         ProjectFile file = fileRepository.findById(item.getUploadedFileId()).orElse(null);
         if (file == null || file.getFilePath() == null) return false;

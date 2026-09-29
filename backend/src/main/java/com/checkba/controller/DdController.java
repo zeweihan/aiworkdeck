@@ -68,6 +68,13 @@ public class DdController {
                 .body(Map.of("code", 403, "message", e.getMessage()));
     }
 
+    /** 审核状态流转不合法（未上传就通过、驳回不带理由、重复下同一结论、已通过还要再传）→ 真 HTTP 400。 */
+    @ExceptionHandler(DdService.IllegalTransitionException.class)
+    public ResponseEntity<Map<String, Object>> onIllegalTransition(DdService.IllegalTransitionException e) {
+        return ResponseEntity.status(org.springframework.http.HttpStatus.BAD_REQUEST)
+                .body(Map.of("code", 400, "message", e.getMessage()));
+    }
+
     private Long requireStaffByProject(String sessionId, Long projectId) {
         Long userId = requireMemberByProject(sessionId, projectId);
         if (projectMemberService.isClient(projectId, userId)) throw new ClientForbiddenException();
@@ -113,6 +120,8 @@ public class DdController {
         Map<String, Object> result = new HashMap<>();
         result.put("request", request);
         result.put("items", items);
+        // 驳回条目的最近一条理由（itemId → 理由），客户视角直接显示在条目上（dev-board#1057）
+        result.put("rejectReasons", ddService.rejectReasons(items));
         return result;
     }
 
@@ -172,8 +181,8 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody UpdateStatusDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireStaffByItem(sessionId, itemId);
-        return ddService.updateItemStatus(itemId, dto.getStatus());
+        Long userId = requireStaffByItem(sessionId, itemId);
+        return ddService.updateItemStatus(itemId, dto.getStatus(), dto.getReason(), userId);
     }
 
     // 更新项信息（标题/描述）
@@ -274,8 +283,12 @@ public class DdController {
 
     static class UpdateStatusDto {
         private String status;
+        /** 驳回理由（status=REJECTED 时必填），落成一条「驳回：」前缀的留言。 */
+        private String reason;
         public String getStatus() { return status; }
         public void setStatus(String status) { this.status = status; }
+        public String getReason() { return reason; }
+        public void setReason(String reason) { this.reason = reason; }
     }
 
     static class UpdateInfoDto {
