@@ -287,7 +287,11 @@ public class ContentSearchService {
             if (cached != null) {
                 return cached;
             }
-            String extracted = documentTextService.extractText(file);
+            // 纯文本按字节解码（UTF-8 严格、失败回退 GBK），与 AI 读文件同一份判据与口径（dev-board#1065）：
+            // 交给 Tika 的话 GBK 中文 txt 抽回空串，search_project_content 就永远搜不到它
+            String extracted = com.checkba.service.ai.context.FileContentExtractorService.isPlainTextName(file.getName())
+                    ? documentTextService.extractPlainText(file)
+                    : documentTextService.extractText(file);
             log.debug("[Search] extracted {} chars from {}",
                 extracted != null ? extracted.length() : 0, filePath);
             // 写缓存的判据与 ProjectFileTextExtractor 一致：PDF 文字层不可用（扫描件残渣）

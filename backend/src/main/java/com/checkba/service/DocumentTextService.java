@@ -115,6 +115,25 @@ public class DocumentTextService {
 
 
     /**
+     * 纯文本文件（txt/md/csv…）按字节解码，口径见
+     * {@link com.checkba.service.ai.context.FileContentExtractorService#decodeText}：UTF-8 严格解码、失败回退 GBK。
+     *
+     * <p>不走 Tika：短小的 GBK 中文 txt 它常常抽回空串，于是全文检索搜不到一份 AI 读得出的会议纪要
+     *（dev-board#1065）。判据用 {@code FileContentExtractorService.isPlainTextName}，与 AI 读文件同一份。
+     */
+    public String extractPlainText(ProjectFile file) throws IOException {
+        String filePath = resolvePath(file);
+        try {
+            Resource resource = storageServiceFactory.getStorageService().load(filePath);
+            try (InputStream is = resource.getInputStream()) {
+                return com.checkba.service.ai.context.FileContentExtractorService.decodeText(is.readAllBytes());
+            }
+        } catch (StorageException e) {
+            throw new IOException("加载文件失败: " + filePath, e);
+        }
+    }
+
+    /**
      * 取物理文件的指纹，供落库缓存（project_file_text_cache）判失效。
      *
      * <p>返回 null 表示「拿不到指纹」（远端存储、特殊 Resource、文件不存在），

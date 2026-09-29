@@ -199,9 +199,13 @@ class _ToolAPI:
         else:
             raise Exception("Tool call timed out - no result received")
     
-    def read_document(self, fileId):
-        \"\"\"Read a document from the project by its file ID.\"\"\"
+    def extract_file_text(self, fileId):
+        \"\"\"Read a project file's plain text by its file ID (same extractor as the extract_file_text tool).\"\"\"
         return {"content": self._call_tool("read_document", fileId=str(fileId))}
+
+    def read_document(self, fileId):
+        \"\"\"Old name of extract_file_text, kept so existing scripts keep working.\"\"\"
+        return self.extract_file_text(fileId)
     
     def search_web(self, query):
         \"\"\"Search the web using Baidu.\"\"\"
@@ -221,7 +225,7 @@ default_api = _ToolAPI()
     @ToolMeta(displayName = "执行Python代码", category = "python")
     @Tool("Run Python script for data analysis and computation. For Chinese company registration records use qichacha_query, "
             + "and for Tushare financial data use tushare_query — those go through the platform gateway and work without any local credentials. "
-            + "You can call default_api.read_document(fileId='...') to read project files. Returns stdout/stderr.")
+            + "You can call default_api.extract_file_text(fileId='...') to read project files. Returns stdout/stderr.")
     public String run_python(@P("要执行的 Python 源码；结果请用 print 输出") String code) {
         if (code == null || code.isBlank()) {
             return "Error: code is required.";

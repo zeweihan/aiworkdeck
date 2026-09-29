@@ -138,4 +138,35 @@ class ContentSearchToolsTest {
         assertTrue(out.contains("还有 11 处未列出"), "10 处正文 + 1 处文件名命中没列出来：" + out);
         assertFalse(out.contains("长".repeat(201)), "片段必须截到 200 字");
     }
+    @Test
+    @DisplayName("GBK 编码的中文 txt 也搜得到：纯文本按字节解码，不再交给 Tika 抽回空串（dev-board#1065）")
+    void gbkPlainTextIsSearchable() throws Exception {
+        ProjectContextHolder.setProjectId("7");
+        String body = "甲方：北京某某科技有限公司\n第八条 违约责任：应向守约方支付合同总价百分之二十的违约金。\n";
+        byte[] gbk = body.getBytes(java.nio.charset.Charset.forName("GBK"));
+        ProjectFile txt = row(61L, "会议纪要.txt", null);
+        txt.setFileType("txt");
+        txt.setFilePath("projects/7/会议纪要.txt");
+        txt.setIsDeleted(false);
+        txt.setSortOrder(0);
+
+        ProjectFileRepository realRepo = Mockito.mock(ProjectFileRepository.class);
+        when(realRepo.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(7L)).thenReturn(List.of(txt));
+        com.checkba.storage.StorageService storage = Mockito.mock(com.checkba.storage.StorageService.class);
+        when(storage.load("projects/7/会议纪要.txt"))
+                .thenAnswer(inv -> new org.springframework.core.io.ByteArrayResource(gbk));
+        com.checkba.storage.StorageServiceFactory factory = Mockito.mock(com.checkba.storage.StorageServiceFactory.class);
+        when(factory.getStorageService()).thenReturn(storage);
+        ContentSearchService realSearch = new ContentSearchService(realRepo,
+                Mockito.mock(com.checkba.repository.FileTagRepository.class),
+                Mockito.mock(com.checkba.repository.TagRepository.class),
+                new com.checkba.service.DocumentTextService(factory), null);
+        try {
+            String out = new ContentSearchTools(realSearch, realRepo).search_project_content("违约金", null, null, null);
+            assertTrue(out.contains("会议纪要.txt (fileId=61)"), out);
+            assertTrue(out.contains("第 2 行：第八条 违约责任"), "命中片段要是正确解码的中文：" + out);
+        } finally {
+            realSearch.shutdown();
+        }
+    }
 }

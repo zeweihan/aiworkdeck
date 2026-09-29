@@ -401,7 +401,7 @@ The `law_*` tools are backed by a **PRC (Mainland China) law database**. They co
 **Available API methods in Python:**
 ```python
 # Read project files by ID
-result = default_api.read_document(fileId="123")
+result = default_api.extract_file_text(fileId="123")
 content = result["content"]
 
 # Search the web
@@ -417,7 +417,7 @@ content = result["content"]
 ```python
 file_ids = ["1871", "1872"]
 for file_id in file_ids:
-    result = default_api.read_document(fileId=file_id)
+    result = default_api.extract_file_text(fileId=file_id)
     content = result["content"]
     print(f"File {file_id}: {len(content)} chars")
 ```
