@@ -135,7 +135,8 @@ class ToolSchemaBudgetTest {
      * 上线路省 28.0%，weight 省 29.2%。摘掉的 41 个：pdf 13、slides(pptx_*) 9、litigation 6、
      * plugin 6、enterprise-data 5、meeting 2；多出 list_tools 1 个。下限留 3 个点余量。
      */
-    private static final double SAVED_WIRE_FLOOR = 0.25;
+    // dev-board#1065 四批下线一批同义/失真工具后基数变小，实测 24.3%（合入前 28.0%）；下限留余量取 20%。
+    private static final double SAVED_WIRE_FLOOR = 0.20;
 
     @Test
     @DisplayName("xlsx / pptx 会话同样省下一大截")
