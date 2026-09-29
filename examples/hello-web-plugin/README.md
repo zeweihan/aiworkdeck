@@ -24,7 +24,7 @@ hello-web-plugin/
 cp -R examples/hello-web-plugin backend/plugins/
 ```
 
-装完是**禁用**状态（在线安装的插件同理），在插件广场点「启用」后才会出现在左栏。
+手动放进 `plugins/` 的插件装完即**启用**（只有从插件广场在线安装的才默认禁用，需在广场点「启用」），重扫后就会出现在左栏。
 
 ## 它演示了什么
 

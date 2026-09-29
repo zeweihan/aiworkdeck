@@ -277,6 +277,12 @@ Text-to-speech runs on-device (bundled Kokoro engine); the legacy EasyVoice Dock
 
 Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun (OCR and Tingwu transcription), and object storage. Not every provider is required to inspect the code or run the basic workbench.
 
+## Contributor Docs
+
+- [Architecture](docs/architecture.md): system layout and how the pieces fit
+- [Getting started](docs/getting-started.md): local stack for contributors and self-hosters
+- [Plugin guide](docs/plugin-guide.md): JAR, web, and declarative plugins, SDK, marketplace
+
 ## Repository Map
 
 | Path | Purpose |

@@ -274,6 +274,14 @@ chmod +x restart-all.sh
 
 常见可选提供方：OpenRouter、Gemini、企查查、Tushare、北大法宝、阿里云（OCR 与听悟转写）与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
 
+## 贡献者文档
+
+以下三篇为英文：
+
+- [架构](docs/architecture.md)：系统怎么拆、各层职责
+- [上手](docs/getting-started.md)：从源码跑本地栈
+- [插件指南](docs/plugin-guide.md)：JAR / Web / 声明式插件、SDK、上架
+
 ## 仓库结构
 
 | 路径 | 用途 |
