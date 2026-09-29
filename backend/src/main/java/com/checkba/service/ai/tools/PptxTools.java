@@ -139,7 +139,7 @@ public class PptxTools implements AgentToolComponent {
                 sb.append(String.format("- ID: %d, 名称: %s, 位置: %s\n", 
                         f.getId(), f.getName(), folderPath.isEmpty() ? "根目录" : folderPath));
             }
-            sb.append("\n使用 pptx_open_file 工具可以打开指定文件进行编辑。");
+            sb.append("\n用 doc_open_file 打开指定文件后即可用 slide_* 编辑（桌面编辑器会话）。");
             return sb.toString();
             
         } catch (Exception e) {
@@ -187,7 +187,7 @@ public class PptxTools implements AgentToolComponent {
                 sb.append(String.format("- ID: %d, 名称: %s, 位置: %s\n", 
                         f.getId(), f.getName(), folderPath.isEmpty() ? "根目录" : folderPath));
             }
-            sb.append("\n使用 pptx_open_file 工具可以打开指定文件进行编辑。");
+            sb.append("\n用 doc_open_file 打开指定文件后即可用 slide_* 编辑（桌面编辑器会话）。");
             return sb.toString();
             
         } catch (Exception e) {

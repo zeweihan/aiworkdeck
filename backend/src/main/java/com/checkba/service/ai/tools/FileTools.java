@@ -169,7 +169,8 @@ public class FileTools implements AgentToolComponent {
             + "same extraction and same truncation, but it also accepts a FOLDER id and lists its children. "
             + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script). "
             + "Max 10MB; very long text is truncated.")
-    public String read_file(String filePath) {
+    public String read_file(
+            @P("文件路径：项目根目录下的相对路径（如 '卷宗/证据清单.txt'），或本项目目录内的绝对路径") String filePath) {
         log.info("Tool: read_file called for {}", filePath);
         try {
             Path path = resolvePath(filePath);
