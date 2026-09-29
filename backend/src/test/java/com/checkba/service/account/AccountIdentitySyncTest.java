@@ -176,4 +176,41 @@ class AccountIdentitySyncTest {
         verify(userService).updateAvatar(LOCAL_USER, null);
         verify(userService, never()).refreshDisplayNameFromWebsite(any(), any());
     }
+
+    // ==================== 断开账户后回退（登录后置 §5.5，dev-board#1046） ====================
+
+    @Test
+    @DisplayName("断开账户：本机行回到哨兵名「本机用户」、头像清空——不再顶着上一个账户的名字与头像")
+    void resetToLocalRevertsNameAndAvatar() {
+        localUser.setDisplayName("韩律师");
+        localUser.setAvatarUrl("https://www.aiworkdeck.com/api/avatar/acc_9f3a?v=1");
+
+        sync.resetToLocal();
+
+        verify(userService).refreshDisplayNameFromWebsite(localUser, LocalIdentityService.LOCAL_DISPLAY_NAME);
+        verify(userService).updateAvatar(LOCAL_USER, null);
+        // 案件库那边随官网刷新的事件不发：已经没有账户可桥接了
+        verify(events, never()).publishEvent(any(Object.class));
+        // 回退是纯本地动作，不打官网
+        verify(accountService, never()).profileIdentity();
+    }
+
+    @Test
+    @DisplayName("断开账户：本来就是哨兵名、没有头像时不写库")
+    void resetToLocalIsIdempotent() {
+        sync.resetToLocal();
+
+        verify(userService).refreshDisplayNameFromWebsite(localUser, LocalIdentityService.LOCAL_DISPLAY_NAME);
+        verify(userService, never()).updateAvatar(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("断开账户：非 local-mode 整条短路（账户是机器级状态，不许改某个租户的行）")
+    void resetToLocalShortCircuitsOnServer() {
+        when(localIdentityService.isLocalMode()).thenReturn(false);
+
+        sync.resetToLocal();
+
+        verifyNoInteractions(userService);
+    }
 }

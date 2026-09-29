@@ -83,6 +83,20 @@ const stripCodeFences = (text, fenceState) => text.replace(/(\n?)```([^\s`]*)([ 
     return pre && post.includes('\n') ? '\n' : ''
 })
 
+/**
+ * SSE error 事件的账户类载荷（登录后置 4011 契约，dev-board#1046；后端 AgentOrchestrator.accountErrorPayload）：
+ * JSON {message, code, kind, reason?}。其余 error 载荷是字符串，这里返回 null。
+ */
+function parseAccountErrorPayload(dataStr) {
+    if (typeof dataStr !== 'string' || dataStr.charAt(0) !== '{') return null
+    try {
+        const parsed = JSON.parse(dataStr)
+        return parsed && typeof parsed.message === 'string' && parsed.kind ? parsed : null
+    } catch (e) {
+        return null
+    }
+}
+
 export function useAgentStream() {
     // STATE: List of all bubbles (history + active)
     const bubbles = ref([])
@@ -1603,7 +1617,20 @@ export function useAgentStream() {
             // Ensure error is visible
             // 注意：错误必须写入 content（walkthrough 卡片当前未渲染，写那里用户永远看不到）
             if (evt === 'error') {
-                const errMsg = dataStr || "Unknown Error"
+                // 账户类失败的载荷是 JSON {message, code, kind, reason?}（登录后置 4011 契约，
+                // dev-board#1046）；其余错误仍是字符串。只加不改：解析不出来就按原串走
+                const accountPayload = parseAccountErrorPayload(dataStr)
+                const errMsg = dataStr && accountPayload ? (accountPayload.message || dataStr) : (dataStr || "Unknown Error")
+                if (accountPayload && accountPayload.code === 4011) {
+                    // 这台电脑还没登录账户：就地弹登录层（不是会话失效，不清会话）。
+                    // 这一轮不自动重发——登录完用户重发即可。平时走不到这里：ChatInterface
+                    // 发送前已经用 requireAccount 拦过，这是后端兜底（如退出登录的同一秒里发出的消息）
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('account.loginDialog.aiNotice') + '\n'
+                    import('@/utils/requireAccount.js')
+                        .then((m) => m.requireAccountFor4011(accountPayload))
+                        .catch((e) => console.warn('[SSE] 登录弹层不可用:', e))
+                } else
                 // 地域拒绝（后端 LlmErrorClassifier.REGION_BLOCKED_MARKER）：上游返回的是一句英文
                 // 「This model is not available in your region」，原样拼给用户等于没有信息。
                 // 这里换成中文引导。注意载荷前面还拼着「Stream Error: 」，所以用 includes 而不是前缀判断。

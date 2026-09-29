@@ -90,8 +90,11 @@ public class SiteSwitchService {
         entitlementService.clearAccountCache();
         platformAiChannel.clearCache();
         platformUsageAccountant.resetBaseline();
-        // 平台通道此刻必然取不到 key，不降级会出现「界面显示通道正常选中、每条消息都报未连接账户」
-        String fallback = chatModelFactory.demotePlatformProvider();
+        // 单机版（local-mode）不降级（登录后置，dev-board#1046）：「平台通道选中 + 未连接账户」
+        // 是全新安装的常态（DataInitializer 就这么初始化），下一条 AI 消息由 4011 → 登录弹层承接；
+        // 降到 OLLAMA 反而让官方版（界面没有 BYOK 入口）的消息静默发给一个多半没装的本地模型。
+        // 团队服务器保持原行为：平台通道此刻取不到 key，不降级会「显示选中、每条消息都报未连接账户」
+        String fallback = licenseService.isLocalMode() ? null : chatModelFactory.demotePlatformProvider();
 
         log.info("站点切换 {} -> {}（授权清除={}，账户断开={}）", from, siteId, licenseCleared, accountCleared);
 

@@ -135,11 +135,23 @@ public class AccountController {
         Map<String, Object> status = accountService.connect(key);
         // 换账户后旧账户的权益、平台密钥、余额判定与用量基线必须立刻作废，不能等下一次刷新。
         // 解锁页那条连接路径共用这一处（AccountSwitchCleanup），别在这里再抄一遍动作
-        accountSwitchCleanup.afterConnect();
+        boolean switched = accountSwitchCleanup.afterConnect();
         // 新账户的展示名/头像立刻落到本机行：不然刚连上账户的那一刻，参与人列表里
         // 还是「本机用户」，得等下一次启动才对（spec 2026-09-10 §5）
         identitySync.refreshQuietly();
-        return ok(status);
+        return ok(withSwitchFlag(status, switched));
+    }
+
+    /**
+     * 换了一个账户时在回包里带一次 {@code previousAccountDiffers:true}（登录后置 §5.5）：
+     * 前端据此弹一次「本机项目属于这台电脑，不随账户走」的说明。没换人时不带这个键——
+     * 回包形状与改造前逐字一致。
+     */
+    static Map<String, Object> withSwitchFlag(Map<String, Object> status, boolean switched) {
+        if (!switched) return status;
+        Map<String, Object> data = new LinkedHashMap<>(status);
+        data.put("previousAccountDiffers", true);
+        return data;
     }
 
     /**
@@ -207,8 +219,12 @@ public class AccountController {
                     body == null ? null : body.get("password"));
         }
         // 与 /connect 同一条：换账户后旧账户的权益、平台密钥、余额判定与用量基线立刻作废
-        accountSwitchCleanup.afterConnect();
-        return ok(status);
+        boolean switched = accountSwitchCleanup.afterConnect();
+        // 与 /connect 对齐（登录后置 §5.5）：登录之后立刻把官网的展示名/头像刷到本机行，
+        // 不等下一次 status。登录弹层就地关掉、用户回到原来的页面，那一刻参与人列表
+        // 里就该是新账户的名字
+        identitySync.refreshQuietly();
+        return ok(withSwitchFlag(status, switched));
     }
 
     @PostMapping("/disconnect")

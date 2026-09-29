@@ -584,15 +584,15 @@ try {
         : '单站形态，站点切换断言本轮未覆盖')
     } else {
       const identPlaceholder = () => page.evaluate(() => {
-        const el = document.querySelector('.unlock-field-box .uni-input-placeholder')
-        return el ? el.textContent.trim() : ''
+        const el = document.querySelector('.unlock-field-box input')
+        return el ? (el.getAttribute('placeholder') || '').trim() : ''
       })
       try {
         await step('站点分段控件切到国际站换成邮箱口径（未登录不弹确认）', async () => {
           await mouseClickSel('.unlock-site-seg-item:nth-child(2)')
           await page.waitForFunction(() => {
-            const el = document.querySelector('.unlock-field-box .uni-input-placeholder')
-            return !!el && el.textContent.trim() === '邮箱'
+            const el = document.querySelector('.unlock-field-box input')
+            return !!el && (el.getAttribute('placeholder') || '').trim() === '邮箱'
           }, { timeout: 15000 })
           const modal = await page.evaluate(() => {
             const m = document.querySelector('.uni-modal')
@@ -610,8 +610,8 @@ try {
         await step('切回中国大陆恢复手机号口径', async () => {
           await mouseClickSel('.unlock-site-seg-item:nth-child(1)')
           await page.waitForFunction(() => {
-            const el = document.querySelector('.unlock-field-box .uni-input-placeholder')
-            return !!el && el.textContent.trim() === '手机号'
+            const el = document.querySelector('.unlock-field-box input')
+            return !!el && (el.getAttribute('placeholder') || '').trim() === '手机号'
           }, { timeout: 15000 })
           const ph = await identPlaceholder()
           if (ph !== '手机号') throw new Error('标识符占位没有回到手机号：' + ph)

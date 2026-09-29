@@ -9,6 +9,7 @@
 import { getAuthHeaders, getSessionId, clearSession } from '@/utils/auth.js'
 import { host, isDesktopHost } from '@/services/host.js'
 import { t } from '@/i18n'
+import { accountRequiredError } from '@/utils/requireAccountCore.js'
 
 /**
  * 功能未配置时的统一引导（#18 T7）。
@@ -270,6 +271,33 @@ function request(options) {
             err.smsRequired = true;
             err.data = res.data.data || {};
             reject(err);
+          } else if (res.data.code === 4011) {
+            // 需要账户（登录后置，dev-board#1046；后端 AccountRequired）：这台电脑还没登录
+            // AI WorkDeck 账户，而这项功能要账户（平台 AI、平台服务、广场付费项、官方案件库、
+            // 会议云端转写、听写）。**这不是会话失效**——不清会话、不跳页，下面的 4010 分支一字未动。
+            // 就地弹登录层，关掉之后一律 reject（err.accountRequired=true；登录成功时
+            // err.loggedIn=true，isAccountLoginRetry(err) 为真，调用方自行决定要不要重试）。
+            // 刻意不 resolve：刚才那次请求没有执行，resolve 出一个「成功」形状，不认识它的调用方
+            // 会弹「安装成功」这类假成功（理由详见 requireAccountCore.js 的 accountRequiredError）。
+            // 后台轮询这类不该打扰用户的请求传 accountPrompt:false，直接 reject 不弹层。
+            const backend = res.data
+            const failAccountRequired = (loggedIn) => {
+              const err = accountRequiredError(backend, loggedIn, t('account.loginDialog.retryAfterLogin'))
+              if (!err.message) err.message = t('common.serviceErrorRetryLater')
+              reject(err)
+            }
+            if (options.accountPrompt === false) {
+              failAccountRequired(false)
+            } else {
+              // 动态引入：requireAccount.js 依赖本文件（读账户状态），静态互引会在模块初始化时成环
+              import('@/utils/requireAccount.js')
+                .then((m) => m.requireAccountFor4011(backend))
+                .catch((e) => {
+                  console.warn('[api] 登录弹层不可用:', e)
+                  return false
+                })
+                .then((ok) => failAccountRequired(!!ok))
+            }
           } else if (res.data.code === 4001) {
             // 功能未配置（#18 T7）：reject 时带 featureNotConfigured 标记，
             // 由调用方决定如何引导（弹"去设置" / 降级为只读），避免在拦截器
@@ -1099,27 +1127,9 @@ export function acceptLegalAgreement(version) {
   });
 }
 
-// 查询首启初始化状态：{ code, initialized }。向导页已下线（2026-08-27），
-// 这条现在由解锁页在登录成功后查询，决定要不要做一次性初始化提交
-export function getWizardStatus() {
-  return request({
-    url: '/api/admin/wizard',
-    method: 'GET',
-  });
-}
-
-// 提交首启初始化（仅未初始化时可调用，payload 结构同 saveAdminConfig；
-// 向导页下线后由解锁页在登录成功后调用；后端 /api/admin/wizard/reset 保留但前端已无入口）
-export function submitWizard(payload) {
-  return request({
-    url: '/api/admin/wizard',
-    method: 'POST',
-    data: payload,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  });
-}
+// 首启初始化（原 getWizardStatus / submitWizard）已由后端 DataInitializer 接管（登录后置，
+// dev-board#1046）：单机版启动期把 ai.activeProvider 默认成官方通道并收口向导标记，前端不再提交。
+// 后端 /api/admin/wizard 端点保留（团队服务器首启、桌面壳用 GET 验明后端 build 指纹）。
 
 // 创建项目接口
 // payload: 项目创建请求数据

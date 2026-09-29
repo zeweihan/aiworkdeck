@@ -139,7 +139,7 @@ async function runAppCommand(verb, arg) {
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
       return
     case 'logout': {
-      // 自带确认框；退出后 reLaunch 回启动页重跑分流（见 utils/signOut.js）
+      // 自带确认框；退出后停在当前页面、广播 awd:account-changed（见 utils/signOut.js）
       const { signOut } = await import('@/utils/signOut.js')
       await signOut()
       return

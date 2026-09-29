@@ -99,6 +99,35 @@ public class AccountIdentitySync {
     }
 
     /**
+     * 断开账户之后（登录后置设计 §5.5，dev-board#1046）：本机行回到哨兵名
+     * {@link LocalIdentityService#LOCAL_DISPLAY_NAME}、头像清空。
+     *
+     * <p>不回退的话，退出登录之后参与人列表、版本署名里还顶着上一个账户的名字与头像，
+     * 而这台电脑此刻已经不属于任何账户——下一个人登录前看到的是别人的身份。
+     * 库里存的是中文哨兵，界面语言只在读出口替换（{@code LocalIdentityService.displayNameOf}），
+     * 所以这里一律写中文字面量。
+     *
+     * <p>纯本地动作，不打官网；也不发 {@link DisplayNameSynced}（没有账户可桥接了）。
+     */
+    public void resetToLocal() {
+        if (!localIdentityService.isLocalMode()) {
+            return;
+        }
+        try {
+            Long userId = localIdentityService.localUserId();
+            if (userId == null) return;
+            User user = userService.getUserById(userId);
+            if (user == null) return;
+            userService.refreshDisplayNameFromWebsite(user, LocalIdentityService.LOCAL_DISPLAY_NAME);
+            if (user.getAvatarUrl() != null) {
+                userService.updateAvatar(userId, null);
+            }
+        } catch (RuntimeException e) {
+            log.warn("断开账户后本机身份行回退失败（不影响断开本身）: {}", e.toString());
+        }
+    }
+
+    /**
      * 唯一写入口。{@code displayName} 为空表示这一项不动（官网也可能确实没有名字，
      * 那种情况同样保留本机已有的那份，不清成空白）；头像要不要动由 {@code touchAvatar} 说了算，
      * 因为「清成空」本身就是一种合法的新值。

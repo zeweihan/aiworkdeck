@@ -80,7 +80,51 @@ public class DataInitializer implements CommandLineRunner {
             systemSettingService.set(WizardController.KEY_WIZARD_COMPLETED, "false");
             log.info("全新安装：已标记首启向导待运行");
         }
+
+        if (localMode) {
+            defaultToPlatformChannel();
+        }
     }
+
+    /**
+     * 单机桌面版的首启初始化（登录后置设计 2026-09-29 §3，dev-board#1046）。
+     *
+     * <p>原来由解锁页的 {@code completeSetup()} 在「登录成功」那一刻提交向导：
+     * {@code activeProvider=AWD_CLOUD} + 跨境同意。登录后置之后打开应用不再经过登录，
+     * 那个时点没有了——不在这里补的话，全新安装的 {@code ai.activeProvider} 一直是空，
+     * {@code ChatModelFactory.resolveProvider()} 回落 yml 的 open-router（BYOK，没有 Key），
+     * 第一条消息就报错，而且报的不是「需要登录」，前端也就不会就地弹登录层。
+     *
+     * <p>三条边界：
+     * <ul>
+     *   <li><b>只填空、不覆盖</b>：库里有任何供应商（哪怕是用户选的本地 Ollama）一个字都不动；</li>
+     *   <li>向导已显式完成（{@code "true"}）却没有供应商这一行，是管理员的状态，不替他改；</li>
+     *   <li>向导标记一并收口成 {@code "true"}：匿名向导窗口（{@code WizardStateService}）
+     *       不该在单机版上一直开着。</li>
+     * </ul>
+     *
+     * <p><b>跨境同意不在这里记</b>：定成官方通道本身不让任何内容出境——出境要先有账户，
+     * 而连账户的两个入口（登录弹层、设置页粘 Key）都在提交前取得跨境单独同意并记录
+     * （个保法第三十九条，前端 {@code utils/accountConsent.js}）。
+     */
+    private void defaultToPlatformChannel() {
+        String provider = systemSettingService.get(KEY_AI_ACTIVE_PROVIDER, null);
+        if (provider != null && !provider.isBlank()) {
+            return;
+        }
+        String completed = systemSettingService.get(WizardController.KEY_WIZARD_COMPLETED, null);
+        if (Boolean.parseBoolean(completed)) {
+            return;
+        }
+        java.util.Map<String, String> updates = new java.util.LinkedHashMap<>();
+        updates.put(KEY_AI_ACTIVE_PROVIDER, "AWD_CLOUD");
+        updates.put(WizardController.KEY_WIZARD_COMPLETED, "true");
+        systemSettingService.setMany(updates);
+        log.info("单机模式首启：AI 供应商默认设为官方通道（AWD_CLOUD），需要账户时再就地登录");
+    }
+
+    /** 与 AdminConfigController / WizardStateService 同一个键。 */
+    private static final String KEY_AI_ACTIVE_PROVIDER = "ai.activeProvider";
 
     private static String generateInitialPassword() {
         byte[] bytes = new byte[18];

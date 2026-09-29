@@ -317,8 +317,10 @@ class SkillMarketServiceTest {
         StubMarketService service = newService(tempDir.resolve("skills"), new PluginService());
         service.responses.put(REGISTRY_URL, PAID_REGISTRY);
 
-        IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> service.install("due-diligence"));
+        // 登录后置（dev-board#1046）：AccountException(NOT_CONNECTED, reason=market) → 4011，前端就地弹登录层
+        com.checkba.service.account.AccountException e = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> service.install("due-diligence"));
+        assertEquals("market", e.getReason());
         assertTrue(e.getMessage().contains("连接 AI WorkDeck 账户"), e.getMessage());
         assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
         assertNotMistakenForLogout(e.getMessage());
@@ -400,8 +402,9 @@ class SkillMarketServiceTest {
         service.responses.put(bundleUrl, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
         service.statuses.put(bundleUrl, 402);
 
-        IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> service.install("due-diligence"));
+        com.checkba.service.account.AccountException e = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> service.install("due-diligence"));
+        assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, e.getKind());
         assertTrue(e.getMessage().contains("连接 AI WorkDeck 账户"), e.getMessage());
         assertFalse(e.getMessage().contains("需购买后安装"),
                 "本机没连账户，官网无从查购买记录：402 不等于用户没买过 —— " + e.getMessage());

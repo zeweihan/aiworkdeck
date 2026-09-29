@@ -94,10 +94,34 @@ public class GlobalExceptionHandler {
         log.warn("平台服务网关失败 kind={}: {}", e.getKind(), e.getMessage());
         Map<String, Object> result = new HashMap<>();
         result.put("code", 1);
+        if (e.getKind() == com.checkba.service.platform.GatewayException.Kind.NOT_CONNECTED) {
+            // 登录后置（dev-board#1046）：未连接账户统一回 4011，前端就地弹登录层。
+            // gatewayKind / canUseOwnKey 照旧带着——只加字段，不改既有字段。
+            result.put("code", com.checkba.service.account.AccountRequired.CODE);
+            result.put("kind", com.checkba.service.account.AccountException.Kind.NOT_CONNECTED.name());
+            result.put("reason", com.checkba.service.account.AccountRequired.REASON_GATEWAY);
+        }
         result.put("gatewayKind", e.getKind().name());
         result.put("canUseOwnKey", e.suggestsByok());
         result.put("message", e.getMessage());
         return ResponseEntity.ok().body(result);
+    }
+
+    /**
+     * 账户类失败（dev-board#1046）：{@code NOT_CONNECTED} → <b>4011 account_required</b>，
+     * 其余 kind 维持 {@code code=1 + kind}。形状定义在
+     * {@link com.checkba.service.account.AccountRequired#envelope(com.checkba.service.account.AccountException)}。
+     *
+     * <p>{@code AccountController} 与 {@code PlatformAiKeyController} 各有一个本地 handler，
+     * Spring 按「控制器内优先」匹配，那两处维持 code=1——设置页 / 个人资料读账户状态时
+     * 本来就是「没连就降级显示」，不该因此弹登录层。
+     */
+    @ExceptionHandler(com.checkba.service.account.AccountException.class)
+    public ResponseEntity<Map<String, Object>> handleAccountException(
+            com.checkba.service.account.AccountException e) {
+        log.info("账户类失败 kind={} reason={}: {}", e.getKind(), e.getReason(), e.getMessage());
+        return ResponseEntity.ok().body(
+                new HashMap<>(com.checkba.service.account.AccountRequired.envelope(e)));
     }
 
     /**
