@@ -1008,7 +1008,7 @@ try {
     if (!created || !created.id) throw new Error('createFile 失败: ' + JSON.stringify(created).slice(0, 200))
     const form = new FormData()
     form.append('file', new Blob([bytes], { type: 'text/plain' }), fileName)
-    const r = await fetch(BACKEND + '/api/files/' + (created.wpsFileId || created.id) + '/upload', {
+    const r = await fetch(BACKEND + '/api/files/' + created.id + '/upload', {
       method: 'POST',
       headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
@@ -1700,8 +1700,8 @@ try {
   // MODIFY；FileTree 右键菜单也没有"替换/重新上传"这类入口（同名上传会被后端
   // ProjectFileService.createFile 的同名校验拒绝），UI 上真做不出一次 MODIFY。
   // 改用与 J6.5/J8 一致的裸 REST 手段：先正常上传一份测试文件并结束（ADD 落进
-  // 历史），再直接 POST 到同一个文件的上传端点覆盖字节（wpsFileId 为空时用数字 id；
-  // createFile 新建的本机文件允许无 wpsFileId，与 J4 和真实编辑器的兜底一致）。FileController
+  // 历史），再直接 POST 到同一个文件的上传端点覆盖字节（一律用数字 id，
+  // /api/files/{x} 只认数字主键，dev-board#1035）。FileController
   // .uploadFile 对已存在文件的覆盖写入走的是同一段
   // signalChange 逻辑，产生的是同一种真实变更信号，不是伪造断言。
   await step('追加工作：上传单文件历史/MODIFY 测试用文件', () =>
@@ -1713,7 +1713,7 @@ try {
     if (!f || !f.id) throw new Error('找不到 qa-版本测试.txt 或其 id: ' + JSON.stringify(list).slice(0, 200))
     const form = new FormData()
     form.append('file', new Blob(['QA 版本记录旅程测试文件（已修改，用于 MODIFY 断言）\n'], { type: 'text/plain' }), 'qa-版本测试.txt')
-    const r = await fetch(BACKEND + '/api/files/' + (f.wpsFileId || f.id) + '/upload', {
+    const r = await fetch(BACKEND + '/api/files/' + f.id + '/upload', {
       method: 'POST',
       headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
@@ -1833,7 +1833,7 @@ try {
   fs.writeFileSync(j10Base, 'QA J10 垫底文件内容\n')
   fs.writeFileSync(j10DraftOnly, 'QA J10 稿专属文件（只应在稿上看到）\n')
 
-  // 裸 REST 覆盖同一文件的字节（wpsFileId 为空则用数字 id）——与 J9 造 MODIFY 同一手段，在两条线
+  // 裸 REST 覆盖同一文件的字节（数字 id）——与 J9 造 MODIFY 同一手段，在两条线
   // 上分别改同一个文件、制造一次真实的三方合并冲突（同一段文本两边改成不同内容）。
   const restOverwrite = async (fileName, content) => {
     const list = await api('/api/projects/' + QA.projectId + '/files')
@@ -1841,14 +1841,14 @@ try {
     if (!f || !f.id) throw new Error('找不到 ' + fileName + ' 或其 id: ' + JSON.stringify(list).slice(0, 200))
     const form = new FormData()
     form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
-    const r = await fetch(BACKEND + '/api/files/' + (f.wpsFileId || f.id) + '/upload', {
+    const r = await fetch(BACKEND + '/api/files/' + f.id + '/upload', {
       method: 'POST',
       headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
     })
     const j = await r.json()
     if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
-    return f.wpsFileId || f.id
+    return f.id
   }
 
   // ---- 1. 开启版本记录（J9 已开）→ 一段命名工作垫底，给后面的另起一稿一个基点 ----
@@ -3368,7 +3368,7 @@ try {
       if (!created || !created.id) throw new Error('建文件行失败: ' + JSON.stringify(created).slice(0, 200))
       const form = new FormData()
       form.append('file', new Blob([bytes]), name)
-      const r = await fetch(apiFn.base + '/api/files/' + (created.wpsFileId || created.id) + '/upload', {
+      const r = await fetch(apiFn.base + '/api/files/' + created.id + '/upload', {
         method: 'POST',
         headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
         body: form,

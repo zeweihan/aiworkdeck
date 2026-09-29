@@ -54,18 +54,7 @@ ai:
 
 # 文件存储配置
 storage:
-  # 生产环境建议使用对象存储
-  type: local  # 或 oss
+  type: local
   local:
     root-path: /data/checkba/wps-files  # 生产环境建议使用绝对路径
     template-path: /data/checkba/docs/template.docx
-  oss:
-    provider: aliyun  # 或 aws、minio
-    access-key-id: ${OSS_ACCESS_KEY_ID:}
-    access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
-    bucket-name: ${OSS_BUCKET_NAME:}
-    region: ${OSS_REGION:oss-cn-hangzhou}
-    endpoint: ${OSS_ENDPOINT:}
-    path-prefix: wps-files/
-    use-https: true
-    cdn-domain: ${OSS_CDN_DOMAIN:}

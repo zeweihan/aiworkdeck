@@ -273,7 +273,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 
 **app-e2e 离开页面前自动等流式结束（dev-board#826）**：run.mjs 给 `page.goto` / `page.reload` 套了一层 `quiesceAiStream`——`.stop-btn` 还在就先等（上限 120s，超时只记 note 不判红）再导航。所以 AI 轮进行中的导航「变慢」是刻意的，不是回归；发版门里「断流计数应为 0」的信号靠它才是开关而不是噪音。判据与 settleAiTurn 同源（`aiStreaming`），改停止键选择器要两处一起改。
 
-**app-e2e 文件编号（dev-board#521）**：`createFile` 新建的测试文件允许 `wpsFileId=null`；J9/J10 的字节覆盖助手必须与 J4/真实编辑器一致，用 `wpsFileId || id` 调上传端点。强制要求 `wpsFileId` 会让合法落盘文件被判不存在，随后 MODIFY、分稿与协作步骤连锁失败。
+**app-e2e 文件编号（dev-board#521）**：`createFile` 新建的测试文件允许 `wpsFileId=null`；J9/J10 的字节覆盖助手必须与 J4/真实编辑器一致，**只用数字 `id`** 调上传端点（dev-board#1035 起 `/api/files/{x}/...` 只认数字主键，前端与 e2e 不再传 `wpsFileId`）。强制要求 `wpsFileId` 会让合法落盘文件被判不存在，随后 MODIFY、分稿与协作步骤连锁失败。
 
 每日全量 QA：`scripts/qa-nightly.sh`（crontab，跑在 ~/aiworkdeck-qa/repo 专用克隆，报告 ~/aiworkdeck-qa/reports/，失败 gh 开 issue 标签 qa-nightly，引擎取自已安装 app）。
 

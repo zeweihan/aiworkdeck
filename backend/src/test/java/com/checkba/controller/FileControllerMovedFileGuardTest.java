@@ -50,6 +50,9 @@ class FileControllerMovedFileGuardTest {
     @Mock private StorageService storageService;
     @Mock private WorkSessionService workSessionService;
 
+    @Mock
+    private com.checkba.storage.ProjectStorageResolver storageResolver;
+
     @InjectMocks
     private FileController controller;
 

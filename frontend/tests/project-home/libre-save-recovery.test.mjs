@@ -11,7 +11,7 @@ const body = source.match(/<script>([\s\S]*?)<\/script>/)[1]
 function makeVm(extra = {}) {
   // stampApplication / documentStampApplication 是 B4 的打标链路，这里喂成「开关关着」，
   // 保存行为与打标前完全一致；打标本身另有 libre-save-generator-stamp.test.mjs。
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileUploadUrl',
+  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
     'stampApplication', 'documentStampApplication', body)(
     null, null, null, id => '/upload/' + id,
     async (bytes) => bytes, async () => null)

@@ -64,7 +64,7 @@ public class LocalFileStorageService implements StorageService {
      * <p>此前这里会「文件不存在就从模板复制一份」并当成正常结果返回：一份正文丢失的合同
      * （换存储位置、同步失败、只恢复了数据库、localRoot 项目里被外部删掉）被读成一份空白模板，
      * 用户打开看到空文档、AI 读到模板内容，全程零报错；自动保存再把空白盖回去，原件就真没了。
-     * 而且这与接口契约、与 {@link OssStorageService#load} 的行为都不一致（那边一直是抛）。
+     * 而且这与接口契约不一致（已删除的 OSS 实现在这里一直是抛）。
      * 新建文档的模板物化改由 {@link #createFromTemplate(String)} 明确表达。
      */
     @Override
@@ -141,11 +141,6 @@ public class LocalFileStorageService implements StorageService {
             log.error("文件移动失败: {} -> {}", from, to, e);
             throw new StorageException("文件移动失败: " + e.getMessage(), e);
         }
-    }
-
-    @Override
-    public String getUrl(String fileId) {
-        return null;
     }
 
     /**

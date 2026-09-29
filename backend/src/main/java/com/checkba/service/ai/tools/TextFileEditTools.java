@@ -165,10 +165,9 @@ public class TextFileEditTools implements AgentToolComponent {
         return PLAIN_TEXT_TYPES.contains(ext.toLowerCase(Locale.ROOT));
     }
 
-    /** 存储键与 DocumentTextService.extractText 同口径：filePath 优先，回退 wpsFileId。 */
+    /** 存储键与 DocumentTextService.extractText 同口径：只认 filePath（wpsFileId 不是存储键，dev-board#1035）。 */
     private String storageKey(ProjectFile pf) {
         String path = pf.getFilePath();
-        if (path == null || path.isBlank()) path = pf.getWpsFileId();
         if (path == null || path.isBlank()) {
             throw new IllegalStateException("文件没有存储路径: " + pf.getId());
         }

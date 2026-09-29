@@ -44,7 +44,7 @@ export function classifyLoadFailure(err) {
   if (isRelayTimeout(err)) return STATUS_LOAD_FAILED
   const m = textOf(err)
   // 404/410 优先于下面的通用 HTTP 分支——「文件已不在磁盘上」是唯一一条
-  // 「重试没有意义」的失败，不能被并进「下载失败，请检查网络」。
+  // 「重试没有意义」的失败，不能被并进「读取失败，请确认本机服务正在运行」。
   if (/\bHTTP (404|410)\b/.test(m)) return STATUS_FILE_MISSING
   if (/\bHTTP \d{3}\b/.test(m)) return STATUS_DOWNLOAD_FAILED
   if (/下载超时|timed out|网络错误|network error/i.test(m)) return STATUS_DOWNLOAD_FAILED

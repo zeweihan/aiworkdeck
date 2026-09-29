@@ -22,7 +22,7 @@ import { renderMarkdown } from '@/utils/markdownRenderer.js'
 import { nextStableLength } from '@/utils/markdownStableSplit.js'
 import { copyToClipboard } from '@/utils/chatClipboard.js'
 import { t } from '@/i18n'
-import { getFileDownloadUrl } from '@/services/api.js'
+import { getFileBytesUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
 // 每帧最多渲染一次（dev-board#750）。流式回答每个 token 都会换一次 content，而这里的渲染
@@ -172,12 +172,12 @@ export default {
     async loadFileContent() {
       if (!this.file) return
 
-      const fileId = this.file.wpsFileId || this.file.id
+      const fileId = this.file.id // 数字主键（dev-board#1035）
       if (!fileId) return
 
       this.loading = true
       try {
-        const url = getFileDownloadUrl(fileId)
+        const url = getFileBytesUrl(fileId)
         const headers = getAuthHeaders()
         const response = await fetch(url, { headers })
 

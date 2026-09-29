@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// File preview / picker / staging / download / search / tag component copy
+// File preview / picker / staging / search / tag component copy
 export default {
   // FileTree.vue: root-level _模板 folder (dev-board#112)
   templateFolderHint: 'Template folder: drop your firm\'s report templates here; once learned, AI drafts with their fonts, numbering and table styles',
@@ -13,9 +13,9 @@ export default {
   renderingDoc: 'Rendering document…',
   renderingSlides: 'Rendering presentation…',
   officePreviewUnsupported: 'Online preview is not available for this file',
-  fileTypeHintDownload: 'File type: {type}. Download it to open locally.',
+  fileTypeHintOpenLocal: 'File type: {type}. Find it in Finder or File Explorer and open it with a local app.',
   unknown: 'Unknown',
-  downloadFile: 'Download File',
+  openFileInBrowser: 'Open File',
   videoNotSupported: 'Your browser does not support video playback',
   videoLoading: 'Loading video…',
   // Custom audio player
@@ -56,8 +56,6 @@ export default {
   imageLoadFailed: 'Failed to load image',
   videoPlayFailed: 'Video playback failed. The codec may not be supported.',
   audioPlayFailed: 'Audio playback failed',
-  openDocFailed: 'Failed to open document',
-  downloadFailed: 'Download failed',
   // FilePickerDialog.vue
   pickerDefaultTitle: 'Select a Document to Import',
   selectedLabel: 'Selected:',
@@ -73,23 +71,6 @@ export default {
   dragHereToStage: 'Drag files here to stage them',
   dropToStage: 'Drop to stage files',
   quotaText: '{count}/{max} files · {used}/{total}',
-  // DownloadList.vue
-  downloadListTitle: 'Download List ({count})',
-  refreshWarning: 'Refreshing the page will delete all audio files. Make sure you have downloaded everything you need.',
-  play: 'Play',
-  pause: 'Pause',
-  download: 'Download',
-  downloading: 'Downloading',
-  downloadAll: 'Download All',
-  clearList: 'Clear List',
-  audioMissing: 'The audio file may be missing.',
-  downloadAudioSuccess: 'Audio downloaded.',
-  downloadSrtSuccess: 'Subtitles downloaded.',
-  confirmDeleteDownload: 'Delete this download item?',
-  tipTitle: 'Notice',
-  deleted: 'Deleted',
-  confirmClearList: 'Clear the download list?',
-  cleared: 'Cleared',
   // SearchPanel.vue
   searchPlaceholder: 'Search files or content...',
   filterByTag: 'Filter by Tag',

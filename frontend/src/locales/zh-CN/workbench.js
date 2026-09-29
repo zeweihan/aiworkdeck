@@ -78,7 +78,6 @@ export default {
   newDoc: '新建文档',
   newFolder: '新建文件夹',
   batchSelect: '批量选择',
-  batchDownload: '批量下载',
   sort: '排序',
   batchCopy: '批量复制',
   deleteSelected: '删除选中',
@@ -255,7 +254,7 @@ export default {
   // 用户看不懂那是什么意思，也不知道下一步该干什么。
   dragUnsupported: '不支持拖入这类内容，可拖入文件、编辑器标签页或本机文件',
   dragFolderUnsupported: '对话区只接收文件；整个文件夹请拖到左侧资源管理器',
-  dragUploadingToRoot: '正在上传到项目根目录…',
+  dragUploadingToRoot: '正在导入到项目根目录…',
   // EvidenceLink：拖到编辑器建链 / method 小条 / 链接定位（evidenceLinkActions.js、EvidenceMethodBar.vue、LibreOfficeEditor.vue）
   evidence: {
     selectFirst: '先选中要关联的文字',

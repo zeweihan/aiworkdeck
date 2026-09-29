@@ -107,7 +107,6 @@ class DocumentTextServiceTest {
         @Override public String save(String fileId, java.io.InputStream in) { throw new UnsupportedOperationException(); }
         @Override public void delete(String fileId) { throw new UnsupportedOperationException(); }
         @Override public boolean exists(String fileId) { return true; }
-        @Override public String getUrl(String fileId) { return null; }
         @Override public String append(String fileId, java.io.InputStream in) { throw new UnsupportedOperationException(); }
         @Override public long getSize(String fileId) { return bytes.length; }
     }

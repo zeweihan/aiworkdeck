@@ -171,7 +171,7 @@ import { classifyLoadFailure, shouldSelfHealLoadFailure } from '@/utils/editorLo
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
 import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
-import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
+import { getFileBytesUrl, getFileWriteUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { createAuthorNameResolver } from '@/utils/editorAuthor.js'
 import { host } from '@/services/host.js'
@@ -1362,10 +1362,10 @@ export default {
     // fetch there so a transient prefetch error can't kill the load path.
     prefetchBytes() {
       const f = this.file
-      const fileId = f && (f.wpsFileId || f.id)
+      const fileId = f && f.id // 数字主键（dev-board#1035）
       if (!fileId) return
       const t0 = Date.now()
-      this._bytesPromise = this.fetchArrayBuffer(getFileDownloadUrl(fileId), (loaded, total) => {
+      this._bytesPromise = this.fetchArrayBuffer(getFileBytesUrl(fileId), (loaded, total) => {
         this.dlLoaded = loaded
         this.dlTotal = total
       })
@@ -1408,8 +1408,8 @@ export default {
     // 区分「换成功了」和「什么都没换」——后者在重载语境下必须当失败处理。
     async loadDocument() {
       const f = this.file
-      const fileId = f.wpsFileId || f.id
-      if (!fileId) throw new Error('file has no id/wpsFileId')
+      const fileId = f.id // 数字主键（dev-board#1035）
+      if (!fileId) throw new Error('file has no id')
       // 每次真正尝试装载都记一个新世代号——onLateLoadResult 靠它辨认一个迟到的
       // load_document 结果是否还对着「当前显示着的那次失败」，而不是被后来的
       // 重试/换文档盖过之后依然生效。
@@ -1417,7 +1417,7 @@ export default {
       // 本次装载所属的 finishDocLoad 世代（见那里的重入闸）；下载回来后若已被
       // 更晚的一次尝试取代，就不能再把命令推给 worker。
       const seq = this._docLoadSeq || 0
-      const url = getFileDownloadUrl(fileId)
+      const url = getFileBytesUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
       if (!buf) {
         try {
@@ -1924,8 +1924,8 @@ export default {
       // 重载窗口期一笔都别起：这时候导出的是即将被替换掉的旧文档，而且 export 会
       // 把 office 线程占住、拖慢紧跟着的 load_document。
       if (this._reloading) { this.appendLog('save blocked: 正在重载后端最新内容'); return false }
-      const fileId = f.wpsFileId || f.id
-      if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
+      const fileId = f.id // 数字主键（dev-board#1035）
+      if (!fileId) { this.appendLog('save: file has no id'); return false }
       this.saving = true
       // 保存状态别抢戏：绝大多数保存几百毫秒就完了，闪一下「保存中…→已保存」
       // 纯粹是干扰（用户反馈：经常有变化，不好看且会打扰）。规则改成——慢到 2s
@@ -1965,7 +1965,7 @@ export default {
         // 已经存过一次），目标路径不在了只能是被外部改名 / 移走——后端据此回 409，
         // 而不是在旧路径把旧文件名重新建出来。新建空白文档的第一笔不带：那时它还不在磁盘上。
         const mustExist = f.fileSize > 0 || this._savedOnce
-        await this.uploadBytes(getFileUploadUrl(fileId) + (mustExist ? '?mustExist=1' : ''), u8, name)
+        await this.uploadBytes(getFileWriteUrl(fileId) + (mustExist ? '?mustExist=1' : ''), u8, name)
         this._savedOnce = true
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         this._savePaused = false

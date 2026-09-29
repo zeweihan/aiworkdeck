@@ -12,6 +12,20 @@
           <text class="cloud-accept-hint">{{ $t('version.noLibraryAvailableShort') }}</text>
         </view>
         <template v-else>
+          <!-- 存放位置（dev-board#1040，仅桌面壳）：默认沿用软件托管目录（不传 localRoot，
+               行为与原来一样）；「更改…」选一个文件夹后，案卷落在其下以案卷名命名的新文件夹里，
+               按本机文件夹项目打开。浏览器端没有系统文件夹对话框，这一行不出现。 -->
+          <view v-if="canChooseFolder && projects.length" class="cloud-accept-location">
+            <view class="cloud-accept-location-main">
+              <text class="cloud-accept-location-label">{{ $t('version.pullLocationLabel') }}</text>
+              <text class="cloud-accept-location-path">{{ parentDir || $t('version.pullLocationManaged') }}</text>
+            </view>
+            <view class="cloud-accept-location-actions">
+              <text class="cloud-accept-link" @tap="chooseParentDir">{{ $t('version.pullLocationChange') }}</text>
+              <text v-if="parentDir" class="cloud-accept-link" @tap="parentDir = ''">{{ $t('version.pullLocationReset') }}</text>
+            </view>
+            <text v-if="parentDir" class="cloud-accept-location-hint">{{ $t('version.pullLocationHint') }}</text>
+          </view>
           <view v-if="!projects.length" class="cloud-accept-hint">{{ $t('version.noSharedProjects') }}</view>
           <view v-else class="cloud-project-list">
             <view v-for="p in projects" :key="p.id" class="cloud-project-row">
@@ -42,6 +56,19 @@ import {
   getOfficialCloud, connectOfficialCloud,
 } from '@/services/api.js'
 import { roleLabel } from '@/config/memberRoles.js'
+import { host, isDesktopHost } from '@/services/host.js'
+
+// 案卷名当文件夹名：去掉各平台文件名里不许出现的字符与首尾的点/空格
+function folderNameFor(name) {
+  const cleaned = String(name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^[\s.]+|[\s.]+$/g, '')
+  return cleaned || 'case'
+}
+
+// 分隔符跟着所选父目录走（Windows 的对话框回的是反斜杠路径）
+function joinPath(parent, child) {
+  const sep = parent.includes('\\') && !parent.includes('/') ? '\\' : '/'
+  return parent.endsWith(sep) ? parent + child : parent + sep + child
+}
 
 export default {
   name: 'CloudAcceptDialog',
@@ -58,7 +85,15 @@ export default {
       connectionId: null,
       projects: [],
       busy: false,
+      // 自选存放位置的父目录；空 = 软件托管目录（默认）
+      parentDir: '',
     }
+  },
+  computed: {
+    // 判据同项目列表页的 isDesktop：有系统文件夹对话框才给这一行
+    canChooseFolder() {
+      return isDesktopHost() && !!(host.fs && host.fs.showOpenDialog)
+    },
   },
   watch: {
     visible(v) {
@@ -114,7 +149,10 @@ export default {
       if (this.busy) return
       this.busy = true
       try {
-        const res = await acceptCloudProject(this.connectionId, project.id)
+        const localRoot = this.canChooseFolder && this.parentDir
+          ? joinPath(this.parentDir, folderNameFor(project.name))
+          : undefined
+        const res = await acceptCloudProject(this.connectionId, project.id, localRoot)
         const localProjectId = res && res.data && res.data.localProjectId
         this.close()
         this.$emit('accepted', localProjectId)
@@ -123,6 +161,15 @@ export default {
       } finally {
         this.busy = false
       }
+    },
+    async chooseParentDir() {
+      const res = await host.fs.showOpenDialog({
+        title: this.$t('account.selectLocationTitle'),
+        buttonLabel: this.$t('account.selectHereBtn'),
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
+      this.parentDir = res.filePaths[0]
     },
     close() {
       this.$emit('update:visible', false)
@@ -159,4 +206,14 @@ export default {
 .cloud-project-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .cloud-project-role { font-size: 12px; color: var(--awd-text-3); }
 .cloud-project-name { font-size: 26rpx; color: var(--awd-text); word-break: break-all; }
+.cloud-accept-location {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px;
+  padding-bottom: 16rpx; margin-bottom: 8rpx; border-bottom: 1px solid var(--awd-border);
+}
+.cloud-accept-location-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.cloud-accept-location-label { font-size: 12px; color: var(--awd-text-3); }
+.cloud-accept-location-path { font-size: 24rpx; color: var(--awd-text); word-break: break-all; }
+.cloud-accept-location-actions { display: flex; gap: 12px; flex-shrink: 0; }
+.cloud-accept-location-hint { width: 100%; font-size: 12px; color: var(--awd-text-3); }
+.cloud-accept-link { font-size: 24rpx; color: var(--awd-accent-text); cursor: pointer; }
 </style>

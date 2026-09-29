@@ -127,9 +127,6 @@ class ShareCloneRoundTripTest {
         DesktopStack s = new DesktopStack();
         s.root = root;
 
-        StorageProperties props = new StorageProperties();
-        props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        s.repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
 
         Map<Long, ProjectFile> fileDb = new HashMap<>();
         long[] nextFileId = {100L};
@@ -159,6 +156,11 @@ class ShareCloneRoundTripTest {
         });
         when(projectRepo.findById(any())).thenAnswer(i -> Optional.ofNullable(projectDb.get(i.getArgument(0))));
         s.projectRepo = projectRepo;
+
+        // 解析器接上桩仓库：取回到自选文件夹（dev-board#1040）靠 Project.localRoot 决定 workTree
+        StorageProperties props = new StorageProperties();
+        props.getLocal().setRootPath(root.toAbsolutePath().toString());
+        s.repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, projectRepo));
 
         s.manifestSvc = new ProjectTreeManifestService(fileRepo, s.repoSvc, new ObjectMapper(),
                 mock(UserRepository.class), projectRepo);
@@ -279,6 +281,64 @@ class ShareCloneRoundTripTest {
         String uidOnA = uidOf(a.fileDb, 7L, "合同.txt");
         String uidOnB = uidOf(b.fileDb, localId, "合同.txt");
         assertEquals(uidOnA, uidOnB);
+    }
+
+    /**
+     * dev-board#1040：取回时选存放文件夹。新项目按「本机文件夹项目」落地——文件出现在用户选的
+     * 文件夹里，托管目录下什么都没有；.git 仍在全局 data 根下，用户文件夹里不多出 .git；
+     * 取回完成后挂上本机文件夹监听。
+     */
+    @Test
+    void cloneIntoChosenLocalFolder(@TempDir Path desktopA, @TempDir Path desktopB,
+                                    @TempDir Path userDocs) throws Exception {
+        userService.register("userC", "pw123456", "userC");
+
+        DesktopStack a = desktopStackOn(desktopA);
+        Files.createDirectories(a.root.resolve("projects/8"));
+        Files.writeString(a.root.resolve("projects/8/起诉状.txt"), "第一稿");
+        ProjectFile file = new ProjectFile();
+        file.setId(100L);
+        file.setProjectId(8L);
+        file.setIsFolder(false);
+        file.setName("起诉状.txt");
+        file.setSortOrder(0);
+        file.setFilePath("projects/8/起诉状.txt");
+        file.setUserId(1L);
+        file.setIsDeleted(false);
+        file.setCreatedAt(LocalDateTime.now());
+        a.fileDb.put(100L, file);
+        Project localProject = new Project();
+        localProject.setId(8L);
+        localProject.setName("买卖合同纠纷");
+        localProject.setUserId(1L);
+        a.projectRepo.save(localProject);
+        a.sessionSvc.enableVersionRecording(8L, "韩泽伟", "hzw@example.com");
+        CloudConnection conn = a.cloud.connect(serverUrl(), "userC", "pw123456", "测试机", 1L);
+        long rid = ((Number) a.cloud.shareToCloud(8L, conn.getId(), 1L).get("remoteProjectId")).longValue();
+
+        DesktopStack b = desktopStackOn(desktopB);
+        com.checkba.service.LocalProjectService lps = mock(com.checkba.service.LocalProjectService.class);
+        // 路径校验本身由 LocalProjectServiceTest 覆盖，这里只要一个「建出目录」的替身
+        when(lps.prepareCloneTarget(any())).thenAnswer(i -> {
+            Path p = Path.of((String) i.getArgument(0));
+            Files.createDirectories(p);
+            return new com.checkba.service.LocalProjectService.CloneTarget(p, true);
+        });
+        b.cloud.setLocalProjectServiceForTest(lps);
+        CloudConnection connB = b.cloud.connect(serverUrl(), "userC", "pw123456", "另一台设备", 9L);
+
+        Path chosen = userDocs.resolve("买卖合同纠纷");
+        Map<String, Object> accepted = b.cloud.cloneFromCloud(connB.getId(), rid, 9L, chosen.toString());
+        long localId = ((Number) accepted.get("localProjectId")).longValue();
+
+        assertEquals("第一稿", Files.readString(chosen.resolve("起诉状.txt")));
+        assertTrue(Files.exists(chosen.resolve(".awd/tree.json")), "清单随工作区落在所选文件夹里");
+        assertTrue(!Files.exists(chosen.resolve(".git")), "用户文件夹里不能多出 .git");
+        assertTrue(Files.isDirectory(desktopB.resolve("repos/project-" + localId + ".git")), "gitDir 仍在全局 data 根下");
+        assertTrue(!Files.exists(desktopB.resolve("projects/" + localId)), "托管目录下不应再有一份");
+        assertEquals(chosen.toString(), b.projectRepo.findById(localId).orElseThrow().getLocalRoot());
+        assertEquals(uidOf(a.fileDb, 8L, "起诉状.txt"), uidOf(b.fileDb, localId, "起诉状.txt"));
+        org.mockito.Mockito.verify(lps).announceLocalRoot(localId, chosen.toString());
     }
 
     @Test

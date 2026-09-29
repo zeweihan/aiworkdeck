@@ -1,6 +1,6 @@
 # AI WorkDeck 隐私说明
 
-更新日期：2026-09-23
+更新日期：2026-09-29
 
 本说明描述 AI WorkDeck 桌面应用的两件事：
 
@@ -21,7 +21,7 @@
 - **自备 Key**（OpenRouter 等）：你的机器直连该服务商；
 - **「AI WorkDeck 云端」**：我们的服务器只参与密钥签发与用量结算，对话内容仍由你的机器直连模型服务商。
 
-因此文档正文、合同内容、AI 对话文本在任何一档下都不流经 AI WorkDeck 的服务器。选用云端模型时内容会发往该第三方服务商，涉及执业保密义务的场合请据此判断；当前使用的模型与提供商在产品内可见，可随时更换或停用。
+因此在**桌面端**，文档正文、合同内容、AI 对话文本在任何一档下都不流经 AI WorkDeck 的服务器。**Office/WPS 插件不适用这一句**：插件内当前文档的正文会发往我们托管的插件云后端做 AI 处理，见下文「跨文件参考与修改（Office/WPS 插件）」与「你主动触发的云端中转」。选用云端模型时内容会发往该第三方服务商，涉及执业保密义务的场合请据此判断；当前使用的模型与提供商在产品内可见，可随时更换或停用。
 
 **智能决策辅助（实验性，可选）。** 对话输入框下方显示开启/关闭状态，默认关闭，偏好按本机的登录用户和服务器分别保存。开启后，本次输入及可用工具的类目、工具名会经当前 OpenRouter 通道发送给 **TypeSafe Jev**，仅用于预选工具类目，尝试减少提供给主模型的工具说明 token 和总费用；它不更换你选定的主模型。Jev 调用本身会产生少量费用，按当前平台额度或自带密钥结算，回复可能稍慢；单次判断最多等待 2.5 秒，低置信度、超时或不可用时沿用原流程，不保证每次更快或更省。
 
@@ -58,6 +58,19 @@
 - **你关联的 GitHub / Gitee 仓库**：你在插件里关联仓库后，云后端会使用你提供的访问令牌读取该仓库的文件列表与你要求参考的文件（出站访问 api.github.com 或 gitee.com），**只读、不提交、不推送**；令牌加密保存、不回显、不写进日志，可随时在插件里解除关联。
 
 以上参考材料的文字**不写日志、不入库、不用于任何模型训练**，也不产生 Credits 扣费（整份文件的跨设备传输仍按原有口径计费）。
+
+## 二之二、你主动触发的云端中转
+
+下列四项都是你主动使用某项功能时才发生的，内容会经过我们的服务器，或存放在我们的服务器上。表内「留存与删除」一栏以后端代码为准，代码读不出的部分写明「以服务端配置为准」。
+
+| 功能 | 内容 | 去向 | 留存与删除 | 扣费 | 如何关闭 |
+|---|---|---|---|---|---|
+| 插件「文档镜像归档」 | Office/WPS 插件里当前文档的原始文件字节（另有对话记录镜像） | 插件云后端（addin.aiworkdeck.com / addin.workdeck.ai）的中转区，经 `/api/mobile/media`（类型 document）；桌面端取件后落到项目的「插件文档」目录 | 桌面端取件并确认（ACK）后立即删除云端文件，未取件的 30 天后由定时清理兜底删除；对话镜像同为 30 天；云端只留投递记录行，不含文件内容；与手机影像共用每用户 3GB 配额 | 不扣 Credits | 仅在插件已绑定桌面项目时才会上传；不绑定项目即不上传 |
+| 跨设备文件传输 | 你选定的文件（单个上限 200MB） | 经 AI WorkDeck 的服务器在你的两台设备之间中转 | 对方设备确认收取后立即删除；推送方向最长保留 30 天、拉取方向最长 7 天，逾期由每小时的定时清理删除并退还 Credits；与手机影像共用 3GB 配额 | 按文件大小扣 Credits，失败、取消、逾期会退款 | 不使用该功能即不发生 |
+| 手机端影像中转 | 手机拍摄的照片、视频、录音与项目目录清单 | 手机端到我们的中转区，再由桌面端取件 | 桌面端取件并确认后立即删除文件，30 天 TTL 兜底；每用户 3GB | 以服务端配置为准 | 手机端不使用该功能，或桌面端不登录手机同步 |
+| 案件库协作 | 你选择上云或共享的项目及其完整版本历史（Git 仓库） | case.aiworkdeck.com，或你自建的团队服务器 | 存放在该服务器上，具体保留期与备份以服务端配置为准；自建服务器由你自己掌控 | 以服务端配置为准 | 不上云、不共享项目，或改连自建服务器；桌面端的本地版本记录不出本机 |
+
+以上除案件库外，中转区里的文件都是「送达即删」：云端只做暂存，不做长期归档。
 
 ## 三、会留下的记录：账务流水
 
@@ -158,11 +171,11 @@
 
 # AI WorkDeck Privacy Note
 
-Last updated: 2026-09-23
+Last updated: 2026-09-29
 
 ## Part 1 — Platform services
 
-**AI conversations never pass through our servers.** Whichever provider tier you choose, conversation content goes straight from your machine to the model provider: with local Ollama it stays on the device; with your own key you connect to that provider directly; with the "AI WorkDeck cloud" tier our servers only issue the key and settle usage, while the conversation itself still goes from your machine to the model provider. Document text, contract content, and AI conversation text therefore never flow through AI WorkDeck servers under any tier. Content sent to a cloud model does reach that third-party provider — judge accordingly where a duty of confidentiality applies. The model and provider in use are visible in the product and can be changed or disabled at any time.
+**AI conversations never pass through our servers.** Whichever provider tier you choose, conversation content goes straight from your machine to the model provider: with local Ollama it stays on the device; with your own key you connect to that provider directly; with the "AI WorkDeck cloud" tier our servers only issue the key and settle usage, while the conversation itself still goes from your machine to the model provider. On the **desktop app**, document text, contract content, and AI conversation text therefore never flow through AI WorkDeck servers under any tier. **The Office/WPS add-in is an exception to this sentence:** the text of the current document in the add-in is sent to our hosted add-in backend for AI processing; see "Cross-file reference and editing (Office/WPS add-in)" and "Cloud relays you trigger yourself" below. Content sent to a cloud model does reach that third-party provider — judge accordingly where a duty of confidentiality applies. The model and provider in use are visible in the product and can be changed or disabled at any time.
 
 **Decision assistance (experimental, optional).** An on/off control below the chat input is off by default. Its preference is stored separately for each signed-in user and server on this device. When enabled, your current input and the available tool categories and names are sent to **TypeSafe Jev** through your current OpenRouter channel, solely to preselect tool categories. It tries to reduce tool-description tokens and total cost without changing your chosen main model. The Jev call itself adds a small charge, billed through your platform credits or your own key, and replies may be slightly slower. Each decision waits at most 2.5 seconds; low confidence, timeouts or unavailability keep the original workflow. Faster or cheaper replies are not guaranteed.
 
@@ -184,6 +197,17 @@ This decision **does not separately include attachments, chat history or documen
 **Optional-component models come from public model hubs, not from our servers.** The models for the optional components (document parsing, speech synthesis, on-device transcription) are not shipped in the installer. Only when you choose to download one does your machine fetch it directly from ModelScope (modelscope.cn); if that cannot be reached it falls back to a HuggingFace mirror (hf-mirror.com), where larger files may be served by HuggingFace's own CDN. The requests carry only the model and file names being fetched; no documents, conversations, or other user data are uploaded.
 
 **Cross-file reference and editing (Office/WPS add-in).** The AI in the Office/WPS task pane talks to our hosted add-in backend (addin.aiworkdeck.com / addin.workdeck.ai). It can read other files you point it at and edit another document you have open, so the following passes through our servers. **Another open document:** when you ask the AI in document A's pane to use or edit document B, B's text and the edits to be applied are relayed by the cloud backend between two panes **of your own account**, held in memory only and never stored; only a document that currently has the AI WorkDeck pane open can be edited, everything else is read-only. **A file in a desktop project:** the desktop app extracts that file's text on your own machine and the cloud backend relays it to the AI, in memory only, not stored and not charged; for this the desktop app keeps one extra connection to the **existing** add-in backend and adds no other server. **A file in a cloud project or in the official case library:** those files already live with us and are read under the project or matter permissions you already have, read-only, with no extra copy kept. **A GitHub or Gitee repository you link:** once you link one in the add-in, the cloud backend uses the access token you supplied to read that repository's file list and the file you asked for (outbound calls to api.github.com or gitee.com), **read-only, never committing and never pushing**; the token is stored encrypted, never echoed back, never logged, and the link can be removed at any time. In all four cases the reference text is not logged, not stored, and not used to train any model, and reading it is not charged (transferring a whole file across devices is still billed as before).
+
+**Cloud relays you trigger yourself.** The four items below happen only when you actively use the feature; the content passes through, or is stored on, our servers. Retention and deletion follow the backend code; where the code does not settle it, we say "per server configuration".
+
+| Feature | Content | Destination | Retention and deletion | Charge | How to turn it off |
+|---|---|---|---|---|---|
+| Add-in "document mirror archive" | The original file bytes of the current document in the Office/WPS add-in (conversation records are mirrored as well) | The add-in backend's relay area (addin.aiworkdeck.com / addin.workdeck.ai) via `/api/mobile/media` (type document); the desktop app then picks it up into the project's "add-in documents" folder | Deleted from the cloud as soon as the desktop app collects and acknowledges it (ACK); anything uncollected is removed by the scheduled cleanup after 30 days; conversation mirror rows also expire after 30 days; only a delivery record row remains, without file content; shares the 3GB per-user quota with phone media | No Credits charge | Uploads happen only when the add-in is bound to a desktop project; leave it unbound and nothing is uploaded |
+| Cross-device file transfer | The file you select (up to 200MB each) | Relayed between your two devices through AI WorkDeck's servers | Deleted as soon as the receiving device confirms; at most 30 days for push and 7 days for pull, after which the hourly cleanup deletes it and refunds the Credits; shares the 3GB quota with phone media | Credits by file size; refunded on failure, cancellation or expiry | Not used means nothing happens |
+| Phone media relay | Photos, videos and recordings taken on the phone, and the project directory list | From the phone to our relay area, then collected by the desktop app | Deleted as soon as the desktop app collects and acknowledges it, with a 30-day TTL as backstop; 3GB per user | Per server configuration | Do not use it on the phone, or do not sign the desktop app in to phone sync |
+| Case library collaboration | Projects you choose to upload or share, with their full version history (a Git repository) | case.aiworkdeck.com, or your own team server | Kept on that server; retention period and backups per server configuration; a self-hosted server is under your own control | Per server configuration | Do not upload or share the project, or connect to your own server; local version history on the desktop never leaves the machine |
+
+Apart from the case library, files in the relay area are deleted on delivery: the cloud only stages them and is not a long-term archive.
 
 **What is kept: billing entries.** Each platform-sourced call leaves one ledger entry under your account recording the service name, operation, quantity (minutes / pages / calls / thousand characters), amount charged, timestamp, and idempotency key. It contains no request content, no result content, and no file names. These are financial records, kept for the life of the account, and visible to you under Settings → Account and Usage.
 

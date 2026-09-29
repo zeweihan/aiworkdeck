@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// 文件预览/选择/暂存/下载/搜索/标签组件文案
+// 文件预览/选择/暂存/搜索/标签组件文案
 export default {
   // FileTree.vue：根级 _模板 文件夹（dev-board#112）
   templateFolderHint: '模板文件夹：放入你所的报告模板，AI 学习后按它的字体、编号与表格样式起草',
@@ -13,9 +13,9 @@ export default {
   renderingDoc: '正在渲染文档…',
   renderingSlides: '正在渲染演示文稿…',
   officePreviewUnsupported: '该文件暂不支持在线预览',
-  fileTypeHintDownload: '文件类型: {type}，可下载后在本地打开',
+  fileTypeHintOpenLocal: '文件类型: {type}，可在访达/资源管理器中找到它，用本机软件打开',
   unknown: '未知',
-  downloadFile: '下载文件',
+  openFileInBrowser: '打开文件',
   videoNotSupported: '您的浏览器不支持视频播放',
   videoLoading: '视频加载中…',
   // 自绘音频播放器
@@ -56,8 +56,6 @@ export default {
   imageLoadFailed: '图片加载失败',
   videoPlayFailed: '视频播放失败，可能是编码格式不支持',
   audioPlayFailed: '音频播放失败',
-  openDocFailed: '打开文档失败',
-  downloadFailed: '下载失败',
   // FilePickerDialog.vue
   pickerDefaultTitle: '选择要导入的文档',
   selectedLabel: '已选择：',
@@ -73,23 +71,6 @@ export default {
   dragHereToStage: '拖拽文件到此处暂存',
   dropToStage: '松手暂存文件',
   quotaText: '{count}/{max} 个文件 · {used}/{total}',
-  // DownloadList.vue
-  downloadListTitle: '下载列表 ({count})',
-  refreshWarning: '刷新页面将删除所有音频，请确保已下载所有需要的音频文件。',
-  play: '播放',
-  pause: '暂停',
-  download: '下载',
-  downloading: '下载中',
-  downloadAll: '全部下载',
-  clearList: '清空列表',
-  audioMissing: '糟糕！音频可能丢失了!',
-  downloadAudioSuccess: '下载音频成功！',
-  downloadSrtSuccess: '下载字幕成功！',
-  confirmDeleteDownload: '确定删除该下载项吗？',
-  tipTitle: '提示',
-  deleted: '已删除',
-  confirmClearList: '确定清空下载列表吗？',
-  cleared: '已清空',
   // SearchPanel.vue
   searchPlaceholder: '搜索文件或内容...',
   filterByTag: '按标签筛选',

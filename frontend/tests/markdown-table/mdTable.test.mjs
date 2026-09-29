@@ -8,7 +8,7 @@
 // 同仓 tests/_lib/review-panel-vm.mjs / tests/insight/insightPane.test.mjs 的套路：把
 // <script> 剥出来当普通对象跑，import 行整块删掉后用形参把依赖喂回去；renderMarkdown 用
 // 真实现（表格包裹是 markdown-it + 我们的 renderer.rules 的真行为，桩不出真值），
-// getFileDownloadUrl / getAuthHeaders 与本用例无关，喂桩即可。
+// getFileBytesUrl / getAuthHeaders 与本用例无关，喂桩即可。
 // dev-board#750 起 markdown-it 实例搬到了 src/utils/markdownRenderer.js（模块级单例，
 // 不能进 data()），渲染结果也从 computed displayedHtml 改成了 data 里的 renderedHtml。
 import test from 'node:test'
@@ -22,7 +22,7 @@ const SRC = readFileSync(new URL('../../src/components/MarkdownPreview.vue', imp
 function makeVm(content) {
   const deps = {
     renderMarkdown,
-    getFileDownloadUrl: async () => '',
+    getFileBytesUrl: async () => '',
     getAuthHeaders: () => ({}),
     // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790），
     // nextStableLength 供流式分段渲染（dev-board#811 K31）

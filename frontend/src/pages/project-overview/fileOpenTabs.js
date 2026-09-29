@@ -466,7 +466,7 @@ export const fileOpenTabsMethods = {
       //
       // .drawio 现在有自己的归宿（内嵌 draw.io，见 isDrawioFile / DrawioEditor.vue），
       // 但同样不能进 LOWA，所以仍留在这份名单里。.vsdx/.vsd 没有内嵌编辑器，
-      // 走 FilePreview 的下载兜底。
+      // 走 FilePreview 的「在访达中显示」兜底，交给本机软件打开。
       const externalSourceTypes = ['drawio', 'vsdx', 'vsd']
       if (externalSourceTypes.includes(type)) return false
 

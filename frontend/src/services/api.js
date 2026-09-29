@@ -1929,7 +1929,8 @@ export function extractArchive(projectId, fileId) {
 }
 
 // 创建文件
-export function createFile(projectId, parentId, name, fileType, fileSize, filePath, wpsFileId) {
+// wpsFileId 由服务端生成（dev-board#1035），这里不再传
+export function createFile(projectId, parentId, name, fileType, fileSize, filePath) {
   return request({
     url: `/api/projects/${projectId}/files/file`,
     method: 'POST',
@@ -1939,7 +1940,6 @@ export function createFile(projectId, parentId, name, fileType, fileSize, filePa
       fileType,
       fileSize,
       filePath,
-      wpsFileId,
     },
     header: {
       'Content-Type': 'application/json',
@@ -2108,14 +2108,16 @@ export function getFileDetail(projectId, fileId) {
   });
 }
 
-// 获取文件下载URL
-export function getFileDownloadUrl(fileId) {
+// 读一份项目文件原始字节的 URL（GET /api/files/{id}/download，带认证头 fetch/XHR）。
+// fileId 一律传数字主键（dev-board#1035）；名字按「读字节」取，不是「下载到本地」（dev-board#1036）。
+export function getFileBytesUrl(fileId) {
   const baseUrl = getApiBaseUrl()
   return `${baseUrl}/api/files/${fileId}/download`
 }
 
-// 获取文件上传URL（multipart "file"，与下载同一 fileId 契约）
-export function getFileUploadUrl(fileId) {
+// 覆盖写一份项目文件字节的 URL（POST /api/files/{id}/upload，multipart "file" 或
+// octet-stream），与 getFileBytesUrl 同一数字主键契约。
+export function getFileWriteUrl(fileId) {
   const baseUrl = getApiBaseUrl()
   return `${baseUrl}/api/files/${fileId}/upload`
 }
@@ -2376,6 +2378,17 @@ export function saveClipboardText(text) {
     url: '/api/clipboard/text',
     method: 'POST',
     data: { text },
+    header: { 'Content-Type': 'application/json' },
+  })
+}
+
+// 桌面端复制了一个文件：只传本机路径，由后端自己 copy 进剪贴板库（仅 local-mode，dev-board B14）。
+// 此前渲染进程要先把整个文件读进内存再走 saveClipboardFile 上传一遍。
+export function saveClipboardLocalFile(sourcePath) {
+  return request({
+    url: '/api/clipboard/file-local',
+    method: 'POST',
+    data: { sourcePath },
     header: { 'Content-Type': 'application/json' },
   })
 }
@@ -3242,8 +3255,8 @@ export default {
   deleteFile,
   moveFile,
   getFileDetail,
-  getFileDownloadUrl,
-  getFileUploadUrl,
+  getFileBytesUrl,
+  getFileWriteUrl,
   ocrRecognize,
   getMyFavorites,
   getProjectFavorites,
@@ -3810,9 +3823,12 @@ export function connectOfficialCloud() {
   return request({ url: '/api/cloud/connect-official', method: 'POST' })
 }
 
-export function acceptCloudProject(connectionId, remoteProjectId) {
-  return request({ url: '/api/cloud/accept', method: 'POST',
-    data: { connectionId, remoteProjectId } })
+// localRoot（可选，dev-board#1040）：取回到本机自选文件夹（绝对路径，桌面端 local-mode 才放行）；
+// 不传 = 软件托管目录，与原来一样
+export function acceptCloudProject(connectionId, remoteProjectId, localRoot) {
+  const data = { connectionId, remoteProjectId }
+  if (localRoot) data.localRoot = localRoot
+  return request({ url: '/api/cloud/accept', method: 'POST', data })
 }
 
 export function getCloudStatus(projectId) {

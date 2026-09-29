@@ -51,6 +51,10 @@ OCR not enabled); relay it to the user as-is instead of guessing at a cause.
   To move several files at once use `move_files_batch` (at most 50 entries per batch; missing
   destination folders are created automatically) rather than one call per file - each single call
   costs a whole execution step, so a dozen files run out of budget half way through.
+- **Cleaning up files**: intermediate outputs, scratch files and files the user asks you to remove go
+  to the project recycle bin via `move_to_trash` (recoverable - the same action as the user pressing
+  Delete in the file explorer); do not create a "to delete" folder and move them into it. You cannot
+  permanently delete files.
 
 ## 9. Research and analysis work as usual
 

@@ -45,9 +45,9 @@
              WPS 预览回退已移除） -->
         <view v-else-if="isOffice" class="preview-unsupported">
           <text>{{ $t('files.officePreviewUnsupported') }}</text>
-          <text class="preview-hint">{{ $t('files.fileTypeHintDownload', { type: file.fileType || $t('files.unknown') }) }}</text>
-          <button class="btn-download" type="default" size="mini" @tap="handleDownload">
-            {{ $t('files.downloadFile') }}
+          <text class="preview-hint">{{ $t('files.fileTypeHintOpenLocal', { type: file.fileType || $t('files.unknown') }) }}</text>
+          <button class="btn-open-local" type="default" size="mini" @tap="handleOpenLocal">
+            {{ isDesktopShell ? $t(revealInFolderKey) : $t('files.openFileInBrowser') }}
           </button>
         </view>
 
@@ -268,8 +268,8 @@
           <text>{{ $t('files.previewUnsupportedType') }}</text>
           <text class="preview-hint">{{ $t('files.fileTypeHint', { type: file.fileType || $t('files.unknown') }) }}</text>
           <text class="preview-hint">{{ $t('files.fileIdHint', { id: file.wpsFileId || file.id }) }}</text>
-          <button class="btn-download" type="default" size="mini" @tap="handleDownload">
-            {{ $t('files.downloadFile') }}
+          <button class="btn-open-local" type="default" size="mini" @tap="handleOpenLocal">
+            {{ isDesktopShell ? $t(revealInFolderKey) : $t('files.openFileInBrowser') }}
           </button>
         </view>
       </view>
@@ -278,9 +278,12 @@
 </template>
 
 <script>
-import { getFileDownloadUrl, getArchiveEntries, extractArchive } from '@/services/api.js'
+import { getFileBytesUrl, getArchiveEntries, extractArchive } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
+import { getFileLocalPath } from '@/services/api.js'
+import { host } from '@/services/host.js'
+import { revealInFolderKey } from '@/utils/windowChrome.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
 import {
   parsePdfLocator, parseImageRect, parseMediaStartSec,
@@ -374,14 +377,21 @@ export default {
     }
   },
   computed: {
+    revealInFolderKey() {
+      return revealInFolderKey()
+    },
     ICONS() { return ICONS },
+    isDesktopShell() {
+      return !!(host.fs && host.fs.showItemInFolder)
+    },
     fileUrl() {
       if (!this.file) {
         console.log('FilePreview: file 为空')
         return ''
       }
-      const fileId = this.file.wpsFileId || this.file.id
-      const url = getFileDownloadUrl(fileId)
+      // 数字主键（dev-board#1035）：wpsFileId 已不是 /api/files/{x} 认的键
+      const fileId = this.file.id
+      const url = getFileBytesUrl(fileId)
       console.log('FilePreview fileUrl:', { file: this.file, fileId, url })
       return url
     },
@@ -1200,43 +1210,25 @@ export default {
         icon: 'none'
       })
     },
-    handleDownload() {
-      if (this.fileUrl) {
-        console.log('下载文件:', this.fileUrl)
-        // #ifdef H5
-        // H5端直接打开下载链接
-        window.open(this.fileUrl + (this.fileUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(getSessionId()), '_blank')
-        // #endif
-        // #ifndef H5
-        uni.downloadFile({
-          url: this.fileUrl,
-          header: getAuthHeaders(),
-          success: (res) => {
-            if (res.statusCode === 200) {
-              uni.openDocument({
-                filePath: res.tempFilePath,
-                success: () => {
-                  console.log('打开文档成功')
-                },
-                fail: (err) => {
-                  console.error('打开文档失败:', err)
-                  uni.showToast({
-                    title: this.$t('files.openDocFailed'),
-                    icon: 'none'
-                  })
-                }
-              })
-            }
-          },
-          fail: (err) => {
-            console.error('下载文件失败:', err)
-            uni.showToast({
-              title: this.$t('files.downloadFailed'),
-              icon: 'none'
-            })
+    // 不支持预览时的出口：文件真相源在用户磁盘，桌面壳里直接在访达/资源管理器中定位；
+    // 纯浏览器没有 shell 能力，退回用浏览器打开字节流
+    async handleOpenLocal() {
+      if (!this.file) return
+      if (this.isDesktopShell) {
+        try {
+          const r = await getFileLocalPath(this.file.id)
+          if (!(r && r.data && r.data.exists && r.data.path)) {
+            uni.showToast({ title: this.$t('workbench.fileNotOnDisk'), icon: 'none' })
+            return
           }
-        })
-        // #endif
+          await host.fs.showItemInFolder(r.data.path)
+        } catch (e) {
+          uni.showToast({ title: (e && e.message) || this.$t('workbench.revealFailed'), icon: 'none' })
+        }
+        return
+      }
+      if (this.fileUrl) {
+        window.open(this.fileUrl + (this.fileUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(getSessionId()), '_blank')
       }
     },
     formatFileSize(bytes) {
@@ -1900,7 +1892,7 @@ export default {
   background: var(--awd-mint);
 }
 
-.btn-download {
+.btn-open-local {
   margin-top: 16rpx;
 }
 

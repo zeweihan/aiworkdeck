@@ -23,6 +23,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -302,6 +303,70 @@ public class LocalProjectService {
 
     /** 校验并规范化用户选择的文件夹。 */
     private Path validateLocalRoot(String raw, boolean createFolder) {
+        Path p = normalizeLocalRoot(raw);
+        if (createFolder) {
+            try {
+                Files.createDirectories(p);
+            } catch (IOException e) {
+                throw new IllegalArgumentException(LangText.of("创建文件夹失败: ", "Failed to create folder: ") + e.getMessage());
+            }
+        }
+        if (!Files.isDirectory(p)) {
+            throw new IllegalArgumentException(LangText.of("文件夹不存在或不是目录: ", "Folder does not exist or is not a directory: ") + p);
+        }
+        return p;
+    }
+
+    /** 系统浏览文件夹时自己落下的杂项：只有这些时仍算「空文件夹」。 */
+    private static final java.util.Set<String> OS_JUNK_NAMES = java.util.Set.of(".DS_Store", "Thumbs.db", "desktop.ini");
+
+    /** {@link #prepareCloneTarget} 的结果：created=这个目录是这次新建的（取回失败时连目录一起清掉）。 */
+    public record CloneTarget(Path root, boolean created) {}
+
+    /**
+     * 「从案件库取回」落到用户自选文件夹（dev-board#1040）：与 open-local 同一套路径校验
+     * （绝对路径、非磁盘根、不在软件内部数据目录、不与已有本地文件夹项目嵌套），外加一条：
+     * 目标必须是空文件夹或还不存在——取回是整仓 checkout，写进一个有东西的文件夹会覆盖用户文件。
+     * 不存在就建出来。只清掉系统自己落的 .DS_Store 这类杂项（否则 git clone 拒绝非空目录）。
+     */
+    public CloneTarget prepareCloneTarget(String raw) {
+        Path p = normalizeLocalRoot(raw);
+        rejectNestedRoot(p);
+        if (!Files.exists(p)) {
+            try {
+                Files.createDirectories(p);
+            } catch (IOException e) {
+                throw new IllegalArgumentException(LangText.of("创建文件夹失败: ", "Failed to create folder: ") + e.getMessage());
+            }
+            return new CloneTarget(p, true);
+        }
+        if (!Files.isDirectory(p)) {
+            throw new IllegalArgumentException(LangText.of("文件夹不存在或不是目录: ", "Folder does not exist or is not a directory: ") + p);
+        }
+        try (var entries = Files.list(p)) {
+            List<Path> all = entries.toList();
+            boolean hasUserContent = all.stream()
+                    .anyMatch(e -> !OS_JUNK_NAMES.contains(e.getFileName().toString()));
+            if (hasUserContent) {
+                throw new IllegalArgumentException(LangText.of(
+                        "这个文件夹里已经有东西了，取回会覆盖其中的文件。请选择一个空文件夹",
+                        "This folder is not empty, and pulling the case file here could overwrite its files. Please choose an empty folder"));
+            }
+            for (Path junk : all) Files.deleteIfExists(junk);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(LangText.of("读取文件夹失败: ", "Failed to read folder: ") + e.getMessage());
+        }
+        return new CloneTarget(p, false);
+    }
+
+    /** 本地文件夹项目由别的入口建好之后（取回到自选文件夹），让监听照常挂上。 */
+    public void announceLocalRoot(long projectId, String localRoot) {
+        storageResolver.invalidate(projectId);
+        eventPublisher.publishEvent(new LocalProjectOpened(projectId, localRoot));
+    }
+
+    /** 不落盘的那部分校验：open-local 与取回到自选文件夹共用。 */
+    private Path normalizeLocalRoot(String raw) {
         if (!StringUtils.hasText(raw)) {
             throw new IllegalArgumentException(LangText.of("请选择一个文件夹", "Please select a folder"));
         }
@@ -316,16 +381,6 @@ public class LocalProjectService {
         Path global = storageResolver.globalRoot();
         if (p.startsWith(global)) {
             throw new IllegalArgumentException(LangText.of("该位置是软件内部数据目录，请选择其他文件夹", "This location is the application's internal data directory; please choose another folder"));
-        }
-        if (createFolder) {
-            try {
-                Files.createDirectories(p);
-            } catch (IOException e) {
-                throw new IllegalArgumentException(LangText.of("创建文件夹失败: ", "Failed to create folder: ") + e.getMessage());
-            }
-        }
-        if (!Files.isDirectory(p)) {
-            throw new IllegalArgumentException(LangText.of("文件夹不存在或不是目录: ", "Folder does not exist or is not a directory: ") + p);
         }
         return p;
     }

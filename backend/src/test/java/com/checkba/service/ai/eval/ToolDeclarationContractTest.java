@@ -304,7 +304,7 @@ class ToolDeclarationContractTest {
         List<String> offered = registry.getAllSpecifications().stream()
                 .map(ToolSpecification::name).toList();
         List<String> missing = new ArrayList<>();
-        for (String name : new String[]{"write_docx", "create_folder", "move_files_batch",
+        for (String name : new String[]{"write_docx", "create_folder", "move_files_batch", "move_to_trash",
                 "extract_file_text", "read_file", "search_web", "todo_write", "dispatch_subtask",
                 "doc_find_replace", "doc_undo", "doc_list_revisions", "sheet_write_cells"}) {
             if (!offered.contains(name)) {

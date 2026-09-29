@@ -8,6 +8,13 @@ import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
 import com.checkba.repository.ProjectInvitationRepository;
 import com.checkba.repository.ProjectMemberRepository;
+import com.checkba.repository.ProjectRemoteRepository;
+import com.checkba.controller.AuthController;
+import com.checkba.controller.ProjectMemberController;
+import com.checkba.model.entity.ProjectRemote;
+import org.mockito.MockedStatic;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import com.checkba.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,14 +22,18 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +50,8 @@ class ClientInvitationServiceTest {
     private ProjectMemberRepository projectMemberRepository;
     private UserRepository userRepository;
     private ProjectMemberService projectMemberService;
+    private LocalIdentityService localIdentityService;
+    private ProjectRemoteRepository remoteRepository;
     private ClientInvitationService service;
 
     private final AtomicLong userIds = new AtomicLong(100);
@@ -58,8 +71,12 @@ class ClientInvitationServiceTest {
             return u;
         });
         when(invitationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // 既有用例按服务端形态（案件库，local-mode=false）跑
+        localIdentityService = mock(LocalIdentityService.class);
+        remoteRepository = mock(ProjectRemoteRepository.class);
+        when(remoteRepository.findByProjectId(any())).thenReturn(Optional.empty());
         service = new ClientInvitationService(invitationRepository, projectMemberRepository,
-                userRepository, projectMemberService);
+                userRepository, projectMemberService, localIdentityService, remoteRepository);
     }
 
     private List<ProjectMember> savedMembers() {
@@ -91,5 +108,45 @@ class ClientInvitationServiceTest {
         List<ProjectMember> members = savedMembers();
         assertTrue(members.stream().anyMatch(m -> "CLIENT".equals(m.getRole()) && m.getProjectId() == 1L),
                 "通用码的影子用户没有成员行，持码人拿不到任何项目权限");
+    }
+
+    // ---- dev-board#1039：本机未上云的案卷不签访问码 ----
+
+    @Test
+    @DisplayName("local-mode 且案卷没有远端绑定：拒绝签发，且不落任何影子用户/邀请行")
+    void localModeUnlinkedProjectIsRejected() {
+        when(localIdentityService.isLocalMode()).thenReturn(true);
+        assertThrows(ClientInvitationService.LibraryRequiredException.class,
+                () -> service.inviteClient(1L, 7L, "张三"));
+        assertThrows(ClientInvitationService.LibraryRequiredException.class,
+                () -> service.inviteClient(1L, 7L, null));
+        verify(userRepository, never()).save(any());
+        verify(invitationRepository, never()).save(any());
+        verify(projectMemberRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("local-mode 但案卷已放进案件库：照常签发")
+    void localModeLinkedProjectStillWorks() {
+        when(localIdentityService.isLocalMode()).thenReturn(true);
+        when(remoteRepository.findByProjectId(1L)).thenReturn(Optional.of(new ProjectRemote()));
+        String code = service.inviteClient(1L, 7L, "张三");
+        assertTrue(code != null && !code.isEmpty());
+    }
+
+    @Test
+    @DisplayName("接口层：本机未上云时回 HTTP 400 + 明确文案")
+    void controllerReturns400WithMessage() {
+        when(localIdentityService.isLocalMode()).thenReturn(true);
+        ProjectMemberController controller = new ProjectMemberController(
+                projectMemberService, service, mock(AuthAbuseGuard.class));
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession(any())).thenReturn(7L);
+            ResponseEntity<Map<String, Object>> res = controller.inviteClient(1L, Map.of("clientName", "张三"), null);
+            assertEquals(HttpStatus.BAD_REQUEST, res.getStatusCode());
+            assertEquals(1, res.getBody().get("code"));
+            String message = String.valueOf(res.getBody().get("message"));
+            assertTrue(message.contains("案件库") || message.contains("Case Library"), message);
+        }
     }
 }

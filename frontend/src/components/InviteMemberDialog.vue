@@ -17,7 +17,12 @@
         >
           {{ $t('version.tabColleague') }}
         </view>
+        <!-- 客户凭访问码进案卷只对放进案件库的案卷成立（dev-board#1039）：本机未上云的案卷
+             访问码落在本机库里，客户那边没有任何入口够得着，生成出来就是一张废码。
+             判据与「同事」页签的轨道同源（NEEDS_LIBRARY = local-mode 且未 linked）；
+             后端 inviteClient 同一判据再拦一道。 -->
         <view
+          v-if="showClientTab"
           class="dialog-tab"
           :class="{ active: activeTab === 'CLIENT' }"
           @tap="activeTab = 'CLIENT'"
@@ -25,7 +30,10 @@
           {{ $t('version.tabClient') }}
         </view>
         <!-- Border bottom line -->
-        <view class="tab-line" :style="{ left: activeTab === 'MEMBER' ? '0%' : '50%' }"></view>
+        <view
+          class="tab-line"
+          :style="{ left: activeTab === 'MEMBER' ? '0%' : '50%', width: showClientTab ? '50%' : '100%' }"
+        ></view>
       </view>
 
       <view class="workdeck-dialog-body">
@@ -48,6 +56,7 @@
               >{{ sharing ? $t('version.processingEllipsis') : $t('version.addToOfficialLibraryTitle') }}</view>
             </view>
             <text v-else class="role-hint">{{ $t('version.noLibraryAvailableNote') }}</text>
+            <text class="role-hint">{{ $t('version.clientNeedsLibraryHint') }}</text>
             <text v-if="errorMessage" class="form-error">{{ errorMessage }}</text>
           </template>
 
@@ -218,7 +227,7 @@
 <script>
 import {
   addProjectMember, lookupProjectMember, inviteClient,
-  getLocalIdentityStatus, getCloudStatus, getOfficialCloud, listCloudConnections,
+  getCloudStatus, getOfficialCloud, listCloudConnections,
   shareProjectToCloud, addCloudMember, lookupCloudMember,
 } from '@/services/api.js'
 import { ASSIGNABLE_ROLES, roleLabel } from '@/config/memberRoles.js'
@@ -226,25 +235,8 @@ import { getInitial } from '@/utils/textInitial.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
+import { readLocalMode } from '@/services/accountProfile.js'
 import { TRACK, resolveTrack, isWorthLooking, lookupIdentifier, inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
-
-// local-mode 是一台机器的装机形态，一次进程内不会变。弹窗每次打开都问一遍后端
-// 纯属浪费——而这个请求恰好挡在「输入框出不出得来」前面，慢一次就是一次白屏。
-let localModeCache = null
-async function readLocalMode() {
-  if (localModeCache !== null) return localModeCache
-  try {
-    // 这个端点回裸 JSON（没有 code/data 包装），见 api.js 的注释
-    const identity = await getLocalIdentityStatus()
-    localModeCache = !!(identity && identity.localMode)
-  } catch (e) {
-    // 读不到按「不是 local-mode」处理：那条轨最差也只是查不到人（就地显示「没有这个
-    // 用户」＋邀请链接）；按 local-mode 处理则会把界面锁死在「先放进案件库」上，
-    // 自建服务器的用户连输入框都见不到。
-    localModeCache = false
-  }
-  return localModeCache
-}
 
 const LOOKUP_DEBOUNCE_MS = 500
 
@@ -318,6 +310,10 @@ export default {
     },
     needsLibrary() {
       return this.track === TRACK.NEEDS_LIBRARY
+    },
+    // 轨道未判定时也先不给：判定出 NEEDS_LIBRARY 再把页签收回去会闪一下
+    showClientTab() {
+      return !this.trackLoading && !!this.track && !this.needsLibrary
     },
     // 本机既没有官方案件库也没有任何连接时，这份案卷放不进任何地方，按钮不给
     canShareToLibrary() {

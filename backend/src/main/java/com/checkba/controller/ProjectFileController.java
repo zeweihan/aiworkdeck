@@ -240,7 +240,8 @@ public class ProjectFileController {
         checkFileWriteAccess(projectId, userId);
         checkParentFolder(request.getParentId(), projectId);
         // 存储键一律由服务端按 projectId + 目录结构生成：请求体里的 filePath 曾被原样落库，
-        // 可指向他人项目的文件，再借这条记录下载/覆盖对方的文档
+        // 可指向他人项目的文件，再借这条记录下载/覆盖对方的文档。
+        // wpsFileId 同理由服务端生成（dev-board#1035）：客户端传的一律忽略，免得撞号或冒用会话文件夹的标记
         return projectFileService.createFile(
                 projectId,
                 request.getParentId(),
@@ -248,7 +249,7 @@ public class ProjectFileController {
                 request.getFileType(),
                 request.getFileSize(),
                 null,
-                request.getWpsFileId(),
+                projectFileService.generateWpsFileId(projectId),
                 userId
         );
     }
@@ -558,7 +559,6 @@ public class ProjectFileController {
         private String name;
         private String fileType;
         private Long fileSize;
-        private String wpsFileId;
 
         public Long getParentId() { return parentId; }
         public void setParentId(Long parentId) { this.parentId = parentId; }
@@ -568,8 +568,6 @@ public class ProjectFileController {
         public void setFileType(String fileType) { this.fileType = fileType; }
         public Long getFileSize() { return fileSize; }
         public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
-        public String getWpsFileId() { return wpsFileId; }
-        public void setWpsFileId(String wpsFileId) { this.wpsFileId = wpsFileId; }
     }
 
     static class ImportLocalRequest {

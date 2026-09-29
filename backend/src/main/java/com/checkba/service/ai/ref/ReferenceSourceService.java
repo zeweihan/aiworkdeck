@@ -33,7 +33,7 @@ public class ReferenceSourceService {
     static final List<String> ORDER = List.of("open", "desk", "cloud", "case", "git");
     static final int MAX_ENTRIES = 100;
 
-    static final String NOTHING_FOUND = "没有找到匹配的文件。可以请用户手动上传，或换个关键词。";
+    static final String NOTHING_FOUND = "没有找到匹配的文件。可以请用户把文件加入项目或拖进对话，或换个关键词。";
     static final String UNKNOWN_REF = "错误：无法识别的引用，请先用 ref_list 获取 ref。";
 
     private final Map<String, RefSource> byScheme = new LinkedHashMap<>();
@@ -122,7 +122,7 @@ public class ReferenceSourceService {
             return UNKNOWN_REF;
         }
         if (!src.available(q)) {
-            return "错误：" + src.scheme() + " 来源在当前环境不可用，请换一个来源，或请用户手动上传文件。";
+            return "错误：" + src.scheme() + " 来源在当前环境不可用，请换一个来源，或请用户把文件加入项目或拖进对话。";
         }
         try {
             return fn.apply(src, trimmed.substring(i + 1));
@@ -130,7 +130,7 @@ public class ReferenceSourceService {
             return "错误：" + e.getMessage();
         } catch (RuntimeException e) {
             log.warn("ref source={} failed: {}", src.scheme(), e.getClass().getName());
-            return "错误：该来源暂时无法访问，可稍后重试，或请用户手动上传文件。";
+            return "错误：该来源暂时无法访问，可稍后重试，或请用户把文件加入项目或拖进对话。";
         }
     }
 

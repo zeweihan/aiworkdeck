@@ -62,7 +62,7 @@ import { json } from '@codemirror/lang-json'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import MarkdownIt from 'markdown-it'
-import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
+import { getFileBytesUrl, getFileWriteUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
 const AUTOSAVE_DELAY = 3000
@@ -184,8 +184,8 @@ export default {
     fileRef() {
       const f = this.file
       if (!f) return null
-      // 数字主键优先：wpsFileId 是自由字段，撞号时后端 findFirst 会取错文件（同 DrawioEditor）
-      return f.id != null ? f.id : (f.wpsFileId || null)
+      // 只认数字主键（dev-board#1035）：/api/files/{x} 已不按 wpsFileId 回退查询
+      return f.id != null ? f.id : null
     },
 
     async boot() {
@@ -213,7 +213,7 @@ export default {
     async download() {
       const id = this.fileRef()
       if (!id) throw new Error(this.$t('editor.plainText.fileMissing'))
-      const res = await fetch(getFileDownloadUrl(id), { headers: getAuthHeaders() || {} })
+      const res = await fetch(getFileBytesUrl(id), { headers: getAuthHeaders() || {} })
       if (!res.ok) throw new Error(this.$t('editor.plainText.readFailed', { status: res.status }))
       const text = await res.text()
       // 空下载闸（PR#194 同款）：元数据说有内容、下载却是空的——多半是网络/存储
@@ -321,7 +321,7 @@ export default {
         const form = new FormData()
         form.append('file', blob, (this.file && this.file.name) || 'untitled.txt')
         const xhr = new XMLHttpRequest()
-        xhr.open('POST', getFileUploadUrl(id), true)
+        xhr.open('POST', getFileWriteUrl(id), true)
         xhr.timeout = 60000
         Object.keys(headers).forEach((k) => { if (k.toLowerCase() !== 'content-type') xhr.setRequestHeader(k, headers[k]) })
         xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))

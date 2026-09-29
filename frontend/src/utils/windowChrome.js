@@ -57,6 +57,17 @@ function classes() {
  * （dev-board#722：Windows 非最大化描边）。classList 只要求 toggle(name, force) 接口，
  * 传真实的 document.documentElement.classList 或测试用的假 Set 都行。
  */
+/**
+ * 「在访达中显示 / 在资源管理器中显示」按平台选文案键：Windows 叫资源管理器，其余沿用访达。
+ * 判别同 initWindowChrome（preload 的 host.chrome.platform）；老壳没有这个命名空间时退到
+ * navigator.platform。浏览器端这几处按钮本来就不走这条文案。
+ */
+export function revealInFolderKey() {
+  const platform = (host.chrome && host.chrome.platform)
+    || (typeof navigator !== 'undefined' && /^win/i.test(navigator.platform || '') ? 'win32' : '')
+  return platform === 'win32' ? 'fileTree.revealInExplorer' : 'fileTree.revealInFinder'
+}
+
 export function applyChromeState(classList, data) {
   if (!classList || !data) return
   classList.toggle('is-fullscreen', !!data.fullscreen)

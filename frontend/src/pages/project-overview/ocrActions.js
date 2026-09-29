@@ -346,11 +346,7 @@ export const ocrActionMethods = {
         const blob = await res.blob()
         const fileSize = blob.size
 
-        // 1. Create File Metadata
-        // Auto-generate wpsFileId and proper fileType
-        const timestamp = Date.now()
-        const randomStr = Math.random().toString(36).substring(2, 9)
-        const wpsFileId = `project_${this.projectId}_doc_${timestamp}_${randomStr}`
+        // 1. Create File Metadata（wpsFileId 由服务端生成，dev-board#1035）
         const fileType = 'png' // Simplify to png for screenshots
         // Ensure name ends with .png
         if (!name.toLowerCase().endsWith('.png')) {
@@ -364,8 +360,7 @@ export const ocrActionMethods = {
             name,
             fileType,
             fileSize,
-            null, // filePath (backend handles)
-            wpsFileId
+            null // filePath (backend handles)
         )
 
         if (!metadata || !metadata.id) {
@@ -379,7 +374,7 @@ export const ocrActionMethods = {
 
         await new Promise((resolve, reject) => {
              uni.uploadFile({
-                 url: `${baseUrl}/api/files/${wpsFileId}/upload`,
+                 url: `${baseUrl}/api/files/${metadata.id}/upload`, // 数字主键（dev-board#1035）
                  name: 'file', // Param name expected by backend
                  file: fileToUpload,
                  header: {

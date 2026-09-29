@@ -160,11 +160,12 @@ test('BUG-73 ⌘ 多选两份后右键其中一份：多选菜单', () => {
   assert.equal(vm.canCompareDocuments(), true)
 })
 
-test('BUG-73 多选菜单隐藏单文件项（重命名/历史/在访达中显示/管理标签/发送/下载/转写/事项），有「已选 N 项」标题', () => {
+test('BUG-73 多选菜单隐藏单文件项（重命名/历史/在访达中显示/管理标签/发送/转写/事项），有「已选 N 项」标题', () => {
   const tpl = SRC.slice(SRC.indexOf('class="context-menu"'), SRC.indexOf('class="context-menu-item context-menu-item-danger"') + 400)
-  for (const key of ['fileTree.rename', 'fileTree.fileHistory', 'fileTree.revealInFinder', 'fileTree.manageTags',
-    'fileTree.sendFile', 'fileTree.download', 'fileTree.transcribe', 'calendar.fileAddTask', 'calendar.fileViewTasks']) {
-    const at = tpl.indexOf(`$t('${key}'`)
+  // 「在访达/资源管理器中显示」按平台切键，模板里是 $t(revealInFolderKey)（计算属性，不带引号）
+  for (const key of ['fileTree.rename', 'fileTree.fileHistory', 'revealInFolderKey', 'fileTree.manageTags',
+    'fileTree.sendFile', 'fileTree.transcribe', 'calendar.fileAddTask', 'calendar.fileViewTasks']) {
+    const at = key.includes('.') ? tpl.indexOf(`$t('${key}'`) : tpl.indexOf(`$t(${key})`)
     assert.ok(at > 0, '菜单里找不到 ' + key)
     const itemStart = tpl.lastIndexOf('<view v-if="', at)
     const vif = tpl.slice(itemStart, tpl.indexOf('"', itemStart + 12))

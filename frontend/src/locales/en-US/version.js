@@ -231,6 +231,7 @@ export default {
   // No official library on this site and no connection on this machine: the hand-typed
   // address entry is gone, so the UI says so plainly instead of offering a dead link.
   noLibraryAvailableNote: 'No team case library is available yet, so this case file stays on this computer only.',
+  clientNeedsLibraryHint: 'Once this case file is in the Team Case Library, you can invite clients to view it with an access code.',
   sharedToLibrary: 'Added to the Team Case Library',
   shareToLibraryFailed: 'Couldn’t add to the case library',
   tooManyLibraries: 'This computer is linked to more than one case library — disconnect the extra ones first',
@@ -324,6 +325,11 @@ export default {
   pullToDevice: 'Pull to This Device',
   loadRemoteProjectsFailed: 'Failed to load case files in the case library',
   pullToDeviceFailed: 'Couldn’t pull to this device. Please try again later.',
+  pullLocationLabel: 'Location',
+  pullLocationManaged: 'App-managed folder (default)',
+  pullLocationChange: 'Change…',
+  pullLocationReset: 'Use Default',
+  pullLocationHint: 'The case file goes into a new folder named after it inside this folder.',
 
   // ---- Collaboration history / commit history tab (dev-board#623/#624) ----
   remoteAheadSelf: 'You submitted {count} new draft(s) from another computer',

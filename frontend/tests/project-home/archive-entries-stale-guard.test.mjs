@@ -33,7 +33,7 @@ function loadMethods(getArchiveEntriesImpl) {
     .replace(/\/\/\s*#endif\n/, '')
     .replace(/export default \{/, 'return {')
   const factory = new Function(
-    'getFileDownloadUrl', 'getArchiveEntries', 'extractArchive',
+    'getFileBytesUrl', 'getArchiveEntries', 'extractArchive',
     'getAuthHeaders', 'getSessionId', 'ICONS', 'shouldAcceptResponse',
     body)
   return factory(

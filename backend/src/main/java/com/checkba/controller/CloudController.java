@@ -40,6 +40,13 @@ public class CloudController {
     private final UserService userService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
+    /** 取回到自选文件夹的闸（同 ProjectController.open-local）；字段注入，既有测试手工 new 时取默认 false。 */
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
+
+    @org.springframework.beans.factory.annotation.Value("${security.local-folder-projects.enabled:false}")
+    private boolean localFolderProjectsEnabled;
+
     public CloudController(CloudSyncService cloudSyncService,
                             com.checkba.version.OfficialCloudService officialCloudService,
                             ProjectMemberService projectMemberService,
@@ -129,7 +136,15 @@ public class CloudController {
         Long userId = requireLogin(sessionId);
         long connectionId = requireLong(body, "connectionId");
         long remoteProjectId = requireLong(body, "remoteProjectId");
-        Map<String, Object> cloned = cloudSyncService.cloneFromCloud(connectionId, remoteProjectId, userId);
+        // 可选 localRoot（dev-board#1040）：取回到自选文件夹。与 open-local 同一道闸——只有
+        // 「服务器就是用户自己这台电脑」时才允许调用方指名一个本机绝对路径去写。
+        Object rawLocalRoot = body.get("localRoot");
+        String localRoot = rawLocalRoot instanceof String str && !str.isBlank() ? str : null;
+        if (localRoot != null && !(localMode && localFolderProjectsEnabled)) {
+            throw VersionException.userFacing(LangText.of(
+                    "当前部署不支持取回到自选文件夹", "This deployment does not support choosing a folder for pulled case files"));
+        }
+        Map<String, Object> cloned = cloudSyncService.cloneFromCloud(connectionId, remoteProjectId, userId, localRoot);
         telemetryService.record("project.created",
                 Map.of("kind", "cloud", "reused", false, "importedCount", 0));
         return ok(cloned);

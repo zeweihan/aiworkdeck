@@ -279,8 +279,8 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   认的标记是 draw.io index.html 的 `geEditor`（body class），`fetch-drawio-assets.js`
   解包后有一条对应断言，上游改了标记先在那里红。
 - **产物 `wpsFileId` 不能只用毫秒时间戳**：一次出图的四五个文件在同一个循环里登记，
-  毫秒撞得上；`/api/files/{id}/download` 在按数字主键查不到时会退回
-  `findByWpsFileId(...).findFirst()`，撞号就意味着「打开 .drawio」可能取到同一张图的 `.svg`。
+  毫秒撞得上；面板（`LitigationVisualPanelService`）靠这个前缀认产物，撞号会让各产物互相错认
+  （`/api/files/{id}/download` 曾按 wpsFileId 回退，dev-board#1035 起只认数字主键）。
   统一走 `LitigationVisualTools.newMarker()`（时间戳 + 进程内单调序号），
   前端 `DrawioEditor.fileRef()` 也改成优先用数字主键。
 - **对话里的文件卡按「基名」兜底**：`@ToolMeta(fileArg = "diagramName")` 报给

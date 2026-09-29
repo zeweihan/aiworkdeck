@@ -293,10 +293,10 @@ export async function fetchProjectFiles({ serverUrl, token }, projectId) {
 /**
  * 创建项目文件记录（POST /api/projects/{pid}/files/file，本地附件上传第一步，dev-board#262）。
  * 参数对齐桌面端 createFile（frontend/src/services/api.js）：body 是
- * {parentId, name, fileType, fileSize, wpsFileId}，存储键由服务端生成（filePath 不上送）。
+ * {parentId, name, fileType, fileSize}，存储键与 wpsFileId 都由服务端生成（dev-board#1035，不上送）。
  * 服务端直接返回 ProjectFile 对象本体（无 {code,data} 信封）；失败抛错由界面提示。
  */
-export async function createProjectFile({ serverUrl, token }, projectId, { name, fileType, size, wpsFileId }) {
+export async function createProjectFile({ serverUrl, token }, projectId, { name, fileType, size }) {
   const base = normalizeBaseUrl(serverUrl)
   if (!base) throw new Error(t('apiServerUrlEmpty'))
   let resp
@@ -304,7 +304,7 @@ export async function createProjectFile({ serverUrl, token }, projectId, { name,
     resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/files/file`, {
       method: 'POST',
       headers: headers(token),
-      body: JSON.stringify({ parentId: null, name, fileType, fileSize: size, wpsFileId })
+      body: JSON.stringify({ parentId: null, name, fileType, fileSize: size })
     })
   } catch (e) {
     throw new Error(t('apiBackendUnreachable'))
@@ -320,7 +320,7 @@ export async function createProjectFile({ serverUrl, token }, projectId, { name,
  * 上传文件字节（POST /api/files/{fileId}/upload，本地附件上传第二步）。
  * 与桌面端 uploadFileContent（ChatInterface.vue）同一套头：裸 octet-stream 单块，
  * X-File-Offset:0 + X-File-Total-Size + X-Session-Id（三个头都在后端 CORS 白名单里）。
- * fileId 用数字 id 或 wpsFileId 均可（后端 resolveProjectFileForUpload 双查）。
+ * fileId 只能是数据库数字 id（dev-board#1035：后端不再按 wpsFileId 回退查找）。
  * 失败抛错：后端守卫类错误（403/400/404）带 {code:-1,message} 可读文案，透传给用户。
  */
 export async function uploadFileBytes({ serverUrl, token }, fileId, blob, totalSize) {

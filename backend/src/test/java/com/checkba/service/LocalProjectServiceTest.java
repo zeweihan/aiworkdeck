@@ -681,4 +681,50 @@ class LocalProjectServiceTest {
         assertThrows(IllegalArgumentException.class, () -> svc.openLocalFolder("/", false, null, null, 1L));
         assertThrows(IllegalArgumentException.class, () -> svc.openLocalFolder("  ", false, null, null, 1L));
     }
+
+    // ---- 取回到自选文件夹（dev-board#1040）：与 open-local 同一套围栏，外加「必须是空文件夹」----
+
+    @Test
+    void cloneTargetIsCreatedWhenMissing(@TempDir Path parent) {
+        Path target = parent.resolve("新案卷");
+        LocalProjectService.CloneTarget t = svc.prepareCloneTarget(target.toString());
+        assertTrue(Files.isDirectory(target));
+        assertTrue(t.created());
+        assertEquals(target.normalize(), t.root());
+    }
+
+    @Test
+    void cloneTargetAcceptsEmptyFolderAndClearsOsJunk(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve(".DS_Store"), "");
+        LocalProjectService.CloneTarget t = svc.prepareCloneTarget(folder.toString());
+        assertFalse(t.created());
+        assertFalse(Files.exists(folder.resolve(".DS_Store")), "系统杂项要清掉，否则 git clone 拒绝非空目录");
+    }
+
+    @Test
+    void cloneTargetRejectsNonEmptyFolderAndLeavesItUntouched(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("客户原件.pdf"), "x");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> svc.prepareCloneTarget(folder.toString()));
+        assertTrue(e.getMessage().contains("空文件夹"), e.getMessage());
+        assertEquals("x", Files.readString(folder.resolve("客户原件.pdf")));
+    }
+
+    @Test
+    void cloneTargetSharesTheOpenLocalFences(@TempDir Path folder) throws Exception {
+        assertThrows(IllegalArgumentException.class, () -> svc.prepareCloneTarget("relative/path"));
+        assertThrows(IllegalArgumentException.class, () -> svc.prepareCloneTarget("/"));
+        assertThrows(IllegalArgumentException.class, () -> svc.prepareCloneTarget("  "));
+        Path inAppData = globalRoot.resolve("projects/x");
+        assertThrows(IllegalArgumentException.class, () -> svc.prepareCloneTarget(inAppData.toString()));
+        assertFalse(Files.exists(inAppData), "围栏没过就不该落盘");
+
+        Files.createDirectories(folder.resolve("outer"));
+        svc.openLocalFolder(folder.resolve("outer").toString(), false, null, null, 1L);
+        Path nested = folder.resolve("outer/新案卷");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> svc.prepareCloneTarget(nested.toString()));
+        assertTrue(e.getMessage().contains("嵌套"));
+        assertFalse(Files.exists(nested));
+    }
 }

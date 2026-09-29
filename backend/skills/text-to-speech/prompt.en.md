@@ -12,7 +12,7 @@ The only thing you need to do:
 
 1. Tell the user the "Voice" panel in the left sidebar has a "Text to Speech" tab: paste or
    import the text to be read (or read the currently open document directly), pick a voice,
-   and click generate to play or download the audio.
+   and click "Generate"; then use the play button in the result area to listen, or "Download" to save the audio.
 2. If the voice component hasn't been downloaded yet, the panel will prompt the user to
    download it first (about 300MB, an offline engine, downloaded once and reused). Let the
    user know to be patient while it downloads.
