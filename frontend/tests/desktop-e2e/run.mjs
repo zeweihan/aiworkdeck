@@ -6,8 +6,10 @@
 // 覆盖浏览器目标够不到的三处：
 //  ① 编辑器保存链路：新建 Word → 编辑器（<webview> 内真实 LOWA 引擎）boot → 宿主
 //     执行器插入文本 → 点保存按钮 → 后端落盘 → API 下载 docx 验证内容真的写进了文件。
-//  ② 需要真实桌面能力（window.checkbaDesktop.fs）才渲染的界面形态——目前是项目
-//     列表页那两张新建卡。app-e2e 的最小桌面桩不含 fs，那边只能验降级形态。
+//  ② 需要真实桌面能力（window.checkbaDesktop.fs）才渲染的界面形态——左栏「项目」面板
+//     那两张新建卡与欢迎标签 Start 区的「打开…文件夹」。app-e2e 的最小桌面桩不含 fs，那边只能验降级形态。
+//  ④ 无项目态外壳的标签生命周期（dev-board#1047/#1048/#1049）：日程标签打开 / 关闭、
+//     「重启」后标签集合与激活标签恢复、关掉「启动时显示欢迎页」后重启不自动开欢迎标签。
 //  ③ 浏览器面板的 BrowserView 生命周期：切走标签再切回来必须还是原来那一页（保活），
 //     关掉标签才销毁（不泄漏）。浏览器目标里根本没有 BrowserView，只有这里能验。
 //
@@ -20,6 +22,8 @@
 //   3) cd frontend && npm run test:desktop-e2e
 // 注意：会在屏幕上弹出一个 dev Electron 窗口，跑完自动关闭。
 // PR-A 后无登录：local-mode 免登直达，不再注册 qa_desk 账号、不再注入会话。
+// dev-board#1027 登录后置之后启动也不设解锁门：后端从 mode=none（未连账户）起跑即可，
+// 不再预置 trial 票据、不再调 ensureUnlocked（_lib/license-gate.mjs 只留给 fork 路径）。
 //
 // Env：DESKTOP_E2E_DEVURL（默认 http://localhost:5174）、APP_E2E_BACKEND（默认 9696；
 // 端口会经 CHECKBA_BACKEND_PORT 传给 Electron 壳，渲染层因此跟测试用同一个后端）
@@ -31,7 +35,6 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pickCdpPort, portFree, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput, reassertFocusEmulation } from '../_lib/electron-cdp.mjs'
-import { ensureUnlocked } from '../_lib/license-gate.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -60,6 +63,10 @@ let puppeteer
 try { puppeteer = (await import('puppeteer-core')).default }
 catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer-core'); process.exit(2) }
 
+// E2E_SETUP_ONLY=1：只跑到 setup 段（前置检查 + 从 mode=none 起跑的 provision）就退出，不起有头
+// Electron——维护者正在用机器（HID 空闲不足）时验证 setup 用，跑完同样清理自己建的东西。
+const SETUP_ONLY = process.env.E2E_SETUP_ONLY === '1'
+
 // ---- preflight ----
 for (const [what, ok] of [
   ['dev server ' + DEVURL, await fetch(DEVURL).then(() => true).catch(() => false)],
@@ -68,8 +75,9 @@ for (const [what, ok] of [
   // 会被判成健康，前置检查形同虚设，失败要等 ~10 分钟后在无关步骤里以一堆看不懂的
   // 报错冒出来，而不是这里干脆利落的"前置缺失"提示。
   ['后端 ' + BACKEND, await fetch(BACKEND + '/api/skills/market/list').then((r) => r.ok).catch(() => false)],
-  ['引擎 dist/zetaoffice/lowa', fs.existsSync(path.join(frontendDir, 'dist/zetaoffice/lowa/soffice.js'))],
-  ['desktop/node_modules', fs.existsSync(path.join(desktopDir, 'node_modules'))],
+  // 这两项只有起 Electron 才用得到
+  ['引擎 dist/zetaoffice/lowa', SETUP_ONLY || fs.existsSync(path.join(frontendDir, 'dist/zetaoffice/lowa/soffice.js'))],
+  ['desktop/node_modules', SETUP_ONLY || fs.existsSync(path.join(desktopDir, 'node_modules'))],
 ]) { if (!ok) { console.error('前置缺失: ' + what); process.exit(2) } }
 
 // ---- provision（local-mode 免登：任何请求都解析为本机用户） ----
@@ -88,16 +96,8 @@ async function api(ep, opts = {}) {
   return body
 }
 {
-  // 冷启动后端可能还锁着/未过向导：解锁门与向导分流由 app-e2e J1 专门覆盖，
-  // 这里只把状态铺平，让 Electron 启动链不停在 unlock/wizard 页。
-  // 解锁起点收进共享模块（发版默认值关掉试用码之后这段三处都要改，抄三份必漏）
-  try { await ensureUnlocked(api) } catch (e) { console.error(e.message); process.exit(2) }
-  const wiz = await api('/api/admin/wizard')
-  if (wiz && wiz.initialized === false) {
-    // 三档收敛后 gemini 会被枚举校验打成 400（见 AdminConfigController.toSettingsUpdates）
-    await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
-  }
-  // 名字记进 QA：启动落项目列表之后要靠它从卡片里认出这一轮的项目
+  // 启动不设门（dev-board#1027）：mode=none、未连账户的后端就是正常起点，这里不碰授权状态。
+  // 名字记进 QA：「项目」面板里要靠它从卡片里认出这一轮的项目
   QA.project = '桌面链路QA_' + Date.now()
   const proj = await api('/api/projects', { method: 'POST', body: { name: QA.project, projectType: 'BLANK' } })
   QA.projectId = proj.id
@@ -109,6 +109,14 @@ async function cleanupClipboardFixture() {
   for (const item of (Array.isArray(result) ? result : result.items || [])) {
     if (item.text === CLIP_MARKER) await api('/api/clipboard/' + item.id, { method: 'DELETE' })
   }
+}
+
+if (SETUP_ONLY) {
+  const lic = await api('/api/license/status')
+  console.log('E2E_SETUP_ONLY=1：setup 段完成（后端 mode=' + (lic && lic.mode) + '、accountConnected=' + (lic && lic.accountConnected)
+    + '，项目 #' + QA.projectId + ' 已建），不起 Electron')
+  await api('/api/projects/' + QA.projectId, { method: 'DELETE' }).catch((e) => console.error('清理测试项目失败：' + e.message))
+  process.exit(0)
 }
 
 // ---- launch dev Electron with CDP ----
@@ -228,14 +236,130 @@ try {
   const ambMenuAfterAlt = await page.evaluate(() => !!document.querySelector('.amb-menu'))
   if (ambMenuAfterAlt) throw new Error('dev-board#726 回归：单独按 Alt 又把 .amb-menu 弹出来了')
 
-  // 列表页的新建入口有两种合法形态，桌面那一种只有这里能验。app-e2e 的浏览器目标
+  // ---- 无项目态外壳：欢迎标签 / 日程标签 / 标签快照（dev-board#1047 #1048 #1049） ----
+  // 「重启」在这里的等价物是：整页回到应用根路径（launch 分流）并重载——壳的首启导航也是这一条，
+  // 模块单例（i18n、appLanguage、标签快照读盘）都会重来。e2e 的 Electron profile 按 CDP 端口复用，
+  // 上一轮留下的快照 / 勾选会改变起点，所以先把这两把键清掉（uni h5 的 storage 就是 localStorage）。
+  const SNAPSHOT_KEYS = ['global_tabs', 'awd_welcome_show_on_startup']
+  const restartToShell = async () => {
+    await page.goto(DEVURL + '/', { waitUntil: 'domcontentloaded' })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-overview/project-overview') && !/[?&]id=/.test(location.hash)
+        && !!document.querySelector('.page-project-overview.no-project'),
+      { timeout: 60000 })
+    // 快照恢复是异步的（restoreTabSnapshot().then(...)），给它一拍
+    await sleep(1500)
+    await reassertFocusEmulation(page)
+  }
+  const leftTabs = () => page.evaluate(() => {
+    const els = [...document.querySelectorAll('.tabs-pane-left .tab-item')].filter((e) => e.offsetParent !== null)
+    return {
+      ids: els.map((e) => (e.id || '').replace(/^tab-left-/, '')),
+      active: ((els.find((e) => e.classList.contains('active')) || {}).id || '').replace(/^tab-left-/, ''),
+    }
+  })
+
+  await step('启动落无项目态外壳，欢迎标签在位（桌面形态 Start 五项）', async () => {
+    await page.evaluate((keys) => { for (const k of keys) { try { localStorage.removeItem(k) } catch (e) { /* ignore */ } } }, SNAPSHOT_KEYS)
+    await restartToShell()
+    await page.waitForSelector('#tab-left-welcome.active', { timeout: 30000 })
+    const items = await page.$$eval('.welcome-start .welcome-action', (els) => els
+      .filter((e) => e.offsetParent !== null)
+      .map((e) => ({ action: e.getAttribute('data-action'), text: (e.innerText || '').trim() })))
+    const want = ['new-project', 'open-folder', 'pull-case', 'connect-team', 'access-code']
+    if (JSON.stringify(items.map((i) => i.action)) !== JSON.stringify(want)) {
+      throw new Error('Start 五项不对（桌面形态应含「打开…文件夹」）：' + JSON.stringify(items))
+    }
+    if (!/打开.*文件夹/.test(items[1].text)) throw new Error('Start 第 2 项不是「打开…文件夹」：' + items[1].text)
+    // 未连账户：rail 底部账户入口是「登录」态（已连账户的长驻后端则是头像，不判）
+    const acct = await api('/api/account/status').catch(() => null)
+    if (acct && acct.data && acct.data.connected === false) {
+      const label = await page.$eval('.left-rail .account-entry-btn', (e) => ({
+        signedOut: e.classList.contains('is-signed-out'),
+        text: ((e.querySelector('.account-entry-label') || {}).textContent || '').trim(),
+      }))
+      if (!label.signedOut || label.text !== '登录') throw new Error('未连账户的 rail 账户入口不是「登录」态：' + JSON.stringify(label))
+    }
+  })
+
+  await step('日程标签：从「项目」面板「查看日程」打开，× 关闭', async () => {
+    if (!(await page.$('.project-list-pane'))) await mouseClickSel('.left-rail [title="项目"]')
+    await mouseClickSel('.project-list-pane .ov-link')
+    await page.waitForSelector('#tab-left-calendar.active', { timeout: 20000 })
+    await page.waitForSelector('.calendar-pane.is-embedded', { visible: true, timeout: 20000 })
+    const st = await leftTabs()
+    if (JSON.stringify(st.ids) !== JSON.stringify(['welcome', 'calendar'])) throw new Error('标签条不是 [welcome, calendar]：' + JSON.stringify(st))
+    // 单例：再点一次不开第二个
+    await mouseClickSel('.project-list-pane .ov-link')
+    const st2 = await leftTabs()
+    if (st2.ids.filter((id) => id === 'calendar').length !== 1) throw new Error('日程标签不是单例：' + JSON.stringify(st2))
+    await mouseClickSel('#tab-left-calendar .tab-close')
+    await page.waitForFunction(() => !document.querySelector('#tab-left-calendar'), { timeout: 10000 })
+    if (await page.$('.calendar-pane.is-embedded')) throw new Error('关掉日程标签后日历视图还挂着')
+    const st3 = await leftTabs()
+    if (st3.active !== 'welcome') throw new Error('关掉日程标签后没有回到欢迎标签：' + JSON.stringify(st3))
+  })
+
+  await step('「重启」后标签集合与激活标签恢复（无项目态 [welcome, calendar]，激活 calendar）', async () => {
+    await mouseClickSel('.project-list-pane .ov-link')
+    await page.waitForSelector('#tab-left-calendar.active', { timeout: 20000 })
+    await sleep(800) // 快照写入节流 300ms
+    const saved = await page.evaluate(() => localStorage.getItem('global_tabs'))
+    if (!saved || !saved.includes('calendar')) throw new Error('全局快照 global_tabs 没写进日程标签：' + String(saved).slice(0, 200))
+    await restartToShell()
+    await page.waitForSelector('#tab-left-calendar', { timeout: 20000 })
+    const st = await leftTabs()
+    if (JSON.stringify(st.ids) !== JSON.stringify(['welcome', 'calendar'])) throw new Error('重启后标签集合没恢复：' + JSON.stringify(st))
+    if (st.active !== 'calendar') throw new Error('重启后激活标签不是 calendar：' + JSON.stringify(st))
+    await page.waitForSelector('.calendar-pane.is-embedded', { visible: true, timeout: 20000 })
+  })
+
+  await step('关掉「启动时显示欢迎页」后重启不自动开欢迎标签，空态给「打开欢迎页」', async () => {
+    try {
+      await mouseClickSel('#tab-left-welcome')
+      await page.waitForSelector('#tab-left-welcome.active', { timeout: 10000 })
+      await mouseClickSel('.welcome-startup-toggle')
+      await page.waitForFunction(() => {
+        const el = document.querySelector('.welcome-startup-toggle')
+        return !!el && el.getAttribute('aria-checked') === 'false'
+      }, { timeout: 10000 })
+      // 快照里有欢迎标签就照恢复（spec §8：同 VS Code 的 startupEditor），所以先把标签全关掉，
+      // 让「启动时要不要自动开欢迎页」这一个开关说了算
+      for (const id of ['calendar', 'welcome']) {
+        if (await page.$('#tab-left-' + id)) {
+          await mouseClickSel('#tab-left-' + id + ' .tab-close')
+          await page.waitForFunction((x) => !document.querySelector('#tab-left-' + x), { timeout: 10000 }, id)
+        }
+      }
+      await sleep(800)
+      await restartToShell()
+      if (await page.$('#tab-left-welcome')) throw new Error('关掉勾选后重启仍自动开了欢迎标签')
+      await page.waitForSelector('.empty-workspace .empty-welcome-link', { visible: true, timeout: 15000 })
+      const empty = await page.$eval('.empty-workspace', (e) => e.innerText)
+      if (!empty.includes('启动时不再自动显示欢迎页')) throw new Error('空态缺「启动时不再自动显示欢迎页」提示：' + empty.slice(0, 160))
+      const link = await page.$eval('.empty-workspace .empty-welcome-link', (e) => e.textContent.trim())
+      if (link !== '打开欢迎页') throw new Error('空态链接文案不是「打开欢迎页」：' + link)
+      await mouseClickSel('.empty-workspace .empty-welcome-link')
+      await page.waitForSelector('#tab-left-welcome.active', { timeout: 10000 })
+      const checked = await page.$eval('.welcome-startup-toggle', (e) => e.getAttribute('aria-checked'))
+      if (checked !== 'false') throw new Error('重启后勾选状态没记住（应仍为关）：' + checked)
+    } finally {
+      // 还原：勾选恢复默认开，快照清掉（profile 会被下一轮复用）
+      await page.evaluate((keys) => { for (const k of keys) { try { localStorage.removeItem(k) } catch (e) { /* ignore */ } } }, SNAPSHOT_KEYS).catch(() => {})
+    }
+  })
+
+  // 「项目」面板的新建入口有两种合法形态，桌面那一种只有这里能验。app-e2e 的浏览器目标
   // 注入的最小桌面桩故意不含 fs（补 fs 会把全应用每个 `host.fs && …` 守卫一起从
   // false 翻成真，让所有页面拿着一个只有 showOpenDialog 的假 fs 走桌面分支，把
-  // "最小桩不引爆任何页面"那次全仓审计整个作废），所以列表页 isDesktop 在那边恒假、
-  // 只渲染一张降级卡。而真实律师在列表页看到的恰恰是这两张（打开文件夹 / 新建项目
+  // "最小桩不引爆任何页面"那次全仓审计整个作废），所以面板 isDesktop 在那边恒假、
+  // 只渲染一张降级卡。而真实律师看到的恰恰是这两张（打开文件夹 / 新建项目
   // 文件夹）——此前它们只有 check-navigation-contract 的静态断言守着"方法接上了"，
   // 没有任何运行时证据证明它们真的渲染得出来。
-  await step('列表页桌面形态：两张新建卡真的渲染（浏览器目标够不到）', async () => {
+  // dev-board#1047 起 pages/project-list 是直链薄壳（redirectTo 工作台外壳 ?pane=projects），
+  // 内容本体是左栏「项目」面板 components/project-list/ProjectListPane.vue。
+  await step('「项目」面板桌面形态：两张新建卡真的渲染（浏览器目标够不到）', async () => {
     await page.goto(DEVURL + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
     // 接着上面钉中文那段：壳启动时已经按环境语言 boot 过一次（Electron 常带
     // --lang=en-GB），appLanguage.js 的模块级 cached 和 i18n 单例都在那次加载时定死。
@@ -244,15 +368,15 @@ try {
     // 渲染出来了、数量也对，但标题是 "Open Folder… | New Project Folder…"，中文断言全红。
     await page.reload({ waitUntil: 'networkidle2' })
     // 壳自己的 loadURL(DEV_SERVER_URL) 随时可能在这次导航之后才落地（#379 的教训），
-    // 但 2026-08 起它的落点也是项目列表页，所以这里只要轮询到「列表路由 + 新建区
-    // 已挂」为止，谁先谁后都不影响结论（它带来的也是新文档，同样读到 zh-CN）。
+    // 它的落点是无项目态外壳（不带 pane），所以这里轮询到「项目」面板的新建区已挂为止；
+    // 落在外壳却没开面板就点 rail「项目」（它带来的也是新文档，同样读到 zh-CN）。
     const deadline = Date.now() + 60000
     let snap = null
     while (Date.now() < deadline) {
       snap = await page.evaluate(() => {
-        if (!location.hash.includes('pages/project-list/project-list')) return null
-        const sec = document.querySelector('.create-section')
-        if (!sec) return null
+        if (!location.hash.includes('pages/project-overview/project-overview')) return null
+        const sec = document.querySelector('.project-list-pane .create-section')
+        if (!sec) return { noPane: true }
         const host = window.checkbaDesktop || {}
         return {
           hasDialog: !!(host.fs && host.fs.showOpenDialog),
@@ -260,15 +384,20 @@ try {
           titles: [...sec.querySelectorAll('.create-title')].map((el) => (el.innerText || '').trim()),
         }
       }).catch(() => null)
+      if (snap && snap.noPane) {
+        const rail = await page.$('.left-rail [title="项目"]')
+        if (rail) await mouseClickSel('.left-rail [title="项目"]').catch(() => {})
+        snap = null
+      }
       if (snap) break
       await sleep(1500)
     }
-    if (!snap) throw new Error('等不到项目列表页的新建区（.create-section）')
+    if (!snap) throw new Error('等不到「项目」面板的新建区（.project-list-pane .create-section）')
     // isDesktop 判据是「有没有系统文件夹对话框」而不是「是不是桌面壳」（老版本壳没有
     // fs 命名空间时该降级而不是给出点不动的按钮）。这条先断言：否则壳哪天漏了 fs，
     // 现象会是"卡数不对"而不是"桌面能力没暴露到渲染层"，白查一轮。
     if (!snap.hasDialog) {
-      throw new Error('壳没把 fs.showOpenDialog 暴露到渲染层，列表页会整体降级成浏览器形态')
+      throw new Error('壳没把 fs.showOpenDialog 暴露到渲染层，「项目」面板会整体降级成浏览器形态')
     }
     if (snap.cards !== 2) {
       throw new Error('桌面形态应当两张新建卡，实际 ' + snap.cards + ' 张：' + JSON.stringify(snap.titles))
@@ -284,29 +413,32 @@ try {
     }
   })
 
-  await step('免登进入项目（启动落项目列表 → 点卡片进工作台）', async () => {
+  await step('免登进入项目（带 id reLaunch 工作台；落回外壳就经「项目」面板点卡片）', async () => {
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'networkidle2' })
     // 同上：跳工作台若只是改 hash，uni 路由会把它弹回项目列表（工作台参与的跳转
     // 本该走 reLaunch）。整页重载一次，直接以工作台路由、以中文重新 boot。
     await page.reload({ waitUntil: 'networkidle2' })
-    // 2026-08 起**启动一律落项目列表页**（launch.vue 不再读 checkba_last_project_id
-    // 直达上次项目）。而壳自己的 loadURL(DEV_SERVER_URL) 是不带 hash 的，它随时可能
-    // 在上面这次导航之后才完成，把页面又带回列表——**点一次是不够的**：实测有一轮
-    // 点完之后壳的启动导航才落地，页面被拽回列表，整套 8 步全红。
-    // 所以这里轮询到真进了工作台为止：在列表上就按真人走法点卡片，已经在工作台
-    // 就直接出去。点卡片主体、避开标题行（标题绑 @tap.stop=startRename）与卡片
+    // dev-board#1047 起**启动一律落无项目态外壳**（不带 id）。而壳自己的
+    // loadURL(DEV_SERVER_URL) 是不带 hash 的，它随时可能在上面这次导航之后才完成，
+    // 把页面又带回外壳——**点一次是不够的**：实测有一轮点完之后壳的启动导航才落地，
+    // 页面被拽回去，整套 8 步全红。
+    // 所以这里轮询到真进了带 id 的工作台为止：落在外壳上就按真人走法打开「项目」面板点卡片，
+    // 已经在工作台就直接出去。点卡片主体、避开标题行（标题绑 @tap.stop=startRename）与卡片
     // 底部那排成员头像/加人按钮（各自也有 @tap.stop）。
     const deadline = Date.now() + 60000
     while (Date.now() < deadline) {
       const where = await page.evaluate(() => ({
-        list: location.hash.includes('pages/project-list/project-list'),
-        wb: location.hash.includes('pages/project-overview/project-overview'),
-        ready: document.body.innerText.includes('资源管理器'),
+        shell: !!document.querySelector('.page-project-overview.no-project'),
+        pane: !!document.querySelector('.project-list-pane'),
+        wb: location.hash.includes('pages/project-overview/project-overview') && /[?&]id=/.test(location.hash),
+        ready: !!document.querySelector('.left-rail [title="资源管理器"]'),
       })).catch(() => null)
       if (where && where.wb && where.ready) break
-      if (where && where.list) {
+      if (where && where.shell && !where.pane) {
+        await mouseClickSel('.left-rail [title="项目"]').catch(() => {})
+      } else if (where && where.shell) {
         const box = await page.evaluate((name) => {
-          const cards = [...document.querySelectorAll('.project-item-card')]
+          const cards = [...document.querySelectorAll('.project-list-pane .project-item-card')]
           const card = cards.find((c) => (c.innerText || '').includes(name)) || cards[0]
           if (!card) return null
           const r = card.getBoundingClientRect()

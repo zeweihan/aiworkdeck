@@ -20,7 +20,6 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pickCdpPort, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
-import { ensureUnlocked, legacyGraceJvmArg } from '../_lib/license-gate.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -39,6 +38,10 @@ catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// E2E_SETUP_ONLY=1：只跑到 setup 段（前置检查 + 从 mode=none 起跑的 provision）就退出，不起有头
+// Electron——维护者正在用机器（HID 空闲不足）时验证 setup 用，跑完同样清理自己建的东西。
+const SETUP_ONLY = process.env.E2E_SETUP_ONLY === '1'
+
 // ---- 找 jar ----
 const jar = process.env.MEETING_E2E_JAR
   || fs.readdirSync(path.join(backendDir, 'target')).filter(f => f.endsWith('.jar') && !f.includes('sources'))
@@ -53,18 +56,12 @@ if (!(await fetch(DEVURL).then(() => true).catch(() => false))) {
 // ---- 起隔离后端（配方源自 app-e2e spawnBackend：隔离 user.home 与 H2） ----
 const home = path.join(os.tmpdir(), 'meeting-e2e-' + ts)
 fs.mkdirSync(path.join(home, 'cwd'), { recursive: true })
-// This suite creates its own backend, so seed the documented legacy trial fixture before
-// startup. Keep the production trial-code switch disabled, as in app/desktop E2E.
-// legacy-grace-until in application-desktop.yml is 2026-09-30; from that day on the seeded
-// ticket is locked unless the isolated backend gets a future date (legacyGraceJvmArg, #1045).
-fs.mkdirSync(path.join(home, '.aiworkdeck'), { recursive: true })
-fs.writeFileSync(path.join(home, '.aiworkdeck', 'license.json'), JSON.stringify({
-  mode: 'trial', code: 'AWD-T-SEEDED-FOR-E2E',
-  activatedAt: new Date().toISOString(), lastVerifiedAt: new Date().toISOString(),
-}), { mode: 0o600 })
+// 启动不设门（dev-board#1027 登录后置）：全新 user.home 的后端是 mode=none、未连账户，
+// 这正是新设计的正常起点——不再预置 trial 票据、不再注入 legacy-grace-until、不再调
+// ensureUnlocked（_lib/license-gate.mjs 只留给 fork 的 trialCodeEnabled=true 路径）。
 console.log('启动隔离后端 :' + BACKEND_PORT + '（日志 ' + home + '/stdout.log）...')
 const backendChild = spawn(process.env.JAVA_HOME + '/bin/java',
-  ['-Duser.home=' + home, legacyGraceJvmArg(), '-jar', jar], {
+  ['-Duser.home=' + home, '-jar', jar], {
   cwd: path.join(home, 'cwd'),
   env: {
     ...process.env,
@@ -99,17 +96,10 @@ async function api(ep, opts = {}) {
   return r.json().catch(() => null)
 }
 
-// ---- 解锁 + 向导 + 项目 + 启用 skill ----
+// ---- 项目 + 启用 skill（不碰授权与 AI 配置：录音到 RECORDED 为止不用账户） ----
 {
-  // 解锁起点收进共享模块（发版默认值关掉试用码之后这段三处都要改，抄三份必漏）
-  try { await ensureUnlocked(api) } catch (e) { die(e.message) }
-  const wiz = await api('/api/admin/wizard')
-  if (wiz && wiz.initialized === false) {
-    // 三档枚举 AWD_CLOUD/OPENROUTER/OLLAMA（feedback-e2e 里的 'gemini' 是改造前的化石，
-    // 它连的常驻后端早已初始化，这行从没真正跑过）；OLLAMA 无 key 无跨境闸，最适合 e2e
-    const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OLLAMA' } } })
-    if (!init || init.code !== 0) die('向导初始化失败: ' + JSON.stringify(init))
-  }
+  const lic = await api('/api/license/status')
+  console.log('隔离后端授权形态：mode=' + (lic && lic.mode) + ' accountConnected=' + (lic && lic.accountConnected))
   QA.project = '会议QA_' + ts
   const proj = await api('/api/projects', { method: 'POST', body: { name: QA.project, projectType: 'BLANK' } })
   QA.projectId = proj.id
@@ -123,6 +113,14 @@ async function api(ep, opts = {}) {
     die('meeting-recorder skill 未启用: ' + JSON.stringify({ en, mine }))
   }
   console.log('项目 #' + QA.projectId + '，skill 已启用')
+}
+
+if (SETUP_ONLY) {
+  const lic = await api('/api/license/status')
+  console.log('E2E_SETUP_ONLY=1：setup 段完成（隔离后端 mode=' + (lic && lic.mode) + '、accountConnected=' + (lic && lic.accountConnected)
+    + '，项目 #' + QA.projectId + '、meeting-recorder 已启用），不起 Electron')
+  try { backendChild.kill() } catch (e) { /* ignore */ }
+  process.exit(0)
 }
 
 // ---- dev Electron + 假麦克风 ----
@@ -197,10 +195,10 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') console.log('    [console.error] ' + m.text().slice(0, 200)) })
 
   await step('进入工作台，左栏出现「语音」入口', async () => {
-    // 2026-08 起**启动一律落项目列表页**：launch.vue 不再读 checkba_last_project_id
-    // 直达上次项目，所以老的"写最近项目 → reload 直达工作台"配方已经失效（本套件
-    // 因此在 master 上整轮红，10 步全挂，第一条就是这里）。改成 desktop-e2e 同款：
-    // 轮询到真进了工作台为止——在列表上就按真人走法点卡片，已经在工作台就直接出去。
+    // dev-board#1047 起**启动一律落无项目态工作台外壳**（不带 id），壳自己的
+    // loadURL(DEV_SERVER_URL) 随时可能在我们这次导航之后才落地、把页面拽回外壳。
+    // 改成 desktop-e2e 同款：轮询到真进了带 id 的工作台为止——落在外壳上就打开左栏
+    // 「项目」面板按真人走法点卡片，已经在工作台就直接出去。
     // 点卡片主体、避开标题行（@tap.stop=startRename）与底部那排成员头像。
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
       { waitUntil: 'domcontentloaded', timeout: 120000 })
@@ -208,17 +206,20 @@ try {
     const deadline = Date.now() + 90000
     while (Date.now() < deadline) {
       const where = await page.evaluate(() => ({
-        list: location.hash.includes('pages/project-list/project-list'),
-        wb: location.hash.includes('pages/project-overview/project-overview'),
+        shell: !!document.querySelector('.page-project-overview.no-project'),
+        pane: !!document.querySelector('.project-list-pane'),
+        wb: location.hash.includes('pages/project-overview/project-overview') && /[?&]id=/.test(location.hash),
         // 别拿「资源管理器」当就绪判据：左栏面板是**记住上次**的，上一轮把它切到
         // 「会议录音」之后，下一轮进来就永远等不到这四个字（本套件正是这样一轮好
         // 一轮坏地交替）。工作台根节点与面板无关，才是稳的判据。
         ready: !!document.querySelector('.page-project-overview'),
       })).catch(() => null)
       if (where && where.wb && where.ready) break
-      if (where && where.list) {
+      if (where && where.shell && !where.pane) {
+        await clickSel('.left-rail [title="项目"]').catch(() => {})
+      } else if (where && where.shell) {
         const box = await page.evaluate((name) => {
-          const cards = [...document.querySelectorAll('.project-item-card')]
+          const cards = [...document.querySelectorAll('.project-list-pane .project-item-card')]
           const card = cards.find((c) => (c.innerText || '').includes(name)) || cards[0]
           if (!card) return null
           const r = card.getBoundingClientRect()
@@ -230,8 +231,8 @@ try {
     }
     try {
       await page.waitForFunction(
-        () => location.hash.includes('pages/project-overview/project-overview'), POLL(60000))
-      await page.waitForFunction(() => !!document.querySelector('.page-project-overview'), POLL(120000))
+        () => location.hash.includes('pages/project-overview/project-overview') && /[?&]id=/.test(location.hash), POLL(60000))
+      await page.waitForFunction(() => !!document.querySelector('.page-project-overview:not(.no-project)'), POLL(120000))
     } catch (e) {
       const url = page.url()
       const text = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch(() => '(取不到)')

@@ -13,7 +13,9 @@ export function prepareWritingIsolation({ root, desktopDir, editorDist, backendP
   const tempRoots = [fs.realpathSync(os.tmpdir()), fs.realpathSync('/tmp')]
   assert.ok(tempRoots.some(temp => root.startsWith(temp + path.sep)), 'Writing acceptance requires a temporary root')
   const home = path.join(root, 'home'), profile = path.join(root, 'profile')
-  assert.ok(fs.existsSync(path.join(home, '.aiworkdeck/license.json')), 'Isolated backend fixture is not prepared')
+  // 登录后置（dev-board#1027）之后隔离后端从 mode=none 起跑，不再有预置的 license.json；
+  // 夹具就绪的判据是 user.home 目录本身在（下面还要核后端进程的 -Duser.home 正是它）
+  assert.ok(fs.existsSync(home), 'Isolated backend fixture is not prepared')
   const pid = Number(execFileSync('lsof', ['-nP', '-iTCP:' + backendPort, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).trim())
   assert.ok(pid > 1, 'Expected exactly one isolated backend listener')
   const command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' })
