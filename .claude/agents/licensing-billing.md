@@ -38,6 +38,10 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   非 local-mode 不查 AccountService（机器级状态 + 本端点匿名，照查等于泄露给匿名请求），edition 恒 paid。
 - 前端：`frontend/src/pages/launch/launch.vue`（启动分流页）、`pages/unlock/unlock.vue`（解锁页，
   左栏品牌展示复用 `components/BrandShowcase.vue`）、`pages/identity/identity.vue`（本机工作区选择页）。
+  **2026-09-29 起登录卡抽成 `components/account/AccountLoginDialog.vue`**（`variant="dialog"` 是就地登录弹层，
+  `variant="page"` 是 unlock.vue 这个薄壳页的卡片）；组件挂在页面树之外时 uni 的 button/input/image 不存在，
+  所以一律 div/span/img + `<component :is="'input'">`，输入框 `:value`+`@input`（v-model 在 `<component :is>` 上
+  会编译成组件 v-model）。组件本身不跳页，成功 emit('success')，薄壳页自己回 launch。
 
 **本机免登身份（PR-A + #250）**
 - `backend/src/main/java/com/checkba/service/LocalIdentityService.java` — local-mode 下「本机用户」的解析：
@@ -73,9 +77,15 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/controller/AccountController.java` — `/api/account/{status,connect,disconnect,usage}`
   以及个人档案 `/api/account/profile`（GET/PUT）与 `/api/account/avatar`（POST multipart/DELETE）。
 - `service/account/AccountSwitchCleanup.java` — **换账户后作废动作的唯一出口**（`afterConnect` / `afterDisconnect`）：
-  权益缓存 + 平台 AI 密钥缓存 + 余额判定 + 用量基线四样一起清，disconnect 还要 `demotePlatformProvider()`。
-  连接账户有**两个**入口（设置页 `AccountController.connect`、解锁页 `LicenseController.activate` 粘 `awdk_`），
-  动作抄两份必然漏（见地雷 22）。新增第三条连接路径时接这里。
+  权益缓存 + 平台 AI 密钥缓存 + 余额判定 + 用量基线四样一起清；disconnect 在团队服务器上还要
+  `demotePlatformProvider()`，单机版不降级（2026-09-29，见地雷 8）。
+  连接账户有**三个**入口（设置页粘 Key `AccountController.connect`、登录弹层 `AccountController.login`、
+  解锁页粘 `awdk_` 的 `LicenseController.activate`），动作抄多份必然漏（见地雷 22）。新增连接路径时接这里。
+  登录后置（2026-09-29，dev-board#1046）又加两件：`afterConnect()` 返回「这次是不是换了一个账户」
+  （`SystemSetting` 键 `account.lastAccountId`，见核心契约「换账户提示」），`afterDisconnect()` 调
+  `AccountIdentitySync.resetToLocal()` 把本机用户行回退成哨兵名「本机用户」、清头像。
+- `service/account/AccountRequired.java` — **「需要账户」4011 信封的唯一定义**（`CODE` / `REASON_*` /
+  `exception(reason, msg)` / `envelope(...)`），见核心契约「4011 account_required」。
 - **`currentKeyOrNull()` 的消费方现在有三处，不再是「只有广场付费项下载」**（dev-board#439）：广场付费项下载（`Authorization: Bearer awdk_` 直发官网）、`MobileRelayClientService` 的手机中转桥接、`com.checkba.version.OfficialCloudService` 的官方团队案件库桥接。后两者形状完全相同——拿 Key POST `{base}/api/auth/awdk-login` 换一枚 awdt_ 长期设备令牌存在本机，用 `accountFingerprintOrNull()` 判「还是不是同一个账户」，换了人就重桥。新增第四条这类通道时照抄这个形状，别自己发明一套令牌缓存。
 - `AccountService.accountFingerprintOrNull()` — 账户指纹（Key 的 SHA-256 前 12 位）的**唯一定义**。
   机器级缓存都是账户级内容，换账号必须作废；指纹单向、可比对可进日志，不受「别把 Key 拿出去传」的限制。
@@ -105,7 +115,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   三条判据见地雷 23。
 - `service/ai/PlatformUsageAccountant.java` — 平台通道真实扣费对账（`GET https://openrouter.ai/api/v1/key` 累计消费差分），
   基线按**密钥指纹**分桶、worker 按指纹分片；兼做吊销探测（401/403 即作废本地密钥）。
-- `service/ai/ChatModelFactory.java` — `Provider.AWD_CLOUD` 路由；`demotePlatformProvider()` 在断开账户时把供应商降级回落。
+- `service/ai/ChatModelFactory.java` — `Provider.AWD_CLOUD` 路由；`demotePlatformProvider()` 在断开账户 / 切站时把供应商降级回落（仅团队服务器；单机版不调，见地雷 8）。
 - `model/entity/TokenUsage.java` 的 `costSource`：`platform`（真实扣费）/ `estimate`（BYOK 单价表估算）。
 - 前端选平台通道有**两个**入口，前置条件相同（已连接账户 + 已分配额度）但**闸门形态不同**，别照抄：
   - `pages/admin/admin.vue` 的 `aiProviderOptions`——缺条件时展示但 `unavailable`，`hint` 指出下一步
@@ -357,9 +367,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   （脚本被拦/超时、`initAliyunCaptcha` 缺失、托管页挂不起）→ `setupCaptcha` 抛 `utils/captchaFailure.js` 的
   `captchaLoadError`（`code='captcha_load_failed'` + `provider` + `reason`），装上后才暴露的失败（阿里云
   `onError`、托管页 `readyTimeoutMs` 内没 ready → controller `state.loadFailed`）走控件的 `loadError()`。
-  解锁页记 `captchaFailure`，点「获取验证码」先等在途装配、再自动重试一次装配，仍失败才报
+  登录卡 `components/account/AccountLoginDialog.vue`（解锁页薄壳与就地登录弹层共用）记 `captchaFailure`，点「获取验证码」先等在途装配、再自动重试一次装配，仍失败才报
   `onboarding.unlock.captchaLoadFailed{Aliyun,Turnstile}`（点名要放行的地址：o.alicdn.com /
   官网域名 + challenges.cloudflare.com）。脚本加载失败要从 `loading` 缓存里摘掉，否则重试永远拿同一枚 reject。
+  `setupCaptcha` 在阿里云脚本到齐之后若发现装配已被取代或挂点已随弹层卸载，回 null——这只在两道 throw 之后判，
+  且那时结果已无人消费，不算「装不出来」。
   护栏 `tests/captcha/captcha-failure.test.mjs`。
 - **桌面壳里托管页挂 `<webview>`，不挂 iframe**（dev-board#863，2026-09-23 真桌面壳实测）：主窗口
   `webPreferences.webSecurity=false`，嵌在这种 WebContents 里的 Turnstile 挑战帧会被 Chromium 以
@@ -397,7 +409,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 ## 核心契约
 
-### 「退出登录」是两层，条件不同（`frontend/src/utils/signOut.js`，2026-08-18）
+### 「退出登录」（`frontend/src/utils/signOut.js`，2026-08-18 起；2026-09-29 收成单动作，见本节末）
 
 桌面端此前**全应用没有登出入口**：个人中心那个按钮写着 `v-if="!isDesktop"`，桌面端不渲染；
 能找到的两个近亲各只做一半，且都藏在设置页深处——「系统设置 → 账户与用量 → 断开连接」
@@ -414,18 +426,98 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 都是后端算的，只刷权益单例不重拉列表，横幅会停在购买前的旧值（剪贴板与暂存区
 都踩过）。现有订阅方：`ClipboardPanel`（refresh）、project-overview（loadStagingUsage）。
 
-两层必须分开判，合成一刀会把人关在自己数据外面：
+**登录后置（2026-09-29，dev-board#1046，设计 `docs/superpowers/specs/2026-09-29-defer-login-welcome-tab-design.md` §5.4）
+起「退出登录」只剩一个动作**，上面那张「两层分开判」的表作废：
 
 | 本机状态 | 动作 |
 |---|---|
-| 连着账户 + `mode=account` | `disconnectAccount()` 然后 `deactivateLicense()` → 回解锁门 |
-| 连着账户 + `mode=trial`（存量试用码机器） | **只** `disconnectAccount()`，授权不动 |
-| 没连账户 + `mode=trial` | 什么都不做，弹一句说明并指向「解除授权」 |
+| 连着账户（不论 `mode`） | 确认 → `disconnectAccount()` → `broadcastAccountChanged({connected:false})` → **停在当前页面** |
+| 没连账户 | 弹一句「没有可退出的登录」，什么都不做 |
 
-`mode=trial` 时**绝不能**调 `deactivateLicense()`：官方发布版
-`security.license.trial-code.enabled=false`，解锁门只认账户凭据，清掉试用授权的机器
-再也解锁不回来。收尾一律 `reLaunch` 回 `pages/launch/launch` 重跑分流，
-不自己跳解锁门——解锁与否的判据只有 launch 一处。
+**一律不再调 `deactivateLicense()`**：启动不设门了（launch 不读 `unlocked`），授权票据留着无害；
+08-18 那条「`mode=trial` 绝不 deactivate」的红线随之自然消失。**也不再 reLaunch 回启动页**——
+回去只会原样回到工作台，还把标签页全销毁。「解除授权」仍是账户与安全里的高级动作，行为不变。
+界面各处的刷新由 `awd:account-changed` 驱动（见下节），调用方不要自己在 `signOut()` 之后补 reload。
+
+### 就地登录与 4011 account_required（2026-09-29，dev-board#1046）
+
+启动不再要求登录；**需要账户的功能在用到时就地登录，登录成功回到原动作**，绝不踢回启动页。
+
+**前端两个出口**：
+- `frontend/src/utils/requireAccount.js` 的 `requireAccount({reason, force?, auto?}) → Promise<boolean>`：
+  已连接直接 true（连接状态缓存 30 秒——`GET /api/account/status` 会顺手打一次官网 `/me`，不能每次发送都查）；
+  否则在 `<body>` 下单独 `createApp` 挂登录弹层 `components/account/AccountLoginDialog.vue`（`variant="dialog"`），
+  打开期间持有全局浮层（`overlayState.js`，让 BrowserView 让开）；成功 true 并广播，取消 false。
+  并发调用共用一个弹层。纯逻辑在 `requireAccountCore.js`（零依赖，护栏 `npm run test:account`）。
+  浏览器端（团队服务器）恒 true——那里账户在服务端按人桥接，不是「本机连官网账户」。
+- `services/api.js` 的 **4011 分支**：就地弹层（`auto:true`——用户取消后 60 秒内同类自动触发不再追着弹），
+  关掉之后**一律 reject**，`err.accountRequired=true`，登录成功时 `err.loggedIn=true`
+  （`isAccountLoginRetry(err)` 为真，message 换成「已登录，请再操作一次」），调用方自行决定要不要重试。
+  **刻意不 resolve**：4011 意味着那次请求没执行，resolve 一个「成功」形状出去，不认识它的调用方会弹
+  「安装成功」这类假成功。后台轮询这类不该打扰人的请求传 `accountPrompt:false`，直接 reject 不弹层。
+  **4010 分支一字未动**——4011 不清会话、不跳页。
+
+**登录成功 / 退出登录的广播只有一个出口** `broadcastAccountChanged(payload)`（`requireAccount.js`）：
+发 `awd:account-changed`（payload `{connected, previousAccountDiffers?, aiProviderFallback?}`）、
+`awd:market-changed(-from-sidebar)`（广场付费项按钮形态）、`refreshEntitlements(true)` 完了再发
+`awd:entitlements-changed`。现有 `awd:account-changed` 订阅方：`requireAccount.js` 自己的缓存、
+`AdminPane`（账户分区/钱包/资料）、`TeamPanel`、`MeetingRecordingPanel`；C 卡的 rail 账户入口与顶栏
+要订同一个事件（`LicenseController.status` 的 `graceKind`/`daysRemaining` 形状不变）。
+
+**接入点**（缺一项算没做完）：AI 发送（`ChatInterface.ensureAiAccount`，只管 `activeProvider=AWD_CLOUD`）、
+广场付费项三处（`MarketPane`/`MarketSidebarPanel`/`MarketDetailPane` 的「需连接账户」→ 登录后按新账户重拉，
+已购就直接装）、团队（`TeamPanel` 空态、`CollabDialog`/`InviteMemberDialog` 的「放进官方案件库」）、
+手机端同步（设置页「账户与用量」新增的一节，未登录时如实说+登录按钮）、会议转写平台档
+（`MeetingRecordingPanel`：档位下的登录按钮、关掉「不出本机」、点转写前）、设置页「账户与用量」
+（主按钮「登录」，粘 Key 折成「高级」）、以及 4011 兜底覆盖的平台网关服务（OCR/企查查/法宝/Tushare/搜索）。
+
+**后端形状**（`service/account/AccountRequired.java`，唯一定义）：HTTP 200，
+`{code:4011, kind:"NOT_CONNECTED", reason, message}`，`reason ∈ platform_ai | gateway | market | team |
+mobile | meeting | dictation`（缺省不带这个键，前端用通用说明）。
+- `GlobalExceptionHandler.handleAccountException`：`AccountException(NOT_CONNECTED)` → 4011，其余 kind 维持
+  `{code:1, kind, message, reason?}`。**`AccountController` 与 `PlatformAiKeyController` 的本地 handler 优先、
+  维持 code=1**——设置页/个人资料读账户接口本来就是「没连就降级显示」，不该因此弹登录层。
+- `handleGateway`：`GatewayException(NOT_CONNECTED)` 在原有 `gatewayKind`/`canUseOwnKey` 之上加
+  `code:4011` + `kind` + `reason:"gateway"`；其余网关失败形状一字不改。
+- 四处统一抛 `AccountRequired.exception(reason, msg)`：广场付费项（`MarketPurchaseGate.bearerFor` /
+  `paymentRequired` 未连账户分支，reason=market；`paymentRequired` 返回类型因此改成 `RuntimeException`，
+  `PluginMarketService` 解析 bundle 那层 catch 与两个 market 控制器的 `catch (Exception)` 都要先放行
+  `AccountException`，否则会被裹成「清单无法解析」/code=1）、官方案件库（`OfficialCloudService.connectOfficial`，
+  reason=team）、会议转写平台档（`MeetingTranscriptionService.startTranscription`，reason=meeting）、
+  语音听写（`VoiceDictationService`，没有账户 reason=dictation；账户在但取不到密钥仍是通道错误）。
+- **听写端点改成 HTTP 200 + JSON 信封**（原来 400/502 + 纯文本）：插件 `taskpane/lib/api.js` 的
+  `postDictate` 同步改为判 `data.code !== 0` 抛错，否则失败会被当成「转出来是空串」。
+- Agent SSE `error` 事件：账户类失败的载荷从裸文案改成 JSON `{message, code, kind, reason?}`
+  （`AgentOrchestrator.accountErrorPayload`，NOT_CONNECTED 的 code=4011、reason 缺省 platform_ai，其余 code=1）；
+  **其余 error 路径载荷仍是字符串**。插件 chatSession.js 本来就先 `JSON.parse(data).message`，两种都接得住；
+  桌面 `useAgentStream.parseAccountErrorPayload` 见 4011 在气泡里追加一句并就地弹层（不自动重发）。
+
+### 首启初始化归后端（2026-09-29，dev-board#1046）
+
+原来解锁页登录成功时 `completeSetup()` 提交向导（`activeProvider=AWD_CLOUD` + 跨境同意）。登录后置之后那个
+时点没有了，改为 **`DataInitializer.defaultToPlatformChannel()`**：local-mode 启动期，`ai.activeProvider`
+为空且向导标记不是 `"true"` 时写 `AWD_CLOUD` + `system.wizard.completed=true`（一次 `setMany`）。
+**只填空不覆盖**（用户选过 OLLAMA 一个字都不动）；非 local-mode 不动（团队服务器仍走向导）。
+不在 `ExternalProviderBackfill`：那个管的是七家外部服务的档位，与 AI 供应商无关。
+
+**跨境同意不在后端默认值里记**：默认成官方通道本身不让内容出境，出境要先有账户，而连账户的入口
+（登录弹层、设置页粘 Key）都在提交前取得两项同意并记录（`frontend/src/utils/accountConsent.js` 的
+`recordAccountConsents()`：协议版本 `POST /api/license/agreement` + `POST /api/admin/config {ai:{crossBorderConsent:true}}`，
+失败不拦路）。**新增连接账户的入口必须接这一步**——后端的跨境闸只在「切到官方通道」那一刻把关，
+默认值不经过那一刻。前端 `getWizardStatus`/`submitWizard` 两个 api 封装随之删除。
+
+### 换账户提示与断开回退（2026-09-29，dev-board#1046，设计 §5.5）
+
+- **`previousAccountDiffers:true`**：`/api/account/connect`、`/api/account/login`、`/api/license/activate`（粘
+  `awdk_`）的回包在「这台电脑此前连过另一个账户」时带这个键，一次性（记录随即改成新账户，同一账户再登录不再带）；
+  没换人时**不带这个键**，回包形状与改造前一致。判据是官网稳定 `accountId`，落 `SystemSetting`
+  `account.lastAccountId`（与 `local.identity.selectedUserId` 同库同生死）；**不用 `accountFingerprintOrNull()`**——
+  那是 Key 的摘要，每次验证码登录官网都签发新 Key，同一个人重新登录就会被误判成换了人。断开账户时不清这条记录。
+  官网没给 accountId 时不猜、不提示、不覆盖。前端（登录弹层、设置页粘 Key）据此弹一次「本机项目属于这台电脑，
+  不随账户走」的说明（维护者拍板），不阻塞。
+- **断开后本机行回退**：`AccountIdentitySync.resetToLocal()`（由 `AccountSwitchCleanup.afterDisconnect()` 调）把
+  本机用户行 `displayName` 写回中文哨兵「本机用户」、清头像；纯本地、不发 `DisplayNameSynced`、非 local-mode 短路。
+- **`/api/account/login` 成功后立即 `identitySync.refreshQuietly()`**（与 `/connect` 对齐），不等下一次 status。
 
 ### 试用码格式与验签
 
@@ -456,9 +548,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 | `account` | `POST {base}/api/license/verify-key` 回 `valid:true` 即解锁 | 30 天未联网复验则 `unlocked:false`，提示联网重验；剩 ≤7 天带 `graceKind=offlineReverify` + `daysRemaining` |
 | 非 local-mode | 团队服务器部署**不设解锁门** | `status()` 恒 `{unlocked:true, mode:"account", plan:"paid"}`，不带上面三个字段 |
 
-### 必须账户登录（2026-08-18）
+### 必须账户登录（2026-08-18；2026-09-29 起启动不设门，见规则 1）
 
 官方发布的桌面版把试用码这条解锁路关掉，解锁门只接受账户凭据（手机号/邮箱登录，或手工粘 `awdk_` Key）。
+**2026-09-29 登录后置之后「解锁门」不再拦启动**（launch 分流不读 `unlocked`），本节的票据与宽限规则仍决定
+`/api/license/status` 的形状与账户入口的提醒行，但不再决定用户能不能进工作台。
 配置项在 `application-desktop.yml`：
 
 ```yaml
@@ -469,7 +563,10 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 四条硬规则：
 
 1. **闸是默认值不是 DRM。** 商业版 / 私有部署 / 自行构建改回 `true` 即完全恢复，刻意不做防篡改。
-   README 有一节告诉自行构建者改哪一行——AGPL 项目不能只把门关上不给钥匙。
+   **2026-09-29 起（登录后置，dev-board#1046/#1047）启动不设门**：launch 不读 `unlocked`，不登录也能打开和使用
+   应用；AI / 广场付费 / 团队 / 手机同步看的是账户连接（4011），试用码代替不了。这个开关因此只剩两层作用：
+   登录框（`AccountLoginDialog`）是否提供「试用码 / 账户 Key」输入、存量 `mode=trial` 票据是否走过渡期。
+   README 里原来「自行构建改一行恢复离线试用」那一节已删并写明原因（门都没了，不存在「不给钥匙」）。
 2. **不要改用 `security.local-mode: false` 来达成同一目的。** 那一位是「这是单机桌面版」的判别位，
    翻它会连带关掉解锁门本身、免费额度、平台 AI 通道、本机设备令牌与切站能力，并让
    `/api/account/login` 自己锁死（走 `MachineAccountGuard`，非 local-mode 要求先有 session）。
@@ -477,8 +574,9 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 3. **`legacy-grace-until` 留空或格式非法一律按已到期处理**，硬期限当天也算到期。安全侧默认：
    配错一个日期不会变成永久宽限。
 4. **`daysRemaining` / `graceKind` 只在需要提醒时下发**，不需要时 `status()` 的形状与过去一模一样。
-   顶栏 chip（`project-overview.vue` 的 `.trial-chip.grace-chip`）与 unlock 页都只读这两个字段，
-   不自己算日期。
+   rail 底部账户入口下拉里的提醒行（`AccountRailEntry` 的 `noticeText`，宿主 `project-overview.vue` 的
+   `accountNoticeText`；2026-09-29 前是顶栏 `.trial-chip.grace-chip`，dev-board#1047 挪走）与 unlock 页都只读
+   这两个字段，不自己算日期。
 
 **app-e2e 的连带约束**：发版默认值下全新 `user.home` 起来的后端是 `mode=none`，套件没有任何办法
 解锁它。冷启动跑法要往隔离 `user.home` 播一份存量 `mode=trial` 票据作起点（真实存在的过渡期状态），
@@ -559,8 +657,11 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 1. **响应带 code=4010 会被前端当成掉线**。PR4-0 起 `frontend/src/services/api.js` 只认
    code=4010 判定未登录（已不做「登录/未授权/请先」中文子串匹配），命中就清本地会话
    （浏览器端还跳登录页）。账户未连接、未分配额度、付费项未购买全是**业务错误不是掉线**，
-   必须走 code=1 信封、绝不带 4010。
-   护栏：`AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors`、两个 market 测试里的 `assertNotMistakenForLogout`。
+   必须走 code=1 信封、绝不带 4010。**「这台电脑还没登录账户」自 2026-09-29 起有自己的码 4011**
+   （`AccountRequired`，见核心契约「就地登录与 4011」）：前端就地弹登录层，同样不清会话、不跳页。
+   两个码绝不能合并——4010 在浏览器端会跳登录页，把「点一下 OCR」变成被踢出去。
+   护栏：`AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors`、两个 market 测试里的 `assertNotMistakenForLogout`、
+   `GlobalExceptionHandlerAccountRequiredTest.neverFourTen`、`frontend/tests/account` 里「4011 分支不清会话不跳页」。
    **「跳登录页」这条链自己会喂自己**（2026-08-17 现网事故，addin.aiworkdeck.com 打开即整页无限刷新）：
    `App.vue` 的导航拦截器给**每一次跳转**补一条 `ui.nav` 埋点，而 `/api/telemetry/event` 同样需要会话——
    4010 → reLaunch 登录页 → 埋点 → 又 4010 → 又跳，8 秒 100 次导航。两道闸缺一不可：
@@ -616,8 +717,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
    因此 `MarketPurchaseGate.purchased()` 只做 UI 标注，缓存陈旧时按已购乐观放行、由 402 兜底——
    比在本地拦住一个真已购的用户更不容易出错。
 8. **平台 AI 通道取不到 key 时绝不静默回退 BYOK**（会花用户自己的钱）；未连接账户时该供应商展示但不可选，
-   点击给引导——隐藏会让用户发现不了，直接可选会拖到发消息才报错。断开账户要 `demotePlatformProvider()`，
-   否则界面显示平台通道正常选中、实际每条消息都报未连接账户。
+   点击给引导——隐藏会让用户发现不了，直接可选会拖到发消息才报错。
+   **断开账户后降不降级按模式分（2026-09-29，dev-board#1046）**：团队服务器仍要 `demotePlatformProvider()`
+   （那里没有登录弹层承接，不降级就是「界面显示平台通道选中、每条消息都报未连接账户」）；
+   **单机版（local-mode）不降级**——「平台通道选中 + 未连接账户」正是全新安装的常态（`DataInitializer`
+   就这么初始化），下一条消息由 4011 → 登录弹层承接，旧理由在单机版上已不成立；而降到 OLLAMA 会让同一台机器
+   出现两种默认值，官方版界面又没有 BYOK 入口，用户下一条消息会静默发给一个多半没装的本地模型。
+   判定在 `AccountSwitchCleanup.afterDisconnect()`（`security.local-mode`），护栏 `AccountSwitchCleanupTest`。
 9. **凭据类 JSON 一律用 `AccountService.stateMapper()`**。Jackson 默认开着 `INCLUDE_SOURCE_IN_LOCATION`，
    解析失败时异常 message 带原文片段，而这些文件里都是明文密钥、解析失败点普遍 `log.warn(..., e.getMessage())`——
    一次半截写入就能把 0600 的密钥复制进 0644 的日志。落盘后统一 `restrictPermissions()` 收敛到 0600（Windows 静默跳过）。
@@ -673,6 +779,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     一行——launch 页查身份在查向导之前，于是**全新安装反而整个跳过首启向导**（真机复现过：
     解锁后直接进个人中心，`ai.activeProvider` 一直空着，要到发第一条消息才发现）。
     护栏 `config/DataInitializerTest`：全新装写标记、存量库一个字都不许改（改了等于把匿名提交窗口重开）。
+    **2026-09-29 补充**：单机版（local-mode）紧接着由 `defaultToPlatformChannel()` 把向导收口
+    （`AWD_CLOUD` + `completed=true`，只在供应商为空且标记不是 true 时），见核心契约「首启初始化归后端」。
+    上面「存量库一个字都不许改」对**团队服务器**仍然成立；单机版存量库只在「从没选过供应商」时补这一行。
 
 17. **平台通道的 key 是「谁的额度」，多租户下缺身份必须报错而不是回落**。
     OpenRouter 的额度上限是 per-key 的，一把机器级 key 就是一个共享额度池——回落等于拿别人的钱花，
@@ -704,8 +813,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     删：`account.json`、`entitlements.json`、`platform-ai-key.json`、`license.json` 中 **mode=account** 的票据。
     留：`license.json` 中 **mode=trial** 的票据（试用码是内置公钥离线验签的，与站点无关；
     抹掉等于把一个只想换站看看的试用用户直接踢回未解锁页）、`storage-location`、项目数据库。
-    另必须调 `ChatModelFactory.demotePlatformProvider()`——不降级会出现「界面显示平台通道正常选中、
-    实际每条消息都报未连接账户」（同地雷 8）。护栏 `SiteSwitchServiceTest`。
+    AI 供应商降不降级与地雷 8 同一口径（2026-09-29 改）：团队服务器调 `ChatModelFactory.demotePlatformProvider()`；
+    **单机版不降级**，切站后的下一条 AI 消息由 4011 → 登录弹层承接（判据 `LicenseService.isLocalMode()`）。
+    护栏 `SiteSwitchServiceTest`（含 `localModeKeepsPlatformProvider`）。
     切站的生效范围**有意分成两段**：账户/解锁门当场改指向，广场与统计上报下次启动才改
     （在属性层固化），`select` 因此回 `restartRecommended:true`。
 
@@ -1345,6 +1455,11 @@ return 404 兜底，云后端从 127.0.0.1 直连 Next。云侧唯一出口
   （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
+- 登录后置（dev-board#1046）：后端 `GlobalExceptionHandlerAccountRequiredTest`、`AgentErrorAccountPayloadTest`、
+  `AccountControllerLoginSyncTest`、`controller/ai/VoiceDictationControllerEnvelopeTest`、`DataInitializerTest`
+  （local-mode 首启默认官方通道四种形态）、`AccountIdentitySyncTest`（resetToLocal）、`AccountSwitchCleanupTest`
+  （换账户标志）；前端 `npm run test:account`（requireAccount 判定 + 七个接入点与 api.js 4011 分支的源码契约）、
+  `npm run test:unlock`（登录卡组件化后的语言接线）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`；
   团队分区另跑 `npm run test:team`（已进 ci.yml frontend job）：文案红线（两语言键对拍、禁 emoji、
   中文不含三个掉线子串、「估算」二字）+ 源码级契约（三态分支、入口地图六条、KPI 布局规则、

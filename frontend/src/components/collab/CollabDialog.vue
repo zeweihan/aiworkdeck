@@ -260,6 +260,7 @@ import {
 } from '@/services/api.js'
 import { roleLabel, ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
+import { requireAccount } from '@/utils/requireAccount.js'
 import { getInitial } from '@/utils/textInitial.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
@@ -407,6 +408,10 @@ export default {
     },
     async onShare() {
       if (this.busy) return
+      // 一条连接都没有、要走官方案件库：官方案件库挂在 AI WorkDeck 账户上，先就地登录
+      // （登录后置，dev-board#1046）。取消就停在原地
+      if (!this.connections.length && this.official.available
+          && !(await requireAccount({ reason: 'team' }))) return
       // 选哪条连接的规则搬到了 utils/cloudShare.js——InviteMemberDialog 的
       // 「放进团队案件库」按钮用的是同一段判定，复制一份必然慢慢分叉。
       this.busy = true

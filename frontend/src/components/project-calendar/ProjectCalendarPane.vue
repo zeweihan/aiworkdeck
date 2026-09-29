@@ -17,6 +17,9 @@
   顶部显示「仅看：文件名 ×」，× 由宿主清掉。
 
   面板标题由外壳的 sidebar-header 出（见 sidebar-shell 的统一口径），本组件不重复渲染标题。
+
+  projectId 可缺省（dev-board#1047 工作台无项目态）：没有项目时读 taskStore.global（全部项目的事项，
+  行上显示所属项目），数据走 loadGlobal；新建由宿主弹全局 TaskDialog（可选项目）。
 -->
 <template>
   <view class="pcp">
@@ -56,7 +59,7 @@
             v-for="task in g.list"
             :key="task.id"
             :task="task"
-            :show-project="false"
+            :show-project="isGlobal"
             density="compact"
             @toggle="onToggle"
             @open="onOpen"
@@ -74,7 +77,7 @@
               v-for="task in groups.done"
               :key="task.id"
               :task="task"
-              :show-project="false"
+              :show-project="isGlobal"
               density="compact"
               @toggle="onToggle"
               @open="onOpen"
@@ -94,7 +97,7 @@
 
 <script>
 import TaskRow from '@/components/calendar/TaskRow.vue'
-import { taskStore, loadProjectTasks, updateTask, deleteTask } from '@/utils/taskStore.js'
+import { taskStore, loadProjectTasks, loadGlobal, updateTask, deleteTask } from '@/utils/taskStore.js'
 import { groupByDue, isDone, taskFiles, taskFileIds } from '@/components/calendar/taskUtils.js'
 import { isEnglish } from '@/utils/appLanguage.js'
 
@@ -109,13 +112,14 @@ export default {
   name: 'ProjectCalendarPane',
   components: { TaskRow },
   props: {
-    projectId: { type: [Number, String], required: true },
+    /** 缺省（null）= 无项目态，读全部项目的事项 */
+    projectId: { type: [Number, String], default: null },
     /** 只看关联了这份文件的事项（文件右键「查看事项」） */
     fileFilter: { type: [Number, String], default: null },
     /** fileFilter 对应的文件名（宿主知道；不给就从事项的文件芯片里找） */
     fileFilterName: { type: String, default: '' },
   },
-  emits: ['leave-workbench', 'new-task', 'open-task', 'open-file', 'clear-file-filter'],
+  emits: ['open-calendar', 'new-task', 'open-task', 'open-file', 'clear-file-filter'],
   data() {
     return {
       /** { y, m } 或 null（= 全部，不按月过滤） */
@@ -125,7 +129,11 @@ export default {
     }
   },
   computed: {
+    isGlobal() {
+      return this.projectId == null || this.projectId === ''
+    },
     entry() {
+      if (this.isGlobal) return taskStore.global
       return taskStore.byProject[String(this.projectId)] || null
     },
     loading() {
@@ -188,10 +196,10 @@ export default {
   },
   methods: {
     async load() {
-      if (!this.projectId) return
       this.loadFailed = false
       try {
-        await loadProjectTasks(this.projectId)
+        if (this.isGlobal) await loadGlobal()
+        else await loadProjectTasks(this.projectId)
       } catch (e) {
         console.warn('[ProjectCalendarPane] 读取事项失败', e)
         this.loadFailed = true
@@ -242,12 +250,9 @@ export default {
       })
     },
     openGlobalCalendar() {
-      // 不在这里自己跳页：离开工作台前必须先把编辑器里的未存改动落盘
-      // （flushDirtyEditors 吃的是挂在工作台页面实例上的编辑器引用，子组件够不到），
-      // 否则律师刚敲的那几秒改动会静默丢失——就是 #489 修过的那一类。
-      // 统一交给父页面的 leaveWorkbench：它先落盘再 reLaunch
-      // （工作台参与的跳转一律 reLaunch，见 CLAUDE.md 导航总规则）。
-      this.$emit('leave-workbench', '/pages/calendar/calendar')
+      // 全盘日程是工作台里的中栏「日程」标签（dev-board#1048），不离开工作台，也就不存在
+      // 「离开前先落盘」的问题；由宿主调 openCalendarTab()。面板自己不跳页。
+      this.$emit('open-calendar')
     },
   },
 }

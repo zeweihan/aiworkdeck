@@ -119,9 +119,17 @@ public class VoiceDictationService {
 
         PlatformAiKeyService.Resolved resolved = platformAiChannel.resolveFor(userId);
         if (resolved == null) {
+            if (!platformAiChannel.availableFor(userId)) {
+                // 没有账户（桌面未连接 / 云端未桥接）：4011，调用方就地弹登录（登录后置，dev-board#1046）
+                throw com.checkba.service.account.AccountRequired.exception(
+                        com.checkba.service.account.AccountRequired.REASON_DICTATION, LangText.of(
+                                "语音听写走平台通道，需要连接 AI WorkDeck 账户",
+                                "Dictation uses the platform channel and needs a connected AI WorkDeck account"));
+            }
+            // 账户在、只是这一刻取不到密钥（未分配额度 / 官网抖动）：不是「要登录」
             throw new IllegalStateException(LangText.of(
-                    "语音听写走平台通道，请先在设置里连接官网账户",
-                    "Dictation uses the platform channel; connect your account in Settings first"));
+                    "语音听写暂时取不到平台通道（可能尚未分配 AI 额度，或官网暂时不可达），请稍后重试",
+                    "Dictation can't reach the platform channel right now (AI Credits may not be allocated yet, or the website is unreachable); please retry shortly"));
         }
 
         ObjectNode body = objectMapper.createObjectNode();

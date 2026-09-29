@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Welcome tab (components/welcome/WelcomePane.vue), the no-project workbench state and the rail account entry (dev-board#1047).
+// Brand title / tagline / lead are not here: they come from onboarding.unlock.brand.* (verbatim copy of design/copy/brand-copy.json).
+export default {
+  tabName: 'Welcome',
+  start: 'Start',
+  recent: 'Recent',
+  guides: 'Walkthroughs',
+  connectTeamServer: 'Connect to a team server',
+  enterWithAccessCode: 'Open a matter with an access code (client)',
+  more: 'More…',
+  recentLoading: 'Loading…',
+  recentLoadFailed: 'Could not load projects. Click to retry',
+  recentEmpty: 'No projects yet. Create a project folder, or open a matter folder already on this computer.',
+  recentCurrent: 'Current project',
+  recentUpdated: 'Modified {date}',
+  guideStart: 'Get started with AI WorkDeck',
+  guideStartDesc: 'The onboarding flow on our website: create a project, add materials, let AI draft.',
+  guideAiEdit: 'Let AI revise a document',
+  guideAiEditDesc: 'See how lawyers use it to revise contracts, draft filings and check materials.',
+  guidePlugin: 'Install your first plugin',
+  guidePluginDesc: 'Skills and panels from the plugin hub show up in the side bar once installed.',
+  showOnStartup: 'Show welcome page on startup',
+  telemetryNotice: 'Anonymous usage statistics are on. You can turn them off in Settings',
+  telemetryNoticeDismiss: 'Do not show again',
+  accessCodeDialogTitle: 'Open a matter with an access code',
+  accessCodeDialogHint: 'Your lawyer sends you the access code. You will only see this one matter.',
+  // Desktop client portal (dev-board#1050): opens {case library}/client/#code= in the system browser
+  portalOpenBtn: 'Open in browser',
+  portalHint: 'The matter opens in your browser. No need to sign in to this app.',
+  portalUnavailable: 'Could not get the case library address. Check your network and try again.',
+  signIn: 'Sign in',
+  signInTitle: 'Sign in (needed for AI, paid hub items and the team case library)',
+  noProjectTitle: 'Open a project to get started',
+  noProjectHint: 'Open a project from Projects on the left, or create one from the Welcome page.',
+  startupDisabledHint: 'The welcome page no longer opens on startup.',
+  openWelcome: 'Open Welcome page',
+  aiNeedsProject: 'Open a project first to use AI chat',
+}

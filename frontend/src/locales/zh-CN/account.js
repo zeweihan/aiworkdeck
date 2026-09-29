@@ -173,11 +173,12 @@ export default {
   logoutConfirmTitle: '退出登录',
   logoutConfirmContent: '确定要退出登录吗？',
   // 桌面端要说破两件事：会断开账户连接，以及本机数据不受影响（不然没人敢点）
-  logoutConfirmDesktop: '将断开本机与 AI WorkDeck 账户的连接，回到登录页。本机的项目与文件不受影响，重新登录即可继续。',
+  // 登录后置（dev-board#1046）：退出登录只断开账户、停在当前页面，不再回登录页
+  logoutConfirmDesktop: '将断开本机与 AI WorkDeck 账户的连接。本机的项目与文件不受影响，需要时再登录即可。',
   // 试用码解锁的机器：只摘账户，不动授权（官方版试用码解锁路已关，清了回不来）
   logoutConfirmTrial: '将断开本机与 AI WorkDeck 账户的连接。本机仍以试用码保持解锁，项目与文件不受影响。',
   logoutNothingTitle: '当前没有登录账户',
-  logoutNothingContent: '本机是用试用码解锁的，还没有连接 AI WorkDeck 账户，没有可退出的登录。要回到未解锁状态，用下面「授权」里的「解除授权」。',
+  logoutNothingContent: '这台电脑还没有登录 AI WorkDeck 账户，没有可退出的登录。',
   logoutFailed: '退出登录失败，请重试',
   // 文档 Generator 元数据开关（可溯源性设计规范附录 B4）
   docGeneratorGroupTitle: '文档属性',
@@ -186,7 +187,7 @@ export default {
   docGeneratorCurrent: '当前写入：{application}',
   docGeneratorSaveFailed: '设置保存失败，请稍后重试',
   logoutGroupTitle: '登录',
-  logoutGroupHint: '退出后回到登录页，可换一个账户登录。本机的项目与文件保留在原处。',
+  logoutGroupHint: '退出后这台电脑不再关联账户，可换一个账户登录。本机的项目与文件保留在原处。',
 
   // ---- login.vue：顶部导航 ----
   guideNav: '使用指引',
@@ -260,4 +261,54 @@ export default {
   selectHereBtn: '选择此处',
   projectCreateSuccess: '项目创建成功',
   createProjectFailed: '创建项目失败，请稍后重试',
+
+  // ---- 登录后置：就地登录弹层与接入点（dev-board#1046，设计 2026-09-29 §5）----
+  // 弹层本体（components/account/AccountLoginDialog.vue）复用 onboarding.unlock.* 那套登录卡文案，
+  // 这里只放弹层独有的部分与各接入点的按钮/说明。
+  loginDialog: {
+    // 弹层顶部一句说明，按触发点换（reason 的取值见 utils/requireAccountCore.js 的 REASONS）
+    reason: {
+      generic: '登录 AI WorkDeck 账户后即可继续。',
+      ai: '使用 AI 需要登录 AI WorkDeck 账户。',
+      market: '安装付费内容需要登录 AI WorkDeck 账户。',
+      team: '团队协作需要登录 AI WorkDeck 账户。',
+      mobile: '手机端同步需要登录 AI WorkDeck 账户。',
+      meeting: '云端转写需要登录 AI WorkDeck 账户。',
+      gateway: '这项服务由 AI WorkDeck 平台提供，需要登录账户。',
+      dictation: '语音听写需要登录 AI WorkDeck 账户。',
+      settings: '登录后可使用 AI、广场付费内容与团队协作。',
+      // rail 底部账户入口的「登录」：用户主动点的，不是被某个功能拦下来的，说明保持中性
+      account: '登录 AI WorkDeck 账户，可使用 AI、广场付费内容、团队案件库与手机端同步。',
+    },
+    cancel: '暂不登录',
+    close: '关闭',
+    // 换了一个账户登录（后端 previousAccountDiffers）：维护者拍板「本机项目属于这台电脑」
+    switchedTitle: '已换成另一个账户',
+    switchedBody: '本机的项目属于这台电脑，不随账户走：这台电脑上原有的项目现在显示在新账户名下，文件一个都没动。换回原来的账户也不会丢任何东西。',
+    gotIt: '知道了',
+    signedOutToast: '已退出登录',
+    // 请求撞上 4011、用户在弹层里登录成功之后，给没做重试处理的调用方弹的那一句
+    retryAfterLogin: '已登录，请再操作一次',
+    // AI 对话里后端回了 4011（SSE error 事件）时追加到回复气泡里的那一句
+    aiNotice: '> 使用「AI WorkDeck 云端」需要登录账户。登录后重新发送这条消息即可。',
+  },
+  // 各接入点上的登录入口
+  accountEntry: {
+    loginButton: '登录',
+    loginAccountButton: '登录 AI WorkDeck 账户',
+    notSignedIn: '未登录',
+    // 设置页「账户与用量」：粘 Key 退成高级入口
+    pasteKeyAdvanced: '高级：粘贴账户 Key',
+    pasteKeyCollapse: '收起',
+    pasteKeyConsentRequired: '连接前请先勾选上面两项同意',
+    // 手机端同步（设置页「账户与用量」）
+    mobileSyncTitle: '手机端同步',
+    mobileSyncDesc: '手机 App 拍的现场照片、录音会自动回到这台电脑的对应项目里。',
+    mobileSyncNeedsLogin: '未登录：手机端同步不会工作。登录同一个 AI WorkDeck 账户后自动开启。',
+    mobileSyncOn: '已随账户开启：在手机 App 登录同一个账户即可同步。',
+    // 会议转写平台档
+    meetingNeedsLogin: '云端转写需要登录账户，录音本身不受影响。',
+    // 团队空态
+    teamNeedsLogin: '登录 AI WorkDeck 账户后即可创建或加入团队。',
+  },
 }

@@ -152,7 +152,10 @@ public class LicenseController {
             accountService.connect(key);
             // 与设置页那条连接路径共用同一套作废动作。这里曾经只刷权益、不清平台密钥/余额判定/用量基线，
             // 于是从解锁页换一个没充值的账号进来能接着花上一个账号的 OpenRouter 额度
-            accountSwitchCleanup.afterConnect();
+            if (accountSwitchCleanup.afterConnect()) {
+                // 换了一个账户：与 /api/account/{connect,login} 同一个一次性标志（登录后置 §5.5）
+                out.put("previousAccountDiffers", true);
+            }
             out.put("accountConnected", true);
         } catch (Exception e) {
             log.warn("解锁成功但账户连接未完成（可在设置页重试）: {}", e.getMessage());

@@ -210,6 +210,22 @@ class MeetingTranscriptionPlatformPathTest {
     }
 
     @Test
+    @DisplayName("平台档未连账户：抛 AccountException(NOT_CONNECTED, reason=meeting) → 4011，会议状态不动")
+    void platformWithoutAccountIsAccountRequired() {
+        when(accountService.currentKeyOrNull()).thenReturn(null);
+        MeetingRecording m = meeting(MeetingRecording.STATUS_RECORDED);
+
+        com.checkba.service.account.AccountException e = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> service().startTranscription(7L));
+
+        assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertEquals("meeting", e.getReason());
+        // 录音本身完好，状态没被改成转写中——登录后再点一次转写即可
+        assertEquals(MeetingRecording.STATUS_RECORDED, m.getStatus());
+        assertTrue(transport.calls.isEmpty(), "没连账户就一次网关都不该打");
+    }
+
+    @Test
     @DisplayName("网关失败 → 落 FAILED 带可读原因，绝不回落 BYOK 去花用户自己的 Key")
     void gatewayFailureNeverFallsBackToByok() throws Exception {
         transport.ticket.add(new PlatformGatewayTransport.Reply(409,
@@ -233,8 +249,9 @@ class MeetingTranscriptionPlatformPathTest {
         when(accountService.currentKeyOrNull()).thenReturn(null);
         meeting(MeetingRecording.STATUS_RECORDED);
 
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> service().startTranscription(7L));
+        // 登录后置（dev-board#1046）：现在是 AccountException(NOT_CONNECTED) → 4011，文案约束照旧
+        com.checkba.service.account.AccountException e = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> service().startTranscription(7L));
         for (String forbidden : List.of("登录", "未授权", "请先")) {
             assertFalse(e.getMessage().contains(forbidden),
                     "命中「" + forbidden + "」会被 api.js 判成掉线并清会话：" + e.getMessage());

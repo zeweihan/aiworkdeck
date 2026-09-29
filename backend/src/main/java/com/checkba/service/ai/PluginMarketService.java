@@ -196,7 +196,8 @@ public class PluginMarketService {
         JSONObject bundle;
         try {
             bundle = JSONUtil.parseObj(readText(registryUrl + "/" + id + "/bundle", bearer, itemName, priceCents));
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | com.checkba.service.account.AccountException e) {
+            // AccountException：付费项未连账户（402 降级路径），原样上抛成 4011，别裹成「清单无法解析」
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(LangText.of("安装清单无法解析: ", "Failed to parse install manifest: ") + e.getMessage());

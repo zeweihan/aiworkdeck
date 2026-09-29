@@ -242,6 +242,9 @@ export async function setupCaptcha(config, holderId) {
     loading.delete(SCRIPTS.aliyun)
     throw captchaLoadError('aliyun', REASONS.INIT_MISSING)
   }
+  // 脚本加载要走外网：等它的这段时间里可能又装配了一次（切站），或者挂点已经不在了
+  // （就地登录弹层被关掉即卸载，dev-board#1046）。这时再 init，SDK 会报「element 参数传入值不合法」
+  if (gen !== setupGen || !document.getElementById(holderId)) return null
 
   let pending = null
   let instance = null

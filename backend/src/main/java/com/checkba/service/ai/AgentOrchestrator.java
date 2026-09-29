@@ -1453,7 +1453,7 @@ public class AgentOrchestrator {
             // 也不打 ERROR 级日志——这条路径在未分配额度时每发一条消息都会走到
             log.info("平台通道不可用 [{}]，会话 {}: {}", e.getKind(), conversationId, e.getMessage());
             markRunState(guard, AgentRunStateService.RunStatus.ERROR);
-            sendRunEvent(guard, "error", e.getMessage());
+            sendRunEvent(guard, "error", accountErrorPayload(e));
             // 用户消息在本方法开头已落库：这里不补一条 ASSISTANT，刷新页面后这一轮就只剩用户
             // 自己的问题，看起来像 AI 完全没回应。落的正是推给用户的那句文案（不加前缀）。
             saveAssistantMessageQuietly(guard, projectId, userId, e.getMessage());
@@ -2511,7 +2511,7 @@ public class AgentOrchestrator {
         } catch (com.checkba.service.account.AccountException ae) {
             log.info("故障转移中止，平台通道不可用 [{}]，会话 {}: {}", ae.getKind(), conversationId, ae.getMessage());
             markRunState(guard, AgentRunStateService.RunStatus.ERROR);
-            sendRunEvent(guard, "error", ae.getMessage());
+            sendRunEvent(guard, "error", accountErrorPayload(ae));
             closeSse(guard);
             endRun(guard);
             return true;
@@ -2730,6 +2730,33 @@ public class AgentOrchestrator {
     }
 
     /** {"content": "..."} 信封，转义交给 Jackson。序列化失败时退回不带正文的空信封而不是发出非法 JSON。 */
+    /**
+     * 账户类失败的 {@code error} 事件载荷（登录后置 4011 契约，dev-board#1046）。
+     *
+     * <p>这一路原来推的是裸文案字符串；现在是 JSON {@code {message, code, kind, reason?}}：
+     * {@code NOT_CONNECTED} 的 code 是 4011（前端据此就地弹登录层），其余 kind 是 1。
+     * 只加字段不改语义——{@code message} 就是原来那句文案；插件侧 chatSession.js 本来就
+     * 先 {@code JSON.parse(data).message}、解析失败再用原串，两种形状都接得住；桌面
+     * useAgentStream 同样先试 JSON。其余 error 路径（LLM 故障、内部错误）载荷不变，仍是字符串。
+     */
+    static String accountErrorPayload(com.checkba.service.account.AccountException e) {
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("message", e.getMessage() == null ? "" : e.getMessage());
+        boolean required = e.getKind() == com.checkba.service.account.AccountException.Kind.NOT_CONNECTED;
+        body.put("code", required ? com.checkba.service.account.AccountRequired.CODE : 1);
+        body.put("kind", e.getKind().name());
+        if (e.getReason() != null && !e.getReason().isBlank()) {
+            body.put("reason", e.getReason());
+        } else if (required) {
+            body.put("reason", com.checkba.service.account.AccountRequired.REASON_PLATFORM_AI);
+        }
+        try {
+            return SKILL_UPDATE_MAPPER.writeValueAsString(body);
+        } catch (Exception ex) {
+            return e.getMessage() == null ? "" : e.getMessage();
+        }
+    }
+
     static String jsonContentEnvelope(String content) {
         try {
             return "{\"content\":" + SKILL_UPDATE_MAPPER.writeValueAsString(content == null ? "" : content) + "}";

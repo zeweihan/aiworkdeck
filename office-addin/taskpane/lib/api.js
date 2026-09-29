@@ -387,6 +387,11 @@ export async function postDictate({ serverUrl, token }, { audioBase64, format, d
     throw new Error(msg)
   }
   const data = await resp.json()
+  // 失败自 dev-board#1046 起是 HTTP 200 + {code:1|4011, message}（原来是 400/502 纯文本）。
+  // 不判 code 的话失败会被当成「听写成功、转出来是空串」，用户什么提示都看不到
+  if (data && typeof data.code === 'number' && data.code !== 0) {
+    throw new Error(data.message || `HTTP ${resp.status}`)
+  }
   return data && typeof data.text === 'string' ? data.text : ''
 }
 

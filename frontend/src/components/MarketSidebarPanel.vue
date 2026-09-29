@@ -120,7 +120,7 @@
             <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
               <text>{{ $t('market.buy') }}</text>
             </view>
-            <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
+            <view v-else class="msb-row-state need" @tap.stop="loginThenInstall(row)">
               <text>{{ $t('market.needAccount') }}</text>
             </view>
           </view>
@@ -162,7 +162,7 @@
             <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
               <text>{{ $t('market.buy') }}</text>
             </view>
-            <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
+            <view v-else class="msb-row-state need" @tap.stop="loginThenInstall(row)">
               <text>{{ $t('market.needAccount') }}</text>
             </view>
           </view>
@@ -181,6 +181,8 @@ import { ICONS } from '@/config/icons.js'
 import { isPanelSkill, isVoiceGroupMember, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
 import { canInstall, paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { requireAccount, isAccountLoginRetry } from '@/utils/requireAccount.js'
+import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { t } from '@/i18n'
 
 const CATEGORY_GLYPHS = {
@@ -219,8 +221,6 @@ function fmtDownloads(n) {
 export default {
   name: 'MarketSidebarPanel',
   emits: ['open-detail'],
-  // 工作台 provide 的设置标签入口；宿主不是工作台时为 null
-  inject: { openSettingsTab: { default: null } },
   data() {
     return {
       searchText: '',
@@ -429,10 +429,21 @@ export default {
       openExternalUrl(purchaseUrl(row.kind, row.id))
       uni.showToast({ title: this.$t('market.openedPurchasePage'), icon: 'none' })
     },
-    goToAccountSettings() {
-      // 工作台里设置是标签，不跳页（dev-board#582）
-      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'account' })
-      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+    /**
+     * 「需连接账户」→ 就地登录后继续安装（登录后置，dev-board#1046）：
+     * 登录成功先按新账户同步一次权益、重拉列表，已购/免费就直接装；没买过按钮自然变「购买」。
+     */
+    async loginThenInstall(row) {
+      const ok = await requireAccount({ reason: 'market' })
+      if (!ok) return
+      await refreshEntitlements(true).catch(() => {})
+      if (row.kind === 'skill') await this.loadMarketSkills()
+      else await this.loadMarketPlugins()
+      const rows = row.kind === 'skill' ? this.skillRows : this.pluginRows
+      const fresh = rows.find((r) => r.id === row.id)
+      if (!fresh || fresh.installed || !fresh.canInstall) return
+      if (fresh.kind === 'skill') await this.installSkillRow(fresh)
+      else await this.installPluginRow(fresh)
     },
     async reloadAll() {
       this.loadInstalled()
@@ -488,6 +499,8 @@ export default {
         uni.$emit('awd:market-changed-from-sidebar')
       } catch (e) {
         console.error('安装 Skill 失败:', e)
+        // 后端 4011 已由 api.js 就地弹过登录层：登录成功就刷新列表，按钮按新账户的状态显示
+        if (isAccountLoginRetry(e)) await this.reloadAll()
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.marketBusyId = ''
@@ -521,6 +534,7 @@ export default {
         uni.$emit('awd:market-changed-from-sidebar')
       } catch (e) {
         console.error('安装插件失败:', e)
+        if (isAccountLoginRetry(e)) await this.reloadAll()
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.pluginBusyId = ''

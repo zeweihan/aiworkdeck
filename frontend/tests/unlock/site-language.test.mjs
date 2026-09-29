@@ -37,7 +37,12 @@ test('已是目标语言、用户亲手选过语言、未知站点：一律不�
 })
 
 test('接线：解锁页就地切语言（不整页 reload），离开时才整页重载', () => {
-  const src = read('pages/unlock/unlock.vue')
+  // 登录后置（dev-board#1046）：登录卡抽成组件（就地登录弹层与解锁页薄壳共用），
+  // 就地切语言的接线在组件里；「离开时整页重载」只属于薄壳页
+  const src = read('components/account/AccountLoginDialog.vue')
+  const page = read('pages/unlock/unlock.vue')
+  assert.match(page, /<AccountLoginDialog/)
+  assert.match(page, /@language-changed="onLanguageChanged"/)
   // 随动走纯判定，且两个方向都走
   assert.match(src, /siteLanguageToApply\(\{/)
   // 就地切：vue-i18n 的全局 locale + 页面自己的响应式语言
@@ -51,8 +56,11 @@ test('接线：解锁页就地切语言（不整页 reload），离开时才整�
   // 语言高亮必须是响应式的（isEnglish() 不是响应式，就地切换后高亮不跟）
   assert.match(src, /isEn\(\) \{\s*return this\.uiLang === 'en-US'/)
   // 本页切过语言，离开时整页重载进启动分流（模块顶层取过的静态文案要按新语言重建）
-  assert.match(src, /goLaunch\(\)/)
-  assert.ok(!/uni\.reLaunch\(\{ url: '\/pages\/launch\/launch' \}\)[^\n]*\n[^\n]*\}, (800|900)\)/.test(src))
+  assert.match(page, /goLaunch\(\)/)
+  assert.match(page, /window\.location\.reload\(\)/)
+  assert.ok(!/uni\.reLaunch\(\{ url: '\/pages\/launch\/launch' \}\)[^\n]*\n[^\n]*\}, (800|900)\)/.test(page))
+  // 组件本身不跳页：弹层形态要把结果交回调用方、原地继续
+  assert.ok(!/uni\.reLaunch/.test(src), '登录卡组件不许自己 reLaunch')
 
   const i18n = read('i18n/index.js')
   assert.match(i18n, /export function applyI18nLocale\(lang\)/)

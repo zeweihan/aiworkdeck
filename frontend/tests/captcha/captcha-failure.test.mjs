@@ -144,10 +144,17 @@ test('接线：captcha.js 装配失败抛可辨识错误，不再回 null 让调
   assert.match(src, /reason: REASONS\.EMBED_NOT_READY/)
   // 未启用仍回 null（官网此刻不校验）
   assert.match(src, /if \(!config \|\| !config\.provider\) return null/)
+  // 登录弹层卸载 / 装配被取代时回 null（dev-board#1046）：只在脚本确实到了、初始化函数也在之后才判，
+  // 不许挡在「装不出来」的两道 throw 前面把真失败吞成 null（那就又回到盲发）
+  const guard = src.indexOf('if (gen !== setupGen || !document.getElementById(holderId)) return null')
+  assert.ok(guard > 0, '缺卸载守卫')
+  assert.ok(src.indexOf("throw captchaLoadError('aliyun', REASONS.INIT_MISSING)") < guard, '守卫必须在 INIT_MISSING 之后')
+  assert.ok(src.indexOf('await loadScript(SCRIPTS.aliyun') < guard, '守卫必须在脚本加载之后')
 })
 
-test('接线：解锁页区分「未启用」与「装不出来」，点按钮先重试一次装配，仍失败才报组件加载失败', () => {
-  const src = read('pages/unlock/unlock.vue')
+test('接线：登录卡（解锁页与就地登录弹层共用）区分「未启用」与「装不出来」，点按钮先重试一次装配，仍失败才报组件加载失败', () => {
+  // 登录卡抽成组件（登录后置，dev-board#1046）：解锁页薄壳与就地登录弹层共用，接线在组件里
+  const src = read('components/account/AccountLoginDialog.vue')
   assert.match(src, /captchaFailure: null/)
   // 配置读不到仍按未启用处理（单独的 try，return 前不记失败）
   assert.match(src, /config = await getAccountCaptchaConfig\(\)\s*\} catch \(e\) \{[\s\S]*?按未启用处理[\s\S]*?return\s*\}/)

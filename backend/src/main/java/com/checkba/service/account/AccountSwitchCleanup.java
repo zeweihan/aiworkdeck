@@ -46,21 +46,76 @@ public class AccountSwitchCleanup {
     private final com.checkba.service.team.TeamUsageSettings teamUsageSettings;
     private final com.checkba.service.team.TeamSettingsCache teamSettingsCache;
     private final com.checkba.service.team.TeamProjectNameNotice teamProjectNameNotice;
+    private final com.checkba.service.SystemSettingService systemSettingService;
+    private final AccountIdentitySync identitySync;
 
-    /** 刚连上一个（可能是不同的）账户：旧账户的一切当场作废，再异步拉新账户的权益。 */
-    public void afterConnect() {
+    /** 单机桌面版判别位。非 final：不进 {@code @RequiredArgsConstructor}，单测用 ReflectionTestUtils 设。 */
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
+
+    /**
+     * 这台电脑上一次连接的官网账户 id（登录后置设计 §5.5，dev-board#1046）。
+     *
+     * <p>用 accountId 而不是 {@link AccountService#accountFingerprintOrNull()}：指纹是 Key 的摘要，
+     * 而每次验证码登录官网都签发一把新 Key——同一个人重新登录一次指纹就变，会被误判成换了人。
+     * accountId 是官网的稳定 id（公开头像地址里就有它），不是凭据。
+     *
+     * <p>落 {@code system_setting} 而不是 {@code ~/.aiworkdeck}：它回答的是「这个库里的本机项目
+     * 上一次挂在谁名下」，与 {@code local.identity.selectedUserId} 同库同生死——还原一份旧库，
+     * 记录跟着回到那个时点才对。断开账户时刻意不清，否则下次登录永远比不出「换没换人」。
+     */
+    public static final String KEY_LAST_ACCOUNT_ID = "account.lastAccountId";
+
+    /**
+     * 刚连上一个（可能是不同的）账户：旧账户的一切当场作废，再异步拉新账户的权益。
+     *
+     * @return 这次连上的是否是另一个账户（此前连过、且 accountId 不同）。一次性：
+     *         记录随即改成新账户，同一账户再登录不再为 true。调用方据此在回包里带
+     *         {@code previousAccountDiffers:true}，前端弹一次「本机项目属于这台电脑」的说明。
+     */
+    public boolean afterConnect() {
         invalidateAll();
         entitlementService.refreshAsync();
+        return recordAccount();
+    }
+
+    private boolean recordAccount() {
+        try {
+            String current = accountService.currentAccountIdOrNull();
+            if (current == null || current.isBlank()) {
+                // 官网没给 accountId（老盘 / 契约漂移）：不猜，也不拿空值盖掉旧记录
+                return false;
+            }
+            String previous = systemSettingService.get(KEY_LAST_ACCOUNT_ID, null);
+            if (current.equals(previous)) {
+                return false;
+            }
+            systemSettingService.set(KEY_LAST_ACCOUNT_ID, current);
+            return previous != null && !previous.isBlank();
+        } catch (RuntimeException e) {
+            // 提示是顺手的事，为它把连接账户搞失败不划算
+            log.warn("记录本机账户历史失败（不影响连接）: {}", e.toString());
+            return false;
+        }
     }
 
     /**
-     * 刚断开账户。除作废缓存外还要把 AI 供应商从平台通道摘下来，
-     * 否则界面显示平台通道正常选中、实际每条消息都报未连接账户。
+     * 刚断开账户。除作废缓存外，团队服务器上还要把 AI 供应商从平台通道摘下来
+     * （否则界面显示平台通道正常选中、实际每条消息都报未连接账户）；单机版不摘，见方法体。
      *
-     * @return 降级到的供应商名；本来就不是平台通道时返回 null
+     * @return 降级到的供应商名；单机版、或本来就不是平台通道时返回 null
      */
     public String afterDisconnect() {
         invalidateAll();
+        // 本机行不再顶着上一个账户的名字与头像（§5.5）。账户记录不清，见 KEY_LAST_ACCOUNT_ID
+        identitySync.resetToLocal();
+        // 单机版不降级（登录后置，dev-board#1046）：「平台通道选中 + 未连接账户」是全新安装的常态，
+        // 下一条 AI 消息由 4011 → 登录弹层承接。降到 OLLAMA 会让同一台机器出现两种默认值，
+        // 而官方版界面没有 BYOK 入口，用户下一条消息会静默发给多半没装的本地模型。
+        // 团队服务器保持原行为（那里没有登录弹层可承接）。
+        if (localMode) {
+            return null;
+        }
         return chatModelFactory.demotePlatformProvider();
     }
 

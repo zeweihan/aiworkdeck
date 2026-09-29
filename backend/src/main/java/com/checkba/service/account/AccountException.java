@@ -51,7 +51,10 @@ public class AccountException extends RuntimeException {
         return kind;
     }
 
-    /** 官网返回的业务机器码（仅 REJECTED 有值），其余为 null。 */
+    /**
+     * 机器码：REJECTED 时是官网返回的业务机器码；NOT_CONNECTED 时是「哪个功能要账户」
+     * （{@link AccountRequired} 的 REASON_* 之一，决定前端登录弹层顶部那句说明）；其余为 null。
+     */
     public String getReason() {
         return reason;
     }

@@ -97,10 +97,10 @@ test('月份条：从「全部」点箭头先落到本月，之后才前后翻',
   assert.deepEqual(ctx.month, { y: 2026, m: 1 })
 })
 
-test('「查看全盘日程」仍经宿主 leaveWorkbench 离开（dev-board#489 落盘口径）', () => {
+test('「查看全盘日程」交给宿主开中栏日程标签，不离开工作台（dev-board#1048）', () => {
   const openGlobalCalendar = build('openGlobalCalendar')
   const emitted = []
-  openGlobalCalendar.call({ $emit: (e, p) => emitted.push([e, p]) })
-  assert.deepEqual(emitted, [['leave-workbench', '/pages/calendar/calendar']])
+  openGlobalCalendar.call({ $emit: (...args) => emitted.push(args) })
+  assert.deepEqual(emitted, [['open-calendar']])
   assert.doesNotMatch(script, /uni\.(reLaunch|navigateTo|redirectTo)/, '面板不许自己跳页')
 })

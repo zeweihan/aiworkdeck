@@ -4,9 +4,14 @@
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
 import { track } from '@/utils/telemetryClient.js'
+import { isPaneAllowedWithoutProject, workbenchStorageKey } from './noProjectShell.js'
 
 export const panelSwitchingMethods = {
     toggleLeftPane(key) {
+      // 无项目态（dev-board#1047）：只有全局面板能开。项目面板不挂载——它们带着
+      // projectId=null 空转会打出 /api/projects/null/... 请求。菜单 / 命令面板 / 旧存量值
+      // 都可能把一个项目面板的 key 送进来，这里是唯一的闸。
+      if (!this.hasProject && !isPaneAllowedWithoutProject(key)) return
       // 埋点：三分支语义分开记（staging 特殊 / 同 key 收展 / 异 key 真切换），
       // 否则「切面板」数会被「折叠侧栏」污染
       track('ui.nav', {
@@ -60,16 +65,12 @@ export const panelSwitchingMethods = {
         // 关标签时的兜底（fileOpenTabs.js）与存量本地存储都还读它。
       }
 
-      // Persistence
-      if (this.projectId) {
-        uni.setStorageSync(`project_${this.projectId}_leftPaneKey`, key)
-        this.saveActiveIdsByMode()
-      }
+      // Persistence：有项目按项目分，无项目落 global_*（此前无项目态写的是 project_null_*）
+      uni.setStorageSync(workbenchStorageKey(this.projectId, 'leftPaneKey'), key)
+      this.saveActiveIdsByMode()
     },
     saveActiveIdsByMode() {
-      if (this.projectId) {
-        uni.setStorageSync(`project_${this.projectId}_activeTabsByMode`, this.lastActiveIdsByMode)
-      }
+      uni.setStorageSync(workbenchStorageKey(this.projectId, 'activeTabsByMode'), this.lastActiveIdsByMode)
     },
     onLeftPluginClick(key) {
       // 兼容旧调用（若仍有地方使用）

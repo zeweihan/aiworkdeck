@@ -156,6 +156,9 @@ public class PluginController {
             result.put("id", id);
             result.put("pendingEnable", true);
             return ResponseEntity.ok(result);
+        } catch (com.checkba.service.account.AccountException e) {
+            // 付费项未连账户：交全局处理器回 4011，前端就地弹登录层（登录后置，dev-board#1046）
+            throw e;
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
         }

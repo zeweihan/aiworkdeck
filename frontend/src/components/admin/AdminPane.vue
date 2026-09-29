@@ -248,25 +248,62 @@
               </text>
           </SettingsSection>
 
-          <!-- 未连接：引导去官网取 Key -->
+          <!-- 未连接：主动作是就地登录（登录后置，dev-board#1046）；粘 Key 退成高级入口 -->
           <SettingsSection v-if="!account.connected" :title="$t('admin.navAccount')" :description="$t('admin.accountSectionSubtitle')">
               <text class="account-intro">
-                {{ $t('admin.accountIntro') }}
+                {{ $t('account.loginDialog.reason.settings') }}
               </text>
-              <view class="account-link-row">
-                <button class="comp-btn" @tap="openAccountSite">{{ $t('admin.getKeyButton') }}</button>
-              </view>
-              <SettingsRow :label="$t('admin.accountKeyLabel')">
-                <input
-                  v-model="accountKeyInput"
-                  class="form-input"
-                  :placeholder="$t('admin.accountKeyPlaceholder')"
-                />
-              </SettingsRow>
-              <view class="account-connect-actions">
-                <button class="btn-primary" :disabled="accountBusy" @tap="onConnectAccount">
-                  {{ accountBusy ? $t('admin.accountConnecting') : $t('admin.connectAccountButton') }}
+              <view class="account-connect-actions is-start">
+                <button class="btn-primary account-login-btn" @tap="onLoginAccount">
+                  {{ $t('account.accountEntry.loginAccountButton') }}
                 </button>
+              </view>
+              <text class="account-advanced-toggle" @tap="keyPasteOpen = !keyPasteOpen">
+                {{ keyPasteOpen ? $t('account.accountEntry.pasteKeyCollapse') : $t('account.accountEntry.pasteKeyAdvanced') }}
+              </text>
+              <template v-if="keyPasteOpen">
+                <text class="account-intro">
+                  {{ $t('admin.accountIntro') }}
+                </text>
+                <view class="account-link-row">
+                  <button class="comp-btn" @tap="openAccountSite">{{ $t('admin.getKeyButton') }}</button>
+                </view>
+                <SettingsRow :label="$t('admin.accountKeyLabel')">
+                  <input
+                    v-model="accountKeyInput"
+                    class="form-input"
+                    :placeholder="$t('admin.accountKeyPlaceholder')"
+                  />
+                </SettingsRow>
+                <!-- 与登录弹层同样的两项同意：后端默认供应商就是官方通道，连上账户就是内容
+                     开始能出境的时点，所以粘 Key 这条路也必须先取得（绝不预勾选） -->
+                <view class="account-consent">
+                  <view class="account-consent-row" @tap="keyAgreementChecked = !keyAgreementChecked">
+                    <view class="account-consent-mark" :class="{ checked: keyAgreementChecked }"></view>
+                    <text class="account-consent-text">
+                      {{ $t('onboarding.unlock.agreePrefix') }}{{ $t('onboarding.unlock.termsName') }}{{ $t('onboarding.unlock.agreeAnd') }}{{ $t('onboarding.unlock.privacyName') }}
+                    </text>
+                  </view>
+                  <view class="account-consent-row" @tap="keyCrossBorderChecked = !keyCrossBorderChecked">
+                    <view class="account-consent-mark" :class="{ checked: keyCrossBorderChecked }"></view>
+                    <text class="account-consent-text">{{ $t('onboarding.unlock.crossBorderLabel') }}</text>
+                  </view>
+                </view>
+                <view class="account-connect-actions">
+                  <button class="comp-btn" :disabled="accountBusy" @tap="onConnectAccount">
+                    {{ accountBusy ? $t('admin.accountConnecting') : $t('admin.connectAccountButton') }}
+                  </button>
+                </view>
+              </template>
+          </SettingsSection>
+
+          <!-- 手机端同步（登录后置，dev-board#1046）：原来没登录时静默不工作，现在如实说 + 给登录入口 -->
+          <SettingsSection v-if="isDesktop" :title="$t('account.accountEntry.mobileSyncTitle')" :description="$t('account.accountEntry.mobileSyncDesc')">
+              <text class="account-intro">
+                {{ account.connected ? $t('account.accountEntry.mobileSyncOn') : $t('account.accountEntry.mobileSyncNeedsLogin') }}
+              </text>
+              <view v-if="!account.connected" class="account-connect-actions is-start">
+                <button class="comp-btn account-login-btn" @tap="onLoginForMobile">{{ $t('account.accountEntry.loginButton') }}</button>
               </view>
           </SettingsSection>
 
@@ -937,6 +974,8 @@ import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, siteLinks, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
 import { signOut } from '@/utils/signOut.js'
+import { requireAccount, broadcastAccountChanged, ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
+import { recordAccountConsents } from '@/utils/accountConsent.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import { loadIdentityProfile, readNudgeDismissed, markNudgeDismissed, PROFILE_SOURCE } from '@/services/accountProfile.js'
 import { shouldPromptNameNudge } from '@/utils/identityProfile.js'
@@ -1161,6 +1200,10 @@ export default {
       tierRulesOpen: false,
       accountKeyInput: '',
       accountBusy: false,
+      // 粘 Key 退成高级入口（登录后置，dev-board#1046）：默认收起；两项同意都绝不预勾选
+      keyPasteOpen: false,
+      keyAgreementChecked: false,
+      keyCrossBorderChecked: false,
       entitlementBusy: false,
       // 文件缓存区存储位置（PR-C）
       // { path, defaultPath, custom, available, movedAt, entitled }
@@ -1413,6 +1456,9 @@ export default {
       this.loadAccountProfile()
     }
     uni.$on('awd:identity-updated', this._onIdentityUpdated)
+    // 登录弹层 / 退出登录之后（任何地方触发的）：账户分区、钱包、资料一起刷新（登录后置，dev-board#1046）
+    this._onAccountChanged = () => this.onAccountChanged()
+    uni.$on(ACCOUNT_CHANGED_EVENT, this._onAccountChanged)
     if (this.isDesktop) {
       // AI 面板的「AI WorkDeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
@@ -1437,6 +1483,10 @@ export default {
     if (this._onWalletRefresh) {
       uni.$off('awd:wallet-refresh', this._onWalletRefresh)
       this._onWalletRefresh = null
+    }
+    if (this._onAccountChanged) {
+      uni.$off(ACCOUNT_CHANGED_EVENT, this._onAccountChanged)
+      this._onAccountChanged = null
     }
     if (this._onIdentityUpdated) {
       uni.$off('awd:identity-updated', this._onIdentityUpdated)
@@ -2382,24 +2432,55 @@ export default {
         this.storageBusy = false
       }
     },
+    /**
+     * 「登录 AI WorkDeck 账户」（登录后置，dev-board#1046）：与各功能触发点同一个就地登录弹层。
+     * 成功后的刷新走 awd:account-changed 广播（onAccountChanged），这里不再重复一遍。
+     */
+    async onLoginAccount() {
+      await requireAccount({ reason: 'settings' })
+    },
+    async onLoginForMobile() {
+      await requireAccount({ reason: 'mobile' })
+    },
+    /** 任何地方登录/退出之后：账户分区、钱包、AI 通道可选性、资料一起按新状态刷新。 */
+    async onAccountChanged() {
+      await this.loadAccount()
+      this.loadWallet()
+      if (this.isDesktop) this.loadPlatformAiAvailability()
+      if (this.account.connected) {
+        this.loadStorageLocation()
+        this.maybePromptNameNudge()
+      }
+    },
     async onConnectAccount() {
       const key = (this.accountKeyInput || '').trim()
       if (!key) {
         uni.showToast({ title: this.$t('admin.pasteKeyFirst'), icon: 'none' })
         return
       }
+      // 粘 Key 与登录弹层同一道同意闸（accountConsent.js 文件头）
+      if (!this.keyAgreementChecked || !this.keyCrossBorderChecked) {
+        uni.showToast({ title: this.$t('account.accountEntry.pasteKeyConsentRequired'), icon: 'none' })
+        return
+      }
       this.accountBusy = true
       try {
-        await connectAccount(key)
+        await recordAccountConsents()
+        const res = await connectAccount(key)
         this.accountKeyInput = ''
-        await this.loadAccount()
-        // 首次连接成功后引导一次「填写你的姓名」（手机号注册的默认展示名是打码手机号）
-        await this.loadAccountProfile()
-        this.maybePromptNameNudge()
-        // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
-        await refreshEntitlements(true)
-        this.notifyMarketAccountChanged()
+        this.keyPasteOpen = false
         uni.showToast({ title: this.$t('admin.accountConnectedToast'), icon: 'none' })
+        // 换了一个账户：与登录弹层同一句一次性说明（后端 previousAccountDiffers）
+        if (res && res.previousAccountDiffers) {
+          uni.showModal({
+            title: this.$t('account.loginDialog.switchedTitle'),
+            content: this.$t('account.loginDialog.switchedBody'),
+            showCancel: false,
+            confirmText: this.$t('account.loginDialog.gotIt'),
+          })
+        }
+        // 刷新走统一广播：本页的 onAccountChanged、广场按钮、权益缓存都在里面
+        broadcastAccountChanged({ connected: true, ...(res || {}) })
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('admin.connectFailed'), icon: 'none' })
       } finally {
@@ -2407,25 +2488,12 @@ export default {
       }
     },
     /**
-     * 「退出登录」（dev-board#205 统一入口）：原「断开连接」只摘账户连接、留人在页里，
-     * 与「账户与安全」的退出登录是两套说法。现在统一走 signOut() 唯一编排——
-     * 确认弹窗、按当前状态决定摘哪几层、成功后回启动页重跑分流，
-     * 所以这里不需要再做 loadAccount / 权益刷新 / 广场广播那些留在页内的收尾。
+     * 「退出登录」（dev-board#205 统一入口）：统一走 signOut() 唯一编排。
+     * 登录后置之后（dev-board#1046）signOut 不再回启动页、停在原地，刷新由它发的
+     * awd:account-changed 广播驱动（本页 onAccountChanged + 广场按钮 + 权益），这里不重复。
      */
     async onSignOut() {
-      const done = await signOut()
-      if (done) this.notifyMarketAccountChanged()
-    },
-    /**
-     * 账户连接状态变了 → 广场的付费项按钮形态跟着变（「需连接账户」↔「购买」/「安装」）。
-     *
-     * 设置页是 navigateTo 打开的，上一页并不销毁：不广播的话用户从「需连接账户」点进来、
-     * 连完账户返回，广场还是旧数据，再点又回到这里，转不出去。
-     * 两个事件名分属两个订阅方（左栏 MarketSidebarPanel / 中栏 MarketDetailPane），都要发。
-     */
-    notifyMarketAccountChanged() {
-      uni.$emit('awd:market-changed')
-      uni.$emit('awd:market-changed-from-sidebar')
+      await signOut()
     },
     // 金额一律两位小数，缺值显示 $0.00 而不是 NaN
     formatUsd(v) {
@@ -3146,6 +3214,66 @@ $brand-accent: $brand-mint;
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+/* 登录后置（dev-board#1046）：「登录」是主动作，靠左放在说明下面；粘 Key 折成一行文字链接 */
+.account-connect-actions.is-start {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+/* uni-button 自带 margin-left/right: auto，放在 flex 容器里会被挤到中间；清掉才真正靠左 */
+.account-login-btn {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.account-advanced-toggle {
+  display: inline-block;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--awd-text-2);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--awd-accent-text);
+  }
+}
+
+.account-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.account-consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.account-consent-mark {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--awd-border-strong);
+  border-radius: 4px;
+  background: var(--awd-surface);
+
+  &.checked {
+    border-color: var(--awd-accent);
+    background: var(--awd-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / 11px no-repeat;
+  }
+}
+
+.account-consent-text {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--awd-text-2);
 }
 
 /* ---------- 账户卡（dev-board#200）：身份一行 + 动作按齐 ---------- */

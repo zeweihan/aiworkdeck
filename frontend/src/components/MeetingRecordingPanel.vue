@@ -14,6 +14,10 @@
       <text class="mr-tier-value" :class="tierClass">{{ tierText }}</text>
     </view>
     <text class="mr-tier-desc">{{ tierDesc }}</text>
+    <!-- 平台档还没登录账户：就地登录（登录后置，dev-board#1046）。录音本身不受影响 -->
+    <view class="mr-tier-gate-actions" v-if="asrProvider === 'platform' && asrPlatformAvailable && !asrAccountConnected">
+      <view class="mr-btn primary" @tap="onLoginForPlatform">{{ $t('account.accountEntry.loginButton') }}</view>
+    </view>
     <!-- 「录音不出本机」。切换时**就地探一次**，没就绪就不许留在打开态（设计 §6.2.1）：
          做成能打开、录完两小时才发现转不了的样子，用户只剩「放弃这份录音」或
          「关掉开关传上云」两条路，后者与他打开开关的目的正好相反。 -->
@@ -311,6 +315,7 @@ import { host } from '@/services/host.js'
 import { speakerColorClass } from '@/utils/media/speakerColors.js'
 import { componentDownloads } from '@/services/componentDownloads.js'
 import { confirmPaidTranscription } from '@/utils/paidTranscribeGate.js'
+import { requireAccount, isAccountLoginRetry, ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 
@@ -537,6 +542,9 @@ export default {
     // 从顶部胶囊停止录音时刷新列表
     this._onStopped = () => this.loadMeetings()
     try { uni.$on('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
+    // 在别处登录 / 退出登录之后（登录弹层、顶栏退出），档位的「需要账户」提示跟着刷新
+    this._onAccountChanged = () => this.loadAsrTier()
+    try { uni.$on(ACCOUNT_CHANGED_EVENT, this._onAccountChanged) } catch (e) { /* ignore */ }
     // 模型下载进度直接订阅主进程，与组件管理页同一条事件流：
     // 用户在这里点的下载与在设置页点的是同一个下载，两处显示的进度必须一致
     if (host.model) {
@@ -559,6 +567,7 @@ export default {
     if (this._releaseClaim) { this._releaseClaim(); this._releaseClaim = null }
     if (this._pollTimer) clearInterval(this._pollTimer)
     try { if (this._onStopped) uni.$off('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
+    try { if (this._onAccountChanged) uni.$off(ACCOUNT_CHANGED_EVENT, this._onAccountChanged) } catch (e) { /* ignore */ }
     if (this._onDeviceChange && navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
       navigator.mediaDevices.removeEventListener('devicechange', this._onDeviceChange)
     }
@@ -624,6 +633,13 @@ export default {
      */
     async onToggleLocalAsr(on) {
       if (this.tierBusy) return
+      // 关掉「不出本机」= 选平台档：平台档要账户，先就地登录；取消就留在本地档
+      // （登录后置，dev-board#1046）
+      if (!on && this.asrPlatformAvailable && !this.asrAccountConnected
+          && !(await requireAccount({ reason: 'meeting' }))) {
+        await this.loadAsrTier()
+        return
+      }
       this.tierBusy = true
       try {
         if (on) {
@@ -643,6 +659,20 @@ export default {
         await this.loadAsrTier()
         await this.loadMeetings()
       }
+    },
+    /**
+     * 平台档（云端转写）要账户（登录后置，dev-board#1046）。本地档 / 自备凭证不要账户，
+     * 平台档本就不可用（server 模式）时也不拦——那里的出路不是登录。
+     * @returns {Promise<boolean>} 可以继续
+     */
+    async ensurePlatformAccount() {
+      if (this.asrProvider !== 'platform' || !this.asrPlatformAvailable || this.asrAccountConnected) return true
+      const ok = await requireAccount({ reason: 'meeting' })
+      if (ok) await this.loadAsrTier()
+      return ok
+    },
+    async onLoginForPlatform() {
+      await this.ensurePlatformAccount()
     },
     async onRecheckLocalAsr() {
       await refreshLocalAsrReadiness()
@@ -888,6 +918,8 @@ export default {
         uni.showToast({ title: NOTICE_COPY.blockBeforeUpload, icon: 'none' })
         return
       }
+      // 平台档还没登录账户：先就地登录（登录后置，dev-board#1046），再走扣费确认
+      if (!(await this.ensurePlatformAccount())) return
       // 平台档一提交就预扣 Credits：每次都先确认（dev-board#968）
       if (!(await confirmPaidTranscription({ durationMs: m.durationMs, projectId: this.projectId }))) return
       try {
@@ -895,6 +927,8 @@ export default {
         await this.loadMeetings()
         this.expandedId = m.id
       } catch (e) {
+        // 后端 4011 已由 api.js 就地弹过登录层：刷新档位，toast 里是「已登录，请再操作一次」
+        if (isAccountLoginRetry(e)) await this.loadAsrTier()
         uni.showToast({ title: this.$t('meeting.submitTranscribeFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
     },

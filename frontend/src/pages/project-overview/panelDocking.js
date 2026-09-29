@@ -20,6 +20,7 @@ import {
   resolveDock,
   sanitizeDockOverrides,
 } from '@/config/panelRegistry.js'
+import { NO_PROJECT_DEFAULT_PANE } from './noProjectShell.js'
 
 const DOCK_STORAGE_KEY = 'awd_panel_docks'
 
@@ -90,7 +91,8 @@ export const panelDockingMethods = {
 
     const leftKeys = docks.left.map((p) => p.key)
     if (isMovablePanel(this.leftPaneKey) && !leftKeys.includes(this.leftPaneKey)) {
-      this.leftPaneKey = 'files'
+      // 无项目态没有资源管理器，回落「项目」面板（dev-board#1047）
+      this.leftPaneKey = this.hasProject ? 'files' : NO_PROJECT_DEFAULT_PANE
     }
   },
 

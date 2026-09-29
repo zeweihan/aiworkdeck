@@ -490,17 +490,10 @@ html.is-desktop .project-header .switcher-menu,
 html.is-desktop .project-header .project-status-badge,
 html.is-desktop .project-header .work-status-chip,
 html.is-desktop .project-header .collab-chip,
-html.is-desktop .project-header .trial-chip,
 html.is-desktop .project-header .header-center,
 html.is-desktop .project-header .header-tools,
 html.is-desktop .project-header .top-bar-btn,
-html.is-desktop .project-header .icon-btn,
-/* 右上角头像（2026-08-19 从 rail 底部搬上来；2026-08-27 下拉恢复成两项：
-   设置 / 退出登录，dev-board#205——菜单与全屏 mask 都要能点）。 */
-html.is-desktop .project-header .header-account,
-html.is-desktop .project-header .avatar-btn,
-html.is-desktop .project-header .avatar-menu,
-html.is-desktop .project-header .avatar-menu-mask {
+html.is-desktop .project-header .icon-btn {
     -webkit-app-region: no-drag;
 }
 
@@ -520,6 +513,8 @@ html.is-desktop .project-header .avatar-menu-mask {
 
    **新增全屏浮层要加进这张名单**；frontend/tests/window-chrome/titlebar-drag-region.test.mjs
    会扫出漏掉的那个。真不吃鼠标事件的层（pointer-events: none）才进那份 EXEMPT。 */
+html.is-desktop .account-entry-mask,
+html.is-desktop .awd-login-mask,
 html.is-desktop .amb-mask,
 html.is-desktop .awd-dialog-mask,
 html.is-desktop .awd-dlg-mask,
@@ -558,6 +553,7 @@ html.is-desktop .sm-dialog-mask,
 html.is-desktop .task-dialog-mask,
 html.is-desktop .theme-menu-mask,
 html.is-desktop .webmark-drag-overlay,
+html.is-desktop .welcome-dialog-mask,
 html.is-desktop .workdeck-dialog-mask {
     -webkit-app-region: no-drag;
 }

@@ -59,7 +59,7 @@ const nodeOps = {
 }
 const { createApp } = createRenderer(nodeOps)
 
-function mountWorkbench() {
+function mountWorkbench({ hasProject = true } = {}) {
   const stats = { mounted: 0, unmounted: 0, streamAborted: 0, resized: 0, historyFetched: 0 }
   const ChatInterface = defineComponent({
     setup(_, { expose }) {
@@ -83,7 +83,8 @@ function mountWorkbench() {
   const App = defineComponent({
     components: { ChatInterface },
     render,
-    data: () => ({ showAiPanel: false, aiPanelMounted: false }),
+    // hasProject：无项目态（dev-board#1047）右栏 AI 不渲染，模板与 toggleAiPanel 都读它
+    data: () => ({ showAiPanel: false, aiPanelMounted: false, hasProject }),
     methods: {
       toggleAiPanel,
       triggerWorkbenchResize() { stats.resized++ },
@@ -147,4 +148,13 @@ test('右栏从没打开过时不挂 ChatInterface（保留懒挂载，不给启
 
 test('工作台 data 里声明了懒挂载标志 aiPanelMounted 且默认 false', () => {
   assert.match(page, /\n\s+aiPanelMounted: false,/)
+})
+
+test('无项目态（dev-board#1047）：开关右栏什么都不挂——会话按项目隔离，AI 面板不渲染', async () => {
+  const { vm, stats } = mountWorkbench({ hasProject: false })
+  vm.toggleAiPanel(); await nextTick(); await nextTick()
+  assert.equal(vm.showAiPanel, false, '无项目态 toggleAiPanel 应直接返回')
+  assert.equal(stats.mounted, 0)
+  assert.equal(vm.$refs.chatInterface ?? null, null)
+  assert.equal(stats.historyFetched, 0, '无项目态不拉会话历史（conversations 接口 projectId 必填）')
 })

@@ -7,7 +7,7 @@ export default {
   pullFromTeamLibrary: 'Pull a Case File from the Team Case Library',
   // Lands on the Personal group of the unified Settings page (merged 2026-08-20; key kept)
   personalCenter: 'Settings',
-  // Header "Calendar" entry, opens pages/calendar/calendar (cross-project task calendar)
+  // "Calendar" entry, opens the workbench Schedule tab (tabType:'calendar', openCalendarTab; pages/calendar/calendar is only a deep-link shell)
   calendarEntry: 'Calendar',
   allProjects: 'All Projects',
   loading: 'Loading…',

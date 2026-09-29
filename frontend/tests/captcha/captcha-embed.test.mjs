@@ -203,7 +203,8 @@ test('接线：turnstile 分支不再本页 render，走 iframe + 两道过滤 +
   assert.match(src, /removeEventListener\('message'/)
   // 阿里云分支原样保留
   assert.match(src, /window\.AliyunCaptchaConfig = \{ region: 'cn', prefix: config\.prefix \}/)
-  const unlock = read('pages/unlock/unlock.vue')
+  // 登录卡抽成组件（登录后置，dev-board#1046）：解锁页与就地登录弹层共用，控件的装配/拆除在组件里
+  const unlock = read('components/account/AccountLoginDialog.vue')
   assert.match(unlock, /teardownCaptcha\(\)/)
   assert.match(unlock, /'is-embed': captcha && captcha\.provider === 'turnstile'/)
 })

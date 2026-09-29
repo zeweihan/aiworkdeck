@@ -11,7 +11,6 @@ import assert from 'node:assert/strict'
 import JSZip from 'jszip'
 import { fileURLToPath } from 'node:url'
 import { pickCdpPort, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
-import { ensureUnlocked } from '../_lib/license-gate.mjs'
 import { prepareWritingIsolation } from '../_lib/writing-isolation.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -48,9 +47,7 @@ for (const [label, url] of [['Vite', DEVURL], ['后端', BACKEND + '/api/skills/
 }
 const isolation = prepareWritingIsolation({ root: process.env.WRITING_E2E_ROOT, desktopDir,
   editorDist: process.env.WRITING_E2E_EDITOR_DIST || path.join(frontendDir, 'dist/zetaoffice'), backendPort: BACKEND_PORT })
-await ensureUnlocked(api)
-const wizard = await api('/api/admin/wizard')
-if (wizard?.initialized === false) await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
+// 启动不设门（dev-board#1027 登录后置）：隔离后端从 mode=none、未连账户起跑，不碰授权与 AI 配置。
 
 // Synthetic legal prose is the only candidate source. No completion/learn setup.
 const zip = new JSZip()
@@ -130,7 +127,8 @@ try {
   let workbenchReady = false
   let workbenchSnapshot = null
   for (let attempt = 0; attempt < 20 && !workbenchReady; attempt++) {
-    if (!page.url().includes('project-overview/project-overview')) {
+    // 壳的首启导航落在无项目态外壳（同一路由、不带 id，dev-board#1047），只认带本项目 id 的工作台
+    if (!page.url().includes('project-overview/project-overview?id=' + project.id)) {
       await page.goto(workbenchUrl, { waitUntil: 'domcontentloaded' })
     }
     workbenchSnapshot = await page.evaluate((expectedId) => {

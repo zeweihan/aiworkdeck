@@ -34,8 +34,8 @@
               <view class="mdp-btn primary" @tap="openPurchase">
                 <text>{{ $t('market.buyWithPrice', { price: priceText }) }}</text>
               </view>
-              <view v-if="paidStateValue === 'need-account'" class="mdp-btn" @tap="goToAccountSettings">
-                <text>{{ $t('market.goConnectAccount') }}</text>
+              <view v-if="paidStateValue === 'need-account'" class="mdp-btn" :class="{ busy }" @tap="loginThenContinue">
+                <text>{{ $t('account.accountEntry.loginAccountButton') }}</text>
               </view>
               <view v-else class="mdp-btn" :class="{ busy }" @tap="onPurchasedRefresh">
                 <text>{{ busy ? $t('market.refreshing') : $t('market.alreadyPurchasedRefresh') }}</text>
@@ -273,6 +273,7 @@ import { isPanelSkill, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
+import { requireAccount, isAccountLoginRetry } from '@/utils/requireAccount.js'
 import { t } from '@/i18n'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -796,10 +797,15 @@ export default {
       if (this.leaveWorkbench) return this.leaveWorkbench('/pages/admin/admin?nav=updates')
       uni.navigateTo({ url: '/pages/admin/admin?nav=updates' })
     },
-    goToAccountSettings() {
-      // 工作台里设置是标签，不跳页（dev-board#582）
-      if (this.openSettingsTab) return this.openSettingsTab({ nav: 'account' })
-      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+    /**
+     * 付费项 + 未登录 → 就地登录后继续（登录后置，dev-board#1046）。登录成功之后与
+     * 「我已购买，刷新」是同一件事：同步权益、重拉，已购就顺手装上；没买过就停在「购买」。
+     */
+    async loginThenContinue() {
+      if (this.busy) return
+      const ok = await requireAccount({ reason: 'market' })
+      if (!ok) return
+      await this.onPurchasedRefresh()
     },
     /**
      * 「我已购买，刷新」：先让后端同步一次官网权益（本地缓存不刷新是看不到刚买的东西的），
@@ -833,6 +839,8 @@ export default {
         this.notifyChanged()
       } catch (e) {
         console.error('安装 Skill 失败:', e)
+        // 后端 4011 已由 api.js 就地弹过登录层：登录成功就重拉详情，按钮按新账户的已购状态显示
+        if (isAccountLoginRetry(e)) await this.reload()
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.busy = false
@@ -881,6 +889,7 @@ export default {
         this.notifyChanged()
       } catch (e) {
         console.error('安装插件失败:', e)
+        if (isAccountLoginRetry(e)) await this.reload()
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.busy = false

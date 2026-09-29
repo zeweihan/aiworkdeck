@@ -249,6 +249,7 @@ import { getInitial } from '@/utils/textInitial.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
+import { requireAccount } from '@/utils/requireAccount.js'
 import { readLocalMode } from '@/services/accountProfile.js'
 import {
   TRACK, resolveTrack, isWorthLooking, lookupIdentifier, inviteLinkFor, notFoundPresentation,
@@ -477,6 +478,10 @@ export default {
     },
     async onShareToLibrary() {
       if (this.sharing) return
+      // 没有配置好的案件库连接、要走官方案件库：先就地登录 AI WorkDeck 账户
+      // （登录后置，dev-board#1046）。取消就停在原地
+      if (!this.connections.length && this.officialAvailable
+          && !(await requireAccount({ reason: 'team' }))) return
       this.sharing = true
       this.errorMessage = ''
       try {

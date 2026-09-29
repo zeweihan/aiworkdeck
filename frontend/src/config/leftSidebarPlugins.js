@@ -67,6 +67,18 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    // 项目（dev-board#1047）：全部案卷的列表（原 pages/project-list 整页，内容组件
+    // components/project-list/ProjectListPane.vue）。启动落工作台外壳之后，「换一个项目 /
+    // 打开一个项目」就是这里。有无项目两态都在 rail 上；无项目态下 rail 只剩它与几个全局项
+    // （见 pages/project-overview/noProjectShell.js 的 NO_PROJECT_PANE_KEYS）。
+    key: 'projects',
+    label: t('config.sidebar.projects'),
+    svgPaths: [
+      { d: 'M20 17a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2Z' },
+      { d: 'M2 8v11a2 2 0 0 0 2 2h14' }
+    ]
+  },
+  {
     key: 'files',
     label: t('config.sidebar.files'),
     svgPaths: [

@@ -27,7 +27,8 @@ test('非 local-mode 或尚未读到形态：一律照常显示', () => {
 test('工作台顶栏与项目列表两处都接了这条判定', () => {
   const po = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
   assert.match(po, /v-if="!soloLocalProject"[^>]*>\{\{ \$t\('workbench\.managerLabel'/)
-  const pl = readFileSync(new URL('../../src/pages/project-list/project-list.vue', import.meta.url), 'utf8')
+  // 项目列表内容体已抽成左栏「项目」面板（dev-board#1047），皇冠门控随之搬家
+  const pl = readFileSync(new URL('../../src/components/project-list/ProjectListPane.vue', import.meta.url), 'utf8')
   const crowns = pl.match(/class="manager-avatar-wrapper" v-if="project\.managerId && !isSoloLocal\(project\)"/g) || []
   assert.equal(crowns.length, 2, '卡片视图与表格视图两处皇冠都要按单人本机项目隐藏')
 })

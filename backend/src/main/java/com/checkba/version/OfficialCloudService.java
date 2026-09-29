@@ -103,8 +103,11 @@ public class OfficialCloudService {
         }
         String key = accountService.currentKeyOrNull();
         if (key == null) {
-            // 文案不含「登录」「未授权」「请先」——那三个词会被读成掉线（licensing 地雷 1）
-            throw VersionException.userFacing(LangText.of(
+            // 文案不含「登录」「未授权」「请先」——那三个词会被读成掉线（licensing 地雷 1）。
+            // 抛 AccountException(NOT_CONNECTED, reason=team)：全局处理器回 4011，
+            // 前端就地弹登录层、登录后由调用方重试（登录后置，dev-board#1046）
+            throw com.checkba.service.account.AccountRequired.exception(
+                    com.checkba.service.account.AccountRequired.REASON_TEAM, LangText.of(
                     "这台电脑还没连上 AI WorkDeck 账户，连好账户就能用官方团队案件库了",
                     "This computer is not linked to an AI WorkDeck account yet — link one to use the official Team Case Library"));
         }

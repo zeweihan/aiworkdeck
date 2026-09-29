@@ -12,8 +12,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * 换账户后必须整套作废的机器级缓存清单——本用例只补 dev-board#183/#184 新加的一项：
@@ -28,6 +33,9 @@ class AccountSwitchCleanupTest {
     com.checkba.service.team.TeamUsageSettings teamUsageSettings;
     com.checkba.service.team.TeamSettingsCache teamSettingsCache;
     com.checkba.service.team.TeamProjectNameNotice teamProjectNameNotice;
+    com.checkba.service.SystemSettingService systemSettingService;
+    AccountIdentitySync identitySync;
+    ChatModelFactory chatModelFactory;
 
     @BeforeEach
     void setUp() {
@@ -36,13 +44,16 @@ class AccountSwitchCleanupTest {
         PlatformAiChannel platformAiChannel = mock(PlatformAiChannel.class);
         PlatformCreditsGate platformCreditsGate = mock(PlatformCreditsGate.class);
         PlatformUsageAccountant platformUsageAccountant = mock(PlatformUsageAccountant.class);
-        ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
+        chatModelFactory = mock(ChatModelFactory.class);
         teamUsageSettings = mock(com.checkba.service.team.TeamUsageSettings.class);
         teamSettingsCache = mock(com.checkba.service.team.TeamSettingsCache.class);
         teamProjectNameNotice = mock(com.checkba.service.team.TeamProjectNameNotice.class);
+        systemSettingService = mock(com.checkba.service.SystemSettingService.class);
+        identitySync = mock(AccountIdentitySync.class);
         cleanup = new AccountSwitchCleanup(accountService, entitlementService, platformAiChannel,
                 platformCreditsGate, platformUsageAccountant, chatModelFactory,
-                teamUsageSettings, teamSettingsCache, teamProjectNameNotice);
+                teamUsageSettings, teamSettingsCache, teamProjectNameNotice,
+                systemSettingService, identitySync);
     }
 
     @Test
@@ -79,5 +90,72 @@ class AccountSwitchCleanupTest {
 
         cleanup.afterDisconnect();
         verify(teamProjectNameNotice, org.mockito.Mockito.times(2)).reset();
+    }
+
+    // ==================== 换账户提示与断开回退（登录后置 §5.5，dev-board#1046） ====================
+
+    @Test
+    @DisplayName("第一次连账户：不提示「换了账户」，但记下这次的账户 id")
+    void firstConnectRecordsWithoutFlag() {
+        when(accountService.currentAccountIdOrNull()).thenReturn("acc_a");
+        when(systemSettingService.get(AccountSwitchCleanup.KEY_LAST_ACCOUNT_ID, null)).thenReturn(null);
+
+        assertFalse(cleanup.afterConnect());
+        verify(systemSettingService).set(AccountSwitchCleanup.KEY_LAST_ACCOUNT_ID, "acc_a");
+    }
+
+    @Test
+    @DisplayName("同一个账户重新登录（每次登录官网都换一把新 Key）：不提示")
+    void sameAccountAgainIsNotASwitch() {
+        when(accountService.currentAccountIdOrNull()).thenReturn("acc_a");
+        when(systemSettingService.get(AccountSwitchCleanup.KEY_LAST_ACCOUNT_ID, null)).thenReturn("acc_a");
+
+        assertFalse(cleanup.afterConnect());
+        verify(systemSettingService, never()).set(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("换了一个账户：提示一次，并把记录改成新账户（下次同一账户不再提示）")
+    void differentAccountFlagsOnce() {
+        when(accountService.currentAccountIdOrNull()).thenReturn("acc_b");
+        when(systemSettingService.get(AccountSwitchCleanup.KEY_LAST_ACCOUNT_ID, null)).thenReturn("acc_a");
+
+        assertTrue(cleanup.afterConnect());
+        verify(systemSettingService).set(AccountSwitchCleanup.KEY_LAST_ACCOUNT_ID, "acc_b");
+    }
+
+    @Test
+    @DisplayName("官网没给 accountId（旧盘/契约漂移）：不猜，不提示也不覆盖旧记录")
+    void unknownAccountIdNeverFlags() {
+        when(accountService.currentAccountIdOrNull()).thenReturn(null);
+
+        assertFalse(cleanup.afterConnect());
+        verify(systemSettingService, never()).set(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("单机版断开账户：AI 供应商不降级（下一条消息由 4011 → 登录弹层承接，dev-board#1046）")
+    void localModeDisconnectKeepsPlatformProvider() {
+        org.springframework.test.util.ReflectionTestUtils.setField(cleanup, "localMode", true);
+
+        org.junit.jupiter.api.Assertions.assertNull(cleanup.afterDisconnect());
+        verify(chatModelFactory, never()).demotePlatformProvider();
+    }
+
+    @Test
+    @DisplayName("团队服务器断开机器级账户：仍降级（原行为）并把回落值交给调用方")
+    void serverModeDisconnectStillDemotes() {
+        when(chatModelFactory.demotePlatformProvider()).thenReturn("OLLAMA");
+
+        org.junit.jupiter.api.Assertions.assertEquals("OLLAMA", cleanup.afterDisconnect());
+    }
+
+    @Test
+    @DisplayName("断开账户：本机身份行回退哨兵名与空头像；账户记录保留（下次登录才比得出换没换人）")
+    void disconnectResetsIdentityButKeepsRecord() {
+        cleanup.afterDisconnect();
+
+        verify(identitySync).resetToLocal();
+        verify(systemSettingService, never()).set(anyString(), anyString());
     }
 }

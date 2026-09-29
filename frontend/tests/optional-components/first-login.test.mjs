@@ -101,11 +101,14 @@ test('面板：「稍后再说」写标记并关闭；「立即下载所选」�
   assert.ok(!/uni\.setStorageSync/.test(dialogSrc), '「提示过」不许落 localStorage/uni storage')
 })
 
-const listSrc = readFileSync(new URL('../../src/pages/project-list/project-list.vue', import.meta.url), 'utf8')
+// 2026-09-29（dev-board#1047）：启动落点从项目列表页换成工作台外壳，首次启动的面板跟着搬到工作台 onLoad
+const listSrc = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
 
 test('触发挂 onLoad 而不是 onShow（从项目页返回会反复触发 onShow）', () => {
   assert.match(listSrc, /maybePromptOptionalComponents/)
-  const onShow = listSrc.slice(listSrc.indexOf('onShow()'), listSrc.indexOf('methods:'))
+  const onLoad = listSrc.slice(listSrc.indexOf('  onLoad(query) {'), listSrc.indexOf('  onShow() {'))
+  assert.match(onLoad, /this\.maybePromptOptionalComponents\(\)/, 'onLoad 里要触发首次启动面板')
+  const onShow = listSrc.slice(listSrc.indexOf('  onShow() {'), listSrc.indexOf('  onHide() {'))
   assert.ok(!/maybePromptOptionalComponents/.test(onShow), 'onShow 里不许挂首次登录面板')
 })
 

@@ -71,10 +71,9 @@ filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bri
 
 **template**
 - project-header 顶部条；header-tools（开关：左栏、底栏、右栏、分屏、截图OCR、浏览器、活动记录、客户视图）。
-  **活动记录右侧新增 `.header-account`**（头像 `.avatar-btn` + 下拉 `.avatar-menu`，2026-08-19
-  从 rail 底部搬上来）。它刻意挂在 `isClientView` 分支**之外**——rail 上那个头像本来
-  就对客户也渲染。2026-08-20 起下拉**只有「设置」一项**（个人中心已并入），
-  这一项对客户同样渲染，开中栏 tab。
+  **顶栏不再放账户态**（dev-board#1047，2026-09-29）：原活动记录右侧的 `.header-account`（头像 + 下拉）、
+  试用 / 宽限 chip 与余额不足 chip 全部挪到 rail 底部的账户入口（`AccountRailEntry`，见「工作台无项目态与欢迎标签」一节）。
+  无项目态下顶栏左侧只有应用名（没有项目切换器 / 协作 chip / 负责人一行），AI 开关、截图、工作记录三个按钮不渲染。
 - left-rail：插件按钮 v-for LEFT_SIDEBAR_PLUGINS（@tap toggleLeftPane）、spacer、暂存区、成员堆叠。
   **齿轮与头像都不在 rail 上了**（2026-08-19）；插件广场按钮也不在了，它升成了
   LEFT_SIDEBAR_PLUGINS 数组里的一项（key `market`）。
@@ -120,14 +119,15 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 **rail 从上到下的顺序就是 `LEFT_SIDEBAR_PLUGINS` 数组的顺序，只有这一个出处。**
 2026-08-19 起「项目概览」与「插件中心」也收进了数组——它们走的都是普通的
 `toggleLeftPane` 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。
-当前顺序：**home(项目概览) → files(资源管理器) → search(搜索) → market(插件中心) →
+当前顺序：**home(项目概览) → projects(项目，dev-board#1047) → files(资源管理器) → search(搜索) → market(插件中心) →
 dev(插件开发，requiresSkill 'plugin-dev' 门控，dev-board#61) → voice(语音) →
 desensitize(文件脱敏) → litigation-visual(门控) → calendar(日历)**。
 **版本记录同一天又挪出了这个数组**（一进一出）：维护者认为它视觉上该挨着
 「暂存区」（都是围绕本机改动/存档的动作），不该跟文件树/搜索这类常驻浏览面板
 混排。定义照 `DD_FILES_PLUGIN` 的先例独立导出成 `VERSION_PLUGIN`，进
 `OFF_RAIL_PLUGINS`（`getLeftSidebarPlugin('version')` 与 `leftPaneTitle` 兜底照常能查到），
-rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版本记录 → 成员堆叠**三项，
+rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版本记录 → 收起左栏 → 成员堆叠 → 反馈 → 账户入口 → 设置齿轮**
+（后两项 dev-board#1047 新增；暂存区 / 版本 / 成员在无项目态不渲染），最初的三项是**暂存区 → 版本记录 → 成员堆叠**，
 版本记录夹在中间；`toggleLeftPane('version')` 语义、面板本身一行未动。
 
 - **home（项目概览）**：内容是 `components/project-home/ProjectHomePane.vue`，传 `compact`。
@@ -203,12 +203,15 @@ type/priority/notes/assigneeId/remindBefore 与多文件关联表 `project_task_
 - **工作台**：rail `calendar` 项标签「日程」+ `.rail-badge` 徽标（当前项目 overdue+today，逾期>0 变红，直读 `taskStore` 响应式缓存）；
   `ProjectCalendarPane.vue` 是议程式面板（**不再用 FullCalendar**，可静态 import；`fileFilter` prop 支持只看某文件）；
   `project-overview.vue` 挂**一个**全局 `<TaskDialog>`（`openTaskDialog`），面板/文件树/命令/概览页共用；
-  头像下拉「我的日程」与命令 `go.calendar` 都走 `leaveWorkbench` 再 reLaunch 日程页（`check:nav` 守着，下拉动作项恰好三项）；命令 `task.new` 开弹窗。
+  账户下拉「我的日程」与命令 `go.calendar` 都走 `goCalendar` → `openCalendarTab()` 开中栏「日程」标签（dev-board#1048，不再离开工作台；
+  `check:nav` 守着，下拉动作项恰好三项）；日程面板底部「查看全盘日程」emit `open-calendar` 同样落到这个标签；命令 `task.new` 开弹窗。
 - **文件树**：右键「添加事项…」（presetFileIds）/「查看事项 (N)」（打开日程面板并按文件过滤）；文件名右侧到期徽标按 `fileDueIndex` 一次建索引，
   名字省略号优先于徽标。旧的内联「设置截止日」弹窗已删。
-- **全局日程页 `pages/calendar/calendar`**：自绘页头（`headerToolbar:false`），FullCalendar 主题接 `--awd-*` 令牌，`eventContent` 自定义；
-  `?focus=<id>` 定位并开编辑，`?group=overdue|today|week` 议程滚到分组；页头自带「返回」，所以在 `utils/globalBack.js` 的 `SELF_NAV_ROUTES` 里。
-  `loadSeq` 竞态护栏保留（`tests/project-home/calendar-load-race.test.mjs` 现在注入 `loadGlobal`）。
+- **日程主体 `components/calendar/CalendarPane.vue`**（dev-board#1048 从 `pages/calendar/calendar` 抽出）：自绘页头（`headerToolbar:false`），
+  FullCalendar 主题接 `--awd-*` 令牌，`eventContent` 自定义；props `focus`（定位并开编辑）/ `group`（overdue|today|week|later 议程滚到分组）。
+  `loadSeq` 竞态护栏保留（`tests/project-home/calendar-load-race.test.mjs` 注入 `loadGlobal`）。宿主是工作台中栏「日程」标签，
+  契约见下面「日程标签与标签快照」一节。`pages/calendar/calendar` 退成直链薄壳（进来即 reLaunch 工作台开日程标签），
+  仍在 `utils/globalBack.js` 的 `SELF_NAV_ROUTES` 里（本页不渲染内容）。
 - **概览页 `TaskSchedule.vue` / 设置页 `PersonalTodosPanel.vue`**：都是 TaskRow + 全局/锁定项目的 TaskDialog；根类名 `task-schedule` / `panel-todos` 是 app-e2e 锚点。
 
 测试：`npm run test:calendar`（tests/calendar/）、`test:project-home` 里的 project-calendar-pane / workbench-task-entries / task-schedule / calendar-load-race。
@@ -336,6 +339,11 @@ ChatInterface 的 `.input-card.is-drop-target`，由新 prop `:drag-active="drag
 
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
+> **2026-09-29（dev-board#1047）起头像不在顶栏了**：它连同下拉（我的日程 / 设置 / 退出登录）搬到 rail 底部的
+> `components/account/AccountRailEntry.vue`，rail 底部另有一个设置齿轮直开设置标签。下文关于「设置标签」本身的
+> 契约全部仍然成立，关于 `.header-account` / `.avatar-btn` 位置的描述是历史。
+
+
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
 `.header-account`：头像 `.avatar-btn`，**点击直接 `goToSystemSettings` 开设置标签，
 没有下拉了**（dev-board#96）。沿革：2026-08-20 个人中心并进系统设置后下拉只剩一项
@@ -414,18 +422,21 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 | 术语 | 指代 | 路由 |
 |---|---|---|
 | **工作台** | 现有四列布局的干活界面 | `pages/project-overview/project-overview`（**刻意不改名**，改名要动 9 处硬编码 URL + 九个模块文件 + e2e + 埋点 path 维度） |
-| **项目列表页** | 2026-08 从个人中心 projects tab 搬出的独立页 | `pages/project-list/project-list` |
+| **项目列表页** | 2026-08 从个人中心 projects tab 搬出的独立页；2026-09-29 起退成**直链薄壳**，内容本体是工作台左栏「项目」面板（`components/project-list/ProjectListPane.vue`） | `pages/project-list/project-list` |
 | **项目概览页** | 一页纸卷轴（档案头/统计条/动态/日程/AI 对话） | `pages/project-home/project-home` |
 
 代价是「project-overview」在代码里指工作台、在产品语言里指项目概览页。写代码时以路由为准，写文案时以术语表为准。
 
 **两级导航（2026-08 二改，原三级已收）**：项目列表页 → 工作台；**概览是工作台里的一个标签**。
 总规则三条——
-① **启动一律落项目列表页**（`launch.vue` 不再读 `checkba_last_project_id` 直达工作台）。理由是维护者的产品口径：开机先看见自己有哪些案卷。**其余四条「直达工作台」的出口一条都不改**（浏览器会话恢复 `login.vue`、应用菜单最近打开 `appMenuBridge.js`、打开本地文件夹/文件 `ideOpen.js`、顶栏最近项目切换器 `switchToProject`）——那几处的用户意图明确指向某一个项目；
+① **启动一律落工作台外壳（无项目态，不带 `?id=`），中央打开「欢迎」标签**（dev-board#1047，2026-09-29，推翻 2026-08 的「启动一律落项目列表页」）。
+`launch.vue` 的分流只剩：非桌面 → login；后端就绪轮询（`/api/license/status` 只当探针，`unlocked` 不参与分流，解锁门删了）；
+本机身份 needsSelection → identity；其余 → `uni.reLaunch({ url: '/pages/project-overview/project-overview' })`。
+`getMyProjects` 不再是分流条件（拉不到也照样进外壳）。「开机先看见自己有哪些案卷」由欢迎标签的 Recent 与左栏「项目」面板承担。**其余四条「直达工作台」的出口一条都不改**（浏览器会话恢复 `login.vue`、应用菜单最近打开 `appMenuBridge.js`、打开本地文件夹/文件 `ideOpen.js`、顶栏最近项目切换器 `switchToProject`）——那几处的用户意图明确指向某一个项目；
 ② **所有「去我的项目」的落点统一到项目列表页**（`launch.vue` 启动、`login.vue` 四处、`newproject/index.vue` 返回、工作台 `goAllProjects`）；
 ③ **列表点卡片 `reLaunch` 直达工作台**，中间不再插概览页。
 
-导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|**project-list**（其余一律）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是左栏面板**（2026-08-19 从中栏标签改过来；rail 第一个按钮 → `toggleLeftPane('home')`，内容组件 `components/project-home/ProjectHomePane.vue` 传 `compact`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个 `goProjectHome`）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；**overview 既不跳 admin 也不跳 userprofile**：设置是中栏标签，个人中心 2026-08-20 并进了它（见下一节）；`pages/userprofile` 与 `pages/admin` 两个薄壳页都还在，只留给直链、浏览器端与仓里既有的 navigateTo（前者现在挂的也是 `AdminPane`，落在个人组的「工作记录」）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；**newproject →project-list 同一条件分流**（上一页是列表 `navigateBack`，否则 `redirectTo`；菜单「文件 > 新建项目…」是 reLaunch 进来的单页栈，navigateTo 会压成两层让全局返回键残留，v0.49.0 BUG-07，`check:nav` 守着）；退出 reLaunch login。
+导航流：launch reLaunch→login（非桌面）|identity（本机工作区待选定）|**project-overview 无项目态外壳**（其余一律；2026-09-29 前这里还有 unlock / wizard / project-list 三个落点）；**project-list 薄壳**：进来即 `redirectTo('/pages/project-overview/project-overview?pane=projects')`（栈里还压着别的页时改 `reLaunch`，防两个工作台实例并存），工作台 `onLoad` 读 `?pane=projects` 打开左栏「项目」面板；**工作台「全部项目…」`.switcher-all` 不再离开工作台**，调 `openProjectsPane()`；下面这段里「project-overview reLaunch→project-list」是 2026-09-29 之前的形态；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是左栏面板**（2026-08-19 从中栏标签改过来；rail 第一个按钮 → `toggleLeftPane('home')`，内容组件 `components/project-home/ProjectHomePane.vue` 传 `compact`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个 `goProjectHome`）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；**overview 既不跳 admin 也不跳 userprofile**：设置是中栏标签，个人中心 2026-08-20 并进了它（见下一节）；`pages/userprofile` 与 `pages/admin` 两个薄壳页都还在，只留给直链、浏览器端与仓里既有的 navigateTo（前者现在挂的也是 `AdminPane`，落在个人组的「工作记录」）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；**newproject →project-list 同一条件分流**（上一页是列表 `navigateBack`，否则 `redirectTo`；菜单「文件 > 新建项目…」是 reLaunch 进来的单页栈，navigateTo 会压成两层让全局返回键残留，v0.49.0 BUG-07，`check:nav` 守着）；退出 reLaunch login。
 
 **客户门户构建（dev-board#1050）另有一条独立的导航流**：`pages/client-portal/client-portal` 只在 `npm run build:client-portal`（条件编译 `CLIENT_PORTAL`）里注册且是入口页，普通 H5/桌面构建里没有它；门户 reLaunch→project-list（CLIENT 视图）→ project-overview。门户包里只有这三页，`utils/clientPortal.js` 在 `main.js` 用 `uni.addInterceptor` 把其余目标（login/launch/calendar/admin……）改写回门户。pages.json 的条件编译块之间的逗号摆法保证两种构建展开后、以及 `check:nav` 剥注释整份读时都是合法 JSON，改 pages.json 时别打乱。契约全文见 version-control.md「客户门户与尽调清单上云」。
 **全局返回键**：`utils/globalBack.js`，body 级单例（同拖拽条/反馈浮窗），落在各页顶部那条 38px 拖拽条里；可见判据只有「页面栈深度 > 1」，工作台与 project-home 走豁免名单（自带左上角导航）。新页不需要各自补返回按钮。
@@ -907,6 +918,120 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 通过了 `ContextAssemblerService` 只判 `isBlank()` 的守卫，被当成文档正文写进
 `<active_document>` CDATA。后端同批补了第二道（`isToolFailureText`，见 ai-chat.md）。
 
+## 工作台无项目态与欢迎标签（dev-board#1047，2026-09-29）
+
+规格：`docs/superpowers/specs/2026-09-29-defer-login-welcome-tab-design.md` §3 §4 §6。启动落不带 `?id=` 的工作台外壳，
+此前这是一个没设计过的半空壳（十来个面板带 `projectId=null` 空转、偶发 `/api/projects/null/...`），现在有明确边界。
+
+**判据只有一个**：计算属性 `hasProject`（`projectId` 非空且是数字）。纯函数与名单在
+`pages/project-overview/noProjectShell.js`（零依赖，`NO_PROJECT_PANE_KEYS` / `isPaneAllowedWithoutProject` / `workbenchStorageKey`）。
+
+| 区域 | 有项目 | 无项目 |
+|---|---|---|
+| rail 上半 | 现状 | 只剩全局面板：**项目**、插件中心、日程（+ 被停到左栏的剪贴板）；动态插件不上 rail |
+| rail 底部 | 暂存区 / 版本 / 收起 / 成员 / 反馈 / 账户 / 设置 | 收起 / 反馈 / 账户 / 设置 |
+| 左栏面板 | 现状 | 只挂 `projects` / `calendar`（读全局事项）/ `market` / `clipboard`；`toggleLeftPane` 第一行就拦项目面板的 key（菜单、命令面板、存量 storage 都可能送进来），默认面板 `projects` |
+| 中央 | 标签 | 标签；「启动时显示欢迎页」开着就自动开欢迎标签，关着停在空态（一行提示 + 「打开欢迎页」链接） |
+| 右栏 AI | 现状 | **不渲染**（`v-if="aiPanelMounted && hasProject"`，`toggleAiPanel` / `resolveChatInterface` 直接返回并提示）——会话按项目隔离 |
+| 顶栏 | 项目名切换器、协作 chip、负责人一行 | 应用名；AI 开关、截图、工作记录三个按钮不渲染 |
+| 暂存区 | `ensureStagingFolder` | 不调用（它留在 `onLoad` 的 `query.id` 分支里，`check:nav` 守着） |
+| 底栏 / 右栏停靠 | 现状 | `panelDocks` 只留剪贴板（收藏夹 / 语音 / 依据都挂在项目上） |
+| Cmd+P | 快速打开 | 打开左栏「项目」面板（QuickOpenPanel 不挂载） |
+| 存储键 | `project_${id}_leftPaneKey` / `_activeTabsByMode` | `global_leftPaneKey` / `global_activeTabsByMode`（此前写的是 `project_null_*`） |
+
+实测（2026-09-29，隔离后端 + 无头浏览器，启动 → 欢迎 → 访问码弹层 → 关欢迎页重启 → 空态链接重开）：全程 59 个请求、零个 `/api/projects/null/`（项目级请求只有「项目」面板对已存在项目拉成员的 `/api/projects/{1,2,3}/members`）。窗口标题「欢迎 — AI WorkDeck」，
+`activityTracker` 收到的 projectId 是 `undefined`（JSON 里省略），不是字符串 `"null"`。
+
+**欢迎标签**（`components/welcome/WelcomePane.vue`，方法组 `pages/project-overview/welcomeTab.js`）：
+- `tabType:'welcome'`、id `'welcome'`、单例（左右两窗格任一边开着就只激活），直接 push 进 `leftFiles/rightFiles`，
+  形制同 `admin-settings`。`'welcome'` 在 `fileKind.js` 的 `NON_FILE_TAB_TYPES` 里，id 非数字——`isContextEligibleTab` 恒 false，
+  不当活跃文档、不能拖进 AI 上下文；标签图标 `GLYPHS.welcome`。左右两条 `v-else-if` 渲染链各一份。
+- 结构：品牌标题 / tagline / lead（取 `onboarding.unlock.brand.*`，即 `design/copy/brand-copy.json` 的逐字副本，不自创）→
+  **开始**（新建项目文件夹 / 打开已有文件夹 / 从团队案件库取一份案卷 / 连接团队服务器 / 凭访问码进入案卷）→
+  **最近**（最多 8 条，最近打开优先、不足按最近活动补齐，规则在 `components/welcome/welcomeRecent.js`；「更多…」开左栏「项目」面板）→
+  **上手指南**三张卡（官网 `/start`、`/showcase`、`/plugins`，在工作台内置浏览器标签里开）→ 底部「启动时显示欢迎页」+ 匿名统计提示。
+- 动作归宿：新建 / 打开文件夹先 `flushBeforeLeaving()` 再 `runCommandById('file.newProject' | 'file.openFolder')`（与菜单「文件」同一条命令）；
+  取案卷是同一个 `CloudAcceptDialog`；连接团队服务器 = `openSettingsTab({ nav: 'team' })`；访问码 = `components/account/ClientAccessCodeForm.vue`
+  （与登录页「客户」tab 共用，按 `mode` 分两形态）。`mode="login"`（登录页、浏览器端欢迎标签）：api.js 的 `clientLogin`，
+  打的就是页面所在的服务器，成功后 CLIENT 进 `?id=<projectId>`。`mode="portal"`（桌面端欢迎标签，**dev-board#1050 定稿契约**）：
+  不登录本应用、不经本机回环后端，只收一个访问码，用系统浏览器（`utils/externalLink.js` 的 `openExternalUrl` → `host.shell.openExternal`）
+  打开 `{portalBase}/client/#code=<码>`；`portalBase` 是弹层打开时经 `GET /api/cloud/official` 取的 `serverUrl`（后端
+  `cloud.collab.base-url`），界面不显示、不给改。**码放 fragment 不放 query**（不随请求发给服务器、不进日志与 Referer），
+  门户页读 hash 预填后自己清掉。拼地址的纯函数是组件里导出的 `clientPortalUrl`；取不到根地址时显示 `welcome.portalUnavailable`，不拼假地址。
+  原来那套「可编辑的案件库服务器栏 + 直接 POST 远端 client-login」已撤。
+  进项目走注入的 `leaveWorkbench`。CLIENT 只看得到 Recent 与访问码入口。
+- 「启动时显示欢迎页」本机键 `awd_welcome_show_on_startup`（默认开）；匿名统计提示只在 `/api/telemetry/settings` 任一开关为真时出现，
+  点击开设置的 `telemetry` 栏，「×」关掉后写 `awd_welcome_telemetry_notice_dismissed` 不再出现。
+- 入口：无项目态启动自动开；菜单「帮助 → 欢迎」（`help.welcome` → `wb:openWelcome` → `menuCommands` 的 `openWelcome`）；空态链接。
+
+**左栏「项目」面板**（`key: 'projects'`，`LEFT_SIDEBAR_PLUGINS` 第二项）：`<ProjectListPane :current-project-id="projectId">`，
+两态都可用；当前项目那张卡描边高亮、点它不重进；改当前项目的名字 emit `project-renamed`，顶栏跟上；
+删掉的正是当前项目时回无项目态外壳。面板里的弹窗经 `overlayState.setGlobalOverlay` 让工作台藏 BrowserView。
+
+**rail 底部账户入口**（`components/account/AccountRailEntry.vue`，对应 VS Code 的 Accounts）：两态都渲染、不按 `isClientView` 收。
+「已登录」= 桌面端 `accountConnected`（授权状态的组合口径，spec §5.3 的唯一判据），浏览器端恒真。未登录显示「登录」，
+点击 emit `login` → `onAccountLogin`：就地 `await requireAccount({ reason: 'account' })`（dev-board#1046），不离开工作台，取消什么都不变。
+**登录 / 退出后即时刷新**：入口组件自己订 `awd:account-changed`（带 `connected` 的负载先按它翻转「登录 ⇄ 头像」，宿主 `loggedIn`
+跟上后以 prop 为准），工作台也订同一事件（`refreshAccountState` 重拉授权状态、余额、用户信息；mounted 挂、beforeUnmount 按引用摘，
+不加活跃实例守卫）。退出走 `utils/signOut.js`（单动作，停在当前页）。护栏 `tests/account/rail-entry-account-changed.test.mjs` + `check:nav`。
+已登录显示头像，下拉 = 账户抬头（余额 + 等级）+ 提醒行（原顶栏宽限 / 试用 chip 文案，`accountNoticeText`）+ 我的日程 / 设置 / 退出登录三个动作；
+余额不足或有提醒时头像右上角挂一个点。下拉的全屏 mask 是 `.account-entry-mask`（进了 App.vue 的 no-drag 名单）。
+设置齿轮在账户入口下面，直调 `goToSystemSettings()`。
+
+## 日程标签与标签快照（dev-board#1048 / #1049，2026-09-29）
+
+规格：`docs/superpowers/specs/2026-09-29-defer-login-welcome-tab-design.md` §7 §8。
+
+### 日程标签（`tabType:'calendar'`）
+
+- **单例**：id 恒为 `'calendar'`，左右两窗格任一边开着就只激活并更新深链，不开第二个；新开落当前焦点窗格（未分屏恒为左）。
+  开法在 `pages/project-overview/calendarTab.js`（零依赖方法组，照 `welcomeTab.js`）：`openCalendarTab({ focus, group })` /
+  `closeCalendarTab()` / `onCalendarOpenProject` / `onCalendarOpenFile`。`provide()` 同时注入 `openCalendarTab` 给子组件。
+- **不是文档**：`'calendar'` 在 `fileKind.js` 的 `NON_FILE_TAB_TYPES` 里，id 非数字，`isContextEligibleTab` 恒 false；图标 `ICONS.calendar`。
+- **全局视图**：左右两条 `v-else-if` 渲染链各一份 `<CalendarPane embedded :project-id="null" …>`——有项目态也传 null，
+  跨项目事项全列，筛选弹层里按项目收窄（CalendarPane 在 projectId 为空时才显示项目筛选段）。CalendarPane 是
+  `defineAsyncComponent` 懒加载（带着 FullCalendar，没开过日程标签的会话不付这份成本）。
+- **宿主高度**：`.pane-content` 是定高 flex 列，CalendarPane 根 `flex:1; height:100%`，FullCalendar 按宿主高度排版不会塌成 0；
+  窗格尺寸变化走 `triggerWorkbenchResize` 派发的 window resize，FullCalendar 自己响应。标签形态按**窗格宽**收窄：
+  `.calendar-pane.is-embedded` 开 `container-type: inline-size`（`cal-pane`），≤1080 页头换行、≤860 议程收到 280px、
+  ≤640 上下排（日历定高 460px，主体整块滚动）——媒体查询按窗口宽算，分屏时对不上。
+- **深链**挂在标签对象的 `calendarFocus` / `calendarGroup` 上；同值再点一次要先清空、下一拍写回（watch 才会触发，同 `openSettingsTab` 的 adminNav）。
+- **标签内的跳转**（CalendarPane embedded 时只 emit，先收掉自己的 TaskDialog）：「进入项目」同项目就地不动、跨项目 `leaveWorkbench`
+  进该项目；文件芯片同项目 `onTaskOpenFile` 就地打开、跨项目 `leaveWorkbench` 带 `openFileId`。页头「返回」在 embedded 时不渲染。
+- **入口**：账户下拉「我的日程」/ 命令「日程」（`goCalendar`）、左栏日程面板「查看全盘日程」（emit `open-calendar`）、
+  左栏「项目」面板的事项概览格 / 「查看日程」/ 下一件（`openSchedule`，带 group / focus，走注入的 `openCalendarTab`）、
+  设置「个人 → 事项」的查看日程（`PersonalTodosPanel`，注入存在时开标签，薄壳页里照旧 navigateTo）。
+  提醒通知点击走 `taskReminders.openReminderTarget`：页面栈顶是工作台且活跃实例指针指着它就开标签，否则 navigateTo 薄壳页。
+- **直链薄壳** `pages/calendar/calendar`：进来即 `reLaunch('/pages/project-overview/project-overview?[id=]&tab=calendar&focus=&group=')`
+  （`calendarShellTarget`，带 `?projectId` 才进该项目，否则进无项目态外壳）；工作台 `onLoad` 在标签快照恢复之后消费 `?tab=calendar`。
+- 两个全屏遮罩 `.cal-filter-mask` / `.task-dialog-mask` 在 App.vue 的拖拽区退出名单里（`calendar-tab.test.mjs` 断言）。
+- 无项目态 rail 上的「日程」仍是左栏议程面板（`ProjectCalendarPane`），不变。
+- 护栏：`check:nav` 三条（四处入口 / 渲染分支 / 薄壳与提醒落点），单测 `tests/project-home/calendar-tab.test.mjs`。
+
+### 标签快照（`pages/project-overview/tabSnapshot.js`）
+
+- **两份**：无项目态 `global_tabs`，有项目 `project_${id}_tabs`（`workbenchStorageKey(projectId, 'tabs')`），存 `uni.storage`。
+  形状 `{ v:1, left:[], right:[], activeLeft, activeRight, splitMode, focusedPane }`。
+- **只存白名单字段**（`SERIALIZERS`，逐类型）：文件 `{id,name,fileType,wpsFileId,filePath}`；尽调清单 `{id,requestId,name,type,fileType}`；
+  web `{url}`；welcome / calendar / commit-history 只有 id+name；admin-settings `{adminNav,adminService}`；market-detail `{marketSpec}`；
+  insight-entity `{entitySpec}`；diff `{diffSource,diffTarget}`；version-compare `{compareSpec}`；version-text-diff `{versionSpec}`。
+  **一次性深链不存**（`pendingLocator`、日程 focus/group、提交历史 focus/focusSha/token）——重启再弹一次定位/编辑框是打扰；恢复时补默认值。
+- **不存的标签**：合并比对稿（裁决只在引擎实例里；后端待决记录让版本面板再给入口）、AI 产物 markdown（内容只在内存）、
+  动态插件标签、任何认不出来的 tabType（新类型没进白名单就不恢复）。**新增标签类型要在 `SERIALIZERS` 登记才会被恢复。**
+- **恢复**（`restoreTabSnapshot`，onLoad 调，在 activeTabsByMode 那段之后）：快照里有文件 / 对比标签时发**一个**
+  `GET /api/projects/{id}/files?tree=true`（`fetchTabSnapshotFileIndex`，回收站里的不在其中），不存在的文件标签静默丢弃，对比标签两份都在才留；
+  清单拉失败就不核对（原样保留）。无项目态只恢复全局标签（欢迎 / 日程 / 设置 / 插件详情 / 网页）。单例（`SINGLETON_TAB_TYPES`）跨两窗格按 id
+  去重（先左后右），同窗格重复 id 只留第一个；未分屏时右侧并进左侧。快照对象也过一遍白名单。单例名按当前语言重取。
+  与恢复期间已开的标签合并（`mergeRestored`：恢复的在前，已开且激活的保持激活）。**快照优先于 `activeTabsByMode` 的旧记忆。**
+- **欢迎页**：无项目态启动时「启动时显示欢迎页」只在**什么都没恢复出来**时生效（同 VS Code `startupEditor`：恢复了编辑器就不另开）；
+  快照里有欢迎标签则照恢复，不管开关。
+- **引擎文档不会一次全拉起**：恢复只恢复标签条，LOWA 保活池只挂「激活 + LRU」（`leftLibreFiles`，LRU 初始为空），
+  其余标签点到时才加载；文本编辑器与网页标签同理（v-if 单实例 / 网页保活池只收激活 + LRU）。不需要额外的 lazy 标记。
+- **写入**：计算属性 `tabSnapshotSignature`（只读白名单字段的 JSON）变化 → `scheduleTabSnapshotSave` 节流 300ms 尾写；
+  `leaveWorkbench` 第一行、`beforeUnmount`、`pagehide` 同步写（`flushTabSnapshot`）。**恢复完成前一律不写**（否则恢复那个 GET 的往返里
+  空标签条会先把快照覆盖掉）。
+- 护栏：`check:nav`「标签快照」一条，单测 `tests/project-home/tab-snapshot.test.mjs`。
+
 ## 非文件标签 `insight-entity`（dev-board#541）
 
 「依据」实体浮窗上的「在新标签页打开」会在中栏开一个实体详情标签：
@@ -982,7 +1107,8 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - `frontend/src/config/panelRegistry.js` — 可停靠面板注册表（**取代了原 `config/tools.js` 的 `WORKBENCH_TOOLS`，那个文件已删**，底栏三项现在是「停在 bottom 档的面板」）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
 - 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（**已是薄壳页**，2026-08-20 起挂 `AdminPane initial-nav="work_log"`，个人中心的四栏内容在 `components/userprofile/Personal*Panel.vue`）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口；原来的「记忆同步」面板 nav key `memory` 已随 dev-board#440 撤掉，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
-- **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
+- **项目列表**（2026-09-29 起）：内容本体 `frontend/src/components/project-list/ProjectListPane.vue` + 同目录 `project-list-pane.scss`（根 `.project-list-pane`，开容器查询 `project-list-pane`，≤520px 收成单列卡 / 三列表）；`pages/project-list/project-list.vue` 是直链薄壳（根仍是 `.page-project-list`）。下面这段描述的内容、类名与门控全部跟着搬进了 Pane，只有三处不同：没有页面大标题（外壳 `.sidebar-header` 出「项目」）、页头的「日程 / 反馈 / 个人中心」按钮不搬（rail 上各有入口）、离开工作台的跳转（进项目 / 删当前项目 / 去日程 / 浏览器端新建）一律走注入的 `leaveWorkbench`。首次启动的「可选组件」面板搬到工作台 `onLoad`（只在无项目态触发），当日事项摘要 `todayDigest` 搬到工作台 `mounted`。
+- **项目列表页（2026-09-29 前的形态）** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
 **双视图（2026-08-18）**：页头右侧 `.view-toggle` 两个按钮切 `viewMode`（`'grid'`/`'list'`），
 选择记在 `uni.storage` 的 `checkba_project_list_view`（本机习惯，不进后端）。默认仍是 grid，
 `.project-item-card` 因此一直在——**app-e2e 的 J2 就钉在这个类名上，改默认视图会让它红**。

@@ -42,12 +42,34 @@ function errorBranch(code) {
 const BRANCH = errorBranch(SRC)
 
 // 真跑这段分支：t() 原样返回 key，于是断言的是「命中了哪条文案」，而不是文案内容本身
+// 账户类载荷（登录后置 4011 契约，dev-board#1046）在锚点之前由 parseAccountErrorPayload 解析好，
+// 这里照源码的判据复刻一份喂进去（字符串载荷恒为 null）
+function parseAccountPayload(dataStr) {
+  if (typeof dataStr !== 'string' || dataStr.charAt(0) !== '{') return null
+  try {
+    const p = JSON.parse(dataStr)
+    return p && typeof p.message === 'string' && p.kind ? p : null
+  } catch (e) {
+    return null
+  }
+}
+
 function renderError(dataStr) {
   const bubble = { value: { content: '' } }
-  const run = new Function('dataStr', 'currentAssistantBubble', 't', BRANCH)
-  run(dataStr, bubble, (k) => k)
+  const run = new Function('dataStr', 'currentAssistantBubble', 't', 'accountPayload', BRANCH)
+  run(dataStr, bubble, (k) => k, parseAccountPayload(dataStr))
   return bubble.value.content
 }
+
+test('账户类载荷（JSON）：4011 → 登录引导；其余 kind 显示 message 原文而不是整段 JSON', () => {
+  assert.ok(SRC.includes('function parseAccountErrorPayload(dataStr)'), '源码判据改了，本用例的复刻要跟着改')
+  const required = renderError(JSON.stringify({ message: '需要连接账户', code: 4011, kind: 'NOT_CONNECTED', reason: 'platform_ai' }))
+  assert.match(required, /account\.loginDialog\.aiNotice/)
+  assert.doesNotMatch(required, /executionInterrupted/)
+  const conflict = renderError(JSON.stringify({ message: '请先在官网账户页分配 AI 额度', code: 1, kind: 'CONFLICT' }))
+  assert.match(conflict, /executionInterrupted/)
+  assert.doesNotMatch(conflict, /"kind"/, '不能把 JSON 原样甩进气泡')
+})
 
 test('断网标记 → 「网络连接异常」引导，而不是把英文主机名甩给用户', () => {
   // 后端实际形态：finishWithError 的载荷前面还拼着「Stream Error: 」
