@@ -45,10 +45,11 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
 
     private final StringBuilder buffer = new StringBuilder();
     /**
-     * 计划审阅（dev-board#1022）：本轮已发出 create 事件的 artifact id，按出现顺序。
-     * 编排器落盘时按同一序号取出，让 saved 事件与流式卡片对上同一个 id。
+     * 计划审阅（dev-board#1022）：本次 LLM 往返已发出 create 事件的 artifact（id, type），按出现顺序。
+     * 编排器落盘时按类型取第一个，让 saved 事件与流式卡片对上同一个 id。
+     * 本实例每次 runLoop 新建，所以不会串到下一次往返。
      */
-    private final java.util.List<String> streamedArtifactIds =
+    private final java.util.List<String[]> streamedArtifacts =
             java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
     private static final int MAX_BUFFER_SIZE = 50; // Buffer for XML tag detection
@@ -167,16 +168,24 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         this.currentRunGate = currentRunGate;
     }
 
-    /** 本轮所有会话级 SSE 事件的唯一出口：不是当前轮次就静默丢弃。 */
-    /** 取走本轮已发出 create 的 artifact id（按出现顺序），返回副本并清空。 */
-    public java.util.List<String> drainStreamedArtifactIds() {
-        synchronized (streamedArtifactIds) {
-            java.util.List<String> copy = new java.util.ArrayList<>(streamedArtifactIds);
-            streamedArtifactIds.clear();
-            return copy;
+    /**
+     * 取走第一个类型为 {@code type} 的已流出 artifact 的 id（取走即移除）；没有返回空串。
+     * 模型可能先流别的类型（如 code）再流计划，按序号取会拿错 id。
+     */
+    public String takeStreamedArtifactId(String type) {
+        synchronized (streamedArtifacts) {
+            for (java.util.Iterator<String[]> it = streamedArtifacts.iterator(); it.hasNext(); ) {
+                String[] entry = it.next();
+                if (entry[1].equals(type)) {
+                    it.remove();
+                    return entry[0];
+                }
+            }
+            return "";
         }
     }
 
+    /** 本轮所有会话级 SSE 事件的唯一出口：不是当前轮次就静默丢弃。 */
     private void sendSse(String eventName, Object payload) {
         if (!currentRunGate.getAsBoolean()) return;
         sseEmitterService.send(conversationId, eventName, payload);
@@ -528,7 +537,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                   // Emit Artifact Event
                   // We treat this as a "create" operation
                   String artifactId = UUID.randomUUID().toString();
-                  streamedArtifactIds.add(artifactId);
+                  streamedArtifacts.add(new String[] {artifactId, type});
                   // Clean content a bit? keep newlines
                   String jsonContent = escapeJson(innerContent);
                   

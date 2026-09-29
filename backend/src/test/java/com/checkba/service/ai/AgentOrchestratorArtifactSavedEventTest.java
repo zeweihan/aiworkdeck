@@ -60,19 +60,21 @@ class AgentOrchestratorArtifactSavedEventTest {
         LangText.reset();
     }
 
-    /** 一轮只吐一段固定内容的模型；streamTokens=false 时不经 onNext，流式层看不到 artifact。 */
+    /**
+     * 一轮只吐一段固定内容的模型：按 chunks 逐段 onNext，最后以全文 onComplete；
+     * chunks 为空时不经 onNext，流式层看不到 artifact。
+     */
     private static final class OneShotModel implements StreamingChatLanguageModel {
-        private final String text;
-        private final boolean streamTokens;
+        private final List<String> chunks;
 
-        OneShotModel(String text, boolean streamTokens) {
-            this.text = text;
-            this.streamTokens = streamTokens;
+        OneShotModel(List<String> chunks) {
+            this.chunks = chunks;
         }
 
         @Override
         public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
-            if (streamTokens) handler.onNext(text);
+            for (String c : chunks) handler.onNext(c);
+            String text = chunks.isEmpty() ? FULL_TEXT.get() : String.join("", chunks);
             handler.onComplete(Response.from(AiMessage.from(text)));
         }
 
@@ -86,7 +88,14 @@ class AgentOrchestratorArtifactSavedEventTest {
     private record Sent(String event, String data) {
     }
 
+    private static final ThreadLocal<String> FULL_TEXT = new ThreadLocal<>();
+
     private static List<Sent> run(String modelOutput, boolean streamTokens) {
+        return runChunks(modelOutput, streamTokens ? List.of(modelOutput) : List.of());
+    }
+
+    private static List<Sent> runChunks(String modelOutput, List<String> chunks) {
+        FULL_TEXT.set(modelOutput);
         List<Sent> sent = new CopyOnWriteArrayList<>();
         SseEmitterService sse = mock(SseEmitterService.class);
         doAnswer(inv -> {
@@ -129,7 +138,7 @@ class AgentOrchestratorArtifactSavedEventTest {
         when(projectFileService.findFile(5L)).thenReturn(Optional.of(convFolder));
 
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
-        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(new OneShotModel(modelOutput, streamTokens));
+        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(new OneShotModel(chunks));
 
         AiContextProperties contextProperties = new AiContextProperties();
         AgentRunStateService runState = new AgentRunStateService(
@@ -219,5 +228,27 @@ class AgentOrchestratorArtifactSavedEventTest {
         assertEquals(77L, saved.path("fileId").asLong());
         assertEquals("AI 助手文件/conv-plan/Task List.md", saved.path("filePath").asText());
         assertEquals("task_list", saved.path("type").asText());
+    }
+
+    @Test
+    @DisplayName("先流 code 再流 implementation_plan：saved 事件的 id 是计划那份的，不是第一份")
+    void savedEventPicksIdOfSameType() throws Exception {
+        String code = "<artifact type=\"code\">\nprint(1)\n</artifact>";
+        String plan = "<artifact type=\"implementation_plan\" name=\"示例计划\">\n# 计划\n</artifact>";
+        List<Sent> sent = runChunks(code + plan, List.of(code, plan));
+        String planId = null;
+        String codeId = null;
+        for (Sent s : sent) {
+            if (!"artifact".equals(s.event())) continue;
+            JsonNode node = JSON.readTree(s.data());
+            if (!"create".equals(node.path("operation").asText())) continue;
+            if ("implementation_plan".equals(node.path("type").asText())) planId = node.path("id").asText();
+            if ("code".equals(node.path("type").asText())) codeId = node.path("id").asText();
+        }
+        assertNotNull(codeId, "流式层应为 code 发 create：" + sent);
+        assertNotNull(planId, "流式层应为计划发 create：" + sent);
+        JsonNode saved = artifactEvent(sent, "saved");
+        assertNotNull(saved, "落盘成功后必须发 saved 事件：" + sent);
+        assertEquals(planId, saved.path("id").asText());
     }
 }

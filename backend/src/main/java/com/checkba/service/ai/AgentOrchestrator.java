@@ -2093,10 +2093,9 @@ public class AgentOrchestrator {
                                  .map(com.checkba.model.entity.ProjectFile::getName)
                                  .orElse(conversationId);
                          // 计划审阅（dev-board#1022）：先发 saved 事件把 fileId 与相对路径交给计划卡，
-                         // 再发「已保存到项目文件」提示。本段一次只落一份 artifact，序号恒为 0；
-                         // 流式层没发过 create（缓冲超长按原文冲出等）就给空串，前端按 filePath 兜底匹配。
-                         java.util.List<String> streamedIds = handler.drainStreamedArtifactIds();
-                         String streamedId = streamedIds.isEmpty() ? "" : streamedIds.get(0);
+                         // 再发「已保存到项目文件」提示。id 取流式层第一个同类型 artifact 的 id；
+                         // 流式层没发过（缓冲超长按原文冲出等）就给空串，前端按 filePath 兜底匹配。
+                         String streamedId = handler.takeStreamedArtifactId(type);
                          sendRunEvent(guard, "artifact", artifactSavedEventJson(
                                  streamedId, saved.getId(), artifactSavedRelativePath(folderName, saved.getName()), type));
                          String savedNotice = artifactSavedNoticeDelta(folderName, saved.getName());
