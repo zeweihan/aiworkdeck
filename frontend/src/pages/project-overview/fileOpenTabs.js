@@ -409,6 +409,7 @@ export const fileOpenTabsMethods = {
       if (tabType === 'admin-settings') return GLYPHS.settings
       if (tabType === 'commit-history') return GLYPHS.history
       if (tabType === 'welcome') return GLYPHS.welcome
+      if (tabType === 'calendar') return GLYPHS.calendar
       return fileGlyph(type)
     },
 

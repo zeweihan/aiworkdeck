@@ -119,7 +119,7 @@ export default {
     /** fileFilter 对应的文件名（宿主知道；不给就从事项的文件芯片里找） */
     fileFilterName: { type: String, default: '' },
   },
-  emits: ['leave-workbench', 'new-task', 'open-task', 'open-file', 'clear-file-filter'],
+  emits: ['open-calendar', 'new-task', 'open-task', 'open-file', 'clear-file-filter'],
   data() {
     return {
       /** { y, m } 或 null（= 全部，不按月过滤） */
@@ -250,12 +250,9 @@ export default {
       })
     },
     openGlobalCalendar() {
-      // 不在这里自己跳页：离开工作台前必须先把编辑器里的未存改动落盘
-      // （flushDirtyEditors 吃的是挂在工作台页面实例上的编辑器引用，子组件够不到），
-      // 否则律师刚敲的那几秒改动会静默丢失——就是 #489 修过的那一类。
-      // 统一交给父页面的 leaveWorkbench：它先落盘再 reLaunch
-      // （工作台参与的跳转一律 reLaunch，见 CLAUDE.md 导航总规则）。
-      this.$emit('leave-workbench', '/pages/calendar/calendar')
+      // 全盘日程是工作台里的中栏「日程」标签（dev-board#1048），不离开工作台，也就不存在
+      // 「离开前先落盘」的问题；由宿主调 openCalendarTab()。面板自己不跳页。
+      this.$emit('open-calendar')
     },
   },
 }

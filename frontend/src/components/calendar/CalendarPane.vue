@@ -15,7 +15,7 @@
            group       深链：overdue|today|week|later，议程滚到该组（值变化时再次生效）。
     emits  open-project({projectId})         「进入项目」
            open-file({projectId, fileId})    文件芯片
-           close                             页头「返回」
+           close                             页头「返回」（仅页面形态渲染；标签形态关标签走标签条）
     跳转   embedded=false（页面形态）时组件自己保持原行为：open-project / open-file 走
            reLaunch 进工作台，「返回」按栈深度 navigateBack / redirectTo 项目列表；
            embedded=true 时一律只 emit，由宿主决定就地打开还是 reLaunch。
@@ -36,7 +36,8 @@
     <view class="calendar-container">
       <view class="content-header cal-header">
         <view class="cal-header-left">
-          <view class="cal-back" @tap="goBack">
+          <!-- 标签形态（embedded）没有「返回」：关标签走标签条上的 ×（dev-board#1048） -->
+          <view v-if="!embedded" class="cal-back" @tap="goBack">
             <svg viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
             <text>{{ $t('calendar.back') }}</text>
           </view>
@@ -553,6 +554,7 @@ export default {
       const fileId = payload && payload.fileId
       if (!task || !task.projectId || fileId == null) return
       if (this.embedded) {
+        this.dialogVisible = false
         this.$emit('open-file', { projectId: task.projectId, fileId })
         return
       }
@@ -663,6 +665,8 @@ export default {
     goToProject(projectId) {
       if (!projectId) return
       if (this.embedded) {
+        // 宿主对同项目「就地不动」，所以弹窗要自己先收掉，否则点了像没反应
+        this.dialogVisible = false
         this.$emit('open-project', { projectId })
         return
       }

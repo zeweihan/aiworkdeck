@@ -420,6 +420,8 @@ export default {
   // 缺省 null 只为 node 静态测试与未来别的宿主兜底。
   inject: {
     leaveWorkbench: { default: null },
+    // 日程是工作台里的中栏标签（dev-board#1048），开它不离开工作台
+    openCalendarTab: { default: null },
   },
   props: {
     /** 工作台当前打开的项目 id（无项目态为 null）：高亮那一张卡，点它不再重进一次 */
@@ -905,25 +907,23 @@ export default {
         this.busy = false
       }
     },
-    // 日程页（D 卡会把它改成工作台里的标签；在那之前仍是离开工作台的一跳，走 leaveWorkbench 先落盘）
+    // 日程：工作台里的中栏「日程」标签（dev-board#1048），不离开工作台。概览条的逾期 / 今天 / 本周格
+    // 带 group 让议程滚到那一组，「下一件」带 focus 定位并打开编辑。
     goToCalendar() {
-      this.goToCalendarUrl('/pages/calendar/calendar')
+      this.openSchedule({})
     },
-    // 概览条的逾期/今天/本周格：进日程页并滚到对应分组
     goToScheduleGroup(group) {
-      this.goToCalendarUrl('/pages/calendar/calendar?group=' + group)
+      this.openSchedule({ group })
     },
     goToNextDue() {
       const t = this.taskSummary.nextDue
       if (!t || t.id == null) return
-      this.goToCalendarUrl('/pages/calendar/calendar?focus=' + t.id)
+      this.openSchedule({ focus: t.id })
     },
-    goToCalendarUrl(url) {
-      if (this.leaveWorkbench) {
-        this.leaveWorkbench(url)
-        return
-      }
-      uni.navigateTo({ url })
+    openSchedule(opts) {
+      // 本面板唯一的宿主是工作台（pages/project-list 已是 redirect 进工作台的薄壳），注入必在；
+      // 缺省 null 只为 node 静态测试。不再有离开工作台去日程页的路径。
+      if (this.openCalendarTab) this.openCalendarTab(opts)
     },
     startRename(project) {
       if (this.isClientUser) return

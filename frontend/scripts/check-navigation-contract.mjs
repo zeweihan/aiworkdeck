@@ -538,10 +538,11 @@ check('账户入口在 rail 底部（AccountRailEntry），下拉恰好三项：
   for (const [ev, handler] of [['@schedule', 'onAvatarMenuSchedule'], ['@settings', 'onAvatarMenuSettings'], ['@sign-out', 'onAvatarMenuSignOut'], ['@login', 'onAccountLogin']]) {
     if (!tag.includes(`${ev}="${handler}"`)) return `账户入口没有把 ${ev} 接到 ${handler}`
   }
+  // 「我的日程」开中栏日程标签（dev-board#1048），不再离开工作台
   const sched = extractMethodBody(src, 'onAvatarMenuSchedule() {')
   const goCal = extractMethodBody(src, 'goCalendar() {')
-  if (!sched || !(sched.includes('this.leaveWorkbench(') || (sched.includes('this.goCalendar(') && goCal && goCal.includes('this.leaveWorkbench(')))) {
-    return '「我的日程」没有走 leaveWorkbench（离开工作台前要先落盘编辑器）'
+  if (!sched || !(sched.includes('this.openCalendarTab(') || (sched.includes('this.goCalendar(') && goCal && goCal.includes('this.openCalendarTab(')))) {
+    return '「我的日程」没有开中栏日程标签（openCalendarTab）'
   }
   // 退出必须走唯一编排，不许在页面里自拼 disconnect/deactivate
   if (!src.includes("from '@/utils/signOut.js'")) return '退出登录没有走 utils/signOut.js 唯一编排'
@@ -978,6 +979,114 @@ check('欢迎标签：单例 tabType welcome，左右两条渲染链都有，菜
   if (!help.includes("run: 'wb:openWelcome'")) return '帮助菜单没有「欢迎」（wb:openWelcome）'
   const menu = readFrontend('src/pages/project-overview/menuCommands.js')
   if (!menu.includes("case 'openWelcome': this.openWelcomeTab()")) return 'wb:openWelcome 没有接到 openWelcomeTab'
+  return null
+})
+
+// ==================== 日程标签与标签快照（dev-board#1048 / #1049） ====================
+
+check('日程是工作台里的中栏标签：四处入口开 openCalendarTab，不再 leaveWorkbench 去日程页（dev-board#1048）', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  if (/leaveWorkbench\(\s*['"`]\/pages\/calendar\/calendar/.test(src)) return '工作台里还有 leaveWorkbench 去日程页的调用'
+  // 1. 命令「日程」/ 账户下拉「我的日程」共用 goCalendar
+  const goCal = extractDefinition(src, 'goCalendar')
+  if (!goCal || !goCal.includes('this.openCalendarTab(') || /leaveWorkbench|pages\/calendar/.test(goCal)) {
+    return 'goCalendar 应当调 openCalendarTab()，不离开工作台'
+  }
+  // 2. 左栏日程面板的「查看全盘日程」
+  const pane = readVue('src/components/project-calendar/ProjectCalendarPane.vue')
+  const open = extractDefinition(pane, 'openGlobalCalendar')
+  if (!open || !open.includes("this.$emit('open-calendar')") || /pages\/calendar|leave-workbench/.test(open)) {
+    return 'ProjectCalendarPane.openGlobalCalendar 应当 emit open-calendar'
+  }
+  if (!src.includes('@open-calendar="openCalendarTab()"')) return '工作台没有把日程面板的 open-calendar 接到 openCalendarTab'
+  if (src.includes('@leave-workbench="leaveWorkbench"')) return '日程面板的 leave-workbench 绑定应已撤掉'
+  // 3. 左栏「项目」面板的事项概览格 / 查看日程 / 下一件
+  const list = readVue('src/components/project-list/ProjectListPane.vue')
+  if (list.includes('/pages/calendar/calendar')) return 'ProjectListPane 还在往日程页跳'
+  if (!/openCalendarTab:\s*\{\s*default:\s*null/.test(list)) return 'ProjectListPane 没有 inject openCalendarTab'
+  for (const m of ['goToCalendar', 'goToScheduleGroup', 'goToNextDue']) {
+    const body = extractDefinition(list, m)
+    if (!body || !body.includes('this.openSchedule(')) return `ProjectListPane.${m} 没有走 openSchedule`
+  }
+  const sched = extractDefinition(list, 'openSchedule')
+  if (!sched || !sched.includes('this.openCalendarTab(opts)') || /leaveWorkbench|uni\./.test(sched)) {
+    return 'ProjectListPane.openSchedule 应当只调注入的 openCalendarTab'
+  }
+  // 4. provide 出 openCalendarTab（设置里「个人 → 事项」等子组件用）
+  const provide = extractMethodBody(src, 'provide()')
+  if (!provide || !provide.includes('openCalendarTab')) return 'provide() 里没有 openCalendarTab'
+  const todos = readVue('src/components/userprofile/PersonalTodosPanel.vue')
+  const oc = extractDefinition(todos, 'openCalendar')
+  if (!oc || !oc.includes('this.openCalendarTab(')) return 'PersonalTodosPanel.openCalendar 在工作台里应开日程标签'
+  return null
+})
+
+check('日程标签：单例 tabType calendar，左右两条渲染链 embedded + 全局视图，非文件标签', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const n = countOf(src, "tabType === 'calendar'")
+  if (n !== 2) return `左右两条渲染链应各有一条 calendar 分支，实际 ${n} 处`
+  for (const side of ['Left', 'Right']) {
+    const at = src.indexOf(`v-else-if="activeFile${side}.tabType === 'calendar'"`)
+    const tag = src.slice(src.lastIndexOf('<CalendarPane', at), src.indexOf('/>', at))
+    if (!tag.startsWith('<CalendarPane')) return `${side} 分支渲染的不是 CalendarPane`
+    if (!/\bembedded\b/.test(tag)) return `${side} 分支没有 embedded`
+    if (!tag.includes(':project-id="null"')) return `${side} 分支应传 :project-id="null"（全局视图，筛选里按项目收窄）`
+    for (const ev of ['@open-project="onCalendarOpenProject"', '@open-file="onCalendarOpenFile"', '@close="closeCalendarTab"']) {
+      if (!tag.includes(ev)) return `${side} 分支缺 ${ev}`
+    }
+  }
+  const tab = readFrontend('src/pages/project-overview/calendarTab.js')
+  if (!tab.includes("export const CALENDAR_TAB_ID = 'calendar'")) return '日程标签的单例 id 不是 calendar'
+  const op = extractDefinition(tab, 'onCalendarOpenProject')
+  if (!op || !op.includes('this.leaveWorkbench(')) return '日程标签跨项目「进入项目」要走 leaveWorkbench'
+  const of = extractDefinition(tab, 'onCalendarOpenFile')
+  if (!of || !of.includes('this.onTaskOpenFile(') || !of.includes('this.leaveWorkbench(')) {
+    return '日程标签「打开文件」：同项目就地 onTaskOpenFile、跨项目 leaveWorkbench'
+  }
+  const kind = readFrontend('src/pages/project-overview/fileKind.js')
+  if (!/NON_FILE_TAB_TYPES = \[[^\]]*'calendar'/.test(kind)) return "NON_FILE_TAB_TYPES 里没有 'calendar'"
+  // 标签形态下 CalendarPane 的跳转只 emit、不自己 reLaunch（它是 defineAsyncComponent 引入的，
+  // 上面「组件跳出工作台」那条按 import 语句扫不到它，这里单独钉住）
+  const cp = readVue('src/components/calendar/CalendarPane.vue')
+  for (const m of ['goToProject', 'onOpenFile', 'goBack']) {
+    const body = extractDefinition(cp, m)
+    const emitAt = body ? body.indexOf('if (this.embedded)') : -1
+    const navAt = body ? body.search(/uni\.(reLaunch|navigateTo|redirectTo)\(/) : -1
+    if (emitAt < 0 || (navAt >= 0 && navAt < emitAt)) return `CalendarPane.${m} 在 embedded 时必须先 emit 再 return`
+  }
+  if (!/v-if="!embedded" class="cal-back"/.test(cp)) return '标签形态下页头「返回」应隐藏'
+  return null
+})
+
+check('日程直链薄壳与提醒落点：进来即 reLaunch 工作台开日程标签（dev-board#1048）', () => {
+  const page = readVue('src/pages/calendar/calendar.vue')
+  if (page.includes('<CalendarPane')) return '日程页应已退成薄壳，不再渲染 CalendarPane'
+  if (!page.includes('uni.reLaunch({ url: calendarShellTarget(query) })')) return '日程薄壳没有 reLaunch 进工作台'
+  if (!page.includes("params.push('tab=calendar')")) return '日程薄壳转进工作台没带 tab=calendar'
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const onLoad = extractMethodBody(src, 'onLoad(query)')
+  if (!onLoad || !/query\.tab === 'calendar'[\s\S]{0,120}this\.openCalendarTab\(/.test(onLoad)) {
+    return '工作台 onLoad 没有消费 ?tab=calendar'
+  }
+  const rem = readFrontend('src/utils/taskReminders.js')
+  const target = extractDefinition(rem, 'export function openReminderTarget') || extractMethodBody(rem, 'export function openReminderTarget(')
+  if (!target || !target.includes('vm.openCalendarTab(')) return '提醒点击在工作台里时应开日程标签'
+  if (!rem.includes('openReminderTarget(task.id)')) return '通知 onclick 没有走 openReminderTarget'
+  return null
+})
+
+check('标签快照：两份键、恢复在 onLoad、leaveWorkbench 前同步写（dev-board#1049）', () => {
+  const snap = readFrontend('src/pages/project-overview/tabSnapshot.js')
+  if (!snap.includes("export const TAB_SNAPSHOT_SUFFIX = 'tabs'")) return '快照键后缀不是 tabs'
+  if (!snap.includes('workbenchStorageKey(this.projectId, TAB_SNAPSHOT_SUFFIX)')) return '快照键没有走 workbenchStorageKey（global_tabs / project_${id}_tabs）'
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const onLoad = extractMethodBody(src, 'onLoad(query)')
+  if (!onLoad || !onLoad.includes('this.restoreTabSnapshot()')) return 'onLoad 没有恢复标签快照'
+  const exit = extractMethodBody(src, 'async leaveWorkbench(url)')
+  const flushAt = exit ? exit.indexOf('this.flushTabSnapshot()') : -1
+  const navAt = exit ? exit.indexOf('uni.reLaunch') : -1
+  if (flushAt < 0 || flushAt > navAt) return 'leaveWorkbench 在 reLaunch 之前没有同步写标签快照'
+  if (!src.includes('tabSnapshotSignature()')) return '缺标签快照的变化信号（watch → 节流写）'
   return null
 })
 

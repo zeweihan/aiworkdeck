@@ -203,12 +203,15 @@ type/priority/notes/assigneeId/remindBefore 与多文件关联表 `project_task_
 - **工作台**：rail `calendar` 项标签「日程」+ `.rail-badge` 徽标（当前项目 overdue+today，逾期>0 变红，直读 `taskStore` 响应式缓存）；
   `ProjectCalendarPane.vue` 是议程式面板（**不再用 FullCalendar**，可静态 import；`fileFilter` prop 支持只看某文件）；
   `project-overview.vue` 挂**一个**全局 `<TaskDialog>`（`openTaskDialog`），面板/文件树/命令/概览页共用；
-  头像下拉「我的日程」与命令 `go.calendar` 都走 `leaveWorkbench` 再 reLaunch 日程页（`check:nav` 守着，下拉动作项恰好三项）；命令 `task.new` 开弹窗。
+  账户下拉「我的日程」与命令 `go.calendar` 都走 `goCalendar` → `openCalendarTab()` 开中栏「日程」标签（dev-board#1048，不再离开工作台；
+  `check:nav` 守着，下拉动作项恰好三项）；日程面板底部「查看全盘日程」emit `open-calendar` 同样落到这个标签；命令 `task.new` 开弹窗。
 - **文件树**：右键「添加事项…」（presetFileIds）/「查看事项 (N)」（打开日程面板并按文件过滤）；文件名右侧到期徽标按 `fileDueIndex` 一次建索引，
   名字省略号优先于徽标。旧的内联「设置截止日」弹窗已删。
-- **全局日程页 `pages/calendar/calendar`**：自绘页头（`headerToolbar:false`），FullCalendar 主题接 `--awd-*` 令牌，`eventContent` 自定义；
-  `?focus=<id>` 定位并开编辑，`?group=overdue|today|week` 议程滚到分组；页头自带「返回」，所以在 `utils/globalBack.js` 的 `SELF_NAV_ROUTES` 里。
-  `loadSeq` 竞态护栏保留（`tests/project-home/calendar-load-race.test.mjs` 现在注入 `loadGlobal`）。
+- **日程主体 `components/calendar/CalendarPane.vue`**（dev-board#1048 从 `pages/calendar/calendar` 抽出）：自绘页头（`headerToolbar:false`），
+  FullCalendar 主题接 `--awd-*` 令牌，`eventContent` 自定义；props `focus`（定位并开编辑）/ `group`（overdue|today|week|later 议程滚到分组）。
+  `loadSeq` 竞态护栏保留（`tests/project-home/calendar-load-race.test.mjs` 注入 `loadGlobal`）。宿主是工作台中栏「日程」标签，
+  契约见下面「日程标签与标签快照」一节。`pages/calendar/calendar` 退成直链薄壳（进来即 reLaunch 工作台开日程标签），
+  仍在 `utils/globalBack.js` 的 `SELF_NAV_ROUTES` 里（本页不渲染内容）。
 - **概览页 `TaskSchedule.vue` / 设置页 `PersonalTodosPanel.vue`**：都是 TaskRow + 全局/锁定项目的 TaskDialog；根类名 `task-schedule` / `panel-todos` 是 app-e2e 锚点。
 
 测试：`npm run test:calendar`（tests/calendar/）、`test:project-home` 里的 project-calendar-pane / workbench-task-entries / task-schedule / calendar-load-race。
@@ -968,6 +971,60 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 已登录显示头像，下拉 = 账户抬头（余额 + 等级）+ 提醒行（原顶栏宽限 / 试用 chip 文案，`accountNoticeText`）+ 我的日程 / 设置 / 退出登录三个动作；
 余额不足或有提醒时头像右上角挂一个点。下拉的全屏 mask 是 `.account-entry-mask`（进了 App.vue 的 no-drag 名单）。
 设置齿轮在账户入口下面，直调 `goToSystemSettings()`。
+
+## 日程标签与标签快照（dev-board#1048 / #1049，2026-09-29）
+
+规格：`docs/superpowers/specs/2026-09-29-defer-login-welcome-tab-design.md` §7 §8。
+
+### 日程标签（`tabType:'calendar'`）
+
+- **单例**：id 恒为 `'calendar'`，左右两窗格任一边开着就只激活并更新深链，不开第二个；新开落当前焦点窗格（未分屏恒为左）。
+  开法在 `pages/project-overview/calendarTab.js`（零依赖方法组，照 `welcomeTab.js`）：`openCalendarTab({ focus, group })` /
+  `closeCalendarTab()` / `onCalendarOpenProject` / `onCalendarOpenFile`。`provide()` 同时注入 `openCalendarTab` 给子组件。
+- **不是文档**：`'calendar'` 在 `fileKind.js` 的 `NON_FILE_TAB_TYPES` 里，id 非数字，`isContextEligibleTab` 恒 false；图标 `ICONS.calendar`。
+- **全局视图**：左右两条 `v-else-if` 渲染链各一份 `<CalendarPane embedded :project-id="null" …>`——有项目态也传 null，
+  跨项目事项全列，筛选弹层里按项目收窄（CalendarPane 在 projectId 为空时才显示项目筛选段）。CalendarPane 是
+  `defineAsyncComponent` 懒加载（带着 FullCalendar，没开过日程标签的会话不付这份成本）。
+- **宿主高度**：`.pane-content` 是定高 flex 列，CalendarPane 根 `flex:1; height:100%`，FullCalendar 按宿主高度排版不会塌成 0；
+  窗格尺寸变化走 `triggerWorkbenchResize` 派发的 window resize，FullCalendar 自己响应。标签形态按**窗格宽**收窄：
+  `.calendar-pane.is-embedded` 开 `container-type: inline-size`（`cal-pane`），≤1080 页头换行、≤860 议程收到 280px、
+  ≤640 上下排（日历定高 460px，主体整块滚动）——媒体查询按窗口宽算，分屏时对不上。
+- **深链**挂在标签对象的 `calendarFocus` / `calendarGroup` 上；同值再点一次要先清空、下一拍写回（watch 才会触发，同 `openSettingsTab` 的 adminNav）。
+- **标签内的跳转**（CalendarPane embedded 时只 emit，先收掉自己的 TaskDialog）：「进入项目」同项目就地不动、跨项目 `leaveWorkbench`
+  进该项目；文件芯片同项目 `onTaskOpenFile` 就地打开、跨项目 `leaveWorkbench` 带 `openFileId`。页头「返回」在 embedded 时不渲染。
+- **入口**：账户下拉「我的日程」/ 命令「日程」（`goCalendar`）、左栏日程面板「查看全盘日程」（emit `open-calendar`）、
+  左栏「项目」面板的事项概览格 / 「查看日程」/ 下一件（`openSchedule`，带 group / focus，走注入的 `openCalendarTab`）、
+  设置「个人 → 事项」的查看日程（`PersonalTodosPanel`，注入存在时开标签，薄壳页里照旧 navigateTo）。
+  提醒通知点击走 `taskReminders.openReminderTarget`：页面栈顶是工作台且活跃实例指针指着它就开标签，否则 navigateTo 薄壳页。
+- **直链薄壳** `pages/calendar/calendar`：进来即 `reLaunch('/pages/project-overview/project-overview?[id=]&tab=calendar&focus=&group=')`
+  （`calendarShellTarget`，带 `?projectId` 才进该项目，否则进无项目态外壳）；工作台 `onLoad` 在标签快照恢复之后消费 `?tab=calendar`。
+- 两个全屏遮罩 `.cal-filter-mask` / `.task-dialog-mask` 在 App.vue 的拖拽区退出名单里（`calendar-tab.test.mjs` 断言）。
+- 无项目态 rail 上的「日程」仍是左栏议程面板（`ProjectCalendarPane`），不变。
+- 护栏：`check:nav` 三条（四处入口 / 渲染分支 / 薄壳与提醒落点），单测 `tests/project-home/calendar-tab.test.mjs`。
+
+### 标签快照（`pages/project-overview/tabSnapshot.js`）
+
+- **两份**：无项目态 `global_tabs`，有项目 `project_${id}_tabs`（`workbenchStorageKey(projectId, 'tabs')`），存 `uni.storage`。
+  形状 `{ v:1, left:[], right:[], activeLeft, activeRight, splitMode, focusedPane }`。
+- **只存白名单字段**（`SERIALIZERS`，逐类型）：文件 `{id,name,fileType,wpsFileId,filePath}`；尽调清单 `{id,requestId,name,type,fileType}`；
+  web `{url}`；welcome / calendar / commit-history 只有 id+name；admin-settings `{adminNav,adminService}`；market-detail `{marketSpec}`；
+  insight-entity `{entitySpec}`；diff `{diffSource,diffTarget}`；version-compare `{compareSpec}`；version-text-diff `{versionSpec}`。
+  **一次性深链不存**（`pendingLocator`、日程 focus/group、提交历史 focus/focusSha/token）——重启再弹一次定位/编辑框是打扰；恢复时补默认值。
+- **不存的标签**：合并比对稿（裁决只在引擎实例里；后端待决记录让版本面板再给入口）、AI 产物 markdown（内容只在内存）、
+  动态插件标签、任何认不出来的 tabType（新类型没进白名单就不恢复）。**新增标签类型要在 `SERIALIZERS` 登记才会被恢复。**
+- **恢复**（`restoreTabSnapshot`，onLoad 调，在 activeTabsByMode 那段之后）：快照里有文件 / 对比标签时发**一个**
+  `GET /api/projects/{id}/files?tree=true`（`fetchTabSnapshotFileIndex`，回收站里的不在其中），不存在的文件标签静默丢弃，对比标签两份都在才留；
+  清单拉失败就不核对（原样保留）。无项目态只恢复全局标签（欢迎 / 日程 / 设置 / 插件详情 / 网页）。单例（`SINGLETON_TAB_TYPES`）跨两窗格按 id
+  去重（先左后右），同窗格重复 id 只留第一个；未分屏时右侧并进左侧。快照对象也过一遍白名单。单例名按当前语言重取。
+  与恢复期间已开的标签合并（`mergeRestored`：恢复的在前，已开且激活的保持激活）。**快照优先于 `activeTabsByMode` 的旧记忆。**
+- **欢迎页**：无项目态启动时「启动时显示欢迎页」只在**什么都没恢复出来**时生效（同 VS Code `startupEditor`：恢复了编辑器就不另开）；
+  快照里有欢迎标签则照恢复，不管开关。
+- **引擎文档不会一次全拉起**：恢复只恢复标签条，LOWA 保活池只挂「激活 + LRU」（`leftLibreFiles`，LRU 初始为空），
+  其余标签点到时才加载；文本编辑器与网页标签同理（v-if 单实例 / 网页保活池只收激活 + LRU）。不需要额外的 lazy 标记。
+- **写入**：计算属性 `tabSnapshotSignature`（只读白名单字段的 JSON）变化 → `scheduleTabSnapshotSave` 节流 300ms 尾写；
+  `leaveWorkbench` 第一行、`beforeUnmount`、`pagehide` 同步写（`flushTabSnapshot`）。**恢复完成前一律不写**（否则恢复那个 GET 的往返里
+  空标签条会先把快照覆盖掉）。
+- 护栏：`check:nav`「标签快照」一条，单测 `tests/project-home/tab-snapshot.test.mjs`。
 
 ## 非文件标签 `insight-entity`（dev-board#541）
 

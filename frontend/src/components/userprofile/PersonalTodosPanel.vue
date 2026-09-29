@@ -115,6 +115,13 @@ import TaskRow from '@/components/calendar/TaskRow.vue'
 export default {
   name: 'PersonalTodosPanel',
   components: { TaskDialog, TaskRow },
+  // 设置已是工作台里的中栏标签（AdminPane embedded），宿主是工作台时由 project-overview 的 provide() 注入：
+  // 开日程走中栏日程标签（dev-board#1048），进项目走 leaveWorkbench（先落盘再 reLaunch）。
+  // pages/admin、pages/userprofile 薄壳页里没有注入，照旧直跳。
+  inject: {
+    leaveWorkbench: { default: null },
+    openCalendarTab: { default: null },
+  },
   data() {
     return {
       loading: false,
@@ -183,21 +190,30 @@ export default {
       this.dialogOpen = false
       this.dialogTask = null
     },
-    // 设置页不在工作台里（没有编辑器要 flush）；进工作台一律 reLaunch
+    // 进工作台一律 reLaunch；宿主是工作台时走注入的 leaveWorkbench，先把编辑器里没落盘的改动写掉
     openProject(task) {
       if (!task || task.projectId == null) return
       this.closeDialog()
-      uni.reLaunch({ url: '/pages/project-overview/project-overview?id=' + task.projectId })
+      this.relaunchTo('/pages/project-overview/project-overview?id=' + task.projectId)
     },
     openFile(payload) {
       const task = payload && payload.task
       if (!task || task.projectId == null || payload.fileId == null) return
       this.closeDialog()
-      uni.reLaunch({
-        url: '/pages/project-overview/project-overview?id=' + task.projectId + '&openFileId=' + payload.fileId,
-      })
+      this.relaunchTo('/pages/project-overview/project-overview?id=' + task.projectId + '&openFileId=' + payload.fileId)
+    },
+    relaunchTo(url) {
+      if (this.leaveWorkbench) {
+        this.leaveWorkbench(url)
+        return
+      }
+      uni.reLaunch({ url })
     },
     openCalendar() {
+      if (this.openCalendarTab) {
+        this.openCalendarTab({})
+        return
+      }
       uni.navigateTo({ url: '/pages/calendar/calendar' })
     },
     async toggleDone(task) {

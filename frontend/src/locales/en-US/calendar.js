@@ -206,4 +206,6 @@ export default {
   paneEmptyMonth: 'No tasks this month',
   paneEmptyFile: 'No tasks linked to this file yet',
   railScheduleTitle: 'Schedule ({overdue} overdue · {today} today)',
+  // Workbench center "Schedule" tab (dev-board#1048)
+  tabName: 'Schedule',
 }

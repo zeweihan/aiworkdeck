@@ -22,6 +22,9 @@
 .calendar-pane.is-embedded {
   padding: 16px 20px 20px;
   background: var(--awd-bg);
+  /* 标签宽度 = 窗格宽度，不是窗口宽度：页头与议程的收窄按容器查询走（下面 @container cal-pane） */
+  container-type: inline-size;
+  container-name: cal-pane;
 }
 
 .calendar-container {
@@ -429,6 +432,29 @@
   flex: none;
   min-height: 0;
   display: flex;
+}
+
+/* 标签形态：窗格可能远窄于窗口（分屏 / 左右栏都开着），同一条收窄规则按窗格宽再给一遍；
+   再窄时议程栏收到 280px，最窄时主体改成上下排（日历在上、议程在下）。 */
+@container cal-pane (max-width: 1080px) {
+  .content-header {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: 12px;
+  }
+
+  .header-actions { margin-left: auto; }
+}
+
+@container cal-pane (max-width: 860px) {
+  .calendar-sidebar { width: 280px; }
+}
+
+@container cal-pane (max-width: 640px) {
+  /* 上下排时主体整块滚动；日历给定高（FullCalendar 按宿主高度排版，flex 伸缩的高度它量不准） */
+  .calendar-body { flex-direction: column; overflow-y: auto; }
+  .calendar-main { flex: none; height: 460px; }
+  .calendar-sidebar { width: auto; flex: none; }
 }
 
 /* ---- FullCalendar 内部标记：v6 通过 innerHTML 字符串或库自身 DOM 逻辑生成节点，

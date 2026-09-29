@@ -206,4 +206,6 @@ export default {
   paneEmptyMonth: '这个月没有事项',
   paneEmptyFile: '这份文件还没有关联事项',
   railScheduleTitle: '日程（逾期 {overdue} · 今天 {today}）',
+  // 工作台中栏「日程」标签（dev-board#1048）
+  tabName: '日程',
 }

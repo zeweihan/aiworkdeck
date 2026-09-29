@@ -789,7 +789,7 @@
             :project-id="projectId"
             :file-filter="calendarFileFilter"
             :file-filter-name="calendarFileFilterName"
-            @leave-workbench="leaveWorkbench"
+            @open-calendar="openCalendarTab()"
             @new-task="openTaskDialog({ mode: 'create', presetFileIds: $event && $event.presetFileIds })"
             @open-task="openTaskDialog({ mode: 'edit', task: $event })"
             @open-file="onTaskOpenFile"
@@ -1257,6 +1257,20 @@
                       @open-projects-pane="openProjectsPane"
                       @update:show-on-startup="setShowWelcomeOnStartup"
                     />
+                    <!-- 「日程」标签（dev-board#1048）：单例，全局视图（projectId 恒传 null，跨项目事项，
+                         筛选里可按项目收窄）。宿主 .pane-content 是定高 flex 列，FullCalendar 不会塌成 0；
+                         窗格尺寸变化走 triggerWorkbenchResize 派发的 window resize，FullCalendar 自己响应。 -->
+                    <CalendarPane
+                      v-else-if="activeFileLeft.tabType === 'calendar'"
+                      :key="activeFileLeft.id"
+                      embedded
+                      :project-id="null"
+                      :focus="activeFileLeft.calendarFocus || ''"
+                      :group="activeFileLeft.calendarGroup || ''"
+                      @open-project="onCalendarOpenProject"
+                      @open-file="onCalendarOpenFile"
+                      @close="closeCalendarTab"
+                    />
                     <AdminPane
                       v-else-if="activeFileLeft.tabType === 'admin-settings'"
                       :key="activeFileLeft.id"
@@ -1454,6 +1468,18 @@
                       @open-url="openBrowserTab($event)"
                       @open-projects-pane="openProjectsPane"
                       @update:show-on-startup="setShowWelcomeOnStartup"
+                    />
+                    <!-- 「日程」标签：见左窗格同名注释 -->
+                    <CalendarPane
+                      v-else-if="activeFileRight.tabType === 'calendar'"
+                      :key="activeFileRight.id"
+                      embedded
+                      :project-id="null"
+                      :focus="activeFileRight.calendarFocus || ''"
+                      :group="activeFileRight.calendarGroup || ''"
+                      @open-project="onCalendarOpenProject"
+                      @open-file="onCalendarOpenFile"
+                      @close="closeCalendarTab"
                     />
                     <AdminPane
                       v-else-if="activeFileRight.tabType === 'admin-settings'"
@@ -2283,6 +2309,8 @@ import TaskDialog from '@/components/calendar/TaskDialog.vue'
 import { taskStore, loadProjectTasks } from '@/utils/taskStore.js'
 import { startTaskReminders, todayDigest } from '@/utils/taskReminders.js'
 const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
+// 日程标签（dev-board#1048）：CalendarPane 带着 FullCalendar，懒加载——只有开过日程标签的会话才付这份成本
+const CalendarPane = defineAsyncComponent(() => import('@/components/calendar/CalendarPane.vue'))
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
 import SubmitDraftGuide from '@/components/collab/SubmitDraftGuide.vue'
@@ -2409,6 +2437,8 @@ import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
 import { insightEntityTabMethods } from './insightEntityTab.js'
 import { welcomeTabMethods, WELCOME_TAB_ID, loadShowWelcomeOnStartup, saveShowWelcomeOnStartup } from './welcomeTab.js'
+import { calendarTabMethods } from './calendarTab.js'
+import { tabSnapshotMethods } from './tabSnapshot.js'
 import { isPaneAllowedWithoutProject, NO_PROJECT_DEFAULT_PANE, NO_PROJECT_PANE_KEYS, workbenchStorageKey } from './noProjectShell.js'
 import ProjectListPane from '@/components/project-list/ProjectListPane.vue'
 import WelcomePane from '@/components/welcome/WelcomePane.vue'
@@ -2438,6 +2468,8 @@ export default {
     return {
       leaveWorkbench: (url) => this.leaveWorkbench(url),
       openSettingsTab: (opts) => this.openSettingsTab(opts || {}),
+      // 日程标签（dev-board#1048）：项目面板、设置里的「个人 → 事项」等子组件开日程不离开工作台
+      openCalendarTab: (opts) => this.openCalendarTab(opts || {}),
     }
   },
   components: {
@@ -2487,6 +2519,7 @@ export default {
     VersionPanel,
     CommitHistoryTab,
     ProjectCalendarPane,
+    CalendarPane,
     TaskDialog,
     ProjectListPane,
     WelcomePane,
@@ -2820,6 +2853,11 @@ export default {
     }
   },
   computed: {
+    // 标签快照的变化信号（dev-board#1049）：只读快照白名单字段，所以名字、网页地址、分屏、
+    // 激活标签变了会触发写，编辑器内部状态不会
+    tabSnapshotSignature() {
+      return JSON.stringify(this.currentTabSnapshot())
+    },
     // 备胎分两桶渲染：可见桶（预热备胎 / 过继后的文档实例）留在左窗格里；隐藏桶
     // （三方合并借用）挂在 .editors-container 直下，不受「左栏有没有开文档」影响。
     libreVisibleSpares() { return this.libreSpares.filter((sp) => !sp.hidden) },
@@ -3393,6 +3431,11 @@ export default {
   },
   beforeUnmount() {
     clearInterval(this._mergeElapsedTimer)
+    // 标签快照（dev-board#1049）：卸载前把节流中的那次写掉
+    this.flushTabSnapshot()
+    if (typeof window !== 'undefined' && this._onTabSnapshotPageHide) {
+      window.removeEventListener('pagehide', this._onTabSnapshotPageHide)
+    }
     this.closeDocumentLinkPreview()
     this.disposeThemeSwitch()
     this.unbindTabsWheel()
@@ -3671,8 +3714,22 @@ export default {
     // 登录态下启用剪贴板记录（仅记录本应用能感知到的 paste / 复制按钮）
     this.bindClipboardListener()
 
-    // 无项目态启动：中央打开「欢迎」标签（「启动时显示欢迎页」关掉了就停在空态，空态里有链接能开回来）
-    if (!this.hasProject && this.showWelcomeOnStartup) this.openWelcomeTab()
+    // 标签快照（dev-board#1049）：恢复上次的标签条、激活标签与分屏（快照优先于上面 activeTabsByMode
+    // 的旧记忆）。恢复完再决定要不要开欢迎页、要不要开日程深链——
+    // 无项目态启动时「启动时显示欢迎页」只在什么都没恢复出来时生效（同 VS Code 的 startupEditor：
+    // 恢复了编辑器就不另开欢迎页；快照里本来就有欢迎标签则照恢复）。
+    this.restoreTabSnapshot().then((restored) => {
+      if (!this.hasProject && this.showWelcomeOnStartup && !restored) this.openWelcomeTab()
+      // 日历薄壳页 / 提醒通知转进来时带 ?tab=calendar&focus=&group=（dev-board#1048）
+      if (query && query.tab === 'calendar') {
+        this.openCalendarTab({ focus: query.focus || '', group: query.group || '' })
+      }
+    })
+    if (typeof window !== 'undefined') {
+      // 刷新 / 关窗时节流中的那次写可能来不及：pagehide 同步补一次
+      this._onTabSnapshotPageHide = () => this.flushTabSnapshot()
+      window.addEventListener('pagehide', this._onTabSnapshotPageHide)
+    }
 
     this.loadDynamicPlugins() // Fetch dynamic plugins
     this.loadEnabledSkills() // 左栏插件位按 skill 启停过滤（诉讼可视化默认不安装）
@@ -4116,6 +4173,9 @@ export default {
     }
   },
   watch: {
+    tabSnapshotSignature() {
+      this.scheduleTabSnapshotSave()
+    },
     // 自动合并进行中每秒推一次时钟，让顶栏那句「正在合并…」带上已等秒数；结束即停。
     'documentMergeState.running'(running) {
       clearInterval(this._mergeElapsedTimer)
@@ -4284,6 +4344,8 @@ export default {
     // 「依据」实体详情标签（dev-board#541）
     ...insightEntityTabMethods,
     ...welcomeTabMethods,
+    ...calendarTabMethods,
+    ...tabSnapshotMethods,
     ...documentLinkPreviewMethods,
     // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
     onFileHistory(file) {
@@ -4389,6 +4451,8 @@ export default {
     //
     // 逐个保存；只要仍有未落盘的改动就留在工作台，让用户重试或先关闭该文档处理。
     async leaveWorkbench(url) {
+      // 标签快照（dev-board#1049）：离开前同步写一次，不等节流
+      if (this.flushTabSnapshot) this.flushTabSnapshot()
       try {
         const result = await flushDirtyEditors(
           this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
@@ -4408,10 +4472,9 @@ export default {
       this.projectSwitcherOpen = false
       this.openProjectsPane()
     },
-    // 全局日程页（命令「日程」、头像菜单「我的日程」）。同日程面板底部「查看全盘日程」
-    // 一样走 leaveWorkbench：先落盘再 reLaunch（工作台参与的跳转一律 reLaunch）。
+    // 日程（命令「日程」、账户下拉「我的日程」）：中栏日程标签（dev-board#1048），不再离开工作台
     goCalendar() {
-      this.leaveWorkbench('/pages/calendar/calendar')
+      this.openCalendarTab()
     },
     // ---------- 事项（dev-board#899）：工作台唯一的 TaskDialog ----------
     openTaskDialog({ mode = 'create', task = null, presetFileIds = [] } = {}) {
@@ -4462,6 +4525,17 @@ export default {
       }
       this.taskDialog.visible = false
       this.openFile(file)
+    },
+    // 标签快照恢复前核对文件还在不在（dev-board#1049）：一次 GET 整棵树（回收站里的不在其中），
+    // Map<String(id), file>。只在快照里真有文件 / 对比标签时才调。
+    async fetchTabSnapshotFileIndex() {
+      const resp = await getProjectFiles(this.projectId, null, true)
+      const files = Array.isArray(resp) ? resp : ((resp && resp.data) || [])
+      const index = new Map()
+      for (const f of files) {
+        if (f && !f.isFolder && f.id !== null && f.id !== undefined) index.set(String(f.id), f)
+      }
+      return index
     },
     // Cmd+P 快速打开面板选中文件
     onQuickOpenFile(file) {

@@ -85,6 +85,31 @@ function whenText(task) {
   return time ? t('calendar.notifyWhenTime', { date, time }) : t('calendar.notifyWhenAllDay', { date })
 }
 
+const WORKBENCH_ROUTE = 'pages/project-overview/project-overview'
+
+/**
+ * 通知点击的落点（dev-board#1048）：当前就在工作台（页面栈顶是工作台、且活跃实例指针指着它）
+ * 就开中栏日程标签并定位到这条事项；否则去日程薄壳页，由它 reLaunch 进工作台再开标签。
+ * 返回 'tab' | 'page'（给单测看）。
+ */
+export function openReminderTarget(taskId) {
+  const vm = typeof window !== 'undefined' ? window.__checkbaActiveOverviewVm : null
+  let route = ''
+  try {
+    const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [] // eslint-disable-line no-undef
+    const top = pages && pages.length ? pages[pages.length - 1] : null
+    route = String((top && (top.route || (top.$page && top.$page.route))) || '').replace(/^\//, '')
+  } catch (e) {
+    route = ''
+  }
+  if (vm && typeof vm.openCalendarTab === 'function' && route === WORKBENCH_ROUTE) {
+    vm.openCalendarTab({ focus: taskId })
+    return 'tab'
+  }
+  uni.navigateTo({ url: '/pages/calendar/calendar?focus=' + taskId })
+  return 'page'
+}
+
 function showReminder(task) {
   const type = typeMeta(task.type, t).label
   const title = t('calendar.notifyTitle', { type, title: task.title || '' })
@@ -96,7 +121,7 @@ function showReminder(task) {
       n.onclick = () => {
         try { window.focus() } catch (e) { /* ignore */ }
         n.close()
-        uni.navigateTo({ url: '/pages/calendar/calendar?focus=' + task.id })
+        openReminderTarget(task.id)
       }
       return
     } catch (e) {
