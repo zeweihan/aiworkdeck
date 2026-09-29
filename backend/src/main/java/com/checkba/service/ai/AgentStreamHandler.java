@@ -70,6 +70,33 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     // 本轮请求发出的时刻（armInactivityWatchdog 设定）与「首字已记过账」闩，用于 TTFT 日志
     private volatile long roundStartNanos = 0L;
     private volatile boolean ttftLogged = false;
+    // 本轮实际承接的上游供应商（OpenRouter 分片顶层的 provider，dev-board#1061）；只进诊断日志
+    private volatile String upstreamProvider = null;
+
+    // ==================== 首字节前排队换家（dev-board#1061） ====================
+    // 保活注释只证明「连接活着」，不证明「模型开始干活」：OpenRouter 把请求排在某家供应商的队里时，
+    // 保活照样每几秒一行，lastActivityNanos 被刷新、首字节时限永远到不了，用户看着「思考中」干等。
+    // 这里单独记「真字节」：从上弦起只收到保活、没有任何正文/思考超过 requeueAfterSeconds，
+    // 就调通道交来的换家动作重发一次（一轮只一次），之后仍按原有链路走。
+    private volatile boolean keepAliveSeen = false;
+    private volatile java.util.function.BooleanSupplier providerRequeue = null;
+    private volatile int requeueAfterSeconds = 0;
+    private final java.util.concurrent.atomic.AtomicBoolean requeueFired =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    // 可注入时钟：测试不真睡 30 秒
+    private volatile java.util.function.LongSupplier nanoClock = System::nanoTime;
+
+    private long now() {
+        return nanoClock.getAsLong();
+    }
+
+    void setClockForTest(java.util.function.LongSupplier clock) {
+        this.nanoClock = clock;
+    }
+
+    boolean checkKeepAliveSeenForTest() {
+        return keepAliveSeen;
+    }
     private volatile java.util.concurrent.ScheduledFuture<?> watchdogFuture;
 
     // 守护线程调度器：进程退出不被它拖住；全局单线程足够（只做轻量检查）
@@ -101,14 +128,15 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
      * </ul>
      */
     public void armInactivityWatchdog(int firstTokenSeconds, int inactivitySeconds) {
-        lastActivityNanos = System.nanoTime();
+        lastActivityNanos = now();
         // TTFT 的零点（dev-board#729 ⑥）：看门狗上弦的位置正好是「工具准备与本地压缩都做完、
         // 马上要发请求」那一刻，与 runLoop 里 generate 的调用点只隔几行，是最诚实的起算点。
         roundStartNanos = lastActivityNanos;
         ttftLogged = false;
         watchdogFuture = WATCHDOG.scheduleWithFixedDelay(() -> {
             if (terminated.get()) return;
-            long idleSec = (System.nanoTime() - lastActivityNanos) / 1_000_000_000L;
+            if (checkProviderRequeue()) return;
+            long idleSec = (now() - lastActivityNanos) / 1_000_000_000L;
             boolean started = streamedAnyToken || streamedAnyReasoning;
             int limitSec = started ? inactivitySeconds : firstTokenSeconds;
             if (idleSec >= limitSec) {
@@ -138,8 +166,8 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     private void noteFirstByte(String kind) {
         if (ttftLogged || roundStartNanos == 0L) return;
         ttftLogged = true;
-        log.info("Stream TTFT conv={} model={} kind={} ms={}",
-                conversationId, modelId, kind, (System.nanoTime() - roundStartNanos) / 1_000_000L);
+        log.info("Stream TTFT conv={} model={} provider={} kind={} ms={}",
+                conversationId, modelId, providerForLog(), kind, (now() - roundStartNanos) / 1_000_000L);
     }
 
     private void cancelWatchdog() {
@@ -235,7 +263,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         // 终态后到达的迟到 token 丢弃（看门狗已终止本轮时，底层流可能还在吐）；
         // 用户停止之后同理——在途缓冲里那几段不该再往前端、快照与文档里走
         if (terminated.get() || cancelled()) return;
-        lastActivityNanos = System.nanoTime();
+        lastActivityNanos = now();
         if (token != null && !token.isEmpty()) {
             streamedAnyToken = true;
             noteFirstByte("token");
@@ -263,7 +291,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     @Override
     public void onReasoning(String reasoningDelta) {
         if (terminated.get() || cancelled() || reasoningDelta == null || reasoningDelta.isEmpty()) return;
-        lastActivityNanos = System.nanoTime();
+        lastActivityNanos = now();
         streamedAnyReasoning = true;
         noteFirstByte("reasoning");
         if (onReasoning != null) {
@@ -280,7 +308,40 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     @Override
     public void onKeepAlive() {
         if (terminated.get() || cancelled()) return;
-        lastActivityNanos = System.nanoTime();
+        lastActivityNanos = now();
+        keepAliveSeen = true;
+    }
+
+    @Override
+    public void bindProviderRequeue(int afterSeconds, java.util.function.BooleanSupplier requeue) {
+        this.requeueAfterSeconds = afterSeconds;
+        this.providerRequeue = requeue;
+    }
+
+    /**
+     * 首字节前排队判定（看门狗每 5 秒调一次；测试直接调）。命中且通道确实重发了返回 true。
+     *
+     * <p>条件缺一不可：通道给了换家动作、本轮还没换过、一个真字节（正文或思考）都没到、
+     * 至少收到过一次保活（连不上的情形交给首字节时限，不在这里换家）、从上弦起已过阈值。
+     */
+    boolean checkProviderRequeue() {
+        java.util.function.BooleanSupplier action = providerRequeue;
+        if (action == null || requeueAfterSeconds <= 0 || requeueFired.get()) return false;
+        if (terminated.get() || cancelled() || streamedAnyToken || streamedAnyReasoning || !keepAliveSeen) return false;
+        if (roundStartNanos == 0L) return false;
+        long waitedSec = (now() - roundStartNanos) / 1_000_000_000L;
+        if (waitedSec < requeueAfterSeconds) return false;
+        if (!requeueFired.compareAndSet(false, true)) return false;
+        String from = providerForLog();
+        if (!action.getAsBoolean()) return false;
+        log.warn("Stream conv={} model={} provider={} got only keep-alive for {}s before first byte, requeued on another provider",
+                conversationId, modelId, from, waitedSec);
+        // 重发的那一次重新起算首字节时限；TTFT 仍从最初上弦算（用户真实等待）
+        lastActivityNanos = now();
+        keepAliveSeen = false;
+        upstreamProvider = null;
+        sendSse("provider_retry", "{\"from\":\"" + escapeJson(from) + "\"}");
+        return true;
     }
 
     /**
@@ -293,8 +354,23 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
      */
     @Override
     public void onCacheUsage(int promptTokens, int cachedTokens, int cacheWriteTokens) {
-        log.info("Prompt cache conv={} model={} promptTokens={} cachedTokens={} cacheWriteTokens={}",
-                conversationId, modelId, promptTokens, cachedTokens, cacheWriteTokens);
+        log.info("Prompt cache conv={} model={} provider={} promptTokens={} cachedTokens={} cacheWriteTokens={}",
+                conversationId, modelId, providerForLog(), promptTokens, cachedTokens, cacheWriteTokens);
+    }
+
+    /**
+     * 上游供应商：同一个模型在 OpenRouter 上可能有十几家供应商，首字慢/断流常常只是某一家在排队。
+     * 只进诊断日志，不进埋点、不落库。
+     */
+    @Override
+    public void onProvider(String provider) {
+        if (provider != null && !provider.isBlank()) upstreamProvider = provider;
+    }
+
+    /** 日志里的供应商名；本轮没拿到（Ollama、脚本模型、上游没带）写 unknown。 */
+    String providerForLog() {
+        String p = upstreamProvider;
+        return p == null ? "unknown" : p;
     }
 
     public boolean hasStreamedReasoning() {

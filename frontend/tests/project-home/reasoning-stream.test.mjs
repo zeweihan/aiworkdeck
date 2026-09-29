@@ -39,9 +39,9 @@ globalThis.setInterval = (fn, ms, ...args) => {
 function mountThinkingCard(props) {
   const body = CARD.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
   const factory = new Function(
-    'ref', 'watch', 'computed', 'onMounted', 'onUnmounted', 't', 'defineProps',
+    'ref', 'watch', 'computed', 'onMounted', 'onUnmounted', 't', 'defineProps', 'defineEmits', 'defineExpose',
     body + '\nreturn { liveSeconds, displayDuration, isExpanded }')
-  return factory(ref, watch, computed, onMounted, onUnmounted, (k, p) => `${k}:${JSON.stringify(p)}`, () => props)
+  return factory(ref, watch, computed, onMounted, onUnmounted, (k, p) => `${k}:${JSON.stringify(p)}`, () => props, () => () => {}, () => {})
 }
 
 // 从函数体的 `{`（箭头函数取 `=> {` 之后那个，避免把参数解构的花括号当函数体）配平截取

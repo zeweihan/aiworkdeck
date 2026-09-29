@@ -89,4 +89,15 @@ class AgentStreamHandlerReasoningTest {
         assertFalse(fired.getCount() == 0,
                 "OpenRouter 的 \": OPENROUTER PROCESSING\" 是上游还在跑的证据，看门狗必须认它");
     }
+
+    @Test
+    @DisplayName("上游供应商名只进诊断日志：拿不到写 unknown，拿到后 TTFT 与缓存日志都带上（dev-board#1061）")
+    void upstreamProviderIsKeptForDiagnostics() {
+        AgentStreamHandler h = handler(mock(SseEmitterService.class), new AtomicReference<>(), new CountDownLatch(1));
+        assertEquals("unknown", h.providerForLog());
+        h.onProvider("  ");
+        assertEquals("unknown", h.providerForLog(), "空白不算拿到");
+        h.onProvider("Moonshot AI");
+        assertEquals("Moonshot AI", h.providerForLog());
+    }
 }

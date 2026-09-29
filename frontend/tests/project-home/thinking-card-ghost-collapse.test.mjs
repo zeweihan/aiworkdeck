@@ -48,9 +48,9 @@ function extractScriptSetupBody() {
 function mountThinkingCard(props) {
   const body = extractScriptSetupBody()
   const factory = new Function(
-    'ref', 'watch', 'computed', 'onMounted', 'onUnmounted', 't', 'defineProps',
+    'ref', 'watch', 'computed', 'onMounted', 'onUnmounted', 't', 'defineProps', 'defineEmits', 'defineExpose',
     body + '\nreturn { isExpanded, toggle }')
-  return factory(ref, watch, computed, onMounted, onUnmounted, (k) => k, () => props)
+  return factory(ref, watch, computed, onMounted, onUnmounted, (k) => k, () => props, () => () => {}, () => {})
 }
 
 test('CRITICAL 行为：挂载时 status 已经是 done（ghost 变体重挂载的常见场景），isExpanded 必须立刻是 false', () => {
@@ -75,10 +75,10 @@ test('挂载后 status 从 thinking 变为 done，照常触发折叠（回归保
   const statusRef = ref('thinking')
   const body = extractScriptSetupBody()
   const factory = new Function(
-    'ref', 'watch', 'computed', 'onMounted', 'onUnmounted', 't', 'defineProps',
+    'ref', 'watch', 'computed', 'onMounted', 'onUnmounted', 't', 'defineProps', 'defineEmits', 'defineExpose',
     body + '\nreturn { isExpanded }')
   const { isExpanded } = factory(ref, watch, computed, onMounted, onUnmounted, (k) => k,
-    () => ({ get status() { return statusRef.value }, duration: 0, content: '', startTime: Date.now() }))
+    () => ({ get status() { return statusRef.value }, duration: 0, content: '', startTime: Date.now() }), () => () => {}, () => {})
   assert.equal(isExpanded.value, true)
   statusRef.value = 'done'
   // watch 默认 flush:'pre'，回调不是同步触发的——要等一轮 Vue 的调度队列

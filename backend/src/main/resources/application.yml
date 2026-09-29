@@ -324,6 +324,29 @@ ai:
       # 由 AiFailoverPropertiesBindingTest 守
       - deepseek/deepseek-v4-flash
       - qwen/qwen3.7-flash
+  # 思考型模型的思考强度（对应 AiReasoningProperties，dev-board#1061）。
+  # 请求体带 OpenRouter 统一参数 "reasoning": {"effort": ...}；不带时供应商按自己的默认值深想，
+  # 一句话的问题也会想几十秒、按输出单价计费。只对 models 里点名的模型注入，空名单 = 都不注入。
+  # 名单里的每一条都要先用真实请求核对过「接受（不 400）且思考确实变短」：
+  # 2026-09-29 对 moonshotai/kimi-k3 实测（InferenceNet / Together / Wafer 三家供应商，含带工具的请求）
+  # 全部 200，不带时 completion 321/587 token，medium 94/96，low 119/102。
+  reasoning:
+    effort-default: medium
+    models:
+      - moonshotai/kimi-k3
+  # OpenRouter 供应商路由偏好（对应 AiProviderRoutingProperties，dev-board#1061）。
+  # 只对上面 reasoning.models 里的思考型模型生效（quantizations 是硬过滤，单供应商模型上是纯风险）。
+  # 默认只按时延排序、不按量化过滤：官方 Moonshot AI 端点标的就是 mxfp4（K3 原生精度），按 4 bit
+  # 一刀切会把最该留的那家排掉（维护者 2026-09-29 定：稳定优先，官方端点必须在候选里）。
+  # 要排量化档时填 OpenRouter 枚举（int4/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown）。
+  provider-routing:
+    enabled: true
+    sort: latency
+    quantizations: []
+    allow-fallbacks: true
+  # 首字节前只收到 OpenRouter 保活注释（请求排在某家供应商的队里）超过这么多秒，
+  # 就掐掉本次请求、换一家供应商重发一次（只对启用了供应商路由的模型）。0 = 不重发。
+  first-byte-requeue-seconds: 30
   # AI 上下文与压缩配置（对应 AiContextProperties，以下均为默认值，可按需覆盖）
   context:
     # 上下文总 token 预算的**兜底值**：只在模型标识解析不出上下文长度时用到

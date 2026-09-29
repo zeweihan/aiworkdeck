@@ -262,7 +262,9 @@ export function useAgentStream() {
     const createAssistantBubble = () => ({
         id: nextBubbleId(),
         role: 'ASSISTANT',
-        thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 },
+        // receivedDelta：本轮是否已收到过思考/正文增量；providerRetried：后端是否因首字节前只有保活
+        // 换过一家供应商（provider_retry）。两者只驱动 ThinkingCard 的长思考副文案（dev-board#1061）。
+        thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0, receivedDelta: false, providerRetried: false },
         title: '',
         processes: [],
         timeline: [],
@@ -1113,6 +1115,14 @@ export function useAgentStream() {
         // 只有两件事：立刻停掉重连（继续重连就是互顶循环的另一半），以及把状态告诉用户——
         // 否则他看到的是一个不停「正在重连（第 N 次）」却永远连不上的窗口。
         // 与 plan_update 同理放在气泡守卫之前：切回会话/重连时气泡指针为 null。
+        // 首字节前只收到保活、后端已换一家供应商重发（dev-board#1061）。与 superseded 同理放在
+        // 气泡守卫之前；只改思考卡的副文案，不动任何流状态。
+        if (evt === 'provider_retry') {
+            const b = currentAssistantBubble.value
+            if (b && b.thinking) b.thinking.providerRetried = true
+            return
+        }
+
         if (evt === 'superseded') {
             supersededByOtherClient = true
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
@@ -1441,6 +1451,8 @@ export function useAgentStream() {
                 appendReasoning(dataStr)
             }
         } else if (evt === 'text_delta') {
+            // 正文也算真字节：长思考副文案不再说「服务商排队中」（dev-board#1061）
+            if (currentAssistantBubble.value?.thinking) currentAssistantBubble.value.thinking.receivedDelta = true
             try {
                 const d = JSON.parse(dataStr)
                 processTextStream(d.content || '')
@@ -1906,6 +1918,7 @@ export function useAgentStream() {
     const appendReasoning = (text) => {
         const bubble = currentAssistantBubble.value
         if (!bubble || !text) return null
+        if (bubble.thinking) bubble.thinking.receivedDelta = true
         if (bubble.processes.length > 0) {
             const lastProc = bubble.processes[bubble.processes.length - 1]
             const lastItem = lastProc.items.length > 0 ? lastProc.items[lastProc.items.length - 1] : null
@@ -1918,7 +1931,7 @@ export function useAgentStream() {
             return lastProc.items[lastProc.items.length - 1]
         }
         if (bubble.thinking.status !== 'thinking') {
-            bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: nowMs() }
+            bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: nowMs(), receivedDelta: true, providerRetried: false }
             bubble.thinking.status = 'thinking'
             if (!bubble.thinking.startTime) bubble.thinking.startTime = nowMs()
         }

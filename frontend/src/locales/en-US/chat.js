@@ -332,6 +332,10 @@ export default {
   toolCallFallback: 'Tool call',
   // ---- ThinkingCard ----
   thinkingLive: 'Thinking… {seconds}s',
+  // Long-thinking hint (dev-board#1061), shown under "Thinking… Ns" once it passes 60 s
+  thinkingQueued: 'The provider is queueing this request. You can stop and try another model.',
+  thinkingLong: 'The model is still reasoning. You can stop and try another model.',
+  thinkingRequeued: 'Retried with another provider',
   thinkingProcessWithDuration: 'Thought process ({duration})',
   thinkingProcess: 'Thought process',
   thoughtFor: 'Thought for {duration}',

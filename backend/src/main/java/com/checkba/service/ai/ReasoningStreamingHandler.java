@@ -50,4 +50,23 @@ public interface ReasoningStreamingHandler extends StreamingResponseHandler<AiMe
      */
     default void onCacheUsage(int promptTokens, int cachedTokens, int cacheWriteTokens) {
     }
+
+    /**
+     * 本轮实际承接请求的上游供应商（OpenRouter 在每个流式分片顶层带 {@code "provider"}，
+     * 如 {@code "Moonshot AI"}）。每轮至多回调一次，且在该分片的内容回调之前。
+     *
+     * <p>只用于诊断日志（dev-board#1061：同一个模型今早 4 秒出首字、下午 41 秒，
+     * 差别在 OpenRouter 路由到了哪一家）。不进埋点、不落库。
+     */
+    default void onProvider(String provider) {
+    }
+
+    /**
+     * 通道交给 handler 的「换家重发」动作（dev-board#1061）：首字节前只收到保活超过
+     * {@code afterSeconds} 秒时，handler 的看门狗调用 {@code requeue}。它掐掉本次请求、
+     * 带 {@code provider.ignore} 重发<b>一次</b>；返回 false 表示没有重发（已用过/已到终态/已取消）。
+     * 只有配置了供应商路由的通道会调用本方法。
+     */
+    default void bindProviderRequeue(int afterSeconds, java.util.function.BooleanSupplier requeue) {
+    }
 }

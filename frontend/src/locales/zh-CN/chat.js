@@ -339,6 +339,10 @@ export default {
   toolCallFallback: '工具调用',
   // ---- ThinkingCard ----
   thinkingLive: '思考中… {seconds} 秒',
+  // 长思考副文案（dev-board#1061）：liveSeconds ≥ 60 时出现在「思考中… N 秒」下面
+  thinkingQueued: '服务商排队中，可以停止后换个模型再试',
+  thinkingLong: '模型仍在推理，可以停止后换个模型',
+  thinkingRequeued: '已换一家供应商重试',
   thinkingProcessWithDuration: '思考过程（{duration}）',
   thinkingProcess: '思考过程',
   thoughtFor: '已思考 {duration}',

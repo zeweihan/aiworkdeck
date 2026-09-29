@@ -409,6 +409,7 @@
                @answer-question="handleQuestionAnswer"
                @message-action="$emit('message-action', $event)"
                @regenerate="openRegenerateDialog(index)"
+               @stop-generation="handleAbort"
              />
              <!-- <span v-if="msg.timestamp" class="bubble-timestamp assistant">{{ msg.timestamp }}</span> -->
           </div>

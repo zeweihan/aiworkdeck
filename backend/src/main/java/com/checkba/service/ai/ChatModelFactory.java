@@ -539,6 +539,54 @@ public class ChatModelFactory {
         return new OpenRouterStreamingChatModel(apiKey, baseUrl, modelId, timeout, maxRequestsPerHost);
     }
 
+    /**
+     * 带思考强度与供应商路由的构建口径（dev-board#1061）；两者都为 null 时与五参版本完全一致。
+     */
+    static dev.langchain4j.model.chat.StreamingChatLanguageModel
+            streamingModel(String apiKey, String baseUrl, String modelId, java.time.Duration timeout,
+                           int maxRequestsPerHost, String reasoningEffort,
+                           OpenRouterStreamingChatModel.ProviderRouting providerRouting) {
+        return new OpenRouterStreamingChatModel(apiKey, baseUrl, modelId, timeout, maxRequestsPerHost,
+                reasoningEffort, providerRouting);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.config.AiProviderRoutingProperties providerRoutingProperties;
+
+    /** 首字节前只收到保活多少秒后换一家供应商重发一次（0 = 不重发）。 */
+    @org.springframework.beans.factory.annotation.Value("${ai.first-byte-requeue-seconds:30}")
+    private int firstByteRequeueSeconds = 30;
+
+    void setProviderRoutingForTest(com.checkba.config.AiProviderRoutingProperties p, int requeueSeconds) {
+        this.providerRoutingProperties = p;
+        this.firstByteRequeueSeconds = requeueSeconds;
+    }
+
+    /** 该模型的供应商路由偏好；只对思考型模型名单生效，关闭/名单外返回 null。 */
+    OpenRouterStreamingChatModel.ProviderRouting providerRoutingFor(String modelId) {
+        com.checkba.config.AiProviderRoutingProperties r = providerRoutingProperties;
+        com.checkba.config.AiReasoningProperties reasoning = reasoningProperties;
+        if (r == null || !r.isEnabled() || reasoning == null || !reasoning.listed(modelId)) return null;
+        return new OpenRouterStreamingChatModel.ProviderRouting(r.getSort(),
+                r.getQuantizations() == null ? java.util.List.of() : java.util.List.copyOf(r.getQuantizations()),
+                r.isAllowFallbacks(), Math.max(0, firstByteRequeueSeconds));
+    }
+
+    /**
+     * 思考强度配置（dev-board#1061）。字段注入而不进构造器：本类由 {@code @RequiredArgsConstructor}
+     * 生成构造器，测试里有手工 new 的实例，缺它时一律不注入（= 改动前行为）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.config.AiReasoningProperties reasoningProperties;
+
+    void setReasoningPropertiesForTest(com.checkba.config.AiReasoningProperties p) { this.reasoningProperties = p; }
+
+    /** 该模型本轮要带的思考强度；null = 不带（名单外/未配置）。 */
+    String reasoningEffortFor(String modelId) {
+        com.checkba.config.AiReasoningProperties p = reasoningProperties;
+        return p == null ? null : p.effortFor(modelId);
+    }
+
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreatePlatformStreamingModel(String modelId) {
         recordModelUse("AWD_CLOUD", modelId, true);
         String apiKey = platformApiKey();
@@ -547,7 +595,7 @@ public class ChatModelFactory {
             log.info("Creating new AWD Cloud StreamingChatModel for: {}", modelId);
             AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
             return streamingModel(apiKey, config.getBaseUrl(), modelId, config.getTimeout(),
-                    config.getMaxRequestsPerHost());
+                    config.getMaxRequestsPerHost(), reasoningEffortFor(modelId), providerRoutingFor(modelId));
         });
     }
 
@@ -593,7 +641,7 @@ public class ChatModelFactory {
             requireByokKey(apiKey);
             
             return streamingModel(apiKey, baseUrl, modelId, config.getTimeout(),
-                    config.getMaxRequestsPerHost());
+                    config.getMaxRequestsPerHost(), reasoningEffortFor(modelId), providerRoutingFor(modelId));
         });
     }
 
