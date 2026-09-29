@@ -48,9 +48,10 @@ it just becomes literal characters on the slide.
 
 ## 8. PDFs and other PPT files in the project: read-only here
 
-- PDF: `pdf_list_files` for the file IDs, `pdf_inspect` to read the text page by page. Highlighting, redaction, in-place replacement and conversion to Word all need the desktop client - tell the user plainly that this session cannot do them.
-- PPTX files stored **in the project** (not the deck open in front of you): `pptx_list_files` / `pptx_search_files` to find them, `pptx_inspect_format` to read text and formatting; changing them needs the desktop client.
-- Any project file can be read as text with `read_document` (by file ID) or `extract_file_text`; images and scans go through OCR automatically.
+- File IDs come from `doc_list_project_files`: every project file in one call (Word / Excel / PPT / PDF / plain text / images), each with its file ID and type. To find a file by name use `search_project_files`; to find which material mentions a phrase use `search_project_content`.
+- PDF: `pdf_inspect` to read the text page by page. Highlighting, redaction, in-place replacement and conversion to Word all need the desktop client - tell the user plainly that this session cannot do them.
+- PPTX files stored **in the project** (not the deck open in front of you): `pptx_inspect_format` to read text and formatting; changing them needs the desktop client.
+- Any project file can be read as text with `extract_file_text` (by file ID); images and scans go through OCR automatically. For a long file, pass the reply's nextStart as `offset` to continue.
 
 ## 9. Creating project files (only when the user asks)
 

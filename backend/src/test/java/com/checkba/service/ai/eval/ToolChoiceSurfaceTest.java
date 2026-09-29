@@ -120,8 +120,10 @@ class ToolChoiceSurfaceTest {
 
         // 生成 / 大纲 / 导出 / 列表 / 只读检查这几样不可替代，必须留着
         List<String> slideSession = offeredNames(registry, "conv", ClientCapabilityService.DOC_KIND_SLIDE);
+        // pptx_list_files 不在这份名单里了：它是 doc_list_project_files 按 .pptx 过滤的子集，
+        // dev-board#1065（T-27）起只登记不下发——文件 ID 统一从全类型清单拿
         for (String kept : List.of("pptx_generate", "pptx_generate_outline", "pptx_export_editable",
-                "pptx_list_files", "pptx_inspect_format")) {
+                "doc_list_project_files", "pptx_inspect_format")) {
             assertTrue(slideSession.contains(kept),
                     kept + " 是不可替代的那一批，不该跟着撤下：" + String.join(", ", slideSession));
         }
@@ -179,6 +181,76 @@ class ToolChoiceSurfaceTest {
                 "list_files 的实现逐条附 (fileId=N)，描述却曾写着 NO database fileId——"
                         + "模型只读描述，于是一个能用的能力被自己的文案藏起来了：" + listFiles);
         assertFalse(listFiles.contains("NO database fileId"), listFiles);
+
+        // 同一个病（dev-board#1065 T-02）：search_project_files 的实现同样逐条附 (fileId=N)，
+        // 描述却写着「Returns paths only, NO database fileId」，而且它在核心集里
+        String searchFiles = descriptionOf(registry, "search_project_files");
+        assertTrue(searchFiles.contains("fileId"),
+                "search_project_files 的结果带 (fileId=N)，描述必须说出来：" + searchFiles);
+        assertFalse(searchFiles.contains("NO database fileId"), searchFiles);
+        assertFalse(searchFiles.contains("Controller.java"),
+                "示例参数要是律师会搜的文件名，不是开发者口吻：" + searchFiles);
+
+        // 按类型的专用清单只登记不下发（T-27）：权威清单在每一类会话里都可见之后，它们只剩重复
+        List<String> offered = offeredNames(registry, "conv", null);
+        for (String subset : List.of("pdf_list_files", "pptx_list_files", "pptx_search_files")) {
+            assertFalse(offered.contains(subset), subset + " 不该再下发：" + String.join(", ", offered));
+        }
+    }
+
+    @Test
+    @DisplayName("权威清单在三类会话里都可见：任务窗格与纯对话会话不再被指向一个拿不到的工具（dev-board#1065 T-01）")
+    void theInventoryIsOfferedInEverySession() {
+        RecordingToolRegistry registry = registry();
+        registry.capabilities().record("conv-word", "office");
+        registry.capabilities().record("conv-excel", "office", "excel");
+        registry.capabilities().record("conv-none", "none");
+        for (String conv : List.of("conv", "conv-word", "conv-excel", "conv-none")) {
+            List<String> offered = offeredNames(registry, conv, null);
+            assertTrue(offered.contains("doc_list_project_files"),
+                    conv + " 里看不见权威清单——而十来个可见工具的描述都说 fileId 从它拿：" + offered);
+            assertEquals("conv".equals(conv), offered.contains("doc_open_file"),
+                    "例外只开给纯后端的清单，doc_open_file 仍然只属于 LOWA 会话：" + conv);
+        }
+    }
+
+    @Test
+    @DisplayName("按正文找文件有了一个真工具，三个「找」的分工写在描述里（dev-board#1065 T-03）")
+    void contentSearchHasOneRealToolAndTheFindersPointAtEachOther() {
+        RecordingToolRegistry registry = registry();
+        List<String> offered = offeredNames(registry, "conv", ClientCapabilityService.DOC_KIND_WRITER);
+        assertTrue(offered.contains("search_project_content"), String.join(", ", offered));
+        assertFalse(offered.contains("doc_search_related_docs"),
+                "doc_search_related_docs 自称搜内容、实际只比文件名，还拿「前 10 个文档」冒充结果——不许再下发");
+
+        String content = descriptionOf(registry, "search_project_content");
+        assertTrue(content.contains("search_project_files"), "要说清按文件名找用哪个：" + content);
+        assertTrue(content.contains("doc_find_text"), "要说清在打开的文档里找用哪个：" + content);
+        assertTrue(descriptionOf(registry, "search_project_files").contains("search_project_content"),
+                "另一头也要点名，否则模型拿文件名搜索去找正文");
+    }
+
+    @Test
+    @DisplayName("读、移、写三组同义入口各只剩一个下发（dev-board#1065 T-05/T-06/T-07）")
+    void synonymEntryPointsAreCollapsed() {
+        RecordingToolRegistry registry = registry();
+        List<String> offered = offeredNames(registry, "conv", null);
+        assertTrue(offered.contains("extract_file_text"));
+        assertFalse(offered.contains("read_document"), "与 extract_file_text 同一个抽取器，只留一个入口");
+        assertTrue(offered.contains("move_files_batch"));
+        assertFalse(offered.contains("move_file"), "单条移动也走 move_files_batch");
+        assertFalse(descriptionOf(registry, "move_files_batch").contains("keep using move_file"),
+                "move_files_batch 不许再把单条移动指回一个已不下发的工具");
+        assertTrue(offered.contains("write_file"));
+        assertFalse(offered.contains("scan_files"), "write_file 有了 parentFolderId，scan_files 只剩维护用途");
+        assertTrue(String.valueOf(registry.getAllSpecifications("conv", null).stream()
+                        .filter(s -> s.name().equals("write_file")).findFirst().orElseThrow()
+                        .parameters().properties()).contains("parentFolderId"),
+                "write_file 必须能直接写进子文件夹");
+        assertTrue(descriptionOf(registry, "write_docx").contains("doc_start_stream")
+                        && descriptionOf(registry, "doc_start_stream").contains("write_docx"),
+                "两个都能新建 docx，判据要写在描述里互相点名");
+        assertTrue(offered.contains("copy_files"), "复制文件（T-25）要下发");
     }
 
     @Test

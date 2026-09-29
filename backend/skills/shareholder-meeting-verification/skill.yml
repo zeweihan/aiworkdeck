@@ -32,7 +32,7 @@ prompt: prompt.md
 #   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
 # 下面清单里的 todo_write / dispatch_subtask 现在已被编排类工具集恒定放行、属于冗余，
 # 刻意保留：显式声明是自文档（删掉会让本文件读起来像"本 skill 不需要清单/不需要子 Agent"）。
-# 基础工具集只有三个（read_document / list_files / query_memory，见 application.yml 的 ai.skills.base-tools），
+# 基础工具集只有三个（extract_file_text / list_files / query_memory，见 application.yml 的 ai.skills.base-tools），
 # 所以凡是本 skill 要用的工具都必须在这里逐个列出——漏了就是「模型看不见 = 不会调用」。
 # dispatch_subtask 曾经漏列：本 skill 是 system_prompt.md 第 6.5 节明确要委派的长程任务
 #（逐份文件抽取字段本身就是「会产生大量中间产物、只需要结论」的典型），裁剪把它藏起来后，

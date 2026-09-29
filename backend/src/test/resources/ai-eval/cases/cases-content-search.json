@@ -1,0 +1,57 @@
+[
+  {
+    "id": "content-search-which-material-mentions-a-phrase",
+    "title": "「哪份材料里提到了违约金」：用 search_project_content 一次全文检索，不再逐份读全文，也不再给出只比文件名的 doc_search_related_docs（dev-board#1065 T-03）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "哪份材料里提到了『违约金』？",
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "search_project_content", "arguments": { "query": "违约金" } }
+        ]
+      },
+      { "text": "<final>《股权转让协议.docx》第 5 行提到了违约金：逾期支付的，按日万分之五支付违约金。</final>" }
+    ],
+    "toolStubs": {
+      "search_project_content": "「违约金」命中 1 个文件、正文共 1 处：\n- 股权转让协议.docx (fileId=1001) [股权转让协议.docx] 第 5 行：逾期支付的，按日万分之五支付违约金\n看某处上下文：extract_file_text(fileId, offset) 读那份文件。"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_project_content", "argsContain": { "query": "违约金" } }
+      ],
+      "offeredToolsInclude": ["search_project_content", "search_project_files", "extract_file_text"],
+      "offeredToolsExclude": ["doc_search_related_docs", "read_document"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "content-search-available-in-plain-chat-session",
+    "title": "纯对话会话里同样能按正文找材料，权威清单也在（dev-board#1065 T-01/T-03）",
+    "category": "files",
+    "protocol": "native",
+    "clientCapability": "none",
+    "userInput": "哪份材料里提到了『违约金』？",
+    "turns": [
+      {
+        "toolCalls": [
+          { "name": "search_project_content", "arguments": { "query": "违约金" } }
+        ]
+      },
+      { "text": "<final>《股权转让协议.docx》第 5 行提到了违约金。</final>" }
+    ],
+    "toolStubs": {
+      "search_project_content": "「违约金」命中 1 个文件、正文共 1 处：\n- 股权转让协议.docx (fileId=1001) [股权转让协议.docx] 第 5 行：逾期支付的，按日万分之五支付违约金"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_project_content" }
+      ],
+      "offeredToolsInclude": ["search_project_content", "doc_list_project_files", "extract_file_text"],
+      "offeredToolsExclude": ["doc_search_related_docs", "doc_open_file", "pdf_list_files"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

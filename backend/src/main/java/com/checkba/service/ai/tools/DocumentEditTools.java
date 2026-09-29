@@ -64,8 +64,8 @@ public class DocumentEditTools implements AgentToolComponent {
             + "每条给出 fileId、名称与类型标注。它是文件 ID 的主要来源——doc_open_file、extract_file_text、"
             + "pdf_inspect 的 fileId，以及 rename_project_file / move_project_file / create_folder 的 "
             + "fileId 与 parentFolderId 都从这里取。\n"
-            + "用户问「项目里都有什么」时调这一个就够了，不必再去调 pdf_list_files / pptx_list_files "
-            + "（那两个只是本清单按类型过滤后的子集）。只列文件夹用 list_project_folders；"
+            + "用户问「项目里都有什么」时调这一个就够了。按文件名找用 search_project_files，"
+            + "按正文内容找用 search_project_content；只列文件夹用 list_project_folders；"
             + "只要物理磁盘路径不要 ID 才用 list_files。")
     public String doc_list_project_files(
             @P("项目ID") Long projectId
@@ -99,7 +99,7 @@ public class DocumentEditTools implements AgentToolComponent {
             }
             sb.append("\n说明：");
             if (hasEditable) {
-                sb.append("[可编辑文档] 用 doc_open_file 打开后用 doc_*/sheet_*/slide_* 编辑；");
+                sb.append("[可编辑文档] 桌面编辑器会话里用 doc_open_file 打开后用 doc_*/sheet_*/slide_* 编辑；");
             }
             if (hasPdf) {
                 sb.append("[PDF] 用 pdf_inspect 读、pdf_* 系列改；");
@@ -287,7 +287,8 @@ public class DocumentEditTools implements AgentToolComponent {
           "不传就落在项目根目录——不要在用户指定了文件夹时省略它。" +
           "调用此工具后，你必须立即开始生成文档内容，并且必须使用严格的 Markdown 格式（Markdown Heading #, ##, ### 等）。" +
           "不要在调用此工具后输出任何非文档内容的闲聊，也不要把正文包进 <artifact>/<process>/<thinking> 等协议标签"
-          + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。")
+          + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。"
+          + "与 write_docx 的取舍：篇幅长、要让用户看着一段段写出来的起草用本工具；一次性落盘一份写好的文书用 write_docx。")
     public String doc_start_stream(
             @P("要打开的文件ID (如果是新建文件则传 null)") Long fileId,
             @P("新建文件名 (如 '法律意见书.docx')，仅当 fileId=null 时必填") String fileName,
@@ -744,7 +745,10 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 智能搜索 ====================
 
-    @ToolMeta(displayName = "搜索相关文档", category = "document")
+    // dev-board#1065（审计 T-03）：描述说「在文件名和文档内容中搜索」，实现只比文件名（内容搜索是个 TODO），
+    // 无命中时还回「项目里前 10 个可编辑文档」冒充结果。全文检索由 search_project_content 承担，
+    // 本工具只登记不下发（老会话回放与 XML 兜底照常执行）。
+    @ToolMeta(displayName = "搜索相关文档", category = "document", offerToModel = false)
     @Tool("搜索项目中可能需要修改的相关文档。根据关键词在文件名和文档内容中搜索。")
     public String doc_search_related_docs(
             @P("搜索关键词，如'交易方案'、'股东决议'等") String keyword,

@@ -63,6 +63,36 @@ class ClientCapabilityServiceTest {
         assertTrue(capabilities.isToolVisible("refresh_index", "conv-lowa"));
     }
 
+    @Test
+    @DisplayName("doc_list_project_files 是纯后端清单：三档会话、三类宿主、四种活跃文档类型都可见（dev-board#1065 T-01）")
+    void backendOnlyInventoryIsVisibleInEverySession() {
+        // 病灶：它只查 project_file 表，却因为 doc_ 前缀被判成 LOWA 专属。任务窗格与纯对话会话里
+        // 十来个可见工具的描述都说「fileId 从 doc_list_project_files 取」，照做只拿到 Tool not found。
+        for (String conv : CONVS) {
+            for (String kind : KINDS) {
+                assertTrue(capabilities.isToolVisible("doc_list_project_files", conv, kind),
+                        "权威清单必须到处可见：" + conv + "/" + kind);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("例外只开给那一个名字：其余 doc_* 在 Office / none 会话里照旧不可见")
+    void theExceptionDoesNotLeakToOtherDocTools() {
+        for (String tool : new String[]{"doc_open_file", "doc_get_document_text", "doc_find_replace",
+                "doc_search_related_docs", "doc_start_stream", "sheet_create_file", "slide_get_overview"}) {
+            for (String conv : new String[]{"conv-office", "conv-office-excel", "conv-office-ppt", "conv-none"}) {
+                assertFalse(capabilities.isToolVisible(tool, conv), tool + " 不该在 " + conv + " 里冒出来");
+            }
+            assertTrue(capabilities.isToolVisible(tool, "conv-lowa"), tool + " 在 LOWA 会话里照旧可见");
+        }
+        // 声明层仍叠加在前面：给它声明 LOWA 就只剩 LOWA 会话可见（只收窄、不放宽）
+        capabilities.declareHostRequirement("doc_list_project_files", ToolMeta.Host.LOWA);
+        assertFalse(capabilities.isToolVisible("doc_list_project_files", "conv-office"));
+        assertFalse(capabilities.isToolVisible("doc_list_project_files", "conv-none"));
+        assertTrue(capabilities.isToolVisible("doc_list_project_files", "conv-lowa"));
+    }
+
     // ==================== 声明层 requiresHost（dev-board#799 / 审计 A9） ====================
 
     /** 三档能力 × 三类 Office 宿主 × 四种活跃文档类型（含"判不出来"的 null）。 */

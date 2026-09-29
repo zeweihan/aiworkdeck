@@ -74,7 +74,7 @@ class WriteFileRegistrationTest {
     void writeFileRegistersInProjectDatabase(@TempDir Path dir) throws Exception {
         Harness h = harness(dir);
 
-        String out = h.tools().write_file("会议纪要.txt", "2026-09-01 开庭", PROJECT_ID);
+        String out = h.tools().write_file("会议纪要.txt", "2026-09-01 开庭", PROJECT_ID, null);
 
         assertTrue(Files.exists(dir.resolve("会议纪要.txt")), "物理文件要写出来");
         assertEquals("2026-09-01 开庭",
@@ -93,17 +93,66 @@ class WriteFileRegistrationTest {
     }
 
     @Test
-    @DisplayName("子目录里的文件如实说明没登记，并指向 scan_files——不许假装已登记")
-    void nestedFileIsHonestAboutNotBeingRegistered(@TempDir Path dir) throws Exception {
+    @DisplayName("名字里带路径直接拒绝并指向 parentFolderId——不再写一份文件树里看不见的孤儿文件（dev-board#1065）")
+    void pathInFileNameIsRejectedWithTheFolderRoute(@TempDir Path dir) throws Exception {
         Harness h = harness(dir);
 
-        String out = h.tools().write_file("卷宗/证据清单.txt", "证据一", PROJECT_ID);
+        String out = h.tools().write_file("卷宗/证据清单.txt", "证据一", PROJECT_ID, null);
 
-        assertTrue(Files.exists(dir.resolve("卷宗/证据清单.txt")), "物理文件仍要写出来");
+        assertTrue(out.startsWith("Error"), "实际是：" + out);
+        assertTrue(out.contains("parentFolderId"), "要给模型下一步，实际是：" + out);
+        assertFalse(out.contains("scan_files"), "scan_files 已不下发，不许再指向它：" + out);
+        assertFalse(Files.exists(dir.resolve("卷宗/证据清单.txt")), "拒绝就不该落盘");
         verify(h.fileService(), never()).createOrUpdateFile(anyLong(), any(), anyString(), anyString(),
                 anyLong(), anyString(), any(), anyLong());
-        assertTrue(out.contains("NOT registered"), "要明说没登记，实际是：" + out);
-        assertTrue(out.contains("scan_files"), "要给模型下一步，实际是：" + out);
+    }
+
+    @Test
+    @DisplayName("parentFolderId：登记进那个文件夹、字节经服务落盘，db_id 交回模型")
+    void writeIntoFolderRegistersUnderThatFolder(@TempDir Path dir) throws Exception {
+        Harness h = harness(dir);
+        ProjectFile folder = new ProjectFile();
+        folder.setId(88L);
+        folder.setProjectId(PROJECT_ID);
+        folder.setIsFolder(true);
+        folder.setName("卷宗");
+        when(h.fileService().findFile(88L)).thenReturn(java.util.Optional.of(folder));
+        ProjectFile created = new ProjectFile();
+        created.setId(5151L);
+        created.setFilePath("projects/7/卷宗/证据清单.txt");
+        when(h.fileService().createOrUpdateFile(eq(PROJECT_ID), eq(88L), eq("证据清单.txt"), eq("txt"),
+                anyLong(), eq(null), eq(null), anyLong())).thenReturn(created);
+        when(h.fileService().overwriteTextContent(eq(PROJECT_ID), eq(5151L), eq("证据一"), anyLong()))
+                .thenReturn(created);
+
+        String out = h.tools().write_file("证据清单.txt", "证据一", PROJECT_ID, 88L);
+
+        assertTrue(out.contains("\"db_id\":5151"), "实际是：" + out);
+        verify(h.fileService()).overwriteTextContent(eq(PROJECT_ID), eq(5151L), eq("证据一"), anyLong());
+        verify(h.bridge()).sendRefreshFilesAction();
+        assertFalse(Files.exists(dir.resolve("证据清单.txt")), "不该顺手在项目根目录也写一份");
+    }
+
+    @Test
+    @DisplayName("parentFolderId 指向别的项目 / 指向文件：拒绝，不建行")
+    void writeIntoForeignOrNonFolderIsRejected(@TempDir Path dir) throws Exception {
+        Harness h = harness(dir);
+        ProjectFile foreign = new ProjectFile();
+        foreign.setId(90L);
+        foreign.setProjectId(999L);
+        foreign.setIsFolder(true);
+        when(h.fileService().findFile(90L)).thenReturn(java.util.Optional.of(foreign));
+        ProjectFile plain = new ProjectFile();
+        plain.setId(91L);
+        plain.setProjectId(PROJECT_ID);
+        plain.setIsFolder(false);
+        plain.setName("a.docx");
+        when(h.fileService().findFile(91L)).thenReturn(java.util.Optional.of(plain));
+
+        assertTrue(h.tools().write_file("x.txt", "x", PROJECT_ID, 90L).startsWith("Error"));
+        assertTrue(h.tools().write_file("x.txt", "x", PROJECT_ID, 91L).startsWith("Error"));
+        assertTrue(h.tools().write_file("x.txt", "x", PROJECT_ID, 92L).startsWith("Error"), "不存在的文件夹");
+        verify(h.fileService(), never()).overwriteTextContent(anyLong(), anyLong(), anyString(), anyLong());
     }
 
     @Test
@@ -114,11 +163,12 @@ class WriteFileRegistrationTest {
                 anyLong(), anyString(), any(), anyLong()))
                 .thenThrow(new IllegalStateException("db down"));
 
-        String out = h.tools().write_file("笔记.txt", "x", PROJECT_ID);
+        String out = h.tools().write_file("笔记.txt", "x", PROJECT_ID, null);
 
         assertTrue(Files.exists(dir.resolve("笔记.txt")));
         assertTrue(out.contains("DB registration failed"), "实际是：" + out);
-        assertTrue(out.contains("scan_files"), "要给模型补救路径，实际是：" + out);
+        assertTrue(out.contains("write_file again"), "要给模型补救路径，实际是：" + out);
+        assertFalse(out.contains("scan_files"), "scan_files 已不下发（dev-board#1065），不许再指向它：" + out);
         assertFalse(out.contains("\"status\":\"success\""), "登记失败不能报成完全成功，实际是：" + out);
     }
 
@@ -126,7 +176,7 @@ class WriteFileRegistrationTest {
     @DisplayName("缺文件名直接拒绝")
     void blankFileNameRejected(@TempDir Path dir) {
         Harness h = harness(dir);
-        assertTrue(h.tools().write_file("  ", "x", PROJECT_ID).startsWith("Error"));
-        assertTrue(h.tools().write_file(null, "x", PROJECT_ID).startsWith("Error"));
+        assertTrue(h.tools().write_file("  ", "x", PROJECT_ID, null).startsWith("Error"));
+        assertTrue(h.tools().write_file(null, "x", PROJECT_ID, null).startsWith("Error"));
     }
 }

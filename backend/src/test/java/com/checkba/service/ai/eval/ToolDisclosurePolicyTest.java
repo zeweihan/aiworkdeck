@@ -97,7 +97,7 @@ class ToolDisclosurePolicyTest {
                 .stream().map(ToolSpecification::name).collect(java.util.stream.Collectors.toSet());
 
         // 每一组 = 一条必须不用查目录就能走完的链。少一环模型就会停在半路说做不了。
-        assertTrue(docx.containsAll(List.of("doc_list_project_files", "extract_file_text", "read_document")),
+        assertTrue(docx.containsAll(List.of("doc_list_project_files", "extract_file_text", "search_project_content")),
                 "「找一份材料并读全文」这条链断了：" + docx);
         assertTrue(docx.containsAll(List.of("doc_get_document_text", "doc_find_text", "doc_find_replace",
                         "doc_replace_at_anchor", "doc_insert_at_cursor", "doc_undo")),

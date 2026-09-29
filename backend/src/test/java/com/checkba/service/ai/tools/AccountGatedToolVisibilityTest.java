@@ -61,7 +61,7 @@ class AccountGatedToolVisibilityTest {
     @Test
     @DisplayName("LegalTools：未连接时藏四个 law_*，read_document 绝不连坐")
     void legalToolsHidesOnlyPkulaw() {
-        LegalTools tools = new LegalTools(null, null, null, null);
+        LegalTools tools = new LegalTools(null, null, null);
         inject(tools, "externalServiceAvailability", availability(false));
 
         Set<String> hidden = tools.currentlyUnusableTools();
@@ -98,7 +98,7 @@ class AccountGatedToolVisibilityTest {
     @DisplayName("没装配 availability（裸 new 的既有测试与评测 harness）时行为与改造前一致")
     void missingAvailabilityBeanHidesNothing() {
         assertTrue(new WebTools().currentlyUnusableTools().isEmpty());
-        assertTrue(new LegalTools(null, null, null, null).currentlyUnusableTools().isEmpty());
+        assertTrue(new LegalTools(null, null, null).currentlyUnusableTools().isEmpty());
         assertTrue(new EnterpriseDataTools(null, null).currentlyUnusableTools().isEmpty());
     }
 }

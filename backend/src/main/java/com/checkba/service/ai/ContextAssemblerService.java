@@ -721,7 +721,7 @@ public class ContextAssemblerService {
                     }
                     // 两道闸：单文件上限，以及本轮正文的合计上限（先到先得，见 attachmentCharBudget）。
                     // 合计额度已经用完时一个字都不注入，但**仍然留下 <file> 壳**——
-                    // 模型据此知道这份材料存在、可以主动 read_document 去读，
+                    // 模型据此知道这份材料存在、可以主动 extract_file_text 去读，
                     // 比整条消失好（消失的那份在界面上标签还在，模型却从不提它）。
                     int effectiveCap = Math.min(maxCharsPerFile, Math.max(0, attachmentCharBudget));
                     if (effectiveCap <= 0) {
@@ -729,9 +729,9 @@ public class ContextAssemblerService {
                                   .append("\" name=\"").append(attrSafe(item.getName())).append("\">")
                                   .append(english
                                           ? "Body omitted: this turn's combined attachment budget is used up. "
-                                            + "Call read_document with this id if you need its content."
+                                            + "Call extract_file_text with this id if you need its content."
                                           : "正文未注入：本轮材料正文的合计字数已用完。"
-                                            + "需要它的内容时用这个 id 调 read_document。")
+                                            + "需要它的内容时用这个 id 调 extract_file_text。")
                                   .append("</file>\n");
                         ledger.attachment(item.getId(), item.getName(), item.getFileType(), "file", false);
                         ledger.notice(ContextTurnSink.BUDGET_EXHAUSTED, item.getId(), item.getName(),
@@ -1063,25 +1063,25 @@ public class ContextAssemblerService {
         if (clientCapabilityService.capabilityOf(conversationId) != ClientCapabilityService.Capability.OFFICE) {
             if (english) {
                 systemText.append("**When organising, archiving or re-filing SEVERAL project files, you MUST submit them in one ");
-                systemText.append("`move_files_batch` call (up to 50 entries per batch); do NOT call `move_file` / ");
+                systemText.append("`move_files_batch` call (up to 50 entries per batch); do NOT call ");
                 systemText.append("`move_project_file` / `create_folder` once per file.** ");
                 systemText.append("Every single-item call costs a whole execution step (about 30 steps per turn), so a dozen files ");
                 systemText.append("run out of budget half way and the task is paused with the tidy-up unfinished. ");
                 systemText.append("Missing destination folders are created automatically, so you do not need `create_folder` first. ");
                 systemText.append("Retry only the entries the report lists under FAILED - never resend the whole batch. ");
-                systemText.append("Moving a single file still uses `move_file`. ");
+                systemText.append("A single file goes through `move_files_batch` too (one entry). ");
                 systemText.append("Intermediate or temporary files you no longer need go to the recycle bin with `move_to_trash` ");
                 systemText.append("(recoverable by the user); never create a \"to delete\" folder as a workaround. ");
                 systemText.append("More generally: tool calls that do not depend on each other's results belong in the SAME turn ");
                 systemText.append("(emit several `<tool_code>` blocks back to back); one call per turn burns the step budget.\n\n");
             } else {
                 systemText.append("**整理文件夹、归档、把多份文件按类别归类时，必须用 `move_files_batch` 一次提交一批");
-                systemText.append("（每批最多 50 条），不要逐个调用 `move_file` / `move_project_file` / `create_folder`。** ");
+                systemText.append("（每批最多 50 条），不要逐个调用 `move_project_file` / `create_folder`。** ");
                 systemText.append("逐个调用每个都要占一整个执行步（单轮上限 30 步），十几份文件整理到一半就会被迫暂停，");
                 systemText.append("用户看到的是「文件整理了一半停住了」。");
                 systemText.append("缺失的目标文件夹会自动补建，不需要先调 `create_folder`。");
                 systemText.append("返回值里 FAILED 段列出的条目单独重试，**绝不要整批重发**——已成功的会被搬第二遍。");
-                systemText.append("只移动一份文件时仍用 `move_file`。");
+                systemText.append("只移动一份文件也用 `move_files_batch`（传一条）。");
                 systemText.append("不再需要的中间文件、临时文件用 `move_to_trash` 移入回收站（用户可恢复），不要另建「待删除」文件夹绕行。");
                 systemText.append("同理，彼此之间不需要看对方结果的工具调用要放在同一轮里并行发出");
                 systemText.append("（连续输出多个 `<tool_code>` 块），一轮一个地挤牙膏会白白烧掉步数预算。\n\n");

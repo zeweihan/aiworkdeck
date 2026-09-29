@@ -130,9 +130,14 @@ class ToolDeclarationContractTest {
      *   <li><b>与每轮注入的上下文重复</b>（get_user_profile、get_project_context、get_conversation_summary，
      *       dev-board#1065 T-13）：它们取的东西 ContextAssemblerService 每轮都已放进上下文，
      *       下发只会让模型多花一次往返去取一份它已经有的东西。</li>
+     *   <li><b>文件与读取面的同义入口</b>（dev-board#1065，审计 T-03/T-05/T-06/T-07/T-27）：
+     *       pdf_list_files / pptx_list_files / pptx_search_files 是 doc_list_project_files 按类型过滤的子集
+     *       （后者如今在每一类会话里都可见）；read_document 与 extract_file_text 是同一个抽取器的两个入口；
+     *       move_file 是 move_files_batch 的单条形态；scan_files 只为 write_file 写不进子文件夹而存在；
+     *       doc_search_related_docs 自称搜内容、实际只比文件名，已由 search_project_content 取代。</li>
      * </ul>
      *
-     * <p>四类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
+     * <p>五类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
      * 拿到的是工具自己那句可行动的说明，好过一句 "Tool not found"。
      */
     private static final Set<String> EXPECTED_NOT_OFFERED = new TreeSet<>(Set.of(
@@ -145,7 +150,15 @@ class ToolDeclarationContractTest {
             "pptx_edit_page",
             "get_user_profile",
             "get_project_context",
-            "get_conversation_summary"));
+            "get_conversation_summary",
+            // dev-board#1065
+            "pdf_list_files",
+            "pptx_list_files",
+            "pptx_search_files",
+            "read_document",
+            "move_file",
+            "scan_files",
+            "doc_search_related_docs"));
 
     private static RecordingToolRegistry registry() {
         RecordingToolRegistry registry =
@@ -256,17 +269,19 @@ class ToolDeclarationContractTest {
     }
 
     @Test
-    @DisplayName("PDF 的读取面不受影响：Office 会话仍看得见 pdf_list_files / pdf_inspect")
+    @DisplayName("PDF 的读取面不受影响：Office 会话仍看得见权威清单 doc_list_project_files 与 pdf_inspect")
     void readOnlyPdfToolsSurviveInOfficeSessions() {
         RecordingToolRegistry registry = registry();
         registry.capabilities().record("conv-word", "office");
         List<String> names = registry.getAllSpecifications("conv-word", null).stream()
                 .map(ToolSpecification::name).toList();
         // 收窄的只有"改"，不是"读"——任务窗格里照样能列 PDF、读 PDF 正文。
-        assertTrue(names.contains("pdf_list_files"), names.toString());
+        // 文件 ID 的来源是全类型的权威清单（dev-board#1065 T-01：纯后端，三档会话都可见），
+        // 按类型过滤的 pdf_list_files / pptx_list_files 已只登记不下发（T-27）。
+        assertTrue(names.contains("doc_list_project_files"), names.toString());
         assertTrue(names.contains("pdf_inspect"), names.toString());
         assertTrue(names.contains("pptx_inspect_format"), names.toString());
-        assertTrue(names.contains("pptx_list_files"), names.toString());
+        assertFalse(names.contains("pdf_list_files"), names.toString());
     }
 
     // ==================== offerToModel（审计 A15） ====================
@@ -311,7 +326,7 @@ class ToolDeclarationContractTest {
                 .map(ToolSpecification::name).toList();
         List<String> missing = new ArrayList<>();
         for (String name : new String[]{"write_docx", "create_folder", "move_files_batch", "move_to_trash",
-                "extract_file_text", "read_file", "search_web", "todo_write", "dispatch_subtask",
+                "extract_file_text", "read_file", "search_project_content", "copy_files", "write_file", "search_web", "todo_write", "dispatch_subtask",
                 "doc_find_replace", "doc_undo", "doc_list_revisions", "sheet_write_cells"}) {
             if (!offered.contains(name)) {
                 missing.add(name);

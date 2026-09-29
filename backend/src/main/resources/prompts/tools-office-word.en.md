@@ -71,9 +71,10 @@ For headings, bold or lists, use the formatting tools above.
 
 ## 8. PDFs and PowerPoint files in the project: read-only here
 
-- PDF: `pdf_list_files` for the file IDs, `pdf_inspect` to read the text page by page. Highlighting, redaction, in-place replacement and conversion to Word all need the desktop client - tell the user plainly that this session cannot do them.
-- PPT: `pptx_list_files` / `pptx_search_files` to find files, `pptx_inspect_format` to read each slide's text and formatting. Changing PPT content likewise needs the desktop client.
-- Any project file can be read as text with `read_document` (by file ID) or `extract_file_text`; images and scans go through OCR automatically.
+- File IDs come from `doc_list_project_files`: every project file in one call (Word / Excel / PPT / PDF / plain text / images), each with its file ID and type. To find a file by name use `search_project_files`; to find which material mentions a phrase use `search_project_content`.
+- PDF: `pdf_inspect` to read the text page by page. Highlighting, redaction, in-place replacement and conversion to Word all need the desktop client - tell the user plainly that this session cannot do them.
+- PPT: `pptx_inspect_format` to read each slide's text and formatting. Changing PPT content likewise needs the desktop client.
+- Any project file can be read as text with `extract_file_text` (by file ID); images and scans go through OCR automatically. For a long file, pass the reply's nextStart as `offset` to continue.
 
 ## 9. Creating project files (only when the user asks)
 

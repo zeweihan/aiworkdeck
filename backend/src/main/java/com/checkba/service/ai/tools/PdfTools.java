@@ -57,7 +57,9 @@ public class PdfTools implements AgentToolComponent {
 
     // ==================== 读取 ====================
 
-    @ToolMeta(displayName = "列出PDF文件", category = "pdf")
+    // dev-board#1065（审计 T-27）：doc_list_project_files 如今在每一类会话里都可见，是唯一的权威清单；
+    // 这份按类型过滤的子集只登记不下发（老会话回放与 XML 兜底照常执行）。
+    @ToolMeta(displayName = "列出PDF文件", category = "pdf", offerToModel = false)
     @Tool("PDF 专用清单：等价于 doc_list_project_files 只保留 .pdf 的那一份结果，返回文件 ID、名称和位置。"
             + "**要看项目里有哪些文件（含 Word / Excel / PPT / 文本 / 图片）请直接用 doc_list_project_files，一次列全**，"
             + "它给出的 fileId 同样可以直接喂给 pdf_* 工具；只有在结果太多、确实只想看 PDF 时才用本工具。")
@@ -101,7 +103,7 @@ public class PdfTools implements AgentToolComponent {
           "如果页面 has_text_layer 为 false，说明是扫描件：无法做文本定位类操作（高亮/脱敏/替换），" +
           "但在桌面端会话里，pdf_to_word 可以直接对它做本地 MinerU OCR 转成可编辑 Word。")
     public String pdf_inspect(
-            @P("文件 ID（从 pdf_list_files 获取）") Long fileId,
+            @P("文件 ID（从 doc_list_project_files 获取）") Long fileId,
             @P("页码（从 0 开始，可选）。指定后只返回该页；传 null 返回全部页") Integer pageIndex,
             @P(value = "续读位点（可选）：上一次返回的 next_offset。给了它就必须同时指定 pageIndex",
                     required = false) Integer offset

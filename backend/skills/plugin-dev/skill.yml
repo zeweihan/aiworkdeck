@@ -30,7 +30,7 @@ triggers:
   - 做个插件
   - 写个插件
 
-# 业务闭环所需工具全集（base-tools 的 read_document/list_files/query_memory 与
+# 业务闭环所需工具全集（base-tools 的 extract_file_text/list_files/query_memory 与
 # 编排类工具恒定可见，不必列；这里逐个列出的是本 skill 的能力边界，漏一个
 # 就等于对模型隐藏了这个能力——见 plugin-system.md「allowed_tools 必读」）。
 # 聚焦模式，限制本轮可见工具（dev-board#799）：插件开发是 enabled_by_default: false

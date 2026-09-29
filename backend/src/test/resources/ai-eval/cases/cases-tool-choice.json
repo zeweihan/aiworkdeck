@@ -115,7 +115,8 @@
         { "name": "doc_list_project_files" },
         { "name": "extract_file_text", "argsContain": { "fileId": "1001" } }
       ],
-      "offeredToolsInclude": ["doc_list_project_files", "extract_file_text", "read_document"],
+      "offeredToolsInclude": ["doc_list_project_files", "extract_file_text", "search_project_content"],
+      "offeredToolsExclude": ["read_document"],
       "structureContains": ["<final>"],
       "bubbleEndStatus": "finished"
     }

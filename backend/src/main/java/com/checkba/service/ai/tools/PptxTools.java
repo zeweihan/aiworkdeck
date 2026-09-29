@@ -110,6 +110,9 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
+    // dev-board#1065（审计 T-27）：doc_list_project_files 如今在每一类会话里都可见，是唯一的权威清单；
+    // 这份按类型过滤的子集只登记不下发（老会话回放与 XML 兜底照常执行）。
+    @ToolMeta(displayName = "列出PPT文件", category = "pptx", offerToModel = false)
     @Tool("PPTX 专用清单：等价于 doc_list_project_files 只保留 .pptx 的那一份结果，返回文件 ID、名称和位置信息。"
             + "**要看项目里有哪些文件（含 Word / Excel / PDF / 文本 / 图片）请直接用 doc_list_project_files，一次列全**；"
             + "只有在结果太多、确实只想看演示文稿时才用本工具。")
@@ -145,6 +148,9 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
+    // dev-board#1065（审计 T-27）：按文件名找文件走 search_project_files，全类型清单走
+    // doc_list_project_files；这个只认 .pptx 的子集只登记不下发。
+    @ToolMeta(displayName = "搜索PPT文件", category = "pptx", offerToModel = false)
     @Tool("搜索项目中的 PPTX 演示文稿文件。可以根据关键词搜索文件名。")
     public String pptx_search_files(
             @P("项目 ID") Long projectId,
@@ -164,7 +170,7 @@ public class PptxTools implements AgentToolComponent {
             
             if (pptxFiles.isEmpty()) {
                 if (StringUtils.hasText(keyword)) {
-                    return "未找到包含关键词 '" + keyword + "' 的 PPTX 文件。可以使用 pptx_list_files 查看所有 PPTX 文件。";
+                    return "未找到包含关键词 '" + keyword + "' 的 PPTX 文件。可以用 doc_list_project_files 查看项目里的全部文件。";
                 }
                 return "项目中没有 PPTX 演示文稿文件。可以使用 pptx_generate 工具生成新的 PPT。";
             }
@@ -201,7 +207,7 @@ public class PptxTools implements AgentToolComponent {
               requiresHost = ToolMeta.Host.LOWA, offerToModel = false)
     @Tool("[已由 doc_open_file 取代] 打开指定的 PPTX 文件进行编辑。文件会在用户的文档编辑器中打开。")
     public String pptx_open_file(
-            @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId
+            @P("文件 ID（从 doc_list_project_files 获取）") Long fileId
     ) {
         log.info("Tool: pptx_open_file called for fileId={}", fileId);
         try {
@@ -638,7 +644,7 @@ public class PptxTools implements AgentToolComponent {
           "本工具只做只读检查，适合没有在编辑器里打开的文件；" +
           "已在编辑器中打开的 PPTX 请用 slide_get_page 查看、用 slide_* 工具修改。")
     public String pptx_inspect_format(
-            @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId,
+            @P("文件 ID（从 doc_list_project_files 获取）") Long fileId,
             @P("页码（从 0 开始，可选）。指定后只返回该页（推荐，输出更精简）；传 null 返回全部页") Integer slideIndex
     ) {
         log.info("Tool: pptx_inspect_format called, fileId={}, slideIndex={}", fileId, slideIndex);
@@ -702,7 +708,7 @@ public class PptxTools implements AgentToolComponent {
           "段落级：align(left|center|right|justify)/line_spacing(行距倍数如1.5)/space_before_pt/space_after_pt/bullet(true|false)/number_start(编号起始值)。" +
           "落字文本自动清除 markdown 标记并转为真实格式。本工具只能改文本与格式，不能编辑图片内容（AI 改图能力当前不可用）。")
     public String pptx_apply_format(
-            @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId,
+            @P("文件 ID（从 doc_list_project_files 获取）") Long fileId,
             @P("操作数组的 JSON 字符串，见工具描述中的六种 action 示例") String opsJson
     ) {
         log.info("Tool: pptx_apply_format called, fileId={}, opsJson length={}",
