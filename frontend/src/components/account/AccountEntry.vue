@@ -1,28 +1,31 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
-  rail 底部账户入口（dev-board#1047，spec 2026-09-29-defer-login-welcome-tab-design §4；对应 VS Code 的 Accounts 图标）。
+  顶栏右上角账户入口（「活动记录」右侧；dev-board#1062 从 rail 底部改回顶栏，
+  2026-09-29 13:22 维护者：「改回右上角」。#1047 那一版曾把它放在 rail 底部，对应 VS Code 的 Accounts）。
 
   两态：
-    - 未登录（未连接账户）：「登录」图标 + 文字。点击 emit('login')，宿主就地
+    - 未登录（未连接账户）：「登录」按钮。点击 emit('login')，宿主就地
       `await requireAccount({ reason: 'account' })` 弹登录层（dev-board#1046），不离开工作台。
-    - 已登录：头像，点击展开原顶栏那份头像下拉——账户抬头（余额 + 等级）、宽限 / 试用提示、
+    - 已登录：头像 .avatar-btn，点击展开头像下拉——账户抬头（余额 + 等级）、宽限 / 试用 / 余额不足提示、
       「我的日程」「设置」「退出登录」三个动作。动作只 emit，路由与落盘由宿主做
       （宿主那三个处理器是 check:nav 盯着的 onAvatarMenuSchedule / onAvatarMenuSettings / onAvatarMenuSignOut）。
 
-  顶栏不再放账户态与 chip：原「试用版 / 需联网验证 · 剩 N 天」chip 与余额不足 chip 都挪进了这里
-  （余额不足 / 有宽限提醒时头像右上角挂一个小点，下拉里给出完整文案）。
-  两态都渲染、不按 isClientView 收——客户也有自己的账号安全与工作记录。
+  设置入口只在这份下拉里（外加应用菜单 ⌘,），rail 上没有齿轮。
+  余额不足 / 有宽限提醒时头像右上角挂一个小点，下拉里给出完整文案。
+  有无项目两态都渲染、不按 isClientView 收——客户也有自己的账号安全与工作记录。
+  顶栏整条是窗口拖拽区：本组件的按钮与下拉都在 App.vue 的 no-drag 名单里（.header-account / .account-entry-btn /
+  .avatar-menu），全屏 mask .account-entry-mask 在「全屏浮层」那份名单里。
 
   **登录 / 退出后即时翻转**：本组件订阅 awd:account-changed（登录弹层成功与 utils/signOut.js 共用的广播），
   收到带 connected 的负载就先按它显示（signedIn），不等宿主重拉授权状态那一趟往返；宿主的 loggedIn
   prop 跟上之后以 prop 为准（watch 里清掉本地覆盖）。余额 / 宽限提示仍由宿主订同一事件后重拉。
 -->
 <template>
-  <view class="account-entry">
+  <view class="header-account">
     <view
-      class="rail-btn account-entry-btn"
-      :class="{ 'is-open': menuOpen, 'is-signed-out': !signedIn }"
+      class="account-entry-btn"
+      :class="signedIn ? { 'avatar-btn': true, 'is-open': menuOpen } : { 'header-login-btn': true, 'is-signed-out': true }"
       :title="signedIn ? $t('workbench.accountMenu') : $t('welcome.signInTitle')"
       @tap.stop="onTap"
     >
@@ -77,7 +80,7 @@ import { ICONS } from '@/config/icons.js'
 import { ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
 
 export default {
-  name: 'AccountRailEntry',
+  name: 'AccountEntry',
   props: {
     loggedIn: { type: Boolean, default: false },
     displayName: { type: String, default: '' },
@@ -152,47 +155,54 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-.account-entry {
+.header-account {
   position: relative; /* 下拉的定位锚 */
   display: flex;
-  flex-direction: column;
   align-items: center;
+  margin-left: 6px;
 }
 
 .account-entry-btn {
   position: relative;
-  width: 40px;
-  height: 40px;
-  margin-bottom: 8px;
-  border-radius: 8px;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+/* 已登录：头像。比 .top-bar-btn 大一圈——它是一个人的身份标识，不是又一个开关。 */
+.avatar-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+/* 未登录：「登录」小按钮，与顶栏工具按钮同一套低调配色 */
+.header-login-btn {
+  height: 22px;
+  padding: 0 8px;
+  gap: 4px;
+  border-radius: 4px;
+  border: 1px solid var(--awd-border);
   color: var(--awd-text-2);
+  background: transparent;
   transition: all 0.2s;
 
-  &:hover,
-  &.is-open {
+  &:hover {
     color: var(--awd-accent-text);
+    border-color: var(--awd-accent);
     background-color: var(--awd-surface-2);
-  }
-
-  &.is-signed-out {
-    height: 44px;
-    gap: 2px;
   }
 }
 
 .account-entry-icon {
-  width: 18px;
-  height: 18px;
+  width: 13px;
+  height: 13px;
 }
 
 .account-entry-label {
-  font-size: 10px;
-  line-height: 12px;
+  font-size: 11px;
+  line-height: 14px;
   white-space: nowrap;
 }
 
@@ -206,10 +216,12 @@ export default {
   justify-content: center;
   background: var(--awd-accent);
   border: 2px solid transparent;
+  box-sizing: border-box;
   transition: border-color 0.2s;
 }
 
-.account-entry-btn:hover .account-avatar {
+.avatar-btn:hover .account-avatar,
+.avatar-btn.is-open .account-avatar {
   border-color: var(--awd-mint);
 }
 
@@ -226,13 +238,13 @@ export default {
 
 .account-attention-dot {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: -1px;
+  right: -1px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--awd-warning-text);
-  border: 1.5px solid var(--awd-bg);
+  border: 1.5px solid var(--awd-surface);
 }
 
 /* 全屏 mask 兜底收起；它是铺满视口的 fixed 浮层，App.vue 的 no-drag 名单里有它 */
@@ -242,11 +254,11 @@ export default {
   z-index: 1198;
 }
 
-/* 下拉从 rail 右侧、贴底向上展开（rail 在窗口最左，底部账户入口往下已无空间） */
+/* 下拉从头像正下方、右对齐展开（顶栏在窗口最上方，往下有整屏空间） */
 .avatar-menu {
   position: absolute;
-  left: calc(100% + 6px);
-  bottom: 4px;
+  top: calc(100% + 8px);
+  right: 0;
   min-width: 188px;
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);

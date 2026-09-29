@@ -272,14 +272,15 @@ try {
       throw new Error('Start 六项不对（桌面形态应含「打开…文件夹」与「打开文件…」）：' + JSON.stringify(items))
     }
     if (!/打开.*文件夹/.test(items[1].text)) throw new Error('Start 第 2 项不是「打开…文件夹」：' + items[1].text)
-    // 未连账户：rail 底部账户入口是「登录」态（已连账户的长驻后端则是头像，不判）
+    // 未连账户：顶栏右上角账户入口是「登录」态（已连账户的长驻后端则是头像，不判）；rail 底部没有账户入口（dev-board#1062）
     const acct = await api('/api/account/status').catch(() => null)
     if (acct && acct.data && acct.data.connected === false) {
-      const label = await page.$eval('.left-rail .account-entry-btn', (e) => ({
+      if (await page.$('.left-rail .account-entry-btn')) throw new Error('rail 底部不该再有账户入口（dev-board#1062 改回顶栏）')
+      const label = await page.$eval('.project-header .header-account .account-entry-btn', (e) => ({
         signedOut: e.classList.contains('is-signed-out'),
         text: ((e.querySelector('.account-entry-label') || {}).textContent || '').trim(),
       }))
-      if (!label.signedOut || label.text !== '登录') throw new Error('未连账户的 rail 账户入口不是「登录」态：' + JSON.stringify(label))
+      if (!label.signedOut || label.text !== '登录') throw new Error('未连账户的顶栏账户入口不是「登录」态：' + JSON.stringify(label))
     }
   })
 

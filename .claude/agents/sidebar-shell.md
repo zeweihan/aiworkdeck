@@ -71,8 +71,10 @@ filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bri
 
 **template**
 - project-header 顶部条；header-tools（开关：左栏、底栏、右栏、分屏、截图OCR、浏览器、活动记录、客户视图）。
-  **顶栏不再放账户态**（dev-board#1047，2026-09-29）：原活动记录右侧的 `.header-account`（头像 + 下拉）、
-  试用 / 宽限 chip 与余额不足 chip 全部挪到 rail 底部的账户入口（`AccountRailEntry`，见「工作台无项目态与欢迎标签」一节）。
+  **账户入口在顶栏右上角**、活动记录右侧：`components/account/AccountEntry.vue`（根 `.header-account`，未登录「登录」按钮
+  `.header-login-btn` / 已登录头像 `.avatar-btn` + 下拉），试用 / 宽限 / 余额不足三枚 chip 并进下拉的提醒行，不单独占顶栏
+  （见「工作台无项目态与欢迎标签」一节的「顶栏账户入口」）。沿革：dev-board#1047（2026-09-29）曾把它挪到 rail 底部并加了
+  设置齿轮，同日 13:22 维护者要求改回右上角（dev-board#1062），齿轮撤掉。
   无项目态下顶栏左侧只有应用名（没有项目切换器 / 协作 chip / 负责人一行），AI 开关、截图、工作记录三个按钮不渲染。
 - left-rail：插件按钮 v-for LEFT_SIDEBAR_PLUGINS（@tap toggleLeftPane）、spacer、暂存区、成员堆叠。
   **齿轮与头像都不在 rail 上了**（2026-08-19）；插件广场按钮也不在了，它升成了
@@ -126,8 +128,9 @@ desensitize(文件脱敏) → litigation-visual(门控) → calendar(日历)**�
 「暂存区」（都是围绕本机改动/存档的动作），不该跟文件树/搜索这类常驻浏览面板
 混排。定义照 `DD_FILES_PLUGIN` 的先例独立导出成 `VERSION_PLUGIN`，进
 `OFF_RAIL_PLUGINS`（`getLeftSidebarPlugin('version')` 与 `leftPaneTitle` 兜底照常能查到），
-rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版本记录 → 收起左栏 → 成员堆叠 → 反馈 → 账户入口 → 设置齿轮**
-（后两项 dev-board#1047 新增；暂存区 / 版本 / 成员在无项目态不渲染），最初的三项是**暂存区 → 版本记录 → 成员堆叠**，
+rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版本记录 → 收起左栏 → 成员堆叠 → 反馈**
+（暂存区 / 版本 / 成员在无项目态不渲染，无项目态只剩收起 / 反馈；dev-board#1047 一度在末尾加过账户入口与设置齿轮，
+dev-board#1062 撤回、账户入口回到顶栏右上角），最初的三项是**暂存区 → 版本记录 → 成员堆叠**，
 版本记录夹在中间；`toggleLeftPane('version')` 语义、面板本身一行未动。
 
 - **home（项目概览）**：内容是 `components/project-home/ProjectHomePane.vue`，传 `compact`。
@@ -339,9 +342,11 @@ ChatInterface 的 `.input-card.is-drop-target`，由新 prop `:drag-active="drag
 
 ## 顶栏头像与统一「设置」标签（2026-08-19 立，2026-08-20 并，2026-08-21 撤下拉）
 
-> **2026-09-29（dev-board#1047）起头像不在顶栏了**：它连同下拉（我的日程 / 设置 / 退出登录）搬到 rail 底部的
-> `components/account/AccountRailEntry.vue`，rail 底部另有一个设置齿轮直开设置标签。下文关于「设置标签」本身的
-> 契约全部仍然成立，关于 `.header-account` / `.avatar-btn` 位置的描述是历史。
+> 历史：2026-09-29（dev-board#1047）头像连同下拉（我的日程 / 设置 / 退出登录）曾搬到 rail 底部的
+> `AccountRailEntry.vue`，rail 底部另加一个设置齿轮直开设置标签。
+> **2026-09-29 13:22 维护者要求改回顶栏（dev-board#1062）**：入口回到「活动记录」右侧的 `.header-account`，
+> 组件改名 `components/account/AccountEntry.vue`，rail 齿轮撤掉，设置入口 = 下拉里的「设置」+ 应用菜单 ⌘,。
+> 下文关于「设置标签」本身的契约全部仍然成立；「点头像直开设置、没有下拉」那段是 #96 时期的历史，现在是三项下拉（#205 / #899）。
 
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
@@ -616,7 +621,9 @@ dragover 实时改 `railOrderDraft` 草稿、dragend 提交并持久化。
 
 **顶栏头像下拉（dev-board#205，2026-08-27）**：恢复成两项（设置 / 退出登录，
 `avatarMenuOpen` + `.avatar-menu`），退出走 `utils/signOut.js` 唯一编排。
-`check-navigation-contract` 钉着「恰好两项」；**别把新方法插在 `goToSystemSettings`
+（现状：#899 加「我的日程」成三项；开合状态自 #1047 起归 `AccountEntry` 组件自己，`avatarMenuOpen` 已不在页面里；
+dev-board#1062 起入口回到顶栏右上角。）
+`check-navigation-contract` 钉着「恰好三项」；**别把新方法插在 `goToSystemSettings`
 与 `openSettingsTab` 之间**——该脚本的方法提取按「call site 后第一个 `{`」配对，
 中间夹方法会截断窗口、报「标签没有带 tabType」的假错。菜单与 mask 都在 App.vue
 的 no-drag 名单里。
@@ -929,11 +936,11 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 | 区域 | 有项目 | 无项目 |
 |---|---|---|
 | rail 上半 | 现状 | 只剩全局面板：**项目**、插件中心、日程（+ 被停到左栏的剪贴板）；动态插件不上 rail |
-| rail 底部 | 暂存区 / 版本 / 收起 / 成员 / 反馈 / 账户 / 设置 | 收起 / 反馈 / 账户 / 设置 |
+| rail 底部 | 暂存区 / 版本 / 收起 / 成员 / 反馈 | 收起 / 反馈（账户入口与设置齿轮 dev-board#1062 撤出 rail） |
 | 左栏面板 | 现状 | 只挂 `projects` / `calendar`（读全局事项）/ `market` / `clipboard`；`toggleLeftPane` 第一行就拦项目面板的 key（菜单、命令面板、存量 storage 都可能送进来），默认面板 `projects` |
 | 中央 | 标签 | 标签；「启动时显示欢迎页」开着就自动开欢迎标签，关着停在空态（一行提示 + 「打开欢迎页」链接） |
 | 右栏 AI | 现状 | **不渲染**（`v-if="aiPanelMounted && hasProject"`，`toggleAiPanel` / `resolveChatInterface` 直接返回并提示）——会话按项目隔离 |
-| 顶栏 | 项目名切换器、协作 chip、负责人一行 | 应用名；AI 开关、截图、工作记录三个按钮不渲染 |
+| 顶栏 | 项目名切换器、协作 chip、负责人一行；右上角账户入口 | 应用名；AI 开关、截图、工作记录三个按钮不渲染；右上角账户入口照常（dev-board#1062） |
 | 暂存区 | `ensureStagingFolder` | 不调用（它留在 `onLoad` 的 `query.id` 分支里，`check:nav` 守着） |
 | 底栏 / 右栏停靠 | 现状 | `panelDocks` 只留剪贴板（收藏夹 / 语音 / 依据都挂在项目上） |
 | Cmd+P | 快速打开 | 打开左栏「项目」面板（QuickOpenPanel 不挂载） |
@@ -968,15 +975,18 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 两态都可用；当前项目那张卡描边高亮、点它不重进；改当前项目的名字 emit `project-renamed`，顶栏跟上；
 删掉的正是当前项目时回无项目态外壳。面板里的弹窗经 `overlayState.setGlobalOverlay` 让工作台藏 BrowserView。
 
-**rail 底部账户入口**（`components/account/AccountRailEntry.vue`，对应 VS Code 的 Accounts）：两态都渲染、不按 `isClientView` 收。
+**顶栏账户入口**（`components/account/AccountEntry.vue`，顶栏 `.header-right` 最右、「活动记录」右侧；dev-board#1047 时在 rail 底部叫
+`AccountRailEntry`，dev-board#1062 改回顶栏）：有无项目两态都渲染、不按 `isClientView` 收。
 「已登录」= 桌面端 `accountConnected`（授权状态的组合口径，spec §5.3 的唯一判据），浏览器端恒真。未登录显示「登录」，
 点击 emit `login` → `onAccountLogin`：就地 `await requireAccount({ reason: 'account' })`（dev-board#1046），不离开工作台，取消什么都不变。
 **登录 / 退出后即时刷新**：入口组件自己订 `awd:account-changed`（带 `connected` 的负载先按它翻转「登录 ⇄ 头像」，宿主 `loggedIn`
 跟上后以 prop 为准），工作台也订同一事件（`refreshAccountState` 重拉授权状态、余额、用户信息；mounted 挂、beforeUnmount 按引用摘，
-不加活跃实例守卫）。退出走 `utils/signOut.js`（单动作，停在当前页）。护栏 `tests/account/rail-entry-account-changed.test.mjs` + `check:nav`。
+不加活跃实例守卫）。退出走 `utils/signOut.js`（单动作，停在当前页）。护栏 `tests/account/account-entry-account-changed.test.mjs`（含「在顶栏、rail 里没有账户入口与齿轮」的宿主摆放断言）+ `check:nav`。
 已登录显示头像，下拉 = 账户抬头（余额 + 等级）+ 提醒行（原顶栏宽限 / 试用 chip 文案，`accountNoticeText`）+ 我的日程 / 设置 / 退出登录三个动作；
-余额不足或有提醒时头像右上角挂一个点。下拉的全屏 mask 是 `.account-entry-mask`（进了 App.vue 的 no-drag 名单）。
-设置齿轮在账户入口下面，直调 `goToSystemSettings()`。
+余额不足或有提醒时头像右上角挂一个点。下拉从头像下方右对齐展开。顶栏整条是 drag 区：`.header-account` /
+`.account-entry-btn` / `.avatar-menu` 在 App.vue 的顶栏 no-drag 名单里，全屏 mask `.account-entry-mask` 在「全屏浮层」名单里。
+rail 上**没有设置齿轮**：设置入口是下拉里的「设置」（`goToSystemSettings`）与应用菜单「设置…」（⌘,，`app.settings`）；
+未登录时下拉不渲染，设置只走应用菜单（app-e2e J6.3 未登录分支用 `menu.onAction` 桩模拟 ⌘,）。
 
 ## 日程标签与标签快照（dev-board#1048 / #1049，2026-09-29）
 

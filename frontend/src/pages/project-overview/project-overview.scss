@@ -330,8 +330,8 @@ $color-accent: var(--awd-mint); // Mint Green
   }
 }
 
-// 试用版 / 宽限预警 / 余额不足三枚 chip 已挪进 rail 底部账户入口的下拉（dev-board#1047），
-// 样式随之搬进 components/account/AccountRailEntry.vue。
+// 试用版 / 宽限预警 / 余额不足三枚 chip 已并进右上角账户入口的下拉（dev-board#1047），
+// 样式随之搬进 components/account/AccountEntry.vue。
 
 .project-meta {
   display: flex;
@@ -367,8 +367,8 @@ $color-accent: var(--awd-mint); // Mint Green
   border-right: none;
 }
 
-/* 右上角头像与下拉（.header-account / .avatar-btn / .avatar-menu*）已挪到 rail 底部的账户入口
-   （components/account/AccountRailEntry.vue，dev-board#1047），样式跟着组件走。 */
+/* 右上角账户入口（.header-account / .avatar-btn / .header-login-btn / .avatar-menu*）的样式在
+   components/account/AccountEntry.vue 里（dev-board#1047 抽组件，dev-board#1062 改回顶栏）。 */
 
 /* 外观切换（dev-board#223）：顶栏那一格的下拉三选一。
    按钮本体沿用 .top-bar-btn，这里只加下拉与它自己的定位上下文。 */
@@ -811,7 +811,7 @@ $color-accent: var(--awd-mint); // Mint Green
   }
 }
 
-/* .avatar-img：rail 上的成员堆叠在用（账户头像的样式在 AccountRailEntry.vue 里）。 */
+/* .avatar-img：rail 上的成员堆叠在用（账户头像的样式在 AccountEntry.vue 里）。 */
 .avatar-img {
   width: 100%; height: 100%; border-radius: 50%;
 }

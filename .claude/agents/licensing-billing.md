@@ -574,8 +574,8 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 3. **`legacy-grace-until` 留空或格式非法一律按已到期处理**，硬期限当天也算到期。安全侧默认：
    配错一个日期不会变成永久宽限。
 4. **`daysRemaining` / `graceKind` 只在需要提醒时下发**，不需要时 `status()` 的形状与过去一模一样。
-   rail 底部账户入口下拉里的提醒行（`AccountRailEntry` 的 `noticeText`，宿主 `project-overview.vue` 的
-   `accountNoticeText`；2026-09-29 前是顶栏 `.trial-chip.grace-chip`，dev-board#1047 挪走）与 unlock 页都只读
+   顶栏右上角账户入口下拉里的提醒行（`AccountEntry` 的 `noticeText`，宿主 `project-overview.vue` 的
+   `accountNoticeText`；2026-09-29 前是顶栏 `.trial-chip.grace-chip`，dev-board#1047 并进下拉，入口位置见 dev-board#1062）与 unlock 页都只读
    这两个字段，不自己算日期。
 
 **app-e2e 的连带约束**：发版默认值下全新 `user.home` 起来的后端是 `mode=none`，套件没有任何办法

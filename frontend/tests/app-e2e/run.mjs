@@ -467,7 +467,7 @@ try {
   // 登录后置之后启动不设门：launch 只等后端就绪、查一次本机工作区是否待选，然后一律
   // reLaunch 到不带 id 的工作台外壳，中央自动开「欢迎」标签。解锁页、项目列表页都不再是
   // 启动路过的一站——旧 J1 的解锁门形态 / 试用码被拒 / 顶栏 .trial-chip 断言随之删除
-  // （顶栏不再放账户态，试用与宽限提示挪进了 rail 底部账户入口的下拉）。
+  // （试用与宽限提示并进了顶栏右上角账户入口的下拉；dev-board#1062 把入口从 rail 底部改回顶栏）。
   // 解锁页本身仍是薄壳页（直链），登录卡的形态断言在 tests/unlock 单测与下面 J3.5 的登录弹层里。
   //
   // 桌面判定桩：launch/unlock/userprofile 以 window.checkbaDesktop 存在性判定
@@ -485,7 +485,13 @@ try {
     try { localStorage.setItem('awd_site_preselected', '1') } catch (e) {}
   `
   await page.evaluateOnNewDocument((apiBase) => {
-    window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
+    window.checkbaDesktop = {
+      apiBaseUrl: apiBase,
+      shell: { openExternal: () => Promise.resolve() },
+      // 应用菜单桩（只收 onAction，不带 setState——菜单树下发照旧跳过）：J6.3 未登录分支用它
+      // 模拟「应用菜单 > 设置…（⌘,）」，那是未登录时唯一的设置入口（dev-board#1062 撤了 rail 齿轮）。
+      menu: { onAction: (cb) => { (window.__awdMenuActionCbs = window.__awdMenuActionCbs || []).push(cb) } },
+    }
   }, BACKEND)
   await page.evaluateOnNewDocument(PIN_ZH_CN)
 
@@ -606,9 +612,9 @@ try {
       if (checked !== 'true') throw new Error('「启动时显示欢迎页」默认应当勾上，aria-checked=' + checked)
     })
 
-    await step('rail 底部账户入口：未连账户显示「登录」态，顶栏无账户态', async () => {
-      await j1Page.waitForSelector('.left-rail .account-entry-btn', { timeout: 15000 })
-      const st = await j1Page.$eval('.left-rail .account-entry-btn', (e) => ({
+    await step('顶栏右上角账户入口：未连账户显示「登录」态，rail 底部无账户入口与设置齿轮', async () => {
+      await j1Page.waitForSelector('.project-header .header-account .account-entry-btn', { timeout: 15000 })
+      const st = await j1Page.$eval('.project-header .header-account .account-entry-btn', (e) => ({
         signedOut: e.classList.contains('is-signed-out'),
         label: ((e.querySelector('.account-entry-label') || {}).textContent || '').trim(),
         avatar: !!e.querySelector('.account-avatar'),
@@ -619,9 +625,9 @@ try {
       } else if (!st.signedOut || st.label !== '登录' || st.avatar) {
         throw new Error('未连账户的入口不是「登录」态: ' + JSON.stringify(st))
       }
-      // 顶栏不再放账户态（dev-board#1047）：旧顶栏头像与试用 chip 都不该再出现
-      for (const sel of ['.trial-chip', '.account-chip', '.avatar-btn']) {
-        if (await j1Page.$(sel)) throw new Error('顶栏仍有账户态元素 ' + sel)
+      // 试用 / 宽限 chip 并进了下拉，不再单独占顶栏；rail 底部不再有账户入口与设置齿轮（dev-board#1062）
+      for (const sel of ['.trial-chip', '.account-chip', '.left-rail .account-entry-btn', '.left-rail .rail-btn[title="设置"]']) {
+        if (await j1Page.$(sel)) throw new Error('不该出现的旧账户入口元素 ' + sel)
       }
     })
 
@@ -1137,18 +1143,20 @@ try {
   })
   await shot('j6-rails')
 
-  // ============ J6.3 rail 底部账户入口 / 设置 → 系统设置中栏标签 ============
+  // ============ J6.3 顶栏账户入口 / 设置 → 系统设置中栏标签 ============
   // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像；
   // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
   // 2026-09-25（dev-board#899，PR#982）：下拉动作项恰好三项（我的日程 / 设置 / 退出登录）。
   // 2026-09-29（dev-board#1047）：顶栏头像与试用 chip 整体挪到 rail 底部的账户入口
   // （.account-entry-btn，对应 VS Code 的 Accounts）；设置另有 rail 齿轮一格。
-  //   - 已登录：点入口开那份三项下拉（.account-entry-menu .avatar-menu-item）；
-  //   - 未登录：入口是「登录」，点了就地弹登录层（dev-board#1046），不离开工作台。
+  // 2026-09-29 13:22（dev-board#1062）：维护者要求改回顶栏右上角，rail 齿轮撤掉。
+  //   - 已登录：点顶栏头像开那份三项下拉（.account-entry-menu .avatar-menu-item）；
+  //   - 未登录：入口是「登录」，点了就地弹登录层（dev-board#1046），不离开工作台；
+  //     设置走应用菜单「设置…」（⌘,，主页面的 menu.onAction 桩模拟）。
   console.log('== J6.3 账户入口与设置标签 ==')
   if (accountConnected0) {
-    await step('点 rail 账户入口开三项下拉，点「设置」开中栏标签、不跳页', async () => {
-      await mouseClickSel('.left-rail .account-entry-btn')
+    await step('点顶栏头像开三项下拉，点「设置」开中栏标签、不跳页', async () => {
+      await mouseClickSel('.project-header .header-account .account-entry-btn')
       await page.waitForSelector('.account-entry-menu', { timeout: 8000 })
       const items = await page.$$eval('.account-entry-menu .avatar-menu-item', (els) => els.map((e) => e.textContent.trim()))
       if (items.length !== 3) throw new Error('账户下拉应当恰好三项（我的日程/设置/退出登录），实际: ' + JSON.stringify(items))
@@ -1166,10 +1174,10 @@ try {
       if (await page.$('.account-entry-menu')) throw new Error('点完菜单项下拉没有收起')
     })
   } else {
-    note('skip', 'J6.3 后端未连账户：rail 账户入口是「登录」态，三项下拉（我的日程/设置/退出登录）只有已登录才渲染，本轮未覆盖')
-    await step('未登录：点 rail「登录」就地弹登录层，「暂不登录」后停在工作台', async () => {
+    note('skip', 'J6.3 后端未连账户：顶栏账户入口是「登录」态，三项下拉（我的日程/设置/退出登录）只有已登录才渲染，本轮未覆盖')
+    await step('未登录：点顶栏「登录」就地弹登录层，「暂不登录」后停在工作台', async () => {
       const hash0 = await page.evaluate(() => location.hash)
-      await mouseClickSel('.left-rail .account-entry-btn.is-signed-out')
+      await mouseClickSel('.project-header .header-account .account-entry-btn.is-signed-out')
       await assertLoginDialog(page, { siteInfo: null })
       const h = await page.evaluate(() => location.hash)
       if (h !== hash0) throw new Error('点「登录」离开了工作台: ' + hash0 + ' -> ' + h)
@@ -1181,8 +1189,14 @@ try {
       await page.waitForSelector('[title="资源管理器"]', { timeout: 30000 })
     }
     if (await page.$('.awd-login-mask')) await cancelLoginDialog(page).catch(() => {})
-    await step('rail 齿轮「设置」开中栏标签、不跳页', async () => {
-      await mouseClickSel('.left-rail .rail-btn[title="设置"]')
+    await step('应用菜单「设置…」（⌘,）开中栏标签、不跳页；rail 上没有齿轮', async () => {
+      if (await page.$('.left-rail .rail-btn[title="设置"]')) throw new Error('rail 上不该再有设置齿轮（dev-board#1062）')
+      const n = await page.evaluate(() => {
+        const cbs = window.__awdMenuActionCbs || []
+        for (const cb of cbs) cb({ action: 'app.settings' })
+        return cbs.length
+      })
+      if (!n) throw new Error('应用菜单桩没有收到 onAction 注册（appMenuBridge 未接上）')
       await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
     })
   }
