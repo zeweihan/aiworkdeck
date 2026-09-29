@@ -2572,7 +2572,7 @@ export default {
                   timestamp: formatTime(msg.createdAt)
               })
           } else {
-              const bubble = parseAssistantHistory(msg.content || '')
+              const bubble = parseAssistantHistory(msg.content || '', msg.reasoning)
               bubble.id = msg.id
               bubble.timestamp = formatTime(msg.createdAt)
               const recoveredTodos = recoverPlanTodos(bubble.processes)

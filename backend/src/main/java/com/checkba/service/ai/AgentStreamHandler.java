@@ -218,6 +218,13 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         this.onToken = onToken;
     }
 
+    // 思考增量回调（dev-board#1060）：编排器据此记恢复日志与落库的思考全文
+    private java.util.function.Consumer<String> onReasoning;
+
+    public void setOnReasoning(java.util.function.Consumer<String> onReasoning) {
+        this.onReasoning = onReasoning;
+    }
+
     public void setOnEditorStream(java.util.function.Consumer<String> onEditorStream) {
         this.onEditorStream = onEditorStream;
     }
@@ -250,7 +257,8 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
      * 思考增量（dev-board#364）：原样转发成 SSE {@code reasoning_delta}，前端实时渲染进思考卡。
      *
      * <p>刻意不进 {@link #fullContentBuilder}、不进编辑器流、不过标签解析：思考文本不是模型正文，
-     * 不落库、不回喂模型（契约 D：模型只看 content），也不该被写进文档。
+     * 不回喂模型（契约 D：模型只看 content），也不该被写进文档。它经 {@link #setOnReasoning}
+     * 交给编排器，只进断线恢复日志与 {@code ProjectAiMessage.reasoning} 这一列（dev-board#1060）。
      */
     @Override
     public void onReasoning(String reasoningDelta) {
@@ -258,6 +266,9 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
         lastActivityNanos = System.nanoTime();
         streamedAnyReasoning = true;
         noteFirstByte("reasoning");
+        if (onReasoning != null) {
+            onReasoning.accept(reasoningDelta);
+        }
         sendSse("reasoning_delta", "{\"content\":\"" + escapeJson(reasoningDelta) + "\"}");
     }
 

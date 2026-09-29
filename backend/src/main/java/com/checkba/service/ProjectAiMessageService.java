@@ -200,6 +200,15 @@ public class ProjectAiMessageService {
      * @return 保存后的消息 ID（供本轮后续增量保存复用）；参数非法时返回 null
      */
     public Long upsertAssistantMessage(String projectIdStr, Long userId, String conversationId, Long existingMessageId, String content) {
+        return upsertAssistantMessage(projectIdStr, userId, conversationId, existingMessageId, content, null);
+    }
+
+    /**
+     * 同上，另带本段的思考记录（dev-board#1060，JSON 数组，见 {@link ProjectAiMessage#getReasoning()}）。
+     * {@code reasoning} 为 null 时不动已有值（新行即为 null）——只加不改，五参调用方行为不变。
+     */
+    public Long upsertAssistantMessage(String projectIdStr, Long userId, String conversationId, Long existingMessageId,
+                                       String content, String reasoning) {
         if (projectIdStr == null) {
             return null;
         }
@@ -215,6 +224,7 @@ public class ProjectAiMessageService {
             if (existingOpt.isPresent()) {
                 ProjectAiMessage existing = existingOpt.get();
                 existing.setContent(content);
+                if (reasoning != null) existing.setReasoning(reasoning);
                 repository.save(existing);
                 mirror(existing);
                 return existing.getId();
@@ -226,6 +236,7 @@ public class ProjectAiMessageService {
         msg.setUserId(userId);
         msg.setRole("ASSISTANT");
         msg.setContent(content);
+        msg.setReasoning(reasoning);
         msg.setConversationId(conversationId);
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);
@@ -581,6 +592,7 @@ public class ProjectAiMessageService {
             copy.setRole(m.getRole());
             copy.setContent(m.getContent());
             copy.setDisplayContent(m.getDisplayContent());
+            copy.setReasoning(m.getReasoning());
             copy.setClientRequestId(m.getClientRequestId());
             copy.setConversationId(newConversationId);
             copy.setCreatedAt(m.getCreatedAt());

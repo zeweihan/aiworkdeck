@@ -111,6 +111,11 @@ public class AgentOrchestrator {
         final long connectionEpoch;
         /** 本轮已流出的正文（断线重连恢复快照 / 取消与出错时保存半截内容）。 */
         private final StringBuilder streamContent = new StringBuilder();
+        /**
+         * 当前助手段已经给用户看过的一切（正文 + 工具过程 + 思考，按发生顺序带时间戳），
+         * 以及随消息落库的思考全文（dev-board#1060）。见 {@link TurnStreamTrace}。
+         */
+        final TurnStreamTrace trace = new TurnStreamTrace();
         /** 本轮 ASSISTANT 消息的行 ID：本轮内的增量/最终保存更新同一行，跨轮次互不覆盖。 */
         private volatile Long assistantMessageId;
         /** 本轮的取消标志。只有 {@link AgentOrchestrator#setCancelled} 解析到的那一轮会被置位。 */
@@ -146,10 +151,16 @@ public class AgentOrchestrator {
         /** 流式 token 与恢复快照跨线程（HTTP 流线程写、SSE /connect 线程读），必须同步。 */
         void appendStream(String token) {
             if (token == null || token.isEmpty()) return;
+            trace.recordText(token);
             synchronized (streamContent) {
                 appendBoundedTail(streamContent, token, STREAM_RECOVERY_LIMIT,
                         STREAM_TRUNCATED_MARKER, false);
             }
+        }
+
+        /** 思考增量：只进回放日志与思考记录，不进正文快照（思考文本不是正文）。 */
+        void appendReasoning(String delta) {
+            trace.recordReasoning(delta);
         }
 
         String streamSnapshot() {
@@ -168,6 +179,8 @@ public class AgentOrchestrator {
 
         void startAssistantSegment() {
             assistantMessageId = null;
+            // 新的一段是一条新消息、前端也是一个新气泡：回放与思考记录都从空开始
+            trace.resetSegment();
         }
 
         /**
@@ -471,8 +484,14 @@ public class AgentOrchestrator {
      * 本轮内后续（增量/最终）保存更新同一行；别的轮次有别的 RunGuard，天然互不覆盖。
      */
     private void saveAssistantMessage(RunGuard guard, String projectId, Long userId, String content) {
-        Long id = messageService.upsertAssistantMessage(
-                projectId, userId, guard.conversationId, guard.assistantMessageId, content);
+        // 思考全文随消息落库（dev-board#1060）：只是给用户回看的，模型永远只读 content。
+        // 本段没有思考时仍走五参重载——非思考型模型的落库路径与改造前逐字一致
+        String reasoning = guard.trace.reasoningJson();
+        Long id = reasoning == null
+                ? messageService.upsertAssistantMessage(
+                        projectId, userId, guard.conversationId, guard.assistantMessageId, content)
+                : messageService.upsertAssistantMessage(
+                        projectId, userId, guard.conversationId, guard.assistantMessageId, content, reasoning);
         if (id != null) {
             guard.assistantMessageId = id;
         }
@@ -775,16 +794,31 @@ public class AgentOrchestrator {
     }
     
     /**
-     * 获取指定会话的当前恢复快照 (用于断线重连)
-     * 返回目前正在生成的流式内容
+     * state_recovery 的完整载荷（dev-board#1060）：旧的 {@code content}（只有模型 token）原样保留，
+     * 另带按序回放日志 {@code events}（正文 / 工具过程 / 思考，各带服务端时间戳）、
+     * 本段开始时间 {@code startedAt} 与 {@code serverNow}（前端据此换算本机时钟，
+     * 思考卡的「已思考 N 秒」续算而不是从 0 重来）。
+     *
+     * @param force 为 true 时即使什么都还没流出也返回一份（RUNNING 但首 token 未到——前端
+     *              靠 state_recovery 重建气泡指针）；没有活跃轮次时退回 {@code {"content":""}}。
+     * @return JSON 字符串；无活跃轮次且不强制、或有轮次但什么都没流出且不强制时返回 null
      */
-    public String getRecoverySnapshot(String conversationId) {
+    public String getRecoveryPayload(String conversationId, boolean force) {
         RunGuard guard = activeRuns.get(conversationId);
         if (guard == null) {
-            return null;
+            return force ? "{\"content\":\"\"}" : null;
         }
         String snapshot = guard.streamSnapshot();
-        return snapshot.isEmpty() ? null : snapshot;
+        if (!force && snapshot.isEmpty() && guard.trace.isEmpty()) {
+            return null;
+        }
+        return guard.trace.recoveryPayload(snapshot);
+    }
+
+    /** 当前段已累计的思考字符数（只用于日志）。 */
+    public int getRecoveryReasoningLength(String conversationId) {
+        RunGuard guard = activeRuns.get(conversationId);
+        return guard == null ? 0 : guard.trace.reasoningLength();
     }
 
     // ==================== 工具分发（统一走 ToolRegistry，编排器不感知具体工具） ====================
@@ -1515,6 +1549,9 @@ public class AgentOrchestrator {
 
         // 实时更新当前生成的内容 (用于断线重连恢复)
         handler.setOnToken(guard::appendStream);
+        // 思考增量同样进恢复日志，并随消息落库（dev-board#1060）；每次调模型另起一块思考
+        guard.trace.beginModelRound(executionLog);
+        handler.setOnReasoning(guard::appendReasoning);
 
         // 编辑器实时流式写入拦截（单名 doc_stream_data；旧名 wps_stream_data 的双发已随
         // dev-board#816 摘除——每个 token 都推两遍，其中一半注定被前端的 latch 扔掉）
@@ -2726,6 +2763,8 @@ public class AgentOrchestrator {
      * Jackson 的 writeValueAsString 会把 U+0000-U+001F 全部转义，这类问题一次性绝迹。
      */
     private void sendTextDelta(RunGuard guard, String content) {
+        // 编排器补发的工具过程标签也进回放日志：只记模型 token 的话，切回会话时过程卡全没了
+        if (guard != null) guard.trace.recordText(content);
         sendRunEvent(guard, "text_delta", jsonContentEnvelope(content));
     }
 
