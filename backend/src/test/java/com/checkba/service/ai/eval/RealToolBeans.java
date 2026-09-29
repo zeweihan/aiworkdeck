@@ -21,10 +21,12 @@ import com.checkba.service.ai.tools.ContributedTemplateTools;
 import com.checkba.service.ai.tools.PdfTools;
 import com.checkba.service.ai.tools.CapabilityTools;
 import com.checkba.service.ai.tools.CheckpointTools;
+import com.checkba.service.ai.tools.ContentSearchTools;
 import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.ReferenceTools;
+import com.checkba.service.ai.tools.SkillTools;
 import com.checkba.service.ai.tools.SlideEditTools;
 import com.checkba.service.ai.tools.SubAgentTools;
 import com.checkba.service.ai.tools.TagTools;
@@ -100,6 +102,8 @@ final class RealToolBeans {
                 // dev-board#729 ① 要断言「docx 活跃时 slide_* 被裁掉」，先把它们补进来，
                 // 否则那条用例即使裁剪整个失效也照样绿。
                 CheckpointTools.class,
+                // search_project_content：跨项目文件的全文检索（dev-board#1065 T-03）
+                ContentSearchTools.class,
                 ContributedTemplateTools.class,
                 DdExportTools.class,
                 DocumentAuditTools.class,
@@ -119,6 +123,9 @@ final class RealToolBeans {
                 PythonTools.class,
                 // ref_* 只对 OFFICE 会话可见（dev-board#717），回放用例默认 LOWA，不改变既有可见工具集
                 ReferenceTools.class,
+                // use_skill（dev-board#1065）：这里构造出来的 SkillRouter 是 null，只登记工具名与参数名；
+                // 要真跑它的用例由 EvalHarness 换成接了真 skill 登记簿的实例
+                SkillTools.class,
                 SlideEditTools.class,
                 SubAgentTools.class,
                 TextFileEditTools.class,

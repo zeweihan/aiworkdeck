@@ -181,6 +181,13 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
   - **并集而不是覆盖**：手动选择表达的是「这轮务必带上它」，不是「只准用它」。集合顺序把手动放在前面，于是 `activeSkill` 这个单值出口仍返回用户明确选的那个（旧的「钉选优先于触发词匹配」语义因此保持）。
   - 同一个 skill 既被手动选中又命中触发词时只出现一次，source 标 `manual`。
   - 埋点 `skill.activated` 每个生效的 skill 各一条（`how` 取值仍是旧字面量 pinned/matched，官网账本按它分组）；`matter.classified` 只取首个——一轮对话只能有一个事项类型。
+- **第三条生效路径：模型中途调 `use_skill(skillId)`**（dev-board#1065，对标 Claude Code 的 Skill 工具）。前两条（手动选择、触发词）都在起跑时、都要求用户说对词；
+  这条让模型自己判断「这件事该按某个 skill 的流程走」（「把这次股东会的材料核一遍」一个触发词都没有）。工具 `tools/SkillTools` 返回
+  `SkillRouter.skillInstructionsFor(skill)`（模板 + 输出约定，语言同注入口径）作为工具结果；编排器分发后调 `SkillRouter.activateMidRun`：
+  restrict 且白名单非空的记进 `midRunByRun`（与 `activeByRun` 分开，不进 `activeSkills`，所以不补注入 system、不发 `skill_update`），
+  并把 allowed_tools 涉及的类目并进展开集。**中途生效只加不减**：`visibleTools` 在起跑时已裁过的回合里并上它的白名单，起跑时没裁的回合维持不裁。
+  可调用口径 `SkillRouter.invocableSkill(s)` = 可用（`isAvailable`）且**不是仅手动**。模型从 `list_tools()` 目录页末尾的 skills 段拿 id。
+  **写 skill 的人要知道**：`description` 的第一行会原样出现在模型的目录里（截 120 字），它现在是模型决定调不调这个 skill 的唯一依据——写成一句「做什么、什么时候用」。
 - 编排接入（纯旁路两处）：`AgentOrchestrator.java` activateForTurn + 发 SSE `skill_update`（~:430）+ visibleTools（~:1160）；`ContextAssemblerService.java` **activeSkills→promptInjectionFor 逐个注入**（~:165）。ASK 模式跳过注入，且手动选择在 ASK 下整体不参与激活。
 - **地雷已修（别改回去）**：`ContextAssemblerService` 原来在注入处自己 `match(userPrompt)` 重新匹配了一遍，判据与编排器裁工具用的那套不是同一个——于是 pinnedSkillId **只裁工具不注入 prompt**，`enabled_by_default` 之外最阴险的一类静默故障。现在两者同源读 `skillRouter.activeSkills(conversationId)`。**注入侧一律不许再 match 一次。**
 - 配置：`SkillProperties.java`（ai.skills.dir / base-tools / disabled-cache-ttl-ms / registry-url）。

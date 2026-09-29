@@ -27,7 +27,7 @@ public class PluginDevTools implements AgentToolComponent {
     @ToolMeta(displayName = "创建插件骨架", category = "file", fileEffect = "ADDED", refreshFiles = true)
     @Tool("在当前项目「插件开发/<id>/」下创建一个 Web 插件骨架（manifest.json + web/index.html + "
             + "web/awd-plugin-sdk.js），返回源码文件夹的数据库 ID。id 用小写字母/数字/连字符（2-50 位）。"
-            + "骨架建好后用 text_write_file / text_find_replace 修改源码，用 write_file 新增文件，"
+            + "骨架建好后用文本编辑工具修改源码，用 write_file 新增文件，"
             + "改完调 plugin_dev_install 安装到本机测试。")
     public String plugin_dev_scaffold(
             @P("插件 id（小写字母/数字/连字符，2-50 位，例如 checklist-helper）") String pluginId,

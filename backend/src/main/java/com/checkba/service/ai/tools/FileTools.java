@@ -71,11 +71,14 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "搜索项目文件", category = "file")
-    @Tool("Locate a file by NAME PATTERN. Returns paths only, NO database fileId — once you know the name, "
-            + "get the fileId from doc_list_project_files (documents), pdf_list_files (PDF) or pptx_list_files (PPTX) "
-            + "before any open/edit/rename/move. Can specify a sub-directory.")
+    @Tool("Locate files by NAME PATTERN (glob, or a plain fragment of the name). Returns up to 50 project-relative "
+            + "paths; every entry registered in the project database carries its id as '(fileId=N)', usable directly "
+            + "with extract_file_text, rename_project_file, move_project_file and copy_files. "
+            + "This searches file NAMES only - to find which file MENTIONS a phrase, use search_project_content; "
+            + "for a complete inventory of every file with its id, use doc_list_project_files. "
+            + "Can be limited to a sub-directory.")
     public String search_project_files(
-            @P("Filename pattern (e.g. '*Controller.java' or 'User*.java')") String fileNamePattern,
+            @P("File name pattern, e.g. '*起诉状*', '合同*' or '*.pdf'; a plain fragment such as '证据' also matches") String fileNamePattern,
             @P("Optional: Sub-directory to search in, relative to the project folder. Default is the project root.") String dirPath
     ) {
         log.info("Tool: search_project_files called pattern='{}', dir='{}'", fileNamePattern, dirPath);
@@ -166,7 +169,8 @@ public class FileTools implements AgentToolComponent {
             + "same extraction and same truncation, but it also accepts a FOLDER id and lists its children. "
             + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script). "
             + "Max 10MB; very long text is truncated.")
-    public String read_file(String filePath) {
+    public String read_file(
+            @P("文件路径：项目根目录下的相对路径（如 '卷宗/证据清单.txt'），或本项目目录内的绝对路径") String filePath) {
         log.info("Tool: read_file called for {}", filePath);
         try {
             Path path = resolvePath(filePath);
@@ -212,7 +216,7 @@ public class FileTools implements AgentToolComponent {
             + "one level at a time (pass subPath to descend). Registered entries DO carry their database id "
             + "— each line ends with (fileId=N) or (folderId=N), usable with doc_open_file, extract_file_text, "
             + "move_project_file, rename_project_file and create_folder; entries not yet in the database are "
-            + "marked 'unregistered: run scan_files before moving/renaming'. "
+            + "marked 'unregistered' (not in the file tree; readable by path with read_file). "
             + "Prefer doc_list_project_files for a whole-project inventory (it lists every file of every type "
             + "with its id in one call); use this one when the on-disk folder structure itself is what matters.")
     public String list_files(
@@ -262,13 +266,13 @@ public class FileTools implements AgentToolComponent {
                     String name = path.getFileName().toString();
                     ProjectFile pf = index.get(prefix.isEmpty() ? name : prefix + "/" + name);
                     String idNote = pf == null
-                            ? " (unregistered: run scan_files before moving/renaming)"
+                            ? " (unregistered: not in the file tree; read it by path with read_file)"
                             : (Files.isDirectory(path) ? " (folderId=" : " (fileId=") + pf.getId() + ")";
                     sb.append(type).append(" ").append(name).append(idNote).append("\n");
                 });
             }
 
-            sb.append("\nNote: fileId/folderId work with move_project_file, rename_project_file and create_folder. move_file accepts paths directly.");
+            sb.append("\nNote: fileId/folderId work with move_project_file, rename_project_file, copy_files and create_folder; move_files_batch accepts paths directly.");
             return sb.toString();
 
         } catch (IOException e) {
@@ -278,17 +282,23 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "提取文档全文", category = "file")
-    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc, images etc.) by its database file ID. "
-            + "Use this to read Word/Excel/PDF documents from the project file tree. "
+    @Tool("Read the plain text of any project file by its database file ID: Word/Excel/PowerPoint, PDF, plain text "
+            + "(UTF-8 or GBK), images, and audio/video that has been transcribed. "
             + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script). "
-            + "Returns extracted text (may be truncated for very large files). "
+            + "Returns at most " + ToolFileGuard.MAX_TOOL_TEXT_CHARS + " characters per call: when the reply says "
+            + "there is more ('还有 N 字符未读', nextStart=N), call again with offset=N to continue - "
+            + "do not re-read from the start. To find where a phrase appears, use search_project_content first. "
             + "If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error. "
             + "This is the fileId entry point; read_file is the same extraction addressed BY PATH, "
             + "for files that have no database id yet.")
     public String extract_file_text(
-            @P("Project file database ID (from doc_list_project_files / material list). May also be a folder ID — you get its contents listed.") Long fileId
+            @P("Project file database ID (from doc_list_project_files / material list). May also be a folder ID — you get its contents listed.") Long fileId,
+            @P(value = "Optional: character offset to start from (0-based, default 0). "
+                    + "To continue a long file, pass the nextStart of the previous reply.", required = false) Integer offset,
+            @P(value = "Optional: max characters to return this call (default and upper limit "
+                    + ToolFileGuard.MAX_TOOL_TEXT_CHARS + ")", required = false) Integer maxChars
     ) {
-        log.info("Tool: extract_file_text called for fileId={}", fileId);
+        log.info("Tool: extract_file_text called for fileId={}, offset={}, maxChars={}", fileId, offset, maxChars);
         if (fileId == null) {
             return "Error: fileId is required.";
         }
@@ -334,13 +344,19 @@ public class FileTools implements AgentToolComponent {
                         : "Warning: no text extracted from '" + name + "'. The file may be empty, or its format "
                                 + "carries no extractable text (OCR only covers images and PDF).";
             }
-            String capped = ToolFileGuard.capToolText(pf.getName(), text);
-            // 未截断时保留原有的「[文件 X]」抬头（模型据此知道正文属于哪个文件）
-            return capped.length() == text.length() ? "[文件 " + pf.getName() + "]\n" + text : capped;
+            // 分页与截断同一条口径（ToolFileGuard.pageToolText）：从头读且一次读得完时原样返回，
+            // 保留原有的「[文件 X]」抬头（模型据此知道正文属于哪个文件）
+            String paged = ToolFileGuard.pageToolText(pf.getName(), pf.getId(), text, offset, maxChars);
+            return paged == text ? "[文件 " + pf.getName() + "]\n" + text : paged;
         } catch (Exception e) {
             log.warn("extract_file_text failed for fileId={}", fileId, e);
             return "Error extracting text: " + e.getMessage();
         }
+    }
+
+    /** 从头读的便捷重载（非工具入口；ToolRegistry 只登记带 {@code @Tool} 的那个）。 */
+    public String extract_file_text(Long fileId) {
+        return extract_file_text(fileId, null, null);
     }
 
     /**
@@ -378,25 +394,40 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
-    @Tool("Write content to a text file at the project root and register it in the project database so it "
-            + "appears in the file tree and can be opened in the editor. Returns the db_id. "
-            + "For a file inside a subfolder, write it and then call scan_files to register it.")
+    @Tool("Write a plain-text file (txt / md / csv / json ...) into the project and register it in the file tree, "
+            + "so it shows up there and can be opened in the editor. Returns the db_id. "
+            + "It goes to the project root unless you pass parentFolderId (a folder id from list_project_folders "
+            + "or create_folder) - same meaning as write_docx's parentFolderId. A file with the same name in that "
+            + "folder is overwritten. fileName is a bare file name, never a path. For a Word document use write_docx.")
     public String write_file(
-            @P("Target filename at the project root (e.g. 'notes.txt')") String fileName, 
+            @P("File name only, no folder path (e.g. 'notes.txt')") String fileName,
             @P("File content") String content,
-            @P("Project ID (Required for DB registration)") Long projectId
+            @P("Project ID (Required for DB registration)") Long projectId,
+            @P(value = "Target folder ID (optional; omit for the project root). Folder IDs come from "
+                    + "list_project_folders or create_folder.", required = false) Long parentFolderId
     ) {
-        log.info("Tool: write_file called for {}", fileName);
+        log.info("Tool: write_file called for {} (folder={})", fileName, parentFolderId);
         if (fileName == null || fileName.isBlank()) {
             return "Error: fileName is required.";
+        }
+        // 名字里带目录：以前是写到磁盘上、不登记，再请模型去调 scan_files 补登记——而 scan_files
+        // 只扫项目根目录，那一步根本补不上（dev-board#1065，审计 T-07）。现在子文件夹一律走
+        // parentFolderId，名字里的路径直接拒绝，不留一份文件树里看不见的孤儿文件。
+        if (fileName.contains("/") || fileName.contains("\\")) {
+            return "Error: fileName must be a bare file name, not a path. To write into a subfolder pass "
+                    + "parentFolderId (folder IDs come from list_project_folders, or create_folder for a new one).";
+        }
+        if (parentFolderId != null) {
+            return writeFileIntoFolder(fileName, content, projectId, parentFolderId);
         }
         try {
              Path path = resolvePath(fileName);
              if (!Files.exists(path.getParent())) {
                  Files.createDirectories(path.getParent());
              }
-             
-             Files.writeString(path, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+             Files.writeString(path, content == null ? "" : content,
+                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
              // 落库。此前这里只有一段「Register in DB so Agent "owns" it」的注释，
              // 底下一行代码都没有——而工具描述与参数说明都白纸黑字写着会注册。
@@ -405,17 +436,7 @@ public class FileTools implements AgentToolComponent {
              // 注册方式与 write_docx 完全一致（createOrUpdateFile 幂等：同名已存在就更新）。
              if (projectId == null) {
                  return "File written to " + path.toAbsolutePath()
-                         + " but NOT registered in the project (no projectId): it will not appear in the file "
-                         + "tree. Call scan_files to register it.";
-             }
-             // 带子目录的名字不在这里登记：parentId 只能填 null，会让文件树把它显示在根目录，
-             // 与它实际所在的子文件夹对不上。如实告知并指向 scan_files（那条路会按目录结构登记）。
-             String normalizedName = fileName.replace('\\', '/');
-             if (normalizedName.contains("/")) {
-                 editorBridgeService.sendRefreshFilesAction();
-                 return "File written to " + path.toAbsolutePath()
-                         + ". It is in a subfolder, so it was NOT registered here — call scan_files("
-                         + projectId + ") to register it into the file tree.";
+                         + " but NOT registered in the project (no projectId): it will not appear in the file tree.";
              }
              try {
                  ProjectFile pf = projectFileService.createOrUpdateFile(
@@ -426,17 +447,59 @@ public class FileTools implements AgentToolComponent {
                          pf.getId(), path.toAbsolutePath().toString().replace("\\", "\\\\"));
              } catch (Exception e) {
                  log.warn("write_file DB register failed for {}", fileName, e);
+                 // 补救路径不再指 scan_files（它已不下发，dev-board#1065）：同名再写一次，
+                 // createOrUpdateFile 幂等，会把这一行补登记上
                  return "File written to " + path.toAbsolutePath()
                          + " but DB registration failed (it will not appear in the file tree): "
-                         + e.getMessage() + " — call scan_files to retry registration.";
+                         + e.getMessage() + " - call write_file again with the same name to retry the registration.";
              }
         } catch (Exception e) {
             return "Error writing file: " + e.getMessage();
         }
     }
 
+    /**
+     * write_file 的子文件夹分支（dev-board#1065，审计 T-07）：与 write_docx 的 parentFolderId 同口径——
+     * 文件夹必须属于当前项目；行由 {@link ProjectFileService#createOrUpdateFile} 建（物理路径服务端
+     * 按文件夹生成、同名即更新），字节由 {@link ProjectFileService#overwriteTextContent} 落盘
+     *（回写大小、发版本信号）。
+     */
+    private String writeFileIntoFolder(String fileName, String content, Long projectId, Long parentFolderId) {
+        if (projectId == null) {
+            return "Error: no project context; cannot write into folder " + parentFolderId + ".";
+        }
+        ProjectFile folder = projectFileService.findFile(parentFolderId).orElse(null);
+        if (folder == null || Boolean.TRUE.equals(folder.getIsDeleted())) {
+            return "Error: target folder " + parentFolderId
+                    + " does not exist (folder IDs come from list_project_folders).";
+        }
+        String denied = ToolFileGuard.rejectIfOutsideProject(folder);
+        if (denied != null) return denied;
+        if (!Boolean.TRUE.equals(folder.getIsFolder()) && !"folder".equalsIgnoreCase(folder.getFileType())) {
+            return "Error: parentFolderId " + parentFolderId + " is a file ('" + folder.getName()
+                    + "'), not a folder (folder IDs come from list_project_folders).";
+        }
+        String text = content == null ? "" : content;
+        try {
+            ProjectFile pf = projectFileService.createOrUpdateFile(projectId, parentFolderId, fileName.trim(),
+                    getFileType(fileName), (long) text.getBytes(StandardCharsets.UTF_8).length,
+                    null, null, AGENT_USER_ID);
+            ProjectFile written = projectFileService.overwriteTextContent(projectId, pf.getId(), text, AGENT_USER_ID);
+            editorBridgeService.sendRefreshFilesAction();
+            String storedPath = written != null && written.getFilePath() != null
+                    ? written.getFilePath() : pf.getFilePath();
+            return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
+                    pf.getId(), String.valueOf(storedPath).replace("\\", "\\\\"));
+        } catch (Exception e) {
+            log.warn("write_file into folder {} failed for {}", parentFolderId, fileName, e);
+            return "Error writing file into folder " + parentFolderId + ": " + e.getMessage();
+        }
+    }
+
     @ToolMeta(displayName = "生成Word文档", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
-    @Tool("【STRICTLY NEW FILES ONLY】Create a NEW .docx from Markdown. FORBIDDEN for 'revise', 'update', or 'modify' tasks. If a similar file exists, you MUST use doc_open_file to edit it. DO NOT create 'Revised_Version.docx'.")
+    @Tool("【STRICTLY NEW FILES ONLY】Create a NEW .docx from Markdown. FORBIDDEN for 'revise', 'update', or 'modify' tasks. If a similar file exists, you MUST use doc_open_file to edit it. DO NOT create 'Revised_Version.docx'. "
+            + "Choosing between this and doc_start_stream: a long draft the user watches being written, in a desktop "
+            + "editor session -> doc_start_stream; a one-shot save, or an Office add-in / plain chat session -> write_docx.")
     public String write_docx(
             @P("新文件名 (如 '报告.docx')") String fileName,
             @P("Markdown 内容") String markdownContent,
@@ -580,7 +643,10 @@ public class FileTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "扫描项目文件", category = "file")
+    // dev-board#1065（审计 T-07）：它存在的唯一理由是 write_file 写不进子文件夹、要靠它补登记——
+    // 而它只扫项目根目录，那一步其实补不上。write_file 有了 parentFolderId 之后它就只是个维护动作，
+    // 只登记不下发（老会话回放与 XML 兜底照常执行）。
+    @ToolMeta(displayName = "扫描项目文件", category = "file", offerToModel = false)
     @Tool("Actively scan the project directory and register any missing files to the database. Repair DB inconsistency.")
     public String scan_files(
         @P("Project ID") Long projectId
@@ -641,7 +707,9 @@ public class FileTools implements AgentToolComponent {
                 + "Use move_to_trash to move them to the project recycle bin (the user can restore them).";
     }
 
-    @ToolMeta(displayName = "移动文件", category = "file", refreshFiles = true)
+    // dev-board#1065（审计 T-06）：路径式移动/改名的唯一入口是 move_files_batch（单条同样走它，
+    // 两者共用 moveOnePath，拒绝理由一字不差）。本工具只登记不下发，老会话回放与 XML 兜底照常执行。
+    @ToolMeta(displayName = "移动文件", category = "file", refreshFiles = true, offerToModel = false)
     @Tool("Move or rename a project file/folder by path (file tree and storage stay in sync). " +
             "Paths are relative to the project root, e.g. move_file('会议记录.txt', '归档/会议记录.txt'). " +
             "If destPath is an existing folder, the file is moved into it keeping its name. " +
@@ -702,13 +770,14 @@ public class FileTools implements AgentToolComponent {
             "movesJson is a JSON array of {\"sourcePath\":\"a.docx\",\"destPath\":\"01 Pleadings/a.docx\"}, " +
             "at most " + MAX_BATCH_MOVES + " entries per batch; paths are relative to the project root. " +
             "[Organising a folder, archiving, sorting several files into categories MUST go through this tool in one call - " +
-            "do NOT call move_file / move_project_file / create_folder once per file] - " +
+            "do NOT call move_project_file / create_folder once per file] - " +
             "one call per file runs out of the turn's step budget half way. " +
             "Missing destination folders are created automatically - you do NOT need create_folder first. " +
             "If destPath is an existing folder the file keeps its name; otherwise the last segment becomes the new name " +
             "(so a move can rename at the same time). " +
+            "This is also THE tool for moving or renaming a single file by path - just pass a one-entry array. " +
             "The report gives 'moved: N' plus a per-item list; retry ONLY the entries under FAILED, never resend the whole " +
-            "batch (the ones that succeeded would be moved twice). For a single file keep using move_file.")
+            "batch (the ones that succeeded would be moved twice).")
     public String move_files_batch(
             @P("Move list, JSON array: [{\"sourcePath\":\"...\",\"destPath\":\"...\"}, ...]") String movesJson
     ) {
@@ -889,7 +958,7 @@ public class FileTools implements AgentToolComponent {
                     file = index.get((String) target);
                     if (file == null) {
                         throw new IllegalArgumentException("'" + target + "' is not in the project file tree "
-                                + "(check the path with list_files, or run scan_files if it was just created on disk).");
+                                + "(check the path with list_files or search_project_files).");
                     }
                 }
                 String label = target instanceof Long ? file.getName() + " (fileId=" + file.getId() + ")"
@@ -941,8 +1010,9 @@ public class FileTools implements AgentToolComponent {
                                     String src, String dest) {
         ProjectFile source = index.get(src);
         if (source == null) {
-            throw new IllegalArgumentException("'" + src + "' is not registered in the project file tree. "
-                    + "Run scan_files first to register it, then retry.");
+            throw new IllegalArgumentException("'" + src + "' is not registered in the project file tree "
+                    + "(check the path with list_files or search_project_files; a file that exists only on disk "
+                    + "has to be added to the file tree by the user first).");
         }
 
         // destPath 指向已有文件夹 → 移入该文件夹并保留原名
@@ -1039,6 +1109,103 @@ public class FileTools implements AgentToolComponent {
         } catch (Exception e) {
             return "Error moving: " + e.getMessage();
         }
+    }
+
+    /** 一次 copy_files 最多复制多少项（与 move_files_batch / move_to_trash 同值同口径）。 */
+    private static final int MAX_BATCH_COPIES = 50;
+
+    @ToolMeta(displayName = "复制文件", category = "file", refreshFiles = true)
+    @Tool("Copy project files/folders (a folder is copied together with everything inside it) into a target folder, "
+            + "the same action as Copy/Paste in the file explorer. The originals are left untouched. "
+            + "fileIds is a JSON array of ids, e.g. [123, 456] (a comma-separated list also works), at most "
+            + MAX_BATCH_COPIES + " per call; ids come from doc_list_project_files, search_project_files or list_files. "
+            + "targetFolderId comes from list_project_folders or create_folder; omit it for the project root. "
+            + "A copy placed in the same folder as its original is named '【副本】<name>'; a name clash in the "
+            + "target folder gets a numbered suffix - nothing is ever overwritten. "
+            + "Use it to keep a pristine version before a risky edit, or to assemble a bundle of materials in one folder.")
+    public String copy_files(
+            @P("Ids to copy, JSON array: [123, 456]") String fileIds,
+            @P(value = "Target folder ID (optional; omit for the project root)", required = false) Long targetFolderId
+    ) {
+        // dev-board#1065（审计 T-25）：界面上早就能复制（ProjectFileService.batchCopy，资源管理器右键
+        // 「复制 / 粘贴」），AI 却没有对位工具，「先留一份原稿再改」只能靠 write_docx 重写一遍。
+        // 这里直通同一条服务路径：同名处理、文件夹递归、物理文件复制、版本信号全部继承。
+        log.info("Tool: copy_files {} -> folder {}", fileIds, targetFolderId);
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        if (projectId == null) {
+            return "Error: no project context for this request.";
+        }
+        List<Long> ids;
+        try {
+            ids = parseIdList(fileIds);
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (ids.isEmpty()) {
+            return "Error: fileIds 至少要有一项，示例：[123, 456]";
+        }
+        if (ids.size() > MAX_BATCH_COPIES) {
+            return "Error: 一次最多复制 " + MAX_BATCH_COPIES + " 项，本次给了 " + ids.size() + " 项，请拆成多批分次提交";
+        }
+        // 归属校验前置：batchCopy 自己也拒跨项目，但它的报错会带出别人项目的文件 id 是否存在——
+        // 这里与 move_to_trash 同口径，「不存在」与「不属于本项目」回同一句话
+        for (Long id : ids) {
+            ProjectFile f = projectFileService.findFile(id).orElse(null);
+            if (f == null || Boolean.TRUE.equals(f.getIsDeleted())
+                    || !java.util.Objects.equals(f.getProjectId(), projectId)) {
+                return "Error: fileId " + id + " is not a file of this project; nothing was copied.";
+            }
+        }
+        com.checkba.model.dto.ProjectFileBatchRequest request = new com.checkba.model.dto.ProjectFileBatchRequest();
+        request.setFileIds(ids);
+        request.setTargetParentId(targetFolderId);
+        try {
+            List<ProjectFile> created = projectFileService.batchCopy(projectId, request, toolUserId());
+            StringBuilder sb = new StringBuilder("copied: ").append(created.size()).append('\n');
+            for (ProjectFile c : created) {
+                boolean folder = Boolean.TRUE.equals(c.getIsFolder());
+                sb.append("- ").append(folder ? "[文件夹] " : "").append(c.getName())
+                        .append(folder ? " (folderId=" : " (fileId=").append(c.getId()).append(")\n");
+            }
+            sb.append("目标位置：").append(targetFolderId == null ? "项目根目录" : "文件夹 " + targetFolderId)
+                    .append("。原文件保持不变。");
+            return sb.toString();
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        } catch (Exception e) {
+            log.warn("copy_files failed ids={} target={}", ids, targetFolderId, e);
+            return "Error copying files: " + e.getMessage();
+        }
+    }
+
+    /** 「[1, 2]」或「1,2」都认；非正整数一律拒绝整批（形状校验全部前置，任何一项不合法就不动手）。 */
+    static List<Long> parseIdList(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            throw new IllegalArgumentException("fileIds 不能为空，示例：[123, 456]");
+        }
+        String body = raw.trim();
+        if (body.startsWith("[")) {
+            if (!body.endsWith("]")) {
+                throw new IllegalArgumentException("fileIds 不是合法的 JSON 数组，示例：[123, 456]");
+            }
+            body = body.substring(1, body.length() - 1);
+        }
+        List<Long> ids = new ArrayList<>();
+        for (String piece : body.split("[,，\\s]+")) {
+            String t = piece.trim().replace("\"", "");
+            if (t.isEmpty()) continue;
+            long id;
+            try {
+                id = Long.parseLong(t);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("fileIds 里的「" + t + "」不是数字 id，示例：[123, 456]");
+            }
+            if (id <= 0) {
+                throw new IllegalArgumentException("fileIds 里的 " + id + " 不是合法的 id");
+            }
+            if (!ids.contains(id)) ids.add(id);
+        }
+        return ids;
     }
 
     // --- Helpers ---

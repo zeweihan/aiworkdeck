@@ -89,7 +89,7 @@ triggers_en:
 prompt: prompt.md
 
 # 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）。
-# base-tools 只有三个（read_document / list_files / query_memory），所以每个要用的工具
+# base-tools 只有三个（extract_file_text / list_files / query_memory），所以每个要用的工具
 # 都得逐条列出——漏一个就等于对模型隐藏了这个能力。
 # 四类：出图三件套（litigation_*）、读材料（抽取阶段要通读文件夹）、落地（建文件夹）、
 # 委派（dispatch_subtask）。

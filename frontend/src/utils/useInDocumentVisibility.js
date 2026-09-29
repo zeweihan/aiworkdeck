@@ -88,7 +88,7 @@ export function shouldShowUseInDocument(bubble) {
 // 也不能按 selection 做子串。词头一律 (?:_|$) 收尾，否则 inspect 会咬到 insert_*。
 const READ_ONLY_STEM = /^(?:audit|check|count|debug|get|goto|inspect|list|locate|read|search|select)(?:_|$)|^summar/
 const READ_ONLY_SUFFIX = /(?:^|_)read$/
-const READ_ONLY_EXACT = new Set(['open_file', 'find_text', 'set_selection'])
+const READ_ONLY_EXACT = new Set(['open_file', 'find_text', 'set_selection', 'export_pdf'])
 
 /** 从 `<tool_code>` 正文里取工具名：`doc_find_replace({...})` -> doc / find_replace。 */
 const DOCUMENT_TOOL_CALL = /^(?:\w+\.)?(?:doc|sheet|slide)_(\w+)\s*\(/

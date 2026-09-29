@@ -16,7 +16,9 @@ public record ToolContext(
         Long userId,
         String modelId,
         java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools,
-        java.util.Set<String> offeredTools
+        java.util.Set<String> offeredTools,
+        String runId,
+        java.util.Set<String> disclosedCategories
 ) {
 
     /**
@@ -32,13 +34,20 @@ public record ToolContext(
      * 它们都不调 {@code list_tools}，给个空列表即可。
      */
     public ToolContext(Long projectId, String conversationId, Long userId, String modelId) {
-        this(projectId, conversationId, userId, modelId, java.util.List.of(), null);
+        this(projectId, conversationId, userId, modelId, java.util.List.of(), null, null, null);
     }
 
     /** 只带候选集、不知道本轮真正下发了哪些的旧入口（offeredTools 为 null = 不知道）。 */
     public ToolContext(Long projectId, String conversationId, Long userId, String modelId,
                        java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools) {
-        this(projectId, conversationId, userId, modelId, sessionTools, null);
+        this(projectId, conversationId, userId, modelId, sessionTools, null, null, null);
+    }
+
+    /** 带本轮下发集、不带轮次标识与回写通道的入口（dev-board#1064 的形状）。 */
+    public ToolContext(Long projectId, String conversationId, Long userId, String modelId,
+                       java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools,
+                       java.util.Set<String> offeredTools) {
+        this(projectId, conversationId, userId, modelId, sessionTools, offeredTools, null, null);
     }
 
     public java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools() {
@@ -53,5 +62,26 @@ public record ToolContext(
      */
     public java.util.Set<String> offeredTools() {
         return offeredTools;
+    }
+
+    /**
+     * 本轮的轮次标识（dev-board#1065）。{@code use_skill} 与 {@code list_tools} 据它判断
+     * 「这个 skill 本轮是不是已经生效了」——skill 的生效登记按 runId 索引（dev-board#533），
+     * conversationId 分不开同一会话的两个并发轮次。null = 调用方不在一轮对话里（子 Agent、插件控制器、各测试）。
+     */
+    public String runId() {
+        return runId;
+    }
+
+    /**
+     * 工具回写给编排器的「这次真正展示了全签名的类目」（dev-board#1065）。
+     *
+     * <p>{@code list_tools(query=…)} / {@code list_tools(names=…)} 命中哪些工具是工具自己算出来的，
+     * 编排器只看参数推不出来，而从渲染出来的文字里反解又脆（改一个标题格式就静默失效）。
+     * 所以编排器在分发前放进一个可写的集合，工具往里加，分发后编排器读它记进展开集——
+     * 结构化的回写通道，不解析输出文本。null = 调用方不收（旧入口），工具照常只返回文字。
+     */
+    public java.util.Set<String> disclosedCategories() {
+        return disclosedCategories;
     }
 }

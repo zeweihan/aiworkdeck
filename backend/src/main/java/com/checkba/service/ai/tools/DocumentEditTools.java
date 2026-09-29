@@ -64,8 +64,8 @@ public class DocumentEditTools implements AgentToolComponent {
             + "每条给出 fileId、名称与类型标注。它是文件 ID 的主要来源——doc_open_file、extract_file_text、"
             + "pdf_inspect 的 fileId，以及 rename_project_file / move_project_file / create_folder 的 "
             + "fileId 与 parentFolderId 都从这里取。\n"
-            + "用户问「项目里都有什么」时调这一个就够了，不必再去调 pdf_list_files / pptx_list_files "
-            + "（那两个只是本清单按类型过滤后的子集）。只列文件夹用 list_project_folders；"
+            + "用户问「项目里都有什么」时调这一个就够了。按文件名找用 search_project_files，"
+            + "按正文内容找用 search_project_content；只列文件夹用 list_project_folders；"
             + "只要物理磁盘路径不要 ID 才用 list_files。")
     public String doc_list_project_files(
             @P("项目ID") Long projectId
@@ -99,7 +99,7 @@ public class DocumentEditTools implements AgentToolComponent {
             }
             sb.append("\n说明：");
             if (hasEditable) {
-                sb.append("[可编辑文档] 用 doc_open_file 打开后用 doc_*/sheet_*/slide_* 编辑；");
+                sb.append("[可编辑文档] 桌面编辑器会话里用 doc_open_file 打开后用 doc_*/sheet_*/slide_* 编辑；");
             }
             if (hasPdf) {
                 sb.append("[PDF] 用 pdf_inspect 读、pdf_* 系列改；");
@@ -133,7 +133,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "打开文档", category = "document")
-    @Tool("打开指定文档进行编辑。文档会在编辑器中打开，之后可以使用其他文档编辑工具进行操作。")
+    @Tool("打开指定文档进行编辑。文档会在编辑器中打开，之后可以使用其他文档编辑工具进行操作。" +
+          "要改这份文档时才打开它；只读内容（摘要、比对、引用）用 extract_file_text，不必打开。")
     public String doc_open_file(
             @P("文件ID（从 doc_list_project_files 获取）") Long fileId
     ) {
@@ -281,12 +282,13 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "流式写入文档", category = "document", fileEffect = "MODIFIED")
     @Tool("开始实时流式写入文档。使用此工具后，模型生成的后续内容将直接写入打开的文档中。" +
-          "**重要：创建新文件时必须提供 fileName 和 projectId 参数。** " +
+          "**重要：创建新文件时必须提供 fileName 参数（fileId 传 null）。** " +
           "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID，再作为 parentFolderId 传进来；" +
           "不传就落在项目根目录——不要在用户指定了文件夹时省略它。" +
           "调用此工具后，你必须立即开始生成文档内容，并且必须使用严格的 Markdown 格式（Markdown Heading #, ##, ### 等）。" +
           "不要在调用此工具后输出任何非文档内容的闲聊，也不要把正文包进 <artifact>/<process>/<thinking> 等协议标签"
-          + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。")
+          + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。"
+          + "与 write_docx 的取舍：篇幅长、要让用户看着一段段写出来的起草用本工具；一次性落盘一份写好的文书用 write_docx。")
     public String doc_start_stream(
             @P("要打开的文件ID (如果是新建文件则传 null)") Long fileId,
             @P("新建文件名 (如 '法律意见书.docx')，仅当 fileId=null 时必填") String fileName,
@@ -417,7 +419,9 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 选区和光标操作 ====================
 
-    @ToolMeta(displayName = "读取选区", category = "document")
+    // 只登记、不下发（dev-board#1065 T-15）：内容被 doc_get_cursor_context（选中内容 + 前后文 +
+    // 所在段落）完全覆盖，两个「看选区」同时摆着只会让模型二选一。
+    @ToolMeta(displayName = "读取选区", category = "document", offerToModel = false)
     @Tool("获取文档中当前选区的文本内容和位置信息。用于了解用户当前光标位置和选中的文本。")
     public String doc_get_selection() {
         log.info("Tool: doc_get_selection called");
@@ -449,7 +453,10 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "设置选区", category = "document")
+    // 只登记、不下发（dev-board#1065 T-15）：参数是 0 基字符偏移，而本类的设计原则写明「禁止使用
+    // 整数字符偏移（跨富文本必然错位）」，模型也拿不到可靠的偏移。选中某处一律走 doc_find_text →
+    // doc_select_anchor。worker 的 set_selection 仍被 doc_select_anchor 与插件使用。
+    @ToolMeta(displayName = "设置选区", category = "document", offerToModel = false)
     @Tool("设置文档的选区范围（精确控制光标/选区）。Start 和 End 是字符索引位置。")
     public String doc_set_selection(
             @P("选区开始位置 (0-based 字符索引)") Integer start,
@@ -468,7 +475,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 查找和替换 ====================
 
     @ToolMeta(displayName = "查找定位", category = "document")
-    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始，可直接作为 doc_replace_nth_match / doc_delete_match 的 matchIndex）、anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始）、anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(
@@ -514,6 +521,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("在文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
           "全文替换一次调用即可完成（大量命中也很快；纯插入型替换会分批处理并回传进度），不要因为耗时较长而重复调用；" +
           "返回 replaced（已替换数）与 total（命中数），cancelled=true 表示用户中途取消、done 为已完成数。" +
+          "replaceText 传空字符串即删除（以修订删除痕迹呈现）。" +
           REDLINE_GRANULARITY_NOTE)
     public String doc_find_replace(
             @P("要查找的文本") String findText,
@@ -537,7 +545,13 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "替换指定匹配", category = "document", fileEffect = "MODIFIED")
+    // 只登记、不下发（dev-board#1065 T-14）：文档里「删一句 / 改第 N 处」原先有八条路，
+    // 这三条描述里没有任何判据，模型在它们与 doc_find_replace / doc_replace_at_anchor 之间随机挑。
+    // 删除一律走 doc_replace_at_anchor(anchorId, "") 或 doc_find_replace(…, "")；第 N 处先
+    // doc_find_text 按上下文挑出那一处的 anchorId。登记保留（插件经 DOC_ACTIONS 按 worker 契约
+    // 直接调这几个 action，老会话回放与 XML 兜底路径调到时照常执行）。
+    @ToolMeta(displayName = "替换指定匹配", category = "document", fileEffect = "MODIFIED",
+            offerToModel = false)
     @Tool("将文档中第 N 个可见匹配项替换为新文本。" +
           "索引从 1 开始，只计算用户可见的匹配（排除修订模式下被删除的内容）。" +
           "如果要删除文本，将 replaceText 设置为空字符串即可。" +
@@ -567,7 +581,9 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "删除匹配文本", category = "document", fileEffect = "MODIFIED")
+    // 只登记、不下发（dev-board#1065 T-14），理由见 doc_replace_nth_match 上方。
+    @ToolMeta(displayName = "删除匹配文本", category = "document", fileEffect = "MODIFIED",
+            offerToModel = false)
     @Tool("删除文档中第 N 个可见的匹配文本。专门用于删除操作，通过查找文本并执行删除。")
     public String doc_delete_match(
             @P("要删除的文本内容") String findText,
@@ -590,11 +606,13 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "删除文本", category = "document", fileEffect = "MODIFIED")
+    // 只登记、不下发（dev-board#1065 T-14），理由见 doc_replace_nth_match 上方。
+    @ToolMeta(displayName = "删除文本", category = "document", fileEffect = "MODIFIED",
+            offerToModel = false)
     @Tool("删除文档中的文本内容。可以删除所有匹配项，或只删除第一个匹配项。")
     public String doc_delete_text(
             @P("要删除的文本内容") String text,
-            @P("是否删除所有匹配项，默认 true") Boolean deleteAll
+            @P("是否删除所有匹配项；不传只删第一处，要全部删掉必须显式传 true") Boolean deleteAll
     ) {
         log.info("Tool: doc_delete_text called text={}, all={}", text, deleteAll);
         try {
@@ -628,17 +646,78 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 插入和修改 ====================
 
     @ToolMeta(displayName = "插入文本", category = "document", fileEffect = "MODIFIED")
-    @Tool("在文档的当前光标位置插入文本内容。修改将以修订模式进行。")
+    @Tool("插入文本，以修订模式进行。不给 anchorId 时插在当前光标处；" +
+          "要在某句话之前/之后插入：先 doc_find_text 拿到那句话的 anchorId，再调本工具并传 anchorId " +
+          "与 position（before=插在它前面，after=插在它后面，默认 after），一次调用完成定位与插入，" +
+          "不需要先 doc_select_anchor / doc_collapse_cursor。")
     public String doc_insert_at_cursor(
-            @P("要插入的文本内容") String text
+            @P("要插入的文本内容") String text,
+            @P(value = "doc_find_text 返回的 anchorId；给了就插在这个锚点的前面或后面，不给就插在当前光标处",
+                    required = false) String anchorId,
+            @P(value = "相对锚点的位置：before 或 after（默认 after）；不给 anchorId 时忽略",
+                    required = false) String position
     ) {
-        log.info("Tool: doc_insert_at_cursor called, text length={}", text.length());
+        log.info("Tool: doc_insert_at_cursor called, text length={}, anchor={}, position={}",
+                text == null ? -1 : text.length(), anchorId, position);
+        if (text == null) {
+            return "Error: 缺少必填参数 text。";
+        }
         try {
+            if (anchorId != null && !anchorId.isBlank()) {
+                String to = normalizeInsertPosition(position);
+                if (to == null) {
+                    return "Error: position 只能是 before 或 after（收到：" + position + "）。";
+                }
+                // 服务端把「选中锚点 → 收起到开头/结尾 → 光标处插入」三步串起来，与
+                // doc_select_anchor / doc_collapse_cursor / 本工具各自下发的命令逐字相同
+                // （dev-board#1065 T-16）。任何一步失败即停，后面的步骤不再发。
+                String selected = editorBridgeService.executeEditorCommand("set_selection",
+                        java.util.Map.of("anchor", anchorId));
+                String failed = insertStepFailure(selected, "第 1 步（按 anchorId 选中锚点，set_selection）");
+                if (failed != null) return failed;
+                String collapsed = editorBridgeService.executeEditorCommand("collapse_selection",
+                        java.util.Map.of("to", "before".equals(to) ? "start" : "end"));
+                failed = insertStepFailure(collapsed, "第 2 步（把光标收到锚点" + ("before".equals(to) ? "开头" : "结尾")
+                        + "，collapse_selection）");
+                if (failed != null) return failed;
+                String inserted = editorBridgeService.executeEditorCommand("insert_at_cursor",
+                        java.util.Map.of("text", text));
+                failed = insertStepFailure(inserted, "第 3 步（插入文本，insert_at_cursor）");
+                return failed != null ? failed : inserted;
+            }
             return editorBridgeService.executeEditorCommand("insert_at_cursor", 
                     java.util.Map.of("text", text));
         } catch (Exception e) {
             log.error("Failed to insert at cursor", e);
             return "Error: " + e.getMessage();
+        }
+    }
+
+    /** position 归一：空 = after；认 before/after（忽略大小写与首尾空白），其余返回 null。 */
+    static String normalizeInsertPosition(String position) {
+        if (position == null || position.isBlank()) return "after";
+        String p = position.trim().toLowerCase(java.util.Locale.ROOT);
+        return "before".equals(p) || "after".equals(p) ? p : null;
+    }
+
+    /**
+     * 锚点插入某一步的桥回执是不是失败；是则返回给模型看的 {@code Error:} 文案（写明哪一步），否则 null。
+     *
+     * <p>编辑器启动中（EDITOR_BOOTING）原样透传：编排器靠那个码把这次当成「没执行、等一等重试同一步」，
+     * 包一层 Error 前缀会让它当成普通失败计数（dev-board#1017）。其余失败带上桥回执里的 error 文案——
+     * 超时/停止回执的「结局未知、不要原样重发」那句话就在里面。
+     */
+    static String insertStepFailure(String raw, String step) {
+        if (EditorBridgeService.isEditorBootingOutput(raw)) {
+            return raw;
+        }
+        try {
+            workerJson(raw);
+            return null;
+        } catch (IllegalStateException e) {
+            // 前两步只动了光标、没写字；第 3 步的超时回执本身会说明「可能已经写进去了」
+            return "Error: " + step + "失败" + (step.startsWith("第 3 步") ? "" : "，没有插入任何内容")
+                    + "：" + e.getMessage();
         }
     }
 
@@ -666,7 +745,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "读取段落", category = "document")
-    @Tool("获取文档中指定段落的文本内容。")
+    @Tool("获取文档中指定段落的文本内容。" +
+          "只取一个已知编号的段落时用它；要连续读一段范围，用 doc_get_document_text(startParagraph, maxParagraphs) 一次取回。")
     public String doc_get_paragraph(
             @P("段落号（0 开始，用 doc_get_document_text 返回的 index）") Integer paragraphIndex
     ) {
@@ -683,7 +763,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "修改段落", category = "document", fileEffect = "MODIFIED")
-    @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。" +
+    @Tool("整段重写：把指定段落的文本整体换成新文本，以修订模式进行，用户可以审阅后接受或拒绝。" +
+          "只在整段重写时用；改一句用 doc_replace_at_anchor（先 doc_find_text 拿 anchorId）。" +
           REDLINE_GRANULARITY_NOTE)
     public String doc_modify_paragraph(
             @P("段落号（0 开始，用 doc_get_document_text 返回的 index）") Integer paragraphIndex,
@@ -708,7 +789,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 文档结构 ====================
 
     @ToolMeta(displayName = "获取文档大纲", category = "document")
-    @Tool("获取文档的大纲结构，包括各级标题及其位置。")
+    @Tool("获取文档的大纲结构，包括各级标题及其位置。" +
+          "只想看结构（有哪些章节、标题在第几段）时用它，比 doc_get_document_text 读正文省得多；要看正文再用后者。")
     public String doc_get_outline() {
         log.info("Tool: doc_get_outline called");
         try {
@@ -720,7 +802,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "标题下插入", category = "document", fileEffect = "MODIFIED")
-    @Tool("在文档的指定标题下方插入新内容。修改将以修订模式进行。")
+    @Tool("在文档的指定标题下方插入新内容。修改将以修订模式进行。" +
+          "按标题定位插入时用它，不必先挪光标再 doc_insert_at_cursor；要插在某句话前后则用 doc_find_text 定位。")
     public String doc_insert_under_heading(
             @P("标题文本，用于定位插入位置") String headingText,
             @P("要插入的内容") String content
@@ -735,9 +818,124 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    // ==================== 导出 ====================
+
+    /**
+     * 导出 PDF 的体积上限（dev-board#1065 T-25）。字节经 base64 塞进 /editor-result 的 JSON 里回来，
+     * Jackson 默认单个字符串上限 2000 万字符；12MB 的 PDF base64 后约 1600 万，留足余量。
+     * 与前端 agentPdfExport.js 的 MAX_EXPORT_PDF_BYTES 同值。
+     */
+    static final long MAX_EXPORT_PDF_BYTES = 12L * 1024 * 1024;
+
+    // 不声明 fileEffect（dev-board#1065 T-25）：编排器对没有 fileArg 的 doc_* 工具会把改动记在
+    // 活跃文档头上，声明 ADDED 就会在改动卡片里说「合同.docx 是新建的」。新 PDF 的名字与 id 在返回值里，
+    // 文件树由 refreshFiles 刷新。requiresHost = LOWA 与 doc_ 前缀链重复，写出来是为了让声明清单
+    // （ToolDeclarationContractTest）一眼看得出它离不开桌面编辑器——字节是编辑器里的引擎导出来的。
+    @ToolMeta(displayName = "导出为PDF", category = "document", refreshFiles = true,
+            requiresHost = ToolMeta.Host.LOWA)
+    @Tool("把编辑器里当前打开的文档导出为 PDF，存进项目、放在原文档所在的文件夹（同名不覆盖，自动加序号），原文档不动。" +
+          "导出的是编辑器此刻的内容（不必先保存），版面按编辑器当前的显示方式（修订痕迹若在显示中也会印出来）。" +
+          "返回新 PDF 的文件名与文件 ID，之后可用 pdf_* 工具处理它。")
+    public String doc_export_pdf(
+            @P(value = "导出的文件名（可选；默认与原文档同名，扩展名自动改为 .pdf）", required = false) String fileName
+    ) {
+        log.info("Tool: doc_export_pdf called fileName={}", fileName);
+        String raw;
+        try {
+            raw = editorBridgeService.executeEditorCommand("export_pdf", java.util.Map.of());
+        } catch (Exception e) {
+            log.error("Failed to export pdf", e);
+            return "Error: 导出 PDF 失败：" + e.getMessage();
+        }
+        if (EditorBridgeService.isEditorBootingOutput(raw)) {
+            return raw; // 编辑器还在启动：原样交给编排器，按「没执行、等一等重试同一步」处理
+        }
+        com.fasterxml.jackson.databind.JsonNode node;
+        try {
+            node = workerJson(raw);
+        } catch (IllegalStateException e) {
+            return "Error: 导出 PDF 失败：" + e.getMessage();
+        }
+        String base64 = node.path("base64").asText("");
+        if (base64.isBlank()) {
+            return "Error: 导出 PDF 失败：编辑器没有返回 PDF 内容。";
+        }
+        byte[] bytes;
+        try {
+            bytes = java.util.Base64.getDecoder().decode(base64);
+        } catch (IllegalArgumentException e) {
+            return "Error: 导出 PDF 失败：编辑器返回的 PDF 内容无法解码。";
+        }
+        if (bytes.length == 0) {
+            return "Error: 导出 PDF 失败：导出结果为空。";
+        }
+        if (bytes.length > MAX_EXPORT_PDF_BYTES) {
+            return "Error: 导出的 PDF 超过 " + (MAX_EXPORT_PDF_BYTES / 1024 / 1024)
+                    + "MB，无法经 AI 存进项目；请让用户用菜单「文件 → 导出为 PDF」另存。";
+        }
+        ProjectFile source = null;
+        long sourceId = node.path("sourceFileId").asLong(0);
+        if (sourceId > 0) {
+            source = projectFileService.findFile(sourceId).orElse(null);
+        }
+        if (source == null || Boolean.TRUE.equals(source.getIsDeleted())) {
+            return "Error: 导出 PDF 失败：找不到编辑器里这份文档对应的项目文件（可能是还没存进项目的新文档）。";
+        }
+        String denied = ToolFileGuard.rejectIfOutsideProject(source);
+        if (denied != null) {
+            return denied;
+        }
+        String name = exportPdfName(fileName, source.getName());
+        java.nio.file.Path temp = null;
+        try {
+            java.nio.file.Path projectRoot = storageResolver.projectRoot(source.getProjectId());
+            java.nio.file.Files.createDirectories(projectRoot);
+            temp = projectRoot.resolve(".export-pdf-" + System.nanoTime() + ".pdf");
+            java.nio.file.Files.write(temp, bytes);
+            ProjectFile created = projectFileService.createFile(
+                    source.getProjectId(), source.getParentId(), name, "pdf",
+                    (long) bytes.length, null,
+                    "project_" + source.getProjectId() + "_ai_" + System.currentTimeMillis(),
+                    AGENT_USER_ID, ProjectFileService.ConflictPolicy.RENAME);
+            java.nio.file.Path target = storageResolver.resolve(created.getFilePath());
+            java.nio.file.Files.createDirectories(target.getParent());
+            java.nio.file.Files.move(temp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            temp = null;
+            created.setFileSize((long) bytes.length);
+            projectFileRepository.save(created);
+            return String.format("已把『%s』导出为 PDF『%s』（文件 ID: %d，%d KB），放在原文档所在的文件夹；原文档没有改动。",
+                    source.getName(), created.getName(), created.getId(), Math.max(1, bytes.length / 1024));
+        } catch (Exception e) {
+            log.error("Failed to save exported pdf: {}", name, e);
+            return "Error: 导出 PDF 失败：保存到项目时出错：" + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+        } finally {
+            if (temp != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(temp);
+                } catch (Exception ignore) {
+                    log.warn("清理临时文件失败: {}", temp);
+                }
+            }
+        }
+    }
+
+    /** 导出文件名：模型给了就用（抹掉路径分隔符、补 .pdf），否则取原文档名换扩展名。 */
+    static String exportPdfName(String requested, String sourceName) {
+        String base = requested != null && !requested.isBlank() ? requested.trim() : sourceName;
+        if (base == null || base.isBlank()) base = "document";
+        base = base.replace('/', '_').replace('\\', '_').trim();
+        if (base.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) return base;
+        int dot = base.lastIndexOf('.');
+        if ((requested == null || requested.isBlank()) && dot > 0) base = base.substring(0, dot);
+        return base + ".pdf";
+    }
+
     // ==================== 智能搜索 ====================
 
-    @ToolMeta(displayName = "搜索相关文档", category = "document")
+    // dev-board#1065（审计 T-03）：描述说「在文件名和文档内容中搜索」，实现只比文件名（内容搜索是个 TODO），
+    // 无命中时还回「项目里前 10 个可编辑文档」冒充结果。全文检索由 search_project_content 承担，
+    // 本工具只登记不下发（老会话回放与 XML 兜底照常执行）。
+    @ToolMeta(displayName = "搜索相关文档", category = "document", offerToModel = false)
     @Tool("搜索项目中可能需要修改的相关文档。根据关键词在文件名和文档内容中搜索。")
     public String doc_search_related_docs(
             @P("搜索关键词，如'交易方案'、'股东决议'等") String keyword,
@@ -874,7 +1072,9 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "收起光标", category = "document")
-    @Tool("【选】把光标落到当前选区的开头或结尾（取消选中）。要在某处'之前/之后'插入文本时：先选中目标，再 collapse 到 start/end，然后 doc_insert_at_cursor。")
+    @Tool("【选】把光标落到当前选区的开头或结尾（取消选中）。要在某句话'之前/之后'插入文本时不必用本工具：" +
+          "直接 doc_insert_at_cursor(text, anchorId, position=before|after) 一次完成。本工具只在选区不是来自锚点" +
+          "（例如 doc_select_paragraph 选中的整段）时用来落光标。")
     public String doc_collapse_cursor(
             @P("start=选区开头, end=选区结尾") String to
     ) {
@@ -891,6 +1091,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @ToolMeta(displayName = "锚点替换", category = "document", fileEffect = "MODIFIED")
     @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。会自动把编辑器视图滚动到该处；返回改动后所在段落的实际文本，核对该返回值即完成验证——不需要先 doc_select_anchor，也不需要改后再读文档。" +
           "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。" +
+          "newText 传空字符串即删除该处文本（以修订删除痕迹呈现）。" +
           REDLINE_GRANULARITY_NOTE)
     public String doc_replace_at_anchor(
             @P("doc_find_text 返回的 anchorId") String anchorId,

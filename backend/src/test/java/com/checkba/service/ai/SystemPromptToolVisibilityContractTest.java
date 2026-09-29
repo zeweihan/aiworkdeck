@@ -53,10 +53,6 @@ class SystemPromptToolVisibilityContractTest {
     private static final Path PROMPTS_DIR =
             Path.of("src/main/resources/prompts");
 
-    /** {@code @Tool} 注解下面那个 public 方法名 —— 与 ToolRegistry 的取名口径一致。 */
-    private static final Pattern TOOL_METHOD = Pattern.compile(
-            "public\\s+(?:static\\s+)?[\\w<>\\[\\],\\s.]+?\\s+([a-zA-Z_][a-zA-Z_0-9]*)\\s*\\(");
-
     /** 反引号里的标识符：`tool_name` 或 `tool_name(args)`。 */
     private static final Pattern BACKTICKED = Pattern.compile(
             "`([a-z][a-z0-9_]*)\\s*\\(|`([a-z][a-z0-9_]*)`");
@@ -112,7 +108,19 @@ class SystemPromptToolVisibilityContractTest {
             Map.entry("text_find_replace", ToolMeta.Host.LOWA),
             // 诉讼可视化：出图后在编辑器里打开
             Map.entry("litigation_timeline_render", ToolMeta.Host.LOWA),
-            Map.entry("litigation_render", ToolMeta.Host.LOWA)));
+            Map.entry("litigation_render", ToolMeta.Host.LOWA),
+            // 管线前置步骤跟随收尾工具（dev-board#1065 T-10）：只在 tools-lowa 里教
+            Map.entry("litigation_reference", ToolMeta.Host.LOWA),
+            Map.entry("litigation_checkpoint", ToolMeta.Host.LOWA),
+            Map.entry("litigation_timeline_start", ToolMeta.Host.LOWA),
+            Map.entry("litigation_timeline_step", ToolMeta.Host.LOWA),
+            Map.entry("pptx_generate_outline", ToolMeta.Host.LOWA),
+            Map.entry("pptx_refine_outline", ToolMeta.Host.LOWA),
+            Map.entry("pptx_get_project_pages", ToolMeta.Host.LOWA),
+            Map.entry("pptx_check_service", ToolMeta.Host.LOWA),
+            Map.entry("pptx_export_editable", ToolMeta.Host.LOWA),
+            // 导出 PDF（T-25）：doc_ 前缀本来就锁在 LOWA，声明是冗余的显式化
+            Map.entry("doc_export_pdf", ToolMeta.Host.LOWA)));
 
     /** 片段文件 → 它服务的那一档会话。 */
     private record Fragment(String stem, Capability capability, OfficeHost host) {
@@ -155,34 +163,36 @@ class SystemPromptToolVisibilityContractTest {
     private record ToolFacts(ToolMeta.Host host, boolean offered) {
     }
 
-    /** 全部 {@code @Tool} 方法名 → 它的宿主声明与是否真下发。 */
+    /**
+     * 全部 {@code @Tool} 方法名 → 它的宿主声明与是否真下发。
+     *
+     * <p>按 tools 目录里的源文件列类名，再用<b>反射</b>读注解（dev-board#1065 改）。
+     * 原先是在源码里「往回 1500 字符找最近一个 @ToolMeta(」：没有 @ToolMeta 的工具会把
+     * 上一个工具的声明记到自己头上（get_project_context 标了 offerToModel = false 之后，
+     * 紧跟着的 update_project_info 就被误判成不下发），写在 @Tool 之后的 @ToolMeta 又整个看不见。
+     * 类名仍从源码目录里取，所以新增的工具类不需要改这里。
+     */
     private static Map<String, ToolFacts> scanTools() {
         Map<String, ToolFacts> tools = new TreeMap<>();
         try (Stream<Path> files = Files.list(TOOLS_DIR)) {
             for (Path p : files.filter(f -> f.getFileName().toString().endsWith(".java")).sorted().toList()) {
-                String src = readSource(p);
-                Matcher tool = Pattern.compile("@Tool\\(").matcher(src);
-                while (tool.find()) {
-                    // 声明写在紧挨着的 @ToolMeta 上；只在「上一个 @ToolMeta 之后」的窗口里找，
-                    // 免得把上一个工具的声明记到这个工具头上
-                    String before = src.substring(Math.max(0, tool.start() - 1500), tool.start());
-                    int metaAt = before.lastIndexOf("@ToolMeta(");
-                    ToolMeta.Host host = ToolMeta.Host.NONE;
-                    boolean offered = true;
-                    if (metaAt >= 0) {
-                        String meta = before.substring(metaAt);
-                        Matcher hm = Pattern.compile("requiresHost\\s*=\\s*ToolMeta\\.Host\\.(\\w+)")
-                                .matcher(meta);
-                        if (hm.find()) {
-                            host = ToolMeta.Host.valueOf(hm.group(1));
-                        }
-                        offered = !Pattern.compile("offerToModel\\s*=\\s*false").matcher(meta).find();
+                String simple = p.getFileName().toString().replace(".java", "");
+                Class<?> type;
+                try {
+                    type = Class.forName("com.checkba.service.ai.tools." + simple);
+                } catch (ClassNotFoundException e) {
+                    continue;
+                }
+                for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
+                    if (!method.isAnnotationPresent(dev.langchain4j.agent.tool.Tool.class)) {
+                        continue;
                     }
-                    Matcher m = TOOL_METHOD.matcher(src.substring(tool.start(),
-                            Math.min(src.length(), tool.start() + 8000)));
-                    if (m.find()) {
-                        tools.put(m.group(1), new ToolFacts(host, offered));
-                    }
+                    ToolMeta meta = method.getAnnotation(ToolMeta.class);
+                    String name = dev.langchain4j.agent.tool.ToolSpecifications
+                            .toolSpecificationFrom(method).name();
+                    tools.put(name, new ToolFacts(
+                            meta == null ? ToolMeta.Host.NONE : meta.requiresHost(),
+                            meta == null || meta.offerToModel()));
                 }
             }
         } catch (IOException e) {
@@ -367,6 +377,129 @@ class SystemPromptToolVisibilityContractTest {
             }
             return n;
         }
+    }
+
+    // ---------------------------------------------------------------- 签名与 schema 对拍（dev-board#1065 T-08）
+
+    /** 反引号里的调用签名：`tool_name(a, b?, c=1)`。 */
+    private static final Pattern BACKTICKED_SIGNATURE = Pattern.compile(
+            "`([a-z][a-z0-9_]*)\\(([^`()]*)\\)`");
+
+    /** 示例里的调用：&lt;tool_code&gt;tool_name(a=1, b="x")&lt;/tool_code&gt;。 */
+    private static final Pattern TOOL_CODE_EXAMPLE = Pattern.compile(
+            "<tool_code>\\s*([a-z][a-z0-9_]*)\\((.*?)\\)\\s*</tool_code>", Pattern.DOTALL);
+
+    private static final Pattern PLAIN_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
+    /**
+     * 每个工具<b>真正下发</b>的参数名：与 {@link ToolRegistry#registerBean} 同一条口径——
+     * {@code ToolSpecifications.toolSpecificationFrom} 再过 {@link ToolRegistry#offerable}
+     * （服务端强注入的 projectId / conversationId / userId 与保位弃用参数都在这里被摘掉）。
+     * 只取类、不实例化，所以不需要任何依赖。
+     */
+    private static Map<String, Set<String>> offeredParameterNames() {
+        Map<String, Set<String>> out = new TreeMap<>();
+        try (Stream<Path> files = Files.list(TOOLS_DIR)) {
+            for (Path p : files.filter(f -> f.getFileName().toString().endsWith(".java")).sorted().toList()) {
+                String simple = p.getFileName().toString().replace(".java", "");
+                Class<?> type;
+                try {
+                    type = Class.forName("com.checkba.service.ai.tools." + simple);
+                } catch (ClassNotFoundException e) {
+                    continue;
+                }
+                for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
+                    if (!method.isAnnotationPresent(dev.langchain4j.agent.tool.Tool.class)) {
+                        continue;
+                    }
+                    dev.langchain4j.agent.tool.ToolSpecification spec = ToolRegistry.offerable(
+                            dev.langchain4j.agent.tool.ToolSpecifications.toolSpecificationFrom(method));
+                    Set<String> params = new TreeSet<>();
+                    if (spec.parameters() != null && spec.parameters().properties() != null) {
+                        params.addAll(spec.parameters().properties().keySet());
+                    }
+                    out.put(spec.name(), params);
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return out;
+    }
+
+    /**
+     * 把 "a, b?, c=1, ..." 拆成参数名。两种形态分开对待：
+     * <ul>
+     *   <li><b>签名</b>（每一项都是裸标识符，可带 ? 表示可选）：每一项都是参数名，全部要对上；</li>
+     *   <li><b>调用示例</b>（出现了字面量：引号、数字、null/true/false）：位置参数是占位的值不是名字，
+     *       只核对 {@code 名=值} 形式里的名字。</li>
+     * </ul>
+     * 中文说明、省略号这类不是标识符的片段一律跳过。
+     */
+    private static List<String> argumentNames(String args) {
+        List<String> parts = new ArrayList<>();
+        for (String raw : args.split(",")) {
+            parts.add(raw.strip());
+        }
+        boolean example = parts.stream().anyMatch(a -> {
+            String value = a.contains("=") ? a.substring(a.indexOf('=') + 1).strip() : a;
+            return value.contains("\"") || value.contains("'") || value.matches("-?\\d.*")
+                    || value.equals("null") || value.equals("true") || value.equals("false");
+        });
+        List<String> names = new ArrayList<>();
+        for (String a : parts) {
+            int eq = a.indexOf('=');
+            if (eq >= 0) {
+                a = a.substring(0, eq).strip();
+            } else if (example) {
+                continue;
+            }
+            if (a.endsWith("?")) {
+                a = a.substring(0, a.length() - 1).strip();
+            }
+            if (PLAIN_IDENTIFIER.matcher(a).matches()) {
+                names.add(a);
+            }
+        }
+        return names;
+    }
+
+    @Test
+    @DisplayName("提示词里写出来的工具签名，参数名必须都在该工具下发的 schema 里（dev-board#1065 T-08）")
+    void promptSignaturesOnlyUseParametersTheSchemaActuallyHas() throws IOException {
+        Map<String, Set<String>> schemas = offeredParameterNames();
+        assertTrue(schemas.containsKey("write_docx") && !schemas.get("write_docx").contains("projectId"),
+                "对拍的前提：projectId 这类服务端注入参数已从下发 schema 里摘掉：" + schemas.get("write_docx"));
+
+        List<String> problems = new ArrayList<>();
+        int checked = 0;
+        try (Stream<Path> files = Files.list(PROMPTS_DIR)) {
+            for (Path p : files.filter(f -> f.getFileName().toString().endsWith(".md")).sorted().toList()) {
+                String fileName = p.getFileName().toString();
+                String text = readSource(p);
+                for (Pattern pattern : List.of(BACKTICKED_SIGNATURE, TOOL_CODE_EXAMPLE)) {
+                    Matcher m = pattern.matcher(text);
+                    while (m.find()) {
+                        Set<String> params = schemas.get(m.group(1));
+                        if (params == null) {
+                            continue; // 不是工具（Python 侧 API、格式键名等），由上面几条测试管
+                        }
+                        checked++;
+                        for (String arg : argumentNames(m.group(2))) {
+                            if (!params.contains(arg)) {
+                                problems.add(fileName + ": " + m.group(1) + "(" + m.group(2).strip()
+                                        + ") 里的 `" + arg + "` 不在下发 schema " + params + " 里");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assertTrue(checked > 20, "一个签名都没对拍上，这条断言就成了空断言：checked=" + checked);
+        assertTrue(problems.isEmpty(),
+                "提示词里的签名与工具下发的 schema 对不上。弱模型以提示词为准：写着 projectId 它就会去猜一个"
+                        + "（猜错不会被任何返回值戳穿），写着一个 schema 里没有的名字它就会传一个绑不上的参数。"
+                        + "照真实 schema 改签名：\n  " + String.join("\n  ", problems));
     }
 
     @Test

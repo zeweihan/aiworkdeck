@@ -886,15 +886,19 @@ public class AgentOrchestrator {
             }
         }
 
+        // 工具回写「这次展示了哪些类目」的通道（dev-board#1065，list_tools 的 query / names 用）
+        java.util.Set<String> disclosedCategories = java.util.concurrent.ConcurrentHashMap.newKeySet();
         com.checkba.service.ai.tools.ToolContext ctx =
                 new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId,
                         guard == null ? List.of() : guard.roundCandidates,
-                        guard == null ? null : guard.roundOffered);
+                        guard == null ? null : guard.roundOffered,
+                        guard == null ? null : guard.runId,
+                        disclosedCategories);
         long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
         // 目录展开只在下一轮生效：本轮的工具集已经发给模型了，中途加进去会让
         // 「一轮内工具集不变」那条契约失效（只加不减，所以不会让已宣布的工具消失）。
-        noteToolCategoryExpansion(guard, toolName, argsJson, result);
+        noteToolCategoryExpansion(guard, toolName, argsJson, result, disclosedCategories);
         recordToolTelemetry(toolName, result, conversationId, System.currentTimeMillis() - toolStartMs);
         applyToolSideEffects(result, toolName, argsJson, conversationId, guard);
 
@@ -2473,18 +2477,40 @@ public class AgentOrchestrator {
      * 失败的调用不记——模型拿到的是一句错误，没看到任何签名。
      */
     private void noteToolCategoryExpansion(RunGuard guard, String toolName, String argsJson,
-                                           ToolRegistry.ToolResult result) {
+                                           ToolRegistry.ToolResult result,
+                                           java.util.Set<String> disclosedCategories) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
-        if (guard == null || policy == null
-                || (!policy.isEnabled() && !guard.assistedDisclosure && !guard.docCategoryTrimActive)
-                || result == null) {
+        if (guard == null || result == null) {
+            return;
+        }
+        // use_skill 的生效登记与披露开关无关（dev-board#1065）：restrict skill 的白名单要登记，
+        // 哪怕这一轮既没开渐进披露、也没开着文档。
+        if (com.checkba.service.ai.tools.SkillTools.TOOL_NAME.equals(toolName)) {
+            if (result.success()) {
+                noteSkillActivation(guard, extractArg(argsJson, "skillId"), policy);
+            }
+            return;
+        }
+        if (policy == null
+                || (!policy.isEnabled() && !guard.assistedDisclosure && !guard.docCategoryTrimActive)) {
             return;
         }
         if (ToolDisclosurePolicy.CATALOG_TOOL.equals(toolName)) {
             if (!result.success()) {
                 return;
             }
-            java.util.Set<String> expanded = policy.parseCategories(extractArg(argsJson, "category"));
+            // 类目参数按参数解析（工具没真跑时——例如回放桩——也记得上）；names / query 给了时 category 被忽略，
+            // 那两种模式展示了哪些工具只有工具自己知道，经 disclosedCategories 回写，两条路取并集。
+            boolean searchMode = hasNonBlankArg(argsJson, "names") || hasNonBlankArg(argsJson, "query");
+            java.util.Set<String> expanded = new java.util.LinkedHashSet<>(searchMode
+                    ? java.util.Set.of() : policy.parseCategories(extractArg(argsJson, "category")));
+            if (disclosedCategories != null) {
+                for (String category : disclosedCategories) {
+                    if (policy.categoryNames().contains(category)) {
+                        expanded.add(category);
+                    }
+                }
+            }
             if (!expanded.isEmpty() && guard.expandedToolCategories.addAll(expanded)) {
                 log.info("[Disclosure] conv={} 展开类目 {}（下一轮生效），当前展开集 {}",
                         guard.conversationId, expanded, guard.expandedToolCategories);
@@ -2502,6 +2528,40 @@ public class AgentOrchestrator {
         if (!"core".equals(category) && guard.expandedToolCategories.add(category)) {
             log.info("[Disclosure] conv={} 模型点名调了未下发的 {}，放回类目 {}（下一轮生效），当前展开集 {}",
                     guard.conversationId, toolName, category, guard.expandedToolCategories);
+        }
+    }
+
+    /**
+     * 模型调过 {@code use_skill} 之后登记那个 skill（dev-board#1065，skill 生效的第三条路）。
+     *
+     * <p>两件事，都<b>只加不减</b>、都下一轮生效：① 白名单涉及的类目放回展开集（被渐进披露或活跃文档类目裁剪
+     * 藏着的那几类回来）；② {@code restrict} 的登记进 {@link com.checkba.service.ai.skill.SkillRouter#activateMidRun}，
+     * 起跑时就被别的 skill 裁过的回合里，它的白名单并到那份裁剪结果上。中途生效的 skill 绝不收窄——
+     * 模型前几轮看过的工具下一轮不能消失（「一轮内工具集不变」），所以不走起跑时那条「裁到白名单」的路。
+     */
+    private void noteSkillActivation(RunGuard guard, String skillId, ToolDisclosurePolicy policy) {
+        java.util.Optional<com.checkba.service.ai.skill.SkillDefinition> def =
+                skillRouter.activateMidRun(guard.conversationId, guard.runId, skillId);
+        if (def.isEmpty()) {
+            return;
+        }
+        java.util.Set<String> putBack = policy == null
+                ? java.util.Set.of() : policy.categoriesCoveredBy(def.get().getAllowedTools());
+        guard.expandedToolCategories.addAll(putBack);
+        log.info("[Skill] conv={} 模型调 use_skill 生效 {}，放回类目 {}（下一轮生效），当前展开集 {}",
+                guard.conversationId, def.get().getId(), putBack, guard.expandedToolCategories);
+    }
+
+    /** 工具参数里这个键是不是非空（解析不了按没有算——与 extractArg 那个「回落原串」的口径刻意不同）。 */
+    private static boolean hasNonBlankArg(String argsJson, String key) {
+        if (argsJson == null || argsJson.isBlank()) {
+            return false;
+        }
+        try {
+            String value = cn.hutool.json.JSONUtil.parseObj(argsJson).getStr(key);
+            return value != null && !value.isBlank();
+        } catch (Exception e) {
+            return false;
         }
     }
 

@@ -5,6 +5,7 @@ package com.checkba.service.ai.tools;
 
 import com.checkba.service.ProjectFileService;
 import com.checkba.model.entity.ProjectFile;
+import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +29,6 @@ public class LegalTools implements AgentToolComponent {
 
     private final ProjectFileService projectFileService;
     private final com.checkba.service.legal.PkulawChannel pkulawChannel;
-    private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     /**
      * 抽取路由（PDF 文字层优先、扫描件才 OCR）与抽取结果缓存，与 {@code extract_file_text}
      * 是同一个 bean（dev-board#800）——{@code read_document} 不再自建第二条分支。
@@ -61,13 +61,15 @@ public class LegalTools implements AgentToolComponent {
     /**
      * 读取项目文件正文。
      *
-     * <p>两条抽取路径：
-     * <ul>
-     *   <li>纯文本类（java/js/md/txt/csv…）→ 直接按字符集解码（UTF-8，失败回退 GBK）；</li>
-     *   <li>其余一切（图片、PDF、<b>docx/xlsx/pptx/doc 等 Office 格式</b>）→
-     *       {@link com.checkba.service.file.ProjectFileTextExtractor}，与 {@code extract_file_text}
-     *       同一条路：图片直接云端 OCR，<b>PDF 先抽文字层、抽不出（扫描件）才 OCR</b>，其余 Tika。</li>
-     * </ul>
+     * <p><b>只登记不下发</b>（dev-board#1065，审计 T-05）：它与 {@code extract_file_text} 是同一个抽取器的
+     * 两个入口，两份几乎同义的描述摆在模型面前，选哪个近乎随机。唯一的实质差异——纯文本的
+     * 「UTF-8 严格解码、失败回退 GBK」——已并进 {@link com.checkba.service.file.ProjectFileTextExtractor}，
+     * 两个入口逐字同一份正文（{@code GbkPlainTextParityTest} 钉住）。方法本身保留：上下文组装
+     *（附件与活跃文档注入）、run_python 的 default_api 与老会话的 XML 兜底都还在调它。
+     *
+     * <p>全部格式走 {@link com.checkba.service.file.ProjectFileTextExtractor}：纯文本按字节解码，
+     * 图片直接云端 OCR，<b>PDF 先抽文字层、抽不出（扫描件）才 OCR</b>，其余（docx/xlsx/pptx/doc 等
+     * Office 格式）Tika。
      *
      * <p>Office 那条曾经不存在：docx 两个白名单都不在，恒定落进
      * {@code FileContentExtractorService.extractText} 的 else 分支返回空串——
@@ -87,7 +89,7 @@ public class LegalTools implements AgentToolComponent {
      * OCR 失败一律 {@code Error:} 开头并带上底层原因——此前它以「[System: OCR 识别失败…]」形态
      * 返回，非空且无 Error 前缀，会被当成正文原样注进上下文。
      */
-    @ToolMeta(displayName = "读取文档", category = "file")
+    @ToolMeta(displayName = "读取文档", category = "file", offerToModel = false)
     @Tool("Read a project file's full plain text by its database fileId (from doc_list_project_files). "
             + "Handles Word/Excel/PowerPoint, PDF and plain text; images and scanned PDFs are OCR'd "
             + "automatically in the cloud (no local setup, no Docker, no script). "
@@ -106,21 +108,16 @@ public class LegalTools implements AgentToolComponent {
 
             String name = file.getName();
             String result;
-            if (!fileContentExtractorService.isOcrSupported(name)
-                    && fileContentExtractorService.isTextFile(name)) {
-                result = readPlainText(fId, file);
-            } else {
-                try {
-                    result = textExtractor.extractText(file);
-                } catch (com.checkba.service.file.ProjectFileTextExtractor
-                        .AudioNotTranscribedException e) {
-                    // 音频没有转写稿不是错误，文件本身好好的（dev-board#814）。用 Warning:
-                    // 而不是 Error:，两者都会被 ContextAssembler 的失败回执守卫认出来、
-                    // 不进 <file> 的 CDATA，但对模型（以及过程卡里的用户）语气不同。
-                    return "Warning: " + e.getMessage();
-                } catch (com.checkba.service.file.ProjectFileTextExtractor.OcrFailedException e) {
-                    return "Error: " + e.getMessage();
-                }
+            try {
+                result = textExtractor.extractText(file);
+            } catch (com.checkba.service.file.ProjectFileTextExtractor
+                    .AudioNotTranscribedException e) {
+                // 音频没有转写稿不是错误，文件本身好好的（dev-board#814）。用 Warning:
+                // 而不是 Error:，两者都会被 ContextAssembler 的失败回执守卫认出来、
+                // 不进 <file> 的 CDATA，但对模型（以及过程卡里的用户）语气不同。
+                return "Warning: " + e.getMessage();
+            } catch (com.checkba.service.file.ProjectFileTextExtractor.OcrFailedException e) {
+                return "Error: " + e.getMessage();
             }
 
             if (!StringUtils.hasText(result)) {
@@ -130,7 +127,7 @@ public class LegalTools implements AgentToolComponent {
             }
             // 上限与 extract_file_text 同源：不截断的话，一份几 MB 的合同会变成一条几十万
             // 字符的工具结果，下一轮必然上下文超限，且它落在 compactor 尾区剪不掉 = 整轮死
-            return ToolFileGuard.capToolText(name, result);
+            return ToolFileGuard.capToolText(name, fId, result);
 
         } catch (Exception e) {
             log.error("Failed to read document {}", fileId, e);
@@ -138,34 +135,11 @@ public class LegalTools implements AgentToolComponent {
         }
     }
 
-    /**
-     * 纯文本类走临时文件 + 字符集解码，<b>刻意不并进抽取器</b>：抽取器对非 OCR 格式走 Tika，
-     * 而 Tika 对 GBK 编码的中文 txt/csv 的字符集猜测不如这里的「UTF-8 严格解码失败即 GBK」稳。
-     */
-    private String readPlainText(Long fId, ProjectFile file) throws java.io.IOException {
-        byte[] bytes = projectFileService.getFileBytes(fId);
-        if (bytes == null || bytes.length == 0) return "";
-        java.nio.file.Path tempPath = null;
-        try {
-            String ext = file.getFileType() != null ? "." + file.getFileType() : ".tmp";
-            tempPath = java.nio.file.Files.createTempFile("checkba_legal_" + fId + "_", ext);
-            java.nio.file.Files.write(tempPath, bytes);
-            return fileContentExtractorService.extractText(tempPath.toFile());
-        } finally {
-            if (tempPath != null) {
-                try {
-                    java.nio.file.Files.deleteIfExists(tempPath);
-                } catch (Exception ignore) {}
-            }
-        }
-    }
-
-
     // --- PKULaw MCP Integration（服务器名对应配置 mcp.servers[].name）---
 
     @ToolMeta(displayName = "语义搜索法规", category = "legal")
     @Tool("Search for laws and regulations using PKULaw MCP Semantic Search. Use this for general legal questions. Returns a list of relevant articles.")
-    public String law_search(String query) {
+    public String law_search(@P("要检索的法律问题或关键词，用自然语言描述即可") String query) {
         log.info("Tool: law_search (semantic) called for query='{}'", query);
         // 先校验再解引用：query 缺省时 Map.of("query", query) 会直接抛 NPE（getMessage()==null），
         // 被 ToolRegistry 的通用异常处理兜成一句不可行动的 "Error executing tool: null"——
@@ -178,7 +152,9 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "关键词搜索法规", category = "legal")
     @Tool("Search for laws by keywords in title or fulltext. Use this when you need specific laws by name.")
-    public String law_search_keyword(String title, String fulltext) {
+    public String law_search_keyword(
+            @P(value = "法规名称中的关键词（如「公司法」）；与 fulltext 至少给一个", required = false) String title,
+            @P(value = "法规正文中的关键词；与 title 至少给一个", required = false) String fulltext) {
         log.info("Tool: law_search_keyword called for title='{}', fulltext='{}'", title, fulltext);
         Map<String, Object> args = new HashMap<>();
         if (StringUtils.hasText(title)) args.put("title", title);
@@ -189,7 +165,7 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "法条识别与溯源", category = "legal")
     @Tool("Identify law names and articles from text and trace their source.")
-    public String law_recognition(String text) {
+    public String law_recognition(@P("要识别其中法规名称与条文号的原文") String text) {
         // text.length() 曾经排在校验之前：text 缺省时这里直接 NPE，比下面的 Map.of 更早触发。
         if (!StringUtils.hasText(text)) {
             return "Error: text is required.";
@@ -200,7 +176,9 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "查询法条", category = "legal")
     @Tool("Get the full content of a specific law article by its title and article number. Use this when you have article info from law_search results.")
-    public String get_law_article(String title, String number) {
+    public String get_law_article(
+            @P("法规全称（如「中华人民共和国民法典」），可取自 law_search 的结果") String title,
+            @P("条文号（如「第五百七十七条」或「577」）") String number) {
         log.info("Tool: get_law_article called for title='{}', number='{}'", title, number);
         // 模型常见的调用形状：只给 title 漏给 number（工具描述没标两者都必填）。ToolRegistry.bindArguments
         // 对缺省的非基本类型参数绑 null，Map.of("title", title, "number", null) 直接抛
@@ -228,6 +206,9 @@ public class LegalTools implements AgentToolComponent {
             return pkulawChannel.callTool(server, tool, args);
         } catch (com.checkba.service.platform.GatewayException e) {
             log.warn("平台法规检索失败 kind={}: {}", e.getKind(), e.getMessage());
+            // 刻意不带 Error / 错误 前缀（dev-board#1065 T-11 裁决）：这是「跳过法规检索、继续干活」的
+            // 软失败，判成失败会让连续失败纠正回路催模型换思路，而正确的下一步正是照常把任务做完。
+            // ToolFailureClassificationTest 的源码扫描把这一处列在白名单里，改文案时同步那里。
             return "法规检索本次不可用：" + e.getMessage() + e.userHint()
                     + " 本次已跳过法规检索，请基于已有信息继续完成任务。";
         }

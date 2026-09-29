@@ -146,6 +146,15 @@ class ClientCapabilityDocKindTest {
         caps.record("conv-none", "none");
         assertFalse(caps.isToolVisible("doc_open_file", "conv-none",
                 ClientCapabilityService.DOC_KIND_WRITER));
+
+        // 唯一的例外是纯后端的权威清单（dev-board#1065 T-01）：任何 kind 下 office/none 都可见，
+        // 而同为 KIND_AGNOSTIC 的 doc_open_file 不跟着放出来（它要编辑器打开文件）
+        for (String kind : new String[]{null, ClientCapabilityService.DOC_KIND_WRITER,
+                ClientCapabilityService.DOC_KIND_SHEET, ClientCapabilityService.DOC_KIND_SLIDE}) {
+            assertTrue(caps.isToolVisible("doc_list_project_files", "conv-office", kind), "kind=" + kind);
+            assertTrue(caps.isToolVisible("doc_list_project_files", "conv-none", kind), "kind=" + kind);
+            assertFalse(caps.isToolVisible("doc_open_file", "conv-office", kind), "kind=" + kind);
+        }
     }
 
     @Test

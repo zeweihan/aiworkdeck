@@ -75,7 +75,7 @@
     "userInput": "看一下 42 号文件那份股权转让协议，然后帮我起草一份补充协议",
     "turns": [
       {
-        "text": "<process name=\"阅读原协议\"><tool_code>read_document(fileId=\"42\")</tool_code></process>"
+        "text": "<process name=\"阅读原协议\"><tool_code>extract_file_text(fileId=\"42\")</tool_code></process>"
       },
       {
         "text": "<process name=\"起草补充协议\"><tool_code>write_docx(fileName=\"股权转让补充协议\", markdownContent=\"# 股权转让补充协议\n\n鉴于双方已于 ____ 年签署《股权转让协议》，现就交割安排补充约定如下。\")</tool_code></process>"
@@ -85,12 +85,12 @@
       }
     ],
     "toolStubs": {
-      "read_document": "《股权转让协议》正文：转让方将其持有的目标公司 30% 股权转让给受让方……（略）",
+      "extract_file_text": "《股权转让协议》正文：转让方将其持有的目标公司 30% 股权转让给受让方……（略）",
       "write_docx": "{\"status\":\"success\",\"file\":\"股权转让补充协议.docx\"}"
     },
     "expect": {
       "toolCalls": [
-        { "name": "read_document", "argsContain": { "fileId": "42" } },
+        { "name": "extract_file_text", "argsContain": { "fileId": "42" } },
         { "name": "write_docx", "argsContain": { "fileName": "股权转让补充协议" } }
       ],
       "structureContains": ["<process", "<final>"],

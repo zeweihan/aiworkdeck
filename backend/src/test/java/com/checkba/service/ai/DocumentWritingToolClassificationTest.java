@@ -81,6 +81,8 @@ class DocumentWritingToolClassificationTest {
             "doc_select_anchor",
             "doc_select_paragraph",
             "doc_set_selection",
+            // —— doc_：导出（产出一份新 PDF，不改文档本身，dev-board#1065 T-25）——
+            "doc_export_pdf",
             // —— sheet_ ——
             "sheet_get_comments",
             "sheet_get_overview",

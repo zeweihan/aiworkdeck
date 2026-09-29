@@ -5,6 +5,7 @@ package com.checkba.service.ai.tools;
 
 import com.checkba.service.ai.subagent.SubAgentResult;
 import com.checkba.service.ai.subagent.SubAgentService;
+import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -45,7 +46,10 @@ public class SubAgentTools implements AgentToolComponent {
             + "conversation). expected_output: precise description of what the result must contain. "
             + "tool_scope: tool names the sub-agent may use, as a JSON array or comma-separated string "
             + "(empty = all tools). dispatch_subtask itself is never available to the sub-agent.")
-    public String dispatch_subtask(String task_description, String expected_output, String tool_scope) {
+    public String dispatch_subtask(
+            @P("子任务的完整独立描述（子 Agent 看不到本对话）") String task_description,
+            @P(value = "结果必须包含什么；不传则由子 Agent 自行决定产出形式", required = false) String expected_output,
+            @P(value = "子 Agent 可用的工具名，JSON 数组或逗号分隔；不传即全部工具", required = false) String tool_scope) {
         log.info("Tool: dispatch_subtask called, scope='{}'", tool_scope);
         if (SubAgentService.inSubAgent()) {
             // 防递归第二道防线（第一道在 SubAgentService 的分发拦截）

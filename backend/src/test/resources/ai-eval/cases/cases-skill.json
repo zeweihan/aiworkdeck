@@ -36,7 +36,7 @@
         "get_law_article",
         "search_web",
         "write_docx",
-        "read_document",
+        "extract_file_text",
         "dispatch_subtask",
         "doc_insert_at_cursor",
         "doc_insert_under_heading",
@@ -90,7 +90,7 @@
         "office_replace_text",
         "law_search",
         "write_docx",
-        "read_document",
+        "extract_file_text",
         "todo_write",
         "dispatch_subtask"
       ],
@@ -151,7 +151,7 @@
         "doc_get_document_text",
         "doc_find_replace",
         "doc_undo",
-        "read_document",
+        "extract_file_text",
         "todo_write",
         "dispatch_subtask"
       ],
@@ -186,8 +186,7 @@
         "dispatch_subtask",
         "extract_file_text",
         "search_project_files",
-        "write_docx",
-        "read_document"
+        "write_docx"
       ],
       "offeredToolsExclude": [
         "law_search",
@@ -236,8 +235,7 @@
         "litigation_timeline_render",
         "extract_file_text",
         "search_project_files",
-        "dispatch_subtask",
-        "read_document"
+        "dispatch_subtask"
       ],
       "offeredToolsExclude": [
         "law_search",
@@ -348,7 +346,7 @@
         "doc_undo",
         "law_search",
         "search_web",
-        "read_document",
+        "extract_file_text",
         "todo_write",
         "dispatch_subtask"
       ],
@@ -394,7 +392,7 @@
         "doc_get_document_text",
         "doc_add_comment",
         "doc_undo",
-        "read_document",
+        "extract_file_text",
         "todo_write",
         "dispatch_subtask"
       ]

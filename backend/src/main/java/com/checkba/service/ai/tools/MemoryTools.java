@@ -77,7 +77,9 @@ public class MemoryTools implements AgentToolComponent {
      * 保存结构化记忆
      */
     @Tool("保存重要信息到记忆中。用于存储关键决策、结论、事实、法律引用、用户偏好等需要长期保留的信息。" +
-          "通过 scope 参数指定记忆归属：用户个人习惯用 user，项目事实用 project（默认），通用法律知识用 global。")
+          "通过 scope 参数指定记忆归属：用户个人习惯用 user，项目事实用 project（默认），通用法律知识用 global。" +
+          "它与 query_memory 是「记一条 / 找一条」的默认入口；要整理、批量改或按文件编辑记忆文件本身" +
+          "（含团队/律所共享记忆）时，改用 memory_list / memory_read / memory_write 等 memory_* 工具。")
     @ToolMeta(displayName = "保存记忆", category = "memory")
     public String save_memory(
             @P("记忆类型: decision(决策)/conclusion(结论)/fact(事实)/reference(法律引用)/preference(偏好)") String type,
@@ -135,15 +137,20 @@ public class MemoryTools implements AgentToolComponent {
                     type, normalizedScope, key, isProtected ? "是" : "否");
         } catch (Exception e) {
             log.error("Failed to save memory: {}", e.getMessage(), e);
-            return "保存记忆时出错: " + e.getMessage();
+            return "错误：保存记忆时出错: " + e.getMessage();
         }
     }
 
     /**
      * 获取用户画像（跨项目的用户级记忆）
+     *
+     * <p>{@code offerToModel = false}（dev-board#1065 T-13）：它返回的偏好与用户级记忆，
+     * ContextAssemblerService 每轮都已作为「用户偏好与习惯（跨项目记忆）」注入系统提示的易变段。
+     * 再下发一个同内容的工具只会让模型多花一次往返去取一份它已经有的东西。
+     * 登记保留：老会话回放 / XML 兜底路径调到时照常执行。
      */
     @Tool("获取当前用户的画像信息：跨项目的用户偏好、行文习惯、常用表达等。在需要个性化输出（如按用户习惯起草文书）时使用。")
-    @ToolMeta(displayName = "获取用户画像", category = "memory")
+    @ToolMeta(displayName = "获取用户画像", category = "memory", offerToModel = false)
     public String get_user_profile() {
         log.info("Tool: get_user_profile called");
 
@@ -185,15 +192,16 @@ public class MemoryTools implements AgentToolComponent {
             return sb.toString();
         } catch (Exception e) {
             log.error("Failed to get user profile: {}", e.getMessage(), e);
-            return "获取用户画像时出错: " + e.getMessage();
+            return "错误：获取用户画像时出错: " + e.getMessage();
         }
     }
 
     /**
      * 查询项目记忆
      */
-    @Tool("在本项目的记忆里找此前的决策、结论、事实与约定。**这是检索项目记忆的唯一工具**，"
-            + "三档检索算法用 depth 选，不要再去找别的记忆检索工具：\n"
+    @Tool("在本项目的记忆里找此前的决策、结论、事实与约定。它与 save_memory 是「记一条 / 找一条」的默认入口；"
+            + "只有要按文件整理记忆（先看有哪些记忆文件、读或改某一个文件）时才改用 memory_search / memory_read 等 memory_* 工具。"
+            + "三档检索算法用 depth 选，不要为同一个问题换着工具挨个试：\n"
             + "- depth=quick（默认）：关键词精确召回。最快最省，什么都不花。"
             + "用户用的词很可能就是当初存下来的词时（人名、公司名、条款名、金额）选它。\n"
             + "- depth=hybrid：关键词 + 语义 RRF 融合。quick 没找到、或者用户是用自己的说法转述"
@@ -253,7 +261,7 @@ public class MemoryTools implements AgentToolComponent {
             return sb.toString();
         } catch (Exception e) {
             log.error("Failed to query memory (depth={}): {}", mode, e.getMessage(), e);
-            return "查询记忆时出错: " + e.getMessage();
+            return "错误：查询记忆时出错: " + e.getMessage();
         }
     }
 
@@ -331,7 +339,12 @@ public class MemoryTools implements AgentToolComponent {
 
     /**
      * 获取项目核心信息
+     *
+     * <p>{@code offerToModel = false}（dev-board#1065 T-13）：返回的就是 {@code ProjectMemory.toCoreContext()}，
+     * 而 ContextAssemblerService 每轮都把同一段作为「项目记忆（长期记忆）」注入系统提示的易变段。
+     * 登记保留：老会话回放 / XML 兜底路径调到时照常执行。
      */
+    @ToolMeta(offerToModel = false)
     @Tool("获取当前项目的核心信息，包括项目类型、交易结构、当事人、关键日期等。")
     public String get_project_context() {
         log.info("Tool: get_project_context called");
@@ -361,7 +374,7 @@ public class MemoryTools implements AgentToolComponent {
             return sb.toString();
         } catch (Exception e) {
             log.error("Failed to get project context: {}", e.getMessage(), e);
-            return "获取项目信息时出错: " + e.getMessage();
+            return "错误：获取项目信息时出错: " + e.getMessage();
         }
     }
 
@@ -386,7 +399,7 @@ public class MemoryTools implements AgentToolComponent {
             return String.format("✓ 项目信息已更新\n- 字段: %s\n- 新值: %s", field, value);
         } catch (Exception e) {
             log.error("Failed to update project info: {}", e.getMessage(), e);
-            return "更新项目信息时出错: " + e.getMessage();
+            return "错误：更新项目信息时出错: " + e.getMessage();
         }
     }
 
@@ -436,7 +449,13 @@ public class MemoryTools implements AgentToolComponent {
 
     /**
      * 获取对话摘要
+     *
+     * <p>{@code offerToModel = false}（dev-board#1065 T-13）：本对话的历史每轮都随消息栈发给模型，
+     * 历史过长触发压缩时 ContextAssemblerService 把同一份 ConversationSummary 折进压缩后的历史。
+     * 模型要的东西已经在它眼前，下发这个工具只是白花一次往返。
+     * 登记保留：老会话回放 / XML 兜底路径调到时照常执行。
      */
+    @ToolMeta(offerToModel = false)
     @Tool("获取当前对话的历史摘要，了解之前讨论的要点和结论。")
     public String get_conversation_summary() {
         log.info("Tool: get_conversation_summary called");
@@ -482,11 +501,12 @@ public class MemoryTools implements AgentToolComponent {
             return sb.toString();
         } catch (Exception e) {
             log.error("Failed to get conversation summary: {}", e.getMessage(), e);
-            return "获取对话摘要时出错: " + e.getMessage();
+            return "错误：获取对话摘要时出错: " + e.getMessage();
         }
     }
 
-    @Tool("列出 Markdown 长期记忆空间中的文件。scope 只能是 user、project、team 或 firm；空间身份由当前登录用户和项目自动确定。")
+    @Tool("列出 Markdown 长期记忆空间中的文件。scope 只能是 user、project、team 或 firm；空间身份由当前登录用户和项目自动确定。"
+            + "管理记忆文件本身用本组 memory_* 工具；只想记一条或找一条时用 save_memory / query_memory。")
     @ToolMeta(displayName = "列出记忆文件", category = "memory")
     public String memory_list(@P("记忆范围: user/project/team/firm") String scope) {
         try {
@@ -504,7 +524,8 @@ public class MemoryTools implements AgentToolComponent {
         }
     }
 
-    @Tool("读取一个 Markdown 长期记忆文件。scope 只能是 user、project、team 或 firm；先用 memory_list 获取路径。")
+    @Tool("读取一个 Markdown 长期记忆文件。scope 只能是 user、project、team 或 firm；先用 memory_list 获取路径。"
+            + "管理记忆文件本身用本组 memory_* 工具；只想记一条或找一条时用 save_memory / query_memory。")
     @ToolMeta(displayName = "读取记忆文件", category = "memory")
     public String memory_read(@P("记忆范围: user/project/team/firm") String scope,
                               @P("相对 Markdown 路径，例如 remember.md 或 topics/style.md") String path) {
@@ -517,7 +538,8 @@ public class MemoryTools implements AgentToolComponent {
         }
     }
 
-    @Tool("在一个 Markdown 长期记忆空间内搜索标题、路径和正文。scope 只能是 user、project、team 或 firm。")
+    @Tool("在一个 Markdown 长期记忆空间内搜索标题、路径和正文，返回的是文件路径与 revision（供 memory_read / memory_edit 接着用）。"
+            + "scope 只能是 user、project、team 或 firm。只想找回此前记下的某条决策或事实时用 query_memory，它直接返回记忆内容。")
     @ToolMeta(displayName = "搜索记忆", category = "memory")
     public String memory_search(@P("记忆范围: user/project/team/firm") String scope,
                                 @P("搜索词") String query) {
@@ -536,7 +558,8 @@ public class MemoryTools implements AgentToolComponent {
         }
     }
 
-    @Tool("创建或整篇更新 Markdown 长期记忆。更新前必须 memory_read 并传回读取到的 revision；新文件 expectedRevision 传 0。")
+    @Tool("创建或整篇更新 Markdown 长期记忆。更新前必须 memory_read 并传回读取到的 revision；新文件 expectedRevision 传 0。"
+            + "只是记下一条决策、事实或偏好时用 save_memory（不用管路径与 revision）；本工具用于整理或重写某个记忆文件。")
     @ToolMeta(displayName = "写入记忆文件", category = "memory")
     public String memory_write(@P("记忆范围: user/project/team/firm") String scope,
                                @P("相对 Markdown 路径") String path,
@@ -552,7 +575,8 @@ public class MemoryTools implements AgentToolComponent {
         }
     }
 
-    @Tool("对 Markdown 长期记忆做一次精确文本替换。oldText 必须在当前正文中恰好出现一次，并需传入当前 revision。")
+    @Tool("对 Markdown 长期记忆做一次精确文本替换。oldText 必须在当前正文中恰好出现一次，并需传入当前 revision。"
+            + "管理记忆文件本身用本组 memory_* 工具；只想记一条或找一条时用 save_memory / query_memory。")
     @ToolMeta(displayName = "编辑记忆文件", category = "memory")
     public String memory_edit(@P("记忆范围: user/project/team/firm") String scope,
                               @P("相对 Markdown 路径") String path,
@@ -560,16 +584,16 @@ public class MemoryTools implements AgentToolComponent {
                               @P("替换后的新文本") String newText,
                               @P("memory_read 返回的当前 revision") long expectedRevision) {
         try {
-            if (oldText == null || oldText.isEmpty()) return "编辑记忆文件失败：oldText 不能为空。";
+            if (oldText == null || oldText.isEmpty()) return "错误：编辑记忆文件失败：oldText 不能为空。";
             MemorySpaceView space = resolveDocumentSpace(scope);
             requireWritable(space);
             MemoryFileView current = memoryDocumentService.read(currentUser(), space.id(), path);
             if (current.revision() != expectedRevision) {
-                return "编辑记忆文件失败：revision 已变化，请重新读取后重试。";
+                return "错误：编辑记忆文件失败：revision 已变化，请重新读取后重试。";
             }
             int first = current.content().indexOf(oldText);
             int second = first < 0 ? -1 : current.content().indexOf(oldText, first + oldText.length());
-            if (first < 0 || second >= 0) return "编辑记忆文件失败：oldText 必须在当前正文中恰好出现一次。";
+            if (first < 0 || second >= 0) return "错误：编辑记忆文件失败：oldText 必须在当前正文中恰好出现一次。";
             String replacement = newText == null ? "" : newText;
             String content = current.content().substring(0, first) + replacement
                     + current.content().substring(first + oldText.length());
@@ -581,7 +605,8 @@ public class MemoryTools implements AgentToolComponent {
         }
     }
 
-    @Tool("删除一个 Markdown 长期记忆主题文件。remember.md 不能删除；必须传入当前 revision。")
+    @Tool("删除一个 Markdown 长期记忆主题文件。remember.md 不能删除；必须传入当前 revision。"
+            + "管理记忆文件本身用本组 memory_* 工具；只想记一条或找一条时用 save_memory / query_memory。")
     @ToolMeta(displayName = "删除记忆文件", category = "memory")
     public String memory_delete(@P("记忆范围: user/project/team/firm") String scope,
                                 @P("相对 Markdown 路径") String path,
@@ -623,7 +648,7 @@ public class MemoryTools implements AgentToolComponent {
     }
 
     private static String documentError(String action, Exception e) {
-        return action + "失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+        return "错误：" + action + "失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
     }
 
     void setMemoryDocumentServiceForTest(MemoryDocumentService service) {

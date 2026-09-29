@@ -143,11 +143,15 @@ class MatchIndexBaseTest {
     }
 
     @Test
-    @DisplayName("doc_find_text 的描述点明返回的 matchIndex 从 1 开始、可直接喂 doc_replace_nth_match")
+    @DisplayName("doc_find_text 的描述点明返回的 matchIndex 从 1 开始，且不再把模型指向已不下发的按序号删改工具")
     void findTextDescriptionStatesReturnedMatchIndexIsOneBased() {
         String d = toolDescription("doc_find_text");
-        assertTrue(d.contains("matchIndex") && d.contains("从 1 开始") && d.contains("doc_replace_nth_match"),
-                "doc_find_text 描述要说明 matchIndex 1 基且可直接喂 doc_replace_nth_match，实际是：" + d);
+        assertTrue(d.contains("matchIndex") && d.contains("从 1 开始"),
+                "doc_find_text 描述要说明 matchIndex 1 基，实际是：" + d);
+        // doc_replace_nth_match / doc_delete_match 已 offerToModel = false（dev-board#1065 T-14）：
+        // 描述还点名它们，就是在勾模型去调一个它清单里没有的名字
+        assertTrue(!d.contains("doc_replace_nth_match") && !d.contains("doc_delete_match"),
+                "doc_find_text 描述不该再点名已不下发的工具，实际是：" + d);
     }
 
     @Test

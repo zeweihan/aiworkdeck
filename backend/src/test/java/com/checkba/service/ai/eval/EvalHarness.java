@@ -92,18 +92,13 @@ public final class EvalHarness {
     /** 同步跑一个用例（handleUserMessage 直接调用，不经 Spring 代理，@Async 不生效） */
     public static RunResult run(EvalCase c) {
         PluginService pluginService = new PluginService();
-        RecordingToolRegistry registry =
-                new RecordingToolRegistry(RealToolBeans.instantiateAll(), pluginService);
-        registry.init();
-        registry.setStubs(c.toolStubs);
-        XmlToolCallParser parser = new XmlToolCallParser(registry);
         ScriptedStreamingModel scripted = new ScriptedStreamingModel(c.turns);
 
         // 真实的 Skill 体系（Phase 3B）：扫描仓库内置 skills/ 目录，
         // 让「skill 触发 → 工具可见性裁剪」路径在回放里被真实执行
         SkillProperties skillProperties = new SkillProperties();
         skillProperties.setDir(skillsDir());
-        skillProperties.setBaseTools(List.of("read_document", "list_files", "query_memory"));
+        skillProperties.setBaseTools(List.of("extract_file_text", "list_files", "query_memory"));
         SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService, null);
         skillRegistry.init();
         // litigation-visual 的 skill.yml 声明了 enabled_by_default:false（默认关闭，需用户手动
@@ -126,6 +121,24 @@ public final class EvalHarness {
                 new com.checkba.service.telemetry.TelemetryTurnTracker(telemetry);
 
         SkillRouter skillRouter = new SkillRouter(skillRegistry, skillProperties, telemetry, null);
+
+        // use_skill（dev-board#1065）要接真的 skill 登记簿才跑得出指引正文：换掉 RealToolBeans 里那个 null 依赖的实例，
+        // 并让注册表在用例没给桩时真执行它——「指引进了下一轮上下文」要看真结果，桩文字证明不了。
+        List<com.checkba.service.ai.tools.AgentToolComponent> toolBeans =
+                new ArrayList<>(RealToolBeans.instantiateAll());
+        toolBeans.replaceAll(bean -> bean instanceof com.checkba.service.ai.tools.SkillTools
+                ? new com.checkba.service.ai.tools.SkillTools(skillRouter) : bean);
+        // list_tools 同理：query / names 命中了哪些工具只有它自己算得出来（经 ToolContext.disclosedCategories 回写），
+        // 桩输出验不到这条回写。接上 skill 登记簿，目录页的 skills 段也是真的。
+        toolBeans.stream()
+                .filter(bean -> bean instanceof com.checkba.service.ai.tools.ToolDiscoveryTools)
+                .forEach(bean -> ((com.checkba.service.ai.tools.ToolDiscoveryTools) bean).setSkillRouter(skillRouter));
+        RecordingToolRegistry registry = new RecordingToolRegistry(toolBeans, pluginService);
+        registry.init();
+        registry.setStubs(c.toolStubs);
+        registry.setLiveTools(java.util.Set.of(com.checkba.service.ai.tools.SkillTools.TOOL_NAME,
+                com.checkba.service.ai.ToolDisclosurePolicy.CATALOG_TOOL));
+        XmlToolCallParser parser = new XmlToolCallParser(registry);
 
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
         when(chatModelFactory.getStreamingChatModel(any())).thenReturn(scripted);

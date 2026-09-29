@@ -113,7 +113,7 @@
       "offeredToolsInclude": [
         "doc_list_project_files",
         "extract_file_text",
-        "read_document",
+        "search_project_content",
         "doc_get_document_text",
         "law_search",
         "query_memory",

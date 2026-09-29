@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * 工具渐进披露（dev-board#810 B 档，审计 A1 / C-07）。
@@ -88,11 +89,13 @@ public class ToolDisclosurePolicy {
      */
     static final Set<String> CORE = Set.of(
             // —— 目录入口与编排：少了 list_tools 整套机制就没有入口；ask_user 是「拿不准先问」
-            //    的唯一入口（dev-board#868），藏进目录里等于让模型先查目录才能想起来问 ——
-            CATALOG_TOOL, "todo_write", "dispatch_subtask", "ask_user",
+            //    的唯一入口（dev-board#868），藏进目录里等于让模型先查目录才能想起来问；
+            //    use_skill 是模型自己切到专门流程的入口（dev-board#1065），与 list_tools 的 skill 目录配套 ——
+            CATALOG_TOOL, "todo_write", "dispatch_subtask", "ask_user", "use_skill",
 
             // —— 项目材料：找文件 → 拿 fileId → 读全文 → 落一份新文件 ——
             "doc_list_project_files", "search_project_files", "extract_file_text", "read_document",
+            "search_project_content",
             "write_docx", "create_folder", "move_files_batch", "move_to_trash",
 
             // —— 记忆：检索与保存各一个（memory_* 六个由编排器的 MEMORY_TOOLS 规则另行兜底）——
@@ -102,15 +105,20 @@ public class ToolDisclosurePolicy {
             "law_search", "law_search_keyword", "get_law_article", "search_web", "browse_url",
 
             // —— 打开的文档·读：通读、找、看条款、机械核对 ——
+            // doc_get_selection 不在这里（dev-board#1065 T-15）：doc_get_cursor_context 已覆盖，且它不再下发。
             "doc_get_document_text", "doc_get_outline", "doc_get_paragraph", "doc_get_cursor_context",
-            "doc_get_selection", "doc_find_text", "doc_get_clauses", "doc_audit_structure",
+            "doc_find_text", "doc_get_clauses", "doc_audit_structure",
 
             // —— 打开的文档·写：改一处、插一段、整篇起草、套标准格式 ——
+            // 删除走 doc_replace_at_anchor / doc_find_replace 传空串（T-14，doc_delete_text 不再下发）；
+            // 「在某句前后插入」由 doc_insert_at_cursor 的 anchorId + position 一步完成（T-16），
+            // doc_insert_under_heading 因此退到 edit 类目，照常下发、只是不占核心集。
             "doc_find_replace", "doc_replace_at_anchor", "doc_replace_selection", "doc_insert_at_cursor",
-            "doc_insert_under_heading", "doc_delete_text", "doc_start_stream", "doc_apply_standard_format",
+            "doc_start_stream", "doc_apply_standard_format",
 
-            // —— 打开的文档·定位与后悔药：选中、撤销、检查点 ——
-            "doc_open_file", "doc_select_anchor", "doc_select_paragraph", "doc_undo", "doc_restore_checkpoint",
+            // —— 打开的文档·定位与后悔药：选中、撤销 ——
+            // doc_restore_checkpoint 是最后手段，退到 revision 类目（T-19）；常规纠错 doc_undo 留在这里。
+            "doc_open_file", "doc_select_anchor", "doc_select_paragraph", "doc_undo",
 
             // —— 批注：审查合同时的主要交付物 ——
             "doc_add_comment", "doc_get_comments",
@@ -126,7 +134,7 @@ public class ToolDisclosurePolicy {
 
     /**
      * 类目 → 这个类目收哪些工具。按<b>声明顺序</b>匹配，第一个命中的类目即归属，
-     * 所以顺序本身是契约的一部分（{@code doc_table_*} 必须排在 {@code doc_} 通配之前）。
+     * 所以顺序本身是契约的一部分（{@code doc_table_*}、edit 与 files 里点名的 doc_* 都必须排在 {@code doc_} 通配之前）。
      *
      * <p>值里 {@code "name:"} 开头的是精确工具名，其余是名字前缀。
      */
@@ -135,17 +143,35 @@ public class ToolDisclosurePolicy {
     static {
         CATEGORIES.put("table", List.of("doc_table_", "name:doc_insert_table"));
         CATEGORIES.put("revision", List.of(
-                "name:doc_list_revisions", "name:doc_accept_revision", "name:doc_reject_revision",
+                "name:doc_restore_checkpoint", "name:doc_list_revisions", "name:doc_accept_revision", "name:doc_reject_revision",
                 "name:doc_accept_all_revisions", "name:doc_reject_all_revisions",
                 "name:doc_reply_comment", "name:doc_resolve_comment", "name:doc_delete_comment",
                 "name:doc_debug_revisions"));
         CATEGORIES.put("evidence", List.of(
                 "name:doc_link_evidence", "name:doc_list_evidence",
-                "name:evidence_verify", "name:retrieve_evidence"));
+                "name:evidence_verify", "name:retrieve_evidence",
+                // 尽调底稿导出与核验导入都是「证据」这条链上的动作（T-19），不是文件整理、也不是企业数据
+                "name:dd_export", "name:web_verify_import"));
         CATEGORIES.put("template", List.of(
                 "name:docx_inspect_template", "name:doc_apply_style_profile",
                 "name:create_file_from_template", "name:list_contributed_templates",
                 "name:contribute_template"));
+        // 定位 / 删改 / 按段落取改（dev-board#1065 T-19）。原先它们都掉进下面的 doc_ 通配归了 format，
+        // 模型想「删掉选中的字」「改第 3 段」时不会去查一个叫 format 的类目。核心集里的几个
+        // （doc_select_anchor / doc_select_paragraph / doc_get_paragraph / doc_get_outline）列在这里只为
+        // 归属清楚，categoryOf 先判核心集，它们照旧返回 core。必须排在 format 之前。
+        CATEGORIES.put("edit", List.of(
+                "name:doc_goto", "name:doc_collapse_cursor", "name:doc_delete_selection", "name:doc_redo",
+                "name:doc_select_anchor", "name:doc_select_paragraph", "name:doc_modify_paragraph",
+                "name:doc_replace_nth_match", "name:doc_delete_match", "name:doc_delete_text",
+                "name:doc_set_selection", "name:doc_get_selection", "name:doc_get_paragraph",
+                "name:doc_get_outline", "name:doc_insert_under_heading"));
+        // files 排在 format 之前，只为 doc_export_pdf：它带 doc_ 前缀，排在后面就会被 format 通配吃掉。
+        CATEGORIES.put("files", List.of(
+                "name:list_files", "name:read_file", "name:write_file", "name:scan_files",
+                "name:move_file", "name:move_project_file", "name:rename_project_file",
+                "name:list_project_folders", "name:delete_file", "text_", "name:doc_export_pdf",
+                "name:copy_files"));
         // doc_* 里剩下的全是版式与排版：字符格式、段落格式、页面、页眉页脚、目录、脚注、图片、超链接……
         CATEGORIES.put("format", List.of("doc_"));
         CATEGORIES.put("spreadsheet", List.of("sheet_"));
@@ -154,18 +180,16 @@ public class ToolDisclosurePolicy {
         CATEGORIES.put("pdf", List.of("pdf_"));
         CATEGORIES.put("litigation", List.of("litigation_"));
         CATEGORIES.put("reference", List.of("ref_"));
-        CATEGORIES.put("memory", List.of("memory_"));
-        CATEGORIES.put("enterprise-data", List.of(
-                "qichacha_", "name:tushare_query", "name:web_verify_import", "name:update_project_info"));
+        // update_project_info 写的是项目记忆（project_memory），不是外部企业数据（T-19）
+        CATEGORIES.put("memory", List.of("memory_", "name:update_project_info"));
+        CATEGORIES.put("enterprise-data", List.of("qichacha_", "name:tushare_query"));
         // law_search / law_search_keyword / get_law_article 在核心集，这里收的是剩下的 law_recognition：
         // 归进 legal 比落 misc 好找——模型要的是「法规这一族还有什么」，不是「杂项里翻翻看」。
         CATEGORIES.put("legal", List.of("law_"));
         CATEGORIES.put("meeting", List.of("meeting_"));
-        CATEGORIES.put("task", List.of("task_", "tag_"));
-        CATEGORIES.put("files", List.of(
-                "name:list_files", "name:read_file", "name:write_file", "name:scan_files",
-                "name:move_file", "name:move_project_file", "name:rename_project_file",
-                "name:list_project_folders", "name:delete_file", "text_", "name:dd_export"));
+        CATEGORIES.put("task", List.of("task_"));
+        // 文件标签不是事项（T-19）：tag_list / tag_file / tag_remove_from_file 原先挂在 task 下
+        CATEGORIES.put("tag", List.of("tag_"));
         CATEGORIES.put("plugin", List.of("plugin_dev_", "capability_"));
         CATEGORIES.put("python", List.of("name:run_python"));
     }
@@ -174,14 +198,27 @@ public class ToolDisclosurePolicy {
     public static final String FALLBACK_CATEGORY = "misc";
 
     /**
+     * 运行期由插件 JAR 注册的工具（dev-board#1065 T-20）。它们的名字不会命中上面任何一条规则，
+     * 原先一律落 misc，与遗留的记忆辅助工具混在一起；单独成类，模型查目录时看得出「这是装的插件带来的」。
+     */
+    public static final String PLUGIN_TOOLS_CATEGORY = "plugin-tools";
+
+    /**
+     * 插件工具名的来源，由 {@code ToolRegistry} 初始化时交进来（活视图，插件热加载后自动跟上）。
+     * 不直接依赖 ToolRegistry：它经工具组件间接依赖本类（ToolDiscoveryTools），反过来注入就成环了。
+     * 没人交进来（手工 new 的单测、EvalHarness）时视为没有插件工具。
+     */
+    private volatile Supplier<Set<String>> pluginToolNames = Set::of;
+
+    /**
      * 活跃文档类型 → 默认不下发的类目（dev-board#1064）。键同 {@code ClientCapabilityService.DOC_KIND_*}。
      *
      * <p>只列<b>类目</b>：slide_* / sheet_* 在上游已经按前缀裁过（{@code visibleForDocKind}），
      * 这里列 {@code slides} 是为了 {@code pptx_*}——它不带 slide_ 前缀，上游一个都裁不掉，
      * 而一份 docx 会话里十个 pptx_* 规格每轮白付。
      *
-     * <p><b>刻意留着的</b>：legal / task / memory / evidence / template / revision / format / table /
-     * files / reference / misc，以及核心集里的 {@code search_web} / {@code browse_url}。
+     * <p><b>刻意留着的</b>：legal / task / tag / memory / evidence / template / revision / edit / format / table /
+     * files / reference / plugin-tools / misc，以及核心集里的 {@code search_web} / {@code browse_url}。
      * 网页浏览看上去与「改文档」无关，但它和法规检索是律师改合同时最高频的两类外部查证
      * （查监管口径、查一个陌生术语），两个加起来一千字符出头，藏掉换来的是每次都要先查目录。
      *
@@ -328,6 +365,11 @@ public class ToolDisclosurePolicy {
         return CORE;
     }
 
+    /** 由 {@code ToolRegistry} 在初始化时调一次（见 {@link #pluginToolNames}）。null 视为没有插件工具。 */
+    public void setPluginToolNames(Supplier<Set<String>> source) {
+        this.pluginToolNames = source == null ? Set::of : source;
+    }
+
     /** 这个工具属于哪个类目。核心集里的工具返回 {@code "core"}。全函数，永不返回 null。 */
     public String categoryOf(String toolName) {
         if (toolName == null) {
@@ -335,6 +377,9 @@ public class ToolDisclosurePolicy {
         }
         if (CORE.contains(toolName)) {
             return "core";
+        }
+        if (isPluginTool(toolName)) {
+            return PLUGIN_TOOLS_CATEGORY;
         }
         for (Map.Entry<String, List<String>> entry : CATEGORIES.entrySet()) {
             for (String rule : entry.getValue()) {
@@ -349,9 +394,20 @@ public class ToolDisclosurePolicy {
         return FALLBACK_CATEGORY;
     }
 
+    /** 插件工具判定。来源抛异常一律当「不是」：判不准就落回普通规则，绝不让目录整个挂掉。 */
+    private boolean isPluginTool(String toolName) {
+        try {
+            Set<String> names = pluginToolNames.get();
+            return names != null && names.contains(toolName);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     /** 目录里出现过的全部类目名（不含 core），供 {@code list_tools} 的描述与校验用。 */
     public Set<String> categoryNames() {
         Set<String> names = new LinkedHashSet<>(CATEGORIES.keySet());
+        names.add(PLUGIN_TOOLS_CATEGORY);
         names.add(FALLBACK_CATEGORY);
         return names;
     }

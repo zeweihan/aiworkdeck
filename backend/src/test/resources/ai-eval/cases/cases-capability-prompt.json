@@ -20,7 +20,7 @@
       {
         "toolCalls": [
           {
-            "name": "read_document",
+            "name": "extract_file_text",
             "arguments": {
               "fileId": "1001"
             }
@@ -33,7 +33,7 @@
     ],
     "toolStubs": {
       "search_project_files": "[{\"fileId\": 1001, \"name\": \"股权转让协议.docx\"}]",
-      "read_document": "第一条 转让标的……"
+      "extract_file_text": "第一条 转让标的……"
     },
     "expect": {
       "toolCalls": [
@@ -41,20 +41,22 @@
           "name": "search_project_files"
         },
         {
-          "name": "read_document"
+          "name": "extract_file_text"
         }
       ],
       "offeredToolsInclude": [
         "search_project_files",
-        "read_document",
+        "doc_list_project_files",
+        "search_project_content",
         "extract_file_text",
         "write_docx",
         "pdf_inspect",
         "pptx_inspect_format"
       ],
       "offeredToolsExclude": [
-        "doc_list_project_files",
         "doc_open_file",
+        "read_document",
+        "pdf_list_files",
         "sheet_get_overview",
         "office_get_text",
         "ref_list",
@@ -70,7 +72,7 @@
   },
   {
     "id": "capability-none-calling-an-editor-tool-burns-a-whole-round",
-    "title": "纯对话会话调 doc_list_project_files 的代价：Tool not found，整轮白烧——这就是提示不该教它的原因（dev-board#809）",
+    "title": "纯对话会话调编辑器工具 doc_open_file 的代价：Tool not found，整轮白烧——这就是提示不该教它的原因（dev-board#809；#1065 起 doc_list_project_files 三档都可见，改用 doc_open_file 记录这笔代价）",
     "category": "files",
     "protocol": "native",
     "clientCapability": "none",
@@ -79,8 +81,10 @@
       {
         "toolCalls": [
           {
-            "name": "doc_list_project_files",
-            "arguments": {}
+            "name": "doc_open_file",
+            "arguments": {
+              "fileId": 1001
+            }
           }
         ]
       },
@@ -105,7 +109,7 @@
       "allowUnresolvedTools": true,
       "toolCalls": [
         {
-          "name": "doc_list_project_files"
+          "name": "doc_open_file"
         },
         {
           "name": "search_project_files"
@@ -168,12 +172,13 @@
         "office_replace_batch",
         "office_pass_step",
         "ref_list",
-        "read_document",
+        "doc_list_project_files",
+        "extract_file_text",
         "pdf_inspect"
       ],
       "offeredToolsExclude": [
-        "doc_list_project_files",
         "doc_find_replace",
+        "read_document",
         "office_excel_get_range",
         "office_ppt_get_slides",
         "pdf_highlight",

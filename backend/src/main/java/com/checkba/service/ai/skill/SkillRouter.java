@@ -58,8 +58,11 @@ public class SkillRouter {
      * 但 {@code ask_user}（dev-board#868）是工具，<b>必须</b>进来：它是「拿不准就先问」的入口，
      * 被 skill 白名单裁掉的表现是模型在最该问的时候只能自己猜着动手（而 skill 命中的往往
      * 正是改动面最大的活——审查、清理、整篇起草）。
+     *
+     * <p>{@code use_skill}（dev-board#1065）同理：它是模型自己切到另一套专门流程的唯一入口，
+     * 被一个 skill 的白名单裁掉，就等于「命中了 A 技能的回合里永远用不上 B 技能」。
      */
-    static final Set<String> ORCHESTRATION_TOOLS = Set.of("todo_write", "dispatch_subtask", "ask_user");
+    static final Set<String> ORCHESTRATION_TOOLS = Set.of("todo_write", "dispatch_subtask", "ask_user", "use_skill");
 
     private final SkillRegistry skillRegistry;
     private final SkillProperties properties;
@@ -74,6 +77,8 @@ public class SkillRouter {
     public static final String SOURCE_AUTO = "auto";
     /** 来源：用户在对话面板里主动选择（含旧字段 pinnedSkillId） */
     public static final String SOURCE_MANUAL = "manual";
+    /** 来源：模型中途调 {@code use_skill}（dev-board#1065）。也是 skill.activated 埋点的 how 取值。 */
+    public static final String SOURCE_MODEL = "model";
 
     /**
      * 本轮生效的一个 skill。
@@ -109,6 +114,20 @@ public class SkillRouter {
      *（{@code ConversationIssuanceService} 24h 过期）。
      */
     private final Map<String, ActivationRecord> activeByRun = new ConcurrentHashMap<>();
+
+    /**
+     * 本轮<b>中途</b>经 {@code use_skill} 生效、且声明了 {@code tool_policy: restrict} 的 skill（dev-board#1065）：
+     * runId -> skillId 集合（按生效先后）。
+     *
+     * <p><b>刻意与 {@link #activeByRun} 分开存</b>：起跑时生效的 skill 可以裁剪本轮工具集（那时还一个工具都没下发），
+     * 中途生效的<b>只许加、不许减</b>——模型已经看过、可能已经在 messages 里宣布要调的工具，下一轮不能消失，
+     * 否则通道直接 400（「一轮内工具集不变」那条契约）。混在一张表里，{@link #visibleTools} 就分不出
+     * 哪些白名单是能收窄的、哪些只能并上去。也不进 {@link #activeSkills}：那是 prompt 注入、
+     * {@code skill_update} 与事项分类的口径，它们都在起跑时读一次，中途的 skill 指引走 {@code use_skill} 的工具结果进上下文。
+     *
+     * <p>passthrough 的 skill 中途生效不登记：它没有白名单可并，它的工具由编排器按类目放回（渐进披露/类目裁剪那份展开集）。
+     */
+    private final Map<String, ActivationRecord> midRunByRun = new ConcurrentHashMap<>();
 
     /** 过期窗口：见 {@link #activeByRun} 字段注释。 */
     private static final long STALE_ACTIVATION_MILLIS = 24L * 60 * 60 * 1000;
@@ -295,7 +314,73 @@ public class SkillRouter {
     public void clearRun(String runId) {
         if (runId != null) {
             activeByRun.remove(runId);
+            midRunByRun.remove(runId);
         }
+    }
+
+    /**
+     * 模型中途调 {@code use_skill} 后由编排器登记（dev-board#1065，第三条生效路径：
+     * 前两条是起跑时的手动选择与触发词）。
+     *
+     * <p>返回生效的定义（不存在 / 不可用 / 仅手动时返回 empty，编排器据此什么都不做）。
+     * 已经在本轮生效（起跑时生效或之前中途生效过）的原样返回、不重复登记。
+     * 只有 {@code restrict} 且白名单非空的才登记进 {@link #midRunByRun}——见那个字段的注释。
+     */
+    public Optional<SkillDefinition> activateMidRun(String conversationId, String runId, String skillId) {
+        Optional<SkillDefinition> def = invocableSkill(skillId);
+        if (def.isEmpty() || runId == null) {
+            return def;
+        }
+        String id = def.get().getId();
+        if (isActiveInRun(runId, id)) {
+            return def;
+        }
+        if (restrictsTools(def.get())) {
+            midRunByRun.compute(runId, (k, prev) -> {
+                List<ActiveEntry> entries = new java.util.ArrayList<>(prev == null ? List.of() : prev.entries());
+                entries.add(new ActiveEntry(id, SOURCE_MODEL));
+                return new ActivationRecord(List.copyOf(entries), clockMillis.getAsLong());
+            });
+        }
+        log.info("Skill '{}' activated mid-run by the model for conversation {} (run {}), policy={}",
+                id, conversationId, runId, def.get().getToolPolicy());
+        telemetryService.recordConv("skill.activated", conversationId,
+                Map.of("skillId", id, "how", SOURCE_MODEL));
+        return def;
+    }
+
+    /**
+     * 模型能不能经 {@code use_skill} 调用这个 skill：已注册、可用（启用 + 所属插件启用 + 当前语言可用），
+     * 且<b>不是「仅手动」</b>。仅手动的意思是用户不想让它被自动带上——模型自己调用和触发词命中一样都是「自动」，
+     * 所以一并拒绝，拒绝文案里告诉模型去请用户在技能面板里选（{@code use_skill} 负责措辞）。
+     */
+    public Optional<SkillDefinition> invocableSkill(String skillId) {
+        if (skillId == null || skillId.isBlank()) {
+            return Optional.empty();
+        }
+        return skillRegistry.getSkill(skillId.trim())
+                .filter(skillRegistry::isAvailable)
+                .filter(def -> !skillRegistry.isManual(def.getId()));
+    }
+
+    /** 模型可调用的全部 skill（{@link #invocableSkill} 口径），注册顺序。供 {@code list_tools()} 目录与错误提示列出。 */
+    public List<SkillDefinition> invocableSkills() {
+        return skillRegistry.getSkills().stream()
+                .filter(skillRegistry::isAvailable)
+                .filter(def -> !skillRegistry.isManual(def.getId()))
+                .toList();
+    }
+
+    /** 这个 skill 本轮是不是已经生效（起跑时生效，或中途经 use_skill 生效过）。 */
+    public boolean isActiveInRun(String runId, String skillId) {
+        if (runId == null || skillId == null) {
+            return false;
+        }
+        if (activeSkills(runId).stream().anyMatch(a -> skillId.equals(a.definition().getId()))) {
+            return true;
+        }
+        ActivationRecord mid = midRunByRun.get(runId);
+        return mid != null && mid.entries().stream().anyMatch(e -> skillId.equals(e.skillId()));
     }
 
     /**
@@ -310,6 +395,7 @@ public class SkillRouter {
             long cutoff = clockMillis.getAsLong() - STALE_ACTIVATION_MILLIS;
             int before = activeByRun.size();
             activeByRun.entrySet().removeIf(e -> e.getValue().activatedAtMillis() < cutoff);
+            midRunByRun.entrySet().removeIf(e -> e.getValue().activatedAtMillis() < cutoff);
             int removed = before - activeByRun.size();
             if (removed > 0) {
                 log.info("清理冷 skill 激活记录 {} 条", removed);
@@ -391,6 +477,38 @@ public class SkillRouter {
      * 避免把 Agent 裁成"无工具可用"——这条判据保留不动。
      */
     public List<ToolSpecification> visibleTools(String runId, List<ToolSpecification> all) {
+        List<ToolSpecification> base = visibleForTurnSkills(runId, all);
+        Set<String> midRunWhitelist = midRunWhitelist(runId);
+        // 中途生效的 restrict skill 只许加（dev-board#1065）：起跑时没裁（base 就是全集），
+        // 那就维持不裁——它的工具由编排器按类目放回；起跑时裁过，就在那份裁剪结果上并入它的白名单。
+        // 两种情况下，前面几轮已经下发过的工具都还在。
+        if (midRunWhitelist.isEmpty() || base.size() >= all.size()) {
+            return base;
+        }
+        Set<String> keep = new HashSet<>(midRunWhitelist);
+        base.forEach(spec -> keep.add(spec.name()));
+        List<ToolSpecification> widened = all.stream().filter(spec -> keep.contains(spec.name())).toList();
+        log.info("Mid-run skills widened visible tools: {} -> {}", base.size(), widened.size());
+        return widened;
+    }
+
+    /** 本轮中途生效、仍可用的 restrict skill 的白名单并集（空 = 没有）。 */
+    private Set<String> midRunWhitelist(String runId) {
+        ActivationRecord mid = runId == null ? null : midRunByRun.get(runId);
+        if (mid == null) {
+            return Set.of();
+        }
+        Set<String> whitelist = new HashSet<>();
+        for (ActiveEntry entry : mid.entries()) {
+            skillRegistry.getSkill(entry.skillId())
+                    .filter(skillRegistry::isAvailable)
+                    .ifPresent(def -> whitelist.addAll(def.getAllowedTools()));
+        }
+        return whitelist;
+    }
+
+    /** 起跑时生效的 skill 决定的裁剪（{@link #visibleTools} 的收窄部分，语义见那里的说明）。 */
+    private List<ToolSpecification> visibleForTurnSkills(String runId, List<ToolSpecification> all) {
         List<ActiveSkill> active = activeSkills(runId);
         if (active.isEmpty()) {
             return all;
@@ -437,6 +555,26 @@ public class SkillRouter {
         return def.getToolPolicy() == SkillDefinition.ToolPolicy.RESTRICT
                 && def.getAllowedTools() != null
                 && !def.getAllowedTools().isEmpty();
+    }
+
+    /**
+     * skill 的指引正文（模板 + 输出约定），按当前应用语言取（英文优先 *_en 字段，缺省回退中文）。
+     * {@code use_skill} 把它原样作为工具结果交给模型；与 {@link #promptInjectionFor} 同一份正文，
+     * 只是不带「本轮命中了技能」那行系统注入前缀（中途调用不是命中）。
+     */
+    public String skillInstructionsFor(SkillDefinition skill) {
+        boolean english = isEnglish();
+        String template = english && skill.getPromptTemplateEn() != null && !skill.getPromptTemplateEn().isBlank()
+                ? skill.getPromptTemplateEn()
+                : skill.getPromptTemplate();
+        String output = english && skill.getOutputEn() != null && !skill.getOutputEn().isBlank()
+                ? skill.getOutputEn()
+                : skill.getOutput();
+        StringBuilder sb = new StringBuilder(template == null ? "" : template);
+        if (output != null && !output.isBlank()) {
+            sb.append(english ? "\n\n## Output Conventions\n" : "\n\n## 输出约定\n").append(output);
+        }
+        return sb.toString();
     }
 
     /** 组装注入块：skill 的 prompt 模板 + 输出约定（由 ContextAssemblerService 追加到系统消息） */

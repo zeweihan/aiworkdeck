@@ -7,6 +7,7 @@ import { sendEditorResult, getFileDetail } from '@/services/api.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '@/utils/docEvents.js'
 import { actionBudgetMs } from '@/composables/zetaOfficeRelay.js'
+import { agentPdfExportResult } from './agentPdfExport.js'
 
 // AI 命令等编辑器启动的上限（dev-board#1018）。**必须低于后端 editor_command 的等待上限**
 // （EditorBridgeService 读写类 120s）：后端先到点的话，模型收到的是普通超时错误而不是
@@ -657,6 +658,22 @@ export const agentClientActionMethods = {
         }
 
         if (await this.replyIfEditorLoadFailed(conversationId, requestId)) return
+
+        // doc_export_pdf（dev-board#1065 T-25）：worker 回的是 PDF 字节，不能按通用路径原样回传
+        // （Uint8Array 会被 JSON 展开成巨大的对象）。编成 base64 连同源文件 id 交给后端，由后端存进项目。
+        if (commandAction === 'export_pdf') {
+            try {
+                const res = await this.libreOfficeExecutor.executeCommand('export_pdf', {})
+                const sourceFileId = typeof this.resolveLibreExecutorFileId === 'function'
+                    ? this.resolveLibreExecutorFileId(this.libreOfficeExecutor) : null
+                const out = agentPdfExportResult(res, sourceFileId)
+                await sendEditorResult(conversationId, requestId, out.success, out.data, out.error)
+            } catch (e) {
+                console.error('[ProjectOverview] export_pdf for agent failed:', e)
+                await sendEditorResult(conversationId, requestId, false, null, (e && e.message) || String(e))
+            }
+            return
+        }
 
         try {
             // __agent 标记：worker 据此把这条命令产生的修订署名为 AI WorkDeck

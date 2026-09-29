@@ -173,6 +173,26 @@ public class ClientCapabilityService {
             "doc_start_stream");
 
     /**
+     * 带 {@code doc_} 前缀、实现却是<b>纯后端</b>的工具：三档会话一律可见（dev-board#1065，审计 T-01）。
+     *
+     * <p>{@code doc_list_project_files} 只查 project_file 表、不经编辑器桥，是项目文件的权威清单
+     *（全类型、每条带 fileId）。可它的前缀让 {@link #isLowaTool} 把它判成 LOWA 专属，于是 Office
+     * 任务窗格与纯对话会话里它不可见——而那两类会话里可见的十来个工具（read_file、list_files、
+     * rename_project_file、pdf_inspect……）描述里都写着「fileId 从 doc_list_project_files 取」，
+     * 模型照着调只会拿到 Tool not found。
+     *
+     * <p><b>为什么开例外而不是改名</b>：这个名字被约十一个工具描述与多份提示词片段引用，
+     * 还写在老会话的执行日志里；改名要么留一个兼容别名（别名表应当一直是空表），
+     * 要么让那些引用在改名的同一刻全部失效。例外只动这一处判据，名字不变。
+     *
+     * <p>只放宽 Office / none 两档；LOWA 会话照旧走活跃文档类型闸——它本来就在
+     * {@link #KIND_AGNOSTIC_LOWA_TOOLS} 里，对哪一类活跃文档都放行。
+     * 声明层闸（{@code @ToolMeta.requiresHost}）仍然叠加在前面：只收窄、不放宽。
+     */
+    private static final java.util.Set<String> BACKEND_ONLY_DOC_TOOLS =
+            java.util.Set.of("doc_list_project_files");
+
+    /**
      * 按活跃文档类型逐个放行的例外：工具名 → 额外放行的活跃文档类型
      *（{@link #KIND_AGNOSTIC_LOWA_TOOLS} 是「对哪一类都放行」，这里是「只对某几类放行」）。
      *
@@ -257,10 +277,12 @@ public class ClientCapabilityService {
         if (!lowaOnly && !officeOnly) {
             return true;
         }
+        boolean backendOnly = BACKEND_ONLY_DOC_TOOLS.contains(toolName);
         return switch (capabilityOf(conversationId)) {
             case LOWA -> lowaOnly && visibleForDocKind(toolName, activeDocKind);
-            case OFFICE -> officeOnly && hostOfTool(toolName) == officeHostOf(conversationId);
-            case NONE -> false;
+            case OFFICE -> backendOnly
+                    || (officeOnly && hostOfTool(toolName) == officeHostOf(conversationId));
+            case NONE -> backendOnly;
         };
     }
 
@@ -363,9 +385,12 @@ public class ClientCapabilityService {
     private static final java.util.regex.Pattern READ_ONLY_SUFFIX =
             java.util.regex.Pattern.compile("(?:^|_)read$");
 
-    /** 词头模式覆盖不到、必须逐个点名的只读工具（见上面两个坑）。 */
+    /**
+     * 词头模式覆盖不到、必须逐个点名的只读工具（见上面两个坑）。{@code export_pdf}（dev-board#1065 T-25）
+     * 产出一份新 PDF、不改文档本身——算写入的话，导出之后「用到文档」那组按钮会被误藏。
+     */
     private static final java.util.Set<String> READ_ONLY_EXACT =
-            java.util.Set.of("open_file", "find_text", "set_selection");
+            java.util.Set.of("open_file", "find_text", "set_selection", "export_pdf");
 
     /**
      * 这个工具会不会真的改动文档内容。{@code bubble_end.documentEdited} 的唯一判据

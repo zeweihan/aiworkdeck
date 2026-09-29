@@ -51,7 +51,7 @@ class AudioAttachmentNoticeTest {
     private final ProjectFileTextExtractor textExtractor =
             new ProjectFileTextExtractor(documentTextService, fileContent, fileService, null, meetings);
 
-    private final LegalTools legalTools = new LegalTools(fileService, null, fileContent, textExtractor);
+    private final LegalTools legalTools = new LegalTools(fileService, null, textExtractor);
     private final FileTools fileTools = new FileTools(
             fileService, repo, null, fileContent, null, documentTextService, null, null, textExtractor);
 

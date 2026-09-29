@@ -62,16 +62,7 @@ public class FileContentExtractorService {
         String fileName = file.getName();
         try {
             if (isTextFile(fileName)) {
-                byte[] bytes = Files.readAllBytes(file.toPath());
-                try {
-                    return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
-                            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                            .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
-                } catch (java.nio.charset.CharacterCodingException ce) {
-                    // 非 UTF-8（常见 GBK/GB18030 中文 txt/csv）回退，避免整篇内容丢失
-                    return new String(bytes, java.nio.charset.Charset.forName("GBK"));
-                }
+                return decodeText(Files.readAllBytes(file.toPath()));
             } else {
                 // Non-text files: skip or hint to use OCR
                 return "";
@@ -80,6 +71,31 @@ public class FileContentExtractorService {
             log.warn("Failed to extract text from file: {}", fileName, e);
             return "[System: Error reading file content]";
         }
+    }
+
+    /**
+     * 纯文本字节的解码口径（全仓唯一一份）：UTF-8 <b>严格</b>解码，失败即回退 GBK。
+     *
+     * <p>为什么不交给 Tika 猜：短小的 GBK 中文 txt/csv（会议纪要、证据清单）Tika 常常猜不出、
+     * 甚至抽回空串，于是同一份文件从 {@code read_document} 读得出、从 {@code extract_file_text}
+     * 读不出（dev-board#1065，审计 T-05）。{@code ProjectFileTextExtractor} 与本类的
+     * {@link #extractText(File)} 都走这里。开头的 UTF-8 BOM 去掉，不让它混进正文。
+     */
+    public static String decodeText(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        String text;
+        try {
+            text = java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (java.nio.charset.CharacterCodingException ce) {
+            // 非 UTF-8（常见 GBK/GB18030 中文 txt/csv）回退，避免整篇内容丢失
+            return new String(bytes, java.nio.charset.Charset.forName("GBK"));
+        }
+        return text.startsWith("\uFEFF") ? text.substring(1) : text;
     }
 
     /**
@@ -209,6 +225,15 @@ public class FileContentExtractorService {
     }
 
     public boolean isTextFile(String fileName) {
+        return isPlainTextName(fileName);
+    }
+
+    /**
+     * 「按字节直接解码的纯文本」判据的静态入口（与 {@link #isTextFile} 同一份扩展名表）。
+     * 给拿不到本 bean 的调用方用——{@code DocumentTextService} / {@code ContentSearchService}
+     * 的全文检索要与 AI 读文件走同一份判据，否则同一份 GBK txt 读得出、搜不到（dev-board#1065）。
+     */
+    public static boolean isPlainTextName(String fileName) {
         if (!StringUtils.hasText(fileName)) return false;
         String ext = getExtension(fileName);
         return ALLOWED_TEXT_EXTENSIONS.contains(ext) || isConfigFile(fileName);
@@ -231,7 +256,7 @@ public class FileContentExtractorService {
         return isOcrSupported(fileName);
     }
 
-    private String getExtension(String fileName) {
+    private static String getExtension(String fileName) {
         int dotIndex = fileName.lastIndexOf('.');
         if (dotIndex > 0 && dotIndex < fileName.length() - 1) {
             return fileName.substring(dotIndex + 1).toLowerCase();
@@ -240,7 +265,7 @@ public class FileContentExtractorService {
     }
     
     // Some files like Dockerfile makefile don't have extensions or strict conventions
-    private boolean isConfigFile(String fileName) {
+    private static boolean isConfigFile(String fileName) {
         String lower = fileName.toLowerCase();
         return lower.equals("dockerfile") || lower.equals("makefile") || lower.equals("jenkinsfile");
     }

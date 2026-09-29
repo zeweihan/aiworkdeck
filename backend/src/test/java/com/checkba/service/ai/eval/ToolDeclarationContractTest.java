@@ -74,6 +74,16 @@ class ToolDeclarationContractTest {
      *       {@code pdf_replace_text} —— PdfTools.finishModification 里的 sendReloadFileAction；</li>
      *   <li>{@code text_write_file} / {@code text_find_replace} ——
      *       TextFileEditTools.writeBack 里的 sendTextReloadFileAction。</li>
+     *   <li><b>管线前置步骤跟随收尾工具</b>（dev-board#1065 T-10）：一个工具如果唯一的用途是给某个
+     *       已声明 LOWA 的工具供料，它也声明 LOWA——否则模型在 Office / none 会话里陪用户走完几轮确认，
+     *       走到最后一步才发现收尾工具不在清单里。{@code litigation_reference} / {@code litigation_checkpoint}
+     *       供 litigation_render；{@code litigation_timeline_start} / {@code litigation_timeline_step} 供
+     *       litigation_timeline_render；{@code pptx_generate_outline} / {@code pptx_refine_outline} /
+     *       {@code pptx_check_service} 为 pptx_generate 做准备，{@code pptx_get_project_pages} /
+     *       {@code pptx_export_editable} 要的 serviceProjectId 只能来自 pptx_generate。
+     *       这一组不发上述四个 send，所以不在下面的调用点绊线里，只靠这份清单钉住。</li>
+     *   <li>{@code doc_export_pdf}（T-25）—— PDF 字节是桌面编辑器里的引擎导出来的；doc_ 前缀链本来就只放给
+     *       LOWA，声明是为了让这份清单一眼看得出它离不开桌面编辑器。</li>
      * </ul>
      *
      * <p><b>要增删先读这一段</b>：后四组（pdf_* 与 text_*）的实际写入是纯服务端的，
@@ -93,7 +103,19 @@ class ToolDeclarationContractTest {
             "pdf_redact",
             "pdf_replace_text",
             "text_write_file",
-            "text_find_replace"));
+            "text_find_replace",
+            // 管线前置步骤（dev-board#1065 T-10）
+            "litigation_reference",
+            "litigation_checkpoint",
+            "litigation_timeline_start",
+            "litigation_timeline_step",
+            "pptx_generate_outline",
+            "pptx_refine_outline",
+            "pptx_get_project_pages",
+            "pptx_check_service",
+            "pptx_export_editable",
+            // 导出 PDF（dev-board#1065 T-25）
+            "doc_export_pdf"));
 
     /**
      * 源码里出现上述四个 send 的工具组件，连<b>调用点条数</b>一起钉住。
@@ -127,9 +149,22 @@ class ToolDeclarationContractTest {
      *       PPTX 的权威编辑面是 slide_*（编辑器内存、页码 1 起）。这三个走 pptx-service 直接改磁盘、
      *       索引 0 起，与 slide_* 大面积重合；两套同时可见时模型混用必然错页，而 pptx_apply_format
      *       改完还会强制 reload，把编辑器里尚未保存的修改静默丢掉。</li>
+     *   <li><b>与每轮注入的上下文重复</b>（get_user_profile、get_project_context、get_conversation_summary，
+     *       dev-board#1065 T-13）：它们取的东西 ContextAssemblerService 每轮都已放进上下文，
+     *       下发只会让模型多花一次往返去取一份它已经有的东西。</li>
+     *   <li><b>文件与读取面的同义入口</b>（dev-board#1065，审计 T-03/T-05/T-06/T-07/T-27）：
+     *       pdf_list_files / pptx_list_files / pptx_search_files 是 doc_list_project_files 按类型过滤的子集
+     *       （后者如今在每一类会话里都可见）；read_document 与 extract_file_text 是同一个抽取器的两个入口；
+     *       move_file 是 move_files_batch 的单条形态；scan_files 只为 write_file 写不进子文件夹而存在；
+     *       doc_search_related_docs 自称搜内容、实际只比文件名，已由 search_project_content 取代。</li>
+     *   <li><b>同一件事的多余路径</b>（dev-board#1065 T-14 / T-15）：文档里删一句原先有八条路，
+     *       {@code doc_delete_text} / {@code doc_delete_match} / {@code doc_replace_nth_match} 的描述
+     *       不给判据，删除一律走 doc_replace_at_anchor / doc_find_replace 传空串；
+     *       {@code doc_get_selection} 被 doc_get_cursor_context 覆盖；{@code doc_set_selection} 用的是
+     *       本仓明令禁止的整数字符偏移。worker 的这几个 action 仍被插件（DOC_ACTIONS）直接调用。</li>
      * </ul>
      *
-     * <p>三类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
+     * <p>五类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
      * 拿到的是工具自己那句可行动的说明，好过一句 "Tool not found"。
      */
     private static final Set<String> EXPECTED_NOT_OFFERED = new TreeSet<>(Set.of(
@@ -139,7 +174,23 @@ class ToolDeclarationContractTest {
             "deep_search",
             "pptx_open_file",
             "pptx_apply_format",
-            "pptx_edit_page"));
+            "pptx_edit_page",
+            "get_user_profile",
+            "get_project_context",
+            "get_conversation_summary",
+            // dev-board#1065
+            "pdf_list_files",
+            "pptx_list_files",
+            "pptx_search_files",
+            "read_document",
+            "move_file",
+            "scan_files",
+            "doc_search_related_docs",
+            "doc_delete_text",
+            "doc_delete_match",
+            "doc_replace_nth_match",
+            "doc_get_selection",
+            "doc_set_selection"));
 
     private static RecordingToolRegistry registry() {
         RecordingToolRegistry registry =
@@ -250,17 +301,19 @@ class ToolDeclarationContractTest {
     }
 
     @Test
-    @DisplayName("PDF 的读取面不受影响：Office 会话仍看得见 pdf_list_files / pdf_inspect")
+    @DisplayName("PDF 的读取面不受影响：Office 会话仍看得见权威清单 doc_list_project_files 与 pdf_inspect")
     void readOnlyPdfToolsSurviveInOfficeSessions() {
         RecordingToolRegistry registry = registry();
         registry.capabilities().record("conv-word", "office");
         List<String> names = registry.getAllSpecifications("conv-word", null).stream()
                 .map(ToolSpecification::name).toList();
         // 收窄的只有"改"，不是"读"——任务窗格里照样能列 PDF、读 PDF 正文。
-        assertTrue(names.contains("pdf_list_files"), names.toString());
+        // 文件 ID 的来源是全类型的权威清单（dev-board#1065 T-01：纯后端，三档会话都可见），
+        // 按类型过滤的 pdf_list_files / pptx_list_files 已只登记不下发（T-27）。
+        assertTrue(names.contains("doc_list_project_files"), names.toString());
         assertTrue(names.contains("pdf_inspect"), names.toString());
         assertTrue(names.contains("pptx_inspect_format"), names.toString());
-        assertTrue(names.contains("pptx_list_files"), names.toString());
+        assertFalse(names.contains("pdf_list_files"), names.toString());
     }
 
     // ==================== offerToModel（审计 A15） ====================
@@ -305,7 +358,7 @@ class ToolDeclarationContractTest {
                 .map(ToolSpecification::name).toList();
         List<String> missing = new ArrayList<>();
         for (String name : new String[]{"write_docx", "create_folder", "move_files_batch", "move_to_trash",
-                "extract_file_text", "read_file", "search_web", "todo_write", "dispatch_subtask",
+                "extract_file_text", "read_file", "search_project_content", "copy_files", "write_file", "search_web", "todo_write", "dispatch_subtask",
                 "doc_find_replace", "doc_undo", "doc_list_revisions", "sheet_write_cells"}) {
             if (!offered.contains(name)) {
                 missing.add(name);

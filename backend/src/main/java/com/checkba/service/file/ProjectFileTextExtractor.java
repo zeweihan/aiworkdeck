@@ -28,6 +28,9 @@ import java.util.Set;
 /**
  * 项目文件的纯文本抽取（dev-board#718，从 FileTools.extract_file_text 抽出）。
  *
+ * <p>纯文本（txt/md/csv/json…）按字节解码，UTF-8 严格解码失败即回退 GBK——这段原来只在
+ * {@code read_document} 里，dev-board#1065 并进来，所有入口同一口径（{@link FileContentExtractorService#decodeText}）。
+ *
  * <p>一条路由、四个使用方（dev-board#800 起 {@code read_document} 也走这里，于是附件正文、
  * 活跃文档正文与文件夹上下文都收敛到同一口径）：AI 工具 {@code extract_file_text} /
  * {@code read_document}、云端项目参考来源、桌面端参考读取、文件夹上下文。
@@ -60,6 +63,7 @@ public class ProjectFileTextExtractor {
     public static final long MAX_BYTES = 50L * 1024 * 1024;
 
     static final String TOO_LARGE = "文件超过 50MB，暂不支持作为参考材料读取";
+    static final String TOO_LARGE_TEXT = "文本文件超过 50MB，无法整篇读取";
     static final String IS_FOLDER = "这是一个文件夹，不是文件，不能作为参考材料读取；请用 ref_list 找到其中的文件再读。";
     /**
      * 参考读取撞上「只能靠 OCR 才有文字」的文件时的回话。
@@ -143,6 +147,13 @@ public class ProjectFileTextExtractor {
             return audioText(pf);
         }
         boolean ocrSupported = isOcrSupported(name);
+        // 纯文本（txt/md/csv/json…）直接按字节解码：UTF-8 严格解码、失败回退 GBK（dev-board#1065，
+        // 审计 T-05）。交给 Tika 的话，短小的 GBK 中文 txt 它常常抽回空串——同一份会议纪要
+        // read_document 读得出、extract_file_text 读不出。解码是纯内存操作，不走缓存：
+        // 缓存里可能躺着一条早先 Tika 抽坏的结果，先查缓存会把它原样交回去。
+        if (!ocrSupported && fileContentExtractorService.isTextFile(name)) {
+            return plainText(pf);
+        }
         boolean pdf = isPdf(name, pf.getFileType());
 
         DocumentTextService.FileStamp stamp = stampOf(pf);
@@ -169,6 +180,18 @@ public class ProjectFileTextExtractor {
             textCache.store(pf.getId(), stamp, source, result);
         }
         return result;
+    }
+
+    /** 纯文本文件的字节解码，口径见 {@link FileContentExtractorService#decodeText}。 */
+    private String plainText(ProjectFile pf) throws IOException {
+        if (pf.getFileSize() != null && pf.getFileSize() > MAX_BYTES) {
+            throw new IOException(TOO_LARGE_TEXT);
+        }
+        byte[] bytes = projectFileService.getFileBytes(pf.getId());
+        if (bytes != null && bytes.length > MAX_BYTES) {
+            throw new IOException(TOO_LARGE_TEXT);
+        }
+        return FileContentExtractorService.decodeText(bytes);
     }
 
     private DocumentTextService.FileStamp stampOf(ProjectFile pf) {

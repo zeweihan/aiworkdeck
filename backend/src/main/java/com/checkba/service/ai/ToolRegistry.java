@@ -216,6 +216,14 @@ public class ToolRegistry {
         this.pluginHostFactory = pluginHostFactory;
     }
 
+    /**
+     * 工具目录的类目策略（dev-board#1065 T-20）：初始化时把「哪些是插件工具」交给它，
+     * 插件工具在 list_tools 里单独成 plugin-tools 类目，不再落 misc。字段注入 + required=false，
+     * 理由同上：手工 new 的 ToolRegistry（含 EvalHarness）没有它，null 即跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ToolDisclosurePolicy disclosurePolicy;
+
     public ToolRegistry(List<AgentToolComponent> toolComponents, PluginService pluginService,
                         ClientCapabilityService clientCapabilityService) {
         this.toolComponents = toolComponents;
@@ -234,8 +242,19 @@ public class ToolRegistry {
             }
             registerBean(bean, available);
         }
+        if (disclosurePolicy != null) {
+            disclosurePolicy.setPluginToolNames(this::pluginToolNames);
+        }
         log.info("ToolRegistry initialized: {} built-in tools from {} components",
                 builtinTools.size(), toolComponents.size());
+    }
+
+    /**
+     * 运行期由插件 JAR 注册的工具名（活视图：插件热加载 / 卸载后自动跟上）。
+     * 不按启停过滤——禁用插件的工具本来就不进候选集，目录里也就不会出现。
+     */
+    public Set<String> pluginToolNames() {
+        return java.util.Collections.unmodifiableSet(pluginService.getPluginTools().keySet());
     }
 
     /** 组件自报可用性绝不能掀翻启动：探测里抛出来的一律当"可用"，最坏只是多下发一个工具。 */

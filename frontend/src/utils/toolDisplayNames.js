@@ -41,6 +41,7 @@ const NAMES = {
   // 文件
   read_document: { zh: '读取文档', en: 'Read document' },
   search_project_files: { zh: '搜索项目文件', en: 'Search files' },
+  search_project_content: { zh: '搜索文件内容', en: 'Search file contents' },
   read_file: { zh: '读取文件', en: 'Read file' },
   extract_file_text: { zh: '提取文档全文', en: 'Extract document text' },
   list_files: { zh: '列出文件', en: 'List files' },
@@ -68,6 +69,7 @@ const NAMES = {
   move_project_file: { zh: '移动文件', en: 'Move file' },
   move_files_batch: { zh: '批量移动文件', en: 'Move files (batch)' },
   move_to_trash: { zh: '移入回收站', en: 'Move to recycle bin' },
+  copy_files: { zh: '复制文件', en: 'Copy files' },
   // 标签（TagTools，标签类型维度 dev-board#63）
   tag_list: { zh: '查看项目标签', en: 'List tags' },
   tag_file: { zh: '给文件打标签', en: 'Tag file' },
@@ -87,6 +89,8 @@ const NAMES = {
   dispatch_subtask: { zh: '委派子任务', en: 'Delegate subtask' },
   // 工具目录（dev-board#810 渐进披露）：模型查「还有哪些工具」时走它
   list_tools: { zh: '查看工具目录', en: 'Browse tool catalog' },
+  // 调用技能（dev-board#1065）：模型自己决定按某个 skill 的流程干活时走它
+  use_skill: { zh: '调用技能', en: 'Use a skill' },
   run_python: { zh: '执行Python代码', en: 'Run Python' },
   // 文档编辑（LibreOffice 拟人式原语）
   doc_list_project_files: { zh: '列出项目文件', en: 'List project files' },
@@ -110,6 +114,7 @@ const NAMES = {
   doc_insert_at_cursor: { zh: '插入文本', en: 'Insert text' },
   doc_modify_paragraph: { zh: '修改段落', en: 'Edit paragraph' },
   doc_insert_under_heading: { zh: '标题下插入', en: 'Insert under heading' },
+  doc_export_pdf: { zh: '导出为PDF', en: 'Export to PDF' },
   doc_search_related_docs: { zh: '搜索相关文档', en: 'Find related docs' },
   doc_select_anchor: { zh: '选中定位点', en: 'Select anchor' },
   doc_select_paragraph: { zh: '选中段落', en: 'Select paragraph' },
