@@ -4627,7 +4627,12 @@ const EXEC = {
       errs.push('stream: loadComponentFromURL returned null');
     } catch (e) { errs.push('stream: ' + errStr(e)); }
 
-    return { success: false, message: 'load_document failed: ' + errs.join(' | ') };
+    // 两条路径都被引擎拒收 = 文件损坏 / 非法 XML / 格式不受支持（dev-board#1018）。
+    // 真机实证（24.2.8-zhcn-r5，lowa-e2e load-rejected.mjs）：不传 InteractionHandler 时
+    // 这类文件 **不弹模态框、不挂住**，loadComponentFromURL 在约 0.1s 内返回 null；
+    // 挂一个记录型 InteractionHandler 也一次都不被调用。带稳定码回去，宿主据此直接落
+    // 「文档无法打开」终态，不做无意义的重启重装。
+    return { success: false, code: 'DOC_REJECTED', message: 'load_document failed: ' + errs.join(' | ') };
   },
   // [Track E] export the current document as bytes (host-initiated save — the
   // mirror image of load_document): storeToURL into MEMFS, read the bytes back,

@@ -107,6 +107,14 @@ const ACTION_BUDGET_MS = {
   slide_set_hyperlink: 120000, slide_write_notes: 120000,
 }
 
+// 某条命令的等待预算（ms），表外的按默认 30s——与后端 EditorBridgeService 的
+// ACTION_TIMEOUT_SECONDS / EDITOR_ACTION_TIMEOUT 同口径（三处同表）。宿主 AI 命令等编辑器
+// 启动时据此给自己封顶，免得后端先到点（dev-board#1018，见 agentClientActions）。
+export const DEFAULT_ACTION_BUDGET_MS = 30000
+export function actionBudgetMs(action) {
+  return ACTION_BUDGET_MS[action] || DEFAULT_ACTION_BUDGET_MS
+}
+
 // 探活（dev-board#539）：备胎过继前先问一声「这个 guest 还活着吗」。用最便宜的
 // 只读命令（get_ui_state 实测 ~6ms），预算刻意短——探活的价值就在于**失败要早**，
 // 沿用 30s 默认预算等于把冷启动往后推半分钟。经 executeCommand 的
