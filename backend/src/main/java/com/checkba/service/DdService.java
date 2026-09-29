@@ -20,7 +20,9 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -213,6 +215,12 @@ public class DdService {
     public DdItem uploadFile(Long itemId, MultipartFile file, Long userId) throws IOException {
         DdItem item = ddItemRepository.findById(itemId)
                 .orElseThrow(() -> new IllegalArgumentException("清单项不存在"));
+        // 已通过的条目不再收材料：要换文件得律师先撤回通过（dev-board#1057）。
+        // 驳回后重传照常，落库时状态回到 UPLOADED（待审核）。
+        if ("APPROVED".equals(item.getStatus())) {
+            throw new IllegalTransitionException(LangText.of("该项已审核通过，如需更换材料请联系律师",
+                    "This item has already been approved; ask your lawyer to reopen it before uploading again"));
+        }
         DdRequest request = getRequest(item.getDdRequestId());
         Long projectId = request.getProjectId();
 
@@ -383,18 +391,91 @@ public class DdService {
     }
 
     /**
-     * 更新项状态（律师审核）
+     * 审核状态流转不合法（dev-board#1057）。单独一个类型，好让 DdController 回真 HTTP 400，
+     * 而不是全站统一的 200+code——经案件库代理时状态码原样带回律师的桌面端。
+     */
+    public static class IllegalTransitionException extends IllegalArgumentException {
+        public IllegalTransitionException(String message) {
+            super(message);
+        }
+    }
+
+    /** 驳回理由写成一条带前缀的留言，客户与律师在留言板里都看得到；两种语言的前缀都认。 */
+    public static final String REJECT_PREFIX_ZH = "驳回：";
+    public static final String REJECT_PREFIX_EN = "Rejected: ";
+    static final int REJECT_REASON_MAX = 1000;
+
+    /**
+     * 律师审核（dev-board#1057）。状态机：
+     * <ul>
+     *   <li>PENDING 与 UPLOADED 由上传决定：新建为 PENDING，客户上传（含驳回后重传）一律回到 UPLOADED；</li>
+     *   <li>律师只能给已有附件的条目下结论：UPLOADED/REJECTED → APPROVED（通过），
+     *       UPLOADED/APPROVED → REJECTED（驳回，必须带理由），APPROVED/REJECTED → UPLOADED（撤回结论）；</li>
+     *   <li>其余一律 400：没上传就通过/驳回、目标就是当前状态、手工改回 PENDING、未知状态值。</li>
+     * </ul>
+     * 驳回理由写成 {@code 驳回：<理由>} 的留言（作者是律师本人），不另加字段。
      */
     @Transactional
-    public DdItem updateItemStatus(Long itemId, String status) {
-        // 状态机校验：只接受合法状态值，防止写入任意字符串（PENDING/UPLOADED/APPROVED/REJECTED）
-        if (status == null || !java.util.Set.of("PENDING", "UPLOADED", "APPROVED", "REJECTED").contains(status)) {
-            throw new IllegalArgumentException("非法的清单项状态: " + status);
+    public DdItem updateItemStatus(Long itemId, String status, String reason, Long userId) {
+        if (status == null || !java.util.Set.of("UPLOADED", "APPROVED", "REJECTED").contains(status)) {
+            throw new IllegalTransitionException(LangText.of("非法的清单项状态: " + status,
+                    "Invalid checklist item status: " + status));
         }
         DdItem item = ddItemRepository.findById(itemId)
                 .orElseThrow(() -> new IllegalArgumentException("清单项不存在"));
+        String from = item.getStatus();
+        if (item.getUploadedFileId() == null) {
+            throw new IllegalTransitionException(LangText.of("客户还没上传材料，不能审核",
+                    "Nothing has been uploaded for this item yet"));
+        }
+        boolean allowed = switch (status) {
+            case "APPROVED" -> "UPLOADED".equals(from) || "REJECTED".equals(from);
+            case "REJECTED" -> "UPLOADED".equals(from) || "APPROVED".equals(from);
+            default -> "APPROVED".equals(from) || "REJECTED".equals(from); // UPLOADED = 撤回结论
+        };
+        if (!allowed) {
+            throw new IllegalTransitionException(LangText.of("清单项状态不能从 " + from + " 改为 " + status,
+                    "Cannot change checklist item status from " + from + " to " + status));
+        }
+        if ("REJECTED".equals(status)) {
+            String trimmed = reason == null ? "" : reason.trim();
+            if (trimmed.isEmpty()) {
+                throw new IllegalTransitionException(LangText.of("驳回需要填写理由", "A reason is required to reject"));
+            }
+            if (trimmed.length() > REJECT_REASON_MAX) {
+                throw new IllegalTransitionException(LangText.of("驳回理由过长", "The rejection reason is too long"));
+            }
+            addComment(itemId, userId, LangText.of(REJECT_PREFIX_ZH, REJECT_PREFIX_EN) + trimmed);
+        }
         item.setStatus(status);
         return ddItemRepository.save(item);
+    }
+
+    /**
+     * 各驳回条目最近一条驳回理由（itemId → 理由，已去前缀），随清单详情一起给前端，
+     * 客户不必逐条去拉留言才知道为什么被驳回。
+     */
+    public Map<Long, String> rejectReasons(List<DdItem> items) {
+        Map<Long, String> out = new HashMap<>();
+        for (DdItem item : items) {
+            if (!"REJECTED".equals(item.getStatus())) continue;
+            List<DdComment> comments = ddCommentRepository.findByDdItemIdOrderByCreatedAtAsc(item.getId());
+            for (int i = comments.size() - 1; i >= 0; i--) {
+                String reason = stripRejectPrefix(comments.get(i).getContent());
+                if (reason != null) {
+                    out.put(item.getId(), reason);
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
+    static String stripRejectPrefix(String content) {
+        if (content == null) return null;
+        if (content.startsWith(REJECT_PREFIX_ZH)) return content.substring(REJECT_PREFIX_ZH.length());
+        if (content.startsWith(REJECT_PREFIX_EN)) return content.substring(REJECT_PREFIX_EN.length());
+        return null;
     }
     
     /**
