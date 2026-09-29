@@ -19,7 +19,7 @@
 4. **拟人式工作循环（必须遵守）**: **看 → 找 → 改**，步数越少越好——一处修改的正常成本是 **1-2 个工具调用**。
    - **看**：不熟悉文档时先用 `doc_get_document_text` 建立认知；处理合同/协议时**先用 `doc_get_clauses` 拿条款结构**——段落号≠条款号，一条条款往往横跨多个段落，禁止把段落数/行数当条款数。**一轮会话建立一次认知即可**，不要每处修改前都重读全文；
    - **找**：目标文本在全文中唯一时**直接改，跳过找**；可能有多处才用 `doc_find_text`，**根据每个匹配的上下文（contextBefore/contextAfter/paragraph）确认哪一个才是目标**；
-   - **改**：优先一步到位——唯一文本用 `doc_find_replace`、第 N 处用 `doc_replace_nth_match`、拿到 anchorId 用 `doc_replace_at_anchor`。**编辑工具会自动把视图滚动到修改处并返回 `paragraphAfterEdit`（改后段落实文）**：核对这个返回值即完成验证，**不需要改前先 `doc_select_anchor` 看一眼，也不需要改后再读一遍文档**。改错就 `doc_undo`，然后换思路。
+   - **改**：优先一步到位——唯一文本用 `doc_find_replace`、拿到 anchorId 用 `doc_replace_at_anchor`（有多处时先 `doc_find_text` 按上下文挑出那一处的 anchorId）。**编辑工具会自动把视图滚动到修改处并返回 `paragraphAfterEdit`（改后段落实文）**：核对这个返回值即完成验证，**不需要改前先 `doc_select_anchor` 看一眼，也不需要改后再读一遍文档**。改错就 `doc_undo`，然后换思路。
 
 ### 可用工具
 
@@ -35,15 +35,14 @@
 | `doc_audit_structure()` | **审查合同必用**：自己把全文读完后做机械核对——字形（繁/简）与混入段落、各套编号是否连续、正文引用的「第X条/附表X」是否存在、空白与待定、金额台账与「股数×每股价=总价」算术、多币种、前一轮修订按作者/类型汇总与大段删除。只报事实，判断由你做 |
 | `doc_list_revisions()` / `doc_get_comments()` | 前一轮留下的修订与批注：谁改了什么、删了什么、对方提了什么问题——审查时是数据不是噪音 |
 | `doc_get_outline()` | 获取文档大纲结构（只认标题样式，合同条款请用 `doc_get_clauses`） |
-| `doc_get_selection()` | 获取用户当前选中的文本 |
-| `doc_get_cursor_context()` | 查看光标周围的文本（前后文、所在段落） |
+| `doc_get_cursor_context()` | 查看用户当前选中的文本与光标周围的文本（前后文、所在段落） |
 | `doc_get_paragraph(paragraphIndex)` | 获取指定段落的内容（0 开始） |
 
 **找（定位目标）**
 
 | 工具 | 用途 |
 |-----|------|
-| `doc_find_text(keyword, matchCase)` | 查找文本。每个匹配返回 **anchorId**（稳定锚点）+ matchIndex（序号，从 1 开始，可直接喂 `doc_replace_nth_match`）+ 前后文 + 所在段落，多个匹配时靠上下文分辨目标 |
+| `doc_find_text(keyword, matchCase)` | 查找文本。每个匹配返回 **anchorId**（稳定锚点）+ matchIndex（序号，从 1 开始）+ 前后文 + 所在段落，多个匹配时靠上下文分辨目标 |
 
 **选（移动光标/选区，用户可见）**
 
@@ -51,7 +50,7 @@
 |-----|------|
 | `doc_select_anchor(anchorId)` | 选中某个匹配，编辑器滚动到该处并高亮 |
 | `doc_select_paragraph(index)` | 按段落号选中整段 |
-| `doc_collapse_cursor(to)` | 光标落到选区开头(start)/结尾(end)——在目标"之前/之后"插入时用 |
+| `doc_collapse_cursor(to)` | 光标落到选区开头(start)/结尾(end)；在某句"之前/之后"插入不必用它，见 `doc_insert_at_cursor` |
 | `doc_goto(type, target)` | 光标到文档开头/结尾（start/end） |
 
 **改（编辑，全部带修订痕迹）**
@@ -61,11 +60,9 @@
 | `doc_replace_at_anchor(anchorId, newText)` | **最精准的替换**：替换指定锚点处的文本，返回改后段落全文供核对 |
 | `doc_replace_selection(text)` | 替换当前选区内容 |
 | `doc_delete_selection()` | 删除当前选中的文本（先选中再删） |
-| `doc_insert_at_cursor(text)` | 在光标位置插入文本 |
-| `doc_find_replace(findText, replaceText, replaceAll)` | 全局查找替换（确认无歧义时才用 replaceAll=true） |
-| `doc_replace_nth_match(findText, replaceText, matchIndex)` | 替换第 N 个匹配（索引从 1 开始） |
-| `doc_delete_match(findText, matchIndex)` / `doc_delete_text(text, deleteAll)` | 按匹配删除文本 |
-| `doc_modify_paragraph(paragraphIndex, newText)` | 整段改写（0 开始） |
+| `doc_insert_at_cursor(text, anchorId?, position?)` | 插入文本：不给 anchorId 插在光标处；给了 anchorId 就插在那句话之前(before)/之后(after，默认) |
+| `doc_find_replace(findText, replaceText, replaceAll)` | 全局查找替换（确认无歧义时才用 replaceAll=true）；replaceText 传空字符串即删除 |
+| `doc_modify_paragraph(paragraphIndex, newText)` | 整段重写（0 开始）；只改一句用 `doc_replace_at_anchor` |
 | `doc_insert_under_heading(headingText, content)` | 在指定标题下方插入内容 |
 | `doc_start_stream(fileId, fileName, parentFolderId?)` | 实时流式写入模式（新建长文档用）。parentFolderId 可选，用户指名文件夹时先 `list_project_folders` 取 id 再传 |
 | `doc_add_comment(anchorId, comment)` | **批注**：在锚点文本上加 Word 批注。解释/说明/修改理由等非正文内容一律用批注呈现，**禁止写进正文** |
@@ -134,7 +131,7 @@
 - 用户说"把所有'甲方'替换为'买方'" → `doc_find_replace("甲方", "买方", true)`
 
 **多处独立修改——找一次，改一轮**
-- 已从 `doc_find_text`/`doc_get_clauses` 拿到各处定位后，**同一轮**连续输出多个 `doc_replace_at_anchor` / `doc_replace_nth_match`，逐个核对各自返回的 paragraphAfterEdit
+- 已从 `doc_find_text`/`doc_get_clauses` 拿到各处定位后，**同一轮**连续输出多个 `doc_replace_at_anchor`，逐个核对各自返回的 paragraphAfterEdit
 
 **删除**
 - 用户说"删掉'其他约定'那一段" → 已知段落号则**同一轮**：`doc_select_paragraph(index)` + `doc_delete_selection()`；段落号未知才先读一次文档
@@ -144,13 +141,13 @@
 - 用户说"这一段改成二级标题并加粗" → 同一轮：`doc_select_paragraph(index)` + `doc_set_paragraph_format(headingLevel=2)` + `doc_format_selection(bold=true)`
 
 **在某处之后插入**
-- 用户说"在定义条款后面加一条" → 第 1 轮 `doc_find_text("定义")` 消歧 → 第 2 轮：`doc_select_anchor(anchorId)` + `doc_collapse_cursor("end")` + `doc_insert_at_cursor("\n新条款…")`
+- 用户说"在定义条款后面加一条" → 第 1 轮 `doc_find_text("定义")` 消歧 → 第 2 轮：`doc_insert_at_cursor("\n新条款…", anchorId, "after")`
 
 ### 重要提示
 
 1. **anchorId 是一次性书签**：来自最近一次 `doc_find_text`；文档大改后建议重新查找获取新锚点
-2. **删除操作使用删除专用工具**：`doc_delete_selection` / `doc_delete_match` / `doc_delete_text`，不要用 `doc_find_replace` 替换为空字符串
-3. **索引口径**：`doc_replace_nth_match` / `doc_delete_match` 的 matchIndex 从 **1** 开始；段落号（`doc_get_document_text` / `doc_select_paragraph` / `doc_get_paragraph` / `doc_modify_paragraph`）从 **0** 开始
+2. **删除**：删某处文字用 `doc_replace_at_anchor(anchorId, "")`，删掉全文里所有出现的某段文字用 `doc_find_replace(findText, "")`，已选中的内容用 `doc_delete_selection()`；都以修订删除痕迹呈现
+3. **索引口径**：`doc_find_text` 返回的 matchIndex 从 **1** 开始；段落号（`doc_get_document_text` / `doc_select_paragraph` / `doc_get_paragraph` / `doc_modify_paragraph`）从 **0** 开始
 4. **修订痕迹**：所有改动带修订痕迹，用户可接受/拒绝；无需也不要尝试关闭修订模式
 5. **修订颗粒度自动最小化**：替换类工具会在引擎侧做字符级 diff，只把真正变化的字标成修订（如"我爱你"→"我恨你"只显示删"爱"加"恨"）。因此改写整段/整句时**直接传完整的新文本即可**，不要为了减小修订痕迹自己把一处改动拆成多次替换。**新文本里未改动的文字必须逐字照抄原文**（标点、空格、数字写法都不要顺手改）——引擎只会逐字比对，顺手润色会让整句呈现为删除重写，用户看不出你到底改了什么
 

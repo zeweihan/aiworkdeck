@@ -221,7 +221,7 @@ class BuiltinSkillsTest {
             assertEquals(SkillDefinition.ToolPolicy.RESTRICT, s.getToolPolicy(),
                     id + " 本条用例只对 restrict 的 skill 有意义");
             for (String tool : docFloor) {
-                // contract-review 用 doc_replace_at_anchor / doc_replace_nth_match 那套带修订痕迹的改法，
+                // contract-review 用 doc_replace_at_anchor / doc_find_replace 那套带修订痕迹的改法，
                 // doc_replace_selection 不在它的清单里，其余下限一致
                 if ("contract-review".equals(id) && "doc_replace_selection".equals(tool)) {
                     continue;

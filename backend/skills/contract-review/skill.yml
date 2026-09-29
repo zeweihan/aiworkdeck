@@ -92,15 +92,14 @@ allowed_tools:
   - doc_select_anchor
   - doc_select_paragraph
   - doc_collapse_cursor
-  # 改（全部带修订痕迹）
+  # 改（全部带修订痕迹）。删除走 doc_replace_at_anchor / doc_find_replace 传空串——
+  # doc_replace_nth_match / doc_delete_match 已不下发（dev-board#1065 T-14），列在这里也放不回来
   - doc_replace_at_anchor
-  - doc_replace_nth_match
   - doc_find_replace
   - doc_modify_paragraph
   - doc_insert_at_cursor
   - doc_insert_under_heading
   - doc_delete_selection
-  - doc_delete_match
   - doc_table_set_cell
   # 批注：说明与风险提示的唯一去处
   - doc_add_comment

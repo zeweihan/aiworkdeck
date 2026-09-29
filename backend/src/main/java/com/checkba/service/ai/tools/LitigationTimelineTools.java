@@ -123,7 +123,11 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
     // ==================== 开始：读材料 ====================
 
-    @ToolMeta(displayName = "读入时间轴材料", category = "litigation-visual")
+    // 管线前置步骤跟随收尾工具声明 LOWA（dev-board#1065 T-10）：这条管线的交付物由
+    // litigation_timeline_render 产出，而它声明了 requiresHost = LOWA；前置步骤在 Office / none 会话里
+    // 可见的话，模型会陪用户走完几轮确认，走到最后一步才发现出不了图。
+    @ToolMeta(displayName = "读入时间轴材料", category = "litigation-visual",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("Start the timeline-master pipeline: turn raw case materials (judgment, complaint, "
             + "defence, contracts, evidence lists, bank statements, chat logs...) into a faithful "
             + "case timeline. Pass the project file IDs of the materials (comma separated; a folder "
@@ -224,7 +228,8 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
     // ==================== 中段：勾选与模型产出 ====================
 
-    @ToolMeta(displayName = "推进时间轴管线", category = "litigation-visual")
+    @ToolMeta(displayName = "推进时间轴管线", category = "litigation-visual",
+            requiresHost = ToolMeta.Host.LOWA)
     @Tool("Advance the timeline-master pipeline by ONE stage. Stages: pick (round 1, which "
             + "materials, answer like '1,2' or '全部'), span (round 2, time span), style (round 3: "
             + "1 奇川风 / 2 歸藏风 / 3 白描 — NEVER leave empty, default to '1'), offer (submit "

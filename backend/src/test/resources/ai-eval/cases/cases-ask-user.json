@@ -54,7 +54,7 @@
               "multi_select": true
             }
           },
-          { "name": "doc_delete_text", "arguments": { "text": "审查报告" } }
+          { "name": "doc_find_replace", "arguments": { "findText": "审查报告", "replaceText": "" } }
         ]
       }
     ],
@@ -106,11 +106,11 @@
     "userInput": "<ask_user_answer id=\"ask-demo1\">\nQuestion: 「清理」具体指哪一种？\nSelected:\n- 删除混入的审查报告\n</ask_user_answer>",
     "activeDocument": { "id": "1001", "name": "股份认购协议.docx", "fileType": "docx" },
     "turns": [
-      { "toolCalls": [ { "name": "doc_delete_text", "arguments": { "text": "审查报告" } } ] },
+      { "toolCalls": [ { "name": "doc_find_replace", "arguments": { "findText": "审查报告", "replaceText": "" } } ] },
       { "text": "<final>已删除混入的审查报告段落。</final>" }
     ],
     "expect": {
-      "toolCalls": [ { "name": "doc_delete_text" } ],
+      "toolCalls": [ { "name": "doc_find_replace", "argsContain": { "findText": "审查报告" } } ],
       "bubbleEndStatus": "finished"
     }
   },

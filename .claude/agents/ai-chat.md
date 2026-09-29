@@ -225,9 +225,16 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      一份文档、要求桌面前端把它打开或重载。`sendRefreshFilesAction`（刷文件树）与
      `sendComponentRequiredAction`（引导下载组件）**刻意不算**：它们是环境通知不是交付物，
      按它们判会把 `write_docx` / `create_folder` 一并锁进 LOWA，Office 会话里连新建文件都做不了。
-     今天声明 LOWA 的 12 个：`pptx_open_file` / `pptx_generate` / `pptx_apply_format` /
+     今天声明 LOWA 的 22 个：`pptx_open_file` / `pptx_generate` / `pptx_apply_format` /
      `litigation_render` / `litigation_timeline_render` / `pdf_to_word` / `pdf_highlight` /
-     `pdf_annotate` / `pdf_redact` / `pdf_replace_text` / `text_write_file` / `text_find_replace`。
+     `pdf_annotate` / `pdf_redact` / `pdf_replace_text` / `text_write_file` / `text_find_replace`，
+     外加 dev-board#1065 T-10 的**管线前置步骤**九个与 T-25 的 `doc_export_pdf`。
+     **判据的延伸（T-10）：一个工具唯一的用途是给某个已声明 LOWA 的工具供料，它也声明 LOWA**——
+     `litigation_reference` / `litigation_checkpoint`（供 litigation_render）、`litigation_timeline_start` /
+     `litigation_timeline_step`（供 litigation_timeline_render）、`pptx_generate_outline` / `pptx_refine_outline` /
+     `pptx_check_service` / `pptx_get_project_pages` / `pptx_export_editable`（后两个要的 serviceProjectId
+     只能来自 pptx_generate）。不这样的话模型在任务窗格里陪用户走完三轮确认，走到出图那一步工具消失。
+     这一组不发那四个 send，所以不在绊线里，只靠 `ToolDeclarationContractTest` 的逐名清单钉住。
      **代价是真的**：后两族（pdf_* 与 text_*）的写入本身是纯服务端的，声明 LOWA 等于在
      Office/none 会话里一并收走那份能力——这是按审计口径做的取舍（那些会话里用户既没有文件树
      也没有预览，拿不到结果，而工具还在承诺「编辑器会重载」），不是顺手扩大的。
@@ -267,10 +274,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      | slide | pdf、litigation、spreadsheet、enterprise-data、plugin、meeting、python |
      | null / text / 未知 | 不裁（同②的「判不准倒向全集」） |
 
-     **刻意留着**：legal / task / memory / evidence / template / revision / format / table / files /
-     reference / misc，以及核心集里的 `search_web` / `browse_url`（与法规检索并列律师改合同时最高频的外部查证，
-     两个一千字符出头，藏了就是每次先查目录）。`enterprise-data` 里连带着 `update_project_info` 与
-     `web_verify_import`，docx 会话里它们也一起藏——要用时同样按下面四条路放回。
+     **刻意留着**：legal / task / tag / memory / evidence / template / revision / edit / format / table / files /
+     reference / plugin-tools / misc，以及核心集里的 `search_web` / `browse_url`（与法规检索并列律师改合同时最高频的外部查证，
+     两个一千字符出头，藏了就是每次先查目录）。`update_project_info` 与 `web_verify_import` 原先挂在
+     `enterprise-data` 里被一起藏，dev-board#1065 T-19 起分别归 memory 与 evidence，docx 会话里照常下发。
      **放回没有第二套机制**，一律写进渐进披露那份 `RunGuard.expandedToolCategories`（只增不减、下一轮生效）。
      四个触发点：① **关键词**（`categoriesHintedBy`，起跑时对本轮用户输入算一次，表 `CATEGORY_KEYWORDS`，
      匹配口径复用 `SkillRouter.containsTrigger`——中文子串、拉丁两端整词，为此它改成了 public）；
@@ -445,6 +452,38 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
       - **核心集是一份集中清单而不是 `@ToolMeta` 上的布尔**：「算不算高频」不是工具自身属性，
         是一次横切取舍——要判断它得把四十个候选放在一起看覆盖面，散在三十四个文件里没人看得出
         「读一份合同」这条链断没断。清单与覆盖面断言都在 `ToolDisclosurePolicy(Test)`。
+        **dev-board#1065 从核心集摘掉四个**：`doc_delete_text` 与 `doc_get_selection`（不再下发，见下文
+        「永久不下发的工具」）、`doc_insert_under_heading`（「在某句前后插入」由 `doc_insert_at_cursor` 的
+        anchorId + position 一步完成，它退到 edit 类目照常下发）、`doc_restore_checkpoint`（最后手段，
+        退到 revision；常规纠错的 `doc_undo` 留在核心集）。docx 核心集 43 → 39 个。
+      - **类目表（dev-board#1065 T-19 / T-20）**，按声明顺序匹配、第一个命中即归属（`ToolDisclosurePolicy.CATEGORIES`）：
+
+        | 类目 | 收什么 |
+        |---|---|
+        | table | `doc_table_*`、`doc_insert_table` |
+        | revision | 修订接受/拒绝、批注回复/解决/删除、`doc_restore_checkpoint` |
+        | evidence | 底稿关联、`evidence_verify`、`retrieve_evidence`、`dd_export`、`web_verify_import` |
+        | template | 模板画像与模板库 |
+        | edit | 定位 / 删改 / 按段落取改：`doc_goto` / `doc_collapse_cursor` / `doc_delete_selection` / `doc_redo` / `doc_modify_paragraph` / `doc_insert_under_heading` 与几个只登记不下发的旧原语（核心集里的 select_anchor / select_paragraph / get_paragraph / get_outline 也列在这里，但 categoryOf 先判核心集，它们仍返回 core） |
+        | files | 路径类文件原语、`text_*`、`doc_export_pdf` |
+        | format | `doc_*` 剩下的（字符/段落格式、页面、页眉页脚、目录、脚注、图片、超链接） |
+        | spreadsheet / slides / office / pdf / litigation / reference | 各自前缀（slides 含 `pptx_*`） |
+        | memory | `memory_*`、`update_project_info` |
+        | enterprise-data | `qichacha_*`、`tushare_query` |
+        | legal / meeting / task | `law_*` / `meeting_*` / `task_*` |
+        | tag | `tag_*`（文件标签不是事项，原先挂在 task） |
+        | plugin / python | `plugin_dev_*` + `capability_*` / `run_python` |
+        | plugin-tools | 运行期由插件 JAR 注册的工具（判定先于一切前缀规则，见下条） |
+        | misc | 认不出的兜底（今天 3 个：`get_user_profile` / `get_project_context` / `get_conversation_summary`） |
+
+        **顺序是契约**：`edit` 与 `files` 都点名了 `doc_*`，必须排在 `format` 的 `doc_` 通配之前，否则被它吃掉
+        （`files` 整块挪到了 `format` 前面，就是为了 `doc_export_pdf`）。`list_tools` 的描述里每个类目名都要念到
+        （`theCatalogDescriptionNamesEveryCategory` 守着）。
+      - **插件工具单独成类 `plugin-tools`（T-20）**：`ToolRegistry.pluginToolNames()` 是
+        `PluginService.getPluginTools().keySet()` 的活视图（热加载后自动跟上），`ToolRegistry.init` 经
+        `@Autowired(required = false)` 拿到 `ToolDisclosurePolicy` 后调 `setPluginToolNames(this::pluginToolNames)` 交进去。
+        **方向不能反**：策略类不能注入 ToolRegistry（ToolRegistry → 工具组件 → ToolDiscoveryTools → 策略，成环）。
+        手工 new 的 ToolRegistry（EvalHarness、各单测）没有这根线，视为没有插件工具，行为不变。来源抛异常一律按「不是插件工具」处理。
       - **开关关着时连 `list_tools` 自己都不下发**（`ToolDiscoveryTools.isAvailable()`）：
         模型手上已是全集，再挂个目录只会每轮白付约一千字符。**例外是 ②b 活跃文档类目裁剪**（dev-board#1064，
         默认开）：它开着时目录工具进程级可用，由编排器按「本轮藏没藏东西」决定下不下发（`dropIdleCatalog`）。
@@ -452,7 +491,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
         ②b 只是把「核心集」换成了「除隐藏类目外的全部」。在 `discloseProgressively` 里的顺序是
         Jev 预选 → ②b 类目裁剪 → 核心集收窄（开关开着时）。整套回放在披露模式下重跑时有 4 条存量用例红
         （`cases-capability-prompt` 3 条、`cases-skill` 的 `skill-not-triggered-behavior-preserved` 1 条，断言的都是非核心工具可见），2026-09-29 在
-        未改动的基线上复跑同样是这 4 条，**不是 ②b 引入的**。
+        未改动的基线上复跑同样是这 4 条，**不是 ②b 引入的**。dev-board#1065 把 `doc_restore_checkpoint` 移出核心集后
+        再多 3 条（`cases-tool-visibility` 里 docx / xlsx / pptx 三例断言首轮可见 `doc_restore_checkpoint`），共 7 条；
+        默认模式（披露关）不受影响。**翻开披露开关前要先定这件事**：Impress 上 `doc_undo` 不生效（见②），
+        pptx 会话里 `doc_restore_checkpoint` 是唯一的后悔药，披露模式下它要等 `list_tools(revision)` 才回来。
       - **真实模型 A/B（2026-09-22，隔离后端 + deepseek-v4-flash，每档 2 场景 × 3 次）**：
         首轮 promptTokens **50692 → 22296（-56%）**，纯对话 T4 中位 11692 → 8048ms；
         「读文件总结」3 次里 2 次与基线同路径（`doc_list_project_files` → `read_document`/
@@ -482,10 +524,22 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   `isAvailable()`（**进程级**，本机有没有 Docker）和 `currentlyUnusableTools()`（**运行期**，
   账户连没连）同一口径——**只裁 spec、不裁 resolve/execute**，但这一个是**永久的**：工具本身
   已经停用或者压根不该出现在律师面前，与环境无关，所以写成声明而不是每次现算。
-  今天两个使用者：`delete_file`（永久停用，实现就是一句拒绝；每轮白付一份 schema，而且用户说
+  最早的两个使用者：`delete_file`（永久停用，实现就是一句拒绝；每轮白付一份 schema，而且用户说
   「把这个文件删掉」时模型会先调一次再转述拒绝，白烧一个往返）与 `doc_debug_revisions`
-  （调试工具，与 `doc_list_revisions` 功能重合，不该进用户的过程卡）。护栏
-  `ToolDeclarationContractTest`（逐名钉住 + 断言登记仍在）。
+  （调试工具，与 `doc_list_revisions` 功能重合，不该进用户的过程卡）。
+  dev-board#1065 又加了五个「同一件事的多余路径」：`doc_delete_text` / `doc_delete_match` /
+  `doc_replace_nth_match`（T-14：删一句原先有八条路，这三条描述里没判据；删除一律走
+  `doc_replace_at_anchor(anchorId, "")` 或 `doc_find_replace(…, "")`，两者描述里都写了「传空字符串即删除」，
+  lowa-e2e `anchor-insert-export-pdf.mjs` 真引擎验过删得掉）、`doc_get_selection`（T-15：被
+  `doc_get_cursor_context` 覆盖）、`doc_set_selection`（T-15：用的是本仓禁止的整数字符偏移）。
+  它们的 worker action 仍在 `PluginHostImpl.DOC_ACTIONS` 里给插件用，登记也保留。完整清单见
+  `ToolDeclarationContractTest.EXPECTED_NOT_OFFERED`（逐名钉住 + 断言登记仍在）。
+  **skill 白名单放不回 `offerToModel = false` 的工具**（T-26 核实）：`SkillRouter.visibleTools` 只在
+  `getAllSpecifications` 给出的候选集里挑，而候选集来自 `builtinSpecifications`，这类工具在注册时就没进去。
+  所以「先藏起来、命中某个 skill 再放出来」这条路走不通——要做只能另开机制。开发者向的
+  `capability_*` / `plugin_dev_*` 因此仍然下发（开着文档的会话里靠 ②b 的 plugin 类目裁剪藏掉），
+  `plugin-dev`（restrict）的白名单把六个都列上，命中时一个不少；`contract-review` 白名单里的
+  `doc_replace_nth_match` / `doc_delete_match` 已摘掉（列着也放不回来）。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
 - tools/：FileTools(14，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语 + **move_to_trash**（dev-board#1044：项目内路径或 fileId 的 JSON 数组、≤50 项，走 `ProjectFileService.delete` 软删进项目回收站，与资源管理器「删除」同一条路、不碰磁盘、可还原；核心集常驻；永久删除仍不给 AI，`delete_file` 的拒绝文案指路到它；护栏 `FileToolsMoveToTrashTest`）——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(3，dev-board #53：task_create/task_list，#895 加 task_update 并给 task_create 扩 type/notes/priority/fileIds(逗号分隔)/assigneeId/remindBefore，task_list 行带 id/类型中文名/负责人/多文件名供 task_update 取 taskId；task_update 归属校验=事项 projectId 必须等于注入的当前项目。项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(14 个登记，**下发 9 个**（dev-board#1065 起）。**一个心智模型写进两边描述**：`save_memory` / `query_memory` =「记一条 / 找一条」（默认入口），`memory_list/read/search/write/edit/delete` =「管理记忆文件本身」（整理、批量、按文件编辑，含团队/律所共享记忆），每个描述都点名另一组并说何时改用；`query_memory` 原先那句「这是检索项目记忆的唯一工具」是错的（memory_search 同时下发、检索的是同一份 Markdown 记忆）已删；`get_user_profile` / `get_project_context` / `get_conversation_summary` 标 `offerToModel = false`（与每轮注入重复，登记保留给老会话回放与 XML 兜底），`ToolChoiceSurfaceTest.memoryToolsShareOneMentalModel` 守着。以下是更早的合并：query_memory / search_knowledge_base / deep_search 三个签名雷同、描述不给判据的检索工具已合并成 `query_memory(query, type, scope, sourceFileId, depth, limit)`，depth = quick(关键词，默认，等于旧 query_memory) / hybrid(RRF 融合，旧 search_knowledge_base) / deep(Agentic 多轮召回，旧 deep_search，**会额外起一次辅助模型做查询扩展**)；旧两名保留为 `@ToolMeta(offerToModel = false)` 的兼容入口，只裁 spec 不裁 execute，返回末尾附一句指路。**depth 填错一律回落 quick，绝不让整次调用失败**。dev-board#807，审计 A13)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13 个登记，**下发 10 个**——PPTX 的权威编辑面是 `slide_*`，pptx_open_file / pptx_apply_format / pptx_edit_page 三个已标 `offerToModel = false`（dev-board#808，审计 B-09）：它们改的是**磁盘字节**然后强制编辑器 reload，会把编辑器里尚未保存的修改静默丢掉，且索引 0 起而 slide_* 1 起，两套并存时模型混用必然错页、错页既不报错也不会被任何返回值戳穿。留下的是不可替代的那批：生成(pptx_generate/pptx_generate_outline/pptx_refine_outline)、导出(pptx_export_editable)、清单(pptx_list_files/pptx_search_files/list_project_folders)、只读检查(pptx_inspect_format，走 pptx-service 自有端点 /api/pptx/*，不必在编辑器里打开)、服务探活与页面清单)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 从 `doc_list_project_files`（现在一次列全类型，含 PDF）或 pdf_list_files 拿；**「doc_list_project_files 不列 PDF、search_project_files 不带 ID」是已经不成立的旧说法**（dev-board#807，审计 B-11 + 复核补漏）。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)，**失败不再自动回退**结构级（dev-board#1016，见下文「等待组件、编辑器启动中与同轮幂等」）；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。**PptxTools / PdfTools / TextFileEditTools / Litigation* 里共 12 个工具已用 `@ToolMeta(requiresHost = LOWA)` 声明桌面前端依赖**（dev-board#799，见上文①b）——「Office 会话看得到 pptx_generate 并被它的『等待用户操作…』卡住整轮」这条地雷**已修**。
 
@@ -501,6 +555,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **描述修正**：`search_project_files` 曾写着「Returns paths only, NO database fileId」，实现却逐条附 `(fileId=N)`——#807 在 `list_files` 上修过的同一个病，这次补上并进 `ToolChoiceSurfaceTest`；示例换成律师会搜的名字。`move_files_batch` 不再说「单个文件继续用 move_file」。`write_docx` / `doc_start_stream` 各加一句取舍判据（长篇、要让用户看着写 → stream；一次性落盘或非编辑器会话 → write_docx）。提示词：基底 prompt §4/§5、四个 Office 片段与 none 片段、LOWA 片段里点名这几个旧名的地方全部换掉（none 片段不许出现 `doc_`，所以那里只描述「工具清单里有一个一次列全的项目文件清单工具」、不点名）。
 - **没动的**：`ToolDisclosurePolicy.CORE` 里的 `read_document` 还留着（本批只往里插了 `search_project_content` 一行；它已不下发，留在核心集里不产生任何规格，清理与核心集瘦身一起做）。`ContextAssemblerService` 的附件与活跃文档注入仍调 `LegalTools.read_document`（方法本身没删）。
 - 验证：`mvn test -Dtest='ToolChoiceSurfaceTest,ToolDeclarationContractTest,SystemPromptToolVisibilityContractTest,ClientCapability*Test,OrchestratorReplayEvalTest,ToolDisclosurePolicyTest,*FileTools*,*ContentSearch*,GbkPlainTextParityTest,ExtractFileTextPagingTest,WriteFileRegistrationTest'`。
+- tools/：FileTools(14，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语 + **move_to_trash**（dev-board#1044：项目内路径或 fileId 的 JSON 数组、≤50 项，走 `ProjectFileService.delete` 软删进项目回收站，与资源管理器「删除」同一条路、不碰磁盘、可还原；核心集常驻；永久删除仍不给 AI，`delete_file` 的拒绝文案指路到它；护栏 `FileToolsMoveToTrashTest`）——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(3，dev-board #53：task_create/task_list，#895 加 task_update 并给 task_create 扩 type/notes/priority/fileIds(逗号分隔)/assigneeId/remindBefore，task_list 行带 id/类型中文名/负责人/多文件名供 task_update 取 taskId；task_update 归属校验=事项 projectId 必须等于注入的当前项目。项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(8 个登记，**下发 6 个**——query_memory / search_knowledge_base / deep_search 三个签名雷同、描述不给判据的检索工具已合并成 `query_memory(query, type, scope, sourceFileId, depth, limit)`，depth = quick(关键词，默认，等于旧 query_memory) / hybrid(RRF 融合，旧 search_knowledge_base) / deep(Agentic 多轮召回，旧 deep_search，**会额外起一次辅助模型做查询扩展**)；旧两名保留为 `@ToolMeta(offerToModel = false)` 的兼容入口，只裁 spec 不裁 execute，返回末尾附一句指路。**depth 填错一律回落 quick，绝不让整次调用失败**。dev-board#807，审计 A13)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13 个登记，**下发 10 个**——PPTX 的权威编辑面是 `slide_*`，pptx_open_file / pptx_apply_format / pptx_edit_page 三个已标 `offerToModel = false`（dev-board#808，审计 B-09）：它们改的是**磁盘字节**然后强制编辑器 reload，会把编辑器里尚未保存的修改静默丢掉，且索引 0 起而 slide_* 1 起，两套并存时模型混用必然错页、错页既不报错也不会被任何返回值戳穿。留下的是不可替代的那批：生成(pptx_generate/pptx_generate_outline/pptx_refine_outline)、导出(pptx_export_editable)、清单(pptx_list_files/pptx_search_files/list_project_folders)、只读检查(pptx_inspect_format，走 pptx-service 自有端点 /api/pptx/*，不必在编辑器里打开)、服务探活与页面清单)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 从 `doc_list_project_files`（现在一次列全类型，含 PDF）或 pdf_list_files 拿；**「doc_list_project_files 不列 PDF、search_project_files 不带 ID」是已经不成立的旧说法**（dev-board#807，审计 B-11 + 复核补漏）。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)，**失败不再自动回退**结构级（dev-board#1016，见下文「等待组件、编辑器启动中与同轮幂等」）；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。**PptxTools / PdfTools / TextFileEditTools / Litigation* / DocumentEditTools 里共 22 个工具已用 `@ToolMeta(requiresHost = LOWA)` 声明桌面前端依赖**（dev-board#799 + #1065 T-10/T-25，见上文①b）——「Office 会话看得到 pptx_generate 并被它的『等待用户操作…』卡住整轮」这条地雷**已修**。
 
 **PDF 页级操作（dev-board#805，审计 A17 / B-12 / B-13）**
 

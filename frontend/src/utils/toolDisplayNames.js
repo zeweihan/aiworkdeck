@@ -114,6 +114,7 @@ const NAMES = {
   doc_insert_at_cursor: { zh: '插入文本', en: 'Insert text' },
   doc_modify_paragraph: { zh: '修改段落', en: 'Edit paragraph' },
   doc_insert_under_heading: { zh: '标题下插入', en: 'Insert under heading' },
+  doc_export_pdf: { zh: '导出为PDF', en: 'Export to PDF' },
   doc_search_related_docs: { zh: '搜索相关文档', en: 'Find related docs' },
   doc_select_anchor: { zh: '选中定位点', en: 'Select anchor' },
   doc_select_paragraph: { zh: '选中段落', en: 'Select paragraph' },

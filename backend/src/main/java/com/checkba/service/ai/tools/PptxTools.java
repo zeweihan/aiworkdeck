@@ -278,7 +278,11 @@ public class PptxTools implements AgentToolComponent {
                 + "在此之前只能导出纯图片版 PPT。";
     }
 
-    @ToolMeta(displayName = "检查PPT服务", category = "pptx")
+    // 管线前置步骤跟随收尾工具声明 LOWA（dev-board#1065 T-10）：这条管线的交付物是
+    // pptx_generate 生成的演示文稿，而收尾那一步声明了 requiresHost = LOWA；大纲、改大纲、
+    // 取页面、导出可编辑版这几步（后三个要的 serviceProjectId 只能来自 pptx_generate）
+    // 在 Office / none 会话里可见的话，模型会陪用户走完几轮确认，走到最后一步才发现出不了稿。
+    @ToolMeta(displayName = "检查PPT服务", category = "pptx", requiresHost = ToolMeta.Host.LOWA)
     @Tool("检查 PPTX 生成服务是否可用。在生成 PPT 之前应先调用此工具确认服务状态。")
     public String pptx_check_service() {
         log.info("Tool: pptx_check_service called");
@@ -562,7 +566,7 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @ToolMeta(displayName = "生成PPT大纲", category = "pptx")
+    @ToolMeta(displayName = "生成PPT大纲", category = "pptx", requiresHost = ToolMeta.Host.LOWA)
     @Tool("生成 PPTX 大纲（不生成完整 PPT）。用于让用户先审阅和修改大纲结构，确认后再生成完整 PPT。")
     public String pptx_generate_outline(
             @P("PPT 主题或详细描述") String topic,
@@ -820,6 +824,7 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(requiresHost = ToolMeta.Host.LOWA)
     @Tool("获取项目中的所有页面信息。返回每个页面的 ID、标题、状态和缩略图 URL。")
     public String pptx_get_project_pages(
             @P("PPTX 服务中的项目 ID") String serviceProjectId
@@ -863,6 +868,7 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(requiresHost = ToolMeta.Host.LOWA)
     @Tool("使用自然语言修改 PPT 大纲结构。可以增加、删除、修改页面，调整顺序等。")
     public String pptx_refine_outline(
             @P("PPTX 服务中的项目 ID") String serviceProjectId,
@@ -903,6 +909,7 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(requiresHost = ToolMeta.Host.LOWA)
     @Tool("导出可编辑的 PPTX 文件。与普通导出（整页图片）不同，此功能会对每页做版面分析，"
           + "把标题与正文还原成可编辑文本框，表格与图片按原位置作为独立元素放回（纯本机识别时表格通常仍是图块）。"
           + "需要本机两个组件都已就绪：「PPT 生成与 PDF 转 Word」负责导出，「扫描件 OCR 引擎（MinerU）」负责版面分析——"

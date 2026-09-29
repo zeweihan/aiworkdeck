@@ -145,6 +145,9 @@ const LOWA_ONLY = {
     'doc_list_project_files', 'doc_search_related_docs', 'doc_link_evidence', 'doc_list_evidence',
     'sheet_create_file'
   ],
+  '导出 PDF：LOWA 引擎导出字节再存进项目；任务窗格里用户开的是 Word/WPS 本身，「另存为 PDF」是宿主自带的，插件面不需要对等工具': [
+    'doc_export_pdf'
+  ],
   '表格行高列宽：插件面并进了 office_excel_edit_rows_cols 的 set_width / set_height 两个 action': [
     'sheet_set_row_col'
   ],

@@ -40,6 +40,11 @@ tool_policy: restrict
 allowed_tools:
   - plugin_dev_scaffold
   - plugin_dev_install
+  # 能力槽管理（dev-board#1065 T-26）：与插件开发同属「开发者向」工具，restrict 回合里不列就被裁掉
+  - capability_list
+  - capability_install
+  - capability_apply
+  - capability_select
   - write_file
   - read_file
   - extract_file_text

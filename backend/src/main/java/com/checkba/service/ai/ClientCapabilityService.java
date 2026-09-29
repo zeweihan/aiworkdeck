@@ -385,9 +385,12 @@ public class ClientCapabilityService {
     private static final java.util.regex.Pattern READ_ONLY_SUFFIX =
             java.util.regex.Pattern.compile("(?:^|_)read$");
 
-    /** 词头模式覆盖不到、必须逐个点名的只读工具（见上面两个坑）。 */
+    /**
+     * 词头模式覆盖不到、必须逐个点名的只读工具（见上面两个坑）。{@code export_pdf}（dev-board#1065 T-25）
+     * 产出一份新 PDF、不改文档本身——算写入的话，导出之后「用到文档」那组按钮会被误藏。
+     */
     private static final java.util.Set<String> READ_ONLY_EXACT =
-            java.util.Set.of("open_file", "find_text", "set_selection");
+            java.util.Set.of("open_file", "find_text", "set_selection", "export_pdf");
 
     /**
      * 这个工具会不会真的改动文档内容。{@code bubble_end.documentEdited} 的唯一判据

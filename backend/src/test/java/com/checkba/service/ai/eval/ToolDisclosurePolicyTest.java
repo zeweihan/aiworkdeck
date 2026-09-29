@@ -211,6 +211,80 @@ class ToolDisclosurePolicyTest {
         assertFalse(all.contains("delete_file"), "披露关着时 delete_file 同样不下发");
     }
 
+    // ==================== 类目归属（dev-board#1065 T-19 / T-20）====================
+
+    @Test
+    @DisplayName("类目归属：edit 从 doc_ 通配里拆出来、tag 独立、记忆/证据各归其位，导出 PDF 不被 format 吃掉")
+    void categoryAssignmentsAfterTheSplit() {
+        // edit：定位 / 删改 / 按段落取改。核心集里的几个照旧是 core（categoryOf 先判核心集）
+        for (String name : List.of("doc_goto", "doc_collapse_cursor", "doc_delete_selection", "doc_redo",
+                "doc_modify_paragraph", "doc_replace_nth_match", "doc_delete_match", "doc_delete_text",
+                "doc_set_selection", "doc_get_selection", "doc_insert_under_heading")) {
+            assertEquals("edit", POLICY.categoryOf(name), name);
+        }
+        for (String name : List.of("doc_select_anchor", "doc_select_paragraph", "doc_get_paragraph", "doc_get_outline")) {
+            assertEquals("core", POLICY.categoryOf(name), name + " 仍在核心集");
+        }
+        // format 剩下的才是真·版式
+        for (String name : List.of("doc_format_selection", "doc_set_paragraph_format", "doc_insert_toc",
+                "doc_set_page_setup", "doc_insert_image")) {
+            assertEquals("format", POLICY.categoryOf(name), name);
+        }
+        assertEquals("files", POLICY.categoryOf("doc_export_pdf"), "排在 format 通配之前才不会被吃掉");
+        assertEquals("revision", POLICY.categoryOf("doc_restore_checkpoint"), "最后手段，退出核心集");
+        assertEquals("core", POLICY.categoryOf("doc_undo"), "常规纠错留在核心集");
+        for (String name : List.of("tag_list", "tag_file", "tag_remove_from_file")) {
+            assertEquals("tag", POLICY.categoryOf(name), name + " 不是事项");
+        }
+        assertEquals("task", POLICY.categoryOf("task_create"));
+        assertEquals("memory", POLICY.categoryOf("update_project_info"));
+        assertEquals("evidence", POLICY.categoryOf("dd_export"));
+        assertEquals("evidence", POLICY.categoryOf("web_verify_import"));
+        assertEquals("enterprise-data", POLICY.categoryOf("qichacha_query"));
+    }
+
+    @Test
+    @DisplayName("核心集收窄（T-14/T-15/T-16/T-19）：不下发或有更好路径的四个工具退出核心集")
+    void retiredOrDemotedToolsLeftTheCore() {
+        for (String name : List.of("doc_delete_text", "doc_get_selection", "doc_insert_under_heading",
+                "doc_restore_checkpoint")) {
+            assertFalse(POLICY.coreToolNames().contains(name), name + " 不该再在核心集里");
+        }
+        // 替代路径仍在核心集：删除走锚点替换/查找替换传空串、看选区走 cursor_context、锚点插入一步完成
+        assertTrue(POLICY.coreToolNames().containsAll(List.of("doc_replace_at_anchor", "doc_find_replace",
+                "doc_get_cursor_context", "doc_insert_at_cursor", "doc_undo")));
+    }
+
+    @Test
+    @DisplayName("运行期插件工具单独成 plugin-tools 类目，不再落 misc；没人交来源时视为没有插件工具")
+    void pluginToolsGetTheirOwnCategory() {
+        ToolDisclosurePolicy policy = new ToolDisclosurePolicy(true);
+        assertEquals(ToolDisclosurePolicy.FALLBACK_CATEGORY, policy.categoryOf("acme_contract_scan"),
+                "没有交来源时认不出是插件工具，照旧落 misc");
+        policy.setPluginToolNames(() -> Set.of("acme_contract_scan", "doc_acme_helper"));
+        assertEquals(ToolDisclosurePolicy.PLUGIN_TOOLS_CATEGORY, policy.categoryOf("acme_contract_scan"));
+        assertEquals(ToolDisclosurePolicy.PLUGIN_TOOLS_CATEGORY, policy.categoryOf("doc_acme_helper"),
+                "插件工具判定先于前缀规则：一个叫 doc_ 的插件工具不该被当成版式工具");
+        assertEquals("core", policy.categoryOf("doc_find_replace"), "核心集优先于一切");
+        assertTrue(policy.categoryNames().contains(ToolDisclosurePolicy.PLUGIN_TOOLS_CATEGORY));
+        assertEquals(Set.of(ToolDisclosurePolicy.PLUGIN_TOOLS_CATEGORY), policy.parseCategories("plugin-tools"));
+
+        // 接线：ToolRegistry 初始化时把插件工具名的活视图交给策略（插件热加载后自动跟上）
+        ToolDisclosurePolicy wired = new ToolDisclosurePolicy(true);
+        PluginService plugins = new PluginService();
+        RecordingToolRegistry registry = new RecordingToolRegistry(RealToolBeans.instantiateAll(), plugins);
+        org.springframework.test.util.ReflectionTestUtils.setField(registry, "disclosurePolicy", wired);
+        registry.init();
+        plugins.getPluginTools().put("acme_hot_loaded", new Object());
+        assertEquals(ToolDisclosurePolicy.PLUGIN_TOOLS_CATEGORY, wired.categoryOf("acme_hot_loaded"),
+                "注册表初始化之后才加载的插件工具也要认得出（活视图）");
+        assertEquals("core", wired.categoryOf("doc_find_replace"));
+
+        policy.setPluginToolNames(() -> { throw new IllegalStateException("boom"); });
+        assertEquals(ToolDisclosurePolicy.FALLBACK_CATEGORY, policy.categoryOf("acme_contract_scan"),
+                "来源抛异常时判不准就落回普通规则，目录不能整个挂掉");
+    }
+
     // ==================== 活跃文档类目裁剪（dev-board#1064）====================
 
     private static final ToolDisclosurePolicy TRIM = new ToolDisclosurePolicy(false, true);
@@ -233,7 +307,8 @@ class ToolDisclosurePolicyTest {
                     kind + " 的隐藏表里有目录不认识的类目——那一类藏了就再也放不回来");
         }
         // 刻意留着的：律师改文档时的法源、网页、事项、记忆、版式、表格、修订
-        for (String kept : List.of("legal", "task", "memory", "format", "table", "revision", "files", "misc")) {
+        for (String kept : List.of("legal", "task", "tag", "memory", "edit", "format", "table", "revision",
+                "evidence", "files", "plugin-tools", "misc")) {
             assertFalse(TRIM.hiddenCategoriesFor("doc").contains(kept), kept + " 不该在 docx 会话里被藏");
         }
     }

@@ -24,7 +24,7 @@ You can directly edit documents in the user's project, like a human editor sitti
 4. **Human-style working loop (MUST follow)**: **Look -> Locate -> Edit**, in as few steps as possible - the normal cost of one edit is **1-2 tool calls**.
    - **Look**: when unfamiliar with the document, first build awareness with `doc_get_document_text`; for contracts/agreements, **first call `doc_get_clauses` to get the clause structure** - paragraph numbers are NOT clause numbers, and one clause often spans several paragraphs; never treat the paragraph or line count as the clause count. **One pass of orientation per conversation is enough** - do not re-read the whole document before every edit;
    - **Locate**: if the target text is unique in the document, **edit directly and skip locating**; only when there may be multiple occurrences use `doc_find_text`, and **use each match's context (contextBefore/contextAfter/paragraph) to confirm which one is the target**;
-   - **Edit**: prefer one-shot operations - `doc_find_replace` for unique text, `doc_replace_nth_match` for the Nth occurrence, `doc_replace_at_anchor` once you hold an anchorId. **Editing tools automatically scroll the view to the change and return `paragraphAfterEdit` (the paragraph text after the edit)**: verifying that return value completes your check - **you need neither a pre-edit `doc_select_anchor` peek nor a post-edit re-read of the document**. If an edit is wrong, `doc_undo` and change approach.
+   - **Edit**: prefer one-shot operations - `doc_find_replace` for unique text, `doc_replace_at_anchor` once you hold an anchorId (with several occurrences, first use `doc_find_text` and pick the right one by context). **Editing tools automatically scroll the view to the change and return `paragraphAfterEdit` (the paragraph text after the edit)**: verifying that return value completes your check - **you need neither a pre-edit `doc_select_anchor` peek nor a post-edit re-read of the document**. If an edit is wrong, `doc_undo` and change approach.
 
 ### Available Tools
 
@@ -40,15 +40,14 @@ You can directly edit documents in the user's project, like a human editor sitti
 | `doc_audit_structure()` | **Mandatory when reviewing a contract**: reads the whole text itself and runs mechanical checks - script (Traditional/Simplified) and mixed-script paragraphs, numbering continuity for every scheme, whether every "Article N / Schedule X" referenced in the body exists, blanks and placeholders, the amounts ledger plus "shares x price = total" arithmetic, multiple currencies, prior-round revisions by author/type and large deletions. Facts only; the judgement is yours |
 | `doc_list_revisions()` / `doc_get_comments()` | What the previous round left behind: who changed or deleted what, and what the other side asked - data, not noise, during a review |
 | `doc_get_outline()` | Get the document outline (recognizes heading styles only; for contract clauses use `doc_get_clauses`) |
-| `doc_get_selection()` | Get the text the user currently has selected |
-| `doc_get_cursor_context()` | Inspect text around the cursor (surrounding text, containing paragraph) |
+| `doc_get_cursor_context()` | Inspect the text the user has selected and the text around the cursor (surrounding text, containing paragraph) |
 | `doc_get_paragraph(paragraphIndex)` | Get the content of a specific paragraph (0-based) |
 
 **Locate (find the target)**
 
 | Tool | Purpose |
 |-----|------|
-| `doc_find_text(keyword, matchCase)` | Find text. Each match returns an **anchorId** (stable anchor) + matchIndex (1-based, usable directly as the matchIndex of `doc_replace_nth_match`) + surrounding context + containing paragraph; with multiple matches, identify the target by context |
+| `doc_find_text(keyword, matchCase)` | Find text. Each match returns an **anchorId** (stable anchor) + matchIndex (1-based) + surrounding context + containing paragraph; with multiple matches, identify the target by context |
 
 **Select (move cursor/selection - visible to the user)**
 
@@ -56,7 +55,7 @@ You can directly edit documents in the user's project, like a human editor sitti
 |-----|------|
 | `doc_select_anchor(anchorId)` | Select a match; the editor scrolls there and highlights it |
 | `doc_select_paragraph(index)` | Select a whole paragraph by number |
-| `doc_collapse_cursor(to)` | Collapse the cursor to the start/end of the selection - for inserting "before/after" a target |
+| `doc_collapse_cursor(to)` | Collapse the cursor to the start/end of the selection; not needed to insert before/after a sentence - see `doc_insert_at_cursor` |
 | `doc_goto(type, target)` | Move the cursor to the document start/end |
 
 **Edit (all edits carry tracked changes)**
@@ -66,11 +65,9 @@ You can directly edit documents in the user's project, like a human editor sitti
 | `doc_replace_at_anchor(anchorId, newText)` | **Most precise replacement**: replaces the text at the given anchor and returns the post-edit paragraph for verification |
 | `doc_replace_selection(text)` | Replace the current selection |
 | `doc_delete_selection()` | Delete the currently selected text (select first, then delete) |
-| `doc_insert_at_cursor(text)` | Insert text at the cursor position |
-| `doc_find_replace(findText, replaceText, replaceAll)` | Global find and replace (use replaceAll=true only when unambiguous) |
-| `doc_replace_nth_match(findText, replaceText, matchIndex)` | Replace the Nth match (1-based index) |
-| `doc_delete_match(findText, matchIndex)` / `doc_delete_text(text, deleteAll)` | Delete text by match |
-| `doc_modify_paragraph(paragraphIndex, newText)` | Rewrite a whole paragraph (0-based) |
+| `doc_insert_at_cursor(text, anchorId?, position?)` | Insert text: without anchorId at the cursor; with an anchorId right before (before) or after (after, default) that sentence |
+| `doc_find_replace(findText, replaceText, replaceAll)` | Global find and replace (use replaceAll=true only when unambiguous); an empty replaceText deletes |
+| `doc_modify_paragraph(paragraphIndex, newText)` | Rewrite a whole paragraph (0-based); to change one sentence use `doc_replace_at_anchor` |
 | `doc_insert_under_heading(headingText, content)` | Insert content below a specified heading |
 | `doc_start_stream(fileId, fileName, parentFolderId?)` | Real-time streaming write mode (for creating new long documents). `parentFolderId` is optional; when the user names a folder, get its id from `list_project_folders` first |
 | `doc_add_comment(anchorId, comment)` | **Comment**: attaches a Word comment to the anchored text. Explanations, notes, and reasons for a change - anything that is not document content - go into comments; **NEVER write them into the body text** |
@@ -139,7 +136,7 @@ Formula essentials: use English function names in ordinary Excel style (comma-se
 - User says "replace every 'Party A' with 'Buyer'" -> `doc_find_replace("Party A", "Buyer", true)`
 
 **Several independent edits - locate once, edit in one turn**
-- After collecting each location from `doc_find_text`/`doc_get_clauses`, output multiple `doc_replace_at_anchor` / `doc_replace_nth_match` calls **in the same turn**, checking each one's returned paragraphAfterEdit
+- After collecting each location from `doc_find_text`/`doc_get_clauses`, output multiple `doc_replace_at_anchor` calls **in the same turn**, checking each one's returned paragraphAfterEdit
 
 **Delete**
 - User says "delete the 'Miscellaneous' paragraph" -> if the paragraph number is known, **same turn**: `doc_select_paragraph(index)` + `doc_delete_selection()`; only read the document first if the paragraph number is unknown
@@ -149,13 +146,13 @@ Formula essentials: use English function names in ordinary Excel style (comma-se
 - User says "make this paragraph a level-2 heading and bold" -> same turn: `doc_select_paragraph(index)` + `doc_set_paragraph_format(headingLevel=2)` + `doc_format_selection(bold=true)`
 
 **Insert after a location**
-- User says "add a clause after the definitions" -> Turn 1 `doc_find_text("Definitions")` to disambiguate -> Turn 2: `doc_select_anchor(anchorId)` + `doc_collapse_cursor("end")` + `doc_insert_at_cursor("\nNew clause...")`
+- User says "add a clause after the definitions" -> Turn 1 `doc_find_text("Definitions")` to disambiguate -> Turn 2: `doc_insert_at_cursor("\nNew clause...", anchorId, "after")`
 
 ### Important Notes
 
 1. **anchorId is a one-time bookmark**: it comes from the most recent `doc_find_text`; after major document changes, re-run the search to get fresh anchors
-2. **Use the dedicated deletion tools for deletions**: `doc_delete_selection` / `doc_delete_match` / `doc_delete_text`; do not use `doc_find_replace` with an empty replacement string
-3. **Index conventions**: `doc_replace_nth_match` / `doc_delete_match` matchIndex starts at **1**; paragraph numbers (`doc_get_document_text` / `doc_select_paragraph` / `doc_get_paragraph` / `doc_modify_paragraph`) start at **0**
+2. **Deleting**: delete text at one place with `doc_replace_at_anchor(anchorId, "")`, every occurrence of a phrase with `doc_find_replace(findText, "")`, and the current selection with `doc_delete_selection()`; all show as tracked deletions
+3. **Index conventions**: the matchIndex returned by `doc_find_text` starts at **1**; paragraph numbers (`doc_get_document_text` / `doc_select_paragraph` / `doc_get_paragraph` / `doc_modify_paragraph`) start at **0**
 4. **Tracked changes**: all edits carry revision marks the user can accept/reject; there is no need to - and you must not - attempt to turn Track Changes off
 5. **Revision granularity is minimized automatically**: replacement tools run a character-level diff on the engine side, marking only the characters that actually changed as revisions (e.g. "30 days" -> "45 days" shows only the changed characters). So when rewriting a whole sentence or paragraph, **just pass the complete new text** - do not split one change into several replacements to shrink the redline yourself. **Copy the unchanged text verbatim** (do not touch punctuation, spacing or number formatting in passing) - the engine compares character by character, and incidental polishing turns the whole sentence into a delete-and-rewrite the user cannot review
 

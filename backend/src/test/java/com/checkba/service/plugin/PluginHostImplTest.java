@@ -427,8 +427,9 @@ class PluginHostImplTest {
             while (m.find()) dispatched.add(m.group(1));
         }
         assertTrue(dispatched.contains("set_style_profile") && dispatched.contains("slide_set_hyperlink"), "扫描没抓到已知下发名: " + dispatched);
-        // 宿主自用 / 诊断原语，按 SPEC §11 不开放给插件
-        dispatched.removeAll(java.util.Set.of("doc_open_file_sync", "debug_revisions"));
+        // 宿主自用 / 诊断原语，按 SPEC §11 不开放给插件。export_pdf（dev-board#1065 T-25）回的是 PDF 字节，
+        // 走的是前端专门为 AI 工具写的 base64 回传路径，插件拿不了字节
+        dispatched.removeAll(java.util.Set.of("doc_open_file_sync", "debug_revisions", "export_pdf"));
         dispatched.removeAll(PluginHostImpl.DOC_ACTIONS);
         assertTrue(dispatched.isEmpty(), "AI 工具下发但 DOC_ACTIONS 未放行（同步 docs/PLUGIN_SPEC.md §11）: " + dispatched);
     }

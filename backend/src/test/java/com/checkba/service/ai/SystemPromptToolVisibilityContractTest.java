@@ -108,7 +108,19 @@ class SystemPromptToolVisibilityContractTest {
             Map.entry("text_find_replace", ToolMeta.Host.LOWA),
             // 诉讼可视化：出图后在编辑器里打开
             Map.entry("litigation_timeline_render", ToolMeta.Host.LOWA),
-            Map.entry("litigation_render", ToolMeta.Host.LOWA)));
+            Map.entry("litigation_render", ToolMeta.Host.LOWA),
+            // 管线前置步骤跟随收尾工具（dev-board#1065 T-10）：只在 tools-lowa 里教
+            Map.entry("litigation_reference", ToolMeta.Host.LOWA),
+            Map.entry("litigation_checkpoint", ToolMeta.Host.LOWA),
+            Map.entry("litigation_timeline_start", ToolMeta.Host.LOWA),
+            Map.entry("litigation_timeline_step", ToolMeta.Host.LOWA),
+            Map.entry("pptx_generate_outline", ToolMeta.Host.LOWA),
+            Map.entry("pptx_refine_outline", ToolMeta.Host.LOWA),
+            Map.entry("pptx_get_project_pages", ToolMeta.Host.LOWA),
+            Map.entry("pptx_check_service", ToolMeta.Host.LOWA),
+            Map.entry("pptx_export_editable", ToolMeta.Host.LOWA),
+            // 导出 PDF（T-25）：doc_ 前缀本来就锁在 LOWA，声明是冗余的显式化
+            Map.entry("doc_export_pdf", ToolMeta.Host.LOWA)));
 
     /** 片段文件 → 它服务的那一档会话。 */
     private record Fragment(String stem, Capability capability, OfficeHost host) {
