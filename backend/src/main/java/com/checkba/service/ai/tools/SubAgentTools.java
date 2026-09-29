@@ -45,7 +45,10 @@ public class SubAgentTools implements AgentToolComponent {
             + "task_description: complete standalone description of the subtask (the sub-agent cannot see this "
             + "conversation). expected_output: precise description of what the result must contain. "
             + "tool_scope: tool names the sub-agent may use, as a JSON array or comma-separated string "
-            + "(empty = all tools). dispatch_subtask itself is never available to the sub-agent.")
+            + "(empty = all tools; grant only the minimal set the subtask needs). "
+            + "dispatch_subtask itself is never available to the sub-agent. "
+            + "If it returns success=false (timeout, budget exceeded, rounds exhausted), take the work over yourself "
+            + "or change strategy - do NOT re-dispatch the same task unchanged.")
     public String dispatch_subtask(
             @P("子任务的完整独立描述（子 Agent 看不到本对话）") String task_description,
             @P(value = "结果必须包含什么；不传则由子 Agent 自行决定产出形式", required = false) String expected_output,

@@ -460,7 +460,7 @@ public class ContextAssemblerService {
 
         // Load Base Prompt（按语言各缓存一份，见 loadBasePrompt——原来是每轮一次 classpath 读盘；
         // 缓存的是基底原文，工具指引片段按会话能力在 spliceToolGuidance 里拼，dev-board#809/#812）
-        systemText.append(spliceToolGuidance(loadBasePrompt(english), conversationId, english));
+        systemText.append(spliceToolGuidance(loadBasePrompt(english), conversationId, english, agentMode));
 
         // Determine current phase based on state
         String currentPhase = determinePhase(planId, taskListId);
@@ -516,7 +516,7 @@ public class ContextAssemblerService {
 
 ## Final Answer Rules
 - **Main Answer**: MUST be inside `<final>...</final>` tag.
-- **Walkthrough**: ONLY for process summary. NEVER duplicate main answer here.
+- **Walkthrough**: ONLY for process summary. NEVER duplicate main answer here. Do NOT output it at all when you output `implementation_plan`.
 - **Forbidden**: Do NOT use `type="summary"` or `type="walkthrough"` as artifact types.
 
 ## Artifact Naming Rules
@@ -1968,8 +1968,16 @@ public class ContextAssemblerService {
      * ——基底 prompt 里已经没有任何编辑器工具指引了，留一条注释只是噪音。
      * 万一基底 prompt 是没有标记的旧版本（或英文缺失回退到了中文版而两版标记不一致），
      * 就把片段接到末尾：宁可位置不理想，也不能整段指引凭空消失。
+     *
+     * <p><b>ASK 模式不拼任何片段</b>（dev-board#1073）：那个模式只下发只读的 memory_list /
+     * memory_read / memory_search，整段文档工具指引一个都用不上，每轮白付几千到上万字符。
+     * 占位照样消掉（换成空串）。ASK 与否一轮之内不变，所以仍属稳定段，不影响提示缓存。
      */
-    private String spliceToolGuidance(String basePrompt, String conversationId, boolean english) {
+    private String spliceToolGuidance(String basePrompt, String conversationId, boolean english,
+                                      AgentMode agentMode) {
+        if (agentMode == AgentMode.ASK) {
+            return basePrompt.replace(TOOL_GUIDANCE_PLACEHOLDER, "");
+        }
         String stem = toolGuidanceStem(
                 clientCapabilityService.capabilityOf(conversationId),
                 clientCapabilityService.officeHostOf(conversationId));
@@ -2150,12 +2158,6 @@ public class ContextAssemblerService {
 2. **智能规划**: 对于复杂任务可以生成 `task_list`（但不会停止等待确认）
 3. **工具使用**: 可以使用所有可用工具（搜索、读写文件、法律研究等）
 4. **正常流程**: 按照标准的 [Thought -> Action -> Observation] 循环执行
-
-## 精确执行原则 (CRITICAL - 必须遵守)
-- **严格遵循用户请求的边界**：只执行用户明确要求的操作
-- 如果用户说"删除第三个z"，就**只删除第三个z**，不要删除第二个、第四个或任何其他z
-- 完成用户**明确请求的任务**后，立即输出 `<final>` 结束
-- **禁止**自作主张继续执行"相关"或"类似"的额外操作
 """;
         };
     }
@@ -2207,7 +2209,7 @@ public class ContextAssemblerService {
 
 ## Final Answer Rules
 - **Main Answer**: MUST be inside `<final>...</final>` tag.
-- **Walkthrough**: ONLY for process summary. NEVER duplicate main answer here.
+- **Walkthrough**: ONLY for process summary. NEVER duplicate main answer here. Do NOT output it at all when you output `implementation_plan`.
 - **Forbidden**: Do NOT use `type="summary"` or `type="walkthrough"` as artifact types.
 
 ## Artifact Naming Rules
@@ -2319,12 +2321,6 @@ You are in Agent mode, the default full-capability mode:
 2. **Smart planning**: for complex tasks you may produce a `task_list` (which does NOT stop and wait for confirmation)
 3. **Tool use**: all available tools may be used (search, file read/write, legal research, etc.)
 4. **Normal flow**: follow the standard [Thought -> Action -> Observation] loop
-
-## Precise Execution Principle (CRITICAL - MUST follow)
-- **Strictly respect the boundary of the user's request**: perform only what the user explicitly asked for
-- If the user says "delete the 3rd z", delete **only the 3rd z** - not the 2nd, the 4th, or any other z
-- After finishing the task the user **explicitly requested**, output `<final>` immediately and end
-- It is **FORBIDDEN** to continue on your own initiative with "related" or "similar" extra operations
 """;
         };
     }

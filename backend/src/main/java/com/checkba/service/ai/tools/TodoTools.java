@@ -26,8 +26,9 @@ public class TodoTools implements AgentToolComponent {
           "1) 多步任务（3 步以上的修改/审查/起草）开工前必须先写清单；" +
           "2) 每完成一项【立即】调用本工具把该项标为 completed，不要攒批；" +
           "3) 同一时刻只允许一项 in_progress；" +
-          "4) 计划变化时（增删任务）也用本工具整表覆写。" +
-          "清单会实时显示给用户作为进度面板。")
+          "4) 计划变化时（增删任务）也用本工具整表覆写；" +
+          "5) 1-2 步的简单任务不要用。" +
+          "清单会实时显示给用户作为进度面板，只管本轮执行进度——跨对话持续的截止日与里程碑用 task_create 等事项工具。")
     @ToolMeta(displayName = "更新任务清单", category = "planning")
     public String todo_write(
             @P("完整任务清单 JSON 数组（整表覆写，含已完成项）。元素形如 " +

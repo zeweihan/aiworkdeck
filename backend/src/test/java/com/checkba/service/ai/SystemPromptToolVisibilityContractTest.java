@@ -76,16 +76,10 @@ class SystemPromptToolVisibilityContractTest {
      * 这两个从来不存在的「工具」就是这么在基底里躺了很久的（dev-board#809 / K29 顺手清掉）。
      */
     private static final Set<String> NON_TOOL_IDENTIFIERS = new TreeSet<>(List.of(
-            // query_memory 的 depth 档位与参数名
-            "depth", "quick", "hybrid", "deep",
-            // dispatch_subtask 的参数名
-            "task_description", "expected_output", "tool_scope",
-            // run_python 里注入的后端 API 对象
-            "default_api",
-            // Tushare 的接口名（不是本仓的工具）
-            "stock_basic", "top10_holders",
-            // artifact 类型标注
-            "implementation_plan"));
+            // 今天为空：dev-board#1073 瘦身后基底里反引号包着的小写标识符全是真工具。
+            // depth 档位、dispatch_subtask 参数名、default_api、Tushare 接口名、implementation_plan
+            // 这几类原先在这里点名，随基底对应段落一起删掉了（判据已并进各工具的描述）。
+            ));
 
     /**
      * 今天声明了宿主依赖的全部工具（{@code @ToolMeta.requiresHost}）。

@@ -82,7 +82,9 @@ public class WebTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "网络搜索", category = "web")
-    @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")
+    @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases, and for the law "
+            + "of jurisdictions other than Mainland China. For PRC statutes prefer law_search / get_law_article (an "
+            + "authoritative database) and cite from those. Returns a summary of search results.")
     public String search_web(@P("搜索关键词") String query) {
         log.info("Tool: search_web called for query='{}'", query);
 

@@ -284,7 +284,9 @@ public class FileTools implements AgentToolComponent {
     @ToolMeta(displayName = "提取文档全文", category = "file")
     @Tool("Read the plain text of any project file by its database file ID: Word/Excel/PowerPoint, PDF, plain text "
             + "(UTF-8 or GBK), images, and audio/video that has been transcribed. "
-            + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script). "
+            + "Images and scanned PDFs are OCR'd automatically in the cloud (no local setup, no Docker, no script); "
+            + "when recognition fails the reply states the real reason (e.g. insufficient Credits, OCR not enabled) - "
+            + "relay that reason to the user verbatim instead of inferring one. "
             + "Returns at most " + ToolFileGuard.MAX_TOOL_TEXT_CHARS + " characters per call: when the reply says "
             + "there is more ('还有 N 字符未读', nextStart=N), call again with offset=N to continue - "
             + "do not re-read from the start. To find where a phrase appears, use search_project_content first. "
