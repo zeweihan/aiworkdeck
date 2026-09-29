@@ -316,11 +316,11 @@
       ],
       "offeredToolsExcludeFirstCall": [
         "pptx_generate",
-        "pptx_list_files"
+        "pptx_inspect_format"
       ],
       "offeredToolsIncludeLastCall": [
         "pptx_generate",
-        "pptx_list_files"
+        "pptx_inspect_format"
       ],
       "structureContains": [
         "<final>"
@@ -330,7 +330,7 @@
   },
   {
     "id": "doc-trim-xml-call-to-hidden-tool-puts-siblings-back",
-    "title": "类目裁剪：模型经 XML 兜底直接点名调了没下发的 pdf_list_files——当轮照常执行，下一轮 PDF 整类回来（dev-board#1064）",
+    "title": "类目裁剪：模型经 XML 兜底直接点名调了没下发的 pdf_list_files（#1065 起只登记不下发，仍可经 XML 调到）——当轮照常执行，下一轮 PDF 整类回来（dev-board#1064）",
     "category": "files",
     "protocol": "xml",
     "docSessionCategoryTrim": true,
@@ -373,11 +373,11 @@
       ],
       "offeredToolsExcludeFirstCall": [
         "pdf_inspect",
-        "pdf_list_files"
+        "pdf_to_word"
       ],
       "offeredToolsIncludeLastCall": [
         "pdf_inspect",
-        "pdf_list_files"
+        "pdf_to_word"
       ],
       "structureContains": [
         "<final>"
