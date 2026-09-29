@@ -44,8 +44,12 @@
                     :file-name="entry.data.fileName"
                     :data="entry.data.data"
                     :actionable="isLatest && !bubble.isStreaming"
+                    :file-id="entry.data.fileId || null"
+                    :saved-path="savedPath"
+                    :review-state="entry.data.fileId ? reviewStates[entry.data.fileId] || null : null"
                     @open-tab="$emit('open-artifact-tab', $event)"
                     @approve="$emit('approve', $event)"
+                    @open-review="$emit('open-review', $event)"
                   />
                </div>
             </template>
@@ -148,14 +152,20 @@ import { visibleChatTimeline, isTimelineEntryActive } from './chatTimeline.mjs'
 import { shouldShowUseInDocument } from '@/utils/useInDocumentVisibility.js'
 import { answerPlainText, copyToClipboard } from '@/utils/chatClipboard.js'
 import { toolDisplayName } from '@/utils/toolDisplayNames.js'
+import { resolveSavedPath } from '@/utils/planReview.js'
 
 const props = defineProps({
   bubble: { type: Object, required: true },
   /** 是否为最新一条助手消息（决定计划卡是否可操作） */
-  isLatest: { type: Boolean, default: false }
+  isLatest: { type: Boolean, default: false },
+  /** 计划审阅（dev-board#1022）：编辑器回传的审阅态，按 fileId 索引，由 ChatInterface 持有 */
+  reviewStates: { type: Object, default: () => ({}) }
 })
 
-const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question', 'regenerate'])
+const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question', 'regenerate', 'open-review'])
+
+// 计划文件的相对路径：历史回放没有 saved 事件，计划卡靠它反查 fileId。流式中不算（正文还在长）。
+const savedPath = computed(() => (props.bubble.isStreaming ? '' : resolveSavedPath(props.bubble.content) || ''))
 
 // 载荷形状对齐 project-overview.handleChatInterfaceAction({ type, msg })，msg 只需 content
 function sendAction(type) {

@@ -1505,6 +1505,65 @@ public class ProjectFileService {
         }
     }
 
+    /**
+     * 用一段 UTF-8 文本整篇覆盖文件字节（计划审阅「放弃修改」写回基线，dev-board#1022）。
+     *
+     * <p>收尾与 {@code FileController.uploadFile} / {@code TextFileEditTools.writeBack} 同构：
+     * 字节落盘 → 回写 fileSize / updatedAt → signalChange 进版本记录。存储键口径同
+     * TextFileEditTools：filePath 优先，回退 wpsFileId。字节写失败直接抛，不发信号。
+     */
+    @Transactional
+    public ProjectFile overwriteTextContent(Long projectId, Long fileId, String text, Long userId) {
+        ProjectFile file = getFile(fileId);
+        if (!Objects.equals(projectId, file.getProjectId())) {
+            throw new IllegalArgumentException(LangText.of("文件不属于该项目", "This file does not belong to this project"));
+        }
+        if (Boolean.TRUE.equals(file.getIsFolder())) {
+            throw new IllegalArgumentException(LangText.of("文件夹不能写入文本", "Cannot write text into a folder"));
+        }
+        String key = StringUtils.hasText(file.getFilePath()) ? file.getFilePath() : file.getWpsFileId();
+        if (!StringUtils.hasText(key)) {
+            throw new IllegalStateException("文件没有存储路径: " + fileId);
+        }
+        byte[] bytes = (text == null ? "" : text).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        storageServiceFactory.getStorageService().save(key, new java.io.ByteArrayInputStream(bytes));
+        file.setFileSize((long) bytes.length);
+        file.setUpdatedAt(LocalDateTime.now());
+        ProjectFile saved = projectFileRepository.save(file);
+        signalChange(projectId, userId);
+        return saved;
+    }
+
+    /** AI 助手文件夹在库里的真名；界面与对话里的中文显示名是「AI 助手文件」。 */
+    private static final String AI_ASSISTANT_FOLDER = "AI Assistant Files";
+    private static final String AI_ASSISTANT_FOLDER_ZH = "AI 助手文件";
+
+    /**
+     * 按「AI 助手文件/&lt;会话夹&gt;/&lt;名&gt;」这种相对路径解析文件（计划审阅 dev-board#1022）。
+     *
+     * <p>路径来自对话里「已保存到项目文件：」那行，首段是 AI 助手文件夹的显示名，中英两种写法都接受；
+     * 反斜杠视同斜杠、首尾斜杠忽略。逐层匹配复用 {@link #findByRelativePath}（只走未删除的文件树行）。
+     */
+    public Optional<ProjectFile> resolveByRelativePath(Long projectId, String relativePath) {
+        if (projectId == null || relativePath == null || relativePath.isBlank()) {
+            return Optional.empty();
+        }
+        String path = relativePath.trim().replace('\\', '/');
+        while (path.startsWith("/")) path = path.substring(1);
+        while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+        if (path.isEmpty()) {
+            return Optional.empty();
+        }
+        int slash = path.indexOf('/');
+        String first = slash < 0 ? path : path.substring(0, slash);
+        String rest = slash < 0 ? "" : path.substring(slash);
+        if (AI_ASSISTANT_FOLDER.equals(first) || AI_ASSISTANT_FOLDER_ZH.equals(first)) {
+            Optional<ProjectFile> hit = findByRelativePath(projectId, AI_ASSISTANT_FOLDER + rest);
+            return hit.isPresent() ? hit : findByRelativePath(projectId, AI_ASSISTANT_FOLDER_ZH + rest);
+        }
+        return findByRelativePath(projectId, path);
+    }
+
     /** 相对路径索引里「项目根」的键：parent_id 为 NULL 与历史遗留的 0 都是根（见 resolveParentId）。 */
     private static final Long PATH_ROOT = 0L;
 

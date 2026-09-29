@@ -1815,6 +1815,18 @@ export function useAgentStream() {
 
     const handleArtifactEvent = (evt) => {
         if (!currentAssistantBubble.value) return
+        // 计划审阅（dev-board#1022）：产物落盘后后端补发 saved，把 fileId 与相对路径交给计划卡。
+        // id 为空串时（流式层没发过 create）按类型认领第一个还没有 fileId 的同类产物。
+        if (evt.operation === 'saved') {
+            const arts = currentAssistantBubble.value.artifacts
+            const target = (evt.id && arts.find(a => a.id === evt.id)) || arts.find(a => !a.fileId && a.type === evt.type) || null
+            if (target) {
+                target.fileId = evt.fileId
+                target.filePath = evt.filePath
+                captureChatTimeline(currentAssistantBubble.value)
+            }
+            return
+        }
         if (evt.operation === 'create') {
             currentAssistantBubble.value.artifacts.push({
                 id: evt.id,

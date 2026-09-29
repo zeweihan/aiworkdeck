@@ -402,8 +402,10 @@
              <RootBubble
                :bubble="msg"
                :is-latest="index === bubbles.length - 1"
+               :review-states="reviewStates"
                @open-artifact-tab="handleArtifactOpenTab"
                @approve="handleArtifactApprove"
+               @open-review="handleArtifactOpenReview"
                @answer-question="handleQuestionAnswer"
                @message-action="$emit('message-action', $event)"
                @regenerate="openRegenerateDialog(index)"
@@ -855,7 +857,7 @@ import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, importLocalFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, getCurrentUser as getCurrentUserApi, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
+import { createFile, importLocalFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, getCurrentUser as getCurrentUserApi, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings, resolveProjectFileByPath } from '@/services/api.js'
 import { audioNeedingTranscription, isTranscribableMedia, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
@@ -3897,16 +3899,98 @@ export default {
     // 不轮询：变了才广播一次，宿主收到后重推菜单状态。
     watch([isStreaming, currentModeId, runningTasks], () => emit('menu-state'))
 
+    // ---- 计划审阅（dev-board#1022）----
+    // 编辑器回传的审阅态，按 fileId 索引，传给 RootBubble → ArtifactCard 显示「修订中 · …」。
+    const reviewStates = ref({})
+    // 最近一次从哪张卡打开了该文件的审阅：fileId → 卡片 id。历史回放的卡每次刷新都换新 id，
+    // 而后端 open 记录幂等返回旧 artifactId，编辑器回传的状态若照旧 id 走，卡片按 id 过滤就认不出
+    // 自己（没有「修订中」chip、提交后不变已修订）。回写成打开它的那张卡的 id 即可。
+    const reviewOpenerCard = ref({})
+    const withOpenerArtifactId = (st) => {
+      const opener = st && st.fileId != null ? reviewOpenerCard.value[st.fileId] : null
+      return opener ? { ...st, artifactId: opener } : st
+    }
+    // 计划卡「打开修订」：先定位计划文件（saved 事件给的 fileId，没有就按气泡里的保存路径反查），
+    // 再交给宿主在编辑器标签里开审阅态。定位不到就退回卡内 textarea（卡片传来的 fallback）。
+    const handleArtifactOpenReview = async (art) => {
+      if (!art) return
+      let fileId = art.fileId
+      let name = ''
+      if (!fileId && art.savedPath) {
+        try {
+          const r = await resolveProjectFileByPath(props.projectId, art.savedPath)
+          fileId = r && r.fileId
+          name = (r && r.name) || ''
+        } catch (e) {
+          fileId = null
+        }
+        // 反查到了就写回产物：卡片的「修订中」状态按 fileId 索引，历史卡片也要对得上
+        if (fileId) {
+          for (const b of bubbles.value) {
+            const hit = (b.artifacts || []).find(a => a.id === art.id)
+            if (hit) { if (!hit.fileId) hit.fileId = fileId; break }
+          }
+        }
+      }
+      if (!fileId) {
+        uni.showToast({ title: t('chat.reviewFileMissing'), icon: 'none' })
+        if (typeof art.fallback === 'function') art.fallback()
+        return
+      }
+      if (!name) name = String(art.savedPath || '').split('/').pop() || ''
+      reviewOpenerCard.value = { ...reviewOpenerCard.value, [fileId]: art.id }
+      emit('open-review-tab', {
+        fileId,
+        name,
+        review: { conversationId: currentConversationId.value, artifactId: art.id, baselineText: art.content || '' }
+      })
+    }
+    // 编辑器里「按修订版推进」：与计划卡「按此推进」同一出口（AGENT 模式发出）。
+    // ack：编辑器等它回话才落库退出审阅态（先发后落库）——sendMessage 一经调用就 ack(true)，
+    // 不等整轮流结束；没消息可发 ack(false)。ack 可能被调两次时以第一次为准（编辑器侧兜住）。
+    const handleReviewSubmit = async ({ fileId, artifactId, message, displayText, ack } = {}) => {
+      const reply = typeof ack === 'function' ? ack : () => {}
+      if (!message) { reply(false); return }
+      if (fileId != null) {
+        const prev = reviewStates.value[fileId] || {}
+        reviewStates.value = {
+          ...reviewStates.value,
+          [fileId]: withOpenerArtifactId({ ...prev, fileId, artifactId: artifactId || prev.artifactId, status: 'submitted' })
+        }
+      }
+      const pending = sendMessage({
+        prompt: message,
+        displayText,
+        fileList: [],
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: 'AGENT',
+        skillIds: currentSkillIds()
+      })
+      reply(true)
+      scrollToBottom()
+      await pending
+    }
+    const handleReviewState = (st) => {
+      if (!st || st.fileId == null) return
+      reviewStates.value = { ...reviewStates.value, [st.fileId]: withOpenerArtifactId(st) }
+    }
+
     // Expose methods for parent ref access
     expose({
       addFile, loadMessages, loadConversationMetadata, sendExternalPrompt,
       startNewChat, menuSetMode, menuStop, menuState,
       uploadLocalFilesAndAddContext,
+      handleReviewSubmit, handleReviewState,
+      // 计划审阅提交前宿主要比对「开审阅的会话」与当前会话（expose 经 proxyRefs，读到的是值）
+      currentConversationId,
     })
 
     return {
        bubbles,
        currentConversationId,
+       reviewStates,
+       handleArtifactOpenReview,
        isStreaming,
        componentGateItem,
        componentReadyContinue,

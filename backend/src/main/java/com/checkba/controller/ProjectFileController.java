@@ -12,6 +12,7 @@ import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Collections;
@@ -71,6 +72,29 @@ public class ProjectFileController {
         result.put("code", 0);
         result.put("data", stageQuotaService.usage(folderId));
         return result;
+    }
+
+    /**
+     * 按相对路径解析 fileId（计划审阅 dev-board#1022）：历史回放没有 artifact saved 事件，
+     * 前端取对话里「已保存到项目文件：」那行的路径来反查。
+     * GET /api/projects/{projectId}/files/resolve?path=AI 助手文件/<会话夹>/<名>.md
+     */
+    @GetMapping("/resolve")
+    public ResponseEntity<?> resolveByPath(
+            @PathVariable Long projectId,
+            @RequestParam("path") String path,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        checkFileTreeAccess(projectId, userId);
+        return projectFileService.resolveByRelativePath(projectId, path)
+                .<ResponseEntity<?>>map(f -> ResponseEntity.ok(Map.of(
+                        "fileId", f.getId(),
+                        "name", f.getName(),
+                        "parentId", f.getParentId() == null ? 0L : f.getParentId())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**

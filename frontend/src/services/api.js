@@ -226,6 +226,12 @@ function request(options) {
       success(res) {
         const status = res.statusCode || 0;
 
+        // 204 No Content 是「没有」的正常回答（如计划审阅 GET review 无记录），静默回 null
+        if (status === 204) {
+          resolve(null);
+          return;
+        }
+
         // 首先检查HTTP状态码，如果不是200则直接拒绝（网络级别错误）
         if (status !== 200) {
           const message =
@@ -1877,6 +1883,22 @@ export function renameProject(projectId, name) {
 }
 
 // ===================== 项目文件管理相关 API =====================
+
+/**
+ * 按项目内相对路径反查文件（计划审阅 dev-board#1022）：路径取自对话里「已保存到项目文件」那行。
+ * 返回 { fileId, name, parentId }；没有这份文件（HTTP 404）返回 null。
+ */
+export async function resolveProjectFileByPath(projectId, path) {
+  try {
+    return await request({
+      url: `/api/projects/${projectId}/files/resolve?path=${encodeURIComponent(path)}`,
+      method: 'GET',
+    });
+  } catch (e) {
+    if (e && e.status === 404) return null;
+    throw e;
+  }
+}
 
 // 获取项目文件列表
 export function getProjectFiles(projectId, parentId = null, tree = false) {
