@@ -241,6 +241,7 @@ export default {
     discardConfirmTitle: '放弃修改',
     discardConfirmContent: '文件会恢复成审阅开始时的内容，批注不再提交。确定放弃吗？',
     submitFailed: '提交失败，请重试',
+    submitNotSent: '修订版没能发给 AI，仍在审阅中，请稍后重试',
     discardFailed: '放弃失败，请重试',
     commentFailed: '批注保存失败',
     openFailed: '进入审阅失败',

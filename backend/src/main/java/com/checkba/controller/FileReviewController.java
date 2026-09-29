@@ -50,7 +50,11 @@ public class FileReviewController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireUser(sessionId);
         checkFileWriteAccess(projectId, userId);
-        checkFileInProject(fileId, projectId);
+        ProjectFile file = checkFileInProject(fileId, projectId);
+        if (!isReviewableText(file)) {
+            throw new IllegalArgumentException(LangText.of(
+                    "只有文本文件（md / markdown / txt）可以审阅", "Only text files (md / markdown / txt) can be reviewed"));
+        }
         OpenRequest req = request != null ? request : new OpenRequest();
         ProjectFileReview r = fileReviewService.open(projectId, fileId, req.getConversationId(),
                 req.getArtifactId(), req.getBaselineText(), userId);
@@ -199,11 +203,24 @@ public class FileReviewController {
         }
     }
 
-    private void checkFileInProject(Long fileId, Long projectId) {
+    private ProjectFile checkFileInProject(Long fileId, Long projectId) {
         ProjectFile file = projectFileService.getFile(fileId); // 文件不存在会抛异常
         if (!projectId.equals(file.getProjectId())) {
             throw new IllegalArgumentException(LangText.of("文件不属于该项目", "This file does not belong to this project"));
         }
+        return file;
+    }
+
+    /** 审阅按行比对纯文本，只接 md / markdown / txt（fileType 为空时看文件名后缀）。 */
+    private static boolean isReviewableText(ProjectFile file) {
+        String t = file.getFileType();
+        if (!StringUtils.hasText(t)) {
+            String name = file.getName() == null ? "" : file.getName();
+            int dot = name.lastIndexOf('.');
+            t = dot >= 0 ? name.substring(dot + 1) : "";
+        }
+        t = t.trim().toLowerCase(java.util.Locale.ROOT);
+        return t.equals("md") || t.equals("markdown") || t.equals("txt");
     }
 
     @Data

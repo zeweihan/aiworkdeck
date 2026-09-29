@@ -237,6 +237,7 @@ export default {
     discardConfirmTitle: 'Discard changes',
     discardConfirmContent: 'The file will be restored to its content when the review started, and the comments will not be submitted. Discard?',
     submitFailed: 'Submit failed. Please try again.',
+    submitNotSent: 'The revised plan was not sent to the AI. The review is still open; please try again.',
     discardFailed: 'Discard failed. Please try again.',
     commentFailed: 'Failed to save the comment',
     openFailed: 'Could not start the review',

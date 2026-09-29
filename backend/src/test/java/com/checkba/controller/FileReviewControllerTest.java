@@ -64,7 +64,7 @@ class FileReviewControllerTest {
         when(projectMemberService.hasReadPermission(1L, 5L)).thenReturn(true);
         when(projectMemberService.hasWritePermission(1L, 5L)).thenReturn(true);
         when(projectMemberService.isClient(1L, 5L)).thenReturn(false);
-        ProjectFile f = new ProjectFile(); f.setId(77L); f.setProjectId(1L);
+        ProjectFile f = new ProjectFile(); f.setId(77L); f.setProjectId(1L); f.setFileType("md");
         when(projectFileService.getFile(77L)).thenReturn(f);
         ProjectFile foreign = new ProjectFile(); foreign.setId(88L); foreign.setProjectId(2L);
         when(projectFileService.getFile(88L)).thenReturn(foreign);
@@ -120,6 +120,26 @@ class FileReviewControllerTest {
                 .andExpect(jsonPath("$.review.updatedAt").exists())
                 .andExpect(jsonPath("$.comments").isArray())
                 .andExpect(jsonPath("$.comments").isEmpty());
+    }
+
+    @Test @DisplayName("POST 开审阅只允许文本类文件（md/markdown/txt），其它类型回 code=1 且不触达服务")
+    void postOpenRejectsNonText() throws Exception {
+        ProjectFile docx = new ProjectFile(); docx.setId(66L); docx.setProjectId(1L); docx.setFileType("docx"); docx.setName("合同.docx");
+        when(projectFileService.getFile(66L)).thenReturn(docx);
+        mvc.perform(post("/api/projects/1/files/66/review").header("X-Session-Id", "s")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"baselineText\":\"x\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1));
+        verify(svc, never()).open(any(), any(), any(), any(), any(), any());
+
+        ProjectFile txt = new ProjectFile(); txt.setId(65L); txt.setProjectId(1L); txt.setFileType("TXT"); txt.setName("a.txt");
+        when(projectFileService.getFile(65L)).thenReturn(txt);
+        when(svc.open(1L, 65L, null, null, "x", 5L)).thenReturn(review("open"));
+        when(svc.comments(9L)).thenReturn(List.of());
+        mvc.perform(post("/api/projects/1/files/65/review").header("X-Session-Id", "s")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"baselineText\":\"x\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.review.status").value("open"));
     }
 
     @Test @DisplayName("POST comments 缺 body 回 400，不落库")

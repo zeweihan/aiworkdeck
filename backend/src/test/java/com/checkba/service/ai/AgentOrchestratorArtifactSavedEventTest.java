@@ -15,6 +15,7 @@ import com.checkba.service.ai.context.ContextCompressor;
 import com.checkba.service.ai.context.RunLoopCompactor;
 import com.checkba.service.ai.memory.MemoryPipelineService;
 import com.checkba.service.ai.skill.SkillRouter;
+import com.checkba.service.review.FileReviewService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -95,6 +96,11 @@ class AgentOrchestratorArtifactSavedEventTest {
     }
 
     private static List<Sent> runChunks(String modelOutput, List<String> chunks) {
+        return runChunks(modelOutput, chunks, null);
+    }
+
+    private static List<Sent> runChunks(String modelOutput, List<String> chunks,
+                                        java.util.function.Function<List<Sent>, FileReviewService> reviewFactory) {
         FULL_TEXT.set(modelOutput);
         List<Sent> sent = new CopyOnWriteArrayList<>();
         SseEmitterService sse = mock(SseEmitterService.class);
@@ -156,6 +162,7 @@ class AgentOrchestratorArtifactSavedEventTest {
                 mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
                 mock(com.checkba.service.telemetry.MatterClassifierService.class),
                 new com.checkba.service.ai.OfficePassStateStore());
+        if (reviewFactory != null) orchestrator.setFileReviewService(reviewFactory.apply(sent));
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
@@ -250,5 +257,24 @@ class AgentOrchestratorArtifactSavedEventTest {
         JsonNode saved = artifactEvent(sent, "saved");
         assertNotNull(saved, "落盘成功后必须发 saved 事件：" + sent);
         assertEquals(planId, saved.path("id").asText());
+    }
+
+    @Test
+    @DisplayName("计划落盘后立即把该文件未完成的审阅记录作废（supersedeOpen），且先于 saved 事件")
+    void savedSupersedesOpenReview() throws Exception {
+        String plan = "<artifact type=\"implementation_plan\" name=\"示例计划\">\n# 计划 v2\n</artifact>";
+        List<Sent> sent = runChunks(plan, List.of(plan), log -> {
+            FileReviewService review = mock(FileReviewService.class);
+            doAnswer(inv -> {
+                log.add(new Sent("supersedeOpen", String.valueOf((Object) inv.getArgument(0))));
+                return null;
+            }).when(review).supersedeOpen(any());
+            return review;
+        });
+        int supIdx = indexOf(sent, s -> "supersedeOpen".equals(s.event()));
+        assertTrue(supIdx >= 0, "落盘后必须调 supersedeOpen：" + sent);
+        assertEquals("77", sent.get(supIdx).data());
+        int savedIdx = indexOf(sent, s -> "artifact".equals(s.event()) && s.data().contains("\"saved\""));
+        assertTrue(savedIdx > supIdx, "supersedeOpen 必须先于 saved 事件：" + sent);
     }
 }

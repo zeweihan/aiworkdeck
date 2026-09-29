@@ -26,15 +26,16 @@ test('审阅扩展装在 Compartment 里，退出审阅态 reconfigure([]) 卸�
   assert.match(SRC, /reconfigure\(\[\]\)/)
 })
 
-test('提交前先落盘、再调 submit，用 buildPlanReviewPrompt 拼消息', () => {
+test('提交先落盘、拼 prompt、交宿主发出，最后才 submit（先发后落库，最终修复波 I-3）', () => {
   const m = SRC.match(/async submitPlanReview\(\)\s*\{([\s\S]*?)\n    \},/)
   assert.ok(m, 'submitPlanReview 方法存在')
   const body = m[1]
   const iFlush = body.indexOf('flushSave(')
-  const iSubmit = body.indexOf('submitReview(')
   const iPrompt = body.indexOf('buildPlanReviewPrompt(')
-  assert.ok(iFlush >= 0 && iSubmit > iFlush, '先 flushSave 再 submitReview')
-  assert.ok(iPrompt > iSubmit, 'submit 成功后再拼 prompt')
+  const iEmit = body.indexOf("$emit('review-submit'")
+  const iSubmit = body.indexOf('submitReview(')
+  assert.ok(iFlush >= 0 && iPrompt > iFlush, '先 flushSave 再拼 prompt')
+  assert.ok(iEmit > iPrompt && iSubmit > iEmit, '交宿主发出之后才 submitReview')
 })
 
 // ---- fileReview.js：把 api.request 换成替身跑真实现 ----
@@ -121,4 +122,89 @@ test('回喂正文在落盘后、发 submit 前就取好', () => {
   const iText = body.indexOf('this.getText()')
   const iSubmit = body.indexOf('submitReview(')
   assert.ok(iFlush >= 0 && iText > iFlush && iSubmit > iText)
+})
+
+// ---- 最终修复波：跑真实现的 submitPlanReview / loadReview / emitReviewState ----
+function loadOptionsWith(env) {
+  const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
+  const body = script.replace(/^import .*$/gm, '').replace('export default', 'return')
+  const names = Object.keys(env)
+  // eslint-disable-next-line no-new-func
+  return new Function('setTimeout', 'clearTimeout', ...names, body)(() => 1, () => {}, ...names.map((k) => env[k]))
+}
+function editorHarness({ ackWith, review = null, reviewRecord } = {}) {
+  const calls = { submit: [], open: [], get: 0, emits: [], toasts: [] }
+  const env = {
+    uni: { showToast: (o) => calls.toasts.push(o.title) },
+    toRaw: (x) => x,
+    lineDiff: () => ({ hunks: 1, added: 1, removed: 1, changedLines: [], deletions: [] }),
+    reanchorComment: () => ({ found: true }),
+    buildPlanReviewPrompt: () => ({ message: 'MSG', displayText: 'DISP' }),
+    fileReview: {
+      submitReview: async (pid, fid) => { calls.submit.push([pid, fid]); return { review: { status: 'submitted' }, comments: [] } },
+      openReview: async (pid, fid, body) => { calls.open.push(body); return { review: { status: 'open', baselineText: body.baselineText, artifactId: body.artifactId }, comments: [] } },
+      getReview: async () => { calls.get++; return null }
+    }
+  }
+  const opts = loadOptionsWith(env)
+  const inst = Object.assign({}, opts.data(), {
+    file: { id: 7 }, projectId: 1, review,
+    $t: (k) => k, $i18n: { locale: 'zh-CN' },
+    $emit: (name, payload) => {
+      calls.emits.push([name, payload])
+      if (name === 'review-submit' && ackWith !== undefined) payload.ack(ackWith)
+    },
+    _view: null, _reviewCompartment: null
+  })
+  inst.reviewRecord = reviewRecord === undefined
+    ? { id: 3, status: 'open', baselineText: 'base', artifactId: 'art-1', conversationId: 'conv-A' }
+    : reviewRecord
+  for (const [k, fn] of Object.entries(opts.computed)) Object.defineProperty(inst, k, { get: fn.bind(inst), configurable: true })
+  for (const [k, fn] of Object.entries(opts.methods)) inst[k] = fn.bind(inst)
+  inst.flushSave = async () => true
+  inst.getText = () => 'revised'
+  return { inst, calls }
+}
+
+test('I-3 编辑器：ack(false) 不调 submitReview、仍在审阅态并提示没发出去', async () => {
+  const { inst, calls } = editorHarness({ ackWith: false })
+  await inst.submitPlanReview()
+  assert.deepEqual(calls.submit, [])
+  assert.equal(inst.reviewRecord.status, 'open')
+  assert.equal(inst.reviewActive, true)
+  assert.deepEqual(calls.toasts, ['editor.planReview.submitNotSent'])
+  assert.equal(inst.reviewSubmitting, false)
+})
+test('I-3 编辑器：ack(true) 之后才调 submitReview 并退出审阅态', async () => {
+  const { inst, calls } = editorHarness({ ackWith: true })
+  await inst.submitPlanReview()
+  assert.deepEqual(calls.submit, [[1, 7]])
+  assert.equal(inst.reviewRecord.status, 'submitted')
+  assert.equal(inst.reviewActive, false)
+  const sub = calls.emits.find(([n]) => n === 'review-submit')[1]
+  assert.equal(sub.message, 'MSG')
+  assert.equal(sub.conversationId, 'conv-A')
+  assert.equal(sub.artifactId, 'art-1')
+})
+test('I-3 编辑器：宿主迟迟不回话时不落库', async () => {
+  const { inst, calls } = editorHarness({})
+  inst.submitPlanReview()
+  await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(calls.submit, [])
+  assert.equal(inst.reviewRecord.status, 'open')
+})
+test('I-1 编辑器：review-state 带 artifactId', () => {
+  const { inst, calls } = editorHarness({})
+  inst.emitReviewState()
+  const st = calls.emits.find(([n]) => n === 'review-state')[1]
+  assert.equal(st.artifactId, 'art-1')
+  assert.equal(st.fileId, 7)
+})
+test('顺手：进审阅态的基线取编辑器自己下载到的正文，卡片正文只作兜底', async () => {
+  let h = editorHarness({ review: { conversationId: 'c', artifactId: 'a', baselineText: '卡片正文' }, reviewRecord: null })
+  await h.inst.loadReview('文件真字节')
+  assert.equal(h.calls.open[0].baselineText, '文件真字节')
+  h = editorHarness({ review: { conversationId: 'c', artifactId: 'a', baselineText: '卡片正文' }, reviewRecord: null })
+  await h.inst.loadReview(null)
+  assert.equal(h.calls.open[0].baselineText, '卡片正文')
 })

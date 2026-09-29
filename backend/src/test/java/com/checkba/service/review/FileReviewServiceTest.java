@@ -72,6 +72,26 @@ class FileReviewServiceTest {
         assertEquals("submitted", svc.submit(77L).getStatus());
     }
 
+    @Test @DisplayName("supersedeOpen：模型重写文件时把 open 记录置 discarded，不写回文件")
+    void supersedeOpenDiscardsWithoutWriteBack() {
+        ProjectFileReview r = openReview();
+        when(reviews.findFirstByFileIdAndStatus(77L, "open")).thenReturn(Optional.of(r), Optional.empty());
+        when(reviews.save(any())).thenAnswer(a -> a.getArgument(0));
+        svc.supersedeOpen(77L);
+        assertEquals("discarded", r.getStatus());
+        assertNotNull(r.getUpdatedAt());
+        verify(reviews).save(r);
+        verifyNoInteractions(projectFileService);
+    }
+
+    @Test @DisplayName("supersedeOpen：没有 open 记录时什么都不做")
+    void supersedeOpenNoop() {
+        when(reviews.findFirstByFileIdAndStatus(77L, "open")).thenReturn(Optional.empty());
+        svc.supersedeOpen(77L);
+        verify(reviews, never()).save(any());
+        verifyNoInteractions(projectFileService);
+    }
+
     @Test @DisplayName("没有 open 记录时 submit / discard 抛 IllegalStateException")
     void submitDiscardRequireOpen() {
         when(reviews.findFirstByFileIdAndStatus(77L, "open")).thenReturn(Optional.empty());

@@ -51,7 +51,7 @@ export const PLAN_REVIEW_TOKENS = {
     '--awd-review-edited-bg': '#FFF6E5',
     '--awd-review-edited-bar': '#E0A526',
     '--awd-review-deleted-fg': '#8A8F98',
-    '--awd-review-comment-bg': '#E8F3ED'
+    '--awd-review-comment-bg': '#CFEBDD'
   },
   dark: {
     '--awd-review-edited-bg': 'rgba(224, 165, 38, 0.13)',

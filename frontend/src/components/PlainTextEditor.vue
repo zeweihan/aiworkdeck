@@ -202,7 +202,7 @@ export default {
     // 标签已开着时宿主再次「打开修订」：换了新的 review 对象就就地进审阅态
     review(v) {
       if (!v || this.reviewActive || this.phase !== 'ready' || !this._view) return
-      this.loadReview().then(() => this.applyReviewExtensions())
+      this.loadReview(this.getText()).then(() => this.applyReviewExtensions())
     }
   },
   mounted() {
@@ -270,7 +270,7 @@ export default {
         const text = await this.download()
         this._loadOk = true
         // 审阅记录要在建 view 之前拿到：扩展装配依赖基线
-        await this.loadReview()
+        await this.loadReview(text)
         this.phase = 'ready'
         await this.$nextTick()
         this.mountEditor(text)
@@ -471,8 +471,12 @@ export default {
 
     // ---------------- 计划审阅（dev-board#1022） ----------------
 
-    /** 拿审阅记录：宿主传了 review 且这个对象没用过 → POST open（幂等）；否则 GET。失败不挡编辑。 */
-    async loadReview() {
+    /**
+     * 拿审阅记录：宿主传了 review 且这个对象没用过 → POST open（幂等）；否则 GET。失败不挡编辑。
+     * fileText：编辑器自己拿到的文件正文，作审阅基线（实体约定「进入审阅态那一刻的文件全文」）；
+     * 宿主传来的卡片正文 review.baselineText 只在拿不到正文时兜底。
+     */
+    async loadReview(fileText) {
       const pid = this.projectId
       const fid = this.file && this.file.id
       if (pid == null || fid == null) return
@@ -483,7 +487,7 @@ export default {
           snap = await fileReview.openReview(pid, fid, {
             conversationId: req.conversationId,
             artifactId: req.artifactId,
-            baselineText: req.baselineText
+            baselineText: typeof fileText === 'string' ? fileText : req.baselineText
           })
           consumedReviewProps.add(req)
         } else {
@@ -591,6 +595,8 @@ export default {
     emitReviewState() {
       this.$emit('review-state', {
         fileId: this.file && this.file.id,
+        // 同一文件会被同会话后续计划复用，计划卡按 artifactId 认领自己那份审阅态
+        artifactId: this.reviewRecord ? this.reviewRecord.artifactId : null,
         hunks: this.reviewStats.hunks,
         comments: this.reviewComments.length,
         status: this.reviewRecord ? this.reviewRecord.status : null
@@ -605,23 +611,50 @@ export default {
       this.emitReviewState()
     },
 
-    /** 「按修订版推进」：先落盘，再 POST submit，拼回喂消息交给宿主发出，然后退出审阅态。 */
+    /**
+     * 「按修订版推进」：先落盘，拼回喂消息交给宿主发出；宿主经 ack 回话「已发出」后才 POST submit
+     * 并退出审阅态（先发后落库）。宿主没发出去（AI 面板未就绪、切不回原会话等）就留在审阅态，
+     * 记录仍是 open，用户可以重试。
+     */
     async submitPlanReview() {
       if (!this.reviewActive || this.reviewSubmitting) return
       this.reviewSubmitting = true
       try {
         const saved = await this.flushSave()
         if (!saved) throw new Error('save failed before submit')
-        // 正文在落盘成功那一刻取：submit 请求期间再敲的字没经过保存，不该进回喂消息
+        // 正文在落盘成功那一刻取：之后再敲的字没经过保存，不该进回喂消息
         const text = this.getText()
-        const snap = await fileReview.submitReview(this.projectId, this.file.id)
         const diff = lineDiff(this.reviewRecord.baselineText || '', text)
-        const list = (snap && Array.isArray(snap.comments)) ? snap.comments : this.reviewComments
-        const comments = list.map((c) => ({ ...c, ...reanchorComment(c, text) }))
+        const comments = this.reviewComments.map((c) => ({ ...c, ...reanchorComment(c, text) }))
         const lang = String((this.$i18n && this.$i18n.locale) || '').startsWith('en') ? 'en' : 'zh'
         const { message, displayText } = buildPlanReviewPrompt({ lang, currentText: text, diff, comments })
         const conversationId = this.reviewRecord.conversationId || (this.review && this.review.conversationId) || null
-        this.$emit('review-submit', { fileId: this.file.id, message, displayText, conversationId })
+        const sent = await new Promise((resolve) => {
+          let done = false
+          const ack = (ok) => {
+            if (done) return
+            done = true
+            resolve(ok === true)
+          }
+          this.$emit('review-submit', {
+            fileId: this.file.id,
+            artifactId: this.reviewRecord.artifactId || null,
+            message,
+            displayText,
+            conversationId,
+            ack
+          })
+        })
+        if (!sent) {
+          uni.showToast({ title: this.$t('editor.planReview.submitNotSent'), icon: 'none' })
+          return
+        }
+        try {
+          await fileReview.submitReview(this.projectId, this.file.id)
+        } catch (e) {
+          // 消息已经发给模型了：落库失败不能把用户留在审阅态（再点会重复发），只记日志
+          console.warn('[PlainTextEditor] submit review record failed after send:', e)
+        }
         this.exitReviewMode('submitted')
       } catch (e) {
         console.warn('[PlainTextEditor] submit review failed:', e)

@@ -3936,13 +3936,20 @@ export default {
         review: { conversationId: currentConversationId.value, artifactId: art.id, baselineText: art.content || '' }
       })
     }
-    // 编辑器里「按修订版推进」：与计划卡「按此推进」同一出口（AGENT 模式发出）
-    const handleReviewSubmit = async ({ fileId, message, displayText } = {}) => {
-      if (!message) return
+    // 编辑器里「按修订版推进」：与计划卡「按此推进」同一出口（AGENT 模式发出）。
+    // ack：编辑器等它回话才落库退出审阅态（先发后落库）——sendMessage 一经调用就 ack(true)，
+    // 不等整轮流结束；没消息可发 ack(false)。ack 可能被调两次时以第一次为准（编辑器侧兜住）。
+    const handleReviewSubmit = async ({ fileId, artifactId, message, displayText, ack } = {}) => {
+      const reply = typeof ack === 'function' ? ack : () => {}
+      if (!message) { reply(false); return }
       if (fileId != null) {
-        reviewStates.value = { ...reviewStates.value, [fileId]: { ...(reviewStates.value[fileId] || {}), status: 'submitted' } }
+        const prev = reviewStates.value[fileId] || {}
+        reviewStates.value = {
+          ...reviewStates.value,
+          [fileId]: { ...prev, fileId, artifactId: artifactId || prev.artifactId, status: 'submitted' }
+        }
       }
-      await sendMessage({
+      const pending = sendMessage({
         prompt: message,
         displayText,
         fileList: [],
@@ -3951,7 +3958,9 @@ export default {
         mode: 'AGENT',
         skillIds: currentSkillIds()
       })
+      reply(true)
       scrollToBottom()
+      await pending
     }
     const handleReviewState = (st) => {
       if (!st || st.fileId == null) return

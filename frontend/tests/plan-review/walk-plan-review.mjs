@@ -5,6 +5,9 @@
 //   段一：进审阅态 → 改一行 → 删一行 → 选一行加批注 → 按修订版推进（拦截 POST /api/agent/chat 断言回喂）
 //   段二：再进审阅态 → 改一行 → 放弃修改 → 确认 → 文件字节回到基线
 //   段三：标签开着时走宿主「打开修订」入口（handleOpenPlanReviewTab），编辑器自己 POST open 进审阅态
+//   段四：对话里种一条带计划卡与「> 已保存到项目文件：Plan.md」的助手气泡（拦 GET /api/ai/history 回放），
+//         真点计划卡「打开修订」（按路径反查 GET files/resolve）→ 卡片「修订中 · …」→ 改一行、提交 →
+//         这张卡变成已修订；再回放一份同名复用 Plan.md 的第二份计划，点它的「打开修订」后仍有按钮（I-1）
 // 不打真模型：/api/agent/chat 被拦截并就地回 200，请求体只做断言。
 //
 // 前置（跑法照 tests/app-e2e/run.mjs 头注释）：
@@ -74,7 +77,8 @@ const created = await api(`/api/projects/${pid}/files/file`, {
   method: 'POST',
   body: { parentId: null, name: FILE_NAME, fileType: 'md', fileSize: Buffer.byteLength(BASELINE) }
 })
-const fid = created.wpsFileId || created.id
+// 审阅 REST 与 /api/files/{id}/* 都认数字主键；wpsFileId 是给 WPS 的字符串 id，不能拿来用
+const fid = created.id
 {
   const form = new FormData()
   form.append('file', new Blob([BASELINE], { type: 'text/markdown' }), FILE_NAME)
@@ -93,6 +97,24 @@ const browser = await puppeteer.launch({
 })
 const chatBodies = []
 const pageErrors = []
+// 段四：种进对话的历史（0 = 不拦，1 = 一份计划，2 = 同名复用的第二份计划）与 resolve 计数
+const SEED_CONV = 'walk-seed-conv-' + Date.now()
+let historyMode = 0
+let resolveHits = 0
+const PLAN_B = BASELINE + '\n6. 补文档'
+const seedMessages = () => {
+  const saved = '\n\n> 已保存到项目文件：' + FILE_NAME
+  const msgs = [
+    { id: 9001, role: 'USER', content: '给我列个实施计划', createdAt: '2026-09-29T10:00:00' },
+    // 卡片正文刻意与文件不同：审阅基线必须取文件真字节，不取卡片正文
+    { id: 9002, role: 'ASSISTANT', content: '<artifact type="implementation_plan" name="Plan">\n' + BASELINE + '\n（卡片正文与文件不同）\n</artifact>' + saved, createdAt: '2026-09-29T10:00:05' }
+  ]
+  if (historyMode === 2) {
+    msgs.push({ id: 9003, role: 'USER', content: '修订版', displayContent: '已按修订版推进（1 处改动、0 条批注）', createdAt: '2026-09-29T10:01:00' })
+    msgs.push({ id: 9004, role: 'ASSISTANT', content: '<artifact type="implementation_plan" name="Plan">\n' + PLAN_B + '\n</artifact>' + saved, createdAt: '2026-09-29T10:01:05' })
+  }
+  return msgs
+}
 try {
   const page = await browser.newPage()
   page.on('pageerror', (e) => pageErrors.push(String(e && e.message || e)))
@@ -101,6 +123,18 @@ try {
   }, BACKEND)
   await page.setRequestInterception(true)
   page.on('request', (req) => {
+    const corsHeaders = { 'Access-Control-Allow-Origin': req.headers().origin || BASE, 'Access-Control-Allow-Credentials': 'true' }
+    if (req.method() === 'GET' && /\/api\/projects\/\d+\/files\/resolve\?/.test(req.url())) resolveHits++
+    if (historyMode && req.method() === 'GET' && /\/api\/ai\/history\?/.test(req.url())
+        && new URL(req.url()).searchParams.get('conversationId') === SEED_CONV) {
+      req.respond({
+        status: 200,
+        contentType: 'application/json',
+        headers: corsHeaders,
+        body: JSON.stringify({ messages: seedMessages(), hasMore: false, nextBefore: null })
+      })
+      return
+    }
     if (req.method() === 'POST' && /\/api\/agent\/chat(\?|$)/.test(req.url())) {
       try { chatBodies.push(JSON.parse(req.postData() || '{}')) } catch (e) { chatBodies.push({ _raw: req.postData() }) }
       // 页面源 5176、后端 9797 跨源：桩响应不带 CORS 头会让 fetch 当场抛「Failed to fetch」
@@ -175,6 +209,9 @@ try {
   check(/^1 处改动/.test(await summary() || ''), `审阅条 = ${await summary()}`)
   const editedTitle = await page.$eval('.cm-review-edited', (e) => e.getAttribute('title')).catch(() => null)
   check(editedTitle === '1. 新建数据表 plan_review', `改动行悬停原文 title = ${editedTitle}`)
+  // UX-1：光标就在这一行（activeLine），琥珀底不许被当前行底色盖掉
+  const editedStyle = await page.$eval('.cm-review-edited', (e) => ({ active: e.classList.contains('cm-activeLine'), bg: getComputedStyle(e).backgroundColor }))
+  check(editedStyle.active && editedStyle.bg === 'rgb(255, 246, 229)', `光标所在改动行底色 = ${editedStyle.bg}（activeLine=${editedStyle.active}）`)
 
   // 删第 5 行（「4. 写单测」）：行首 shift+↓ 选中整行再退格
   {
@@ -211,6 +248,9 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.prc-item').length === 1, { timeout: 10000 }).catch(() => {})
   await sleep(400)
   check(await count('.cm-review-commented') === 1, `.cm-review-commented = ${await count('.cm-review-commented')}`)
+  // UX-2：批注高亮加深 + 2px 强调色下划线
+  const cmtStyle = await page.$eval('.cm-review-commented', (e) => { const cs = getComputedStyle(e); return { bg: cs.backgroundColor, bw: cs.borderBottomWidth, bs: cs.borderBottomStyle } })
+  check(cmtStyle.bg === 'rgb(207, 235, 221)' && cmtStyle.bw === '2px' && cmtStyle.bs === 'solid', `批注高亮 = ${cmtStyle.bg} / 下划线 ${cmtStyle.bw} ${cmtStyle.bs}`)
   check(await count('.prc-item') === 1, `右栏批注条数 = ${await count('.prc-item')}`)
   check(/1 条批注$/.test(await summary() || ''), `审阅条 = ${await summary()}`)
   // 点空白处收起「+」再截图，标记更清楚
@@ -295,6 +335,106 @@ try {
   check(!!(rec3 && rec3.review && rec3.review.status === 'open' && rec3.review.artifactId === artId && rec3.review.conversationId === CONV),
     `「打开修订」入口由编辑器 POST open 建出记录（artifactId=${rec3 && rec3.review && rec3.review.artifactId}）`)
   await page.screenshot({ path: `${OUT}/${TAG}-plan-review-6-open-from-host.png` })
+
+  // ---------------- 段四：真点计划卡「打开修订」 ----------------
+  // 段三留下的 open 记录先放弃掉（写回基线），再整页重载，从对话里的计划卡进
+  await api(`/api/projects/${pid}/files/${fid}/review/discard`, { method: 'POST' })
+  historyMode = 1
+  resolveHits = 0
+  const chatBase = chatBodies.length
+  await page.goto('about:blank')
+  await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + pid, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  const loadSeed = () => page.evaluate(async (conv) => {
+    for (let i = 0; i < 100; i++) {
+      const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
+      const vm = pages.length ? pages[pages.length - 1].$vm : null
+      if (vm && typeof vm.loadHistoryChat === 'function' && typeof vm.resolveChatInterface === 'function') {
+        const chat = await vm.resolveChatInterface()
+        if (!chat) return 'no-chat'
+        return await vm.loadHistoryChat({ conversationId: conv })
+      }
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    return 'no-vm'
+  }, SEED_CONV)
+  const cardBox = (k, sel) => page.evaluate((i, s) => {
+    const card = document.querySelectorAll('.artifact-card')[i]
+    const el = card && card.querySelector(s)
+    if (!el) return null
+    el.scrollIntoView({ block: 'center' })
+    const r = el.getBoundingClientRect()
+    return r.width > 0 ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null
+  }, k, sel)
+  const cardHas = async (k, sel) => !!(await cardBox(k, sel))
+  const cardText = (k, sel) => page.evaluate((i, s) => {
+    const card = document.querySelectorAll('.artifact-card')[i]
+    return card ? [...card.querySelectorAll(s)].map((e) => e.textContent.trim()) : []
+  }, k, sel)
+  const clickCard = async (k, sel) => {
+    const b = await cardBox(k, sel)
+    if (!b) throw new Error(`card ${k} ${sel} not found`)
+    await sleep(200)
+    const b2 = await cardBox(k, sel)
+    await page.mouse.click(b2.x, b2.y)
+  }
+  const seedRes = await loadSeed()
+  check(seedRes === true, `种入的会话回放成功（loadHistoryChat = ${seedRes}）`)
+  await page.waitForFunction(() => document.querySelectorAll('.artifact-card').length === 1, { timeout: 15000 }).catch(() => {})
+  check(await count('.artifact-card') === 1, `对话里出现 1 张计划卡（${await count('.artifact-card')}）`)
+  check(await cardHas(0, '.btn-revise'), '计划卡有「打开修订」按钮')
+  await clickCard(0, '.btn-revise')
+  const seg4Bar = await page.waitForSelector('.prb-bar', { visible: true, timeout: 20000 }).then(() => true).catch(() => false)
+  check(seg4Bar, '点计划卡「打开修订」后标签进审阅态')
+  check(resolveHits >= 1, `历史回放卡按路径反查 fileId（GET files/resolve ${resolveHits} 次）`)
+  await page.waitForSelector('.ptx-cm-host .cm-content .cm-line', { visible: true, timeout: 20000 })
+  await sleep(600)
+  const recA = await api(`/api/projects/${pid}/files/${fid}/review`)
+  check(!!(recA && recA.review && recA.review.status === 'open' && recA.review.conversationId === SEED_CONV),
+    `卡片入口建出的审阅记录归属种入的会话（conversationId=${recA && recA.review && recA.review.conversationId}）`)
+  check(!!(recA && recA.review && recA.review.baselineText === BASELINE), '审阅基线 = 文件真字节')
+  let chip = await cardText(0, '.status-badge.revised')
+  check(chip.includes('修订中 · 0 处改动 · 0 条批注'), `卡片 chip = ${JSON.stringify(chip)}`)
+  await typeAtLineEnd(2, '（卡片修订）')
+  await sleep(600)
+  chip = await cardText(0, '.status-badge.revised')
+  check(chip.includes('修订中 · 1 处改动 · 0 条批注'), `改一行后卡片 chip = ${JSON.stringify(chip)}`)
+  await page.screenshot({ path: `${OUT}/${TAG}-plan-review-7-card-reviewing.png` })
+  await clickSel('.prb-bar .prb-primary')
+  for (let i = 0; i < 60 && chatBodies.length === chatBase; i++) await sleep(250)
+  check(chatBodies.length === chatBase + 1, `卡片入口提交发出 1 次对话（${chatBodies.length - chatBase}）`)
+  const body4 = chatBodies[chatBase] || {}
+  check(body4.conversationId === SEED_CONV, `回喂落回种入的会话 = ${body4.conversationId}`)
+  check(String(body4.displayText || '').startsWith('已按修订版推进'), `displayText = ${body4.displayText}`)
+  await page.waitForFunction(() => !document.querySelector('.prb-bar'), { timeout: 10000 }).catch(() => {})
+  check(await count('.prb-bar') === 0, '提交后审阅条消失')
+  await sleep(800)
+  check(!(await cardHas(0, '.btn-revise')), '这张卡提交后不再有按钮')
+  const badgesA = await cardText(0, '.status-badge')
+  check(badgesA.includes('已确认执行') && badgesA.includes('已修订计划'), `这张卡变成已修订（${JSON.stringify(badgesA)}）`)
+  const stA = await api(`/api/projects/${pid}/files/${fid}/review`)
+  check(stA === '' || stA == null, '提交后记录已落库（GET review 无 open 记录）')
+  await page.screenshot({ path: `${OUT}/${TAG}-plan-review-8-card-submitted.png` })
+
+  // I-1：模型重出第二份计划，同名复用 Plan.md（同一 fileId）。回放后第二张卡是最新那条，
+  // 点它「打开修订」→ 反查到同一个 fileId → 上一张卡的 submitted 不许把它置为已完成
+  historyMode = 2
+  const seedRes2 = await loadSeed()
+  check(seedRes2 === true, `回放含第二份计划的会话（${seedRes2}）`)
+  await page.waitForFunction(() => document.querySelectorAll('.artifact-card').length === 2, { timeout: 15000 }).catch(() => {})
+  check(await count('.artifact-card') === 2, `对话里 2 张计划卡（${await count('.artifact-card')}）`)
+  check(await cardHas(1, '.btn-revise') && await cardHas(1, '.btn-approve'), '第二张卡有「按此推进 / 打开修订」')
+  const resolveBefore = resolveHits
+  await clickCard(1, '.btn-revise')
+  const seg4Bar2 = await page.waitForSelector('.prb-bar', { visible: true, timeout: 20000 }).then(() => true).catch(() => false)
+  check(seg4Bar2, '第二张卡「打开修订」进审阅态')
+  check(resolveHits > resolveBefore, `第二张卡也按路径反查（GET files/resolve +${resolveHits - resolveBefore}）`)
+  await sleep(1000)
+  check(await cardHas(1, '.btn-revise') && await cardHas(1, '.btn-approve'), '同一 fileId 的第二张卡仍有按钮（I-1）')
+  const badgesB = await cardText(1, '.status-badge')
+  check(!badgesB.includes('已确认执行'), `第二张卡没被上一份的 submitted 置为已完成（${JSON.stringify(badgesB)}）`)
+  check(badgesB.includes('修订中 · 0 处改动 · 0 条批注'), '第二张卡显示自己的「修订中」')
+  await page.screenshot({ path: `${OUT}/${TAG}-plan-review-9-second-card.png` })
+  historyMode = 0
   check(pageErrors.length === 0, `页面未捕获异常 ${pageErrors.length} 条${pageErrors.length ? '：' + pageErrors.slice(0, 3).join(' | ') : ''}`)
 } catch (e) {
   console.log('ERROR', e.stack)

@@ -49,13 +49,19 @@ const reviewTheme = EditorView.baseTheme({
     backgroundColor: 'var(--awd-review-edited-bg)',
     boxShadow: 'inset 3px 0 0 var(--awd-review-edited-bar)'
   },
+  // 光标所在的改动行：PlainTextEditor 的 EditorView.theme 里 .cm-activeLine 底色排在本 baseTheme
+  // 之后、特异性相同会盖掉琥珀底（只剩左侧标记条），这里用三个类把特异性抬上去
+  '.cm-line.cm-activeLine.cm-review-edited': {
+    backgroundColor: 'var(--awd-review-edited-bg)'
+  },
   '.cm-review-deleted': {
     color: 'var(--awd-review-deleted-fg)',
     fontSize: '12px',
     padding: '0 8px'
   },
   '.cm-review-commented': {
-    backgroundColor: 'var(--awd-review-comment-bg)'
+    backgroundColor: 'var(--awd-review-comment-bg)',
+    borderBottom: '2px solid var(--awd-accent)'
   },
   '.cm-tooltip.cm-review-add-tip': {
     border: 'none',

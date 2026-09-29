@@ -9,7 +9,7 @@
         <span class="card-title">{{ typeLabel }}</span>
         <span v-if="effectiveStatus === 'resolved'" class="status-badge resolved">{{ $t('chat.confirmedExecuted') }}</span>
         <span v-if="revisionNote" class="status-badge revised">{{ revisionNote }}</span>
-        <span v-if="reviewInProgress" class="status-badge revised">{{ $t('chat.reviewInProgress', { hunks: reviewState.hunks || 0, comments: reviewState.comments || 0 }) }}</span>
+        <span v-if="reviewInProgress" class="status-badge revised">{{ $t('chat.reviewInProgress', { hunks: ownReviewState.hunks || 0, comments: ownReviewState.comments || 0 }) }}</span>
       </div>
 
       <div class="card-actions">
@@ -115,7 +115,8 @@ export default {
       type: String,
       default: ''
     },
-    // 编辑器里审阅态的回传：{ hunks, comments, status }
+    // 编辑器里审阅态的回传：{ fileId, artifactId, hunks, comments, status }（按 fileId 索引，
+    // 同一文件可能被同会话后续计划复用，所以只认 artifactId 对得上的那份，见 ownReviewState）
     reviewState: {
       type: Object,
       default: null
@@ -140,8 +141,15 @@ export default {
     effectiveStatus() {
       return this.localResolved ? 'resolved' : this.status
     },
+    // 计划落盘同名复用同一文件（默认 Plan.md），第二份计划的卡拿到的 fileId 与上一份相同；
+    // 审阅态带 artifactId 时只采用自己那份，不带（旧回传）时照旧采用
+    ownReviewState() {
+      const s = this.reviewState
+      if (!s) return null
+      return !s.artifactId || s.artifactId === this.id ? s : null
+    },
     reviewInProgress() {
-      return !!this.reviewState && this.reviewState.status === 'open' && this.effectiveStatus === 'draft'
+      return !!this.ownReviewState && this.ownReviewState.status === 'open' && this.effectiveStatus === 'draft'
     },
     showApprovalBar() {
       return this.isPlanType && this.actionable && this.effectiveStatus === 'draft'
@@ -175,7 +183,7 @@ export default {
   },
   watch: {
     // 在编辑器里「按修订版推进」之后，卡片跟着置为已推进
-    reviewState: {
+    ownReviewState: {
       immediate: true,
       handler(s) {
         if (s && s.status === 'submitted' && !this.localResolved) {

@@ -1147,6 +1147,17 @@ public class AgentOrchestrator {
     }
 
     /**
+     * 计划审阅（dev-board#1022）：计划落盘后作废该文件上未完成的审阅记录（{@code supersedeOpen}）。
+     * 为空（各单元测试直接 new）= 不处理。同 {@link #turnExecutor}：走 setter 不走构造器。
+     */
+    private volatile com.checkba.service.review.FileReviewService fileReviewService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFileReviewService(com.checkba.service.review.FileReviewService fileReviewService) {
+        this.fileReviewService = fileReviewService;
+    }
+
+    /**
      * 工具渐进披露策略（dev-board#810）。为空 = 不披露、下发候选全集，
      * 也就是各单元测试与回放评测里直接 {@code new AgentOrchestrator(...)} 的既有行为。
      * 同 {@link #turnExecutor}：走 setter 而不是构造器，免得再触一次 EvalHarness 那颗地雷。
@@ -2095,6 +2106,16 @@ public class AgentOrchestrator {
                          // 计划审阅（dev-board#1022）：先发 saved 事件把 fileId 与相对路径交给计划卡，
                          // 再发「已保存到项目文件」提示。id 取流式层第一个同类型 artifact 的 id；
                          // 流式层没发过（缓冲超长按原文冲出等）就给空串，前端按 filePath 兜底匹配。
+                         // 同名复用同一文件：上一版计划未完成的审阅记录就此作废（不写回文件），
+                         // 否则新卡「打开修订」拿到的是旧基线与旧批注、放弃会把旧计划写回去
+                         com.checkba.service.review.FileReviewService reviewSvc = fileReviewService;
+                         if (reviewSvc != null) {
+                             try {
+                                 reviewSvc.supersedeOpen(saved.getId());
+                             } catch (Exception e) {
+                                 log.warn("supersede open review failed for file {}", saved.getId(), e);
+                             }
+                         }
                          String streamedId = handler.takeStreamedArtifactId(type);
                          sendRunEvent(guard, "artifact", artifactSavedEventJson(
                                  streamedId, saved.getId(), artifactSavedRelativePath(folderName, saved.getName()), type));

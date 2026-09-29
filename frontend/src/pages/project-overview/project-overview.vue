@@ -6270,21 +6270,30 @@ export default {
     /**
      * 计划审阅（dev-board#1022）：编辑器里「按修订版推进」→ 交给 AI 面板以 AGENT 模式发出。
      * 走 resolveChatInterface：AI 面板此刻可能收着或右侧停着别的面板。
+     * 先发后落库：编辑器等 payload.ack 回话才 POST submit、退出审阅态。每条早退路径都 ack(false)
+     * （编辑器留在审阅态提示「没发出去」）；成功路径由 handleReviewSubmit 在 sendMessage 调用后 ack(true)。
      */
     async onPlanReviewSubmit(payload) {
-      const chat = await this.resolveChatInterface()
-      if (!chat || typeof chat.handleReviewSubmit !== 'function') return
-      // 修订版必须回到开审阅的那个会话：用户中途切到别的会话（或新对话）时先切回去，
-      // 否则回喂落进错的会话，原会话的计划还停在等审批。切不回去就不发。
-      const target = payload && payload.conversationId
-      if (target && chat.currentConversationId !== target) {
-        const ok = await this.loadHistoryChat({ conversationId: target })
-        if (ok !== true) {
-          uni.showToast({ title: this.$t('chat.reviewConversationSwitchFailed'), icon: 'none' })
-          return
+      const ack = (payload && typeof payload.ack === 'function') ? payload.ack : () => {}
+      try {
+        const chat = await this.resolveChatInterface()
+        if (!chat || typeof chat.handleReviewSubmit !== 'function') { ack(false); return }
+        // 修订版必须回到开审阅的那个会话：用户中途切到别的会话（或新对话）时先切回去，
+        // 否则回喂落进错的会话，原会话的计划还停在等审批。切不回去就不发。
+        const target = payload && payload.conversationId
+        if (target && chat.currentConversationId !== target) {
+          const ok = await this.loadHistoryChat({ conversationId: target })
+          if (ok !== true) {
+            uni.showToast({ title: this.$t('chat.reviewConversationSwitchFailed'), icon: 'none' })
+            ack(false)
+            return
+          }
         }
+        await chat.handleReviewSubmit(payload)
+      } catch (e) {
+        console.warn('[project-overview] plan review submit failed:', e)
+        ack(false)
       }
-      await chat.handleReviewSubmit(payload)
     },
     /** 编辑器回传审阅态：转给对话里的计划卡；审阅结束后清掉标签上的 review，免得重开时再进审阅。 */
     onPlanReviewState(state) {

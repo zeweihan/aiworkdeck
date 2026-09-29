@@ -108,6 +108,23 @@ public class FileReviewService {
         return reviews.save(r);
     }
 
+    /**
+     * 模型把同一文件重写成新一版计划时调用（编排器落盘成功后、saved 事件之前）：
+     * 该文件上未完成的审阅记录全部置 discarded，<b>不写回文件</b>——文件此刻已是新一版，
+     * 旧记录的基线与批注属于上一版，留着会让新卡「打开修订」拿到旧基线、放弃时把旧计划写回去。
+     * 不按 artifactId 比对：刷新后历史回放卡的 id 会变。
+     */
+    @Transactional
+    public void supersedeOpen(Long fileId) {
+        Optional<ProjectFileReview> open;
+        while ((open = reviews.findFirstByFileIdAndStatus(fileId, STATUS_OPEN)).isPresent()) {
+            ProjectFileReview r = open.get();
+            r.setStatus(STATUS_DISCARDED);
+            r.setUpdatedAt(LocalDateTime.now());
+            reviews.save(r);
+        }
+    }
+
     private ProjectFileReview requireOpen(Long fileId) {
         return reviews.findFirstByFileIdAndStatus(fileId, STATUS_OPEN)
                 .orElseThrow(NoOpenReviewException::new);

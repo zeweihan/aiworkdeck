@@ -54,3 +54,15 @@ test('selectionSnapshot：三击选整行（to 落在下一行行首）不多算
   // 'abc\ndef\nghi'：选中第 2 行整行 = [4, 8)，8 是第 3 行行首
   assert.deepEqual(selectionSnapshot(fakeState('abc\ndef\nghi', 4, 8)), { fromLine: 2, toLine: 2, quotedText: 'def' })
 })
+
+// ---- 最终修复波 UX-1 / UX-2：主题规则（计算样式在走查脚本里真渲染断言） ----
+import { readFileSync } from 'node:fs'
+import { PLAN_REVIEW_TOKENS } from '../../src/utils/appTheme.js'
+const EXT = readFileSync(new URL('../../src/utils/planReviewExtensions.js', import.meta.url), 'utf8')
+test('UX-1：光标所在的改动行，琥珀底要盖过 activeLine（更高特异性规则）', () => {
+  assert.match(EXT, /'\.cm-line\.cm-activeLine\.cm-review-edited':\s*\{[^}]*backgroundColor:\s*'var\(--awd-review-edited-bg\)'/)
+})
+test('UX-2：批注高亮加深为 #CFEBDD 并带 2px 强调色下划线', () => {
+  assert.equal(PLAN_REVIEW_TOKENS.light['--awd-review-comment-bg'], '#CFEBDD')
+  assert.match(EXT, /'\.cm-review-commented':\s*\{[^}]*borderBottom:\s*'2px solid var\(--awd-accent\)'/)
+})
