@@ -98,7 +98,10 @@ export function createReviewExtensions({ getBaseline, getComments, onAddComment,
     const ranges = []
     for (const ln of specs.editedLines) {
       if (ln < 1 || ln > doc.lines) continue
-      ranges.push(Decoration.line({ class: 'cm-review-edited' }).range(doc.line(ln).from))
+      const original = specs.editedOriginals[ln]
+      const spec = { class: 'cm-review-edited' }
+      if (original !== undefined) spec.attributes = { title: original }
+      ranges.push(Decoration.line(spec).range(doc.line(ln).from))
     }
     for (const d of specs.deletions) {
       const atEnd = d.beforeLine > doc.lines

@@ -12,47 +12,57 @@ import { reanchorComment } from './planReview.js'
 /**
  * lineDiff 把「改了一行」记成一删一增；审阅视图里那一行只该显示为「改动」，
  * 不该再冒一条「已删除 1 行」。所以每段删除先与紧挨着它的新增行一一配对
- * （先看删除位之后、再看之前），配上的算改动，只把多出来的删除行画成删除标记，
+ * （先看删除位之后、再看之前），配上的算改动，并把被替换的原文按当前行号记下
+ * （editedOriginals，供改动行悬停查看）；只把多出来的删除行画成删除标记，
  * 标记落在配对的新增行之后。
  */
 function netDeletions(changedLines, deletions) {
   const added = new Set(changedLines)
   const used = new Set()
   const out = []
+  const editedOriginals = {}
   for (const d of deletions) {
-    let paired = 0
-    let after = 0
-    for (let ln = d.beforeLine; paired < d.count && added.has(ln) && !used.has(ln); ln++) {
-      used.add(ln); paired++; after++
-    }
-    for (let ln = d.beforeLine - 1; paired < d.count && added.has(ln) && !used.has(ln); ln--) {
-      used.add(ln); paired++
-    }
-    const rest = d.count - paired
-    if (rest <= 0) continue
     const lines = String(d.text).split('\n')
-    out.push({ beforeLine: d.beforeLine + after, count: rest, text: lines.slice(lines.length - rest).join('\n') })
+    const afterLines = []
+    for (let ln = d.beforeLine; afterLines.length < d.count && added.has(ln) && !used.has(ln); ln++) {
+      used.add(ln); afterLines.push(ln)
+    }
+    const beforeLines = []
+    for (let ln = d.beforeLine - 1; afterLines.length + beforeLines.length < d.count && added.has(ln) && !used.has(ln); ln--) {
+      used.add(ln); beforeLines.unshift(ln)
+    }
+    const paired = [...beforeLines, ...afterLines].sort((a, b) => a - b)
+    // 删除行在前、按序对应配对行；多出的删除行留作删除标记
+    paired.forEach((ln, k) => { editedOriginals[ln] = lines[k] })
+    const rest = d.count - paired.length
+    if (rest <= 0) continue
+    out.push({ beforeLine: d.beforeLine + afterLines.length, count: rest, text: lines.slice(paired.length).join('\n') })
   }
-  return out
+  return { deletions: out, editedOriginals }
 }
 
 export function buildDecorationSpecs({ baseline, current, comments }) {
   const { changedLines, deletions: raw } = lineDiff(baseline, current)
-  const deletions = netDeletions(changedLines, raw)
+  const { deletions, editedOriginals } = netDeletions(changedLines, raw)
   const commentRanges = (Array.isArray(comments) ? comments : []).map((c) => {
     const r = reanchorComment(c, current)
     return { id: c.id, fromLine: r.fromLine, toLine: r.toLine, found: r.found }
   })
-  return { editedLines: changedLines, deletions, commentRanges }
+  return { editedLines: changedLines, editedOriginals, deletions, commentRanges }
 }
 
-/** 当前主选区的行号与原文；选区为空返回 null。只读传入对象的方法，不依赖 CodeMirror。 */
+/**
+ * 当前主选区的行号与原文；选区为空返回 null。只读传入对象的方法，不依赖 CodeMirror。
+ * 三击选整行时 to 落在下一行行首：那一行不算进批注区间，原文也去掉尾部换行。
+ */
 export function selectionSnapshot(state) {
   const sel = state && state.selection && state.selection.main
   if (!sel || sel.from === sel.to) return null
+  let to = sel.to
+  if (to > sel.from && state.doc.lineAt(to).from === to) to -= 1
   return {
     fromLine: state.doc.lineAt(sel.from).number,
-    toLine: state.doc.lineAt(sel.to).number,
-    quotedText: state.sliceDoc(sel.from, sel.to)
+    toLine: state.doc.lineAt(to).number,
+    quotedText: state.sliceDoc(sel.from, sel.to).replace(/\n+$/, '')
   }
 }
