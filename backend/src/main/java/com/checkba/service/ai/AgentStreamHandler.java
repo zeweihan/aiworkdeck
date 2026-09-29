@@ -44,6 +44,12 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     private String currentBubbleId;
 
     private final StringBuilder buffer = new StringBuilder();
+    /**
+     * 计划审阅（dev-board#1022）：本轮已发出 create 事件的 artifact id，按出现顺序。
+     * 编排器落盘时按同一序号取出，让 saved 事件与流式卡片对上同一个 id。
+     */
+    private final java.util.List<String> streamedArtifactIds =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
     private static final int MAX_BUFFER_SIZE = 50; // Buffer for XML tag detection
 
@@ -162,6 +168,15 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
     }
 
     /** 本轮所有会话级 SSE 事件的唯一出口：不是当前轮次就静默丢弃。 */
+    /** 取走本轮已发出 create 的 artifact id（按出现顺序），返回副本并清空。 */
+    public java.util.List<String> drainStreamedArtifactIds() {
+        synchronized (streamedArtifactIds) {
+            java.util.List<String> copy = new java.util.ArrayList<>(streamedArtifactIds);
+            streamedArtifactIds.clear();
+            return copy;
+        }
+    }
+
     private void sendSse(String eventName, Object payload) {
         if (!currentRunGate.getAsBoolean()) return;
         sseEmitterService.send(conversationId, eventName, payload);
@@ -513,6 +528,7 @@ public class AgentStreamHandler implements ReasoningStreamingHandler {
                   // Emit Artifact Event
                   // We treat this as a "create" operation
                   String artifactId = UUID.randomUUID().toString();
+                  streamedArtifactIds.add(artifactId);
                   // Clean content a bit? keep newlines
                   String jsonContent = escapeJson(innerContent);
                   

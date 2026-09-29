@@ -2092,6 +2092,13 @@ public class AgentOrchestrator {
                          String folderName = projectFileService.findFile(saved.getParentId())
                                  .map(com.checkba.model.entity.ProjectFile::getName)
                                  .orElse(conversationId);
+                         // 计划审阅（dev-board#1022）：先发 saved 事件把 fileId 与相对路径交给计划卡，
+                         // 再发「已保存到项目文件」提示。本段一次只落一份 artifact，序号恒为 0；
+                         // 流式层没发过 create（缓冲超长按原文冲出等）就给空串，前端按 filePath 兜底匹配。
+                         java.util.List<String> streamedIds = handler.drainStreamedArtifactIds();
+                         String streamedId = streamedIds.isEmpty() ? "" : streamedIds.get(0);
+                         sendRunEvent(guard, "artifact", artifactSavedEventJson(
+                                 streamedId, saved.getId(), artifactSavedRelativePath(folderName, saved.getName()), type));
                          String savedNotice = artifactSavedNoticeDelta(folderName, saved.getName());
                          sendTextDelta(guard, savedNotice);
                          content = content + savedNotice;
@@ -2763,9 +2770,27 @@ public class AgentOrchestrator {
      * 所以文案不引用任何界面位置（「左侧资源管理器」在窗格里不成立）。
      */
     static String artifactSavedNoticeDelta(String folderName, String fileName) {
-        return LangText.of(
-                "\n\n> 已保存到项目文件：AI 助手文件/" + folderName + "/" + fileName,
-                "\n\n> Saved to project file: AI Assistant Files/" + folderName + "/" + fileName);
+        return LangText.of("\n\n> 已保存到项目文件：", "\n\n> Saved to project file: ")
+                + artifactSavedRelativePath(folderName, fileName);
+    }
+
+    /**
+     * 落盘产物的相对路径（从项目根算）。「已保存到项目文件」提示与 artifact saved 事件共用这一处，
+     * 保证两者逐字相同——前端历史回放时要按提示里的路径反查 fileId。
+     */
+    static String artifactSavedRelativePath(String folderName, String fileName) {
+        return LangText.of("AI 助手文件/", "AI Assistant Files/") + folderName + "/" + fileName;
+    }
+
+    /** 计划审阅（dev-board#1022）：artifact saved 事件载荷，交 Jackson 转义。 */
+    static String artifactSavedEventJson(String artifactId, Long fileId, String filePath, String type) {
+        com.fasterxml.jackson.databind.node.ObjectNode node = SKILL_UPDATE_MAPPER.createObjectNode();
+        node.put("operation", "saved");
+        node.put("id", artifactId == null ? "" : artifactId);
+        node.put("fileId", fileId);
+        node.put("filePath", filePath);
+        node.put("type", type);
+        return node.toString();
     }
 
     static String truncate(String s, int max) {
