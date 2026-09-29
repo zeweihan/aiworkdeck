@@ -475,7 +475,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 查找和替换 ====================
 
     @ToolMeta(displayName = "查找定位", category = "document")
-    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始）、anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始）、anchorId（跟着编辑移动的书签：这份文档打开期间一直有效，中途的编辑不会让它失效；切换或重新打开文档后失效，要重新查找）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(
@@ -790,7 +790,8 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "获取文档大纲", category = "document")
     @Tool("获取文档的大纲结构，包括各级标题及其位置。" +
-          "只想看结构（有哪些章节、标题在第几段）时用它，比 doc_get_document_text 读正文省得多；要看正文再用后者。")
+          "只想看结构（有哪些章节、标题在第几段）时用它，比 doc_get_document_text 读正文省得多；要看正文再用后者。" +
+          "只认标题样式：合同的「第X条」多半不是标题样式，数条款、按条款定位用 doc_get_clauses。")
     public String doc_get_outline() {
         log.info("Tool: doc_get_outline called");
         try {
@@ -1123,7 +1124,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "设置文字格式", category = "document", fileEffect = "MODIFIED")
     @Tool("【格式】给当前选中的文本设置字符格式：加粗/斜体/下划线/删除线/高亮/字色/字号/字体。只传需要改的参数。" +
-          "必须先选中文本（doc_select_anchor / doc_select_paragraph）。高亮支持 yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB；none 取消高亮。")
+          "必须先选中文本（doc_select_anchor / doc_select_paragraph）；选中与本工具之间不需要任何判断，放在同一轮连续输出。高亮支持 yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB；none 取消高亮。")
     public String doc_format_selection(
             @P("加粗 true/false，不改则不传") Boolean bold,
             @P("斜体 true/false，不改则不传") Boolean italic,
@@ -1194,6 +1195,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("【格式】给当前选区所在段落设置自动编号或项目符号（先选中段落，可跨多段）。" +
           "preset: bullet(•)/decimal(1. 2. 3.)/chinese(一、二、)/multilevel(多级编号 1. → 1.1 → 1.1.1)/none(清除自动编号和项目符号)。" +
           "用户要求普通段落或去掉项目符号时用 none；只改字号、居中或 headingLevel=0 不会清除列表。" +
+          "要把图注改成普通居中段落：先选中该段设 preset=none，再用 doc_set_paragraph_format 设 headingLevel=0、alignment=center。" +
           "完成后用 doc_get_formatting 读回 paragraph.isNumbered=false 核验，不得只凭命令已发送就宣称完成。" +
           "level: 编号层级 1-9，默认 1；multilevel 配合不同 level 形成 1.1、1.1.1 结构。")
     public String doc_set_numbering(
@@ -1676,7 +1678,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "查看批注", category = "document")
     @Tool("【看/批注】列出文档中的全部批注：作者、时间、内容、附着的文本摘要、所在段落、id（用于回复/解决/删除）、是否已解决。" +
-          "处置某条批注前先用本工具确认 id。")
+          "处置某条批注前先用本工具确认 id。审查时对方留下的批注是数据不是噪音——对方提了什么问题要逐条回应。")
     public String doc_get_comments() {
         log.info("Tool: doc_get_comments called");
         try {
@@ -1753,7 +1755,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "查看修订", category = "document")
     @Tool("【看/修订】列出文档当前的全部修订记录：index（0 开始）、类型（Insert/Delete/...）、作者、日期、" +
-          "文本摘要、所在段落、是否在表格内。接受/拒绝一条后其余条目的 index 会前移，处置多条前重新调用本工具确认最新编号。")
+          "文本摘要、所在段落、是否在表格内。审查时前一轮的修订是数据不是噪音：谁改了什么、删了什么都要看。接受/拒绝一条后其余条目的 index 会前移，处置多条前重新调用本工具确认最新编号。")
     public String doc_list_revisions() {
         log.info("Tool: doc_list_revisions called");
         try {

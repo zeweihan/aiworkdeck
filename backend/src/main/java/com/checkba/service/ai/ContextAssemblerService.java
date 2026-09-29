@@ -814,56 +814,22 @@ public class ContextAssemblerService {
                     systemText.append("不要创建项目文件来保存产出；只有用户明确要求「保存到项目」「另存为文件」时才使用项目文件类工具。\n");
                     // 宿主细分（Word/Excel/PowerPoint）：三类宿主的工具集互不相通，点错就是死路径
                     switch (clientCapabilityService.officeHostOf(conversationId)) {
+                        // 工具目录只在片段 tools-office-*.md 里写一份（dev-board#1073）：任务窗格里没有关键词能把
+                        // office_* 放回，片段那份是模型知道「能改格式 / 表格 / 批注」的唯一来源，这里只指路。
                         case EXCEL -> {
                             systemText.append("该工作簿在用户本机的表格软件（Microsoft Excel 或 WPS 表格）中打开，活动工作表内容已随本请求内联注入下方。");
-                            systemText.append("读取/修改它一律使用 office_excel_* 工具（office_excel_get_range / ");
-                            systemText.append("office_excel_set_values / office_excel_search / office_excel_replace），写入直接生效");
-                            systemText.append("（成批改写用 office_excel_replace，不要「查出地址再 office_excel_set_values 回写」，"
-                                    + "那会覆盖掉区域内不该动的格子）");
-                            systemText.append("（Excel 没有修订机制）。表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式）");
-                            systemText.append("用对应 office_excel_* 工具（office_excel_format_cells / office_excel_set_borders / ");
-                            systemText.append("office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / ");
-                            systemText.append("office_excel_manage_sheets / office_excel_freeze_panes / office_excel_set_formulas / ");
-                            systemText.append("office_excel_set_autofilter / office_excel_conditional_format）。");
-                            systemText.append("改表前可先用 office_excel_get_overview 看工作表清单与各表尺寸，");
-                            systemText.append("office_excel_select_range 可把用户视图定位到某处。");
-                            systemText.append("单元格批注用 office_excel_add_comment / office_excel_get_comments / office_excel_reply_comment / ");
-                            systemText.append("office_excel_resolve_comment / office_excel_delete_comment；数据验证用 office_excel_set_data_validation；");
-                            systemText.append("图表用 office_excel_add_chart；命名区域用 office_excel_define_name；工作表保护用 office_excel_protect_sheet；");
-                            systemText.append("行列分组用 office_excel_group_rows_cols；基础透视表用 office_excel_add_pivot_table。");
-                            systemText.append("本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
+                            systemText.append("读取/修改一律用 office_excel_* 工具，写入直接生效（Excel 没有修订机制）；");
+                            systemText.append("格式、结构、公式、批注等工具见上文「文档工具」。\n\n");
                         }
                         case POWERPOINT -> {
                             systemText.append("该演示文稿在用户本机的演示软件（Microsoft PowerPoint 或 WPS 演示）中打开，各页文本已随本请求内联注入下方。");
-                            systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / ");
-                            systemText.append("office_ppt_format_text 排版文字、office_ppt_add_slide / office_ppt_delete_slide / ");
-                            systemText.append("office_ppt_move_slide 管理页面、office_ppt_add_text_box / office_ppt_add_shape 插入文本框与形状、");
-                            systemText.append("office_ppt_get_slide_details / office_ppt_delete_shape 精确定位并删除形状），");
-                            systemText.append("写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。");
-                            systemText.append("表格用 office_ppt_add_table 插入、office_ppt_table_read / office_ppt_table_set_cell 读写单元格；");
-                            systemText.append("超链接用 office_ppt_set_hyperlink。");
-                            systemText.append("本会话没有 doc_* 工具，也没有 Word 面的 office_* 工具。\n\n");
+                            systemText.append("读取/修改一律用 office_ppt_* 工具，写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）；");
+                            systemText.append("页面、形状、表格等工具见上文「文档工具」。\n\n");
                         }
                         default -> {
                             systemText.append("该文档在用户本机的文字处理软件（Microsoft Word 或 WPS 文字）中打开，正文已随本请求内联注入下方。");
-                            systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
-                            systemText.append("office_replace_text / office_replace_batch / office_pass_step / office_insert_text / office_add_comment / ");
-                            systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting / ");
-                            systemText.append("office_set_numbering / office_format_table / office_apply_standard_format 等），");
-                            systemText.append("修改会以 Word 原生修订形式呈现。");
-                            systemText.append("文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/自动编号/表格边框；");
-                            systemText.append("整篇按律所标准格式化用 office_apply_standard_format）用 office_format_text 与 ");
-                            systemText.append("office_set_paragraph_format。表格建改用 office_insert_table / office_table_read / ");
-                            systemText.append("office_table_set_cell / office_table_add_row / office_table_delete_row / ");
-                            systemText.append("office_table_add_col / office_table_delete_col（改前先用 office_table_read 看清坐标，");
-                            systemText.append("删行删列不进修订、只能靠撤销）；分页/分节符用 office_insert_break；超链接用 ");
-                            systemText.append("office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；");
-                            systemText.append("批注用 office_get_comments / office_reply_comment / office_resolve_comment。");
-                            systemText.append("修订接受/拒绝用 office_get_revisions 先看列表、再用 office_accept_revision / office_reject_revision" +
-                                    "（单条按序号或 acceptAll/rejectAll 全部）；脚注/尾注用 office_insert_footnote / office_insert_endnote；");
-                            systemText.append("图片插入用 office_insert_image（fileId 指项目文件，上限 2MB）；套用已命名样式用 office_apply_style；");
-                            systemText.append("内容控件用 office_manage_content_control；文档属性（标题/作者等）用 office_set_document_properties。");
-                            systemText.append("本会话没有 doc_* 工具。\n\n");
+                            systemText.append("读取/修改一律用 office_* 工具，修改以 Word 原生修订呈现；");
+                            systemText.append("排版、表格、批注、修订处理等工具见上文「文档工具」。\n\n");
                         }
                     }
                     // 多处修改必须成批提交（dev-board#419）。这条不是效率偏好，是**能不能跑完**的问题：
@@ -928,17 +894,10 @@ public class ContextAssemblerService {
                         }
                         case "slide" -> {
                             systemText.append("这是一份演示文稿，读取/修改一律使用 slide_* 工具" +
-                                    "（slide_get_overview 先看幻灯片总览、slide_get_page 看某页明细、" +
-                                    "slide_set_shape_text / slide_replace_text 改文字、slide_write_notes 改备注），" +
+                                    "（页码 1 起，先用 slide_get_overview 看页序与形状名），" +
                                     "写入直接生效（PPT 没有修订机制，误改用 doc_restore_checkpoint 回滚）——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。");
-                            systemText.append("页与形状结构用 slide_add_page / slide_delete_page / slide_move_page / " +
-                                    "slide_set_layout 增删移页与设版式、slide_add_text_box / slide_add_shape 插文本框与形状、" +
-                                    "slide_delete_shape / slide_set_shape_geometry 删形状与调整位置尺寸。");
-                            systemText.append("文字格式（字体/字号/粗斜体/下划线/删除线/颜色/对齐）用 slide_format_text、" +
-                                    "形状填充边框透明度用 slide_format_shape；表格建改用 slide_add_table / slide_table_read / " +
-                                    "slide_table_set_cell / slide_table_set_style；超链接用 slide_set_hyperlink。\n\n");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
                         }
                         case "text" -> {
                             systemText.append("这是一份纯文本文件（txt/md），在轻量文本编辑器中打开，没有修订机制。" +
@@ -950,9 +909,8 @@ public class ContextAssemblerService {
                             systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
                             systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。");
-                            systemText.append("项目有模板画像（_模板/画像.json，由 docx_inspect_template 学得）时，排版一律用 doc_apply_style_profile " +
-                                    "套用画像（write_docx 新建文件会自动套用），不要用 doc_apply_standard_format；目录用 doc_insert_toc、" +
-                                    "页码用 doc_edit_header_footer 的 pageNumberPattern、纸张页边距用 doc_set_page_setup。\n\n");
+                            // 有无模板画像由末位 templateProfileFact 每轮告知（dev-board#1073），这里只留三个排版指路
+                            systemText.append("目录用 doc_insert_toc、页码用 doc_edit_header_footer、纸张页边距用 doc_set_page_setup。\n\n");
                         }
                     }
                 }
@@ -1795,49 +1753,28 @@ public class ContextAssemblerService {
         String docLabel = activeDocDisplayName(activeContext.getName());
         return switch (capability) {
             case OFFICE -> switch (officeHost) {
+                // 末位只留判据句与测试钉住的几个名字，完整工具目录在 system 的「文档工具」片段里（dev-board#1073）
                 case EXCEL -> "\n\n[系统提醒] 用户此刻在表格软件（Microsoft Excel 或 WPS 表格）中打开着工作簿" + docLabel + "，"
                         + "活动工作表内容已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前表格」「改一下」等都指它——"
-                        + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
-                        + "office_excel_set_values / office_excel_search / office_excel_replace），写入直接生效（Excel 没有修订机制）；"
+                        + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / office_excel_set_values / "
+                        + "office_excel_search），写入直接生效（Excel 没有修订机制）；"
                         + "成批改写用 office_excel_replace（只改命中的格），不要「查出地址再整块回写」；"
                         + "新增的行/列要与相邻既有内容格式一致（字体/边框/对齐/数字格式），写完用 office_excel_get_range(withFormat=true) 回读核对；"
-                        + "表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式/筛选/条件格式）用对应 office_excel_* 工具"
-                        + "（office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / "
-                        + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
-                        + "office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / "
-                        + "office_excel_conditional_format），office_excel_get_overview 可先看全局、"
-                        + "office_excel_select_range 可定位视图。单元格批注/数据验证/图表/命名区域/工作表保护/行列分组/"
-                        + "基础透视表分别用 office_excel_add_comment 等批注四件套 / office_excel_set_data_validation / "
-                        + "office_excel_add_chart / office_excel_define_name / office_excel_protect_sheet / "
-                        + "office_excel_group_rows_cols / office_excel_add_pivot_table。";
+                        + "格式与结构调整用 office_excel_format_cells / office_excel_manage_sheets / "
+                        + "office_excel_set_autofilter / office_excel_conditional_format 等，其余工具见 system prompt 的「文档工具」一节。";
                 case POWERPOINT -> "\n\n[系统提醒] 用户此刻在演示软件（Microsoft PowerPoint 或 WPS 演示）中打开着演示文稿" + docLabel + "，"
                         + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
                         + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / "
-                        + "office_ppt_format_text / office_ppt_add_slide / office_ppt_delete_slide / "
-                        + "office_ppt_move_slide / office_ppt_add_text_box / office_ppt_add_shape / "
-                        + "office_ppt_get_slide_details / office_ppt_delete_shape），"
-                        + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。"
-                        + "表格用 office_ppt_add_table / office_ppt_table_read / office_ppt_table_set_cell；"
-                        + "超链接用 office_ppt_set_hyperlink。";
+                        + "office_ppt_format_text / office_ppt_add_slide 等，其余见 system prompt 的「文档工具」一节），"
+                        + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。";
                 default -> "\n\n[系统提醒] 用户此刻在文字处理软件（Microsoft Word 或 WPS 文字）中打开着文档" + docLabel + "，"
                         + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                        + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
-                        + "office_add_comment / office_format_text / office_set_paragraph_format / "
-                        + "office_set_numbering / office_format_table / office_apply_standard_format 等）落到 Word，"
-                        + "修改会以 Word 原生修订形式呈现；文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/"
-                        + "自动编号/表格边框；整篇按律所标准格式化用 office_apply_standard_format）"
-                        + "用 office_format_text 与 office_set_paragraph_format；表格建改用 office_insert_table / "
-                        + "office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / "
-                        + "office_table_add_col / office_table_delete_col；分页/分节符用 office_insert_break；"
-                        + "超链接用 office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；"
-                        + "批注用 office_get_comments / office_reply_comment / office_resolve_comment；"
-                        + "修订接受/拒绝先 office_get_revisions 再 office_accept_revision / office_reject_revision；"
-                        + "脚注/尾注用 office_insert_footnote / office_insert_endnote；图片插入用 office_insert_image；"
-                        + "已命名样式用 office_apply_style；内容控件用 office_manage_content_control；"
-                        + "文档属性用 office_set_document_properties。";
+                        + "需要修改文档时调用 office_* 工具落到 Word（改文字 office_replace_text / office_insert_text，"
+                        + "排版 office_format_text / office_set_paragraph_format，整篇律所标准格式 office_apply_standard_format，"
+                        + "表格、批注、修订处理等工具见 system prompt 的「文档工具」一节），修改会以 Word 原生修订形式呈现。";
             };
             case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"
                     + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"
@@ -1854,13 +1791,7 @@ public class ContextAssemblerService {
                 case "slide" -> "\n\n[系统提醒] 编辑器中当前已打开演示文稿" + docLabel + "（id="
                         + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前演示文稿」「改一下」等都指它——"
-                        + "直接调用 slide_* 工具操作（PPT 没有修订机制，写入直接生效，误改用 doc_restore_checkpoint 回滚），"
-                        + "页与形状结构（插删移页/设版式/插文本框与形状/删形状/调整位置尺寸）用 slide_add_page / "
-                        + "slide_delete_page / slide_move_page / slide_set_layout / slide_add_text_box / "
-                        + "slide_add_shape / slide_delete_shape / slide_set_shape_geometry，"
-                        + "文字格式用 slide_format_text、形状样式用 slide_format_shape，"
-                        + "表格用 slide_add_table / slide_table_read / slide_table_set_cell / slide_table_set_style，"
-                        + "超链接用 slide_set_hyperlink，"
+                        + "直接调用 slide_* 工具操作（页码 1 起；PPT 没有修订机制，写入直接生效，误改用 doc_restore_checkpoint 回滚），"
                         + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
                 case "text" -> "\n\n[系统提醒] 用户此刻打开的是纯文本文件" + docLabel + "（id="
                         + activeContext.getId() + "），其内容见 system prompt 的 <active_document>。"
@@ -2328,30 +2259,19 @@ You are in Agent mode, the default full-capability mode:
     // 活跃文档指引（system prompt 段）的英文分支文本，与中文 switch 各分支逐条对应
     private static final String EN_GUIDE_OFFICE_EXCEL = """
 This workbook is open in the user's spreadsheet application (Microsoft Excel or WPS Spreadsheets); the active worksheet's content is inlined below with this request.
-Read and modify it exclusively with the office_excel_* tools (office_excel_get_range / office_excel_set_values / office_excel_search / office_excel_replace); writes take effect immediately (Excel has no track-changes mechanism). For bulk edits use office_excel_replace, which rewrites only the matching cells - do not "search for addresses, then write the block back with office_excel_set_values", which overwrites cells that should stay untouched.
-For formatting and structural changes (cell formats / borders / rows and columns / merging / sorting / worksheets / freezing / formulas), use the corresponding office_excel_* tools (office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / office_excel_conditional_format).
-Before changing the sheet you may first call office_excel_get_overview to see the worksheet list and each sheet's dimensions; office_excel_select_range can move the user's view to a location.
-Cell comments use office_excel_add_comment / office_excel_get_comments / office_excel_reply_comment / office_excel_resolve_comment / office_excel_delete_comment; data validation uses office_excel_set_data_validation; charts use office_excel_add_chart; named ranges use office_excel_define_name; sheet protection uses office_excel_protect_sheet; row/column grouping uses office_excel_group_rows_cols; basic pivot tables use office_excel_add_pivot_table.
-This session has no doc_* / sheet_* tools, and none of the Word-side office_* tools.
+Read and modify it exclusively with the office_excel_* tools; writes take effect immediately (Excel has no track-changes mechanism). The formatting, structure, formula and comment tools are listed in the "Document Tools" section above.
 
 """;
 
     private static final String EN_GUIDE_OFFICE_PPT = """
 This presentation is open in the user's presentation application (Microsoft PowerPoint or WPS Presentation); the text of each slide is inlined below with this request.
-Read and modify it exclusively with the office_ppt_* tools (office_ppt_get_slides / office_ppt_replace_text / office_ppt_format_text for text and formatting; office_ppt_add_slide / office_ppt_delete_slide / office_ppt_move_slide for slide management; office_ppt_add_text_box / office_ppt_add_shape to insert text boxes and shapes; office_ppt_get_slide_details / office_ppt_delete_shape to locate precisely and delete shapes); writes take effect immediately (PowerPoint has no track-changes mechanism - deletions and edits cannot be undone from a review panel).
-Tables: office_ppt_add_table to insert, office_ppt_table_read / office_ppt_table_set_cell to read and write cells; hyperlinks: office_ppt_set_hyperlink.
-This session has no doc_* tools, and none of the Word-side office_* tools.
+Read and modify it exclusively with the office_ppt_* tools; writes take effect immediately (PowerPoint has no track-changes mechanism - deletions and edits cannot be undone from a review panel). The slide, shape and table tools are listed in the "Document Tools" section above.
 
 """;
 
     private static final String EN_GUIDE_OFFICE_WORD = """
 This document is open in the user's word processor (Microsoft Word or WPS Writer); its body text is inlined below with this request.
-Read and modify it exclusively with the office_* tools (office_get_text / office_search / office_replace_text / office_insert_text / office_add_comment / office_format_text / office_set_paragraph_format / office_get_formatting / office_set_numbering / office_format_table / office_apply_standard_format, etc.); edits appear as native Word tracked changes.
-Document formatting (font / size / line spacing / indentation / alignment / underline / strikethrough / automatic numbering / table borders; to format the whole document to the firm's house style use office_apply_standard_format) is done with office_format_text and office_set_paragraph_format.
-Tables are built and edited with office_insert_table / office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / office_table_add_col / office_table_delete_col (call office_table_read first to see the exact coordinates; row and column deletions are NOT tracked as revisions and can only be reversed by undo).
-Page and section breaks use office_insert_break; hyperlinks use office_set_hyperlink; headers and footers (first section only) use office_edit_header_footer; comments use office_get_comments / office_reply_comment / office_resolve_comment.
-To accept or reject revisions, first list them with office_get_revisions, then office_accept_revision / office_reject_revision (a single revision by index, or acceptAll/rejectAll for all); footnotes and endnotes use office_insert_footnote / office_insert_endnote; image insertion uses office_insert_image (fileId refers to a project file, 2MB limit); named styles use office_apply_style; content controls use office_manage_content_control; document properties (title/author, etc.) use office_set_document_properties.
-This session has no doc_* tools.
+Read and modify it exclusively with the office_* tools; edits appear as native Word tracked changes. The formatting, table, comment and revision tools are listed in the "Document Tools" section above.
 
 """;
 
@@ -2372,14 +2292,12 @@ This is a plain-text file (txt/md), open in the lightweight text editor; it has 
 """;
 
     private static final String EN_GUIDE_LOWA_SLIDE = """
-This is a presentation. Read and modify it exclusively with the slide_* tools (slide_get_overview first for the deck overview, slide_get_page for one slide's details, slide_set_shape_text / slide_replace_text to change text, slide_write_notes to change speaker notes); writes take effect immediately (presentations have no track-changes mechanism; roll back mistakes with doc_restore_checkpoint). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. This session has no doc_* tools.
-Slide and shape structure: slide_add_page / slide_delete_page / slide_move_page / slide_set_layout to add, delete, move slides and set layouts; slide_add_text_box / slide_add_shape to insert text boxes and shapes; slide_delete_shape / slide_set_shape_geometry to delete shapes and adjust position and size.
-Text formatting (font / size / bold and italic / underline / strikethrough / color / alignment) uses slide_format_text; shape fill, border, and transparency use slide_format_shape; tables use slide_add_table / slide_table_read / slide_table_set_cell / slide_table_set_style; hyperlinks use slide_set_hyperlink.
+This is a presentation. Read and modify it exclusively with the slide_* tools (1-based slide numbers; call slide_get_overview first for the slide order and shape names); writes take effect immediately (presentations have no track-changes mechanism; roll back mistakes with doc_restore_checkpoint). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document.
 
 """;
 
     private static final String EN_GUIDE_LOWA_DOC = """
-All doc_* editing and reading tools act directly on this document. You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. When the project has a template style profile (_模板/画像.json, learned by docx_inspect_template), format with doc_apply_style_profile (write_docx applies it automatically) rather than doc_apply_standard_format; use doc_insert_toc for a table of contents, doc_edit_header_footer's pageNumberPattern for page numbers, and doc_set_page_setup for paper size and margins.
+All doc_* editing and reading tools act directly on this document. You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. Use doc_insert_toc for a table of contents, doc_edit_header_footer for page numbers, and doc_set_page_setup for paper size and margins.
 
 """;
 
@@ -2470,54 +2388,32 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "<active_document> and can be read and analyzed directly. "
                         + "Unless the user names another file, \"this\", \"the current spreadsheet\", \"change it\", "
                         + "and the like refer to this workbook - read and modify it exclusively via the office_excel_* tools "
-                        + "(office_excel_get_range / office_excel_set_values / office_excel_search / office_excel_replace); "
-                        + "for bulk edits use office_excel_replace, which rewrites only the matching cells; "
+                        + "(office_excel_get_range / office_excel_set_values / office_excel_search); "
+                        + "writes take effect immediately (Excel has no track-changes mechanism); "
+                        + "for bulk edits use office_excel_replace, which rewrites only the matching cells - do not search for "
+                        + "addresses and write the whole block back; "
                         + "new rows/columns must match the formatting of the adjacent existing content (font / borders / "
                         + "alignment / number format) - after writing, re-read with office_excel_get_range(withFormat=true) to check; "
-                        + "writes take effect immediately (Excel has no track-changes mechanism); "
-                        + "formatting and structural changes (cell formats / borders / rows and columns / merging / sorting / "
-                        + "worksheets / freezing / formulas / filters / conditional formats) use the corresponding office_excel_* tools "
-                        + "(office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / "
-                        + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
-                        + "office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / "
-                        + "office_excel_conditional_format); office_excel_get_overview shows the big picture first and "
-                        + "office_excel_select_range positions the view. Cell comments / data validation / charts / "
-                        + "named ranges / sheet protection / row-column grouping / basic pivot tables use, respectively, "
-                        + "the office_excel_add_comment comment suite / office_excel_set_data_validation / "
-                        + "office_excel_add_chart / office_excel_define_name / office_excel_protect_sheet / "
-                        + "office_excel_group_rows_cols / office_excel_add_pivot_table.";
+                        + "formatting and structure use office_excel_format_cells / office_excel_manage_sheets / "
+                        + "office_excel_set_autofilter / office_excel_conditional_format and the rest listed in the system prompt's "
+                        + "\"Document Tools\" section.";
                 case POWERPOINT -> "\n\n[System reminder] The user currently has the presentation " + docLabel
                         + " open in Microsoft PowerPoint or WPS Presentation; the text of each slide is inlined in the system prompt's "
                         + "<active_document> and can be read and analyzed directly. "
                         + "Unless the user names another file, \"this\", \"the current deck\", \"change it\", "
                         + "and the like refer to this presentation - read and modify it exclusively via the office_ppt_* tools "
-                        + "(office_ppt_get_slides / office_ppt_replace_text / office_ppt_format_text / office_ppt_add_slide / "
-                        + "office_ppt_delete_slide / office_ppt_move_slide / office_ppt_add_text_box / office_ppt_add_shape / "
-                        + "office_ppt_get_slide_details / office_ppt_delete_shape); writes take effect immediately "
-                        + "(PowerPoint has no track-changes mechanism - deletions and edits cannot be undone from a review panel). "
-                        + "Tables use office_ppt_add_table / office_ppt_table_read / office_ppt_table_set_cell; "
-                        + "hyperlinks use office_ppt_set_hyperlink.";
+                        + "(office_ppt_get_slides / office_ppt_replace_text / office_ppt_format_text / office_ppt_add_slide, "
+                        + "and the rest listed in the system prompt's \"Document Tools\" section); writes take effect immediately "
+                        + "(PowerPoint has no track-changes mechanism - deletions and edits cannot be undone from a review panel).";
                 default -> "\n\n[System reminder] The user currently has the document " + docLabel
                         + " open in Microsoft Word or WPS Writer; its body text is inlined in the system prompt's <active_document> "
                         + "and can be read and analyzed directly. "
                         + "Unless the user names another document, \"this\", \"the current document\", \"revise it\", "
-                        + "and the like refer to this document - to modify it, call the office_* tools "
-                        + "(office_replace_text / office_insert_text / office_add_comment / office_format_text / "
-                        + "office_set_paragraph_format / office_set_numbering / office_format_table / "
-                        + "office_apply_standard_format, etc.), which write to Word, and edits appear as native Word "
-                        + "tracked changes. Document formatting (font / size / line spacing / indentation / alignment / "
-                        + "underline / strikethrough / automatic numbering / table borders; whole-document house-style "
-                        + "formatting via office_apply_standard_format) uses office_format_text and "
-                        + "office_set_paragraph_format; tables are built and edited with office_insert_table / "
-                        + "office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / "
-                        + "office_table_add_col / office_table_delete_col; page and section breaks use office_insert_break; "
-                        + "hyperlinks use office_set_hyperlink; headers and footers (first section only) use "
-                        + "office_edit_header_footer; comments use office_get_comments / office_reply_comment / "
-                        + "office_resolve_comment; to accept or reject revisions, office_get_revisions first, then "
-                        + "office_accept_revision / office_reject_revision; footnotes and endnotes use "
-                        + "office_insert_footnote / office_insert_endnote; image insertion uses office_insert_image; "
-                        + "named styles use office_apply_style; content controls use office_manage_content_control; "
-                        + "document properties use office_set_document_properties.";
+                        + "and the like refer to this document - to modify it, call the office_* tools, which write to Word "
+                        + "(text: office_replace_text / office_insert_text; formatting: office_format_text / "
+                        + "office_set_paragraph_format; whole-document house style: office_apply_standard_format; the table, "
+                        + "comment and revision tools are listed in the system prompt's \"Document Tools\" section); "
+                        + "edits appear as native Word tracked changes.";
             };
             case NONE -> "\n\n[System reminder] The document the user is currently viewing is " + docLabel
                     + "; its body text is in the system prompt's <active_document> and is for reading and analysis only. "
@@ -2536,14 +2432,8 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + " (id=" + activeContext.getId() + ") open; its structure and content are in the system prompt's "
                         + "<active_document>. Unless the user names another document, \"this\", \"the current deck\", "
                         + "\"change it\", and the like refer to it - operate on it directly with the slide_* tools "
-                        + "(presentations have no track-changes mechanism; writes take effect immediately; roll back "
-                        + "mistakes with doc_restore_checkpoint). Slide and shape structure (add/delete/move slides, "
-                        + "set layouts, insert text boxes and shapes, delete shapes, adjust position and size) uses "
-                        + "slide_add_page / slide_delete_page / slide_move_page / slide_set_layout / slide_add_text_box / "
-                        + "slide_add_shape / slide_delete_shape / slide_set_shape_geometry; text formatting uses "
-                        + "slide_format_text; shape styling uses slide_format_shape; tables use slide_add_table / "
-                        + "slide_table_read / slide_table_set_cell / slide_table_set_style; hyperlinks use "
-                        + "slide_set_hyperlink. "
+                        + "(1-based slide numbers; presentations have no track-changes mechanism; writes take effect immediately; "
+                        + "roll back mistakes with doc_restore_checkpoint). "
                         + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**.";
                 case "text" -> "\n\n[System reminder] The user currently has the plain-text file " + docLabel
                         + " (id=" + activeContext.getId() + ") open; its content is in the system prompt's "
