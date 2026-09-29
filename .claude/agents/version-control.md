@@ -872,6 +872,14 @@ spec §5.5 已改，初版口径在那里划掉留痕）**。它原本是「溯�
 - **CLIENT 白名单（案件库侧，server 模式生效）**：只许 `GET /projects/{pid}`、`GET /requests/{id}`、`POST /items/{id}/upload`、
   `GET|POST /items/{id}/comments`、`GET /items/{id}/file`；其余 10 个写端点一律 HTTP 403 `{code:403}`（DdController 自己的 `@ExceptionHandler`，
   不走全站 200+code）。文件树（`ProjectFileController`）与 git（`GitAccessService`）对 CLIENT 本来就拒，保持。
+- **律师审核（dev-board#1057）**：状态机权威在 `DdService.updateItemStatus(itemId, status, reason, userId)`。PENDING/UPLOADED 由上传决定
+  （客户上传含驳回后重传一律回 UPLOADED）；律师只能对**有附件**的条目下结论：UPLOADED/REJECTED→APPROVED、UPLOADED/APPROVED→REJECTED（必须带理由）、
+  APPROVED/REJECTED→UPLOADED（撤回结论）；其余（未上传、同状态、改回 PENDING、未知值、理由空或超 1000 字）抛 `DdService.IllegalTransitionException`，
+  DdController 映射成**真 HTTP 400** `{code:400}`。已通过的条目**上传也回 400**（在写存储之前拦）。驳回理由不加字段，落成一条 `驳回：<理由>`（英文部署 `Rejected: `）
+  前缀的留言，`GET /requests/{id}` 多回 `rejectReasons: {itemId: 理由}`（只含当前 REJECTED 的条目、取最近一条）。迁移只在附件迁上去之后才推
+  APPROVED/REJECTED（驳回写一句「迁入案件库前已驳回（原理由未记录）」），否则整条清单会被 400 卡住反复重试。前端呈现口径在 `utils/ddReview.js`，
+  `api.updateDdItemStatus(itemId, status, reason, projectId)`；护栏 `DdItemReviewStatusTest`、`tests/project-home/dd-review-status.test.mjs`。
+  **案件库要随桌面端一起升级**：老案件库不认 reason、不回 rejectReasons，律师驳回时不会留下理由。
 - **门户构建**：`npm run build:client-portal`（`VITE_CLIENT_PORTAL=1 uni build -p client-portal --base /client/`）。`package.json` 的
   `uni-app.scripts.client-portal` 打开条件编译 `CLIENT_PORTAL`，pages.json 只注册门户 / 项目列表 / 工作台三页，入口是门户页；
   `utils/clientPortal.js` 在 `main.js` 里把其余硬编码跳转（4010 回登录页、退出登录回启动页、日程……）改写回门户；门户不埋点。
@@ -891,11 +899,12 @@ spec §5.5 已改，初版口径在那里划掉留痕）**。它原本是「溯�
 ### 验证
 
 ```bash
-cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q test -Dtest='ClientPortalRoundTripTest,DdControllerClientWhitelistTest,DdCloudProxyFilterTest,AuthClientLoginGuardTest,ClientInvitationServiceTest'
+cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q test -Dtest='ClientPortalRoundTripTest,DdControllerClientWhitelistTest,DdItemReviewStatusTest,DdCloudProxyFilterTest,AuthClientLoginGuardTest,ClientInvitationServiceTest'
 cd frontend && node --test tests/member-invite/*.test.mjs && npm run build:client-portal
 ```
 `ClientPortalRoundTripTest` 起一个 local-mode=false 的内嵌案件库，桌面栈手工 new：放进案件库 → 本机旧清单首读迁上去（含 multipart 附件）→ 代理签码 →
-客户凭码登录只见这一份 → 代理建清单 → 客户读、传、留言 → 客户删清单 403 → 律师经代理取到客户的文件 → 撤销后码失效、会话看不到案卷。
+客户凭码登录只见这一份 → 代理建清单 → 客户读、传、留言 → 客户删清单 403 → 律师经代理取到客户的文件 → 律师经代理审核（未上传通过 400、
+驳回带理由 → 客户读到状态与理由 → 客户改状态 403 → 重传回待审核 → 通过后客户再传 400 → 撤回通过）→ 撤销后码失效、会话看不到案卷。
 
 ## 案件库的内部只读口（2026-09-18，dev-board#720，spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md` §7.1）
 

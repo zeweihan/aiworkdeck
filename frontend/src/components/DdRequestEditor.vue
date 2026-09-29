@@ -18,6 +18,8 @@
            {{ getStatusText(request.status) }}
         </view>
         <text class="progress-info" v-if="items.length > 0">{{ $t('panels.ddProgress', { completed: completedCount, total: items.length }) }}</text>
+        <!-- 审核汇总（dev-board#1057）：律师一眼看到还有几项等着看 -->
+        <text class="review-summary" v-if="items.length > 0">{{ $t('panels.ddReviewSummary', reviewSummary) }}</text>
       </view>
 
       <view style="display: flex; gap: 10px; align-items: center;" v-if="!deleted && !clientView">
@@ -35,6 +37,7 @@
         <view class="col-desc">{{ $t('panels.ddColDesc') }}</view>
         <view class="col-example">{{ $t('panels.ddColExample') }}</view>
         <view class="col-upload">{{ $t('panels.ddColUpload') }}</view>
+        <view class="col-review">{{ $t('panels.ddColReview') }}</view>
         <view class="col-qa">{{ $t('panels.ddColQa') }}</view>
         <view class="col-action"></view>
       </view>
@@ -110,16 +113,36 @@
                </svg>
                <text class="file-name">{{ $t('panels.ddUploaded') }}</text>
             </view>
+             <!-- 没传过的给「上传」；被驳回的给「重新上传」（重传后回到待审核）；已通过的不再收 -->
              <button
               class="mini-btn upload"
-              v-else-if="!isApproved(item.status)"
+              v-if="showUploadButton(item)"
               @tap.stop="chooseFile(item)"
             >
-              {{ $t('panels.ddUpload') }}
+              {{ item.uploadedFileId ? $t('panels.ddReupload') : $t('panels.ddUpload') }}
             </button>
-             <view class="status-tag" :class="item.status.toLowerCase()" v-if="item.status !== 'PENDING' && !item.uploadedFileId">
-               {{ getItemStatusText(item.status) }}
-             </view>
+          </view>
+
+          <!-- Review（dev-board#1057）：状态徽标 + 驳回理由；律师视角另有通过 / 驳回 / 撤回通过 -->
+          <view class="col-review">
+            <view class="review-badge" :class="'is-' + (item.status || 'PENDING').toLowerCase()">
+              {{ getItemStatusText(item.status) }}
+            </view>
+            <text
+              v-if="item.status === 'REJECTED' && rejectReasons[item.id]"
+              class="reject-reason"
+              :title="rejectReasons[item.id]"
+            >{{ $t('panels.ddRejectReasonLabel', { reason: rejectReasons[item.id] }) }}</text>
+            <view class="review-actions" v-if="reviewActions(item).length">
+              <button
+                v-for="action in reviewActions(item)"
+                :key="action"
+                class="mini-btn review"
+                :class="'is-' + action"
+                :disabled="reviewingId === item.id"
+                @tap.stop="review(item, action)"
+              >{{ $t(REVIEW_ACTION_KEYS[action]) }}</button>
+            </view>
           </view>
 
           <!-- QA/Comments -->
@@ -169,6 +192,13 @@
 import api, { getApiBaseUrl } from '@/services/api'
 import { getSessionId } from '@/utils/auth'
 import { ICONS } from '@/config/icons.js'
+import { ddStatusLabelKey, ddReviewActions, ddCanUpload, ddReviewSummary, ddActionTarget } from '@/utils/ddReview.js'
+
+const REVIEW_ACTION_KEYS = {
+  approve: 'panels.ddReviewApprove',
+  reject: 'panels.ddReviewReject',
+  withdraw: 'panels.ddReviewWithdraw'
+}
 
 export default {
   name: 'DdRequestEditor',
@@ -193,6 +223,10 @@ export default {
       request: null,
       requestName: '',
       items: [],
+      // 驳回条目的最近一条理由（itemId → 理由），随清单详情一起回来（dev-board#1057）
+      rejectReasons: {},
+      // 正在提交审核的那一条，防连点重复下结论（后端对重复结论回 400）
+      reviewingId: null,
       isLawyer: true,
       selectedItemId: null,
       expandedItems: new Set(),
@@ -212,6 +246,8 @@ export default {
   },
   computed: {
     ICONS() { return ICONS },
+    REVIEW_ACTION_KEYS() { return REVIEW_ACTION_KEYS },
+    reviewSummary() { return ddReviewSummary(this.items) },
     completedCount() {
       return this.items.filter(i => i.status === 'APPROVED' || i.status === 'UPLOADED').length
     },
@@ -271,6 +307,7 @@ export default {
         this.request = res.request
         this.requestName = this.request.name
         this.items = res.items
+        this.rejectReasons = res.rejectReasons || {}
       } catch (e) {
         if (seq !== this.fetchSeq) return
         console.error('Fetch DD details failed', e)
@@ -371,15 +408,48 @@ export default {
       return s === 'PUBLISHED' ? this.$t('panels.ddStatusPublished') : (s === 'DRAFT' ? this.$t('panels.ddStatusDraft') : s)
     },
     getItemStatusText(s) {
-      const map = {
-        'PENDING': this.$t('panels.ddItemPending'),
-        'UPLOADED': this.$t('panels.ddItemUploaded'),
-        'APPROVED': this.$t('panels.ddItemApproved'),
-        'REJECTED': this.$t('panels.ddItemRejected')
-      }
-      return map[s] || s
+      return this.$t(ddStatusLabelKey(s))
     },
-    isApproved(s) { return s === 'APPROVED' },
+    reviewActions(item) { return ddReviewActions(item, this.clientView) },
+    showUploadButton(item) {
+      return ddCanUpload(item) && (!item.uploadedFileId || item.status === 'REJECTED')
+    },
+
+    // 驳回必须写一句理由：后端把它落成一条「驳回：」前缀的留言，客户在条目上与留言板里都看得到
+    askRejectReason() {
+      return new Promise((resolve) => {
+        uni.showModal({
+          title: this.$t('panels.ddRejectTitle'),
+          editable: true,
+          placeholderText: this.$t('panels.ddRejectPlaceholder'),
+          success: (r) => resolve(r && r.confirm ? String(r.content || '').trim() : null),
+          fail: () => resolve(null)
+        })
+      })
+    },
+    async review(item, action) {
+      const status = ddActionTarget(action)
+      if (!status || this.reviewingId) return
+      let reason = null
+      if (action === 'reject') {
+        reason = await this.askRejectReason()
+        if (reason === null) return
+        if (!reason) {
+          uni.showToast({ title: this.$t('panels.ddRejectReasonRequired'), icon: 'none' })
+          return
+        }
+      }
+      this.reviewingId = item.id
+      try {
+        await api.updateDdItemStatus(item.id, status, reason, this.projectId)
+        await this.fetchData()
+      } catch (e) {
+        console.error(e)
+        uni.showToast({ title: (e && e.message) || this.$t('panels.ddOperationFailed'), icon: 'none' })
+      } finally {
+        this.reviewingId = null
+      }
+    },
 
     async chooseFile(item) {
       uni.chooseFile({
@@ -404,7 +474,10 @@ export default {
             uni.showToast({ title: this.$t('panels.ddUploadSuccess') })
             this.fetchData()
           } else {
-            uni.showToast({ title: this.$t('panels.ddUploadFail'), icon: 'none' })
+            // 400 带着后端的原因（如该项已审核通过），照实告诉上传的人
+            let reason = ''
+            try { reason = (typeof res.data === 'string' ? JSON.parse(res.data) : res.data).message || '' } catch (e) { reason = '' }
+            uni.showToast({ title: reason || this.$t('panels.ddUploadFail'), icon: 'none' })
           }
         },
         fail: () => { uni.hideLoading(); uni.showToast({ title: this.$t('panels.ddNetworkError'), icon: 'none' }) }
@@ -535,6 +608,11 @@ export default {
         color: var(--awd-text-3);
         margin-left: 10px;
       }
+
+      .review-summary {
+        font-size: 12px;
+        color: var(--awd-text-2);
+      }
     }
 
     .new-btn {
@@ -586,6 +664,7 @@ export default {
       .col-desc { flex: 1; }
       .col-example { width: 60px; text-align: center; }
       .col-upload { width: 100px; text-align: center; }
+      .col-review { width: 150px; text-align: center; }
       .col-qa { width: 60px; text-align: center; }
       .col-action { width: 40px; text-align: center; }
     }
@@ -617,8 +696,47 @@ export default {
       }
       .col-desc { flex: 1; padding-right: 10px; }
       .col-example { width: 60px; text-align: center; }
-      .col-upload { width: 100px; display: flex; justify-content: center; }
+      .col-upload { width: 100px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+      .col-review {
+        width: 150px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 0 4px;
+        box-sizing: border-box;
+      }
       .col-qa { width: 60px; display: flex; justify-content: center; }
+
+      .review-badge {
+        font-size: 11px;
+        padding: 1px 8px;
+        border-radius: 10px;
+        background: var(--awd-surface-3);
+        color: var(--awd-text-2);
+        white-space: nowrap;
+
+        &.is-uploaded { background: var(--awd-warning-soft); color: var(--awd-warning-text); }
+        &.is-approved { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
+        &.is-rejected { background: var(--awd-danger-soft); color: var(--awd-danger-text); }
+      }
+
+      .reject-reason {
+        max-width: 100%;
+        font-size: 11px;
+        color: var(--awd-danger-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .review-actions {
+        display: flex;
+        gap: 4px;
+
+        .mini-btn.review { padding: 1px 8px; margin: 0; line-height: 1.6; }
+        .mini-btn.review.is-reject:hover { border-color: var(--awd-danger); color: var(--awd-danger-text); }
+      }
       .col-action {
           width: 40px;
           display: flex;

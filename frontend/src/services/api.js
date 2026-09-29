@@ -2954,11 +2954,13 @@ export function getDdRequestDetails(requestId, projectId) {
   })
 }
 
-export function updateDdItemStatus(itemId, status, projectId) {
+// 律师审核（dev-board#1057）：status 取 APPROVED / REJECTED / UPLOADED（撤回结论）；
+// 驳回必须带 reason，后端落成一条「驳回：」前缀的留言。非法流转回 HTTP 400。
+export function updateDdItemStatus(itemId, status, reason, projectId) {
   return request({
     url: ddUrl(`/api/dd/items/${itemId}/status`, projectId),
     method: 'PUT',
-    data: { status },
+    data: reason ? { status, reason } : { status },
     header: { 'Content-Type': 'application/json' }
   })
 }
