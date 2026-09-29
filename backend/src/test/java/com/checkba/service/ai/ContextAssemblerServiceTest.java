@@ -1374,7 +1374,7 @@ class ContextAssemblerServiceTest {
         assertFalse(none.contains("doc_"), "纯对话会话的系统提示里一个 doc_ 都不该有");
         assertFalse(none.contains("sheet_"), "纯对话会话的系统提示里不该有 sheet_");
         assertFalse(none.contains("office_"), "纯对话会话的系统提示里不该有 office_");
-        assertTrue(none.contains("read_document"), "none 会话仍要知道怎么读项目文件");
+        assertTrue(none.contains("extract_file_text"), "none 会话仍要知道怎么读项目文件（read_document 已于 #1065 下线，入口是 extract_file_text）");
 
         // Office 会话教的是本宿主的 office_*，不教嵌入式编辑器那一套
         assertTrue(office.contains("office_replace_batch"), "word 会话应教批量替换");
