@@ -286,8 +286,15 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      ③ **`list_tools(category)`**；④ **分发**：模型经 XML 兜底（或原生）点名调了本轮没下发的工具
      （判据 `RunGuard.roundOffered` 不含它且注册表 found），它所在的类目下一轮放回
      （`noteToolCategoryExpansion` 的第二支）。
-     起跑判定在 `AgentOrchestrator.prepareDocCategoryTrim`（`guard.docCategoryTrimActive`，一轮只算一次、
-     中途换文档也不清——它还决定 `list_tools` 下不下发）；裁剪本身在 `discloseProgressively` 里、
+     起跑判定在 `AgentOrchestrator.prepareToolCategoryPutBack`（原名 prepareDocCategoryTrim；
+     `guard.docCategoryTrimActive`，一轮只算一次、中途换文档也不清——它还决定 `list_tools` 下不下发）。
+     **关键词与 skill 两条预放回在「类目裁剪生效」或「渐进披露开着」时都做**（dev-board#1064 第二步泛化：
+     披露默认开之后，没开文档的纯对话 / 任务窗格会话同样只下发核心集，「帮我建个事项」不预放回 task
+     就要先花一轮 list_tools）。关键词表 `CATEGORY_KEYWORDS` 同批补了 table / revision / template / evidence /
+     format / files / legal / memory 八类（`表格` 同时放回 table 与 spreadsheet；不收单独的「目录」——
+     它在中文里也是文件夹；不收「整理」——「整理录音 / 要点」远比整理文件夹常见；edit 不收关键词——
+     「改成 / 替换 / 删除」几乎每句都有，常用删改原语本来就在核心集；legal 收「法》」「条例》」，
+     用户一写书名号引一部法就是在查法条）。裁剪本身在 `discloseProgressively` 里、
      **排在决策辅助（Jev）之后、核心集收窄之前**：Jev 看裁剪前的全集，它刚放回的类目本轮就生效。
      skill 已裁过的回合不裁；ASK 模式不裁；中途 `widen*` 把 `activeDocKind` 置 null 即整类回来。
      `ToolDiscoveryTools.isAvailable()` 在两个开关任一开着时为真，于是没开文档的会话里 `list_tools`
@@ -388,7 +395,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      **只判「平台档 + 没连账户」这一种**，BYOK/LOCAL 档与判不出来的一律当可用——
      藏掉一个能用的工具比失败一次严重得多。云后端 `resolve()` 恒不返回 PLATFORM，这道闸天然空转。
      **一轮内不变**：与 activeDocKind 同一条契约，而且这一个连中途放宽的口子都没有。
-  ⑤ **渐进披露**（dev-board#810，`ToolDisclosurePolicy`，**默认关**）：只下发核心集 + 本轮已展开的类目。
+  ⑤ **渐进披露**（dev-board#810，`ToolDisclosurePolicy`，**2026-09-29 起默认开**，dev-board#1064 第二步）：只下发核心集 + 本轮已展开的类目。
      与 ②b 叠用时先按类目裁、再按核心集收窄，两者都是「核心集 ∪ 已展开类目」的形状，叠起来仍是那个形状。
      见下文「工具规格瘦身与渐进披露」一节。
   - **为什么值得做②**：工具规格**每一轮都要重发**，一条消息跑三五个往返就付三五遍。
@@ -433,12 +440,23 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
       绝大多数是 K27（#807/#808）上周刚写进去、把工具选择正确率从 5/9 抬到 9/9 的判据句。
       再要 -20% 就只能砍判据，那是拿准确率换 token，方向反了。
     - **B 档：渐进披露**（`ToolDisclosurePolicy` + `ToolDiscoveryTools.list_tools`，
-      开关 `ai.tools.progressive-disclosure.enabled`，**默认 false**）。每轮只下发**核心集**
+      开关 `ai.tools.progressive-disclosure.enabled` / env `AI_TOOLS_PROGRESSIVE_DISCLOSURE`，
+      **2026-09-29 起默认 true**，理由见下文「为什么默认开」）。每轮只下发**核心集**
       （一份人工清单，按「把一条完整的活干完需要哪些工具」挑，不按调用次数），其余按**类目**收进目录；
       模型调 `list_tools()` 看类目、`list_tools(category="format,table")` 拿全签名。
-      离线实测 docx：148 → **41 个工具**，56703 → 14827 字符、73474 → 19028 上线路字节（**-74%**）；
-      真实模型上首轮 promptTokens **-56%**（见下「真实模型 A/B」——差额是 system prompt 与历史，
-      不是工具，所以 -74% 的 schema 折成整段前缀只剩 -56%）。
+      离线实测（`ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete`，2026-09-29 重定核心集之后，本机无 Docker）：
+
+      | 会话 | 全集 | 核心集 | 上线路字节（全集 → 核心集） |
+      |---|---|---|---|
+      | docx（LOWA 文字） | 146 | 35 | 84628 → 23408（-72.3%） |
+      | xlsx（LOWA 表格） | 117 | 28 | 74039 → 21721（-70.7%） |
+      | pptx（LOWA 演示） | 112 | 28 | 70899 → 20924（-70.5%） |
+      | Word 任务窗格 | 110 | 26 | 66843 → 20087（-69.9%） |
+      | Excel 任务窗格 | 98 | 24 | 62236 → 19711（-68.3%） |
+      | PowerPoint 任务窗格 | 85 | 23 | 52286 → 18568（-64.5%） |
+      | 纯对话（none） | 67 | 19 | 42128 → 16288（-61.3%） |
+
+      （「全集」含 list_tools；编排器另按 `MEMORY_TOOLS` 规则补 memory_* 六个，不在这张表里。）
       - **展开只在下一轮生效**，这是它与「一轮内工具集不变」相容的全部理由：展开记在
         `RunGuard.expandedToolCategories`（`dispatchTool` 里 `noteToolCategoryExpansion` 写、
         下一次递归 runLoop 读），而且**只做加法**——模型已宣布要调的工具永远不会消失。
@@ -449,6 +467,26 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
       - **三条安全性质**，缺一条就会变成静默的能力丢失：`categoryOf` 是**全函数**（认不出落 `misc`，
         `list_tools()` 一定列得出来，新增工具不改策略类也在目录里）；`list_tools` 自己恒在核心集；
         **skill 已经裁过就不再裁**（判据在编排器：`skillRouter.visibleTools` 返回的集合比候选集小即视为已裁）。
+      - **核心集按「通用段 + 各宿主段」写成一份扁平清单**（dev-board#1064 第二步 + 审计 T-18）。
+        通用段 19 个（list_tools / use_skill / todo_write / ask_user / dispatch_subtask / doc_list_project_files /
+        search_project_files / search_project_content / extract_file_text / write_docx / create_folder /
+        move_files_batch / move_to_trash / query_memory / save_memory / law_search / get_law_article /
+        search_web / browse_url）；docx 段 15 个（doc_open_file / doc_get_document_text / doc_find_text /
+        doc_get_cursor_context / doc_get_clauses / doc_audit_structure / doc_find_replace / doc_replace_at_anchor /
+        doc_insert_at_cursor / doc_start_stream / doc_insert_table / doc_apply_standard_format / doc_add_comment /
+        doc_undo / doc_restore_checkpoint）；xlsx 段 5（sheet_create_file / get_overview / read_range /
+        write_cells / find_replace）；pptx 段 5（slide_get_overview / get_page / set_shape_text / replace_text /
+        add_page）；Word 窗格 7（office_get_text / search / insert_text / replace_text / replace_batch /
+        add_comment / pass_step）；Excel 窗格 5（office_excel_get_overview / get_range / set_values / search /
+        replace）；PowerPoint 窗格 4（office_ppt_get_slides / replace_text / format_text / add_slide）。
+        别家宿主的段由上游能力闸与活跃文档闸整段裁掉，所以 docx 会话实际是 19 + 15 + kind 无关的 sheet_create_file = 35。
+        **移出核心集**（照常可经类目下发）：`read_document`（已只登记不下发）、`law_search_keyword`（legal）、
+        `doc_get_outline` / `doc_get_paragraph` / `doc_replace_selection` / `doc_select_anchor` / `doc_select_paragraph`（edit）、
+        `doc_get_comments`（revision）。**回到核心集**：`doc_restore_checkpoint`——Impress 上 `doc_undo` 是空操作，
+        pptx 会话里它是唯一的后悔药（约 300 字符）。`doc_insert_table` 进核心集是因为活跃文档末位提醒点名要它
+        「整表一次提交」，被点名的工具藏在目录里，弱模型会改成逐行写表把步数耗光。
+        护栏：`corePerSessionIsSmallAndComplete`（每类会话 ≤40 个且各有读 + 找 + 写，T-18）、
+        `everyCoreNameIsActuallyOffered`（核心集不许是只登记不下发的名字）、`findAndReadIsCompleteOutsideTheDesktopEditorToo`。
       - **核心集是一份集中清单而不是 `@ToolMeta` 上的布尔**：「算不算高频」不是工具自身属性，
         是一次横切取舍——要判断它得把四十个候选放在一起看覆盖面，散在三十四个文件里没人看得出
         「读一份合同」这条链断没断。清单与覆盖面断言都在 `ToolDisclosurePolicy(Test)`。
@@ -461,10 +499,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
         | 类目 | 收什么 |
         |---|---|
         | table | `doc_table_*`、`doc_insert_table` |
-        | revision | 修订接受/拒绝、批注回复/解决/删除、`doc_restore_checkpoint` |
+        | revision | 修订接受/拒绝、看批注 `doc_get_comments`、批注回复/解决/删除（`doc_restore_checkpoint` 也列在这里，但 #1064 第二步起它在核心集） |
         | evidence | 底稿关联、`evidence_verify`、`retrieve_evidence`、`dd_export`、`web_verify_import` |
         | template | 模板画像与模板库 |
-        | edit | 定位 / 删改 / 按段落取改：`doc_goto` / `doc_collapse_cursor` / `doc_delete_selection` / `doc_redo` / `doc_modify_paragraph` / `doc_insert_under_heading` 与几个只登记不下发的旧原语（核心集里的 select_anchor / select_paragraph / get_paragraph / get_outline 也列在这里，但 categoryOf 先判核心集，它们仍返回 core） |
+        | edit | 定位 / 删改 / 按段落取改：`doc_goto` / `doc_collapse_cursor` / `doc_delete_selection` / `doc_redo` / `doc_modify_paragraph` / `doc_insert_under_heading` / `doc_select_anchor` / `doc_select_paragraph` / `doc_get_paragraph` / `doc_get_outline` / `doc_replace_selection`（后五个 #1064 第二步退出核心集后归这里）与几个只登记不下发的旧原语 |
         | files | 路径类文件原语、`text_*`、`doc_export_pdf` |
         | format | `doc_*` 剩下的（字符/段落格式、页面、页眉页脚、目录、脚注、图片、超链接） |
         | spreadsheet / slides / office / pdf / litigation / reference | 各自前缀（slides 含 `pptx_*`） |
@@ -489,29 +527,66 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
         默认开）：它开着时目录工具进程级可用，由编排器按「本轮藏没藏东西」决定下不下发（`dropIdleCatalog`）。
       - **与 ②b 的关系**：两者共用 `expandedToolCategories` 这一份放回集与 `list_tools` 这一个入口，
         ②b 只是把「核心集」换成了「除隐藏类目外的全部」。在 `discloseProgressively` 里的顺序是
-        Jev 预选 → ②b 类目裁剪 → 核心集收窄（开关开着时）。整套回放在披露模式下重跑时有 4 条存量用例红
-        （`cases-capability-prompt` 3 条、`cases-skill` 的 `skill-not-triggered-behavior-preserved` 1 条，断言的都是非核心工具可见），2026-09-29 在
-        未改动的基线上复跑同样是这 4 条，**不是 ②b 引入的**。dev-board#1065 把 `doc_restore_checkpoint` 移出核心集后
-        再多 3 条（`cases-tool-visibility` 里 docx / xlsx / pptx 三例断言首轮可见 `doc_restore_checkpoint`），共 7 条；
-        默认模式（披露关）不受影响。**翻开披露开关前要先定这件事**：Impress 上 `doc_undo` 不生效（见②），
-        pptx 会话里 `doc_restore_checkpoint` 是唯一的后悔药，披露模式下它要等 `list_tools(revision)` 才回来。
-      - **真实模型 A/B（2026-09-22，隔离后端 + deepseek-v4-flash，每档 2 场景 × 3 次）**：
-        首轮 promptTokens **50692 → 22296（-56%）**，纯对话 T4 中位 11692 → 8048ms；
-        「读文件总结」3 次里 2 次与基线同路径（`doc_list_project_files` → `read_document`/
-        `extract_file_text`，3 轮，T4 37614 → 23643ms 更快），**1 次跑偏**：7 轮、300s 内没收尾，
-        模型在 `doc_open_file` / `doc_get_document_text` 之间打转。**那两个工具在两种模式下
-        都在核心集里**，所以不是「工具被藏起来」造成的，是多出来的目录提示段 + 模型变异；
-        而且无头后端没有 LOWA，`doc_get_document_text` 必然超时，真实桌面会话里这条路是通的。
-        n=3 说明不了因果，但「3 次里 1 次不收尾」本身就够让开关保持关着。
-      - **为什么默认关**：回放评测用的是**脚本模型**，它永远按剧本调对工具，证明不了真实模型
-        找不找得到 `list_tools`。绿的回放只说明编排器没做坏事。翻开它之前要先有真实模型的
-        对照数据（同一批任务的完成率 / 轮数 / promptTokens），而上面那组数据里
-        **完成率这一项恰恰是退的**。
-      - 护栏：`ToolDisclosurePolicyTest`（9 条）+ `cases-tool-disclosure.json`（3 例，
-        用例字段 `progressiveDisclosure: true` 单独开，**进默认 `mvn test`**——只能靠命令行开关跑的
-        验证等于没有护栏）+ `ContextAssemblerServiceTest` 的两条 prompt 段断言。
-        整套回放在披露模式下重跑：`mvn test -Dtest=OrchestratorReplayEvalTest
-        -Dai.tools.progressive-disclosure.enabled=true`。
+        Jev 预选 → ②b 类目裁剪 → 核心集收窄（开关开着时）。任一开关单独关掉，另一个照常工作。
+      - **为什么默认开（2026-09-29，dev-board#1064 第二步）**。09-22 那组 A/B 里「读文件总结 3 次 1 次不收尾」
+        是默认关的全部理由；09-29 复查查清了它：无头后端没有 LOWA 编辑器，`doc_get_document_text` 必然等满
+        编辑器桥 122 秒超时，**关掉披露照样复现**（09-29 诊断：LOWA 会话「读文件总结」披露关 5 次里 1 次、
+        披露开 10 次里 3 次走到 `doc_open_file → doc_get_document_text(FAIL)`，每次 135~162 秒，最终都改走
+        extract_file_text 完成），是测试环境的假象，不是披露造成的。同日隔离后端的真实模型矩阵（纯对话会话、
+        合成保密协议、三类任务 × DeepSeek V4 Flash / Kimi K3 × 10 次，语义判据：T-B 要 task_create 成功，
+        T-A / T-C 要真读了正文且答出是保密协议）：披露开 + 旧核心集 58/60，补上列文件工具后 60/60；
+        它同时查出两个真缺陷——纯对话 / 任务窗格会话的核心集里没有「列项目文件」的工具（#1065 T-01 让
+        `doc_list_project_files` 三档可见后自然解决），以及片段里「清单里没有就执行不了、不要去试」与目录规则打架
+        （`toolDisclosureRule` 末条改读，见下文「system prompt 侧」）。
+      - **最终代码上的真实模型矩阵（2026-09-29，隔离后端 + BYOK + 未连账户，合成保密协议，每次新建项目）**：
+
+        | 会话 / 任务 | DeepSeek V4 Flash | Kimi K3 |
+        |---|---|---|
+        | 纯对话 T-A「读一下项目里的这份文件，三句话总结」 | 9/10，3 轮，首轮 15.6k | 10/10，3 轮，首轮 14.6k |
+        | 纯对话 T-B「帮我创建一个事项…高优先级」 | 10/10，**2 轮**，首轮 16.7k | 10/10，**2 轮**，首轮 15.5k |
+        | 纯对话 T-C「这是什么文件？」 | 10/10 收尾（8/10 读过正文），3 轮 | 9/10，3 轮 |
+        | docx 会话首轮「这是什么文件？」（×3） | 25138 promptTokens / 38 个工具 | 23466 / 38 |
+
+        **60 次里 list_tools 一次都没调**：T-B 在诊断时 20/20 要先 `list_tools(category=task)`（3 轮），
+        关键词预放回之后 20/20 第一轮直接 task_create。docx 首轮对比 PR#1035（只开类目裁剪）：
+        DeepSeek 37498 / 111 个工具 → 25138 / 38（-33.0%），Kimi 34063 / 111 → 23466 / 38（-31.1%）。
+        没达标的 4 次是两类模型行为：先调 ask_user 反问「读哪一份」（2 次）、只调 doc_list_project_files
+        按文件名作答不读正文（2 次）。同一构建、披露关的对照组里它们同样出现、频率不更低
+        （DeepSeek T-A 20 次里反问 3 次、T-C 10 次里只看文件名 3 次；另 1 次是并发建项目撞唯一索引的既有问题），
+        所以与披露无关；涉及的工具两种模式下都在下发集里。同一对照组首轮 promptTokens：开 15.6k / 关 23.0k（-32%）。
+        完整表格随 dev-board#1064 第二步的 PR 描述附上。**没测的**：真实桌面 LOWA 编辑器里需要非核心类目
+        （改格式、插表之外的表格操作、修订接受）的写入任务；Office / WPS 任务窗格的真实模型行为；已连账户的平台通道。
+        **结构性代价**：任务要用一个非核心类目、而关键词没猜到时，多一轮 `list_tools`（DeepSeek 常常先
+        `list_tools()` 再 `list_tools(category)`，是两轮），且展开之后那一轮工具集变了、**提示缓存整段失效一次**。
+        接受它，是因为每一轮都省下的那一大块规格（上表六到七成）远大于偶尔多付的这一两轮；起跑时的关键词 / skill
+        预放回就是为了把这笔代价压到最少。
+      - **system prompt 侧**：`ContextAssemblerService.toolDisclosureRule` 在披露开着（或类目裁剪生效）时注入
+        「## 工具目录」段，末条把片段与基底 prompt 里「工具清单里没有的就是这台客户端 / 机器执行不了的」
+        改读成「连 `list_tools()` 也列不出来的」——`tools-none.md` / `tools-office-*.md` 与 run_python 一节都有那句话，
+        清单只是子集时它照字面读就是叫模型别去查目录。这一段排在片段之后（末位赢），中英两版同步，
+        护栏 `toolCatalogRuleOverridesTheFragmentsNotInYourListSentence`。**ASK 模式不注入**（那个模式不下发
+        list_tools；披露默认开之后不排除 ASK，每个 ASK 会话都会被教一个用不了的工具，护栏 `askModeNeverGetsTheCatalogRule`）。
+      - **回放评测跟生产默认走**：`EvalCase.progressiveDisclosure` 改成 `Boolean`，缺省 null = 生产默认（开），
+        `-Dai.tools.progressive-disclosure.enabled=false` 把缺省的用例整套切到「下发全集」重跑；**显式写了就钉死**
+        （两个全局 -D 都不再影响它），写了 `docSessionCategoryTrim` 的用例缺省也按生产默认（开）。
+        翻默认时钉成 `false` 的 8 条（title 里写明了为什么）：`cases-capability-prompt` 3 条（断言的是能力闸下的
+        全集：pdf_inspect / pdf_highlight / ref_list / text_write_file 首轮可见）、`cases-skill` 的
+        `skill-not-triggered-behavior-preserved`（断言「skill 不命中就不裁」时的全集，含 pptx_generate）、
+        `cases-doc-session-trim` 3 条（`doc-trim-what-is-this-file` / `doc-trim-edit-paragraph-keeps-editing-surface`
+        断言的是类目裁剪单独开着时留下哪些类目；`no-doc-session-does-not-offer-idle-catalog` 断言的「什么都没藏就不下发
+        目录」只在披露关着时成立）。钉成 `true` 的是 `cases-tool-disclosure` 全部 6 条（新增 3 条：纯对话 / Word 窗格
+        问「这是什么文件？」不查目录就列出并读全文、「帮我创建一个事项」起跑时关键词预放回 task 第一轮直接 task_create——
+        这一条在还原「预放回只在类目裁剪时做」之后转红，已实测）。另有两条改了输入措辞而非断言：
+        `disclosure-catalog-lookup-brings-the-category-back-next-round`（原句「表格…标准格式」会被新关键词预放回
+        table / format，本用例验的是「查目录 → 下一轮回来」这条链，改成「那张表按律所标准重排」）与
+        `disclosure-xml-fallback-can-call-an-undisclosed-tool-in-the-same-turn`（「表格」→「那张表」）。
+        三种模式都要绿：默认（开）、`-Dai.tools.progressive-disclosure.enabled=false`、
+        `-Dai.tools.doc-session-category-trim.enabled=false`。
+      - 护栏：`ToolDisclosurePolicyTest`（21 条）+ `ToolSchemaBudgetTest.productionDefaultDocxShipsTheCoreSetOnly`
+        + `cases-tool-disclosure.json`（6 例）+ `ContextAssemblerServiceTest` 的四条 prompt 段断言。
+        验证命令：`mvn test -Dtest='ToolDisclosurePolicyTest,ToolSchemaBudgetTest,ContextAssemblerServiceTest,OrchestratorReplayEvalTest,*ToolDecision*'`，
+        再各跑一次 `-Dtest=OrchestratorReplayEvalTest -Dai.tools.progressive-disclosure.enabled=false` 与
+        `-Dtest=OrchestratorReplayEvalTest -Dai.tools.doc-session-category-trim.enabled=false`。
   - 回放护栏 `cases-tool-visibility.json`（5 例，起跑时的裁剪）+ `cases-tool-visibility-widening.json`
     （3 例，中途放回全集；用 `expect.offeredToolsExcludeFirstCall` / `offeredToolsIncludeLastCall`
     这对**逐轮**断言——全轮次的 `offeredToolsExclude` 在这种形态下必然自相矛盾）
@@ -1365,6 +1440,10 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   - **跨类 `public static final` 常量在编译期内联**：只跑 `mvn test` 的增量编译会留下「源码一致、字节码不一致」的假失败，验证阶段一律 `mvn clean test`。
   - **`mvn clean test` 里有 16 条 skip 是常态**（2026-09-22 K32 后实测：Tests run 4870 / Skipped 16；同日 K31 时是 4758 / 15，更早 4676 / 15，2026-09-20 是 4321 / 15，2026-09-09 是 3410 / 14），不是回归。逐条门控：ProjectProfileFieldMysqlSchemaTest **3** 条与 ProjectAiMessageIndexMysqlTest **1** 条要 `AWD_MYSQL_SCHEMA_CHECK=1`（真 MySQL）；LitigationPngServiceTest **4** 条要本机有随包字体与已生成的示例 SVG（`node desktop/scripts/fetch-lowa-assets.js`）；RealVisionSmokeTest **3** 条与 RealLlmSmokeTest **1** 条要 `OPENROUTER_API_KEY`；WritingLiveEvaluationTest **1** 条同样要 key；AllowedModelsLiveContractTest **1** 条与 MultiSystemSplitLiveProbeTest **1** 条要 `RUN_LIVE_MODEL_CHECK=1`（后者还要 `OPENROUTER_API_KEY`）；CrossLanguageSignatureTest **1** 条要 python。数字对不上再查，别默认「skip 反正是常态」。
   - **Mockito 陷阱（踩过）**：`String.valueOf(inv.getArgument(n))` 会被 Java 重载决议挑成 `String.valueOf(char[])`（泛型 `<T> T` 推成 `char[]`），运行时抛 ClassCastException；若该 mock 的调用方把异常吞掉只 log（如 `SubAgentService.sendProgress`），表现就是「队列永远空、断言说没收到事件」，看着像生产代码不发事件。写 `inv.getArgument(n, String.class)`。
+- 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`（**回放跟生产默认走：渐进披露与类目裁剪都开**；另跑两遍
+  `-Dai.tools.progressive-disclosure.enabled=false` 与 `-Dai.tools.doc-session-category-trim.enabled=false`，三种模式都要绿，
+  用例字段 `progressiveDisclosure` / `docSessionCategoryTrim` 显式写了就钉死该用例的模式，见「工具规格瘦身与渐进披露」）。
+- 渐进披露（dev-board#810/#1064）：`mvn test -Dtest='ToolDisclosurePolicyTest,ToolSchemaBudgetTest,ContextAssemblerServiceTest,ToolDiscoveryTools*Test,SkillToolsTest,DecisionAssist*,*ToolDecision*,AgentOrchestratorInboxTest'`。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
 - 工具选择面（dev-board#807/#808）：`mvn test -Dtest=ToolChoiceSurfaceTest,FormatTableColumnWidthTest,MemoryToolsScopeTest,ToolRegistryTest,ToolDeclarationContractTest,OrchestratorReplayEvalTest`。
 - 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。

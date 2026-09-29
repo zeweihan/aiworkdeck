@@ -275,7 +275,8 @@
   },
   {
     "id": "skill-not-triggered-behavior-preserved",
-    "title": "未命中任何 Skill：可见工具不裁剪，行为与现状完全一致",
+    "title": "未命中任何 Skill：可见工具不裁剪，行为与现状完全一致（钉死渐进披露关：本用例断言的是「skill 不命中就不裁」时的全集，核心集收窄由 cases-tool-disclosure 另守，dev-board#1064）",
+    "progressiveDisclosure": false,
     "category": "skill",
     "protocol": "xml",
     "userInput": "帮我总结一下这份股权转让协议的主要风险点",

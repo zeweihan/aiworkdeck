@@ -1,7 +1,8 @@
 [
   {
     "id": "doc-trim-what-is-this-file",
-    "title": "类目裁剪：docx 会话问「这是什么文件？」——PDF / 诉讼出图 / 演示文稿 / 企业数据 / 插件 / 会议 / Python 整类不下发，读写面、法源、网页、事项照常（dev-board#1064）",
+    "title": "类目裁剪：docx 会话问「这是什么文件？」——PDF / 诉讼出图 / 演示文稿 / 企业数据 / 插件 / 会议 / Python 整类不下发，读写面、法源、网页、事项照常（dev-board#1064）（钉死渐进披露关：本用例断言的是类目裁剪单独开着时留下哪些类目，dev-board#1064）",
+    "progressiveDisclosure": false,
     "category": "files",
     "protocol": "native",
     "docSessionCategoryTrim": true,
@@ -60,7 +61,8 @@
   },
   {
     "id": "doc-trim-edit-paragraph-keeps-editing-surface",
-    "title": "类目裁剪：改一处措辞时编辑面完整——锚点替换、表格、版式都在，被藏的只有无关整类（dev-board#1064）",
+    "title": "类目裁剪：改一处措辞时编辑面完整——锚点替换、表格、版式都在，被藏的只有无关整类（dev-board#1064）（钉死渐进披露关：本用例断言的是类目裁剪单独开着时编辑面一个不少，dev-board#1064）",
+    "progressiveDisclosure": false,
     "category": "files",
     "protocol": "native",
     "docSessionCategoryTrim": true,
@@ -486,7 +488,8 @@
   },
   {
     "id": "no-doc-session-does-not-offer-idle-catalog",
-    "title": "类目裁剪：没开文档的会话什么都没藏——list_tools 不下发，不为一个打开来只会说「没有可展开的」的目录每轮白付一千字符（dev-board#1064）",
+    "title": "类目裁剪：没开文档的会话什么都没藏——list_tools 不下发，不为一个打开来只会说「没有可展开的」的目录每轮白付一千字符（dev-board#1064）（钉死渐进披露关：「什么都没藏就不下发目录」只在披露关着时成立；披露开着时目录是核心集的一员，dev-board#1064）",
+    "progressiveDisclosure": false,
     "category": "files",
     "protocol": "native",
     "docSessionCategoryTrim": true,

@@ -276,7 +276,11 @@ public class ContextAssemblerService {
      * 整类没下发，模型手上的同样是子集。<b>判据只看开关与活跃文档类型</b>（与编排器
      * {@code AgentOrchestrator.initialDocKind} 同一个函数），绝不看本轮放回了什么——
      * 放回是每轮会变的，写进这里会让稳定段逐轮变化、提示缓存永久失效且不报错。
-     * ASK 模式不下发工具，不注入。
+     * ASK 模式不下发工具，不注入（渐进披露默认打开之后，不排除 ASK 就会在每个 ASK 会话里教一个用不了的工具）。
+     *
+     * <p>最后一条是给片段打的补丁（dev-board#1064 第二步）：{@code tools-none.md} / {@code tools-office-*.md}
+     * 与基底 prompt 的 run_python 一节都写着「清单里没有就执行不了、不要去试」。清单只是子集时，
+     * 这句话照字面读就是叫模型别去查目录，两段互相打架；本段排在片段之后（末位更有效），所以由它来改读。
      */
     private String toolDisclosureRule(boolean english,
                                       com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
@@ -285,8 +289,10 @@ public class ContextAssemblerService {
         if (policy == null) {
             return "";
         }
-        boolean docTrim = agentMode != AgentMode.ASK
-                && !policy.hiddenCategoriesFor(AgentOrchestrator.initialDocKind(activeContext)).isEmpty();
+        if (agentMode == AgentMode.ASK) {
+            return "";
+        }
+        boolean docTrim = !policy.hiddenCategoriesFor(AgentOrchestrator.initialDocKind(activeContext)).isEmpty();
         if (!policy.isEnabled() && !docTrim) {
             return "";
         }
@@ -301,6 +307,9 @@ public class ContextAssemblerService {
                 + "- When unsure whether a capability exists, search with `list_tools(query=\"keywords\")`; "
                 + "when the task clearly fits one of the skills (specialised workflows) the catalog lists, "
                 + "switch to it with `use_skill` first.\n"
+                + "- Wherever this prompt says a tool missing from your tool list cannot run on this client or machine, "
+                + "read that as: a tool that `list_tools()` does not show either. A tool the catalog does show is "
+                + "available - expand it and use it.\n"
                 : "\n\n## 工具目录\n"
                 + "你手上这份工具清单是常用子集，不是本产品能做的全部。"
                 + "`list_tools()` 按类目列出其余工具；`list_tools(category=\"x\")` 给出它们的完整签名，"
@@ -308,7 +317,9 @@ public class ContextAssemblerService {
                 + "- **在告诉用户「做不到 / 不支持」之前，先调一次 `list_tools()`。** "
                 + "一个查一次目录就能拿到的能力被你说成没有，是最严重的一类错误。\n"
                 + "- 不确定有没有某项能力时用 `list_tools(query=\"关键词\")` 按关键词搜；"
-                + "任务明显属于目录里列出的某个 skill（专门流程）时，先调 `use_skill` 切过去再做。\n";
+                + "任务明显属于目录里列出的某个 skill（专门流程）时，先调 `use_skill` 切过去再做。\n"
+                + "- 本提示里凡是说「工具清单里没有的工具就是这台客户端 / 这台机器执行不了的」，在本会话里都指"
+                + "**连 `list_tools()` 也列不出来**的工具；目录里列得出来的就是能用的，展开后照常调用。\n";
     }
 
     // 应用语言（EN 版 PR5）：en-US 时选英文 system prompt 与各硬编码段的英文文本；

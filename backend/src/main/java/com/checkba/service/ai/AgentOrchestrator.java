@@ -1492,9 +1492,9 @@ public class AgentOrchestrator {
                 log.info("[ToolVisibility] conv={} 活跃文档类型={}，本轮按该类型裁剪 doc_/sheet_/slide_ 工具集",
                         conversationId, guard.activeDocKind);
             }
-            // 活跃文档类目裁剪（dev-board#1064）：起跑时一次算定要不要裁，并把本轮用户输入的关键词
-            // 与生效 skill 的白名单涉及的类目预先放回（写进渐进披露那一份展开集，只增不减）。
-            prepareDocCategoryTrim(guard, request.getMessage(), agentMode);
+            // 活跃文档类目裁剪与渐进披露（dev-board#1064）：起跑时一次算定要不要按类目裁，并把本轮
+            // 用户输入的关键词与生效 skill 的白名单涉及的类目预先放回（写进同一份展开集，只增不减）。
+            prepareToolCategoryPutBack(guard, request.getMessage(), agentMode);
             // 运行期不可用的工具也在同一处算定（dev-board#750）：账户没连时那些工具每次都只会回
             // 一句「尚未连接 AI WorkDeck 账户」，而模型会为此白花一整轮（3~5 秒）
             guard.unusableTools = toolRegistry.unusableToolNames();
@@ -2566,26 +2566,32 @@ public class AgentOrchestrator {
     }
 
     /**
-     * 活跃文档类目裁剪的起跑准备（dev-board#1064）：判定本轮裁不裁，并把用户输入的关键词与
-     * 生效 skill 的白名单涉及的类目预先放回展开集。只在起跑时调一次。
+     * 工具类目的起跑准备（dev-board#1064）：判定本轮做不做活跃文档类目裁剪，并在<b>渐进披露开着或
+     * 类目裁剪生效</b>时，把用户输入的关键词与生效 skill 的白名单涉及的类目预先放回展开集。只在起跑时调一次。
      *
-     * <p>ASK 模式只下发只读记忆工具，裁不裁都一样，不做。
+     * <p>预放回原先只在类目裁剪生效时做（那时渐进披露默认关）。渐进披露默认打开之后，
+     * 没开文档的会话（纯对话、Office 任务窗格）里同样只下发核心集——「帮我建个事项」若不预放回
+     * task 类目，就要先花一轮 list_tools，下一轮工具集一变提示缓存还得整段重付（09-29 实测 T-B 20/20 如此）。
+     *
+     * <p>ASK 模式只下发只读记忆工具，裁不裁、放不放回都一样，不做。
      */
-    private void prepareDocCategoryTrim(RunGuard guard, String userMessage, AgentMode agentMode) {
+    private void prepareToolCategoryPutBack(RunGuard guard, String userMessage, AgentMode agentMode) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
-        if (guard == null || policy == null || agentMode == AgentMode.ASK
-                || policy.hiddenCategoriesFor(guard.activeDocKind).isEmpty()) {
+        if (guard == null || policy == null || agentMode == AgentMode.ASK) {
             return;
         }
-        guard.docCategoryTrimActive = true;
+        guard.docCategoryTrimActive = !policy.hiddenCategoriesFor(guard.activeDocKind).isEmpty();
+        if (!guard.docCategoryTrimActive && !policy.isEnabled()) {
+            return;
+        }
         java.util.Set<String> putBack = new java.util.LinkedHashSet<>(policy.categoriesHintedBy(userMessage));
         for (com.checkba.service.ai.skill.SkillRouter.ActiveSkill skill : skillRouter.activeSkills(guard.runId)) {
             putBack.addAll(policy.categoriesCoveredBy(skill.definition().getAllowedTools()));
         }
         guard.expandedToolCategories.addAll(putBack);
-        log.info("[ToolVisibility] conv={} 活跃文档 {} 按类目裁剪 {}，预先放回类目 {}（关键词/skill）",
+        log.info("[ToolVisibility] conv={} 活跃文档 {} 按类目裁剪 {}，渐进披露 {}，预先放回类目 {}（关键词/skill）",
                 guard.conversationId, guard.activeDocKind,
-                policy.hiddenCategoriesFor(guard.activeDocKind), putBack);
+                policy.hiddenCategoriesFor(guard.activeDocKind), policy.isEnabled() ? "开" : "关", putBack);
     }
 
     /**
@@ -2605,7 +2611,7 @@ public class AgentOrchestrator {
 
     /**
      * 渐进披露（dev-board#810）：只下发核心集 + 本轮已展开的类目。
-     * 策略未注入或开关关着时原样返回——这是默认行为，也是全部既有测试走的那条路。
+     * 策略未注入或两个开关都关着时原样返回（手工 new 的编排器没注入策略，走的是这条路）。
      */
     private List<ToolSpecification> discloseProgressively(List<ToolSpecification> allCandidates, RunGuard guard) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;

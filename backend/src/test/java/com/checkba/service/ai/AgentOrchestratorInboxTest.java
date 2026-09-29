@@ -386,7 +386,7 @@ class AgentOrchestratorInboxTest {
         orchestrator.setToolDisclosurePolicy(new ToolDisclosurePolicy(false));
         when(modelFactory.resolveTarget(any(), eq(false))).thenReturn(new ChatModelFactory.ResolvedTarget(
                 com.checkba.config.AiModelProperties.Provider.OPENROUTER, MODEL));
-        var specs = List.of("read_document", "read_file", "doc_set_font", "doc_accept_revision", "memory_search")
+        var specs = List.of("extract_file_text", "read_file", "doc_set_font", "doc_accept_revision", "memory_search")
                 .stream().map(n -> ToolSpecification.builder().name(n).description(n).build()).toList();
         when(tools.getAllSpecifications(any(), any())).thenReturn(specs);
         var catalog = ToolSpecification.builder().name("list_tools").description("catalog").build();
@@ -413,7 +413,7 @@ class AgentOrchestratorInboxTest {
         var decision = installDecision();
         when(decision.select(any(), any(), any())).thenReturn(Optional.empty());
         when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
-                AiMessage.from(List.of(tool("read_document", "read"))), AiMessage.from("done")));
+                AiMessage.from(List.of(tool("extract_file_text", "read"))), AiMessage.from("done")));
         var request = request("synthetic original input", "fallback", "steer");
         request.setDecisionAssistEnabled(true);
         orchestrator.handleUserMessage(request, 7L);
@@ -434,7 +434,7 @@ class AgentOrchestratorInboxTest {
         request.setDecisionAssistEnabled(true);
         orchestrator.handleUserMessage(request, 7L);
         assertEquals(2, modelToolNames.size());
-        assertTrue(modelToolNames.get(0).containsAll(List.of("read_document", "read_file", "memory_search", "list_tools")));
+        assertTrue(modelToolNames.get(0).containsAll(List.of("extract_file_text", "read_file", "memory_search", "list_tools")));
         assertFalse(modelToolNames.get(0).contains("doc_set_font"));
         assertTrue(modelToolNames.get(1).containsAll(modelToolNames.get(0)));
         assertTrue(modelToolNames.get(1).contains("doc_set_font"));
@@ -474,7 +474,7 @@ class AgentOrchestratorInboxTest {
             context.set(inv.getArgument(0)); entered.countDown(); await(release); return Optional.of("files");
         });
         when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
-                AiMessage.from(List.of(tool("read_document", "read"))), AiMessage.from("done")));
+                AiMessage.from(List.of(tool("extract_file_text", "read"))), AiMessage.from("done")));
         var initial = request("initial consent", "initial", "steer"); initial.setDecisionAssistEnabled(true);
         var row = inbox.submit(initial, 7L);
         var thread = new Thread(() -> orchestrator.acceptInboxSubmission(row.getId())); thread.start();
@@ -507,11 +507,11 @@ class AgentOrchestratorInboxTest {
         var decision = installDecision();
         when(decision.select(any(), any(), any())).thenReturn(Optional.of("files"));
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
-        when(tools.execute(eq("read_document"), any(), any())).thenAnswer(inv -> {
+        when(tools.execute(eq("extract_file_text"), any(), any())).thenAnswer(inv -> {
             entered.countDown(); await(release); return new ToolRegistry.ToolResult("synthetic file", null, true);
         });
         when(modelFactory.getStreamingChatModel(MODEL)).thenReturn(scripted(
-                AiMessage.from(List.of(tool("read_document", "read"))), AiMessage.from("first done"),
+                AiMessage.from(List.of(tool("extract_file_text", "read"))), AiMessage.from("first done"),
                 AiMessage.from("off done"), AiMessage.from("on done")));
         var first = request("first on", "first", "steer"); first.setDecisionAssistEnabled(true);
         var row = inbox.submit(first, 7L);

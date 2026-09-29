@@ -61,7 +61,7 @@ final class RealToolBeans {
     /**
      * 渐进披露开关，只影响 {@link ToolDiscoveryTools#isAvailable()}（也就是 list_tools 下不下发规格）。
      * 默认 true：绝大多数测试要么不在乎它，要么正是要断言目录工具在场。
-     * 想量「生产默认（披露关着）到底下发多少工具」时用 {@link #instantiateAll(boolean)}。
+     * 想量「披露关着（AI_TOOLS_PROGRESSIVE_DISCLOSURE=false）时到底下发多少工具」时用 {@link #instantiateAll(boolean)}。
      */
     static List<AgentToolComponent> instantiateAll() {
         return instantiateAll(true);
@@ -134,7 +134,7 @@ final class RealToolBeans {
                 // offeredToolsInclude 永远失败、offeredToolsExclude 永远通过）。
                 // 补进来后 skill-orchestration-tools-not-trimmed 才真正有意义。
                 TodoTools.class,
-                // list_tools：工具目录（dev-board#810）。渐进披露默认关着，它也照常下发——
+                // list_tools：工具目录（dev-board#810；#1064 第二步起渐进披露默认开）。这里恒可用——
                 // 多一个便宜的目录入口不会改变任何既有用例的工具选择，而漏列它会让
                 // ToolDisclosurePolicyTest 的覆盖面断言全部变成空断言。
                 ToolDiscoveryTools.class,

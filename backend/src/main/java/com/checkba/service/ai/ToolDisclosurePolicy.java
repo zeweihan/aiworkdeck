@@ -53,10 +53,23 @@ import java.util.function.Supplier;
  * 散在三十四个文件的注解里没人能一眼看出「读一份合同」这条链是不是断的。
  * 清单集中在这里，配套的覆盖面断言也集中在 {@code ToolDisclosurePolicyTest}。
  *
- * <p><b>默认关闭</b>（{@code ai.tools.progressive-disclosure.enabled=false}）：这套机制改的是
- * 模型行为，而回放评测用的是脚本模型——脚本模型永远会按剧本调对工具，证明不了真实模型
- * 找不找得到 {@code list_tools}。绿的回放只说明「编排器没把事情做坏」，不说明
- * 「模型在少了一百个工具之后还能把活干完」。开关默认关，等真实模型的对照数据够了再翻。
+ * <p><b>默认打开</b>（{@code ai.tools.progressive-disclosure.enabled=true}，2026-09-29，dev-board#1064 第二步；
+ * 环境变量 {@code AI_TOOLS_PROGRESSIVE_DISCLOSURE=false} 可关）。此前默认关，理由是回放评测用的是脚本模型，
+ * 证明不了真实模型找不找得到 {@code list_tools}，而 2026-09-22 那组真实模型对照里「读文件总结」3 次有 1 次不收尾。
+ * 09-29 复查查清了那一次：无头后端没有 LOWA 编辑器，{@code doc_get_document_text} 必然等满编辑器桥 122 秒超时，
+ * 关掉披露照样复现——是测试环境的假象，不是披露造成的。在最终代码上跑的隔离后端真实模型矩阵
+ * （纯对话会话，三类任务 × DeepSeek V4 Flash / Kimi K3 × 10 次）：60 次里 list_tools 一次都没调，
+ * 58 次正常收尾；没达标的几次（模型先反问「读哪一份」、只看文件名就作答）在同一构建披露关着时
+ * 同样出现、频率不更低，与披露无关。数据与方法写在 ai-chat.md。
+ * 翻开关之前同批补上的三件事，是它能默认开的前提：
+ * <ol>
+ *   <li>核心集按「通用段 + 各宿主段」重定（T-18），每一类会话都有自己那一份「读 + 找 + 写」；</li>
+ *   <li>起跑时的关键词 / skill 预放回不再只在活跃文档类目裁剪时做，披露开着就做
+ *       （{@code AgentOrchestrator.prepareToolCategoryPutBack}）——「帮我建个事项」不必先查一轮目录；</li>
+ *   <li>system prompt 的目录规则把片段里「清单里没有就执行不了」那句改读成「目录也列不出来才执行不了」。</li>
+ * </ol>
+ * <b>已知代价</b>：任务要用一个非核心类目、而关键词没猜到时，多一轮 {@code list_tools}，且展开后那一轮
+ * 工具集变了、提示缓存整段失效一次。接受它，是因为每一轮都省下的那一大块规格远大于偶尔多付的这一轮。
  *
  * <p><b>另一把独立的刀：活跃文档类目裁剪</b>（dev-board#1064，
  * {@code ai.tools.doc-session-category-trim.enabled}，<b>默认开</b>）。开着一份文档时，
@@ -70,9 +83,8 @@ import java.util.function.Supplier;
  * 本轮生效的 skill 白名单涉及的类目（{@link #categoriesCoveredBy}）、模型调 {@code list_tools(category)}、
  * 模型经 XML 兜底直接点名调了一个没下发的工具（它的同类工具下一轮回来）。
  *
- * <p>为什么它可以默认开而渐进披露不行：它藏掉的是「开着一份文档时几乎用不到」的整类，
- * 核心集那种「连 doc_* 版式工具都先藏起来」的激进收窄才真正改模型的做事路径；
- * 而漏网的请求至少有关键词、skill、目录三条路把能力放回来。
+ * <p>两把刀的分工：类目裁剪藏的是「开着一份文档时几乎用不到」的整类，渐进披露再把剩下的收窄到核心集。
+ * 任何一把单独关掉，另一把照常工作；两者共用同一份放回集与同一个 {@code list_tools} 入口。
  */
 @Service
 public class ToolDisclosurePolicy {
@@ -86,50 +98,74 @@ public class ToolDisclosurePolicy {
      * <p>挑选判据是<b>把一条完整的活干完需要哪些工具</b>，不是按调用次数排名：
      * 少一个「读」类工具模型就绕路，少一个「写」类工具它就停在半路告诉用户做不了。
      * 每一组后面的注释写的是这组保证哪条链不断。
+     *
+     * <p>这是<b>一份扁平集合</b>，按段写只为读得清：通用段之外的每一段都挑宿主，
+     * 上游的会话能力闸（{@code ClientCapabilityService.isToolVisible}）与活跃文档闸
+     * 会把别家宿主的那几段整段裁掉，所以一份 docx 会话实际拿到的是「通用段 + docx 段」
+     * 再加上 kind 无关的 {@code sheet_create_file}；逐会话的实数由
+     * {@code ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete} 打印并钉住。
      */
     static final Set<String> CORE = Set.of(
+            // ==================== 通用段：任何会话都要有（19 个）====================
             // —— 目录入口与编排：少了 list_tools 整套机制就没有入口；ask_user 是「拿不准先问」
             //    的唯一入口（dev-board#868），藏进目录里等于让模型先查目录才能想起来问；
             //    use_skill 是模型自己切到专门流程的入口（dev-board#1065），与 list_tools 的 skill 目录配套 ——
             CATALOG_TOOL, "todo_write", "dispatch_subtask", "ask_user", "use_skill",
 
-            // —— 项目材料：找文件 → 拿 fileId → 读全文 → 落一份新文件 ——
-            "doc_list_project_files", "search_project_files", "extract_file_text", "read_document",
-            "search_project_content",
+            // —— 项目材料：找文件（按名 / 按正文）→ 拿 fileId → 读全文 → 落一份新文件 → 整理 ——
+            // doc_list_project_files 自 dev-board#1065 T-01 起三档会话都可见（纯后端清单），
+            // 所以纯对话与 Office 任务窗格会话也不必为「这是什么文件」先查一次目录（#1064 实测病灶）。
+            // read_document 已只登记不下发（T-05），入口统一是 extract_file_text。
+            "doc_list_project_files", "search_project_files", "search_project_content", "extract_file_text",
             "write_docx", "create_folder", "move_files_batch", "move_to_trash",
 
             // —— 记忆：检索与保存各一个（memory_* 六个由编排器的 MEMORY_TOOLS 规则另行兜底）——
             "query_memory", "save_memory",
 
-            // —— 法源与公网：律师最高频的外部检索，四个加起来也只有一千出头字符 ——
-            "law_search", "law_search_keyword", "get_law_article", "search_web", "browse_url",
+            // —— 法源与公网：律师最高频的外部检索。law_search_keyword 是 law_search 的精确检索变体，
+            //    退到 legal 类目（「法规」「法条」等关键词会在起跑时把它预先放回）——
+            "law_search", "get_law_article", "search_web", "browse_url",
 
-            // —— 打开的文档·读：通读、找、看条款、机械核对 ——
-            // doc_get_selection 不在这里（dev-board#1065 T-15）：doc_get_cursor_context 已覆盖，且它不再下发。
-            "doc_get_document_text", "doc_get_outline", "doc_get_paragraph", "doc_get_cursor_context",
-            "doc_find_text", "doc_get_clauses", "doc_audit_structure",
+            // ==================== LOWA 文字（docx）段：15 个 ====================
+            // 能力闸与活跃文档闸会把它们从 xlsx / pptx / 任务窗格 / 纯对话会话里裁掉，不占位。
+            // —— 读：打开、通读、找、看光标处、看条款、机械核对 ——
+            // doc_get_outline / doc_get_paragraph 退到 edit 类目：doc_get_document_text 分页读已覆盖通读，
+            // doc_get_cursor_context 覆盖「看选区与上下文」（T-15）。
+            "doc_open_file", "doc_get_document_text", "doc_find_text", "doc_get_cursor_context",
+            "doc_get_clauses", "doc_audit_structure",
+            // —— 写：改一处、插一段（含锚点前后插入，T-16）、整篇起草、插表、套标准格式 ——
+            // doc_insert_table 进核心集：活跃文档末位提醒点名要求「新表整表一次提交」，
+            // 被点名的工具藏在目录里，弱模型就会改成逐行写表把步数耗光（2026-09-07 实测回归 B4）。
+            // doc_replace_selection / doc_select_anchor / doc_select_paragraph 退到 edit 类目：
+            // 锚点替换与查找替换已覆盖「改一处」，先选中再替换是两步走的旧路。
+            "doc_find_replace", "doc_replace_at_anchor", "doc_insert_at_cursor", "doc_start_stream",
+            "doc_insert_table", "doc_apply_standard_format",
+            // —— 批注与后悔药 ——
+            // doc_get_comments 退到 revision 类目（与回复 / 解决 / 删除批注同类；「批注」「修订」等关键词会预先放回）。
+            // doc_restore_checkpoint 回到核心集：Impress 上 doc_undo 是空操作（引擎不记撤销栈，
+            // lowa-e2e undo-redo-kinds 实测），pptx 会话里它是唯一的后悔药，约 300 字符。
+            "doc_add_comment", "doc_undo", "doc_restore_checkpoint",
 
-            // —— 打开的文档·写：改一处、插一段、整篇起草、套标准格式 ——
-            // 删除走 doc_replace_at_anchor / doc_find_replace 传空串（T-14，doc_delete_text 不再下发）；
-            // 「在某句前后插入」由 doc_insert_at_cursor 的 anchorId + position 一步完成（T-16），
-            // doc_insert_under_heading 因此退到 edit 类目，照常下发、只是不占核心集。
-            "doc_find_replace", "doc_replace_at_anchor", "doc_replace_selection", "doc_insert_at_cursor",
-            "doc_start_stream", "doc_apply_standard_format",
+            // ==================== LOWA 表格（xlsx）段：5 个 ====================
+            // sheet_create_file 在 docx 会话里同样可见（新建一份表格，不依赖活跃文档类型）。
+            "sheet_create_file", "sheet_get_overview", "sheet_read_range", "sheet_write_cells", "sheet_find_replace",
 
-            // —— 打开的文档·定位与后悔药：选中、撤销 ——
-            // doc_restore_checkpoint 是最后手段，退到 revision 类目（T-19）；常规纠错 doc_undo 留在这里。
-            "doc_open_file", "doc_select_anchor", "doc_select_paragraph", "doc_undo",
+            // ==================== LOWA 演示（pptx）段：5 个 ====================
+            "slide_get_overview", "slide_get_page", "slide_set_shape_text", "slide_replace_text", "slide_add_page",
 
-            // —— 批注：审查合同时的主要交付物 ——
-            "doc_add_comment", "doc_get_comments",
-
-            // —— 表格 / 演示文稿 / Office 任务窗格的最小面 ——
-            // 这几族在各自的会话里本来就被上游的能力闸与活跃文档闸裁过一遍，这里留的是
-            // 「在那种会话里同样要能开工」的最小集合；doc_* 会话里它们早被裁掉，不占位。
-            "sheet_create_file", "sheet_get_overview", "sheet_read_range", "sheet_write_cells",
-            "slide_get_overview", "slide_set_shape_text", "slide_add_page",
+            // ==================== Office 任务窗格·Word 段：7 个（T-18）====================
+            // office_pass_step 是 Word 窗格整篇大改的入口（分段过卷，dev-board#422）；office_add_comment 是审查的交付物。
             "office_get_text", "office_search", "office_insert_text", "office_replace_text",
-            "office_replace_batch"
+            "office_replace_batch", "office_add_comment", "office_pass_step",
+
+            // ==================== Office 任务窗格·Excel 段：5 个（T-18）====================
+            // 三类宿主的执行器互不相通，Word 面的 office_* 在 Excel 窗格里一个都不可见，
+            // 所以每个宿主都要有自己那一份「读 + 找 + 写」。
+            "office_excel_get_overview", "office_excel_get_range", "office_excel_set_values",
+            "office_excel_search", "office_excel_replace",
+
+            // ==================== Office 任务窗格·PowerPoint 段：4 个（T-18）====================
+            "office_ppt_get_slides", "office_ppt_replace_text", "office_ppt_format_text", "office_ppt_add_slide"
     );
 
     /**
@@ -143,7 +179,7 @@ public class ToolDisclosurePolicy {
     static {
         CATEGORIES.put("table", List.of("doc_table_", "name:doc_insert_table"));
         CATEGORIES.put("revision", List.of(
-                "name:doc_restore_checkpoint", "name:doc_list_revisions", "name:doc_accept_revision", "name:doc_reject_revision",
+                "name:doc_restore_checkpoint", "name:doc_get_comments", "name:doc_list_revisions", "name:doc_accept_revision", "name:doc_reject_revision",
                 "name:doc_accept_all_revisions", "name:doc_reject_all_revisions",
                 "name:doc_reply_comment", "name:doc_resolve_comment", "name:doc_delete_comment",
                 "name:doc_debug_revisions"));
@@ -157,15 +193,15 @@ public class ToolDisclosurePolicy {
                 "name:create_file_from_template", "name:list_contributed_templates",
                 "name:contribute_template"));
         // 定位 / 删改 / 按段落取改（dev-board#1065 T-19）。原先它们都掉进下面的 doc_ 通配归了 format，
-        // 模型想「删掉选中的字」「改第 3 段」时不会去查一个叫 format 的类目。核心集里的几个
-        // （doc_select_anchor / doc_select_paragraph / doc_get_paragraph / doc_get_outline）列在这里只为
-        // 归属清楚，categoryOf 先判核心集，它们照旧返回 core。必须排在 format 之前。
+        // 模型想「删掉选中的字」「改第 3 段」时不会去查一个叫 format 的类目。
+        // doc_select_anchor / doc_select_paragraph / doc_get_paragraph / doc_get_outline / doc_replace_selection
+        // 在 #1064 第二步退出核心集后就归这里。必须排在 format 之前。
         CATEGORIES.put("edit", List.of(
                 "name:doc_goto", "name:doc_collapse_cursor", "name:doc_delete_selection", "name:doc_redo",
                 "name:doc_select_anchor", "name:doc_select_paragraph", "name:doc_modify_paragraph",
                 "name:doc_replace_nth_match", "name:doc_delete_match", "name:doc_delete_text",
                 "name:doc_set_selection", "name:doc_get_selection", "name:doc_get_paragraph",
-                "name:doc_get_outline", "name:doc_insert_under_heading"));
+                "name:doc_get_outline", "name:doc_insert_under_heading", "name:doc_replace_selection"));
         // files 排在 format 之前，只为 doc_export_pdf：它带 doc_ 前缀，排在后面就会被 format 通配吃掉。
         CATEGORIES.put("files", List.of(
                 "name:list_files", "name:read_file", "name:write_file", "name:scan_files",
@@ -250,8 +286,29 @@ public class ToolDisclosurePolicy {
         CATEGORY_KEYWORDS.put("plugin", List.of("插件", "plugin", "能力安装", "capability"));
         CATEGORY_KEYWORDS.put("meeting", List.of("会议", "录音", "纪要", "转写", "meeting", "transcript"));
         CATEGORY_KEYWORDS.put("python", List.of("python", "脚本", "计算一下", "跑一段代码"));
+        // 「表格」两边都放：docx 里说的「表格」是文档内的表（table 类目的 doc_table_*），
+        // xlsx 会话或「做一张表格」说的是电子表格；分不清就两类都放回，多付的是一轮里两类的规格。
         CATEGORY_KEYWORDS.put("spreadsheet", List.of("表格", "excel", "xlsx", "工作表"));
-        CATEGORY_KEYWORDS.put("task", List.of("事项", "日程", "提醒", "待办"));
+        CATEGORY_KEYWORDS.put("table", List.of("表格", "table", "单元格", "合并单元格"));
+        CATEGORY_KEYWORDS.put("task", List.of("事项", "日程", "提醒", "待办", "截止", "deadline"));
+        // 以下几类是渐进披露默认打开后补的（dev-board#1064 第二步）：律师最常说的几类请求，
+        // 起跑时就把那一类放回，免得先花一轮查目录、再让下一轮的提示缓存整段失效。
+        CATEGORY_KEYWORDS.put("revision", List.of("修订", "批注", "接受", "拒绝", "评论",
+                "comment", "revision", "track changes"));
+        CATEGORY_KEYWORDS.put("template", List.of("模板", "套用", "template"));
+        CATEGORY_KEYWORDS.put("evidence", List.of("证据", "依据", "evidence"));
+        // 不收单独的「目录」：它在中文里也是「文件夹」（「项目目录下有什么」），误中就白付整个 format 类目
+        // 四十个规格；只收明确指文档目录的短语。
+        CATEGORY_KEYWORDS.put("format", List.of("格式", "字体", "字号", "段落", "页眉", "页脚", "脚注", "排版",
+                "插入目录", "生成目录", "更新目录", "font", "format", "heading"));
+        // 不收「整理」：「整理一下录音 / 要点」远比「整理文件夹」常见，而建文件夹、批量移动、移入回收站本来就在核心集。
+        CATEGORY_KEYWORDS.put("files", List.of("移动", "重命名", "文件夹", "rename", "move", "folder"));
+        // 「法》」「条例》」：用户一写书名号引一部法（《公司法》《劳动合同法》《著作权法实施条例》）就是在查法条，
+        // 比「法规」「法条」这类泛称命中得准。
+        CATEGORY_KEYWORDS.put("legal", List.of("法规", "法条", "条文", "司法解释", "法》", "条例》"));
+        CATEGORY_KEYWORDS.put("memory", List.of("记住", "记忆", "偏好"));
+        // edit 刻意不收关键词：「删除 / 改成 / 替换 / 插入」几乎每句改文档的话都有，而真正常用的
+        // 删改原语（锚点替换、查找替换、光标处插入）本来就在核心集里。
     }
 
     private final boolean enabled;
@@ -264,7 +321,7 @@ public class ToolDisclosurePolicy {
 
     @Autowired
     public ToolDisclosurePolicy(
-            @Value("${ai.tools.progressive-disclosure.enabled:false}") boolean enabled,
+            @Value("${ai.tools.progressive-disclosure.enabled:true}") boolean enabled,
             @Value("${ai.tools.doc-session-category-trim.enabled:true}") boolean docSessionCategoryTrim) {
         this.enabled = enabled;
         this.docSessionCategoryTrim = docSessionCategoryTrim;

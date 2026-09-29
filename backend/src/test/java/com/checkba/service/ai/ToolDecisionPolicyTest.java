@@ -33,7 +33,7 @@ class ToolDecisionPolicyTest {
     }
 
     private static List<ToolSpecification> candidates() {
-        return List.of(tool("list_tools", 80), tool("read_document", 80),
+        return List.of(tool("list_tools", 80), tool("extract_file_text", 80),
                 tool("read_file", 1800), tool("pdf_inspect", 1800), tool("doc_set_font", 1800),
                 tool("memory_read", 80));
     }
@@ -69,7 +69,7 @@ class ToolDecisionPolicyTest {
     }
 
     @Test void entirelyCoreCandidatesCannotShrinkAndNeverCall() {
-        assertTrue(policy.select(enabled(), "读取文档", List.of(tool("list_tools", 80), tool("read_document", 6000), tool("memory_read", 3000))).isEmpty());
+        assertTrue(policy.select(enabled(), "读取文档", List.of(tool("list_tools", 80), tool("extract_file_text", 6000), tool("memory_read", 3000))).isEmpty());
         verifyNoInteractions(service);
     }
 
@@ -84,7 +84,7 @@ class ToolDecisionPolicyTest {
         assertEquals(java.util.Set.of("user_request", "available_tools"), state.getValue().keySet());
         @SuppressWarnings("unchecked") Map<String, List<String>> available =
                 (Map<String, List<String>>) state.getValue().get("available_tools");
-        assertEquals(List.of("list_tools", "read_document", "memory_read"), available.get("core"));
+        assertEquals(List.of("list_tools", "extract_file_text", "memory_read"), available.get("core"));
         assertEquals(List.of("read_file"), available.get("files"));
         assertFalse(available.containsKey("slides"));
         assertEquals(java.util.Set.of("core", "files", "pdf", "format", "uncertain"), criteria.getValue().keySet());
