@@ -271,10 +271,23 @@ public class ContextAssemblerService {
      * 写进易变段会白白多一次提示缓存未命中）。位置是刻意的：本仓的实证是
      * 只写在 system prompt 中段的约束会被弱模型无视，而这一条正是
      * 「别急着告诉用户做不了」——它失效的表现恰恰是最贵的那种（模型谎报能力缺失）。
+     *
+     * <p>活跃文档类目裁剪（dev-board#1064）生效的会话里同样注入这一段：那种会话里 pdf_* / pptx_* 等
+     * 整类没下发，模型手上的同样是子集。<b>判据只看开关与活跃文档类型</b>（与编排器
+     * {@code AgentOrchestrator.initialDocKind} 同一个函数），绝不看本轮放回了什么——
+     * 放回是每轮会变的，写进这里会让稳定段逐轮变化、提示缓存永久失效且不报错。
+     * ASK 模式不下发工具，不注入。
      */
-    private String toolDisclosureRule(boolean english) {
+    private String toolDisclosureRule(boolean english,
+                                      com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+                                      AgentMode agentMode) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
-        if (policy == null || !policy.isEnabled()) {
+        if (policy == null) {
+            return "";
+        }
+        boolean docTrim = agentMode != AgentMode.ASK
+                && !policy.hiddenCategoriesFor(AgentOrchestrator.initialDocKind(activeContext)).isEmpty();
+        if (!policy.isEnabled() && !docTrim) {
             return "";
         }
         return english
@@ -505,8 +518,9 @@ public class ContextAssemblerService {
         // [Injection] Mode-Specific Constraints (CRITICAL)
         systemText.append(english ? getModeConstraintsEn(agentMode) : getModeConstraints(agentMode));
 
-        // [Injection] 工具渐进披露的硬规则（dev-board#810）。开关关着时是空串。
-        systemText.append(toolDisclosureRule(english));
+        // [Injection] 工具渐进披露的硬规则（dev-board#810；活跃文档类目裁剪生效时同样注入，#1064）。
+        // 两个开关都不适用时是空串。
+        systemText.append(toolDisclosureRule(english, activeContext, agentMode));
 
         // [Injection] Skill（Phase 3B，规范见 docs/SKILL_SPEC.md）：
         // 把本轮生效的每个 skill 的 prompt 模板注入系统消息。

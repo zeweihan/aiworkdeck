@@ -279,6 +279,21 @@ public class AgentOrchestrator {
          * 正是「你没看见但确实有」的那些，而这份名单只有编排器算得出来。
          */
         volatile List<ToolSpecification> roundCandidates = List.of();
+        /**
+         * 本轮真正下发给模型的工具名（dev-board#1064）。{@code list_tools} 的目录页据它列
+         * 「有但没下发」的那些；分发时也据它判断模型是不是经 XML 兜底点名调了一个没下发的工具。
+         */
+        volatile java.util.Set<String> roundOffered = java.util.Set.of();
+        /**
+         * 本轮起跑时活跃文档类目裁剪是否生效（开关开着且这种文档类型确实有要藏的类目）。
+         * <b>一轮内只算一次、不随中途换文档清掉</b>：它决定 list_tools 这一轮要不要下发，
+         * 下发过的工具不能在下一轮消失。
+         */
+        boolean docCategoryTrimActive;
+        /** 本轮是否已经下发过 list_tools。下发过就一直下发（只增不减）。 */
+        volatile boolean catalogOffered;
+        /** 这一次 LLM 往返被类目裁剪摘掉的工具数，只进 [Round] 日志（真机日志看得出裁没裁、裁了多少）。 */
+        volatile int roundTrimmed;
         // LLM 往返轮数与首轮 promptTokens（埋点 ai.turn；只由当前轮次记账）
         int llmRounds;
         boolean promptTokensRecorded;
@@ -839,7 +854,8 @@ public class AgentOrchestrator {
 
         com.checkba.service.ai.tools.ToolContext ctx =
                 new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId,
-                        guard == null ? List.of() : guard.roundCandidates);
+                        guard == null ? List.of() : guard.roundCandidates,
+                        guard == null ? null : guard.roundOffered);
         long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
         // 目录展开只在下一轮生效：本轮的工具集已经发给模型了，中途加进去会让
@@ -1438,6 +1454,9 @@ public class AgentOrchestrator {
                 log.info("[ToolVisibility] conv={} 活跃文档类型={}，本轮按该类型裁剪 doc_/sheet_/slide_ 工具集",
                         conversationId, guard.activeDocKind);
             }
+            // 活跃文档类目裁剪（dev-board#1064）：起跑时一次算定要不要裁，并把本轮用户输入的关键词
+            // 与生效 skill 的白名单涉及的类目预先放回（写进渐进披露那一份展开集，只增不减）。
+            prepareDocCategoryTrim(guard, request.getMessage(), agentMode);
             // 运行期不可用的工具也在同一处算定（dev-board#750）：账户没连时那些工具每次都只会回
             // 一句「尚未连接 AI WorkDeck 账户」，而模型会为此白花一整轮（3~5 秒）
             guard.unusableTools = toolRegistry.unusableToolNames();
@@ -2340,13 +2359,17 @@ public class AgentOrchestrator {
             guard.roundCandidates = registered;
         }
         List<ToolSpecification> visible;
+        if (guard != null) {
+            guard.roundTrimmed = 0;
+        }
         if (agentMode == AgentMode.ASK) {
             visible = registered.stream().filter(s -> ASK_MEMORY_TOOLS.contains(s.name())).toList();
             log.info("Ask mode: generating with {} read-only memory tools", visible.size());
         } else {
             List<ToolSpecification> afterSkill = skillRouter.visibleTools(guard.runId, registered);
             // skill 的 allowed_tools 本身已经是一次披露；两层叠起来会把 skill 精心挑出来的
-            // 工具又藏掉一半，所以这里只在「skill 没裁过」时才做渐进披露（dev-board#810）。
+            // 工具又藏掉一半，所以这里只在「skill 没裁过」时才做渐进披露（dev-board#810）
+            // 与活跃文档类目裁剪（dev-board#1064，在 discloseProgressively 里先于核心集收窄）。
             boolean narrowedBySkill = afterSkill.size() < registered.size();
             visible = new java.util.ArrayList<>(
                     narrowedBySkill ? afterSkill : discloseProgressively(afterSkill, guard));
@@ -2356,6 +2379,17 @@ public class AgentOrchestrator {
                         && visible.stream().noneMatch(v -> v.name().equals(spec.name()))) {
                     visible.add(spec);
                 }
+            }
+            dropIdleCatalog(visible, guard);
+        }
+        if (guard != null) {
+            java.util.Set<String> offeredNames = new java.util.HashSet<>();
+            for (ToolSpecification spec : visible) {
+                offeredNames.add(spec.name());
+            }
+            guard.roundOffered = java.util.Collections.unmodifiableSet(offeredNames);
+            if (offeredNames.contains(ToolDisclosurePolicy.CATALOG_TOOL)) {
+                guard.catalogOffered = true;
             }
         }
         roundTimings.mark("tools", visible.size());
@@ -2373,8 +2407,10 @@ public class AgentOrchestrator {
             guard.llmRounds++;
             telemetryTurnTracker.noteRound(conversationId);
         }
-        log.info("[Round] conv={} depth={} round={} tools={} messages={}",
-                conversationId, depth, guard == null ? -1 : guard.llmRounds, visible.size(), messages.size());
+        log.info("[Round] conv={} depth={} round={} tools={} trimmed={} expanded={} messages={}",
+                conversationId, depth, guard == null ? -1 : guard.llmRounds, visible.size(),
+                guard == null ? 0 : guard.roundTrimmed,
+                guard == null ? java.util.Set.of() : guard.expandedToolCategories, messages.size());
         try {
             // 在途请求的句柄交给本轮的 RunGuard，「停止」才掐得断它（计划 K4 ①）。
             // trackInflight 自己会补查一次取消标志：请求刚发出、标志恰好落在这两步之间时，
@@ -2396,28 +2432,91 @@ public class AgentOrchestrator {
     private void noteToolCategoryExpansion(RunGuard guard, String toolName, String argsJson,
                                            ToolRegistry.ToolResult result) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
-        if (guard == null || policy == null || (!policy.isEnabled() && !guard.assistedDisclosure)
-                || !ToolDisclosurePolicy.CATALOG_TOOL.equals(toolName)
-                || result == null || !result.success()) {
+        if (guard == null || policy == null
+                || (!policy.isEnabled() && !guard.assistedDisclosure && !guard.docCategoryTrimActive)
+                || result == null) {
             return;
         }
-        java.util.Set<String> expanded = policy.parseCategories(extractArg(argsJson, "category"));
-        if (!expanded.isEmpty() && guard.expandedToolCategories.addAll(expanded)) {
-            log.info("[Disclosure] conv={} 展开类目 {}（下一轮生效），当前展开集 {}",
-                    guard.conversationId, expanded, guard.expandedToolCategories);
+        if (ToolDisclosurePolicy.CATALOG_TOOL.equals(toolName)) {
+            if (!result.success()) {
+                return;
+            }
+            java.util.Set<String> expanded = policy.parseCategories(extractArg(argsJson, "category"));
+            if (!expanded.isEmpty() && guard.expandedToolCategories.addAll(expanded)) {
+                log.info("[Disclosure] conv={} 展开类目 {}（下一轮生效），当前展开集 {}",
+                        guard.conversationId, expanded, guard.expandedToolCategories);
+            }
+            return;
         }
+        // 模型经 XML 兜底直接点名调了一个本轮没下发的工具（dev-board#1064）：它要的就是那一类，
+        // 把同类工具下一轮放回来——不然它每调一个同类工具都得再点一次名，或者干脆以为没有。
+        // 只认真的登记着的工具（found）；本轮下发集为空说明还没进过 runLoop，不判。
+        java.util.Set<String> offered = guard.roundOffered;
+        if (!result.found() || offered == null || offered.isEmpty() || offered.contains(toolName)) {
+            return;
+        }
+        String category = policy.categoryOf(toolName);
+        if (!"core".equals(category) && guard.expandedToolCategories.add(category)) {
+            log.info("[Disclosure] conv={} 模型点名调了未下发的 {}，放回类目 {}（下一轮生效），当前展开集 {}",
+                    guard.conversationId, toolName, category, guard.expandedToolCategories);
+        }
+    }
+
+    /**
+     * 活跃文档类目裁剪的起跑准备（dev-board#1064）：判定本轮裁不裁，并把用户输入的关键词与
+     * 生效 skill 的白名单涉及的类目预先放回展开集。只在起跑时调一次。
+     *
+     * <p>ASK 模式只下发只读记忆工具，裁不裁都一样，不做。
+     */
+    private void prepareDocCategoryTrim(RunGuard guard, String userMessage, AgentMode agentMode) {
+        ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
+        if (guard == null || policy == null || agentMode == AgentMode.ASK
+                || policy.hiddenCategoriesFor(guard.activeDocKind).isEmpty()) {
+            return;
+        }
+        guard.docCategoryTrimActive = true;
+        java.util.Set<String> putBack = new java.util.LinkedHashSet<>(policy.categoriesHintedBy(userMessage));
+        for (com.checkba.service.ai.skill.SkillRouter.ActiveSkill skill : skillRouter.activeSkills(guard.runId)) {
+            putBack.addAll(policy.categoriesCoveredBy(skill.definition().getAllowedTools()));
+        }
+        guard.expandedToolCategories.addAll(putBack);
+        log.info("[ToolVisibility] conv={} 活跃文档 {} 按类目裁剪 {}，预先放回类目 {}（关键词/skill）",
+                guard.conversationId, guard.activeDocKind,
+                policy.hiddenCategoriesFor(guard.activeDocKind), putBack);
+    }
+
+    /**
+     * 本轮什么都没藏时不下发 list_tools（dev-board#1064）。类目裁剪开着时 {@code ToolDiscoveryTools}
+     * 是进程级可用的，于是没开文档的会话里它也在候选集里——每轮白付约一千字符、打开来又是一句
+     * 「没有可展开的」。渐进披露开着、决策辅助接管了披露、或本轮在做类目裁剪时照常下发；
+     * 本轮已经下发过的也照常下发（只增不减）。
+     */
+    private void dropIdleCatalog(List<ToolSpecification> visible, RunGuard guard) {
+        ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
+        if (guard == null || policy == null || policy.isEnabled() || guard.assistedDisclosure
+                || guard.docCategoryTrimActive || guard.catalogOffered) {
+            return;
+        }
+        visible.removeIf(spec -> ToolDisclosurePolicy.CATALOG_TOOL.equals(spec.name()));
     }
 
     /**
      * 渐进披露（dev-board#810）：只下发核心集 + 本轮已展开的类目。
      * 策略未注入或开关关着时原样返回——这是默认行为，也是全部既有测试走的那条路。
      */
-    private List<ToolSpecification> discloseProgressively(List<ToolSpecification> candidates, RunGuard guard) {
+    private List<ToolSpecification> discloseProgressively(List<ToolSpecification> allCandidates, RunGuard guard) {
         ToolDisclosurePolicy policy = this.toolDisclosurePolicy;
         if (policy == null || guard == null) {
-            return candidates;
+            return allCandidates;
         }
-        prepareToolDecision(candidates, guard);
+        // 决策辅助看的是裁剪之前的全集：它选中的类目（比如 pdf）要能在本轮就放回来。
+        prepareToolDecision(allCandidates, guard);
+        // 活跃文档类目裁剪（dev-board#1064）排在核心集收窄之前，两者都是「只留 核心集 ∪ 已放回类目」
+        // 的形状，叠起来仍是那个形状。放在决策辅助之后，它刚放回的类目本轮就生效。
+        List<ToolSpecification> candidates = guard.docCategoryTrimActive
+                ? policy.trimForDocKind(allCandidates, guard.activeDocKind, guard.expandedToolCategories)
+                : allCandidates;
+        guard.roundTrimmed = allCandidates.size() - candidates.size();
         if (guard.decisionContext != null && guard.decisionAbandoned) return candidates;
         if (!policy.isEnabled() && !guard.assistedDisclosure) return candidates;
         List<ToolSpecification> disclosed = policy.narrow(candidates, guard.expandedToolCategories);

@@ -1300,6 +1300,35 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("活跃文档类目裁剪生效的会话同样补目录规则，落在稳定段且逐轮字节不变（dev-board#1064）")
+    void toolCatalogRuleAppearsForDocSessionTrimAndStaysCacheable() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+        assembler.setToolDisclosurePolicy(new ToolDisclosurePolicy(false, true));
+        String sep = ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR;
+
+        String first = assembleSystemText(activeDoc());
+        String second = assembleSystemText(activeDoc());
+        String stable = first.substring(0, first.indexOf(sep));
+
+        assertTrue(stable.contains("## 工具目录"),
+                "docx 会话里 pdf_* / pptx_* 等整类没下发，模型手上是子集，必须告诉它有目录可查：" + stable);
+        assertTrue(stable.contains("list_tools()"), stable);
+        assertFalse(first.substring(first.indexOf(sep)).contains("## 工具目录"),
+                "目录规则只随开关与文档类型变，放进易变段是白白多一次缓存未命中");
+        assertEquals(stable, second.substring(0, second.indexOf(sep)),
+                "裁剪规则的判据只能看开关与文档类型，不许看每轮会变的放回集");
+    }
+
+    @Test
+    @DisplayName("类目裁剪开着但没有活跃文档：什么都没藏，system prompt 与改动前逐字一致（dev-board#1064）")
+    void docSessionTrimWithoutActiveDocumentLeavesThePromptUntouched() {
+        String withoutPolicy = assembleSystemText(null);
+        assembler.setToolDisclosurePolicy(new ToolDisclosurePolicy(false, true));
+        assertEquals(withoutPolicy, assembleSystemText(null),
+                "没开文档的会话一个工具都没藏，却多了一段目录规则，等于让它每轮白付这段字符");
+    }
+
+    @Test
     @DisplayName("同一会话连续两次组装：标记之前的字节完全相同（缓存命中的充分条件）")
     void stablePrefixIsByteIdenticalAcrossTurns() {
         when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");

@@ -65,17 +65,29 @@ final class RealToolBeans {
         return instantiateAll(true);
     }
 
-    /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
+    /**
+     * 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致。
+     * 只给披露开关时，活跃文档类目裁剪（dev-board#1064）按关着算：这个重载的调用方量的是
+     * 「两个开关都关着时 list_tools 到底下不下发」。
+     */
     static List<AgentToolComponent> instantiateAll(boolean disclosureEnabled) {
+        return instantiateAll(disclosureEnabled, false);
+    }
+
+    /** 两个开关都指定：渐进披露 × 活跃文档类目裁剪（dev-board#1064，生产默认开）。 */
+    static List<AgentToolComponent> instantiateAll(boolean disclosureEnabled, boolean docSessionCategoryTrim) {
         DISCLOSURE_ENABLED.set(disclosureEnabled);
+        DOC_TRIM_ENABLED.set(docSessionCategoryTrim);
         try {
             return instantiateComponents();
         } finally {
             DISCLOSURE_ENABLED.set(true);
+            DOC_TRIM_ENABLED.set(true);
         }
     }
 
     private static final ThreadLocal<Boolean> DISCLOSURE_ENABLED = ThreadLocal.withInitial(() -> true);
+    private static final ThreadLocal<Boolean> DOC_TRIM_ENABLED = ThreadLocal.withInitial(() -> true);
 
     private static List<AgentToolComponent> instantiateComponents() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
@@ -152,7 +164,8 @@ final class RealToolBeans {
         // 渐进披露策略是无状态的纯逻辑，给个真的：ToolDiscoveryTools 拿到 null 就只会
         // 回一句错误，list_tools 在回放里等于没接上（dev-board#810）。
         if (t == com.checkba.service.ai.ToolDisclosurePolicy.class) {
-            return new com.checkba.service.ai.ToolDisclosurePolicy(DISCLOSURE_ENABLED.get());
+            return new com.checkba.service.ai.ToolDisclosurePolicy(
+                    DISCLOSURE_ENABLED.get(), DOC_TRIM_ENABLED.get());
         }
         if (!t.isPrimitive()) {
             return null;

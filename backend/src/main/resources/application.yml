@@ -495,6 +495,17 @@ ai:
     # 要翻开它，先拿真实模型的对照数据（同一批任务的完成率 / 轮数 / promptTokens）。
     progressive-disclosure:
       enabled: ${AI_TOOLS_PROGRESSIVE_DISCLOSURE:false}
+    # 活跃文档类目裁剪（dev-board#1064）：开着一份文档时，与改文档 / 就文档答疑无关的整类工具
+    # （pdf / litigation / slides(pptx_*) / enterprise-data / plugin / meeting / python）默认不下发，
+    # 一份 docx 会话每轮省下三四成工具规格。隐藏表与关键词表在 ToolDisclosurePolicy。
+    # 与上面的渐进披露互相独立，可叠用（先按类目裁，再按核心集收窄）。
+    #
+    # 放回走渐进披露那一份 RunGuard.expandedToolCategories（只增不减、下一轮生效），四个触发点：
+    # 本轮用户输入命中关键词、生效 skill 的白名单涉及该类目、模型调 list_tools(category)、
+    # 模型经 XML 兜底直接点名调了一个没下发的工具。skill 已经裁过的回合不再裁。
+    # 默认开：藏的是开着文档时几乎用不到的整类，且漏网请求有关键词 / skill / 目录三条路放回。
+    doc-session-category-trim:
+      enabled: ${AI_TOOLS_DOC_SESSION_CATEGORY_TRIM:true}
 
 # 匿名使用统计（设计见 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
 # 本地账本永远记录；出本机由 system_setting 的 telemetry.rollup.enabled（默认开）/

@@ -15,7 +15,8 @@ public record ToolContext(
         String conversationId,
         Long userId,
         String modelId,
-        java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools
+        java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools,
+        java.util.Set<String> offeredTools
 ) {
 
     /**
@@ -31,10 +32,26 @@ public record ToolContext(
      * 它们都不调 {@code list_tools}，给个空列表即可。
      */
     public ToolContext(Long projectId, String conversationId, Long userId, String modelId) {
-        this(projectId, conversationId, userId, modelId, java.util.List.of());
+        this(projectId, conversationId, userId, modelId, java.util.List.of(), null);
+    }
+
+    /** 只带候选集、不知道本轮真正下发了哪些的旧入口（offeredTools 为 null = 不知道）。 */
+    public ToolContext(Long projectId, String conversationId, Long userId, String modelId,
+                       java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools) {
+        this(projectId, conversationId, userId, modelId, sessionTools, null);
     }
 
     public java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools() {
         return sessionTools == null ? java.util.List.of() : sessionTools;
+    }
+
+    /**
+     * 本轮<b>真正下发给模型</b>的工具名（dev-board#1064）。{@code list_tools} 的目录页列的是
+     * 「候选集 − 本集合」：只开了活跃文档类目裁剪、没开渐进披露时，核心集以外的大半工具其实都在
+     * 模型手上，按「非核心」列会把它们也当成没看见的列一遍。null = 调用方不知道（旧入口），
+     * 此时 {@code list_tools} 退回「非核心即未下发」的旧口径。
+     */
+    public java.util.Set<String> offeredTools() {
+        return offeredTools;
     }
 }

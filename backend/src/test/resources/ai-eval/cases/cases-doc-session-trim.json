@@ -1,0 +1,531 @@
+[
+  {
+    "id": "doc-trim-what-is-this-file",
+    "title": "类目裁剪：docx 会话问「这是什么文件？」——PDF / 诉讼出图 / 演示文稿 / 企业数据 / 插件 / 会议 / Python 整类不下发，读写面、法源、网页、事项照常（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "这是什么文件？",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_get_document_text",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "text": "<final>这是一份股权转让协议，约定甲方向乙方转让目标公司 30% 股权。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_get_document_text": "股权转让协议 甲方向乙方转让目标公司 30% 股权。"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_get_document_text"
+        }
+      ],
+      "offeredToolsInclude": [
+        "doc_get_document_text",
+        "doc_find_replace",
+        "law_search",
+        "search_web",
+        "task_create",
+        "list_tools"
+      ],
+      "offeredToolsExclude": [
+        "pdf_to_word",
+        "pdf_highlight",
+        "litigation_render",
+        "pptx_generate",
+        "qichacha_query",
+        "plugin_dev_scaffold",
+        "capability_install",
+        "meeting_list_recordings",
+        "run_python"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-edit-paragraph-keeps-editing-surface",
+    "title": "类目裁剪：改一处措辞时编辑面完整——锚点替换、表格、版式都在，被藏的只有无关整类（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "把第二段的『甲方』改成『买方』",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_find_replace",
+            "arguments": {
+              "findText": "甲方",
+              "replaceText": "买方"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已把第二段的「甲方」改为「买方」，修订痕迹保留。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_find_replace"
+        }
+      ],
+      "offeredToolsInclude": [
+        "doc_find_replace",
+        "doc_replace_at_anchor",
+        "doc_table_add_row",
+        "doc_format_table",
+        "list_tools"
+      ],
+      "offeredToolsExclude": [
+        "pdf_to_word",
+        "pdf_highlight",
+        "litigation_render",
+        "pptx_generate",
+        "qichacha_query",
+        "plugin_dev_scaffold",
+        "capability_install",
+        "meeting_list_recordings",
+        "run_python"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-keyword-relationship-graph-puts-litigation-back",
+    "title": "类目裁剪：用户说「做个可视化」——诉讼出图类目按关键词预先放回，首轮就能调；其余无关整类仍藏着（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "把这份合同里的当事人和交易结构做个可视化",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "litigation_render",
+            "arguments": {
+              "semanticMapJson": "{}",
+              "diagramName": "当事人关系图"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已生成当事人关系图，放在项目的「诉讼可视化」文件夹里。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "litigation_render"
+        }
+      ],
+      "offeredToolsInclude": [
+        "litigation_render",
+        "litigation_reference"
+      ],
+      "offeredToolsExclude": [
+        "pdf_highlight",
+        "pdf_to_word",
+        "qichacha_query",
+        "pptx_generate"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-keyword-company-lookup-puts-enterprise-data-back",
+    "title": "类目裁剪：用户说「工商信息」——企业数据类目按关键词预先放回，首轮就能查企查查（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "查一下甲方公司的工商信息",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "qichacha_query",
+            "arguments": {
+              "keyword": "北京甲方科技有限公司"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>甲方公司登记状态为存续，注册资本 1000 万元。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "qichacha_query"
+        }
+      ],
+      "offeredToolsInclude": [
+        "qichacha_query"
+      ],
+      "offeredToolsExclude": [
+        "litigation_render",
+        "pdf_highlight",
+        "pdf_to_word",
+        "pptx_generate"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-keyword-pdf-puts-pdf-back",
+    "title": "类目裁剪：用户提到 PDF——PDF 类目按关键词预先放回，首轮就能 pdf_to_word（dev-board#1064；docx 转 PDF 没有 AI 工具，只有界面上的导出 PDF）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "把项目里那份 PDF 转成 Word 再打开",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "pdf_to_word",
+            "arguments": {
+              "fileId": "2001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已把那份 PDF 转成 Word 并打开。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "pdf_to_word"
+        }
+      ],
+      "offeredToolsInclude": [
+        "pdf_to_word",
+        "pdf_inspect"
+      ],
+      "offeredToolsExclude": [
+        "qichacha_query",
+        "litigation_render",
+        "pptx_generate"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-catalog-lookup-puts-category-back-next-round",
+    "title": "类目裁剪：没命中关键词的请求（「deck」）——模型查一次目录，下一轮 pptx_generate 回到可见集（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "帮我做一版汇报用的 deck",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "list_tools",
+            "arguments": {
+              "category": "slides"
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "pptx_generate",
+            "arguments": {
+              "topic": "股权转让交易汇报"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已按合同要点生成一版汇报演示文稿。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_tools",
+          "argsContain": {
+            "category": "slides"
+          }
+        },
+        {
+          "name": "pptx_generate"
+        }
+      ],
+      "offeredToolsInclude": [
+        "list_tools"
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "pptx_generate",
+        "pptx_list_files"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "pptx_generate",
+        "pptx_list_files"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-xml-call-to-hidden-tool-puts-siblings-back",
+    "title": "类目裁剪：模型经 XML 兜底直接点名调了没下发的 pdf_list_files——当轮照常执行，下一轮 PDF 整类回来（dev-board#1064）",
+    "category": "files",
+    "protocol": "xml",
+    "docSessionCategoryTrim": true,
+    "userInput": "看看项目里有哪些扫描件",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "text": "<tool_code>pdf_list_files()</tool_code>"
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "pdf_inspect",
+            "arguments": {
+              "fileId": "2001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>项目里有 1 份扫描件：起诉状.pdf，共 3 页。</final>"
+      }
+    ],
+    "toolStubs": {
+      "pdf_list_files": "1. 起诉状.pdf (fileId=2001)",
+      "pdf_inspect": "共 3 页，文本型。"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "pdf_list_files"
+        },
+        {
+          "name": "pdf_inspect"
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "pdf_inspect",
+        "pdf_list_files"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "pdf_inspect",
+        "pdf_list_files"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "doc-trim-restrict-skill-is-not-trimmed-twice",
+    "title": "类目裁剪：命中 restrict skill（诉讼可视化，触发词「大事记」、不在关键词表里）——skill 白名单是一次披露，不再按类目裁，litigation_* 照样可见（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "把这个案子的大事记整理出来",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "litigation_reference",
+            "arguments": {
+              "name": "extraction"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已按事实经过整理出 7 个节点，出图前会先请你确认。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "litigation_reference"
+        }
+      ],
+      "offeredToolsInclude": [
+        "litigation_reference",
+        "litigation_render",
+        "litigation_timeline_start"
+      ],
+      "offeredToolsExclude": [
+        "pdf_highlight",
+        "qichacha_query"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "sheet-trim-hides-pdf-and-litigation",
+    "title": "类目裁剪：xlsx 会话同样藏 PDF / 诉讼出图 / 演示文稿 / 企业数据，表格读写面不受影响（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "B 列合计是多少？",
+    "activeDocument": {
+      "id": "1002",
+      "name": "股权款台账.xlsx",
+      "fileType": "xlsx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "sheet_read_range",
+            "arguments": {
+              "range": "B1:B10"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>B 列合计 1,250,000 元。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "sheet_read_range"
+        }
+      ],
+      "offeredToolsInclude": [
+        "sheet_read_range",
+        "sheet_write_cells",
+        "list_tools"
+      ],
+      "offeredToolsExclude": [
+        "pdf_highlight",
+        "pdf_to_word",
+        "litigation_render",
+        "pptx_generate",
+        "qichacha_query"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "no-doc-session-does-not-offer-idle-catalog",
+    "title": "类目裁剪：没开文档的会话什么都没藏——list_tools 不下发，不为一个打开来只会说「没有可展开的」的目录每轮白付一千字符（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "项目里都有哪些文件？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "text": "<final>项目里有 2 份文档。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "1. 股权转让协议.docx (fileId=1001)\n2. 起诉状.pdf (fileId=2001)"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_list_project_files"
+        }
+      ],
+      "offeredToolsInclude": [
+        "doc_list_project_files",
+        "pdf_inspect",
+        "pptx_generate",
+        "qichacha_query"
+      ],
+      "offeredToolsExclude": [
+        "list_tools"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

@@ -3,11 +3,14 @@
 
 package com.checkba.service.ai;
 
+import com.checkba.service.ai.skill.SkillRouter;
 import dev.langchain4j.agent.tool.ToolSpecification;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -53,6 +56,22 @@ import java.util.Set;
  * 模型行为，而回放评测用的是脚本模型——脚本模型永远会按剧本调对工具，证明不了真实模型
  * 找不找得到 {@code list_tools}。绿的回放只说明「编排器没把事情做坏」，不说明
  * 「模型在少了一百个工具之后还能把活干完」。开关默认关，等真实模型的对照数据够了再翻。
+ *
+ * <p><b>另一把独立的刀：活跃文档类目裁剪</b>（dev-board#1064，
+ * {@code ai.tools.doc-session-category-trim.enabled}，<b>默认开</b>）。开着一份文档时，
+ * 与「改这份文档 / 就这份文档答疑」无关的整类工具（PDF、诉讼出图、演示文稿、企业数据、
+ * 插件开发与能力安装、会议录音、Python）默认不下发，见 {@link #HIDDEN_CATEGORIES_BY_DOC_KIND}。
+ * 它与渐进披露<b>同一个形状</b>：可见 = 候选 − （本类型隐藏的类目 − 已放回的类目），放回集就是
+ * 渐进披露那份 {@code RunGuard.expandedToolCategories}，只增不减、下一轮生效，没有第二套机制。
+ * 两者叠用时先按类目裁、再按核心集收窄，结果仍是「核心集 ∪ 已展开类目」的子集。
+ *
+ * <p>放回的四个触发点：本轮用户输入命中关键词（{@link #categoriesHintedBy}，起跑时一次算定）、
+ * 本轮生效的 skill 白名单涉及的类目（{@link #categoriesCoveredBy}）、模型调 {@code list_tools(category)}、
+ * 模型经 XML 兜底直接点名调了一个没下发的工具（它的同类工具下一轮回来）。
+ *
+ * <p>为什么它可以默认开而渐进披露不行：它藏掉的是「开着一份文档时几乎用不到」的整类，
+ * 核心集那种「连 doc_* 版式工具都先藏起来」的激进收窄才真正改模型的做事路径；
+ * 而漏网的请求至少有关键词、skill、目录三条路把能力放回来。
  */
 @Service
 public class ToolDisclosurePolicy {
@@ -154,15 +173,154 @@ public class ToolDisclosurePolicy {
     /** 认不出归属的工具落这里——目录里绝不允许出现黑洞。 */
     public static final String FALLBACK_CATEGORY = "misc";
 
-    private final boolean enabled;
+    /**
+     * 活跃文档类型 → 默认不下发的类目（dev-board#1064）。键同 {@code ClientCapabilityService.DOC_KIND_*}。
+     *
+     * <p>只列<b>类目</b>：slide_* / sheet_* 在上游已经按前缀裁过（{@code visibleForDocKind}），
+     * 这里列 {@code slides} 是为了 {@code pptx_*}——它不带 slide_ 前缀，上游一个都裁不掉，
+     * 而一份 docx 会话里十个 pptx_* 规格每轮白付。
+     *
+     * <p><b>刻意留着的</b>：legal / task / memory / evidence / template / revision / format / table /
+     * files / reference / misc，以及核心集里的 {@code search_web} / {@code browse_url}。
+     * 网页浏览看上去与「改文档」无关，但它和法规检索是律师改合同时最高频的两类外部查证
+     * （查监管口径、查一个陌生术语），两个加起来一千字符出头，藏掉换来的是每次都要先查目录。
+     *
+     * <p>kind 为 null / "text" / 未知值一律不裁——与 {@code visibleForDocKind} 同一条
+     * 「判不准倒向全集」。
+     */
+    static final Map<String, Set<String>> HIDDEN_CATEGORIES_BY_DOC_KIND = Map.of(
+            "doc", Set.of("pdf", "litigation", "slides", "enterprise-data", "plugin", "meeting", "python"),
+            "sheet", Set.of("pdf", "litigation", "slides", "enterprise-data", "plugin", "meeting", "python"),
+            "slide", Set.of("pdf", "litigation", "spreadsheet", "enterprise-data", "plugin", "meeting", "python"));
 
+    /**
+     * 类目 → 用户输入里出现就把该类目预先放回的关键词（dev-board#1064）。比较时一律小写；
+     * 匹配口径复用 {@link SkillRouter#containsTrigger}：中文是子串，拉丁串两端要求整词
+     * （「pptx」不会被「ppt」吃掉，所以两个都列）。
+     *
+     * <p>这张表只做<b>预先放回</b>，漏词的代价是模型多查一次目录（或经 XML 直接点名），不是能力丢失；
+     * 多词的代价是这一轮多付那一类的规格。所以它宁可宽一点，但不收「文件」「合同」这种每句都有的词。
+     */
+    static final Map<String, List<String>> CATEGORY_KEYWORDS = new LinkedHashMap<>();
+
+    static {
+        CATEGORY_KEYWORDS.put("pdf", List.of("pdf"));
+        CATEGORY_KEYWORDS.put("litigation", List.of("时间轴", "关系图", "流程图", "可视化",
+                "timeline", "diagram", "relationship graph"));
+        CATEGORY_KEYWORDS.put("slides", List.of("ppt", "pptx", "幻灯片", "演示文稿", "slides", "presentation"));
+        CATEGORY_KEYWORDS.put("enterprise-data", List.of("工商", "企业信息", "企查查", "股东", "注册资本",
+                "公司背景", "tushare", "股票", "上市公司"));
+        CATEGORY_KEYWORDS.put("plugin", List.of("插件", "plugin", "能力安装", "capability"));
+        CATEGORY_KEYWORDS.put("meeting", List.of("会议", "录音", "纪要", "转写", "meeting", "transcript"));
+        CATEGORY_KEYWORDS.put("python", List.of("python", "脚本", "计算一下", "跑一段代码"));
+        CATEGORY_KEYWORDS.put("spreadsheet", List.of("表格", "excel", "xlsx", "工作表"));
+        CATEGORY_KEYWORDS.put("task", List.of("事项", "日程", "提醒", "待办"));
+    }
+
+    private final boolean enabled;
+    private final boolean docSessionCategoryTrim;
+
+    /** 只管渐进披露的旧入口：类目裁剪关着。存量单测靠它保持改动前的行为。 */
+    public ToolDisclosurePolicy(boolean enabled) {
+        this(enabled, false);
+    }
+
+    @Autowired
     public ToolDisclosurePolicy(
-            @Value("${ai.tools.progressive-disclosure.enabled:false}") boolean enabled) {
+            @Value("${ai.tools.progressive-disclosure.enabled:false}") boolean enabled,
+            @Value("${ai.tools.doc-session-category-trim.enabled:true}") boolean docSessionCategoryTrim) {
         this.enabled = enabled;
+        this.docSessionCategoryTrim = docSessionCategoryTrim;
     }
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    /** 活跃文档类目裁剪开没开（dev-board#1064）。与 {@link #isEnabled()} 互相独立。 */
+    public boolean isDocSessionCategoryTrimEnabled() {
+        return docSessionCategoryTrim;
+    }
+
+    /**
+     * 这种活跃文档类型下默认不下发的类目。开关关着、或 kind 判不准时返回空集。
+     */
+    public Set<String> hiddenCategoriesFor(String activeDocKind) {
+        if (!docSessionCategoryTrim || activeDocKind == null) {
+            return Set.of();
+        }
+        return HIDDEN_CATEGORIES_BY_DOC_KIND.getOrDefault(activeDocKind, Set.of());
+    }
+
+    /**
+     * 按活跃文档类型再裁一刀（dev-board#1064）：去掉「属于本类型隐藏类目、且还没被放回」的工具。
+     *
+     * <p>纯函数、只收窄：核心集与 {@code list_tools} 永不裁（前者 {@link #categoryOf} 返回 core，
+     * 后者本身就在核心集里）。开关关着或 kind 判不准时原样返回。
+     */
+    public List<ToolSpecification> trimForDocKind(List<ToolSpecification> candidates, String activeDocKind,
+                                                  Set<String> expanded) {
+        Set<String> hidden = hiddenCategoriesFor(activeDocKind);
+        if (hidden.isEmpty() || candidates == null) {
+            return candidates;
+        }
+        Set<String> open = expanded == null ? Set.of() : expanded;
+        List<ToolSpecification> kept = new ArrayList<>();
+        for (ToolSpecification spec : candidates) {
+            String category = categoryOf(spec.name());
+            if (!hidden.contains(category) || open.contains(category)) {
+                kept.add(spec);
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * 用户这一句话提示了哪些类目（关键词表 {@link #CATEGORY_KEYWORDS}）。
+     * 「这是什么文件？」这种中性问句返回空集。只返回 {@link #categoryNames()} 里真有的类目。
+     */
+    public Set<String> categoriesHintedBy(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) {
+            return Set.of();
+        }
+        String normalized = userMessage.toLowerCase(Locale.ROOT);
+        Set<String> known = categoryNames();
+        Set<String> hinted = new LinkedHashSet<>();
+        for (Map.Entry<String, List<String>> entry : CATEGORY_KEYWORDS.entrySet()) {
+            if (!known.contains(entry.getKey())) {
+                continue;
+            }
+            for (String keyword : entry.getValue()) {
+                if (SkillRouter.containsTrigger(normalized, keyword.toLowerCase(Locale.ROOT))) {
+                    hinted.add(entry.getKey());
+                    break;
+                }
+            }
+        }
+        return hinted;
+    }
+
+    /** 关键词表覆盖的类目（只读）。契约测试据它核对每个键都是目录认得的类目——认不得就永远不会被提示。 */
+    public Set<String> keywordCategories() {
+        return java.util.Collections.unmodifiableSet(CATEGORY_KEYWORDS.keySet());
+    }
+
+    /**
+     * 一组工具名涉及哪些类目（不含 core）。用于 skill 放回：skill 白名单里点名的工具，
+     * 它们所在的类目整类放回——skill 作者列了 run_python，就是说这一轮要用 Python。
+     */
+    public Set<String> categoriesCoveredBy(Collection<String> toolNames) {
+        if (toolNames == null || toolNames.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> covered = new LinkedHashSet<>();
+        for (String name : toolNames) {
+            String category = categoryOf(name);
+            if (!"core".equals(category)) {
+                covered.add(category);
+            }
+        }
+        return covered;
     }
 
     /** 核心集（只读）。供契约测试核对「名字是不是真的存在」与常用链的覆盖面。 */

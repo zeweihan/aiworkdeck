@@ -92,6 +92,51 @@ class ToolSchemaBudgetTest {
                 "docx 会话不该下发任何 slide_* 工具");
     }
 
+    /**
+     * 活跃文档类目裁剪（dev-board#1064）在 docx 会话里再省多少。
+     *
+     * <p>「改动前」= 生产默认下改动前真正下发的那份：docx 前缀裁剪之后的全部工具，
+     * 不含 list_tools（渐进披露关着，目录工具不下发）。「改动后」= 再按类目摘掉
+     * pdf / litigation / slides / enterprise-data / plugin / meeting / python，并多出 list_tools
+     * （它是放回的入口，这一千字符是要付的）。实测数字写在 {@link #SAVED_WIRE_FLOOR} 上。
+     */
+    @Test
+    @DisplayName("docx 会话按类目再裁：上线路字节再省一大截（dev-board#1064）")
+    void docSessionCategoryTrimShrinksTheWriterSchemaFurther() {
+        RecordingToolRegistry registry = registry();
+        com.checkba.service.ai.ToolDisclosurePolicy trim = new com.checkba.service.ai.ToolDisclosurePolicy(false, true);
+        List<ToolSpecification> docx =
+                registry.getAllSpecifications("conv", ClientCapabilityService.DOC_KIND_WRITER);
+        List<ToolSpecification> before = docx.stream()
+                .filter(sp -> !com.checkba.service.ai.ToolDisclosurePolicy.CATALOG_TOOL.equals(sp.name()))
+                .toList();
+        List<ToolSpecification> after =
+                trim.trimForDocKind(docx, ClientCapabilityService.DOC_KIND_WRITER, java.util.Set.of());
+
+        int beforeWire = wireBytes(before);
+        int afterWire = wireBytes(after);
+        double savedWire = 1.0 - (double) afterWire / beforeWire;
+        double savedWeight = 1.0 - (double) weight(after) / weight(before);
+        System.out.printf("[dev-board#1064] docx 类目裁剪：改前 %d 个工具 / %d 字符 / %d 上线路字节；"
+                        + "改后 %d 个 / %d 字符 / %d 上线路字节；上线路省 %.1f%%，weight 省 %.1f%%%n",
+                before.size(), weight(before), beforeWire, after.size(), weight(after), afterWire,
+                savedWire * 100, savedWeight * 100);
+
+        assertTrue(after.stream().anyMatch(sp -> sp.name().equals("list_tools")), "放回的入口必须在");
+        assertFalse(after.stream().anyMatch(sp -> sp.name().startsWith("pptx_")), "pptx_* 必须被 slides 类目裁掉");
+        assertTrue(savedWire >= SAVED_WIRE_FLOOR,
+                "docx 会话类目裁剪省下的上线路字节不足 " + (int) (SAVED_WIRE_FLOOR * 100) + "%（实际 "
+                        + String.format("%.1f%%", savedWire * 100) + "）——类目裁剪多半失效了");
+    }
+
+    /**
+     * 2026-09-29 实测（本机无 Docker，run_python 本来就不下发；有 Docker 的机器上还要再多省它一个）：
+     * 改前 156 个工具 / 63705 字符 / 80993 上线路字节，改后 116 个 / 45086 字符 / 58353 上线路字节，
+     * 上线路省 28.0%，weight 省 29.2%。摘掉的 41 个：pdf 13、slides(pptx_*) 9、litigation 6、
+     * plugin 6、enterprise-data 5、meeting 2；多出 list_tools 1 个。下限留 3 个点余量。
+     */
+    private static final double SAVED_WIRE_FLOOR = 0.25;
+
     @Test
     @DisplayName("xlsx / pptx 会话同样省下一大截")
     void calcAndImpressSessionsAlsoShrink() {

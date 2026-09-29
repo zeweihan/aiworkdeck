@@ -61,6 +61,15 @@ public class EvalCase {
      * 只能靠命令行开关跑的验证，等于没有护栏。
      */
     public boolean progressiveDisclosure;
+    /**
+     * 可选：活跃文档类目裁剪（dev-board#1064）。缺省 null = 跟生产默认走（开），
+     * 可被 {@code -Dai.tools.doc-session-category-trim.enabled=false} 整套关掉重跑。
+     *
+     * <p><b>显式写了就钉死本用例的模式</b>：这个开关与渐进披露两个全局 -D 都不再影响它，
+     * 渐进披露只取用例自己的 {@link #progressiveDisclosure}。类目裁剪用例断言的是「生产默认下
+     * 这一类藏了、那一类回来了」，被全局开关改掉模式后断言本身就不成立，跑了也只是噪音红。
+     */
+    public Boolean docSessionCategoryTrim;
     /** 非 null 时该用例进入真实 LLM 冒烟集（RealLlmSmokeTest） */
     public Smoke smoke;
     /** 预录的模型输出，按轮次回放 */

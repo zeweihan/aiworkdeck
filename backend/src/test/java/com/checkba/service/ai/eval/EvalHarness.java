@@ -223,10 +223,18 @@ public final class EvalHarness {
         // 工具渐进披露（dev-board#810）。默认关 = 与改动前逐字一致；
         // -Dai.tools.progressive-disclosure.enabled=true 时整套回放在核心集模式下重跑一遍，
         // 这是 B 档「回放不降」唯一的验证方式。
+        // 活跃文档类目裁剪（dev-board#1064）默认开，与生产一致；
+        // -Dai.tools.doc-session-category-trim.enabled=false 时整套回放在「不裁」模式下重跑。
+        // 用例显式写了 docSessionCategoryTrim 就钉死它自己的模式（见 EvalCase 该字段的说明）。
+        boolean pinned = c.docSessionCategoryTrim != null;
+        String trimOverride = System.getProperty("ai.tools.doc-session-category-trim.enabled");
+        boolean docTrim = pinned ? c.docSessionCategoryTrim
+                : (trimOverride == null || Boolean.parseBoolean(trimOverride));
         com.checkba.service.ai.ToolDisclosurePolicy disclosurePolicy =
                 new com.checkba.service.ai.ToolDisclosurePolicy(
                         c.progressiveDisclosure
-                                || Boolean.getBoolean("ai.tools.progressive-disclosure.enabled"));
+                                || (!pinned && Boolean.getBoolean("ai.tools.progressive-disclosure.enabled")),
+                        docTrim);
         // ContextAssemblerService 在本 harness 里是 mock，system prompt 段不走这条路；
         // 那一段的护栏在 ContextAssemblerServiceTest。
         orchestrator.setToolDisclosurePolicy(disclosurePolicy);
