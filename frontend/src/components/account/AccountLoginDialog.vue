@@ -193,6 +193,7 @@
 <script>
 import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount, getAccountCaptchaConfig } from '@/services/api.js'
 import { setupCaptcha, teardownCaptcha } from '@/utils/captcha.js'
+import { captchaFailureNotice, toCaptchaFailure } from '@/utils/captchaFailure.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 import { getAppLanguage, setAppLanguage, isLanguageManuallyChosen } from '@/utils/appLanguage.js'
@@ -243,7 +244,14 @@ export default {
       loggingIn: false,
       cooldown: 0,
       cooldownTimer: null,
+      // 人机验证控件。null 且 captchaFailure 为空 = 本站未启用，此时照常发码（官网那边也不会校验）
       captcha: null,
+      // 官网说启用了、控件却装不出来：{ provider, reason }。此时绝不盲发码（必 403），
+      // 点「获取验证码」先重试一次装配，仍失败就说清楚要放行哪些地址（dev-board#1056）
+      captchaFailure: null,
+      // 在途的装配（promise）。点按钮时它还没落地就先等它，别趁控件没装好盲发
+      captchaSetup: null,
+      // 装配代次：切站后重新装配时，先发出的那次若后返回，不许覆盖新站的控件
       captchaGen: 0,
       // 两项同意都绝不预勾选：预勾选的同意无效（跨境那枚还是个保法 39 条的单独同意）
       agreementChecked: false,
@@ -349,10 +357,24 @@ export default {
       const target = (st.sites || []).find((s) => s && s.id === want)
       if (target) await this.switchSite(target)
     },
-    /** 装配人机验证控件。任何一步失败都只是不装，不拦路。 */
-    async setupCaptchaWidget() {
+    /**
+     * 装配人机验证控件。**配置读不到只是不装**，不拦路——
+     * 官网没启用时本来就不校验，而配置读不到时为此把人挡在门外不划算
+     * （发码本身还有官网的 IP 限流与全局熔断兜着）。
+     * 但配置说启用了（provider 非空）、控件却装不出来，就记进 captchaFailure，
+     * 不能再按「未启用」处理：那样会不带 token 盲发，官网必 403（dev-board#1056）。
+     * setupCaptcha 回 null 只有两种情形：官网未启用；或装配被更新的一次取代 / 挂点已随弹层卸载
+     * （这两种情形本组件的代次检查或卸载已经让结果无人消费），都不算「装不出来」。
+     */
+    setupCaptchaWidget() {
+      const run = this.runCaptchaSetup()
+      this.captchaSetup = run
+      return run
+    },
+    async runCaptchaSetup() {
       const gen = ++this.captchaGen
       this.captcha = null
+      this.captchaFailure = null
       // #ifdef H5
       teardownCaptcha()
       try {
@@ -360,15 +382,49 @@ export default {
         if (holder) holder.innerHTML = ''
       } catch (e) { /* ignore */ }
       // #endif
+      let config = null
       try {
-        const config = await getAccountCaptchaConfig()
-        if (gen !== this.captchaGen) return
+        config = await getAccountCaptchaConfig()
+      } catch (e) {
+        console.warn('人机验证配置读取失败（按未启用处理）:', e && e.message)
+        return
+      }
+      if (gen !== this.captchaGen) return
+      try {
         const widget = await setupCaptcha(config, this.captchaId)
         if (gen === this.captchaGen) this.captcha = widget
       } catch (e) {
-        console.warn('人机验证控件装配失败（按未启用处理）:', e && e.message)
-        if (gen === this.captchaGen) this.captcha = null
+        console.warn('人机验证组件加载失败:', e && e.message)
+        if (gen === this.captchaGen) this.captchaFailure = toCaptchaFailure(e, config && config.provider)
       }
+    },
+    /** 已知装不出来：装配时就失败了，或控件装上之后才报失败（阿里云 onError、托管页一直不 ready）。 */
+    currentCaptchaFailure() {
+      if (this.captchaFailure) return this.captchaFailure
+      const w = this.captcha
+      return (w && typeof w.loadError === 'function' && w.loadError()) || null
+    },
+    /**
+     * 取发码要带的 token。回 `{ token }`（未启用时 token 为空串）、
+     * `{ failure }`（组件加载失败）或 `{ rejected: true }`（控件在、但没通过）。
+     */
+    async acquireCaptchaToken() {
+      // 装配还在路上：等它落地，别趁控件没装好不带 token 发出去
+      if (this.captchaSetup) await this.captchaSetup
+      // 已知装不出来：先自动重试一次装配（网络可能已经放行、托管页可能只是慢）
+      if (this.currentCaptchaFailure()) await this.setupCaptchaWidget()
+      const failure = this.currentCaptchaFailure()
+      if (failure) return { failure }
+      const widget = this.captcha
+      if (!widget) return { token: '' }
+      const token = await widget.getToken()
+      if (token) return { token }
+      const late = typeof widget.loadError === 'function' ? widget.loadError() : null
+      return late ? { failure: late } : { rejected: true }
+    },
+    captchaFailureMessage(failure) {
+      const { key, params } = captchaFailureNotice({ provider: failure && failure.provider, siteBaseUrl: siteBaseUrl() })
+      return this.$t(key, params)
     },
     async refreshTrialGate() {
       try {
@@ -414,16 +470,19 @@ export default {
       this.errorMsg = ''
       this.sendingCode = true
       try {
-        // 先取人机验证 token 再发。拿不到就别发——发了必被官网 403
-        let captchaToken = ''
-        if (this.captcha) {
-          captchaToken = await this.captcha.getToken()
-          if (!captchaToken) {
-            this.errorMsg = this.$t('onboarding.unlock.captchaFailed')
-            this.sendingCode = false
-            return
-          }
+        // 先取人机验证 token 再发。拿不到就别发——发了必被官网 403，白让用户等一轮。
+        const got = await this.acquireCaptchaToken()
+        if (got.failure) {
+          this.errorMsg = this.captchaFailureMessage(got.failure)
+          this.sendingCode = false
+          return
         }
+        if (got.rejected) {
+          this.errorMsg = this.$t('onboarding.unlock.captchaFailed')
+          this.sendingCode = false
+          return
+        }
+        const captchaToken = got.token
         await sendAccountLoginCode(identifier, captchaToken, this.isPhoneSite)
         uni.showToast({ title: this.$t('onboarding.unlock.codeSent'), icon: 'none', duration: 1600 })
         this.startCooldown(60)

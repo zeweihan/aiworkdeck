@@ -157,3 +157,31 @@ test('工作台接线：onAccountLogin 就地 requireAccount({ reason: \'account
   const rb = src.slice(r, src.indexOf('\n    },', r))
   for (const m of ['loadLicenseMode()', 'loadWalletBalance()', 'loadRealUserInfo()']) assert.ok(rb.includes(m), '缺 ' + m)
 })
+
+test('客户视角：下拉里不出「我的日程」（客户看不到事项），宿主以 isClientView 传入', async () => {
+  // 下拉只在 menuOpen 时渲染：用覆盖 data 的方式把它打开再真渲染
+  async function renderMenu(props) {
+    const Patched = { ...Entry, data() { return { ...Entry.data.call(this), menuOpen: true } } }
+    const app = VueRuntime.createSSRApp({ render: () => VueRuntime.h(Patched, props) })
+    app.config.globalProperties.$t = (k) => k
+    app.config.warnHandler = () => {}
+    const saved = globalThis.uni
+    globalThis.uni = { $on() {}, $off() {}, $emit() {} }
+    try {
+      return (await renderToString(app)).replace(/<!--[\s\S]*?-->/g, '')
+    } finally {
+      globalThis.uni = saved
+    }
+  }
+  const lawyer = await renderMenu({ loggedIn: true })
+  assert.match(lawyer, /calendar\.mySchedule/, '律师视角有「我的日程」')
+  assert.match(lawyer, /workbench\.settingsTabName/)
+  const client = await renderMenu({ loggedIn: true, clientView: true })
+  assert.doesNotMatch(client, /calendar\.mySchedule/, '客户视角不出「我的日程」')
+  assert.match(client, /workbench\.settingsTabName/, '其余菜单项照常')
+  assert.match(client, /account\.logoutBtn/)
+  const host = read('pages/project-overview/project-overview.vue')
+  const i = host.indexOf('<AccountRailEntry')
+  const tag = host.slice(i, host.indexOf('/>', i))
+  assert.match(tag, /:client-view="isClientView"/)
+})

@@ -58,7 +58,8 @@
       <view v-if="noticeText" class="avatar-menu-notice" @tap.stop="emitAndClose('grace-info')">
         <text class="avatar-menu-notice-text">{{ noticeText }}</text>
       </view>
-      <view class="avatar-menu-item" @tap.stop="emitAndClose('schedule')">
+      <!-- 客户视角看不到事项（dev-board#1050 #1051 起的口径），「我的日程」不给入口 -->
+      <view v-if="!clientView" class="avatar-menu-item" @tap.stop="emitAndClose('schedule')">
         <text>{{ $t('calendar.mySchedule') }}</text>
       </view>
       <view class="avatar-menu-item" @tap.stop="emitAndClose('settings')">
@@ -87,6 +88,8 @@ export default {
     walletTier: { type: String, default: '' },
     /** 宽限 / 试用提示文案（「需联网验证 · 剩 N 天」「试用版」）；空串不显示 */
     noticeText: { type: String, default: '' },
+    /** 宿主的客户视角（isClientView）：客户看不到事项，下拉里不出「我的日程」 */
+    clientView: { type: Boolean, default: false },
   },
   emits: ['login', 'account', 'grace-info', 'schedule', 'settings', 'sign-out'],
   data() {

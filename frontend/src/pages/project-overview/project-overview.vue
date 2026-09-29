@@ -448,6 +448,7 @@
           :wallet-low="walletLow"
           :wallet-tier="walletTierName"
           :notice-text="accountNoticeText"
+          :client-view="isClientView"
           @login="onAccountLogin"
           @account="onAvatarMenuAccount"
           @grace-info="showTrialInfo = true"

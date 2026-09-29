@@ -367,9 +367,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   （脚本被拦/超时、`initAliyunCaptcha` 缺失、托管页挂不起）→ `setupCaptcha` 抛 `utils/captchaFailure.js` 的
   `captchaLoadError`（`code='captcha_load_failed'` + `provider` + `reason`），装上后才暴露的失败（阿里云
   `onError`、托管页 `readyTimeoutMs` 内没 ready → controller `state.loadFailed`）走控件的 `loadError()`。
-  解锁页记 `captchaFailure`，点「获取验证码」先等在途装配、再自动重试一次装配，仍失败才报
+  登录卡 `components/account/AccountLoginDialog.vue`（解锁页薄壳与就地登录弹层共用）记 `captchaFailure`，点「获取验证码」先等在途装配、再自动重试一次装配，仍失败才报
   `onboarding.unlock.captchaLoadFailed{Aliyun,Turnstile}`（点名要放行的地址：o.alicdn.com /
   官网域名 + challenges.cloudflare.com）。脚本加载失败要从 `loading` 缓存里摘掉，否则重试永远拿同一枚 reject。
+  `setupCaptcha` 在阿里云脚本到齐之后若发现装配已被取代或挂点已随弹层卸载，回 null——这只在两道 throw 之后判，
+  且那时结果已无人消费，不算「装不出来」。
   护栏 `tests/captcha/captcha-failure.test.mjs`。
 - **桌面壳里托管页挂 `<webview>`，不挂 iframe**（dev-board#863，2026-09-23 真桌面壳实测）：主窗口
   `webPreferences.webSecurity=false`，嵌在这种 WebContents 里的 Turnstile 挑战帧会被 Chromium 以
