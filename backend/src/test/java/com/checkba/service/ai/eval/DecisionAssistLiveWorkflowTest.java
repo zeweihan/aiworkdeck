@@ -77,7 +77,7 @@ class DecisionAssistLiveWorkflowTest {
                 for (; rounds < 3; rounds++) {
                     List<ToolSpecification> offered = selected.isPresent()
                             ? candidates.stream().filter(s -> disclosure.narrow(candidates, expanded).contains(s)
-                                    || Set.of("memory_list", "memory_read", "memory_search", "memory_write", "memory_edit", "memory_delete").contains(s.name())).toList()
+                                    || Set.of("memory_list", "memory_read", "memory_search").contains(s.name())).toList()
                             : candidates.stream().filter(s -> !s.name().equals("list_tools")).toList();
                     var response = model.generate(messages, offered);
                     if (response.tokenUsage() != null) {
