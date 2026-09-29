@@ -45,20 +45,33 @@ import {
   createEmbedController,
   originOf,
 } from '@/utils/captchaEmbedCore.js'
+import { ALIYUN_SCRIPT_URL, REASONS, captchaLoadError } from '@/utils/captchaFailure.js'
 
 const SCRIPTS = {
-  aliyun: 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js',
+  aliyun: ALIYUN_SCRIPT_URL,
 }
 
+// 丢包型拦截下 onerror 可能要等 TCP 超时才来；给个上限，别让「获取验证码」一直转圈
+const SCRIPT_TIMEOUT_MS = 15000
+
 const loading = new Map()
-function loadScript(src) {
+function loadScript(src, provider) {
   if (loading.has(src)) return loading.get(src)
   const p = new Promise((resolve, reject) => {
     const el = document.createElement('script')
+    let timer = null
+    // 失败要从缓存里摘掉，否则「重试装配」拿到的永远是这枚已 reject 的 promise
+    const fail = (reason) => {
+      if (timer) clearTimeout(timer)
+      loading.delete(src)
+      if (el.parentNode) el.parentNode.removeChild(el)
+      reject(captchaLoadError(provider, reason))
+    }
     el.src = src
     el.async = true
-    el.onload = resolve
-    el.onerror = () => reject(new Error('captcha script load failed: ' + src))
+    el.onload = () => { if (timer) clearTimeout(timer); resolve() }
+    el.onerror = () => fail(REASONS.SCRIPT_ERROR)
+    timer = setTimeout(() => fail(REASONS.SCRIPT_TIMEOUT), SCRIPT_TIMEOUT_MS)
     document.head.appendChild(el)
   })
   loading.set(src, p)
@@ -182,17 +195,24 @@ async function setupEmbedCaptcha(holderId, gen) {
   const [links, bridge] = await Promise.all([loadSiteLinks(), webviewBridgeConfig()])
   if (gen !== setupGen) return null
   const el = document.getElementById(holderId)
-  if (!el) return null
+  if (!el) throw captchaLoadError('turnstile', REASONS.HOLDER_MISSING)
   const baseUrl = (links && links.baseUrl) || ''
   const expectedOrigin = originOf(baseUrl)
-  if (!expectedOrigin) return null
+  if (!expectedOrigin) throw captchaLoadError('turnstile', REASONS.SITE_URL)
 
   const src = buildEmbedUrl(baseUrl, { lang: getAppLanguage(), theme: currentTheme() })
   const embed = bridge
     ? mountWebviewEmbed(el, src, expectedOrigin, bridge.preload)
     : mountIframeEmbed(el, src, expectedOrigin)
   activeEmbed = embed
-  return { provider: 'turnstile', getToken: () => embed.controller.getToken() }
+  return {
+    provider: 'turnstile',
+    getToken: () => embed.controller.getToken(),
+    // 托管页一直没 ready（官网或 Cloudflare 挑战域名打不开）：属于「组件加载失败」
+    loadError: () => (embed.controller.state.loadFailed
+      ? { provider: 'turnstile', reason: REASONS.EMBED_NOT_READY }
+      : null),
+  }
 }
 
 /**
@@ -200,9 +220,12 @@ async function setupEmbedCaptcha(holderId, gen) {
  *
  * @param {object} config 官网下发的公开配置（`GET /api/account/captcha-config`）
  * @param {string} holderId 页面上一个空 div 的 id，控件挂在里面
- * @returns {Promise<{getToken: () => Promise<string>, provider: string}>}
+ * @returns {Promise<{getToken: () => Promise<string>, provider: string, loadError: () => object|null}>}
  *          未启用（`provider` 为空）时返回 null，调用方据此**跳过**验证码直接发码——
  *          与官网此刻确实不校验是同一个判断。
+ *          **启用了但装不出来**（脚本被拦、初始化函数缺失、托管页无从挂起）一律抛
+ *          `captchaLoadError`（见 utils/captchaFailure.js），绝不回 null：回 null 等于让调用方
+ *          不带 token 盲发，官网必 403（dev-board#1056）。装出来之后才暴露的失败走 `loadError()`。
  */
 export async function setupCaptcha(config, holderId) {
   const gen = ++setupGen
@@ -213,11 +236,16 @@ export async function setupCaptcha(config, holderId) {
 
   // 阿里云：必须在 loadScript 之前设全局，脚本读的是加载那一刻的值
   window.AliyunCaptchaConfig = { region: 'cn', prefix: config.prefix }
-  await loadScript(SCRIPTS.aliyun)
-  if (!window.initAliyunCaptcha) return null
+  await loadScript(SCRIPTS.aliyun, 'aliyun')
+  if (!window.initAliyunCaptcha) {
+    // 「加载成功」却没有初始化函数（多半是拦截设备回了一张拦截页）：摘掉缓存，重试时重新拉
+    loading.delete(SCRIPTS.aliyun)
+    throw captchaLoadError('aliyun', REASONS.INIT_MISSING)
+  }
 
   let pending = null
   let instance = null
+  let initFailed = false
   window.initAliyunCaptcha({
     SceneId: config.sceneId,
     mode: 'popup',
@@ -236,11 +264,17 @@ export async function setupCaptcha(config, holderId) {
     getInstance: (i) => { instance = i },
     slideStyle: { width: 320, height: 40 },
     language: 'cn',
-    onError: (e) => console.warn('[captcha] 阿里云控件初始化失败:', e),
+    onError: (e) => {
+      console.warn('[captcha] 阿里云控件初始化失败:', e)
+      initFailed = true
+      // 有人在等就立刻收口，别让按钮干等 120 秒
+      if (pending) { const r = pending; pending = null; r('') }
+    },
   })
 
   return {
     provider: 'aliyun',
+    loadError: () => (initFailed ? { provider: 'aliyun', reason: REASONS.INIT_ERROR } : null),
     getToken: () => new Promise((resolve) => {
       pending = resolve
       // 一次性参数：每次取之前先刷新，否则拿到的是上一枚已核销的
