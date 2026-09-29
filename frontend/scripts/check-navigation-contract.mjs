@@ -852,15 +852,24 @@ checkFull('sidebar-shell.md 的页面路由一节收录了两个新页', () => {
   return miss.length ? '缺: ' + miss.join(', ') : null
 })
 
-checkFull('app-e2e 走三级跳而不是把个人中心当必经之路', () => {
+// dev-board#1027/#1047：启动落工作台外壳（不带 id）+ 欢迎标签，解锁页与项目列表页都不再是
+// 启动路过的一站。J1 用 J1_EXPECT_ROUTE 钉落点，并把 unlock / project-list 列为「路过即红」；
+// J2/J3 仍从项目列表直链（薄壳 → 外壳「项目」面板）出发进工作台。
+checkFull('app-e2e：启动落工作台外壳、经「项目」面板进项目，不把个人中心当必经之路', () => {
   const src = readFrontend('tests/app-e2e/run.mjs')
-  if (!src.includes(LIST_ROUTE)) return 'J3 没有从项目列表页出发'
+  if (!src.includes(LIST_ROUTE)) return 'J2/J3 没有从项目列表直链出发'
+  if (!src.includes('pane=projects')) return 'J2/J3 没有断言项目列表直链落到外壳的「项目」面板（?pane=projects）'
   if (!src.includes(HOME_ROUTE)) return 'J3 没有经过项目概览页'
   if (src.includes("mouseClickText('我的项目')")) return '个人中心已经没有「我的项目」tab 了'
-  const i = src.indexOf('解锁成功')
-  if (i < 0 || !src.slice(i, i + 500).includes(LIST_ROUTE)) {
-    return '解锁后的落点断言还没放行项目列表页'
+  if (!/const J1_EXPECT_ROUTE = 'pages\/project-overview\/project-overview'/.test(src)) {
+    return 'J1 的启动落点不是工作台外壳（J1_EXPECT_ROUTE）'
   }
+  const i = src.indexOf('J1_EXPECT_ROUTE = ')
+  const j1 = src.slice(i, i + 2500)
+  if (!j1.includes('unlock\\/unlock') || !j1.includes('project-list\\/project-list')) {
+    return 'J1 没有把解锁页 / 项目列表页列为启动链路上「路过即红」的页'
+  }
+  if (src.includes('解锁成功')) return 'app-e2e 还留着旧解锁门的「解锁成功」落点断言'
   return null
 })
 

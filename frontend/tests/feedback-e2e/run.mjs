@@ -9,7 +9,9 @@
 //
 // 跑法（本机）：
 //   1) frontend：`npx uni --port 5174`（dev:h5）
-//   2) 一个 local-mode 后端在跑（默认 9696；冷启动可用新 jar 在别的端口顶班）
+//   2) 一个 local-mode 后端在跑（默认 9696；冷启动可用新 jar 在别的端口顶班）。
+//      启动不设门（dev-board#1027 登录后置）：mode=none、未连账户的后端就是正常起点，
+//      不再预置 trial 票据、不再调 ensureUnlocked（_lib/license-gate.mjs 只留给 fork 路径）
 //   3) cd frontend && npm run test:feedback-e2e
 // 注意：会在屏幕上弹出一个 dev Electron 窗口，跑完自动关闭。
 //
@@ -23,7 +25,6 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pickCdpPort, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
-import { ensureUnlocked } from '../_lib/license-gate.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -39,11 +40,15 @@ let puppeteer
 try { puppeteer = (await import('puppeteer-core')).default }
 catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer-core'); process.exit(2) }
 
+// E2E_SETUP_ONLY=1：只跑到 setup 段（前置检查 + 从 mode=none 起跑的 provision）就退出，不起有头
+// Electron——维护者正在用机器（HID 空闲不足）时验证 setup 用，跑完同样清理自己建的东西。
+const SETUP_ONLY = process.env.E2E_SETUP_ONLY === '1'
+
 // ---- preflight ----
 for (const [what, ok] of [
   ['dev server ' + DEVURL, await fetch(DEVURL).then(() => true).catch(() => false)],
   ['后端 ' + BACKEND, await fetch(BACKEND + '/api/skills/market/list').then(() => true).catch(() => false)],
-  ['desktop/node_modules', fs.existsSync(path.join(desktopDir, 'node_modules'))],
+  ['desktop/node_modules', SETUP_ONLY || fs.existsSync(path.join(desktopDir, 'node_modules'))],
 ]) { if (!ok) { console.error('前置缺失: ' + what); process.exit(2) } }
 
 const QA = { sid: null }
@@ -56,15 +61,16 @@ async function api(ep, opts = {}) {
   return r.json().catch(() => null)
 }
 {
-  // 解锁起点收进共享模块（发版默认值关掉试用码之后这段三处都要改，抄三份必漏）
-  try { await ensureUnlocked(api) } catch (e) { console.error(e.message); process.exit(2) }
-  const wiz = await api('/api/admin/wizard')
-  if (wiz && wiz.initialized === false) {
-    await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'gemini' } } })
-  }
   const proj = await api('/api/projects', { method: 'POST', body: { name: '反馈QA_' + Date.now(), projectType: 'BLANK' } })
   QA.projectId = proj.id
   console.log('本机用户（免登）/ 项目 #' + QA.projectId)
+}
+
+if (SETUP_ONLY) {
+  const lic = await api('/api/license/status')
+  console.log('E2E_SETUP_ONLY=1：setup 段完成（后端 mode=' + (lic && lic.mode) + '、accountConnected=' + (lic && lic.accountConnected)
+    + '，项目 #' + QA.projectId + ' 已建），不起 Electron')
+  process.exit(QA.projectId ? 0 : 1)
 }
 
 // ---- launch dev Electron with CDP + 假麦克风 ----
@@ -164,9 +170,18 @@ try {
   await step('进入工作台，左栏 rail 底部的反馈入口在场', async () => {
     // dev server 冷启动时首次 transform 整个工作台页要几十秒（project-overview 一万多行），
     // 20s 的等待会稳定超时并把原因伪装成「浮窗没出来」
-    await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
-      { waitUntil: 'domcontentloaded', timeout: 120000 })
-    await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), POLL(120000))
+    // 直接带 id 进工作台。壳自己的 loadURL(DEV_SERVER_URL) 可能在这次导航之后才落地，
+    // 它的落点是无项目态外壳（dev-board#1047，不带 id）——落回外壳就再进一次。
+    const wbUrl = DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId
+    const inProject = () => page.evaluate((pid) => new RegExp('[?&]id=' + pid + '(&|$)').test(location.hash)
+      && !!document.querySelector('.left-rail [title="资源管理器"]'), String(QA.projectId)).catch(() => false)
+    for (let i = 0; i < 3 && !(await inProject()); i++) {
+      await page.goto(wbUrl, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await page.waitForFunction((pid) => new RegExp('[?&]id=' + pid + '(&|$)').test(location.hash)
+        && !!document.querySelector('.left-rail [title="资源管理器"]'), POLL(120000), String(QA.projectId)).catch(() => {})
+      await sleep(1500)
+    }
+    if (!(await inProject())) throw new Error('三次都没进到项目 #' + QA.projectId + ' 的工作台：' + await page.evaluate(() => location.hash))
     await page.waitForSelector(RAIL_FEEDBACK, { timeout: 15000 })
   })
 

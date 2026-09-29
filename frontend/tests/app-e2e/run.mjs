@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
-// 从桌面首启解锁门（launch → unlock）开始，以真实鼠标点击
-// 走完核心用户旅程：项目列表页、统一设置页的「个人」组、两级导航（列表→工作台，
+// 从桌面启动（launch → 工作台外壳 → 欢迎标签，dev-board#1027 登录后置）开始，以真实鼠标点击
+// 走完核心用户旅程：左栏「项目」面板、统一设置页的「个人」组、两级导航（项目面板→工作台，
 // 含概览页档案手填落库）、文件落进项目（含 >5MB 大文件回归）、
 // 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
 // 任何断言失败退出码非 0。
@@ -24,32 +24,16 @@
 //       「语音面板里是两个 tab」必然超时失败——**症状长得像 UI 回归，其实是环境缺件**。
 //       判断方法：先 `curl <backend>/api/skills/list`，空数组就是这个坑。
 //
-//       **冷启动的新后端必须先有解锁起点**（2026-08 官方版必须账户登录之后的新约束）：
-//       发版默认值关掉了试用码，全新 user.home 起来的后端是 mode=none，而本套件
-//       没有任何办法把它解锁——唯一的路是账户凭据，要真实手机号与官网。
-//       正确做法是往隔离 user.home 里播一份**存量 trial 票据**（这是真实存在的
-//       过渡期状态，不是绕过闸）：
-//
-//         mkdir -p $HOME_E2E/.aiworkdeck && cat > $HOME_E2E/.aiworkdeck/license.json <<'EOF'
-//         { "mode":"trial", "code":"AWD-T-SEEDED-FOR-E2E",
-//           "activatedAt":"<ISO8601 now>", "lastVerifiedAt":"<ISO8601 now>" }
-//         EOF
-//
-//       只要今天早于后端生效的 legacy-grace-until，后端就是已解锁状态。
-//       application-desktop.yml 里是 2026-09-30，**过了这天冷启动的隔离后端必须加
-//       -Dsecurity.license.trial-code.legacy-grace-until=2099-12-31**（常量见
-//       _lib/license-gate.mjs 的 LEGACY_GRACE_FUTURE；长驻 9696 后端则需自行处于账户模式），
-//       否则播了票据也是 unlocked:false。宽限态同时顺带让 J1 的顶栏 chip 断言覆盖到「试用版 · 剩 N 天」。
-//       **不要改用 -Dsecurity.license.trial-code.enabled=true 来解锁**——那会让 J1
-//       走回旧分支，发版默认值反而没人测。
+//       **冷启动的新后端不需要任何解锁起点**（dev-board#1027 登录后置之后）：
+//       全新 user.home 起来的后端是 mode=none、未连账户、ai.activeProvider=AWD_CLOUD
+//       （DataInitializer 首启回填）——这正是新设计的正常起点，启动不设门。
+//       **不要再往隔离 user.home 播 trial 票据，也不要加 legacy-grace-until**：
+//       那是旧解锁门的跑法（_lib/license-gate.mjs 只留给 fork 的 trialCodeEnabled=true 路径）。
+//       未连账户时：J3.5 断言「AI 发送先弹登录层」，J6.5 / J12 的真发送按 skip 记（AI 要账户），
+//       账户下拉（我的日程 / 设置 / 退出登录）只有已登录才渲染，同样按 skip 记。
 // 自包含：local-mode 免登（任何请求都解析为本机用户，qa_bot 注册已随登录一起
-//       消亡），自建 BLANK 项目；只读 admin 页面，绝不保存全局配置、绝不触发
-//       向导重置。J1 按后端的 trialCodeEnabled 分两条走（2026-08 官方版必须账户登录）：
-//       试用码仍开着（fork / 本地构建 / 旧打包后端）走原来的「deactivate → 真码解锁」
-//       全链路；试用码已关（发版默认值）则**完全不动后端状态**，直接进 unlock 页
-//       断言门的形态与拒绝文案，跑完后端仍是原样。
-//       另外 deactivate 只在原状态是 trial 时才做——原先对账户模式也照 deactivate，
-//       而那是还原不回去的（run.mjs 自己在报告里道歉），现在直接不碰。
+//       消亡），自建 BLANK 项目；只读 admin 页面，绝不保存全局配置（含 AI 供应商）、
+//       绝不触发向导重置、绝不改动授权状态。
 //
 // 桌面环境假冒：launch/unlock/userprofile 等页面用 window.checkbaDesktop 存在性
 // 判定桌面（免登）语境，浏览器目标全程注入一个最小桩（shell.openExternal）。
@@ -171,10 +155,6 @@ async function api(ep, opts = {}) {
   console.log('本机用户（免登）/ 项目 #' + QA.projectId)
 }
 
-// J1 用的公开通用试用码（GitHub README 公开发布的那枚，Ed25519 离线验签）。
-const TRIAL_CODE = process.env.APP_E2E_TRIAL_CODE
-  || 'AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK'
-
 // ---------- test fixtures ----------
 const smallFile = path.join(OUT, 'qa-small.txt')
 const bigFile = path.join(OUT, 'qa-big.txt')
@@ -206,15 +186,12 @@ try {
     const t = m.text()
     // 资源加载失败由 response 监听按 URL 精确上报（favicon 已滤），这里只收脚本错误。
     // api.js 对每个非 2xx 都会 console.error('HTTP 状态码错误')——与 response 监听
-    // 完全重复（后者带 URL 与方法，更精确），且 J1 坏码步骤会故意触发一次，滤掉。
+    // 完全重复（后者带 URL 与方法，更精确），滤掉。
     if (/favicon|sourcemap|vite|Failed to load resource|HTTP 状态码错误/i.test(t)) return
     note('console', t.slice(0, 280))
   })
   page.on('pageerror', (e) => note('pageerror', String(e).slice(0, 280)))
   page.on('response', (r) => {
-    // J1 故意用坏码打 /api/license/activate 验证 400 内联报错——这个 400 是断言
-    // 目标本身，不是异常信号
-    if (r.status() === 400 && r.url().includes('/api/license/activate')) return
     if (r.status() >= 400 && /\/api\//.test(r.url())) note('http' + r.status(), r.request().method() + ' ' + r.url().slice(0, 150))
     else if (r.status() === 404 && !/favicon|hot-update/.test(r.url())) note('asset404', r.url().slice(0, 150))
   })
@@ -486,314 +463,228 @@ try {
     return { names: state.names, skip: null }
   }
 
-  // ============ J1 首启解锁 → 直达（商业化改造 PR-A 后的启动链） ============
-  // 旧 J1「登录页真实打字登录」已随桌面去登录整体移除：login.vue 只剩浏览器访问
-  // 团队服务器的场景（不在本套件覆盖面内）。issue #200「J1 登录抖动」（登录输入
-  // 去抖截断密码）失去了存在的土壤，随本次重写一并消亡。
+  // ============ J1 启动 → 工作台外壳（无项目态）→ 欢迎标签（dev-board#1027 / #1047） ============
+  // 登录后置之后启动不设门：launch 只等后端就绪、查一次本机工作区是否待选，然后一律
+  // reLaunch 到不带 id 的工作台外壳，中央自动开「欢迎」标签。解锁页、项目列表页都不再是
+  // 启动路过的一站——旧 J1 的解锁门形态 / 试用码被拒 / 顶栏 .trial-chip 断言随之删除
+  // （顶栏不再放账户态，试用与宽限提示挪进了 rail 底部账户入口的下拉）。
+  // 解锁页本身仍是薄壳页（直链），登录卡的形态断言在 tests/unlock 单测与下面 J3.5 的登录弹层里。
   //
   // 桌面判定桩：launch/unlock/userprofile 以 window.checkbaDesktop 存在性判定
   // 桌面（免登）语境。evaluateOnNewDocument 注册的最小桩对之后每个新文档生效，
   // 全程保持——这正是新基线（桌面=免登）的浏览器映射。
-  console.log('== J1 首启解锁门 ==')
+  console.log('== J1 启动 → 工作台外壳 → 欢迎标签 ==')
+  // 中文基线钉死：utils/appLanguage.js 首启会按 navigator.language 猜语言，
+  // 全新 profile 在英文 locale 机器/CI 上会整套翻成英文导致中文断言全线假红。
+  // 显式写语言键（uni h5 的 getStorageSync 兼容裸字符串）。
+  // 同时视为用户亲手选过中文：登录卡选国际站时「从没选过语言就顺带切英文」（设计 2026-09-23 §2.4）
+  // 会整页 reload 成英文；并钉住「首装按语言预选站点」已做过，套件全程不让页面替用户切站。
+  const PIN_ZH_CN = `
+    try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) {}
+    try { localStorage.setItem('awd_app_language_manual', '1') } catch (e) {}
+    try { localStorage.setItem('awd_site_preselected', '1') } catch (e) {}
+  `
   await page.evaluateOnNewDocument((apiBase) => {
     window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
-    // 中文基线钉死：utils/appLanguage.js 首启会按 navigator.language 猜语言，
-    // 全新 profile 在英文 locale 机器/CI 上会整套翻成英文导致中文断言全线假红。
-    // 显式写语言键（uni h5 的 getStorageSync 兼容裸字符串）。
-    try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ }
-    // 视为用户亲手选过中文：解锁页选国际站时「从没选过语言就顺带切英文」（设计 2026-09-23 §2.4）
-    // 会整页 reload 成英文，中文断言全线假红。同理钉住「首装按语言预选站点」已做过，
-    // 套件全程不让页面替用户切站（长驻后端的站点状态由套件自己管）。
-    try { localStorage.setItem('awd_app_language_manual', '1') } catch (e) { /* ignore */ }
-    try { localStorage.setItem('awd_site_preselected', '1') } catch (e) { /* ignore */ }
   }, BACKEND)
+  await page.evaluateOnNewDocument(PIN_ZH_CN)
 
-  // 后端的解锁门形态。trialCodeEnabled=false 是发版默认值（官方版必须账户登录）；
-  // 缺字段 = 旧后端，按 true 处理，与改动前行为一致。
-  const lic0 = await api('/api/license/status')
-  const trialGateOpen = !(lic0 && lic0.trialCodeEnabled === false)
-  // 破坏性链路（deactivate → 重新解锁）只在两个条件同时成立时才跑：
-  //  1. 试用码这条路还开着——否则解锁不回来，长驻后端会被打成砖；
-  //  2. 原状态不是账户模式——那种 deactivate 之后还原不回去（要用户手工重连）。
-  const accountMode = !!(lic0 && lic0.unlocked && lic0.mode && lic0.mode !== 'trial')
-  const canRunUnlockChain = trialGateOpen && !accountMode
+  // 账户与 AI 供应商的起点：发版默认值下全新 user.home 的后端是 mode=none、未连账户、
+  // ai.activeProvider=AWD_CLOUD（DataInitializer 首启回填）——这就是新设计的正常起点，
+  // 不再需要预置试用票据或解锁。长驻后端若已连账户，依赖「未登录」的断言逐条 skip。
+  const acct0 = await api('/api/account/status')
+  const accountConnected0 = !!((acct0 && acct0.data) ? acct0.data.connected : (acct0 && acct0.connected))
+  const aiCfg0 = await api('/api/ai/config')
+  const aiProvider0 = String((aiCfg0 && (aiCfg0.activeProvider || (aiCfg0.data && aiCfg0.data.activeProvider))) || '').toUpperCase()
+  console.log('  账户已连接=' + accountConnected0 + ' / AI 供应商=' + (aiProvider0 || '（空）'))
+  // 平台通道 + 未连账户：AI 发送会先弹登录层（dev-board#1046），消息发不出去。
+  // J3.5 专门断言这条；J6.5 / J12 的真发送在这种后端上无从谈起，按 skip 处理而不是
+  // 替用户改全局 AI 配置（长驻后端的配置套件一律不写）。
+  const aiNeedsLogin = aiProvider0 === 'AWD_CLOUD' && !accountConnected0
 
-  if (!canRunUnlockChain) {
-    // ---- 发版默认值：试用码这条解锁路已关 ----
-    // 这里刻意不 deactivate：关掉试用码之后本套件没有任何办法把后端再解锁回来
-    // （唯一的路是账户凭据，要真实手机号与官网），deactivate 一下就等于把长驻
-    // 后端打成砖，后面 J2-J12 全部陪葬。unlock 页本身是一个普通页面，直接进去
-    // 就能验门的形态，不需要先把机器锁上。
-    note('info', trialGateOpen
-      ? '后端原授权模式为 ' + (lic0 && lic0.mode) + '（deactivate 后还原不回来），J1 走非破坏性分支'
-      : '后端已关闭试用码解锁（发版默认值），J1 走非破坏性分支，不改动后端授权状态')
-    if (trialGateOpen) {
-      note('skip', 'J1 破坏性解锁链路（坏码报错 / 真码解锁 / 向导巡检）本轮未覆盖')
+  // J1 用一个独立页面跑：它的桌面桩多带一个 fs.showOpenDialog，欢迎页 Start 区才会渲染
+  // 桌面版的五项（isDesktopFs 判据是「有没有系统文件夹对话框」）。主页面的最小桩刻意不带 fs——
+  // 后面 J3 的「浏览器降级下新建卡恰好 1 张」断言依赖它。这一页只看不点 Start 项，
+  // showOpenDialog 不会被调用。
+  const j1Page = await browser.newPage()
+  const j1Nav = []
+  j1Page.on('framenavigated', (f) => { if (f === j1Page.mainFrame()) j1Nav.push(f.url()) })
+  j1Page.on('pageerror', (e) => note('pageerror', 'J1: ' + String(e).slice(0, 280)))
+  await j1Page.evaluateOnNewDocument((apiBase) => {
+    window.checkbaDesktop = {
+      apiBaseUrl: apiBase,
+      shell: { openExternal: () => Promise.resolve() },
+      fs: { showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }) },
     }
+    // 页内也记一份路由轨迹：uni 的 reLaunch/redirectTo 走 history.replaceState，
+    // 与 puppeteer 的 framenavigated 互为旁证（任一处看见 unlock / project-list 都判红）。
+    try {
+      const log = (window.__awdNavLog = [location.href])
+      for (const m of ['pushState', 'replaceState']) {
+        const orig = history[m].bind(history)
+        history[m] = (...a) => { const r = orig(...a); log.push(location.href); return r }
+      }
+      window.addEventListener('hashchange', () => log.push(location.href))
+    } catch (e) { /* ignore */ }
+  }, BACKEND)
+  await j1Page.evaluateOnNewDocument(PIN_ZH_CN)
+  const j1Shot = (n) => j1Page.screenshot({ path: path.join(OUT, n + '.png') })
+    .catch((e) => note('shotFail', n + ': ' + String((e && e.message) || e).slice(0, 120)))
 
-    // 站点形态：国际站开放（2026-09-23）后发版默认是双站，解锁页顶部有分段控件
-    const site0 = await api('/api/site')
-    const multiSite = !!(site0 && site0.multiSite)
-
-    await step('unlock 页是「登录或注册」一个入口（无页签）', async () => {
-      await page.goto(BASE + '/#/pages/unlock/unlock', { waitUntil: 'domcontentloaded', timeout: 30000 })
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-      await page.waitForSelector('.unlock-btn', { timeout: 20000 })
-      // 登录与注册是同一条链路（官网验证码端点「不存在即注册」），页签整个撤掉（dev-board#846）
-      if (await page.$('.unlock-tab')) throw new Error('解锁门仍留着「登录 / 注册」页签')
-      await page.waitForFunction(() => {
-        const btn = document.querySelector('.unlock-btn')
-        return !!btn && btn.textContent.trim() === '继续'
-      }, { timeout: 10000 })
-      const title = await page.$eval('.unlock-title', (e) => e.textContent.trim())
-      if (title !== '登录或注册') throw new Error('标题不是「登录或注册」：' + title)
-      if (multiSite) {
-        await page.waitForSelector('.unlock-site-seg', { timeout: 10000 })
-        const segs = await page.$$eval('.unlock-site-seg-item', (els) => els.map((e) => e.textContent.trim()))
-        if (segs.length !== 2 || segs[0] !== '中国大陆' || segs[1] !== '国际 · International') {
-          throw new Error('站点分段控件文案不对：' + JSON.stringify(segs))
-        }
-      } else {
-        note('skip', '后端为单站形态（multiSite=false），站点分段控件断言本轮未覆盖')
-      }
-      if (!trialGateOpen) {
-        // 等 trialCodeEnabled 拉回来（异步）：Key 入口整条撤掉
-        await page.waitForFunction(
-          () => !document.querySelector('.unlock-foot-link'),
-          { timeout: 15000 },
-        )
-      }
-      const t = await textOf()
-      // 官方版自 2026-08-18 起不再有「解锁正式版」的概念（dev-board#848）
-      if (t.includes('正式版已解锁')) throw new Error('解锁门仍在说「正式版已解锁」')
-      if (t.includes('获取正式版')) throw new Error('解锁门仍留着「获取正式版」外链')
-      // 账号密码那条路已从解锁门撤掉（官网验证码端点「不存在即注册」，口令是存量遗留）
-      if (t.includes('用账号密码登录')) throw new Error('解锁门仍留着「用账号密码登录」入口')
-      if (!trialGateOpen) {
-        if (t.includes('使用账户 Key')) throw new Error('试用码已关闭，页面仍留着「使用账户 Key」入口')
-        // 「获取试用码」外链指向 README 里已经撤掉的那枚码，必须一并消失
-        if (t.includes('获取试用码')) throw new Error('试用码已关闭，页面仍留着「获取试用码」外链')
-      }
+  // 期望落点：不带 id 的工作台外壳。「还原病灶即转红」时把这里改成 project-list 验证 J1 会红。
+  const J1_EXPECT_ROUTE = 'pages/project-overview/project-overview'
+  try {
+    await step('launch 直落工作台外壳（不带 id），不经过解锁页与项目列表页', async () => {
+      await j1Page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await j1Page.waitForFunction((route) => location.hash.includes(route) && !/[?&]id=/.test(location.hash),
+        { timeout: 30000 }, J1_EXPECT_ROUTE)
+      await j1Page.waitForSelector('.page-project-overview.no-project', { timeout: 30000 })
+      await sleep(1500) // 给「落了外壳又被弹走」留一个观察窗
+      const inPage = await j1Page.evaluate(() => window.__awdNavLog || [])
+      const trail = [...j1Nav, ...inPage]
+      const bad = trail.filter((u) => /pages\/(unlock\/unlock|project-list\/project-list|login\/login|wizard\/wizard)/.test(u))
+      if (bad.length) throw new Error('启动链路过了不该过的页: ' + JSON.stringify(bad))
+      const now = await j1Page.evaluate(() => location.hash)
+      if (!now.includes(J1_EXPECT_ROUTE) || /[?&]id=/.test(now)) throw new Error('最终没停在无项目态外壳: ' + now)
     })
 
-    // 切站在解锁页上是非破坏性的前提：本机没有账户连接、也不是账户 Key 解锁
-    //（否则切站会清掉账户票据，长驻后端还原不回来）。满足时点一下「国际」，
-    // 标识符必须换成邮箱口径且**不弹确认框**（§2.2），再切回来并确认后端回到 cn。
-    const siteSwitchSafe = multiSite && !(site0 && site0.pinned)
-      && !(lic0 && lic0.accountConnected) && !(lic0 && lic0.mode === 'account')
-    if (!siteSwitchSafe) {
-      note('skip', multiSite
-        ? '本机已连账户或为账户 Key 解锁（切站会清票据），站点切换断言本轮未覆盖'
-        : '单站形态，站点切换断言本轮未覆盖')
-    } else {
-      const identPlaceholder = () => page.evaluate(() => {
-        const el = document.querySelector('.unlock-field-box input')
-        return el ? (el.getAttribute('placeholder') || '').trim() : ''
+    await step('欢迎标签在位且激活，内容挂载', async () => {
+      await j1Page.waitForSelector('#tab-left-welcome', { timeout: 20000 })
+      const st = await j1Page.evaluate(() => {
+        const tab = document.querySelector('#tab-left-welcome')
+        const tabs = [...document.querySelectorAll('.tabs-pane-left .tab-item')].filter((e) => e.offsetParent !== null)
+        return {
+          active: !!tab && tab.classList.contains('active'),
+          name: tab ? ((tab.querySelector('.tab-name') || {}).textContent || '') : '',
+          count: tabs.length,
+        }
       })
-      try {
-        await step('站点分段控件切到国际站换成邮箱口径（未登录不弹确认）', async () => {
-          await mouseClickSel('.unlock-site-seg-item:nth-child(2)')
-          await page.waitForFunction(() => {
-            const el = document.querySelector('.unlock-field-box input')
-            return !!el && (el.getAttribute('placeholder') || '').trim() === '邮箱'
-          }, { timeout: 15000 })
-          const modal = await page.evaluate(() => {
-            const m = document.querySelector('.uni-modal')
-            return !!m && getComputedStyle(m).display !== 'none' && m.offsetParent !== null
-          })
-          if (modal) throw new Error('未登录态切站不该弹确认框')
-          const s1 = await api('/api/site')
-          if (!s1 || s1.current !== 'intl') throw new Error('后端站点没有切到 intl：' + JSON.stringify(s1 && s1.current))
-          const t = await textOf()
-          if (!t.includes('未注册的邮箱会自动创建账户')) throw new Error('国际站说明没有换成邮箱口径')
-          // 已手动选过中文，选国际站不该顺带切英文
-          const title = await page.$eval('.unlock-title', (e) => e.textContent.trim())
-          if (title !== '登录或注册') throw new Error('手动选过中文后选国际站，界面被切成了：' + title)
-        })
-        await step('切回中国大陆恢复手机号口径', async () => {
-          await mouseClickSel('.unlock-site-seg-item:nth-child(1)')
-          await page.waitForFunction(() => {
-            const el = document.querySelector('.unlock-field-box input')
-            return !!el && (el.getAttribute('placeholder') || '').trim() === '手机号'
-          }, { timeout: 15000 })
-          const ph = await identPlaceholder()
-          if (ph !== '手机号') throw new Error('标识符占位没有回到手机号：' + ph)
-        })
-      } finally {
-        // 无论断言成败，都把长驻后端的站点还原成进来时的样子
-        const s2 = await api('/api/site')
-        if (site0 && s2 && s2.current !== site0.current) {
-          await api('/api/site/select', { method: 'POST', body: { site: site0.current } })
-        }
-      }
-    }
+      if (!st.active) throw new Error('欢迎标签不是激活标签')
+      if (st.name.trim() !== '欢迎') throw new Error('欢迎标签名不是「欢迎」: ' + st.name)
+      if (st.count !== 1) throw new Error('首启中栏应当只有欢迎这一个标签，实际 ' + st.count)
+      await j1Page.waitForSelector('.welcome-pane .welcome-hero', { timeout: 15000 })
+    })
 
-    await step('后端授权状态未被 J1 改动', async () => {
-      const after = await api('/api/license/status')
-      if (JSON.stringify(after && after.mode) !== JSON.stringify(lic0 && lic0.mode)) {
-        throw new Error('J1 改动了后端授权模式：' + (lic0 && lic0.mode) + ' -> ' + (after && after.mode))
+    await step('Start 五项齐全且顺序对', async () => {
+      await j1Page.waitForSelector('.welcome-start .welcome-action', { timeout: 15000 })
+      const items = await j1Page.$$eval('.welcome-start .welcome-action', (els) => els
+        .filter((e) => e.offsetParent !== null)
+        .map((e) => ({ action: e.getAttribute('data-action'), text: (e.innerText || '').trim() })))
+      const want = [
+        ['new-project', '新建项目文件夹'],
+        ['open-folder', '文件夹'],
+        ['pull-case', '从团队案件库取一份案卷'],
+        ['connect-team', '连接团队服务器'],
+        ['access-code', '凭访问码进入案卷'],
+      ]
+      if (items.length !== want.length) throw new Error('Start 应当恰好五项，实际: ' + JSON.stringify(items))
+      want.forEach(([action, text], i) => {
+        if (items[i].action !== action) throw new Error('Start 第 ' + (i + 1) + ' 项应为 ' + action + '，实际: ' + JSON.stringify(items))
+        if (!items[i].text.includes(text)) throw new Error('Start 第 ' + (i + 1) + ' 项文案应含「' + text + '」，实际: ' + items[i].text)
+      })
+      // 第 2 项的文案口径：规格 §6 写「打开已有文件夹」，实现复用 account.openFolderTitle（「打开文件夹…」）。
+      // 两种都认，但必须是「打开…文件夹」，别漂成「打开文件」。
+      if (!/^打开.*文件夹/.test(items[1].text)) throw new Error('Start 第 2 项不是「打开…文件夹」: ' + items[1].text)
+    })
+
+    await step('Recent 区存在，列出本次建的 QA 项目', async () => {
+      await j1Page.waitForSelector('.welcome-recent', { timeout: 15000 })
+      await j1Page.waitForFunction((name) => {
+        const items = [...document.querySelectorAll('.welcome-recent .welcome-recent-item .welcome-recent-name')]
+        return items.some((e) => (e.textContent || '').includes(name))
+      }, { timeout: 20000 }, QA.project)
+      const n = await j1Page.$$eval('.welcome-recent .welcome-recent-item', (els) => els.length)
+      if (n > 8) throw new Error('Recent 最多 8 条，实际 ' + n)
+      if (!(await j1Page.$('.welcome-recent .welcome-more'))) throw new Error('Recent 缺「更多…」入口')
+    })
+
+    await step('「启动时显示欢迎页」勾选默认开', async () => {
+      const checked = await j1Page.$eval('.welcome-startup-toggle', (e) => e.getAttribute('aria-checked'))
+      if (checked !== 'true') throw new Error('「启动时显示欢迎页」默认应当勾上，aria-checked=' + checked)
+    })
+
+    await step('rail 底部账户入口：未连账户显示「登录」态，顶栏无账户态', async () => {
+      await j1Page.waitForSelector('.left-rail .account-entry-btn', { timeout: 15000 })
+      const st = await j1Page.$eval('.left-rail .account-entry-btn', (e) => ({
+        signedOut: e.classList.contains('is-signed-out'),
+        label: ((e.querySelector('.account-entry-label') || {}).textContent || '').trim(),
+        avatar: !!e.querySelector('.account-avatar'),
+      }))
+      if (accountConnected0) {
+        note('skip', 'J1 后端已连账户，账户入口「登录」态断言未覆盖（改为断言头像态）')
+        if (st.signedOut || !st.avatar) throw new Error('已连账户却不是头像态: ' + JSON.stringify(st))
+      } else if (!st.signedOut || st.label !== '登录' || st.avatar) {
+        throw new Error('未连账户的入口不是「登录」态: ' + JSON.stringify(st))
+      }
+      // 顶栏不再放账户态（dev-board#1047）：旧顶栏头像与试用 chip 都不该再出现
+      for (const sel of ['.trial-chip', '.account-chip', '.avatar-btn']) {
+        if (await j1Page.$(sel)) throw new Error('顶栏仍有账户态元素 ' + sel)
       }
     })
 
-    // 回到正常起点，J2 起照常
-    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(() => !location.hash.includes('pages/unlock/unlock'), { timeout: 30000 })
-  } else {
-
-  // ---- 试用码仍开着（fork / 本地构建 / 旧打包后端）：原全链路一字未改 ----
-  // J1 需要「未解锁」起点。只在原状态是 trial 时 deactivate——账户模式还原不回来，
-  // 不碰它，改跑上面那条非破坏性断言。
-  {
-    if (lic0 && lic0.unlocked && lic0.mode && lic0.mode !== 'trial') {
-      note('skip', '后端原授权模式为 ' + lic0.mode + '（deactivate 后无法自动还原），跳过 J1 破坏性解锁链路')
-    } else if (lic0 && lic0.unlocked) {
-      await api('/api/license/deactivate', { method: 'POST' })
-    }
-  }
-
-  // 解锁门的默认落点是验证码登录；试用码 / Key 由卡片底部「使用账户 Key」进入
-  //（2026-09-23 页签撤掉之后）——破坏性链路每次进页面都得先切过去，否则根本没有
-  // .unlock-input 可打字。
-  const openTrialCodeTab = async () => {
-    await page.waitForSelector('.unlock-card-foot .unlock-foot-link', { timeout: 20000 })
-    await mouseClickSel('.unlock-card-foot .unlock-foot-link')
-    // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
-    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
-    await ensureConsentChecked()
-  }
-
-  // 2026-08-27 起解锁提交前有两枚同意勾选框（服务条款/隐私政策 + 跨境单独同意），
-  // 都不预勾选——不点上它们，任何解锁点击都会停在同意提示上
-  const ensureConsentChecked = async () => {
-    await page.waitForSelector('.consent-mark', { timeout: 10000 })
-    await page.evaluate(() => {
-      document.querySelectorAll('.consent-mark:not(.checked)').forEach((el) => el.click())
+    await step('无项目态：AI 栏不渲染、项目专属 rail 项不挂、有「项目」入口', async () => {
+      if (await j1Page.$('.chat-input-rich')) throw new Error('无项目态不该渲染 AI 输入框')
+      for (const title of ['资源管理器', '版本记录', '文件暂存区']) {
+        if (await j1Page.$('.left-rail [title="' + title + '"]')) throw new Error('无项目态 rail 不该有「' + title + '」')
+      }
+      if (!(await j1Page.$('.left-rail [title="项目"]'))) throw new Error('无项目态 rail 缺「项目」入口')
     })
-    await page.waitForFunction(
-      () => document.querySelectorAll('.consent-mark:not(.checked)').length === 0,
-      { timeout: 5000 },
-    )
+
+    // 欢迎标签不能当活跃文档、不能拖进 AI 上下文（isContextEligibleTab 为假）。
+    // 无项目态 AI 栏整个不渲染，没有可拖进去的落点；有项目态把标签拖进 AI 输入区要真实
+    // HTML5 拖拽（dataTransfer），headless 驱动不了。判定本身由单测
+    // tests/project-home/welcome-tab.test.mjs 覆盖，这里不造假拖拽。
+    note('skip', 'J1 欢迎标签「不能拖进 AI 上下文」无可驱动的 UI 锚点（无项目态无 AI 栏；HTML5 拖拽 headless 驱动不了），由单测覆盖')
+
+    await step('欢迎页文案巡检', async () => {
+      const t = await j1Page.evaluate(() => document.body.innerText)
+      const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
+      if (m) throw new Error('欢迎页文本可疑: ' + m[0])
+    })
+    await j1Shot('j1-welcome')
+  } finally {
+    await j1Page.close().catch(() => {})
   }
 
-  await step('launch 未解锁分流到 unlock 页', async () => {
-    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
-    await openTrialCodeTab()
-  })
-
-  await step('坏码走后端 400 内联报错', async () => {
-    await page.type('.unlock-input textarea', 'AWD-T-BAD-CODE')
-    // uni useValueSync 的 triggerInput 是 100ms throttle：快速连打只有首字符进
-    // v-model。停一拍再补敲一个会被前端去空白的空格，让最后一次 input 以完整值
-    // 触发 leading call（真实用户粘贴是单次 input 事件，不受此影响）。
-    await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
-    await mouseClickSel('.unlock-btn')
-    await page.waitForFunction(() => {
-      const el = document.querySelector('.unlock-error')
-      return !!el && el.textContent.includes('格式不正确')
-    }, { timeout: 10000 })
-  })
-
-  await step('真试用码解锁（含粘贴态换行空格去除）', async () => {
-    // 重进拿干净输入框（hash 同页时 goto 不重载文档，补一次 reload）
-    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
-    await openTrialCodeTab()
-    // 模拟从邮件/网页复制来的粘贴形态：中间夹换行和空格，验证前端去空白
-    const messy = TRIAL_CODE.slice(0, 30) + '\n ' + TRIAL_CODE.slice(30)
-    await page.type('.unlock-input textarea', messy)
-    await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
-    await mouseClickSel('.unlock-btn')
-    // 解锁成功 → toast → reLaunch 回 launch 分流。向导页已下线（2026-08-27），
-    // 唯一合法落点是项目列表页（2026-08 起启动一律落列表，不再「有最近项目就直达工作台」）
-    await page.waitForFunction(
-      () => location.hash.includes('pages/project-list/project-list'),
-      { timeout: 30000 },
-    )
-  })
-
-  } // ---- J1 两条分支到此合流：下面各步在两种形态下都要成立 ----
-
-  // 向导巡检 + API 置初始化挪到合流区（2026-08-19）：非破坏性分支（发版默认值，
-  // 试用码关）此前从不经过这一步——长驻后端早就初始化过所以看不出来，冷启动的
-  // 隔离后端 initialized=false，launch 分流永远落 wizard，「已解锁重启 → 落项目
-  // 列表页」在那种环境下必红。步骤自带「不在向导页就跳过」守卫，长驻后端零影响。
-  await step('向导已下线：分流不落向导页，未初始化走 API 补置', async () => {
-    // 向导页 2026-08-27 起整体删除：首启初始化（官方通道 + 跨境同意）由解锁页在
-    // 登录成功后一次性提交。这里钉两件事：① 分流唯一落点是项目列表页（决不能再
-    // 出现向导路由）；② 冷启动隔离后端 initialized=false 时用 API 出口补置——
-    // 后面「已解锁重启 → 落项目列表页」等步骤依赖一个初始化过的后端。
-    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(
-      () => location.hash.includes('pages/project-list/project-list'),
-      { timeout: 30000 },
-    )
-    if (page.url().includes('pages/wizard/wizard')) {
-      throw new Error('向导页已下线，分流不该再落 pages/wizard/wizard')
-    }
-    const wiz = await api('/api/admin/wizard')
-    if (wiz && wiz.initialized === false) {
-      // 供应商必须是后端仍认的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
-      // AWD_CLOUD 要跨境同意，套件用 OPENROUTER 走后端路径即可。
-      const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
-      if (!init || init.code !== 0) throw new Error('API 置初始化失败: ' + JSON.stringify(init).slice(0, 150))
-    }
-  })
-
-  await step('已解锁重启 → 落项目列表页（即使有最近项目）', async () => {
-    // uni h5 getStorageSync 兼容裸字符串
-    await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
-    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-    // project-list / project-home / project-overview 三个路由并存，一律写全路径判定：
-    // 'project-' 前缀家族已经三个成员，模糊匹配迟早撞上。
-    // 这条钉死的是 2026-08 的落点决策：**开机先看见自己有哪些案卷**，
-    // 不再因为存了 checkba_last_project_id 就直接扎进上一个项目。
-    // （应用菜单「最近打开」、拖文件夹进窗口、顶栏切换器那三条直达出口不受影响，
-    //   它们的用户意图明确指向某一个项目。）
-    await page.waitForFunction(
-      () => location.hash.includes('pages/project-list/project-list'), { timeout: 30000 })
-    await page.waitForSelector('.page-project-list', { timeout: 20000 })
-  })
-
-  await step('project-overview 常驻授权标识（宽限期内带倒计时）', async () => {
-    // 上一步落在项目列表页（启动落点已改），授权标识挂在工作台顶栏上，
-    // 得先真的进到工作台里
-    await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
-      { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await waitText('资源管理器', 30000)
-    await page.waitForSelector('.trial-chip', { timeout: 15000 })
-    // 宽限期内 chip 必须真的把剩余天数写出来——这是「不处理就会被挡在门外」的唯一提示，
-    // 只断言 chip 在不在等于没验（三种状态共用 .trial-chip 这个类）。
-    if (lic0 && lic0.graceKind) {
-      const days = Number(lic0.daysRemaining || 0)
-      await page.waitForFunction((n) => {
-        const el = document.querySelector('.trial-chip .trial-chip-text')
-        return !!el && el.textContent.includes('剩 ' + n + ' 天')
-      }, { timeout: 15000 }, days)
-      const cls = await page.$eval('.trial-chip', (e) => e.className)
-      if (!cls.includes('grace-chip')) throw new Error('宽限态 chip 缺 grace-chip 类（配色不会生效）：' + cls)
-    }
-  })
-
-  // ============ J2 项目列表页 + 统一设置页的「个人」组 ============
-  //  ① 项目列表页自己能加载出卡片（J3 的起点，必须先立住）
+  // ============ J2 左栏「项目」面板 + 统一设置页的「个人」组 ============
+  //  ① 项目列表直链落到工作台外壳的「项目」面板，能加载出卡片（J3 的起点，必须先立住）。
+  //     dev-board#1047 起 pages/project-list 是直链薄壳：redirectTo 外壳 ?pane=projects，
+  //     内容本体是 components/project-list/ProjectListPane.vue（.project-list-pane）。
   //  ② 个人内容仍然到得了、四个栏目都不是空白页
   // 2026-08-20：个人中心并进了统一「设置」页（AdminPane 的「个人」组），
   // /pages/userprofile 薄壳页仍在、落点就是这一组，所以这一段的入口 URL 没变，
   // 变的是页面结构（.page-admin 的侧栏分组，不再是 .nav-menu 那套 tab）。
-  console.log('== J2 项目列表页 + 个人设置 ==')
+  console.log('== J2 左栏「项目」面板 + 个人设置 ==')
 
-  await step('项目列表页加载出项目卡片', async () => {
-    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
-    await page.waitForSelector('.page-project-list', { timeout: 20000 })
-    await page.waitForSelector('.project-item-card', { timeout: 20000 })
+  // 到左栏「项目」面板。已经在工作台里就走用户真实会走的那条路——点 rail「项目」（面板是
+  // 开关：已开着就不点）；不在工作台才用项目列表直链（薄壳页 redirectTo 外壳 ?pane=projects）。
+  // 不在工作台里硬改 hash 去直链：那样进来的薄壳页 getCurrentPages() 为空、redirectTo 不动，
+  // 停在一张空白页（2026-09-29 实测，已作为业务问题上报，见 J2 第一步的直链断言）。
+  const gotoProjectsPane = async () => {
+    const inWorkbench = await page.evaluate(() => !!document.querySelector('.page-project-overview .left-rail [title="项目"]'))
+    if (inWorkbench) {
+      if (!(await page.$('.project-list-pane'))) await mouseClickSel('.left-rail [title="项目"]')
+    } else {
+      await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
+      await page.waitForFunction(
+        () => location.hash.includes('pages/project-overview/project-overview') && location.hash.includes('pane=projects'),
+        { timeout: 20000 })
+    }
+    await page.waitForSelector('.project-list-pane .project-item-card', { timeout: 20000 })
+  }
+
+  await step('项目列表直链 → 外壳「项目」面板加载出项目卡片', async () => {
+    // 这一步刻意走直链（新文档，不在工作台里），验薄壳页的 redirectTo
+    if (await page.$('.page-project-overview')) throw new Error('直链断言要从工作台之外出发')
+    await gotoProjectsPane()
+    if (!(await page.evaluate(() => location.hash.includes('pane=projects')))) throw new Error('直链没落到 ?pane=projects')
     await waitText(QA.project.slice(0, 8))
+    const n = await page.evaluate(() => document.querySelectorAll('.page-project-list').length)
+    if (n !== 0) throw new Error('薄壳页 redirectTo 之后页面栈里仍留着 ' + n + ' 个列表页实例')
   })
 
-  await step('项目列表页文案巡检', async () => {
-    const t = await textOf()
+  await step('「项目」面板文案巡检', async () => {
+    const t = await page.$eval('.project-list-pane', (e) => e.innerText.replace(/\n{2,}/g, '\n'))
     const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
     if (m) throw new Error('页面文本可疑: ' + m[0])
     // 官方案件库零配置直连（#439）后入口已恢复；验收与当前产品口径一致。
@@ -844,11 +735,11 @@ try {
     })
   }
 
-  // ============ J3 两级导航：项目列表页 → 工作台（概览是工作台里的一个标签） ============
+  // ============ J3 两级导航：「项目」面板 → 工作台（概览是工作台里的一个标签） ============
   // 术语（代码里同名不同物，别看错）：
-  //   pages/project-overview/project-overview = 工作台（四列干活界面，路由不改名）
+  //   pages/project-overview/project-overview = 工作台（四列干活界面，路由不改名；不带 id = 无项目态外壳）
   //   pages/project-home/project-home         = 概览薄壳页，只留给直链/深链
-  //   pages/project-list/project-list         = 项目列表页
+  //   pages/project-list/project-list         = 项目列表直链薄壳（redirectTo 外壳 ?pane=projects）
   // 三个路由互不是子串，但同属 'project-' 前缀家族——一律写全路径判定。
   //
   // 2026-08 改动：概览不再是列表与工作台之间那一站独立页，而是工作台 rail 第一个
@@ -858,9 +749,8 @@ try {
   // 所以后面回工作台必须先点回「资源管理器」（见「回到工作台继续后续旅程」）。
   console.log('== J3 两级导航 ==')
 
-  await step('列表页点卡片 → 直达工作台', async () => {
-    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
-    await page.waitForSelector('.project-item-card', { timeout: 15000 })
+  await step('「项目」面板点卡片 → 直达工作台', async () => {
+    await gotoProjectsPane()
     await waitText(QA.project.slice(0, 8))
     // 卡片标题绑定 @tap.stop=startRename（点名字=重命名），进入要点卡片主体
     await mouseClickSel('.project-item-card')
@@ -874,17 +764,17 @@ try {
     }
   })
 
-  await step('列表页下方有新建入口，且没有「打开文件」', async () => {
-    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
-    await page.waitForSelector('.create-section', { timeout: 15000 })
-    const t = await textOf()
+  await step('「项目」面板有新建入口，且没有「打开文件」', async () => {
+    await gotoProjectsPane()
+    await page.waitForSelector('.project-list-pane .create-section', { timeout: 15000 })
+    const t = await page.$eval('.project-list-pane', (e) => e.innerText)
     // 浏览器目标注入的是最小桌面桩（只有 shell.openExternal，没有 fs），列表页的
     // isDesktop 判据正是「有没有系统文件夹对话框」，所以这里必然走浏览器降级分支：
     // 只渲染一张「新建项目」卡，点进去是 newproject 页的托管空白项目表单。
     // 桌面版那两张（打开文件夹 / 新建项目文件夹）在这个目标下渲染不出来，
     // 由 check-navigation-contract 的静态断言守（校验 openFolderFlow /
     // createFolderFlow / 命名弹窗真的接在页面上），别在这里断言它们。
-    const cards = await page.evaluate(() => document.querySelectorAll('.create-card').length)
+    const cards = await page.evaluate(() => document.querySelectorAll('.project-list-pane .create-card').length)
     if (cards !== 1) throw new Error('浏览器降级下新建卡应当恰好 1 张，实际 ' + cards)
     if (!t.includes('新建项目')) throw new Error('列表下方缺新建入口')
     if (t.includes('打开文件…')) throw new Error('「单独打开文件」应当已从新建入口去掉')
@@ -948,19 +838,26 @@ try {
     }
   })
 
-  await step('概览薄壳页直链仍可用，且返回列表不堆页面栈', async () => {
+  await step('概览薄壳页直链仍可用，且返回「项目」面板不堆页面栈', async () => {
     // 产品流程里不再经过这一页，但收藏/深链会落进来，薄壳必须还活着
     await page.goto(BASE + '/#/pages/project-home/project-home?id=' + QA.projectId,
       { waitUntil: 'networkidle2' })
     await page.waitForSelector('.page-project-home', { timeout: 15000 })
     await page.waitForSelector('.project-home-pane', { timeout: 15000 })
     await mouseClickSel('.btn-project-list')
+    // 返回键仍落 pages/project-list（薄壳），薄壳再 redirectTo 工作台外壳并打开「项目」面板
     await page.waitForFunction(
-      () => location.hash.includes('pages/project-list/project-list'), { timeout: 15000 })
+      () => location.hash.includes('pages/project-overview/project-overview') && location.hash.includes('pane=projects'),
+      { timeout: 15000 })
+    await page.waitForSelector('.project-list-pane .project-item-card', { timeout: 15000 })
     // uni h5 的页面栈在 DOM 里是并存的（navigateTo 压栈时旧页留在文档里只是隐藏），
     // 所以根节点计数就是页面栈实例数的直接证据。
-    const n = await page.evaluate(() => document.querySelectorAll('.page-project-list').length)
-    if (n !== 1) throw new Error('项目列表页实例数 = ' + n + '（页面栈堆叠）')
+    const n = await page.evaluate(() => ({
+      list: document.querySelectorAll('.page-project-list').length,
+      shell: document.querySelectorAll('.page-project-overview').length,
+      home: document.querySelectorAll('.page-project-home').length,
+    }))
+    if (n.list !== 0 || n.shell !== 1 || n.home !== 0) throw new Error('页面栈实例数不对（堆叠）: ' + JSON.stringify(n))
   })
 
   await step('回到工作台继续后续旅程', async () => {
@@ -986,6 +883,132 @@ try {
     await page.waitForSelector('[title="新建文件夹"]', { timeout: 15000 })
   })
   await shot('j3-project')
+
+  // ============ J3.5 AI 发送触发登录弹层（登录后置，dev-board#1046） ============
+  // 平台通道（AWD_CLOUD）+ 未连账户：ChatInterface 在发送前 requireAccount({reason:'ai'})，
+  // 就地弹 AccountLoginDialog（挂 <body> 的 .awd-login-mask，不跳页）；点「暂不登录」
+  // 停在原地，草稿不动、消息不发、历史不落。弹层的形态断言（站点分段 + 「暂不登录」）
+  // 由下面两个助手统一做，J12 英文与 J13.5 广场付费项复用。
+  const LOGIN_CANCEL_TEXT = '暂不登录' // 「还原病灶即转红」时把它改错，验证本旅程会红
+  const site0 = await api('/api/site')
+  /** 等登录弹层出现并断言形态；siteInfo 为 null 时跳过站点分段断言。返回弹层里的文本。 */
+  const assertLoginDialog = async (pg, { reasonIncludes = '', siteInfo = site0, cancelText = LOGIN_CANCEL_TEXT, noCjk = false } = {}) => {
+    await pg.waitForSelector('.awd-login-mask .unlock-card.is-dialog', { visible: true, timeout: 15000 })
+    const st = await pg.evaluate(() => {
+      const mask = document.querySelector('.awd-login-mask')
+      const q = (s) => mask && mask.querySelector(s)
+      return {
+        reason: ((q('.awd-login-reason') || {}).textContent || '').trim(),
+        segs: mask ? [...mask.querySelectorAll('.unlock-site-seg .unlock-site-seg-item')].map((e) => e.textContent.trim()) : [],
+        cancel: ((q('.awd-login-cancel') || {}).textContent || '').trim(),
+        consent: mask ? mask.querySelectorAll('.consent-mark').length : 0,
+        text: mask ? mask.innerText : '',
+      }
+    })
+    if (reasonIncludes && !st.reason.includes(reasonIncludes)) throw new Error('登录弹层说明不含「' + reasonIncludes + '」: ' + st.reason)
+    if (st.cancel !== cancelText) throw new Error('登录弹层缺「' + cancelText + '」出口，实际: ' + JSON.stringify(st.cancel))
+    if (st.consent !== 2) throw new Error('登录弹层应有两枚同意勾选（协议 + 跨境），实际 ' + st.consent)
+    if (siteInfo && siteInfo.multiSite) {
+      if (st.segs.length !== 2) throw new Error('双站形态下登录弹层应有两段站点分段控件，实际: ' + JSON.stringify(st.segs))
+      if (!noCjk && (st.segs[0] !== '中国大陆' || st.segs[1] !== '国际 · International')) {
+        throw new Error('站点分段控件文案不对: ' + JSON.stringify(st.segs))
+      }
+    } else if (siteInfo) {
+      note('skip', '后端为单站形态（multiSite=false），登录弹层站点分段控件断言未覆盖')
+    }
+    if (noCjk) {
+      for (const [k, v] of [['reason', st.reason], ['cancel', st.cancel]]) {
+        if (/[一-鿿]/.test(v)) throw new Error('en-US 下登录弹层 ' + k + ' 仍是中文: ' + v)
+      }
+    }
+    return st
+  }
+  /** 真实鼠标点「暂不登录」，等弹层卸掉。 */
+  const cancelLoginDialog = async (pg, cancelText = LOGIN_CANCEL_TEXT) => {
+    const box = await pg.evaluate((want) => {
+      const el = [...document.querySelectorAll('.awd-login-mask .awd-login-cancel')]
+        .find((e) => e.textContent.trim() === want && e.offsetParent !== null)
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    }, cancelText)
+    if (!box) throw new Error('找不到可见的「' + cancelText + '」')
+    await pg.mouse.click(box.x, box.y)
+    await pg.waitForFunction(() => !document.querySelector('.awd-login-mask'), { timeout: 10000 })
+  }
+  /** 点可见的发送键（AI 面板可能挂了不止一个 .send-btn），中心被遮挡就判红。 */
+  const clickVisibleSend = async () => {
+    const hit = await page.evaluate(() => {
+      const btn = [...document.querySelectorAll('.send-btn')].find((b) => b.getBoundingClientRect().width > 0)
+      if (!btn) return { ok: false, top: '（没有可见的 .send-btn）' }
+      const r = btn.getBoundingClientRect()
+      const x = r.x + r.width / 2
+      const y = r.y + r.height / 2
+      const top = document.elementFromPoint(x, y)
+      return { ok: !!top && (top === btn || btn.contains(top)), x, y, top: top ? top.tagName + '.' + String(top.className || '') : 'null' }
+    })
+    if (!hit.ok) throw new Error('发送按钮中心被遮挡，elementFromPoint 命中 ' + hit.top)
+    await page.mouse.click(hit.x, hit.y)
+  }
+  /** 本项目 AI 历史里有没有这句提问（判「消息没发出去」的落库判据）。 */
+  const historyHasPrompt = async (prompt) => {
+    const r = await fetch(BACKEND + '/api/ai/history?projectId=' + QA.projectId + '&limit=200')
+    const body = await r.json()
+    const list = Array.isArray(body) ? body : (body && Array.isArray(body.messages) ? body.messages : [])
+    return list.some((m) => String((m && m.content) || '').includes(prompt))
+  }
+  /** 清掉 AI 输入框里的草稿（测试收尾卫生：别让后面的旅程带着这句发出去）。 */
+  const clearChatDraft = () => page.evaluate(() => {
+    const el = document.querySelector('.chat-input-rich')
+    if (!el) return
+    el.innerHTML = ''
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  console.log('== J3.5 AI 发送触发登录弹层 ==')
+  if (!aiNeedsLogin) {
+    note('skip', 'J3.5 需要「平台通道 + 未连账户」的后端（当前 账户已连接=' + accountConnected0
+      + '、供应商=' + (aiProvider0 || '空') + '），AI 发送触发登录弹层旅程未覆盖')
+  } else {
+    const J35_PROMPT = 'J3.5 登录后置回归：这句话不该被发出去 ' + ts
+    const hash0 = await page.evaluate(() => location.hash)
+    const opened = await step('未连账户时 AI 发送先弹登录层（含站点分段控件与「暂不登录」）', async () => {
+      if (!(await page.$('.chat-input-rich'))) await mouseClickSel('[title="AI 助手"]')
+      await page.waitForSelector('.chat-input-rich', { timeout: 10000 })
+      await mouseClickSel('.chat-input-rich')
+      await page.keyboard.type(J35_PROMPT, { delay: 5 })
+      await clickVisibleSend()
+      await assertLoginDialog(page, { reasonIncludes: '使用 AI 需要登录' })
+      // 弹层是就地的：路由不动
+      const h = await page.evaluate(() => location.hash)
+      if (h !== hash0) throw new Error('弹登录层时路由变了: ' + hash0 + ' -> ' + h)
+      await sleep(300) // 弹层有 160ms 淡入，截图等它落定
+      await shot('j3.5-login-dialog')
+    })
+    if (opened) {
+      await step('点「暂不登录」回到原状态，消息未发出', async () => {
+        await cancelLoginDialog(page)
+        await sleep(1500) // 给「取消了还是发出去」留观察窗
+        const st = await page.evaluate((p) => {
+          const input = document.querySelector('.chat-input-rich')
+          const turns = [...document.querySelectorAll('.conversation-turn .user-bubble-content')]
+          return {
+            hash: location.hash,
+            streaming: !!document.querySelector('.stop-btn'),
+            draft: input ? (input.innerText || '') : null,
+            turnSent: turns.some((t) => (t.innerText || '').includes(p)),
+          }
+        }, J35_PROMPT)
+        if (st.hash !== hash0) throw new Error('取消登录后路由变了: ' + hash0 + ' -> ' + st.hash)
+        if (st.streaming) throw new Error('取消登录后仍进入了流式（.stop-btn 出现）')
+        if (st.turnSent) throw new Error('取消登录后提问仍落进了消息区')
+        if (st.draft === null || !st.draft.includes(J35_PROMPT)) throw new Error('取消登录后草稿被清掉了: ' + JSON.stringify(st.draft))
+        if (await historyHasPrompt(J35_PROMPT)) throw new Error('取消登录后提问仍被后端落进了 AI 历史')
+      })
+    }
+    await clearChatDraft().catch(() => {})
+    if (await page.$('.awd-login-mask')) await cancelLoginDialog(page).catch(() => {})
+  }
 
   // ============ J4 文件落进项目（小 + 大） ============
   // dev-board#513 起资源管理器没有「上传文件」这条 UI 通道了（对话框、分片上传队列、
@@ -1111,31 +1134,57 @@ try {
   })
   await shot('j6-rails')
 
-  // ============ J6.3 顶栏头像 → 系统设置中栏标签 ============
+  // ============ J6.3 rail 底部账户入口 / 设置 → 系统设置中栏标签 ============
   // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像；
   // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
-  // 2026-08-21（dev-board#96）：只剩一项时下拉撤掉、点头像直开设置。
-  // 2026-08-27（dev-board#205）：下拉恢复成两项（设置 / 退出登录）。
-  // 2026-09-25（dev-board#899，PR#982）：最前面加「我的日程」，动作项恰好三项
-  // （我的日程 / 设置 / 退出登录，sidebar-shell.md 与 check:nav 同口径）。
-  console.log('== J6.3 头像与设置标签 ==')
-  await step('点头像开三项下拉，点「设置」开中栏标签、不跳页', async () => {
-    await mouseClickSel('.avatar-btn')
-    await page.waitForSelector('.avatar-menu', { timeout: 8000 })
-    const items = await page.$$eval('.avatar-menu .avatar-menu-item', (els) => els.map((e) => e.textContent.trim()))
-    if (items.length !== 3) throw new Error('头像下拉应当恰好三项（我的日程/设置/退出登录），实际: ' + JSON.stringify(items))
-    if (!items[0].includes('我的日程')) throw new Error('下拉第一项不是「我的日程」: ' + items[0])
-    if (!items[1].includes('设置')) throw new Error('下拉第二项不是「设置」: ' + items[1])
-    if (!items[2].includes('退出登录')) throw new Error('下拉第三项不是「退出登录」: ' + items[2])
-    // 按序号点第二项（「设置」）——第一项「我的日程」会 reLaunch 离开工作台
-    const settingsBox = await page.$$eval('.avatar-menu .avatar-menu-item', (els) => {
-      const r = els[1].getBoundingClientRect()
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  // 2026-09-25（dev-board#899，PR#982）：下拉动作项恰好三项（我的日程 / 设置 / 退出登录）。
+  // 2026-09-29（dev-board#1047）：顶栏头像与试用 chip 整体挪到 rail 底部的账户入口
+  // （.account-entry-btn，对应 VS Code 的 Accounts）；设置另有 rail 齿轮一格。
+  //   - 已登录：点入口开那份三项下拉（.account-entry-menu .avatar-menu-item）；
+  //   - 未登录：入口是「登录」，点了就地弹登录层（dev-board#1046），不离开工作台。
+  console.log('== J6.3 账户入口与设置标签 ==')
+  if (accountConnected0) {
+    await step('点 rail 账户入口开三项下拉，点「设置」开中栏标签、不跳页', async () => {
+      await mouseClickSel('.left-rail .account-entry-btn')
+      await page.waitForSelector('.account-entry-menu', { timeout: 8000 })
+      const items = await page.$$eval('.account-entry-menu .avatar-menu-item', (els) => els.map((e) => e.textContent.trim()))
+      if (items.length !== 3) throw new Error('账户下拉应当恰好三项（我的日程/设置/退出登录），实际: ' + JSON.stringify(items))
+      if (!items[0].includes('我的日程')) throw new Error('下拉第一项不是「我的日程」: ' + items[0])
+      if (!items[1].includes('设置')) throw new Error('下拉第二项不是「设置」: ' + items[1])
+      if (!items[2].includes('退出登录')) throw new Error('下拉第三项不是「退出登录」: ' + items[2])
+      // 按序号点第二项（「设置」）——「退出登录」会真的断开账户，绝不点
+      const settingsBox = await page.$$eval('.account-entry-menu .avatar-menu-item', (els) => {
+        const r = els[1].getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      await page.mouse.click(settingsBox.x, settingsBox.y)
+      await sleep(700)
+      await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
+      if (await page.$('.account-entry-menu')) throw new Error('点完菜单项下拉没有收起')
     })
-    await page.mouse.click(settingsBox.x, settingsBox.y)
-    await sleep(700)
+  } else {
+    note('skip', 'J6.3 后端未连账户：rail 账户入口是「登录」态，三项下拉（我的日程/设置/退出登录）只有已登录才渲染，本轮未覆盖')
+    await step('未登录：点 rail「登录」就地弹登录层，「暂不登录」后停在工作台', async () => {
+      const hash0 = await page.evaluate(() => location.hash)
+      await mouseClickSel('.left-rail .account-entry-btn.is-signed-out')
+      await assertLoginDialog(page, { siteInfo: null })
+      const h = await page.evaluate(() => location.hash)
+      if (h !== hash0) throw new Error('点「登录」离开了工作台: ' + hash0 + ' -> ' + h)
+      await cancelLoginDialog(page)
+    })
+    // 上一步红了（例如入口仍跳 unlock 页）时回到工作台，别把后面的旅程压在别的页上
+    if (!(await page.evaluate(() => location.hash.includes('pages/project-overview/project-overview?id=')))) {
+      await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForSelector('[title="资源管理器"]', { timeout: 30000 })
+    }
+    if (await page.$('.awd-login-mask')) await cancelLoginDialog(page).catch(() => {})
+    await step('rail 齿轮「设置」开中栏标签、不跳页', async () => {
+      await mouseClickSel('.left-rail .rail-btn[title="设置"]')
+      await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
+    })
+  }
+  await step('设置标签不跳页，个人组与系统组同页可达', async () => {
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
-    if (await page.$('.avatar-menu')) throw new Error('点完菜单项下拉没有收起')
     const h = await page.evaluate(() => location.hash)
     if (h.includes('pages/admin/admin')) throw new Error('设置又变回整页跳转了')
     // 个人组与系统组都要在同一页里够得着
@@ -1431,7 +1480,11 @@ try {
 
   // ============ J6.5 AI 对话（真 UI 打字发送；默认模型 deepseek-v4-flash，
   // $0.09/M tokens，一条消息成本可忽略；AI_E2E=0 跳过） ============
-  if (process.env.AI_E2E !== '0') {
+  // 平台通道 + 未连账户（冷启动隔离后端的默认起点）时 AI 发不出去——发送前就地弹登录层，
+  // 那条由 J3.5 断言；这里没有可验的真回复，记 skip，不替用户改全局 AI 配置。
+  if (process.env.AI_E2E !== '0' && aiNeedsLogin) {
+    note('skip', 'J6.5 后端为平台通道且未连账户（AI 需登录），真发送与流式回复断言未覆盖（登录弹层由 J3.5 覆盖）')
+  } else if (process.env.AI_E2E !== '0') {
     console.log('== J6.5 AI 对话 ==')
     // 提问原文要在两个步骤里复用（定位这一轮），提到外面来
     const J65_PROMPT = '这是自动化测试。请只回复四个字：测试通过'
@@ -2527,9 +2580,10 @@ try {
     await step('取回弹窗：列表带「我在这份案卷里的角色」，同一份案卷再取一次不造第二个项目', async () => {
       const before = await api('/api/projects/my')
       const beforeCount = (Array.isArray(before) ? before : []).length
-      await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2', timeout: 30000 })
-      await page.waitForSelector('.project-item-card', { timeout: 20000 })
-      await mouseClickText('从团队案件库取一份案卷')
+      // 入口在左栏「项目」面板头部（dev-board#1047 起项目列表页是直链薄壳）。欢迎标签的 Start 区
+      // 也有一个同名入口，限定在面板里点，别点到另一个宿主上去。
+      await gotoProjectsPane()
+      await mouseClickSel('.project-list-pane .header-actions .btn-secondary-small')
       await page.waitForSelector('.cloud-project-list', { timeout: 20000 })
       const rows = await page.evaluate(() => [...document.querySelectorAll('.cloud-project-row')].map((r) => ({
         name: ((r.querySelector('.cloud-project-name') || {}).innerText || '').trim(),
@@ -3030,6 +3084,22 @@ try {
     // 重命名输入框、也被操作条吃过点击。而「能不能打开文档」中文侧 J5 已经覆盖，
     // 与语言无关（文件名是用户数据、引擎 UI 归 lowa-e2e）。这里只钉真正属于
     // i18n 的那一面：空态文案必须是英文。
+    // dev-board#1049 起标签条随项目快照恢复（project_<id>_tabs），整页 reload 之后前序旅程
+    // 打开的标签都还在，空态根本不出现。先用真实鼠标把中栏标签逐个 × 掉（与用户关标签同一条
+    // closeFile 路径），再断言空态文案。
+    for (let i = 0; i < 30; i++) {
+      const box = await page.evaluate(() => {
+        const tab = [...document.querySelectorAll('.tabs-bar .tab-item')].find((e) => e.offsetParent !== null)
+        const x = tab && tab.querySelector('.tab-close')
+        if (!x) return null
+        x.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+        const r = x.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      if (!box) break
+      await page.mouse.click(box.x, box.y)
+      await sleep(300)
+    }
     await page.waitForFunction(() => {
       const t = document.body.innerText || ''
       return t.includes('Select a file to get started')
@@ -3059,7 +3129,26 @@ try {
     // 现在：按钮中心被别的元素盖住 / 点了没发出去 → 判红；发出去了但模型这一轮
     // 没调工具 → 照旧 skip。
     const J12_PROMPT = 'List the files in this project, then reply with just: E2E OK'
-    const j12Sent = await step('J12 发送按钮未被遮挡且点击确实发出消息', async () => {
+    // 平台通道 + 未连账户：发不出去，点发送就地弹登录层——这时 EN 发版门验的是登录弹层的英文
+    // （说明句与「Not now」出口不带中文），过程卡工具名那条无从谈起，记 skip。
+    if (aiNeedsLogin) {
+      note('skip', 'J12 后端为平台通道且未连账户（AI 需登录），英文过程卡工具名断言未覆盖，改验英文登录弹层')
+      await step('J12 未连账户：发送弹出英文登录层，「Not now」后草稿不发', async () => {
+        const J12_LOGIN_PROMPT = 'J12 login gate check ' + ts
+        await mouseClickSel('.chat-input-rich')
+        await page.keyboard.type(J12_LOGIN_PROMPT, { delay: 5 })
+        await clickVisibleSend()
+        await assertLoginDialog(page, { reasonIncludes: 'requires an AI WorkDeck account', cancelText: 'Not now', noCjk: true })
+        await sleep(300)
+        await shot('j12-en-login-dialog')
+        await cancelLoginDialog(page, 'Not now')
+        await sleep(1000)
+        if (await page.$('.stop-btn')) throw new Error('取消登录后仍进入了流式')
+        if (await historyHasPrompt(J12_LOGIN_PROMPT)) throw new Error('取消登录后提问仍被后端落进了 AI 历史')
+        await clearChatDraft()
+      })
+    }
+    const j12Sent = aiNeedsLogin ? false : await step('J12 发送按钮未被遮挡且点击确实发出消息', async () => {
       await mouseClickSel('.chat-input-rich')
       await page.keyboard.type(J12_PROMPT, { delay: 10 })
       const hit = await page.evaluate(() => {
@@ -3172,6 +3261,7 @@ try {
     const j13LogFile = fs.createWriteStream(path.join(j13Home, 'stdout.log'))
     j13Child.stdout.pipe(j13LogFile); j13Child.stderr.pipe(j13LogFile)
     let j13Page = null
+    let j13Ctx = null
     try {
       let j13Ready = false
       for (let i = 0; i < 90; i++) {
@@ -3186,7 +3276,10 @@ try {
         if (!j13Proj || !j13Proj.id) throw new Error('J13 隔离后端建项目失败: ' + JSON.stringify(j13Proj).slice(0, 200))
         const j13ProjectId = j13Proj.id
 
-        j13Page = await browser.newPage()
+        // 独立浏览器上下文（独立 localStorage），理由同 J13.5：隔离后端的项目 id 也从 1 数起，
+        // 按项目 id 存的工作台状态（标签快照、左栏面板键）会与主页面串味。
+        j13Ctx = await browser.createBrowserContext()
+        j13Page = await j13Ctx.newPage()
         // 桌面壳假冒 + apiBaseUrl 覆盖：host.js 的 getApiBaseUrl() 最先认
         // window.checkbaDesktop.apiBaseUrl，借这条把这一页的全部 API 请求
         // 定向到隔离后端，不需要另起一份 dev server（真实 Electron 壳换后端
@@ -3320,8 +3413,162 @@ try {
       }
     } finally {
       if (j13Page) { try { await j13Page.close() } catch (e) { /* ignore */ } }
+      if (j13Ctx) { try { await j13Ctx.close() } catch (e) { /* ignore */ } }
       try { j13Child.kill('SIGKILL') } catch (e) { /* ignore */ }
       try { await j13Stub.close() } catch (e) { /* ignore */ }
+    }
+  }
+
+  // ============ J13.5 广场付费项触发登录弹层（登录后置，dev-board#1046） ============
+  // 付费项 + 未连账户：广场侧栏的主按钮是「需连接账户」，点了就地 requireAccount({reason:'market'})，
+  // 「暂不登录」停在原地、不装。
+  //
+  // 官方注册表目前没有任何付费项（2026-09-29 实测 skills 29 条 / plugins 2 条，priceCents 全为 0），
+  // 主后端上这条旅程无从谈起。所以照 J13 另起一个隔离后端，把 ai.skills.registry-url /
+  // ai.plugins.registry-url 指向本地一个注册表桩，桩里放一条 priceCents>0 的 skill——被测对象
+  // （后端的价格归一与账户判定、广场侧栏的按钮形态、登录弹层）全是真的，只有「官网注册表」
+  // 这个外部依赖换成了桩（与 J13 用 pack 桩同一个理由）。取消之后不走安装，桩不需要 bundle 端点。
+  console.log('== J13.5 广场付费项触发登录弹层 ==')
+  if (!J11_JAR) {
+    note('skip', 'J13.5 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，广场付费项登录弹层旅程未覆盖')
+  } else {
+    const PAID_ID = 'e2e-paid-skill-' + ts
+    const PAID_NAME = 'E2E付费技能' + String(ts).slice(-5)
+    const registryStub = http.createServer((req, res) => {
+      const u = (req.url || '').split('?')[0]
+      const json = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+      if (u === '/skills') {
+        return json(200, [{
+          id: PAID_ID, name: PAID_NAME, description: 'e2e 付费项（本地注册表桩）', icon: '◆', version: '1.0.0',
+          author: 'e2e', authorDisplayName: 'e2e', triggers: [], allowedTools: [], category: 'other',
+          priceCents: 990, pricingModel: 'once',
+        }])
+      }
+      if (u === '/plugins' || u === '/plugins/revoked' || u === '/skills/revoked') return json(200, [])
+      return json(404, { error: 'not found' })
+    })
+    await new Promise((r) => registryStub.listen(0, '127.0.0.1', r))
+    const stubBase = 'http://127.0.0.1:' + registryStub.address().port
+    const j135Home = path.join(OUT, 'j135-paid-' + ts)
+    const j135Cwd = path.join(j135Home, 'cwd')
+    fs.mkdirSync(j135Cwd, { recursive: true })
+    const repoRoot135 = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..')
+    const j135SkillsDir = path.join(j135Home, 'skills-copy')
+    fs.cpSync(path.join(repoRoot135, 'backend/skills'), j135SkillsDir, { recursive: true })
+    const j135Port = 9705 // J11 占 9701/9702/9704，J13 9703
+    const j135Backend = 'http://127.0.0.1:' + j135Port
+    // 命令行参数优先级高于站点表注入的 registry-url（SiteEnvironmentPostProcessor 插在系统环境之后）
+    const j135Child = spawn(process.env.JAVA_HOME + '/bin/java', [
+      '-Duser.home=' + j135Home, '-jar', J11_JAR,
+      '--server.port=' + j135Port,
+      '--spring.profiles.active=desktop',
+      '--spring.datasource.url=jdbc:h2:file:' + path.join(j135Home, 'db') + ';MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE',
+      '--ai.skills.dir=' + j135SkillsDir,
+      '--ai.skills.registry-url=' + stubBase + '/skills',
+      '--ai.plugins.registry-url=' + stubBase + '/plugins',
+    ], { cwd: j135Cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const j135Log = fs.createWriteStream(path.join(j135Home, 'stdout.log'))
+    j135Child.stdout.pipe(j135Log); j135Child.stderr.pipe(j135Log)
+    let j135Page = null
+    let j135Ctx = null
+    try {
+      let ready = false
+      for (let i = 0; i < 90; i++) {
+        try { const r = await fetch(j135Backend + '/api/auth/me'); if (r.status === 200) { ready = true; break } } catch (e) { /* 未就绪 */ }
+        await sleep(1000)
+      }
+      if (!ready) {
+        note('skip', 'J13.5 隔离后端未在 90s 内就绪，日志见 ' + path.join(j135Home, 'stdout.log') + '，广场付费项登录弹层旅程未覆盖')
+      } else {
+        const j135Api = mkApi(j135Backend)
+        const acct = await j135Api('/api/account/status')
+        const connected = !!(acct && acct.data && acct.data.connected)
+        const mk = await j135Api('/api/skills/market/list')
+        const paid = ((mk && mk.skills) || []).find((x) => x && x.id === PAID_ID)
+        if (connected) {
+          note('skip', 'J13.5 隔离后端竟然已连账户（不应发生），付费项登录弹层旅程未覆盖')
+        } else if (!paid || !(Number(paid.priceCents) > 0)) {
+          note('skip', 'J13.5 隔离后端没从注册表桩拿到付费项（' + JSON.stringify(mk).slice(0, 160) + '），旅程未覆盖')
+        } else {
+          const proj = await j135Api('/api/projects', { method: 'POST', body: { name: 'J13.5付费项', projectType: 'BLANK' } })
+          if (!proj || !proj.id) throw new Error('J13.5 隔离后端建项目失败: ' + JSON.stringify(proj).slice(0, 200))
+          const site135 = await j135Api('/api/site')
+          // 独立浏览器上下文（独立 localStorage）：同一个 dev server 源下，各隔离后端的项目 id
+          // 都从 1 数起，按项目 id 存的工作台状态（标签快照 project_<id>_tabs、左栏面板键…）
+          // 会跨后端串味——实测主后端 1 号项目的标签与左栏收起态被带进了这里，反过来这里点
+          // rail 的开关又写回去，害得后面 J14 在主页面上等不到资源管理器。
+          j135Ctx = await browser.createBrowserContext()
+          j135Page = await j135Ctx.newPage()
+          await j135Page.evaluateOnNewDocument((apiBase) => {
+            window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
+          }, j135Backend)
+          await j135Page.evaluateOnNewDocument(PIN_ZH_CN)
+          const pg = j135Page
+          const step135 = async (name, fn) => {
+            try { await fn(); passed++; console.log('  ✓ ' + name); return true }
+            catch (e) {
+              stepFails++; note('step-fail', name + ': ' + String(e.message || e).slice(0, 180))
+              try { await pg.screenshot({ path: path.join(OUT, 'FAIL-' + name.replace(/[^\w一-龥]/g, '_') + '.png') }) } catch (e2) { /* ignore */ }
+              return false
+            }
+          }
+          const findNeedBtn = () => pg.evaluate((name) => {
+            const row = [...document.querySelectorAll('.msb .msb-row')].find((r) => (r.innerText || '').includes(name))
+            if (!row) return null
+            const btn = row.querySelector('.msb-row-state.need')
+            if (!btn || btn.offsetParent === null) return { row: true, btn: false, text: row.innerText }
+            btn.scrollIntoView({ block: 'center' })
+            const r = btn.getBoundingClientRect()
+            return { row: true, btn: true, text: btn.innerText.trim(), x: r.x + r.width / 2, y: r.y + r.height / 2 }
+          }, PAID_NAME)
+
+          const shown = await step135('J13.5 广场侧栏的付费项显示「需连接账户」', async () => {
+            await pg.goto(BASE + '/#/pages/project-overview/project-overview?id=' + proj.id, { waitUntil: 'domcontentloaded', timeout: 30000 })
+            await pg.waitForSelector('[title="插件中心"]', { timeout: 30000 })
+            // rail 按钮是开关：面板已开着时再点一下正好关上，所以「确保打开」而不是「点一下」
+            if (!(await pg.$('.msb'))) {
+              const railBox = await pg.evaluate(() => {
+                const r = document.querySelector('[title="插件中心"]').getBoundingClientRect()
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+              })
+              await pg.mouse.click(railBox.x, railBox.y)
+            }
+            await pg.waitForFunction((name) => [...document.querySelectorAll('.msb .msb-row')].some((r) => (r.innerText || '').includes(name)),
+              { timeout: 20000 }, PAID_NAME)
+            const b = await findNeedBtn()
+            if (!b || !b.btn) throw new Error('付费项那一行没有可见的「需连接账户」按钮: ' + JSON.stringify(b))
+            if (b.text !== '需连接账户') throw new Error('付费项按钮文案不是「需连接账户」: ' + b.text)
+          })
+          if (shown) {
+            const opened = await step135('J13.5 点「需连接账户」就地弹登录层', async () => {
+              const hash0 = await pg.evaluate(() => location.hash)
+              const b = await findNeedBtn()
+              await pg.mouse.click(b.x, b.y)
+              await assertLoginDialog(pg, { reasonIncludes: '安装付费内容需要登录', siteInfo: site135 })
+              const h = await pg.evaluate(() => location.hash)
+              if (h !== hash0) throw new Error('弹登录层时路由变了: ' + hash0 + ' -> ' + h)
+              await pg.screenshot({ path: path.join(OUT, 'j13.5-market-login.png') }).catch(() => {})
+            })
+            if (opened) {
+              await step135('J13.5 「暂不登录」后停在原地、没有安装', async () => {
+                await cancelLoginDialog(pg)
+                await sleep(1000)
+                const b = await findNeedBtn()
+                if (!b || !b.btn) throw new Error('取消后付费项按钮不见了（是不是被当成已装？）: ' + JSON.stringify(b))
+                const list = await j135Api('/api/skills/list')
+                const arr = Array.isArray(list) ? list : ((list && (list.data || list.skills)) || [])
+                if (JSON.stringify(arr).includes(PAID_ID)) throw new Error('取消登录后付费项仍被装进了本地 skill 列表')
+              })
+            }
+          }
+        }
+      }
+    } finally {
+      if (j135Page) { try { await j135Page.close() } catch (e) { /* ignore */ } }
+      if (j135Ctx) { try { await j135Ctx.close() } catch (e) { /* ignore */ } }
+      try { j135Child.kill('SIGKILL') } catch (e) { /* ignore */ }
+      try { registryStub.closeAllConnections() } catch (e) { /* ignore */ }
+      try { registryStub.close() } catch (e) { /* ignore */ }
     }
   }
 

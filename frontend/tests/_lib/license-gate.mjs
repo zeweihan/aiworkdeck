@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 解锁门的测试起点（2026-08「官方版必须账户登录」之后收进共享模块）。
 //
+// **仅 fork（trialCodeEnabled=true）路径使用，默认套件不再调用**（dev-board#1027，2026-09-29）：
+// 登录后置之后启动不设解锁门，app-e2e / desktop-e2e / feedback-e2e / meeting-e2e 一律从
+// mode=none（未连账户）的后端起跑，不再预置 trial 票据、不再注入 legacy-grace-until。
+// 本模块保留给仍开着试用码的 fork / 私有部署构建：那里若有套件需要「已解锁」起点，照旧调
+// ensureUnlocked；legacyGraceJvmArg 同理只在那条路径上有意义。别在默认套件里再引回来——
+// 那会让「未连账户就是正常起点」这条新基线没有任何一套 e2e 覆盖到。
+//
 // 这段逻辑此前在 desktop-e2e / feedback-e2e / meeting-e2e 里逐字抄了三份，都是
 // 「后端没解锁就拿 README 那枚公开试用码激活，激活失败就硬退出」。发版默认值
 // （security.license.trial-code.enabled=false）关掉试用码之后那条路走不通，
