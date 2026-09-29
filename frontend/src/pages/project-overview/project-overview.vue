@@ -1167,6 +1167,9 @@
                       :ref="el => setPlainTextRef('left', el)"
                       :file="activeFileLeft"
                       :project-id="projectId"
+                      :review="activeFileLeft.review || null"
+                      @review-submit="onPlanReviewSubmit"
+                      @review-state="onPlanReviewState"
                     />
                     <!-- key 不能省：两个对比标签命中同一个 v-else-if 分支，没有 key
                          Vue 会就地复用同一个组件实例，而 DocDiffViewer 只在 mounted()
@@ -1363,6 +1366,9 @@
                       :ref="el => setPlainTextRef('right', el)"
                       :file="activeFileRight"
                       :project-id="projectId"
+                      :review="activeFileRight.review || null"
+                      @review-submit="onPlanReviewSubmit"
+                      @review-state="onPlanReviewState"
                     />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileRight)"
@@ -1624,6 +1630,7 @@
                 @menu-state="pushMenuState"
                 @artifact-open-tab="handleArtifactOpenTab"
                 @open-file="handleOpenFileFromChat"
+                @open-review-tab="handleOpenPlanReviewTab"
                 @transcribe-audio="onTranscribeAudio"
               />
             </view>
@@ -6255,6 +6262,24 @@ export default {
         fileId,
         timeoutMs: (options && options.timeoutMs) || 1500,
       })
+    },
+    /**
+     * 计划审阅（dev-board#1022）：编辑器里「按修订版推进」→ 交给 AI 面板以 AGENT 模式发出。
+     * 走 resolveChatInterface：AI 面板此刻可能收着或右侧停着别的面板。
+     */
+    async onPlanReviewSubmit(payload) {
+      const chat = await this.resolveChatInterface()
+      if (chat && typeof chat.handleReviewSubmit === 'function') await chat.handleReviewSubmit(payload)
+    },
+    /** 编辑器回传审阅态：转给对话里的计划卡；审阅结束后清掉标签上的 review，免得重开时再进审阅。 */
+    onPlanReviewState(state) {
+      const chat = this.$refs.chatInterface
+      if (chat && typeof chat.handleReviewState === 'function') chat.handleReviewState(state)
+      if (state && (state.status === 'submitted' || state.status === 'discarded')) {
+        for (const tab of [...(this.leftFiles || []), ...(this.rightFiles || [])]) {
+          if (tab.review && String(tab.id) === String(state.fileId)) tab.review = null
+        }
+      }
     },
     /** 写作辅助打开既有资料；全文在线核验由面板中的显式按钮单独触发。 */
     onOpenInsight(payload, pane) {

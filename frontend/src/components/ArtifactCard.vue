@@ -9,6 +9,7 @@
         <span class="card-title">{{ typeLabel }}</span>
         <span v-if="effectiveStatus === 'resolved'" class="status-badge resolved">{{ $t('chat.confirmedExecuted') }}</span>
         <span v-if="revisionNote" class="status-badge revised">{{ revisionNote }}</span>
+        <span v-if="reviewInProgress" class="status-badge revised">{{ $t('chat.reviewInProgress', { hunks: reviewState.hunks || 0, comments: reviewState.comments || 0 }) }}</span>
       </div>
 
       <div class="card-actions">
@@ -47,8 +48,8 @@
         <div class="btn-approve" @click.stop="approvePlain">
           <span>{{ $t('chat.proceedBtn') }}</span>
         </div>
-        <div class="btn-revise" @click.stop="startEditing">
-          <span>{{ $t('chat.reviseBtn') }}</span>
+        <div class="btn-revise" @click.stop="openReview">
+          <span>{{ $t('chat.openRevisionBtn') }}</span>
         </div>
       </template>
       <template v-else>
@@ -103,9 +104,24 @@ export default {
     actionable: {
       type: Boolean,
       default: false
+    },
+    // 计划审阅（dev-board#1022）：计划文件在项目里的 fileId（SSE saved 事件补上）；
+    // 历史回放没有 saved 事件时退而用气泡正文里「已保存到项目文件」那行的路径反查。
+    fileId: {
+      type: [Number, String],
+      default: null
+    },
+    savedPath: {
+      type: String,
+      default: ''
+    },
+    // 编辑器里审阅态的回传：{ hunks, comments, status }
+    reviewState: {
+      type: Object,
+      default: null
     }
   },
-  emits: ['open-tab', 'approve'],
+  emits: ['open-tab', 'approve', 'open-review'],
   data() {
     return {
       editing: false,
@@ -123,6 +139,9 @@ export default {
     },
     effectiveStatus() {
       return this.localResolved ? 'resolved' : this.status
+    },
+    reviewInProgress() {
+      return !!this.reviewState && this.reviewState.status === 'open' && this.effectiveStatus === 'draft'
     },
     showApprovalBar() {
       return this.isPlanType && this.actionable && this.effectiveStatus === 'draft'
@@ -154,6 +173,18 @@ export default {
       return this.$t('chat.generatedClickView', { name: typeName })
     }
   },
+  watch: {
+    // 在编辑器里「按修订版推进」之后，卡片跟着置为已推进
+    reviewState: {
+      immediate: true,
+      handler(s) {
+        if (s && s.status === 'submitted' && !this.localResolved) {
+          this.localResolved = true
+          this.revisionNote = this.$t('chat.approveDisplayRevised')
+        }
+      }
+    }
+  },
   methods: {
     handleOpenTab() {
       console.log('[ArtifactCard] Opening artifact in tab:', this.id)
@@ -163,6 +194,22 @@ export default {
         fileName: this.fileName,
         filePath: this.filePath,
         content: this.data?.content || ''
+      })
+    },
+    // 「打开修订」：计划文件能定位到就交给宿主在编辑器标签里开审阅态；
+    // 定位不到（没有 fileId 也没有保存路径，或宿主反查失败回调 fallback）才退回卡内 textarea。
+    openReview() {
+      if (!this.fileId && !this.savedPath) {
+        this.startEditing()
+        return
+      }
+      this.$emit('open-review', {
+        id: this.id,
+        type: this.type,
+        fileId: this.fileId || null,
+        savedPath: this.savedPath,
+        content: this.planContent,
+        fallback: () => this.startEditing()
       })
     },
     startEditing() {

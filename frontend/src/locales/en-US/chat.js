@@ -378,4 +378,8 @@ export default {
   generatedClickView: 'Generated {name}. Click to view details.',
   revisionNote: 'Revised in {hunks} places (+{added} lines / -{removed} lines)',
   approveDisplayRevised: 'Plan revised',
+  // Plan review (dev-board#1022)
+  openRevisionBtn: 'Open Revision',
+  reviewInProgress: 'Revising · {hunks} change(s) · {comments} comment(s)',
+  reviewFileMissing: 'Cannot find the project file for this plan. Revise it in the card instead.',
 }

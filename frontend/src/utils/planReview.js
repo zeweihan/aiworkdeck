@@ -39,3 +39,17 @@ export function buildPlanReviewPrompt({ lang = 'zh', currentText, diff, comments
     : `已按修订版推进（${n} 处改动、${m} 条批注）`
   return { message, displayText }
 }
+
+// 后端 AgentOrchestrator.artifactSavedNoticeDelta 的两种写法：「> 已保存到项目文件：<路径>」
+// 与「> Saved to project file: <路径>」。路径与 saved 事件的 filePath 逐字相同。
+const SAVED_LINE = /^>\s*(?:已保存到项目文件：|Saved to project file:)[ \t]*(.+?)[ \t]*$/gm
+
+/**
+ * 从助手气泡正文取「已保存到项目文件」那行的相对路径（取最后一次出现）。
+ * 历史回放没有 saved 事件，计划卡靠它反查 fileId。没有返回 null。
+ */
+export function resolveSavedPath(bubbleContent) {
+  let last = null
+  for (const m of String(bubbleContent || '').matchAll(SAVED_LINE)) last = m[1]
+  return last || null
+}
