@@ -2363,6 +2363,7 @@ import {
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { signOut } from '@/utils/signOut.js'
+import { requireAccount, ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
 import { loadSiteLinks, siteBaseUrl, siteLinks } from '@/utils/siteLinks.js'
 import { confirmPaidTranscription } from '@/utils/paidTranscribeGate.js'
 import { getCurrentUser } from '@/utils/auth.js'
@@ -3461,6 +3462,10 @@ export default {
       uni.$off('awd:wallet-refresh', this._onWalletRefresh)
       this._onWalletRefresh = null
     }
+    if (this._onAccountChanged) {
+      uni.$off(ACCOUNT_CHANGED_EVENT, this._onAccountChanged)
+      this._onAccountChanged = null
+    }
     if (this._onIdentityUpdated) {
       uni.$off('awd:identity-updated', this._onIdentityUpdated)
       this._onIdentityUpdated = null
@@ -3863,6 +3868,11 @@ export default {
     // beforeUnmount 必须按引用 $off，否则每回来一次多一份订阅。
     this._onWalletRefresh = () => this.loadWalletBalance()
     uni.$on('awd:wallet-refresh', this._onWalletRefresh)
+    // 账户连上 / 断开（登录弹层成功、utils/signOut.js，dev-board#1046）：rail 账户入口的头像、余额抬头、
+    // 宽限提示都读本页的授权状态与余额，就地重拉，不刷新页面。刻意不加 isActiveOverviewInstance 守卫：
+    // 每个实例只刷自己的数据，栈里被压着的那个回来时也该是新状态（同 awd:wallet-refresh）。
+    this._onAccountChanged = () => this.refreshAccountState()
+    uni.$on(ACCOUNT_CHANGED_EVENT, this._onAccountChanged)
     // SKU 解锁成功（UnlockHint 广播）：暂存区用量条的 limited 是后端算的，重拉一次
     // 才会摘掉「立即解锁」横幅（与剪贴板同病，dev-board#201）
     this._onEntitlementsChanged = () => {
@@ -5827,13 +5837,18 @@ export default {
     async onAvatarMenuSignOut() {
       await signOut()
     },
-    // rail 底部账户入口的「登录」（dev-board#1047 先留位）。
-    // TODO(#1046): requireAccount —— 就地登录弹层合入后改成 await requireAccount({ reason: 'account' })，
-    // 不再离开工作台。在那之前暂时打开 pages/unlock 薄壳页：先把编辑器落盘，再 navigateTo
-    // （工作台留在栈里，全局返回键能回来；解锁页登录成功会 reLaunch 回启动分流）。
+    // rail 底部账户入口的「登录」（dev-board#1047 / #1046）：就地弹登录层，不离开工作台。
+    // 登录成功由 requireAccount 广播 awd:account-changed，本页（refreshAccountState）与入口组件都订着；
+    // 这里成功后再补一次刷新，是防广播订阅还没挂上的早期点击。取消 = 什么都不变。
     async onAccountLogin() {
-      if (!(await this.flushBeforeLeaving())) return
-      uni.navigateTo({ url: '/pages/unlock/unlock' })
+      const ok = await requireAccount({ reason: 'account' })
+      if (ok) this.refreshAccountState()
+    },
+    /** 账户连接变化后重拉 rail 账户入口依赖的三样：授权状态（连接 / 宽限）、余额抬头、用户信息。 */
+    refreshAccountState() {
+      this.loadLicenseMode()
+      this.loadWalletBalance()
+      this.loadRealUserInfo()
     },
     /** 离开 / 可能离开工作台前的落盘（leaveWorkbench 的前半截）。落不下来就提示并返回 false。 */
     async flushBeforeLeaving() {

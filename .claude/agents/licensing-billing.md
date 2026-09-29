@@ -537,9 +537,11 @@ mobile | meeting | dictation`（缺省不带这个键，前端用通用说明）
 | `account` | `POST {base}/api/license/verify-key` 回 `valid:true` 即解锁 | 30 天未联网复验则 `unlocked:false`，提示联网重验；剩 ≤7 天带 `graceKind=offlineReverify` + `daysRemaining` |
 | 非 local-mode | 团队服务器部署**不设解锁门** | `status()` 恒 `{unlocked:true, mode:"account", plan:"paid"}`，不带上面三个字段 |
 
-### 必须账户登录（2026-08-18）
+### 必须账户登录（2026-08-18；2026-09-29 起启动不设门，见规则 1）
 
 官方发布的桌面版把试用码这条解锁路关掉，解锁门只接受账户凭据（手机号/邮箱登录，或手工粘 `awdk_` Key）。
+**2026-09-29 登录后置之后「解锁门」不再拦启动**（launch 分流不读 `unlocked`），本节的票据与宽限规则仍决定
+`/api/license/status` 的形状与账户入口的提醒行，但不再决定用户能不能进工作台。
 配置项在 `application-desktop.yml`：
 
 ```yaml
@@ -550,7 +552,10 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 四条硬规则：
 
 1. **闸是默认值不是 DRM。** 商业版 / 私有部署 / 自行构建改回 `true` 即完全恢复，刻意不做防篡改。
-   README 有一节告诉自行构建者改哪一行——AGPL 项目不能只把门关上不给钥匙。
+   **2026-09-29 起（登录后置，dev-board#1046/#1047）启动不设门**：launch 不读 `unlocked`，不登录也能打开和使用
+   应用；AI / 广场付费 / 团队 / 手机同步看的是账户连接（4011），试用码代替不了。这个开关因此只剩两层作用：
+   登录框（`AccountLoginDialog`）是否提供「试用码 / 账户 Key」输入、存量 `mode=trial` 票据是否走过渡期。
+   README 里原来「自行构建改一行恢复离线试用」那一节已删并写明原因（门都没了，不存在「不给钥匙」）。
 2. **不要改用 `security.local-mode: false` 来达成同一目的。** 那一位是「这是单机桌面版」的判别位，
    翻它会连带关掉解锁门本身、免费额度、平台 AI 通道、本机设备令牌与切站能力，并让
    `/api/account/login` 自己锁死（走 `MachineAccountGuard`，非 local-mode 要求先有 session）。
@@ -558,8 +563,9 @@ security.license.trial-code.legacy-grace-until: "2026-09-30"
 3. **`legacy-grace-until` 留空或格式非法一律按已到期处理**，硬期限当天也算到期。安全侧默认：
    配错一个日期不会变成永久宽限。
 4. **`daysRemaining` / `graceKind` 只在需要提醒时下发**，不需要时 `status()` 的形状与过去一模一样。
-   顶栏 chip（`project-overview.vue` 的 `.trial-chip.grace-chip`）与 unlock 页都只读这两个字段，
-   不自己算日期。
+   rail 底部账户入口下拉里的提醒行（`AccountRailEntry` 的 `noticeText`，宿主 `project-overview.vue` 的
+   `accountNoticeText`；2026-09-29 前是顶栏 `.trial-chip.grace-chip`，dev-board#1047 挪走）与 unlock 页都只读
+   这两个字段，不自己算日期。
 
 **app-e2e 的连带约束**：发版默认值下全新 `user.home` 起来的后端是 `mode=none`，套件没有任何办法
 解锁它。冷启动跑法要往隔离 `user.home` 播一份存量 `mode=trial` 票据作起点（真实存在的过渡期状态），

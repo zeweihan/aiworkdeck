@@ -180,9 +180,16 @@ Recent
 
 - 标题与 lead 文案取 `design/copy/brand-copy.json`，不自创。
 - Start 五项分别接现有动作：新建 / 打开文件夹（`config/commands/file.js` 同一套）、取案卷（列表页现有入口）、
-  连接团队服务器（设置里的连接动作）、**凭访问码进入案卷**（dev-board#1026 协同项：落点仍走 `clientLogin` API，
-  CLIENT 角色进入后落到该案卷；实现时与 `login.vue:112` 的客户入口共用一个组件，客户输码连的是案件库服务器，
-  不是本机回环后端）。
+  连接团队服务器（设置里的连接动作）、**凭访问码进入案卷**（dev-board#1026 协同项，**客户门户契约按 dev-board#1050 定稿**）：
+  - 桌面端：不在本应用里登录、不经本机回环后端。欢迎标签的弹窗只有一个访问码输入框 +「在浏览器中打开」+
+    一句「案卷在浏览器中打开，无需登录本应用」；点按钮用系统浏览器（`host.shell.openExternal`，经
+    `utils/externalLink.js` 的 `openExternalUrl`）打开 `{cloud.collab.base-url}/client/#code=<访问码>`。
+    根地址取 `GET /api/cloud/official` 的 `serverUrl`（后端 `cloud.collab.base-url`），界面不显示、不给改；
+    访问码放 **fragment** 不放 query（不随请求发给服务器、不进访问日志与 Referer），门户页读 hash 预填后自己清掉。
+    取不到根地址时如实提示，不拼假地址。
+  - 浏览器端（团队服务器网页）与 `login.vue` 的「客户」tab：保持原样，走本服务器的 `clientLogin`，
+    CLIENT 角色进入后落到该案卷。
+  - 两种形态共用 `components/account/ClientAccessCodeForm.vue`，按 `mode: 'portal' | 'login'` 分支。
 - 上手指南三张卡指向官网现有文档页与启动视频（`2026-08-20-launch-video-design.md`），本期不新写教程内容。
   卡片不做进度追踪。
 - 「启动时显示欢迎页」：本机记忆，默认开。关掉后启动进无项目态外壳但不自动开欢迎标签（中央空态显示一行提示 +
@@ -193,7 +200,9 @@ Recent
 ## 7. 日历标签
 
 - `pages/calendar/calendar.vue` 主体抽成 `components/calendar/CalendarPane.vue`（FullCalendar 引入随之搬家），
-  页面退成薄壳（直链、提醒 `taskReminders.js` 的落点仍可用，进入后 `redirectTo` 工作台并开日历标签）。
+  页面退成薄壳（直链、提醒 `taskReminders.js` 的落点仍可用，进入后 `reLaunch` 工作台并开日历标签）。
+  **实现用 `reLaunch` 而不是本稿原写的 `redirectTo`**：薄壳常从工作台之外进来，而栈里若还压着一个活着的工作台，
+  `redirectTo` 会让两个工作台实例并存（页面栈多实例地雷，见 sidebar-shell.md）；「工作台参与的跳转一律 reLaunch」。
 - `tabType:'calendar'`，id `calendar`，单例；`NON_FILE_TAB_TYPES` 加一行；图标补一个。
 - 四处 `leaveWorkbench('/pages/calendar/calendar')`（`goCalendar`、`ProjectCalendarPane.openGlobalCalendar`、
   头像菜单「我的日程」、列表页入口）改为 `openCalendarTab()`。
@@ -271,3 +280,4 @@ Agents 窗口是「会话中心」，单位是 agent 任务，服务于把整块
 | C | 无项目态外壳 + 欢迎标签 + 左栏「项目」面板 + rail 账户入口 + 列表页薄壳 + 客户访问码入口 | p/aiworkdeck:工作台界面 |
 | D | 日历标签（CalendarPane 抽取 + 标签接线 + 四处入口改造） | p/aiworkdeck:工作台界面 |
 | E | 标签持久化（全局 + 按项目快照） | p/aiworkdeck:工作台界面 |
+| #1050 | 已上云案卷的客户门户（案件库服务器 `/client/#code=`，桌面端欢迎标签的访问码入口落点） | 见 dev-board#1050 |

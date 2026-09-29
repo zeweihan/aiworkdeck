@@ -210,7 +210,7 @@ test('项目列表页退成薄壳：路由保留，不再承载内容', () => {
   assert.match(pages, /"path": "pages\/project-list\/project-list"/)
 })
 
-// ---------------- 凭访问码进入案卷（桌面端连案件库服务器，依赖 dev-board#1050） ----------------
+// ---------------- 凭访问码进入案卷（桌面端 = 案件库客户门户，dev-board#1050 定稿契约） ----------------
 
 const CLIENT_FORM = read('components/account/ClientAccessCodeForm.vue')
 
@@ -225,56 +225,57 @@ function methodBody(src, header) {
   throw new Error('方法体不闭合：' + header)
 }
 
-function remoteVm(requestImpl, serverInput) {
+// 组件里的纯函数：抠出来跑，不 import .vue
+const clientPortalUrl = new Function(`return (function clientPortalUrl(base, code) ${methodBody(CLIENT_FORM, 'export function clientPortalUrl(base, code) {')})`)()
+
+test('客户门户地址：{base}/client/#code=<码>，访问码在 fragment 不在 query，末尾斜杠去掉、码做编码', () => {
+  assert.equal(clientPortalUrl('https://case.example.com///', ' AB12cd '), 'https://case.example.com/client/#code=AB12cd')
+  assert.equal(clientPortalUrl('https://case.example.com', 'a b&c=1'), 'https://case.example.com/client/#code=a%20b%26c%3D1')
+  const url = clientPortalUrl('https://case.example.com', 'XYZ')
+  assert.ok(!url.includes('?'), '不许带 query')
+  assert.equal(new URL(url).search, '')
+  assert.equal(new URL(url).hash, '#code=XYZ')
+})
+
+test('客户门户地址：取不到案件库地址 / 不是 http(s) / 地址自带 ? 或 # 时返回空串，不拼假地址', () => {
+  assert.equal(clientPortalUrl('', 'XYZ'), '')
+  assert.equal(clientPortalUrl('case.example.com', 'XYZ'), '')
+  assert.equal(clientPortalUrl('https://case.example.com/?x=1', 'XYZ'), '')
+  assert.equal(clientPortalUrl('https://case.example.com', '  '), '')
+})
+
+function portalVm(portalBase) {
+  const opened = []
   const emitted = []
-  const vm = {
-    serverInput,
-    loading: false,
-    errorText: '',
-    noticeText: '',
-    $t: (k, p) => (p ? k + JSON.stringify(p) : k),
-    $emit: (name, payload) => emitted.push([name, payload]),
-    requestRemote: requestImpl,
-  }
-  vm.submitRemote = new Function(`return (async function submitRemote(code) ${methodBody(CLIENT_FORM, 'async submitRemote(code) {')})`)().bind(vm)
-  return { vm, emitted }
+  const vm = { portalBase, errorText: '', $t: (k) => k, $emit: (n) => emitted.push(n) }
+  vm.openPortal = new Function('clientPortalUrl', 'openExternalUrl',
+    `return (function openPortal(code) ${methodBody(CLIENT_FORM, 'openPortal(code) {')})`)(clientPortalUrl, (u) => opened.push(u)).bind(vm)
+  return { vm, opened, emitted }
 }
 
-test('访问码（桌面端）：服务器地址不是 http(s) 时不发请求，给出可读提示', async () => {
-  let calls = 0
-  const { vm } = remoteVm(() => { calls++ }, 'case.example.com')
-  await vm.submitRemote('abc')
-  assert.equal(calls, 0)
-  assert.equal(vm.errorText, 'welcome.caseServerInvalid')
+test('portal 形态：系统浏览器打开门户（openExternalUrl），不写本机会话、不改路由', () => {
+  const { vm, opened, emitted } = portalVm('https://case.example.com')
+  vm.openPortal('K9')
+  assert.deepEqual(opened, ['https://case.example.com/client/#code=K9'])
+  assert.deepEqual(emitted, ['portal-opened'])
+  const body = methodBody(CLIENT_FORM, 'openPortal(code) {').replace(/^\s*\/\/.*$/gm, '')
+  assert.ok(!/saveSession|clientLogin|reLaunch|leaveWorkbench|enterCase|uni\.request/.test(body), '门户这条路不许动本机会话与路由')
 })
 
-test('访问码（桌面端）：打的是案件库服务器的 /api/auth/client-login，失败时把服务器原文完整显示、不伪造成功', async () => {
-  const seen = []
-  const { vm, emitted } = remoteVm(async (base, code) => {
-    seen.push([base, code])
-    return { code: 1, message: '访问码无效或已过期，请联系承办律师重新发送。' }
-  }, 'https://case.example.com///')
-  await vm.submitRemote('code-1')
-  assert.deepEqual(seen, [['https://case.example.com', 'code-1']], '去掉末尾斜杠后拼接')
-  assert.equal(vm.errorText, '访问码无效或已过期，请联系承办律师重新发送。')
-  assert.equal(vm.noticeText, '')
+test('portal 形态：案件库地址没取到时如实提示，不打开任何东西', () => {
+  const { vm, opened, emitted } = portalVm('')
+  vm.openPortal('K9')
+  assert.deepEqual(opened, [])
   assert.deepEqual(emitted, [])
-  assert.equal(vm.loading, false)
+  assert.equal(vm.errorText, 'welcome.portalUnavailable')
 })
 
-test('访问码（桌面端）：兑换成功也不写本机会话、不跳进本机工作台（TODO(#1050)），只如实告知', async () => {
-  const { vm, emitted } = remoteVm(async () => ({ code: 0, data: { sessionId: 's', projectId: 7, user: { role: 'CLIENT' } } }), 'https://case.example.com')
-  await vm.submitRemote('ok')
-  assert.equal(vm.noticeText, 'welcome.accessCodeRemoteVerified')
-  assert.deepEqual(emitted, [['remote-verified', { serverUrl: 'https://case.example.com', projectId: 7 }]])
-  // 只看真代码：注释里要写明「为什么不写会话」，那段说明不该把断言判红
-  const body = methodBody(CLIENT_FORM, 'async submitRemote(code) {').replace(/^\s*\/\/.*$/gm, '')
-  assert.ok(!/saveSession|reLaunch|leaveWorkbench|enterCase/.test(body), '远端兑换这条路不许动本机会话与路由')
-})
-
-test('访问码：登录页与欢迎标签共用同一个组件，欢迎标签在桌面端给出服务器地址栏', () => {
+test('访问码：登录页用 login 形态（原样）；欢迎标签桌面端用 portal 形态、不显示服务器地址栏', () => {
   assert.match(read('pages/login/login.vue'), /<ClientAccessCodeForm \/>/)
   const welcome = read('components/welcome/WelcomePane.vue')
-  assert.match(welcome, /<ClientAccessCodeForm compact autofocus :server-url="caseServerUrl" :show-server-field="isDesktop" \/>/)
-  assert.match(welcome, /getOfficialCloud\(\)/, '默认服务器取官方案件库地址（cloud.collab.base-url）')
+  assert.match(welcome, /<ClientAccessCodeForm\s+v-if="isDesktop"\s+mode="portal"[\s\S]*?:portal-base="caseServerUrl"/)
+  assert.match(welcome, /<ClientAccessCodeForm v-else compact autofocus \/>/)
+  assert.match(welcome, /getOfficialCloud\(\)/, '门户根地址取官方案件库地址（cloud.collab.base-url）')
+  assert.ok(!/showServerField|show-server-field|serverInput|submitRemote/.test(CLIENT_FORM), '服务器地址栏与远端兑换那条路已撤')
+  assert.match(CLIENT_FORM, /import \{ openExternalUrl \} from '@\/utils\/externalLink\.js'/)
 })

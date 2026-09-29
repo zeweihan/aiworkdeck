@@ -7,7 +7,7 @@ export default {
   pullFromTeamLibrary: '从团队案件库取一份案卷',
   // 落点是统一「设置」页的「个人」组（2026-08-20 个人中心并入设置，键名不动免得动调用点）
   personalCenter: '设置',
-  // 顶栏「日历」入口 → pages/calendar/calendar（全盘任务日历）
+  // 「日历」入口 → 工作台中栏「日程」标签（tabType:'calendar'，openCalendarTab；pages/calendar/calendar 只剩直链薄壳）
   calendarEntry: '日历',
   allProjects: '全部项目',
   loading: '加载中...',

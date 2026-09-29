@@ -13,7 +13,9 @@
     - 新建 / 打开文件夹：emit 给宿主，宿主先把编辑器落盘，再跑与菜单「文件」同一条命令（config/commands/file.js）；
     - 取案卷：与项目列表同一个 CloudAcceptDialog；
     - 连接团队服务器：设置标签的「团队」一栏（注入的 openSettingsTab）；
-    - 凭访问码进入案卷：与登录页「客户」tab 同一个 ClientAccessCodeForm；
+    - 凭访问码进入案卷：与登录页「客户」tab 同一个 ClientAccessCodeForm。桌面端用 mode="portal"
+      （dev-board#1050：系统浏览器打开案件库客户门户 {cloud.collab.base-url}/client/#code=<码>，不登录本应用）；
+      浏览器端（团队服务器网页）用 mode="login"，打页面所在服务器的 clientLogin；
     - 进项目：注入的 leaveWorkbench（先落盘再 reLaunch 进带 id 的工作台）。
   客户视图（CLIENT）只看得到 Recent，建项目 / 取案卷 / 连服务器三项对他收起。
 -->
@@ -56,7 +58,7 @@
                 <text class="welcome-action-text">{{ $t('welcome.connectTeamServer') }}</text>
               </view>
             </template>
-            <view class="welcome-action" data-action="access-code" @tap="openAccessCode">
+            <view v-if="showAccessCodeEntry" class="welcome-action" data-action="access-code" @tap="openAccessCode">
               <svg class="welcome-action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path v-for="(d, gi) in ICONS.logIn" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
@@ -126,9 +128,17 @@
           <text class="welcome-dialog-close" @tap="showAccessCode = false">×</text>
         </view>
         <text class="welcome-dialog-hint">{{ $t('welcome.accessCodeDialogHint') }}</text>
-        <!-- 桌面端：客户输码连的是案件库服务器（默认官方案件库，可改成自建服务器），不是本机回环后端；
-             浏览器端（团队服务器上的网页）服务器就是页面所在那台，不给地址栏。依赖 dev-board#1050。 -->
-        <ClientAccessCodeForm compact autofocus :server-url="caseServerUrl" :show-server-field="isDesktop" />
+        <!-- 桌面端：案卷在案件库的客户门户里（浏览器打开，不登录本应用，dev-board#1050）；
+             浏览器端（团队服务器上的网页）：页面所在那台服务器的 clientLogin，进本服务器的工作台。 -->
+        <ClientAccessCodeForm
+          v-if="isDesktop"
+          mode="portal"
+          compact
+          autofocus
+          :portal-base="caseServerUrl"
+          @portal-opened="showAccessCode = false"
+        />
+        <ClientAccessCodeForm v-else compact autofocus />
       </view>
     </view>
 
@@ -176,8 +186,10 @@ export default {
       showCloudAccept: false,
       telemetryEnabled: false,
       telemetryDismissed: false,
-      // 官方案件库地址（后端 cloud.collab.base-url，经 /api/cloud/official）；访问码表单的默认服务器
+      // 官方案件库地址（后端 cloud.collab.base-url，经 /api/cloud/official）；客户门户的根地址，不在界面上显示
       caseServerUrl: '',
+      // 国际站没有官方案件库（/api/cloud/official 回 available:false），桌面态客户入口整个不显示
+      portalUnavailable: false,
     }
   },
   computed: {
@@ -191,6 +203,9 @@ export default {
     // 判据同项目列表：有系统文件夹对话框才给「打开已有文件夹」（浏览器端降级为托管空白项目）
     isDesktop() {
       return isDesktopHost()
+    },
+    showAccessCodeEntry() {
+      return !this.isDesktop || !this.portalUnavailable
     },
     isDesktopFs() {
       return isDesktopHost() && !!(host.fs && host.fs.showOpenDialog)
@@ -224,6 +239,7 @@ export default {
   mounted() {
     this.loadRecent()
     this.loadTelemetryState()
+    this.loadPortalBase()
   },
   beforeUnmount() {
     setGlobalOverlay(false, this._overlayHolder)
@@ -277,16 +293,21 @@ export default {
       if (localProjectId) this.openProject({ id: localProjectId })
       else this.loadRecent()
     },
-    // 凭访问码进入案卷：桌面端先取官方案件库地址作默认服务器（取不到就留空，让用户填自建服务器）
+    // 凭访问码进入案卷：桌面端先取官方案件库地址（客户门户在它下面）；取不到时表单提交会如实提示
     async openAccessCode() {
       this.showAccessCode = true
-      if (!isDesktopHost() || this.caseServerUrl) return
+      await this.loadPortalBase()
+    },
+    // 桌面态挂载时就查一次：明确 available:false（国际站）就把入口藏掉；网络失败不藏，提交时如实提示
+    async loadPortalBase() {
+      if (!isDesktopHost() || this.caseServerUrl || this.portalUnavailable) return
       try {
         const res = await getOfficialCloud()
         const d = (res && res.data) || {}
         if (d.available && d.serverUrl) this.caseServerUrl = String(d.serverUrl)
+        else if (d.available === false) this.portalUnavailable = true
       } catch (e) {
-        // 取不到不拦路：表单里的服务器地址留空，让用户自己填
+        // 取不到不拦路：弹窗照开，提交时表单说「暂时取不到案件库地址」
       }
     },
     onConnectTeam() {

@@ -19,6 +19,9 @@
     跳转   embedded=false（页面形态）时组件自己保持原行为：open-project / open-file 走
            reLaunch 进工作台，「返回」按栈深度 navigateBack / redirectTo 项目列表；
            embedded=true 时一律只 emit，由宿主决定就地打开还是 reLaunch。
+    页面形态现状：已无调用方——直链薄壳 pages/calendar/calendar 进来即 reLaunch 工作台开日程标签，
+           不再挂本组件。embedded=false 那几支（页头「返回」、自己 reLaunch 的 open-project / open-file）
+           刻意保留，只作 fork / 自建宿主的兜底（不挂在工作台里时组件仍能独立工作），不是误留的死代码。
     方法   updateSize()  宿主在标签从隐藏变可见、或窗格尺寸变了之后调，让 FullCalendar 重排。
 
   数据：所有读写经 utils/taskStore。挂载先全量拉一次（议程要逾期与之后，不跟视图区间走），

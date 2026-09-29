@@ -1,37 +1,23 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!--
-  「凭访问码进入案卷」表单（客户入口）。两个宿主共用这一份（dev-board#1047 / #1026 协同项）：
-    - pages/login/login.vue 的「客户」tab（浏览器访问团队服务器 / 案件库服务器）；
-    - 工作台欢迎标签 Start 里的「凭访问码进入案卷（客户）」（components/welcome/WelcomePane.vue）。
+  「凭访问码进入案卷」表单（客户入口）。两个宿主共用这一份（dev-board#1047 / #1026 / #1050），按 mode 分两种形态：
 
-  落点：POST /api/auth/client-login → 存会话 → 以 CLIENT 角色 reLaunch 进那份案卷的工作台（?id=<projectId>）。
+  mode="login"（默认；pages/login/login.vue 的「客户」tab，浏览器访问团队服务器）：
+    POST /api/auth/client-login（services/api.js 的 clientLogin，打的就是页面所在那台服务器）→ 存会话 →
+    以 CLIENT 角色 reLaunch 进那份案卷的工作台（?id=<projectId>）。宿主是工作台时走注入的 leaveWorkbench。
 
-  **连接目标**（两种宿主不一样，别弄混）：
-    - 登录页（浏览器访问团队服务器 / 案件库服务器）：不传 serverUrl，走 services/api.js 的 clientLogin，
-      打的就是页面所在的那台服务器，链路完整。
-    - 桌面端欢迎标签：客户输码连的是**案件库服务器**，不是本机回环后端。宿主传 serverUrl（默认官方案件库，
-      即后端 cloud.collab.base-url 经 /api/cloud/official 给出的地址）并打开 show-server-field 让用户可改成
-      自建服务器，本组件直接 POST `${serverUrl}/api/auth/client-login`。
-      **依赖 dev-board#1050**：已上云案卷的客户访问码目前仍由本机后端签发，案件库侧兑换不了——在那之前
-      这条路多半兑换失败，失败时把服务器返回的原文完整显示在表单下方，不在前端伪造成功。
-      兑换成功时（#1050 修好后）桌面端还没有「以远端会话打开案卷」的通道：只如实告知，不写本机会话、
-      不把本机工作台切成客户视图（TODO(#1050)）。
-
-  宿主是工作台时，进入案卷那一跳走注入的 leaveWorkbench（先落盘再 reLaunch）；登录页没有注入，直调 uni。
+  mode="portal"（桌面端欢迎标签，dev-board#1050 定稿契约）：
+    客户不在桌面端里登录、也不经本机回环后端——已上云案卷的客户门户在案件库服务器上。本组件只收一个访问码，
+    用系统浏览器打开 `{portalBase}/client/#code=<访问码>`：
+      - portalBase = 后端 cloud.collab.base-url，经 GET /api/cloud/official 的 serverUrl 取（宿主负责取，传进来）；
+      - 访问码放在 **fragment**（#code=），不是 query：fragment 不随请求发给服务器、不进访问日志与 Referer，
+        门户页读 hash 预填后自己把它清掉；
+      - 外链走 utils/externalLink.js 的 openExternalUrl（桌面端 = host.shell.openExternal，系统浏览器）。
+    不写本机会话、不改路由、不显示服务器地址（界面不给律师 / 客户看案件库地址）。
 -->
 <template>
   <view class="client-access-form" :class="{ 'is-compact': compact }">
-    <view v-if="showServerField" class="input-group">
-      <text class="label">{{ $t('welcome.caseServerLabel') }}</text>
-      <input
-        class="glass-input"
-        type="text"
-        v-model="serverInput"
-        :placeholder="$t('welcome.caseServerPlaceholder')"
-        placeholder-class="placeholder-style"
-      />
-    </view>
     <view class="input-group">
       <text class="label">{{ $t('account.caseAccessCodeLabel') }}</text>
       <input
@@ -44,16 +30,28 @@
         placeholder-class="placeholder-style"
       />
     </view>
-    <button class="action-btn" :disabled="loading" :loading="loading" @tap="submit">{{ $t('account.enterCaseBtn') }}</button>
-    <!-- 服务器返回的原文，完整可读（toast 会截断长句） -->
+    <button class="action-btn" :disabled="loading" :loading="loading" @tap="submit">{{ isPortal ? $t('welcome.portalOpenBtn') : $t('account.enterCaseBtn') }}</button>
+    <text v-if="isPortal" class="caf-notice">{{ $t('welcome.portalHint') }}</text>
+    <!-- 完整可读的错误（toast 会截断长句） -->
     <text v-if="errorText" class="caf-error">{{ errorText }}</text>
-    <text v-if="noticeText" class="caf-notice">{{ noticeText }}</text>
   </view>
 </template>
 
 <script>
 import { clientLogin } from '@/services/api.js'
 import { saveSession } from '@/utils/auth.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
+
+/**
+ * 纯函数：客户门户地址（tests/project-home/welcome-tab.test.mjs 抠出来跑）。
+ * 访问码进 fragment（#code=），不进 query；base 不是 http(s) 时返回空串。
+ */
+export function clientPortalUrl(base, code) {
+  const b = String(base || '').trim().replace(/\/+$/, '')
+  const c = String(code || '').trim()
+  if (!c || !/^https?:\/\/[^\s/?#]+/i.test(b) || /[?#]/.test(b)) return ''
+  return b + '/client/#code=' + encodeURIComponent(c)
+}
 
 export default {
   name: 'ClientAccessCodeForm',
@@ -61,28 +59,25 @@ export default {
     leaveWorkbench: { default: null },
   },
   props: {
+    /** login：本服务器 clientLogin 进案卷（登录页）；portal：在系统浏览器打开案件库的客户门户（桌面端欢迎标签） */
+    mode: { type: String, default: 'login', validator: (v) => v === 'login' || v === 'portal' },
+    /** portal 形态的案件库地址（cloud.collab.base-url）；宿主异步取，取不到为空串 */
+    portalBase: { type: String, default: '' },
     /** 欢迎标签里用紧凑尺寸；登录页用原来的大号表单 */
     compact: { type: Boolean, default: false },
     autofocus: { type: Boolean, default: false },
-    /** 案件库服务器地址（桌面端欢迎标签传；登录页不传 = 页面所在服务器） */
-    serverUrl: { type: String, default: '' },
-    /** 显示可编辑的服务器地址栏（桌面端：官方案件库之外也能填自建服务器） */
-    showServerField: { type: Boolean, default: false },
   },
-  emits: ['success', 'remote-verified'],
+  emits: ['success', 'portal-opened'],
   data() {
     return {
       accessCode: '',
-      serverInput: this.serverUrl || '',
       loading: false,
       errorText: '',
-      noticeText: '',
     }
   },
-  watch: {
-    // 宿主异步拿到官方案件库地址时补进来；用户已经改过就不覆盖
-    serverUrl(v) {
-      if (!this.serverInput) this.serverInput = v || ''
+  computed: {
+    isPortal() {
+      return this.mode === 'portal'
     },
   },
   methods: {
@@ -94,9 +89,8 @@ export default {
         return
       }
       this.errorText = ''
-      this.noticeText = ''
-      if (this.showServerField) {
-        await this.submitRemote(code)
+      if (this.isPortal) {
+        this.openPortal(code)
         return
       }
       this.loading = true
@@ -117,49 +111,15 @@ export default {
         this.loading = false
       }
     },
-    /**
-     * 桌面端：直接向案件库服务器兑换访问码（不经本机回环后端）。
-     * 失败 = 服务器原文完整显示；成功 = 如实告知（见文件头「依赖 dev-board#1050」）。
-     */
-    async submitRemote(code) {
-      const base = String(this.serverInput || '').trim().replace(/\/+$/, '')
-      if (!/^https?:\/\/[^\s/]+/i.test(base)) {
-        this.errorText = this.$t('welcome.caseServerInvalid')
+    /** portal 形态：系统浏览器打开客户门户（见文件头契约）。取不到案件库地址时如实说，不拼一个假地址。 */
+    openPortal(code) {
+      const url = clientPortalUrl(this.portalBase, code)
+      if (!url) {
+        this.errorText = this.$t('welcome.portalUnavailable')
         return
       }
-      this.loading = true
-      try {
-        const res = await this.requestRemote(base, code)
-        if (res && res.code === 0 && res.data) {
-          // TODO(#1050): 桌面端以远端会话打开案件库里的案卷。在那之前不写本机会话
-          // （saveSession 会把本机工作台整个切成客户视图、请求却还打本机后端），只如实告知。
-          this.noticeText = this.$t('welcome.accessCodeRemoteVerified')
-          this.$emit('remote-verified', { serverUrl: base, projectId: res.data.projectId })
-        } else {
-          this.errorText = (res && res.message) || this.$t('account.loginFailedToast')
-        }
-      } catch (e) {
-        this.errorText = (e && e.message) || this.$t('welcome.caseServerUnreachable')
-      } finally {
-        this.loading = false
-      }
-    },
-    requestRemote(base, code) {
-      return new Promise((resolve, reject) => {
-        uni.request({
-          url: base + '/api/auth/client-login',
-          method: 'POST',
-          data: { accessCode: code, displayName: null },
-          header: { 'Content-Type': 'application/json' },
-          timeout: 20000,
-          success: (r) => {
-            const body = r && r.data
-            if (body && typeof body === 'object') resolve(body)
-            else reject(new Error(this.$t('welcome.caseServerBadResponse', { status: (r && r.statusCode) || '' })))
-          },
-          fail: () => reject(new Error(this.$t('welcome.caseServerUnreachable'))),
-        })
-      })
+      openExternalUrl(url)
+      this.$emit('portal-opened')
     },
     // CLIENT 角色进入后落到该案卷的工作台（工作台参与的跳转一律 reLaunch）
     enterCase(projectId) {

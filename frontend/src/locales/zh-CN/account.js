@@ -272,6 +272,8 @@ export default {
       gateway: '这项服务由 AI WorkDeck 平台提供，需要登录账户。',
       dictation: '语音听写需要登录 AI WorkDeck 账户。',
       settings: '登录后可使用 AI、广场付费内容与团队协作。',
+      // rail 底部账户入口的「登录」：用户主动点的，不是被某个功能拦下来的，说明保持中性
+      account: '登录 AI WorkDeck 账户，可使用 AI、广场付费内容、团队案件库与手机端同步。',
     },
     cancel: '暂不登录',
     close: '关闭',

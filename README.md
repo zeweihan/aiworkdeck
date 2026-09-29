@@ -62,32 +62,23 @@ Just want to try it? You don't need to build from source.
 
 > Intel mac builds are discontinued (upstream Python dependencies no longer ship x86_64 wheels). The last Intel dmg remains available in older releases.
 
-Double-click to install, sign in, and start working. The official desktop build needs **no API keys and no infrastructure**: AI and external services run through the AI WorkDeck platform channel and are billed by usage (Credits), and the backend, a trimmed JRE, and a local database are bundled in — no Java, Docker, or PostgreSQL required. (Building from source instead? The self-hosted stack keeps configurable providers, including fully local models via [Ollama](https://ollama.com) — see [Quick Start](#quick-start).)
+Double-click to install and start working. The official desktop build needs **no API keys and no infrastructure**: AI and external services run through the AI WorkDeck platform channel and are billed by usage (Credits), and the backend, a trimmed JRE, and a local database are bundled in — no Java, Docker, or PostgreSQL required. (Building from source instead? The self-hosted stack keeps configurable providers, including fully local models via [Ollama](https://ollama.com) — see [Quick Start](#quick-start).)
 
 > The desktop build is the fastest way to evaluate AI WorkDeck. To self-host the full stack or contribute code, see [Quick Start](#quick-start) below.
 
-## Access & Unlock
+## Signing in
 
-The desktop app asks you to sign in on first launch. Create an account at [aiworkdeck.com](https://www.aiworkdeck.com/start) — on the China site a mobile number and an SMS code is all it takes, and there is no separate registration step: an unrecognised number simply creates the account.
+Download and use it right away; sign in to your account for AI, paid Marketplace content, the team case library and mobile sync. The app opens straight into the workspace: creating projects and opening, editing and saving documents need no account.
 
-After signing in, the desktop app stores an account key on this machine and opens straight into the workspace from then on. **It does not need to be online every time**: authorisation carries a 30-day offline grace period, and any single online start within that window renews it. Aeroplanes and firm intranets are fine — documents open, edit and save as usual.
+The first time you reach one of those features, a sign-in dialog opens in place; after signing in you carry on with what you were doing, without leaving the page or losing unsaved edits. On the China site a mobile number and an SMS code is all it takes, and there is no separate registration step: an unrecognised number simply creates the account. You can also sign in any time from "Sign in" at the bottom of the left sidebar.
 
-**If you already hold an account key** (team server, self-hosted deployment, or one you generated yourself on the account page with the `awdk_` prefix), switch to the "Account key" tab on the unlock screen and paste it. That path is unchanged.
+After signing in, the desktop app stores an account key on this machine. **It does not need to be online every time**: the account carries a 30-day offline grace period, and any single online start within that window renews it. Aeroplanes and firm intranets are fine — documents open, edit and save as usual.
 
-Two notes for firms evaluating deployment: authorisation is per machine and is stored locally at `~/.aiworkdeck/`; a self-hosted team deployment (browser access to a shared server) has no unlock gate at all.
+**If you already hold an account key** (team server, self-hosted deployment, or one you generated yourself on the account page with the `awdk_` prefix), paste it under "Advanced" in Settings > "Account & Usage".
 
-### Building it yourself: re-enabling offline trial codes
+Two notes for firms evaluating deployment: the account connection is per machine and is stored locally at `~/.aiworkdeck/`; on a self-hosted team deployment (browser access to a shared server) accounts are bridged per person on the server and the browser never shows the sign-in dialog.
 
-The offline trial-code path is still in the source; official binaries simply ship with it turned off. When building your own, change
-
-```yaml
-security:
-  license:
-    trial-code:
-      enabled: false
-```
-
-in `backend/src/main/resources/application-desktop.yml` to `true` and the previous behaviour returns in full (offline signature verification, no network, nothing about your machine reported anywhere). This is a default value, not a tamper-protection mechanism.
+A note for people building it themselves: the earlier section "change `security.license.trial-code.enabled` to re-enable offline trial codes" has been removed. Startup no longer has a gate, so you can open and use the app without a trial code, while AI, paid Marketplace content, the team case library and mobile sync depend on an account connection, which a trial code does not replace. The switch is still in `backend/src/main/resources/application-desktop.yml`; it now only decides whether the sign-in dialog still offers the "trial code / account key" input (and the transition period for existing trial tickets), and does not affect the features above.
 
 ## Demo
 

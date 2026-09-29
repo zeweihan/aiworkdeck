@@ -556,11 +556,16 @@ check('账户入口在 rail 底部（AccountRailEntry），下拉恰好三项：
   for (const ev of ['schedule', 'settings', 'sign-out']) {
     if (!menu.includes(`emitAndClose('${ev}')`)) return `下拉里没有 ${ev} 项`
   }
-  // 登录就地弹层（dev-board#1046）合入前的留位：未登录点击发 login，宿主暂时开 unlock 薄壳页
+  // 登录就地弹层（dev-board#1046）：未登录点击发 login，宿主 requireAccount({ reason: 'account' })，不离开工作台
   const onTap = extractMethodBody(entry, 'onTap() {')
   if (!onTap || !onTap.includes("this.$emit('login')")) return '未登录态点击没有 emit login'
-  if (!readFrontend('src/components/account/AccountRailEntry.vue').includes('TODO(#1046): requireAccount')) {
-    return '「登录」处缺 TODO(#1046): requireAccount 留位标记'
+  const login = extractMethodBody(src, 'async onAccountLogin() {')
+  if (!login || !login.includes("requireAccount({ reason: 'account' })")) return 'onAccountLogin 没有就地调 requireAccount({ reason: \'account\' })'
+  if (/navigateTo|reLaunch|redirectTo|leaveWorkbench/.test(login)) return 'onAccountLogin 不许离开工作台（登录是就地弹层）'
+  // 登录 / 退出后即时刷新：入口组件与工作台都订 awd:account-changed
+  if (!entry.includes('ACCOUNT_CHANGED_EVENT')) return 'AccountRailEntry 没有订阅 awd:account-changed'
+  if (!/uni\.\$on\(ACCOUNT_CHANGED_EVENT/.test(src) || !/uni\.\$off\(ACCOUNT_CHANGED_EVENT/.test(src)) {
+    return '工作台没有成对订阅 / 退订 awd:account-changed'
   }
   return null
 })

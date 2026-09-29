@@ -268,6 +268,8 @@ export default {
       gateway: 'This service is provided by the AI WorkDeck platform and requires an account.',
       dictation: 'Voice dictation requires an AI WorkDeck account.',
       settings: 'Sign in to use AI, paid Marketplace content and team collaboration.',
+      // Rail account entry: the user chose to sign in, so the line stays neutral
+      account: 'Sign in to your AI WorkDeck account to use AI, paid Marketplace content, the team case library and mobile sync.',
     },
     cancel: 'Not now',
     close: 'Close',

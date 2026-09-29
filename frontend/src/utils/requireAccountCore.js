@@ -20,7 +20,7 @@ const BACKEND_REASON_MAP = {
 }
 
 /** 前端认得的 reason（决定弹层顶部那句说明）。与 locales 里 account.loginDialog.reason.* 对拍。 */
-export const REASONS = ['ai', 'market', 'team', 'mobile', 'meeting', 'gateway', 'dictation', 'settings']
+export const REASONS = ['ai', 'market', 'team', 'mobile', 'meeting', 'gateway', 'dictation', 'settings', 'account']
 
 export function reasonFromBackend(raw) {
   const key = String(raw || '').trim()

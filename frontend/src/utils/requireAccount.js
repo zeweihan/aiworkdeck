@@ -111,7 +111,7 @@ try {
 
 /**
  * @param {object} [opts]
- * @param {'ai'|'market'|'team'|'mobile'|'meeting'|'gateway'|'dictation'|'settings'} [opts.reason]
+ * @param {'ai'|'market'|'team'|'mobile'|'meeting'|'gateway'|'dictation'|'settings'|'account'} [opts.reason]
  * @param {boolean} [opts.force]  不看本地缓存直接开弹层（后端刚回了 4011）
  * @param {boolean} [opts.auto]   由 4011 自动触发（非用户点击）：刚取消过就不再追着弹
  * @returns {Promise<boolean>}

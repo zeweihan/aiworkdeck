@@ -4,8 +4,8 @@
   rail 底部账户入口（dev-board#1047，spec 2026-09-29-defer-login-welcome-tab-design §4；对应 VS Code 的 Accounts 图标）。
 
   两态：
-    - 未登录（未连接账户）：「登录」图标 + 文字。点击 emit('login')，宿主暂时打开 pages/unlock 薄壳页；
-      dev-board#1046 合入后改为就地弹 requireAccount 登录层（见下方 onTap 的 TODO）。
+    - 未登录（未连接账户）：「登录」图标 + 文字。点击 emit('login')，宿主就地
+      `await requireAccount({ reason: 'account' })` 弹登录层（dev-board#1046），不离开工作台。
     - 已登录：头像，点击展开原顶栏那份头像下拉——账户抬头（余额 + 等级）、宽限 / 试用提示、
       「我的日程」「设置」「退出登录」三个动作。动作只 emit，路由与落盘由宿主做
       （宿主那三个处理器是 check:nav 盯着的 onAvatarMenuSchedule / onAvatarMenuSettings / onAvatarMenuSignOut）。
@@ -13,16 +13,20 @@
   顶栏不再放账户态与 chip：原「试用版 / 需联网验证 · 剩 N 天」chip 与余额不足 chip 都挪进了这里
   （余额不足 / 有宽限提醒时头像右上角挂一个小点，下拉里给出完整文案）。
   两态都渲染、不按 isClientView 收——客户也有自己的账号安全与工作记录。
+
+  **登录 / 退出后即时翻转**：本组件订阅 awd:account-changed（登录弹层成功与 utils/signOut.js 共用的广播），
+  收到带 connected 的负载就先按它显示（signedIn），不等宿主重拉授权状态那一趟往返；宿主的 loggedIn
+  prop 跟上之后以 prop 为准（watch 里清掉本地覆盖）。余额 / 宽限提示仍由宿主订同一事件后重拉。
 -->
 <template>
   <view class="account-entry">
     <view
       class="rail-btn account-entry-btn"
-      :class="{ 'is-open': menuOpen, 'is-signed-out': !loggedIn }"
-      :title="loggedIn ? $t('workbench.accountMenu') : $t('welcome.signInTitle')"
+      :class="{ 'is-open': menuOpen, 'is-signed-out': !signedIn }"
+      :title="signedIn ? $t('workbench.accountMenu') : $t('welcome.signInTitle')"
       @tap.stop="onTap"
     >
-      <template v-if="loggedIn">
+      <template v-if="signedIn">
         <view class="account-avatar">
           <image v-if="avatarUrl" :src="avatarUrl" class="account-avatar-img" />
           <text v-else class="account-avatar-text">{{ initial }}</text>
@@ -69,6 +73,7 @@
 
 <script>
 import { ICONS } from '@/config/icons.js'
+import { ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
 
 export default {
   name: 'AccountRailEntry',
@@ -87,11 +92,16 @@ export default {
   data() {
     return {
       menuOpen: false,
+      // awd:account-changed 带来的连接状态；null = 以宿主 prop 为准
+      connectedOverride: null,
     }
   },
   computed: {
     ICONS() {
       return ICONS
+    },
+    signedIn() {
+      return this.connectedOverride == null ? !!this.loggedIn : this.connectedOverride
     },
     initial() {
       const n = (this.displayName || '').trim()
@@ -102,15 +112,33 @@ export default {
       return !!(this.walletLow || this.noticeText)
     },
   },
+  watch: {
+    // 宿主重拉授权状态后跟上了：以 prop 为准，本地覆盖作废
+    loggedIn() {
+      this.connectedOverride = null
+    },
+  },
+  created() {
+    // 页面栈多实例：按引用订阅 / 退订，每个实例只管自己
+    this._onAccountChanged = (payload) => this.onAccountChanged(payload)
+    try { uni.$on(ACCOUNT_CHANGED_EVENT, this._onAccountChanged) } catch (e) { /* 非 uni 环境 */ }
+  },
+  beforeUnmount() {
+    try { uni.$off(ACCOUNT_CHANGED_EVENT, this._onAccountChanged) } catch (e) { /* ignore */ }
+  },
   methods: {
     onTap() {
-      if (!this.loggedIn) {
-        // TODO(#1046): requireAccount —— 登录就地弹层合入后，这里改成
-        // `await requireAccount({ reason: 'account' })`，不再离开工作台。
+      if (!this.signedIn) {
+        // 宿主就地弹登录层（requireAccount({ reason: 'account' })），成功后经 awd:account-changed 翻转
         this.$emit('login')
         return
       }
       this.menuOpen = !this.menuOpen
+    },
+    onAccountChanged(payload) {
+      if (payload && typeof payload.connected === 'boolean') this.connectedOverride = payload.connected
+      // 退出登录后下拉若还开着，里面的余额与动作都已不成立
+      if (!this.signedIn) this.menuOpen = false
     },
     emitAndClose(event) {
       this.menuOpen = false

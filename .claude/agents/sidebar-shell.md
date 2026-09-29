@@ -950,12 +950,13 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   **上手指南**三张卡（官网 `/start`、`/showcase`、`/plugins`，在工作台内置浏览器标签里开）→ 底部「启动时显示欢迎页」+ 匿名统计提示。
 - 动作归宿：新建 / 打开文件夹先 `flushBeforeLeaving()` 再 `runCommandById('file.newProject' | 'file.openFolder')`（与菜单「文件」同一条命令）；
   取案卷是同一个 `CloudAcceptDialog`；连接团队服务器 = `openSettingsTab({ nav: 'team' })`；访问码 = `components/account/ClientAccessCodeForm.vue`
-  （与登录页「客户」tab 共用。登录页不传 `serverUrl`，走 api.js 的 `clientLogin`，打的就是页面所在的服务器，成功后 CLIENT 进 `?id=<projectId>`。
-  **桌面端欢迎标签连的是案件库服务器，不是本机回环后端**：打开弹层时经 `GET /api/cloud/official` 取官方案件库地址（`cloud.collab.base-url`）
-  预填进可编辑的「案件库服务器」一栏（可改成自建服务器），直接 `uni.request` POST `${server}/api/auth/client-login`。
-  **依赖 dev-board#1050**：已上云案卷的客户访问码目前仍由本机后端签发、案件库侧兑换不了，在那之前这条路多半兑换失败——
-  失败时把服务器返回的 `message` 原文完整显示在表单下方（`.caf-error`，不用会截断的 toast），不在前端伪造成功；
-  兑换成功时桌面端还没有「以远端会话打开案卷」的通道（TODO(#1050)），只如实提示，不写本机会话、不把本机工作台切成客户视图）；
+  （与登录页「客户」tab 共用，按 `mode` 分两形态）。`mode="login"`（登录页、浏览器端欢迎标签）：api.js 的 `clientLogin`，
+  打的就是页面所在的服务器，成功后 CLIENT 进 `?id=<projectId>`。`mode="portal"`（桌面端欢迎标签，**dev-board#1050 定稿契约**）：
+  不登录本应用、不经本机回环后端，只收一个访问码，用系统浏览器（`utils/externalLink.js` 的 `openExternalUrl` → `host.shell.openExternal`）
+  打开 `{portalBase}/client/#code=<码>`；`portalBase` 是弹层打开时经 `GET /api/cloud/official` 取的 `serverUrl`（后端
+  `cloud.collab.base-url`），界面不显示、不给改。**码放 fragment 不放 query**（不随请求发给服务器、不进日志与 Referer），
+  门户页读 hash 预填后自己清掉。拼地址的纯函数是组件里导出的 `clientPortalUrl`；取不到根地址时显示 `welcome.portalUnavailable`，不拼假地址。
+  原来那套「可编辑的案件库服务器栏 + 直接 POST 远端 client-login」已撤。
   进项目走注入的 `leaveWorkbench`。CLIENT 只看得到 Recent 与访问码入口。
 - 「启动时显示欢迎页」本机键 `awd_welcome_show_on_startup`（默认开）；匿名统计提示只在 `/api/telemetry/settings` 任一开关为真时出现，
   点击开设置的 `telemetry` 栏，「×」关掉后写 `awd_welcome_telemetry_notice_dismissed` 不再出现。
@@ -967,7 +968,10 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 
 **rail 底部账户入口**（`components/account/AccountRailEntry.vue`，对应 VS Code 的 Accounts）：两态都渲染、不按 `isClientView` 收。
 「已登录」= 桌面端 `accountConnected`（授权状态的组合口径，spec §5.3 的唯一判据），浏览器端恒真。未登录显示「登录」，
-点击 emit `login` → `onAccountLogin`：**TODO(#1046) 留位**，暂时先落盘再 `navigateTo('/pages/unlock/unlock')`（工作台留在栈里，全局返回键能回来）。
+点击 emit `login` → `onAccountLogin`：就地 `await requireAccount({ reason: 'account' })`（dev-board#1046），不离开工作台，取消什么都不变。
+**登录 / 退出后即时刷新**：入口组件自己订 `awd:account-changed`（带 `connected` 的负载先按它翻转「登录 ⇄ 头像」，宿主 `loggedIn`
+跟上后以 prop 为准），工作台也订同一事件（`refreshAccountState` 重拉授权状态、余额、用户信息；mounted 挂、beforeUnmount 按引用摘，
+不加活跃实例守卫）。退出走 `utils/signOut.js`（单动作，停在当前页）。护栏 `tests/account/rail-entry-account-changed.test.mjs` + `check:nav`。
 已登录显示头像，下拉 = 账户抬头（余额 + 等级）+ 提醒行（原顶栏宽限 / 试用 chip 文案，`accountNoticeText`）+ 我的日程 / 设置 / 退出登录三个动作；
 余额不足或有提醒时头像右上角挂一个点。下拉的全屏 mask 是 `.account-entry-mask`（进了 App.vue 的 no-drag 名单）。
 设置齿轮在账户入口下面，直调 `goToSystemSettings()`。
