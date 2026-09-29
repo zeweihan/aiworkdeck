@@ -4,6 +4,7 @@
 package com.checkba.service.ai.tools;
 
 import com.checkba.service.LangText;
+import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -221,7 +222,7 @@ default_api = _ToolAPI()
     @Tool("Run Python script for data analysis and computation. For Chinese company registration records use qichacha_query, "
             + "and for Tushare financial data use tushare_query — those go through the platform gateway and work without any local credentials. "
             + "You can call default_api.read_document(fileId='...') to read project files. Returns stdout/stderr.")
-    public String run_python(String code) {
+    public String run_python(@P("要执行的 Python 源码；结果请用 print 输出") String code) {
         if (code == null || code.isBlank()) {
             return "Error: code is required.";
         }

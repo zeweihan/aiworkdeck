@@ -5,6 +5,7 @@ package com.checkba.service.ai.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
@@ -82,7 +83,7 @@ public class WebTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "网络搜索", category = "web")
     @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")
-    public String search_web(String query) {
+    public String search_web(@P("搜索关键词") String query) {
         log.info("Tool: search_web called for query='{}'", query);
 
         // 平台代采档：走网关，成本折算 Credits。失败**绝不静默回落 BYOK**——
@@ -211,7 +212,7 @@ public class WebTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "浏览网页", category = "web")
     @Tool("Browse a specific URL and extract its main content.")
-    public String browse_url(String url) {
+    public String browse_url(@P("要打开的网页地址；不带协议时按 https 处理") String url) {
         log.info("Tool: browse_url called for url='{}'", url);
         if (url == null || url.isBlank()) {
             return "Error: url is required.";

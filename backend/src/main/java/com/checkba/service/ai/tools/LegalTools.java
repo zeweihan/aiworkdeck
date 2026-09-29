@@ -5,6 +5,7 @@ package com.checkba.service.ai.tools;
 
 import com.checkba.service.ProjectFileService;
 import com.checkba.model.entity.ProjectFile;
+import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -165,7 +166,7 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "语义搜索法规", category = "legal")
     @Tool("Search for laws and regulations using PKULaw MCP Semantic Search. Use this for general legal questions. Returns a list of relevant articles.")
-    public String law_search(String query) {
+    public String law_search(@P("要检索的法律问题或关键词，用自然语言描述即可") String query) {
         log.info("Tool: law_search (semantic) called for query='{}'", query);
         // 先校验再解引用：query 缺省时 Map.of("query", query) 会直接抛 NPE（getMessage()==null），
         // 被 ToolRegistry 的通用异常处理兜成一句不可行动的 "Error executing tool: null"——
@@ -178,7 +179,9 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "关键词搜索法规", category = "legal")
     @Tool("Search for laws by keywords in title or fulltext. Use this when you need specific laws by name.")
-    public String law_search_keyword(String title, String fulltext) {
+    public String law_search_keyword(
+            @P(value = "法规名称中的关键词（如「公司法」）；与 fulltext 至少给一个", required = false) String title,
+            @P(value = "法规正文中的关键词；与 title 至少给一个", required = false) String fulltext) {
         log.info("Tool: law_search_keyword called for title='{}', fulltext='{}'", title, fulltext);
         Map<String, Object> args = new HashMap<>();
         if (StringUtils.hasText(title)) args.put("title", title);
@@ -189,7 +192,7 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "法条识别与溯源", category = "legal")
     @Tool("Identify law names and articles from text and trace their source.")
-    public String law_recognition(String text) {
+    public String law_recognition(@P("要识别其中法规名称与条文号的原文") String text) {
         // text.length() 曾经排在校验之前：text 缺省时这里直接 NPE，比下面的 Map.of 更早触发。
         if (!StringUtils.hasText(text)) {
             return "Error: text is required.";
@@ -200,7 +203,9 @@ public class LegalTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "查询法条", category = "legal")
     @Tool("Get the full content of a specific law article by its title and article number. Use this when you have article info from law_search results.")
-    public String get_law_article(String title, String number) {
+    public String get_law_article(
+            @P("法规全称（如「中华人民共和国民法典」），可取自 law_search 的结果") String title,
+            @P("条文号（如「第五百七十七条」或「577」）") String number) {
         log.info("Tool: get_law_article called for title='{}', number='{}'", title, number);
         // 模型常见的调用形状：只给 title 漏给 number（工具描述没标两者都必填）。ToolRegistry.bindArguments
         // 对缺省的非基本类型参数绑 null，Map.of("title", title, "number", null) 直接抛
@@ -228,6 +233,9 @@ public class LegalTools implements AgentToolComponent {
             return pkulawChannel.callTool(server, tool, args);
         } catch (com.checkba.service.platform.GatewayException e) {
             log.warn("平台法规检索失败 kind={}: {}", e.getKind(), e.getMessage());
+            // 刻意不带 Error / 错误 前缀（dev-board#1065 T-11 裁决）：这是「跳过法规检索、继续干活」的
+            // 软失败，判成失败会让连续失败纠正回路催模型换思路，而正确的下一步正是照常把任务做完。
+            // ToolFailureClassificationTest 的源码扫描把这一处列在白名单里，改文案时同步那里。
             return "法规检索本次不可用：" + e.getMessage() + e.userHint()
                     + " 本次已跳过法规检索，请基于已有信息继续完成任务。";
         }

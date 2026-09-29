@@ -22,9 +22,9 @@ public class CheckpointTools implements AgentToolComponent {
     private final DocumentCheckpointService documentCheckpointService;
 
     @Tool("【恢复】把文档恢复到本轮开始前的快照（检查点）。这是最后手段：" +
-          "仅在文档已被改乱、doc_undo 无法逐步退回时使用。" +
+          "仅在文档已被改乱、无法逐步撤销时使用。" +
           "恢复会丢弃本轮的所有修改（包括修订标记）并让编辑器重新加载文档。" +
-          "常规纠错请优先使用 doc_undo。")
+          "Word/Calc 文档常规纠错优先 doc_undo；演示文稿没有逐步撤销，只能用本工具。")
     @ToolMeta(displayName = "恢复文档快照", category = "document", fileEffect = "MODIFIED")
     public String doc_restore_checkpoint() {
         log.info("Tool: doc_restore_checkpoint called");

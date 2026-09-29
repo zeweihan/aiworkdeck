@@ -72,7 +72,7 @@ class LitigationVisualFlowTest {
 
         String out = tools.litigation_checkpoint(MAP, null);
 
-        assertFalse(out.startsWith("生成确认问题失败"), out);
+        assertFalse(out.startsWith("错误"), out);
         assertTrue(out.contains("不要发给用户"), "指引块必须明确标注不转述——否则模型会把它原样发出去");
         assertTrue(out.contains("write_file") && out.contains("read_file"),
                 "必须明确禁止把语义地图落成项目文件（真机上就是这么走岔的）");
@@ -134,7 +134,7 @@ class LitigationVisualFlowTest {
     void worksWithoutConversationId() {
         requireRuntime();
         String out = tools.litigation_checkpoint(MAP, null);
-        assertFalse(out.startsWith("生成确认问题失败"), out);
+        assertFalse(out.startsWith("错误"), out);
         assertTrue(out.contains("litigation_render"));
     }
 

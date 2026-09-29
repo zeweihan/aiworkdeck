@@ -27,9 +27,9 @@
 
 | 工具 | 用途 |
 |-----|------|
-| `doc_list_project_files(projectId)` | **项目文件的权威清单，一次列全**：Word/Excel/PPT、PDF、纯文本、图片都在里面，每条带 fileId 与类型标注。问「项目里有什么」调这一个就够，不必再调 pdf_list_files / pptx_list_files |
+| `doc_list_project_files()` | **项目文件的权威清单，一次列全**：Word/Excel/PPT、PDF、纯文本、图片都在里面，每条带 fileId 与类型标注。问「项目里有什么」调这一个就够，不必再调 pdf_list_files / pptx_list_files |
 | `doc_open_file(fileId)` | 打开指定文档进行编辑 |
-| `doc_search_related_docs(keyword, projectId)` | 搜索项目中可能需要修改的相关文档 |
+| `doc_search_related_docs(keyword)` | 搜索项目中可能需要修改的相关文档 |
 | `doc_get_document_text(startParagraph, maxParagraphs)` | **首选**：分段读取全文（带段落编号和标题级别），长文档分页读 |
 | `doc_get_clauses()` | **合同/协议必用**：按「第X条/第X章/一、」编号识别条款结构，返回每条条款的段落范围；数条款、按条款修订都以它为准 |
 | `doc_audit_structure()` | **审查合同必用**：自己把全文读完后做机械核对——字形（繁/简）与混入段落、各套编号是否连续、正文引用的「第X条/附表X」是否存在、空白与待定、金额台账与「股数×每股价=总价」算术、多币种、前一轮修订按作者/类型汇总与大段删除。只报事实，判断由你做 |
@@ -67,7 +67,7 @@
 | `doc_delete_match(findText, matchIndex)` / `doc_delete_text(text, deleteAll)` | 按匹配删除文本 |
 | `doc_modify_paragraph(paragraphIndex, newText)` | 整段改写（0 开始） |
 | `doc_insert_under_heading(headingText, content)` | 在指定标题下方插入内容 |
-| `doc_start_stream(fileId, fileName, projectId, parentFolderId?)` | 实时流式写入模式（新建长文档用）。parentFolderId 可选，用户指名文件夹时先 `list_project_folders` 取 id 再传 |
+| `doc_start_stream(fileId, fileName, parentFolderId?)` | 实时流式写入模式（新建长文档用）。parentFolderId 可选，用户指名文件夹时先 `list_project_folders` 取 id 再传 |
 | `doc_add_comment(anchorId, comment)` | **批注**：在锚点文本上加 Word 批注。解释/说明/修改理由等非正文内容一律用批注呈现，**禁止写进正文** |
 
 **格式（先选中，再排版）**
@@ -98,7 +98,7 @@
 | `sheet_format_cells(range, bold, italic, underline, fontSize, fontName, color, background, hAlign, vAlign, wrap, numberFormat, sheet)` | 单元格格式：字体/字号/加粗/字色/底色/水平垂直对齐/自动换行/数字格式（如 `#,##0.00`、`0.00%`、`yyyy-mm-dd`） |
 | `sheet_set_borders(range, preset, widthPt, color, sheet)` | 边框：all（内外全部）/outer（仅外框）/none（清除） |
 | `sheet_set_row_col(range, rowHeightPt, colWidthPt, autoFitRows, autoFitCols, sheet)` | 行高列宽（磅）或自动适应 |
-| `sheet_create_file(fileName, projectId, parentFolderId?)` | **新建空白 xlsx 文件**并打开（用户要"新建一张表"时用这个，不要用 doc_start_stream）。parentFolderId 可选，同上 |
+| `sheet_create_file(fileName, parentFolderId?)` | **新建空白 xlsx 文件**并打开（用户要"新建一张表"时用这个，不要用 doc_start_stream）。parentFolderId 可选，同上 |
 | `sheet_manage_sheets(op, name, newName, position)` | 工作表管理：add 新建/rename 重命名/delete 删除/move 移动 |
 | `sheet_edit_rows_cols(op, start, count, sheet)` | 插入/删除整行整列：insert_rows/delete_rows/insert_cols/delete_cols，start 是行号（'3'）或列标（'B'） |
 | `sheet_merge_cells(range, merge, sheet)` | 合并/取消合并单元格（merge=false 取消） |
@@ -168,7 +168,7 @@
 
 <process name="撰写文档">
   <step>正在创建文件并开始流式写入...</step>
-  <tool_code>doc_start_stream(fileId=null, fileName="xxx协议.docx", projectId=123, parentFolderId=null)</tool_code>
+  <tool_code>doc_start_stream(fileId=null, fileName="xxx协议.docx", parentFolderId=null)</tool_code>
 </process>
 
 **After tool called, IMMEDIATELY start outputting markdown content.**
@@ -198,11 +198,11 @@
 
 | 工具 | 用途 |
 |-----|------|
-| `doc_list_project_files(projectId)` | 项目文件权威清单（含 PPTX），fileId 从这里取 |
-| `pptx_list_files(projectId)` | 只看演示文稿时用（等价于上面那份按 .pptx 过滤） |
-| `pptx_search_files(projectId, keyword)` | 搜索包含关键词的 PPTX 文件 |
+| `doc_list_project_files()` | 项目文件权威清单（含 PPTX），fileId 从这里取 |
+| `pptx_list_files()` | 只看演示文稿时用（等价于上面那份按 .pptx 过滤） |
+| `pptx_search_files(keyword)` | 搜索包含关键词的 PPTX 文件 |
 | `doc_open_file(fileId)` | 打开指定 PPTX 进行编辑（打开后 `slide_*` 工具即可用） |
-| `pptx_generate(topic, projectId, parentId, fileName, style, language)` | 启动 PPT 生成配置流程（会唤起 UI 让用户选择格式和确认） |
+| `pptx_generate(topic, parentId, fileName, style, language)` | 启动 PPT 生成配置流程（会唤起 UI 让用户选择格式和确认） |
 | `pptx_generate_outline(topic, language)` | 仅生成 PPT 大纲供审阅 |
 | `pptx_check_service()` | 检查 PPT 生成服务是否可用 |
 
@@ -250,7 +250,7 @@
 
 | 工具 | 用途 |
 |-----|------|
-| `pdf_list_files(projectId)` | 列出项目中的 PDF 文件及其文件 ID（**所有 pdf_* 工具的 fileId 从这里拿**） |
+| `pdf_list_files()` | 列出项目中的 PDF 文件及其文件 ID（**所有 pdf_* 工具的 fileId 从这里拿**） |
 | `pdf_inspect(fileId, pageIndex)` | 逐页读取文本与信息（页数、是否有文本层）。页码 0 起。**所有操作前先调用它核对原文** |
 | `pdf_highlight(fileId, text, pageIndex, color, note)` | 高亮所有匹配文本（标准 PDF 注释，可附说明），color 如 '#FFFF00' |
 | `pdf_annotate(fileId, anchorText, comment, pageIndex)` | 在锚点文本旁加便签批注（署名 AI WorkDeck） |

@@ -54,7 +54,7 @@ public class TemplateTools implements AgentToolComponent {
             + "spacing, indents, heading numbering, table borders, page setup, header/footer and TOC. "
             + "Pass the database fileIds of the templates (comma-separated for several; the majority value wins and a "
             + "confidence is reported). The profile is saved automatically as the project's _模板/画像.json (that is the "
-            + "file doc_apply_style_profile and write_docx read), so you never need to write it yourself; "
+            + "file write_docx reads, and in desktop sessions doc_apply_style_profile too), so you never need to write it yourself; "
             + "the returned JSON carries savedProfileFileId/savedProfilePath.")
     public String docx_inspect_template(
             @P("Template file database IDs, comma-separated, e.g. \"123\" or \"123,456\"") String fileIds,

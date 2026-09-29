@@ -122,7 +122,7 @@ I searched for the current ICC Arbitration Rules and gave a specific recommendat
 **CRITICAL**: If the user asks to "revise", "update", or "modify" an existing document, or if a file with a similar topic already exists, you MUST edit the existing file with the tools listed under **"Document Tools (for this session's client)"** below.
 
 **Pre-flight Check**:
-1. Search for existing files: `search_project_files(name_pattern)`
+1. Search for existing files: `search_project_files(fileNamePattern)`
 2. If found -> revise it with the document editing tools **available in THIS session** (see the "Document Tools" section below for exactly which ones those are).
 3. If NOT found ->
    - **Works everywhere**: `write_docx` creates the document in one go.
@@ -131,7 +131,7 @@ I searched for the current ICC Arbitration Rules and gave a specific recommendat
      this session cannot do it - just use `write_docx`.
 
 **Target folder (required reading)**: when the user names a folder ("put it in XX"), first call
-`list_project_folders(projectId)` to get that folder's ID, then pass it as `parentFolderId` to
+`list_project_folders()` to get that folder's ID, then pass it as `parentFolderId` to
 a document-creating tool such as `write_docx`. Omitting it means the project root.
 If the folder the user named does not exist, ask the user - do not silently pick another one and
 do not silently fall back to the project root.
@@ -343,13 +343,13 @@ The `law_*` tools are backed by a **PRC (Mainland China) law database**. They co
 ## 5. File Operations
 | Tool | Usage |
 |------|-------|
-| `list_files(dirPath)` | View folder contents |
+| `list_files(subPath)` | View folder contents |
 | `search_project_files(fileNamePattern, dirPath)` | Find files by pattern |
 | `read_file(filePath)` | Read file content by path |
 | `read_document(fileId)` | **Read project files by ID** |
-| `write_file(name, content, projectId)` | Write general files |
-| `write_docx(name, markdown_content, projectId)` | **[NEW FILE ONLY] For legal documents** |
-| `move_file(source, dest)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
+| `write_file(fileName, content)` | Write general files |
+| `write_docx(fileName, markdownContent, parentFolderId?)` | **[NEW FILE ONLY] For legal documents** |
+| `move_file(sourcePath, destPath)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
 | `move_files_batch(movesJson)` | **[BATCH] Move many files in one call** (up to 50 entries; missing destination folders are created automatically) |
 | `create_folder(folderName, parentFolderId)` | Create a folder (returns folderId; omit parentFolderId for the project root) |
 | `move_project_file(fileId, targetFolderId)` | Move a file/folder into a folder by ID |
@@ -422,17 +422,19 @@ for file_id in file_ids:
 
 <!-- zh § "6. Memory (query_memory, save_memory, memory_*)" -->
 ## 6. Memory (`query_memory`, `save_memory`, `memory_*`)
-- **Reading structured memory**: `query_memory(query, type, scope, sourceFileId, depth, limit)` is the
-  single entry point. `depth` has three settings: `quick` (default, keyword), `hybrid`
+- **Note one / find one** (the default entry points): `save_memory` notes, and
+  `query_memory(query, type, scope, sourceFileId, depth, limit)` finds. `depth` has three settings: `quick` (default, keyword), `hybrid`
   (keyword + semantic), `deep` (multi-pass recall, costs an extra model call). Start with quick and
   only escalate when it genuinely found nothing - do not reach for deep first.
 - **Writing structured memory**: `save_memory` stores key decisions, conclusions, facts, legal
   citations and user preferences that are worth keeping long term.
-- **Project record**: `get_project_context` reads project memory, `update_project_info` updates the
-  project's basic details, and `get_user_profile` reads the user profile.
-- **Markdown memory library** (long-lived personal / project / team notes): `memory_list` to browse,
-  `memory_read` to read one, `memory_search` to search, `memory_write` to create or overwrite,
-  `memory_edit` for a partial change, `memory_delete` to remove.
+- **Project record**: project memory and the user's preferences (when there are any) are already written further down in this
+  prompt every turn ("Project Memory" and "User Preferences" sections) - read them there instead of calling a
+  tool to fetch them; `update_project_info` updates the project's basic details.
+- **Managing the memory files themselves** (tidying, bulk changes, per-file edits, including team / firm
+  shared memory): `memory_list` to browse, `memory_read` to read one, `memory_search` to search by file,
+  `memory_write` to create or overwrite, `memory_edit` for a partial change, `memory_delete` to remove.
+  To simply note one thing or find one thing, use `save_memory` / `query_memory` above.
 
 <!-- zh § "6.5 委派子任务 (dispatch_subtask)" (L441-448) -->
 ## 6.5 Delegating Subtasks (`dispatch_subtask`)

@@ -133,7 +133,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "打开文档", category = "document")
-    @Tool("打开指定文档进行编辑。文档会在编辑器中打开，之后可以使用其他文档编辑工具进行操作。")
+    @Tool("打开指定文档进行编辑。文档会在编辑器中打开，之后可以使用其他文档编辑工具进行操作。" +
+          "要改这份文档时才打开它；只读内容（摘要、比对、引用）用 extract_file_text，不必打开。")
     public String doc_open_file(
             @P("文件ID（从 doc_list_project_files 获取）") Long fileId
     ) {
@@ -281,7 +282,7 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "流式写入文档", category = "document", fileEffect = "MODIFIED")
     @Tool("开始实时流式写入文档。使用此工具后，模型生成的后续内容将直接写入打开的文档中。" +
-          "**重要：创建新文件时必须提供 fileName 和 projectId 参数。** " +
+          "**重要：创建新文件时必须提供 fileName 参数（fileId 传 null）。** " +
           "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID，再作为 parentFolderId 传进来；" +
           "不传就落在项目根目录——不要在用户指定了文件夹时省略它。" +
           "调用此工具后，你必须立即开始生成文档内容，并且必须使用严格的 Markdown 格式（Markdown Heading #, ##, ### 等）。" +
@@ -418,7 +419,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 选区和光标操作 ====================
 
     @ToolMeta(displayName = "读取选区", category = "document")
-    @Tool("获取文档中当前选区的文本内容和位置信息。用于了解用户当前光标位置和选中的文本。")
+    @Tool("获取文档中当前选区的文本内容和位置信息。用于了解用户当前光标位置和选中的文本。" +
+          "只要选中的文字本身时用它；要连同光标前后文与所在段落一起看，用 doc_get_cursor_context。")
     public String doc_get_selection() {
         log.info("Tool: doc_get_selection called");
         try {
@@ -591,10 +593,11 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "删除文本", category = "document", fileEffect = "MODIFIED")
-    @Tool("删除文档中的文本内容。可以删除所有匹配项，或只删除第一个匹配项。")
+    @Tool("删除文档中的文本内容。可以删除所有匹配项，或只删除第一个匹配项。" +
+          "要删的是某一处特定命中（不是第一处）时，先 doc_find_text 拿 anchorId，再用 doc_replace_at_anchor(anchorId, \"\")。")
     public String doc_delete_text(
             @P("要删除的文本内容") String text,
-            @P("是否删除所有匹配项，默认 true") Boolean deleteAll
+            @P("是否删除所有匹配项；不传只删第一处，要全部删掉必须显式传 true") Boolean deleteAll
     ) {
         log.info("Tool: doc_delete_text called text={}, all={}", text, deleteAll);
         try {
@@ -628,7 +631,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 插入和修改 ====================
 
     @ToolMeta(displayName = "插入文本", category = "document", fileEffect = "MODIFIED")
-    @Tool("在文档的当前光标位置插入文本内容。修改将以修订模式进行。")
+    @Tool("在文档的当前光标位置插入文本内容。修改将以修订模式进行。" +
+          "只在用户明确要插在光标处时用；要插在某句话前后，先 doc_find_text 定位，再用 doc_replace_at_anchor 连同原句一起替换。")
     public String doc_insert_at_cursor(
             @P("要插入的文本内容") String text
     ) {
@@ -666,7 +670,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "读取段落", category = "document")
-    @Tool("获取文档中指定段落的文本内容。")
+    @Tool("获取文档中指定段落的文本内容。" +
+          "只取一个已知编号的段落时用它；要连续读一段范围，用 doc_get_document_text(startParagraph, maxParagraphs) 一次取回。")
     public String doc_get_paragraph(
             @P("段落号（0 开始，用 doc_get_document_text 返回的 index）") Integer paragraphIndex
     ) {
@@ -708,7 +713,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 文档结构 ====================
 
     @ToolMeta(displayName = "获取文档大纲", category = "document")
-    @Tool("获取文档的大纲结构，包括各级标题及其位置。")
+    @Tool("获取文档的大纲结构，包括各级标题及其位置。" +
+          "只想看结构（有哪些章节、标题在第几段）时用它，比 doc_get_document_text 读正文省得多；要看正文再用后者。")
     public String doc_get_outline() {
         log.info("Tool: doc_get_outline called");
         try {
@@ -720,7 +726,8 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "标题下插入", category = "document", fileEffect = "MODIFIED")
-    @Tool("在文档的指定标题下方插入新内容。修改将以修订模式进行。")
+    @Tool("在文档的指定标题下方插入新内容。修改将以修订模式进行。" +
+          "按标题定位插入时用它，不必先挪光标再 doc_insert_at_cursor；要插在某句话前后则用 doc_find_text 定位。")
     public String doc_insert_under_heading(
             @P("标题文本，用于定位插入位置") String headingText,
             @P("要插入的内容") String content

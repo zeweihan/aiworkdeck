@@ -62,7 +62,7 @@
   },
   {
     "id": "memory-user-profile-noarg-xml",
-    "title": "无参工具调用 get_user_profile（XML 协议）",
+    "title": "无参工具调用 get_user_profile（XML 协议；该工具已不下发，验的是兼容入口仍能执行）",
     "category": "memory",
     "protocol": "xml",
     "userInput": "按我平时的习惯格式，整理一份会议纪要模板的要点",

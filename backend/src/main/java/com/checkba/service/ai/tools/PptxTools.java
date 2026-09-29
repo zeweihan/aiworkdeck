@@ -285,7 +285,7 @@ public class PptxTools implements AgentToolComponent {
             return "PPTX 生成服务当前不可用（本机的 PPT 服务组件没有就绪）。请稍后重试；这只影响 PPT 生成，不影响读文件与 OCR。";
         } catch (Exception e) {
             log.error("Failed to check PPTX service", e);
-            return "检查服务状态失败: " + e.getMessage() + "。这只影响 PPT 生成，不影响读文件与 OCR。";
+            return "错误：检查服务状态失败: " + e.getMessage() + "。这只影响 PPT 生成，不影响读文件与 OCR。";
         }
     }
 
@@ -461,7 +461,7 @@ public class PptxTools implements AgentToolComponent {
                 if (taskId != null) {
                     backgroundTaskService.failTask(taskId, result.getError());
                 }
-                return "PPTX 生成失败: " + result.getError();
+                return "错误：PPTX 生成失败: " + result.getError();
             }
             
             // 注册到项目文件库
@@ -516,9 +516,9 @@ public class PptxTools implements AgentToolComponent {
                 
                 successMsg.append("**页面修改**: 可以使用以下工具进行修改：\n");
                 successMsg.append("- pptx_get_project_pages: 查看所有页面\n");
-                successMsg.append("- pptx_edit_page: 用自然语言修改页面（如'把标题改成红色'）\n");
                 successMsg.append("- pptx_refine_outline: 修改大纲结构（增删页面）\n");
-                successMsg.append("- pptx_inspect_format + pptx_apply_format: 直接修改文件中的文本与格式（可编辑版适用）");
+                // pptx_edit_page / pptx_apply_format 已不下发（dev-board#808），别在回执里再把模型指过去（#1065 T-09）
+                successMsg.append("- 在编辑器中打开生成的文件后，用 slide_get_page 查看、slide_* 工具修改文本与格式（可编辑版适用）");
                 
                 // 标记后台任务完成
                 if (taskId != null) {
@@ -535,7 +535,7 @@ public class PptxTools implements AgentToolComponent {
                     backgroundTaskService.failTask(taskId, "PPTX 已生成但注册到数据库失败: " + e.getMessage());
                 }
                 return String.format(
-                        "PPTX 已生成但注册到数据库失败。\n" +
+                        "错误：PPTX 已生成但注册到数据库失败。\n" +
                         "- 文件名: %s\n" +
                         "- 页数: %d\n" +
                         "- 路径: %s\n" +
@@ -552,7 +552,7 @@ public class PptxTools implements AgentToolComponent {
             if (taskId != null) {
                 backgroundTaskService.failTask(taskId, e.getMessage());
             }
-            return "PPTX 生成过程中出错: " + e.getMessage();
+            return "错误：PPTX 生成过程中出错: " + e.getMessage();
         }
     }
 
@@ -621,7 +621,7 @@ public class PptxTools implements AgentToolComponent {
             
         } catch (Exception e) {
             log.error("PPTX outline generation failed", e);
-            return "大纲生成失败: " + e.getMessage();
+            return "错误：大纲生成失败: " + e.getMessage();
         }
     }
 
@@ -635,7 +635,8 @@ public class PptxTools implements AgentToolComponent {
           "返回每页每个形状（shape）的段落/run 文本及其格式：字体、中文字体、字号、粗体/斜体/下划线/删除线、" +
           "高亮、颜色、对齐、行距、段距、项目符号，以及表格的行列与单元格内容。" +
           "所有定位索引（slide/shape/paragraph/run/row/col）从 0 开始。" +
-          "修改 PPT 文本或格式前必须先调用本工具获取定位索引，再用 pptx_apply_format 执行修改。")
+          "本工具只做只读检查，适合没有在编辑器里打开的文件；" +
+          "已在编辑器中打开的 PPTX 请用 slide_get_page 查看、用 slide_* 工具修改。")
     public String pptx_inspect_format(
             @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId,
             @P("页码（从 0 开始，可选）。指定后只返回该页（推荐，输出更精简）；传 null 返回全部页") Integer slideIndex
@@ -672,7 +673,7 @@ public class PptxTools implements AgentToolComponent {
 
         } catch (Exception e) {
             log.error("Failed to inspect PPTX format", e);
-            return "读取 PPT 格式失败: " + e.getMessage();
+            return "错误：读取 PPT 格式失败: " + e.getMessage();
         }
     }
 
@@ -769,7 +770,7 @@ public class PptxTools implements AgentToolComponent {
 
         } catch (Exception e) {
             log.error("Failed to apply PPTX format ops", e);
-            return "PPT 格式操作失败: " + e.getMessage();
+            return "错误：PPT 格式操作失败: " + e.getMessage();
         }
     }
 
@@ -797,7 +798,7 @@ public class PptxTools implements AgentToolComponent {
             cn.hutool.json.JSONObject taskResult = pptxServiceClient.waitForTask(serviceProjectId, taskId);
             
             if (taskResult == null) {
-                return "页面编辑失败：任务超时或执行出错";
+                return "错误：页面编辑失败：任务超时或执行出错";
             }
             
             return String.format("页面编辑成功！\n" +
@@ -809,7 +810,7 @@ public class PptxTools implements AgentToolComponent {
             
         } catch (Exception e) {
             log.error("Failed to edit page", e);
-            return "页面编辑失败: " + e.getMessage();
+            return "错误：页面编辑失败: " + e.getMessage();
         }
     }
 
@@ -847,12 +848,12 @@ public class PptxTools implements AgentToolComponent {
                 sb.append(String.format("  - 有图片: %s\n\n", imagePath != null ? "是" : "否"));
             }
             
-            sb.append("使用 pptx_edit_page 工具可以编辑指定页面。");
+            sb.append("要修改页面，请在编辑器中打开生成的 PPTX 后用 slide_* 工具修改，或用 pptx_refine_outline 调整大纲。");
             return sb.toString();
             
         } catch (Exception e) {
             log.error("Failed to get project pages", e);
-            return "获取项目页面失败: " + e.getMessage();
+            return "错误：获取项目页面失败: " + e.getMessage();
         }
     }
 
@@ -892,7 +893,7 @@ public class PptxTools implements AgentToolComponent {
             
         } catch (Exception e) {
             log.error("Failed to refine outline", e);
-            return "大纲修改失败: " + e.getMessage();
+            return "错误：大纲修改失败: " + e.getMessage();
         }
     }
 
@@ -929,7 +930,7 @@ public class PptxTools implements AgentToolComponent {
             cn.hutool.json.JSONObject taskResult = pptxServiceClient.waitForTask(serviceProjectId, taskId);
             
             if (taskResult == null) {
-                return "可编辑 PPTX 导出失败：任务超时或执行出错";
+                return "错误：可编辑 PPTX 导出失败：任务超时或执行出错";
             }
             
             // 产物在 pptx-service 的存储里（download_url 是服务内相对地址，用户与模型都用不上），
@@ -948,7 +949,7 @@ public class PptxTools implements AgentToolComponent {
             
         } catch (Exception e) {
             log.error("Failed to export editable PPTX", e);
-            return "可编辑 PPTX 导出失败: " + e.getMessage();
+            return "错误：可编辑 PPTX 导出失败: " + e.getMessage();
         }
     }
 

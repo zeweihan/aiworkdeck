@@ -78,6 +78,33 @@ class ToolChoiceSurfaceTest {
     }
 
     @Test
+    @DisplayName("记忆面一个心智模型：save/query =「记一条 / 找一条」，memory_* =「管理记忆文件本身」，两边互相点名（dev-board#1065 T-12/T-13）")
+    void memoryToolsShareOneMentalModel() {
+        RecordingToolRegistry registry = registry();
+        List<String> offered = offeredNames(registry, "conv", null);
+
+        String query = descriptionOf(registry, "query_memory");
+        assertFalse(query.contains("唯一"),
+                "memory_search 同时下发、检索的是同一份记忆，「唯一」这句话是错的：" + query);
+        assertTrue(query.contains("save_memory") && query.contains("memory_"),
+                "query_memory 要点名配对的 save_memory 与管理文件用的 memory_*：" + query);
+        assertTrue(descriptionOf(registry, "save_memory").contains("memory_"),
+                "save_memory 要说清什么时候改用 memory_* 写文件");
+        for (String name : List.of("memory_list", "memory_read", "memory_search",
+                "memory_write", "memory_edit", "memory_delete")) {
+            String d = descriptionOf(registry, name);
+            assertTrue(d.contains("save_memory") || d.contains("query_memory"),
+                    name + " 要说清只想记一条 / 找一条时该用哪个，否则模型在两套写入、两套检索之间随机挑：" + d);
+        }
+
+        // 这三个取的东西每轮都已注入系统提示（ContextAssemblerService），下发只是白花一次往返
+        for (String duplicate : List.of("get_user_profile", "get_project_context", "get_conversation_summary")) {
+            assertFalse(offered.contains(duplicate), duplicate + " 与每轮注入的上下文重复，不该下发");
+            descriptionOf(registry, duplicate); // 登记仍在：老会话回放与 XML 兜底照常执行
+        }
+    }
+
+    @Test
     @DisplayName("PPTX 只剩 slide_* 一套编辑面：0 基的 pptx_* 编辑工具不再与之并存")
     void pptxEditingHasOneAuthoritativeSurface() {
         RecordingToolRegistry registry = registry();
@@ -168,6 +195,40 @@ class ToolChoiceSurfaceTest {
                 "别名 = 静默改道。要容错写错的工具名请改 not-found 的指路文案：" + ToolRegistry.TOOL_NAME_ALIASES);
         assertTrue(ToolRegistry.unknownToolMessage("search_laws").contains("law_search"),
                 "模型写错名字时必须收到一句能照着做的指路");
+    }
+
+    @Test
+    @DisplayName("下发工具的描述与参数说明不得点名 offerToModel=false 的工具（dev-board#1065 T-09）")
+    void offeredDescriptionsNeverPointAtRetiredTools() {
+        RecordingToolRegistry registry = registry();
+
+        // 判据只认 @ToolMeta(offerToModel = false)：isAvailable() 那类进程级闸（本机有没有 Docker）
+        // 随机器而变，把它算进来会让同一条断言在不同机器上一红一绿。
+        List<String> retired = registry.toolNamesLongestFirst().stream()
+                .filter(name -> registry.resolve(name)
+                        .map(t -> t.meta() != null && !t.meta().offerToModel())
+                        .orElse(false))
+                .sorted()
+                .toList();
+        assertTrue(retired.contains("pptx_apply_format") && retired.contains("delete_file"),
+                "名单是从注解里现取的，取空了这条断言就成了空断言：" + retired);
+
+        List<String> offenders = new java.util.ArrayList<>();
+        for (ToolSpecification spec : registry.getAllSpecifications()) {
+            String text = (spec.description() == null ? "" : spec.description())
+                    + "\n" + (spec.parameters() == null ? "" : String.valueOf(spec.parameters().properties()));
+            for (String name : retired) {
+                if (java.util.regex.Pattern.compile("(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(name)
+                        + "(?![A-Za-z0-9_])").matcher(text).find()) {
+                    offenders.add(spec.name() + " → " + name);
+                }
+            }
+        }
+        System.out.printf("[dev-board#1065] 只登记不下发的工具 %d 个：%s%n", retired.size(), retired);
+        assertEquals(List.of(), offenders,
+                "模型只读描述：描述里点名一个不下发的工具，它就会经 XML 兜底路径把那个工具调出来，"
+                        + "恰好撞上当初下线它要防的那个坑（pptx_apply_format 的 reload 丢未保存修改、0 基错页）。"
+                        + "改描述指向仍下发的替代工具，不要把名字加进例外");
     }
 
     @Test
