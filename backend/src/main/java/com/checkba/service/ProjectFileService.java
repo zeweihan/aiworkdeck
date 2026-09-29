@@ -807,6 +807,51 @@ public class ProjectFileService {
     }
 
     /**
+     * 彻底删除，但磁盘这一半已由调用方处理（dev-board#1051）：桌面壳先把
+     * {@link #diskPathsForPurge} 报出的路径送进系统废纸篓，成功后再调这里只清行。
+     * diskHandled=false 时与 {@link #permDelete(Long, Long)} 完全相同。
+     */
+    @Transactional
+    public void permDelete(Long fileId, Long userId, boolean diskHandled) {
+        if (!diskHandled) {
+            permDelete(fileId, userId);
+            return;
+        }
+        if (fileId == null) {
+            throw new IllegalArgumentException(LangText.of("文件 ID 不能为空", "File ID must not be empty"));
+        }
+        ProjectFile file = projectFileRepository.findById(fileId).orElse(null);
+        if (file == null) {
+            log.info("彻底删除（磁盘已由调用方处理）：记录已不存在，按已删除处理 fileId={}", fileId);
+            return;
+        }
+        purgeRecursive(file, false);
+    }
+
+    /**
+     * 彻底删除这一行（含子孙）时会从磁盘移走的物理绝对路径（dev-board#1051）。
+     * 与 {@link #permDelete(Long, Long)} 的磁盘半边同一份判定（缓存区目录、被活着的同名行占着的
+     * 路径都不在其中），再把落在另一条路径之下的路径去掉——移走文件夹目录已经带走了它们，
+     * 逐个再送一次废纸篓只会留下一堆零散条目。行已不在时回空表（幂等，与 permDelete 一致）。
+     */
+    public List<java.nio.file.Path> diskPathsForPurge(Long fileId) {
+        ProjectFile file = fileId == null ? null : projectFileRepository.findById(fileId).orElse(null);
+        if (file == null || storageResolver == null) {
+            return List.of();
+        }
+        List<java.nio.file.Path> resolved = new ArrayList<>();
+        for (String key : collectPhysicalTargets(file)) {
+            resolved.add(storageResolver.resolve(key));
+        }
+        List<java.nio.file.Path> out = new ArrayList<>();
+        for (java.nio.file.Path p : resolved) {
+            boolean covered = resolved.stream().anyMatch(o -> !o.equals(p) && p.startsWith(o));
+            if (!covered && !out.contains(p)) out.add(p);
+        }
+        return out;
+    }
+
+    /**
      * 本地文件夹项目对账专用：磁盘上已经不存在的行直接出索引（连同子孙，含其中回收站里的行），
      * <b>不进回收站、不碰磁盘</b>。回收站只收律师在应用里亲手删的东西——软删除不动磁盘，
      * 还原得回来；Finder 里删掉的字节已经不在了，进回收站既还原不出内容、彻底删除又撞
@@ -828,38 +873,69 @@ public class ProjectFileService {
 
     /** 递归移除行（子孙含已软删除的，否则删不干净）；deletePhysical=false 时一个字节都不碰磁盘。 */
     private void purgeRecursive(ProjectFile file, boolean deletePhysical) {
-        Long fileId = file.getId();
-        // 如果是文件夹，递归彻底删除所有子文件
+        if (deletePhysical) {
+            deletePhysicalTargets(collectPhysicalTargets(file));
+        }
+        purgeRows(file);
+    }
+
+    /** 这一行在磁盘上对应的逻辑路径：文件取 filePath，文件夹按祖先链现拼。 */
+    private String physicalKey(ProjectFile file) {
         if (Boolean.TRUE.equals(file.getIsFolder())) {
-            // 这里要查出所有子文件（包括已软删除的，否则删不干净）
-            // 使用自定义查询查所有 parentId = id 的
-            List<ProjectFile> children = getAllChildrenIncludingDeleted(file.getProjectId(), fileId);
-            for (ProjectFile child : children) {
-                purgeRecursive(child, deletePhysical);
+            return buildPhysicalPath(file.getProjectId(), file.getParentId(), file.getName());
+        }
+        return file.getFilePath();
+    }
+
+    /**
+     * 彻底删除要从磁盘移走的逻辑路径，子孙在前、文件夹在后（文件夹目录要等里面删空才删得掉）。
+     * 子孙含已软删除的，否则删不干净。磁盘半边（删字节 / 送废纸篓）与行半边（{@link #purgeRows}）
+     * 共用这一份判定。
+     */
+    private List<String> collectPhysicalTargets(ProjectFile file) {
+        List<String> out = new ArrayList<>();
+        collectPhysicalTargets(file, out);
+        return out;
+    }
+
+    private void collectPhysicalTargets(ProjectFile file, List<String> out) {
+        if (Boolean.TRUE.equals(file.getIsFolder())) {
+            for (ProjectFile child : getAllChildrenIncludingDeleted(file.getProjectId(), file.getId())) {
+                collectPhysicalTargets(child, out);
             }
         }
-
-        // 记录文件路径用于向量库刷新和物理文件删除
-        String filePath = file.getFilePath();
-        
-        // 删除物理文件
-        // 1. 如果是文件夹，构建物理路径并尝试删除
-        if (Boolean.TRUE.equals(file.getIsFolder())) {
-             filePath = buildPhysicalPath(file.getProjectId(), file.getParentId(), file.getName());
-        }
-
+        String filePath = physicalKey(file);
         // 根级文件缓存区：回收站里的旧缓存区与活着的缓存区同名同位置，物理目录是同一个——
-        // 按目录删会把活着的缓存区里的文件字节一起删掉。子文件上面已按各自 filePath 删过了。
-        if (deletePhysical && StringUtils.hasText(filePath) && !isRootStagingFolder(file)
+        // 按目录删会把活着的缓存区里的文件字节一起删掉。子文件已按各自 filePath 收进来了。
+        if (StringUtils.hasText(filePath) && !isRootStagingFolder(file)
                 && !physicalPathInUseByLiveRow(file, filePath)) {
+            out.add(filePath);
+        }
+    }
+
+    private void deletePhysicalTargets(List<String> paths) {
+        for (String path : paths) {
             try {
-                storageServiceFactory.getStorageService().delete(filePath);
-                log.info("物理文件/文件夹彻底删除成功: fileId={}, path={}", fileId, filePath);
+                storageServiceFactory.getStorageService().delete(path);
+                log.info("物理文件/文件夹彻底删除成功: path={}", path);
             } catch (Exception e) {
-                log.warn("物理文件/文件夹彻底删除失败，继续删除数据库记录: fileId={}, path={}", fileId, filePath, e);
+                log.warn("物理文件/文件夹彻底删除失败，继续删除数据库记录: path={}", path, e);
             }
         }
-        
+    }
+
+    /** 只删行（含子孙）与行上挂的派生数据，不碰磁盘。 */
+    private void purgeRows(ProjectFile file) {
+        Long fileId = file.getId();
+        if (Boolean.TRUE.equals(file.getIsFolder())) {
+            for (ProjectFile child : getAllChildrenIncludingDeleted(file.getProjectId(), fileId)) {
+                purgeRows(child);
+            }
+        }
+
+        // 记录文件路径用于向量库刷新
+        String filePath = physicalKey(file);
+
         // 证据链接级联：删该文件的 target，target 清空的 link 标 orphan（软删不走这里，面板灰显即可）
         evidenceLinkService.onFilePurged(file.getProjectId(), fileId);
 
@@ -872,7 +948,7 @@ public class ProjectFileService {
                     String.valueOf(file.getProjectId()), filePath);
         }
     }
-    
+
     /**
      * 这个物理路径是否还被另一条活着的行占着（dev-board#1020）。软删除不动磁盘，而
      * {@code createFolder} / {@code createFile(FAIL)} 的同名查重只看活着的行，所以「删 A → 再建 A」

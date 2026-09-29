@@ -70,6 +70,9 @@ public class AuthController {
      */
     private static final String AWDK_BRIDGE_RATE_KEY = "::awdk-bridge";
 
+    /** 客户访问码登录的限速维度（dev-board#1050），同上带冒号避开真实用户名空间。 */
+    private static final String CLIENT_CODE_RATE_KEY = "::client-code";
+
     /**
      * 账户登录（手机号/邮箱）的限速维度，同上带冒号避开真实用户名空间。
      *
@@ -939,26 +942,43 @@ public class AuthController {
     }
 
     /**
-     * 客户登录（使用访问码）
+     * 客户登录（使用访问码）。
+     *
+     * <p>案件库托管客户门户（dev-board#1050）之后，这是公网上唯一一个「凭一串码就换会话」的
+     * 匿名入口：接 {@link com.checkba.service.AuthAbuseGuard} 的失败锁定（按 IP + 固定的访问码
+     * 维度，写法同 awdk-login），错码连续 5 次锁 10 分钟；nginx 另有 awd_auth 限频兜底。
      */
     @PostMapping("/client-login")
-    public Map<String, Object> clientLogin(@RequestBody ClientLoginRequest request) {
+    public Map<String, Object> clientLogin(@RequestBody ClientLoginRequest request,
+                                           jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http == null ? null : http.getRemoteAddr();
         try {
-            ProjectInvitation invitation = clientInvitationService.validateCode(request.getAccessCode());
-            
-            // Create a new user for this client login if displayName is provided
-            // This allows tracking "Who uploaded what"
+            authAbuseGuard.checkLoginAttempt(ip, CLIENT_CODE_RATE_KEY);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        try {
+            ProjectInvitation invitation;
+            try {
+                invitation = clientInvitationService.validateCode(request.getAccessCode());
+            } catch (IllegalArgumentException e) {
+                // 只有「码不对 / 已作废 / 已过期」计失败；后面的业务拒绝（人数上限等）不消耗尝试次数
+                authAbuseGuard.recordLoginFailure(ip, CLIENT_CODE_RATE_KEY);
+                throw e;
+            }
+
+            // 带称呼：同码同称呼复用同一个客户用户（不再每次新建，见 createClientUser）
             User user;
             if (request.getDisplayName() != null && !request.getDisplayName().trim().isEmpty()) {
-                user = clientInvitationService.createClientUser(
-                    invitation.getProjectId(), 
-                    request.getDisplayName(), 
-                    request.getAccessCode()
-                );
+                user = clientInvitationService.createClientUser(invitation, request.getDisplayName());
             } else {
                  // Fallback to the generic user linked to the invitation (legacy)
                  user = userService.getUserById(invitation.getRelatedUserId());
             }
+            authAbuseGuard.recordLoginSuccess(ip, CLIENT_CODE_RATE_KEY);
 
             String sessionId = userSessionService.issue(user.getId());
 

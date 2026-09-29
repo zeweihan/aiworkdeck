@@ -290,7 +290,8 @@
               <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
             </view>
             <!-- 我的日程（dev-board#899）：跨项目的全局日程页，走 leaveWorkbench 先落盘再离开 -->
-            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSchedule">
+            <!-- 客户看不到事项（TaskController 拒客户），日程页对他是空的；客户门户包里也没有这一页 -->
+            <view v-if="!isClientView" class="avatar-menu-item" @tap.stop="onAvatarMenuSchedule">
               <text>{{ $t('calendar.mySchedule') }}</text>
             </view>
             <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
@@ -1203,6 +1204,8 @@
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
+                      :project-id="projectId"
+                      :client-view="isClientView"
                     />
                     <MarketDetailPane
                       v-else-if="activeFileLeft.tabType === 'market-detail'"
@@ -1392,6 +1395,8 @@
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileRight)"
                       :request-id="activeFileRight.requestId"
+                      :project-id="projectId"
+                      :client-view="isClientView"
                     />
                     <MarketDetailPane
                       v-else-if="activeFileRight.tabType === 'market-detail'"

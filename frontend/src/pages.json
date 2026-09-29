@@ -1,5 +1,18 @@
 {
 	"pages": [ //pages数组中第一项表示应用启动页，参考：https://uniapp.dcloud.io/collocation/pages
+		// 客户门户构建（npm run build:client-portal，条件编译 CLIENT_PORTAL，dev-board#1050）只打包
+		// 客户用得到的三页：门户（启动页）→ 项目列表 → 工作台。登录/解锁/设置等一律不进包。
+		// 分支之间的逗号这样摆，是为了两种构建各自展开后、以及剥掉注释整份读（check:nav）时都是合法 JSON。
+		// #ifdef CLIENT_PORTAL
+		{
+			"path": "pages/client-portal/client-portal",
+			"style": {
+				"navigationBarTitleText": "AI WorkDeck",
+				"navigationStyle": "custom"
+			}
+		},
+		// #endif
+		// #ifndef CLIENT_PORTAL
 		{
 			"path": "pages/launch/launch",
 			"style": {
@@ -35,6 +48,7 @@
 				"navigationStyle": "custom"
 			}
 		},
+		// #endif
 		{
 			"path": "pages/project-overview/project-overview",
 			"style": {
@@ -48,7 +62,9 @@
 				"navigationBarTitleText": "我的项目",
 				"navigationStyle": "custom"
 			}
-		},
+		}
+		// #ifndef CLIENT_PORTAL
+		,
 		{
 			"path": "pages/project-home/project-home",
 			"style": {
@@ -91,6 +107,7 @@
 				"navigationStyle": "custom"
 			}
 		}
+		// #endif
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "black",

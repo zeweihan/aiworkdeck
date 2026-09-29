@@ -221,6 +221,11 @@ export default {
   caseAccessCodeLabel: '案卷访问码',
   caseAccessCodePlaceholder: '请输入律师发给你的访问码',
   enterCaseBtn: '进入案卷',
+  // ---- client-portal.vue：案件库托管的客户门户（dev-board#1050）----
+  portalTitle: '进入案卷',
+  portalLead: '输入律师发给你的访问码，即可查看律师需要你提供的材料清单并上传文件。你只看得到这一份案卷里给你的清单。',
+  portalCodeRequired: '请输入访问码',
+  portalSourceNotice: '本服务基于开源软件 AI WorkDeck（AGPL-3.0），源代码：',
   footerTagline: '让法律人聚焦专业判断',
   totpVerificationLabel: '认证器验证',
   mailVerificationLabel: '邮箱验证',

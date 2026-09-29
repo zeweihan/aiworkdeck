@@ -110,6 +110,13 @@
               <view v-for="m in members" :key="m.username || m.id" class="collab-member-row">
                 <text class="collab-member-name">{{ m.displayName || $t('version.unnamedColleague') }}</text>
                 <text class="collab-member-role">{{ roleLabel(m.role) }}</text>
+                <!-- 移出（dev-board#1050）：同事与凭访问码进来的客户都在这里移；移出客户连带作废
+                     他的访问码。能不能移（不能移自己、参与者只能移只读与客户）由案件库判。 -->
+                <text
+                  v-if="m.role !== 'OWNER' && m.userId != null"
+                  class="collab-member-remove"
+                  @tap="onRemoveMember(m)"
+                >{{ $t('version.removeFromCaseFile') }}</text>
               </view>
             </view>
 
@@ -249,7 +256,7 @@
 import {
   listCloudConnections,
   shareProjectToCloud, uploadToCloud, updateFromCloud, checkCloud, getVersionStatus,
-  getCloudMembers, addCloudMember, lookupCloudMember, getOfficialCloud,
+  getCloudMembers, addCloudMember, lookupCloudMember, getOfficialCloud, removeCloudMember,
 } from '@/services/api.js'
 import { roleLabel, ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
@@ -518,6 +525,22 @@ export default {
         this.membersLoading = false
       }
     },
+    onRemoveMember(m) {
+      uni.showModal({
+        title: this.$t('version.removeFromCaseFile'),
+        content: this.$t('version.removeCloudMemberConfirm', { name: m.displayName || this.$t('version.unnamedColleague') }),
+        success: async (r) => {
+          if (!r.confirm) return
+          try {
+            await removeCloudMember(this.projectId, m.userId)
+            uni.showToast({ title: this.$t('version.removedFromCaseFile'), icon: 'none' })
+            this.loadMembers()
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || this.$t('version.revokeFailed'), icon: 'none' })
+          }
+        }
+      })
+    },
     // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
     getInitial,
     clearCandidate() {
@@ -685,6 +708,7 @@ export default {
 }
 .collab-member-name { font-size: 14px; color: var(--awd-text); }
 .collab-member-role { font-size: 12.5px; color: var(--awd-text-2); }
+.collab-member-remove { font-size: 12.5px; color: var(--awd-danger-text); cursor: pointer; margin-left: 12px; }
 
 /* 查不到人的那一块：与候选人卡片同一个盒子形制——两者在同一个位置轮流出现，
    换一种边框会看着像界面跳了一下 */

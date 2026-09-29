@@ -6,6 +6,11 @@ import {
 import App from "./App.vue";
 import { recordFrontendError } from "./utils/errorBuffer.js";
 import { i18n } from "./i18n/index.js";
+import { isClientPortalBuild, capturePortalCode, portalRoute } from "./utils/clientPortal.js";
+import { codeFromHash } from "./utils/memberLookup.js";
+
+// 客户门户构建（dev-board#1050）：路由起来之前先把 #code= 取走并清掉，见 utils/clientPortal.js
+if (isClientPortalBuild()) capturePortalCode(null, codeFromHash);
 // #ifdef H5
 import { installUniDialogBridge } from "./utils/dialog.js";
 import { installUniToastBridge } from "./utils/toast.js";
@@ -25,6 +30,17 @@ export function createApp() {
 	// 同样走拦截器，理由见 utils/toast.js 顶部注释。
 	installUniToastBridge();
 	// #endif
+	// 客户门户构建：门户包里只有门户 / 项目列表 / 工作台三页，其余硬编码跳转一律改写回门户
+	if (isClientPortalBuild()) {
+		["navigateTo", "redirectTo", "reLaunch"].forEach((t) => {
+			uni.addInterceptor(t, {
+				invoke(args) {
+					if (args && args.url) args.url = portalRoute(args.url);
+					return true;
+				},
+			});
+		});
+	}
 	
 	// 全局错误处理：捕获未处理的 Promise rejection
 	if (typeof window !== 'undefined') {

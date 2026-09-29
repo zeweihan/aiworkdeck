@@ -284,6 +284,35 @@ public class CloudController {
         return ok(Map.of());
     }
 
+    /**
+     * 移出案件库上的一位参与人（dev-board#1050）：撤销客户访问码与移出同事共用这一条。
+     * {@code remoteUserId} 是案件库那一侧的 userId（参与人列表 / 签码回执里的那个）。
+     */
+    @DeleteMapping("/projects/{projectId}/members/{remoteUserId}")
+    public ResponseEntity<Map<String, Object>> removeMember(
+            @PathVariable Long projectId,
+            @PathVariable Long remoteUserId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriteMember(projectId, sessionId);
+        cloudSyncService.proxyRemoveMember(projectId, remoteUserId);
+        return ok(Map.of());
+    }
+
+    /**
+     * 经案件库签发客户访问码（dev-board#1050）。回 {@code {accessCode, expiresAt, clientUserId,
+     * clientUrl}}——clientUrl 是案件库托管的客户门户（{@code {server}/client/}），发给客户的链接
+     * 由前端拼成 {@code {clientUrl}#code=<码>}（码放 fragment，不进服务器与 access log）。
+     */
+    @PostMapping("/projects/{projectId}/invite/client")
+    public ResponseEntity<Map<String, Object>> inviteClient(
+            @PathVariable Long projectId,
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriteMember(projectId, sessionId);
+        String clientName = body == null ? null : body.get("clientName");
+        return ok(cloudSyncService.proxyInviteClient(projectId, clientName));
+    }
+
     /** update/resolve 共用的响应形状：UpdateResult 平铺。 */
     private Map<String, Object> updateResultData(CloudSyncService.UpdateResult r) {
         Map<String, Object> m = new HashMap<>();

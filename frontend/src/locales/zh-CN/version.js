@@ -288,6 +288,20 @@ export default {
   generateAccessCode: '生成访问码',
   usernameRequired: '请输入同事的账号',
   generateFailed: '生成失败',
+  // ---- 客户门户（dev-board#1050）：案卷在团队案件库里时，访问码由案件库签发 ----
+  clientPortalLinkLabel: '客户打开的网址：',
+  clientCodeExpires: '有效期至 {date}，过期后重新生成即可续期。',
+  clientCopyInvite: '复制发给客户的话',
+  clientInviteShareText: '请用浏览器打开下面的链接进入案卷，上传我们需要的材料：\n{link}\n\n如果页面要求输入访问码，请输入：{code}\n访问码有效期至 {date}，只发给你本人，请勿转发。',
+  clientInviteShareTextNoDate: '请用浏览器打开下面的链接进入案卷，上传我们需要的材料：\n{link}\n\n如果页面要求输入访问码，请输入：{code}\n访问码只发给你本人，请勿转发。',
+  clientPortalAccessCodeTip: '客户打开上面的网址即可进入，不需要安装任何软件；网址里已带着访问码。这串码等同于进这份案卷的钥匙，只发给本人。',
+  revokeClientCode: '撤销这个访问码',
+  revokeClientCodeConfirm: '撤销后客户再也无法用这个访问码进入这份案卷，已上传的材料仍然保留。确定撤销？',
+  revokedClientCode: '访问码已撤销',
+  revokeFailed: '撤销失败',
+  removeFromCaseFile: '移出',
+  removeCloudMemberConfirm: '把 {name} 移出这份案卷？移出客户会同时作废他的访问码。',
+  removedFromCaseFile: '已移出',
 
   // ---- SubmitDraftGuide.vue（交稿引导，dev-board#645）----
   // 状态 → 步骤的映射在 utils/submitGuide.js；第 ② 步那句话与顶栏「同事交了新稿」

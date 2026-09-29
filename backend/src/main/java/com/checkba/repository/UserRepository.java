@@ -11,6 +11,9 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsername(String username);
 
+    /** 同一访问码名下已建出的客户用户数（username 前缀 client_inv{invitationId}_，dev-board#1050）。 */
+    long countByUsernameStartingWith(String prefix);
+
     Optional<User> findByPhone(String phone);
 
     /** 按已验证邮箱定位账号（登录身份）。资料字段 email 不唯一，不可用于此。 */

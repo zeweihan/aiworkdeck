@@ -24,6 +24,7 @@
 | 负责人 | Lead | 项目负责人；「负责人：{name}」 → Lead: {name} |
 | 暂存区 | Staging Area | |
 | 回收站 | Recycle Bin | 文件树软删除；toast 句中用小写 recycle bin |
+| 系统废纸篓 | system Trash | 操作系统的废纸篓（Windows 回收站），与应用内回收站区分；彻底删除送这里（dev-board#1051） |
 | 根目录 | Root Directory | 文件树；句中用小写 the root directory |
 | 左栏/侧边栏 | Sidebar | |
 | 底部工具抽屉 | Tools Panel | |

@@ -49,6 +49,39 @@ public class DdController {
         return requireMemberByProject(sessionId, ddService.getProjectIdByItemId(itemId));
     }
 
+    // ==================== 客户白名单（dev-board#1050） ====================
+    // 案件库托管客户门户之后，CLIENT 是公网上凭一串访问码就能进来的人。客户只做三件事：
+    // 看清单、给清单项传文件、留言（外加回看自己传过的文件）。其余写端点——建/改/删/复制
+    // 清单、增删改移清单项、改审核状态——一律 403。成员校验照旧在前面（非成员仍是原来的
+    // 「无权访问」），这里只多拦一层角色。
+
+    /** CLIENT 撞到写端点。单独一个类型，好让本控制器回真 403 而不是全站统一的 200+code。 */
+    static class ClientForbiddenException extends IllegalArgumentException {
+        ClientForbiddenException() {
+            super(LangText.of("客户无权进行此操作", "Clients are not allowed to do this"));
+        }
+    }
+
+    @ExceptionHandler(ClientForbiddenException.class)
+    public ResponseEntity<Map<String, Object>> onClientForbidden(ClientForbiddenException e) {
+        return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN)
+                .body(Map.of("code", 403, "message", e.getMessage()));
+    }
+
+    private Long requireStaffByProject(String sessionId, Long projectId) {
+        Long userId = requireMemberByProject(sessionId, projectId);
+        if (projectMemberService.isClient(projectId, userId)) throw new ClientForbiddenException();
+        return userId;
+    }
+
+    private Long requireStaffByRequest(String sessionId, Long requestId) {
+        return requireStaffByProject(sessionId, ddService.getProjectIdByRequestId(requestId));
+    }
+
+    private Long requireStaffByItem(String sessionId, Long itemId) {
+        return requireStaffByProject(sessionId, ddService.getProjectIdByItemId(itemId));
+    }
+
     // 获取项目的请求列表
     @GetMapping("/projects/{projectId}")
     public List<DdRequest> getRequests(
@@ -64,7 +97,7 @@ public class DdController {
             @PathVariable Long projectId,
             @RequestBody CreateRequestDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberByProject(sessionId, projectId);
+        Long userId = requireStaffByProject(sessionId, projectId);
         return ddService.createRequest(projectId, dto.getName(), dto.getContent(), userId);
     }
 
@@ -89,7 +122,7 @@ public class DdController {
             @PathVariable Long requestId,
             @RequestBody CreateRequestDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberByRequest(sessionId, requestId);
+        requireStaffByRequest(sessionId, requestId);
         return ddService.addItems(requestId, dto.getContent());
     }
 
@@ -99,7 +132,7 @@ public class DdController {
             @PathVariable Long requestId,
             @RequestBody UpdateRequestDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberByRequest(sessionId, requestId);
+        requireStaffByRequest(sessionId, requestId);
         return ddService.updateRequest(requestId, dto.getName());
     }
 
@@ -109,7 +142,7 @@ public class DdController {
             @PathVariable Long requestId,
             @RequestBody AddItemDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberByRequest(sessionId, requestId);
+        requireStaffByRequest(sessionId, requestId);
         return ddService.addItem(requestId, dto.getParentId());
     }
 
@@ -119,7 +152,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody MoveItemDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberByItem(sessionId, itemId);
+        requireStaffByItem(sessionId, itemId);
         return ddService.moveItem(itemId, dto.getParentId());
     }
 
@@ -139,7 +172,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody UpdateStatusDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberByItem(sessionId, itemId);
+        requireStaffByItem(sessionId, itemId);
         return ddService.updateItemStatus(itemId, dto.getStatus());
     }
 
@@ -149,7 +182,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody UpdateInfoDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberByItem(sessionId, itemId);
+        requireStaffByItem(sessionId, itemId);
         return ddService.updateItemInfo(itemId, dto.getTitle(), dto.getDescription());
     }
 
@@ -172,12 +205,35 @@ public class DdController {
         return ddService.getComments(itemId);
     }
 
+    /**
+     * 清单项上已上传的那份文件（dev-board#1050）。客户与律师都可读。浏览器新开标签页带不了
+     * 头，允许 {@code ?token=} 兜底（同 FileController 的下载口）。
+     */
+    @GetMapping("/items/{itemId}/file")
+    public ResponseEntity<org.springframework.core.io.Resource> getItemFile(
+            @PathVariable Long itemId,
+            @RequestParam(value = "token", required = false) String token,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberByItem(sessionId != null ? sessionId : token, itemId);
+        com.checkba.model.entity.ProjectFile file = ddService.getUploadedFile(itemId);
+        org.springframework.core.io.Resource resource = ddService.loadStored(file);
+        String name = file.getName() == null ? "file" : file.getName();
+        org.springframework.http.MediaType type = org.springframework.http.MediaTypeFactory.getMediaType(name)
+                .orElse(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM);
+        return ResponseEntity.ok()
+                .contentType(type)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        org.springframework.http.ContentDisposition.inline()
+                                .filename(name, java.nio.charset.StandardCharsets.UTF_8).build().toString())
+                .body(resource);
+    }
+
     // 删除项
     @DeleteMapping("/items/{itemId}")
     public ResponseEntity<Void> deleteItem(
             @PathVariable Long itemId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberByItem(sessionId, itemId);
+        Long userId = requireStaffByItem(sessionId, itemId);
         ddService.deleteItem(itemId, userId);
         return ResponseEntity.ok().build();
     }
@@ -186,7 +242,7 @@ public class DdController {
     public ResponseEntity<Void> deleteRequest(
             @PathVariable Long requestId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberByRequest(sessionId, requestId);
+        Long userId = requireStaffByRequest(sessionId, requestId);
         ddService.deleteRequest(requestId, userId);
         return ResponseEntity.ok().build();
     }
@@ -196,7 +252,7 @@ public class DdController {
     public DdRequest copyRequest(
             @PathVariable Long requestId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberByRequest(sessionId, requestId);
+        Long userId = requireStaffByRequest(sessionId, requestId);
         return ddService.copyRequest(requestId, userId);
     }
 

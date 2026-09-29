@@ -828,6 +828,71 @@ spec §5.5 已改，初版口径在那里划掉留痕）**。它原本是「溯�
 
 56. **版本操作后的「重载打开中的编辑器」必须同时清两个注册表，只摘 `libreLruKeys` 等于没刷新**（v0.44.1 真机反馈 A1）——链路本身是通的（`resolveAdopt` 报 `affectedFileIds`，护栏 `DraftAdoptTest.resolveAdoptReportsTheResolvedFileForEditorReload`；`AdoptConflictDialog` → `VersionPanel.onReload` → `reload-files` → `onVersionReloadFiles`），断在最后一步：非活动实例靠「摘出 `libreLruKeys` 让它卸载」刷新，而**过继备胎**渲染自 `libreSpares`，`leftLibreFiles` 还会把「有备胎顶着」的文件整个排除掉——只摘 LRU 键那个实例压根不卸载，端着的还是合并前的字节。而左窗格首开的那份文档**一定**是过继来的备胎（`maybeAdoptLibreSpare`），也就是最常见的那一种实例。表现：采纳一稿逐处裁决完，磁盘已是合并结果、文档标签里仍是旧正文，关掉标签重开才对（`closeFile` → `pruneClosedLibreSpares` 顺手清掉了备胎槽）。现已收拢进 `librePool.unloadInactiveLibreInstances(fileId)`（两个注册表一起清，活动实例照旧跳过、交给 `reloadActiveLibreInstances` 就地换文档），LRU 淘汰那条路本来就两边都清（`evictLibreInstance` 末尾的 `pruneLibreSpare`）。**今后任何「让某个文件的实例重新装载」的新入口都调这一个方法**，别再自己 filter 一遍 LRU。护栏 `frontend/tests/version-history/versionReloadPool.test.mjs`。
 
+## 客户门户与尽调清单上云（2026-09-29，dev-board#1050）
+
+律师把案卷放进案件库之后，客户凭访问码在**案件库托管的网页**（`{server}/client/`）里看尽调清单、传材料。
+桌面端后端只听回环，客户够不着；所以访问码、客户用户、尽调清单都必须落在案件库上。
+
+### 关键文件
+
+- `controller/CloudController.java` — `POST /api/cloud/projects/{id}/invite/client`（代理签码，回 `{accessCode, expiresAt, clientUserId, clientUrl}`）、`DELETE /api/cloud/projects/{id}/members/{remoteUserId}`（撤销客户码 / 移出同事共用）。都走 `requireWriteMember`。
+- `version/CloudSyncService.java` — `proxyInviteClient` / `proxyRemoveMember` / `proxyDd`（原字节转发，`httpRaw` seam 非 200 不抛，403 原样带回）/ `hasRemoteBinding` / `clientPortalUrl`。
+- `config/DdCloudProxyFilter.java` — local-mode 下 `/api/dd/*` 在已上云案卷上整体转发到 `{server}/api/dd/*`。
+- `service/DdCloudMigrationService.java` — 首读清单列表时把本机未迁移的清单推上去；`DdRequest.cloudRequestId` 非空 = 已迁移。
+- `controller/DdController.java` — CLIENT 白名单（`requireStaffBy*` + `ClientForbiddenException` → 真 HTTP 403）；`GET /api/dd/items/{itemId}/file`（清单项取件口，`?token=` 兜底）。
+- `service/ClientInvitationService.java` — `issueClientCode`（`Issued{code, expiresAt, clientUserId}`）、30 天有效期、同码同称呼复用、local-mode 一律不签（`IssueViaLibraryException`）。
+- `controller/AuthController.clientLogin` — 接 `AuthAbuseGuard`（维度 `::client-code`）。
+- 前端：`pages/client-portal/client-portal.vue`、`utils/clientPortal.js`（门户构建的路由收口）、`utils/memberLookup.js` 的 `clientPortalLink`/`codeFromHash`/`expiryDate`、`InviteMemberDialog.vue`（云端轨签码 + 撤销）、`collab/CollabDialog.vue`（参与人「移出」）、`services/api.js` 的 `ddUrl`/`inviteCloudClient`/`removeCloudMember`。
+- 部署：`deploy/case/nginx-case.conf.example`（`location ^~ /client/`、`/api/auth/client-login` 限频）、`deploy/case/README.md`「六之二」。
+
+### 核心契约
+
+- **客户门户入口（对外契约，#1027 桌面新首页据此接）**：门户地址是 `{案件库地址}/client/`，预填访问码用 **fragment**：`{案件库地址}/client/#code=<码>`。
+  桌面新首页「凭访问码进入案卷」= 用系统浏览器打开这个地址（有码时带 `#code=`）。案件库地址 = `cloud.collab.base-url`；
+  留空时按官方派生（大陆站 `https://case.aiworkdeck.com`，见 `OfficialCloudService`/`OfficialCloudEndpoint`），国际站暂无案件库、也就没有门户。
+  码**不许**放查询串：fragment 不随请求发给服务器、不进 nginx access log、不经 Referer 泄漏。门户页（`main.js` → `capturePortalCode`）
+  在路由起来之前取走 `#code=` 并 `history.replaceState` 清掉（hash 路由会把它当成一个不存在的路由）。签码回执里的 `clientUrl` 只到 `/client/`，
+  拼 `#code=` 是前端 `clientPortalLink` 的事。
+- **签码必须经案件库**：local-mode 的本机后端 `ClientInvitationService` 一律拒绝签码——没上云回 `LibraryRequiredException`（「先放进案件库」），
+  上云了回 `IssueViaLibraryException`（「经案件库签发」）；两者都是 HTTP 400。前端云端轨道（`TRACK.CLOUD`）调代理，本机轨（自建多用户服务器）仍打本机口。
+- **撤销 = 在案件库上移出那个客户用户**（`clientUserId`，案件库那一侧的 id）。案件库 `ProjectMemberService.removeMember` 移出 CLIENT 时连带作废其名下的码
+  （`findByProjectIdAndRelatedUserId`），所以具名码撤销即失效。通用码（不填客户称呼）的 `clientUserId` 是模板用户，移出它同样作废那张码。
+- **访问码**：签发与重新签发都写 `expiresAt = now + 30 天`（重新签发即续期）；本列之前的老码按 `createdAt + 30 天` 推算。
+  带 `displayName` 的登录按 `client_inv{invitationId}_{称呼摘要}` 复用同一个用户（不再每次新建），同一张码最多 20 个不同称呼；
+  复用到的用户已不是成员（被律师移出过）→ 拒绝，不许自己加回来。门户前端只传码不传称呼，恒登录成 `relatedUserId`。
+  `clientLogin` 的失败锁定只计「码无效 / 已作废 / 已过期」，人数上限等业务拒绝不消耗次数。
+- **尽调清单以案件库为准**：DdRequest/DdItem/DdComment 只是库表行、不进 git。案卷有 project_remote 绑定时，本机 `/api/dd/*` 整体转发。
+  路由判据要能定出项目 id：`/api/dd/projects/{id}` 路径自带，其余端点前端带 `?projectId=`（`api.js` 的 dd 系列末位参数 + `ddUrl`，
+  `DdRequestEditor`/`DdFilesPanel` 都已带）。**清单/清单项 id 在本机与案件库是两个 id 空间**，带不出 projectId 的请求落本机 DdController，
+  撞号会读写到本机另一份无关清单——新增 dd 调用点一律带 projectId。转发时剥掉 `projectId` 与 `token` 两个本机参数。
+  附件查看走 `GET /api/dd/items/{itemId}/file`，**不许**再拿 `uploadedFileId` 去打 `/api/files/{id}/download`（同样是两个 id 空间）。
+- **迁移**：判据是「本机有 `cloudRequestId` 为空的清单」而不是「案件库上还没有清单」（后者在同事先建过清单时会让本机清单永远留在本机）。
+  迁移内容：清单名 → 条目（层级、标题、说明）→ 附件（走案件库上传口，上传人记成律师在案件库的账号）→ 审核状态；**留言不迁**（作者会变成律师本人）。
+  一条清单中途失败就尽力删掉案件库上建了一半的那条、下次读列表重试；失败不挡这次读列表。本机行不删。
+- **CLIENT 白名单（案件库侧，server 模式生效）**：只许 `GET /projects/{pid}`、`GET /requests/{id}`、`POST /items/{id}/upload`、
+  `GET|POST /items/{id}/comments`、`GET /items/{id}/file`；其余 10 个写端点一律 HTTP 403 `{code:403}`（DdController 自己的 `@ExceptionHandler`，
+  不走全站 200+code）。文件树（`ProjectFileController`）与 git（`GitAccessService`）对 CLIENT 本来就拒，保持。
+- **门户构建**：`npm run build:client-portal`（`VITE_CLIENT_PORTAL=1 uni build -p client-portal --base /client/`）。`package.json` 的
+  `uni-app.scripts.client-portal` 打开条件编译 `CLIENT_PORTAL`，pages.json 只注册门户 / 项目列表 / 工作台三页，入口是门户页；
+  `utils/clientPortal.js` 在 `main.js` 里把其余硬编码跳转（4010 回登录页、退出登录回启动页、日程……）改写回门户；门户不埋点。
+  这只是入口收口，真闸在后端。
+
+### 已知地雷
+
+- `DdCloudProxyFilter` **绝不能调 `request.getParameter`**：Tomcat 会顺手把 multipart 请求体解析掉，原字节转发就断了；查询串自己拆（`parseQuery`）。
+- 转发的上传与取件要保留原 `Content-Type`（含 boundary）与 `Content-Disposition`；`httpRaw` 非 200 不抛，是为了让客户越权的 403 原样回到调用方。
+- **律师侧的尽调清单入口 2026-08-19 起对律师隐藏**（`DD_FILES_PLUGIN` 不在 `LEFT_SIDEBAR_PLUGINS`，只有 CLIENT 看得到）。本卡没有恢复它：
+  律师在桌面端目前没有 UI 建清单，客户门户里能看到的只有迁移上去的旧清单。要不要对已上云案卷恢复律师入口是产品决定，未做。
+
+### 验证
+
+```bash
+cd backend && JAVA_HOME=$(/usr/libexec/java_home -v 21) mvn -q test -Dtest='ClientPortalRoundTripTest,DdControllerClientWhitelistTest,DdCloudProxyFilterTest,AuthClientLoginGuardTest,ClientInvitationServiceTest'
+cd frontend && node --test tests/member-invite/*.test.mjs && npm run build:client-portal
+```
+`ClientPortalRoundTripTest` 起一个 local-mode=false 的内嵌案件库，桌面栈手工 new：放进案件库 → 本机旧清单首读迁上去（含 multipart 附件）→ 代理签码 →
+客户凭码登录只见这一份 → 代理建清单 → 客户读、传、留言 → 客户删清单 403 → 律师经代理取到客户的文件 → 撤销后码失效、会话看不到案卷。
+
 ## 案件库的内部只读口（2026-09-18，dev-board#720，spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md` §7.1）
 
 插件里的 AI 要把官方案件库当参考来源：插件云后端（addin 实例）经 **127.0.0.1** 问案件库（case 实例）「这个官网账号在案件库里能看到哪些文件、某一份的正文是什么」。**只读**——没有任何写接口，也不在这条口子上碰工作段、分支与提交。云端那一侧的来源分派见 ai-chat.md「参考来源工具 ref_*」节，部署配置见 `deploy/case/README.md` 验收清单第 9 条与 `deploy/cloud/README.md`。

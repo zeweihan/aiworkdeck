@@ -50,6 +50,15 @@ public class ProjectInvitation {
     @Column
     private LocalDateTime revokedAt;
 
+    /**
+     * 有效期截止（dev-board#1050）。签发与重新签发都写成「现在 + 有效天数」；过了就在
+     * {@code ClientInvitationService.validateCode} 挡住。案件库对公网开放客户门户之后，
+     * 一张永不过期的码泄漏出去就是永久的入口。本列上线前签的老码为空，按
+     * {@code createdAt + 有效天数} 推算（见 {@code ClientInvitationService.effectiveExpiry}）。
+     */
+    @Column
+    private LocalDateTime expiresAt;
+
     @CreationTimestamp
     @Column(updatable = false)
     private LocalDateTime createdAt;
@@ -106,6 +115,14 @@ public class ProjectInvitation {
 
     public void setRevokedAt(LocalDateTime revokedAt) {
         this.revokedAt = revokedAt;
+    }
+
+    public LocalDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(LocalDateTime expiresAt) {
+        this.expiresAt = expiresAt;
     }
 
     public LocalDateTime getCreatedAt() {
