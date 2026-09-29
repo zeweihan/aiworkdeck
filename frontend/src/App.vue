@@ -514,6 +514,7 @@ html.is-desktop .project-header .icon-btn {
    **新增全屏浮层要加进这张名单**；frontend/tests/window-chrome/titlebar-drag-region.test.mjs
    会扫出漏掉的那个。真不吃鼠标事件的层（pointer-events: none）才进那份 EXEMPT。 */
 html.is-desktop .account-entry-mask,
+html.is-desktop .awd-login-mask,
 html.is-desktop .amb-mask,
 html.is-desktop .awd-dialog-mask,
 html.is-desktop .awd-dlg-mask,
