@@ -2,7 +2,7 @@
   "name": "aiworkdeck-desktop",
   "private": true,
   "version": "0.50.0",
-  "description": "AI WorkDeck desktop shell (Electron)",
+  "description": "AI WorkDeck",
   "author": "AI WorkDeck contributors",
   "main": "main/main.js",
   "scripts": {
