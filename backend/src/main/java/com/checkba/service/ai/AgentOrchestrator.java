@@ -2048,40 +2048,21 @@ public class AgentOrchestrator {
             cleanedContent = cleanedContent.replaceAll("```(?:xml|html|markdown)?\\s*\\n", "");
             cleanedContent = cleanedContent.replaceAll("\\n```", "");
             
-            if (cleanedContent.contains("<artifact") && (cleanedContent.contains("type=\"implementation_plan\"") || cleanedContent.contains("type=\"task_list\""))) {
-                // Parse full artifact
-                String type = "unknown";
-                if (cleanedContent.contains("type=\"implementation_plan\"")) type = "implementation_plan";
-                else if (cleanedContent.contains("type=\"task_list\"")) type = "task_list";
-                
-                // Extract name attribute if present
-                String artifactName = null;
-                java.util.regex.Pattern namePattern = java.util.regex.Pattern.compile("<artifact[^>]*name=\"([^\"]+)\"[^>]*>");
-                java.util.regex.Matcher nameMatcher = namePattern.matcher(cleanedContent);
-                if (nameMatcher.find()) {
-                    artifactName = nameMatcher.group(1).trim();
+            // #1052：按类型挑要落盘的计划类 artifact（有 implementation_plan 取第一个
+            // implementation_plan，没有才取第一个 task_list），不是回复里第一个 artifact——
+            // 模型先流一段 code 再流计划时，落盘的必须是计划。
+            PlanArtifact planArtifact = firstPlanArtifact(cleanedContent);
+            if (planArtifact != null) {
+                String type = planArtifact.type();
+                String artifactName = planArtifact.name();
+                if (artifactName != null) {
+                    artifactName = artifactName.trim();
                     // Sanitize for filename (max 30 chars, remove special chars)
                     artifactName = artifactName.replaceAll("[/\\\\:*?\"<>|]", "_");
                     if (artifactName.length() > 30) artifactName = artifactName.substring(0, 30);
                 }
-                
-                // Extract Content inside tags
-                String artifactContent = "";
-                java.util.regex.Pattern p = java.util.regex.Pattern.compile("<artifact[^>]*>([\\s\\S]*?)</artifact>");
-                java.util.regex.Matcher m = p.matcher(cleanedContent);
-                if (m.find()) {
-                    artifactContent = m.group(1).trim();
-                } else {
-                     // Fallback: Try to extract everything after the opening artifact tag
-                     int start = cleanedContent.indexOf(">" , cleanedContent.indexOf("<artifact"));
-                     int end = cleanedContent.indexOf("</artifact>");
-                     if (start > 0 && end > start) {
-                         artifactContent = cleanedContent.substring(start + 1, end).trim();
-                     } else {
-                         artifactContent = cleanedContent; // Last resort fallback
-                     }
-                }
-                
+                String artifactContent = planArtifact.content();
+
                 // Determine filename: prefer extracted name, fallback to default
                 String filename;
                 if (artifactName != null && !artifactName.isEmpty()) {
@@ -2800,6 +2781,58 @@ public class AgentOrchestrator {
      */
     static String artifactSavedRelativePath(String folderName, String fileName) {
         return LangText.of("AI 助手文件/", "AI Assistant Files/") + folderName + "/" + fileName;
+    }
+
+    /** 回复里挑出的计划类 artifact（#1052）。 */
+    record PlanArtifact(String type, String name, String content) {
+    }
+
+    private static final java.util.regex.Pattern ARTIFACT_BLOCK =
+            java.util.regex.Pattern.compile("<artifact(\\s[^>]*)?>([\\s\\S]*?)</artifact>");
+    private static final java.util.regex.Pattern ARTIFACT_OPEN =
+            java.util.regex.Pattern.compile("<artifact(\\s[^>]*)?>");
+    private static final java.util.regex.Pattern ARTIFACT_TYPE_ATTR =
+            java.util.regex.Pattern.compile("(?:^|\\s)type\\s*=\\s*\"([^\"]*)\"");
+    private static final java.util.regex.Pattern ARTIFACT_NAME_ATTR =
+            java.util.regex.Pattern.compile("(?:^|\\s)name\\s*=\\s*\"([^\"]*)\"");
+
+    private static String artifactAttr(java.util.regex.Pattern attr, String attrs) {
+        if (attrs == null) return null;
+        java.util.regex.Matcher m = attr.matcher(attrs);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * 挑回复里要落盘的计划类 artifact（属性顺序不定）：有 implementation_plan 就取第一个
+     * implementation_plan（要停机等审批的那份），没有才取第一个 task_list；
+     * 一个计划类 artifact 都没有时返回 null（不落盘）。
+     */
+    static PlanArtifact firstPlanArtifact(String text) {
+        if (text == null || !text.contains("<artifact")) return null;
+        PlanArtifact plan = firstArtifactOfType(text, "implementation_plan");
+        return plan != null ? plan : firstArtifactOfType(text, "task_list");
+    }
+
+    /**
+     * 按出现顺序找第一个指定 type 的闭合 artifact；没有闭合的，退回该类型第一个开标签之后的
+     * 全部文本（截断的计划照旧落盘）。
+     */
+    private static PlanArtifact firstArtifactOfType(String text, String wanted) {
+        java.util.regex.Matcher m = ARTIFACT_BLOCK.matcher(text);
+        while (m.find()) {
+            if (wanted.equals(artifactAttr(ARTIFACT_TYPE_ATTR, m.group(1)))) {
+                return new PlanArtifact(wanted, artifactAttr(ARTIFACT_NAME_ATTR, m.group(1)), m.group(2).trim());
+            }
+        }
+        java.util.regex.Matcher open = ARTIFACT_OPEN.matcher(text);
+        while (open.find()) {
+            if (!wanted.equals(artifactAttr(ARTIFACT_TYPE_ATTR, open.group(1)))) continue;
+            String rest = text.substring(open.end());
+            int end = rest.indexOf("</artifact>");
+            if (end >= 0) rest = rest.substring(0, end);
+            return new PlanArtifact(wanted, artifactAttr(ARTIFACT_NAME_ATTR, open.group(1)), rest.trim());
+        }
+        return null;
     }
 
     /** 计划审阅（dev-board#1022）：artifact saved 事件载荷，交 Jackson 转义。 */

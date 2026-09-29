@@ -91,6 +91,9 @@ class AgentOrchestratorArtifactSavedEventTest {
 
     private static final ThreadLocal<String> FULL_TEXT = new ThreadLocal<>();
 
+    /** 每次 run 里 saveArtifactFile 收到的 [文件名, 正文]。 */
+    private static final List<String[]> SAVED_FILES = new CopyOnWriteArrayList<>();
+
     private static List<Sent> run(String modelOutput, boolean streamTokens) {
         return runChunks(modelOutput, streamTokens ? List.of(modelOutput) : List.of());
     }
@@ -102,6 +105,7 @@ class AgentOrchestratorArtifactSavedEventTest {
     private static List<Sent> runChunks(String modelOutput, List<String> chunks,
                                         java.util.function.Function<List<Sent>, FileReviewService> reviewFactory) {
         FULL_TEXT.set(modelOutput);
+        SAVED_FILES.clear();
         List<Sent> sent = new CopyOnWriteArrayList<>();
         SseEmitterService sse = mock(SseEmitterService.class);
         doAnswer(inv -> {
@@ -138,6 +142,7 @@ class AgentOrchestratorArtifactSavedEventTest {
         convFolder.setName("conv-plan");
         when(projectFileService.saveArtifactFile(eq(1L), eq("conv-plan"), any(), any(), any()))
                 .thenAnswer(inv -> {
+                    SAVED_FILES.add(new String[]{inv.getArgument(2), inv.getArgument(3)});
                     saved.setName(inv.getArgument(2));
                     return saved;
                 });
@@ -276,5 +281,78 @@ class AgentOrchestratorArtifactSavedEventTest {
         assertEquals("77", sent.get(supIdx).data());
         int savedIdx = indexOf(sent, s -> "artifact".equals(s.event()) && s.data().contains("\"saved\""));
         assertTrue(savedIdx > supIdx, "supersedeOpen 必须先于 saved 事件：" + sent);
+    }
+
+    @Test
+    @DisplayName("#1052 先流带名字的 code 再流计划：落盘的是计划的名字与正文，saved id 是计划那份的")
+    void codeBeforePlanSavesThePlanNotTheCode() throws Exception {
+        String code = "<artifact type=\"code\" name=\"脚本\">print(1)</artifact>";
+        String plan = "<artifact type=\"implementation_plan\" name=\"示例计划\"># 计划</artifact>";
+        List<Sent> sent = runChunks(code + plan, List.of(code, plan));
+        assertEquals(1, SAVED_FILES.size(), "只落盘一份：" + SAVED_FILES);
+        assertEquals("示例计划.md", SAVED_FILES.get(0)[0]);
+        assertEquals("# 计划", SAVED_FILES.get(0)[1]);
+        String planId = null;
+        for (Sent s : sent) {
+            if (!"artifact".equals(s.event())) continue;
+            JsonNode node = JSON.readTree(s.data());
+            if ("create".equals(node.path("operation").asText())
+                    && "implementation_plan".equals(node.path("type").asText())) planId = node.path("id").asText();
+        }
+        JsonNode saved = artifactEvent(sent, "saved");
+        assertNotNull(saved, "落盘成功后必须发 saved 事件：" + sent);
+        assertEquals(planId, saved.path("id").asText());
+        assertEquals("AI 助手文件/conv-plan/示例计划.md", saved.path("filePath").asText());
+        assertEquals("implementation_plan", saved.path("type").asText());
+        assertTrue(sent.stream().anyMatch(s -> "bubble_end".equals(s.event())
+                && s.data().contains("awaiting_approval")), "计划仍要停机等审批：" + sent);
+    }
+
+    @Test
+    @DisplayName("#1052 先计划后 code：也只存计划")
+    void planBeforeCodeSavesOnlyThePlan() throws Exception {
+        String plan = "<artifact name=\"示例计划\" type=\"implementation_plan\"># 计划</artifact>";
+        String code = "<artifact type=\"code\" name=\"脚本\">print(1)</artifact>";
+        runChunks(plan + code, List.of(plan, code));
+        assertEquals(1, SAVED_FILES.size(), "只落盘一份：" + SAVED_FILES);
+        assertEquals("示例计划.md", SAVED_FILES.get(0)[0]);
+        assertEquals("# 计划", SAVED_FILES.get(0)[1]);
+    }
+
+    @Test
+    @DisplayName("#1052 只有带名字的 task_list：照旧按名字落盘，不停机")
+    void namedTaskListStillSaved() throws Exception {
+        List<Sent> sent = run("<artifact type=\"task_list\" name=\"清单\">- 事项</artifact>", true);
+        assertEquals(1, SAVED_FILES.size(), "只落盘一份：" + SAVED_FILES);
+        assertEquals("清单.md", SAVED_FILES.get(0)[0]);
+        assertEquals("- 事项", SAVED_FILES.get(0)[1]);
+        JsonNode saved = artifactEvent(sent, "saved");
+        assertNotNull(saved);
+        assertEquals("task_list", saved.path("type").asText());
+        assertFalse(sent.stream().anyMatch(s -> "bubble_end".equals(s.event())
+                && s.data().contains("awaiting_approval")), "task_list 不停机：" + sent);
+    }
+
+    @Test
+    @DisplayName("#1052 只有 code artifact：不落盘")
+    void codeOnlyIsNotSaved() {
+        run("<artifact type=\"code\" name=\"脚本\">print(1)</artifact>", true);
+        assertEquals(0, SAVED_FILES.size(), "非计划类不落盘：" + SAVED_FILES);
+    }
+
+    @Test
+    @DisplayName("#1052 task_list 在前、implementation_plan 在后：落盘的是计划，停机等审批")
+    void implementationPlanWinsOverEarlierTaskList() throws Exception {
+        String tasks = "<artifact type=\"task_list\" name=\"清单\">- 事项</artifact>";
+        String plan = "<artifact type=\"implementation_plan\" name=\"示例计划\"># 计划</artifact>";
+        List<Sent> sent = runChunks(tasks + plan, List.of(tasks, plan));
+        assertEquals(1, SAVED_FILES.size(), "只落盘一份：" + SAVED_FILES);
+        assertEquals("示例计划.md", SAVED_FILES.get(0)[0]);
+        assertEquals("# 计划", SAVED_FILES.get(0)[1]);
+        JsonNode saved = artifactEvent(sent, "saved");
+        assertNotNull(saved);
+        assertEquals("implementation_plan", saved.path("type").asText());
+        assertTrue(sent.stream().anyMatch(s -> "bubble_end".equals(s.event())
+                && s.data().contains("awaiting_approval")), "计划仍要停机等审批：" + sent);
     }
 }
