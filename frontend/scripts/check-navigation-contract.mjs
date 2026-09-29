@@ -955,6 +955,12 @@ check('rail 上有「项目」面板，左栏渲染 ProjectListPane', () => {
   if (!src.includes('<ProjectListPane') || !src.includes("leftPaneKey === 'projects'")) {
     return "左栏没有 leftPaneKey === 'projects' 渲染 ProjectListPane 的分支"
   }
+  // 无项目态 rail 直接读 LEFT_SIDEBAR_PLUGINS 常量；合并 master 时这个 import 成员丢过一次
+  // （2026-09-29，症状 = 无项目态 rail 只剩折叠/反馈/登录/设置，vite 构建不报错，只有跑起来才炸）
+  const importBlock = src.match(/import \{([^}]*)\} from '@\/config\/leftSidebarPlugins\.js'/)
+  if (!importBlock || !/\bLEFT_SIDEBAR_PLUGINS\b/.test(importBlock[1])) {
+    return "project-overview 没有从 leftSidebarPlugins.js import LEFT_SIDEBAR_PLUGINS（无项目态 rail 会整段 ReferenceError）"
+  }
   return null
 })
 
