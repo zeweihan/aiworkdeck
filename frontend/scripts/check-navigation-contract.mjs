@@ -887,8 +887,8 @@ check('工作台里「去团队设置 / 去账户」开设置标签，不跳出�
   const sites = [
     ['src/components/InviteMemberDialog.vue', 'goTeamSettings()'],
     ['src/components/collab/CollabDialog.vue', 'goTeamSettings()'],
-    ['src/components/MarketSidebarPanel.vue', 'goToAccountSettings()'],
-    ['src/components/MarketDetailPane.vue', 'goToAccountSettings()'],
+    // 广场两处「需连接账户」原本跳设置标签（goToAccountSettings），登录后置后改为就地
+    // 登录弹层 requireAccount({reason:'market'})，不再离开也不再开设置（dev-board#1046）。
   ]
   const bad = []
   for (const [rel, marker] of sites) {

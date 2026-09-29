@@ -2849,6 +2849,7 @@ export default {
     // 激活标签变了会触发写，编辑器内部状态不会
     tabSnapshotSignature() {
       return JSON.stringify(this.currentTabSnapshot())
+    },
     // 单人本机项目（dev-board#1026 C22）：负责人只能是本机用户自己，那一行不显示
     soloLocalProject() {
       return isSoloLocalProject({
