@@ -349,5 +349,129 @@
       ],
       "bubbleEndStatus": "finished"
     }
+  },
+  {
+    "id": "disclosure-memory-read-trio-always-write-trio-behind-category",
+    "title": "渐进披露：记忆只读三个（list/read/search）每轮都下发（每轮注入的记忆索引点名要 memory_read），写入三个（write/edit/delete）不再每轮兜底，归 memory 类目（dev-board#1073）",
+    "category": "memory",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "clientCapability": "none",
+    "userInput": "这份保密协议的保密期限一般写几年合适？",
+    "turns": [
+      {
+        "text": "<final>通常为 2 至 5 年，商业秘密可约定至其不再构成商业秘密为止。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "offeredToolsInclude": [
+        "memory_list",
+        "memory_read",
+        "memory_search",
+        "query_memory",
+        "save_memory",
+        "list_tools"
+      ],
+      "offeredToolsExclude": [
+        "memory_write",
+        "memory_edit",
+        "memory_delete"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-memory-keyword-puts-write-trio-back-before-the-first-round",
+    "title": "渐进披露：「记下来」起跑时按关键词预放回 memory 类目，第一轮就能直接调 memory_write（dev-board#1073）",
+    "category": "memory",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "clientCapability": "none",
+    "userInput": "把这条写作习惯记下来，写进我的个人记忆文件 topics/style.md：称呼对方一律用「贵方」。",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "memory_write",
+            "arguments": {
+              "scope": "user",
+              "path": "topics/style.md",
+              "content": "# 写作习惯\n\n- 称呼对方一律用「贵方」。\n",
+              "expectedRevision": 0
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已写入个人记忆 topics/style.md。</final>"
+      }
+    ],
+    "toolStubs": {
+      "memory_write": "✓ 记忆已保存: topics/style.md revision=1"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "memory_write"
+        }
+      ],
+      "offeredToolsInclude": [
+        "memory_list",
+        "memory_read",
+        "memory_search",
+        "memory_write",
+        "memory_edit",
+        "memory_delete"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-memory-write-named-over-xml-comes-back-next-round",
+    "title": "渐进披露：没有关键词时模型经 XML 点名 memory_edit 当轮照常执行，下一轮 memory 类目放回（dev-board#1073）",
+    "category": "memory",
+    "protocol": "xml",
+    "progressiveDisclosure": true,
+    "clientCapability": "none",
+    "userInput": "个人习惯文件里把「仿宋」改成「宋体」",
+    "turns": [
+      {
+        "text": "<tool_code>memory_edit(scope=\"user\", path=\"topics/style.md\", oldText=\"仿宋\", newText=\"宋体\", expectedRevision=1)</tool_code>"
+      },
+      {
+        "text": "<final>已把习惯文件里的字体改为宋体。</final>"
+      }
+    ],
+    "toolStubs": {
+      "memory_edit": "✓ 记忆已更新: topics/style.md revision=2"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "memory_edit"
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "memory_write",
+        "memory_edit",
+        "memory_delete"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "memory_write",
+        "memory_edit",
+        "memory_delete"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
   }
 ]

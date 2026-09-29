@@ -120,6 +120,24 @@ class ContextAssemblerServiceTest {
         }
     }
 
+    @Test
+    @DisplayName("ASK 模式不拼文档工具片段，AGENT 模式照拼（dev-board#1073）")
+    void askModeSplicesNoToolGuidanceFragment() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            String heading = english ? "# Document Tools" : "# 文档工具";
+            String ask = ((SystemMessage) assembler.assemble(
+                    "conv-1", "run-1", "此前偏好是什么", null, null,
+                    null, null, "88", AgentMode.ASK, 1L, null).get(0)).text();
+            String agent = ((SystemMessage) assembler.assemble(
+                    "conv-1", "run-1", "此前偏好是什么", null, null,
+                    null, null, "88", AgentMode.AGENT, 1L, null).get(0)).text();
+            assertFalse(ask.contains(heading), "ASK 只下发只读记忆工具，文档工具指引整段都是白付");
+            assertFalse(ask.contains(ContextAssemblerService.TOOL_GUIDANCE_PLACEHOLDER), "占位标记要消掉");
+            assertTrue(agent.contains(heading), "AGENT 会话必须仍有文档工具片段");
+        }
+    }
+
     /** 末位消息（用户消息）的文本——注意力最高的位置。 */
     private String assembleLastUserText(AiAgentController.ContextItem activeContext) {
         List<ChatMessage> messages = assembleMessages(activeContext);

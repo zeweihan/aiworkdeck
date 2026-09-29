@@ -106,7 +106,7 @@ public class ToolDisclosurePolicy {
      * {@code ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete} 打印并钉住。
      */
     static final Set<String> CORE = Set.of(
-            // ==================== 通用段：任何会话都要有（19 个）====================
+            // ==================== 通用段：任何会话都要有（21 个）====================
             // —— 目录入口与编排：少了 list_tools 整套机制就没有入口；ask_user 是「拿不准先问」
             //    的唯一入口（dev-board#868），藏进目录里等于让模型先查目录才能想起来问；
             //    use_skill 是模型自己切到专门流程的入口（dev-board#1065），与 list_tools 的 skill 目录配套 ——
@@ -118,8 +118,10 @@ public class ToolDisclosurePolicy {
             // read_document 已只登记不下发（T-05），入口统一是 extract_file_text。
             "doc_list_project_files", "search_project_files", "search_project_content", "extract_file_text",
             "write_docx", "create_folder", "move_files_batch", "move_to_trash",
+            // 跨文件硬规则要求先列后读；reference 没有关键词预放回，不能再让模型先查目录。
+            "ref_list", "ref_read",
 
-            // —— 记忆：检索与保存各一个（memory_* 六个由编排器的 MEMORY_TOOLS 规则另行兜底）——
+            // —— 记忆：检索与保存各一个（memory_list/read/search 由编排器每轮另补；write/edit/delete 走 memory 类目，skill 收窄时由编排器兜底，dev-board#1073）——
             "query_memory", "save_memory",
 
             // —— 法源与公网：律师最高频的外部检索。law_search_keyword 是 law_search 的精确检索变体，
@@ -306,7 +308,10 @@ public class ToolDisclosurePolicy {
         // 「法》」「条例》」：用户一写书名号引一部法（《公司法》《劳动合同法》《著作权法实施条例》）就是在查法条，
         // 比「法规」「法条」这类泛称命中得准。
         CATEGORY_KEYWORDS.put("legal", List.of("法规", "法条", "条文", "司法解释", "法》", "条例》"));
-        CATEGORY_KEYWORDS.put("memory", List.of("记住", "记忆", "偏好"));
+        // memory 类目里是 memory_write / memory_edit / memory_delete 三个写入工具（只读三个编排器每轮都补，
+        // dev-board#1073）；「记下」「忘掉」是要改记忆文件的说法。不收「别忘」「forget」：
+        // 「别忘了加页码」是叮嘱不是记忆。
+        CATEGORY_KEYWORDS.put("memory", List.of("记住", "记忆", "偏好", "记下", "忘掉", "remember", "memory"));
         // edit 刻意不收关键词：「删除 / 改成 / 替换 / 插入」几乎每句改文档的话都有，而真正常用的
         // 删改原语（锚点替换、查找替换、光标处插入）本来就在核心集里。
     }

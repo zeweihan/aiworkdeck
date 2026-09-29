@@ -133,6 +133,21 @@ class ToolDisclosurePolicyTest {
         }
     }
 
+    @Test
+    @DisplayName("跨文件硬规则的先列后读在各 Office 宿主首轮可达（dev-board#1073）")
+    void officeReferenceReadJourneyNeedsNoDiscoveryRound() {
+        RecordingToolRegistry registry = registry();
+        for (String host : List.of("word", "excel", "powerpoint")) {
+            String conv = "reference-" + host;
+            registry.capabilities().record(conv, "office", host);
+            Set<String> offered = names(POLICY.narrow(registry.getAllSpecifications(conv, null), Set.of()));
+            assertTrue(offered.containsAll(List.of("ref_list", "ref_read")), host + ": " + offered);
+            // 读能力常驻不应顺带放开跨文件写入；编辑与打开仍按需发现。
+            assertFalse(offered.contains("ref_edit"));
+            assertFalse(offered.contains("ref_open"));
+        }
+    }
+
     /**
      * 核心集逐会话的实数（dev-board#1064 第二步）。打印出来，是为了让「核心集到底多大」在每次改动后
      * 都看得见；断言只卡两条：每一类会话都够小（否则收窄没意义），每一类会话都有自己那一份「读 + 找 + 写」
@@ -483,6 +498,13 @@ class ToolDisclosurePolicyTest {
         assertEquals(Set.of("legal"), TRIM.categoriesHintedBy("《劳动合同法》里经济补偿的标准在哪一条？"));
         assertEquals(Set.of("meeting"), TRIM.categoriesHintedBy("把昨天的录音整理一下"), "「整理」不许把文件整理类放回");
         assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("记住我喜欢用仿宋"));
+        // memory 类目只剩写入三个工具（只读三个编排器每轮都补，dev-board#1073），这几种说法都要把它放回
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("把这条约定记下来"));
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("忘掉上次说的称呼"));
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("Please remember that I sign as the managing partner"));
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("clean up my memory files"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("别忘了在末尾加上日期"),
+                "「别忘了」是叮嘱不是记忆，不收");
         assertEquals(Set.of(), TRIM.categoriesHintedBy("把第三条里的「五日」改成「十日」"),
                 "edit 不收关键词：「改成 / 替换 / 删除」几乎每句都有，常用删改原语本来就在核心集");
         // 拉丁词两端整词（SkillRouter.containsTrigger 同一口径）：别的单词的一截不算

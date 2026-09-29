@@ -7,6 +7,25 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 职责边界：AI 对话功能本身（编排循环、工具注册分发、记忆、SSE、前端聊天 UI、评测）。AI→编辑器指令链路属 ai-doc-bridge 领域；skill 机制属 plugin-system 领域（但 SkillRouter 在编排循环里有两处旁路接入点）。
 
+## 系统提示瘦身（dev-board#1073，2026-09-29）
+
+- 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。
+- ASK 不拼能力片段，仍保留只读 memory 约束；AGENT/PLAN 仍拼。LOWA 不按当前文件类型拆片段，避免同轮切换文档后失去另一类型的指引。时间/阶段仍在缓存分界后，固定前缀逐字节稳定由 `ContextAssemblerServiceTest` 守住。
+- Office 的全目录只留 `tools-office-*.md` 一份；Active Document 改为短指路，末位只留当前文档、原位修改、修订、批量替换与格式回读判据。Word 分页/超链接/页眉页脚/脚注尾注/图片/内容控件/属性也必须在片段中，中英同步，不能随 Java 目录一起丢掉。
+- `ref_list` / `ref_read` 补入核心集：Office 跨文件硬规则要求先列后读，而 reference 无关键词预放回；`ref_edit` / `ref_open` 仍按需发现，权限边界不变。`ToolDisclosurePolicyTest.officeReferenceReadJourneyNeedsNoDiscoveryRound` 覆盖三个 Office 宿主。
+- 锚点以 worker 的 `anchorBookmark` / `dropAiAnchors` 为准：通常随编辑移动、不是一次性，但切换/重开或清理会失效。`EvidenceAnchorService` 按引文建链也会清临时锚点，所以不能承诺“打开期间一直有效”；失效须重新查找。工具描述和中英片段统一此口径。
+- `SystemPromptSizeReportTest` 用真实组装器报告五档 × 中英的固定块与 o200k token；token 口径不是各供应商的真实计费。`OrchestratorReplayEvalTest` 的组装器是 mock，只验证编排/工具披露，不证明瘦身后的模型质量；真实模型结果单独记录。
+
+固定块实测（稳定段减合成内联正文，无 skill/附件/记忆；基线为 Claude 留存的 A 半前报告，瘦身后由 Codex 在接续工作树重跑，2026-09-29）。以下为 o200k token，**不代表供应商计费或缓存命中实测**：
+
+| 会话 | zh 前 → 后 | en 前 → 后 |
+|---|---:|---:|
+| LOWA docx | 16534 → 7857（-52.5%） | 16268 → 7418（-54.4%） |
+| LOWA xlsx | 16543 → 7923（-52.1%） | 16277 → 7474（-54.1%） |
+| LOWA pptx | 16665 → 7879（-52.7%） | 16391 → 7430（-54.7%） |
+| Word 任务窗格 | 11365 → 7553（-33.5%） | 11106 → 6931（-37.6%） |
+| 纯对话 | 9980 → 6422（-35.7%） | 10160 → 6047（-40.5%） |
+
 ## 智能决策辅助（实验性，dev-board#824，2026-09-23）
 
 - **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。
@@ -55,6 +74,8 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
     - **片段属于稳定段**：内容只随（能力 × 宿主 × 语言）变，拼在 `SYSTEM_VOLATILE_SEPARATOR` 之前，不影响提示缓存命中（`ContextAssemblerServiceTest.splicedToolGuidanceStaysInsideTheCacheableStablePrefix` 钉住）。**往片段里写任何每轮会变的东西都会让缓存永久失效且不报错。**
     - **跨文件 ref_* 硬规则只有一个家**：它在活跃文档指引之后的末位 Java 块里。Office 片段**刻意不重复**它（重复会把一份拷贝放到提示前半段，直接破坏那条「末位」契约，`officeBoundaryRuleAllowsReferencesAndOpenDocEdits*` 会转红），只留一句「按本提示末尾那条跨文件硬规则办」。
     - 体量（字符，基线 origin/master 12c4a05a）：zh 基底 28673 → 14512；合计 LOWA 28928（+0.9%）、Word 17212（-40.0%）、Excel 16913（-41.0%）、PPT 16523（-42.4%）、none 16464（-42.6%）。en 基底 54052 → 27778；LOWA 55899（+3.4%，多了片段抬头与流式小节标题）、其余 -37.3% ~ -41.7%。LOWA 略涨是片段抬头注释的代价，换来的是另外四档各省四成。
+    - **ASK 模式不拼任何片段**（dev-board#1073）：`spliceToolGuidance` 多一个 `AgentMode` 形参，ASK 下占位直接换成空串——那个模式只下发只读的 memory_list/read/search，整段文档工具指引都是白付。护栏 `ContextAssemblerServiceTest.askModeSplicesNoToolGuidanceFragment`。
+    - **基底瘦身（dev-board#1073 A 半，2026-09-29）**：与 enforcement 逐条重复的段（ReAct Loop、Tool Call Rules 末两条、Final Output / Walkthrough / Artifacts）删基底、留 enforcement（enforcement 补了「出 `implementation_plan` 时不写 walkthrough」）；AGENT 模式约束里与基底重复的「精确执行原则」删掉（基底 Precise Execution 留）；Python / 企查查 / tushare / default_api 代码块、文件操作表、记忆 depth 三档、dispatch_subtask 节、法规签名表压成一两句；Clarification 只留「清理」病灶例。**被删的 per-tool 判据先并进了工具描述**：run_python（别在 Python 里读 QICHACHA_KEY/TUSHARE_TOKEN、数据经参数传入、不是读文件/OCR 的备选）、extract_file_text（OCR 失败如实转述原因）、dispatch_subtask（success=false 别原样重派）、todo_write（口径「每完成一项立即更新」，1-2 步不用，与 task_* 事项的区别）、search_web（Bocha；内地法条优先 law_search / get_law_article）。示例与 Evidence First 改走 law_search。en 基底的头注释与每节 `<!-- zh § … -->` 删掉（加载不剥注释，原样发给模型），维护者说明挪到不被加载的 `prompts/README.md`。`NON_TOOL_IDENTIFIERS` 因此清空。体量（`SystemPromptSizeReportTest` 固定块合计，AGENT 模式）：zh docx 36392 → 28380、Word 窗格 26020 → 18008、纯对话 23211 → 15199；en docx 69824 → 55001、Word 窗格 48407 → 33584、纯对话 43744 → 28921（片段与 Active Document 的瘦身是 B 半，不在这组数里）。
     - 回放评测 `cases-capability-prompt.json`（4 例：none/office-word/lowa 三档首轮无 Tool not found + 一例专门记录「none 调 doc_list_project_files 的代价」）。`allowUnresolvedTools` 今天只有两处打开：那一例，与 K27 的 `tool-choice-law-alias-is-corrected-not-silently-rerouted`（它故意写错名字去验 `unknownToolMessage` 的指路）。同批把回放 harness 的 `RecordingToolRegistry.execute` 从单参 `resolve(name)` 改成与生产一致的 `resolve(name, conversationId)`——此前它**整个跳过了会话能力过滤**，「none 会话调 doc_*」在回放里会拿到桩输出 OK，生产里拿到的却是 Tool not found；`EvalCase.Expect.allowUnresolvedTools`（默认 false）让「本轮不许有 Tool not found」成为全部用例的默认断言。
   - **enforcement 段与模式约束是「比 system_prompt.md 更末位」的文本，两边打架时它赢**（本仓实证：末位注意力最高，只写在 system prompt 里的约束被弱模型稳定无视，PR#209）。所以给模型加任何新的停机/输出形态时，**必须同时改这里**，否则功能整条是死的。反问那次就踩了三处：① Stop Conditions 原文是「**STOP ONLY** when you output implementation_plan」——把反问停机明确排除在外了，已改成 STOP + 补一条 **ALSO STOP** for `<question>`；② Output Structure 第 5 项「`<final>` REQUIRED for all non-chitchat」会让模型为了满足 REQUIRED 而在问完之后硬编一段答案，已补「以 `<question>` 收尾时不要求 `<final>`」的例外；③ AGENT 模式约束第 1 条「自动执行，无需等待用户确认」已补「但缺少影响成果正确性的前提时先用 `<question>` 问」。
 - `service/ai/ChatModelFactory.java` — 供应商路由，2026-08 起收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`（本地，实验档）。**GEMINI 档已下线**（手写的 GeminiChatLanguageModel 不支持 tools 也没有流式，AGENT/PLAN 下是死路；Gemini 系列模型改由 OpenRouter 的 `google/*` 提供），存量库里的 `ai.activeProvider=GEMINI` 由 `migrateRetiredGeminiProvider()`（ApplicationReadyEvent，幂等）改写成 OLLAMA——不迁移的话 `resolveProvider()` 只 warn 一句就静默回退 yml，用户的选择被改掉而设置页显示的又是另一回事。provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。公有解析 API：`resolveProvider()` / `resolveDefaultModel()`（DB `ai.defaultModel` → yml `open-router.default-model`）/ `getAuxChatModel()`（辅助模型，非白名单抛 `FeatureNotConfiguredException(feature="ai-aux-model")`，不静默回落）/ `resolveOllamaModelName()` / `resolveOllamaBaseUrl()`。**判定顺序不许改**：平台通道短路 → 白名单短路 → provider 分流（由 ChatModelFactoryTest 固化）。`AllowedModels.java` 白名单（分档单价，见下节）。
@@ -444,19 +465,19 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
       **2026-09-29 起默认 true**，理由见下文「为什么默认开」）。每轮只下发**核心集**
       （一份人工清单，按「把一条完整的活干完需要哪些工具」挑，不按调用次数），其余按**类目**收进目录；
       模型调 `list_tools()` 看类目、`list_tools(category="format,table")` 拿全签名。
-      离线实测（`ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete`，2026-09-29 重定核心集之后，本机无 Docker）：
+      离线实测（`ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete`，2026-09-29 瘦身 #1073 并补 ref_list/ref_read 之后，本机无 Docker）：
 
       | 会话 | 全集 | 核心集 | 上线路字节（全集 → 核心集） |
       |---|---|---|---|
-      | docx（LOWA 文字） | 146 | 35 | 84628 → 23408（-72.3%） |
-      | xlsx（LOWA 表格） | 117 | 28 | 74039 → 21721（-70.7%） |
-      | pptx（LOWA 演示） | 112 | 28 | 70899 → 20924（-70.5%） |
-      | Word 任务窗格 | 110 | 26 | 66843 → 20087（-69.9%） |
-      | Excel 任务窗格 | 98 | 24 | 62236 → 19711（-68.3%） |
-      | PowerPoint 任务窗格 | 85 | 23 | 52286 → 18568（-64.5%） |
-      | 纯对话（none） | 67 | 19 | 42128 → 16288（-61.3%） |
+      | docx（LOWA 文字） | 146 | 35 | 85441 → 23970（-71.9%） |
+      | xlsx（LOWA 表格） | 117 | 28 | 74575 → 22236（-70.2%） |
+      | pptx（LOWA 演示） | 112 | 28 | 71435 → 21439（-70.0%） |
+      | Word 任务窗格 | 110 | 28 | 67379 → 21484（-68.1%） |
+      | Excel 任务窗格 | 98 | 26 | 62772 → 21108（-66.4%） |
+      | PowerPoint 任务窗格 | 85 | 25 | 52822 → 19965（-62.2%） |
+      | 纯对话（none） | 67 | 19 | 42664 → 16803（-60.6%） |
 
-      （「全集」含 list_tools；编排器另按 `MEMORY_TOOLS` 规则补 memory_* 六个，不在这张表里。）
+      （「全集」含 list_tools；编排器每轮另补只读的 memory_list/read/search 三个（约 1.2k 上线路字节），不在这张表里。写入的 memory_write/edit/delete（约 1.7k）自 dev-board#1073 起不再每轮兜底：只在 skill 收窄时补（`AgentOrchestrator.MEMORY_TOOLS` 的原始语义——skill 白名单不许藏掉记忆能力）、或本轮已下发过时照补（只增不减），平时归 memory 类目，由关键词「记住/记忆/偏好/记下/忘掉/remember/memory」、skill、`list_tools`、XML 点名四条路放回；回放 `cases-tool-disclosure.json` 的三条 `disclosure-memory-*` 守着。）
       - **展开只在下一轮生效**，这是它与「一轮内工具集不变」相容的全部理由：展开记在
         `RunGuard.expandedToolCategories`（`dispatchTool` 里 `noteToolCategoryExpansion` 写、
         下一次递归 runLoop 读），而且**只做加法**——模型已宣布要调的工具永远不会消失。
@@ -468,10 +489,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
         `list_tools()` 一定列得出来，新增工具不改策略类也在目录里）；`list_tools` 自己恒在核心集；
         **skill 已经裁过就不再裁**（判据在编排器：`skillRouter.visibleTools` 返回的集合比候选集小即视为已裁）。
       - **核心集按「通用段 + 各宿主段」写成一份扁平清单**（dev-board#1064 第二步 + 审计 T-18）。
-        通用段 19 个（list_tools / use_skill / todo_write / ask_user / dispatch_subtask / doc_list_project_files /
+        通用段清单 21 个（含仅 Office 可见的 ref_list / ref_read；其余宿主仍是 19 个）：list_tools / use_skill / todo_write / ask_user / dispatch_subtask / doc_list_project_files /
         search_project_files / search_project_content / extract_file_text / write_docx / create_folder /
         move_files_batch / move_to_trash / query_memory / save_memory / law_search / get_law_article /
-        search_web / browse_url）；docx 段 15 个（doc_open_file / doc_get_document_text / doc_find_text /
+        search_web / browse_url；docx 段 15 个（doc_open_file / doc_get_document_text / doc_find_text /
         doc_get_cursor_context / doc_get_clauses / doc_audit_structure / doc_find_replace / doc_replace_at_anchor /
         doc_insert_at_cursor / doc_start_stream / doc_insert_table / doc_apply_standard_format / doc_add_comment /
         doc_undo / doc_restore_checkpoint）；xlsx 段 5（sheet_create_file / get_overview / read_range /
@@ -868,7 +889,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - 前端 `AgentInbox.vue` 的 `run-active` prop 决定 steer 项露不露「立即发送」（`canSendNow`：queue 项恒露，steer 项只在没轮次在跑时露），并在没轮次时多渲一行 `chat.inboxIdleNotice`。判据取 `ChatInterface.inboxRunActive` = **`isStreaming` 单一来源**：切回一条后台仍在跑的会话时 `run_state=RUNNING` 会把它置起，所以它不只是「本窗口从头看到尾的那一轮」。**刻意不与 `agentRunStatus === 'RUNNING'` 取或**——用户点停止后 `isStreaming` 立刻 false，而 `agentRunStatus` 要等后端 `cancelled` 事件才落终态，SSE 正好死了就永远停在 RUNNING；用一个可能永不归位的状态去挡救命按钮，等于把病灶换了个地方。护栏在 `tests/chat-presentation-ui/run.mjs`（真组件渲染，停止前后各断一次）。
 - 前端 `AgentInbox.vue`、`agentInboxState.mjs` 与 `chatSubmissionState.mjs` 管理队列、事件去重和提交事务。发送与停止分开，执行中可输入；新会话只断开本地视图，旧会话继续。迟到 receipt 不得清空新会话草稿；附件草稿按原始 HTML 快照比较。
 - `service/ai/memory/document/*`、`MemoryDocumentController`、`MemoryDocument`/`MemoryDocumentSpace` 是 Markdown 记忆真源。`/api/ai/memory/{spaces,files,file,download}`；个人/项目使用权限校验后的 opaque spaceId，团队/律所由官网共享服务校验成员/管理员。每空间 remember.md 自动维护 topic 链接；UTF-8 128 KiB、路径校验、expectedRevision 冲突及删除墓碑由后端负责。legacy 读写/同步向同一文档服务收敛，不保留可独立写入的副本。
-- `MemoryTools` 暴露 memory_list/read/search/write/edit/delete；Agent/Plan 的 skill 白名单不能隐藏这些基础工具，ASK 只允许前三个。ContextAssembler 每轮注入有权限的限量索引，正文按需由模型读取。`MemoryBrowser.vue` 从对话与设置进入，支持索引跳转、编辑、下载及冲突提示。
+- `MemoryTools` 暴露 memory_list/read/search/write/edit/delete；Agent/Plan 的 skill 白名单不能隐藏这些基础工具，ASK 只允许前三个。没被 skill 收窄的 Agent/Plan 回合里只读三个每轮必下发（每轮注入的索引点名要 memory_read），写入三个归渐进披露的 memory 类目（dev-board#1073，详见「工具规格瘦身与渐进披露」那张核心集表下的注）。ContextAssembler 每轮注入有权限的限量索引，正文按需由模型读取。`MemoryBrowser.vue` 从对话与设置进入，支持索引跳转、编辑、下载及冲突提示。
 - 桌面共享记忆使用已连接账户 Bearer；服务器使用专用 `memory.shared.base-url`/`memory.shared.secret` 与绑定账户 ID，不能复用只读协作目录密钥。官网配套契约与 PR 见 `doc/ai-alignment/memory-report.md`；无账户/服务未配置的共享空间显示不可用，不能伪装成本地共享。
 - 测试与实际结果：`doc/ai-alignment/validation-report.md`；隔离运行配方：`doc/ai-alignment/test-environment.md`。不可将模拟 provider E2E 称为真实模型测试。
 

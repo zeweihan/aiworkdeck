@@ -223,9 +223,16 @@ default_api = _ToolAPI()
 """;
 
     @ToolMeta(displayName = "执行Python代码", category = "python")
-    @Tool("Run Python script for data analysis and computation. For Chinese company registration records use qichacha_query, "
-            + "and for Tushare financial data use tushare_query — those go through the platform gateway and work without any local credentials. "
-            + "You can call default_api.extract_file_text(fileId='...') to read project files. Returns stdout/stderr.")
+    @Tool("Run a Python script (isolated Docker sandbox, python:3.9 with pandas/requests/matplotlib) for data analysis "
+            + "and computation. Returns stdout/stderr. "
+            + "External data goes through first-class tools, not raw Python: use qichacha_query for Chinese company "
+            + "registration records, tushare_query for Tushare financial data and search_web for the web, then pass the "
+            + "returned JSON into the script as literal data. Do NOT read env vars such as QICHACHA_KEY / TUSHARE_TOKEN "
+            + "or call those APIs from Python: the credentials are never injected into the sandbox, so such scripts get "
+            + "empty values and fail silently. "
+            + "This is not a route for reading files or OCR - extract_file_text already reads images and scans. "
+            + "Inside the script, default_api.extract_file_text(fileId='...'), default_api.search_web(query='...') and "
+            + "default_api.browse_url(url='...') are available.")
     public String run_python(@P("要执行的 Python 源码；结果请用 print 输出") String code) {
         if (code == null || code.isBlank()) {
             return "Error: code is required.";

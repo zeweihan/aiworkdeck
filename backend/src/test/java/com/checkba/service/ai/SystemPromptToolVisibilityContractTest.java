@@ -53,6 +53,21 @@ class SystemPromptToolVisibilityContractTest {
     private static final Path PROMPTS_DIR =
             Path.of("src/main/resources/prompts");
 
+    @Test
+    @DisplayName("压掉 Active Document 目录后，Word 专属功能仍在中英片段可发现")
+    void wordFragmentRetainsSpecializedEditingEntrypoints() throws IOException {
+        for (String suffix : List.of(".md", ".en.md")) {
+            String text = Files.readString(PROMPTS_DIR.resolve("tools-office-word" + suffix));
+            for (String name : List.of("office_insert_break", "office_set_hyperlink", "office_edit_header_footer",
+                    "office_insert_footnote", "office_insert_endnote", "office_insert_image",
+                    "office_manage_content_control", "office_set_document_properties")) {
+                assertTrue(text.contains("`" + name + "`"), name + " 从 " + suffix + " 的工具指路中丢失");
+            }
+            assertTrue(text.contains("2MB"));
+            assertTrue(text.contains(suffix.equals(".md") ? "仅首节" : "first section only"));
+        }
+    }
+
     /** 反引号里的标识符：`tool_name` 或 `tool_name(args)`。 */
     private static final Pattern BACKTICKED = Pattern.compile(
             "`([a-z][a-z0-9_]*)\\s*\\(|`([a-z][a-z0-9_]*)`");
@@ -76,16 +91,10 @@ class SystemPromptToolVisibilityContractTest {
      * 这两个从来不存在的「工具」就是这么在基底里躺了很久的（dev-board#809 / K29 顺手清掉）。
      */
     private static final Set<String> NON_TOOL_IDENTIFIERS = new TreeSet<>(List.of(
-            // query_memory 的 depth 档位与参数名
-            "depth", "quick", "hybrid", "deep",
-            // dispatch_subtask 的参数名
-            "task_description", "expected_output", "tool_scope",
-            // run_python 里注入的后端 API 对象
-            "default_api",
-            // Tushare 的接口名（不是本仓的工具）
-            "stock_basic", "top10_holders",
-            // artifact 类型标注
-            "implementation_plan"));
+            // 今天为空：dev-board#1073 瘦身后基底里反引号包着的小写标识符全是真工具。
+            // depth 档位、dispatch_subtask 参数名、default_api、Tushare 接口名、implementation_plan
+            // 这几类原先在这里点名，随基底对应段落一起删掉了（判据已并进各工具的描述）。
+            ));
 
     /**
      * 今天声明了宿主依赖的全部工具（{@code @ToolMeta.requiresHost}）。
