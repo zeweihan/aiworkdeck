@@ -79,6 +79,13 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **版本退回/AI 直改后必须走 `reloadPlainTextInstances(fileId)`**（fileOpenTabs.js）：`onVersionReloadFiles` 与 `handleTextReloadFile`（SSE `text_reload_file`，AI text_* 工具后端直改后下发）都调用它，让正在显示的实例 `reloadFromBackend()` 就地重载并丢弃本地未保存态——不做的话画面不变、下次 autosave 把旧内容写回去。未激活的文本标签没有实例，下次挂载自然拉新内容。
 - 真 `.md` 文件自此可编辑（编辑/预览切换在组件内，markdown-it 渲染）；`isMarkdownTab` 已收窄为只认 `tabType==='markdown'` 的 AI 虚拟产物标签。
 - AI 侧对纯文本走后端直读直写（`text_write_file`/`text_find_replace`），不经编辑器桥——契约见 ai-doc-bridge.md。
+- **计划审阅态（dev-board#1022，2026-09-29；对话侧入口与回喂契约见 ai-chat.md「计划审批卡」）**：
+  - `PlainTextEditor` 多一个 `review` prop（`{conversationId, artifactId, baselineText}`，宿主「打开修订」时经 `tab.review` 传入）和两个事件 `review-submit {fileId,message,displayText,conversationId}` / `review-state {fileId,hunks,comments,status}`。`loadReview()`：review 对象没用过（模块级 `consumedReviewProps` WeakSet，按对象身份）→ `POST .../review` 幂等开记录；否则 `GET .../review`，有 open 记录照样进审阅态（刷新、重开标签不丢审阅）。标签已开着时 `watch review` 就地进审阅态。
+  - 审阅态 UI：顶部 `PlanReviewBar.vue`（「计划审阅 · N 处改动 · M 条批注」+ 放弃修改 / 按修订版推进），右栏 `PlanReviewComments.vue`（引用原文 → 评论，可删；只在编辑态显示，预览态不画标记）。REST 封装在 `services/fileReview.js`。
+  - CM6 扩展装在一个 `Compartment`（`_reviewCompartment`）里，`applyReviewExtensions()` 按 `reviewActive` 重配，退出审阅即卸下。**两个文件**：`utils/planReviewSpecs.js`（纯函数：`buildDecorationSpecs` 算改动行 / 删除段 / 批注区间，一删一增配对成「改动」、`editedOriginals` 供悬停看原文）与 `utils/planReviewExtensions.js`（`createReviewExtensions({getBaseline,getComments,onAddComment,deletedLabel})` → 行装饰 `cm-review-edited`、删除段块级 widget `cm-review-deleted`「已删除 N 行」、批注 mark `cm-review-commented`、选区旁「+」tooltip `cm-review-add`；打字时装饰随改动平移，停笔 150ms 重算）。**纯函数与 CodeMirror 扩展分两个文件是为了 node:test 能 import**：@codemirror/* 在 node 里不可直接加载，specs 文件不许 import 任何 @codemirror 包。行级 diff 与批注重锚定在 `utils/lineDiff.js` / `utils/planReview.js`（`reanchorComment` 先在原行 ±20 行内找引用原文，再全文找）。
+  - 四个令牌 `--awd-review-edited-bg` / `--awd-review-edited-bar` / `--awd-review-deleted-fg` / `--awd-review-comment-bg`：值定义在 `utils/appTheme.js` 的 `PLAN_REVIEW_TOKENS`（light / dark 两套），由 `planReviewExtensions.js` 的 `EditorView.baseTheme` 挂到编辑器根元素上。刻意不进 App.vue 全局令牌、也不进注入插件的 `THEME_TOKEN_NAMES`。
+  - 提交 = `flushSave` 落盘失败就不提交 → `POST /submit` → 拼回喂消息（正文在落盘成功那一刻取）→ emit `review-submit` → `exitReviewMode('submitted')`。放弃 = 确认框（`uni.showModal`，被 `utils/dialog.js` 接管成 `AwdDialog`）→ 先清自动保存定时器并置 `_discarding`（`beforeUnmount` 兜底上传也看它）、等在途上传 → `POST /discard`（服务端写回基线）→ `reloadFromBackend()` → `exitReviewMode('discarded')`。
+  - 真渲染走查 `frontend/tests/plan-review/walk-plan-review.mjs`：只从 REST 开的记录只有**新挂载**的编辑器会 GET 到，同 hash 的 `page.goto` 不重挂载，脚本先 `about:blank` 再进工作台。
 
 ## 启动链路（打开 docx → 可编辑）
 
