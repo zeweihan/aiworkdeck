@@ -190,7 +190,7 @@ class ToolDisclosurePolicyTest {
                 "披露关着却照样下发 list_tools：每轮白付约一千字符，而这正是本卡要治的病");
         assertTrue(off.resolve(ToolDisclosurePolicy.CATALOG_TOOL).isPresent(),
                 "只裁 spec、不裁 execute：登记必须还在");
-        System.out.printf("[dev-board#810] 生产默认（披露关着）docx：%d 个工具 / %d 字符 / %d 上线路字节%n",
+        System.out.printf("[dev-board#810] 披露与类目裁剪都关着的 docx：%d 个工具 / %d 字符 / %d 上线路字节%n",
                 docx.size(), ToolSchemaBudgetTest.weight(docx), ToolSchemaBudgetTest.wireBytes(docx));
         assertFalse(new ToolDisclosurePolicy(false).isEnabled());
     }
@@ -209,6 +209,98 @@ class ToolDisclosurePolicyTest {
         Set<String> all = names(off.getAllSpecifications("conv", null));
         assertTrue(all.contains("move_to_trash"), "披露关着时（生产默认）模型也要看得见 move_to_trash");
         assertFalse(all.contains("delete_file"), "披露关着时 delete_file 同样不下发");
+    }
+
+    // ==================== 活跃文档类目裁剪（dev-board#1064）====================
+
+    private static final ToolDisclosurePolicy TRIM = new ToolDisclosurePolicy(false, true);
+
+    @Test
+    @DisplayName("类目裁剪：每种文档类型藏哪些类目是钉死的；判不准的类型一个都不藏")
+    void hiddenCategoriesPerDocKindArePinned() {
+        Set<String> docAndSheet = Set.of("pdf", "litigation", "slides", "enterprise-data", "plugin", "meeting", "python");
+        assertEquals(docAndSheet, TRIM.hiddenCategoriesFor(ClientCapabilityService.DOC_KIND_WRITER));
+        assertEquals(docAndSheet, TRIM.hiddenCategoriesFor(ClientCapabilityService.DOC_KIND_SHEET));
+        assertEquals(Set.of("pdf", "litigation", "spreadsheet", "enterprise-data", "plugin", "meeting", "python"),
+                TRIM.hiddenCategoriesFor(ClientCapabilityService.DOC_KIND_SLIDE));
+        assertEquals(Set.of(), TRIM.hiddenCategoriesFor(null));
+        assertEquals(Set.of(), TRIM.hiddenCategoriesFor("text"));
+        assertEquals(Set.of(), TRIM.hiddenCategoriesFor("nonsense"));
+        assertEquals(Set.of(), POLICY.hiddenCategoriesFor(ClientCapabilityService.DOC_KIND_WRITER),
+                "只开渐进披露、没开类目裁剪时不许藏任何类目");
+        for (String kind : new String[]{"doc", "sheet", "slide"}) {
+            assertTrue(TRIM.categoryNames().containsAll(TRIM.hiddenCategoriesFor(kind)),
+                    kind + " 的隐藏表里有目录不认识的类目——那一类藏了就再也放不回来");
+        }
+        // 刻意留着的：律师改文档时的法源、网页、事项、记忆、版式、表格、修订
+        for (String kept : List.of("legal", "task", "memory", "format", "table", "revision", "files", "misc")) {
+            assertFalse(TRIM.hiddenCategoriesFor("doc").contains(kept), kept + " 不该在 docx 会话里被藏");
+        }
+    }
+
+    @Test
+    @DisplayName("类目裁剪：docx 真实工具集里只摘掉隐藏类目，核心集与 list_tools 一个不少；放回的类目回来")
+    void trimForDocKindOnlyDropsHiddenCategoriesAndHonoursPutBack() {
+        RecordingToolRegistry registry = registry();
+        List<ToolSpecification> docx = registry.getAllSpecifications("conv", ClientCapabilityService.DOC_KIND_WRITER);
+        Set<String> hidden = TRIM.hiddenCategoriesFor("doc");
+
+        List<ToolSpecification> trimmed = TRIM.trimForDocKind(docx, "doc", Set.of());
+        Set<String> kept = names(trimmed);
+        for (ToolSpecification spec : docx) {
+            String category = TRIM.categoryOf(spec.name());
+            assertEquals(!hidden.contains(category), kept.contains(spec.name()),
+                    spec.name() + "（类目 " + category + "）的去留与隐藏表不一致");
+        }
+        assertTrue(kept.contains(ToolDisclosurePolicy.CATALOG_TOOL), "list_tools 是放回的入口，永远不许裁");
+        Set<String> coreInDocx = new TreeSet<>(names(docx));
+        coreInDocx.retainAll(TRIM.coreToolNames());
+        assertTrue(kept.containsAll(coreInDocx), "核心集不许被类目裁剪摘掉：" + difference(coreInDocx, kept));
+        assertTrue(trimmed.size() < docx.size(), "docx 会话里确实有东西被藏");
+        assertFalse(kept.contains("pdf_to_word"));
+        assertFalse(kept.contains("pptx_generate"), "pptx_* 不带 slide_ 前缀，只能靠这里的 slides 类目裁掉");
+
+        Set<String> putBack = names(TRIM.trimForDocKind(docx, "doc", Set.of("pdf", "slides")));
+        assertTrue(putBack.contains("pdf_to_word") && putBack.contains("pptx_generate"), "放回的类目必须回来");
+        assertFalse(putBack.contains("litigation_render"), "没放回的类目仍然藏着");
+
+        assertEquals(docx, TRIM.trimForDocKind(docx, null, Set.of()), "kind 判不准一律不裁");
+        assertEquals(docx, POLICY.trimForDocKind(docx, "doc", Set.of()), "开关关着一律不裁");
+    }
+
+    @Test
+    @DisplayName("类目裁剪：关键词放回——每组都认得出，中性问句一个都不提示，拉丁词按整词匹配")
+    void keywordsHintTheRightCategories() {
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("这是什么文件？"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("把第二段的『甲方』改成『买方』"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("帮我做一版汇报用的 deck"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy(null));
+        assertEquals(Set.of("pdf"), TRIM.categoriesHintedBy("把项目里那份 PDF 转成 Word"));
+        assertEquals(Set.of("litigation"), TRIM.categoriesHintedBy("根据这份合同画一张当事人关系图"));
+        assertEquals(Set.of("litigation"), TRIM.categoriesHintedBy("draw a timeline of the dispute"));
+        assertEquals(Set.of("slides"), TRIM.categoriesHintedBy("把这份合同转成幻灯片"));
+        assertEquals(Set.of("slides"), TRIM.categoriesHintedBy("做一份 PPTX"));
+        assertEquals(Set.of("enterprise-data"), TRIM.categoriesHintedBy("查一下甲方公司的工商信息"));
+        assertEquals(Set.of("plugin"), TRIM.categoriesHintedBy("装一个插件"));
+        assertEquals(Set.of("meeting"), TRIM.categoriesHintedBy("把昨天的录音整理一下"));
+        assertEquals(Set.of("python"), TRIM.categoriesHintedBy("用 Python 算一下违约金"));
+        assertEquals(Set.of("spreadsheet"), TRIM.categoriesHintedBy("把这些数字填进 Excel"));
+        assertEquals(Set.of("task"), TRIM.categoriesHintedBy("帮我建个开庭日程"));
+        // 拉丁词两端整词（SkillRouter.containsTrigger 同一口径）：别的单词的一截不算
+        assertFalse(TRIM.categoriesHintedBy("pythonic 的写法").contains("python"));
+        assertFalse(TRIM.categoriesHintedBy("超过 100 pdfs").contains("pdf"));
+        for (String category : TRIM.keywordCategories()) {
+            assertTrue(TRIM.categoryNames().contains(category), "关键词表里的类目 " + category + " 目录不认识");
+        }
+    }
+
+    @Test
+    @DisplayName("类目裁剪：skill 放回——白名单里点名的工具，它们所在的类目整类放回（core 不算）")
+    void skillAllowedToolsMapToCategories() {
+        assertEquals(Set.of("python", "litigation"),
+                TRIM.categoriesCoveredBy(List.of("run_python", "extract_file_text", "litigation_render")));
+        assertEquals(Set.of(), TRIM.categoriesCoveredBy(List.of("doc_get_document_text", "law_search")));
+        assertEquals(Set.of(), TRIM.categoriesCoveredBy(null));
     }
 
     private static Set<String> names(List<ToolSpecification> specs) {

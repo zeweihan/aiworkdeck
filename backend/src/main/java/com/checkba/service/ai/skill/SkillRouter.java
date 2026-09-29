@@ -182,8 +182,12 @@ public class SkillRouter {
      * <p><b>它治不了什么</b>：「帮我把这段 IPO 条款改一下」两端是空格与中文，仍然命中——
      * 中文语境下的过宽只能靠把触发词写成短语来收，以及靠白名单带上编辑面
      * 让误命中退化成「指引不对但能力还在」。两条都在本次一起做了。
+     *
+     * <p>{@code ToolDisclosurePolicy.categoriesHintedBy} 的类目关键词（dev-board#1064）也走这一份口径，
+     * 所以它是 public——同一件事（一句话里有没有这个词）不许出第二套判据。
+     * 入参必须已经小写。
      */
-    private static boolean containsTrigger(String normalizedInput, String normalizedTrigger) {
+    public static boolean containsTrigger(String normalizedInput, String normalizedTrigger) {
         boolean leftBounded = isLatinWordChar(normalizedTrigger.charAt(0));
         boolean rightBounded = isLatinWordChar(normalizedTrigger.charAt(normalizedTrigger.length() - 1));
         if (!leftBounded && !rightBounded) {

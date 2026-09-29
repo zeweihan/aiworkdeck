@@ -209,7 +209,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
   - **`TOOL_NAME_ALIASES` 现在是空表，而且应当一直是空表**（dev-board#807，审计 A11）。别名的代价是**静默改道**：模型以为调了 A、实际跑的是 B，回喂里一个字都没提。最后一条 `search_laws → search_web` 已删——它把「查法条」改道成一次**公网搜索**，而仓里有 law_search / law_search_keyword / law_recognition / get_law_article 四个真法源工具，模型拿到网页摘要却当法条原文引用，在法律场景里是直接的正确性风险。要容错模型写错的工具名，**改 `UNKNOWN_TOOL_HINTS`（not-found 时的指路文案），不要往别名表里加**：那里只多花一次 LLM 往返，而且日志里看得见模型原本想调什么。XML 兜底分支也会把这句指路原样带给模型（只回一句 "Unknown tool" 它无从纠正，下一轮多半换个同样不存在的名字再试）。护栏 `ToolRegistryTest` + `ToolChoiceSurfaceTest`。
 - **LEGACY_DEFAULTS 只许给「可选参数」代填，绝不许给必填参数代填**（审计 A4）：`bindArguments` 的顺序是**先补缺省再转换**，所以这里填了值、方法里的 null 守卫就永远走不到——等于把一处写好的防护重新打开。踩过的坑：`doc_get_paragraph.paragraphIndex` 与 `doc_modify_paragraph.paragraphIndex` 曾缺省 1，而 `DocumentEditTools.rejectBadParagraphIndex` 正是为「模型漏传段落号」写的守卫，结果 doc_modify_paragraph 漏传时不报错、而是对**第 2 段**（0 基 index=1）做一次模型从未主张过的整段替换（修订模式下用户还很可能直接接受）。两条已删；`doc_find_replace.replaceAll` 也搬回工具自身（口径不变：不传即替换全部，只想改第一处必须显式 false）。留下的四条都是真·可选参数。回归 `ToolRegistryLegacyDefaultsTest`（走整条 execute→bindArguments→方法 的链路；直接调方法的 `ParagraphIndexBaseTest` 绕过 bindArguments，证明不了这件事）。
-- **工具可见性是五层闸，判据分别在五个地方**（改任一层前先分清是哪一层）：
+- **工具可见性是五层闸（外加两道子闸 ①b / ②b），判据分别在不同地方**（改任一层前先分清是哪一层）：
   ① **会话客户端能力**（`ClientCapabilityService.isToolVisible`）：LOWA 会话只见 doc_/sheet_/slide_，
      Office 插件会话只见 office_* 且按宿主 Word/Excel/PowerPoint 再分，none 两者皆无；
   ①b **工具自报的宿主依赖**（dev-board#799，`@ToolMeta.requiresHost = NONE|LOWA|OFFICE`）：
@@ -251,6 +251,54 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      更糟的是 `slide_add_page` 内部「insertNewByIndex（不记）+ `.uno:MovePageUp/Down`（记）」
      只有后半段进撤销栈，撤一次可能把插页撤成「新页留在错位置」的半成品。
      引擎哪天记了撤销栈，那条 e2e 用例会先红——它锁的就是今天这个现状。
+  ②b **活跃文档类目裁剪**（dev-board#1064，`ToolDisclosurePolicy.trimForDocKind`，**默认开**，
+     `ai.tools.doc-session-category-trim.enabled` / env `AI_TOOLS_DOC_SESSION_CATEGORY_TRIM`）：
+     开着一份文档时，与改文档 / 就文档答疑无关的**整类**默认不下发。病灶：docx 会话每轮 157~168 个规格、
+     3.1~3.4 万 token（占 prompt 七成），问一句「这是什么文件？」也全付。隐藏表 `HIDDEN_CATEGORIES_BY_DOC_KIND`：
+
+     | 活跃文档 | 默认不下发的类目 |
+     |---|---|
+     | doc / sheet | pdf、litigation、slides（为的是 `pptx_*`，它不带 slide_ 前缀、②裁不掉）、enterprise-data、plugin（含 capability_*）、meeting、python |
+     | slide | pdf、litigation、spreadsheet、enterprise-data、plugin、meeting、python |
+     | null / text / 未知 | 不裁（同②的「判不准倒向全集」） |
+
+     **刻意留着**：legal / task / memory / evidence / template / revision / format / table / files /
+     reference / misc，以及核心集里的 `search_web` / `browse_url`（与法规检索并列律师改合同时最高频的外部查证，
+     两个一千字符出头，藏了就是每次先查目录）。`enterprise-data` 里连带着 `update_project_info` 与
+     `web_verify_import`，docx 会话里它们也一起藏——要用时同样按下面四条路放回。
+     **放回没有第二套机制**，一律写进渐进披露那份 `RunGuard.expandedToolCategories`（只增不减、下一轮生效）。
+     四个触发点：① **关键词**（`categoriesHintedBy`，起跑时对本轮用户输入算一次，表 `CATEGORY_KEYWORDS`，
+     匹配口径复用 `SkillRouter.containsTrigger`——中文子串、拉丁两端整词，为此它改成了 public）；
+     ② **skill**（起跑时把本轮生效 skill 的 `allowed_tools` 所在类目放回，`categoriesCoveredBy`；
+     restrict 的 skill 本来就不裁，这条对 passthrough 且列了工具的 skill 才有意义）；
+     ③ **`list_tools(category)`**；④ **分发**：模型经 XML 兜底（或原生）点名调了本轮没下发的工具
+     （判据 `RunGuard.roundOffered` 不含它且注册表 found），它所在的类目下一轮放回
+     （`noteToolCategoryExpansion` 的第二支）。
+     起跑判定在 `AgentOrchestrator.prepareDocCategoryTrim`（`guard.docCategoryTrimActive`，一轮只算一次、
+     中途换文档也不清——它还决定 `list_tools` 下不下发）；裁剪本身在 `discloseProgressively` 里、
+     **排在决策辅助（Jev）之后、核心集收窄之前**：Jev 看裁剪前的全集，它刚放回的类目本轮就生效。
+     skill 已裁过的回合不裁；ASK 模式不裁；中途 `widen*` 把 `activeDocKind` 置 null 即整类回来。
+     `ToolDiscoveryTools.isAvailable()` 在两个开关任一开着时为真，于是没开文档的会话里 `list_tools`
+     也在候选集里——编排器 `dropIdleCatalog` 在「披露关、Jev 没接管、本轮没在裁、也没下发过」时把它摘掉，
+     免得每轮白付一千字符打开来又是一句「没有可展开的」。`list_tools()` 的目录页列的是
+     **候选集 − 本轮下发集**（`ToolContext.offeredTools`，新加的第 6 个 record 分量；旧入口为 null 时退回
+     「非核心即未下发」）。prompt 侧：`ContextAssemblerService.toolDisclosureRule` 在类目裁剪生效的会话
+     同样注入「## 工具目录」那段，**判据只看开关 + `AgentOrchestrator.initialDocKind(activeContext)`**，
+     绝不看放回集（放回每轮会变，写进稳定段会让缓存永久失效且不报错）。真机日志：
+     `[ToolVisibility] … 活跃文档 doc 按类目裁剪 […]，预先放回类目 […]` 每轮一次起跑行，
+     `[Round] … tools=116 trimmed=41 expanded=[…]` 每轮一行。
+     体量（`ToolSchemaBudgetTest.docSessionCategoryTrimShrinksTheWriterSchemaFurther`，2026-09-29，本机无
+     Docker）：docx 156 个 / 80993 上线路字节 → 116 个 / 58353（**-28.0%**，weight -29.2%）；摘掉 pdf 13、
+     slides 9、litigation 6、plugin 6、enterprise-data 5、meeting 2，多出 list_tools 1。
+     **docx 转 PDF 没有 AI 工具**（只有界面菜单 `file.exportPdf`），所以「把这份文件转成 PDF」即使放回
+     pdf 类目也做不了，是既有缺口不是本闸造成的。
+     护栏：`ToolDisclosurePolicyTest` 的四条类目裁剪用例、`ContextAssemblerServiceTest` 的两条
+     （`toolCatalogRuleAppearsForDocSessionTrimAndStaysCacheable` /
+     `docSessionTrimWithoutActiveDocumentLeavesThePromptUntouched`）、`ToolSchemaBudgetTest` 上面那条、
+     回放 `cases-doc-session-trim.json`（10 例：中性问句、改措辞、三条关键词放回、目录放回、XML 点名放回、
+     restrict skill 不重复裁、xlsx、没开文档不下发 list_tools）、`ToolDiscoveryToolsIndexTest`（目录页口径）。用例字段 `docSessionCategoryTrim`（null = 跟生产默认开）**显式写了就钉死
+     本用例的模式**，全局 `-Dai.tools.*` 两个开关都不再影响它。整套回放关掉类目裁剪重跑：
+     `mvn test -Dtest=OrchestratorReplayEvalTest -Dai.tools.doc-session-category-trim.enabled=false`。
   ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节。
      **裁不裁是 skill 自愿声明的**（dev-board#799，审计 A2）：skill.yml 的
      `tool_policy: passthrough | restrict`，**缺省 passthrough = 不裁**。改之前裁剪与否只看
@@ -290,6 +338,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      藏掉一个能用的工具比失败一次严重得多。云后端 `resolve()` 恒不返回 PLATFORM，这道闸天然空转。
      **一轮内不变**：与 activeDocKind 同一条契约，而且这一个连中途放宽的口子都没有。
   ⑤ **渐进披露**（dev-board#810，`ToolDisclosurePolicy`，**默认关**）：只下发核心集 + 本轮已展开的类目。
+     与 ②b 叠用时先按类目裁、再按核心集收窄，两者都是「核心集 ∪ 已展开类目」的形状，叠起来仍是那个形状。
      见下文「工具规格瘦身与渐进披露」一节。
   - **为什么值得做②**：工具规格**每一轮都要重发**，一条消息跑三五个往返就付三五遍。
     本机实测 202 个工具 59045 prompt token / 首轮 26.4s，裁到 16 个 18854 token / 6.1s；
@@ -353,7 +402,13 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
         是一次横切取舍——要判断它得把四十个候选放在一起看覆盖面，散在三十四个文件里没人看得出
         「读一份合同」这条链断没断。清单与覆盖面断言都在 `ToolDisclosurePolicy(Test)`。
       - **开关关着时连 `list_tools` 自己都不下发**（`ToolDiscoveryTools.isAvailable()`）：
-        模型手上已是全集，再挂个目录只会每轮白付约一千字符。
+        模型手上已是全集，再挂个目录只会每轮白付约一千字符。**例外是 ②b 活跃文档类目裁剪**（dev-board#1064，
+        默认开）：它开着时目录工具进程级可用，由编排器按「本轮藏没藏东西」决定下不下发（`dropIdleCatalog`）。
+      - **与 ②b 的关系**：两者共用 `expandedToolCategories` 这一份放回集与 `list_tools` 这一个入口，
+        ②b 只是把「核心集」换成了「除隐藏类目外的全部」。在 `discloseProgressively` 里的顺序是
+        Jev 预选 → ②b 类目裁剪 → 核心集收窄（开关开着时）。整套回放在披露模式下重跑时有 4 条存量用例红
+        （`cases-capability-prompt` 3 条、`cases-skill` 的 `skill-not-triggered-behavior-preserved` 1 条，断言的都是非核心工具可见），2026-09-29 在
+        未改动的基线上复跑同样是这 4 条，**不是 ②b 引入的**。
       - **真实模型 A/B（2026-09-22，隔离后端 + deepseek-v4-flash，每档 2 场景 × 3 次）**：
         首轮 promptTokens **50692 → 22296（-56%）**，纯对话 T4 中位 11692 → 8048ms；
         「读文件总结」3 次里 2 次与基线同路径（`doc_list_project_files` → `read_document`/

@@ -49,14 +49,18 @@ public class ToolDiscoveryTools implements AgentToolComponent {
      * 而这条卡要治的正是每轮白付。复用组件级可用性闸（{@code isAvailable()}）而不是
      * {@code @ToolMeta.offerToModel}：后者是永久声明，这里要看的是一个启动时读定的配置。
      * 注意这只是「不下发规格」，登记仍在，XML 兜底路径调到它照样执行（只裁 spec、不裁 execute）。
+     *
+     * <p>活跃文档类目裁剪（dev-board#1064）开着时也要它：那种会话里 pdf_* / pptx_* 等整类没下发，
+     * 目录是放回的入口之一。没开文档、什么都没藏的会话里，编排器会把它从本轮下发集里摘掉，
+     * 不在这里判——这里是进程级的闸，看不到会话。
      */
     @Override
     public boolean isAvailable() {
-        return policy == null || policy.isEnabled();
+        return policy == null || policy.isEnabled() || policy.isDocSessionCategoryTrimEnabled();
     }
 
     @ToolMeta(displayName = "查看工具目录", category = "agent")
-    @Tool("List the tools that exist but are NOT in the small default set you were given. "
+    @Tool("List the tools that exist in this session but are NOT in the tool list you were given. "
             + "Call this BEFORE telling the user something cannot be done — the capability is very often here. "
             + "Categories: table, revision, evidence, template, format (fonts/paragraphs/page setup/TOC/footnotes/images), "
             + "spreadsheet, slides, office, pdf, litigation (diagrams), reference, memory, enterprise-data, legal, "
@@ -71,8 +75,9 @@ public class ToolDiscoveryTools implements AgentToolComponent {
                     required = false) String category,
             String conversationId
     ) {
-        List<ToolSpecification> candidates = ToolContextHolder.get() == null
-                ? List.of() : ToolContextHolder.get().sessionTools();
+        ToolContext ctx = ToolContextHolder.get();
+        List<ToolSpecification> candidates = ctx == null ? List.of() : ctx.sessionTools();
+        java.util.Set<String> offered = ctx == null ? null : ctx.offeredTools();
         if (candidates.isEmpty()) {
             return "Error: the tool catalog is not available in this context.";
         }
@@ -84,15 +89,24 @@ public class ToolDiscoveryTools implements AgentToolComponent {
         }
         log.info("Tool: list_tools conv={} category={} candidates={}",
                 conversationId, requested.isEmpty() ? "(all)" : requested, candidates.size());
-        return requested.isEmpty() ? renderIndex(candidates) : renderCategories(candidates, requested);
+        return requested.isEmpty() ? renderIndex(candidates, offered) : renderCategories(candidates, requested);
     }
 
-    /** 目录页：每个类目一行，只给工具名。便宜（全量也就两千字符），所以鼓励模型先查这个。 */
-    private String renderIndex(List<ToolSpecification> candidates) {
+    /**
+     * 目录页：每个类目一行，只给工具名。便宜（全量也就两千字符），所以鼓励模型先查这个。
+     *
+     * <p>列的是「本会话有、但本轮没下发」的工具 = 候选集 − 本轮下发集（dev-board#1064）。
+     * 编排器没告诉我们下发了哪些（{@code offered == null}，旧调用方）时退回「非核心即未下发」——
+     * 那正是只开渐进披露时的真实情况。
+     */
+    private String renderIndex(List<ToolSpecification> candidates, java.util.Set<String> offered) {
         Map<String, List<String>> byCategory = new LinkedHashMap<>();
         for (ToolSpecification spec : candidates) {
             String category = policy.categoryOf(spec.name());
-            if ("core".equals(category)) {
+            boolean alreadyOffered = offered != null
+                    ? offered.contains(spec.name())
+                    : "core".equals(category);
+            if (alreadyOffered || "core".equals(category)) {
                 continue;
             }
             byCategory.computeIfAbsent(category, k -> new ArrayList<>()).add(spec.name());
