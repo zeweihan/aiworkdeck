@@ -3964,6 +3964,8 @@ export default {
       startNewChat, menuSetMode, menuStop, menuState,
       uploadLocalFilesAndAddContext,
       handleReviewSubmit, handleReviewState,
+      // 计划审阅提交前宿主要比对「开审阅的会话」与当前会话（expose 经 proxyRefs，读到的是值）
+      currentConversationId,
     })
 
     return {

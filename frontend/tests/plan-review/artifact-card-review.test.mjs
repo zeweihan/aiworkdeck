@@ -18,3 +18,48 @@ test('计划卡有「打开修订」按钮并发 open-review；useAgentStream �
   assert.match(CARD, /\$emit\('open-review'/)
   assert.match(STREAM, /evt\.operation === 'saved'/)
 })
+
+// ---- 修复轮 1：修订版必须回到开审阅的那个会话 ----
+const OVERVIEW = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
+function loadOnPlanReviewSubmit() {
+  const m = OVERVIEW.match(/\n {4}async onPlanReviewSubmit\(payload\) \{([\s\S]*?)\n {4}\},\n/)
+  assert.ok(m, '找不到 onPlanReviewSubmit')
+  // eslint-disable-next-line no-new-func
+  return new Function('uni', 'return async function (payload) {' + m[1] + '\n}')
+}
+function harness({ currentId, switchOk }) {
+  const log = []
+  const toasts = []
+  const chat = {
+    currentConversationId: currentId,
+    handleReviewSubmit: async (p) => { log.push(['submit', chat.currentConversationId, p.message]) }
+  }
+  const vm = {
+    $t: (k) => k,
+    resolveChatInterface: async () => chat,
+    loadHistoryChat: async ({ conversationId }) => {
+      log.push(['switch', conversationId])
+      if (switchOk) chat.currentConversationId = conversationId
+      return switchOk
+    }
+  }
+  const fn = loadOnPlanReviewSubmit()({ showToast: (o) => toasts.push(o.title) })
+  return { run: (p) => fn.call(vm, p), log, toasts }
+}
+
+test('会话不同：先切回开审阅的会话再发', async () => {
+  const h = harness({ currentId: 'conv-B', switchOk: true })
+  await h.run({ fileId: 1, message: 'M', displayText: 'D', conversationId: 'conv-A' })
+  assert.deepEqual(h.log, [['switch', 'conv-A'], ['submit', 'conv-A', 'M']])
+})
+test('会话不同且切换失败：提示并不发', async () => {
+  const h = harness({ currentId: 'conv-B', switchOk: false })
+  await h.run({ fileId: 1, message: 'M', displayText: 'D', conversationId: 'conv-A' })
+  assert.deepEqual(h.log, [['switch', 'conv-A']])
+  assert.deepEqual(h.toasts, ['chat.reviewConversationSwitchFailed'])
+})
+test('会话相同：不切换直接发', async () => {
+  const h = harness({ currentId: 'conv-A', switchOk: true })
+  await h.run({ fileId: 1, message: 'M', displayText: 'D', conversationId: 'conv-A' })
+  assert.deepEqual(h.log, [['submit', 'conv-A', 'M']])
+})

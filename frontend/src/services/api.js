@@ -1884,7 +1884,6 @@ export function renameProject(projectId, name) {
 
 // ===================== 项目文件管理相关 API =====================
 
-// 获取项目文件列表
 /**
  * 按项目内相对路径反查文件（计划审阅 dev-board#1022）：路径取自对话里「已保存到项目文件」那行。
  * 返回 { fileId, name, parentId }；没有这份文件（HTTP 404）返回 null。
@@ -1901,6 +1900,7 @@ export async function resolveProjectFileByPath(projectId, path) {
   }
 }
 
+// 获取项目文件列表
 export function getProjectFiles(projectId, parentId = null, tree = false) {
   const params = []
   if (parentId !== null) {

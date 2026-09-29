@@ -382,4 +382,5 @@ export default {
   openRevisionBtn: 'Open Revision',
   reviewInProgress: 'Revising · {hunks} change(s) · {comments} comment(s)',
   reviewFileMissing: 'Cannot find the project file for this plan. Revise it in the card instead.',
+  reviewConversationSwitchFailed: 'Could not switch back to the conversation of this plan. The revision was not sent.',
 }

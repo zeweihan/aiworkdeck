@@ -4015,6 +4015,10 @@ export default {
     }
   },
   watch: {
+    // 计划审阅：AI 面板第一次挂上时补交它不在期间编辑器回传的审阅态
+    aiPanelMounted(v) {
+      if (v) this.$nextTick(() => this.flushPlanReviewStates())
+    },
     // 自动合并进行中每秒推一次时钟，让顶栏那句「正在合并…」带上已等秒数；结束即停。
     'documentMergeState.running'(running) {
       clearInterval(this._mergeElapsedTimer)
@@ -6269,17 +6273,39 @@ export default {
      */
     async onPlanReviewSubmit(payload) {
       const chat = await this.resolveChatInterface()
-      if (chat && typeof chat.handleReviewSubmit === 'function') await chat.handleReviewSubmit(payload)
+      if (!chat || typeof chat.handleReviewSubmit !== 'function') return
+      // 修订版必须回到开审阅的那个会话：用户中途切到别的会话（或新对话）时先切回去，
+      // 否则回喂落进错的会话，原会话的计划还停在等审批。切不回去就不发。
+      const target = payload && payload.conversationId
+      if (target && chat.currentConversationId !== target) {
+        const ok = await this.loadHistoryChat({ conversationId: target })
+        if (ok !== true) {
+          uni.showToast({ title: this.$t('chat.reviewConversationSwitchFailed'), icon: 'none' })
+          return
+        }
+      }
+      await chat.handleReviewSubmit(payload)
     },
     /** 编辑器回传审阅态：转给对话里的计划卡；审阅结束后清掉标签上的 review，免得重开时再进审阅。 */
     onPlanReviewState(state) {
-      const chat = this.$refs.chatInterface
-      if (chat && typeof chat.handleReviewState === 'function') chat.handleReviewState(state)
       if (state && (state.status === 'submitted' || state.status === 'discarded')) {
         for (const tab of [...(this.leftFiles || []), ...(this.rightFiles || [])]) {
           if (tab.review && String(tab.id) === String(state.fileId)) tab.review = null
         }
       }
+      if (!state || state.fileId == null) return
+      // AI 面板收着时状态也不能丢：页面上留一份最新的，面板挂上时补交（flushPlanReviewStates）。
+      // 刻意不走 resolveChatInterface：审阅态每次编辑都会回传，那样会反复把用户收起的 AI 面板
+      // 顶开、把右侧停靠面板切走，还会置 restoredLastConversation 打断会话恢复。
+      if (!this._planReviewStates) this._planReviewStates = {}
+      this._planReviewStates[state.fileId] = state
+      this.flushPlanReviewStates()
+    },
+    /** 把页面上留存的审阅态交给 ChatInterface（它不在就等 aiPanelMounted 的 watcher 再来）。 */
+    flushPlanReviewStates() {
+      const chat = this.$refs.chatInterface
+      if (!chat || typeof chat.handleReviewState !== 'function' || !this._planReviewStates) return
+      for (const st of Object.values(this._planReviewStates)) chat.handleReviewState(st)
     },
     /** 写作辅助打开既有资料；全文在线核验由面板中的显式按钮单独触发。 */
     onOpenInsight(payload, pane) {
@@ -7098,7 +7124,7 @@ export default {
                 limit: 60
             })
             // 竞态防护：快速切换会话时，丢弃已不是当前选中会话的旧响应，避免旧数据覆盖新会话
-            if (this.currentConversationId !== chat.conversationId) return
+            if (this.currentConversationId !== chat.conversationId) return false
             // Pass conversationId and messages to ChatInterface via $refs
             if (this.$refs.chatInterface && typeof this.$refs.chatInterface.loadMessages === 'function') {
                 this.$refs.chatInterface.loadMessages(chat.conversationId, msgs)
@@ -7116,9 +7142,12 @@ export default {
                 }))
             }
             this.showHistoryDrawer = false
+            // 计划审阅提交前要确认切会话成功了（onPlanReviewSubmit）；其余调用方不看返回值
+            return true
         } catch (e) {
             console.error('Load chat failed', e)
             uni.showToast({ title: this.$t('workbench.loadConversationFailed'), icon: 'none' })
+            return false
         } finally {
             this.loadingHistory = false
         }

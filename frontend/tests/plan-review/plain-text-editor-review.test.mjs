@@ -67,9 +67,9 @@ test('fileReview.js 六个函数的 URL / 方法 / 请求体', async () => {
   assert.equal(calls[1].data.body, 'b')
 })
 
+// api.request 对 204 resolve null（T6 修复轮 1），替身照这个口径
 test('getReview：204 回 null，200 回快照，其它错误照抛', async () => {
-  const e204 = Object.assign(new Error('no content'), { status: 204 })
-  let svc = await loadService(async () => { throw e204 })
+  let svc = await loadService(async () => null)
   assert.equal(await svc.getReview(1, 2), null)
 
   const snap = { review: { id: 1, status: 'open' }, comments: [] }
@@ -81,10 +81,12 @@ test('getReview：204 回 null，200 回快照，其它错误照抛', async () =
   await assert.rejects(() => svc.getReview(1, 2), /conflict/)
 })
 
-test('deleteComment：204 视为成功', async () => {
-  const e204 = Object.assign(new Error('no content'), { status: 204 })
-  const svc = await loadService(async () => { throw e204 })
+test('deleteComment：204 视为成功，其它错误照抛', async () => {
+  let svc = await loadService(async () => null)
   assert.equal(await svc.deleteComment(1, 2, 3), true)
+  const e409 = Object.assign(new Error('conflict'), { status: 409 })
+  svc = await loadService(async () => { throw e409 })
+  await assert.rejects(() => svc.deleteComment(1, 2, 3), /conflict/)
 })
 
 // ---- 修复轮 1：beforeUnmount 兜底上传必须让路给放弃修改 ----
