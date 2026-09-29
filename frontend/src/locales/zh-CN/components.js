@@ -25,6 +25,13 @@ export default {
   stateDownloadingRuntime: '正在下载运行时 {percent}%',
   stateDownloadingModel: '正在下载模型 {percent}%',
   stateStartingService: '正在启动组件…',
+  // pack 下载完之后的几段（dev-board#1015）：上万个小文件的解压在 Windows 上能走好几分钟，得让人看见它在动
+  stateVerifyingRuntime: '正在校验下载内容…',
+  stateExtractingRuntime: '正在解压 {percent}%',
+  stateCheckingRuntime: '正在核对文件…',
+  stateFinalizingRuntime: '正在写入…',
+  errorStalled: '长时间没有进展，已停止等待。请重试；仍失败可查看 ~/.aiworkdeck/logs 下的后端日志。',
+  errorBackendRestarted: '后台服务已重启，下载被中断，请重试。',
   stateFailed: '下载失败：{msg}',
   progressTotal: '总进度 {done}/{count}（{percent}%）',
   retry: '重试',
@@ -33,8 +40,21 @@ export default {
   chatConfirm: '下载并继续',
   chatCancel: '暂不下载',
   chatInstalling: '正在准备组件…',
+  // 对话拦截卡片下方那一句，随阶段变（dev-board#1015；此前恒为 chatInstalling）
+  chatStage: {
+    preparing: '正在准备组件…',
+    downloading: '正在下载，可以点「后台下载」先继续对话。',
+    verifying: '下载完成，正在校验内容…',
+    extracting: '正在解压安装，文件较多，可能需要几分钟。',
+    checking: '正在核对解压出的文件…',
+    finalizing: '即将完成，正在写入安装目录…',
+    model: '正在下载模型…',
+    starting: '正在启动组件…',
+  },
   chatResending: '组件已就绪，正在继续刚才的请求…',
   chatReadyRetry: '组件已就绪，可以重新发送刚才的请求。',
+  chatReadyContinue: '组件已就绪，可以继续刚才那一步',
+  chatReadyContinueBtn: '继续',
 
   // 后台下载（dev-board#581）：关掉面板/收起卡片后下载继续，完成或失败时全局提示
   backgroundDownload: '后台下载',

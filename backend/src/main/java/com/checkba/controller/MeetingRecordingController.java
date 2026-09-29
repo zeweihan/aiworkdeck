@@ -97,6 +97,24 @@ public class MeetingRecordingController {
         return result;
     }
 
+    /**
+     * 按文件反查会议记录（dev-board#1024，播放器字幕按钮用）。没转写过是常态：
+     * 返回 200 + {@code meeting:null}，不是 404。HashMap：Map.of 不收 null 值。
+     */
+    @GetMapping("/projects/{projectId}/by-file/{fileId}")
+    public Map<String, Object> byFile(
+            @PathVariable Long projectId,
+            @PathVariable Long fileId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberByProject(sessionId, projectId);
+        MeetingRecording meeting = meetingService.findByAudioFile(projectId, fileId)
+                .map(transcriptionService::attachProgress)
+                .orElse(null);
+        Map<String, Object> result = new HashMap<>();
+        result.put("meeting", meeting);
+        return result;
+    }
+
     /** 详情（poll-on-read：转写中会顺手查一次听悟并推进状态）。 */
     @GetMapping("/{meetingId}")
     public MeetingRecording get(

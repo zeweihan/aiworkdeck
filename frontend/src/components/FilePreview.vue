@@ -133,110 +133,20 @@
           </view>
         </view>
 
-        <!-- 视频预览：与图片/音频一致走带鉴权的 blob——直链 <video src> 不带
-             X-Session-Id，后端 401，表现为 MEDIA_ERR_SRC_NOT_SUPPORTED（真机证实） -->
-        <view v-else-if="isVideo" class="preview-video">
-          <!-- autoplay 只在「没有定位时刻」时开：带 media locator 打开的目的是看那一帧，
-               自动播下去等于当场把定位冲掉（P3） -->
-          <video
-            v-if="blobUrl"
-            ref="videoPlayer"
-            :src="blobUrl"
-            controls
-            :autoplay="mediaLocatorSec == null"
-            class="preview-video-player"
-            @error="handleVideoError"
-            @loadeddata="onVideoLoaded"
-            @loadedmetadata="onVideoLoaded"
-          >
-            {{ $t('files.videoNotSupported') }}
-          </video>
-          <view v-else class="loading-video"><text>{{ $t('files.videoLoading') }}</text></view>
-          <!-- EvidenceLink 时间标记：定位到的时刻 + 一键继续播放 -->
-          <view v-if="mediaLocatorSec != null && mediaMarkVisible" class="evidence-media-mark">
-            <text class="emm-label">{{ $t('files.locate.mediaMark', { time: formatClock(mediaLocatorSec) }) }}</text>
-            <view class="emm-btn" @tap="playFromMark"><text>{{ $t('files.locate.playFromMark') }}</text></view>
-            <view class="emm-close" :title="$t('files.locate.close')" @tap="mediaMarkVisible = false"><text>×</text></view>
-          </view>
-        </view>
-
-        <!-- 音频预览：自绘播放器。
-             原来是 v-html 注一个裸 <audio controls>，用的是 Chromium 默认媒体控件——
-             一条深灰药丸，跟整个浅色外壳格格不入，还不认应用的配色。
-             播放器本体是 new window.Audio()：模板里写不了 <audio>，uni-h5 的编译器
-             会把这个标签替换成不存在的组件（FeedbackWidget 与会议录音面板同坑）。 -->
-        <view v-else-if="isAudio" class="preview-audio">
-           <view class="audio-card">
-            <view class="audio-head">
-              <svg class="audio-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path v-for="(d, gi) in ICONS.audioLines" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <text class="audio-name">{{ file.name }}</text>
-            </view>
-
-            <view v-if="!blobUrl" class="audio-loading"><text>{{ $t('files.audioLoading') }}</text></view>
-
-            <template v-else>
-              <!-- 进度条：整条都可点可拖，命中区比视觉轨道高（4px 的轨道点不准） -->
-              <view
-                ref="audioTrack"
-                class="audio-track"
-                @mousedown="onSeekDown"
-              >
-                <view class="audio-track-rail"></view>
-                <view class="audio-track-fill" :style="{ width: audioProgressPct + '%' }"></view>
-                <!-- EvidenceLink 时间标记：定位时刻在轨道上的刻度（P3） -->
-                <view v-if="mediaMarkPct != null" class="audio-track-mark" :style="{ left: mediaMarkPct + '%' }"></view>
-                <view class="audio-track-knob" :style="{ left: audioProgressPct + '%' }"></view>
-              </view>
-
-              <view class="audio-times">
-                <text class="audio-time">{{ formatClock(audioCurrent) }}</text>
-                <text class="audio-time">{{ formatClock(audioDuration) }}</text>
-              </view>
-
-              <view v-if="mediaLocatorSec != null && mediaMarkVisible" class="evidence-media-mark is-inline">
-                <text class="emm-label">{{ $t('files.locate.mediaMark', { time: formatClock(mediaLocatorSec) }) }}</text>
-                <view class="emm-btn" @tap="playFromMark"><text>{{ $t('files.locate.playFromMark') }}</text></view>
-                <view class="emm-close" :title="$t('files.locate.close')" @tap="mediaMarkVisible = false"><text>×</text></view>
-              </view>
-
-              <view class="audio-controls">
-                <view class="audio-play" :title="audioPlaying ? $t('files.audioPause') : $t('files.audioPlay')" @tap="toggleAudioPlay">
-                  <svg class="audio-play-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path
-                      v-for="(d, gi) in (audioPlaying ? ICONS.pause : ICONS.play)"
-                      :key="gi"
-                      :d="d"
-                      :fill="audioPlaying ? 'none' : 'currentColor'"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </view>
-
-                <view class="audio-side">
-                  <!-- 倍速：Chromium 原生控件的溢出菜单里本来就有，换成自绘不能把它弄丢 -->
-                  <view class="audio-rate" :title="$t('files.audioRate')" @tap="cycleAudioRate">
-                    <text>{{ audioRate }}x</text>
-                  </view>
-                  <view class="audio-vol">
-                    <view class="audio-vol-btn" :title="$t('files.audioMute')" @tap="toggleAudioMute">
-                      <svg class="audio-vol-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path v-for="(d, gi) in (audioMuted ? ICONS.volumeMute : ICONS.volume)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                      </svg>
-                    </view>
-                    <view ref="audioVolTrack" class="audio-vol-track" @mousedown="onVolumeDown">
-                      <view class="audio-vol-rail"></view>
-                      <view class="audio-vol-fill" :style="{ width: (audioMuted ? 0 : audioVolume * 100) + '%' }"></view>
-                    </view>
-                  </view>
-                </view>
-              </view>
-            </template>
-           </view>
+        <!-- 视频 / 音频：统一自绘播放器（dev-board#1023/#1024/#1025）。媒体元素、取源（直链
+             Range 流式，失败回退 blob）、控制条、字幕、快捷键与 EvidenceLink 时间定位都在
+             components/media/MediaPlayer.vue；key 绑文件，换文件或文件内容更新即整份重建。 -->
+        <view v-else-if="isVideo || isAudio" class="preview-media">
+          <MediaPlayer
+            ref="mediaPlayer"
+            :key="mediaKey"
+            :kind="isVideo ? 'video' : 'audio'"
+            :file="file"
+            :project-id="projectId"
+            :locator-sec="mediaLocatorSec"
+            @locator-consumed="onMediaLocatorConsumed"
+            @error="onMediaError"
+          />
         </view>
 
         <!-- 文本预览 -->
@@ -285,6 +195,9 @@ import { getFileLocalPath } from '@/services/api.js'
 import { host } from '@/services/host.js'
 import { revealInFolderKey } from '@/utils/windowChrome.js'
 import { shouldAcceptResponse } from '@/utils/requestGeneration.js'
+import { previewKindOf } from '@/utils/media/mediaTypes.js'
+import { shouldGrabMediaFocus } from '@/utils/media/mediaShortcuts.js'
+import MediaPlayer from '@/components/media/MediaPlayer.vue'
 import {
   parsePdfLocator, parseImageRect, parseMediaStartSec,
   imageTransform, imageRectBox, rotatedDisplaySize, normalizeRotation,
@@ -305,6 +218,7 @@ const IMAGE_MAX_SCALE = 8
 
 export default {
   name: 'FilePreview',
+  components: { MediaPlayer },
   props: {
     file: {
       type: Object,
@@ -323,6 +237,11 @@ export default {
     showEditBtn: {
       type: Boolean,
       default: true
+    },
+    // 播放器登记转写（生成字幕）要项目 id；file 上带 projectId 时以 file 为准，这里是兜底
+    projectId: {
+      type: [String, Number],
+      default: null
     }
   },
   data() {
@@ -358,22 +277,13 @@ export default {
       // 旋转（0/90/180/270，顺时针）：扫描件、手机拍的现场照常常是躺着的，
       // 定位框要跟着一起转（换算在 utils/evidenceLocator.js 的 imageRectBox）
       imageRotation: 0,
-      // 自绘音频播放器。实例本身（window.Audio）不进 data——它不需要响应式，
-      // 塞进 data 会被 Vue 代理一层，媒体元素被 Proxy 包住后行为不可预期。
-      audioPlaying: false,
-      audioCurrent: 0,
-      audioDuration: 0,
-      audioVolume: 1,
-      audioMuted: false,
-      audioRate: 1,
-      // EvidenceLink 定位：locator prop 的本地副本 + 三类可见态。
+      // EvidenceLink 定位：locator prop 的本地副本 + 可见态。
       // 图片画框常驻（点框或工具栏按钮收起），只有压暗周边的遮罩 3s 后淡掉；
-      // pdf 引文卡与音视频时间标记都由用户显式关闭。
+      // pdf 引文卡由用户显式关闭；音视频时间标记归 MediaPlayer 管。
       appliedLocator: null,
       evidenceRectVisible: false,
       evidenceRectUndimmed: false,
-      pdfLocateVisible: false,
-      mediaMarkVisible: false
+      pdfLocateVisible: false
     }
   },
   computed: {
@@ -419,19 +329,17 @@ export default {
       const type = this.file.fileType.toLowerCase()
       return ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(type)
     },
+    // 扩展名表单一来源：utils/media/mediaTypes.js（ogg 按音频，只有 ogv 当视频）
     isVideo() {
-      if (!this.file || !this.file.fileType) return false
-      const type = this.file.fileType.toLowerCase()
-      return ['mp4', 'webm', 'ogg', 'mov', 'mkv', 'avi'].includes(type)
+      return !!this.file && previewKindOf(this.file.fileType) === 'video'
     },
     isAudio() {
-       if (!this.file || !this.file.fileType) return false
-       const type = this.file.fileType.toLowerCase()
-       return ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac'].includes(type)
+      return !!this.file && previewKindOf(this.file.fileType) === 'audio'
     },
-    audioProgressPct() {
-      if (!this.audioDuration) return 0
-      return Math.min(100, Math.max(0, (this.audioCurrent / this.audioDuration) * 100))
+    // 换文件或 AI 改完文件（wpsFileId 变）时播放器整份重建
+    mediaKey() {
+      const f = this.file
+      return f ? 'media-' + f.id + '-' + (f.wpsFileId || '') : 'media-none'
     },
     isText() {
       if (!this.file || !this.file.fileType) return false
@@ -489,13 +397,6 @@ export default {
     mediaLocatorSec() {
       return parseMediaStartSec(this.appliedLocator)
     },
-    // 音频轨道上的定位刻度（百分比）；时长未知或定位超出时长就不画
-    mediaMarkPct() {
-      const sec = this.mediaLocatorSec
-      if (sec == null || !this.mediaMarkVisible || !(this.audioDuration > 0)) return null
-      if (sec > this.audioDuration) return null
-      return (sec / this.audioDuration) * 100
-    },
     evidenceRectStyle() {
       if (!this.evidenceRectVisible || !this.imageReady) return null
       const box = imageRectBox(this.imageLocatorRect, this.imageView)
@@ -515,17 +416,6 @@ export default {
         console.log('FilePreview file 变化:', newFile)
         this.reloadPreview(newFile)
       }
-    },
-    // 音频的 blob 是异步拉下来的（要带 X-Session-Id，直链拿不到），
-    // 播放器实例只能等 blobUrl 落地再建。换文件时 reloadPreview 会先清空它。
-    blobUrl(url) {
-      this.teardownAudio()
-      this.teardownVideoLocator()
-      if (url && this.isAudio) this.setupAudio(url)
-      // 视频的 seek 不能只指望模板上的 @loadeddata/@loadedmetadata：uni 在各端把
-      // <video> 编译成自家组件，事件名与 e.target 都不保证是原生那一套。元素一挂出来
-      // 就直接在真的 <video> 上挂一次原生监听，定位才不会静默落空。
-      if (url && this.isVideo) this.$nextTick(() => this.attachVideoLocator())
     },
     // 宿主 openFile(file, {locator}) 落到 tab.pendingLocator → 这里的 prop。收到即拷贝成
     // appliedLocator（pdf/image/media 三类都按它渲染），然后通知宿主 locator-consumed 清空
@@ -548,8 +438,6 @@ export default {
     }
   },
   beforeUnmount() {
-    this.teardownAudio()
-    this.teardownVideoLocator()
     this.clearEvidenceRectTimers()
     if (this.blobUrl) {
       URL.revokeObjectURL(this.blobUrl)
@@ -569,99 +457,6 @@ export default {
     this.syncImageViewportListeners()
   },
   methods: {
-    // ==================== 自绘音频播放器 ====================
-    setupAudio(url) {
-      try {
-        const a = new window.Audio(url)
-        a.preload = 'metadata'
-        a.volume = this.audioVolume
-        a.playbackRate = this.audioRate
-        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0; this.seekToLocator() })
-        a.addEventListener('timeupdate', () => { this.audioCurrent = a.currentTime || 0 })
-        a.addEventListener('play', () => { this.audioPlaying = true })
-        a.addEventListener('pause', () => { this.audioPlaying = false })
-        a.addEventListener('ended', () => { this.audioPlaying = false; this.audioCurrent = 0 })
-        this._audio = a
-      } catch (e) {
-        console.warn('音频播放器创建失败:', e)
-      }
-    },
-    teardownAudio() {
-      this.detachAudioDrag()
-      if (this._audio) {
-        try { this._audio.pause() } catch (e) { /* ignore */ }
-        this._audio.src = ''
-        this._audio = null
-      }
-      this.audioPlaying = false
-      this.audioCurrent = 0
-      this.audioDuration = 0
-    },
-    toggleAudioPlay() {
-      if (!this._audio) return
-      if (this._audio.paused) this._audio.play().catch(() => {})
-      else this._audio.pause()
-    },
-    toggleAudioMute() {
-      if (!this._audio) return
-      this.audioMuted = !this.audioMuted
-      this._audio.muted = this.audioMuted
-    },
-    cycleAudioRate() {
-      const steps = [1, 1.25, 1.5, 2, 0.75]
-      this.audioRate = steps[(steps.indexOf(this.audioRate) + 1) % steps.length]
-      if (this._audio) this._audio.playbackRate = this.audioRate
-    },
-    formatClock(sec) {
-      const s = Math.max(0, Math.floor(sec || 0))
-      const m = Math.floor(s / 60)
-      return m + ':' + String(s % 60).padStart(2, '0')
-    },
-    // 进度条与音量条共用「按下即生效、按住可拖」的一套：监听挂 window，
-    // 否则拖出轨道范围就收不到 mouseup，滑块会一直粘着鼠标
-    ratioFromEvent(el, e) {
-      const rect = el.getBoundingClientRect()
-      if (!rect.width) return 0
-      return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-    },
-    onSeekDown(e) {
-      if (!this._audio || !this.audioDuration) return
-      const el = this.$refs.audioTrack
-      const apply = (ev) => {
-        const t = this.ratioFromEvent(el, ev) * this.audioDuration
-        this._audio.currentTime = t
-        this.audioCurrent = t
-      }
-      apply(e)
-      this.attachAudioDrag(apply)
-    },
-    onVolumeDown(e) {
-      if (!this._audio) return
-      const el = this.$refs.audioVolTrack
-      const apply = (ev) => {
-        const v = this.ratioFromEvent(el, ev)
-        this.audioVolume = v
-        this.audioMuted = v === 0
-        this._audio.volume = v
-        this._audio.muted = this.audioMuted
-      }
-      apply(e)
-      this.attachAudioDrag(apply)
-    },
-    attachAudioDrag(apply) {
-      this.detachAudioDrag()
-      this._audioDragMove = (ev) => apply(ev)
-      this._audioDragUp = () => this.detachAudioDrag()
-      window.addEventListener('mousemove', this._audioDragMove)
-      window.addEventListener('mouseup', this._audioDragUp)
-    },
-    detachAudioDrag() {
-      if (this._audioDragMove) window.removeEventListener('mousemove', this._audioDragMove)
-      if (this._audioDragUp) window.removeEventListener('mouseup', this._audioDragUp)
-      this._audioDragMove = null
-      this._audioDragUp = null
-    },
-
     // file watch 与 wpsFileId watch 共用的加载分发（原 file watch handler 逻辑原样抽出）
     reloadPreview(newFile) {
       // 换文件：定位副本随之作废（新文件的 locator 会经 prop watch 重新 apply）
@@ -670,9 +465,6 @@ export default {
       this.evidenceRectVisible = false
       this.evidenceRectUndimmed = false
       this.pdfLocateVisible = false
-      this.mediaMarkVisible = false
-      this.teardownVideoLocator()
-      this._videoEl = null
       // 清理旧的 blobUrl
       if (this.blobUrl) {
         URL.revokeObjectURL(this.blobUrl)
@@ -691,10 +483,13 @@ export default {
         this.renderDocx()
       } else if (this.isPptx && this.usePptxPreview) {
         this.renderPptx()
-      } else if (this.isImage || this.isVideo || this.isAudio || this.isPdf) {
+      } else if (this.isImage || this.isPdf) {
         this.loadMediaResource()
       } else if (this.isArchive) {
         this.loadArchiveEntries()
+      } else if (this.isVideo || this.isAudio) {
+        // 音视频由 MediaPlayer 自己取源；这里只负责焦点无主时把快捷键接过来
+        this.$nextTick(() => this.focusMediaPlayer())
       }
     },
     // 换文件（或重新加载同一文件）时清空缩放平移状态。真正的「适应窗口」尺寸
@@ -941,14 +736,15 @@ export default {
       this.evidenceRectVisible = false
       this.evidenceRectUndimmed = false
       this.pdfLocateVisible = !!this.pdfLocate
-      this.mediaMarkVisible = this.mediaLocatorSec != null
       if (this.imageLocatorRect) {
         // 框常驻（用户要缩放、旋转之后核对它还罩不罩得住那块内容），
         // 只有压暗周边的遮罩 3s 后淡掉
         this.evidenceRectVisible = true
         this._rectFadeTimer = setTimeout(() => { this.evidenceRectUndimmed = true }, 3000)
       }
-      this.seekToLocator()
+      // 音视频：同一文件再次被点中时播放器已在，要它重新落一次定位（时刻相同时
+      // locatorSec 不变、播放器的 watch 不会触发）。等一帧让新的 locatorSec 先传下去。
+      this.$nextTick(() => this.relocateMedia())
       const f = this.file
       if (f && f.id != null) this.$nextTick(() => this.$emit('locator-consumed', f.id))
     },
@@ -988,63 +784,33 @@ export default {
         fail: () => { uni.showToast({ title: this.$t('files.locate.quoteCopyFailed'), icon: 'none' }) }
       })
     },
-    // uni 的 <video> 在不同平台的编译产物不同：ref 拿到的可能是组件实例、也可能已经是
-    // 原生元素，两种都要能落到真正的 <video> 上，否则 seek 会静默失效。
-    getVideoEl() {
-      if (this._videoEl) return this._videoEl
-      const ref = this.$refs.videoPlayer
-      const el = ref && (ref.$el || ref)
-      if (!el) return null
-      if (el.tagName === 'VIDEO') return el
-      return el.querySelector ? el.querySelector('video') : null
+    relocateMedia() {
+      const p = this.$refs.mediaPlayer
+      if (p && typeof p.relocate === 'function') p.relocate()
     },
-    // 在真的 <video> 上挂原生 loadedmetadata/loadeddata，元数据一就绪就把定位落下去
-    attachVideoLocator() {
-      const el = this.getVideoEl()
-      if (!el || el === this._videoBound) return
-      this.teardownVideoLocator()
-      this._videoBound = el
-      this._videoEl = el
-      const onReady = () => this.seekToLocator()
-      el.addEventListener('loadedmetadata', onReady)
-      el.addEventListener('loadeddata', onReady)
-      this._videoOff = () => {
-        el.removeEventListener('loadedmetadata', onReady)
-        el.removeEventListener('loadeddata', onReady)
-      }
-      this.seekToLocator()
+    // 播放器 seek 落地。宿主在 applyLocator 时已被通知过一次，这里再报一次是幂等的
+    // （onLocatorConsumed 只清 pendingLocator），保证「定位真正落下」之后宿主状态一定干净。
+    onMediaLocatorConsumed() {
+      const f = this.file
+      if (f && f.id != null) this.$emit('locator-consumed', f.id)
     },
-    teardownVideoLocator() {
-      if (this._videoOff) this._videoOff()
-      this._videoOff = null
-      this._videoBound = null
+    onMediaError(detail) {
+      const status = detail && detail.status
+      uni.showToast({
+        title: status
+          ? this.$t('files.resourceLoadFailedStatus', { status })
+          : (this.isVideo ? this.$t('files.videoPlayFailed') : this.$t('files.audioPlayFailed')),
+        icon: 'none'
+      })
     },
-    // media 定位：seek 到 startMs 并**停在那一帧**——自动播下去等于当场把定位冲掉。
-    // 元数据没就绪时 currentTime 写不进去，loadedmetadata/loadeddata 会再调一次。
-    seekToLocator() {
-      const sec = this.mediaLocatorSec
-      if (sec == null) return
-      const el = this.isAudio ? this._audio : this.getVideoEl()
-      if (!el) return
-      try {
-        el.currentTime = sec
-        if (typeof el.pause === 'function') el.pause()
-      } catch (e) { /* metadata 未就绪，等下一次事件回调 */ }
-    },
-    // 时间标记上的「从这里播放」
-    playFromMark() {
-      const sec = this.mediaLocatorSec
-      const el = this.isAudio ? this._audio : this.getVideoEl()
-      if (!el) return
-      try {
-        if (sec != null && Math.abs((el.currentTime || 0) - sec) > 0.5) el.currentTime = sec
-        const p = el.play()
-        if (p && typeof p.catch === 'function') p.catch(() => {})
-      } catch (e) { /* 播放失败交给原生控件的报错，不再弹框打断 */ }
-    },
-    onVideoLoaded(e) {
-      if (e && e.target) this._videoEl = e.target
-      this.seekToLocator()
+    // 打开 / 切换音视频文件时把焦点交给播放器根元素，空格/方向键立刻可用。
+    // 焦点在资源管理器（带 tabindex 的文件树）上也要接过来——否则按键全打到文件树，
+    // ↑↓ 会切走选中文件把播放器卸掉；只有用户正在输入（输入框、可编辑区、编辑器 iframe）时不抢。
+    focusMediaPlayer() {
+      if (typeof document === 'undefined') return
+      if (!shouldGrabMediaFocus(document.activeElement)) return
+      const p = this.$refs.mediaPlayer
+      if (p && typeof p.focusRoot === 'function') p.focusRoot()
     },
     // uni 的 <view> 在 H5 端 $refs 拿到的有时是组件实例（带 $el），有时已经是原生
     // DOM 节点，取决于具体编译产物——renderPptx/renderDocx 已经踩过这个坑，同款兜底。
@@ -1179,34 +945,6 @@ export default {
       console.error('图片加载失败:', e)
       uni.showToast({
         title: this.$t('files.imageLoadFailed'),
-        icon: 'none'
-      })
-    },
-    handleVideoError(e) {
-      console.error('视频加载失败:', e)
-      // 获取更详细的错误信息
-      const video = e.target
-      if (video && video.error) {
-        const errorCodes = {
-          1: 'MEDIA_ERR_ABORTED - 用户中止',
-          2: 'MEDIA_ERR_NETWORK - 网络错误',
-          3: 'MEDIA_ERR_DECODE - 解码错误（可能是编码格式不支持）',
-          4: 'MEDIA_ERR_SRC_NOT_SUPPORTED - 不支持的视频格式或编码'
-        }
-        console.error('视频错误代码:', video.error.code, errorCodes[video.error.code] || '未知错误')
-        console.error('视频错误消息:', video.error.message)
-      }
-      console.log('当前 blobUrl:', this.blobUrl)
-      console.log('视频 src:', video ? video.src : 'N/A')
-      uni.showToast({
-        title: this.$t('files.videoPlayFailed'),
-        icon: 'none'
-      })
-    },
-    handleAudioError(e) {
-      console.error('音频加载失败:', e)
-      uni.showToast({
-        title: this.$t('files.audioPlayFailed'),
         icon: 'none'
       })
     },
@@ -1423,64 +1161,6 @@ export default {
   background: var(--awd-surface-2);
 }
 
-/* EvidenceLink 音视频时间标记（P3）：视频浮在画面上，音频跟在时间行下面 */
-.evidence-media-mark {
-  position: absolute;
-  top: 16rpx;
-  right: 16rpx;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: 12rpx;
-  padding: 8rpx 12rpx;
-  background: var(--awd-surface);
-  border: 1rpx solid var(--awd-border);
-  border-left: 6rpx solid var(--awd-accent);
-  border-radius: 8rpx;
-  box-shadow: 0 4rpx 14rpx rgba(15, 23, 42, 0.16);
-}
-
-/* 音频卡片一律 px（见「自绘音频播放器」注释），内联那份跟着换单位 */
-.evidence-media-mark.is-inline {
-  position: static;
-  margin-top: 12px;
-  gap: 10px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  box-shadow: none;
-}
-
-.emm-label {
-  font-size: 22rpx;
-  color: var(--awd-accent-text);
-  font-weight: 600;
-}
-
-.emm-btn {
-  padding: 4rpx 14rpx;
-  border: 1rpx solid var(--awd-border-strong);
-  border-radius: 6rpx;
-  font-size: 22rpx;
-  color: var(--awd-text);
-  cursor: pointer;
-}
-
-.emm-btn:hover {
-  background: var(--awd-surface-2);
-}
-
-.emm-close {
-  padding: 0 6rpx;
-  font-size: 26rpx;
-  line-height: 1;
-  color: var(--awd-text-3);
-  cursor: pointer;
-}
-
-.emm-close:hover {
-  color: var(--awd-text);
-}
-
 /* Word 文档零配置只读渲染容器（docx-preview） */
 .preview-docx {
   width: 100%;
@@ -1657,239 +1337,10 @@ export default {
   font-size: 28rpx;
 }
 
-.preview-video {
-  position: relative;
+/* 音视频：MediaPlayer 占满预览区（播放器内部尺寸一律 px，见 components/media/） */
+.preview-media {
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #000;
-}
-
-.preview-video-player {
-  width: 100%;
-  height: 100%;
-}
-
-.loading-video {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  color: var(--awd-text-on-accent);
-  font-size: 28rpx;
-}
-
-/* ---- 自绘音频播放器 ----
-   尺寸一律用 px：这块是桌面端的固定形制，不该跟着 rpx 一起做视口缩放。 */
-.preview-audio {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: var(--awd-bg);
-}
-
-.audio-card {
-  width: 100%;
-  max-width: 460px;
-  padding: 24px;
-  box-sizing: border-box;
-  background: var(--awd-surface);
-  border: 1px solid var(--awd-border);
-  border-radius: 12px;
-  box-shadow: 0 6px 24px rgba(18, 52, 77, 0.06);
-}
-
-.audio-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
-.audio-icon {
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  color: var(--awd-accent-text);
-}
-
-.audio-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  color: var(--awd-text);
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.audio-loading {
-  padding: 12px 0;
-  font-size: 12px;
-  color: var(--awd-text-3);
-  text-align: center;
-}
-
-/* 轨道：视觉 4px，命中区 16px。4px 高的东西点不准，也拖不住 */
-.audio-track {
-  position: relative;
-  height: 16px;
-  cursor: pointer;
-}
-
-.audio-track-rail,
-.audio-track-fill {
-  position: absolute;
-  top: 6px;
-  left: 0;
-  height: 4px;
-  border-radius: 2px;
-}
-
-.audio-track-rail {
-  right: 0;
-  background: var(--awd-surface-2);
-}
-
-.audio-track-fill {
-  background: var(--awd-accent);
-}
-
-/* EvidenceLink 定位刻度：告诉用户「证据在这条录音的哪一处」，比进度旋钮矮一档，
-   不吃鼠标（点它要落到轨道上去 seek） */
-.audio-track-mark {
-  position: absolute;
-  top: 2px;
-  width: 2px;
-  height: 12px;
-  margin-left: -1px;
-  background: var(--awd-danger);
-  pointer-events: none;
-}
-
-.audio-track-knob {
-  position: absolute;
-  top: 3px;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
-  border-radius: 50%;
-  background: var(--awd-accent);
-  box-shadow: 0 1px 4px rgba(46, 90, 80, 0.4);
-}
-
-.audio-times {
-  display: flex;
-  justify-content: space-between;
-  margin: 4px 0 14px;
-}
-
-.audio-time {
-  font-size: 11px;
-  color: var(--awd-text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.audio-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.audio-play {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--awd-accent);
-  color: var(--awd-text-on-accent);
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.audio-play:hover {
-  background: var(--awd-accent-hover);
-}
-
-.audio-play-glyph {
-  width: 18px;
-  height: 18px;
-}
-
-.audio-side {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.audio-rate {
-  min-width: 40px;
-  padding: 4px 8px;
-  border: 1px solid var(--awd-border);
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--awd-text);
-  text-align: center;
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
-}
-
-.audio-rate:hover {
-  border-color: var(--awd-mint);
-  color: var(--awd-accent-text);
-}
-
-.audio-vol {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.audio-vol-btn {
-  width: 20px;
-  height: 20px;
-  color: var(--awd-text);
-  cursor: pointer;
-}
-
-.audio-vol-glyph {
-  width: 20px;
-  height: 20px;
-}
-
-.audio-vol-track {
-  position: relative;
-  width: 72px;
-  height: 16px;
-  cursor: pointer;
-}
-
-.audio-vol-rail,
-.audio-vol-fill {
-  position: absolute;
-  top: 6px;
-  left: 0;
-  height: 4px;
-  border-radius: 2px;
-}
-
-.audio-vol-rail {
-  right: 0;
-  background: var(--awd-surface-2);
-}
-
-.audio-vol-fill {
-  background: var(--awd-mint);
 }
 
 .btn-open-local {

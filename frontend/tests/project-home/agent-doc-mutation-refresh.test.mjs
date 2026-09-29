@@ -16,6 +16,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createSerialQueue } from '../../src/utils/asyncSerialize.js'
+import { loadBudgetMs } from '../../src/utils/editorLoadFailure.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '../../src/utils/docEvents.js'
 import { createAuthorNameResolver } from '../../src/utils/editorAuthor.js'
 
@@ -43,10 +44,10 @@ function loadEditorMethods() {
   const factory = new Function(
     'getFileBytesUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
-    'getAuthHeaders', 'host', 'DOC_MUTATED_EVENT', 'createAuthorNameResolver', body)
+    'getAuthHeaders', 'host', 'DOC_MUTATED_EVENT', 'createAuthorNameResolver', 'loadBudgetMs', body)
   return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),
     null, null, null, null, null, null, null, null, DOC_MUTATED_EVENT,
-    createAuthorNameResolver).methods
+    createAuthorNameResolver, loadBudgetMs).methods
 }
 
 // ---- 宿主发信端（project-overview 的 AI 指令路由）----

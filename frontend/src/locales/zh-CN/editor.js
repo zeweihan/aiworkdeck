@@ -34,6 +34,7 @@ export default {
     // 读取超时/连不上本机服务 = 确认服务在跑后重试有意义，其余沿用 loadFailed。
     fileMissingFailed: '文件已不在磁盘上',
     downloadFailed: '读取失败，请确认本机服务正在运行',
+    docOpenFailed: '文档无法打开',
     ready: '就绪',
     reloading: '重新加载中…',
     reloadFailed: '重新加载失败，内容已过期',
@@ -57,6 +58,17 @@ export default {
   dlProgress: '文档内容 {loaded} / {total}',
   dlLoadedOnly: '已读取文档内容 {size}',
   firstOpenHint: '首次打开需初始化文档引擎，大文档会稍慢，请稍候',
+  // 「文档无法打开」终态（dev-board#1018）：引擎拒收损坏文件，或重启重装后仍无响应。
+  openFailed: {
+    title: '文档无法打开：引擎无响应或文件损坏',
+    code: '诊断码：{code}',
+    previewNotice: '文档无法在编辑器中打开（诊断码：{code}），以下为只读预览',
+    readOnlyPreview: '用只读预览打开',
+    download: '下载原文件',
+    retry: '重启编辑器再试一次',
+    previewFailed: '只读预览也无法渲染该文件：{reason}',
+    downloadFailedToast: '下载原文件失败：{reason}',
+  },
   retryLoad: '一直卡着？点此重试',
   bootFailedHint: '文档引擎启动失败：{reason}。可能是网络或公司防火墙拦截了引擎资源，请检查网络后重试。',
   review: {

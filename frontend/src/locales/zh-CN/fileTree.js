@@ -34,7 +34,7 @@ export default {
   noOtherFolders: '暂无其他文件夹',
   // 右键菜单
   compareDocuments: '对比文档',
-  transcribe: '转写',
+  transcribe: '语音转文字',
   transcribeSubmitted: '已提交转写，请在会议录音面板查看进度',
   transcribeRegistered: '已加入会议录音面板，配置转写服务后可开始转写',
   transcribeFailed: '转写发起失败',

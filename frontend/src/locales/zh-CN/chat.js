@@ -263,7 +263,7 @@ export default {
   // 音频附件（dev-board#814）：模型读的是转写稿，没有转写稿它只拿得到一个文件名。
   // 发送之前就说清楚，别让用户以为 AI 听了这段录音——这是能不能信任回答的分界。
   audioNotTranscribed: '「{name}」尚未转写，AI 只能看到文件名、读不到里面说了什么。',
-  audioNotTranscribedMore: '「{name}」等 {count} 个音频尚未转写，AI 只能看到文件名。',
+  audioNotTranscribedMore: '「{name}」等 {count} 个音视频文件尚未转写，AI 只能看到文件名。',
   audioTranscribeAction: '转写',
   pastedImageName: '粘贴图片-{stamp}',
   pastedImageUploadFailed: '{count} 张粘贴图片保存失败，未随本条消息发送',

@@ -181,7 +181,7 @@ public class FileTools implements AgentToolComponent {
             // 音频（dev-board#814）：Tika 对 mp3 抽回来的是 ID3 标签里的标题/艺术家/专辑，
             // 非空，于是会被当成「文件正文」原样喂给模型。按路径查不到转写稿，所以这里
             // 只说事实并指向查得到的那个入口（extract_file_text + fileId）。
-            if (com.checkba.service.meeting.MeetingRecordingService.isAudioFileName(file.getName())) {
+            if (com.checkba.service.meeting.MeetingRecordingService.isTranscribableMediaName(file.getName())) {
                 return "Warning: " + com.checkba.service.file.ProjectFileTextExtractor
                         .audioNoticeByPath(file.getName());
             }
@@ -445,6 +445,41 @@ public class FileTools implements AgentToolComponent {
             @P(value = "样式画像 JSON（可选；docx_inspect_template 的输出或其子集。不填自动取项目 _模板/画像.json，"
                     + "没有则用系统默认 / 律所标准格式）", required = false) String styleProfileJson
     ) {
+        // 同一轮对同一目标再生成一次：直接复用第一次那份（dev-board#1017）。编辑器没就绪时模型常转头
+        // 用 write_docx 重来，而带文件夹的路径走 ConflictPolicy.RENAME——每试一次多一份「 (n)」同名文档。
+        String runKey = (fileName == null || fileName.isBlank()) ? null
+                : com.checkba.service.ai.EditorBridgeService.newDocxKey(parentFolderId, fileName);
+        if (runKey != null) {
+            Long existingId = editorBridgeService.generatedInRun(runKey);
+            if (existingId != null) {
+                ProjectFile existing = projectFileService.findFile(existingId).orElse(null);
+                if (existing != null && !Boolean.TRUE.equals(existing.getIsDeleted())) {
+                    return com.checkba.service.ai.EditorBridgeService.reusedGeneratedMessage(
+                            existing.getName(), existing.getId());
+                }
+                editorBridgeService.forgetGenerated(runKey);
+            }
+        }
+        String out = writeDocxDispatch(fileName, markdownContent, projectId, parentFolderId, styleProfileJson);
+        Long createdId = successDbId(out);
+        if (runKey != null && createdId != null) {
+            editorBridgeService.noteGenerated(runKey, createdId);
+        }
+        return out;
+    }
+
+    private static final java.util.regex.Pattern SUCCESS_DB_ID =
+            java.util.regex.Pattern.compile("^\\{\"status\":\"success\", \"db_id\":(\\d+)");
+
+    /** write_docx 成功回执里的 db_id；不是成功回执返回 null。 */
+    static Long successDbId(String out) {
+        if (out == null) return null;
+        java.util.regex.Matcher m = SUCCESS_DB_ID.matcher(out);
+        return m.find() ? Long.valueOf(m.group(1)) : null;
+    }
+
+    private String writeDocxDispatch(String fileName, String markdownContent, Long projectId,
+                                     Long parentFolderId, String styleProfileJson) {
         if (parentFolderId != null) {
             // 指定目标文件夹时走 AiDocxExportService（正确的路径构建 + StorageService 落盘 + RAG 刷新）
             log.info("Tool: write_docx (folder={}) called for {}", parentFolderId, fileName);
@@ -504,7 +539,10 @@ public class FileTools implements AgentToolComponent {
             com.vladsch.flexmark.util.data.MutableDataSet options =
                     com.checkba.service.ai.AiDocxExportService.markdownOptions();
             Parser parser = Parser.builder(options).build();
-            com.vladsch.flexmark.util.ast.Node document = parser.parse(markdownContent);
+            // XML 1.0 不允许的控制字符原样进 document.xml 会让整份 docx 打不开（dev-board#1018）
+            com.vladsch.flexmark.util.ast.Node document = parser.parse(
+                    com.checkba.service.ai.AiDocxExportService.stripXmlInvalidChars(
+                            markdownContent == null ? "" : markdownContent));
 
             // Flexmark docx-converter usage pattern:
             File file = targetPath.toFile();

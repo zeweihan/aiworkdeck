@@ -34,7 +34,7 @@ export default {
   noOtherFolders: 'No other folders',
   // Context menu
   compareDocuments: 'Compare Documents',
-  transcribe: 'Transcribe',
+  transcribe: 'Transcribe speech',
   transcribeSubmitted: 'Transcription submitted. Check progress in the meeting recordings panel.',
   transcribeRegistered: 'Added to the meeting recordings panel. Configure a transcription service to start.',
   transcribeFailed: 'Failed to start transcription',

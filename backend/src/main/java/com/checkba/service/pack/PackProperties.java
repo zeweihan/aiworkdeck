@@ -62,6 +62,13 @@ public class PackProperties {
     /** 单个压缩包解压后的总体积上限（字节）。默认 2.5 GB：mineru 的 lib 解压后 1.2 GB 量级。 */
     private long maxUnpackedBytes = 2_684_354_560L;
 
+    /**
+     * 下载读空闲超时（毫秒）：这么久一个新字节都没收到，就中断本次读取，走续传 + 换源
+     * （dev-board#1015）。JDK HttpClient 的请求超时只管到响应头，读体没有超时，
+     * 半开连接会让安装线程永久阻塞在 read() 上。
+     */
+    private long readIdleTimeoutMs = 60_000L;
+
     public String getDir() { return dir; }
     public void setDir(String dir) { this.dir = dir; }
     public List<String> getBaseUrls() { return baseUrls; }
@@ -76,4 +83,6 @@ public class PackProperties {
     public void setMaxArchiveEntries(int maxArchiveEntries) { this.maxArchiveEntries = maxArchiveEntries; }
     public long getMaxUnpackedBytes() { return maxUnpackedBytes; }
     public void setMaxUnpackedBytes(long maxUnpackedBytes) { this.maxUnpackedBytes = maxUnpackedBytes; }
+    public long getReadIdleTimeoutMs() { return readIdleTimeoutMs; }
+    public void setReadIdleTimeoutMs(long readIdleTimeoutMs) { this.readIdleTimeoutMs = readIdleTimeoutMs; }
 }

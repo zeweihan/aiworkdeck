@@ -447,4 +447,15 @@ class MeetingTranscriptionServiceTest {
         assertEquals(1, upstreamCalls.get(),
                 "两个并发请求应只有一次真正问上游，另一次必须被节流窗口挡下而不是各自都通过");
     }
+
+    @Test
+    @DisplayName("needsAudioExtraction：视频容器（大小写不敏感）为真，音频（含 webm）为假")
+    void needsAudioExtractionForVideoOnly() {
+        assertTrue(MeetingTranscriptionService.needsAudioExtraction("庭审.mp4"));
+        assertTrue(MeetingTranscriptionService.needsAudioExtraction("CLIP.MOV"));
+        assertFalse(MeetingTranscriptionService.needsAudioExtraction("rec.mp3"));
+        assertFalse(MeetingTranscriptionService.needsAudioExtraction("meeting.webm"));
+        assertFalse(MeetingTranscriptionService.needsAudioExtraction("noext"));
+        assertFalse(MeetingTranscriptionService.needsAudioExtraction(null));
+    }
 }

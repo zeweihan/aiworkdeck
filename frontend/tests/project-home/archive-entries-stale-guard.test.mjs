@@ -32,14 +32,30 @@ function loadMethods(getArchiveEntriesImpl) {
     .replace(/\/\/\s*#ifdef H5\n/, '')
     .replace(/\/\/\s*#endif\n/, '')
     .replace(/export default \{/, 'return {')
-  const factory = new Function(
-    'getFileBytesUrl', 'getArchiveEntries', 'extractArchive',
-    'getAuthHeaders', 'getSessionId', 'ICONS', 'shouldAcceptResponse',
-    body)
-  return factory(
-    () => '/download', getArchiveEntriesImpl, async () => ({}),
-    () => ({}), () => 'sess', {}, shouldAcceptResponse
-  ).methods
+  // import 的符号从源码里读出来逐个当参数传：FilePreview 的依赖会变（媒体播放器那批
+  // 加了 MediaPlayer / previewKindOf / shouldGrabMediaFocus），写死参数表会让整份
+  // 测试因 ReferenceError 陪葬。本测试只关心 loadArchiveEntries，无关符号一律给空桩。
+  const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
+  const imported = new Set()
+  for (const m of script.matchAll(/^\s*import\s+([\s\S]*?)\s+from\s*'[^']*'\s*$/gm)) {
+    const clause = m[1]
+    const braces = clause.match(/\{([\s\S]*)\}/)
+    if (braces) braces[1].split(',').map(x => x.trim().split(/\s+as\s+/).pop()).filter(Boolean).forEach(n => imported.add(n))
+    const def = clause.replace(/\{[\s\S]*\}/, '').replace(',', '').trim()
+    if (def) imported.add(def)
+  }
+  const provided = {
+    getFileBytesUrl: () => '/download',
+    getArchiveEntries: getArchiveEntriesImpl,
+    extractArchive: async () => ({}),
+    getAuthHeaders: () => ({}),
+    getSessionId: () => 'sess',
+    ICONS: {},
+    shouldAcceptResponse,
+  }
+  const names = [...new Set([...Object.keys(provided), ...imported])]
+  const factory = new Function(...names, body)
+  return factory(...names.map(n => (n in provided ? provided[n] : (() => ({}))))).methods
 }
 
 function makeVm(methods) {

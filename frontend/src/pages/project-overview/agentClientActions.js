@@ -6,6 +6,15 @@
 import { sendEditorResult, getFileDetail } from '@/services/api.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '@/utils/docEvents.js'
+import { actionBudgetMs } from '@/composables/zetaOfficeRelay.js'
+
+// AI 命令等编辑器启动的上限（dev-board#1018）。**必须低于后端 editor_command 的等待上限**
+// （EditorBridgeService 读写类 120s）：后端先到点的话，模型收到的是普通超时错误而不是
+// EDITOR_BOOTING，「等就绪、重试同一步」这套就白做了。超过就回 EDITOR_BOOTING，模型重试时再等一轮。
+// 表外命令后端只等 30s（EDITOR_ACTION_TIMEOUT），所以实际上限还要按命令收紧：
+// min(100s, 该命令的后端预算 - 10s 余量)，预算经 zetaOfficeRelay.actionBudgetMs 取（三处同表）。
+const EDITOR_BOOT_WAIT_CAP_MS = 100000
+const EDITOR_BOOT_WAIT_MARGIN_MS = 10000
 
 // 落字被挡住（编辑器未就绪/目标不匹配）时的重试节奏：300ms 一次、最多 100 次（约 30 秒）。
 // 有上限是为了不把定时器无限期挂在页面上；上限用尽后缓冲仍然留着，流结束时还会再试一次。
@@ -131,6 +140,10 @@ export const agentClientActionMethods = {
      */
     docStreamBlockReason() {
         if (!this.libreOfficeActive || !this.libreOfficeExecutor) return this._docStreamText('docStreamReasonEditorNotReady', '文档编辑器尚未就绪')
+        // 装载失败的编辑器端着空白占位文档、保存闸永久落下：写进去等于静默丢失（dev-board#1018）
+        if (typeof this.libreLoadFailureOf === 'function' && this.libreLoadFailureOf(this.libreOfficeExecutor)) {
+            return this._docStreamText('docStreamReasonLoadFailed', '文档未能打开，内容没有写进去 / the document failed to open; nothing was written')
+        }
         const currentFileId = this.resolveLibreExecutorFileId(this.libreOfficeExecutor)
         if (!shouldFlushDocStream(this._docStreamTargetFileId, currentFileId)) {
             return this._docStreamText('docStreamReasonWrongTarget', '编辑器当前打开的不是本次写入的目标文档')
@@ -333,6 +346,8 @@ export const agentClientActionMethods = {
                 await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪')
                 return
             }
+            // 就绪了但文档没打开（空白占位 + 保存闸落下）：不许接着往里流式落字（dev-board#1018）
+            if (await this.replyIfEditorLoadFailed(conversationId, requestId)) return
 
             // 5. 重置流式缓冲，准备接收新的流式数据
             this._docStreamBuffer = ''
@@ -577,6 +592,38 @@ export const agentClientActionMethods = {
      * 处理 AI Agent 的编辑器命令请求（#79：LibreOffice 是唯一执行器；
      * 结果经 sendEditorResult 回传后端，路由 /editor-result，双轨迁移见 Phase 3）
      */
+    // 轮询等活跃编辑器指针就绪（同 _handleEditorOpenFileSyncImpl 的 500ms 轮询）。
+    // 上限取在启动的各实例装载预算里最长的那个，再按命令封顶（editorBootWaitCapMs，必须低于
+    // 后端 editor_command 超时）；等待中已没有任何实例在启动（落了
+    // 失败态、被关掉）就提前收手。返回 'ready' | 'timeout' | 'gone'。
+    editorBootWaitCapMs(action) {
+        const backend = Number(actionBudgetMs(action)) || 30000
+        return Math.max(0, Math.min(EDITOR_BOOT_WAIT_CAP_MS, backend - EDITOR_BOOT_WAIT_MARGIN_MS))
+    },
+    async waitLibreExecutorReady(booting, action) {
+        const budget = Math.min(this.editorBootWaitCapMs(action), Math.max(...booting.map((b) => Number(b.budgetMs) || 0), 0))
+        const deadline = Date.now() + budget
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 500))
+            if (this.libreOfficeActive && this.libreOfficeExecutor) return 'ready'
+            if (typeof this.libreBootingInstances === 'function' && !this.libreBootingInstances().length) {
+                return (this.libreOfficeActive && this.libreOfficeExecutor) ? 'ready' : 'gone'
+            }
+        }
+        return (this.libreOfficeActive && this.libreOfficeExecutor) ? 'ready' : 'timeout'
+    },
+    // 目标编辑器处于装载失败态时回结构化 EDITOR_LOAD_FAILED（dev-board#1018，与后端的契约：
+    // error / code / retryable 字段与字面量不许改；后端按普通失败计，文案让模型停下）。
+    // 返回 true = 已回复，调用方到此为止。
+    async replyIfEditorLoadFailed(conversationId, requestId) {
+        const failed = typeof this.libreLoadFailureOf === 'function' ? this.libreLoadFailureOf(this.libreOfficeExecutor) : null
+        if (!failed) return false
+        const msg = '文档未能打开（' + failed.code + '），这一步没有执行；请告知用户并停止对该文档的编辑'
+        console.error('[ProjectOverview] editor command refused: document failed to load', failed)
+        await sendEditorResult(conversationId, requestId, false,
+            { error: msg, code: 'EDITOR_LOAD_FAILED', retryable: false }, msg)
+        return true
+    },
     async handleEditorCommand(action) {
         console.log('[ProjectOverview] ========== Editor Command Start ==========')
         console.log('[ProjectOverview] Editor Command:', JSON.stringify(action))
@@ -585,10 +632,31 @@ export const agentClientActionMethods = {
         console.log('[ProjectOverview] commandAction:', commandAction, 'requestId:', requestId)
 
         if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-            console.error('[ProjectOverview] No embedded editor available')
-            await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
-            return
+            // 有编辑器正在启动/装载（典型：AI 刚生成的文档自动开了新标签，引擎还在 boot）
+            // 就等它就绪，而不是立刻回「未就绪」让模型瞎重试（dev-board#1018）。等满该
+            // 实例的装载预算仍未就绪，回结构化的 EDITOR_BOOTING——与后端约定的契约，
+            // error / code / retryable 三个字段与字面量不许改。
+            const booting = typeof this.libreBootingInstances === 'function' ? this.libreBootingInstances() : []
+            if (!booting.length) {
+                console.error('[ProjectOverview] No embedded editor available')
+                await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
+                return
+            }
+            const outcome = await this.waitLibreExecutorReady(booting, commandAction)
+            if (outcome !== 'ready') {
+                if (outcome === 'timeout') {
+                    const msg = '编辑器仍在启动，请稍后重试同一步'
+                    await sendEditorResult(conversationId, requestId, false,
+                        { error: msg, code: 'EDITOR_BOOTING', retryable: true }, msg)
+                } else {
+                    // 等待期间实例落了失败态 / 被关掉：不再是「启动中」，照旧回未就绪
+                    await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
+                }
+                return
+            }
         }
+
+        if (await this.replyIfEditorLoadFailed(conversationId, requestId)) return
 
         try {
             // __agent 标记：worker 据此把这条命令产生的修订署名为 AI WorkDeck

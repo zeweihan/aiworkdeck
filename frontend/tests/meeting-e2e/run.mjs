@@ -20,7 +20,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pickCdpPort, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
-import { ensureUnlocked } from '../_lib/license-gate.mjs'
+import { ensureUnlocked, legacyGraceJvmArg } from '../_lib/license-gate.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -55,6 +55,8 @@ const home = path.join(os.tmpdir(), 'meeting-e2e-' + ts)
 fs.mkdirSync(path.join(home, 'cwd'), { recursive: true })
 // This suite creates its own backend, so seed the documented legacy trial fixture before
 // startup. Keep the production trial-code switch disabled, as in app/desktop E2E.
+// legacy-grace-until in application-desktop.yml is 2026-09-30; from that day on the seeded
+// ticket is locked unless the isolated backend gets a future date (legacyGraceJvmArg, #1045).
 fs.mkdirSync(path.join(home, '.aiworkdeck'), { recursive: true })
 fs.writeFileSync(path.join(home, '.aiworkdeck', 'license.json'), JSON.stringify({
   mode: 'trial', code: 'AWD-T-SEEDED-FOR-E2E',
@@ -62,7 +64,7 @@ fs.writeFileSync(path.join(home, '.aiworkdeck', 'license.json'), JSON.stringify(
 }), { mode: 0o600 })
 console.log('启动隔离后端 :' + BACKEND_PORT + '（日志 ' + home + '/stdout.log）...')
 const backendChild = spawn(process.env.JAVA_HOME + '/bin/java',
-  ['-Duser.home=' + home, '-jar', jar], {
+  ['-Duser.home=' + home, legacyGraceJvmArg(), '-jar', jar], {
   cwd: path.join(home, 'cwd'),
   env: {
     ...process.env,

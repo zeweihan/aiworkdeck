@@ -30,6 +30,7 @@ export default {
     loadFailed: 'Failed to load the document',
     fileMissingFailed: 'The file is no longer on disk',
     downloadFailed: 'Read failed — make sure the local service is running',
+    docOpenFailed: 'The document cannot be opened',
     ready: 'Ready',
     reloading: 'Reloading…',
     reloadFailed: 'Reload failed; the content is out of date',
@@ -53,6 +54,17 @@ export default {
   dlProgress: 'Document content {loaded} / {total}',
   dlLoadedOnly: 'Read {size} of document content',
   firstOpenHint: 'The first open initializes the document engine; large documents may take a moment',
+  // "Cannot open" terminal state (dev-board#1018).
+  openFailed: {
+    title: 'The document cannot be opened: the editor is not responding or the file is damaged',
+    code: 'Diagnostic code: {code}',
+    previewNotice: 'The document could not be opened in the editor (code {code}); showing a read-only preview',
+    readOnlyPreview: 'Open read-only preview',
+    download: 'Download the original file',
+    retry: 'Restart the editor and try again',
+    previewFailed: 'The read-only preview could not render this file either: {reason}',
+    downloadFailedToast: 'Failed to download the original file: {reason}',
+  },
   retryLoad: 'Stuck? Tap to retry',
   bootFailedHint: 'The document engine failed to start: {reason}. The network or a corporate firewall may be blocking the engine files; check the connection and retry.',
   review: {
