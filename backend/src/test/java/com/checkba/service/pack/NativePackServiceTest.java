@@ -327,6 +327,157 @@ class NativePackServiceTest {
         assertFalse(Files.exists(packsRoot().resolve(PACK_ID).resolve("current.json")));
     }
 
+    // ==================== 阶段与进度（dev-board#1015） ====================
+
+    @Test
+    @DisplayName("安装全程报细分阶段；解压阶段 filesDone 与 phasePercent 单调推进到 100")
+    void reportsPhasesAndExtractionProgress() throws Exception {
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        for (int i = 0; i < 2000; i++) {
+            files.put("lib/pkg" + (i % 20) + "/mod" + i + ".py", ("x = " + i + "\n").repeat(40).getBytes(StandardCharsets.UTF_8));
+        }
+        byte[] archive = tarGzWithContents(files);
+        publish(primary, archive, "litviz", List.of("*"), true);
+
+        TestPackService svc = (TestPackService) service(publicKeyPem, primary.baseUrl());
+        svc.install(PACK_ID);
+
+        List<String> phases = new ArrayList<>();
+        for (String f : svc.frames) {
+            String p = f.split("\\|")[0];
+            if (phases.isEmpty() || !phases.get(phases.size() - 1).equals(p)) phases.add(p);
+        }
+        assertEquals(List.of("downloading", "verifying", "extracting", "checking", "finalizing"), phases);
+
+        long lastFiles = -1;
+        int lastPercent = -1;
+        int extractingFrames = 0;
+        for (String f : svc.frames) {
+            String[] p = f.split("\\|");
+            if (!"extracting".equals(p[0])) continue;
+            extractingFrames++;
+            long filesDone = Long.parseLong(p[2]);
+            int percent = Integer.parseInt(p[1]);
+            assertTrue(filesDone >= lastFiles, "filesDone 不许回退: " + f);
+            assertTrue(percent >= lastPercent, "phasePercent 不许回退: " + f);
+            lastFiles = filesDone;
+            lastPercent = percent;
+        }
+        assertTrue(extractingFrames > 10, "解压阶段应边做边报，而不是只报首尾: " + extractingFrames);
+        assertEquals(2001, lastFiles, "2000 个文件 + contents.sha256");
+        assertEquals(100, lastPercent);
+
+        NativePackService.PackStatus st = svc.status(PACK_ID);
+        assertEquals(NativePackService.STATE_READY, st.getState());
+        assertEquals(NativePackService.PHASE_READY, st.getPhase());
+    }
+
+    @Test
+    @DisplayName("复核并进解压：写盘时算的哈希与清单不符即拒绝，且不再把文件重读一遍")
+    void streamingVerificationRejectsMismatchWithoutRereading() throws Exception {
+        byte[] archive = tarGz(tar -> {
+            tar.file("a.py", "real".getBytes(StandardCharsets.UTF_8));
+            tar.file("b.py", "ok".getBytes(StandardCharsets.UTF_8));
+            String list = sha256Hex("tampered".getBytes(StandardCharsets.UTF_8)) + "  a.py\n"
+                    + sha256Hex("ok".getBytes(StandardCharsets.UTF_8)) + "  b.py\n";
+            tar.file(CONTENTS, list.getBytes(StandardCharsets.UTF_8));
+        });
+        Path file = tempDir.resolve("stream.tar.gz");
+        Files.write(file, archive);
+        NativePackService svc = service(publicKeyPem, "https://example.invalid/plugin-packs");
+        Path out = tempDir.resolve("stream-out");
+        Map<String, String> hashes = svc.extractAndHash(file, out, new NativePackService.PackStatus());
+        assertEquals(sha256Hex("real".getBytes(StandardCharsets.UTF_8)), hashes.get("a.py"));
+
+        // 解压之后把磁盘上的 a.py 改成清单里的内容：如果复核还在重读磁盘，这一改会让它「通过」
+        Files.writeString(out.resolve("a.py"), "tampered");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> svc.verifyContents(out, hashes, new NativePackService.PackStatus()));
+        assertTrue(e.getMessage().contains("文件校验失败") || e.getMessage().contains("File verification failed"), e.getMessage());
+
+        // 清单列了、包里没有的文件照旧拒绝
+        Map<String, String> missing = new java.util.HashMap<>(hashes);
+        missing.put("a.py", sha256Hex("tampered".getBytes(StandardCharsets.UTF_8)));
+        missing.remove("b.py");
+        IllegalStateException e2 = assertThrows(IllegalStateException.class,
+                () -> svc.verifyContents(out, missing, new NativePackService.PackStatus()));
+        assertTrue(e2.getMessage().contains("不存在") || e2.getMessage().contains("missing"), e2.getMessage());
+    }
+
+    @Test
+    @DisplayName("只发响应头不发体的源：读空闲超时后换下一个源，安装照常完成")
+    void readIdleTimeoutSwitchesSource() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "print(1)".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        publish(secondary, archive, "litviz", List.of("*"), true);
+        primary.hangAfter.put("/" + PACK_ID + "/" + VERSION + "/litviz.tar.gz", 0);
+
+        NativePackService svc = serviceWithIdle(400, primary.baseUrl(), secondary.baseUrl());
+        String v = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(20),
+                () -> svc.install(PACK_ID));
+        assertEquals(VERSION, v);
+        assertTrue(secondary.requests.stream().anyMatch(r -> r.path().endsWith(".tar.gz")), "应换到第二个源");
+        assertTrue(svc.isReady(PACK_ID));
+    }
+
+    @Test
+    @DisplayName("发了一半就吊住的源：读空闲超时保留 .part，换源后带 Range 续传")
+    void readIdleTimeoutKeepsPartAndResumes() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "0123456789".repeat(4000).getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        publish(secondary, archive, "litviz", List.of("*"), true);
+        int half = archive.length / 2;
+        primary.hangAfter.put("/" + PACK_ID + "/" + VERSION + "/litviz.tar.gz", half);
+
+        NativePackService svc = serviceWithIdle(400, primary.baseUrl(), secondary.baseUrl());
+        org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(20),
+                () -> svc.install(PACK_ID));
+        assertEquals(List.of("bytes=" + half + "-"), secondary.rangeServed, "第二个源应从断点续传");
+        assertTrue(svc.isReady(PACK_ID));
+    }
+
+    @Test
+    @DisplayName("安装线程里冒出 Error（如 OOM）也落到 failed，不会永久停在进行中")
+    void errorInInstallThreadEndsInFailed() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
+        publish(primary, archive, "litviz", List.of("*"), true);
+        TestPackService svc = (TestPackService) service(publicKeyPem, primary.baseUrl());
+        svc.injectedError = new OutOfMemoryError("simulated heap exhaustion");
+
+        svc.installAsync(PACK_ID);
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline
+                && !NativePackService.STATE_FAILED.equals(svc.status(PACK_ID).getState())) {
+            Thread.sleep(20);
+        }
+        NativePackService.PackStatus st = svc.status(PACK_ID);
+        assertEquals(NativePackService.STATE_FAILED, st.getState());
+        assertEquals(NativePackService.PHASE_FAILED, st.getPhase());
+        assertTrue(st.getError() != null && st.getError().contains("simulated heap exhaustion"), st.getError());
+
+        // 安装线程没被这次 Error 打死：同一个 pack 还能再装
+        svc.injectedError = null;
+        long d2 = System.currentTimeMillis() + 10_000;
+        svc.installAsync(PACK_ID);
+        while (System.currentTimeMillis() < d2 && !svc.isReady(PACK_ID)) Thread.sleep(20);
+        assertTrue(svc.isReady(PACK_ID));
+    }
+
+    @Test
+    @DisplayName("后端重启后发现解压半成品：status 报 failed「安装被中断」，而不是 not_installed")
+    void interruptedInstallAfterRestartReportsFailed() throws Exception {
+        Files.createDirectories(packsRoot().resolve(".staging").resolve(PACK_ID + "-" + VERSION).resolve("unpack").resolve("litviz"));
+        NativePackService fresh = service(publicKeyPem, "https://example.invalid/plugin-packs");
+        NativePackService.PackStatus st = fresh.status(PACK_ID);
+        assertEquals(NativePackService.STATE_FAILED, st.getState());
+        assertTrue(st.getError() != null && (st.getError().contains("中断") || st.getError().contains("interrupted")), st.getError());
+
+        // 只有下载断点（.part），没开始解压：仍是 not_installed，续传路径不受影响
+        FileUtilHolder.del(packsRoot().resolve(".staging").resolve(PACK_ID + "-" + VERSION).resolve("unpack"));
+        Files.write(packsRoot().resolve(".staging").resolve(PACK_ID + "-" + VERSION).resolve("litviz.tar.gz.part"), new byte[10]);
+        assertEquals(NativePackService.STATE_NOT_INSTALLED, fresh.status(PACK_ID).getState());
+    }
+
     // ==================== 进度跨线程可见性 ====================
 
     @Test
@@ -336,7 +487,8 @@ class NativePackServiceTest {
         // 是 run.mjs 那侧一处未限定容器的 DOM 文本断言（详见 run.mjs J13 段注释），
         // 不是这里；但 PackStatus 的字段本来就该是 volatile（写者/读者分属不同线程，
         // 普通字段没有 happens-before 保证），顺手钉住这条契约，别被后续改动悄悄剥掉。
-        for (String field : new String[] {"id", "state", "installedVersion", "bytesDownloaded", "bytesTotal", "error"}) {
+        for (String field : new String[] {"id", "state", "installedVersion", "bytesDownloaded", "bytesTotal", "error",
+                "phase", "component", "phasePercent", "filesDone", "filesTotal", "bytesUnpacked", "bytesUnpackTotal"}) {
             java.lang.reflect.Field f = NativePackService.PackStatus.class.getDeclaredField(field);
             assertTrue(java.lang.reflect.Modifier.isVolatile(f.getModifiers()), "PackStatus." + field + " 应为 volatile");
         }
@@ -850,13 +1002,25 @@ class NativePackServiceTest {
 
     /** 平台固定为 mac-arm64，别让断言随构建机的 os.arch 变化 */
     private static class TestPackService extends NativePackService {
+        /** progressChanged 逐帧快照：phase|phasePercent|filesDone|bytesUnpacked */
+        final List<String> frames = new CopyOnWriteArrayList<>();
+        /** 非空时 platform() 抛它，模拟安装线程里冒出的 Error（OOM 等） */
+        volatile Error injectedError;
+
         TestPackService(PackProperties props, String pem, String appVersion) {
             super(props, pem, appVersion);
         }
 
         @Override
         protected String platform() {
+            Error e = injectedError;
+            if (e != null) throw e;
             return "mac-arm64";
+        }
+
+        @Override
+        protected void progressChanged(PackStatus st) {
+            frames.add(st.getPhase() + "|" + st.getPhasePercent() + "|" + st.getFilesDone() + "|" + st.getBytesUnpacked());
         }
     }
 
@@ -874,6 +1038,18 @@ class NativePackServiceTest {
 
     private NativePackService service(String pem, String... baseUrls) {
         return new TestPackService(props(baseUrls), pem, "0.21.0");
+    }
+
+    private NativePackService serviceWithIdle(long idleMs, String... baseUrls) {
+        PackProperties p = props(baseUrls);
+        p.setReadIdleTimeoutMs(idleMs);
+        return new TestPackService(p, publicKeyPem, "0.21.0");
+    }
+
+    private static final class FileUtilHolder {
+        static void del(Path p) {
+            cn.hutool.core.io.FileUtil.del(p.toFile());
+        }
     }
 
     /** 单组件 pack 的一站式发布（manifest + sig + 压缩包） */
@@ -1074,11 +1250,20 @@ class NativePackServiceTest {
         final Map<String, byte[]> files = new LinkedHashMap<>();
         final List<Request> requests = new CopyOnWriteArrayList<>();
         final List<String> rangeServed = new CopyOnWriteArrayList<>();
+        /** path -> 先发多少字节再吊住（0 = 只发响应头）；模拟半开连接 */
+        final Map<String, Integer> hangAfter = new java.util.concurrent.ConcurrentHashMap<>();
+        private final CountDownLatch release = new CountDownLatch(1);
         private final HttpServer server;
 
         StubMirror() throws IOException {
             server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
             server.createContext("/", this::handle);
+            // 吊住的请求不能卡死同一台桩上的其它请求（默认执行器是单线程）
+            server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "stub-mirror");
+                t.setDaemon(true);
+                return t;
+            }));
             server.start();
         }
 
@@ -1087,6 +1272,7 @@ class NativePackServiceTest {
         }
 
         void stop() {
+            release.countDown();
             server.stop(0);
         }
 
@@ -1114,6 +1300,21 @@ class NativePackServiceTest {
                 }
             }
             byte[] slice = java.util.Arrays.copyOfRange(body, Math.min(from, body.length), body.length);
+            Integer hang = hangAfter.get(path);
+            if (hang != null) {
+                // 发完响应头（和前 hang 个字节）就不再发任何东西，也不关连接
+                ex.sendResponseHeaders(from > 0 ? 206 : 200, slice.length);
+                OutputStream out = ex.getResponseBody();
+                out.write(slice, 0, Math.min(hang, slice.length));
+                out.flush();
+                try {
+                    release.await(60, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                ex.close();
+                return;
+            }
             if (from > 0) {
                 ex.getResponseHeaders().add("Content-Range",
                         "bytes " + from + "-" + (body.length - 1) + "/" + body.length);

@@ -825,7 +825,7 @@
         <text class="cg-title">{{ $t('components.chatTitle') }}</text>
         <OptionalComponentCard :item="componentGateItem" :selectable="false" :busy="true" />
         <view v-if="componentGateResolved" class="cg-installing">
-          <text class="cg-installing-text">{{ $t('components.chatInstalling') }}</text>
+          <text class="cg-installing-text">{{ $t('components.chatStage.' + (componentGateItem.stageKey || 'preparing')) }}</text>
           <view class="cg-actions">
             <view class="cg-btn cg-background" @tap="backgroundComponentGate">{{ $t('components.backgroundDownload') }}</view>
           </view>

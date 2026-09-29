@@ -68,19 +68,35 @@ export default {
         impact: this.$t('components.' + this.item.localeKey + '.impact'),
       })
     },
+    /** 前端判出的失败（停滞 / 后端重启）按界面语言出文案；后端给的原因原样显示 */
+    failureText() {
+      if (this.item.errorKey === 'stalled') return this.$t('components.errorStalled')
+      if (this.item.errorKey === 'backendRestarted') return this.$t('components.errorBackendRestarted')
+      return this.item.error || ''
+    },
     stateLine() {
       const p = this.item.percent || 0
       switch (this.item.phase) {
-        case 'runtime': return this.$t('components.stateDownloadingRuntime', { percent: p })
+        case 'runtime': return this.runtimeLine(p)
         case 'model': return this.$t('components.stateDownloadingModel', { percent: p })
         case 'starting': return this.$t('components.stateStartingService')
         case 'ready': return this.$t('components.stateReady')
-        case 'failed': return this.$t('components.stateFailed', { msg: this.item.error || '' })
+        case 'failed': return this.$t('components.stateFailed', { msg: this.failureText })
         default: return this.$t('components.stateNotInstalled')
       }
     },
   },
   methods: {
+    /** pack 段细分阶段（dev-board#1015）：下载 n% / 校验 / 解压 n% / 核对 / 写入 */
+    runtimeLine(p) {
+      switch (this.item.stage) {
+        case 'verifying': return this.$t('components.stateVerifyingRuntime')
+        case 'extracting': return this.$t('components.stateExtractingRuntime', { percent: p })
+        case 'checking': return this.$t('components.stateCheckingRuntime')
+        case 'finalizing': return this.$t('components.stateFinalizingRuntime')
+        default: return this.$t('components.stateDownloadingRuntime', { percent: p })
+      }
+    },
     onToggle() {
       this.$emit('toggle', this.item.packId, !this.item.selected)
     },

@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -26,12 +27,16 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.DigestOutputStream;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -42,6 +47,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +57,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
@@ -108,6 +119,16 @@ public class NativePackService {
     public static final String STATE_FAILED = "failed";
     public static final String STATE_REVOKED = "revoked";
 
+    // 细分阶段（dev-board#1015）：state 的旧枚举是对外老契约，phase 在它之下细分，
+    // 前端据此显示「正在下载 / 正在校验 / 正在解压 n% / 正在核对 / 正在写入」。
+    public static final String PHASE_DOWNLOADING = "downloading";
+    public static final String PHASE_VERIFYING = "verifying";
+    public static final String PHASE_EXTRACTING = "extracting";
+    public static final String PHASE_CHECKING = "checking";
+    public static final String PHASE_FINALIZING = "finalizing";
+    public static final String PHASE_READY = "ready";
+    public static final String PHASE_FAILED = "failed";
+
     private final PackProperties props;
     private final String publicKeyPem;
     private final String appVersion;
@@ -116,6 +137,18 @@ public class NativePackService {
     private final ExecutorService installer =
             Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "native-pack-installer");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * 下载读空闲看门狗（dev-board#1015）：{@code in.read()} 本身没有超时，半开连接会让安装线程
+     * 永久阻塞。看门狗发现超过 {@code ai.packs.read-idle-timeout-ms} 没有新字节就关掉响应流，
+     * 阻塞的 read 随之返回，本次尝试按网络中断处理（保留 .part，换下一个源续传）。
+     */
+    private final ScheduledExecutorService readWatchdog =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "native-pack-read-watchdog");
                 t.setDaemon(true);
                 return t;
             });
@@ -241,6 +274,20 @@ public class NativePackService {
         private volatile long bytesDownloaded;
         private volatile long bytesTotal;
         private volatile String error;
+        /** 细分阶段（{@code PHASE_*}）；state 保持旧枚举不变，老调用方照旧可用 */
+        private volatile String phase;
+        /** 正在处理的组件名（manifest 的 name） */
+        private volatile String component;
+        /** 当前阶段的进度 0-100；-1 = 该阶段没有可计量的进度 */
+        private volatile int phasePercent = -1;
+        /** 解压阶段：已写入（且已算完哈希）的文件数，全组件累计 */
+        private volatile long filesDone;
+        /** 核对阶段：清单文件总数；解压阶段事先不知道，为 0 */
+        private volatile long filesTotal;
+        /** 已解压写盘的字节数（未压缩），全组件累计 */
+        private volatile long bytesUnpacked;
+        /** manifest 声明的解压后总字节数；老 manifest 没有该字段时为 0（未知） */
+        private volatile long bytesUnpackTotal;
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
@@ -254,6 +301,20 @@ public class NativePackService {
         public void setBytesTotal(long bytesTotal) { this.bytesTotal = bytesTotal; }
         public String getError() { return error; }
         public void setError(String error) { this.error = error; }
+        public String getPhase() { return phase; }
+        public void setPhase(String phase) { this.phase = phase; }
+        public String getComponent() { return component; }
+        public void setComponent(String component) { this.component = component; }
+        public int getPhasePercent() { return phasePercent; }
+        public void setPhasePercent(int phasePercent) { this.phasePercent = phasePercent; }
+        public long getFilesDone() { return filesDone; }
+        public void setFilesDone(long filesDone) { this.filesDone = filesDone; }
+        public long getFilesTotal() { return filesTotal; }
+        public void setFilesTotal(long filesTotal) { this.filesTotal = filesTotal; }
+        public long getBytesUnpacked() { return bytesUnpacked; }
+        public void setBytesUnpacked(long bytesUnpacked) { this.bytesUnpacked = bytesUnpacked; }
+        public long getBytesUnpackTotal() { return bytesUnpackTotal; }
+        public void setBytesUnpackTotal(long bytesUnpackTotal) { this.bytesUnpackTotal = bytesUnpackTotal; }
     }
 
     private record CachedManifest(Manifest manifest, long fetchedAt) {}
@@ -328,7 +389,34 @@ public class NativePackService {
                 st.setState(STATE_READY);
             }
         }
+        if (STATE_READY.equals(st.getState())) {
+            st.setPhase(PHASE_READY);
+        } else if (!STATE_REVOKED.equals(st.getState()) && hasInterruptedStaging(packId)) {
+            // 内存里没有在途记录、磁盘上却有解压半成品 = 上一次安装在解压之后被打断
+            // （后端被重启 / 进程崩溃）。报 not_installed 会让还在轮询的前端以为「还没开始」
+            // 永远等下去，所以如实报失败，让用户重试（dev-board#1015）。
+            st.setState(STATE_FAILED);
+            st.setPhase(PHASE_FAILED);
+            st.setError(LangText.of("安装被中断，请重试", "Installation was interrupted; please retry"));
+        }
         return st;
+    }
+
+    /** .staging/&lt;id&gt;-&lt;version&gt;/unpack 存在：解压已经开始过、却没走到收尾 */
+    private boolean hasInterruptedStaging(String packId) {
+        Path staging = packsRoot().resolve(".staging");
+        if (!Files.isDirectory(staging)) return false;
+        String prefix = packId + "-";
+        try (var stream = Files.list(staging)) {
+            return stream.anyMatch(p -> {
+                String name = p.getFileName().toString();
+                return name.length() > prefix.length() && name.startsWith(prefix)
+                        && Character.isDigit(name.charAt(prefix.length()))
+                        && Files.isDirectory(p.resolve("unpack"));
+            });
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**
@@ -463,17 +551,60 @@ public class NativePackService {
             return;
         }
         PackStatus st = liveStatus(packId);
+        resetProgress(st);
         st.setState(STATE_DOWNLOADING);
+        st.setPhase(PHASE_DOWNLOADING);
         st.setError(null);
         installer.submit(() -> {
             try {
                 install(packId);
-            } catch (Exception e) {
-                log.warn("Pack {} install failed: {}", packId, e.getMessage());
+            } catch (Throwable t) {
+                // 兜住 Throwable：install() 自己已把状态落到 failed；这里再兜一层，防止
+                // 锁外的前置检查（如开关在排队期间被关）抛出后状态永远停在「下载中」
+                log.warn("Pack {} install failed: {}", packId, describe(t));
+                PackStatus cur = liveStatus(packId);
+                if (isInFlight(cur.getState())) {
+                    cur.setState(STATE_FAILED);
+                    cur.setPhase(PHASE_FAILED);
+                    cur.setError(describe(t));
+                }
             } finally {
                 inFlight.remove(packId);
             }
         });
+    }
+
+    private static boolean isInFlight(String state) {
+        return STATE_DOWNLOADING.equals(state) || STATE_VERIFYING.equals(state) || STATE_INSTALLING.equals(state);
+    }
+
+    private static void resetProgress(PackStatus st) {
+        st.setComponent(null);
+        st.setPhasePercent(-1);
+        st.setFilesDone(0);
+        st.setFilesTotal(0);
+        st.setBytesUnpacked(0);
+        st.setBytesUnpackTotal(0);
+    }
+
+    /** 异常/错误的人话：Error 常常没有 message（如 StackOverflowError），至少给出类型 */
+    private static String describe(Throwable t) {
+        String msg = t.getMessage();
+        if (t instanceof Error) {
+            return LangText.of("安装过程出现内部错误: ", "Internal error during installation: ")
+                    + t.getClass().getSimpleName() + (msg == null ? "" : " (" + msg + ")");
+        }
+        return msg != null ? msg : t.getClass().getSimpleName();
+    }
+
+    /** 进入一个细分阶段：写状态、打一行开始日志、通知进度钩子 */
+    private void enterPhase(PackStatus st, String phase, String packId, String version, String component) {
+        st.setPhase(phase);
+        st.setComponent(component);
+        st.setPhasePercent(-1);
+        log.info("Pack {} v{}{}: {} started", packId, version,
+                component == null ? "" : " [" + component + "]", phase);
+        progressChanged(st);
     }
 
     /**
@@ -491,16 +622,22 @@ public class NativePackService {
             requireEnabled();
             PackStatus st = liveStatus(packId);
             try {
+                resetProgress(st);
                 st.setState(STATE_DOWNLOADING);
+                st.setPhase(PHASE_DOWNLOADING);
                 st.setError(null);
                 String version = doInstall(packId, st);
                 st.setState(STATE_READY);
+                st.setPhase(PHASE_READY);
+                st.setPhasePercent(100);
                 st.setInstalledVersion(version);
                 // 装完让资源消费方的运行时解析缓存失效——不然用户装完 pack 不重启后端，
                 // 面板/工具仍然显示上一次探测出的「不可用」。
                 notifyPackChanged(packId);
                 return version;
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
+                // 兜 Throwable 而不只是 RuntimeException（dev-board#1015）：OOM 之类的 Error
+                // 漏过去，状态会永久停在「安装中」，前端就一直转圈。
                 // 因封禁被拒不是「安装失败」：状态要如实停在 revoked，否则广场把平台封禁
                 // 显示成一次网络出错，用户只会一遍遍重试
                 JSONObject current = readCurrent(packId);
@@ -510,7 +647,11 @@ public class NativePackService {
                 } else {
                     st.setState(STATE_FAILED);
                 }
-                st.setError(e.getMessage());
+                st.setPhase(PHASE_FAILED);
+                st.setError(describe(e));
+                if (e instanceof Error) {
+                    log.error("Pack {} install aborted by {}", packId, e.toString(), e);
+                }
                 throw e;
             }
         }
@@ -551,6 +692,7 @@ public class NativePackService {
         }
 
         st.setBytesTotal(totalSize(components));
+        st.setBytesUnpackTotal(totalUnpacked(components));
         long completed = 0;
         List<Path> archives = new ArrayList<>();
         for (Component c : components) {
@@ -561,25 +703,45 @@ public class NativePackService {
             archives.add(part);
         }
 
+        // 解压与复核合一（dev-board#1015）：写盘时顺手算每个文件的 sha256，全部解压完再
+        // 与各组件的 contents.sha256 逐条比对。此前是解压完再把几百 MB、上万个小文件
+        // 整个重读一遍算哈希，Windows 上叠加实时杀毒扫描，这一段能拖好几分钟且没有任何进度。
         st.setState(STATE_INSTALLING);
+        long archivesTotal = 0;
+        for (Path a : archives) archivesTotal += sizeOf(a);
+        long archivesDone = 0;
+        List<Map<String, String>> hashes = new ArrayList<>();
         for (int i = 0; i < components.size(); i++) {
             Component c = components.get(i);
+            enterPhase(st, PHASE_EXTRACTING, packId, m.version(), c.name());
             Path target = unpack.resolve(c.unpackDir());
-            extract(archives.get(i), target);
-            verifyContents(target);
+            hashes.add(extractAndHash(archives.get(i), target, st, archivesDone, archivesTotal));
+            archivesDone += sizeOf(archives.get(i));
         }
+        st.setPhasePercent(100);
+        progressChanged(st);
+        log.info("Pack {} v{}: extracted {} file(s), {} bytes", packId, m.version(), st.getFilesDone(), st.getBytesUnpacked());
 
+        long filesExtracted = st.getFilesDone();
+        enterPhase(st, PHASE_CHECKING, packId, m.version(), null);
+        st.setFilesDone(0);
+        st.setFilesTotal(0);
+        for (int i = 0; i < components.size(); i++) {
+            Component c = components.get(i);
+            st.setComponent(c.name());
+            verifyContents(unpack.resolve(c.unpackDir()), hashes.get(i), st);
+        }
+        st.setPhasePercent(100);
+        progressChanged(st);
+
+        enterPhase(st, PHASE_FINALIZING, packId, m.version(), null);
+        st.setFilesDone(0);
+        st.setFilesTotal(filesExtracted);
         Path versionParent = versionDir.getParent();
         try {
             Files.createDirectories(versionParent);
             FileUtil.del(versionDir.toFile());
-            try {
-                Files.move(unpack, versionDir, StandardCopyOption.ATOMIC_MOVE);
-            } catch (IOException atomicFailed) {
-                // 跨文件系统时原子移动不可用，退化为拷贝（staging 与目标默认同盘，这条极少走到）
-                FileUtil.copyContent(unpack.toFile(), versionDir.toFile(), true);
-                FileUtil.del(unpack.toFile());
-            }
+            moveIntoPlace(packId, m.version(), unpack, versionDir, st);
             // 版本目录留一份体积快照：可选组件面板要在不发网络请求的前提下报出
             // 「下载多大 / 占盘多大」，而重启后 manifest 内存缓存是空的。
             JSONObject sizes = new JSONObject();
@@ -591,12 +753,60 @@ public class NativePackService {
             FileUtil.del(versionDir.toFile());
             throw new IllegalStateException(LangText.of("安装落盘失败: ", "Failed to finalize installation: ") + e.getMessage());
         }
+        st.setFilesDone(st.getFilesTotal());
 
         writeCurrent(packId, m.version(), false);
         pruneOtherVersions(packId, m.version());
         FileUtil.del(staging.toFile());
         log.info("Installed native pack {} v{} ({} component(s))", packId, m.version(), components.size());
         return m.version();
+    }
+
+    /**
+     * 把解压好的目录换到版本目录。先原子 rename（同盘时瞬间完成）；Windows 上实时杀毒
+     * 刚扫完的文件可能还被短暂占着句柄，rename 报 AccessDenied——重试两次再退化成拷贝，
+     * 拷贝逐文件推进 filesDone，前端看得到它在动（dev-board#1015）。
+     */
+    private void moveIntoPlace(String packId, String version, Path unpack, Path versionDir, PackStatus st)
+            throws IOException {
+        IOException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                Files.move(unpack, versionDir, StandardCopyOption.ATOMIC_MOVE);
+                st.setFilesDone(st.getFilesTotal());
+                progressChanged(st);
+                return;
+            } catch (IOException e) {
+                last = e;
+                if (attempt < 2) {
+                    try {
+                        Thread.sleep(500L * (attempt + 1));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+        log.warn("Pack {} v{}: atomic move failed ({}); falling back to copy",
+                packId, version, last == null ? "?" : last.toString());
+        Files.createDirectories(versionDir);
+        Files.walkFileTree(unpack, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                Files.createDirectories(versionDir.resolve(unpack.relativize(dir).toString()));
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Files.copy(file, versionDir.resolve(unpack.relativize(file).toString()),
+                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+                st.setFilesDone(st.getFilesDone() + 1);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        FileUtil.del(unpack.toFile());
     }
 
     /**
@@ -678,6 +888,7 @@ public class NativePackService {
 
     private void downloadComponent(String packId, String version, Component c,
                                    Path part, PackStatus st, long baseBytes) {
+        enterPhase(st, PHASE_DOWNLOADING, packId, version, c.name());
         List<String> sources = sourceUrls(packId, version, c);
         if (sources.isEmpty()) {
             throw new IllegalStateException(LangText.of("没有可用的下载源", "No download source configured"));
@@ -691,8 +902,12 @@ public class NativePackService {
                 if (c.size() > 0 && sizeOf(part) >= c.size()) {
                     FileUtil.del(part.toFile());
                 }
+                if (!PHASE_DOWNLOADING.equals(st.getPhase())) {
+                    enterPhase(st, PHASE_DOWNLOADING, packId, version, c.name());
+                }
                 fetchToFile(url, part, st, baseBytes);
                 st.setState(STATE_VERIFYING);
+                enterPhase(st, PHASE_VERIFYING, packId, version, c.name());
                 String actual = sha256Hex(part);
                 if (actual.equalsIgnoreCase(c.sha256())) {
                     st.setState(STATE_DOWNLOADING);
@@ -750,7 +965,27 @@ public class NativePackService {
 
         Files.createDirectories(part.getParent());
         long written = have;
-        try (InputStream in = resp.body();
+        InputStream body = resp.body();
+        long idleMs = props.getReadIdleTimeoutMs();
+        AtomicLong lastByteAt = new AtomicLong(System.nanoTime());
+        AtomicBoolean idleTimedOut = new AtomicBoolean(false);
+        ScheduledFuture<?> guard = null;
+        if (idleMs > 0) {
+            long period = Math.max(50L, Math.min(1000L, idleMs / 5));
+            guard = readWatchdog.scheduleAtFixedRate(() -> {
+                if (System.nanoTime() - lastByteAt.get() >= TimeUnit.MILLISECONDS.toNanos(idleMs)
+                        && idleTimedOut.compareAndSet(false, true)) {
+                    // 关流让阻塞的 read 返回；JDK 的响应流被关后 read 可能直接返回 -1
+                    // 而不是抛异常，所以下面一律以 idleTimedOut 为准判「中断」而不是「读完」
+                    try {
+                        body.close();
+                    } catch (IOException ignored) {
+                        // 关不掉也无妨：标志位已置，读循环下一次返回时照样按中断处理
+                    }
+                }
+            }, period, period, TimeUnit.MILLISECONDS);
+        }
+        try (InputStream in = body;
              OutputStream out = append
                      ? Files.newOutputStream(part, StandardOpenOption.CREATE, StandardOpenOption.APPEND)
                      : Files.newOutputStream(part, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
@@ -759,9 +994,25 @@ public class NativePackService {
             while ((n = in.read(buf)) > 0) {
                 out.write(buf, 0, n);
                 written += n;
+                lastByteAt.set(System.nanoTime());
                 st.setBytesDownloaded(baseBytes + written);
             }
+        } catch (IOException e) {
+            if (idleTimedOut.get()) throw readIdleTimeout(url, idleMs, e);
+            throw e;
+        } finally {
+            if (guard != null) guard.cancel(false);
         }
+        if (idleTimedOut.get()) throw readIdleTimeout(url, idleMs, null);
+    }
+
+    private IOException readIdleTimeout(String url, long idleMs, IOException cause) {
+        IOException e = new IOException(LangText.of(
+                "下载中断：" + (idleMs / 1000) + " 秒内没有收到新数据",
+                "Download stalled: no data received for " + (idleMs / 1000) + "s") + " (" + url + ")");
+        if (cause != null) e.initCause(cause);
+        log.warn("Pack download from {} idle for {} ms; aborting this attempt", url, idleMs);
+        return e;
     }
 
     private List<String> sourceUrls(String packId, String version, Component c) {
@@ -923,13 +1174,34 @@ public class NativePackService {
      * 恢复 POSIX exec 位（graphviz 的 dot 等）；非 posix 文件系统跳过。
      */
     void extract(Path archive, Path destDir) {
+        extractAndHash(archive, destDir, new PackStatus());
+    }
+
+    /** 解压并返回「相对路径 → 写盘字节的 sha256」；进度按本压缩包自身计 */
+    Map<String, String> extractAndHash(Path archive, Path destDir, PackStatus st) {
+        return extractAndHash(archive, destDir, st, 0, sizeOf(archive));
+    }
+
+    /**
+     * 解压的同时逐文件算 sha256（写盘的就是被哈希的那份字节），供 {@link #verifyContents}
+     * 比对，省掉事后整棵树重读一遍（dev-board#1015）。
+     *
+     * <p>进度：tar 流里事先不知道条目总数，所以 {@code phasePercent} 按<b>已消耗的压缩字节</b>
+     * 占全部压缩包字节的比例算（{@code baseBytes} 是此前组件的压缩包字节和），
+     * 解压完之前封顶 99；另外逐文件推进 {@code filesDone} / {@code bytesUnpacked}。
+     */
+    private Map<String, String> extractAndHash(Path archive, Path destDir, PackStatus st,
+                                               long baseBytes, long totalBytes) {
+        Map<String, String> hashes = new HashMap<>();
         try {
             Files.createDirectories(destDir);
             Path canonicalDest = destDir.toRealPath();
             int entries = 0;
             long unpacked = 0;
+            CountingInputStream counted = new CountingInputStream(Files.newInputStream(archive));
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
             try (TarArchiveInputStream tin = new TarArchiveInputStream(
-                    new GzipCompressorInputStream(Files.newInputStream(archive)))) {
+                    new GzipCompressorInputStream(counted))) {
                 TarArchiveEntry e;
                 while ((e = tin.getNextEntry()) != null) {
                     if (++entries > props.getMaxArchiveEntries()) {
@@ -966,15 +1238,65 @@ public class NativePackService {
                                 "Unpacked size exceeds the limit (" + props.getMaxUnpackedBytes() + " bytes)"));
                     }
                     Files.createDirectories(dest.getParent());
-                    try (OutputStream out = Files.newOutputStream(dest)) {
-                        tin.transferTo(out);
+                    md.reset();
+                    long n;
+                    try (OutputStream out = new DigestOutputStream(Files.newOutputStream(dest), md)) {
+                        n = tin.transferTo(out);
                     }
+                    hashes.put(relKey(canonicalDest, dest), hex(md.digest()));
                     restoreExecBit(dest, e.getMode());
+
+                    st.setFilesDone(st.getFilesDone() + 1);
+                    st.setBytesUnpacked(st.getBytesUnpacked() + n);
+                    if (totalBytes > 0) {
+                        int pct = (int) Math.min(99, (baseBytes + counted.count()) * 100 / totalBytes);
+                        st.setPhasePercent(Math.max(st.getPhasePercent(), pct));
+                    }
+                    progressChanged(st);
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException(LangText.of("解压失败: ", "Extraction failed: ") + e.getMessage());
         }
+        return hashes;
+    }
+
+    /** 统计已读字节（给解压进度用：压缩字节消耗比例） */
+    private static final class CountingInputStream extends FilterInputStream {
+        private final AtomicLong count = new AtomicLong();
+
+        CountingInputStream(InputStream in) {
+            super(in);
+        }
+
+        long count() {
+            return count.get();
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            if (b >= 0) count.incrementAndGet();
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int n = super.read(b, off, len);
+            if (n > 0) count.addAndGet(n);
+            return n;
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            long k = super.skip(n);
+            if (k > 0) count.addAndGet(k);
+            return k;
+        }
+    }
+
+    private static String relKey(Path base, Path file) {
+        return base.relativize(file).toString().replace(java.io.File.separatorChar, '/');
     }
 
     private static void restoreExecBit(Path file, int mode) {
@@ -993,8 +1315,12 @@ public class NativePackService {
     /**
      * 按包内 {@code contents.sha256}（每行 {@code <hex>  <相对路径>}）逐文件复核。
      * 签名已经从密码学上覆盖了压缩包内容，这一步是落盘完整性的事后可审计凭据。
+     *
+     * <p>比对对象是解压时对写盘字节算出的哈希（{@link #extractAndHash} 的返回值），
+     * 不再把文件从磁盘重读一遍（dev-board#1015）；语义不变：清单里每一条都必须有、
+     * 且哈希一致，否则拒绝。
      */
-    void verifyContents(Path dir) {
+    void verifyContents(Path dir, Map<String, String> hashes, PackStatus st) {
         Path list = dir.resolve(CONTENTS_LIST);
         if (!Files.isRegularFile(list)) {
             throw new IllegalStateException(LangText.of(
@@ -1006,6 +1332,15 @@ public class NativePackService {
         } catch (IOException e) {
             throw new IllegalStateException(LangText.of("读取 contents.sha256 失败: ", "Failed to read contents.sha256: ") + e.getMessage());
         }
+        Path base;
+        try {
+            base = dir.toRealPath();
+        } catch (IOException e) {
+            throw new IllegalStateException(LangText.of("路径检查失败: ", "Path check failed: ") + e.getMessage());
+        }
+        long listed = lines.stream().filter(l -> !l.isBlank()).count();
+        long doneBefore = st.getFilesDone();
+        st.setFilesTotal(st.getFilesTotal() + listed);
         for (String line : lines) {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
@@ -1018,14 +1353,19 @@ public class NativePackService {
             if (!isSafeRelPath(rel)) {
                 throw new IllegalStateException(LangText.of("contents.sha256 含非法路径: ", "contents.sha256 contains an unsafe path: ") + rel);
             }
-            Path file = dir.resolve(rel).normalize();
-            if (!file.startsWith(dir) || !Files.isRegularFile(file)) {
+            Path file = base.resolve(rel).normalize();
+            String actual = file.startsWith(base) ? hashes.get(relKey(base, file)) : null;
+            if (actual == null) {
                 throw new IllegalStateException(LangText.of("清单里的文件不存在: ", "File listed in contents.sha256 is missing: ") + rel);
             }
-            if (!sha256Hex(file).equalsIgnoreCase(expected)) {
+            if (!actual.equalsIgnoreCase(expected)) {
                 throw new IllegalStateException(LangText.of("文件校验失败: ", "File verification failed: ") + rel);
             }
+            st.setFilesDone(st.getFilesDone() + 1);
+            long total = st.getFilesTotal();
+            if (total > 0) st.setPhasePercent((int) Math.min(99, st.getFilesDone() * 100 / total));
         }
+        if (st.getFilesDone() - doneBefore > 0) progressChanged(st);
     }
 
     // ==================== 封禁 ====================
@@ -1253,14 +1593,18 @@ public class NativePackService {
             byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
-            StringBuilder sb = new StringBuilder(64);
-            for (byte b : md.digest()) {
-                sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
-            }
-            return sb.toString();
+            return hex(md.digest());
         } catch (Exception e) {
             throw new IllegalStateException(LangText.of("哈希计算失败: ", "Failed to compute hash: ") + e.getMessage());
         }
+    }
+
+    private static String hex(byte[] digest) {
+        StringBuilder sb = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 
     private static PublicKey parsePublicKey(String pem) throws Exception {
@@ -1340,6 +1684,14 @@ public class NativePackService {
     @PreDestroy
     public void shutdown() {
         installer.shutdownNow();
+        readWatchdog.shutdownNow();
+    }
+
+    /**
+     * 进度快照钩子：阶段切换与解压进度推进时调用（默认空实现）。
+     * 单测覆写它逐帧记录状态，不必靠另一条线程去赌轮询时机。
+     */
+    protected void progressChanged(PackStatus st) {
     }
 
     // ==================== HTTP seam（单测覆写；测试用本地 HTTP 桩） ====================
@@ -1375,8 +1727,10 @@ public class NativePackService {
     /** 大文件 GET，{@code from > 0} 时带 Range 头请求断点续传 */
     protected HttpResponse<InputStream> httpGetRange(String url, long from)
             throws IOException, InterruptedException {
+        // 这个超时只管到响应头为止（JDK HttpClient 的语义），读体由 fetchToFile 的看门狗管
+        long idleMs = props.getReadIdleTimeoutMs();
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofMinutes(10))
+                .timeout(idleMs > 0 ? Duration.ofMillis(Math.max(idleMs, 5000L)) : Duration.ofMinutes(10))
                 .GET();
         if (from > 0) {
             b.header("Range", "bytes=" + from + "-");
