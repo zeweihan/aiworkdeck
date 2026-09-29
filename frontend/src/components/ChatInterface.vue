@@ -3902,6 +3902,14 @@ export default {
     // ---- 计划审阅（dev-board#1022）----
     // 编辑器回传的审阅态，按 fileId 索引，传给 RootBubble → ArtifactCard 显示「修订中 · …」。
     const reviewStates = ref({})
+    // 最近一次从哪张卡打开了该文件的审阅：fileId → 卡片 id。历史回放的卡每次刷新都换新 id，
+    // 而后端 open 记录幂等返回旧 artifactId，编辑器回传的状态若照旧 id 走，卡片按 id 过滤就认不出
+    // 自己（没有「修订中」chip、提交后不变已修订）。回写成打开它的那张卡的 id 即可。
+    const reviewOpenerCard = ref({})
+    const withOpenerArtifactId = (st) => {
+      const opener = st && st.fileId != null ? reviewOpenerCard.value[st.fileId] : null
+      return opener ? { ...st, artifactId: opener } : st
+    }
     // 计划卡「打开修订」：先定位计划文件（saved 事件给的 fileId，没有就按气泡里的保存路径反查），
     // 再交给宿主在编辑器标签里开审阅态。定位不到就退回卡内 textarea（卡片传来的 fallback）。
     const handleArtifactOpenReview = async (art) => {
@@ -3930,6 +3938,7 @@ export default {
         return
       }
       if (!name) name = String(art.savedPath || '').split('/').pop() || ''
+      reviewOpenerCard.value = { ...reviewOpenerCard.value, [fileId]: art.id }
       emit('open-review-tab', {
         fileId,
         name,
@@ -3946,7 +3955,7 @@ export default {
         const prev = reviewStates.value[fileId] || {}
         reviewStates.value = {
           ...reviewStates.value,
-          [fileId]: { ...prev, fileId, artifactId: artifactId || prev.artifactId, status: 'submitted' }
+          [fileId]: withOpenerArtifactId({ ...prev, fileId, artifactId: artifactId || prev.artifactId, status: 'submitted' })
         }
       }
       const pending = sendMessage({
@@ -3964,7 +3973,7 @@ export default {
     }
     const handleReviewState = (st) => {
       if (!st || st.fileId == null) return
-      reviewStates.value = { ...reviewStates.value, [st.fileId]: st }
+      reviewStates.value = { ...reviewStates.value, [st.fileId]: withOpenerArtifactId(st) }
     }
 
     // Expose methods for parent ref access

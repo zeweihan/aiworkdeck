@@ -153,8 +153,9 @@ function loadHandleReviewSubmit(sendMessage) {
   assert.ok(m, '找不到 handleReviewSubmit')
   const reviewStates = { value: {} }
   // eslint-disable-next-line no-new-func
-  const fn = new Function('sendMessage', 'reviewStates', 'props', 'currentModelId', 'currentSkillIds', 'scrollToBottom',
-    `return async (${m[1]}) => {${m[2]}\n}`)(sendMessage, reviewStates, { projectId: 1 }, { value: 'm' }, () => [], () => {})
+  // withOpenerArtifactId：没有登记过「打开审阅的卡」时原样返回（真实现见 ChatInterface 的 reviewOpenerCard）
+  const fn = new Function('sendMessage', 'reviewStates', 'props', 'currentModelId', 'currentSkillIds', 'scrollToBottom', 'withOpenerArtifactId',
+    `return async (${m[1]}) => {${m[2]}\n}`)(sendMessage, reviewStates, { projectId: 1 }, { value: 'm' }, () => [], () => {}, (st) => st)
   return { fn, reviewStates }
 }
 test('I-3 ChatInterface：sendMessage 已调用后才 ack(true)；submitted 态带 artifactId', async () => {
