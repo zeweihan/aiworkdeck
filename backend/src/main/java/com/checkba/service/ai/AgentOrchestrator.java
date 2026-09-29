@@ -455,8 +455,8 @@ public class AgentOrchestrator {
                                     dev.langchain4j.model.StreamingResponseHandler<
                                             dev.langchain4j.data.message.AiMessage> handler) {
         if (model instanceof OpenRouterStreamingChatModel cancellable) {
-            okhttp3.Call call = cancellable.generateTracked(messages, tools, handler);
-            return call::cancel;
+            // 句柄总是掐当前那次请求：首字节前换家重发后第一次的 Call 已作废（dev-board#1061）
+            return cancellable.generateWithCanceller(messages, tools, handler);
         }
         model.generate(messages, tools, handler);
         return null;
@@ -2271,8 +2271,14 @@ public class AgentOrchestrator {
             }
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
             boolean replayable = !handler.hasStreamedTokens();
+            // 同模型退避重放还要求「思考也没流出过」（dev-board#1061）：思考型模型（Kimi K3）一轮纯思考
+            // 可以跑到 OkHttp callTimeout（600s），这时正文一个字没出、按上面的判据「可重放」——
+            // 原样重放 3 次就是从头再想 3 遍、按输出单价再付 3 遍，而同一家供应商多半还在同一个队里。
+            // 已经在思考的轮直接落到下面的故障转移链（换模型重放，用户只是多看一张思考卡），
+            // 故障转移不可用或无候选时照常终态收尾。
+            boolean sameModelReplayable = replayable && !handler.hasStreamedReasoning();
 
-            if (replayable && kind.retryable() && guard.llmRetries < kind.maxRetries()) {
+            if (sameModelReplayable && kind.retryable() && guard.llmRetries < kind.maxRetries()) {
                 int attempt = ++guard.llmRetries;
                 long delaySec = kind.retryDelaySeconds(attempt);
                 log.warn("LLM error [{}] for {} (attempt {}/{}), retrying in {}s: {}",

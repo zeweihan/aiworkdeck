@@ -36,6 +36,11 @@
       </div>
     </button>
 
+    <div v-if="longWaitKey" class="long-wait" role="status">
+      <span class="long-wait-text">{{ $t(longWaitKey) }}</span>
+      <button v-if="stoppable" type="button" class="long-wait-stop" @click.stop="emit('stop')">{{ $t('chat.stop') }}</button>
+    </div>
+
     <transition name="expand">
       <div class="body" v-if="isExpanded && content">
         <div class="content">
@@ -56,8 +61,19 @@ const props = defineProps({
   duration: { type: Number, default: 0 },
   content: { type: String, default: '' },
   variant: { type: String, default: 'card' }, // 'card' | 'inline'
-  startTime: { type: Number, default: 0 }
+  startTime: { type: Number, default: 0 },
+  // 长思考提示（dev-board#1061）：是否已收到过思考/正文增量、是否已换过一家供应商重试、
+  // 是否给「停止」按钮（只有本轮仍在流式的最新气泡给，停止走 ChatInterface 现有的 abort）
+  receivedDelta: { type: Boolean, default: false },
+  providerRetried: { type: Boolean, default: false },
+  stoppable: { type: Boolean, default: false }
 })
+
+const emit = defineEmits(['stop'])
+
+// 等过 60 秒才出副文案：短思考不打扰。三句话分开——
+// 还没收到任何增量（只有保活）= 排在服务商队里；换过家还没字 = 已换一家重试；已在收思考 = 模型仍在推理。
+const LONG_WAIT_SECONDS = 60
 
 const isExpanded = ref(true)
 const liveSeconds = ref(0)
@@ -134,9 +150,43 @@ const displayDuration = computed(() => {
 const toggle = () => {
   isExpanded.value = !isExpanded.value
 }
+
+const longWaitKey = computed(() => {
+    if (props.variant === 'inline' || props.status !== 'thinking') return ''
+    if (liveSeconds.value < LONG_WAIT_SECONDS) return ''
+    if (props.receivedDelta) return 'chat.thinkingLong'
+    if (props.providerRetried) return 'chat.thinkingRequeued'
+    return 'chat.thinkingQueued'
+})
+
+// 供组件单测直接拨秒表（不真等 60 秒）
+defineExpose({ liveSeconds, longWaitKey })
 </script>
 
 <style scoped>
+.long-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 12px 6px 30px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--awd-text-3);
+}
+.long-wait-stop {
+  appearance: none;
+  border: 1px solid var(--awd-border);
+  background: transparent;
+  color: var(--awd-text-2);
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.long-wait-stop::after { border: 0; }
+.long-wait-stop:hover { color: var(--awd-text); border-color: var(--awd-text-3); }
 /* Standard Card Styles */
 .thinking-card {
   margin-bottom: 12px;

@@ -334,6 +334,63 @@ class ChatModelFactoryTest {
         verify(systemSettingService, never()).set(eq("ai.activeProvider"), anyString());
     }
 
+    // ==================== 思考强度（dev-board#1061） ====================
+
+    @Test
+    @DisplayName("思考强度只接到名单内模型：BYOK 与平台两条流式构建口径都带上，名单外不带")
+    void reasoningEffortIsWiredOnlyForListedModels() {
+        com.checkba.config.AiReasoningProperties reasoning = new com.checkba.config.AiReasoningProperties();
+        reasoning.setModels(java.util.List.of("moonshotai/kimi-k3"));
+        factory.setReasoningPropertiesForTest(reasoning);
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+
+        OpenRouterStreamingChatModel k3 = (OpenRouterStreamingChatModel) factory.getStreamingChatModel("moonshotai/kimi-k3");
+        assertEquals("medium", k3.reasoningEffort());
+        OpenRouterStreamingChatModel ds = (OpenRouterStreamingChatModel) factory.getStreamingChatModel("deepseek/deepseek-v4-flash");
+        assertNull(ds.reasoningEffort(), "名单外模型的请求体不许多出 reasoning 字段");
+
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
+        when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
+        factory.clearCache();
+        OpenRouterStreamingChatModel platformK3 =
+                (OpenRouterStreamingChatModel) factory.getStreamingChatModel("moonshotai/kimi-k3");
+        assertEquals("medium", platformK3.reasoningEffort(), "平台通道同样要带上");
+    }
+
+    @Test
+    @DisplayName("供应商路由只接到思考型模型名单：开关关掉或名单外都不带")
+    void providerRoutingIsWiredOnlyForListedModelsWhenEnabled() {
+        com.checkba.config.AiReasoningProperties reasoning = new com.checkba.config.AiReasoningProperties();
+        reasoning.setModels(java.util.List.of("moonshotai/kimi-k3"));
+        factory.setReasoningPropertiesForTest(reasoning);
+        com.checkba.config.AiProviderRoutingProperties routing = new com.checkba.config.AiProviderRoutingProperties();
+        routing.setEnabled(true);
+        routing.setQuantizations(java.util.List.of("fp8", "unknown"));
+        factory.setProviderRoutingForTest(routing, 30);
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+
+        OpenRouterStreamingChatModel.ProviderRouting k3 =
+                ((OpenRouterStreamingChatModel) factory.getStreamingChatModel("moonshotai/kimi-k3")).providerRouting();
+        assertEquals(new OpenRouterStreamingChatModel.ProviderRouting("latency", java.util.List.of("fp8", "unknown"), true, 30), k3);
+        assertNull(((OpenRouterStreamingChatModel) factory.getStreamingChatModel("qwen/qwen3.7-flash")).providerRouting(),
+                "单供应商模型不许带量化硬过滤");
+
+        routing.setEnabled(false);
+        factory.clearCache();
+        assertNull(((OpenRouterStreamingChatModel) factory.getStreamingChatModel("moonshotai/kimi-k3")).providerRouting());
+    }
+
+    @Test
+    @DisplayName("思考强度名单为空或未注入配置：一个模型都不带")
+    void reasoningEffortAbsentWithoutConfiguration() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        assertNull(((OpenRouterStreamingChatModel) factory.getStreamingChatModel("moonshotai/kimi-k3")).reasoningEffort());
+        factory.setReasoningPropertiesForTest(new com.checkba.config.AiReasoningProperties());
+        factory.clearCache();
+        assertNull(((OpenRouterStreamingChatModel) factory.getStreamingChatModel("moonshotai/kimi-k3")).reasoningEffort());
+    }
+
     // ==================== 平台通道「AI WorkDeck 云端」（PR-B） ====================
 
     @Test

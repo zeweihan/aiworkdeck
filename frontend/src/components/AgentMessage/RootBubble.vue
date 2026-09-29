@@ -12,7 +12,11 @@
               :duration="entry.data.duration || 0"
               :content="entry.data.content"
               :start-time="entry.data.startTime || 0"
+              :received-delta="!!entry.data.receivedDelta"
+              :provider-retried="!!entry.data.providerRetried"
+              :stoppable="!!(isLatest && bubble.isStreaming)"
               variant="ghost"
+              @stop="$emit('stop-generation')"
             />
             <div v-else-if="entry.type === 'title'" class="stream-title">{{ bubble.title }}</div>
             <section v-else-if="entry.type === 'execution' || entry.type === 'plan'" class="activity-entry">
@@ -162,7 +166,7 @@ const props = defineProps({
   reviewStates: { type: Object, default: () => ({}) }
 })
 
-const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question', 'regenerate', 'open-review'])
+const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question', 'regenerate', 'open-review', 'stop-generation'])
 
 // 计划文件的相对路径：历史回放没有 saved 事件，计划卡靠它反查 fileId。流式中不算（正文还在长）。
 const savedPath = computed(() => (props.bubble.isStreaming ? '' : resolveSavedPath(props.bubble.content) || ''))

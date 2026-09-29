@@ -97,6 +97,10 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
     private final boolean explicitPromptCache;
     /** 本模型走不走「易变段拆成第二条 system 消息」那条路，见 {@link #splitsVolatileSystem}。 */
     private final boolean splitVolatile;
+    /** 思考强度；null = 请求体不带 reasoning 字段（dev-board#1061）。 */
+    private final String reasoningEffort;
+    /** 供应商路由偏好；null = 请求体不带 provider 字段（dev-board#1061）。 */
+    private final ProviderRouting providerRouting;
 
     /** Empty/length-limited responses can still incur provider usage; null means unreported, never zero. */
     public static final class EmptyResponseException extends RuntimeException {
@@ -133,6 +137,37 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
 
     public OpenRouterStreamingChatModel(String apiKey, String baseUrl, String modelName, Duration timeout,
                                         int maxRequestsPerHost) {
+        this(apiKey, baseUrl, modelName, timeout, maxRequestsPerHost, null);
+    }
+
+    /**
+     * @param reasoningEffort 思考强度（dev-board#1061），非 null 时请求体带
+     *        {@code "reasoning":{"effort":...}}；null = 不带（供应商默认）。由
+     *        {@link com.checkba.config.AiReasoningProperties#effortFor} 按模型白名单给出。
+     */
+    public OpenRouterStreamingChatModel(String apiKey, String baseUrl, String modelName, Duration timeout,
+                                        int maxRequestsPerHost, String reasoningEffort) {
+        this(apiKey, baseUrl, modelName, timeout, maxRequestsPerHost, reasoningEffort, null);
+    }
+
+    /**
+     * 供应商路由偏好（dev-board#1061）。非 null 时请求体带 OpenRouter 的 {@code "provider"} 对象，
+     * 且 {@code requeueAfterSeconds > 0} 时启用「首字节前只收到保活就换一家重发一次」。
+     *
+     * @param sort              {@code latency} / {@code throughput} / {@code price}
+     * @param quantizations     允许的量化档（OpenRouter 枚举值）；空 = 不限制
+     * @param allowFallbacks    首选供应商失败时是否允许 OpenRouter 自己换家
+     * @param requeueAfterSeconds 首字节前只收到保活多少秒后换家重发；0 = 不重发
+     */
+    public record ProviderRouting(String sort, List<String> quantizations, boolean allowFallbacks,
+                                  int requeueAfterSeconds) {
+    }
+
+    public OpenRouterStreamingChatModel(String apiKey, String baseUrl, String modelName, Duration timeout,
+                                        int maxRequestsPerHost, String reasoningEffort,
+                                        ProviderRouting providerRouting) {
+        this.reasoningEffort = reasoningEffort == null || reasoningEffort.isBlank() ? null : reasoningEffort.trim();
+        this.providerRouting = providerRouting;
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.explicitPromptCache = requiresExplicitPromptCache(modelName);
@@ -157,12 +192,22 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         return modelName;
     }
 
+    /** 本实例注入的思考强度；null = 不注入（给工厂接线测试用）。 */
+    String reasoningEffort() {
+        return reasoningEffort;
+    }
+
+    /** 本实例的供应商路由偏好；null = 不注入（给工厂接线测试用）。 */
+    ProviderRouting providerRouting() {
+        return providerRouting;
+    }
+
     public Call generateCancellable(List<ChatMessage> messages, int maxOutputTokens,
                                     StreamingResponseHandler<AiMessage> handler) {
         if (maxOutputTokens < 256 || maxOutputTokens > 4096) {
             throw new IllegalArgumentException("Writing output limit must be between 256 and 4096 tokens");
         }
-        return send(messages, null, maxOutputTokens, handler);
+        return send(messages, null, maxOutputTokens, handler).firstCall;
     }
 
     @Override
@@ -195,11 +240,41 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
      */
     public Call generateTracked(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
                                 StreamingResponseHandler<AiMessage> handler) {
-        return send(messages, toolSpecifications, null, handler);
+        return send(messages, toolSpecifications, null, handler).firstCall;
     }
 
-    private Call send(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
-                      Integer maxOutputTokens, StreamingResponseHandler<AiMessage> handler) {
+    /**
+     * 与 {@link #generateTracked} 同一条路，但交回的取消句柄总是掐<b>当前</b>那次请求：
+     * 首字节前换家重发（dev-board#1061）之后，第一次拿到的 {@link Call} 已经作废，
+     * 编排器的「停止」必须打到重发出去的那一次上。
+     */
+    public Runnable generateWithCanceller(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
+                                          StreamingResponseHandler<AiMessage> handler) {
+        return send(messages, toolSpecifications, null, handler)::cancel;
+    }
+
+    /** 一轮生成的在途请求：换家重发会把 call/session 换成新的一份。 */
+    private static final class Inflight {
+        final Call firstCall;
+        volatile Call call;
+        volatile StreamSession session;
+        volatile boolean cancelled;
+
+        Inflight(Call call, StreamSession session) {
+            this.firstCall = call;
+            this.call = call;
+            this.session = session;
+        }
+
+        void cancel() {
+            cancelled = true;
+            Call c = call;
+            if (c != null) c.cancel();
+        }
+    }
+
+    private Inflight send(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
+                          Integer maxOutputTokens, StreamingResponseHandler<AiMessage> handler) {
         // 分界标记绝不能漏进报文，三条路各自处理（都在序列化之前做）：
         //   显式缓存（Anthropic/Qwen）→ 留着标记，markSystemForCaching 按它拆 content block；
         //   自动缓存且形态已验证 → 按标记拆成两条 system 消息（dev-board#750，见 splitVolatileSystem）；
@@ -229,6 +304,13 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         if (explicitPromptCache) {
             body = markSystemForCaching(body);
         }
+        if (reasoningEffort != null) {
+            body = withReasoningEffort(body, reasoningEffort);
+        }
+        // 写作通道（maxOutputTokens 非 null）不带路由偏好：那条路是 qwen 单供应商，且不做重发
+        if (providerRouting != null && maxOutputTokens == null) {
+            body = withProviderRouting(body, providerRouting);
+        }
         // Verified Flash writing must not spend its small output budget on hidden reasoning.
         // Other Qwen endpoints can require reasoning; leave every unverified model at its default.
         if (maxOutputTokens != null && "qwen/qwen3.7-flash".equals(modelName)) {
@@ -239,6 +321,41 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             } catch (IOException e) { throw new IllegalStateException("Cannot encode writing request", e); }
         }
 
+        StreamSession session = new StreamSession(handler, maxOutputTokens != null);
+        // Explicit paid writing requests do not transparently retry a failed connection.
+        // The existing general chat transport retains its original OkHttp policy.
+        OkHttpClient transport = maxOutputTokens == null ? client : client.newBuilder().retryOnConnectionFailure(false).build();
+        Inflight inflight = new Inflight(enqueue(transport, body, session), session);
+
+        // 首字节前排队换家（dev-board#1061）：判定交给 handler 的看门狗（它手里有「保活 vs 真字节」
+        // 的计时），动作在这里做——先让旧会话静默（之后它的任何回调都不再转给 handler，
+        // 包括我们自己 cancel 换来的那个 IOException），再掐旧请求、带 ignore 重发一次。
+        if (maxOutputTokens == null && providerRouting != null && providerRouting.requeueAfterSeconds() > 0
+                && handler instanceof ReasoningStreamingHandler rh) {
+            final String baseBody = body;
+            java.util.concurrent.atomic.AtomicBoolean used = new java.util.concurrent.atomic.AtomicBoolean(false);
+            rh.bindProviderRequeue(providerRouting.requeueAfterSeconds(), () -> {
+                if (inflight.cancelled || !used.compareAndSet(false, true)) return false;
+                StreamSession old = inflight.session;
+                // 判定与动作之间首字节恰好到了：不掐一条已经开始出字的流
+                if (old.sawContent || !old.supersede()) return false;   // 已经到终态（或已出首字节后收尾），不再重发
+                String from = old.provider;
+                inflight.call.cancel();
+                StreamSession next = new StreamSession(handler, false);
+                String retryBody = withProviderRequeue(baseBody, from, providerRouting.sort());
+                log.warn("Requeueing {} on another provider (was {}): only keep-alive before first byte",
+                        modelName, from == null ? "unknown" : from);
+                inflight.session = next;
+                inflight.call = enqueue(transport, retryBody, next);
+                if (inflight.cancelled) inflight.call.cancel();   // 停止恰好落在换家这一刻
+                return true;
+            });
+        }
+        return inflight;
+    }
+
+    /** 发出一次请求；回调全部转给 session（session 静默后一概不再转给 handler）。 */
+    private Call enqueue(OkHttpClient transport, String body, StreamSession session) {
         Request request = new Request.Builder()
                 .url(endpoint)
                 .header("Authorization", "Bearer " + (apiKey == null ? "" : apiKey))
@@ -246,11 +363,6 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
                 .header("User-Agent", ProductIdentity.userAgent("ai-gateway"))
                 .post(RequestBody.create(body, JSON))
                 .build();
-
-        StreamSession session = new StreamSession(handler, maxOutputTokens != null);
-        // Explicit paid writing requests do not transparently retry a failed connection.
-        // The existing general chat transport retains its original OkHttp policy.
-        OkHttpClient transport = maxOutputTokens == null ? client : client.newBuilder().retryOnConnectionFailure(false).build();
         Call call = transport.newCall(request);
         call.enqueue(new Callback() {
             @Override
@@ -271,6 +383,8 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
                         session.fail(new IOException("empty response body from " + endpoint));
                         return;
                     }
+                    // 部分情况下 OpenRouter 在响应头里就带了供应商名（多数流式响应要等首个分片）
+                    session.noteProvider(r.header("X-Provider-Name"));
                     session.consume(rb0.source());
                 } catch (Throwable t) {
                     session.fail(t);
@@ -278,6 +392,68 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             }
         });
         return call;
+    }
+
+    /**
+     * 往请求体里加 {@code "reasoning":{"effort":...}}（dev-board#1061）。
+     * 只由构造时给定的档位触发，名单外的模型请求体一个字节都不变。
+     */
+    static String withReasoningEffort(String body, String effort) {
+        try {
+            ObjectNode root = (ObjectNode) LENIENT.readTree(body);
+            root.set("reasoning", LENIENT.createObjectNode().put("effort", effort));
+            return LENIENT.writeValueAsString(root);
+        } catch (IOException | ClassCastException e) {
+            // 改写失败只是按供应商默认去想，不能让本轮失败
+            log.warn("Could not add reasoning effort to request body: {}", e.getClass().getSimpleName());
+            return body;
+        }
+    }
+
+    /**
+     * 往请求体里加 OpenRouter 的供应商路由偏好（dev-board#1061）：
+     * {@code "provider":{"sort":...,"quantizations":[...],"allow_fallbacks":...}}。
+     */
+    static String withProviderRouting(String body, ProviderRouting routing) {
+        try {
+            ObjectNode root = (ObjectNode) LENIENT.readTree(body);
+            ObjectNode p = LENIENT.createObjectNode();
+            if (routing.sort() != null && !routing.sort().isBlank()) p.put("sort", routing.sort().trim());
+            if (routing.quantizations() != null && !routing.quantizations().isEmpty()) {
+                com.fasterxml.jackson.databind.node.ArrayNode q = p.putArray("quantizations");
+                for (String s : routing.quantizations()) {
+                    if (s != null && !s.isBlank()) q.add(s.trim());
+                }
+            }
+            p.put("allow_fallbacks", routing.allowFallbacks());
+            root.set("provider", p);
+            return LENIENT.writeValueAsString(root);
+        } catch (IOException | ClassCastException e) {
+            log.warn("Could not add provider routing to request body: {}", e.getClass().getSimpleName());
+            return body;
+        }
+    }
+
+    /**
+     * 换家重发的请求体：知道刚才是哪一家就 {@code ignore} 它；不知道（首字节前通常拿不到）
+     * 就换一档排序（latency ⇄ throughput），让 OpenRouter 大概率挑到另一家。
+     * OpenRouter 的 ignore 认供应商显示名（如 "Moonshot AI"），2026-09-29 实测与 slug 等效。
+     */
+    static String withProviderRequeue(String body, String fromProvider, String sort) {
+        try {
+            ObjectNode root = (ObjectNode) LENIENT.readTree(body);
+            JsonNode existing = root.get("provider");
+            ObjectNode p = existing instanceof ObjectNode o ? o : root.putObject("provider");
+            if (fromProvider != null && !fromProvider.isBlank()) {
+                p.putArray("ignore").add(fromProvider.trim());
+            } else {
+                p.put("sort", "throughput".equalsIgnoreCase(sort == null ? "" : sort.trim()) ? "latency" : "throughput");
+            }
+            return LENIENT.writeValueAsString(root);
+        } catch (IOException | ClassCastException e) {
+            log.warn("Could not build requeue request body: {}", e.getClass().getSimpleName());
+            return body;
+        }
     }
 
     // ==================== 提示缓存（Anthropic 显式断点） ====================
@@ -599,6 +775,24 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
         private final AtomicBoolean settled = new AtomicBoolean(false);
         private TokenUsage reportedUsage;
         private final boolean privateWriting;
+        /** 上游供应商每轮只报一次（每个分片都带同一个值）。 */
+        private volatile boolean providerReported;
+        /** 本次请求的上游供应商（换家重发时拿它去 ignore）；拿不到是 null。 */
+        volatile String provider;
+        /** 是否已收到过正文或思考（真字节）；换家重发不掐已经开始出字的流。 */
+        volatile boolean sawContent;
+
+        /** 让本会话静默：之后的数据与终态一概不转给 handler。已到终态时返回 false。 */
+        boolean supersede() {
+            return settled.compareAndSet(false, true);
+        }
+
+        void noteProvider(String name) {
+            if (providerReported || name == null || name.isBlank()) return;
+            providerReported = true;
+            provider = name.trim();
+            if (reasoningHandler != null) reasoningHandler.onProvider(provider);
+        }
 
         StreamSession(StreamingResponseHandler<AiMessage> handler, boolean privateWriting) {
             this.handler = handler;
@@ -665,6 +859,11 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
                 else log.warn("SSE chunk does not fit ChatCompletionResponse, ignored: {}", abbreviate(payload));
                 return false;
             }
+            if (!providerReported) {
+                // 分片顶层的 provider：排在内容回调之前，TTFT 那条日志才能带上它
+                JsonNode p = root.get("provider");
+                if (p != null && p.isTextual()) noteProvider(p.asText());
+            }
             builder.append(chunk);
             JsonNode usage = root.path("usage");
             if (usage.path("prompt_tokens").isIntegralNumber() && usage.path("completion_tokens").isIntegralNumber()) {
@@ -675,12 +874,14 @@ public final class OpenRouterStreamingChatModel implements StreamingChatLanguage
             if (choices != null && !choices.isEmpty()) {
                 Delta delta = choices.get(0).delta();
                 if (delta != null && delta.content() != null) {
+                    if (!delta.content().isEmpty()) sawContent = true;
                     handler.onNext(delta.content());
                 }
             }
             if (reasoningHandler != null) {
                 String reasoning = reasoningDeltaOf(root);
                 if (reasoning != null && !reasoning.isEmpty()) {
+                    sawContent = true;
                     reasoningHandler.onReasoning(reasoning);
                 }
                 // usage 只在最后一个 chunk（choices 为空）上出现，所以这里不会重复回调

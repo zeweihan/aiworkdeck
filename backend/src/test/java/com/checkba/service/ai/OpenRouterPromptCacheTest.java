@@ -414,6 +414,145 @@ class OpenRouterPromptCacheTest {
         assertEquals("V", ((SystemMessage) out.get(3)).text());
     }
 
+    // ==================== 思考强度（dev-board#1061） ====================
+
+    private String expectedPlainBody(String modelId) {
+        return Json.toJson(ChatCompletionRequest.builder()
+                .stream(true)
+                .streamOptions(StreamOptions.builder().includeUsage(true).build())
+                .model(modelId)
+                .messages(InternalOpenAiHelper.toOpenAiMessages(MESSAGES))
+                .temperature(0.7)
+                .build());
+    }
+
+    private void runWithEffort(String modelId, String effort) throws Exception {
+        serveStream(TRIVIAL_STREAM);
+        OpenRouterStreamingChatModel model = new OpenRouterStreamingChatModel(
+                "sk-test", baseUrl(), modelId, Duration.ofSeconds(5), 32, effort);
+        Collector c = new Collector();
+        model.generate(MESSAGES, c);
+        c.await();
+        assertNull(c.error.get(), () -> "不该出错：" + c.error.get());
+    }
+
+    @Test
+    @DisplayName("名单外模型：不注入 reasoning，请求体与改造前逐字段一致")
+    void modelOutsideReasoningListIsUntouched() throws Exception {
+        com.checkba.config.AiReasoningProperties reasoning = new com.checkba.config.AiReasoningProperties();
+        reasoning.setModels(List.of("moonshotai/kimi-k3"));
+        String effort = reasoning.effortFor("deepseek/deepseek-v4-flash");
+        assertNull(effort);
+        runWithEffort("deepseek/deepseek-v4-flash", effort);
+
+        assertEquals(MAPPER.readTree(expectedPlainBody("deepseek/deepseek-v4-flash")), MAPPER.readTree(rawRequestBody));
+        assertFalse(rawRequestBody.contains("\"reasoning\""), rawRequestBody);
+    }
+
+    @Test
+    @DisplayName("名单内模型：只多出 reasoning.effort，其余字段一字不变，且仍是紧凑 JSON")
+    void listedModelCarriesReasoningEffort() throws Exception {
+        com.checkba.config.AiReasoningProperties reasoning = new com.checkba.config.AiReasoningProperties();
+        reasoning.setModels(List.of("moonshotai/kimi-k3"));
+        String effort = reasoning.effortFor("moonshotai/kimi-k3");
+        assertEquals("medium", effort, "默认档位是 medium");
+        runWithEffort("moonshotai/kimi-k3", effort);
+
+        com.fasterxml.jackson.databind.node.ObjectNode actual =
+                (com.fasterxml.jackson.databind.node.ObjectNode) MAPPER.readTree(rawRequestBody);
+        assertEquals("medium", actual.path("reasoning").path("effort").asText(), rawRequestBody);
+        assertEquals(1, actual.path("reasoning").size(), "reasoning 里只许有 effort：" + rawRequestBody);
+        actual.remove("reasoning");
+        assertEquals(MAPPER.readTree(expectedPlainBody("moonshotai/kimi-k3")), actual);
+        assertFalse(rawRequestBody.contains("\n"), "注入之后仍然是紧凑 JSON");
+    }
+
+    @Test
+    @DisplayName("供应商路由开：只多出 provider 对象（sort/quantizations/allow_fallbacks），其余字段一字不变")
+    void providerRoutingOnAddsOnlyTheProviderObject() throws Exception {
+        serveStream(TRIVIAL_STREAM);
+        OpenRouterStreamingChatModel.ProviderRouting routing = new OpenRouterStreamingChatModel.ProviderRouting(
+                "latency", List.of("fp8", "bf16", "unknown"), true, 30);
+        OpenRouterStreamingChatModel model = new OpenRouterStreamingChatModel(
+                "sk-test", baseUrl(), "moonshotai/kimi-k3", Duration.ofSeconds(5), 32, null, routing);
+        Collector c = new Collector();
+        model.generate(MESSAGES, c);
+        c.await();
+        assertNull(c.error.get());
+
+        com.fasterxml.jackson.databind.node.ObjectNode actual =
+                (com.fasterxml.jackson.databind.node.ObjectNode) MAPPER.readTree(rawRequestBody);
+        JsonNode p = actual.path("provider");
+        assertEquals("latency", p.path("sort").asText(), rawRequestBody);
+        assertEquals(MAPPER.readTree("[\"fp8\",\"bf16\",\"unknown\"]"), p.path("quantizations"));
+        assertTrue(p.path("allow_fallbacks").asBoolean(false));
+        assertFalse(p.has("ignore"), "首发请求不许带 ignore");
+        actual.remove("provider");
+        assertEquals(MAPPER.readTree(expectedPlainBody("moonshotai/kimi-k3")), actual);
+    }
+
+    @Test
+    @DisplayName("供应商路由关（null）：请求体不带 provider 字段，与改造前逐字段一致")
+    void providerRoutingOffLeavesBodyUntouched() throws Exception {
+        runWithEffort("moonshotai/kimi-k3", null);
+        assertEquals(MAPPER.readTree(expectedPlainBody("moonshotai/kimi-k3")), MAPPER.readTree(rawRequestBody));
+        assertFalse(rawRequestBody.contains("\"provider\""), rawRequestBody);
+    }
+
+    @Test
+    @DisplayName("换家重发的请求体：知道供应商就 ignore 它，不知道就换一档排序")
+    void requeueBodyIgnoresKnownProviderOrSwapsSort() throws Exception {
+        String base = OpenRouterStreamingChatModel.withProviderRouting("{\"model\":\"m\"}",
+                new OpenRouterStreamingChatModel.ProviderRouting("latency", List.of("fp8"), true, 30));
+        JsonNode known = MAPPER.readTree(OpenRouterStreamingChatModel.withProviderRequeue(base, "Moonshot AI", "latency"));
+        assertEquals("Moonshot AI", known.path("provider").path("ignore").path(0).asText());
+        assertEquals("latency", known.path("provider").path("sort").asText(), "ignore 那一档不改排序");
+        assertEquals("fp8", known.path("provider").path("quantizations").path(0).asText(), "量化过滤原样保留");
+
+        JsonNode unknown = MAPPER.readTree(OpenRouterStreamingChatModel.withProviderRequeue(base, null, "latency"));
+        assertEquals("throughput", unknown.path("provider").path("sort").asText());
+        assertFalse(unknown.path("provider").has("ignore"));
+        JsonNode back = MAPPER.readTree(OpenRouterStreamingChatModel.withProviderRequeue(base, "  ", "throughput"));
+        assertEquals("latency", back.path("provider").path("sort").asText());
+    }
+
+    @Test
+    @DisplayName("名单为空或档位写错：一律不注入")
+    void emptyListOrInvalidEffortInjectsNothing() {
+        com.checkba.config.AiReasoningProperties reasoning = new com.checkba.config.AiReasoningProperties();
+        assertNull(reasoning.effortFor("moonshotai/kimi-k3"), "空名单 = 不注入");
+        reasoning.setModels(List.of("MoonshotAI/Kimi-K3"));
+        assertEquals("medium", reasoning.effortFor("moonshotai/kimi-k3"), "精确匹配但忽略大小写");
+        assertNull(reasoning.effortFor("moonshotai/kimi-k3:beta"), "不做前缀匹配");
+        reasoning.setEffortDefault("turbo");
+        assertNull(reasoning.effortFor("moonshotai/kimi-k3"), "非法档位不注入，免得换回一个 400");
+        reasoning.setEffortDefault(" LOW ");
+        assertEquals("low", reasoning.effortFor("moonshotai/kimi-k3"));
+    }
+
+    @Test
+    @DisplayName("分片顶层的 provider 只回调一次，且排在首个内容回调之前（TTFT 日志要带上它）")
+    void upstreamProviderIsReportedOnceBeforeContent() throws Exception {
+        serveStream("data: {\"id\":\"g\",\"provider\":\"Moonshot AI\",\"object\":\"chat.completion.chunk\","
+                + "\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning\":\"想\"}}]}\n\n"
+                + "data: {\"id\":\"g\",\"provider\":\"Moonshot AI\",\"object\":\"chat.completion.chunk\","
+                + "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+                + "data: [DONE]\n\n");
+        List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+        CountDownLatch settled = new CountDownLatch(1);
+        ReasoningStreamingHandler h = new ReasoningStreamingHandler() {
+            @Override public void onProvider(String p) { order.add("provider:" + p); }
+            @Override public void onReasoning(String r) { order.add("reasoning"); }
+            @Override public void onNext(String t) { if (!t.isEmpty()) order.add("token"); }
+            @Override public void onComplete(Response<AiMessage> r) { settled.countDown(); }
+            @Override public void onError(Throwable t) { order.add("error"); settled.countDown(); }
+        };
+        new OpenRouterStreamingChatModel("sk-test", baseUrl(), "moonshotai/kimi-k3", Duration.ofSeconds(5))
+                .generate(MESSAGES, h);
+        assertTrue(settled.await(10, TimeUnit.SECONDS));
+        assertEquals(List.of("provider:Moonshot AI", "reasoning", "token"), order);
+    }
+
     @Test
     @DisplayName("usage 里的缓存命中/写入 token 数被读出来（openai4j 的 Usage 丢掉了这两个字段）")
     void cachedTokensAreParsedFromUsage() throws Exception {

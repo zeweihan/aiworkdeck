@@ -274,6 +274,78 @@ class AgentOrchestratorFailoverFlowTest {
         assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-offline").status());
     }
 
+    /**
+     * 先流出一段思考、再以超时收场的模型（dev-board#1061：Kimi K3 一轮纯思考撞上 callTimeout）。
+     * 计数用来断言「同一个模型没有被原样重放」。
+     */
+    private static final class ThinkThenTimeoutModel implements StreamingChatLanguageModel {
+        final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        final boolean think;
+        ThinkThenTimeoutModel(boolean think) { this.think = think; }
+
+        @Override
+        public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
+            calls.incrementAndGet();
+            if (think) ((ReasoningStreamingHandler) handler).onReasoning("先看看这个文件是什么……");
+            handler.onError(new java.io.IOException("timeout"));
+        }
+
+        @Override
+        public void generate(List<ChatMessage> messages, List<ToolSpecification> tools,
+                             StreamingResponseHandler<AiMessage> handler) {
+            generate(messages, handler);
+        }
+    }
+
+    @Test
+    @DisplayName("已流出思考的轮超时：不同模型原样重放，直接换备选（dev-board#1061）")
+    void reasoningOnlyTimeoutSkipsSameModelRetryAndFailsOver() {
+        ThinkThenTimeoutModel primary = new ThinkThenTimeoutModel(true);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(primary);
+        when(chatModelFactory.getStreamingChatModel(BACKUP)).thenReturn(new HealthyModel("这是一份保密协议。"));
+
+        run("conv-think-timeout");
+
+        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        assertEquals(1, primary.calls.get(), "思考过的轮不许同模型重放——每重放一次都是从头想、从头计费");
+        assertFalse(allText().contains("秒后自动重试"), "不该出现同模型退避提示：" + allText());
+        assertTrue(allText().contains("已自动切换到备用模型"), "要告诉用户换了模型：" + allText());
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-think-timeout").status());
+    }
+
+    @Test
+    @DisplayName("已流出思考的轮超时且无备选：直接终态报错，不退避重放")
+    void reasoningOnlyTimeoutWithoutBackupTerminates() {
+        ThinkThenTimeoutModel primary = new ThinkThenTimeoutModel(true);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(primary);
+        AiFailoverProperties empty = new AiFailoverProperties();
+        empty.setModels(List.of());
+        AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
+        request.setProjectId(1L);
+        request.setConversationId("conv-think-timeout-nochain");
+        request.setMessage("这是什么文件？");
+        request.setModel(PRIMARY);
+        orchestratorWith(empty).handleUserMessage(request, 7L);
+
+        assertEquals(1, primary.calls.get());
+        assertFalse(allText().contains("秒后自动重试"), allText());
+        assertTrue(sseEvents.contains("error"));
+        assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-think-timeout-nochain").status());
+    }
+
+    @Test
+    @DisplayName("零字节（既无正文也无思考）超时：仍按原样退避重放同模型")
+    void silentTimeoutStillRetriesSameModel() {
+        ThinkThenTimeoutModel primary = new ThinkThenTimeoutModel(false);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(primary);
+        when(chatModelFactory.getStreamingChatModel(BACKUP)).thenReturn(new HealthyModel("不应该被用到"));
+
+        run("conv-silent-timeout");
+
+        assertTrue(allText().contains("秒后自动重试"), "零字节超时仍走同模型退避：" + allText());
+        verify(chatModelFactory, never()).getStreamingChatModel(eq(BACKUP));
+    }
+
     @Test
     @DisplayName("鉴权类 FATAL 错误不换模型：重放也不会好，白换一次还多花一次调用")
     void doesNotFailoverOnFatalError() {
