@@ -93,7 +93,7 @@ class AudioAttachmentNoticeTest {
 
         assertTrue(out.startsWith("Warning: "),
                 "前缀要让 ContextAssembler 的失败回执守卫认出来，实际是：" + out);
-        assertTrue(out.contains("转写音频"), "要指到文件树右键那条真实入口，实际是：" + out);
+        assertTrue(out.contains("语音转文字"), "要指到文件树右键那条真实入口，实际是：" + out);
         assertFalse(out.contains("OCR"), "OCR 对音频没有一点用，实际是：" + out);
         assertFalse(out.contains("extract_file_text"),
                 "那是同一条抽取路由，指过去只会再空转一轮，实际是：" + out);

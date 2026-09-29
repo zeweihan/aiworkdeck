@@ -358,19 +358,27 @@ AwdDialog 队列非空时持有 `overlayState` 的 `'awd-dialog'`（`utils/dialo
   另写一份换算。旋转只走 90° 步进（`imageRotate`），转完重新适应窗口。
   框**常驻**（缩放旋转后还要能核对），3s 后撤掉的只是压暗周边的那圈 `box-shadow`；
   工具栏「定位框」按钮可收起/重新亮出。
-- **音视频 seek 完必须 `pause()`**，并把 `autoplay` 绑成 `mediaLocatorSec == null`——
-  带定位打开的目的是看那一帧，自动播下去等于当场把定位冲掉。**别只靠模板上的
-  `@loadeddata`/`@loadedmetadata`**：uni 在各端把 `<video>` 编译成自家组件，事件名与
-  `e.target` 都不保证是原生那一套（P0 的 `@loadeddata` 很可能从没触发过）；`attachVideoLocator()`
-  在 `blobUrl` 落地后 `$nextTick` 去真的 `<video>` 上挂原生监听，换文件与卸载时 `teardownVideoLocator()`
-  摘干净。
+- **音视频交给 `components/media/MediaPlayer.vue`（dev-board#1023/#1024/#1025）**。FilePreview 只传
+  `:kind :file :project-id :locator-sec`（`mediaLocatorSec`）并按 `mediaKey`（文件 id + wpsFileId）
+  重建；取源、控制条、字幕、快捷键、时间标记全在播放器里。契约照旧：元数据就绪后 seek 并
+  **`pause()`**、带定位绝不自动播放（`el.autoplay` 恒 false，自动播放只由 `afterMetadata` 决定），
+  落地后 emit `locator-consumed` 一次；同一文件同一时刻再次被点中时 FilePreview 调播放器的
+  `relocate()`（locatorSec 没变、watch 不触发）。媒体元素**命令式创建**
+  （`document.createElement('video')` / `new Audio()`），模板里不许出现 `<video>`/`<audio>`：
+  uni 会把它编译成自家组件，事件名与 ref 都不可靠。播放器模板一律原生 `div/span`，不用
+  `view/text`——uni 会把 view 上的键盘/鼠标事件重建成普通对象（target 不是真节点、shiftKey 丢），
+  快捷键与滑轨拖拽都要真事件。取源走直链 `?token=`（后端 Range，流式），`error` code 2/4
+  回退一次 XHR blob（`_mediaReqId` 竞态防护随之搬来），日志里的 URL 一律 `redactToken`。
+  CC「生成字幕」与右键转写同走 `confirmPaidTranscription`（dev-board#968，会扣 Credits）。
 
 测试：`frontend/tests/evidence/locatorGeometry.test.mjs`（坐标换算，含四个旋转角与 CSS
-transform 的自洽互校）、`previewLocate.test.mjs`（三种定位各一个可复现实例，抠组件方法体真跑）、
+transform 的自洽互校）、`previewLocate.test.mjs`（pdf 与图片定位各一个可复现实例，抠组件方法体真跑）、
 `previewLocateRender.test.mjs`（用 vue 自带的 compiler-sfc + server-renderer 把模板真渲染成
 HTML 再断言——模板里 class 名写错、v-if 挂错分支、i18n 键打错，只跑方法体的那份测试一个都发现不了）。
 三份都在 `npm run test:evidence` 里，CI 跑。**模板里的中文注释会原样进 HTML**，
-断言标签属性要先剥注释（`<video src>` 这几个字就写在既有注释里，直接 match 会假绿）。
+断言标签属性要先剥注释。音视频那一半在 `npm run test:media`：`tests/media/previewLocate.test.mjs`
+（定位契约）与 `mediaPlayerRender.test.mjs`（`sfcLoader.mjs` 连 script 一起装载做 SSR 真渲染，
+uni 依赖换桩；SSR 合并 class 的顺序不固定，按「含有这个类」断言）。
 
 **反馈浮窗的第二个截图消费者**：`FeedbackWidget.vue` 也走 `host.ocr.startSelection({mode:'window'})`，
 自带一份等价的裁剪算法（不复用 project-overview 的实例态方法组）。改截图 IPC 的返回结构

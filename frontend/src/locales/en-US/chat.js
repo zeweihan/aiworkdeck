@@ -257,7 +257,7 @@ export default {
   // Audio attachments (dev-board#814): the model reads the transcript, not the audio.
   // Without one it only gets a file name — say so before sending, not after the answer.
   audioNotTranscribed: '"{name}" has not been transcribed, so the AI only sees the file name, not what was said in it.',
-  audioNotTranscribedMore: '"{name}" and {count} other audio files have not been transcribed; the AI only sees their file names.',
+  audioNotTranscribedMore: '"{name}" and {count} other audio or video files have not been transcribed; the AI only sees their file names.',
   audioTranscribeAction: 'Transcribe',
   pastedImageName: 'pasted-image-{stamp}',
   pastedImageUploadFailed: '{count} pasted image(s) failed to upload and were not sent with this message.',

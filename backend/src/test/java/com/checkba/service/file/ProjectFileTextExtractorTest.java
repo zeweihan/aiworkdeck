@@ -206,7 +206,7 @@ class ProjectFileTextExtractorTest {
 
         assertThatThrownBy(() -> extractor.extractText(mp3))
                 .isInstanceOf(ProjectFileTextExtractor.AudioNotTranscribedException.class)
-                .hasMessageContaining("音频")
+                .hasMessageContaining("音视频")
                 .hasMessageContaining("转写");
         // 抽不出来不是因为「没试」：音频根本不该交给 Tika 或 OCR 走一趟
         verifyNoInteractions(storageFactory);
@@ -292,5 +292,31 @@ class ProjectFileTextExtractorTest {
         assertThatThrownBy(() -> extractor.extractBytes("卷宗/询问笔录.amr", new byte[]{1, 2, 3}))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("转写");
+    }
+
+    /**
+     * 视频（dev-board#1024）：右键转写与字幕现在也收视频，AI 对话的「未转写提示」也扩到了视频。
+     * 转写完成后提示就消失——这里若还把 mp4 交给 Tika，模型读到的是容器元数据，提示却说它读得到。
+     */
+    @Test
+    void transcribedVideoIsInjectedAsItsTranscript() throws Exception {
+        ProjectFile mp4 = audio(17L, "庭审录像.mp4");
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBED, 17L);
+        when(meetings.findByAudioFile(7L, 17L)).thenReturn(Optional.of(m));
+        when(meetings.renderTranscriptText(m)).thenReturn("[00:00] 说话人1：现在开庭。\n");
+
+        assertThat(extractor.extractText(mp4)).contains("现在开庭。");
+        verifyNoInteractions(storageFactory);
+    }
+
+    @Test
+    void untranscribedVideoAsksForATranscriptInsteadOfGoingToTika() {
+        ProjectFile mp4 = audio(18L, "会见录像.MOV");
+        when(meetings.findByAudioFile(7L, 18L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> extractor.extractText(mp4))
+                .isInstanceOf(ProjectFileTextExtractor.AudioNotTranscribedException.class)
+                .hasMessageContaining("转写");
+        verifyNoInteractions(storageFactory);
     }
 }

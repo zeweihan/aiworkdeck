@@ -15,6 +15,7 @@ import com.checkba.version.WorkSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -225,13 +226,32 @@ public class FileController {
                  mediaType = MediaType.parseMediaType("audio/mpeg");
             } else if (lowerName.endsWith(".txt")) {
                  mediaType = MediaType.TEXT_PLAIN;
+            } else {
+                 String mediaMime = mediaMimeFor(lowerName);
+                 if (mediaMime != null) {
+                     mediaType = MediaType.parseMediaType(mediaMime);
+                 }
             }
 
             String filename = URLEncoder.encode(downloadFilename, StandardCharsets.UTF_8).replace("+", "%20");
+            String contentDisposition = "attachment; filename=\"" + filename + "\"";
+
+            // Range（dev-board#1025）：返回 200 + Resource 时，Spring MVC（AbstractMessageConverterMethodProcessor）
+            // 会按请求的 Range 头自行切成 ResourceRegion 回 206 / 越界回 416 + "bytes */total"，
+            // 并写 Accept-Ranges——前提是返回类型声明为 Resource（改成 ResponseEntity<?> 会让
+            // ResourceRegionHttpMessageConverter 拒写）。它依赖 contentLength()；取不到长度的资源
+            // （对象存储等）包成 InputStreamResource，Spring 对它跳过 Range 处理，退回 200 全量。
+            if (contentLengthOrNegative(resource) < 0) {
+                return ResponseEntity.ok()
+                        .contentType(mediaType)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                        .body(new InputStreamResource(resource.getInputStream()));
+            }
 
             return ResponseEntity.ok()
                     .contentType(mediaType)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                     .body(resource);
         } catch (StorageException e) {
             log.error("[FileDownload] 存储异常: fileId={}, message={}", fileId, e.getMessage());
@@ -241,6 +261,38 @@ public class FileController {
             log.error("[FileDownload] 未知异常: fileId={}, message={}", fileId, e.getMessage());
             log.error("[FileDownload] 未知异常堆栈:", e);
             return ResponseEntity.status(500).build();
+        }
+    }
+
+    /** 资源字节长度；取不到（抛异常）返回 -1。 */
+    private static long contentLengthOrNegative(Resource resource) {
+        try {
+            return resource.contentLength();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /** 音视频扩展名 → MIME（规格 2026-09-29-media-player-design §4.1）；非媒体返回 null。 */
+    static String mediaMimeFor(String lowerName) {
+        int dot = lowerName.lastIndexOf('.');
+        if (dot < 0) {
+            return null;
+        }
+        switch (lowerName.substring(dot + 1)) {
+            case "webm": return "video/webm";
+            case "ogv": return "video/ogg";
+            case "mov": return "video/quicktime";
+            case "m4v": return "video/x-m4v";
+            case "mkv": return "video/x-matroska";
+            case "avi": return "video/x-msvideo";
+            case "ogg": return "audio/ogg";
+            case "opus": return "audio/ogg";
+            case "m4a": return "audio/mp4";
+            case "wav": return "audio/wav";
+            case "flac": return "audio/flac";
+            case "aac": return "audio/aac";
+            default: return null;
         }
     }
 

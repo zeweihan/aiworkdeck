@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // P3「底稿定位增强」的真渲染走查：把 FilePreview.vue 的 <template> 用 vue 自带的
-// compiler-sfc 编译出来、真的渲染成 HTML，断言三种定位下该出现的东西确实出现了。
+// compiler-sfc 编译出来、真的渲染成 HTML，断言 pdf 与图片定位下该出现的东西确实出现了。
+// 音视频的时间标记随播放器搬走，真渲染用例在 tests/media/mediaPlayerRender.test.mjs。
 //
 // 为什么要有这一层：previewLocate.test.mjs 只跑方法体，模板里写错 class 名、v-if 挂错
 // 分支、i18n 键打错，那份测试一个都发现不了（「验证要走完 UI 链路」）。
@@ -70,14 +71,6 @@ async function render(state) {
   }
 }
 
-// 模板里的中文注释会原样进 HTML，而且里头就写着 `<video src>` 这样的字样——
-// 断言 autoplay 之类的属性必须先把注释剥掉，否则会匹配到注释上（假绿）
-function tagOf(html, name) {
-  const m = html.replace(/<!--[\s\S]*?-->/g, '').match(new RegExp('<' + name + '[^>]*>'))
-  assert.ok(m, '渲染结果里找不到 <' + name + '>')
-  return m[0]
-}
-
 test('真渲染 pdf：有引文无坐标 → 卡上是「未能在本页定位到引文」，且 iframe 指向 #page=3', async () => {
   const html = await render({
     isPdf: true,
@@ -124,40 +117,4 @@ test('真渲染图片：定位框与工具栏（含旋转、定位框开关）�
   const btn = html.match(/<button class="[^"]*"[^>]*>files\.locate\.imageRect/)
   assert.ok(btn, '工具栏里没有「定位框」开关')
   assert.match(btn[0], /is-on/, '框亮着时开关要显示按下态')
-})
-
-test('真渲染视频：带定位时不 autoplay，且时间标记就在画面上', async () => {
-  const withMark = await render({
-    file: { id: 9, name: 'v.mp4', fileType: 'mp4' },
-    isVideo: true,
-    mediaLocatorSec: 125,
-    mediaMarkVisible: true,
-  })
-  assert.ok(!tagOf(withMark, 'video').includes('autoplay'), '定位打开的目的是看那一帧，不能自动播下去')
-  assert.match(withMark, /class="evidence-media-mark"/)
-  assert.match(withMark, /files\.locate\.mediaMark\{"time":"s125"\}/)
-  assert.match(withMark, /files\.locate\.playFromMark/)
-
-  const noMark = await render({ file: { id: 9, name: 'v.mp4', fileType: 'mp4' }, isVideo: true, mediaLocatorSec: null })
-  assert.match(tagOf(noMark, 'video'), /autoplay/, '没有定位时保持原来的自动播放')
-  assert.ok(!noMark.includes('class="evidence-media-mark"'))
-})
-
-test('真渲染音频：轨道上有定位刻度，卡片里有时间标记', async () => {
-  const html = await render({
-    file: { id: 10, name: 'a.mp3', fileType: 'mp3' },
-    isAudio: true,
-    ICONS: { audioLines: [], play: [], pause: [], volume: [], volumeMute: [] },
-    audioProgressPct: 0,
-    audioCurrent: 0,
-    audioDuration: 600,
-    audioVolume: 1,
-    audioRate: 1,
-    mediaLocatorSec: 125,
-    mediaMarkVisible: true,
-    mediaMarkPct: 20.83,
-  })
-  assert.match(html, /class="audio-track-mark" style="left:20.83%;"/)
-  assert.match(html, /class="evidence-media-mark is-inline"/)
-  assert.match(html, /files\.locate\.mediaMark\{"time":"s125"\}/)
 })

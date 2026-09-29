@@ -17,20 +17,47 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
   AUDIO_EXTENSIONS,
+  VIDEO_EXTENSIONS,
   audioNeedingTranscription,
   isAudioFile,
+  isTranscribableMedia,
   transcribedAudioFileIds,
 } from '../../src/utils/audioAttachment.js'
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
 
-test('音频扩展名表与后端 MeetingRecordingService 逐项一致', () => {
-  const java = read('../../../backend/src/main/java/com/checkba/service/meeting/MeetingRecordingService.java')
-  const block = java.match(/AUDIO_EXTENSIONS\s*=\s*Set\.of\(([\s\S]*?)\);/)
-  assert.ok(block, '后端的 AUDIO_EXTENSIONS 常量没找到——表被改名或改形状了，对拍失效')
-  const backend = [...block[1].matchAll(/"([a-z0-9]+)"/g)].map((m) => m[1]).sort()
-  assert.deepEqual([...AUDIO_EXTENSIONS].sort(), backend,
-    '前后端音频表漂移：前端漏判 = 用户看不到「转写」入口；前端多判 = 点了转写后端拒收')
+// 两张表（音频 / 视频，dev-board#1024 起加了后者）都与后端逐项对拍
+for (const [name, frontend] of [['AUDIO_EXTENSIONS', AUDIO_EXTENSIONS], ['VIDEO_EXTENSIONS', VIDEO_EXTENSIONS]]) {
+  test(`${name} 与后端 MeetingRecordingService 逐项一致`, () => {
+    const java = read('../../../backend/src/main/java/com/checkba/service/meeting/MeetingRecordingService.java')
+    const block = java.match(new RegExp(`${name}\\s*=\\s*Set\\.of\\(([\\s\\S]*?)\\);`))
+    assert.ok(block, `后端的 ${name} 常量没找到——表被改名或改形状了，对拍失效`)
+    const backend = [...block[1].matchAll(/"([a-z0-9]+)"/g)].map((m) => m[1]).sort()
+    assert.deepEqual([...frontend].sort(), backend,
+      '前后端媒体表漂移：前端漏判 = 用户看不到「转写」入口；前端多判 = 点了转写后端拒收')
+  })
+}
+
+test('isTranscribableMedia = 音频 ∪ 视频；isAudioFile 不含视频', () => {
+  assert.equal(isTranscribableMedia({ name: '开庭录音.mp3' }), true)
+  assert.equal(isTranscribableMedia({ name: '庭审录像.mp4' }), true)
+  assert.equal(isTranscribableMedia({ name: '会见录像.MOV' }), true, '扩展名大小写不敏感')
+  assert.equal(isTranscribableMedia({ name: '录像', fileType: 'mkv' }), true, '没有扩展名时退回 fileType')
+  assert.equal(isTranscribableMedia({ name: '录像.mp4', isFolder: true }), false)
+  assert.equal(isTranscribableMedia({ name: '录像.mp4', isDir: true }), false)
+  assert.equal(isTranscribableMedia({ name: '股权转让协议.docx' }), false)
+  assert.equal(isTranscribableMedia(null), false)
+  assert.equal(isAudioFile({ name: '庭审录像.mp4' }), false, 'isAudioFile 保持只认音频')
+})
+
+test('视频附件同样要提示先转写（AI 读不到视频，只能读转写稿）', () => {
+  const files = [
+    { id: 1, name: '庭审录像.mp4' },
+    { id: 2, name: '股权转让协议.docx' },
+    { id: 3, name: '会见录像.mov' },
+  ]
+  const done = transcribedAudioFileIds([{ audioFileId: 3, status: 'TRANSCRIBED' }])
+  assert.deepEqual(audioNeedingTranscription(files, done).map((f) => f.id), [1])
 })
 
 test('判据认扩展名，文件夹与非音频一律为假', () => {
@@ -84,6 +111,13 @@ test('FileTree 与 ChatInterface 共用同一张表，locale 两套齐备', () =
       `${name} 必须从 utils/audioAttachment 取判据，不许再内联一份扩展名数组`)
   }
   assert.ok(!/'mp3',\s*'m4a'/.test(tree), 'FileTree 里那份内联副本应当已经删掉')
+  assert.ok(/isTranscribableMedia/.test(tree), 'FileTree 右键「语音转文字」对视频也要显示，判据用 isTranscribableMedia')
+  assert.ok(/isTranscribableMedia\(fileData\)/.test(chat), '挂上视频附件时也要去拉转写状态，否则视频提示恒在')
+
+  const zhTree = read('../../src/locales/zh-CN/fileTree.js')
+  const enTree = read('../../src/locales/en-US/fileTree.js')
+  assert.ok(/\btranscribe: '语音转文字'/.test(zhTree), 'zh-CN fileTree.transcribe 应为「语音转文字」')
+  assert.ok(/\btranscribe: 'Transcribe speech'/.test(enTree), 'en-US fileTree.transcribe 应为 Transcribe speech')
 
   const zh = read('../../src/locales/zh-CN/chat.js')
   const en = read('../../src/locales/en-US/chat.js')

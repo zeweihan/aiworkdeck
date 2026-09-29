@@ -1285,6 +1285,7 @@
                     <FilePreview
                       v-else
                       :file="activeFileLeft"
+                      :project-id="projectId"
                       :locator="activeFileLeft.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
@@ -1467,6 +1468,7 @@
                     <FilePreview
                       v-else
                       :file="activeFileRight"
+                      :project-id="projectId"
                       :locator="activeFileRight.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"

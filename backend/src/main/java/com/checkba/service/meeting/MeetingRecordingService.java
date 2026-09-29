@@ -111,8 +111,8 @@ public class MeetingRecordingService {
         if (Boolean.TRUE.equals(file.getIsFolder())) {
             throw new IllegalArgumentException(LangText.of("不能转写文件夹", "Cannot transcribe a folder"));
         }
-        if (!isAudioFileName(file.getName())) {
-            throw new IllegalArgumentException(LangText.of("该文件不是音频文件", "Not an audio file"));
+        if (!isTranscribableMediaName(file.getName())) {
+            throw new IllegalArgumentException(LangText.of("该文件不是音视频文件", "Not an audio or video file"));
         }
 
         for (MeetingRecording existing : meetingRepository.findByProjectIdOrderByCreatedAtDesc(projectId)) {
@@ -138,11 +138,32 @@ public class MeetingRecordingService {
     private static final Set<String> AUDIO_EXTENSIONS = Set.of(
             "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "amr", "wma", "webm");
 
+    /**
+     * 可注册转写的视频扩展名（dev-board#1024）：转写前由 MeetingTranscriptionService 抽音轨成 mp3。
+     * webm 已在音频表里（MediaRecorder 产物），这里不重复。与前端 utils/audioAttachment.js 的
+     * VIDEO_EXTENSIONS 逐项对拍（tests/project-home/audio-attachment.test.mjs）。
+     */
+    public static final Set<String> VIDEO_EXTENSIONS = Set.of(
+            "mp4", "mov", "mkv", "avi", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp");
+
     public static boolean isAudioFileName(String name) {
-        if (name == null) return false;
+        return AUDIO_EXTENSIONS.contains(extensionOf(name));
+    }
+
+    public static boolean isVideoFileName(String name) {
+        return VIDEO_EXTENSIONS.contains(extensionOf(name));
+    }
+
+    /** 能走转写链路的媒体文件 = 音频 ∪ 视频。 */
+    public static boolean isTranscribableMediaName(String name) {
+        return isAudioFileName(name) || isVideoFileName(name);
+    }
+
+    private static String extensionOf(String name) {
+        if (name == null) return "";
         int dot = name.lastIndexOf('.');
-        if (dot < 0 || dot == name.length() - 1) return false;
-        return AUDIO_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase());
+        if (dot < 0 || dot == name.length() - 1) return "";
+        return name.substring(dot + 1).toLowerCase();
     }
 
     /**

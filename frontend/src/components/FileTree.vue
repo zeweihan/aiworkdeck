@@ -174,7 +174,7 @@
           </view>
           <text class="context-menu-text">{{ $t('fileTree.download') }}</text>
         </view>
-        <view v-if="contextMenu.targetItem && !isContextMulti() && transcribeEnabled && isAudioFile(contextMenu.targetItem)" class="context-menu-item" @tap="$emit('transcribe-audio', contextMenu.targetItem); closeContextMenu()">
+        <view v-if="contextMenu.targetItem && !isContextMulti() && transcribeEnabled && isTranscribableMedia(contextMenu.targetItem)" class="context-menu-item" @tap="$emit('transcribe-audio', contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-linecap="round" stroke-linejoin="round"/>
@@ -696,7 +696,7 @@ import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import { nativeDataTransfer, isExternalFileDrag, claimExternalDrop } from '@/utils/fileTreeExternalDrop.js'
-import { isAudioFile as isAudioFileName } from '@/utils/audioAttachment.js'
+import { isTranscribableMedia as isTranscribableMediaItem } from '@/utils/audioAttachment.js'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
@@ -2397,12 +2397,12 @@ export default {
     },
 
     /**
-     * 右键「转写」项的判定。表在 utils/audioAttachment.js（dev-board#814 起前端只此一份，
-     * 与后端 MeetingRecordingService.AUDIO_EXTENSIONS 由测试逐项对拍）——AI 对话那边
-     * 判「这个附件要不要提示先转写」用的是同一个判据。
+     * 右键「语音转文字」项的判定：音频 ∪ 视频（dev-board#1024）。表在 utils/audioAttachment.js
+     * （dev-board#814 起前端只此一份，与后端 MeetingRecordingService 的 AUDIO/VIDEO_EXTENSIONS
+     * 由测试逐项对拍）——AI 对话那边判「这个附件要不要提示先转写」用的是同一个判据。
      */
-    isAudioFile(item) {
-      return isAudioFileName(item)
+    isTranscribableMedia(item) {
+      return isTranscribableMediaItem(item)
     },
 
     /**
