@@ -221,6 +221,11 @@ export default {
   caseAccessCodeLabel: 'Case File Access Code',
   caseAccessCodePlaceholder: 'Enter the access code your lawyer sent you',
   enterCaseBtn: 'Enter Case File',
+  // ---- client-portal.vue: client portal hosted by the Case Library (dev-board#1050) ----
+  portalTitle: 'Enter Case File',
+  portalLead: 'Enter the access code your lawyer sent you to see the list of materials they need and upload your files. You can only see the checklist shared with you in this case file.',
+  portalCodeRequired: 'Please enter the access code',
+  portalSourceNotice: 'This service runs on the open-source software AI WorkDeck (AGPL-3.0). Source code: ',
   footerTagline: 'Let legal professionals focus on their expertise',
   totpVerificationLabel: 'Authenticator Verification',
   mailVerificationLabel: 'Email Verification',

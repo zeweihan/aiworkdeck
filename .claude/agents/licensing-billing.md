@@ -362,6 +362,15 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   父发消息的 targetOrigin 钉官网 origin。取 token 先 `reset` 再 `get-token`，8 秒超时回空串，
   等待中的空串 token 不收口（reset 回调）。阿里云（大陆站）在 `file://` 下本来就好，那条分支没动。
   切站重装配前必须 `teardownCaptcha()`，否则旧 iframe 的 message 监听留在 window 上。
+- **「未启用」与「装不出来」是两回事，后者绝不盲发码**（dev-board#1056，律所网络拦了 o.alicdn.com 的真机事故）：
+  `captcha-config` 拿不到或 `provider` 为空 → 未启用，照常不带 token 发码；`provider` 非空而控件装不出来
+  （脚本被拦/超时、`initAliyunCaptcha` 缺失、托管页挂不起）→ `setupCaptcha` 抛 `utils/captchaFailure.js` 的
+  `captchaLoadError`（`code='captcha_load_failed'` + `provider` + `reason`），装上后才暴露的失败（阿里云
+  `onError`、托管页 `readyTimeoutMs` 内没 ready → controller `state.loadFailed`）走控件的 `loadError()`。
+  解锁页记 `captchaFailure`，点「获取验证码」先等在途装配、再自动重试一次装配，仍失败才报
+  `onboarding.unlock.captchaLoadFailed{Aliyun,Turnstile}`（点名要放行的地址：o.alicdn.com /
+  官网域名 + challenges.cloudflare.com）。脚本加载失败要从 `loading` 缓存里摘掉，否则重试永远拿同一枚 reject。
+  护栏 `tests/captcha/captcha-failure.test.mjs`。
 - **桌面壳里托管页挂 `<webview>`，不挂 iframe**（dev-board#863，2026-09-23 真桌面壳实测）：主窗口
   `webPreferences.webSecurity=false`，嵌在这种 WebContents 里的 Turnstile 挑战帧会被 Chromium 以
   `Terminating renderer for bad IPC message, reason 1` 杀掉渲染进程，控件卡死（`[Cloudflare Turnstile]

@@ -676,7 +676,7 @@
 </template>
 
 <script>
-import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getContributedTemplates, createFileFromContributedTemplate, importLocalFile } from '@/services/api.js'
+import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, getFilePermDiskPaths, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getContributedTemplates, createFileFromContributedTemplate, importLocalFile } from '@/services/api.js'
 import { host } from '@/services/host.js'
 import { showDialog } from '@/utils/dialog.js'
 import { findTopmostDeletedAncestor, summarizeDeleteResults, collapseToTopmostSelected, computeDisplayFiles } from '@/utils/fileTreeRecycle.js'
@@ -906,6 +906,11 @@ export default {
     },
     isDesktopShell() {
       return !!(host.fs && host.fs.showItemInFolder)
+    },
+    // 桌面壳：彻底删除把磁盘上的文件送进系统废纸篓而不是直接删掉（dev-board#1051）。
+    // 本机文件夹项目的文件就是律师自己文件夹里的真文件，直接删找不回来。
+    trashesToSystem() {
+      return this.isDesktopShell && !!(host.fs && host.fs.trashItems)
     },
     // 「发送…」只在桌面壳且壳版本带 shareFile 时出现（dev-board#382）
     canShareFile() {
@@ -1564,7 +1569,7 @@ export default {
       let content = ''
       if (this.deleteIsBatch) {
         content = this.$t(isHard ? 'fileTree.deleteConfirmBatchHard' : 'fileTree.deleteConfirmBatchSoft', { count: this.deleteBatchIds.length })
-        if (isHard) content += this.$t('fileTree.irreversibleNote')
+        if (isHard) content += this.$t(this.trashesToSystem ? 'fileTree.systemTrashNote' : 'fileTree.irreversibleNote')
       } else if (this.deleteTargetItem) {
         const item = this.deleteTargetItem
         content = this.$t(isHard ? 'fileTree.deleteConfirmItemHard' : 'fileTree.deleteConfirmItemSoft', {
@@ -1572,7 +1577,7 @@ export default {
           name: item.name
         })
         if (item.isFolder && !isHard) content += this.$t('fileTree.folderSoftDeleteNote')
-        if (isHard) content += this.$t('fileTree.irreversibleNote')
+        if (isHard) content += this.$t(this.trashesToSystem ? 'fileTree.systemTrashNote' : 'fileTree.irreversibleNote')
       }
 
       const r = await showDialog({
@@ -1643,10 +1648,32 @@ export default {
        await this.showDeleteConfirmDialog()
     },
 
+    /**
+     * 彻底删除一项。桌面壳（trashesToSystem）三步走，顺序即保证（dev-board#1051）：
+     * 取后端报的物理路径 → 主进程送进系统废纸篓 → 全部成功才让后端只清行（diskHandled）。
+     * 送废纸篓有一项失败就抛 trashFailed，行留在回收站里，不会出现「行没了、字节还在」。
+     * 其他环境（纯浏览器、服务端部署）走原路，由后端删磁盘。
+     */
+    async permDeleteOne(projectId, id) {
+        if (!this.trashesToSystem) return deleteFilePerm(projectId, id)
+        const res = await getFilePermDiskPaths(projectId, id)
+        const paths = (res && res.data && Array.isArray(res.data.paths)) ? res.data.paths : []
+        if (paths.length > 0) {
+            const r = await host.fs.trashItems(paths)
+            if (!r || !r.ok) {
+                console.error('送系统废纸篓失败:', id, r)
+                const err = new Error('trash-failed')
+                err.trashFailed = true
+                throw err
+            }
+        }
+        return deleteFilePerm(projectId, id, { diskHandled: true })
+    },
+
     async executePermDelete(item) {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         try {
-            await deleteFilePerm(projectId, item.id)
+            await this.permDeleteOne(projectId, item.id)
             // Remove from local bin UI
             const idx = this.recycleBin.findIndex(f => f.id === item.id)
             if (idx > -1) {
@@ -1666,7 +1693,7 @@ export default {
                uni.showToast({ title: this.$t('fileTree.permDeleteSuccess'), icon: 'success' })
                this.$emit('file-deleted', { ids: [item.id] })
              } else {
-               uni.showToast({ title: this.$t('fileTree.deleteFailed'), icon: 'none' })
+               uni.showToast({ title: this.$t(e && e.trashFailed ? 'fileTree.systemTrashFailed' : 'fileTree.deleteFailed'), icon: 'none' })
              }
         }
     },
@@ -1685,7 +1712,7 @@ export default {
             const results = []
             for (const id of roots) {
                  try {
-                   await deleteFilePerm(projectId, id)
+                   await this.permDeleteOne(projectId, id)
                    results.push({ id, ok: true })
                  } catch (e) {
                    const isMissing = e.statusCode === 404 || e.status === 404

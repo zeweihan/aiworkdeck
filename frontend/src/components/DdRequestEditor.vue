@@ -11,7 +11,7 @@
           v-model="requestName"
           @blur="updateRequestName"
           @confirm="updateRequestName"
-          :disabled="deleted"
+          :disabled="deleted || clientView"
           :placeholder="request ? request.name : $t('panels.ddLoadingPlaceholder')"
         />
         <view class="status-badge" v-if="request" :class="request.status">
@@ -20,7 +20,7 @@
         <text class="progress-info" v-if="items.length > 0">{{ $t('panels.ddProgress', { completed: completedCount, total: items.length }) }}</text>
       </view>
 
-      <view style="display: flex; gap: 10px; align-items: center;" v-if="!deleted">
+      <view style="display: flex; gap: 10px; align-items: center;" v-if="!deleted && !clientView">
         <button class="delete-list-btn" @tap="handleDeleteRequest">{{ $t('panels.ddDeleteList') }}</button>
         <button class="new-btn" @tap="handleAddItem">
             <text>{{ $t('panels.ddNewItem') }}</text>
@@ -60,7 +60,7 @@
              <view class="tree-controls-wrapper">
                 <!-- Arrows for Indent/Outdent (Hover Only) -->
                 <!-- Positioned specifically to not overlap the triangle -->
-                <view class="indent-controls" v-if="hoveredItemId === item.id">
+                <view class="indent-controls" v-if="!clientView && hoveredItemId === item.id">
                   <view class="arrow-btn" @tap.stop="handleOutdent(item)" :title="$t('panels.ddOutdentTitle')">‹</view>
                   <view class="arrow-btn" @tap.stop="handleIndent(item)" :title="$t('panels.ddIndentTitle')">›</view>
                 </view>
@@ -80,6 +80,7 @@
             <input
               class="silent-input title-input"
               v-model="item.title"
+              :disabled="clientView"
               @blur="updateInfo(item)"
               :placeholder="$t('panels.ddNamePlaceholder')"
             />
@@ -90,6 +91,7 @@
             <input
               class="silent-input"
               v-model="item.description"
+              :disabled="clientView"
               @blur="updateInfo(item)"
               :placeholder="$t('panels.ddDescPlaceholder')"
             />
@@ -102,7 +104,7 @@
 
           <!-- Upload -->
           <view class="col-upload">
-            <view v-if="item.uploadedFileId" class="uploaded-info" @tap.stop="viewFile(item.uploadedFileId)">
+            <view v-if="item.uploadedFileId" class="uploaded-info" @tap.stop="viewFile(item)">
                <svg class="file-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                  <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                </svg>
@@ -130,7 +132,7 @@
 
           <!-- Delete Action -->
           <view class="col-action">
-              <view class="delete-btn" @tap.stop="handleDeleteItem(item)" :title="$t('panels.ddDeleteTitle')">
+              <view v-if="!clientView" class="delete-btn" @tap.stop="handleDeleteItem(item)" :title="$t('panels.ddDeleteTitle')">
                    <text>×</text>
               </view>
           </view>
@@ -174,6 +176,16 @@ export default {
     requestId: {
       type: [Number, String],
       required: true
+    },
+    // 放进案件库的案卷，本机 /api/dd/* 靠它把请求转到案件库（dev-board#1050，见 api.js ddUrl）
+    projectId: {
+      type: [Number, String],
+      default: null
+    },
+    // 客户视角：只看清单、传文件、留言；改名/增删/缩进一律不给（案件库那边对客户也是 403）
+    clientView: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
@@ -254,7 +266,7 @@ export default {
     async fetchData() {
       const seq = ++this.fetchSeq
       try {
-        const res = await api.getDdRequestDetails(this.requestId)
+        const res = await api.getDdRequestDetails(this.requestId, this.projectId)
         if (seq !== this.fetchSeq) return
         this.request = res.request
         this.requestName = this.request.name
@@ -269,7 +281,7 @@ export default {
         if (!this.request) return
         if (!this.requestName || this.requestName === this.request.name) return
         try {
-            await api.updateDdRequest(this.requestId, this.requestName)
+            await api.updateDdRequest(this.requestId, this.requestName, this.projectId)
             this.request.name = this.requestName
             uni.showToast({ title: this.$t('panels.ddRenamed'), icon: 'success' })
             // Would be nice to emit event to refresh sidebar
@@ -311,7 +323,7 @@ export default {
           this.expandedItems.add(this.selectedItemId)
       }
       try {
-        await api.addDdItem(this.requestId, parentId)
+        await api.addDdItem(this.requestId, parentId, this.projectId)
         await this.fetchData()
         uni.showToast({ title: this.$t('panels.ddCreated'), icon: 'none' })
       } catch (e) {
@@ -340,7 +352,7 @@ export default {
 
     async moveItem(itemId, newParentId) {
       try {
-        await api.moveDdItem(itemId, newParentId)
+        await api.moveDdItem(itemId, newParentId, this.projectId)
         await this.fetchData()
         if (newParentId) this.expandedItems.add(newParentId)
       } catch (e) {
@@ -351,7 +363,7 @@ export default {
 
     async updateInfo(item) {
       try {
-        await api.updateDdItemInfo(item.id, item.title, item.description)
+        await api.updateDdItemInfo(item.id, item.title, item.description, this.projectId)
       } catch (e) { console.error(e) }
     },
 
@@ -378,7 +390,7 @@ export default {
       })
     },
     async uploadFile(item, file) {
-      const uploadUrl = `${getApiBaseUrl()}/api/dd/items/${item.id}/upload`
+      const uploadUrl = `${getApiBaseUrl()}${api.ddUrl(`/api/dd/items/${item.id}/upload`, this.projectId)}`
       uni.showLoading({ title: this.$t('panels.ddUploading') })
       uni.uploadFile({
         url: uploadUrl,
@@ -398,24 +410,26 @@ export default {
         fail: () => { uni.hideLoading(); uni.showToast({ title: this.$t('panels.ddNetworkError'), icon: 'none' }) }
       })
     },
-    viewFile(fileId) {
-       const url = `${getApiBaseUrl()}/api/files/${fileId}/download?token=${encodeURIComponent(getSessionId())}`
-       window.open(url, '_blank')
+    // 走清单项自己的取件口而不是 /api/files/{id}：放进案件库的案卷里 uploadedFileId 是案件库
+    // 那一侧的 id，拿到本机 /api/files 上会撞到另一份无关的文件（dev-board#1050）
+    viewFile(item) {
+       const path = api.ddUrl(`/api/dd/items/${item.id}/file?token=${encodeURIComponent(getSessionId() || '')}`, this.projectId)
+       window.open(`${getApiBaseUrl()}${path}`, '_blank')
     },
 
     async toggleComments(item) {
         this.activeItem = item
         this.showCommentsDrawer = true
         this.activeItemComments = []
-        const res = await api.getDdItemComments(item.id)
+        const res = await api.getDdItemComments(item.id, this.projectId)
         this.activeItemComments = res
     },
     async sendComment() {
         if (!this.newCommentText || !this.activeItem) return
         try {
-            await api.addDdItemComment(this.activeItem.id, this.newCommentText)
+            await api.addDdItemComment(this.activeItem.id, this.newCommentText, this.projectId)
             this.newCommentText = ''
-            const res = await api.getDdItemComments(this.activeItem.id)
+            const res = await api.getDdItemComments(this.activeItem.id, this.projectId)
             this.activeItemComments = res
             this.activeItem.comments = res
         } catch(e) { console.error(e) }
@@ -428,7 +442,7 @@ export default {
             success: async (res) => {
                 if (res.confirm) {
                     try {
-                        await api.deleteDdItem(item.id)
+                        await api.deleteDdItem(item.id, this.projectId)
                         this.fetchData()
                         uni.showToast({title: this.$t('panels.ddDeleted'), icon: 'none'})
                     } catch (e) {
@@ -448,7 +462,7 @@ export default {
             success: async (res) => {
                 if (res.confirm) {
                     try {
-                        await api.deleteDdRequest(this.requestId)
+                        await api.deleteDdRequest(this.requestId, this.projectId)
                         uni.showToast({title: this.$t('panels.ddDeleted'), icon: 'success'})
                         // 父组件（工作台）没有接 @deleted，标签不会自动关；
                         // 这里先把本地状态清空，免得面板继续渲染已删清单的行、

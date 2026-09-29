@@ -35,6 +35,58 @@ function initLocalFileService() {
         const win = BrowserWindow.fromWebContents(event.sender);
         return shareFile(process.platform, filePath, win);
     });
+
+    // Handler: 回收站「彻底删除」把磁盘上的文件送进系统废纸篓（dev-board#1051）。
+    // 路径由后端 GET .../permanent/disk-paths 按项目 localRoot 解析，渲染层原样转交；
+    // 送废纸篓可从 Finder/资源管理器还原，与 showItemInFolder 同档，不另设白名单。
+    ipcMain.handle('fs:trashItems', async (event, { paths } = {}) => {
+        return trashItems(paths);
+    });
+}
+
+/**
+ * 逐个 shell.trashItem，返回逐项成败 { ok, results: [{ path, ok, missing?, reason? }] }。
+ * ok 仅在每一项都成功（或本来就不在）时为真——调用方据此决定要不要去清数据库行。
+ *
+ * 路径闸：只收绝对路径；normalize 后必须与原串一致（不接受 ".." 之类要靠解析才知道落点的写法）；
+ * 不收文件系统根、用户主目录本身及其祖先（一条坏数据把整个主目录送进废纸篓的代价太大）。
+ * 本来就不在的路径算成功（已达成），这样行照常清掉、不会在回收站里留幽灵。
+ * 不做 realpath 比对：本机文件夹项目的 localRoot 可以经符号链接打开（外置盘、同步盘），
+ * 父链有链接就拒绝会让这类项目永远删不掉；条目自身是链接时 trashItem 送走的是链接本身。
+ */
+async function trashItems(paths, deps = {}) {
+    const sh = deps.shell || shell;
+    const fsp = deps.fs || fs.promises;
+    const home = path.resolve(deps.homedir || require('os').homedir());
+    if (!Array.isArray(paths)) return { ok: false, reason: 'bad-paths', results: [] };
+    const results = [];
+    for (const p of paths) {
+        results.push(await trashOne(p, sh, fsp, home));
+    }
+    return { ok: results.every((r) => r.ok), results };
+}
+
+async function trashOne(p, sh, fsp, home) {
+    if (typeof p !== 'string' || !p || !path.isAbsolute(p)) return { path: p, ok: false, reason: 'not-absolute' };
+    const resolved = path.resolve(p);
+    const root = path.parse(resolved).root;
+    if (resolved === root || resolved === home || home.startsWith(resolved + path.sep)) {
+        return { path: p, ok: false, reason: 'protected' };
+    }
+    // 原串（去掉结尾分隔符）必须就是解析结果：带 ".."、"."、重复分隔符的一律不收
+    if (p.replace(/[\\/]+$/, '') !== resolved) return { path: p, ok: false, reason: 'not-normalized' };
+    try {
+        await fsp.lstat(resolved);
+    } catch (e) {
+        if (e && e.code === 'ENOENT') return { path: p, ok: true, missing: true };
+        return { path: p, ok: false, reason: 'stat-failed' };
+    }
+    try {
+        await sh.trashItem(resolved);
+        return { path: p, ok: true };
+    } catch (e) {
+        return { path: p, ok: false, reason: 'trash-failed', message: String((e && e.message) || e) };
+    }
 }
 
 /**
@@ -118,6 +170,7 @@ async function launchWeChatWindows() {
 module.exports = {
     initLocalFileService,
     shareFile,
+    trashItems,
     psQuote,
     windowsClipboardCommand,
     WECHAT_REGISTRY_CANDIDATES,

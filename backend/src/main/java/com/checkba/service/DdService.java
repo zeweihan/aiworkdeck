@@ -91,6 +91,27 @@ public class DdService {
     }
 
     /**
+     * 清单项上客户已上传的那份文件（dev-board#1050）：律师在桌面端经案件库代理查看、客户在
+     * 门户里回看自己传过的东西都走它。文件 id 不直接暴露给 /api/files——桌面端那一侧的 id
+     * 与案件库是两个 id 空间，撞号会打开本机另一份无关的文件。
+     */
+    public ProjectFile getUploadedFile(Long itemId) {
+        DdItem item = ddItemRepository.findById(itemId)
+                .orElseThrow(() -> new IllegalArgumentException("清单项不存在"));
+        if (item.getUploadedFileId() == null) {
+            throw new IllegalArgumentException(LangText.of("这一项还没有上传文件", "No file has been uploaded for this item yet"));
+        }
+        Long projectId = getProjectIdByRequestId(item.getDdRequestId());
+        return projectFileRepository.findById(item.getUploadedFileId())
+                .filter(f -> f.getProjectId() != null && f.getProjectId().equals(projectId))
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在", "File not found")));
+    }
+
+    public org.springframework.core.io.Resource loadStored(ProjectFile file) {
+        return storageServiceFactory.getStorageService().load(file.getFilePath());
+    }
+
+    /**
      * 获取请求下的所有项
      */
     public List<DdItem> getItems(Long requestId) {

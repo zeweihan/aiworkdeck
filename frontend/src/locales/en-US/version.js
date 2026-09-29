@@ -287,6 +287,20 @@ export default {
   generateAccessCode: 'Generate Access Code',
   usernameRequired: 'Please enter your colleague’s account',
   generateFailed: 'Failed to generate',
+  // ---- Client portal (dev-board#1050): case files in the Team Case Library get codes issued by the library ----
+  clientPortalLinkLabel: 'Link for the client:',
+  clientCodeExpires: 'Valid until {date}. Generate it again to extend.',
+  clientCopyInvite: 'Copy message for the client',
+  clientInviteShareText: 'Please open the link below in your browser to access the case file and upload the materials we need:\n{link}\n\nIf the page asks for an access code, enter: {code}\nThe code is valid until {date}. It is for you only — please do not forward it.',
+  clientInviteShareTextNoDate: 'Please open the link below in your browser to access the case file and upload the materials we need:\n{link}\n\nIf the page asks for an access code, enter: {code}\nThe code is for you only — please do not forward it.',
+  clientPortalAccessCodeTip: 'The client just opens the link above — no software to install, and the access code is already in the link. The code is like a key to this case file; only share it with the intended person.',
+  revokeClientCode: 'Revoke this access code',
+  revokeClientCodeConfirm: 'Once revoked, the client can no longer use this code to access the case file. Materials already uploaded are kept. Revoke it?',
+  revokedClientCode: 'Access code revoked',
+  revokeFailed: 'Failed to revoke',
+  removeFromCaseFile: 'Remove',
+  removeCloudMemberConfirm: 'Remove {name} from this case file? Removing a client also revokes their access code.',
+  removedFromCaseFile: 'Removed',
 
   // ---- SubmitDraftGuide.vue (submit-draft guide, dev-board#645) ----
   // State-to-steps mapping lives in utils/submitGuide.js; step 2's sentence shares its

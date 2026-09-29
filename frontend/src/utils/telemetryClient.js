@@ -3,6 +3,7 @@
 import { logTelemetryEvent } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { isDesktopHost } from '@/services/host.js'
+import { isClientPortalBuild } from '@/utils/clientPortal.js'
 
 /**
  * 产品埋点前端入口（设计见 docs/ANALYTICS_TELEMETRY_DESIGN.md）。
@@ -19,6 +20,8 @@ export function track(eventName, attrs) {
     // 浏览器端就是整页无限刷新（addin.aiworkdeck.com 实测）。桌面 local-mode
     // 免登录，恒可发。
     if (!isDesktopHost() && !getSessionId()) return
+    // 客户门户（dev-board#1050）不埋点：来访的是律师的客户，不是产品用户，隐私声明也没把他们算进去
+    if (isClientPortalBuild()) return
     logTelemetryEvent(eventName, attrs || {}).catch(() => {})
   } catch (e) {
     // 静默

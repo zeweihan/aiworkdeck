@@ -129,8 +129,25 @@ export const fileOpenTabsMethods = {
       }
     },
 
+    // 计划审阅（dev-board#1022）：计划卡「打开修订」→ 在编辑器标签里打开计划文件并进审阅态。
+    // { fileId, name, review }：review 原样挂到标签上（同一个对象引用），PlainTextEditor 按对象身份判用没用过。
+    async handleOpenPlanReviewTab({ fileId, name, review } = {}) {
+      if (fileId === null || fileId === undefined || fileId === '') return
+      let target = null
+      try {
+        const resp = await getProjectFiles(this.projectId, null, true)
+        const files = Array.isArray(resp) ? resp : (resp?.data || [])
+        target = findChatFile(files, { fileId })
+      } catch (e) {
+        console.warn('[project-overview] handleOpenPlanReviewTab: fetch files failed', e)
+      }
+      if (!target) target = { id: fileId, name: name || String(fileId), fileType: 'md' }
+      this.openFile(target, { review })
+    },
+
     // opts.locator：EvidenceLink 定位符（spec §1.4），挂在 tab 对象的 pendingLocator 上，
     // 由 LibreOfficeEditor（书签/quote）或 FilePreview（pdf 页码/图片框/媒体时刻）消费。
+    // opts.review：计划审阅参数，挂在 tab.review 上交给 PlainTextEditor 的 review prop。
     openFile(file, opts = {}) {
       // 检查文件类型是否支持打开
       if (!this.isFileTypeSupported(file)) {
@@ -173,8 +190,11 @@ export const fileOpenTabsMethods = {
       if (existing) {
         Object.assign(existing, file, { id: tabId })
         if (opts.locator) existing.pendingLocator = opts.locator
+        if (opts.review) existing.review = opts.review
       } else {
-        targetList.push({ ...file, pendingLocator: opts.locator || null })
+        const tab = { ...file, pendingLocator: opts.locator || null }
+        if (opts.review) tab.review = opts.review
+        targetList.push(tab)
       }
       this[targetIdProp] = tabId
 

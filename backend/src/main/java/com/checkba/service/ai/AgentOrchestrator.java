@@ -1147,6 +1147,17 @@ public class AgentOrchestrator {
     }
 
     /**
+     * 计划审阅（dev-board#1022）：计划落盘后作废该文件上未完成的审阅记录（{@code supersedeOpen}）。
+     * 为空（各单元测试直接 new）= 不处理。同 {@link #turnExecutor}：走 setter 不走构造器。
+     */
+    private volatile com.checkba.service.review.FileReviewService fileReviewService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFileReviewService(com.checkba.service.review.FileReviewService fileReviewService) {
+        this.fileReviewService = fileReviewService;
+    }
+
+    /**
      * 工具渐进披露策略（dev-board#810）。为空 = 不披露、下发候选全集，
      * 也就是各单元测试与回放评测里直接 {@code new AgentOrchestrator(...)} 的既有行为。
      * 同 {@link #turnExecutor}：走 setter 而不是构造器，免得再触一次 EvalHarness 那颗地雷。
@@ -2037,40 +2048,21 @@ public class AgentOrchestrator {
             cleanedContent = cleanedContent.replaceAll("```(?:xml|html|markdown)?\\s*\\n", "");
             cleanedContent = cleanedContent.replaceAll("\\n```", "");
             
-            if (cleanedContent.contains("<artifact") && (cleanedContent.contains("type=\"implementation_plan\"") || cleanedContent.contains("type=\"task_list\""))) {
-                // Parse full artifact
-                String type = "unknown";
-                if (cleanedContent.contains("type=\"implementation_plan\"")) type = "implementation_plan";
-                else if (cleanedContent.contains("type=\"task_list\"")) type = "task_list";
-                
-                // Extract name attribute if present
-                String artifactName = null;
-                java.util.regex.Pattern namePattern = java.util.regex.Pattern.compile("<artifact[^>]*name=\"([^\"]+)\"[^>]*>");
-                java.util.regex.Matcher nameMatcher = namePattern.matcher(cleanedContent);
-                if (nameMatcher.find()) {
-                    artifactName = nameMatcher.group(1).trim();
+            // #1052：按类型挑要落盘的计划类 artifact（有 implementation_plan 取第一个
+            // implementation_plan，没有才取第一个 task_list），不是回复里第一个 artifact——
+            // 模型先流一段 code 再流计划时，落盘的必须是计划。
+            PlanArtifact planArtifact = firstPlanArtifact(cleanedContent);
+            if (planArtifact != null) {
+                String type = planArtifact.type();
+                String artifactName = planArtifact.name();
+                if (artifactName != null) {
+                    artifactName = artifactName.trim();
                     // Sanitize for filename (max 30 chars, remove special chars)
                     artifactName = artifactName.replaceAll("[/\\\\:*?\"<>|]", "_");
                     if (artifactName.length() > 30) artifactName = artifactName.substring(0, 30);
                 }
-                
-                // Extract Content inside tags
-                String artifactContent = "";
-                java.util.regex.Pattern p = java.util.regex.Pattern.compile("<artifact[^>]*>([\\s\\S]*?)</artifact>");
-                java.util.regex.Matcher m = p.matcher(cleanedContent);
-                if (m.find()) {
-                    artifactContent = m.group(1).trim();
-                } else {
-                     // Fallback: Try to extract everything after the opening artifact tag
-                     int start = cleanedContent.indexOf(">" , cleanedContent.indexOf("<artifact"));
-                     int end = cleanedContent.indexOf("</artifact>");
-                     if (start > 0 && end > start) {
-                         artifactContent = cleanedContent.substring(start + 1, end).trim();
-                     } else {
-                         artifactContent = cleanedContent; // Last resort fallback
-                     }
-                }
-                
+                String artifactContent = planArtifact.content();
+
                 // Determine filename: prefer extracted name, fallback to default
                 String filename;
                 if (artifactName != null && !artifactName.isEmpty()) {
@@ -2092,6 +2084,22 @@ public class AgentOrchestrator {
                          String folderName = projectFileService.findFile(saved.getParentId())
                                  .map(com.checkba.model.entity.ProjectFile::getName)
                                  .orElse(conversationId);
+                         // 计划审阅（dev-board#1022）：先发 saved 事件把 fileId 与相对路径交给计划卡，
+                         // 再发「已保存到项目文件」提示。id 取流式层第一个同类型 artifact 的 id；
+                         // 流式层没发过（缓冲超长按原文冲出等）就给空串，前端按 filePath 兜底匹配。
+                         // 同名复用同一文件：上一版计划未完成的审阅记录就此作废（不写回文件），
+                         // 否则新卡「打开修订」拿到的是旧基线与旧批注、放弃会把旧计划写回去
+                         com.checkba.service.review.FileReviewService reviewSvc = fileReviewService;
+                         if (reviewSvc != null) {
+                             try {
+                                 reviewSvc.supersedeOpen(saved.getId());
+                             } catch (Exception e) {
+                                 log.warn("supersede open review failed for file {}", saved.getId(), e);
+                             }
+                         }
+                         String streamedId = handler.takeStreamedArtifactId(type);
+                         sendRunEvent(guard, "artifact", artifactSavedEventJson(
+                                 streamedId, saved.getId(), artifactSavedRelativePath(folderName, saved.getName()), type));
                          String savedNotice = artifactSavedNoticeDelta(folderName, saved.getName());
                          sendTextDelta(guard, savedNotice);
                          content = content + savedNotice;
@@ -2790,9 +2798,79 @@ public class AgentOrchestrator {
      * 所以文案不引用任何界面位置（「左侧资源管理器」在窗格里不成立）。
      */
     static String artifactSavedNoticeDelta(String folderName, String fileName) {
-        return LangText.of(
-                "\n\n> 已保存到项目文件：AI 助手文件/" + folderName + "/" + fileName,
-                "\n\n> Saved to project file: AI Assistant Files/" + folderName + "/" + fileName);
+        return LangText.of("\n\n> 已保存到项目文件：", "\n\n> Saved to project file: ")
+                + artifactSavedRelativePath(folderName, fileName);
+    }
+
+    /**
+     * 落盘产物的相对路径（从项目根算）。「已保存到项目文件」提示与 artifact saved 事件共用这一处，
+     * 保证两者逐字相同——前端历史回放时要按提示里的路径反查 fileId。
+     */
+    static String artifactSavedRelativePath(String folderName, String fileName) {
+        return LangText.of("AI 助手文件/", "AI Assistant Files/") + folderName + "/" + fileName;
+    }
+
+    /** 回复里挑出的计划类 artifact（#1052）。 */
+    record PlanArtifact(String type, String name, String content) {
+    }
+
+    private static final java.util.regex.Pattern ARTIFACT_BLOCK =
+            java.util.regex.Pattern.compile("<artifact(\\s[^>]*)?>([\\s\\S]*?)</artifact>");
+    private static final java.util.regex.Pattern ARTIFACT_OPEN =
+            java.util.regex.Pattern.compile("<artifact(\\s[^>]*)?>");
+    private static final java.util.regex.Pattern ARTIFACT_TYPE_ATTR =
+            java.util.regex.Pattern.compile("(?:^|\\s)type\\s*=\\s*\"([^\"]*)\"");
+    private static final java.util.regex.Pattern ARTIFACT_NAME_ATTR =
+            java.util.regex.Pattern.compile("(?:^|\\s)name\\s*=\\s*\"([^\"]*)\"");
+
+    private static String artifactAttr(java.util.regex.Pattern attr, String attrs) {
+        if (attrs == null) return null;
+        java.util.regex.Matcher m = attr.matcher(attrs);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * 挑回复里要落盘的计划类 artifact（属性顺序不定）：有 implementation_plan 就取第一个
+     * implementation_plan（要停机等审批的那份），没有才取第一个 task_list；
+     * 一个计划类 artifact 都没有时返回 null（不落盘）。
+     */
+    static PlanArtifact firstPlanArtifact(String text) {
+        if (text == null || !text.contains("<artifact")) return null;
+        PlanArtifact plan = firstArtifactOfType(text, "implementation_plan");
+        return plan != null ? plan : firstArtifactOfType(text, "task_list");
+    }
+
+    /**
+     * 按出现顺序找第一个指定 type 的闭合 artifact；没有闭合的，退回该类型第一个开标签之后的
+     * 全部文本（截断的计划照旧落盘）。
+     */
+    private static PlanArtifact firstArtifactOfType(String text, String wanted) {
+        java.util.regex.Matcher m = ARTIFACT_BLOCK.matcher(text);
+        while (m.find()) {
+            if (wanted.equals(artifactAttr(ARTIFACT_TYPE_ATTR, m.group(1)))) {
+                return new PlanArtifact(wanted, artifactAttr(ARTIFACT_NAME_ATTR, m.group(1)), m.group(2).trim());
+            }
+        }
+        java.util.regex.Matcher open = ARTIFACT_OPEN.matcher(text);
+        while (open.find()) {
+            if (!wanted.equals(artifactAttr(ARTIFACT_TYPE_ATTR, open.group(1)))) continue;
+            String rest = text.substring(open.end());
+            int end = rest.indexOf("</artifact>");
+            if (end >= 0) rest = rest.substring(0, end);
+            return new PlanArtifact(wanted, artifactAttr(ARTIFACT_NAME_ATTR, open.group(1)), rest.trim());
+        }
+        return null;
+    }
+
+    /** 计划审阅（dev-board#1022）：artifact saved 事件载荷，交 Jackson 转义。 */
+    static String artifactSavedEventJson(String artifactId, Long fileId, String filePath, String type) {
+        com.fasterxml.jackson.databind.node.ObjectNode node = SKILL_UPDATE_MAPPER.createObjectNode();
+        node.put("operation", "saved");
+        node.put("id", artifactId == null ? "" : artifactId);
+        node.put("fileId", fileId);
+        node.put("filePath", filePath);
+        node.put("type", type);
+        return node.toString();
     }
 
     static String truncate(String s, int max) {

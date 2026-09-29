@@ -1156,6 +1156,9 @@
                       :ref="el => setPlainTextRef('left', el)"
                       :file="activeFileLeft"
                       :project-id="projectId"
+                      :review="activeFileLeft.review || null"
+                      @review-submit="onPlanReviewSubmit"
+                      @review-state="onPlanReviewState"
                     />
                     <!-- key 不能省：两个对比标签命中同一个 v-else-if 分支，没有 key
                          Vue 会就地复用同一个组件实例，而 DocDiffViewer 只在 mounted()
@@ -1192,6 +1195,8 @@
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
+                      :project-id="projectId"
+                      :client-view="isClientView"
                     />
                     <MarketDetailPane
                       v-else-if="activeFileLeft.tabType === 'market-detail'"
@@ -1379,6 +1384,9 @@
                       :ref="el => setPlainTextRef('right', el)"
                       :file="activeFileRight"
                       :project-id="projectId"
+                      :review="activeFileRight.review || null"
+                      @review-submit="onPlanReviewSubmit"
+                      @review-state="onPlanReviewState"
                     />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileRight)"
@@ -1408,6 +1416,8 @@
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileRight)"
                       :request-id="activeFileRight.requestId"
+                      :project-id="projectId"
+                      :client-view="isClientView"
                     />
                     <MarketDetailPane
                       v-else-if="activeFileRight.tabType === 'market-detail'"
@@ -1665,6 +1675,7 @@
                 @menu-state="pushMenuState"
                 @artifact-open-tab="handleArtifactOpenTab"
                 @open-file="handleOpenFileFromChat"
+                @open-review-tab="handleOpenPlanReviewTab"
                 @transcribe-audio="onTranscribeAudio"
               />
             </view>
@@ -2388,7 +2399,6 @@ import { matchEntityAt } from '@/utils/insightMatch.js'
 // 表格/演示/PDF 没有可通读的正文。这份清单是 fileOpenTabs.js 里 wpsFormats 的 Writer 子集。
 const INSIGHT_DOC_TYPES = ['doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt', 'wps', 'wpt']
 import {
-  LEFT_SIDEBAR_PLUGINS,
   VERSION_PLUGIN,
   filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
@@ -2400,6 +2410,7 @@ import { activityTracker } from '@/utils/activityTracker.js'
 
 import { ICONS as GLYPHS } from '@/config/icons.js'
 import { readLocalMode } from '@/services/accountProfile.js'
+import { resolveTrack, TRACK } from '@/utils/memberLookup.js'
 import { isSoloLocalProject } from '@/utils/soloLocalProject.js'
 import { openFeedbackWidget } from '@/utils/feedbackWidget.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
@@ -3031,7 +3042,7 @@ export default {
       }
       const base = (user && user.role === 'CLIENT')
         ? getPluginsForUser('CLIENT')
-        : [...LEFT_SIDEBAR_PLUGINS, ...this.dynamicPlugins]
+        : [...getPluginsForUser(user && user.role, { cloudTrack: this.ddCloudTrack }), ...this.dynamicPlugins]
       // 声明了 requiresSkill 的插件位（诉讼可视化）跟着 skill 启停走：默认不安装，
       // 用户在广场里装了才出现在左栏。
       //
@@ -3127,6 +3138,12 @@ export default {
     // 协作 UI 的总闸：只有这份案卷真的放进过团队案件库才渲染任何协作元素。
     collabLinked() {
       return !!(this.collabCloud && this.collabCloud.linked) && !this.isClientView
+    },
+    // 律师的尽调清单入口（dev-board#1050）：只对云端轨道的案卷恢复，判据与加人弹窗
+    // （InviteMemberDialog 的 isCloudTrack）同源。collabCloud 在「放进案件库」之后由
+    // onCollabChanged / onInviteMemberSuccess 重取，rail 随之即时出现这一项，不需重进页面。
+    ddCloudTrack() {
+      return resolveTrack({ localMode: this.localMode, linked: this.collabLinked }) === TRACK.CLOUD
     },
     /*
      * 协作状态口径（顶栏 chip / 底部状态条 / 版本面板状态行 / 协作抽屉四处同源同序）：
@@ -4187,6 +4204,10 @@ export default {
     tabSnapshotSignature() {
       this.scheduleTabSnapshotSave()
     },
+    // 计划审阅：AI 面板第一次挂上时补交它不在期间编辑器回传的审阅态
+    aiPanelMounted(v) {
+      if (v) this.$nextTick(() => this.flushPlanReviewStates())
+    },
     // 自动合并进行中每秒推一次时钟，让顶栏那句「正在合并…」带上已等秒数；结束即停。
     'documentMergeState.running'(running) {
       clearInterval(this._mergeElapsedTimer)
@@ -4202,6 +4223,11 @@ export default {
     // 事件（见对应组件），这里只管工作台自己的。桥那边有浅比较+去抖，
     // 这些 watcher 只管「叫一声」，不必自己节流。
     'project.id'() { this.pushMenuState() },
+    // 案卷从案件库断开（或协作状态重取后判为未上云）时，律师正开着的尽调清单面板
+    // 已经不在 rail 上了——回落资源管理器，别停在一个没有按钮高亮的面板上。
+    ddCloudTrack(on) {
+      if (!on && this.leftPaneKey === 'dd-files' && !this.isClientView) this.leftPaneKey = 'files'
+    },
     activeFileIdRight() { this.pushMenuState(); this.ensureActiveTabVisible('right') },
     sidebarCollapsed() { this.pushMenuState() },
     showToolsPanel() { this.pushMenuState() },
@@ -6559,6 +6585,55 @@ export default {
         timeoutMs: (options && options.timeoutMs) || 1500,
       })
     },
+    /**
+     * 计划审阅（dev-board#1022）：编辑器里「按修订版推进」→ 交给 AI 面板以 AGENT 模式发出。
+     * 走 resolveChatInterface：AI 面板此刻可能收着或右侧停着别的面板。
+     * 先发后落库：编辑器等 payload.ack 回话才 POST submit、退出审阅态。每条早退路径都 ack(false)
+     * （编辑器留在审阅态提示「没发出去」）；成功路径由 handleReviewSubmit 在 sendMessage 调用后 ack(true)。
+     */
+    async onPlanReviewSubmit(payload) {
+      const ack = (payload && typeof payload.ack === 'function') ? payload.ack : () => {}
+      try {
+        const chat = await this.resolveChatInterface()
+        if (!chat || typeof chat.handleReviewSubmit !== 'function') { ack(false); return }
+        // 修订版必须回到开审阅的那个会话：用户中途切到别的会话（或新对话）时先切回去，
+        // 否则回喂落进错的会话，原会话的计划还停在等审批。切不回去就不发。
+        const target = payload && payload.conversationId
+        if (target && chat.currentConversationId !== target) {
+          const ok = await this.loadHistoryChat({ conversationId: target })
+          if (ok !== true) {
+            uni.showToast({ title: this.$t('chat.reviewConversationSwitchFailed'), icon: 'none' })
+            ack(false)
+            return
+          }
+        }
+        await chat.handleReviewSubmit(payload)
+      } catch (e) {
+        console.warn('[project-overview] plan review submit failed:', e)
+        ack(false)
+      }
+    },
+    /** 编辑器回传审阅态：转给对话里的计划卡；审阅结束后清掉标签上的 review，免得重开时再进审阅。 */
+    onPlanReviewState(state) {
+      if (state && (state.status === 'submitted' || state.status === 'discarded')) {
+        for (const tab of [...(this.leftFiles || []), ...(this.rightFiles || [])]) {
+          if (tab.review && String(tab.id) === String(state.fileId)) tab.review = null
+        }
+      }
+      if (!state || state.fileId == null) return
+      // AI 面板收着时状态也不能丢：页面上留一份最新的，面板挂上时补交（flushPlanReviewStates）。
+      // 刻意不走 resolveChatInterface：审阅态每次编辑都会回传，那样会反复把用户收起的 AI 面板
+      // 顶开、把右侧停靠面板切走，还会置 restoredLastConversation 打断会话恢复。
+      if (!this._planReviewStates) this._planReviewStates = {}
+      this._planReviewStates[state.fileId] = state
+      this.flushPlanReviewStates()
+    },
+    /** 把页面上留存的审阅态交给 ChatInterface（它不在就等 aiPanelMounted 的 watcher 再来）。 */
+    flushPlanReviewStates() {
+      const chat = this.$refs.chatInterface
+      if (!chat || typeof chat.handleReviewState !== 'function' || !this._planReviewStates) return
+      for (const st of Object.values(this._planReviewStates)) chat.handleReviewState(st)
+    },
     /** 写作辅助打开既有资料；全文在线核验由面板中的显式按钮单独触发。 */
     onOpenInsight(payload, pane) {
       const fileId = payload && payload.fileId
@@ -7376,7 +7451,7 @@ export default {
                 limit: 60
             })
             // 竞态防护：快速切换会话时，丢弃已不是当前选中会话的旧响应，避免旧数据覆盖新会话
-            if (this.currentConversationId !== chat.conversationId) return
+            if (this.currentConversationId !== chat.conversationId) return false
             // Pass conversationId and messages to ChatInterface via $refs
             if (this.$refs.chatInterface && typeof this.$refs.chatInterface.loadMessages === 'function') {
                 this.$refs.chatInterface.loadMessages(chat.conversationId, msgs)
@@ -7394,9 +7469,12 @@ export default {
                 }))
             }
             this.showHistoryDrawer = false
+            // 计划审阅提交前要确认切会话成功了（onPlanReviewSubmit）；其余调用方不看返回值
+            return true
         } catch (e) {
             console.error('Load chat failed', e)
             uni.showToast({ title: this.$t('workbench.loadConversationFailed'), icon: 'none' })
+            return false
         } finally {
             this.loadingHistory = false
         }

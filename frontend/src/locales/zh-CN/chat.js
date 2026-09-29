@@ -385,4 +385,9 @@ export default {
   generatedClickView: '已生成{name}，点击查看详情',
   revisionNote: '已修订 {hunks} 处（+{added} 行 / -{removed} 行）',
   approveDisplayRevised: '已修订计划',
+  // 计划审阅（dev-board#1022）
+  openRevisionBtn: '打开修订',
+  reviewInProgress: '修订中 · {hunks} 处改动 · {comments} 条批注',
+  reviewFileMissing: '找不到这份计划的项目文件，请在卡片内修订',
+  reviewConversationSwitchFailed: '无法切回这份计划所在的对话，修订版未发送',
 }

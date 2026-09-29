@@ -227,6 +227,12 @@ function request(options) {
       success(res) {
         const status = res.statusCode || 0;
 
+        // 204 No Content 是「没有」的正常回答（如计划审阅 GET review 无记录），静默回 null
+        if (status === 204) {
+          resolve(null);
+          return;
+        }
+
         // 首先检查HTTP状态码，如果不是200则直接拒绝（网络级别错误）
         if (status !== 200) {
           const message =
@@ -1888,6 +1894,22 @@ export function renameProject(projectId, name) {
 
 // ===================== 项目文件管理相关 API =====================
 
+/**
+ * 按项目内相对路径反查文件（计划审阅 dev-board#1022）：路径取自对话里「已保存到项目文件」那行。
+ * 返回 { fileId, name, parentId }；没有这份文件（HTTP 404）返回 null。
+ */
+export async function resolveProjectFileByPath(projectId, path) {
+  try {
+    return await request({
+      url: `/api/projects/${projectId}/files/resolve?path=${encodeURIComponent(path)}`,
+      method: 'GET',
+    });
+  } catch (e) {
+    if (e && e.status === 404) return null;
+    throw e;
+  }
+}
+
 // 获取项目文件列表
 export function getProjectFiles(projectId, parentId = null, tree = false) {
   const params = []
@@ -1997,11 +2019,21 @@ export function deleteFile(projectId, fileId) {
 
 
 
-// 永久删除文件
-export function deleteFilePerm(projectId, fileId) {
+// 永久删除文件。diskHandled：桌面壳已把磁盘上的文件送进系统废纸篓，后端只清行
+// （dev-board#1051，只在 local-mode 生效）。
+export function deleteFilePerm(projectId, fileId, { diskHandled = false } = {}) {
   return request({
-    url: `/api/projects/${projectId}/files/${fileId}/permanent`,
+    url: `/api/projects/${projectId}/files/${fileId}/permanent${diskHandled ? '?diskHandled=true' : ''}`,
     method: 'DELETE',
+  });
+}
+
+// 彻底删除这一项（含子孙）会从磁盘移走的物理绝对路径 → { data: { paths: [...] } }
+// （dev-board#1051，仅 local-mode）。
+export function getFilePermDiskPaths(projectId, fileId) {
+  return request({
+    url: `/api/projects/${projectId}/files/${fileId}/permanent/disk-paths`,
+    method: 'GET',
   });
 }
 
@@ -2922,6 +2954,15 @@ export function getTelemetrySummary(days = 30) {
 }
 
 // ===================== 尽调清单管理 (Due Diligence) =====================
+// 放进团队案件库的案卷，清单以案件库为准（dev-board#1050）：桌面端本机 /api/dd/* 整体转发到
+// 案件库（后端 DdCloudProxyFilter）。清单/清单项 id 是案件库那一侧的，本机后端只能靠 projectId
+// 认出该往哪转——所以 dd 系列统一在末位收一个可选的 projectId，带上就拼成 ?projectId=。
+// 不带时行为与以前一样（本机库 / 案件库自己）。
+export function ddUrl(path, projectId) {
+  if (projectId == null || projectId === '') return path
+  return `${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}`
+}
+
 export function getDdRequests(projectId) {
   return request({
     url: `/api/dd/projects/${projectId}`,
@@ -2938,64 +2979,64 @@ export function createDdRequest(projectId, payload) {
   })
 }
 
-export function getDdRequestDetails(requestId) {
+export function getDdRequestDetails(requestId, projectId) {
   return request({
-    url: `/api/dd/requests/${requestId}`,
+    url: ddUrl(`/api/dd/requests/${requestId}`, projectId),
     method: 'GET'
   })
 }
 
-export function updateDdItemStatus(itemId, status) {
+export function updateDdItemStatus(itemId, status, projectId) {
   return request({
-    url: `/api/dd/items/${itemId}/status`,
+    url: ddUrl(`/api/dd/items/${itemId}/status`, projectId),
     method: 'PUT',
     data: { status },
     header: { 'Content-Type': 'application/json' }
   })
 }
 
-export function updateDdItemInfo(itemId, title, description) {
+export function updateDdItemInfo(itemId, title, description, projectId) {
   return request({
-    url: `/api/dd/items/${itemId}/info`,
+    url: ddUrl(`/api/dd/items/${itemId}/info`, projectId),
     method: 'PUT',
     data: { title, description },
     header: { 'Content-Type': 'application/json' }
   })
 }
 
-export function addDdItemComment(itemId, content) {
+export function addDdItemComment(itemId, content, projectId) {
   return request({
-    url: `/api/dd/items/${itemId}/comments`,
+    url: ddUrl(`/api/dd/items/${itemId}/comments`, projectId),
     method: 'POST',
     data: { content },
     header: { 'Content-Type': 'application/json' }
   })
 }
 
-export function getDdItemComments(itemId) {
+export function getDdItemComments(itemId, projectId) {
   return request({
-    url: `/api/dd/items/${itemId}/comments`,
+    url: ddUrl(`/api/dd/items/${itemId}/comments`, projectId),
     method: 'GET'
   })
 }
 
-export function deleteDdItem(itemId) {
+export function deleteDdItem(itemId, projectId) {
   return request({
-    url: `/api/dd/items/${itemId}`,
+    url: ddUrl(`/api/dd/items/${itemId}`, projectId),
     method: 'DELETE'
   })
 }
 
-export function deleteDdRequest(requestId) {
+export function deleteDdRequest(requestId, projectId) {
   return request({
-    url: `/api/dd/requests/${requestId}`,
+    url: ddUrl(`/api/dd/requests/${requestId}`, projectId),
     method: 'DELETE'
   })
 }
 
-export function copyDdRequest(requestId) {
+export function copyDdRequest(requestId, projectId) {
   return request({
-    url: `/api/dd/requests/${requestId}/copy`,
+    url: ddUrl(`/api/dd/requests/${requestId}/copy`, projectId),
     method: 'POST'
   })
 }
@@ -3310,6 +3351,7 @@ export default {
   getMeetingAsrNotice,
   acknowledgeMeetingAsrNotice,
   // DD Files
+  ddUrl,
   getDdRequests,
   createDdRequest,
   getDdRequestDetails,
@@ -3334,33 +3376,33 @@ export default {
   desensitizeFile,
   // WPS 操作
   sendEditorResult,
-  addDdRequestItems(requestId, content) {
+  addDdRequestItems(requestId, content, projectId) {
     return request({
-      url: `/api/dd/requests/${requestId}/items`,
+      url: ddUrl(`/api/dd/requests/${requestId}/items`, projectId),
       method: 'POST',
       data: { content },
       header: { 'Content-Type': 'application/json' }
     })
   },
-  addDdItem(requestId, parentId) {
+  addDdItem(requestId, parentId, projectId) {
     return request({
-      url: `/api/dd/requests/${requestId}/item`,
+      url: ddUrl(`/api/dd/requests/${requestId}/item`, projectId),
       method: 'POST',
       data: { parentId },
       header: { 'Content-Type': 'application/json' }
     })
   },
-  moveDdItem(itemId, parentId) {
+  moveDdItem(itemId, parentId, projectId) {
     return request({
-      url: `/api/dd/items/${itemId}/parent`,
+      url: ddUrl(`/api/dd/items/${itemId}/parent`, projectId),
       method: 'PUT',
       data: { parentId },
       header: { 'Content-Type': 'application/json' }
     })
   },
-  updateDdRequest(requestId, name) {
+  updateDdRequest(requestId, name, projectId) {
     return request({
-      url: `/api/dd/requests/${requestId}`,
+      url: ddUrl(`/api/dd/requests/${requestId}`, projectId),
       method: 'PUT',
       data: { name },
       header: { 'Content-Type': 'application/json' }
@@ -3913,6 +3955,19 @@ export function lookupCloudMember(projectId, identifier) {
 export function addCloudMember(projectId, identifier, role) {
   return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'POST',
     data: { identifier, role } })
+}
+
+// 案件库上移出一位参与人（dev-board#1050）：撤销客户访问码与移出同事共用。
+// remoteUserId 是案件库那一侧的 userId（参与人列表 / 签码回执的 clientUserId），不是本机 user.id。
+export function removeCloudMember(projectId, remoteUserId) {
+  return request({ url: `/api/cloud/projects/${projectId}/members/${remoteUserId}`, method: 'DELETE' })
+}
+
+// 经案件库签发客户访问码（dev-board#1050）。回 {accessCode, expiresAt, clientUserId, clientUrl}；
+// 发给客户的链接是 `${clientUrl}#code=<码>`（utils/memberLookup.js clientPortalLink）。
+export function inviteCloudClient(projectId, clientName) {
+  return request({ url: `/api/cloud/projects/${projectId}/invite/client`, method: 'POST',
+    data: { clientName }, header: { 'Content-Type': 'application/json' } })
 }
 
 // ==================== 记忆同步 ====================

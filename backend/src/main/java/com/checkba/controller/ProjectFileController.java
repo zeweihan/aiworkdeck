@@ -12,6 +12,7 @@ import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Collections;
@@ -71,6 +72,29 @@ public class ProjectFileController {
         result.put("code", 0);
         result.put("data", stageQuotaService.usage(folderId));
         return result;
+    }
+
+    /**
+     * 按相对路径解析 fileId（计划审阅 dev-board#1022）：历史回放没有 artifact saved 事件，
+     * 前端取对话里「已保存到项目文件：」那行的路径来反查。
+     * GET /api/projects/{projectId}/files/resolve?path=AI 助手文件/<会话夹>/<名>.md
+     */
+    @GetMapping("/resolve")
+    public ResponseEntity<?> resolveByPath(
+            @PathVariable Long projectId,
+            @RequestParam("path") String path,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        checkFileTreeAccess(projectId, userId);
+        return projectFileService.resolveByRelativePath(projectId, path)
+                .<ResponseEntity<?>>map(f -> ResponseEntity.ok(Map.of(
+                        "fileId", f.getId(),
+                        "name", f.getName(),
+                        "parentId", f.getParentId() == null ? 0L : f.getParentId())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
@@ -519,6 +543,7 @@ public class ProjectFileController {
     public Map<String, Object> permDelete(
             @PathVariable Long projectId,
             @PathVariable Long fileId,
+            @RequestParam(value = "diskHandled", required = false, defaultValue = "false") boolean diskHandled,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) {
@@ -532,11 +557,50 @@ public class ProjectFileController {
         // 仍存在的行照旧先过归属校验。
         if (projectFileService.findFile(fileId).isPresent()) {
             checkFileInProject(fileId, projectId);
-            projectFileService.permDelete(fileId, userId);
+            // diskHandled 只在 local-mode 认（dev-board#1051）：桌面壳已把 permanent/disk-paths
+            // 报出的路径送进系统废纸篓，这里只清行。服务端部署不认——那里没有人替它删磁盘。
+            projectFileService.permDelete(fileId, userId, localMode && diskHandled);
         }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("message", com.checkba.service.LangText.of("彻底删除成功", "Permanently deleted successfully"));
+        return result;
+    }
+
+    /**
+     * 彻底删除这一项（含子孙）会从磁盘移走的物理绝对路径（dev-board#1051）。
+     * GET /api/projects/{projectId}/files/{fileId}/permanent/disk-paths
+     *
+     * 桌面壳的彻底删除三步：取这里的路径 → 主进程 shell.trashItem 送进系统废纸篓 →
+     * 全部成功才调 DELETE .../permanent?diskHandled=true 清行。本机文件夹项目的文件就是律师自己
+     * 文件夹里的真文件，直接 Files.delete 找不回来。路径是服务器磁盘上的绝对路径，
+     * 只有「服务器就是用户这台电脑」时才有意义，故仅 local-mode 开放（同 import-local）。
+     * 行已不在时回空表（幂等，与彻底删除一致）。
+     */
+    @GetMapping("/{fileId}/permanent/disk-paths")
+    public Map<String, Object> permDeleteDiskPaths(
+            @PathVariable Long projectId,
+            @PathVariable Long fileId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        if (!localMode) {
+            throw new IllegalArgumentException(com.checkba.service.LangText.of(
+                    "当前部署不支持查询本机磁盘路径", "This deployment does not expose local disk paths"));
+        }
+        checkFileWriteAccess(projectId, userId);
+        List<String> paths = Collections.emptyList();
+        if (projectFileService.findFile(fileId).isPresent()) {
+            checkFileInProject(fileId, projectId);
+            paths = projectFileService.diskPathsForPurge(fileId).stream()
+                    .map(java.nio.file.Path::toString)
+                    .collect(Collectors.toList());
+        }
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 0);
+        result.put("data", Map.of("paths", paths));
         return result;
     }
 

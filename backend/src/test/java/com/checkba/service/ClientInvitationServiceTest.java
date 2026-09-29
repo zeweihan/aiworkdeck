@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -126,12 +127,121 @@ class ClientInvitationServiceTest {
     }
 
     @Test
-    @DisplayName("local-mode 但案卷已放进案件库：照常签发")
-    void localModeLinkedProjectStillWorks() {
+    @DisplayName("local-mode 且案卷已放进案件库：本机也不签，要经案件库签发（dev-board#1050）")
+    void localModeLinkedProjectMustIssueViaLibrary() {
         when(localIdentityService.isLocalMode()).thenReturn(true);
         when(remoteRepository.findByProjectId(1L)).thenReturn(Optional.of(new ProjectRemote()));
-        String code = service.inviteClient(1L, 7L, "张三");
-        assertTrue(code != null && !code.isEmpty());
+        ClientInvitationService.LibraryRequiredException e = assertThrows(
+                ClientInvitationService.IssueViaLibraryException.class,
+                () -> service.inviteClient(1L, 7L, "张三"));
+        assertTrue(e.getMessage().contains("案件库签发") || e.getMessage().contains("issued through the library"),
+                e.getMessage());
+        verify(userRepository, never()).save(any());
+        verify(invitationRepository, never()).save(any());
+    }
+
+    // ---- dev-board#1050：有效期与同码复用 ----
+
+    @Test
+    @DisplayName("签发即写有效期（30 天），回执带得出来")
+    void issueSetsThirtyDayExpiry() {
+        ClientInvitationService.Issued issued = service.issueClientCode(1L, 7L, "张三");
+        assertNotNull(issued.expiresAt());
+        long days = java.time.Duration.between(java.time.LocalDateTime.now(), issued.expiresAt()).toDays();
+        assertTrue(days >= 29 && days <= 30, "有效期应为 30 天，实际 " + days);
+        assertNotNull(issued.clientUserId());
+    }
+
+    @Test
+    @DisplayName("过期的码登录被拒")
+    void expiredCodeIsRejected() {
+        ProjectInvitation inv = invitation(5L, 1L);
+        inv.setExpiresAt(java.time.LocalDateTime.now().minusMinutes(1));
+        when(invitationRepository.findByAccessCode("CODE")).thenReturn(Optional.of(inv));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> service.validateCode("CODE"));
+        assertTrue(e.getMessage().contains("过期") || e.getMessage().contains("expired"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("没有 expiresAt 的老码按签发时间 + 30 天推算")
+    void legacyCodeExpiresFromCreatedAt() {
+        ProjectInvitation old = invitation(5L, 1L);
+        old.setCreatedAt(java.time.LocalDateTime.now().minusDays(31));
+        when(invitationRepository.findByAccessCode("OLD")).thenReturn(Optional.of(old));
+        assertThrows(IllegalArgumentException.class, () -> service.validateCode("OLD"));
+        ProjectInvitation fresh = invitation(6L, 1L);
+        fresh.setCreatedAt(java.time.LocalDateTime.now().minusDays(3));
+        when(invitationRepository.findByAccessCode("FRESH")).thenReturn(Optional.of(fresh));
+        assertEquals(fresh, service.validateCode("FRESH"));
+    }
+
+    @Test
+    @DisplayName("重新签发通用码即续期")
+    void reissueGenericRefreshesExpiry() {
+        ProjectInvitation generic = invitation(5L, 1L);
+        generic.setType("CLIENT_GENERIC");
+        generic.setAccessCode("abcdefghijklmnopqrst");
+        generic.setRelatedUserId(55L);
+        generic.setExpiresAt(java.time.LocalDateTime.now().minusDays(1));
+        when(invitationRepository.findByProjectIdAndType(1L, "CLIENT_GENERIC")).thenReturn(List.of(generic));
+        ClientInvitationService.Issued issued = service.issueClientCode(1L, 7L, null);
+        assertEquals("abcdefghijklmnopqrst", issued.code());
+        assertTrue(issued.expiresAt().isAfter(java.time.LocalDateTime.now().plusDays(29)));
+        assertEquals(55L, issued.clientUserId());
+    }
+
+    @Test
+    @DisplayName("同码同称呼重复登录复用同一个客户用户，不再每次新建")
+    void sameNameReusesClientUser() {
+        ProjectInvitation inv = invitation(5L, 1L);
+        java.util.Map<String, User> byName = new java.util.HashMap<>();
+        when(userRepository.findByUsername(any())).thenAnswer(i -> Optional.ofNullable(byName.get(i.getArgument(0))));
+        org.mockito.Mockito.doAnswer(i -> {
+            User u = i.getArgument(0);
+            if (u.getId() == null) u.setId(userIds.incrementAndGet());
+            byName.put(u.getUsername(), u);
+            return u;
+        }).when(userRepository).save(any());
+        when(projectMemberRepository.findByProjectIdAndUserId(any(), any()))
+                .thenReturn(Optional.of(new ProjectMember()));
+
+        User first = service.createClientUser(inv, "李四");
+        User second = service.createClientUser(inv, " 李四 ");
+        assertEquals(first.getId(), second.getId());
+        verify(userRepository, org.mockito.Mockito.times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("被律师移出过的人再用同码登录被拒，不会把自己加回来")
+    void removedPersonCannotRejoinByName() {
+        ProjectInvitation inv = invitation(5L, 1L);
+        User existing = new User();
+        existing.setId(77L);
+        when(userRepository.findByUsername(any())).thenReturn(Optional.of(existing));
+        when(projectMemberRepository.findByProjectIdAndUserId(1L, 77L)).thenReturn(Optional.empty());
+        assertThrows(IllegalArgumentException.class, () -> service.createClientUser(inv, "李四"));
+        verify(projectMemberRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("同一张码能建出的不同称呼用户有上限")
+    void distinctNamesPerCodeAreCapped() {
+        ProjectInvitation inv = invitation(5L, 1L);
+        when(userRepository.findByUsername(any())).thenReturn(Optional.empty());
+        when(userRepository.countByUsernameStartingWith("client_inv5_"))
+                .thenReturn((long) ClientInvitationService.MAX_USERS_PER_INVITATION);
+        assertThrows(IllegalArgumentException.class, () -> service.createClientUser(inv, "王五"));
+        verify(userRepository, never()).save(any());
+    }
+
+    private static ProjectInvitation invitation(Long id, Long projectId) {
+        ProjectInvitation inv = new ProjectInvitation();
+        inv.setId(id);
+        inv.setProjectId(projectId);
+        inv.setAccessCode("CODE");
+        inv.setType("CLIENT_NAMED");
+        inv.setRelatedUserId(99L);
+        return inv;
     }
 
     @Test

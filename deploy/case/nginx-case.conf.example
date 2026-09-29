@@ -2,10 +2,12 @@
 # 部署在北京 ECS（8.152.169.44），与官网、插件云后端共机。只新增本 server 块，
 # 不改任何既有配置。宝塔机上落 /www/server/panel/vhost/nginx/case.aiworkdeck.com.conf。
 #
-# 与 nginx-addin.conf.example 的根本差异：**这台不服务浏览器**。
-# 没有 h5、没有 LOWA 编辑器、没有 office-addin 静态页、没有 feedback-console，
+# 与 nginx-addin.conf.example 的根本差异：**这台几乎不服务浏览器**。
+# 没有律师用的 h5、没有 LOWA 编辑器、没有 office-addin 静态页、没有 feedback-console，
 # 因此也就没有 COOP/COEP 全站头 —— addin 那边"location 里出现任意 add_header
 # 就会丢弃上层继承的 add_header"的坑在这里天然不存在。
+# 唯一的例外是 /client/ 客户门户（dev-board#1050）：律师的客户凭访问码进来看尽调清单、
+# 传材料的那一页静态包，安全头只写在它自己的 location 里（本 server 块没有全站 add_header）。
 # 反过来说：将来若在本文件里加了任何全站 add_header，每个带 add_header 的
 # location 都必须把它重复一遍，否则会漏。
 #
@@ -34,7 +36,21 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/case.aiworkdeck.com/privkey.pem;
 
     # 后端 Spring Boot 只监听 127.0.0.1:9797（9696 是同机的插件云后端）
-    # 本站没有 root/index：不服务任何静态文件。
+    # 本站没有 root/index：除 /client/ 客户门户外不服务任何静态文件。
+
+    # ================= 客户门户（dev-board#1050） =================
+    # 前端 `npm run build:client-portal` 的产物（base /client/，hash 路由），rsync 到下面的
+    # alias 目录。只收口这一个前缀：律师的 h5 / 编辑器 / 设置页都不在这台机器上，门户包里
+    # 也只注册了「门户 → 项目列表 → 工作台」三页。真闸在后端（CLIENT 在案件库上文件树、
+    # git、尽调写端点一律被拒），这里只是把静态包放出来。
+    # 访问码经 fragment 预填（/client/#code=<码>）：fragment 不随请求发送，不进本机 access log。
+    location ^~ /client/ {
+        alias /opt/aiworkdeck/case/web/client/;
+        try_files $uri $uri/ /client/index.html;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+    }
 
     # ================= git smart-HTTP =================
     # 端点：GitHttpController
@@ -159,6 +175,17 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+    # 客户门户的访问码登录（dev-board#1050）：公网上唯一「凭一串码就换会话」的匿名入口。
+    # 应用层 AuthAbuseGuard 按 IP 连错 5 次锁 10 分钟，这里是前置闸。
+    location = /api/auth/client-login {
+        limit_req zone=awd_auth burst=5 nodelay;
+        proxy_pass http://127.0.0.1:9797;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
     location = /api/auth/login {
         limit_req zone=awd_auth burst=5 nodelay;
         proxy_pass http://127.0.0.1:9797;
@@ -170,7 +197,7 @@ server {
     }
 
     # ================= 其余一律 404 =================
-    # 案件库没有任何面向浏览器的内容。根路径不给重定向、不给欢迎页，
+    # 除 /client/ 之外案件库没有任何面向浏览器的内容。根路径不给重定向、不给欢迎页，
     # 不留任何"这台机器上有什么"的探测面。
     location / {
         return 404;

@@ -1065,6 +1065,100 @@ public class CloudSyncService {
         }
     }
 
+    /**
+     * 移出案件库上的一位参与人（dev-board#1050）：同事，或凭访问码进来的客户——案件库那一侧
+     * 移出 CLIENT 时会连带作废他名下的访问码（{@code ProjectMemberService.removeMember}）。
+     * {@code remoteUserId} 是**案件库那一侧**的 userId（参与人列表里的 userId），与本机
+     * user.id 是两个 id 空间。权限规则（不能移自己、参与者只能移只读与客户）都在案件库判。
+     */
+    public void proxyRemoveMember(long projectId, long remoteUserId) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        JSONObject resp = JSONUtil.parseObj(httpDelete(
+                conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members/" + remoteUserId,
+                conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing(LangText.of(
+                    "没能移出：" + resp.getStr("message", "请重试"),
+                    "Couldn't remove: " + resp.getStr("message", "please try again")));
+        }
+    }
+
+    /**
+     * 经案件库签发客户访问码（dev-board#1050）。本机 local-mode 的案卷放进案件库之后，客户
+     * 登录的是案件库托管的客户门户（{@code {server}/client/}），码与客户用户必须落在案件库上——
+     * 本机 H2 里签的码客户那边根本不存在。
+     *
+     * @return {@code {accessCode, expiresAt, clientUserId, clientUrl}}；clientUserId 是案件库
+     *         那一侧的客户用户 id，撤销时交给 {@link #proxyRemoveMember}。
+     */
+    public Map<String, Object> proxyInviteClient(long projectId, String clientName) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        Map<String, Object> reqBody = new HashMap<>();
+        if (clientName != null && !clientName.isBlank()) reqBody.put("clientName", clientName.trim());
+        JSONObject resp = JSONUtil.parseObj(httpPost(
+                conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/invite/client",
+                JSONUtil.toJsonStr(reqBody), conn.getDeviceToken()));
+        JSONObject data = resp.getJSONObject("data");
+        if (resp.getInt("code", 1) != 0 || data == null || data.getStr("accessCode") == null) {
+            throw VersionException.userFacing(LangText.of(
+                    "没能生成访问码：" + resp.getStr("message", "请重试"),
+                    "Couldn't generate an access code: " + resp.getStr("message", "please try again")));
+        }
+        Map<String, Object> out = new HashMap<>();
+        out.put("accessCode", data.getStr("accessCode"));
+        out.put("expiresAt", JSONUtil.isNull(data.get("expiresAt")) ? null : data.getStr("expiresAt"));
+        out.put("clientUserId", data.getLong("clientUserId", null));
+        out.put("clientUrl", clientPortalUrl(conn.getServerUrl()));
+        return out;
+    }
+
+    /** 案件库托管的客户门户地址（nginx {@code location ^~ /client/}）。 */
+    static String clientPortalUrl(String serverUrl) {
+        String base = serverUrl == null ? "" : serverUrl.replaceAll("/+$", "");
+        return base + "/client/";
+    }
+
+    /** 这份案卷是否放进过案件库（DD 代理的路由判据）。 */
+    public boolean hasRemoteBinding(long projectId) {
+        return remoteRepository.findByProjectId(projectId).isPresent();
+    }
+
+    /** 原样转发的响应：状态码、类型、Content-Disposition 与字节都不动。 */
+    public record RawResponse(int status, String contentType, String contentDisposition, byte[] body) {}
+
+    private static final java.util.regex.Pattern DD_PROJECT_PATH =
+            java.util.regex.Pattern.compile("^/projects/(\\d+)(/.*)?$");
+
+    /**
+     * 尽调清单（DdRequest/DdItem）以案件库为准（dev-board#1050）：清单只是库表行、不进 git，
+     * 放进案件库的案卷若继续写本机库，客户在门户里永远看不到律师建的清单。本机
+     * {@code /api/dd/*} 在这种案卷上整体转发到 {@code {server}/api/dd/*}（见 DdCloudProxyFilter），
+     * 这里只做路径改写与原样转发——请求体按原字节转（multipart 的 boundary 一并保留），
+     * 响应也原样带回。
+     *
+     * <p>{@code pathSuffix} 是 {@code /api/dd} 之后的部分。唯一带本机 id 的形态是
+     * {@code /projects/{localId}}，改写成案件库的 remoteProjectId；清单/清单项 id 本来就是
+     * 案件库那一侧的（列表就是从案件库拿的）。
+     */
+    public RawResponse proxyDd(long projectId, String method, String pathSuffix, String query,
+                               byte[] body, String contentType) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        String path = pathSuffix == null ? "" : pathSuffix;
+        java.util.regex.Matcher m = DD_PROJECT_PATH.matcher(path);
+        if (m.matches()) {
+            if (Long.parseLong(m.group(1)) != projectId) {
+                throw new IllegalArgumentException("projectId 与路径不一致");
+            }
+            path = "/projects/" + remote.getRemoteProjectId() + (m.group(2) == null ? "" : m.group(2));
+        }
+        String url = conn.getServerUrl() + "/api/dd" + path
+                + (query == null || query.isBlank() ? "" : "?" + query);
+        return httpRaw(method, url, body, contentType, conn.getDeviceToken());
+    }
+
     /** 结束工作 → 后台自动上传（spec 决策 3）。绝不能让上传异常反向影响已经结束的工作段。 */
     @EventListener
     @Async("taskExecutor")
@@ -1424,6 +1518,31 @@ public class CloudSyncService {
             return resp.body();
         } catch (IllegalStateException e) {
             throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("云端不可达: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 原样转发的 seam（DD 代理用）：任意方法、原字节请求体、原 Content-Type；非 200 也不抛——
+     * 案件库回的 403（客户越权）要原样带回给调用方，而不是翻译成「云端请求失败」。
+     * 只有连不上才抛 IllegalStateException。
+     */
+    protected RawResponse httpRaw(String method, String url, byte[] body, String contentType, String sessionToken) {
+        HttpRequest req = HttpRequest.of(url)
+                .method(cn.hutool.http.Method.valueOf(method.toUpperCase(java.util.Locale.ROOT)))
+                .setConnectionTimeout(5000)
+                .setReadTimeout(120000);
+        if (sessionToken != null) {
+            req.header("X-Session-Id", sessionToken);
+        }
+        if (body != null && body.length > 0) {
+            if (contentType != null) req.header("Content-Type", contentType);
+            req.body(body);
+        }
+        try (HttpResponse resp = req.execute()) {
+            return new RawResponse(resp.getStatus(), resp.header("Content-Type"),
+                    resp.header("Content-Disposition"), resp.bodyBytes());
         } catch (Exception e) {
             throw new IllegalStateException("云端不可达: " + e.getMessage(), e);
         }

@@ -56,7 +56,7 @@
       </view>
 
       <!-- Action Icons (Hover) -->
-      <view class="dd-item-actions" v-if="hoveredId === req.id && !editingId">
+      <view class="dd-item-actions" v-if="canCreateRequest && hoveredId === req.id && !editingId">
         <view
             class="dd-action-btn"
             @tap.stop="copyRequest(req)"
@@ -170,7 +170,7 @@ export default {
     },
     async copyRequest(req) {
       try {
-        await api.copyDdRequest(req.id)
+        await api.copyDdRequest(req.id, this.projectId)
         uni.showToast({ title: this.$t('panels.dfCopied'), icon: 'none' })
         await this.fetchRequests()
       } catch (e) {
@@ -185,7 +185,7 @@ export default {
     async handleDelete() {
       if (!this.deletingRequest) return
       try {
-        await api.deleteDdRequest(this.deletingRequest.id)
+        await api.deleteDdRequest(this.deletingRequest.id, this.projectId)
         uni.showToast({ title: this.$t('panels.dfDeleted'), icon: 'none' })
         this.showDeleteDialog = false
         this.deletingRequest = null
@@ -203,7 +203,7 @@ export default {
         if (!this.editingId) return
         if (this.editName && this.editName !== req.name) {
             try {
-                await api.updateDdRequest(req.id, this.editName)
+                await api.updateDdRequest(req.id, this.editName, this.projectId)
                 req.name = this.editName
                 uni.showToast({ title: this.$t('panels.dfRenamed'), icon: 'none' })
             } catch (e) {
