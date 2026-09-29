@@ -10,7 +10,8 @@ import java.io.InputStream;
 /**
  * 文件存储服务接口
  * 
- * 统一抽象文件存储操作，支持本地文件系统和对象存储（OSS/S3等）
+ * 统一抽象文件存储操作。唯一实现是本机文件系统（{@link LocalFileStorageService}）：
+ * 文件的真相源是磁盘，项目命名空间的物理位置由 {@link ProjectStorageResolver} 决定。
  * 实现类需要处理：
  * - 文件上传/保存
  * - 文件下载/读取
@@ -48,8 +49,7 @@ public interface StorageService {
      * 新建文档时物化一个初始文件（本地实现从 docs/template.docx 复制，缺模板则建空文件）。
      *
      * <p>只有「创建」路径可以调用；已存在则原样不动（幂等）。
-     * 默认空实现：对象存储此前根本没有这条路（{@code load} 直接抛，调用方 catch 掉记一行日志），
-     * 保持这个既有行为，不在本次修复里给 OSS 新增一次上传。
+     * 默认空实现：不支持模板物化的实现保持 no-op（调用方 {@code load} 失败时 catch 掉记一行日志）。
      */
     default void createFromTemplate(String fileId) throws StorageException {
         // no-op：见 javadoc
@@ -68,8 +68,7 @@ public interface StorageService {
      *
      * <p>「先写临时 key、再 move 顶替」是覆盖式落盘的原子化手段（插件文档镜像，
      * dev-board#299）：直接 save 到最终 key 中途失败会留半截文件。本地实现用
-     * {@code Files.move}（同卷原子）；默认实现退化为 load→save→delete 流拷贝
-     * （对象存储没有原子 move，覆盖窗口收窄到对象存储自身的 put 原子性）。
+     * {@code Files.move}（同卷原子）；默认实现退化为 load→save→delete 流拷贝（非原子）。
      */
     default void move(String fromId, String toId) throws StorageException {
         try (InputStream in = load(fromId).getInputStream()) {
@@ -87,14 +86,6 @@ public interface StorageService {
      * @return 是否存在
      */
     boolean exists(String fileId);
-
-    /**
-     * 获取文件的访问URL（用于对象存储的预签名URL或直接访问URL）
-     * 
-     * @param fileId 文件ID
-     * @return 访问URL，如果不需要URL则返回null
-     */
-    String getUrl(String fileId);
 
     /**
      * 追加内容到文件末尾 (用于断点续传)

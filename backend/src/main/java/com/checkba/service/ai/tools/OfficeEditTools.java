@@ -2816,10 +2816,8 @@ public class OfficeEditTools implements AgentToolComponent {
         if (denied != null) {
             return denied;
         }
+        // 只认 filePath（dev-board#1035）：wpsFileId 不是存储键，拿它当路径永远找不到
         String filePath = pf.getFilePath();
-        if (filePath == null || filePath.isBlank()) {
-            filePath = pf.getWpsFileId();
-        }
         if (filePath == null || filePath.isBlank()) {
             return "Error: 文件路径为空（fileId=" + fileId + "）";
         }

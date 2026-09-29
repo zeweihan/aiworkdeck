@@ -92,3 +92,24 @@ export function collapseToTopmostSelected(ids, recycleBinList) {
   }
   return { roots, coveredBy }
 }
+
+/**
+ * 文件树实际渲染的行（FileTree.vue 的 displayFiles 计算属性）。
+ *
+ * 病灶（dev-board#1019）：回收站视图也套了文件视图的两道过滤——按名字藏系统文件夹
+ * （__staging_area__ 等）、按 id 藏暂存区文件。回收站标题按 recycleBin.length 计数，
+ * 接口返回的缓存区文件夹行被藏掉后，删光可见行也永远剩「回收站 (2)」、列表却是空的，
+ * 用户看不见就删不掉。回收站里接口给的每一行都要渲染出来（平铺，不按父子挂树，
+ * 父文件夹早已不在的孤儿行照样可见）；两道过滤只属于文件视图。
+ *
+ * @param {{viewMode: string, files: Array, recycleBin: Array, hiddenFileIds: Array}} state
+ * @returns {Array}
+ */
+export function computeDisplayFiles({ viewMode, files, recycleBin, hiddenFileIds }) {
+  const bin = Array.isArray(recycleBin) ? recycleBin : []
+  if (viewMode === 'recycle') return bin
+  const binIds = new Set(bin.map(f => f.id))
+  const hiddenNames = new Set(['.stagezone', '__staging_area__'])
+  const hiddenIds = new Set((hiddenFileIds || []).map(id => Number(id)))
+  return (files || []).filter(f => !binIds.has(f.id) && !hiddenIds.has(Number(f.id)) && !hiddenNames.has(f.name))
+}

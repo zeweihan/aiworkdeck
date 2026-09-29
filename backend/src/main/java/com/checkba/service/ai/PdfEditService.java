@@ -201,7 +201,9 @@ public class PdfEditService {
                 stripper.setSortByPosition(true);
                 stripper.setStartPage(i + 1);
                 stripper.setEndPage(i + 1);
-                String text = stripper.getText(doc).strip();
+                // 文字层里夹着的 XML 非法控制字符（如 U+0002）要在这里剔掉：它们会一路进到
+                // docx 的 document.xml，整份文档打不开（dev-board#1018）
+                String text = AiDocxExportService.stripXmlInvalidChars(stripper.getText(doc)).strip();
                 totalChars += text.length();
                 if (text.isEmpty()) continue;
                 if (md.length() > 0) md.append("\n\n");

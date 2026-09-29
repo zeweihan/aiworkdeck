@@ -820,12 +820,16 @@
     <!-- 可选组件缺失（设计 §4.2）：确认前把体积、解锁什么、不装则什么不可用都说全，
          确认后卡片就地跳进度，装完自动重发原消息。下载中可「后台下载」收起卡片继续用对话
          （dev-board#581），装完是否重发见 useComponentRequired.shouldAutoResend。 -->
+    <view v-if="componentReadyContinue" class="chat-component-ready">
+      <text class="ccr-text">{{ $t('components.chatReadyContinue') }}</text>
+      <view class="cg-btn primary" :class="{ disabled: isStreaming }" @tap="continueComponentPending">{{ $t('components.chatReadyContinueBtn') }}</view>
+    </view>
     <view v-if="componentGateItem" class="chat-component-gate">
       <view class="cg-panel">
         <text class="cg-title">{{ $t('components.chatTitle') }}</text>
         <OptionalComponentCard :item="componentGateItem" :selectable="false" :busy="true" />
         <view v-if="componentGateResolved" class="cg-installing">
-          <text class="cg-installing-text">{{ $t('components.chatInstalling') }}</text>
+          <text class="cg-installing-text">{{ $t('components.chatStage.' + (componentGateItem.stageKey || 'preparing')) }}</text>
           <view class="cg-actions">
             <view class="cg-btn cg-background" @tap="backgroundComponentGate">{{ $t('components.backgroundDownload') }}</view>
           </view>
@@ -851,9 +855,10 @@ import AgentInbox from './AgentInbox.vue'
 import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, getCurrentUser as getCurrentUserApi, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
-import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
+import { createFile, importLocalFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, getCurrentUser as getCurrentUserApi, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
+import { audioNeedingTranscription, isTranscribableMedia, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
+import { host } from '@/services/host.js'
 import DecisionAssistControl from './DecisionAssistControl.vue'
 import ModelSelectorDropdown from './ModelSelectorDropdown.vue'
 import { createDecisionAssistState, decisionAssistPreferenceKey, decisionAssistUser } from '@/utils/decisionAssistPreference.js'
@@ -978,6 +983,16 @@ export default {
     // 可选组件缺失闸（设计 §4.2）。下载走应用级单例（dev-board#581）：与首次登录面板、
     // 组件管理页同一份编排、同一份进度，顺序 pack → 模型 → ensure(service) 不能换。
     const componentGateItem = ref(null)
+    const componentReadyContinue = ref(null) // 装完但没自动重发时挂着的「待继续」原消息
+    const dropComponentPending = () => {
+      if (typeof componentRequiredHandler !== 'undefined') componentRequiredHandler.dismissPending()
+      componentReadyContinue.value = null
+    }
+    const continueComponentPending = async () => {
+      if (isStreaming.value) return
+      const ok = await componentRequiredHandler.continuePending({ streaming: isStreaming.value })
+      if (ok) componentReadyContinue.value = null
+    }
     const componentGateResolved = ref(false)
     const componentGateResolve = ref(null)
     // 前台认领：对话组件活着就由它交代结果（重发或提示可重试）；卸载时释放，交给全局提示
@@ -1017,8 +1032,12 @@ export default {
         userCountAtGate: mark,
         userCountNow: userMessageCount(),
       }),
-      readyNotice: (item) => {
+      readyNotice: (item, opts) => {
         closeComponentGate(item.packId)
+        if (opts && opts.canContinue) {
+          componentReadyContinue.value = componentRequiredHandler.pendingContinue()
+          return
+        }
         if (chatAlive) uni.showToast({ title: t('components.chatReadyRetry'), icon: 'none', duration: 3500 })
       },
       // 弹窗确认：把 item 挂上去，等模板里的按钮 resolve
@@ -1297,7 +1316,7 @@ export default {
     const activeDocDismissed = ref(false)
     watch(() => props.activeTab && props.activeTab.id, () => { activeDocDismissed.value = false })
     // 换项目：附件草稿里的 fileId 属于上一个项目，带过去后端 ToolFileGuard 必拒
-    watch(() => props.projectId, () => { clearAttachmentDraft() })
+    watch(() => props.projectId, () => { clearAttachmentDraft(); dropComponentPending() })
 
     /**
      * 输入框上方那枚「当前文档 · <名称>」chip 的数据（null = 不显示）。
@@ -2093,6 +2112,7 @@ export default {
     }
 
     const startNewChat = () => {
+      dropComponentPending()
       // New conversation detaches this panel from the old SSE. The server run keeps working
       // and remains visible from history; Stop is the explicit cancellation action.
       setConversationId(null)  // This now triggers resetSSE internally
@@ -2103,6 +2123,7 @@ export default {
     }
 
     const handleSubmit = async (requestedMode = 'steer') => {
+      dropComponentPending()
       // 插件镜像会话只读（dev-board#298）：输入区已换成说明条，这里再拦一道
       // 兜住空态输入框等旁路（后端对镜像会话追加也会拒，这是省一次报错）
       if (props.externalReadOnly) return
@@ -2604,6 +2625,7 @@ export default {
      *   `{ messages, hasMore, nextBefore }` 信封（带 limit 请求时后端回的形状）
      */
     const loadMessages = (conversationId, loaded) => {
+       dropComponentPending()
        const page = Array.isArray(loaded) ? { messages: loaded, hasMore: false, nextBefore: null } : (loaded || {})
        const loadedMsgs = page.messages || []
        console.log('[ChatInterface] Loading history...', loadedMsgs.length)
@@ -3199,8 +3221,8 @@ export default {
         isDir: file.isDir || file.fileType === 'folder'
       }
       contextFiles.value.push(fileData)
-      // 只有真挂了音频才去问「它转写过没有」（dev-board#814 K34）
-      if (isAudioFile(fileData)) refreshTranscribedAudio()
+      // 只有真挂了音视频才去问「它转写过没有」（dev-board#814 K34；视频见 #1024）
+      if (isTranscribableMedia(fileData)) refreshTranscribedAudio()
 
       // Insert inline tag into rich input
       insertContextTagToInput(fileData)
@@ -3610,12 +3632,36 @@ export default {
 
       // 字节上传失败的文件名：这些不并入附件，收尾时要点名告诉用户
       const failedUploads = []
+      const failedImports = []
       let addedCount = 0
 
       try {
         for (const file of filesToUpload) {
+          // 桌面壳：本机文件交给 import-local，由后端从磁盘复制进项目，一步到位（dev-board#1034）。
+          // 老路「createFile 建空行再传字节」会在字节失效时留下空白文件（dev-board#409）。
+          const localPath = localPathOf(file.fileObject)
+          if (localPath) {
+            try {
+              const res = await importLocalFile(projectId, localPath, parentId)
+              const imported = res && res.data
+              if (!imported || !imported.id) throw new Error('import-local returned no file')
+              addFile({
+                id: imported.id,
+                name: imported.name,
+                fileType: imported.fileType,
+                wpsFileId: imported.wpsFileId,
+                isDir: false
+              })
+              addedCount++
+            } catch (importErr) {
+              console.warn('[ChatInterface] import-local failed, not attaching:', importErr)
+              failedImports.push(file.name)
+            }
+            continue
+          }
+
+          // 纯浏览器（拿不到本机路径）：建行 + 字节直传
           const fileType = getFileTypeFromName(file.name)
-          const wpsFileId = `project_${projectId}_doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
 
           // Create file record in backend
           const createdFile = await createFile(
@@ -3624,8 +3670,7 @@ export default {
             file.name,
             fileType,
             file.size,
-            null,
-            wpsFileId
+            null
           )
 
           if (createdFile && createdFile.id) {
@@ -3634,7 +3679,7 @@ export default {
             // Upload file content if available (H5)
             if (file.fileObject) {
               try {
-                await uploadFileContent(createdFile.id, wpsFileId, file.fileObject, file.size)
+                await uploadFileContent(createdFile.id, file.fileObject, file.size)
               } catch (uploadErr) {
                 // 字节没传上去就**不并入附件**。原来这里只 console.warn 然后照样 addFile，
                 // 结果是 contextItems 里挂着一个服务器上没有内容的 id：模型收到的是
@@ -3659,7 +3704,13 @@ export default {
           }
         }
 
-        if (failedUploads.length) {
+        if (failedImports.length) {
+          uni.showToast({
+            title: t('chat.importContentFailed', { names: failedImports.join('、') }),
+            icon: 'none',
+            duration: 3000
+          })
+        } else if (failedUploads.length) {
           uni.showToast({
             title: t('chat.uploadContentFailed', { names: failedUploads.join('、') }),
             icon: 'none',
@@ -3677,10 +3728,10 @@ export default {
     }
 
     /**
-     * 把本机文件（Finder / 资源管理器拖进对话区）上传进项目并挂上下文（dev-board#779 K6 ③）。
+     * 把本机文件（Finder / 资源管理器拖进对话区）导入项目并挂上下文（dev-board#779 K6 ③）。
      * 宿主 project-overview 的 handleAiDrop 在三种应用内格式都落空、dataTransfer 里
-     * 确实有文件时调这里，走的就是上传对话框那一条路（createFile + uploadFileContent +
-     * addFile），不另起一套。
+     * 确实有文件时调这里，走的就是上传对话框那一条路（uploadFilesAndAttach：桌面壳
+     * import-local，纯浏览器 createFile + uploadFileContent），不另起一套。
      *
      * 落点固定项目根目录：工作台里没有「当前文件夹」这个概念（文件树的选中项跟着编辑器
      * 标签走，是一份文件不是一个目录），跟着它走会把拖进来的材料随机塞到某份文档旁边。
@@ -3694,12 +3745,27 @@ export default {
       await uploadFilesAndAttach(files, null)
     }
 
-    // Upload file content to storage
-    const uploadFileContent = async (fileId, wpsFileId, fileObject, totalSize) => {
+    // File → 本机绝对路径（桌面壳 webUtils，同 FileTree.resolveDroppedFilePath）。
+    // 「+」对话框的 uni.chooseFile 在 H5 下返回的就是 <input type=file> 的原生 File，
+    // 拖入的是 dataTransfer 的 File，两者都拿得到。粘贴的 blob、纯浏览器恒为空串。
+    // preload 在 webUtils 缺席时回落 file.path，而 uni.chooseFile 把 path 定义成 blob: URL，
+    // 所以只认绝对路径。
+    const localPathOf = (fileObject) => {
+      try {
+        if (!fileObject || !host.fs || typeof host.fs.getPathForFile !== 'function') return ''
+        const p = host.fs.getPathForFile(fileObject) || ''
+        return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(p) ? p : ''
+      } catch (e) {
+        return ''
+      }
+    }
+
+    // Upload file content to storage（纯浏览器与粘贴图片用；URL 一律用数字主键）
+    const uploadFileContent = async (fileId, fileObject, totalSize) => {
       return new Promise((resolve, reject) => {
         // #ifdef H5
         const xhr = new XMLHttpRequest()
-        xhr.open('POST', `${getApiBaseUrl()}/api/files/${wpsFileId}/upload`)
+        xhr.open('POST', `${getApiBaseUrl()}/api/files/${fileId}/upload`)
 
         const headers = getAuthHeaders()
         for (const key in headers) {
@@ -3760,14 +3826,13 @@ export default {
         // 同一秒里贴多张会重名，带上序号
         const suffix = images.length > 1 ? `${stamp}-${i + 1}` : stamp
         const name = `${t('chat.pastedImageName', { stamp: suffix })}.${ext}`
-        const wpsFileId = `project_${projectId}_doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
         try {
           // 落在项目根目录：粘贴没有「选目标文件夹」这一步，不该替用户猜一个
-          const created = await createFile(projectId, null, name, getFileTypeFromName(name), blob.size, null, wpsFileId)
+          const created = await createFile(projectId, null, name, getFileTypeFromName(name), blob.size, null)
           if (!created || !created.id) throw new Error('createFile returned no id')
           // 字节没传上去就绝不并入附件：contextItems 里挂一个服务器上没有内容的 id，
           // 模型只会回「我看不到这张图」，而用户以为自己已经把图发过去了。
-          await uploadFileContent(created.id, wpsFileId, blob, blob.size)
+          await uploadFileContent(created.id, blob, blob.size)
           files.push({
             id: created.id,
             name: created.name,
@@ -3856,6 +3921,8 @@ export default {
        currentConversationId,
        isStreaming,
        componentGateItem,
+       componentReadyContinue,
+       continueComponentPending,
        componentGateResolved,
        resolveComponentGate,
        backgroundComponentGate,
@@ -6499,6 +6566,29 @@ export default {
 }
 .awd-btn-secondary:hover {
     background-color: var(--awd-surface-3);
+}
+
+/* 组件装完但没自动重发：贴在输入区上方的「继续」条 */
+.chat-component-ready {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 12px 8px;
+    padding: 8px 12px;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
+    border-radius: 10px;
+}
+
+.ccr-text {
+    font-size: 13px;
+    color: var(--awd-text);
+}
+
+.chat-component-ready .cg-btn.disabled {
+    opacity: 0.5;
+    pointer-events: none;
 }
 
 /* 可选组件缺失弹窗（设计 §4.2） */

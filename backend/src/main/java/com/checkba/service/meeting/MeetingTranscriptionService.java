@@ -487,6 +487,15 @@ public class MeetingTranscriptionService {
         return ext.isEmpty() ? "webm" : ext;
     }
 
+    /**
+     * 源文件是视频容器、必须先抽音轨（dev-board#1024）。三档提交本来就都过 {@link #transcodeWithTimeout}，
+     * 区别在转码失败时：音频可以回退原文件「宁可试一次」，视频不行——把几百 MB 的 mp4 原样
+     * 送去听悟/网关/本机识别，要么被拒、要么白花上传与计费，所以视频转码失败直接落 FAILED。
+     */
+    static boolean needsAudioExtraction(String fileName) {
+        return MeetingRecordingService.isVideoFileName(fileName);
+    }
+
     /** 音频本体的定位与非空校验，两档共用。 */
     private Path resolveAudioPath(MeetingRecording meeting) throws Exception {
         ProjectFile audio = projectFileRepository.findById(meeting.getAudioFileId())
@@ -520,8 +529,15 @@ public class MeetingTranscriptionService {
             return t;
         });
         try {
-            return worker.submit(() -> transcoder.toMp3(input, workDir))
+            File prepared = worker.submit(() -> transcoder.toMp3(input, workDir))
                     .get(transcodeTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            // 视频：转码器失败会回退原文件，这里拦下，保证送出去的一定是 mp3 产物
+            if (needsAudioExtraction(input.getName()) && !"mp3".equals(audioFormat(prepared))) {
+                throw new IllegalStateException(LangText.of(
+                        "无法从视频中提取音轨（文件可能损坏或没有声音）",
+                        "Could not extract the audio track from the video (the file may be damaged or silent)"));
+            }
+            return prepared;
         } catch (TimeoutException e) {
             log.warn("音频转码超时（超过 {} 未完成，判定为卡死）: {}", transcodeTimeout, input.getName());
             throw new IllegalStateException(

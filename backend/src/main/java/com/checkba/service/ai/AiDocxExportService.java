@@ -49,6 +49,40 @@ public class AiDocxExportService {
         return options;
     }
 
+    /**
+     * 剔除 XML 1.0 不允许的字符（dev-board#1016/#1018）：C0 控制字符（保留 \t \n \r）、
+     * 孤立代理项、U+FFFE / U+FFFF。
+     *
+     * <p>PDF 文字层里常夹着这类字符（字体私有编码的残留），docx4j 不替你挡，原样写进
+     * word/document.xml——产出的 docx 编辑器打不开、预览也渲染不出，表现为「一直卡在加载」。
+     * 干净文本原样返回同一实例（常态零分配）。
+     */
+    public static String stripXmlInvalidChars(String text) {
+        if (text == null || text.isEmpty()) return text;
+        int n = text.length();
+        int i = 0;
+        while (i < n && isXmlCharAt(text, i)) i += Character.charCount(text.codePointAt(i));
+        if (i >= n) return text;
+        StringBuilder sb = new StringBuilder(n);
+        sb.append(text, 0, i);
+        while (i < n) {
+            int cp = text.codePointAt(i);
+            int len = Character.charCount(cp);
+            if (isXmlCharAt(text, i)) sb.appendCodePoint(cp);
+            i += len;
+        }
+        return sb.toString();
+    }
+
+    private static boolean isXmlCharAt(String s, int i) {
+        char c = s.charAt(i);
+        if (Character.isHighSurrogate(c)) {
+            return i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1));
+        }
+        if (Character.isLowSurrogate(c)) return false;   // 孤立低代理
+        return c == 0x9 || c == 0xA || c == 0xD || (c >= 0x20 && c <= 0xFFFD);
+    }
+
     @Transactional
     public ProjectFile exportMarkdownToDocx(Long projectId,
                                             Long parentId,
@@ -78,6 +112,8 @@ public class AiDocxExportService {
         if (!StringUtils.hasText(markdownContent)) {
             markdownContent = "";
         }
+        // 落盘前剔除 XML 非法字符：一个 U+0002 就能让整份 docx 打不开（dev-board#1018）
+        markdownContent = stripXmlInvalidChars(markdownContent);
 
         // 生成 WPS 文件 ID，供在线编辑与回调使用
         String wpsFileId = "project_" + projectId + "_ai_" + System.currentTimeMillis();

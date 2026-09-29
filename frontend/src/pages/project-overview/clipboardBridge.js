@@ -7,7 +7,7 @@
 // 含 #ifdef H5 条件编译：uni 预处理器对 src/pages/**.js 同样生效（已实测验证）。
 // 经展开进组件 methods（纯搬移，Phase 3a 外置），`this` 即 project-overview 页面实例。
 
-import { saveClipboardText, saveClipboardFile } from '@/services/api.js'
+import { saveClipboardText, saveClipboardFile, saveClipboardLocalFile } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { host, isDesktopHost } from '@/services/host.js'
 
@@ -69,27 +69,13 @@ export const clipboardBridgeMethods = {
              }
            } else if (payload.type === 'FILE' && payload.filePath) {
              try {
-               // Must verify API exists (Electron only)
-                // eslint-disable-next-line
-               if (host.utils && host.utils.readFile) {
-                  // eslint-disable-next-line
-                  const resp = await host.utils.readFile(payload.filePath)
-                  if (resp && resp.ok && resp.data) {
-                     // resp.data is usually Uint8Array or serialized Buffer
-                     const u8arr = new Uint8Array(resp.data)
-
-                     const name = payload.filePath.split(/[/\\]/).pop() || 'file'
-                     const blob = new Blob([u8arr])
-                     const f = new File([blob], name)
-
-
-                     const res = await saveClipboardFile({ file: f }, 'FILE')
-                     const saved = (res && res.data) ? res.data : res
-                     this.onClipboardSaved(saved)
-                     uni.showToast({ title: this.$t('workbenchOps.fileCaptured'), icon: 'success' })
-                     return saved
-                  }
-               }
+               // 只传路径，由后端（local-mode，与本机同一台机器）自己 copy 进剪贴板库；
+               // 不再把整个文件读进渲染进程再上传一遍（大文件会把渲染进程内存撑爆，dev-board B14）
+               const res = await saveClipboardLocalFile(payload.filePath)
+               const saved = (res && res.data) ? res.data : res
+               this.onClipboardSaved(saved)
+               uni.showToast({ title: this.$t('workbenchOps.fileCaptured'), icon: 'success' })
+               return saved
              } catch (e) {
                console.error('File upload failed', e)
                uni.showToast({ title: this.$t('workbenchOps.fileCaptureFailed'), icon: 'none' })

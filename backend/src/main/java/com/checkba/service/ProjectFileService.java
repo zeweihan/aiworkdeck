@@ -345,8 +345,24 @@ public class ProjectFileService {
         return savedFile;
     }
 
-    /** 单个项目的文件总量上限，与 FileController.uploadFile 那道闸同一个数（20GB）。 */
-    private static final long PROJECT_TOTAL_SIZE_LIMIT = 20L * 1024 * 1024 * 1024;
+    /**
+     * 项目总量闸，与 FileController.uploadFile 同一套口径（storage.project-size-limit，
+     * 桌面端本机文件夹项目豁免，dev-board#1038）。超限抛 IllegalArgumentException。
+     * 手工 new 的测试实例没有解析器时按默认 20GB 判。
+     */
+    private void requireWithinProjectSizeLimit(Long projectId, long incomingBytes) {
+        Long total = projectFileRepository.sumSizeByProjectId(projectId);
+        if (storageResolver != null) {
+            if (storageResolver.exceedsProjectSizeLimit(projectId, total, incomingBytes)) {
+                throw new IllegalArgumentException(storageResolver.projectSizeLimitMessage());
+            }
+            return;
+        }
+        long fallback = new com.checkba.storage.StorageProperties().getProjectSizeLimit().toBytes();
+        if (total != null && total + incomingBytes > fallback) {
+            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
+        }
+    }
 
     /**
      * 从本机绝对路径复制一份进项目目录（dev-board#409：桌面端「拖入 = 复制进来」）。
@@ -375,10 +391,7 @@ public class ProjectFileService {
         } catch (java.io.IOException e) {
             throw new IllegalArgumentException(LangText.of("无法读取源文件: ", "Cannot read source file: ") + sourcePath);
         }
-        Long total = projectFileRepository.sumSizeByProjectId(projectId);
-        if (total != null && total + size > PROJECT_TOTAL_SIZE_LIMIT) {
-            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
-        }
+        requireWithinProjectSizeLimit(projectId, size);
 
         String name = source.getFileName().toString();
         int dot = name.lastIndexOf('.');
@@ -418,6 +431,15 @@ public class ProjectFileService {
         if (userId == null) {
             throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
+        return resolveLocalSourcePath(sourcePath);
+    }
+
+    /**
+     * 「调用方指名一个本机绝对路径让服务端去读」这类入口共用的路径校验（import-local 与
+     * 剪贴板按路径存文件，dev-board B14）：非空、可解析、必须是绝对路径、末段不是符号链接。
+     * 只做路径形态校验；是不是普通文件、大小上限、local-mode 闸由各调用点自己把。
+     */
+    public static java.nio.file.Path resolveLocalSourcePath(String sourcePath) {
         if (!StringUtils.hasText(sourcePath)) {
             throw new IllegalArgumentException(LangText.of("源文件路径不能为空", "Source path must not be empty"));
         }
@@ -496,7 +518,7 @@ public class ProjectFileService {
      * <ul>
      * <li><b>顶层同名报错</b>——用的就是 {@link #createFolder} 那道同名查重，不改名不覆盖；</li>
      * <li><b>额度先算后拷</b>——先摊平整棵树、把普通文件的字节加总，与
-     *     {@code sumSizeByProjectId} 一起过 20GB 那道闸，拦住时一行不建、一个字节不落盘；</li>
+     *     {@code sumSizeByProjectId} 一起过项目总量闸，拦住时一行不建、一个字节不落盘；</li>
      * <li><b>跳过而不是报错</b>——树里的符号链接（跟随了等于把项目目录外的文件复制进来）、
      *     设备/管道等特殊文件、读不到的条目只计数；点开头的目录与 {@code ~$} 锁文件
      *     按磁盘扫描同一条规则（{@link LocalProjectService#isIgnoredEntryName}）静默略过，
@@ -560,10 +582,7 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("无法读取源目录: ", "Cannot read source directory: ") + source);
         }
 
-        Long total = projectFileRepository.sumSizeByProjectId(projectId);
-        if (total != null && total + totalBytes[0] > PROJECT_TOTAL_SIZE_LIMIT) {
-            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
-        }
+        requireWithinProjectSizeLimit(projectId, totalBytes[0]);
 
         ProjectFile rootFolder = createFolder(projectId, parentId, topName.toString(), userId);
         java.util.Map<java.nio.file.Path, Long> dirIds = new java.util.HashMap<>();
@@ -829,7 +848,10 @@ public class ProjectFileService {
              filePath = buildPhysicalPath(file.getProjectId(), file.getParentId(), file.getName());
         }
 
-        if (deletePhysical && StringUtils.hasText(filePath)) {
+        // 根级文件缓存区：回收站里的旧缓存区与活着的缓存区同名同位置，物理目录是同一个——
+        // 按目录删会把活着的缓存区里的文件字节一起删掉。子文件上面已按各自 filePath 删过了。
+        if (deletePhysical && StringUtils.hasText(filePath) && !isRootStagingFolder(file)
+                && !physicalPathInUseByLiveRow(file, filePath)) {
             try {
                 storageServiceFactory.getStorageService().delete(filePath);
                 log.info("物理文件/文件夹彻底删除成功: fileId={}, path={}", fileId, filePath);
@@ -851,6 +873,32 @@ public class ProjectFileService {
         }
     }
     
+    /**
+     * 这个物理路径是否还被另一条活着的行占着（dev-board#1020）。软删除不动磁盘，而
+     * {@code createFolder} / {@code createFile(FAIL)} 的同名查重只看活着的行，所以「删 A → 再建 A」
+     * 之后，回收站里的旧 A 与新 A 是同一个目录，两边同名的子文件 filePath 也逐字相同。
+     * 这时按路径删，删掉的是活着那一份的字节（行还在，点开即「文件不存在」）；空的新 A 的目录
+     * 被删掉，本地文件夹项目的对账还会把它判成「Finder 里删了」。所以被占着就只删行、不碰磁盘。
+     */
+    private boolean physicalPathInUseByLiveRow(ProjectFile file, String filePath) {
+        Long projectId = file.getProjectId();
+        if (projectId == null) return false;
+        boolean inUse;
+        if (Boolean.TRUE.equals(file.getIsFolder())) {
+            inUse = projectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).stream()
+                    .filter(r -> Boolean.TRUE.equals(r.getIsFolder()) && !r.getId().equals(file.getId())
+                            && file.getName() != null && file.getName().equals(r.getName()))
+                    .anyMatch(r -> filePath.equals(buildPhysicalPath(projectId, r.getParentId(), r.getName())));
+        } else {
+            inUse = projectFileRepository.findByProjectIdAndFilePathAndIsDeletedFalse(projectId, filePath).stream()
+                    .anyMatch(r -> !r.getId().equals(file.getId()));
+        }
+        if (inUse) {
+            log.info("彻底删除：物理路径仍被活着的同名行占用，只删记录不删磁盘 fileId={}, path={}", file.getId(), filePath);
+        }
+        return inUse;
+    }
+
     private List<ProjectFile> getAllChildrenIncludingDeleted(Long projectId, Long parentId) {
         return projectFileRepository.findByProjectIdAndParentId(projectId, parentId);
     }
@@ -896,7 +944,18 @@ public class ProjectFileService {
      * 获取回收站文件列表
      */
     public List<ProjectFile> getRecycleBinFiles(Long projectId) {
-         return projectFileRepository.findByProjectIdAndIsDeletedTrueOrderByDeletedAtDesc(projectId);
+         // 根级文件缓存区的空壳不列出（dev-board#1019）：工作台每次打开懒建缓存区，v0.49.0 前
+         // 本地文件夹项目的对账又把「磁盘上没目录」的空缓存区送进回收站，一个项目能攒几十个。
+         // 前端按名字把系统文件夹藏起来、标题却按条数计数——删光可见行后永远剩「回收站 (N)」、
+         // 列表却是空的。空壳里什么都没有，列出来也只是一行律师看不懂的内部目录名。
+         // 装着文件的缓存区照常列出：子行还原时要靠它做「先还原上层」的锚点。
+         List<ProjectFile> rows = projectFileRepository.findByProjectIdAndIsDeletedTrueOrderByDeletedAtDesc(projectId);
+         List<ProjectFile> out = new ArrayList<>(rows.size());
+         for (ProjectFile f : rows) {
+             if (isRootStagingFolder(f) && projectFileRepository.countByParentId(f.getId()) == 0) continue;
+             out.add(f);
+         }
+         return out;
     }
 
     /**
@@ -1188,7 +1247,7 @@ public class ProjectFileService {
         return candidate;
     }
 
-    private String generateWpsFileId(Long projectId) {
+    public String generateWpsFileId(Long projectId) {
         // 与前端生成规则保持一致的风格（无需完全一致，但确保全局唯一）
         String rand = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         return String.format("project_%d_doc_%d_%s", projectId, System.currentTimeMillis(), rand);

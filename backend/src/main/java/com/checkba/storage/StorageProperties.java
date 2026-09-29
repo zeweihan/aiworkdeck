@@ -5,6 +5,7 @@ package com.checkba.storage;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
 
 /**
  * 存储服务配置属性
@@ -14,7 +15,7 @@ import org.springframework.stereotype.Component;
 public class StorageProperties {
 
     /**
-     * 存储类型：local（本地文件系统）或 oss（对象存储）
+     * 存储类型：只支持 local（本地文件系统）
      */
     private String type = "local";
 
@@ -24,9 +25,16 @@ public class StorageProperties {
     private Local local = new Local();
 
     /**
-     * 对象存储配置
+     * 单个项目的文件总量上限（dev-board#1038）。上传与本机导入共用这一道闸；
+     * application.yml 的 multipart 单请求上限也引用这个值，二者同源。
      */
-    private Oss oss = new Oss();
+    private DataSize projectSizeLimit = DataSize.ofGigabytes(20);
+
+    /**
+     * 本机文件夹项目（Project.localRoot 非空）是否豁免项目总量闸。
+     * 只在桌面 profile 打开：那是用户自己的磁盘，没有理由替他限量；托管项目与云端/案件库照旧受限。
+     */
+    private boolean exemptLocalFolderProjects = false;
 
     public String getType() {
         return type;
@@ -36,20 +44,28 @@ public class StorageProperties {
         this.type = type;
     }
 
+    public DataSize getProjectSizeLimit() {
+        return projectSizeLimit;
+    }
+
+    public void setProjectSizeLimit(DataSize projectSizeLimit) {
+        this.projectSizeLimit = projectSizeLimit;
+    }
+
+    public boolean isExemptLocalFolderProjects() {
+        return exemptLocalFolderProjects;
+    }
+
+    public void setExemptLocalFolderProjects(boolean exemptLocalFolderProjects) {
+        this.exemptLocalFolderProjects = exemptLocalFolderProjects;
+    }
+
     public Local getLocal() {
         return local;
     }
 
     public void setLocal(Local local) {
         this.local = local;
-    }
-
-    public Oss getOss() {
-        return oss;
-    }
-
-    public void setOss(Oss oss) {
-        this.oss = oss;
     }
 
     public static class Local {
@@ -79,129 +95,6 @@ public class StorageProperties {
 
         public void setTemplatePath(String templatePath) {
             this.templatePath = templatePath;
-        }
-    }
-
-    public static class Oss {
-        /**
-         * 对象存储类型：aliyun（阿里云OSS）、aws（AWS S3）、minio（MinIO）
-         */
-        private String provider = "aliyun";
-
-        /**
-         * 访问密钥ID
-         */
-        private String accessKeyId;
-
-        /**
-         * 访问密钥Secret
-         */
-        private String accessKeySecret;
-
-        /**
-         * 存储桶名称（Bucket）
-         */
-        private String bucketName;
-
-        /**
-         * 存储桶所在区域（Region）
-         * 例如：oss-cn-hangzhou（阿里云）、us-east-1（AWS）
-         */
-        private String region;
-
-        /**
-         * 自定义端点（Endpoint），用于MinIO或私有部署的对象存储
-         * 如果为空，则使用默认端点
-         */
-        private String endpoint;
-
-        /**
-         * 文件存储路径前缀（可选）
-         * 例如：wps-files/ 或 project-files/
-         */
-        private String pathPrefix = "";
-
-        /**
-         * 是否使用HTTPS
-         */
-        private boolean useHttps = true;
-
-        /**
-         * CDN域名（可选，用于加速访问）
-         * 如果配置了CDN，文件访问URL将使用CDN域名
-         */
-        private String cdnDomain;
-
-        public String getProvider() {
-            return provider;
-        }
-
-        public void setProvider(String provider) {
-            this.provider = provider;
-        }
-
-        public String getAccessKeyId() {
-            return accessKeyId;
-        }
-
-        public void setAccessKeyId(String accessKeyId) {
-            this.accessKeyId = accessKeyId;
-        }
-
-        public String getAccessKeySecret() {
-            return accessKeySecret;
-        }
-
-        public void setAccessKeySecret(String accessKeySecret) {
-            this.accessKeySecret = accessKeySecret;
-        }
-
-        public String getBucketName() {
-            return bucketName;
-        }
-
-        public void setBucketName(String bucketName) {
-            this.bucketName = bucketName;
-        }
-
-        public String getRegion() {
-            return region;
-        }
-
-        public void setRegion(String region) {
-            this.region = region;
-        }
-
-        public String getEndpoint() {
-            return endpoint;
-        }
-
-        public void setEndpoint(String endpoint) {
-            this.endpoint = endpoint;
-        }
-
-        public String getPathPrefix() {
-            return pathPrefix;
-        }
-
-        public void setPathPrefix(String pathPrefix) {
-            this.pathPrefix = pathPrefix;
-        }
-
-        public boolean isUseHttps() {
-            return useHttps;
-        }
-
-        public void setUseHttps(boolean useHttps) {
-            this.useHttps = useHttps;
-        }
-
-        public String getCdnDomain() {
-            return cdnDomain;
-        }
-
-        public void setCdnDomain(String cdnDomain) {
-            this.cdnDomain = cdnDomain;
         }
     }
 }

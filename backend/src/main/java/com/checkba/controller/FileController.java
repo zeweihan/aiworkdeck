@@ -15,6 +15,7 @@ import com.checkba.version.WorkSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -148,25 +149,11 @@ public class FileController {
         log.info("[FileDownload] 收到下载请求: fileId={}", fileId);
         
         try {
-            // 1. 获取文件路径
-            String path = fileId; // 默认回退到 fileId (兼容旧逻辑)
+            // 1. 获取文件路径（fileId 只认数据库数字 id）
+            String path = fileId;
             
-            Optional<ProjectFile> projectFileOpt = Optional.empty();
-            
-            // 尝试将 fileId 解析为 Long ID (Frontend 传的是 DB ID)
-            try {
-                Long dbId = Long.parseLong(fileId);
-                projectFileOpt = projectFileRepository.findById(dbId);
-                log.info("[FileDownload] 按数据库ID查找: dbId={}, found={}", dbId, projectFileOpt.isPresent());
-            } catch (NumberFormatException e) {
-                log.info("[FileDownload] fileId不是数字，将按wpsFileId查找: {}", fileId);
-            }
-            
-            // 如果没找到，尝试按 WPS File ID 查找 (Fallback)
-            if (projectFileOpt.isEmpty()) {
-                projectFileOpt = projectFileRepository.findByWpsFileId(fileId).stream().findFirst();
-                log.info("[FileDownload] 按wpsFileId查找: wpsFileId={}, found={}", fileId, projectFileOpt.isPresent());
-            }
+            Optional<ProjectFile> projectFileOpt = findByNumericId(fileId);
+            log.info("[FileDownload] 按数据库ID查找: fileId={}, found={}", fileId, projectFileOpt.isPresent());
             
             String downloadFilename = fileId + ".docx";
 
@@ -225,13 +212,32 @@ public class FileController {
                  mediaType = MediaType.parseMediaType("audio/mpeg");
             } else if (lowerName.endsWith(".txt")) {
                  mediaType = MediaType.TEXT_PLAIN;
+            } else {
+                 String mediaMime = mediaMimeFor(lowerName);
+                 if (mediaMime != null) {
+                     mediaType = MediaType.parseMediaType(mediaMime);
+                 }
             }
 
             String filename = URLEncoder.encode(downloadFilename, StandardCharsets.UTF_8).replace("+", "%20");
+            String contentDisposition = "attachment; filename=\"" + filename + "\"";
+
+            // Range（dev-board#1025）：返回 200 + Resource 时，Spring MVC（AbstractMessageConverterMethodProcessor）
+            // 会按请求的 Range 头自行切成 ResourceRegion 回 206 / 越界回 416 + "bytes */total"，
+            // 并写 Accept-Ranges——前提是返回类型声明为 Resource（改成 ResponseEntity<?> 会让
+            // ResourceRegionHttpMessageConverter 拒写）。它依赖 contentLength()；取不到长度的资源
+            // （对象存储等）包成 InputStreamResource，Spring 对它跳过 Range 处理，退回 200 全量。
+            if (contentLengthOrNegative(resource) < 0) {
+                return ResponseEntity.ok()
+                        .contentType(mediaType)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                        .body(new InputStreamResource(resource.getInputStream()));
+            }
 
             return ResponseEntity.ok()
                     .contentType(mediaType)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                     .body(resource);
         } catch (StorageException e) {
             log.error("[FileDownload] 存储异常: fileId={}, message={}", fileId, e.getMessage());
@@ -241,6 +247,38 @@ public class FileController {
             log.error("[FileDownload] 未知异常: fileId={}, message={}", fileId, e.getMessage());
             log.error("[FileDownload] 未知异常堆栈:", e);
             return ResponseEntity.status(500).build();
+        }
+    }
+
+    /** 资源字节长度；取不到（抛异常）返回 -1。 */
+    private static long contentLengthOrNegative(Resource resource) {
+        try {
+            return resource.contentLength();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /** 音视频扩展名 → MIME（规格 2026-09-29-media-player-design §4.1）；非媒体返回 null。 */
+    static String mediaMimeFor(String lowerName) {
+        int dot = lowerName.lastIndexOf('.');
+        if (dot < 0) {
+            return null;
+        }
+        switch (lowerName.substring(dot + 1)) {
+            case "webm": return "video/webm";
+            case "ogv": return "video/ogg";
+            case "mov": return "video/quicktime";
+            case "m4v": return "video/x-m4v";
+            case "mkv": return "video/x-matroska";
+            case "avi": return "video/x-msvideo";
+            case "ogg": return "audio/ogg";
+            case "opus": return "audio/ogg";
+            case "m4a": return "audio/mp4";
+            case "wav": return "audio/wav";
+            case "flac": return "audio/flac";
+            case "aac": return "audio/aac";
+            default: return null;
         }
     }
 
@@ -277,25 +315,18 @@ public class FileController {
     }
 
     /**
-     * 上传目标文件定位：先按数据库 ID 查，查不到再退回 wpsFileId——与 downloadFile
-     * （:111-124）同一套双查顺序。缺这一步时，任何 wpsFileId 为 null 的文件（凡是走
-     * 清单同步创建的 ProjectFile 行都是这样：跨机器 git clone/从云端接一个项目/退回·
-     * 切线·采纳等场景新建的节点，manifest v2 只带 uid/relPath，不带 wpsFileId）在编辑器
-     * 里保存都会静默失败——LibreOfficeEditor.vue 的 `f.wpsFileId || f.id` 会把数字 id
-     * 当 fileId 传过来，这里如果只认 wpsFileId 就查不到，resolveUploadStoragePath 会拿
-     * 裸 id 字符串当存储路径，字节写进一个跟真实文件毫不相干的孤儿路径，且
-     * signalChange 因 projectFileOpt 为空而不触发——律师看到保存成功提示，实际编辑
-     * 内容对应的真文件在磁盘上纹丝没动。J11 e2e 里同事在另一台机器上编辑一个从云端
-     * 接入的文件时现场踩中，不是假设性风险。
+     * 下载 / 上传的目标文件定位：只认数据库数字 id（dev-board#1035）。
+     *
+     * <p>曾经查不到还会按 wpsFileId 回退，但 wpsFileId 不唯一（清单同步建的行为 null，
+     * 会话文件夹存的是 conversationId），回退命中的可能是别的文件；客户端已统一传数字 id。
+     * 非数字一律视为「文件不存在」，由调用方回 404。
      */
-    private Optional<ProjectFile> resolveProjectFileForUpload(String fileId) {
+    private Optional<ProjectFile> findByNumericId(String fileId) {
         try {
-            Optional<ProjectFile> byId = projectFileRepository.findById(Long.parseLong(fileId));
-            if (byId.isPresent()) return byId;
+            return projectFileRepository.findById(Long.parseLong(fileId));
         } catch (NumberFormatException ignored) {
-            // fileId 不是数字，走下面的 wpsFileId 查找
+            return Optional.empty();
         }
-        return projectFileRepository.findByWpsFileId(fileId).stream().findFirst();
     }
 
     /**
@@ -342,9 +373,8 @@ public class FileController {
 
         InputStream inputStream = null;
         try {
-            // 0. 检查项目总大小限制 (20GB)
-            // 数字 id / wpsFileId 双查见 resolveProjectFileForUpload 的方法注释。
-            final Optional<ProjectFile> projectFileOpt = resolveProjectFileForUpload(fileId);
+            // 0. 检查项目总大小限制（storage.project-size-limit；桌面端本机文件夹项目豁免）
+            final Optional<ProjectFile> projectFileOpt = findByNumericId(fileId);
             if (projectFileOpt.isPresent()) {
                 Long projectId = projectFileOpt.get().getProjectId();
                 // 鉴权：上传是就地覆盖文件字节，必须要写权限——此前只校验读权限，
@@ -353,8 +383,8 @@ public class FileController {
                     return ResponseEntity.status(403).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("无权上传到该文件", "You do not have permission to upload to this file")));
                 }
                 Long totalSize = projectFileRepository.sumSizeByProjectId(projectId); // Need to add this method to repo
-                if (totalSize != null && totalSize > 20L * 1024 * 1024 * 1024) {
-                     return ResponseEntity.status(400).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit")));
+                if (storageResolver.exceedsProjectSizeLimit(projectId, totalSize, 0L)) {
+                     return ResponseEntity.status(400).body(Map.of("code", -1, "message", storageResolver.projectSizeLimitMessage()));
                 }
             } else {
                 // 找不到文件记录就无从判断归属：此前只要求登录，resolveUploadStoragePath

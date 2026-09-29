@@ -195,6 +195,11 @@ export function getLeftSidebarPlugin(key) {
 }
 
 export function getPluginsForUser(role) {
+  // 门控依据（dev-board#1039）：CLIENT 只来自 /api/auth/client-login 的回包（客户凭访问码进案卷）。
+  // 桌面端 local-mode 下：后端拒绝给未放进案件库的案卷生成访问码（ProjectMemberController
+  // .inviteClient），且所有请求一律解析为本机用户（AuthController.getUserIdFromSession），
+  // 本机后端不会把任何请求认成 CLIENT。所以尽调文件的客户上传流程天然只在案件库（服务端形态）
+  // 成立，这里不再另加「未上云不显示」的判断。
   if (role === 'CLIENT') {
     return [DD_FILES_PLUGIN]
   }

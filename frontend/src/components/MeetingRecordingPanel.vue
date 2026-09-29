@@ -219,7 +219,7 @@
                 v-for="sp in speakerIds(m)"
                 :key="sp"
                 class="mr-speaker-chip"
-                :class="'sp-' + (Number(sp) % 6)"
+                :class="speakerClass(sp)"
                 @tap="startEditSpeaker(m, sp)"
               >
                 <text>{{ speakerName(m, sp) }}</text>
@@ -266,7 +266,7 @@
             <view class="mr-transcript">
               <view v-for="(seg, i) in segmentsOf(m)" :key="i" class="mr-seg">
                 <view class="mr-seg-head">
-                  <text class="mr-seg-speaker" :class="'sp-' + (Number(seg.speaker) % 6)">{{ speakerName(m, seg.speaker) }}</text>
+                  <text class="mr-seg-speaker" :class="speakerClass(seg.speaker)">{{ speakerName(m, seg.speaker) }}</text>
                   <text class="mr-seg-time">{{ formatMs(seg.start) }}</text>
                 </view>
                 <text class="mr-seg-text">{{ seg.text }}</text>
@@ -312,6 +312,7 @@ import {
   localTierReady, localAsrProbeResult, refreshLocalAsrReadiness
 } from '@/config/platformServices.js'
 import { host } from '@/services/host.js'
+import { speakerColorClass } from '@/utils/media/speakerColors.js'
 import { componentDownloads } from '@/services/componentDownloads.js'
 import { confirmPaidTranscription } from '@/utils/paidTranscribeGate.js'
 import { requireAccount, isAccountLoginRetry, ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
@@ -1010,6 +1011,10 @@ export default {
         return {}
       }
     },
+    // 六色循环的下标规则与播放器逐字稿共用（utils/media/speakerColors.js）
+    speakerClass(sp) {
+      return speakerColorClass(sp)
+    },
     speakerName(m, sp) {
       const names = this.speakerNamesOf(m)
       return names[sp] && names[sp].trim() ? names[sp] : this.$t('meeting.speakerDefaultName', { n: sp })
@@ -1679,7 +1684,8 @@ export default {
   &:hover { border-color: var(--awd-border-strong); }
 }
 
-/* 六色循环：同一说话人在图例与转写稿里颜色一致 */
+/* 六色循环：同一说话人在图例与转写稿里颜色一致。下标规则在 utils/media/speakerColors.js，
+   .sp-3 的紫色与那里 SPEAKER_COLOR_TOKENS[3] 的回退值同值，改一处要同改另一处 */
 .sp-0 { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 .sp-1 { background: var(--awd-info-soft); color: var(--awd-info-text); }
 .sp-2 { background: var(--awd-warning-soft); color: var(--awd-warning-text); }

@@ -98,6 +98,26 @@ public class CloudSyncService {
         this.pendingMergeStore = store;
     }
 
+    /**
+     * 取回到自选文件夹（dev-board#1040）用的路径校验与监听挂载。惰性取用：LocalProjectService
+     * 的依赖链很长，直接注入容易成环；手工 new 的测试取不到时整条「自选文件夹」路径不可用。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.checkba.service.LocalProjectService>
+            localProjectServiceProvider;
+
+    private com.checkba.service.LocalProjectService localProjectServiceOverride;
+
+    /** 仅供测试注入。 */
+    public void setLocalProjectServiceForTest(com.checkba.service.LocalProjectService service) {
+        this.localProjectServiceOverride = service;
+    }
+
+    private com.checkba.service.LocalProjectService localProjectService() {
+        if (localProjectServiceOverride != null) return localProjectServiceOverride;
+        return localProjectServiceProvider == null ? null : localProjectServiceProvider.getIfAvailable();
+    }
+
     public CloudSyncService(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectTreeManifestService manifestService,
@@ -321,6 +341,18 @@ public class CloudSyncService {
      * 没有跨机器一致的 uid，v2 是本机制的立身之本，旧格式一律拒绝、指引律师先在云端更新一次。
      */
     public Map<String, Object> cloneFromCloud(long connectionId, long remoteProjectId, Long localUserId) {
+        return cloneFromCloud(connectionId, remoteProjectId, localUserId, null);
+    }
+
+    /**
+     * localRoot 非空（dev-board#1040）：取回到用户自选的文件夹，新项目按「本机文件夹项目」落地
+     * （{@code Project.localRoot} = 该目录，workTree 随之指向它，gitDir 仍在全局 data 根下，
+     * 用户文件夹里不会多出 .git）。目录不存在就建、非空拒绝；校验与 open-local 同一套
+     * （{@code LocalProjectService.prepareCloneTarget}）。是否允许走这条路由调用方按
+     * local-folder-projects 开关判定。localRoot 为空时行为与原来完全一样（托管目录）。
+     */
+    public Map<String, Object> cloneFromCloud(long connectionId, long remoteProjectId, Long localUserId,
+                                              String localRoot) {
         CloudConnection conn = ownedConnection(connectionId, localUserId);
 
         // 换机器取回的查重：这份案卷本机已经有了就把既有的本机 id 还回去，不再造第二个
@@ -350,12 +382,28 @@ public class CloudSyncService {
                 .findFirst()
                 .orElse(LangText.of("案件库里的案卷", "A case file in the library"));
 
+        // 目标文件夹放在 prepare-remote 之后才落盘：前面任何一步失败都不该在用户磁盘上留下空目录
+        com.checkba.service.LocalProjectService.CloneTarget target = null;
+        if (localRoot != null && !localRoot.isBlank()) {
+            var lps = localProjectService();
+            if (lps == null) {
+                throw VersionException.userFacing(LangText.of(
+                        "当前部署不支持取回到自选文件夹", "This deployment does not support choosing a folder for pulled case files"));
+            }
+            try {
+                target = lps.prepareCloneTarget(localRoot);
+            } catch (IllegalArgumentException e) {
+                throw VersionException.userFacing(e.getMessage());
+            }
+        }
+
         Project project = new Project();
         project.setName(remoteName);
         project.setProjectType("BLANK");
         project.setListedCompanyName("");
         project.setTargetCompanyName("");
         project.setUserId(localUserId);
+        if (target != null) project.setLocalRoot(target.root().toString());
         project.setCreatedAt(LocalDateTime.now());
         project = projectRepository.save(project);
         long localProjectId = project.getId();
@@ -369,6 +417,17 @@ public class CloudSyncService {
                 repoService.cloneFromRemote(localProjectId,
                         conn.getServerUrl() + "/git/" + remoteProjectId + ".git",
                         conn.getUsername(), conn.getDeviceToken());
+                if (target != null) {
+                    // JGit 带独立 gitDir 克隆时会在工作区写一个 ".git" 指路文件（gitdir: ...）。
+                    // 本仓一切读写都显式传 gitDir/workTree，用不到它；留在用户自己的文件夹里
+                    // 会让别的工具把它当成一个指向软件内部数据目录的 git 仓库。
+                    Path gitLink = target.root().resolve(".git");
+                    try {
+                        if (Files.isRegularFile(gitLink)) Files.delete(gitLink);
+                    } catch (IOException e) {
+                        log.warn("清理取回文件夹里的 .git 指路文件失败: project={}, path={}", localProjectId, gitLink, e);
+                    }
+                }
 
                 TreeManifest manifest = manifestService.readAtRef(localProjectId, "HEAD");
                 if (manifest == null || manifest.version() < 2) {
@@ -386,12 +445,15 @@ public class CloudSyncService {
                 remote.setLastSyncSha(repoService.resolveRef(localProjectId, repoService.mainBranch()));
                 remote.setCreatedAt(LocalDateTime.now());
                 remoteRepository.save(remote);
+                if (target != null) {
+                    localProjectService().announceLocalRoot(localProjectId, target.root().toString());
+                }
 
                 Map<String, Object> result = new HashMap<>();
                 result.put("localProjectId", localProjectId);
                 return result;
             } catch (RuntimeException e) {
-                cleanupFailedClone(localProjectId, project);
+                cleanupFailedClone(localProjectId, project, target);
                 throw e;
             }
         } finally {
@@ -400,14 +462,32 @@ public class CloudSyncService {
     }
 
     /** 接入失败留下的本地半成品：删本地 Project 行 + 递归删 gitDir/workTree，清理失败只 log.warn，不掩盖原异常。 */
-    private void cleanupFailedClone(long localProjectId, Project project) {
+    private void cleanupFailedClone(long localProjectId, Project project,
+                                    com.checkba.service.LocalProjectService.CloneTarget target) {
+        // 路径先算好再删项目行：workTree 按项目行的 localRoot 解析，行删了就解析回托管目录
+        Path gitDir = repoService.gitDir(localProjectId);
+        Path workTree = target != null ? target.root() : repoService.workTree(localProjectId);
         try {
             projectRepository.delete(project);
         } catch (Exception e) {
             log.warn("接入失败清理本地项目行失败: project={}", localProjectId, e);
         }
-        deleteDirectoryQuietly(localProjectId, repoService.gitDir(localProjectId));
-        deleteDirectoryQuietly(localProjectId, repoService.workTree(localProjectId));
+        deleteDirectoryQuietly(localProjectId, gitDir);
+        if (target != null && !target.created()) {
+            // 用户自己选的、原本就存在的空文件夹：清掉取回写进去的东西，文件夹本身留着
+            deleteChildrenQuietly(localProjectId, workTree);
+        } else {
+            deleteDirectoryQuietly(localProjectId, workTree);
+        }
+    }
+
+    private void deleteChildrenQuietly(long projectId, Path dir) {
+        if (!Files.isDirectory(dir)) return;
+        try (var children = Files.list(dir)) {
+            children.forEach(child -> deleteDirectoryQuietly(projectId, child));
+        } catch (Exception e) {
+            log.warn("接入失败清理目录失败: project={}, dir={}", projectId, dir, e);
+        }
     }
 
     private void deleteDirectoryQuietly(long projectId, Path dir) {

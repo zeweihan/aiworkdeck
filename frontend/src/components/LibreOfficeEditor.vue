@@ -14,10 +14,27 @@
            渲染失败/非 Word/空文档保持原进度卡片。 -->
       <view v-show="previewReady" class="libre-preview-strip">
         <view class="libre-strip-track"><view class="libre-strip-fill" :style="{ width: bootPct + '%' }"></view></view>
-        <text class="libre-strip-text">{{ bootStageText }} {{ Math.round(bootPct) }}% — {{ $t('editor.previewReadableHint') }}</text>
+        <text v-if="openFailed" class="libre-strip-text libre-strip-error">{{ $t('editor.openFailed.previewNotice', { code: openFailCode }) }}</text>
+        <text v-else class="libre-strip-text">{{ bootStageText }} {{ Math.round(bootPct) }}% — {{ $t('editor.previewReadableHint') }}</text>
       </view>
       <view v-show="previewReady" ref="docxPreviewHost" class="libre-preview-host"></view>
-      <view v-if="!previewReady" class="libre-loading-card">
+      <!-- 「文档无法打开」终态（dev-board#1018）：引擎拒收损坏文件，或重启重装后仍无响应。
+           说清楚、给诊断码、给出路（只读预览 / 下载原文件 / 重启再试），不再对着 95% 干等。 -->
+      <view v-if="!previewReady && openFailed" class="libre-loading-card libre-open-failed">
+        <text class="libre-loading-name">{{ loadingTitle }}</text>
+        <text class="libre-loading-error">{{ $t('editor.openFailed.title') }}</text>
+        <text class="libre-loading-dl">{{ $t('editor.openFailed.code', { code: openFailCode }) }}</text>
+        <view v-if="canReadOnlyPreview" class="libre-loading-retry" @click="openReadOnlyPreview">
+          <text>{{ $t('editor.openFailed.readOnlyPreview') }}</text>
+        </view>
+        <view class="libre-loading-retry" @click="downloadOriginal">
+          <text>{{ $t('editor.openFailed.download') }}</text>
+        </view>
+        <view class="libre-loading-retry" @click="retryLoad">
+          <text>{{ $t('editor.openFailed.retry') }}</text>
+        </view>
+      </view>
+      <view v-if="!previewReady && !openFailed" class="libre-loading-card">
         <view class="libre-doc-icon">
           <view class="doc-fold"></view>
           <view class="doc-line l1"></view>
@@ -167,11 +184,11 @@
 
 import { webviewTransport, iframeTransport } from '@/composables/useZetaOfficeWebview.js'
 import { createRelayExecutor, PROBE_ACTION, PROBE_BUDGET_MS } from '@/composables/zetaOfficeRelay.js'
-import { classifyLoadFailure, shouldSelfHealLoadFailure } from '@/utils/editorLoadFailure.js'
+import { classifyLoadFailure, shouldSelfHealLoadFailure, loadBudgetMs, openFailureOf, STATUS_OPEN_FAILED } from '@/utils/editorLoadFailure.js'
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
 import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
-import { getFileDownloadUrl, getFileUploadUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
+import { getFileBytesUrl, getFileWriteUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { createAuthorNameResolver } from '@/utils/editorAuthor.js'
 import { host } from '@/services/host.js'
@@ -310,6 +327,8 @@ export default {
       previewFailed: false,
       // 同一 bootStageKey 停留超过约 30s（下载挂起等场景）时置位，露出重试按钮。
       stuck: false,
+      // 「文档无法打开」终态的诊断码（DOC_REJECTED / EDITOR_LOAD_TIMEOUT，见 editorLoadFailure.js）
+      openFailCode: '',
       // 客体页 boot 失败时的原因串（lo-relay 'boot-failed'），显示在加载面板上。
       bootFailReason: '',
       // 改字 stale 提示条当前展示的条目 [{linkKey, text, link}]（合并规则见 StaleQueue）
@@ -394,7 +413,18 @@ export default {
         loading: this.provLoading,
       }
     },
+    openFailed() {
+      return this.statusKey === STATUS_OPEN_FAILED
+    },
+    // 只读预览只对 Word 生效（docx-preview）；表格/演示只给下载出口。
+    canReadOnlyPreview() {
+      const t = String((this.file && this.file.fileType) || '').toLowerCase()
+      return t === 'docx' || t === 'doc'
+    },
     loadingOverlayVisible() {
+      // 「文档无法打开」是终态，但原因与出路（只读预览 / 下载 / 重试）只有这块地方能放；
+      // 画布上是 boot 出来的空白原型，露出来只会让人以为文档是空的。
+      if (this.statusKey === STATUS_OPEN_FAILED) return true
       // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板。
       // boot 失败是唯一保留面板的失败态：原因与重试按钮都只有这块地方能放。
       if (this.statusKey === 'bootFailed') return !this.ready
@@ -910,10 +940,24 @@ export default {
     // 下载动作，只重置计时器继续等待，30s 后按钮会再次出现。
     // 例外是 boot 已经明确失败（'boot-failed'）：等下去不会有结果，整个承载
     // 引擎的元素重建一次才是真的重试。
+    //
+    // dev-board#1018：load_document **已经发给引擎、结果未回**时，再追加一条只会排在挂住
+    // 的那条后面（office 线程单事件循环），越点越卡——这时唯一有意义的重试是重建引擎。
+    // 用户点的这一次就算作本轮的自愈：重建后若仍超时，直接落「文档无法打开」终态，
+    // 不再自动重启第二次。「文档无法打开」终态上的重试同理（引擎拒收的文件重建引擎
+    // 通常也没用，但那是用户明确要的，且能排除引擎自身被卡死的可能）。
     retryLoad() {
       this.stuck = false
       this._stageChangedAt = Date.now()
       if (!this._endpointUp && this.statusKey === 'bootFailed') {
+        this.remountEditor()
+        return
+      }
+      if (this._loadInFlight || this.statusKey === STATUS_OPEN_FAILED) {
+        this.appendLog('用户点击重试：装载在途/已判定无法打开 → 重建引擎 / retry: load in flight or open failed, remounting engine')
+        this._loadSelfHealed = true
+        this.openFailCode = ''
+        this.docLoadFailed = false
         this.remountEditor()
         return
       }
@@ -938,6 +982,12 @@ export default {
       if (this._inlineReviewHost) { this._inlineReviewHost.destroy(); this._inlineReviewHost = null }
       this.inlineReviewState = null
       this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
+      // 让在途的装载链路作废（dev-board#1018）：旧 executor 被 dispose 后，它那条
+      // load_document 仍会在预算到点时以超时收场——若世代号还对得上，它会在新引擎
+      // boot 期间把状态落成失败、把 ready 连同一个已经不存在的 executor 发出去。
+      // 新引擎就绪后 onEndpointReady → finishDocLoad 起新世代，自愈判定归新链路。
+      this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      this._loadInFlight = null
       try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
       this._eventUnsub = null
       this._transportSend = null
@@ -1178,6 +1228,7 @@ export default {
       if (this._loadGen !== this._loadGenAtFailure) return
       if (result && result.success) {
         this.docLoadFailed = false
+        this.openFailCode = ''
         this.statusKey = 'ready'
         this.initWritingAssistance()
         this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
@@ -1266,6 +1317,7 @@ export default {
           // 否则重试/自愈装好了，autosave 却永久拒绝（用户的编辑不落盘）。
           this.docLoadFailed = false
           this._loadSelfHealed = false
+          this.openFailCode = ''
         } catch (e) {
           if (seq !== this._docLoadSeq) return
           const msg = (e && e.message) ? e.message : String(e)
@@ -1291,10 +1343,14 @@ export default {
           // is wrong, so this is loud, not silent. docLoadFailed 关保存闸——
           // 空白画布上的任何编辑都不得回传覆盖后端真文件。
           this.docLoadFailed = true
+          // 「文档无法打开」终态（dev-board#1018）：引擎明确拒收（DOC_REJECTED），或
+          // 重启重装后仍超时（EDITOR_LOAD_TIMEOUT）。带诊断码，加载面板给出路。
+          const open = openFailureOf(e, this._loadSelfHealed)
           // 失败原因分流（dev-board#539）：404 = 文件已不在磁盘上（重试无意义）、
           // 下载超时/网络错 = 请检查网络、其余（含引擎装载失败与 relay 超时）
-          // 沿用 loadFailed。三个 key 都以 'Failed' 结尾，既有判据不必改。
-          this.statusKey = classifyLoadFailure(e)
+          // 沿用 loadFailed。几个 key 都以 'Failed' 结尾，既有判据不必改。
+          if (open) this.openFailCode = open.code
+          this.statusKey = open ? open.statusKey : classifyLoadFailure(e)
           // 记下这次失败时的世代号——迟到的 load_document 结果（见
           // onLateLoadResult）只在世代仍相符（没有更晚的装载尝试发生过）时
           // 才允许撤回这个失败态，防止串到后来的重试/换文档头上。
@@ -1362,10 +1418,10 @@ export default {
     // fetch there so a transient prefetch error can't kill the load path.
     prefetchBytes() {
       const f = this.file
-      const fileId = f && (f.wpsFileId || f.id)
+      const fileId = f && f.id // 数字主键（dev-board#1035）
       if (!fileId) return
       const t0 = Date.now()
-      this._bytesPromise = this.fetchArrayBuffer(getFileDownloadUrl(fileId), (loaded, total) => {
+      this._bytesPromise = this.fetchArrayBuffer(getFileBytesUrl(fileId), (loaded, total) => {
         this.dlLoaded = loaded
         this.dlTotal = total
       })
@@ -1376,8 +1432,9 @@ export default {
     },
     // 引擎 boot 期间先把预取到的 docx 渲成只读预览（docx-preview 本地解析，
     // 同 FilePreview.renderDocx 的配置）。失败静默回落进度卡片。
-    async tryDocxPreview(buf) {
-      if (!buf || buf.byteLength === 0 || this.ready || this.previewReady || this.previewFailed) return
+    async tryDocxPreview(buf, force = false) {
+      if (!buf || buf.byteLength === 0 || this.previewReady) return
+      if (!force && (this.ready || this.previewFailed)) return
       const t = String((this.file && this.file.fileType) || '').toLowerCase()
       if (t !== 'docx' && t !== 'doc') return
       try {
@@ -1385,7 +1442,7 @@ export default {
         await this.$nextTick() // 过继路径上 overlay 可能刚重新显示，等 ref 挂上
         const ref = this.$refs.docxPreviewHost
         const container = ref && (ref.$el || ref)
-        if (!container || this.ready) return
+        if (!container || (!force && this.ready)) return
         container.innerHTML = ''
         await renderAsync(buf, container, null, {
           className: 'docx',
@@ -1395,12 +1452,58 @@ export default {
           breakPages: true,
           experimental: true,
         })
-        if (this.ready) return
+        if (!force && this.ready) return
         this.previewReady = true
         this.appendLog('只读预览就绪（引擎继续后台启动）')
+        return true
       } catch (e) {
         this.previewFailed = true
         this.appendLog('docx 预览渲染失败（保留进度面板）: ' + (e && e.message ? e.message : e))
+        if (force) throw e
+      }
+    },
+    // 宿主等这份编辑器就绪最多该等多久（dev-board#1018，librePool.libreBootingInstances
+    // 读它）：引擎还没空白就绪就再算一段冷启动（~90s，与 doc_open_file_sync 的轮询同档），
+    // 加上本文档按字节数分级的装载预算。
+    loadWaitBudgetMs() {
+      const f = this.file || {}
+      return (this._endpointUp ? 0 : 90000) + loadBudgetMs(f.fileSize)
+    },
+    // 「文档无法打开」终态的两个出口（dev-board#1018）。原文件字节优先用预取结果，
+    // 自愈重装时它被清掉了就重新下载一次。
+    async originalBytes() {
+      let buf = this._bytesPromise ? await this._bytesPromise : null
+      if (!buf) {
+        const f = this.file || {}
+        buf = await this.fetchArrayBuffer(getFileBytesUrl(f.id))
+      }
+      return buf
+    },
+    async openReadOnlyPreview() {
+      try {
+        const buf = await this.originalBytes()
+        if (!buf || !buf.byteLength) throw new Error('empty')
+        await this.tryDocxPreview(buf, true)
+      } catch (e) {
+        const reason = (e && e.message) || String(e)
+        uni.showToast({ title: this.$t('editor.openFailed.previewFailed', { reason }), icon: 'none' })
+      }
+    },
+    async downloadOriginal() {
+      const f = this.file || {}
+      const name = f.name || ('document.' + String(f.fileType || 'docx'))
+      try {
+        const buf = await this.originalBytes()
+        if (!buf || !buf.byteLength) throw new Error('empty')
+        const url = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' }))
+        const link = document.createElement('a')
+        link.href = url
+        link.download = name
+        document.body.appendChild(link); link.click(); link.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
+      } catch (e) {
+        const reason = (e && e.message) || String(e)
+        uni.showToast({ title: this.$t('editor.openFailed.downloadFailedToast', { reason }), icon: 'none' })
       }
     },
     // 返回 true 表示 worker 里的文档已被换成后端字节；false 表示后端是空内容
@@ -1408,8 +1511,8 @@ export default {
     // 区分「换成功了」和「什么都没换」——后者在重载语境下必须当失败处理。
     async loadDocument() {
       const f = this.file
-      const fileId = f.wpsFileId || f.id
-      if (!fileId) throw new Error('file has no id/wpsFileId')
+      const fileId = f.id // 数字主键（dev-board#1035）
+      if (!fileId) throw new Error('file has no id')
       // 每次真正尝试装载都记一个新世代号——onLateLoadResult 靠它辨认一个迟到的
       // load_document 结果是否还对着「当前显示着的那次失败」，而不是被后来的
       // 重试/换文档盖过之后依然生效。
@@ -1417,7 +1520,7 @@ export default {
       // 本次装载所属的 finishDocLoad 世代（见那里的重入闸）；下载回来后若已被
       // 更晚的一次尝试取代，就不能再把命令推给 worker。
       const seq = this._docLoadSeq || 0
-      const url = getFileDownloadUrl(fileId)
+      const url = getFileBytesUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
       if (!buf) {
         try {
@@ -1459,11 +1562,24 @@ export default {
       if (seq !== (this._docLoadSeq || 0)) throw new Error('装载已被更晚的一次尝试取代 / load superseded')
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       this.bootMilestone(86, 95, 'openingDoc')
+      // 「一直卡着」的 30s 计时从命令真正发出这一刻算（dev-board#1018）：openingDoc 阶段
+      // 往往在引擎空白就绪时就已经进入，那时起算会在装载刚开始几秒就亮出重试。
+      this._stageChangedAt = Date.now()
+      this.stuck = false
       // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，
       // AI 命令产生的修订署名 AI WorkDeck（worker execCommand 按 __agent 切换）。
       const authorName = currentAuthorName()
       const t0 = Date.now()
-      const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
+      // 按字节数分级的预算（≤1MB 30s / ≤10MB 90s / 更大 180s，见 editorLoadFailure.js）；
+      // _loadInFlight 让 retryLoad 知道此刻追加命令无济于事、只能重建引擎。
+      const inflight = { seq }
+      this._loadInFlight = inflight
+      let res
+      try {
+        res = await this.executor.executeCommand('load_document', { bytes, name, authorName }, { timeoutMs: loadBudgetMs(bytes.length) })
+      } finally {
+        if (this._loadInFlight === inflight) this._loadInFlight = null
+      }
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw Object.assign(new Error((res && res.message) || 'load_document returned no success'), { code: res?.code })
       if (res.kind) this.docKind = res.kind
@@ -1924,8 +2040,8 @@ export default {
       // 重载窗口期一笔都别起：这时候导出的是即将被替换掉的旧文档，而且 export 会
       // 把 office 线程占住、拖慢紧跟着的 load_document。
       if (this._reloading) { this.appendLog('save blocked: 正在重载后端最新内容'); return false }
-      const fileId = f.wpsFileId || f.id
-      if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
+      const fileId = f.id // 数字主键（dev-board#1035）
+      if (!fileId) { this.appendLog('save: file has no id'); return false }
       this.saving = true
       // 保存状态别抢戏：绝大多数保存几百毫秒就完了，闪一下「保存中…→已保存」
       // 纯粹是干扰（用户反馈：经常有变化，不好看且会打扰）。规则改成——慢到 2s
@@ -1965,7 +2081,7 @@ export default {
         // 已经存过一次），目标路径不在了只能是被外部改名 / 移走——后端据此回 409，
         // 而不是在旧路径把旧文件名重新建出来。新建空白文档的第一笔不带：那时它还不在磁盘上。
         const mustExist = f.fileSize > 0 || this._savedOnce
-        await this.uploadBytes(getFileUploadUrl(fileId) + (mustExist ? '?mustExist=1' : ''), u8, name)
+        await this.uploadBytes(getFileWriteUrl(fileId) + (mustExist ? '?mustExist=1' : ''), u8, name)
         this._savedOnce = true
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         this._savePaused = false
@@ -2156,6 +2272,9 @@ export default {
 .libre-strip-track { width: 100%; height: 3px; background: var(--awd-surface-3); border-radius: 999px; overflow: hidden; }
 .libre-strip-fill { height: 100%; background: var(--awd-mint); border-radius: 999px; transition: width 0.5s ease; }
 .libre-strip-text { font-size: 11px; color: var(--awd-text-2); }
+.libre-strip-error { color: var(--awd-danger); }
+.libre-open-failed .libre-loading-error { font-size: 13px; margin-top: 10px; }
+.libre-open-failed .libre-loading-retry + .libre-loading-retry { margin-top: 6px; }
 .libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: var(--awd-surface-2); }
 /* docx-preview 生成的页面居中呈现（deep：内容是运行时注入的非 scoped DOM） */
 .libre-preview-host :deep(.docx-wrapper) { background: transparent; padding: 16px 0; }

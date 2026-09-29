@@ -13,7 +13,7 @@
     <view v-else-if="phase === 'unavailable'" class="drawio-status">
       <text class="drawio-status-text">{{ $t('editor.drawio.unavailable') }}</text>
       <text class="drawio-status-hint">
-        {{ showInstallAction ? $t('editor.drawio.installHint') : $t('editor.drawio.downloadHint', { name: (file && file.name) || '' }) }}
+        {{ showInstallAction ? $t('editor.drawio.installHint') : $t('editor.drawio.openHint', { name: (file && file.name) || '' }) }}
       </text>
       <view class="drawio-actions">
         <view
@@ -23,7 +23,7 @@
           role="button"
           @tap="installPack"
         >{{ installButtonText }}</view>
-        <view class="drawio-btn" role="button" @tap="download">{{ $t('editor.drawio.downloadFile') }}</view>
+        <view class="drawio-btn" role="button" @tap="openLocal">{{ canReveal ? $t(revealInFolderKey) : $t('editor.drawio.openFile') }}</view>
         <view class="drawio-btn" role="button" @tap="boot">{{ $t('editor.drawio.retry') }}</view>
       </view>
     </view>
@@ -71,9 +71,11 @@
 // LitigationVisualPanelService.saveDrawio。**PNG 不用 draw.io 自己导的位图**——
 // 随包中文字体的注册与字体栈兜底都在服务端 Batik 那条路上，绕过它标题在干净的
 // Windows 上会变成方块（记在案的地雷）。
-import { getFileDownloadUrl, saveDrawioDiagram, packStatus, packInstall } from '@/services/api.js'
+import { getFileBytesUrl, saveDrawioDiagram, packStatus, packInstall } from '@/services/api.js'
+import { getFileLocalPath } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import { host, isDesktopHost } from '@/services/host.js'
+import { revealInFolderKey } from '@/utils/windowChrome.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
 
 export default {
@@ -106,6 +108,12 @@ export default {
     }
   },
   computed: {
+    revealInFolderKey() {
+      return revealInFolderKey()
+    },
+    canReveal() {
+      return !!(host.fs && host.fs.showItemInFolder)
+    },
     showInstallAction() {
       return this.phase === 'unavailable' && !!this.packId && isDesktopHost()
     },
@@ -242,7 +250,7 @@ export default {
     fileRef() {
       const f = this.file
       if (!f) return null
-      return f.id != null ? f.id : (f.wpsFileId || null)
+      return f.id != null ? f.id : null // wpsFileId 不再是 URL 键（dev-board#1035）
     },
 
     // 直接取原始字节读成文本。**不能走 /api/files/{id}/text** —— 那条路会过
@@ -251,7 +259,7 @@ export default {
     async loadXml() {
       const id = this.fileRef()
       if (!id) throw new Error(this.$t('editor.drawio.fileMissing'))
-      const res = await fetch(getFileDownloadUrl(id), { headers: getAuthHeaders() || {}, cache: 'no-store' })
+      const res = await fetch(getFileBytesUrl(id), { headers: getAuthHeaders() || {}, cache: 'no-store' })
       if (!res.ok) throw new Error(this.$t('editor.drawio.readFailed', { status: res.status }))
       const text = await res.text()
       if (!text || !text.trim()) throw new Error(this.$t('editor.drawio.fileEmpty'))
@@ -371,14 +379,25 @@ export default {
       }
     },
 
-    download() {
+    // 编辑器起不来时的出口：桌面壳在访达/资源管理器中定位磁盘上的原文件，
+    // 交给本机 draw.io 打开；纯浏览器没有 shell 能力，退回浏览器打开字节流
+    async openLocal() {
       const id = this.fileRef()
       if (!id) return
-      if (host.shell && typeof host.shell.openExternal === 'function') {
-        host.shell.openExternal(getFileDownloadUrl(id))
+      if (this.canReveal) {
+        try {
+          const r = await getFileLocalPath(id)
+          if (!(r && r.data && r.data.exists && r.data.path)) {
+            uni.showToast({ title: this.$t('workbench.fileNotOnDisk'), icon: 'none' })
+            return
+          }
+          await host.fs.showItemInFolder(r.data.path)
+        } catch (e) {
+          uni.showToast({ title: (e && e.message) || this.$t('workbench.revealFailed'), icon: 'none' })
+        }
         return
       }
-      window.open(getFileDownloadUrl(id), '_blank')
+      window.open(getFileBytesUrl(id), '_blank')
     },
 
     // ---- 图形编辑器组件（native pack）引导安装 ----
@@ -388,7 +407,7 @@ export default {
         const res = await packStatus(this.packId)
         this.packState = (res && res.status) || null
       } catch (e) {
-        // 拉不到状态：旧后端没有这个端点——按「不可知」处理，用户仍可点「下载文件」兜底
+        // 拉不到状态：旧后端没有这个端点——按「不可知」处理，用户仍可点「在访达中显示」兜底
         this.packState = null
         this.stopPackPoll()
         return

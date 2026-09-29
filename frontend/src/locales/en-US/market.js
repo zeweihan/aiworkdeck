@@ -57,7 +57,7 @@ export default {
   pluginMarketUnavailableTitle: 'Online plugin marketplace is temporarily unavailable',
   pluginMarketErrorHint: '{error} — locally installed plugins are unaffected',
   noPluginsYet: 'No plugins published yet',
-  localInstallHint: 'You can also install locally: drop a plugin directory into the server\'s plugins/ folder, then click "Rescan"',
+  localInstallHint: 'You can also install locally: drop a plugin directory into the local plugins folder ~/.aiworkdeck/plugins/, then click "Rescan"',
   pluginLabel: 'Plugin',
   panelPluginLabel: 'Panel plugin',
   panelPluginHint: 'Adds a sidebar icon that opens a full panel',
@@ -71,7 +71,7 @@ export default {
   sectionPluginSub: 'Standalone capabilities: bring their own tools and UI, shown in the sidebar once enabled',
   loadingLocalPlugins: 'Reading local plugins',
   noLocalPlugins: 'No plugins installed locally yet',
-  noLocalPluginsHint: 'Drop a plugin directory (with manifest.json) into the server\'s plugins/ folder, then click "Rescan"',
+  noLocalPluginsHint: 'Drop a plugin directory (with manifest.json) into the local plugins folder ~/.aiworkdeck/plugins/, then click "Rescan"',
   pluginSettingsTitle: 'Plugin settings',
   saveSettings: 'Save settings',
   savingEllipsis: 'Saving...',
@@ -86,7 +86,7 @@ export default {
   disabledTag: 'Disabled',
   sectionSkillSub: 'Prompt-based capabilities: take effect in conversation, with configurable activation',
   noLocalSkills: 'No Skills installed locally yet',
-  noLocalSkillsHint: 'Install one from the "Skill Marketplace", or drop a Skill directory (with skill.yml) into the server\'s skills/ folder and click "Rescan"',
+  noLocalSkillsHint: 'Install one from the "Skill Marketplace", or drop a Skill directory (with skill.yml) into the local Skill folder ~/.aiworkdeck/skills/ and click "Rescan"',
   fromPlugin: 'From plugin {pluginId}',
 
   // ---- Permissions ----

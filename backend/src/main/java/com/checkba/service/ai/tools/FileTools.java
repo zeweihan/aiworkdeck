@@ -181,7 +181,7 @@ public class FileTools implements AgentToolComponent {
             // 音频（dev-board#814）：Tika 对 mp3 抽回来的是 ID3 标签里的标题/艺术家/专辑，
             // 非空，于是会被当成「文件正文」原样喂给模型。按路径查不到转写稿，所以这里
             // 只说事实并指向查得到的那个入口（extract_file_text + fileId）。
-            if (com.checkba.service.meeting.MeetingRecordingService.isAudioFileName(file.getName())) {
+            if (com.checkba.service.meeting.MeetingRecordingService.isTranscribableMediaName(file.getName())) {
                 return "Warning: " + com.checkba.service.file.ProjectFileTextExtractor
                         .audioNoticeByPath(file.getName());
             }
@@ -445,6 +445,41 @@ public class FileTools implements AgentToolComponent {
             @P(value = "样式画像 JSON（可选；docx_inspect_template 的输出或其子集。不填自动取项目 _模板/画像.json，"
                     + "没有则用系统默认 / 律所标准格式）", required = false) String styleProfileJson
     ) {
+        // 同一轮对同一目标再生成一次：直接复用第一次那份（dev-board#1017）。编辑器没就绪时模型常转头
+        // 用 write_docx 重来，而带文件夹的路径走 ConflictPolicy.RENAME——每试一次多一份「 (n)」同名文档。
+        String runKey = (fileName == null || fileName.isBlank()) ? null
+                : com.checkba.service.ai.EditorBridgeService.newDocxKey(parentFolderId, fileName);
+        if (runKey != null) {
+            Long existingId = editorBridgeService.generatedInRun(runKey);
+            if (existingId != null) {
+                ProjectFile existing = projectFileService.findFile(existingId).orElse(null);
+                if (existing != null && !Boolean.TRUE.equals(existing.getIsDeleted())) {
+                    return com.checkba.service.ai.EditorBridgeService.reusedGeneratedMessage(
+                            existing.getName(), existing.getId());
+                }
+                editorBridgeService.forgetGenerated(runKey);
+            }
+        }
+        String out = writeDocxDispatch(fileName, markdownContent, projectId, parentFolderId, styleProfileJson);
+        Long createdId = successDbId(out);
+        if (runKey != null && createdId != null) {
+            editorBridgeService.noteGenerated(runKey, createdId);
+        }
+        return out;
+    }
+
+    private static final java.util.regex.Pattern SUCCESS_DB_ID =
+            java.util.regex.Pattern.compile("^\\{\"status\":\"success\", \"db_id\":(\\d+)");
+
+    /** write_docx 成功回执里的 db_id；不是成功回执返回 null。 */
+    static Long successDbId(String out) {
+        if (out == null) return null;
+        java.util.regex.Matcher m = SUCCESS_DB_ID.matcher(out);
+        return m.find() ? Long.valueOf(m.group(1)) : null;
+    }
+
+    private String writeDocxDispatch(String fileName, String markdownContent, Long projectId,
+                                     Long parentFolderId, String styleProfileJson) {
         if (parentFolderId != null) {
             // 指定目标文件夹时走 AiDocxExportService（正确的路径构建 + StorageService 落盘 + RAG 刷新）
             log.info("Tool: write_docx (folder={}) called for {}", parentFolderId, fileName);
@@ -504,7 +539,10 @@ public class FileTools implements AgentToolComponent {
             com.vladsch.flexmark.util.data.MutableDataSet options =
                     com.checkba.service.ai.AiDocxExportService.markdownOptions();
             Parser parser = Parser.builder(options).build();
-            com.vladsch.flexmark.util.ast.Node document = parser.parse(markdownContent);
+            // XML 1.0 不允许的控制字符原样进 document.xml 会让整份 docx 打不开（dev-board#1018）
+            com.vladsch.flexmark.util.ast.Node document = parser.parse(
+                    com.checkba.service.ai.AiDocxExportService.stripXmlInvalidChars(
+                            markdownContent == null ? "" : markdownContent));
 
             // Flexmark docx-converter usage pattern:
             File file = targetPath.toFile();
@@ -598,8 +636,9 @@ public class FileTools implements AgentToolComponent {
     @Tool("Delete a file. DISABLED: AI Agent is not allowed to delete files.")
     public String delete_file(String filePath) {
         log.info("Tool: delete_file called for {} - DENIED (AI Agent cannot delete files)", filePath);
-        // AI Agent 不允许删除文件，只能新建、移动、重命名
-        return "Error: Permission Denied. AI Agent is not allowed to delete files. You can only create, move, or rename files.";
+        // AI Agent 不允许永久删除；可恢复的删除走 move_to_trash（dev-board#1044）
+        return "Error: Permission Denied. AI Agent is not allowed to permanently delete files. "
+                + "Use move_to_trash to move them to the project recycle bin (the user can restore them).";
     }
 
     @ToolMeta(displayName = "移动文件", category = "file", refreshFiles = true)
@@ -758,6 +797,134 @@ public class FileTools implements AgentToolComponent {
             for (String line : failed) {
                 report.append("- ").append(line).append('\n');
             }
+        }
+        return report.toString().trim();
+    }
+
+    /** 一次 move_to_trash 最多多少项（与 move_files_batch 同值同口径）。 */
+    private static final int MAX_BATCH_TRASH = 50;
+
+    /** 回执末尾那句给模型转述的恢复指引（中英同句，模型按会话语言转述）。 */
+    static final String TRASH_RECOVERY_HINT =
+            "已移入回收站，可在资源管理器的回收站中恢复。 / Moved to the recycle bin; restore it from the recycle bin in the file explorer.";
+
+    @ToolMeta(displayName = "移入回收站", category = "file", refreshFiles = true)
+    @Tool("Move project files/folders to the project RECYCLE BIN (recoverable - this is NOT a permanent delete). " +
+            "Same action as the user pressing Delete in the file explorer: the entries disappear from the file tree " +
+            "and can be restored from the recycle bin; a folder goes in together with everything inside it. " +
+            "targetsJson is a JSON array whose items are either a path relative to the project root (string) " +
+            "or a numeric fileId, e.g. [\"草稿/临时摘录.txt\", 1234]; at most " + MAX_BATCH_TRASH + " items per call. " +
+            "Use it to clean up intermediate/temporary files you created - do NOT create a 'to delete' folder instead. " +
+            "Only trash files the user asked to remove or that you produced yourself as scratch output. " +
+            "The report gives 'trashed: N' plus a per-item list; retry ONLY the entries under FAILED.")
+    public String move_to_trash(
+            @P("Items to trash, JSON array of project-relative paths and/or numeric fileIds: [\"a.txt\", 123]") String targetsJson
+    ) {
+        // dev-board#1044（D25）：AI 此前没有任何删除途径（delete_file 永久停用），被要求「清掉中间产物」
+        // 时只能建一个「待删除」文件夹把东西挪进去。这里给一个可恢复的原语：走 ProjectFileService.delete
+        // ——与资源管理器右键「删除」同一条路（软删 isDeleted=true，不碰磁盘），用户随时能从回收站还原。
+        // 永久删除（permDelete）刻意不给 AI。
+        log.info("Tool: move_to_trash called");
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        if (projectId == null) {
+            return "Error: no project context for this request.";
+        }
+        if (!StringUtils.hasText(targetsJson)) {
+            return "Error: targetsJson 不能为空，示例：[\"草稿/临时摘录.txt\", 1234]";
+        }
+        List<Object> raw;
+        try {
+            raw = BATCH_MAPPER.readValue(targetsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<Object>>() {});
+        } catch (Exception e) {
+            return "Error: targetsJson 不是合法的 JSON 数组，示例：[\"草稿/临时摘录.txt\", 1234]";
+        }
+        if (raw == null || raw.isEmpty()) {
+            return "Error: targetsJson 至少要有一项";
+        }
+        if (raw.size() > MAX_BATCH_TRASH) {
+            return "Error: 一次最多 " + MAX_BATCH_TRASH + " 项，本次给了 " + raw.size() + " 项，请拆成多批分次提交";
+        }
+
+        // 形状校验全部前置：任何一项不合法就整批不动手。
+        List<Object> plan = new ArrayList<>();
+        java.util.Set<Object> seen = new java.util.HashSet<>();
+        for (int i = 0; i < raw.size(); i++) {
+            int index = i + 1;
+            Object item = raw.get(i);
+            Object target;
+            if (item instanceof Number n) {
+                if (n.doubleValue() != n.longValue() || n.longValue() <= 0) {
+                    return "Error: 第 " + index + " 项不是合法的 fileId：" + item;
+                }
+                target = n.longValue();
+            } else if (item instanceof String s && StringUtils.hasText(s)) {
+                String path = normalizeRelPath(s);
+                if (path == null) {
+                    return "Error: 第 " + index + " 项越界。Access denied: 路径必须留在项目目录内（不能含 '..'）：" + s;
+                }
+                target = path;
+            } else {
+                return "Error: 第 " + index + " 项要么是项目内相对路径（字符串），要么是数字 fileId";
+            }
+            if (!seen.add(target)) {
+                return "Error: 第 " + index + " 项在本批里重复：" + target;
+            }
+            plan.add(target);
+        }
+
+        java.util.Map<String, ProjectFile> index = dbPathIndex(projectId);
+        List<String> ok = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (Object target : plan) {
+            try {
+                ProjectFile file;
+                if (target instanceof Long id) {
+                    file = projectFileRepository.findById(id).orElse(null);
+                    // 跨项目的 id 与不存在的 id 同一句话：不给越权探测留出分辨余地
+                    if (file == null || !java.util.Objects.equals(file.getProjectId(), projectId)) {
+                        throw new IllegalArgumentException("fileId " + id + " is not a file of this project.");
+                    }
+                } else {
+                    file = index.get((String) target);
+                    if (file == null) {
+                        throw new IllegalArgumentException("'" + target + "' is not in the project file tree "
+                                + "(check the path with list_files, or run scan_files if it was just created on disk).");
+                    }
+                }
+                String label = target instanceof Long ? file.getName() + " (fileId=" + file.getId() + ")"
+                        : target + " (fileId=" + file.getId() + ")";
+                if (Boolean.TRUE.equals(file.getIsDeleted())) {
+                    // 本批里先移入的父文件夹已经把它带进去了，或者它早就在回收站：目标已达成，不算失败
+                    ok.add(label + " - already in the recycle bin");
+                    continue;
+                }
+                if (ProjectFileService.isRootStagingFolder(file)) {
+                    throw new IllegalArgumentException("the file staging area folder itself cannot be trashed; "
+                            + "trash the files inside it instead.");
+                }
+                projectFileService.delete(file.getId(), toolUserId());
+                ok.add(label + (Boolean.TRUE.equals(file.getIsFolder()) ? " - folder, with everything inside" : ""));
+                index = dbPathIndex(projectId);
+            } catch (Exception e) {
+                log.warn("move_to_trash entry failed {}", target, e);
+                failed.add(target + " : " + e.getMessage());
+            }
+        }
+
+        StringBuilder report = new StringBuilder();
+        report.append("trashed: ").append(ok.size()).append("; failed: ").append(failed.size()).append('\n');
+        for (String line : ok) {
+            report.append("- ").append(line).append('\n');
+        }
+        if (!failed.isEmpty()) {
+            report.append("FAILED (retry only these):\n");
+            for (String line : failed) {
+                report.append("- ").append(line).append('\n');
+            }
+        }
+        if (!ok.isEmpty()) {
+            report.append(TRASH_RECOVERY_HINT);
         }
         return report.toString().trim();
     }

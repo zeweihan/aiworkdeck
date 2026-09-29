@@ -313,7 +313,7 @@
           </template>
         </span>
       </div>
-      <!-- 隐藏的文件选择器：菜单「上传本地文件」触发 -->
+      <!-- 隐藏的文件选择器：菜单「添加本地文件」触发 -->
       <input
         ref="fileInputEl"
         type="file"

@@ -27,6 +27,11 @@ spring:
     show-sql: false
     database-platform: org.hibernate.dialect.H2Dialect
 
+# 本机文件夹项目的文件就在用户自己的磁盘上，不替他限量（dev-board#1038）；
+# 托管项目（{globalRoot}/projects/{id}）仍按 storage.project-size-limit 限量。
+storage:
+  exempt-local-folder-projects: true
+
 # 桌面/单机：所有登录用户都是管理员（系统管理/向导重置对全员开放）。
 # 云端多人部署不设此项（默认 false，仅 admin 账号）。
 security:

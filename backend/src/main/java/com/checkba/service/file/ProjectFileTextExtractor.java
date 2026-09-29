@@ -138,7 +138,8 @@ public class ProjectFileTextExtractor {
         // 音频必须排在缓存之前：转写稿是会后才出现的，而音频字节一个都没变，
         // mtime+size 指纹也就一个字节都没变。把「请先转写」写进缓存，用户转写完成之后
         // 这份文件在本机永远读不到转写稿——而且不报错。见 audioText 的注释。
-        if (MeetingRecordingService.isAudioFileName(name)) {
+        // 视频同此（dev-board#1024）：它的正文同样只能是转写稿
+        if (MeetingRecordingService.isTranscribableMediaName(name)) {
             return audioText(pf);
         }
         boolean ocrSupported = isOcrSupported(name);
@@ -188,7 +189,7 @@ public class ProjectFileTextExtractor {
         if (bytes.length > MAX_BYTES) {
             throw new IOException(TOO_LARGE);
         }
-        if (MeetingRecordingService.isAudioFileName(displayName(fileName))) {
+        if (MeetingRecordingService.isTranscribableMediaName(displayName(fileName))) {
             // 案件库/git 的裸字节查不到转写稿（那边没有 project_file），但同样不能交给
             // Tika——抽回来的是 ID3 标签里的艺术家与专辑，模型会把它当文件正文引用。
             throw new AudioNotTranscribedException(audioNotice(displayName(fileName), null));
@@ -334,10 +335,10 @@ public class ProjectFileTextExtractor {
 
     private static String transcriptBanner(String name) {
         return LangText.of(
-                "[以下为音频「" + name + "」的转写稿，由机器语音识别生成，可能有识别误差；"
-                        + "你听不到音频本身。引用时以转写稿原文为准，不要臆测听不清的部分。]\n\n",
-                "[The following is the machine transcript of the audio \"" + name + "\". It was produced by "
-                        + "speech recognition and may contain errors; you cannot hear the audio itself. "
+                "[以下为音视频文件「" + name + "」的转写稿，由机器语音识别生成，可能有识别误差；"
+                        + "你听不到、看不到原始录音/录像本身。引用时以转写稿原文为准，不要臆测听不清的部分。]\n\n",
+                "[The following is the machine transcript of the audio/video file \"" + name + "\". It was produced by "
+                        + "speech recognition and may contain errors; you can neither hear nor see the original recording itself. "
                         + "Quote the transcript as written and do not guess at unclear passages.]\n\n");
     }
 
@@ -369,12 +370,12 @@ public class ProjectFileTextExtractor {
             };
         }
         return LangText.of(
-                "「" + name + "」是音频文件，需要先转写成文字才能读："
-                        + state + "。请用户在文件树里右键该文件选「转写音频」（或在左栏「会议录音」面板里转写）；"
+                "「" + name + "」是音视频文件，需要先转写成文字才能读："
+                        + state + "。请用户在文件树里右键该文件选「语音转文字」（或在左栏「会议录音」面板里转写）；"
                         + "如果手头已经有转写稿，让用户把转写稿文件作为附件发过来。",
-                "'" + name + "' is an audio file and must be transcribed before it can be read: "
+                "'" + name + "' is an audio/video file and must be transcribed before it can be read: "
                         + state + ". Ask the user to right-click the file in the file tree and choose "
-                        + "\"Transcribe audio\" (or transcribe it in the Meeting Recording panel in the sidebar). "
+                        + "\"Transcribe speech\" (or transcribe it in the Meeting Recording panel in the sidebar). "
                         + "If they already have a transcript, ask them to attach the transcript file instead.");
     }
 
@@ -387,13 +388,13 @@ public class ProjectFileTextExtractor {
      */
     public static String audioNoticeByPath(String name) {
         return LangText.of(
-                "「" + name + "」是音频文件，正文是它的转写稿，按路径读不到。"
+                "「" + name + "」是音视频文件，正文是它的转写稿，按路径读不到。"
                         + "如果它已经转写过，用 extract_file_text 配它的数据库 fileId 就能拿到转写稿；"
-                        + "还没转写的话，请用户在文件树里右键该文件选「转写音频」。",
-                "'" + name + "' is an audio file; its readable content is its transcript, which cannot be "
+                        + "还没转写的话，请用户在文件树里右键该文件选「语音转文字」。",
+                "'" + name + "' is an audio/video file; its readable content is its transcript, which cannot be "
                         + "reached by path. If it has already been transcribed, call extract_file_text with its "
                         + "database fileId to get the transcript; if not, ask the user to right-click the file "
-                        + "in the file tree and choose \"Transcribe audio\".");
+                        + "in the file tree and choose \"Transcribe speech\".");
     }
 
     /**

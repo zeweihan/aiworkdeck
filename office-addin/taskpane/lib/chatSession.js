@@ -634,8 +634,7 @@ async function runUpload(entry) {
     const created = await createProjectFile(settings, entry.projectId, {
       name: entry.name,
       fileType: fileTypeFromName(entry.name),
-      size: entry.file.size || 0,
-      wpsFileId: `project_${entry.projectId}_doc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+      size: entry.file.size || 0
     })
     await uploadFileBytes(settings, created.id, entry.file, entry.file.size || 0)
     // 成功：中间态撤下，正式并入附件。createFile 失败时什么都没发生（无半截状态）；

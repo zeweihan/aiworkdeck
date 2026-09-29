@@ -132,3 +132,39 @@ test('FileTree 批量彻底删除接了 collapseToTopmostSelected，删完从服
   assert.match(body, /for \(const id of roots\)/, '只对最上层逐条请求')
   assert.match(body, /await this\.loadFiles\(\)/, '删完要从服务端重拉回收站，不能让本地陈旧行永远卡着')
 })
+
+// ---------- dev-board#1019：回收站「标题 (2)、列表空」 ----------
+//
+// 回收站接口返回的行里夹着根级 __staging_area__（文件缓存区）——列表按系统文件夹名藏掉它，
+// 标题却按 recycleBin.length 计数；删光可见行后永远剩看不见、也删不掉的「(2)」。
+// 判据：回收站里接口给的每一行都必须渲染出来（用户能看见才能删），可见行数 = 标题计数。
+
+import { computeDisplayFiles } from '../../src/utils/fileTreeRecycle.js'
+
+test('回收站视图：缓存区文件夹与暂存区 id 的行都照常渲染，可见行数 = 标题计数', () => {
+  const recycleBin = [
+    { id: 20, parentId: null, name: '__staging_area__', isFolder: true },
+    { id: 21, parentId: 20, name: '证据.pdf', isFolder: false },
+    { id: 22, parentId: 999, name: '孤儿.docx', isFolder: false }, // 父文件夹早已不在
+  ]
+  const rows = computeDisplayFiles({ viewMode: 'recycle', files: [], recycleBin, hiddenFileIds: [21] })
+  assert.deepEqual(rows.map(r => r.id), [20, 21, 22])
+  assert.equal(rows.length, recycleBin.length, '标题计数与可见行数必须一致')
+})
+
+test('文件视图：系统缓存区文件夹、暂存区文件、回收站里的行照旧不出现在树上', () => {
+  const files = [
+    { id: 1, parentId: null, name: '__staging_area__', isFolder: true },
+    { id: 2, parentId: null, name: '合同.docx' },
+    { id: 3, parentId: null, name: '暂存.docx' },
+    { id: 4, parentId: null, name: '已删.docx' },
+  ]
+  const rows = computeDisplayFiles({ viewMode: 'files', files, recycleBin: [{ id: 4 }], hiddenFileIds: [3] })
+  assert.deepEqual(rows.map(r => r.id), [2])
+})
+
+test('FileTree.vue 的 displayFiles 走 computeDisplayFiles，缓存区文件夹显示成可读名称', () => {
+  const src = readFileSync(new URL('../../src/components/FileTree.vue', import.meta.url), 'utf8')
+  assert.match(src, /computeDisplayFiles\(\{/)
+  assert.match(src, /__staging_area__'[^\n]*\n[^\n]*files\.stagingTitle/)
+})

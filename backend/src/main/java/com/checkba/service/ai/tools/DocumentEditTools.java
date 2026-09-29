@@ -168,7 +168,11 @@ public class DocumentEditTools implements AgentToolComponent {
             // 通过 SSE 发送打开文件指令到前端
             editorBridgeService.sendOpenFileAction(file);
             
-            return String.format("已发送打开文件指令。文件名: %s, 类型: %s。请等待文档加载完成后再进行后续操作。", 
+            // 加载要时间（dev-board#1017）：模型打开后立刻调 doc_* 撞上「编辑器仍在启动」是常态，
+            // 那不是失败，等一等重试同一步即可——绝不能读成「编辑器坏了、改用新建文件」。
+            return String.format("已发送打开文件指令。文件名: %s, 类型: %s。请等待文档加载完成后再进行后续操作。"
+                    + "加载需要时间；随后的 doc_* 调用若返回 EDITOR_BOOTING，就等一等再重试同一步，"
+                    + "不要改用新建文件或其它通道。",
                     file.getName(), file.getFileType());
             
         } catch (Exception e) {
@@ -299,6 +303,9 @@ public class DocumentEditTools implements AgentToolComponent {
             }
 
             ProjectFile file = null;
+            // 本次调用新建的文件：同步打开失败时要删掉它，不能留一份空文档在项目里（dev-board#1017）
+            ProjectFile createdHere = null;
+            String runKey = null;
 
             // 1. 如果 fileId=null，创建新的空白 docx 文件
             if (fileId == null) {
@@ -314,6 +321,18 @@ public class DocumentEditTools implements AgentToolComponent {
                     fileName = fileName + ".docx";
                 }
 
+                // 同一轮对同一目标再新建：直接复用第一次那份（dev-board#1017）。
+                // 新建走 ConflictPolicy.RENAME，不拦的话每重试一次就多一份「 (n)」同名文档。
+                runKey = EditorBridgeService.newDocxKey(parentFolderId, fileName);
+                Long existingId = editorBridgeService.generatedInRun(runKey);
+                if (existingId != null) {
+                    ProjectFile existing = projectFileService.findFile(existingId).orElse(null);
+                    if (existing != null && !Boolean.TRUE.equals(existing.getIsDeleted())) {
+                        return EditorBridgeService.reusedGeneratedMessage(existing.getName(), existing.getId());
+                    }
+                    editorBridgeService.forgetGenerated(runKey);
+                }
+
                 // 建行 + 落盘走 createAgentFile 这一条路（dev-board#465）：parentFolderId
                 // 为空即根目录，非空即该文件夹，规则完全一致，不按参数是否为空分叉。
                 file = createAgentFile(projectId, parentFolderId, fileName, "docx", "stream", target -> {
@@ -325,6 +344,7 @@ public class DocumentEditTools implements AgentToolComponent {
                     wordDoc.save(target.toFile());
                 });
 
+                createdHere = file;
                 log.info("Created new docx file for streaming: id={}, name={}, parentId={}",
                         file.getId(), file.getName(), file.getParentId());
                 
@@ -354,7 +374,13 @@ public class DocumentEditTools implements AgentToolComponent {
             String resultJson = editorBridgeService.executeEditorCommand("doc_open_file_sync", openParams);
             
             if (resultJson.contains("\"error\"")) {
+                if (createdHere != null) {
+                    discardEmptyCreatedFile(createdHere);
+                }
                 return "Error opening file: " + resultJson;
+            }
+            if (createdHere != null) {
+                editorBridgeService.noteGenerated(runKey, createdHere.getId());
             }
 
             // 3. 开启流式模式
@@ -368,6 +394,24 @@ public class DocumentEditTools implements AgentToolComponent {
         } catch (Exception e) {
             log.error("Failed to start doc stream", e);
             return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * doc_start_stream 刚建的空白文档没能打开：删掉它（dev-board#1017）。
+     *
+     * <p>留着的话，模型下一次重试会再建一份（RENAME 加「 (n)」），一轮下来项目里一排同名空文档。
+     * 删的只是本次调用自己刚建、一个字都没写进去的那份，彻底删除而不进回收站——回收站里多一份
+     * 用户从没见过的空文档只会让人困惑。删除失败只记日志：打开失败的真实原因才是要回给模型的。
+     */
+    private void discardEmptyCreatedFile(ProjectFile created) {
+        try {
+            projectFileService.permDelete(created.getId(), AGENT_USER_ID);
+            editorBridgeService.sendRefreshFilesAction();
+            log.info("Discarded empty stream target after open failure: id={}, name={}",
+                    created.getId(), created.getName());
+        } catch (Exception e) {
+            log.warn("Failed to discard empty stream target id={}", created.getId(), e);
         }
     }
 

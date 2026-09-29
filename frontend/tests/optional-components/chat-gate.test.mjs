@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createComponentRequiredHandler } from '../../src/composables/useComponentRequired.js'
+import { createComponentRequiredHandler, shouldAutoResend } from '../../src/composables/useComponentRequired.js'
 
 const payload = {
   action: 'component_required', packId: 'pptx-runtime', service: 'pptx-service',
@@ -76,6 +76,58 @@ test('同一轮里重复收到同一个 packId 只处理一次（工具可能连
   assert.equal(d.calls.filter((c) => c.startsWith('install:')).length, 1)
 })
 
+// ---------- dev-board#1016：生成中装完不重发，挂成「组件已就绪，继续」 ----------
+
+test('生成中装完：不自动重发（会变成插话把这一轮打断），挂成待继续并提示可继续', async () => {
+  let streaming = true
+  const notices = []
+  const d = deps({
+    mark: () => 1,
+    shouldResend: () => shouldAutoResend({
+      alive: true, backgrounded: false, streaming, userCountAtGate: 1, userCountNow: 1,
+    }),
+    readyNotice: (item, opts) => notices.push([item.packId, opts]),
+  })
+  const h = createComponentRequiredHandler(d)
+  const r = await h.onAction(payload)
+  assert.deepEqual(r, { installed: true, resent: false, pending: true })
+  assert.deepEqual(d.calls, ['install:pptx-runtime'], '生成中绝不能自动重发')
+  assert.deepEqual(notices, [['pptx-runtime', { canContinue: true }]])
+  const p = h.pendingContinue()
+  assert.equal(p.text, '帮我做一份关于并购尽调的 PPT')
+  assert.equal(p.packId, 'pptx-runtime')
+  assert.equal(p.localeKey, 'pptxRuntime')
+
+  // 仍在生成时点「继续」：兜住，不发，待继续保留
+  assert.equal(await h.continuePending({ streaming: true }), false)
+  assert.deepEqual(d.calls, ['install:pptx-runtime'])
+  assert.ok(h.pendingContinue())
+
+  // 生成结束后点「继续」：发出原消息，且只发一次
+  streaming = false
+  assert.equal(await h.continuePending({ streaming }), true)
+  assert.deepEqual(d.calls, ['install:pptx-runtime', 'resend:帮我做一份关于并购尽调的 PPT'])
+  assert.equal(h.pendingContinue(), null)
+  assert.equal(await h.continuePending(), false)
+})
+
+test('待继续可以放弃（用户发了新消息 / 换了会话）', async () => {
+  const d = deps({ shouldResend: () => false })
+  const h = createComponentRequiredHandler(d)
+  await h.onAction(payload)
+  assert.ok(h.pendingContinue())
+  h.dismissPending()
+  assert.equal(h.pendingContinue(), null)
+  assert.equal(await h.continuePending(), false)
+  assert.deepEqual(d.calls, ['install:pptx-runtime'])
+})
+
+test('自动重发成功时不留待继续', async () => {
+  const h = createComponentRequiredHandler(deps())
+  await h.onAction(payload)
+  assert.equal(h.pendingContinue(), null)
+})
+
 const chatSrc = readFileSync(new URL('../../src/components/ChatInterface.vue', import.meta.url), 'utf8')
 
 test('component_required 在 ChatInterface 就地拦下，不往下透到编辑器执行器', () => {
@@ -87,4 +139,30 @@ test('component_required 在 ChatInterface 就地拦下，不往下透到编辑�
   assert.ok(branch.length > 0 && branch.length < 800, '没能定位到 component_required 的分支体')
   assert.ok(!/emit\('client-action'/.test(branch),
     'component_required 不是编辑器命令，透到 EDITOR_ACTIONS 白名单只会得到 Unknown action')
+})
+
+// dev-board#1016：ChatInterface 接线 + 反问判据
+test('ChatInterface 接了待继续：readyNotice canContinue、继续条、四处 dismiss', () => {
+  const src = readFileSync(new URL('../../src/components/ChatInterface.vue', import.meta.url), 'utf8')
+  assert.match(src, /opts && opts\.canContinue[\s\S]{0,120}componentRequiredHandler\.pendingContinue\(\)/)
+  assert.match(src, /v-if="componentReadyContinue"/)
+  assert.match(src, /:class="\{ disabled: isStreaming \}"/)
+  assert.match(src, /continuePending\(\{ streaming: isStreaming\.value \}\)/)
+  for (const fn of ['const startNewChat = () => {', "const handleSubmit = async (requestedMode = 'steer') => {", 'const loadMessages = (conversationId, loaded) => {']) {
+    const i = src.indexOf(fn)
+    assert.ok(i > 0, fn)
+    assert.match(src.slice(i, i + 200), /dropComponentPending\(\)/, fn)
+  }
+  assert.match(src, /watch\(\(\) => props\.projectId, \(\) => \{[^}]*dropComponentPending\(\)/)
+})
+
+test('isUserQuestionAwaiting：component_required 不算反问，普通 awaiting_input 算', async () => {
+  const { isUserQuestionAwaiting } = await import('../../src/composables/awaitingInput.mjs')
+  assert.equal(isUserQuestionAwaiting({ status: 'awaiting_input', reason: 'component_required' }), false)
+  assert.equal(isUserQuestionAwaiting({ status: 'awaiting_input' }), true)
+  assert.equal(isUserQuestionAwaiting({ status: 'AWAITING_INPUT' }), true)
+  assert.equal(isUserQuestionAwaiting({ status: 'finished' }), false)
+  assert.equal(isUserQuestionAwaiting(null), false)
+  const s = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(s, /=\s*\(?[^\n]*status === 'awaiting_input'\)?\s*$/m)
 })

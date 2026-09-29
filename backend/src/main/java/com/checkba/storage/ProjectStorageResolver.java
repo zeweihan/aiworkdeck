@@ -45,6 +45,8 @@ public class ProjectStorageResolver {
     /** 配置文件里写的默认位置，迁移后仍需展示「默认位置」与判断是否已自选。 */
     private final Path configuredRoot;
     private final Path templateDoc;
+    private final long projectSizeLimitBytes;
+    private final boolean exemptLocalFolderProjects;
     /** projectId → localRoot（Optional.empty = 存量托管项目）。只缓存确实存在的项目行。 */
     private final Map<Long, Optional<Path>> localRootCache = new ConcurrentHashMap<>();
 
@@ -53,6 +55,34 @@ public class ProjectStorageResolver {
         this.configuredRoot = resolveConfiguredPath(storageProperties.getLocal().getRootPath());
         this.globalRoot = configuredRoot;
         this.templateDoc = resolveConfiguredPath(storageProperties.getLocal().getTemplatePath());
+        this.projectSizeLimitBytes = storageProperties.getProjectSizeLimit().toBytes();
+        this.exemptLocalFolderProjects = storageProperties.isExemptLocalFolderProjects();
+    }
+
+    /**
+     * 项目总量闸（dev-board#1038）：已有总量 + 本次新增是否超过 {@code storage.project-size-limit}。
+     * 开了 {@code storage.exempt-local-folder-projects} 时，本机文件夹项目永不超限。
+     */
+    public boolean exceedsProjectSizeLimit(long projectId, Long currentTotal, long incomingBytes) {
+        if (exemptLocalFolderProjects && hasLocalRoot(projectId)) {
+            return false;
+        }
+        return currentTotal != null && currentTotal + incomingBytes > projectSizeLimitBytes;
+    }
+
+    /** 超限提示（带上配置的上限值）。 */
+    public String projectSizeLimitMessage() {
+        String limit = formatSize(projectSizeLimitBytes);
+        return com.checkba.service.LangText.of("项目文件总大小超过" + limit + "限制",
+                "Project file storage exceeds the " + limit + " limit");
+    }
+
+    private static String formatSize(long bytes) {
+        long gb = 1024L * 1024 * 1024;
+        long mb = 1024L * 1024;
+        if (bytes >= gb && bytes % gb == 0) return (bytes / gb) + "GB";
+        if (bytes >= mb && bytes % mb == 0) return (bytes / mb) + "MB";
+        return bytes + "B";
     }
 
     /**

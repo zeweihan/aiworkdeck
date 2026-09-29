@@ -190,27 +190,10 @@ test('前端镜像与后端归类逐名一致（全部 113 个工具）', () => 
 // 形制照 chat-timeline-contract.test.mjs：@/ 别名与 uni 全局让 node 没法直接 import，
 // 剥掉 import 后靠形参注入依赖。
 
-const source = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
+import { buildAgentStreamFactory } from '../_lib/agent-stream-factory.mjs'
 
 function stream() {
-  const body = source.replace(/^import .*$/gm, '')
-    .replace('export function useAgentStream()', 'function useAgentStream()')
-    .replace('        bubbles,\n', '        bubbles, handleEvent, currentAssistantBubble, createAssistantBubble,\n')
-  const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
-    'createProtocolTagRegex', 'decodeProtocolTags', 'decodeProtocolTagsIncremental', 't', 'nextBubbleId', 'captureChatTimeline',
-    'documentEditedFromProcesses',
-    'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
-    'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
-    // ask_user（dev-board#868）：<question> 标签的解析会读 kind/description 属性
-    'ASK_USER_KIND', 'decodeAttr', 'normalizeAskUserEvent',
-    body + '\nreturn useAgentStream()')
-  const value = factory(ref, reactive, nextTick, () => {}, () => null,
-    createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental, key => key, nextBubbleId, captureChatTimeline,
-    documentEditedFromProcesses,
-    createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
-    () => 'http://test.local', () => 'test-session',
-    async () => ({ items: [], runId: null, status: null }), async () => null, async () => ({ items: [] }), async () => null,
-    ASK_USER_KIND, decodeAttr, normalizeAskUserEvent)
+  const value = buildAgentStreamFactory({ expose: 'handleEvent, currentAssistantBubble, createAssistantBubble' })
   const bubble = value.createAssistantBubble()
   bubble.isStreaming = true
   value.bubbles.value.push(bubble)

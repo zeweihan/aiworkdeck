@@ -256,7 +256,7 @@
 | `pdf_annotate(fileId, anchorText, comment, pageIndex)` | 在锚点文本旁加便签批注（署名 AI WorkDeck） |
 | `pdf_redact(fileId, textsJson, pageIndex)` | 真脱敏：黑框覆盖并把涉及页转为图片页、彻底移除该页文字层。textsJson 为 JSON 字符串数组 |
 | `pdf_replace_text(fileId, find, replace, pageIndex)` | 短文本原位替换（改日期/金额/人名等不跨行的小改动） |
-| `pdf_to_word(fileId, parentId)` | 转成可编辑 Word：文本型走版式级转换（pdf2docx，段落/表格/图片尽量保留原排版，服务不可用时回退结构级）；扫描件自动走本地 MinerU OCR（文档不出本机）。转出后自动在编辑器打开，返回信息注明实际路径 |
+| `pdf_to_word(fileId, parentId)` | 转成可编辑 Word：文本型走版式级转换（pdf2docx，段落/表格/图片尽量保留原排版；本机组件没装时会请用户下载并结束本轮，装好后自动重跑，不要改用别的方式自己生成；组件装好仍失败时，只保留文字的结构级转换会丢表格，须用户同意后带 `allowStructuralFallback=true` 再调）；扫描件自动走本地 MinerU OCR（文档不出本机）。转出后自动在编辑器打开，返回信息注明实际路径 |
 
 ### PDF 操作规范
 

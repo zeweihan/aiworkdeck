@@ -51,7 +51,8 @@ public class EvidenceTextExtractor {
         if (file == null || Boolean.TRUE.equals(file.getIsFolder()) || Boolean.TRUE.equals(file.getIsDeleted())) {
             return null;
         }
-        if (!StringUtils.hasText(file.getFilePath()) && !StringUtils.hasText(file.getWpsFileId())) {
+        // 只认 filePath（dev-board#1035）：wpsFileId 不是存储键，DocumentTextService 也已不再拿它兜底
+        if (!StringUtils.hasText(file.getFilePath())) {
             return null;
         }
         String type = StringUtils.hasText(file.getFileType())

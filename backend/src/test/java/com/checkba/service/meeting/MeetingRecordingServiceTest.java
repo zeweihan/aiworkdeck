@@ -251,6 +251,50 @@ class MeetingRecordingServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.registerExisting(1L, 4L, 10001L));
     }
 
+    // ==================== 视频文件接入转写（dev-board#1024） ====================
+
+    @Test
+    @DisplayName("注册视频：mp4 可注册，进 RECORDED、不代管文件")
+    void registerExistingAcceptsVideo() {
+        when(projectFileRepository.findById(78L))
+                .thenReturn(Optional.of(audioFile(78L, 1L, "庭审录像.mp4")));
+        when(meetingRepository.findByProjectIdOrderByCreatedAtDesc(1L)).thenReturn(java.util.List.of());
+
+        MeetingRecording m = service.registerExisting(1L, 78L, 10001L);
+        assertEquals(MeetingRecording.STATUS_RECORDED, m.getStatus());
+        assertEquals(78L, m.getAudioFileId());
+        assertEquals(Boolean.FALSE, m.getOwnsAudioFile());
+        assertEquals("庭审录像", m.getTitle());
+    }
+
+    @Test
+    @DisplayName("注册围栏（视频扩展后）：文件夹仍拒绝；.txt 拒绝且文案说「音视频」")
+    void registerExistingRejectsFolderAndNonMedia() {
+        com.checkba.model.entity.ProjectFile folder = audioFile(2L, 1L, "录像.mp4");
+        folder.setIsFolder(true);
+        when(projectFileRepository.findById(2L)).thenReturn(Optional.of(folder));
+        assertThrows(IllegalArgumentException.class, () -> service.registerExisting(1L, 2L, 10001L));
+
+        when(projectFileRepository.findById(5L))
+                .thenReturn(Optional.of(audioFile(5L, 1L, "笔录.txt")));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.registerExisting(1L, 5L, 10001L));
+        assertTrue(e.getMessage().contains("音视频"), "拒绝文案要说清是音视频：" + e.getMessage());
+    }
+
+    @Test
+    @DisplayName("isTranscribableMediaName = 音频 ∪ 视频，大小写不敏感；isAudioFileName 不含视频")
+    void transcribableMediaNameDetection() {
+        assertTrue(MeetingRecordingService.isTranscribableMediaName("rec.m4a"));
+        assertTrue(MeetingRecordingService.isTranscribableMediaName("a.MOV"));
+        assertTrue(MeetingRecordingService.isTranscribableMediaName("clip.3gp"));
+        assertFalse(MeetingRecordingService.isTranscribableMediaName("合同.docx"));
+        assertFalse(MeetingRecordingService.isTranscribableMediaName(null));
+        assertFalse(MeetingRecordingService.isAudioFileName("a.mp4"), "isAudioFileName 保持只认音频");
+        assertEquals(java.util.Set.of("mp4", "mov", "mkv", "avi", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp"),
+                MeetingRecordingService.VIDEO_EXTENSIONS);
+    }
+
     @Test
     @DisplayName("删除记录：代管的（面板占位/存量 null）连带删音频，注册的不动用户原始文件")
     void deleteCascadesOnlyForOwnedAudio() {

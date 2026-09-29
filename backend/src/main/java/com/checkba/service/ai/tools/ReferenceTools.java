@@ -32,7 +32,9 @@ public class ReferenceTools implements AgentToolComponent {
     private final ReferenceSourceService referenceSourceService;
     private final ObjectMapper objectMapper;
 
-    @Tool("列出可作为参考材料的文件：其他打开着的 Office/WPS 文档、桌面端项目文件、云端项目文件、官方案件库、已关联的 git 仓库。"
+    @Tool("列出可作为参考材料的文件：其他打开着的 Office/WPS 文档（open）、当前项目里的文件（cloud）、"
+            + "其他设备上桌面端项目里的文件（desk，那台设备在线才有）、官方案件库（case）、已关联的 git 仓库（git）；"
+            + "当前环境不可用的来源会自动跳过。"
             + "query 为文件名关键字，可空；source 可选 open/desk/cloud/case/git。返回每行一个 ref，读取或修改时原样使用 ref。")
     @ToolMeta(displayName = "查找参考文件", category = "reference")
     public String ref_list(

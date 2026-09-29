@@ -216,12 +216,12 @@
 
               <view class="card-footer-new">
                 <view class="members-area-new">
-                  <view class="manager-avatar-wrapper" v-if="project.managerId" :title="$t('projects.managerLabel', { name: project.managerName || $t('projects.unknown') })">
+                  <view class="manager-avatar-wrapper" v-if="project.managerId && !isSoloLocal(project)" :title="$t('projects.managerLabel', { name: project.managerName || $t('projects.unknown') })">
                     <image v-if="project.managerAvatarUrl" :src="project.managerAvatarUrl" class="manager-avatar-img" />
                     <view v-else class="manager-avatar-placeholder">{{ project.managerName?.charAt(0) || 'M' }}</view>
                     <view class="manager-badge-icon"><svg class="badge-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.crown" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
                   </view>
-                  <view class="members-divider" v-if="project.managerId && getInternalMembers(project).length > 0"></view>
+                  <view class="members-divider" v-if="project.managerId && !isSoloLocal(project) && getInternalMembers(project).length > 0"></view>
 
                   <view class="members-split-container">
                     <view class="members-group">
@@ -302,7 +302,7 @@
               <text class="ptable-col col-time col-created ptable-sub">{{ formatTime(project.createdAt) || '—' }}</text>
               <text class="ptable-col col-time col-updated ptable-sub">{{ formatTime(project.lastActivityAt) || '—' }}</text>
               <view class="ptable-col col-members">
-                <view class="manager-avatar-wrapper" v-if="project.managerId" :title="$t('projects.managerLabel', { name: project.managerName || $t('projects.unknown') })">
+                <view class="manager-avatar-wrapper" v-if="project.managerId && !isSoloLocal(project)" :title="$t('projects.managerLabel', { name: project.managerName || $t('projects.unknown') })">
                   <image v-if="project.managerAvatarUrl" :src="project.managerAvatarUrl" class="manager-avatar-img" />
                   <view v-else class="manager-avatar-placeholder">{{ project.managerName?.charAt(0) || 'M' }}</view>
                   <view class="manager-badge-icon"><svg class="badge-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.crown" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
@@ -394,6 +394,8 @@ import { isDesktopHost, host } from '@/services/host.js'
 import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { ICONS } from '@/config/icons.js'
+import { readLocalMode } from '@/services/accountProfile.js'
+import { isSoloLocalProject } from '@/utils/soloLocalProject.js'
 import { taskStore, loadSummary } from '@/utils/taskStore.js'
 import { formatMonthDay, timeOf } from '@/components/calendar/taskUtils.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
@@ -506,6 +508,7 @@ export default {
         avatarUrl: null,
       },
       projects: [],
+      localMode: null, // 装机形态（local-mode），只用来判「单人本机项目」隐藏皇冠
       projectsLoading: false,
       deletingProjectId: null,
       renamingProjectId: null,
@@ -540,6 +543,7 @@ export default {
     },
   },
   created() {
+    readLocalMode().then((v) => { this.localMode = v })
     overlaySeq += 1
     this._overlayHolder = 'project-list-pane-' + overlaySeq
   },
@@ -703,6 +707,10 @@ export default {
       if (role === 'ADMIN') return 'role-admin'
       if (role === 'CLIENT') return 'role-client'
       return 'role-member'
+    },
+    // 单人本机项目（dev-board#1026 C22）：负责人只能是本机用户自己，不显示皇冠头像
+    isSoloLocal(project) {
+      return isSoloLocalProject({ localMode: this.localMode, managerId: project.managerId, members: project.members })
     },
     getInternalMembers(project) {
       if (!project.members) return []

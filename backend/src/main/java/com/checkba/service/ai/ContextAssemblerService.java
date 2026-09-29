@@ -1056,6 +1056,8 @@ public class ContextAssemblerService {
                 systemText.append("Missing destination folders are created automatically, so you do not need `create_folder` first. ");
                 systemText.append("Retry only the entries the report lists under FAILED - never resend the whole batch. ");
                 systemText.append("Moving a single file still uses `move_file`. ");
+                systemText.append("Intermediate or temporary files you no longer need go to the recycle bin with `move_to_trash` ");
+                systemText.append("(recoverable by the user); never create a \"to delete\" folder as a workaround. ");
                 systemText.append("More generally: tool calls that do not depend on each other's results belong in the SAME turn ");
                 systemText.append("(emit several `<tool_code>` blocks back to back); one call per turn burns the step budget.\n\n");
             } else {
@@ -1066,6 +1068,7 @@ public class ContextAssemblerService {
                 systemText.append("缺失的目标文件夹会自动补建，不需要先调 `create_folder`。");
                 systemText.append("返回值里 FAILED 段列出的条目单独重试，**绝不要整批重发**——已成功的会被搬第二遍。");
                 systemText.append("只移动一份文件时仍用 `move_file`。");
+                systemText.append("不再需要的中间文件、临时文件用 `move_to_trash` 移入回收站（用户可恢复），不要另建「待删除」文件夹绕行。");
                 systemText.append("同理，彼此之间不需要看对方结果的工具调用要放在同一轮里并行发出");
                 systemText.append("（连续输出多个 `<tool_code>` 块），一轮一个地挤牙膏会白白烧掉步数预算。\n\n");
             }

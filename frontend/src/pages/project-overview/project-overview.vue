@@ -84,7 +84,7 @@
             </view>
           </view>
           <view class="project-meta">
-            <text class="meta-item">{{ $t('workbench.managerLabel', { name: project.manager || userDisplayName || $t('workbench.me') }) }}</text>
+            <text v-if="!soloLocalProject" class="meta-item">{{ $t('workbench.managerLabel', { name: project.manager || userDisplayName || $t('workbench.me') }) }}</text>
 
             <block v-if="project.listedCompanyName && project.listedCompanyName !== '-'">
                 <text class="meta-divider">|</text>
@@ -594,19 +594,6 @@
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.checkSquare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </view>
-
-              <!-- 5. 下载 (批量模式) -->
-              <view
-                v-if="fileBatchMode"
-                class="icon-btn mini"
-                @tap="onFileTreeQuickAction('download')"
-                :title="$t('workbench.batchDownload')"
-                :class="{ disabled: checkedFileCount <= 0 }"
-              >
-                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path v-for="(d, gi) in GLYPHS.download" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </view>
 
@@ -1301,6 +1288,7 @@
                     <FilePreview
                       v-else
                       :file="activeFileLeft"
+                      :project-id="projectId"
                       :locator="activeFileLeft.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
@@ -1508,6 +1496,7 @@
                     <FilePreview
                       v-else
                       :file="activeFileRight"
+                      :project-id="projectId"
                       :locator="activeFileRight.pendingLocator || null"
                       :show-edit-btn="false"
                       @extracted="onArchiveExtracted"
@@ -1856,23 +1845,23 @@
       </view>
 
       <!-- AI 导出为 Word 对话框 -->
-      <view v-if="showExportDialog" class="upload-mask" @tap="closeExportDialog">
+      <view v-if="showExportDialog" class="form-dialog-mask" @tap="closeExportDialog">
         <view class="folder-modal" @tap.stop>
-          <view class="upload-header">
-            <text class="upload-title">{{ $t('workbench.exportWordTitle') }}</text>
-            <text class="upload-subtitle">{{ $t('workbench.exportWordSubtitle') }}</text>
+          <view class="form-dialog-header">
+            <text class="form-dialog-title">{{ $t('workbench.exportWordTitle') }}</text>
+            <text class="form-dialog-subtitle">{{ $t('workbench.exportWordSubtitle') }}</text>
           </view>
           <view class="folder-body">
-            <view class="upload-row">
-              <text class="upload-label">{{ $t('workbench.fileNameLabel') }}</text>
+            <view class="form-dialog-row">
+              <text class="form-dialog-label">{{ $t('workbench.fileNameLabel') }}</text>
               <input
                 v-model="exportFileName"
                 class="dialog-input"
                 :placeholder="$t('workbench.exportFileNamePlaceholder')"
               />
             </view>
-            <view class="upload-row export-folder-label-row">
-              <text class="upload-label">{{ $t('workbench.saveLocationLabel') }}</text>
+            <view class="form-dialog-row export-folder-label-row">
+              <text class="form-dialog-label">{{ $t('workbench.saveLocationLabel') }}</text>
             </view>
             <scroll-view class="export-folder-list" scroll-y>
               <view
@@ -1906,13 +1895,13 @@
               </view>
             </scroll-view>
           </view>
-          <view class="upload-footer">
-            <view class="upload-btn upload-btn-secondary" @tap="closeExportDialog">
+          <view class="form-dialog-footer">
+            <view class="form-dialog-btn form-dialog-btn-secondary" @tap="closeExportDialog">
               {{ $t('common.cancel') }}
             </view>
             <view
-              class="upload-btn upload-btn-primary"
-              :class="{ 'upload-btn-disabled': exportLoading || !exportFileName.trim() }"
+              class="form-dialog-btn form-dialog-btn-primary"
+              :class="{ 'form-dialog-btn-disabled': exportLoading || !exportFileName.trim() }"
               @tap="!exportLoading && exportFileName.trim() && confirmExportWord()"
             >
               {{ exportLoading ? $t('workbench.exporting') : $t('workbench.confirmExport') }}
@@ -1928,22 +1917,22 @@
       </view>
 
       <!-- Screenshot Save Dialog -->
-      <view v-if="showScreenshotSaveDialog" class="upload-mask" @tap="closeScreenshotSaveDialog">
+      <view v-if="showScreenshotSaveDialog" class="form-dialog-mask" @tap="closeScreenshotSaveDialog">
         <view class="folder-modal" @tap.stop>
-          <view class="upload-header">
-            <text class="upload-title">{{ $t('workbench.saveScreenshotTitle') }}</text>
+          <view class="form-dialog-header">
+            <text class="form-dialog-title">{{ $t('workbench.saveScreenshotTitle') }}</text>
           </view>
           <view class="folder-content">
-            <view class="upload-row">
-              <text class="upload-label">{{ $t('workbench.fileNameLabel') }}</text>
+            <view class="form-dialog-row">
+              <text class="form-dialog-label">{{ $t('workbench.fileNameLabel') }}</text>
               <input
                 v-model="screenshotSaveName"
                 class="dialog-input"
                 :placeholder="$t('workbench.screenshotNamePlaceholder')"
               />
             </view>
-            <view class="upload-row export-folder-label-row">
-              <text class="upload-label">{{ $t('workbench.saveLocationLabel') }}</text>
+            <view class="form-dialog-row export-folder-label-row">
+              <text class="form-dialog-label">{{ $t('workbench.saveLocationLabel') }}</text>
             </view>
             <scroll-view scroll-y class="folder-tree-list">
               <view
@@ -1989,13 +1978,13 @@
               </view>
             </scroll-view>
           </view>
-          <view class="upload-footer">
-            <view class="upload-btn upload-btn-secondary" @tap="closeScreenshotSaveDialog">
+          <view class="form-dialog-footer">
+            <view class="form-dialog-btn form-dialog-btn-secondary" @tap="closeScreenshotSaveDialog">
               {{ $t('common.cancel') }}
             </view>
             <view
-              class="upload-btn upload-btn-primary"
-              :class="{ 'upload-btn-disabled': screenshotSaveLoading || !screenshotSaveName.trim() }"
+              class="form-dialog-btn form-dialog-btn-primary"
+              :class="{ 'form-dialog-btn-disabled': screenshotSaveLoading || !screenshotSaveName.trim() }"
               @tap="!screenshotSaveLoading && screenshotSaveName.trim() && confirmSaveScreenshot()"
             >
               {{ screenshotSaveLoading ? $t('workbench.savingText') : $t('workbench.confirmSave') }}
@@ -2053,7 +2042,7 @@
 
       <!-- 文件关联选择弹窗：一个锚点挂了多条底稿位置（EvidenceLink target）且链接不带 t
            时，点击超链接弹出选择：文件名 + 核查方法 + 定位摘要。
-           独立一套 filelink-* 类，不复用下面导出/截图对话框共用的 upload-mask/
+           独立一套 filelink-* 类，不复用下面导出/截图对话框共用的 form-dialog-mask/
            folder-modal（那组被三处对话框复用，风险面太大，见样式区注释）。 -->
       <view v-if="fileLinkPicker.visible" class="filelink-mask" @tap="closeFileLinkPicker">
         <view class="filelink-dialog" @tap.stop>
@@ -2409,6 +2398,8 @@ import {
 import { activityTracker } from '@/utils/activityTracker.js'
 
 import { ICONS as GLYPHS } from '@/config/icons.js'
+import { readLocalMode } from '@/services/accountProfile.js'
+import { isSoloLocalProject } from '@/utils/soloLocalProject.js'
 import { openFeedbackWidget } from '@/utils/feedbackWidget.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import ShareholderMeetingPanel from '@/components/ShareholderMeetingPanel.vue'
@@ -2546,6 +2537,7 @@ export default {
       screenshotSaveLoading: false,
       screenshotSaveDataUrl: '', // Cached for save dialog
       projectMembers: [], // Added
+      localMode: null, // 装机形态（local-mode），只用来判「单人本机项目」隐藏负责人一行
       isRenamingProject: false,
       // File Picker
       showFilePicker: false,
@@ -2857,6 +2849,13 @@ export default {
     // 激活标签变了会触发写，编辑器内部状态不会
     tabSnapshotSignature() {
       return JSON.stringify(this.currentTabSnapshot())
+    // 单人本机项目（dev-board#1026 C22）：负责人只能是本机用户自己，那一行不显示
+    soloLocalProject() {
+      return isSoloLocalProject({
+        localMode: this.localMode,
+        managerId: this.project && this.project.managerId,
+        members: this.projectMembers,
+      })
     },
     // 备胎分两桶渲染：可见桶（预热备胎 / 过继后的文档实例）留在左窗格里；隐藏桶
     // （三方合并借用）挂在 .editors-container 直下，不受「左栏有没有开文档」影响。
@@ -3826,6 +3825,7 @@ export default {
     // 当日事项摘要 toast（每天一次，顺带写入 taskStore.global.summary，左栏「项目」面板的概览条读它）。
     // 原挂在项目列表页 mounted，启动落点换成工作台外壳之后搬来（dev-board#1047）。CLIENT 看不到事项。
     if (!this.isClientView) todayDigest().catch((e) => console.warn('[project-overview] 事项摘要读取失败', e))
+    readLocalMode().then((v) => { this.localMode = v })
     // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
     // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
     this.$nextTick(() => this.rebindTabsWheel())
@@ -5146,13 +5146,6 @@ export default {
            }
         }
         return
-      }
-
-      if (actionKey === 'download') {
-         if (typeof tree.openBatchAction === 'function') {
-             tree.openBatchAction('download')
-         }
-         return
       }
 
       if (actionKey === 'copy') {

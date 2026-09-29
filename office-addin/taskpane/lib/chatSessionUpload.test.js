@@ -88,8 +88,9 @@ test('上传成功：createFile + upload 两步后并入 attachedFiles（真实 
       assert.equal(body.name, 'a.pdf')
       assert.equal(body.fileType, 'pdf')
       assert.equal(body.fileSize, 1234)
-      assert.ok(body.wpsFileId)
-      return jsonReply({ id: 55, name: 'a.pdf', fileType: 'pdf', wpsFileId: body.wpsFileId })
+      // wpsFileId 由服务端生成（dev-board#1035），客户端不再上送
+      assert.equal(body.wpsFileId, undefined)
+      return jsonReply({ id: 55, name: 'a.pdf', fileType: 'pdf', wpsFileId: 'w55' })
     }
     if (url.includes('/api/files/55/upload')) {
       assert.equal(options.headers['X-File-Offset'], '0')

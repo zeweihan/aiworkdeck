@@ -31,9 +31,10 @@ export default {
     bootFailed: '文档引擎启动失败',
     loadFailed: '文档加载失败',
     // 装载失败三分（dev-board#539）：404 = 文件已不在磁盘上（重试没有意义），
-    // 下载超时/网络错 = 检查网络后重试有意义，其余沿用 loadFailed。
+    // 读取超时/连不上本机服务 = 确认服务在跑后重试有意义，其余沿用 loadFailed。
     fileMissingFailed: '文件已不在磁盘上',
-    downloadFailed: '下载失败，请检查网络',
+    downloadFailed: '读取失败，请确认本机服务正在运行',
+    docOpenFailed: '文档无法打开',
     ready: '就绪',
     reloading: '重新加载中…',
     reloadFailed: '重新加载失败，内容已过期',
@@ -55,8 +56,19 @@ export default {
   previewReadableHint: '已可阅读，编辑器就绪后可直接编辑',
   preparingEditor: '正在准备编辑器',
   dlProgress: '文档内容 {loaded} / {total}',
-  dlLoadedOnly: '已下载文档内容 {size}',
+  dlLoadedOnly: '已读取文档内容 {size}',
   firstOpenHint: '首次打开需初始化文档引擎，大文档会稍慢，请稍候',
+  // 「文档无法打开」终态（dev-board#1018）：引擎拒收损坏文件，或重启重装后仍无响应。
+  openFailed: {
+    title: '文档无法打开：引擎无响应或文件损坏',
+    code: '诊断码：{code}',
+    previewNotice: '文档无法在编辑器中打开（诊断码：{code}），以下为只读预览',
+    readOnlyPreview: '用只读预览打开',
+    download: '下载原文件',
+    retry: '重启编辑器再试一次',
+    previewFailed: '只读预览也无法渲染该文件：{reason}',
+    downloadFailedToast: '下载原文件失败：{reason}',
+  },
   retryLoad: '一直卡着？点此重试',
   bootFailedHint: '文档引擎启动失败：{reason}。可能是网络或公司防火墙拦截了引擎资源，请检查网络后重试。',
   review: {
@@ -180,8 +192,8 @@ export default {
   drawio: {
     opening: '正在打开图形编辑器…',
     unavailable: '当前环境没有内置图形编辑器',
-    downloadHint: '这份 {name} 可以下载后用 draw.io 打开继续编辑。',
-    downloadFile: '下载文件',
+    openHint: '这份 {name} 可用本机的 draw.io 打开继续编辑。',
+    openFile: '打开文件',
     retry: '重试',
     unsaved: '未保存',
     saving: '保存中…',
@@ -204,7 +216,7 @@ export default {
     loadFailed: '读取文件失败',
     readFailed: '读取文件失败（{status}）',
     fileMissing: '文件不存在',
-    emptyDownload: '文件内容下载为空，为防覆盖真实内容已禁止编辑，请重试',
+    emptyDownload: '读到的文件内容为空，为防覆盖真实内容已禁止编辑，请重试',
     retry: '重试',
     edit: '编辑',
     preview: '预览',

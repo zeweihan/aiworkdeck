@@ -11,6 +11,7 @@ import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ClientInvitationService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -167,7 +168,7 @@ public class ProjectMemberController {
     }
 
     @PostMapping("/{projectId}/invite/client")
-    public Map<String, Object> inviteClient(
+    public ResponseEntity<Map<String, Object>> inviteClient(
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
@@ -185,12 +186,18 @@ public class ProjectMemberController {
             result.put("code", 0);
             result.put("message", com.checkba.service.LangText.of("邀请码生成成功", "Invitation code generated successfully"));
             result.put("data", Map.of("accessCode", code));
-            return result;
+            return ResponseEntity.ok(result);
+        } catch (ClientInvitationService.LibraryRequiredException e) {
+            // 本机未上云的案卷（dev-board#1039）：明确 400，不是一次可重试的业务失败
+            Map<String, Object> result = new HashMap<>();
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(result);
         } catch (IllegalArgumentException e) {
             Map<String, Object> result = new HashMap<>();
             result.put("code", 1);
             result.put("message", e.getMessage());
-            return result;
+            return ResponseEntity.ok(result);
         }
     }
 

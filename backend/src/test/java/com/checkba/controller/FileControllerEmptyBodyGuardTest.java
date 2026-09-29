@@ -21,8 +21,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 import java.io.InputStream;
-import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -59,10 +59,14 @@ class FileControllerEmptyBodyGuardTest {
     @Mock
     private WorkSessionService workSessionService;
 
+    @Mock
+    private com.checkba.storage.ProjectStorageResolver storageResolver;
+
     @InjectMocks
     private FileController controller;
 
     private static final String WPS_FILE_ID = "project_4_doc_1784101301299_a5d5o6u";
+    private static final String FILE_ID = "16";
     private static final String FILE_PATH = "projects/4/big.docx";
 
     private ProjectFile projectFile() {
@@ -82,7 +86,7 @@ class FileControllerEmptyBodyGuardTest {
      */
     @Test
     void emptyOctetStreamBodyWithDeclaredTotalSizeIsRejectedBeforeWrite() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         // 注意：不 stub getStorageService()——修复后的守卫必须在碰存储层之前就拒绝，
         // 一旦实现改成先取存储服务再判断，这里会因为 UnnecessaryStubbing 之外的原因
@@ -98,7 +102,7 @@ class FileControllerEmptyBodyGuardTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                    controller.uploadFile(WPS_FILE_ID, null, null, "sess", null, request);
+                    controller.uploadFile(FILE_ID, null, null, "sess", null, request);
 
             assertEquals(400, resp.getStatusCode().value(), "自相矛盾的空 body 必须被拒绝，不能回 200");
             assertNotEquals(0, resp.getBody().get("code"), "响应体不能是 code:0（骗前端上传成功）");
@@ -112,7 +116,7 @@ class FileControllerEmptyBodyGuardTest {
     /** X-File-Total-Size 缺失时，空 body 是合法场景（保存一个空文件），不能被新校验误伤。 */
     @Test
     void emptyBodyWithoutTotalSizeHeaderIsAllowed() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         when(storageService.save(any(), any())).thenReturn(FILE_PATH);
@@ -127,7 +131,7 @@ class FileControllerEmptyBodyGuardTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                    controller.uploadFile(WPS_FILE_ID, null, null, "sess", null, request);
+                    controller.uploadFile(FILE_ID, null, null, "sess", null, request);
 
             assertEquals(200, resp.getStatusCode().value());
             assertEquals(0, resp.getBody().get("code"));
@@ -139,7 +143,7 @@ class FileControllerEmptyBodyGuardTest {
     /** X-File-Total-Size 显式为 0 同样是合法的空文件声明，不能被拦。 */
     @Test
     void emptyBodyWithZeroTotalSizeHeaderIsAllowed() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         when(storageService.save(any(), any())).thenReturn(FILE_PATH);
@@ -154,7 +158,7 @@ class FileControllerEmptyBodyGuardTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                    controller.uploadFile(WPS_FILE_ID, null, null, "sess", null, request);
+                    controller.uploadFile(FILE_ID, null, null, "sess", null, request);
 
             assertEquals(200, resp.getStatusCode().value());
             assertEquals(0, resp.getBody().get("code"));
@@ -166,7 +170,7 @@ class FileControllerEmptyBodyGuardTest {
     /** 非空 body 即便声明了总大小也必须正常放行，不能被新校验误伤真实分片。 */
     @Test
     void nonEmptyBodyWithDeclaredTotalSizeStillWorks() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         when(storageService.save(any(), any())).thenReturn(FILE_PATH);
@@ -182,7 +186,7 @@ class FileControllerEmptyBodyGuardTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                    controller.uploadFile(WPS_FILE_ID, null, null, "sess", null, request);
+                    controller.uploadFile(FILE_ID, null, null, "sess", null, request);
 
             assertEquals(200, resp.getStatusCode().value());
             assertEquals(0, resp.getBody().get("code"));

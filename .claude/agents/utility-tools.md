@@ -107,7 +107,7 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
 **截图**：入口 `checkbaDesktop.ocr.captureScreen`；desktop main.js 透明覆盖框选窗 ~:389-571（BrowserView 模式仅限其区域内框选 ~:426）、capturePage 抓取 ~:577/:585/:709、IPC：ocr-capture-screen/desktop/window/view + ocr-start-selection。**推荐链路是 ocr-capture-view（当前 BrowserView，免 macOS 录屏权限）**；无独立后端端点，产物统一走 OCR。
   渲染层浮层（project-overview.vue `.ocr-overlay`，样式在 project-overview.scss）的底图是一张冻结帧截图，叠在上面的 `.ocr-selection` / 提示条**必须用半透明字面量**，不能引用 `--awd-*-soft` 这类主题令牌（浅色下是不透明色，PR#657 令牌化曾把选区变成一整块 #EFF6FF，框住的内容全没了，dev-board#474）；提示条贴底居中，别钉左上角压交通灯与项目名。契约测试 `npm run test:ocr-overlay`。
 
-**剪贴板**：`ClipboardPanel.vue`；desktop 主进程 1 秒轮询：定时器与推送在 main.js `startClipboardWatcher`，单次 tick 的判定逻辑在 `desktop/main/clipboard-watch.js`（指纹去重与 main.js `emitClipboard` 共用，首 tick 只记指纹、图文混合优先图）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
+**剪贴板**：`ClipboardPanel.vue`；desktop 主进程 1 秒轮询：定时器与推送在 main.js `startClipboardWatcher`，单次 tick 的判定逻辑在 `desktop/main/clipboard-watch.js`（指纹去重与 main.js `emitClipboard` 共用，首 tick 只记指纹、图文混合优先图）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、POST /file-local、GET /{id}/file、DELETE /{id}）。**复制文件走按路径存**（dev-board B14）：采集桥 FILE 分支只把本机路径 POST 给 `/file-local`（仅 local-mode，路径校验与 import-local 共用 `ProjectFileService.resolveLocalSourcePath`，单文件上限同 multipart 上限），服务端自己 copy 进 `clipboard/{userId}/{uuid}`；渲染进程不再经 `host.utils.readFile` 把整个文件读进内存。IMAGE 分支照旧解码上传。回归 `ClipboardLocalFileTest`、`tests/clipboard/fileByPath.test.mjs`。
   **重启后采集又停住（2026-09-07，dev-board#455）**：先区分「页面没订阅」与「主窗引用丢失」。
   实机 0.35 已有 IPC 订阅但本会话无事件，既有窗口截图接口却报 `window not ready`：
   macOS `activate` 可抢在异步启动链之前建窗，随后又建第二个；旧窗关闭回调无条件把
@@ -358,19 +358,27 @@ AwdDialog 队列非空时持有 `overlayState` 的 `'awd-dialog'`（`utils/dialo
   另写一份换算。旋转只走 90° 步进（`imageRotate`），转完重新适应窗口。
   框**常驻**（缩放旋转后还要能核对），3s 后撤掉的只是压暗周边的那圈 `box-shadow`；
   工具栏「定位框」按钮可收起/重新亮出。
-- **音视频 seek 完必须 `pause()`**，并把 `autoplay` 绑成 `mediaLocatorSec == null`——
-  带定位打开的目的是看那一帧，自动播下去等于当场把定位冲掉。**别只靠模板上的
-  `@loadeddata`/`@loadedmetadata`**：uni 在各端把 `<video>` 编译成自家组件，事件名与
-  `e.target` 都不保证是原生那一套（P0 的 `@loadeddata` 很可能从没触发过）；`attachVideoLocator()`
-  在 `blobUrl` 落地后 `$nextTick` 去真的 `<video>` 上挂原生监听，换文件与卸载时 `teardownVideoLocator()`
-  摘干净。
+- **音视频交给 `components/media/MediaPlayer.vue`（dev-board#1023/#1024/#1025）**。FilePreview 只传
+  `:kind :file :project-id :locator-sec`（`mediaLocatorSec`）并按 `mediaKey`（文件 id + wpsFileId）
+  重建；取源、控制条、字幕、快捷键、时间标记全在播放器里。契约照旧：元数据就绪后 seek 并
+  **`pause()`**、带定位绝不自动播放（`el.autoplay` 恒 false，自动播放只由 `afterMetadata` 决定），
+  落地后 emit `locator-consumed` 一次；同一文件同一时刻再次被点中时 FilePreview 调播放器的
+  `relocate()`（locatorSec 没变、watch 不触发）。媒体元素**命令式创建**
+  （`document.createElement('video')` / `new Audio()`），模板里不许出现 `<video>`/`<audio>`：
+  uni 会把它编译成自家组件，事件名与 ref 都不可靠。播放器模板一律原生 `div/span`，不用
+  `view/text`——uni 会把 view 上的键盘/鼠标事件重建成普通对象（target 不是真节点、shiftKey 丢），
+  快捷键与滑轨拖拽都要真事件。取源走直链 `?token=`（后端 Range，流式），`error` code 2/4
+  回退一次 XHR blob（`_mediaReqId` 竞态防护随之搬来），日志里的 URL 一律 `redactToken`。
+  CC「生成字幕」与右键转写同走 `confirmPaidTranscription`（dev-board#968，会扣 Credits）。
 
 测试：`frontend/tests/evidence/locatorGeometry.test.mjs`（坐标换算，含四个旋转角与 CSS
-transform 的自洽互校）、`previewLocate.test.mjs`（三种定位各一个可复现实例，抠组件方法体真跑）、
+transform 的自洽互校）、`previewLocate.test.mjs`（pdf 与图片定位各一个可复现实例，抠组件方法体真跑）、
 `previewLocateRender.test.mjs`（用 vue 自带的 compiler-sfc + server-renderer 把模板真渲染成
 HTML 再断言——模板里 class 名写错、v-if 挂错分支、i18n 键打错，只跑方法体的那份测试一个都发现不了）。
 三份都在 `npm run test:evidence` 里，CI 跑。**模板里的中文注释会原样进 HTML**，
-断言标签属性要先剥注释（`<video src>` 这几个字就写在既有注释里，直接 match 会假绿）。
+断言标签属性要先剥注释。音视频那一半在 `npm run test:media`：`tests/media/previewLocate.test.mjs`
+（定位契约）与 `mediaPlayerRender.test.mjs`（`sfcLoader.mjs` 连 script 一起装载做 SSR 真渲染，
+uni 依赖换桩；SSR 合并 class 的顺序不固定，按「含有这个类」断言）。
 
 **反馈浮窗的第二个截图消费者**：`FeedbackWidget.vue` 也走 `host.ocr.startSelection({mode:'window'})`，
 自带一份等价的裁剪算法（不复用 project-overview 的实例态方法组）。改截图 IPC 的返回结构

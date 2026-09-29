@@ -246,9 +246,86 @@ public class EditorBridgeService {
         activeDocKeys.put(conversationId, String.valueOf(fileId));
     }
 
-    /** 新一轮（新用户消息）开始：清空本轮的整段插入登记。 */
+    /** 新一轮（新用户消息）开始：清空本轮的整段插入登记、生成物登记与「等组件」标记。 */
     public void clearForNewRun(String conversationId) {
-        if (conversationId != null) dispatchedBulkInserts.remove(conversationId);
+        if (conversationId == null) return;
+        dispatchedBulkInserts.remove(conversationId);
+        generatedThisRun.remove(conversationId);
+        componentWaits.remove(conversationId);
+    }
+
+    // ==================== 本轮生成物登记（dev-board#1017） ====================
+
+    /**
+     * 本轮（run）内已经新建过的文档：conversationId -> (目标键 -> fileId)。
+     * {@link #clearForNewRun} 在每条新用户消息开始时清空，作用域与整段插入去重闸完全一致。
+     *
+     * <p>病灶：编辑器还没就绪时模型拿到失败，转头改用 write_docx / doc_start_stream 再生成一份，
+     * 新建走 ConflictPolicy.RENAME 自动加「 (n)」——每重试一次项目里就多一份同名文档，
+     * 一轮下来四份。这里让「同一轮、同一目标」的第二次新建直接拿回第一次那份。
+     * 跨轮（用户说「重新生成」）仍然新建：那是用户明确要的新一份。
+     */
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Long>> generatedThisRun =
+            new ConcurrentHashMap<>();
+
+    /** 新建一份 docx 的目标键：目标文件夹 + 文件名（大小写不敏感，缺 .docx 补上）。 */
+    public static String newDocxKey(Long parentId, String fileName) {
+        String name = fileName == null ? "" : fileName.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!name.endsWith(".docx")) name = name + ".docx";
+        return "docx|" + (parentId == null || parentId <= 0 ? "root" : parentId) + "|" + name;
+    }
+
+    /** pdf_to_word 的目标键：源 PDF + 目标文件夹。 */
+    public static String pdfToWordKey(Long sourceFileId, Long parentId) {
+        return "pdf2docx|" + sourceFileId + "|" + (parentId == null || parentId <= 0 ? "root" : parentId);
+    }
+
+    /** 本轮这个目标已经生成过的 fileId；没有（或拿不到当前会话）返回 null。 */
+    public Long generatedInRun(String key) {
+        String conversationId = currentConversationId.get();
+        if (conversationId == null || key == null) return null;
+        java.util.Map<String, Long> seen = generatedThisRun.get(conversationId);
+        return seen == null ? null : seen.get(key);
+    }
+
+    /** 登记本轮新建成功的文档。只在真的建成（且对流式写入而言：真的打开了）之后调。 */
+    public void noteGenerated(String key, Long fileId) {
+        String conversationId = currentConversationId.get();
+        if (conversationId == null || key == null || fileId == null) return;
+        generatedThisRun.computeIfAbsent(conversationId, k -> new ConcurrentHashMap<>()).put(key, fileId);
+    }
+
+    /** 登记指向的文件已经不在了（用户这一轮里删了它）：撤掉，让下一次照常新建。 */
+    public void forgetGenerated(String key) {
+        String conversationId = currentConversationId.get();
+        if (conversationId == null || key == null) return;
+        java.util.Map<String, Long> seen = generatedThisRun.get(conversationId);
+        if (seen != null) seen.remove(key);
+    }
+
+    /** 给模型的复用说明：本轮已生成过，直接用那一份，不再新建。 */
+    public static String reusedGeneratedMessage(String fileName, Long fileId) {
+        return LangText.of(
+                "本轮已生成过这份文档『" + fileName + "』（文件 ID: " + fileId + "），直接复用它，没有再新建一份。"
+                        + "要改内容就对这份文档用 doc_* 编辑工具；编辑器还在加载时等它就绪后重试同一步。",
+                "This document \"" + fileName + "\" (file ID: " + fileId + ") was already generated in this run, "
+                        + "so it is reused and no new copy was created. Edit it with the doc_* tools; "
+                        + "if the editor is still loading, wait for it and retry the same step.");
+    }
+
+    // ==================== 等待组件（dev-board#1016） ====================
+
+    /**
+     * 本轮已发出 component_required、正在等用户下载组件的会话。
+     * 编排器在每个工具执行完之后 {@link #consumeComponentWait} 一次：命中即本轮以「等待组件」收尾，
+     * 不再把控制权交回模型——否则模型拿到「已请用户下载」之后会自己找别的路
+     * （结构级转换、write_docx、doc_start_stream……）把同一件事再做一遍。
+     */
+    private final java.util.Set<String> componentWaits = ConcurrentHashMap.newKeySet();
+
+    /** 这个会话刚刚请用户下载了组件吗？读后即清。 */
+    public boolean consumeComponentWait(String conversationId) {
+        return conversationId != null && componentWaits.remove(conversationId);
     }
 
     /**
@@ -551,6 +628,7 @@ public class EditorBridgeService {
             payloadMap.put("features", features == null ? java.util.List.of() : features);
             payloadMap.put("trigger", trigger);
             sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
+            componentWaits.add(conversationId);
             log.info("Sent component_required for pack {} (trigger={})", packId, trigger);
         } catch (Exception e) {
             log.error("Failed to send component_required for pack " + packId, e);
@@ -612,6 +690,11 @@ public class EditorBridgeService {
             if (result.isSuccess()) {
                 recordBridge(action, "ok", conversationId, bridgeStartMs);
                 return objectMapper.writeValueAsString(result.getData());
+            } else if (isEditorBooting(result)) {
+                // 编辑器还在启动（dev-board#1017）：这一步没执行，不是失败，等它就绪重试同一步
+                recordBridge(action, "booting", conversationId, bridgeStartMs);
+                forgetBulkInsert(conversationId, action, params);
+                return editorBootingResultJson();
             } else {
                 recordBridge(action, "error", conversationId, bridgeStartMs);
                 // 编辑器明确报错 = 这段确实没写进去，撤掉去重登记（超时不撤，结局未知）
@@ -656,6 +739,53 @@ public class EditorBridgeService {
                         + "The editor may still be executing it and the content may already be written. "
                         + "Do not resend it; tell the user this step was stopped and its outcome is unknown.")
                 + "\", \"code\": \"EDITOR_RESULT_CANCELLED\", \"outcomeUnknown\": true, \"retryable\": false}";
+    }
+
+    // ==================== 编辑器启动中（dev-board#1017） ====================
+
+    /** 前端在编辑器仍在启动、等到上限仍未就绪时回的错误码（与 doc-editor 侧约定）。 */
+    public static final String EDITOR_BOOTING_CODE = "EDITOR_BOOTING";
+
+    private static final java.util.regex.Pattern BOOTING_CODE_IN_JSON =
+            java.util.regex.Pattern.compile("\\\\?\"code\\\\?\"\\s*:\\s*\\\\?\"" + EDITOR_BOOTING_CODE);
+
+    /**
+     * 前端回执是不是「编辑器仍在启动」。两处都认：{@code data} 里的 {@code code}
+     * （前端按 {"error","code","retryable"} 形状回传时 Jackson 反成 Map），以及 error 串里
+     * 带着这个码（只回了一句错误字符串的旧形状）。
+     */
+    static boolean isEditorBooting(EditorActionResult result) {
+        if (result == null || result.isSuccess()) return false;
+        Object data = result.getData();
+        if (data instanceof Map<?, ?> m && EDITOR_BOOTING_CODE.equals(String.valueOf(m.get("code")))) return true;
+        if (data instanceof String str && str.contains(EDITOR_BOOTING_CODE)) return true;
+        String err = result.getError();
+        return err != null && err.contains(EDITOR_BOOTING_CODE);
+    }
+
+    /**
+     * 工具输出（桥回执原样、或被工具包进另一段 JSON 字符串里、引号带转义）里是不是带着
+     * EDITOR_BOOTING 码。编排器据此不计失败。只认 {@code "code":"EDITOR_BOOTING"} 这个键值形状，
+     * 文档正文里碰巧出现这个词不算。
+     */
+    public static boolean isEditorBootingOutput(String toolOutput) {
+        return toolOutput != null && toolOutput.contains(EDITOR_BOOTING_CODE)
+                && BOOTING_CODE_IN_JSON.matcher(toolOutput).find();
+    }
+
+    /**
+     * 编辑器启动中的回执。仍带 {@code "error"} 键（这一步确实没执行，面板不该打绿勾），
+     * 但 {@code retryable=true}：编排器据此不计入连续失败，模型该做的是等一等、重试同一步——
+     * 不是改用新建文件或其它通道（dev-board#1017 那四份同名文档就是这么来的）。
+     */
+    static String editorBootingResultJson() {
+        return "{\"error\": \"" + LangText.of(
+                "编辑器仍在启动（文档还在加载），这一步没有执行。等它就绪后重试同一步即可；"
+                        + "不要改用新建文件、生成副本或其它通道去完成同一件事。",
+                "The editor is still starting up (the document is still loading), so this step was not executed. "
+                        + "Wait for it to be ready and retry the same step; do not switch to creating a new file, "
+                        + "a copy, or any other channel to do the same thing.")
+                + "\", \"code\": \"" + EDITOR_BOOTING_CODE + "\", \"retryable\": true}";
     }
 
     /**

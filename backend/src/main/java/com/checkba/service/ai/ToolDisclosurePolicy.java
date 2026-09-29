@@ -74,7 +74,7 @@ public class ToolDisclosurePolicy {
 
             // —— 项目材料：找文件 → 拿 fileId → 读全文 → 落一份新文件 ——
             "doc_list_project_files", "search_project_files", "extract_file_text", "read_document",
-            "write_docx", "create_folder", "move_files_batch",
+            "write_docx", "create_folder", "move_files_batch", "move_to_trash",
 
             // —— 记忆：检索与保存各一个（memory_* 六个由编排器的 MEMORY_TOOLS 规则另行兜底）——
             "query_memory", "save_memory",

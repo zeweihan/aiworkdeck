@@ -10,6 +10,7 @@ import { nextBubbleId } from './bubbleId.js'
 import { documentEditedFromProcesses } from '@/utils/useInDocumentVisibility.js'
 import { isSameFileChange } from '@/utils/chatFileChange.js'
 import { ASK_USER_KIND, decodeAttr, normalizeAskUserEvent } from '@/utils/askUserAnswer.mjs'
+import { isUserQuestionAwaiting } from './awaitingInput.mjs'
 import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
@@ -1269,6 +1270,9 @@ export function useAgentStream() {
                     // 上次进程执行中被杀（关 app/崩溃/断电），启动回收标记出来的：
                     // 半截回复已带 [进程中断] 说明，这里补上同一条「继续」入口
                     agentPaused.value = { reason: 'process_interrupted' }
+                } else if (d.status === 'AWAITING_INPUT' && !isUserQuestionAwaiting(d)) {
+                    // 组件未就绪收尾（reason=component_required）：不是反问，按已完成处理
+                    agentRunStatus.value = 'FINISHED'
                 } else if (d.status === 'AWAITING_INPUT') {
                     // 模型反问后停机等答案：切回会话时要看得出「AI 在等你回答」。
                     // 不置 isStreaming——后台没有任何东西在跑，输入框必须可用。
@@ -1406,12 +1410,12 @@ export function useAgentStream() {
                         ? { reason: d.reason || '' } : null
                     // 反问停机（AWAITING_INPUT）：这一路是「重连落在快照未建窗口」的兜底，
                     // 少认一个状态的表现是会话切回来既没有「等你回答」提示、状态又显示成已完成
-                    agentAwaitingInput.value = (evt === 'bubble_end' && d.status === 'awaiting_input')
+                    agentAwaitingInput.value = (evt === 'bubble_end' && isUserQuestionAwaiting(d))
                     agentRunStatus.value = evt === 'error' ? 'ERROR'
                         : evt === 'cancelled' ? 'CANCELLED'
                         : d.status === 'paused' ? 'PAUSED'
                         : d.status === 'awaiting_approval' ? 'AWAITING_APPROVAL'
-                        : d.status === 'awaiting_input' ? 'AWAITING_INPUT' : 'FINISHED'
+                        : isUserQuestionAwaiting(d) ? 'AWAITING_INPUT' : 'FINISHED'
                 } catch (e) {
                     agentPaused.value = null
                     agentAwaitingInput.value = false
@@ -1601,10 +1605,10 @@ export function useAgentStream() {
                     currentAssistantBubble.value.status = d.status || ''
                     currentAssistantBubble.value.documentEdited = !!d.documentEdited
                     agentPaused.value = d.status === 'paused' ? { reason: d.reason || '' } : null
-                    agentAwaitingInput.value = d.status === 'awaiting_input'
+                    agentAwaitingInput.value = isUserQuestionAwaiting(d)
                     agentRunStatus.value = d.status === 'paused' ? 'PAUSED'
                         : d.status === 'awaiting_approval' ? 'AWAITING_APPROVAL'
-                        : d.status === 'awaiting_input' ? 'AWAITING_INPUT' : 'FINISHED'
+                        : isUserQuestionAwaiting(d) ? 'AWAITING_INPUT' : 'FINISHED'
                 } catch (e) {
                     agentPaused.value = null
                     agentAwaitingInput.value = false
