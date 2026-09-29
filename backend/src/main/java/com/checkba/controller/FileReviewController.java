@@ -29,7 +29,8 @@ import java.util.Optional;
  *
  * <p>鉴权与 {@link ProjectFileController} 同口径（那几个闸在那边是私有方法，这里照抄一份，语义不改）：
  * 读走 checkFileTreeAccess、写走 checkFileWriteAccess，一律再过 checkFileInProject。
- * 没有 open 记录时的写操作（服务层抛 {@link IllegalStateException}）本控制器局部映射 409。
+ * 没有 open 记录时的写操作（服务层抛 {@link FileReviewService.NoOpenReviewException}）本控制器局部映射 409；
+ * 其它 IllegalStateException 照全局处理器走。
  */
 @RestController
 @RequestMapping("/api/projects/{projectId}/files/{fileId}/review")
@@ -130,8 +131,8 @@ public class FileReviewController {
         return result;
     }
 
-    @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<Map<String, Object>> handleConflict(IllegalStateException e) {
+    @ExceptionHandler(FileReviewService.NoOpenReviewException.class)
+    public ResponseEntity<Map<String, Object>> handleConflict(FileReviewService.NoOpenReviewException e) {
         log.info("计划审阅状态冲突: {}", e.getMessage());
         Map<String, Object> err = new LinkedHashMap<>();
         err.put("code", 1);

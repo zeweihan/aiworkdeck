@@ -22,7 +22,7 @@ import java.util.Optional;
  *
  * <p>鉴权（项目读写权限、fileId 属于 projectId）在控制器里做，这里只管状态机：
  * open 幂等创建（已有 open 记录原样返回、不覆盖基线）→ submit / discard 二选一收尾。
- * 没有 open 记录时的写操作一律抛 {@link IllegalStateException}（控制器映射 409）。
+ * 没有 open 记录时的写操作一律抛 {@link NoOpenReviewException}（控制器映射 409）。
  */
 @Service
 @RequiredArgsConstructor
@@ -110,6 +110,16 @@ public class FileReviewService {
 
     private ProjectFileReview requireOpen(Long fileId) {
         return reviews.findFirstByFileIdAndStatus(fileId, STATUS_OPEN)
-                .orElseThrow(() -> new IllegalStateException("no open review"));
+                .orElseThrow(NoOpenReviewException::new);
+    }
+
+    /**
+     * 该文件没有 open 状态的审阅记录。控制器只把这一种映射 409；其它 IllegalStateException
+     * （例如写回基线时「文件没有存储路径」）照全局处理器走，不冒充状态冲突。
+     */
+    public static class NoOpenReviewException extends IllegalStateException {
+        public NoOpenReviewException() {
+            super("no open review");
+        }
     }
 }

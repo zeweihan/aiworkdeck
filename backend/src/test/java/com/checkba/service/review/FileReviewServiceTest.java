@@ -75,8 +75,8 @@ class FileReviewServiceTest {
     @Test @DisplayName("没有 open 记录时 submit / discard 抛 IllegalStateException")
     void submitDiscardRequireOpen() {
         when(reviews.findFirstByFileIdAndStatus(77L, "open")).thenReturn(Optional.empty());
-        assertThrows(IllegalStateException.class, () -> svc.submit(77L));
-        assertThrows(IllegalStateException.class, () -> svc.discard(1L, 77L, 5L));
+        assertThrows(FileReviewService.NoOpenReviewException.class, () -> svc.submit(77L));
+        assertThrows(FileReviewService.NoOpenReviewException.class, () -> svc.discard(1L, 77L, 5L));
         verifyNoInteractions(projectFileService);
     }
 
@@ -93,7 +93,7 @@ class FileReviewServiceTest {
     @Test @DisplayName("没有 open 记录时 addComment 抛 IllegalStateException")
     void addCommentRequiresOpenReview() {
         when(reviews.findFirstByFileIdAndStatus(77L, "open")).thenReturn(Optional.empty());
-        assertThrows(IllegalStateException.class, () -> svc.addComment(77L, 1, 2, "引用", "评论"));
+        assertThrows(FileReviewService.NoOpenReviewException.class, () -> svc.addComment(77L, 1, 2, "引用", "评论"));
     }
 
     @Test @DisplayName("addComment 挂在 open 记录下并落字段")

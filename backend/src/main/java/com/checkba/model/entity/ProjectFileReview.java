@@ -5,6 +5,8 @@ package com.checkba.model.entity;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -40,8 +42,9 @@ public class ProjectFileReview {
     private String artifactId;
 
     /** 进入审阅态那一刻的文件全文（UTF-8 文本）。 */
-    @Lob
-    @Column(name = "baseline_text")
+    // 不用 @Lob：PG 方言下 @Lob String 走 oid 大对象访问会炸，LONGVARCHAR + TEXT 双方言通吃（同 ProjectFileTextCache / MeetingRecording 的约定）
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(name = "baseline_text", columnDefinition = "TEXT")
     private String baselineText;
 
     /** open | submitted | discarded */

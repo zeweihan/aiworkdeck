@@ -149,10 +149,18 @@ class FileReviewControllerTest {
 
     @Test @DisplayName("没有 open 记录时加批注：服务层 IllegalStateException 映射 409")
     void noOpenReview409() throws Exception {
-        when(svc.addComment(anyLong(), any(), any(), any(), any())).thenThrow(new IllegalStateException("no open review"));
+        when(svc.addComment(anyLong(), any(), any(), any(), any())).thenThrow(new FileReviewService.NoOpenReviewException());
         mvc.perform(post(BASE + "/comments").header("X-Session-Id", "s").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"body\":\"评论\"}"))
                 .andExpect(status().isConflict());
+    }
+
+    @Test @DisplayName("其它 IllegalStateException（如写回时文件没有存储路径）不冒充 409，照全局处理器走")
+    void otherIllegalStateNotConflict() throws Exception {
+        when(svc.discard(1L, 77L, 5L)).thenThrow(new IllegalStateException("文件没有存储路径: 77"));
+        mvc.perform(post(BASE + "/discard").header("X-Session-Id", "s"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(1));
     }
 
     @Test @DisplayName("DELETE comments 回 204")
