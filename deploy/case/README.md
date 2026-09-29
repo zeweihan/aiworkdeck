@@ -413,6 +413,10 @@ rsync -av --delete frontend/dist/build/client-portal/ root@8.152.169.44:/opt/aiw
 ssh root@8.152.169.44 'nginx -t && nginx -s reload'   # 仅首次加 location 时需要
 ```
 
+2026-09-29 首次上线实录：jar 先传成 `backend.jar.new` 再原子换名，旧 jar 留 `.bak-日期`；静态包先传到 `web/client.new` 再换名；
+vhost 里 `/client/` 的 location 用 `root /opt/aiworkdeck/case/web` 而不是 `alias`（alias + try_files 回退 404）。
+验收实测：`/client/` 200、`/client/任意` 200（hash 路由回退）、`/` 与其他路径 404、`client-login` 错码返回 `{code:1,访问码无效}`、连发第 6 次起 503（限频）。
+
 `/opt/aiworkdeck/case/web/` 属于「程序」一侧（可重建，不进迁移单元、不进备份）。
 
 **为什么只放 `/client/`，其余仍 404**：案件库的公网面越小越好——git 与 API 已经是必须的，

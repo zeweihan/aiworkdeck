@@ -45,7 +45,10 @@ server {
     # git、尽调写端点一律被拒），这里只是把静态包放出来。
     # 访问码经 fragment 预填（/client/#code=<码>）：fragment 不随请求发送，不进本机 access log。
     location ^~ /client/ {
-        alias /opt/aiworkdeck/case/web/client/;
+        # 用 root 而不是 alias：alias 配 try_files 时回退路径 /client/index.html 按 root 解析，
+        # 2026-09-29 首次上线就 404 了一次；root + 目录名与 URI 前缀同名即可。
+        root /opt/aiworkdeck/case/web;
+        index index.html;
         try_files $uri $uri/ /client/index.html;
         add_header X-Frame-Options "DENY" always;
         add_header X-Content-Type-Options "nosniff" always;
