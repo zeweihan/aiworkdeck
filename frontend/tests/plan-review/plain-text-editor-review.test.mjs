@@ -86,3 +86,37 @@ test('deleteComment：204 视为成功', async () => {
   const svc = await loadService(async () => { throw e204 })
   assert.equal(await svc.deleteComment(1, 2, 3), true)
 })
+
+// ---- 修复轮 1：beforeUnmount 兜底上传必须让路给放弃修改 ----
+function loadOptions() {
+  const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
+  const body = script.replace(/^import .*$/gm, '').replace('export default', 'return')
+  // eslint-disable-next-line no-new-func
+  return new Function('setTimeout', 'clearTimeout', body)(() => 1, () => {})
+}
+
+function unmountWith(discarding) {
+  const opts = loadOptions()
+  const uploads = []
+  const inst = Object.assign({}, opts.data(), {
+    dirty: true, saving: false, _loadOk: true, _discarding: discarding,
+    _view: { state: { doc: { toString: () => '修订稿' } }, destroy() {} }
+  })
+  for (const [k, fn] of Object.entries(opts.methods)) inst[k] = fn.bind(inst)
+  inst.uploadContent = (c) => { uploads.push(c); return Promise.resolve() }
+  opts.beforeUnmount.call(inst)
+  return uploads
+}
+
+test('放弃修改在途时卸载，不兜底上传修订稿', () => {
+  assert.deepEqual(unmountWith(true), [])
+  assert.deepEqual(unmountWith(false), ['修订稿'], '对照：平时卸载照常兜底上传')
+})
+
+test('回喂正文在落盘后、发 submit 前就取好', () => {
+  const body = SRC.match(/async submitPlanReview\(\)\s*\{([\s\S]*?)\n    \},/)[1]
+  const iFlush = body.indexOf('flushSave(')
+  const iText = body.indexOf('this.getText()')
+  const iSubmit = body.indexOf('submitReview(')
+  assert.ok(iFlush >= 0 && iText > iFlush && iSubmit > iText)
+})

@@ -228,7 +228,8 @@ export default {
     // 标签切走/关闭时的最后防线：同步取走内容，异步发出去（组件销毁不影响 XHR）。
     // closeFile 的显式 flushSave 分支是主路径，这里兜住"切到别的标签"这种不经
     // closeFile 的卸载——v-if 单实例意味着切标签就是销毁。
-    if (this.dirty && !this.saving && this._loadOk && this._view) {
+    // 放弃修改在途时不兜底上传：服务端正在把文件写回基线，此时上传会把放弃静默撤销
+    if (this.dirty && !this.saving && this._loadOk && this._view && !this._discarding) {
       const content = this._view.state.doc.toString()
       this.uploadContent(content).catch((e) => {
         console.warn('[PlainTextEditor] unmount flush-save failed:', e)
@@ -611,8 +612,9 @@ export default {
       try {
         const saved = await this.flushSave()
         if (!saved) throw new Error('save failed before submit')
-        const snap = await fileReview.submitReview(this.projectId, this.file.id)
+        // 正文在落盘成功那一刻取：submit 请求期间再敲的字没经过保存，不该进回喂消息
         const text = this.getText()
+        const snap = await fileReview.submitReview(this.projectId, this.file.id)
         const diff = lineDiff(this.reviewRecord.baselineText || '', text)
         const list = (snap && Array.isArray(snap.comments)) ? snap.comments : this.reviewComments
         const comments = list.map((c) => ({ ...c, ...reanchorComment(c, text) }))
