@@ -7,6 +7,25 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 职责边界：AI 对话功能本身（编排循环、工具注册分发、记忆、SSE、前端聊天 UI、评测）。AI→编辑器指令链路属 ai-doc-bridge 领域；skill 机制属 plugin-system 领域（但 SkillRouter 在编排循环里有两处旁路接入点）。
 
+## 系统提示瘦身（dev-board#1073，2026-09-29）
+
+- 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。
+- ASK 不拼能力片段，仍保留只读 memory 约束；AGENT/PLAN 仍拼。LOWA 不按当前文件类型拆片段，避免同轮切换文档后失去另一类型的指引。时间/阶段仍在缓存分界后，固定前缀逐字节稳定由 `ContextAssemblerServiceTest` 守住。
+- Office 的全目录只留 `tools-office-*.md` 一份；Active Document 改为短指路，末位只留当前文档、原位修改、修订、批量替换与格式回读判据。Word 分页/超链接/页眉页脚/脚注尾注/图片/内容控件/属性也必须在片段中，中英同步，不能随 Java 目录一起丢掉。
+- `ref_list` / `ref_read` 补入核心集：Office 跨文件硬规则要求先列后读，而 reference 无关键词预放回；`ref_edit` / `ref_open` 仍按需发现，权限边界不变。`ToolDisclosurePolicyTest.officeReferenceReadJourneyNeedsNoDiscoveryRound` 覆盖三个 Office 宿主。
+- 锚点以 worker 的 `anchorBookmark` / `dropAiAnchors` 为准：通常随编辑移动、不是一次性，但切换/重开或清理会失效。`EvidenceAnchorService` 按引文建链也会清临时锚点，所以不能承诺“打开期间一直有效”；失效须重新查找。工具描述和中英片段统一此口径。
+- `SystemPromptSizeReportTest` 用真实组装器报告五档 × 中英的固定块与 o200k token；token 口径不是各供应商的真实计费。`OrchestratorReplayEvalTest` 的组装器是 mock，只验证编排/工具披露，不证明瘦身后的模型质量；真实模型结果单独记录。
+
+固定块实测（稳定段减合成内联正文，无 skill/附件/记忆；基线为 Claude 留存的 A 半前报告，瘦身后由 Codex 在接续工作树重跑，2026-09-29）。以下为 o200k token，**不代表供应商计费或缓存命中实测**：
+
+| 会话 | zh 前 → 后 | en 前 → 后 |
+|---|---:|---:|
+| LOWA docx | 16534 → 7857（-52.5%） | 16268 → 7418（-54.4%） |
+| LOWA xlsx | 16543 → 7923（-52.1%） | 16277 → 7474（-54.1%） |
+| LOWA pptx | 16665 → 7879（-52.7%） | 16391 → 7430（-54.7%） |
+| Word 任务窗格 | 11365 → 7553（-33.5%） | 11106 → 6931（-37.6%） |
+| 纯对话 | 9980 → 6422（-35.7%） | 10160 → 6047（-40.5%） |
+
 ## 智能决策辅助（实验性，dev-board#824，2026-09-23）
 
 - **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。
@@ -446,17 +465,17 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
       **2026-09-29 起默认 true**，理由见下文「为什么默认开」）。每轮只下发**核心集**
       （一份人工清单，按「把一条完整的活干完需要哪些工具」挑，不按调用次数），其余按**类目**收进目录；
       模型调 `list_tools()` 看类目、`list_tools(category="format,table")` 拿全签名。
-      离线实测（`ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete`，2026-09-29 重定核心集之后，本机无 Docker）：
+      离线实测（`ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete`，2026-09-29 瘦身 #1073 并补 ref_list/ref_read 之后，本机无 Docker）：
 
       | 会话 | 全集 | 核心集 | 上线路字节（全集 → 核心集） |
       |---|---|---|---|
-      | docx（LOWA 文字） | 146 | 35 | 84628 → 23408（-72.3%） |
-      | xlsx（LOWA 表格） | 117 | 28 | 74039 → 21721（-70.7%） |
-      | pptx（LOWA 演示） | 112 | 28 | 70899 → 20924（-70.5%） |
-      | Word 任务窗格 | 110 | 26 | 66843 → 20087（-69.9%） |
-      | Excel 任务窗格 | 98 | 24 | 62236 → 19711（-68.3%） |
-      | PowerPoint 任务窗格 | 85 | 23 | 52286 → 18568（-64.5%） |
-      | 纯对话（none） | 67 | 19 | 42128 → 16288（-61.3%） |
+      | docx（LOWA 文字） | 146 | 35 | 85441 → 23970（-71.9%） |
+      | xlsx（LOWA 表格） | 117 | 28 | 74575 → 22236（-70.2%） |
+      | pptx（LOWA 演示） | 112 | 28 | 71435 → 21439（-70.0%） |
+      | Word 任务窗格 | 110 | 28 | 67379 → 21484（-68.1%） |
+      | Excel 任务窗格 | 98 | 26 | 62772 → 21108（-66.4%） |
+      | PowerPoint 任务窗格 | 85 | 25 | 52822 → 19965（-62.2%） |
+      | 纯对话（none） | 67 | 19 | 42664 → 16803（-60.6%） |
 
       （「全集」含 list_tools；编排器每轮另补只读的 memory_list/read/search 三个（约 1.2k 上线路字节），不在这张表里。写入的 memory_write/edit/delete（约 1.7k）自 dev-board#1073 起不再每轮兜底：只在 skill 收窄时补（`AgentOrchestrator.MEMORY_TOOLS` 的原始语义——skill 白名单不许藏掉记忆能力）、或本轮已下发过时照补（只增不减），平时归 memory 类目，由关键词「记住/记忆/偏好/记下/忘掉/remember/memory」、skill、`list_tools`、XML 点名四条路放回；回放 `cases-tool-disclosure.json` 的三条 `disclosure-memory-*` 守着。）
       - **展开只在下一轮生效**，这是它与「一轮内工具集不变」相容的全部理由：展开记在
@@ -470,10 +489,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
         `list_tools()` 一定列得出来，新增工具不改策略类也在目录里）；`list_tools` 自己恒在核心集；
         **skill 已经裁过就不再裁**（判据在编排器：`skillRouter.visibleTools` 返回的集合比候选集小即视为已裁）。
       - **核心集按「通用段 + 各宿主段」写成一份扁平清单**（dev-board#1064 第二步 + 审计 T-18）。
-        通用段 19 个（list_tools / use_skill / todo_write / ask_user / dispatch_subtask / doc_list_project_files /
+        通用段清单 21 个（含仅 Office 可见的 ref_list / ref_read；其余宿主仍是 19 个）：list_tools / use_skill / todo_write / ask_user / dispatch_subtask / doc_list_project_files /
         search_project_files / search_project_content / extract_file_text / write_docx / create_folder /
         move_files_batch / move_to_trash / query_memory / save_memory / law_search / get_law_article /
-        search_web / browse_url）；docx 段 15 个（doc_open_file / doc_get_document_text / doc_find_text /
+        search_web / browse_url；docx 段 15 个（doc_open_file / doc_get_document_text / doc_find_text /
         doc_get_cursor_context / doc_get_clauses / doc_audit_structure / doc_find_replace / doc_replace_at_anchor /
         doc_insert_at_cursor / doc_start_stream / doc_insert_table / doc_apply_standard_format / doc_add_comment /
         doc_undo / doc_restore_checkpoint）；xlsx 段 5（sheet_create_file / get_overview / read_range /

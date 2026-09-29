@@ -18,7 +18,7 @@
 
 ### 常用工具
 - **看**：`doc_get_document_text(startParagraph, maxParagraphs)` 分段读全文；`doc_get_clauses()` 条款结构；`doc_audit_structure()` 审查前的机械核对；`doc_get_cursor_context()` 用户选中的文字与光标周围；`doc_list_project_files()` 项目文件权威清单（所有 fileId 从这里拿）；`doc_open_file(fileId)` 打开别的文档；`search_project_content(query)` 在全部项目文件的正文里找，只在改动可能牵涉其他文档时用。
-- **找**：`doc_find_text(keyword, matchCase)` 返回每个匹配的 anchorId、matchIndex（序号，从 1 开始）、前后文与所在段落。anchorId 是跟着编辑移动的书签，这份文档打开期间一直有效；切换或重新打开文档后失效，要重新查找。段落号从 0 开始。
+- **找**：`doc_find_text(keyword, matchCase)` 返回每个匹配的 anchorId、matchIndex（序号，从 1 开始）、前后文与所在段落。anchorId 是通常随编辑移动的临时书签，并非用一次就失效；切换/重开文档或清理锚点后失效（按引文建证据链接也会清理），失效时重新查找。段落号从 0 开始。
 - **改**（全部带修订）：`doc_replace_at_anchor(anchorId, newText)` 改一处，newText 传空字符串即删除；`doc_find_replace(findText, replaceText, replaceAll)` 全局替换（确认无歧义才 replaceAll=true）；`doc_insert_at_cursor(text, anchorId?, position?)` 在光标处或某句之前/之后插入；`doc_insert_table(rowsJson, headerRow)` 整表一次插入；`doc_apply_standard_format()` 整篇律所标准格式；`doc_undo(steps)` 撤销，`doc_restore_checkpoint()` 回到本轮开始前（最后手段）。
 - **格式**（类目 format）：字符与段落格式先选中再排；`doc_set_numbering(preset, level)` 设置或清除自动编号（preset=none 同时清除编号和项目符号）；`doc_get_formatting()` 读回核验——去掉列表后确认 paragraph.isNumbered=false，未读回不得宣称完成。
 

@@ -53,6 +53,21 @@ class SystemPromptToolVisibilityContractTest {
     private static final Path PROMPTS_DIR =
             Path.of("src/main/resources/prompts");
 
+    @Test
+    @DisplayName("压掉 Active Document 目录后，Word 专属功能仍在中英片段可发现")
+    void wordFragmentRetainsSpecializedEditingEntrypoints() throws IOException {
+        for (String suffix : List.of(".md", ".en.md")) {
+            String text = Files.readString(PROMPTS_DIR.resolve("tools-office-word" + suffix));
+            for (String name : List.of("office_insert_break", "office_set_hyperlink", "office_edit_header_footer",
+                    "office_insert_footnote", "office_insert_endnote", "office_insert_image",
+                    "office_manage_content_control", "office_set_document_properties")) {
+                assertTrue(text.contains("`" + name + "`"), name + " 从 " + suffix + " 的工具指路中丢失");
+            }
+            assertTrue(text.contains("2MB"));
+            assertTrue(text.contains(suffix.equals(".md") ? "仅首节" : "first section only"));
+        }
+    }
+
     /** 反引号里的标识符：`tool_name` 或 `tool_name(args)`。 */
     private static final Pattern BACKTICKED = Pattern.compile(
             "`([a-z][a-z0-9_]*)\\s*\\(|`([a-z][a-z0-9_]*)`");

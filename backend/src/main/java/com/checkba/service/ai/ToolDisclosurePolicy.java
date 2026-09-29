@@ -106,7 +106,7 @@ public class ToolDisclosurePolicy {
      * {@code ToolDisclosurePolicyTest.corePerSessionIsSmallAndComplete} 打印并钉住。
      */
     static final Set<String> CORE = Set.of(
-            // ==================== 通用段：任何会话都要有（19 个）====================
+            // ==================== 通用段：任何会话都要有（21 个）====================
             // —— 目录入口与编排：少了 list_tools 整套机制就没有入口；ask_user 是「拿不准先问」
             //    的唯一入口（dev-board#868），藏进目录里等于让模型先查目录才能想起来问；
             //    use_skill 是模型自己切到专门流程的入口（dev-board#1065），与 list_tools 的 skill 目录配套 ——
@@ -118,6 +118,8 @@ public class ToolDisclosurePolicy {
             // read_document 已只登记不下发（T-05），入口统一是 extract_file_text。
             "doc_list_project_files", "search_project_files", "search_project_content", "extract_file_text",
             "write_docx", "create_folder", "move_files_batch", "move_to_trash",
+            // 跨文件硬规则要求先列后读；reference 没有关键词预放回，不能再让模型先查目录。
+            "ref_list", "ref_read",
 
             // —— 记忆：检索与保存各一个（memory_list/read/search 由编排器每轮另补；write/edit/delete 走 memory 类目，skill 收窄时由编排器兜底，dev-board#1073）——
             "query_memory", "save_memory",

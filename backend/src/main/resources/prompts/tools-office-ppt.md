@@ -18,7 +18,7 @@
 - 形状：`office_ppt_add_text_box` 插文本框、`office_ppt_add_shape` 插形状、`office_ppt_delete_shape` 删形状（先用 `office_ppt_get_slide_details` 确认索引）。
 - 表格：`office_ppt_add_table` 插入、`office_ppt_table_read` 读单元格、`office_ppt_table_set_cell` 写单元格。
 - 超链接：`office_ppt_set_hyperlink`。
-- 彼此不依赖结果的调用要放在同一轮批量发出，一轮一个地挤牙膏会白白烧掉步数预算（单轮约 30 步）。
+- 彼此不依赖结果的调用要放在同一轮批量发出，一轮一个地挤牙膏会白白烧掉执行时间。
 
 ### 能力边界要如实说
 只能改文本、形状与版式；**页面里的图片内容无法编辑**，如实告知用户，不要绕路假装做到了。

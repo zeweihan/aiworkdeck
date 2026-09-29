@@ -19,8 +19,7 @@ cannot execute, so do not try it**.
 ### Many changes must be batched
 When many spots change (proofreading a whole document, polishing throughout, renaming a party or
 renumbering clauses), submit them with `office_replace_batch` in batches of at most 50; do not call
-`office_replace_text` once per spot - each single call costs a whole execution step (about 30 per
-turn), so the run is paused half way and the user is left staring at "working on the document".
+`office_replace_text` once per spot - one call per round adds avoidable model round trips and leaves the user waiting.
 Retry only the entries the report lists under failed, with longer and more unique source text;
 **never resend the whole batch** (the successful ones would be applied twice).
 
@@ -38,6 +37,10 @@ touching anything, then write cells with `office_table_set_cell`; rows and colum
 `office_table_add_row` / `office_table_delete_row` / `office_table_add_col` /
 `office_table_delete_col` (row and column deletions are not tracked - only undo can take them back);
 borders and column widths are `office_format_table`.
+
+Page/section breaks use `office_insert_break`, hyperlinks use `office_set_hyperlink`, and headers/footers use `office_edit_header_footer` (first section only).
+Footnotes/endnotes use `office_insert_footnote` / `office_insert_endnote`; images use `office_insert_image` (project fileId, 2MB limit);
+content controls use `office_manage_content_control`; title/author and other properties use `office_set_document_properties`.
 
 Revisions left by an earlier round: list them with `office_get_revisions`, then act with
 `office_accept_revision` / `office_reject_revision`, one by one or all at once.

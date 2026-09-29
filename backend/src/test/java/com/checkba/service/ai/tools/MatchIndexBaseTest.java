@@ -165,6 +165,21 @@ class MatchIndexBaseTest {
         assertTrue(en.contains("matchIndex (1-based"), "tools-lowa.en.md doc_find_text row lacks the 1-based matchIndex note");
     }
 
+    @Test
+    @DisplayName("锚点不是一次性句柄，也不能承诺打开期间永远有效：中英提示与工具描述都给出清理后重找")
+    void anchorGuidancePreservesReuseAndInvalidation() throws Exception {
+        String description = toolDescription("doc_find_text");
+        String zh = readResource("prompts/tools-lowa.md");
+        for (String text : java.util.List.of(description, zh)) {
+            assertTrue(text.contains("并非用一次就失效"));
+            assertTrue(text.contains("清理锚点") && text.contains("失效时重新查找"));
+            assertTrue(!text.contains("一直有效"));
+        }
+        String en = readResource("prompts/tools-lowa.en.md");
+        assertTrue(en.contains("not a single-use handle"));
+        assertTrue(en.contains("clearing anchors invalidates") && en.contains("Search again if it is invalid"));
+    }
+
     private static String readResource(String path) throws Exception {
         try (InputStream in = MatchIndexBaseTest.class.getClassLoader().getResourceAsStream(path)) {
             assertNotNull(in, "classpath 上找不到 " + path);

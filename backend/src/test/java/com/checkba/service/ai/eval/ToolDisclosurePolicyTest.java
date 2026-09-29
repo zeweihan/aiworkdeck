@@ -133,6 +133,21 @@ class ToolDisclosurePolicyTest {
         }
     }
 
+    @Test
+    @DisplayName("跨文件硬规则的先列后读在各 Office 宿主首轮可达（dev-board#1073）")
+    void officeReferenceReadJourneyNeedsNoDiscoveryRound() {
+        RecordingToolRegistry registry = registry();
+        for (String host : List.of("word", "excel", "powerpoint")) {
+            String conv = "reference-" + host;
+            registry.capabilities().record(conv, "office", host);
+            Set<String> offered = names(POLICY.narrow(registry.getAllSpecifications(conv, null), Set.of()));
+            assertTrue(offered.containsAll(List.of("ref_list", "ref_read")), host + ": " + offered);
+            // 读能力常驻不应顺带放开跨文件写入；编辑与打开仍按需发现。
+            assertFalse(offered.contains("ref_edit"));
+            assertFalse(offered.contains("ref_open"));
+        }
+    }
+
     /**
      * 核心集逐会话的实数（dev-board#1064 第二步）。打印出来，是为了让「核心集到底多大」在每次改动后
      * 都看得见；断言只卡两条：每一类会话都够小（否则收窄没意义），每一类会话都有自己那一份「读 + 找 + 写」

@@ -475,7 +475,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 查找和替换 ====================
 
     @ToolMeta(displayName = "查找定位", category = "document")
-    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始）、anchorId（跟着编辑移动的书签：这份文档打开期间一直有效，中途的编辑不会让它失效；切换或重新打开文档后失效，要重新查找）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始）、anchorId（通常随编辑移动的临时书签，并非用一次就失效；切换/重开文档或清理锚点后失效（按引文建证据链接也会清理），失效时重新查找）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(

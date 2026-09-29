@@ -23,6 +23,10 @@
 增删行列用 `office_table_add_row` / `office_table_delete_row` / `office_table_add_col` / `office_table_delete_col`
 （删行删列不进修订、只能靠撤销），表格边框与列宽用 `office_format_table`。
 
+分页/分节符用 `office_insert_break`，超链接用 `office_set_hyperlink`，页眉页脚用 `office_edit_header_footer`（仅首节）；
+脚注/尾注用 `office_insert_footnote` / `office_insert_endnote`，图片用 `office_insert_image`（项目 fileId，上限 2MB），
+内容控件用 `office_manage_content_control`，标题/作者等属性用 `office_set_document_properties`。
+
 前一轮留下的修订用 `office_get_revisions` 先看列表，再用 `office_accept_revision` / `office_reject_revision` 逐条或全部处理。
 
 ### 解释类文字用批注，不进正文

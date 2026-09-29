@@ -832,14 +832,12 @@ public class ContextAssemblerService {
                             systemText.append("排版、表格、批注、修订处理等工具见上文「文档工具」。\n\n");
                         }
                     }
-                    // 多处修改必须成批提交（dev-board#419）。这条不是效率偏好，是**能不能跑完**的问题：
-                    // 逐处 office_replace_text 每处占一整个执行步（AgentOrchestrator.MAX_LOOP_DEPTH=30），
-                    // 整篇校对一份合同几十上百处，走逐处路径结构上跑不完，只会一路「正在操作文档」
-                    // 到撞上步数上限暂停——2026-09-03 用户真机实况正是如此。挂在末位（约束放前面会被弱模型无视）。
+                    // 多处修改必须成批提交（dev-board#419）。旧 30 步上限已移除，但逐项往返仍会拖长任务；
+                    // 批量与过卷判据留在末位（约束放前面会被弱模型无视）。
                     if (clientCapabilityService.officeHostOf(conversationId) == ClientCapabilityService.OfficeHost.WORD) {
                         systemText.append("**要改很多处时（整篇校对错别字与病句、整篇润色、批量替换称谓/条款编号等），");
                         systemText.append("必须用 office_replace_batch 一次提交一批（每批最多 50 处），不要逐处调用 office_replace_text。** ");
-                        systemText.append("逐处调用每处要占一整个执行步（单轮上限 30 步），改到一半就会被迫暂停，用户会一直等在「正在操作文档」上。");
+                        systemText.append("一轮只改一处会增加模型往返，让用户长时间等在「正在操作文档」上。");
                         systemText.append("正确做法：先通读内联正文把要改的地方一次性列全，再分批调用 office_replace_batch；");
                         systemText.append("每批返回的 failed 里若有条目，只针对那几条换更长、更唯一的原文重试，");
                         systemText.append("**绝不要整批重发**——已成功的那些会被改第二遍。\n\n");
@@ -1027,9 +1025,7 @@ public class ContextAssemblerService {
         timings.mark("memory");
 
         // 整理/归类多份文件必须成批提交（dev-board#466）。与 #419 的 office_replace_batch 同一道题：
-        // 文件树的变更原语全是单项的，而步数预算按 LLM 轮数计（AgentOrchestrator.MAX_LOOP_DEPTH=30），
-        // 弱模型一轮只发一个调用时，「14 份文件归进 8 个文件夹」干到一半就撞上限暂停
-        // ——2026-09-05 用户真机实况正是如此。挂在稳定段末位（约束放前面会被弱模型无视，见 PR#209）。
+        // 旧 30 步上限已移除，批量仍能减少逐项模型往返。挂在稳定段末位（见 PR#209）。
         //
         // 只对有项目文件树可整理的会话说：Office/WPS 任务窗格会话的编辑范围就是打开的那一份文档
         // （见上面 :471 那段硬边界），而且 Word 面的 #419/#422 末位块靠「排在最后」生效，
@@ -1039,8 +1035,8 @@ public class ContextAssemblerService {
                 systemText.append("**When organising, archiving or re-filing SEVERAL project files, you MUST submit them in one ");
                 systemText.append("`move_files_batch` call (up to 50 entries per batch); do NOT call ");
                 systemText.append("`move_project_file` / `create_folder` once per file.** ");
-                systemText.append("Every single-item call costs a whole execution step (about 30 steps per turn), so a dozen files ");
-                systemText.append("run out of budget half way and the task is paused with the tidy-up unfinished. ");
+                systemText.append("One item per round adds avoidable model round trips, leaving the user waiting ");
+                systemText.append("with the tidy-up unfinished. ");
                 systemText.append("Missing destination folders are created automatically, so you do not need `create_folder` first. ");
                 systemText.append("Retry only the entries the report lists under FAILED - never resend the whole batch. ");
                 systemText.append("A single file goes through `move_files_batch` too (one entry). ");
@@ -1051,7 +1047,7 @@ public class ContextAssemblerService {
             } else {
                 systemText.append("**整理文件夹、归档、把多份文件按类别归类时，必须用 `move_files_batch` 一次提交一批");
                 systemText.append("（每批最多 50 条），不要逐个调用 `move_project_file` / `create_folder`。** ");
-                systemText.append("逐个调用每个都要占一整个执行步（单轮上限 30 步），十几份文件整理到一半就会被迫暂停，");
+                systemText.append("逐个调用会增加模型往返，避免让用户长时间等在中途，");
                 systemText.append("用户看到的是「文件整理了一半停住了」。");
                 systemText.append("缺失的目标文件夹会自动补建，不需要先调 `create_folder`。");
                 systemText.append("返回值里 FAILED 段列出的条目单独重试，**绝不要整批重发**——已成功的会被搬第二遍。");
