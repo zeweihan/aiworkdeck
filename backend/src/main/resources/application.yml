@@ -513,11 +513,15 @@ ai:
     # list_tools 目录，模型按需展开（展开只在下一轮生效）。核心集与类目表在
     # ToolDisclosurePolicy，逐条判据写在那里的 javadoc 里。
     #
-    # 默认关闭，理由写在那个类的 javadoc 末段：这套机制改的是模型行为，而回放评测用的是
-    # 脚本模型——脚本模型永远按剧本调对工具，证明不了真实模型找不找得到 list_tools。
-    # 要翻开它，先拿真实模型的对照数据（同一批任务的完成率 / 轮数 / promptTokens）。
+    # 默认打开（2026-09-29，dev-board#1064 第二步）。09-22 那次「3 次 1 次不收尾」查实是无头后端
+    # 没有编辑器、doc_get_document_text 等满 122 秒桥超时的假象（关掉披露照样复现）；09-29 隔离后端的
+    # 真实模型矩阵（DeepSeek V4 Flash / Kimi K3 × 三类任务 × 10 次）完成率全过，数据在 ai-chat.md。
+    # 能放心打开靠四条放回路径：起跑时按用户输入关键词 / 生效 skill 预先放回类目、模型调
+    # list_tools(category|query|names)、模型经 XML 兜底点名调了没下发的工具（下一轮同类回来）。
+    # 代价：关键词没猜中时多一轮 list_tools，且那一轮之后提示缓存失效一次。
+    # 关掉：环境变量 AI_TOOLS_PROGRESSIVE_DISCLOSURE=false（回到下发全集，类目裁剪仍按下面那个开关）。
     progressive-disclosure:
-      enabled: ${AI_TOOLS_PROGRESSIVE_DISCLOSURE:false}
+      enabled: ${AI_TOOLS_PROGRESSIVE_DISCLOSURE:true}
     # 活跃文档类目裁剪（dev-board#1064）：开着一份文档时，与改文档 / 就文档答疑无关的整类工具
     # （pdf / litigation / slides(pptx_*) / enterprise-data / plugin / meeting / python）默认不下发，
     # 一份 docx 会话每轮省下三四成工具规格。隐藏表与关键词表在 ToolDisclosurePolicy。

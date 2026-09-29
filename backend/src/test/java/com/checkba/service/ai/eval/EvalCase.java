@@ -53,14 +53,15 @@ public class EvalCase {
     /** 可选：Office 会话的宿主（word / excel / powerpoint），仅 clientCapability=office 时有意义，缺省 word */
     public String officeHost;
     /**
-     * 可选：本用例强制打开工具渐进披露（dev-board#810）。
+     * 可选：本用例的工具渐进披露模式（dev-board#810；#1064 第二步起生产默认开）。
      *
-     * <p>缺省 false = 与生产默认一致（开关关着），存量 64 条用例一条都不受影响。
-     * 写成用例字段而不是只靠 {@code -Dai.tools.progressive-disclosure.enabled=true}，
-     * 是为了让「查目录 → 下一轮工具回来」这条链<b>进默认的 mvn test</b>：
-     * 只能靠命令行开关跑的验证，等于没有护栏。
+     * <p>缺省 null = 跟生产默认走（开），可被 {@code -Dai.tools.progressive-disclosure.enabled=false}
+     * 整套关掉重跑。<b>显式写了就钉死本用例的模式</b>，两个全局 -D 都不再影响它：
+     * 写 true 的是「查目录 → 下一轮工具回来」这条链的护栏（进默认的 mvn test，不靠命令行开关）；
+     * 写 false 的是断言「某一层能力闸下全集长什么样」的用例——那种断言与披露无关，
+     * 在核心集模式下跑只是噪音红，用例的 title 里写明了为什么钉死。
      */
-    public boolean progressiveDisclosure;
+    public Boolean progressiveDisclosure;
     /**
      * 可选：活跃文档类目裁剪（dev-board#1064）。缺省 null = 跟生产默认走（开），
      * 可被 {@code -Dai.tools.doc-session-category-trim.enabled=false} 整套关掉重跑。

@@ -104,12 +104,112 @@ class ToolDisclosurePolicyTest {
                 "「通读当前文档并改两处措辞」这条链断了：" + docx);
         assertTrue(docx.containsAll(List.of("doc_audit_structure", "doc_get_clauses", "doc_add_comment")),
                 "「审查合同并留批注」这条链断了：" + docx);
-        assertTrue(docx.containsAll(List.of("law_search", "law_search_keyword", "get_law_article", "search_web")),
+        assertTrue(docx.containsAll(List.of("law_search", "get_law_article", "search_web", "browse_url")),
                 "「查法条 / 查公网」这条链断了：" + docx);
+        assertTrue(docx.containsAll(List.of("doc_insert_table", "doc_get_cursor_context", "doc_restore_checkpoint")),
+                "末位提醒点名的整表插入、看光标处、检查点后悔药必须不用查目录：" + docx);
         assertTrue(docx.containsAll(List.of("doc_start_stream", "write_docx", "doc_apply_standard_format")),
                 "「起草一份新文书并排版」这条链断了：" + docx);
-        assertTrue(docx.containsAll(List.of("query_memory", "todo_write", "dispatch_subtask")),
+        assertTrue(docx.containsAll(List.of("query_memory", "todo_write", "dispatch_subtask", "ask_user", "use_skill")),
                 "记忆检索与编排工具必须在核心集：" + docx);
+        assertTrue(docx.containsAll(List.of("create_folder", "move_files_batch", "move_to_trash")),
+                "「整理项目文件」这条链断了：" + docx);
+    }
+
+    @Test
+    @DisplayName("纯对话与 Office 任务窗格会话：「列出项目文件并读全文」同样不必查目录（dev-board#1064）")
+    void findAndReadIsCompleteOutsideTheDesktopEditorToo() {
+        // 09-29 真实模型实测的病灶：那两档会话里核心集没有任何「看看项目里有什么」的工具，
+        // 「这是什么文件？」每问一次都要先多花一轮 list_tools（DeepSeek 10 次里 5 次）。
+        // dev-board#1065 T-01 让 doc_list_project_files 三档都可见之后，它就是那一环，不再另加 list_files。
+        RecordingToolRegistry registry = registry();
+        registry.capabilities().record("conv-none", "none", null);
+        registry.capabilities().record("conv-office", "office", "word");
+        for (String conv : List.of("conv-none", "conv-office")) {
+            Set<String> offered = names(POLICY.narrow(registry.getAllSpecifications(conv, null), Set.of()));
+            assertTrue(offered.containsAll(List.of("doc_list_project_files", "extract_file_text",
+                            "search_project_files", "search_project_content")),
+                    conv + " 的核心集里「列出项目文件并读全文」这条链断了：" + offered);
+        }
+    }
+
+    /**
+     * 核心集逐会话的实数（dev-board#1064 第二步）。打印出来，是为了让「核心集到底多大」在每次改动后
+     * 都看得见；断言只卡两条：每一类会话都够小（否则收窄没意义），每一类会话都有自己那一份「读 + 找 + 写」
+     * （T-18：三类 Office 宿主的执行器互不相通，Word 面的 office_* 在 Excel 窗格里一个都不可见）。
+     */
+    @Test
+    @DisplayName("核心集逐会话：docx / xlsx / pptx / 三个任务窗格 / 纯对话各自够小，且各有读 + 找 + 写（T-18）")
+    void corePerSessionIsSmallAndComplete() {
+        RecordingToolRegistry registry = registry();
+        registry.capabilities().record("conv-word", "office", "word");
+        registry.capabilities().record("conv-excel", "office", "excel");
+        registry.capabilities().record("conv-ppt", "office", "powerpoint");
+        registry.capabilities().record("conv-none", "none", null);
+        java.util.Map<String, List<ToolSpecification>> sessions = new java.util.LinkedHashMap<>();
+        sessions.put("docx", registry.getAllSpecifications("conv", ClientCapabilityService.DOC_KIND_WRITER));
+        sessions.put("xlsx", registry.getAllSpecifications("conv", ClientCapabilityService.DOC_KIND_SHEET));
+        sessions.put("pptx", registry.getAllSpecifications("conv", ClientCapabilityService.DOC_KIND_SLIDE));
+        sessions.put("Word 窗格", registry.getAllSpecifications("conv-word", null));
+        sessions.put("Excel 窗格", registry.getAllSpecifications("conv-excel", null));
+        sessions.put("PPT 窗格", registry.getAllSpecifications("conv-ppt", null));
+        sessions.put("纯对话", registry.getAllSpecifications("conv-none", null));
+
+        java.util.Map<String, Set<String>> core = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, List<ToolSpecification>> e : sessions.entrySet()) {
+            List<ToolSpecification> narrowed = POLICY.narrow(e.getValue(), Set.of());
+            core.put(e.getKey(), names(narrowed));
+            System.out.printf("[dev-board#1064] %s：全集 %d 个 / %d 上线路字节；核心集 %d 个 / %d 上线路字节（省 %.1f%%）%s%n",
+                    e.getKey(), e.getValue().size(), ToolSchemaBudgetTest.wireBytes(e.getValue()),
+                    narrowed.size(), ToolSchemaBudgetTest.wireBytes(narrowed),
+                    (1 - (double) ToolSchemaBudgetTest.wireBytes(narrowed)
+                            / ToolSchemaBudgetTest.wireBytes(e.getValue())) * 100,
+                    core.get(e.getKey()));
+            assertTrue(narrowed.size() <= 40, e.getKey() + " 的核心集有 " + narrowed.size() + " 个，收窄失去意义："
+                    + core.get(e.getKey()));
+            assertTrue(core.get(e.getKey()).containsAll(List.of(ToolDisclosurePolicy.CATALOG_TOOL,
+                            "doc_list_project_files", "extract_file_text", "ask_user", "todo_write")),
+                    e.getKey() + " 的通用段不齐：" + core.get(e.getKey()));
+        }
+        // 每一类会话的「读 + 找 + 写」
+        assertTrue(core.get("xlsx").containsAll(List.of("sheet_get_overview", "sheet_read_range",
+                "sheet_find_replace", "sheet_write_cells", "doc_undo", "doc_restore_checkpoint")), "xlsx：" + core.get("xlsx"));
+        assertTrue(core.get("pptx").containsAll(List.of("slide_get_overview", "slide_get_page",
+                "slide_replace_text", "slide_set_shape_text", "slide_add_page", "doc_restore_checkpoint")),
+                "pptx（Impress 上 doc_undo 是空操作，检查点是唯一的后悔药）：" + core.get("pptx"));
+        assertTrue(core.get("Word 窗格").containsAll(List.of("office_get_text", "office_search",
+                "office_replace_text", "office_replace_batch", "office_insert_text", "office_add_comment",
+                "office_pass_step")), "Word 窗格：" + core.get("Word 窗格"));
+        assertTrue(core.get("Excel 窗格").containsAll(List.of("office_excel_get_overview", "office_excel_get_range",
+                "office_excel_search", "office_excel_replace", "office_excel_set_values")), "Excel 窗格：" + core.get("Excel 窗格"));
+        assertTrue(core.get("PPT 窗格").containsAll(List.of("office_ppt_get_slides", "office_ppt_replace_text",
+                "office_ppt_format_text", "office_ppt_add_slide")), "PPT 窗格：" + core.get("PPT 窗格"));
+        // 反向：别家宿主的段不会漏进来（能力闸在上游裁，核心集是扁平的）
+        assertFalse(core.get("Excel 窗格").contains("office_replace_text"), "Word 面工具漏进了 Excel 窗格");
+        assertFalse(core.get("docx").stream().anyMatch(n -> n.startsWith("office_") || n.startsWith("slide_")),
+                "docx 会话里不该有 office_* / slide_*：" + core.get("docx"));
+    }
+
+    @Test
+    @DisplayName("核心集里每个名字都真的会下发：不能是 offerToModel=false 的只登记工具")
+    void everyCoreNameIsActuallyOffered() {
+        RecordingToolRegistry registry = registry();
+        registry.capabilities().record("conv-word", "office", "word");
+        registry.capabilities().record("conv-excel", "office", "excel");
+        registry.capabilities().record("conv-ppt", "office", "powerpoint");
+        Set<String> offeredSomewhere = new TreeSet<>();
+        for (String conv : List.of("conv", "conv-word", "conv-excel", "conv-ppt")) {
+            for (String kind : new String[]{null, ClientCapabilityService.DOC_KIND_WRITER,
+                    ClientCapabilityService.DOC_KIND_SHEET, ClientCapabilityService.DOC_KIND_SLIDE}) {
+                offeredSomewhere.addAll(names(registry.getAllSpecifications(conv, kind)));
+            }
+        }
+        List<String> neverOffered = POLICY.coreToolNames().stream()
+                .filter(name -> !offeredSomewhere.contains(name))
+                .sorted()
+                .toList();
+        assertEquals(List.of(), neverOffered,
+                "核心集里这些名字在任何会话里都不下发（多半是已下线的旧工具）——占着核心集的位置却什么也没给模型");
     }
 
     @Test
@@ -207,7 +307,7 @@ class ToolDisclosurePolicyTest {
                 new RecordingToolRegistry(RealToolBeans.instantiateAll(false), new PluginService());
         off.init();
         Set<String> all = names(off.getAllSpecifications("conv", null));
-        assertTrue(all.contains("move_to_trash"), "披露关着时（生产默认）模型也要看得见 move_to_trash");
+        assertTrue(all.contains("move_to_trash"), "披露关着时（AI_TOOLS_PROGRESSIVE_DISCLOSURE=false）模型也要看得见 move_to_trash");
         assertFalse(all.contains("delete_file"), "披露关着时 delete_file 同样不下发");
     }
 
@@ -222,16 +322,21 @@ class ToolDisclosurePolicyTest {
                 "doc_set_selection", "doc_get_selection", "doc_insert_under_heading")) {
             assertEquals("edit", POLICY.categoryOf(name), name);
         }
-        for (String name : List.of("doc_select_anchor", "doc_select_paragraph", "doc_get_paragraph", "doc_get_outline")) {
-            assertEquals("core", POLICY.categoryOf(name), name + " 仍在核心集");
+        // #1064 第二步退出核心集后归 edit
+        for (String name : List.of("doc_select_anchor", "doc_select_paragraph", "doc_get_paragraph", "doc_get_outline",
+                "doc_replace_selection")) {
+            assertEquals("edit", POLICY.categoryOf(name), name);
         }
+        assertEquals("revision", POLICY.categoryOf("doc_get_comments"), "看批注与回复 / 解决批注同类");
+        assertEquals("legal", POLICY.categoryOf("law_search_keyword"));
         // format 剩下的才是真·版式
         for (String name : List.of("doc_format_selection", "doc_set_paragraph_format", "doc_insert_toc",
                 "doc_set_page_setup", "doc_insert_image")) {
             assertEquals("format", POLICY.categoryOf(name), name);
         }
         assertEquals("files", POLICY.categoryOf("doc_export_pdf"), "排在 format 通配之前才不会被吃掉");
-        assertEquals("revision", POLICY.categoryOf("doc_restore_checkpoint"), "最后手段，退出核心集");
+        assertEquals("core", POLICY.categoryOf("doc_restore_checkpoint"),
+                "#1064 第二步回到核心集：Impress 上 doc_undo 是空操作，pptx 会话里它是唯一的后悔药");
         assertEquals("core", POLICY.categoryOf("doc_undo"), "常规纠错留在核心集");
         for (String name : List.of("tag_list", "tag_file", "tag_remove_from_file")) {
             assertEquals("tag", POLICY.categoryOf(name), name + " 不是事项");
@@ -244,10 +349,11 @@ class ToolDisclosurePolicyTest {
     }
 
     @Test
-    @DisplayName("核心集收窄（T-14/T-15/T-16/T-19）：不下发或有更好路径的四个工具退出核心集")
+    @DisplayName("核心集收窄（T-14/T-15/T-16/T-19 + #1064 第二步）：不下发或有更好路径的工具退出核心集")
     void retiredOrDemotedToolsLeftTheCore() {
         for (String name : List.of("doc_delete_text", "doc_get_selection", "doc_insert_under_heading",
-                "doc_restore_checkpoint")) {
+                "read_document", "law_search_keyword", "doc_get_outline", "doc_get_paragraph",
+                "doc_replace_selection", "doc_select_anchor", "doc_select_paragraph", "doc_get_comments")) {
             assertFalse(POLICY.coreToolNames().contains(name), name + " 不该再在核心集里");
         }
         // 替代路径仍在核心集：删除走锚点替换/查找替换传空串、看选区走 cursor_context、锚点插入一步完成
@@ -360,7 +466,25 @@ class ToolDisclosurePolicyTest {
         assertEquals(Set.of("meeting"), TRIM.categoriesHintedBy("把昨天的录音整理一下"));
         assertEquals(Set.of("python"), TRIM.categoriesHintedBy("用 Python 算一下违约金"));
         assertEquals(Set.of("spreadsheet"), TRIM.categoriesHintedBy("把这些数字填进 Excel"));
+        assertEquals(Set.of("spreadsheet", "table"), TRIM.categoriesHintedBy("在合同末尾加一张表格"),
+                "「表格」分不清是文档内的表还是电子表格，两类都放回");
         assertEquals(Set.of("task"), TRIM.categoriesHintedBy("帮我建个开庭日程"));
+        assertEquals(Set.of("task"), TRIM.categoriesHintedBy("帮我创建一个事项：下周三之前提交答辩状，标记为高优先级。"));
+        assertEquals(Set.of("revision"), TRIM.categoriesHintedBy("把对方的修订全部接受"));
+        assertEquals(Set.of("revision"), TRIM.categoriesHintedBy("accept all track changes"));
+        assertEquals(Set.of("template"), TRIM.categoriesHintedBy("套用律所的起诉状模板"));
+        assertEquals(Set.of("evidence"), TRIM.categoriesHintedBy("把证据清单和正文里的引用对一下"));
+        assertEquals(Set.of("format"), TRIM.categoriesHintedBy("把正文字体改成仿宋、页眉加上案号"));
+        assertEquals(Set.of("format"), TRIM.categoriesHintedBy("在第一页插入目录"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("项目目录下有什么"),
+                "单独的「目录」多半是文件夹，不许把整个 format 类目放回");
+        assertEquals(Set.of("files"), TRIM.categoriesHintedBy("把这几份文件移动到「往来函件」文件夹"));
+        assertEquals(Set.of("legal"), TRIM.categoriesHintedBy("这段话引用了哪条司法解释？"));
+        assertEquals(Set.of("legal"), TRIM.categoriesHintedBy("《劳动合同法》里经济补偿的标准在哪一条？"));
+        assertEquals(Set.of("meeting"), TRIM.categoriesHintedBy("把昨天的录音整理一下"), "「整理」不许把文件整理类放回");
+        assertEquals(Set.of("memory"), TRIM.categoriesHintedBy("记住我喜欢用仿宋"));
+        assertEquals(Set.of(), TRIM.categoriesHintedBy("把第三条里的「五日」改成「十日」"),
+                "edit 不收关键词：「改成 / 替换 / 删除」几乎每句都有，常用删改原语本来就在核心集");
         // 拉丁词两端整词（SkillRouter.containsTrigger 同一口径）：别的单词的一截不算
         assertFalse(TRIM.categoriesHintedBy("pythonic 的写法").contains("python"));
         assertFalse(TRIM.categoriesHintedBy("超过 100 pdfs").contains("pdf"));

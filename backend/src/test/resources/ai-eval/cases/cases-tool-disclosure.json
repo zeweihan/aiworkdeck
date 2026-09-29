@@ -5,7 +5,7 @@
     "category": "files",
     "protocol": "native",
     "progressiveDisclosure": true,
-    "userInput": "把这份合同里的表格套成标准格式",
+    "userInput": "把这份合同里的那张表按律所标准重排一下",
     "activeDocument": {
       "id": "1001",
       "name": "股权转让协议.docx",
@@ -131,7 +131,7 @@
     "category": "files",
     "protocol": "xml",
     "progressiveDisclosure": true,
-    "userInput": "把正文里的表格整体加一行",
+    "userInput": "在正文那张表的末尾加一行",
     "activeDocument": {
       "id": "1001",
       "name": "股权转让协议.docx",
@@ -159,6 +159,190 @@
       ],
       "offeredToolsExcludeFirstCall": [
         "doc_table_add_row"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-none-session-lists-and-reads-without-catalog-lookup",
+    "title": "渐进披露：纯对话会话里问「这是什么文件？」，核心集自带 doc_list_project_files 与 extract_file_text，不必先查目录（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "clientCapability": "none",
+    "userInput": "这是什么文件？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "extract_file_text",
+            "arguments": {
+              "fileId": "1001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>这是一份保密协议。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "1. 保密协议.docx (fileId=1001) [可编辑文档]",
+      "extract_file_text": "保密协议 甲方……乙方……"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_list_project_files"
+        },
+        {
+          "name": "extract_file_text",
+          "argsContain": {
+            "fileId": "1001"
+          }
+        }
+      ],
+      "offeredToolsInclude": [
+        "list_tools",
+        "doc_list_project_files",
+        "extract_file_text",
+        "search_project_files",
+        "search_project_content"
+      ],
+      "offeredToolsExclude": [
+        "pdf_inspect",
+        "task_create",
+        "doc_get_document_text",
+        "read_document"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-office-word-session-lists-and-reads-without-catalog-lookup",
+    "title": "渐进披露：Word 任务窗格会话里问「这是什么文件？」，核心集自带 doc_list_project_files 与 extract_file_text，不必先查目录（dev-board#1064）",
+    "category": "files",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "clientCapability": "office",
+    "officeHost": "word",
+    "userInput": "这是什么文件？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "extract_file_text",
+            "arguments": {
+              "fileId": "1001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>这是一份保密协议。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "1. 保密协议.docx (fileId=1001) [可编辑文档]",
+      "extract_file_text": "保密协议 甲方……乙方……"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "doc_list_project_files"
+        },
+        {
+          "name": "extract_file_text",
+          "argsContain": {
+            "fileId": "1001"
+          }
+        }
+      ],
+      "offeredToolsInclude": [
+        "list_tools",
+        "doc_list_project_files",
+        "extract_file_text",
+        "search_project_files",
+        "search_project_content",
+        "office_get_text",
+        "office_pass_step"
+      ],
+      "offeredToolsExclude": [
+        "pdf_inspect",
+        "task_create",
+        "doc_get_document_text",
+        "read_document"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "disclosure-keyword-puts-task-back-before-the-first-round",
+    "title": "渐进披露：「帮我创建一个事项」起跑时按关键词预放回 task 类目，第一轮就能直接调 task_create，不必先查目录（dev-board#1064）",
+    "category": "task",
+    "protocol": "native",
+    "progressiveDisclosure": true,
+    "clientCapability": "none",
+    "userInput": "帮我创建一个事项：下周三之前提交答辩状，标记为高优先级。",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "task_create",
+            "arguments": {
+              "title": "提交答辩状",
+              "dueDate": "2026-10-07",
+              "priority": "HIGH"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已创建事项「提交答辩状」，高优先级。</final>"
+      }
+    ],
+    "toolStubs": {
+      "task_create": "已创建事项 #12：提交答辩状"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "task_create"
+        }
+      ],
+      "offeredToolsInclude": [
+        "task_create",
+        "task_list",
+        "list_tools"
+      ],
+      "offeredToolsExclude": [
+        "pdf_inspect",
+        "tag_file"
       ],
       "structureContains": [
         "<final>"

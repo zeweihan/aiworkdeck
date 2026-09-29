@@ -95,8 +95,10 @@ class ToolSchemaBudgetTest {
     /**
      * 活跃文档类目裁剪（dev-board#1064）在 docx 会话里再省多少。
      *
-     * <p>「改动前」= 生产默认下改动前真正下发的那份：docx 前缀裁剪之后的全部工具，
-     * 不含 list_tools（渐进披露关着，目录工具不下发）。「改动后」= 再按类目摘掉
+     * <p>这一条只量类目裁剪这一把刀（渐进披露关着的口径，即 {@code AI_TOOLS_PROGRESSIVE_DISCLOSURE=false}）。
+     * 生产默认（两把刀都开）的数字见下一条 {@link #productionDefaultDocxShipsTheCoreSetOnly}。
+     * 「改动前」= docx 前缀裁剪之后的全部工具，不含 list_tools（两个开关都关时目录工具不下发）。
+     * 「改动后」= 再按类目摘掉
      * pdf / litigation / slides / enterprise-data / plugin / meeting / python，并多出 list_tools
      * （它是放回的入口，这一千字符是要付的）。实测数字写在 {@link #SAVED_WIRE_FLOOR} 上。
      */
@@ -127,6 +129,33 @@ class ToolSchemaBudgetTest {
         assertTrue(savedWire >= SAVED_WIRE_FLOOR,
                 "docx 会话类目裁剪省下的上线路字节不足 " + (int) (SAVED_WIRE_FLOOR * 100) + "%（实际 "
                         + String.format("%.1f%%", savedWire * 100) + "）——类目裁剪多半失效了");
+    }
+
+    /**
+     * 生产默认（dev-board#1064 第二步起渐进披露与类目裁剪都开）下，一份 docx 会话首轮到底下发多少。
+     * 「两个开关都关」是改动前的全集口径；「生产默认」= 类目裁剪之后再收窄到核心集（没有任何放回）。
+     * 数字随工具面浮动，这里只卡「生产默认比全集至少省一半上线路字节」，具体值打印出来看。
+     */
+    @Test
+    @DisplayName("生产默认：docx 会话首轮只下发核心集，上线路字节比全集省一半以上（dev-board#1064）")
+    void productionDefaultDocxShipsTheCoreSetOnly() {
+        RecordingToolRegistry registry = registry();
+        com.checkba.service.ai.ToolDisclosurePolicy production =
+                new com.checkba.service.ai.ToolDisclosurePolicy(true, true);
+        List<ToolSpecification> docx =
+                registry.getAllSpecifications("conv", ClientCapabilityService.DOC_KIND_WRITER);
+        List<ToolSpecification> full = docx.stream()
+                .filter(sp -> !com.checkba.service.ai.ToolDisclosurePolicy.CATALOG_TOOL.equals(sp.name()))
+                .toList();
+        List<ToolSpecification> shipped = production.narrow(
+                production.trimForDocKind(docx, ClientCapabilityService.DOC_KIND_WRITER, java.util.Set.of()),
+                java.util.Set.of());
+        double saved = 1.0 - (double) wireBytes(shipped) / wireBytes(full);
+        System.out.printf("[dev-board#1064] docx 首轮：两个开关都关 %d 个 / %d 上线路字节；生产默认 %d 个 / %d 上线路字节；省 %.1f%%%n",
+                full.size(), wireBytes(full), shipped.size(), wireBytes(shipped), saved * 100);
+        assertTrue(shipped.stream().anyMatch(sp -> sp.name().equals("list_tools")), "目录入口必须在");
+        assertTrue(saved >= 0.5, "生产默认下 docx 会话首轮只省了 " + String.format("%.1f%%", saved * 100)
+                + "——核心集多半被塞成了全集，或者渐进披露没生效");
     }
 
     /**

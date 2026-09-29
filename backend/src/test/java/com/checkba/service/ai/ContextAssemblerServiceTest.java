@@ -1303,6 +1303,42 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("渐进披露开着时，目录规则排在「清单里没有就执行不了」那句之后并把它改读成「目录也列不出来」（dev-board#1064）")
+    void toolCatalogRuleOverridesTheFragmentsNotInYourListSentence() {
+        // tools-none.md / tools-office-*.md 写着「清单里没有的工具就是这台客户端执行不了的，不要去试」。
+        // 披露开着时清单只是核心子集，这句话照字面读就是叫模型别去查目录——两段互相打架，
+        // 而模型会听排在后面的那一段，所以覆盖句必须排在片段之后。
+        assembler.setToolDisclosurePolicy(new ToolDisclosurePolicy(true));
+        for (String[] session : new String[][]{{"none", null}, {"office", "word"}, {"office", "excel"},
+                {"office", "powerpoint"}}) {
+            capabilityService.record("conv-1", session[0], session[1]);
+            String systemText = assembleSystemText(null);
+            int fragment = systemText.indexOf("清单里没有");
+            int override = systemText.indexOf("连 `list_tools()` 也列不出来");
+            assertTrue(fragment >= 0, session[0] + "/" + session[1] + " 会话的片段里那句话不在了，这条用例该重新审视");
+            assertTrue(override > fragment,
+                    session[0] + "/" + session[1] + " 会话里覆盖句缺失或排在片段之前：" + systemText);
+        }
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        capabilityService.record("conv-1", "none", null);
+        String english = assembleSystemText(null);
+        int fragment = english.indexOf("not in your tool list");
+        int override = english.indexOf("a tool that `list_tools()` does not show either");
+        assertTrue(fragment >= 0 && override > fragment, "英文版同一条覆盖句缺失或排在片段之前：" + english);
+    }
+
+    @Test
+    @DisplayName("ASK 模式不注入目录规则：那个模式不下发 list_tools，教它只会让模型去调一个用不了的工具")
+    void askModeNeverGetsTheCatalogRule() {
+        assembler.setToolDisclosurePolicy(new ToolDisclosurePolicy(true, true));
+        String ask = ((SystemMessage) assembler.assemble(
+                "conv-1", "run-1", "这份合同讲了什么", null, null,
+                null, null, "88", AgentMode.ASK, 1L, null).get(0)).text();
+        assertFalse(ask.contains("## 工具目录"), ask);
+        assertFalse(ask.contains("list_tools"), ask);
+    }
+
+    @Test
     @DisplayName("活跃文档类目裁剪生效的会话同样补目录规则，落在稳定段且逐轮字节不变（dev-board#1064）")
     void toolCatalogRuleAppearsForDocSessionTrimAndStaysCacheable() {
         when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
