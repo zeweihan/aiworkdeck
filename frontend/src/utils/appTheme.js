@@ -40,6 +40,27 @@ export const THEME_TOKEN_NAMES = [
   'halo-1', 'halo-2', 'halo-page', 'glass', 'glass-border', 'canvas'
 ]
 
+// 计划审阅（dev-board#1022）的四个令牌：改动行底色 / 改动行左侧标记条 / 删除段小标记文字 /
+// 批注高亮底色。只在审阅态的 CodeMirror 里用，所以不进 App.vue 的全局令牌、也不进上面那张
+// 注入插件的名单；planReviewExtensions.js 读这张表，把它们定义在编辑器根元素上
+// （浅色一套、html[data-theme='dark'] 下一套）。外壳保持浅色，深色只是跟随：
+// 琥珀与竹月青两个色相不变，底色改成低透明度叠在暖墨底上（同 warning-soft / accent-soft 的路数），
+// 标记条与删除文字提亮到在深底上读得出来。
+export const PLAN_REVIEW_TOKENS = {
+  light: {
+    '--awd-review-edited-bg': '#FFF6E5',
+    '--awd-review-edited-bar': '#E0A526',
+    '--awd-review-deleted-fg': '#8A8F98',
+    '--awd-review-comment-bg': '#E8F3ED'
+  },
+  dark: {
+    '--awd-review-edited-bg': 'rgba(224, 165, 38, 0.13)',
+    '--awd-review-edited-bar': '#D19C3D',
+    '--awd-review-deleted-fg': '#A09A8C',
+    '--awd-review-comment-bg': 'rgba(137, 168, 160, 0.18)'
+  }
+}
+
 /** 当前生效主题的令牌表：{ '--awd-*': '值' }。非浏览器环境返回空表。 */
 export function collectThemeTokens() {
   const out = {}
