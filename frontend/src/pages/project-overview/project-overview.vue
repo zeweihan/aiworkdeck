@@ -2400,6 +2400,7 @@ import { matchEntityAt } from '@/utils/insightMatch.js'
 // 表格/演示/PDF 没有可通读的正文。这份清单是 fileOpenTabs.js 里 wpsFormats 的 Writer 子集。
 const INSIGHT_DOC_TYPES = ['doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt', 'wps', 'wpt']
 import {
+  LEFT_SIDEBAR_PLUGINS,
   VERSION_PLUGIN,
   filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
