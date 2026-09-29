@@ -831,7 +831,8 @@ public class ProjectFileService {
 
         // 根级文件缓存区：回收站里的旧缓存区与活着的缓存区同名同位置，物理目录是同一个——
         // 按目录删会把活着的缓存区里的文件字节一起删掉。子文件上面已按各自 filePath 删过了。
-        if (deletePhysical && StringUtils.hasText(filePath) && !isRootStagingFolder(file)) {
+        if (deletePhysical && StringUtils.hasText(filePath) && !isRootStagingFolder(file)
+                && !physicalPathInUseByLiveRow(file, filePath)) {
             try {
                 storageServiceFactory.getStorageService().delete(filePath);
                 log.info("物理文件/文件夹彻底删除成功: fileId={}, path={}", fileId, filePath);
@@ -853,6 +854,32 @@ public class ProjectFileService {
         }
     }
     
+    /**
+     * 这个物理路径是否还被另一条活着的行占着（dev-board#1020）。软删除不动磁盘，而
+     * {@code createFolder} / {@code createFile(FAIL)} 的同名查重只看活着的行，所以「删 A → 再建 A」
+     * 之后，回收站里的旧 A 与新 A 是同一个目录，两边同名的子文件 filePath 也逐字相同。
+     * 这时按路径删，删掉的是活着那一份的字节（行还在，点开即「文件不存在」）；空的新 A 的目录
+     * 被删掉，本地文件夹项目的对账还会把它判成「Finder 里删了」。所以被占着就只删行、不碰磁盘。
+     */
+    private boolean physicalPathInUseByLiveRow(ProjectFile file, String filePath) {
+        Long projectId = file.getProjectId();
+        if (projectId == null) return false;
+        boolean inUse;
+        if (Boolean.TRUE.equals(file.getIsFolder())) {
+            inUse = projectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId).stream()
+                    .filter(r -> Boolean.TRUE.equals(r.getIsFolder()) && !r.getId().equals(file.getId())
+                            && file.getName() != null && file.getName().equals(r.getName()))
+                    .anyMatch(r -> filePath.equals(buildPhysicalPath(projectId, r.getParentId(), r.getName())));
+        } else {
+            inUse = projectFileRepository.findByProjectIdAndFilePathAndIsDeletedFalse(projectId, filePath).stream()
+                    .anyMatch(r -> !r.getId().equals(file.getId()));
+        }
+        if (inUse) {
+            log.info("彻底删除：物理路径仍被活着的同名行占用，只删记录不删磁盘 fileId={}, path={}", file.getId(), filePath);
+        }
+        return inUse;
+    }
+
     private List<ProjectFile> getAllChildrenIncludingDeleted(Long projectId, Long parentId) {
         return projectFileRepository.findByProjectIdAndParentId(projectId, parentId);
     }
