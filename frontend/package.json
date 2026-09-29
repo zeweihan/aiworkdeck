@@ -25,6 +25,7 @@
     "dev:quickapp-webview-union": "uni -p quickapp-webview-union",
     "build:custom": "uni build -p",
     "build:h5": "uni build",
+    "build:client-portal": "VITE_CLIENT_PORTAL=1 uni build -p client-portal --base /client/ --outDir dist/build/client-portal",
     "prebuild:zetaoffice": "node scripts/sync-house-profile.mjs",
     "build:zetaoffice": "vite build --config vite.zetaoffice.config.js",
     "build:h5:ssr": "uni build --ssr",
@@ -149,6 +150,19 @@
     "uc.micro": "^2.1.0",
     "vue": "^3.4.21",
     "vue-i18n": "^9.1.9"
+  },
+  "uni-app": {
+    "scripts": {
+      "client-portal": {
+        "title": "客户门户（案件库托管于 /client/，dev-board#1050）",
+        "env": {
+          "UNI_PLATFORM": "h5"
+        },
+        "define": {
+          "CLIENT_PORTAL": true
+        }
+      }
+    }
   },
   "devDependencies": {
     "@dcloudio/types": "^3.4.8",

@@ -52,7 +52,7 @@ class ProjectFileControllerPermDeleteTest {
                     .thenThrow(new IllegalArgumentException("文件不存在: 42"));
             when(projectFileService.findFile(42L)).thenReturn(Optional.empty());
 
-            Map<String, Object> r = controller.permDelete(1L, 42L, "sess");
+            Map<String, Object> r = controller.permDelete(1L, 42L, false, "sess");
             assertEquals(0, r.get("code"), "记录已经不在 = 彻底删除已达成，不能回失败: " + r);
         }
     }
@@ -67,8 +67,8 @@ class ProjectFileControllerPermDeleteTest {
             lenient().when(projectFileService.getFile(50L)).thenReturn(foreign);
             lenient().when(projectFileService.findFile(50L)).thenReturn(Optional.of(foreign));
 
-            assertThrows(IllegalArgumentException.class, () -> controller.permDelete(1L, 50L, "sess"));
-            verify(projectFileService, never()).permDelete(anyLong(), anyLong());
+            assertThrows(IllegalArgumentException.class, () -> controller.permDelete(1L, 50L, false, "sess"));
+            verify(projectFileService, never()).permDelete(anyLong(), anyLong(), anyBoolean());
         }
     }
 }

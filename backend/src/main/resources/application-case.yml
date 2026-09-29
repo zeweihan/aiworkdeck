@@ -63,15 +63,16 @@ security:
   # 桥接签发的是 awdt_ 设备令牌，与 /api/auth/device-token 出的是同一种凭据，
   # git Basic 的 password 位吃的也是它（GitAccessService.resolveUser）。
   awdk-login-enabled: true
-  # 浏览器会话滑动过期。案件库没有浏览器客户端，这项几乎用不到，
-  # 但与 cloud 保持同一姿态：公网实例不用桌面的 365 天"常驻"语义。
+  # 浏览器会话滑动过期。案件库唯一的浏览器客户端是 /client/ 客户门户（dev-board#1050，
+  # 客户凭访问码登录），公网实例不用桌面的 365 天"常驻"语义，与 cloud 同一姿态。
   session-idle-days: 7
   # conversationId 强制服务端签发（公网多租户防空会话抢占）
   conversation-issuance-required: true
   cors:
-    # 案件库不服务任何浏览器：桌面端是本机后端做服务端到服务端调用（无 Origin 头），
-    # git 客户端也不带 Origin。所以白名单留空即可（CorsConfig 仍默认放行 localhost，
-    # 那条是开发态兜底，不构成对外开放面）。allow-all 绝不能开。
+    # 桌面端是本机后端做服务端到服务端调用（无 Origin 头），git 客户端也不带 Origin；
+    # /client/ 客户门户（dev-board#1050）由同一域名的 nginx 托管，与 /api/ 同源，不走 CORS。
+    # 所以白名单留空即可（CorsConfig 仍默认放行 localhost，那条是开发态兜底，不构成
+    # 对外开放面）。allow-all 绝不能开。
     allowed-origins: ""
 
 storage:

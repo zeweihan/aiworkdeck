@@ -10,7 +10,12 @@ import { t } from '@/i18n'
  *
  * **但它不能从这个文件里删掉**：CLIENT（客户访问码进来的那一档）只看得见尽调文件，
  * getPluginsForUser('CLIENT') 必须仍然拿得到这一项。所以定义留在这里、只是不进
- * LEFT_SIDEBAR_PLUGINS 数组。想对律师也恢复的话，把它加回数组即可。
+ * LEFT_SIDEBAR_PLUGINS 数组。
+ *
+ * **云端轨道项目对律师恢复（dev-board#1050），本机项目仍隐藏**：案卷放进案件库后，
+ * 客户凭访问码在门户里看清单、传材料，律师得有地方建清单，否则客户流程闭不上环。
+ * 判据与加人弹窗的云端轨同源（memberLookup.js 的 resolveTrack === TRACK.CLOUD），
+ * 由调用方算好传进 getPluginsForUser(role, { cloudTrack })；未上云的案卷维持 08-19 的隐藏。
  */
 export const DD_FILES_PLUGIN = {
   key: 'dd-files',
@@ -173,7 +178,7 @@ export const LEFT_SIDEBAR_PLUGINS = [
   }
 ]
 
-/** 不在 rail 数组里、但仍要能按 key 查到 label 的面板（CLIENT 的尽调文件、版本记录） */
+/** 不在 rail 数组里、但仍要能按 key 查到 label 的面板（CLIENT / 云端轨道律师的尽调文件、版本记录） */
 const OFF_RAIL_PLUGINS = [DD_FILES_PLUGIN, VERSION_PLUGIN]
 
 export function getLeftSidebarPlugin(key) {
@@ -182,7 +187,12 @@ export function getLeftSidebarPlugin(key) {
     || LEFT_SIDEBAR_PLUGINS[0]
 }
 
-export function getPluginsForUser(role) {
+/**
+ * @param {string} role 当前用户角色
+ * @param {{cloudTrack?: boolean}} [opts] cloudTrack = 这份案卷在云端轨道上（桌面端 local-mode
+ *   且已放进案件库，resolveTrack(...) === TRACK.CLOUD）。为真时律师的 rail 末尾追加尽调清单。
+ */
+export function getPluginsForUser(role, { cloudTrack = false } = {}) {
   // 门控依据（dev-board#1039）：CLIENT 只来自 /api/auth/client-login 的回包（客户凭访问码进案卷）。
   // 桌面端 local-mode 下：后端拒绝给未放进案件库的案卷生成访问码（ProjectMemberController
   // .inviteClient），且所有请求一律解析为本机用户（AuthController.getUserIdFromSession），
@@ -191,6 +201,9 @@ export function getPluginsForUser(role) {
   if (role === 'CLIENT') {
     return [DD_FILES_PLUGIN]
   }
+  // dev-board#1050：已放进案件库的案卷，/api/dd/* 经 DdCloudProxyFilter 转到案件库，
+  // 客户在门户里看的就是律师在这里建的清单；本机项目不给（维持 08-19 的隐藏）。
+  if (cloudTrack) return [...LEFT_SIDEBAR_PLUGINS, DD_FILES_PLUGIN]
   return LEFT_SIDEBAR_PLUGINS
 }
 
@@ -203,6 +216,8 @@ export function getPluginsForUser(role) {
  * 「加载中…」占位符，而且 rail 上没有一个按钮是高亮的，看上去就是坏了。
  *
  * CLIENT 不走这里（它的默认值另有分支，dd-files 对客户仍然有效）。
+ * 云端轨道的律师（dev-board#1050）也照样回落 files：恢复 leftPaneKey 时协作状态还没拉到，
+ * 判不出这份案卷有没有放进案件库，宁可落在资源管理器也不落在一个可能不存在的面板上。
  */
 const LEFT_PANE_KEY_ALIASES = {
   easyvoice: 'voice',

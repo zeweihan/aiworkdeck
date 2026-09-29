@@ -37,21 +37,61 @@ public class ClientInvitationService {
      */
     public static class LibraryRequiredException extends IllegalStateException {
         public LibraryRequiredException() {
-            super(LangText.of(
+            this(LangText.of(
                     "这份案卷还没放进团队案件库，客户无法凭访问码查看。请先放进团队案件库再邀请客户。",
                     "This case file is not in the Team Case Library yet, so clients cannot view it with an access code. Add it to the Team Case Library first, then invite clients."));
         }
+
+        protected LibraryRequiredException(String message) {
+            super(message);
+        }
     }
+
+    /**
+     * 本机（local-mode）案卷已经放进案件库时，访问码必须由**案件库**签发（dev-board#1050）：
+     * 客户登录的是案件库的客户门户，本机 H2 里签出来的码与影子用户案件库上根本不存在。
+     * 前端云端轨道走 {@code POST /api/cloud/projects/{id}/invite/client} 代理，不会打到这里；
+     * 这里兜住绕过前端直调本机接口的情况。
+     */
+    public static class IssueViaLibraryException extends LibraryRequiredException {
+        public IssueViaLibraryException() {
+            super(LangText.of(
+                    "这份案卷已放进团队案件库，客户访问码需要通过案件库签发，本机签的码客户无法使用。",
+                    "This case file is in the Team Case Library, so client access codes must be issued through the library; a code issued on this computer would not work for the client."));
+        }
+    }
+
+    /** 访问码默认有效天数（dev-board#1050）。重新签发即续期。 */
+    public static final int VALID_DAYS = 30;
+
+    /**
+     * 同一张通用码最多能建出多少个具名客户用户（带 displayName 登录那一支）。
+     * 同名复用之后，刷不同的名字仍能建人，这是兜底上限——一家客户公司里凭同一张码
+     * 进来看材料的人不会有这么多。
+     */
+    static final int MAX_USERS_PER_INVITATION = 20;
+
+    /** 签发结果：码、有效期截止、它登录成的那个客户用户（撤销时按这个 id 移出）。 */
+    public record Issued(String code, LocalDateTime expiresAt, Long clientUserId) {}
 
     @Transactional
     public String inviteClient(Long projectId, Long requesterId, String clientName) {
+        return issueClientCode(projectId, requesterId, clientName).code();
+    }
+
+    @Transactional
+    public Issued issueClientCode(Long projectId, Long requesterId, String clientName) {
         // 1. Check permissions (Allow Admin and Participant)
         if (!projectMemberService.hasWritePermission(projectId, requesterId)) {
              throw new IllegalArgumentException("权限不足：只有管理员或参与者可以邀请客户");
         }
-        // 判据与前端 InviteMemberDialog 的轨道同源：local-mode 且没有 project_remote 绑定 = 未放进案件库
-        if (localIdentityService.isLocalMode() && remoteRepository.findByProjectId(projectId).isEmpty()) {
-            throw new LibraryRequiredException();
+        // 判据与前端 InviteMemberDialog 的轨道同源：local-mode 且没有 project_remote 绑定 = 未放进案件库；
+        // 有绑定则必须经案件库签发（本机签的码客户用不了）
+        if (localIdentityService.isLocalMode()) {
+            if (remoteRepository.findByProjectId(projectId).isEmpty()) {
+                throw new LibraryRequiredException();
+            }
+            throw new IssueViaLibraryException();
         }
 
         // 2. If clientName is provided, generate a UNIQUE named invitation
@@ -83,22 +123,23 @@ public class ClientInvitationService {
              invitation.setType("CLIENT_NAMED");
              invitation.setRelatedUserId(user.getId());
              invitation.setCreatedBy(requesterId);
+             invitation.setExpiresAt(freshExpiry());
              invitationRepository.save(invitation);
              
-             return code;
+             return new Issued(code, invitation.getExpiresAt(), user.getId());
         }
 
         // 3. Standard Shared Code Logic (Generic)
         // Check for new "CLIENT_GENERIC" type
         Optional<ProjectInvitation> existingGeneric = earliest(projectId, "CLIENT_GENERIC");
         if (existingGeneric.isPresent()) {
-            return ensureLongCode(existingGeneric.get());
+            return reissue(existingGeneric.get());
         }
         
         // Check for legacy "CLIENT" type
         Optional<ProjectInvitation> existingLegacy = earliest(projectId, "CLIENT");
         if (existingLegacy.isPresent()) {
-             return ensureLongCode(existingLegacy.get());
+             return reissue(existingLegacy.get());
         }
 
         // Create new Generic Invitation
@@ -120,6 +161,7 @@ public class ClientInvitationService {
         invitation.setType("CLIENT_GENERIC");
         invitation.setRelatedUserId(templateUser.getId());
         invitation.setCreatedBy(requesterId);
+        invitation.setExpiresAt(freshExpiry());
         invitationRepository.save(invitation);
 
         // 通用码此前只建影子用户与 invitation 行，从不建成员行；而客户登录恒走
@@ -129,7 +171,25 @@ public class ClientInvitationService {
         // 之后每个文件接口都回 403——「登录成功」与「什么都打不开」并存。
         ensureClientMember(projectId, templateUser.getId());
 
-        return code;
+        return new Issued(code, invitation.getExpiresAt(), templateUser.getId());
+    }
+
+    /** 重新签发同一行通用码：续期并取（必要时升级成长码）的码。 */
+    private Issued reissue(ProjectInvitation invitation) {
+        invitation.setExpiresAt(freshExpiry());
+        String code = ensureLongCode(invitation);
+        invitationRepository.save(invitation);
+        return new Issued(code, invitation.getExpiresAt(), invitation.getRelatedUserId());
+    }
+
+    private static LocalDateTime freshExpiry() {
+        return LocalDateTime.now().plusDays(VALID_DAYS);
+    }
+
+    /** 老码（本列上线前签的）没有 expiresAt：按签发时间推算；两者都缺就不设限。 */
+    static LocalDateTime effectiveExpiry(ProjectInvitation invitation) {
+        if (invitation.getExpiresAt() != null) return invitation.getExpiresAt();
+        return invitation.getCreatedAt() == null ? null : invitation.getCreatedAt().plusDays(VALID_DAYS);
     }
 
     /** 把影子用户补成 CLIENT 成员；已经是成员就不动（重发访问码会走到这里）。 */
@@ -173,15 +233,41 @@ public class ClientInvitationService {
         return existingCode;
     }
 
+    /**
+     * 带 displayName 的客户登录：同一张码、同一个称呼**复用同一个客户用户**（dev-board#1050）。
+     *
+     * <p>此前每登录一次就新建一个用户并加一行成员——客户门户上了公网之后，这是一个能被
+     * 无限刷出用户行的口子。现在用户名按 {@code client_inv{invitationId}_{称呼摘要}} 确定性
+     * 生成，同名即同人；不同称呼的人数设上限 {@link #MAX_USERS_PER_INVITATION}。
+     *
+     * <p>复用到的用户若已不是成员，说明律师把这个人移出过案卷：拒绝，而不是悄悄把他加回来
+     * （与「移出客户同时作废访问码」同一条纪律，这里作用在单个人身上）。
+     */
     @Transactional
-    public User createClientUser(Long projectId, String displayName, String accessCode) {
-        // Create a unique user for this client login
-        String username = "client_" + accessCode + "_" + UUID.randomUUID().toString().substring(0, 8);
-        
+    public User createClientUser(ProjectInvitation invitation, String displayName) {
+        Long projectId = invitation.getProjectId();
+        String name = displayName.trim();
+        String prefix = "client_inv" + invitation.getId() + "_";
+        String username = prefix + nameDigest(name);
+
+        Optional<User> existing = userRepository.findByUsername(username);
+        if (existing.isPresent()) {
+            User user = existing.get();
+            if (projectMemberRepository.findByProjectIdAndUserId(projectId, user.getId()).isEmpty()) {
+                throw new IllegalArgumentException(LangText.of("访问码已失效", "This access code is no longer valid"));
+            }
+            return user;
+        }
+        if (userRepository.countByUsernameStartingWith(prefix) >= MAX_USERS_PER_INVITATION) {
+            throw new IllegalArgumentException(LangText.of(
+                    "这个访问码登录的人数已达上限，请联系律师",
+                    "Too many people have signed in with this access code; please contact your lawyer"));
+        }
+
         User user = new User();
         user.setUsername(username);
         user.setPassword("{noop}" + UUID.randomUUID().toString()); // No password
-        user.setDisplayName(displayName);
+        user.setDisplayName(name);
         user.setRole("CLIENT");
         user.setSubscriptionType("FREE");
         user.setCreatedAt(LocalDateTime.now());
@@ -196,6 +282,17 @@ public class ClientInvitationService {
         projectMemberRepository.save(member);
         
         return user;
+    }
+
+    /** 称呼的短摘要：username 列有长度限制，且称呼里可能有任意字符。 */
+    private static String nameDigest(String name) {
+        try {
+            byte[] h = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(name.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(h, 0, 8);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private String generateUniqueCode() {
@@ -221,6 +318,11 @@ public class ClientInvitationService {
         // 重新加成 CLIENT 成员，被移出的客户就自己回到项目里了。
         if (invitation.getRevokedAt() != null) {
             throw new IllegalArgumentException("访问码已失效");
+        }
+        LocalDateTime expiry = effectiveExpiry(invitation);
+        if (expiry != null && expiry.isBefore(LocalDateTime.now())) {
+            throw new IllegalArgumentException(LangText.of(
+                    "访问码已过期，请联系律师重新发送", "This access code has expired; please ask your lawyer for a new one"));
         }
         return invitation;
     }

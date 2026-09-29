@@ -122,3 +122,38 @@ export function notFoundPresentation(reason) {
   }
   return { titleKey: 'version.noSuchAccount', action: 'INVITE_LINK' }
 }
+
+/**
+ * 发给客户的门户链接（dev-board#1050）：`{clientUrl}#code=<码>`。
+ *
+ * 码放 fragment 而不是查询串：fragment 不随请求发到服务器，不进 nginx access log，
+ * 也不会经 Referer 泄漏；门户页读 location.hash 预填后立刻用 replaceState 清掉。
+ * clientUrl 由案件库代理回执给出（`{server}/client/`），缺了就没有链接可给。
+ */
+export function clientPortalLink(clientUrl, code) {
+  const base = String(clientUrl == null ? '' : clientUrl).trim()
+  const c = String(code == null ? '' : code).trim()
+  if (!base || !c) return ''
+  return `${base.replace(/#.*$/, '')}#code=${encodeURIComponent(c)}`
+}
+
+/**
+ * 从门户地址的 hash 里取访问码（`#code=xxx`，也容忍 `#/...&code=xxx` 这种被路由改写过的形态）。
+ * 取不到回空串。
+ */
+export function codeFromHash(hash) {
+  const h = String(hash == null ? '' : hash).replace(/^#/, '')
+  const m = h.match(/(?:^|[&?/])code=([^&]*)/)
+  if (!m) return ''
+  try {
+    return decodeURIComponent(m[1]).trim()
+  } catch (e) {
+    return m[1].trim()
+  }
+}
+
+/** 后端回的 ISO 本地时间（`2026-10-29T10:11:12.123`）取日期部分；认不出回空串。 */
+export function expiryDate(iso) {
+  const m = String(iso == null ? '' : iso).match(/^(\d{4}-\d{2}-\d{2})/)
+  return m ? m[1] : ''
+}

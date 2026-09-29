@@ -198,6 +198,9 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     // 「发送…」：macOS 唤起系统分享面板（微信/邮件/隔空投送），Windows 退化为剪贴板粘贴
     // （dev-board#382）。返回 { ok, mode: 'share-sheet' | 'clipboard', reason? }。
     shareFile: (path) => ipcRenderer.invoke('fs:shareFile', { path }),
+    // 回收站「彻底删除」把后端报回的物理路径送进系统废纸篓（dev-board#1051）。
+    // 返回 { ok, results: [{ path, ok, missing?, reason? }] }；ok 为假时渲染层不清行。
+    trashItems: (paths) => ipcRenderer.invoke('fs:trashItems', { paths }),
     // BUG-34：导出 PDF 前报一次源文件的绝对路径，存盘对话框默认展开到它所在的目录
     // （而不是系统「上次用过的目录」）。一次性消费，见 main/export-download.js。
     setNextExportSource: (filePath) => ipcRenderer.invoke('fs:setNextExportSource', { filePath }),

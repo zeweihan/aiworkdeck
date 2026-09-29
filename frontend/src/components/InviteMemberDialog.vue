@@ -195,7 +195,20 @@
                    <text class="code-text">{{ clientInviteCode }}</text>
                    <text class="copy-link" @tap="copyClientCode">{{ $t('version.copy') }}</text>
                </view>
-               <text class="code-tip">{{ $t('version.accessCodeTip') }}</text>
+               <!-- 云端轨（dev-board#1050）：码由案件库签发，客户打开案件库托管的门户，
+                    链接里的码放在 #code= 里（不进服务器日志）。本机轨（自建服务器）没有门户地址。 -->
+               <template v-if="clientPortalLinkText">
+                   <text class="code-label">{{ $t('version.clientPortalLinkLabel') }}</text>
+                   <view class="code-display-row">
+                       <text class="invite-link-text" selectable>{{ clientPortalLinkText }}</text>
+                   </view>
+               </template>
+               <text v-if="clientExpiryDate" class="code-tip">{{ $t('version.clientCodeExpires', { date: clientExpiryDate }) }}</text>
+               <text class="code-tip">{{ clientPortalLinkText ? $t('version.clientPortalAccessCodeTip') : $t('version.accessCodeTip') }}</text>
+               <view v-if="clientPortalLinkText" class="code-actions-row">
+                   <text class="copy-link" @tap="copyClientInvite">{{ $t('version.clientCopyInvite') }}</text>
+                   <text v-if="isCloudTrack && clientUserId != null" class="copy-link danger-link" @tap="revokeClientCode">{{ $t('version.revokeClientCode') }}</text>
+               </view>
            </view>
         </view>
       </view>
@@ -229,6 +242,7 @@ import {
   addProjectMember, lookupProjectMember, inviteClient,
   getCloudStatus, getOfficialCloud, listCloudConnections,
   shareProjectToCloud, addCloudMember, lookupCloudMember,
+  inviteCloudClient, removeCloudMember,
 } from '@/services/api.js'
 import { ASSIGNABLE_ROLES, roleLabel } from '@/config/memberRoles.js'
 import { getInitial } from '@/utils/textInitial.js'
@@ -236,7 +250,10 @@ import { getAppLanguage } from '@/utils/appLanguage.js'
 import { siteBaseUrl } from '@/utils/siteLinks.js'
 import { shareProjectToLibrary } from '@/utils/cloudShare.js'
 import { readLocalMode } from '@/services/accountProfile.js'
-import { TRACK, resolveTrack, isWorthLooking, lookupIdentifier, inviteLinkFor, notFoundPresentation } from '@/utils/memberLookup.js'
+import {
+  TRACK, resolveTrack, isWorthLooking, lookupIdentifier, inviteLinkFor, notFoundPresentation,
+  clientPortalLink, expiryDate,
+} from '@/utils/memberLookup.js'
 
 const LOOKUP_DEBOUNCE_MS = 500
 
@@ -277,6 +294,10 @@ export default {
       role: 'PARTICIPANT',
       clientName: '',
       clientInviteCode: '',
+      // 云端轨签码回执（dev-board#1050）：门户地址、有效期、案件库那一侧的客户用户 id（撤销用）
+      clientPortalUrl: '',
+      clientExpiresAt: '',
+      clientUserId: null,
       loading: false,
       // ---- 轨道 ----
       track: '',
@@ -328,6 +349,12 @@ export default {
     showDualTrackHint() {
       return this.track === TRACK.LOCAL && this.linked
     },
+    clientPortalLinkText() {
+      return clientPortalLink(this.clientPortalUrl, this.clientInviteCode)
+    },
+    clientExpiryDate() {
+      return expiryDate(this.clientExpiresAt)
+    },
     currentRoleHint() {
       const r = ASSIGNABLE_ROLES.find((x) => x.value === this.role)
       return r ? r.hint : ''
@@ -353,6 +380,9 @@ export default {
         this.role = 'PARTICIPANT'
         this.clientName = ''
         this.clientInviteCode = ''
+        this.clientPortalUrl = ''
+        this.clientExpiresAt = ''
+        this.clientUserId = null
         this.loading = false
         this.sharing = false
         this.errorMessage = ''
@@ -546,9 +576,16 @@ export default {
     async generateClientCode() {
         this.loading = true
         try {
-            const res = await inviteClient(this.projectId, this.clientName)
+            // 云端轨：案卷在团队案件库里，码必须由案件库签（客户登录的是案件库的门户，
+            // 本机签的码案件库上不存在）；本机轨（自建服务器）照旧打本机接口
+            const res = this.isCloudTrack
+              ? await inviteCloudClient(this.projectId, this.clientName)
+              : await inviteClient(this.projectId, this.clientName)
             if (res.code === 0 && res.data && res.data.accessCode) {
                 this.clientInviteCode = res.data.accessCode
+                this.clientPortalUrl = res.data.clientUrl || ''
+                this.clientExpiresAt = res.data.expiresAt || ''
+                this.clientUserId = res.data.clientUserId != null ? res.data.clientUserId : null
             } else {
                 throw new Error(this.$t('version.generateFailed'))
             }
@@ -557,6 +594,40 @@ export default {
         } finally {
             this.loading = false
         }
+    },
+    copyClientInvite() {
+        const date = this.clientExpiryDate
+        const text = date
+          ? this.$t('version.clientInviteShareText', { link: this.clientPortalLinkText, code: this.clientInviteCode, date })
+          : this.$t('version.clientInviteShareTextNoDate', { link: this.clientPortalLinkText, code: this.clientInviteCode })
+        uni.setClipboardData({
+            data: text,
+            success: () => {
+                uni.showToast({ title: this.$t('common.copied'), icon: 'success' })
+            }
+        })
+    },
+    // 撤销 = 在案件库上把这个客户用户移出案卷；案件库移出 CLIENT 时连带作废他名下的码
+    revokeClientCode() {
+        if (this.clientUserId == null) return
+        uni.showModal({
+            title: this.$t('version.revokeClientCode'),
+            content: this.$t('version.revokeClientCodeConfirm'),
+            success: async (r) => {
+                if (!r.confirm) return
+                try {
+                    await removeCloudMember(this.projectId, this.clientUserId)
+                    uni.showToast({ title: this.$t('version.revokedClientCode'), icon: 'none' })
+                    this.clientInviteCode = ''
+                    this.clientPortalUrl = ''
+                    this.clientExpiresAt = ''
+                    this.clientUserId = null
+                    this.$emit('success')
+                } catch (e) {
+                    uni.showToast({ title: (e && e.message) || this.$t('version.revokeFailed'), icon: 'none' })
+                }
+            }
+        })
     },
     copyClientCode() {
         if (!this.clientInviteCode) return
@@ -572,6 +643,8 @@ export default {
 </script>
 
 <style scoped>
+.code-actions-row { display: flex; gap: 16px; margin-top: 10px; }
+.danger-link { color: var(--awd-danger-text); }
 /* Workdeck Dialog Styles + Specifics */
 .workdeck-dialog-mask {
   position: fixed;

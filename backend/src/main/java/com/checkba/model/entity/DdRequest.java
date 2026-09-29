@@ -56,6 +56,22 @@ public class DdRequest {
     @UpdateTimestamp
     private LocalDateTime updatedAt;
 
+    /**
+     * 迁移到案件库之后，案件库那一侧对应清单的 id（dev-board#1050）。非空 = 已迁移：
+     * 案卷放进案件库之后清单以案件库为准（本机 /api/dd 整体代理过去），本机这一行只留作
+     * 历史，不删；首次代理时把尚未迁移的本机清单一次性推上去（DdCloudMigrationService）。
+     */
+    @Column
+    private Long cloudRequestId;
+
+    public Long getCloudRequestId() {
+        return cloudRequestId;
+    }
+
+    public void setCloudRequestId(Long cloudRequestId) {
+        this.cloudRequestId = cloudRequestId;
+    }
+
     public Long getId() {
         return id;
     }

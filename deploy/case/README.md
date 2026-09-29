@@ -6,7 +6,9 @@ dev-board#441。「案件库」= 团队服务器 = **另一个完整的 AI WorkD
 - **git smart-HTTP**（`GitHttpController`，`/git/{repo}.git/*`）——案卷仓库的托管；
 - **一小撮 API**——换设备令牌、建项目、成员、`prepare-remote`、云端同步状态。
 
-它**不**跑 AI 对话、不收用户反馈、不做手机影像中转、不服务任何浏览器页面。
+它**不**跑 AI 对话、不收用户反馈、不做手机影像中转。浏览器页面只有一个例外：
+`/client/` **客户门户**（dev-board#1050）——律师的客户凭访问码进来看尽调清单、传材料，
+见第六节之后的「客户门户构建与同步」。
 
 | 决策项 | 结论 |
 |---|---|
@@ -188,7 +190,8 @@ nginx -t && nginx -s reload
 1. **启动强不变式**：临时删掉 env 里的 `AWD_PLATFORM_KEY_SECRET` 重启一次，
    服务必须**拒绝启动**（`PlatformAiKeyCipher`）。恢复后再启。
 2. `curl https://case.aiworkdeck.com/api/admin/wizard` 通（匿名探活端点）。
-3. `curl https://case.aiworkdeck.com/` 返回 404（不该有任何欢迎页）。
+3. `curl https://case.aiworkdeck.com/` 返回 404（不该有任何欢迎页）；
+   `curl -I https://case.aiworkdeck.com/client/` 返回 200（客户门户，带 `X-Frame-Options: DENY`）。
 4. **注册闸**：`POST /api/auth/register` 被拒。
 5. **桥接**：真实 `awdk_` 打 `POST /api/auth/awdk-login` 换到 `awdt_`，
    再带它 `GET /api/projects/my` 通。
@@ -381,6 +384,51 @@ du -sh /data/aiworkdeck-case/store/repos              # 盘占用（长得最快
   忘了 case，发版清单里要分两行写。
 - **仓库 GC**：`RepoMaintenanceJob` 每天 03:30 自动跑（重打包 + 清不可达对象），
   不做任何历史清理。它跟备份的 cron 时间要错开。
+
+---
+
+## 六之二、客户门户构建与同步（dev-board#1050）
+
+律师在桌面端给放进案件库的案卷「生成访问码」时，码由**案件库**签发（桌面经
+`POST /api/cloud/projects/{id}/invite/client` 代理），发给客户的链接是
+`https://case.aiworkdeck.com/client/#code=<码>`。客户用浏览器打开 → 门户页 →
+`POST /api/auth/client-login` → 项目列表（只有被分享的那一份）→ 工作台里只有「尽调清单」。
+
+**构建**（本地 worktree，与后端 jar 同一个提交）：
+
+```bash
+cd frontend && npm run build:client-portal
+# 产物：frontend/dist/build/client-portal/（index.html 里的资源路径以 /client/ 开头）
+```
+
+`build:client-portal` = `VITE_CLIENT_PORTAL=1 uni build -p client-portal --base /client/`：
+`package.json` 的 `uni-app.scripts.client-portal` 打开条件编译 `CLIENT_PORTAL`，pages.json 只注册
+门户 / 项目列表 / 工作台三页（登录、解锁、设置等页面不进包），入口是门户页；运行时
+`utils/clientPortal.js` 把其余硬编码跳转改写回门户，埋点关闭。
+
+**同步**（只有北京这一台，与 jar 一起发）：
+
+```bash
+rsync -av --delete frontend/dist/build/client-portal/ root@8.152.169.44:/opt/aiworkdeck/case/web/client/
+ssh root@8.152.169.44 'nginx -t && nginx -s reload'   # 仅首次加 location 时需要
+```
+
+`/opt/aiworkdeck/case/web/` 属于「程序」一侧（可重建，不进迁移单元、不进备份）。
+
+**为什么只放 `/client/`，其余仍 404**：案件库的公网面越小越好——git 与 API 已经是必须的，
+门户只加一个静态前缀，律师用的 h5、编辑器、设置页一概不上这台机器；根路径与任何其他路径
+继续 404，不给探测面。门户包里的入口收口只是体验，**真闸在后端**：CLIENT 在案件库上
+文件树（`ProjectFileController`）、git（`GitAccessService`）、尽调写端点（`DdController`
+客户白名单，只许读清单 / 传文件 / 留言）一律被拒；`/api/auth/client-login` 有 nginx 限频 +
+`AuthAbuseGuard` 失败锁定；访问码 30 天有效，重新生成即续期。
+
+**验收**：
+1. 桌面端对一个已放进案件库的案卷生成客户访问码，复制「发给客户的话」，链接形如
+   `https://case.aiworkdeck.com/client/#code=...`；
+2. 无痕窗口打开链接 → 访问码已预填、地址栏里的 `#code=` 已被清掉 → 进入 → 只看到这一份案卷；
+3. 客户上传一份文件、留一句言成功；在浏览器控制台对 `DELETE /api/dd/requests/{id}` 得到 **403**；
+4. 律师在协作面板「案件参与人」里移出该客户（或在签码回执上「撤销这个访问码」）→ 客户刷新后
+   会话失效、再用同一个码登录提示「访问码已失效」。
 
 ---
 

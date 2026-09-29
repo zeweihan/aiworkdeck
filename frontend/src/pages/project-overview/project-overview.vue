@@ -290,7 +290,8 @@
               <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
             </view>
             <!-- 我的日程（dev-board#899）：跨项目的全局日程页，走 leaveWorkbench 先落盘再离开 -->
-            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSchedule">
+            <!-- 客户看不到事项（TaskController 拒客户），日程页对他是空的；客户门户包里也没有这一页 -->
+            <view v-if="!isClientView" class="avatar-menu-item" @tap.stop="onAvatarMenuSchedule">
               <text>{{ $t('calendar.mySchedule') }}</text>
             </view>
             <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
@@ -1203,6 +1204,8 @@
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
+                      :project-id="projectId"
+                      :client-view="isClientView"
                     />
                     <MarketDetailPane
                       v-else-if="activeFileLeft.tabType === 'market-detail'"
@@ -1392,6 +1395,8 @@
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileRight)"
                       :request-id="activeFileRight.requestId"
+                      :project-id="projectId"
+                      :client-view="isClientView"
                     />
                     <MarketDetailPane
                       v-else-if="activeFileRight.tabType === 'market-detail'"
@@ -2335,7 +2340,6 @@ import { matchEntityAt } from '@/utils/insightMatch.js'
 // 表格/演示/PDF 没有可通读的正文。这份清单是 fileOpenTabs.js 里 wpsFormats 的 Writer 子集。
 const INSIGHT_DOC_TYPES = ['doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt', 'wps', 'wpt']
 import {
-  LEFT_SIDEBAR_PLUGINS,
   VERSION_PLUGIN,
   filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
@@ -2347,6 +2351,7 @@ import { activityTracker } from '@/utils/activityTracker.js'
 
 import { ICONS as GLYPHS } from '@/config/icons.js'
 import { readLocalMode } from '@/services/accountProfile.js'
+import { resolveTrack, TRACK } from '@/utils/memberLookup.js'
 import { isSoloLocalProject } from '@/utils/soloLocalProject.js'
 import { openFeedbackWidget } from '@/utils/feedbackWidget.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
@@ -2941,7 +2946,7 @@ export default {
       const user = getCurrentUser()
       const base = (user && user.role === 'CLIENT')
         ? getPluginsForUser('CLIENT')
-        : [...LEFT_SIDEBAR_PLUGINS, ...this.dynamicPlugins]
+        : [...getPluginsForUser(user && user.role, { cloudTrack: this.ddCloudTrack }), ...this.dynamicPlugins]
       // 声明了 requiresSkill 的插件位（诉讼可视化）跟着 skill 启停走：默认不安装，
       // 用户在广场里装了才出现在左栏。
       //
@@ -3010,6 +3015,12 @@ export default {
     // 协作 UI 的总闸：只有这份案卷真的放进过团队案件库才渲染任何协作元素。
     collabLinked() {
       return !!(this.collabCloud && this.collabCloud.linked) && !this.isClientView
+    },
+    // 律师的尽调清单入口（dev-board#1050）：只对云端轨道的案卷恢复，判据与加人弹窗
+    // （InviteMemberDialog 的 isCloudTrack）同源。collabCloud 在「放进案件库」之后由
+    // onCollabChanged / onInviteMemberSuccess 重取，rail 随之即时出现这一项，不需重进页面。
+    ddCloudTrack() {
+      return resolveTrack({ localMode: this.localMode, linked: this.collabLinked }) === TRACK.CLOUD
     },
     /*
      * 协作状态口径（顶栏 chip / 底部状态条 / 版本面板状态行 / 协作抽屉四处同源同序）：
@@ -4023,6 +4034,11 @@ export default {
     // 事件（见对应组件），这里只管工作台自己的。桥那边有浅比较+去抖，
     // 这些 watcher 只管「叫一声」，不必自己节流。
     'project.id'() { this.pushMenuState() },
+    // 案卷从案件库断开（或协作状态重取后判为未上云）时，律师正开着的尽调清单面板
+    // 已经不在 rail 上了——回落资源管理器，别停在一个没有按钮高亮的面板上。
+    ddCloudTrack(on) {
+      if (!on && this.leftPaneKey === 'dd-files' && !this.isClientView) this.leftPaneKey = 'files'
+    },
     activeFileIdRight() { this.pushMenuState(); this.ensureActiveTabVisible('right') },
     sidebarCollapsed() { this.pushMenuState() },
     showToolsPanel() { this.pushMenuState() },

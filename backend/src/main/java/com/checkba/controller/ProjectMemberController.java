@@ -181,11 +181,16 @@ public class ProjectMemberController {
         String clientName = (body != null) ? body.get("clientName") : null;
 
         try {
-            String code = clientInvitationService.inviteClient(projectId, userId, clientName);
+            ClientInvitationService.Issued issued = clientInvitationService.issueClientCode(projectId, userId, clientName);
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
             result.put("message", com.checkba.service.LangText.of("邀请码生成成功", "Invitation code generated successfully"));
-            result.put("data", Map.of("accessCode", code));
+            // expiresAt（ISO 本地时间）与 clientUserId（撤销时按它移出）供桌面端代理转述（dev-board#1050）
+            Map<String, Object> data = new HashMap<>();
+            data.put("accessCode", issued.code());
+            data.put("expiresAt", issued.expiresAt() == null ? null : issued.expiresAt().toString());
+            data.put("clientUserId", issued.clientUserId());
+            result.put("data", data);
             return ResponseEntity.ok(result);
         } catch (ClientInvitationService.LibraryRequiredException e) {
             // 本机未上云的案卷（dev-board#1039）：明确 400，不是一次可重试的业务失败
