@@ -829,7 +829,9 @@ public class ProjectFileService {
              filePath = buildPhysicalPath(file.getProjectId(), file.getParentId(), file.getName());
         }
 
-        if (deletePhysical && StringUtils.hasText(filePath)) {
+        // 根级文件缓存区：回收站里的旧缓存区与活着的缓存区同名同位置，物理目录是同一个——
+        // 按目录删会把活着的缓存区里的文件字节一起删掉。子文件上面已按各自 filePath 删过了。
+        if (deletePhysical && StringUtils.hasText(filePath) && !isRootStagingFolder(file)) {
             try {
                 storageServiceFactory.getStorageService().delete(filePath);
                 log.info("物理文件/文件夹彻底删除成功: fileId={}, path={}", fileId, filePath);
@@ -896,7 +898,18 @@ public class ProjectFileService {
      * 获取回收站文件列表
      */
     public List<ProjectFile> getRecycleBinFiles(Long projectId) {
-         return projectFileRepository.findByProjectIdAndIsDeletedTrueOrderByDeletedAtDesc(projectId);
+         // 根级文件缓存区的空壳不列出（dev-board#1019）：工作台每次打开懒建缓存区，v0.49.0 前
+         // 本地文件夹项目的对账又把「磁盘上没目录」的空缓存区送进回收站，一个项目能攒几十个。
+         // 前端按名字把系统文件夹藏起来、标题却按条数计数——删光可见行后永远剩「回收站 (N)」、
+         // 列表却是空的。空壳里什么都没有，列出来也只是一行律师看不懂的内部目录名。
+         // 装着文件的缓存区照常列出：子行还原时要靠它做「先还原上层」的锚点。
+         List<ProjectFile> rows = projectFileRepository.findByProjectIdAndIsDeletedTrueOrderByDeletedAtDesc(projectId);
+         List<ProjectFile> out = new ArrayList<>(rows.size());
+         for (ProjectFile f : rows) {
+             if (isRootStagingFolder(f) && projectFileRepository.countByParentId(f.getId()) == 0) continue;
+             out.add(f);
+         }
+         return out;
     }
 
     /**

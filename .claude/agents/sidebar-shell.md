@@ -1110,6 +1110,14 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   `findFile`，不存在直接回 `code:0`。前端批量彻底删除先用 `fileTreeRecycle.collapseToTopmostSelected`
   折叠掉被勾选祖先覆盖的子孙，删完从服务端重拉回收站。别再写「按 HTTP 404 判已不存在」——
   全站 HTTP 恒 200，那个分支永远不会走到。
+- **回收站标题计数 = 可见行数（dev-board#1019）**：回收站视图的 `displayFiles` 走
+  `fileTreeRecycle.computeDisplayFiles`，**不套**文件视图的系统文件夹名 / 暂存区 id 两道过滤——
+  标题按 `recycleBin.length` 计数，藏掉的行就是「回收站 (2)、列表空」、用户删不掉的幽灵。
+  后端 `getRecycleBinFiles` 不列根级 `__staging_area__` 空壳（`isRootStagingFolder` 且
+  `countByParentId==0`，v0.49.0 前对账攒下的，一个项目几十个）；装着文件的缓存区照常列出，
+  前端 `displayName` 显示成「文件暂存区」。彻底删除根级缓存区**不删目录**（与活着的缓存区同一个
+  物理目录），子文件按各自 `filePath` 删。护栏 `ProjectFileServiceRecycleBinGhostTest`、
+  `tests/project-home/file-tree-recycle.test.mjs`。
 - **左栏面板要给 AI 面板发 prompt，一律走 `resolveChatInterface()`**（工作台 methods）。
   它做三件事：`showAiPanel` 为 false 时先走既有的 `toggleAiPanel()`（顺带刷 AI 上下文 +
   拉历史，不能绕过去直接改标志位）→ 有界轮询 ~3s（30×100ms）等 `$refs.chatInterface`
