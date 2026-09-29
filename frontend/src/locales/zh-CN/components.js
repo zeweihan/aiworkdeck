@@ -53,6 +53,8 @@ export default {
   },
   chatResending: '组件已就绪，正在继续刚才的请求…',
   chatReadyRetry: '组件已就绪，可以重新发送刚才的请求。',
+  chatReadyContinue: '组件已就绪，可以继续刚才那一步',
+  chatReadyContinueBtn: '继续',
 
   // 后台下载（dev-board#581）：关掉面板/收起卡片后下载继续，完成或失败时全局提示
   backgroundDownload: '后台下载',

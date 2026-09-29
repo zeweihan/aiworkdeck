@@ -820,6 +820,10 @@
     <!-- 可选组件缺失（设计 §4.2）：确认前把体积、解锁什么、不装则什么不可用都说全，
          确认后卡片就地跳进度，装完自动重发原消息。下载中可「后台下载」收起卡片继续用对话
          （dev-board#581），装完是否重发见 useComponentRequired.shouldAutoResend。 -->
+    <view v-if="componentReadyContinue" class="chat-component-ready">
+      <text class="ccr-text">{{ $t('components.chatReadyContinue') }}</text>
+      <view class="cg-btn primary" :class="{ disabled: isStreaming }" @tap="continueComponentPending">{{ $t('components.chatReadyContinueBtn') }}</view>
+    </view>
     <view v-if="componentGateItem" class="chat-component-gate">
       <view class="cg-panel">
         <text class="cg-title">{{ $t('components.chatTitle') }}</text>
@@ -977,6 +981,16 @@ export default {
     // 可选组件缺失闸（设计 §4.2）。下载走应用级单例（dev-board#581）：与首次登录面板、
     // 组件管理页同一份编排、同一份进度，顺序 pack → 模型 → ensure(service) 不能换。
     const componentGateItem = ref(null)
+    const componentReadyContinue = ref(null) // 装完但没自动重发时挂着的「待继续」原消息
+    const dropComponentPending = () => {
+      if (typeof componentRequiredHandler !== 'undefined') componentRequiredHandler.dismissPending()
+      componentReadyContinue.value = null
+    }
+    const continueComponentPending = async () => {
+      if (isStreaming.value) return
+      const ok = await componentRequiredHandler.continuePending({ streaming: isStreaming.value })
+      if (ok) componentReadyContinue.value = null
+    }
     const componentGateResolved = ref(false)
     const componentGateResolve = ref(null)
     // 前台认领：对话组件活着就由它交代结果（重发或提示可重试）；卸载时释放，交给全局提示
@@ -1016,8 +1030,12 @@ export default {
         userCountAtGate: mark,
         userCountNow: userMessageCount(),
       }),
-      readyNotice: (item) => {
+      readyNotice: (item, opts) => {
         closeComponentGate(item.packId)
+        if (opts && opts.canContinue) {
+          componentReadyContinue.value = componentRequiredHandler.pendingContinue()
+          return
+        }
         if (chatAlive) uni.showToast({ title: t('components.chatReadyRetry'), icon: 'none', duration: 3500 })
       },
       // 弹窗确认：把 item 挂上去，等模板里的按钮 resolve
@@ -1296,7 +1314,7 @@ export default {
     const activeDocDismissed = ref(false)
     watch(() => props.activeTab && props.activeTab.id, () => { activeDocDismissed.value = false })
     // 换项目：附件草稿里的 fileId 属于上一个项目，带过去后端 ToolFileGuard 必拒
-    watch(() => props.projectId, () => { clearAttachmentDraft() })
+    watch(() => props.projectId, () => { clearAttachmentDraft(); dropComponentPending() })
 
     /**
      * 输入框上方那枚「当前文档 · <名称>」chip 的数据（null = 不显示）。
@@ -2085,6 +2103,7 @@ export default {
     }
 
     const startNewChat = () => {
+      dropComponentPending()
       // New conversation detaches this panel from the old SSE. The server run keeps working
       // and remains visible from history; Stop is the explicit cancellation action.
       setConversationId(null)  // This now triggers resetSSE internally
@@ -2095,6 +2114,7 @@ export default {
     }
 
     const handleSubmit = async (requestedMode = 'steer') => {
+      dropComponentPending()
       // 插件镜像会话只读（dev-board#298）：输入区已换成说明条，这里再拦一道
       // 兜住空态输入框等旁路（后端对镜像会话追加也会拒，这是省一次报错）
       if (props.externalReadOnly) return
@@ -2592,6 +2612,7 @@ export default {
      *   `{ messages, hasMore, nextBefore }` 信封（带 limit 请求时后端回的形状）
      */
     const loadMessages = (conversationId, loaded) => {
+       dropComponentPending()
        const page = Array.isArray(loaded) ? { messages: loaded, hasMore: false, nextBefore: null } : (loaded || {})
        const loadedMsgs = page.messages || []
        console.log('[ChatInterface] Loading history...', loadedMsgs.length)
@@ -3844,6 +3865,8 @@ export default {
        currentConversationId,
        isStreaming,
        componentGateItem,
+       componentReadyContinue,
+       continueComponentPending,
        componentGateResolved,
        resolveComponentGate,
        backgroundComponentGate,
@@ -6487,6 +6510,29 @@ export default {
 }
 .awd-btn-secondary:hover {
     background-color: var(--awd-surface-3);
+}
+
+/* 组件装完但没自动重发：贴在输入区上方的「继续」条 */
+.chat-component-ready {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 12px 8px;
+    padding: 8px 12px;
+    background: var(--awd-surface);
+    border: 1px solid var(--awd-border);
+    border-radius: 10px;
+}
+
+.ccr-text {
+    font-size: 13px;
+    color: var(--awd-text);
+}
+
+.chat-component-ready .cg-btn.disabled {
+    opacity: 0.5;
+    pointer-events: none;
 }
 
 /* 可选组件缺失弹窗（设计 §4.2） */

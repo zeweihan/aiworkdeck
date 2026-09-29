@@ -47,6 +47,8 @@ export default {
   },
   chatResending: 'The component is ready. Continuing your request…',
   chatReadyRetry: 'The component is ready. You can resend your request.',
+  chatReadyContinue: 'The component is ready. You can continue the step you were on.',
+  chatReadyContinueBtn: 'Continue',
 
   backgroundDownload: 'Download in background',
   backgroundStarted: 'Downloading in the background. Track progress in Settings → Components.',

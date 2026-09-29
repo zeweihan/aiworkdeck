@@ -2931,7 +2931,11 @@ public class AgentOrchestrator {
         sendTextDelta(guard, notice);
         log.info("component_required for {}: ending the turn and waiting for the download", guard.conversationId);
         saveAssistantMessage(guard, projectId, userId, persistedPrefix + notice);
-        markRunState(guard, AgentRunStateService.RunStatus.AWAITING_INPUT);
+        // 运行状态记 FINISHED 而不是 AWAITING_INPUT：重连时的 run_state 事件只带 status 不带 reason，
+        // 记 AWAITING_INPUT 会让刷新后的前端把它当成模型的反问（输入区「等你回答」、会话列表「待回答」）。
+        // 「等组件」的续跑由前端在组件装好后重发原消息触发，后台没有任何东西在等，就是 FINISHED。
+        // bubble_end 仍带 reason=component_required，让在线的前端知道这一轮是因组件停的。
+        markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
         sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "awaiting_input", "component_required"));
         closeSse(guard);
         endRun(guard);

@@ -231,7 +231,7 @@ class AgentOrchestratorEditorBootingAndComponentStopTest {
     }
 
     @Test
-    @DisplayName("工具发出 component_required：本轮到此收尾（AWAITING_INPUT + reason=component_required），不再调模型")
+    @DisplayName("工具发出 component_required：本轮到此收尾（bubble_end awaiting_input + reason=component_required，运行状态 FINISHED），不再调模型")
     void componentRequiredEndsTheTurn() {
         when(toolRegistry.execute(eq("pdf_to_word"), any(), any()))
                 .thenReturn(new ToolRegistry.ToolResult("版式级转换需要本机组件……本轮到此为止。", null, true));
@@ -248,7 +248,8 @@ class AgentOrchestratorEditorBootingAndComponentStopTest {
         assertNotNull(end, sseEvents.toString());
         assertTrue(end.contains("\"status\":\"awaiting_input\""), end);
         assertTrue(end.contains("\"reason\":\"component_required\""), end);
-        assertEquals(AgentRunStateService.RunStatus.AWAITING_INPUT, runState.get("conv-comp").status());
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-comp").status(),
+                "run_state 重连事件不带 reason，记 AWAITING_INPUT 会被刷新后的前端当成反问");
         org.mockito.Mockito.verify(toolRegistry, org.mockito.Mockito.never())
                 .execute(eq("write_docx"), any(), any());
         assertTrue(sseData.stream().anyMatch(d -> d.contains("装好后会自动继续")), sseData.toString());

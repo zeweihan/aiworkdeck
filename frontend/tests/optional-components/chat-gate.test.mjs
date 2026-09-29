@@ -140,3 +140,29 @@ test('component_required 在 ChatInterface 就地拦下，不往下透到编辑�
   assert.ok(!/emit\('client-action'/.test(branch),
     'component_required 不是编辑器命令，透到 EDITOR_ACTIONS 白名单只会得到 Unknown action')
 })
+
+// dev-board#1016：ChatInterface 接线 + 反问判据
+test('ChatInterface 接了待继续：readyNotice canContinue、继续条、四处 dismiss', () => {
+  const src = readFileSync(new URL('../../src/components/ChatInterface.vue', import.meta.url), 'utf8')
+  assert.match(src, /opts && opts\.canContinue[\s\S]{0,120}componentRequiredHandler\.pendingContinue\(\)/)
+  assert.match(src, /v-if="componentReadyContinue"/)
+  assert.match(src, /:class="\{ disabled: isStreaming \}"/)
+  assert.match(src, /continuePending\(\{ streaming: isStreaming\.value \}\)/)
+  for (const fn of ['const startNewChat = () => {', "const handleSubmit = async (requestedMode = 'steer') => {", 'const loadMessages = (conversationId, loaded) => {']) {
+    const i = src.indexOf(fn)
+    assert.ok(i > 0, fn)
+    assert.match(src.slice(i, i + 200), /dropComponentPending\(\)/, fn)
+  }
+  assert.match(src, /watch\(\(\) => props\.projectId, \(\) => \{[^}]*dropComponentPending\(\)/)
+})
+
+test('isUserQuestionAwaiting：component_required 不算反问，普通 awaiting_input 算', async () => {
+  const { isUserQuestionAwaiting } = await import('../../src/composables/awaitingInput.mjs')
+  assert.equal(isUserQuestionAwaiting({ status: 'awaiting_input', reason: 'component_required' }), false)
+  assert.equal(isUserQuestionAwaiting({ status: 'awaiting_input' }), true)
+  assert.equal(isUserQuestionAwaiting({ status: 'AWAITING_INPUT' }), true)
+  assert.equal(isUserQuestionAwaiting({ status: 'finished' }), false)
+  assert.equal(isUserQuestionAwaiting(null), false)
+  const s = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(s, /=\s*\(?[^\n]*status === 'awaiting_input'\)?\s*$/m)
+})
