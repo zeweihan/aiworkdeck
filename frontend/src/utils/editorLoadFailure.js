@@ -77,3 +77,50 @@ export function isRelayTimeout(err) {
 export function shouldSelfHealLoadFailure(err, alreadyHealed) {
   return !alreadyHealed && isRelayTimeout(err)
 }
+
+// ---- 装载预算分级与「打不开」终态（dev-board#1018）----
+//
+// load_document 原先一律 180s 墙钟预算，超时后自愈重装一次再 180s：一份几十 KB 的
+// AI 生成文档卡住时，用户要对着 95% 干等六七分钟才看到报错。按字节数分级——小文档
+// 正常装载是亚秒到几秒（lowa-e2e 大文档基线：6.7MB/150 页 1.4–3.7s），30s 足以
+// 区分「慢」和「不会回来了」。
+
+/** 装载「打不开」终态：引擎拒收（文件损坏/格式不受支持）或重启重装后仍无响应。 */
+export const STATUS_OPEN_FAILED = 'docOpenFailed'
+/** 诊断码：引擎读了字节但两条装载路径都拒收（loadComponentFromURL 返回 null / 抛异常）。 */
+export const DIAG_DOC_REJECTED = 'DOC_REJECTED'
+/** 诊断码：重启引擎重装一次后 load_document 仍超过预算没有回音。 */
+export const DIAG_LOAD_TIMEOUT = 'EDITOR_LOAD_TIMEOUT'
+
+const MB = 1024 * 1024
+export const LOAD_BUDGET_TIERS = Object.freeze([
+  Object.freeze({ maxBytes: 1 * MB, ms: 30000 }),
+  Object.freeze({ maxBytes: 10 * MB, ms: 90000 }),
+])
+export const LOAD_BUDGET_MAX_MS = 180000
+
+/**
+ * load_document 的等待预算（ms），按文档字节数分级：≤1MB 30s、≤10MB 90s、更大 180s。
+ * 字节数未知/非法按最大档（宁可多等，不把正常的大文档误判成挂死）。
+ * @param {number} byteLength
+ */
+export function loadBudgetMs(byteLength) {
+  const n = Number(byteLength)
+  if (!Number.isFinite(n) || n < 0) return LOAD_BUDGET_MAX_MS
+  for (const t of LOAD_BUDGET_TIERS) if (n <= t.maxBytes) return t.ms
+  return LOAD_BUDGET_MAX_MS
+}
+
+/**
+ * 这次失败要不要落「文档无法打开」终态，以及诊断码。null = 不是这一类（走 classifyLoadFailure）。
+ * - 引擎明确拒收（worker 回 code DOC_REJECTED）：重试/重启都没用，直接落终态；
+ * - relay 超时且本轮已经自愈过一次：引擎无响应，落终态。
+ * @param {Error|string} err
+ * @param {boolean} alreadyHealed
+ * @returns {null|{statusKey:string, code:string}}
+ */
+export function openFailureOf(err, alreadyHealed) {
+  if (err && err.code === DIAG_DOC_REJECTED) return { statusKey: STATUS_OPEN_FAILED, code: DIAG_DOC_REJECTED }
+  if (alreadyHealed && isRelayTimeout(err)) return { statusKey: STATUS_OPEN_FAILED, code: DIAG_LOAD_TIMEOUT }
+  return null
+}

@@ -690,7 +690,7 @@ import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, dele
 import { getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 import { showDialog } from '@/utils/dialog.js'
-import { findTopmostDeletedAncestor, summarizeDeleteResults, collapseToTopmostSelected } from '@/utils/fileTreeRecycle.js'
+import { findTopmostDeletedAncestor, summarizeDeleteResults, collapseToTopmostSelected, computeDisplayFiles } from '@/utils/fileTreeRecycle.js'
 import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
@@ -922,25 +922,14 @@ export default {
       return map[this.sortMode] || this.$t('fileTree.sortLabelDefault')
     },
     displayFiles() {
-       let result = []
-       if (this.viewMode === 'recycle') {
-         result = this.recycleBin
-       } else {
-         // Filter out soft-deleted items
-         const binIds = new Set(this.recycleBin.map(f => f.id))
-         result = this.files.filter(f => !binIds.has(f.id))
-       }
-
-       // Filter out staged files AND the staging folder itself
-       const hiddenNames = new Set(['.stagezone', '__staging_area__'])
-
-       if (this.hiddenFileIds && this.hiddenFileIds.length > 0) {
-         const hiddenIds = new Set(this.hiddenFileIds.map(id => Number(id)))
-         result = result.filter(f => !hiddenIds.has(Number(f.id)) && !hiddenNames.has(f.name))
-       } else {
-         result = result.filter(f => !hiddenNames.has(f.name))
-       }
-       return result
+      // 回收站视图不做系统文件夹/暂存区过滤：标题按 recycleBin.length 计数，藏掉的行
+      // 会变成看不见也删不掉的幽灵计数（dev-board#1019），见 utils/fileTreeRecycle.js
+      return computeDisplayFiles({
+        viewMode: this.viewMode,
+        files: this.files,
+        recycleBin: this.recycleBin,
+        hiddenFileIds: this.hiddenFileIds
+      })
     },
     // 窗口化渲染（dev-board#107 单元 F3）：只用于模板 v-for 的渲染层，displayFiles 本身
     // 保持不变——选择/拖拽/批量操作等既有逻辑继续对完整列表生效，只是超过 100 项的
@@ -1127,6 +1116,10 @@ export default {
     displayName(item) {
       if (item && item.isFolder && item.name === 'AI Assistant Files' && item.parentId == null) {
         return this.$t('fileTree.aiAssistantFilesFolder')
+      }
+      // 文件缓存区只会在回收站视图里露面（文件视图按名字藏掉了），别让律师看到内部目录名
+      if (item && item.isFolder && item.name === '__staging_area__' && item.parentId == null) {
+        return this.$t('files.stagingTitle')
       }
       return item ? item.name : ''
     },
@@ -1753,7 +1746,7 @@ export default {
         if (blocker) {
             uni.showModal({
                 title: this.$t('fileTree.restoreBlockedTitle'),
-                content: this.$t('fileTree.restoreBlockedContent', { folderName: blocker.name }),
+                content: this.$t('fileTree.restoreBlockedContent', { folderName: this.displayName(blocker) }),
                 confirmText: this.$t('fileTree.restoreBlockedConfirm'),
                 cancelText: this.$t('fileTree.cancel'),
                 success: (res) => {

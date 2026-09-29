@@ -342,6 +342,10 @@ txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue�
 - 护栏：`EditorBridgeSingleDispatchTest`（单发 + 后端源码里不许再出现 `"wps_command"`/`"wps_open_file"`/`"wps_reload_file"`/`"wps_stream_data"`/`"wps_open_file_sync"` 字面量）、`frontend/tests/project-home/editor-command-legacy-names-removed.test.mjs`（新名照常分发 + 旧名一律不再被识别 + latch 不许回来）。
 **`wpsFileId` 不属于命令双轨**——是持久化字段名（ProjectFile 实体），贯穿前后端，无改名计划，别动。
 
+## 编辑器启动中 EDITOR_BOOTING（dev-board#1017，2026-09-29）
+
+前端 `editor_command` 在编辑器仍在启动时**等待**，等到上限仍未就绪才回失败，形状 `sendEditorResult(conv, req, false, {error:"...", code:"EDITOR_BOOTING", retryable:true}, "...")`（前端执行器那一半归 doc-editor 领域）。后端 `EditorBridgeService.executeEditorCommand` 认 `data.code` 或 error 串里的码（`isEditorBooting`），回执换成 `editorBootingResultJson()`（`{"error": ..., "code": "EDITOR_BOOTING", "retryable": true}`，文案：这一步没有执行，等就绪后重试同一步，不要改用新建文件/副本/其它通道），并撤掉整段插入去重登记。它仍带 `"error"` 键（面板不打绿勾），但编排器不计入连续失败、不发收敛提示（见 ai-chat.md「等待组件、编辑器启动中与同轮幂等」）。与 `TIMEOUT_RESULT_JSON`（`EDITOR_RESULT_TIMEOUT`，结局未知、**不许**重发）语义相反：BOOTING 是**确定没执行**，**应该**重试同一步。`doc_open_file` 的返回文案同步提示「随后的 doc_* 调用若返回 EDITOR_BOOTING，就等一等再重试同一步」。改码名要两侧一起改。
+
 ## 已知地雷
 
 - **新增 doc_*/sheet_*/slide_* 编辑原语要同步四处，漏一处 CI 就红**（2026-09-22 K24 实证，PR#934 连红三次）：① `PluginHostImpl.DOC_ACTIONS` 白名单（`PluginHostImplTest.docActionsCoverDocumentEditToolsDispatch` 扫 DocumentEditTools 源码）；② `docs/PLUGIN_SPEC.md` §11 清单；③ `frontend/src/config/pluginDocActions.js` 镜像（`tests/plugin-sdk/doc-actions-parity.test.mjs` 与后端逐项对拍）；④ `scripts/check-tool-parity.mjs` 的 MATRIX（两族对拍，CI 的 spdx-check job 里跑）。

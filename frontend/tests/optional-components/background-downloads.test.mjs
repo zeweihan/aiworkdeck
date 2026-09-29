@@ -174,8 +174,10 @@ test('activeCount 反映在途任务数（组件管理的卡片据此锁按钮�
 
 // ---------- AI 对话：后台下载与重发判据 ----------
 
-test('重发判据：前台装完照旧重发；后台装完只有「没新消息且没在生成」才重发', () => {
-  assert.equal(shouldAutoResend({ alive: true, backgrounded: false, streaming: true, userCountAtGate: 1, userCountNow: 1 }), true)
+test('重发判据：前台装完照旧重发（生成中除外）；后台装完只有「没新消息且没在生成」才重发', () => {
+  assert.equal(shouldAutoResend({ alive: true, backgrounded: false, streaming: false, userCountAtGate: 1, userCountNow: 1 }), true)
+  // dev-board#1016：前台装完但正在生成——重发会变成插话、把这一轮打断，不重发
+  assert.equal(shouldAutoResend({ alive: true, backgrounded: false, streaming: true, userCountAtGate: 1, userCountNow: 1 }), false)
   assert.equal(shouldAutoResend({ alive: true, backgrounded: true, streaming: false, userCountAtGate: 1, userCountNow: 1 }), true)
   assert.equal(shouldAutoResend({ alive: true, backgrounded: true, streaming: true, userCountAtGate: 1, userCountNow: 1 }), false)
   assert.equal(shouldAutoResend({ alive: true, backgrounded: true, streaming: false, userCountAtGate: 1, userCountNow: 2 }), false)
@@ -196,7 +198,7 @@ test('后台装完但用户已经发了新消息：不重发，只提示「已�
     readyNotice: () => calls.push('ready'),
   })
   const r = await h.onAction({ packId: 'pptx-runtime', service: 'pptx-service', sizeMb: 1 })
-  assert.deepEqual(r, { installed: true, resent: false })
+  assert.deepEqual(r, { installed: true, resent: false, pending: true })
   assert.deepEqual(calls, ['ready'])
 })
 

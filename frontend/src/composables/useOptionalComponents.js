@@ -27,6 +27,31 @@ const WEIGHT = { runtime: 40, model: 55, starting: 5 }
 
 const POLL_MS = 1000
 
+// 轮询里连续这么久「阶段 / 字节 / 文件数 / 百分比」一样都没变，就判卡死（dev-board#1015）。
+// 后端解压每写一个文件都会推进 filesDone，正常安装不会三分钟纹丝不动。
+export const STALL_MS = 3 * 60 * 1000
+
+// pack 段内部的细分阶段在「运行时 40%」里的占比：下载占大头，解压其次。
+// 只用于总进度（overallPercentOf）；卡片上显示的是每个阶段自己的百分比。
+const RUNTIME_SPAN = {
+  downloading: [0, 60],
+  verifying: [60, 65],
+  extracting: [65, 95],
+  checking: [95, 97],
+  finalizing: [97, 100],
+}
+
+// 后端 state（老契约）→ 细分阶段；后端没带 phase 字段（老后端）时用它兜底
+const STATE_TO_STAGE = { downloading: 'downloading', verifying: 'verifying', installing: 'extracting' }
+const IN_FLIGHT = new Set(['downloading', 'verifying', 'installing'])
+
+// 前端自己判出来的失败没有后端文案，给一句默认话；有 deps.t 时按界面语言取 locale
+const FALLBACK_ERROR = {
+  stalled: '长时间没有进展，已停止等待。请重试；仍失败可查看 ~/.aiworkdeck/logs 下的后端日志。',
+  backendRestarted: '后台服务已重启，下载被中断，请重试。',
+}
+const ERROR_LOCALE_KEY = { stalled: 'errorStalled', backendRestarted: 'errorBackendRestarted' }
+
 export function createOptionalComponentsController(deps) {
   // 状态容器可以由调用方注入（.vue 里传 `reactive({})`）。必须在这里就拿到那个代理：
   // 控制器内部的写全部走闭包变量 state，事后再 `controller.state = reactive(state)`
@@ -42,6 +67,35 @@ export function createOptionalComponentsController(deps) {
   })
 
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)))
+  const now = deps.now || (() => Date.now())
+
+  function failWith(item, errorKey) {
+    item.phase = 'failed'
+    item.stageKey = 'preparing'
+    item.errorKey = errorKey
+    const k = 'components.' + ERROR_LOCALE_KEY[errorKey]
+    let msg = ''
+    try { msg = deps.t ? deps.t(k) : '' } catch (e) { msg = '' }
+    item.error = msg && msg !== k ? msg : FALLBACK_ERROR[errorKey]
+  }
+
+  /** 把一帧后端 status 映射到卡片：stage（细分阶段）、percent（本阶段）、runtimePercent（总进度用） */
+  function applyStatus(item, st) {
+    const stage = RUNTIME_SPAN[st.phase] ? st.phase : (STATE_TO_STAGE[st.state] || 'downloading')
+    let pct = null
+    if (stage === 'downloading') {
+      if (st.bytesTotal > 0) pct = Math.min(100, Math.round((st.bytesDownloaded || 0) / st.bytesTotal * 100))
+    } else if (typeof st.phasePercent === 'number' && st.phasePercent >= 0) {
+      pct = Math.min(100, st.phasePercent)
+    }
+    item.stage = stage
+    item.stageKey = stage
+    item.percent = pct == null ? 0 : pct
+    item.percentKnown = pct != null
+    const [lo, hi] = RUNTIME_SPAN[stage]
+    const within = pct == null ? 0 : pct / 100
+    item.runtimePercent = Math.max(item.runtimePercent || 0, Math.round(lo + (hi - lo) * within))
+  }
 
   async function load() {
     state.loading = true
@@ -80,26 +134,53 @@ export function createOptionalComponentsController(deps) {
     return item
   }
 
-  /** pack 段：装 + 轮询到 ready / failed。返回 true = 就绪。 */
+  /**
+   * pack 段：装 + 轮询到 ready / failed。返回 true = 就绪。
+   *
+   * 三条出口之外不许无限转圈（dev-board#1015）：
+   *   - 后端 ready / failed / revoked：照后端说的办；
+   *   - 在途中后端回 not_installed：它把在途记录丢了（后端被重启），判失败让用户重试；
+   *     安装请求已返回时后端必然已把状态置为 downloading，所以这里不存在「还没开始」；
+   *   - STALL_MS 内状态签名没有任何变化：判卡死。
+   */
   async function installPack(item) {
     if (item.installed) return true
     item.phase = 'runtime'
+    item.stage = 'downloading'
+    item.stageKey = 'downloading'
     item.percent = 0
+    item.percentKnown = false
+    item.runtimePercent = 0
+    item.errorKey = ''
     await deps.packInstall(item.packId)
+    let lastSig = null
+    let lastChange = now()
     for (;;) {
       const res = await deps.packStatus(item.packId)
       const st = (res && res.status) || {}
-      if (st.bytesTotal > 0) {
-        item.percent = Math.min(99, Math.round((st.bytesDownloaded || 0) / st.bytesTotal * 100))
-      }
       if (st.state === 'ready') {
         item.installed = true
         item.percent = 100
+        item.runtimePercent = 100
         return true
       }
       if (st.state === 'failed' || st.state === 'revoked') {
         item.phase = 'failed'
+        item.stageKey = 'preparing'
         item.error = st.error || st.state
+        return false
+      }
+      if (!IN_FLIGHT.has(st.state)) {
+        failWith(item, 'backendRestarted')
+        return false
+      }
+      applyStatus(item, st)
+      const sig = [st.state, st.phase, st.bytesDownloaded, st.filesDone, st.bytesUnpacked, st.phasePercent].join('|')
+      if (sig !== lastSig) {
+        lastSig = sig
+        lastChange = now()
+      } else if (now() - lastChange >= STALL_MS) {
+        failWith(item, 'stalled')
         return false
       }
       await sleep(POLL_MS)
@@ -116,12 +197,13 @@ export function createOptionalComponentsController(deps) {
   async function installModel(item) {
     if (!item.modelId || item.modelInstalled) return true
     item.phase = 'model'
+    item.stageKey = 'model'
     item.percent = 0
     return new Promise((resolve) => {
       let unsub = () => {}
       const finish = (ok, msg) => {
         try { unsub() } catch (e) { /* ignore */ }
-        if (!ok) { item.phase = 'failed'; item.error = msg || '' }
+        if (!ok) { item.phase = 'failed'; item.stageKey = 'preparing'; item.error = msg || '' }
         else { item.modelInstalled = true; item.percent = 100 }
         resolve(ok)
       }
@@ -148,10 +230,12 @@ export function createOptionalComponentsController(deps) {
    */
   async function installOne(item) {
     item.error = ''
+    item.errorKey = ''
     try {
       if (!(await installPack(item))) return false
       if (!(await installModel(item))) return false
       item.phase = 'starting'
+      item.stageKey = 'starting'
       item.percent = 0
       const res = await deps.ensureService(item.service)
       if (res && res.ok === false && !res.disabled) {
@@ -203,7 +287,8 @@ export function overallPercentOf(scope) {
   for (const i of scope) {
     if (i.phase === 'ready') { sum += 100; continue }
     if (i.phase === 'failed') { sum += 100; continue } // 失败也不再前进，按处理完计
-    if (i.phase === 'runtime') sum += WEIGHT.runtime * (i.percent / 100)
+    // runtimePercent：pack 段各细分阶段折算后的进度（解压时卡片百分比会从 0 重来，总进度不能跟着退）
+    if (i.phase === 'runtime') sum += WEIGHT.runtime * ((typeof i.runtimePercent === 'number' ? i.runtimePercent : i.percent) / 100)
     else if (i.phase === 'model') sum += WEIGHT.runtime + WEIGHT.model * (i.percent / 100)
     else if (i.phase === 'starting') sum += WEIGHT.runtime + WEIGHT.model
   }

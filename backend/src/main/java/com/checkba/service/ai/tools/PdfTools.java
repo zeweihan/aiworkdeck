@@ -5,6 +5,7 @@ package com.checkba.service.ai.tools;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.AiDocxExportService;
 import com.checkba.service.ai.EditorBridgeService;
@@ -483,19 +484,28 @@ public class PdfTools implements AgentToolComponent {
     @ToolMeta(displayName = "PDF转Word", category = "pdf", fileEffect = "ADDED", refreshFiles = true,
             requiresHost = ToolMeta.Host.LOWA)
     @Tool("把 PDF 转换为可编辑的 Word 文档，自动选择最佳路径：" +
-          "1) 文本型 PDF 优先版式级转换（pdf2docx：段落/表格/图片/分栏尽量保留原排版），转换服务不可用时" +
-          "自动回退为结构级转换（保留文字与段落，不保版式）；" +
+          "1) 文本型 PDF 走版式级转换（pdf2docx：段落/表格/图片/分栏尽量保留原排版）。" +
+          "本机转换组件没装或正在下载时，本工具会请用户下载、本轮到此结束，装好后自动重新执行——" +
+          "不要改用文字提取或其它方式自行生成文档。组件装好了但转换仍失败时返回失败原因：" +
+          "只保留文字的结构级转换会丢掉表格与版式，必须先征得用户同意，再带 allowStructuralFallback=true 调用；" +
           "2) 扫描件（无文本层）自动走本地 MinerU OCR 识别出内容再转（内容级，文档不出本机）。" +
           "这是对 PDF 做大范围修改的正确路径：转出 docx 后用 doc_* 工具编辑（带修订痕迹）。" +
-          "转换是机械流程，不消耗模型步数重新生成内容；完成后新 docx 自动在编辑器中打开，" +
-          "返回信息会注明实际使用的转换路径，向用户如实转述。")
+          "转换是机械流程，不消耗模型步数重新生成内容；完成后新 docx 自动在编辑器中打开（加载需要时间），" +
+          "返回信息会注明实际使用的转换路径，向用户如实转述。同一轮里对同一份 PDF 再调一次会直接复用已转出的那份。")
     public String pdf_to_word(
             @P("PDF 文件 ID") Long fileId,
-            @P("目标文件夹 ID（可选，传 null 放项目根目录）") Long parentId
+            @P("目标文件夹 ID（可选，传 null 放项目根目录）") Long parentId,
+            @P(value = "版式级转换失败时是否允许退回只保留文字的结构级转换（表格与版式会丢失）。"
+                    + "默认 false；只有用户明确同意后才传 true", required = false) Boolean allowStructuralFallback
     ) {
-        log.info("Tool: pdf_to_word called, fileId={}, parentId={}", fileId, parentId);
+        log.info("Tool: pdf_to_word called, fileId={}, parentId={}, allowStructuralFallback={}",
+                fileId, parentId, allowStructuralFallback);
         try {
             ProjectFile file = getPdfFile(fileId);
+            // 同一轮对同一份 PDF 再转一次：直接复用（dev-board#1017，RENAME 会再多一份同名 docx）
+            String runKey = EditorBridgeService.pdfToWordKey(file.getId(), parentId);
+            String reused = reuseGenerated(runKey);
+            if (reused != null) return reused;
             Path localPath = resolveExisting(file);
             String docxName = file.getName().replaceAll("(?i)\\.pdf$", "") + ".docx";
 
@@ -535,9 +545,10 @@ public class PdfTools implements AgentToolComponent {
                 } else {
                 ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
                         file.getProjectId(), parentId, AGENT_USER_ID, docxName, ocrMarkdown);
+                editorBridgeService.noteGenerated(runKey, docx.getId());
                 editorBridgeService.sendRefreshFilesAction();
                 editorBridgeService.sendOpenFileAction(docx);
-                return String.format("已将扫描件『%s』经本地 MinerU OCR 识别并转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开。\n" +
+                return String.format("已将扫描件『%s』经本地 MinerU OCR 识别并转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开（加载需要时间；随后的 doc_* 调用若返回 EDITOR_BOOTING，就等一等再重试同一步）。\n" +
                         "说明：这是 OCR 内容级转换（识别文字并保留段落结构，不保留原版式；识别结果建议人工核对）。\n" +
                         "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
                         file.getName(), docx.getName(), docx.getId());
@@ -562,10 +573,11 @@ public class PdfTools implements AgentToolComponent {
                     Files.move(tempOut, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                     docx.setFileSize(Files.size(target));
                     projectFileRepository.save(docx);
+                    editorBridgeService.noteGenerated(runKey, docx.getId());
 
                     editorBridgeService.sendRefreshFilesAction();
                     editorBridgeService.sendOpenFileAction(docx);
-                    return String.format("已将『%s』版式级转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开。\n" +
+                    return String.format("已将『%s』版式级转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开（加载需要时间；随后的 doc_* 调用若返回 EDITOR_BOOTING，就等一等再重试同一步）。\n" +
                             "说明：版式级转换（pdf2docx），段落/表格/图片/分栏尽量保留原排版。\n" +
                             "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹，用户可逐条接受/拒绝）。",
                             file.getName(), docx.getName(), docx.getId());
@@ -573,20 +585,34 @@ public class PdfTools implements AgentToolComponent {
                     Files.deleteIfExists(tempOut);
                 }
             } catch (Exception e) {
-                log.warn("Layout-level pdf2docx conversion failed, falling back to structural extraction", e);
-                // 组件没装才提示下载；提示只是提示——下面的结构级降级照常做完，
-                // 不能因为发提示把一份本来能转出来的 docx 弄丢（设计 §4.2）。
-                promptPptxComponentIfMissing("pdf_to_word");
+                log.warn("Layout-level pdf2docx conversion failed", e);
+                // 组件没装或正在下载（dev-board#1016）：请用户下载，本轮到此为止，装好后前端自动重发。
+                // 此前这里「一边弹下载提示、一边照做结构级转换」——结构级只剩文字、表格全丢，
+                // 模型拿着那份残缺的 docx 接着干，组件装完又整件事再做一遍。
+                String waiting = promptPptxComponentIfMissing("pdf_to_word");
+                if (waiting != null) return waiting;
+                // 组件装好了、服务却失败：结构级回退会丢表格与版式，必须用户同意才做
+                if (!Boolean.TRUE.equals(allowStructuralFallback)) {
+                    return layoutFailedNeedsConsent(e);
+                }
             }
 
             ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
                     file.getProjectId(), parentId, AGENT_USER_ID, docxName, markdown);
+            editorBridgeService.noteGenerated(runKey, docx.getId());
             editorBridgeService.sendRefreshFilesAction();
             editorBridgeService.sendOpenFileAction(docx);
-            return String.format("已将『%s』转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开。\n" +
-                    "说明：版式级转换服务当前不可用，本次为结构级转换（保留文字与段落、不保留原版式）。\n" +
-                    "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
-                    file.getName(), docx.getName(), docx.getId());
+            return LangText.of(
+                    String.format("已将『%s』按用户同意做了结构级转换，得到 Word 文档『%s』（文件 ID: %d），已在编辑器中打开（加载需要时间）。\n" +
+                            "说明：结构级转换只保留文字与段落，原文的表格与版式已丢失。向用户如实说明这一点。\n" +
+                            "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
+                            file.getName(), docx.getName(), docx.getId()),
+                    String.format("With the user's consent, \"%s\" was converted structurally into the Word document \"%s\" "
+                            + "(file ID: %d), now opening in the editor (loading takes a moment).\n"
+                            + "Note: a structural conversion keeps only the text and paragraphs; the original tables and "
+                            + "layout have been lost. Tell the user this plainly.\n"
+                            + "You can now edit the docx with the doc_* tools (edits are tracked).",
+                            file.getName(), docx.getName(), docx.getId()));
         } catch (Exception e) {
             return errorOf("PDF 转 Word 失败", e);
         }
@@ -595,20 +621,63 @@ public class PdfTools implements AgentToolComponent {
     // ==================== 辅助 ====================
 
     /**
-     * 版式级转换（pdf2docx，跑在 pptx-service 里）打不通且 pptx-runtime 没装时，
-     * 发一次 component_required 引导下载。只发提示、不改变返回值：
-     * 结构级降级转换仍然照常完成。
+     * 版式级转换（pdf2docx，跑在 pptx-service 里）打不通且 pptx-runtime 没装（含正在下载——
+     * {@code isReady} 下载中也是 false）时，发一次 component_required 引导下载，并返回给模型的停止文案；
+     * 组件已就绪（问题出在服务本身）时返回 null。
+     *
+     * <p>文案与 PptxTools.promptComponentIfMissing 同一口径：不出现「稍后重试」（模型会原样转述），
+     * 明说装好后自动重新执行、现在不要改用别的方式生成文档。编排器看到 component_required
+     * 已发出，会在这个工具之后直接收尾本轮（dev-board#1016）。
      */
-    private void promptPptxComponentIfMissing(String trigger) {
+    private String promptPptxComponentIfMissing(String trigger) {
+        OptionalComponents.Entry pe = OptionalComponents.byService("pptx-service");
         try {
-            OptionalComponents.Entry pe = OptionalComponents.byService("pptx-service");
-            if (packService.isReady(pe.packId())) return;
+            if (packService.isReady(pe.packId())) return null;
             long sizeMb = packService.knownSizes(pe.packId()).downloadBytes() / (1024 * 1024);
             editorBridgeService.sendComponentRequiredAction(
                     pe.packId(), pe.service(), pe.modelId(), sizeMb, pe.featureKeys(), trigger);
-        } catch (Exception ignored) {
-            // 提示失败不该影响降级转换
+        } catch (Exception e) {
+            // 判不出组件状态：按「没装好」处置——宁可让用户多看一次下载卡片，
+            // 也不能悄悄做一份丢了表格的结构级转换
+            log.warn("Could not determine pptx-runtime readiness", e);
         }
+        return LangText.of(
+                "版式级转换需要本机组件「PPT 生成与 PDF 转 Word」，它还没有装好（可能正在下载），"
+                        + "已请用户确认下载（界面上已经弹出提示）。装好后会自动重新执行这一步。"
+                        + "你现在不需要重复调用本工具，也不要改用文字提取或其它方式自行生成文档"
+                        + "（那样会丢掉表格与版式）；本轮到此为止。",
+                "Layout-level conversion needs the local component \"PPT generation and PDF to Word\", which is not "
+                        + "installed yet (it may still be downloading). The user has been asked to confirm the download "
+                        + "(a prompt is already on screen). This step will run again automatically once it is installed. "
+                        + "Do not call this tool again now, and do not switch to text extraction or any other way of "
+                        + "producing the document yourself (that would lose the tables and layout); this turn ends here.");
+    }
+
+    /** 组件已就绪但版式级转换失败：说清原因，结构级回退要用户点头。 */
+    private static String layoutFailedNeedsConsent(Exception e) {
+        String reason = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        if (reason.length() > 200) reason = reason.substring(0, 200) + "…";
+        return LangText.of(
+                "Error: 版式级转换失败（" + reason + "）。可以改做只保留文字的结构级转换，"
+                        + "但原文的表格与版式会丢失。请先把这一点告诉用户、征得同意后，"
+                        + "再带 allowStructuralFallback=true 调用本工具；用户不同意就不要转换，"
+                        + "也不要改用其它方式自行生成文档。",
+                "Error: layout-level conversion failed (" + reason + "). A structural conversion that keeps only the "
+                        + "text is possible, but the original tables and layout will be lost. Tell the user this and "
+                        + "get their consent first, then call this tool again with allowStructuralFallback=true; if "
+                        + "they decline, do not convert and do not produce the document some other way.");
+    }
+
+    /** 本轮对同一目标已经生成过：还在就复用，被删了就撤掉登记照常新建。 */
+    private String reuseGenerated(String runKey) {
+        Long existingId = editorBridgeService.generatedInRun(runKey);
+        if (existingId == null) return null;
+        ProjectFile existing = projectFileService.findFile(existingId).orElse(null);
+        if (existing == null || Boolean.TRUE.equals(existing.getIsDeleted())) {
+            editorBridgeService.forgetGenerated(runKey);
+            return null;
+        }
+        return EditorBridgeService.reusedGeneratedMessage(existing.getName(), existing.getId());
     }
 
     private ProjectFile getPdfFile(Long fileId) {

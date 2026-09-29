@@ -9,6 +9,8 @@ import com.checkba.model.entity.User;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.ProjectFileService;
+import com.checkba.service.quota.StageQuotaService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -198,12 +200,30 @@ public class ProjectTreeManifestService {
             Map<Long, Long> remap = new LinkedHashMap<>();
             int created = 0, updated = 0;
 
+            // 根级文件缓存区是工作台懒建的运行时结构，不是版本内容（dev-board#1021）：
+            // 清单只管它名下的文件，它自己的存废、改名一律不跟清单走。
+            ProjectFile liveStaging = current.values().stream()
+                    .filter(f -> ProjectFileService.isRootStagingFolder(f) && !Boolean.TRUE.equals(f.getIsDeleted()))
+                    .findFirst().orElse(null);
+
             for (TreeManifest.Node node : ordered) {
                 Long targetParentId = node.parentId() == null
                         ? null : remap.getOrDefault(node.parentId(), node.parentId());
 
                 ProjectFile existing = current.get(node.id());
                 boolean idTakenByOther = existing != null && !sameNode(existing, node);
+
+                if (existing != null && !idTakenByOther && ProjectFileService.isRootStagingFolder(existing)) {
+                    // 已有的缓存区行（活着的或回收站里的旧壳）原样不动：
+                    // 复活旧壳会多出第二个活缓存区，软删活的会让工作台再懒建一个
+                    current.remove(node.id());
+                    continue;
+                }
+                if (existing == null && liveStaging != null && isRootStagingNode(node)) {
+                    // 清单记着的旧缓存区行已经没了：不新建第二个，它名下的文件挂到现在这个下面
+                    remap.put(node.id(), liveStaging.getId());
+                    continue;
+                }
 
                 if (existing != null && !idTakenByOther) {
                     boolean keepDbLocation =
@@ -248,6 +268,7 @@ public class ProjectTreeManifestService {
             if (syncDeletions) {
                 for (ProjectFile leftover : current.values()) {
                     if (Boolean.TRUE.equals(leftover.getIsDeleted())) continue;
+                    if (ProjectFileService.isRootStagingFolder(leftover)) continue; // dev-board#1021
                     leftover.setIsDeleted(true);
                     leftover.setDeletedAt(LocalDateTime.now());
                     projectFileRepository.save(leftover);
@@ -261,6 +282,11 @@ public class ProjectTreeManifestService {
         } catch (Exception e) {
             throw new VersionException("同步文件树清单回数据库失败: project=" + projectId, e);
         }
+    }
+
+    private static boolean isRootStagingNode(TreeManifest.Node node) {
+        return node.isFolder() && node.parentId() == null
+                && StageQuotaService.STAGING_FOLDER_NAME.equals(node.name());
     }
 
     private Map<String, TreeManifest.Node> baseByUid(TreeManifest base) {

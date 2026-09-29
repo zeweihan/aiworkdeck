@@ -211,7 +211,7 @@ class ComponentRequiredTest {
         EditorBridgeService bridge = mock(EditorBridgeService.class);
 
         String out = pdfTools(pdf, files, bridge, mock(AiDocxExportService.class), client, storage, packs)
-                .pdf_to_word(7L, null);
+                .pdf_to_word(7L, null, null);
 
         verify(bridge).sendComponentRequiredAction(eq("mineru-runtime"), eq("mineru-service"),
                 eq("mineru-models"), eq(1000L),
@@ -219,9 +219,11 @@ class ComponentRequiredTest {
         assertFalse(out.contains("稍后重试"), out);
     }
 
-    @Test
-    @DisplayName("版式级转换打不通且 pptx-runtime 未装：发提示，但结构级降级转换照常做完")
-    void layoutFallbackStillConvertsWhilePrompting(@TempDir Path tmp) throws Exception {
+    /** 文本型 PDF + 版式级转换打不通 的公共夹具。 */
+    private record TextPdfFixture(PdfTools tools, EditorBridgeService bridge, AiDocxExportService docxExport,
+                                  ProjectFile docx, PdfEditService pdf) {}
+
+    private static TextPdfFixture textPdfLayoutDown(Path tmp, boolean packReady) throws Exception {
         Path onDisk = Files.writeString(tmp.resolve("text.pdf"), "%PDF-1.7");
         PdfEditService pdf = mock(PdfEditService.class);
         when(pdf.extractMarkdown(onDisk)).thenReturn(new PdfEditService.ExtractedText("# 正文", false));
@@ -234,7 +236,7 @@ class ComponentRequiredTest {
         PptxServiceClient client = mock(PptxServiceClient.class);
         when(client.convertPdfToDocx(anyString(), anyString())).thenThrow(new RuntimeException("service down"));
         NativePackService packs = mock(NativePackService.class);
-        when(packs.isReady("pptx-runtime")).thenReturn(false);
+        when(packs.isReady("pptx-runtime")).thenReturn(packReady);
         when(packs.knownSizes("pptx-runtime")).thenReturn(new NativePackService.Sizes(173_015_040L, 0L));
         AiDocxExportService docxExport = mock(AiDocxExportService.class);
         ProjectFile docx = new ProjectFile();
@@ -243,13 +245,89 @@ class ComponentRequiredTest {
         when(docxExport.exportMarkdownToDocx(eq(3L), isNull(), anyLong(), anyString(), eq("# 正文")))
                 .thenReturn(docx);
         EditorBridgeService bridge = mock(EditorBridgeService.class);
+        return new TextPdfFixture(pdfTools(pdf, files, bridge, docxExport, client, storage, packs),
+                bridge, docxExport, docx, pdf);
+    }
 
-        String out = pdfTools(pdf, files, bridge, docxExport, client, storage, packs).pdf_to_word(7L, null);
+    @Test
+    @DisplayName("版式级转换打不通且 pptx-runtime 未装：发提示并停下，不做结构级降级（dev-board#1016）")
+    void layoutFailureWithComponentMissingStopsWithoutFallback(@TempDir Path tmp) throws Exception {
+        TextPdfFixture f = textPdfLayoutDown(tmp, false);
 
-        verify(bridge).sendComponentRequiredAction(eq("pptx-runtime"), eq("pptx-service"), isNull(),
+        String out = f.tools().pdf_to_word(7L, null, null);
+
+        verify(f.bridge()).sendComponentRequiredAction(eq("pptx-runtime"), eq("pptx-service"), isNull(),
                 eq(165L), eq(OptionalComponents.byPackId("pptx-runtime").featureKeys()), eq("pdf_to_word"));
-        // 降级路径不能因为发了提示就失败：docx 照样转出来并在编辑器里打开
-        verify(bridge).sendOpenFileAction(docx);
+        // 旧行为：一边弹下载提示一边转出一份丢了表格的 docx 并自动打开——模型拿着它接着干
+        verify(f.docxExport(), never()).exportMarkdownToDocx(any(), any(), any(), any(), any());
+        verify(f.bridge(), never()).sendOpenFileAction(any());
+        assertTrue(out.contains("已请用户确认下载"), out);
+        assertTrue(out.contains("不要改用文字提取"), out);
+        assertTrue(out.contains("装好后会自动重新执行"), out);
+        assertFalse(out.contains("稍后重试"), out);
+        assertFalse(out.startsWith("Error"), "等组件不是失败，别计入连续失败：" + out);
+    }
+
+    @Test
+    @DisplayName("组件正在下载（isReady=false）时即便模型带了 allowStructuralFallback=true 也不降级")
+    void downloadingComponentNeverFallsBackEvenIfAllowed(@TempDir Path tmp) throws Exception {
+        TextPdfFixture f = textPdfLayoutDown(tmp, false);
+
+        String out = f.tools().pdf_to_word(7L, null, true);
+
+        verify(f.docxExport(), never()).exportMarkdownToDocx(any(), any(), any(), any(), any());
+        verify(f.bridge(), never()).sendOpenFileAction(any());
+        assertTrue(out.contains("已请用户确认下载"), out);
+    }
+
+    @Test
+    @DisplayName("组件已装好、服务却失败：不自动降级，返回失败原因并要求先征得用户同意")
+    void installedButServiceFailsNeedsExplicitConsent(@TempDir Path tmp) throws Exception {
+        TextPdfFixture f = textPdfLayoutDown(tmp, true);
+
+        String out = f.tools().pdf_to_word(7L, null, null);
+
+        verify(f.bridge(), never()).sendComponentRequiredAction(anyString(), anyString(), any(), anyLong(),
+                anyList(), anyString());
+        verify(f.docxExport(), never()).exportMarkdownToDocx(any(), any(), any(), any(), any());
+        assertTrue(out.startsWith("Error:"), out);
+        assertTrue(out.contains("service down"), "失败原因要带出来：" + out);
+        assertTrue(out.contains("表格与版式会丢失"), out);
+        assertTrue(out.contains("allowStructuralFallback=true"), out);
+    }
+
+    @Test
+    @DisplayName("用户同意后带 allowStructuralFallback=true：做结构级转换，返回里明写表格与版式已丢失")
+    void allowedStructuralFallbackConvertsAndDeclaresTheLoss(@TempDir Path tmp) throws Exception {
+        TextPdfFixture f = textPdfLayoutDown(tmp, true);
+
+        String out = f.tools().pdf_to_word(7L, null, true);
+
+        verify(f.docxExport()).exportMarkdownToDocx(eq(3L), isNull(), anyLong(), eq("scan.docx"), eq("# 正文"));
+        verify(f.bridge()).sendOpenFileAction(f.docx());
+        verify(f.bridge()).noteGenerated(EditorBridgeService.pdfToWordKey(7L, null), 9L);
         assertTrue(out.contains("结构级转换"), out);
+        assertTrue(out.contains("表格与版式已丢失"), out);
+    }
+
+    @Test
+    @DisplayName("同一轮对同一份 PDF 再转一次：直接复用已转出的那份，不再新建（dev-board#1017）")
+    void sameRunSecondConversionReusesTheFirst(@TempDir Path tmp) throws Exception {
+        TextPdfFixture f = textPdfLayoutDown(tmp, true);
+        when(f.bridge().generatedInRun(EditorBridgeService.pdfToWordKey(7L, null))).thenReturn(9L);
+        // pdfTools 里的 ProjectFileService 是夹具内部 mock，这里重新搭一份可控的
+        Path onDisk = tmp.resolve("text.pdf");
+        ProjectFileService files = mock(ProjectFileService.class);
+        when(files.getFile(7L)).thenReturn(pdfFile(onDisk));
+        when(files.findFile(9L)).thenReturn(java.util.Optional.of(f.docx()));
+        PdfTools tools = pdfTools(f.pdf(), files, f.bridge(), f.docxExport(), mock(PptxServiceClient.class),
+                mock(com.checkba.storage.ProjectStorageResolver.class), mock(NativePackService.class));
+
+        String out = tools.pdf_to_word(7L, null, true);
+
+        assertTrue(out.contains("本轮已生成过"), out);
+        assertTrue(out.contains("9"), out);
+        verify(f.pdf(), never()).extractMarkdown(any());
+        verify(f.docxExport(), never()).exportMarkdownToDocx(any(), any(), any(), any(), any());
     }
 }

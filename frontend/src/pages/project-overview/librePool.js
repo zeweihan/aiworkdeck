@@ -76,6 +76,43 @@ export const librePoolMethods = {
             return
         }
     },
+    // 「有实例正在启动/装载」信号（dev-board#1018）：AI 生成文档后自动开新标签，
+    // 引擎还在 boot / load_document 途中时活跃指针是 null，handleEditorCommand 以前
+    // 立刻回「编辑器未就绪」，模型只能瞎重试。这里列出挂着文件、尚未 ready、也没落
+    // 失败态的实例，连同各自还该等多久（组件按引擎是否已就绪 + 文档字节数给出，见
+    // LibreOfficeEditor.loadWaitBudgetMs），供 AI 命令等待。空白备胎不注册 _libreRefs，
+    // 天然不在列。
+    libreBootingInstances() {
+        const refs = this._libreRefs || {}
+        const out = []
+        for (const k of Object.keys(refs)) {
+            const ed = refs[k]
+            if (!ed || !ed.file || ed.ready) continue
+            const st = String(ed.statusKey || '')
+            if (st.endsWith('Failed') || st === 'desktopOnly' || st === 'unsupported') continue
+            let budgetMs = 0
+            try { budgetMs = typeof ed.loadWaitBudgetMs === 'function' ? Number(ed.loadWaitBudgetMs()) || 0 : 0 } catch (e) { budgetMs = 0 }
+            out.push({ key: k, fileId: ed.file.id, budgetMs: budgetMs > 0 ? budgetMs : 90000 })
+        }
+        return out
+    },
+    // 这份 executor 所属的编辑器是否处于装载失败态（dev-board#1018）。失败态的编辑器仍会
+    // emit ready 并登记 executor（沿用 loadFailed 的既有语义：画布可见、可排查），但它
+    // 端着的是 boot 出来的空白占位文档，docLoadFailed 保存闸永久落下——AI 往里写的每个字
+    // 都会报成功、永远不落盘。判据就是这道保存闸（reloadFromBackend 失败同样置它：画布上
+    // 是过期内容，写了也存不下）。返回 {key, fileId, code} 或 null。
+    libreLoadFailureOf(executor) {
+        if (!executor) return null
+        const map = this.getLibreExecutorMap()
+        const refs = this._libreRefs || {}
+        for (const k of Object.keys(map)) {
+            if (map[k] !== executor) continue
+            const ed = refs[k]
+            if (!ed || !ed.docLoadFailed) return null
+            return { key: k, fileId: k.slice(k.indexOf(':') + 1), code: ed.openFailCode || ed.statusKey || 'loadFailed' }
+        }
+        return null
+    },
     setLibreRef(pane, fileId, el) {
         const refs = this._libreRefs || (this._libreRefs = {})
         const key = pane + ':' + fileId

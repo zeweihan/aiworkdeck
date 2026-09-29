@@ -21,6 +21,8 @@ export const componentDownloads = createComponentDownloadManager({
   packInstall,
   packStatus,
   packInfo,
+  // 前端自己判出的失败（停滞、后端重启）要按界面语言取文案，缺 t 会退回中文兜底
+  t,
   modelDownload: (id) => host.model.download(id),
   onModelProgress: (cb) => host.model.onProgress(cb),
   ensureService: (name) => host.services.ensure(name),

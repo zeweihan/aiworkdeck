@@ -225,6 +225,15 @@ public class PackController {
         m.put("bytesDownloaded", st.getBytesDownloaded());
         m.put("bytesTotal", st.getBytesTotal());
         m.put("error", st.getError());
+        // 细分阶段与解压/核对进度（dev-board#1015）。phase 取值见 NativePackService.PHASE_*；
+        // phasePercent=-1 表示该阶段没有可计量进度；filesDone/filesTotal 按当前阶段计。
+        m.put("phase", st.getPhase());
+        m.put("component", st.getComponent());
+        m.put("phasePercent", st.getPhasePercent());
+        m.put("filesDone", st.getFilesDone());
+        m.put("filesTotal", st.getFilesTotal());
+        m.put("bytesUnpacked", st.getBytesUnpacked());
+        m.put("bytesUnpackTotal", st.getBytesUnpackTotal());
         // 追新提示。latestVersion 是内存快照（最近一次真发过请求的路径写的），拿不到就是 null
         // ——列表端点绝不为它发网络请求：镜像不可达时 20s 超时 × 两个源会把整个广场拖死。
         m.put("latestVersion", packService.knownLatestVersion(packId));

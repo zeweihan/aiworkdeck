@@ -29,7 +29,7 @@ import { nextBubbleId } from '../../src/composables/bubbleId.js'
 import { documentEditedFromProcesses } from '../../src/utils/useInDocumentVisibility.js'
 import { isSameFileChange } from '../../src/utils/chatFileChange.js'
 
-const source = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
+import { buildAgentStreamFactory } from '../_lib/agent-stream-factory.mjs'
 
 /** 一条可控的 SSE 响应体：push 一段原文、end 正常收尾（服务端关流）、fail 异常断开。 */
 function controllableBody() {
@@ -97,22 +97,7 @@ function harness() {
     return { ok: true, status: 200, json: async () => [] }
   }
 
-  const body = source.replace(/^import .*$/gm, '')
-    .replace('export function useAgentStream()', 'function useAgentStream()')
-  const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
-    'createProtocolTagRegex', 'decodeProtocolTags', 'decodeProtocolTagsIncremental', 't', 'nextBubbleId', 'captureChatTimeline',
-    'documentEditedFromProcesses', 'isSameFileChange',
-    'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
-    'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
-    'ASK_USER_KIND', 'decodeAttr', 'normalizeAskUserEvent',
-    body + '\nreturn useAgentStream()')
-  const s = factory(ref, reactive, nextTick, () => {}, () => null,
-    createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental, (key) => key, nextBubbleId, captureChatTimeline,
-    documentEditedFromProcesses, isSameFileChange,
-    createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
-    () => 'http://test.local', () => 'test-session',
-    async () => ({ items: [], runId: null, status: null }), async () => null, async () => ({ items: [] }), async () => null,
-    ASK_USER_KIND, decodeAttr, normalizeAskUserEvent)
+  const s = buildAgentStreamFactory()
 
   const connects = () => calls.filter((u) => u.includes('/api/agent/connect/')).length
   const becomeVisible = () => {
