@@ -65,6 +65,29 @@ test('模型读不了图 + 附件里有图 → 常驻提示（不管图是粘的
     '拖进来的项目图片走 contextFiles，原来那条提示嵌在 pastedImages 块里，这条路零提示')
 })
 
+test('预览标签打开的是当前文档（activeDoc）时同样要提示——它不走 pastedImages/contextFiles 任何一条', () => {
+  assert.equal(
+    visionNoticeKey({ modelVision: false, pastedImages: [], contextFiles: [], activeDoc: { id: '1', name: '现场.jpg', fileType: 'image' } }),
+    'chat.imageOcrFallbackNote',
+    'fileType 直接是 image 的形状',
+  )
+  assert.equal(
+    visionNoticeKey({ modelVision: false, pastedImages: [], contextFiles: [], activeDoc: { id: '2', name: '现场.jpg', fileType: 'jpg' } }),
+    'chat.imageOcrFallbackNote',
+    'fileType 是扩展名的形状，靠文件名后缀兜底命中',
+  )
+  assert.equal(
+    visionNoticeKey({ modelVision: false, pastedImages: [], contextFiles: [], activeDoc: { id: '3', name: '合同.docx', fileType: 'docx' } }),
+    '',
+    'activeDoc 不是图片就不提示',
+  )
+  assert.equal(
+    visionNoticeKey({ modelVision: null, pastedImages: [], contextFiles: [], activeDoc: { id: '1', name: '现场.jpg', fileType: 'image' } }),
+    '',
+    'modelVision 未知时同样不提示',
+  )
+})
+
 test('能力未知（null）一律不提示——拉不到模型目录时对所有模型误报是造谣', () => {
   assert.equal(visionNoticeKey({ modelVision: null, pastedImages: [{}], contextFiles: [] }), '')
   assert.equal(visionNoticeKey({ modelVision: undefined, pastedImages: [{}], contextFiles: [] }), '')

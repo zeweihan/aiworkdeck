@@ -75,12 +75,17 @@ export function isImageAttachment(item) {
  *
  * <p>`modelVision` 是三态：true 支持 / false 不支持 / null 未知。
  * **未知一律不提示**——拉不到模型目录时会对所有模型误报「不支持读图」。
+ *
+ * <p>`activeDoc`（可选）是输入框上方「当前文档」chip 对应的对象。它随消息一起
+ * 送给模型，但既不在 pastedImages 也不在 contextFiles 里——预览标签里打开一张
+ * jpg 时，原来界面上没有任何提示，模型读到的是 OCR 转写文本（dev-board#1013）。
  */
-export function visionNoticeKey({ modelVision, pastedImages, contextFiles }) {
+export function visionNoticeKey({ modelVision, pastedImages, contextFiles, activeDoc }) {
   if (modelVision !== false) return ''
   const hasPasted = Array.isArray(pastedImages) && pastedImages.length > 0
   const hasDragged = Array.isArray(contextFiles) && contextFiles.some(isImageAttachment)
-  return hasPasted || hasDragged ? 'chat.imageOcrFallbackNote' : ''
+  const hasActiveDocImage = isImageAttachment(activeDoc)
+  return hasPasted || hasDragged || hasActiveDocImage ? 'chat.imageOcrFallbackNote' : ''
 }
 
 /**
