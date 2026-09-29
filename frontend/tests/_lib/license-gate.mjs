@@ -10,6 +10,19 @@
 //
 // 契约：调用方传自己的 api(ep, opts) —— 三套各自维护 BACKEND 与会话头，形状一致。
 
+/**
+ * 存量 trial 票据的「宽限态」测试用未来硬期限（dev-board#1045）。
+ * application-desktop.yml 的 legacy-grace-until 是 2026-09-30，过了这天播了存量 trial 票据的
+ * 隔离后端会变 unlocked:false、套件死在 setup。自起隔离后端的套件一律带
+ * `legacyGraceJvmArg()` 把期限推到远期，跑宽限态；这不改 yml、也不开 trial-code.enabled，
+ * 发版默认值（试用码关闭）仍被覆盖。daysRemaining 由后端按今天动态算（约 2.6 万天），
+ * 顶栏 chip 断言读的就是 status 里的值，不受影响。
+ */
+export const LEGACY_GRACE_FUTURE = '2099-12-31'
+export function legacyGraceJvmArg() {
+  return '-Dsecurity.license.trial-code.legacy-grace-until=' + LEGACY_GRACE_FUTURE
+}
+
 /** README 曾公开发布的通用试用码（Ed25519 离线验签）。官方版已不再受理，仅用于 fork / 旧后端。 */
 export const PUBLIC_TRIAL_CODE = process.env.APP_E2E_TRIAL_CODE
   || 'AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK'
@@ -32,7 +45,9 @@ const SEED_RECIPE = `
        EOF
        chmod 600 "$HOME_E2E/.aiworkdeck/license.json"
 
-     只要今天早于 application-desktop.yml 里的 legacy-grace-until，后端即为已解锁。
+     只要今天早于后端生效的 legacy-grace-until，后端即为已解锁。application-desktop.yml 里
+     是 2026-09-30，过了这天必须给隔离后端加 JVM 参数（本模块的 legacyGraceJvmArg()，
+     即 -Dsecurity.license.trial-code.legacy-grace-until=2099-12-31）；长驻后端则需自行处于账户模式。
 
 **不要改用 -Dsecurity.license.trial-code.enabled=true 来解锁。**
 那会让发版默认值反而没有任何一套 e2e 覆盖到，等于把闸变成摆设。`.trim()
