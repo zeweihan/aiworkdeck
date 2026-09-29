@@ -881,8 +881,12 @@ spec §5.5 已改，初版口径在那里划掉留痕）**。它原本是「溯�
 
 - `DdCloudProxyFilter` **绝不能调 `request.getParameter`**：Tomcat 会顺手把 multipart 请求体解析掉，原字节转发就断了；查询串自己拆（`parseQuery`）。
 - 转发的上传与取件要保留原 `Content-Type`（含 boundary）与 `Content-Disposition`；`httpRaw` 非 200 不抛，是为了让客户越权的 403 原样回到调用方。
-- **律师侧的尽调清单入口 2026-08-19 起对律师隐藏**（`DD_FILES_PLUGIN` 不在 `LEFT_SIDEBAR_PLUGINS`，只有 CLIENT 看得到）。本卡没有恢复它：
-  律师在桌面端目前没有 UI 建清单，客户门户里能看到的只有迁移上去的旧清单。要不要对已上云案卷恢复律师入口是产品决定，未做。
+- **律师侧的尽调清单入口只对云端轨道案卷恢复**（2026-08-19 起对律师隐藏，dev-board#1050 起云端轨道恢复）：`DD_FILES_PLUGIN` 仍不在
+  `LEFT_SIDEBAR_PLUGINS` 数组里，`getPluginsForUser(role, { cloudTrack })` 在 `cloudTrack` 为真时把它追加到末尾；工作台的 `ddCloudTrack`
+  computed 用 `resolveTrack({localMode, linked: collabLinked}) === TRACK.CLOUD`（与 `InviteMemberDialog.isCloudTrack` 同源），
+  放进案件库后 `onCollabChanged` / `onInviteMemberSuccess` 重取 `collabCloud`，rail 即时出现；断开后正开着的面板回落 `files`。
+  本机项目与自建服务器（localMode=false）维持隐藏。存量 `leftPaneKey='dd-files'` 仍经 `migrateLeftPaneKey` 回落 `files`（恢复时协作状态还没拉到）。
+  护栏 `tests/project-home/dd-files-cloud-track.test.mjs`。
 
 ### 验证
 
