@@ -304,6 +304,45 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      restrict skill 不重复裁、xlsx、没开文档不下发 list_tools）、`ToolDiscoveryToolsIndexTest`（目录页口径）。用例字段 `docSessionCategoryTrim`（null = 跟生产默认开）**显式写了就钉死
      本用例的模式**，全局 `-Dai.tools.*` 两个开关都不再影响它。整套回放关掉类目裁剪重跑：
      `mvn test -Dtest=OrchestratorReplayEvalTest -Dai.tools.doc-session-category-trim.enabled=false`。
+  ②c **`list_tools` 的三种查法与 `use_skill`**（dev-board#1065，对标 Claude Code 的 ToolSearch 与 Skill 两个工具）：
+     - `list_tools(category?, query?, names?)`，**同时给了几个时 names > query > category**。
+       `query` 在本会话**候选集**（`ctx.sessionTools()`，含已下发的）的「工具名 + 描述」里搜，空白分隔的每个词都要出现（AND，
+       大小写不敏感），最多 15 条全签名（`ToolDiscoveryTools.MAX_QUERY_HITS`），多出来的只报个数，并顺带列至多 5 个命中的 skill；
+       `names` 是逗号分隔的确切工具名，查不到的单列一行「not found in this session: …」——**不以 Error 开头**
+       （部分命中不能让整次调用判成失败，否则编排器不记展开）。两种都保留「NEXT turn / `<tool_code>`」尾句。
+     - **放回靠结构化回写，不解析输出文字**：`ToolContext` 新加两个分量 `runId` 与 `disclosedCategories`（可写集合，
+       编排器在 `dispatchTool` 里现造一个传进去），`list_tools` 把**真正展示了全签名**的工具所在类目（不含 core）写进去，
+       `noteToolCategoryExpansion` 分发后读它并进 `RunGuard.expandedToolCategories`（仍是唯一的放回机制，只增不减、下一轮生效）。
+       category 模式按参数解析与回写取并集——回放里 list_tools 走桩时只有参数那条路。给了 names/query 时不再按 category 参数放回。
+     - 无参目录页末尾附「skills (specialised workflows; switch with use_skill…)」一段：`SkillRouter.invocableSkills()`
+       里**本轮还没生效**的（`isActiveInRun(runId, id)` 为假），每条 `- id — 展示名: 描述第一行（≤120 字）`。
+       `ToolDiscoveryTools` 拿 SkillRouter 走 `@Autowired(required=false)` setter，构造器不变（评测与单测直接 new 它）。
+     - `use_skill(skillId)`（`tools/SkillTools`，`@ToolMeta(displayName="调用技能", category="agent")`，Host NONE，三档客户端都可见，
+       进 `ToolDisclosurePolicy.CORE` 与 `SkillRouter.ORCHESTRATION_TOOLS`）= **skill 生效的第三条路**（前两条是起跑时的手动选择与触发词）。
+       结果就是 skill 的指引正文（`SkillRouter.skillInstructionsFor`：模板 + 输出约定，按应用语言取 *_en；与 `promptInjectionFor` 同一份正文、
+       只是不带「本轮命中了技能」前缀），于是指引**当轮**进上下文；末尾列出它的 allowed_tools 并说「下一轮起可见 / 当轮用 `<tool_code>`」。
+       未知 / 停用 / 当前语言不可用 / **仅手动**的回 `Error:` 并列可用 id（仅手动 = 用户不想让它被自动带上，模型调用也算自动）；
+       本轮已生效的只回一句「already active」，不再灌一遍正文。
+     - **生效登记在编排器**（`noteToolCategoryExpansion` → `noteSkillActivation`，与披露开关无关、判据是工具结果 success）：
+       ① `policy.categoriesCoveredBy(allowed_tools)` 并进展开集——被渐进披露 / 活跃文档类目裁剪藏着的那几类下一轮回来；
+       ② `restrict` 且白名单非空的登记进 `SkillRouter.activateMidRun`（存在单独的 `midRunByRun`，**不进 `activeSkills`**——
+       那是起跑时读一次的 prompt 注入 / `skill_update` / 事项分类口径；`clearRun` 与 24h 过期一并清）。
+       passthrough 的不登记（没有白名单可并），只靠①。
+     - **中途生效只许加、不许减（并集规则）**：`SkillRouter.visibleTools` = 起跑时 skill 的裁剪结果 `base`，
+       若 `base` 就是全集（起跑时没裁）则原样返回，由编排器的披露路径按①放回；若起跑时裁过，则 `base ∪ 中途 restrict skill 的白名单`
+       （按 `all` 的顺序）。**绝不走「裁到白名单」那条路**：模型前几轮看过、可能已在 messages 里宣布要调的工具下一轮不能消失（通道 400）。
+     - 埋点 `skill.activated` 的 `how` 多一个取值 `model`（`SkillRouter.SOURCE_MODEL`；白名单只按键过滤，官网账本不需同步）。
+       中途生效**不补发** `skill_update`（前端技能 chip 不会亮），过程卡上那条「调用技能」就是可见痕迹。
+     - **prompt 侧只在 `toolDisclosureRule`（「## 工具目录」段）加了一句**「不确定就 `list_tools(query=…)`，属于专门流程就 `use_skill`」，
+       **不进基底 prompt**：没藏东西的会话里 list_tools 不下发（`dropIdleCatalog`），基底提它等于教一个用不了的工具，
+       `ContextAssemblerServiceTest.toolCatalogRuleIsAbsentWhileDisclosureIsOff` 守着。**已知缺口**：没开文档、披露关着的会话里
+       `list_tools` 不下发，模型看得见 `use_skill` 却没有原生途径列出 skill id（只能经 XML 调 list_tools，或靠 use_skill 报错时列出的可用 id）。
+     - 回放：`RecordingToolRegistry.setLiveTools`——用例没给桩时，`use_skill` 与 `list_tools` **真执行**（EvalHarness 把 RealToolBeans 里
+       null 依赖的 SkillTools 换成接真 SkillRouter 的实例，并给 ToolDiscoveryTools 接上 SkillRouter），于是 `promptContains`
+       能断言 skill 指引正文 / 目录页真的回喂进了下一轮上下文，逐轮可见性断言验得到回写通道。`cases-use-skill.json`（7 例：
+       无触发词调 use_skill 指引进上下文且原工具一个不少、错 id 回 Error 列可用 id、docx 类目裁剪下 use_skill 放回 litigation_*、
+       起跑已被 restrict skill 裁过时中途 restrict skill 只并不减、list_tools query 放回 pdf、names 只放回点名类目、目录页列 skills）。
+       单测 `ToolDiscoveryToolsSearchTest`（9 条）、`SkillToolsTest`（5 条）、`SkillRouterTest` 的「use_skill」组（5 条）。
   ③ **skill 白名单**（`SkillRouter.visibleTools(runId, …)`）+ 记忆工具兜底，见上文 skill 一节。
      **裁不裁是 skill 自愿声明的**（dev-board#799，审计 A2）：skill.yml 的
      `tool_policy: passthrough | restrict`，**缺省 passthrough = 不裁**。改之前裁剪与否只看

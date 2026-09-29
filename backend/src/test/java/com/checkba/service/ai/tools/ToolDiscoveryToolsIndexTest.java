@@ -41,7 +41,7 @@ class ToolDiscoveryToolsIndexTest {
     void indexListsOnlyToolsThatWereNotOffered() {
         ToolContextHolder.set(new ToolContext(1L, "conv", 7L, null, SESSION,
                 Set.of("doc_get_document_text", "doc_format_table", "list_tools")));
-        String index = new ToolDiscoveryTools(new ToolDisclosurePolicy(false, true)).list_tools(null, "conv");
+        String index = new ToolDiscoveryTools(new ToolDisclosurePolicy(false, true)).list_tools(null, null, null, "conv");
 
         assertTrue(index.contains("pdf (1): pdf_inspect"), index);
         assertFalse(index.contains("doc_format_table"), "已经在模型手上的工具不该出现在目录页：" + index);
@@ -51,7 +51,7 @@ class ToolDiscoveryToolsIndexTest {
     @DisplayName("调用方没给本轮下发集时退回旧口径：非核心即未下发")
     void withoutOfferedSetFallsBackToNonCore() {
         ToolContextHolder.set(new ToolContext(1L, "conv", 7L, null, SESSION));
-        String index = new ToolDiscoveryTools(new ToolDisclosurePolicy(true)).list_tools(null, "conv");
+        String index = new ToolDiscoveryTools(new ToolDisclosurePolicy(true)).list_tools(null, null, null, "conv");
 
         assertTrue(index.contains("pdf_inspect"), index);
         assertTrue(index.contains("doc_format_table"), index);

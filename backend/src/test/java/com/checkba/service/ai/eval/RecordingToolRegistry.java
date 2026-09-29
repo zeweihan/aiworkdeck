@@ -56,6 +56,18 @@ public class RecordingToolRegistry extends ToolRegistry {
         return capabilities;
     }
 
+    /**
+     * 真跑的工具名（dev-board#1065）：用例没给桩时，这些工具走生产的 execute、真执行方法体。
+     *
+     * <p>只收纯逻辑、无外部副作用的工具。{@code use_skill} 在这里是因为它的「结果」本身就是要验的东西——
+     * skill 的指引正文进没进下一轮上下文，桩输出证明不了（桩文字是用例自己写的）。
+     */
+    private java.util.Set<String> liveTools = java.util.Set.of();
+
+    public void setLiveTools(java.util.Set<String> liveTools) {
+        this.liveTools = liveTools == null ? java.util.Set.of() : liveTools;
+    }
+
     /** 设置工具桩输出（key = 别名解析后的工具名） */
     public void setStubs(Map<String, String> stubs) {
         this.stubs = stubs == null ? Map.of() : stubs;
@@ -80,6 +92,9 @@ public class RecordingToolRegistry extends ToolRegistry {
             // 与生产行为一致：未注册 / 本会话不可见的工具返回 found=false，
             // 并带上那句指路（审计 A11）
             return new ToolResult(ToolRegistry.unknownToolMessage(resolved), null, false);
+        }
+        if (liveTools.contains(resolved) && !stubs.containsKey(resolved)) {
+            return super.execute(resolved, argsJson, ctx);
         }
         String output = stubs.getOrDefault(resolved, "OK (eval stub)");
         return new ToolResult(output, tool.get(), true);

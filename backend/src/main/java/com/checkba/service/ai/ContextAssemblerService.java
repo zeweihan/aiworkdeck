@@ -298,12 +298,17 @@ public class ContextAssemblerService {
                 + "`<tool_code>name(arg=\"value\")</tool_code>`).\n"
                 + "- Before you tell the user something is impossible or unsupported, call `list_tools()`. "
                 + "Saying \"I can't\" about a capability that is one catalog lookup away is a serious error.\n"
+                + "- When unsure whether a capability exists, search with `list_tools(query=\"keywords\")`; "
+                + "when the task clearly fits one of the skills (specialised workflows) the catalog lists, "
+                + "switch to it with `use_skill` first.\n"
                 : "\n\n## 工具目录\n"
                 + "你手上这份工具清单是常用子集，不是本产品能做的全部。"
                 + "`list_tools()` 按类目列出其余工具；`list_tools(category=\"x\")` 给出它们的完整签名，"
                 + "并从下一轮起并入你的工具清单（想当轮就用，写成 `<tool_code>name(arg=\"value\")</tool_code>`）。\n"
                 + "- **在告诉用户「做不到 / 不支持」之前，先调一次 `list_tools()`。** "
-                + "一个查一次目录就能拿到的能力被你说成没有，是最严重的一类错误。\n";
+                + "一个查一次目录就能拿到的能力被你说成没有，是最严重的一类错误。\n"
+                + "- 不确定有没有某项能力时用 `list_tools(query=\"关键词\")` 按关键词搜；"
+                + "任务明显属于目录里列出的某个 skill（专门流程）时，先调 `use_skill` 切过去再做。\n";
     }
 
     // 应用语言（EN 版 PR5）：en-US 时选英文 system prompt 与各硬编码段的英文文本；

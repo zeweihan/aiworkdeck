@@ -1297,6 +1297,9 @@ class ContextAssemblerServiceTest {
         assertTrue(stable.contains("list_tools()"), stable);
         // 这一句是整段里唯一真正要紧的：它失效的表现是模型谎报能力缺失（dev-board#396 那种形状）
         assertTrue(stable.contains("做不到"), "「说做不到之前先查目录」这条硬规则不能丢：" + stable);
+        // dev-board#1065：关键词搜与切到专门流程两条路也写在这一段——只在 list_tools 真的下发时出现，
+        // 基底 prompt 不提（没藏东西的会话里 list_tools 不下发，提了就是教一个用不了的工具）
+        assertTrue(stable.contains("list_tools(query=") && stable.contains("use_skill"), stable);
     }
 
     @Test

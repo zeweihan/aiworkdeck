@@ -1,0 +1,356 @@
+[
+  {
+    "id": "use-skill-without-trigger-word-brings-instructions-and-tools",
+    "title": "use_skill：用户没说触发词（「把这次股东会的材料核一遍」），模型自己调 use_skill——指引正文作为工具结果进下一轮上下文，白名单工具可见，原来看得见的工具一个不少（dev-board#1065）",
+    "category": "skill",
+    "protocol": "native",
+    "userInput": "把这次股东会的材料核一遍",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "use_skill",
+            "arguments": {
+              "skillId": "shareholder-meeting-verification"
+            }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "extract_file_text",
+            "arguments": {
+              "fileId": "2001"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已按股东大会核查流程读完通知与决议公告，逐字段交叉核对结果见底稿。</final>"
+      }
+    ],
+    "toolStubs": {
+      "extract_file_text": "2026 年第一次临时股东大会通知 会议召开时间 2026-09-30 14:00"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "use_skill",
+          "argsContain": {
+            "skillId": "shareholder-meeting-verification"
+          }
+        },
+        {
+          "name": "extract_file_text"
+        }
+      ],
+      "offeredToolsIncludeLastCall": [
+        "extract_file_text",
+        "write_docx",
+        "search_project_files",
+        "doc_find_replace",
+        "use_skill"
+      ],
+      "promptContains": [
+        "# Skill: 股东大会核查 (shareholder-meeting-verification)",
+        "你是律师事务所股东会见证项目组的核查与起草助手"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "use-skill-unknown-id-returns-error-with-available-ids",
+    "title": "use_skill：id 写错——回 Error 并列出可用 skill，本轮照常收尾，不登记任何东西（dev-board#1065）",
+    "category": "skill",
+    "protocol": "native",
+    "userInput": "按尽调的流程把这批材料过一遍",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "use_skill",
+            "arguments": {
+              "skillId": "due-diligence-review"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>没有名为「尽调」的专门流程，我按通用方式逐份阅读材料并列出问题。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "use_skill",
+          "argsContain": {
+            "skillId": "due-diligence-review"
+          }
+        }
+      ],
+      "promptContains": [
+        "Error: no usable skill with id 'due-diligence-review'",
+        "Available skills: "
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "use-skill-in-docx-session-puts-trimmed-category-back",
+    "title": "use_skill：docx 会话里诉讼出图整类被类目裁剪藏着，模型调 use_skill(\"litigation-visual\") 之后下一轮 litigation_* 回来（dev-board#1065 × #1064）",
+    "category": "skill",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "帮我把这份协议里各方的往来经过梳理一下，准备开庭用",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "use_skill",
+            "arguments": {
+              "skillId": "litigation-visual"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>我先按诉讼可视化的流程抽取各方往来，确认后再出图。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "use_skill",
+          "argsContain": {
+            "skillId": "litigation-visual"
+          }
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "litigation_render",
+        "litigation_timeline_render"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "litigation_render",
+        "litigation_timeline_render",
+        "doc_find_replace",
+        "doc_get_document_text",
+        "list_tools"
+      ],
+      "promptContains": [
+        "先吃透，再重画"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "use-skill-mid-run-restrict-skill-only-adds-to-a-trimmed-run",
+    "title": "use_skill：起跑时已被诉讼可视化（restrict）裁过，中途再调股东大会核查（restrict）——它的白名单并上去，原来那份一个不少（dev-board#1065）",
+    "category": "skill",
+    "protocol": "native",
+    "userInput": "做张图，另外顺便把股东会的材料也核一下",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "use_skill",
+            "arguments": {
+              "skillId": "shareholder-meeting-verification"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>两件事分开做：先按核查流程读材料，再出图。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "use_skill"
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "write_docx"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "write_docx",
+        "litigation_render",
+        "litigation_timeline_start",
+        "extract_file_text",
+        "use_skill"
+      ],
+      "offeredToolsExclude": [
+        "doc_find_replace"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "list-tools-query-expands-the-hit-categories-next-round",
+    "title": "list_tools(query=…)：docx 会话里 PDF 整类被类目裁剪藏着，按关键词搜到 pdf_merge——命中工具的类目经 ToolContext 回写，下一轮原生可见（dev-board#1065）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "这几份证据能不能拼成一个文件交给法院？",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "list_tools",
+            "arguments": {
+              "query": "合并 pdf"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>可以，用 pdf_merge 按证据序号合成一册。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_tools",
+          "argsContain": {
+            "query": "合并"
+          }
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "pdf_merge",
+        "pdf_split"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "pdf_merge",
+        "pdf_split",
+        "doc_find_replace"
+      ],
+      "promptContains": [
+        "- pdf_merge(",
+        "from the NEXT turn on"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "list-tools-names-expands-only-what-was-named",
+    "title": "list_tools(names=…)：按确切名字要签名，查不到的单列一行；只放回点名工具所在的类目（dev-board#1065）",
+    "category": "files",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "把合同里各方的关系整理一下",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "list_tools",
+            "arguments": {
+              "names": "litigation_render,draw_relationship_graph"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>我先抽取各方关系，确认后再出图。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_tools"
+        }
+      ],
+      "offeredToolsExcludeFirstCall": [
+        "litigation_render"
+      ],
+      "offeredToolsIncludeLastCall": [
+        "litigation_render"
+      ],
+      "offeredToolsExclude": [
+        "pdf_merge"
+      ],
+      "promptContains": [
+        "- litigation_render(",
+        "not found in this session: draw_relationship_graph"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "list-tools-index-lists-invocable-skills",
+    "title": "list_tools()：目录页末尾列出本轮还没生效、模型可调用的 skill，配合 use_skill（dev-board#1065）",
+    "category": "skill",
+    "protocol": "native",
+    "docSessionCategoryTrim": true,
+    "userInput": "你还能帮我做哪些专门的活？",
+    "activeDocument": {
+      "id": "1001",
+      "name": "股权转让协议.docx",
+      "fileType": "docx"
+    },
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "list_tools",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "text": "<final>除了改这份文档，还可以按专门流程做诉讼可视化、股东大会核查等。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "list_tools"
+        }
+      ],
+      "promptContains": [
+        "skills (specialised workflows; switch with use_skill",
+        "- litigation-visual — 诉讼可视化",
+        "- shareholder-meeting-verification — 股东大会核查"
+      ],
+      "structureContains": [
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

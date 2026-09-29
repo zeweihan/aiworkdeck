@@ -576,4 +576,80 @@ class SkillRouterTest {
         assertEquals(List.of(), router.activeSkills("run-r1"), "已结束的轮次不该还留着生效集合");
         assertEquals(1, router.activeSkills("run-r2").size(), "另一轮不受影响");
     }
+
+    // ==================== use_skill：中途生效只许加、不许减（dev-board#1065） ====================
+
+    @Test
+    @DisplayName("中途生效的 restrict skill 不收窄：起跑时没裁，下一轮仍是全集（它的工具由编排器按类目放回）")
+    void midRunRestrictSkillNeverNarrowsAnUntrimmedRun() {
+        List<ToolSpecification> all = specs("law_search", "write_docx", "search_web", "doc_find_replace",
+                "read_document", "todo_write");
+        router.activateForTurn("conv-m", "run-m", "帮我起草一份保密协议"); // 起跑时没有 skill
+
+        Optional<SkillDefinition> def = router.activateMidRun("conv-m", "run-m", "skill-a");
+
+        assertEquals("skill-a", def.orElseThrow().getId());
+        assertSame(all, router.visibleTools("run-m", all),
+                "中途生效的 restrict skill 不能把模型前几轮看过的工具藏掉——通道会 400");
+        assertTrue(router.isActiveInRun("run-m", "skill-a"));
+        assertEquals(List.of(), router.activeSkills("run-m"),
+                "中途生效的不进 activeSkills：那是起跑时读一次的 prompt 注入 / skill_update 口径");
+    }
+
+    @Test
+    @DisplayName("起跑时已被别的 skill 裁过：中途生效的 restrict skill 把白名单并上去，原来那份一个不少")
+    void midRunRestrictSkillWidensAnAlreadyTrimmedRun() {
+        List<ToolSpecification> all = specs("law_search", "write_docx", "search_web", "doc_find_replace",
+                "read_document", "todo_write");
+        router.activateForTurn("conv-w", "run-w", "比较一下上市路径怎么选"); // skill-b：search_web
+        List<String> before = router.visibleTools("run-w", all).stream().map(ToolSpecification::name).toList();
+        assertFalse(before.contains("law_search"), "起跑时 skill-b 裁掉了 law_search：" + before);
+
+        router.activateMidRun("conv-w", "run-w", "skill-a"); // 白名单 law_search / write_docx
+        List<String> after = router.visibleTools("run-w", all).stream().map(ToolSpecification::name).toList();
+
+        assertTrue(after.containsAll(before), "只加不减：" + before + " -> " + after);
+        assertTrue(after.contains("law_search") && after.contains("write_docx"), after.toString());
+        assertFalse(after.contains("doc_find_replace"), "不在任何白名单里的仍然不下发：" + after);
+    }
+
+    @Test
+    @DisplayName("passthrough 的 skill 中途生效不登记白名单；已经生效的不重复登记；轮次结束一并清掉")
+    void midRunBookkeeping() throws IOException {
+        writeSkill("skill-p", List.of("随便"), List.of("search_web"), null);
+        registry.rescan();
+        router.activateForTurn("conv-b", "run-b", "比较一下上市路径怎么选"); // skill-b 起跑时生效
+
+        assertTrue(router.activateMidRun("conv-b", "run-b", "skill-p").isPresent());
+        assertFalse(router.isActiveInRun("run-b", "skill-p"), "passthrough 没有白名单可并，不登记");
+        assertTrue(router.activateMidRun("conv-b", "run-b", "skill-b").isPresent(), "已生效的原样返回");
+        assertTrue(router.activateMidRun("conv-b", "run-b", "no-such-skill").isEmpty());
+
+        router.activateMidRun("conv-b", "run-b", "skill-a");
+        assertTrue(router.isActiveInRun("run-b", "skill-a"));
+        router.clearRun("run-b");
+        assertFalse(router.isActiveInRun("run-b", "skill-a"), "clearRun 也要摘掉中途生效的登记");
+    }
+
+    @Test
+    @DisplayName("仅手动 / 已停用的 skill 模型调不了，也不出现在可调用清单里")
+    void manualAndDisabledSkillsAreNotInvocable() {
+        registry.setActivationMode("skill-a", SkillRegistry.ActivationMode.MANUAL);
+        registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
+
+        assertTrue(router.invocableSkill("skill-a").isEmpty(), "仅手动 = 用户不想让它被自动带上");
+        assertTrue(router.invocableSkill("skill-b").isEmpty());
+        assertTrue(router.activateMidRun("conv-x", "run-x", "skill-a").isEmpty());
+        assertTrue(router.invocableSkills().stream().noneMatch(d -> d.getId().startsWith("skill-")),
+                router.invocableSkills().toString());
+    }
+
+    @Test
+    @DisplayName("skillInstructionsFor 与 promptInjectionFor 是同一份正文，只是不带「命中了技能」那行前缀")
+    void instructionsShareTheInjectedBody() {
+        SkillDefinition a = registry.getSkill("skill-a").orElseThrow();
+        String instructions = router.skillInstructionsFor(a);
+        assertEquals("prompt of skill-a", instructions);
+        assertTrue(router.promptInjectionFor(a).endsWith(instructions));
+    }
 }
