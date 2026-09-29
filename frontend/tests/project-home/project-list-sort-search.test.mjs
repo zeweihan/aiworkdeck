@@ -25,7 +25,8 @@ import {
 import zh from '../../src/locales/zh-CN/projects.js'
 import en from '../../src/locales/en-US/projects.js'
 
-const SRC = readFileSync(new URL('../../src/pages/project-list/project-list.vue', import.meta.url), 'utf8')
+// 2026-09-29 起项目列表的内容本体是工作台左栏「项目」面板（dev-board#1047），pages/project-list 是直链薄壳
+const SRC = readFileSync(new URL('../../src/components/project-list/ProjectListPane.vue', import.meta.url), 'utf8')
 const TEMPLATE = SRC.match(/<template>([\s\S]*)<\/template>/)[1]
 
 const P = [
@@ -140,7 +141,7 @@ test('排序选择记在本机：setSort 写 uni storage，restoreSort 读回来
   vm2.restoreSort = mk('restoreSort() {', 'restoreSort').bind(vm2)
   vm2.restoreSort()
   assert.deepEqual(vm2.sort, { key: 'name', dir: 'asc' }, '下次打开要记得上次的排序')
-  assert.match(SRC, /onLoad\(\)\s*\{[\s\S]*?this\.restoreSort\(\)/)
+  assert.match(SRC, /mounted\(\)\s*\{[\s\S]*?this\.restoreSort\(\)/)
   delete globalThis.uni
 })
 

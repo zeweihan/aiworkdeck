@@ -408,6 +408,7 @@ export const fileOpenTabsMethods = {
       // 个人中心 2026-08-20 并进了「设置」标签，不再有 user-profile 标签
       if (tabType === 'admin-settings') return GLYPHS.settings
       if (tabType === 'commit-history') return GLYPHS.history
+      if (tabType === 'welcome') return GLYPHS.welcome
       return fileGlyph(type)
     },
 

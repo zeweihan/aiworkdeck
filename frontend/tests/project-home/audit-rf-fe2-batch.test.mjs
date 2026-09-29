@@ -390,11 +390,17 @@ test('login: handleRegister 请求飞着时二次点击不会重复发出注册�
   await second
 })
 
-test('login: handleClientLogin 请求飞着时二次点击不会重复发出访问码登录请求', async () => {
+// 客户访问码表单 2026-09-29 抽成组件（dev-board#1047：登录页「客户」tab 与工作台欢迎标签共用），
+// 重入守卫跟着搬进 components/account/ClientAccessCodeForm.vue 的 submit()。
+const CLIENT_FORM_SRC = read('components/account/ClientAccessCodeForm.vue')
+
+test('login: 客户访问码表单（ClientAccessCodeForm.submit）请求飞着时二次点击不会重复发出访问码登录请求', async () => {
   let calls = 0
   const gate = deferred()
-  const fn = makeLoginHandler('handleClientLogin', 'clientLogin', () => { calls++; return gate.promise })
-  const ctx = { clientLoginLoading: false, clientForm: { accessCode: 'code123' }, $t: (k) => k }
+  const body = extractMethod(CLIENT_FORM_SRC, 'async submit() {')
+  const fn = new Function('clientLogin', 'saveSession', 'uni', `return (async function submit() ${body})`)(
+    () => { calls++; return gate.promise }, () => {}, { showToast() {}, reLaunch() {} })
+  const ctx = { loading: false, accessCode: 'code123', $t: (k) => k, $emit() {}, enterCase() {} }
 
   const first = fn.call(ctx)
   const second = fn.call(ctx)
@@ -409,7 +415,8 @@ test('login: 四个提交按钮都绑了 :disabled，跟随各自的 loading 标
   assert.match(LOGIN_SRC, /:disabled="loginLoading" :loading="loginLoading" @tap="handleLogin"/)
   assert.match(LOGIN_SRC, /:disabled="loginLoading" :loading="loginLoading" @tap="handleSmsLogin"/)
   assert.match(LOGIN_SRC, /:disabled="registerLoading" :loading="registerLoading" @tap="handleRegister"/)
-  assert.match(LOGIN_SRC, /:disabled="clientLoginLoading" :loading="clientLoginLoading" @tap="handleClientLogin"/)
+  assert.match(LOGIN_SRC, /<ClientAccessCodeForm \/>/, '客户 tab 用共享的访问码表单组件')
+  assert.match(CLIENT_FORM_SRC, /:disabled="loading" :loading="loading" @tap="submit"/)
 })
 
 // ======================================================================
@@ -490,10 +497,11 @@ test('VariablePanel.fetchDocFields: 两次调用乱序回来，陈旧响应不�
 
 // ======================================================================
 // 9. project-list.vue confirmRename()：blur 在途时把 renamingProjectId 置空
-//    （文档现址 1004，原始行号误标 948）
+//    （文档现址 1004，原始行号误标 948）。2026-09-29 起内容本体是工作台左栏「项目」面板
+//    （components/project-list/ProjectListPane.vue，dev-board#1047），断言跟着搬。
 // ======================================================================
 
-const PL_SRC = read('pages/project-list/project-list.vue')
+const PL_SRC = read('components/project-list/ProjectListPane.vue')
 
 function makeProjectListRenameVm(renameProjectImpl) {
   const confirmBody = extractMethod(PL_SRC, 'async confirmRename() {')

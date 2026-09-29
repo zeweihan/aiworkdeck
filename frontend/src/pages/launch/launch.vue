@@ -22,9 +22,7 @@
 import {
   getLicenseStatus,
   getLocalIdentityStatus,
-  getMyProjects,
 } from '@/services/api.js'
-import { syncRecentToMenu } from '@/utils/recentProjects.js'
 import { isDesktopHost, host } from '@/services/host.js'
 
 export default {
@@ -74,14 +72,12 @@ export default {
         return
       }
 
-      // 桌面环境：等待本地服务就绪后查授权状态
+      // 桌面环境：等本地服务就绪。授权状态端点在这里只当「后端起来了没有」的探针用——
+      // 启动不再设解锁门（dev-board#1027 / #1047：登录后置，需要账户的功能在用到时就地登录），
+      // unlocked 的真假不参与分流。
       const status = await this.waitLicenseStatus()
       if (!status) {
         this.failed = true
-        return
-      }
-      if (!status.unlocked) {
-        uni.reLaunch({ url: '/pages/unlock/unlock' })
         return
       }
 
@@ -98,26 +94,11 @@ export default {
         console.warn('查询本机工作区状态失败（忽略）:', e && e.message)
       }
 
-      // 首启向导已下线（2026-08-27）：初始化（官方通道 + 跨境同意）由解锁页在登录成功后
-      // 一次性提交，这里不再分流，直达上次项目
-
-      try {
-        // local-mode 免登录：不需要 session 探活，getMyProjects 探通即视为可用
-        const projects = await getMyProjects()
-        const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
-        syncRecentToMenu(list) // 应用菜单「最近打开」子菜单
-        // 启动一律落项目列表页（2026-08 维护者定的落点）。
-        // 此前是「有最近项目就直达工作台」，为的是「立刻干活」；代价是开机永远
-        // 停在上一个项目里，手上有第二件事的人得先找到出口再切。列表页顶部有
-        // 「继续：上次的项目」一键回去，多的那一下点击换来的是每次开机都先看见
-        // 自己有哪些案子。**其余四条直达工作台的出口一条没动**（应用菜单最近打开、
-        // 打开本地文件夹/文件、顶栏切换器、浏览器态会话恢复）——那几处的用户
-        // 意图明确指向某一个项目，强插列表页才是多一跳。
-        uni.reLaunch({ url: '/pages/project-list/project-list' })
-      } catch (e) {
-        console.warn('启动分流失败:', e && e.message)
-        this.failed = true
-      }
+      // 启动一律落工作台外壳（无项目态，不带 id），中央打开「欢迎」标签（dev-board#1047）。
+      // 项目清单不再是分流条件：拉不到也照样进外壳，欢迎标签的 Recent 与左栏「项目」面板
+      // 各自处理空态与错误。直达某一个项目的四条出口（应用菜单最近打开、打开本地文件夹/文件、
+      // 顶栏最近项目切换器、浏览器态会话恢复）不经过这里，一条没动。
+      uni.reLaunch({ url: '/pages/project-overview/project-overview' })
     },
     // 打包版后端随应用启动需要几秒，轮询直到可达（上限 90 秒）。
     // ARM 版 Windows（Mac 虚拟机）转译运行时主进程看门狗已放宽 8 倍（dev-board#340），

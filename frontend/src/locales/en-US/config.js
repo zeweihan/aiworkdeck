@@ -4,6 +4,7 @@
 export default {
   sidebar: {
     projectHome: 'Project Overview',
+    projects: 'Projects',
     files: 'Explorer',
     ddFiles: 'Due Diligence Files',
     market: 'Extensions',

@@ -4,6 +4,7 @@
 export default {
   sidebar: {
     projectHome: '项目概览',
+    projects: '项目',
     files: '资源管理器',
     ddFiles: '尽调文件',
     market: '插件中心',

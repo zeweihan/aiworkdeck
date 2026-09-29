@@ -1,18 +1,15 @@
 /* SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors */
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* 项目列表页样式。
+/* 左栏「项目」面板样式（dev-board#1047：2026-09-29 由 pages/project-list/project-list.scss
+ * 随内容本体一起搬来，原页面退成直链薄壳）。
  *
- * 来源：2026-08-08 从 pages/userprofile/userprofile.vue 的「我的项目」tab 整块搬出。
- * 抽行区间：1299-1310 品牌配色变量 / 1430-1434 .role-text（与个人信息卡共用，是复制不是搬走）/
- * 1517-1593 页头与两个按钮 / 1595-1932 统计条与项目卡片 / 2031-2065 虚线空态 /
- * 2590-2617 角色徽章 / 2619-2728 负责人头像与成员分组。
+ * 更早的来源：2026-08-08 从 pages/userprofile/userprofile.vue 的「我的项目」tab 整块搬出。
+ * .card-style-default / .badge-text-new / .arrow-char / .rename-box / .rename-input
+ * 在原页面就无定义，保持无定义。
  *
- * 没搬的两块：userprofile.vue 的 2381-2451 与 2453-2588（模板里已无 class 命中的死样式，
- * 成员改用 -new 变体、弹窗已组件化）；2730-2735 的 .empty-icon 服务收藏/待办空态，留在 userprofile。
- *
- * 原页面就没有定义的 class 这次补了三个（.panel-projects / .loading-state / .loading-text）；
- * 另外 .card-style-default / .badge-text-new / .arrow-char / .rename-box / .rename-input
- * 在原页面同样无定义，本次是纯搬迁不夹带视觉改动，保持无定义。
+ * 宿主从整页换成了工作台左栏（默认 260px、可拖宽），所以根节点开了容器查询
+ * （container-name: project-list-pane），窄栏下的排布在文件末尾按实际渲染宽度收紧，
+ * 不再按视口宽度猜。
  *
  * 配色守浅色红线：白 / var(--awd-bg) 浅茶白底 #F1EFE7 + 墨竹青 #2E5A50 主色 + mint var(--awd-mint)（竹月青氛围色）点缀，不做深色 chrome。
  */
@@ -20,23 +17,22 @@
 $brand-dark: #221F1A;    /* Dark BG */
 
 
-/* 页面外壳。原 .page-userprofile（:1311-1327）与 .main-content（:1509-1515）改写：
-   本页没有左侧个人信息栏，容器由两列改成单列，因此 .workbench-container 不搬。 */
-.page-project-list {
-  min-height: 100vh;
-  background: linear-gradient(135deg, var(--awd-bg) 0%, var(--awd-halo-page) 100%);
-  padding: 40px 24px;
+/* 面板外壳：铺满左栏内容区、自己滚动（外壳 .sidebar-content 不替子面板滚） */
+.project-list-pane {
+  height: 100%;
+  overflow-y: auto;
   box-sizing: border-box;
+  padding: 10px var(--awd-panel-pad-x, 10px) 16px;
   color: var(--awd-text);
+  container-type: inline-size;
+  container-name: project-list-pane;
 }
 
 .project-list-container {
-  max-width: 1200px;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 24px;
+  gap: 12px;
 }
 
 .main-content {
@@ -57,11 +53,9 @@ $brand-dark: #221F1A;    /* Dark BG */
     display: flex !important;
     flex-direction: row !important;
     justify-content: flex-start !important;
-    gap: 20px;
+    gap: 8px;
     align-items: center !important;
-    margin-bottom: 24px;
-    border-bottom: 1px solid var(--awd-border);
-    padding-bottom: 16px;
+    margin-bottom: 12px;
 }
 
 .header-title {
@@ -74,8 +68,15 @@ $brand-dark: #221F1A;    /* Dark BG */
 .header-actions {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-left: auto;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+
+    /* uni 的 <button> 默认 block + 左右 auto 外边距：不压掉会在窄栏里居中成一块灰条 */
+    .btn-secondary-small {
+        margin: 0;
+        color: var(--awd-text-2);
+    }
 }
 
 .btn-secondary-small {
@@ -1130,4 +1131,108 @@ $brand-dark: #221F1A;    /* Dark BG */
 
     &:hover,
     &.is-sorted { color: var(--awd-accent-text); }
+}
+
+/* 工作台当前打开的那个项目：描边强调，点它不会重进 */
+.project-item-card.is-current {
+    border-color: var(--awd-accent);
+    box-shadow: 0 0 0 1px var(--awd-accent) inset;
+}
+
+.ptable-item.is-current {
+    background: var(--awd-accent-wash);
+}
+
+/* ---- 左栏窄宽（容器查询，按面板实际渲染宽度） ----
+ * 左栏默认 260px、常被拖到 300-400px；整页时代按 1200px 排的卡片与六列表格在这里放不下。
+ * 方块视图收成单列紧凑卡，列表视图只留「名称 + 最近修改 + 操作」三列。 */
+@container project-list-pane (max-width: 520px) {
+    .project-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .project-item-card {
+        min-height: 0;
+    }
+
+    .card-top-row {
+        padding: 10px 12px 0;
+    }
+
+    .card-main-content {
+        padding: 4px 12px 10px;
+    }
+
+    .card-footer-new {
+        padding: 8px 12px;
+    }
+
+    .time-text-new {
+        white-space: nowrap;
+    }
+
+    .col-client,
+    .col-created,
+    .col-members {
+        display: none;
+    }
+
+    .col-time {
+        flex: 0 0 78px;
+    }
+
+    /* 窄栏里名称是唯一要紧的一列：行内边距、列间距收紧，角色 / 类型徽章让位（方块视图里仍在） */
+    .ptable-head,
+    .ptable-row {
+        gap: 8px;
+        padding: 0 10px;
+    }
+
+    .ptable-row {
+        min-height: 40px;
+    }
+
+    .col-name .project-role-badge,
+    .col-name .project-type-badge-new {
+        display: none;
+    }
+
+    .col-ops {
+        flex: 0 0 52px;
+    }
+
+    .projects-stats-row {
+        flex-wrap: wrap;
+    }
+
+    .project-list-toolbar {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .project-search-input {
+        flex: 1 1 100%;
+    }
+
+    .project-sort {
+        margin-left: 0;
+    }
+
+    .create-row {
+        flex-wrap: nowrap;
+    }
+
+    .create-card {
+        flex: 1 1 0;
+        min-width: 0;
+        height: 36px;
+        padding: 0 10px;
+        justify-content: center;
+    }
+
+    .create-title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 }

@@ -23,6 +23,7 @@ const WIDGET = read('components/FeedbackWidget.vue')
 const MOUNT = read('utils/feedbackWidget.js')
 const WORKBENCH = read('pages/project-overview/project-overview.vue')
 const PROJECT_LIST = read('pages/project-list/project-list.vue')
+const LAUNCH = read('pages/launch/launch.vue')
 const ICONS = read('config/icons.js')
 
 test('FeedbackWidget 不再有浮钮：没有 .awdfb-launcher，没有拖动处理器', () => {
@@ -74,10 +75,14 @@ test('工作台 rail 底部有反馈按钮（spacer 之后，与暂存区/版本
     '工作台的 openFeedback 走 utils/feedbackWidget.js 的统一出口')
 })
 
-test('项目列表页（没有 rail）在页头保留反馈入口', () => {
-  assert.match(PROJECT_LIST, /@tap="openFeedback"/, '启动落点页不能没有反馈入口')
-  assert.match(PROJECT_LIST, /openFeedback\s*\(\)\s*\{[^}]*openFeedbackWidget\(\)/,
-    '项目列表页的 openFeedback 走同一个出口')
+// 2026-09-29（dev-board#1047）：启动落点从项目列表页换成工作台外壳（有 rail），项目列表页
+// 退成直链薄壳、进来即转到工作台——「启动落点不能没有反馈入口」这条由工作台 rail 兜住。
+test('启动落点是工作台外壳（rail 底部有反馈入口），项目列表页只是转过去的薄壳', () => {
+  assert.match(LAUNCH, /uni\.reLaunch\(\{ url: '\/pages\/project-overview\/project-overview' \}\)/,
+    '启动落工作台外壳')
+  assert.match(PROJECT_LIST, /\/pages\/project-overview\/project-overview\?pane=projects/,
+    '项目列表页转到工作台外壳并打开「项目」面板')
+  assert.match(WORKBENCH, /@tap="openFeedback"/, '工作台 rail 上有反馈入口')
 })
 
 test('反馈图标进 config/icons.js（唯一图标出处）', () => {

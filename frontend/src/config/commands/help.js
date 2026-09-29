@@ -3,6 +3,15 @@
 // 「帮助」菜单。此前整条菜单不存在——新用户找不到任何入口，使用手册只在官网上。
 
 export const HELP_COMMANDS = [
+  // 欢迎（dev-board#1047）：中栏「欢迎」标签（单例），有无项目两态都能开。
+  // 关掉「启动时显示欢迎页」之后，这里是除空态链接之外的另一个入口。
+  {
+    id: 'help.welcome',
+    label: { zh: '欢迎', en: 'Welcome' },
+    menu: 'help', group: 0,
+    when: ['workbench'],
+    run: 'wb:openWelcome',
+  },
   {
     id: 'help.manual',
     label: { zh: '使用手册', en: 'User Guide' },

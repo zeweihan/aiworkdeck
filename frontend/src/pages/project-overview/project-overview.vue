@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view class="page-project-overview" :class="{ 'compact-mode': isCompactLayout, 'is-resizing': resizing && resizing.active, 'rail-edit-mode': railEditMode }">
+  <view class="page-project-overview" :class="{ 'compact-mode': isCompactLayout, 'is-resizing': resizing && resizing.active, 'rail-edit-mode': railEditMode, 'no-project': !hasProject }">
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
@@ -10,7 +10,13 @@
              mac 上组件内部 visible=false，不渲染。 -->
         <AppMenuBar :refresh-key="menuBarRefreshKey" />
 
-        <view class="project-info">
+        <!-- 无项目态（dev-board#1047）：顶栏只有应用名，没有项目切换器 / 协作 chip / 负责人一行 -->
+        <view v-if="!hasProject" class="project-info no-project-info">
+          <view class="project-title-row">
+            <text class="project-name no-project-title">{{ $t('onboarding.unlock.brand.brand') }}</text>
+          </view>
+        </view>
+        <view v-else class="project-info">
           <!-- Logo moved to center -->
           <view class="project-title-row">
             <view v-if="isRenamingProject" class="rename-container">
@@ -99,25 +105,8 @@
       </view>
 
       <view class="header-right">
-        <!-- 授权标识（低调 chip）。优先级：宽限预警 > 试用版。
-             「已连接账户」chip 已删（dev-board#221）：手机号登录就是常态，无需状态标注；
-             预警仍排最前——它是唯一「不处理就会被挡在门外」的一条。 -->
-        <view
-          v-if="graceKind"
-          class="trial-chip grace-chip"
-          @tap.stop="showTrialInfo = true"
-          :title="graceTitle"
-        >
-          <text class="trial-chip-text">{{ graceChipText }}</text>
-        </view>
-        <view
-          v-else-if="!accountConnected && licenseMode === 'trial'"
-          class="trial-chip"
-          @tap.stop="showTrialInfo = true"
-          :title="$t('workbench.trialInfo')"
-        >
-          <text class="trial-chip-text">{{ $t('workbench.trialBadge') }}</text>
-        </view>
+        <!-- 授权标识 chip（试用版 / 宽限预警）与余额不足 chip 已挪进 rail 底部账户入口的下拉
+             （dev-board#1047：顶栏不再放账户态，spec 2026-09-29 §4 / §5.3）。 -->
         <!-- 顶部工具区（IDE 风格）：整理 / 分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
           <!-- 外观主题（dev-board#223）：浅色/深色/跟随系统三选一。
@@ -182,8 +171,9 @@
             </svg>
           </view>
 
-          <!-- 3. Right Sidebar (AI Panel) -->
+          <!-- 3. Right Sidebar (AI Panel)：无项目态右栏 AI 不渲染（会话按项目隔离） -->
           <view
+            v-if="hasProject"
             class="top-bar-btn"
             :class="{ active: showAiPanel }"
             @tap="toggleAiPanel"
@@ -206,8 +196,9 @@
             </svg>
           </view>
 
-          <!-- 5. Screenshot (OCR) -->
+          <!-- 5. Screenshot (OCR)：摘录落在项目收藏里，无项目态不给 -->
           <view
+            v-if="hasProject"
             class="top-bar-btn"
             @tap="startOcrCapture"
             :title="$t('workbench.ocrCapture')"
@@ -229,8 +220,9 @@
             </svg>
           </view>
 
-          <!-- Activity Record Toggle -->
+          <!-- Activity Record Toggle：工作记录按项目记，无项目态不给 -->
           <view
+            v-if="hasProject"
             class="top-bar-btn"
             :class="{ active: isRecording, recording: isRecording }"
             @tap="toggleRecording"
@@ -250,57 +242,7 @@
             </view>
         </view>
 
-        <!-- Credits 余额（dev-board#187 → #223 合并）：余额与头像本是同一件事
-             （都是「我的账户」，点开都通向设置的「账户与用量」），并排两个 chip
-             是重复入口，已收进头像下拉。
-             **只有余额不足时仍在顶栏常显**——那是唯一「不处理就会卡住干活」的
-             信号，藏进下拉等于让用户在跑任务时才撞上。 -->
-        <view
-          v-if="walletChipVisible && walletLow"
-          class="trial-chip wallet-chip wallet-chip-low"
-          @tap.stop="goToAccountPanel"
-          :title="$t('workbench.walletChipTitle')"
-        >
-          <text class="trial-chip-text">{{ walletChipText }}</text>
-        </view>
-
-        <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
-             刻意放在 isClientView 分支之外：rail 上那个头像本来就对客户也渲染。
-
-             2026-08-20：个人中心并进了「设置」，下拉只剩这一项——两个入口各开一个
-             整面板、彼此还互相跳的形态是用户明确抱怨过的。客户同样要能进（个人组
-             的工作记录/账号安全对他一样成立），面板内的「系统」组自己按 isAdmin 收。
-             2026-08-21（dev-board#96）：只剩一项时下拉曾撤掉、点头像直开设置。
-             2026-08-27（dev-board#205）：「退出登录」要有一个找得到的一级入口，
-             下拉恢复成两项（设置 / 退出登录）——恢复的判据正是当年撤它的判据。
-             顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里。 -->
-        <view class="header-account">
-          <view class="avatar-btn" @tap.stop="avatarMenuOpen = !avatarMenuOpen" :title="$t('workbench.accountMenu')">
-            <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
-            <text v-else class="avatar-text">{{ getInitial(userDisplayName || currentUser?.displayName) || 'U' }}</text>
-          </view>
-          <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
-          <view v-if="avatarMenuOpen" class="avatar-menu">
-            <!-- 账户抬头：余额 + 等级。整块可点，去向与原余额 chip 一致 -->
-            <view v-if="walletChipVisible" class="avatar-menu-wallet" @tap.stop="onAvatarMenuAccount">
-              <view class="avatar-menu-wallet-row">
-                <text class="avatar-menu-balance" :class="{ low: walletLow }">{{ walletChipText }}</text>
-                <text v-if="walletTierName" class="avatar-menu-tier">{{ walletTierName }}</text>
-              </view>
-              <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
-            </view>
-            <!-- 我的日程（dev-board#899）：跨项目的全局日程页，走 leaveWorkbench 先落盘再离开 -->
-            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSchedule">
-              <text>{{ $t('calendar.mySchedule') }}</text>
-            </view>
-            <view class="avatar-menu-item" @tap.stop="onAvatarMenuSettings">
-              <text>{{ $t('workbench.settingsTabName') }}</text>
-            </view>
-            <view class="avatar-menu-item danger" @tap.stop="onAvatarMenuSignOut">
-              <text>{{ $t('account.logoutBtn') }}</text>
-            </view>
-          </view>
-        </view>
+        <!-- 顶栏头像与下拉已挪到 rail 底部的账户入口（AccountRailEntry，dev-board#1047）。 -->
       </view>
     </view>
 
@@ -368,8 +310,9 @@
         <!-- Spacer -->
         <view style="flex: 1"></view>
 
-        <!-- Staging Area (Moved to bottom) -->
+        <!-- Staging Area (Moved to bottom)：暂存区挂在项目下（.stagezone），无项目态不给 -->
         <view
+          v-if="hasProject"
           class="rail-btn"
           :class="{ active: (leftPaneKey === 'staging' && !sidebarCollapsed) || stagingPinned }"
           :title="$t('workbench.stagingArea')"
@@ -389,8 +332,9 @@
              config/leftSidebarPlugins.js 的 VERSION_PLUGIN），视觉上放在项目成员
              与暂存区之间。 -->
 
-        <!-- Version History -->
+        <!-- Version History：无项目态不给 -->
         <view
+          v-if="hasProject"
           class="rail-btn"
           :class="{ active: leftPaneKey === 'version' && !sidebarCollapsed }"
           :title="VERSION_PLUGIN.label"
@@ -420,7 +364,7 @@
         </view>
 
         <!-- Project Members Stack -->
-        <view class="rail-members-container" v-if="projectMembers && projectMembers.length > 0">
+        <view class="rail-members-container" v-if="hasProject && projectMembers && projectMembers.length > 0">
            <view class="members-stack-icon">
               <!-- Stacked avatars -->
               <view class="stack-preview">
@@ -488,6 +432,40 @@
           <view class="rail-icon-wrapper">
             <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.feedback" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
+
+        <!-- 账户入口（dev-board#1047，对应 VS Code 的 Accounts）：未登录是「登录」，已登录是头像 +
+             原顶栏那份下拉（我的日程 / 设置 / 退出登录，试用与宽限提示也挪进这里）。
+             有无项目两态都渲染，也不按 isClientView 收。 -->
+        <AccountRailEntry
+          :logged-in="accountSignedIn"
+          :display-name="userDisplayName || (currentUser && currentUser.displayName) || ''"
+          :avatar-url="(currentUser && currentUser.avatarUrl) || ''"
+          :wallet-visible="walletChipVisible"
+          :wallet-text="walletChipText"
+          :wallet-low="walletLow"
+          :wallet-tier="walletTierName"
+          :notice-text="accountNoticeText"
+          @login="onAccountLogin"
+          @account="onAvatarMenuAccount"
+          @grace-info="showTrialInfo = true"
+          @schedule="onAvatarMenuSchedule"
+          @settings="onAvatarMenuSettings"
+          @sign-out="onAvatarMenuSignOut"
+        />
+
+        <!-- 设置（对应 VS Code 的 Manage 齿轮）：未登录时账户入口点了是去登录，设置得有自己的一格 -->
+        <view
+          class="rail-btn"
+          :class="{ active: isSettingsTabActive }"
+          :title="$t('workbench.settingsTabName')"
+          @tap="goToSystemSettings()"
+        >
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.settings" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
             </svg>
           </view>
         </view>
@@ -695,6 +673,13 @@
             @view-tasks="onFileTreeViewTasks"
             :transcribe-enabled="meetingRecorderEnabled"
             @transcribe-audio="onTranscribeAudio"
+          />
+          <!-- 项目（dev-board#1047）：全部案卷的列表，原 pages/project-list 整页的内容本体。
+               有无项目两态都在；点卡片走注入的 leaveWorkbench 进带 id 的工作台。 -->
+          <ProjectListPane
+            v-else-if="leftPaneKey === 'projects'"
+            :current-project-id="projectId"
+            @project-renamed="onProjectRenamedFromPane"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -910,6 +895,7 @@
                的 evidence-drop），侧栏不再放落点区。 -->
           <!-- 文件暂存区 (Visible if Staging has files OR Dragging) -->
           <FileStagingArea
+            v-if="hasProject"
             :visible="showStagingArea"
             :files="stagingFiles"
             :usage="stagingUsage"
@@ -1048,8 +1034,11 @@
                   <view class="empty-logo-tile">
                     <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                   </view>
-                  <text class="empty-title">{{ $t('workbench.emptyWorkspace') }}</text>
-                  <text class="empty-sub">{{ $t('workbench.emptyWorkspaceHint') }}</text>
+                  <text class="empty-title">{{ hasProject ? $t('workbench.emptyWorkspace') : $t('welcome.noProjectTitle') }}</text>
+                  <text class="empty-sub">{{ hasProject ? $t('workbench.emptyWorkspaceHint') : $t('welcome.noProjectHint') }}</text>
+                  <!-- 关掉了「启动时显示欢迎页」时的空态（dev-board#1047）：一行提示 + 随手能开回来的链接 -->
+                  <text v-if="!showWelcomeOnStartup" class="empty-sub empty-welcome-hint">{{ $t('welcome.startupDisabledHint') }}</text>
+                  <text class="empty-welcome-link" @tap="openWelcomeTab">{{ $t('welcome.openWelcome') }}</text>
                 </view>
               </view>
 
@@ -1255,6 +1244,19 @@
                     <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
                          （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
                          并进了它的「个人」组，工作台里不再有第二个设置类标签。 -->
+                    <!-- 「欢迎」标签（dev-board#1047）：单例，照设置标签的形制。无项目态启动时自动打开，
+                         有项目态从菜单「帮助 → 欢迎」打开，两态的 Start / Recent 行为一致。 -->
+                    <WelcomePane
+                      v-else-if="activeFileLeft.tabType === 'welcome'"
+                      :key="activeFileLeft.id"
+                      :current-project-id="projectId"
+                      :show-on-startup="showWelcomeOnStartup"
+                      @new-project="onWelcomeNewProject"
+                      @open-folder="onWelcomeOpenFolder"
+                      @open-url="openBrowserTab($event)"
+                      @open-projects-pane="openProjectsPane"
+                      @update:show-on-startup="setShowWelcomeOnStartup"
+                    />
                     <AdminPane
                       v-else-if="activeFileLeft.tabType === 'admin-settings'"
                       :key="activeFileLeft.id"
@@ -1440,6 +1442,19 @@
                       @submit-guide="openSubmitGuide"
                     />
                     <!-- 「设置」标签：见左窗格同名注释 -->
+                    <!-- 「欢迎」标签（dev-board#1047）：单例，照设置标签的形制。无项目态启动时自动打开，
+                         有项目态从菜单「帮助 → 欢迎」打开，两态的 Start / Recent 行为一致。 -->
+                    <WelcomePane
+                      v-else-if="activeFileRight.tabType === 'welcome'"
+                      :key="activeFileRight.id"
+                      :current-project-id="projectId"
+                      :show-on-startup="showWelcomeOnStartup"
+                      @new-project="onWelcomeNewProject"
+                      @open-folder="onWelcomeOpenFolder"
+                      @open-url="openBrowserTab($event)"
+                      @open-projects-pane="openProjectsPane"
+                      @update:show-on-startup="setShowWelcomeOnStartup"
+                    />
                     <AdminPane
                       v-else-if="activeFileRight.tabType === 'admin-settings'"
                       :key="activeFileRight.id"
@@ -1572,7 +1587,7 @@
                原来整块挂在 v-if="showAiPanel" 上，关一下右栏就把 ChatInterface 连同
                当前会话、消息和进行中的流一起卸掉，再打开是空白新对话。 -->
           <view
-            v-if="aiPanelMounted"
+            v-if="aiPanelMounted && hasProject"
             v-show="showAiPanel"
             ref="aiPanel"
             class="side-panel side-panel-ai"
@@ -2070,7 +2085,7 @@
 
       <!-- IDE 化 Cmd+P 快速打开 -->
       <QuickOpenPanel
-        v-if="quickOpenVisible"
+        v-if="quickOpenVisible && hasProject"
         :project-id="projectId"
         @open="onQuickOpenFile"
         @close="quickOpenVisible = false"
@@ -2083,6 +2098,13 @@
         @close="commandPaletteVisible = false"
       />
 
+      <!-- 首次启动的「可选组件」面板（设计 §4.1）：随启动落点从项目列表页搬来，只在无项目态启动时判一次 -->
+      <OptionalComponentsDialog
+        v-if="showOptionalComponents"
+        :app-version="optionalComponentsAppVersion"
+        @close="showOptionalComponents = false"
+      />
+
       <!-- 工作台唯一的事项弹窗（dev-board#899）：日程面板、文件树右键「添加事项…」、
            命令「新建事项…」共用。项目锁定为当前项目；写操作走 taskStore，
            保存/删除后面板与徽标靠它的广播自己更新，这里不用重拉。 -->
@@ -2091,6 +2113,7 @@
         :mode="taskDialog.mode"
         :task="taskDialog.task"
         :project-id="projectId"
+        :projects="taskDialogProjects"
         :preset-file-ids="taskDialog.presetFileIds"
         @open-file="onTaskOpenFile"
         @close="taskDialog.visible = false"
@@ -2258,7 +2281,7 @@ import CommitHistoryTab from '@/components/version/CommitHistoryTab.vue'
 // 已不依赖 FullCalendar，懒加载保留（只有点开「日程」面板的会话才付这份代码的成本）。
 import TaskDialog from '@/components/calendar/TaskDialog.vue'
 import { taskStore, loadProjectTasks } from '@/utils/taskStore.js'
-import { startTaskReminders } from '@/utils/taskReminders.js'
+import { startTaskReminders, todayDigest } from '@/utils/taskReminders.js'
 const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
@@ -2313,6 +2336,7 @@ import {
   getCurrentUser as getCurrentUserApi, // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
   registerMeetingFromFile, // 右键转写：音频文件注册进会议录音面板（dev-board#227）
   getDocInsight, // 「依据」实体索引预取：窗格关着也要能 Cmd 点正文（dev-board#541）
+  optionalComponents, // 首次启动的「可选组件」面板（随启动落点从项目列表页搬来，dev-board#1047）
   // 三方合并：逐份落盘 + 三语境收尾（useDocumentMerge 的依赖，spec §5.2）
   postMergeResolveFile,
   postMergeResolveStructured,
@@ -2384,6 +2408,18 @@ import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
 import { insightEntityTabMethods } from './insightEntityTab.js'
+import { welcomeTabMethods, WELCOME_TAB_ID, loadShowWelcomeOnStartup, saveShowWelcomeOnStartup } from './welcomeTab.js'
+import { isPaneAllowedWithoutProject, NO_PROJECT_DEFAULT_PANE, NO_PROJECT_PANE_KEYS, workbenchStorageKey } from './noProjectShell.js'
+import ProjectListPane from '@/components/project-list/ProjectListPane.vue'
+import WelcomePane from '@/components/welcome/WelcomePane.vue'
+import AccountRailEntry from '@/components/account/AccountRailEntry.vue'
+import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
+import {
+  shouldPromptOptionalComponents,
+  mergePromptedPackIds,
+  PROMPTED_PREF_KEY,
+  PROMPTED_PACKS_PREF_KEY,
+} from '@/composables/useOptionalComponents.js'
 import { documentLinkPreviewMethods } from './documentLinkPreview.js'
 import DocumentLinkPreview from '@/components/DocumentLinkPreview.vue'
 
@@ -2451,12 +2487,23 @@ export default {
     VersionPanel,
     CommitHistoryTab,
     ProjectCalendarPane,
-    TaskDialog
+    TaskDialog,
+    ProjectListPane,
+    WelcomePane,
+    AccountRailEntry,
+    OptionalComponentsDialog
   },
   data() {
     return {
       projectId: null,
       project: {},
+      // 欢迎标签（dev-board#1047）：「启动时显示欢迎页」本机记忆，默认开
+      showWelcomeOnStartup: true,
+      // 无项目态下新建事项：TaskDialog 的项目下拉候选（全局创建形态）
+      taskDialogProjects: [],
+      // 首次启动的「可选组件」面板（设计 §4.1，随启动落点从项目列表页搬来）
+      showOptionalComponents: false,
+      optionalComponentsAppVersion: '',
       // Screenshot Save Dialog
       showScreenshotSaveDialog: false,
       imagePreviewUrl: '',
@@ -2500,8 +2547,6 @@ export default {
       // 会议录音那个 tab 是 skill 门控的，记住它会让停用 skill 之后再进来落在
       // 一个不渲染的 tab 上（v-else 兜底能救，但 tab 条上没有高亮项，看着像坏了）。
       voiceTab: 'tts',
-      // 顶栏右上角头像下拉（设置 / 退出登录，dev-board#205）
-      avatarMenuOpen: false,
       // 工作台唯一的 TaskDialog 的状态（dev-board#899），见 openTaskDialog
       taskDialog: { visible: false, mode: 'create', task: null, presetFileIds: [] },
       // 日程面板按文件过滤（文件右键「查看事项 (N)」），null = 不过滤
@@ -2939,6 +2984,12 @@ export default {
     },
     LEFT_SIDEBAR_PLUGINS() {
       const user = getCurrentUser()
+      // 无项目态（dev-board#1047）：rail 只留全局项（项目 / 日程 / 插件中心，以及被停到左栏的剪贴板），
+      // 动态插件与项目面板一律不上 rail——它们都带着 projectId 干活。
+      if (!this.hasProject) {
+        const globals = LEFT_SIDEBAR_PLUGINS.filter(p => isPaneAllowedWithoutProject(p.key))
+        return this.applyRailOrder(this.applyPanelDocks(globals).filter(p => isPaneAllowedWithoutProject(p.key)))
+      }
       const base = (user && user.role === 'CLIENT')
         ? getPluginsForUser('CLIENT')
         : [...LEFT_SIDEBAR_PLUGINS, ...this.dynamicPlugins]
@@ -3006,6 +3057,33 @@ export default {
     isClientView() {
       const user = getCurrentUser()
       return user && user.role === 'CLIENT'
+    },
+    /**
+     * 工作台有没有打开项目（dev-board#1047）。启动一律落不带 ?id= 的外壳（无项目态）：
+     * rail 只留全局项、项目面板不挂载、右栏 AI 不渲染、暂存区不建（spec 2026-09-29 §4）。
+     */
+    hasProject() {
+      return this.projectId != null && this.projectId !== '' && !Number.isNaN(Number(this.projectId))
+    },
+    /**
+     * rail 底部账户入口的「已登录」判据。桌面端以「已连接账户」为准（spec §5.3：
+     * AccountService.status().connected 是唯一判据，经授权状态的 accountConnected 组合口径带过来）；
+     * 浏览器端能进到工作台就已经有会话。
+     */
+    accountSignedIn() {
+      if (!isDesktopHost()) return true
+      return !!this.accountConnected
+    },
+    // 账户下拉里的提醒行（原顶栏两枚 chip）：宽限预警优先，其次试用版
+    accountNoticeText() {
+      if (this.graceKind) return this.graceChipText
+      if (!this.accountConnected && this.licenseMode === 'trial') return this.$t('workbench.trialBadge')
+      return ''
+    },
+    isSettingsTabActive() {
+      const left = this.activeFileLeft
+      const right = this.splitMode ? this.activeFileRight : null
+      return !!((left && left.tabType === 'admin-settings') || (right && right.tabType === 'admin-settings'))
     },
     // 协作 UI 的总闸：只有这份案卷真的放进过团队案件库才渲染任何协作元素。
     collabLinked() {
@@ -3253,7 +3331,11 @@ export default {
     // ——— 面板停靠（dev-board#180）———
     // 三个 dock 的分配，唯一出处是 config/panelRegistry.js 的纯函数 resolveDocks
     panelDocks() {
-      return resolveDocks(this.panelDockOverrides)
+      const docks = resolveDocks(this.panelDockOverrides)
+      if (this.hasProject) return docks
+      // 无项目态：可停靠面板里只有剪贴板是全局的（收藏夹 / 语音 / 依据都挂在项目上）
+      const keep = (list) => list.filter(p => NO_PROJECT_PANE_KEYS.includes(p.key))
+      return { left: keep(docks.left), right: keep(docks.right), bottom: keep(docks.bottom) }
     },
     // 底部抽屉的 tab 列表（原 WORKBENCH_TOOLS）。底栏 tab 条与状态条工具入口同源消费，
     // 面板被搬到左/右之后这里自动少一项，两处一起变。
@@ -3517,7 +3599,14 @@ export default {
       this.ensureStagingFolder().then(() => {
           this.loadStagingFiles()
       })
+    } else {
+      // 无项目态（dev-board#1047）：启动的落点。不建暂存区、不拉成员与协作状态；
+      // 应用菜单「最近打开」原来由启动页顺手同步，启动页不再拉项目清单之后挪到这里（静默）。
+      syncRecentToMenuFetching()
+      // 首次启动的「可选组件」面板：原挂在项目列表页 onLoad，启动落点换了它跟着搬
+      this.maybePromptOptionalComponents()
     }
+    this.showWelcomeOnStartup = loadShowWelcomeOnStartup(uni)
 
     const user = getCurrentUser()
     if (user) {
@@ -3542,8 +3631,12 @@ export default {
     this.sidebarCollapsed = loadSidebarCollapsed(uni)
     this.initThemeSwitch()
 
-    const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
-    if (savedKey && user && user.role === 'CLIENT') {
+    // 存储键：有项目按项目分，无项目落 global_*（此前无项目态写的是 project_null_*）
+    const savedKey = uni.getStorageSync(workbenchStorageKey(this.projectId, 'leftPaneKey'))
+    if (!this.hasProject) {
+      // 无项目态只允许全局面板；存量值落在项目面板上就回到「项目」面板
+      this.leftPaneKey = isPaneAllowedWithoutProject(savedKey) ? savedKey : NO_PROJECT_DEFAULT_PANE
+    } else if (savedKey && user && user.role === 'CLIENT') {
         // CLIENT 只有 dd-files 这一个面板，存量值原样用（migrate 会把它映射成
         // files，那对客户是错的——他看不到资源管理器）
         this.leftPaneKey = savedKey
@@ -3561,9 +3654,14 @@ export default {
     // 存量 leftPaneKey 可能指向一个已经被搬去右侧/底部的面板（语音），
     // 那样左栏会渲染成「加载中…」占位符——按停靠分配校一遍，不在左栏就回落资源管理器。
     this.normalizeDockSelections()
+    // 直链薄壳 pages/project-list 转进来时带 ?pane=projects：打开左栏「项目」面板（两态都允许）
+    if (query && query.pane === 'projects') {
+      this.leftPaneKey = 'projects'
+      this.sidebarCollapsed = false
+    }
 
     // Restore active tabs for this project/mode
-    const savedActiveTabs = uni.getStorageSync(`project_${this.projectId}_activeTabsByMode`)
+    const savedActiveTabs = uni.getStorageSync(workbenchStorageKey(this.projectId, 'activeTabsByMode'))
     if (savedActiveTabs) {
       this.lastActiveIdsByMode = savedActiveTabs
       const mode = this.leftPaneKey || 'files'
@@ -3572,6 +3670,9 @@ export default {
     }
     // 登录态下启用剪贴板记录（仅记录本应用能感知到的 paste / 复制按钮）
     this.bindClipboardListener()
+
+    // 无项目态启动：中央打开「欢迎」标签（「启动时显示欢迎页」关掉了就停在空态，空态里有链接能开回来）
+    if (!this.hasProject && this.showWelcomeOnStartup) this.openWelcomeTab()
 
     this.loadDynamicPlugins() // Fetch dynamic plugins
     this.loadEnabledSkills() // 左栏插件位按 skill 启停过滤（诉讼可视化默认不安装）
@@ -3663,8 +3764,11 @@ export default {
     // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
-    // 本机事项提醒（dev-board#899）：模块级单例、幂等，项目列表页也调
+    // 本机事项提醒（dev-board#899）：模块级单例、幂等
     startTaskReminders()
+    // 当日事项摘要 toast（每天一次，顺带写入 taskStore.global.summary，左栏「项目」面板的概览条读它）。
+    // 原挂在项目列表页 mounted，启动落点换成工作台外壳之后搬来（dev-board#1047）。CLIENT 看不到事项。
+    if (!this.isClientView) todayDigest().catch((e) => console.warn('[project-overview] 事项摘要读取失败', e))
     // 标签栏的滚轮横滚：只能原生挂（模板 @wheel 收到的是 uni 重建过的普通对象，
     // 见 utils/horizontalWheel.js），所以 DOM 就绪后挂一次，beforeUnmount 摘掉。
     this.$nextTick(() => this.rebindTabsWheel())
@@ -3757,6 +3861,11 @@ export default {
         if (k === 'p') {
           e.preventDefault()
           e.stopPropagation()
+          // 无项目态没有文件可快速打开：Cmd+P 开左栏「项目」面板（VS Code 无文件夹时同一键位是「打开最近」）
+          if (!this.hasProject) {
+            this.openProjectsPane()
+            return
+          }
           this.quickOpenVisible = !this.quickOpenVisible
         } else if (k === 'w') {
           e.preventDefault()
@@ -4174,6 +4283,7 @@ export default {
     ...ocrCaptureMethods,
     // 「依据」实体详情标签（dev-board#541）
     ...insightEntityTabMethods,
+    ...welcomeTabMethods,
     ...documentLinkPreviewMethods,
     // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
     onFileHistory(file) {
@@ -4293,9 +4403,10 @@ export default {
       }
       uni.reLaunch({ url })
     },
+    // 「全部项目…」：项目列表已经是工作台左栏的「项目」面板（dev-board#1047），不再离开工作台
     goAllProjects() {
       this.projectSwitcherOpen = false
-      this.leaveWorkbench('/pages/project-list/project-list')
+      this.openProjectsPane()
     },
     // 全局日程页（命令「日程」、头像菜单「我的日程」）。同日程面板底部「查看全盘日程」
     // 一样走 leaveWorkbench：先落盘再 reLaunch（工作台参与的跳转一律 reLaunch）。
@@ -4304,12 +4415,23 @@ export default {
     },
     // ---------- 事项（dev-board#899）：工作台唯一的 TaskDialog ----------
     openTaskDialog({ mode = 'create', task = null, presetFileIds = [] } = {}) {
-      if (!this.projectId) return
+      // 无项目态（dev-board#1047）：日程面板读的是全部项目的事项，新建走全局形态——
+      // TaskDialog 不锁项目、给一个项目下拉（候选拉一次项目清单）
+      if (!this.hasProject) this.loadTaskDialogProjects()
       this.taskDialog = {
         visible: true,
         mode: mode === 'edit' && task ? 'edit' : 'create',
         task: mode === 'edit' ? task : null,
         presetFileIds: Array.isArray(presetFileIds) ? presetFileIds.filter((id) => id != null) : [],
+      }
+    },
+    async loadTaskDialogProjects() {
+      try {
+        const res = await getMyProjects()
+        const list = Array.isArray(res) ? res : (res && res.data) || []
+        this.taskDialogProjects = list.map((p) => ({ id: p.id, name: p.name, myRole: p.myRole }))
+      } catch (e) {
+        this.taskDialogProjects = []
       }
     },
     onFileTreeAddTask(file) {
@@ -4764,6 +4886,11 @@ export default {
      * 上限 ~3s（30 × 100ms）：比固定 600ms 宽容，又不会在真出问题时把人挂住。
      */
     async resolveChatInterface() {
+      // 无项目态没有 AI 面板（会话按项目隔离）：直接说清楚，不空等 3 秒
+      if (!this.hasProject) {
+        uni.showToast({ title: this.$t('welcome.aiNeedsProject'), icon: 'none' })
+        return null
+      }
       this.restoredLastConversation = true // 马上要往当前会话发 prompt，不能中途被换掉
       if (!this.showAiPanel) this.toggleAiPanel()
       // 右侧面板可能停着别的面板（dev-board#180）：要发 prompt 就得先切回对话 tab，
@@ -5616,25 +5743,110 @@ export default {
       this.focusedPane = targetPane
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
-    // 头像下拉两项（dev-board#205）。退出走 utils/signOut.js 唯一编排，确认弹窗与
-    // 状态判定都在它里面，这里只负责收起菜单。注意位置：不能插在 goToSystemSettings
-    // 与 openSettingsTab 之间——check-navigation-contract 的方法提取按
-    // 「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
+    // 账户下拉的动作（dev-board#205；2026-09-29 起下拉在 rail 底部的 AccountRailEntry 里，
+    // 开合状态归组件自己，这里只接动作）。退出走 utils/signOut.js 唯一编排，确认弹窗与
+    // 状态判定都在它里面。注意位置：不能插在 goToSystemSettings 与 openSettingsTab 之间——
+    // check-navigation-contract 的方法提取按「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
     onAvatarMenuAccount() {
-      this.avatarMenuOpen = false
       this.goToAccountPanel()
     },
     onAvatarMenuSchedule() {
-      this.avatarMenuOpen = false
       this.goCalendar()
     },
     onAvatarMenuSettings() {
-      this.avatarMenuOpen = false
       this.goToSystemSettings()
     },
     async onAvatarMenuSignOut() {
-      this.avatarMenuOpen = false
       await signOut()
+    },
+    // rail 底部账户入口的「登录」（dev-board#1047 先留位）。
+    // TODO(#1046): requireAccount —— 就地登录弹层合入后改成 await requireAccount({ reason: 'account' })，
+    // 不再离开工作台。在那之前暂时打开 pages/unlock 薄壳页：先把编辑器落盘，再 navigateTo
+    // （工作台留在栈里，全局返回键能回来；解锁页登录成功会 reLaunch 回启动分流）。
+    async onAccountLogin() {
+      if (!(await this.flushBeforeLeaving())) return
+      uni.navigateTo({ url: '/pages/unlock/unlock' })
+    },
+    /** 离开 / 可能离开工作台前的落盘（leaveWorkbench 的前半截）。落不下来就提示并返回 false。 */
+    async flushBeforeLeaving() {
+      try {
+        const result = await flushDirtyEditors(
+          this._libreRefs || (this._libreRefs = {}), this._plainTextRefs || (this._plainTextRefs = {}))
+        if (result.failed > 0) {
+          uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+          return false
+        }
+        return true
+      } catch (e) {
+        console.warn('[project-overview] flush before leaving failed', e)
+        uni.showToast({ title: this.$t('editor.saveBeforeLeaving'), icon: 'none', duration: 4000 })
+        return false
+      }
+    },
+    // ---------- 欢迎标签与左栏「项目」面板（dev-board#1047） ----------
+    /** 打开左栏「项目」面板（已开着且左栏收起时只展开，不收起） */
+    openProjectsPane() {
+      if (this.leftPaneKey === 'projects') {
+        if (this.sidebarCollapsed) this.toggleSidebar()
+        return
+      }
+      this.toggleLeftPane('projects')
+    },
+    // 欢迎标签 Start 的「新建项目文件夹 / 打开已有文件夹」：与菜单「文件」同一条命令
+    // （config/commands/file.js 的 file.newProject / file.openFolder），先把编辑器落盘——
+    // 两条命令都会 reLaunch 走，有项目态下从「帮助 → 欢迎」点进来时正开着文档。
+    async onWelcomeNewProject() {
+      await this.runWelcomeCommand('file.newProject')
+    },
+    async onWelcomeOpenFolder() {
+      await this.runWelcomeCommand('file.openFolder')
+    },
+    async runWelcomeCommand(commandId) {
+      if (!(await this.flushBeforeLeaving())) return
+      const { runCommandById } = await import('@/utils/appMenuBridge.js')
+      await runCommandById(commandId)
+    },
+    setShowWelcomeOnStartup(on) {
+      this.showWelcomeOnStartup = !!on
+      saveShowWelcomeOnStartup(uni, this.showWelcomeOnStartup)
+    },
+    // 左栏「项目」面板里改了当前项目的名字：顶栏与窗口标题跟上
+    onProjectRenamedFromPane(payload) {
+      if (!payload || Number(payload.id) !== Number(this.projectId)) return
+      this.project = { ...this.project, name: payload.name }
+    },
+    /**
+     * 首次启动的「可选组件」面板（设计 §4.1）。原挂在项目列表页 onLoad，启动落点换成工作台外壳后
+     * 搬到这里、只在无项目态（= 启动那一次）触发；判据与写回原样照搬。
+     */
+    async maybePromptOptionalComponents() {
+      if (!isDesktopHost() || !host.prefs) return
+      try {
+        const [res, prompted, promptedPacks, status] = await Promise.all([
+          optionalComponents(),
+          host.prefs.get(PROMPTED_PREF_KEY),
+          host.prefs.get(PROMPTED_PACKS_PREF_KEY),
+          host.update ? host.update.status() : Promise.resolve(null),
+        ])
+        const unwrap = (v) => (v && v.value !== undefined ? v.value : v)
+        const items = (res && res.components) || []
+        const promptedPackIds = unwrap(promptedPacks)
+        this.optionalComponentsAppVersion = (status && status.appVersion) || ''
+        this.showOptionalComponents = shouldPromptOptionalComponents({
+          items,
+          promptedVersion: unwrap(prompted),
+          promptedPackIds,
+          isDesktop: true,
+        })
+        // 0.46 及以前只记了版本号。不弹的时候把「提示过哪些组件」补齐，将来真多出一个新组件
+        // 时才认得出来。清单为空（后端没起来 / ai.packs 关着）时不写。
+        if (!this.showOptionalComponents && !Array.isArray(promptedPackIds) && items.length) {
+          await host.prefs.set(PROMPTED_PACKS_PREF_KEY, mergePromptedPackIds(null, items))
+        }
+      } catch (e) {
+        // 后端还没起来 / 离线部署关了 ai.packs：不打扰，用户仍可从设置进组件管理
+        console.warn('[project-overview] 可选组件检查跳过', e)
+      }
     },
     goToPluginMarket() {
       // VS Code 扩展栏形态：rail 按钮开左栏列表面板（保留标签页与编辑区），
@@ -5707,6 +5919,8 @@ export default {
     },
 
     toggleAiPanel() {
+      // 无项目态右栏 AI 不渲染（会话按项目隔离，spec 2026-09-29 §4），菜单 / 快捷键进来也不开
+      if (!this.hasProject) return
       this.showAiPanel = !this.showAiPanel
       if (this.showAiPanel) this.aiPanelMounted = true
       this.$nextTick(() => {

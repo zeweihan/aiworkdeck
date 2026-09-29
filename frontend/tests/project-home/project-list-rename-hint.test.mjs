@@ -6,7 +6,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const SRC = readFileSync(new URL('../../src/pages/project-list/project-list.vue', import.meta.url), 'utf8')
+// 2026-09-29 起项目列表的内容本体是工作台左栏「项目」面板（dev-board#1047），pages/project-list 是直链薄壳
+const SRC = readFileSync(new URL('../../src/components/project-list/ProjectListPane.vue', import.meta.url), 'utf8')
 const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 const EN = readFileSync(new URL('../../src/locales/en-US/projects.js', import.meta.url), 'utf8')
 

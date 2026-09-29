@@ -10,6 +10,7 @@
 // 多个实例，不守卫就是「点一次菜单执行 N 次」（这个项目在剪贴板订阅上踩过）。
 
 import { patchMenuState, setMenuPage, COMMAND_EVENT } from '@/utils/appMenuBridge.js'
+import { isContextEligibleTab } from './activeTabContext.js'
 
 const WORD_EXT = /\.(doc|docx|wps)$/i
 
@@ -178,6 +179,7 @@ export const menuCommandsMethods = {
       case 'commandPalette': this.commandPaletteVisible = true; break
       case 'goProjectHome': this.goProjectHome(); break
       case 'goAllProjects': this.goAllProjects(); break
+      case 'openWelcome': this.openWelcomeTab(); break
       case 'goCalendar': this.goCalendar(); break
       case 'newTask': this.openTaskDialog({ mode: 'create' }); break
 
@@ -259,7 +261,8 @@ export const menuCommandsMethods = {
   /** 「文件 > 发送…」：把当前活跃标签的文件交给系统分享（复用文件树右键那条 onShareFile）。 */
   async menuShareFile() {
     const f = this.activeFileLeft
-    if (!f || f.isFolder) { this.menuToast(this.$t('workbench.openDocFirst')); return }
+    // 非文件标签（欢迎 / 设置 / 浏览器…）没有本机路径：不判掉会打出 /api/projects/null/files/welcome/local-path
+    if (!f || f.isFolder || !isContextEligibleTab(f)) { this.menuToast(this.$t('workbench.openDocFirst')); return }
     return this.onShareFile(f)
   },
 }

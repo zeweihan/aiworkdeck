@@ -330,87 +330,8 @@ $color-accent: var(--awd-mint); // Mint Green
   }
 }
 
-// 试用版标识（顶部区域右侧，低调 chip，点击弹说明）
-.trial-chip {
-  display: flex;
-  align-items: center;
-  background: var(--awd-bg);
-  border: 1px solid var(--awd-warning);
-  border-radius: 4px;
-  padding: 2px 8px;
-  margin-right: 10px;
-  cursor: pointer;
-  transition: border-color 0.2s;
-
-  &:hover {
-    border-color: var(--awd-warning);
-  }
-
-  .trial-chip-text {
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--awd-warning-text);
-  }
-
-  // 宽限预警：同一形状，比「试用版」再暖一档并加重字重。
-  // 刻意不用红——这不是错误，是一条有剩余时间的提醒；红色会让用户以为文档出了事。
-  &.grace-chip {
-    background: var(--awd-warning-soft);
-    border-color: var(--awd-warning);
-
-    &:hover {
-      border-color: var(--awd-warning);
-    }
-
-    .trial-chip-text {
-      color: var(--awd-warning-text);
-      font-weight: 600;
-    }
-  }
-
-  // Credits 余额 chip（dev-board#187）：品牌绿底，
-  // 余额是数字所以字重略加；等级名做成内嵌小徽章
-  &.wallet-chip {
-    background: var(--awd-accent-soft);
-    border-color: var(--awd-accent);
-    gap: 6px;
-
-    &:hover {
-      border-color: var(--awd-mint);
-    }
-
-    .trial-chip-text {
-      color: var(--awd-accent-text);
-      font-weight: 600;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .wallet-chip-tier {
-      font-size: 10px;
-      font-weight: 500;
-      line-height: 14px;
-      color: var(--awd-text-on-accent);
-      background: var(--awd-accent);
-      border-radius: 3px;
-      padding: 0 5px;
-    }
-  }
-
-  // 余额不足才留在顶栏（dev-board#223）：既然它此刻的唯一职责是催充值，
-  // 就别再穿品牌绿的日常皮，换告警色
-  &.wallet-chip-low {
-    background: var(--awd-warning-soft);
-    border-color: var(--awd-warning);
-
-    .trial-chip-text {
-      color: var(--awd-warning-text);
-    }
-
-    &:hover {
-      border-color: var(--awd-warning-text);
-    }
-  }
-}
+// 试用版 / 宽限预警 / 余额不足三枚 chip 已挪进 rail 底部账户入口的下拉（dev-board#1047），
+// 样式随之搬进 components/account/AccountRailEntry.vue。
 
 .project-meta {
   display: flex;
@@ -441,122 +362,8 @@ $color-accent: var(--awd-mint); // Mint Green
   border-right: none;
 }
 
-/* 右上角头像。独立成一格（不进 .header-tools）是因为它对客户视图
-   也渲染，而整片工具区在客户视图里是收起来的。 */
-.header-account {
-  display: flex;
-  align-items: center;
-  position: relative; /* 头像下拉的定位锚 */
-}
-
-/* 右上角头像（2026-08-19 从 rail 底部搬上来）：统一「设置」页的入口。
-   比 .top-bar-btn 大一圈——它是一个人的身份标识，不是又一个开关。 */
-.avatar-btn {
-  width: 26px;
-  height: 26px;
-  margin-left: 6px;
-  border-radius: 50%;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--awd-accent);
-  cursor: pointer;
-  border: 2px solid transparent;
-  transition: border-color 0.2s;
-
-  &:hover {
-    border-color: var(--awd-mint);
-  }
-}
-
-/* 头像下拉（dev-board#205）：设置 / 退出登录。mask 全屏兜底收起 */
-.avatar-menu-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 1198;
-}
-
-/* 头像下拉的账户抬头（dev-board#223：原顶栏余额 chip 并进来）：
-   余额是这块的主角，等级做小徽章，底下一行说明它是什么、点了去哪 */
-.avatar-menu-wallet {
-  padding: 8px 10px 9px;
-  border-bottom: 1px solid var(--awd-border-subtle);
-  margin-bottom: 4px;
-  border-radius: 6px 6px 0 0;
-  cursor: pointer;
-
-  &:hover {
-    background: var(--awd-surface-2);
-  }
-}
-
-.avatar-menu-wallet-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.avatar-menu-balance {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--awd-text);
-  font-variant-numeric: tabular-nums;
-
-  &.low {
-    color: var(--awd-warning-text);
-  }
-}
-
-.avatar-menu-tier {
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 14px;
-  color: var(--awd-text-on-accent);
-  background: var(--awd-accent);
-  border-radius: 3px;
-  padding: 0 5px;
-}
-
-.avatar-menu-wallet-label {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--awd-text-3);
-}
-
-.avatar-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  min-width: 168px;
-  background: var(--awd-surface);
-  border: 1px solid var(--awd-border);
-  border-radius: 8px;
-  box-shadow: var(--awd-shadow-lg);
-  padding: 4px;
-  z-index: 1199;
-}
-
-.avatar-menu-item {
-  padding: 7px 12px;
-  border-radius: 5px;
-  font-size: 13px;
-  color: var(--awd-text);
-  cursor: pointer;
-
-  &:hover {
-    background: var(--awd-bg);
-  }
-
-  &.danger {
-    color: var(--awd-danger-text);
-
-    &:hover {
-      background: var(--awd-danger-soft);
-    }
-  }
-}
+/* 右上角头像与下拉（.header-account / .avatar-btn / .avatar-menu*）已挪到 rail 底部的账户入口
+   （components/account/AccountRailEntry.vue，dev-board#1047），样式跟着组件走。 */
 
 /* 外观切换（dev-board#223）：顶栏那一格的下拉三选一。
    按钮本体沿用 .top-bar-btn，这里只加下拉与它自己的定位上下文。 */
@@ -999,13 +806,9 @@ $color-accent: var(--awd-mint); // Mint Green
   }
 }
 
-/* .rail-user-avatar 已随头像搬到顶栏而删除（2026-08-19）。
-   .avatar-img / .avatar-text 保留：顶栏头像与 rail 上的成员堆叠都在用。 */
+/* .avatar-img：rail 上的成员堆叠在用（账户头像的样式在 AccountRailEntry.vue 里）。 */
 .avatar-img {
   width: 100%; height: 100%; border-radius: 50%;
-}
-.avatar-text {
-  color: var(--awd-text-on-accent); font-size: 14px; font-weight: 600;
 }
 
 /* Sidebar Left (File Tree) */
@@ -4874,4 +4677,25 @@ $color-accent: var(--awd-mint); // Mint Green
   background: var(--awd-surface);
   padding: 4px 10px;
   border-radius: 4px;
+}
+
+/* ---- 无项目态（dev-board#1047）---- */
+.no-project-title {
+  font-weight: 600;
+}
+
+/* 空工作区里「打开欢迎页」的链接（关掉「启动时显示欢迎页」后也能随手开回来） */
+.empty-welcome-hint {
+  margin-top: 4px;
+}
+
+.empty-welcome-link {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--awd-accent-text);
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
 }

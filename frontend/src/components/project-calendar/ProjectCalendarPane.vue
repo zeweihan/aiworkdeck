@@ -17,6 +17,9 @@
   顶部显示「仅看：文件名 ×」，× 由宿主清掉。
 
   面板标题由外壳的 sidebar-header 出（见 sidebar-shell 的统一口径），本组件不重复渲染标题。
+
+  projectId 可缺省（dev-board#1047 工作台无项目态）：没有项目时读 taskStore.global（全部项目的事项，
+  行上显示所属项目），数据走 loadGlobal；新建由宿主弹全局 TaskDialog（可选项目）。
 -->
 <template>
   <view class="pcp">
@@ -56,7 +59,7 @@
             v-for="task in g.list"
             :key="task.id"
             :task="task"
-            :show-project="false"
+            :show-project="isGlobal"
             density="compact"
             @toggle="onToggle"
             @open="onOpen"
@@ -74,7 +77,7 @@
               v-for="task in groups.done"
               :key="task.id"
               :task="task"
-              :show-project="false"
+              :show-project="isGlobal"
               density="compact"
               @toggle="onToggle"
               @open="onOpen"
@@ -94,7 +97,7 @@
 
 <script>
 import TaskRow from '@/components/calendar/TaskRow.vue'
-import { taskStore, loadProjectTasks, updateTask, deleteTask } from '@/utils/taskStore.js'
+import { taskStore, loadProjectTasks, loadGlobal, updateTask, deleteTask } from '@/utils/taskStore.js'
 import { groupByDue, isDone, taskFiles, taskFileIds } from '@/components/calendar/taskUtils.js'
 import { isEnglish } from '@/utils/appLanguage.js'
 
@@ -109,7 +112,8 @@ export default {
   name: 'ProjectCalendarPane',
   components: { TaskRow },
   props: {
-    projectId: { type: [Number, String], required: true },
+    /** 缺省（null）= 无项目态，读全部项目的事项 */
+    projectId: { type: [Number, String], default: null },
     /** 只看关联了这份文件的事项（文件右键「查看事项」） */
     fileFilter: { type: [Number, String], default: null },
     /** fileFilter 对应的文件名（宿主知道；不给就从事项的文件芯片里找） */
@@ -125,7 +129,11 @@ export default {
     }
   },
   computed: {
+    isGlobal() {
+      return this.projectId == null || this.projectId === ''
+    },
     entry() {
+      if (this.isGlobal) return taskStore.global
       return taskStore.byProject[String(this.projectId)] || null
     },
     loading() {
@@ -188,10 +196,10 @@ export default {
   },
   methods: {
     async load() {
-      if (!this.projectId) return
       this.loadFailed = false
       try {
-        await loadProjectTasks(this.projectId)
+        if (this.isGlobal) await loadGlobal()
+        else await loadProjectTasks(this.projectId)
       } catch (e) {
         console.warn('[ProjectCalendarPane] 读取事项失败', e)
         this.loadFailed = true

@@ -103,13 +103,9 @@
             <button class="action-btn" :disabled="registerLoading" :loading="registerLoading" @tap="handleRegister">{{ $t('account.registerBtn') }}</button>
           </view>
 
-          <!-- Client Form -->
+          <!-- Client Form：与工作台欢迎标签的「凭访问码进入案卷」共用同一个组件（dev-board#1047） -->
           <view v-else class="form-body swing-in">
-            <view class="input-group">
-              <text class="label">{{ $t('account.caseAccessCodeLabel') }}</text>
-              <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" :placeholder="$t('account.caseAccessCodePlaceholder')" placeholder-class="placeholder-style" />
-            </view>
-            <button class="action-btn" :disabled="clientLoginLoading" :loading="clientLoginLoading" @tap="handleClientLogin">{{ $t('account.enterCaseBtn') }}</button>
+            <ClientAccessCodeForm />
           </view>
 
           <view class="card-footer">
@@ -122,14 +118,15 @@
 </template>
 
 <script>
-import { login, register, clientLogin, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
+import { login, register, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
 import BrandShowcase from '@/components/BrandShowcase.vue'
+import ClientAccessCodeForm from '@/components/account/ClientAccessCodeForm.vue'
 
 export default {
   name: 'Login',
-  components: { BrandShowcase },
+  components: { BrandShowcase, ClientAccessCodeForm },
   onLoad() {
     // 首启向导已下线（2026-08-27）：初始化由桌面解锁页承担，浏览器/团队服务器
     // 场景直接尝试恢复会话回到上次的工作现场
@@ -148,13 +145,8 @@ export default {
         password: '',
         passwordConfirm: '',
       },
-      clientForm: {
-        accessCode: '',
-        displayName: ''
-      },
       loginLoading: false,
       registerLoading: false,
-      clientLoginLoading: false,
       // 登录二次验证步骤（后端返回 4005 时进入）；method: 'totp' | 'sms'
       smsStep: false,
       smsMethod: 'sms',
@@ -213,7 +205,6 @@ export default {
       this.activeTab = tab;
       this.loginForm = { username: '', password: '' };
       this.registerForm = { username: '', displayName: '', password: '', passwordConfirm: '' };
-      this.clientForm = { accessCode: '' };
       this.resetSmsStep();
     },
     resetSmsStep() {
@@ -294,31 +285,6 @@ export default {
       setTimeout(() => {
         uni.reLaunch({ url: '/pages/project-list/project-list' });
       }, 300);
-    },
-    async handleClientLogin() {
-      if (this.clientLoginLoading) return;
-      if (!this.clientForm.accessCode) {
-        uni.showToast({ title: this.$t('account.caseAccessCodePlaceholder'), icon: 'none' });
-        return;
-      }
-      this.clientLoginLoading = true;
-      try {
-        const res = await clientLogin(this.clientForm.accessCode, null);
-        if (res.code === 0 && res.data) {
-          saveSession(res.data.sessionId, res.data.user);
-          uni.showToast({ title: this.$t('account.loginSuccessToast'), icon: 'success' });
-          const projectId = res.data.projectId;
-          setTimeout(() => {
-            uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${projectId}` });
-          }, 300);
-        } else {
-          uni.showToast({ title: res.message || this.$t('account.loginFailedToast'), icon: 'none' });
-        }
-      } catch (e) {
-        uni.showToast({ title: e.message || this.$t('account.loginFailedToast'), icon: 'none' });
-      } finally {
-        this.clientLoginLoading = false;
-      }
     },
     async handleLogin() {
       if (this.loginLoading) return;
