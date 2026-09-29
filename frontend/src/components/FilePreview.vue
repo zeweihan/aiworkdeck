@@ -83,15 +83,16 @@
         <!-- 图片/SVG 预览：缩放平移查看器。用原生 img 配 CSS transform 而不是 uni 的
              image 组件——transform 不好控。换文件时的状态重置见 resetImageViewState。
              滚轮/拖拽/双击绑在容器而不是 img 本身：图片小于容器时四周还有留白，
-             绑在 img 上会让留白区域变成"死区"，滚轮/拖拽在那里没反应。 -->
+             绑在 img 上会让留白区域变成"死区"，滚轮/拖拽在那里没反应。
+             滚轮与双击不写模板 @wheel/@dblclick：uni 会把事件重建成没有 deltaY/clientX 的
+             普通对象（只能缩小、不能放大，dev-board#1014），改由 syncImageViewportListeners
+             用原生 addEventListener 挂到真实元素上。 -->
         <view
           v-else-if="isImage"
           class="preview-image"
           :class="{ 'is-panning': imagePanning }"
           ref="imageViewport"
-          @wheel="handleImageWheel"
           @mousedown="handleImagePanStart"
-          @dblclick="handleImageDblClick"
         >
           <img
             v-if="blobUrl"
@@ -285,6 +286,7 @@ import {
   parsePdfLocator, parseImageRect, parseMediaStartSec,
   imageTransform, imageRectBox, rotatedDisplaySize, normalizeRotation,
 } from '@/utils/evidenceLocator.js'
+import { imageWheelZoomFactor, imageEventAnchor } from '@/utils/imageWheelZoom.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
@@ -542,12 +544,19 @@ export default {
     if (this.blobUrl) {
       URL.revokeObjectURL(this.blobUrl)
     }
+    this.unbindImageViewportListeners()
     // 组件卸载时若正处于拖拽平移中，window 上的监听不会自己消失
     window.removeEventListener('mousemove', this.handleImagePanMove)
     window.removeEventListener('mouseup', this.handleImagePanEnd)
   },
   mounted() {
     console.log('FilePreview mounted, file:', this.file, 'fileUrl:', this.fileUrl)
+    this.syncImageViewportListeners()
+  },
+  // .preview-image 是 v-else-if 分支：切文件（图片 → docx → 图片）、加载态切换都会重建它。
+  // 每次重渲染后比对一次元素身份，换了就把原生监听挪过去（同一元素不重复挂）。
+  updated() {
+    this.syncImageViewportListeners()
   },
   methods: {
     // ==================== 自绘音频播放器 ====================
@@ -1075,14 +1084,37 @@ export default {
       this.imageTy = anchorY - (anchorY - this.imageTy) * ratio
       this.imageScale = newScale
     },
+    // 滚轮与双击用原生监听挂到真实元素上（理由见模板注释与 utils/imageWheelZoom.js）。
+    // wheel 必须 passive:false，否则 Chromium 按 passive 处理、preventDefault 被忽略。
+    syncImageViewportListeners() {
+      const el = this.getImageViewportEl()
+      const target = el && typeof el.addEventListener === 'function' ? el : null
+      if (target === this._imageListenEl) return
+      this.unbindImageViewportListeners()
+      if (!target) return
+      this._imageWheelHandler = (e) => this.handleImageWheel(e)
+      this._imageDblHandler = (e) => this.handleImageDblClick(e)
+      target.addEventListener('wheel', this._imageWheelHandler, { passive: false })
+      target.addEventListener('dblclick', this._imageDblHandler)
+      this._imageListenEl = target
+    },
+    unbindImageViewportListeners() {
+      const el = this._imageListenEl
+      if (el) {
+        el.removeEventListener('wheel', this._imageWheelHandler)
+        el.removeEventListener('dblclick', this._imageDblHandler)
+      }
+      this._imageListenEl = null
+    },
     handleImageWheel(e) {
       e.preventDefault()
       if (!this.imageNaturalWidth) return
       const el = this.getImageViewportEl()
       if (!el) return
-      const rect = el.getBoundingClientRect()
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
-      this.zoomImageTo(this.imageScale * factor, e.clientX - rect.left, e.clientY - rect.top)
+      const factor = imageWheelZoomFactor(e)
+      if (factor === 1) return
+      const a = imageEventAnchor(e, el.getBoundingClientRect())
+      this.zoomImageTo(this.imageScale * factor, a.x, a.y)
     },
     handleImagePanStart(e) {
       if (!this.imageNaturalWidth) return
@@ -1113,9 +1145,9 @@ export default {
       if (!this.imageNaturalWidth) return
       const el = this.getImageViewportEl()
       if (!el) return
-      const rect = el.getBoundingClientRect()
       const target = Math.abs(this.imageScale - 1) < 0.001 ? this.imageFitScale : 1
-      this.zoomImageTo(target, e.clientX - rect.left, e.clientY - rect.top)
+      const a = imageEventAnchor(e, el.getBoundingClientRect())
+      this.zoomImageTo(target, a.x, a.y)
     },
     imageZoomInBtn() {
       const el = this.getImageViewportEl()

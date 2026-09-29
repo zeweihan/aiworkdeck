@@ -746,11 +746,20 @@ public class ContextAssemblerService {
         // [Injection] Active Document Context (auto-detected current tab)
         // This is injected when no explicit context is provided but user is viewing a document
         // LLM decides whether to use this based on user's instruction
+        //
+        // 活跃文档是图片时（dev-board#1013）另走一条路：与附件同一条视觉通道、占同一张数上限，
+        // 直送不了才 OCR 并明示降级。null = 活跃文档不是图片；true = 模型能看到图像本身；
+        // false = 模型手上只有 OCR 转写。末位提醒据此选文案。
+        Boolean activeImageVisible = null;
         if (activeContext != null && activeContext.getId() != null && !activeContext.getId().isEmpty()) {
             log.info("[Context] Injecting active document: id={}, name={}, inline={}",
                      activeContext.getId(), activeContext.getName(),
                      activeContext.getInlineContent() != null && !activeContext.getInlineContent().isEmpty());
 
+            if (isVisionCandidate(activeContext)) {
+                activeImageVisible = appendActiveImage(systemText, contextItems, activeContext,
+                        visionCapable, visionAttachments, english, ledger);
+            } else {
             // 只带壳还是连正文一起注入：判据单独一个方法，别在下面那串条件里再长出一条 if
             String content = injectActiveDocumentBody(contextItems, activeContext)
                     ? resolveActiveDocumentContent(activeContext, conversationId)
@@ -962,6 +971,7 @@ public class ContextAssemblerService {
                           .append("\" name=\"").append(attrSafe(activeContext.getName()))
                           .append("\">").append(readHint).append("</active_document>\n");
             }
+            } // end non-image active document
         }
 
         // 2. 注入 Markdown 记忆索引与既有结构化记忆。
@@ -1139,9 +1149,11 @@ public class ContextAssemblerService {
         // 活跃文档提醒挂在**用户消息尾部**而非只留在 system prompt：system prompt 里的同类
         // 声明被弱模型（如 DeepSeek Flash）稳定无视——实测注入了正文仍先调 doc_list_project_files
         // 重新发现文档。末位消息是注意力最高的位置，这里再说一次才真正生效。
-        String userText = userPrompt + activeDocumentReminder(activeContext,
-                clientCapabilityService.capabilityOf(conversationId),
-                clientCapabilityService.officeHostOf(conversationId))
+        String userText = userPrompt + (activeImageVisible != null
+                ? activeImageReminder(activeContext, activeImageVisible, english)
+                : activeDocumentReminder(activeContext,
+                        clientCapabilityService.capabilityOf(conversationId),
+                        clientCapabilityService.officeHostOf(conversationId)))
                 + templateProfileFact(activeContext, clientCapabilityService.capabilityOf(conversationId), projectId)
                 + clarificationReminder(agentMode, userPrompt, english);
 
@@ -1360,17 +1372,180 @@ public class ContextAssemblerService {
                   .append("\" name=\"").append(attrSafe(item.getName()))
                   .append("\" source=\"ocr\" reason=\"").append(attrSafe(reason))
                   .append("\"><![CDATA[\n");
-        systemText.append(english
-                ? "[The text below was extracted from an image by OCR because " + reason
-                        + ". You cannot see the image itself; recognition may be wrong, "
-                        + "so ask the user to check the original whenever a key number or name matters]\n"
-                : "[以下正文由文字识别（OCR）从图片转写而来，" + reason
-                        + "；你看不到图像本身，识别结果可能有误，涉及关键数字/名称时请提示用户核对原图]\n");
+        systemText.append(ocrFallbackBanner(reason, english));
         // 同上：OCR 一个字都没认出来时 read_document 回的是 "Warning: no text extracted…"，
         // 顶着上面那句「以下正文由 OCR 转写而来」的横幅进 CDATA，就成了「识别结果是这句英文」。
         systemText.append(readable ? fenceSafe(content) : "[Empty or unreadable file]");
         systemText.append("\n]]></file>\n");
         return readable;
+    }
+
+    /** OCR 降级正文的横幅（附件与活跃图片共用，zh/en 成对）。 */
+    private static String ocrFallbackBanner(String reason, boolean english) {
+        return english
+                ? "[The text below was extracted from an image by OCR because " + reason
+                        + ". You cannot see the image itself; recognition may be wrong, "
+                        + "so ask the user to check the original whenever a key number or name matters]\n"
+                : "[以下正文由文字识别（OCR）从图片转写而来，" + reason
+                        + "；你看不到图像本身，识别结果可能有误，涉及关键数字/名称时请提示用户核对原图]\n";
+    }
+
+    private static final String ACTIVE_IMAGE_ATTACHED_NOTE_ZH =
+            "与上方 # User Context Files 中 id 相同的那一项是同一张图，已在那里提供，这里不重复";
+    private static final String ACTIVE_IMAGE_ATTACHED_NOTE_EN =
+            "Same image as the item with this id under # User Context Files above; provided there, not repeated here";
+
+    /**
+     * 活跃文档（当前文档 chip）是图片时的注入（dev-board#1013）。
+     *
+     * <p>与附件走同一条视觉通道：生效模型能看图且本轮还有张数余额时，把字节收进
+     * {@code visionAttachments}（末位用户消息里以 ImageContent HIGH 直送），system 里只留一条标识；
+     * 否则降级 OCR 并明示（{@code source="ocr" reason=...} + 横幅 + notice）。
+     * 同 id 已作为附件出现时不再读盘/直送/OCR——同一张图绝不发两份。
+     *
+     * <p>刻意忽略 {@code staleBody}、「有附件只带壳」与内联正文：图片没有这些形态，
+     * 只带壳的图片对模型毫无用处。<b>不进附件账本</b>（活跃文档从来不进，进了会被「重新生成」当附件重建）。
+     *
+     * @return true = 模型能看到图像本身；false = 只有 OCR 转写（或什么都读不出）
+     */
+    private boolean appendActiveImage(StringBuilder systemText,
+                                      java.util.List<com.checkba.controller.ai.AiAgentController.ContextItem> contextItems,
+                                      com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+                                      boolean visionCapable,
+                                      List<VisionAttachment> visionAttachments,
+                                      boolean english,
+                                      ContextTurnSink ledger) {
+        String id = activeContext.getId();
+        String name = activeContext.getName();
+        boolean alreadyAttached = contextItems != null && contextItems.stream()
+                .anyMatch(i -> i != null && !i.isDir() && id.equals(i.getId()));
+
+        if (alreadyAttached) {
+            boolean visible = visionAttachments.stream().anyMatch(a -> id.equals(a.fileId()));
+            systemText.append(activeImageGuidance(activeContext, "attached", english));
+            systemText.append("<active_document id=\"").append(id)
+                      .append("\" name=\"").append(attrSafe(name))
+                      .append("\" kind=\"image\" note=\"")
+                      .append(english ? ACTIVE_IMAGE_ATTACHED_NOTE_EN : ACTIVE_IMAGE_ATTACHED_NOTE_ZH)
+                      .append("\"/>\n");
+            return visible;
+        }
+
+        int maxImages = contextProperties.getVision().getMaxImagesPerTurn();
+        boolean overPerTurnLimit = visionCapable && visionAttachments.size() >= maxImages;
+        boolean[] tooLarge = new boolean[1];
+        VisionAttachment attachment = (visionCapable && !overPerTurnLimit)
+                ? loadVisionAttachment(activeContext, tooLarge)
+                : null;
+        if (attachment != null) {
+            visionAttachments.add(attachment);
+            systemText.append(activeImageGuidance(activeContext, "vision", english));
+            systemText.append("<active_document id=\"").append(id)
+                      .append("\" name=\"").append(attrSafe(name))
+                      .append("\" kind=\"image\" note=\"").append(english ? VISION_NOTE_EN : VISION_NOTE_ZH)
+                      .append("\"/>\n");
+            return true;
+        }
+
+        // 降级：原因、notice kind、detail 与附件分支同口径
+        String noticeKind = overPerTurnLimit ? ContextTurnSink.IMAGE_LIMIT
+                : tooLarge[0] ? ContextTurnSink.IMAGE_TOO_LARGE
+                : ContextTurnSink.OCR_FALLBACK;
+        String detail = overPerTurnLimit ? String.valueOf(maxImages)
+                : tooLarge[0] ? String.valueOf(contextProperties.getVision().getMaxImageBytes())
+                : null;
+        String reason = !visionCapable ? (english ? OCR_FALLBACK_NO_VISION_EN : OCR_FALLBACK_NO_VISION_ZH)
+                : overPerTurnLimit ? (english ? OCR_FALLBACK_COUNT_EN : OCR_FALLBACK_COUNT_ZH)
+                : tooLarge[0] ? (english ? OCR_FALLBACK_SIZE_EN : OCR_FALLBACK_SIZE_ZH)
+                : (english ? OCR_FALLBACK_READ_EN : OCR_FALLBACK_READ_ZH);
+
+        String content = legalTools.read_document(id);
+        boolean readable = content != null && !content.isBlank()
+                && !isToolFailureText(content) && !content.strip().startsWith("[System:");
+
+        systemText.append(activeImageGuidance(activeContext, "ocr", english));
+        systemText.append("<active_document id=\"").append(id)
+                  .append("\" name=\"").append(attrSafe(name))
+                  .append("\" kind=\"image\" source=\"ocr\" reason=\"").append(attrSafe(reason)).append("\">");
+        if (readable) {
+            int maxChars = contextProperties.getFiles().getMaxCharsActiveDocument();
+            if (content.length() > maxChars) {
+                content = truncateAtCharBoundary(content, maxChars) + "\n... [TRUNCATED - File too long]";
+                ledger.notice(ContextTurnSink.TRUNCATED, id, name, String.valueOf(maxChars));
+            }
+            systemText.append("<![CDATA[\n").append(ocrFallbackBanner(reason, english))
+                      .append(fenceSafe(content)).append("\n]]>");
+        } else {
+            systemText.append(english ? "[Image content temporarily unreadable]" : "[图片内容暂不可读]");
+        }
+        systemText.append("</active_document>\n");
+        // 一张图只说一件事：OCR 也没读出字时「读不到内容」盖过「怎么降级的」
+        ledger.notice(readable ? noticeKind : ContextTurnSink.UNREADABLE, id, name, readable ? detail : null);
+        return false;
+    }
+
+    /** 活跃图片的 {@code # Active Document} 段（zh/en 成对）。mode = vision / ocr / attached。 */
+    private static String activeImageGuidance(com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+                                              String mode, boolean english) {
+        StringBuilder sb = new StringBuilder();
+        if (english) {
+            sb.append("\n\n# Active Document\n");
+            sb.append("The file open right now is an image (id=").append(activeContext.getId())
+              .append(", name=").append(activeContext.getName())
+              .append(") - it is what the user is looking at. When the user says \"this image\", \"this\", ")
+              .append("\"the current file\", or gives no target, they mean it. It is NOT an editable document: ")
+              .append("do not call doc_* / sheet_* / slide_* / office_* editing tools on it, and do not call ")
+              .append("doc_list_project_files or doc_open_file to rediscover or reopen it. ");
+            switch (mode) {
+                case "vision" -> sb.append("It is provided to you as an image with this message - look at it directly; do not call any read tool.\n\n");
+                case "attached" -> sb.append("It is the same image as the item with this id under # User Context Files above ")
+                        .append("and is provided there (as an image or as its OCR text); it is not repeated here.\n\n");
+                default -> sb.append("You cannot see the image itself - you only have its OCR text (in <active_document> below), ")
+                        .append("and recognition may be wrong; ask the user to check the original whenever a key number or name matters.\n\n");
+            }
+        } else {
+            sb.append("\n\n# Active Document (当前活跃文档)\n");
+            sb.append("当前打开的是一张图片（id=").append(activeContext.getId())
+              .append(", name=").append(activeContext.getName())
+              .append("），就是用户此刻正在看的内容；用户说「这张图」「这个」「当前文件」或未指明对象时，默认指它。")
+              .append("它不是可编辑文档：不要对它调用 doc_* / sheet_* / slide_* / office_* 编辑工具，")
+              .append("也不要调 doc_list_project_files / doc_open_file 去重新发现或打开它。");
+            switch (mode) {
+                case "vision" -> sb.append("它已作为图像随本条消息直接提供给你，直接看图即可，不要再调读取工具。\n\n");
+                case "attached" -> sb.append("它与上方 # User Context Files 中 id 相同的那一项是同一张图，")
+                        .append("已在那里提供（图像本身或其 OCR 转写），这里不重复提供。\n\n");
+                default -> sb.append("你看不到图像本身，只有它的文字识别（OCR）转写文本（见下方 <active_document>），")
+                        .append("识别结果可能有误，涉及关键数字/名称时请提示用户核对原图。\n\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 活跃图片的末位提醒（zh/en 成对）。visible = 模型能看到图像本身。 */
+    private static String activeImageReminder(com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+                                              boolean visible, boolean english) {
+        String id = activeContext.getId();
+        if (english) {
+            String label = activeDocDisplayNameEn(activeContext.getName());
+            String notEditable = " It is not an editable document - do not call doc_* / sheet_* / slide_* / office_* "
+                    + "editing tools on it.";
+            return visible
+                    ? "\n\n[System reminder] What the user is looking at right now is the image " + label + " (id=" + id
+                            + "), sent to you with this message - look at it directly and answer from what you see. "
+                            + "Unless the user names another file, \"this image\", \"this\", and the like refer to it." + notEditable
+                    : "\n\n[System reminder] What the user is looking at right now is the image " + label + " (id=" + id
+                            + "). You cannot see the image itself; you only have its OCR text (the item with id=" + id
+                            + " in the system prompt), and recognition may be wrong - ask the user to check the original "
+                            + "whenever a key number or name matters." + notEditable;
+        }
+        String label = activeDocDisplayName(activeContext.getName());
+        String notEditable = "它不是可编辑文档，不要对它调用 doc_* / sheet_* / slide_* / office_* 编辑工具。";
+        return visible
+                ? "\n\n[系统提醒] 用户此刻正在看的是图片" + label + "（id=" + id + "），就是随本条消息发给你的那张图，"
+                        + "直接看图作答。用户未指明别的文件时，「这张图」「这个」等都指它。" + notEditable
+                : "\n\n[系统提醒] 用户此刻正在看的是图片" + label + "（id=" + id + "）。你看不到图像本身，"
+                        + "只有其文字识别（OCR）转写文本（见 system prompt 中 id=" + id + " 的那一项），识别结果可能有误，"
+                        + "涉及关键数字/名称时请提示用户核对原图。" + notEditable;
     }
 
     /** 扩展名 → image/* MIME。jpg 必须归一化成 image/jpeg，拼成 image/jpg 上游不认。 */
@@ -1487,6 +1662,10 @@ public class ContextAssemblerService {
             return "";
         }
         if (!ClientCapabilityService.DOC_KIND_WRITER.equals(lowaDocKind(activeContext))) {
+            return "";
+        }
+        // lowaDocKind 对图片也返回 doc（它驱动工具可见性，刻意不改）；排版画像对图片毫无意义
+        if (isVisionCandidate(activeContext)) {
             return "";
         }
         Long pid;

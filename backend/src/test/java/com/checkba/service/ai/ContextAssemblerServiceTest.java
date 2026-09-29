@@ -1494,4 +1494,171 @@ class ContextAssemblerServiceTest {
                 null, null, "88", AgentMode.AGENT, 1L, null);
         return ((dev.langchain4j.data.message.SystemMessage) out.get(0)).text();
     }
+
+    // ==================== 活跃文档是图片（dev-board#1013） ====================
+    //
+    // 病灶：工作台预览标签里开着一张 jpg，它作为「当前文档」（activeContext）进来，
+    // 活跃文档注入块没有视觉分支——无条件 read_document → 云端 OCR → CDATA，
+    // 且引导/提醒把它当 Writer 文档讲。模型明明能看图，却回答「只能通过文字识别间接了解」。
+
+    /** 记下每条 notice 的 kind:fileId:detail。 */
+    private static final class ImageNoticeSink implements ContextTurnSink {
+        final List<String> notices = new java.util.ArrayList<>();
+
+        @Override
+        public void notice(String kind, String fileId, String name, String detail) {
+            notices.add(kind + ":" + fileId + ":" + detail);
+        }
+
+        boolean has(String kind, String fileId) {
+            return notices.stream().anyMatch(n -> n.startsWith(kind + ":" + fileId + ":"));
+        }
+    }
+
+    private static AiAgentController.ContextItem activeImage(String id, String name) {
+        AiAgentController.ContextItem item = new AiAgentController.ContextItem();
+        item.setId(id);
+        item.setName(name);
+        item.setFileType("jpg");
+        return item;
+    }
+
+    /** 组装器：视觉能力与语言可控，给出的每个 id 都能读到图片字节。 */
+    private ContextAssemblerService imageAssembler(boolean vision, boolean english, String... ids) throws Exception {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.effectiveModelSupportsVision(any())).thenReturn(vision);
+        com.checkba.service.ProjectFileService fileService = mock(com.checkba.service.ProjectFileService.class);
+        for (String id : ids) {
+            com.checkba.model.entity.ProjectFile file = new com.checkba.model.entity.ProjectFile();
+            file.setId(Long.valueOf(id));
+            file.setProjectId(88L);
+            file.setName("img-" + id + ".jpg");
+            when(fileService.getFile(Long.valueOf(id))).thenReturn(file);
+            when(fileService.getFileBytes(Long.valueOf(id))).thenReturn(new byte[]{1, 2, 3, 4});
+        }
+        com.checkba.service.AppLanguageService lang = mock(com.checkba.service.AppLanguageService.class);
+        when(lang.isEnglish()).thenReturn(english);
+        return new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), mockedSkillRouter(), new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                lang, factory, fileService);
+    }
+
+    @Test
+    @DisplayName("活跃文档是图片 + 模型能看图：图随末位用户消息直送，不调 read_document，也不按 Writer 文档讲")
+    void activeImageIsSentDirectlyToVisionModel() throws Exception {
+        ContextAssemblerService a = imageAssembler(true, false, "555");
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "这张照片里有什么", null,
+                activeImage("555", "现场照片.jpg"), null, null, "88", AgentMode.AGENT, 1L,
+                "moonshotai/kimi-k3", null);
+
+        ChatMessage last = messages.get(messages.size() - 1);
+        assertEquals(1, com.checkba.service.ai.context.ChatMessageText.imageCountOf(last),
+                "当前打开的图片应作为 ImageContent 挂在末位用户消息上");
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+
+        String systemText = ((SystemMessage) messages.get(0)).text();
+        assertTrue(systemText.contains("<active_document id=\"555\""), "仍要留下活跃文档标识");
+        assertTrue(systemText.contains("已作为图像随本条消息直接提供给你"), "应写明图已直送");
+        assertFalse(systemText.contains("<active_document id=\"555\" name=\"现场照片.jpg\"><![CDATA["),
+                "直送时不许再注入 OCR 正文");
+        assertFalse(systemText.contains("所有 doc_* 编辑/读取工具直接作用于该文档"),
+                "图片不是 Writer 文档，不该给 doc_* 指引");
+
+        String userText = com.checkba.service.ai.context.ChatMessageText.of(last);
+        assertTrue(userText.contains("随本条消息"), "末位提醒应说明用户正在看的就是随消息发来的那张图");
+        assertFalse(userText.contains("doc_link_evidence"), "末位提醒不该按 Writer 文档讲");
+        assertFalse(userText.contains("其正文见 system prompt 的 <active_document>"));
+    }
+
+    @Test
+    @DisplayName("活跃文档是图片 + 纯文本模型：走 OCR 并明示降级（source=ocr + 原因 + notice）")
+    void activeImageFallsBackToOcrWithExplicitNotice() throws Exception {
+        when(legalTools.read_document("555")).thenReturn("识别出来的文字");
+        ContextAssemblerService a = imageAssembler(false, false, "555");
+        ImageNoticeSink sink = new ImageNoticeSink();
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "这张照片里有什么", null,
+                activeImage("555", "现场照片.jpg"), null, null, "88", AgentMode.AGENT, 1L,
+                "deepseek/deepseek-v4-flash", sink);
+
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.times(1)).read_document("555");
+        String systemText = ((SystemMessage) messages.get(0)).text();
+        assertTrue(systemText.contains("source=\"ocr\""), "应标出正文来源是 OCR");
+        assertTrue(systemText.contains("当前模型不支持视觉输入"), "必须写明降级原因");
+        assertTrue(systemText.contains("识别出来的文字"));
+        assertTrue(sink.has(ContextTurnSink.OCR_FALLBACK, "555"), "降级必须发 notice");
+        assertEquals(0, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)));
+        String userText = com.checkba.service.ai.context.ChatMessageText.of(messages.get(messages.size() - 1));
+        assertTrue(userText.contains("OCR"), "末位提醒应说明手上只有 OCR 转写文本");
+    }
+
+    @Test
+    @DisplayName("活跃图片与附件是同一张：只发一份，不重复读盘/OCR")
+    void activeImageAlsoAttachedIsSentOnce() throws Exception {
+        ContextAssemblerService a = imageAssembler(true, false, "555");
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "看图", List.of(imageItem("555", "现场照片.jpg")),
+                activeImage("555", "现场照片.jpg"), null, null, "88", AgentMode.AGENT, 1L,
+                "moonshotai/kimi-k3", null);
+
+        assertEquals(1, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)), "同一张图不许发两份");
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+        String systemText = ((SystemMessage) messages.get(0)).text();
+        assertTrue(systemText.contains("<active_document id=\"555\""));
+        assertTrue(systemText.contains("是同一张图"), "应说明活跃图片就是上方那份附件");
+        assertTrue(com.checkba.service.ai.context.ChatMessageText.of(messages.get(messages.size() - 1))
+                .contains("随本条消息"), "附件已直送时末位提醒按「能看到图」讲");
+    }
+
+    @Test
+    @DisplayName("活跃图片撞上本轮张数上限：降级 OCR，原因写张数，notice 为 image_limit")
+    void activeImageOverPerTurnLimitFallsBackToOcr() throws Exception {
+        when(legalTools.read_document("555")).thenReturn("识别出来的文字");
+        ContextAssemblerService a = imageAssembler(true, false, "1", "2", "3", "4", "555");
+        ImageNoticeSink sink = new ImageNoticeSink();
+
+        List<ChatMessage> messages = a.assemble("conv-1", "run-1", "看图",
+                List.of(imageItem("1", "a.jpg"), imageItem("2", "b.jpg"),
+                        imageItem("3", "c.jpg"), imageItem("4", "d.jpg")),
+                activeImage("555", "现场照片.jpg"), null, null, "88", AgentMode.AGENT, 1L,
+                "moonshotai/kimi-k3", sink);
+
+        assertEquals(4, com.checkba.service.ai.context.ChatMessageText.imageCountOf(
+                messages.get(messages.size() - 1)), "活跃图片占同一张数上限");
+        String systemText = ((SystemMessage) messages.get(0)).text();
+        assertTrue(systemText.contains("超出本轮可直送的图片张数上限"));
+        assertTrue(systemText.contains("source=\"ocr\""));
+        assertTrue(sink.has(ContextTurnSink.IMAGE_LIMIT, "555"));
+    }
+
+    @Test
+    @DisplayName("EN 应用语言：活跃图片的指引、降级说明与末位提醒都是英文")
+    void activeImageTextsFollowAppLanguage() throws Exception {
+        ContextAssemblerService vision = imageAssembler(true, true, "555");
+        List<ChatMessage> vm = vision.assemble("conv-1", "run-1", "what is in it", null,
+                activeImage("555", "photo.jpg"), null, null, "88", AgentMode.AGENT, 1L,
+                "moonshotai/kimi-k3", null);
+        String vSystem = ((SystemMessage) vm.get(0)).text();
+        String vUser = com.checkba.service.ai.context.ChatMessageText.of(vm.get(vm.size() - 1));
+        assertTrue(vSystem.contains("Provided to you as an image with this message"));
+        assertFalse(vSystem.contains("All doc_* editing and reading tools act directly on this document"));
+        assertTrue(vUser.contains("sent to you with this message"));
+        assertFalse(vUser.contains("随本条消息"));
+
+        when(legalTools.read_document("555")).thenReturn("recognized text");
+        ContextAssemblerService ocr = imageAssembler(false, true, "555");
+        List<ChatMessage> om = ocr.assemble("conv-1", "run-1", "what is in it", null,
+                activeImage("555", "photo.jpg"), null, null, "88", AgentMode.AGENT, 1L,
+                "deepseek/deepseek-v4-flash", null);
+        String oSystem = ((SystemMessage) om.get(0)).text();
+        assertTrue(oSystem.contains("does not accept image input"));
+        assertTrue(oSystem.contains("source=\"ocr\""));
+        assertFalse(oSystem.contains("当前模型不支持视觉输入"));
+        assertFalse(oSystem.contains("以下正文由文字识别"));
+    }
 }

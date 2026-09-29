@@ -1424,11 +1424,18 @@ export default {
      * 的缩略图块里，从文件树拖进来的项目图片（走 contextFiles）完全不触发——
      * 用户把一张现场照片拖进对话、模型读不了图时界面上没有任何线索，
      * 而模型收到的是 OCR 转写文本，回答里的数字可能是识别错的（审查 E-6）。
+     *
+     * activeDoc：预览标签里打开一张 jpg 时，它以「当前文档」chip 随消息上送，
+     * 既不在 pastedImages 也不在 contextFiles 里，原来这条路零提示（dev-board#1013）。
      */
     const visionNotice = computed(() => visionNoticeKey({
       modelVision: currentModelVision.value,
       pastedImages: pastedImages.value,
       contextFiles: contextFiles.value,
+      // chip 只有 id/name，fileType 从 activeTab 补上——与发送时 activeContext 的形状一致，两条判据都能命中
+      activeDoc: activeDocChip.value
+        ? { ...activeDocChip.value, fileType: props.activeTab ? props.activeTab.fileType : '' }
+        : null,
     }))
 
     // 选中读不了图的模型时说一声：降级是后端自动做的，不说用户会以为模型看到了图

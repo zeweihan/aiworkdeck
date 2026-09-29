@@ -430,6 +430,12 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - **摘下窗口的 BrowserView 会被 Chromium 冻住渲染进程**（后台标签的正常待遇，页面状态照留）。
   自动化里往冻着的 target 里 evaluate 会一直挂到 CDP 的 protocolTimeout，最后只落一句
   「Runtime.callFunctionOn timed out」——desktop-e2e 那一段为此自带超时与「等它醒过来」轮询。
+- **图片预览的滚轮/双击不许写回模板 `@wheel`/`@dblclick`（dev-board#1014）**：`.preview-image` 是 uni `<view>`，
+  uni-h5 的 `createNativeEvent` 只给 click / mouse* / touch / 键盘补字段，`wheel` 丢 deltaY 与 clientX/Y、
+  `dblclick` 丢 clientX/Y——症状是「滚轮只能缩小不能放大、缩放时图跳到左上角」。现在由
+  `FilePreview.syncImageViewportListeners`（mounted + updated，跟随 v-if 重建换元素）原生挂载，
+  取值口径在 `utils/imageWheelZoom.js`（取不到 delta 不动、取不到坐标退视口中心）。`@mousedown` 在补字段分支里，
+  不受影响。回归 `tests/project-home/image-preview-wheel-zoom.test.mjs`。
 - **浏览器面板的注入脚本是一行**：加代码时别顺手写 `//` 注释，整段会当场死掉且只在页面控制台
   留一句 SyntaxError（详见上面「注入脚本的三条硬规则」）。app-e2e 的 J6.7 与
   `BrowserProxyControllerTest` 都能拦住。
