@@ -517,7 +517,10 @@ class PluginMarketServiceTest {
                 return reply(200, paidRegistryJson());
             }
         };
-        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
+        // 登录后置（dev-board#1046）：AccountException(NOT_CONNECTED, reason=market) → 4011，前端就地弹登录层
+        com.checkba.service.account.AccountException e = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> svc.install("demo"));
+        assertEquals("market", e.getReason());
         assertTrue(e.getMessage().contains("连接 AI WorkDeck 账户"), e.getMessage());
         assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
         assertNotMistakenForLogout(e.getMessage());
@@ -625,7 +628,10 @@ class PluginMarketServiceTest {
                 return reply(402, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
             }
         };
-        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
+        // 402 降级路径上的未连账户同样是 4011（且不能被「清单无法解析」那层 catch 吞掉）
+        com.checkba.service.account.AccountException e = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> svc.install("demo"));
+        assertEquals("market", e.getReason());
         assertTrue(e.getMessage().contains("连接 AI WorkDeck 账户"), e.getMessage());
         assertFalse(e.getMessage().contains("需购买后安装"),
                 "本机没连账户，官网无从查购买记录：402 不等于用户没买过 —— " + e.getMessage());

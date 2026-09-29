@@ -141,7 +141,6 @@ export default {
   kindNotePlugin: '插件是可执行扩展：为工作台增加新功能，与本机应用同等权限，经平台人工审核并签名分发。',
   kindNoteSkill: 'Skill 是提示词工作流：教 AI 助手按一套业务方法做事，纯文本、不含可执行代码。',
   buyWithPrice: '购买 {price}',
-  goConnectAccount: '去连接账户',
   refreshing: '刷新中…',
   alreadyPurchasedRefresh: '我已购买，刷新',
   installingEllipsis: '安装中…',

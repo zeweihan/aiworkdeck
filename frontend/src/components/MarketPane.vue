@@ -135,7 +135,7 @@
                     {{ marketBusyId === m.id ? $t('market.processing') : (m.installed ? $t('market.update') : $t('market.install')) }}
                   </view>
                   <view v-else-if="marketAction(m) === 'buy'" class="act-primary" @tap="openPurchase('skill', m.id)">{{ $t('market.buy') }}</view>
-                  <view v-else class="act-primary" @tap="goToAccountSettings">{{ $t('market.needAccount') }}</view>
+                  <view v-else class="act-primary" @tap="loginThenInstall('skill', m)">{{ $t('market.needAccount') }}</view>
                   <view v-if="m.installed" class="act-remove" @tap="uninstallSkill(m)">{{ $t('market.uninstallBtn') }}</view>
                 </view>
               </view>
@@ -198,7 +198,7 @@
                     @tap="installPlugin(m)"
                   >{{ pluginBusyId === m.id ? $t('market.installingShort') : (m.updatable ? $t('market.update') : $t('market.install')) }}</view>
                   <view v-else-if="marketAction(m) === 'buy'" class="act-primary" @tap="openPurchase('plugin', m.id)">{{ $t('market.buy') }}</view>
-                  <view v-else-if="marketAction(m) === 'need-account'" class="act-primary" @tap="goToAccountSettings">{{ $t('market.needAccount') }}</view>
+                  <view v-else-if="marketAction(m) === 'need-account'" class="act-primary" @tap="loginThenInstall('plugin', m)">{{ $t('market.needAccount') }}</view>
                   <view v-if="m.installed" class="act-remove" @tap="uninstallPlugin(m)">{{ $t('market.uninstallBtn') }}</view>
                 </view>
               </view>
@@ -367,7 +367,9 @@
 
 <script>
 import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivation, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill, getPluginMarket, installMarketPlugin, uninstallMarketPlugin } from '@/services/api.js'
-import { paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
+import { canInstall, paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
+import { requireAccount, isAccountLoginRetry } from '@/utils/requireAccount.js'
+import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { ICONS } from '@/config/icons.js'
 import { isPanelSkill, isVoiceGroupMember, buildVoiceGroupSkill } from '@/config/leftSidebarPlugins.js'
@@ -572,8 +574,22 @@ export default {
     openPurchase(kind, id) {
       openExternalUrl(purchaseUrl(kind, id))
     },
-    goToAccountSettings() {
-      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+    /**
+     * 「需连接账户」→ 就地登录后继续安装（登录后置，dev-board#1046）。
+     * 登录成功后先重拉列表（已购标记是后端按新账户的权益算的），已购/免费就直接装；
+     * 没买过则按钮自然变成「购买」，不替用户打开支付页。取消就停在原地。
+     */
+    async loginThenInstall(kind, item) {
+      const ok = await requireAccount({ reason: 'market' })
+      if (!ok) return
+      await refreshEntitlements(true).catch(() => {})
+      if (kind === 'skill') await this.loadMarket()
+      else await this.loadPluginMarket()
+      const list = kind === 'skill' ? this.marketSkills : this.marketPlugins
+      const fresh = (list || []).find((x) => x && x.id === item.id) || item
+      if (!canInstall(paidState(fresh, this.accountConnected))) return
+      if (kind === 'skill') await this.installSkill(fresh)
+      else await this.installPlugin(fresh)
     },
     formatSize(bytes) {
       if (!bytes) return this.$t('market.unknownSize')
@@ -626,6 +642,9 @@ export default {
         this.notifyMarketChanged()
       } catch (e) {
         console.error('安装插件失败:', e)
+        // 后端 4011（价格没查到的降级路径）：api.js 已就地弹过登录层；登录成功就重拉列表，
+        // 按钮按新账户的已购状态刷新，toast 里是「已登录，请再操作一次」
+        if (isAccountLoginRetry(e)) await this.loadPluginMarket()
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.pluginBusyId = ''
@@ -789,6 +808,7 @@ export default {
         this.notifyMarketChanged()
       } catch (e) {
         console.error('安装 Skill 失败:', e)
+        if (isAccountLoginRetry(e)) await this.loadMarket()
         uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.marketBusyId = ''

@@ -145,9 +145,13 @@ class OfficialCloudServiceTest {
     void withoutAnAccountKeyTheMessageIsBusinessLikeAndDoesNotLookLikeALogoutNotice() {
         connectedAccount(null, null);
 
-        VersionException ex = assertThrows(VersionException.class, () -> mainland().connectOfficial(ME));
+        // 登录后置（dev-board#1046）：未连账户是 AccountException(NOT_CONNECTED, reason=team)，
+        // 全局处理器回 4011，前端就地弹登录层；文案照旧原样给律师看
+        com.checkba.service.account.AccountException ex = assertThrows(
+                com.checkba.service.account.AccountException.class, () -> mainland().connectOfficial(ME));
 
-        assertTrue(ex.isUserFacing(), "这是业务错误，要原样给律师看");
+        assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, ex.getKind());
+        assertEquals("team", ex.getReason());
         for (String forbidden : new String[]{"登录", "未授权", "请先"}) {
             assertFalse(ex.getMessage().contains(forbidden),
                     "文案不得含「" + forbidden + "」: " + ex.getMessage());
@@ -241,7 +245,7 @@ class OfficialCloudServiceTest {
 
         // 账户断开后再点：既没有 Key 也没有指纹，不能拿旧行冒充"已连接"继续桥接
         connectedAccount(null, null);
-        assertThrows(VersionException.class, () -> svc.connectOfficial(ME));
+        assertThrows(com.checkba.service.account.AccountException.class, () -> svc.connectOfficial(ME));
         assertEquals(1, httpCalls);
     }
 

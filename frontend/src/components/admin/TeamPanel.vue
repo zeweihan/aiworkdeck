@@ -41,10 +41,12 @@
     <view v-if="!connected" class="section-card">
       <view class="section-header">
         <text class="section-title">{{ $t('team.needAccountTitle') }}</text>
-        <text class="section-subtitle">{{ $t('team.needAccountDesc') }}</text>
+        <text class="section-subtitle">{{ $t('account.accountEntry.teamNeedsLogin') }}</text>
       </view>
       <view class="section-body">
-        <view class="team-btn primary" @tap="onGoAccount">{{ $t('team.goAccount') }}</view>
+        <!-- 登录后置（dev-board#1046）：就地登录，成功后原地刷新成团队看板，不用跑去账户分区再回来 -->
+        <view class="team-btn primary" @tap="onLogin">{{ $t('account.accountEntry.loginAccountButton') }}</view>
+        <view class="team-btn" @tap="onGoAccount">{{ $t('team.goAccount') }}</view>
       </view>
     </view>
 
@@ -511,6 +513,7 @@ import {
   joinTeam, regenerateTeamJoinCode,
   createFirm, joinFirm, updateFirm, regenerateFirmJoinCode, removeFirmTeam,
 } from '@/services/api.js'
+import { requireAccount, ACCOUNT_CHANGED_EVENT } from '@/utils/requireAccount.js'
 
 const ROLE_KEYS = ['ADMIN', 'MEMBER']
 
@@ -660,6 +663,11 @@ export default {
   },
   mounted() {
     this.reload()
+    // 在别处登录 / 退出登录之后（登录弹层、顶栏退出），团队态跟着刷新
+    uni.$on(ACCOUNT_CHANGED_EVENT, this.reload)
+  },
+  beforeUnmount() {
+    uni.$off(ACCOUNT_CHANGED_EVENT, this.reload)
   },
   methods: {
     hoursLabel(minutes) {
@@ -776,6 +784,10 @@ export default {
     },
     onGoAccount() {
       this.$emit('go-account')
+    },
+    async onLogin() {
+      const ok = await requireAccount({ reason: 'team' })
+      if (ok) await this.reload()
     },
     onCreateTeam() {
       const name = (this.newTeamName || '').trim()

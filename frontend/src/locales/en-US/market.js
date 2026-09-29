@@ -139,7 +139,6 @@ export default {
   kindNotePlugin: 'A plugin is an executable extension: it adds new capabilities to the workbench, has the same permissions as apps on this machine, and is manually reviewed and signed by the platform.',
   kindNoteSkill: 'A Skill is a prompt workflow: it teaches the AI assistant to follow a set of business methods — plain text, no executable code.',
   buyWithPrice: 'Buy {price}',
-  goConnectAccount: 'Connect Account',
   refreshing: 'Refreshing…',
   alreadyPurchasedRefresh: 'I\'ve Purchased, Refresh',
   installingEllipsis: 'Installing…',

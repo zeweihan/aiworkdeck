@@ -54,13 +54,26 @@ class VoiceDictationServiceTest {
     }
 
     @Test
-    @DisplayName("通道不可用（未桥接/BYOK）：明确报「连接账户」，不出网")
-    void rejectsWhenChannelUnavailable() {
+    @DisplayName("没有账户（未连接/未桥接）：AccountException(NOT_CONNECTED, reason=dictation) → 4011，不出网")
+    void rejectsWhenNoAccount() {
         PlatformAiChannel channel = mock(PlatformAiChannel.class);
         when(channel.resolveFor(1L)).thenReturn(null);
-        var e = assertThrows(IllegalStateException.class,
+        when(channel.availableFor(1L)).thenReturn(false);
+        var e = assertThrows(com.checkba.service.account.AccountException.class,
                 () -> service(channel).transcribe(1L, Base64.getEncoder().encodeToString(new byte[16]), "wav", 1000));
+        assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertEquals("dictation", e.getReason());
         assertTrue(e.getMessage().contains("账户") || e.getMessage().contains("account"));
+    }
+
+    @Test
+    @DisplayName("账户在但取不到密钥（如未分配额度 / 官网抖动）：仍是通道错误，不弹登录层")
+    void rejectsWhenChannelUnavailableButConnected() {
+        PlatformAiChannel channel = mock(PlatformAiChannel.class);
+        when(channel.resolveFor(1L)).thenReturn(null);
+        when(channel.availableFor(1L)).thenReturn(true);
+        assertThrows(IllegalStateException.class,
+                () -> service(channel).transcribe(1L, Base64.getEncoder().encodeToString(new byte[16]), "wav", 1000));
     }
 
     // ==================== 提示词回显剥离（dev-board#175） ====================

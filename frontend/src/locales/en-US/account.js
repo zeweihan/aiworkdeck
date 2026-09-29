@@ -174,10 +174,10 @@ export default {
   logoutBtn: 'Log Out',
   logoutConfirmTitle: 'Log Out',
   logoutConfirmContent: 'Log out of your account?',
-  logoutConfirmDesktop: 'This disconnects this machine from your AI WorkDeck account and returns to the sign-in screen. Your local projects and files are untouched — sign back in to continue.',
+  logoutConfirmDesktop: 'This disconnects this machine from your AI WorkDeck account. Your local projects and files are untouched; sign in again whenever you need to.',
   logoutConfirmTrial: 'This disconnects this machine from your AI WorkDeck account. The machine stays unlocked by its trial code, and your projects and files are untouched.',
   logoutNothingTitle: 'Not signed in',
-  logoutNothingContent: 'This machine is unlocked by a trial code and is not connected to an AI WorkDeck account, so there is no sign-in to leave. To return to the locked state, use "Deactivate License" under License below.',
+  logoutNothingContent: 'This computer is not signed in to an AI WorkDeck account, so there is nothing to log out of.',
   logoutFailed: 'Log out failed, please try again',
   // 文档 Generator 元数据开关（可溯源性设计规范附录 B4）
   docGeneratorGroupTitle: 'Document properties',
@@ -186,7 +186,7 @@ export default {
   docGeneratorCurrent: 'Currently written: {application}',
   docGeneratorSaveFailed: 'Could not save the setting, please try again',
   logoutGroupTitle: 'Sign-in',
-  logoutGroupHint: 'Returns to the sign-in screen so you can use a different account. Your local projects and files stay where they are.',
+  logoutGroupHint: 'This computer stops being linked to your account, so you can sign in with a different one. Your local projects and files stay where they are.',
 
   // ---- login.vue: top nav ----
   guideNav: 'Guide',
@@ -255,4 +255,41 @@ export default {
   selectHereBtn: 'Choose This Folder',
   projectCreateSuccess: 'Project created',
   createProjectFailed: 'Failed to create project. Try again later.',
+
+  // ---- 登录后置：就地登录弹层与接入点（dev-board#1046）----
+  loginDialog: {
+    reason: {
+      generic: 'Sign in to your AI WorkDeck account to continue.',
+      ai: 'Using AI requires an AI WorkDeck account.',
+      market: 'Installing paid content requires an AI WorkDeck account.',
+      team: 'Team collaboration requires an AI WorkDeck account.',
+      mobile: 'Mobile sync requires an AI WorkDeck account.',
+      meeting: 'Cloud transcription requires an AI WorkDeck account.',
+      gateway: 'This service is provided by the AI WorkDeck platform and requires an account.',
+      dictation: 'Voice dictation requires an AI WorkDeck account.',
+      settings: 'Sign in to use AI, paid Marketplace content and team collaboration.',
+    },
+    cancel: 'Not now',
+    close: 'Close',
+    switchedTitle: 'Switched to a different account',
+    switchedBody: 'Local projects belong to this computer, not to an account: the projects already on this computer now show under the new account, and no files were touched. Switching back loses nothing.',
+    gotIt: 'Got it',
+    signedOutToast: 'Logged out',
+    retryAfterLogin: 'Signed in. Please try that again.',
+    aiNotice: '> "AI WorkDeck Cloud" requires an account. Sign in, then send this message again.',
+  },
+  accountEntry: {
+    loginButton: 'Sign in',
+    loginAccountButton: 'Sign in to AI WorkDeck',
+    notSignedIn: 'Not signed in',
+    pasteKeyAdvanced: 'Advanced: paste an account key',
+    pasteKeyCollapse: 'Hide',
+    pasteKeyConsentRequired: 'Check both agreements above before connecting',
+    mobileSyncTitle: 'Mobile sync',
+    mobileSyncDesc: 'Photos and recordings taken in the mobile app land in the matching project on this computer.',
+    mobileSyncNeedsLogin: 'Not signed in: mobile sync is off. It turns on once you sign in with the same AI WorkDeck account.',
+    mobileSyncOn: 'On with your account: sign in to the same account in the mobile app to sync.',
+    meetingNeedsLogin: 'Cloud transcription requires an account. Your recording itself is not affected.',
+    teamNeedsLogin: 'Sign in to your AI WorkDeck account to create or join a team.',
+  },
 }

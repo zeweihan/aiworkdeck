@@ -195,9 +195,11 @@ public class PlatformAiChannel {
                             "This account has not been connected via an account key yet; the \"AI WorkDeck Cloud\" channel is unavailable"));
         }
         if (!accountService.isConnected()) {
+            // reason 决定前端登录弹层顶部那句说明（登录后置 4011 契约，dev-board#1046）
             throw new AccountException(AccountException.Kind.NOT_CONNECTED,
                     LangText.of("「AI WorkDeck 云端」需要连接账户，请到设置页粘贴账户 Key",
-                            "\"AI WorkDeck Cloud\" requires a connected account; paste your account key on the Settings page"));
+                            "\"AI WorkDeck Cloud\" requires a connected account; paste your account key on the Settings page"),
+                    com.checkba.service.account.AccountRequired.REASON_PLATFORM_AI);
         }
         Cached cached = current();
         if (cached == null) cached = fetch();

@@ -78,7 +78,8 @@ public class MarketPurchaseGate {
      * @param priceCents 广场元数据里的价格（分）；&lt;= 0 一律按免费处理
      * @param itemName   用于错误文案的条目名
      * @return 付费项返回账户 Key；**免费项返回 null**（不带鉴权头，行为与改造前一致）
-     * @throws IllegalStateException 付费项但本机尚未连接账户
+     * @throws com.checkba.service.account.AccountException NOT_CONNECTED（reason=market）：付费项但本机尚未连接账户。
+     *         全局处理器回 4011，前端就地弹登录层、登录后继续安装（登录后置，dev-board#1046）
      */
     public String bearerFor(int priceCents, String itemName) {
         if (priceCents <= 0) {
@@ -86,7 +87,7 @@ public class MarketPurchaseGate {
         }
         String key = accountService.currentKeyOrNull();
         if (key == null) {
-            throw new IllegalStateException(needAccountMessage(itemName, priceCents));
+            throw needAccount(itemName, priceCents);
         }
         return key;
     }
@@ -113,8 +114,15 @@ public class MarketPurchaseGate {
      */
     private static String needAccountMessage(String itemName, int priceCents) {
         String price = priceCents > 0 ? "（" + yuan(priceCents) + "）" : "";
+        // 不再指路「去设置页」：4011 到了前端会就地弹登录层（登录后置，dev-board#1046）
         return "「" + itemName + "」是付费项目" + price
-                + "，需在设置的「账户与用量」中连接 AI WorkDeck 账户后才能安装";
+                + "，连接 AI WorkDeck 账户后才能安装";
+    }
+
+    /** 付费项 + 未连账户 → AccountException(NOT_CONNECTED, reason=market)，全局处理器回 4011。 */
+    private static com.checkba.service.account.AccountException needAccount(String itemName, int priceCents) {
+        return com.checkba.service.account.AccountRequired.exception(
+                com.checkba.service.account.AccountRequired.REASON_MARKET, needAccountMessage(itemName, priceCents));
     }
 
     /**
@@ -124,7 +132,7 @@ public class MarketPurchaseGate {
      * 本机未连账户时**不说「去购买」**：官网无从查这台机器的购买记录，402 只说明没带 Key，
      * 不说明用户没买过。这条分支只有价格未知的降级路径能走到（价格已知时 {@link #bearerFor} 已本地拦下）。
      */
-    public IllegalStateException paymentRequired(String responseBody, String fallbackName, int fallbackPriceCents) {
+    public RuntimeException paymentRequired(String responseBody, String fallbackName, int fallbackPriceCents) {
         String name = fallbackName;
         int cents = fallbackPriceCents;
         try {
@@ -137,7 +145,7 @@ public class MarketPurchaseGate {
             // 官网没按契约返回 JSON：用本地已知信息把话说清楚即可
         }
         if (!accountService.isConnected()) {
-            return new IllegalStateException(needAccountMessage(name, cents));
+            return needAccount(name, cents);
         }
         String price = cents > 0 ? "（" + yuan(cents) + "）" : "";
         return new IllegalStateException("「" + name + "」需购买后安装" + price

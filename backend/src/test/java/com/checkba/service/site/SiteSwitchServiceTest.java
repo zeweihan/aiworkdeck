@@ -134,7 +134,21 @@ class SiteSwitchServiceTest {
     }
 
     @Test
-    @DisplayName("供应商降级发生时把回落值报给前端，避免「显示选中、每条消息都报未连接账户」")
+    @DisplayName("单机版切站：凭据照清，但 AI 供应商不降级（下一条消息由 4011 → 登录弹层承接，dev-board#1046）")
+    void localModeKeepsPlatformProvider() {
+        Fixture f = fixture(true, true);
+        when(f.license().isLocalMode()).thenReturn(true);
+
+        Map<String, Object> result = f.service().switchTo("intl");
+
+        verify(f.account()).disconnect();
+        verify(f.channel()).clearCache();
+        verify(f.models(), never()).demotePlatformProvider();
+        assertFalse(result.containsKey("aiProviderFallback"));
+    }
+
+    @Test
+    @DisplayName("团队服务器：供应商降级发生时把回落值报给前端，避免「显示选中、每条消息都报未连接账户」")
     void reportsProviderFallback() {
         Fixture f = fixture(true, true);
         when(f.models().demotePlatformProvider()).thenReturn("open-router");

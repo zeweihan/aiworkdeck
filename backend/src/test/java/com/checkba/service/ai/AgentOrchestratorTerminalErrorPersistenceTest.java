@@ -149,9 +149,15 @@ class AgentOrchestratorTerminalErrorPersistenceTest {
 
         run("conv-account");
 
-        assertEquals(notice, errorPayload(), "账户类失败原样透出中文文案，不加前缀");
+        // 登录后置（dev-board#1046）：账户类失败的 SSE 载荷是 JSON {message, code, kind}，
+        // message 仍是原样的中文文案、不加前缀；落库的仍是那句纯文案
+        String payload = errorPayload();
+        assertEquals(AgentOrchestrator.accountErrorPayload(
+                new AccountException(AccountException.Kind.CONFLICT, notice)), payload);
+        assertTrue(payload.contains("\"message\":\"" + notice + "\""), "账户类失败原样透出中文文案，不加前缀：" + payload);
+        assertTrue(payload.contains("\"code\":1"), "未分配额度不是「需要登录」，不带 4011：" + payload);
         assertEquals(notice, persistedAssistantText("conv-account"),
-                "历史里必须留下这一轮的回应，且与 SSE 推出去的一致");
+                "历史里必须留下这一轮的回应，文案与 SSE 载荷里的 message 一致");
         assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-account").status());
     }
 

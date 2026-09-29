@@ -878,6 +878,7 @@ import {
 import { attachmentRecord, attachmentsFromHistory, fileListFromBubble } from '@/utils/chatAttachments.js'
 import { formatAskUserAnswer, parseAskUserAnswer } from '@/utils/askUserAnswer.mjs'
 import { isEnglish } from '@/utils/appLanguage.js'
+import { requireAccount } from '@/utils/requireAccount.js'
 import {
   AI_CONTEXT_FOLDER_FILE_LIMIT,
   countDescendantFiles,
@@ -1555,6 +1556,13 @@ export default {
       }
     }
 
+    // 发送前的账户闸（登录后置，dev-board#1046）：只管平台通道。本地 Ollama / 自备 Key
+    // 不需要账户；供应商取不到（''）时不拦，后端没账户会回 4011，由 SSE error 分支兜底弹层。
+    const ensureAiAccount = async () => {
+      if (String(activeProvider.value).toUpperCase() !== 'AWD_CLOUD') return true
+      return requireAccount({ reason: 'ai' })
+    }
+
     const toggleModeDropdown = () => {
       showModeDropdown.value = !showModeDropdown.value
       // 关闭其他下拉菜单
@@ -2172,6 +2180,10 @@ export default {
         })
         return
       }
+
+      // 平台通道且这台电脑还没登录账户：发送前就地登录（登录后置，dev-board#1046）。
+      // 取消就停在原地，草稿与附件一个都不动；已连接时 requireAccount 走缓存，不多一次请求。
+      if (!(await ensureAiAccount())) return
 
       const prompt = text
       const submissionMode = isStreaming.value && requestedMode === 'queue' ? 'queue' : 'steer'
