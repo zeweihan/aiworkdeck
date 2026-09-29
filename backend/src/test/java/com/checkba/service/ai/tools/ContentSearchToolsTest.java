@@ -66,8 +66,10 @@ class ContentSearchToolsTest {
     @DisplayName("命中逐行给出：文件名 (fileId=N) [项目内路径] 第 L 行：片段")
     void hitsCarryIdPathLineAndSnippet() {
         ProjectContextHolder.setProjectId("7");
+        ProjectFile folder = row(3L, "卷宗", null);
+        folder.setIsFolder(true);
         when(repo.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(7L))
-                .thenReturn(List.of(row(3L, "卷宗", null), row(12L, "股权转让协议.docx", 3L)));
+                .thenReturn(List.of(folder, row(12L, "股权转让协议.docx", 3L)));
         when(search.searchContent(eq(7L), any())).thenReturn(SearchResult.builder()
                 .totalMatches(2).totalFiles(1).results(List.of(file(12L, "股权转让协议.docx", 5, 40))).build());
 
