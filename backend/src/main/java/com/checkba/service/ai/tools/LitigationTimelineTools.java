@@ -8,10 +8,10 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
-import com.checkba.service.DocumentTextService;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.service.ai.LitigationVisualService;
+import com.checkba.service.file.ProjectFileTextExtractor;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -110,7 +110,12 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
     private final LitigationVisualService litviz;
     private final com.checkba.service.ai.LitigationPngService pngService;
-    private final DocumentTextService documentTextService;
+    /**
+     * 统一抽取器（dev-board#1065 T-24）：与 extract_file_text 同一条路由——图片与扫描件自动 OCR、
+     * 结果落库缓存。此前这里直接用 DocumentTextService，扫描件一律抽不出字，只能把模型指去
+     * pdf_to_word 自己转（那是桌面端专属工具，别的会话里根本看不见）。
+     */
+    private final ProjectFileTextExtractor textExtractor;
     private final ProjectFileRepository projectFileRepository;
     private final ProjectFileService projectFileService;
     private final EditorBridgeService editorBridgeService;
@@ -124,8 +129,8 @@ public class LitigationTimelineTools implements AgentToolComponent {
             + "case timeline. Pass the project file IDs of the materials (comma separated; a folder "
             + "ID expands to its direct children). This tool extracts their text, feeds the "
             + "deterministic pipeline, and returns the NUMBERED sentence list you will later judge "
-            + "sentence by sentence. Files with no extractable text (scans/photos) are reported "
-            + "back — run OCR first and add the text version as a material. Use this ONLY when the "
+            + "sentence by sentence. Images and scanned PDFs are OCR'd automatically; files that still "
+            + "yield no text are reported back with the reason. Use this ONLY when the "
             + "user wants a timeline built FROM materials; for redrawing an existing figure or the "
             + "other six layouts use litigation_render.")
     public String litigation_timeline_start(
@@ -155,13 +160,20 @@ public class LitigationTimelineTools implements AgentToolComponent {
             for (ProjectFile pf : resolveMaterials(materialFileIds)) {
                 String text;
                 try {
-                    text = documentTextService.extractText(pf);
+                    text = textExtractor.extractText(pf);
+                } catch (ProjectFileTextExtractor.AudioNotTranscribedException e) {
+                    // 音频/视频的正文是转写稿，message 本身就是可行动的下一步（dev-board#814）
+                    unreadable.add(pf.getName() + "（" + e.getMessage() + "）");
+                    continue;
+                } catch (ProjectFileTextExtractor.OcrFailedException e) {
+                    unreadable.add(pf.getName() + "（文字识别失败：" + e.getMessage() + "）");
+                    continue;
                 } catch (Exception e) {
                     unreadable.add(pf.getName() + "（抽取失败：" + e.getMessage() + "）");
                     continue;
                 }
                 if (text == null || text.isBlank()) {
-                    unreadable.add(pf.getName() + "（没有可提取文本，可能是扫描件/照片）");
+                    unreadable.add(pf.getName() + "（没有读出任何文字；图片与扫描件已自动做过文字识别）");
                     continue;
                 }
                 idx++;
@@ -175,8 +187,8 @@ public class LitigationTimelineTools implements AgentToolComponent {
             if (relPaths.isEmpty()) {
                 SESSIONS.remove(sessionKey());
                 deleteTreeQuietly(s.workdir);
-                return "没有一份材料能读出文本。" + String.join("；", unreadable)
-                        + "\n扫描件/照片请先用 OCR（如 pdf_to_word 的 OCR 路线）转出文字版存入项目，再重新开始。";
+                return "错误：没有一份材料能读出文本。" + String.join("；", unreadable)
+                        + "\n请按上面列出的原因处理，或换用其他材料后重新开始。";
             }
 
             LitigationVisualService.Result r = litviz.timeline(s.workdir, "read", relPaths, null);
@@ -186,7 +198,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
 
             String sentenceList = numberedSentences(s.workdir);
             if (sentenceList == null) {
-                return "读入材料失败：管线没有落下 state.json。" + tailStderr(r);
+                return "错误：读入材料失败：管线没有落下 state.json。" + tailStderr(r);
             }
             if (sentenceList.length() > MAX_SENTENCE_CHARS) {
                 SESSIONS.remove(sessionKey());
@@ -199,14 +211,14 @@ public class LitigationTimelineTools implements AgentToolComponent {
             sb.append(r.raw().getStr("text", "")).append("\n\n");
             if (!unreadable.isEmpty()) {
                 sb.append("以下材料本轮没有读入：").append(String.join("；", unreadable))
-                  .append("\n需要它们的话，先用 OCR 出文字版并存入项目，再重新 litigation_timeline_start。\n\n");
+                  .append("\n需要它们的话，按上面列出的原因处理后再重新 litigation_timeline_start。\n\n");
             }
             sb.append("── 句子清单（后面所有判定都按这些编号对账）──\n").append(sentenceList);
             sb.append(START_GUIDANCE);
             return sb.toString();
         } catch (Exception e) {
             log.error("litigation_timeline_start failed", e);
-            return "读入材料失败：" + e.getMessage();
+            return "错误：读入材料失败：" + e.getMessage();
         }
     }
 
@@ -268,7 +280,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
             return text + STEP_GUIDANCE;
         } catch (Exception e) {
             log.error("litigation_timeline_step failed: stage={}", st, e);
-            return "阶段 " + st + " 执行失败：" + e.getMessage();
+            return "错误：阶段 " + st + " 执行失败：" + e.getMessage();
         }
     }
 
@@ -327,7 +339,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
             }
 
             JSONArray files = r.raw().getJSONArray("files");
-            if (files == null || files.isEmpty()) return "出图失败：管线没有报出任何产物。";
+            if (files == null || files.isEmpty()) return "错误：出图失败：管线没有报出任何产物。";
 
             List<Path> paths = new ArrayList<>();
             Path traceJson = null;
@@ -362,7 +374,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
                 if (svg == null && pf.getName().endsWith(".svg") && !pf.getName().endsWith(".drawio.svg")) svg = pf;
                 if (drawio == null && pf.getName().endsWith(".drawio")) drawio = pf;
             }
-            if (registered.isEmpty()) return "出图失败：产物未能写入项目。";
+            if (registered.isEmpty()) return "错误：出图失败：产物未能写入项目。";
 
             editorBridgeService.sendRefreshFilesAction();
             ProjectFile openTarget = drawio != null ? drawio : svg;
@@ -374,7 +386,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
             return note;
         } catch (Exception e) {
             log.error("litigation_timeline_render failed", e);
-            return "出图失败：" + e.getMessage();
+            return "错误：出图失败：" + e.getMessage();
         }
     }
 
@@ -457,7 +469,7 @@ public class LitigationTimelineTools implements AgentToolComponent {
                         JSONUtil.toJsonStr(obj.get(name)), StandardCharsets.UTF_8);
             }
         } catch (Exception e) {
-            return "写入模型产出失败：" + e.getMessage();
+            return "错误：写入模型产出失败：" + e.getMessage();
         }
         return null;
     }

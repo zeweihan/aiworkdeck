@@ -99,7 +99,7 @@ public class PdfTools implements AgentToolComponent {
           "每页单次最多返回 " + INSPECT_MAX_CHARS_PER_PAGE + " 字符；正文更长时返回 truncated=true 与 next_offset，" +
           "把 next_offset 原样传回本工具的 offset 参数即可接着读同一页的后半段（char_count 始终是整页字数）。" +
           "如果页面 has_text_layer 为 false，说明是扫描件：无法做文本定位类操作（高亮/脱敏/替换），" +
-          "但 pdf_to_word 可以直接对它做本地 MinerU OCR 转成可编辑 Word。")
+          "但在桌面端会话里，pdf_to_word 可以直接对它做本地 MinerU OCR 转成可编辑 Word。")
     public String pdf_inspect(
             @P("文件 ID（从 pdf_list_files 获取）") Long fileId,
             @P("页码（从 0 开始，可选）。指定后只返回该页；传 null 返回全部页") Integer pageIndex,

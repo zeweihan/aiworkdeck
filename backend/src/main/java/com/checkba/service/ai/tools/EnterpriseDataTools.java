@@ -6,6 +6,7 @@ package com.checkba.service.ai.tools;
 import com.checkba.service.QichachaService;
 import com.checkba.service.TushareService;
 import com.checkba.service.platform.GatewayException;
+import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -84,7 +85,7 @@ public class EnterpriseDataTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "查询企业工商信息", category = "data")
     @Tool("Look up a Chinese company's business registration record (legal name, registered capital, address, shareholders, executives) by company name or unified social credit code. Returns the raw record as JSON.")
-    public String qichacha_query(String companyName) {
+    public String qichacha_query(@P("企业全称或统一社会信用代码") String companyName) {
         log.info("Tool: qichacha_query called for '{}'", companyName);
         if (!StringUtils.hasText(companyName)) {
             return "Error: companyName is required.";
@@ -123,7 +124,9 @@ public class EnterpriseDataTools implements AgentToolComponent {
             + "software_copyright (软件著作权), work_copyright (作品著作权), "
             + "icp (网站域名 ICP 备案与小程序备案), ipr_pledge (知识产权出质). "
             + "Call once per kind needed. Returns readable text.")
-    public String qichacha_ipr(String companyName, String kind) {
+    public String qichacha_ipr(
+            @P("企业全称或统一社会信用代码") String companyName,
+            @P("知识产权类别：trademark / patent / intl_patent / software_copyright / work_copyright / icp / ipr_pledge") String kind) {
         log.info("Tool: qichacha_ipr called for '{}' kind='{}'", companyName, kind);
         if (!StringUtils.hasText(companyName)) {
             return "Error: companyName is required.";
@@ -150,7 +153,10 @@ public class EnterpriseDataTools implements AgentToolComponent {
             + "(e.g. stock_basic, stock_company, top10_holders, stk_managers, daily, income, balancesheet). "
             + "paramsJson is a JSON object of that interface's parameters (e.g. {\"ts_code\":\"000001.SZ\"}). "
             + "fields is a comma-separated list of columns to return. Returns the raw Tushare response as JSON.")
-    public String tushare_query(String apiName, String paramsJson, String fields) {
+    public String tushare_query(
+            @P("Tushare 接口名，如 stock_basic、top10_holders、income") String apiName,
+            @P(value = "该接口参数的 JSON 对象，如 {\"ts_code\":\"000001.SZ\"}；不传即不带参数", required = false) String paramsJson,
+            @P(value = "要返回的列，逗号分隔；不传返回接口默认列", required = false) String fields) {
         log.info("Tool: tushare_query called api='{}' params='{}'", apiName, paramsJson);
         if (!StringUtils.hasText(apiName)) {
             return "Error: apiName is required.";

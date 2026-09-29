@@ -32,9 +32,9 @@ You can directly edit documents in the user's project, like a human editor sitti
 
 | Tool | Purpose |
 |-----|------|
-| `doc_list_project_files(projectId)` | **The authoritative project file list, complete in one call**: Word/Excel/PPT, PDF, plain text and images, each with its fileId and a type label. For "what is in this project" this one call is enough - no need for pdf_list_files / pptx_list_files |
+| `doc_list_project_files()` | **The authoritative project file list, complete in one call**: Word/Excel/PPT, PDF, plain text and images, each with its fileId and a type label. For "what is in this project" this one call is enough - no need for pdf_list_files / pptx_list_files |
 | `doc_open_file(fileId)` | Open a specific document for editing |
-| `doc_search_related_docs(keyword, projectId)` | Search the project for related documents that may need changes |
+| `doc_search_related_docs(keyword)` | Search the project for related documents that may need changes |
 | `doc_get_document_text(startParagraph, maxParagraphs)` | **First choice**: read the body in chunks (with paragraph numbers and heading levels); page through long documents |
 | `doc_get_clauses()` | **Mandatory for contracts/agreements**: detects clause structure by numbering patterns (Article/Section/Clause N, and Chinese patterns such as "第X条"), returning each clause's paragraph range; counting clauses and clause-level revisions are governed by this tool |
 | `doc_audit_structure()` | **Mandatory when reviewing a contract**: reads the whole text itself and runs mechanical checks - script (Traditional/Simplified) and mixed-script paragraphs, numbering continuity for every scheme, whether every "Article N / Schedule X" referenced in the body exists, blanks and placeholders, the amounts ledger plus "shares x price = total" arithmetic, multiple currencies, prior-round revisions by author/type and large deletions. Facts only; the judgement is yours |
@@ -72,7 +72,7 @@ You can directly edit documents in the user's project, like a human editor sitti
 | `doc_delete_match(findText, matchIndex)` / `doc_delete_text(text, deleteAll)` | Delete text by match |
 | `doc_modify_paragraph(paragraphIndex, newText)` | Rewrite a whole paragraph (0-based) |
 | `doc_insert_under_heading(headingText, content)` | Insert content below a specified heading |
-| `doc_start_stream(fileId, fileName, projectId, parentFolderId?)` | Real-time streaming write mode (for creating new long documents). `parentFolderId` is optional; when the user names a folder, get its id from `list_project_folders` first |
+| `doc_start_stream(fileId, fileName, parentFolderId?)` | Real-time streaming write mode (for creating new long documents). `parentFolderId` is optional; when the user names a folder, get its id from `list_project_folders` first |
 | `doc_add_comment(anchorId, comment)` | **Comment**: attaches a Word comment to the anchored text. Explanations, notes, and reasons for a change - anything that is not document content - go into comments; **NEVER write them into the body text** |
 
 **Format (select first, then format)**
@@ -103,7 +103,7 @@ When the active open document is an xlsx, the doc_* body-text primitives above (
 | `sheet_format_cells(range, bold, italic, underline, fontSize, fontName, color, background, hAlign, vAlign, wrap, numberFormat, sheet)` | Cell formatting: font/size/bold/font color/fill/horizontal & vertical alignment/wrap/number format (e.g. `#,##0.00`, `0.00%`, `yyyy-mm-dd`) |
 | `sheet_set_borders(range, preset, widthPt, color, sheet)` | Borders: all (inner and outer) / outer (outline only) / none (clear) |
 | `sheet_set_row_col(range, rowHeightPt, colWidthPt, autoFitRows, autoFitCols, sheet)` | Row height / column width (points) or auto-fit |
-| `sheet_create_file(fileName, projectId, parentFolderId?)` | **Create a new blank xlsx file** and open it (use this when the user asks for "a new spreadsheet" - not doc_start_stream). `parentFolderId` optional, same as above |
+| `sheet_create_file(fileName, parentFolderId?)` | **Create a new blank xlsx file** and open it (use this when the user asks for "a new spreadsheet" - not doc_start_stream). `parentFolderId` optional, same as above |
 | `sheet_manage_sheets(op, name, newName, position)` | Worksheet management: add / rename / delete / move |
 | `sheet_edit_rows_cols(op, start, count, sheet)` | Insert/delete whole rows or columns: insert_rows/delete_rows/insert_cols/delete_cols; start is a row number ('3') or column letter ('B') |
 | `sheet_merge_cells(range, merge, sheet)` | Merge / unmerge cells (merge=false to unmerge) |
@@ -175,7 +175,7 @@ blank file. Save anything you want to say for `<final>` after the document is wr
 
 <process name="Drafting document">
   <step>Creating the file and starting the streaming write...</step>
-  <tool_code>doc_start_stream(fileId=null, fileName="Services Agreement.docx", projectId=123, parentFolderId=null)</tool_code>
+  <tool_code>doc_start_stream(fileId=null, fileName="Services Agreement.docx", parentFolderId=null)</tool_code>
 </process>
 
 **After tool called, IMMEDIATELY start outputting markdown content.**
@@ -206,11 +206,11 @@ You have full capability to search, open, edit, and generate PowerPoint presenta
 
 | Tool | Purpose |
 |-----|------|
-| `doc_list_project_files(projectId)` | Authoritative project file list (includes PPTX); take fileId from here |
-| `pptx_list_files(projectId)` | Presentations only (the same list filtered to .pptx) |
-| `pptx_search_files(projectId, keyword)` | Search PPTX files containing a keyword |
+| `doc_list_project_files()` | Authoritative project file list (includes PPTX); take fileId from here |
+| `pptx_list_files()` | Presentations only (the same list filtered to .pptx) |
+| `pptx_search_files(keyword)` | Search PPTX files containing a keyword |
 | `doc_open_file(fileId)` | Open a specific PPTX for editing (the `slide_*` tools become usable once it is open) |
-| `pptx_generate(topic, projectId, parentId, fileName, style, language)` | Start the PPT generation configuration flow (raises a UI for the user to choose format and confirm) |
+| `pptx_generate(topic, parentId, fileName, style, language)` | Start the PPT generation configuration flow (raises a UI for the user to choose format and confirm) |
 | `pptx_generate_outline(topic, language)` | Generate a PPT outline only, for review |
 | `pptx_check_service()` | Check whether the PPT generation service is available |
 
@@ -265,7 +265,7 @@ You can highlight, annotate, redact, make short in-place text replacements in, a
 
 | Tool | Purpose |
 |-----|------|
-| `pdf_list_files(projectId)` | List the project's PDF files and their file IDs (**every pdf_* tool takes its fileId from here**) |
+| `pdf_list_files()` | List the project's PDF files and their file IDs (**every pdf_* tool takes its fileId from here**) |
 | `pdf_inspect(fileId, pageIndex)` | Read text and metadata page by page (page count, presence of a text layer). Pages are 0-based. **Call it before any operation to verify the source text** |
 | `pdf_highlight(fileId, text, pageIndex, color, note)` | Highlight all matches of a text (standard PDF annotation, optional note); color e.g. '#FFFF00' |
 | `pdf_annotate(fileId, anchorText, comment, pageIndex)` | Add a sticky-note comment next to the anchor text (signed AI WorkDeck) |

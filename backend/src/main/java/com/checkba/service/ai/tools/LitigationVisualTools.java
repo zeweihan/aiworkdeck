@@ -159,7 +159,7 @@ public class LitigationVisualTools implements AgentToolComponent {
         String body = litviz.readReference(rel);
         if (body == null) {
             String why = litviz.unavailableReason();
-            return why != null ? why : "读取失败：" + rel;
+            return why != null ? why : "错误：读取失败：" + rel;
         }
         return body;
     }
@@ -197,7 +197,7 @@ public class LitigationVisualTools implements AgentToolComponent {
             }
 
             LitigationVisualService.Result r = litviz.checkpoint(tmp, suggest);
-            if (!r.ok()) return "生成确认问题失败：" + r.error();
+            if (!r.ok()) return "错误：生成确认问题失败：" + r.error();
             String questions = r.raw().getStr("questions", "");
             if (st != null) {
                 st.pendingCheckpointFingerprint = fingerprint;
@@ -209,7 +209,7 @@ public class LitigationVisualTools implements AgentToolComponent {
             return "语义地图不是合法 JSON：" + e.getMessage();
         } catch (Exception e) {
             log.error("litigation_checkpoint failed", e);
-            return "生成确认问题失败：" + e.getMessage();
+            return "错误：生成确认问题失败：" + e.getMessage();
         } finally {
             deleteQuietly(tmp);
         }
@@ -264,20 +264,23 @@ public class LitigationVisualTools implements AgentToolComponent {
     // 那里的用户拿不到这份交付物——审计 A9。
     @ToolMeta(displayName = "生成诉讼图", category = "litigation-visual", fileEffect = "ADDED",
             fileArg = "diagramName", refreshFiles = true, requiresHost = ToolMeta.Host.LOWA)
+    // 七种 layout 的枚举住在 semanticMapJson 的 @P 里（layout 是地图里的字段，不是本方法的参数），
+    // @Tool 只留判据句：逐字、不许手画坐标、只调一次（dev-board#1065 T-22）。
     @Tool("Draw a litigation diagram (timeline / flowchart / party-relationship) from a semantic map and "
             + "save it into the project. NEVER hand-write SVG coordinates or lay out nodes by eye — emit "
-            + "the JSON map and this tool computes ALL geometry. Layouts: numbered_point_timeline (order "
-            + "only; the safe default), dated_point_timeline (real date gaps carry meaning), "
-            + "proportional_gantt (periods that overlap, e.g. 诉讼时效/保证期间), graphviz_flow (procedure "
-            + "with decisions), graphviz_relation (free-form party network), relation_tree (top-down "
-            + "hierarchy, e.g. 股权/控制结构), comparison_table (A vs B). Text must be VERBATIM from the "
+            + "the JSON map and this tool computes ALL geometry. Text must be VERBATIM from the "
             + "source — never reorder events, merge items or invent a date. Pass the map INLINE as a "
             + "JSON string — never stage it through write_file/read_file. Call litigation_checkpoint "
             + "first; an unconfirmed map is written as a *-draft on purpose. After the user confirms, "
             + "call this exactly ONCE — this tool is what actually puts the figure in the project, and "
             + "a second identical call produces nothing new.")
     public String litigation_render(
-            @P("The semantic map, as a JSON object string (see litigation_reference 'schema')") String semanticMapJson,
+            @P("The semantic map, as a JSON object string (see litigation_reference 'schema'). Its layout "
+                    + "field picks the diagram: numbered_point_timeline (order only; the safe default), "
+                    + "dated_point_timeline (real date gaps carry meaning), proportional_gantt (periods that "
+                    + "overlap, e.g. 诉讼时效/保证期间), graphviz_flow (procedure with decisions), "
+                    + "graphviz_relation (free-form party network), relation_tree (top-down hierarchy, e.g. "
+                    + "股权/控制结构), comparison_table (A vs B).") String semanticMapJson,
             @P("Diagram name, used for the output folder and file names (e.g. '担保纠纷事实经过时间轴')") String diagramName,
             @P("Project ID") Long projectId,
             @P(value = "Target folder ID (optional; omit for project root)", required = false) Long parentFolderId,
@@ -318,12 +321,12 @@ public class LitigationVisualTools implements AgentToolComponent {
                     tmpMap, outBase, mode,
                     (formats == null || formats.isBlank()) ? DEFAULT_FORMATS : formats);
             if (!r.ok()) {
-                return "出图失败：" + r.error()
+                return "错误：出图失败：" + r.error()
                         + (r.stderr().isBlank() ? "" : "\n引擎输出：\n" + tail(r.stderr(), 1200));
             }
 
             JSONArray files = r.raw().getJSONArray("files");
-            if (files == null || files.isEmpty()) return "出图失败：引擎没有产出任何文件。";
+            if (files == null || files.isEmpty()) return "错误：出图失败：引擎没有产出任何文件。";
 
             // 引擎的 PNG 依赖外部光栅器，桌面端不随包分发，所以多数机器上这一项是空的。
             // 用 Batik 在服务端补上——没有位图的话这张图就插不进用户正在写的文书
@@ -360,7 +363,7 @@ public class LitigationVisualTools implements AgentToolComponent {
                     drawio = pf;
                 }
             }
-            if (registered.isEmpty()) return "出图失败：产物未能写入项目。";
+            if (registered.isEmpty()) return "错误：出图失败：产物未能写入项目。";
 
             // 语义地图与产物同放。图是从它算出来的，留着才能「换个风格重出一版」而
             // 不必再问一次模型——重问既费钱，也可能因为模型这次读得不一样而改了内容。
@@ -390,7 +393,7 @@ public class LitigationVisualTools implements AgentToolComponent {
             return "语义地图不是合法 JSON：" + e.getMessage();
         } catch (Exception e) {
             log.error("litigation_render failed", e);
-            return "出图失败：" + e.getMessage();
+            return "错误：出图失败：" + e.getMessage();
         } finally {
             deleteQuietly(tmpMap);
             deleteTreeQuietly(work);

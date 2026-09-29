@@ -64,6 +64,9 @@ public class MeetingTools implements AgentToolComponent {
             @P("Meeting recording id") Long meetingId) {
         MeetingRecording meeting = meetingService.get(meetingId);
         if (!projectId.equals(meeting.getProjectId())) {
+            // 刻意不带 Error / 错误 前缀（dev-board#1065 T-11 裁决）：维护者把它定为软失败，
+            // 这句只陈述「这个 meetingId 不在本项目」，由模型换一个 meetingId 或向用户说明。
+            // ToolFailureClassificationTest 的源码扫描把这一处列在白名单里，改文案时同步那里。
             return LangText.of("该会议不属于当前项目。",
                     "That meeting does not belong to the current project.");
         }

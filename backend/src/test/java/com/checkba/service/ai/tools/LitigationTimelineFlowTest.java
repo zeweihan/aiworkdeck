@@ -6,11 +6,11 @@ package com.checkba.service.ai.tools;
 import cn.hutool.json.JSONUtil;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
-import com.checkba.service.DocumentTextService;
 import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.service.ai.LitigationPngService;
 import com.checkba.service.ai.LitigationVisualService;
 import com.checkba.service.ai.context.ProjectContextHolder;
+import com.checkba.service.file.ProjectFileTextExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -116,13 +116,56 @@ class LitigationTimelineFlowTest {
         LitigationVisualService old = mock(LitigationVisualService.class);
         when(old.timelineUnavailableReason()).thenReturn(
                 "请更新资源包；可用 litigation_checkpoint + litigation_render 回退。");
-        DocumentTextService docText = mock(DocumentTextService.class);
+        ProjectFileTextExtractor docText = mock(ProjectFileTextExtractor.class);
         LitigationTimelineTools tools = new LitigationTimelineTools(old, null, docText, null, null, null, null);
         String result = tools.litigation_timeline_start(7L, "101");
         assertTrue(result.startsWith("Error:"), "必须被工具失败判据识别，不能当作成功继续重试");
         assertTrue(result.contains("litigation_checkpoint"));
         assertTrue(result.contains("litigation_render"));
         Mockito.verifyNoInteractions(docText);
+    }
+
+    @Test
+    @DisplayName("start 走统一抽取器（含 OCR），读不出字时带原因报失败，不再把模型指去 pdf_to_word（dev-board#1065 T-24）")
+    void startReadsMaterialsThroughTheUnifiedExtractor() throws Exception {
+        ProjectContextHolder.setConversationId("tl-extract-" + System.nanoTime());
+        ProjectContextHolder.setProjectId("7");
+
+        ProjectFile scan = new ProjectFile();
+        scan.setId(201L);
+        scan.setProjectId(7L);
+        scan.setName("判决书扫描件.pdf");
+        scan.setIsFolder(false);
+        scan.setFileType("pdf");
+        ProjectFile photo = new ProjectFile();
+        photo.setId(202L);
+        photo.setProjectId(7L);
+        photo.setName("聊天截图.jpg");
+        photo.setIsFolder(false);
+        photo.setFileType("image");
+
+        ProjectFileRepository repo = mock(ProjectFileRepository.class);
+        when(repo.findById(201L)).thenReturn(Optional.of(scan));
+        when(repo.findById(202L)).thenReturn(Optional.of(photo));
+        ProjectFileTextExtractor extractor = mock(ProjectFileTextExtractor.class);
+        when(extractor.extractText(scan)).thenReturn("");
+        when(extractor.extractText(photo)).thenThrow(
+                new ProjectFileTextExtractor.OcrFailedException("Credits 不足", null));
+        LitigationVisualService visual = mock(LitigationVisualService.class);
+
+        LitigationTimelineTools tools = new LitigationTimelineTools(
+                visual, null, extractor, repo, null, null, null);
+        String result = tools.litigation_timeline_start(7L, "201,202");
+
+        Mockito.verify(extractor).extractText(scan);
+        Mockito.verify(extractor).extractText(photo);
+        assertTrue(result.startsWith("错误"), "一份都读不出来是失败，必须被失败判据认出：" + result);
+        assertTrue(result.contains("判决书扫描件.pdf") && result.contains("自动做过文字识别"), result);
+        assertTrue(result.contains("聊天截图.jpg") && result.contains("Credits 不足"),
+                "文字识别失败的真实原因要原样带给模型：" + result);
+        assertFalse(result.contains("pdf_to_word"),
+                "pdf_to_word 是桌面端专属工具，扫描件本来就会自动识别，别再把模型指过去：" + result);
+        Mockito.verify(visual, Mockito.never()).timeline(any(), any(), any(), any());
     }
 
     @Test
@@ -148,7 +191,7 @@ class LitigationTimelineFlowTest {
 
         ProjectFileRepository repo = mock(ProjectFileRepository.class);
         when(repo.findById(101L)).thenReturn(Optional.of(pf));
-        DocumentTextService docText = mock(DocumentTextService.class);
+        ProjectFileTextExtractor docText = mock(ProjectFileTextExtractor.class);
         when(docText.extractText(pf)).thenReturn(materialText);
 
         LitigationPngService png = mock(LitigationPngService.class);

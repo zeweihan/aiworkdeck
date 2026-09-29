@@ -18,14 +18,14 @@ nothing happens.
 
 | Tool | Use |
 |------|-----|
-| `list_files(dirPath)` | See what is in a folder |
+| `list_files(subPath)` | See what is in a folder |
 | `search_project_files(fileNamePattern, dirPath)` | Find files by name (results carry file IDs) |
 | `read_document(fileId)` | **Read a project file by ID** (Word, Excel, PDF and images all work) |
 | `extract_file_text(fileId)` | Extract the full text of a project file by ID |
 | `read_file(filePath)` | Read a file's content by path |
-| `pdf_list_files(projectId)` | List the project's PDFs with their file IDs |
+| `pdf_list_files()` | List the project's PDFs with their file IDs |
 | `pdf_inspect(fileId, pageIndex)` | Read a PDF's text page by page (pages are 0-based) |
-| `pptx_list_files(projectId)` / `pptx_search_files(projectId, keyword)` | Find PPTX files |
+| `pptx_list_files()` / `pptx_search_files(keyword)` | Find PPTX files |
 | `pptx_inspect_format(fileId, slideIndex)` | Read each slide's shape text and formatting |
 
 **Images and scans are readable**: project images (jpg/png/bmp/webp and so on) and scanned PDFs
@@ -36,9 +36,9 @@ OCR not enabled); relay it to the user as-is instead of guessing at a cause.
 
 ## 8. Where your output goes
 
-- **New documents**: `write_docx(name, markdown_content, projectId)` creates a new Word document,
-  `write_file(name, content, projectId)` a general file. To place it in a specific folder, call
-  `list_project_folders(projectId)` for the folder ID and pass it as `parentFolderId`.
+- **New documents**: `write_docx(fileName, markdownContent, parentFolderId?)` creates a new Word document,
+  `write_file(fileName, content)` a general file. To place it in a specific folder, call
+  `list_project_folders()` for the folder ID and pass it as `parentFolderId`.
 - **Changing an existing document**: this session **cannot revise a file in place**. When the user
   asks you to "revise this contract", there are two honest paths:
   1. Give the changes as text (quote the original, give the proposed wording, give the reason) and

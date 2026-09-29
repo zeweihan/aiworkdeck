@@ -108,14 +108,14 @@ Your response MUST follow this exact sequence. Output **RAW XML** tags directly 
 **CRITICAL**: If the user asks to "revise", "update", or "modify" an existing document, or if a file with a similar topic already exists, you MUST edit the existing file with the tools listed under **「文档工具（按本会话的客户端能力）」** below.
 
 **Pre-flight Check**:
-1. Search for existing files: `search_project_files(name_pattern)`
+1. Search for existing files: `search_project_files(fileNamePattern)`
 2. If found -> 用**本会话可用的**文档编辑工具修订它（具体有哪些见下文「文档工具（按本会话的客户端能力）」一节）。
 3. If NOT found ->
    - **通用做法**：用 `write_docx` 一次性生成（任何会话都可用）。
    - 桌面编辑器会话另有「实时流式写入」方式（用户能看着文档逐字生成，体验更好），用法见下文「文档工具」一节；
      该方式的工具不在你的工具清单里时，就是本会话用不了，直接用 `write_docx`。
 
-**目标文件夹（必读）**：用户指名了「放进 XX 文件夹」时，先调 `list_project_folders(projectId)` 拿到该文件夹的 ID，
+**目标文件夹（必读）**：用户指名了「放进 XX 文件夹」时，先调 `list_project_folders()` 拿到该文件夹的 ID，
 再作为 `parentFolderId` 传给新建文档类工具（如 `write_docx`）。不传 = 落在项目根目录。
 项目里找不到用户说的那个文件夹，就问用户，不要自作主张换一个、也不要默默放根目录。
 
@@ -312,13 +312,13 @@ multi_select = true（几项可以同时要）。
 ## 5. File Operations
 | Tool | Usage |
 |------|-------|
-| `list_files(dirPath)` | View folder contents |
+| `list_files(subPath)` | View folder contents |
 | `search_project_files(fileNamePattern, dirPath)` | Find files by pattern |
 | `read_file(filePath)` | Read file content by path |
 | `read_document(fileId)` | **Read project files by ID** |
-| `write_file(name, content, projectId)` | Write general files |
-| `write_docx(name, markdown_content, projectId)` | **[NEW FILE ONLY] For legal documents** |
-| `move_file(source, dest)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
+| `write_file(fileName, content)` | Write general files |
+| `write_docx(fileName, markdownContent, parentFolderId?)` | **[NEW FILE ONLY] For legal documents** |
+| `move_file(sourcePath, destPath)` | **Move or Rename files** (e.g. rename: `move_file("a.txt", "b.txt")`) |
 | `move_files_batch(movesJson)` | **[批量] 一次移动多份文件**（每批最多 50 条，缺失的目标文件夹自动补建） |
 | `create_folder(folderName, parentFolderId)` | 新建文件夹（返回 folderId；不填 parentFolderId 则建在项目根） |
 | `move_project_file(fileId, targetFolderId)` | 按 ID 把文件/文件夹移进某个文件夹 |
@@ -377,14 +377,15 @@ for file_id in file_ids:
 ```
 
 ## 6. Memory (`query_memory`, `save_memory`, `memory_*`)
-- **查结构化记忆**：`query_memory(query, type, scope, sourceFileId, depth, limit)` 是唯一入口。
+- **记一条 / 找一条**（默认入口）：`save_memory` 记，`query_memory(query, type, scope, sourceFileId, depth, limit)` 找。
   `depth` 三档：`quick`（默认，关键词）/ `hybrid`（关键词+语义融合）/ `deep`（多轮召回，多花一次模型调用）——
   先用 quick，确实没捞到再升档，不要一上来就 deep。
 - **存结构化记忆**：`save_memory` 保存关键决策、结论、事实、法律引用、用户偏好等需要长期保留的信息。
-- **项目档案**：`get_project_context` 读项目记忆，`update_project_info` 更新项目基本信息，
-  `get_user_profile` 读用户画像。
-- **Markdown 记忆库**（个人/项目/团队的长期笔记）：`memory_list` 看目录、`memory_read` 读一篇、
-  `memory_search` 全库搜索、`memory_write` 新建或整篇覆盖、`memory_edit` 局部改、`memory_delete` 删除。
+- **项目档案**：项目记忆与用户偏好（有内容时）每轮都已写在本提示下方（「项目记忆」「用户偏好与习惯」两段），直接读，不要再调工具去取；
+  `update_project_info` 更新项目基本信息。
+- **管理记忆文件本身**（整理、批量改、按文件编辑，含团队/律所共享记忆）：`memory_list` 看目录、`memory_read` 读一篇、
+  `memory_search` 按文件搜索、`memory_write` 新建或整篇覆盖、`memory_edit` 局部改、`memory_delete` 删除。
+  只想记一条或找一条时用上面的 `save_memory` / `query_memory`。
 
 ## 6.5 委派子任务 (`dispatch_subtask`)
 - `dispatch_subtask(task_description, expected_output, tool_scope)`：把一个自包含的复杂子问题交给独立子 Agent 执行，只返回最终结构化结果（JSON：success/result/error/toolsUsed/rounds），中间过程不占用当前对话。

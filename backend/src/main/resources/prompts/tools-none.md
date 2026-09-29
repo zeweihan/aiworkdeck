@@ -14,14 +14,14 @@
 
 | 工具 | 用途 |
 |-----|------|
-| `list_files(dirPath)` | 看某个目录下有什么 |
+| `list_files(subPath)` | 看某个目录下有什么 |
 | `search_project_files(fileNamePattern, dirPath)` | 按文件名找文件（返回结果带文件 ID） |
 | `read_document(fileId)` | **按文件 ID 读项目文件**（Word / Excel / PDF / 图片都能读） |
 | `extract_file_text(fileId)` | 按文件 ID 抽取全文文字 |
 | `read_file(filePath)` | 按路径读文件内容 |
-| `pdf_list_files(projectId)` | 列出项目里的 PDF 与它们的文件 ID |
+| `pdf_list_files()` | 列出项目里的 PDF 与它们的文件 ID |
 | `pdf_inspect(fileId, pageIndex)` | 逐页读 PDF 的文本（页码 0 起） |
-| `pptx_list_files(projectId)` / `pptx_search_files(projectId, keyword)` | 找 PPTX 文件 |
+| `pptx_list_files()` / `pptx_search_files(keyword)` | 找 PPTX 文件 |
 | `pptx_inspect_format(fileId, slideIndex)` | 读 PPTX 每页每个形状的文本与格式 |
 
 **图片与扫描件是可读的**：项目里的图片（jpg/png/bmp/webp 等）和没有文字层的扫描版 PDF，
@@ -31,9 +31,9 @@
 
 ## 8. 产出怎么落地
 
-- **新建文书**：用 `write_docx(name, markdown_content, projectId)` 生成一份新的 Word 文档，
-  或 `write_file(name, content, projectId)` 写一般文件。落进指定文件夹时先用
-  `list_project_folders(projectId)` 拿文件夹 ID，再作为 `parentFolderId` 传入。
+- **新建文书**：用 `write_docx(fileName, markdownContent, parentFolderId?)` 生成一份新的 Word 文档，
+  或 `write_file(fileName, content)` 写一般文件。落进指定文件夹时先用
+  `list_project_folders()` 拿文件夹 ID，再作为 `parentFolderId` 传入。
 - **修改既有文档**：本会话**做不到原位修订**。用户要求"修订/修改这份合同"时，两条诚实的路径：
   1. 把改动以文字形式给出（引用原文 + 建议的新表述 + 理由），由用户自己落到文件里；
   2. 用户接受的话，用 `write_docx` 另出一份**新文件**，并明确告诉用户这是新文件、原文件没有被改动。

@@ -127,9 +127,12 @@ class ToolDeclarationContractTest {
      *       PPTX 的权威编辑面是 slide_*（编辑器内存、页码 1 起）。这三个走 pptx-service 直接改磁盘、
      *       索引 0 起，与 slide_* 大面积重合；两套同时可见时模型混用必然错页，而 pptx_apply_format
      *       改完还会强制 reload，把编辑器里尚未保存的修改静默丢掉。</li>
+     *   <li><b>与每轮注入的上下文重复</b>（get_user_profile、get_project_context、get_conversation_summary，
+     *       dev-board#1065 T-13）：它们取的东西 ContextAssemblerService 每轮都已放进上下文，
+     *       下发只会让模型多花一次往返去取一份它已经有的东西。</li>
      * </ul>
      *
-     * <p>三类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
+     * <p>四类都<b>只裁 spec、不裁 execute</b>：老会话回放与 XML 兜底路径调到时照常执行，
      * 拿到的是工具自己那句可行动的说明，好过一句 "Tool not found"。
      */
     private static final Set<String> EXPECTED_NOT_OFFERED = new TreeSet<>(Set.of(
@@ -139,7 +142,10 @@ class ToolDeclarationContractTest {
             "deep_search",
             "pptx_open_file",
             "pptx_apply_format",
-            "pptx_edit_page"));
+            "pptx_edit_page",
+            "get_user_profile",
+            "get_project_context",
+            "get_conversation_summary"));
 
     private static RecordingToolRegistry registry() {
         RecordingToolRegistry registry =
