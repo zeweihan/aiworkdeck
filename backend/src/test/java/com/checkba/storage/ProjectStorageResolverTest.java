@@ -118,4 +118,80 @@ class ProjectStorageResolverTest {
         assertThrows(StorageException.class, () -> r.resolve(""));
         assertThrows(StorageException.class, () -> r.resolve(null));
     }
+
+    // ==================== 项目总量闸（dev-board#1038） ====================
+
+    private ProjectRepository repoWith(long hostedId, long localId, Path userFolder) {
+        ProjectRepository repo = mock(ProjectRepository.class);
+        Project hosted = new Project();
+        hosted.setId(hostedId);
+        Project local = new Project();
+        local.setId(localId);
+        local.setLocalRoot(userFolder.toAbsolutePath().toString());
+        when(repo.findById(hostedId)).thenReturn(Optional.of(hosted));
+        when(repo.findById(localId)).thenReturn(Optional.of(local));
+        return repo;
+    }
+
+    @Test
+    void sizeLimitDefaultsTo20GbForEveryProject(@TempDir Path root, @TempDir Path userFolder) {
+        ProjectStorageResolver r = new ProjectStorageResolver(props(root), repoWith(1L, 2L, userFolder));
+        long gb20 = 20L * 1024 * 1024 * 1024;
+        assertFalse(r.exceedsProjectSizeLimit(1L, gb20, 0L));
+        assertTrue(r.exceedsProjectSizeLimit(1L, gb20, 1L));
+        assertTrue(r.exceedsProjectSizeLimit(2L, gb20, 1L), "未开豁免时本机文件夹项目同样受限");
+        assertFalse(r.exceedsProjectSizeLimit(1L, null, 1L));
+        assertTrue(r.projectSizeLimitMessage().contains("20GB"));
+    }
+
+    @Test
+    void exemptionOnlyCoversLocalFolderProjects(@TempDir Path root, @TempDir Path userFolder) {
+        StorageProperties p = props(root);
+        p.setExemptLocalFolderProjects(true);
+        p.setProjectSizeLimit(org.springframework.util.unit.DataSize.ofMegabytes(10));
+        ProjectStorageResolver r = new ProjectStorageResolver(p, repoWith(1L, 2L, userFolder));
+        long big = 50L * 1024 * 1024;
+        assertTrue(r.exceedsProjectSizeLimit(1L, big, 0L), "托管项目沿用配置值");
+        assertFalse(r.exceedsProjectSizeLimit(2L, big, big), "本机文件夹项目豁免");
+        assertTrue(r.projectSizeLimitMessage().contains("10MB"));
+    }
+
+    /** 配置接线：桌面 profile 开豁免，基础配置 20GB 且 multipart 引用同一个值；云端/案件库不开豁免。 */
+    @Test
+    void profilesWireTheSizeLimit() throws Exception {
+        java.util.Map<String, Object> base = flatYaml("application.yml");
+        assertEquals("20GB", String.valueOf(base.get("storage.project-size-limit")));
+        assertEquals(false, base.get("storage.exempt-local-folder-projects"));
+        assertEquals("${storage.project-size-limit:20GB}", base.get("spring.servlet.multipart.max-file-size"));
+        assertEquals("${storage.project-size-limit:20GB}", base.get("spring.servlet.multipart.max-request-size"));
+        assertEquals("8MB", String.valueOf(base.get("spring.servlet.multipart.file-size-threshold")));
+        assertEquals(true, flatYaml("application-desktop.yml").get("storage.exempt-local-folder-projects"));
+        for (String cloudish : new String[] {"application-cloud.yml", "application-case.yml"}) {
+            java.util.Map<String, Object> y = flatYaml(cloudish);
+            assertFalse(y.containsKey("storage.exempt-local-folder-projects"), cloudish);
+            assertFalse(y.containsKey("storage.project-size-limit"), cloudish);
+        }
+    }
+
+    private static java.util.Map<String, Object> flatYaml(String name) throws Exception {
+        java.util.Map<String, Object> out = new java.util.HashMap<>();
+        try (java.io.InputStream in = ProjectStorageResolverTest.class.getClassLoader().getResourceAsStream(name)) {
+            assertNotNull(in, name);
+            for (Object doc : new org.yaml.snakeyaml.Yaml().loadAll(in)) {
+                flatten("", doc, out);
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void flatten(String prefix, Object node, java.util.Map<String, Object> out) {
+        if (node instanceof java.util.Map<?, ?> m) {
+            for (java.util.Map.Entry<?, ?> e : m.entrySet()) {
+                flatten(prefix.isEmpty() ? String.valueOf(e.getKey()) : prefix + "." + e.getKey(), e.getValue(), out);
+            }
+        } else if (!prefix.isEmpty()) {
+            out.put(prefix, node);
+        }
+    }
 }

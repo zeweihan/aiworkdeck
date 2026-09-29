@@ -20,7 +20,7 @@ const body = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/^import .*$/gm, '').replace(/export default \{/, 'return {')
 
 function makeVm(extra = {}) {
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileUploadUrl',
+  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
     'stampApplication', 'documentStampApplication', body)(
     null, null, null, id => '/upload/' + id,
     async (bytes) => bytes, async () => null)
@@ -106,7 +106,7 @@ function setupCopy({ result } = {}) {
     body: { appendChild() {} },
   }
   const uploads = []
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileUploadUrl',
+  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
     'stampApplication', 'documentStampApplication', 'setTimeout', body)(
     null, null, null, id => '/upload/' + id, async (bytes) => bytes, async () => null, () => 0)
   const vm = {

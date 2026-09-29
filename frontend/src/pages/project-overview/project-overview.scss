@@ -426,6 +426,11 @@ $color-accent: var(--awd-mint); // Mint Green
   font-size: 10px;
 }
 
+/* 负责人一行按条件隐藏后（单人本机项目），首个分隔符就成了打头的「|」 */
+.project-meta > .meta-divider:first-child {
+  display: none;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -3068,7 +3073,7 @@ $color-accent: var(--awd-mint); // Mint Green
 }
 
 /* 导出 Word 对话框复用上传/文件夹样式 */
-.upload-mask {
+.form-dialog-mask {
   position: fixed;
   top: 0;
   left: 0;
@@ -3340,18 +3345,18 @@ $color-accent: var(--awd-mint); // Mint Green
   flex-direction: column;
 }
 
-.upload-header {
+.form-dialog-header {
   padding: 32rpx 40rpx 16rpx;
   border-bottom: 1rpx solid var(--awd-border);
 }
 
-.upload-title {
+.form-dialog-title {
   font-size: 32rpx;
   font-weight: 600;
   color: var(--awd-text);
 }
 
-.upload-subtitle {
+.form-dialog-subtitle {
   margin-top: 8rpx;
   font-size: 24rpx;
   color: var(--awd-text-2);
@@ -3476,7 +3481,7 @@ $color-accent: var(--awd-mint); // Mint Green
   font-size: 14px;
 }
 
-.upload-footer {
+.form-dialog-footer {
   padding: 16rpx 40rpx 24rpx;
   border-top: 1rpx solid var(--awd-border-subtle); /* Neutral Lightest */
   background-color: var(--awd-surface);
@@ -3487,7 +3492,7 @@ $color-accent: var(--awd-mint); // Mint Green
   border-bottom-right-radius: 12px;
 }
 
-.upload-btn {
+.form-dialog-btn {
   min-width: 140rpx;
   padding: 14rpx 32rpx;
   text-align: center;
@@ -3498,35 +3503,35 @@ $color-accent: var(--awd-mint); // Mint Green
   font-weight: 500;
 }
 
-.upload-btn-secondary {
+.form-dialog-btn-secondary {
   background-color: var(--awd-surface);
   color: var(--awd-text-2); /* Slate 500 */
   border: 1rpx solid var(--awd-border-strong);
 }
 
-.upload-btn-secondary:hover {
+.form-dialog-btn-secondary:hover {
   background-color: var(--awd-bg);
   color: var(--awd-accent-text);
   border-color: var(--awd-accent);
 }
 
-.upload-btn-primary {
+.form-dialog-btn-primary {
   background-color: var(--awd-accent); /* Forest Green */
   color: var(--awd-text-on-accent);
   border: 1px solid transparent;
 }
 
-.upload-btn-primary:hover {
+.form-dialog-btn-primary:hover {
   background-color: var(--awd-accent-hover); /* Darker Forest */
 }
 
-.upload-btn-primary.upload-btn-disabled {
+.form-dialog-btn-primary.form-dialog-btn-disabled {
   background-color: var(--awd-surface-3);
   color: var(--awd-text-3);
   cursor: not-allowed;
 }
 
-/* 文档关联弹窗（fileLinkPicker）：独立一套类，不与上面的 upload-mask/folder-modal
+/* 文档关联弹窗（fileLinkPicker）：独立一套类，不与上面的 form-dialog-mask/folder-modal
    共用——那组样式同时被导出 Word、截图保存、回收站三处对话框复用，直接改动
    风险面太大。视觉语言对齐 components/collab/CollabDialog.vue。 */
 .filelink-mask {
@@ -3783,7 +3788,7 @@ $color-accent: var(--awd-mint); // Mint Green
 .project-members-stack:hover .members-expand-panel {
     display: block;
 }
-.upload-label {
+.form-dialog-label {
   font-size: 26rpx;
   color: var(--awd-text); /* AI WorkDeck Dark Blue/Gray */
   font-weight: 600;

@@ -17,7 +17,7 @@ export { PROFILE_SOURCE }
 
 // local-mode 是一台机器的装机形态，一次进程内不会变（同 InviteMemberDialog 的缓存理由）。
 let localModeCache = null
-async function readLocalMode() {
+export async function readLocalMode() {
   if (localModeCache !== null) return localModeCache
   try {
     // 这个端点回裸 JSON（没有 code/data 包装），见 api.js 的注释

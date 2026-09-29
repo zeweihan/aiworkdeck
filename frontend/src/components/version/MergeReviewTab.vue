@@ -68,7 +68,7 @@
 <script>
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import { createWebviewEditorExecutor, createIframeEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
-import { fetchVersionFileBytes, postMergeResolveFile, getFileDownloadUrl } from '@/services/api.js'
+import { fetchVersionFileBytes, postMergeResolveFile, getFileBytesUrl } from '@/services/api.js'
 import { fetchMergeInputs, buildMergeDraft } from '@/services/mergeDraft.js'
 import { collectDecisions } from '@/utils/mergeReviewDecisions.js'
 import { resolveMergeSideNames } from '@/utils/mergeSideNames.js'
@@ -238,7 +238,7 @@ export default {
       const spec = this.mergeSpec
       // 合并稿此刻只在工作区里（还没落成版本），所以按 ProjectFile 取当前字节。
       if (!spec.fileId) throw new Error(this.$t('version.mergeReadonlyNeedsFile'))
-      const resp = await fetch(getFileDownloadUrl(spec.fileId), { headers: getAuthHeaders() })
+      const resp = await fetch(getFileBytesUrl(spec.fileId), { headers: getAuthHeaders() })
       if (!resp.ok) throw new Error(this.$t('version.compareFetchBytesFailed'))
       return new Uint8Array(await resp.arrayBuffer())
     },

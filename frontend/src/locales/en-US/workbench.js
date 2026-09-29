@@ -78,7 +78,6 @@ export default {
   newDoc: 'New Document',
   newFolder: 'New Folder',
   batchSelect: 'Batch Select',
-  batchDownload: 'Batch Download',
   sort: 'Sort',
   batchCopy: 'Batch Copy',
   deleteSelected: 'Delete Selected',
@@ -256,7 +255,7 @@ export default {
   // Dropping into the AI chat area (dev-board#779 K6 (5))
   dragUnsupported: 'This content cannot be dropped here; drop a file, an editor tab, or a file from your computer',
   dragFolderUnsupported: 'The chat area accepts files only; drop a whole folder onto the file explorer on the left',
-  dragUploadingToRoot: 'Uploading to the project root folder...',
+  dragUploadingToRoot: 'Importing to the project root folder...',
   // EvidenceLink: drop-to-link in the editor / method bar / link locating (evidenceLinkActions.js, EvidenceMethodBar.vue, LibreOfficeEditor.vue)
   evidence: {
     selectFirst: 'Select the text to link first',

@@ -231,6 +231,7 @@ export default {
   addToOfficialLibraryNote: '用你登录 AI WorkDeck 的账号就能放进去，不用填服务器地址。放进去之后，把同事加进来，各自取一份到本机办案。',
   // 本站没有官方案件库、本机也没有连接：手填地址的入口已撤，界面上如实说一句，不给走不通的链接
   noLibraryAvailableNote: '当前还没有可用的团队案件库，这份案卷只留在你这台电脑上。',
+  clientNeedsLibraryHint: '放进团队案件库后，可邀请客户凭访问码查看。',
   sharedToLibrary: '已放进团队案件库',
   shareToLibraryFailed: '没能放进案件库',
   tooManyLibraries: '这台电脑连着不止一个案件库，请先断开多余的再放进去',
@@ -325,6 +326,11 @@ export default {
   pullToDevice: '取到本机',
   loadRemoteProjectsFailed: '读取案件库里的案卷失败',
   pullToDeviceFailed: '没能取到本机，请稍后重试',
+  pullLocationLabel: '存放位置',
+  pullLocationManaged: '软件托管目录（默认）',
+  pullLocationChange: '更改…',
+  pullLocationReset: '用默认位置',
+  pullLocationHint: '案卷会放在这个文件夹下、以案卷名命名的新文件夹里。',
 
   // ---- 协作历史 / 提交历史标签页（dev-board#623/#624）----
   // 「同事交了新稿」四处同源（顶栏 chip / 底部状态条 / CloudSyncBar / 协作抽屉），

@@ -345,8 +345,24 @@ public class ProjectFileService {
         return savedFile;
     }
 
-    /** 单个项目的文件总量上限，与 FileController.uploadFile 那道闸同一个数（20GB）。 */
-    private static final long PROJECT_TOTAL_SIZE_LIMIT = 20L * 1024 * 1024 * 1024;
+    /**
+     * 项目总量闸，与 FileController.uploadFile 同一套口径（storage.project-size-limit，
+     * 桌面端本机文件夹项目豁免，dev-board#1038）。超限抛 IllegalArgumentException。
+     * 手工 new 的测试实例没有解析器时按默认 20GB 判。
+     */
+    private void requireWithinProjectSizeLimit(Long projectId, long incomingBytes) {
+        Long total = projectFileRepository.sumSizeByProjectId(projectId);
+        if (storageResolver != null) {
+            if (storageResolver.exceedsProjectSizeLimit(projectId, total, incomingBytes)) {
+                throw new IllegalArgumentException(storageResolver.projectSizeLimitMessage());
+            }
+            return;
+        }
+        long fallback = new com.checkba.storage.StorageProperties().getProjectSizeLimit().toBytes();
+        if (total != null && total + incomingBytes > fallback) {
+            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
+        }
+    }
 
     /**
      * 从本机绝对路径复制一份进项目目录（dev-board#409：桌面端「拖入 = 复制进来」）。
@@ -375,10 +391,7 @@ public class ProjectFileService {
         } catch (java.io.IOException e) {
             throw new IllegalArgumentException(LangText.of("无法读取源文件: ", "Cannot read source file: ") + sourcePath);
         }
-        Long total = projectFileRepository.sumSizeByProjectId(projectId);
-        if (total != null && total + size > PROJECT_TOTAL_SIZE_LIMIT) {
-            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
-        }
+        requireWithinProjectSizeLimit(projectId, size);
 
         String name = source.getFileName().toString();
         int dot = name.lastIndexOf('.');
@@ -418,6 +431,15 @@ public class ProjectFileService {
         if (userId == null) {
             throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
+        return resolveLocalSourcePath(sourcePath);
+    }
+
+    /**
+     * 「调用方指名一个本机绝对路径让服务端去读」这类入口共用的路径校验（import-local 与
+     * 剪贴板按路径存文件，dev-board B14）：非空、可解析、必须是绝对路径、末段不是符号链接。
+     * 只做路径形态校验；是不是普通文件、大小上限、local-mode 闸由各调用点自己把。
+     */
+    public static java.nio.file.Path resolveLocalSourcePath(String sourcePath) {
         if (!StringUtils.hasText(sourcePath)) {
             throw new IllegalArgumentException(LangText.of("源文件路径不能为空", "Source path must not be empty"));
         }
@@ -496,7 +518,7 @@ public class ProjectFileService {
      * <ul>
      * <li><b>顶层同名报错</b>——用的就是 {@link #createFolder} 那道同名查重，不改名不覆盖；</li>
      * <li><b>额度先算后拷</b>——先摊平整棵树、把普通文件的字节加总，与
-     *     {@code sumSizeByProjectId} 一起过 20GB 那道闸，拦住时一行不建、一个字节不落盘；</li>
+     *     {@code sumSizeByProjectId} 一起过项目总量闸，拦住时一行不建、一个字节不落盘；</li>
      * <li><b>跳过而不是报错</b>——树里的符号链接（跟随了等于把项目目录外的文件复制进来）、
      *     设备/管道等特殊文件、读不到的条目只计数；点开头的目录与 {@code ~$} 锁文件
      *     按磁盘扫描同一条规则（{@link LocalProjectService#isIgnoredEntryName}）静默略过，
@@ -560,10 +582,7 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("无法读取源目录: ", "Cannot read source directory: ") + source);
         }
 
-        Long total = projectFileRepository.sumSizeByProjectId(projectId);
-        if (total != null && total + totalBytes[0] > PROJECT_TOTAL_SIZE_LIMIT) {
-            throw new IllegalArgumentException(LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit"));
-        }
+        requireWithinProjectSizeLimit(projectId, totalBytes[0]);
 
         ProjectFile rootFolder = createFolder(projectId, parentId, topName.toString(), userId);
         java.util.Map<java.nio.file.Path, Long> dirIds = new java.util.HashMap<>();
@@ -1228,7 +1247,7 @@ public class ProjectFileService {
         return candidate;
     }
 
-    private String generateWpsFileId(Long projectId) {
+    public String generateWpsFileId(Long projectId) {
         // 与前端生成规则保持一致的风格（无需完全一致，但确保全局唯一）
         String rand = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         return String.format("project_%d_doc_%d_%s", projectId, System.currentTimeMillis(), rand);

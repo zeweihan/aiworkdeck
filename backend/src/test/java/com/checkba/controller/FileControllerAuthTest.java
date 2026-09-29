@@ -18,7 +18,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
 
-import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -41,6 +40,9 @@ class FileControllerAuthTest {
     private ProjectRagService projectRagService;
     @Mock
     private AutoTaggingService autoTaggingService;
+
+    @Mock
+    private com.checkba.storage.ProjectStorageResolver storageResolver;
 
     @InjectMocks
     private FileController controller;
@@ -65,9 +67,20 @@ class FileControllerAuthTest {
     @Test
     void downloadRejectsUnknownFileWith404() {
         when(projectFileRepository.findById(9L)).thenReturn(Optional.empty());
-        when(projectFileRepository.findByWpsFileId("9")).thenReturn(List.of());
 
         ResponseEntity<Resource> resp = controller.downloadFile("9", "sess", null);
         assertEquals(404, resp.getStatusCode().value());
+    }
+
+    /** dev-board#1035：非数字 fileId 不再按 wpsFileId 回退查找，下载与上传一律 404。 */
+    @Test
+    void nonNumericFileIdIsNotFoundWithoutWpsFileIdFallback() throws Exception {
+        ResponseEntity<Resource> down = controller.downloadFile("project_4_doc_1_abc", "sess", null);
+        assertEquals(404, down.getStatusCode().value());
+
+        ResponseEntity<java.util.Map<String, Object>> up = controller.uploadFile(
+                "project_4_doc_1_abc", null, null, "sess", null, new org.springframework.mock.web.MockHttpServletRequest());
+        assertEquals(404, up.getStatusCode().value());
+        org.mockito.Mockito.verifyNoInteractions(projectFileRepository);
     }
 }

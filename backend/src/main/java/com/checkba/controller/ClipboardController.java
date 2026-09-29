@@ -20,6 +20,17 @@ public class ClipboardController {
 
     private final ClipboardService clipboardService;
 
+    /**
+     * 单机模式判别位。file-local 让调用方指名服务器磁盘上的绝对路径去读，只有「服务器就是
+     * 用户这台电脑」时才成立，与 ProjectFileController.import-local 同一道闸。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
+
+    /** 单文件上限，与 POST /file 的 multipart 上限同一口径（application.yml spring.servlet.multipart）。 */
+    @org.springframework.beans.factory.annotation.Value("${spring.servlet.multipart.max-file-size:20GB}")
+    private org.springframework.util.unit.DataSize maxFileSize = org.springframework.util.unit.DataSize.ofGigabytes(20);
+
     @GetMapping
     public ResponseEntity<?> list(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
@@ -57,6 +68,34 @@ public class ClipboardController {
         }
         try {
             return ResponseEntity.ok(success(clipboardService.saveFile(userId, file, type)));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(com.checkba.service.LangText.of("保存失败: ", "Save failed: ") + e.getMessage()));
+        }
+    }
+
+    /**
+     * 按本机路径存一份剪贴板文件（dev-board B14）。桌面端复制了一个文件时前端只传路径，
+     * 服务端自己 copy 进剪贴板库——此前渲染进程要先把整个文件读进内存再 POST 回来。
+     * POST /api/clipboard/file-local  body: { sourcePath }
+     */
+    @PostMapping("/file-local")
+    public ResponseEntity<?> saveLocalFile(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestBody SaveLocalFileRequest request
+    ) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
+        }
+        if (!localMode) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(com.checkba.service.LangText.of(
+                    "当前部署不支持按本机路径保存剪贴板文件", "This deployment does not support saving clipboard files from a local path")));
+        }
+        try {
+            return ResponseEntity.ok(success(clipboardService.saveLocalFile(
+                    userId, request == null ? null : request.getSourcePath(), maxFileSize.toBytes())));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(error(e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(com.checkba.service.LangText.of("保存失败: ", "Save failed: ") + e.getMessage()));
         }
@@ -128,6 +167,18 @@ public class ClipboardController {
         result.put("message", "OK");
         result.put("data", data);
         return result;
+    }
+
+    public static class SaveLocalFileRequest {
+        private String sourcePath;
+
+        public String getSourcePath() {
+            return sourcePath;
+        }
+
+        public void setSourcePath(String sourcePath) {
+            this.sourcePath = sourcePath;
+        }
     }
 
     public static class SaveTextRequest {

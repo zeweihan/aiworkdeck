@@ -125,24 +125,51 @@ public class ClipboardService {
         if (userId == null) throw new IllegalArgumentException(LangText.of("userId 不能为空", "userId must not be empty"));
         if (file == null || file.isEmpty()) throw new IllegalArgumentException(LangText.of("file 不能为空", "file must not be empty"));
 
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null) originalFilename = "unknown";
+        // try-with-resources 关闭上传源流，防句柄泄漏
+        try (java.io.InputStream in = file.getInputStream()) {
+            return storeAndRecord(userId, in, originalFilename, file.getSize(), type);
+        }
+    }
+
+    /**
+     * 按本机路径存一份剪贴板文件（dev-board B14）：桌面端复制了一个文件时，由服务端自己把字节
+     * copy 进剪贴板库，不再让渲染进程把整个文件读进内存再 POST 回来。只有「服务器就是用户这台
+     * 电脑」时才成立，local-mode 闸在控制器；路径形态校验与 import-local 共用
+     * {@link ProjectFileService#resolveLocalSourcePath}。
+     *
+     * @param maxBytes 单文件上限（与 POST /file 的 multipart 上限同一口径）
+     */
+    @Transactional
+    public ClipboardItem saveLocalFile(Long userId, String sourcePath, long maxBytes) throws java.io.IOException {
+        if (userId == null) throw new IllegalArgumentException(LangText.of("userId 不能为空", "userId must not be empty"));
+        java.nio.file.Path source = ProjectFileService.resolveLocalSourcePath(sourcePath);
+        if (!java.nio.file.Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException(LangText.of("源文件不存在或不是普通文件: ", "Source file does not exist or is not a regular file: ") + sourcePath);
+        }
+        long size = java.nio.file.Files.size(source);
+        if (size > maxBytes) {
+            throw new IllegalArgumentException(LangText.of("文件过大，超过剪贴板单文件上限", "The file exceeds the clipboard size limit"));
+        }
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(source)) {
+            return storeAndRecord(userId, in, source.getFileName().toString(), size, "FILE");
+        }
+    }
+
+    /** 两条入口（上传 / 本机路径）共用：字节落 clipboard/{userId}/{uuid}，再记一行 ClipboardItem。 */
+    private ClipboardItem storeAndRecord(Long userId, java.io.InputStream in, String fileName, long size, String type) {
         String uuid = java.util.UUID.randomUUID().toString();
         // 存储路径：clipboard/{userId}/{uuid}
         String storagePath = "clipboard/" + userId + "/" + uuid;
-        
-        // 保存文件到存储服务（try-with-resources 关闭上传源流，防句柄泄漏）
-        try (java.io.InputStream in = file.getInputStream()) {
-            getStorageService().save(storagePath, in);
-        }
+        getStorageService().save(storagePath, in);
 
         // 构建元数据 JSON
-        String originalFilename = file.getOriginalFilename();
-        if (originalFilename == null) originalFilename = "unknown";
-        
         Map<String, Object> metaMap = new HashMap<>();
         metaMap.put("path", storagePath);
-        metaMap.put("fileName", originalFilename);
-        metaMap.put("size", file.getSize());
-        
+        metaMap.put("fileName", fileName);
+        metaMap.put("size", size);
+
         String metaJson;
         try {
             metaJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(metaMap);
@@ -158,7 +185,7 @@ public class ClipboardService {
         item.setCreatedAt(LocalDateTime.now());
         return repository.save(item);
     }
-    
+
     public org.springframework.core.io.Resource getFile(Long id, Long userId) {
         ClipboardItem item = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(LangText.of("记录不存在", "Record not found")));
         if (!item.getUserId().equals(userId)) {

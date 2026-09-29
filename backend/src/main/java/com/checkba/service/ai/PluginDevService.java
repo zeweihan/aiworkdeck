@@ -567,10 +567,8 @@ public class PluginDevService {
     }
 
     private byte[] readBytes(ProjectFile pf) {
+        // 只认 filePath（dev-board#1035）：wpsFileId 不是存储键，拿它当路径永远找不到
         String key = pf.getFilePath();
-        if (key == null || key.isBlank()) {
-            key = pf.getWpsFileId();
-        }
         if (key == null || key.isBlank()) {
             throw new IllegalArgumentException(LangText.of("文件没有存储路径: ", "File has no storage path: ") + pf.getName());
         }

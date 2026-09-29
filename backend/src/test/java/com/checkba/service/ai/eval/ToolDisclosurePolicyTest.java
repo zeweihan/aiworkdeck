@@ -195,6 +195,22 @@ class ToolDisclosurePolicyTest {
         assertFalse(new ToolDisclosurePolicy(false).isEnabled());
     }
 
+    @Test
+    @DisplayName("移入回收站是核心集常驻、无需展开；永久删除 delete_file 披露开关两态都不下发（dev-board#1044）")
+    void trashIsOfferedButPermanentDeleteNeverIs() {
+        RecordingToolRegistry registry = registry();
+        Set<String> narrowed = names(POLICY.narrow(registry.getAllSpecifications("conv", null), Set.of()));
+        assertTrue(narrowed.contains("move_to_trash"), "move_to_trash 应与 move_files_batch 同档常驻核心集：" + narrowed);
+        assertFalse(narrowed.contains("delete_file"), "delete_file 不许下发");
+
+        RecordingToolRegistry off =
+                new RecordingToolRegistry(RealToolBeans.instantiateAll(false), new PluginService());
+        off.init();
+        Set<String> all = names(off.getAllSpecifications("conv", null));
+        assertTrue(all.contains("move_to_trash"), "披露关着时（生产默认）模型也要看得见 move_to_trash");
+        assertFalse(all.contains("delete_file"), "披露关着时 delete_file 同样不下发");
+    }
+
     private static Set<String> names(List<ToolSpecification> specs) {
         return specs.stream().map(ToolSpecification::name)
                 .collect(java.util.stream.Collectors.toCollection(TreeSet::new));

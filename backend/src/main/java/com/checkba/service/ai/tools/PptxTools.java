@@ -900,6 +900,7 @@ public class PptxTools implements AgentToolComponent {
           + "把标题与正文还原成可编辑文本框，表格与图片按原位置作为独立元素放回（纯本机识别时表格通常仍是图块）。"
           + "需要本机两个组件都已就绪：「PPT 生成与 PDF 转 Word」负责导出，「扫描件 OCR 引擎（MinerU）」负责版面分析——"
           + "全程在本机跑，内容不出这台电脑，不需要任何云端账号或 token；组件缺失时本工具会引导用户下载。"
+          + "导出结果保存到当前项目根目录（同名不覆盖，自动加序号）。"
           + "这是 beta 功能：版面复杂的页面可能提取不全，导出后提示用户核对。")
     public String pptx_export_editable(
             @P("PPTX 服务中的项目 ID") String serviceProjectId,
@@ -931,16 +932,19 @@ public class PptxTools implements AgentToolComponent {
                 return "可编辑 PPTX 导出失败：任务超时或执行出错";
             }
             
-            // 获取下载链接
+            // 产物在 pptx-service 的存储里（download_url 是服务内相对地址，用户与模型都用不上），
+            // 取回来落进当前项目根目录并登记，返回项目内相对路径
             cn.hutool.json.JSONObject progress = taskResult.getJSONObject("progress");
-            String downloadUrl = progress != null ? progress.getStr("download_url") : null;
-            String exportedFilename = progress != null ? progress.getStr("filename") : filename + ".pptx";
-            
+            String serviceUrl = progress != null ? progress.getStr("download_url") : null;
+            String exportedFilename = progress != null ? progress.getStr("filename") : null;
+            String saved = saveEditableExportToProject(serviceUrl, exportedFilename, filename);
+            if (saved.startsWith("错误：")) {
+                return "可编辑 PPTX 已生成，但未能存入项目：" + saved.substring("错误：".length());
+            }
             return String.format("可编辑 PPTX 导出成功！\n" +
-                    "- 文件名: %s\n" +
-                    "- 下载链接: %s\n\n" +
+                    "- 已保存到项目：%s\n\n" +
                     "这个 PPTX 文件中的文字和表格都可以直接编辑。",
-                    exportedFilename, downloadUrl != null ? downloadUrl : "请在项目导出目录查看");
+                    saved);
             
         } catch (Exception e) {
             log.error("Failed to export editable PPTX", e);
@@ -949,6 +953,47 @@ public class PptxTools implements AgentToolComponent {
     }
 
     // ==================== 辅助方法 ====================
+
+    /**
+     * 把 pptx-service 里的可编辑导出产物取回当前项目根目录并登记到文件树。
+     * 同名不覆盖（用户已有的文件不许被导出静默顶掉），自动改名 "name (n).pptx"。
+     *
+     * @return 成功时是项目内相对路径（即文件名，落在项目根目录）；失败时以「错误：」开头
+     */
+    String saveEditableExportToProject(String serviceUrl, String exportedFilename, String requestedName) {
+        ToolContext ctx = ToolContextHolder.get();
+        Long projectId = ctx != null ? ctx.projectId() : null;
+        if (projectId == null) {
+            return "错误：当前对话没有关联项目。";
+        }
+        if (!StringUtils.hasText(serviceUrl)) {
+            return "错误：PPT 服务没有返回产物位置。";
+        }
+        String base = StringUtils.hasText(exportedFilename) ? exportedFilename
+                : (StringUtils.hasText(requestedName) ? requestedName : "presentation_editable");
+        base = Paths.get(base).getFileName().toString().replaceAll("\\.[pP][pP][tT][xX]?$", "");
+        try {
+            String name = base + ".pptx";
+            String storagePath = buildPhysicalPath(projectId, null, name);
+            Path localPath = storageResolver.resolve(storagePath);
+            for (int n = 2; Files.exists(localPath)
+                    || projectFileRepository.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, null, name).isPresent(); n++) {
+                name = base + " (" + n + ").pptx";
+                storagePath = buildPhysicalPath(projectId, null, name);
+                localPath = storageResolver.resolve(storagePath);
+            }
+            Files.createDirectories(localPath.getParent());
+            pptxServiceClient.downloadPptx(serviceUrl, localPath.toString());
+            String wpsId = "pptx_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8);
+            projectFileService.createOrUpdateFile(projectId, null, name, "pptx",
+                    Files.size(localPath), storagePath, wpsId, AGENT_USER_ID);
+            editorBridgeService.sendRefreshFilesAction();
+            return name;
+        } catch (Exception e) {
+            log.warn("Failed to save editable PPTX into project {}", projectId, e);
+            return "错误：" + e.getMessage();
+        }
+    }
 
     /**
      * 判断文件是否是 PPTX 格式

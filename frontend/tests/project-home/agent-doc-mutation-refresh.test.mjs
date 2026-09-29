@@ -42,7 +42,7 @@ function loadEditorMethods() {
     .replace(/^import .*$/gm, '')
     .replace(/export default \{/, 'return {')
   const factory = new Function(
-    'getFileDownloadUrl', 'getCurrentUser', 'createRelayExecutor',
+    'getFileBytesUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
     'getAuthHeaders', 'host', 'DOC_MUTATED_EVENT', 'createAuthorNameResolver', 'loadBudgetMs', body)
   return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),

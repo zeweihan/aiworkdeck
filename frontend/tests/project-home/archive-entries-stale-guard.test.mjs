@@ -45,7 +45,7 @@ function loadMethods(getArchiveEntriesImpl) {
     if (def) imported.add(def)
   }
   const provided = {
-    getFileDownloadUrl: () => '/download',
+    getFileBytesUrl: () => '/download',
     getArchiveEntries: getArchiveEntriesImpl,
     extractArchive: async () => ({}),
     getAuthHeaders: () => ({}),

@@ -21,8 +21,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 import java.io.InputStream;
-import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -54,10 +54,14 @@ class FileControllerChunkedUploadTest {
     @Mock
     private WorkSessionService workSessionService;
 
+    @Mock
+    private com.checkba.storage.ProjectStorageResolver storageResolver;
+
     @InjectMocks
     private FileController controller;
 
     private static final String WPS_FILE_ID = "project_4_doc_1784101301299_a5d5o6u";
+    private static final String FILE_ID = "16";
     private static final String FILE_PATH = "projects/4/big.docx";
 
     private ProjectFile projectFile() {
@@ -73,7 +77,7 @@ class FileControllerChunkedUploadTest {
 
     @Test
     void appendChunkGoesToResolvedFilePathNotRawFileId() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         when(storageService.append(any(), any())).thenReturn(FILE_PATH);
@@ -87,13 +91,13 @@ class FileControllerChunkedUploadTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
+                controller.uploadFile(FILE_ID, null, 5242880L, "sess", null, request);
 
             assertEquals(200, resp.getStatusCode().value());
         }
 
         verify(storageService).append(eq(FILE_PATH), any(InputStream.class));
-        verify(storageService, never()).append(eq(WPS_FILE_ID), any(InputStream.class));
+        verify(storageService, never()).append(eq(FILE_ID), any(InputStream.class));
     }
 
     /**
@@ -103,7 +107,7 @@ class FileControllerChunkedUploadTest {
      */
     @Test
     void intermediateChunkDoesNotEmitChangeSignal() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         when(storageService.append(any(), any())).thenReturn(FILE_PATH);
@@ -120,7 +124,7 @@ class FileControllerChunkedUploadTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
+                controller.uploadFile(FILE_ID, null, 5242880L, "sess", null, request);
 
             assertEquals(200, resp.getStatusCode().value());
         }
@@ -133,7 +137,7 @@ class FileControllerChunkedUploadTest {
      */
     @Test
     void finalChunkEmitsChangeSignalExactlyOnce() throws Exception {
-        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.findById(16L)).thenReturn(Optional.of(projectFile()));
         when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
         when(storageServiceFactory.getStorageService()).thenReturn(storageService);
         when(storageService.append(any(), any())).thenReturn(FILE_PATH);
@@ -150,7 +154,7 @@ class FileControllerChunkedUploadTest {
             when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
-                controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
+                controller.uploadFile(FILE_ID, null, 5242880L, "sess", null, request);
 
             assertEquals(200, resp.getStatusCode().value());
         }

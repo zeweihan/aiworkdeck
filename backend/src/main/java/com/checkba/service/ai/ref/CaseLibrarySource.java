@@ -27,7 +27,7 @@ import java.util.Optional;
 @Component
 public class CaseLibrarySource implements RefSource {
 
-    static final String UNREACHABLE = "案件库暂时无法访问，请稍后再试，或请用户手动上传这份文件。";
+    static final String UNREACHABLE = "案件库暂时无法访问，请稍后再试，或请用户把文件加入项目或拖进对话。";
     static final String BAD_REF = "无法识别的引用，请先用 ref_list 获取 ref。";
 
     private final CaseRefClient client;

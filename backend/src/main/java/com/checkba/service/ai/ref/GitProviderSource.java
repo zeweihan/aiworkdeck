@@ -38,7 +38,7 @@ public class GitProviderSource implements RefSource {
     static final String NOT_FOUND = "仓库里没有这个文件，或这条关联不属于你。请用 ref_list 重新查找。";
     static final String AUTH_FAILED = "git 仓库授权失效，请在设置里重新填写令牌。";
     static final String NO_SECRET = "服务器未配置 git 令牌密钥，读不了这个仓库，请联系管理员。";
-    static final String UNREACHABLE = "暂时读不到这个 git 仓库，请稍后再试，或请用户手动上传这份文件。";
+    static final String UNREACHABLE = "暂时读不到这个 git 仓库，请稍后再试，或请用户把文件加入项目或拖进对话。";
 
     /** 单个仓库最多列多少条：几个仓库一起列时，别让第一个仓库把 100 条的额度占满。 */
     static final int MAX_PER_REPO = 50;

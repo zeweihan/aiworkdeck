@@ -43,8 +43,6 @@ export default {
   notConnectedTitle: '尚未连接账户',
   notConnectedBody: '平台代采要用官网账户结算。在账户页粘贴一枚 awdk_ 开头的账户 Key 即可连接。',
   goConnect: '去连接账户',
-  serverModeTitle: '本机形态不支持平台代采',
-  serverModeBody: '团队服务器与云端实例统一使用服务器侧配置的 Key：那里的外部服务是整台机器共账的，平台代采会把全所的用量记到同一个账户上。',
   loadFailed: '读取平台服务状态失败，稍后重试',
   switchFailed: '切换失败，稍后重试',
   switched: '已切换',

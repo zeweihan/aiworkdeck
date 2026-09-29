@@ -25,7 +25,7 @@ const SSR_URL = import.meta.resolve('vue/server-renderer')
 // 依赖 uni 运行时的模块换成桩：SSR 只看渲染，不发请求
 const STUBS = {
   '@/services/api.js': `
-    export const getFileDownloadUrl = (id) => '/api/files/' + id + '/download'
+    export const getFileBytesUrl = (id) => '/api/files/' + id + '/download'
     export const getMeetingByFile = async () => ({ meeting: null })
     export const getMeetingRecording = async () => null
     export const registerMeetingFromFile = async () => ({})

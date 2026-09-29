@@ -161,7 +161,7 @@ test('媒体元素命令式创建且不带原生控件、不靠 autoplay 属性�
   assert.match(body, /el\.controls = false/)
   assert.match(body, /preload = 'metadata'/)
   assert.match(body, /setAttribute\('playsinline', ''\)/)
-  assert.match(body, /buildStreamUrl\(getFileDownloadUrl\(/, '直链流式取源')
+  assert.match(body, /buildStreamUrl\(getFileBytesUrl\(/, '直链流式取源')
 })
 
 // ── 打开媒体文件时的焦点接管（真机：从资源管理器点开后焦点在 .file-tree 上） ──

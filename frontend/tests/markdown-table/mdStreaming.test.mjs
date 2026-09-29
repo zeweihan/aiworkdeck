@@ -28,7 +28,7 @@ const SRC = readFileSync(new URL('../../src/components/MarkdownPreview.vue', imp
 function loadComponent(render = renderMarkdown) {
   const deps = {
     renderMarkdown: render,
-    getFileDownloadUrl: async () => '',
+    getFileBytesUrl: async () => '',
     getAuthHeaders: () => ({}),
     // 组件的模块依赖变了就要跟着喂：t 供代码块复制键的文字，copyToClipboard 供事件委托（dev-board#790），
     // nextStableLength 供流式分段渲染（dev-board#811 K31）

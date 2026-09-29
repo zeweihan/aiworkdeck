@@ -69,9 +69,8 @@ public class LitigationVisualTools implements AgentToolComponent {
      *
      * <p>原来只用 {@code System.currentTimeMillis()}：一次出图的四五个文件在同一个
      * for 循环里登记，毫秒级完全撞得上，于是它们共享同一个 wpsFileId。
-     * {@code /api/files/{id}/download} 在按数字 id 查不到时会退回
-     * {@code findByWpsFileId(...).findFirst()}——撞号意味着"按 wpsFileId 下载 .drawio"
-     * 可能拿到同一张图的 .svg 或 .map.json。加一个单调序号把身份还原成唯一。
+     * 面板靠 wpsFileId 认出同一次出图的各个产物，撞号会让 .drawio / .svg / .map.json
+     * 互相错认。加一个单调序号把身份还原成唯一。
      */
     private static final java.util.concurrent.atomic.AtomicLong MARKER_SEQ =
             new java.util.concurrent.atomic.AtomicLong();

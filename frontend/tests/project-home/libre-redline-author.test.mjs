@@ -30,7 +30,7 @@ function makeVm({ cached = null, remote = null, fail = false, endpointUp = true 
   const sent = []
   const options = new Function(
     'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
-    'getCurrentUser', 'fetchAuthUser', 'createAuthorNameResolver', 'getFileDownloadUrl', BODY)(
+    'getCurrentUser', 'fetchAuthUser', 'createAuthorNameResolver', 'getFileBytesUrl', BODY)(
     null, null, null,
     () => cached,
     async () => { if (fail) throw new Error('401'); return remote ? { code: 0, data: remote } : null },

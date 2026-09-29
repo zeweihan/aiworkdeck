@@ -144,11 +144,8 @@ public class DocumentTextService {
     }
 
     private static String resolvePath(ProjectFile file) throws IOException {
+        // 只认 filePath（dev-board#1035）：wpsFileId 不是存储键，拿它当路径读到的是无关文件或根本不存在
         String filePath = file.getFilePath();
-        if (!StringUtils.hasText(filePath)) {
-            // 尝试使用 wpsFileId 作为路径
-            filePath = file.getWpsFileId();
-        }
         if (!StringUtils.hasText(filePath)) {
             throw new IOException("文件路径为空: " + file.getId());
         }

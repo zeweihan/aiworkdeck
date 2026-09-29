@@ -32,9 +32,11 @@ spring:
   servlet:
     multipart:
       enabled: true
-      max-file-size: 20GB
-      max-request-size: 20GB
-      file-size-threshold: 1GB
+      # 单请求上限与项目总量闸同源（storage.project-size-limit）
+      max-file-size: ${storage.project-size-limit:20GB}
+      max-request-size: ${storage.project-size-limit:20GB}
+      # 超过这个大小的分块才落临时盘；1GB 意味着一个大分块整块压在堆里
+      file-size-threshold: 8MB
 
 # 外部服务配置
 external:
@@ -587,7 +589,7 @@ optimizer:
 
 # 手机端云中转（/api/mobile/*）的 blob 存储（dev-board#236）。
 # 默认本地盘（storage.local.root-path/mobile-relay）；云后端配齐 MOBILE_RELAY_OSS_*
-# 环境变量即切 OSS 私有桶（中转是短生命周期暂存，与下方 storage.oss 的文档存储无关）。
+# 环境变量即切 OSS 私有桶（中转是短生命周期暂存，与项目文档存储无关）。
 # 团队案件库（协作）。留空 = 官方案件库地址按 ai.account.base-url 所属站点派生
 # （大陆站 → https://case.aiworkdeck.com；国际站暂不提供，只留本地版本记录）。
 # 填了就原样用——自建与私有部署靠它把「官方案件库」指到自己的服务器上。
@@ -692,34 +694,18 @@ addin:
 
 # 文件存储配置
 storage:
-  # 存储类型：local（本地文件系统）或 oss（对象存储）
+  # 存储类型：只支持 local（本地文件系统）
   type: local
+  # 单个项目的文件总量上限（上传与本机导入共用；multipart 单请求上限也引用它）
+  project-size-limit: 20GB
+  # 本机文件夹项目（打开本机文件夹的项目）是否豁免上面的总量闸；桌面 profile 打开
+  exempt-local-folder-projects: false
   # 本地存储配置
   local:
     # 存储根目录（相对于项目根目录或绝对路径）
     root-path: data
     # 模板文件路径（用于新建文档的初始内容）
     template-path: docs/template.docx
-  # 对象存储配置（当 type=oss 时生效）
-  oss:
-    # 对象存储提供商：aliyun（阿里云OSS）、aws（AWS S3）、minio（MinIO）
-    provider: aliyun
-    # 访问密钥ID
-    access-key-id: YOUR_ACCESS_KEY_ID
-    # 访问密钥Secret
-    access-key-secret: YOUR_ACCESS_KEY_SECRET
-    # 存储桶名称
-    bucket-name: your-bucket-name
-    # 存储桶所在区域（例如：oss-cn-hangzhou、us-east-1）
-    region: oss-cn-hangzhou
-    # 自定义端点（可选，用于MinIO或私有部署）
-    endpoint:
-    # 文件存储路径前缀（可选，例如：wps-files/）
-    path-prefix: wps-files/
-    # 是否使用HTTPS
-    use-https: true
-    # CDN域名（可选，用于加速访问）
-    cdn-domain:
 
 security:
   # 登录会话空闲有效期（天，滑动过期：距最后一次使用超过该天数即失效）。

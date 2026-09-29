@@ -176,7 +176,7 @@ import MediaControls from './MediaControls.vue'
 import MediaTranscript from './MediaTranscript.vue'
 import { ICONS } from '@/config/icons.js'
 import {
-  getFileDownloadUrl, getMeetingByFile, getMeetingRecording,
+  getFileBytesUrl, getMeetingByFile, getMeetingRecording,
   registerMeetingFromFile, transcribeMeetingRecording,
 } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
@@ -430,7 +430,7 @@ export default {
       this._fellBack = false
       this._autoplayed = false
       // 直链流式播放（#1025）：媒体元素设不了请求头，鉴权走 ?token=
-      this._streamUrl = buildStreamUrl(getFileDownloadUrl(f.wpsFileId || f.id), getSessionId())
+      this._streamUrl = buildStreamUrl(getFileBytesUrl(f.id), getSessionId())
       el.src = this._streamUrl
     },
     teardownMedia() {
@@ -598,7 +598,7 @@ export default {
     loadBlob() {
       const f = this.file
       if (!f) return
-      const url = getFileDownloadUrl(f.wpsFileId || f.id)
+      const url = getFileBytesUrl(f.id)
       const reqId = (this._mediaReqId = (this._mediaReqId || 0) + 1)
       this.loading = true
       const headers = getAuthHeaders() || {}

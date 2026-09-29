@@ -279,11 +279,11 @@ public class DesktopSource implements RefSource {
     private RefSourceException unavailable(Long userId, String deviceId, String name) {
         if (relay.isDeviceOnline(userId, deviceId)) {
             return new RefSourceException("设备《" + name + "》上的桌面端还没有与云端建立常连（多半是版本较旧），"
-                    + "读不到其中的项目文件。请把桌面端升级到最新版本后重试，或手动上传文件。");
+                    + "读不到其中的项目文件。请把桌面端升级到最新版本后重试，或请用户把文件加入项目或拖进对话。");
         }
         String last = lastSeen(userId, deviceId);
         return new RefSourceException("设备《" + name + "》离线" + (last == null ? "" : "，最后在线 " + last)
-                + "。请打开桌面端，或手动上传文件。");
+                + "。请在该设备上打开桌面端后重试，或请用户把文件加入项目或拖进对话。");
     }
 
     /** 门铃流最后确认连着的时刻；流从没连过（重启后、旧版本）退回设备心跳表。 */

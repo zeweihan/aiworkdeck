@@ -42,8 +42,6 @@ export default {
   notConnectedTitle: 'No account connected yet',
   notConnectedBody: 'Platform-sourced services settle against your website account. Paste an account key starting with awdk_ on the account page to connect.',
   goConnect: 'Connect an Account',
-  serverModeTitle: 'This deployment does not offer platform-sourced services',
-  serverModeBody: 'Team servers and cloud instances use keys configured on the server: external services there are shared machine-wide, so platform sourcing would bill an entire firm to one account.',
   loadFailed: 'Could not read platform service status. Try again later.',
   switchFailed: 'Could not switch. Try again later.',
   switched: 'Switched',

@@ -413,14 +413,34 @@ class CloudControllerTest {
     void acceptForwardsIdsAndUserId() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
-            when(cloudSyncService.cloneFromCloud(3L, 9L, USER_ID)).thenReturn(Map.of("localProjectId", 42L));
+            when(cloudSyncService.cloneFromCloud(3L, 9L, USER_ID, null)).thenReturn(Map.of("localProjectId", 42L));
 
             var resp = controller.accept(Map.of("connectionId", 3, "remoteProjectId", 9), "sess");
 
-            verify(cloudSyncService).cloneFromCloud(3L, 9L, USER_ID);
+            verify(cloudSyncService).cloneFromCloud(3L, 9L, USER_ID, null);
             @SuppressWarnings("unchecked")
             Map<String, Object> data = (Map<String, Object>) resp.getBody().get("data");
             assertEquals(42L, data.get("localProjectId"));
+        }
+    }
+
+    /** dev-board#1040：自选存放文件夹只在 local-mode 且开了 local-folder-projects 时放行（同 open-local）。 */
+    @Test
+    void acceptWithLocalRootIsGatedLikeOpenLocal() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            Map<String, Object> body = Map.of("connectionId", 3, "remoteProjectId", 9, "localRoot", "/Users/x/案卷");
+
+            // 服务端形态（字段默认 false）：拒绝，且根本不去克隆
+            VersionException ex = assertThrows(VersionException.class, () -> controller.accept(body, "sess"));
+            assertTrue(ex.isUserFacing());
+            verify(cloudSyncService, never()).cloneFromCloud(anyLong(), anyLong(), any(), any());
+
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "localMode", true);
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "localFolderProjectsEnabled", true);
+            when(cloudSyncService.cloneFromCloud(3L, 9L, USER_ID, "/Users/x/案卷")).thenReturn(Map.of("localProjectId", 43L));
+            controller.accept(body, "sess");
+            verify(cloudSyncService).cloneFromCloud(3L, 9L, USER_ID, "/Users/x/案卷");
         }
     }
 

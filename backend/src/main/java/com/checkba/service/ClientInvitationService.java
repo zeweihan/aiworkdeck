@@ -8,6 +8,7 @@ import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
 import com.checkba.repository.ProjectInvitationRepository;
 import com.checkba.repository.ProjectMemberRepository;
+import com.checkba.repository.ProjectRemoteRepository;
 import com.checkba.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -25,12 +26,32 @@ public class ClientInvitationService {
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
     private final ProjectMemberService projectMemberService;
+    private final LocalIdentityService localIdentityService;
+    private final ProjectRemoteRepository remoteRepository;
+
+    /**
+     * 本机（local-mode）案卷还没放进案件库时拒绝签发访问码（dev-board#1039）。
+     * 桌面端后端只听回环、所有请求都解析为本机用户，客户拿着一张落在本机库里的码
+     * 没有任何入口够得着——签出来就是一张没人能用的码。前端已按同一判据收起「客户」页签，
+     * 这里兜住绕过前端直调接口的情况。
+     */
+    public static class LibraryRequiredException extends IllegalStateException {
+        public LibraryRequiredException() {
+            super(LangText.of(
+                    "这份案卷还没放进团队案件库，客户无法凭访问码查看。请先放进团队案件库再邀请客户。",
+                    "This case file is not in the Team Case Library yet, so clients cannot view it with an access code. Add it to the Team Case Library first, then invite clients."));
+        }
+    }
 
     @Transactional
     public String inviteClient(Long projectId, Long requesterId, String clientName) {
         // 1. Check permissions (Allow Admin and Participant)
         if (!projectMemberService.hasWritePermission(projectId, requesterId)) {
              throw new IllegalArgumentException("权限不足：只有管理员或参与者可以邀请客户");
+        }
+        // 判据与前端 InviteMemberDialog 的轨道同源：local-mode 且没有 project_remote 绑定 = 未放进案件库
+        if (localIdentityService.isLocalMode() && remoteRepository.findByProjectId(projectId).isEmpty()) {
+            throw new LibraryRequiredException();
         }
 
         // 2. If clientName is provided, generate a UNIQUE named invitation

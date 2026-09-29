@@ -145,7 +145,7 @@ class ReferenceSourceServiceTest {
             public String scheme() { return "desk"; }
             public List<RefEntry> list(RefQuery rq) { return List.of(); }
             public String read(RefQuery rq, String body, String locator) {
-                throw new RefSourceException("设备《办公室 iMac》离线，请打开桌面端或手动上传文件");
+                throw new RefSourceException("设备《办公室 iMac》离线，请在该设备上打开桌面端后重试");
             }
         };
         RefSource crashing = new RefSource() {
@@ -155,7 +155,7 @@ class ReferenceSourceServiceTest {
         };
         var svc = new ReferenceSourceService(List.of(failing, crashing));
         assertThat(svc.read(q, "desk:d1:p1:a.docx", null))
-                .isEqualTo("错误：设备《办公室 iMac》离线，请打开桌面端或手动上传文件");
+                .isEqualTo("错误：设备《办公室 iMac》离线，请在该设备上打开桌面端后重试");
         // 非预期异常也不许掀翻整轮：转成一句带「错误：」前缀的可行动文案（失败判据认「错误」前缀）
         assertThat(svc.read(q, "cloud:5", null)).startsWith("错误：").isNotBlank();
     }

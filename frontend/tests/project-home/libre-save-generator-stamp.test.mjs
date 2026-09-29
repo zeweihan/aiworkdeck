@@ -23,7 +23,7 @@ const BODY = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
 function makeVm({ stamp, appOf, exportBytes }) {
   const uploads = []
   const options = new Function(
-    'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileUploadUrl',
+    'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
     'stampApplication', 'documentStampApplication', BODY)(
     null, null, null, (id) => '/upload/' + id, stamp, appOf)
   const vm = {
