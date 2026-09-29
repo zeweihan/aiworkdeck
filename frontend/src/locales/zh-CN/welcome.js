@@ -7,6 +7,7 @@ export default {
   start: '开始',
   recent: '最近',
   guides: '上手指南',
+  openFile: '打开文件…',
   connectTeamServer: '连接团队服务器',
   enterWithAccessCode: '凭访问码进入案卷（客户）',
   more: '更多…',

@@ -260,16 +260,16 @@ try {
     }
   })
 
-  await step('启动落无项目态外壳，欢迎标签在位（桌面形态 Start 五项）', async () => {
+  await step('启动落无项目态外壳，欢迎标签在位（桌面形态 Start 六项）', async () => {
     await page.evaluate((keys) => { for (const k of keys) { try { localStorage.removeItem(k) } catch (e) { /* ignore */ } } }, SNAPSHOT_KEYS)
     await restartToShell()
     await page.waitForSelector('#tab-left-welcome.active', { timeout: 30000 })
     const items = await page.$$eval('.welcome-start .welcome-action', (els) => els
       .filter((e) => e.offsetParent !== null)
       .map((e) => ({ action: e.getAttribute('data-action'), text: (e.innerText || '').trim() })))
-    const want = ['new-project', 'open-folder', 'pull-case', 'connect-team', 'access-code']
+    const want = ['new-project', 'open-folder', 'open-file', 'pull-case', 'connect-team', 'access-code']
     if (JSON.stringify(items.map((i) => i.action)) !== JSON.stringify(want)) {
-      throw new Error('Start 五项不对（桌面形态应含「打开…文件夹」）：' + JSON.stringify(items))
+      throw new Error('Start 六项不对（桌面形态应含「打开…文件夹」与「打开文件…」）：' + JSON.stringify(items))
     }
     if (!/打开.*文件夹/.test(items[1].text)) throw new Error('Start 第 2 项不是「打开…文件夹」：' + items[1].text)
     // 未连账户：rail 底部账户入口是「登录」态（已连账户的长驻后端则是头像，不判）
