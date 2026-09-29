@@ -493,7 +493,12 @@ html.is-desktop .project-header .collab-chip,
 html.is-desktop .project-header .header-center,
 html.is-desktop .project-header .header-tools,
 html.is-desktop .project-header .top-bar-btn,
-html.is-desktop .project-header .icon-btn {
+html.is-desktop .project-header .icon-btn,
+/* 右上角账户入口（components/account/AccountEntry.vue；dev-board#1062 从 rail 底部改回顶栏）：
+   「登录」按钮 / 头像与下拉面板都要能点；全屏 mask 在下面「全屏浮层」那份名单里。 */
+html.is-desktop .project-header .header-account,
+html.is-desktop .project-header .account-entry-btn,
+html.is-desktop .project-header .avatar-menu {
     -webkit-app-region: no-drag;
 }
 

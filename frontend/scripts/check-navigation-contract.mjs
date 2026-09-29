@@ -16,8 +16,8 @@
  * 2026-09-29 改动（dev-board#1047，登录后置 + 欢迎标签）：启动一律落工作台外壳
  * （无项目态，不带 ?id=），中央打开「欢迎」标签。项目列表的内容本体搬进工作台左栏的
  * 「项目」面板（components/project-list/ProjectListPane.vue），pages/project-list 退成
- * 直链薄壳（redirectTo 外壳并开该面板）。rail 底部新增账户入口（AccountRailEntry），
- * 顶栏不再放头像与账户 chip。
+ * 直链薄壳（redirectTo 外壳并开该面板）。账户入口（AccountEntry）当天先挪到 rail 底部、
+ * 又按维护者要求改回顶栏右上角（dev-board#1062），rail 底部不放账户入口与设置齿轮。
  *
  * 术语（同名不同物，别看串）：
  *   工作台       = pages/project-overview/project-overview（四列干活界面，不改名）
@@ -519,24 +519,37 @@ check('工作台「全部项目」开左栏「项目」面板，不离开工作�
   return null
 })
 
-check('账户入口在 rail 底部（AccountRailEntry），下拉恰好三项：我的日程 + 设置 + 退出登录（dev-board#205 / #899 / #1047）', () => {
+check('账户入口在顶栏右上角（AccountEntry），rail 底部没有账户入口与设置齿轮；下拉恰好三项：我的日程 + 设置 + 退出登录（dev-board#205 / #899 / #1047 / #1062）', () => {
   // 沿革：2026-08-20 个人中心并进设置后下拉只剩一项，2026-08-21（dev-board#96）撤下拉、
   // 点头像直开设置；2026-08-27（dev-board#205）「退出登录」要有一级入口，下拉恢复成
   // 两项；2026-09-25（dev-board#899）加「我的日程」成三项。2026-09-29（dev-board#1047）
-  // 头像连同下拉从顶栏挪到 rail 底部的账户入口（对应 VS Code 的 Accounts），顶栏不再放账户态。
+  // 头像连同下拉挪到 rail 底部并在 rail 上加了设置齿轮；同日（dev-board#1062）维护者要求
+  // 改回顶栏右上角，齿轮撤掉，设置入口 = 下拉里的「设置」+ 应用菜单 ⌘,。
   const src = readVue('src/pages/project-overview/project-overview.vue')
   for (const dead of ['openUserProfileTab', 'goToUserProfile', "workbench.profile", "'user-profile'"]) {
     if (src.includes(dead)) return '还残留个人中心标签那一套: ' + dead
   }
-  for (const gone of ['class="header-account"', 'class="avatar-btn"', 'class="trial-chip', 'avatarMenuOpen']) {
-    if (src.includes(gone)) return '顶栏不再放账户态与 chip，残留: ' + gone
+  for (const gone of ['class="trial-chip', 'avatarMenuOpen', 'AccountRailEntry']) {
+    if (src.includes(gone)) return '残留旧账户入口形态: ' + gone
   }
   const rail = src.slice(src.indexOf('<view class="left-rail">'), src.indexOf('<FilePickerDialog'))
-  const tag = rail.slice(rail.indexOf('<AccountRailEntry'), rail.indexOf('/>', rail.indexOf('<AccountRailEntry')))
-  if (!tag.startsWith('<AccountRailEntry')) return 'rail 里没有 <AccountRailEntry>'
+  if (!rail.startsWith('<view class="left-rail">')) return '找不到 rail 模板段'
+  if (rail.includes('<AccountEntry')) return 'rail 里不该再有账户入口（dev-board#1062 改回顶栏）'
+  if (rail.includes('GLYPHS.settings') || rail.includes('goToSystemSettings')) return 'rail 里不该再有设置齿轮（设置入口在头像下拉里）'
+  const header = src.slice(src.indexOf('<view class="header-right">'), src.indexOf('<!-- 主体布局 -->'))
+  if (!header.startsWith('<view class="header-right">')) return '找不到顶栏 header-right 段'
+  const tagAt = header.indexOf('<AccountEntry')
+  if (tagAt < 0) return '顶栏右上角没有 <AccountEntry>'
+  if (tagAt < header.indexOf('toggleRecording')) return '账户入口应在「活动记录」右侧'
+  const tag = header.slice(tagAt, header.indexOf('/>', tagAt))
   if (/\bv-if=/.test(tag)) return '账户入口有无项目两态都渲染、不按 isClientView 收（客户也有自己的个人组）'
   for (const [ev, handler] of [['@schedule', 'onAvatarMenuSchedule'], ['@settings', 'onAvatarMenuSettings'], ['@sign-out', 'onAvatarMenuSignOut'], ['@login', 'onAccountLogin']]) {
     if (!tag.includes(`${ev}="${handler}"`)) return `账户入口没有把 ${ev} 接到 ${handler}`
+  }
+  // 顶栏整条是 drag 区：账户入口的按钮与下拉要在 App.vue 的 no-drag 名单里
+  const app = readVue('src/App.vue')
+  for (const sel of ['.project-header .header-account', '.project-header .account-entry-btn', '.project-header .avatar-menu', '.account-entry-mask']) {
+    if (!app.includes(sel)) return `App.vue 的 no-drag 名单里缺 ${sel}（顶栏里点不动）`
   }
   // 「我的日程」开中栏日程标签（dev-board#1048），不再离开工作台
   const sched = extractMethodBody(src, 'onAvatarMenuSchedule() {')
@@ -547,9 +560,9 @@ check('账户入口在 rail 底部（AccountRailEntry），下拉恰好三项：
   // 退出必须走唯一编排，不许在页面里自拼 disconnect/deactivate
   if (!src.includes("from '@/utils/signOut.js'")) return '退出登录没有走 utils/signOut.js 唯一编排'
 
-  const entry = readVue('src/components/account/AccountRailEntry.vue')
+  const entry = readVue('src/components/account/AccountEntry.vue')
   const menuIdx = entry.indexOf('class="avatar-menu')
-  if (menuIdx < 0) return 'AccountRailEntry 里找不到下拉 .avatar-menu'
+  if (menuIdx < 0) return 'AccountEntry 里找不到下拉 .avatar-menu'
   const menu = entry.slice(menuIdx, entry.indexOf('</template>', menuIdx))
   const actions = menu.match(/class="avatar-menu-item/g) || []
   if (actions.length !== 3) return `下拉动作项应恰好三项，实际 ${actions.length} 项`
@@ -563,7 +576,7 @@ check('账户入口在 rail 底部（AccountRailEntry），下拉恰好三项：
   if (!login || !login.includes("requireAccount({ reason: 'account' })")) return 'onAccountLogin 没有就地调 requireAccount({ reason: \'account\' })'
   if (/navigateTo|reLaunch|redirectTo|leaveWorkbench/.test(login)) return 'onAccountLogin 不许离开工作台（登录是就地弹层）'
   // 登录 / 退出后即时刷新：入口组件与工作台都订 awd:account-changed
-  if (!entry.includes('ACCOUNT_CHANGED_EVENT')) return 'AccountRailEntry 没有订阅 awd:account-changed'
+  if (!entry.includes('ACCOUNT_CHANGED_EVENT')) return 'AccountEntry 没有订阅 awd:account-changed'
   if (!/uni\.\$on\(ACCOUNT_CHANGED_EVENT/.test(src) || !/uni\.\$off\(ACCOUNT_CHANGED_EVENT/.test(src)) {
     return '工作台没有成对订阅 / 退订 awd:account-changed'
   }

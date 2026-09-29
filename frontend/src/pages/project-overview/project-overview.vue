@@ -105,8 +105,8 @@
       </view>
 
       <view class="header-right">
-        <!-- 授权标识 chip（试用版 / 宽限预警）与余额不足 chip 已挪进 rail 底部账户入口的下拉
-             （dev-board#1047：顶栏不再放账户态，spec 2026-09-29 §4 / §5.3）。 -->
+        <!-- 授权标识 chip（试用版 / 宽限预警）与余额不足 chip 已并进右上角账户入口的下拉
+             （dev-board#1047 起不再单独占顶栏，spec 2026-09-29 §5.3；入口位置见 dev-board#1062）。 -->
         <!-- 顶部工具区（IDE 风格）：整理 / 分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
           <!-- 外观主题（dev-board#223）：浅色/深色/跟随系统三选一。
@@ -242,7 +242,27 @@
             </view>
         </view>
 
-        <!-- 顶栏头像与下拉已挪到 rail 底部的账户入口（AccountRailEntry，dev-board#1047）。 -->
+        <!-- 账户入口（「活动记录」右侧）：未登录是「登录」按钮（就地弹登录层），已登录是头像 +
+             下拉（账户抬头 / 宽限·试用·余额提示 / 我的日程 / 设置 / 退出登录）。
+             dev-board#1047 曾把它挪到 rail 底部，dev-board#1062 维护者要求改回右上角。
+             有无项目两态都渲染，也不按 isClientView 收。 -->
+        <AccountEntry
+          :logged-in="accountSignedIn"
+          :display-name="userDisplayName || (currentUser && currentUser.displayName) || ''"
+          :avatar-url="(currentUser && currentUser.avatarUrl) || ''"
+          :wallet-visible="walletChipVisible"
+          :wallet-text="walletChipText"
+          :wallet-low="walletLow"
+          :wallet-tier="walletTierName"
+          :notice-text="accountNoticeText"
+          :client-view="isClientView"
+          @login="onAccountLogin"
+          @account="onAvatarMenuAccount"
+          @grace-info="showTrialInfo = true"
+          @schedule="onAvatarMenuSchedule"
+          @settings="onAvatarMenuSettings"
+          @sign-out="onAvatarMenuSignOut"
+        />
       </view>
     </view>
 
@@ -436,40 +456,6 @@
           </view>
         </view>
 
-        <!-- 账户入口（dev-board#1047，对应 VS Code 的 Accounts）：未登录是「登录」，已登录是头像 +
-             原顶栏那份下拉（我的日程 / 设置 / 退出登录，试用与宽限提示也挪进这里）。
-             有无项目两态都渲染，也不按 isClientView 收。 -->
-        <AccountRailEntry
-          :logged-in="accountSignedIn"
-          :display-name="userDisplayName || (currentUser && currentUser.displayName) || ''"
-          :avatar-url="(currentUser && currentUser.avatarUrl) || ''"
-          :wallet-visible="walletChipVisible"
-          :wallet-text="walletChipText"
-          :wallet-low="walletLow"
-          :wallet-tier="walletTierName"
-          :notice-text="accountNoticeText"
-          :client-view="isClientView"
-          @login="onAccountLogin"
-          @account="onAvatarMenuAccount"
-          @grace-info="showTrialInfo = true"
-          @schedule="onAvatarMenuSchedule"
-          @settings="onAvatarMenuSettings"
-          @sign-out="onAvatarMenuSignOut"
-        />
-
-        <!-- 设置（对应 VS Code 的 Manage 齿轮）：未登录时账户入口点了是去登录，设置得有自己的一格 -->
-        <view
-          class="rail-btn"
-          :class="{ active: isSettingsTabActive }"
-          :title="$t('workbench.settingsTabName')"
-          @tap="goToSystemSettings()"
-        >
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in GLYPHS.settings" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
       </view>
 
       <!-- File Picker Dialog (for EasyVoice Import) -->
@@ -2447,7 +2433,7 @@ import { tabSnapshotMethods } from './tabSnapshot.js'
 import { isPaneAllowedWithoutProject, NO_PROJECT_DEFAULT_PANE, NO_PROJECT_PANE_KEYS, workbenchStorageKey } from './noProjectShell.js'
 import ProjectListPane from '@/components/project-list/ProjectListPane.vue'
 import WelcomePane from '@/components/welcome/WelcomePane.vue'
-import AccountRailEntry from '@/components/account/AccountRailEntry.vue'
+import AccountEntry from '@/components/account/AccountEntry.vue'
 import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
 import {
   shouldPromptOptionalComponents,
@@ -2528,7 +2514,7 @@ export default {
     TaskDialog,
     ProjectListPane,
     WelcomePane,
-    AccountRailEntry,
+    AccountEntry,
     OptionalComponentsDialog
   },
   data() {
@@ -3108,7 +3094,10 @@ export default {
     },
     isClientView() {
       const user = getCurrentUser()
-      return user && user.role === 'CLIENT'
+      // 必须收成布尔值：没有会话缓存时 getCurrentUser() 是 uni.getStorageSync 的空串 ''，
+      // 原样传给 Boolean prop（AccountEntry 的 client-view）会被 Vue 按「空串 = 属性在场」转成 true，
+      // 律师在头像下拉里就看不到「我的日程」（dev-board#1062 截图走查发现）。
+      return !!(user && user.role === 'CLIENT')
     },
     /**
      * 工作台有没有打开项目（dev-board#1047）。启动一律落不带 ?id= 的外壳（无项目态）：
@@ -3118,7 +3107,7 @@ export default {
       return this.projectId != null && this.projectId !== '' && !Number.isNaN(Number(this.projectId))
     },
     /**
-     * rail 底部账户入口的「已登录」判据。桌面端以「已连接账户」为准（spec §5.3：
+     * 顶栏账户入口的「已登录」判据。桌面端以「已连接账户」为准（spec §5.3：
      * AccountService.status().connected 是唯一判据，经授权状态的 accountConnected 组合口径带过来）；
      * 浏览器端能进到工作台就已经有会话。
      */
@@ -3131,11 +3120,6 @@ export default {
       if (this.graceKind) return this.graceChipText
       if (!this.accountConnected && this.licenseMode === 'trial') return this.$t('workbench.trialBadge')
       return ''
-    },
-    isSettingsTabActive() {
-      const left = this.activeFileLeft
-      const right = this.splitMode ? this.activeFileRight : null
-      return !!((left && left.tabType === 'admin-settings') || (right && right.tabType === 'admin-settings'))
     },
     // 协作 UI 的总闸：只有这份案卷真的放进过团队案件库才渲染任何协作元素。
     collabLinked() {
@@ -5849,7 +5833,7 @@ export default {
       this.focusedPane = targetPane
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
-    // 账户下拉的动作（dev-board#205；2026-09-29 起下拉在 rail 底部的 AccountRailEntry 里，
+    // 账户下拉的动作（dev-board#205；下拉在顶栏右上角的 AccountEntry 里（dev-board#1062），
     // 开合状态归组件自己，这里只接动作）。退出走 utils/signOut.js 唯一编排，确认弹窗与
     // 状态判定都在它里面。注意位置：不能插在 goToSystemSettings 与 openSettingsTab 之间——
     // check-navigation-contract 的方法提取按「call site 后第一个 {」配对，中间夹方法会截断它的窗口。
