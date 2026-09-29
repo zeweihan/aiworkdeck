@@ -233,22 +233,32 @@ public class FileContextLoader {
             Long folderId = Long.parseLong(folderIdStr);
             Long projectId = Long.parseLong(projectIdStr);
 
-            List<ProjectFile> allFiles = new ArrayList<>();
-            listFilesRecursive(projectId, folderId, allFiles, 0);
+            List<FolderEntry> allFiles = new ArrayList<>();
+            boolean depthLimited = listFilesRecursive(projectId, folderId, allFiles, "", 0);
 
             // 1. Directory Structure
             sb.append("### Directory Content:\n");
-            for (ProjectFile f : allFiles) {
+            for (FolderEntry entry : allFiles) {
+                ProjectFile f = entry.file();
                 String type = Boolean.TRUE.equals(f.getIsFolder()) ? "[DIR]" : "[FILE]";
-                sb.append("- ").append(type).append(" ").append(f.getName())
+                sb.append("- ").append(type).append(" ").append(entry.relativePath())
                   .append(" (ID: ").append(f.getId()).append(")\n");
             }
             sb.append("\n");
+            if (depthLimited) {
+                sb.append("[System Note: Directory listing is incomplete: recursion depth limit ")
+                  .append(ASSEMBLER_FOLDER_MAX_DEPTH)
+                  .append(" reached; deeper folders were not traversed. Inspect relevant subfolders separately.]\n");
+            }
+            long listedFiles = allFiles.stream().filter(e -> !Boolean.TRUE.equals(e.file().getIsFolder())).count();
 
             // 2. File Contents (Limit total)
             int reads = 0;
             int maxReads = contextProperties.getFiles().getMaxFilesPerContext() - currentTotalCount;
-            if (maxReads <= 0) return sb.toString();
+            if (maxReads <= 0) {
+                appendFolderCoverage(sb, listedFiles, 0, 0);
+                return sb.toString();
+            }
 
             sb.append("### Folder Document Contents (First ").append(maxReads).append(" files):\n");
 
@@ -257,8 +267,9 @@ public class FileContextLoader {
             // 读不出正文的文件要在上下文里留痕：静默跳过时模型看到的是
             // 「Folder Document Contents」标题下空空如也，只能当这些文件不存在或去猜内容。
             List<String> unreadable = new ArrayList<>();
-            for (ProjectFile f : allFiles) {
+            for (FolderEntry entry : allFiles) {
                 if (reads >= maxReads) break;
+                ProjectFile f = entry.file();
                 if (Boolean.TRUE.equals(f.getIsFolder())) continue;
 
                 try {
@@ -271,18 +282,18 @@ public class FileContextLoader {
                         if (text != null && !text.isBlank()) {
                             if (text.length() > maxChars) text = text.substring(0, maxChars) + "...[Truncated]";
 
-                            sb.append("\n#### File: ").append(f.getName()).append("\n");
+                            sb.append("\n#### File: ").append(entry.relativePath()).append("\n");
                             sb.append("```\n").append(text).append("\n```\n");
                             reads++;
                         } else {
-                            unreadable.add(withReason(f.getName(), reason.toString()));
+                            unreadable.add(withReason(entry.relativePath(), reason.toString()));
                         }
                     } else {
-                        unreadable.add(withReason(f.getName(), physicalFile.exists()
+                        unreadable.add(withReason(entry.relativePath(), physicalFile.exists()
                                 ? "超过单文件大小上限" : "文件不在磁盘上"));
                     }
                 } catch (Exception e) {
-                    unreadable.add(withReason(f.getName(), e.getMessage()));
+                    unreadable.add(withReason(entry.relativePath(), e.getMessage()));
                 }
             }
             if (!unreadable.isEmpty()) {
@@ -296,6 +307,7 @@ public class FileContextLoader {
             }
             counters[0] = reads;
             counters[1] = unreadable.size();
+            appendFolderCoverage(sb, listedFiles, reads, unreadable.size());
 
         } catch (Exception e) {
             sb.append("\n[Error reading folder: ").append(e.getMessage()).append("]\n");
@@ -313,15 +325,28 @@ public class FileContextLoader {
         return StringUtils.hasText(reason) ? name + "（" + reason.trim() + "）" : name;
     }
 
-    private void listFilesRecursive(Long projectId, Long parentId, List<ProjectFile> collector, int depth) {
-        if (depth > ASSEMBLER_FOLDER_MAX_DEPTH) return;
+    private static void appendFolderCoverage(StringBuilder sb, long listedFiles, int reads, int unreadable) {
+        sb.append("\n[System Note: Of ").append(listedFiles).append(" listed file(s), text preloaded from ")
+          .append(reads).append("; yielded no text: ").append(unreadable)
+          .append("; not attempted due to the file-count budget: ").append(listedFiles - reads - unreadable)
+          .append(". Listed files are not necessarily read; preloaded text may be truncated.]").append('\n');
+    }
+
+    private record FolderEntry(ProjectFile file, String relativePath) {}
+
+    private boolean listFilesRecursive(Long projectId, Long parentId, List<FolderEntry> collector,
+                                       String parentPath, int depth) {
+        if (depth > ASSEMBLER_FOLDER_MAX_DEPTH) return true;
+        boolean depthLimited = false;
         List<ProjectFile> children = projectFileService.getFilesByParent(projectId, parentId);
         for (ProjectFile child : children) {
-            collector.add(child);
+            String relativePath = parentPath + child.getName();
+            collector.add(new FolderEntry(child, relativePath));
             if (Boolean.TRUE.equals(child.getIsFolder())) {
-                listFilesRecursive(projectId, child.getId(), collector, depth + 1);
+                depthLimited |= listFilesRecursive(projectId, child.getId(), collector, relativePath + "/", depth + 1);
             }
         }
+        return depthLimited;
     }
 
     private void deleteQuietly(Path path) {

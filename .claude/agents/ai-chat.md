@@ -26,6 +26,15 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 | Word 任务窗格 | 11365 → 7553（-33.5%） | 11106 → 6931（-37.6%） |
 | 纯对话 | 9980 → 6422（-35.7%） | 10160 → 6047（-40.5%） |
 
+## 主动项目取材（dev-board#1076，2026-09-30）
+
+- AGENT 实质性修订/起草依赖项目事实时，先复用已有正文，再发现并读取同项目相关底稿；不必等用户逐份点名。只读取材可以先于澄清，修改仍限定在用户指定对象；错别字、格式、精确替换不触发全项目扫描。ASK/PLAN 的工具与审批边界不变。
+- `ContextAssemblerService` 的活跃文档禁令只禁止重新发现/打开已知目标，不能阻止列出其他参考；Office 产出去向限制只管创建/写入项目文件。Office 参考来源用对应 reader，不能把 `open:` / `desk:` 交给只查服务端项目索引的 `search_project_content`。
+- `doc_list_project_files` 返回项目相对路径；与 `FileTools.dbPathIndex` 共用按父链构建的路径 helper，不暴露宿主绝对路径。缺失/删除/非目录/跨项目父节点停止，循环截断，清单仍保留每个存活文件 ID。
+- `FileContextLoader` 的目录及预读正文显示相对路径，显式报告深度上限、已列文件数、成功预读、不可读和配额未读数量；数量指已列部分，不能称全项目已读。原深度 5、成功正文配额与字符上限保持。
+- CORE 不绕过 skill restrict：`contract-review` 需显式保留 `doc_list_project_files` / `search_project_content` / `ref_list` / `ref_read`，再按宿主过滤；不增加跨文档写入权限。`BuiltinSkillsTest` 用实际 skill + router + registry + disclosure 验证五种宿主。
+- 验证：`ContextAssemblerServiceTest`、`ContextAssemblerAskUserTest`、`FileContextLoaderTest`、`DocumentEditToolsProjectFilesTest`、`BuiltinSkillsTest`；行为需另看真实模型已执行工具及返回正文，模型输出的工具样式文字不算执行，编辑器 ACK 桩不算真实 LOWA 修订成功。
+
 ## 智能决策辅助（实验性，dev-board#824，2026-09-23）
 
 - **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。

@@ -101,6 +101,20 @@ class ContextAssemblerAskUserTest {
     }
 
     @Test
+    void readOnlyProjectDiscoveryIsAllowedBeforeClarifyingWriteScopeInBothLanguages() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            String tail = lastUserText(assemble("整理一下这个文件夹", AgentMode.AGENT, null));
+            assertTrue(tail.contains(english ? "read-only discovery is allowed before clarification"
+                    : "澄清前可只读了解背景"), tail);
+            assertTrue(tail.contains(english ? "inspect the listing and relevant samples first"
+                    : "整理文件夹应先看目录和相关样本"), tail);
+            assertTrue(tail.contains(english ? "do not edit the document or write a task list before the user answers"
+                    : "不要改文档、不要写任务清单"), "允许先读不等于放开含糊写入: " + tail);
+        }
+    }
+
+    @Test
     void answerMessageSwitchesTheTailToContinueAndNeverAsksAgain() {
         String text = lastUserText(assemble(ANSWER, AgentMode.AGENT, null));
         assertTrue(text.startsWith(ANSWER), "回答原样进入下一轮，模型才知道答的是哪一问: " + text);
