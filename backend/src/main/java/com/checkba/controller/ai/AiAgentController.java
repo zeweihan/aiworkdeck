@@ -107,24 +107,18 @@ public class AiAgentController {
         SseEmitter emitter = sseEmitterService.createConnection(conversationId, clientInstance, lastEventId);
         
         // Check for active stream recovery
-        String snapshot = agentOrchestrator.getRecoverySnapshot(conversationId);
         // RUNNING 但快照为空（上下文组装中/首 token 未到/纯 function-calling 轮）也必须发
         // state_recovery：前端靠它重建气泡指针，否则后续 text_delta 乃至 bubble_end 全被
         // 空指针守卫丢弃，isStreaming 永久锁死（F-06 确定性 hang）
-        if (snapshot == null
-                && com.checkba.service.ai.AgentRunStateService.RunStatus.RUNNING.name()
-                        .equals(agentRunStateService.statusName(conversationId))) {
-            snapshot = "";
-        }
-        if (snapshot != null) {
-            log.info("Recovering active stream for conversation: {} ({} chars)", conversationId, snapshot.length());
-            // Send recovery event immediately after connection established
-            // Use a small delay or ensure SseEmitterService sends it properly
-            // SseEmitterService.createConnection sends initial "connected" event.
-            // We can send this right after.
-            sseEmitterService.send(conversationId, "state_recovery", "{\"content\":\"" +
-                snapshot.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") +
-                "\"}");
+        boolean running = com.checkba.service.ai.AgentRunStateService.RunStatus.RUNNING.name()
+                .equals(agentRunStateService.statusName(conversationId));
+        // 载荷除旧的 content（模型 token）外还带按序回放日志：思考、工具过程与正文，
+        // 各带服务端时间戳——切走再切回时思考卡与过程卡原样回来（dev-board#1060）
+        String recovery = agentOrchestrator.getRecoveryPayload(conversationId, running);
+        if (recovery != null) {
+            log.info("Recovering active stream for conversation: {} ({} payload chars, {} reasoning chars)",
+                    conversationId, recovery.length(), agentOrchestrator.getRecoveryReasoningLength(conversationId));
+            sseEmitterService.send(conversationId, "state_recovery", recovery);
         }
 
         // 重连后把当前任务清单重推给前端（常驻进度卡恢复）

@@ -85,6 +85,19 @@ class ProjectAiMessageServiceTest {
     }
 
     @Test
+    void 思考记录随ASSISTANT行落库_五参更新不抹掉它() {
+        // dev-board#1060：思考全文进 reasoning 列；之后没有新思考的增量保存（五参）不许把它清掉
+        String reasoning = "[{\"text\":\"想\",\"startedAt\":1,\"endedAt\":2,\"anchor\":0}]";
+        Long id = service.upsertAssistantMessage("1", 2L, "conv-1", null, "部分回复", reasoning);
+        assertEquals(reasoning, savedRows.get(0).getReasoning());
+        service.upsertAssistantMessage("1", 2L, "conv-1", id, "完整回复");
+        assertEquals(reasoning, savedRows.get(0).getReasoning(), "五参更新保留已有思考记录");
+        assertEquals("完整回复", savedRows.get(0).getContent(), "思考不进 content");
+        service.upsertAssistantMessage("1", 2L, "conv-1", null, "非思考型模型");
+        assertNull(savedRows.get(1).getReasoning(), "没有思考的行保持 null，存量行为不变");
+    }
+
+    @Test
     void 传入的行ID不存在时退化为插入新行() {
         Long id = service.upsertAssistantMessage("1", 2L, "conv-1", 999L, "回复内容");
 

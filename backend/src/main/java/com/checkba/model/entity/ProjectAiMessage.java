@@ -64,6 +64,17 @@ public class ProjectAiMessage {
     private String displayContent;
 
     /**
+     * 思考型模型（Kimi K3 等）这一段回复的思考全文，JSON 数组（dev-board#1060）：
+     * {@code [{"text","startedAt","endedAt","anchor"[,"truncated"]}]}，每次调用模型一块，
+     * {@code anchor} = 这块思考开始前本段已执行的工具过程数（历史回放据此挂回对应过程卡之后）。
+     *
+     * <p><b>只给用户回看</b>：与 displayContent 同一条红线，上下文组装一律读 content，
+     * 不许读本字段（思考不回喂模型）。可空：非思考型模型与存量消息恒为 null。
+     */
+    @Column(columnDefinition = "TEXT")
+    private String reasoning;
+
+    /**
      * 关联的会话分组 ID（预留，便于以后做多会话）
      */
     @Column(length = 64)
@@ -165,6 +176,8 @@ public class ProjectAiMessage {
     public void setContent(String content) { this.content = content; }
     public String getDisplayContent() { return displayContent; }
     public void setDisplayContent(String displayContent) { this.displayContent = displayContent; }
+    public String getReasoning() { return reasoning; }
+    public void setReasoning(String reasoning) { this.reasoning = reasoning; }
     public String getConversationId() { return conversationId; }
     public void setConversationId(String conversationId) { this.conversationId = conversationId; }
     public String getConversationTitle() { return conversationTitle; }

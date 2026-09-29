@@ -237,6 +237,11 @@ export function useAgentStream() {
 
     // Parser State (Local to the current stream)
     let parserBuffer = ''
+    // 解析器用的时钟（dev-board#1060）：state_recovery 按序重放时临时指向那段事件发生的时刻
+    // （已换算成本机时钟），思考卡与工具卡的起止时间、「已思考 N 秒」因此按真实发生时间续算，
+    // 而不是全挤在重连那一毫秒。平时恒为 null = Date.now()。
+    let replayClock = null
+    const nowMs = () => (replayClock != null ? replayClock : Date.now())
     let activeTag = null
     let activeProcessId = null
     let thinkingParentProcessId = null
@@ -1741,16 +1746,43 @@ export function useAgentStream() {
                 resetParser()
 
                 // 3. Process the full snapshot
-                // Treat it like a huge chunk of text
-                // 与 text_delta 走同一个解析入口（此前调的 parseTags 从未定义，
-                // 切回运行中的会话就抛 ReferenceError，快照整段丢失）
-                if (d.content) {
+                if (Array.isArray(d.events)) {
+                    // 新后端（dev-board#1060）：按发生顺序重放正文 / 工具过程 / 思考，
+                    // 与实时 text_delta / reasoning_delta 走同一个入口，落点与实时逐一对齐。
+                    replayRecoveryEvents(bubble, d)
+                } else if (d.content) {
+                    // 旧后端只给正文快照；与 text_delta 走同一个解析入口（此前调的 parseTags
+                    // 从未定义，切回运行中的会话就抛 ReferenceError，快照整段丢失）
                     processTextStream(d.content)
                 }
 
             } catch (e) {
                 console.error('Failed to parse state_recovery', e)
             }
+    }
+
+    // state_recovery 的按序重放（dev-board#1060）。服务端时间戳经 serverNow 换算成本机时钟
+    // （云后端与本机可能差几秒；桌面端同机，偏移为 0）。根级思考卡先按本段开始时间置为
+    // thinking，所以「思考中 N 秒」从用户发送那一刻续算，而不是从重连那一刻重来。
+    const replayRecoveryEvents = (bubble, d) => {
+        const offset = Number.isFinite(d.serverNow) ? Date.now() - d.serverNow : 0
+        const toLocal = (ms) => (Number.isFinite(ms) ? ms + offset : Date.now())
+        if (Number.isFinite(d.startedAt)) {
+            bubble.thinking = { status: 'thinking', content: '', duration: 0, startTime: toLocal(d.startedAt), endTime: 0 }
+        }
+        try {
+            for (const ev of d.events) {
+                if (!ev || typeof ev.content !== 'string' || !ev.content) continue
+                replayClock = toLocal(ev.at)
+                if (ev.type === 'reasoning') {
+                    appendReasoning(ev.content)
+                } else if (ev.type === 'text') {
+                    processTextStream(ev.content)
+                }
+            }
+        } finally {
+            replayClock = null
+        }
     }
 
     /**
@@ -1870,27 +1902,29 @@ export function useAgentStream() {
     // 滚动显示），已经有工具过程后（多轮工具循环中间的再思考）挂到最后一个过程卡的
     // 思考条目上——与 flushContent 的 thinking 分支同口径，否则第二轮起的思考会被
     // 记到首轮的顶层卡上、把首轮的时长越算越长。
+    // 返回写进去的那个思考对象（历史回放要按落库的起止时间回填它的时长）。
     const appendReasoning = (text) => {
         const bubble = currentAssistantBubble.value
-        if (!bubble || !text) return
+        if (!bubble || !text) return null
         if (bubble.processes.length > 0) {
             const lastProc = bubble.processes[bubble.processes.length - 1]
             const lastItem = lastProc.items.length > 0 ? lastProc.items[lastProc.items.length - 1] : null
             if (!lastItem || lastItem.type !== 'thinking' || lastItem.status === 'done') {
-                lastProc.items.push({ type: 'thinking', status: 'thinking', content: text, startTime: Date.now(), fromReasoning: true })
+                lastProc.items.push({ type: 'thinking', status: 'thinking', content: text, startTime: nowMs(), fromReasoning: true })
             } else {
                 lastItem.content += text
             }
             captureChatTimeline(bubble)
-            return
+            return lastProc.items[lastProc.items.length - 1]
         }
         if (bubble.thinking.status !== 'thinking') {
-            bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: Date.now() }
+            bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: nowMs() }
             bubble.thinking.status = 'thinking'
-            if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
+            if (!bubble.thinking.startTime) bubble.thinking.startTime = nowMs()
         }
         bubble.thinking.content += text
         captureChatTimeline(bubble)
+        return bubble.thinking
     }
 
     const flushContent = (text) => {
@@ -1919,7 +1953,7 @@ export function useAgentStream() {
                             type: 'thinking',
                             status: 'thinking',
                             content: text,
-                            startTime: Date.now()
+                            startTime: nowMs()
                         })
                         activeProcessId = lastProc.id
                     } else {
@@ -2019,7 +2053,7 @@ export function useAgentStream() {
         const th = bubble && bubble.thinking
         if (th && th.status === 'thinking') {
             th.status = 'done'
-            th.endTime = Date.now()
+            th.endTime = nowMs()
             th.duration = th.startTime ? (th.endTime - th.startTime) / 1000 : 0
         }
         // reasoning_delta 在过程卡里建的思考条目没有 </thinking> 来收尾：正文/下一个标签
@@ -2030,7 +2064,7 @@ export function useAgentStream() {
             const last = items[items.length - 1]
             if (last && last.type === 'thinking' && last.status === 'thinking' && last.fromReasoning) {
                 last.status = 'done'
-                last.endTime = Date.now()
+                last.endTime = nowMs()
                 last.duration = last.startTime ? (last.endTime - last.startTime) / 1000 : 0
             }
         }
@@ -2060,14 +2094,14 @@ export function useAgentStream() {
                         if (lastItem && lastItem.type === 'thinking') {
                             lastItem.status = 'done'
                             // Calculate duration for per-segment timing
-                            lastItem.endTime = Date.now()
-                            lastItem.duration = (Date.now() - lastItem.startTime) / 1000
+                            lastItem.endTime = nowMs()
+                            lastItem.duration = (nowMs() - lastItem.startTime) / 1000
                         }
                     }
                 } else {
                     bubble.thinking.status = 'done'
                     // Calculate this segment's duration (not cumulative)
-                    bubble.thinking.endTime = Date.now()
+                    bubble.thinking.endTime = nowMs()
                     bubble.thinking.duration = (bubble.thinking.endTime - bubble.thinking.startTime) / 1000
                 }
                 activeProcessId = thinkingParentProcessId
@@ -2082,7 +2116,7 @@ export function useAgentStream() {
                             type: 'thinking',
                             status: 'thinking',
                             content: '',
-                            startTime: Date.now()
+                            startTime: nowMs()
                         })
                     }
                     activeTag = 'thinking'
@@ -2095,16 +2129,16 @@ export function useAgentStream() {
                         type: 'thinking',
                         status: 'thinking',
                         content: '',
-                        startTime: Date.now()
+                        startTime: nowMs()
                     })
                     activeProcessId = lastProc.id
                     activeTag = 'thinking'
                 } else {
                     // Keep later thinking segments distinct in the transcript.
-                    if (bubble.thinking.status === 'done') bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: Date.now() }
+                    if (bubble.thinking.status === 'done') bubble.thinking = { status: 'idle', content: '', duration: 0, startTime: nowMs() }
                     bubble.thinking.status = 'thinking'
                     // 发送时已打过 startTime（读秒从发送起算），这里只兜底补齐
-                    if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
+                    if (!bubble.thinking.startTime) bubble.thinking.startTime = nowMs()
                     activeTag = 'thinking'
                 }
             }
@@ -2198,7 +2232,7 @@ export function useAgentStream() {
                         // 运行状态条的秒表起点（dev-board#792）。这一刻就是模型发出调用的时刻，
                         // 工具跑完才会有 tool_output，中间这段静默正是用户最需要知道「在等什么、等了多久」的时候。
                         // 历史回灌的条目没有这个字段（那时早就跑完了），RootBubble 按缺省 0 处理。
-                        startTime: Date.now()
+                        startTime: nowMs()
                     })
                 }
                 activeTag = 'tool_code'
@@ -2439,7 +2473,37 @@ export function useAgentStream() {
         ['\n\n[Generation error, interrupted]', 'agentStream.stoppedWithError'],
     ]
 
-    const parseAssistantHistory = (rawContent) => {
+    // 落库的思考记录（ProjectAiMessage.reasoning，JSON 数组，dev-board#1060）。
+    // 坏值 / 旧消息 / 缺字段一律当作没有——历史回放行为与改造前一致。
+    const parseReasoningRecord = (raw) => {
+        let list = raw
+        if (typeof raw === 'string') {
+            try { list = JSON.parse(raw) } catch (e) { return [] }
+        }
+        if (!Array.isArray(list)) return []
+        return list
+            .filter(b => b && typeof b.text === 'string' && b.text)
+            .map(b => ({
+                text: b.text,
+                anchor: Number.isInteger(b.anchor) && b.anchor > 0 ? b.anchor : 0,
+                duration: Number.isFinite(b.startedAt) && Number.isFinite(b.endedAt) && b.endedAt >= b.startedAt
+                    ? (b.endedAt - b.startedAt) / 1000 : 0,
+            }))
+            .sort((a, b) => a.anchor - b.anchor)
+    }
+
+    // 第 n 个 </process> 之后的位置（n=0 → 0）。过程数不够时停在最后一个之后。
+    const afterNthProcess = (content, n) => {
+        let pos = 0
+        for (let i = 0; i < n; i++) {
+            const at = content.indexOf('</process>', pos)
+            if (at < 0) break
+            pos = at + '</process>'.length
+        }
+        return pos
+    }
+
+    const parseAssistantHistory = (rawContent, reasoningRecord) => {
         let content = rawContent || ''
         let stopNoticeKey = ''
         for (const [tail, key] of HISTORY_INTERRUPT_TAIL) {
@@ -2452,7 +2516,32 @@ export function useAgentStream() {
             currentAssistantBubble.value = bubble
             clientActionHandler.value = null
             resetParser()
-            processTextStream(content, true)
+            // 思考记录按 anchor 插回原位：anchor=k 表示这块思考发生在第 k 个工具过程之后，
+            // 与实时 appendReasoning 同口径（没有过程卡 → 顶层思考卡，有 → 挂在那个过程卡上）。
+            // 每块单独一个条目，不把多轮思考合成一坨。
+            const reasoningBlocks = parseReasoningRecord(reasoningRecord)
+            const reasoningTargets = []
+            let pos = 0
+            for (const block of reasoningBlocks) {
+                // 工具之前的多块思考（空回复重试等）都落在同一张顶层卡上：接着写，别互相顶掉
+                const rootTarget = block.anchor === 0 && reasoningTargets.find(([t]) => t === bubble.thinking)
+                if (rootTarget) {
+                    rootTarget[0].content += '\n\n' + block.text
+                    rootTarget[1] += block.duration
+                    continue
+                }
+                const cut = Math.max(pos, afterNthProcess(content, block.anchor))
+                if (cut > pos) {
+                    processTextStream(content.slice(pos, cut), true)
+                    pos = cut
+                }
+                const target = appendReasoning(block.text)
+                if (target) {
+                    target.status = 'done'
+                    reasoningTargets.push([target, block.duration])
+                }
+            }
+            processTextStream(content.slice(pos), true)
             flushRemainingBuffer()
             settleRootThinking(bubble)
             finalizeProcesses('success')
@@ -2462,6 +2551,10 @@ export function useAgentStream() {
             if (stopNoticeKey) bubble.stopNotice = t(stopNoticeKey)
             for (const entry of bubble.timeline) {
                 if (entry.type === 'thinking') Object.assign(entry.data, { status: 'done', duration: 0, startTime: 0 })
+            }
+            // 落库的思考带真实起止时间，回看时仍显示「已思考 N 秒」
+            for (const [target, duration] of reasoningTargets) {
+                Object.assign(target, { status: 'done', duration, startTime: 0 })
             }
             return bubble
         } finally {
