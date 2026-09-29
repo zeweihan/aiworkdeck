@@ -31,6 +31,24 @@ export function isAudioFile(item) {
   return AUDIO_EXTENSIONS.includes(ext)
 }
 
+/**
+ * 与 backend MeetingRecordingService.VIDEO_EXTENSIONS 逐项一致（dev-board#1024）。
+ * 视频转写前由后端抽音轨成 mp3；webm 已在音频表里，这里不重复。
+ */
+export const VIDEO_EXTENSIONS = [
+  'mp4', 'mov', 'mkv', 'avi', 'm4v', 'wmv', 'flv', 'mpeg', 'mpg', '3gp',
+]
+
+/**
+ * 能走转写链路的媒体文件 = 音频 ∪ 视频（后端 isTranscribableMediaName 同口径）。
+ * 右键「语音转文字」与 AI 附件「未转写提示」都用它：视频进 AI 上下文同样只能靠转写稿。
+ */
+export function isTranscribableMedia(item) {
+  if (!item || item.isFolder || item.isDir) return false
+  const ext = extensionOf(item.name) || String(item.fileType || '').toLowerCase()
+  return AUDIO_EXTENSIONS.includes(ext) || VIDEO_EXTENSIONS.includes(ext)
+}
+
 function extensionOf(name) {
   if (!name) return ''
   const dot = String(name).lastIndexOf('.')
@@ -39,7 +57,7 @@ function extensionOf(name) {
 }
 
 /**
- * 本轮附件里「AI 其实读不到」的那些音频：没有转写稿的。
+ * 本轮附件里「AI 其实读不到」的那些音视频：没有转写稿的。
  *
  * @param {Array} contextFiles 输入框上挂着的附件
  * @param {Set|Array} transcribedFileIds 已转写完成的音频 fileId（来自 GET /api/meetings/projects/{id}）
@@ -51,7 +69,7 @@ export function audioNeedingTranscription(contextFiles, transcribedFileIds) {
     ? transcribedFileIds
     : new Set(Array.isArray(transcribedFileIds) ? transcribedFileIds : [])
   // id 两边一个是数字一个是字符串是常态（附件 id 经过 HTTP 往返），统一按字符串比
-  return contextFiles.filter((f) => isAudioFile(f) && !done.has(String(f.id)))
+  return contextFiles.filter((f) => isTranscribableMedia(f) && !done.has(String(f.id)))
 }
 
 /**

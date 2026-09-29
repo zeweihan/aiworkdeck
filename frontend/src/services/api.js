@@ -3100,6 +3100,15 @@ export function registerMeetingFromFile(projectId, fileId) {
   })
 }
 
+// 按文件反查会议记录（播放器字幕按钮用，dev-board#1024）。返回 { meeting }，
+// 没转写过是常态：meeting 为 null，不是 404。
+export function getMeetingByFile(projectId, fileId) {
+  return request({
+    url: `/api/meetings/projects/${projectId}/by-file/${fileId}`,
+    method: 'GET'
+  })
+}
+
 export function updateMeetingRecording(meetingId, payload) {
   return request({
     url: `/api/meetings/${meetingId}`,

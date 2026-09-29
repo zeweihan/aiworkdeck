@@ -852,7 +852,7 @@ import MemoryBrowser from './MemoryBrowser.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, getAiHistory, rollbackConversation, performPptGeneration, getSkills, getCurrentUser as getCurrentUserApi, fetchAiModels, getAiConfig, cancelBackgroundTask, listPluginJobs, cancelPluginJob, getMeetingRecordings } from '@/services/api.js'
-import { audioNeedingTranscription, isAudioFile, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
+import { audioNeedingTranscription, isTranscribableMedia, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import DecisionAssistControl from './DecisionAssistControl.vue'
 import ModelSelectorDropdown from './ModelSelectorDropdown.vue'
@@ -3180,8 +3180,8 @@ export default {
         isDir: file.isDir || file.fileType === 'folder'
       }
       contextFiles.value.push(fileData)
-      // 只有真挂了音频才去问「它转写过没有」（dev-board#814 K34）
-      if (isAudioFile(fileData)) refreshTranscribedAudio()
+      // 只有真挂了音视频才去问「它转写过没有」（dev-board#814 K34；视频见 #1024）
+      if (isTranscribableMedia(fileData)) refreshTranscribedAudio()
 
       // Insert inline tag into rich input
       insertContextTagToInput(fileData)

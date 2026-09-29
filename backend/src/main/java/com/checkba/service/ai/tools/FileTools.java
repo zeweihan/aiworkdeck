@@ -181,7 +181,7 @@ public class FileTools implements AgentToolComponent {
             // 音频（dev-board#814）：Tika 对 mp3 抽回来的是 ID3 标签里的标题/艺术家/专辑，
             // 非空，于是会被当成「文件正文」原样喂给模型。按路径查不到转写稿，所以这里
             // 只说事实并指向查得到的那个入口（extract_file_text + fileId）。
-            if (com.checkba.service.meeting.MeetingRecordingService.isAudioFileName(file.getName())) {
+            if (com.checkba.service.meeting.MeetingRecordingService.isTranscribableMediaName(file.getName())) {
                 return "Warning: " + com.checkba.service.file.ProjectFileTextExtractor
                         .audioNoticeByPath(file.getName());
             }

@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -296,5 +297,44 @@ class MeetingTranscriptionLocalPathTest {
         MeetingRecording second = meeting(8L, MeetingRecording.STATUS_RECORDED);
         service.startTranscription(8L);
         awaitUntil(() -> MeetingRecording.STATUS_TRANSCRIBED.equals(second.getStatus()));
+    }
+
+    // ==================== 视频文件接入转写（dev-board#1024） ====================
+
+    private File videoSource() throws Exception {
+        File video = Files.createTempDirectory("awd-meeting-video-").resolve("庭审录像.mp4").toFile();
+        Files.write(video.toPath(), new byte[1_000_000]);
+        when(storageResolver.resolve(anyString())).thenReturn(video.toPath());
+        return video;
+    }
+
+    @Test
+    @DisplayName("视频输入：抽音轨成 mp3 后送识别，识别端收到的是 mp3 产物而不是视频")
+    void videoIsExtractedToMp3BeforeAsr() throws Exception {
+        File video = videoSource();
+        when(transcoder.toMp3(any(), any())).thenReturn(audioFile);
+        when(localAsr.transcribe(any(File.class))).thenReturn(LOCAL_JSON);
+
+        MeetingRecording m = meeting(MeetingRecording.STATUS_RECORDED);
+        service().startTranscription(7L);
+        awaitUntil(() -> MeetingRecording.STATUS_TRANSCRIBED.equals(m.getStatus()));
+
+        verify(transcoder).toMp3(eq(video), any());
+        verify(localAsr).transcribe(audioFile);
+    }
+
+    @Test
+    @DisplayName("视频抽音轨失败（转码器回退原文件）：落 FAILED，绝不把视频原样送去识别")
+    void videoExtractionFailureNeverSendsRawVideo() throws Exception {
+        File video = videoSource();
+        // MeetingAudioTranscoder 失败时的约定是「返回原文件」——对音频是宽容，对视频是灾难
+        when(transcoder.toMp3(any(), any())).thenReturn(video);
+
+        MeetingRecording m = meeting(MeetingRecording.STATUS_RECORDED);
+        service().startTranscription(7L);
+        awaitUntil(() -> MeetingRecording.STATUS_FAILED.equals(m.getStatus()));
+
+        verify(localAsr, never()).transcribe(any(File.class));
+        assertTrue(m.getError().contains("音轨"), "要说清是视频抽音轨失败：" + m.getError());
     }
 }
