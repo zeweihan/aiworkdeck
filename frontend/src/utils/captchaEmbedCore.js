@@ -91,7 +91,9 @@ export function normalizeHeight(h) {
  * 父页侧状态机。
  *
  * - `ready` 之前调 `getToken` 排队，ready 到了再发请求；等 ready 另有上限（`readyTimeoutMs`），
- *   托管页加载不出来时不让「获取验证码」按钮永远转圈。
+ *   托管页加载不出来时不让「获取验证码」按钮永远转圈。到点仍没 ready 时置 `state.loadFailed`
+ *   ——这是「组件根本没加载出来」，与「控件在、但没通过」是两回事，调用方据此给不同提示
+ *   （dev-board#1056）；之后若 ready 迟到，标记随之清掉。
  * - 每次取 token 先发 `reset` 再发 `get-token`：token 一次性，不 reset 的话重发会带上已核销的那枚。
  * - 请求发出后 `timeoutMs`（默认 8 秒）内没拿到非空 token 回空串。
  * - **交互式挑战**：Turnstile 平时隐形（interaction-only），判定可疑时才长出勾选框要人点
@@ -125,7 +127,7 @@ export function createEmbedController(opts) {
     clearTimer = (id) => clearTimeout(id),
   } = opts || {}
 
-  const state = { ready: false, disabled: false, destroyed: false, provider: '', interactive: false }
+  const state = { ready: false, disabled: false, destroyed: false, provider: '', interactive: false, loadFailed: false }
   let inflight = null // { promise, resolve, timer, requested }
 
   function settle(token) {
@@ -150,6 +152,7 @@ export function createEmbedController(opts) {
     switch (data.type) {
       case 'ready':
         state.ready = true
+        state.loadFailed = false
         state.provider = typeof data.provider === 'string' ? data.provider : ''
         sendRequest()
         break
@@ -192,7 +195,10 @@ export function createEmbedController(opts) {
     if (state.ready) {
       sendRequest()
     } else {
-      inflight.timer = setTimer(() => settle(''), readyTimeoutMs)
+      inflight.timer = setTimer(() => {
+        if (!state.ready) state.loadFailed = true
+        settle('')
+      }, readyTimeoutMs)
     }
     return promise
   }

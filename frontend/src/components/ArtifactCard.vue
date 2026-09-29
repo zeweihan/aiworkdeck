@@ -9,6 +9,7 @@
         <span class="card-title">{{ typeLabel }}</span>
         <span v-if="effectiveStatus === 'resolved'" class="status-badge resolved">{{ $t('chat.confirmedExecuted') }}</span>
         <span v-if="revisionNote" class="status-badge revised">{{ revisionNote }}</span>
+        <span v-if="reviewInProgress" class="status-badge revised">{{ $t('chat.reviewInProgress', { hunks: ownReviewState.hunks || 0, comments: ownReviewState.comments || 0 }) }}</span>
       </div>
 
       <div class="card-actions">
@@ -47,8 +48,8 @@
         <div class="btn-approve" @click.stop="approvePlain">
           <span>{{ $t('chat.proceedBtn') }}</span>
         </div>
-        <div class="btn-revise" @click.stop="startEditing">
-          <span>{{ $t('chat.reviseBtn') }}</span>
+        <div class="btn-revise" @click.stop="openReview">
+          <span>{{ $t('chat.openRevisionBtn') }}</span>
         </div>
       </template>
       <template v-else>
@@ -65,57 +66,7 @@
 
 <script>
 import MarkdownPreview from './MarkdownPreview.vue'
-
-/**
- * 行级 diff 统计：返回 { hunks: 改动处数, added, removed }。
- * 计划文本通常几十行，LCS DP 足够；超大文本退化为整体一处改动。
- */
-function lineDiffStats(original, edited) {
-  const A = original.split('\n')
-  const B = edited.split('\n')
-  const n = A.length
-  const m = B.length
-  if (n * m > 400000) {
-    return { hunks: 1, added: Math.max(0, m - n), removed: Math.max(0, n - m) }
-  }
-  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1))
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
-    }
-  }
-  let i = 0
-  let j = 0
-  let added = 0
-  let removed = 0
-  let hunks = 0
-  let inHunk = false
-  while (i < n && j < m) {
-    if (A[i] === B[j]) {
-      i++
-      j++
-      inHunk = false
-    } else {
-      if (!inHunk) {
-        hunks++
-        inHunk = true
-      }
-      if (dp[i + 1][j] >= dp[i][j + 1]) {
-        removed++
-        i++
-      } else {
-        added++
-        j++
-      }
-    }
-  }
-  if (i < n || j < m) {
-    if (!inHunk) hunks++
-    removed += n - i
-    added += m - j
-  }
-  return { hunks, added, removed }
-}
+import { lineDiffStats } from '@/utils/lineDiff.js'
 
 export default {
   name: 'ArtifactCard',
@@ -153,9 +104,25 @@ export default {
     actionable: {
       type: Boolean,
       default: false
+    },
+    // 计划审阅（dev-board#1022）：计划文件在项目里的 fileId（SSE saved 事件补上）；
+    // 历史回放没有 saved 事件时退而用气泡正文里「已保存到项目文件」那行的路径反查。
+    fileId: {
+      type: [Number, String],
+      default: null
+    },
+    savedPath: {
+      type: String,
+      default: ''
+    },
+    // 编辑器里审阅态的回传：{ fileId, artifactId, hunks, comments, status }（按 fileId 索引，
+    // 同一文件可能被同会话后续计划复用，所以只认 artifactId 对得上的那份，见 ownReviewState）
+    reviewState: {
+      type: Object,
+      default: null
     }
   },
-  emits: ['open-tab', 'approve'],
+  emits: ['open-tab', 'approve', 'open-review'],
   data() {
     return {
       editing: false,
@@ -173,6 +140,16 @@ export default {
     },
     effectiveStatus() {
       return this.localResolved ? 'resolved' : this.status
+    },
+    // 计划落盘同名复用同一文件（默认 Plan.md），第二份计划的卡拿到的 fileId 与上一份相同；
+    // 审阅态带 artifactId 时只采用自己那份，不带（旧回传）时照旧采用
+    ownReviewState() {
+      const s = this.reviewState
+      if (!s) return null
+      return !s.artifactId || s.artifactId === this.id ? s : null
+    },
+    reviewInProgress() {
+      return !!this.ownReviewState && this.ownReviewState.status === 'open' && this.effectiveStatus === 'draft'
     },
     showApprovalBar() {
       return this.isPlanType && this.actionable && this.effectiveStatus === 'draft'
@@ -204,6 +181,18 @@ export default {
       return this.$t('chat.generatedClickView', { name: typeName })
     }
   },
+  watch: {
+    // 在编辑器里「按修订版推进」之后，卡片跟着置为已推进
+    ownReviewState: {
+      immediate: true,
+      handler(s) {
+        if (s && s.status === 'submitted' && !this.localResolved) {
+          this.localResolved = true
+          this.revisionNote = this.$t('chat.approveDisplayRevised')
+        }
+      }
+    }
+  },
   methods: {
     handleOpenTab() {
       console.log('[ArtifactCard] Opening artifact in tab:', this.id)
@@ -213,6 +202,22 @@ export default {
         fileName: this.fileName,
         filePath: this.filePath,
         content: this.data?.content || ''
+      })
+    },
+    // 「打开修订」：计划文件能定位到就交给宿主在编辑器标签里开审阅态；
+    // 定位不到（没有 fileId 也没有保存路径，或宿主反查失败回调 fallback）才退回卡内 textarea。
+    openReview() {
+      if (!this.fileId && !this.savedPath) {
+        this.startEditing()
+        return
+      }
+      this.$emit('open-review', {
+        id: this.id,
+        type: this.type,
+        fileId: this.fileId || null,
+        savedPath: this.savedPath,
+        content: this.planContent,
+        fallback: () => this.startEditing()
       })
     },
     startEditing() {

@@ -42,6 +42,10 @@ export default {
     sendingCode: '发送中',
     resendIn: '{n} 秒后重发',
     captchaFailed: '请先完成安全验证后再试',
+    // 官网要求安全验证、但验证组件装不出来（网络拦了相关地址）。不发码，说清楚要放行什么
+    captchaLoadFailed: '安全验证组件加载失败，暂时无法发送验证码。请检查网络后重试，或联系单位 IT 协助。',
+    captchaLoadFailedAliyun: '安全验证组件加载失败，暂时无法发送验证码。当前网络可能拦截了 {host}，请检查网络后重试，或联系单位 IT 放行该地址。',
+    captchaLoadFailedTurnstile: '安全验证组件加载失败，暂时无法发送验证码。请确认能访问 {siteHost} 与 {cfHost}，或联系单位 IT 放行这两个地址。',
     emailPlaceholder: '邮箱',
     emailFirst: '请先填写邮箱',
     loggingIn: '正在登录',

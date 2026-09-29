@@ -219,6 +219,29 @@ export default {
     unsaved: 'Unsaved',
     saveFailedRetry: 'Save failed - tap to retry',
   },
+  // Plan review (dev-board#1022): edit and comment on a markdown plan in its tab, then proceed with the revision
+  planReview: {
+    title: 'Plan review',
+    summary: '{hunks} change(s) · {comments} comment(s)',
+    submit: 'Proceed with revision',
+    submitting: 'Submitting…',
+    discard: 'Discard changes',
+    deletedLines: '{count} line(s) deleted',
+    commentsTitle: 'Comments',
+    commentsEmpty: 'Select text and click "+" to add a comment',
+    anchorLost: 'Original text changed',
+    draftPlaceholder: 'Additional requirement for this passage…',
+    save: 'Save',
+    cancel: 'Cancel',
+    remove: 'Delete',
+    discardConfirmTitle: 'Discard changes',
+    discardConfirmContent: 'The file will be restored to its content when the review started, and the comments will not be submitted. Discard?',
+    submitFailed: 'Submit failed. Please try again.',
+    submitNotSent: 'The revised plan was not sent to the AI. The review is still open; please try again.',
+    discardFailed: 'Discard failed. Please try again.',
+    commentFailed: 'Failed to save the comment',
+    openFailed: 'Could not start the review',
+  },
   // Self-built toolbar (EditorToolbar.vue): tooltips, dropdowns and the find bar.
   // Inline review (dev-board#723/#724): the list lives in the review panel's
   // "Checks" tab; the body text only keeps a small floating ball.

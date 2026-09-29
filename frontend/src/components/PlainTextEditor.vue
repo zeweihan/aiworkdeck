@@ -31,11 +31,33 @@
           <text v-else-if="dirty || saving" class="ptx-dirty">{{ $t('editor.plainText.unsaved') }}</text>
         </view>
       </view>
-      <!-- CodeMirror 挂载点必须是真实 DOM（div 而非 uni view），预览时 v-show 藏住
-           而不销毁——切回编辑要保留光标/滚动/撤销栈 -->
-      <div v-show="!previewMode" ref="cmHost" class="ptx-cm-host"></div>
-      <view v-if="previewMode" class="ptx-preview">
-        <view class="markdown-body" v-html="previewHtml"></view>
+      <!-- 计划审阅（dev-board#1022）：审阅条与右栏只在审阅态出现 -->
+      <PlanReviewBar
+        v-if="reviewActive"
+        :hunks="reviewStats.hunks"
+        :added="reviewStats.added"
+        :removed="reviewStats.removed"
+        :comment-count="reviewComments.length"
+        :submitting="reviewSubmitting"
+        @submit="submitPlanReview"
+        @discard="discardPlanReview"
+      />
+      <view class="ptx-body">
+        <!-- CodeMirror 挂载点必须是真实 DOM（div 而非 uni view），预览时 v-show 藏住
+             而不销毁——切回编辑要保留光标/滚动/撤销栈 -->
+        <div v-show="!previewMode" ref="cmHost" class="ptx-cm-host"></div>
+        <view v-if="previewMode" class="ptx-preview">
+          <view class="markdown-body" v-html="previewHtml"></view>
+        </view>
+        <!-- 批注只在编辑态有意义（预览态不画标记），右栏跟着编辑态走 -->
+        <PlanReviewComments
+          v-if="reviewActive && !previewMode"
+          ref="reviewComments"
+          :comments="reviewCommentsView"
+          :saving="reviewCommentSaving"
+          @add="onReviewCommentAdd"
+          @remove="onReviewCommentRemove"
+        />
       </view>
     </template>
   </view>
@@ -51,7 +73,7 @@
 // 2. 下载失败/可疑空下载即封保存（朴素版 docLoadFailed 闸，PR#194 同款事故的预防）；
 // 3. reloadFromBackend()：版本退回/AI text_* 直改后，宿主命令就地重载，丢弃本地
 //    未保存态（版本操作以后端为准），否则下一次自动保存会把旧内容写回去。
-import { EditorState } from '@codemirror/state'
+import { EditorState, Compartment } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
@@ -64,9 +86,22 @@ import { css } from '@codemirror/lang-css'
 import MarkdownIt from 'markdown-it'
 import { getFileBytesUrl, getFileWriteUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
+import { toRaw } from 'vue'
+import * as fileReview from '@/services/fileReview.js'
+import { lineDiff } from '@/utils/lineDiff.js'
+import { reanchorComment, buildPlanReviewPrompt } from '@/utils/planReview.js'
+import { createReviewExtensions } from '@/utils/planReviewExtensions.js'
+import PlanReviewBar from './PlanReviewBar.vue'
+import PlanReviewComments from './PlanReviewComments.vue'
 
 const AUTOSAVE_DELAY = 3000
 const RETRY_DELAY = 15000
+const REVIEW_STATS_DELAY = 200
+
+// 已经用来开过审阅的 review prop 对象（按对象身份）。标签切走即销毁本组件、切回来重挂载时
+// tab.review 还是同一个对象；若那次审阅已提交/放弃，再拿它 POST open 会凭空开出一条新审阅。
+// 宿主每次「打开修订」都传新对象，所以新的一次点击不受影响。
+const consumedReviewProps = new WeakSet()
 
 // 语法高亮配色：颜色全部走 --awd-* 令牌而非字面色值，深浅色跟随
 // html[data-theme] 的 CSS 变量自动切换——HighlightStyle 生成的也是普通 CSS
@@ -121,10 +156,19 @@ function getPtxHighlightStyle() {
 
 export default {
   name: 'PlainTextEditor',
+  // getter 而不是对象字面量：plaintext-flush-save 那套测试剥掉 import 后求值 <script>，
+  // 被剥掉的符号只许出现在不被立即求值的位置（Vue 解析子组件时才读这里）。
+  get components() {
+    return { PlanReviewBar, PlanReviewComments }
+  },
   props: {
     file: { type: Object, default: null },
-    projectId: { type: [String, Number], default: null }
+    projectId: { type: [String, Number], default: null },
+    // 计划审阅（dev-board#1022）：宿主「打开修订」时传入；为 null 时组件自己 GET review，
+    // 有 open 记录照样进审阅态（刷新/重开标签不丢审阅）。
+    review: { type: Object, default: null }
   },
+  emits: ['review-submit', 'review-state'],
   data() {
     return {
       phase: 'loading',      // loading | ready | error
@@ -133,13 +177,32 @@ export default {
       saving: false,
       saveFailed: false,
       previewMode: false,
-      previewHtml: ''
+      previewHtml: '',
+      reviewRecord: null,        // 后端审阅记录 { id, fileId, conversationId, artifactId, status, baselineText, ... }
+      reviewComments: [],        // 后端批注 [{ id, fromLine, toLine, quotedText, body }]（原始行号，重锚定交给扩展）
+      reviewFound: {},           // 批注 id → 当前正文里还找不找得到引用原文
+      reviewStats: { hunks: 0, added: 0, removed: 0 },
+      reviewSubmitting: false,
+      reviewCommentSaving: false
     }
   },
   computed: {
     isMarkdown() {
       const t = this.file && this.file.fileType ? String(this.file.fileType).toLowerCase() : ''
       return t === 'md' || t === 'markdown'
+    },
+    reviewActive() {
+      return !!this.reviewRecord && this.reviewRecord.status === 'open'
+    },
+    reviewCommentsView() {
+      return this.reviewComments.map((c) => ({ ...c, found: this.reviewFound[c.id] !== false }))
+    }
+  },
+  watch: {
+    // 标签已开着时宿主再次「打开修订」：换了新的 review 对象就就地进审阅态
+    review(v) {
+      if (!v || this.reviewActive || this.phase !== 'ready' || !this._view) return
+      this.loadReview(this.getText()).then(() => this.applyReviewExtensions())
     }
   },
   mounted() {
@@ -152,15 +215,21 @@ export default {
     this._applyingRemote = false
     this._loadOk = false
     this._md = null
+    this._reviewCompartment = null
+    this._review = null        // createReviewExtensions 的返回（extensions + refresh）
+    this._statsTimer = null
+    this._discarding = false
     this.boot()
   },
   beforeUnmount() {
     clearTimeout(this._saveTimer)
     clearTimeout(this._retryTimer)
+    clearTimeout(this._statsTimer)
     // 标签切走/关闭时的最后防线：同步取走内容，异步发出去（组件销毁不影响 XHR）。
     // closeFile 的显式 flushSave 分支是主路径，这里兜住"切到别的标签"这种不经
     // closeFile 的卸载——v-if 单实例意味着切标签就是销毁。
-    if (this.dirty && !this.saving && this._loadOk && this._view) {
+    // 放弃修改在途时不兜底上传：服务端正在把文件写回基线，此时上传会把放弃静默撤销
+    if (this.dirty && !this.saving && this._loadOk && this._view && !this._discarding) {
       const content = this._view.state.doc.toString()
       this.uploadContent(content).catch((e) => {
         console.warn('[PlainTextEditor] unmount flush-save failed:', e)
@@ -200,9 +269,12 @@ export default {
       try {
         const text = await this.download()
         this._loadOk = true
+        // 审阅记录要在建 view 之前拿到：扩展装配依赖基线
+        await this.loadReview(text)
         this.phase = 'ready'
         await this.$nextTick()
         this.mountEditor(text)
+        if (this.reviewActive) this.refreshReviewStats()
         if (this.previewMode) this.renderPreview()
       } catch (e) {
         this.errorText = (e && e.message) || this.$t('editor.plainText.loadFailed')
@@ -237,7 +309,9 @@ export default {
         EditorView.lineWrapping,
         syntaxHighlighting(getPtxHighlightStyle()),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged && !this._applyingRemote) this.onUserEdit()
+          if (!update.docChanged) return
+          if (!this._applyingRemote) this.onUserEdit()
+          if (this.reviewActive) this.scheduleReviewStats()
         }),
         // 全部走 --awd-* 令牌：背景/文字/gutter 天然跟随 html[data-theme]，
         // 已打开的编辑器切主题时浏览器直接重算这些 CSS 变量，不需要 reconfigure。
@@ -256,6 +330,10 @@ export default {
       ]
       const lang = this.languageExtension()
       if (lang) extensions.push(lang)
+      // 审阅扩展单独装在 Compartment 里：进出审阅态只 reconfigure 这一格，撤销栈与光标不动
+      this._reviewCompartment = new Compartment()
+      this._review = this.reviewActive ? this.makeReviewExtensions() : null
+      extensions.push(this._reviewCompartment.of(this._review ? this._review.extensions : []))
       this._view = new EditorView({
         state: EditorState.create({ doc: text, extensions }),
         parent: host
@@ -286,6 +364,8 @@ export default {
 
     async save() {
       if (!this._loadOk || this.phase !== 'ready' || !this._view) return false
+      // 放弃修改在途：服务端正在把文件写回基线，此时再上传会把修订内容写回去
+      if (this._discarding) return false
       if (this.saving) { this.scheduleSave(); return false }
       const seq = this._seq
       const content = this._view.state.doc.toString()
@@ -389,6 +469,240 @@ export default {
       }
     },
 
+    // ---------------- 计划审阅（dev-board#1022） ----------------
+
+    /**
+     * 拿审阅记录：宿主传了 review 且这个对象没用过 → POST open（幂等）；否则 GET。失败不挡编辑。
+     * fileText：编辑器自己拿到的文件正文，作审阅基线（实体约定「进入审阅态那一刻的文件全文」）；
+     * 宿主传来的卡片正文 review.baselineText 只在拿不到正文时兜底。
+     */
+    async loadReview(fileText) {
+      const pid = this.projectId
+      const fid = this.file && this.file.id
+      if (pid == null || fid == null) return
+      const req = this.review ? toRaw(this.review) : null
+      try {
+        let snap
+        if (req && !consumedReviewProps.has(req)) {
+          snap = await fileReview.openReview(pid, fid, {
+            conversationId: req.conversationId,
+            artifactId: req.artifactId,
+            baselineText: typeof fileText === 'string' ? fileText : req.baselineText
+          })
+          consumedReviewProps.add(req)
+        } else {
+          snap = await fileReview.getReview(pid, fid)
+        }
+        this.applyReviewSnapshot(snap)
+      } catch (e) {
+        console.warn('[PlainTextEditor] load review failed:', e)
+        if (req) uni.showToast({ title: this.$t('editor.planReview.openFailed'), icon: 'none' })
+      }
+    },
+
+    applyReviewSnapshot(snap) {
+      const rec = snap && snap.review
+      if (!rec || rec.status !== 'open') {
+        this.reviewRecord = null
+        this.reviewComments = []
+        return
+      }
+      this.reviewRecord = rec
+      this.reviewComments = Array.isArray(snap.comments) ? snap.comments : []
+      this.reviewFound = {}
+    },
+
+    makeReviewExtensions() {
+      return createReviewExtensions({
+        getBaseline: () => (this.reviewRecord && this.reviewRecord.baselineText) || '',
+        getComments: () => this.reviewComments,
+        onAddComment: (sel) => this.promptComment(sel),
+        deletedLabel: (k) => this.$t('editor.planReview.deletedLines', { count: k })
+      })
+    },
+
+    /** 按 reviewActive 装上或卸下审阅扩展（Compartment 重配），并刷新统计。 */
+    applyReviewExtensions() {
+      if (!this._view || !this._reviewCompartment) return
+      if (this.reviewActive) {
+        this._review = this.makeReviewExtensions()
+        this._view.dispatch({ effects: this._reviewCompartment.reconfigure(this._review.extensions) })
+        this.refreshReviewStats()
+      } else {
+        this._review = null
+        this._view.dispatch({ effects: this._reviewCompartment.reconfigure([]) })
+      }
+    },
+
+    promptComment(sel) {
+      const panel = this.$refs.reviewComments
+      if (panel && typeof panel.startDraft === 'function') panel.startDraft(sel)
+    },
+
+    async onReviewCommentAdd(payload) {
+      if (!this.reviewActive || this.reviewCommentSaving) return
+      this.reviewCommentSaving = true
+      try {
+        const c = await fileReview.addComment(this.projectId, this.file.id, {
+          fromLine: payload.fromLine,
+          toLine: payload.toLine,
+          quotedText: payload.quotedText,
+          body: payload.body
+        })
+        this.reviewComments = [...this.reviewComments, c]
+        const panel = this.$refs.reviewComments
+        if (panel && typeof panel.closeDraft === 'function') panel.closeDraft()
+        if (this._review) this._review.refresh(this._view)
+        this.refreshReviewStats()
+      } catch (e) {
+        console.warn('[PlainTextEditor] add comment failed:', e)
+        uni.showToast({ title: this.$t('editor.planReview.commentFailed'), icon: 'none' })
+      } finally {
+        this.reviewCommentSaving = false
+      }
+    },
+
+    async onReviewCommentRemove({ id }) {
+      if (!this.reviewActive) return
+      try {
+        await fileReview.deleteComment(this.projectId, this.file.id, id)
+        this.reviewComments = this.reviewComments.filter((c) => c.id !== id)
+        if (this._review) this._review.refresh(this._view)
+        this.refreshReviewStats()
+      } catch (e) {
+        console.warn('[PlainTextEditor] delete comment failed:', e)
+        uni.showToast({ title: this.$t('editor.planReview.commentFailed'), icon: 'none' })
+      }
+    },
+
+    scheduleReviewStats() {
+      clearTimeout(this._statsTimer)
+      this._statsTimer = setTimeout(() => { this._statsTimer = null; this.refreshReviewStats() }, REVIEW_STATS_DELAY)
+    },
+
+    /** 重算改动统计与批注锚点，并把状态回传宿主（计划卡显示「修订中 · N 处改动 · M 条批注」）。 */
+    refreshReviewStats() {
+      if (!this.reviewActive) return
+      const text = this.getText()
+      const d = lineDiff(this.reviewRecord.baselineText || '', text)
+      this.reviewStats = { hunks: d.hunks, added: d.added, removed: d.removed }
+      const found = {}
+      for (const c of this.reviewComments) found[c.id] = reanchorComment(c, text).found
+      this.reviewFound = found
+      this.emitReviewState()
+    },
+
+    emitReviewState() {
+      this.$emit('review-state', {
+        fileId: this.file && this.file.id,
+        // 同一文件会被同会话后续计划复用，计划卡按 artifactId 认领自己那份审阅态
+        artifactId: this.reviewRecord ? this.reviewRecord.artifactId : null,
+        hunks: this.reviewStats.hunks,
+        comments: this.reviewComments.length,
+        status: this.reviewRecord ? this.reviewRecord.status : null
+      })
+    },
+
+    exitReviewMode(status) {
+      clearTimeout(this._statsTimer)
+      this._statsTimer = null
+      if (this.reviewRecord) this.reviewRecord = { ...this.reviewRecord, status }
+      this.applyReviewExtensions()
+      this.emitReviewState()
+    },
+
+    /**
+     * 「按修订版推进」：先落盘，拼回喂消息交给宿主发出；宿主经 ack 回话「已发出」后才 POST submit
+     * 并退出审阅态（先发后落库）。宿主没发出去（AI 面板未就绪、切不回原会话等）就留在审阅态，
+     * 记录仍是 open，用户可以重试。
+     */
+    async submitPlanReview() {
+      if (!this.reviewActive || this.reviewSubmitting) return
+      this.reviewSubmitting = true
+      try {
+        const saved = await this.flushSave()
+        if (!saved) throw new Error('save failed before submit')
+        // 正文在落盘成功那一刻取：之后再敲的字没经过保存，不该进回喂消息
+        const text = this.getText()
+        const diff = lineDiff(this.reviewRecord.baselineText || '', text)
+        const comments = this.reviewComments.map((c) => ({ ...c, ...reanchorComment(c, text) }))
+        const lang = String((this.$i18n && this.$i18n.locale) || '').startsWith('en') ? 'en' : 'zh'
+        const { message, displayText } = buildPlanReviewPrompt({ lang, currentText: text, diff, comments })
+        const conversationId = this.reviewRecord.conversationId || (this.review && this.review.conversationId) || null
+        const sent = await new Promise((resolve) => {
+          let done = false
+          const ack = (ok) => {
+            if (done) return
+            done = true
+            resolve(ok === true)
+          }
+          this.$emit('review-submit', {
+            fileId: this.file.id,
+            artifactId: this.reviewRecord.artifactId || null,
+            message,
+            displayText,
+            conversationId,
+            ack
+          })
+        })
+        if (!sent) {
+          uni.showToast({ title: this.$t('editor.planReview.submitNotSent'), icon: 'none' })
+          return
+        }
+        try {
+          await fileReview.submitReview(this.projectId, this.file.id)
+        } catch (e) {
+          // 消息已经发给模型了：落库失败不能把用户留在审阅态（再点会重复发），只记日志
+          console.warn('[PlainTextEditor] submit review record failed after send:', e)
+        }
+        this.exitReviewMode('submitted')
+      } catch (e) {
+        console.warn('[PlainTextEditor] submit review failed:', e)
+        uni.showToast({ title: this.$t('editor.planReview.submitFailed'), icon: 'none' })
+      } finally {
+        this.reviewSubmitting = false
+      }
+    },
+
+    /** 「放弃修改」：确认 → 服务端写回基线 → 就地重载 → 退出审阅态。 */
+    async discardPlanReview() {
+      if (!this.reviewActive || this.reviewSubmitting) return
+      const confirmed = await new Promise((resolve) => {
+        uni.showModal({
+          title: this.$t('editor.planReview.discardConfirmTitle'),
+          content: this.$t('editor.planReview.discardConfirmContent'),
+          success: (r) => resolve(!!(r && r.confirm)),
+          fail: () => resolve(false)
+        })
+      })
+      if (!confirmed) return
+      this.reviewSubmitting = true
+      // 先截住自动保存：挂着的防抖/在途上传若落在服务端写回基线之后，会把修订内容写回去
+      clearTimeout(this._saveTimer)
+      this._saveTimer = null
+      clearTimeout(this._retryTimer)
+      this._retryTimer = null
+      this._discarding = true
+      try {
+        while (this._inflight) {
+          try { await this._inflight } catch (e) { /* 失败已在 save 里记账 */ }
+        }
+        await fileReview.discardReview(this.projectId, this.file.id)
+        this._discarding = false
+        await this.reloadFromBackend()
+        this.exitReviewMode('discarded')
+      } catch (e) {
+        console.warn('[PlainTextEditor] discard review failed:', e)
+        this._discarding = false
+        // 没放弃成功：本地修订仍是用户的内容，照常存
+        if (this.dirty) this.scheduleSave()
+        uni.showToast({ title: this.$t('editor.planReview.discardFailed'), icon: 'none' })
+      } finally {
+        this._discarding = false
+        this.reviewSubmitting = false
+      }
+    },
+
     setPreview(on) {
       if (this.previewMode === !!on) return
       this.previewMode = !!on
@@ -455,8 +769,15 @@ export default {
 .ptx-toggle-btn + .ptx-toggle-btn { border-left: 1px solid var(--awd-info-soft); }
 .ptx-toggle-btn.active { background: var(--awd-accent-soft); color: var(--awd-accent-text); }
 
+.ptx-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
 .ptx-cm-host {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -465,6 +786,7 @@ export default {
 
 .ptx-preview {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 16px 20px;

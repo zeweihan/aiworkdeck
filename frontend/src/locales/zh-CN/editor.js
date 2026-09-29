@@ -223,6 +223,29 @@ export default {
     unsaved: '未保存',
     saveFailedRetry: '保存失败，点击重试',
   },
+  // 计划审阅（dev-board#1022）：md 计划文件在标签里改完、加批注，再「按修订版推进」
+  planReview: {
+    title: '计划审阅',
+    summary: '{hunks} 处改动 · {comments} 条批注',
+    submit: '按修订版推进',
+    submitting: '正在提交…',
+    discard: '放弃修改',
+    deletedLines: '已删除 {count} 行',
+    commentsTitle: '批注',
+    commentsEmpty: '选中文字后点「+」添加批注',
+    anchorLost: '原文已改动',
+    draftPlaceholder: '对这段的补充要求…',
+    save: '保存',
+    cancel: '取消',
+    remove: '删除',
+    discardConfirmTitle: '放弃修改',
+    discardConfirmContent: '文件会恢复成审阅开始时的内容，批注不再提交。确定放弃吗？',
+    submitFailed: '提交失败，请重试',
+    submitNotSent: '修订版没能发给 AI，仍在审阅中，请稍后重试',
+    discardFailed: '放弃失败，请重试',
+    commentFailed: '批注保存失败',
+    openFailed: '进入审阅失败',
+  },
   // 自建工具栏（EditorToolbar.vue）。工具提示、下拉与查找替换条的全部可见文案。
   // AI 审校（dev-board#723/#724，命名与开关归属见 #749）：清单在审阅面板的
   // 「AI 审校」页，正文里只剩一颗浮球——开关也在那颗浮球上。
