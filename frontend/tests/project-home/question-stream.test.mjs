@@ -21,30 +21,15 @@ import { captureChatTimeline, visibleChatTimeline } from '../../src/components/A
 import { nextBubbleId } from '../../src/composables/bubbleId.js'
 import { documentEditedFromProcesses } from '../../src/utils/useInDocumentVisibility.js'
 
-const source = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
+import { buildAgentStreamFactory } from '../_lib/agent-stream-factory.mjs'
 
 function stream(overrides = {}) {
-  const body = source.replace(/^import .*$/gm, '')
-    .replace('export function useAgentStream()', 'function useAgentStream()')
-    .replace('        bubbles,\n', '        bubbles, handleEvent, currentAssistantBubble, createAssistantBubble, createUserBubble,\n')
-  const factory = new Function('ref', 'reactive', 'nextTick', 'onUnmounted', 'getCurrentInstance',
-    'createProtocolTagRegex', 'decodeProtocolTags', 'decodeProtocolTagsIncremental', 't', 'nextBubbleId', 'captureChatTimeline',
-    'documentEditedFromProcesses',
-    'createInboxState', 'applyInboxReceipt', 'applyInboxSnapshot', 'applyInputApplied', 'markInboxEvent', 'removeInboxItem', 'replaceInboxItem',
-    'getApiBaseUrl', 'getSessionId', 'getAgentInbox', 'updateAgentInboxItem', 'deleteAgentInboxItem', 'getConversationMetadata',
-    // ask_user（dev-board#868）：<question> 标签的解析会读 kind/description 属性
-    'ASK_USER_KIND', 'decodeAttr', 'normalizeAskUserEvent',
-    body + '\nreturn useAgentStream()')
-  const value = factory(ref, reactive, nextTick, () => {}, () => null,
-    createProtocolTagRegex, decodeProtocolTags, decodeProtocolTagsIncremental, key => key, nextBubbleId, captureChatTimeline,
-    documentEditedFromProcesses,
-    createInboxState, applyInboxReceipt, applyInboxSnapshot, applyInputApplied, markInboxEvent, removeInboxItem, replaceInboxItem,
-    () => 'http://test.local', () => 'test-session',
-    overrides.getAgentInbox || (async () => ({ items: [], runId: null, status: null })),
-    overrides.updateAgentInboxItem || (async () => null),
-    overrides.deleteAgentInboxItem || (async () => ({ items: [] })),
-    async () => null,
-    ASK_USER_KIND, decodeAttr, normalizeAskUserEvent)
+  const value = buildAgentStreamFactory({
+    expose: 'handleEvent, currentAssistantBubble, createAssistantBubble, createUserBubble',
+    getAgentInbox: overrides.getAgentInbox,
+    updateAgentInboxItem: overrides.updateAgentInboxItem,
+    deleteAgentInboxItem: overrides.deleteAgentInboxItem,
+  })
   const bubble = value.createAssistantBubble()
   bubble.isStreaming = true
   value.bubbles.value.push(bubble)
