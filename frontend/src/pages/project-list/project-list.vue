@@ -23,13 +23,14 @@ export default {
       return
     }
     // 同级替换：本页是 reLaunch 进来的单页栈（登录成功、菜单「关闭项目」）时 redirectTo，
-    // 栈深度保持 1。栈里还压着别的页（有人 navigateTo 进来）时改 reLaunch——底下若恰好
-    // 是一个活着的工作台，redirectTo 会让两个工作台实例并存（页面栈多实例地雷）。
+    // 栈深度保持 1。其余一律 reLaunch：栈里压着别的页时 redirectTo 会让底下活着的工作台
+    // 与新工作台并存（页面栈多实例地雷）；栈为空（工作台里直接改 URL 进来）时 redirectTo
+    // 什么都不做、停在白页（e2e 复现过）。
     const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
-    if (pages.length > 1) {
-      uni.reLaunch({ url: SHELL_URL })
-    } else {
+    if (pages.length === 1) {
       uni.redirectTo({ url: SHELL_URL })
+    } else {
+      uni.reLaunch({ url: SHELL_URL })
     }
   },
 }
