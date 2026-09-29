@@ -74,6 +74,7 @@ public class ToolDisclosurePolicy {
 
             // —— 项目材料：找文件 → 拿 fileId → 读全文 → 落一份新文件 ——
             "doc_list_project_files", "search_project_files", "extract_file_text", "read_document",
+            "search_project_content",
             "write_docx", "create_folder", "move_files_batch", "move_to_trash",
 
             // —— 记忆：检索与保存各一个（memory_* 六个由编排器的 MEMORY_TOOLS 规则另行兜底）——
@@ -146,7 +147,8 @@ public class ToolDisclosurePolicy {
         CATEGORIES.put("files", List.of(
                 "name:list_files", "name:read_file", "name:write_file", "name:scan_files",
                 "name:move_file", "name:move_project_file", "name:rename_project_file",
-                "name:list_project_folders", "name:delete_file", "text_", "name:dd_export"));
+                "name:list_project_folders", "name:delete_file", "text_", "name:dd_export",
+                "name:copy_files"));
         CATEGORIES.put("plugin", List.of("plugin_dev_", "capability_"));
         CATEGORIES.put("python", List.of("name:run_python"));
     }

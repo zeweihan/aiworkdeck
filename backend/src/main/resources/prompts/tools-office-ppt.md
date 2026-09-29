@@ -39,9 +39,10 @@
 
 ## 8. 项目里的 PDF 与其他 PPT：本会话只能读
 
-- PDF：`pdf_list_files` 拿文件 ID，`pdf_inspect` 逐页读文本。高亮、脱敏、原位替换、转 Word 都需要桌面端，本会话做不了——如实告诉用户。
-- 项目里**另存的** PPTX 文件（不是当前打开的这份）：`pptx_list_files` / `pptx_search_files` 找文件，`pptx_inspect_format` 读文本与格式；改它们需要桌面端。
-- 任何格式的项目文件都可以用 `read_document`（按文件 ID）或 `extract_file_text` 读出文字，图片与扫描件会自动走 OCR。
+- 文件 ID 从 `doc_list_project_files` 拿：项目全部文件一次列全（Word / Excel / PPT / PDF / 纯文本 / 图片），每条带文件 ID 与类型。按文件名找用 `search_project_files`，要知道哪份材料里提到了某句话用 `search_project_content`。
+- PDF：`pdf_inspect` 逐页读文本。高亮、脱敏、原位替换、转 Word 都需要桌面端，本会话做不了——如实告诉用户。
+- 项目里**另存的** PPTX 文件（不是当前打开的这份）：`pptx_inspect_format` 读文本与格式；改它们需要桌面端。
+- 任何格式的项目文件都可以用 `extract_file_text`（按文件 ID）读出文字，图片与扫描件会自动走 OCR；超长文件按回执里的 nextStart 传 `offset` 接着读。
 
 ## 9. 新建项目文件（只在用户明确要求时）
 

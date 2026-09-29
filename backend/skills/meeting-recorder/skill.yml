@@ -63,7 +63,7 @@ prompt: prompt.md
 
 # 工具白名单：命中后本轮 LLM 可见工具
 #   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
-# 基础工具集只有 read_document / list_files / query_memory 三个，
+# 基础工具集只有 extract_file_text / list_files / query_memory 三个，
 # 本 skill 要用的工具必须逐个列出——漏了就是「模型看不见 = 不会调用」。
 # todo_write 已被编排类工具集恒定放行，显式声明是自文档。
 # 聚焦模式，限制本轮可见工具（dev-board#799）。这里写 restrict 是保持现状：

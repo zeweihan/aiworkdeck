@@ -44,7 +44,6 @@ class LegalToolsValidationTest {
         tools = new LegalTools(projectFileService,
                 new com.checkba.service.legal.PkulawChannel(
                         mcpClientService, externalProviderResolver, platformGatewayClient),
-                fileContentExtractorService,
                 new com.checkba.service.file.ProjectFileTextExtractor(
                         documentTextService, fileContentExtractorService, projectFileService, null, null));
     }

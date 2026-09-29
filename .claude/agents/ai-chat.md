@@ -212,6 +212,11 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - **工具可见性是五层闸，判据分别在五个地方**（改任一层前先分清是哪一层）：
   ① **会话客户端能力**（`ClientCapabilityService.isToolVisible`）：LOWA 会话只见 doc_/sheet_/slide_，
      Office 插件会话只见 office_* 且按宿主 Word/Excel/PowerPoint 再分，none 两者皆无；
+     **唯一的例外是纯后端的权威清单 `doc_list_project_files`**（`ClientCapabilityService.BACKEND_ONLY_DOC_TOOLS`，
+     dev-board#1065 审计 T-01）：它只查 project_file 表、不经编辑器桥，三档会话都可见（LOWA 照旧过活跃文档类型闸，
+     它本来就在 `KIND_AGNOSTIC_LOWA_TOOLS` 里；声明层 `requiresHost` 仍叠在前面）。**开例外而不是改名**：
+     这个名字被十来个工具描述与多份提示片段引用、还写在老会话执行日志里，改名要么留别名（别名表应当一直是空表）、
+     要么让那些引用同一刻全部失效。其余 doc_* 在 Office/none 会话里照旧不可见（`ClientCapabilityServiceTest` 钉着）；
   ①b **工具自报的宿主依赖**（dev-board#799，`@ToolMeta.requiresHost = NONE|LOWA|OFFICE`）：
      叠在前缀链**之上**的声明层，**只收窄、绝不放宽**（两层都通过才可见）。前缀链是既有公开契约、
      一行没动；无前缀的工具从此自己声明，不再往 `ClientCapabilityService` 里塞名字清单。
@@ -226,8 +231,8 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
      **代价是真的**：后两族（pdf_* 与 text_*）的写入本身是纯服务端的，声明 LOWA 等于在
      Office/none 会话里一并收走那份能力——这是按审计口径做的取舍（那些会话里用户既没有文件树
      也没有预览，拿不到结果，而工具还在承诺「编辑器会重载」），不是顺手扩大的。
-     **只读面没动**：`pdf_list_files` / `pdf_inspect` / `pptx_inspect_format` / `pptx_list_files`
-     在任务窗格会话里照常可见——收窄的是「改」不是「读」。
+     **只读面没动**：`pdf_inspect` / `pptx_inspect_format` 在任务窗格会话里照常可见——收窄的是「改」不是「读」；
+     fileId 从三档都可见的 `doc_list_project_files` 拿（按类型的 `pdf_list_files` / `pptx_list_files` 自 dev-board#1065 起只登记不下发）。
      声明清单与「谁在发那四个 send」的绊线都在 `ToolDeclarationContractTest`（逐名钉住 + 扫源码对拍）。
   ② **活跃文档类型**（dev-board#729 ①，同一个方法的三参重载 + `visibleForDocKind`）：
      docx 隐藏全部 slide_* 与除 `sheet_create_file` 外的 sheet_*；xlsx/pptx 反过来隐藏 doc_*，
@@ -389,6 +394,19 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
   `ToolDeclarationContractTest`（逐名钉住 + 断言登记仍在）。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
 - tools/：FileTools(14，含 create_folder/rename_project_file/move_project_file/move_file/**move_files_batch** 五个 DB 感知文件树原语 + **move_to_trash**（dev-board#1044：项目内路径或 fileId 的 JSON 数组、≤50 项，走 `ProjectFileService.delete` 软删进项目回收站，与资源管理器「删除」同一条路、不碰磁盘、可还原；核心集常驻；永久删除仍不给 AI，`delete_file` 的拒绝文案指路到它；护栏 `FileToolsMoveToTrashTest`）——直通 ProjectFileService，与前端右键菜单同路径；move_file 2026-08 由停用复活为路径版移动：按路径经 dbPathIndex 解析 project_file 记录、缺失目标文件夹自动补建，真机实证 txt 类文件拿不到 fileId 时模型会绕道 read_file+write_file 整篇重写；**move_files_batch(movesJson) 是它的批量形态**（≤50 条，dev-board#466，见下文「步数预算与批量原语」）；list_files/search_project_files 对 DB 已登记条目附带 fileId/folderId，未登记提示先 scan_files；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读，**图片与无文字层的扫描件自动走云端 OCR**（见下文「读取类工具的 OCR 路由」）；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、TaskTools(3，dev-board #53：task_create/task_list，#895 加 task_update 并给 task_create 扩 type/notes/priority/fileIds(逗号分隔)/assigneeId/remindBefore，task_list 行带 id/类型中文名/负责人/多文件名供 task_update 取 taskId；task_update 归属校验=事项 projectId 必须等于注入的当前项目。项目级「任务/日程」的 AI 接线，落 `ProjectTaskService`。与 TodoTools 的边界是术语表那条——task_* 管跨对话持续存在、日历页可见的截止日/开庭日里程碑，todo_write 管 AI 本轮工作步骤条，本轮结束即失效，别混。task_create 走新增的 `ProjectTaskService.createAiTask`（source 恒 "ai"，与用户手建的 "user" 区分；内部委托同一份校验逻辑，未新增校验分支），projectId/userId 走 `SERVER_CONTEXT_PARAMS` 强制注入，fileId 越权校验复用 `validateFileInProject`。task_list 空结果返回明确中文文案而非空串——空白工具输出会炸 `ToolExecutionResultMessage.ensureNotBlank`，掀翻整轮对话，见下文「已知地雷」)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(2：retrieve_evidence 检索 + evidence_verify 勾稽核查，后者委托 `service/evidence/EvidenceVerifyService`，见 ai-doc-bridge「勾稽核查」)、MemoryTools(8 个登记，**下发 6 个**——query_memory / search_knowledge_base / deep_search 三个签名雷同、描述不给判据的检索工具已合并成 `query_memory(query, type, scope, sourceFileId, depth, limit)`，depth = quick(关键词，默认，等于旧 query_memory) / hybrid(RRF 融合，旧 search_knowledge_base) / deep(Agentic 多轮召回，旧 deep_search，**会额外起一次辅助模型做查询扩展**)；旧两名保留为 `@ToolMeta(offerToModel = false)` 的兼容入口，只裁 spec 不裁 execute，返回末尾附一句指路。**depth 填错一律回落 quick，绝不让整次调用失败**。dev-board#807，审计 A13)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13 个登记，**下发 10 个**——PPTX 的权威编辑面是 `slide_*`，pptx_open_file / pptx_apply_format / pptx_edit_page 三个已标 `offerToModel = false`（dev-board#808，审计 B-09）：它们改的是**磁盘字节**然后强制编辑器 reload，会把编辑器里尚未保存的修改静默丢掉，且索引 0 起而 slide_* 1 起，两套并存时模型混用必然错页、错页既不报错也不会被任何返回值戳穿。留下的是不可替代的那批：生成(pptx_generate/pptx_generate_outline/pptx_refine_outline)、导出(pptx_export_editable)、清单(pptx_list_files/pptx_search_files/list_project_folders)、只读检查(pptx_inspect_format，走 pptx-service 自有端点 /api/pptx/*，不必在编辑器里打开)、服务探活与页面清单)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 从 `doc_list_project_files`（现在一次列全类型，含 PDF）或 pdf_list_files 拿；**「doc_list_project_files 不列 PDF、search_project_files 不带 ID」是已经不成立的旧说法**（dev-board#807，审计 B-11 + 复核补漏）。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)，**失败不再自动回退**结构级（dev-board#1016，见下文「等待组件、编辑器启动中与同轮幂等」）；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。**PptxTools / PdfTools / TextFileEditTools / Litigation* 里共 12 个工具已用 `@ToolMeta(requiresHost = LOWA)` 声明桌面前端依赖**（dev-board#799，见上文①b）——「Office 会话看得到 pptx_generate 并被它的『等待用户操作…』卡住整轮」这条地雷**已修**。
+
+**文件与读取工具面（dev-board#1065 批次一，审计 T-01~T-07 / T-25 / T-27）**
+
+- **一句话**：同一件事只留一个下发的入口，缺的「按正文找」「复制」两样补上；被合并掉的旧名一律 `@ToolMeta(offerToModel = false)`——**只裁 spec、不裁 resolve/execute**，老会话回放、XML 兜底、上下文组装与 run_python 的 `default_api` 照常调得到。清单钉在 `ToolDeclarationContractTest.EXPECTED_NOT_OFFERED`。
+- **本批新增的只登记不下发**：`read_document`（与 `extract_file_text` 同一个抽取器，T-05）、`move_file`（`move_files_batch` 的单条形态，两者共用 `moveOnePath`，T-06）、`scan_files`（只为 `write_file` 写不进子文件夹而存在，而它只扫项目根，那一步其实补不上，T-07）、`doc_search_related_docs`（自称搜内容、实现只比文件名，无命中还拿「前 10 个文档」冒充结果，T-03）、`pdf_list_files` / `pptx_list_files` / `pptx_search_files`（权威清单的按类型子集，T-27）。
+- **`search_project_content(query, useRegex?, wholeWord?, fileTypes?)`**：新组件 `tools/ContentSearchTools`，包的是界面搜索面板早就在用的 `ContentSearchService.searchContent`（落库缓存 + 有界线程池，一行搜索逻辑不重写），核心集常驻。回执每行 `文件名 (fileId=N) [项目内路径] 第 L 行：片段`，最多 50 处、片段 ≤200 字，其余只报个数；没命中回 `No matches:` 开头的一句话。**坏正则在工具里先编译一次、直接回 `Error:`**——服务层遇到坏正则会静默退回字面匹配，对界面是体贴，对模型是误导。描述写清三个「找」的分工：按文件名 `search_project_files`（Glob），按正文本工具（Grep），在打开的那一份里 `doc_find_text` / `office_search`。扫描件与图片只有被读过一次（OCR 结果进了缓存）才搜得到。
+- **`copy_files(fileIds, targetFolderId?)`**（T-25）：直通 `ProjectFileService.batchCopy`（资源管理器「复制 / 粘贴」同一条路：文件夹递归、同层加「【副本】」、目标同名加序号、绝不覆盖）。≤50 项，`[1,2]` 与 `1,2` 都认；**归属校验前置**（不存在 / 已删除 / 别的项目回同一句话，整批不动手）。`@ToolMeta(refreshFiles = true)`，**刻意不声明 fileEffect**（没有哪一份文件被改动；ADDED 在没有 fileArg 时会报成「当前文档」）。归 `files` 类目（`name:copy_files`）。
+- **`write_file` 多一个可选 `parentFolderId`**（与 `write_docx` 同义）：走 `createOrUpdateFile`（父文件夹经 `resolveParentId` 校验、同名即更新）+ `overwriteTextContent`（落盘、回写大小、发版本信号）。**名字里带路径直接拒绝**并指向 parentFolderId——原来是写到磁盘、不登记、再请模型去调 scan_files，结果是一份文件树里看不见的孤儿文件。
+- **纯文本解码并进抽取器**（T-05）：`FileContentExtractorService.decodeText(byte[])`（UTF-8 严格解码、失败回退 GBK、去 BOM）是全仓唯一一份，`ProjectFileTextExtractor` 对 `isTextFile` 且非 OCR 的扩展名**在查缓存之前**直接按字节解码（缓存里可能躺着一条早先 Tika 抽坏的结果）。实测病灶：一份 GBK 编码的中文 txt，改动前 `read_document` 读得出、`extract_file_text` 走 Tika **抽回空串**（回的是「no text extracted」）；`GbkPlainTextParityTest` 用真 Tika 钉住两个入口逐字相同。附件注入与文件夹上下文因此也换成了同一口径。
+- **`ai.skills.base-tools` 改成 `[extract_file_text, list_files, query_memory]`**（`EvalHarness` 的字面量同步；六个 skill.yml 的注释同步）。回放用例里断言 `read_document` 被下发的，改成断言 `extract_file_text`；`cases-capability-prompt.json` 里「none 会话调 doc_list_project_files 白烧一轮」那例改用 `doc_open_file` 记录同一笔代价（前者现在三档都可见了）。
+- **描述修正**：`search_project_files` 曾写着「Returns paths only, NO database fileId」，实现却逐条附 `(fileId=N)`——#807 在 `list_files` 上修过的同一个病，这次补上并进 `ToolChoiceSurfaceTest`；示例换成律师会搜的名字。`move_files_batch` 不再说「单个文件继续用 move_file」。`write_docx` / `doc_start_stream` 各加一句取舍判据（长篇、要让用户看着写 → stream；一次性落盘或非编辑器会话 → write_docx）。提示词：基底 prompt §4/§5、四个 Office 片段与 none 片段、LOWA 片段里点名这几个旧名的地方全部换掉（none 片段不许出现 `doc_`，所以那里只描述「工具清单里有一个一次列全的项目文件清单工具」、不点名）。
+- **没动的**：`ToolDisclosurePolicy.CORE` 里的 `read_document` 还留着（本批只往里插了 `search_project_content` 一行；它已不下发，留在核心集里不产生任何规格，清理与核心集瘦身一起做）。`ContextAssemblerService` 的附件与活跃文档注入仍调 `LegalTools.read_document`（方法本身没删）。
+- 验证：`mvn test -Dtest='ToolChoiceSurfaceTest,ToolDeclarationContractTest,SystemPromptToolVisibilityContractTest,ClientCapability*Test,OrchestratorReplayEvalTest,ToolDisclosurePolicyTest,*FileTools*,*ContentSearch*,GbkPlainTextParityTest,ExtractFileTextPagingTest,WriteFileRegistrationTest'`。
 
 **PDF 页级操作（dev-board#805，审计 A17 / B-12 / B-13）**
 
@@ -758,8 +776,9 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   fileId**，而「看看我项目里有什么」要连调三四个专用清单才拼得齐。
   分桶判据**只看扩展名**，不看 `ProjectFile.fileType`——那一列是客户端自填、原样落库、无校验的，
   拿它分桶等于让「用户随手填的一个 doc」变成模型的行动依据。
-  `pdf_list_files` / `pptx_list_files` 保留（旧会话回放 + 结果太多时按类型过滤），
-  但描述已改成「等价于 doc_list_project_files 过滤后的子集」。清单一次列全之后，模型更容易拿一个
+  `pdf_list_files` / `pptx_list_files` / `pptx_search_files` 自 dev-board#1065（审计 T-27）起 `offerToModel = false`
+  （只登记不下发，旧会话回放与 XML 兜底照常执行）：权威清单在每一类会话里都可见之后，它们只剩重复；
+  描述仍自报「等价于 doc_list_project_files 过滤后的子集」。清单一次列全之后，模型更容易拿一个
   PDF/图片的 fileId 去调 `doc_open_file`，所以那里的拒绝文案也补了指路（PDF → pdf_inspect / pdf_*，
   其它 → extract_file_text），**别让它以为这份文件整个读不了**。
 
@@ -911,6 +930,12 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   `extract_file_text / read_file / read_document` 这类读**项目文件**的工具，而 doc_* 读的是编辑器里那一份，
   PDF/xlsx 这类还没有分页读取原语的类型只能走后半句。`OversizedToolResultRecoveryTest` 现在反射
   DocumentEditTools 的真实 @Tool 名单，核对文案点名的工具确实存在。
+  **dev-board#1065（审计 T-04）起主路是 `extract_file_text(fileId, offset)`**：id 式读取原来只有 fileId 一个参数，
+  超过 8 万字符的未打开文件后半段谁也读不到。现在 `extract_file_text` 多两个可选参数 `offset` / `maxChars`
+  （形状照抄 `office_get_text`：0 起、缺省与上限都是 `MAX_TOOL_TEXT_CHARS`），回执给 `nextStart=N` 与「还有 N 字符未读」，
+  截断文案把 `extract_file_text(fileId=…, offset=…)` 写全供模型照抄；分页与截断同一口径 `ToolFileGuard.pageToolText`
+  （从头读且读得完时原样返回同一实例、切点不切代理对、offset 越过文末回 `Error:`）。
+  两个参数都是**可选**的，所以不进 `LEGACY_DEFAULTS` 也无妨；护栏 `ExtractFileTextPagingTest`（三页拼回全文逐字相同）。
 - **文件夹上下文要走 `ProjectFileTextExtractor.extract`，不是 `FileContentExtractorService.extractText`**：
   后者的白名单（java/js/md/txt/csv…）不含 docx/xlsx/pptx/doc/pdf，恒返回空串，
   `buildFolderContext` 随后 `if (!text.isEmpty())` 把这些文件**静默跳过**——

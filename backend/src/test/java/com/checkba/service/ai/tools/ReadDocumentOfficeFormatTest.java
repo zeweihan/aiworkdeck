@@ -80,7 +80,7 @@ class ReadDocumentOfficeFormatTest {
         FileContentExtractorService extractor = new FileContentExtractorService(
                 Mockito.mock(OcrService.class), new AiContextProperties());
         DocumentTextService documentTextService = new DocumentTextService(factory);
-        return new LegalTools(fileService, null, extractor,
+        return new LegalTools(fileService, null,
                 new com.checkba.service.file.ProjectFileTextExtractor(
                         documentTextService, extractor, fileService, null, null));
     }

@@ -103,7 +103,7 @@ public final class EvalHarness {
         // 让「skill 触发 → 工具可见性裁剪」路径在回放里被真实执行
         SkillProperties skillProperties = new SkillProperties();
         skillProperties.setDir(skillsDir());
-        skillProperties.setBaseTools(List.of("read_document", "list_files", "query_memory"));
+        skillProperties.setBaseTools(List.of("extract_file_text", "list_files", "query_memory"));
         SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService, null);
         skillRegistry.init();
         // litigation-visual 的 skill.yml 声明了 enabled_by_default:false（默认关闭，需用户手动

@@ -50,36 +50,78 @@ public final class ToolFileGuard {
     public static final int MAX_TOOL_TEXT_CHARS = 80_000;
 
     /**
-     * 按 {@link #MAX_TOOL_TEXT_CHARS} 截断读取类工具的正文，并**显式告诉模型被截断了**。
+     * 按 {@link #MAX_TOOL_TEXT_CHARS} 截断读取类工具的正文，并**显式告诉模型被截断了、怎么接着读**。
      *
      * <p>为什么必须截断：工具结果原样进 {@code ToolExecutionResultMessage} 入栈，没有任何
-     * 上限。一次 {@code read_document} 读一份几 MB 的合同就能产生几十万字符的单条消息，
+     * 上限。一次读取一份几 MB 的合同就能产生几十万字符的单条消息，
      * 下一次 generate 必然被服务商以上下文超限 400 挡回。而这条超长结果落在
      * {@code RunLoopCompactor} 的 keepRecent 尾区（尾部平时刻意不剪）、中段又往往不够
      * 折叠条数，于是强制压缩缩不动、编排器判定「压不动」直接终态——同一份文档每次重试
      * 都必然再撞同一个 400，用户侧表现为「这份文件永远读不了」。
      *
-     * <p>截断说明写成模型能据以行动的一句话：告诉它还有多少、以及用哪个工具分段读。
-     *
-     * <p><b>点名的工具必须真的存在</b>：这里曾点名一个注册表里从来没有过的分段读取工具
-     * （审计 A5/B-01，全仓 5 处引用、0 处定义）——模型照着调只会拿到「Tool not found」，白烧一整个 LLM 往返，
-     * 弱模型还会据此判定「这份文档读不完」而放弃。分页读的正解是
-     * {@code doc_get_document_text(startParagraph, maxParagraphs)}，它返回的
-     * {@code nextStartParagraph} 就是下一段的起点。
-     *
-     * <p>措辞上给 {@code doc_get_document_text} 加了「已在编辑器中打开」的前提：本方法服务的是
-     * {@code extract_file_text / read_file / read_document} 这类读<b>项目文件</b>的工具，
-     * 而 doc_* 读的是编辑器里那一份。对 PDF / xlsx 之类还没有分页读取原语的类型，
-     * 剩下的那半句「先检索定位再读该段」才是它们的出路。
+     * <p>截断说明写成模型能据以行动的一句话。<b>点名的工具必须真的存在</b>：这里曾点名一个
+     * 注册表里从来没有过的分段读取工具（审计 A5/B-01），模型照着调只会拿到「Tool not found」。
+     * 续读的主路是 {@code extract_file_text(fileId, offset)}（dev-board#1065，审计 T-04）——
+     * 此前 id 式读取只有 fileId 一个参数，超过 8 万字符的未打开文件后半段谁也读不到；
+     * 文档若已在编辑器中打开，{@code doc_get_document_text(startParagraph, maxParagraphs)}
+     * 仍是按段落读的另一条路。
      */
     public static String capToolText(String fileName, String text) {
+        return capToolText(fileName, null, text);
+    }
+
+    /** 同上，知道 fileId 时把它直接写进续读指引（模型照抄即可，不必再去查 id）。 */
+    public static String capToolText(String fileName, Long fileId, String text) {
         if (text == null || text.length() <= MAX_TOOL_TEXT_CHARS) {
             return text;
         }
-        return "[文件 " + fileName + "，全文 " + text.length() + " 字符，已截断至前 "
-                + MAX_TOOL_TEXT_CHARS + " 字符。该文档若已在编辑器中打开，用 "
-                + "doc_get_document_text(startParagraph=…, maxParagraphs=…) 从上次读到的段落号继续分段读取"
-                + "（返回值里的 nextStartParagraph 就是下一段的起点）；否则先检索定位再读该段。]\n"
-                + text.substring(0, MAX_TOOL_TEXT_CHARS);
+        return pageToolText(fileName, fileId, text, 0, null);
+    }
+
+    /**
+     * 按字符分页取正文（{@code extract_file_text} 的 offset / maxChars，形状照抄 {@code office_get_text}：
+     * 起点从 0 开始，缺省一次给满 {@link #MAX_TOOL_TEXT_CHARS}，给出 nextStart 与「还有 N 字符未读」）。
+     *
+     * <p>从头读且一次读得完时<b>原样返回 text</b>（不加任何抬头），由调用方决定要不要加「[文件 X]」；
+     * 其余情况返回带抬头的那一段。起点越过文末返回 {@code Error:} 开头的一句话——
+     * 那说明模型记错了位置，不是文件出了问题。切点落在代理对中间时往前挪一位，免得切出半个字。
+     *
+     * @param offset   起始字符位置，null 或负数按 0
+     * @param maxChars 本次最多返回多少字符，null / 非正数按上限，超过上限按上限
+     */
+    public static String pageToolText(String fileName, Long fileId, String text, Integer offset, Integer maxChars) {
+        String body = text == null ? "" : text;
+        int total = body.length();
+        int start = offset == null || offset < 0 ? 0 : offset;
+        int limit = maxChars == null || maxChars <= 0 ? MAX_TOOL_TEXT_CHARS : Math.min(maxChars, MAX_TOOL_TEXT_CHARS);
+        if (start == 0 && total <= limit) {
+            return text;
+        }
+        if (start >= total) {
+            return "Error: offset=" + start + " 已超出全文长度（「" + fileName + "」全文 " + total
+                    + " 字符），前面已经读到文末，不需要再读。";
+        }
+        int end = Math.min(total, start + limit);
+        if (end < total && end > start + 1 && Character.isHighSurrogate(body.charAt(end - 1))) {
+            end--;
+        }
+        String next = "extract_file_text(fileId=" + (fileId == null ? "<它的 fileId>" : fileId)
+                + ", offset=" + end + ")";
+        StringBuilder sb = new StringBuilder("[文件 ").append(fileName).append("，全文 ").append(total).append(" 字符，");
+        if (start == 0) {
+            sb.append("已截断至前 ").append(end).append(" 字符。接着读用 ").append(next)
+                    .append("；文档若已在编辑器中打开，也可用 doc_get_document_text(startParagraph=…, maxParagraphs=…) 按段落读；"
+                            + "找某处先用 search_project_content。]\n");
+        } else {
+            sb.append("本次返回第 ").append(start).append("–").append(end).append(" 字符。]\n");
+        }
+        sb.append(body, start, end);
+        if (end < total) {
+            sb.append("\n[还有 ").append(total - end).append(" 字符未读，nextStart=").append(end)
+                    .append("：传 offset=").append(end).append(" 再调一次 extract_file_text 接着读]");
+        } else {
+            sb.append("\n[已读到文末]");
+        }
+        return sb.toString();
     }
 }

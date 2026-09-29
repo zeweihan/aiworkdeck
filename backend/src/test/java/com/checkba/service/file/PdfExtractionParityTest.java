@@ -119,7 +119,7 @@ class PdfExtractionParityTest {
             when(factory.getStorageService()).thenReturn(storage);
             DocumentTextService documentTextService = new DocumentTextService(factory);
             textExtractor = new ProjectFileTextExtractor(documentTextService, extractor, fileService, cache, null);
-            legalTools = new LegalTools(fileService, null, extractor, textExtractor);
+            legalTools = new LegalTools(fileService, null, textExtractor);
             ProjectStorageResolver resolver = mock(ProjectStorageResolver.class);
             try {
                 when(resolver.resolve(anyString())).thenReturn(onDisk);

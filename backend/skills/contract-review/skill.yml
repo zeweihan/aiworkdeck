@@ -64,7 +64,7 @@ prompt: prompt.md
 
 # 工具白名单：命中后本轮 LLM 可见工具
 #   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
-# 基础工具集只有 read_document / list_files / query_memory；审查要用的每个工具都得逐个列出，
+# 基础工具集只有 extract_file_text / list_files / query_memory；审查要用的每个工具都得逐个列出，
 # 漏了 = 模型看不见 = 不会调用（原生 function calling 下尤其如此）。
 # doc_* 与 office_* 两族同时列出：ClientCapabilityService 会按会话客户端只放行其中一族
 # （工作台 LOWA 会话见 doc_*，Word 插件会话见 office_*），这里不需要也不能替它挑。
