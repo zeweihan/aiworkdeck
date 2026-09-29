@@ -35,8 +35,11 @@
 //           "activatedAt":"<ISO8601 now>", "lastVerifiedAt":"<ISO8601 now>" }
 //         EOF
 //
-//       只要今天早于 application-desktop.yml 里的 legacy-grace-until（默认 2026-09-30），
-//       后端就是已解锁状态，顺带让 J1 的顶栏 chip 断言覆盖到「试用版 · 剩 N 天」。
+//       只要今天早于后端生效的 legacy-grace-until，后端就是已解锁状态。
+//       application-desktop.yml 里是 2026-09-30，**过了这天冷启动的隔离后端必须加
+//       -Dsecurity.license.trial-code.legacy-grace-until=2099-12-31**（常量见
+//       _lib/license-gate.mjs 的 LEGACY_GRACE_FUTURE；长驻 9696 后端则需自行处于账户模式），
+//       否则播了票据也是 unlocked:false。宽限态同时顺带让 J1 的顶栏 chip 断言覆盖到「试用版 · 剩 N 天」。
 //       **不要改用 -Dsecurity.license.trial-code.enabled=true 来解锁**——那会让 J1
 //       走回旧分支，发版默认值反而没人测。
 // 自包含：local-mode 免登（任何请求都解析为本机用户，qa_bot 注册已随登录一起
