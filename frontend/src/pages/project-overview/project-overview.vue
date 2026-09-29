@@ -1246,6 +1246,7 @@
                       :show-on-startup="showWelcomeOnStartup"
                       @new-project="onWelcomeNewProject"
                       @open-folder="onWelcomeOpenFolder"
+                      @open-file="onWelcomeOpenFile"
                       @open-url="openBrowserTab($event)"
                       @open-projects-pane="openProjectsPane"
                       @update:show-on-startup="setShowWelcomeOnStartup"
@@ -1464,6 +1465,7 @@
                       :show-on-startup="showWelcomeOnStartup"
                       @new-project="onWelcomeNewProject"
                       @open-folder="onWelcomeOpenFolder"
+                      @open-file="onWelcomeOpenFile"
                       @open-url="openBrowserTab($event)"
                       @open-projects-pane="openProjectsPane"
                       @update:show-on-startup="setShowWelcomeOnStartup"
@@ -5903,14 +5905,18 @@ export default {
       }
       this.toggleLeftPane('projects')
     },
-    // 欢迎标签 Start 的「新建项目文件夹 / 打开已有文件夹」：与菜单「文件」同一条命令
-    // （config/commands/file.js 的 file.newProject / file.openFolder），先把编辑器落盘——
-    // 两条命令都会 reLaunch 走，有项目态下从「帮助 → 欢迎」点进来时正开着文档。
+    // 欢迎标签 Start 的「新建项目文件夹 / 打开已有文件夹 / 打开文件」：与菜单「文件」同一条命令
+    // （config/commands/file.js 的 file.newProject / file.openFolder / file.openFile），先把编辑器落盘——
+    // 这几条命令都会 reLaunch 走，有项目态下从「帮助 → 欢迎」点进来时正开着文档。
     async onWelcomeNewProject() {
       await this.runWelcomeCommand('file.newProject')
     },
     async onWelcomeOpenFolder() {
       await this.runWelcomeCommand('file.openFolder')
+    },
+    // 「打开文件…」：以所在文件夹入项目并打开该文件（file.openFile → ideOpen.openFileFlow，dev-board#1059）
+    async onWelcomeOpenFile() {
+      await this.runWelcomeCommand('file.openFile')
     },
     async runWelcomeCommand(commandId) {
       if (!(await this.flushBeforeLeaving())) return

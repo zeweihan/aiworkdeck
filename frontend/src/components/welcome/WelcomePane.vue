@@ -45,6 +45,13 @@
                 </svg>
                 <text class="welcome-action-text">{{ $t('account.openFolderTitle') }}</text>
               </view>
+              <!-- 打开文件：以所在文件夹入项目并打开该文件（同菜单「文件 > 打开文件…」file.openFile，dev-board#1059） -->
+              <view v-if="isDesktopFs" class="welcome-action" data-action="open-file" @tap="$emit('open-file')">
+                <svg class="welcome-action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <text class="welcome-action-text">{{ $t('welcome.openFile') }}</text>
+              </view>
               <view class="welcome-action" data-action="pull-case" @tap="showCloudAccept = true">
                 <svg class="welcome-action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in ICONS.download" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -177,7 +184,7 @@ export default {
     /** 「启动时显示欢迎页」当前值（本机记忆由宿主持有） */
     showOnStartup: { type: Boolean, default: true },
   },
-  emits: ['new-project', 'open-folder', 'open-url', 'open-projects-pane', 'update:show-on-startup'],
+  emits: ['new-project', 'open-folder', 'open-file', 'open-url', 'open-projects-pane', 'update:show-on-startup'],
   data() {
     return {
       recentProjects: [],

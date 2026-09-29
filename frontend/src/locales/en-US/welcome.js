@@ -7,6 +7,7 @@ export default {
   start: 'Start',
   recent: 'Recent',
   guides: 'Walkthroughs',
+  openFile: 'Open File…',
   connectTeamServer: 'Connect to a team server',
   enterWithAccessCode: 'Open a matter with an access code (client)',
   more: 'More…',

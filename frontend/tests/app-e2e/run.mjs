@@ -503,7 +503,7 @@ try {
   const aiNeedsLogin = aiProvider0 === 'AWD_CLOUD' && !accountConnected0
 
   // J1 用一个独立页面跑：它的桌面桩多带一个 fs.showOpenDialog，欢迎页 Start 区才会渲染
-  // 桌面版的五项（isDesktopFs 判据是「有没有系统文件夹对话框」）。主页面的最小桩刻意不带 fs——
+  // 桌面版的六项（isDesktopFs 判据是「有没有系统文件夹对话框」）。主页面的最小桩刻意不带 fs——
   // 后面 J3 的「浏览器降级下新建卡恰好 1 张」断言依赖它。这一页只看不点 Start 项，
   // showOpenDialog 不会被调用。
   const j1Page = await browser.newPage()
@@ -565,7 +565,7 @@ try {
       await j1Page.waitForSelector('.welcome-pane .welcome-hero', { timeout: 15000 })
     })
 
-    await step('Start 五项齐全且顺序对', async () => {
+    await step('Start 六项齐全且顺序对', async () => {
       await j1Page.waitForSelector('.welcome-start .welcome-action', { timeout: 15000 })
       const items = await j1Page.$$eval('.welcome-start .welcome-action', (els) => els
         .filter((e) => e.offsetParent !== null)
@@ -573,11 +573,12 @@ try {
       const want = [
         ['new-project', '新建项目文件夹'],
         ['open-folder', '文件夹'],
+        ['open-file', '打开文件'],
         ['pull-case', '从团队案件库取一份案卷'],
         ['connect-team', '连接团队服务器'],
         ['access-code', '凭访问码进入案卷'],
       ]
-      if (items.length !== want.length) throw new Error('Start 应当恰好五项，实际: ' + JSON.stringify(items))
+      if (items.length !== want.length) throw new Error('Start 应当恰好六项，实际: ' + JSON.stringify(items))
       want.forEach(([action, text], i) => {
         if (items[i].action !== action) throw new Error('Start 第 ' + (i + 1) + ' 项应为 ' + action + '，实际: ' + JSON.stringify(items))
         if (!items[i].text.includes(text)) throw new Error('Start 第 ' + (i + 1) + ' 项文案应含「' + text + '」，实际: ' + items[i].text)
@@ -585,6 +586,8 @@ try {
       // 第 2 项的文案口径：规格 §6 写「打开已有文件夹」，实现复用 account.openFolderTitle（「打开文件夹…」）。
       // 两种都认，但必须是「打开…文件夹」，别漂成「打开文件」。
       if (!/^打开.*文件夹/.test(items[1].text)) throw new Error('Start 第 2 项不是「打开…文件夹」: ' + items[1].text)
+      // 第 3 项「打开文件…」（dev-board#1059，同菜单 file.openFile），别漂成「打开…文件夹」
+      if (/文件夹/.test(items[2].text)) throw new Error('Start 第 3 项应为「打开文件…」: ' + items[2].text)
     })
 
     await step('Recent 区存在，列出本次建的 QA 项目', async () => {

@@ -947,10 +947,10 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   形制同 `admin-settings`。`'welcome'` 在 `fileKind.js` 的 `NON_FILE_TAB_TYPES` 里，id 非数字——`isContextEligibleTab` 恒 false，
   不当活跃文档、不能拖进 AI 上下文；标签图标 `GLYPHS.welcome`。左右两条 `v-else-if` 渲染链各一份。
 - 结构：品牌标题 / tagline / lead（取 `onboarding.unlock.brand.*`，即 `design/copy/brand-copy.json` 的逐字副本，不自创）→
-  **开始**（新建项目文件夹 / 打开已有文件夹 / 从团队案件库取一份案卷 / 连接团队服务器 / 凭访问码进入案卷）→
+  **开始**（新建项目文件夹 / 打开已有文件夹 / 打开文件…（以所在文件夹入项目并打开该文件，同菜单 `file.openFile`；与打开文件夹同受 `isDesktopFs` 门槛，dev-board#1059）/ 从团队案件库取一份案卷 / 连接团队服务器 / 凭访问码进入案卷）→
   **最近**（最多 8 条，最近打开优先、不足按最近活动补齐，规则在 `components/welcome/welcomeRecent.js`；「更多…」开左栏「项目」面板）→
   **上手指南**三张卡（官网 `/start`、`/showcase`、`/plugins`，在工作台内置浏览器标签里开）→ 底部「启动时显示欢迎页」+ 匿名统计提示。
-- 动作归宿：新建 / 打开文件夹先 `flushBeforeLeaving()` 再 `runCommandById('file.newProject' | 'file.openFolder')`（与菜单「文件」同一条命令）；
+- 动作归宿：新建 / 打开文件夹 / 打开文件先 `flushBeforeLeaving()` 再 `runCommandById('file.newProject' | 'file.openFolder' | 'file.openFile')`（与菜单「文件」同一条命令）；
   取案卷是同一个 `CloudAcceptDialog`；连接团队服务器 = `openSettingsTab({ nav: 'team' })`；访问码 = `components/account/ClientAccessCodeForm.vue`
   （与登录页「客户」tab 共用，按 `mode` 分两形态）。`mode="login"`（登录页、浏览器端欢迎标签）：api.js 的 `clientLogin`，
   打的就是页面所在的服务器，成功后 CLIENT 进 `?id=<projectId>`。`mode="portal"`（桌面端欢迎标签，**dev-board#1050 定稿契约**）：
