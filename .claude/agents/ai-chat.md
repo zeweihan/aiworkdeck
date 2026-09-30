@@ -944,6 +944,8 @@ ChatInterface.handleSubmit（~:927）→ useAgentStream.sendMessage（确保 SSE
 
 ## SSE 事件名清单
 
+**account_action_required**：付费工具或异步 PPT 任务需要登录/充值的非终态通知，JSON 包含 `code`、`message` 与 `reason`，并带 `kind` 或 `gatewayKind`。前端打开相应弹框，不据此结束聊天流；模型自身的账户失败仍走终态 `error`。
+
 connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的 reasoning 增量，`{"content":"…"}`，只进思考卡、不进正文；随消息落 `reasoning` 列，state_recovery 的 `events` 里按序带着它，重连/切回后原样重放，见「思考记录的持久化与断线恢复」）/ artifact / token_usage / bubble_end（status: finished|paused|awaiting_approval|awaiting_input；外加 **documentEdited**，见下）/ error / cancelled / **file_change**（见下）/ client_action / title_update / doc_stream_data（旧名 wps_stream_data 已于 dev-board#816 摘除，出站单名）/ doc_stream_end（编辑器流式写入收尾，前端据此落盘并报失败）/ state_recovery（断线重连快照）/ run_state / plan_update / **skill_update** / background_task_start / background_task_complete / task_progress / heartbeat / subtask_progress / **pass_progress**（整篇分段过卷进度，dev-board#422）/ **context_notice**（附件降级/截断/丢弃 + 上下文超窗，见下）/ inbox_updated / input_applied / **superseded**（本连接已被同会话的另一个客户端实例接管，见下）/ **provider_retry**（首字节前只收到保活、后端已换一家供应商重发，`{"from":"<供应商显示名或 unknown>"}`，只驱动思考卡副文案，dev-board#1061）/ **ask_user**（ask_user 工具的结构化提问，带版本号 `v`，紧跟在同一问题的 `<question kind="ask_user">` 标记之后、`bubble_end status=awaiting_input` 之前，见上文「向用户提问 ask_user 工具」）。前端分派均在 useAgentStream.handleEvent。超限 paused 契约见 PR#172。
 
 **`error` 事件有两种载荷**（2026-09-29，dev-board#1046 登录后置）：编排器捕获 `AccountException` 的两处
