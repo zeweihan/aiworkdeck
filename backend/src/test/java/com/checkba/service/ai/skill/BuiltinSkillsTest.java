@@ -97,6 +97,17 @@ class BuiltinSkillsTest {
         assertTrue(skill.getPromptTemplateEn().contains("Distinguish future contractual obligations"));
     }
 
+    @Test
+    void contractReviewLimitsVerbatimCopiesToTheMatchedRange() {
+        var skill = registry.getSkill("contract-review").orElseThrow();
+        assertTrue(skill.getPromptTemplate().contains("只覆盖 matches[].text"));
+        assertTrue(skill.getPromptTemplate().contains("被替换范围内"));
+        assertTrue(skill.getPromptTemplate().contains("doc_modify_paragraph"));
+        assertTrue(skill.getPromptTemplateEn().contains("covers only matches[].text"));
+        assertTrue(skill.getPromptTemplateEn().contains("within the replacement range"));
+        assertTrue(skill.getPromptTemplateEn().contains("doc_modify_paragraph"));
+    }
+
     @BeforeAll
     static void setUp() {
         SkillProperties props = new SkillProperties();

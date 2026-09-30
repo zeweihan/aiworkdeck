@@ -319,16 +319,16 @@ public class XmlToolCallParser {
             java.lang.reflect.Parameter[] params = tool.get().method().getParameters();
             for (java.lang.reflect.Parameter p : params) {
                 String paramName = p.getName();
-                String value = extractStringArg(code, paramName);
-                if (value.isEmpty()) {
+                String value = extractNullableStringArg(code, paramName);
+                if (value == null) {
                     for (String alias : ToolRegistry.aliasesFor(paramName)) {
-                        value = extractStringArg(code, alias);
-                        if (!value.isEmpty()) {
+                        value = extractNullableStringArg(code, alias);
+                        if (value != null) {
                             break;
                         }
                     }
                 }
-                if (!value.isEmpty()) {
+                if (value != null) {
                     args.set(paramName, value);
                 }
             }
@@ -580,6 +580,12 @@ public class XmlToolCallParser {
      * 处理顺序：ctrl46 定界符 → 三引号 → 单/双引号（含转义）→ 无引号值。
      */
     String extractStringArg(String code, String key) {
+        String value = extractNullableStringArg(code, key);
+        return value != null ? value : "";
+    }
+
+    /** null 表示未提供参数；显式空串仍是有效值（例如 replaceText="" 表示删除）。 */
+    private String extractNullableStringArg(String code, String key) {
         try {
             // <ctrl46> 定界符格式：key:<ctrl46>value<ctrl46> 或 key=<ctrl46>value<ctrl46>
             String ctrlDelimiter = "<ctrl46>";
@@ -650,12 +656,12 @@ public class XmlToolCallParser {
                         }
                     }
                 }
-                return "";
+                return null;
             }
 
             int valueStart = keyStart + key.length() + 2;
             if (valueStart >= code.length()) {
-                return "";
+                return null;
             }
             StringBuilder value = new StringBuilder();
             boolean escaped = false;
@@ -679,7 +685,7 @@ public class XmlToolCallParser {
         } catch (Exception e) {
             log.warn("Failed to extract arg {} from code {}", key,
                     code.length() > 200 ? code.substring(0, 200) + "..." : code);
-            return "";
+            return null;
         }
     }
 

@@ -132,3 +132,110 @@ test('重载失败时保存闸照旧落下（不因为多了一步藏 chrome 而
   assert.equal(host.docLoadFailed, true)
   assert.equal(host.statusKey, 'reloadFailed')
 })
+
+
+test('checkpoint prepare drains an already uploading save before acknowledging and blocks new saves', async () => {
+  const { host } = editorHost()
+  let finishUpload, uploadStarted
+  const started = new Promise(resolve => { uploadStarted = resolve })
+  host.executor = { executeCommand: async () => ({ success: true, bytes: new Uint8Array([1, 2, 3]) }) }
+  host.stampGeneratorMetadata = async bytes => bytes
+  host.uploadBytes = async () => { uploadStarted(); await new Promise(resolve => { finishUpload = resolve }) }
+  host.scheduleProvenanceReload = () => {}
+  host.dirty = true
+  const saving = host.saveDocument()
+  await started
+  let acknowledged = false
+  const prepare = host.prepareCheckpointRestore().then(ok => { acknowledged = true; return ok })
+  assert.equal(host._reloading, true)
+  assert.equal(host.dirty, false)
+  assert.equal(await host.saveDocument(), false, 'another autosave cannot start')
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(acknowledged, false, 'the backend must not overwrite storage while the old upload is in flight')
+  finishUpload()
+  assert.equal(await saving, true)
+  assert.equal(await prepare, true)
+  assert.equal(host._reloading, true, 'save lock remains until the checkpoint is loaded')
+  assert.equal(await host.reloadFromBackend(), true)
+  assert.equal(host._reloading, false)
+})
+
+test('failed checkpoint restore blocks old-model autosave until a real reload succeeds', async () => {
+  const { host } = editorHost()
+  assert.equal(await host.prepareCheckpointRestore(), true)
+  host.failCheckpointRestore()
+  assert.equal(host.docLoadFailed, true)
+  assert.equal(await host.saveDocument(), false)
+  assert.equal(await host.reloadFromBackend(), true)
+  assert.equal(host.docLoadFailed, false)
+})
+
+
+test('late checkpoint load cannot clear a newer restore save barrier or failure state', async () => {
+  const { host } = editorHost()
+  let finish
+  host.loadDocument = () => new Promise(resolve => { finish = resolve })
+  assert.equal(await host.prepareCheckpointRestore('old'), true)
+  const old = host.reloadFromBackend('old')
+  host.failCheckpointRestore('old')
+  host.docLoadFailed = false // user has retried the failed document
+  assert.equal(await host.prepareCheckpointRestore('new'), true)
+  host.docLoadFailed = true
+  finish(true)
+  assert.equal(await old, false)
+  assert.equal(host._checkpointRestoreId, 'new')
+  assert.equal(host._reloading, true)
+  assert.equal(host.docLoadFailed, true)
+})
+
+test('checkpoint prepare refuses to overlap an existing reload or load command', async () => {
+  for (const busy of [{ _reloading: true }, { _loadInFlight: {} }]) {
+    const { host } = editorHost()
+    Object.assign(host, busy)
+    assert.equal(await host.prepareCheckpointRestore('new'), false)
+    assert.equal(host._checkpointRestoreId, undefined, 'do not take ownership of another load')
+  }
+})
+
+test('an in-flight upload failure cannot be acknowledged as safe to overwrite storage', async () => {
+  const { host } = editorHost()
+  let rejectUpload, uploadStarted
+  const started = new Promise(resolve => { uploadStarted = resolve })
+  host.executor = { executeCommand: async () => ({ success: true, bytes: new Uint8Array([1]) }) }
+  host.stampGeneratorMetadata = async bytes => bytes
+  host.uploadBytes = async () => { uploadStarted(); await new Promise((_, reject) => { rejectUpload = reject }) }
+  const save = host.saveDocument()
+  await started
+  const prepare = host.prepareCheckpointRestore('restore')
+  rejectUpload(new Error('network timeout: server write outcome unknown'))
+  assert.equal(await save, false)
+  assert.equal(host.statusKey, 'saveFailed')
+  assert.equal(await prepare, false, 'saving=false does not establish that an old server upload stopped')
+})
+
+test('a same-file replacement instance without the old token is blocked after failed checkpoint reload', async () => {
+  const old = editorHost().host, fresh = editorHost().host
+  old.file.id = 50; fresh.file.id = 50
+  const replies = []
+  const actionSource = readFileSync(new URL('../../src/pages/project-overview/agentClientActions.js', import.meta.url), 'utf8')
+    .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '').replace(/^export\s+/gm, '')
+  const methods = new Function('sendEditorResult', actionSource + '; return agentClientActionMethods')(
+    async (...args) => { replies.push(args) })
+  const page = Object.assign({ _libreRefs: { old }, activeFileIdLeft: 50, activeFileIdRight: null }, methods)
+  const run = phase => page.handleEditorCommand({ action: 'doc_checkpoint_restore', conversationId: 'conv',
+    requestId: phase, params: { fileId: 50, restoreId: 'old', phase } })
+  await run('prepare')
+  assert.equal(replies.at(-1)[2], true)
+  page._libreRefs = { fresh }
+  await run('reload')
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(old.docLoadFailed, true)
+  assert.equal(fresh.docLoadFailed, true, 'the new unprepared model must not overwrite restored storage')
+  assert.equal(await fresh.saveDocument(), false)
+
+  const newer = editorHost().host
+  assert.equal(await newer.prepareCheckpointRestore('new'), true)
+  newer.failCheckpointRestore('old')
+  assert.equal(newer.docLoadFailed, false, 'an actual newer token still owns its own save barrier')
+  assert.equal(newer._checkpointRestoreId, 'new')
+})

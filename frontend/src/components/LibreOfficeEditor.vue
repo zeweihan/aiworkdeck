@@ -1601,7 +1601,50 @@ export default {
     // 换文档前必须先停掉自动保存：取消定时器 + 清脏 + 等在途保存结束。否则旧
     // 内容的 export 还排在队里，换完文档照样把旧字节传上去。重载语义就是丢弃
     // 编辑器内的本地改动（后端内容是权威），所以清脏不需要征询。
-    async reloadFromBackend() {
+    // Checkpoint restore pauses saves BEFORE the backend overwrites storage. Waiting
+    // only after that overwrite cannot stop an already-uploading old document.
+    async prepareCheckpointRestore(restoreId) {
+      if (!this.file || !this.executor || !this.ready || this.docLoadFailed || this._reloading || this._loadInFlight) return false
+      const fileId = this.file.id, executor = this.executor
+      this._checkpointRestoreId = restoreId
+      this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      this._reloading = true
+      clearTimeout(this._saveTimer)
+      this._saveTimer = null
+      this.dirty = false
+      this._dirtySince = 0
+      const deadline = Date.now() + 100000
+      while (this.saving && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
+      if (this._checkpointRestoreId !== restoreId || this.saving) return false
+      // A timed-out upload may still be writing server-side. Do not overwrite
+      // storage on the strength of saving=false after an uncertain result.
+      if (this.statusKey === 'saveFailed' || this.statusKey === 'movedSaveFailed') return false
+      if (!this.ready || this.executor !== executor || !this.file || String(this.file.id) !== String(fileId)) {
+        this._reloading = false
+        return false
+      }
+      this.dirty = false
+      this._dirtySince = 0
+      return true
+    },
+    failCheckpointRestore(restoreId) {
+      if (restoreId && this._checkpointRestoreId && this._checkpointRestoreId !== restoreId) return
+      this._checkpointRestoreId = null
+      this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      // Storage may already hold the checkpoint. Never autosave this old model
+      // over it after a failed/abandoned reload; the normal retry can reload it.
+      this.docLoadFailed = true
+      this.statusKey = 'reloadFailed'
+      this._loadGenAtFailure = this._loadGen
+      this._reloading = false
+      clearTimeout(this._saveTimer)
+      this._saveTimer = null
+      this.dirty = false
+    },
+    async reloadFromBackend(checkpointRestoreId) {
+      const restoreOwner = checkpointRestoreId || null
+      const ownsReload = () => (this._checkpointRestoreId || null) === restoreOwner
+      if (!ownsReload()) return false
       if (!this.file || !this.executor || !this.ready) {
         // 引擎还在启动（含备胎刚过继、只读预览接力正显示着 docx-preview 的那段）：
         // worker 里根本还没有文档可换，但 _bytesPromise 里预取的正是退回前的旧字节，
@@ -1636,6 +1679,7 @@ export default {
       // 在途 export/upload 期间不能换文档（export 读的是 worker 当前文档）——
       // 等它结束，其间新来的 modify 同样丢弃。
       while (this.saving) await new Promise((r) => setTimeout(r, 100))
+      if (!ownsReload()) return false
       cancelAutoSave()
       // 预取到的是改前的字节，必须重新下载。
       this._bytesPromise = null
@@ -1645,6 +1689,7 @@ export default {
       this.statusKey = 'reloading'
       try {
         const loaded = await this.loadDocument()
+        if (!ownsReload()) return false
         if (!loaded) throw new Error('后端返回 0 字节，未替换编辑器内文档')
         // load_document 的 retarget 重装了 modify listener 并重置 RecordChanges，
         // 换完再清一次脏（retarget 里设 RecordChanges 会触发一次 modified）。
@@ -1659,10 +1704,12 @@ export default {
         if (toolbar && typeof toolbar.reapplyChrome === 'function') {
           try { await toolbar.reapplyChrome() } catch (e) { this.appendLog('reapply chrome failed: ' + e) }
         }
+        if (!ownsReload()) return false
         this.statusKey = prevStatusKey.endsWith('Failed') ? 'ready' : prevStatusKey
         this.appendLog('reload: 已就地换成后端最新内容')
         return true
       } catch (e) {
+        if (!ownsReload()) return false
         // 换文档失败 = 画布上仍是改前内容。保存闸必须落下，否则下一次 autosave
         // 会用旧内容覆盖后端刚改好的文件。
         this.docLoadFailed = true
@@ -1671,12 +1718,17 @@ export default {
         this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
-        this._reloading = false
-        this.initWritingAssistance()
-        // 换进来的是另一个版本的文档，锚点要重新结账
-        this.scheduleAnchorCheck()
-        // 溯源同理：画布上已经是另一版了，旧的段落归属一条都不作数
-        this.loadProvenance()
+        // An old load may finish after abort + a newer prepare. It must not
+        // clear the new save barrier or reactivate assistance against old text.
+        if (ownsReload()) {
+          this._checkpointRestoreId = null
+          this._reloading = false
+          this.initWritingAssistance()
+          // 换进来的是另一个版本的文档，锚点要重新结账
+          this.scheduleAnchorCheck()
+          // 溯源同理：画布上已经是另一版了，旧的段落归属一条都不作数
+          this.loadProvenance()
+        }
       }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,

@@ -29,17 +29,26 @@ try {
     zip.file('word/document.xml', `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`)
     return Array.from(await zip.generateAsync({ type: 'uint8array' }))
   }
-  for (const [original, replacement] of [
+  for (const [original, replacement, keyword = original, newText = replacement] of [
     ['云杉项目法律意见书（草稿）', '云杉项目法律意见书'],
     ['股权转让价款为人民币100万元。', '股权转让价款为人民币126万元。'],
+    ['背景说明。'.repeat(60) + '付款尚未完成，尚余104万元。',
+      '背景说明。'.repeat(60) + '付款尚未完成，尚余84万元。', '尚余104万元', '尚余84万元'],
   ]) {
     await ok('load_document', { name: 'first-agent-edit.docx', bytes: await fixture(original) })
     assert.equal((await ok('set_revision_view', {})).mode, 'all')
     assert.equal((await ok('list_revisions', { limit: 100 })).count, 0, 'the first edit must start without any tracked changes')
-    const found = await ok('find_text_locations', { keyword: original, __agent: true })
+    const found = await ok('find_text_locations', { keyword, __agent: true })
     assert.equal(found.count, 1)
-    const edited = await ok('replace_at_position', { anchor: found.matches[0].anchorId, newText: replacement, __agent: true })
-    assert.equal(edited.paragraphAfterEdit, replacement, 'the immediate first-write result must exclude deleted text')
+    assert.equal(found.matches[0].paragraphLength, original.length)
+    assert.equal(found.matches[0].paragraphTruncated, original.length > 160)
+    assert.equal(found.matches[0].paragraph, original.slice(0, 160))
+    const edited = await ok('replace_at_position', { anchor: found.matches[0].anchorId, newText, __agent: true })
+    assert.equal(edited.paragraphAfterEdit, replacement.slice(0, 200), 'the first-write excerpt must exclude deleted text')
+    assert.equal(edited.paragraphAfterEditLength, replacement.length)
+    assert.equal(edited.paragraphAfterEditTruncated, replacement.length > 200)
+    assert.equal((await ok('get_paragraph', { index: 0, __agent: true })).text, replacement,
+      'full paragraph read verifies changes beyond the excerpt boundary')
     assert.equal((await ok('set_revision_view', {})).mode, 'all', 'restore the user display mode')
     const changes = await ok('list_revisions', { limit: 100 })
     assert.ok(changes.count > 0, 'retaining changes is required, accepting them is not a fix')
@@ -73,7 +82,7 @@ try {
     assert.equal((await ok('get_document_text', { __agent: true })).paragraphs[0].text, replacement, 'final text survives export/reload')
     assert.equal((await ok('list_revisions', { limit: 100 })).count, changes.count, 'tracked changes survive export/reload')
     assert.equal((await ok('set_revision_view', {})).mode, 'all')
-    console.log('PASS first edit + final-text receipt + user undo/redo + revisions + export/reload: ' + original)
+    console.log('PASS first edit + final-text receipt + user undo/redo + revisions + export/reload: ' + original.slice(0, 35))
   }
 } finally {
   await browser.close()

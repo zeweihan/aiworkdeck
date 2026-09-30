@@ -459,7 +459,7 @@ export const agentClientActionMethods = {
      * - **版本退回**（true）：律师刚亲手点了「退回到这一版」，他要的就是回到过去。
      *   正在显示的那个实例必须就地换文档，在途的未保存输入被丢弃是语义本身；
      *   不换的话下一次 autosave 会把「旧内容 + 新编辑」写回，把退回冲掉（真机复现过）。
-     * - **AI 改文件 / 检查点恢复**（默认 false）：律师此刻可能正在这份文档里打字，
+     * - **普通 AI 后端改文件**（默认 false）：律师此刻可能正在这份文档里打字，
      *   静默强刷等于替他丢弃未保存内容还弹一句「文件已更新」。只逐非活动的保活
      *   实例（下次激活自然重挂载拉新字节），当前画面不动。
      *
@@ -533,7 +533,7 @@ export const agentClientActionMethods = {
                 // pane 列表对它毫无作用，画布上还是改前的内容。律师接着编辑，
                 // autosave 就会把「旧内容 + 新编辑」写回去，把版本退回冲掉。所以
                 // 退回路径显式命令活动实例就地重载（换文档前它自己会取消在飞的
-                // 自动保存并清脏，见 reloadFromBackend）。AI/检查点路径不做这件事，
+                // 自动保存并清脏，见 reloadFromBackend）。普通 AI 后端改文件路径不做这件事，
                 // 理由见方法头 opts.forceActive 的注释。
                 if (forceActive) {
                     reloadOk = await this.reloadActiveLibreInstances(file.id)
@@ -625,7 +625,73 @@ export const agentClientActionMethods = {
             { error: msg, code: 'EDITOR_LOAD_FAILED', retryable: false }, msg)
         return true
     },
+    // Dedicated, acknowledged checkpoint protocol. Ordinary backend reload events
+    // keep their existing protection for the user's active unsaved document.
+    async handleCheckpointRestore(action) {
+        const { requestId, conversationId, params = {} } = action
+        const { fileId, restoreId, phase } = params
+        const pending = this._checkpointRestores || (this._checkpointRestores = new Map())
+        let entry = pending.get(String(fileId))
+        try {
+            if (!fileId || !restoreId) throw new Error('检查点恢复缺少文件或操作标识')
+            if (phase === 'prepare') {
+                if (entry) throw new Error('该文档已有检查点恢复进行中')
+                const instances = [...new Set(Object.values(this._libreRefs || {}).filter(inst =>
+                    inst && inst.file && String(inst.file.id) === String(fileId)))]
+                const active = [this.activeFileIdLeft, this.activeFileIdRight].some(id => String(id) === String(fileId))
+                if (active && !instances.length) throw new Error('目标编辑器尚未就绪，未恢复快照')
+                entry = { restoreId, instances }
+                pending.set(String(fileId), entry)
+                for (const inst of instances) {
+                    if (typeof inst.prepareCheckpointRestore !== 'function' || !await inst.prepareCheckpointRestore(restoreId)) {
+                        throw new Error('无法暂停目标文档的保存，未恢复快照')
+                    }
+                    if (pending.get(String(fileId)) !== entry) throw new Error('检查点恢复已被取消或取代')
+                }
+            } else {
+                if (!entry || entry.restoreId !== restoreId) throw new Error('检查点恢复状态已变化，请重新发起恢复')
+                if (phase === 'reload') {
+                    const current = Object.values(this._libreRefs || {}).filter(inst =>
+                        inst && inst.file && String(inst.file.id) === String(fileId))
+                    if (current.some(inst => !entry.instances.includes(inst))) {
+                        throw new Error('恢复期间目标编辑器已变化，请重新打开文档核对')
+                    }
+                    for (const inst of entry.instances) {
+                        if (!current.includes(inst) || !inst.ready || !inst.executor ||
+                            !await inst.reloadFromBackend(restoreId) || pending.get(String(fileId)) !== entry || !inst.executor ||
+                            !Object.values(this._libreRefs || {}).includes(inst)) {
+                            throw new Error('快照已写回，但编辑器重载失败，请停止编辑并重新打开文档')
+                        }
+                    }
+                } else if (phase === 'abort') {
+                    for (const inst of entry.instances) {
+                        if (inst.file && String(inst.file.id) === String(fileId)) inst.failCheckpointRestore(restoreId)
+                    }
+                } else throw new Error('未知检查点恢复阶段')
+                if (pending.get(String(fileId)) !== entry) throw new Error('检查点恢复已被取消或取代')
+                pending.delete(String(fileId))
+            }
+            await sendEditorResult(conversationId, requestId, true, { success: true, fileId, phase }, null)
+        } catch (error) {
+            if (entry && entry.restoreId === restoreId && pending.get(String(fileId)) === entry) {
+                const targets = new Set([...entry.instances, ...Object.values(this._libreRefs || {}).filter(inst =>
+                    inst && inst.file && String(inst.file.id) === String(fileId))])
+                for (const inst of targets) {
+                    if (inst.file && String(inst.file.id) === String(fileId) && typeof inst.failCheckpointRestore === 'function') inst.failCheckpointRestore(restoreId)
+                }
+                pending.delete(String(fileId))
+            }
+            await sendEditorResult(conversationId, requestId, false, null, error.message || String(error))
+        }
+    },
     async handleEditorCommand(action) {
+        if (action.action === 'doc_checkpoint_restore') return this.handleCheckpointRestore(action)
+        const currentFileId = typeof this.resolveLibreExecutorFileId === 'function'
+            ? this.resolveLibreExecutorFileId(this.libreOfficeExecutor) : null
+        if (this._checkpointRestores?.has(String(currentFileId))) {
+            await sendEditorResult(action.conversationId, action.requestId, false, null, '检查点正在恢复，这一步未执行，请等待恢复完成')
+            return
+        }
         console.log('[ProjectOverview] ========== Editor Command Start ==========')
         console.log('[ProjectOverview] Editor Command:', JSON.stringify(action))
 

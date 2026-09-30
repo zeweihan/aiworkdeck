@@ -84,6 +84,25 @@ class XmlToolCallParserTest {
     }
 
     @Test
+    void preservesExplicitEmptyNamedArgumentAndDoesNotInventMissingArgument() {
+        for (String empty : List.of("\"\"", "''", "\"\"\"\"\"\"", "<ctrl46><ctrl46>")) {
+            var call = single("<tool_code>doc_find_replace(findText=\"草稿\",replaceText="
+                    + empty + ",replaceAll=false)</tool_code>");
+            var args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+            assertTrue(args.containsKey("replaceText"), call.argsJson());
+            assertEquals("", args.getStr("replaceText"));
+        }
+        var missing = single("<tool_code>doc_find_replace(findText=\"草稿\",replaceAll=false)</tool_code>");
+        assertFalse(cn.hutool.json.JSONUtil.parseObj(missing.argsJson()).containsKey("replaceText"));
+    }
+
+    @Test
+    void emptyCanonicalNamedArgumentTakesPrecedenceOverAlias() {
+        var call = single("<tool_code>write_docx(fileName=\"x.docx\",markdownContent=\"\",content=\"不要替代\")</tool_code>");
+        assertEquals("", cn.hutool.json.JSONUtil.parseObj(call.argsJson()).getStr("markdownContent"));
+    }
+
+    @Test
     @DisplayName("run_python：多行代码含其他工具名不被误匹配")
     void parsesMultilinePython() {
         String content = "<tool_code>run_python(code='import pandas\\n# search_web(query=\"x\") 是注释\\nprint(1)')</tool_code>";

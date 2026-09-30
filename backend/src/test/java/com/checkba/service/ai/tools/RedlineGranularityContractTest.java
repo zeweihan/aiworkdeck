@@ -4,6 +4,7 @@
 package com.checkba.service.ai.tools;
 
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.agent.tool.P;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -59,6 +60,46 @@ class RedlineGranularityContractTest {
         String en = readResource("prompts/tools-lowa.en.md");
         assertTrue(zh.contains("逐字照抄"), "tools-lowa.md 修订颗粒度条目缺「逐字照抄」约束");
         assertTrue(en.contains("verbatim"), "tools-lowa.en.md revision-granularity note lacks the verbatim-copy constraint");
+    }
+
+    @Test
+    @DisplayName("锚点范围是匹配文本，不能把段落上下文回填为替换文本（dev-board#1085）")
+    void anchorToolDescriptionsSeparateMatchRangeFromParagraphContext() throws Exception {
+        for (String tool : List.of("doc_find_text", "doc_replace_at_anchor")) {
+            String description = toolDescription(tool);
+            assertTrue(description.contains("matches[].text"), description);
+            assertTrue(description.contains("paragraph") && description.contains("仅供定位"), description);
+        }
+        String replacement = toolDescription("doc_replace_at_anchor");
+        assertTrue(replacement.contains("doc_modify_paragraph"), "整段重写必须指向范围匹配的工具");
+        var method = DocumentEditTools.class.getMethod("doc_replace_at_anchor", String.class, String.class);
+        String parameter = method.getParameters()[1].getAnnotation(P.class).value();
+        assertTrue(parameter.contains("仅替换") && parameter.contains("matches[].text"), parameter);
+        assertTrue(parameter.contains("周边文字"), parameter);
+    }
+
+    @Test
+    void lowaPromptsDefineReplacementScopeInBothLanguages() throws Exception {
+        String zh = readResource("prompts/tools-lowa.md");
+        String en = readResource("prompts/tools-lowa.en.md");
+        assertTrue(zh.contains("只覆盖 matches[].text") && zh.contains("仅供定位"));
+        assertTrue(zh.contains("doc_modify_paragraph") && zh.contains("被替换范围内"));
+        assertTrue(en.contains("covers only matches[].text") && en.contains("only for locating"));
+        assertTrue(en.contains("doc_modify_paragraph") && en.contains("within the replacement range"));
+    }
+
+    @Test
+    void truncatedAnchorReceiptsRequireAFullParagraphRead() throws Exception {
+        String replacement = toolDescription("doc_replace_at_anchor");
+        assertTrue(replacement.contains("paragraphAfterEditTruncated=true")
+                && replacement.contains("doc_get_paragraph"));
+        assertTrue(!replacement.contains("也不需要改后再读文档"));
+        assertTrue(toolDescription("doc_find_text").contains("paragraphTruncated=true"));
+        for (String resource : List.of("prompts/tools-lowa.md", "prompts/tools-lowa.en.md")) {
+            String prompt = readResource(resource);
+            assertTrue(prompt.contains("paragraphAfterEditTruncated=true") && prompt.contains("doc_get_paragraph"));
+            assertTrue(prompt.contains("paragraphLength") && prompt.contains("paragraphTruncated=true"));
+        }
     }
 
     private static String readResource(String path) throws Exception {

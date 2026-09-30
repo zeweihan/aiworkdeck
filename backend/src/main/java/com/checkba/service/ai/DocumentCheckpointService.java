@@ -34,6 +34,7 @@ public class DocumentCheckpointService {
     private final ProjectFileService projectFileService;
     private final StorageServiceFactory storageServiceFactory;
     private final EditorBridgeService editorBridgeService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * conversationId -> (fileId -> 本轮快照信息)。
@@ -88,23 +89,36 @@ public class DocumentCheckpointService {
         java.util.List<String> restoredNames = new java.util.ArrayList<>();
         java.util.List<String> failures = new java.util.ArrayList<>();
         for (Checkpoint cp : perFile.values()) {
+            String restoreId = java.util.UUID.randomUUID().toString();
+            boolean needsAbort = false;
             try {
                 ProjectFile file = projectFileService.getFile(cp.fileId());
                 if (file == null || file.getFilePath() == null) {
                     failures.add("文件 " + cp.fileId() + " 已不存在");
                     continue;
                 }
+                // Pause autosave and drain uploads before changing authoritative bytes.
+                // A later reload alone cannot undo an old upload racing this write.
+                needsAbort = true; // also abort a prepare whose acknowledgement timed out
+                checkpointAction(cp.fileId(), restoreId, "prepare");
                 try (InputStream in = storage.load(cp.checkpointKey()).getInputStream()) {
                     storage.save(file.getFilePath(), in);
                 }
-                // 通知前端编辑器重新加载该文件（丢弃编辑器内当前状态）
-                editorBridgeService.sendReloadFileAction(file);
+                // Unlike ordinary fire-and-forget reloads, success means the active
+                // model has actually loaded the checkpoint and can safely be read.
+                checkpointAction(cp.fileId(), restoreId, "reload");
+                needsAbort = false;
                 restoredNames.add(file.getName());
                 log.info("Document checkpoint restored: conv={}, fileId={}, key={}",
                         conversationId, cp.fileId(), cp.checkpointKey());
             } catch (Exception e) {
                 log.error("Failed to restore document checkpoint for conv={}, fileId={}", conversationId, cp.fileId(), e);
                 failures.add("文件 " + cp.fileId() + " 恢复失败：" + e.getMessage());
+            } finally {
+                if (needsAbort) {
+                    try { checkpointAction(cp.fileId(), restoreId, "abort"); }
+                    catch (Exception e) { log.warn("Checkpoint editor remains blocked after failed restore: fileId={}", cp.fileId()); }
+                }
             }
         }
         if (restoredNames.isEmpty()) {
@@ -114,8 +128,18 @@ public class DocumentCheckpointService {
                 .map(n -> "《" + n + "》")
                 .collect(java.util.stream.Collectors.joining("、"));
         String failureSuffix = failures.isEmpty() ? "" : "（另有恢复失败：" + String.join("；", failures) + "）";
-        return String.format("已将%s恢复到本轮开始前的快照，编辑器正在重新加载。本轮所有修改（含修订）已丢弃，请重新规划后再操作。%s",
+        return String.format("已将%s恢复到本轮开始前的快照，编辑器已完成重新加载。这些文件的本轮修改（含修订）已丢弃，请重新规划后再操作。%s",
                 names, failureSuffix);
+    }
+
+    private void checkpointAction(Long fileId, String restoreId, String phase) throws Exception {
+        String result = editorBridgeService.executeEditorCommand("doc_checkpoint_restore",
+                Map.of("fileId", fileId, "restoreId", restoreId, "phase", phase));
+        var response = result == null ? null : objectMapper.readTree(result);
+        if (response == null || !response.path("success").asBoolean(false)) {
+            throw new IllegalStateException(response == null ? "编辑器没有确认恢复阶段 " + phase
+                    : response.path("error").asText("编辑器没有完成恢复阶段 " + phase));
+        }
     }
 
     /**

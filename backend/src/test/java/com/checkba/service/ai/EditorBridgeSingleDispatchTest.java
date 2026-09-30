@@ -99,6 +99,32 @@ class EditorBridgeSingleDispatchTest {
     }
 
     @Test
+    void checkpointRestoreWaitsForMatchingClientAcknowledgement() throws Exception {
+        SseEmitterService sse = mock(SseEmitterService.class);
+        List<String> payloads = captureClientActions(sse, new CopyOnWriteArrayList<>());
+        EditorBridgeService svc = newService(sse);
+        assertEquals(180, EditorBridgeService.timeoutSecondsFor("doc_checkpoint_restore"));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            var result = pool.submit(() -> {
+                svc.setCurrentConversationId("conv-checkpoint");
+                return svc.executeEditorCommand("doc_checkpoint_restore",
+                        Map.of("fileId", 50L, "phase", "reload", "restoreId", "restore-1"));
+            });
+            for (int i = 0; i < 100 && payloads.isEmpty(); i++) Thread.sleep(10);
+            assertEquals(1, payloads.size());
+            var payload = new ObjectMapper().readTree(payloads.get(0));
+            assertFalse(result.isDone(), "sending SSE is not completed recovery");
+            assertFalse(svc.completeEditorAction(payload.path("requestId").asText(), "other-conversation",
+                    true, Map.of("success", true), null));
+            assertFalse(result.isDone());
+            assertTrue(svc.completeEditorAction(payload.path("requestId").asText(), "conv-checkpoint",
+                    true, Map.of("success", true, "fileId", 50, "phase", "reload"), null));
+            assertTrue(result.get(5, TimeUnit.SECONDS).contains("\"success\":true"));
+        } finally { pool.shutdownNow(); }
+    }
+
+    @Test
     @DisplayName("打开 / 重载文件也只发一次，不再有 wps_open_file / wps_reload_file")
     void openAndReloadAreDispatchedExactlyOnce() {
         SseEmitterService sse = mock(SseEmitterService.class);

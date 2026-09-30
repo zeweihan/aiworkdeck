@@ -478,7 +478,7 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 查找和替换 ====================
 
     @ToolMeta(displayName = "查找定位", category = "document")
-    @Tool("【找】在文档中查找文本。每个匹配返回：matchIndex（序号，从 1 开始）、anchorId（通常随编辑移动的临时书签，并非用一次就失效；切换/重开文档或清理锚点后失效（按引文建证据链接也会清理），失效时重新查找）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+    @Tool("【找】在文档中查找文本。anchorId 只覆盖 matches[].text（命中的文本）；contextBefore/contextAfter 和 paragraph 仅供定位，不在替换范围内。每个匹配返回：text（匹配原文）、matchIndex（序号，从 1 开始）、anchorId（通常随编辑移动的临时书签，并非用一次就失效；切换/重开文档或清理锚点后失效（按引文建证据链接也会清理），失效时重新查找）、前后文 contextBefore/contextAfter、段落片段 paragraph（最多160字，paragraphLength 为完整长度；paragraphTruncated=true 时须回读完整目标段落）。" +
           "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
           "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(
@@ -1093,13 +1093,13 @@ public class DocumentEditTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "锚点替换", category = "document", fileEffect = "MODIFIED")
-    @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。会自动把编辑器视图滚动到该处；返回改动后所在段落的实际文本，核对该返回值即完成验证——不需要先 doc_select_anchor，也不需要改后再读文档。" +
+    @Tool("【改】仅把 anchorId 覆盖的 matches[].text 替换为 newText，以修订模式进行，锚点外文字保持不变。contextBefore/contextAfter 和 paragraph 仅供定位，不要把它们拼进 newText。整段重写须先查找完整原段取得整段锚点，或用 doc_modify_paragraph；仅被替换范围内未改动的字需照抄。会自动把编辑器视图滚动到该处；返回 paragraphAfterEdit（最多200字）及完整长度 paragraphAfterEditLength；paragraphAfterEditTruncated=true 时用 doc_get_paragraph 回读完整目标段落（段号未知先用 doc_get_document_text 定位），不得把片段当作完整验证；未截断时核对回执即可，不需要先 doc_select_anchor。" +
           "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。" +
           "newText 传空字符串即删除该处文本（以修订删除痕迹呈现）。" +
           REDLINE_GRANULARITY_NOTE)
     public String doc_replace_at_anchor(
             @P("doc_find_text 返回的 anchorId") String anchorId,
-            @P("新文本") String newText
+            @P("仅替换该锚点 matches[].text 的新文本；不要拼回锚点外的周边文字，空字符串表示删除该匹配") String newText
     ) {
         log.info("Tool: doc_replace_at_anchor called anchor={}", anchorId);
         try {

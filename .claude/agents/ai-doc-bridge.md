@@ -42,6 +42,22 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 **描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算**。已收窄成只宣告 start/end，
 并指向 `doc_select_paragraph` / `doc_select_anchor`。
 
+## 检查点恢复确认（dev-board#1084）
+
+- `DocumentCheckpointService.restore` 通过宿主专用 `doc_checkpoint_restore`（复用 editor_command 的 requestId/ACK，180秒）按 `prepare → 写回快照 → reload` 串行执行；只有实际重载完成才报告恢复成功。普通 `doc_reload_file` 仍保留对用户活动编辑器的保护，不能把它当作检查点已重载的依据。
+- prepare 按文件暂停全部已打开实例的自动保存并等待在途上传；失败或上传结果未知时不写回快照。处理中阻挡旧模型命令。恢复标识及实例身份在异步步骤后复核，迟到旧结果不得解除新锁；abort/加载失败阻止旧画面再次覆盖后端，需重新加载后再编辑。
+- 后端 checkpoint/bridge 测试验证顺序与失败回执；`project-home/checkpoint-restore.test.mjs`、`version-history/reloadChrome.test.mjs` 覆盖保存、迟到回调及实例变化。还须实际桌面验证改动后恢复、随后读取及保存重开，不能只测发送了reload事件。
+
+## 空替换参数（dev-board#1086）
+
+- 空字符串表示删除，不能与缺少参数混同。`XmlToolCallParser` 命名参数按是否存在提取，`ToolRegistry.rawArg` 保留显式空串且优先于别名；modelId上下文回落和旧默认值语义另行保留。`EmptyStringToolArgumentsTest` 走真实parser→registry→DocumentEditTools，空替换抵达编辑桥，真正缺参不调用编辑器。
+
+## 锚点替换范围（dev-board#1085）
+
+- `doc_find_text` 的 anchorId 只覆盖 `matches[].text`；`contextBefore` / `contextAfter` / `paragraph` 用于定位，不属于替换范围。`doc_replace_at_anchor.newText` 只替换匹配区间，整段重写应取得完整原段锚点或使用 `doc_modify_paragraph`。工具描述、LOWA 中英片段和 contract-review 同步此契约；“逐字照抄未改文字”也只指被替换范围内。
+- 真实模型曾以局部匹配替换整段新文本，造成周边重复；不能用 newText 长度阈值拦截，短词扩写成长句本身合法。`RedlineGranularityContractTest` / `BuiltinSkillsTest` 守提示接线，实际模型遵从须另验。
+- 长段回执（dev-board#1087）：worker 查找仍返回至多160字 `paragraph`，新增 `paragraphLength` / `paragraphTruncated`；锚点替换仍返回至多200字 `paragraphAfterEdit`，新增 `paragraphAfterEditLength` / `paragraphAfterEditTruncated`。长度按现有 JS 字符串计数。截断时用 `doc_get_paragraph` 回读完整目标段落（未知段号先用 `doc_get_document_text` 定位），不能凭片段宣称整段核验。`paragraphTruncation.test.mjs` 覆盖边界；`first-agent-edit.mjs` 实引擎覆盖200字之后的局部改动、回读、撤销/重做及导出重开。
+
 ## 结构审计工具 `doc_audit_structure`（dev-board#375）
 
 `service/ai/tools/DocumentAuditTools.java` → 纯函数 `service/ai/review/ContractStructureAudit.java`（+ `ChineseNumerals`）。

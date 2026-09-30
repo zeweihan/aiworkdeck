@@ -62,7 +62,7 @@ The "Precise Execution" rule in the system prompt (finish the one requested spot
 
 - Collect several anchorIds with `doc_find_text` in one turn, then output several `doc_replace_at_anchor` +
   `doc_add_comment` calls **in the same turn**. One change per turn burns the step budget on round trips.
-- Copy unchanged text **verbatim** inside replacements (the engine diffs character by character; incidental polishing turns a
+- An anchorId covers only matches[].text; paragraph/context are only for locating it. Do not copy text outside the anchor into newText. For a whole-paragraph rewrite, obtain a complete paragraph anchor or use `doc_modify_paragraph`. Copy unchanged text **verbatim** within the replacement range (the engine diffs character by character; incidental polishing turns a
   sentence into a delete-and-rewrite).
 - Each change carries one comment: issue + authority (statute / clause) + why this wording. Risk points you do not change
   get a comment too.

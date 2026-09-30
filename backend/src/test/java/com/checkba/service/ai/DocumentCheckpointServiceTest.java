@@ -13,11 +13,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ByteArrayResource;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -54,7 +57,8 @@ class DocumentCheckpointServiceTest {
         storage = mock(StorageService.class);
         when(storageServiceFactory.getStorageService()).thenReturn(storage);
         editorBridgeService = mock(EditorBridgeService.class);
-        service = new DocumentCheckpointService(projectFileService, storageServiceFactory, editorBridgeService);
+        when(editorBridgeService.executeEditorCommand(eq("doc_checkpoint_restore"), any())).thenReturn("{\"success\":true}");
+        service = new DocumentCheckpointService(projectFileService, storageServiceFactory, editorBridgeService, new com.fasterxml.jackson.databind.ObjectMapper());
     }
 
     @Test
@@ -80,12 +84,63 @@ class DocumentCheckpointServiceTest {
         assertTrue(result.contains("B.docx"), "应包含第二个文件，修复前这里会漏掉：" + result);
         verify(storage).save(eq("projects/1/A.docx"), any());
         verify(storage).save(eq("projects/1/B.docx"), any());
-        verify(editorBridgeService, times(1)).sendReloadFileAction(argThatFileId(1L));
-        verify(editorBridgeService, times(1)).sendReloadFileAction(argThatFileId(2L));
+        verify(editorBridgeService).executeEditorCommand(eq("doc_checkpoint_restore"),
+                org.mockito.ArgumentMatchers.argThat(p -> p.get("fileId").equals(1L) && p.get("phase").equals("reload")));
+        verify(editorBridgeService).executeEditorCommand(eq("doc_checkpoint_restore"),
+                org.mockito.ArgumentMatchers.argThat(p -> p.get("fileId").equals(2L) && p.get("phase").equals("reload")));
     }
 
-    private ProjectFile argThatFileId(Long id) {
-        return org.mockito.ArgumentMatchers.argThat(f -> f != null && id.equals(f.getId()));
+    @Test
+    void restoreWaitsForSaveQuiescenceBeforeWritingAndForReloadBeforeSuccess() throws Exception {
+        ProjectFile file = fileOf(1L, "A.docx", "projects/1/A.docx");
+        when(projectFileService.getFile(1L)).thenReturn(file);
+        when(projectFileService.getFileBytes(1L)).thenReturn("baseline".getBytes());
+        when(storage.load(anyString())).thenReturn(new ByteArrayResource("baseline".getBytes()));
+        service.ensureCheckpoint("conv-1", 1L);
+        java.util.List<String> order = new java.util.ArrayList<>();
+        doAnswer(inv -> { order.add("store"); return null; }).when(storage).save(eq(file.getFilePath()), any());
+        when(editorBridgeService.executeEditorCommand(eq("doc_checkpoint_restore"), any())).thenAnswer(inv -> {
+            java.util.Map<?, ?> params = inv.getArgument(1);
+            order.add(String.valueOf(params.get("phase")));
+            assertEquals(1L, params.get("fileId"));
+            return "{\"success\":true}";
+        });
+        assertTrue(service.restore("conv-1").contains("已将"));
+        assertEquals(java.util.List.of("prepare", "store", "reload"), order);
+    }
+
+    @Test
+    void failedPrepareCannotOverwriteStorageOrClaimRecovery() throws Exception {
+        ProjectFile file = fileOf(1L, "A.docx", "projects/1/A.docx");
+        when(projectFileService.getFile(1L)).thenReturn(file);
+        when(projectFileService.getFileBytes(1L)).thenReturn("baseline".getBytes());
+        when(storage.load(anyString())).thenReturn(new ByteArrayResource("baseline".getBytes()));
+        service.ensureCheckpoint("conv-1", 1L);
+        when(editorBridgeService.executeEditorCommand(eq("doc_checkpoint_restore"), any()))
+                .thenReturn("{\"error\":\"editor unavailable\"}");
+        assertTrue(service.restore("conv-1").startsWith("Error:"));
+        verify(storage, never()).save(eq(file.getFilePath()), any());
+        var phases = org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(editorBridgeService, times(2)).executeEditorCommand(eq("doc_checkpoint_restore"), phases.capture());
+        assertEquals("prepare", phases.getAllValues().get(0).get("phase"));
+        assertEquals("abort", phases.getAllValues().get(1).get("phase"));
+        assertEquals(phases.getAllValues().get(0).get("restoreId"), phases.getAllValues().get(1).get("restoreId"));
+    }
+
+    @Test
+    void failedReloadCannotClaimThatEditorRecovered() throws Exception {
+        ProjectFile file = fileOf(1L, "A.docx", "projects/1/A.docx");
+        when(projectFileService.getFile(1L)).thenReturn(file);
+        when(projectFileService.getFileBytes(1L)).thenReturn("baseline".getBytes());
+        when(storage.load(anyString())).thenReturn(new ByteArrayResource("baseline".getBytes()));
+        service.ensureCheckpoint("conv-1", 1L);
+        when(editorBridgeService.executeEditorCommand(eq("doc_checkpoint_restore"), any())).thenAnswer(inv -> {
+            java.util.Map<?, ?> params = inv.getArgument(1);
+            return "reload".equals(params.get("phase")) ? "{\"error\":\"load failed\"}" : "{\"success\":true}";
+        });
+        String result = service.restore("conv-1");
+        assertTrue(result.startsWith("Error:"), result);
+        assertFalse(result.contains("已完成重新加载"));
     }
 
     @Test
@@ -147,8 +202,8 @@ class DocumentCheckpointServiceTest {
     }
 
     @Test
-    @DisplayName("单文件场景行为不变：restore 文案与既有格式一致")
-    void singleFileRestoreMessageUnchanged() throws Exception {
+    @DisplayName("单文件完成重载后才确认该文件修改已丢弃")
+    void singleFileRestoreMessageConfirmsCompletedReload() throws Exception {
         when(projectFileService.getFile(1L)).thenReturn(fileOf(1L, "合同.docx", "projects/1/合同.docx"));
         when(projectFileService.getFileBytes(1L)).thenReturn("内容".getBytes());
         when(storage.load(any())).thenReturn(new ByteArrayResource("内容".getBytes()));
@@ -157,6 +212,6 @@ class DocumentCheckpointServiceTest {
         String result = service.restore("conv-1");
 
         assertTrue(result.contains("已将《合同.docx》恢复到本轮开始前的快照"), result);
-        assertTrue(result.contains("本轮所有修改（含修订）已丢弃"), result);
+        assertTrue(result.contains("编辑器已完成重新加载。这些文件的本轮修改（含修订）已丢弃"), result);
     }
 }

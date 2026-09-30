@@ -3837,10 +3837,12 @@ const EXEC = {
       let anchorId = null;
       try { anchorId = anchorBookmark(r); } catch (e) {}
       const ctx = contextAround(r, 40);
+      const paragraph = paragraphTextOf(r) || '';
       return {
         matchIndex: i, anchorId: anchorId, text: r.getString(),
         contextBefore: ctx.before, contextAfter: ctx.after,
-        paragraph: (paragraphTextOf(r) || '').slice(0, 160),
+        paragraph: paragraph.slice(0, 160),
+        paragraphLength: paragraph.length, paragraphTruncated: paragraph.length > 160,
       };
     });
     const res = { success: true, count: matches.length, matches: matches };
@@ -4015,9 +4017,11 @@ const EXEC = {
     if (!range) return { success: false, message: 'anchor not found: ' + p.anchor };
     selectVisibly(range); // 拟人：先看见目标再动手
     if (!applyMinimalRedline(range, String(p.newText || ''))) range.setString(String(p.newText || ''));
-    // 验证回路：返回改动后所在段落的实际文本，AI 据此确认改对了。
+    // Keep the excerpt budget, but expose whether verification needs a full paragraph read.
+    const paragraph = paragraphTextOf(range) || '';
     return Object.assign({ success: true, anchor: p.anchor, newText: String(p.newText || '') },
-      { paragraphAfterEdit: (paragraphTextOf(range) || '').slice(0, 200) });
+      { paragraphAfterEdit: paragraph.slice(0, 200), paragraphAfterEditLength: paragraph.length,
+        paragraphAfterEditTruncated: paragraph.length > 200 });
   },
   // [verified-extend] insert a paragraph break at the view cursor (Enter key in
   // the IME overlay routes here — the overlay's single-line <input> can't make a
