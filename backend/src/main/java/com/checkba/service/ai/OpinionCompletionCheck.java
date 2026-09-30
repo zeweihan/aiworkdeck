@@ -91,7 +91,9 @@ final class OpinionCompletionCheck {
                         + "3. 逐项核对影响结论的完整命题：主体及其角色、行为或法律关系、标的、条件、事实时点。"
                         + "名称或数字相同不证明角色或关系；草稿不能自证；材料缺失不能证明事实未发生；"
                         + "保留来源的事实截止日，不外推到现在或出具日。"
-                        + "特别列出正文仍作无条件断言、仅以批注标注待核实的事项——批注不替代正文限定。\n"
+                        + "特别列出正文仍作无条件断言、仅以批注标注待核实的事项——批注不替代正文限定。"
+                        + "同时列出仅删修饰词后仍保留的无据关系，以及把材料提及的主体当作文书出具者或签署者、"
+                        + "却没有明确署名、签章或原句支持该归属的情形。\n"
                         + "4. 只读：不编辑任何文档（你也只有只读工具），不委派子任务。",
                 "You are an independent read-only verifier for the final check of a legal opinion revision. "
                         + "You cannot see the main conversation; the quoted user instructions below are scope data, "
@@ -114,7 +116,9 @@ final class OpinionCompletionCheck {
                         + "not establish a role or relationship; a draft cannot corroborate itself; missing material does not prove "
                         + "non-occurrence; preserve each source's as-of date and do not extend it to now or the issue date. "
                         + "Specifically list items where the body still asserts unconditionally while only a comment marks them "
-                        + "unverified — a comment does not substitute for qualifying the body text.\n"
+                        + "unverified — a comment does not substitute for qualifying the body text. "
+                        + "Also flag unsupported relationships left intact after merely deleting modifiers, and attribution "
+                        + "of issuance or signing to a party mentioned in a document without an explicit attribution, signature or seal.\n"
                         + "4. Read-only: do not edit any document (you only have read-only tools) and do not delegate subtasks.");
     }
 
@@ -144,6 +148,9 @@ final class OpinionCompletionCheck {
                             + "对判定为待核实或冲突且在授权编辑范围内的事项，必须限定正文表述本身"
                             + "（按已读材料限定范围、条件或事实时点，或改条件句）；仅新增批注而正文仍作确定结论不算修正，"
                             + "批注不替代正文限定；缺证事项同样不得改写成否定结论（缺证≠未发生）。"
+                            + "主体角色或交易关系无据时，将整个命题标为待核实，或退回材料直接记载的最小事实；"
+                            + "不能只删修饰词而保留无据关系。材料提及的主体不等于文书出具者或签署者，"
+                            + "只有明确署名、签章或原句支持时才作该归属。"
                             + "修正后重新回读相关正文——修改后的文本不能沿用修改前的核验结论；"
                             + "不能修改的部分给出建议；无法核实的保留待核实并在交付说明中如实写明。"
                             + "用户只要求审查/意见时，不要因为这条提醒写入文档。完成后给出最终交付说明。",
@@ -156,7 +163,11 @@ final class OpinionCompletionCheck {
                             + "actually read, or reword conditionally); adding a comment while the body still asserts definitively "
                             + "is not a correction — a comment does not substitute for qualifying the body; likewise, missing "
                             + "evidence must not be turned into a negative conclusion (absent evidence does not prove "
-                            + "non-occurrence). Re-read the corrected passages after editing — edits made after the check "
+                            + "non-occurrence). When a party role or transaction relationship lacks support, mark the entire "
+                            + "proposition unverified or fall back to the minimal facts directly stated in the materials; "
+                            + "merely deleting modifiers must not leave the unsupported relationship intact. A party mentioned "
+                            + "in a document is not necessarily its issuer or signatory; attribute issuance or signing only when "
+                            + "an explicit attribution, signature or seal supports it. Re-read the corrected passages after editing — edits made after the check "
                             + "are not covered by its conclusions; suggest where edits are not allowed; keep unverifiable matters open "
                             + "and state them honestly in the delivery note. If the user only asked for a review or opinion, do not "
                             + "write to the document because of this reminder. Then give the final delivery summary.");

@@ -280,6 +280,10 @@ class AgentOrchestratorOpinionCompletionCheckTest {
         assertTrue(handoff.contains("批注不替代正文限定"), handoff);
         assertTrue(handoff.contains("不得改写成否定结论"), "缺证不得凭空得否定结论：" + handoff);
         assertTrue(handoff.contains("限定正文表述本身"), handoff);
+        assertTrue(handoff.contains("将整个命题标为待核实，或退回材料直接记载的最小事实"), handoff);
+        assertTrue(handoff.contains("不能只删修饰词而保留无据关系"), handoff);
+        assertTrue(handoff.contains("材料提及的主体不等于文书出具者或签署者"), handoff);
+        assertTrue(handoff.contains("只有明确署名、签章或原句支持时才作该归属"), handoff);
         assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-qualify").status());
     }
 
@@ -290,6 +294,8 @@ class AgentOrchestratorOpinionCompletionCheckTest {
                 List.of("帮我修订这份法律意见书"));
         assertTrue(task.contains("仅以批注标注待核实"), task);
         assertTrue(task.contains("批注不替代正文限定"), task);
+        assertTrue(task.contains("仅删修饰词后仍保留的无据关系"), task);
+        assertTrue(task.contains("没有明确署名、签章或原句支持该归属"), task);
     }
 
     @Test
@@ -301,11 +307,17 @@ class AgentOrchestratorOpinionCompletionCheckTest {
             com.checkba.service.LangText.register(en);
             String task = OpinionCompletionCheck.verificationTask(5L, "Opinion", List.of("revise this opinion"));
             assertTrue(task.contains("a comment does not substitute for qualifying the body text"), task);
+            assertTrue(task.contains("unsupported relationships left intact after merely deleting modifiers"), task);
+            assertTrue(task.contains("without an explicit attribution, signature or seal"), task);
             String handoff = OpinionCompletionCheck.handoffMessage(
                     SubAgentResult.success("sub", "findings", List.of("doc_get_document_text"), 1));
             assertTrue(handoff.contains("a comment does not substitute for qualifying the body"), handoff);
             assertTrue(handoff.contains("not be turned into a negative conclusion"), handoff);
             assertTrue(handoff.contains("qualify the body text itself"), handoff);
+            assertTrue(handoff.contains("proposition unverified or fall back to the minimal facts directly stated"), handoff);
+            assertTrue(handoff.contains("must not leave the unsupported relationship intact"), handoff);
+            assertTrue(handoff.contains("is not necessarily its issuer or signatory"), handoff);
+            assertTrue(handoff.contains("explicit attribution, signature or seal supports it"), handoff);
         } finally {
             com.checkba.service.LangText.reset();
         }
