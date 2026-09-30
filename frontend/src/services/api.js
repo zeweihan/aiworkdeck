@@ -3207,6 +3207,13 @@ export function deleteMeetingRecording(meetingId) {
 
 // ==================== 编辑器操作结果回调 ====================
 
+export function getCheckpointRestoreWriteState(conversationId, fileId, restoreId) {
+  return request({
+    url: `/api/ai/agent/checkpoint-restore-state?conversationId=${encodeURIComponent(conversationId)}&fileId=${encodeURIComponent(fileId)}&restoreId=${encodeURIComponent(restoreId)}`,
+    method: 'GET'
+  })
+}
+
 /**
  * 发送编辑器操作结果到后端（双轨迁移：新路由 /editor-result；后端同版本起
  * 保留旧路由 /wps-result 别名供旧前端使用，见 docs/AI_ARCHITECTURE.md Phase 3）

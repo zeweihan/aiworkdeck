@@ -3,17 +3,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
+let projectSequence = 0
 const source = readFileSync(new URL('../../src/pages/project-overview/agentClientActions.js', import.meta.url), 'utf8')
   .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '').replace(/^export\s+/gm, '')
-function fixture(instances) {
+function fixture(instances, send) {
   instances.forEach(inst => { inst.ready = true; inst.executor = {} })
   const replies = []
-  const methods = new Function('sendEditorResult', source + '; return agentClientActionMethods')(
-    async (...args) => { replies.push(args) })
-  const page = Object.assign({ _libreRefs: Object.fromEntries(instances.map((inst, i) => [i, inst])),
-    activeFileIdLeft: 50, activeFileIdRight: null, resolveLibreExecutorFileId: () => 50 }, methods)
+  const methods = new Function(...Object.keys(barriers), 'getCheckpointRestoreWriteState', 'sendEditorResult', source + '; return agentClientActionMethods')(
+    ...Object.values(barriers), async () => ({ mayWrite: true }), async (...args) => { replies.push(args); await send?.(...args) })
+  const page = Object.assign({ projectId: 'checkpoint-test-' + (++projectSequence), _libreRefs: Object.fromEntries(instances.map((inst, i) => [i, inst])),
+    conversationId: 'conv-' + projectSequence, activeFileIdLeft: 50, activeFileIdRight: null, resolveLibreExecutorFileId: () => 50 }, methods)
   const run = (phase, restoreId = 'restore-1') => page.handleEditorCommand({ action: 'doc_checkpoint_restore',
-    conversationId: 'conv', requestId: phase, params: { fileId: 50, restoreId, phase } })
+    conversationId: page.conversationId, requestId: phase, params: { fileId: 50, restoreId, phase } })
   return { page, replies, run }
 }
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
@@ -99,6 +101,102 @@ test('a late aborted reload cannot delete or fail the newer restore lock', async
   await run('prepare', 'new')
   late.resolve(true); await old
   assert.equal(page._checkpointRestores.get('50').restoreId, 'new')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'new')
   assert.equal(replies.at(-1)[2], false, 'the obsolete reload cannot acknowledge success')
   assert.equal(blocked, 1, 'the old catch cannot fail the new restore')
+})
+
+// The save may belong to an editor that Vue has not registered yet.
+test('prepare drains unregistered saves and keeps the file closed to saves after its ACK', async () => {
+  const { page, run, replies } = fixture([])
+  page.activeFileIdLeft = null
+  const lease = barriers.beginDocumentSave(page.projectId, 50)
+  const preparing = run('prepare')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(replies.length, 0)
+  lease.finish(true)
+  await preparing
+  assert.equal(replies.at(-1)[2], true)
+  assert.equal(barriers.beginDocumentSave(page.projectId, 50), null)
+  await run('reload')
+  const next = barriers.beginDocumentSave(page.projectId, 50)
+  assert.ok(next)
+  next.finish(true)
+})
+
+test('unregistered failed upload before prepare cannot be forgotten on retry', async () => {
+  const { page, run, replies } = fixture([])
+  page.activeFileIdLeft = null
+  barriers.beginDocumentSave(page.projectId, 50).finish(false)
+  await run('prepare')
+  assert.equal(replies.at(-1)[2], false)
+  await run('prepare', 'retry')
+  assert.equal(replies.at(-1)[2], false)
+})
+
+test('a new registered editor after prepare ACK invalidates restore and remains blocked', async () => {
+  const poolSource = readFileSync(new URL('../../src/pages/project-overview/librePool.js', import.meta.url), 'utf8')
+    .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '').replace(/^export\s+/gm, '')
+  const pool = new Function(...Object.keys(barriers), poolSource + '; return librePoolMethods')(...Object.values(barriers))
+  const original = { file: { id: 50 }, prepareCheckpointRestore: async () => true, reloadFromBackend: async () => true, failCheckpointRestore() {} }
+  const { page, run, replies } = fixture([original])
+  Object.assign(page, pool)
+  await run('prepare')
+  let blocked = false
+  const fresh = { file: { id: 50 }, failCheckpointRestore() { blocked = true } }
+  page.setLibreRef('right', 50, fresh)
+  assert.equal(blocked, true)
+  await run('reload')
+  assert.equal(replies.at(-1)[2], false)
+})
+
+test('terminal phases can find the original restore from a replacement page with a different project', async () => {
+  let failed = 0
+  const first = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    reloadFromBackend: async () => true, failCheckpointRestore() { failed++ } }])
+  await first.run('prepare', 'cross-page')
+  const second = fixture([])
+  second.page.activeFileIdLeft = null
+  second.page.conversationId = first.page.conversationId
+  await second.run('abort', 'cross-page')
+  assert.equal(second.replies.at(-1)[2], true)
+  assert.equal(barriers.checkpointSaveBarrier(first.page.projectId, 50), null)
+  assert.equal(first.page._checkpointRestores.size, 0)
+  assert.equal(failed, 1)
+})
+
+test('cross-page reconciliation invalidates an old asynchronous reload without unlocking a newer restore', async () => {
+  const late = deferred()
+  let failed = 0
+  const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    reloadFromBackend: () => late.promise, failCheckpointRestore() { failed++ } }])
+  await run('prepare', 'old-page')
+  const old = run('reload', 'old-page')
+  assert.equal(await barriers.reconcileCheckpointSaveBarrier(page.projectId, 50, async () => ({ mayWrite: false })), true)
+  await run('prepare', 'new-page')
+  late.resolve(true); await old
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'new-page')
+  assert.equal(failed, 1)
+})
+
+test('a duplicate prepare cannot release the active write barrier', async () => {
+  const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    failCheckpointRestore() { throw Error('duplicate prepare must not invalidate owner') } }])
+  await run('prepare', 'duplicate')
+  const barrier = barriers.checkpointSaveBarrier(page.projectId, 50)
+  await run('prepare', 'duplicate')
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), barrier)
+})
+
+test('a lost prepare success ACK retains its barrier until the backend write state is reconciled', async () => {
+  const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    failCheckpointRestore() {} }], async (...args) => { if (args[2] === true) throw Error('ACK response lost') })
+  await run('prepare', 'lost-ack')
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'lost-ack')
+  assert.equal(await barriers.reconcileCheckpointSaveBarrier(page.projectId, 50, async () => ({ mayWrite: true })), false)
+  assert.equal(await barriers.reconcileCheckpointSaveBarrier(page.projectId, 50, async () => ({ mayWrite: false })), true)
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), null)
 })

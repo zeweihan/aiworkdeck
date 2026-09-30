@@ -102,6 +102,24 @@ class RedlineGranularityContractTest {
         }
     }
 
+    @Test
+    void insertionAndFinalReadContractsSeparateParagraphBoundariesFromAnchorBoundaries() throws Exception {
+        String insertion = toolDescription("doc_insert_at_cursor");
+        assertTrue(insertion.contains("不会自动换段"), insertion);
+        assertTrue(insertion.contains("实际换行符") && insertion.contains("回读"), insertion);
+        var method = DocumentEditTools.class.getMethod("doc_insert_at_cursor", String.class, String.class, String.class);
+        assertTrue(method.getParameters()[0].getAnnotation(P.class).value().contains("实际换行符"));
+        assertTrue(toolDescription("doc_get_document_text").contains("最后一次"));
+        for (boolean en : new boolean[] {false, true}) {
+            String text = readResource(en ? "prompts/tools-lowa.en.md" : "prompts/tools-lowa.md");
+            assertTrue(text.contains(en ? "does not create a paragraph" : "不会自动换段"), text);
+            assertTrue(text.contains(en ? "after the last" : "最后一次"), text);
+            assertTrue(text.contains("doc_get_document_text") && text.contains("nextStartParagraph"), text);
+            assertTrue(text.contains(en ? "headings" : "标题") && text.contains(en ? "incomplete" : "残缺"), text);
+            assertTrue(!text.contains(en ? "one pass of `doc_get_document_text` per conversation is enough" : "一轮会话用 `doc_get_document_text` 建立一次认知即可"), text);
+        }
+    }
+
     private static String readResource(String path) throws Exception {
         try (InputStream in = RedlineGranularityContractTest.class.getClassLoader().getResourceAsStream(path)) {
             assertNotNull(in, "classpath 上找不到 " + path);

@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 // dev-board#1018：AI 生成 docx 后自动开新标签，加载页停在 95%「正在打开文档」几分钟。
 //
 // 三处病灶，逐条锁住：
@@ -26,12 +27,12 @@ function loadOptions() {
   const body = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, '')
     .replace(/export default \{/, 'return {')
-  const factory = new Function(
+  const factory = new Function(...Object.keys(barriers),
     'getFileBytesUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
     'getAuthHeaders', 'host', 'classifyLoadFailure', 'shouldSelfHealLoadFailure',
     'createAuthorNameResolver', 'loadBudgetMs', 'openFailureOf', 'STATUS_OPEN_FAILED', body)
-  return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),
+  return factory(...Object.values(barriers), (id) => '/download/' + id, () => ({ name: '测试用户' }),
     null, null, null, null, null, null, null,
     { zetaoffice: { getEditor: async () => ({ kind: 'iframe', url: 'about:blank' }) } },
     classifyLoadFailure, shouldSelfHealLoadFailure, createAuthorNameResolver,

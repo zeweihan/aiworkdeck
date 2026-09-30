@@ -3,7 +3,8 @@
 // project-overview.vue 的 AI 指令路由：SSE client_action 分发、
 // doc 流式写入缓冲、编辑器打开/重载/命令执行与结果回传。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
-import { sendEditorResult, getFileDetail } from '@/services/api.js'
+import { beginCheckpointSaveBarrier, endCheckpointSaveBarrier, checkpointSaveBarrier, findCheckpointSaveBarrier, reconcileCheckpointSaveBarrier } from '@/utils/checkpointSaveBarrier.js'
+import { sendEditorResult, getFileDetail, getCheckpointRestoreWriteState } from '@/services/api.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '@/utils/docEvents.js'
 import { actionBudgetMs } from '@/composables/zetaOfficeRelay.js'
@@ -631,34 +632,50 @@ export const agentClientActionMethods = {
         const { requestId, conversationId, params = {} } = action
         const { fileId, restoreId, phase } = params
         const pending = this._checkpointRestores || (this._checkpointRestores = new Map())
-        let entry = pending.get(String(fileId))
+        let entry = phase === 'prepare' ? pending.get(String(fileId))
+            : findCheckpointSaveBarrier(fileId, restoreId, conversationId)?.entry
+        const ownsEntry = () => entry && checkpointSaveBarrier(entry.projectId, fileId) === entry.barrier
+        let prepareAckAttempted = false
+        let entryOwnedByAction = phase !== 'prepare'
         try {
             if (!fileId || !restoreId) throw new Error('检查点恢复缺少文件或操作标识')
             if (phase === 'prepare') {
                 if (entry) throw new Error('该文档已有检查点恢复进行中')
+                if (checkpointSaveBarrier(this.projectId, fileId) &&
+                    !await reconcileCheckpointSaveBarrier(this.projectId, fileId, getCheckpointRestoreWriteState)) {
+                    throw new Error('检查点仍在恢复，请稍后重新加载文档')
+                }
                 const instances = [...new Set(Object.values(this._libreRefs || {}).filter(inst =>
                     inst && inst.file && String(inst.file.id) === String(fileId)))]
                 const active = [this.activeFileIdLeft, this.activeFileIdRight].some(id => String(id) === String(fileId))
                 if (active && !instances.length) throw new Error('目标编辑器尚未就绪，未恢复快照')
-                entry = { restoreId, instances }
+                const barrier = beginCheckpointSaveBarrier(this.projectId, fileId, restoreId)
+                if (!barrier) throw new Error('该文档已有检查点恢复进行中')
+                barrier.instances = instances
+                barrier.conversationId = conversationId
+                entry = { restoreId, instances, barrier, projectId: this.projectId, pending }
+                barrier.entry = entry
                 pending.set(String(fileId), entry)
+                entryOwnedByAction = true
                 for (const inst of instances) {
                     if (typeof inst.prepareCheckpointRestore !== 'function' || !await inst.prepareCheckpointRestore(restoreId)) {
                         throw new Error('无法暂停目标文档的保存，未恢复快照')
                     }
-                    if (pending.get(String(fileId)) !== entry) throw new Error('检查点恢复已被取消或取代')
+                    if (!ownsEntry()) throw new Error('检查点恢复已被取消或取代')
                 }
+                if (!await entry.barrier.drained) throw new Error('此前保存结果不确定，未恢复快照，请核对文件后重试')
+                if (!ownsEntry() || entry.barrier.invalidated) throw new Error('恢复期间目标编辑器已变化，请重新打开文档核对')
             } else {
                 if (!entry || entry.restoreId !== restoreId) throw new Error('检查点恢复状态已变化，请重新发起恢复')
                 if (phase === 'reload') {
                     const current = Object.values(this._libreRefs || {}).filter(inst =>
                         inst && inst.file && String(inst.file.id) === String(fileId))
-                    if (current.some(inst => !entry.instances.includes(inst))) {
+                    if (entry.barrier.invalidated || current.some(inst => !entry.instances.includes(inst))) {
                         throw new Error('恢复期间目标编辑器已变化，请重新打开文档核对')
                     }
                     for (const inst of entry.instances) {
                         if (!current.includes(inst) || !inst.ready || !inst.executor ||
-                            !await inst.reloadFromBackend(restoreId) || pending.get(String(fileId)) !== entry || !inst.executor ||
+                            !await inst.reloadFromBackend(restoreId) || !ownsEntry() || entry.barrier.invalidated || !inst.executor ||
                             !Object.values(this._libreRefs || {}).includes(inst)) {
                             throw new Error('快照已写回，但编辑器重载失败，请停止编辑并重新打开文档')
                         }
@@ -668,18 +685,19 @@ export const agentClientActionMethods = {
                         if (inst.file && String(inst.file.id) === String(fileId)) inst.failCheckpointRestore(restoreId)
                     }
                 } else throw new Error('未知检查点恢复阶段')
-                if (pending.get(String(fileId)) !== entry) throw new Error('检查点恢复已被取消或取代')
-                pending.delete(String(fileId))
+                if (!ownsEntry()) throw new Error('检查点恢复已被取消或取代')
+                endCheckpointSaveBarrier(entry.projectId, fileId, restoreId)
             }
+            prepareAckAttempted = phase === 'prepare'
             await sendEditorResult(conversationId, requestId, true, { success: true, fileId, phase }, null)
         } catch (error) {
-            if (entry && entry.restoreId === restoreId && pending.get(String(fileId)) === entry) {
+            if (entryOwnedByAction && entry && entry.restoreId === restoreId && ownsEntry()) {
                 const targets = new Set([...entry.instances, ...Object.values(this._libreRefs || {}).filter(inst =>
                     inst && inst.file && String(inst.file.id) === String(fileId))])
                 for (const inst of targets) {
                     if (inst.file && String(inst.file.id) === String(fileId) && typeof inst.failCheckpointRestore === 'function') inst.failCheckpointRestore(restoreId)
                 }
-                pending.delete(String(fileId))
+                if (!prepareAckAttempted) endCheckpointSaveBarrier(entry.projectId, fileId, restoreId)
             }
             await sendEditorResult(conversationId, requestId, false, null, error.message || String(error))
         }

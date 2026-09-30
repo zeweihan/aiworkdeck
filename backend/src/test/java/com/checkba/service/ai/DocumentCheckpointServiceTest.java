@@ -214,4 +214,39 @@ class DocumentCheckpointServiceTest {
         assertTrue(result.contains("已将《合同.docx》恢复到本轮开始前的快照"), result);
         assertTrue(result.contains("编辑器已完成重新加载。这些文件的本轮修改（含修订）已丢弃"), result);
     }
+    @Test
+    void writeStateRemainsActiveThroughStorageAndEndsBeforeLostReloadOrAbort() throws Exception {
+        for (String failure : new String[] {"none", "prepare", "storage"}) {
+            setUp();
+            when(projectFileService.getFile(1L)).thenReturn(fileOf(1L, "A.docx", "projects/1/A.docx"));
+            when(projectFileService.getFileBytes(1L)).thenReturn("baseline".getBytes());
+            when(storage.load(anyString())).thenReturn(new ByteArrayResource("baseline".getBytes()));
+            service.ensureCheckpoint("conv-1", 1L);
+            var token = new java.util.concurrent.atomic.AtomicReference<String>();
+            doAnswer(inv -> {
+                assertTrue(service.restoreMayWrite("conv-1", 1L, token.get()), "storage call is still in flight");
+                if (failure.equals("storage")) throw new java.io.IOException("write failed");
+                return null;
+            }).when(storage).save(eq("projects/1/A.docx"), any());
+            when(editorBridgeService.executeEditorCommand(eq("doc_checkpoint_restore"), any())).thenAnswer(inv -> {
+                java.util.Map<?, ?> params = inv.getArgument(1);
+                String id = (String) params.get("restoreId");
+                token.set(id);
+                String phase = (String) params.get("phase");
+                if (phase.equals("prepare")) {
+                    assertTrue(service.restoreMayWrite("conv-1", 1L, id));
+                    org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                            () -> service.restoreMayWrite("other-conversation", 1L, id));
+                    org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                            () -> service.restoreMayWrite("conv-1", 2L, id));
+                    return failure.equals("prepare") ? "{\"error\":\"timeout\"}" : "{\"success\":true}";
+                }
+                assertFalse(service.restoreMayWrite("conv-1", 1L, id), "lost editor ACK cannot retain a storage-write lock");
+                return "{\"error\":\"SSE disconnected\"}";
+            });
+            assertTrue(service.restore("conv-1").startsWith("Error"));
+            assertFalse(service.restoreMayWrite("conv-1", 1L, token.get()));
+        }
+    }
+
 }

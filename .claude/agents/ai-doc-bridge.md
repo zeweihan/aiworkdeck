@@ -7,6 +7,10 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 
 职责边界：AI 侧发出编辑指令 → 编辑器执行 的整条链路。不含编辑器内核本身（那是 doc-editor 领域），不含对话编排（ai-chat 领域）。
 
+## 插入与最终回读（dev-board#1089，2026-09-30）
+
+`doc_insert_at_cursor` 的 before/after 只定位锚点文字边界，不自动换段；独立标题/段落依赖 text 中实际换行符。多段或结构修订必须在最后一次写入后分页回读改动和相邻段落，核对分段、编号、重复及残句；完整单点回执仍可直接验证单点改动。契约在 LOWA 片段与工具描述，不能恢复成「每会话只读一次」。回归：`RedlineGranularityContractTest`、`DocumentEditToolsAnchorInsertAndPdfExportTest`；真实模型质量仍须实模验收。
+
 ## 段落号基数：doc_* 全族 0 基（已踩）
 
 编辑器侧一律 0 基——`office_thread.js` 的 `get_paragraph` / `modify_paragraph` /

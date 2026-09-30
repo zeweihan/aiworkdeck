@@ -49,6 +49,20 @@ public class DocumentCheckpointService {
      */
     private final Map<String, Map<Long, Checkpoint>> checkpoints = new ConcurrentHashMap<>();
 
+    // Registered before prepare is emitted. Removed only after the path that may
+    // write storage exits; editor ACKs and run-state cancellation are not proof.
+    private record RestoreWrite(String conversationId, Long fileId) {}
+    private final Map<String, RestoreWrite> restoreWrites = new ConcurrentHashMap<>();
+
+    public boolean restoreMayWrite(String conversationId, Long fileId, String restoreId) {
+        RestoreWrite write = restoreWrites.get(restoreId);
+        // An identity mismatch must never be interpreted as permission to unlock.
+        if (write != null && (!write.conversationId().equals(conversationId) || !write.fileId().equals(fileId))) {
+            throw new IllegalArgumentException("恢复操作归属不匹配");
+        }
+        return write != null;
+    }
+
     private record Checkpoint(Long fileId, String checkpointKey, long createdAt) {}
 
     /**
@@ -100,9 +114,14 @@ public class DocumentCheckpointService {
                 // Pause autosave and drain uploads before changing authoritative bytes.
                 // A later reload alone cannot undo an old upload racing this write.
                 needsAbort = true; // also abort a prepare whose acknowledgement timed out
-                checkpointAction(cp.fileId(), restoreId, "prepare");
-                try (InputStream in = storage.load(cp.checkpointKey()).getInputStream()) {
-                    storage.save(file.getFilePath(), in);
+                restoreWrites.put(restoreId, new RestoreWrite(conversationId, cp.fileId()));
+                try {
+                    checkpointAction(cp.fileId(), restoreId, "prepare");
+                    try (InputStream in = storage.load(cp.checkpointKey()).getInputStream()) {
+                        storage.save(file.getFilePath(), in);
+                    }
+                } finally {
+                    restoreWrites.remove(restoreId);
                 }
                 // Unlike ordinary fire-and-forget reloads, success means the active
                 // model has actually loaded the checkpoint and can safely be read.

@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 // 审计（dev-board#74）：LibreOfficeEditor 的「重试」没有重入闸。
 //
 // 病灶：下载挂起（弱网 / 代理收了头就不给正文，XHR 的 60s 超时还没到）时，
@@ -26,14 +27,14 @@ function loadMethods() {
   const body = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, '')
     .replace(/export default \{/, 'return {')
-  const factory = new Function(
+  const factory = new Function(...Object.keys(barriers),
     'getFileBytesUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
     'getAuthHeaders', 'host', 'classifyLoadFailure', 'shouldSelfHealLoadFailure',
     'createAuthorNameResolver', 'loadBudgetMs', 'openFailureOf', 'STATUS_OPEN_FAILED', body)
   // 失败分流与自愈判据喂**真实现**（dev-board#539）：桩掉它们等于把这份用例
   // 断言的 statusKey 变成测试自己写的常量。
-  return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),
+  return factory(...Object.values(barriers), (id) => '/download/' + id, () => ({ name: '测试用户' }),
     null, null, null, null, null, null, null, null,
     classifyLoadFailure, shouldSelfHealLoadFailure, createAuthorNameResolver,
     loadBudgetMs, openFailureOf, STATUS_OPEN_FAILED).methods

@@ -54,14 +54,16 @@ class BuiltinSkillsTest {
     private static final Path SKILLS_DIR = Path.of("skills");
 
     @ParameterizedTest
-    @CsvSource({"lowa,word,false", "none,word,false", "office,word,true",
-            "office,excel,true", "office,powerpoint,true"})
-    void contractReviewKeepsReadOnlyProjectDiscoveryWithinHostCapabilities(
-            String capability, String host, boolean referencesVisible) {
+    @CsvSource({"contract-review,lowa,word,false", "contract-review,none,word,false", "contract-review,office,word,true",
+            "contract-review,office,excel,true", "contract-review,office,powerpoint,true",
+            "legal-opinion-review,lowa,word,false", "legal-opinion-review,office,word,true"})
+    void reviewSkillsKeepReadOnlyProjectDiscoveryWithinHostCapabilities(
+            String skillId, String capability, String host, boolean referencesVisible) {
         SkillRouter router = new SkillRouter(registry, new SkillProperties(),
                 org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class), null);
-        router.activateForTurn("contract", "contract-run", "审查合同", "contract-review");
-        assertEquals("contract-review", router.activeSkill("contract-run").orElseThrow().getId());
+        router.activateForTurn("contract", "contract-run",
+                "contract-review".equals(skillId) ? "审查合同" : "修订法律意见书", null);
+        assertEquals(skillId, router.activeSkill("contract-run").orElseThrow().getId());
         ClientCapabilityService capabilities = new ClientCapabilityService();
         capabilities.record("contract", capability, host);
         List<ToolSpecification> hosted = realToolNames.stream()
@@ -72,7 +74,12 @@ class BuiltinSkillsTest {
                 .map(ToolSpecification::name).collect(java.util.stream.Collectors.toSet());
 
         assertTrue(visible.containsAll(List.of("search_project_content", "doc_list_project_files",
-                "search_project_files", "extract_file_text")), visible.toString());
+                "search_project_files", "extract_file_text", "ask_user", "todo_write")), visible.toString());
+        if ("lowa".equals(capability)) {
+            assertTrue(visible.containsAll(List.of("doc_get_document_text", "doc_find_replace")), visible.toString());
+        } else if ("office".equals(capability) && "word".equals(host)) {
+            assertTrue(visible.containsAll(List.of("office_get_text", "office_replace_text")), visible.toString());
+        }
         assertEquals(referencesVisible, visible.contains("ref_list"));
         assertEquals(referencesVisible, visible.contains("ref_read"));
         Set<String> restrictedNames = restricted.stream().map(ToolSpecification::name)
@@ -95,6 +102,19 @@ class BuiltinSkillsTest {
         assertTrue(skill.getPromptTemplateEn().contains("A draft cannot corroborate itself"));
         assertTrue(skill.getPromptTemplateEn().contains("qualify the body’s conclusion"));
         assertTrue(skill.getPromptTemplateEn().contains("Distinguish future contractual obligations"));
+    }
+
+    @Test
+    void contractReviewDoesNotInventIssuanceTermsAndChecksFinalEditedBody() {
+        var skill = registry.getSkill("contract-review").orElseThrow();
+        for (boolean en : new boolean[] {false, true}) {
+            String prompt = en ? skill.getPromptTemplateEn() : skill.getPromptTemplate();
+            assertTrue(prompt.contains(en ? "issue date" : "出具日期"), prompt);
+            assertTrue(prompt.contains(en ? "use restrictions" : "用途限制"), prompt);
+            assertTrue(prompt.contains(en ? "instructions or supporting material" : "指示或材料依据"), prompt);
+            assertTrue(prompt.contains(en ? "after the last" : "最后一次"), prompt);
+            assertTrue(prompt.contains("doc_get_document_text") && prompt.contains(en ? "adjacent" : "相邻"), prompt);
+        }
     }
 
     @Test
@@ -181,6 +201,7 @@ class BuiltinSkillsTest {
         // 模型只能回「我无法修改文档」——而 text-to-speech 还是默认启用的。
         Map<String, SkillDefinition.ToolPolicy> expected = new TreeMap<>(Map.of(
                 "contract-review", SkillDefinition.ToolPolicy.RESTRICT,
+                "legal-opinion-review", SkillDefinition.ToolPolicy.RESTRICT,
                 "listing-pathway", SkillDefinition.ToolPolicy.RESTRICT,
                 "litigation-visual", SkillDefinition.ToolPolicy.RESTRICT,
                 "meeting-recorder", SkillDefinition.ToolPolicy.RESTRICT,

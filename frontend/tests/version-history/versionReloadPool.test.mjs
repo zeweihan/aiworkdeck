@@ -29,7 +29,7 @@ function loadMethods(getFileDetail) {
     return { librePoolMethods, agentClientActionMethods }
   `
   // 被剥掉的 import 里，这条链真正会碰到的只有 getFileDetail；其余给个不会被调用的桩。
-  const stubNames = ['isDesktopHost', 'sendEditorResult', 'createSerialQueue',
+  const stubNames = ['checkpointSaveBarrier', 'isDesktopHost', 'sendEditorResult', 'createSerialQueue',
     'DOC_MUTATED_EVENT', 'DOC_MUTATED_DEBOUNCE_MS', 'isDocMutatingAction']
   const fn = new Function('getFileDetail', ...stubNames, body)
   return fn(getFileDetail, ...stubNames.map(() => () => {}))

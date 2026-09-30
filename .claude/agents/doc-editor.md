@@ -439,3 +439,13 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 检查范围为正文段落（不含表格、页眉页脚），单段 >15,000 字跳过并披露截断，总计 200,000 字/10,000 段/60 页。行内修订模式需切页边或最终视图。完整在线核验保留在依据窗格，打开窗格不自动调用模型或外库，点击后先保存对应文档。
 
 验证：`npm run test:inline-review`（宿主 host 契约 + guest 形态 + 纯函数 + `wiring.test.mjs` 的接线/文案四组）、`test:project-home`（「AI 审校」标签与面板动作：`review-panel-inline-check-tab.test.mjs`）、`test:lowa-inline-review`（真引擎：浮球/chip、只发 open-panel、AI 关掉后浮球仍在、收起后边缘把手可见且真鼠标点击即展开回原位、会话结束才清场、导出件无锚点），真实桌面 `tests/desktop-e2e/writing.mjs` 走完「从浮球菜单关掉 AI → 输入正文 → 浮球出数 → 拖动 → 点开右栏清单 → 切分类」。**那份桌面用例里「没有自动 AI」的断言现在靠一开始就把 AI 关掉来保证**——留着开关的话停笔 20 秒本来就会自动跑一次，那条断言会变成不稳定的红。
+
+
+### 检查点恢复的文件保存屏障（dev-board#1088）
+
+`utils/checkpointSaveBarrier.js` 按 projectId/fileId 登记从导出开始到实际 upload promise 结束的保存 lease。prepare 同步建立屏障并等待这些 lease（不依赖 Vue refs）；reload/abort 只能释放同一 restoreId。恢复期间新登记实例使本次恢复失败；文件 generation 同时拦截恢复结束后才登记的旧预取/旧模型，成功加载当前 generation 的后端字节才解除实例失效状态。
+
+上传 rejection 保守保留本页面会话的 uncertain 状态，后续 checkpoint prepare 拒绝，普通 reload 不清除该状态；即使编辑器已卸载也不会遗忘。当前实现不提供跨页面、跨客户端的服务端写入 CAS，因此不能声称 HTTP 超时后本地重开即可证明旧服务端写入停止。普通加载失败可通过现有重试/重载恢复，uncertain 上传则需核对服务端文件与请求结果。回归：`node --test tests/project-home/checkpoint*.test.mjs tests/version-history/reloadChrome.test.mjs`。
+
+
+页面销毁后丢失 reload/abort 时，恢复锁通过 `checkpoint-restore-state` 查询核对精确 conversationId/fileId/restoreId。服务端在 prepare 前登记“可能写存储”，仅在 prepare/storage.load/save 路径退出后移除，不以 run_state 或取消回执代替写入结束。新页面/普通重试确认 mayWrite=false 后失效旧实例、释放原操作并重新下载；查询失败或仍可能写入保持阻止。原 owner 正常 checkpoint reload 不走此对账；加载 seq 在首次 await 前捕获，迟到查询不能冒用后一次加载身份。该查询只用于已经收到 prepare 并持有本地精确锁的操作，不用于推断任意未知请求状态。

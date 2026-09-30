@@ -7,6 +7,14 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 职责边界：AI 对话功能本身（编排循环、工具注册分发、记忆、SSE、前端聊天 UI、评测）。AI→编辑器指令链路属 ai-doc-bridge 领域；skill 机制属 plugin-system 领域（但 SkillRouter 在编排循环里有两处旁路接入点）。
 
+## 修订时点与交付边界（dev-board#1090/#1091，2026-09-30）
+
+system prompt 的事实分级保留来源事实截止日，不凭系统当天或自填出具日外推后续状态；最终验证发生在最后一次实质修改之后。合同审查 skill 的范围/交付步骤约束不凭惯例代填正式出具日期、添加文书自身用途限制或出具者免责条款，并回读最终改动与相邻段落。此边界不限制用户已授权的合同交易条款审查。回归：`ContextAssemblerAskUserTest` 用真实组装器覆盖中英及澄清回答后的规则，`BuiltinSkillsTest` 核对中英 skill 加载；实模另验。
+
+## 法律意见书技能路由（dev-board#1092，2026-09-30）
+
+`legal-opinion-review` 独立于合同六遍清单：相关事实依据/缺口清单 → 正文与结论限定 → 来源时点 → 最终按清单回读。只审查不直接编辑，编辑范围与审查范围分开。`SkillRouter` 用本地规则在意见书主体命中后区分实质任务与纯机械编辑；并列错字/格式不排除实质审查，后置“仅限错字”限制修订，否定动作不当正向请求。不调用付费预选。当前自动匹配只读用户消息，未将 active filename 加入路由；通用“修订这个文档”仍需模型 `use_skill` 或手选。回归：`LegalOpinionSkillRoutingTest` 中英范围/否定/混合意图；`BuiltinSkillsTest` 校验真实工具名及 LOWA/Office 激活后的读取、编辑、澄清与计划工具。路由通过不等于事实核验质量通过，仍须真实模型验收。
+
 ## 系统提示瘦身（dev-board#1073，2026-09-29）
 
 - 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。

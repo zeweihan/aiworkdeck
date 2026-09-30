@@ -4,6 +4,7 @@
 // 模式说明见 .claude/agents/sidebar-shell.md 与 PR#151/#159。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
+import { checkpointSaveBarrier } from '@/utils/checkpointSaveBarrier.js'
 import { host, isDesktopHost } from '@/services/host.js'
 
 // 内嵌 LibreOffice 保活池按文档体积计权（尽调模块 P3 稳定性余项 #2，
@@ -108,7 +109,7 @@ export const librePoolMethods = {
         for (const k of Object.keys(map)) {
             if (map[k] !== executor) continue
             const ed = refs[k]
-            if (!ed || !ed.docLoadFailed) return null
+            if (!ed || (!ed.docLoadFailed && !ed._checkpointInvalidated)) return null
             return { key: k, fileId: k.slice(k.indexOf(':') + 1), code: ed.openFailCode || ed.statusKey || 'loadFailed' }
         }
         return null
@@ -116,7 +117,14 @@ export const librePoolMethods = {
     setLibreRef(pane, fileId, el) {
         const refs = this._libreRefs || (this._libreRefs = {})
         const key = pane + ':' + fileId
-        if (el) refs[key] = el
+        if (el) {
+            refs[key] = el
+            const barrier = checkpointSaveBarrier(this.projectId, fileId)
+            if (barrier && !barrier.instances?.includes(el)) {
+                barrier.invalidated = true
+                el.failCheckpointRestore?.(barrier.restoreId)
+            }
+        }
         else delete refs[key]
     },
     // 活跃实例指针（同 PR#151 WPS 编辑器模式）：AI 指令路由到焦点 pane 的

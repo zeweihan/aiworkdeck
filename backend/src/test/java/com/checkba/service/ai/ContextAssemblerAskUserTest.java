@@ -142,6 +142,20 @@ class ContextAssemblerAskUserTest {
     }
 
     @Test
+    void assembledRevisionPromptRequiresSourceCutoffAndFinalArtifactCheck() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            for (String prompt : List.of("修订当前文书", ANSWER)) {
+                String system = ((SystemMessage) assemble(prompt, AgentMode.AGENT, activeDoc()).get(0)).text();
+                assertTrue(system.contains(english ? "source's as-of date" : "来源的事实截止日"), system);
+                assertTrue(system.contains(english ? "today or the issue date" : "今天或出具日"), system);
+                assertTrue(system.contains(english ? "after the last substantive edit" : "最后一次实质修改后"), system);
+                assertTrue(system.contains(english ? "verify again" : "再次核对"), system);
+            }
+        }
+    }
+
+    @Test
     void answerMessageSwitchesTheTailToContinueAndNeverAsksAgain() {
         String text = lastUserText(assemble(ANSWER, AgentMode.AGENT, null));
         assertTrue(text.startsWith(ANSWER), "回答原样进入下一轮，模型才知道答的是哪一问: " + text);
