@@ -337,3 +337,26 @@ test('settings request opens the host settings tab without touching any lookup A
   assert.deepEqual(opened, [{ nav: 'account' }])
   assert.equal(f.calls.some((c) => ['lookup', 'detail'].includes(c.name)), false)
 })
+
+
+test('paid lookup errors preserve account and wallet hints across the editor bridge', async () => {
+  const f = fixture()
+  for (const [fields, hint] of [[{ code: 4011, accountRequired: true }, 'NOT_CONNECTED'], [{ reason: 'no_credits' }, 'NO_CREDITS']]) {
+    f.api.lookup = async () => { throw Object.assign(new Error('Please sign in or add credits'), fields) }
+    await f.request('lookup', { kind: 'LAW', text: 'Synthetic law' })
+    const response = f.messages.at(-1)
+    assert.equal(response.error, 'Please sign in or add credits')
+    assert.equal(response.hint, hint)
+    assert.equal(response.result, undefined)
+  }
+})
+
+test('editor login and recharge actions open in-place dialogs without repeating lookup', async () => {
+  const opened = []
+  const host = createWritingAssistanceHost({ projectId: 1, fileId: 2, userId: 3, writable: true,
+    send() {}, storage: { get() {} }, api: {}, execute: async () => ({}),
+    openAccount: async () => opened.push('login'), openRecharge: async () => opened.push('recharge') })
+  for (const action of ['login', 'recharge']) await host.handle({ type: 'writing-request', session: host.session, id: 1, action })
+  assert.deepEqual(opened, ['login', 'recharge'])
+  host.destroy()
+})

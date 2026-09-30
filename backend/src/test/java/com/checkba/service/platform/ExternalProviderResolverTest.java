@@ -33,8 +33,8 @@ class ExternalProviderResolverTest {
     }
 
     @Test
-    @DisplayName("local-mode：设置写什么就是什么")
-    void localModeHonoursSetting() {
+    @DisplayName("官方桌面付费服务强制走账户网关，仅本地 ASR 不受影响")
+    void localModeRequiresAccountGateway() {
         Map<String, String> rows = new HashMap<>();
         rows.put("external.search.provider", "platform");
         rows.put("external.asr.provider", "local");
@@ -44,7 +44,14 @@ class ExternalProviderResolverTest {
         assertTrue(r.platformAvailable());
         assertEquals(ExternalServiceProvider.PLATFORM, r.resolve("search"));
         assertEquals(ExternalServiceProvider.LOCAL, r.resolve("asr"));
-        assertEquals(ExternalServiceProvider.BYOK, r.resolve("ocr"));
+        assertEquals(ExternalServiceProvider.PLATFORM, r.resolve("ocr"));
+        for (ExternalServiceProvider.Descriptor d : ExternalServiceProvider.ALL) {
+            rows.put(d.providerSettingKey(), "byok");
+            assertEquals(ExternalServiceProvider.PLATFORM, r.resolve(d.service()));
+            rows.put(d.providerSettingKey(), "local");
+            assertEquals(d.hasLocal() ? ExternalServiceProvider.LOCAL : ExternalServiceProvider.PLATFORM,
+                    r.resolve(d.service()), "Unsupported local settings must not enable paid BYOK");
+        }
     }
 
     @Test

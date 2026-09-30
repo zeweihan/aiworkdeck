@@ -49,7 +49,7 @@ class ExternalServiceDualTierRoutingTest {
                     ? tier.settingValue()
                     : inv.getArgument(1);
         });
-        return new ExternalProviderResolver(settings, true);
+        return new ExternalProviderResolver(settings, tier != ExternalServiceProvider.BYOK);
     }
 
     private static PlatformGatewayClient gatewayReturning(String dataJson) {
@@ -389,23 +389,19 @@ class ExternalServiceDualTierRoutingTest {
         }
 
         @Test
-        @DisplayName("自备 Key 档：与改造前逐字一致，三个变量照旧注入")
-        void byokInjectsAsBefore() {
-            var env = tools(ExternalServiceProvider.BYOK, ExternalServiceProvider.BYOK)
-                    .injectableCredentials();
-            assertEquals("ts-token", env.get("TUSHARE_TOKEN"));
-            assertEquals("qcc-key", env.get("QICHACHA_KEY"));
-            assertEquals("qcc-secret", env.get("QICHACHA_SECRET"));
+        @DisplayName("官方桌面历史自备 Key 不得注入 Python 外呼环境")
+        void desktopLegacyKeysAreNotInjected() {
+            assertTrue(tools(ExternalServiceProvider.BYOK, ExternalServiceProvider.BYOK)
+                    .injectableCredentials().isEmpty());
         }
 
         @Test
-        @DisplayName("两家档位互不影响：一家平台一家自备时只注入自备那家")
-        void tiersAreIndependent() {
-            var env = tools(ExternalServiceProvider.PLATFORM, ExternalServiceProvider.BYOK)
-                    .injectableCredentials();
-            assertFalse(env.containsKey("TUSHARE_TOKEN"));
-            assertEquals("qcc-key", env.get("QICHACHA_KEY"));
+        @DisplayName("官方桌面混合历史档位也不能泄漏凭证或绕过账户")
+        void desktopMixedLegacyTiersCannotInjectKeys() {
+            assertTrue(tools(ExternalServiceProvider.PLATFORM, ExternalServiceProvider.BYOK)
+                    .injectableCredentials().isEmpty());
         }
+
     }
 
     // =======================================================================
@@ -421,7 +417,7 @@ class ExternalServiceDualTierRoutingTest {
                     .thenThrow(new GatewayException(GatewayException.Kind.SERVICE_DISABLED, "该服务暂未开放"));
             TushareService ts = mock(TushareService.class);
             when(ts.queryJson(anyString(), anyMap(), anyString()))
-                    .thenThrow(new GatewayException(GatewayException.Kind.NO_CREDITS, "Credits 余额不足，到官网充值后即可继续"));
+                    .thenThrow(new GatewayException(GatewayException.Kind.SERVICE_DISABLED, "该服务暂未开放"));
 
             EnterpriseDataTools tools = new EnterpriseDataTools(qcc, ts);
 

@@ -197,14 +197,17 @@ public class LegalTools implements AgentToolComponent {
      * 法宝检索的双档分发，分发本身在
      * {@link com.checkba.service.legal.PkulawChannel}（依据窗格与本工具共用，dev-board#395）。
      *
-     * <p>网关失败<b>不抛异常打断整轮对话</b>：这是给模型看的文本，
-     * 说清楚发生了什么、下一步是什么，让它基于已有信息继续——
-     * 与「未配置」那条既有分支同一口径（licensing-billing 地雷 27）。
+     * <p>账户错误保留机器分类，由 ToolRegistry 通知前端登录或充值，再回喂跳过说明。
+     * 其余网关失败直接返回文本，让模型基于已有信息继续（licensing-billing 地雷 27）。
      */
     private String callPkulaw(String server, String tool, Map<String, Object> args) {
         try {
             return pkulawChannel.callTool(server, tool, args);
         } catch (com.checkba.service.platform.GatewayException e) {
+            switch (e.getKind()) {
+                case NOT_CONNECTED, UNAUTHORIZED, NO_CREDITS -> throw e;
+                default -> { }
+            }
             log.warn("平台法规检索失败 kind={}: {}", e.getKind(), e.getMessage());
             // 刻意不带 Error / 错误 前缀（dev-board#1065 T-11 裁决）：这是「跳过法规检索、继续干活」的
             // 软失败，判成失败会让连续失败纠正回路催模型换思路，而正确的下一步正是照常把任务做完。

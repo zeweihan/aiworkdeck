@@ -38,6 +38,7 @@ public class AiAgentController {
     private final com.checkba.service.ai.ClientCapabilityService clientCapabilityService;
     private final com.checkba.service.ai.subagent.SubAgentService subAgentService;
     private final com.checkba.service.ai.AgentInboxService agentInboxService;
+    private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AiAgentController(SseEmitterService sseEmitterService,
@@ -50,7 +51,8 @@ public class AiAgentController {
                             com.checkba.service.ProjectMemberService projectMemberService,
                             com.checkba.service.ai.ClientCapabilityService clientCapabilityService,
                             com.checkba.service.ai.subagent.SubAgentService subAgentService,
-                            com.checkba.service.ai.AgentInboxService agentInboxService) {
+                            com.checkba.service.ai.AgentInboxService agentInboxService,
+                            com.checkba.service.ai.ChatModelFactory chatModelFactory) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
@@ -62,6 +64,7 @@ public class AiAgentController {
         this.clientCapabilityService = clientCapabilityService;
         this.subAgentService = subAgentService;
         this.agentInboxService = agentInboxService;
+        this.chatModelFactory = chatModelFactory;
     }
 
     /**
@@ -176,6 +179,8 @@ public class AiAgentController {
         if (request.getMessage() == null || request.getMessage().isBlank()) {
             return chatError(400, LangText.of("消息内容不能为空", "Message cannot be empty"));
         }
+
+        chatModelFactory.ensurePaidAccess(userId);
 
         log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}",
                 request.getProjectId(), request.getConversationId(), request.getAgentMode(), request.getMessage());
@@ -382,6 +387,8 @@ public class AiAgentController {
                     LangText.of("无权写入该项目", "You do not have write access to this project") + "\"}");
         }
 
+        chatModelFactory.ensurePaidAccess(userId);
+
         log.info("Received PPT Generation Request: topic={}, editable={}", request.getTopic(), request.isExportEditable());
         
         // Create final variable for lambda capture
@@ -391,19 +398,27 @@ public class AiAgentController {
         // 平台通道按用户计费：后台线程上显式建立身份作用域，否则多租户下取不到 key
         java.util.concurrent.CompletableFuture.runAsync(() ->
             com.checkba.service.ai.PlatformAiUserScope.run(effectiveUserId, () -> {
-                String outcome = pptxTools.performPptGenerationWithProgress(
-                    request.getTopic(),
-                    request.getProjectId(),
-                    request.getParentId(),
-                    request.getFileName(),
-                    request.getStyle(),
-                    request.getLanguage(),
-                    request.getModelId(),
-                    request.getConversationId(),
-                    effectiveUserId,
-                    request.isExportEditable()
-                );
-                persistPptOutcome(request, effectiveUserId, outcome);
+                try {
+                    String outcome = pptxTools.performPptGenerationWithProgress(
+                        request.getTopic(),
+                        request.getProjectId(),
+                        request.getParentId(),
+                        request.getFileName(),
+                        request.getStyle(),
+                        request.getLanguage(),
+                        request.getModelId(),
+                        request.getConversationId(),
+                        effectiveUserId,
+                        request.isExportEditable()
+                    );
+                    persistPptOutcome(request, effectiveUserId, outcome);
+                } catch (com.checkba.service.account.AccountException e) {
+                    persistPptOutcome(request, effectiveUserId, e.getMessage());
+                    if (request.getConversationId() != null) {
+                        sseEmitterService.send(request.getConversationId(), "account_action_required",
+                                cn.hutool.json.JSONUtil.toJsonStr(com.checkba.service.account.AccountRequired.envelope(e)));
+                    }
+                }
             }));
 
         return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"PPT generation started\"}");

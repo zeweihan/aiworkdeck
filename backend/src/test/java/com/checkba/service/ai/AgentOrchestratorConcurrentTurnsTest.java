@@ -410,7 +410,9 @@ class AgentOrchestratorConcurrentTurnsTest {
         assertTrue(firstToolRunning.await(10, TimeUnit.SECONDS), "第一轮没进入工具执行");
 
         // 第一轮的工具还在跑，第二轮起跑并跑完——它命中的是另一个 skill
-        when(chatModelFactory.getStreamingChatModel(MODEL)).thenReturn(second);
+        // The factory is now checked on each round; route the synthetic models by turn.
+        when(chatModelFactory.getStreamingChatModel(MODEL))
+                .thenAnswer(inv -> Thread.currentThread() == t1 ? first : second);
         orchestrator.handleUserMessage(request("帮我做一下脱敏"), 7L);
 
         firstToolMayReturn.countDown();

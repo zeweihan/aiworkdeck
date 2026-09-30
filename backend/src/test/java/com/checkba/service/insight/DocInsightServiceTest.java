@@ -63,6 +63,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -231,6 +232,44 @@ class DocInsightServiceTest {
         verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
     }
 
+    @Test
+    void paidParseIsRejectedBeforePersistingOrStartingWork() throws Exception {
+        doThrow(new com.checkba.service.account.AccountException(
+                com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, "请登录"))
+                .when(chatModelFactory).ensurePaidAccess(UID);
+        assertThrows(com.checkba.service.account.AccountException.class, () -> svc.startParse(UID, PID, DOC));
+        verify(runs, never()).save(any());
+        verify(docText, never()).extractText(any());
+        verify(model, never()).generate(anyList());
+    }
+
+    @Test
+    void explicitLookupRequiresAccountBeforeCheckingProviderCredentials() {
+        when(providerResolver.resolve(ExternalServiceProvider.QICHACHA)).thenReturn(ExternalServiceProvider.PLATFORM);
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW)).thenReturn(ExternalServiceProvider.PLATFORM);
+        doThrow(new GatewayException(GatewayException.Kind.NOT_CONNECTED, "请登录"))
+                .when(gateway).ensureConnected();
+        for (String kind : List.of("COMPANY", "LAW", "CASE")) {
+            GatewayException e = assertThrows(GatewayException.class,
+                    () -> svc.lookupSelection(UID, PID, kind, "测试文字"));
+            assertEquals(GatewayException.Kind.NOT_CONNECTED, e.getKind());
+        }
+        verify(gateway, never()).call(anyString(), anyString(), anyMap(), anyInt());
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void explicitLookupPreservesTopUpFailure() {
+        when(providerResolver.resolve(ExternalServiceProvider.PKULAW)).thenReturn(ExternalServiceProvider.PLATFORM);
+        when(gateway.call(anyString(), anyString(), anyMap(), anyInt()))
+                .thenThrow(new GatewayException(GatewayException.Kind.NO_CREDITS, "请充值"));
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> svc.lookupSelection(UID, PID, "LAW", "《中华人民共和国公司法》"));
+        assertEquals(GatewayException.Kind.NO_CREDITS, e.getKind());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+    }
+
     /** 带 tokenUsage 的回包——不带的话记账那条断言永远是空的（真实通道一定会回 usage）。 */
     private static Response<AiMessage> modelReply(String text) {
         return Response.from(AiMessage.from(text), new dev.langchain4j.model.output.TokenUsage(120, 80));
@@ -238,7 +277,7 @@ class DocInsightServiceTest {
 
     private DocInsightService newService() {
         return new DocInsightService(runs, entityRepo, findingRepo, files, members, docText,
-                chatModelFactory, auxModelResolver, tokenUsageService, qichacha, mcp, pkulaw, props,
+                chatModelFactory, auxModelResolver, tokenUsageService, qichacha, mcp, pkulaw, providerResolver, gateway, props,
                 new ObjectMapper());
     }
 
@@ -810,6 +849,42 @@ class DocInsightServiceTest {
     }
 
     @Test
+    void extractionRechecksCreditsBeforeEveryChunkAndStopsAtEmptyBalance() throws Exception {
+        props.setChunkChars(10000);
+        props.setChunkOverlap(500);
+        when(docText.extractText(any())).thenReturn("文".repeat(30000));
+        when(model.generate(anyList())).thenReturn(modelReply("{}"));
+        when(chatModelFactory.getAuxChatModel()).thenReturn(model).thenThrow(
+                new com.checkba.service.account.AccountException(
+                        com.checkba.service.account.AccountException.Kind.CONFLICT, "请充值", "no_credits"));
+
+        DocInsightRun run = awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_FAILED);
+
+        assertTrue(run.getError().contains("请充值"), run.getError());
+        verify(chatModelFactory, org.mockito.Mockito.times(2)).getAuxChatModel();
+        verify(model, org.mockito.Mockito.times(1)).generate(anyList());
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void extractionDoesNotSkipAccountFailureIntoAnotherPaidChunk() throws Exception {
+        props.setChunkChars(10000);
+        props.setChunkOverlap(500);
+        when(docText.extractText(any())).thenReturn("文".repeat(30000));
+        when(model.generate(anyList())).thenThrow(new com.checkba.service.account.AccountException(
+                com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, "请登录"));
+
+        DocInsightRun run = awaitStatus(svc.startParse(UID, PID, DOC).runId(), DocInsightRun.STATUS_FAILED);
+
+        assertTrue(run.getError().contains("请登录"), run.getError());
+        verify(chatModelFactory, org.mockito.Mockito.times(1)).getAuxChatModel();
+        verify(model, org.mockito.Mockito.times(1)).generate(anyList());
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+    }
+
+    @Test
     @DisplayName("单块模型输出坏掉只跳过这一块，不炸整轮")
     void 模型输出坏掉不炸整轮() throws Exception {
         when(model.generate(anyList())).thenReturn(modelReply("对不起，我不能这么做。"));
@@ -1169,10 +1244,24 @@ class DocInsightServiceTest {
         assertTrue(result.findings().stream().anyMatch(f -> "PLACEHOLDER".equals(f.kind())
                 && f.paragraphIndex() == 8 && f.expectedParagraph().contains("____")));
         verify(chatModelFactory, never()).getAuxChatModel();
+        verify(chatModelFactory, never()).ensurePaidAccess(any());
+        verify(gateway, never()).ensureConnected();
         verify(qichacha, never()).queryEciInfoJson(anyString());
         verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
         verify(runs, never()).save(any());
         verify(findingRepo, never()).save(any());
+    }
+
+    @Test
+    void deepReviewPreservesAccountErrorInsteadOfPartialResult() {
+        when(chatModelFactory.getAuxChatModel(any(java.time.Duration.class))).thenThrow(
+                new com.checkba.service.account.AccountException(
+                        com.checkba.service.account.AccountException.Kind.CONFLICT, "请充值", "no_credits"));
+        com.checkba.service.account.AccountException error = assertThrows(
+                com.checkba.service.account.AccountException.class,
+                () -> svc.review(UID, PID, DOC, List.of(new ParagraphInput(0, "测试审校文字")), true, false));
+        assertEquals("no_credits", error.getReason());
+        verify(model, never()).generate(anyList());
     }
 
     @Test

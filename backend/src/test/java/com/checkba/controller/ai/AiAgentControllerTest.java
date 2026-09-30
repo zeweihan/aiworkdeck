@@ -52,6 +52,8 @@ class AiAgentControllerTest {
     private AgentOrchestrator agentOrchestrator;
     private com.checkba.service.ai.AgentInboxService inboxService;
     private AiAgentController controller;
+    private SseEmitterService sse;
+    private com.checkba.service.ai.ChatModelFactory chatModelFactory;
 
     @BeforeEach
     void setUp() {
@@ -62,8 +64,10 @@ class AiAgentControllerTest {
         projectMemberService = mock(ProjectMemberService.class);
         agentOrchestrator = mock(AgentOrchestrator.class);
         inboxService = mock(com.checkba.service.ai.AgentInboxService.class);
+        sse = mock(SseEmitterService.class);
+        chatModelFactory = mock(com.checkba.service.ai.ChatModelFactory.class);
         controller = new AiAgentController(
-                mock(SseEmitterService.class),
+                sse,
                 agentOrchestrator,
                 messageService,
                 backgroundTaskService,
@@ -73,7 +77,43 @@ class AiAgentControllerTest {
                 projectMemberService,
                 mock(ClientCapabilityService.class),
                 subAgentService,
-                inboxService);
+                inboxService, chatModelFactory);
+    }
+
+    @Test
+    void unpaidChatDoesNotEnterInboxOrStartWork() {
+        var req = new AiAgentController.AgentChatRequest();
+        req.setProjectId(42L);
+        req.setConversationId("conv-1");
+        req.setMessage("Paid request");
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
+            when(messageService.canUseConversation("conv-1", 7L)).thenReturn(true);
+            org.mockito.Mockito.doThrow(com.checkba.service.account.AccountRequired.exception("platform_ai", "Sign in"))
+                    .when(chatModelFactory).ensurePaidAccess(7L);
+            org.junit.jupiter.api.Assertions.assertThrows(com.checkba.service.account.AccountException.class,
+                    () -> controller.startSession(req, "s", null));
+            org.mockito.Mockito.verifyNoInteractions(inboxService, agentOrchestrator);
+        }
+    }
+
+    @Test
+    void pptAccountFailureAfterAcceptanceStillPromptsTheUser() {
+        var req = new AiAgentController.PptGenerationRequest();
+        req.setProjectId(42L);
+        req.setConversationId("conv-ppt");
+        req.setTopic("Synthetic");
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
+            when(projectMemberService.hasWritePermission(42L, 7L)).thenReturn(true);
+            org.mockito.Mockito.doThrow(new com.checkba.service.account.AccountException(
+                    com.checkba.service.account.AccountException.Kind.CONFLICT, "请充值", "no_credits"))
+                    .when(pptxTools).performPptGenerationWithProgress(any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+            assertEquals(200, controller.performPptGeneration(req, "s").getStatusCode().value());
+            verify(sse, timeout(2000)).send(eq("conv-ppt"), eq("account_action_required"),
+                    org.mockito.ArgumentMatchers.argThat(payload -> payload.toString().contains("no_credits")));
+        }
     }
 
     private AiAgentController.SubtaskCancelRequest subtaskReq(String conv, String subtaskId) {

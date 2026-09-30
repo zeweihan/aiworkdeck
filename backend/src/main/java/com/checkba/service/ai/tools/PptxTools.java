@@ -554,6 +554,9 @@ public class PptxTools implements AgentToolComponent {
                 );
             }
 
+        } catch (com.checkba.service.account.AccountException e) {
+            if (taskId != null) backgroundTaskService.failTask(taskId, e.getMessage());
+            throw e;
         } catch (Exception e) {
             // 同上：这条外层 catch 覆盖服务不可用/网络失败等更早期的异常，taskId 若已注册
             // 同样必须标失败，否则这条 RUNNING 记录永远回收不了（本条是 dev-board#74 的触发场景：
@@ -629,6 +632,8 @@ public class PptxTools implements AgentToolComponent {
             
             return sb.toString();
             
+        } catch (com.checkba.service.account.AccountException e) {
+            throw e;
         } catch (Exception e) {
             log.error("PPTX outline generation failed", e);
             return "错误：大纲生成失败: " + e.getMessage();
@@ -960,6 +965,8 @@ public class PptxTools implements AgentToolComponent {
                     "这个 PPTX 文件中的文字和表格都可以直接编辑。",
                     saved);
             
+        } catch (com.checkba.service.account.AccountException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to export editable PPTX", e);
             return "错误：可编辑 PPTX 导出失败: " + e.getMessage();
@@ -1093,6 +1100,7 @@ public class PptxTools implements AgentToolComponent {
         if (provider == AiModelProperties.Provider.AWD_CLOUD) {
             // 平台通道：密钥由官网按账户 provision。取不到时原样抛业务异常——静默回退用户自己的
             // BYOK key 等于拿用户的钱去跑，还会掩盖「额度未就绪」这类需要去官网处理的状态。
+            chatModelFactory.ensurePaidAccess(com.checkba.service.ai.PlatformAiUserScope.current());
             apiKey = platformAiChannel.apiKey();
             // baseUrl 只认 yml：DB 那份是用户 BYOK 的自定义地址，把 provision 出来的凭据发过去
             // 等于把平台密钥交出去（与 ChatModelFactory 平台通道同规矩）

@@ -155,6 +155,75 @@ class AgentOrchestratorFailoverFlowTest {
         return String.join("\n", sseData);
     }
 
+    private StreamingChatLanguageModel continuationModel(java.util.concurrent.atomic.AtomicInteger requests) {
+        StreamingChatLanguageModel model = mock(StreamingChatLanguageModel.class);
+        doAnswer(inv -> {
+            requests.incrementAndGet();
+            StreamingResponseHandler<AiMessage> handler = inv.getArgument(2);
+            // An incomplete tag asks the orchestrator to make a correction round.
+            handler.onComplete(Response.from(AiMessage.from("<final>")));
+            return null;
+        }).when(model).generate(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyList(), any());
+        return model;
+    }
+
+    @Test
+    void continuationStopsWithRechargePayloadBeforeAnotherPaidRequest() {
+        var requests = new java.util.concurrent.atomic.AtomicInteger();
+        var model = continuationModel(requests);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(model, model)
+                .thenThrow(new com.checkba.service.account.AccountException(
+                        com.checkba.service.account.AccountException.Kind.CONFLICT, "请充值", "no_credits"));
+
+        run("conv-credits-ended");
+
+        assertEquals(1, requests.get(), "余额检查失败后不能再调用上一轮持有的模型");
+        assertTrue(allText().contains("no_credits"), allText());
+        assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-credits-ended").status());
+        verify(chatModelFactory, never()).getStreamingChatModel(BACKUP);
+    }
+
+    @Test
+    void continuationStopsWithLoginPayloadAfterLogout() {
+        var requests = new java.util.concurrent.atomic.AtomicInteger();
+        var model = continuationModel(requests);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(model, model)
+                .thenThrow(com.checkba.service.account.AccountRequired.exception("platform_ai", "请登录"));
+
+        run("conv-logged-out");
+
+        assertEquals(1, requests.get());
+        assertTrue(allText().contains("4011"), allText());
+        assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-logged-out").status());
+    }
+
+    @Test
+    void continuationUsesCurrentAccountModelInsteadOfPreviousAccountsKey() {
+        var requests = new java.util.concurrent.atomic.AtomicInteger();
+        var previousAccountModel = continuationModel(requests);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY))
+                .thenReturn(previousAccountModel, previousAccountModel, new HealthyModel("当前账户已完成"));
+
+        run("conv-account-switched");
+
+        assertEquals(1, requests.get(), "账户切换后不能再调用旧账户的模型");
+        assertTrue(allText().contains("当前账户已完成"), allText());
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-account-switched").status());
+    }
+
+    @Test
+    void upstreamCloudQuotaErrorRequestsRechargeWithoutFailover() {
+        when(chatModelFactory.resolveProvider()).thenReturn(com.checkba.config.AiModelProperties.Provider.AWD_CLOUD);
+        when(chatModelFactory.getStreamingChatModel(PRIMARY)).thenReturn(
+                new FailingModel(new RuntimeException("status code: 402 - Insufficient credits")));
+
+        run("conv-runtime-quota");
+
+        assertTrue(allText().contains("no_credits"), allText());
+        assertEquals(AgentRunStateService.RunStatus.ERROR, runState.get("conv-runtime-quota").status());
+        verify(chatModelFactory, never()).getStreamingChatModel(BACKUP);
+    }
+
     @Test
     @DisplayName("模型下线 404：立刻换备选把本轮跑完，用户看到切换提示而不是报错")
     void switchesToBackupOnModelOffline() {
@@ -166,7 +235,7 @@ class AgentOrchestratorFailoverFlowTest {
 
         run("conv-failover");
 
-        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        verify(chatModelFactory, org.mockito.Mockito.times(2)).getStreamingChatModel(BACKUP);
         assertTrue(allText().contains("已自动切换到备用模型"), "必须明确告诉用户换了模型：" + allText());
         assertTrue(allText().contains(BACKUP), "提示里要点名切到了哪个模型");
         assertFalse(sseEvents.contains("error"), "换成功就不该再给用户报错");
@@ -195,7 +264,7 @@ class AgentOrchestratorFailoverFlowTest {
 
         run("conv-sync-failure");
 
-        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        verify(chatModelFactory, org.mockito.Mockito.times(2)).getStreamingChatModel(BACKUP);
         assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-sync-failure").status());
         int eventCount = sseEvents.size();
         captured.get().onNext("迟到的内容");
@@ -215,7 +284,7 @@ class AgentOrchestratorFailoverFlowTest {
 
         run("conv-region");
 
-        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        verify(chatModelFactory, org.mockito.Mockito.times(2)).getStreamingChatModel(BACKUP);
         assertTrue(allText().contains("在当前网络环境不可用"), "要说清原模型为什么不能用：" + allText());
         assertTrue(allText().contains(BACKUP), "要点名切到了哪个模型");
         assertFalse(sseEvents.contains("error"), "换成功就不该再给用户报错");
@@ -306,7 +375,7 @@ class AgentOrchestratorFailoverFlowTest {
 
         run("conv-think-timeout");
 
-        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        verify(chatModelFactory, org.mockito.Mockito.times(2)).getStreamingChatModel(BACKUP);
         assertEquals(1, primary.calls.get(), "思考过的轮不许同模型重放——每重放一次都是从头想、从头计费");
         assertFalse(allText().contains("秒后自动重试"), "不该出现同模型退避提示：" + allText());
         assertTrue(allText().contains("已自动切换到备用模型"), "要告诉用户换了模型：" + allText());

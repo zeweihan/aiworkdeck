@@ -110,7 +110,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   机器级路径（缓存 `~/.aiworkdeck/platform-ai-key.json`，0600）与 per-user 路径在这里分叉，
   `keyFingerprint()` 供模型实例缓存失效。缓存文件带 `owner`（签发它的账户指纹），
   归属对不上一律丢弃重取（见地雷 22）。`usesMachineKey(userId)` 是余额闸的适用判据。
-- `service/ai/PlatformCreditsGate.java` — **余额闸**：确知 Credits 为 0 时不让这一轮跑起来，
+- `service/ai/PlatformCreditsGate.java` — **余额闸**：确认账户与正余额后才能启动付费调用，
   由 `ChatModelFactory.platformApiKey()` 在取 key 之前调用（那是平台通道每条消息的必经点）。
   三条判据见地雷 23。
 - `service/ai/PlatformUsageAccountant.java` — 平台通道真实扣费对账（`GET https://openrouter.ai/api/v1/key` 累计消费差分），
@@ -464,7 +464,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 `AdminPane`（账户分区/钱包/资料）、`TeamPanel`、`MeetingRecordingPanel`；C 卡的 rail 账户入口与顶栏
 要订同一个事件（`LicenseController.status` 的 `graceKind`/`daysRemaining` 形状不变）。
 
-**接入点**（缺一项算没做完）：AI 发送（`ChatInterface.ensureAiAccount`，只管 `activeProvider=AWD_CLOUD`）、
+**接入点**（缺一项算没做完）：AI 发送（`ChatInterface.ensureAiAccount`，除显式本地 OLLAMA 外均检查）、
 广场付费项三处（`MarketPane`/`MarketSidebarPanel`/`MarketDetailPane` 的「需连接账户」→ 登录后按新账户重拉，
 已购就直接装）、团队（`TeamPanel` 空态、`CollabDialog`/`InviteMemberDialog` 的「放进官方案件库」）、
 手机端同步（设置页「账户与用量」新增的一节，未登录时如实说+登录按钮）、会议转写平台档
@@ -853,12 +853,21 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     不是「这个人还有没有钱」。补这一段的是 `PlatformCreditsGate`，三条判据顺序不能换：
     ① **只管机器级路径**（`usesMachineKey`）——per-user 路径的额度在官网签发 key 时已按人闸住，
     且本端拿不到对方的 awdk_ Key，查也查不了；
-    ② **确知为 0 才拦**——`GET /api/account/ai-usage` 在上游不可达时仍回 200 + 真实 `creditsCents`，
-    只有网络失败/端点缺失/字段缺失这三种「不知道」一律放行（同地雷 6：权益失效不等于把人锁在外面），
-    且**不保留上一次的 0**，否则一次抖动就把刚充完值的人锁住；
-    ③ **首次同步、之后后台刷新**（60 秒保鲜）——全新的零余额账户第一条消息就必须被拦住，
-    所以第一次不能异步；之后不给每条消息加一次官网往返。
-    文案照旧不得含「登录」「未授权」「请先」（地雷 1）。护栏：`PlatformCreditsGateTest`。
+    ② **必须确认正余额**（2026-09-30，dev-board#1083）——未连接账户回 4011；余额为零/负数回
+    `CONFLICT + reason=no_credits`；网络失败或缺余额字段阻止新付费请求，保留“无法确认余额”的原因，
+    不能伪称余额为零，也不能继续花费。此规则只管外部支出，本地编辑与离线功能不受影响。
+    ③ **首次及过期同步校验**——正余额按账户缓存 60 秒，过期先同步查询再放行；零余额不复用缓存，
+    充值后的下一次操作即可重查。换账户清缓存，查询途中换账户也拒绝使用旧结果。
+    `ChatModelFactory` 在官方桌面 local-mode 对非显式 OLLAMA 强制选择 AWD_CLOUD，旧数据库或 env 的
+    OpenRouter Key 不得绕过账户；`ensurePaidAccess(userId)` 给异步任务入口预检，不能代替实际请求前的检查。
+    主/子 Agent 每轮重新获取模型，听写与 PPT 的直接取 key 路径也须经过余额闸。
+    前端 `requireRecharge` 复用 `RechargeDialog` 就地充值；HTTP（含聊天直连 fetch）与 SSE 按机器码处理，不自动重发付费操作。
+    工具内部的账户失败由 `ToolRegistry` 发 `account_action_required` 非终态 SSE，弹账户操作框同时让模型基于已有信息继续，
+    不能借用终态 `error` 事件；普通供应商故障不弹账户框。认证表单自身请求不得自动弹登录层，以免等待自身弹框完成。
+    编辑器明确查询（lookup/refresh）账户/余额失败须穿透为结构化异常，不能吞成“未配置 Key”或空结果。
+    `ExternalProviderResolver` 在运行时保障桌面付费服务走 PLATFORM，仅有效 ASR LOCAL 保留，不能只靠启动迁移。
+    护栏：`PlatformCreditsGateTest`、`ChatModelFactoryTest`、`DocInsightServiceTest` 与 `frontend/tests/account`。
+
 
 ## 平台服务网关（2026-08-17 起，分六批 P0-P5）
 
@@ -1146,7 +1155,7 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     网关按 `meta.taskId` 累计，那就得由桌面端在每次调用上带 taskId 与阈值。
     在那之前，**别在界面上把它说成硬性封顶**（文案已按「什么时候问你一句」写）。
 
-42. **用量取不到给 null，绝不退化成 0**（同「余额/权益查不到就放行」那条的同源判断）。
+42. **用量取不到给 null，绝不退化成 0**（展示未知用量，不把未知写成零；付费准入另由余额闸判断）。
     `GET /api/platform-services` 的 `usage` 整段为 null = 读不到，界面显示「—」；
     拿到了但某项服务不在表里 = 本月真没花过，那是一个真实的 0。
     两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，

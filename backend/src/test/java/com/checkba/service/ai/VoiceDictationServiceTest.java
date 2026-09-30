@@ -21,7 +21,7 @@ import static org.mockito.Mockito.*;
 class VoiceDictationServiceTest {
 
     private VoiceDictationService service(PlatformAiChannel channel) {
-        return new VoiceDictationService(channel, "https://unreachable.invalid/api/v1", "xiaomi/mimo-v2.5");
+        return new VoiceDictationService(channel, mock(PlatformCreditsGate.class), "https://unreachable.invalid/api/v1", "xiaomi/mimo-v2.5");
     }
 
     @Test
@@ -74,6 +74,50 @@ class VoiceDictationServiceTest {
         when(channel.availableFor(1L)).thenReturn(true);
         assertThrows(IllegalStateException.class,
                 () -> service(channel).transcribe(1L, Base64.getEncoder().encodeToString(new byte[16]), "wav", 1000));
+    }
+
+    @Test
+    void rejectsNoCreditsBeforeResolvingEvenACachedKey() {
+        PlatformAiChannel channel = mock(PlatformAiChannel.class);
+        PlatformCreditsGate gate = mock(PlatformCreditsGate.class);
+        var error = new com.checkba.service.account.AccountException(
+                com.checkba.service.account.AccountException.Kind.CONFLICT, "请充值", "no_credits");
+        doThrow(error).when(gate).ensureCredits(1L);
+        var service = new VoiceDictationService(channel, gate,
+                "https://unreachable.invalid/api/v1", "xiaomi/mimo-v2.5");
+
+        assertSame(error, assertThrows(com.checkba.service.account.AccountException.class,
+                () -> service.transcribe(1L, Base64.getEncoder().encodeToString(new byte[16]), "wav", 1000)));
+        verifyNoInteractions(channel);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {401, 403, 402})
+    void upstreamAccountRejectionPreservesLoginOrRechargeAction(int status) throws Exception {
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(status, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            PlatformAiChannel channel = mock(PlatformAiChannel.class);
+            PlatformCreditsGate gate = mock(PlatformCreditsGate.class);
+            when(channel.resolveFor(1L)).thenReturn(new PlatformAiKeyService.Resolved("fake-key", "fingerprint", 1.0));
+            var service = new VoiceDictationService(channel, gate,
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "xiaomi/mimo-v2.5");
+
+            var error = assertThrows(com.checkba.service.account.AccountException.class,
+                    () -> service.transcribe(1L, Base64.getEncoder().encodeToString(new byte[16]), "wav", 1000));
+            assertEquals(status == 402 ? com.checkba.service.account.AccountException.Kind.CONFLICT
+                    : com.checkba.service.account.AccountException.Kind.UNAUTHORIZED, error.getKind());
+            if (status == 402) assertEquals("no_credits", error.getReason());
+            else verify(channel).onKeyRejected(1L);
+            verify(gate).ensureCredits(1L);
+        } finally {
+            server.stop(0);
+        }
     }
 
     // ==================== 提示词回显剥离（dev-board#175） ====================

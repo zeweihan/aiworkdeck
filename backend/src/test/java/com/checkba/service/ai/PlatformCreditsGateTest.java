@@ -17,8 +17,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * 平台通道余额闸的判据。这道闸决定「没充值能不能用 AI」，两个方向都会出人命：
- * 放太松就是被白嫖，收太紧就是一断网谁都用不了。
+ * 平台通道付费准入：未登录、无余额或无法确认余额时，不得发起外部支出。
  */
 class PlatformCreditsGateTest {
 
@@ -49,6 +48,7 @@ class PlatformCreditsGateTest {
         AccountException e = assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
 
         assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+        assertEquals("no_credits", e.getReason());
         verify(accountService, times(1)).fetchAiUsage();
     }
 
@@ -65,25 +65,25 @@ class PlatformCreditsGateTest {
     }
 
     @Test
-    @DisplayName("官网不可达：放行。查不到不等于没钱——反过来判会让人一断网就用不了")
-    void unreachableWebsiteDoesNotBlock() {
+    @DisplayName("官网不可达：阻止付费调用，保留网络错误")
+    void unreachableWebsiteBlocks() {
         when(accountService.fetchAiUsage())
                 .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接服务器"));
 
-        assertDoesNotThrow(() -> gate.ensureCredits(1L));
+        assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
     }
 
     @Test
-    @DisplayName("官网没给 creditsCents（旧版本）：放行，不拿缺字段当没钱")
-    void missingFieldDoesNotBlock() {
+    @DisplayName("缺余额字段：阻止付费调用，不误提示充值")
+    void missingFieldBlocks() {
         websiteReports(null);
 
-        assertDoesNotThrow(() -> gate.ensureCredits(1L));
+        assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
     }
 
     @Test
-    @DisplayName("已知为 0 之后官网又不可达：放行。一次抖动不该把刚充完值的人锁住")
-    void knownZeroIsNotRememberedAcrossAnOutage() {
+    @DisplayName("零余额后查询失败也不能允许付费调用")
+    void outageNeverPermitsSpending() {
         websiteReports(0);
         assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
 
@@ -91,7 +91,7 @@ class PlatformCreditsGateTest {
         when(accountService.fetchAiUsage())
                 .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接服务器"));
 
-        assertDoesNotThrow(() -> gate.ensureCredits(1L));
+        assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
     }
 
     @Test
@@ -105,12 +105,12 @@ class PlatformCreditsGateTest {
     }
 
     @Test
-    @DisplayName("未连接账户不归这道闸管（那是 PlatformAiChannel 的 NOT_CONNECTED）")
-    void disconnectedAccountIsSomeoneElsesError() {
+    @DisplayName("未连接账户先要求登录，不查询余额")
+    void disconnectedAccountRequiresLogin() {
         when(accountService.accountFingerprintOrNull()).thenReturn(null);
         websiteReports(0);
 
-        assertDoesNotThrow(() -> gate.ensureCredits(1L));
+        assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
         verify(accountService, never()).fetchAiUsage();
     }
 
@@ -125,6 +125,24 @@ class PlatformCreditsGateTest {
 
         assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
         verify(accountService, times(2)).fetchAiUsage();
+    }
+
+    @Test
+    void topUpIsEffectiveOnNextAttempt() {
+        websiteReports(0);
+        assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
+        websiteReports(100);
+        assertDoesNotThrow(() -> gate.ensureCredits(1L));
+        verify(accountService, times(2)).fetchAiUsage();
+    }
+
+    @Test
+    void expiredPositiveBalanceCannotSpendWhileRefreshing() {
+        websiteReports(100);
+        gate.ensureCredits(1L);
+        org.springframework.test.util.ReflectionTestUtils.setField(gate, "checkedAt", 1L);
+        websiteReports(0);
+        assertThrows(AccountException.class, () -> gate.ensureCredits(1L));
     }
 
     @Test

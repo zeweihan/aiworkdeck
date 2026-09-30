@@ -19,6 +19,7 @@
 
 import { createApp } from 'vue'
 import AccountLoginDialog from '@/components/account/AccountLoginDialog.vue'
+import RechargeDialog from '@/components/RechargeDialog.vue'
 import { i18n } from '@/i18n/index.js'
 import { getAccountStatus } from '@/services/api.js'
 import { isDesktopHost } from '@/services/host.js'
@@ -135,4 +136,39 @@ export function invalidateAccountCache() {
 /** 已知连接状态（如设置页刚读过 status）时顺手喂给缓存，省一次查询。 */
 export function noteAccountConnected(connected) {
   gate.noteConnected(connected)
+}
+
+// One in-place wallet dialog for all paid-service entry points. Closing an automatic
+// prompt suppresses repeated background failures; an explicit click always works.
+let rechargePending = null
+let rechargeSuppressedUntil = 0
+export function requireRecharge({ auto = false } = {}) {
+  if (rechargePending) return rechargePending
+  if (auto && Date.now() < rechargeSuppressedUntil) return Promise.resolve()
+  if (typeof document === 'undefined' || !document.body) return Promise.resolve()
+  const el = document.createElement('div')
+  document.body.appendChild(el)
+  let app
+  let resolveClosed
+  rechargePending = new Promise(resolve => { resolveClosed = resolve })
+  const pending = rechargePending
+  const finish = () => {
+    if (!rechargePending) return
+    app?.unmount()
+    el.remove()
+    setGlobalOverlay(false, 'awd-account-recharge')
+    rechargeSuppressedUntil = Date.now() + 60000
+    rechargePending = null
+    resolveClosed()
+  }
+  try {
+    app = createApp(RechargeDialog, { visible: true, 'onUpdate:visible': visible => { if (!visible) finish() } })
+    app.use(i18n)
+    setGlobalOverlay(true, 'awd-account-recharge')
+    app.mount(el)
+  } catch (error) {
+    finish()
+    console.warn('[requireRecharge] 充值弹层挂载失败:', error)
+  }
+  return pending
 }

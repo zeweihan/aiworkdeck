@@ -94,6 +94,9 @@ jobs:
       - name: Test AI inbox, submission and memory state
         working-directory: frontend
         run: node --test tests/ai-alignment/*.test.mjs
+      - name: Test account and paid-service access
+        working-directory: frontend
+        run: npm run test:account
       - name: Test project-home page
         working-directory: frontend
         run: npm run test:project-home
