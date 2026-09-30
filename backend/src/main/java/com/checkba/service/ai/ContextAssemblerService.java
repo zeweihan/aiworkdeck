@@ -1718,14 +1718,14 @@ public class ContextAssemblerService {
         }
         return english
                 ? "\n\n[System reminder] Before editing, check whether this request is clear. For substantive revisions that depend on project facts, inspect the project/reference inventory first (reuse it if supplied), then follow amendments and performance records; do not edit based only on the first keyword match. Skip project discovery for local typo or formatting changes. First use available project materials to resolve factual gaps; read-only discovery is allowed before clarification. For folder organization, inspect the listing and relevant samples first. In any of these cases, "
-                        + "call the ask_user tool (not just a <question> tag) with 2-4 concrete options and stop there - ask_user is a tool call, not an XML tag; never emit an <ask_user> element. "
+                        + "call the ask_user tool (not just a <question> tag) with 2-4 concrete options and stop there - "
                         + "do not edit the document or write a task list before the user answers: (1) the user is asking "
                         + "\"can you / could you ...?\" and what to actually do is unclear; (2) the key verb has no stated "
                         + "standard (\"clean up\", \"tidy up\", \"improve\"); (3) it would delete or rewrite a large part of a "
                         + "document without the user explicitly authorising that scope. If it already says what to change "
                         + "and how (e.g. \"delete paragraphs 12 to 21\"), just do it - do not ask back."
                 : "\n\n[系统提醒] 修改前先判断这条要求是否明确。依赖项目事实的实质修订，先看项目/参考文件清单（已有则复用），再沿补充、变更与履行关系核对依据，不能只凭首份关键词命中落笔；单点纠错/格式修改不用查项目。事实缺口先查可用的项目材料；澄清前可只读了解背景，整理文件夹应先看目录和相关样本。以下任一情形，先调用 ask_user 工具"
-                        + "（不要只写 <question> 标签）提一个带 2-4 个具体选项的问题，本轮到此为止。ask_user 是工具调用，不是 XML 标签，禁止输出 <ask_user> 元素。用户回答之前"
+                        + "（不要只写 <question> 标签）提一个带 2-4 个具体选项的问题，本轮到此为止——用户回答之前"
                         + "不要改文档、不要写任务清单：① 用户是在问「能不能 / 可不可以帮我…」（句末是「吗」「么」「？」）"
                         + "而具体做法不清楚；② 动作词没说标准（如「清理」「整理」「优化一下」「规范一下」）；"
                         + "③ 会大范围删改文档而用户没有明确授权这个范围。"

@@ -35,6 +35,13 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - CORE 不绕过 skill restrict：`contract-review` 需显式保留 `doc_list_project_files` / `search_project_content` / `ref_list` / `ref_read`，再按宿主过滤；不增加跨文档写入权限。`BuiltinSkillsTest` 用实际 skill + router + registry + disclosure 验证五种宿主。
 - 验证：`ContextAssemblerServiceTest`、`ContextAssemblerAskUserTest`、`FileContextLoaderTest`、`DocumentEditToolsProjectFilesTest`、`BuiltinSkillsTest`；行为需另看真实模型已执行工具及返回正文，模型输出的工具样式文字不算执行，编辑器 ACK 桩不算真实 LOWA 修订成功。
 
+## 澄清工具的裸标签兼容（dev-board#1078，2026-09-30）
+
+- 真实模型偶发输出自闭合 `<ask_user question="..." options='[...]' />`，不是原生调用也不是 `<tool_code>`；仅加提示仍复现，原编排不会发提问事件，混合批次还会执行后续写入。
+- `XmlToolCallParser` 只在顶层/过程协议壳恢复这一种别名，按原文位置与既有工具调用合并；参数交给原 `ToolRegistry` / `AskUserQuestion` 校验，成功后沿现有 SSE、落库与等待回答停机路径。只兼容已知四字段，不泛化任意标签为工具；歧义/非法参数显式返回原参数错误。
+- 代码围栏、普通示例文字及 thinking/final/其他容器内部不识别为新别名；不恢复非自闭合或不完整输出。ASK 仍经原工具权限闸，未改 PLAN 既有行为。
+- 回归：`XmlToolCallParserTest` 保存完整实际失败形态；`AskUserOrchestratorFlowTest` 验证提问事件、持久化、同批后续写入不执行及 ASK 拒绝。`AskUserLiveEvaluationTest` 只量提问/进入编辑工具的行为，不代表真实文档删改成功。
+
 ## 智能决策辅助（实验性，dev-board#824，2026-09-23）
 
 - **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。

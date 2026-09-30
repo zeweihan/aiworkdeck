@@ -36,6 +36,10 @@ public class XmlToolCallParser {
 
     private static final Pattern TOOL_CODE_PATTERN = Pattern.compile("(?s)<(tool_code|code)>(.*?)</\\1>");
     private static final Pattern PROCESS_NAME_PATTERN = Pattern.compile("<process[^>]*name=\"([^\"]*)\"[^>]*>");
+    private static final Pattern TAG_HEAD = Pattern.compile("<(/?)([A-Za-z_]\\w*)\\b[^>]*>");
+    private static final Pattern ASK_ATTRIBUTE = Pattern.compile("([a-z_]+)\\s*=\\s*(['\"])");
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper()
+            .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     private final ToolRegistry toolRegistry;
 
@@ -53,7 +57,8 @@ public class XmlToolCallParser {
      * 内容中是否包含 XML 工具调用标签。
      */
     public boolean containsToolCall(String content) {
-        return content != null && (content.contains("<tool_code>") || content.contains("<code>"));
+        return content != null && (content.contains("<tool_code>") || content.contains("<code>")
+                || !bareAskUserCalls(content).isEmpty());
     }
 
     /**
@@ -71,9 +76,9 @@ public class XmlToolCallParser {
      * 解析内容中的全部工具调用（按出现顺序）。
      */
     public List<ParsedCall> parse(String content) {
-        List<ParsedCall> calls = new ArrayList<>();
+        List<LocatedCall> calls = new ArrayList<>();
         if (content == null) {
-            return calls;
+            return List.of();
         }
         Matcher matcher = TOOL_CODE_PATTERN.matcher(content);
         while (matcher.find()) {
@@ -83,11 +88,126 @@ public class XmlToolCallParser {
             }
             for (String statement : splitStatements(code)) {
                 if (!statement.isBlank()) {
-                    calls.add(parseSingle(statement));
+                    calls.add(new LocatedCall(matcher.start(), parseSingle(statement)));
                 }
             }
         }
-        return calls;
+        calls.addAll(bareAskUserCalls(content));
+        calls.sort(java.util.Comparator.comparingInt(LocatedCall::offset));
+        return calls.stream().map(LocatedCall::call).toList();
+    }
+
+    private record LocatedCall(int offset, ParsedCall call) {}
+
+    /**
+     * #1078: 部分模型把提问写成独立的自闭合标签。只恢复这一种别名，交给原分发、
+     * 权限与 AskUserQuestion 校验/停机；不把任意 XML 标签变成工具。
+     * 仅接受由协议块组成的输出：正文、示例容器、代码围栏内的标签不执行，普通 prose 也不猜。
+     */
+    private List<LocatedCall> bareAskUserCalls(String content) {
+        List<LocatedCall> calls = new ArrayList<>();
+        int cursor = 0;
+        int processDepth = 0;
+        while (cursor < content.length()) {
+            if (Character.isWhitespace(content.charAt(cursor))) { cursor++; continue; }
+            if (content.startsWith("<!--", cursor)) {
+                int end = content.indexOf("-->", cursor + 4);
+                if (end < 0) return List.of();
+                cursor = end + 3;
+                continue;
+            }
+            if (content.startsWith("```", cursor) || content.startsWith("~~~", cursor)) {
+                char marker = content.charAt(cursor);
+                int start = cursor;
+                while (cursor < content.length() && content.charAt(cursor) == marker) cursor++;
+                String fence = content.substring(start, cursor);
+                int end = content.indexOf("\n" + fence, cursor);
+                if (end < 0) return List.of();
+                cursor = end + 1 + fence.length();
+                continue;
+            }
+            if (content.startsWith("<ask_user", cursor)
+                    && cursor + 9 < content.length()
+                    && (Character.isWhitespace(content.charAt(cursor + 9)) || content.charAt(cursor + 9) == '/')) {
+                BareAsk parsed = bareAskArguments(content, cursor + 9);
+                if (parsed == null) return List.of();
+                String raw = content.substring(cursor, parsed.end());
+                calls.add(new LocatedCall(cursor, new ParsedCall("ask_user",
+                        parsed.argsJson(), raw)));
+                cursor = parsed.end();
+                continue;
+            }
+            Matcher tag = TAG_HEAD.matcher(content).region(cursor, content.length());
+            if (!tag.lookingAt()) return List.of();
+            String name = tag.group(2);
+            boolean closing = !tag.group(1).isEmpty();
+            if ("process".equals(name)) {
+                processDepth += closing ? -1 : 1;
+                if (processDepth < 0) return List.of();
+                cursor = tag.end();
+            } else {
+                // thinking/final/示例/回答/原工具参数全部不透明，里面的 ask_user 不是请求。
+                if (closing) return List.of();
+                if (tag.group().endsWith("/>")) { cursor = tag.end(); continue; }
+                String close = "</" + name + ">";
+                int end = content.indexOf(close, tag.end());
+                if (end < 0) return List.of();
+                cursor = end + close.length();
+            }
+        }
+        return processDepth == 0 ? calls : List.of();
+    }
+
+    private record BareAsk(int end, String argsJson) {}
+
+    /** 属性值与外层结束符用同一次扫描定位，值里的 <br/> 不是标签结束。
+     * 不明确的参数走现有 question-required 错误反馈；未闭合的语法不猜边界。
+     */
+    private BareAsk bareAskArguments(String content, int cursor) {
+        cn.hutool.json.JSONObject args = new cn.hutool.json.JSONObject();
+        boolean valid = true;
+        while (cursor < content.length()) {
+            if (Character.isWhitespace(content.charAt(cursor))) { cursor++; continue; }
+            if (content.startsWith("/>", cursor)) return new BareAsk(cursor + 2, valid ? args.toString() : "{}");
+            Matcher attribute = ASK_ATTRIBUTE.matcher(content).region(cursor, content.length());
+            if (!attribute.lookingAt()) return null;
+            String key = attribute.group(1);
+            if (!java.util.Set.of("question", "options", "header", "multi_select").contains(key)
+                    || args.containsKey(key)) valid = false;
+            char quote = attribute.group(2).charAt(0);
+            int start = attribute.end();
+            int end = start;
+            String value;
+            // options='[{...}]' 与 options="[{"label":...}]"：按JSON边界取整段，
+            // 不让内部双引号误当外层属性终点。转义JSON字符串仍走正常引号分支。
+            int jsonEnd = "options".equals(key) && start < content.length()
+                    && content.charAt(start) == '[' ? findJsonLiteralEnd(content, start) : -1;
+            if (jsonEnd >= 0 && jsonEnd < content.length() && content.charAt(jsonEnd) == quote) {
+                value = content.substring(start, jsonEnd);
+                end = jsonEnd;
+            } else {
+                while (end < content.length() && content.charAt(end) != quote) {
+                    end += content.charAt(end) == '\\' ? 2 : 1;
+                }
+                if (end >= content.length()) return null;
+                value = unquote(content.substring(start - 1, end + 1));
+            }
+            if ("options".equals(key)) {
+                try {
+                    var options = JSON.readTree(value);
+                    if (options == null || !options.isArray()) valid = false;
+                    else value = options.toString();
+                } catch (Exception invalid) {
+                    valid = false;
+                }
+            }
+            if ("multi_select".equals(key) && !"true".equals(value) && !"false".equals(value)) valid = false;
+            args.set(key, value);
+            cursor = end + 1;
+            if (cursor < content.length() && !Character.isWhitespace(content.charAt(cursor))
+                    && !content.startsWith("/>", cursor)) return null;
+        }
+        return null;
     }
 
     /**
