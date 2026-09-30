@@ -345,6 +345,10 @@ public class AgentOrchestrator {
     private final com.checkba.service.ai.memory.MemoryPipelineService memoryPipelineService;
     private final com.checkba.service.ProjectFileService projectFileService;
     private final EditorBridgeService editorBridgeService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.checkba.service.ai.subagent.SubAgentService subAgentService;
     private final ConversationFileChangeService conversationFileChangeService;
     private final TodoListService todoListService;
     private final DocumentCheckpointService documentCheckpointService;
@@ -456,6 +460,7 @@ public class AgentOrchestrator {
         }
         log.info("Cancelling conversation {} (run {})", conversationId, guard.runId);
         guard.cancel();
+        if (subAgentService != null) subAgentService.cancelParentRun(conversationId, guard.runId);
         // 桥上的等待与 LLM 请求是两条独立的阻塞，缺一条停止就还是「按了要等」
         editorBridgeService.cancelPendingActions(conversationId);
         return true;
@@ -897,7 +902,7 @@ public class AgentOrchestrator {
                         guard == null ? List.of() : guard.roundCandidates,
                         guard == null ? null : guard.roundOffered,
                         guard == null ? null : guard.runId,
-                        disclosedCategories);
+                        disclosedCategories, guard == null ? null : guard::isCancelled);
         long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
         // 目录展开只在下一轮生效：本轮的工具集已经发给模型了，中途加进去会让

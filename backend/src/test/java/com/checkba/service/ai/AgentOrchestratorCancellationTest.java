@@ -237,6 +237,59 @@ class AgentOrchestratorCancellationTest {
         return sseEvents.stream().filter(e -> eventName.equals(e[0])).count();
     }
 
+    @Test
+    void parentStopCancelsActualChildAndBlocksItsLateToolResponse() throws Exception {
+        var childRegistry = mock(ToolRegistry.class);
+        when(childRegistry.getAllSpecifications(any())).thenReturn(List.of(
+                ToolSpecification.builder().name("search_web").description("search").build()));
+        var childModel = mock(dev.langchain4j.model.chat.ChatLanguageModel.class);
+        var childFactory = mock(ChatModelFactory.class);
+        when(childFactory.getChatModel(any())).thenReturn(childModel);
+        var resolver = mock(AuxModelResolver.class);
+        when(resolver.subAgentModelId(any())).thenReturn(MODEL);
+        var child = new com.checkba.service.ai.subagent.SubAgentService(childRegistry, childFactory,
+                new XmlToolCallParser(childRegistry), sse,
+                new com.checkba.service.ai.subagent.SubAgentProperties(), resolver, mock(TokenUsageService.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(orchestrator, "subAgentService", child);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var context = new java.util.concurrent.atomic.AtomicReference<com.checkba.service.ai.tools.ToolContext>();
+        when(childModel.generate(any(), any(java.util.List.class))).thenAnswer(inv -> {
+            entered.countDown();
+            long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (release.getCount() > 0 && System.nanoTime() < end) {
+                try { release.await(20, TimeUnit.MILLISECONDS); } catch (InterruptedException ignored) { }
+            }
+            Thread.interrupted();
+            return Response.from(AiMessage.from(ToolExecutionRequest.builder()
+                    .id("late").name("search_web").arguments("{}").build()));
+        });
+        when(toolRegistry.execute(any(), any(), any())).thenAnswer(inv -> {
+            context.set(inv.getArgument(2));
+            var result = child.dispatch("read only", null, List.of("search_web"), context.get());
+            return new ToolRegistry.ToolResult(result.toJson(), null, true);
+        });
+        Thread parent = runAsync("read", GatedModel.ungated(AiMessage.from(ToolExecutionRequest.builder()
+                .id("dispatch").name("read_document").arguments("{}").build())));
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            assertFalse(context.get().isCancelled());
+            assertTrue(context.get().runId() != null);
+            assertTrue(orchestrator.setCancelled(CONV));
+            join(parent); // Parent returns before the non-interruptible child model does.
+            assertTrue(context.get().isCancelled());
+            release.countDown();
+            var pool = (java.util.concurrent.ThreadPoolExecutor) org.springframework.test.util.ReflectionTestUtils.getField(child, "executor");
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS));
+            org.mockito.Mockito.verify(childRegistry, org.mockito.Mockito.never()).execute(any(), any(), any());
+            assertTrue(sseEvents.stream().noneMatch(e -> "subtask_progress".equals(e[0]) && e[1].contains("succeeded")));
+        } finally {
+            release.countDown();
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(child, "shutdown");
+        }
+    }
+
     // =====================================================================================
     // ① 取消之后不再转发 token
     // =====================================================================================
