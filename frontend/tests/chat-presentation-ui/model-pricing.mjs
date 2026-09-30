@@ -97,6 +97,58 @@ const shot = async (name) => {
 }
 
 try {
+  // #1111: actual panel width, with long model name and token usage competing for space.
+  for (const lang of ['zh-CN', 'en-US']) {
+    for (const empty of [false, true]) {
+      for (const width of [240, 360, 420]) {
+        await open(catalog(CHARGED_CNY), { width, lang, empty })
+        await page.evaluate(() => {
+          window.chatState.showModelDropdown = false
+          window.chatState.currentModelName = 'DeepSeek V4 Flash'
+          window.chatState.tokenUsage.totalTokens = 75553
+          window.chatState.fileChanges = [{ fileId: 11, fileName: '合成协议.docx', changeType: 'MODIFIED' }]
+        })
+        await page.waitForFunction(() => !document.querySelector('.model-dropdown'))
+        assert.equal(await page.$eval('.chat-interface', el => el.getBoundingClientRect().width), width, 'fixture uses the actual CSS panel width')
+        const issues = await page.evaluate(() => {
+          const issues = []
+          const panel = document.querySelector('.chat-interface').getBoundingClientRect()
+          const controls = [...document.querySelectorAll('.input-footer .mode-selector, .input-footer .model-selector, .input-footer .skill-selector, .input-footer .file-add-btn, .input-footer .send-btn, .status-btn')]
+          for (const el of controls) {
+            const r = el.getBoundingClientRect()
+            if (r.width < 20 || r.left < panel.left || r.right > panel.right || r.bottom > innerHeight) issues.push(`${el.className}: clipped or unusable`)
+          }
+          for (const el of document.querySelectorAll('.status-btn-label, .mode-name')) {
+            const range = document.createRange()
+            range.selectNodeContents(el)
+            if (range.getClientRects().length !== 1) issues.push(`${el.textContent}: wraps across lines`)
+          }
+          const model = document.querySelector('.model-name')
+          if (model.getBoundingClientRect().width < 64) issues.push('model name has less than 64px of readable space')
+          if (getComputedStyle(model).whiteSpace !== 'nowrap') issues.push('model name may wrap')
+          for (let i = 0; i < controls.length; i++) for (let j = i + 1; j < controls.length; j++) {
+            const a = controls[i].getBoundingClientRect(), b = controls[j].getBoundingClientRect()
+            if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) issues.push('controls overlap')
+          }
+          return issues
+        })
+        await page.screenshot({ path: `${shots}/k1111-footer-${width}-${lang}-${empty ? 'empty' : 'chat'}.png` })
+        assert.deepEqual(issues, [], `${width}px ${lang} ${empty ? 'empty' : 'chat'} footer layout`)
+        // uni dispatches tap in H5; exercise the real handlers in this Vue fixture.
+        await page.$eval('.mode-selector', el => el.dispatchEvent(new CustomEvent('tap', { bubbles: true })))
+        await page.waitForSelector('.mode-dropdown')
+        await page.$eval('.mode-selector', el => el.dispatchEvent(new CustomEvent('tap', { bubbles: true })))
+        await page.$eval('.model-selector', el => el.dispatchEvent(new CustomEvent('tap', { bubbles: true })))
+        await page.waitForSelector('.model-dropdown .model-option')
+        await page.$eval('.model-dropdown .model-option', el => el.dispatchEvent(new CustomEvent('tap', { bubbles: true })))
+        await page.waitForFunction(() => !document.querySelector('.model-dropdown'))
+        await page.$eval('.chat-input-rich', el => { el.textContent = '合成布局测试'; el.dispatchEvent(new Event('input', { bubbles: true })) })
+        await page.click('.send-btn')
+        await page.waitForFunction(() => window.chatPosts.some(p => p.message === '合成布局测试'))
+      }
+    }
+  }
+  console.log('PASS: footer geometry and mode/model/send at 240/360/420px, zh/en, empty/chat')
   // ---- 1. 平台通道实付价，人民币，对话中（向上展开）----
   await open(catalog(CHARGED_CNY))
   assert.ok(await page.$('.model-dropdown.up'), '对话中应向上展开')
