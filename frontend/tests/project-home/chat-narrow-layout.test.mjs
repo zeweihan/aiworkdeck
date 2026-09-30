@@ -16,15 +16,16 @@ const rule = (css, selector) => {
   return css.slice(at, css.indexOf('}', at))
 }
 
-test('模型名单行显示、放不下时省略号截断，选择器本身可收缩', () => {
+test('模型名单行省略，保留可读宽度并允许工具栏换行', () => {
   const name = rule(CI, '.model-name')
   assert.match(name, /white-space:\s*nowrap/)
   assert.match(name, /text-overflow:\s*ellipsis/)
   assert.match(name, /overflow:\s*hidden/)
-  assert.match(rule(CI, '.model-selector'), /min-width:\s*0/, '选择器不许以内容宽撑住整行')
+  assert.match(rule(CI, '.model-selector'), /min-width:\s*100px/, '最窄面板也须保留模型名可读宽度')
+  assert.match(rule(CI, '.action-bar-left'), /flex-wrap:\s*wrap/, '空间不足时按控件换行，不把模型压成一字宽')
 })
 
-test('空状态输入卡的发送钮与控件同一行，不再被 flex-basis 强制换行', () => {
+test('空状态发送钮不被 flex-basis 强制换行，宽度足够时可与控件同行', () => {
   assert.ok(!/\.centered-style \.composer-actions\s*\{[^}]*flex-basis:\s*calc\(100% - 56px\)/.test(CI),
     'composer-actions 的 flex-basis 接近 100%，无论多宽都会和控件行分成两行')
 })

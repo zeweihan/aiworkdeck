@@ -630,7 +630,7 @@
                 <view class="status-btn-wrapper">
                     <view class="status-btn modified" :class="{ empty: modifiedFiles.length === 0 }" @tap.stop="modifiedFiles.length > 0 ? toggleModifiedPopup() : null">
                         <svg class="status-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                        <text>{{ $t('chat.modifiedCount', { count: modifiedFiles.length }) }}</text>
+                        <text class="status-btn-label">{{ $t('chat.modifiedCount', { count: modifiedFiles.length }) }}</text>
                     </view>
                    <view v-if="showModifiedPopup && modifiedFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in modifiedFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
@@ -645,7 +645,7 @@
                <view class="status-btn-wrapper">
                    <view class="status-btn created" :class="{ empty: createdFiles.length === 0 }" @tap.stop="createdFiles.length > 0 ? toggleNewPopup() : null">
                        <svg class="status-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                       <text>{{ $t('chat.createdCount', { count: createdFiles.length }) }}</text>
+                       <text class="status-btn-label">{{ $t('chat.createdCount', { count: createdFiles.length }) }}</text>
                    </view>
                    <view v-if="showNewPopup && createdFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
@@ -4735,10 +4735,11 @@ export default {
 
 .action-bar-left {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  flex: 1 1 140px;
-  /* 允许整条工具栏收缩，避免钉选长名 Skill 时把发送按钮挤出面板 */
+  flex: 1 1 240px;
+  /* 窄面板按控件换行，保留模型名的可读宽度；发送按钮可另起一行。 */
   min-width: 0;
 }
 
@@ -4760,8 +4761,9 @@ export default {
   border-radius: 6px;
   transition: background 0.15s ease, border-color 0.15s ease;
   white-space: nowrap;
-  /* 右栏窄时让模型名省略号截断，不把整行撑宽（BUG-41） */
-  min-width: 0;
+  flex: 1 1 100px;
+  min-width: 100px;
+  max-width: 100%;
 }
 /* uni 的 <text> 不继承父级的 nowrap 效果，窄栏下「Kimi K3」会折成两行（BUG-41） */
 .model-name {
@@ -4776,6 +4778,7 @@ export default {
 }
 
 .dropdown-arrow {
+  flex-shrink: 0;
   font-size: 8px;
   color: var(--awd-text-3);
   transition: color 0.15s ease;
@@ -4806,9 +4809,7 @@ export default {
   background: var(--awd-accent-wash);
   border: 1px solid var(--awd-accent-soft);
   transition: all 0.15s ease;
-  /* 模式名是固定短词集（提问/计划/智能体、Ask/Plan/Agent），不参与收缩——
-     窄栏的收缩余量全由 .model-selector 的省略号承担（BUG-41）。否则 240px
-     最窄栏会把它压到一字宽，「智能体」逐字竖排（dev-board#1101）。 */
+  /* 模式名不参与收缩；空间不足时工具栏按控件换行。 */
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -6243,6 +6244,8 @@ export default {
 .status-bar-row {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   justify-content: space-between;
   align-items: center;
   /* 与下方输入卡对齐（卡自带描边），行距走 8 栅格 */
@@ -6257,7 +6260,8 @@ export default {
 .status-bar-left {
   display: flex;
   flex-direction: row;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   align-items: center;
 }
 
@@ -6280,6 +6284,11 @@ export default {
 /* Status Buttons */
 .status-btn-wrapper {
   position: relative;
+  flex-shrink: 0;
+}
+
+.status-btn-label {
+  white-space: nowrap;
 }
 
 .status-btn {
