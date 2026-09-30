@@ -4806,6 +4806,11 @@ export default {
   background: var(--awd-accent-wash);
   border: 1px solid var(--awd-accent-soft);
   transition: all 0.15s ease;
+  /* 模式名是固定短词集（提问/计划/智能体、Ask/Plan/Agent），不参与收缩——
+     窄栏的收缩余量全由 .model-selector 的省略号承担（BUG-41）。否则 240px
+     最窄栏会把它压到一字宽，「智能体」逐字竖排（dev-board#1101）。 */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .mode-selector:hover {
   background: var(--awd-accent-soft);
@@ -4819,6 +4824,8 @@ export default {
 .mode-name {
   font-weight: 500;
   color: var(--awd-accent-text);
+  /* uni 的 <text> 不继承父级的 nowrap（同 BUG-41 的 .model-name） */
+  white-space: nowrap;
 }
 
 .mode-dropdown {

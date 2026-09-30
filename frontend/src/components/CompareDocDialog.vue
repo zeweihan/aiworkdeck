@@ -24,7 +24,7 @@
                 v-for="(doc, index) in documents" 
                 :key="doc.id"
                 class="doc-option"
-                :class="{ selected: sourceIndex === index }"
+                :class="{ selected: sourceIndex === index, disabled: busy }"
                 @tap="selectSource(index)"
               >
                 <view class="option-radio" :class="{ checked: sourceIndex === index }"></view>
@@ -51,7 +51,7 @@
                 v-for="(doc, index) in documents" 
                 :key="doc.id"
                 class="doc-option"
-                :class="{ selected: targetIndex === index, disabled: sourceIndex === index }"
+                :class="{ selected: targetIndex === index, disabled: busy || sourceIndex === index }"
                 @tap="selectTarget(index)"
               >
                 <view class="option-radio" :class="{ checked: targetIndex === index, disabled: sourceIndex === index }"></view>
@@ -66,7 +66,8 @@
         <button class="btn-cancel" @tap="handleCancel">{{ $t('editor.compare.cancel') }}</button>
         <button
           class="btn-confirm"
-          :class="{ disabled: !canConfirm }"
+          :class="{ disabled: !canConfirm || busy }"
+          :disabled="!canConfirm || busy"
           @tap="handleConfirm"
         >
           {{ $t('editor.compare.start') }}
@@ -81,6 +82,7 @@ import { ICONS } from '@/config/icons.js'
 export default {
   name: 'CompareDocDialog',
   props: {
+    busy: { type: Boolean, default: false },
     visible: {
       type: Boolean,
       default: false
@@ -116,6 +118,7 @@ export default {
   },
   methods: {
     selectSource(index) {
+      if (this.busy) return
       this.sourceIndex = index
       // 如果选择了相同的，自动切换 target
       if (this.targetIndex === index) {
@@ -123,7 +126,7 @@ export default {
       }
     },
     selectTarget(index) {
-      if (index === this.sourceIndex) return
+      if (this.busy || index === this.sourceIndex) return
       this.targetIndex = index
     },
     handleCancel() {
@@ -131,7 +134,7 @@ export default {
       this.$emit('update:visible', false)
     },
     handleConfirm() {
-      if (!this.canConfirm) return
+      if (this.busy || !this.canConfirm) return
       
       const sourceDoc = this.documents[this.sourceIndex]
       const targetDoc = this.documents[this.targetIndex]

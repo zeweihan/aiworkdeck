@@ -515,6 +515,7 @@
       <CompareDocDialog
         :visible="showCompareDialog"
         :documents="compareDocuments"
+        :busy="compareSaving"
         @cancel="showCompareDialog = false"
         @confirm="onCompareDialogConfirm"
       />
@@ -2602,6 +2603,7 @@ export default {
 
       // 文档对比
       showCompareDialog: false,
+      compareSaving: false,
       compareDocuments: [], // 待比较的文档列表
 
       // 右侧 AI 面板（IDE 右侧窗格）

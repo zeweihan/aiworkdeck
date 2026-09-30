@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -93,8 +95,13 @@ public class LocalFileStorageService implements StorageService {
                 Files.copy(templateDoc, filePath, StandardCopyOption.REPLACE_EXISTING);
                 log.info("从模板创建新文件: fileId={}, path={}", fileId, filePath);
             } else {
-                log.warn("模板文件不存在: {}, 创建空文件", templateDoc);
-                Files.createFile(filePath);
+                // 没有外部模板时也要创建合法 DOCX，零字节文件不能参与全文读取或比对。
+                log.warn("模板文件不存在: {}, 创建空白 DOCX: {}", templateDoc, filePath);
+                try (XWPFDocument doc = new XWPFDocument();
+                     OutputStream out = Files.newOutputStream(filePath)) {
+                    doc.createParagraph();
+                    doc.write(out);
+                }
             }
         } catch (IOException e) {
             log.error("创建文件失败: fileId={}, path={}", fileId, filePath, e);

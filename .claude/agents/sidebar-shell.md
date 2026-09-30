@@ -39,6 +39,12 @@ flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editor
 `inject: { openSettingsTab: { default: null } }`，有就 `this.openSettingsTab({ nav })` 开设置标签，
 没有（项目列表页等工作台之外的宿主）才跳 `/pages/admin/admin?nav=xxx`。现有四处：加人弹窗与
 协作抽屉的 `goTeamSettings`、插件侧栏与插件详情的 `goToAccountSettings`，`check:nav` 逐个钉住。
+## 新建空白文档与文件比对（dev-board#1102）
+
+`LocalFileStorageService.createFromTemplate` 在配置模板不存在时使用 POI 生成有效的空白 DOCX，不能落成零字节文件，否则 Tika 全文读取与比对会失败；读取缺失文件仍抛错，不在读路径创建模板。回归 `BlankTemplateCompareRegressionTest` 覆盖有内容 A、空白 B 及真实缺失负例。
+
+`onCompareDialogConfirm` 先保存本次两份文档已打开且待保存的 Office 实例，最后重查 dirty/saving；失败保留对话框重试，不保存无关文档。等待期间取消、换比较对象或切项目，不打开过期比对。回归 `compare-flush-before-diff.test.mjs`。差异数等待 Monaco `onDidUpdateDiff` 更新，不能只在 `nextTick` 读取尚未完成的结果（dev-board#1104）；关闭标签释放监听。
+
 ## 文档标签与左栏独立（2026-09-10，dev-board#555/#556）
 
 `fileOpenTabs.activateTab` 不得修改 `leftPaneKey` 或 `sidebarCollapsed`；文件树已挂载时仍可同步选中项。

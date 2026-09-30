@@ -108,14 +108,17 @@ class MissingFileIsNotFabricatedTest {
     }
 
     @Test
-    @DisplayName("缺模板文件时物化成空文件，仍然不许把这个行为漏进 load")
-    void createFromTemplateFallsBackToAnEmptyFile(@TempDir Path dir) throws Exception {
+    @DisplayName("缺模板文件时物化成有效的空白 DOCX（非 0 字节），仍然不许把这个行为漏进 load")
+    void createFromTemplateFallsBackToValidBlankDocx(@TempDir Path dir) throws Exception {
         Path template = dir.resolve("no-such-template.docx");
         Path root = Files.createDirectory(dir.resolve("root"));
         LocalFileStorageService storage = storageWithTemplate(root, template);
 
         storage.createFromTemplate("projects/1/新建文档.docx");
-        assertTrue(Files.exists(root.resolve("projects/1/新建文档.docx")));
+        Path made = root.resolve("projects/1/新建文档.docx");
+        assertTrue(Files.exists(made));
+        assertTrue(Files.size(made) > 0,
+                "0 字节 docx 会被 Tika 拒绝（ZeroByteFileException），比对/全文提取直接失败");
 
         assertThrows(StorageException.class, () -> storage.load("projects/1/另一个.docx"));
         assertFalse(Files.exists(root.resolve("projects/1/另一个.docx")));

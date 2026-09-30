@@ -33,6 +33,10 @@ localRoot 项目里被外部删掉）会被读成一份**空白模板**：用户
 新建文档确实需要物化一个初始文件，那是**另一件事**，走
 `StorageService.createFromTemplate(key)`（幂等，已存在则不动；对象存储侧默认空实现，
 保持其既有行为）。唯一调用方是 `ProjectFileService.createFile`。
+配置的模板路径（`storage.local.template-path`）不存在时，本地实现用现有 POI 依赖
+生成一份结构合法的空白 DOCX——**绝不物化成 0 字节文件**：
+Tika 对 0 字节输入抛 `ZeroByteFileException`，新建空白文档一进「比对/提取全文」就 500。
+回归用例 `BlankTemplateCompareRegressionTest`。
 
 **新增存储实现或新增调用点时**：读路径一律 `load`，创建路径一律 `createFromTemplate`，
 不要再让读操作带副作用。回归用例 `MissingFileIsNotFabricatedTest`。

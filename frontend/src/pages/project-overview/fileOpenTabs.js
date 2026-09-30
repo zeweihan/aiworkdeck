@@ -766,10 +766,53 @@ export const fileOpenTabsMethods = {
       this.showCompareDialog = true
     },
 
-    onCompareDialogConfirm({ source, target }) {
-      // 用户确认了源文档和目标文档，打开 diff 标签页
-      this.showCompareDialog = false
-      this.openDiffTab(source, target)
+    async onCompareDialogConfirm({ source, target }) {
+      // 用户确认了源文档和目标文档。比对读的是磁盘字节，而自动保存是防抖的——
+      // 刚敲进编辑器的字可能还端在实例里，直接开会比到旧字节。先把本次 source/target
+      // 已打开且待保存的 Office 编辑器落盘（判据同 closeFile：ready 且非 docLoadFailed，
+      // 加载失败的空白原型不许存）；只动这两份，无关文档不碰。
+      if (this.compareSaving) return
+      this.compareSaving = true
+      try {
+        const ids = new Set([String(source.id), String(target.id)])
+        const pending = Object.values(this._libreRefs || {}).filter(inst =>
+          inst && inst.ready && !inst.docLoadFailed && inst.file &&
+          ids.has(String(inst.file.id)) && (inst.dirty || inst.saving) &&
+          typeof inst.flushSave === 'function')
+        const projectId = this.projectId
+        let failedName = null
+        for (const inst of pending) {
+          try {
+            const saved = await inst.flushSave({ timeoutMs: 10000 })
+            if (saved === false || inst.dirty || inst.saving) failedName = failedName ?? (inst.file.name || '')
+          } catch (e) {
+            failedName = failedName ?? (inst.file.name || '')
+            console.warn('[ProjectOverview] compare flush-save failed:', e)
+          }
+        }
+        // 等待保存期间用户可能取消对话框、换一组比较对象或切了项目——
+        // 旧确认不许再开比对，否则开出的就是过期的那一组。
+        const current = this.compareDocuments || []
+        if (projectId !== this.projectId || !this.showCompareDialog ||
+            !current.some(d => d && String(d.id) === String(source.id)) ||
+            !current.some(d => d && String(d.id) === String(target.id))) return
+        // B 保存期间，A 可能再次被编辑或换成新注册实例；开比对前重查当前两份。
+        for (const inst of Object.values(this._libreRefs || {})) {
+          if (inst && inst.ready && !inst.docLoadFailed && inst.file &&
+              ids.has(String(inst.file.id)) && (inst.dirty || inst.saving)) {
+            failedName = failedName ?? (inst.file.name || '')
+          }
+        }
+        if (failedName !== null) {
+          // 没落盘不能装成落盘：保留对话框让用户重试。
+          uni.showToast({ title: this.$t('workbenchOps.saveFailedNamed', { msg: failedName }), icon: 'none' })
+          return
+        }
+        this.showCompareDialog = false
+        this.openDiffTab(source, target)
+      } finally {
+        this.compareSaving = false
+      }
     },
 
     openDiffTab(source, target) {
