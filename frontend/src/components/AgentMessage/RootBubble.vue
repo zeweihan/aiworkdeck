@@ -153,6 +153,7 @@ import QuestionCard from './QuestionCard.vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
 import { t } from '@/i18n'
 import { visibleChatTimeline, isTimelineEntryActive } from './chatTimeline.mjs'
+import { APPROVAL_PLAN_TYPES } from './chatTurns.mjs'
 import { shouldShowUseInDocument } from '@/utils/useInDocumentVisibility.js'
 import { answerPlainText, copyToClipboard } from '@/utils/chatClipboard.js'
 import { toolDisplayName } from '@/utils/toolDisplayNames.js'
@@ -260,12 +261,13 @@ const activityLabel = (entry, index) => {
 }
 
 // ---- 审批卡视觉强调 ----
-// 判据刻意跟 ArtifactCard.showApprovalBar 完全对齐（isPlanType && actionable &&
+// 判据刻意跟 ArtifactCard.showApprovalBar 完全对齐（审批类计划 && actionable &&
 // effectiveStatus === 'draft'）：只有「确实弹出了按此推进/修订按钮」的那一张才
 // 值得强调，历史消息里已解决/不可操作的计划卡保持普通样式，不制造假的紧迫感。
-const APPROVAL_ARTIFACT_TYPES = ['task_list', 'plan', 'implementation_plan']
+// task_list 不在审批类里（后端契约：task_list 继续、implementation_plan 才停机，
+// dev-board#1106）——它是内部执行清单，轮次 finished 后不该再挂「待确认」。
 function isApprovalPending(art) {
-  return APPROVAL_ARTIFACT_TYPES.includes(art.type) && art.status === 'draft' && props.isLatest && !props.bubble.isStreaming
+  return APPROVAL_PLAN_TYPES.includes(art.type) && art.status === 'draft' && props.isLatest && !props.bubble.isStreaming
 }
 
 </script>

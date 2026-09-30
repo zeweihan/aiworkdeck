@@ -128,6 +128,16 @@ try {
     assert.ok(await page.$('[data-chat-attention].chat-attention-flash'), `${kind}: the card is highlighted on arrival`)
     await wait(() => !document.querySelector('.attention-locator'))
   }
+  // #1106: replay a completed answer with an internal draft checklist.
+  await page.evaluate(() => window.loadFixture('task-list'))
+  await wait(() => document.querySelector('.artifact-card.task_list'))
+  assert.ok(await page.$eval('.artifact-card.task_list', el => el.textContent.includes('读取底稿') && el.textContent.includes('修订正文')), 'internal checklist content remains visible')
+  assert.equal(await page.$('.artifact-card.task_list .approval-bar'), null, 'internal checklist has no approval actions')
+  assert.equal(await page.$('[data-chat-attention]'), null, 'internal checklist has no pending-confirmation badge or attention anchor')
+  assert.ok(!await page.$eval('.message-list', el => el.textContent.includes('待确认')), 'internal checklist must not say pending confirmation')
+  await page.evaluate(() => { const el = document.querySelector('.message-list'); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+  await wait(() => !window.chatState.followLatest)
+  assert.equal(await page.$('.attention-locator'), null, 'offscreen internal checklist does not create pending approval locator')
   // Feed the real SSE handler, then answer a question: continuing must retain tasks.
   await page.evaluate(() => window.loadFixture('question'))
   await page.evaluate(() => {

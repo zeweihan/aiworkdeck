@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
-const PLAN_TYPES = ['task_list', 'plan', 'implementation_plan']
+// 后端契约：implementation_plan 才停机等审批，task_list 是内部执行清单、模型继续跑。
+// 「待审批」的判定只能用下面这份窄表——把 task_list 算进来，会在轮次正常 finished 之后
+// 仍催用户去「按此推进」（dev-board#1106）。'plan' 是历史类型，审批照旧。
+export const APPROVAL_PLAN_TYPES = ['plan', 'implementation_plan']
 
 const TODO_WRITE_CALL = /^(?:\w+\.)?todo_write\(([\s\S]*)\)$/
 
@@ -117,7 +120,7 @@ export function buildChatTurns(bubbles, { isStreaming = false, runStatus = null,
     const last = latest.assistants.at(-1)
     const actionable = last && last.index === bubbles.length - 1 && !isStreaming && !last.bubble.isStreaming
     const pendingQuestion = actionable && last.bubble.question && !last.bubble.question.answered
-    if (pendingQuestion || actionable && (last.bubble.artifacts || []).some(a => PLAN_TYPES.includes(a.type) && a.status === 'draft')) {
+    if (pendingQuestion || actionable && (last.bubble.artifacts || []).some(a => APPROVAL_PLAN_TYPES.includes(a.type) && a.status === 'draft')) {
       latest.attentionIndex = last.index
       latest.attentionKind = pendingQuestion ? 'question' : 'approval'
     }

@@ -27,6 +27,24 @@ test('a draft plan is an approval entry, and approving it clears the bar', () =>
   assert.equal(locate(withPlan('approved')), null)
 })
 
+// dev-board#1106：task_list 是内部执行清单（后端契约：task_list 继续、只有
+// implementation_plan 停机审批）。轮次正常 finished 后残留的 draft task_list 不算
+// 待审批；判定层与历史回放共用同一条路径，这条钉住两边一致。
+test('a draft task_list left behind by a finished turn is not an approval entry', () => {
+  const withTaskList = status => [user('u', '改一下这份合同'), assistant('a', { artifacts: [{ type: 'task_list', status }], content: '已按清单完成修改。' })]
+  assert.equal(locate(withTaskList('draft')), null, '内部清单不该催审批')
+  const turns = buildChatTurns(withTaskList('draft'))
+  assert.equal(turns[0].status, 'idle')
+  assert.equal(turns[0].attentionIndex, -1)
+})
+
+test('historical plan type keeps its approval entry', () => {
+  assert.deepEqual(
+    locate([user('u', '给个方案'), assistant('a', { artifacts: [{ type: 'plan', status: 'draft' }] })]),
+    { index: 1, kind: 'approval', count: 1 }
+  )
+})
+
 test('nothing is waiting while the turn is still running', () => {
   const list = [user('u', 'a'), assistant('a', { question: { text: '?' }, isStreaming: true })]
   assert.equal(locate(list, { isStreaming: true, runStatus: 'RUNNING' }), null)
