@@ -115,7 +115,7 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
 - `frontend/src/composables/useEditorBridge.js` — 编辑器无关的分发接缝（薄封装），执行器可插拔。
 - `frontend/src/composables/libreofficeExecutorClient.js` — **EDITOR_ACTIONS 白名单定义处**（:15-174，2026-09-22 复核行号：数组早已超出旧标注的 :67，实测以 `grep -n '^]'` 收在 :174）+ reqId 关联的 worker port 客户端；白名单外 action 直接拒绝。
 - `frontend/src/composables/useAgentStream.js` — SSE 消费：`client_action`（~:1368）；`doc_stream_data`（~:1393，单名）。
-- `frontend/src/pages/project-overview/agentClientActions.js` — 命令路由中枢：`handleClientAction`（按 `action.action` / `action.tool` 分派，单名）→ `handleEditorCommand`（打 `__agent:true` 标记后调 executor）。
+- `frontend/src/pages/project-overview/agentClientActions.js` — 命令路由中枢：`handleClientAction`（按 `action.action` / `action.tool` 分派，单名）→ `handleEditorCommand`（打 `__agent:true` 标记后调 executor）。读取类 `get_document_text` / `get_paragraph` 的成功对象回执附 `sourceFileId`（dev-board#1097：派发那一刻经 `resolveLibreExecutorFileId` 从实际 executor 反查，等待期间用户切 tab 不跟随；查不到明确 null，不猜；worker 原结果浅拷贝不就地污染，失败/无关命令不带身份；boot 等待在捕获之前，流程不退化）。回归 `tests/project-home/agent-read-source-file-id.test.mjs`。
 - `frontend/src/zetaoffice/public/office_thread.js` — worker 端所有 action 的真实 UNO 实现 + UI_COMMANDS 白名单（:321-332）+ 修订机制。
 - `frontend/src/utils/toolDisplayNames.js` — 工具名→中文显示名映射表（NAMES 表 :8-97）。**新增工具必须同步加中文名**。
 

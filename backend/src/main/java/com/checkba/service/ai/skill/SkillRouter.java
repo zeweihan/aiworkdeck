@@ -185,8 +185,18 @@ public class SkillRouter {
         return Optional.ofNullable(best);
     }
 
-    /** 意见书主体由 triggers 匹配；这里只区分实质审查与纯机械编辑，不做付费意图预选。 */
-    private static boolean requestsOpinionReview(String input) {
+    /**
+     * 意见书主体由 triggers 匹配；这里只区分实质审查与纯机械编辑，不做付费意图预选。
+     * 编排器的收尾补检（dev-board#1097）复用同一判据门控，不另造第二套启发式。
+     */
+    public static boolean requestsOpinionReview(String input) {
+        if (input == null) {
+            return false;
+        }
+        input = input.trim().toLowerCase();
+        if (input.isEmpty()) {
+            return false;
+        }
         List<String> actions = List.of("审查", "审阅", "审核", "修订", "修改", "评估",
                 "審查", "審閱", "審核", "修訂", "評估", "review", "revise", "redline", "assess");
         List<String> mechanical = List.of("错别字", "错字", "錯別字", "錯字", "字体", "字體",

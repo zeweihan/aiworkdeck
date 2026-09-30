@@ -772,11 +772,24 @@ export const agentClientActionMethods = {
         }
 
         try {
+            // dev-board#1097：get_document_text / get_paragraph 的回执必须带真实来源
+            // fileId，子任务才能区分意见书与参考文件。派发那一刻从实际 executor 反查
+            // （resolveLibreExecutorFileId），等待期间用户切了活跃编辑器也不跟着变；
+            // 查不到就明确 null，不猜、不拿用户传入的 fileId 冒充。
+            const isAgentDocReadAction = commandAction === 'get_document_text' || commandAction === 'get_paragraph'
+            const readSourceFileId = isAgentDocReadAction && typeof this.resolveLibreExecutorFileId === 'function'
+                ? (this.resolveLibreExecutorFileId(this.libreOfficeExecutor) ?? null)
+                : null
             // __agent 标记：worker 据此把这条命令产生的修订署名为 AI WorkDeck
             //（用户本人的 IME 输入等不带标记，署用户名），修订面板里可区分来源。
             const result = await this.libreOfficeExecutor.executeCommand(
                 commandAction, Object.assign({}, params, { __agent: true }))
             const successFlag = result && result.success !== false
+            // 成功的读取对象结果浅拷贝后附 sourceFileId（成功但 worker 回的不是对象
+            // 就保持原样）；worker 原结果不就地污染，失败 / 其他命令不带身份。
+            const resultPayload = isAgentDocReadAction && successFlag && result && typeof result === 'object' && !Array.isArray(result)
+                ? Object.assign({}, result, { sourceFileId: readSourceFileId })
+                : result
             // 失败原因优先取 error，没有就退到 message：worker 里大量失败分支只填 message
             //（如 delete_match 的「match index out of range」），只取 error 的话模型收到的是
             // {"error": "null"}，等于没告诉它哪里错了，它只能瞎猜着重试。
@@ -784,7 +797,7 @@ export const agentClientActionMethods = {
             // 写入类命令写完了 → 通知编辑器刷新审阅面板（dev-board#460）。只读命令
             // 不发（白费一轮往返），失败的也不发（什么都没写成）。
             if (successFlag && isDocMutatingAction(commandAction)) this.notifyDocMutated()
-            await sendEditorResult(conversationId, requestId, successFlag, result, successFlag ? (result && result.error) || null : failReason)
+            await sendEditorResult(conversationId, requestId, successFlag, resultPayload, successFlag ? (result && result.error) || null : failReason)
         } catch (e) {
             console.error('[ProjectOverview] LibreOffice command error:', e)
             await sendEditorResult(conversationId, requestId, false, null, e.message)

@@ -263,6 +263,16 @@ public class AgentOrchestrator {
         // 活跃文档名（仅用于给模型的反馈文案）
         String activeFileName;
         /**
+         * dev-board#1097 法律意见书收尾补检（机制与边界见 {@link OpinionCompletionCheck}）：
+         * opinionCompletionCheckDone — 服务端兜底核验一轮最多一次，派发前置位，成败都不再补第二次；
+         * opinionInstructions — 本轮用户指令（原指令在前、插话按顺序），核验时作为授权范围数据；
+         * opinionTargetFileId/Name — 本轮开始时绑定的活跃文档，核验目标以它为准。
+         */
+        volatile boolean opinionCompletionCheckDone;
+        final java.util.List<String> opinionInstructions = new java.util.concurrent.CopyOnWriteArrayList<>();
+        volatile Long opinionTargetFileId;
+        volatile String opinionTargetFileName;
+        /**
          * 本轮下发工具时用的活跃文档类型（dev-board#729 ①）：doc / sheet / slide，
          * null = 不裁剪（没有活跃文档、纯文本、或本轮中途换过文档类型）。
          *
@@ -762,6 +772,8 @@ public class AgentOrchestrator {
                     guard.activeFileName = request.getActiveContext().getName();
                 } catch (NumberFormatException ignore) { }
             }
+            // 插话按顺序补进授权范围数据：核验以原指令为门控、以全序列为范围（dev-board#1097）
+            guard.opinionInstructions.add(input.getMessage());
         }
         return true;
     }
@@ -1494,6 +1506,10 @@ public class AgentOrchestrator {
                     guard.activeFileName = request.getActiveContext().getName();
                 } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
             }
+            // dev-board#1097：本轮最初的用户指令（门控）与最初绑定的活跃文档（核验目标）
+            guard.opinionInstructions.add(request.getMessage());
+            guard.opinionTargetFileId = guard.activeFileId;
+            guard.opinionTargetFileName = guard.activeFileName;
             // 工具可见性按活跃文档类型收窄（dev-board#729 ①）：本轮只算这一次，
             // 之后每轮递归都沿用，保证同一轮工具集不变
             guard.activeDocKind = initialDocKind(request.getActiveContext());
@@ -2242,6 +2258,13 @@ public class AgentOrchestrator {
 
             // 4. Default: Loop Finished
             log.info("Agent Loop Finished for {}", conversationId);
+            // dev-board#1097：法律意见书实质修订的正常收尾由系统安排一次独立只读核验，
+            // 把发现接回主助手核对后续一轮；门控与边界见 runOpinionCompletionCheckOnce。
+            // 反问/审批/暂停/取消各有自己的终态分支、走不到这里；返回 true 表示已接管收尾。
+            if (runOpinionCompletionCheckOnce(model, messages, conversationId, projectId, userId,
+                    modelId, depth, executionLog, agentMode, guard, content)) {
+                return;
+            }
             if (!content.isEmpty()) {
                 // Prepend execution log for history persistence
                 String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
@@ -2731,6 +2754,102 @@ public class AgentOrchestrator {
                     LlmErrorClassifier.INTERNAL_ERROR_MARKER + ": Continuation rejected: " + e.getMessage(),
                     executionLog);
         }
+    }
+
+    /**
+     * dev-board#1097：法律意见书实质修订的最小有界收尾检查（机制与边界见
+     * {@link OpinionCompletionCheck} 类注释，这里只做编排）。
+     *
+     * <p>门控 = legal-opinion-review 生效 + 本轮最初用户指令经
+     * {@link com.checkba.service.ai.skill.SkillRouter#requestsOpinionReview} 判为实质审查
+     * （复用同一判据，不另造第二套）；被新 run 取代或已取消时保守跳过，不为旧轮新增付费核验。
+     *
+     * @return true = 本方法已接管收尾（补检续轮或取消），调用方直接 return；false = 走默认收尾
+     */
+    private boolean runOpinionCompletionCheckOnce(StreamingChatLanguageModel model,
+                                                  java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                                  String conversationId, String projectId, Long userId,
+                                                  String modelId, int depth, StringBuilder executionLog,
+                                                  AgentMode agentMode, RunGuard guard, String prematureContent) {
+        if (guard != null && guard.isCancelled()) {
+            handleCancellation(guard, projectId, userId, executionLog);
+            return true;
+        }
+        if (guard == null || agentMode != AgentMode.AGENT || subAgentService == null
+                || guard.opinionCompletionCheckDone || !isCurrentRun(guard)
+                || !skillRouter.isActiveInRun(guard.runId, OpinionCompletionCheck.SKILL_ID)
+                || guard.opinionInstructions.isEmpty()
+                || !com.checkba.service.ai.skill.SkillRouter.requestsOpinionReview(
+                        guard.opinionInstructions.get(0))) {
+            return false;
+        }
+        // 「仅一次」的标志在派发前置位：核验失败、接回后那一轮再收尾，都不会再补第二次——
+        // 绝不重复原样派发（失败的出路是把「未验证」如实接回，见 handoffMessage）。
+        guard.opinionCompletionCheckDone = true;
+        log.info("[OpinionCheck] conv={} run={} 实质意见书任务收尾，服务端安排一次独立只读核验（仅一次）",
+                conversationId, guard.runId);
+
+        com.checkba.service.ai.tools.ToolContext ctx = new com.checkba.service.ai.tools.ToolContext(
+                Long.parseLong(projectId), conversationId, userId, modelId,
+                guard.roundCandidates, guard.roundOffered, guard.runId, null, guard::isCancelled);
+        com.checkba.service.ai.subagent.SubAgentResult outcome;
+        try {
+            if (guard.opinionTargetFileId == null || !guard.opinionTargetFileId.equals(guard.activeFileId)) {
+                outcome = com.checkba.service.ai.subagent.SubAgentResult.failure("opinion-completion-check",
+                        LangText.of("无法确认当前编辑器仍为本轮目标文档，请先定位目标并自行回读核对。",
+                                "The active editor cannot be confirmed as this run's target. Locate and re-read the target yourself."),
+                        List.of(), 0);
+            } else outcome = subAgentService.dispatch(
+                    OpinionCompletionCheck.verificationTask(guard.opinionTargetFileId,
+                            guard.opinionTargetFileName, guard.opinionInstructions),
+                    OpinionCompletionCheck.expectedOutput(),
+                    OpinionCompletionCheck.VERIFICATION_SCOPE, ctx);
+        } catch (Exception e) {
+            // 派发异常与核验失败同一条出路：如实接回「未验证」，不阻断收尾
+            log.warn("[OpinionCheck] conv={} 补检派发异常，按失败接回", conversationId, e);
+            outcome = null;
+        }
+        if (outcome == null) {
+            outcome = com.checkba.service.ai.subagent.SubAgentResult.failure(
+                    "opinion-completion-check", "no result returned", List.of(), 0);
+        }
+
+        // 补检可能跑了很久：取消走取消收尾；被新 run 取代则不把发现接回旧 run 自动续轮，
+        // 让默认收尾把已流出正文照常落历史（会话级事件本来就只有当前轮发得出去）。
+        // 两条检查都必须在把收尾前正文并入 executionLog 之前——handleCancellation 用
+        // streamSnapshot 落正文，顺序反了同一句话会在历史里出现两遍。
+        if (guard.isCancelled()) {
+            handleCancellation(guard, projectId, userId, executionLog);
+            return true;
+        }
+        if (!isCurrentRun(guard)) {
+            log.info("[OpinionCheck] conv={} run={} 补检期间被新轮次取代，发现不接回", conversationId, guard.runId);
+            return false;
+        }
+
+        // 收尾前正文已逐 token 流给用户：并进执行日志留在历史里（顺序 = 正文 → 核验过程卡 →
+        // 修正后的最终说明），但不作为最终答复单独落库——旧结论要经核对才算数。
+        if (prematureContent != null && !prematureContent.isEmpty()) {
+            appendBoundedExecutionLog(executionLog, prematureContent + "\n");
+        }
+        int displayLimit = toolOutputDisplayLimit(
+                com.checkba.service.ai.subagent.SubAgentService.DISPATCH_TOOL_NAME);
+        String status = outcome.success() ? "SUCCESS" : "FAILURE";
+        String outcomeText = outcome.success() ? outcome.result() : "Error: " + String.valueOf(outcome.error());
+        String processCard = String.format(
+                "<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
+                LangText.of("收尾核验", "Completion check"),
+                com.checkba.service.ai.subagent.SubAgentService.DISPATCH_TOOL_NAME,
+                AgentTagProtocol.escape(truncate("system: one-time read-only verification", 200)),
+                status, AgentTagProtocol.escape(truncate(String.valueOf(outcomeText), displayLimit)));
+        appendBoundedExecutionLog(executionLog, processCard);
+        sendTextDelta(guard, processCard);
+
+        messages.add(dev.langchain4j.data.message.UserMessage.from(
+                OpinionCompletionCheck.handoffMessage(outcome)));
+        continueRunLoop(model, messages, conversationId, projectId, userId, modelId,
+                depth + 1, executionLog, agentMode, guard);
+        return true;
     }
 
     /**

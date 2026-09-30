@@ -15,6 +15,12 @@ system prompt 的事实分级保留来源事实截止日，不凭系统当天或
 
 `legal-opinion-review` 独立于合同六遍清单：相关事实依据/缺口清单 → 正文与结论限定 → 来源时点 → 最终按清单回读。只审查不直接编辑，编辑范围与审查范围分开。`SkillRouter` 用本地规则在意见书主体命中后区分实质任务与纯机械编辑；并列错字/格式不排除实质审查，后置“仅限错字”限制修订，否定动作不当正向请求。不调用付费预选。当前自动匹配只读用户消息，未将 active filename 加入路由；通用“修订这个文档”仍需模型 `use_skill` 或手选。回归：`LegalOpinionSkillRoutingTest` 中英范围/否定/混合意图；`BuiltinSkillsTest` 校验真实工具名及 LOWA/Office 激活后的读取、编辑、澄清与计划工具。路由通过不等于事实核验质量通过，仍须真实模型验收。
 
+## 意见书收尾补检（dev-board#1097，2026-09-30）
+
+`OpinionCompletionCheck` + `AgentOrchestrator.runOpinionCompletionCheckOnce`：legal-opinion-review 生效且本轮**最初**用户指令过 `SkillRouter.requestsOpinionReview`（public static，同一判据无第二套）的 AGENT 轮正常完成时，服务端经 `SubAgentService.dispatch` 派**一次**固定只读 scope 的核验子任务（标志派发前置位，失败不重派），发现接回主助手核对后续一轮；skill 第 4 步已改为系统安排核验，主助手不再自行派同一种收尾核验。被新 run 取代或已取消时保守跳过（派发前后都查 isCurrentRun）；取消走 `handleCancellation`。目标绑定本轮最初活跃文档，子任务须先确认编辑器当前稿即目标，确认不了如实报未验证。用户指令（原指令 + 插话按序）只作范围数据；UX 局限：收尾前正文可能已流出，核验发现只在后续轮接回。回归：`AgentOrchestratorOpinionCompletionCheckTest`（真实编排器 + 脚本模型接线）。
+
+补检目标绑定本轮最初活跃文件；无文件 ID 或已切到别的文件时不派发对子任务的付费核验，接回“未验证”让主助手定位并回读。LOWA 读取回执 `sourceFileId` 用于核对实际读取来源；不能靠文本相似度猜身份。原指令与后续插话按序保留，不截掉长指令尾部的范围限制。
+
 ## 系统提示瘦身（dev-board#1073，2026-09-29）
 
 - 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。
