@@ -24,6 +24,26 @@ class LegalOpinionSkillRoutingTest {
     }
 
     @ParameterizedTest
+    @CsvSource({"false,修订法律意见书", "true,Revise this legal opinion"})
+    void opinionWorkflowSeparatesRequirementsFactsAndAdvice(boolean english, String request) {
+        SkillRouter router = router(english);
+        router.activateForTurn("opinion", "opinion-run", request, null);
+        String prompt = router.promptInjectionFor(router.activeSkill("opinion-run").orElseThrow());
+        assertAll(
+                () -> assertTrue(prompt.contains(english ? "legal requirements, contractual terms, established facts and risk-control advice"
+                        : "法律要求、合同约定、已证实事实与风险控制建议")),
+                () -> assertTrue(prompt.contains(english ? "non-performance does not itself create a new precondition"
+                        : "未履行事实本身不生成新的先决条件")),
+                () -> assertTrue(prompt.contains(english ? "identities, subject matter or premises for applying the law"
+                        : "主体身份、标的或法律适用前提")),
+                () -> assertTrue(prompt.contains(english ? "conditional analysis or mark them unverified"
+                        : "条件化分析或待核实")),
+                () -> assertTrue(prompt.contains(english ? "current status" : "目前")),
+                () -> assertTrue(prompt.contains(english ? "requirements, facts and advice have not been conflated"
+                        : "要求、事实与建议未混淆")));
+    }
+
+    @ParameterizedTest
     @CsvSource({
         "false,帮我修订一下这个法律意见书",
         "false,根据项目材料审查法律意见书",
