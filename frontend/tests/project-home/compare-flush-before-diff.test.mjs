@@ -158,3 +158,26 @@ for (const change of ['edit-saved-a', 'register-dirty-a']) {
     assert.equal(toasts.length, 1)
   })
 }
+
+test('保存期间对话框不能反转比较方向或重复确认，仍可取消；失败后可重试', () => {
+  const source = readFileSync(new URL('../../src/components/CompareDocDialog.vue', import.meta.url), 'utf8')
+  const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
+    .replace(/^import .*$/gm, '').replace('export default', 'return')
+  const dialog = new Function(script)()
+  const events = []
+  const vm = { busy: true, canConfirm: true, documents: [A, B], sourceIndex: 0, targetIndex: 1,
+    $emit: (...args) => events.push(args) }
+  dialog.methods.selectSource.call(vm, 1)
+  dialog.methods.selectTarget.call(vm, 0)
+  dialog.methods.handleConfirm.call(vm)
+  assert.equal(vm.sourceIndex, 0)
+  assert.equal(vm.targetIndex, 1)
+  assert.equal(events.length, 0)
+  dialog.methods.handleCancel.call(vm)
+  assert.equal(events[0][0], 'cancel')
+  events.length = 0
+  vm.busy = false
+  dialog.methods.selectSource.call(vm, 1)
+  dialog.methods.handleConfirm.call(vm)
+  assert.deepEqual(events[0], ['confirm', { source: B, target: A }])
+})

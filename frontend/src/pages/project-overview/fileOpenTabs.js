@@ -771,8 +771,8 @@ export const fileOpenTabsMethods = {
       // 刚敲进编辑器的字可能还端在实例里，直接开会比到旧字节。先把本次 source/target
       // 已打开且待保存的 Office 编辑器落盘（判据同 closeFile：ready 且非 docLoadFailed，
       // 加载失败的空白原型不许存）；只动这两份，无关文档不碰。
-      if (this._compareFlushing) return
-      this._compareFlushing = true
+      if (this.compareSaving) return
+      this.compareSaving = true
       try {
         const ids = new Set([String(source.id), String(target.id)])
         const pending = Object.values(this._libreRefs || {}).filter(inst =>
@@ -811,7 +811,7 @@ export const fileOpenTabsMethods = {
         this.showCompareDialog = false
         this.openDiffTab(source, target)
       } finally {
-        this._compareFlushing = false
+        this.compareSaving = false
       }
     },
 

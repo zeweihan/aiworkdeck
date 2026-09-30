@@ -14,7 +14,7 @@
             <text>↑</text>
             <text class="nav-text">{{ $t('editor.diff.prev') }}</text>
           </button>
-          <text class="diff-count">{{ currentDiffIndex + 1 }} / {{ totalDiffs }}</text>
+          <text class="diff-count">{{ totalDiffs ? currentDiffIndex + 1 : 0 }} / {{ totalDiffs }}</text>
           <button class="nav-btn" @tap="goToNextDiff" :disabled="currentDiffIndex >= totalDiffs - 1">
             <text>↓</text>
             <text class="nav-text">{{ $t('editor.diff.next') }}</text>
@@ -235,6 +235,8 @@ export default {
         this._originalModel = monaco.editor.createModel(this.sourceText, 'plaintext')
         this._modifiedModel = monaco.editor.createModel(this.targetText, 'plaintext')
 
+        // 差异计算在 worker 中异步完成；nextTick 只能等 DOM，不能等计算结果。
+        this._diffUpdateListener = this.diffEditor.onDidUpdateDiff(() => this.computeDiffCount())
         this.diffEditor.setModel({
           original: this._originalModel,
           modified: this._modifiedModel
@@ -324,6 +326,7 @@ export default {
     },
     
     disposeDiffEditor() {
+      if (this._diffUpdateListener) { this._diffUpdateListener.dispose(); this._diffUpdateListener = null }
       if (this.diffEditor) {
         this.diffEditor.dispose()
         this.diffEditor = null
