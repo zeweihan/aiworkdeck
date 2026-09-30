@@ -640,7 +640,19 @@ export const agentClientActionMethods = {
         try {
             if (!fileId || !restoreId) throw new Error('检查点恢复缺少文件或操作标识')
             if (phase === 'prepare') {
-                if (entry) throw new Error('该文档已有检查点恢复进行中')
+                if (entry) {
+                    // 旧 prepare 的终态 SSE（reload/abort）丢失后，旧 entry 会一直占住
+                    // pending，新恢复被恒拒。只对这条旧操作本身对账：查询用的是旧
+                    // barrier 自己的 conversationId/restoreId，mayWrite=false（后端写
+                    // 路径已结束）才失效旧实例并释放；同 restoreId 重复 prepare、
+                    // 对账失败或仍可能写入的一律保持阻止，不改旧 entry 的所有权。
+                    if (entry.restoreId === restoreId || !ownsEntry() || !entry.barrier.conversationId ||
+                        !await reconcileCheckpointSaveBarrier(entry.projectId, fileId, getCheckpointRestoreWriteState) ||
+                        pending.get(String(fileId))) {
+                        throw new Error('该文档已有检查点恢复进行中')
+                    }
+                    entry = null
+                }
                 if (checkpointSaveBarrier(this.projectId, fileId) &&
                     !await reconcileCheckpointSaveBarrier(this.projectId, fileId, getCheckpointRestoreWriteState)) {
                     throw new Error('检查点仍在恢复，请稍后重新加载文档')
@@ -659,7 +671,7 @@ export const agentClientActionMethods = {
                 entryOwnedByAction = true
                 for (const inst of instances) {
                     if (typeof inst.prepareCheckpointRestore !== 'function' || !await inst.prepareCheckpointRestore(restoreId)) {
-                        throw new Error('无法暂停目标文档的保存，未恢复快照')
+                        throw new Error('无法暂停目标文档的保存，未恢复快照，请重新打开文档后重试')
                     }
                     if (!ownsEntry()) throw new Error('检查点恢复已被取消或取代')
                 }

@@ -7,11 +7,11 @@ import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 let projectSequence = 0
 const source = readFileSync(new URL('../../src/pages/project-overview/agentClientActions.js', import.meta.url), 'utf8')
   .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '').replace(/^export\s+/gm, '')
-function fixture(instances, send) {
+function fixture(instances, send, writeState) {
   instances.forEach(inst => { inst.ready = true; inst.executor = {} })
   const replies = []
   const methods = new Function(...Object.keys(barriers), 'getCheckpointRestoreWriteState', 'sendEditorResult', source + '; return agentClientActionMethods')(
-    ...Object.values(barriers), async () => ({ mayWrite: true }), async (...args) => { replies.push(args); await send?.(...args) })
+    ...Object.values(barriers), writeState || (async () => ({ mayWrite: true })), async (...args) => { replies.push(args); await send?.(...args) })
   const page = Object.assign({ projectId: 'checkpoint-test-' + (++projectSequence), _libreRefs: Object.fromEntries(instances.map((inst, i) => [i, inst])),
     conversationId: 'conv-' + projectSequence, activeFileIdLeft: 50, activeFileIdRight: null, resolveLibreExecutorFileId: () => 50 }, methods)
   const run = (phase, restoreId = 'restore-1') => page.handleEditorCommand({ action: 'doc_checkpoint_restore',
@@ -190,6 +190,85 @@ test('a duplicate prepare cannot release the active write barrier', async () => 
   assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), barrier)
 })
 
+// 终态 SSE（reload/abort）连同页面一起丢失后，旧 entry 会永远占住 pending；
+// 只有后端写路径确认结束（mayWrite=false）才允许对这条旧操作本身对账并重试。
+test('a lost terminal SSE with a finished backend write no longer blocks a fresh restore', async () => {
+  let failed = 0
+  const inst = { file: { id: 50 }, prepareCheckpointRestore: async () => true, reloadFromBackend: async () => true,
+    failCheckpointRestore() { failed++ } }
+  const { page, run, replies } = fixture([inst], null, async () => ({ mayWrite: false }))
+  await run('prepare', 'lost')
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'lost')
+  await run('prepare', 'fresh')
+  assert.equal(replies.at(-1)[2], true, 'the fresh prepare must reach the safe recovery flow')
+  assert.equal(failed, 1, 'the abandoned instance is invalidated exactly once')
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'fresh')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'fresh')
+  await run('reload', 'fresh')
+  assert.equal(page._checkpointRestores.size, 0)
+})
+
+test('a backend write still in flight keeps the stale entry blocking a fresh restore', async () => {
+  let failed = 0
+  const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    failCheckpointRestore() { failed++ } }], null, async () => ({ mayWrite: true }))
+  await run('prepare', 'lost')
+  await run('prepare', 'fresh')
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'lost')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'lost')
+  assert.equal(failed, 0)
+})
+
+test('a state query failure keeps the stale entry and its ownership untouched', async () => {
+  const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    failCheckpointRestore() {} }], null, async () => { throw Error('state endpoint down') })
+  await run('prepare', 'lost')
+  await run('prepare', 'fresh')
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'lost')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'lost')
+})
+
+test('a duplicate prepare with the same restoreId cannot reconcile away the active operation', async () => {
+  let failed = 0
+  const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    failCheckpointRestore() { failed++ } }], null, async () => ({ mayWrite: false }))
+  await run('prepare', 'dup')
+  const barrier = barriers.checkpointSaveBarrier(page.projectId, 50)
+  await run('prepare', 'dup')
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), barrier)
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'dup')
+  assert.equal(failed, 0)
+})
+
+test('a late terminal for the reconciled restore cannot disturb the newer one', async () => {
+  const inst = { file: { id: 50 }, prepareCheckpointRestore: async () => true, reloadFromBackend: async () => true,
+    failCheckpointRestore() {} }
+  const { page, run, replies } = fixture([inst], null, async () => ({ mayWrite: false }))
+  await run('prepare', 'old')
+  await run('prepare', 'new')
+  await run('reload', 'old')
+  assert.equal(replies.at(-1)[2], false, 'the late terminal cannot acknowledge success')
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'new')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50).restoreId, 'new')
+})
+
+test('an editor invalidated by the abandoned restore yields a clear reopen guidance instead of a stale lock', async () => {
+  const inst = { file: { id: 50 }, ready: true, executor: {},
+    async prepareCheckpointRestore() { return this.ready },
+    async reloadFromBackend() { return true },
+    failCheckpointRestore() { this.ready = false } }
+  const { page, run, replies } = fixture([inst], null, async () => ({ mayWrite: false }))
+  await run('prepare', 'lost')
+  await run('prepare', 'fresh')
+  assert.equal(replies.at(-1)[2], false)
+  assert.match(replies.at(-1)[4], /未恢复快照，请重新打开文档后重试/)
+  assert.equal(page._checkpointRestores.size, 0, 'the failed fresh prepare must not leave a lock behind')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), null)
+})
+
 test('a lost prepare success ACK retains its barrier until the backend write state is reconciled', async () => {
   const { page, run, replies } = fixture([{ file: { id: 50 }, prepareCheckpointRestore: async () => true,
     failCheckpointRestore() {} }], async (...args) => { if (args[2] === true) throw Error('ACK response lost') })
@@ -199,4 +278,25 @@ test('a lost prepare success ACK retains its barrier until the backend write sta
   assert.equal(await barriers.reconcileCheckpointSaveBarrier(page.projectId, 50, async () => ({ mayWrite: true })), false)
   assert.equal(await barriers.reconcileCheckpointSaveBarrier(page.projectId, 50, async () => ({ mayWrite: false })), true)
   assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), null)
+})
+
+
+test('a delayed reconciliation cannot clear a newer prepare on the same page', async () => {
+  let resolveState
+  const inst = { file: { id: 50 }, prepareCheckpointRestore: async () => true,
+    failCheckpointRestore() {} }
+  const { page, run, replies } = fixture([inst], null, (conversationId, fileId, restoreId) => {
+    assert.deepEqual([conversationId, fileId, restoreId], [page.conversationId, 50, 'old'])
+    return new Promise(resolve => { resolveState = resolve })
+  })
+  await run('prepare', 'old')
+  const delayed = run('prepare', 'retry')
+  await run('abort', 'old')
+  await run('prepare', 'new')
+  const newer = barriers.checkpointSaveBarrier(page.projectId, 50)
+  resolveState({ mayWrite: false })
+  await delayed
+  assert.equal(replies.at(-1)[2], false)
+  assert.equal(page._checkpointRestores.get('50').restoreId, 'new')
+  assert.equal(barriers.checkpointSaveBarrier(page.projectId, 50), newer)
 })
