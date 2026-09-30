@@ -11,6 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { isAccountRequired, isCreditsRequired } from '../../src/utils/requireAccountCore.js'
 import zh from '../../src/locales/zh-CN/agentStream.js'
 import en from '../../src/locales/en-US/agentStream.js'
 
@@ -48,7 +49,7 @@ function parseAccountPayload(dataStr) {
   if (typeof dataStr !== 'string' || dataStr.charAt(0) !== '{') return null
   try {
     const p = JSON.parse(dataStr)
-    return p && typeof p.message === 'string' && p.kind ? p : null
+    return p && typeof p.message === 'string' && (p.kind || p.gatewayKind) ? p : null
   } catch (e) {
     return null
   }
@@ -56,8 +57,10 @@ function parseAccountPayload(dataStr) {
 
 function renderError(dataStr) {
   const bubble = { value: { content: '' } }
-  const run = new Function('dataStr', 'currentAssistantBubble', 't', 'accountPayload', BRANCH)
-  run(dataStr, bubble, (k) => k, parseAccountPayload(dataStr))
+  const run = new Function('dataStr', 'currentAssistantBubble', 't', 'accountPayload',
+    'isAccountRequired', 'isCreditsRequired', 'promptAccountAction', BRANCH)
+  // This suite tests rendered error copy; the account dialog is verified in paid-service.mjs.
+  run(dataStr, bubble, (k) => k, parseAccountPayload(dataStr), isAccountRequired, isCreditsRequired, () => {})
   return bubble.value.content
 }
 
