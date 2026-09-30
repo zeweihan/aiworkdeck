@@ -20,6 +20,8 @@ dev-board#181（后端部分）+ #182 + #541（DOC 第四类实体）。
 
 自动补全资料卡（「查看已有资料」/「查询法规与条款」）的失败态与依据窗格共用 `retrievalHint`：`completionDetails` 把原因码带到卡片，客体页 `hintAction` 据它摆按钮（NOT_CONNECTED/UNAUTHORIZED →「去设置配置」、NO_CREDITS →「去充值」、NO_CREDENTIAL 只给文案），点下去发 `writing-request` 的`settings` 动作 → 宿主注入的 `openSettingsTab({nav:'account'})`（客体页不导航）。
 
+选区右键（dev-board#1109）：`utils/selectionLookup.js` 对完整选区做本地确定性分类，不调用模型或检索。`zetaOfficeCompletion.js` 仅将识别出的 COMPANY/LAW/CASE 查询置于首层，其余折叠到「其他查询…」；未知/混合文字只有「查询资料…」展开入口。打开或展开菜单均不外查，仍传原始选区与原 token；规则归一化只用于菜单分类。已有资料入口照旧保留。企业简称、冷门案号与法规可能落入手动查询，不将规则分类当成实体核验。回归：`test:completion` 和真实 LOWA `test:writing-ui`。
+
 只有用户选区菜单点击后的 POST `/lookup` 才调用 `DocInsightService.lookupSelection`，复用既有检索与计费上下文，不启动全文解析或 LLM 抽取。成功资料缓存到当前项目学习项，失败不覆盖已有资料；GET `/entries/{id}` 只读缓存。外部资料先预览，点击插入才写文档。候选类别 COMPANY/PERSON/LAW/ARTICLE/CASE/WORD/PHRASE；外查只接 COMPANY/LAW/CASE。
 
 测试：`CompletionServiceTest`、`CompletionPersistenceTest`、`CompletionControllerTest` 与 `DocInsightServiceTest`（授权、并发、限额、失败缓存与显式检索边界）。

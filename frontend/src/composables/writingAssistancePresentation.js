@@ -42,6 +42,16 @@ export const WRITING_ASSISTANCE_CSS = `
   flex:none; width:26px; height:26px; padding:0; text-align:center;
   color:var(--wa-muted); font-size:18px; line-height:24px;
 }
+.awd-writing-assistance .awd-wa-panel[data-mode="context"] { width:300px; }
+.awd-writing-assistance .awd-wa-panel[data-mode="context"] .awd-wa-heading strong {
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.awd-writing-assistance .awd-wa-query { display:block; width:100%; margin-top:3px; }
+.awd-writing-assistance .awd-wa-query-primary { color:var(--wa-accent); font-weight:600; }
+.awd-writing-assistance .awd-wa-query-more { color:var(--wa-muted); }
+.awd-writing-assistance .awd-wa-query-more::after { content:'›'; float:right; }
+.awd-writing-assistance .awd-wa-query-more[aria-expanded="true"]::after { content:'⌄'; }
+.awd-writing-assistance .awd-wa-query-notice { padding:7px 10px 2px; }
 .awd-writing-assistance .awd-wa-option { display:block; width:100%; overflow-wrap:anywhere; }
 .awd-writing-assistance small { display:block; color:var(--wa-muted); font-size:11px; }
 .awd-writing-assistance .awd-wa-copy { white-space:pre-wrap; overflow-wrap:anywhere; padding:8px; max-height:28vh; overflow:auto; }

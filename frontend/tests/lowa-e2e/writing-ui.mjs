@@ -64,6 +64,31 @@ try {
   assert.equal(await text(), '北京当红晴天律师事务所')
   await exec('undo'); assert.equal(await text(), '北')
   await page.keyboard.press('Escape')
+  for (const [selection, expected] of [
+    ['北京示例科技有限公司', '查询机构工商信息'],
+    ['（2026）京0105民初123号', '查询案例与案号'],
+    ['《民法典》第五百七十七条', '查询法规与条款'],
+    ['双方应当诚实信用', null],
+  ]) {
+    await exec('ui_command', { name: 'select_all' }); await exec('replace_selection', { text: selection })
+    await exec('ui_command', { name: 'select_all' })
+    const lookupsBefore = await page.evaluate(() => window.__writingRequests.filter(m => m.action === 'lookup').length)
+    await page.mouse.click(160, 232, { button: 'right' })
+    await page.waitForFunction(selection => {
+      const panel = document.querySelector('.awd-wa-panel[data-mode="context"]')
+      return panel && !panel.hidden && panel.querySelector('strong')?.textContent === selection
+    }, {}, selection)
+    assert.deepEqual(await page.$$eval('.awd-wa-query-primary', rows => rows.map(row => row.textContent)), expected ? [expected] : [])
+    assert.equal(await page.$$eval('.awd-wa-query', rows => rows.length), expected ? 2 : 1)
+    assert.equal((await exec('get_selection')).text, selection)
+    await page.screenshot({ path: '/tmp/awd-1109-menu-' + (expected ? ['company', 'case', 'law'][['查询机构工商信息', '查询案例与案号', '查询法规与条款'].indexOf(expected)] : 'plain') + '.png' })
+    await page.click('.awd-wa-query-more')
+    assert.equal(await page.$$eval('.awd-wa-query', rows => rows.length), 4)
+    assert.equal(await page.evaluate(() => window.__writingRequests.filter(m => m.action === 'lookup').length), lookupsBefore)
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => document.querySelector('.awd-wa-panel').hidden)
+    assert.equal((await exec('get_selection')).text, selection, 'menu dismissal preserves selected text')
+  }
   await exec('ui_command', { name: 'select_all' }); await exec('replace_selection', { text: '北京当红晴天律师事务所' })
   await exec('ui_command', { name: 'select_all' })
   const popupClip = { x: 165, y: 130, width: 305, height: 90 }
@@ -71,6 +96,8 @@ try {
   // 真鼠标右键落在已选中的第一行：worker 的 XContextMenuInterceptor 取消
   // Writer 自己的弹窗（#601），HTML 菜单不必、也不许再合成 Escape 去关它。
   await page.mouse.click(160, 232, { button: 'right' })
+  await page.waitForSelector('.awd-wa-query-more')
+  await page.click('.awd-wa-query-more')
   await page.waitForFunction(() => [...document.querySelectorAll('.awd-wa-panel button')].some(b => b.textContent === '查询机构工商信息'))
   await page.evaluate(() => [...document.querySelectorAll('.awd-wa-panel button')].find(b => b.textContent === '查询机构工商信息').click())
   await page.waitForSelector('.awd-wa-panel table')
