@@ -12,6 +12,7 @@
 // 真引擎侧的断言（属性真的写进去、页边真的生效）在 lowa-e2e 组 31。
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import vm from 'node:vm'
 import { readFileSync } from 'node:fs'
 import { EDITOR_ACTIONS, createLibreOfficeExecutor } from '../../src/composables/libreofficeExecutorClient.js'
 
@@ -185,8 +186,8 @@ test('__agent 命令按页边语义执行：内联态下临时切页边，跑完
   assert.match(fn, /if \(AGENT_VIEW_EXEMPT\[action\] \|\| !isWriterDoc\(\)\) return fn\(\)/,
     '豁免名单 + 非 Writer 一个属性都不碰')
   assert.match(fn, /if \(before !== 'all'\) return fn\(\)/, '页边/最终稿态正文本来就不含删除文字，零开销直通')
-  assert.match(fn, /if \(!hasAnyRedline\(\)\) return fn\(\)/,
-    '一条修订都没有 = 正文里没有被删的字，整趟往返是纯成本（dev-board#725）')
+  assert.match(fn, /if \(!hasAnyRedline\(\) && FINAL_TEXT_READ_ACTIONS\.has\(action\)\) return fn\(\)/,
+    '零修订优化只限只读命令，首笔写入仍须按最终文本回读（dev-board#1082）')
   assert.match(fn, /applyRevisionView\('margin'\)/)
   // **这里刻意不 refresh()**（dev-board#725 真机实测 24.2.8-zhcn-r5）：隐藏修订后不重排，
   // getString / 段落枚举 / 区间偏移读到的最终文本与「切+refresh」逐字相等（同一段两条
@@ -200,4 +201,49 @@ test('__agent 命令按页边语义执行：内联态下临时切页边，跑完
     '分批原语是 async，恢复要等它 settle')
   assert.match(fn, /catch \(e\) \{ restore\(\); throw e; \}/, '同步抛异常也要还原')
   assert.match(WORKER_SRC, /const AGENT_VIEW_EXEMPT = \{ set_revision_view: 1, export_document: 1, load_document: 1 \};/)
+})
+
+// dev-board#1082: the first AI edit creates redlines inside the command. Its
+// verification result must already see final text, even when it started clean.
+function firstEditView() {
+  let mode = 'all', redlines = false
+  const switches = []
+  const start = WORKER_SRC.indexOf('const FINAL_TEXT_ACTIONS = ')
+  const end = WORKER_SRC.indexOf('\nconst RESOLVE_REVISION_ACTIONS', start)
+  const realm = vm.createContext({
+    isWriterDoc: () => true,
+    revisionViewState: () => ({ mode }),
+    hasAnyRedline: () => redlines,
+    withViewOnlyChange: fn => fn(),
+    applyRevisionView(next) { switches.push(next); mode = next; return { mode } },
+    ctrl: { getViewCursor: () => ({}) }, paragraphTextOf: () => '',
+  })
+  vm.runInContext(WORKER_SRC.slice(start, end), realm)
+  return {
+    run: vm.runInContext('runAgentCommandInMarginView', realm), switches,
+    mode: () => mode,
+    replace() { redlines = true; return { paragraphAfterEdit: mode === 'all' ? '旧新' : '新' } },
+  }
+}
+
+test('first AI replacement returns final text and restores the inline revision view', () => {
+  const view = firstEditView()
+  const result = view.run('replace_at_position', () => view.replace())
+  assert.equal(result.paragraphAfterEdit, '新', 'first-write verification must exclude the newly deleted text')
+  assert.equal(view.mode(), 'all')
+  assert.deepEqual(view.switches, ['final', 'all'])
+})
+
+test('redline-free reads still avoid revision-view switches', () => {
+  const view = firstEditView()
+  for (const action of ['get_document_text', 'get_paragraph', 'get_completion_context', 'get_review_context', 'capture_writing_context']) {
+    assert.equal(view.run(action, () => '正文'), '正文')
+  }
+  assert.deepEqual(view.switches, [], 'high-frequency reads keep the no-redline optimization')
+})
+
+test('an unrecognized AI action cannot bypass final-text semantics before its first edit', () => {
+  const view = firstEditView()
+  assert.equal(view.run('future_write_action', () => view.replace()).paragraphAfterEdit, '新')
+  assert.equal(view.mode(), 'all')
 })

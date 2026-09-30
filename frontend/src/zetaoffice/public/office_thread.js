@@ -8822,16 +8822,27 @@ const EXEC = {
 // 分批命令在批间会让出事件循环，那期间插进来的别的命令会看到页边语义——与「批间允许
 // 别的命令插进来」这条既有约定同源，不额外收窄。
 const FINAL_TEXT_ACTIONS = new Set(['get_completion_context', 'accept_completion', 'insert_completion_content', 'capture_writing_context', 'accept_writing_suggestion', 'get_review_context', 'goto_review_range', 'apply_review_edit']);
+// Only known readers may skip the view guard on a clean document. A write can
+// create its first deletion and then read paragraphAfterEdit in the same command.
+const FINAL_TEXT_READ_ACTIONS = new Set([
+  'get_selection', 'get_paragraph', 'get_outline', 'get_document_text', 'get_cursor_context',
+  'get_clauses', 'get_cursor_rect', 'get_ui_state', 'get_ui_lang', 'get_doc_kind',
+  'get_selection_hyperlink', 'get_hyperlink_at_cursor', 'get_bookmark_context',
+  'get_review_context', 'get_review_layout', 'get_completion_context', 'capture_writing_context',
+  'get_context_menu_context', 'find_text_locations', 'table_read', 'check_link_anchors',
+  'list_styles', 'list_fonts', 'list_revisions', 'list_comments', 'var_list', 'debug_revisions', 'probe_modules',
+]);
 const AGENT_VIEW_EXEMPT = { set_revision_view: 1, export_document: 1, load_document: 1 };
 function runAgentCommandInMarginView(action, fn) {
   if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
   const before = revisionViewState().mode;
   if (before !== 'all') return fn();
-  // 没有任何修订 = 正文里没有被删的字，最终文本就是当前文本。这是起草场景的
-  // 常态，而这一趟往返并不便宜：两次模型属性写 + 两次 invalidateParaIndex（下一
+  // 只读命令遇到零修订时，最终文本就是当前文本；写命令可能在这次执行中产生
+  // 第一条删除修订，不能跳过，否则验证回读仍含旧字（dev-board#1082）。这一趟
+  // 往返并不便宜：两次模型属性写 + 两次 invalidateParaIndex（下一
   // 次读要把整份段落索引重新枚举一遍），还会把 Writer 缓存的光标屏幕坐标留在
   // 另一个视图的几何里（dev-board#725）。一次 O(1) 的枚举探问就能整段跳过。
-  if (!hasAnyRedline()) return fn();
+  if (!hasAnyRedline() && FINAL_TEXT_READ_ACTIONS.has(action)) return fn();
   // 通向「正文 = 改后的样子」有两条路，读回的正文 / 段号 / 偏移完全一致：
   //   隐藏修订  RedlineDisplayType   → **模型**属性
   //   页边      ShowChangesInMargin  → **控制器的视图设置**

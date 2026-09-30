@@ -35,6 +35,8 @@ The "Precise Execution" rule in the system prompt (finish the one requested spot
    behind; open every "large deletion" in section 7 and check whether the clause was left as a stub (e.g. clause 2.1 reduced
    to "447,761 shares in total" with no subject matter and no undertaking).
 
+5. For assertions of completed approvals, payments or other project events, follow the system prompt’s factual evidence levels and check relevant sources. A draft cannot corroborate itself; where support remains missing, qualify the body’s conclusion and identify what needs verification, rather than leaving an unconditional assertion with only a comment. Distinguish future contractual obligations from completed performance.
+
 ## Step 2: six review passes (one question per pass; log findings with `todo_write`)
 
 - **A. Terminology and legal basis**: do the terms belong to this jurisdiction, are the article numbers right, are the

@@ -86,6 +86,17 @@ class BuiltinSkillsTest {
         }
     }
 
+    @Test
+    void contractReviewChecksDraftFactsWithoutRewritingFutureObligationsAsUnverified() {
+        var skill = registry.getSkill("contract-review").orElseThrow();
+        assertTrue(skill.getPromptTemplate().contains("草稿自述不能自证"));
+        assertTrue(skill.getPromptTemplate().contains("限定正文结论"));
+        assertTrue(skill.getPromptTemplate().contains("未来合同义务与已履行事实分开判断"));
+        assertTrue(skill.getPromptTemplateEn().contains("A draft cannot corroborate itself"));
+        assertTrue(skill.getPromptTemplateEn().contains("qualify the body’s conclusion"));
+        assertTrue(skill.getPromptTemplateEn().contains("Distinguish future contractual obligations"));
+    }
+
     @BeforeAll
     static void setUp() {
         SkillProperties props = new SkillProperties();
