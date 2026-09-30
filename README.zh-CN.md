@@ -1,374 +1,123 @@
 <p align="center">
-  <a href="https://www.aiworkdeck.com">
-    <img src=".github/assets/icon.png" width="88" alt="AI WorkDeck logo">
-  </a>
+  <a href="https://www.aiworkdeck.com"><img src=".github/assets/icon.png" width="80" alt="AI WorkDeck 标志"></a>
 </p>
 
 <h1 align="center">AI WorkDeck</h1>
 
 <p align="center">
-  <strong>让法律人聚焦专业判断 — 面向法律与文档密集型工作的 AI 原生工作台</strong>
+  <strong>专业文档工作的开源 AI 工作台</strong><br>
+  从原始材料到经过审阅的交付成果，从法律工作出发。
 </p>
 
 <p align="center">
-  <a href="https://github.com/zeweihan/aiworkdeck/stargazers"><img src="https://img.shields.io/github/stars/zeweihan/aiworkdeck?style=social" alt="Stars"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=2E5A50" alt="Release"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-2E5A50" alt="Platform"></a>
-  <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-blue.svg" alt="License: AGPLv3"></a>
-  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/%E5%95%86%E4%B8%9A%E8%AE%B8%E5%8F%AF-%E5%8F%AF%E7%94%A8-2E5A50.svg" alt="商业许可"></a>
-  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-aiworkdeck.com-2E5A50.svg" alt="官网"></a>
+  <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="AGPL-3.0-or-later"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=2E5A50" alt="最新版本"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml"><img src="https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml/badge.svg" alt="持续集成状态"></a>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <strong>简体中文</strong>
+  <a href="README.md">English</a> · <strong>简体中文</strong><br>
+  <a href="WHY.zh-CN.md">产品判断</a> · <a href="#一起建设">一起建设</a> · <a href="docs/architecture.md">技术架构</a> · <a href="https://github.com/zeweihan/aiworkdeck/releases/latest">下载体验</a> · <a href="mailto:hi@aiworkdeck.com">投资与合作</a>
 </p>
+
+一份合同能够交付，意味着有人愿意对它负责。为此，需要核对依据、协商修改、保留文档结构，也需要知道哪一版经过了谁的审阅。写出初稿，只是其中一步。
+
+<strong>AI WorkDeck 把这些工作放进同一个可扩展的工作台。</strong> 智能体与文档编辑器、项目文件、来源依据和版本记录共同工作。律师可以在文档里检查 AI 提出的修改，逐项接受或拒绝，并把成果保留在项目历史中。开发者则可以在同一套编辑器、智能体工具和插件运行时之上，构建自己的专业工作流。
+
+<strong>我们希望把它建设成专业 AI 的共同基础：</strong>从要求严格的法律场景切入，将底层文档能力做成可复用的接口，让不同领域的开发者能够在其上继续创造。
 
 <p align="center">
-  <a href="https://www.aiworkdeck.com">
-    <img src=".github/assets/workspace-ai.png" alt="AI WorkDeck — 项目工作区：文件树 + 文档预览 + AI 智能体面板（真实产品截图）" width="900">
-  </a>
+  <img src=".github/assets/workdeck-redline.png" alt="合同中的 AI 署名修订，右侧可逐项接受或拒绝修改" width="1000">
+  <br><sub>早期版本的真实产品截图，使用虚构演示材料；界面细节随版本更新。</sub>
 </p>
 
----
+## 为什么值得做
 
-> **VS Code** 把文件、扩展、终端、Git 和 AI 编程助手装进了开发者的同一个工作台。
->
-> **AI WorkDeck** 想为律师和文档密集型团队做同样的事：项目、文档、智能体、插件、证据与审查，尽在一处。
+AI 编程工具已经展示了智能体进入实际工作环境的价值。专业文档工作同样需要这种深度：理解正在编辑的文件、支撑结论的材料、准备提出的修改，以及最终对成果负责的人。
 
-## 为什么值得 Star
+我们从法律工作切入，因为这些要求几乎同时出现在每一个项目中。尽调结论需要依据，谈判条款需要修订记录，最终文件还要交给使用 Word 的客户和交易对手。把这些环节做好，所形成的基础能力也有机会服务于交易咨询、合规以及更多依赖文档交付的专业领域。
 
-如果你关心下面任何一个问题，欢迎为 AI WorkDeck 点一颗 ⭐：
+<strong>我们的判断是，长期价值在于把上下文、实际操作和专业审阅连接起来。</strong> 模型进步扩大了智能体的能力范围，工作台让这些能力进入真实业务流程。[产品判断](WHY.zh-CN.md)进一步说明了这条发展路径，以及仍需验证的问题。
 
-- 构建 AI 原生的法律 / 专业服务工作流
-- 从「聊天机器人外挂」进化为文件、上下文、智能体、插件真正共存的工作台
-- 私有化部署文档 AI 基础设施：数据私有、留痕可审计、面向组织级工作流
-- 在同一套代码里探索 MCP 式智能体编排、文档解析、内嵌 LibreOffice 编辑、AI PPT、语音合成、OCR 与证据链工作流
+## 今天已经可以检查什么
 
-## 这是什么
+本仓库包含桌面应用、工作台、智能体后端、文档编辑器集成和插件运行时。这里有可以运行的代码、[桌面安装包](https://github.com/zeweihan/aiworkdeck/releases)、[公开开发记录](https://github.com/zeweihan/aiworkdeck/commits/master/)和[持续集成结果](https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml)。
 
-AI WorkDeck 社区版就是完整的工作台，AGPL 开源：与官方安装包相同的桌面端、编辑器、Agent 与插件运行时。商业授权面向需要免除 AGPL 义务的机构，不以功能设卡。开源的目的，是让开发者、律所、法律科技团队和文档 AI 团队可以审查、私有部署、集成和扩展它。
-
-## 下载即用
-
-只是想试试？不需要从源码构建。
-
-**➡️ [下载最新版桌面应用](https://github.com/zeweihan/aiworkdeck/releases/latest)**
-
-| 平台 | 安装包 | 说明 |
+| 基础能力 | 对专业工作的价值 | 查看实现 |
 |---|---|---|
-| macOS（Apple Silicon） | `AI WorkDeck-<version>-arm64.dmg` | 已签名并公证 |
-| Windows | `AI WorkDeck Setup <version>.exe` | 暂未代码签名，SmartScreen 可能提示，选择「仍要运行」即可 |
+| <strong>直接操作文档的智能体</strong> | 通过结构化工具作细粒度修改，在内嵌 LibreOffice WASM 编辑器中审阅修订与批注，并提供检查点恢复路径。 | [编辑原语](docs/AI_EDITOR_PRIMITIVES.md) · [编辑器桥接](frontend/src/zetaoffice/) |
+| <strong>与依据相连的成果</strong> | 将段落与支撑材料关联，回到来源核查，检测锚点内容变化或丢失；通过证据提供方接口扩展检索。 | [依据关联契约](docs/EVIDENCE_CONTRACT.md) · [提供方示例](examples/hello-evidence-plugin/) |
+| <strong>项目历史与协作</strong> | 基于 Git 保留历史，通过三方文档合并流程比较平行稿，并查看段落级来源归属。 | [版本引擎](backend/src/main/java/com/checkba/version/) |
+| <strong>可扩展的工作台</strong> | 增加网页面板、Java 工具、声明式模板或可复用 Skill，复用已有应用基础。 | [插件指南](docs/plugin-guide.md) · [SDK](sdk/plugin-sdk/) · [示例](examples/) |
+| <strong>具体的专业工作流</strong> | 尽职调查、合同审查、依据核查和诉讼可视化，为平台能力提供明确的落点。 | [内置 Skills](backend/skills/) · [可视化引擎](litviz/) |
+| <strong>进入现有工作环境的入口</strong> | 桌面工作台与 Office/WPS 任务窗格，让 AI 参与已有的文档工作流程。 | [桌面端](desktop/) · [Office 加载项](office-addin/) |
 
-> Intel 芯片 Mac 的构建已停止（上游 Python 依赖不再提供 x86_64 版本），旧版本 Release 中仍保留最后一个 Intel dmg。
+工程工作的重点，是最终文件的质量：保留结构、让修改可以审阅、让依据在多轮修订后仍可核查。[下一步](#下一步)列出了值得贡献者共同解决的问题。
 
-双击安装即可开始工作。官方桌面版**不需要任何 API Key、不需要任何基础设施**：AI 与外部服务统一走 AI WorkDeck 平台通道、按用量（Credits）计费；后端、精简版 JRE 和本地数据库都已打进安装包，无需 Java、Docker 或 PostgreSQL。（想从源码构建？自部署服务栈保留了可配置的模型提供方，包括用 [Ollama](https://ollama.com) 跑完全本地的模型——见下方[快速开始](#快速开始)。）
-
-> 桌面版是体验 AI WorkDeck 最快的方式。想自部署完整服务栈或参与开发，请看下方[快速开始](#快速开始)。
-
-## 登录与账户
-
-下载即用；使用 AI、广场付费内容、团队案件库与手机端同步时登录账户。打开应用直接进入工作台，建项目、开文档、编辑、保存都不需要账户。
-
-第一次用到上面几项功能时，应用会就地弹出登录框，登录完继续刚才的操作，不跳页、不丢正在编辑的内容。在中国站用手机号收一条验证码即可完成注册与登录——没有单独的注册步骤，未注册的手机号会直接建号。也可以随时点左侧边栏底部的「登录」。
-
-登录之后，桌面端在本机保存一枚账户 Key，**不需要每次联网**：账户有 30 天离线宽限，只要一个月内联网启动过一次就会自动续上。飞机上、律所内网都能照常开文档、编辑、保存。
-
-**已有账户 Key 的用户**（团队服务器、私有部署，或在官网账户页自行生成过 `awdk_` 前缀的 Key）：在设置 →「账户与用量」的「高级」里粘贴即可。
-
-两点供拟部署的机构参考：账户连接是按机器的，状态存在本机 `~/.aiworkdeck/` 目录下；部署为团队服务器（同事用浏览器访问共用服务端）时账户在服务端按人桥接，浏览器端不弹登录框。
-
-自行构建者注意：此前 README 里「改 `security.license.trial-code.enabled` 一行即恢复离线试用」那一节已删除——启动不再设门，不需要试用码也能打开和使用应用；而 AI、广场付费内容、团队案件库与手机端同步看的是「是否连着账户」，试用码代替不了。该开关仍留在 `backend/src/main/resources/application-desktop.yml`，现在只决定登录框里是否还提供「试用码 / 账户 Key」输入这一项（以及存量试用票据的过渡期），不影响上述功能。
-
-## 演示
-
-| | |
-|---|---|
-| 官网 | [aiworkdeck.com](https://www.aiworkdeck.com/zh) |
-| 产品视频 | [功能演示视频](https://www.aiworkdeck.com/videos/intro.mp4) |
-| 功能演练 | [AI WorkDeck 功能演练](https://www.aiworkdeck.com/zh/showcase) |
-
-## 界面截图
-
-全部为**真实产品截图**（演示项目，人名与文档内容均为虚构）。下面两张：应用内插件 / Skill 广场（列表为在线 registry 实拉的真实条目），以及带 AI 署名修订与审阅面板的文档工作台。
+<details>
+<summary><strong>查看工作台与扩展广场</strong></summary>
 
 <p align="center">
-  <img src=".github/assets/marketplace-live.png" alt="应用内插件与 Skill 广场（真实产品截图）" width="900">
-</p>
-<p align="center">
-  <img src=".github/assets/workdeck-redline.png" alt="文档工作台：AI 署名修订与审阅面板（真实产品截图）" width="900">
+  <img src=".github/assets/workspace-ai.png" alt="同一工作台中的项目文件、文档视图与 AI 对话" width="1000">
+  <img src=".github/assets/marketplace-live.png" alt="应用内插件与可复用 Skill 广场" width="1000">
 </p>
 
-## 核心能力
+以上为早期版本截图，材料为虚构演示内容。实际评估请使用[最新版本](https://github.com/zeweihan/aiworkdeck/releases/latest)。
 
-| 领域 | 社区版提供什么 |
-|---|---|
-| **工作区** | 项目 / 文件树、文档暂存、收藏、剪贴板记忆、工作记录、日历与任务管理、浅色 / 深色主题 |
-| **AI 文档工作** | 起草、审查、要素抽取、脱敏、Markdown 与文档预览 |
-| **智能体层** | 主智能体界面、流式回复、上下文文件标签、MCP 式工具编排 |
-| **文档编辑** | 内嵌 LibreOffice（WASM）编辑器（原生中文界面）、本地 DOCX 修订编辑、审阅面板（逐条接受 / 拒绝修订与批注）、AI 编辑器原语（docx/xlsx/pptx/pdf）、文档内链、差异对比 |
-| **版本记录** | 基于 Git 的项目级版本系统：时间线、逐版本差异、退回、里程碑、多稿并行 |
-| **文档解析与依据** | 实体抽取（企业 / 法规 / 案例）、外部库检索、文档内部一致性校验、依据窗格 |
-| **法律工作流** | 尽职调查工作台、股东会核查、诉讼可视化（时间轴 / 流程图 / 当事人关系图） |
-| **解析与生成** | MinerU 文档解析、AI PPT 生成、本机语音合成、会议录音转写 |
-| **插件面** | 应用内插件 / Skill 广场、左栏插件、公开插件 SDK 与示例（`sdk/`、`examples/`）、垂直工作流专属面板 |
-| **伴生端** | Microsoft Office 插件（Word/Excel/PPT 任务窗格）、手机端拍摄与项目同步中转 |
-| **部署** | Java/Spring 后端、Vue/uni-app 前端、Electron 桌面壳、Docker 化服务 |
-| **治理** | 私有化部署路径、可审计的工作记录、商业授权路径 |
+</details>
 
-## 架构
+## 一起建设
 
-```mermaid
-flowchart TB
-  User["用户工作区"] --> IDE["IDE 交互层"]
-  IDE --> LO["内嵌 LibreOffice 编辑器"]
-  IDE --> Agent["智能体与对话界面"]
-  Agent --> MCP["MCP / 工具编排"]
-  MCP --> Skills["文档技能与插件"]
-  Skills --> Data["PostgreSQL、对象存储、文件上下文"]
-  Skills --> Services["MinerU、PPTX 服务、TTS、OCR"]
-  Data --> Security["私有部署与审计控制"]
-  Services --> Security
-```
+开发者应当能够把精力投入有价值的业务流程，同时复用底层文档能力。这里有几种具体的起点：
 
-## 数据处理与隐私
+| 想做什么 | 可以复用什么 | 从哪里开始 |
+|---|---|---|
+| 专门的审查或研究面板 | 项目文件、文档访问、宿主事件与界面集成 | 运行[最小网页插件](examples/hello-web-plugin/)，使用普通 HTML 和 JavaScript，无需构建。 |
+| 接入某一类专业资料来源 | 证据检索接口及其一致性测试 | 扩展[证据提供方示例](examples/hello-evidence-plugin/)。 |
+| 可复用的专业工作流 | 智能体工具与 Skill 加载机制 | 阅读 [Skill 规范](docs/SKILL_SPEC.md)，参考[现有 Skills](backend/skills/)。 |
+| 文书模板与机构样式 | 无需后端执行代码的声明式扩展 | 从[声明式插件示例](examples/hello-declarative-plugin/)开始。 |
+| 改进核心能力 | 编辑器桥接、版本引擎与智能体运行时 | 先读[架构](docs/architecture.md)，再[从源码启动](docs/getting-started.md)。 |
 
-AI WorkDeck 为**自托管、私有化部署**而设计。下图标注了哪些组件在本地处理数据、哪些走外部服务：
+网页插件运行在沙箱 iframe 中，通过检查权限的桥接接口调用宿主；Java 插件在后端进程中运行，需要信任其代码。[插件指南](docs/plugin-guide.md)说明了这些边界和发布流程。
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  你的基础设施（内网）                                             │
-│                                                                 │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐  │
-│  │ AI 智能体 │  │  MinerU  │  │   PPTX   │  │    敏感信息     │  │
-│  │ (Ollama) │  │ (Docker) │  │ (Docker) │  │     脱敏        │  │
-│  │  本地    │  │  本地    │  │  本地     │  │     本地        │  │
-│  └──────────┘  └──────────┘  └──────────┘  └────────────────┘  │
-│                                                                 │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────────────┐  │
-│  │PostgreSQL│  │   RAG    │  │        本地文件存储            │  │
-│  │  本地    │  │  本地    │  │           本地                │  │
-│  └──────────┘  └──────────┘  └──────────────────────────────┘  │
-│                                                                 │
-├───────────────────────────── 可选外部服务 ───────────────────────┤
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │   OCR    │  │ 会议转写  │  │  企业数据  │  │  Gemini /    │   │
-│  │ (阿里云)  │  │ (听悟)    │  │ (企查查)  │  │  OpenRouter  │   │
-│  │  外部    │  │  外部     │  │  外部     │  │   可配置      │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
+### 参与贡献
 
-| 组件 | 默认位置 | 可完全本地？ | 说明 |
-|---|---|---|---|
-| AI 推理（对话 / 智能体） | 自部署构建默认本地（Ollama） | ✅ 可以 | 官方桌面版走平台通道（Credits）；自部署默认 localhost:11434 |
-| RAG / 向量化 | 本地（Apache Tika） | ✅ 可以 | InMemoryEmbeddingStore |
-| 文档解析（MinerU） | 本地（Docker） | ✅ 可以 | 无外部调用 |
-| PPTX 生成 | 本地（Docker） | ✅ 可以 | 无外部调用 |
-| 敏感信息脱敏 | 本地（正则） | ✅ 可以 | 中文 PII 模式，无外部调用 |
-| 文档存储 | 本地文件系统 | ✅ 可以 | 可配置：本地 / OSS / S3 |
-| OCR | **平台代采**（经我们的服务器转阿里云） | 无本地回退 | 全新安装的默认档；可改自备 Key 直连或停用 |
-| 语音合成 | 本地引擎（随包 Kokoro） | 可以 | 只有本机一档，无云端通路 |
-| 企业数据查询 | **平台代采**（经我们的服务器转企查查） | 无本地回退 | 全新安装的默认档；可改自备 Key 直连或停用 |
-| 会议录音转写 | **平台代采**（音频经我们的对象存储中转，转写完成即删） | 后续版本随包发出本机引擎 | 全新安装的默认档；可改自备 Key 直连或停用 |
-| 云端大模型 | **外部**（Gemini/OpenRouter） | ✅ 可换 Ollama | 提供方可配置 |
-| 匿名使用统计 | 本地账本 + 每日聚合计数上报 | ✅ 可关闭 | 仅计数与枚举值，无内容；设置一键关，见 legal/PRIVACY.md |
+可以先把你熟悉的一项审查或研究流程做成扩展。如果更愿意改进核心能力，也可以从一个小而可复现的问题开始：某份文档丢失了格式，某条依据无法重新定位，某次修改保存后重开不一致，或者某个安装步骤不够清楚。请使用合成或适当脱敏的材料，说明预期结果。较大的改动，先在 [Issue](https://github.com/zeweihan/aiworkdeck/issues) 中讨论范围。
 
-**离线 / 内网隔离部署**：Ollama + 本地存储 + MinerU + PPTX 服务的组合可以让所有文档完全不出内网。关闭 OCR、企业数据、会议转写与云端模型后，核心工作区、文档编辑、智能体编排与尽调工作流均可正常使用（语音合成本来就在本机，不必关）。
+提交前阅读[贡献指南](.github/CONTRIBUTING.md)。代码贡献需一次性签署 [CLA](legal/CLA.md)：贡献者保留著作权，并授权项目管理方按开源与商业许可两种方式分发。重要 API 改动走 [RFC 流程](GOVERNANCE.md#rfc-process)。[治理规则](GOVERNANCE.md)提供了从贡献者到审阅者、维护者的成长路径，[现任维护者](MAINTAINERS.md)公开列明。
 
-## 证据链与审计现状
+插件与 Skill 作者也可以通过广场发布作品：[中国站](https://www.aiworkdeck.com/zh/plugins) · [国际站](https://www.workdeck.ai/en/plugins)。作品权利、付费分成、审核和结算按[广场条款](legal/MARKETPLACE-TERMS.md)执行。单项资助任务见[悬赏政策](BOUNTIES.md)，是否开放及具体金额以对应 Issue 为准。
 
-> **现状**：版本记录与关系型审计日志已就位，密码学级溯源在路线图上。
+## 下一步
 
-社区版目前提供：
+下一阶段，我们希望让这套基础更可靠，也更容易被开发者复用。以下是参与方向，不是带有确定日期的发版承诺：
 
-- **版本记录**：基于 Git 的项目级版本系统（`com.checkba.version`），含时间线、逐版本文件差异、退回、里程碑与多稿并行
-- **行为日志**：`UserActivityLog` 记录每个用户动作（登录、打开文件、页面访问等），带 Hibernate `@CreationTimestamp` 时间戳与 JSON 元数据
-- **尽调追踪**：`DdItem` 记录状态流转（待上传 → 已上传 → 通过/退回），含 `uploadedAt` 与 `uploadedBy`
-- **会话审计**：`ConversationFileChange` 按会话记录文档新增与修改
-- **文件元数据**：`ProjectFile` 在 PostgreSQL 中存储 `createdAt`/`updatedAt` 与文件路径
+- <strong>可靠的文档操作：</strong>为复杂排版、长文档、修订和撤销积累可复现样例，同时检查智能体回复与保存、重开后的实际文件。
+- <strong>可以核查的来源：</strong>完善修改后的依据定位和检索提供方一致性；将密码学溯源作为独立方向，区别于普通版本记录和引用。
+- <strong>更短的开发起步路径：</strong>清晰的本地演示、私有部署说明、更多插件样例与双语贡献文档。
+- <strong>能够重复执行的专业流程：</strong>把范围明确的任务做成 Skill 和扩展，说明输入、审阅环节以及可检验的输出。
 
-**尚未实现**（在路线图上）：
-- 文档密码学哈希（SHA-256 校验和）
-- 防篡改审计链（Merkle 链或签名日志）
-- 不可变的只追加证据日志
+欢迎带着具体场景参与 [Discussions](https://github.com/zeweihan/aiworkdeck/discussions)，或提出范围清楚的 [Issue](https://github.com/zeweihan/aiworkdeck/issues)。开发者与专业人士可以一起定义这些工作。
 
-插件架构在设计上已为这些能力预留了位置。如果你的合规或诉讼支持场景需要密码学级溯源，欢迎开 issue 描述需求——这会直接影响我们的优先级排序。
+## 开源与商业如何相互支持
 
-## 律所使用许可 FAQ
+开源工作台给开发者提供可以检查、修改和扩展的代码。商业模式包括按用量计费的平台服务、商业许可与实施支持，以及分发专业工作流的广场。我们希望先进入经常发生的法律工作，再支持机构部署，并让专业开发者向相邻场景扩展。一个有用的扩展，可以成为另一类团队采用工作台的理由；共同的运行环境，则减少后来者需要重复建设的基础工作。
 
-### 律所内部使用 AI WorkDeck，需要公开我们的修改吗？
-
-**通常不需要——但有一个值得理解的细节。** AGPLv3 保障你运行软件、以及为自用而修改软件的权利。内部运行*未修改*的副本不产生任何源码披露义务。如果你*修改*了 AI WorkDeck，并通过网络把修改版提供给他人使用——这可能包括你所内律师和员工把它当内部 Web 应用使用——AGPLv3 第 13 条可能要求你向**这些用户**提供修改版的对应源码。这些源码留在所内即可：你不需要向公众或向我们公开。如果你希望修改、插件或集成保持专有、完全不受 AGPLv3 约束，商业许可可以彻底移除 copyleft 义务。
-
-### 网络使用条款（AGPLv3 第 13 条）怎么理解？
-
-第 13 条由**与修改版的网络交互**触发，有权获得对应源码的是**修改版的用户**。两种常见情形：
-
-- **防火墙内的内部工具（有修改）**：用户是你的员工。你可能需要向他们提供对应源码，但不需要向公众或向我们披露。未修改的部署没有此义务。
-- **面向客户的门户或对外服务（有修改）**：用户是你的客户，AGPLv3 会要求向他们提供修改版源码。如果不想这样做，商业许可是干净的路径。
-
-### 专有插件和扩展呢？
-
-当前架构中插件在进程内运行。在 AGPLv3 下，copyleft *可能*延伸到专有插件。如果贵所计划构建专有工作流扩展，**商业许可**为以下场景提供干净的法律基础：
-- 闭源插件与集成
-- 不披露源码的专有本地化部署
-- 基于 AI WorkDeck 内核构建的商业 SaaS 产品
-
-详见 [`legal/COMMERCIAL-LICENSE.md`](legal/COMMERCIAL-LICENSE.md)，或联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
-
-### 我们的数据去哪了？
-
-**AI 对话不经过我们的服务器。** 对话内容由你的机器直接发往所选模型提供商：选本地 Ollama 时只在本机处理，选云端提供商时发往该第三方；即便用「AI WorkDeck 云端」这一档，我们的服务器也只参与密钥签发与用量结算。因此在桌面端，文档与合同内容、AI 对话文本、文件名、项目与客户信息不流经我们的服务器；在 Ollama + 本地存储 + Docker 服务的自托管部署中，**它们根本不离开你的网络**。
-
-**例外：Office/WPS 插件。** 插件内当前文档的正文会发往我们托管的插件云后端（addin.aiworkdeck.com / addin.workdeck.ai）做 AI 处理；可选的文档镜像归档还会把文档文件上传到中转区，直到你的桌面端取走（30 天兜底）。跨设备传输、手机影像中转与案件库协作在你使用时同样会经过或存放在我们的服务器上，见 [`legal/PRIVACY.md`](legal/PRIVACY.md)。
-
-**平台代采档会经过我们的服务器。** 桌面版全新安装时，图片文字识别、联网搜索、企业工商信息、证券财务数据、法律法规检索与会议录音转写默认落在「平台代采」档——由 AI WorkDeck 统一向供应商采购、按 Credits 计费，不必自备 Key；该档下本次调用必需的内容会经我们的服务器转给对应供应商。其中只有会议录音的音频文件会在我们的对象存储中转，转写完成即删除，另有 24 小时生命周期规则兜底；其余各项只在调用当时透传，不留存请求内容。这六家供应商全部在境内。语音合成不在此列——它只有本机一档，随包的引擎在你的机器上合成，不出本机。逐项口径（经过什么、存放多久、何时删除）见 [`legal/PRIVACY.md`](legal/PRIVACY.md)。
-
-**每一项都能改档。** 「系统管理 → 平台服务」里可把任一项切成自备 Key（桌面端直连该供应商，不经过我们）或本地档，也可整项停用；已经填过自备 Key 的存量安装不会被切走。团队自建服务器部署与 Office 插件恒为自备 Key，平台代采档不对它们开放。
-
-应用默认分享匿名聚合使用统计（仅每日功能使用计数，关联随机安装标识），用于改进产品；可在设置中一键关闭，采集口径同见 [`legal/PRIVACY.md`](legal/PRIVACY.md)。
-
-## 快速开始
-
-> 面向想自部署完整服务栈或参与开发的开发者。只想试用应用请直接看上方[下载即用](#下载即用)。
-
-### 环境要求
-
-| 依赖 | 版本 |
-|---|---|
-| Docker Desktop | 最新版（用于 MinerU、PPTX、TTS 服务） |
-| Java | 17+（也支持 JDK 21） |
-| Node.js | 18+ |
-| PostgreSQL | 14+ |
-
-### 步骤
-
-```bash
-# 1. 克隆
-git clone https://github.com/zeweihan/aiworkdeck.git
-cd aiworkdeck
-
-# 2. 配置环境变量
-cp backend/.env.example backend/.env.production
-cp pptx-service/.env.example pptx-service/.env
-
-# 3. 创建数据库
-# 创建名为 `checkba` 的 PostgreSQL 数据库
-# 或修改后端环境变量指向你自己的数据库
-
-# 4. 启动全部服务
-chmod +x restart-all.sh
-./restart-all.sh
-```
-
-### 服务地址
-
-| 服务 | 地址 |
-|---|---|
-| 前端 | `http://localhost:5173` |
-| 后端 | `http://localhost:9696` |
-| PPTX 服务 | `http://localhost:5001` |
-| MinerU 服务 | `http://localhost:8001` |
-
-语音合成在本机运行（随包 Kokoro 引擎）；旧的 EasyVoice Docker 服务已删除。
-
-常见可选提供方：OpenRouter、Gemini、企查查、Tushare、北大法宝、阿里云（OCR 与听悟转写）与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
-
-## 贡献者文档
-
-以下三篇为英文：
-
-- [架构](docs/architecture.md)：系统怎么拆、各层职责
-- [上手](docs/getting-started.md)：从源码跑本地栈
-- [插件指南](docs/plugin-guide.md)：JAR / Web / 声明式插件、SDK、上架
-
-## 仓库结构
-
-| 路径 | 用途 |
-|---|---|
-| `backend/` | Spring Boot 后端，智能体/工具 API，文档服务 |
-| `frontend/` | Vue/uni-app 工作台前端 |
-| `desktop/` | Electron 桌面壳 |
-| `pptx-service/` | AI 原生 PPT 生成服务 |
-| `mineru-service/` | 基于 MinerU 的文档解析服务 |
-| `docs/` | 工程笔记、编辑器迁移笔记、存储与工作流文档 |
-| `legal/` | AGPLv3 许可、CLA、商业许可、商标条款 |
-
-## 路线图
-
-这份清单最初写下后已交付的：公开插件 SDK 与示例插件、尽职调查与股东会核查工作流、诉讼可视化、基于 Git 的版本历史与差异。仍在前方的：
-
-- [ ] 更干净的一键本地演示（带示例数据）
-- [ ] 密码学级溯源：文档哈希、防篡改审计链
-- [ ] 本机会议转写引擎（当前默认档经平台服务器中转）
-- [ ] 更多法律文书工作流：合同审查、独立的证据时间线
-- [ ] 面向律所与企业私有化部署的更好的自托管指南
-- [ ] 社区版双语文档
-
-## 治理
-
-AI WorkDeck 以开放方式开发：贡献者 → 评审者 → 维护者的晋升阶梯、重大变更走 RFC 流程、每月一次社区例会——详见 [GOVERNANCE.md](GOVERNANCE.md) 与 [MAINTAINERS.md](MAINTAINERS.md)。项目由北京京微资易科技有限公司作为 steward 运营（海外发行由真善美承泽有限公司 Zhen Shan Mei Grace Legacy Limited 承担），商标与商业授权集中于公司；治理角色承载技术权限，不附带任何经济权利。
+项目管理方为<strong>北京京微资易科技有限公司</strong>，国际业务由<strong>真善美承泽有限公司（Zhen Shan Mei Grace Legacy Limited）</strong>运营。商业许可覆盖管理方拥有权利的代码，第三方组件仍遵循各自条款。详见[商业许可](legal/COMMERCIAL-LICENSE.md)、[第三方组件](legal/THIRD-PARTY-COMPONENTS.md)与[商标说明](legal/TRADEMARKS.md)。
 
 ### 社区基金
 
-我们承诺将**商业授权净收入的 20%** 注入社区基金，用于 issue 悬赏（[BOUNTIES.md](BOUNTIES.md)）、Skill 创作补贴与社区活动。这是公司单方面的公开政策，不构成对任何个人的合同承诺；比例与规则可能随项目发展前瞻性调整。
+管理方现行政策将<strong>商业许可净收入的 20%</strong>用于社区基金，支持悬赏、Skill 创作资助与社区活动。这是一项可向未来调整的公开政策，不构成对个人的合同性权益承诺。治理角色对应技术权限，经济安排另按[悬赏政策](BOUNTIES.md)与[广场条款](legal/MARKETPLACE-TERMS.md)执行。
 
-## 参与贡献
+<strong>希望投资、基于这套基础开发垂直产品，或成为实施合作伙伴？</strong> 欢迎联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)，交流产品、技术基础与商业方向。我们期待关心交付质量的合作伙伴，也期待愿意共同定义专业智能体工作方式的开发者。
 
-欢迎 issue、讨论、文档改进、集成笔记和目标明确的 PR。提交 PR 前请先阅读 [CONTRIBUTING.md](.github/CONTRIBUTING.md)。代码贡献需要一次性签署 [CLA](legal/CLA.md)，首个 PR 上由机器人自动引导完成。带 `bounty` 标签的 issue 合并即有现金悬赏——见 [BOUNTIES.md](BOUNTIES.md)。
+<a id="快速开始"></a>
 
-适合上手的第一批贡献：
+## 进一步了解
 
-- 在不同操作系统上复现并记录本地部署路径
-- 改进自托管文档与 `.env` 示例
-- 添加插件示例
-- 为文档解析、智能体工具调用和前端工作流补测试
-- 改进中英文文档
+- <strong>体验产品：</strong>[macOS / Windows 安装包](https://github.com/zeweihan/aiworkdeck/releases/latest) · [产品演示](https://www.aiworkdeck.com/zh/showcase)。
+- <strong>阅读或运行源码：</strong>[开发入门](docs/getting-started.md) · [技术架构](docs/architecture.md)。贡献者环境使用 JDK 21、Maven、Node/npm 和 PostgreSQL；可选服务另有依赖。
+- <strong>核对数据流向：</strong>[隐私与服务数据说明](legal/PRIVACY.md)。桌面编辑默认使用本地存储；云端模型、平台服务、托管加载项和同步各有数据路径，私有部署需要结合配置逐项验证。
+- <strong>了解许可：</strong>[AGPL-3.0-or-later](legal/LICENSE) · [CLA](legal/CLA.md) · [商业许可](legal/COMMERCIAL-LICENSE.md)。
 
-### 投稿 Skill、上架插件——不用提 PR
-
-参与共建最快的方式是走广场，你发布的内容会直达每一台桌面端：
-
-- **投稿 Skill**（可复用的提示词工作流：审合同、写文书、做核查）：[aiworkdeck.com/zh/skills](https://www.aiworkdeck.com/zh/skills)。登录即发布，表单里的 AI 辅助能把一句话想法扩写成完整 Skill。
-- **上架插件**（基于[插件 SDK](sdk/plugin-sdk/README.md) 的 JAR 或 Web 插件，可从 [`examples/`](examples/) 起步）：在[插件广场](https://www.aiworkdeck.com/zh/plugins)提交。每个插件都经人工审核并以 Ed25519 签名后上架，付费插件与作者分成。
-- **提需求**：开一个 [GitHub issue](https://github.com/zeweihan/aiworkdeck/issues)，或用官网的[需求提交表单](https://www.aiworkdeck.com/zh/feature-request)——提交会直接进入我们的分诊队列。
-
-## 许可
-
-AI WorkDeck 社区版基于 GNU Affero General Public License v3.0 发布。
-
-如果你修改了本项目并将其作为网络服务提供，AGPLv3 通常要求你向该服务的用户提供对应源码。
-
-以下场景可获得商业许可：
-
-- 闭源 SaaS 交付
-- 专有本地化交付
-- 需要集成内核但不公开专有修改的商业产品
-- 企业级支持与实施协助
-
-详见 [LICENSE](legal/LICENSE) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md)。商业许可请联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
-
-随包分发的第三方组件（PPT 生成与文档解析 sidecar、LibreOffice WASM 编辑器、Graphviz 等）各自保留其原许可，商业许可不改变这些条款。清单见 [THIRD-PARTY-COMPONENTS.md](legal/THIRD-PARTY-COMPONENTS.md)。
-
-**AI WorkDeck 标识**（K 形图形）已在中国注册为商标（第 9、35、42 类，注册号 89857424、89857389、89857390）。「**AI WorkDeck**」作为商号与未注册文字商标使用（标 ™），与 aiworkdeck.com 域名一起受反不正当竞争法保护。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品的营销需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
-
-## 背景
-
-产品理念与创始故事见 [WHY.md](WHY.md)。
-
----
-
-## ⭐ Star 趋势
-
-<p align="center">
-  <a href="https://github.com/zeweihan/aiworkdeck/stargazers">
-    <img src="https://raw.githubusercontent.com/zeweihan/aiworkdeck/star-history/star-history.svg" alt="Star 历史曲线" width="760">
-  </a>
-</p>
-<p align="center">
-  <sub>自托管曲线图，由<a href=".github/workflows/star-history.yml">定时工作流</a>每周自动刷新。</sub>
-</p>
-
-<p align="center">
-  如果你认同这个方向，请 <a href="https://github.com/zeweihan/aiworkdeck/stargazers">⭐ Star 本仓库</a>，并分享给正在做法律 AI、文档 AI 或专业服务基础设施的朋友。
-</p>
+可以从关注[版本更新](https://github.com/zeweihan/aiworkdeck/releases)、参与一场[讨论](https://github.com/zeweihan/aiworkdeck/discussions)，或写一个小扩展开始。具体的成果，会让我们更清楚下一步值得一起做什么。
