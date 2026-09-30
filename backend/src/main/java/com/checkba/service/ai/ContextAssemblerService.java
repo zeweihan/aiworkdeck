@@ -1040,6 +1040,11 @@ public class ContextAssemblerService {
                 systemText.append("Missing destination folders are created automatically, so you do not need `create_folder` first. ");
                 systemText.append("Retry only the entries the report lists under FAILED - never resend the whole batch. ");
                 systemText.append("A single file goes through `move_files_batch` too (one entry). ");
+                systemText.append("For \"organize this folder\", work inside the specified folder and preserve that folder itself: ");
+                systemText.append("create groups beneath it. Confirming a grouping method does not authorize moving outside it or deleting it, even after it becomes empty. ");
+                systemText.append("Only an explicit user instruction to move outside, flatten into a named parent or delete the specified folder changes this boundary; follow that instruction within its scope. ");
+                systemText.append("For `move_files_batch`, source and destination must both be project-relative paths; an attached folder's listing may instead be folder-relative. ");
+                systemText.append("Resolve the folder ID to its full project path with `list_project_folders` before moving; retain its prefix on both sides for internal organization. ");
                 systemText.append("Intermediate or temporary files you no longer need go to the recycle bin with `move_to_trash` ");
                 systemText.append("(recoverable by the user); never create a \"to delete\" folder as a workaround. ");
                 systemText.append("More generally: tool calls that do not depend on each other's results belong in the SAME turn ");
@@ -1052,6 +1057,11 @@ public class ContextAssemblerService {
                 systemText.append("缺失的目标文件夹会自动补建，不需要先调 `create_folder`。");
                 systemText.append("返回值里 FAILED 段列出的条目单独重试，**绝不要整批重发**——已成功的会被搬第二遍。");
                 systemText.append("只移动一份文件也用 `move_files_batch`（传一条）。");
+                systemText.append("用户说「整理这个文件夹」时，默认在指定目录内部整理并保留该目录本身，分类目录建在它下面。");
+                systemText.append("确认归类方式不等于授权移出或删除该目录，即使整理后它已空也不例外。");
+                systemText.append("只有用户明确要求移出、扁平化到指定父级或删除指定目录时，才按指示改变该边界，并遵守指示范围。");
+                systemText.append("`move_files_batch` 的 source 和 destination 均须使用项目相对路径；附件目录清单可能是相对附件目录的路径。");
+                systemText.append("移动前用 `list_project_folders` 按目录 ID 核对其完整项目路径；内部整理时两端都保留该目录前缀。");
                 systemText.append("不再需要的中间文件、临时文件用 `move_to_trash` 移入回收站（用户可恢复），不要另建「待删除」文件夹绕行。");
                 systemText.append("同理，彼此之间不需要看对方结果的工具调用要放在同一轮里并行发出");
                 systemText.append("（连续输出多个 `<tool_code>` 块），一轮一个地挤牙膏会白白烧掉步数预算。\n\n");

@@ -49,6 +49,7 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 - `ContextAssemblerService` 的活跃文档禁令只禁止重新发现/打开已知目标，不能阻止列出其他参考；Office 产出去向限制只管创建/写入项目文件。Office 参考来源用对应 reader，不能把 `open:` / `desk:` 交给只查服务端项目索引的 `search_project_content`。
 - `doc_list_project_files` 返回项目相对路径；与 `FileTools.dbPathIndex` 共用按父链构建的路径 helper，不暴露宿主绝对路径。缺失/删除/非目录/跨项目父节点停止，循环截断，清单仍保留每个存活文件 ID。
 - `FileContextLoader` 的目录及预读正文显示相对路径，显式报告深度上限、已列文件数、成功预读、不可读和配额未读数量；数量指已列部分，不能称全项目已读。原深度 5、成功正文配额与字符上限保持。
+- 文件夹整理边界（dev-board#1108）：上述路径以**附件目录**为基准，目录说明标明其 ID，不能直接当作 `move_files_batch` 的项目根相对路径；移动前按目录 ID 从项目清单核对完整路径，不凭同名目录或宿主路径猜测。`ContextAssemblerService` 的中英末位批量整理规则要求默认在指定目录内分类、保留指定目录本身（变空也不删除）；确认分类方式不扩大该边界，用户明确移出、扁平化到指定父级或删除目录的指示仍按范围执行。未新增硬工具权限闸。`FileContextLoaderTest` 与 `ContextAssemblerServiceTest` 覆盖实际注入及配额耗尽路径；提示接线测试不证明实模遵守。
 - CORE 不绕过 skill restrict：`contract-review` 需显式保留 `doc_list_project_files` / `search_project_content` / `ref_list` / `ref_read`，再按宿主过滤；不增加跨文档写入权限。`BuiltinSkillsTest` 用实际 skill + router + registry + disclosure 验证五种宿主。
 - 验证：`ContextAssemblerServiceTest`、`ContextAssemblerAskUserTest`、`FileContextLoaderTest`、`DocumentEditToolsProjectFilesTest`、`BuiltinSkillsTest`；行为需另看真实模型已执行工具及返回正文，模型输出的工具样式文字不算执行，编辑器 ACK 桩不算真实 LOWA 修订成功。
 

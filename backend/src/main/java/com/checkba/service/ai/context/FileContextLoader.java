@@ -238,6 +238,10 @@ public class FileContextLoader {
 
             // 1. Directory Structure
             sb.append("### Directory Content:\n");
+            sb.append("[Path base: all listing paths and file headings below are relative to the attached folder (ID: ")
+              .append(folderId).append("), NOT the project root. Before path-based moves, resolve the folder ID to its full project-relative path ")
+              .append("using list_project_folders; prepend that path to these entries. ")
+              .append("Do not infer the full path from the folder name alone.]\n");
             for (FolderEntry entry : allFiles) {
                 ProjectFile f = entry.file();
                 String type = Boolean.TRUE.equals(f.getIsFolder()) ? "[DIR]" : "[FILE]";
