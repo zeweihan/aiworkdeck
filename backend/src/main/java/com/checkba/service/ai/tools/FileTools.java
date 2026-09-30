@@ -1242,18 +1242,27 @@ public class FileTools implements AgentToolComponent {
         for (ProjectFile f : all) byId.put(f.getId(), f);
         java.util.Map<String, ProjectFile> index = new java.util.HashMap<>();
         for (ProjectFile f : all) {
-            StringBuilder p = new StringBuilder(f.getName());
-            ProjectFile cur = f;
-            int guard = 0;
-            while (cur.getParentId() != null && guard++ < 64) {
-                ProjectFile parent = byId.get(cur.getParentId());
-                if (parent == null) break;
-                p.insert(0, parent.getName() + "/");
-                cur = parent;
-            }
-            index.put(p.toString(), f);
+            index.put(relativeProjectPath(f, byId), f);
         }
         return index;
+    }
+
+    /** 只沿项目内存活目录拼相对路径；异常父链停在已知部分，不按全局 ID 追查或读取物理路径。 */
+    static String relativeProjectPath(ProjectFile file, java.util.Map<Long, ProjectFile> byId) {
+        StringBuilder path = new StringBuilder(file.getName());
+        java.util.Set<Long> visited = new java.util.HashSet<>();
+        visited.add(file.getId());
+        ProjectFile current = file;
+        int depth = 0;
+        while (current.getParentId() != null && depth++ < 64) {
+            ProjectFile parent = byId.get(current.getParentId());
+            if (parent == null || !visited.add(parent.getId())
+                    || !Boolean.TRUE.equals(parent.getIsFolder()) || Boolean.TRUE.equals(parent.getIsDeleted())
+                    || !java.util.Objects.equals(file.getProjectId(), parent.getProjectId())) break;
+            path.insert(0, parent.getName() + "/");
+            current = parent;
+        }
+        return path.toString();
     }
 
     private Path resolvePath(String fileName) {

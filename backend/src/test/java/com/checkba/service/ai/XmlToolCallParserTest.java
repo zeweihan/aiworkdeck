@@ -277,6 +277,92 @@ class XmlToolCallParserTest {
         assertFalse(parser.containsToolCall(null));
     }
 
+    @Test
+    void bareAskUserAcceptsBothObservedOptionsQuoteStyles() {
+        String options = "[{\"label\":\"删除审查意见\",\"description\":\"正文不动\"},{\"label\":\"统一格式排版\"}]";
+        for (String quote : List.of("'", "\"")) {
+            String text = "<thinking>清理标准不明确，先问。</thinking>\n"
+                    + "<ask_user question=\"「清理」具体指哪一种操作？请选择：\" options="
+                    + quote + options + quote + " multi_select=\"false\" header=\"清理范围\" />";
+            assertTrue(parser.containsToolCall(text));
+            var call = single(text);
+            assertEquals("ask_user", call.toolName());
+            AskUserQuestion question = AskUserQuestion.fromArgsJson(call.argsJson(), "test");
+            assertEquals("「清理」具体指哪一种操作？请选择：", question.question());
+            assertEquals("清理范围", question.header());
+            assertEquals(2, question.options().size());
+            assertEquals("正文不动", question.options().get(0).description());
+            assertFalse(question.multiSelect());
+        }
+    }
+
+    @Test
+    void bareAskUserReplaysCompleteSelfClosingTagFromLiveProtocolFailure() {
+        // 完整标签来自 /tmp/project-context-1076-ask-live-protocol.log；另一次单引号日志被截断。
+        String text = """
+                <ask_user question="「清理」具体指哪一种操作？请选择："
+                 options="[{"label":"删除审查意见","description":"只删【律师审查意见】到【审查意见结束】之间的内部讨论内容，正文不动"},{"label":"统一格式排版","description":"套用律所标准格式（字体、行距、对齐），不改文字内容"},{"label":"两者都要","description":"先删审查意见，再统一格式排版"}]"
+                 multi_select="false"
+                 header="清理范围" />
+                """;
+        AskUserQuestion question = AskUserQuestion.fromArgsJson(single(text).argsJson(), "test");
+        assertEquals(3, question.options().size());
+        assertEquals("两者都要", question.options().get(2).label());
+        assertEquals("套用律所标准格式（字体、行距、对齐），不改文字内容", question.options().get(1).description());
+    }
+
+    @Test
+    void bareAskUserPreservesMixedToolOrder() {
+        var calls = parser.parse("<tool_code>search_web(query=\"a\")</tool_code>\n"
+                + "<process name=\"澄清\"><ask_user question=\"怎么整理？\" options='[\"仅格式\",\"仅措辞\"]' /></process>\n"
+                + "<tool_code>doc_find_replace(findText=\"甲\",replaceText=\"乙\")</tool_code>");
+        assertEquals(List.of("search_web", "ask_user", "doc_find_replace"),
+                calls.stream().map(XmlToolCallParser.ParsedCall::toolName).toList());
+    }
+
+    @Test
+    void bareAskUserFindsOuterCloseAfterMarkupInQuestionOrOptions() {
+        for (String attributes : List.of(
+                "question=\"保留 <br/> 还是删除？\" options='[\"保留\",\"删除\"]'",
+                "question=\"怎么处理？\" options='[{\"label\":\"保留\",\"description\":\"保留 <br/>\"},{\"label\":\"删除\"}]'",
+                "question=\"怎么处理？\" options=\"[{\"label\":\"保留\",\"description\":\"保留 <br/>\"},{\"label\":\"删除\"}]\"")) {
+            var calls = parser.parse("<ask_user " + attributes + " /><tool_code>doc_find_replace(findText=\"甲\",replaceText=\"乙\")</tool_code>");
+            assertEquals(List.of("ask_user", "doc_find_replace"),
+                    calls.stream().map(XmlToolCallParser.ParsedCall::toolName).toList());
+            AskUserQuestion question = AskUserQuestion.fromArgsJson(calls.get(0).argsJson(), "test");
+            assertEquals(2, question.options().size());
+            assertTrue(question.question().contains("<br/>") || question.options().get(0).description().contains("<br/>"));
+        }
+    }
+
+    @Test
+    void bareAskUserExamplesAnswersAndOtherTagsAreNotTools() {
+        String tag = "<ask_user question=\"怎么整理？\" options='[\"格式\",\"措辞\"]' />";
+        for (String text : List.of("```xml\n" + tag + "\n```", "~~~xml\n" + tag + "\n~~~",
+                "`" + tag + "`", "示例：\n" + tag, "<final>示例：" + tag + "</final>",
+                "<thinking>可输出" + tag + "</thinking>", "<example>" + tag + "</example>",
+                "<!-- " + tag + " -->", "<ask_user_answer id=\"a\">仅格式</ask_user_answer>",
+                "<doc_find_replace findText=\"甲\" replaceText=\"乙\" />")) {
+            assertFalse(parser.containsToolCall(text), text);
+            assertTrue(parser.parse(text).isEmpty(), text);
+        }
+        var code = parser.parse("<tool_code>run_python(code='print(\"" + tag + "\")')</tool_code>");
+        assertEquals(List.of("run_python"), code.stream().map(XmlToolCallParser.ParsedCall::toolName).toList());
+    }
+
+    @Test
+    void ambiguousBareAskUserIsRejectedByExistingArgumentValidation() {
+        for (String tag : List.of("<ask_user options='[\"格式\",\"措辞\"]' />",
+                "<ask_user question=\"怎么整理？\" options='[not json]' />",
+                "<ask_user question=\"怎么整理？\" question=\"另一个问题\" />",
+                "<ask_user question=\"怎么整理？\" unexpected=\"x\" />")) {
+            var call = single(tag);
+            assertEquals("ask_user", call.toolName());
+            assertThrows(IllegalArgumentException.class,
+                    () -> AskUserQuestion.fromArgsJson(call.argsJson(), "test"), tag);
+        }
+    }
+
     // dev-board#393：Kimi K3 在同一会话里两种写法随机切换——
     //   todos="[{\"content\":...}]"（带引号转义）能过，
     //   todos=[{"content":...},{...}]（裸 JSON 字面量）走到「无引号值」分支，

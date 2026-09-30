@@ -148,4 +148,68 @@ class AskUserOrchestratorFlowTest {
         assertEquals(2, payload.get("options").size());
         assertTrue(r.lastAssistantMessage().orElseThrow().contains("multi=\"true\""));
     }
+
+    @Test
+    void bareAskUserUsesRealEventAndSkipsLaterWriteInMixedXmlBatch() throws Exception {
+        EvalCase c = new EvalCase();
+        c.id = "ask-user-bare-alias";
+        c.userInput = "你能帮我清理已经打开的这个文档么";
+        EvalCase.Turn turn = new EvalCase.Turn();
+        turn.text = "<thinking>清理标准不明确，先问。</thinking>\n"
+                + "<ask_user question=\"「清理」具体指哪一种操作？请选择：\" "
+                + "options=\"[{\"label\":\"删除审查意见\",\"description\":\"正文不动\"},{\"label\":\"统一格式排版\"}]\" "
+                + "multi_select=\"false\" header=\"清理范围\" />\n"
+                + "<tool_code>doc_delete_text(text=\"审查报告\")</tool_code>";
+        c.turns = new ArrayList<>(List.of(turn));
+
+        EvalHarness.RunResult r = EvalHarness.run(c);
+
+        assertEquals(List.of("ask_user"), r.dispatches().stream().map(RecordingToolRegistry.Dispatch::resolvedName).toList());
+        assertEquals(1, r.toolsOfferedPerLlmCall().size());
+        assertEquals(1, r.events(AskUserQuestion.SSE_EVENT).size());
+        JsonNode payload = MAPPER.readTree(r.events(AskUserQuestion.SSE_EVENT).get(0).data());
+        assertEquals("删除审查意见", payload.path("options").get(0).path("label").asText());
+        assertTrue(r.lastAssistantMessage().orElseThrow().contains("<question kind=\"ask_user\""));
+        var last = r.sseEvents().get(r.sseEvents().size() - 1);
+        assertEquals("bubble_end", last.event());
+        assertTrue(last.data().contains("\"awaiting_input\""), last.data());
+    }
+
+    @Test
+    void bareAskUserDoesNotBypassAskModeToolRestriction() {
+        EvalCase c = new EvalCase();
+        c.id = "ask-user-bare-in-ask-mode";
+        c.mode = "ASK";
+        c.userInput = "解释这个提问示例";
+        EvalCase.Turn attempted = new EvalCase.Turn();
+        attempted.text = "<ask_user question=\"怎么整理？\" options='[\"格式\",\"措辞\"]' />";
+        EvalCase.Turn answer = new EvalCase.Turn();
+        answer.text = "<final>当前仅解释，不执行操作。</final>";
+        c.turns = new ArrayList<>(List.of(attempted, answer));
+
+        EvalHarness.RunResult r = EvalHarness.run(c);
+
+        assertTrue(r.dispatches().isEmpty());
+        assertTrue(r.events(AskUserQuestion.SSE_EVENT).isEmpty());
+        assertEquals(2, r.toolsOfferedPerLlmCall().size(), "别名应进入原有权限拒绝与反馈路径");
+        assertTrue(r.lastAssistantMessage().orElseThrow().contains("当前仅解释"));
+    }
+
+    @Test
+    void markupInsideBareQuestionDoesNotHideQuestionAndAllowLaterWrite() {
+        EvalCase c = new EvalCase();
+        c.id = "ask-user-bare-inner-markup";
+        c.userInput = "帮我整理正文换行";
+        EvalCase.Turn turn = new EvalCase.Turn();
+        turn.text = "<ask_user question=\"保留 <br/> 还是删除？\" options='[\"保留\",\"删除\"]' />"
+                + "<tool_code>doc_delete_text(text=\"正文\")</tool_code>";
+        c.turns = new ArrayList<>(List.of(turn));
+
+        EvalHarness.RunResult r = EvalHarness.run(c);
+
+        assertEquals(List.of("ask_user"), r.dispatches().stream().map(RecordingToolRegistry.Dispatch::resolvedName).toList());
+        assertEquals(1, r.events(AskUserQuestion.SSE_EVENT).size());
+        assertEquals(1, r.toolsOfferedPerLlmCall().size());
+        assertTrue(r.events("bubble_end").get(0).data().contains("\"awaiting_input\""));
+    }
 }

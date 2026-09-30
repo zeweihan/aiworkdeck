@@ -811,7 +811,7 @@ public class ContextAssemblerService {
                     // 新建项目文件，用户面前的文档纹丝不动——插件用户看着的是文档，不是项目文件列表）
                     systemText.append("用户要求起草/撰写/生成内容（合同、简报、函件、清单等）时，");
                     systemText.append("默认把产出**直接写进这份打开的文档**（用本会话的 office_* 编辑工具），");
-                    systemText.append("不要创建项目文件来保存产出；只有用户明确要求「保存到项目」「另存为文件」时才使用项目文件类工具。\n");
+                    systemText.append("不要创建项目文件来保存产出；只有用户明确要求「保存到项目」「另存为文件」时才创建或写入项目文件；只读查阅相关项目材料不受此限制。\n");
                     // 宿主细分（Word/Excel/PowerPoint）：三类宿主的工具集互不相通，点错就是死路径
                     switch (clientCapabilityService.officeHostOf(conversationId)) {
                         // 工具目录只在片段 tools-office-*.md 里写一份（dev-board#1073）：任务窗格里没有关键词能把
@@ -867,7 +867,7 @@ public class ContextAssemblerService {
                     // **打开着**的文档（痕迹在那个文档自己的窗格里明示）；未打开的文件仍一律不改（D 决策）。
                     // 「别把 B 的内容写进 A」这条原病灶的禁令原样保留。英文版见 activeDocumentGuidanceEn，两边逐条对应。
                     systemText.append("**本会话直接编辑的是上面这一份打开的文档。** ");
-                    systemText.append("用户提到其他文件时：需要参考内容，用 ref_list 找到它再用 ref_read 读取，不要凭上一轮的印象作答；");
+                    systemText.append("任务依赖项目事实时，主动用 ref_list 查找同项目相关材料、用 ref_read 读取依据，不必等用户逐份点名；不要凭上一轮的印象作答；");
                     systemText.append("需要修改另一个**打开着**的文档，用 ref_edit，并且只改用户要求改的那个文档，");
                     systemText.append("绝不能把本该写进那个文件的内容改写进当前这份文档。");
                     systemText.append("**未打开的文件一律不能修改**：说明它没有打开，桌面端项目里的文件可用 ref_open 代为打开，");
@@ -888,14 +888,14 @@ public class ContextAssemblerService {
                                     "不要「查出坐标再 sheet_write_cells 回写」，那会覆盖掉不该动的格子），" +
                                     "写入直接生效（Calc 没有修订机制）——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
+                            systemText.append("为核实项目事实可以列出并读取相关材料；参考阅读无需打开或切换当前文档。\n\n");
                         }
                         case "slide" -> {
                             systemText.append("这是一份演示文稿，读取/修改一律使用 slide_* 工具" +
                                     "（页码 1 起，先用 slide_get_overview 看页序与形状名），" +
                                     "写入直接生效（PPT 没有修订机制，误改用 doc_restore_checkpoint 回滚）——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                            systemText.append("为核实项目事实可以列出并读取相关材料；参考阅读无需打开或切换当前文档。\n\n");
                         }
                         case "text" -> {
                             systemText.append("这是一份纯文本文件（txt/md），在轻量文本编辑器中打开，没有修订机制。" +
@@ -906,7 +906,7 @@ public class ContextAssemblerService {
                         default -> {
                             systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。");
+                            systemText.append("为核实项目事实可以列出并读取相关材料；参考阅读无需打开或切换当前文档。");
                             // 有无模板画像由末位 templateProfileFact 每轮告知（dev-board#1073），这里只留三个排版指路
                             systemText.append("目录用 doc_insert_toc、页码用 doc_edit_header_footer、纸张页边距用 doc_set_page_setup。\n\n");
                         }
@@ -1717,14 +1717,14 @@ public class ContextAssemblerService {
                             + "不要再就同一件事提问。";
         }
         return english
-                ? "\n\n[System reminder] Before acting, check whether this request is clear. In any of these cases, "
+                ? "\n\n[System reminder] Before editing, check whether this request is clear. For substantive revisions that depend on project facts, inspect the project/reference inventory first (reuse it if supplied), then follow amendments and performance records; do not edit based only on the first keyword match. Skip project discovery for local typo or formatting changes. First use available project materials to resolve factual gaps; read-only discovery is allowed before clarification. For folder organization, inspect the listing and relevant samples first. In any of these cases, "
                         + "call the ask_user tool (not just a <question> tag) with 2-4 concrete options and stop there - "
                         + "do not edit the document or write a task list before the user answers: (1) the user is asking "
                         + "\"can you / could you ...?\" and what to actually do is unclear; (2) the key verb has no stated "
                         + "standard (\"clean up\", \"tidy up\", \"improve\"); (3) it would delete or rewrite a large part of a "
                         + "document without the user explicitly authorising that scope. If it already says what to change "
                         + "and how (e.g. \"delete paragraphs 12 to 21\"), just do it - do not ask back."
-                : "\n\n[系统提醒] 动手前先判断这条要求是否明确。以下任一情形，先调用 ask_user 工具"
+                : "\n\n[系统提醒] 修改前先判断这条要求是否明确。依赖项目事实的实质修订，先看项目/参考文件清单（已有则复用），再沿补充、变更与履行关系核对依据，不能只凭首份关键词命中落笔；单点纠错/格式修改不用查项目。事实缺口先查可用的项目材料；澄清前可只读了解背景，整理文件夹应先看目录和相关样本。以下任一情形，先调用 ask_user 工具"
                         + "（不要只写 <question> 标签）提一个带 2-4 个具体选项的问题，本轮到此为止——用户回答之前"
                         + "不要改文档、不要写任务清单：① 用户是在问「能不能 / 可不可以帮我…」（句末是「吗」「么」「？」）"
                         + "而具体做法不清楚；② 动作词没说标准（如「清理」「整理」「优化一下」「规范一下」）；"
@@ -1783,12 +1783,12 @@ public class ContextAssemblerService {
                         + "直接调用 sheet_* 工具操作（Calc 没有修订机制，写入直接生效），"
                         // dev-board#844：追加行只写值，新行格式与原表明显不同。
                         + "新增的行/列要与相邻既有内容格式一致（字体/边框/对齐/数字格式），写完用 sheet_read_range(withFormat=true) 回读核对；"
-                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它；这不禁止为核实项目事实列出、读取相关参考材料。";
                 case "slide" -> "\n\n[系统提醒] 编辑器中当前已打开演示文稿" + docLabel + "（id="
                         + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前演示文稿」「改一下」等都指它——"
                         + "直接调用 slide_* 工具操作（页码 1 起；PPT 没有修订机制，写入直接生效，误改用 doc_restore_checkpoint 回滚），"
-                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它；这不禁止为核实项目事实列出、读取相关参考材料。";
                 case "text" -> "\n\n[系统提醒] 用户此刻打开的是纯文本文件" + docLabel + "（id="
                         + activeContext.getId() + "），其内容见 system prompt 的 <active_document>。"
                         + "用户未指明别的文件时，「这个」「当前文件」「改一下」等都指它——"
@@ -1797,7 +1797,7 @@ public class ContextAssemblerService {
                 default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
                         + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                        + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。"
+                        + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它；这不禁止为核实项目事实列出、读取相关参考材料。"
                         + "用户要求写入新表格时，把整张表的内容放进 doc_insert_table 的 rowsJson 一次调用提交，"
                         + "不要逐行或逐格建表；整表写完后再做必要的合并和格式调整。"
                         + "写入任何事实陈述（数字、日期、主体、权属等可被核对的内容）后必须立即调用 doc_link_evidence"
@@ -2080,7 +2080,7 @@ public class ContextAssemblerService {
    查到的先用工具查，别问；只有猜错会让整份产出作废的前提才问）。
    **要求本身含糊时也先问**：用户用疑问句问「能不能帮我 X」而 X 的做法不明确、
    动作词没说标准（「清理」「整理」「优化一下」「规范一下」）、或者一个动作会大范围
-   删改文档而用户没有明确授权这个范围——先调 `ask_user` 给 2-4 个具体选项，再动手。
+   删改文档而用户没有明确授权这个范围——可先只读了解相关材料，改动前先调 `ask_user` 给 2-4 个具体选项，回答后才改动。
    指令明确（说清了改哪里、怎么改，如「把第 12 到 21 段删掉」）就直接执行，不要反问。
 2. **智能规划**: 对于复杂任务可以生成 `task_list`（但不会停止等待确认）
 3. **工具使用**: 可以使用所有可用工具（搜索、读写文件、法律研究等）
@@ -2243,7 +2243,7 @@ You are in Agent mode, the default full-capability mode:
    what X means is unclear, the key verb has no stated standard ("clean up", "tidy up",
    "improve", "polish"), or the action would delete or rewrite a large part of a document
    without the user explicitly authorising that scope - call `ask_user` with 2-4 concrete
-   options first, then act. When the instruction is specific (it says what to change and how,
+   options before editing; read-only discovery of relevant materials may precede the question. When the instruction is specific (it says what to change and how,
    e.g. "delete paragraphs 12 to 21"), just do it - do not ask back.
 2. **Smart planning**: for complex tasks you may produce a `task_list` (which does NOT stop and wait for confirmation)
 3. **Tool use**: all available tools may be used (search, file read/write, legal research, etc.)
@@ -2278,7 +2278,7 @@ Give your conclusions or suggested edits in prose; do not attempt to call docume
 """;
 
     private static final String EN_GUIDE_LOWA_SHEET = """
-This is a spreadsheet. Read and modify it exclusively with the sheet_* tools (sheet_get_overview first to see the worksheet structure, sheet_read_range / sheet_write_cells to read and write cells, sheet_search to find text and sheet_find_replace for bulk replacement - use it for bulk edits instead of "search for coordinates, then write back with sheet_write_cells", which would overwrite cells that should stay untouched); writes take effect immediately (Calc has no track-changes mechanism). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. This session has no doc_* tools.
+This is a spreadsheet. Read and modify it exclusively with the sheet_* tools (sheet_get_overview first to see the worksheet structure, sheet_read_range / sheet_write_cells to read and write cells, sheet_search to find text and sheet_find_replace for bulk replacement - use it for bulk edits instead of "search for coordinates, then write back with sheet_write_cells", which would overwrite cells that should stay untouched); writes take effect immediately (Calc has no track-changes mechanism). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; listing and reading related project evidence is allowed when needed; reading references does not require opening them or switching the active document.
 
 """;
 
@@ -2288,12 +2288,12 @@ This is a plain-text file (txt/md), open in the lightweight text editor; it has 
 """;
 
     private static final String EN_GUIDE_LOWA_SLIDE = """
-This is a presentation. Read and modify it exclusively with the slide_* tools (1-based slide numbers; call slide_get_overview first for the slide order and shape names); writes take effect immediately (presentations have no track-changes mechanism; roll back mistakes with doc_restore_checkpoint). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document.
+This is a presentation. Read and modify it exclusively with the slide_* tools (1-based slide numbers; call slide_get_overview first for the slide order and shape names); writes take effect immediately (presentations have no track-changes mechanism; roll back mistakes with doc_restore_checkpoint). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; listing and reading related project evidence is allowed when needed; reading references does not require opening them or switching the active document.
 
 """;
 
     private static final String EN_GUIDE_LOWA_DOC = """
-All doc_* editing and reading tools act directly on this document. You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. Use doc_insert_toc for a table of contents, doc_edit_header_footer for page numbers, and doc_set_page_setup for paper size and margins.
+All doc_* editing and reading tools act directly on this document. You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; listing and reading related project evidence is allowed when needed; reading references does not require opening them or switching the active document. Use doc_insert_toc for a table of contents, doc_edit_header_footer for page numbers, and doc_set_page_setup for paper size and margins.
 
 """;
 
@@ -2313,8 +2313,8 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                 // 与中文版同源的产出去向默认规则（dev-board#244）
                 sb.append("When the user asks you to draft or produce content (a contract, briefing, letter, list, ...), ")
                   .append("write it directly into this open document with the office_* editing tools by default - ")
-                  .append("do NOT create a project file to hold the output. Only use project-file tools when the user ")
-                  .append("explicitly asks to save to the project or export a file.\n");
+                  .append("do NOT create a project file to hold the output. Only create or write project files when the user ")
+                  .append("explicitly asks to save to the project or export a file; reading relevant project evidence is allowed.\n");
                 switch (clientCapabilityService.officeHostOf(conversationId)) {
                     case EXCEL -> sb.append(EN_GUIDE_OFFICE_EXCEL);
                     case POWERPOINT -> sb.append(EN_GUIDE_OFFICE_PPT);
@@ -2328,7 +2328,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                 // any reference source may be read, other OPEN documents may be edited via ref_edit,
                 // files that are not open are never edited).
                 sb.append("**This session edits the one open document described above.** ")
-                  .append("When the user refers to another file: to use its content, find it with ref_list and read it with ref_read - ")
+                  .append("When the task depends on project facts, proactively find related same-project sources with ref_list and read them with ref_read, even if the user has not named them - ")
                   .append("never answer for it from an earlier impression. To change another document that is **open**, use ref_edit, ")
                   .append("change only the document the user asked for, and never write content meant for that file into the current one. ")
                   .append("**Files that are not open must never be edited**: say it is not open; a desktop-project file can be opened ")
@@ -2423,14 +2423,14 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "(Calc has no track-changes mechanism; writes take effect immediately). "
                         + "New rows/columns must match the formatting of the adjacent existing content (font / borders / "
                         + "alignment / number format); after writing, re-read with sheet_read_range(withFormat=true) to check. "
-                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**.";
+                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**; this does not prohibit listing and reading related project evidence.";
                 case "slide" -> "\n\n[System reminder] The editor currently has the presentation " + docLabel
                         + " (id=" + activeContext.getId() + ") open; its structure and content are in the system prompt's "
                         + "<active_document>. Unless the user names another document, \"this\", \"the current deck\", "
                         + "\"change it\", and the like refer to it - operate on it directly with the slide_* tools "
                         + "(1-based slide numbers; presentations have no track-changes mechanism; writes take effect immediately; "
                         + "roll back mistakes with doc_restore_checkpoint). "
-                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**.";
+                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**; this does not prohibit listing and reading related project evidence.";
                 case "text" -> "\n\n[System reminder] The user currently has the plain-text file " + docLabel
                         + " (id=" + activeContext.getId() + ") open; its content is in the system prompt's "
                         + "<active_document>. Unless the user names another file, \"this\", \"the current file\", "
@@ -2441,7 +2441,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + " (id=" + activeContext.getId() + ") open; its body text is in the system prompt's "
                         + "<active_document>. Unless the user names another document, \"this\", \"the current document\", "
                         + "\"revise it\", and the like refer to it - operate on it directly with the doc_* tools. "
-                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**. "
+                        + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**; this does not prohibit listing and reading related project evidence. "
                         + "When asked to insert a new table, submit all rows in doc_insert_table rowsJson in one call, "
                         + "rather than building it row by row or cell by cell; apply necessary merges and formatting afterwards. "
                         + "After writing any factual statement (figures, dates, parties, ownership - anything verifiable), "

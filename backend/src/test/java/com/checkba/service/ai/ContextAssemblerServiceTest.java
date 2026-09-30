@@ -94,6 +94,25 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    void activeDocumentDoesNotBlockReadingRelatedProjectEvidenceInEitherLanguage() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            for (String ext : List.of("docx", "xlsx", "pptx")) {
+                AiAgentController.ContextItem active = activeDoc();
+                active.setFileType(ext);
+                String system = assembleSystemText(active);
+                String tail = assembleLastUserText(active);
+                assertFalse(system.contains(english ? "only when the user explicitly wants to work on a DIFFERENT"
+                        : "只有用户明确要操作**其他**文档"), system);
+                assertTrue(system.contains(english ? "reading references does not require opening them"
+                        : "参考阅读无需打开或切换当前文档"), system);
+                assertTrue(tail.contains(english ? "this does not prohibit listing and reading related project evidence"
+                        : "这不禁止为核实项目事实列出、读取相关参考材料"), tail);
+            }
+        }
+    }
+
+    @Test
     void markdownMemoryIndexesAreInjectedWithConfiguredTokenBudget() {
         when(memoryDocumentService.contextIndexes(1L, 88L, 10_000))
                 .thenReturn("## 个人记忆 [user]\n- [行文](topics/style.md)");
@@ -763,6 +782,7 @@ class ContextAssemblerServiceTest {
             assertTrue(rule >= 0, host + "：应有「未打开的文件一律不能修改」硬规则");
             assertTrue(systemText.contains("ref_list"), host + "：应指引用 ref_list 找参考文件");
             assertTrue(systemText.contains("ref_read"), host + "：应指引用 ref_read 读参考文件");
+            assertTrue(systemText.contains("不必等用户逐份点名"), host + "：项目依据需要主动读取");
             assertTrue(systemText.contains("ref_edit"), host + "：应指引用 ref_edit 改其他打开的文档");
             assertTrue(systemText.contains("ref_open"), host + "：应指引桌面端项目文件可用 ref_open 代为打开");
             assertFalse(systemText.contains("不在本会话的编辑范围内"), host + "：旧的「一概不碰其他文件」口径应已移除");
@@ -786,6 +806,7 @@ class ContextAssemblerServiceTest {
             assertTrue(rule >= 0, host + ": the not-open rule must be present");
             assertTrue(systemText.contains("ref_list"), host + ": should point to ref_list");
             assertTrue(systemText.contains("ref_read"), host + ": should point to ref_read");
+            assertTrue(systemText.contains("even if the user has not named them"), host + ": discover implicit project evidence");
             assertTrue(systemText.contains("ref_edit"), host + ": should point to ref_edit");
             assertTrue(systemText.contains("ref_open"), host + ": should point to ref_open");
             assertFalse(systemText.contains("outside this session's reach"), host + ": old wording must be gone");

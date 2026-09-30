@@ -9,9 +9,12 @@ import com.checkba.service.ProjectFileService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -28,14 +31,18 @@ class FileContextLoaderTest {
     private FileContentExtractorService extractor;
     private AiContextProperties props;
     private FileContextLoader loader;
+    @TempDir
+    Path tempDir;
 
     @BeforeEach
     void setUp() {
         projectFileService = mock(ProjectFileService.class);
         extractor = mock(FileContentExtractorService.class);
         props = new AiContextProperties();
+        com.checkba.storage.StorageProperties storageProps = new com.checkba.storage.StorageProperties();
+        storageProps.getLocal().setRootPath(tempDir.toString());
         loader = new FileContextLoader(projectFileService, extractor, props,
-                new com.checkba.storage.ProjectStorageResolver(new com.checkba.storage.StorageProperties(), null),
+                new com.checkba.storage.ProjectStorageResolver(storageProps, null),
                 mock(com.checkba.service.file.ProjectFileTextExtractor.class));
     }
 
@@ -137,5 +144,98 @@ class FileContextLoaderTest {
         assertTrue(result.contains("Directory Content"));
         assertTrue(result.contains("doc.txt"), "目录结构仍应列出文件");
         assertFalse(result.contains("Folder Document Contents"), "不应再读取文件内容");
+        assertTrue(result.contains("text preloaded from 0; yielded no text: 0; not attempted due to the file-count budget: 1"));
+        verifyNoInteractions(extractor);
+    }
+
+    @Test
+    @DisplayName("目录与正文均用相对路径区分根目录和子目录里的同名文件")
+    void buildFolderContextDistinguishesDuplicateNames() throws Exception {
+        ProjectFile rootFile = readableFile(41L, "意见书.txt", "root");
+        ProjectFile nestedFile = readableFile(42L, "意见书.txt", "nested");
+        ProjectFile folder = file(43L, "底稿", true);
+        when(projectFileService.getFilesByParent(1L, 200L)).thenReturn(List.of(rootFile, folder));
+        when(projectFileService.getFilesByParent(1L, 43L)).thenReturn(List.of(nestedFile));
+
+        FileContextLoader.FolderContext result = loader.buildFolderContextCounted("200", "1", 0);
+
+        assertTrue(result.text().contains("[FILE] 意见书.txt (ID: 41)"));
+        assertTrue(result.text().contains("[FILE] 底稿/意见书.txt (ID: 42)"));
+        assertTrue(result.text().contains("#### File: 意见书.txt\n```\nroot"));
+        assertTrue(result.text().contains("#### File: 底稿/意见书.txt\n```\nnested"));
+        assertTrue(result.text().contains("Of 2 listed file(s), text preloaded from 2"));
+        assertFalse(result.text().contains("Directory listing is incomplete"));
+        assertEquals(2, result.filesRead());
+    }
+
+    @Test
+    @DisplayName("深度5的文件仍可列出，无更深目录时不误报截断")
+    void buildFolderContextIncludesFilesAtDepthBoundary() {
+        stubDepthBoundary(false);
+
+        String result = loader.buildFolderContext("200", "1", props.getFiles().getMaxFilesPerContext());
+
+        assertTrue(result.contains("[FILE] d1/d2/d3/d4/d5/boundary.txt"));
+        assertFalse(result.contains("Directory listing is incomplete"));
+        verify(projectFileService).getFilesByParent(1L, 305L);
+    }
+
+    @Test
+    @DisplayName("超过深度5不追加查询，并诚实说明更深目录未遍历")
+    void buildFolderContextReportsUntraversedSubfolders() {
+        stubDepthBoundary(true);
+
+        String result = loader.buildFolderContext("200", "1", props.getFiles().getMaxFilesPerContext());
+
+        assertTrue(result.contains("[FILE] d1/d2/d3/d4/d5/boundary.txt"));
+        assertTrue(result.contains("[DIR] d1/d2/d3/d4/d5/d6"));
+        assertTrue(result.contains("Directory listing is incomplete: recursion depth limit 5 reached; deeper folders were not traversed"));
+        verify(projectFileService, never()).getFilesByParent(1L, 306L);
+    }
+
+    @Test
+    @DisplayName("数量预算按成功预读数扣减，区分失败与未尝试，并保留正文字符截断")
+    void buildFolderContextReportsActualReadCoverage() throws Exception {
+        props.getFiles().setMaxFilesPerContext(3);
+        props.getFiles().setFolderFileMaxChars(3);
+        ProjectFile missing = file(51L, "missing.txt", false);
+        ProjectFile first = readableFile(52L, "first.txt", "abcdef");
+        ProjectFile second = readableFile(53L, "second.txt", "ghijkl");
+        ProjectFile remaining = readableFile(54L, "remaining.txt", "mnopqr");
+        when(projectFileService.getFilesByParent(1L, 200L)).thenReturn(List.of(missing, first, second, remaining));
+
+        FileContextLoader.FolderContext result = loader.buildFolderContextCounted("200", "1", 1);
+
+        assertEquals(2, result.filesRead());
+        assertEquals(1, result.unreadableCount());
+        assertTrue(result.text().contains("Of 4 listed file(s), text preloaded from 2; yielded no text: 1; not attempted due to the file-count budget: 1"));
+        assertTrue(result.text().contains("abc...[Truncated]"));
+        assertTrue(result.text().contains("ghi...[Truncated]"));
+        assertTrue(result.text().indexOf("#### File: first.txt") < result.text().indexOf("#### File: second.txt"));
+        assertFalse(result.text().contains("#### File: remaining.txt"));
+        verify(extractor, times(2)).extractText(any(File.class));
+        verify(extractor, never()).extractTextWithOcr(any(File.class));
+    }
+
+    private ProjectFile readableFile(long id, String name, String text) throws Exception {
+        Path path = Files.writeString(tempDir.resolve(id + ".txt"), text);
+        ProjectFile f = file(id, name, false);
+        f.setFilePath(path.getFileName().toString());
+        when(extractor.isTextFile(name)).thenReturn(true);
+        when(extractor.extractText(path.toFile())).thenReturn(text);
+        return f;
+    }
+
+    private void stubDepthBoundary(boolean deeperFolder) {
+        long parent = 200L;
+        for (int depth = 1; depth <= 5; depth++) {
+            long child = 300L + depth;
+            when(projectFileService.getFilesByParent(1L, parent))
+                    .thenReturn(List.of(file(child, "d" + depth, true)));
+            parent = child;
+        }
+        ProjectFile boundary = file(310L, "boundary.txt", false);
+        when(projectFileService.getFilesByParent(1L, parent)).thenReturn(deeperFolder
+                ? List.of(boundary, file(306L, "d6", true)) : List.of(boundary));
     }
 }

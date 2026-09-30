@@ -61,9 +61,9 @@ public class DocumentEditTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "列出项目文件", category = "document")
     @Tool("**项目文件的权威清单，一次列全**：Word / Excel / PPT / PDF / 纯文本(txt,md,csv…) / 图片 / 其他，"
-            + "每条给出 fileId、名称与类型标注。它是文件 ID 的主要来源——doc_open_file、extract_file_text、"
-            + "pdf_inspect 的 fileId，以及 rename_project_file / move_project_file / create_folder 的 "
-            + "fileId 与 parentFolderId 都从这里取。\n"
+            + "每条给出 fileId、名称、项目相对路径与类型标注，同名文件按路径区分（父目录异常时仅列已知路径部分）。"
+            + "它是文件 ID 的主要来源——doc_open_file、extract_file_text、pdf_inspect、"
+            + "rename_project_file / move_project_file 的 fileId 从这里取；文件夹 ID 用 list_project_folders。\n"
             + "用户问「项目里都有什么」时调这一个就够了。按文件名找用 search_project_files，"
             + "按正文内容找用 search_project_content；只列文件夹用 list_project_folders；"
             + "只要物理磁盘路径不要 ID 才用 list_files。")
@@ -87,6 +87,9 @@ public class DocumentEditTools implements AgentToolComponent {
                 return "项目中还没有任何文件。";
             }
 
+            java.util.Map<Long, ProjectFile> byId = new java.util.HashMap<>();
+            files.stream().filter(f -> !Boolean.TRUE.equals(f.getIsDeleted()))
+                    .forEach(f -> byId.put(f.getId(), f));
             StringBuilder sb = new StringBuilder("项目文件列表 (共 " + visible.size() + " 个):\n");
             boolean hasEditable = false;
             boolean hasPdf = false;
@@ -94,8 +97,8 @@ public class DocumentEditTools implements AgentToolComponent {
                 String bucket = fileBucket(f.getName());
                 hasEditable |= "可编辑文档".equals(bucket);
                 hasPdf |= "PDF".equals(bucket);
-                sb.append(String.format("- ID: %d, 名称: %s, 类型: %s [%s]%n",
-                        f.getId(), f.getName(), f.getFileType(), bucket));
+                sb.append(String.format("- ID: %d, 名称: %s, 路径: %s, 类型: %s [%s]%n",
+                        f.getId(), f.getName(), FileTools.relativeProjectPath(f, byId), f.getFileType(), bucket));
             }
             sb.append("\n说明：");
             if (hasEditable) {

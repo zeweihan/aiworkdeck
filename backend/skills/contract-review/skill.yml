@@ -140,6 +140,11 @@ allowed_tools:
   # 对照附件/底稿
   - extract_file_text
   - search_project_files
+  - search_project_content
+  - doc_list_project_files
+  # Office/WPS 的只读参考来源；宿主仍由 ClientCapabilityService 过滤，不开放 ref_edit
+  - ref_list
+  - ref_read
   # 逐条核法源这类多轮检索只需要结论，可委派
   - dispatch_subtask
 

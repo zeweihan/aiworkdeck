@@ -4,11 +4,16 @@
 package com.checkba.service.ai.skill;
 
 import com.checkba.service.ai.PluginService;
+import com.checkba.service.ai.ClientCapabilityService;
+import com.checkba.service.ai.ToolDisclosurePolicy;
 import com.checkba.service.ai.tools.AgentToolComponent;
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AssignableTypeFilter;
@@ -47,6 +52,39 @@ class BuiltinSkillsTest {
 
     /** 测试运行时 cwd 是 backend/，内置 skill 就在它下面的 skills/。 */
     private static final Path SKILLS_DIR = Path.of("skills");
+
+    @ParameterizedTest
+    @CsvSource({"lowa,word,false", "none,word,false", "office,word,true",
+            "office,excel,true", "office,powerpoint,true"})
+    void contractReviewKeepsReadOnlyProjectDiscoveryWithinHostCapabilities(
+            String capability, String host, boolean referencesVisible) {
+        SkillRouter router = new SkillRouter(registry, new SkillProperties(),
+                org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class), null);
+        router.activateForTurn("contract", "contract-run", "审查合同", "contract-review");
+        assertEquals("contract-review", router.activeSkill("contract-run").orElseThrow().getId());
+        ClientCapabilityService capabilities = new ClientCapabilityService();
+        capabilities.record("contract", capability, host);
+        List<ToolSpecification> hosted = realToolNames.stream()
+                .filter(name -> capabilities.isToolVisible(name, "contract"))
+                .map(name -> ToolSpecification.builder().name(name).description(name).build()).toList();
+        List<ToolSpecification> restricted = router.visibleTools("contract-run", hosted);
+        Set<String> visible = new ToolDisclosurePolicy(true).narrow(restricted, Set.of()).stream()
+                .map(ToolSpecification::name).collect(java.util.stream.Collectors.toSet());
+
+        assertTrue(visible.containsAll(List.of("search_project_content", "doc_list_project_files",
+                "search_project_files", "extract_file_text")), visible.toString());
+        assertEquals(referencesVisible, visible.contains("ref_list"));
+        assertEquals(referencesVisible, visible.contains("ref_read"));
+        Set<String> restrictedNames = restricted.stream().map(ToolSpecification::name)
+                .collect(java.util.stream.Collectors.toSet());
+        for (String writeTool : List.of("ref_edit", "doc_start_stream", "write_docx", "text_write_file")) {
+            assertTrue(realToolNames.contains(writeTool), writeTool + " must be a real tool for this guard to mean anything");
+            assertFalse(restrictedNames.contains(writeTool), writeTool + " must remain restricted");
+        }
+        if (!"word".equals(host) || !"office".equals(capability)) {
+            assertFalse(restrictedNames.contains("office_replace_text"));
+        }
+    }
 
     @BeforeAll
     static void setUp() {
