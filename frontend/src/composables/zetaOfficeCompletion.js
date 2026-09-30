@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { classifySelectionLookup } from '../utils/selectionLookup.js'
 import { extractCompletionEntries, matchCompletionItems } from '../utils/completionLexicon.js'
 import { WRITING_ASSISTANCE_CSS, renderCompletionOption } from './writingAssistancePresentation.js'
 
 const LABELS = {
-  zh: { suggestions: '补全建议', manual: '显示补全建议 · Alt+/', noMatch: '没有匹配的本地词条，请继续输入或查看已学词库。', acceptKey: '补全', chooseKey: '选择', dismissKey: '关闭', title: '自动补全', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动弹出候选', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', login: '登录', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', contextHint: '选中文字后右键可查询机构 / 法规 / 案例，点了才联网、才可能扣费。', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
-  en: { suggestions: 'Suggestions', manual: 'Show suggestions · Alt+/', noMatch: 'No matching local entries. Keep typing or review learned vocabulary.', acceptKey: 'Accept', chooseKey: 'Select', dismissKey: 'Dismiss', title: 'Autocomplete', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Suggest as I type', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', login: 'Sign in', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', contextHint: 'Select text and right-click to look up a company, law or case. Nothing goes online — and nothing can be charged — until you click.', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
+  zh: { suggestions: '补全建议', manual: '显示补全建议 · Alt+/', noMatch: '没有匹配的本地词条，请继续输入或查看已学词库。', acceptKey: '补全', chooseKey: '选择', dismissKey: '关闭', title: '自动补全', close: '关闭', local: '仅本地补全 · Tab 接受 · Esc 关闭', empty: '暂无本地候选，常用内容会随写作积累。', enabled: '自动弹出候选', learning: '学习我输入的常用内容', hints: '相关资料提示', manage: '已学词库', project: '本项目', user: '我的词库', remove: '删除', clear: '清空此范围的已学记录', confirm: '再次点击确认清空', loading: '正在读取…', stale: '光标或正文已变化，请重新选择后操作。', detail: '查看已有资料', insert: '插入以上内容', lookup: '在线查询（可能产生费用）', query: '查询资料…', otherQueries: '其他查询…', company: '查询机构工商信息', law: '查询法规与条款', case: '查询案例与案号', noDetail: '暂无可插入的资料。可选中文字后右键查询。', source: '来源', date: '查询时间', error: '操作未完成，请稍后重试。', login: '登录', recharge: '去充值', saved: '已插入，可用撤销恢复。', current: '当前文档', refresh: '刷新本地词库', contextHint: '选中文字后右键可查询机构 / 法规 / 案例，点了才联网、才可能扣费。', COMPANY: '机构', PERSON: '人名', LAW: '法规', ARTICLE: '条款', CASE: '案例', WORD: '词语', PHRASE: '表述' },
+  en: { suggestions: 'Suggestions', manual: 'Show suggestions · Alt+/', noMatch: 'No matching local entries. Keep typing or review learned vocabulary.', acceptKey: 'Accept', chooseKey: 'Select', dismissKey: 'Dismiss', title: 'Autocomplete', close: 'Close', local: 'Local suggestions · Tab accept · Esc dismiss', empty: 'No local suggestions yet. Vocabulary grows as you write.', enabled: 'Suggest as I type', learning: 'Learn from my typing', hints: 'Related information', manage: 'Learned vocabulary', project: 'This project', user: 'My vocabulary', remove: 'Delete', clear: 'Clear learned entries in this scope', confirm: 'Click again to confirm', loading: 'Loading…', stale: 'The cursor or document changed. Select the text again.', detail: 'View saved information', insert: 'Insert the content above', lookup: 'Online lookup (charges may apply)', query: 'Look up information…', otherQueries: 'Other lookups…', company: 'Look up company information', law: 'Look up a law or article', case: 'Look up a case', noDetail: 'No insertable information. Select text and right-click to look it up.', source: 'Source', date: 'Retrieved', error: 'The operation failed. Please try again.', login: 'Sign in', recharge: 'Add credits', saved: 'Inserted. Use Undo to revert.', current: 'Current document', refresh: 'Refresh local vocabulary', contextHint: 'Select text and right-click to look up a company, law or case. Nothing goes online — and nothing can be charged — until you click.', COMPANY: 'Company', PERSON: 'Person', LAW: 'Law', ARTICLE: 'Article', CASE: 'Case', WORD: 'Word', PHRASE: 'Phrase' },
 }
 let instanceSeq = 0
 // Longest selection the right-click lookup menu accepts.
@@ -366,8 +367,31 @@ export function attachWritingAssistance({ canvas, input, execute, transport, foc
     show('context', ctx.selectedText, point)
     const known = items.find((x) => x.text === ctx.selectedText)
     if (known?.entityId || known?.hasDetail) button(t.detail, () => detailRequest('detail', { entityId: known.entityId, id: known.id }, ctx.token))
-    note(t.lookup)
-    for (const [kind, label] of [['COMPANY', 'company'], ['LAW', 'law'], ['CASE', 'case']]) button(t[label], () => detailRequest('lookup', { kind, text: ctx.selectedText }, ctx.token))
+    // Only a complete selection is classified. Unknown or mixed text keeps a
+    // compact manual route; opening it never issues a lookup request.
+    const recommended = classifySelectionLookup(ctx.selectedText)
+    const queries = [['COMPANY', 'company'], ['LAW', 'law'], ['CASE', 'case']]
+    const addQuery = ([kind, label], parent = panel) => {
+      const action = button(t[label], () => detailRequest('lookup', { kind, text: ctx.selectedText }, ctx.token), parent)
+      action.className = 'awd-wa-query'
+      if (kind === recommended) action.classList.add('awd-wa-query-primary')
+    }
+    if (recommended) addQuery(queries.find(([kind]) => kind === recommended))
+    const more = button(recommended ? t.otherQueries : t.query, () => {
+      const expanded = more.getAttribute('aria-expanded') !== 'true'
+      more.setAttribute('aria-expanded', String(expanded))
+      alternatives.hidden = !expanded
+      if (expanded && !alternatives.childElementCount) {
+        queries.filter(([kind]) => kind !== recommended).forEach(query => addQuery(query, alternatives))
+      }
+      position(point)
+    })
+    more.className = 'awd-wa-query awd-wa-query-more'
+    more.setAttribute('aria-expanded', 'false')
+    const alternatives = doc.createElement('div')
+    alternatives.id = listId + '-queries'; alternatives.hidden = true
+    more.setAttribute('aria-controls', alternatives.id); panel.appendChild(alternatives)
+    const notice = doc.createElement('small'); notice.className = 'awd-wa-query-notice'; notice.textContent = t.lookup; panel.appendChild(notice)
     position(point)
   }
   const startComposition = () => { composing = true; invalidate({ flush: false }) }

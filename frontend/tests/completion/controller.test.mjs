@@ -176,6 +176,7 @@ test('只有选中后右键产生外查菜单，显式点击才查询；晚回�
   h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 })); await tick()
   assert.equal(h.doc.activeElement, h.input, 'HTML context menu explicitly retains its Escape-key route')
   assert.equal(h.messages.some(m => m.action === 'lookup'), false)
+  h.button('查询资料…').click()
   h.button('查询机构工商信息').click()
   const request = h.messages.find(m => m.action === 'lookup')
   assert.deepEqual(request.data, { kind: 'COMPANY', text: '示例企业' })
@@ -230,6 +231,7 @@ test('缓存详情可复用，外查后刷新词库不破坏当前详情和选�
   h.setContext({ available: false, hasSelection: true, selectedText: cached.text, token: 'selected-cache' })
   h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true })); await tick()
   assert.ok(h.button('查看已有资料'))
+  h.button('查询资料…').click()
   h.button('查询机构工商信息').click()
   h.respond('lookup', { title: cached.text, variants: [{ text: '新的工商资料' }] }); await tick()
   assert.ok(h.messages.find(m => m.action === 'refresh'))
@@ -266,6 +268,7 @@ test('WORD/PHRASE 的低频学习项不抢候选；错误 session 的回复被�
   h.api.invalidate()
   h.setContext({ available: false, hasSelection: true, selectedText: '违约责任', token: 'selection' })
   h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true })); await tick()
+  h.button('查询资料…').click()
   h.button('查询法规与条款').click()
   const request = h.messages.find(m => m.action === 'lookup')
   h.deliver({ type: 'writing-response', id: request.id, session: 'wrong', result: { title: '不可显示', variants: [{ text: '错误' }] } }); await tick()
@@ -556,6 +559,7 @@ test('在线查询失败保留登录和充值按钮，不展示配置 Key 引导
     h.setContext({ available: false, hasSelection: true, selectedText: '合成机构', token: hint })
     h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 }))
     await tick()
+    h.button('查询资料…').click()
     h.button('查询机构工商信息').click()
     const request = h.messages.findLast(m => m.action === 'lookup')
     h.deliver({ type: 'writing-response', id: request.id, session: request.session, error: label + '后重试', hint })
@@ -566,4 +570,57 @@ test('在线查询失败保留登录和充值按钮，不展示配置 Key 引导
     assert.equal(h.messages.at(-1).action, action)
     h.respond(action, {})
   }
+})
+
+
+for (const [selectedText, label, kind] of [
+  ['北京示例科技有限公司', '查询机构工商信息', 'COMPANY'],
+  ['（2026）京0105民初123号', '查询案例与案号', 'CASE'],
+  ['《中华人民共和国民法典》第五百七十七条', '查询法规与条款', 'LAW'],
+]) {
+  test(`选区 ${kind} 只突出匹配查询，保留原文和 token`, async t => {
+    const h = harness(t)
+    h.setContext({ available: false, hasSelection: true, selectedText, token: 'exact-selection' })
+    h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await tick()
+    assert.deepEqual([...h.doc.querySelectorAll('.awd-wa-query-primary')].map(b => b.textContent), [label])
+    assert.equal(h.doc.querySelectorAll('.awd-wa-query').length, 2)
+    assert.equal(h.messages.some(m => m.action === 'lookup'), false)
+    h.button(label).click()
+    assert.deepEqual(h.messages.findLast(m => m.action === 'lookup').data, { kind, text: selectedText })
+    h.respond('lookup', { title: selectedText, variants: [{ text: '合成查询资料' }] }); await tick()
+    h.button('插入以上内容').click(); await tick()
+    assert.deepEqual(h.calls.findLast(c => c.action === 'insert_completion_content').params, { token: 'exact-selection', text: '合成查询资料' })
+  })
+}
+
+test('普通文字折叠查询；展开不联网；切换选区清除旧展开和查询', async t => {
+  const h = harness(t)
+  h.setContext({ available: false, hasSelection: true, selectedText: '双方应当诚实信用', token: 'plain' })
+  const open = async () => { h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true })); await tick() }
+  await open()
+  assert.equal(h.button('查询机构工商信息'), undefined)
+  const more = h.button('查询资料…')
+  assert.equal(more.getAttribute('aria-expanded'), 'false')
+  more.click()
+  assert.equal(more.getAttribute('aria-expanded'), 'true')
+  assert.ok(h.button('查询法规与条款'))
+  assert.equal(h.messages.some(m => m.action === 'lookup'), false)
+  more.click()
+  assert.equal(h.doc.getElementById(more.getAttribute('aria-controls')).hidden, true)
+  h.setContext({ selectedText: '公司法', token: 'law' })
+  await open()
+  assert.equal(h.button('查询资料…'), undefined)
+  assert.equal(h.button('查询机构工商信息'), undefined)
+  h.button('其他查询…').click()
+  h.button('查询机构工商信息').click()
+  assert.deepEqual(h.messages.findLast(m => m.action === 'lookup').data, { kind: 'COMPANY', text: '公司法' })
+})
+
+test('迟到的右键预解析不能覆盖新文档或关闭后的菜单', async t => {
+  const waiting = deferred(), h = harness(t, { get_context_menu_context: () => waiting.promise })
+  h.canvas.dispatchEvent(new h.dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  h.config({ session: 'new-document' })
+  waiting.resolve({ success: true, selectedText: '北京示例有限公司', token: 'old' }); await tick()
+  assert.equal(h.panel().hidden, true)
+  assert.equal(h.messages.some(m => m.action === 'lookup'), false)
 })
