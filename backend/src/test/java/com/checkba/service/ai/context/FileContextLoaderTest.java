@@ -217,6 +217,24 @@ class FileContextLoaderTest {
         verify(extractor, never()).extractTextWithOcr(any(File.class));
     }
 
+    @Test
+    @DisplayName("附件目录路径明确以该目录为基准，不冒充项目根路径；配额耗尽也保留说明")
+    void folderPathsIdentifyTheirBaseBeforeContentOrQuotaReturn() throws Exception {
+        ProjectFile nested = file(60L, "暂放", true);
+        ProjectFile note = readableFile(61L, "协议.txt", "合成协议正文");
+        when(projectFileService.getFilesByParent(1L, 200L)).thenReturn(List.of(nested));
+        when(projectFileService.getFilesByParent(1L, 60L)).thenReturn(List.of(note));
+        for (int used : List.of(0, props.getFiles().getMaxFilesPerContext())) {
+            String result = loader.buildFolderContext("200", "1", used);
+            assertTrue(result.contains("relative to the attached folder (ID: 200), NOT the project root"), result);
+            assertTrue(result.contains("resolve the folder ID to its full project-relative path"), result);
+            assertTrue(result.contains("using list_project_folders"), "按目录 ID 查路径须用返回目录的清单，不能用只返回文件的 doc_list_project_files");
+            assertTrue(result.contains("[FILE] 暂放/协议.txt (ID: 61)"), result);
+            assertFalse(result.contains(tempDir.toString()), "不输出宿主绝对路径");
+            if (used == 0) assertTrue(result.contains("#### File: 暂放/协议.txt\n```\n合成协议正文"), result);
+        }
+    }
+
     private ProjectFile readableFile(long id, String name, String text) throws Exception {
         Path path = Files.writeString(tempDir.resolve(id + ".txt"), text);
         ProjectFile f = file(id, name, false);

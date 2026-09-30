@@ -852,6 +852,50 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("文件夹整理真实注入：路径基准、默认保留父目录、归类确认与显式扩范围，中英一致")
+    void folderOrganizationKeepsItsBoundaryInProductionContext() {
+        var files = mock(com.checkba.service.ProjectFileService.class);
+        var child = new com.checkba.model.entity.ProjectFile();
+        child.setId(201L);
+        child.setName("协议.txt");
+        child.setIsFolder(false);
+        when(files.getFilesByParent(88L, 200L)).thenReturn(List.of(child));
+        var limits = new AiContextProperties();
+        limits.getFiles().setMaxFilesPerContext(0); // 仅查目录，不在这条接线测试中访问磁盘
+        var loader = new FileContextLoader(files,
+                mock(com.checkba.service.ai.context.FileContentExtractorService.class), limits,
+                mock(com.checkba.storage.ProjectStorageResolver.class),
+                mock(com.checkba.service.file.ProjectFileTextExtractor.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(assembler, "fileContextLoader", loader);
+        var folder = new AiAgentController.ContextItem();
+        folder.setId("200"); folder.setName("待整理资料"); folder.setIsDir(true);
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            for (String request : english
+                    ? List.of("Organize this folder", "Group by project", "Move everything to the project root and delete this folder")
+                    : List.of("整理一下这个文件夹", "按项目关联整理", "将全部文件移到项目根目录并删除这个文件夹")) {
+                List<ChatMessage> messages = assembler.assemble("conv-1", "run-1", request, List.of(folder),
+                        null, null, null, "88", AgentMode.AGENT, 1L, null);
+                String system = ((SystemMessage) messages.get(0)).text();
+                assertTrue(system.contains("## Folder: 待整理资料 (ID: 200)"), system);
+                assertTrue(system.contains("relative to the attached folder (ID: 200), NOT the project root"));
+                assertTrue(system.contains("[FILE] 协议.txt (ID: 201)"));
+                String stable = system.substring(0, system.indexOf(ContextAssemblerService.SYSTEM_VOLATILE_SEPARATOR));
+                String guidance = stable.substring(stable.lastIndexOf(english ? "**When organising" : "**整理文件夹"));
+                assertTrue(guidance.contains(english ? "inside the specified folder and preserve that folder itself" : "在指定目录内部整理并保留该目录本身"), guidance);
+                assertTrue(guidance.contains(english ? "does not authorize moving outside it or deleting it" : "不等于授权移出或删除该目录"), guidance);
+                assertTrue(guidance.contains(english ? "Only an explicit user instruction to move outside, flatten into a named parent or delete the specified folder changes this boundary" : "只有用户明确要求移出、扁平化到指定父级或删除指定目录时，才按指示改变该边界"), guidance);
+                assertTrue(guidance.contains(english ? "source and destination must both be project-relative paths" : "source 和 destination 均须使用项目相对路径"), guidance);
+                assertTrue(messages.stream().filter(m -> m instanceof dev.langchain4j.data.message.UserMessage)
+                        .map(m -> ((dev.langchain4j.data.message.UserMessage) m).singleText()).anyMatch(s -> s.contains(request)),
+                        "用户显式移出/删除指示仍原样传给模型，不按关键字硬拦截");
+            }
+        }
+        capabilityService.record("conv-1", "office", "word");
+        assertFalse(assembleSystemText(officeDoc("正文")).contains("inside the specified folder and preserve that folder itself"));
+    }
+
+    @Test
     @DisplayName("office 会话不发文件整理指引：Word 面的 #419/#422 末位块不能被挤走")
     void officeSessionKeepsItsOwnLastPositionBlock() {
         capabilityService.record("conv-1", "office", "word");
