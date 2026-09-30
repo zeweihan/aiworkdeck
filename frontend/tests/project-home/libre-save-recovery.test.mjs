@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 // A6/C10：运行真实组件保存方法，控制导出/上传的在途顺序。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -11,8 +12,8 @@ const body = source.match(/<script>([\s\S]*?)<\/script>/)[1]
 function makeVm(extra = {}) {
   // stampApplication / documentStampApplication 是 B4 的打标链路，这里喂成「开关关着」，
   // 保存行为与打标前完全一致；打标本身另有 libre-save-generator-stamp.test.mjs。
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
-    'stampApplication', 'documentStampApplication', body)(
+  const options = new Function(...Object.keys(barriers), 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
+    'stampApplication', 'documentStampApplication', body)(...Object.values(barriers),
     null, null, null, id => '/upload/' + id,
     async (bytes) => bytes, async () => null)
   const vm = {
@@ -100,7 +101,7 @@ test('上传请求具备超时和中止终态，不会永远保持 saving', asyn
     constructor() { xhr = this }
     open() {} setRequestHeader() {} send() {}
   }
-  const opts = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getAuthHeaders', 'XMLHttpRequest', body)(null, null, null, () => ({}), Xhr)
+  const opts = new Function(...Object.keys(barriers), 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getAuthHeaders', 'XMLHttpRequest', body)(...Object.values(barriers), null, null, null, () => ({}), Xhr)
   const vm = { $t: k => k }
   const pending = opts.methods.uploadBytes.call(vm, '/upload/7', new Uint8Array([1]), 'a.docx')
   assert.equal(xhr.timeout, 60000)
@@ -115,7 +116,7 @@ function makeCloseVm(confirm) {
     .replace(/^\s*import[\s\S]*?from\s*'[^']*'\s*$/gm, '')
     .replace('export const fileOpenTabsMethods = {', 'return {')
   const modals = [], toasts = []
-  const methods = new Function('uni', 'activityTracker', s)({
+  const methods = new Function(...Object.keys(barriers), 'uni', 'activityTracker', s)(...Object.values(barriers), {
     showModal: opts => { modals.push(opts); opts.success({ confirm }) },
     showToast: opts => toasts.push(opts),
   }, { stopActivity() {} })

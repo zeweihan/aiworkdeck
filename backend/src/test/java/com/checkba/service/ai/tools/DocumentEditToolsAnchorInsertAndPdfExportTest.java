@@ -107,6 +107,18 @@ class DocumentEditToolsAnchorInsertAndPdfExportTest {
     }
 
     @Test
+    void paragraphBreaksAreExplicitPayloadAndSurviveAnchoredInsertion() {
+        for (String position : List.of("before", "after")) {
+            EditorBridgeService bridge = Mockito.mock(EditorBridgeService.class);
+            when(bridge.executeEditorCommand(anyString(), any())).thenReturn(OK);
+            String text = "before".equals(position) ? "新增标题\n新增内容\n" : "\n新增标题\n新增内容";
+            assertEquals(OK, toolsWithBridge(bridge).doc_insert_at_cursor(text, "anchor", position));
+            var params = paramsInOrder(bridge, List.of("set_selection", "collapse_selection", "insert_at_cursor"));
+            assertEquals(Map.of("text", text), params.get(2), "段落分隔符不能被 trim 或变成字面量反斜杠 n");
+        }
+    }
+
+    @Test
     @DisplayName("不给 anchorId：行为与改动前一字不差，只发一条 insert_at_cursor")
     void withoutAnchorOnlyInsertsAtTheCursor() {
         EditorBridgeService bridge = Mockito.mock(EditorBridgeService.class);

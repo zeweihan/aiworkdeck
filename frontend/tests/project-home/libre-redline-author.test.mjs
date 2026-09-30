@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 //
 // 「用查找替换产生的修订作者是『未知作者』」的接线用例。
 //
@@ -28,9 +29,9 @@ const BODY = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
 // 两个同源不同物的取数都要桩掉。
 function makeVm({ cached = null, remote = null, fail = false, endpointUp = true } = {}) {
   const sent = []
-  const options = new Function(
+  const options = new Function(...Object.keys(barriers),
     'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
-    'getCurrentUser', 'fetchAuthUser', 'createAuthorNameResolver', 'getFileBytesUrl', BODY)(
+    'getCurrentUser', 'fetchAuthUser', 'createAuthorNameResolver', 'getFileBytesUrl', BODY)(...Object.values(barriers),
     null, null, null,
     () => cached,
     async () => { if (fail) throw new Error('401'); return remote ? { code: 0, data: remote } : null },

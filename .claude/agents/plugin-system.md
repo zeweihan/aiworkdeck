@@ -326,6 +326,7 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.
   `PluginHostImpl` 按 `call().conversationId()` 临时绑定再还原，别绕开它直接调 bridge。
   `Llm.complete` 的温度 / maxTokens 由通道侧模型配置决定（`ChatModelFactory` 给的是预建实例），
   `LlmOptions` 里这两个字段目前是声明性的。
+- `PluginJobService.finish` 先更新内存终态再持久化；测试断言终态落库必须等待 repository 保存回执，不能仅等 `status=done`（dev-board#1100）。
 - 测试：`PluginJobServiceTest`、`PluginHostImplTest`、`ProjectFileServiceEnsureFolderPathTest`。
   示例：`examples/hello-plugin` 的 `helloListFiles`。
 

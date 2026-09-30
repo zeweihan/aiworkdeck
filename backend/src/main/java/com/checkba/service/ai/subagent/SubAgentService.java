@@ -38,11 +38,13 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 子 Agent 服务（Phase 3C 多智能体协作第一阶段）。
@@ -88,6 +90,9 @@ public class SubAgentService {
     private final TokenUsageService tokenUsageService;
     private final ExecutorService executor;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.ai.EditorBridgeService editorBridgeService;
+
     /**
      * 正在跑的子任务登记簿：subtaskId → 句柄。只服务于「任务级取消」，
      * {@link #dispatch} 返回前一定移除（finally），不做过期清理。
@@ -98,7 +103,13 @@ public class SubAgentService {
      * 一个在跑的子任务。conversationId 一并记下来是为了鉴权：
      * 取消端点只允许停「自己会话里的」子任务，光凭一个 subtaskId 不足以授权。
      */
-    private record RunningSubtask(String conversationId, Future<SubAgentResult> future) {}
+    private record RunningSubtask(String conversationId, String runId, Future<SubAgentResult> future,
+                                  Progress progress) {
+        void cancel() {
+            progress.cancelled.set(true);
+            future.cancel(true);
+        }
+    }
 
     /**
      * runLoop 在子线程里边跑边写、dispatch() 在超时/中断/取消/异常分支读的跨线程进度快照
@@ -119,6 +130,12 @@ public class SubAgentService {
     static final class Progress {
         private final List<String> toolsUsed = new java.util.concurrent.CopyOnWriteArrayList<>();
         private final AtomicInteger completedRounds = new AtomicInteger(0);
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+
+        boolean isCancelled(ToolContext parentCtx) {
+            return cancelled.get() || Thread.currentThread().isInterrupted()
+                    || (parentCtx != null && parentCtx.isCancelled());
+        }
 
         List<String> toolsUsedList() {
             return toolsUsed;
@@ -220,33 +237,48 @@ public class SubAgentService {
         Progress progress = new Progress();
         Callable<SubAgentResult> task = () -> PlatformAiUserScope.call(scopedUser, () -> {
             IN_SUB_AGENT.set(Boolean.TRUE);
+            String previousConversation = editorBridgeService == null ? null
+                    : editorBridgeService.getCurrentConversationId();
             try {
+                if (editorBridgeService != null) {
+                    editorBridgeService.setCurrentConversationId(parentCtx == null ? null : parentCtx.conversationId());
+                }
                 return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx, modelId, progress);
             } finally {
+                if (editorBridgeService != null) {
+                    if (previousConversation == null) editorBridgeService.clearCurrentConversationId();
+                    else editorBridgeService.setCurrentConversationId(previousConversation);
+                }
                 IN_SUB_AGENT.remove();
             }
         });
-        Future<SubAgentResult> future = executor.submit(task);
-        // 登记后才可能被取消端点看见；先 submit 再 put 的窗口只会让「刚提交那一瞬的取消」失败，
-        // 用户重点一次即可，比先 put 再 submit（句柄里是 null future）安全
-        running.put(subtaskId, new RunningSubtask(
-                parentCtx != null ? parentCtx.conversationId() : null, future));
+        // 先登记完整句柄再起线程，父轮取消与提交竞态由持久 checker 补齐。
+        FutureTask<SubAgentResult> future = new FutureTask<>(task);
+        RunningSubtask handle = new RunningSubtask(
+                parentCtx != null ? parentCtx.conversationId() : null,
+                parentCtx != null ? parentCtx.runId() : null, future, progress);
+        running.put(subtaskId, handle);
 
         SubAgentResult result;
         boolean cancelledByUser = false;
         try {
+            if (progress.isCancelled(parentCtx)) handle.cancel();
+            else executor.execute(future);
+            if (progress.isCancelled(parentCtx)) handle.cancel();
             result = future.get(props.getTimeoutSeconds(), TimeUnit.SECONDS);
+            if (progress.isCancelled(parentCtx)) throw new CancellationException();
         } catch (TimeoutException e) {
-            future.cancel(true);
+            handle.cancel();
             result = SubAgentResult.failure(subtaskId,
                     "sub-agent timed out after " + props.getTimeoutSeconds() + "s",
                     progress.toolsUsedSnapshot(), progress.roundsCompleted());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            future.cancel(true);
+            handle.cancel();
             result = SubAgentResult.failure(subtaskId, "sub-agent interrupted",
                     progress.toolsUsedSnapshot(), progress.roundsCompleted());
         } catch (CancellationException e) {
+            handle.cancel();
             // 用户点了「停止子任务」（见 cancel）。回喂给模型的文案必须点明「是用户停的、不要自动重派」：
             // 只说 failed 的话模型下一轮会立刻再 dispatch 一次，用户看到的是「点了停止反而又跑起来」。
             cancelledByUser = true;
@@ -277,8 +309,8 @@ public class SubAgentService {
      * 任务级取消：停掉一个正在跑的子任务（「长任务可控」的一半——另一半是后台任务取消）。
      *
      * <p><b>只承诺「正在停止」，不承诺「立即停止」</b>：{@code cancel(true)} 打不断已经发出去的
-     * HTTP 读（OkHttp 的阻塞 read 不响应 interrupt），而 {@link #runLoop} 的中断检查在每轮开头，
-     * 所以最坏情况是白烧一次在途 LLM 调用后才停下。文案上不要写「已停止」。
+     * HTTP 读可能不响应 interrupt；持久取消位会在回包后、每次工具执行前拦截后续动作。
+     * 已经开始的工具仍需依靠自己的取消机制。
      *
      * @param subtaskId      dispatch 时生成、随 subtask_progress 事件下发给前端的子任务 ID
      * @param conversationId 调用方声明的会话；必须与该子任务登记的会话一致
@@ -294,9 +326,17 @@ public class SubAgentService {
         if (handle == null || !conversationId.equals(handle.conversationId())) {
             return false;
         }
-        handle.future().cancel(true);
+        handle.cancel();
         log.info("子任务 {} 收到停止请求（会话 {}）", subtaskId, conversationId);
         return true;
+    }
+
+    /** 只取消发起该轮的子任务；同会话的新轮次和其它会话不受影响。 */
+    public void cancelParentRun(String conversationId, String runId) {
+        if (conversationId == null || runId == null) return;
+        running.values().stream()
+                .filter(handle -> conversationId.equals(handle.conversationId()) && runId.equals(handle.runId()))
+                .forEach(RunningSubtask::cancel);
     }
 
     /**
@@ -316,10 +356,12 @@ public class SubAgentService {
                 .filter(s -> allowed.contains(s.name()))
                 .toList();
 
-        // 子 Agent 的工具调用继承主会话身份（不变式 3），模型可独立
+        // 继承会话身份和取消 checker；父 runId 只留在取消句柄，不能把父技能状态当作子消息栈已有上下文。
         ToolContext subCtx = parentCtx == null
-                ? new ToolContext(null, null, null, modelId)
-                : new ToolContext(parentCtx.projectId(), parentCtx.conversationId(), parentCtx.userId(), modelId);
+                ? new ToolContext(null, null, null, modelId, specs, allowed, null, null,
+                        () -> progress.isCancelled(null))
+                : new ToolContext(parentCtx.projectId(), parentCtx.conversationId(), parentCtx.userId(), modelId,
+                        specs, allowed, null, null, () -> progress.isCancelled(parentCtx));
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(buildSystemPrompt(expectedOutput, allowed)));
@@ -336,7 +378,7 @@ public class SubAgentService {
             // 记「已完整跑完 round-1 轮」：本轮才刚开始，还不算数——与下面各分支自己返回的
             // round - 1 保持同一个口径。
             progress.roundStarted(round);
-            if (Thread.currentThread().isInterrupted()) {
+            if (progress.isCancelled(parentCtx)) {
                 return SubAgentResult.failure(subtaskId, "sub-agent interrupted", toolsUsed, round - 1);
             }
             if (estimateChars(messages) > charBudget) {
@@ -356,6 +398,7 @@ public class SubAgentService {
                         "sub-agent LLM call failed: " + e.getMessage(), toolsUsed, round - 1);
             }
             recordUsage(response, modelId, parentCtx);
+            if (progress.isCancelled(parentCtx)) throw new CancellationException();
             AiMessage aiMessage = response.content();
             messages.add(aiMessage);
 
@@ -385,6 +428,7 @@ public class SubAgentService {
             }
 
             // 无工具调用 = 最终答案
+            if (progress.isCancelled(parentCtx)) throw new CancellationException();
             return SubAgentResult.success(subtaskId, text.trim(), toolsUsed, round);
         }
     }
@@ -418,6 +462,7 @@ public class SubAgentService {
     /** 受限分发：先别名解析，再做防递归与工具域校验，最后经 ToolRegistry 执行 */
     private String executeScoped(String rawName, String argsJson, Set<String> allowed,
                                  ToolContext subCtx, List<String> toolsUsed) {
+        if (subCtx.isCancelled()) throw new CancellationException();
         String resolved = ToolRegistry.TOOL_NAME_ALIASES.getOrDefault(rawName, rawName);
         if (DISPATCH_TOOL_NAME.equals(resolved)) {
             return "Error: dispatch_subtask is not available inside a sub-agent (nested delegation refused).";

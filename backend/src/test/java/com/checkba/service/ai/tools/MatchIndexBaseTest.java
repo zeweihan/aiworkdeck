@@ -130,6 +130,24 @@ class MatchIndexBaseTest {
     }
 
     @Test
+    void anchorExcerptMetadataReachesTheModelWithoutDroppingTruncation() throws Exception {
+        EditorBridgeService bridge = Mockito.mock(EditorBridgeService.class);
+        Mockito.when(bridge.executeEditorCommand(eq("find_text_locations"), any())).thenReturn(
+                "{\"success\":true,\"matches\":[{\"matchIndex\":0,\"text\":\"尾部\","
+                        + "\"paragraph\":\"片段\",\"paragraphLength\":315,\"paragraphTruncated\":true}]}");
+        String receipt = "{\"success\":true,\"paragraphAfterEdit\":\"片段\","
+                + "\"paragraphAfterEditLength\":314,\"paragraphAfterEditTruncated\":true}";
+        Mockito.when(bridge.executeEditorCommand(eq("replace_at_position"), any())).thenReturn(receipt);
+        DocumentEditTools tools = toolsWithBridge(bridge);
+        var match = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(tools.doc_find_text("尾部", false)).get("matches").get(0);
+        assertEquals(1, match.get("matchIndex").intValue());
+        assertEquals(315, match.get("paragraphLength").intValue());
+        assertTrue(match.get("paragraphTruncated").booleanValue());
+        assertEquals(receipt, tools.doc_replace_at_anchor("anchor", "新尾部"));
+    }
+
+    @Test
     @DisplayName("doc_find_text：错误 / 非 JSON 结果原样透传，不因归一而吞掉")
     void findTextPassesThroughErrorsUntouched() {
         EditorBridgeService bridge = Mockito.mock(EditorBridgeService.class);

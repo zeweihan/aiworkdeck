@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 // 尽调模块 P3 稳定性余项 #2（dev-board#100）：LOWA 编辑器保活池固定 LRU=3，与文档体积
 // 无关。三个 150 页/6.6MB 大文档同时驻留会把页面内存吃到约 2.4GB（实测基线，见
 // docs/superpowers/specs/2026-08-21-due-diligence-module-proposal.md §3）。
@@ -22,8 +23,8 @@ function loadMethods() {
   const body = SRC
     .replace(/^\s*import[\s\S]*?from\s*'[^']*'\s*$/gm, '')
     .replace(/export const librePoolMethods = \{/, 'return {')
-  const factory = new Function('isDesktopHost', 'host', body)
-  return factory(() => true, { systemMemory: { totalBytes: 16 * 1024 ** 3 } })
+  const factory = new Function(...Object.keys(barriers), 'isDesktopHost', 'host', body)
+  return factory(...Object.values(barriers), () => true, { systemMemory: { totalBytes: 16 * 1024 ** 3 } })
 }
 
 const MB = 1024 * 1024

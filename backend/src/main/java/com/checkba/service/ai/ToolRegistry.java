@@ -727,13 +727,13 @@ public class ToolRegistry {
             } else if ("modelId".equals(paramName)) {
                 // modelId：优先 LLM 显式指定，缺省回落到会话所选模型
                 Object raw = rawArg(args, paramName);
-                value = convert(raw, p.getType());
+                value = convert(isBlank(raw) ? null : raw, p.getType());
                 if (value == null && ctx != null) {
                     value = ctx.modelId();
                 }
             } else {
                 Object raw = rawArg(args, paramName);
-                if (raw == null) {
+                if (isBlank(raw) && LEGACY_DEFAULTS.containsKey(toolName + "." + paramName)) {
                     raw = LEGACY_DEFAULTS.get(toolName + "." + paramName);
                 }
                 value = convert(raw, p.getType());
@@ -747,17 +747,16 @@ public class ToolRegistry {
         return values;
     }
 
-    /** 按参数名取值，值为空串时尝试历史别名 */
+    /** 显式空串是有效值；只有缺失/null 才尝试历史别名。 */
     private Object rawArg(cn.hutool.json.JSONObject args, String paramName) {
         Object raw = args.get(paramName);
-        if (isBlank(raw)) {
+        if (raw == null) {
             for (String alias : ARG_ALIASES.getOrDefault(paramName, List.of())) {
                 Object aliased = args.get(alias);
-                if (!isBlank(aliased)) {
+                if (aliased != null) {
                     return aliased;
                 }
             }
-            return isBlank(raw) ? null : raw;
         }
         return raw;
     }

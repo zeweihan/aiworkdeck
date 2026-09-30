@@ -18,8 +18,22 @@ public record ToolContext(
         java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools,
         java.util.Set<String> offeredTools,
         String runId,
-        java.util.Set<String> disclosedCategories
+        java.util.Set<String> disclosedCategories,
+        java.util.function.BooleanSupplier cancellationCheck
 ) {
+
+    /** Cancellation belongs to the originating run, not whichever run is now active in its conversation. */
+    public boolean isCancelled() {
+        return cancellationCheck != null && cancellationCheck.getAsBoolean();
+    }
+
+    public ToolContext(Long projectId, String conversationId, Long userId, String modelId,
+                       java.util.List<dev.langchain4j.agent.tool.ToolSpecification> sessionTools,
+                       java.util.Set<String> offeredTools, String runId,
+                       java.util.Set<String> disclosedCategories) {
+        this(projectId, conversationId, userId, modelId, sessionTools, offeredTools, runId,
+                disclosedCategories, null);
+    }
 
     /**
      * 本轮这个会话<b>本来</b>能用的全部工具（dev-board#810）：上游三层闸
@@ -30,7 +44,7 @@ public record ToolContext(
      * 不走 ThreadLocal 是因为工具分发已经有一个 {@link ToolContextHolder} 了，
      * 再加一个同生命周期的 ThreadLocal 只会多一处忘了清理的地方。
      *
-     * <p>四参构造留给其余十几处调用方（子 Agent、插件控制器、各测试）：
+     * <p>四参构造留给未提供工具目录的旧调用方（插件控制器、各测试）：
      * 它们都不调 {@code list_tools}，给个空列表即可。
      */
     public ToolContext(Long projectId, String conversationId, Long userId, String modelId) {
@@ -67,7 +81,7 @@ public record ToolContext(
     /**
      * 本轮的轮次标识（dev-board#1065）。{@code use_skill} 与 {@code list_tools} 据它判断
      * 「这个 skill 本轮是不是已经生效了」——skill 的生效登记按 runId 索引（dev-board#533），
-     * conversationId 分不开同一会话的两个并发轮次。null = 调用方不在一轮对话里（子 Agent、插件控制器、各测试）。
+     * conversationId 分不开同一会话的两个并发轮次。null = 不参与主轮技能状态（子 Agent、插件控制器、各测试）。
      */
     public String runId() {
         return runId;

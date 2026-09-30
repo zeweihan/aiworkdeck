@@ -7,6 +7,10 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 
 职责边界：AI 侧发出编辑指令 → 编辑器执行 的整条链路。不含编辑器内核本身（那是 doc-editor 领域），不含对话编排（ai-chat 领域）。
 
+## 插入与最终回读（dev-board#1089，2026-09-30）
+
+`doc_insert_at_cursor` 的 before/after 只定位锚点文字边界，不自动换段；独立标题/段落依赖 text 中实际换行符。多段或结构修订必须在最后一次写入后分页回读改动和相邻段落，核对分段、编号、重复及残句；完整单点回执仍可直接验证单点改动。契约在 LOWA 片段与工具描述，不能恢复成「每会话只读一次」。回归：`RedlineGranularityContractTest`、`DocumentEditToolsAnchorInsertAndPdfExportTest`；真实模型质量仍须实模验收。
+
 ## 段落号基数：doc_* 全族 0 基（已踩）
 
 编辑器侧一律 0 基——`office_thread.js` 的 `get_paragraph` / `modify_paragraph` /
@@ -41,6 +45,22 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 `goto()` 只实现 `start/end`，其余一律返回 "goto type not supported yet"——
 **描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算**。已收窄成只宣告 start/end，
 并指向 `doc_select_paragraph` / `doc_select_anchor`。
+
+## 检查点恢复确认（dev-board#1084）
+
+- `DocumentCheckpointService.restore` 通过宿主专用 `doc_checkpoint_restore`（复用 editor_command 的 requestId/ACK，180秒）按 `prepare → 写回快照 → reload` 串行执行；只有实际重载完成才报告恢复成功。普通 `doc_reload_file` 仍保留对用户活动编辑器的保护，不能把它当作检查点已重载的依据。
+- prepare 按文件暂停全部已打开实例的自动保存并等待在途上传；失败或上传结果未知时不写回快照。处理中阻挡旧模型命令。恢复标识及实例身份在异步步骤后复核，迟到旧结果不得解除新锁；abort/加载失败阻止旧画面再次覆盖后端，需重新加载后再编辑。
+- 后端 checkpoint/bridge 测试验证顺序与失败回执；`project-home/checkpoint-restore.test.mjs`、`version-history/reloadChrome.test.mjs` 覆盖保存、迟到回调及实例变化。还须实际桌面验证改动后恢复、随后读取及保存重开，不能只测发送了reload事件。
+
+## 空替换参数（dev-board#1086）
+
+- 空字符串表示删除，不能与缺少参数混同。`XmlToolCallParser` 命名参数按是否存在提取，`ToolRegistry.rawArg` 保留显式空串且优先于别名；modelId上下文回落和旧默认值语义另行保留。`EmptyStringToolArgumentsTest` 走真实parser→registry→DocumentEditTools，空替换抵达编辑桥，真正缺参不调用编辑器。
+
+## 锚点替换范围（dev-board#1085）
+
+- `doc_find_text` 的 anchorId 只覆盖 `matches[].text`；`contextBefore` / `contextAfter` / `paragraph` 用于定位，不属于替换范围。`doc_replace_at_anchor.newText` 只替换匹配区间，整段重写应取得完整原段锚点或使用 `doc_modify_paragraph`。工具描述、LOWA 中英片段和 contract-review 同步此契约；“逐字照抄未改文字”也只指被替换范围内。
+- 真实模型曾以局部匹配替换整段新文本，造成周边重复；不能用 newText 长度阈值拦截，短词扩写成长句本身合法。`RedlineGranularityContractTest` / `BuiltinSkillsTest` 守提示接线，实际模型遵从须另验。
+- 长段回执（dev-board#1087）：worker 查找仍返回至多160字 `paragraph`，新增 `paragraphLength` / `paragraphTruncated`；锚点替换仍返回至多200字 `paragraphAfterEdit`，新增 `paragraphAfterEditLength` / `paragraphAfterEditTruncated`。长度按现有 JS 字符串计数。截断时用 `doc_get_paragraph` 回读完整目标段落（未知段号先用 `doc_get_document_text` 定位），不能凭片段宣称整段核验。`paragraphTruncation.test.mjs` 覆盖边界；`first-agent-edit.mjs` 实引擎覆盖200字之后的局部改动、回读、撤销/重做及导出重开。
 
 ## 结构审计工具 `doc_audit_structure`（dev-board#375）
 
@@ -95,7 +115,7 @@ Operational Rules 第 2 条那句「revision mode disabled、改动立即生效�
 - `frontend/src/composables/useEditorBridge.js` — 编辑器无关的分发接缝（薄封装），执行器可插拔。
 - `frontend/src/composables/libreofficeExecutorClient.js` — **EDITOR_ACTIONS 白名单定义处**（:15-174，2026-09-22 复核行号：数组早已超出旧标注的 :67，实测以 `grep -n '^]'` 收在 :174）+ reqId 关联的 worker port 客户端；白名单外 action 直接拒绝。
 - `frontend/src/composables/useAgentStream.js` — SSE 消费：`client_action`（~:1368）；`doc_stream_data`（~:1393，单名）。
-- `frontend/src/pages/project-overview/agentClientActions.js` — 命令路由中枢：`handleClientAction`（按 `action.action` / `action.tool` 分派，单名）→ `handleEditorCommand`（打 `__agent:true` 标记后调 executor）。
+- `frontend/src/pages/project-overview/agentClientActions.js` — 命令路由中枢：`handleClientAction`（按 `action.action` / `action.tool` 分派，单名）→ `handleEditorCommand`（打 `__agent:true` 标记后调 executor）。读取类 `get_document_text` / `get_paragraph` 的成功对象回执附 `sourceFileId`（dev-board#1097：派发那一刻经 `resolveLibreExecutorFileId` 从实际 executor 反查，等待期间用户切 tab 不跟随；查不到明确 null，不猜；worker 原结果浅拷贝不就地污染，失败/无关命令不带身份；boot 等待在捕获之前，流程不退化）。回归 `tests/project-home/agent-read-source-file-id.test.mjs`。
 - `frontend/src/zetaoffice/public/office_thread.js` — worker 端所有 action 的真实 UNO 实现 + UI_COMMANDS 白名单（:321-332）+ 修订机制。
 - `frontend/src/utils/toolDisplayNames.js` — 工具名→中文显示名映射表（NAMES 表 :8-97）。**新增工具必须同步加中文名**。
 

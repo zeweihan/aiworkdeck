@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# 法律意见书实质审查/修订；确定性本地路由，不调用模型做预选（dev-board#1092）。
+id: legal-opinion-review
+name: 法律意见书审查
+name_en: Legal Opinion Review
+description: 根据相关材料核对法律意见书中的事实、事实时点和结论，保留证据缺口并以修订和批注落实；尊重用户指定的段落范围，不自动扩成合同条款审查。
+languages: [zh-CN, en-US]
+triggers: [法律意见书, 法律意見書]
+triggers_en: [legal opinion]
+prompt: prompt.md
+tool_policy: restrict
+allowed_tools:
+  - doc_get_document_text
+  - doc_get_paragraph
+  - doc_get_outline
+  - doc_get_comments
+  - doc_list_revisions
+  - doc_audit_structure
+  - doc_table_read
+  - doc_find_text
+  - doc_replace_at_anchor
+  - doc_find_replace
+  - doc_modify_paragraph
+  - doc_insert_at_cursor
+  - doc_insert_under_heading
+  - doc_add_comment
+  - doc_reply_comment
+  - doc_select_anchor
+  - doc_select_paragraph
+  - doc_format_selection
+  - doc_undo
+  - doc_restore_checkpoint
+  - office_get_text
+  - office_search
+  - office_replace_text
+  - office_replace_batch
+  - office_pass_step
+  - office_insert_text
+  - office_add_comment
+  - office_reply_comment
+  - office_get_comments
+  - office_get_revisions
+  - office_format_text
+  - office_table_read
+  - ref_list
+  - ref_read
+  - extract_file_text
+  - search_project_files
+  - search_project_content
+  - doc_list_project_files
+  - law_search
+  - law_search_keyword
+  - get_law_article
+  - search_web
+  - browse_url

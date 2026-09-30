@@ -169,6 +169,9 @@ public class SkillRouter {
             if (!skillRegistry.isAvailable(skill) || skillRegistry.isManual(skill.getId())) {
                 continue;
             }
+            if ("legal-opinion-review".equals(skill.getId()) && !requestsOpinionReview(normalized)) {
+                continue;
+            }
             for (String trigger : matchTriggers(skill, english)) {
                 if (trigger == null || trigger.isBlank()) {
                     continue;
@@ -180,6 +183,47 @@ public class SkillRouter {
             }
         }
         return Optional.ofNullable(best);
+    }
+
+    /**
+     * 意见书主体由 triggers 匹配；这里只区分实质审查与纯机械编辑，不做付费意图预选。
+     * 编排器的收尾补检（dev-board#1097）复用同一判据门控，不另造第二套启发式。
+     */
+    public static boolean requestsOpinionReview(String input) {
+        if (input == null) {
+            return false;
+        }
+        input = input.trim().toLowerCase();
+        if (input.isEmpty()) {
+            return false;
+        }
+        List<String> actions = List.of("审查", "审阅", "审核", "修订", "修改", "评估",
+                "審查", "審閱", "審核", "修訂", "評估", "review", "revise", "redline", "assess");
+        List<String> mechanical = List.of("错别字", "错字", "錯別字", "錯字", "字体", "字體",
+                "字号", "字號", "标点", "標點", "排版", "格式", "替换", "替換",
+                "typo", "typos", "format", "formatting", "font", "punctuation", "replace");
+        String quotedText = "(?:“[^”]*”|「[^」]*」|『[^』]*』|\"[^\"]*\"|'[^']*')";
+        // 并列请求分开判断：全面修订 + 检查错字仍是实质任务；仅修订错字则不是。
+        boolean substantive = false;
+        boolean reviewOnly = false;
+        boolean localLimit = false;
+        for (String clause : input.split("[，,。；;！!？?]|也|同时|同時|并且|並且|\\b(?:also|and)\\b")) {
+            if (clause.stripLeading().matches("^(?:请|請)?(?:不要|不用|无需|無需|不必|别|別|do not\\b|don't\\b|no need to\\b).*")) {
+                continue;
+            }
+            boolean review = actions.stream().anyMatch(t -> containsTrigger(clause, t));
+            // 只识别带范围限定、明确引号原文和新文的替换，不把一般“改为”当机械编辑。
+            boolean limitedReplacement = clause.matches(".*(?:只|仅限?|僅限?)\\s*(?:把|将|將)\\s*"
+                    + quotedText + "\\s*(?:改成|改为|改為)\\s*" + quotedText + ".*");
+            boolean local = limitedReplacement || mechanical.stream().anyMatch(t -> containsTrigger(clause, t));
+            substantive |= review && !local;
+            reviewOnly |= !local && List.of("审查", "审阅", "审核", "评估", "審查", "審閱", "審核",
+                    "評估", "review", "assess").stream().anyMatch(t -> containsTrigger(clause, t));
+            localLimit |= local && (clause.contains("只") || clause.contains("仅") || clause.contains("僅")
+                    || containsTrigger(clause, "only"));
+        }
+        // 后置“仅限错字”限定修订；“全面审查，正文仅修错字”仍保留审查任务。
+        return reviewOnly || (substantive && !localLimit);
     }
 
     /**

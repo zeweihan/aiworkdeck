@@ -3,7 +3,8 @@
 // project-overview.vue 的 AI 指令路由：SSE client_action 分发、
 // doc 流式写入缓冲、编辑器打开/重载/命令执行与结果回传。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
-import { sendEditorResult, getFileDetail } from '@/services/api.js'
+import { beginCheckpointSaveBarrier, endCheckpointSaveBarrier, checkpointSaveBarrier, findCheckpointSaveBarrier, reconcileCheckpointSaveBarrier } from '@/utils/checkpointSaveBarrier.js'
+import { sendEditorResult, getFileDetail, getCheckpointRestoreWriteState } from '@/services/api.js'
 import { createSerialQueue } from '@/utils/asyncSerialize.js'
 import { DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction } from '@/utils/docEvents.js'
 import { actionBudgetMs } from '@/composables/zetaOfficeRelay.js'
@@ -459,7 +460,7 @@ export const agentClientActionMethods = {
      * - **版本退回**（true）：律师刚亲手点了「退回到这一版」，他要的就是回到过去。
      *   正在显示的那个实例必须就地换文档，在途的未保存输入被丢弃是语义本身；
      *   不换的话下一次 autosave 会把「旧内容 + 新编辑」写回，把退回冲掉（真机复现过）。
-     * - **AI 改文件 / 检查点恢复**（默认 false）：律师此刻可能正在这份文档里打字，
+     * - **普通 AI 后端改文件**（默认 false）：律师此刻可能正在这份文档里打字，
      *   静默强刷等于替他丢弃未保存内容还弹一句「文件已更新」。只逐非活动的保活
      *   实例（下次激活自然重挂载拉新字节），当前画面不动。
      *
@@ -533,7 +534,7 @@ export const agentClientActionMethods = {
                 // pane 列表对它毫无作用，画布上还是改前的内容。律师接着编辑，
                 // autosave 就会把「旧内容 + 新编辑」写回去，把版本退回冲掉。所以
                 // 退回路径显式命令活动实例就地重载（换文档前它自己会取消在飞的
-                // 自动保存并清脏，见 reloadFromBackend）。AI/检查点路径不做这件事，
+                // 自动保存并清脏，见 reloadFromBackend）。普通 AI 后端改文件路径不做这件事，
                 // 理由见方法头 opts.forceActive 的注释。
                 if (forceActive) {
                     reloadOk = await this.reloadActiveLibreInstances(file.id)
@@ -625,7 +626,102 @@ export const agentClientActionMethods = {
             { error: msg, code: 'EDITOR_LOAD_FAILED', retryable: false }, msg)
         return true
     },
+    // Dedicated, acknowledged checkpoint protocol. Ordinary backend reload events
+    // keep their existing protection for the user's active unsaved document.
+    async handleCheckpointRestore(action) {
+        const { requestId, conversationId, params = {} } = action
+        const { fileId, restoreId, phase } = params
+        const pending = this._checkpointRestores || (this._checkpointRestores = new Map())
+        let entry = phase === 'prepare' ? pending.get(String(fileId))
+            : findCheckpointSaveBarrier(fileId, restoreId, conversationId)?.entry
+        const ownsEntry = () => entry && checkpointSaveBarrier(entry.projectId, fileId) === entry.barrier
+        let prepareAckAttempted = false
+        let entryOwnedByAction = phase !== 'prepare'
+        try {
+            if (!fileId || !restoreId) throw new Error('检查点恢复缺少文件或操作标识')
+            if (phase === 'prepare') {
+                if (entry) {
+                    // 旧 prepare 的终态 SSE（reload/abort）丢失后，旧 entry 会一直占住
+                    // pending，新恢复被恒拒。只对这条旧操作本身对账：查询用的是旧
+                    // barrier 自己的 conversationId/restoreId，mayWrite=false（后端写
+                    // 路径已结束）才失效旧实例并释放；同 restoreId 重复 prepare、
+                    // 对账失败或仍可能写入的一律保持阻止，不改旧 entry 的所有权。
+                    if (entry.restoreId === restoreId || !ownsEntry() || !entry.barrier.conversationId ||
+                        !await reconcileCheckpointSaveBarrier(entry.projectId, fileId, getCheckpointRestoreWriteState) ||
+                        pending.get(String(fileId))) {
+                        throw new Error('该文档已有检查点恢复进行中')
+                    }
+                    entry = null
+                }
+                if (checkpointSaveBarrier(this.projectId, fileId) &&
+                    !await reconcileCheckpointSaveBarrier(this.projectId, fileId, getCheckpointRestoreWriteState)) {
+                    throw new Error('检查点仍在恢复，请稍后重新加载文档')
+                }
+                const instances = [...new Set(Object.values(this._libreRefs || {}).filter(inst =>
+                    inst && inst.file && String(inst.file.id) === String(fileId)))]
+                const active = [this.activeFileIdLeft, this.activeFileIdRight].some(id => String(id) === String(fileId))
+                if (active && !instances.length) throw new Error('目标编辑器尚未就绪，未恢复快照')
+                const barrier = beginCheckpointSaveBarrier(this.projectId, fileId, restoreId)
+                if (!barrier) throw new Error('该文档已有检查点恢复进行中')
+                barrier.instances = instances
+                barrier.conversationId = conversationId
+                entry = { restoreId, instances, barrier, projectId: this.projectId, pending }
+                barrier.entry = entry
+                pending.set(String(fileId), entry)
+                entryOwnedByAction = true
+                for (const inst of instances) {
+                    if (typeof inst.prepareCheckpointRestore !== 'function' || !await inst.prepareCheckpointRestore(restoreId)) {
+                        throw new Error('无法暂停目标文档的保存，未恢复快照，请重新打开文档后重试')
+                    }
+                    if (!ownsEntry()) throw new Error('检查点恢复已被取消或取代')
+                }
+                if (!await entry.barrier.drained) throw new Error('此前保存结果不确定，未恢复快照，请核对文件后重试')
+                if (!ownsEntry() || entry.barrier.invalidated) throw new Error('恢复期间目标编辑器已变化，请重新打开文档核对')
+            } else {
+                if (!entry || entry.restoreId !== restoreId) throw new Error('检查点恢复状态已变化，请重新发起恢复')
+                if (phase === 'reload') {
+                    const current = Object.values(this._libreRefs || {}).filter(inst =>
+                        inst && inst.file && String(inst.file.id) === String(fileId))
+                    if (entry.barrier.invalidated || current.some(inst => !entry.instances.includes(inst))) {
+                        throw new Error('恢复期间目标编辑器已变化，请重新打开文档核对')
+                    }
+                    for (const inst of entry.instances) {
+                        if (!current.includes(inst) || !inst.ready || !inst.executor ||
+                            !await inst.reloadFromBackend(restoreId) || !ownsEntry() || entry.barrier.invalidated || !inst.executor ||
+                            !Object.values(this._libreRefs || {}).includes(inst)) {
+                            throw new Error('快照已写回，但编辑器重载失败，请停止编辑并重新打开文档')
+                        }
+                    }
+                } else if (phase === 'abort') {
+                    for (const inst of entry.instances) {
+                        if (inst.file && String(inst.file.id) === String(fileId)) inst.failCheckpointRestore(restoreId)
+                    }
+                } else throw new Error('未知检查点恢复阶段')
+                if (!ownsEntry()) throw new Error('检查点恢复已被取消或取代')
+                endCheckpointSaveBarrier(entry.projectId, fileId, restoreId)
+            }
+            prepareAckAttempted = phase === 'prepare'
+            await sendEditorResult(conversationId, requestId, true, { success: true, fileId, phase }, null)
+        } catch (error) {
+            if (entryOwnedByAction && entry && entry.restoreId === restoreId && ownsEntry()) {
+                const targets = new Set([...entry.instances, ...Object.values(this._libreRefs || {}).filter(inst =>
+                    inst && inst.file && String(inst.file.id) === String(fileId))])
+                for (const inst of targets) {
+                    if (inst.file && String(inst.file.id) === String(fileId) && typeof inst.failCheckpointRestore === 'function') inst.failCheckpointRestore(restoreId)
+                }
+                if (!prepareAckAttempted) endCheckpointSaveBarrier(entry.projectId, fileId, restoreId)
+            }
+            await sendEditorResult(conversationId, requestId, false, null, error.message || String(error))
+        }
+    },
     async handleEditorCommand(action) {
+        if (action.action === 'doc_checkpoint_restore') return this.handleCheckpointRestore(action)
+        const currentFileId = typeof this.resolveLibreExecutorFileId === 'function'
+            ? this.resolveLibreExecutorFileId(this.libreOfficeExecutor) : null
+        if (this._checkpointRestores?.has(String(currentFileId))) {
+            await sendEditorResult(action.conversationId, action.requestId, false, null, '检查点正在恢复，这一步未执行，请等待恢复完成')
+            return
+        }
         console.log('[ProjectOverview] ========== Editor Command Start ==========')
         console.log('[ProjectOverview] Editor Command:', JSON.stringify(action))
 
@@ -676,11 +772,24 @@ export const agentClientActionMethods = {
         }
 
         try {
+            // dev-board#1097：get_document_text / get_paragraph 的回执必须带真实来源
+            // fileId，子任务才能区分意见书与参考文件。派发那一刻从实际 executor 反查
+            // （resolveLibreExecutorFileId），等待期间用户切了活跃编辑器也不跟着变；
+            // 查不到就明确 null，不猜、不拿用户传入的 fileId 冒充。
+            const isAgentDocReadAction = commandAction === 'get_document_text' || commandAction === 'get_paragraph'
+            const readSourceFileId = isAgentDocReadAction && typeof this.resolveLibreExecutorFileId === 'function'
+                ? (this.resolveLibreExecutorFileId(this.libreOfficeExecutor) ?? null)
+                : null
             // __agent 标记：worker 据此把这条命令产生的修订署名为 AI WorkDeck
             //（用户本人的 IME 输入等不带标记，署用户名），修订面板里可区分来源。
             const result = await this.libreOfficeExecutor.executeCommand(
                 commandAction, Object.assign({}, params, { __agent: true }))
             const successFlag = result && result.success !== false
+            // 成功的读取对象结果浅拷贝后附 sourceFileId（成功但 worker 回的不是对象
+            // 就保持原样）；worker 原结果不就地污染，失败 / 其他命令不带身份。
+            const resultPayload = isAgentDocReadAction && successFlag && result && typeof result === 'object' && !Array.isArray(result)
+                ? Object.assign({}, result, { sourceFileId: readSourceFileId })
+                : result
             // 失败原因优先取 error，没有就退到 message：worker 里大量失败分支只填 message
             //（如 delete_match 的「match index out of range」），只取 error 的话模型收到的是
             // {"error": "null"}，等于没告诉它哪里错了，它只能瞎猜着重试。
@@ -688,7 +797,7 @@ export const agentClientActionMethods = {
             // 写入类命令写完了 → 通知编辑器刷新审阅面板（dev-board#460）。只读命令
             // 不发（白费一轮往返），失败的也不发（什么都没写成）。
             if (successFlag && isDocMutatingAction(commandAction)) this.notifyDocMutated()
-            await sendEditorResult(conversationId, requestId, successFlag, result, successFlag ? (result && result.error) || null : failReason)
+            await sendEditorResult(conversationId, requestId, successFlag, resultPayload, successFlag ? (result && result.error) || null : failReason)
         } catch (e) {
             console.error('[ProjectOverview] LibreOffice command error:', e)
             await sendEditorResult(conversationId, requestId, false, null, e.message)

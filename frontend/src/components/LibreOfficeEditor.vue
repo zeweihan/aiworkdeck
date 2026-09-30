@@ -182,13 +182,14 @@
 // by the project-overview keep-alive pool as the product inline document editor
 // （原 ⌘⇧O 实验覆盖层与探针工具栏已移除）.
 
+import { beginDocumentSave, checkpointSaveBarrier, documentCheckpointGeneration, reconcileCheckpointSaveBarrier } from '@/utils/checkpointSaveBarrier.js'
 import { webviewTransport, iframeTransport } from '@/composables/useZetaOfficeWebview.js'
 import { createRelayExecutor, PROBE_ACTION, PROBE_BUDGET_MS } from '@/composables/zetaOfficeRelay.js'
 import { classifyLoadFailure, shouldSelfHealLoadFailure, loadBudgetMs, openFailureOf, STATUS_OPEN_FAILED } from '@/utils/editorLoadFailure.js'
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import EditorToolbar from '@/components/EditorToolbar.vue'
 import EvidenceStaleBar from '@/components/EvidenceStaleBar.vue'
-import { getFileBytesUrl, getFileWriteUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
+import { getCheckpointRestoreWriteState, getFileBytesUrl, getFileWriteUrl, listEvidenceLinks, reportEvidenceAnchors, keepEvidenceAnchor, getCurrentUser as fetchAuthUser, getFileLocalPath } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { createAuthorNameResolver } from '@/utils/editorAuthor.js'
 import { host } from '@/services/host.js'
@@ -1424,6 +1425,7 @@ export default {
       const fileId = f && f.id // 数字主键（dev-board#1035）
       if (!fileId) return
       const t0 = Date.now()
+      this._checkpointGeneration = documentCheckpointGeneration(this.projectId, fileId)
       this._bytesPromise = this.fetchArrayBuffer(getFileBytesUrl(fileId), (loaded, total) => {
         this.dlLoaded = loaded
         this.dlTotal = total
@@ -1516,13 +1518,37 @@ export default {
       const f = this.file
       const fileId = f.id // 数字主键（dev-board#1035）
       if (!fileId) throw new Error('file has no id')
+      const seq = this._docLoadSeq || 0 // capture before reconciliation can await
+      const priorBarrier = checkpointSaveBarrier(this.projectId, fileId)
+      if (priorBarrier && this._checkpointRestoreId !== priorBarrier.restoreId) {
+        this._checkpointInvalidated = true
+        if (!await reconcileCheckpointSaveBarrier(this.projectId, fileId, getCheckpointRestoreWriteState, this)) {
+          this._checkpointInvalidated = true
+          throw new Error('检查点仍在恢复，请稍后重新加载文档')
+        }
+        if (seq !== (this._docLoadSeq || 0)) throw new Error('装载已被更晚的一次尝试取代 / load superseded')
+        this._bytesPromise = null // reconciliation requires fresh authoritative bytes
+      }
+      const generation = documentCheckpointGeneration(this.projectId, fileId)
+      const barrier = checkpointSaveBarrier(this.projectId, fileId)
+      if ((barrier && this._checkpointRestoreId !== barrier.restoreId) ||
+          (this._bytesPromise && this._checkpointGeneration != null && this._checkpointGeneration !== generation)) {
+        this._checkpointInvalidated = true
+        throw new Error('文档在检查点恢复期间已变化，请重新加载')
+      }
+      const assertCurrentGeneration = () => {
+        if (seq !== (this._docLoadSeq || 0)) throw new Error('装载已被更晚的一次尝试取代 / load superseded')
+        if (documentCheckpointGeneration(this.projectId, fileId) !== generation) {
+          this._checkpointInvalidated = true
+          throw new Error('文档在检查点恢复期间已变化，请重新加载')
+        }
+      }
       // 每次真正尝试装载都记一个新世代号——onLateLoadResult 靠它辨认一个迟到的
       // load_document 结果是否还对着「当前显示着的那次失败」，而不是被后来的
       // 重试/换文档盖过之后依然生效。
       this._loadGen = (this._loadGen || 0) + 1
       // 本次装载所属的 finishDocLoad 世代（见那里的重入闸）；下载回来后若已被
       // 更晚的一次尝试取代，就不能再把命令推给 worker。
-      const seq = this._docLoadSeq || 0
       const url = getFileBytesUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
       if (!buf) {
@@ -1536,6 +1562,7 @@ export default {
           buf = await this.fetchArrayBuffer(url)
         }
       }
+      assertCurrentGeneration()
       const bytes = new Uint8Array(buf || new ArrayBuffer(0))
       const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
       // Empty body = a brand-new / unsaved document — the backend streams HTTP
@@ -1558,6 +1585,9 @@ export default {
           try { await this.executor.executeCommand('load_document', { authorName: blankAuthor }) }
           catch (e) { this.appendLog('修订署名下发失败 / redline author push failed: ' + (e && e.message ? e.message : e)) }
         }
+        assertCurrentGeneration()
+        this._checkpointGeneration = generation
+        this._checkpointInvalidated = false
         return false
       }
       // office 是单线程消息循环，两条 load_document 会按到达顺序依次执行，后到的
@@ -1585,6 +1615,9 @@ export default {
       }
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw Object.assign(new Error((res && res.message) || 'load_document returned no success'), { code: res?.code })
+      assertCurrentGeneration()
+      this._checkpointGeneration = generation
+      this._checkpointInvalidated = false
       if (res.kind) this.docKind = res.kind
       // 换文档后工具栏必须重读一次激活态：worker 的 retarget 会把修订显示方式
       // 复位到默认（上一份文档设过「最终稿」就在这一步被打回来），工具栏若还
@@ -1604,7 +1637,51 @@ export default {
     // 换文档前必须先停掉自动保存：取消定时器 + 清脏 + 等在途保存结束。否则旧
     // 内容的 export 还排在队里，换完文档照样把旧字节传上去。重载语义就是丢弃
     // 编辑器内的本地改动（后端内容是权威），所以清脏不需要征询。
-    async reloadFromBackend() {
+    // Checkpoint restore pauses saves BEFORE the backend overwrites storage. Waiting
+    // only after that overwrite cannot stop an already-uploading old document.
+    async prepareCheckpointRestore(restoreId) {
+      if (!this.file || !this.executor || !this.ready || this.docLoadFailed || this._reloading || this._loadInFlight) return false
+      const fileId = this.file.id, executor = this.executor
+      this._checkpointRestoreId = restoreId
+      this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      this._reloading = true
+      clearTimeout(this._saveTimer)
+      this._saveTimer = null
+      this.dirty = false
+      this._dirtySince = 0
+      const deadline = Date.now() + 100000
+      while (this.saving && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
+      if (this._checkpointRestoreId !== restoreId || this.saving) return false
+      // A timed-out upload may still be writing server-side. Do not overwrite
+      // storage on the strength of saving=false after an uncertain result.
+      if (this.statusKey === 'saveFailed' || this.statusKey === 'movedSaveFailed') return false
+      if (!this.ready || this.executor !== executor || !this.file || String(this.file.id) !== String(fileId)) {
+        this._reloading = false
+        return false
+      }
+      this.dirty = false
+      this._dirtySince = 0
+      return true
+    },
+    failCheckpointRestore(restoreId) {
+      if (restoreId && this._checkpointRestoreId && this._checkpointRestoreId !== restoreId) return
+      this._checkpointRestoreId = null
+      this._docLoadSeq = (this._docLoadSeq || 0) + 1
+      // Storage may already hold the checkpoint. Never autosave this old model
+      // over it after a failed/abandoned reload; the normal retry can reload it.
+      this._checkpointInvalidated = true
+      this.docLoadFailed = true
+      this.statusKey = 'reloadFailed'
+      this._loadGenAtFailure = this._loadGen
+      this._reloading = false
+      clearTimeout(this._saveTimer)
+      this._saveTimer = null
+      this.dirty = false
+    },
+    async reloadFromBackend(checkpointRestoreId) {
+      const restoreOwner = checkpointRestoreId || null
+      const ownsReload = () => (this._checkpointRestoreId || null) === restoreOwner
+      if (!ownsReload()) return false
       if (!this.file || !this.executor || !this.ready) {
         // 引擎还在启动（含备胎刚过继、只读预览接力正显示着 docx-preview 的那段）：
         // worker 里根本还没有文档可换，但 _bytesPromise 里预取的正是退回前的旧字节，
@@ -1639,6 +1716,7 @@ export default {
       // 在途 export/upload 期间不能换文档（export 读的是 worker 当前文档）——
       // 等它结束，其间新来的 modify 同样丢弃。
       while (this.saving) await new Promise((r) => setTimeout(r, 100))
+      if (!ownsReload()) return false
       cancelAutoSave()
       // 预取到的是改前的字节，必须重新下载。
       this._bytesPromise = null
@@ -1648,10 +1726,12 @@ export default {
       this.statusKey = 'reloading'
       try {
         const loaded = await this.loadDocument()
+        if (!ownsReload()) return false
         if (!loaded) throw new Error('后端返回 0 字节，未替换编辑器内文档')
         // load_document 的 retarget 重装了 modify listener 并重置 RecordChanges，
         // 换完再清一次脏（retarget 里设 RecordChanges 会触发一次 modified）。
         this.docLoadFailed = false
+        this._checkpointInvalidated = false
         cancelAutoSave()
         // 它还把 LO 原生那套 chrome（菜单栏 / 工具栏 / 状态栏 / 标尺）重新拉了出来，
         // 而自建工具栏的 bootstrap 只在 executor 变化时跑——正常打开那条路藏过一次，
@@ -1662,10 +1742,12 @@ export default {
         if (toolbar && typeof toolbar.reapplyChrome === 'function') {
           try { await toolbar.reapplyChrome() } catch (e) { this.appendLog('reapply chrome failed: ' + e) }
         }
+        if (!ownsReload()) return false
         this.statusKey = prevStatusKey.endsWith('Failed') ? 'ready' : prevStatusKey
         this.appendLog('reload: 已就地换成后端最新内容')
         return true
       } catch (e) {
+        if (!ownsReload()) return false
         // 换文档失败 = 画布上仍是改前内容。保存闸必须落下，否则下一次 autosave
         // 会用旧内容覆盖后端刚改好的文件。
         this.docLoadFailed = true
@@ -1674,12 +1756,17 @@ export default {
         this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
-        this._reloading = false
-        this.initWritingAssistance()
-        // 换进来的是另一个版本的文档，锚点要重新结账
-        this.scheduleAnchorCheck()
-        // 溯源同理：画布上已经是另一版了，旧的段落归属一条都不作数
-        this.loadProvenance()
+        // An old load may finish after abort + a newer prepare. It must not
+        // clear the new save barrier or reactivate assistance against old text.
+        if (ownsReload()) {
+          this._checkpointRestoreId = null
+          this._reloading = false
+          this.initWritingAssistance()
+          // 换进来的是另一个版本的文档，锚点要重新结账
+          this.scheduleAnchorCheck()
+          // 溯源同理：画布上已经是另一版了，旧的段落归属一条都不作数
+          this.loadProvenance()
+        }
       }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
@@ -1846,7 +1933,7 @@ export default {
     },
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件
-      if (!this.ready || !this.file || this.docLoadFailed) return
+      if (!this.ready || !this.file || this.docLoadFailed || this._checkpointInvalidated) return
       // 重载窗口期（版本退回 / 检查点恢复正在换文档）里的 modified 一律丢弃：
       // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
       if (this._reloading || this._saveDiscarded) return
@@ -2037,6 +2124,13 @@ export default {
     async saveDocument() {
       const f = this.file
       if (!f || !this.executor || this.saving || this._saveDiscarded) return false
+      const generation = documentCheckpointGeneration(this.projectId, f.id)
+      const barrier = checkpointSaveBarrier(this.projectId, f.id)
+      if ((barrier && !barrier.instances?.includes(this)) ||
+          (this._checkpointGeneration != null && this._checkpointGeneration !== generation)) this._checkpointInvalidated = true
+      if (barrier) return false
+      if (this._checkpointInvalidated) return false
+      this._checkpointGeneration = generation
       // 最后一道闸（onDocModified 之外的调用方也拦住）：文档没成功加载，
       // 导出的只会是空白 boot 文档——拒绝覆盖后端真文件。
       if (this.docLoadFailed) { this.appendLog('save blocked: 文档未成功加载，拒绝用空白文档覆盖后端文件'); return false }
@@ -2045,6 +2139,9 @@ export default {
       if (this._reloading) { this.appendLog('save blocked: 正在重载后端最新内容'); return false }
       const fileId = f.id // 数字主键（dev-board#1035）
       if (!fileId) { this.appendLog('save: file has no id'); return false }
+      const lease = beginDocumentSave(this.projectId, fileId)
+      if (lease === null) return false
+      let safeToOverwrite = true // false only while an HTTP upload has an uncertain outcome
       this.saving = true
       // 保存状态别抢戏：绝大多数保存几百毫秒就完了，闪一下「保存中…→已保存」
       // 纯粹是干扰（用户反馈：经常有变化，不好看且会打扰）。规则改成——慢到 2s
@@ -2079,12 +2176,16 @@ export default {
           return false
         }
         u8 = await this.stampGeneratorMetadata(u8)
+        if (this._reloading || this._saveDiscarded || checkpointSaveBarrier(this.projectId, fileId) ||
+            documentCheckpointGeneration(this.projectId, fileId) !== generation) return false
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         // mustExist=1（BUG-14 / v0.49.0 C4-03）：这份文件磁盘上本来就有（元数据非空，或本会话
         // 已经存过一次），目标路径不在了只能是被外部改名 / 移走——后端据此回 409，
         // 而不是在旧路径把旧文件名重新建出来。新建空白文档的第一笔不带：那时它还不在磁盘上。
         const mustExist = f.fileSize > 0 || this._savedOnce
+        safeToOverwrite = false
         await this.uploadBytes(getFileWriteUrl(fileId) + (mustExist ? '?mustExist=1' : ''), u8, name)
+        safeToOverwrite = true
         this._savedOnce = true
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         this._savePaused = false
@@ -2101,6 +2202,7 @@ export default {
         this.appendLog('save failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
+        lease?.finish(safeToOverwrite)
         this.saving = false
         clearTimeout(this._slowSaveTimer)
         // 只收回自己挂上去的「保存中…」；失败态是 catch 里刚设的，必须留着

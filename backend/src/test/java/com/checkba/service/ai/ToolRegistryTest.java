@@ -122,6 +122,25 @@ class ToolRegistryTest {
     }
 
     @Test
+    void preservesExplicitEmptyStringWhileMissingArgumentRemainsNull() {
+        assertEquals("草稿>:false", registry.execute("doc_find_replace",
+                "{\"findText\":\"草稿\",\"replaceText\":\"\",\"replaceAll\":false}", ctx).output());
+        assertEquals("草稿>null:false", registry.execute("doc_find_replace",
+                "{\"findText\":\"草稿\",\"replaceAll\":false}", ctx).output());
+        assertEquals("x.docx::::5", registry.execute("write_docx",
+                "{\"fileName\":\"x.docx\",\"markdownContent\":\"\",\"content\":\"不要替代\"}", ctx).output());
+        assertEquals("x.docx::::5", registry.execute("write_docx",
+                "{\"fileName\":\"x.docx\",\"content\":\"\"}", ctx).output());
+    }
+
+    @Test
+    void emptyOptionalValuesKeepContextAndLegacyDefaults() {
+        assertEquals("model:" + ctx.modelId(), registry.execute("model_probe", "{\"modelId\":\"\"}", ctx).output());
+        assertEquals("list:.", registry.execute("list_files", "{\"subPath\":\"\"}", ctx).output());
+        assertEquals("null/null/false", registry.execute("numbers", "{\"a\":\"\",\"b\":\"\",\"c\":\"\"}", ctx).output());
+    }
+
+    @Test
     @DisplayName("安全：projectId/conversationId/userId 强制来自服务端上下文，LLM 传值被忽略")
     void serverContextOverridesLlmArgs() {
         ToolRegistry.ToolResult r = registry.execute("context_probe",

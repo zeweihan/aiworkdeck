@@ -236,6 +236,8 @@ public class EditorBridgeService {
     static final int BULK_INSERT_MIN_CHARS = 200;
 
     static int timeoutSecondsFor(String action) {
+        // Host-level save/reload handshake, not a worker/relay action.
+        if ("doc_checkpoint_restore".equals(action)) return 180;
         if (action == null) return EDITOR_ACTION_TIMEOUT; // Map.of 对 null 键抛 NPE
         return ACTION_TIMEOUT_SECONDS.getOrDefault(action, EDITOR_ACTION_TIMEOUT);
     }

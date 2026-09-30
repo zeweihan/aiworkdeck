@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 //
 // B4 的接线用例：LibreOfficeEditor 的保存路径必须「导出 → 打标 → 上传」这个次序，
 // 上传出去的是**打过标的**字节，不是导出的原字节。
@@ -22,9 +23,9 @@ const BODY = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
  */
 function makeVm({ stamp, appOf, exportBytes }) {
   const uploads = []
-  const options = new Function(
+  const options = new Function(...Object.keys(barriers),
     'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
-    'stampApplication', 'documentStampApplication', BODY)(
+    'stampApplication', 'documentStampApplication', BODY)(...Object.values(barriers),
     null, null, null, (id) => '/upload/' + id, stamp, appOf)
   const vm = {
     ready: true, file: { id: 7, name: '合同.docx' }, statusKey: 'ready',

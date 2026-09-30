@@ -22,7 +22,24 @@ import org.springframework.web.bind.annotation.*;
 public class EditorResultController {
 
     private final EditorBridgeService editorBridgeService;
+    private final com.checkba.service.ai.DocumentCheckpointService checkpointService;
     private final com.checkba.service.ProjectAiMessageService messageService;
+
+    @GetMapping("/checkpoint-restore-state")
+    public org.springframework.http.ResponseEntity<?> checkpointRestoreState(
+            @RequestParam String conversationId, @RequestParam Long fileId, @RequestParam String restoreId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = com.checkba.controller.AuthController.getUserIdFromSession(sessionId);
+        if (!messageService.canUseConversation(conversationId, userId)) {
+            return org.springframework.http.ResponseEntity.status(403).build();
+        }
+        try {
+            return org.springframework.http.ResponseEntity.ok(java.util.Map.of(
+                    "mayWrite", checkpointService.restoreMayWrite(conversationId, fileId, restoreId)));
+        } catch (IllegalArgumentException e) {
+            return org.springframework.http.ResponseEntity.badRequest().build();
+        }
+    }
 
     /**
      * 接收编辑器操作结果

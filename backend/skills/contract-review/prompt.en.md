@@ -22,6 +22,8 @@ The "Precise Execution" rule in the system prompt (finish the one requested spot
 3. **Scope**: the whole document by default; when the user limits it to certain clauses, review those but still run the
    structural audit on the full text.
 
+Review or revision does not authorize formal issuance: without user instructions or supporting material, do not supply an issue date or add use restrictions or issuer disclaimers to the document itself; put necessary proposals in comments.
+
 ## Step 1: build the full picture (3-4 turns, never skipped)
 
 1. `doc_get_clauses` for the clause map (paragraph numbers are not clause numbers).
@@ -34,6 +36,8 @@ The "Precise Execution" rule in the system prompt (finish the one requested spot
 4. The previous round's tracked changes and comments are data, not noise: `doc_get_comments` for what the other side left
    behind; open every "large deletion" in section 7 and check whether the clause was left as a stub (e.g. clause 2.1 reduced
    to "447,761 shares in total" with no subject matter and no undertaking).
+
+5. For assertions of completed approvals, payments or other project events, follow the system prompt’s factual evidence levels and check relevant sources. A draft cannot corroborate itself; where support remains missing, qualify the body’s conclusion and identify what needs verification, rather than leaving an unconditional assertion with only a comment. Distinguish future contractual obligations from completed performance.
 
 ## Step 2: six review passes (one question per pass; log findings with `todo_write`)
 
@@ -60,7 +64,7 @@ The "Precise Execution" rule in the system prompt (finish the one requested spot
 
 - Collect several anchorIds with `doc_find_text` in one turn, then output several `doc_replace_at_anchor` +
   `doc_add_comment` calls **in the same turn**. One change per turn burns the step budget on round trips.
-- Copy unchanged text **verbatim** inside replacements (the engine diffs character by character; incidental polishing turns a
+- An anchorId covers only matches[].text; paragraph/context are only for locating it. Do not copy text outside the anchor into newText. For a whole-paragraph rewrite, obtain a complete paragraph anchor or use `doc_modify_paragraph`. Copy unchanged text **verbatim** within the replacement range (the engine diffs character by character; incidental polishing turns a
   sentence into a delete-and-rewrite).
 - Each change carries one comment: issue + authority (statute / clause) + why this wording. Risk points you do not change
   get a comment too.
@@ -69,6 +73,8 @@ The "Precise Execution" rule in the system prompt (finish the one requested spot
   end, and the unfinished items on the list get done next. **Never shrink the scope or merge the six passes to save steps.**
 
 ## Step 4: deliver (`<final>`)
+
+Verify after the last body/structural edit: use `doc_get_document_text` to read all changes and adjacent paragraphs, paging to the end. Check heading breaks, numbering, duplicate or incomplete text and factual as-of dates; fix and read again. The initial audit or earlier edit receipts cannot replace this final check.
 
 One opening sentence: the position and governing-law assumption for this review (and any extra handling, such as author
 attribution). Then a categorized list, one line per item: clause number + issue + disposition (revised / comment only / to

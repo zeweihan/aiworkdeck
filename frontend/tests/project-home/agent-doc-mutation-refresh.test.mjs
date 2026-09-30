@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 // dev-board#460：Agent 在文档里写完内容后，编辑器工具条上的「修订 / 批注 / 底稿」
 // 计数不立即刷新，切一次标签页才更新。
 //
@@ -30,10 +31,10 @@ function loadActionMethods(uni) {
     .replace(/^import .*$/gm, '')
     .replace(/export function shouldFlushDocStream/, 'function shouldFlushDocStream')
     .replace(/export const agentClientActionMethods = \{/, 'return {')
-  const factory = new Function(
+  const factory = new Function(...Object.keys(barriers),
     'sendEditorResult', 'getFileDetail', 'createSerialQueue', 'uni',
     'DOC_MUTATED_EVENT', 'DOC_MUTATED_DEBOUNCE_MS', 'isDocMutatingAction', body)
-  return factory(async () => {}, async () => null, createSerialQueue, uni,
+  return factory(...Object.values(barriers), async () => {}, async () => null, createSerialQueue, uni,
     DOC_MUTATED_EVENT, DOC_MUTATED_DEBOUNCE_MS, isDocMutatingAction)
 }
 
@@ -41,11 +42,11 @@ function loadEditorMethods() {
   const body = EDITOR_SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, '')
     .replace(/export default \{/, 'return {')
-  const factory = new Function(
+  const factory = new Function(...Object.keys(barriers),
     'getFileBytesUrl', 'getCurrentUser', 'createRelayExecutor',
     'webviewTransport', 'iframeTransport', 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar',
     'getAuthHeaders', 'host', 'DOC_MUTATED_EVENT', 'createAuthorNameResolver', 'loadBudgetMs', body)
-  return factory((id) => '/download/' + id, () => ({ name: '测试用户' }),
+  return factory(...Object.values(barriers), (id) => '/download/' + id, () => ({ name: '测试用户' }),
     null, null, null, null, null, null, null, null, DOC_MUTATED_EVENT,
     createAuthorNameResolver, loadBudgetMs).methods
 }

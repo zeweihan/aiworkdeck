@@ -115,6 +115,47 @@ class ContextAssemblerAskUserTest {
     }
 
     @Test
+    void factualRevisionEvidenceRulesSurviveScopeClarificationInBothLanguages() {
+        // The saved opinion once retained an unsupported approval assertion after ask_user
+        // clarified only revision scope. Verify both actual prompt layers, including that turn.
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            for (String prompt : List.of("帮我修订一下这个法律意见书",
+                    "<ask_user_answer id=\"scope\">全面法律论证并直接修订，保留修订痕迹。</ask_user_answer>")) {
+                List<ChatMessage> messages = assemble(prompt, AgentMode.AGENT, activeDoc());
+                String system = ((SystemMessage) messages.get(0)).text();
+                String tail = lastUserText(messages);
+                for (String layer : List.of(system, tail)) {
+                    assertTrue(layer.contains(english ? "draft assertions are not independent evidence"
+                            : "草稿主张不等于独立证据"), layer);
+                    assertTrue(layer.contains(english ? "explicit factual confirmation from the user"
+                            : "用户明确的事实确认"), layer);
+                    assertTrue(layer.contains(english ? "missing evidence does not establish that an event did not occur"
+                            : "缺少证明不等于事实未发生"), layer);
+                    assertTrue(layer.contains(english ? "qualify the document's own factual assertions and conclusions"
+                            : "限定文档正文中的事实陈述及结论"), layer);
+                }
+                assertTrue(tail.contains(english ? "Scope approval is not factual confirmation"
+                        : "修订范围的确认不等于事实确认"), tail);
+            }
+        }
+    }
+
+    @Test
+    void assembledRevisionPromptRequiresSourceCutoffAndFinalArtifactCheck() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            for (String prompt : List.of("修订当前文书", ANSWER)) {
+                String system = ((SystemMessage) assemble(prompt, AgentMode.AGENT, activeDoc()).get(0)).text();
+                assertTrue(system.contains(english ? "source's as-of date" : "来源的事实截止日"), system);
+                assertTrue(system.contains(english ? "today or the issue date" : "今天或出具日"), system);
+                assertTrue(system.contains(english ? "after the last substantive edit" : "最后一次实质修改后"), system);
+                assertTrue(system.contains(english ? "verify again" : "再次核对"), system);
+            }
+        }
+    }
+
+    @Test
     void answerMessageSwitchesTheTailToContinueAndNeverAsksAgain() {
         String text = lastUserText(assemble(ANSWER, AgentMode.AGENT, null));
         assertTrue(text.startsWith(ANSWER), "回答原样进入下一轮，模型才知道答的是哪一问: " + text);

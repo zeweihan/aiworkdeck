@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import * as barriers from '../../src/utils/checkpointSaveBarrier.js'
 //
 // BUG-14（v0.49.0 真机 C4-03）：已打开的 docx 在 Finder 里被改名后，编辑器继续按旧路径
 // 保存，后端把旧文件名在原地重新建出来——磁盘两份、标签/资源管理器/回收站三处名字对不上。
@@ -20,8 +21,8 @@ const body = source.match(/<script>([\s\S]*?)<\/script>/)[1]
   .replace(/^import .*$/gm, '').replace(/export default \{/, 'return {')
 
 function makeVm(extra = {}) {
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
-    'stampApplication', 'documentStampApplication', body)(
+  const options = new Function(...Object.keys(barriers), 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
+    'stampApplication', 'documentStampApplication', body)(...Object.values(barriers),
     null, null, null, id => '/upload/' + id,
     async (bytes) => bytes, async () => null)
   const vm = {
@@ -106,8 +107,8 @@ function setupCopy({ result } = {}) {
     body: { appendChild() {} },
   }
   const uploads = []
-  const options = new Function('ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
-    'stampApplication', 'documentStampApplication', 'setTimeout', body)(
+  const options = new Function(...Object.keys(barriers), 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', 'getFileWriteUrl',
+    'stampApplication', 'documentStampApplication', 'setTimeout', body)(...Object.values(barriers),
     null, null, null, id => '/upload/' + id, async (bytes) => bytes, async () => null, () => 0)
   const vm = {
     ready: true, file: { id: 7, name: '合同-改名.docx', fileSize: 67603 }, statusKey: 'movedSaveFailed',

@@ -7,6 +7,20 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 职责边界：AI 对话功能本身（编排循环、工具注册分发、记忆、SSE、前端聊天 UI、评测）。AI→编辑器指令链路属 ai-doc-bridge 领域；skill 机制属 plugin-system 领域（但 SkillRouter 在编排循环里有两处旁路接入点）。
 
+## 修订时点与交付边界（dev-board#1090/#1091，2026-09-30）
+
+system prompt 的事实分级保留来源事实截止日，不凭系统当天或自填出具日外推后续状态；最终验证发生在最后一次实质修改之后。合同审查 skill 的范围/交付步骤约束不凭惯例代填正式出具日期、添加文书自身用途限制或出具者免责条款，并回读最终改动与相邻段落。此边界不限制用户已授权的合同交易条款审查。回归：`ContextAssemblerAskUserTest` 用真实组装器覆盖中英及澄清回答后的规则，`BuiltinSkillsTest` 核对中英 skill 加载；实模另验。
+
+## 法律意见书技能路由（dev-board#1092，2026-09-30）
+
+`legal-opinion-review` 独立于合同六遍清单：相关事实依据/缺口清单 → 正文与结论限定 → 来源时点 → 最终按清单回读。只审查不直接编辑，编辑范围与审查范围分开。`SkillRouter` 用本地规则在意见书主体命中后区分实质任务与纯机械编辑；并列错字/格式不排除实质审查，后置“仅限错字”限制修订，否定动作不当正向请求。不调用付费预选。当前自动匹配只读用户消息，未将 active filename 加入路由；通用“修订这个文档”仍需模型 `use_skill` 或手选。回归：`LegalOpinionSkillRoutingTest` 中英范围/否定/混合意图；`BuiltinSkillsTest` 校验真实工具名及 LOWA/Office 激活后的读取、编辑、澄清与计划工具。路由通过不等于事实核验质量通过，仍须真实模型验收。
+
+## 意见书收尾补检（dev-board#1097，2026-09-30）
+
+`OpinionCompletionCheck` + `AgentOrchestrator.runOpinionCompletionCheckOnce`：legal-opinion-review 生效且本轮**最初**用户指令过 `SkillRouter.requestsOpinionReview`（public static，同一判据无第二套）的 AGENT 轮正常完成时，服务端经 `SubAgentService.dispatch` 派**一次**固定只读 scope 的核验子任务（标志派发前置位，失败不重派），发现接回主助手核对后续一轮；skill 第 4 步已改为系统安排核验，主助手不再自行派同一种收尾核验。被新 run 取代或已取消时保守跳过（派发前后都查 isCurrentRun）；取消走 `handleCancellation`。目标绑定本轮最初活跃文档，子任务须先确认编辑器当前稿即目标，确认不了如实报未验证。用户指令（原指令 + 插话按序）只作范围数据；UX 局限：收尾前正文可能已流出，核验发现只在后续轮接回。回归：`AgentOrchestratorOpinionCompletionCheckTest`（真实编排器 + 脚本模型接线）。
+
+补检目标绑定本轮最初活跃文件；无文件 ID 或已切到别的文件时不派发对子任务的付费核验，接回“未验证”让主助手定位并回读。LOWA 读取回执 `sourceFileId` 用于核对实际读取来源；不能靠文本相似度猜身份。原指令与后续插话按序保留，不截掉长指令尾部的范围限制。
+
 ## 系统提示瘦身（dev-board#1073，2026-09-29）
 
 - 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。
@@ -29,6 +43,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 ## 主动项目取材（dev-board#1076，2026-09-30）
 
 - AGENT 实质性修订/起草依赖项目事实时，先复用已有正文与完整清单，再列出材料、沿补充/变更/履行关系读取同项目相关底稿；只按主体关键词命中原协议可能漏掉未重复主体名的补充协议；不必等用户逐份点名。只读取材可以先于澄清，修改仍限定在用户指定对象；错别字、格式、精确替换不触发全项目扫描。ASK/PLAN 的工具与审批边界不变。
+- 实质性事实修订区分原始依据、用户明确事实确认与草稿主张；修订范围确认不能当作事实确认。查阅后仍缺证明，正文中的事实及结论须限定，不能只在聊天/批注提示；缺证不等于未发生，未来合同义务也不能误当作已履行事实。`clarificationReminder` 在 ask_user 回答后仍携带这一纪律（dev-board#1081），中英组装器及内置审查 skill 均有契约回归。
 - `ContextAssemblerService` 的活跃文档禁令只禁止重新发现/打开已知目标，不能阻止列出其他参考；Office 产出去向限制只管创建/写入项目文件。Office 参考来源用对应 reader，不能把 `open:` / `desk:` 交给只查服务端项目索引的 `search_project_content`。
 - `doc_list_project_files` 返回项目相对路径；与 `FileTools.dbPathIndex` 共用按父链构建的路径 helper，不暴露宿主绝对路径。缺失/删除/非目录/跨项目父节点停止，循环截断，清单仍保留每个存活文件 ID。
 - `FileContextLoader` 的目录及预读正文显示相对路径，显式报告深度上限、已列文件数、成功预读、不可读和配额未读数量；数量指已列部分，不能称全项目已读。原深度 5、成功正文配额与字符上限保持。
@@ -64,7 +79,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 **编排核心**
 - `controller/ai/AiAgentController.java` — 主入口（/api/agent）：GET /connect/{cid}（建 SSE）、POST /chat（异步 200）、POST /cancel/{cid}、/history/rollback、/tasks/active、/ppt/generate、**POST /subtask/cancel**、**POST /tasks/cancel**。**对话只有这一条链路**。
-  - **任务级取消（长任务可控）**：`POST /api/agent/subtask/cancel` body `{conversationId, subtaskId}` 停一个 `dispatch_subtask`；`POST /api/agent/tasks/cancel` body `{conversationId, taskId}` 停一个后台任务（PPT 生成等，接的是早就写好却零调用方的 `BackgroundTaskService.cancelTask`）。返回 200 `{"status":"ok","message":"正在停止…"}` / 404「已经结束，无需停止」/ 403 无权。**两层鉴权**：控制器判 `canUseConversation`，服务再判「这个 subtaskId/taskId 确实登记在这个会话名下」——少一层就能拿自己的会话 ID + 猜到的 ID 去掐别人的任务。**这两个端点不打 `AgentRunStateService.mark`**：掐的是一个子任务/后台任务，会话仍是 RUNNING、主循环继续跑（PR#173 要求的状态点只针对轮次终态）。**文案只许说「正在停止」**：`future.cancel(true)` 打不断阻塞的 HTTP 读，子 Agent 的中断检查在每轮开头，最坏白烧一次在途 LLM 调用；后台任务取消更只是簿记 + 广播，pptx-service 那边照样跑完落盘。子任务被停后回喂模型的文案明说 "stopped by the user, do NOT dispatch again automatically"——否则模型下一轮立刻重派，用户看到的是「点了停止反而又跑起来」。
+  - **任务级取消（长任务可控）**：`POST /api/agent/subtask/cancel` body `{conversationId, subtaskId}` 停一个 `dispatch_subtask`；`POST /api/agent/tasks/cancel` body `{conversationId, taskId}` 停一个后台任务（PPT 生成等，接的是早就写好却零调用方的 `BackgroundTaskService.cancelTask`）。返回 200 `{"status":"ok","message":"正在停止…"}` / 404「已经结束，无需停止」/ 403 无权。**两层鉴权**：控制器判 `canUseConversation`，服务再判「这个 subtaskId/taskId 确实登记在这个会话名下」——少一层就能拿自己的会话 ID + 猜到的 ID 去掐别人的任务。**这两个端点不打 `AgentRunStateService.mark`**：掐的是一个子任务/后台任务，会话仍是 RUNNING、主循环继续跑（PR#173 要求的状态点只针对轮次终态）。**文案只许说「正在停止」**：`future.cancel(true)` 打不断阻塞的 HTTP 读，子 Agent 用持久取消位在模型回包后和每次工具前检查，最坏仍会消耗一次在途 LLM 调用，但迟到响应不得再派工具；后台任务取消更只是簿记 + 广播，pptx-service 那边照样跑完落盘。子任务被停后回喂模型的文案明说 "stopped by the user, do NOT dispatch again automatically"——否则模型下一轮立刻重派，用户看到的是「点了停止反而又跑起来」。
   - **`/ppt/generate` 的 runAsync 现在会落一条 ASSISTANT 消息**（原来整段成功文本被丢弃：文件生成了但历史里一个字都没有，主 Agent 下一轮不知道这个文件存在、刷新页面用户也看不出发生过什么）。走契约 D 双通道：`content` = 工具原样全文（fileId / PPTX 服务项目 ID / 可编辑与否都在里面，模型需要），`displayContent` = 一句人话。落库失败只 log。
   - **`POST /chat` 的 `skillIds`（可选字符串数组）= 用户主动选择的 skill，本轮强制生效**（`AgentChatRequest.skillIds`）。与触发词自动命中取**并集**；无效 id（不存在/已停用/所属插件停用/当前应用语言不可用）静默忽略——SSE `skill_update` 下发的是真正生效的清单，用户看得见它没被点亮。**无状态**：后端不持久化，前端每次请求携带。旧字段 `pinnedSkillId` 已 `@Deprecated`，语义收编成「只有一项的 skillIds」（仍受理，供不发 skillIds 的存量客户端）。ASK 模式下整体不参与。
     - **必须同时注入 prompt 与参与工具可见性**——这两件事的判据现在同源收敛在 `SkillRouter.activateForTurn`。旧的 pinnedSkillId 静默 bug 就出在这里：编排器按钉选裁工具，而 `ContextAssemblerService` 自己又 `match(userPrompt)` 重新匹配了一遍，于是钉选的 skill 被裁了工具却拿不到 prompt。**组装器一律读 `skillRouter.activeSkills(conversationId)`，不许再 match 一次。**
@@ -700,7 +715,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - memory/：MemoryPipelineService（轮次结束异步触发写侧管线）、MemoryManager（检索）、AgenticRetriever、MemCellExtractor、ProjectMemoryExtractor、MemoryEvidenceFormatter（证据账本：时间锚点/来源/更新信号，PR#155）。记忆五作用域 + 拟人化排序（重要性×衰减×随机）。
 - evidence/：evidence.retrieve.v1（PR#186）——EvidenceRetriever SPI + Registry + Memory/Mcp 实现。两大不变式：**缺定位符即丢弃、缺证据≠矛盾**。
 - mcp/：McpClientService 门面 + StreamableHttpMcpProvider；配置驱动 mcp.servers（langchain4j-mcp 需 1.0.0+）。
-- subagent/：SubAgentService（dispatch_subtask，发 subtask_progress）。内存登记簿 `running`（subtaskId → Future + 所属会话，dispatch 返回前 finally 移除）支撑 `cancel(subtaskId, conversationId)`；被停的子任务走 `CancellationException` 分支，给用户看的进度文案是「子任务已停止」（stage 仍用 `failed`，不新造 stage 值），给模型看的是「用户停的、不要自动重派」。
+- subagent/：SubAgentService（dispatch_subtask，发 subtask_progress）。内存登记簿 `running`（subtaskId → Future + conversationId + parent runId + 持久取消位，dispatch 返回前 finally 移除）支撑单子任务取消及父轮 `cancelParentRun(conversationId, runId)`；null runId 不做宽泛取消，同会话其它轮次不受影响。`FutureTask` 先登记再执行，`ToolContext` 携带原父轮 checker，堵住取消与派发竞态；超时、中断、用户停止均先置持久取消位，模型即使吞掉 interrupt，回包后、逐工具前、最终答案与完成事件前仍检查，迟到回包照实记 token。不能撤销已开始的工具或强制终止不响应中断的 HTTP。子线程显式绑定编辑桥 conversationId，finally 恢复/清理 ThreadLocal；客户端能力继续按该会话解析，不强制 LOWA。子工具上下文用自身 scope 的候选/下发集，runId 保持 null，不共享父轮技能/披露状态；父 runId 只用于取消句柄，避免把父已激活技能误当成子消息栈已有指引。停止进度仍为 `failed`，模型结果要求不要自动重派。契约测试 `SubAgentLifecycleTest` 和 `AgentOrchestratorCancellationTest` 覆盖真实桥回执、复用线程清理、迟到工具、父轮停止与新轮隔离（dev-board#1095/#1096）。
 
 **SSE**
 - `service/ai/SseEmitterService.java` — 连接池（cid→SseEmitter，超时 30 分钟，建连发 connected）。**所有事件唯一出口**。生产者：Orchestrator、StreamHandler、Controller、TodoListService(plan_update)、BackgroundTaskService(background_task_*/heartbeat/task_progress)、SubAgentService、EditorBridgeService。**15s 心跳广播**（@PostConstruct 调度器，穿透代理空闲回收 + 前端判活依据）；同 ID 重连会 complete 旧 emitter，回调移除一律用两参 remove(id, emitter) 防摘掉新连接。
