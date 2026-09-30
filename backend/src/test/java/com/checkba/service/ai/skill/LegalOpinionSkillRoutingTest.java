@@ -34,8 +34,14 @@ class LegalOpinionSkillRoutingTest {
                         : "法律要求、合同约定、已证实事实与风险控制建议")),
                 () -> assertTrue(prompt.contains(english ? "non-performance does not itself create a new precondition"
                         : "未履行事实本身不生成新的先决条件")),
-                () -> assertTrue(prompt.contains(english ? "identities, subject matter or premises for applying the law"
-                        : "主体身份、标的或法律适用前提")),
+                () -> assertTrue(prompt.contains(english ? "mark the entire proposition unverified or fall back to the minimal facts directly stated"
+                        : "将整个命题标为待核实，或退回材料直接记载的最小事实")),
+                () -> assertTrue(prompt.contains(english ? "must not leave the unsupported relationship intact"
+                        : "不能只删“全部”“已”等词而保留无据关系")),
+                () -> assertTrue(prompt.contains(english ? "is not necessarily its issuer or signatory"
+                        : "材料提及的主体不等于文书出具者或签署者")),
+                () -> assertTrue(prompt.contains(english ? "explicit attribution, signature or seal supports it"
+                        : "只有明确署名、签章或原句支持时才作该归属")),
                 () -> assertTrue(prompt.contains(english ? "conditional analysis or mark them unverified"
                         : "条件化分析或待核实")),
                 () -> assertTrue(prompt.contains(english ? "current status" : "目前")),
