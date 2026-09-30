@@ -15,6 +15,7 @@ import { captureChatTimeline } from '../../src/components/AgentMessage/chatTimel
 import { nextBubbleId } from '../../src/composables/bubbleId.js'
 import { documentEditedFromProcesses } from '../../src/utils/useInDocumentVisibility.js'
 import { isSameFileChange } from '../../src/utils/chatFileChange.js'
+import { isAccountRequired, isCreditsRequired } from '../../src/utils/requireAccountCore.js'
 import { isUserQuestionAwaiting } from '../../src/composables/awaitingInput.mjs'
 
 const SOURCE = readFileSync(new URL('../../src/composables/useAgentStream.js', import.meta.url), 'utf8')
@@ -51,6 +52,8 @@ const DEPS = {
   decodeAttr,
   normalizeAskUserEvent,
   isUserQuestionAwaiting,
+  isAccountRequired,
+  isCreditsRequired,
 }
 
 /**

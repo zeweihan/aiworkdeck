@@ -1,80 +1,84 @@
 <!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
-  <view v-if="visible" class="awd-mask" @tap.self="close">
-    <view class="awd-dialog recharge-dialog">
-      <view class="awd-header recharge-header">
-        <text class="awd-title">{{ $t('admin.rechargeTitle') }}</text>
-        <text class="recharge-subtitle">{{ $t('admin.rechargeSubtitle') }}</text>
-      </view>
-      <view class="awd-body">
+  <div v-if="visible" class="awd-mask" @click.self="close">
+    <div class="awd-dialog recharge-dialog">
+      <div class="awd-header recharge-header">
+        <span class="awd-title">{{ $t('admin.rechargeTitle') }}</span>
+        <span class="recharge-subtitle">{{ $t('admin.rechargeSubtitle') }}</span>
+      </div>
+      <div class="awd-body">
         <!-- 步骤一：选金额 -->
         <template v-if="step === 'pick'">
-          <text class="recharge-label">{{ $t('admin.rechargeAmountLabel') }}</text>
-          <view class="recharge-presets">
-            <view
+          <span class="recharge-label">{{ $t('admin.rechargeAmountLabel') }}</span>
+          <div class="recharge-presets">
+            <div
               v-for="cents in presetCents"
               :key="cents"
               class="recharge-preset"
               :class="{ checked: selectedCents === cents && !customInput.trim() }"
-              @tap="pickPreset(cents)"
+              @click="pickPreset(cents)"
             >
-              <text class="recharge-preset-cur">{{ currencySymbol }}</text>
-              <text class="recharge-preset-text">{{ (cents / 100).toFixed(0) }}</text>
-            </view>
-          </view>
-          <text class="recharge-label recharge-custom-label">{{ $t('admin.rechargeCustomLabel') }}</text>
-          <view class="recharge-custom-row" :class="{ filled: customInput.trim() }">
-            <text class="recharge-custom-prefix">{{ currencySymbol }}</text>
-            <input
-              v-model="customInput"
+              <span class="recharge-preset-cur">{{ currencySymbol }}</span>
+              <span class="recharge-preset-text">{{ (cents / 100).toFixed(0) }}</span>
+            </div>
+          </div>
+          <span class="recharge-label recharge-custom-label">{{ $t('admin.rechargeCustomLabel') }}</span>
+          <div class="recharge-custom-row" :class="{ filled: customInput.trim() }">
+            <span class="recharge-custom-prefix">{{ currencySymbol }}</span>
+            <component
+              :is="'input'"
+              :value="customInput"
+              @input="customInput = $event.target.value"
               class="recharge-custom-input"
-              type="digit"
+              type="text"
+              inputmode="decimal"
               :placeholder="$t('admin.rechargeCustomPlaceholder')"
             />
-          </view>
-          <text v-if="inputError" class="recharge-error">{{ inputError }}</text>
+          </div>
+          <span v-if="inputError" class="recharge-error">{{ inputError }}</span>
         </template>
 
         <!-- 步骤二 A：站内二维码（微信站） -->
         <template v-else-if="step === 'qrcode'">
-          <view class="recharge-qr-wrap">
-            <view class="recharge-qr-frame">
-              <image v-if="qrDataUrl" :src="qrDataUrl" class="recharge-qr" mode="aspectFit" />
-            </view>
-            <text class="recharge-hint">{{ $t('admin.rechargeQrHint', { amount: amountText }) }}</text>
-            <view class="recharge-waiting-row">
-              <view v-if="!pollTimedOut" class="recharge-waiting-dot"></view>
-              <text class="recharge-waiting">{{ pollHint }}</text>
-            </view>
-          </view>
+          <div class="recharge-qr-wrap">
+            <div class="recharge-qr-frame">
+              <img v-if="qrDataUrl" :src="qrDataUrl" class="recharge-qr" />
+            </div>
+            <span class="recharge-hint">{{ $t('admin.rechargeQrHint', { amount: amountText }) }}</span>
+            <div class="recharge-waiting-row">
+              <div v-if="!pollTimedOut" class="recharge-waiting-dot"></div>
+              <span class="recharge-waiting">{{ pollHint }}</span>
+            </div>
+          </div>
         </template>
 
         <!-- 步骤二 B：外跳浏览器（Stripe 站） -->
         <template v-else-if="step === 'redirect'">
-          <view class="recharge-qr-wrap">
-            <text class="recharge-hint">{{ $t('admin.rechargeRedirectHint', { amount: amountText }) }}</text>
-            <view class="recharge-waiting-row">
-              <view v-if="!pollTimedOut" class="recharge-waiting-dot"></view>
-              <text class="recharge-waiting">{{ pollHint }}</text>
-            </view>
-          </view>
+          <div class="recharge-qr-wrap">
+            <span class="recharge-hint">{{ $t('admin.rechargeRedirectHint', { amount: amountText }) }}</span>
+            <div class="recharge-waiting-row">
+              <div v-if="!pollTimedOut" class="recharge-waiting-dot"></div>
+              <span class="recharge-waiting">{{ pollHint }}</span>
+            </div>
+          </div>
         </template>
-      </view>
-      <view class="awd-footer">
-        <view class="awd-btn awd-btn-secondary" @tap="close">{{ $t('common.close') }}</view>
-        <view
+      </div>
+      <div class="awd-footer">
+        <div class="awd-btn awd-btn-secondary" @click="close">{{ $t('common.close') }}</div>
+        <div
           v-if="step === 'pick'"
           class="awd-btn awd-btn-primary"
           :class="{ 'awd-btn-disabled': submitting }"
-          @tap="submit"
-        >{{ submitLabel }}</view>
-      </view>
-    </view>
-  </view>
+          @click="submit"
+        >{{ submitLabel }}</div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script>
+// Also mounted as a standalone app by requireRecharge: use native elements and click/input events.
 // 充值弹窗（dev-board#184）：档位按站点（cn ¥50/¥100/¥300，intl $10/$20/$50，与官网
 // RechargeDialog 一致）+ 自定义金额；微信站站内渲染二维码，Stripe 站外跳浏览器。
 // 两种形态都轮询 getRechargeStatus，paid 即成功。
@@ -141,13 +145,16 @@ export default {
     },
   },
   watch: {
-    visible(v) {
-      if (v) {
-        this.resetState()
-      } else {
-        // 弹窗被宿主关掉（v-model）也要停轮询——只清自己的定时器
-        this.stopPolling()
-      }
+    visible: {
+      immediate: true,
+      handler(v) {
+        if (v) {
+          this.resetState()
+        } else {
+          // 弹窗被宿主关掉（v-model）也要停轮询——只清自己的定时器
+          this.stopPolling()
+        }
+      },
     },
   },
   beforeUnmount() {
@@ -272,7 +279,7 @@ export default {
    1rpx=0.5px；rpx 混着写在这个弹窗上正是自定义金额输入框被裁掉的病灶之一，
    见 .recharge-custom-input 的说明）。 */
 .awd-mask {
-  position: fixed; inset: 0; z-index: 999;
+  position: fixed; inset: 0; z-index: 9980;
   display: flex; align-items: center; justify-content: center;
   padding: 16px; box-sizing: border-box;
   background: var(--awd-overlay);

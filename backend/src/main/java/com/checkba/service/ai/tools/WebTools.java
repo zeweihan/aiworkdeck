@@ -149,9 +149,8 @@ public class WebTools implements AgentToolComponent {
     /**
      * 平台代采档：把搜索交给网关，官网持凭证调博查并按次扣 Credits。
      *
-     * <p>返回的是**给模型看的文本**，所以失败时不能抛异常打断整轮对话——
-     * 与「未配置」那条既有分支同一口径：说清楚发生了什么、下一步是什么，
-     * 然后让模型基于已有信息继续。抛异常会让一次搜索失败变成一次对话失败。
+     * <p>账户错误保留机器分类，由 ToolRegistry 通知前端登录或充值，再回喂跳过说明。
+     * 其余故障直接给模型说明文本，让它基于已有信息继续，不打断整轮对话。
      */
     private String searchViaPlatform(String query) {
         try {
@@ -161,6 +160,10 @@ public class WebTools implements AgentToolComponent {
                             SEARCH_TIMEOUT_SECONDS);
             return formatSearchResults(result.data(), query);
         } catch (com.checkba.service.platform.GatewayException e) {
+            switch (e.getKind()) {
+                case NOT_CONNECTED, UNAUTHORIZED, NO_CREDITS -> throw e;
+                default -> { }
+            }
             log.warn("平台搜索失败 kind={}: {}", e.getKind(), e.getMessage());
             return "网络搜索本次不可用：" + e.getMessage() + e.userHint()
                     + " 本次已跳过网络搜索，请基于已有信息继续完成任务。";

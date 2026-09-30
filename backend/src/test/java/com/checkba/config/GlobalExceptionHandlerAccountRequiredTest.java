@@ -65,7 +65,7 @@ class GlobalExceptionHandlerAccountRequiredTest {
         assertEquals("NOT_CONNECTED", body.get("kind"));
         assertEquals("gateway", body.get("reason"));
         assertEquals("NOT_CONNECTED", body.get("gatewayKind"));
-        assertEquals(Boolean.TRUE, body.get("canUseOwnKey"));
+        assertEquals(Boolean.FALSE, body.get("canUseOwnKey"));
     }
 
     @Test

@@ -74,6 +74,7 @@ public class VoiceDictationService {
     };
 
     private final PlatformAiChannel platformAiChannel;
+    private final PlatformCreditsGate platformCreditsGate;
     private final String baseUrl;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -83,9 +84,11 @@ public class VoiceDictationService {
     private final String dictationModel;
 
     public VoiceDictationService(PlatformAiChannel platformAiChannel,
+                                 PlatformCreditsGate platformCreditsGate,
                                  @Value("${ai.providers.openrouter.base-url:https://openrouter.ai/api/v1}") String baseUrl,
                                  @Value("${ai.dictation.model:xiaomi/mimo-v2.5}") String dictationModel) {
         this.platformAiChannel = platformAiChannel;
+        this.platformCreditsGate = platformCreditsGate;
         this.baseUrl = baseUrl;
         this.dictationModel = dictationModel;
     }
@@ -117,6 +120,8 @@ public class VoiceDictationService {
             throw new IllegalArgumentException(LangText.of("音频过大（上限 6MB）", "Audio too large (6MB cap)"));
         }
 
+        // Dictation always uses the paid platform channel, even when chat uses local Ollama.
+        platformCreditsGate.ensureCredits(userId);
         PlatformAiKeyService.Resolved resolved = platformAiChannel.resolveFor(userId);
         if (resolved == null) {
             if (!platformAiChannel.availableFor(userId)) {
@@ -173,9 +178,15 @@ public class VoiceDictationService {
         if (response.statusCode() == 401 || response.statusCode() == 403) {
             // 与 AI 通道同口径：上游明确拒绝 = key 已吊销，立即作废本地缓存
             platformAiChannel.onKeyRejected(userId);
-            throw new IllegalStateException(LangText.of(
-                    "平台通道凭据已失效，请在设置里重新登录账户",
-                    "Platform credential is no longer valid; sign in again in Settings"));
+            throw new com.checkba.service.account.AccountException(
+                    com.checkba.service.account.AccountException.Kind.UNAUTHORIZED, LangText.of(
+                    "账户登录已失效，请重新登录", "Your account session has expired. Please sign in again"));
+        }
+        if (response.statusCode() == 402) {
+            throw new com.checkba.service.account.AccountException(
+                    com.checkba.service.account.AccountException.Kind.CONFLICT,
+                    LangText.of("账户 Credits 余额不足，充值后即可继续听写",
+                            "Your Credits balance is insufficient. Top up to continue dictation"), "no_credits");
         }
         if (response.statusCode() == 429) {
             throw new IllegalStateException(LangText.of("听写请求过于频繁，请稍候几秒再试", "Too many dictation requests; wait a few seconds and retry"));

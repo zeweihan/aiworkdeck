@@ -14,8 +14,7 @@ package com.checkba.service.platform;
  * <p>网关必须能区分三件在用户眼里长得一样、下一步却完全不同的事：
  * 「这项服务我们还没开放」「上游供应商挂了」「我们自己的服务器不可达」。
  *
- * <p>message 经 {@code LangText.of} 双语化，且<b>不许含「登录」「未授权」「请先」</b>——
- * {@code frontend/src/services/api.js} 拿这三个子串判掉线并清会话。
+ * <p>UI uses structured error codes to distinguish sign-in, top-up and provider failures.
  */
 public class GatewayException extends RuntimeException {
 
@@ -57,25 +56,9 @@ public class GatewayException extends RuntimeException {
         return kind;
     }
 
-    /**
-     * 要不要在提示里主动摆出「改用自己的 Key」这个入口。
-     *
-     * <p>自备 Key 整个绕开网关，所以对任何一种网关失败它都是一条真出路。
-     * 尤其是 {@link Kind#NOT_CONNECTED}：<b>用试用码解锁、根本不打算连账户的用户
-     * （README 公开发布的永久试用码是主要获客入口），自备 Key 是他唯一的出路</b>——
-     * 只提示他去连账户等于把他堵死。{@link Kind#NO_CREDITS} 同理，
-     * 主 CTA 是充值，但不该把另一条合法出路藏起来。
-     *
-     * <p>只有 {@link Kind#UNAUTHORIZED} 不提：那里的结论已经很明确（Key 无效或被撤销），
-     * 再塞第二个建议只会让用户不知道该修哪个。
-     *
-     * <p>{@link Kind#BUDGET_EXCEEDED} 同样不提，但理由相反：那不是一次故障，
-     * 是用户自己设的闸拦了自己。他要的下一步是「继续」或「把上限调高」，
-     * 这时摆一个「改用自己的 Key」是答非所问——照做还会让他绕开自己刚设的上限。
-     */
+    /** Official desktop gateways require an account; BYOK is not a supported recovery path. */
     public boolean suggestsByok() {
-        return kind != Kind.UNAUTHORIZED && kind != Kind.BAD_REQUEST && kind != Kind.MALFORMED
-                && kind != Kind.BUDGET_EXCEEDED;
+        return false;
     }
 
     /**
@@ -88,8 +71,8 @@ public class GatewayException extends RuntimeException {
      */
     public String userHint() {
         return switch (kind) {
-            case NO_CREDITS -> "账户 Credits 余额不足，请到官网账户页充值后重试。";
-            case NOT_CONNECTED -> "请先在设置中连接 AI WorkDeck 账户。";
+            case NO_CREDITS -> "账户 Credits 余额不足，充值后重试。";
+            case NOT_CONNECTED -> "请登录 AI WorkDeck 账户后重试。";
             case SERVICE_DISABLED, UPSTREAM_FAILED, GATEWAY_UNREACHABLE -> "请稍后重试；若持续失败请联系 hi@aiworkdeck.com。";
             default -> "";
         };

@@ -439,7 +439,7 @@ class AgentOrchestratorInboxTest {
         assertTrue(modelToolNames.get(1).containsAll(modelToolNames.get(0)));
         assertTrue(modelToolNames.get(1).contains("doc_set_font"));
         verify(decision, times(1)).select(any(), eq("synthetic original input"), any());
-        verify(modelFactory, times(1)).getStreamingChatModel(MODEL);
+        verify(modelFactory, times(3)).getStreamingChatModel(MODEL); // initial selection + two paid rounds
     }
 
     @Test void cancelledDecisionCannotStartMainGenerationOrAffectNextRun() throws Exception {

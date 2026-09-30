@@ -204,6 +204,7 @@ import { isEnglish } from '@/utils/appLanguage.js'
 import { stampApplication } from '@/utils/docxAppProps.js'
 import { documentStampApplication } from '@/utils/documentGeneratorSetting.js'
 import { createInlineReviewHost } from '@/composables/inlineReviewHost.js'
+import { requireAccount, requireRecharge } from '@/utils/requireAccount.js'
 import { createWritingAssistanceHost } from '@/composables/writingAssistanceHost.js'
 import { createSemanticWritingHost } from '@/composables/semanticWritingHost.js'
 import { getSemanticWritingSettings, saveSemanticWritingSettings, createSemanticWritingSuggestion, getSemanticWritingSuggestion, cancelSemanticWritingSuggestion, acceptSemanticWritingSuggestion } from '@/services/api.js'
@@ -1400,6 +1401,8 @@ export default {
         api: { list: listWritingCompletions, learn: learnWritingCompletions, remove: deleteWritingCompletion,
           clear: clearWritingCompletions, lookup: lookupWritingSelection, detail: getDocInsightEntity, learnedDetail: getWritingCompletionDetail },
         openSettings: (opts) => { if (this.openSettingsTab) this.openSettingsTab(opts || {}) },
+        openAccount: () => requireAccount({ reason: 'gateway', force: true }),
+        openRecharge: () => requireRecharge(),
       })
       this._writingHost.start()
       this._inlineReviewHost = createInlineReviewHost({

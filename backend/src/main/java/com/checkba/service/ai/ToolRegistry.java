@@ -224,6 +224,9 @@ public class ToolRegistry {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ToolDisclosurePolicy disclosurePolicy;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private SseEmitterService sseEmitterService;
+
     public ToolRegistry(List<AgentToolComponent> toolComponents, PluginService pluginService,
                         ClientCapabilityService clientCapabilityService) {
         this.toolComponents = toolComponents;
@@ -652,12 +655,48 @@ public class ToolRegistry {
             return new ToolResult(result != null ? result.toString() : "", tool, true);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
+            ToolResult accountResult = accountActionResult(cause, tool, ctx);
+            if (accountResult != null) return accountResult;
             log.error("Tool '{}' execution failed", resolvedName, cause);
             return new ToolResult("Error executing tool: " + cause.getMessage(), tool, true);
         } catch (Exception e) {
             log.error("Tool '{}' dispatch failed", resolvedName, e);
             return new ToolResult("Error executing tool: " + e.getMessage(), tool, true);
         }
+    }
+
+    /** Account actions are UI notifications, not terminal model errors or a request to retry tools. */
+    private ToolResult accountActionResult(Throwable error, RegisteredTool tool, ToolContext ctx) {
+        Map<String, Object> payload;
+        if (error instanceof com.checkba.service.platform.GatewayException gatewayError) {
+            var kind = gatewayError.getKind();
+            if (kind != com.checkba.service.platform.GatewayException.Kind.NOT_CONNECTED
+                    && kind != com.checkba.service.platform.GatewayException.Kind.UNAUTHORIZED
+                    && kind != com.checkba.service.platform.GatewayException.Kind.NO_CREDITS) return null;
+            boolean needsCredits = kind == com.checkba.service.platform.GatewayException.Kind.NO_CREDITS;
+            payload = new java.util.LinkedHashMap<>();
+            payload.put("code", needsCredits ? 1 : com.checkba.service.account.AccountRequired.CODE);
+            payload.put("gatewayKind", kind.name());
+            payload.put("reason", needsCredits ? "no_credits" : "gateway");
+            payload.put("message", needsCredits
+                    ? LangText.of("账户 Credits 余额不足，请充值后重试", "Your Credits balance is insufficient. Top up and retry")
+                    : LangText.of("请登录 AI WorkDeck 账户后重试", "Sign in to your AI WorkDeck account and retry"));
+        } else if (error instanceof com.checkba.service.account.AccountException accountError) {
+            if (accountError.getKind() != com.checkba.service.account.AccountException.Kind.NOT_CONNECTED
+                    && accountError.getKind() != com.checkba.service.account.AccountException.Kind.UNAUTHORIZED
+                    && !"no_credits".equals(accountError.getReason())
+                    && !"insufficient_credits".equals(accountError.getReason())) return null;
+            payload = com.checkba.service.account.AccountRequired.envelope(accountError);
+        } else {
+            return null;
+        }
+        if (sseEmitterService != null && ctx != null && ctx.conversationId() != null) {
+            sseEmitterService.send(ctx.conversationId(), "account_action_required",
+                    cn.hutool.json.JSONUtil.toJsonStr(payload));
+        }
+        return new ToolResult(payload.get("message") + LangText.of(
+                "。本次已跳过该操作，请基于已有信息继续完成任务，不要重复调用。",
+                ". This operation was skipped. Continue using the available information without retrying it."), tool, true);
     }
 
     private cn.hutool.json.JSONObject parseArgs(String argsJson) {

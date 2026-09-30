@@ -50,6 +50,7 @@ class PptxToolsTest {
     private ProjectFileService projectFileService;
     private ProjectStorageResolver storageResolver;
     private PptxTools pptxTools;
+    private PlatformAiChannel platformAiChannel;
 
     @TempDir
     Path tmp;
@@ -70,7 +71,7 @@ class PptxToolsTest {
         when(chatModelFactory.resolveOpenRouterApiKey()).thenReturn("sk-test");
         when(chatModelFactory.resolveOpenRouterBaseUrl()).thenReturn("https://openrouter.ai/api/v1");
         when(chatModelFactory.resolveDefaultModel()).thenReturn("deepseek/deepseek-v4");
-        PlatformAiChannel platformAiChannel = mock(PlatformAiChannel.class);
+        platformAiChannel = mock(PlatformAiChannel.class);
         storageResolver = mock(ProjectStorageResolver.class);
         when(storageResolver.resolve(anyString())).thenReturn(tmp.resolve("out.pptx"));
 
@@ -78,6 +79,25 @@ class PptxToolsTest {
                 editorBridgeService, storageServiceFactory, aiModelProperties, backgroundTaskService,
                 chatModelFactory, platformAiChannel, storageResolver,
                 mock(com.checkba.service.pack.NativePackService.class));
+    }
+
+    @Test
+    void cloudPptCannotReuseCachedKeyWithoutCredits() {
+        when(chatModelFactory.resolveProvider()).thenReturn(AiModelProperties.Provider.AWD_CLOUD);
+        when(pptxServiceClient.isHealthy()).thenReturn(true);
+        org.mockito.Mockito.doThrow(new com.checkba.service.account.AccountException(
+                com.checkba.service.account.AccountException.Kind.CONFLICT, "请充值", "no_credits"))
+                .when(chatModelFactory).ensurePaidAccess(any());
+
+        var error = org.junit.jupiter.api.Assertions.assertThrows(com.checkba.service.account.AccountException.class,
+                () -> pptxTools.performPptGenerationWithProgress(
+                        "尽调汇报", 42L, null, "报告", null, "zh",
+                        "deepseek/deepseek-v4", "conv-1", 7L, false));
+
+        org.junit.jupiter.api.Assertions.assertEquals("no_credits", error.getReason());
+        verify(platformAiChannel, never()).apiKey();
+        verify(pptxServiceClient, never()).generatePptxWithProgress(any(), any(), any(), any(), any(), anyBoolean(), any());
+        verify(backgroundTaskService, never()).registerTask(any(), any(), any(), any());
     }
 
     @Test

@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { extractCompletionEntries } from '../utils/completionLexicon.js'
+import { isCreditsRequired } from '../utils/requireAccountCore.js'
 import { completionDetails } from '../utils/completionDetails.js'
 
 const preferenceListeners = new Map()
 
 /** Host-scoped vocabulary and explicit lookup. Dependencies stay injectable for isolation tests. */
 export function createWritingAssistanceHost({ projectId, fileId, userId, execute, send, api, storage, writable, language,
-  openSettings = null, semantic = null,
+  openSettings = null, openAccount = null, openRecharge = null, semantic = null,
   timers = { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) } }) {
   const session = `${projectId}:${fileId}:${Date.now()}:${Math.random().toString(36).slice(2)}`
   semantic?.bindSession(session)
@@ -127,6 +128,12 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
         // settings route instead of a retry. The guest cannot navigate, so the host does.
         if (openSettings) openSettings({ nav: 'account' })
         return {}
+      case 'login':
+        if (openAccount) await openAccount()
+        return {}
+      case 'recharge':
+        if (openRecharge) await openRecharge()
+        return {}
       case 'lookup':
         if (!writable) throw new Error('Read-only document')
         // This branch is only reached by the selected-text context menu's explicit action.
@@ -158,7 +165,8 @@ export function createWritingAssistanceHost({ projectId, fileId, userId, execute
         const result = await perform(msg.action, msg.data || {})
         if (!disposed) send({ __lo: 'lo-relay', type: 'writing-response', session, id: msg.id, result })
       } catch (e) {
-        if (!disposed) send({ __lo: 'lo-relay', type: 'writing-response', session, id: msg.id, error: String(e?.message || e) })
+        const hint = e?.accountRequired || e?.code === 4011 ? 'NOT_CONNECTED' : isCreditsRequired(e) ? 'NO_CREDITS' : ''
+        if (!disposed) send({ __lo: 'lo-relay', type: 'writing-response', session, id: msg.id, error: String(e?.message || e), hint })
       }
       return true
     },

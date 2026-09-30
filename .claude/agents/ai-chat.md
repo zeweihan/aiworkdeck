@@ -51,6 +51,14 @@ system prompt 的事实分级保留来源事实截止日，不凭系统当天或
 - 代码围栏、普通示例文字及 thinking/final/其他容器内部不识别为新别名；不恢复非自闭合或不完整输出。ASK 仍经原工具权限闸，未改 PLAN 既有行为。
 - 回归：`XmlToolCallParserTest` 保存完整实际失败形态；`AskUserOrchestratorFlowTest` 验证提问事件、持久化、同批后续写入不执行及 ASK 拒绝。`AskUserLiveEvaluationTest` 只量提问/进入编辑工具的行为，不代表真实文档删改成功。
 
+## 外部支出准入（dev-board#1083，2026-09-30）
+
+- 官方桌面云模型运行时统一 AWD_CLOUD；旧 OPENROUTER 配置与环境变量 Key 不能绕登录/余额，显式本地 OLLAMA 保留。
+- `/agent/chat`、`/agent/ppt/generate` 在异步受理前 `ensurePaidAccess(userId)`；拒绝返回结构化账户信封，聊天直连 fetch 也必须识别，不能只等 SSE。
+- 主循环、子 Agent 与文档分块解析每次生成前重新取得模型，校验当前账户/余额，不能沿用退出前的密钥实例。
+- `ToolRegistry` 对付费工具的账户失败发送 `account_action_required`（JSON 机器码）；这是非终态通知，前端仅打开登录/充值框，模型收到“跳过此次操作、基于已有信息继续”的结果。流式模型自身余额耗尽仍为终态 `error`，载荷带 `reason=no_credits`。
+- 具体余额、登录缓存与充值契约见 `licensing-billing.md` 地雷 23；本地免费能力不加账户门。
+
 ## 智能决策辅助（实验性，dev-board#824，2026-09-23）
 
 - **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。
@@ -944,6 +952,8 @@ ChatInterface.handleSubmit（~:927）→ useAgentStream.sendMessage（确保 SSE
 - 验证：`mvn test -Dtest='AskUserQuestionTest,AskUserOrchestratorFlowTest,ContextAssemblerAskUserTest,OrchestratorReplayEvalTest'`（回放用例 `cases-ask-user.json` 6 例）；真实模型 `RUN_LIVE_MODEL_CHECK=1 OPENROUTER_API_KEY=… mvn test -Dtest=AskUserLiveEvaluationTest`（`AI_EVAL_RUNS` / `AI_EVAL_SMOKE_MODEL` 可调，用生产 ContextAssembler + docx 会话工具集 + 生产 XmlToolCallParser，合成材料）；前端 `node --test tests/project-home/ask-user-answer.test.mjs`、真渲染 `node tests/chat-presentation-ui/ask-user.mjs`（单选 / 多选 + 其他 + 键盘 / 开放式 / 只读高亮 / 历史回灌 / 窄栏 / 浅深主题 / 英文）。
 
 ## SSE 事件名清单
+
+**account_action_required**：付费工具或异步 PPT 任务需要登录/充值的非终态通知，JSON 包含 `code`、`message` 与 `reason`，并带 `kind` 或 `gatewayKind`。前端打开相应弹框，不据此结束聊天流；模型自身的账户失败仍走终态 `error`。
 
 connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的 reasoning 增量，`{"content":"…"}`，只进思考卡、不进正文；随消息落 `reasoning` 列，state_recovery 的 `events` 里按序带着它，重连/切回后原样重放，见「思考记录的持久化与断线恢复」）/ artifact / token_usage / bubble_end（status: finished|paused|awaiting_approval|awaiting_input；外加 **documentEdited**，见下）/ error / cancelled / **file_change**（见下）/ client_action / title_update / doc_stream_data（旧名 wps_stream_data 已于 dev-board#816 摘除，出站单名）/ doc_stream_end（编辑器流式写入收尾，前端据此落盘并报失败）/ state_recovery（断线重连快照）/ run_state / plan_update / **skill_update** / background_task_start / background_task_complete / task_progress / heartbeat / subtask_progress / **pass_progress**（整篇分段过卷进度，dev-board#422）/ **context_notice**（附件降级/截断/丢弃 + 上下文超窗，见下）/ inbox_updated / input_applied / **superseded**（本连接已被同会话的另一个客户端实例接管，见下）/ **provider_retry**（首字节前只收到保活、后端已换一家供应商重发，`{"from":"<供应商显示名或 unknown>"}`，只驱动思考卡副文案，dev-board#1061）/ **ask_user**（ask_user 工具的结构化提问，带版本号 `v`，紧跟在同一问题的 `<question kind="ask_user">` 标记之后、`bubble_end status=awaiting_input` 之前，见上文「向用户提问 ask_user 工具」）。前端分派均在 useAgentStream.handleEvent。超限 paused 契约见 PR#172。
 

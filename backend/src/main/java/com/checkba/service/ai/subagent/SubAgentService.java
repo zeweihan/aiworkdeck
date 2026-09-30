@@ -356,7 +356,6 @@ public class SubAgentService {
                 .filter(s -> allowed.contains(s.name()))
                 .toList();
 
-        ChatLanguageModel model = chatModelFactory.getChatModel(modelId);
         // 继承会话身份和取消 checker；父 runId 只留在取消句柄，不能把父技能状态当作子消息栈已有上下文。
         ToolContext subCtx = parentCtx == null
                 ? new ToolContext(null, null, null, modelId, specs, allowed, null, null,
@@ -390,6 +389,8 @@ public class SubAgentService {
 
             Response<AiMessage> response;
             try {
+                // Recheck account/balance and key ownership before every paid round.
+                ChatLanguageModel model = chatModelFactory.getChatModel(modelId);
                 response = specs.isEmpty() ? model.generate(messages) : model.generate(messages, specs);
             } catch (Exception e) {
                 log.warn("Sub-agent {} LLM call failed at round {}", subtaskId, round, e);
