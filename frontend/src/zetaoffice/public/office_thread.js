@@ -5872,18 +5872,54 @@ const EXEC = {
     if (!comment) return { success: false, message: 'add_comment requires {comment}' };
     const range = anchorRange(anchorId);
     if (!range) return { success: false, message: 'anchor not found: ' + anchorId };
-    const annotatedText = (range.getString() || '').slice(0, 120);
-    // 拟人：选中并滚动到被批注的位置——选区同时就是批注的附着区间
-    if (!selectVisibly(range)) return { success: false, message: 'could not select anchor: ' + anchorId };
-    withRecordChangesOff(function () {
-      css.frame.DispatchHelper.create(context).executeDispatch(
-        ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
-        [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
-    });
+    const targetText = String(range.getString() || '');
+    if (!targetText) return tableFail('批注目标文本已为空，请重新定位后重试');
+    const annotations = function () {
+      const fields = [], en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation')) fields.push(f);
+      }
+      return fields;
+    };
+    const before = new Set(annotations().map(commentIdOf));
+    const view = ctrl.getViewSettings();
+    const showAnnotations = !!view.getPropertyValue('ShowAnnotations');
+    // dev-board#1105: a focused native annotation shell can consume the next
+    // InsertAnnotation and discard its text/selection. Set the actual view
+    // property: dispatching the toggle through that same shell is unreliable.
+    try {
+      withViewOnlyChange(function () { view.setPropertyValue('ShowAnnotations', false); });
+      if (!selectVisibly(range)) return { success: false, message: 'could not select anchor: ' + anchorId };
+      withRecordChangesOff(function () {
+        css.frame.DispatchHelper.create(context).executeDispatch(
+          ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+          [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
+      });
+    } finally {
+      // InsertAnnotation enables annotations itself. Close its editor before
+      // restoring the user's setting, including an originally hidden sidebar.
+      withViewOnlyChange(function () {
+        view.setPropertyValue('ShowAnnotations', false);
+        view.setPropertyValue('ShowAnnotations', showAnnotations);
+      });
+    }
+    const added = annotations().filter(function (f) { return !before.has(commentIdOf(f)); });
+    if (added.length !== 1) return tableFail('批注写入未通过核验，请检查审阅列表后重试');
+    const field = added[0], actualRange = field.getAnchor(), text = range.getText();
+    const content = String(field.getPropertyValue('Content') || '');
+    const author = String(field.getPropertyValue('Author') || '');
+    const annotatedText = String(actualRange.getString() || '');
+    // The field adds a zero-width annotation marker at its end, so native end
+    // positions differ from the bookmark. Match the native start and full text.
+    if (content !== comment || author !== AI_AUTHOR
+      || text.compareRegionStarts(actualRange, range) !== 0 || annotatedText !== targetText) {
+      return tableFail('批注内容或附着范围未通过核验，请检查审阅列表后重试');
+    }
     return {
-      success: true, anchor: anchorId, author: AI_AUTHOR, comment: comment,
-      annotatedText: annotatedText,
-      paragraph: (paragraphTextOf(range) || '').slice(0, 200),
+      success: true, anchor: anchorId, author: author, comment: content,
+      annotatedText: annotatedText.slice(0, 120),
+      paragraph: (paragraphTextOf(actualRange) || '').slice(0, 200),
     };
   },
   // 用户在工具栏上给**当前选区**加批注。与 add_comment 的差别有两处，所以不能
