@@ -30,10 +30,13 @@ public class ChatModelFactory {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChatModelFactory.class);
 
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
+
     private final AiModelProperties aiModelProperties;
     private final com.checkba.service.SystemSettingService systemSettingService;
     private final PlatformAiChannel platformAiChannel;
-    /** 平台通道的余额闸：确知 Credits 为 0 时不让这一轮跑起来。 */
+    /** 平台通道的余额闸：登录且确认正余额才可发起外部付费调用。 */
     private final PlatformCreditsGate platformCreditsGate;
     private final PlatformUsageAccountant usageAccountant;
     /**
@@ -99,6 +102,8 @@ public class ChatModelFactory {
      * 未配置或值非法时回退 application.yml 的静态配置。
      */
     public AiModelProperties.Provider resolveProvider() {
+        // Official desktop cloud calls must use the signed-in account, never an old DB/env key.
+        if (localMode && !isExplicitLocalProvider()) return AiModelProperties.Provider.AWD_CLOUD;
         String configured = systemSettingService.get("ai.activeProvider", null);
         if (configured != null && !configured.isBlank()) {
             try {
@@ -424,6 +429,13 @@ public class ChatModelFactory {
                     targetModel, defaultModel);
         }
         return defaultModel;
+    }
+
+    /** Check before starting asynchronous paid work so callers receive the account error directly. */
+    public void ensurePaidAccess(Long userId) {
+        if (resolveTarget(null, false).channel() == AiModelProperties.Provider.AWD_CLOUD) {
+            PlatformAiUserScope.run(userId, () -> platformApiKey());
+        }
     }
 
     /**

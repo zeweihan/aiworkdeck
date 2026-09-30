@@ -299,7 +299,7 @@ public class AccountService {
             if ("no_credits".equals(code)) {
                 throw new AccountException(AccountException.Kind.CONFLICT,
                         LangText.of("账户 Credits 余额为空，到官网充值后即可使用平台 AI",
-                                "Your account has no Credits balance. Top up on the website to use the platform AI channel"));
+                                "Your account has no Credits balance. Top up to use the platform AI channel"), "no_credits");
             }
             if ("no_allocation".equals(code)) {
                 // 旧版官网才会返回；新版已无此分支

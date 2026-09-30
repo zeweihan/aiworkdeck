@@ -133,13 +133,18 @@ public class PlatformGatewayClient {
         return accountService.currentKeyOrNull() != null;
     }
 
+    /** Fail before starting an asynchronous job or swallowing lookup errors into a result. */
+    public void ensureConnected() {
+        requireKey();
+    }
+
     private String requireKey() {
         String key = accountService.currentKeyOrNull();
         if (key == null) {
             // 不发请求。发出去只会拿回 401，而 401 在桌面端会被判成凭据失效并清空权益缓存。
             throw new GatewayException(GatewayException.Kind.NOT_CONNECTED,
-                    LangText.of("尚未连接 AI WorkDeck 账户，可在设置页「账户与用量」粘贴账户 Key",
-                            "No AI WorkDeck account is connected. Paste your account key in Settings → Account & usage"));
+                    LangText.of("请登录 AI WorkDeck 账户后使用此功能",
+                            "Sign in to your AI WorkDeck account to use this feature"));
         }
         return key;
     }
@@ -179,8 +184,8 @@ public class PlatformGatewayClient {
             case "service_disabled", "not_configured" -> new GatewayException(
                     GatewayException.Kind.SERVICE_DISABLED,
                     fallback(serverMessage, LangText.of(
-                            "该服务暂未开放，可在系统管理里改用自己的 Key",
-                            "This service is not available yet. You can switch to your own key in System settings")));
+                            "该服务暂未开放，请稍后重试",
+                            "This service is not available yet. Please try again later")));
             // 用户自己设的单次任务上限被撞上。它与其余七档的性质不同：**任务没坏，钱也没白花**，
             // 用户确认一句就能继续（设计 §4.9）。不认这个码的话它会落到下面按状态码分类的
             // 409 分支，变成一句「平台服务返回了预期外的状态」——一个可恢复的确认被表达成故障。
@@ -200,13 +205,13 @@ public class PlatformGatewayClient {
                     fallback(serverMessage, LangText.of("请求不合法", "The request was rejected as invalid")));
             default -> switch (reply.status()) {
                 case 401, 403 -> new GatewayException(GatewayException.Kind.UNAUTHORIZED,
-                        LangText.of("账户 Key 无效或已被撤销", "The account key is invalid or has been revoked"));
+                        LangText.of("账户登录已失效，请重新登录", "Your account session has expired. Please sign in again"));
                 case 502, 504 -> new GatewayException(GatewayException.Kind.UPSTREAM_FAILED,
                         LangText.of("该服务的上游暂时不可用，其余功能不受影响",
                                 "The upstream provider for this service is temporarily unavailable; other features are unaffected"));
                 case 503 -> new GatewayException(GatewayException.Kind.SERVICE_DISABLED,
-                        LangText.of("该服务暂未开放，可在系统管理里改用自己的 Key",
-                                "This service is not available yet. You can switch to your own key in System settings"));
+                        LangText.of("该服务暂未开放，请稍后重试",
+                                "This service is not available yet. Please try again later"));
                 default -> new GatewayException(GatewayException.Kind.MALFORMED,
                         LangText.of("平台服务返回了预期外的状态（" + reply.status() + "）",
                                 "The platform service returned an unexpected status (" + reply.status() + ")"));
@@ -221,9 +226,9 @@ public class PlatformGatewayClient {
      */
     private String unreachableMessage() {
         return LangText.of(
-                "AI WorkDeck 平台服务暂时不可用（不是你的网络问题），稍后重试，或在系统管理里改用自己的 Key",
+                "AI WorkDeck 平台服务暂时不可用（不是你的网络问题），请稍后重试",
                 "The AI WorkDeck platform service is temporarily unavailable (not a problem with your network). "
-                        + "Retry shortly, or switch to your own key in System settings");
+                        + "Please try again later");
     }
 
     /** 服务端文案优先（它更贴近具体原因），缺失时用本地兜底。 */

@@ -42,6 +42,14 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - 代码围栏、普通示例文字及 thinking/final/其他容器内部不识别为新别名；不恢复非自闭合或不完整输出。ASK 仍经原工具权限闸，未改 PLAN 既有行为。
 - 回归：`XmlToolCallParserTest` 保存完整实际失败形态；`AskUserOrchestratorFlowTest` 验证提问事件、持久化、同批后续写入不执行及 ASK 拒绝。`AskUserLiveEvaluationTest` 只量提问/进入编辑工具的行为，不代表真实文档删改成功。
 
+## 外部支出准入（dev-board#1083，2026-09-30）
+
+- 官方桌面云模型运行时统一 AWD_CLOUD；旧 OPENROUTER 配置与环境变量 Key 不能绕登录/余额，显式本地 OLLAMA 保留。
+- `/agent/chat`、`/agent/ppt/generate` 在异步受理前 `ensurePaidAccess(userId)`；拒绝返回结构化账户信封，聊天直连 fetch 也必须识别，不能只等 SSE。
+- 主循环、子 Agent 与文档分块解析每次生成前重新取得模型，校验当前账户/余额，不能沿用退出前的密钥实例。
+- `ToolRegistry` 对付费工具的账户失败发送 `account_action_required`（JSON 机器码）；这是非终态通知，前端仅打开登录/充值框，模型收到“跳过此次操作、基于已有信息继续”的结果。流式模型自身余额耗尽仍为终态 `error`，载荷带 `reason=no_credits`。
+- 具体余额、登录缓存与充值契约见 `licensing-billing.md` 地雷 23；本地免费能力不加账户门。
+
 ## 智能决策辅助（实验性，dev-board#824，2026-09-23）
 
 - **一期范围只有工具类目预选**：TypeSafe Jev 读本次 `AgentChatRequest.message` 和当前可用工具的类目/名称，尝试减少下发主模型的工具说明 token 与总费用；不代替用户选择的主模型，不裁决法律结论、权限或工具执行成功。全流程研究过上下文筛选、摘要增量门控、子 Agent 交付检查，但未证明净收益，**未接入这些路径**。评估必须算上 Jev 自身耗时和费用，不能把减少输入 token 称为端到端提速；用户已接受成本与速度平衡、回复可能稍慢。

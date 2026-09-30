@@ -51,7 +51,13 @@ public class ExternalProviderResolver {
         ExternalServiceProvider configured = ExternalServiceProvider.parse(
                 systemSettingService.get(providerKey(service), null),
                 ExternalServiceProvider.PLATFORM);
-        if (!localMode && configured == ExternalServiceProvider.PLATFORM) {
+        // Official desktop paid services always use the account gateway; stale BYOK settings
+        // must not bypass login and Credits. Only ASR has a genuinely local implementation.
+        if (localMode) {
+            return configured == ExternalServiceProvider.LOCAL && ExternalServiceProvider.ASR.equals(service)
+                    ? ExternalServiceProvider.LOCAL : ExternalServiceProvider.PLATFORM;
+        }
+        if (configured == ExternalServiceProvider.PLATFORM) {
             return ExternalServiceProvider.BYOK;
         }
         return configured;

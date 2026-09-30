@@ -61,6 +61,34 @@ class ChatModelFactoryTest {
                         "test"));
     }
 
+    @Test
+    void desktopNeverUsesLegacyOrEnvironmentKeyForCloudCalls() {
+        org.springframework.test.util.ReflectionTestUtils.setField(factory, "localMode", true);
+        setDbProvider("OPENROUTER");
+        properties.getOpenRouter().setApiKey("legacy-key-must-not-be-used");
+        doThrow(com.checkba.service.account.AccountRequired.exception("platform_ai", "Sign in"))
+                .when(creditsGate).ensureCredits(any());
+        assertEquals(AiModelProperties.Provider.AWD_CLOUD, factory.resolveProvider());
+        assertThrows(com.checkba.service.account.AccountException.class, () -> factory.getChatModel(null));
+        assertThrows(com.checkba.service.account.AccountException.class, () -> factory.getStreamingChatModel(null));
+        assertThrows(com.checkba.service.account.AccountException.class,
+                () -> factory.getWritingModel(java.time.Duration.ofSeconds(1)));
+        assertThrows(com.checkba.service.account.AccountException.class, () -> factory.ensurePaidAccess(1L));
+        verify(platformAiChannel, never()).apiKey();
+        verifyNoInteractions(usageAccountant);
+    }
+
+    @Test
+    void desktopDefaultAlsoUsesAccountButExplicitLocalStaysOffline() {
+        org.springframework.test.util.ReflectionTestUtils.setField(factory, "localMode", true);
+        assertEquals(AiModelProperties.Provider.AWD_CLOUD, factory.resolveTarget(null, false).channel());
+        setDbProvider("OLLAMA");
+        assertEquals(AiModelProperties.Provider.OLLAMA,
+                factory.resolveTarget(AllowedModels.QWEN_3_7_FLASH.getModelId(), false).channel());
+        factory.ensurePaidAccess(1L);
+        verifyNoInteractions(creditsGate, platformAiChannel, usageAccountant);
+    }
+
     private void setDbProvider(String provider) {
         when(systemSettingService.get(eq("ai.activeProvider"), any())).thenReturn(provider);
     }

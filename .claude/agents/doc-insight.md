@@ -503,3 +503,9 @@ cd backend && mvn clean test                      # 全量（跨类常量内联�
 显式深入审校的模型阶段总预算105秒（前端120秒），按剩余时间创建不缓存的辅助模型客户端；可重试类整轮自动重试一次（首次尝试为此预留35秒），限流/额度/地域/超窗不重试；传输/账户错误即停止后续块，保留已完成发现并`deepComplete=false`＋`deepReason`原因码。失败日志带`chunk=n/总数`、`chars`、`budgetMs`、`setupMs`（余额探测＋provision key＋DNS/TLS）、`callMs`、`status`、`model`，用于证实或排除首轮冷启动。正文异步解析累计失败块并在结果摘要说明遗漏风险。自动补全扫描最多10000段/200000字，仍有有限候选。边界、回归和实测分层见 `doc/document-resilience-audit.md`。
 
 解析排队使用2工作线程+32等待容量；超载请求返回可见繁忙提示并清理RUNNING/inFlight，拒绝路径不启动AI。真实饱和恢复测试见`DocInsightServiceTest.saturatedParseQueueRejectsCleanlyAndRecovers`。
+
+## 登录与充值闸（2026-09-30）
+
+- `startParse` 投递异步任务前、`review(deep=true)` 调模型前调用 `ChatModelFactory.ensurePaidAccess(userId)`；账户错误保留结构化响应，不降级成“部分完成”。异步解析每个抽取块重新经模型工厂检查账户与余额；中途账户失败停止后续块及外部检索，不按普通坏输出跳过后继续收费。`deep=false` 仍纯本地，不要求账户或余额。
+- `lookupSelection` 在参数与项目权限校验后、读取检索凭证前检查平台账户；非 DOC 的 `refreshEntity` 同样检查。显式查询遇到 NOT_CONNECTED / UNAUTHORIZED / NO_CREDITS 必须向 HTTP 层抛出，让前端显示登录或充值框，不能只落一条“未配置 Key”说明。批量解析的实体失败仍保留逐条结果。
+- `ExternalProviderResolver` 在官方桌面运行时把付费服务固定到平台网关，防止历史 BYOK 或非法 LOCAL 档绕过账户；仅本地 ASR 保留 LOCAL。TTS、本地审校、DOC 项目内文件匹配不产生平台费用，不受此限制。

@@ -2297,6 +2297,23 @@ public class AgentOrchestrator {
                 return;
             }
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
+            com.checkba.service.account.AccountException accountError =
+                    err instanceof com.checkba.service.account.AccountException ae ? ae : null;
+            if (accountError == null && kind == LlmErrorClassifier.Kind.QUOTA_EXHAUSTED
+                    && chatModelFactory.resolveProvider() == com.checkba.config.AiModelProperties.Provider.AWD_CLOUD) {
+                accountError = new com.checkba.service.account.AccountException(
+                        com.checkba.service.account.AccountException.Kind.CONFLICT,
+                        LangText.of("账户 Credits 余额不足，请充值后重试", "Your Credits balance is insufficient. Top up and retry"),
+                        "no_credits");
+            }
+            if (accountError != null) {
+                markRunState(guard, AgentRunStateService.RunStatus.ERROR);
+                sendRunEvent(guard, "error", accountErrorPayload(accountError));
+                saveAssistantMessageQuietly(guard, projectId, userId, accountError.getMessage());
+                closeSse(guard);
+                endRun(guard);
+                return;
+            }
             boolean replayable = !handler.hasStreamedTokens();
             // 同模型退避重放还要求「思考也没流出过」（dev-board#1061）：思考型模型（Kimi K3）一轮纯思考
             // 可以跑到 OkHttp callTimeout（600s），这时正文一个字没出、按上面的判据「可重放」——
@@ -2472,7 +2489,10 @@ public class AgentOrchestrator {
             // 在途请求的句柄交给本轮的 RunGuard，「停止」才掐得断它（计划 K4 ①）。
             // trackInflight 自己会补查一次取消标志：请求刚发出、标志恰好落在这两步之间时，
             // 不补这一下那次请求就永远没人去掐。
-            guard.trackInflight(startGeneration(model, messages, visible, handler));
+            // Re-resolve on every round: logout/zero balance must stop continuation, and an
+            // account switch must never keep spending the previous model instance's key.
+            StreamingChatLanguageModel currentModel = chatModelFactory.getStreamingChatModel(modelId);
+            guard.trackInflight(startGeneration(currentModel, messages, visible, handler));
         } catch (Exception e) {
             // 同步抛错与异步失败共用终态闸：取消看门狗并执行有限重试 / 模型切换。
             handler.onError(e);

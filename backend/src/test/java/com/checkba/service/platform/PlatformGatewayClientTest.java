@@ -67,6 +67,8 @@ class PlatformGatewayClientTest {
         GatewayException e = assertThrows(GatewayException.class,
                 () -> client.call("search", "web", Map.of("query", "x"), 30));
         assertEquals(GatewayException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(e.getMessage().contains("登录") || e.getMessage().contains("Sign in"));
+        assertFalse(e.getMessage().contains("Key"));
         // 发出去只会拿回 401，而 401 在桌面端会被判成凭据失效并清空已购权益缓存
         assertTrue(transport.calls.isEmpty(), "未连账户时不该发出任何请求");
     }
@@ -150,7 +152,7 @@ class PlatformGatewayClientTest {
         // 账户通道那句「请检查网络后重试」会让用户去重启路由器，而真实原因往往是我们在发版
         assertTrue(e.getMessage().contains("不是你的网络问题") || e.getMessage().contains("not a problem with your network"),
                 "网关不可达的文案必须明说这不是用户的网络问题，实际为：" + e.getMessage());
-        assertTrue(e.suggestsByok(), "我们挂了的时候，自备 Key 是一条有意义的出路");
+        assertFalse(e.suggestsByok(), "官方桌面不提供绕过账户的路径");
     }
 
     @Test
@@ -185,17 +187,10 @@ class PlatformGatewayClientTest {
     }
 
     @Test
-    @DisplayName("除「Key 无效」与我们自己的 bug 外，都要摆出「改用自己的 Key」的出路")
-    void byokIsOfferedWhereverItHelps() {
-        // 用试用码解锁、根本不打算连账户的用户，自备 Key 是他唯一的出路——
-        // 只提示「去连账户」等于把这批人（README 公开试用码是主要获客入口）堵死
-        assertTrue(new GatewayException(GatewayException.Kind.NOT_CONNECTED, "x").suggestsByok());
-        assertTrue(new GatewayException(GatewayException.Kind.NO_CREDITS, "x").suggestsByok());
-        assertTrue(new GatewayException(GatewayException.Kind.SERVICE_DISABLED, "x").suggestsByok());
-        assertTrue(new GatewayException(GatewayException.Kind.GATEWAY_UNREACHABLE, "x").suggestsByok());
-        assertTrue(new GatewayException(GatewayException.Kind.UPSTREAM_FAILED, "x").suggestsByok());
-        // 这里结论已经明确（Key 无效或被撤销），再塞第二个建议只会让用户不知道该修哪个
-        assertFalse(new GatewayException(GatewayException.Kind.UNAUTHORIZED, "x").suggestsByok());
+    void gatewayNeverSuggestsBypassingTheAccountWithOwnKey() {
+        for (GatewayException.Kind kind : GatewayException.Kind.values()) {
+            assertFalse(new GatewayException(kind, "x").suggestsByok());
+        }
     }
 
     @Test
@@ -211,15 +206,14 @@ class PlatformGatewayClientTest {
     }
 
     @Test
-    @DisplayName("所有网关文案都不含「登录」「未授权」「请先」——命中即被前端判成掉线并清会话")
-    void messagesNeverLookLikeLogout() {
+    @DisplayName("仅账户失败提示登录，余额及平台故障不误导用户重新登录")
+    void onlyAccountFailuresAskForLogin() {
         List<PlatformGatewayTransport.Reply> cases = List.of(
                 new PlatformGatewayTransport.Reply(409, "{\"error\":\"no_credits\"}"),
                 new PlatformGatewayTransport.Reply(409, "{\"error\":\"service_disabled\"}"),
                 new PlatformGatewayTransport.Reply(409, "{\"error\":\"budget_exceeded\"}"),
                 new PlatformGatewayTransport.Reply(502, "{\"error\":\"upstream_failed\"}"),
                 new PlatformGatewayTransport.Reply(503, "{}"),
-                new PlatformGatewayTransport.Reply(401, "{}"),
                 new PlatformGatewayTransport.Reply(418, "{}"),
                 new PlatformGatewayTransport.Reply(PlatformGatewayTransport.Reply.NETWORK_FAILURE, null));
 
@@ -241,9 +235,8 @@ class PlatformGatewayClientTest {
         when(accountService.currentKeyOrNull()).thenReturn(null);
         GatewayException e = assertThrows(GatewayException.class,
                 () -> client.call("search", "web", Map.of(), 30));
-        for (String forbidden : List.of("登录", "未授权", "请先")) {
-            assertFalse(e.getMessage().contains(forbidden), "未连账户文案含「" + forbidden + "」：" + e.getMessage());
-        }
+        assertTrue(e.getMessage().contains("登录") || e.getMessage().contains("Sign in"));
+        assertFalse(e.getMessage().contains("Key"));
     }
 
     @Test

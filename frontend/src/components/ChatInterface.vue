@@ -887,6 +887,7 @@ import { attachmentRecord, attachmentsFromHistory, fileListFromBubble } from '@/
 import { formatAskUserAnswer, parseAskUserAnswer } from '@/utils/askUserAnswer.mjs'
 import { isEnglish } from '@/utils/appLanguage.js'
 import { requireAccount } from '@/utils/requireAccount.js'
+import { requiresAiAccount } from '@/utils/requireAccountCore.js'
 import {
   AI_CONTEXT_FOLDER_FILE_LIMIT,
   countDescendantFiles,
@@ -1578,10 +1579,10 @@ export default {
       }
     }
 
-    // 发送前的账户闸（登录后置，dev-board#1046）：只管平台通道。本地 Ollama / 自备 Key
-    // 不需要账户；供应商取不到（''）时不拦，后端没账户会回 4011，由 SSE error 分支兜底弹层。
+    // All external AI requires an account, including legacy OPENROUTER settings.
+    // Only explicit local Ollama can run without an account.
     const ensureAiAccount = async () => {
-      if (String(activeProvider.value).toUpperCase() !== 'AWD_CLOUD') return true
+      if (!requiresAiAccount(activeProvider.value)) return true
       return requireAccount({ reason: 'ai' })
     }
 

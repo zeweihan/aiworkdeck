@@ -105,6 +105,17 @@ class SubAgentServiceTest {
     }
 
     @Test
+    void accountGateIsCheckedAgainBeforeNextModelRound() {
+        when(modelFactory.getChatModel(any())).thenReturn(model).thenThrow(
+                com.checkba.service.account.AccountRequired.exception("platform_ai", "Sign in"));
+        when(model.generate(anyList(), anyList())).thenReturn(toolCallTurn("search_web", "{}"));
+        SubAgentResult result = newService().dispatch("task", "result", List.of("search_web"), PARENT_CTX);
+        assertFalse(result.success());
+        verify(model, times(1)).generate(anyList(), anyList());
+        verify(modelFactory, times(2)).getChatModel(AUX_MODEL);
+    }
+
+    @Test
     @DisplayName("身份继承（不变式 3）：子 Agent 工具调用的 ToolContext 与主会话一致 + 进度事件成对发送")
     void identityInheritedFromParentContext() {
         when(model.generate(anyList(), anyList())).thenReturn(

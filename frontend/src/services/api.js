@@ -9,7 +9,7 @@
 import { getAuthHeaders, getSessionId, clearSession } from '@/utils/auth.js'
 import { host, isDesktopHost } from '@/services/host.js'
 import { t } from '@/i18n'
-import { accountRequiredError } from '@/utils/requireAccountCore.js'
+import { accountRequiredError, isCreditsRequired, isAccountRequired } from '@/utils/requireAccountCore.js'
 
 /**
  * 功能未配置时的统一引导（#18 T7）。
@@ -277,7 +277,7 @@ function request(options) {
             err.smsRequired = true;
             err.data = res.data.data || {};
             reject(err);
-          } else if (res.data.code === 4011) {
+          } else if (res.data.code === 4011 || (options.accountPrompt !== false && isAccountRequired(res.data))) {
             // 需要账户（登录后置，dev-board#1046；后端 AccountRequired）：这台电脑还没登录
             // AI WorkDeck 账户，而这项功能要账户（平台 AI、平台服务、广场付费项、官方案件库、
             // 会议云端转写、听写）。**这不是会话失效**——不清会话、不跳页，下面的 4010 分支一字未动。
@@ -393,6 +393,13 @@ function request(options) {
             if (res.data.gatewayKind) {
               bizErr.gatewayKind = res.data.gatewayKind;
               bizErr.canUseOwnKey = res.data.canUseOwnKey !== false;
+            }
+            if (res.data.kind) bizErr.kind = res.data.kind;
+            if (isCreditsRequired(bizErr) && options.accountPrompt !== false) {
+              // The rejected operation never ran. Opening the wallet must not turn it into success.
+              import('@/utils/requireAccount.js')
+                .then((m) => m.requireRecharge({ auto: true }))
+                .catch((e) => console.warn('[api] 充值弹层不可用:', e))
             }
             reject(bizErr);
           }
@@ -1336,6 +1343,7 @@ export function getAccountStatus() {
 export function connectAccount(key) {
   return request({
     url: '/api/account/connect',
+    accountPrompt: false, // Authentication failures belong in this form, not another login dialog.
     method: 'POST',
     data: { key },
     header: {
@@ -1351,6 +1359,7 @@ export function connectAccount(key) {
 export function sendAccountLoginCode(identifier, captchaToken, isPhone = true) {
   return request({
     url: '/api/account/login/send-code',
+    accountPrompt: false, // Authentication failures belong in this form, not another login dialog.
     method: 'POST',
     // captchaToken 必须一路传到官网：官网启用人机验证后不带就是 403，
     // 而它无法区分「桌面端转发」与「攻击者直接 POST」，所以不存在「桌面端豁免」这条路。
@@ -1377,6 +1386,7 @@ export function getAccountCaptchaConfig() {
 export function loginAccount(payload) {
   return request({
     url: '/api/account/login',
+    accountPrompt: false, // Authentication failures belong in this form, not another login dialog.
     method: 'POST',
     data: payload,
     header: {

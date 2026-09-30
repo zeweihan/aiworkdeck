@@ -40,6 +40,10 @@ import com.checkba.service.insight.DocInsightViews.RunView;
 import com.checkba.service.insight.DocInsightViews.StartResult;
 import com.checkba.service.legal.PkulawChannel;
 import com.checkba.service.platform.GatewayException;
+import com.checkba.service.platform.ExternalProviderResolver;
+import com.checkba.service.platform.ExternalServiceProvider;
+import com.checkba.service.platform.PlatformGatewayClient;
+import com.checkba.service.account.AccountException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -159,6 +163,8 @@ public class DocInsightService {
     private final QichachaService qichachaService;
     private final McpClientService mcpClientService;
     private final PkulawChannel pkulawChannel;
+    private final ExternalProviderResolver externalProviderResolver;
+    private final PlatformGatewayClient platformGatewayClient;
     private final InsightProperties props;
     private final ObjectMapper om;
 
@@ -259,6 +265,7 @@ public class DocInsightService {
         boolean deepComplete = false;
         DeepRun deepRun = null;
         if (deep) {
+            chatModelFactory.ensurePaidAccess(userId);
             String key = projectId + ":" + docFileId;
             if (!deepReviews.add(key)) throw new IllegalStateException("这份文档正在深入审校中");
             try {
@@ -335,6 +342,9 @@ public class DocInsightService {
                     claims.addAll(parsed.claims());
                     issues.addAll(parsed.issues());
                     break;
+                } catch (AccountException e) {
+                    // Login and top-up are actionable; preserve their structured response.
+                    throw e;
                 } catch (FeatureNotConfiguredException e) {
                     // 辅助模型不在可用清单里（要去设置页换一个）——这不是可降级的传输故障，
                     // 而是一条用户能自己修的配置错误。吞成 deepComplete=false 的话界面只会说
@@ -543,6 +553,7 @@ public class DocInsightService {
     public StartResult startParse(Long userId, Long projectId, Long docFileId) {
         requireWrite(projectId, userId);
         ProjectFile file = requireDoc(projectId, docFileId);
+        chatModelFactory.ensurePaidAccess(userId);
 
         String key = projectId + ":" + docFileId;
         if (!inFlight.add(key)) {
@@ -657,12 +668,13 @@ public class DocInsightService {
     private int extract(Long runId, String text, List<RawEntity> into, List<Claim> claims,
                          Long projectId, Long userId) {
         List<String> chunks = DocInsightExtraction.chunks(text, props.getChunkChars(), props.getChunkOverlap());
-        // 模型解析不出来（未配置辅助模型）要整轮失败：抽取是管线的地基，没有它只剩正则那点东西
-        ChatLanguageModel model = chatModelFactory.getAuxChatModel();
         String modelId = auxModelResolver.auxModelId();
         int failedChunks = 0;
         for (int i = 0; i < chunks.size(); i++) {
             phase(runId, LangText.of("抽取实体 ", "Extracting entities ") + (i + 1) + "/" + chunks.size());
+            // Recheck the account and Credits before every paid chunk, including cached models.
+            // Configuration/account failures stop the whole run rather than skipping into another charge.
+            ChatLanguageModel model = chatModelFactory.getAuxChatModel();
             try {
                 // 走 List 版而不是可变参数版：可变参数是接口的 default 方法，
                 // 单测里 mock 掉之后不会转发到真正的实现，stub 会落空
@@ -677,6 +689,8 @@ public class DocInsightService {
                 }
                 into.addAll(parsed.entities());
                 claims.addAll(parsed.claims());
+            } catch (AccountException e) {
+                throw e;
             } catch (Exception e) {
                 failedChunks++;
                 log.warn("解析第 {} 块失败，跳过: {}", i + 1, e.getMessage());
@@ -1542,6 +1556,7 @@ public class DocInsightService {
     public EntityView refreshEntity(Long userId, Long projectId, Long entityId) {
         requireWrite(projectId, userId);
         DocInsightEntity row = requireEntity(projectId, entityId);
+        ensureLookupAccount(row.getKind());
         // 检索本身可能打网络，同样包进身份作用域：控制器线程没有它
         PlatformAiUserScope.run(userId, () -> {
             try {
@@ -1552,6 +1567,7 @@ public class DocInsightService {
                 row.setFetchedAt(LocalDateTime.now());
             }
         });
+        throwLookupAccountFailure(row);
         return view(entities.save(row), true);
     }
 
@@ -1565,6 +1581,7 @@ public class DocInsightService {
         if (name.length() < 2 || name.length() > 160 || name.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException("查询文本须为 2 至 160 字的单行文字");
         }
+        ensureLookupAccount(kind);
         DocInsightExtraction.RawEntity raw;
         if ("COMPANY".equals(kind)) raw = DocInsightExtraction.company(name, name);
         else if ("CASE".equals(kind)) raw = DocInsightExtraction.caseRef(name, "", name);
@@ -1586,7 +1603,29 @@ public class DocInsightService {
                 row.setFetchedAt(LocalDateTime.now());
             }
         });
+        throwLookupAccountFailure(row);
         return view(row, true);
+    }
+
+    private void ensureLookupAccount(String kind) {
+        if ("DOC".equals(kind)) return;
+        String service = "COMPANY".equals(kind) ? ExternalServiceProvider.QICHACHA : ExternalServiceProvider.PKULAW;
+        if (externalProviderResolver.resolve(service) == ExternalServiceProvider.PLATFORM) {
+            platformGatewayClient.ensureConnected();
+        }
+    }
+
+    /** Explicit lookups must open the login/top-up flow rather than return a configuration note. */
+    private void throwLookupAccountFailure(DocInsightEntity row) {
+        String hint = row.getRetrievalHint();
+        GatewayException.Kind kind = DocInsightEntity.HINT_NOT_CONNECTED.equals(hint)
+                ? GatewayException.Kind.NOT_CONNECTED
+                : DocInsightEntity.HINT_NO_CREDITS.equals(hint) ? GatewayException.Kind.NO_CREDITS
+                : DocInsightEntity.HINT_UNAUTHORIZED.equals(hint)
+                        && externalProviderResolver.resolve("COMPANY".equals(row.getKind())
+                                ? ExternalServiceProvider.QICHACHA : ExternalServiceProvider.PKULAW)
+                            == ExternalServiceProvider.PLATFORM ? GatewayException.Kind.UNAUTHORIZED : null;
+        if (kind != null) throw new GatewayException(kind, row.getRetrievalNote());
     }
 
     // ---------------------------------------------------------------- 视图

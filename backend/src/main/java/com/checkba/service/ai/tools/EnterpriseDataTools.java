@@ -38,8 +38,8 @@ import java.util.Map;
  * <b>分档在那两个 service 内部</b>：平台档走网关按次扣 Credits，自备 Key 档
  * 走用户自己的凭证。所以这两个工具不是「平台档专用」，换档不会让它们失效。
  *
- * <p>网关失败<b>不抛异常打断整轮对话</b>：返回一段说明文本让模型基于已有信息继续，
- * 与 {@code WebTools.search_web} 同一口径（licensing-billing 地雷 27）。
+ * <p>账户错误由 ToolRegistry 通知前端登录或充值，再回喂跳过说明；其余网关失败直接返回
+ * 说明文本，让模型基于已有信息继续（licensing-billing 地雷 27）。
  */
 @Component
 @RequiredArgsConstructor
@@ -205,6 +205,10 @@ public class EnterpriseDataTools implements AgentToolComponent {
 
     /** 网关失败的统一说明文本。官方版没有自备 Key 入口（#533），只指真实存在的出路。 */
     private String unavailable(String action, GatewayException e) {
+        switch (e.getKind()) {
+            case NOT_CONNECTED, UNAUTHORIZED, NO_CREDITS -> throw e;
+            default -> { }
+        }
         log.warn("{}走平台通道失败 kind={}: {}", action, e.getKind(), e.getMessage());
         return action + "本次不可用：" + e.getMessage() + e.userHint()
                 + " 本次已跳过该查询，请基于已有信息继续完成任务。";

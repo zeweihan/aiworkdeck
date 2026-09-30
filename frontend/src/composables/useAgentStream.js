@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { isCreditsRequired, isAccountRequired } from '@/utils/requireAccountCore.js'
 import { ref, reactive, nextTick, onUnmounted, getCurrentInstance } from 'vue'
 import { deleteAgentInboxItem, getAgentInbox, getApiBaseUrl, getConversationMetadata, updateAgentInboxItem } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
@@ -92,10 +93,17 @@ function parseAccountErrorPayload(dataStr) {
     if (typeof dataStr !== 'string' || dataStr.charAt(0) !== '{') return null
     try {
         const parsed = JSON.parse(dataStr)
-        return parsed && typeof parsed.message === 'string' && parsed.kind ? parsed : null
+        return parsed && typeof parsed.message === 'string' && (parsed.kind || parsed.gatewayKind) ? parsed : null
     } catch (e) {
         return null
     }
+}
+
+function promptAccountAction(payload) {
+    if (!isAccountRequired(payload) && !isCreditsRequired(payload)) return
+    import('@/utils/requireAccount.js')
+        .then((m) => isAccountRequired(payload) ? m.requireAccountFor4011(payload) : m.requireRecharge({ auto: true }))
+        .catch((e) => console.warn('[SSE] 账户弹层不可用:', e))
 }
 
 export function useAgentStream() {
@@ -860,7 +868,9 @@ export function useAgentStream() {
             //     由后端的「已送达水位」兜住（同卡的后端改动）。
             //   · 前端：POST 成功后仍然 await 这个 promise（见下），建连失败照旧抛出去，
             //     错误处置与改造前完全一致——只是不再让它挡在 POST 前面。
+            const previousSseController = sseAbortController
             const connectPromise = connectSSE(conversationId)
+            const newSseController = sseAbortController !== previousSseController ? sseAbortController : null
             // 建连失败会在下面 await 时统一处置；这里先挂一个空 catch，
             // 免得它在 await 之前就变成 unhandledrejection 打到控制台。
             connectPromise.catch(() => {})
@@ -912,6 +922,20 @@ export function useAgentStream() {
                 throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
             }
             const responseBody = await chatResp.json()
+            // Preflight can reject before a run exists, so no SSE error will follow.
+            if (isAccountRequired(responseBody) || isCreditsRequired(responseBody)
+                || (responseBody && responseBody.code != null && responseBody.code !== 0 && responseBody.code !== 200)) {
+                // Retire only the connection this rejected submission created. A reused
+                // connection or a still-running turn must keep receiving its events.
+                if (!continuingRun && newSseController && sseAbortController === newSseController) {
+                    sseAbortController = null
+                    isConnected.value = false
+                    stopHeartbeatMonitor()
+                    newSseController.abort()
+                }
+                promptAccountAction(responseBody)
+                throw Object.assign(new Error(responseBody.message || t('common.serviceErrorRetryLater')), responseBody)
+            }
             // POST 已经受理，现在才等建连——多半早就连上了（两件事是并行跑的）。
             // 仍然要等：建连失败必须照旧抛出去走同一条错误处置，
             // 否则用户会看到「消息发出去了，但界面永远停在等待」。
@@ -1108,6 +1132,12 @@ export function useAgentStream() {
     }
 
     const handleEvent = (evt, dataStr) => {
+        // A paid tool can be blocked while the agent continues with information it already has.
+        if (evt === 'account_action_required') {
+            promptAccountAction(parseAccountErrorPayload(dataStr))
+            return
+        }
+
         // 这里同样是逐 token 的热路径（每个 text_delta 都要过一次），不要在此加日志：
         // 见上面 SSE 读取循环里的说明（dev-board#750）。
 
@@ -1642,15 +1672,16 @@ export function useAgentStream() {
                 // dev-board#1046）；其余错误仍是字符串。只加不改：解析不出来就按原串走
                 const accountPayload = parseAccountErrorPayload(dataStr)
                 const errMsg = dataStr && accountPayload ? (accountPayload.message || dataStr) : (dataStr || "Unknown Error")
-                if (accountPayload && accountPayload.code === 4011) {
+                if (isAccountRequired(accountPayload)) {
                     // 这台电脑还没登录账户：就地弹登录层（不是会话失效，不清会话）。
                     // 这一轮不自动重发——登录完用户重发即可。平时走不到这里：ChatInterface
                     // 发送前已经用 requireAccount 拦过，这是后端兜底（如退出登录的同一秒里发出的消息）
                     currentAssistantBubble.value.content +=
                         '\n\n' + t('account.loginDialog.aiNotice') + '\n'
-                    import('@/utils/requireAccount.js')
-                        .then((m) => m.requireAccountFor4011(accountPayload))
-                        .catch((e) => console.warn('[SSE] 登录弹层不可用:', e))
+                    promptAccountAction(accountPayload)
+                } else if (isCreditsRequired(accountPayload)) {
+                    currentAssistantBubble.value.content += '\n\n' + errMsg + '\n'
+                    promptAccountAction(accountPayload)
                 } else
                 // 地域拒绝（后端 LlmErrorClassifier.REGION_BLOCKED_MARKER）：上游返回的是一句英文
                 // 「This model is not available in your region」，原样拼给用户等于没有信息。

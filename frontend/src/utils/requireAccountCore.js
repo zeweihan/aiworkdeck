@@ -136,3 +136,19 @@ export function accountRequiredError(backend, loggedIn, retryMessage) {
 export function isAccountLoginRetry(err) {
   return !!(err && err.accountRequired === true && err.loggedIn === true && err.code === 4011)
 }
+
+/** Paid-service failures use machine-readable fields; provider outages are not wallet failures. */
+export function isCreditsRequired(error) {
+  return !!error && (error.gatewayKind === 'NO_CREDITS' || error.kind === 'NO_CREDITS'
+    || error.reason === 'no_credits' || error.reason === 'insufficient_credits')
+}
+
+/** Legacy cloud provider settings still incur external charges. Only explicit local Ollama is exempt. */
+export function requiresAiAccount(provider) {
+  return String(provider || '').toUpperCase() !== 'OLLAMA'
+}
+
+/** An expired platform account needs the same in-place sign-in as a disconnected one. */
+export function isAccountRequired(error) {
+  return !!error && (error.code === 4011 || error.kind === 'UNAUTHORIZED' || error.gatewayKind === 'UNAUTHORIZED')
+}
