@@ -17,7 +17,7 @@ system prompt 的事实分级保留来源事实截止日，不凭系统当天或
 
 ## 意见书收尾补检（dev-board#1097，2026-09-30）
 
-`OpinionCompletionCheck` + `AgentOrchestrator.runOpinionCompletionCheckOnce`：legal-opinion-review 生效且本轮**最初**用户指令过 `SkillRouter.requestsOpinionReview`（public static，同一判据无第二套）的 AGENT 轮正常完成时，服务端经 `SubAgentService.dispatch` 派**一次**固定只读 scope 的核验子任务（标志派发前置位，失败不重派），发现接回主助手核对后续一轮；skill 第 4 步已改为系统安排核验，主助手不再自行派同一种收尾核验。被新 run 取代或已取消时保守跳过（派发前后都查 isCurrentRun）；取消走 `handleCancellation`。目标绑定本轮最初活跃文档，子任务须先确认编辑器当前稿即目标，确认不了如实报未验证。用户指令（原指令 + 插话按序）只作范围数据；UX 局限：收尾前正文可能已流出，核验发现只在后续轮接回。回归：`AgentOrchestratorOpinionCompletionCheckTest`（真实编排器 + 脚本模型接线）。
+`OpinionCompletionCheck` + `AgentOrchestrator.runOpinionCompletionCheckOnce`：legal-opinion-review 生效且本轮**最初**用户指令过 `SkillRouter.requestsOpinionReview`（public static，同一判据无第二套）的 AGENT 轮正常完成时，服务端经 `SubAgentService.dispatch` 派**一次**固定只读 scope 的核验子任务（标志派发前置位，失败不重派），发现接回主助手核对后续一轮；skill 第 4 步已改为系统安排核验，主助手不再自行派同一种收尾核验。被新 run 取代或已取消时保守跳过（派发前后都查 isCurrentRun）；取消走 `handleCancellation`。目标绑定本轮最初活跃文档，子任务须先确认编辑器当前稿即目标，确认不了如实报未验证。用户指令（原指令 + 插话按序）只作范围数据；UX 局限：收尾前正文可能已流出，核验发现只在后续轮接回。回归：`AgentOrchestratorOpinionCompletionCheckTest`（真实编排器 + 脚本模型接线）。dev-board#1107：真机 0.51.3 复测仍出现「正文确定断言 + 仅加待核批注」，已强化 skill prompt 第 2/4 步（缺证时正文表述本身必须限定，批注不替代正文限定；缺证也不得反向得否定结论）与 `OpinionCompletionCheck` 的核验任务及接回消息（同规则，中英双语），测试断言生产注入消息与英文文案携带该规则。
 
 补检目标绑定本轮最初活跃文件；无文件 ID 或已切到别的文件时不派发对子任务的付费核验，接回“未验证”让主助手定位并回读。LOWA 读取回执 `sourceFileId` 用于核对实际读取来源；不能靠文本相似度猜身份。原指令与后续插话按序保留，不截掉长指令尾部的范围限制。
 
