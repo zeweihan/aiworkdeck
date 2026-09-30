@@ -424,6 +424,45 @@ try {
   await page.mouse.move(10, 10)
   await wait(() => !document.querySelector('.rail-panel'))
 
+  // ---- 输入工具行窄栏几何（dev-board#1101）----
+  // 病灶：.mode-name 是 uni 的 <text>，不继承父级 nowrap；.mode-selector 作为
+  // flex 项的 min-content 对 CJK 只有一字宽，240px 最窄栏把它压成「智/能/体」
+  // 三个纵排字。修法与 BUG-41 的 .model-name 同款，这里钉的是真实布局结果：
+  // 模式名保持单行、收缩余量由长模型名的省略号承担、工具行不横向溢出、发送键
+  // 完整留在面板内。欢迎页（empty-flow-container）与会话页（input-area-wrapper）
+  // 两套模板各验一遍。
+  const assertComposerRow = async (label) => {
+    assert.ok(await page.$eval('.mode-name', el => {
+      const style = getComputedStyle(el)
+      const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4
+      return el.getBoundingClientRect().height <= line * 1.5
+    }), `${label}: 模式名保持单行，不逐字竖排`)
+    assert.ok(await page.$eval('.input-footer', el => el.scrollWidth <= el.clientWidth + 1), `${label}: 工具行不横向溢出`)
+    assert.ok(await page.evaluate(() => {
+      const shell = document.querySelector('.chat-interface').getBoundingClientRect()
+      const send = document.querySelector('.send-btn').getBoundingClientRect()
+      return send.width > 0 && send.left >= shell.left - 1 && send.right <= shell.right + 1
+    }), `${label}: 发送键完整留在面板内`)
+    assert.ok(await page.$eval('.model-name', el => el.scrollWidth > el.clientWidth),
+      `${label}: 长模型名由省略号截断吸收收缩，而不是去挤模式名`)
+  }
+  // 长模型名是触发挤压的条件之一，夹具默认空目录只显示「选择模型」，压不出病灶
+  await page.evaluate(() => { window.chatState.currentModelName = 'Very-Long-Model-Name-Pro-Max-Ultra-128k-Preview' })
+  for (const kind of ['conversation', 'empty']) {
+    if (kind === 'empty') {
+      await page.evaluate(() => window.chat.loadMessages('fixture-empty-1101', []))
+      await wait(() => document.querySelector('.empty-flow-container .mode-name'))
+    } else {
+      await page.evaluate(() => window.loadFixture('single'))
+      await wait(() => document.querySelector('.input-area-wrapper .mode-name'))
+    }
+    for (const width of [240, 280, 320]) {
+      await page.setViewport({ width, height: 860 })
+      await assertComposerRow(`${kind} @${width}px`)
+    }
+  }
+  await page.setViewport({ width: 420, height: 860 })
+
 
   // ---- 长会话性能（dev-board#811 K31 / 审查 C-05、C-10、F12）----
   // 病灶：`chatTurns` 挂在深响应式 bubbles 上，流式回答每个 token 都让它全量重建，
@@ -706,9 +745,24 @@ try {
     document.querySelector('.md-copy-btn').textContent.trim(),
     document.querySelector('.tool-copy-btn').getAttribute('title')
   ]), ['Copy', 'Regenerate', 'Copy', 'Copy call'], 'English labels for copy/regenerate')
+  // dev-board#1101 英文面：两套模板、窄栏，模式名「Agent」同样单行不溢出
+  await page.evaluate(() => { window.chatState.currentModelName = 'Very-Long-Model-Name-Pro-Max-Ultra-128k-Preview' })
+  for (const kind of ['conversation', 'empty']) {
+    if (kind === 'empty') {
+      await page.evaluate(() => window.chat.loadMessages('fixture-empty-1101-en', []))
+      await wait(() => document.querySelector('.empty-flow-container .mode-name'))
+    } else {
+      await page.evaluate(() => window.loadFixture('single'))
+      await wait(() => document.querySelector('.input-area-wrapper .mode-name'))
+    }
+    for (const width of [240, 320]) {
+      await page.setViewport({ width, height: 860 })
+      await assertComposerRow(`en ${kind} @${width}px`)
+    }
+  }
   await page.screenshot({ path: `${shots}/k11k13-english.png` })
   assert.deepEqual(errors, [], 'browser runtime errors')
-  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, @ mention picker and the project-pick tab, composer key bindings (Esc/Cmd+Enter/history recall) and focusable send-stop buttons, long-conversation streaming cost and selection survival, narrow widths, themes, English')
+  console.log('PASS: chronological history/live stream, automatic collapse, manual disclosures, output inspection, scrolling, attention cards and their locator, on-demand use-in-document actions, rollback locator and its dialog, branch-from-here availability, ungated copy for answers/tool calls/tool output/code blocks, running tool name and elapsed seconds, per-turn token line, regenerate through the rollback channel, interjection receipts and inbox/transcript reconciliation, menu stop, turn rail navigation, stranded steer items getting a send-now, @ mention picker and the project-pick tab, composer key bindings (Esc/Cmd+Enter/history recall) and focusable send-stop buttons, long-conversation streaming cost and selection survival, composer tool row geometry at narrow widths (#1101), narrow widths, themes, English')
 } catch (error) {
   console.error('BROWSER ERRORS', errors)
   console.error(await page.evaluate(() => document.querySelector('.message-row.assistant:last-child')?.textContent))
