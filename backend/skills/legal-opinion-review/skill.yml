@@ -38,6 +38,7 @@ allowed_tools:
   - office_pass_step
   - office_insert_text
   - office_add_comment
+  - office_reply_comment
   - office_get_comments
   - office_get_revisions
   - office_format_text
