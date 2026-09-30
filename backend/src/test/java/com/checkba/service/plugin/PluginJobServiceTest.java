@@ -47,6 +47,7 @@ class PluginJobServiceTest {
 
     /** 每次 save 的快照（status/done/error），因为 save 传入的是同一个可变实例，直接留引用看不到历史。 */
     final List<String[]> saved = new ArrayList<>();
+    final CountDownLatch donePersisted = new CountDownLatch(1);
 
     @BeforeEach
     void setUp() {
@@ -55,6 +56,7 @@ class PluginJobServiceTest {
             synchronized (saved) {
                 saved.add(new String[]{j.getStatus(), String.valueOf(j.getDone()), j.getError(), j.getResultJson()});
             }
+            if (PluginJob.STATUS_DONE.equals(j.getStatus())) donePersisted.countDown();
             return j;
         });
         when(repo.findByStatusIn(anyList())).thenReturn(List.of());
@@ -107,6 +109,8 @@ class PluginJobServiceTest {
         }
 
         release.countDown();
+        // 内存 done 先于 persist；落库断言要等 save mock 记录完终态。
+        assertTrue(donePersisted.await(5, TimeUnit.SECONDS), "terminal result must be persisted");
         JobStatus done = await(svc, h.jobId(), "done");
         assertEquals("{\"ok\":true}", done.resultJson());
         assertEquals(3, done.total());
