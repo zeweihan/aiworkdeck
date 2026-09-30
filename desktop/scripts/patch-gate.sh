@@ -8,6 +8,7 @@
 #      Electron 壳在 mac 签名密封内，补丁到不了用户手里；
 #   2. backend 任何 pom.xml 无改动——补丁只发业务 jar，依赖 lib/ 留在安装包；
 #   3. LOWA 引擎来源（desktop-build.yml 的 LOWA_BASE_URL / fetch-lowa-assets.js）无改动。
+#   4. backend/skills 无改动——内置 skill 是安装包独立资源，不在 app.jar 补丁内。
 # 违反任一条 → 构建失败，提示改发大版本 0.(X+1).0。
 #
 # Usage: patch-gate.sh <tag>   例: patch-gate.sh v0.11.2
@@ -76,12 +77,19 @@ if [ -n "$req_changed" ]; then
   violations+=("requirements.lock 有改动（lock 改动走 pack 发版，不进补丁）：$req_changed")
 fi
 
+# 5) 内置 skill 是 resources/skills 下的独立文件，不在 backend-app 的 app.jar
+#    中；现有壳没有 skills overlay，不能把仅更新业务 jar 当作已交付 skill 规则。
+skills_changed=$(git diff --name-only "$PREV..$TAG" -- backend/skills/ || true)
+if [ -n "$skills_changed" ]; then
+  violations+=("backend/skills 有改动（内置 skill 只随全量安装包走，不进 app.jar 补丁）：$skills_changed")
+fi
+
 if [ ${#violations[@]} -gt 0 ]; then
   echo ""
   echo "[patch-gate] 小版本 $TAG 含越界变更，拒绝发布："
   for v in "${violations[@]}"; do echo "  - $v"; done
   echo ""
-  echo "  处理：删 tag（git push origin :refs/tags/$TAG），把版本号升为大版本 0.$((X + 1)).0 后重新打 tag。"
+  echo "  处理：删 tag（git push origin :refs/tags/${TAG}），把版本号升为大版本 0.$((X + 1)).0 后重新打 tag。"
   echo "  依据：docs/INCREMENTAL_UPDATE_DESIGN.md §2.2（补丁只含 backend-app / frontend-h5 / zetaoffice-wrapper）。"
   exit 1
 fi

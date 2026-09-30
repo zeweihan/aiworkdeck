@@ -15,7 +15,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 
 ## 发版链路
 
-0. **版本规则 0.X.Y**（docs/INCREMENTAL_UPDATE_DESIGN.md）：X=大版本全量安装包；Y=小版本应用内补丁（overlay 机制，组件=backend-app/frontend-h5/zetaoffice-wrapper/pysvc-src）。小版本 tag 触发 CI `patch-gate` job（desktop/scripts/patch-gate.sh）：改壳（desktop/）、pom、LOWA 引擎、requirements.lock 都会被拒——这些只能随大版本走。补丁产物+签名 manifest 由 build-patch-assets.js 在 windows job 生成（私钥=secret UPDATE_SIGNING_KEY，备份 ~/.ssh/aiworkdeck_update_signing.pem；公钥内置 update-service.js，换钥须发大版本）；镜像同步 deploy/update-mirror-sync.sh 在官网 ECS 跑。
+0. **版本规则 0.X.Y**（docs/INCREMENTAL_UPDATE_DESIGN.md）：X=大版本全量安装包；Y=小版本应用内补丁（overlay 机制，组件=backend-app/frontend-h5/zetaoffice-wrapper）。小版本 tag 触发 CI `patch-gate` job（desktop/scripts/patch-gate.sh）：改壳（desktop/）、pom、LOWA 引擎、requirements.lock、`backend/skills/` 都会被拒；内置 skill 需全量版本，requirements.lock 改动走独立 pack 发版。补丁产物+签名 manifest 由 build-patch-assets.js 在 windows job 生成（私钥=secret UPDATE_SIGNING_KEY，备份 ~/.ssh/aiworkdeck_update_signing.pem；公钥内置 update-service.js，换钥须发大版本）；镜像同步 deploy/update-mirror-sync.sh 在官网 ECS 跑。
 0.1. **服务上下文必须传 `appVersion: app.getVersion()`（dev-board#589）**：backendLayout 与 UI 的 overlay 使用不同调用链。漏传时 UI 显示补丁已更新，但后端因无法解析大版本目录而静默回落内置 app.jar。回归必须运行 main.js 的实际 createServices，再验证 backendLayout 读取激活补丁及回滚；只单测 overlay 不足以覆盖接线。旧 0.38 壳存在此缺陷，脱敏 2.0 必须先装完整 0.38.4；修复随 0.39.0 全量版本交付，不能用旧壳自身的补丁修复。
 0.2. **桌面端默认关闭自动 AI 标签（dev-board#590，0.39.0）**：上传、本地导入及编辑器保存共用 AutoTaggingService；脱敏前 flushSave 也会经过此链路。`application-desktop.yml` 设置 `ai.auto-tagging.enabled: false`，在读取正文和调用模型之前返回，避免原文先被自动发送。云端默认行为及手动标签不变。DesktopAutoTaggingPrivacyTest 加载真实 desktop 配置，验证入口不读正文、不调用模型。0.38.4 仅供合成样例测试，真实敏感材料需完整 0.39.0；普通 AI 会话仍须由用户核查项目和历史上下文。
 1. 版本号**单一来源 `desktop/package.json` version**（backend 拆为 backend/app.jar + backend/lib/，启动 `java -cp "app.jar:lib/*" com.checkba.CheckbaApplication`，见 backend-service.js javaLaunchArgs；frontend version 不参与）。
@@ -95,7 +95,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    官方插件判据：源 `manifest.json` 版本高于 `/api/registry/plugins` → 北京 `publish-plugin.mjs` 上架 +
    国际站同步；声明了更高 `minHostVersion` 的要等桌面正式版发出后再上。LOWA：`desktop-build.yml`
    的 `LOWA_BASE_URL` 变了 → `publish-lowa-engine.sh publish/verify` 先于打 tag。
-   内置 skill（`backend/skills/*`，脱敏等）随安装包/补丁走，不在此列。
+   内置 skill（`backend/skills/*`，脱敏等）只随完整安装包走，不在此列。它们由 extraResources 放到 `Resources/skills`，SkillRegistry 从该物理目录加载；`backend-app` 补丁只有 `app.jar`，没有 skill 资源或 classpath 补偿。`patch-gate.sh` 拒绝内置 skill 变更的小版本（dev-board#1114），必须升 `0.(X+1).0`；临时 Git 仓回归见 `desktop/tests/patch-gate.test.js`。
 4.8. **官网版本记录是发版硬步骤（2026-09-23 维护者定，dev-board#862）**：
    每发一个 0.X 大版本，就在官网仓 `zeweihan/aiworkdeck_website`（本机 `1-1 aiworkdeckweb`）的
    `content/releases.ts` 数组头部加一条：`version`（0.X.0）、`date`（tag 日期）、`headline` 一句、
