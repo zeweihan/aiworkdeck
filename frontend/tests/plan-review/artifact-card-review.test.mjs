@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 计划审阅（dev-board#1022）Task 6：计划卡「打开修订」、SSE saved 事件、工作台接线。
+import { APPROVAL_PLAN_TYPES } from '../../src/components/AgentMessage/chatTurns.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -69,7 +70,7 @@ function cardOptions() {
   const script = CARD.match(/<script>([\s\S]*?)<\/script>/)[1]
   const body = script.replace(/^import .*$/gm, '').replace('export default', 'return')
   // eslint-disable-next-line no-new-func
-  return new Function('MarkdownPreview', 'lineDiffStats', body)({}, () => ({ hunks: 0, added: 0, removed: 0 }))
+  return new Function('MarkdownPreview', 'lineDiffStats', 'APPROVAL_PLAN_TYPES', body)({}, () => ({ hunks: 0, added: 0, removed: 0 }), APPROVAL_PLAN_TYPES)
 }
 function mountCard(props) {
   const opts = cardOptions()
@@ -101,6 +102,26 @@ test('artifactId 对上（或回传不带 artifactId）照常采用', () => {
 })
 test('卡片模板的「修订中」徽标读的是过滤后的审阅态', () => {
   assert.doesNotMatch(CARD, /reviewState\.hunks/)
+})
+
+// ---- dev-board#1106：task_list 是内部执行清单，不参与审批 ----
+test('draft task_list 照常内联展示，但不弹「按此推进 / 打开修订」', () => {
+  const vm = mountCard({ id: 'art-t', type: 'task_list', status: 'draft', actionable: true, data: { content: '1. 改文档\n2. 复核' } })
+  assert.equal(vm.isPlanType, true, 'task_list 仍按计划类内联渲染')
+  assert.equal(vm.effectiveStatus, 'draft')
+  assert.equal(vm.showApprovalBar, false, '内部清单不该催用户审批')
+})
+test('implementation_plan 与历史 plan 的审批条不受影响', () => {
+  for (const type of ['implementation_plan', 'plan']) {
+    const vm = mountCard({ id: 'art-p', type, status: 'draft', actionable: true, data: { content: 'x' } })
+    assert.equal(vm.isApprovalType, true)
+    assert.equal(vm.showApprovalBar, true, `${type} 的真审批必须保留`)
+  }
+})
+test('RootBubble 的「待确认」强调与卡共用同一份审批类型表', () => {
+  const ROOT_BUBBLE = readFileSync(new URL('../../src/components/AgentMessage/RootBubble.vue', import.meta.url), 'utf8')
+  assert.match(ROOT_BUBBLE, /import \{ APPROVAL_PLAN_TYPES \} from '\.\/chatTurns\.mjs'/)
+  assert.doesNotMatch(ROOT_BUBBLE, /APPROVAL_ARTIFACT_TYPES/)
 })
 
 // ---- 最终修复波 I-3：宿主只在切会话成功且 sendMessage 已调用后 ack(true) ----

@@ -67,6 +67,7 @@
 <script>
 import MarkdownPreview from './MarkdownPreview.vue'
 import { lineDiffStats } from '@/utils/lineDiff.js'
+import { APPROVAL_PLAN_TYPES } from './AgentMessage/chatTurns.mjs'
 
 export default {
   name: 'ArtifactCard',
@@ -135,6 +136,12 @@ export default {
     isPlanType() {
       return ['task_list', 'plan', 'implementation_plan'].includes(this.type)
     },
+    // 审批类计划：implementation_plan（后端停机等审批的那份）与历史 'plan' 类型。
+    // task_list 是内部执行清单（后端契约：task_list 继续），照常内联展示，
+    // 但不弹「按此推进 / 打开修订」，也不计入待审批（dev-board#1106）。
+    isApprovalType() {
+      return APPROVAL_PLAN_TYPES.includes(this.type)
+    },
     planContent() {
       return (this.data && this.data.content) ? this.data.content.trim() : ''
     },
@@ -152,7 +159,7 @@ export default {
       return !!this.ownReviewState && this.ownReviewState.status === 'open' && this.effectiveStatus === 'draft'
     },
     showApprovalBar() {
-      return this.isPlanType && this.actionable && this.effectiveStatus === 'draft'
+      return this.isApprovalType && this.actionable && this.effectiveStatus === 'draft'
     },
     editorHeight() {
       const lines = Math.max(8, this.draftText.split('\n').length + 1)

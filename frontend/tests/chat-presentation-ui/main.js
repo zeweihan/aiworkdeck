@@ -132,7 +132,7 @@ window.loadFixture = async (kind = 'long') => {
   ]
   if (kind !== 'single') history.push(
     { id: 'u2', role: 'USER', content: '请给出完整的风险清单，并说明需要我确认的事项。' },
-    { id: 'a2', role: 'ASSISTANT', content: `<thinking>按条款逐一整理风险与修改建议。</thinking>${toolLog}${planLog}<final>## 合同审查结果\n\n${Array.from({ length: 25 }, (_, i) => `### ${i + 1}. ${i % 2 ? '付款安排' : '违约责任'}\n建议补充明确的期限、验收标准和责任边界，以便双方按约履行。\n`).join('\n')}</final>${kind === 'question' ? '<question>是否按30日付款期限修订？<option>按30日修订</option><option>保持原期限</option></question>' : kind === 'approval' ? '<artifact type="implementation_plan">1. 明确付款期限\n2. 补充违约责任</artifact>' : ''}` }
+    { id: 'a2', role: 'ASSISTANT', content: `<thinking>按条款逐一整理风险与修改建议。</thinking>${toolLog}${planLog}<final>## 合同审查结果\n\n${Array.from({ length: 25 }, (_, i) => `### ${i + 1}. ${i % 2 ? '付款安排' : '违约责任'}\n建议补充明确的期限、验收标准和责任边界，以便双方按约履行。\n`).join('\n')}</final>${kind === 'question' ? '<question>是否按30日付款期限修订？<option>按30日修订</option><option>保持原期限</option></question>' : kind === 'approval' ? '<artifact type="implementation_plan">1. 明确付款期限\n2. 补充违约责任</artifact>' : kind === 'task-list' ? '<artifact type="task_list">- [x] 读取底稿\n- [ ] 修订正文</artifact><final>修改已完成。</final>' : ''}` }
   )
   chat.value.loadMessages(`fixture-${kind}`, history)
   await nextTick()
