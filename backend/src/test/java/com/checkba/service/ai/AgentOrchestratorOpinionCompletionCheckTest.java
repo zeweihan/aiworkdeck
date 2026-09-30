@@ -262,6 +262,56 @@ class AgentOrchestratorOpinionCompletionCheckTest {
     }
 
     @Test
+    @DisplayName("接回消息（生产注入原文，zh）：仅加批注不算修正、批注不替代正文限定、缺证不得反向否定")
+    void handoffMessageDemandsBodyQualificationNotJustComments() {
+        skillActive();
+        when(subAgentService.dispatch(any(), any(), any(), any()))
+                .thenReturn(SubAgentResult.success("sub-check",
+                        "判定：待核实——“已获股东会批准”无决议材料支撑",
+                        List.of("doc_get_document_text"), 1));
+        ScriptModel model = run("conv-qualify",
+                AiMessage.from("已按您的要求完成修订。"),
+                AiMessage.from("已按发现限定正文表述，交付说明如下。"));
+
+        String handoff = lastMessageText(model, 1);
+        assertTrue(handoff.contains("收尾核验发现"), handoff);
+        assertTrue(handoff.contains("仅新增批注而正文仍作确定结论不算修正"),
+                "接回消息必须点破 dev-board#1107 的病灶——只加批注保留确定结论：" + handoff);
+        assertTrue(handoff.contains("批注不替代正文限定"), handoff);
+        assertTrue(handoff.contains("不得改写成否定结论"), "缺证不得凭空得否定结论：" + handoff);
+        assertTrue(handoff.contains("限定正文表述本身"), handoff);
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-qualify").status());
+    }
+
+    @Test
+    @DisplayName("verificationTask（zh）：核验员须点名“正文确定断言 + 仅批注待核”形态")
+    void verificationTaskFlagsCommentOnlyQualification() {
+        String task = OpinionCompletionCheck.verificationTask(5L, "意见书",
+                List.of("帮我修订这份法律意见书"));
+        assertTrue(task.contains("仅以批注标注待核实"), task);
+        assertTrue(task.contains("批注不替代正文限定"), task);
+    }
+
+    @Test
+    @DisplayName("英文界面：核验任务与接回消息同样携带正文限定规则（多语边界）")
+    void englishHandoffAndTaskCarryBodyQualificationRule() {
+        com.checkba.service.AppLanguageService en = mock(com.checkba.service.AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        try {
+            com.checkba.service.LangText.register(en);
+            String task = OpinionCompletionCheck.verificationTask(5L, "Opinion", List.of("revise this opinion"));
+            assertTrue(task.contains("a comment does not substitute for qualifying the body text"), task);
+            String handoff = OpinionCompletionCheck.handoffMessage(
+                    SubAgentResult.success("sub", "findings", List.of("doc_get_document_text"), 1));
+            assertTrue(handoff.contains("a comment does not substitute for qualifying the body"), handoff);
+            assertTrue(handoff.contains("not be turned into a negative conclusion"), handoff);
+            assertTrue(handoff.contains("qualify the body text itself"), handoff);
+        } finally {
+            com.checkba.service.LangText.reset();
+        }
+    }
+
+    @Test
     @DisplayName("补检子任务失败：如实接回「未能完成」，绝不重复派发，仍 FINISHED")
     void failedCompletionCheckHandsBackUnverifiedAndNeverRepeats() {
         skillActive();
