@@ -192,6 +192,7 @@ public class SkillRouter {
         List<String> mechanical = List.of("错别字", "错字", "錯別字", "錯字", "字体", "字體",
                 "字号", "字號", "标点", "標點", "排版", "格式", "替换", "替換",
                 "typo", "typos", "format", "formatting", "font", "punctuation", "replace");
+        String quotedText = "(?:“[^”]*”|「[^」]*」|『[^』]*』|\"[^\"]*\"|'[^']*')";
         // 并列请求分开判断：全面修订 + 检查错字仍是实质任务；仅修订错字则不是。
         boolean substantive = false;
         boolean reviewOnly = false;
@@ -201,7 +202,10 @@ public class SkillRouter {
                 continue;
             }
             boolean review = actions.stream().anyMatch(t -> containsTrigger(clause, t));
-            boolean local = mechanical.stream().anyMatch(t -> containsTrigger(clause, t));
+            // 只识别带范围限定、明确引号原文和新文的替换，不把一般“改为”当机械编辑。
+            boolean limitedReplacement = clause.matches(".*(?:只|仅限?|僅限?)\\s*(?:把|将|將)\\s*"
+                    + quotedText + "\\s*(?:改成|改为|改為)\\s*" + quotedText + ".*");
+            boolean local = limitedReplacement || mechanical.stream().anyMatch(t -> containsTrigger(clause, t));
             substantive |= review && !local;
             reviewOnly |= !local && List.of("审查", "审阅", "审核", "评估", "審查", "審閱", "審核",
                     "評估", "review", "assess").stream().anyMatch(t -> containsTrigger(clause, t));
