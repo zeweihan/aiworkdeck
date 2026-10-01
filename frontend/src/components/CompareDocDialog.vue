@@ -244,15 +244,19 @@ export default {
 }
 
 .compare-dialog {
+  display: flex;
+  flex-direction: column;
   background: var(--awd-surface);
   border-radius: 12px;
   width: 400px;
   max-width: 90vw;
+  max-height: calc(100vh - 32px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   overflow: hidden;
 }
 
 .dialog-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -280,6 +284,8 @@ export default {
 }
 
 .dialog-body {
+  min-height: 0;
+  overflow-y: auto;
   padding: 20px;
 }
 
@@ -415,6 +421,7 @@ export default {
 }
 
 .dialog-footer {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;

@@ -985,7 +985,7 @@ export default {
       this.inlineReviewState = null
       this.appendLog('用户点击重试（重启引擎）/ retry requested (engine remount)')
       // 让在途的装载链路作废（dev-board#1018）：旧 executor 被 dispose 后，它那条
-      // load_document 仍会在预算到点时以超时收场——若世代号还对得上，它会在新引擎
+      // load_document 会立即以已释放结果结束——若世代号还对得上，它会在新引擎
       // boot 期间把状态落成失败、把 ready 连同一个已经不存在的 executor 发出去。
       // 新引擎就绪后 onEndpointReady → finishDocLoad 起新世代，自愈判定归新链路。
       this._docLoadSeq = (this._docLoadSeq || 0) + 1

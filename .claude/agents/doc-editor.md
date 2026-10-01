@@ -483,3 +483,5 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 - LOWA实际runtime会把enumerable `Module.onAbort` 从pthread转主线程。boot注册onAbort→可选onFatal→editor-main发不含原始诊断的 `engine-failed`，relay以 `EDITOR_ENGINE_FAILED` 结束pending。渲染进程退出在重启防抖前dispose；dispose立即结算全部pending并拒绝后续复用，不能仅退订让无期限请求悬挂。
 - 隐藏实例监听engine-failed/boot-failed后释放，冷启动不再为已知失败等满启动预算；运行中finally同样按唯一key释放。原生同步比较收不到协作cancel，用户取消仍依靠销毁专用webview/worker并作废会话。不能将“5分钟无阶段变化”断言为死循环或已确认死机。
 - 回归入口：`tests/zeta-relay/{comparison-wait,engine-fatal}.test.mjs`、project-home `{compare-dialog-progress,comparison-engine-exit,docx-compare-flow,libre-hidden-release-reactive}.test.mjs`，以及真实隔离Electron长等待/取消/故障注入验收。onAbort人工注入只能证明回调链，不等同于自然OOM复现。
+
+- #1123 隔离 Electron 实测：同历史 SHA 的 2000 页密集修改样本本轮原生比较 84.2 秒、build 88.1 秒、导出 15.2 秒；两侧 OOXML 文字投影与来源一致，末页中文/修订可见，键盘输入落盘并正常关闭重开。算法未改，不能把耗时差异归因为取消截止。真实时钟无回应注入（未调用 native）超过 180 秒保持等待、约 304 秒提示，继续不重发、取消释放且同页重试成功；onAbort 回调及隐藏 guest 崩溃人工注入分别约 685ms/1060ms 结束等待，随后同页重试成功。证据入口为本机 `~/.codex/handoffs/2026-10-01-docx-compare-progress/host/ACCEPTANCE.md`，不代表任意复杂 2000 页文档或自然 OOM 已验证。
