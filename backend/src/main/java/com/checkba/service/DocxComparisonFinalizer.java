@@ -74,7 +74,7 @@ public final class DocxComparisonFinalizer {
             String value = switch (name) {
                 case "t", "delText" -> e.getTextContent();
                 case "tab" -> "\t";
-                case "br", "cr" -> "\n";
+                case "br", "cr" -> tokenText(e);
                 default -> null;
             };
             if (value != null) {
@@ -245,12 +245,22 @@ public final class DocxComparisonFinalizer {
     private static void collectTextElements(Node n, List<Element> out) {
         if (n instanceof Element e && W.equals(e.getNamespaceURI())) {
             if (Set.of("pPr", "rPr", "sectPr").contains(e.getLocalName())) return;
-            if (Set.of("t", "delText", "tab", "br", "cr").contains(e.getLocalName())) { out.add(e); return; }
+            if (Set.of("t", "delText", "tab", "br", "cr").contains(e.getLocalName())) {
+                if (!tokenText(e).isEmpty()) out.add(e);
+                return;
+            }
         }
         for (Node c = n.getFirstChild(); c != null; c = c.getNextSibling()) collectTextElements(c, out);
     }
     private static String tokenText(Element e) {
-        return switch (e.getLocalName()) { case "tab" -> "\t"; case "br", "cr" -> "\n"; default -> e.getTextContent(); };
+        // Writer may serialize pageBreakBefore as a run break. These layout markers do not
+        // occupy a text offset, unlike a real line break; keep their XML untouched.
+        return switch (e.getLocalName()) {
+            case "tab" -> "\t";
+            case "br" -> Set.of("page", "column").contains(e.getAttributeNS(W, "type")) ? "" : "\n";
+            case "cr" -> "\n";
+            default -> e.getTextContent();
+        };
     }
     private static Token boundary(Scan scan, int position, boolean start) {
         // Binary search keeps comment reconstruction linearithmic for long, heavily annotated files.
@@ -318,6 +328,18 @@ public final class DocxComparisonFinalizer {
     private static boolean hasContent(Element run) { return children(run).stream().anyMatch(e -> !is(e, "rPr")); }
 
     private static List<MovePair> promoteMoves(Document doc) {
+        // Writer splits one change at script/font boundaries (e.g. Chinese + a page number).
+        // Rejoin adjacent wrappers with identical metadata, keeping every formatted run intact.
+        for (Element paragraph : elements(doc, "p")) {
+            Element previous = null;
+            for (Element e : children(paragraph)) {
+                if (!is(e, "ins") && !is(e, "del")) { previous = null; continue; }
+                if (previous != null && sameRevisionMetadata(previous, e)) {
+                    while (e.hasChildNodes()) previous.appendChild(e.getFirstChild());
+                    paragraph.removeChild(e);
+                } else previous = e;
+            }
+        }
         List<MovePair> pairs = new ArrayList<>();
         Map<String, List<Element>> deletes = revisionsByText(doc, "del"), inserts = revisionsByText(doc, "ins");
         String oldText = scan(doc, false).text, newText = scan(doc, true).text;
@@ -339,6 +361,15 @@ public final class DocxComparisonFinalizer {
             pairs.add(new MovePair(from, to));
         }
         return pairs;
+    }
+    private static boolean sameRevisionMetadata(Element a, Element b) {
+        if (!a.getLocalName().equals(b.getLocalName()) || a.getAttributes().getLength() != b.getAttributes().getLength()) return false;
+        for (int i = 0; i < a.getAttributes().getLength(); i++) {
+            Node attr = a.getAttributes().item(i);
+            if (W.equals(attr.getNamespaceURI()) && "id".equals(attr.getLocalName())) continue;
+            if (!attr.getNodeValue().equals(b.getAttributeNS(attr.getNamespaceURI(), attr.getLocalName()))) return false;
+        }
+        return true;
     }
     private static Map<String, List<Element>> revisionsByText(Document doc, String tag) {
         Map<String, List<Element>> out = new LinkedHashMap<>();

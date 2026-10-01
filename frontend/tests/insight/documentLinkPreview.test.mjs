@@ -84,7 +84,7 @@ const built = await build({ stdin: { contents: `
 `, resolveDir: sourceRoot }, bundle: true, write: false, format: 'esm', platform: 'node', plugins: [{ name: 'io-only', setup(b) {
   b.onResolve({ filter: /^@\/(services\/api|utils\/activityTracker|config\/icons)\.js$/ }, args => ({ path: args.path, namespace: 'stub' }))
   b.onLoad({ filter: /.*/, namespace: 'stub' }, args => ({ contents: args.path.includes('api')
-    ? 'export const getFileDetail=(...a)=>globalThis.__documentLinkTestIo.detail(...a); export const getEvidenceLink=(...a)=>globalThis.__documentLinkTestIo.evidence(...a); export const createEvidenceLink=()=>{}; export const addEvidenceTargets=()=>{}; export const updateEvidenceTarget=()=>{}; export const getProjectFiles=()=>{};'
+    ? 'export const getFileDetail=(...a)=>globalThis.__documentLinkTestIo.detail(...a); export const getEvidenceLink=(...a)=>globalThis.__documentLinkTestIo.evidence(...a); export const createEvidenceLink=()=>{}; export const addEvidenceTargets=()=>{}; export const updateEvidenceTarget=()=>{}; export const getProjectFiles=()=>{}; export const fetchProjectFileBytes=()=>{}; export const createComparisonFile=()=>{};'
     : args.path.includes('activityTracker') ? 'export const activityTracker={trackActivePage(){}}' : 'export const ICONS={}; export const fileGlyph=()=>"";' }))
   b.onResolve({ filter: /^@\// }, args => ({ path: path.join(sourceRoot, args.path.slice(2)) }))
 } }] })

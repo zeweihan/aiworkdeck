@@ -68,6 +68,17 @@ class DocxComparisonFinalizerTest {
         assertEquals(from.getAttributeNS(W, "name"), to.getAttributeNS(W, "name"));
         assertArrayEquals(entry(a, "word/media/preserved.bin"), entry(result, "word/media/preserved.bin"));
     }
+    @Test void nativeMixedScriptRunSplitsStillFormOneUniqueMove() throws Exception {
+        String common = "页。双方应当依约履行义务。", moved = "第0701" + common, stay = "第0702" + common;
+        byte[] a = doc(p(run(moved)) + p(run(stay)), null), b = doc(p(run(stay)) + p(run(moved)), null);
+        String from = revision("del", "第") + revision("del", "0701") + revision("del", common);
+        String to = revision("ins", "第") + revision("ins", "0701") + revision("ins", common);
+        byte[] result = DocxComparisonFinalizer.finalizeComparison(a, b, doc(p(from) + p(run(stay)) + p(to), null));
+        Document d = xml(result, "word/document.xml");
+        assertEquals(1, d.getElementsByTagNameNS(W, "moveFrom").getLength());
+        assertEquals(moved, text(d.getElementsByTagNameNS(W, "moveFrom").item(0)));
+        assertEquals(3, ((Element) d.getElementsByTagNameNS(W, "moveTo").item(0)).getElementsByTagNameNS(W, "r").getLength());
+    }
     @Test void reconstructsBothCommentAnchorsAcrossChangedRunsAndRetainsAuthors() throws Exception {
         byte[] a = doc(p(run("前言") + marked("7", "通知期限") + run("尾文")), comment("7", "旧方", "原意见"));
         byte[] b = doc(p(run("前言") + marked("7", "送达期限") + run("尾文")), comment("7", "新方", "新意见"));
@@ -127,6 +138,19 @@ class DocxComparisonFinalizerTest {
         byte[] result = DocxComparisonFinalizer.finalizeComparison(source, source,
                 doc(p(revision("del", clause)) + p(run(clause)) + p(revision("ins", clause)), null));
         assertEquals(0, xml(result, "word/document.xml").getElementsByTagNameNS(W, "moveFrom").getLength());
+    }
+    @Test void nativePageBreakNormalizationPreservesTextAndCommentOffsets() throws Exception {
+        byte[] source = doc(p(run("首页")) + p("<w:pPr><w:pageBreakBefore/></w:pPr>" + marked("1", "第二页")), comment("1", "律师", "分页批注"));
+        byte[] nativeBytes = doc(p(run("首页") + "<w:r><w:br w:type=\"page\"/></w:r>") + p(run("第二页")), null);
+        byte[] result = DocxComparisonFinalizer.finalizeComparison(source, source, nativeBytes);
+        Document d = xml(result, "word/document.xml");
+        assertEquals(Map.of("0", "第二页"), anchored(d));
+        assertEquals("page", ((Element) d.getElementsByTagNameNS(W, "br").item(0)).getAttributeNS(W, "type"));
+    }
+    @Test void realLineBreakStillParticipatesInContentValidation() throws Exception {
+        byte[] source = doc(p(run("甲乙")), null);
+        byte[] changed = doc(p(run("甲") + "<w:r><w:br/></w:r>" + run("乙")), null);
+        assertThrows(IllegalArgumentException.class, () -> DocxComparisonFinalizer.finalizeComparison(source, source, changed));
     }
     @Test void refusesWrongDirectionOrTruncatedComparison() throws Exception {
         byte[] a = doc(p(run("原文")), null), b = doc(p(run("新文")), null);
