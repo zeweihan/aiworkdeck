@@ -100,7 +100,7 @@ export const EDITOR_ACTIONS = [
   // （backend doc_add_comment）。
   'add_comment',
   // [第 2 期 版本对比] host-initiated：当前文档与旧版字节比较产出修订，随后切只读。
-  'compare_document',
+  'compare_document', 'build_comparison_document',
   // [三方合并 dev-board#630/#631/#632] host-initiated：合并比对稿。
   // build_merge_draft 把「主线侧原生比较 + 另一侧逐段重放」整条链做在**一条命令里**
   //（修订署名必须同命令内切换，见 office_thread.js 的说明）；merge_take_other 是同段
@@ -200,6 +200,7 @@ export const ACTION_BUDGET_MS = {
   // 三方合并：三次 load（另一侧/上一版/主线）+ 两遍格式扫描 + 一次原生比较 + 逐段重放
   // 全在一条命令里；420 段 32 页的夹具实测约 22 秒，按 load_document 同量级给预算。
   build_merge_draft: 180000,
+  build_comparison_document: 180000,
   // 读取类（dev-board#729 ③）：此前全部吃 30s 默认值。doc_open_file 是 fire-and-forget，
   // 「打开文档 → 立刻读」时那条读命令正撞在装载中（doc_open_file_sync 自己就给了 180s），
   // 30s 必然不够；超时后模型会再读一次，代价是一整个 LLM 往返（真机中位 80s）。

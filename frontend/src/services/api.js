@@ -2174,6 +2174,36 @@ export function getFileWriteUrl(fileId) {
   return `${baseUrl}/api/files/${fileId}/upload`
 }
 
+// 拉一份项目文件的原始字节（比对稿要拿磁盘上的最新版本做基线，dev-board#1120）。
+// 裸 XHR + getAuthHeaders：request() 那层没有 arraybuffer 通道（LibreOfficeEditor 的
+// fetchArrayBuffer 同款写法）；60s 上限、空字节由调用方语义拒绝。
+export function fetchProjectFileBytes(fileId, timeoutMs = 60000) {
+  const baseUrl = getApiBaseUrl()
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', `${baseUrl.replace(/\/$/, '')}/api/files/${fileId}/download`)
+    xhr.responseType = 'arraybuffer'
+    xhr.timeout = timeoutMs
+    const authHeaders = getAuthHeaders()
+    Object.keys(authHeaders).forEach((key) => xhr.setRequestHeader(key, authHeaders[key]))
+    xhr.onload = () => {
+      if (xhr.status !== 200) {
+        reject(new Error(`HTTP ${xhr.status}`))
+        return
+      }
+      const body = xhr.response ? new Uint8Array(xhr.response) : new Uint8Array(0)
+      if (!body.byteLength) {
+        reject(new Error(t('common.networkError')))
+        return
+      }
+      resolve(body)
+    }
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.ontimeout = () => reject(new Error(t('common.networkError')))
+    xhr.send(null)
+  })
+}
+
 // Web 插件面板入口 URL（插件规范 v2.3）。
 // - 绝对 http(s) URL：旧形态，原样返回，宿主 iframe 直接打开外部页面（行为不变）
 // - web/ 之下的相对路径：映射到后端静态服务 <apiBase>/api/plugin-web/<id>/<entry>
@@ -3835,6 +3865,45 @@ export function postMergeResolveFile(projectId, { path, mode, decisions, bytes, 
       }
     }
     xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.send(form)
+  })
+}
+
+// 比对稿落盘（dev-board#1120）：multipart file=整份生成的 docx 字节 + 双方文件主键与
+// SHA256。服务端负责最终命名（客户端只给建议名）、哈希守卫与原子落盘；响应与 createFile
+// 为直接 ProjectFile。裸 XHR 不手写 Content-Type（multipart 边界由
+// FormData 生成，手写会破坏 boundary）。
+export function createComparisonFile(projectId, { bytes, name, baseFileId, revisedFileId, baseSha256, revisedSha256 }, timeoutMs = 60000) {
+  const baseUrl = getApiBaseUrl()
+  const sessionId = getSessionId()
+  const form = new FormData()
+  const blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+  form.append('file', blob, name || 'comparison.docx')
+  form.append('baseFileId', String(baseFileId))
+  form.append('revisedFileId', String(revisedFileId))
+  form.append('baseSha256', baseSha256 || '')
+  form.append('revisedSha256', revisedSha256 || '')
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/api/projects/${projectId}/files/comparison`)
+    if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
+    xhr.timeout = timeoutMs
+    xhr.onload = () => {
+      let data
+      try { data = JSON.parse(xhr.responseText) } catch (e) {
+        reject(new Error(t('common.parseResponseFailed')))
+        return
+      }
+      if (xhr.status === 200 && data && data.id != null) {
+        resolve(data)
+        return
+      }
+      const error = new Error((data && data.message) || t('common.submitFailed'))
+      if (data && data.reason) error.reason = data.reason
+      reject(error)
+    }
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
+    xhr.ontimeout = () => reject(new Error(t('common.networkError')))
     xhr.send(form)
   })
 }

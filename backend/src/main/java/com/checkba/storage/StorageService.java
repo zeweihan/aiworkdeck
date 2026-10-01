@@ -79,6 +79,11 @@ public interface StorageService {
         delete(fromId);
     }
 
+    /** 发布已完成的新文件；目标已存在必须失败，不能覆盖。 */
+    default void moveNew(String fromId, String toId) throws StorageException {
+        throw new StorageException("Storage does not support publishing a new file");
+    }
+
     /**
      * 检查文件是否存在
      * 

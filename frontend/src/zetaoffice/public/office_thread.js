@@ -6178,6 +6178,7 @@ const EXEC = {
         // TextTable …）。改造前面板只分「Delete 与其余」，格式类修订被当成插入显示
         // （dev-board#377）；面板的类型映射认不出的一律原样展示，不再硬塞进「插入」。
         try { it.type = String(r.getPropertyValue('RedlineType')); } catch (e) {}
+        try { const id = Number(r.getPropertyValue('RedlineMovedID')); it.movedId = id > 1 ? id : 0; } catch (e) { it.movedId = 0; }
         try { it.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { it.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
         // 格式类修订正文是空的，引擎给的说明（「属性已更改」之类）是唯一能读的信息
@@ -6536,6 +6537,59 @@ const EXEC = {
     } catch (e) {}
     comparisonModel = xModel; // The comparison tab is a read-only review surface.
     return { success: true, redlineCount: r.redlineCount };
+  },
+  // Standalone comparison copies: compare both final projections in temporary
+  // models. Source files are never written by this action.
+  // Unlike compare_document, the result remains editable and can be exported.
+  build_comparison_document(p) {
+    if (!toUnoByteSeq(p && p.baseBytes) || !toUnoByteSeq(p && p.revisedBytes))
+      return { success: false, stage: 'input', message: 'baseBytes and revisedBytes are required' };
+    let stage = 'configuration', access = null, saved = null;
+    const previousAuthor = humanAuthor;
+    try {
+      const provider = context.getServiceManager().createInstanceWithContext(
+        'com.sun.star.configuration.ConfigurationProvider', context);
+      access = provider.createInstanceWithArguments('com.sun.star.configuration.ConfigurationUpdateAccess',
+        [mkProp('nodepath', '/org.openoffice.Office.Writer/Comparison')]);
+      saved = { Mode: access.getByName('Mode'), UseRSID: access.getByName('UseRSID'),
+        IgnorePieces: access.getByName('IgnorePieces') };
+      // SwCompareMode::ByChar = 2. Do not erase isolated matching characters
+      // or let unrelated documents' RSIDs determine Chinese granularity.
+      access.replaceByName('Mode', shortAny(2));
+      access.replaceByName('UseRSID', false);
+      access.replaceByName('IgnorePieces', false);
+      access.commitChanges();
+      stage = 'load-revised';
+      const loaded = EXEC.load_document({ bytes: p.revisedBytes, name: 'revised.docx', authorName: previousAuthor });
+      if (!loaded.success) throw new Error(loaded.message || stage);
+      if (docKindOf() !== 'writer') throw new Error('comparison requires Writer documents');
+      stage = 'normalize-revised';
+      if (countRedlines() > 0) {
+        const resolved = EXEC.resolve_all_revisions({ action: 'accept' });
+        if (!resolved.success || resolved.remaining !== 0) throw new Error('could not accept existing revisions');
+      }
+      xModel.setPropertyValue('RecordChanges', false);
+      stage = 'compare';
+      setRedlineAuthor(String(p.authorName || '版本对比'));
+      // Native SwDoc::CompareDoc reads the source with ShowInsert, i.e. its
+      // final projection. Do not load/export the baseline in a visible model:
+      // that adds two full-document layout passes for large documents.
+      const compared = compareWithBytes(p.baseBytes, 'file:///tmp/awd_standalone_base.docx');
+      if (!compared.success) return { success: false, stage: stage, message: compared.message };
+      // Native CompareDocuments turns recording off after producing redlines.
+      // Subsequent user edits follow the editor's normal explicit toggle.
+      return { success: true, redlineCount: compared.redlineCount };
+    } catch (e) { return { success: false, stage: stage, message: errStr(e) }; }
+    finally {
+      humanAuthor = previousAuthor;
+      try { setRedlineAuthor(previousAuthor); } catch (e) {}
+      if (access && saved) {
+        access.replaceByName('Mode', saved.Mode == null ? saved.Mode : shortAny(saved.Mode));
+        access.replaceByName('UseRSID', saved.UseRSID);
+        access.replaceByName('IgnorePieces', saved.IgnorePieces);
+        access.commitChanges();
+      }
+    }
   },
   // ==================== 三方合并（合并比对稿）====================
   // spec docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md §5.1。

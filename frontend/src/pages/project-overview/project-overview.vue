@@ -516,7 +516,8 @@
         :visible="showCompareDialog"
         :documents="compareDocuments"
         :busy="compareSaving"
-        @cancel="showCompareDialog = false"
+        :stage="compareStage"
+        @cancel="onCompareDialogCancel"
         @confirm="onCompareDialogConfirm"
       />
 
@@ -2605,6 +2606,7 @@ export default {
       showCompareDialog: false,
       compareSaving: false,
       compareDocuments: [], // 待比较的文档列表
+      compareStage: '', // 比对稿流程的用户可见阶段：reading/comparing/saving（#1120）
 
       // 右侧 AI 面板（IDE 右侧窗格）
       showAiPanel: false,
@@ -3438,6 +3440,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this._comparisonDisposed = true
     clearInterval(this._mergeElapsedTimer)
     // 标签快照（dev-board#1049）：卸载前把节流中的那次写掉
     this.flushTabSnapshot()

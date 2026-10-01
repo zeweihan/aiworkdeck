@@ -125,3 +125,16 @@ test('countByAuthorKind / filterByAuthorKind：计数按全量算，筛选只挑
   // 筛选之后再数一次，四个桶的数字一个都不许变
   assert.deepEqual(countByAuthorKind(groups), counts)
 })
+
+
+test('native move ids distinguish moved ranges without merging ordinary edits or other moves', () => {
+  assert.equal(revisionTypeKey('Insert', 2), 'moveTo')
+  assert.equal(revisionTypeKey('Delete', 2), 'moveFrom')
+  assert.equal(revisionTypeKey('Delete', 1), 'delete')
+  const rows = [0, 2, 3, 3].map((movedId, index) => ({ index, movedId, type: 'Insert', author: '律师', date: '2026-10-01', contiguous: true, text: '句' }))
+  const groups = groupRevisions(rows)
+  assert.equal(groups.length, 3)
+  assert.equal(groups[0].typeKey, 'insert')
+  assert.equal(groups[1].typeKey, 'moveTo')
+  assert.equal(groups[2].items.length, 2)
+})

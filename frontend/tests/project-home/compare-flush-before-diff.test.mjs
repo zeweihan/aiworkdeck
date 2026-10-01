@@ -8,9 +8,13 @@
 // （判据同 closeFile：ready 且非 docLoadFailed），失败保留对话框提示重试，不碰无关文档。
 //
 // fileOpenTabs.js import 了 @/ 别名跑不进 node，按本目录既有方式把方法体切出来真跑。
+// dev-board#1120 起 DOCX×DOCX（桌面宿主）确认后改走 runDocxComparisonFlow 生成比对稿；
+// 这里 mock 掉 flow（真流程见 docx-compare-flow.test.mjs），只验 confirm 的 flush/失效
+// 语义与路由分流：docx 走新 flow（对话框由 flow 负责关），非 docx 仍开 diff 标签页。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { isDocxDoc } from '../../src/utils/docxComparison.js'
 
 const SRC = readFileSync(
   new URL('../../src/pages/project-overview/fileOpenTabs.js', import.meta.url), 'utf8')
@@ -20,8 +24,8 @@ const end = SRC.indexOf('    openDiffTab(source, target) {', from)
 assert.ok(from > 0 && end > from, 'fileOpenTabs.js 里应能切出 onCompareDialogConfirm 方法体')
 
 const toasts = []
-const methods = new Function('uni', 'return {' + SRC.slice(from, end) + '}')(
-  { showToast: (o) => toasts.push(o) })
+const methods = new Function('uni', 'isDocxDoc', 'return {' + SRC.slice(from, end) + '}')(
+  { showToast: (o) => toasts.push(o) }, isDocxDoc)
 
 function libre(file, { dirty = false, saving = false, ready = true, docLoadFailed = false } = {}) {
   const inst = { dirty, saving, ready, docLoadFailed, file, flushed: 0 }
@@ -36,8 +40,10 @@ function makeVm(docs, refs, projectId = 7) {
     compareDocuments: docs,
     showCompareDialog: true,
     _libreRefs: refs,
+    libreOfficePreferred: true,
     $t: (k, p) => (p && p.msg !== undefined ? `${k}:${p.msg}` : k),
     openDiffTab(source, target) { this.events.push(['diff', source.id, target.id]) },
+    runDocxComparisonFlow(source, target) { this.events.push(['docx', source.id, target.id]) },
   }
   return vm
 }
@@ -45,7 +51,7 @@ function makeVm(docs, refs, projectId = 7) {
 const A = { id: 1, name: 'A.docx' }
 const B = { id: 2, name: 'B.docx' }
 
-test('脏 A + 干净 B：只落盘 A，随后关对话框开比对', async () => {
+test('脏 A + 干净 B：只落盘 A，docx 对走比对稿流程（对话框由 flow 关）', async () => {
   toasts.length = 0
   const a = libre(A, { dirty: true })
   const b = libre(B)
@@ -53,9 +59,30 @@ test('脏 A + 干净 B：只落盘 A，随后关对话框开比对', async () =>
   await methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
   assert.equal(a.flushed, 1, '脏的 A 必须先落盘')
   assert.equal(b.flushed, 0, '干净的 B 不空存一次')
+  assert.deepEqual(vm.events, [['docx', 1, 2]])
+  assert.equal(vm.showCompareDialog, true, '关对话框是 flow 成功后的职责')
+  assert.equal(toasts.length, 0)
+})
+
+test('非 DOCX 对（.doc 旧格式）：flush 语义不变，仍开 diff 标签页并关对话框', async () => {
+  toasts.length = 0
+  const old1 = { id: 1, name: 'A.doc' }
+  const old2 = { id: 2, name: 'B.doc' }
+  const a = libre(old1, { dirty: true })
+  const vm = makeVm([old1, old2], { 'left:1': a })
+  await methods.onCompareDialogConfirm.call(vm, { source: old1, target: old2 })
+  assert.equal(a.flushed, 1, '旧格式的 flush 语义同样保留')
   assert.deepEqual(vm.events, [['diff', 1, 2]])
   assert.equal(vm.showCompareDialog, false)
-  assert.equal(toasts.length, 0)
+})
+
+test('DOCX 不因编辑器偏好静默退回文本比对', async () => {
+  toasts.length = 0
+  const vm = makeVm([A, B], {})
+  vm.libreOfficePreferred = false
+  await methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  assert.deepEqual(vm.events, [['docx', 1, 2]])
+  assert.equal(vm.showCompareDialog, true)
 })
 
 test('B 保存在途：等它落盘完才开比对', async () => {
@@ -71,7 +98,7 @@ test('B 保存在途：等它落盘完才开比对', async () => {
   release()
   await pending
   assert.equal(b.flushed, 1)
-  assert.deepEqual(vm.events, [['diff', 1, 2]])
+  assert.deepEqual(vm.events, [['docx', 1, 2]])
 })
 
 for (const kind of ['throws', 'returns-false', 'stays-dirty']) {
@@ -99,7 +126,7 @@ test('无关文档再脏也不碰；加载失败的空白原型不存', async ()
   await methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
   assert.equal(c.flushed, 0, '本次比对之外文档不保存')
   assert.equal(a.flushed, 0, '加载失败的实例存空白会覆盖真文件，跳过（同 closeFile）')
-  assert.deepEqual(vm.events, [['diff', 1, 2]], '跳过不算失败，只能比磁盘上的字节')
+  assert.deepEqual(vm.events, [['docx', 1, 2]], '跳过不算失败，只能比磁盘上的字节')
 })
 
 for (const change of ['cancel-dialog', 'swap-pair', 'switch-project']) {
@@ -136,7 +163,7 @@ test('保存期间重复点确认只开一次比对', async () => {
   release()
   await Promise.all([p1, p2])
   assert.equal(a.flushed, 1)
-  assert.deepEqual(vm.events, [['diff', 1, 2]])
+  assert.deepEqual(vm.events, [['docx', 1, 2]])
 })
 
 for (const change of ['edit-saved-a', 'register-dirty-a']) {
@@ -180,4 +207,19 @@ test('保存期间对话框不能反转比较方向或重复确认，仍可取�
   dialog.methods.selectSource.call(vm, 1)
   dialog.methods.handleConfirm.call(vm)
   assert.deepEqual(events[0], ['confirm', { source: B, target: A }])
+})
+
+test('saving 阶段不能取消（防误导），reading/comparing 阶段仍可取消', () => {
+  const source = readFileSync(new URL('../../src/components/CompareDocDialog.vue', import.meta.url), 'utf8')
+  const script = source.match(/<script>([\s\S]*?)<\/script>/)[1]
+    .replace(/^import .*$/gm, '').replace('export default', 'return')
+  const dialog = new Function(script)()
+  const events = []
+  const vm = { busy: true, stage: 'saving', documents: [A, B], sourceIndex: 0, targetIndex: 1,
+    $emit: (...args) => events.push(args) }
+  dialog.methods.handleCancel.call(vm)
+  assert.equal(events.length, 0, '落盘在途时取消按钮必须无效')
+  vm.stage = 'comparing'
+  dialog.methods.handleCancel.call(vm)
+  assert.equal(events[0][0], 'cancel', '落盘前的阶段仍可取消')
 })

@@ -449,3 +449,13 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 
 
 页面销毁后丢失 reload/abort 时，恢复锁通过 `checkpoint-restore-state` 查询核对精确 conversationId/fileId/restoreId。服务端在 prepare 前登记“可能写存储”，仅在 prepare/storage.load/save 路径退出后移除，不以 run_state 或取消回执代替写入结束。新页面/普通重试确认 mayWrite=false 后失效旧实例、释放原操作并重新下载；查询失败或仍可能写入保持阻止。原 owner 正常 checkpoint reload 不走此对账；加载 seq 在首次 await 前捕获，迟到查询不能冒用后一次加载身份。该查询只用于已经收到 prepare 并持有本地精确锁的操作，不用于推断任意未知请求状态。同页残留的旧 pending entry 也走同一条对账：新 prepare 先用旧 barrier 自己的 conversationId/restoreId 查写入态，mayWrite=false 才 reconcile 旧操作（failCheckpointRestore 旧实例 + 清 pending）再走全新 prepare；同 restoreId 重复 prepare、查询失败/未知、mayWrite=true 或所有权已变一律保持阻止，不动旧 entry。对账成功不代表新 prepare 成功——旧实例被失效（ready=false/_checkpointInvalidated）后新 prepare 可能仍要在 `prepareCheckpointRestore` 处失败并给出重开指引。
+
+## 两份 DOCX 独立比对稿（dev-board#1120）
+
+文件树 CompareDocDialog → fileOpenTabs 保存屏障 → utils/docxComparison.js 借临时实例 → `build_comparison_document` → 导出并释放 → `POST /api/projects/{id}/files/comparison` → 打开普通 LibreOfficeEditor。DOCX 不再走 DocDiffViewer；非 DOCX 保持文本比较。`compare_document` 仍只供原来的版本展示标签使用。
+
+- 新原语按最终文本比较副本，字符模式临时设置后恢复；基础字节直接交原生比较读取（原生按 ShowInsert 读取基础最终正文），新版仅有旧修订时接受。不要为基础版额外 load/export：2000 页测试曾因此使比较超过 180 秒，省掉重复排版后比对约 19 秒。
+- ProjectFileController/ProjectFileService.createComparison 校验两来源和 SHA-256；DocxComparisonFinalizer 核对双向正文、补标准 move 标签和批注锚点，结果暂存到 `.awd` 后独立创建，回滚清理文件。源变化 HTTP409 `SOURCE_CHANGED`；成功返回 ProjectFile 直接对象。
+- `list_revisions.movedId` 来自原生 RedlineMovedID，>1 才是已配对移动；类型仍为 Insert/Delete。审阅列表和气泡以此显示移出/移入，不根据同色或文字猜类型。
+- 批注一次扫描并按 run 边界插回，避免逐批注扫描全文。重复条款不猜移动。复杂批注资源不能安全复制时明确失败，不能静默丢内容。
+- 验证：`tests/lowa-e2e/comparison-document.mjs`、`comparison-large.mjs`，`tests/lowa-unit/comparison-document.test.mjs`，project-home `docx-compare-{flow,transport}` 与保存屏障，后端 `DocxComparisonFinalizerTest`、`ProjectFileComparisonTest`、`ProjectFileComparisonControllerTest`。2000 页测试是隔离压力测试，不属于每次 PR 的普通小回归。

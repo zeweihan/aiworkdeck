@@ -53,6 +53,9 @@ public class ProjectFileService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.checkba.repository.ProjectRepository projectRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     /** 手工 new 出来的实例（测试）补上解析器。 */
     void setStorageResolverForTest(com.checkba.storage.ProjectStorageResolver resolver) {
         this.storageResolver = resolver;
@@ -343,6 +346,123 @@ public class ProjectFileService {
 
         signalChange(projectId, userId);
         return savedFile;
+    }
+
+    /** 比对基于下载时的两份快照；保存前发生变化必须重新比对。 */
+    public static class ComparisonSourceChangedException extends IllegalArgumentException {
+        public ComparisonSourceChangedException() {
+            super(LangText.of("原文档已发生变化，请重新比对", "A source document changed; compare again"));
+        }
+    }
+
+    @Transactional
+    public ProjectFile createComparison(Long projectId, Long baseFileId, Long revisedFileId,
+            String baseSha256, String revisedSha256, byte[] bytes, Long userId) {
+        if (projectId == null || userId == null || baseFileId == null || revisedFileId == null
+                || baseFileId.equals(revisedFileId)) {
+            throw new IllegalArgumentException(LangText.of("请选择两份不同的 DOCX 文档", "Select two different DOCX documents"));
+        }
+        ProjectFile base = requireComparisonSource(projectId, baseFileId, baseSha256);
+        ProjectFile revised = requireComparisonSource(projectId, revisedFileId, revisedSha256);
+        Long parentId = resolveParentId(projectId, base.getParentId());
+        if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("Empty comparison document");
+        // 完成批注并集和移动修订；同时核对接受/拒绝后的正文完整对应两份来源。
+        // finalizer 已校验 ZIP/XML，避免再用 POI 完整加载一遍大文档。
+        try {
+            bytes = DocxComparisonFinalizer.finalizeComparison(getFileBytes(baseFileId), getFileBytes(revisedFileId), bytes);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(LangText.of("比对稿不是有效的 DOCX 文档", "The comparison is not a valid DOCX document"), e);
+        }
+        requireWithinProjectSizeLimit(projectId, bytes.length);
+        String name = resolveConflictingName(projectId, parentId, comparisonStem(base.getName())
+                + LangText.of("与", " vs ") + comparisonStem(revised.getName()) + LangText.of("（比对稿）.docx", " (comparison).docx"));
+        validateNodeName(name);
+        String path = requireProjectScopedPath(projectId, buildPhysicalPath(projectId, parentId, name));
+        String staging = "projects/" + projectId + "/.awd/comparison-" + UUID.randomUUID() + ".tmp";
+        var storage = storageServiceFactory.getStorageService();
+        boolean[] published = {false};
+        boolean transactional = org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive();
+        if (transactional) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override public void afterCommit() {
+                            // afterCommit 仍绑定已提交的 EntityManager；工作段写入必须另开事务。
+                            try {
+                                if (transactionManager == null) { signalChange(projectId, userId); return; }
+                                var tx = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+                                tx.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                                tx.executeWithoutResult(status -> signalChange(projectId, userId));
+                            } catch (RuntimeException e) {
+                                log.warn("比对稿已保存，版本变更信号失败", e);
+                            }
+                        }
+                        @Override public void afterCompletion(int status) {
+                            if (status != STATUS_COMMITTED && published[0]) cleanupComparisonFile(path);
+                            cleanupComparisonFile(staging);
+                        }
+                    });
+        }
+        try {
+            storage.save(staging, new java.io.ByteArrayInputStream(bytes));
+            // 再核对一次，覆盖校验结果包期间来源刚好被保存的窗口。
+            requireComparisonSource(projectId, baseFileId, baseSha256);
+            requireComparisonSource(projectId, revisedFileId, revisedSha256);
+            storage.moveNew(staging, path);
+            published[0] = true;
+            ProjectFile result = new ProjectFile();
+            result.setProjectId(projectId);
+            result.setParentId(parentId);
+            result.setIsFolder(false);
+            result.setName(name);
+            result.setFileType("docx");
+            result.setFileSize((long) bytes.length);
+            result.setFilePath(path);
+            result.setWpsFileId(generateWpsFileId(projectId));
+            Integer order = projectFileRepository.maxSortOrder(projectId, parentId);
+            result.setSortOrder((order == null ? -1 : order) + 1);
+            result.setUserId(userId);
+            result.setCreatedAt(LocalDateTime.now());
+            result.setUpdatedAt(LocalDateTime.now());
+            ProjectFile saved = projectFileRepository.saveAndFlush(result);
+            if (!transactional) signalChange(projectId, userId);
+            return saved;
+        } catch (RuntimeException e) {
+            if (published[0]) { cleanupComparisonFile(path); published[0] = false; }
+            cleanupComparisonFile(staging);
+            throw e;
+        }
+    }
+
+    private ProjectFile requireComparisonSource(Long projectId, Long id, String sha256) {
+        ProjectFile file = getFile(id);
+        if (!projectId.equals(file.getProjectId()) || Boolean.TRUE.equals(file.getIsFolder())
+                || Boolean.TRUE.equals(file.getIsDeleted()) || !"docx".equalsIgnoreCase(file.getFileType())) {
+            throw new IllegalArgumentException(LangText.of("只能比对本项目内的 DOCX 文档", "Only DOCX documents in this project can be compared"));
+        }
+        if (sha256 == null || !sha256.matches("[a-fA-F0-9]{64}")) throw new IllegalArgumentException("Invalid source SHA-256");
+        try (var in = storageServiceFactory.getStorageService().load(file.getFilePath()).getInputStream()) {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            for (int n; (n = in.read(buffer)) != -1;) digest.update(buffer, 0, n);
+            if (!java.util.HexFormat.of().formatHex(digest.digest()).equalsIgnoreCase(sha256)) {
+                throw new ComparisonSourceChangedException();
+            }
+        } catch (java.io.IOException | java.security.NoSuchAlgorithmException e) {
+            throw new IllegalArgumentException(LangText.of("无法读取原文档，请重新打开后比对", "Cannot read the source document; reopen it and compare again"), e);
+        }
+        return file;
+    }
+
+    private String comparisonStem(String name) {
+        String stem = name == null ? "document" : name.replaceFirst("(?i)\\.docx$", "");
+        return stem.substring(0, Math.min(stem.length(), 60));
+    }
+
+    private void cleanupComparisonFile(String path) {
+        try { storageServiceFactory.getStorageService().delete(path); }
+        catch (RuntimeException e) { log.warn("清理未完成的比对稿失败", e); }
     }
 
     /**

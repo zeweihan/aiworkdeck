@@ -78,6 +78,7 @@ const ACTION_BUDGET_MS = {
   replace_selection: 120000, modify_paragraph: 120000,
   // 三方合并（合并比对稿）：与 libreofficeExecutorClient 同表。
   build_merge_draft: 180000,
+  build_comparison_document: 180000,
   // 读取类（dev-board#729 ③）：此前全部吃 30s 默认值。doc_open_file 是 fire-and-forget，
   // 「打开文档 → 立刻读」时那条读命令正撞在装载中（doc_open_file_sync 自己就给了 180s），
   // 30s 必然不够；超时后模型会再读一次，代价是一整个 LLM 往返（真机中位 80s）。
