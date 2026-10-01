@@ -462,8 +462,8 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 - 原生 CompareDocuments 不比较脚注/尾注内部文字及引用域指令。`DocxComparisonNotes` 按正文双投影的脚尾注引用位置匹配实际 note，补内部文字和整段增删；旧片段依赖按需复制并重映射关系。`DocxComparisonFields` 把完整字段作为原子，补 REF/PAGEREF/CITATION 等指令修订，按字段语义校验两侧，缓存显示重算不算正文丢字。正文批注与脚尾注引用位置都使用同一字段原子坐标，不能重新按缓存字数映射。
 - `DocxComparisonTables` 仅将结构、段落属性及文字格式都可保真的普通表格替换细化成单元格内修订；行列/合并单元格/复杂内容保留原生结构修订。候选接受和拒绝侧格式都必须能还原；相同文本不同格式不能只保留新格式。表格源文本计数预先建索引，避免逐表重扫全文。结构修订行中的批注会阻止 Writer 删除空行，故移到稳定正文点锚并在批注中附原稿/新稿与原位置摘录；普通单元格文字修订仍保留原锚点。相邻整表替换间保留一个无文字段落，防止 Writer 合并两表而继承错误列宽；接受/拒绝后该空段仍在。
 - 引用域需要资源与指令一起保留：按接受与拒绝两侧位置恢复 REF/PAGEREF 目标书签，避免同名书签仅存在于新增修订中而拒绝后悬空；`DocxComparisonBibliography` 合并双方书目 Sources；同 Tag 不同定义不能悄悄覆盖。全部接受/拒绝后刷新字段缓存，防止 REF 继续显示新旧混合文字。字段缓存内的制表/换行同样纳入原子坐标；引用目标书签仅覆盖缓存一部分时明确失败，不能压成空点。跨段或嵌套字段等尚不能完整处理的结构明确失败；不将这些边界称为全量 Word 格式兼容。
-- 比较或导出超时返回专门提示且不落盘。计算中取消立即释放已取得的隐藏实例，迟到实例也归还；每流程仅释放一次，旧流程收尾不得覆盖新流程状态。保存阶段不可取消。
-- 2000 页稀疏修改样本通过比较、末页显示、编辑保存重开；同规模每页修改样本在原生字符/词/自动三模式均达到 180 秒超时，不能宣称全面支持密集修改。后者峰值浏览器进程树 RSS 约 2.58 GiB，独立页面有响应，但没有完成可用产物。
+- 交互比对的比较/导出使用专用无截止等待（#1123，见下）；其他调用仍保留预算，超时返回专门提示且不落盘。计算中取消立即释放已取得的隐藏实例，迟到实例也归还；每流程仅释放一次，旧流程收尾不得覆盖新流程状态。保存阶段不可取消。
+- #1120 历史压力结果：2000 页稀疏修改样本通过比较、末页显示、编辑保存重开；同规模每页修改样本在原生字符/词/自动三模式均达到 180 秒超时，不能宣称全面支持密集修改。后者峰值浏览器进程树 RSS 约 2.58 GiB，独立页面有响应，但没有完成可用产物。
 - 验证：`tests/lowa-e2e/comparison-document.mjs`、`comparison-large.mjs`，`tests/lowa-unit/comparison-document.test.mjs`，project-home `docx-compare-{flow,transport}` 与保存屏障，后端 `DocxComparisonFinalizerTest`、`ProjectFileComparisonTest`、`ProjectFileComparisonControllerTest`。2000 页测试是隔离压力测试，不属于每次 PR 的普通小回归。
 
 ### 连续载入的模型释放（dev-board#1121）
@@ -473,3 +473,13 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 ### 隐藏实例的响应式释放（dev-board#1122）
 
 `acquireLibreHiddenInstance` 返回的句柄持有原始 spare，而 `libreSpares` 中的条目经 Vue 代理。释放必须按正整数唯一 key 删除，不能用 raw/proxy 身份比较；否则取消或生成结束仍残留隐藏 webview。`libre-hidden-release-reactive.test.mjs` 使用真实 Vue reactive 数组覆盖释放、迟到旧句柄、冷启动超时与无效句柄。
+
+
+### 大文档比对等待与明确故障（dev-board#1123）
+
+- 交互 `runDocxComparison` 的 build/export 传 `callOpts.waitForCompletion:true`，hidden handle → relay → worker client 全链透传，两个等待层均不设命令截止；仅允许 `build_comparison_document`、`export_document` 选择此策略。普通导出、AI 命令和后端预算表保持原策略，冷启动仍单独有启动上限。
+- LibreOffice 24.2 原生 `SwDoc::CompareDoc` 是同步调用，没有逐页/StatusIndicator 回调。worker仅在加载新版、归一已有修订、开始原生比较的真实边界发送stage；编排另报读取/启动/导出/保存。不能用UI计时、CPU活跃或持续动画当作引擎正在取得进展的证据。
+- CompareDocDialog宿主计时不依赖worker：总耗时跨stage保留，5分钟无新stage提醒“可能仍在计算，也可能已停滞”。用户选继续等待只重新计警示间隔，不重复发命令、不重启引擎、不清总耗时；无新stage再过5分钟再次提示。关闭、结束、卸载清timer；保存阶段仍禁取消。
+- LOWA实际runtime会把enumerable `Module.onAbort` 从pthread转主线程。boot注册onAbort→可选onFatal→editor-main发不含原始诊断的 `engine-failed`，relay以 `EDITOR_ENGINE_FAILED` 结束pending。渲染进程退出在重启防抖前dispose；dispose立即结算全部pending并拒绝后续复用，不能仅退订让无期限请求悬挂。
+- 隐藏实例监听engine-failed/boot-failed后释放，冷启动不再为已知失败等满启动预算；运行中finally同样按唯一key释放。原生同步比较收不到协作cancel，用户取消仍依靠销毁专用webview/worker并作废会话。不能将“5分钟无阶段变化”断言为死循环或已确认死机。
+- 回归入口：`tests/zeta-relay/{comparison-wait,engine-fatal}.test.mjs`、project-home `{compare-dialog-progress,comparison-engine-exit,docx-compare-flow,libre-hidden-release-reactive}.test.mjs`，以及真实隔离Electron长等待/取消/故障注入验收。onAbort人工注入只能证明回调链，不等同于自然OOM复现。

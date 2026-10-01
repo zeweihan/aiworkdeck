@@ -1000,6 +1000,7 @@
                 <LibreOfficeEditor
                   :file="sp.file"
                   @ready="onLibreSpareReady(sp, $event)"
+                  @engine-failed="releaseLibreHiddenInstance(sp)"
                   :project-id="projectId"
                   :can-write="canWriteProject"
                 />

@@ -249,7 +249,7 @@ export const librePoolMethods = {
             if (!this.libreSpares.includes(sp)) return null
         }
         return {
-            run: (action, payload) => sp.executor.executeCommand(action, payload),
+            run: (action, payload, callOpts) => sp.executor.executeCommand(action, payload, callOpts),
             _spare: sp,
         }
     },

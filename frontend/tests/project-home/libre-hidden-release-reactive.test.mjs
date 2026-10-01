@@ -49,3 +49,19 @@ test('missing, invalid and unknown handles leave the reactive pool unchanged', (
   vm.releaseLibreHiddenInstance(vm.libreSpares[1])
   assert.deepEqual(vm.libreSpares.map(x => x.key), [1])
 })
+
+test('hidden handle forwards completion policy and native progress callback unchanged', async () => {
+  const vm = makeVm(), pending = vm.acquireLibreHiddenInstance(), calls = []
+  vm.libreSpares.at(-1).executor = { executeCommand: (...args) => { calls.push(args); return { success: true } } }
+  const handle = await pending, options = { waitForCompletion: true, onProgress() {} }
+  await handle.run('build_comparison_document', { name: 'result.docx' }, options)
+  assert.equal(calls[0][2], options)
+  assert.equal(calls[0][0], 'build_comparison_document')
+  vm.releaseLibreHiddenInstance(handle)
+})
+test('fatal event removing a starting hidden engine ends acquisition without waiting for its boot deadline', async () => {
+  const vm = makeVm(), pending = vm.acquireLibreHiddenInstance()
+  vm.releaseLibreHiddenInstance(vm.libreSpares.at(-1))
+  assert.equal(await pending, null)
+  assert.equal(vm.libreSpares.length, 0)
+})

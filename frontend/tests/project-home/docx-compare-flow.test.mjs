@@ -93,7 +93,7 @@ test('成功序：下载→sha→引擎 build/export→release（恰一次）→
   assert.ok(order.indexOf('release') < order.indexOf('save'))
   assert.deepEqual(
     order.filter((x) => x.startsWith('stage:')),
-    ['stage:reading', 'stage:comparing', 'stage:saving'])
+    ['stage:reading', 'stage:starting', 'stage:loading', 'stage:exporting', 'stage:saving'])
 })
 
 for (const [name, overrides, expectMsg] of [
@@ -427,7 +427,7 @@ test('pending build取消立即释放；旧流程收尾不释放新引擎或清�
   assert.deepEqual(released, ['old'], 'old finally neither releases twice nor releases new engine')
   assert.equal(vm._cancelDocxComparison, newCancel)
   assert.equal(vm.compareSaving, true)
-  assert.equal(vm.compareStage, 'comparing')
+  assert.equal(vm.compareStage, 'loading')
   newBuild.resolve({ success: true }); await second
   assert.deepEqual(released, ['old', 'new'])
   assert.equal(m.calls.filter(x => x.startsWith('save:')).length, 1)
@@ -471,4 +471,39 @@ test('保存stage仍不可取消，产物正常打开', async () => {
   }
   await methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
   assert.ok(vm.events.includes('openFile:99'))
+})
+
+
+test('comparison scopes unlimited wait to its two commands and forwards only current known native stages', async () => {
+  const { deps, order } = makeHarness()
+  const calls = []
+  let progress
+  deps.acquireEngine = () => ({ run: async (action, params, opts) => {
+    calls.push({ action, opts })
+    if (action === 'build_comparison_document') {
+      progress = opts.onProgress
+      progress({ stage: 'normalizing' }); progress({ stage: 'comparing' }); progress({ stage: 'unknown' })
+      return { success: true }
+    }
+    return { success: true, bytes: [8] }
+  } })
+  await runDocxComparison(deps)
+  assert.deepEqual(calls.map(c => [c.action, c.opts.waitForCompletion]), [
+    ['build_comparison_document', true], ['export_document', true],
+  ])
+  assert.deepEqual(order.filter(s => s.startsWith('stage:')), [
+    'stage:reading', 'stage:starting', 'stage:loading', 'stage:normalizing', 'stage:comparing', 'stage:exporting', 'stage:saving',
+  ])
+  const length = order.length
+  deps.isCancelled = () => true
+  progress({ stage: 'loading' })
+  assert.equal(order.length, length, 'cancelled task must not update a subsequent task')
+})
+
+
+for (const code of ['EDITOR_ENGINE_FAILED', 'EDITOR_DISPOSED']) test(code + ' releases comparison and reports engine failure without saving', async () => {
+  const { deps, order, savedPayloads } = makeHarness({ buildResult: { success: false, code } })
+  await assert.rejects(runDocxComparison(deps), /failEngineStopped/)
+  assert.equal(order.filter(x => x === 'release').length, 1)
+  assert.equal(savedPayloads.length, 0)
 })

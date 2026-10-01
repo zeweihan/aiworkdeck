@@ -9,7 +9,9 @@ const method = worker.slice(worker.indexOf('  build_comparison_document(p) {'), 
 function harness(failStage) {
   const settings = { Mode: undefined, UseRSID: true, IgnorePieces: true }
   let loads = 0, writes = 0
+  const progress = []
   const context = {
+    post: (cmd, data) => progress.push({ cmd, ...data }),
     toUnoByteSeq: x => Array.isArray(x) && x.length ? x : null,
     humanAuthor: 'User', shortAny: x => x, mkProp: (Name, Value) => ({ Name, Value }), errStr: String,
     docKindOf: () => 'writer', countRedlines: () => 2, xModel: { setPropertyValue() { writes++ } },
@@ -25,7 +27,7 @@ function harness(failStage) {
     }) }) }) },
   }
   const run = vm.runInNewContext(`({ ${method} }).build_comparison_document`, context)
-  return { run, settings, context, state: () => ({ loads, writes }) }
+  return { run, settings, context, progress, state: () => ({ loads, writes }) }
 }
 test('missing inputs fail before loading documents or changing engine configuration', () => {
   const h = harness()
@@ -40,4 +42,11 @@ for (const stage of ['load-revised', 'normalize-revised', 'compare']) test(stage
   assert.equal(result.stage, stage)
   assert.equal(h.context.author, 'User')
   assert.deepEqual(h.settings, { Mode: undefined, UseRSID: true, IgnorePieces: true })
+})
+
+
+test('native comparison emits real stage boundaries with its request id, without invented counts', () => {
+  const h = harness()
+  assert.equal(h.run({ baseBytes: [1], revisedBytes: [2], __reqId: 'compare-1' }).success, true)
+  assert.deepEqual(h.progress, ['loading', 'normalizing', 'comparing'].map(stage => ({ cmd: 'progress', reqId: 'compare-1', stage })))
 })

@@ -242,7 +242,7 @@ export default {
   // open-insight：行内写作提示 → 宿主打开「依据」窗格；不自动调用 AI 或外部库。
   // cursor-context：画布点击/光标移动时客体页回传的光标邻域（仅在 insightSubscribed
   //   为真时才产生——不订阅时客体页一条都不发，常态零开销）。
-  emits: ['close', 'ready', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context', 'open-history'],
+  emits: ['close', 'ready', 'engine-failed', 'open-url', 'menu-state', 'evidence-drop', 'locator-consumed', 'open-evidence-target', 'command-progress', 'open-insight', 'cursor-context', 'open-history'],
   // 写作辅助卡片遇到配置类检索失败时要指一条真路（dev-board#688 D3）。设置在工作台里是
   // 一个标签（dev-board#582），组件拿不到页面实例，只能靠宿主注入——与 MarketDetailPane 同口径。
   inject: { openSettingsTab: { default: null } },
@@ -1170,7 +1170,10 @@ export default {
           this.$emit('cursor-context', ctx)
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
+        } else if (msg.type === 'engine-failed') {
+          this.$emit('engine-failed')
         } else if (msg.type === 'boot-failed') {
+          this.$emit('engine-failed')
           this.onBootFailed(String(msg.message || ''))
         }
       })
@@ -1261,6 +1264,8 @@ export default {
     // 重启引擎并重装当前文件（未保存的编辑随进程一起没了，重装拿到的是后端
     // 最后一次落盘的内容，这已是能做到的最好结果）。
     async onGuestProcessGone(reason) {
+      // Even a second crash must settle pending commands before restart throttling.
+      if (this.executor && typeof this.executor.dispose === 'function') this.executor.dispose()
       // 崩溃风暴防抖：起不来的引擎会连着 gone 好几次，别陷进重启循环。
       if (this._guestGoneAt && Date.now() - this._guestGoneAt < 10000) {
         this.appendLog('render-process-gone 再次发生（10s 内），不再重启：' + reason)

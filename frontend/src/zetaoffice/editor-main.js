@@ -319,10 +319,16 @@ function relayCursorContext(meta) {
     .then(() => { cursorInFlight = false }, () => { cursorInFlight = false })
 }
 
+let engineFailed = false
 startEditorEndpoint({
   canvas: document.getElementById('qtcanvas'),
   transport: hostTransport,
   onWorkerMessage: relayModified,
+  onFatal() {
+    if (engineFailed) return
+    engineFailed = true
+    try { hostTransport.send({ __lo: 'lo-relay', type: 'engine-failed', code: 'EDITOR_ENGINE_FAILED' }) } catch (e) { /* host already removed */ }
+  },
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
@@ -355,6 +361,7 @@ startEditorEndpoint({
     try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-log', msg: String(m) }) } catch (e) { /* ignore */ }
   },
 }).then((endpoint) => {
+  if (engineFailed) { endpoint.dispose(); return }
   let semanticWriting = null
   reviewBalloons = attachReviewBalloons({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), transport: hostTransport, locale: q.get('uilang') || 'zh' })
   // A layout result can arrive while the host has already started another UNO
@@ -465,6 +472,7 @@ startEditorEndpoint({
     window.__loExecutor = endpoint.executor
   }
 }).catch((e) => {
+  if (engineFailed) return // The abort callback already sent the terminal failure.
   const reason = e && e.message ? e.message : String(e)
   console.error('[zeta-editor] boot failed:', e)
   if (VERIFY) vlog('boot failed: ' + reason)
