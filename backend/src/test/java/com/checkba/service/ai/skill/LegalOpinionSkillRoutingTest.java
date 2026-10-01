@@ -46,7 +46,12 @@ class LegalOpinionSkillRoutingTest {
                         : "条件化分析或待核实")),
                 () -> assertTrue(prompt.contains(english ? "current status" : "目前")),
                 () -> assertTrue(prompt.contains(english ? "requirements, facts and advice have not been conflated"
-                        : "要求、事实与建议未混淆")));
+                        : "要求、事实与建议未混淆")),
+                // 事实槽契约（dev-board#1107 收尾）：复合命题拆槽取证、当前稿不作证据来源、缺槽命题逐条处置
+                () -> assertTrue(prompt.contains(english ? "required fact slots" : "必要事实槽")),
+                () -> assertTrue(prompt.contains(english ? "never evidence sources" : "不作证据来源")),
+                () -> assertTrue(prompt.contains(english ? "handled explicitly, item by item" : "逐条明确处置")),
+                () -> assertTrue(prompt.contains(english ? "counts as unverified" : "按未验证处理")));
     }
 
     @ParameterizedTest

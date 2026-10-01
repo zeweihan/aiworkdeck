@@ -299,6 +299,57 @@ class AgentOrchestratorOpinionCompletionCheckTest {
     }
 
     @Test
+    @DisplayName("verificationTask（zh）：复合命题拆必要事实槽、逐槽直接证据、缺槽写「未找到」、当前稿不填证据槽")
+    void verificationTaskRequiresPerSlotDirectEvidence() {
+        String task = OpinionCompletionCheck.verificationTask(5L, "意见书",
+                List.of("帮我修订这份法律意见书"));
+        assertTrue(task.contains("必要事实槽"), task);
+        assertTrue(task.contains("主体角色、法律关系、标的、条件、时点各自独立"), task);
+        assertTrue(task.contains("来源文件 ID 或名称 + 定位 + 该来源的原文引文"), task);
+        assertTrue(task.contains("未找到"), task);
+        assertTrue(task.contains("不得把其他槽的有据合成为整句有据"), task);
+        assertTrue(task.contains("任一必要槽未找到直接证据，该命题不得判「有依据」"), task);
+        assertTrue(task.contains("当前稿和对话陈述只是待核命题，不能填入证据槽"), task);
+        assertTrue(task.contains("直接有据的输入与可复算式，不能据此推断角色或标的"), task);
+    }
+
+    @Test
+    @DisplayName("expectedOutput 走生产派发路径：逐槽引文 + 槽判定 + 缺槽不得判有依据")
+    void expectedOutputSlotContractReachesTheSubtask() {
+        skillActive();
+        ArgumentCaptor<String> taskCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> expectedCaptor = ArgumentCaptor.forClass(String.class);
+        run("conv-expected", AiMessage.from("已按您的要求完成修订。"),
+                AiMessage.from("已核对收尾核验发现，交付说明如下。"));
+
+        verify(subAgentService, times(1)).dispatch(taskCaptor.capture(), expectedCaptor.capture(), any(), any());
+        assertTrue(taskCaptor.getValue().contains("必要事实槽"), taskCaptor.getValue());
+        String expected = expectedCaptor.getValue();
+        assertTrue(expected.contains("必要事实槽"), expected);
+        assertTrue(expected.contains("该引文能证明的最小事实"), expected);
+        assertTrue(expected.contains("槽判定（有依据/未找到/不适用）"), expected);
+        assertTrue(expected.contains("任一必要槽未找到直接证据时整句不得判「有依据」"), expected);
+        assertTrue(expected.contains("未发现冲突"), expected);
+    }
+
+    @Test
+    @DisplayName("接回消息（zh）：待核命题逐条明确处置而非只在总结提及；缺逐槽引文的发现按未验证回读")
+    void handoffMessageDemandsItemByItemHandlingOfUnverifiedPropositions() {
+        skillActive();
+        ScriptModel model = run("conv-slot-handoff",
+                AiMessage.from("已按您的要求完成修订。"),
+                AiMessage.from("已逐条处理待核实命题，交付说明如下。"));
+
+        String handoff = lastMessageText(model, 1);
+        assertTrue(handoff.contains("逐条处置每项发现"), handoff);
+        assertTrue(handoff.contains("授权编辑范围内必须限定正文或改为明确待核实表述"), handoff);
+        assertTrue(handoff.contains("不能只在总结里笼统带过"), handoff);
+        assertTrue(handoff.contains("缺逐槽引文证据的"), handoff);
+        assertTrue(handoff.contains("按未验证处理，自行回读原文核对"), handoff);
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-slot-handoff").status());
+    }
+
+    @Test
     @DisplayName("英文界面：核验任务与接回消息同样携带正文限定规则（多语边界）")
     void englishHandoffAndTaskCarryBodyQualificationRule() {
         com.checkba.service.AppLanguageService en = mock(com.checkba.service.AppLanguageService.class);
@@ -318,6 +369,18 @@ class AgentOrchestratorOpinionCompletionCheckTest {
             assertTrue(handoff.contains("must not leave the unsupported relationship intact"), handoff);
             assertTrue(handoff.contains("is not necessarily its issuer or signatory"), handoff);
             assertTrue(handoff.contains("explicit attribution, signature or seal supports it"), handoff);
+            // 事实槽契约（dev-board#1107 收尾）：任务拆槽取证、产出按槽判定、接回逐条处置
+            assertTrue(task.contains("required fact slots"), task);
+            assertTrue(task.contains("directly evidenced inputs and a reproducible calculation"), task);
+            assertTrue(task.contains("must not be composed into support for the whole sentence"), task);
+            assertTrue(task.contains("can never fill an evidence slot"), task);
+            String expected = OpinionCompletionCheck.expectedOutput();
+            assertTrue(expected.contains("required fact slot"), expected);
+            assertTrue(expected.contains("slot verdict (supported / not found / not applicable)"), expected);
+            assertTrue(expected.contains("must not be judged \"supported\""), expected);
+            assertTrue(handoff.contains("Handle each finding individually"), handoff);
+            assertTrue(handoff.contains("not merely mentioned in a passing summary"), handoff);
+            assertTrue(handoff.contains("without per-slot quote evidence counts as unverified"), handoff);
         } finally {
             com.checkba.service.LangText.reset();
         }
