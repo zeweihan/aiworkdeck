@@ -161,6 +161,7 @@ export default {
     failEmpty: '文档字节为空：{name}',
     failEngine: '比对引擎暂不可用，请稍后重试',
     failBuild: '生成比对稿失败，请重试',
+    failTimeout: '比对耗时过长，未生成比对稿；可拆分文档后重试',
     failExport: '导出比对稿失败，请重试',
     failSave: '保存比对稿失败，请重试',
     failChanged: '「{name}」在比对期间有未保存修改，请重试',

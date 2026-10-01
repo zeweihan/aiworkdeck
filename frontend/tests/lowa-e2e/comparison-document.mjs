@@ -84,6 +84,14 @@ try {
   }
   await load(tracked)
   assert.equal((await ok('list_revisions')).count, 2, 'input bytes still contain original revisions')
+  const referenceTarget = await docx(`<w:p><w:bookmarkStart w:id="1" w:name="TargetA"/>${r('付款期限为')}<w:del w:id="1" w:author="比较"><w:r><w:delText>三</w:delText></w:r></w:del><w:ins w:id="2" w:author="比较">${r('六')}</w:ins>${r('十日。')}<w:bookmarkEnd w:id="1"/></w:p><w:p><w:fldSimple w:instr="REF TargetA">${r('付款期限为六三十日。')}</w:fldSimple></w:p>`)
+  for (const [action, expected] of [['accept', '付款期限为六十日。'], ['reject', '付款期限为三十日。']]) {
+    await load(referenceTarget)
+    assert.equal((await ok('resolve_all_revisions', { action })).remaining, 0)
+    assert.deepEqual(await text(), [expected, expected], 'reference cache follows resolved target')
+    await load((await ok('export_document')).bytes)
+    assert.deepEqual(await text(), [expected, expected], 'resolved reference cache survives reopen')
+  }
   const blank = await docx('<w:p/>')
   await ok('build_comparison_document', { baseBytes: base, revisedBytes: blank })
   const deleted = (await ok('export_document')).bytes

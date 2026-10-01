@@ -459,4 +459,9 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 - `list_revisions.movedId` 来自原生 RedlineMovedID，>1 才是已配对移动；类型仍为 Insert/Delete。审阅列表和气泡以此显示移出/移入，不根据同色或文字猜类型。
 - 导出 DOCX 前用 `repairMoveRangeBookmarks` 按原生 RedlineMovedID 的完整删除/插入组修复配对书签；只修复确定配对，保留普通及孤立书签。RedlineStart/End 是无序 Point/Mark，必须比较范围后取首末，不能假定 Start 在前。只读命令临时切换 final/all 可能破坏书签；不要为规避它改掉既有 margin-view 读取契约。真实客户端已验证移动句内编辑、自动保存、关闭重开两轮，配对与批注仍保留。
 - 批注一次扫描并按 run 边界插回，避免逐批注扫描全文。重复条款不猜移动。复杂批注资源不能安全复制时明确失败，不能静默丢内容。
+- 原生 CompareDocuments 不比较脚注/尾注内部文字及引用域指令。`DocxComparisonNotes` 按正文双投影的脚尾注引用位置匹配实际 note，补内部文字和整段增删；旧片段依赖按需复制并重映射关系。`DocxComparisonFields` 把完整字段作为原子，补 REF/PAGEREF/CITATION 等指令修订，按字段语义校验两侧，缓存显示重算不算正文丢字。正文批注与脚尾注引用位置都使用同一字段原子坐标，不能重新按缓存字数映射。
+- `DocxComparisonTables` 仅将结构、段落属性及文字格式都可保真的普通表格替换细化成单元格内修订；行列/合并单元格/复杂内容保留原生结构修订。候选接受和拒绝侧格式都必须能还原；相同文本不同格式不能只保留新格式。表格源文本计数预先建索引，避免逐表重扫全文。结构修订行中的批注会阻止 Writer 删除空行，故移到稳定正文点锚并在批注中附原稿/新稿与原位置摘录；普通单元格文字修订仍保留原锚点。相邻整表替换间保留一个无文字段落，防止 Writer 合并两表而继承错误列宽；接受/拒绝后该空段仍在。
+- 引用域需要资源与指令一起保留：按接受与拒绝两侧位置恢复 REF/PAGEREF 目标书签，避免同名书签仅存在于新增修订中而拒绝后悬空；`DocxComparisonBibliography` 合并双方书目 Sources；同 Tag 不同定义不能悄悄覆盖。全部接受/拒绝后刷新字段缓存，防止 REF 继续显示新旧混合文字。字段缓存内的制表/换行同样纳入原子坐标；引用目标书签仅覆盖缓存一部分时明确失败，不能压成空点。跨段或嵌套字段等尚不能完整处理的结构明确失败；不将这些边界称为全量 Word 格式兼容。
+- 比较或导出超时返回专门提示且不落盘。计算中取消立即释放已取得的隐藏实例，迟到实例也归还；每流程仅释放一次，旧流程收尾不得覆盖新流程状态。保存阶段不可取消。
+- 2000 页稀疏修改样本通过比较、末页显示、编辑保存重开；同规模每页修改样本在原生字符/词/自动三模式均达到 180 秒超时，不能宣称全面支持密集修改。后者峰值浏览器进程树 RSS 约 2.58 GiB，独立页面有响应，但没有完成可用产物。
 - 验证：`tests/lowa-e2e/comparison-document.mjs`、`comparison-large.mjs`，`tests/lowa-unit/comparison-document.test.mjs`，project-home `docx-compare-{flow,transport}` 与保存屏障，后端 `DocxComparisonFinalizerTest`、`ProjectFileComparisonTest`、`ProjectFileComparisonControllerTest`。2000 页测试是隔离压力测试，不属于每次 PR 的普通小回归。

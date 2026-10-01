@@ -139,6 +139,86 @@ class DocxComparisonFinalizerTest {
                 doc(p(revision("del", clause)) + p(run(clause)) + p(revision("ins", clause)), null));
         assertEquals(0, xml(result, "word/document.xml").getElementsByTagNameNS(W, "moveFrom").getLength());
     }
+    @Test void changedReferenceWithSameDisplayIsNotAMovedPassage() throws Exception {
+        String cached = "引用条款的显示文字";
+        String oldField = "<w:fldSimple w:instr=\"REF TargetA\">" + run(cached) + "</w:fldSimple>";
+        String newField = "<w:fldSimple w:instr=\"REF TargetB\">" + run(cached) + "</w:fldSimple>";
+        String changes = "<w:del w:id=\"1\">" + oldField + "</w:del><w:ins w:id=\"2\">" + newField + "</w:ins>";
+        byte[] result = DocxComparisonFinalizer.finalizeComparison(doc(p(oldField), null), doc(p(newField), null), doc(p(changes), null));
+        Document d = xml(result, "word/document.xml");
+        assertEquals(0, d.getElementsByTagNameNS(W, "moveFrom").getLength());
+        assertEquals(1, d.getElementsByTagNameNS(W, "del").getLength());
+        assertEquals(1, d.getElementsByTagNameNS(W, "ins").getLength());
+    }
+    @Test void refreshedFieldCacheDoesNotShiftFollowingCommentsOrCreateARevision() throws Exception {
+        String field = "<w:fldSimple w:instr=\"PAGEREF TargetA\">%s</w:fldSimple>";
+        byte[] old = doc(p(field.formatted(run("1")) + marked("1", "后文")), comment("1", "旧方", "页码后批注"));
+        byte[] updated = doc(p(field.formatted(run("20")) + marked("1", "后文")), comment("1", "新方", "新批注"));
+        byte[] nativeBytes = doc(p(field.formatted(run("3") + run("00")) + run("后文")), null);
+        byte[] output = DocxComparisonFinalizer.finalizeComparison(old, updated, nativeBytes);
+        Document result = xml(output, "word/document.xml");
+        assertEquals(0, result.getElementsByTagNameNS(W, "ins").getLength());
+        assertEquals(Map.of("0", "后文", "1", "后文"), anchored(result));
+        assertEquals("300后文", text(result));
+    }
+    @Test void restoresOldReferenceTargetDroppedByNativeComparison() throws Exception {
+        String oldField = "<w:fldSimple w:instr=\"REF TargetA\">" + run("引用显示") + "</w:fldSimple>";
+        String newField = "<w:fldSimple w:instr=\"REF TargetB\">" + run("引用显示") + "</w:fldSimple>";
+        String oldTarget = "<w:bookmarkStart w:id=\"1\" w:name=\"TargetA\"/>" + run("条款甲") + "<w:bookmarkEnd w:id=\"1\"/>";
+        String newTarget = "<w:bookmarkStart w:id=\"2\" w:name=\"TargetB\"/>" + run("条款乙") + "<w:bookmarkEnd w:id=\"2\"/>";
+        byte[] output = DocxComparisonFinalizer.finalizeComparison(doc(p(oldTarget) + p(oldField), null), doc(p(newTarget) + p(newField), null),
+                doc(p(revision("del", "条款甲") + "<w:ins w:id=\"10\">" + newTarget + "</w:ins>") + p(newField), null));
+        Document result = xml(output, "word/document.xml");
+        Set<String> targets = new HashSet<>();
+        NodeList starts = result.getElementsByTagNameNS(W, "bookmarkStart");
+        for (int i = 0; i < starts.getLength(); i++) targets.add(((Element) starts.item(i)).getAttributeNS(W, "name"));
+        assertTrue(targets.containsAll(Set.of("TargetA", "TargetB")));
+        assertTrue(new String(entry(output, "word/document.xml"), StandardCharsets.UTF_8).contains("REF TargetA"));
+    }
+    @Test void replacedTableCommentsUseStablePointAnchorsAndRetainOriginalContext() throws Exception {
+        for (boolean hasBodyParagraph : List.of(true, false)) {
+            String tail = hasBodyParagraph ? p(run("表格后固定段落。")) : "";
+            String a = "<w:tbl><w:tr><w:tc>" + p(marked("1", "旧格")) + "</w:tc></w:tr></w:tbl>";
+            String b = "<w:tbl><w:tr><w:tc>" + p(marked("2", "新格")) + "</w:tc><w:tc>" + p(run("新列")) + "</w:tc></w:tr></w:tbl>";
+            String nativeOld = "<w:tbl><w:tr><w:trPr><w:del w:id=\"10\"/></w:trPr><w:tc>" + p(revision("del", "旧格")) + "</w:tc></w:tr></w:tbl>";
+            String nativeNew = "<w:tbl><w:tr><w:trPr><w:ins w:id=\"11\"/></w:trPr><w:tc>" + p(revision("ins", "新格")) + "</w:tc><w:tc>" + p(revision("ins", "新列")) + "</w:tc></w:tr></w:tbl>";
+            byte[] output = DocxComparisonFinalizer.finalizeComparison(doc(a + tail, comment("1", "旧方", "旧表意见")),
+                    doc(b + tail, comment("2", "新方", "新表意见")), doc(nativeOld + nativeNew + tail, null));
+            Document result = xml(output, "word/document.xml");
+            assertEquals(Map.of("0", "", "1", ""), anchored(result));
+            NodeList references = result.getElementsByTagNameNS(W, "commentReference");
+            for (int i = 0; i < references.getLength(); i++)
+                assertEquals("body", references.item(i).getParentNode().getParentNode().getParentNode().getLocalName());
+            String comments = text(xml(output, "word/comments.xml"));
+            assertTrue(comments.contains("旧表意见原稿表格批注的原位置：“旧格”。"));
+            assertTrue(comments.contains("新表意见新稿表格批注的原位置：“新格”。"));
+        }
+    }
+    @Test void sameNamedReferenceTargetInInsertionMustAlsoSurviveRejection() throws Exception {
+        String before = "<w:bookmarkStart w:id=\"1\" w:name=\"TargetA\"/>" + run("旧") + "<w:bookmarkEnd w:id=\"1\"/>";
+        String after = before.replace("旧", "新");
+        String field = "<w:fldSimple w:instr=\"REF TargetA\">" + run("缓存") + "</w:fldSimple>";
+        byte[] output = DocxComparisonFinalizer.finalizeComparison(doc(p(before) + p(field), null), doc(p(after) + p(field), null),
+                doc(p(revision("del", "旧") + "<w:ins w:id=\"3\">" + after + "</w:ins>") + p(field), null));
+        Document d = xml(output, "word/document.xml");
+        assertEquals(1, d.getElementsByTagNameNS(W, "bookmarkStart").getLength());
+        assertEquals("p", d.getElementsByTagNameNS(W, "bookmarkStart").item(0).getParentNode().getLocalName());
+        assertEquals("p", d.getElementsByTagNameNS(W, "bookmarkEnd").item(0).getParentNode().getLocalName());
+    }
+    @Test void incompatibleSameNamedReferencePositionsAreRejectedInsteadOfSilentlyMisbound() throws Exception {
+        String start = "<w:bookmarkStart w:id=\"1\" w:name=\"TargetA\"/>", end = "<w:bookmarkEnd w:id=\"1\"/>";
+        String field = p("<w:fldSimple w:instr=\"REF TargetA\">" + run("缓存") + "</w:fldSimple>");
+        byte[] a = doc(p(start + run("甲") + end + run("中间乙")) + field, null);
+        byte[] b = doc(p(run("甲中间") + start + run("乙") + end) + field, null);
+        assertThrows(IllegalArgumentException.class, () -> DocxComparisonFinalizer.finalizeComparison(a, b, b));
+    }
+    @Test void aReferenceIntoPartOfAnotherFieldCacheIsNotSilentlyRestoredAsAnEmptyTarget() throws Exception {
+        String start = "<w:bookmarkStart w:id=\"1\" w:name=\"TargetA\"/>", end = "<w:bookmarkEnd w:id=\"1\"/>";
+        String source = p("<w:fldSimple w:instr=\"REF TargetB\">" + run("A") + start + run("B") + end + run("C") + "</w:fldSimple>")
+                + p("<w:fldSimple w:instr=\"REF TargetA\">" + run("B") + "</w:fldSimple>");
+        byte[] a = doc(source, null), nativeBytes = doc(source.replace(start, "").replace(end, ""), null);
+        assertThrows(IllegalArgumentException.class, () -> DocxComparisonFinalizer.finalizeComparison(a, a, nativeBytes));
+    }
     @Test void nativePageBreakNormalizationPreservesTextAndCommentOffsets() throws Exception {
         byte[] source = doc(p(run("首页")) + p("<w:pPr><w:pageBreakBefore/></w:pPr>" + marked("1", "第二页")), comment("1", "律师", "分页批注"));
         byte[] nativeBytes = doc(p(run("首页") + "<w:r><w:br w:type=\"page\"/></w:r>") + p(run("第二页")), null);

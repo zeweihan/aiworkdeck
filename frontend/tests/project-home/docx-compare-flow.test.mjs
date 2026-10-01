@@ -362,3 +362,113 @@ test('flush期间取消并重开相同两文件，旧确认不可套入新会话
   await methods.onCompareDialogConfirm.call(vm,{source:A,target:B})
   assert.deepEqual(m.calls, [])
 })
+
+for (const action of ['build_comparison_document', 'export_document']) {
+  for (const thrown of [false, true]) {
+    test(`${action} ${thrown ? '抛出' : '返回'}超时：专门提示、释放一次且不保存`, async () => {
+      const { deps, order, savedPayloads } = makeHarness()
+      const acquire = deps.acquireEngine
+      deps.acquireEngine = () => {
+        const handle = acquire(), run = handle.run
+        handle.run = async (name, payload) => {
+          if (name !== action) return run(name, payload)
+          const timeout = { success: false, code: 'EDITOR_RESULT_TIMEOUT', message: 'retry original' }
+          if (thrown) throw timeout
+          return timeout
+        }
+        return handle
+      }
+      await assert.rejects(runDocxComparison(deps), /editor.compare.failTimeout/)
+      assert.equal(order.filter(x => x === 'release').length, 1)
+      assert.equal(savedPayloads.length, 0)
+    })
+  }
+}
+
+test('超时文案到达对话框，隐藏引擎释放且无产物', async () => {
+  const m = makeMocks(), methods = makeSlice(m.uni, m.api), vm = makeVm(m, [A, B], methods)
+  m.engine.run = async () => ({ success: false, code: 'EDITOR_RESULT_TIMEOUT' })
+  await methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  assert.equal(m.toasts[0].title, 'editor.compare.failTimeout')
+  assert.equal(vm.events.filter(x => x === 'release').length, 1)
+  assert.equal(m.calls.filter(x => x.startsWith('save:')).length, 0)
+  assert.equal(vm.compareSaving, false)
+  assert.equal(vm._cancelDocxComparison, null)
+})
+
+function deferred() {
+  let resolve
+  const promise = new Promise(r => { resolve = r })
+  return { promise, resolve }
+}
+
+test('pending build取消立即释放；旧流程收尾不释放新引擎或清空新状态', async () => {
+  const m = makeMocks(), methods = makeSlice(m.uni, m.api), vm = makeVm(m, [A, B], methods)
+  const oldStarted = deferred(), oldBuild = deferred(), newStarted = deferred(), newBuild = deferred()
+  const released = []
+  const engine = (name, started, build) => ({ name, run: async (action) => {
+    if (action === 'build_comparison_document') { started.resolve(); return build.promise }
+    return { success: true, bytes: new Uint8Array([8]) }
+  } })
+  const handles = [engine('old', oldStarted, oldBuild), engine('new', newStarted, newBuild)]
+  vm.acquireLibreHiddenInstance = () => handles.shift()
+  vm.releaseLibreHiddenInstance = handle => released.push(handle.name)
+  const first = methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  await oldStarted.promise
+  methods.onCompareDialogCancel.call(vm)
+  assert.deepEqual(released, ['old'], 'pending engine is released before its command settles')
+  assert.equal(vm.compareSaving, false, 'new confirmation need not wait for old RPC timeout')
+  assert.equal(m.calls.filter(x => x.startsWith('save:')).length, 0)
+  vm.compareDocuments = [A, B]; vm.showCompareDialog = true
+  const second = methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  await newStarted.promise
+  const newCancel = vm._cancelDocxComparison
+  oldBuild.resolve({ success: true }); await first
+  assert.deepEqual(released, ['old'], 'old finally neither releases twice nor releases new engine')
+  assert.equal(vm._cancelDocxComparison, newCancel)
+  assert.equal(vm.compareSaving, true)
+  assert.equal(vm.compareStage, 'comparing')
+  newBuild.resolve({ success: true }); await second
+  assert.deepEqual(released, ['old', 'new'])
+  assert.equal(m.calls.filter(x => x.startsWith('save:')).length, 1)
+  assert.equal(vm._cancelDocxComparison, null)
+  assert.equal(vm.compareSaving, false)
+})
+
+test('pending export取消立即释放且不保存', async () => {
+  const m = makeMocks(), methods = makeSlice(m.uni, m.api), vm = makeVm(m, [A, B], methods)
+  const started = deferred(), exported = deferred()
+  m.engine.run = async action => {
+    if (action === 'build_comparison_document') return { success: true }
+    started.resolve(); return exported.promise
+  }
+  const pending = methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  await started.promise; vm.onCompareDialogCancel()
+  assert.equal(vm.events.filter(x => x === 'release').length, 1)
+  exported.resolve({ success: true, bytes: new Uint8Array([8]) }); await pending
+  assert.equal(vm.events.filter(x => x === 'release').length, 1)
+  assert.equal(m.calls.filter(x => x.startsWith('save:')).length, 0)
+})
+
+test('取得引擎前取消：迟到handle立即释放，不运行命令', async () => {
+  const m = makeMocks(), methods = makeSlice(m.uni, m.api), vm = makeVm(m, [A, B], methods)
+  const started = deferred(), acquired = deferred()
+  vm.acquireLibreHiddenInstance = () => { started.resolve(); return acquired.promise }
+  const pending = methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  await started.promise; vm.onCompareDialogCancel(); acquired.resolve(m.engine); await pending
+  assert.equal(vm.events.filter(x => x === 'release').length, 1)
+  assert.ok(!m.calls.some(x => x.startsWith('run:') || x.startsWith('save:')))
+})
+
+test('保存stage仍不可取消，产物正常打开', async () => {
+  const m = makeMocks(), methods = makeSlice(m.uni, m.api), vm = makeVm(m, [A, B], methods)
+  m.state.onSave = () => {
+    const seq = vm._compareSessionSeq
+    vm.onCompareDialogCancel()
+    assert.equal(vm._compareSessionSeq, seq)
+    assert.equal(vm.compareSaving, true)
+    assert.equal(vm.showCompareDialog, true)
+  }
+  await methods.onCompareDialogConfirm.call(vm, { source: A, target: B })
+  assert.ok(vm.events.includes('openFile:99'))
+})

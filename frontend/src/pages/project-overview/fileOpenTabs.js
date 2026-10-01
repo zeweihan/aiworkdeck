@@ -767,12 +767,16 @@ export const fileOpenTabsMethods = {
       this.showCompareDialog = true
     },
 
-    // 取消比对：会话序号 +1，让进行中的比对流程在下一个 guard 处自行作废（不落盘）。
+    // 取消比对：使会话作废并立即释放已取得的隐藏引擎；旧流程不能清理新会话。
     onCompareDialogCancel() {
       if (this.compareStage === 'saving') return
       this._compareSessionSeq = (this._compareSessionSeq || 0) + 1
+      const cancel = this._cancelDocxComparison
+      this._cancelDocxComparison = null
+      try { if (cancel) cancel() } catch (e) { console.warn('[DocxCompare] 取消时释放隐藏引擎失败', e) }
       this.showCompareDialog = false
       this.compareStage = ''
+      this.compareSaving = false
     },
 
     // DOCX×DOCX 比对稿主流程（dev-board#1120）：字节下载 → 隐藏引擎生成 → 落盘。
@@ -806,6 +810,14 @@ export const fileOpenTabsMethods = {
       const proposedName = this.$t('editor.compare.resultName', { name: stem })
       const user = this.currentUser || {}
       const authorName = this.userDisplayName || user.displayName || ''
+      let engineHandle = null
+      let released = false
+      const releaseOnce = () => {
+        if (!engineHandle || released) return
+        released = true
+        this.releaseLibreHiddenInstance(engineHandle)
+      }
+      this._cancelDocxComparison = releaseOnce
       let created = null
       try {
         created = await runDocxComparison({
@@ -821,21 +833,27 @@ export const fileOpenTabsMethods = {
             const names = dirtyNames()
             if (names.length) throw new Error(this.$t('editor.compare.failChanged', { name: names[0] }))
           },
-          acquireEngine: () => this.acquireLibreHiddenInstance(),
-          releaseEngine: (handle) => this.releaseLibreHiddenInstance(handle),
+          acquireEngine: async () => {
+            engineHandle = await this.acquireLibreHiddenInstance()
+            if (!isCurrent()) releaseOnce()
+            return engineHandle
+          },
+          releaseEngine: releaseOnce,
           saveFile: async (payload) => {
             const resp = await createComparisonFile(projectId, payload)
             return resp
           },
         })
       } catch (e) {
-        this.compareStage = ''
+        if (isCurrent()) this.compareStage = ''
         if (!(e && e.cancelled) && isCurrent()) {
           uni.showToast({ icon: 'none', title: e && e.message ? e.message : this.$t('editor.compare.failBuild') })
         }
         return
+      } finally {
+        if (this._cancelDocxComparison === releaseOnce) this._cancelDocxComparison = null
       }
-      this.compareStage = ''
+      if (isCurrent()) this.compareStage = ''
       // 后端已提交但项目切走/会话作废：产物留在原项目，绝不在错项目里开件。
       if (!created || projectId !== this.projectId || !isCurrent()) return
       this.showCompareDialog = false
@@ -855,6 +873,7 @@ export const fileOpenTabsMethods = {
       this.compareSaving = true
       const confirmedDocuments = this.compareDocuments
       const confirmedSeq = this._compareSessionSeq || 0
+      const confirmedProjectId = this.projectId
       try {
         const ids = new Set([String(source.id), String(target.id)])
         const pending = Object.values(this._libreRefs || {}).filter(inst =>
@@ -900,7 +919,10 @@ export const fileOpenTabsMethods = {
         this.showCompareDialog = false
         this.openDiffTab(source, target)
       } finally {
-        this.compareSaving = false
+        if ((this._compareSessionSeq || 0) === confirmedSeq &&
+            this.compareDocuments === confirmedDocuments && this.projectId === confirmedProjectId) {
+          this.compareSaving = false
+        }
       }
     },
 

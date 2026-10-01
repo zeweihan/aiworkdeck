@@ -61,9 +61,18 @@ export async function runDocxComparison(deps) {
   let outBytes
   try {
     guard()
-    const run = typeof handle.run === 'function'
-      ? (action, payload) => handle.run(action, payload)
-      : (action, payload) => handle.executeCommand(action, payload)
+    const run = async (action, payload) => {
+      let result
+      try {
+        result = await (typeof handle.run === 'function'
+          ? handle.run(action, payload) : handle.executeCommand(action, payload))
+      } catch (e) {
+        if (e && e.code === 'EDITOR_RESULT_TIMEOUT') throw new Error(t('editor.compare.failTimeout'))
+        throw e
+      }
+      if (result && result.code === 'EDITOR_RESULT_TIMEOUT') throw new Error(t('editor.compare.failTimeout'))
+      return result
+    }
     const built = await run('build_comparison_document', {
       baseBytes, revisedBytes, name: deps.name, authorName: deps.authorName || '',
     })

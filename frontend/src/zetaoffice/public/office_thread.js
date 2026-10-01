@@ -6439,6 +6439,9 @@ const EXEC = {
     try {
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+      // A REF cache can still contain the former mixed revision text after its
+      // target resolves. Refresh only after all changes have been resolved.
+      if (before > 0 && countRedlines() === 0) xModel.getTextFields().refresh();
     } finally { resumeModifyListener(); }
     const after = countRedlines(); // 前后各数一次（原先结束时数了两遍 O(N)）
     return { success: true, action: action, resolved: before - after, remaining: after };

@@ -157,6 +157,7 @@ export default {
     failEmpty: 'Document bytes are empty: {name}',
     failEngine: 'The comparison engine is unavailable, please retry later',
     failBuild: 'Failed to generate the compared document, please retry',
+    failTimeout: 'The comparison took too long. No compared document was created; split the documents before retrying.',
     failExport: 'Failed to export the compared document, please retry',
     failSave: 'Failed to save the compared document, please retry',
     failChanged: '"{name}" has unsaved changes made during the comparison, please retry',
