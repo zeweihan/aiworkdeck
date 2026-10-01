@@ -333,7 +333,15 @@ export function useAgentStream() {
         // 挂在**用户气泡**上：这些事说的是「你发的这些材料被怎么处理了」，
         // 而且重连/切回会话时 currentAssistantBubble 可能为 null，末条用户气泡永远在。
         // 同样要预声明——运行时才挂上去的字段 Vue 3 追踪不到，提示会渲染成「第一次对、之后不变」。
-        contextNotices: []
+        contextNotices: [],
+        // 本轮 activeContext（当前打开文档）的发送时快照（dev-board#1118）。
+        // 重新生成要走 confirmRollback 重发，而那时用户可能已切走文档——
+        // 重试必须按「原提问当时的文档」重放，不能偷绑当前打开的另一份，
+        // 也不能在原问没带文档时因为现在开着一份就添进去。快照挂在用户气泡上
+        // 与 contextFiles 同一模式（单一事实来源）；历史回灌的气泡没有这个字段
+        // （后端不持久化），调用侧据 undefined 阻止无身份重试。
+        // 只有已知发送快照才填对象或 null；恢复 inbox 缺 draft 仍属未知。
+        activeContext: undefined
     })
 
     const resetInboxState = () => {
@@ -747,6 +755,8 @@ export function useAgentStream() {
         if (entry.state === 'pending') bubble.wasPendingInbox = true
         bubble.content = entry.message
         bubble.displayContent = entry.displayText || ''
+        // 发送时快照随 draft 透传（dev-board#1118）；与 images/contextFiles 同一接缝
+        if (draft.activeContext !== undefined) bubble.activeContext = draft.activeContext
         return bubble
     }
 
@@ -813,6 +823,19 @@ export function useAgentStream() {
     }) => {
         const continuingRun = isStreaming.value || agentRunStatus.value === 'RUNNING'
         const requestId = clientRequestId || createClientRequestId()
+        // 发送时快照（dev-board#1118）：气泡与 payload 复用同一份对象，
+        // 重新生成（confirmRollback 重发）按它忠实重放，而不是重新取当前打开的文档。
+        const activeContextSnapshot = activeContext ? {
+            id: String(activeContext.id),
+            name: activeContext.name || 'Unknown',
+            fileType: activeContext.fileType || '',
+            wpsFileId: activeContext.wpsFileId || null,
+            // 没能在发送前把编辑器里的改动落盘（dev-board#793 K14 ⑤）：
+            // 磁盘上那份正文已经不是用户眼前看到的那份，让后端只带壳、
+            // 由模型走编辑器桥读实时正文，别拿旧版本给结论。
+            // 重新生成保留身份，由调用侧重新标明正文状态。
+            staleBody: activeContext.staleBody === true
+        } : null
 
         if (!continuingRun) {
             fileChanges.value = []
@@ -832,6 +855,7 @@ export function useAgentStream() {
             if (!userBubble) {
                 userBubble = createUserBubble(prompt, _userImages, _userContextFiles, contentHtml, displayText)
                 userBubble.clientRequestId = requestId
+                userBubble.activeContext = activeContextSnapshot
                 bubbles.value.push(userBubble)
             }
 
@@ -896,17 +920,8 @@ export function useAgentStream() {
                     fileType: f.fileType || ''
                 })),
                 fileIds: fileList.map(f => f.id), // Legacy compatibility
-                // NEW: Active context (auto-detected current tab)
-                activeContext: activeContext ? {
-                    id: String(activeContext.id),
-                    name: activeContext.name || 'Unknown',
-                    fileType: activeContext.fileType || '',
-                    wpsFileId: activeContext.wpsFileId || null,
-                    // 没能在发送前把编辑器里的改动落盘（dev-board#793 K14 ⑤）：
-                    // 磁盘上那份正文已经不是用户眼前看到的那份，让后端只带壳、
-                    // 由模型走编辑器桥读实时正文，别拿旧版本给结论
-                    staleBody: activeContext.staleBody === true
-                } : null,
+                // NEW: Active context (auto-detected current tab) — 与用户气泡上的快照同源（dev-board#1118）
+                activeContext: activeContextSnapshot,
                 // 用户主动选择的 Skill；为空则后端只走触发词自动匹配
                 skillIds: Array.isArray(skillIds) && skillIds.length ? skillIds : null
             }
@@ -961,6 +976,7 @@ export function useAgentStream() {
                         images: _userImages,
                         contextFiles: _userContextFiles,
                         contentHtml,
+                        activeContext: activeContextSnapshot,
                     })
                 }
                 if (entry && entry.state === 'applied') {
@@ -970,7 +986,7 @@ export function useAgentStream() {
                         sequence: entry.sequence,
                         message: entry.message,
                         displayText: entry.displayText,
-                    }, { images: _userImages, contextFiles: _userContextFiles, contentHtml })
+                    }, { images: _userImages, contextFiles: _userContextFiles, contentHtml, activeContext: activeContextSnapshot })
                 }
             } else {
                 const optimistic = bubbles.value.find((candidate) => candidate.clientRequestId === requestId)

@@ -595,7 +595,11 @@ try {
   // ---- 重新生成（dev-board#790 / 审查 D-07）----
   // 走的是和「回退到这条消息」同一条后端通道：先截断（K1 之后会先存档），再原样重问。
   await page.evaluate(() => { window.rollbackCalls = [] })
-  await page.evaluate(() => window.loadFixture('long'))
+  await page.evaluate(() => {
+    window.loadFixture('long')
+    // 本用例验证可恢复原问的重发通道；明确原问无文档，未知历史另有阻止回归。
+    window.chatState.bubbles.filter(b => b.role === 'USER').at(-1).activeContext = null
+  })
   await wait(() => document.querySelector('.message-row.assistant:last-child .msg-regen-btn'))
   assert.equal(await page.$$eval('.msg-regen-btn', els => els.length), 1, '重新生成只给最新一条：对着中间某条点下去会静默毁掉后面好几轮')
   await page.click('.message-row.assistant:last-child .msg-regen-btn')

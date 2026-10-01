@@ -94,6 +94,8 @@ export default {
   regeneratePreviewLabel: '将用这条提问重新生成：',
   regenerateSending: '正在重新生成',
   regenerateNoSource: '找不到这条回答对应的提问',
+  regenerateContextLost: '原提问的文档身份无法恢复，请重新定位文档后重发原问题',
+  regenerateTargetChanged: '请先回到原文档“{name}”再重新生成',
   unknownError: '未知错误',
   // ---- PPT 生成 ----
   pptConfigTitle: 'PPT 生成选项',
