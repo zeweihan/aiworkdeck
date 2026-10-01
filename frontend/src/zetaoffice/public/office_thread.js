@@ -6662,16 +6662,19 @@ const EXEC = {
       access.replaceByName('IgnorePieces', false);
       access.commitChanges();
       stage = 'load-revised';
+      if (p.__reqId) post('progress', { reqId: p.__reqId, stage: 'loading' });
       const loaded = EXEC.load_document({ bytes: p.revisedBytes, name: 'revised.docx', authorName: previousAuthor });
       if (!loaded.success) throw new Error(loaded.message || stage);
       if (docKindOf() !== 'writer') throw new Error('comparison requires Writer documents');
       stage = 'normalize-revised';
+      if (p.__reqId) post('progress', { reqId: p.__reqId, stage: 'normalizing' });
       if (countRedlines() > 0) {
         const resolved = EXEC.resolve_all_revisions({ action: 'accept' });
         if (!resolved.success || resolved.remaining !== 0) throw new Error('could not accept existing revisions');
       }
       xModel.setPropertyValue('RecordChanges', false);
       stage = 'compare';
+      if (p.__reqId) post('progress', { reqId: p.__reqId, stage: 'comparing' });
       setRedlineAuthor(String(p.authorName || '版本对比'));
       // Native SwDoc::CompareDoc reads the source with ShowInsert, i.e. its
       // final projection. Do not load/export the baseline in a visible model:

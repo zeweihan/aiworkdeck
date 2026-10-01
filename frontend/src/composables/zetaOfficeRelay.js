@@ -50,8 +50,9 @@ export function serveExecutor({ executor, send, subscribe }) {
         params = Object.assign({}, params, { reqId: inflight.get(params.reqId) })
       }
       result = await executor.executeCommand(msg.action, params, {
+        waitForCompletion: msg.waitForCompletion === true,
         onIssued: (id) => inflight.set(msg.reqId, id),
-        onProgress: (p) => send({ __lo: TAG, type: 'progress', reqId: msg.reqId, done: p.done, total: p.total }),
+        onProgress: (p) => send({ __lo: TAG, type: 'progress', reqId: msg.reqId, done: p.done, total: p.total, ...(p.stage ? { stage: p.stage } : {}) }),
       })
     } catch (e) {
       const message = e && e.message ? e.message : String(e)
@@ -148,6 +149,9 @@ export const PROBE_BUDGET_MS = 3000
  */
 export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onReady, onLateResult, onProgress }) {
   let seq = 0
+  let disposed = false
+  let terminalResult
+  const disposedResult = () => ({ success: false, code: 'EDITOR_DISPOSED', message: 'Editor closed / 编辑器已关闭' })
   let readyCb = onReady
   const pending = new Map() // reqId -> {resolve, timer}
   // Timing out a command only stops US from waiting on it — the worker-side
@@ -162,10 +166,15 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
   const tombstones = new Map() // reqId -> action
   const MAX_TOMBSTONES = 20
   const off = subscribe((msg) => {
-    if (!msg || msg.__lo !== TAG) return
+    if (!msg || msg.__lo !== TAG || disposed) return
+    if (msg.type === 'engine-failed') {
+      dispose({ success: false, code: 'EDITOR_ENGINE_FAILED', message: 'Editor engine stopped / 文档引擎异常停止' })
+      return
+    }
     if (msg.type === 'ready') { if (readyCb) { const cb = readyCb; readyCb = null; cb() } return }
     if (msg.type === 'progress') {
-      const p = { done: Number(msg.done) || 0, total: Number(msg.total) || 0 }
+      const p = { done: Number(msg.done) || 0, total: Number(msg.total) || 0,
+        ...(typeof msg.stage === 'string' ? { stage: msg.stage } : {}) }
       const live = pending.get(msg.reqId)
       if (live && live.onProgress) { try { live.onProgress(p) } catch (e) { /* ignore */ } }
       if (onProgress) { try { onProgress(msg.reqId, p) } catch (e) { /* ignore */ } }
@@ -189,6 +198,10 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
   // callOpts（可选）：{onProgress(p), onIssued(reqId), timeoutMs}；reqId 也是 cancel
   // 的把手，timeoutMs 显式覆盖本次调用的等待预算（探活）。
   function executeCommand(action, params = {}, callOpts) {
+    if (disposed) return Promise.resolve(terminalResult)
+    // Only the cancellable standalone comparison may opt out of the deadline.
+    const waitForCompletion = callOpts?.waitForCompletion === true &&
+      (action === 'build_comparison_document' || action === 'export_document')
     const reqId = 'rly_' + Date.now() + '_' + (++seq)
     // Whole-document transfers (load/export can be tens of MB and the worker
     // marshals every byte into UNO) and whole-document batch edits get a longer
@@ -201,7 +214,7 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
       : (ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs)
     if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const timer = waitForCompletion ? null : setTimeout(() => {
         if (pending.has(reqId)) {
           pending.delete(reqId)
           tombstones.set(reqId, action)
@@ -223,7 +236,7 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
         resolve({ success: false, message: 'LibreOffice relay send failed: ' + action + ': ' + (e && e.message ? e.message : String(e)) })
       }
       try {
-        const sent = send({ __lo: TAG, type: 'exec', reqId, action, params })
+        const sent = send({ __lo: TAG, type: 'exec', reqId, action, params, ...(waitForCompletion ? { waitForCompletion: true } : {}) })
         if (sent && typeof sent.then === 'function') sent.then(null, sendFailed)
       } catch (e) {
         sendFailed(e)
@@ -231,7 +244,20 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
     })
   }
 
-  return { executeCommand, dispose: off }
+  function dispose(result = disposedResult()) {
+    if (disposed) return
+    disposed = true
+    terminalResult = result
+    off()
+    readyCb = null
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer)
+      entry.resolve(terminalResult)
+    }
+    pending.clear()
+    tombstones.clear()
+  }
+  return { executeCommand, dispose }
 }
 
 /**

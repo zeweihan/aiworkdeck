@@ -252,7 +252,8 @@ export function createLibreOfficeExecutor(opts = {}) {
   function handleMessage(e) {
     const d = (e && e.data) || {}
     if (d.cmd === 'progress') {
-      const p = { done: Number(d.done) || 0, total: Number(d.total) || 0 }
+      const p = { done: Number(d.done) || 0, total: Number(d.total) || 0,
+        ...(typeof d.stage === 'string' ? { stage: d.stage } : {}) }
       const entry = pending.get(d.reqId)
       if (entry && entry.onProgress) { try { entry.onProgress(p) } catch (err) { /* ignore */ } }
       if (opts.onProgress) { try { opts.onProgress(d.reqId, p) } catch (err) { /* ignore */ } }
@@ -293,13 +294,22 @@ export function createLibreOfficeExecutor(opts = {}) {
     // Whole-document transfers and whole-document batch edits get a longer
     // deadline (mirror of the host-side relay budget in zetaOfficeRelay.js).
     const budget = ACTION_BUDGET_MS[action] ? Math.max(timeoutMs, ACTION_BUDGET_MS[action]) : timeoutMs
+    // Match the relay's scoped opt-out; ordinary editor/AI commands retain budgets.
+    const waitForCompletion = callOpts?.waitForCompletion === true &&
+      (action === 'build_comparison_document' || action === 'export_document')
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = waitForCompletion ? null : setTimeout(() => {
         if (pending.has(reqId)) { pending.delete(reqId); reject(Object.assign(new Error('等待编辑器结果超时，操作可能仍在执行。请先检查文档和修订记录，确认结果前不要重复执行写入操作。 / Editor result timed out; the operation may still be running. Check the document and tracked changes before repeating any write.'), { code: 'EDITOR_RESULT_TIMEOUT' })) }
       }, budget)
       pending.set(reqId, { resolve, reject, timer, onProgress: callOpts && callOpts.onProgress })
       if (callOpts && callOpts.onIssued) { try { callOpts.onIssued(reqId) } catch (e) { /* ignore */ } }
-      workerPort.postMessage({ cmd: 'exec', reqId, action, params: params || {} })
+      try {
+        workerPort.postMessage({ cmd: 'exec', reqId, action, params: params || {} })
+      } catch (e) {
+        clearTimeout(timer)
+        pending.delete(reqId)
+        reject(e)
+      }
     })
   }
 

@@ -53,6 +53,7 @@ const DEFAULT_SOFFICE_BASE_URL = 'https://cdn.zetaoffice.net/zetaoffice_latest/'
  * @param {()=>void}                [options.onReady] fired on worker 'ui_ready'
  *        (document loaded, canvas interactive).
  * @param {(data:any)=>void}        [options.onWorkerMessage] raw worker messages.
+ * @param {()=>void}               [options.onFatal] native abort during boot or execution.
  * @returns {Promise<{port: MessagePort, dispose: ()=>void}>}
  */
 export function bootZetaOffice(options = {}) {
@@ -74,6 +75,7 @@ export function bootZetaOffice(options = {}) {
     onLog,
     onReady,
     onWorkerMessage,
+    onFatal,
   } = options
 
   const log = (m) => { if (onLog) onLog(m) }
@@ -101,7 +103,16 @@ export function bootZetaOffice(options = {}) {
   // into `reject`.
   return new Promise((resolve, reject) => {
     let dispose = () => {}
+    let disposed = false, fatal = false
     const rejectWithError = (e) => { dispose(); reject(e instanceof Error ? e : new Error(String(e))) }
+    const reportFatal = (reason) => {
+      if (disposed || fatal) return
+      fatal = true
+      // Keep raw native diagnostics in logs, never in the host failure payload.
+      try { log('LOWA aborted: ' + String(reason)) } catch (e) { /* diagnostic only */ }
+      rejectWithError(new Error('LibreOffice engine stopped'))
+      try { if (onFatal) onFatal() } catch (e) { /* host may already be gone */ }
+    }
     ;(async () => {
     // Files to write into the LOWA MEMFS before main() (CJK font). Each
     // { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
@@ -211,6 +222,9 @@ export function bootZetaOffice(options = {}) {
     // The globals `canvas` and `Module` must exist before soffice.js loads.
     const Module = {
       canvas,
+      // Emscripten forwards enumerable Module.onAbort handlers from pthreads
+      // to the main thread, including native OOM before a UNO result returns.
+      onAbort: reportFatal,
       uno_scripts: [zetaJsUrl, houseProfileUrl, workerScriptUrl],
       locateFile: function (path, prefix) { return (prefix || sofficeBaseUrl) + path },
       // ALWAYS an array: LOWA's soffice.js prologue does `if(!("preRun" in
@@ -269,7 +283,7 @@ export function bootZetaOffice(options = {}) {
     }
     globalThis.Module = Module
 
-    let ready = false, disposed = false, lastWidth = 0, lastHeight = 0
+    let ready = false, lastWidth = 0, lastHeight = 0
     function resizeCanvas(force = false) {
       if (disposed || !ready) return
       const width = canvas.clientWidth, height = canvas.clientHeight
@@ -282,6 +296,7 @@ export function bootZetaOffice(options = {}) {
     }
 
     function onMessage(e) {
+      if (disposed) return
       const d = (e && e.data) || {}
       if (d.cmd === 'log') log(d.msg)
       else if (d.cmd === 'ui_ready') {
@@ -313,12 +328,14 @@ export function bootZetaOffice(options = {}) {
     // only after soffice.js has run — so wire it in onload. (Verified against the
     // allotropia/zetajs web-office example.)
     s.onload = function () {
+      if (disposed) return
       // s.onload is a plain DOM callback (not async): a synchronous throw here
       // (e.g. Module.uno_main being missing/undefined) would otherwise vanish —
       // nothing upstream catches it, so the boot promise would hang forever.
       try {
         log('soffice.js loaded — initializing office thread…')
         Module.uno_main.then(function (port) {
+          if (disposed) return
           port.onmessage = onMessage
           log('thread port ready')
           resolve({ port, dispose })

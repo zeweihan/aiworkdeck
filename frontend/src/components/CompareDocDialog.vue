@@ -60,10 +60,27 @@
             </view>
           </view>
         </view>
+
+        <view
+          v-if="busy"
+          class="compare-progress"
+        >
+          <view class="progress-head">
+            <text class="progress-stage" aria-live="polite">{{ stageText }}</text>
+            <text class="progress-elapsed">{{ elapsedText }}</text>
+          </view>
+          <view class="progress-track" :class="{ stalled: comparisonStalled }" role="progressbar" :aria-label="$t('editor.compare.progressLabel')">
+            <view class="progress-bar"></view>
+          </view>
+          <text class="progress-hint">{{ $t('editor.compare.slowHint') }}</text>
+          <view v-if="comparisonStalled" class="progress-stalled">
+            <text role="alert">{{ $t('editor.compare.stalledHint') }}</text>
+            <button class="btn-continue" @tap="continueWaiting">{{ $t('editor.compare.continueWaiting') }}</button>
+          </view>
+        </view>
       </view>
-      
+
       <view class="dialog-footer">
-        <text v-if="busy && stageText" class="dialog-stage">{{ stageText }}</text>
         <view class="footer-spacer"></view>
         <button class="btn-cancel" :disabled="stage === 'saving'" @tap="handleCancel">{{ $t('editor.compare.cancel') }}</button>
         <button
@@ -98,13 +115,25 @@ export default {
   data() {
     return {
       sourceIndex: 0,
-      targetIndex: 1
+      targetIndex: 1,
+      compareElapsedMs: 0,
+      compareIdleMs: 0
     }
   },
   computed: {
     ICONS() { return ICONS },
     stageText() {
       return this.stage ? this.$t('editor.compare.stage_' + this.stage) : ''
+    },
+    comparisonStalled() {
+      return this.busy && this.visible && this.compareIdleMs >= 300000
+    },
+    elapsedText() {
+      const totalSec = Math.floor(this.compareElapsedMs / 1000)
+      return this.$t('editor.compare.elapsedFormat', {
+        minutes: Math.floor(totalSec / 60),
+        seconds: totalSec % 60
+      })
     },
     canConfirm() {
       return this.documents.length === 2 && 
@@ -120,9 +149,52 @@ export default {
         this.sourceIndex = 0
         this.targetIndex = 1
       }
+      this.updateCompareTimer()
+    },
+    busy() {
+      this.updateCompareTimer()
+    },
+    stage() {
+      this.continueWaiting()
     }
   },
+  mounted() {
+    this.updateCompareTimer()
+  },
+  beforeUnmount() {
+    this.stopCompareTimer()
+  },
   methods: {
+    updateCompareTimer() {
+      if (this.busy && this.visible) {
+        if (this._compareTimer) return
+        this._compareStartedAt = Date.now()
+        this.compareElapsedMs = 0
+        this.continueWaiting()
+        this._compareTimer = setInterval(() => {
+          const now = Date.now()
+          this.compareElapsedMs = now - this._compareStartedAt
+          this.compareIdleMs = now - this._compareLastProgressAt
+        }, 1000)
+      } else {
+        this.stopCompareTimer()
+      }
+    },
+    continueWaiting() {
+      // Acknowledging the warning never restarts the native command or total clock.
+      this._compareLastProgressAt = Date.now()
+      this.compareIdleMs = 0
+    },
+    stopCompareTimer() {
+      if (this._compareTimer) {
+        clearInterval(this._compareTimer)
+        this._compareTimer = null
+      }
+      this._compareStartedAt = 0
+      this._compareLastProgressAt = 0
+      this.compareElapsedMs = 0
+      this.compareIdleMs = 0
+    },
     selectSource(index) {
       if (this.busy) return
       this.sourceIndex = index
@@ -172,15 +244,19 @@ export default {
 }
 
 .compare-dialog {
+  display: flex;
+  flex-direction: column;
   background: var(--awd-surface);
   border-radius: 12px;
   width: 400px;
   max-width: 90vw;
+  max-height: calc(100vh - 32px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   overflow: hidden;
 }
 
 .dialog-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -208,6 +284,8 @@ export default {
 }
 
 .dialog-body {
+  min-height: 0;
+  overflow-y: auto;
   padding: 20px;
 }
 
@@ -343,6 +421,7 @@ export default {
 }
 
 .dialog-footer {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -352,18 +431,101 @@ export default {
   background: var(--awd-bg);
 }
 
-.dialog-stage {
+.compare-progress {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--awd-border);
+}
+
+.progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.progress-stage {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--awd-text);
+}
+
+.progress-elapsed {
   font-size: 12px;
   color: var(--awd-text-3);
-  flex: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--awd-border);
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  border-radius: 2px;
+  background: var(--awd-info);
+  animation: compare-progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes compare-progress-indeterminate {
+  0% { left: -30%; }
+  50% { left: 100%; }
+  100% { left: -30%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.45;
+  }
+}
+
+.progress-track.stalled .progress-bar {
+  animation-play-state: paused;
+}
+
+.progress-stalled {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--awd-text);
+}
+
+.btn-continue {
+  margin: 8px 0 0;
+  padding: 4px 12px;
+  font-size: 13px;
+  background: var(--awd-surface);
+  color: var(--awd-text);
+  border: 1px solid var(--awd-border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.progress-hint {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--awd-text-3);
+  line-height: 1.5;
 }
 
 .footer-spacer {
   flex: 1;
-}
-
-.dialog-stage + .footer-spacer {
-  flex: 0;
 }
 
 .btn-cancel {

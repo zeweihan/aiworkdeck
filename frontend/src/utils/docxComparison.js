@@ -55,7 +55,7 @@ export async function runDocxComparison(deps) {
   const revisedSha256 = await sha256Hex(revisedBytes)
 
   guard()
-  if (deps.onStage) deps.onStage('comparing')
+  if (deps.onStage) deps.onStage('starting')
   const handle = await deps.acquireEngine()
   if (!handle) throw new Error(t('editor.compare.failEngine'))
   let outBytes
@@ -63,21 +63,32 @@ export async function runDocxComparison(deps) {
     guard()
     const run = async (action, payload) => {
       let result
+      const callOpts = {
+        waitForCompletion: true,
+        onProgress: (p) => {
+          if (deps.isCancelled && deps.isCancelled()) return
+          if (deps.onStage && ['loading', 'normalizing', 'comparing'].includes(p.stage)) deps.onStage(p.stage)
+        },
+      }
       try {
         result = await (typeof handle.run === 'function'
-          ? handle.run(action, payload) : handle.executeCommand(action, payload))
+          ? handle.run(action, payload, callOpts) : handle.executeCommand(action, payload, callOpts))
       } catch (e) {
         if (e && e.code === 'EDITOR_RESULT_TIMEOUT') throw new Error(t('editor.compare.failTimeout'))
         throw e
       }
+      guard()
+      if (result && ['EDITOR_ENGINE_FAILED', 'EDITOR_DISPOSED'].includes(result.code)) throw new Error(t('editor.compare.failEngineStopped'))
       if (result && result.code === 'EDITOR_RESULT_TIMEOUT') throw new Error(t('editor.compare.failTimeout'))
       return result
     }
+    if (deps.onStage) deps.onStage('loading')
     const built = await run('build_comparison_document', {
       baseBytes, revisedBytes, name: deps.name, authorName: deps.authorName || '',
     })
     if (!built || built.success !== true) throw new Error(t('editor.compare.failBuild'))
     guard()
+    if (deps.onStage) deps.onStage('exporting')
     const exported = await run('export_document', { name: deps.name })
     const bytes = exported && (exported.bytes || exported.data)
     if (!exported || exported.success === false || !bytes || !(bytes.byteLength || bytes.length)) {
