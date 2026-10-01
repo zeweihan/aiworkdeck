@@ -46,7 +46,7 @@ const timeout=setTimeout(()=>stop('300s hard time limit exceeded'),300000)
 const monitor=setInterval(()=>{const rows=children();const rss=rows.reduce((sum,row)=>sum+row[2],0)/1024;const cpu=rows.reduce((sum,row)=>sum+String(row[3]).split(':').reduce((s,v)=>s*60+Number(v),0),0);result.cpuSamples.push({at:Date.now(),rssMiB:rss,cpuSeconds:cpu});result.peakBrowserRssMiB=Math.max(rss,result.peakBrowserRssMiB);if(rss>5632)stop('5.5GiB safety stop before 6GiB browser RSS cap');if(observer&&!heartbeatInFlight&&!exceeded){heartbeatInFlight=true;observer.evaluate(()=>window.__beat).then(beat=>{result.separatePageHeartbeat=beat}).catch(()=>{}).finally(()=>{heartbeatInFlight=false})}save();},dense?500:2000)
 const stage=async(name,fn)=>{const start=Date.now();result.activeStage=name;save();logBrowser('stage',name);const value=await fn();result.stages.push({name,ms:Date.now()-start});save();return value;}
 try {
- const page=await stage('boot',()=>openEditor(browser));await page.setViewport({width:1280,height:900});
+ const page=await stage('boot',()=>openEditor(browser,{viewport:{width:1280,height:900}}));
  const exec=(a,p={})=>page.evaluate(async(a,p)=>{const r=await window.__loExecutor.executeCommand(a,p);if(r.bytes)r.bytes=Array.from(r.bytes);return r},a,p)
  result.fonts=await stage('fonts',()=>exec('list_fonts'));assert.ok(result.fonts.families.includes('Noto Sans SC'),'real CJK font required');
  const base=await fixture(false),revised=await fixture(true);result.inputBytes=[base.length,revised.length];const hash=b=>createHash('sha256').update(Buffer.from(b)).digest('hex');result.inputHashes=[hash(base),hash(revised)];save()

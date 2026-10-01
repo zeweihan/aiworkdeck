@@ -469,3 +469,7 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 ### 连续载入的模型释放（dev-board#1121）
 
 `load_document` 成功绑定新模型、安装监听器并恢复视图后，清除旧模型修改标志并关闭旧组件；空输入、两种导入都失败或返回同一模型时不关闭当前模型。`_default` 会保留已修改组件，32 次载入曾累积 33 个模型，导出触及固定 1 GiB WASM heap 而超时；操作系统 RSS 不是 WASM 剩余内存。比较完整序列必须在原所有断言通过后验证 components=1。原生压力测试保留完整 console/pageerror，以免把 OOM 误判为计算慢。
+
+### 隐藏实例的响应式释放（dev-board#1122）
+
+`acquireLibreHiddenInstance` 返回的句柄持有原始 spare，而 `libreSpares` 中的条目经 Vue 代理。释放必须按正整数唯一 key 删除，不能用 raw/proxy 身份比较；否则取消或生成结束仍残留隐藏 webview。`libre-hidden-release-reactive.test.mjs` 使用真实 Vue reactive 数组覆盖释放、迟到旧句柄、冷启动超时与无效句柄。

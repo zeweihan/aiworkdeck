@@ -2082,6 +2082,10 @@ try {
   // 在两态下不变，天然不参与计数，也就不用再猜纸在哪。
   {
     console.log('\n== 组 30：set_app_theme 应用配色 ==')
+    // Group 29 uses a hidden model; pixel assertions need their own visible frame.
+    // Do not rely on an old visible document leaked by load_document (#1121).
+    const themeDoc = await exec('debug_fresh_document', { visible: true })
+    if (!themeDoc.success) throw new Error('theme fixture: ' + JSON.stringify(themeDoc))
     const { PNG } = await import('pngjs')
     const shotOf = async () => {
       const vp = page.viewport() || { width: 1280, height: 800 }
