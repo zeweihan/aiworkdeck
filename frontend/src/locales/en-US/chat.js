@@ -92,6 +92,8 @@ export default {
   regeneratePreviewLabel: 'Will regenerate from:',
   regenerateSending: 'Regenerating',
   regenerateNoSource: 'No question found for this answer',
+  regenerateContextLost: 'The original document identity is unavailable. Locate the document again and resend your question.',
+  regenerateTargetChanged: 'Return to the original document “{name}” before regenerating.',
   unknownError: 'Unknown error',
   // ---- PPT generation ----
   pptConfigTitle: 'PPT Generation Options',

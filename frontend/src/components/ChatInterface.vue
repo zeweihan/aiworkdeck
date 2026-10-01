@@ -2024,6 +2024,22 @@ export default {
       // 重新生成要原样再带一次——同一个问题重问一次而材料没跟着走，模型当然给出不一样的答案，
       // 用户却以为这是「换一份回答」的正常波动。
       const rolledBackAttachments = fileListFromBubble(source)
+      // 缺少历史快照不能当成明确无文档；目标切走时也不能让原问落在另一份编辑器。
+      if (resend && (!source || source.activeContext === undefined)) {
+        cancelRollback()
+        uni.showToast({ title: t('chat.regenerateContextLost'), icon: 'none' })
+        return
+      }
+      if (resend && source?.activeContext &&
+          String(source.activeContext.id) !== String(activeDocChip.value?.id ?? '')) {
+        cancelRollback()
+        uni.showToast({ title: t('chat.regenerateTargetChanged', { name: source.activeContext.name }), icon: 'none' })
+        return
+      }
+      // 重放原目标身份，正文是否已落盘不能沿用旧发送时的判断。
+      const resendActiveContext = resend && source?.activeContext
+        ? { ...source.activeContext, staleBody: true }
+        : null
 
       // 关闭对话框
       showRollbackDialog.value = false
@@ -2081,7 +2097,8 @@ export default {
             projectId: props.projectId,
             modelId: currentModelId.value,
             mode: currentModeId.value,
-            skillIds: currentSkillIds()
+            skillIds: currentSkillIds(),
+            activeContext: resendActiveContext
           })
           scrollToBottom()
         }
