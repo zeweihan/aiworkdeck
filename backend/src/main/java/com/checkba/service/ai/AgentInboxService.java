@@ -136,6 +136,60 @@ public class AgentInboxService {
         }
     }
 
+    /** Server-owned continuation metadata in the existing durable request snapshot. */
+    public record Clarification(List<String> instructions, List<String> skillIds,
+                                Long targetFileId, String targetFileName) {}
+
+    public void rememberClarification(String runId, String questionId, Clarification context) {
+        var applied = repository.findByRunIdAndState(runId, APPLIED);
+        var latest = applied.stream().max(Comparator.comparingLong(row ->
+                row.getAppliedSequence() == null ? 0L : row.getAppliedSequence()));
+        for (AgentInboxItem row : latest.stream().toList()) {
+            try {
+                var json = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(row.getRequestJson());
+                json.put("_clarificationQuestionId", questionId);
+                json.set("_clarification", mapper.valueToTree(context));
+                row.setRequestJson(mapper.writeValueAsString(json));
+                repository.save(row);
+            } catch (Exception e) {
+                throw new IllegalStateException("Could not retain clarification context", e);
+            }
+        }
+    }
+
+    public Clarification takeClarification(String conversationId, Long projectId, Long userId, String answer, String activeFileId) {
+        if (!AskUserQuestion.isAnswerMessage(answer)) return null;
+        var match = java.util.regex.Pattern.compile("^\\s*<ask_user_answer\\s+id=\"([^\"]+)\"\\s*>").matcher(answer);
+        if (!match.find()) return null;
+        synchronized (conversationLock(conversationId)) {
+            var rows = repository.findByConversationIdOrderByPositionAscCreatedAtAsc(conversationId).stream()
+                    .sorted(Comparator.comparing(AgentInboxItem::getUpdatedAt)).toList();
+            for (int i = rows.size() - 1; i >= 0; i--) {
+                AgentInboxItem row = rows.get(i);
+                if (!APPLIED.equals(row.getState()) || !Objects.equals(projectId, row.getProjectId())
+                        || !Objects.equals(userId, row.getUserId())) continue;
+                var priorAnswer = java.util.regex.Pattern.compile("^\\s*<ask_user_answer\\s+id=\"([^\"]+)\"\\s*>")
+                        .matcher(row.getMessage());
+                if (priorAnswer.find() && match.group(1).equals(priorAnswer.group(1))) continue;
+                try {
+                    var json = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(row.getRequestJson());
+                    if (!match.group(1).equals(json.path("_clarificationQuestionId").asText())) return null;
+                    Clarification context = mapper.treeToValue(json.get("_clarification"), Clarification.class);
+                    // A switched/closed editor must not consume the user's pending answer context.
+                    if (context.targetFileId() == null || String.valueOf(context.targetFileId()).equals(activeFileId)) {
+                        json.remove(List.of("_clarificationQuestionId", "_clarification"));
+                        row.setRequestJson(mapper.writeValueAsString(json));
+                        repository.save(row);
+                    }
+                    return context;
+                } catch (Exception e) {
+                    throw new IllegalStateException("Could not restore clarification context", e);
+                }
+            }
+        }
+        return null;
+    }
+
     public AgentInboxItem claim(String id, String runId) {
         return claim(id, runId, true);
     }
