@@ -272,6 +272,7 @@ public class AgentOrchestrator {
         final java.util.List<String> opinionInstructions = new java.util.concurrent.CopyOnWriteArrayList<>();
         volatile Long opinionTargetFileId;
         volatile String opinionTargetFileName;
+        java.util.List<String> clarificationSkillIds = java.util.List.of();
         /**
          * 本轮下发工具时用的活跃文档类型（dev-board#729 ①）：doc / sheet / slide，
          * null = 不裁剪（没有活跃文档、纯文本、或本轮中途换过文档类型）。
@@ -1428,12 +1429,34 @@ public class AgentOrchestrator {
             // 显示与实际不一致的状态压根不出现。
             timings.mark("firstTurnCheck");
             boolean skillsEffective = agentMode != AgentMode.ASK;
+            AgentInboxService.Clarification clarification = inboxService == null ? null
+                    : inboxService.takeClarification(conversationId, request.getProjectId(), userId, request.getMessage(),
+                            request.getActiveContext() == null ? null : request.getActiveContext().getId());
             skillRouter.activateForTurn(conversationId, guard.runId, request.getMessage(),
                     request.getPinnedSkillId(), skillsEffective ? request.getSkillIds() : null);
+            if (clarification != null && skillsEffective) {
+                guard.clarificationSkillIds = clarification.skillIds();
+                skillRouter.restoreAutomaticSkills(conversationId, guard.runId, guard.clarificationSkillIds);
+            }
             // 把本轮真正生效的清单告诉前端（自动命中的那枚在面板里会闪一下）。
             // 空列表也发：前端靠它把上一轮的 chip 清掉。
             sendSkillUpdate(guard,
                     skillsEffective ? skillRouter.activeSkills(guard.runId) : List.of());
+
+            // A clarification does not authorize editing whichever file is open now.
+            if (clarification != null && clarification.targetFileId() != null
+                    && (request.getActiveContext() == null
+                    || !String.valueOf(clarification.targetFileId()).equals(request.getActiveContext().getId()))) {
+                String notice = LangText.of("当前编辑器不是原任务文档《" + clarification.targetFileName() + "》；请重新打开原文档后重新发送修订请求。",
+                        "The original task document is no longer active. Reopen it and send the review request again.");
+                sendTextDelta(guard, notice);
+                saveAssistantMessage(guard, projectId, userId, notice);
+                markRunState(guard, AgentRunStateService.RunStatus.FINISHED);
+                sendRunEvent(guard, "bubble_end", bubbleEndPayload(guard, "finished"));
+                closeSse(guard);
+                endRun(guard);
+                return;
+            }
 
             // 1.3 事项类型 AI 兜底分类：仅会话首轮且未命中 skill（skill 命中由 SkillRouter 产出类别）；
             // 异步、开关关闭时 no-op，绝不阻塞对话主链路
@@ -1507,9 +1530,10 @@ public class AgentOrchestrator {
                 } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
             }
             // dev-board#1097：本轮最初的用户指令（门控）与最初绑定的活跃文档（核验目标）
+            if (clarification != null) guard.opinionInstructions.addAll(clarification.instructions());
             guard.opinionInstructions.add(request.getMessage());
-            guard.opinionTargetFileId = guard.activeFileId;
-            guard.opinionTargetFileName = guard.activeFileName;
+            guard.opinionTargetFileId = clarification == null ? guard.activeFileId : clarification.targetFileId();
+            guard.opinionTargetFileName = clarification == null ? guard.activeFileName : clarification.targetFileName();
             // 工具可见性按活跃文档类型收窄（dev-board#729 ①）：本轮只算这一次，
             // 之后每轮递归都沿用，保证同一轮工具集不变
             guard.activeDocKind = initialDocKind(request.getActiveContext());
@@ -2780,7 +2804,9 @@ public class AgentOrchestrator {
                 || !skillRouter.isActiveInRun(guard.runId, OpinionCompletionCheck.SKILL_ID)
                 || guard.opinionInstructions.isEmpty()
                 || !com.checkba.service.ai.skill.SkillRouter.requestsOpinionReview(
-                        guard.opinionInstructions.get(0))) {
+                        String.join("；", guard.opinionInstructions))
+                || guard.opinionInstructions.stream().skip(1).anyMatch(instruction ->
+                        instruction.matches("(?is).*(?:只审不改|只審不改|仅审不改|僅審不改|review only|do not edit|don't edit|(?:只|仅限?|僅限?)(?:修改|修订|调整|改|修)?(?:错字|错别字|格式|排版|字体|标点)|规范格式排版|only (?:fix )?(?:typos|format|formatting|punctuation)).*"))) {
             return false;
         }
         // 「仅一次」的标志在派发前置位：核验失败、接回后那一轮再收尾，都不会再补第二次——
@@ -3422,6 +3448,14 @@ public class AgentOrchestrator {
      */
     private void stopForAskUser(RunGuard guard, String projectId, Long userId,
                                 String persistedPrefix, AskUserQuestion question) {
+        if (inboxService != null && isCurrentRun(guard)) {
+            java.util.LinkedHashSet<String> inheritedSkills = new java.util.LinkedHashSet<>(guard.clarificationSkillIds);
+            skillRouter.activeSkills(guard.runId).stream().filter(skill -> "auto".equals(skill.source()))
+                    .forEach(skill -> inheritedSkills.add(skill.definition().getId()));
+            inboxService.rememberClarification(guard.runId, question.id(), new AgentInboxService.Clarification(
+                    java.util.List.copyOf(guard.opinionInstructions), java.util.List.copyOf(inheritedSkills),
+                    guard.opinionTargetFileId, guard.opinionTargetFileName));
+        }
         String markup = question.toMarkup();
         sendTextDelta(guard, markup);
         sendRunEvent(guard, AskUserQuestion.SSE_EVENT, question.toEventJson());

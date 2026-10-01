@@ -23,6 +23,14 @@ system prompt 的事实分级保留来源事实截止日，不凭系统当天或
 
 dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无据交易关系，且把付款人误当作付款文件出具者。skill 第 2 步及补检接回规则改为：角色/关系无据时整条命题待核，或退回材料直接记载的最小事实；出具/签署归属须有明确署名、签章或原句支持，中英一致。`LegalOpinionSkillRoutingTest` 验实际技能注入，`AgentOrchestratorOpinionCompletionCheckTest` 验实际接回与只读核验提示；不改补检次数、模型或工具权限。一次完整合成来源、原始/当前草稿及固定发现的真实模型纠错复测修正了该样本残留；这是开发态生成探针，未验证自然请求取材、编辑保存或正式客户端 E2E，不代表总体通过率。
 
+## 澄清回答续轮（dev-board#1116）
+
+`ask_user` 停机时，原请求范围（含依序插话）、自动技能与原目标身份写入既有 inbox 的 `requestJson` 服务端元数据；回答凭 questionId、会话、项目、用户匹配原快照，不接受客户端自报原授权。成功匹配原文档才消费快照，跨后端重启可恢复，同问题重复回答不再继承旧范围，新无关任务使旧问题失效。回答仍是新 run，步数与收尾补检次数按新 run 有界；核验目标保持原文件，回答文字按序加入范围。
+
+桌面 `handleQuestionAnswer` 发送当前合格文档身份，并标 `staleBody:true` 让模型从编辑器读取实时稿；这只用于核对原目标，不能授权偷绑新打开文档。切文件/关闭原稿时在调用主模型前止步，保留未消费快照，提示重开原稿再发请求；旧客户端未传身份同样保守止步。回答明确只审不改或仅限错字时不派可能接回纠正的收尾补检。持久续轮只适用于已进入 inbox 的请求；普通裸 `<question>` 无匹配 id，不从任意历史猜原任务。
+
+回归：`AgentOrchestratorOpinionCompletionCheckTest` 真编排器两轮脚本模型验证问答→原范围/目标→一次补检，以及切文件、只读/机械收窄；`AgentInboxServiceTest` 真实服务快照序列化、跨实例重载、身份/旧问题/重复回答边界；`frontend/tests/chat-presentation-ui/ask-user.mjs` 真 ChatInterface+SSE+问题卡点击核对发送 activeContext。脚本模型/合成HTTP回归不等于正式安装包实模复测。
+
 ## 系统提示瘦身（dev-board#1073，2026-09-29）
 
 - 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。

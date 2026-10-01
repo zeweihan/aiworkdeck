@@ -652,4 +652,15 @@ class SkillRouterTest {
         assertEquals("prompt of skill-a", instructions);
         assertTrue(router.promptInjectionFor(a).endsWith(instructions));
     }
+    @Test
+    void clarificationRestoresAutomaticSourceAndHonorsCurrentDisabledState() {
+        router.activateForTurn("conv", "answer", "核对依据后继续", null, List.of());
+        router.restoreAutomaticSkills("conv", "answer", List.of("skill-a"));
+        assertTrue(router.isActiveInRun("answer", "skill-a"));
+        assertEquals("auto", router.activeSkills("answer").get(0).source());
+        registry.setEnabled("skill-b", false);
+        router.restoreAutomaticSkills("conv", "answer", List.of("skill-b"));
+        assertFalse(router.isActiveInRun("answer", "skill-b"));
+    }
+
 }
