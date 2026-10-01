@@ -454,7 +454,7 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 
 文件树 CompareDocDialog → fileOpenTabs 保存屏障 → utils/docxComparison.js 借临时实例 → `build_comparison_document` → 导出并释放 → `POST /api/projects/{id}/files/comparison` → 打开普通 LibreOfficeEditor。DOCX 不再走 DocDiffViewer；非 DOCX 保持文本比较。`compare_document` 仍只供原来的版本展示标签使用。
 
-- 新原语按最终文本比较副本，字符模式临时设置后恢复；基础字节直接交原生比较读取（原生按 ShowInsert 读取基础最终正文），新版仅有旧修订时接受。不要为基础版额外 load/export：2000 页测试曾因此使比较超过 180 秒，省掉重复排版后比对约 19 秒。
+- 新原语按最终文本比较副本，字符模式临时设置后恢复；基础字节直接交原生比较读取（原生按 ShowInsert 读取基础最终正文），新版仅有旧修订时接受，省去基础版的额外 load/export。压力测试必须加载完整中文字体：缺字体的隔离环境曾导出超时，补齐后同一样本恢复正常；不能把该环境的耗时归因于比较算法。
 - ProjectFileController/ProjectFileService.createComparison 校验两来源和 SHA-256；DocxComparisonFinalizer 核对双向正文、补标准 move 标签和批注锚点，结果暂存到 `.awd` 后独立创建，回滚清理文件。源变化 HTTP409 `SOURCE_CHANGED`；成功返回 ProjectFile 直接对象。
 - `list_revisions.movedId` 来自原生 RedlineMovedID，>1 才是已配对移动；类型仍为 Insert/Delete。审阅列表和气泡以此显示移出/移入，不根据同色或文字猜类型。
 - 批注一次扫描并按 run 边界插回，避免逐批注扫描全文。重复条款不猜移动。复杂批注资源不能安全复制时明确失败，不能静默丢内容。
