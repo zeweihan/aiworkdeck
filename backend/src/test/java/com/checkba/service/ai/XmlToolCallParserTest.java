@@ -24,6 +24,11 @@ class XmlToolCallParserTest {
      */
     static class ProtocolFakeTools implements AgentToolComponent {
 
+        @Tool("comment")
+        public String doc_add_comment(@P("anchor") String anchorId, @P("comment") String comment) {
+            return "";
+        }
+
         @Tool("web search")
         public String search_web(@P("query") String query) {
             return "";
@@ -58,6 +63,45 @@ class XmlToolCallParserTest {
         public String todo_write(@P("todos") String todos) {
             return "";
         }
+    }
+
+    @Test
+    void unescapedSameQuoteInsideNamedStringIsRejectedInsteadOfTruncated() {
+        for (String payload : List.of(
+                "原稿称\"不存在其他审批前置条件\"，但补充协议要求银行同意。",
+                "原稿结论为\"可以按前述安排办理交割\"，但条件尚未满足。",
+                "核验发现：签署协议不等于批准。已删除\"已由股东会批准\"的表述。",
+                "材料仅确认截至9月29日未取得同意，原稿\"截至出具日\"无依据。")) {
+            String call = "<tool_code>doc_add_comment(anchorId=\"__ai_anchor_2\", comment=\"" + payload + "\")</tool_code>";
+            var rejected = single(call);
+            assertNotNull(rejected.parseError(), payload);
+            assertNull(rejected.argsJson(), "invalid string must not become executable partial args");
+        }
+        assertNotNull(single("<tool_code>search_web(query='can’t 'approve' this')</tool_code>").parseError());
+    }
+
+    @Test
+    void invalidQuotedCallCannotSwallowOrAlterFollowingValidCall() {
+        var calls = parser.parse("<tool_code>doc_add_comment(anchorId='a', comment=\"原稿称\"无条件\"，有误\")</tool_code>"
+                + "<tool_code>doc_find_replace(findText='原稿', replaceText=\"修订稿\", replaceAll=false)</tool_code>");
+        assertEquals(2, calls.size());
+        assertNotNull(calls.get(0).parseError());
+        assertNull(calls.get(0).argsJson());
+        assertNull(calls.get(1).parseError());
+        var args = cn.hutool.json.JSONUtil.parseObj(calls.get(1).argsJson());
+        assertEquals("原稿", args.getStr("findText"));
+        assertEquals("修订稿", args.getStr("replaceText"));
+        assertEquals("false", args.getStr("replaceAll"));
+    }
+
+    @Test
+    void legalQuotedArgumentsKeepCompleteTextAndTrailingArguments() {
+        var call = single("<tool_code>doc_find_replace(findText=\"原稿称\\\"无条件\\\"，(旧)\", "
+                + "replaceText='银行\\'s 同意，(新)', replaceAll=false)</tool_code>");
+        var args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("原稿称\"无条件\"，(旧)", args.getStr("findText"));
+        assertEquals("银行's 同意，(新)", args.getStr("replaceText"));
+        assertEquals("false", args.getStr("replaceAll"));
     }
 
     private XmlToolCallParser parser;

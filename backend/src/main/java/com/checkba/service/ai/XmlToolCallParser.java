@@ -50,7 +50,10 @@ public class XmlToolCallParser {
      * @param argsJson 规范化后的 JSON 参数
      * @param rawCode  原始 tool_code 文本（用于日志与反馈消息）
      */
-    public record ParsedCall(String toolName, String argsJson, String rawCode) {
+    public record ParsedCall(String toolName, String argsJson, String rawCode, String parseError) {
+        public ParsedCall(String toolName, String argsJson, String rawCode) {
+            this(toolName, argsJson, rawCode, null);
+        }
     }
 
     /**
@@ -311,6 +314,11 @@ public class XmlToolCallParser {
             return new ParsedCall(toolName, jsonArgs, code);
         }
 
+        String quoteError = namedStringQuoteError(code, toolName);
+        if (quoteError != null) {
+            return new ParsedCall(toolName, null, code, quoteError);
+        }
+
         // 4. 按目标工具的参数名逐个提取（支持多行/转义/三引号/ctrl46/无引号值）
         cn.hutool.json.JSONObject args = new cn.hutool.json.JSONObject();
         Optional<ToolRegistry.RegisteredTool> tool = toolRegistry.resolve(
@@ -395,6 +403,31 @@ public class XmlToolCallParser {
         String head = code.substring(0, paren).trim();
         int dot = head.lastIndexOf('.');
         return dot != -1 ? head.substring(dot + 1).trim() : head;
+    }
+
+    /** Reject ambiguous named strings before extraction can silently accept a prefix. */
+    private String namedStringQuoteError(String code, String toolName) {
+        for (String token : splitTopLevelArgs(code, toolName)) {
+            String trimmed = token.strip();
+            Matcher named = NAMED_ARG_TOKEN_PATTERN.matcher(trimmed);
+            if (!named.find()) continue;
+            String value = trimmed.substring(named.end()).strip();
+            if (value.startsWith("\"\"\"") || value.startsWith("'''")) continue;
+            if (value.isEmpty() || (value.charAt(0) != '"' && value.charAt(0) != '\'')) continue;
+            char quote = value.charAt(0);
+            boolean escaped = false;
+            int end = -1;
+            for (int i = 1; i < value.length(); i++) {
+                char c = value.charAt(i);
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == quote) { end = i; break; }
+            }
+            if (end < 0 || !value.substring(end + 1).isBlank()) {
+                return "Error: invalid quoted tool argument. Escape inner matching quotes or use a well-formed JSON object; no operation was executed.";
+            }
+        }
+        return null;
     }
 
     private static final Pattern NAMED_ARG_TOKEN_PATTERN = Pattern.compile("^[A-Za-z_]\\w*\\s*=(?!=)");

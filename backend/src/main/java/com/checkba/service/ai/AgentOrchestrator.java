@@ -1932,7 +1932,10 @@ public class AgentOrchestrator {
                     String result;
                     boolean xmlToolSuccess;
                     ToolRegistry.ToolResult toolResult = null;
-                    if (agentMode == AgentMode.ASK && !ASK_MEMORY_TOOLS.contains(call.toolName())) {
+                    if (call.parseError() != null) {
+                        result = call.parseError();
+                        xmlToolSuccess = false;
+                    } else if (agentMode == AgentMode.ASK && !ASK_MEMORY_TOOLS.contains(call.toolName())) {
                         result = "Error: ASK mode permits only memory_list, memory_read, and memory_search.";
                         xmlToolSuccess = false;
                     } else {

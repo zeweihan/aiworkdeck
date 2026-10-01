@@ -60,6 +60,12 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 - 代码围栏、普通示例文字及 thinking/final/其他容器内部不识别为新别名；不恢复非自闭合或不完整输出。ASK 仍经原工具权限闸，未改 PLAN 既有行为。
 - 回归：`XmlToolCallParserTest` 保存完整实际失败形态；`AskUserOrchestratorFlowTest` 验证提问事件、持久化、同批后续写入不执行及 ASK 拒绝。`AskUserLiveEvaluationTest` 只量提问/进入编辑工具的行为，不代表真实文档删改成功。
 
+## XML 命名字符串的引号拒绝（dev-board#1117，2026-10-01）
+
+- 命名字符串内未转义的同型引号可能把批注等参数静默截为前缀。`XmlToolCallParser.ParsedCall.parseError` 在提取前拒绝此类歧义，参数不成为可执行的半截 JSON；合法转义、单双引号与既有三引号路径继续沿用原解析。
+- 主、子编排器都必须先检查 `parseError`，不派发工具，沿既有工具失败结果回喂模型纠正；不能把 `argsJson=null` 交给工具默认参数，也不因单次解析错误终止整轮。
+- `XmlToolCallParserTest`、`AgentOrchestratorBlankToolOutputTest`、`SubAgentServiceTest` 覆盖实际残句、合法尾随参数与错误后合法重试。此契约限定命名参数；位置参数的歧义与新版正式包验收仍未验证。
+
 ## 外部支出准入（dev-board#1083，2026-09-30）
 
 - 官方桌面云模型运行时统一 AWD_CLOUD；旧 OPENROUTER 配置与环境变量 Key 不能绕登录/余额，显式本地 OLLAMA 保留。
