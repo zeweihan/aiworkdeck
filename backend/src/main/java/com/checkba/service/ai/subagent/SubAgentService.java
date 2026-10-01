@@ -417,7 +417,8 @@ public class SubAgentService {
             if (xmlToolCallParser.containsToolCall(text)) {
                 boolean executed = false;
                 for (XmlToolCallParser.ParsedCall call : xmlToolCallParser.parse(text)) {
-                    String output = executeScoped(call.toolName(), call.argsJson(), allowed, subCtx, toolsUsed);
+                    String output = call.parseError() != null ? call.parseError()
+                            : executeScoped(call.toolName(), call.argsJson(), allowed, subCtx, toolsUsed);
                     messages.add(UserMessage.from("[Tool Execution Result]\nTool: " + call.rawCode()
                             + "\nOutput: " + output));
                     executed = true;

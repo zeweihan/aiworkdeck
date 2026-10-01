@@ -23,6 +23,14 @@ system prompt 的事实分级保留来源事实截止日，不凭系统当天或
 
 dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无据交易关系，且把付款人误当作付款文件出具者。skill 第 2 步及补检接回规则改为：角色/关系无据时整条命题待核，或退回材料直接记载的最小事实；出具/签署归属须有明确署名、签章或原句支持，中英一致。`LegalOpinionSkillRoutingTest` 验实际技能注入，`AgentOrchestratorOpinionCompletionCheckTest` 验实际接回与只读核验提示；不改补检次数、模型或工具权限。一次完整合成来源、原始/当前草稿及固定发现的真实模型纠错复测修正了该样本残留；这是开发态生成探针，未验证自然请求取材、编辑保存或正式客户端 E2E，不代表总体通过率。
 
+## 澄清回答续轮（dev-board#1116）
+
+`ask_user` 停机时，原请求范围（含依序插话）、自动技能与原目标身份写入既有 inbox 的 `requestJson` 服务端元数据；回答凭 questionId、会话、项目、用户匹配原快照，不接受客户端自报原授权。成功匹配原文档才消费快照，跨后端重启可恢复，同问题重复回答不再继承旧范围，新无关任务使旧问题失效。回答仍是新 run，步数与收尾补检次数按新 run 有界；核验目标保持原文件，回答文字按序加入范围。
+
+桌面 `handleQuestionAnswer` 发送当前合格文档身份，并标 `staleBody:true` 让模型从编辑器读取实时稿；这只用于核对原目标，不能授权偷绑新打开文档。切文件/关闭原稿时在调用主模型前止步，保留未消费快照，提示重开原稿再发请求；旧客户端未传身份同样保守止步。回答明确只审不改或仅限错字时不派可能接回纠正的收尾补检。持久续轮只适用于已进入 inbox 的请求；普通裸 `<question>` 无匹配 id，不从任意历史猜原任务。
+
+回归：`AgentOrchestratorOpinionCompletionCheckTest` 真编排器两轮脚本模型验证问答→原范围/目标→一次补检，以及切文件、只读/机械收窄；`AgentInboxServiceTest` 真实服务快照序列化、跨实例重载、身份/旧问题/重复回答边界；`frontend/tests/chat-presentation-ui/ask-user.mjs` 真 ChatInterface+SSE+问题卡点击核对发送 activeContext。脚本模型/合成HTTP回归不等于正式安装包实模复测。
+
 ## 系统提示瘦身（dev-board#1073，2026-09-29）
 
 - 固定规则、能力片段与末位提醒分工见 `backend/src/main/resources/prompts/README.md`。基底与 enforcement 去重；只删被工具描述或末位提醒承接的判据。维护者 HTML 注释不进模型；占位与模型示例注释保留，加载器不做通用剥除。
@@ -59,6 +67,12 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 - `XmlToolCallParser` 只在顶层/过程协议壳恢复这一种别名，按原文位置与既有工具调用合并；参数交给原 `ToolRegistry` / `AskUserQuestion` 校验，成功后沿现有 SSE、落库与等待回答停机路径。只兼容已知四字段，不泛化任意标签为工具；歧义/非法参数显式返回原参数错误。
 - 代码围栏、普通示例文字及 thinking/final/其他容器内部不识别为新别名；不恢复非自闭合或不完整输出。ASK 仍经原工具权限闸，未改 PLAN 既有行为。
 - 回归：`XmlToolCallParserTest` 保存完整实际失败形态；`AskUserOrchestratorFlowTest` 验证提问事件、持久化、同批后续写入不执行及 ASK 拒绝。`AskUserLiveEvaluationTest` 只量提问/进入编辑工具的行为，不代表真实文档删改成功。
+
+## XML 命名字符串的引号拒绝（dev-board#1117，2026-10-01）
+
+- 命名字符串内未转义的同型引号可能把批注等参数静默截为前缀。`XmlToolCallParser.ParsedCall.parseError` 在提取前拒绝此类歧义，参数不成为可执行的半截 JSON；合法转义、单双引号与既有三引号路径继续沿用原解析。
+- 主、子编排器都必须先检查 `parseError`，不派发工具，沿既有工具失败结果回喂模型纠正；不能把 `argsJson=null` 交给工具默认参数，也不因单次解析错误终止整轮。
+- `XmlToolCallParserTest`、`AgentOrchestratorBlankToolOutputTest`、`SubAgentServiceTest` 覆盖实际残句、合法尾随参数与错误后合法重试。此契约限定命名参数；位置参数的歧义与新版正式包验收仍未验证。
 
 ## 外部支出准入（dev-board#1083，2026-09-30）
 

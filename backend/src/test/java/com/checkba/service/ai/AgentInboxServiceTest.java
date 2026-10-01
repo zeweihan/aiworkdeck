@@ -255,4 +255,38 @@ class AgentInboxServiceTest {
         request.setSubmissionMode(mode);
         return request;
     }
+    @Test
+    void clarificationSnapshotSurvivesServiceRestartAndIsConsumedOnce() {
+        AgentInboxItem original = service.submit(request("修订这份法律意见书", "review", null), 7L);
+        service.claim(original.getId(), "review-run");
+        AgentInboxService.Clarification context = new AgentInboxService.Clarification(
+                List.of("修订这份法律意见书"), List.of("legal-opinion-review"), 5L, "意见书.docx");
+        service.rememberClarification("review-run", "ask-review", context);
+        AgentInboxService restarted = new AgentInboxService(repository, sse, mock(AgentRunStateService.class));
+        String answer = "<ask_user_answer id=\"ask-review\">Selected:\n- 核对事实后修订</ask_user_answer>";
+        assertNull(restarted.takeClarification("conv-1", 42L, 8L, answer, "5"), "其他用户不能取得原范围");
+        assertNull(restarted.takeClarification("conv-1", 43L, 7L, answer, "5"), "其他项目不能取得原范围");
+        assertNull(restarted.takeClarification("conv-1", 42L, 7L, answer.replace("ask-review", "ask-stale"), "5"));
+        assertEquals(context, restarted.takeClarification("conv-1", 42L, 7L, answer, "99"),
+                "切文件时返回原目标但不消费待回答范围");
+        AgentInboxItem switchedAnswer = service.submit(request(answer, "switched-answer", null), 7L);
+        service.claim(switchedAnswer.getId(), "switched-run");
+        assertEquals(context, restarted.takeClarification("conv-1", 42L, 7L, answer, "5"),
+                "切文件失败后同问题重答仍可恢复未消费范围");
+        assertNull(restarted.takeClarification("conv-1", 42L, 7L, answer, "5"), "迟到的重复回答不能再次恢复旧范围");
+        assertEquals("修订这份法律意见书", restarted.requestOf(original).getMessage());
+    }
+
+    @Test
+    void unrelatedNewTurnInvalidatesOlderClarification() {
+        AgentInboxItem original = service.submit(request("修订这份法律意见书", "review", null), 7L);
+        service.claim(original.getId(), "review-run");
+        service.rememberClarification("review-run", "ask-review", new AgentInboxService.Clarification(
+                List.of("修订这份法律意见书"), List.of("legal-opinion-review"), 5L, "意见书.docx"));
+        AgentInboxItem newer = service.submit(request("另一个任务", "new", null), 7L);
+        service.claim(newer.getId(), "new-run");
+        assertNull(service.takeClarification("conv-1", 42L, 7L,
+                "<ask_user_answer id=\"ask-review\">Selected:\n- 继续</ask_user_answer>", "5"));
+    }
+
 }

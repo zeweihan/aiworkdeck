@@ -4177,6 +4177,13 @@ export default {
              await sendMessage({
                 prompt: formatted.prompt,
                 displayText: formatted.displayText,
+                activeContext: activeDocChip.value ? {
+                  ...activeDocChip.value,
+                  fileType: props.activeTab.fileType,
+                  wpsFileId: props.activeTab.wpsFileId,
+                  pane: props.activeTabPane,
+                  staleBody: true
+                } : null,
                 fileList: [],
                 projectId: props.projectId,
                 modelId: currentModelId.value,

@@ -105,6 +105,24 @@ class SubAgentServiceTest {
     }
 
     @Test
+    void invalidQuotedXmlIsNotExecutedAndErrorAllowsCorrection() {
+        when(model.generate(anyList(), anyList())).thenReturn(
+                textTurn("<tool_code>search_web(query=\"原稿称\"无条件\"，有误\")</tool_code>"),
+                textTurn("<tool_code>search_web(query=\"修正后的完整参数\")</tool_code>"),
+                textTurn("完成"));
+        SubAgentResult result = newService().dispatch("任务", "结果", List.of("search_web"), PARENT_CTX);
+        assertTrue(result.success());
+        assertEquals(3, result.rounds());
+        ArgumentCaptor<String> args = ArgumentCaptor.forClass(String.class);
+        verify(registry, times(1)).execute(eq("search_web"), args.capture(), any());
+        assertEquals("修正后的完整参数", cn.hutool.json.JSONUtil.parseObj(args.getValue()).getStr("query"));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChatMessage>> messages = ArgumentCaptor.forClass((Class) List.class);
+        verify(model, atLeastOnce()).generate(messages.capture(), anyList());
+        assertTrue(messages.getValue().toString().contains("invalid quoted tool argument"));
+    }
+
+    @Test
     void accountGateIsCheckedAgainBeforeNextModelRound() {
         when(modelFactory.getChatModel(any())).thenReturn(model).thenThrow(
                 com.checkba.service.account.AccountRequired.exception("platform_ai", "Sign in"));
