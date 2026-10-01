@@ -168,7 +168,7 @@ test('worker 的 EXEC 里有 set_revision_view，且工具栏显示三个用户�
 test('export_document 走 withInlineMarkupForExport：导出期间强制内联，导完还原原态', () => {
   // 页边会把 docx 导错位（dev-board#367），最终稿可能把隐藏态写进文件——两种非默认
   // 显示态都必须在导出期间临时切成内联全显。这是导出保真的唯一闸。
-  assert.match(WORKER_SRC, /withInlineMarkupForExport\(function \(\) \{ xModel\.storeToURL\('private:stream', props\); \}\);/)
+  assert.match(WORKER_SRC, /withInlineMarkupForExport\(function \(\) \{[^{}]*xModel\.storeToURL\('private:stream', props\); \}\);/)
   const fn = WORKER_SRC.match(/function withInlineMarkupForExport\(fn\) \{[\s\S]*?\n\}/)[0]
   assert.match(fn, /const before = revisionViewState\(\)\.mode/, '先记下用户所选的态')
   assert.match(fn, /if \(before === 'all'\) return fn\(\)/, '已经内联时直接导出')
