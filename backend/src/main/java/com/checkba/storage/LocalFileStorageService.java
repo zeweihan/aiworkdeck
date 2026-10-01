@@ -127,6 +127,18 @@ public class LocalFileStorageService implements StorageService {
     }
 
     @Override
+    public void moveNew(String fromId, String toId) throws StorageException {
+        try {
+            Path target = resolveFilePath(toId);
+            Files.createDirectories(target.getParent());
+            // 不用 ATOMIC_MOVE：该选项对已存在目标的行为由 provider 决定，可能覆盖。
+            Files.move(resolveFilePath(fromId), target);
+        } catch (IOException e) {
+            throw new StorageException("Failed to publish new file", e);
+        }
+    }
+
+    @Override
     public boolean exists(String fileId) {
         Path filePath = resolveFilePath(fileId);
         return Files.exists(filePath);

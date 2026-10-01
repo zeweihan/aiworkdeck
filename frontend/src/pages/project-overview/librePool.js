@@ -255,8 +255,10 @@ export const librePoolMethods = {
     },
     releaseLibreHiddenInstance(handle) {
         const sp = handle && (handle._spare || handle)
-        if (!sp) return
-        this.libreSpares = this.libreSpares.filter((x) => x !== sp)
+        // #1122: array entries are Vue proxies; acquired handles retain the raw object.
+        const key = sp && sp.key
+        if (!Number.isSafeInteger(key) || key < 1) return
+        this.libreSpares = this.libreSpares.filter((x) => x.key !== key)
     },
 
     // 过继实例渲染自 libreSpares，出池必须同步删条目组件才会卸载。

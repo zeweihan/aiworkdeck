@@ -2589,6 +2589,98 @@ function applyRevisionView(mode, reserveGutter) {
 // 把上一份文档可能留下的「最终稿」隐藏态显式打回来——保活池里同一个 worker 会
 // 连着开好几份文档，不复位就是「上一份设了最终稿、下一份打开修订痕迹默默不见」。
 function resetRevisionView() { return applyRevisionView(DEFAULT_REVISION_VIEW); }
+// Writer's final-text view can lose/rename the private bookmarks that its DOCX
+// exporter uses for move ranges, while native RedlineMovedID remains intact.
+// Restore only complete native pairs; never infer movement from matching text.
+function repairMoveRangeBookmarks() {
+  if (!isWriterDoc()) return;
+  const groups = Object.create(null), en = xModel.getRedlines().createEnumeration();
+  while (en.hasMoreElements()) {
+    const redline = en.nextElement();
+    let id;
+    try { id = Number(redline.getPropertyValue('RedlineMovedID')); } catch (e) { return; }
+    if (!(id > 1)) continue;
+    const type = String(redline.getPropertyValue('RedlineType'));
+    if (type !== 'Delete' && type !== 'Insert') continue;
+    const group = groups[id] || (groups[id] = { Delete: [], Insert: [] });
+    let start = redline.getPropertyValue('RedlineStart'), end = redline.getPropertyValue('RedlineEnd');
+    // UNO exposes the redline Point/Mark, which can be reversed after view changes.
+    if (start.getText().compareRegionStarts(start, end) < 0) { const tmp = start; start = end; end = tmp; }
+    group[type].push({ start: start, end: end });
+  }
+  const ids = Object.keys(groups).filter(id => groups[id].Delete.length && groups[id].Insert.length);
+  if (!ids.length) return;
+  const span = function (parts) {
+    let start = parts[0].start, end = parts[0].end;
+    const text = start.getText();
+    // One logical move can be split into several redlines after later edits.
+    // Fold its native endpoints, including any intervening tracked edits.
+    try {
+      for (let i = 1; i < parts.length; i++) {
+        if (text.compareRegionStarts(parts[i].start, start) > 0) start = parts[i].start;
+        if (text.compareRegionEnds(parts[i].end, end) < 0) end = parts[i].end;
+      }
+      const cursor = text.createTextCursorByRange(start);
+      cursor.gotoRange(end, true);
+      return cursor;
+    } catch (e) { throw new Error('Could not preserve tracked movement across text regions'); }
+  };
+  const bookmarks = xModel.getBookmarks(), existing = [];
+  const names = bookmarks.getElementNames();
+  for (let i = 0; i < names.length; i++) {
+    const name = String(names[i]);
+    const type = name.startsWith('__RefMoveFrom__') ? 'Delete' : name.startsWith('__RefMoveTo__') ? 'Insert' : null;
+    if (type) existing.push({ name: name, type: type, bookmark: bookmarks.getByName(name) });
+  }
+  const sameRange = function (a, b) {
+    try { return a.getText().compareRegionStarts(a.getStart(), b.getStart()) === 0
+      && a.getText().compareRegionEnds(a.getEnd(), b.getEnd()) === 0; } catch (e) { return false; }
+  };
+  const plans = [];
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i], from = span(groups[id].Delete), to = span(groups[id].Insert);
+    if (from.isCollapsed() || to.isCollapsed()) throw new Error('Could not preserve empty tracked movement ranges');
+    const oldFrom = existing.filter(b => b.type === 'Delete' && sameRange(b.bookmark.getAnchor(), from));
+    const oldTo = existing.filter(b => b.type === 'Insert' && sameRange(b.bookmark.getAnchor(), to));
+    if (oldFrom.length === 1 && oldTo.length === 1
+      && oldFrom[0].name.slice('__RefMoveFrom__'.length) === oldTo[0].name.slice('__RefMoveTo__'.length)) continue;
+    let suffix = 'awdNativeMove' + id, serial = 0;
+    while (bookmarks.hasByName('__RefMoveFrom__' + suffix) || bookmarks.hasByName('__RefMoveTo__' + suffix))
+      suffix = 'awdNativeMove' + id + '_' + (++serial);
+    plans.push({ from: from, to: to, suffix: suffix, old: oldFrom.concat(oldTo) });
+  }
+  if (!plans.length) return;
+  const created = [], recording = xModel.getPropertyValue('RecordChanges');
+  const undo = xModel.getUndoManager(), ownsUndoLock = !undo.isLocked();
+  if (ownsUndoLock) undo.lock();
+  try {
+    xModel.setPropertyValue('RecordChanges', false);
+    // Create and verify both sides before removing existing private markers.
+    // Failure must abort export rather than silently serialize a broken pair.
+    for (let i = 0; i < plans.length; i++) {
+      const plan = plans[i];
+      for (const side of [{ prefix: '__RefMoveFrom__', range: plan.from }, { prefix: '__RefMoveTo__', range: plan.to }]) {
+        const bookmark = xModel.createInstance('com.sun.star.text.Bookmark'), name = side.prefix + plan.suffix;
+        bookmark.setName(name);
+        side.range.getText().insertTextContent(side.range, bookmark, true);
+        created.push(bookmark);
+        if (String(bookmark.getName()) !== name || !sameRange(bookmark.getAnchor(), side.range))
+          throw new Error('Could not preserve tracked movement ranges');
+      }
+    }
+    for (let i = 0; i < plans.length; i++) for (const old of plans[i].old)
+      old.bookmark.getAnchor().getText().removeTextContent(old.bookmark);
+  } catch (e) {
+    for (let i = created.length - 1; i >= 0; i--) {
+      try { created[i].getAnchor().getText().removeTextContent(created[i]); } catch (ignored) {}
+    }
+    throw e;
+  } finally {
+    xModel.setPropertyValue('RecordChanges', recording);
+    if (ownsUndoLock) undo.unlock();
+  }
+}
+
 // 导出期间**强制切成「全部修订」内联视图**（dev-board#367 的 withMarginOff + #368 三态）。
 // 两种非默认显示态都会把 docx 导坏，而自动保存 / 版本记录 / 版本对比全走这条导出：
 //   页边（margin）——ShowChangesInMargin 开着时删除文本被并出版面，导出器却按并合后的
@@ -4564,6 +4656,7 @@ const EXEC = {
 
     // Retarget the worker's model/controller onto a freshly-loaded component.
     const retarget = (loaded) => {
+      const previous = xModel;
       xModel = loaded;
       ctrl = loaded.getCurrentController();
       installReviewCommentInterceptor(ctrl);
@@ -4587,6 +4680,12 @@ const EXEC = {
         // Revisions default ON for the real document too (same as bootDoc).
         try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
         resetRevisionView();
+      }
+      // _default keeps modified components alive. Close only after successful
+      // replacement: 33 retained models exhausted LOWA's 1 GiB heap (#1121).
+      if (previous && previous !== loaded) {
+        try { previous.setModified(false); previous.close(true); }
+        catch (e) { log('load_document: previous model close failed: ' + errStr(e)); }
       }
     };
 
@@ -4679,7 +4778,7 @@ const EXEC = {
     const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
     exportInFlight = true;
     try {
-      withInlineMarkupForExport(function () { xModel.storeToURL('private:stream', props); });
+      withInlineMarkupForExport(function () { if (ext === 'docx') repairMoveRangeBookmarks(); xModel.storeToURL('private:stream', props); });
     } finally {
       try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
       exportInFlight = false;
@@ -6178,6 +6277,7 @@ const EXEC = {
         // TextTable …）。改造前面板只分「Delete 与其余」，格式类修订被当成插入显示
         // （dev-board#377）；面板的类型映射认不出的一律原样展示，不再硬塞进「插入」。
         try { it.type = String(r.getPropertyValue('RedlineType')); } catch (e) {}
+        try { const id = Number(r.getPropertyValue('RedlineMovedID')); it.movedId = id > 1 ? id : 0; } catch (e) { it.movedId = 0; }
         try { it.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { it.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
         // 格式类修订正文是空的，引擎给的说明（「属性已更改」之类）是唯一能读的信息
@@ -6346,6 +6446,9 @@ const EXEC = {
     try {
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+      // A REF cache can still contain the former mixed revision text after its
+      // target resolves. Refresh only after all changes have been resolved.
+      if (before > 0 && countRedlines() === 0) xModel.getTextFields().refresh();
     } finally { resumeModifyListener(); }
     const after = countRedlines(); // 前后各数一次（原先结束时数了两遍 O(N)）
     return { success: true, action: action, resolved: before - after, remaining: after };
@@ -6536,6 +6639,59 @@ const EXEC = {
     } catch (e) {}
     comparisonModel = xModel; // The comparison tab is a read-only review surface.
     return { success: true, redlineCount: r.redlineCount };
+  },
+  // Standalone comparison copies: compare both final projections in temporary
+  // models. Source files are never written by this action.
+  // Unlike compare_document, the result remains editable and can be exported.
+  build_comparison_document(p) {
+    if (!toUnoByteSeq(p && p.baseBytes) || !toUnoByteSeq(p && p.revisedBytes))
+      return { success: false, stage: 'input', message: 'baseBytes and revisedBytes are required' };
+    let stage = 'configuration', access = null, saved = null;
+    const previousAuthor = humanAuthor;
+    try {
+      const provider = context.getServiceManager().createInstanceWithContext(
+        'com.sun.star.configuration.ConfigurationProvider', context);
+      access = provider.createInstanceWithArguments('com.sun.star.configuration.ConfigurationUpdateAccess',
+        [mkProp('nodepath', '/org.openoffice.Office.Writer/Comparison')]);
+      saved = { Mode: access.getByName('Mode'), UseRSID: access.getByName('UseRSID'),
+        IgnorePieces: access.getByName('IgnorePieces') };
+      // SwCompareMode::ByChar = 2. Do not erase isolated matching characters
+      // or let unrelated documents' RSIDs determine Chinese granularity.
+      access.replaceByName('Mode', shortAny(2));
+      access.replaceByName('UseRSID', false);
+      access.replaceByName('IgnorePieces', false);
+      access.commitChanges();
+      stage = 'load-revised';
+      const loaded = EXEC.load_document({ bytes: p.revisedBytes, name: 'revised.docx', authorName: previousAuthor });
+      if (!loaded.success) throw new Error(loaded.message || stage);
+      if (docKindOf() !== 'writer') throw new Error('comparison requires Writer documents');
+      stage = 'normalize-revised';
+      if (countRedlines() > 0) {
+        const resolved = EXEC.resolve_all_revisions({ action: 'accept' });
+        if (!resolved.success || resolved.remaining !== 0) throw new Error('could not accept existing revisions');
+      }
+      xModel.setPropertyValue('RecordChanges', false);
+      stage = 'compare';
+      setRedlineAuthor(String(p.authorName || '版本对比'));
+      // Native SwDoc::CompareDoc reads the source with ShowInsert, i.e. its
+      // final projection. Do not load/export the baseline in a visible model:
+      // that adds two full-document layout passes for large documents.
+      const compared = compareWithBytes(p.baseBytes, 'file:///tmp/awd_standalone_base.docx');
+      if (!compared.success) return { success: false, stage: stage, message: compared.message };
+      // Native CompareDocuments turns recording off after producing redlines.
+      // Subsequent user edits follow the editor's normal explicit toggle.
+      return { success: true, redlineCount: compared.redlineCount };
+    } catch (e) { return { success: false, stage: stage, message: errStr(e) }; }
+    finally {
+      humanAuthor = previousAuthor;
+      try { setRedlineAuthor(previousAuthor); } catch (e) {}
+      if (access && saved) {
+        access.replaceByName('Mode', saved.Mode == null ? saved.Mode : shortAny(saved.Mode));
+        access.replaceByName('UseRSID', saved.UseRSID);
+        access.replaceByName('IgnorePieces', saved.IgnorePieces);
+        access.commitChanges();
+      }
+    }
   },
   // ==================== 三方合并（合并比对稿）====================
   // spec docs/superpowers/specs/2026-09-14-docx-three-way-merge-design.md §5.1。

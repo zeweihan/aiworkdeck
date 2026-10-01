@@ -15,6 +15,7 @@ export default {
   previousVersion: '上一版',
   currentVersion: '这一版',
   selectTwoDocsToCompare: '请选择两个文档进行对比',
+  compareNoWritePermission: '当前项目为只读，无法生成比对稿',
   updatedOpenFiles: '已更新 {count} 份打开中的文件',
 
   // agentClientActions.js

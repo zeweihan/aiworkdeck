@@ -4,11 +4,12 @@
 // 标签激活与 FileTree 选中同步、关闭（Office 文档出池前先落盘）、可打开性判定与文档对比标签。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
 
-import { getProjectFiles } from '@/services/api.js'
+import { getProjectFiles, fetchProjectFileBytes, createComparisonFile } from '@/services/api.js'
 import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 import { fileKindClass } from './fileKind.js'
 import { findChatFile, isCurrentDocSentinel, matchesActiveTab } from '@/utils/chatFileChange.js'
+import { isDocxDoc, runDocxComparison } from '@/utils/docxComparison.js'
 
 // 轻量文本编辑器（PlainTextEditor.vue）承接的扩展名（dev-board#37）。
 // dev-board#61 插件开发形态起收纳代码文件（js/json/html/css 等），供律师直改插件源码。
@@ -766,6 +767,103 @@ export const fileOpenTabsMethods = {
       this.showCompareDialog = true
     },
 
+    // 取消比对：使会话作废并立即释放已取得的隐藏引擎；旧流程不能清理新会话。
+    onCompareDialogCancel() {
+      if (this.compareStage === 'saving') return
+      this._compareSessionSeq = (this._compareSessionSeq || 0) + 1
+      const cancel = this._cancelDocxComparison
+      this._cancelDocxComparison = null
+      try { if (cancel) cancel() } catch (e) { console.warn('[DocxCompare] 取消时释放隐藏引擎失败', e) }
+      this.showCompareDialog = false
+      this.compareStage = ''
+      this.compareSaving = false
+    },
+
+    // DOCX×DOCX 比对稿主流程（dev-board#1120）：字节下载 → 隐藏引擎生成 → 落盘。
+    // 调用前 onCompareDialogConfirm 已完成源文档的 flush 保存；这里只做比对稿本身。
+    async runDocxComparisonFlow(source, target, docsArray, projectId) {
+      if (!this.canWriteProject) {
+        uni.showToast({ icon: 'none', title: this.$t('workbenchOps.compareNoWritePermission') })
+        return
+      }
+      const seq = this._compareSessionSeq || 0
+      // 作废判定：会话序号变了（取消/重开）、文档数组换了引用（重开同组）、项目切走、
+      // 对话框被关——任何一个命中都不再落盘/开件。
+      const isCurrent = () =>
+        !this._comparisonDisposed &&
+        (typeof this.isActiveOverviewInstance !== 'function' || this.isActiveOverviewInstance()) &&
+        projectId === this.projectId &&
+        this.compareDocuments === docsArray &&
+        (this._compareSessionSeq || 0) === seq &&
+        this.showCompareDialog
+      const ids = new Set([String(source.id), String(target.id)])
+      const dirtyNames = () => {
+        const names = []
+        Object.values(this._libreRefs || {}).forEach((inst) => {
+          if (!inst || !inst.ready || inst.docLoadFailed || !inst.file) return
+          if (!ids.has(String(inst.file.id))) return
+          if (inst.dirty || inst.saving) names.push(inst.file.name)
+        })
+        return names
+      }
+      const stem = String(target.name || '').replace(/\.docx$/i, '')
+      const proposedName = this.$t('editor.compare.resultName', { name: stem })
+      const user = this.currentUser || {}
+      const authorName = this.userDisplayName || user.displayName || ''
+      let engineHandle = null
+      let released = false
+      const releaseOnce = () => {
+        if (!engineHandle || released) return
+        released = true
+        this.releaseLibreHiddenInstance(engineHandle)
+      }
+      this._cancelDocxComparison = releaseOnce
+      let created = null
+      try {
+        created = await runDocxComparison({
+          source,
+          target,
+          t: (key, params) => this.$t(key, params),
+          name: proposedName,
+          authorName,
+          onStage: (stage) => { if (isCurrent()) this.compareStage = stage },
+          isCancelled: () => !isCurrent(),
+          fetchBytes: (doc) => fetchProjectFileBytes(doc.id),
+          recheckClean: () => {
+            const names = dirtyNames()
+            if (names.length) throw new Error(this.$t('editor.compare.failChanged', { name: names[0] }))
+          },
+          acquireEngine: async () => {
+            engineHandle = await this.acquireLibreHiddenInstance()
+            if (!isCurrent()) releaseOnce()
+            return engineHandle
+          },
+          releaseEngine: releaseOnce,
+          saveFile: async (payload) => {
+            const resp = await createComparisonFile(projectId, payload)
+            return resp
+          },
+        })
+      } catch (e) {
+        if (isCurrent()) this.compareStage = ''
+        if (!(e && e.cancelled) && isCurrent()) {
+          uni.showToast({ icon: 'none', title: e && e.message ? e.message : this.$t('editor.compare.failBuild') })
+        }
+        return
+      } finally {
+        if (this._cancelDocxComparison === releaseOnce) this._cancelDocxComparison = null
+      }
+      if (isCurrent()) this.compareStage = ''
+      // 后端已提交但项目切走/会话作废：产物留在原项目，绝不在错项目里开件。
+      if (!created || projectId !== this.projectId || !isCurrent()) return
+      this.showCompareDialog = false
+      try {
+        const reloaded = this.$refs.fileTree && this.$refs.fileTree.loadFiles()
+        if (reloaded && typeof reloaded.catch === 'function') reloaded.catch(() => {})
+      } catch (e) { /* 刷新失败不丢已保存的产物 */ }
+      this.openFile(created)
+    },
+
     async onCompareDialogConfirm({ source, target }) {
       // 用户确认了源文档和目标文档。比对读的是磁盘字节，而自动保存是防抖的——
       // 刚敲进编辑器的字可能还端在实例里，直接开会比到旧字节。先把本次 source/target
@@ -773,6 +871,9 @@ export const fileOpenTabsMethods = {
       // 加载失败的空白原型不许存）；只动这两份，无关文档不碰。
       if (this.compareSaving) return
       this.compareSaving = true
+      const confirmedDocuments = this.compareDocuments
+      const confirmedSeq = this._compareSessionSeq || 0
+      const confirmedProjectId = this.projectId
       try {
         const ids = new Set([String(source.id), String(target.id)])
         const pending = Object.values(this._libreRefs || {}).filter(inst =>
@@ -794,6 +895,7 @@ export const fileOpenTabsMethods = {
         // 旧确认不许再开比对，否则开出的就是过期的那一组。
         const current = this.compareDocuments || []
         if (projectId !== this.projectId || !this.showCompareDialog ||
+            this.compareDocuments !== confirmedDocuments || (this._compareSessionSeq || 0) !== confirmedSeq ||
             !current.some(d => d && String(d.id) === String(source.id)) ||
             !current.some(d => d && String(d.id) === String(target.id))) return
         // B 保存期间，A 可能再次被编辑或换成新注册实例；开比对前重查当前两份。
@@ -808,10 +910,19 @@ export const fileOpenTabsMethods = {
           uni.showToast({ title: this.$t('workbenchOps.saveFailedNamed', { msg: failedName }), icon: 'none' })
           return
         }
+        // DOCX 始终生成独立修订稿；无法取得引擎时明确报错，不静默退回文本差异页。
+        // 其他文件类型继续使用原有文本比对。
+        if (isDocxDoc(source) && isDocxDoc(target)) {
+          await this.runDocxComparisonFlow(source, target, current, projectId)
+          return
+        }
         this.showCompareDialog = false
         this.openDiffTab(source, target)
       } finally {
-        this.compareSaving = false
+        if ((this._compareSessionSeq || 0) === confirmedSeq &&
+            this.compareDocuments === confirmedDocuments && this.projectId === confirmedProjectId) {
+          this.compareSaving = false
+        }
       }
     },
 

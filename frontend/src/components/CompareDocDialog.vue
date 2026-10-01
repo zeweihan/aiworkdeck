@@ -63,7 +63,9 @@
       </view>
       
       <view class="dialog-footer">
-        <button class="btn-cancel" @tap="handleCancel">{{ $t('editor.compare.cancel') }}</button>
+        <text v-if="busy && stageText" class="dialog-stage">{{ stageText }}</text>
+        <view class="footer-spacer"></view>
+        <button class="btn-cancel" :disabled="stage === 'saving'" @tap="handleCancel">{{ $t('editor.compare.cancel') }}</button>
         <button
           class="btn-confirm"
           :class="{ disabled: !canConfirm || busy }"
@@ -83,6 +85,7 @@ export default {
   name: 'CompareDocDialog',
   props: {
     busy: { type: Boolean, default: false },
+    stage: { type: String, default: '' },
     visible: {
       type: Boolean,
       default: false
@@ -100,6 +103,9 @@ export default {
   },
   computed: {
     ICONS() { return ICONS },
+    stageText() {
+      return this.stage ? this.$t('editor.compare.stage_' + this.stage) : ''
+    },
     canConfirm() {
       return this.documents.length === 2 && 
              this.sourceIndex !== this.targetIndex &&
@@ -130,6 +136,8 @@ export default {
       this.targetIndex = index
     },
     handleCancel() {
+      // saving 阶段后端正在落盘，此时取消会给用户「没保存」的错觉（dev-board#1120）。
+      if (this.stage === 'saving') return
       this.$emit('cancel')
       this.$emit('update:visible', false)
     },
@@ -336,11 +344,26 @@ export default {
 
 .dialog-footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 20px;
   border-top: 1px solid var(--awd-border);
   background: var(--awd-bg);
+}
+
+.dialog-stage {
+  font-size: 12px;
+  color: var(--awd-text-3);
+  flex: 1;
+}
+
+.footer-spacer {
+  flex: 1;
+}
+
+.dialog-stage + .footer-spacer {
+  flex: 0;
 }
 
 .btn-cancel {

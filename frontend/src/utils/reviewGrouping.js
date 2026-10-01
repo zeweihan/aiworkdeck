@@ -38,7 +38,9 @@ const TYPE_KEYS = {
   Format: 'format',
   ParagraphFormat: 'paraFormat',
 }
-export function revisionTypeKey(type) {
+export function revisionTypeKey(type, movedId = 0) {
+  if (Number(movedId) > 1 && type === 'Insert') return 'moveTo'
+  if (Number(movedId) > 1 && type === 'Delete') return 'moveFrom'
   return TYPE_KEYS[String(type == null ? '' : type)] || 'other'
 }
 
@@ -107,6 +109,7 @@ export function groupRevisions(revisions, opts) {
     const joins = last && (sameOperation || (r.contiguous && !r.operationId && !last.operationId
       && (last.date || '') === (r.date || '')))
       && last.type === r.type
+      && Number(last.movedId || 0) === Number(r.movedId || 0)
       && (last.author || '') === (r.author || '')
     if (joins) {
       last.items.push(r)
@@ -115,7 +118,8 @@ export function groupRevisions(revisions, opts) {
       groups.push({
         key: 'g' + r.index, operationId: r.operationId, operationKind: r.operationKind, tableName: r.tableName,
         type: r.type,
-        typeKey: revisionTypeKey(r.type),
+        movedId: r.movedId || 0,
+        typeKey: revisionTypeKey(r.type, r.movedId),
         description: r.description || '',
         author: r.author,
         authorKind: authorKind(r.author, selfAuthor),

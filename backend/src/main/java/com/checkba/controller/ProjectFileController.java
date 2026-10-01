@@ -278,6 +278,36 @@ public class ProjectFileController {
         );
     }
 
+    /** 已完成的 DOCX 比对稿一次性入库；绝不创建空白占位文件。 */
+    @PostMapping(value = "/comparison", consumes = "multipart/form-data")
+    public ResponseEntity<?> createComparison(
+            @PathVariable Long projectId,
+            @RequestParam Long baseFileId,
+            @RequestParam Long revisedFileId,
+            @RequestParam String baseSha256,
+            @RequestParam String revisedSha256,
+            @RequestPart("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) throws java.io.IOException {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) throw new UnauthorizedException("请先登录");
+        checkFileWriteAccess(projectId, userId);
+        try {
+            ProjectFile created = projectFileService.createComparison(projectId, baseFileId,
+                    revisedFileId, baseSha256, revisedSha256, file.getBytes(), userId);
+            // 与普通上传完成后同源；service 返回时事务和最终字节已提交。
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try { projectRagService.refreshProjectKnowledgeIncremental(String.valueOf(projectId), created.getFilePath()); }
+                catch (Exception e) { log.warn("比对稿索引失败 fileId={}", created.getId(), e); }
+                try { autoTaggingService.autoTagFile(projectId, created.getId(), created.getFilePath(), userId); }
+                catch (Exception e) { log.warn("比对稿自动标签失败 fileId={}", created.getId(), e); }
+            });
+            return ResponseEntity.ok(created);
+        } catch (ProjectFileService.ComparisonSourceChangedException e) {
+            return ResponseEntity.status(409).body(Map.of("code", -1, "reason", "SOURCE_CHANGED",
+                    "message", e.getMessage()));
+        }
+    }
+
     /**
      * 从本机绝对路径导入进项目（桌面端「拖入资源管理器 = 复制进项目目录」，dev-board#409）。
      * POST /api/projects/{projectId}/files/import-local  body: { sourcePath, parentId }

@@ -15,6 +15,7 @@ export default {
   previousVersion: 'Previous Version',
   currentVersion: 'This Version',
   selectTwoDocsToCompare: 'Select two documents to compare',
+  compareNoWritePermission: 'This project is read-only for you; a comparison document cannot be created',
   updatedOpenFiles: 'Updated {count} open files',
 
   // agentClientActions.js
