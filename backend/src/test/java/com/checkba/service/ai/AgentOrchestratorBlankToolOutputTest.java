@@ -66,6 +66,7 @@ class AgentOrchestratorBlankToolOutputTest {
     private ProjectAiMessageService messageService;
     private ToolRegistry toolRegistry;
     private TodoListService todoListService;
+    private XmlToolCallParser parser;
     private List<String> sseEvents;
     private List<String> sseData;
     private AgentOrchestrator orchestrator;
@@ -130,7 +131,7 @@ class AgentOrchestratorBlankToolOutputTest {
         SkillRouter skillRouter = mock(SkillRouter.class);
         when(skillRouter.visibleTools(any(), any())).thenAnswer(inv -> inv.getArgument(1));
         when(skillRouter.activeSkill(any())).thenReturn(java.util.Optional.empty());
-        XmlToolCallParser parser = mock(XmlToolCallParser.class);
+        parser = mock(XmlToolCallParser.class);
         when(parser.containsToolCall(any())).thenReturn(false);
 
         todoListService = mock(TodoListService.class);
@@ -181,6 +182,29 @@ class AgentOrchestratorBlankToolOutputTest {
             if (event.equals(sseEvents.get(i))) return sseData.get(i);
         }
         return null;
+    }
+
+    @Test
+    void invalidXmlQuoteFeedsFailureWithoutDispatchAndAllowsCorrectedNextCall() {
+        ToolRegistry parsingRegistry = new ToolRegistry(
+                List.of(new XmlToolCallParserTest.ProtocolFakeTools()),
+                new PluginService(), new ClientCapabilityService());
+        parsingRegistry.init();
+        XmlToolCallParser realParser = new XmlToolCallParser(parsingRegistry);
+        when(parser.containsToolCall(any())).thenAnswer(inv -> realParser.containsToolCall(inv.getArgument(0)));
+        when(parser.parse(any())).thenAnswer(inv -> realParser.parse(inv.getArgument(0)));
+        when(toolRegistry.execute(any(), any(), any()))
+                .thenReturn(new ToolRegistry.ToolResult("done", null, true));
+        ScriptModel model = run("conv-invalid-quote",
+                AiMessage.from("<tool_code>search_web(query=\"原稿称\"无条件\"，有误\")</tool_code>"),
+                AiMessage.from("<tool_code>search_web(query='原稿称\"无条件\"，有误')</tool_code>"),
+                AiMessage.from("<final>已更正。</final>"));
+        assertEquals(3, model.calls.get());
+        assertFalse(sseEvents.contains("error"));
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-invalid-quote").status());
+        verify(toolRegistry, org.mockito.Mockito.times(1)).execute(any(), any(), any());
+        assertTrue(model.lastMessages.toString().contains("invalid quoted tool argument"));
+        assertTrue(model.lastMessages.toString().contains("Status: FAILURE"));
     }
 
     @Test
