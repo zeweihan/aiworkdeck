@@ -591,4 +591,74 @@ class AgentOrchestratorOpinionCompletionCheckTest {
         next.setMessage("只改一个错字"); next.setModel(MODEL);
         orchestrator.handleUserMessage(next, 7L);
     }
+    @Test
+    void clarificationAnswerRetainsOriginalReviewAndTarget() throws Exception {
+        AgentInboxService inbox = mock(AgentInboxService.class);
+        when(inbox.conversationLock(any())).thenReturn(new Object());
+        when(inbox.nextPending(any())).thenReturn(java.util.Optional.empty());
+        ReflectionTestUtils.setField(orchestrator, "inboxService", inbox);
+        doAnswer(inv -> {
+            String message = inv.getArgument(2);
+            List<String> ids = inv.getArgument(4);
+            when(skillRouter.isActiveInRun(eq(inv.getArgument(1)), eq("legal-opinion-review")))
+                    .thenReturn(message.contains("法律意见书") || ids != null && ids.contains("legal-opinion-review"));
+            return null;
+        }).when(skillRouter).activateForTurn(any(), any(), any(), any(), any());
+        doAnswer(inv -> {
+            when(skillRouter.isActiveInRun(eq(inv.getArgument(1)), eq("legal-opinion-review"))).thenReturn(true);
+            return null;
+        }).when(skillRouter).restoreAutomaticSkills(any(), any(), any());
+        com.checkba.service.ai.skill.SkillDefinition definition = new com.checkba.service.ai.skill.SkillDefinition();
+        definition.setId("legal-opinion-review");
+        when(skillRouter.activeSkills(any())).thenReturn(List.of(new SkillRouter.ActiveSkill(definition, "法律意见书审查", "auto")));
+        AiMessage question = AiMessage.from(List.of(ToolExecutionRequest.builder().id("ask")
+                .name("ask_user").arguments("{\"question\":\"修订范围？\",\"options\":[\"核对事实与依据后修订\",\"只改错字\"]}").build()));
+        run("conv-answer", question);
+        verify(subAgentService, never()).dispatch(any(), any(), any(), any());
+        String questionId = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(sseData.get(sseEvents.indexOf("ask_user"))).path("id").asText();
+        AgentInboxService.Clarification original = new AgentInboxService.Clarification(
+                List.of("帮我修订一下这个法律意见书"), List.of("legal-opinion-review"), 5L, "法律意见书.docx");
+        when(inbox.takeClarification(eq("conv-answer"), eq(1L), eq(7L), any(), any())).thenReturn(original);
+        runWithMessage("conv-answer", "<ask_user_answer id=\"" + questionId
+                        + "\">Selected:\n- 核对事实与依据后修订</ask_user_answer>",
+                AiMessage.from("已修订"), AiMessage.from("已核验"));
+        ArgumentCaptor<String> task = ArgumentCaptor.forClass(String.class);
+        verify(subAgentService, times(1)).dispatch(task.capture(), any(), any(), any());
+        verify(inbox).rememberClarification(any(), eq(questionId), eq(original));
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-answer").status());
+        assertTrue(task.getValue().contains("帮我修订一下这个法律意见书"));
+        assertTrue(task.getValue().contains("核对事实与依据后修订"));
+        assertTrue(task.getValue().contains("5"));
+    }
+
+    @Test
+    void clarificationNarrowedToMechanicalOrReadOnlyDoesNotScheduleCorrection() {
+        AgentInboxService inbox = mock(AgentInboxService.class);
+        when(inbox.conversationLock(any())).thenReturn(new Object());
+        when(inbox.nextPending(any())).thenReturn(java.util.Optional.empty());
+        ReflectionTestUtils.setField(orchestrator, "inboxService", inbox);
+        when(inbox.takeClarification(any(), any(), any(), any(), any())).thenReturn(new AgentInboxService.Clarification(
+                List.of("帮我全面审查这个法律意见书"), List.of("legal-opinion-review"), 5L, "意见书.docx"));
+        skillActive();
+        for (String limit : List.of("只审不改", "只改错字", "仅限错别字", "review only", "only fix typos", "只调整格式", "规范格式排版", "only format")) {
+            runWithMessage("conv-limit-" + limit, "<ask_user_answer id=\"ask-limit\">Selected:\n- "
+                    + limit + "</ask_user_answer>", AiMessage.from("已按指定范围处理"));
+        }
+        verify(subAgentService, never()).dispatch(any(), any(), any(), any());
+    }
+
+    @Test
+    void clarificationCannotRebindAnotherActiveDocument() {
+        AgentInboxService inbox = mock(AgentInboxService.class);
+        ReflectionTestUtils.setField(orchestrator, "inboxService", inbox);
+        when(inbox.takeClarification(any(), any(), any(), any(), any())).thenReturn(new AgentInboxService.Clarification(
+                List.of("帮我修订这个法律意见书"), List.of("legal-opinion-review"), 99L, "原任务.docx"));
+        ScriptModel model = runWithMessage("conv-switched", "<ask_user_answer id=\"ask-old\">Selected:\n- 继续</ask_user_answer>",
+                AiMessage.from("不应运行"));
+        assertEquals(0, model.calls.get(), "切到另一文件时不得让主助手编辑当前文件");
+        verify(subAgentService, never()).dispatch(any(), any(), any(), any());
+        assertTrue(lastPersistedAssistant().contains("原任务文档"));
+    }
+
 }

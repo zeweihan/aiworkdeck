@@ -64,7 +64,10 @@ try {
   await page.goto('http://127.0.0.1:5211')
   await page.addStyleTag({ content: `${tokens}\nhtml,body,#app {margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;} *{box-sizing:border-box;} view,scroll-view{display:block;} text{display:inline;} #app{height:100dvh;}` })
   await wait(() => window.ready)
-  await page.evaluate(() => window.loadFixture('single'))
+  await page.evaluate(() => {
+    window.chatFixtureProps.activeTab = { id: '5', name: '法律意见书.docx', fileType: 'docx', tabType: 'file' }
+    window.loadFixture('single')
+  })
 
   // ---------- 1. 单选：点一下即作答 ----------
   await submitText('你能帮我清理已经打开的这个文档么')
@@ -126,6 +129,7 @@ try {
   assert.ok(post.message.startsWith('<ask_user_answer id="ask-single1">'), post.message)
   assert.ok(post.message.includes('Question: 「清理」具体指哪一种？'))
   assert.ok(post.message.includes('Selected:\n- 删除混入的审查报告'))
+  assert.equal(post.activeContext?.id, '5', '回答请求保留当前文档身份以核对原目标')
   assert.equal(post.displayText, '删除混入的审查报告', '用户气泡只显示所选项')
   // 用户气泡显示的是人话，不是回答消息
   await wait(() => [...document.querySelectorAll('.user-bubble')].at(-1)?.textContent.includes('删除混入的审查报告'))

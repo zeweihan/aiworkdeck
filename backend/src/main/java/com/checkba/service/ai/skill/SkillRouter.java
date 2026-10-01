@@ -351,6 +351,22 @@ public class SkillRouter {
         recordActivation(conversationId, activeSkills(runId));
     }
 
+    /** Restore only server-recorded automatic activations for a matched clarification. */
+    public void restoreAutomaticSkills(String conversationId, String runId, List<String> ids) {
+        java.util.LinkedHashMap<String, String> entries = new java.util.LinkedHashMap<>();
+        ActivationRecord current = activeByRun.get(runId);
+        if (current != null) current.entries().forEach(entry -> entries.put(entry.skillId(), entry.source()));
+        for (String id : ids) {
+            if (!skillRegistry.isManual(id) && skillRegistry.getSkill(id).filter(skillRegistry::isAvailable).isPresent()) {
+                entries.putIfAbsent(id, SOURCE_AUTO);
+            }
+        }
+        if (entries.isEmpty()) return;
+        activeByRun.put(runId, new ActivationRecord(entries.entrySet().stream()
+                .map(entry -> new ActiveEntry(entry.getKey(), entry.getValue())).toList(), clockMillis.getAsLong()));
+        recordActivation(conversationId, activeSkills(runId));
+    }
+
     /**
      * 轮次结束时摘掉它的生效记录（编排器在每条终态路径上调一次）。
      * 摘不掉的异常路径（进程被杀）由 {@link #purgeStaleActivations()} 兜底。
