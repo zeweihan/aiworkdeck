@@ -27,6 +27,16 @@ const fontNames = ['cjk.ttc', 'cjk-serif.otf', 'cjk-kai.ttf', 'cjk-fangsong.ttf'
 preflight(fontNames.map(f => ['CJK font (LOWA_FONTS_DIR)', path.join(fontDir, f)]))
 const server=await startServer({extraFiles:Object.fromEntries(fontNames.map(f=>['/'+f,path.join(fontDir,f)])),patchServed(url,b){if(url==='/office_thread.js'){let source=b.toString();return Buffer.from(source.replace('const EXEC = {',`const EXEC = { debug_comparison_pages(){const vc=ctrl.getViewCursor();vc.gotoEnd(false);const pageCount=vc.getPage();const tail=xModel.getText().createTextCursor();tail.gotoEnd(false);tail.goLeft(60,true);return {success:true,pageCount,redlineCount:countRedlines(),endText:tail.getString()};},`));}if(/^\/assets\/editor-.*\.js$/.test(url))return Buffer.from(b.toString().replace(/(['"])get_hyperlink_at_cursor\1/,m=>m+',"debug_comparison_pages"'));return b;}})
 const browser=await launchBrowser(await loadPuppeteer())
+const browserLog=path.join(out,'browser.log')
+fs.writeFileSync(browserLog,'')
+const logBrowser=(kind,text)=>fs.appendFileSync(browserLog,`${new Date().toISOString()} ${kind} ${text}\n`)
+browser.on('targetcreated',async target=>{
+ if(target.type()!=='page')return;
+ const page=await target.page();
+ if(!page)return;
+ page.on('console',message=>logBrowser(message.type(),message.text()));
+ page.on('pageerror',error=>logBrowser('pageerror',error.stack||String(error)));
+})
 const pid=browser.process().pid;result.browserPid=pid;result.cpuSamples=[]
 let exceeded=false,observer=null,heartbeatInFlight=false
 const save=()=>fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2))
@@ -34,7 +44,7 @@ const children=()=>{const rows=execFileSync('ps',['-axo','pid=,ppid=,rss=,time='
 const stop=reason=>{if(exceeded)return;exceeded=true;result.failure=reason;save();for(const row of children().reverse()){try{process.kill(row[0],'SIGKILL')}catch{}}}
 const timeout=setTimeout(()=>stop('300s hard time limit exceeded'),300000)
 const monitor=setInterval(()=>{const rows=children();const rss=rows.reduce((sum,row)=>sum+row[2],0)/1024;const cpu=rows.reduce((sum,row)=>sum+String(row[3]).split(':').reduce((s,v)=>s*60+Number(v),0),0);result.cpuSamples.push({at:Date.now(),rssMiB:rss,cpuSeconds:cpu});result.peakBrowserRssMiB=Math.max(rss,result.peakBrowserRssMiB);if(rss>5632)stop('5.5GiB safety stop before 6GiB browser RSS cap');if(observer&&!heartbeatInFlight&&!exceeded){heartbeatInFlight=true;observer.evaluate(()=>window.__beat).then(beat=>{result.separatePageHeartbeat=beat}).catch(()=>{}).finally(()=>{heartbeatInFlight=false})}save();},dense?500:2000)
-const stage=async(name,fn)=>{const start=Date.now();const value=await fn();result.stages.push({name,ms:Date.now()-start});save();return value;}
+const stage=async(name,fn)=>{const start=Date.now();result.activeStage=name;save();logBrowser('stage',name);const value=await fn();result.stages.push({name,ms:Date.now()-start});save();return value;}
 try {
  const page=await stage('boot',()=>openEditor(browser));await page.setViewport({width:1280,height:900});
  const exec=(a,p={})=>page.evaluate(async(a,p)=>{const r=await window.__loExecutor.executeCommand(a,p);if(r.bytes)r.bytes=Array.from(r.bytes);return r},a,p)

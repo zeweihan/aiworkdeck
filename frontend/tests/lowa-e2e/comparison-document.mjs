@@ -17,7 +17,12 @@ async function docx(body) {
 }
 preflight()
 const server = await startServer({ patchServed(url, bytes) {
-  if (url === '/office_thread.js') return Buffer.from(bytes.toString().replace('const EXEC = {', `const EXEC = { debug_comparison_settings() {
+  if (url === '/office_thread.js') return Buffer.from(bytes.toString().replace('const EXEC = {', `const EXEC = { debug_comparison_settings(p) {
+    if(p && p.componentCount) {
+      let count=0; const en=desktop.getComponents().createEnumeration();
+      while(en.hasMoreElements()){en.nextElement();count++;}
+      return {success:true,count};
+    }
     const provider=context.getServiceManager().createInstanceWithContext('com.sun.star.configuration.ConfigurationProvider',context);
     const config=provider.createInstanceWithArguments('com.sun.star.configuration.ConfigurationAccess',[mkProp('nodepath','/org.openoffice.Office.Writer/Comparison')]);
     return {success:true,mode:config.getByName('Mode'),useRSID:config.getByName('UseRSID'),ignorePieces:config.getByName('IgnorePieces'),author:currentRedlineAuthor};
@@ -176,6 +181,7 @@ try {
   await ok('get_review_context')
   const orphanSaved = await JSZip.loadAsync((await ok('export_document')).bytes)
   assert.match(await orphanSaved.file('word/document.xml').async('string'), /w:name="orphanMove"/, 'unpaired movement marker is preserved')
+  assert.equal((await ok('debug_comparison_settings', { componentCount: true })).count, 1, 'repeated successful loads close previous native models');
   console.log('PASS: standalone comparison final snapshots, character revisions, editable save/reopen, blank/identical documents, configuration restoration, native movement round-trip')
 } finally {
   await browser.close()

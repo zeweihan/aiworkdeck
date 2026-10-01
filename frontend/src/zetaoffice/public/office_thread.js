@@ -4656,6 +4656,7 @@ const EXEC = {
 
     // Retarget the worker's model/controller onto a freshly-loaded component.
     const retarget = (loaded) => {
+      const previous = xModel;
       xModel = loaded;
       ctrl = loaded.getCurrentController();
       installReviewCommentInterceptor(ctrl);
@@ -4679,6 +4680,12 @@ const EXEC = {
         // Revisions default ON for the real document too (same as bootDoc).
         try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
         resetRevisionView();
+      }
+      // _default keeps modified components alive. Close only after successful
+      // replacement: 33 retained models exhausted LOWA's 1 GiB heap (#1121).
+      if (previous && previous !== loaded) {
+        try { previous.setModified(false); previous.close(true); }
+        catch (e) { log('load_document: previous model close failed: ' + errStr(e)); }
       }
     };
 

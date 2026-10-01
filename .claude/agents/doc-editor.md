@@ -465,3 +465,7 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 - 比较或导出超时返回专门提示且不落盘。计算中取消立即释放已取得的隐藏实例，迟到实例也归还；每流程仅释放一次，旧流程收尾不得覆盖新流程状态。保存阶段不可取消。
 - 2000 页稀疏修改样本通过比较、末页显示、编辑保存重开；同规模每页修改样本在原生字符/词/自动三模式均达到 180 秒超时，不能宣称全面支持密集修改。后者峰值浏览器进程树 RSS 约 2.58 GiB，独立页面有响应，但没有完成可用产物。
 - 验证：`tests/lowa-e2e/comparison-document.mjs`、`comparison-large.mjs`，`tests/lowa-unit/comparison-document.test.mjs`，project-home `docx-compare-{flow,transport}` 与保存屏障，后端 `DocxComparisonFinalizerTest`、`ProjectFileComparisonTest`、`ProjectFileComparisonControllerTest`。2000 页测试是隔离压力测试，不属于每次 PR 的普通小回归。
+
+### 连续载入的模型释放（dev-board#1121）
+
+`load_document` 成功绑定新模型、安装监听器并恢复视图后，清除旧模型修改标志并关闭旧组件；空输入、两种导入都失败或返回同一模型时不关闭当前模型。`_default` 会保留已修改组件，32 次载入曾累积 33 个模型，导出触及固定 1 GiB WASM heap 而超时；操作系统 RSS 不是 WASM 剩余内存。比较完整序列必须在原所有断言通过后验证 components=1。原生压力测试保留完整 console/pageerror，以免把 OOM 误判为计算慢。
