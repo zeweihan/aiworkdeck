@@ -34,6 +34,7 @@ try {
     return result
   }, action, params)
   const ok = async (action, params) => {
+    if (process.env.COMPARISON_DEBUG) console.log('action',action)
     const result = await exec(action, params)
     assert.equal(result.success, true, action + ': ' + JSON.stringify(result))
     return result
@@ -112,6 +113,61 @@ try {
     await ok('resolve_all_revisions', { action })
     assert.deepEqual(await text(), [expected])
   }
+  await load(moveDoc)
+  await ok('find_replace', { findText: '内容需要', replaceText: '条款应当', replaceAll: true, __agent: true })
+  let editedMove
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await ok('get_review_context')
+    await ok('goto', { type: 'end' })
+    await ok('insert_at_cursor', { text: '补。' })
+    editedMove = (await ok('export_document')).bytes
+    await load(editedMove)
+    const revisions = (await ok('list_revisions')).revisions
+    const moved = revisions.filter(x => x.movedId > 1)
+    assert.ok(moved.some(x => x.type === 'Delete') && moved.some(x => x.type === 'Insert'), 'edited move retains both sides')
+    assert.equal(new Set(moved.map(x => x.movedId)).size, 1, 'editing within moved text preserves native pair')
+  }
+  for (const [action, expected] of [['accept', '开始内容。中间保留。保密条款应当移动'+'补。'.repeat(3)], ['reject', '开始内容。'+movement+'中间保留。']]) {
+    await load(editedMove)
+    await ok('resolve_all_revisions', { action })
+    assert.deepEqual(await text(), [expected], 'edited move '+action+' projection')
+  }
+  // Real regression: final-text reads used to drop/rename private move bookmarks.
+  // Preserve a user bookmark, and two native redlines on each side of one move.
+  const splitMove = await docx(`<w:p><w:bookmarkStart w:id="99" w:name="UserBookmark"/>${r('开始。')}<w:bookmarkEnd w:id="99"/><w:moveFromRangeStart w:id="10" w:name="splitMove" ${attrs}/><w:moveFrom w:id="11" ${attrs}><w:r><w:delText>移动第一句。</w:delText></w:r></w:moveFrom><w:moveFrom w:id="14" w:author="另一作者" w:date="2026-10-01T09:00:00Z"><w:r><w:delText>移动第二句。</w:delText></w:r></w:moveFrom><w:moveFromRangeEnd w:id="10"/>${r('中间。')}<w:moveToRangeStart w:id="12" w:name="splitMove" ${attrs}/><w:moveTo w:id="13" ${attrs}>${r('移动第一句。')}</w:moveTo><w:moveTo w:id="15" w:author="另一作者" w:date="2026-10-01T09:00:00Z">${r('移动第二句。')}</w:moveTo><w:moveToRangeEnd w:id="12"/></w:p>`)
+  await load(splitMove)
+  assert.equal((await ok('list_revisions')).revisions.filter(x => x.movedId > 1).length, 4, 'one move can span several redlines')
+  {
+    await ok('get_review_context')
+    await ok('get_document_text', { __agent: true })
+    await ok('goto', { type: 'end' })
+    await ok('insert_at_cursor', { text: '补。' })
+    const saved = (await ok('export_document')).bytes
+    const zip = await JSZip.loadAsync(saved)
+    const xml = await zip.file('word/document.xml').async('string')
+    assert.match(xml, /w:name="UserBookmark"/, 'ordinary bookmark survives')
+    const names = [...xml.matchAll(/<w:move(?:From|To)RangeStart[^>]*w:name="([^"]*)"/g)].map(m => m[1])
+    assert.equal(names.length, 2, 'exactly one complete move range pair')
+    assert.equal(names[0], names[1], 'exported movement names remain paired')
+    await load(saved)
+    const moved = (await ok('list_revisions')).revisions.filter(x => x.movedId > 1)
+    // LOWA itself loses the from-side native ID on this multi-author fixture even
+    // without reads/edits. Verify the repair's exported ranges and text, not that
+    // unrelated importer limitation (covered by the investigation control).
+    for (const side of ['From', 'To']) {
+      const range = xml.match(new RegExp('<w:move'+side+'RangeStart[^>]*>([\\s\\S]*?)<w:move'+side+'RangeEnd'))
+      assert.ok(range, 'complete split move range '+side)
+      assert.equal(range[1].replace(/<[^>]*>/g, ''), '移动第一句。移动第二句。')
+    }
+    assert.ok(moved.length >= 2)
+  }
+  const orphanZip = await JSZip.loadAsync(moveDoc)
+  const orphanXml = (await orphanZip.file('word/document.xml').async('string')).replace('</w:p>', `<w:moveToRangeStart w:id="50" w:name="orphanMove" ${attrs}/><w:moveTo w:id="51" ${attrs}>${r('独立未配对移动')}</w:moveTo><w:moveToRangeEnd w:id="50"/></w:p>`)
+  orphanZip.file('word/document.xml', orphanXml)
+  await load(Array.from(await orphanZip.generateAsync({ type: 'uint8array' })))
+  await ok('get_review_context')
+  const orphanSaved = await JSZip.loadAsync((await ok('export_document')).bytes)
+  assert.match(await orphanSaved.file('word/document.xml').async('string'), /w:name="orphanMove"/, 'unpaired movement marker is preserved')
   console.log('PASS: standalone comparison final snapshots, character revisions, editable save/reopen, blank/identical documents, configuration restoration, native movement round-trip')
 } finally {
   await browser.close()

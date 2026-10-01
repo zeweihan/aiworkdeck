@@ -457,5 +457,6 @@ IME 光标定位优先用 `XController.getViewData()` 的实时分号数据与 V
 - 新原语按最终文本比较副本，字符模式临时设置后恢复；基础字节直接交原生比较读取（原生按 ShowInsert 读取基础最终正文），新版仅有旧修订时接受，省去基础版的额外 load/export。压力测试必须加载完整中文字体：缺字体的隔离环境曾导出超时，补齐后同一样本恢复正常；不能把该环境的耗时归因于比较算法。
 - ProjectFileController/ProjectFileService.createComparison 校验两来源和 SHA-256；DocxComparisonFinalizer 核对双向正文、补标准 move 标签和批注锚点，结果暂存到 `.awd` 后独立创建，回滚清理文件。源变化 HTTP409 `SOURCE_CHANGED`；成功返回 ProjectFile 直接对象。
 - `list_revisions.movedId` 来自原生 RedlineMovedID，>1 才是已配对移动；类型仍为 Insert/Delete。审阅列表和气泡以此显示移出/移入，不根据同色或文字猜类型。
+- 导出 DOCX 前用 `repairMoveRangeBookmarks` 按原生 RedlineMovedID 的完整删除/插入组修复配对书签；只修复确定配对，保留普通及孤立书签。RedlineStart/End 是无序 Point/Mark，必须比较范围后取首末，不能假定 Start 在前。只读命令临时切换 final/all 可能破坏书签；不要为规避它改掉既有 margin-view 读取契约。真实客户端已验证移动句内编辑、自动保存、关闭重开两轮，配对与批注仍保留。
 - 批注一次扫描并按 run 边界插回，避免逐批注扫描全文。重复条款不猜移动。复杂批注资源不能安全复制时明确失败，不能静默丢内容。
 - 验证：`tests/lowa-e2e/comparison-document.mjs`、`comparison-large.mjs`，`tests/lowa-unit/comparison-document.test.mjs`，project-home `docx-compare-{flow,transport}` 与保存屏障，后端 `DocxComparisonFinalizerTest`、`ProjectFileComparisonTest`、`ProjectFileComparisonControllerTest`。2000 页测试是隔离压力测试，不属于每次 PR 的普通小回归。

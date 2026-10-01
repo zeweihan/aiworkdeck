@@ -2589,6 +2589,98 @@ function applyRevisionView(mode, reserveGutter) {
 // 把上一份文档可能留下的「最终稿」隐藏态显式打回来——保活池里同一个 worker 会
 // 连着开好几份文档，不复位就是「上一份设了最终稿、下一份打开修订痕迹默默不见」。
 function resetRevisionView() { return applyRevisionView(DEFAULT_REVISION_VIEW); }
+// Writer's final-text view can lose/rename the private bookmarks that its DOCX
+// exporter uses for move ranges, while native RedlineMovedID remains intact.
+// Restore only complete native pairs; never infer movement from matching text.
+function repairMoveRangeBookmarks() {
+  if (!isWriterDoc()) return;
+  const groups = Object.create(null), en = xModel.getRedlines().createEnumeration();
+  while (en.hasMoreElements()) {
+    const redline = en.nextElement();
+    let id;
+    try { id = Number(redline.getPropertyValue('RedlineMovedID')); } catch (e) { return; }
+    if (!(id > 1)) continue;
+    const type = String(redline.getPropertyValue('RedlineType'));
+    if (type !== 'Delete' && type !== 'Insert') continue;
+    const group = groups[id] || (groups[id] = { Delete: [], Insert: [] });
+    let start = redline.getPropertyValue('RedlineStart'), end = redline.getPropertyValue('RedlineEnd');
+    // UNO exposes the redline Point/Mark, which can be reversed after view changes.
+    if (start.getText().compareRegionStarts(start, end) < 0) { const tmp = start; start = end; end = tmp; }
+    group[type].push({ start: start, end: end });
+  }
+  const ids = Object.keys(groups).filter(id => groups[id].Delete.length && groups[id].Insert.length);
+  if (!ids.length) return;
+  const span = function (parts) {
+    let start = parts[0].start, end = parts[0].end;
+    const text = start.getText();
+    // One logical move can be split into several redlines after later edits.
+    // Fold its native endpoints, including any intervening tracked edits.
+    try {
+      for (let i = 1; i < parts.length; i++) {
+        if (text.compareRegionStarts(parts[i].start, start) > 0) start = parts[i].start;
+        if (text.compareRegionEnds(parts[i].end, end) < 0) end = parts[i].end;
+      }
+      const cursor = text.createTextCursorByRange(start);
+      cursor.gotoRange(end, true);
+      return cursor;
+    } catch (e) { throw new Error('Could not preserve tracked movement across text regions'); }
+  };
+  const bookmarks = xModel.getBookmarks(), existing = [];
+  const names = bookmarks.getElementNames();
+  for (let i = 0; i < names.length; i++) {
+    const name = String(names[i]);
+    const type = name.startsWith('__RefMoveFrom__') ? 'Delete' : name.startsWith('__RefMoveTo__') ? 'Insert' : null;
+    if (type) existing.push({ name: name, type: type, bookmark: bookmarks.getByName(name) });
+  }
+  const sameRange = function (a, b) {
+    try { return a.getText().compareRegionStarts(a.getStart(), b.getStart()) === 0
+      && a.getText().compareRegionEnds(a.getEnd(), b.getEnd()) === 0; } catch (e) { return false; }
+  };
+  const plans = [];
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i], from = span(groups[id].Delete), to = span(groups[id].Insert);
+    if (from.isCollapsed() || to.isCollapsed()) throw new Error('Could not preserve empty tracked movement ranges');
+    const oldFrom = existing.filter(b => b.type === 'Delete' && sameRange(b.bookmark.getAnchor(), from));
+    const oldTo = existing.filter(b => b.type === 'Insert' && sameRange(b.bookmark.getAnchor(), to));
+    if (oldFrom.length === 1 && oldTo.length === 1
+      && oldFrom[0].name.slice('__RefMoveFrom__'.length) === oldTo[0].name.slice('__RefMoveTo__'.length)) continue;
+    let suffix = 'awdNativeMove' + id, serial = 0;
+    while (bookmarks.hasByName('__RefMoveFrom__' + suffix) || bookmarks.hasByName('__RefMoveTo__' + suffix))
+      suffix = 'awdNativeMove' + id + '_' + (++serial);
+    plans.push({ from: from, to: to, suffix: suffix, old: oldFrom.concat(oldTo) });
+  }
+  if (!plans.length) return;
+  const created = [], recording = xModel.getPropertyValue('RecordChanges');
+  const undo = xModel.getUndoManager(), ownsUndoLock = !undo.isLocked();
+  if (ownsUndoLock) undo.lock();
+  try {
+    xModel.setPropertyValue('RecordChanges', false);
+    // Create and verify both sides before removing existing private markers.
+    // Failure must abort export rather than silently serialize a broken pair.
+    for (let i = 0; i < plans.length; i++) {
+      const plan = plans[i];
+      for (const side of [{ prefix: '__RefMoveFrom__', range: plan.from }, { prefix: '__RefMoveTo__', range: plan.to }]) {
+        const bookmark = xModel.createInstance('com.sun.star.text.Bookmark'), name = side.prefix + plan.suffix;
+        bookmark.setName(name);
+        side.range.getText().insertTextContent(side.range, bookmark, true);
+        created.push(bookmark);
+        if (String(bookmark.getName()) !== name || !sameRange(bookmark.getAnchor(), side.range))
+          throw new Error('Could not preserve tracked movement ranges');
+      }
+    }
+    for (let i = 0; i < plans.length; i++) for (const old of plans[i].old)
+      old.bookmark.getAnchor().getText().removeTextContent(old.bookmark);
+  } catch (e) {
+    for (let i = created.length - 1; i >= 0; i--) {
+      try { created[i].getAnchor().getText().removeTextContent(created[i]); } catch (ignored) {}
+    }
+    throw e;
+  } finally {
+    xModel.setPropertyValue('RecordChanges', recording);
+    if (ownsUndoLock) undo.unlock();
+  }
+}
+
 // 导出期间**强制切成「全部修订」内联视图**（dev-board#367 的 withMarginOff + #368 三态）。
 // 两种非默认显示态都会把 docx 导坏，而自动保存 / 版本记录 / 版本对比全走这条导出：
 //   页边（margin）——ShowChangesInMargin 开着时删除文本被并出版面，导出器却按并合后的
@@ -4679,7 +4771,7 @@ const EXEC = {
     const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
     exportInFlight = true;
     try {
-      withInlineMarkupForExport(function () { xModel.storeToURL('private:stream', props); });
+      withInlineMarkupForExport(function () { if (ext === 'docx') repairMoveRangeBookmarks(); xModel.storeToURL('private:stream', props); });
     } finally {
       try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
       exportInFlight = false;
