@@ -3617,7 +3617,7 @@ function reviewLayout(p) {
     truncated: cache.truncated || missing, pending: pending, unread: unread,
     stale: cache.revisionAtRead !== currentReviewRevision(),
     sidebarWidth: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')),
-    revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), selfAuthor: humanAuthor, view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
+    revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), selfAuthor: typeof humanAuthor !== 'undefined' ? humanAuthor : '', view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
       caretX: v[0], caretY: v[1], ...rect }, mode: mode };
 }
 
