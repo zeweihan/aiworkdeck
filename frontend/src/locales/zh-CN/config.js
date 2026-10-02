@@ -13,6 +13,7 @@ export default {
     voice: '语音',
     meetingRecorder: '会议录音',
     litigationVisual: '诉讼可视化',
+    tmeet: '腾讯会议',
     search: '搜索',
     tts: '语音合成',
     desensitize: '文件脱敏',

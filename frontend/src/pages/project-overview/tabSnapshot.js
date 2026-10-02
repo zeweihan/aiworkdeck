@@ -107,6 +107,10 @@ const SERIALIZERS = {
     const spec = plain(t.versionSpec)
     return spec ? { id: t.id, tabType: 'version-text-diff', fileType: 'version-text-diff', name: str(t.name), versionSpec: spec } : null
   },
+  'tmeet-transcript': (t) => {
+    const spec = plain(t.meetingSpec)
+    return spec ? { id: t.id, tabType: 'tmeet-transcript', name: str(t.name), meetingSpec: spec } : null
+  },
 }
 
 /** 恢复时补回一次性字段的默认值（模板与组件读得到，但不带上次的深链） */

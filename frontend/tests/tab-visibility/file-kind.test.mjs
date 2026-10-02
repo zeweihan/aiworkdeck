@@ -45,7 +45,8 @@ test('非文件标签一律不着色', () => {
     { fileType: 'diff', tabType: 'diff' },
     // 合并比对稿标签（dev-board#630）：名字里带的是 docx 的文件名，但它是一份
     // 临时比对稿而不是那份文件本身，不能跟着 Word 蓝走。
-    { fileType: 'merge-review', tabType: 'merge-review' }
+    { fileType: 'merge-review', tabType: 'merge-review' },
+    { fileType: undefined, tabType: 'tmeet-transcript' }
   ]
   for (const t of tabs) {
     assert.equal(fileKindKey(t.fileType, t.tabType), '',

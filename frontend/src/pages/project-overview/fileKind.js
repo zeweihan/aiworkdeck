@@ -15,8 +15,8 @@
 // 但它是一份临时比对稿、不是那份文件本身——跟着 Word 蓝走会让律师以为自己开的
 // 就是正文，保存/关闭的心智全错。
 // 'welcome'（欢迎标签，dev-board#1047）：单例 id 'welcome'，不是文档，不当活跃文档、不能拖进 AI 上下文。
-// 'calendar'（日程标签，dev-board#1048）：单例 id 'calendar'，同上。
-export const NON_FILE_TAB_TYPES = ['web', 'browser', 'market-detail', 'admin-settings', 'insight-entity', 'commit-history', 'merge-review', 'welcome', 'calendar']
+// 'tmeet-transcript'：腾讯会议逐字稿标签（中栏工作台），查看会议转写时间轴与智能纪要。
+export const NON_FILE_TAB_TYPES = ['web', 'browser', 'market-detail', 'admin-settings', 'insight-entity', 'commit-history', 'merge-review', 'welcome', 'calendar', 'tmeet-transcript']
 
 // 分组口径与 config/icons.js 的 fileGlyph 保持一致（csv 跟着 Excel 走）。
 const KIND_BY_EXT = {

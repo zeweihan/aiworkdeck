@@ -144,6 +144,16 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    key: 'tmeet',
+    label: t('config.sidebar.tmeet'),
+    requiresSkill: 'tencent-meeting',
+    // 摄像机/视频会议图标
+    svgPaths: [
+      { d: 'm16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.934a.5.5 0 0 0-.777-.416L16 11' },
+      { d: 'M4 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z' }
+    ]
+  },
+  {
     key: 'desensitize',
     label: t('config.sidebar.desensitize'),
     // 对应 skill.yml 的 enabled_by_default:false——默认不装，装了才出现在左栏。

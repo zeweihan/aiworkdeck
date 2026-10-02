@@ -431,6 +431,7 @@ export const fileOpenTabsMethods = {
       if (tabType === 'commit-history') return GLYPHS.history
       if (tabType === 'welcome') return GLYPHS.welcome
       if (tabType === 'calendar') return GLYPHS.calendar
+      if (tabType === 'tmeet-transcript') return GLYPHS.tmeet
       return fileGlyph(type)
     },
 
