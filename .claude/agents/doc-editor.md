@@ -23,7 +23,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 **前端 boot 与桥**
 - `frontend/src/zetaoffice/editor.html` + `editor-main.js` — webview 页面入口：选传输、startEditorEndpoint、IME 覆盖层、modified 节流（1/500ms）、boot-log 里程碑。
 - `frontend/src/zetaoffice/public/`：zeta.js（vendored zetajs）、**office_thread.js（worker 内全部 UNO 操作实现，本领域最核心文件）**。
-- composables：`zetaOfficeBoot.js`（emscripten Module、注入 CJK 字体+fontconfig 别名 conf、locale shim、resolve office-worker port）、`zetaOfficeEditorEndpoint.js`（boot+executor+serve 三件套）、`zetaOfficeRelay.js`（跨隔离命令中继：serveExecutor/createRelayExecutor/portTransport）、`libreofficeExecutorClient.js`（EDITOR_ACTIONS 白名单+请求应答）、`useLibreOfficeBridge.js`、`useZetaOfficeWebview.js`（webview 包成 executeCommand 契约）、`zetaOfficeImeOverlay.js`（canvas 透明 IME 层，中文输入+控制键转发）。
+- composables：`zetaOfficeBoot.js`（emscripten Module、注入 CJK 字体+fontconfig 别名 conf、locale shim、resolve office-worker port）、`zetaOfficeEditorEndpoint.js`（boot+executor+serve 三件套）、`zetaOfficeRelay.js`（跨隔离命令中继：serveExecutor/createRelayExecutor/portTransport）、`libreofficeExecutorClient.js`（EDITOR_ACTIONS 白名单+请求应答）、`useLibreOfficeBridge.js`、`useZetaOfficeWebview.js`（webview 包成 executeCommand 契约）、`zetaOfficeImeOverlay.js`（canvas 透明 IME 层，中文输入+控制键转发）、`zetaOfficeReviewHover.js`（正文鼠标悬停展示修订者浮动气泡，dev-board#1126）。
 - `frontend/vite.zetaoffice.config.js` — editor 页专用 Vite 构建（脱离 uni-app），产出 dist/zetaoffice/。
 
 **宿主能力层与编辑器容器（两种壳，一套 relay）**

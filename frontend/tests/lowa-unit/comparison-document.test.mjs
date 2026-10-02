@@ -12,6 +12,8 @@ function harness(failStage) {
   const progress = []
   const context = {
     post: (cmd, data) => progress.push({ cmd, ...data }),
+    log: () => {}, refineCalls: [],
+    refineComparisonRedlines: author => { context.refineCalls.push(author); return 2 },
     toUnoByteSeq: x => Array.isArray(x) && x.length ? x : null,
     humanAuthor: 'User', shortAny: x => x, mkProp: (Name, Value) => ({ Name, Value }), errStr: String,
     docKindOf: () => 'writer', countRedlines: () => 2, xModel: { setPropertyValue() { writes++ } },
@@ -48,5 +50,27 @@ for (const stage of ['load-revised', 'normalize-revised', 'compare']) test(stage
 test('native comparison emits real stage boundaries with its request id, without invented counts', () => {
   const h = harness()
   assert.equal(h.run({ baseBytes: [1], revisedBytes: [2], __reqId: 'compare-1' }).success, true)
-  assert.deepEqual(h.progress, ['loading', 'normalizing', 'comparing'].map(stage => ({ cmd: 'progress', reqId: 'compare-1', stage })))
+  assert.deepEqual(h.progress, ['loading', 'normalizing', 'comparing', 'refining'].map(stage => ({ cmd: 'progress', reqId: 'compare-1', stage })))
+})
+test('successful comparison runs minimal-revision refinement under the comparison author, and reports the count', () => {
+  const h = harness()
+  const result = h.run({ baseBytes: [1], revisedBytes: [2], authorName: '比较者' })
+  assert.equal(result.success, true)
+  assert.equal(result.refined, 2)
+  assert.deepEqual(h.context.refineCalls, ['比较者'])
+})
+test('refinement failures are best-effort: the comparison still succeeds without a refined count', () => {
+  const h = harness()
+  h.context.refineComparisonRedlines = () => { throw new Error('boom') }
+  const result = h.run({ baseBytes: [1], revisedBytes: [2] })
+  assert.equal(result.success, true)
+  assert.equal(result.refined, 0)
+})
+test('refineMinimal=false skips the refinement stage entirely', () => {
+  const h = harness()
+  const result = h.run({ baseBytes: [1], revisedBytes: [2], __reqId: 'compare-9', refineMinimal: false })
+  assert.equal(result.success, true)
+  assert.equal(result.refined, 0)
+  assert.deepEqual(h.context.refineCalls, [])
+  assert.deepEqual(h.progress.map(x => x.stage), ['loading', 'normalizing', 'comparing'])
 })

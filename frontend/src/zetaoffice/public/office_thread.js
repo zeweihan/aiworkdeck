@@ -697,6 +697,24 @@ function minimalEdits(oldStr, newStr) {
   }
   return edits;
 }
+// —— 最小修订比对（dev-board#1126 需求一）的纯判据 ——
+// 原生 CompareDocuments 即使 Mode=ByChar 也会把「合成服务协议 → 合成采购协议」
+// 这类替换产出成同一起点的一整条 Delete + 一整条 Insert。判据函数只回答一件事：
+// 这对删/插文字有没有"确实没动的公共部分"值得保留——有则返回字符级编辑脚本
+// （refineComparisonRedlines 据此重写），没有（全删全插、面目全非、纯增删）返回
+// null，保持引擎原样。顶层纯函数，单测经 _workerFns.mjs 直接抠出。
+function comparisonRefinePlan(oldText, newText) {
+  const o = String(oldText == null ? '' : oldText), n = String(newText == null ? '' : newText);
+  if (!o || !n || o === n) return null;
+  if (/[\r\n]/.test(o) || /[\r\n]/.test(n)) return null; // 跨段改动不是这里的活
+  const edits = minimalEdits(o, n);
+  if (!edits.length) return null;
+  let deleted = 0;
+  for (let k = 0; k < edits.length; k++) deleted += edits[k].delLen;
+  // 没有保留任何旧字符（含公共前后缀为空的整块重写）：最小粒度就是整删整插本身。
+  if (deleted >= o.length) return null;
+  return edits;
+}
 // find_replace 全部替换的分流判据：原生 replaceAll 一次只能把「掐掉公共前后缀的中段」
 // 整块替换；差异不止一块（甲方→乙方 与 三日→五日 两处）时整块替换会把两处之间没改的
 // 字一起删了重打，必须走逐命中的 applyMinimalRedline 路径。
@@ -743,6 +761,124 @@ function applyMinimalRedline(range, newText) {
     // let the caller's paragraphAfterEdit verification loop catch any residue.
     return applied > 0;
   }
+}
+
+// ---- 最小修订比对（dev-board#1126 需求一）-----------------------------------
+// 原生 CompareDocuments 的产物里，同一起点的「整段 Delete + 整段 Insert」是替换的
+// 粗粒度形态。refineComparisonRedlines 把这些对子重写成字符级修订：
+//   ① 快照全部修订，按「作者 = 比较作者 + Delete/Insert + 起点重合」配对，用
+//      comparisonRefinePlan 判定值得重写；
+//   ② 从文档末尾往前逐对处理：先 Reject 插入（去掉新文字），再 Reject 删除（恢复
+//      旧文字）——两条同位相连的修订可能被引擎一次连带处理，每次都重新枚举核对；
+//   ③ 在恢复出来的旧文字上开 RecordChanges、以比较作者署名走 applyMinimalRedline，
+//      只留删「服务」插「采购」这样的最小片段；RecordChanges 复原为比较后的关态。
+// 任何一步校验不过（正文没恢复成旧文字、reject 没让条数下降）立即停手，保留原生
+// 产物——修不出最小粒度也绝不能把文档改坏。返回成功重写的对数。
+function comparisonRedlineTextOf(r, isDelete) {
+  try {
+    if (isDelete) {
+      const hiddenText = r.getPropertyValue('RedlineText');
+      if (hiddenText) return String(hiddenText.getString() || '');
+    }
+    const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
+    if (rs && re) {
+      const rc = rs.getText().createTextCursorByRange(rs);
+      rc.gotoRange(re, true);
+      return String(rc.getString() || '');
+    }
+  } catch (e) {}
+  return '';
+}
+function rejectRedlineBySelection(r) {
+  try {
+    const before = countRedlines();
+    if (!selectRedlineRange(r, true)) return false;
+    css.frame.DispatchHelper.create(context).executeDispatch(ctrl.getFrame(), '.uno:RejectTrackedChange', '', 0, []);
+    return countRedlines() < before;
+  } catch (e) { return false; }
+}
+// 拒掉插入后重新枚举：返回仍留在锚点处的同作者同文字删除修订（两条同位相连时
+// 引擎可能已把它连带拒掉），没有则 null。绝不用悬空的旧 redline 对象再派发。
+function remainingDeleteAtAnchor(author, oldText, anchor) {
+  try {
+    const en = xModel.getRedlines().createEnumeration();
+    const t = anchor.getText();
+    while (en.hasMoreElements()) {
+      const r = en.nextElement();
+      let type = '', a = '';
+      try { type = String(r.getPropertyValue('RedlineType')); } catch (e) {}
+      try { a = String(r.getPropertyValue('RedlineAuthor')); } catch (e) {}
+      if (type !== 'Delete' || a !== author) continue;
+      const rs = r.getPropertyValue('RedlineStart');
+      if (!rs) continue;
+      let near = false;
+      try { near = t.compareRegionStarts(rs, anchor) === 0; } catch (e) { near = false; }
+      if (near && comparisonRedlineTextOf(r, true) === oldText) return r;
+    }
+  } catch (e) {}
+  return null;
+}
+function refineComparisonRedlines(authorName, maxPairs) {
+  const author = String(authorName == null ? '' : authorName);
+  const cap = Math.max(0, Math.min(500, Number(maxPairs) || 200));
+  let refined = 0;
+  for (let round = 0; round < cap; round++) {
+    const dels = [], ins = [];
+    try {
+      const en = xModel.getRedlines().createEnumeration();
+      while (en.hasMoreElements()) {
+        const r = en.nextElement();
+        let type = '', a = '';
+        try { type = String(r.getPropertyValue('RedlineType')); } catch (e) {}
+        try { a = String(r.getPropertyValue('RedlineAuthor')); } catch (e) {}
+        if (a !== author) continue;
+        const rs = r.getPropertyValue('RedlineStart');
+        if (!rs) continue;
+        const text = comparisonRedlineTextOf(r, type === 'Delete');
+        if (!text) continue;
+        if (type === 'Delete') dels.push({ redline: r, start: rs, text: text });
+        else if (type === 'Insert') ins.push({ redline: r, start: rs, text: text });
+      }
+    } catch (e) { break; }
+    // 配对 + 判定；挑文档里起点最靠后的一对先做（重写会移动后方位置）。
+    const pairs = [];
+    for (let i = 0; i < ins.length; i++) {
+      for (let d = 0; d < dels.length; d++) {
+        let same = false;
+        try { same = ins[i].start.getText().compareRegionStarts(ins[i].start, dels[d].start) === 0; } catch (e) { same = false; }
+        if (!same) continue;
+        const plan = comparisonRefinePlan(dels[d].text, ins[i].text);
+        if (plan) pairs.push({ insItem: ins[i], delItem: dels[d] });
+      }
+    }
+    if (!pairs.length) break;
+    let best = pairs[0];
+    for (let k = 1; k < pairs.length; k++) {
+      let later = false;
+      try { later = best.insItem.start.getText().compareRegionStarts(pairs[k].insItem.start, best.insItem.start) > 0; } catch (e) { later = false; }
+      if (later) best = pairs[k];
+    }
+    const oldText = best.delItem.text, newText = best.insItem.text;
+    const anchor = best.delItem.start; // XTextRange 随 reject 自动跟随恢复出来的旧文字
+    if (!rejectRedlineBySelection(best.insItem.redline)) break;
+    const pendingDelete = remainingDeleteAtAnchor(author, oldText, anchor);
+    if (pendingDelete && !rejectRedlineBySelection(pendingDelete)) break;
+    // 校验：正文必须恢复成旧文字，否则不动手。
+    let restored = null;
+    try {
+      const t = anchor.getText();
+      restored = t.createTextCursorByRange(anchor);
+      if (!restored.goRight(oldText.length, true) || String(restored.getString() || '') !== oldText) restored = null;
+    } catch (e) { restored = null; }
+    if (!restored) { log('refineComparisonRedlines: restored text mismatch, keeping native redlines'); break; }
+    try { xModel.setPropertyValue('RecordChanges', true); } catch (e) { break; }
+    let applied = false;
+    try { setRedlineAuthor(author); applied = applyMinimalRedline(restored, newText); } catch (e) { applied = false; }
+    if (!applied) { try { restored.setString(newText); } catch (e) { break; } } // 退化成整块替换修订（与原生形态一致）
+    try { xModel.setPropertyValue('RecordChanges', false); } catch (e) {}
+    refined++;
+  }
+  return refined;
 }
 
 // Fire a Writer UI command (.uno:*) on the current frame — the engine-native
@@ -3467,7 +3603,7 @@ function reviewLayout(p) {
       return;
     }
     items.push({ key: key, kind: kind, data: data, x: native.anchor.x, y: native.anchor.y,
-      page: native.page, rects: native.rects || [] });
+      w: native.anchor.width, h: native.anchor.height, page: native.page, rects: native.rects || [] });
   }
   geometry.revisions.forEach(g => {
     if (!revisionCards) { add('revision', { index: g.index }, g, 'r' + g.index); return; }
@@ -3481,7 +3617,7 @@ function reviewLayout(p) {
     truncated: cache.truncated || missing, pending: pending, unread: unread,
     stale: cache.revisionAtRead !== currentReviewRevision(),
     sidebarWidth: Number(ctrl.getPropertyValue('AwdReviewSidebarWidth')),
-    revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
+    revision: currentReviewRevision(), documentSeq: docSeq, writable: isReviewWritable(), selfAuthor: typeof humanAuthor !== 'undefined' ? humanAuthor : '', view: { left: v[3], top: v[4], right: v[5], bottom: v[6],
       caretX: v[0], caretY: v[1], ...rect }, mode: mode };
 }
 
@@ -6681,9 +6817,18 @@ const EXEC = {
       // that adds two full-document layout passes for large documents.
       const compared = compareWithBytes(p.baseBytes, 'file:///tmp/awd_standalone_base.docx');
       if (!compared.success) return { success: false, stage: stage, message: compared.message };
+      // dev-board#1126 需求一：把同起点的整删整插对重写成字符级最小修订。
+      // best-effort：失败只是保留原生形态，绝不让整次比较报错。
+      let refined = 0;
+      if (p.refineMinimal !== false) {
+        stage = 'refine-minimal';
+        if (p.__reqId) post('progress', { reqId: p.__reqId, stage: 'refining' });
+        try { refined = refineComparisonRedlines(String(p.authorName || '版本对比')); }
+        catch (e) { log('refineComparisonRedlines failed: ' + errStr(e)); refined = 0; }
+      }
       // Native CompareDocuments turns recording off after producing redlines.
       // Subsequent user edits follow the editor's normal explicit toggle.
-      return { success: true, redlineCount: compared.redlineCount };
+      return { success: true, redlineCount: compared.redlineCount, refined: refined };
     } catch (e) { return { success: false, stage: stage, message: errStr(e) }; }
     finally {
       humanAuthor = previousAuthor;
