@@ -13,6 +13,7 @@ export default {
     voice: 'Voice',
     meetingRecorder: 'Meeting Recording',
     litigationVisual: 'Litigation Visualization',
+    tmeet: 'Tencent Meeting',
     search: 'Search',
     tts: 'Text to Speech',
     desensitize: 'File Redaction',

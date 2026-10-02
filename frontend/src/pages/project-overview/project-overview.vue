@@ -779,6 +779,13 @@
             @open-plugin="toggleLeftPane"
             @ai-develop="onPluginDevAiDevelop"
           />
+          <TencentMeetingPanel
+            v-else-if="leftPaneKey === 'tmeet'"
+            :project-id="projectId"
+            @open-transcript="onOpenTmeetTranscript"
+            @generate-minutes="handleTmeetMinutesStart"
+            @generate-todos="handleTmeetTodosStart"
+          />
           <!-- 停靠到左栏的工具面板（dev-board#180）。三个面板组件本身一行没改，这里只做宿主：
                一条紧凑搜索行（底栏那份的等价物——这三个面板的搜索早就外置给宿主了，
                不给就等于没有搜索）+ 面板体。三个 dock 的 props/@event 逐个显式写，
@@ -1254,6 +1261,14 @@
                       @open-file="onCalendarOpenFile"
                       @close="closeCalendarTab"
                     />
+                    <TencentMeetingTranscriptPane
+                      v-else-if="activeFileLeft.tabType === 'tmeet-transcript'"
+                      :key="activeFileLeft.id"
+                      :meeting="activeFileLeft.meetingSpec"
+                      :project-id="projectId"
+                      @generate-minutes="handleTmeetMinutesStart"
+                      @generate-todos="handleTmeetTodosStart"
+                    />
                     <AdminPane
                       v-else-if="activeFileLeft.tabType === 'admin-settings'"
                       :key="activeFileLeft.id"
@@ -1470,6 +1485,14 @@
                       @open-project="onCalendarOpenProject"
                       @open-file="onCalendarOpenFile"
                       @close="closeCalendarTab"
+                    />
+                    <TencentMeetingTranscriptPane
+                      v-else-if="activeFileRight.tabType === 'tmeet-transcript'"
+                      :key="activeFileRight.id"
+                      :meeting="activeFileRight.meetingSpec"
+                      :project-id="projectId"
+                      @generate-minutes="handleTmeetMinutesStart"
+                      @generate-todos="handleTmeetTodosStart"
                     />
                     <AdminPane
                       v-else-if="activeFileRight.tabType === 'admin-settings'"
@@ -2277,6 +2300,8 @@ import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
 import PluginGuidePane from '@/components/PluginGuidePane.vue'
 import PluginDevPanel from '@/components/PluginDevPanel.vue'
+import TencentMeetingPanel from '@/components/tmeet/TencentMeetingPanel.vue'
+import TencentMeetingTranscriptPane from '@/components/tmeet/TencentMeetingTranscriptPane.vue'
 import DrawioEditor from '@/components/DrawioEditor.vue'
 import PlainTextEditor from '@/components/PlainTextEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
@@ -2434,6 +2459,7 @@ import { ocrCaptureMethods } from './ocrCapture.js'
 import { insightEntityTabMethods } from './insightEntityTab.js'
 import { welcomeTabMethods, WELCOME_TAB_ID, loadShowWelcomeOnStartup, saveShowWelcomeOnStartup } from './welcomeTab.js'
 import { calendarTabMethods } from './calendarTab.js'
+import { tmeetTabMethods } from './tmeetTab.js'
 import { tabSnapshotMethods } from './tabSnapshot.js'
 import { isPaneAllowedWithoutProject, NO_PROJECT_DEFAULT_PANE, NO_PROJECT_PANE_KEYS, workbenchStorageKey } from './noProjectShell.js'
 import ProjectListPane from '@/components/project-list/ProjectListPane.vue'
@@ -2498,6 +2524,8 @@ export default {
     PluginPane, // Added
     PluginGuidePane,
     PluginDevPanel,
+    TencentMeetingPanel,
+    TencentMeetingTranscriptPane,
     DrawioEditor,
     PlainTextEditor,
     MarketSidebarPanel,
@@ -4376,6 +4404,7 @@ export default {
     ...insightEntityTabMethods,
     ...welcomeTabMethods,
     ...calendarTabMethods,
+    ...tmeetTabMethods,
     ...tabSnapshotMethods,
     ...documentLinkPreviewMethods,
     // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
@@ -5028,6 +5057,23 @@ export default {
     // 会议录音「生成纪要」：prompt 由服务端拼好（触发词「会议纪要」开头才命中 skill 注入），
     // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
     async handleMeetingMinutesStart({ prompt }) {
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
+      await chat.sendExternalPrompt(prompt)
+    },
+
+    // 腾讯会议逐字稿与 AI 纪要/待办
+    onOpenTmeetTranscript(meeting) {
+      this.openTmeetTranscriptTab(meeting)
+    },
+
+    async handleTmeetMinutesStart({ prompt }) {
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
+      await chat.sendExternalPrompt(prompt)
+    },
+
+    async handleTmeetTodosStart({ prompt }) {
       const chat = await this.resolveChatInterface()
       if (!chat) return
       await chat.sendExternalPrompt(prompt)

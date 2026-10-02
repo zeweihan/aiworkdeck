@@ -4206,3 +4206,97 @@ export function saveDrawioDiagram(projectId, fileId, payload) {
   })
 }
 
+// ==================== 腾讯会议 (tmeet CLI) ====================
+
+export function getTmeetAuthStatus() {
+  return request({
+    url: '/api/tmeet/auth/status',
+    method: 'GET'
+  })
+}
+
+export function loginTmeet() {
+  return request({
+    url: '/api/tmeet/auth/login',
+    method: 'POST'
+  })
+}
+
+export function logoutTmeet() {
+  return request({
+    url: '/api/tmeet/auth/logout',
+    method: 'POST'
+  })
+}
+
+export function getTmeetSyncConfig() {
+  return request({
+    url: '/api/tmeet/config',
+    method: 'GET'
+  })
+}
+
+export function updateTmeetSyncConfig(data) {
+  return request({
+    url: '/api/tmeet/config',
+    method: 'POST',
+    data,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function syncTmeetMeetings(options = {}) {
+  return request({
+    url: '/api/tmeet/sync',
+    method: 'POST',
+    data: options,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function getTmeetMeetings(params = {}) {
+  return request({
+    url: '/api/tmeet/meetings',
+    method: 'GET',
+    data: params
+  })
+}
+
+export function getTmeetMeetingDetail(recordId) {
+  return request({
+    url: `/api/tmeet/meetings/${recordId}`,
+    method: 'GET'
+  })
+}
+
+export function linkTmeetProject(recordId, projectId) {
+  return request({
+    url: `/api/tmeet/meetings/${recordId}/link-project`,
+    method: 'POST',
+    data: { projectId }
+  })
+}
+
+export function exportTmeetToDoc(recordId, projectId) {
+  return request({
+    url: `/api/tmeet/meetings/${recordId}/export-doc`,
+    method: 'POST',
+    data: { projectId }
+  })
+}
+
+export function getTmeetMinutesPrompt(recordId) {
+  return request({
+    url: `/api/tmeet/meetings/${recordId}/minutes-prompt`,
+    method: 'GET'
+  })
+}
+
+export function getTmeetTodosPrompt(recordId) {
+  return request({
+    url: `/api/tmeet/meetings/${recordId}/todos-prompt`,
+    method: 'GET'
+  })
+}
+
+

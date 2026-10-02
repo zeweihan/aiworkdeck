@@ -31,6 +31,7 @@ import com.checkba.service.ai.tools.SlideEditTools;
 import com.checkba.service.ai.tools.SubAgentTools;
 import com.checkba.service.ai.tools.TagTools;
 import com.checkba.service.ai.tools.TaskTools;
+import com.checkba.service.ai.tools.TencentMeetingTools;
 import com.checkba.service.ai.tools.TemplateTools;
 import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
@@ -140,6 +141,7 @@ final class RealToolBeans {
                 ToolDiscoveryTools.class,
                 TagTools.class,
                 TaskTools.class,
+                TencentMeetingTools.class,
                 TemplateTools.class,
                 WebTools.class,
                 WebVerifyTools.class);
