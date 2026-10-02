@@ -17,7 +17,9 @@
 // browser) can drive it the same way the host will.
 
 import { attachReviewBalloons } from '../composables/zetaOfficeReviewBalloons.js'
+import { attachReviewHover } from '../composables/zetaOfficeReviewHover.js'
 let reviewBalloons = null
+let reviewHover = null
 
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
 import { attachDocumentLinkClicks } from '../composables/zetaOfficeLinkClick.js'
@@ -239,6 +241,7 @@ function relayModified(d) {
   if (d.cmd === 'sel_changed') { relaySelection(); return }
   if (d.cmd !== 'modified') return
   reviewBalloons?.documentChanged()
+  reviewHover?.documentChanged()
   inlineReview?.documentChanged()
   const now = Date.now()
   if (now - lastModifiedRelay < 500) return
@@ -364,6 +367,7 @@ startEditorEndpoint({
   if (engineFailed) { endpoint.dispose(); return }
   let semanticWriting = null
   reviewBalloons = attachReviewBalloons({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), transport: hostTransport, locale: q.get('uilang') || 'zh' })
+  reviewHover = attachReviewHover({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), locale: q.get('uilang') || 'zh' })
   // A layout result can arrive while the host has already started another UNO
   // command. Never resize the Qt canvas during import/export or an edit.
   const executeWithReview = endpoint.executor.executeCommand.bind(endpoint.executor)
@@ -425,7 +429,7 @@ startEditorEndpoint({
       transport: hostTransport, focus: overlay.focus })
     inlineReview = attachInlineReview({ canvas: document.getElementById('qtcanvas'), input: overlay.element,
       execute: (action, params) => endpoint.executor.executeCommand(action, params), transport: hostTransport, language: q.get('uilang') || 'zh-CN' })
-    window.addEventListener('pagehide', () => { writingAssistance.destroy(); semanticWriting.destroy(); inlineReview.destroy(); reviewBalloons?.destroy() }, { once: true })
+    window.addEventListener('pagehide', () => { writingAssistance.destroy(); semanticWriting.destroy(); inlineReview.destroy(); reviewBalloons?.destroy(); reviewHover?.destroy() }, { once: true })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
   // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且
