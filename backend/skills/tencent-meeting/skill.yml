@@ -1,0 +1,74 @@
+# 腾讯会议插件 Skill（打包规范见 docs/SKILL_SPEC.md）
+#
+# 接入腾讯会议官方 CLI（tmeet），支持扫码登录与多频次自动/手动同步。
+# 命中本 skill 后，AI 可直接调用 tmeet_get_transcript 读取会议逐字稿与智能纪要，
+# 并调用 task_create 将行动项落入系统项目日程，或生成结构化会议纪要文档。
+id: tencent-meeting
+name: 腾讯会议
+name_en: Tencent Meeting
+description: 接入腾讯会议官方 CLI（tmeet），自动/手动同步会议逐字稿与智能纪要。支持 AI 一键提炼会议纪要、生成项目日程待办（ToDo List）并归档至项目。
+description_en: Connect to official Tencent Meeting CLI (tmeet) to sync transcripts and smart minutes. Use AI to generate meeting minutes, extract project action items (ToDo List), and archive into project files.
+
+author: AI Workdeck
+author_url: https://www.aiworkdeck.com
+version: 1.0.0
+license: AGPL-3.0-or-later
+
+# 默认启用插件
+enabled_by_default: true
+
+# 事项类别（枚举见 MatterCategory）
+category: 其他法律事务
+
+languages:
+  - zh-CN
+  - en-US
+
+# 触发词：用户输入包含任一关键词即命中（面板按钮生成的 kick-off prompt 以前两条开头）
+triggers:
+  - 腾讯会议纪要
+  - 腾讯会议待办
+  - 腾讯会议
+  - 整理腾讯会议
+  - 腾讯会议转写
+  - 腾讯会议同步
+
+# 英文触发词
+triggers_en:
+  - tencent meeting minutes
+  - tencent meeting todos
+  - tencent meeting
+  - sync tencent meeting
+  - tencent meeting transcript
+
+# prompt 模板文件名
+prompt: prompt.md
+
+# 聚焦模式：限定本轮可见工具集
+tool_policy: restrict
+
+allowed_tools:
+  # 腾讯会议专用工具
+  - tmeet_list_meetings
+  - tmeet_get_transcript
+  # 日程与任务（落入系统项目日程管理）
+  - task_create
+  - task_list
+  - task_update
+  # 会话步骤条与文件产出
+  - todo_write
+  - write_docx
+  - write_file
+  - read_file
+  - search_project_files
+  # 文档内编辑与改动（LOWA 工作台）
+  - doc_get_document_text
+  - doc_get_outline
+  - doc_find_text
+  - doc_get_cursor_context
+  - doc_insert_at_cursor
+  - doc_insert_under_heading
+  - doc_insert_table
+  - doc_find_replace
+  - doc_replace_selection
+  - doc_undo

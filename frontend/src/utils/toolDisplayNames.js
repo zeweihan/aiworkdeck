@@ -342,9 +342,11 @@ const NAMES = {
   litigation_timeline_start: { zh: '读入时间轴材料', en: 'Read timeline materials' },
   litigation_timeline_step: { zh: '推进时间轴管线', en: 'Advance timeline pipeline' },
   litigation_timeline_render: { zh: '生成案件时间轴', en: 'Draw case timeline' },
-  // 会议录音
+  // 会议录音与腾讯会议
   meeting_list_recordings: { zh: '列出会议录音', en: 'List meeting recordings' },
   meeting_get_transcript: { zh: '读取会议转写稿', en: 'Read meeting transcript' },
+  tmeet_list_meetings: { zh: '列出腾讯会议', en: 'List Tencent meetings' },
+  tmeet_get_transcript: { zh: '读取腾讯会议转写稿', en: 'Read Tencent meeting transcript' },
 }
 
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。
