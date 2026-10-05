@@ -191,3 +191,19 @@ test('同一份文档换了项目就是另一条会话（项目也是键的一�
     restore()
   }
 })
+
+// 2026-10-04 AppSource 驳回回归：国际站 bundle 漏设 VITE_ADDIN_SERVER_URL，默认后端焊成国内站，
+// 审核员登录即「Backend unreachable」。官方主站上默认后端必须跟随页面 origin。
+test('官方主站上默认后端跟随页面 origin，不信构建期焊入值', async () => {
+  const { resolveDefaultServerUrl } = await import('./settings.js')
+  assert.equal(resolveDefaultServerUrl('https://addin.aiworkdeck.com', 'https://addin.workdeck.ai'), 'https://addin.workdeck.ai')
+  assert.equal(resolveDefaultServerUrl('https://addin.workdeck.ai', 'https://addin.aiworkdeck.com'), 'https://addin.aiworkdeck.com')
+})
+
+test('非官方 origin（私有部署 / dev / WPS 本地 null）退回构建期值', async () => {
+  const { resolveDefaultServerUrl } = await import('./settings.js')
+  assert.equal(resolveDefaultServerUrl('https://addin.yourfirm.com/', 'https://addin.yourfirm.com'), 'https://addin.yourfirm.com')
+  assert.equal(resolveDefaultServerUrl('https://addin.aiworkdeck.com', 'https://localhost:3000'), 'https://addin.aiworkdeck.com')
+  assert.equal(resolveDefaultServerUrl('https://addin.aiworkdeck.com', 'null'), 'https://addin.aiworkdeck.com')
+  assert.equal(resolveDefaultServerUrl('', ''), '')
+})

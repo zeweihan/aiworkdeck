@@ -38,16 +38,46 @@ function conversationKey(projectId, hostTag, docKey) {
   return docKey ? scoped + '_' + docKey : scoped
 }
 
-/**
- * 构建期注入的默认后端地址（见 vite.config.js 的 define）。
- * 非 vite 环境（单测等）下常量不存在，退回空串。
- */
-export const DEFAULT_SERVER_URL =
-  typeof __ADDIN_DEFAULT_SERVER__ === 'string' ? __ADDIN_DEFAULT_SERVER__ : ''
-
 export function normalizeBaseUrl(url) {
   return (url || '').trim().replace(/\/+$/, '')
 }
+
+/**
+ * 两个官方插件主站：任务窗格与后端 API 同源托管（/office-addin/ 与 /api/ 在同一 origin）。
+ */
+const OFFICIAL_ADDIN_ORIGINS = ['https://addin.aiworkdeck.com', 'https://addin.workdeck.ai']
+
+/**
+ * 默认后端地址：任务窗格由官方主站托管时**以页面自身 origin 为准**，否则退回构建期焊入值。
+ *
+ * 2026-10-04 AppSource 第二次驳回的根因：国际站 addin.workdeck.ai 上线的那份 bundle
+ * 构建时漏了 VITE_ADDIN_SERVER_URL，默认后端焊成了国内站 addin.aiworkdeck.com——
+ * 跨站请求被国内站 CORS 白名单拒掉（且国内站本就不支持邮箱登录），审核员看到
+ * 「Backend unreachable」。官方主站上后端必然与页面同源，没理由信构建期的值；
+ * 私有部署、WPS 本地加载（origin 为 null/file）等其余情形仍按构建期值。
+ */
+export function resolveDefaultServerUrl(baked, pageOrigin) {
+  const origin = normalizeBaseUrl(pageOrigin)
+  if (OFFICIAL_ADDIN_ORIGINS.includes(origin)) return origin
+  return normalizeBaseUrl(baked)
+}
+
+function currentPageOrigin() {
+  try {
+    return typeof location !== 'undefined' && location ? location.origin || '' : ''
+  } catch (e) {
+    return ''
+  }
+}
+
+/**
+ * 默认后端地址（构建期值见 vite.config.js 的 define；官方主站上被页面 origin 覆盖）。
+ * 非 vite 环境（单测等）下构建期常量不存在，退回空串。
+ */
+export const DEFAULT_SERVER_URL = resolveDefaultServerUrl(
+  typeof __ADDIN_DEFAULT_SERVER__ === 'string' ? __ADDIN_DEFAULT_SERVER__ : '',
+  currentPageOrigin()
+)
 
 /**
  * localStorage 在 Office 任务窗格的 webview 里不保证可用：第三方存储被策略禁用时
