@@ -72,3 +72,9 @@ allowed_tools:
   - doc_find_replace
   - doc_replace_selection
   - doc_undo
+  # Office/WPS 文档内编辑（按客户端能力与 LOWA 工具互斥可见）
+  - office_get_text
+  - office_search
+  - office_replace_text
+  - office_insert_text
+  - office_insert_table

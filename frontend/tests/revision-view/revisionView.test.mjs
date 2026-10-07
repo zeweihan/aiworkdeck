@@ -14,8 +14,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { readFileSync } from 'node:fs'
-import { EDITOR_ACTIONS, createLibreOfficeExecutor } from '../../src/composables/libreofficeExecutorClient.js'
 import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
+import { EDITOR_ACTIONS, createLibreOfficeExecutor } from '../../src/composables/libreofficeExecutorClient.js'
 
 const WORKER_SRC = readFileSync(new URL('../../src/zetaoffice/public/office_thread.js', import.meta.url), 'utf8')
 
@@ -53,9 +53,10 @@ test('executor 放行 set_revision_view 并原样把 mode 发给 worker', async 
 function loadToolbar() {
   const src = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
   const script = src.match(/<script>([\s\S]*?)<\/script>/)[1]
-  return new Function('CN_FONT_SIZES', 'PT_FONT_SIZES', 'ParagraphFormatPanel', 'SystemFontsPanel',
+  return new Function('bindHorizontalWheel', 'watchScrollEdges', 'isEnglish', 'host',
+    'CN_FONT_SIZES', 'PT_FONT_SIZES', 'ParagraphFormatPanel', 'SystemFontsPanel',
     script.replace(/^import .*$/gm, '').replace('export default', 'return'))(
-    CN_FONT_SIZES, PT_FONT_SIZES, null, null)
+    () => () => {}, () => () => {}, () => false, {}, CN_FONT_SIZES, PT_FONT_SIZES, {}, {})
 }
 
 // engineView: worker 侧 get_ui_state 回的 view 段（= 引擎的真实读回）
@@ -129,15 +130,20 @@ test('文档类型不对（非 Writer，view 里没有该字段）时整个控�
 })
 
 test('工具栏重挂（bootstrap）先清空状态，不端着上一份文档的读数', async () => {
-  const vm = makeVm(() => ({ revisionView: 'final', revisionBalloonsSupported: true }))
+  let revisionView = 'final'
+  const vm = makeVm(() => ({ revisionView, revisionBalloonsSupported: true }))
   await vm.refresh()
   assert.equal(vm.state.view.revisionView, 'final')
   const seen = []
   const realRefresh = vm.refresh
   vm.refresh = function () { seen.push(this.state.view.revisionView); return realRefresh.call(this) }
+  revisionView = 'all'
+  vm.calls.length = 0
   await vm.bootstrap()
-  assert.ok(seen.length > 0, 'bootstrap 必须读取引擎状态')
-  assert.equal(seen[0], undefined, 'bootstrap 必须先 EMPTY() 再去读引擎')
+  assert.deepEqual(seen, [undefined, 'all'], 'bootstrap 先 EMPTY() 读新文档，再在应用视图偏好后刷新')
+  assert.deepEqual(vm.calls.filter(c => ['get_ui_state', 'set_view_options'].includes(c.action)).map(c => c.action),
+    ['get_ui_state', 'set_view_options', 'get_ui_state'])
+  assert.equal(vm.state.view.revisionView, 'all')
 })
 
 // ---------- worker：三态映射 + 换文档复位 ----------

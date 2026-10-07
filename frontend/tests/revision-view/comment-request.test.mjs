@@ -3,9 +3,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
 import { JSDOM } from 'jsdom'
 import { attachImeOverlay } from '../../src/composables/zetaOfficeImeOverlay.js'
-import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -15,7 +15,9 @@ function component(path, dependencies = {}) {
   return new Function(...Object.keys(dependencies), body)(...Object.values(dependencies))
 }
 const toolbarComponent = component('../../src/components/EditorToolbar.vue', {
-  CN_FONT_SIZES, PT_FONT_SIZES, ParagraphFormatPanel: null, SystemFontsPanel: null,
+  bindHorizontalWheel: () => () => {}, watchScrollEdges: () => () => {},
+  isEnglish: () => false, host: {}, CN_FONT_SIZES, PT_FONT_SIZES,
+  ParagraphFormatPanel: {}, SystemFontsPanel: {},
 })
 
 function hostFixture(t, execute) {
