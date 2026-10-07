@@ -9,8 +9,8 @@
 // 测试。纯函数拆开导出，node:test 直接覆盖（reviewHover.test.mjs）。
 //
 // 元数据按需补齐：balloons/margin 模式下 get_review_layout 的 items 自带作者/时间，
-// inline（默认）模式只有位置，此时补一次 list_revisions（locate:false）按 index 合并，
-// 每个 documentSeq 只补一次。
+// inline（默认）模式只有位置，真实悬停命中后才读取该条元数据。启动、滚动及
+// 文档变化只清缓存，不让后台全文扫描挡住正文的首次绘制。
 
 export function hoverViewportMetrics(canvasRect, view) {
   if (!canvasRect || !view?.frameWidth || !view.viewport || !(view.right > view.left)) return null
@@ -66,9 +66,9 @@ export function revisionHoverCard(item, selfAuthor, locale = 'zh') {
 
 export function attachReviewHover({ canvas, execute, locale = 'zh' }) {
   const doc = canvas.ownerDocument, win = doc.defaultView
-  let disposed = false
-  let layout = null, metaByIndex = null, metaDocSeq = null
-  let hoverTimer = 0, refreshTimer = 0, inFlight = false, again = false
+  let disposed = false, suspended = 0
+  let layout = null, metadata = new Map(), generation = 0, pointer = null
+  let hoverTimer = 0, inFlight = false, pending = null
   const root = doc.createElement('div'); root.className = 'awd-review-hover'; root.hidden = true
   const style = doc.createElement('style'); style.textContent = `
     .awd-review-hover { position:fixed;z-index:6;pointer-events:none;max-width:280px;padding:6px 10px;
@@ -82,47 +82,38 @@ export function attachReviewHover({ canvas, execute, locale = 'zh' }) {
   `
   doc.head.append(style); doc.body.append(root)
   function hide() { clearTimeout(hoverTimer); hoverTimer = 0; root.hidden = true }
-  async function refresh() {
-    if (disposed || inFlight) { again = true; return }
+  function invalidate() {
+    generation++; pointer = null; pending = null; layout = null; metadata.clear(); hide()
+  }
+  async function show(point, gen) {
+    const current = () => !disposed && !suspended && gen === generation && pointer === point
+    if (!current()) return
+    if (inFlight) { pending = { point, gen }; return }
     inFlight = true
     try {
-      const data = await execute('get_review_layout', { fresh: false })
-      if (disposed) return
-      if (!data?.success || data.available === false) { layout = null; hide(); return }
-      layout = data
-      // inline 模式 items 只有位置：按 index 合并一次 list_revisions 元数据。
-      const needMeta = data.items.some(i => i.kind === 'revision' && !i.data?.author)
-      if (needMeta && metaDocSeq !== data.documentSeq) {
-        const revs = await execute('list_revisions', { limit: 500, locate: false })
-        if (revs?.success) {
-          metaByIndex = new Map(revs.revisions.map(r => [r.index, r]))
-          metaDocSeq = data.documentSeq
-        }
+      if (!layout) {
+        const data = await execute('get_review_layout', { fresh: false })
+        if (!current() || !data?.success || data.available === false) return
+        layout = data
       }
-      if (needMeta && metaByIndex) {
-        for (const item of data.items) {
-          if (item.kind === 'revision' && !item.data?.author) {
-            const meta = metaByIndex.get(item.data.index)
-            if (meta) item.data = { ...meta, index: item.data.index }
-          }
-        }
-      }
-    } catch { /* 只读查询失败：保留上一份快照 */ }
-    finally { inFlight = false; if (again && !disposed) { again = false; refresh() } }
-  }
-  function scheduleRefresh(delay = 300) {
-    if (disposed || refreshTimer) return
-    refreshTimer = setTimeout(() => { refreshTimer = 0; refresh() }, delay)
-  }
-  function onMove(e) {
-    if (!layout?.items?.length) { hide(); return }
-    clearTimeout(hoverTimer)
-    // 150-200ms 防抖：连续移动不打点，停下来才做命中测试。
-    hoverTimer = setTimeout(() => {
-      hoverTimer = 0
       const metrics = hoverViewportMetrics(canvas.getBoundingClientRect(), layout.view)
-      const item = hitTestRevision(e.clientX, e.clientY, layout.items, metrics)
-      if (!item) { root.hidden = true; return }
+      let item = hitTestRevision(point.x, point.y, layout.items, metrics)
+      if (!item) return
+      if (typeof item.data?.type !== 'string') {
+        const index = item.data.index
+        let detail = metadata.get(index)
+        if (!detail) {
+          const revs = await execute('list_revisions', { index, documentSeq: layout.documentSeq, revision: layout.revision, locate: false })
+          if (!current()) return
+          if (!revs?.success || revs.documentSeq !== layout.documentSeq || revs.revision !== layout.revision) {
+            layout = null; metadata.clear(); return
+          }
+          detail = revs.revisions?.find(r => r.index === index)
+          if (!detail) return
+          metadata.set(index, detail)
+        }
+        item = { ...item, data: detail }
+      }
       const card = revisionHoverCard(item, layout.selfAuthor, locale)
       const meta = doc.createElement('div'); meta.className = 'awd-rh-meta'
       const type = doc.createElement('strong'); type.textContent = card.type
@@ -138,25 +129,36 @@ export function attachReviewHover({ canvas, execute, locale = 'zh' }) {
       }
       root.hidden = false
       // 跟随鼠标，右/下缘出界时翻到左侧/上方。
-      const x = e.clientX + 14 + root.offsetWidth > win.innerWidth ? e.clientX - 14 - root.offsetWidth : e.clientX + 14
-      const y = e.clientY + 16 + root.offsetHeight > win.innerHeight ? e.clientY - 16 - root.offsetHeight : e.clientY + 16
+      const x = point.x + 14 + root.offsetWidth > win.innerWidth ? point.x - 14 - root.offsetWidth : point.x + 14
+      const y = point.y + 16 + root.offsetHeight > win.innerHeight ? point.y - 16 - root.offsetHeight : point.y + 16
       root.style.left = x + 'px'; root.style.top = y + 'px'
-    }, 160)
+    } catch { /* Hover reads never interrupt editing. */ }
+    finally {
+      inFlight = false
+      const next = pending; pending = null
+      if (next) show(next.point, next.gen)
+    }
   }
-  const onWheel = () => { hide(); scheduleRefresh() }
-  const onLeave = hide
-  const onResize = () => { hide(); scheduleRefresh() }
+  function onMove(e) {
+    hide()
+    if (disposed || suspended) return
+    if (e.buttons) { invalidate(); return }
+    const point = pointer = { x: e.clientX, y: e.clientY }, gen = generation
+    // Only a real pointer dwell starts work; moving across the page does not.
+    hoverTimer = setTimeout(() => { hoverTimer = 0; show(point, gen) }, 160)
+  }
   canvas.addEventListener('mousemove', onMove)
-  canvas.addEventListener('mouseleave', onLeave)
-  canvas.addEventListener('wheel', onWheel, { passive: true })
-  win.addEventListener('resize', onResize)
-  refresh()
+  canvas.addEventListener('mouseleave', invalidate)
+  canvas.addEventListener('wheel', invalidate, { passive: true })
+  win.addEventListener('resize', invalidate)
   return {
-    documentChanged() { hide(); scheduleRefresh(150) },
+    suspend() { suspended++; invalidate() },
+    resume() { suspended = Math.max(0, suspended - 1) },
+    documentChanged: invalidate,
     destroy() {
-      disposed = true; hide(); clearTimeout(refreshTimer)
-      canvas.removeEventListener('mousemove', onMove); canvas.removeEventListener('mouseleave', onLeave)
-      canvas.removeEventListener('wheel', onWheel); win.removeEventListener('resize', onResize)
+      disposed = true; invalidate()
+      canvas.removeEventListener('mousemove', onMove); canvas.removeEventListener('mouseleave', invalidate)
+      canvas.removeEventListener('wheel', invalidate); win.removeEventListener('resize', invalidate)
       root.remove(); style.remove()
     },
   }

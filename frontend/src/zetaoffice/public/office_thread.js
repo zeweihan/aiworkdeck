@@ -6483,6 +6483,12 @@ const EXEC = {
   // 且页边小字读不到作者/时间。审阅面板（宿主右栏）用下面这组原语驱动：列出、
   // 点击定位、逐条接受/拒绝——修订的权威视图从页边挪进面板。
   list_revisions(p) {
+    // Hover reads only the hit revision, fenced to the geometry it used. Reading
+    // every redline's metadata here can block first paint for several seconds.
+    const index = p && p.index;
+    if (index != null && (!Number.isInteger(index) || index < 0)) return tableFail('Invalid revision index');
+    if (p && ((p.documentSeq != null && p.documentSeq !== docSeq)
+      || (p.revision != null && p.revision !== currentReviewRevision()))) return tableFail('修订已变化，请刷新后重试');
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
     // locate:false skips the paragraph text and locator: they rebuild the whole
     // paragraph index after every edit, and review balloons render neither.
@@ -6490,10 +6496,13 @@ const EXEC = {
     const out = [], tableCells = Object.create(null);
     let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
-      const en = xModel.getRedlines().createEnumeration();
-      while (en.hasMoreElements() && out.length < limit) {
-        const r = en.nextElement();
-        const it = { index: out.length };
+      const redlines = xModel.getRedlines();
+      const en = index == null ? redlines.createEnumeration() : null;
+      let position = 0;
+      while (index != null ? !out.length && index < redlines.getCount() : en.hasMoreElements() && out.length < limit) {
+        const r = index != null ? redlines.getByIndex(index) : en.nextElement();
+        const currentIndex = index != null ? index : position++;
+        const it = { index: currentIndex };
         try { it.identifier = String(r.getPropertyValue('RedlineIdentifier')); } catch (e) {}
         // RedlineType 如实回传引擎原串（Insert / Delete / Format / ParagraphFormat /
         // TextTable …）。改造前面板只分「Delete 与其余」，格式类修订被当成插入显示
