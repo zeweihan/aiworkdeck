@@ -343,6 +343,13 @@ JAR 插件拿宿主能力的唯一契约：`com.checkba:plugin-api:1.1.0`（1.0.
 
 **历史发布整合（2026-09-10，dev-board#585；姓名口径已由 #599 更新）**：脱敏引擎 2.0.0 最终随完整桌面端 0.39.0 交付。当时沿用 #531 的姓名手填整词（每行一个，支持英文公司名里的空格/逗号），旧 customWords JSON 字段由 JsonAlias 兼容。SkillController 对内置 desensitize 返回实际 SensitiveService.VERSION/DESCRIPTION，防止只读 Resources/skills/1.0.0 将补丁引擎误报为旧版；用户自装插件不覆盖。详情页检查更新走工作台 updates 设置标签，不能用重装 skill 文本冒充引擎升级。
 
+## 腾讯会议 CI 契约（dev-board#1129）
+
+- `backend/skills/tencent-meeting/skill.yml` 保留 `restrict`；会议素材读取、纪要产出和任务工具之外，文档基本编辑面同时列 LOWA 与 Office/WPS 对等工具，由 `ClientCapabilityService` 按客户端过滤。`BuiltinSkillsTest.tencentMeetingKeepsEditingToolsForTheCurrentHost` 验证两端可见性，`scripts/check-tool-parity.mjs` 守工具对等。
+- `TmeetCliServiceTest` 在 `ProcessBuilder` 边界模拟进程，验证可用/缺失/非零退出/超时及登录状态解析，不依赖机器安装 tmeet 或用户登录；不要把真实账号状态当作单测前提。
+- `TencentMeetingRecord` / `TencentMeetingSyncConfig` 的 `@Table` 索引必须用 `user_id` / `start_time` / `project_id` / `record_file_id` 物理列名；`EntityIndexColumnNamingTest` 会实际检查 H2 列与索引，不能只验证 Repository CRUD。
+- 验证：JDK 21 下 `cd backend && mvn test -Dtest='TmeetCliServiceTest,TencentMeeting*Test,BuiltinSkillsTest,EntityIndexColumnNamingTest'`；仓库根目录 `node scripts/check-tool-parity.mjs`。
+
 ## HR 用工模板包下架（2026-09-15，dev-board#649）
 
 `hr-template-pack` 已从三站注册表下架；`PluginService.isRetired` 在离线扫描与启用判定中拒绝该 ID，`PluginMarketService` 隐藏旧列表并拒绝直接安装。保留插件磁盘文件及用户已创建文书。其他通用插件机制不受影响。上线验证与回退备份位置见 `doc/hr-template-retirement.md`。

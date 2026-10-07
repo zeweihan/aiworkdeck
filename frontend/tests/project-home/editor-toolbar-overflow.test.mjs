@@ -12,7 +12,7 @@
 //  1) 先对 node_modules 里 uni-h5 的 ScrollView render 做一次结构金丝雀——升级 uni 改了
 //     层级，这条先红，别让下面的假 DOM 悄悄过时；
 //  2) 在 jsdom 里用真 Vue 挂 EditorToolbar.vue 的**真实组件选项**（<script> 原文抽出来，
-//     只替换两条 import），模板换成与 uni-h5 同构的 DOM，驱动真实的 mounted/beforeUnmount/
+//     显式注入组件 import 依赖），模板换成与 uni-h5 同构的 DOM，驱动真实的 mounted/beforeUnmount/
 //     methods；jsdom 不排版，scrollWidth/clientWidth/scrollLeft 用属性注入。
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -32,6 +32,7 @@ for (const k of ['window', 'document', 'navigator', 'Node', 'Element', 'HTMLElem
 const Vue = await import('vue')
 const { bindHorizontalWheel } = await import('../../src/utils/horizontalWheel.js')
 const { watchScrollEdges, scrollViewMain, scrollEdges } = await import('../../src/utils/scrollEdges.js')
+const { CN_FONT_SIZES, PT_FONT_SIZES } = await import('../../src/utils/paragraphFormat.js')
 
 // ---- 1) uni-h5 ScrollView 渲染结构金丝雀 ----
 test('金丝雀：uni-h5 的 scroll-view 仍是 uni-scroll-view > div > div(滚动层) > .uni-scroll-view-content', () => {
@@ -128,10 +129,17 @@ function loadToolbarOptions() {
   assert.deepEqual(imports.map((l) => l.replace(/\s+/g, ' ')), [
     "import { bindHorizontalWheel } from '@/utils/horizontalWheel.js'",
     "import { watchScrollEdges } from '@/utils/scrollEdges.js'",
+    "import { isEnglish } from '@/utils/appLanguage.js'",
+    "import { host } from '@/services/host.js'",
+    "import { CN_FONT_SIZES, PT_FONT_SIZES } from '@/utils/paragraphFormat.js'",
+    "import ParagraphFormatPanel from './ParagraphFormatPanel.vue'",
+    "import SystemFontsPanel from './SystemFontsPanel.vue'",
   ], 'EditorToolbar 的 import 变了，本测试的注入表要跟上')
   const body = script.replace(/^import .*$/gm, '').replace(/export\s+default/, 'return')
   // eslint-disable-next-line no-new-func
-  return new Function('bindHorizontalWheel', 'watchScrollEdges', body)(bindHorizontalWheel, watchScrollEdges)
+  return new Function('bindHorizontalWheel', 'watchScrollEdges', 'isEnglish', 'host',
+    'CN_FONT_SIZES', 'PT_FONT_SIZES', 'ParagraphFormatPanel', 'SystemFontsPanel', body)(
+    bindHorizontalWheel, watchScrollEdges, () => false, {}, CN_FONT_SIZES, PT_FONT_SIZES, {}, {})
 }
 
 async function mountToolbar() {

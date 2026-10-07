@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
 @Data
 @Entity
 @Table(name = "tencent_meeting_sync_config", indexes = {
-        @Index(name = "idx_tmeet_cfg_user", columnList = "userId", unique = true)
+        @Index(name = "idx_tmeet_cfg_user", columnList = "user_id", unique = true)
 })
 public class TencentMeetingSyncConfig {
 

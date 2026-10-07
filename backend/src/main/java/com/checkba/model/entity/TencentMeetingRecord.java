@@ -18,9 +18,9 @@ import java.time.LocalDateTime;
 @Data
 @Entity
 @Table(name = "tencent_meeting_record", indexes = {
-        @Index(name = "idx_tmeet_user_start", columnList = "userId, startTime"),
-        @Index(name = "idx_tmeet_project", columnList = "projectId"),
-        @Index(name = "idx_tmeet_record_file", columnList = "recordFileId")
+        @Index(name = "idx_tmeet_user_start", columnList = "user_id, start_time"),
+        @Index(name = "idx_tmeet_project", columnList = "project_id"),
+        @Index(name = "idx_tmeet_record_file", columnList = "record_file_id")
 })
 public class TencentMeetingRecord {
 
