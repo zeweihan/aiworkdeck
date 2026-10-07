@@ -3,6 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
 import { JSDOM } from 'jsdom'
 import { attachImeOverlay } from '../../src/composables/zetaOfficeImeOverlay.js'
 
@@ -13,7 +14,11 @@ function component(path, dependencies = {}) {
     .replace(/^import .*$/gm, '').replace(/export default \{/, 'return {')
   return new Function(...Object.keys(dependencies), body)(...Object.values(dependencies))
 }
-const toolbarComponent = component('../../src/components/EditorToolbar.vue')
+const toolbarComponent = component('../../src/components/EditorToolbar.vue', {
+  bindHorizontalWheel: () => () => {}, watchScrollEdges: () => () => {},
+  isEnglish: () => false, host: {}, CN_FONT_SIZES, PT_FONT_SIZES,
+  ParagraphFormatPanel: {}, SystemFontsPanel: {},
+})
 
 function hostFixture(t, execute) {
   const dom = new JSDOM('<button></button><div class="toolbar"><div class="etb-form"><textarea></textarea></div></div>', { pretendToBeVisual: true })
