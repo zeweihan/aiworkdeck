@@ -15,6 +15,7 @@ import com.checkba.service.LangText;
 import com.checkba.service.ProjectFileService;
 import com.checkba.storage.StorageServiceFactory;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -162,7 +163,7 @@ public class MobileTransferService {
         t.put("credits", row.getChargedCredits());
         t.put("error", row.getErrorMessage());
         if (KIND_LIST.equals(row.getKind()) && STATUS_DONE.equals(row.getStatus()) && row.getPayloadJson() != null) {
-            t.put("files", parseFiles(row.getPayloadJson()));
+            t.putAll(parseListResult(row.getPayloadJson()));
         }
         t.put("createdAt", row.getCreatedAt() != null ? row.getCreatedAt().toString() : null);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -416,9 +417,15 @@ public class MobileTransferService {
         return new CommandsResult(out, hot);
     }
 
-    /** POST /{id}/files：LIST 应答 → DONE，超 2000 条服务端截断。 */
+    /** 兼容旧桌面：没有 totalCount，恰好 2000 条时不能断言清单完整。 */
     @Transactional
     public void submitFiles(Long userId, Long id, List<Map<String, Object>> files) {
+        submitFiles(userId, id, files, null);
+    }
+
+    /** POST /{id}/files：LIST 应答 → DONE，保留总数与截断标记，不静默省略文件。 */
+    @Transactional
+    public void submitFiles(Long userId, Long id, List<Map<String, Object>> files, Integer totalCount) {
         MobileTransferRequest row = owned(userId, id);
         if (!KIND_LIST.equals(row.getKind())) {
             throw new IllegalArgumentException(LangText.of("该请求不是清单类型", "This request is not a list"));
@@ -428,6 +435,10 @@ public class MobileTransferService {
             throw new IllegalArgumentException(LangText.of("该请求当前状态不接受应答", "This request cannot accept a reply now"));
         }
         List<Map<String, Object>> src = files == null ? List.of() : files;
+        int receivedCount = src.size();
+        Integer knownTotal = totalCount;
+        if (totalCount != null) knownTotal = Math.max(totalCount, receivedCount);
+        else if (receivedCount != MAX_LIST_FILES) knownTotal = receivedCount;
         if (src.size() > MAX_LIST_FILES) {
             src = src.subList(0, MAX_LIST_FILES);
         }
@@ -443,9 +454,9 @@ public class MobileTransferService {
             sanitized.add(s);
         }
         try {
-            row.setPayloadJson(om.writeValueAsString(sanitized));
+            row.setPayloadJson(om.writeValueAsString(listResult(sanitized, knownTotal)));
         } catch (Exception e) {
-            row.setPayloadJson("[]");
+            throw new IllegalStateException("Failed to serialize file list", e);
         }
         row.setStatus(STATUS_DONE);
         row.setUpdatedAt(LocalDateTime.now());
@@ -726,13 +737,28 @@ public class MobileTransferService {
                 || STATUS_FAILED.equals(status) || STATUS_EXPIRED.equals(status);
     }
 
-    private List<Map<String, Object>> parseFiles(String payloadJson) {
+    private Map<String, Object> parseListResult(String payloadJson) {
         try {
-            return om.readValue(payloadJson, new TypeReference<List<Map<String, Object>>>() {});
+            JsonNode payload = om.readTree(payloadJson);
+            boolean legacy = payload.isArray();
+            List<Map<String, Object>> files = om.convertValue(legacy ? payload : payload.get("files"),
+                    new TypeReference<List<Map<String, Object>>>() {});
+            Integer total = legacy ? (files.size() < MAX_LIST_FILES ? files.size() : null)
+                    : (payload.path("totalCount").isNumber() ? payload.path("totalCount").asInt() : null);
+            return listResult(files, total);
         } catch (Exception e) {
             log.warn("跨设备传输：LIST payloadJson 解析失败", e);
-            return List.of();
+            return listResult(List.of(), null);
         }
+    }
+
+    private Map<String, Object> listResult(List<Map<String, Object>> files, Integer totalCount) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("files", files);
+        result.put("count", files.size());
+        result.put("totalCount", totalCount);
+        result.put("truncated", totalCount == null || totalCount > files.size());
+        return result;
     }
 
     private ProjectFile ensureFolder(Long projectId, Long parentId, String name, Long userId) {

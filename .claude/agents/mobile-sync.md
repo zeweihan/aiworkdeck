@@ -214,6 +214,25 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
   定价 `service_pricing` 行 transfer/relay=60 Credits/GB（迁移 24）；流水 kind 仍是
   `service_spend`（meta.service=transfer），**没有新增 ledger kind**。
 
+### iOS 项目文件读取（dev-board#1127）
+
+- `openapi/mobile-v1.yaml` 现收录手机端 `transfer/list`、`/{id}`、`quote`、`pull`、
+  `/{id}/content`、`ack`、`cancel` 的真实契约。文件仍以桌面为权威源，LIST/PULL 要求在线；
+  文件条目 `{id,name,path,size}` 不含文件夹，`path` 只作项目内展示，不是下载地址。
+- LIST DONE 的 `transfer` 增加 `count`（实际返回条数）、`totalCount`（可 null）、
+  `truncated`。桌面仅发送前 2000 条，但扫描已取得的文件树统计非目录总数，以 `totalCount`
+  上报；不读文件字节。服务端用原有 `payloadJson` 保存 metadata，无新表/列；读取兼容旧数组。
+  旧桌面恰报 2000 条或旧数组有 2000 条时，总数无法确定，回 `totalCount:null,truncated:true`。
+  客户端必须显示不完整提示；这些字段缺失的旧服务器也不能在 2000 边界视为完整。
+- PULL 创建即扣费：先 quote，再用户确认，再持久化 UUID `requestId` 后创建。幂等键是
+  用户范围，不得在 LIST/PULL 或不同项目文件之间复用。传输错误只有 code/message，无专用 kind。
+- STAGED `fileSize` 是实际上传长度，下载只接受 2xx + `application/octet-stream` + 裸字节，
+  对账 Content-Length 与 STAGED fileSize，原子保存后才 ACK（立即删除云 blob）；目前无服务端 hash。
+  下载失败留 STAGED 重试（7 天 TTL）。`cancel` 仅支持 LIST/PULL PENDING，不能取消 STAGED。
+- 护栏：`MobileApiContractTest.transferEndpointsMatchSpec` 覆盖真实 LIST→DONE、报价、PULL→
+  STAGED→字节下载→ACK/DELIVERED、取消/错误信封；`MobileTransferServiceTest` 验证新旧 metadata，
+  `MobileRelayClientHttpTest.transferListReportsTotalBeyondUploadLimitWithoutReadingFileBytes` 验证桌面上报边界。
+
 ## 统一账户余额与充值（dev-board#425，spec：aiworkdeck_mobile docs/specs/2026-09-04-mobile-recharge-design.md §3.2）
 
 **本期只有服务端通路，没有任何客户端支付界面**（iOS 内购 #426 / 小程序虚拟支付 #427 /

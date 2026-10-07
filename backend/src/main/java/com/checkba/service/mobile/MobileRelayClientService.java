@@ -659,17 +659,18 @@ public class MobileRelayClientService {
         }
         ObjectNode body = mapper.createObjectNode();
         ArrayNode files = body.putArray("files");
-        int count = 0;
+        int totalCount = 0;
         for (ProjectFile f : tree) {
             if (Boolean.TRUE.equals(f.getIsFolder())) continue;
-            if (count >= 2000) break; // 服务端也会截断，这里提前止损，别白传超出部分
+            totalCount++;
+            if (files.size() >= 2000) continue; // 只上报前 2000 条，仍统计完整数量
             ObjectNode e = files.addObject();
             e.put("id", String.valueOf(f.getId()));
             e.put("name", f.getName());
             e.put("path", listEntryPath(f, byId));
             e.put("size", f.getFileSize() == null ? 0L : f.getFileSize());
-            count++;
         }
+        body.put("totalCount", totalCount);
         String payload;
         try {
             payload = mapper.writeValueAsString(body);
