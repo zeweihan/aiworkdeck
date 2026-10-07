@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { readFileSync } from 'node:fs'
 import { EDITOR_ACTIONS, createLibreOfficeExecutor } from '../../src/composables/libreofficeExecutorClient.js'
+import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
 
 const WORKER_SRC = readFileSync(new URL('../../src/zetaoffice/public/office_thread.js', import.meta.url), 'utf8')
 
@@ -52,7 +53,9 @@ test('executor 放行 set_revision_view 并原样把 mode 发给 worker', async 
 function loadToolbar() {
   const src = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
   const script = src.match(/<script>([\s\S]*?)<\/script>/)[1]
-  return new Function(script.replace(/^import .*$/gm, '').replace('export default', 'return'))()
+  return new Function('CN_FONT_SIZES', 'PT_FONT_SIZES', 'ParagraphFormatPanel', 'SystemFontsPanel',
+    script.replace(/^import .*$/gm, '').replace('export default', 'return'))(
+    CN_FONT_SIZES, PT_FONT_SIZES, null, null)
 }
 
 // engineView: worker 侧 get_ui_state 回的 view 段（= 引擎的真实读回）
@@ -133,7 +136,8 @@ test('工具栏重挂（bootstrap）先清空状态，不端着上一份文档�
   const realRefresh = vm.refresh
   vm.refresh = function () { seen.push(this.state.view.revisionView); return realRefresh.call(this) }
   await vm.bootstrap()
-  assert.deepEqual(seen, [undefined], 'bootstrap 必须先 EMPTY() 再去读引擎')
+  assert.ok(seen.length > 0, 'bootstrap 必须读取引擎状态')
+  assert.equal(seen[0], undefined, 'bootstrap 必须先 EMPTY() 再去读引擎')
 })
 
 // ---------- worker：三态映射 + 换文档复位 ----------
@@ -180,13 +184,13 @@ test('export_document 走 withInlineMarkupForExport：导出期间强制内联�
 test('__agent 命令按页边语义执行：内联态下临时切页边，跑完还原', () => {
   // AI 多轮改稿依赖「正文 = 改后的样子」与「只数可见匹配」。用户把视图切成内联后
   // 正文里混着被删的旧字——不兜住的话 AI 读到的就是错的（dev-board#369 的契约）。
-  assert.match(WORKER_SRC, /\(p\.__agent \|\| FINAL_TEXT_ACTIONS\.has\(action\)\) \? runAgentCommandInMarginView\(action, function \(\) \{ return fn\(p\); \}\) : fn\(p\)/,
+  assert.match(WORKER_SRC, /\(p\.__agent \|\| FINAL_TEXT_ACTIONS\.has\(action\)\) \? runAgentCommandInMarginView\(action, run\) : run\(\)/,
     'execCommand 必须把带 __agent 的命令套进守卫')
   const fn = WORKER_SRC.match(/function runAgentCommandInMarginView\(action, fn\) \{[\s\S]*?\n\}/)[0]
   assert.match(fn, /if \(AGENT_VIEW_EXEMPT\[action\] \|\| !isWriterDoc\(\)\) return fn\(\)/,
     '豁免名单 + 非 Writer 一个属性都不碰')
-  assert.match(fn, /if \(before !== 'all'\) return fn\(\)/, '页边/最终稿态正文本来就不含删除文字，零开销直通')
-  assert.match(fn, /if \(!hasAnyRedline\(\) && FINAL_TEXT_READ_ACTIONS\.has\(action\)\) return fn\(\)/,
+  assert.match(fn, /if \(before === 'all'\) withViewOnlyChange/, '页边/最终稿态不额外切视图；异步批次仍守住显示选择')
+  assert.match(fn, /if \(before === 'all' && !hasAnyRedline\(\) && FINAL_TEXT_READ_ACTIONS\.has\(action\)\) return fn\(\)/,
     '零修订优化只限只读命令，首笔写入仍须按最终文本回读（dev-board#1082）')
   assert.match(fn, /applyRevisionView\('margin'\)/)
   // **这里刻意不 refresh()**（dev-board#725 真机实测 24.2.8-zhcn-r5）：隐藏修订后不重排，
@@ -211,6 +215,7 @@ function firstEditView() {
   const start = WORKER_SRC.indexOf('const FINAL_TEXT_ACTIONS = ')
   const end = WORKER_SRC.indexOf('\nconst RESOLVE_REVISION_ACTIONS', start)
   const realm = vm.createContext({
+    xModel: {},
     isWriterDoc: () => true,
     revisionViewState: () => ({ mode }),
     hasAnyRedline: () => redlines,

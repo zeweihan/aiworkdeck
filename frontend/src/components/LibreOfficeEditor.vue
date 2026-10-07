@@ -1948,7 +1948,11 @@ export default {
       if (fid != null && String(fid) !== String(this.file.id)) return
       // 这里只接 AI 写入完成通知，不接人工补全的 modified，避免关闭它自己的资料提示。
       if (this._transportSend) this._transportSend({ __lo: 'lo-relay', type: 'writing-invalidate' })
-      if (this.reviewOpen) this.reviewRefreshKey++
+      if (this.reviewOpen) {
+        // 此次即时刷新已覆盖此前 modified；避免停笔计时器再重读同一批修订。
+        clearTimeout(this._reviewRefreshTimer)
+        this.reviewRefreshKey++
+      }
     },
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件

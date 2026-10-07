@@ -94,6 +94,38 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    void taskPlanningIsEarlyAndDoesNotRequireAStatusOnlyRoundInEitherLanguage() {
+        for (boolean english : new boolean[] {false, true}) {
+            when(appLanguageService.isEnglish()).thenReturn(english);
+            String system = assembleSystemText(activeDoc());
+            String planning = system.substring(system.indexOf("## Task List (`todo_write`)"),
+                    system.indexOf("## Clarification (`ask_user`"));
+            assertTrue(planning.contains(english ? "before detailed analysis" : "细读分析前"), planning);
+            assertTrue(planning.contains(english ? "do not work out every edit" : "不要先推演全部修改"), planning);
+            assertTrue(planning.contains(english ? "same response" : "同一次响应"), planning);
+            assertTrue(planning.contains(english ? "already known and needs no intermediate result"
+                    : "下一步已确定且不依赖中间结果"), planning);
+            assertTrue(planning.contains(english ? "do not skip source checks or final readback"
+                    : "不得省略依据核验或最终回读"), planning);
+            assertTrue(planning.contains(english ? "clarification is needed" : "需要澄清"), planning);
+            assertTrue(planning.contains("1-2"), planning);
+        }
+    }
+
+    @Test
+    void todoToolSchemaPreservesTheSameEarlyPlanningAndSafeBatchingContract() throws Exception {
+        String description = dev.langchain4j.agent.tool.ToolSpecifications.toolSpecificationFrom(
+                com.checkba.service.ai.tools.TodoTools.class.getMethod("todo_write", String.class)).description();
+        assertTrue(description.contains("细读分析前"), description);
+        assertTrue(description.contains("不要先推演全部修改"), description);
+        assertTrue(description.contains("下一步已确定且不依赖中间结果"), description);
+        assertTrue(description.contains("同一次响应"), description);
+        assertTrue(description.contains("实际完成"), description);
+        assertTrue(description.contains("不得省略依据核验或最终回读"), description);
+        assertTrue(description.contains("需要澄清"), description);
+    }
+
+    @Test
     void activeDocumentDoesNotBlockReadingRelatedProjectEvidenceInEitherLanguage() {
         for (boolean english : new boolean[] {false, true}) {
             when(appLanguageService.isEnglish()).thenReturn(english);

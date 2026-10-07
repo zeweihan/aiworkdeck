@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { attachImeOverlay } from '../../src/composables/zetaOfficeImeOverlay.js'
+import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -13,7 +14,9 @@ function component(path, dependencies = {}) {
     .replace(/^import .*$/gm, '').replace(/export default \{/, 'return {')
   return new Function(...Object.keys(dependencies), body)(...Object.values(dependencies))
 }
-const toolbarComponent = component('../../src/components/EditorToolbar.vue')
+const toolbarComponent = component('../../src/components/EditorToolbar.vue', {
+  CN_FONT_SIZES, PT_FONT_SIZES, ParagraphFormatPanel: null, SystemFontsPanel: null,
+})
 
 function hostFixture(t, execute) {
   const dom = new JSDOM('<button></button><div class="toolbar"><div class="etb-form"><textarea></textarea></div></div>', { pretendToBeVisual: true })

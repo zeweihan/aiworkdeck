@@ -4172,7 +4172,13 @@ const EXEC = {
     const el = paraAt(idx);
     if (!el) return { success: false, message: 'paragraph index out of range: ' + idx };
     selectVisibly(el); // 拟人：先跳到目标段落
-    if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
+    // One paragraph may contain dozens of minimal edits. Batch their layout and
+    // modified notifications just like find_replace; otherwise each fragment
+    // reflows all earlier tracked changes, making successive paragraphs stall.
+    lockModel();
+    try {
+      if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
+    } finally { unlockModel(); }
     const after = el.getString().slice(0, 200);
     invalidateParaIndex();
     return { success: true, index: idx, paragraphAfterEdit: after };
@@ -4719,6 +4725,15 @@ const EXEC = {
       const mode = String(p.mode);
       if (REVISION_VIEWS.indexOf(mode) < 0) {
         return tableFail('未知的修订显示方式: ' + mode + '（可选 ' + REVISION_VIEWS.join(' / ') + '）');
+      }
+      // A yielded AI batch still owns its temporary final-text view. Apply the
+      // user's selection after it restores, not halfway through its edits.
+      if (agentViewPending) {
+        const model = xModel;
+        const apply = function () {
+          return model === xModel ? EXEC.set_revision_view(p) : tableFail('文档已切换，请重新选择显示方式');
+        };
+        return agentViewPending.then(apply, apply);
       }
       if (mode === 'balloons' && !supportsReviewGeometry()) return tableFail('当前编辑器引擎不支持批注框修订，请更新编辑器后使用。');
       if (mode === 'balloons' && !installReviewCommentInterceptor(ctrl)) return tableFail('批注输入通道不可用，请重新打开文档后重试。');
@@ -9229,13 +9244,13 @@ const EXEC = {
 // WHY：AI 多轮改稿依赖「正文 = 改后的样子」——get_document_text / get_paragraph 读到的
 // 不能混进被删的旧字，find_text_locations / replace_nth_match 的计数只能数可见匹配
 // （dev-board#369）。内联「全部修订」是默认显示态，所以这条守卫是常态路径：执行前
-// 临时切到一种不含删除文字的态 + refresh，执行完切回去 + refresh。
-// 最终稿态与页边态的正文本来就不含删除文字，直接放行，零开销。
+// 临时切到一种不含删除文字的态，执行完切回去；不强制全文重排。
+// 最终稿态与页边态的正文本来就不含删除文字，不需要切视图。
 // 非 Writer 文档一个属性都不碰（Impress 上问 Writer 专属属性会把引擎搞坏，
 // 见 withInlineMarkupForExport 头上的注释）。
 // 原语可能是 async（分批的 find_replace / apply_house_style），恢复必须等它 settle；
-// 分批命令在批间会让出事件循环，那期间插进来的别的命令会看到页边语义——与「批间允许
-// 别的命令插进来」这条既有约定同源，不额外收窄。
+// 批间仍让出事件循环，但后续最终文本命令及用户显示切换等待当前批次完成，
+// 避免中途改变段落成员，或收尾恢复覆盖用户的新选择。
 const FINAL_TEXT_ACTIONS = new Set(['get_completion_context', 'accept_completion', 'insert_completion_content', 'capture_writing_context', 'accept_writing_suggestion', 'get_review_context', 'goto_review_range', 'apply_review_edit']);
 // Only known readers may skip the view guard on a clean document. A write can
 // create its first deletion and then read paragraphAfterEdit in the same command.
@@ -9248,16 +9263,23 @@ const FINAL_TEXT_READ_ACTIONS = new Set([
   'list_styles', 'list_fonts', 'list_revisions', 'list_comments', 'var_list', 'debug_revisions', 'probe_modules',
 ]);
 const AGENT_VIEW_EXEMPT = { set_revision_view: 1, export_document: 1, load_document: 1 };
+let agentViewPending = null;
 function runAgentCommandInMarginView(action, fn) {
   if (AGENT_VIEW_EXEMPT[action] || !isWriterDoc()) return fn();
+  const model = xModel;
+  if (agentViewPending) {
+    const resume = function () {
+      return model === xModel ? runAgentCommandInMarginView(action, fn) : tableFail('文档已切换，未执行排队的编辑命令');
+    };
+    return agentViewPending.then(resume, resume);
+  }
   const before = revisionViewState().mode;
-  if (before !== 'all') return fn();
   // 只读命令遇到零修订时，最终文本就是当前文本；写命令可能在这次执行中产生
   // 第一条删除修订，不能跳过，否则验证回读仍含旧字（dev-board#1082）。这一趟
   // 往返并不便宜：两次模型属性写 + 两次 invalidateParaIndex（下一
   // 次读要把整份段落索引重新枚举一遍），还会把 Writer 缓存的光标屏幕坐标留在
   // 另一个视图的几何里（dev-board#725）。一次 O(1) 的枚举探问就能整段跳过。
-  if (!hasAnyRedline() && FINAL_TEXT_READ_ACTIONS.has(action)) return fn();
+  if (before === 'all' && !hasAnyRedline() && FINAL_TEXT_READ_ACTIONS.has(action)) return fn();
   // 通向「正文 = 改后的样子」有两条路，读回的正文 / 段号 / 偏移完全一致：
   //   隐藏修订  RedlineDisplayType   → **模型**属性
   //   页边      ShowChangesInMargin  → **控制器的视图设置**
@@ -9273,10 +9295,11 @@ function runAgentCommandInMarginView(action, fn) {
   // 文档重排，这条守卫在默认内联视图下是 35ms/180ms 节拍的常态路径，一读两排。
   // 导出那条路（withInlineMarkupForExport）仍然必须 refresh——那里消费的是版面，
   // 不是文本，别把这两处当同一回事。
-  withViewOnlyChange(function () {
+  if (before === 'all') withViewOnlyChange(function () {
     if (applyRevisionView('final').mode === 'all') applyRevisionView('margin');
   });
   const restore = function () {
+    if (before !== 'all' || model !== xModel) return;
     withViewOnlyChange(function () { applyRevisionView(before); });
     // Writer 把光标的屏幕坐标缓存着，只在下一次**读正文**时按当时的视图几何重算。
     // 这条命令最后一次读正文发生在最终文本视图里，所以不在这儿补一次读，光标就
@@ -9289,7 +9312,10 @@ function runAgentCommandInMarginView(action, fn) {
   try { out = fn(); }
   catch (e) { restore(); throw e; }
   if (out && typeof out.then === 'function') {
-    return out.then(function (r) { restore(); return r; }, function (e) { restore(); throw e; });
+    const pending = out.then(function (r) { restore(); return r; }, function (e) { restore(); throw e; })
+      .finally(function () { if (agentViewPending === pending) agentViewPending = null; });
+    agentViewPending = pending;
+    return pending;
   }
   restore();
   return out;
@@ -9378,11 +9404,17 @@ function execCommand(reqId, action, params) {
     p.__reqId = reqId; // 分批命令发 progress / 查 cancel 用
     // 修订署名切换：AI 命令（宿主打 __agent 标记）→ AI WorkDeck；其余（IME 输入
     // 等用户本人操作）→ 用户名。失败不阻断命令本身（降级为引擎默认作者）。
-    try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
-    catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
+    const run = function () {
+      if (CANCELLED[reqId]) return tableFail('操作已取消');
+      // A final-text command may have waited behind another batch. Assign its
+      // author at execution time, not while that other command is still editing.
+      try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
+      catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
+      return fn(p);
+    };
     result = fn
-      ? (RESOLVE_REVISION_ACTIONS.has(action) ? runRevisionResolution(function () { return fn(p); }, p, action) : (p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, function () { return fn(p); }) : fn(p))
+      ? (RESOLVE_REVISION_ACTIONS.has(action) ? runRevisionResolution(run, p, action) : (p.__agent || FINAL_TEXT_ACTIONS.has(action)) ? runAgentCommandInMarginView(action, run) : run())
       : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };

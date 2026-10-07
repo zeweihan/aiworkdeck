@@ -7,6 +7,12 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 职责边界：编辑器内核与宿主集成。AI 发编辑指令的链路属 ai-doc-bridge 领域。引擎 = LibreOffice 24.2.8 自建 zh-CN 版（LO core 分支 distro/allotropia/zeta-24-2）。
 
+## AI 逐段修订与显示切换（dev-board#1131/#1132，2026-10-07）
+
+`modify_paragraph` 的字符级差异须在既有 `lockModel/unlockModel` 内一次落完，并用 `finally` 解锁；否则每个差异片段触发布局及 JS 修改监听器，累计修订越多越慢。不得以整段替换或丢弃修订换取提速。异步最终文本命令由 `agentViewPending` 串行等待；显式 `set_revision_view` 在批次结束后执行，不能中途改变最终正文语义，也不能被旧显示态恢复覆盖。命令署名在真正执行的闭包内设置，排队时不改变在飞命令的作者。
+
+宿主同文件 AI 完成的即时审阅刷新取消此前已覆盖的 modified 停笔计时器；后续真实编辑仍重新排刷新。回归 `test:lowa-paragraph-performance` 用真实引擎核对 60 段合成正文中 24 段修改、批注框切换、DOCX 原稿/目标稿双向还原及重开续改；`async-view-switch.test.mjs` 覆盖全部初始显示态、异常、重叠批次及排队署名。不得把合成引擎测试称为已安装客户端升级后的用户原稿复测。
+
 ## 关键文件
 
 **引擎构建与分发**
