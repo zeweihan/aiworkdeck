@@ -33,7 +33,7 @@ export const DOC_READONLY_ACTIONS = new Set([
   'select_paragraph', 'set_selection', 'collapse_selection', 'move_cursor', 'clear_anchors',
   // 显示 / 外观 / 宿主自发的存取，都不改内容
   'export_document', 'load_document', 'set_zoom', 'set_app_theme', 'set_chrome',
-  'set_track_changes', 'set_revision_view',
+  'set_track_changes', 'set_revision_view', 'set_view_options',
 ])
 
 export function isDocMutatingAction(action) {

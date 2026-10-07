@@ -93,6 +93,32 @@ class BuiltinSkillsTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"lowa,doc_get_document_text,office_get_text", "office,office_get_text,doc_get_document_text"})
+    void tencentMeetingKeepsEditingToolsForTheCurrentHost(String capability, String readTool, String otherHostTool) {
+        SkillRouter router = new SkillRouter(registry, new SkillProperties(),
+                org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class), null);
+        router.activateForTurn("tmeet", "tmeet-run", "腾讯会议纪要", null);
+        assertEquals("tencent-meeting", router.activeSkill("tmeet-run").orElseThrow().getId());
+        ClientCapabilityService capabilities = new ClientCapabilityService();
+        capabilities.record("tmeet", capability, "word");
+        List<ToolSpecification> hosted = realToolNames.stream()
+                .filter(name -> capabilities.isToolVisible(name, "tmeet"))
+                .map(name -> ToolSpecification.builder().name(name).description(name).build()).toList();
+        Set<String> visible = router.visibleTools("tmeet-run", hosted).stream()
+                .map(ToolSpecification::name).collect(java.util.stream.Collectors.toSet());
+
+        List<String> editingTools = "lowa".equals(capability)
+                ? List.of(readTool, "doc_find_text", "doc_find_replace", "doc_insert_at_cursor", "doc_insert_table")
+                : List.of(readTool, "office_search", "office_replace_text", "office_insert_text", "office_insert_table");
+        assertTrue(visible.containsAll(editingTools), visible.toString());
+        assertTrue(visible.containsAll(List.of("tmeet_list_meetings", "tmeet_get_transcript", "task_create", "write_docx")),
+                visible.toString());
+        assertFalse(visible.contains(otherHostTool), visible.toString());
+        assertTrue(realToolNames.contains("doc_start_stream"));
+        assertFalse(visible.contains("doc_start_stream"), "Tencent Meeting must retain its restricted tool policy");
+    }
+
     @Test
     void contractReviewChecksDraftFactsWithoutRewritingFutureObligationsAsUnverified() {
         var skill = registry.getSkill("contract-review").orElseThrow();
@@ -207,6 +233,7 @@ class BuiltinSkillsTest {
                 "meeting-recorder", SkillDefinition.ToolPolicy.RESTRICT,
                 "plugin-dev", SkillDefinition.ToolPolicy.RESTRICT,
                 "shareholder-meeting-verification", SkillDefinition.ToolPolicy.RESTRICT,
+                "tencent-meeting", SkillDefinition.ToolPolicy.RESTRICT,
                 "desensitize", SkillDefinition.ToolPolicy.PASSTHROUGH,
                 "text-to-speech", SkillDefinition.ToolPolicy.PASSTHROUGH));
         Map<String, SkillDefinition.ToolPolicy> actual = new TreeMap<>();

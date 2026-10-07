@@ -323,7 +323,22 @@ function relayCursorContext(meta) {
 }
 
 let engineFailed = false
-startEditorEndpoint({
+// 本机字体（仅桌面：desktop/main/zetaoffice-server.js 的 /sysfonts/enabled.json，
+// 清单由用户在「编辑器字体」面板勾选）。短超时、任何失败都按「没有本机字体」处理，
+// 绝不明显拖慢启动；Web 版没有这个路由（404）同样落空。
+const SYSTEM_FONTS_TIMEOUT_MS = 1500
+function loadSystemFonts() {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const timer = setTimeout(() => { try { ctrl && ctrl.abort() } catch (e) { /* ignore */ } }, SYSTEM_FONTS_TIMEOUT_MS)
+  return fetch('./sysfonts/enabled.json', { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
+    .then((r) => (r.ok ? r.json() : { fonts: [] }))
+    .then((j) => (Array.isArray(j && j.fonts) ? j.fonts : [])
+      .filter((f) => f && typeof f.url === 'string' && Array.isArray(f.families) && f.families.length)
+      .map((f) => ({ url: f.url, family: f.families[0], systemFamilies: f.families, fileName: f.file })))
+    .catch(() => [])
+    .finally(() => clearTimeout(timer))
+}
+loadSystemFonts().then((systemFonts) => startEditorEndpoint({
   canvas: document.getElementById('qtcanvas'),
   transport: hostTransport,
   onWorkerMessage: relayModified,
@@ -349,6 +364,9 @@ startEditorEndpoint({
     { url: './cjk-serif.otf', family: 'Noto Serif SC', category: 'serif' },
     { url: './cjk-kai.ttf', family: '霞鹜文楷', category: 'kai' },
     { url: './cjk-fangsong.ttf', family: '朱雀仿宋（预览测试版）', category: 'fangsong' },
+    // 本机字体排在随包字体之后（无 category，不参与别名目标；其族名会让 boot
+    // 跳过同名别名规则，真字体不被 assign 劫持到随包字体上）。
+    ...systemFonts,
   ],
   // Deterministic Chinese UI regardless of the browser/Electron language (the
   // engine follows navigator.languages otherwise — v0.3.1 shipped English on an
@@ -363,7 +381,7 @@ startEditorEndpoint({
     // （引擎下载/字体/线程/文档就绪）。宿主在 dom-ready 前就订阅了 lo-relay。
     try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-log', msg: String(m) }) } catch (e) { /* ignore */ }
   },
-}).then((endpoint) => {
+})).then((endpoint) => {
   if (engineFailed) { endpoint.dispose(); return }
   let semanticWriting = null
   reviewBalloons = attachReviewBalloons({ canvas: document.getElementById('qtcanvas'), execute: (a,p) => endpoint.executor.executeCommand(a,p), transport: hostTransport, locale: q.get('uilang') || 'zh' })
@@ -404,14 +422,17 @@ startEditorEndpoint({
   try {
     overlay = attachImeOverlay({
       canvas: document.getElementById('qtcanvas'),
-      commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text }),
+      // replaceSelection：用户手打 = Word 语义，选中的文字被新输入覆盖（删掉选区、
+      // 在原位置落字）。不带这个标记的 insert_at_cursor 仍是「塌到选区末尾追加」——
+      // AI 与插件管线依赖那条语义（先 select 再 insert_at_cursor 表示「插在后面」）。
+      commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text, replaceSelection: true }),
       getCursorRaw: () => endpoint.executor.executeCommand('get_cursor_rect', {}),
       // Control keys: the overlay swallows keystrokes (it IS the focused input),
       // so Enter/Backspace/arrows must be forwarded to the worker explicitly.
       // The worker actions (insert_paragraph/delete_backward/move_cursor) have
       // existed since Track C and are whitelisted — this wiring was the missing
       // link (v0.3.1 real-machine report: Backspace did nothing).
-      onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
+      onEnter: () => endpoint.executor.executeCommand('insert_paragraph', { replaceSelection: true }),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
       onCursorMoved: (event) => { relaySelection(); writingAssistance?.cursorMoved(event); semanticWriting?.cursorMoved(event); inlineReview?.cursorMoved() },

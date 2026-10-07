@@ -602,6 +602,32 @@ function insertTextAtCursor(vc, text) {
   }
 }
 
+// 用户手打覆盖选区（Word 语义）：选中一段再敲字 = 选区被删、新字落在原位置。
+// 旧实现一律 collapseToEnd 再插，选中的字原样留着、新字跟在后面（用户实测反馈）。
+// 只在 replace=true（IME 覆盖层的手打 / 回车 / Tab）时生效；AI 管线不带这个标记，
+// 「先选中再 insert_at_cursor = 插在后面」的契约不变。
+// 删除走 vc.setString('')：修订开着时记成删除修订（被删的字仍在正文流里，光标
+// collapseToEnd 落到删除段之后再插），关着时真删——与 replace_selection 的非最小
+// 修订分支同一条路。跨表格这类 setString 抛异常的选区退回引擎原生 .uno:Delete。
+// 删 + 插包在同一个撤销组里：一次 Cmd+Z 把选区原样找回来，而不是先撤掉新字、
+// 再撤一次才恢复被删的字。
+function typeOverSelection(vc, replace, title, insert) {
+  let sel = '';
+  if (replace) { try { sel = vc.getString() || ''; } catch (e) { sel = ''; } }
+  if (!sel) return insert();
+  let um = null;
+  try { um = xModel.getUndoManager(); um.enterUndoContext(title || '输入'); } catch (e) { um = null; }
+  try {
+    try { vc.setString(''); } catch (e) { dispatchUno('.uno:Delete'); }
+    vc.collapseToEnd();
+    const out = insert();
+    if (out && typeof out === 'object') out.replacedSelection = sel.length;
+    return out;
+  } finally {
+    if (um) { try { um.leaveUndoContext(); } catch (e) {} }
+  }
+}
+
 // ---- 最小修订颗粒度 (minimal redline granularity) ---------------------------
 // range.setString(newText) under RecordChanges marks the WHOLE range deleted
 // and the WHOLE new text inserted — so a one-char edit in a clause reads as
@@ -3935,6 +3961,9 @@ const EXEC = {
   // [verified] insert at the view cursor (append, not select) — see testInsertText.
   // 带 markdown 标记的文本走剥离转换（**→真粗体、行首 # 剥掉），字体沿用现场格式；
   // 纯文本走原路径不动。
+  // replaceSelection:true 是**用户手打**的语义（IME 覆盖层提交时带）：有选区就先删掉
+  // 选区、在原位置落字（Word 行为）。不带时仍是「塌到选区末尾追加」——AI / 插件管线
+  // 先 select 再 insert_at_cursor 表示「插在后面」，那条契约不能被改掉。
   insert_at_cursor(p) {
     if (nativeKeyDoc()) {
       const text = String(p.text || '');
@@ -3952,12 +3981,14 @@ const EXEC = {
       return Object.assign(postNativeKeys(keys), { inserted: text });
     }
     const vc = ctrl.getViewCursor();
-    vc.collapseToEnd();
     const text = String(p.text || '');
-    if (MD_MARKER_RE.test(text)) insertInlineStyled(vc, text);
-    else insertTextAtCursor(vc, text);
-    vc.collapseToEnd();
-    return Object.assign({ success: true, inserted: text }, verifySnapshot());
+    return typeOverSelection(vc, !!p.replaceSelection, '输入', function () {
+      vc.collapseToEnd();
+      if (MD_MARKER_RE.test(text)) insertInlineStyled(vc, text);
+      else insertTextAtCursor(vc, text);
+      vc.collapseToEnd();
+      return Object.assign({ success: true, inserted: text }, verifySnapshot());
+    });
   },
   // [verified] replace selection if any, else insert at cursor. '\n' in the new
   // text becomes a paragraph break (insertTextAtCursor).
@@ -4254,14 +4285,17 @@ const EXEC = {
   // [verified-extend] insert a paragraph break at the view cursor (Enter key in
   // the IME overlay routes here — the overlay's single-line <input> can't make a
   // newline itself). Append, leave cursor collapsed after the break.
-  insert_paragraph() {
+  // replaceSelection:true（覆盖层的回车）= Word 语义：选区先被删掉再分段。
+  insert_paragraph(p) {
     if (nativeKeyDoc()) return postNativeKeys([{ key: 'RETURN', ch: '\r' }]);
     const vc = ctrl.getViewCursor();
-    vc.collapseToEnd();
-    const xText = vc.getText();   // 同 insertTextAtCursor：单元格里必须用光标自己的 XText
-    xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
-    vc.collapseToEnd();
-    return { success: true };
+    return typeOverSelection(vc, !!(p && p.replaceSelection), '输入', function () {
+      vc.collapseToEnd();
+      const xText = vc.getText();   // 同 insertTextAtCursor：单元格里必须用光标自己的 XText
+      xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+      vc.collapseToEnd();
+      return { success: true };
+    });
   },
   // [spike] move the view cursor (arrow keys in the IME overlay route here — the
   // overlay's single-line <input> would otherwise navigate the empty input, not
@@ -4315,10 +4349,13 @@ const EXEC = {
     let cell = null;
     try { cell = vc.getPropertyValue('Cell'); } catch (e) {}
     if (!cell) {
-      vc.collapseToEnd();
-      insertTextAtCursor(vc, '\t');
-      vc.collapseToEnd();
-      return Object.assign({ success: true, inTable: false, inserted: '\t' }, verifySnapshot());
+      // tab_key 只有覆盖层（用户手打）会发，按 Word 语义覆盖选区。
+      return typeOverSelection(vc, true, '输入', function () {
+        vc.collapseToEnd();
+        insertTextAtCursor(vc, '\t');
+        vc.collapseToEnd();
+        return Object.assign({ success: true, inTable: false, inserted: '\t' }, verifySnapshot());
+      });
     }
     dispatchUno(shift ? '.uno:JumpToPrevCell' : '.uno:JumpToNextCell');
     return { success: true, inTable: true, shift: shift, cell: viewCursorCellName() };
@@ -4489,6 +4526,10 @@ const EXEC = {
     out.paragraph = pa;
     const view = {};
     try { view.zoom = ctrl.getViewSettings().getPropertyValue('ZoomValue'); } catch (e) {}
+    // 格式标记 / 标尺的真实读回（set_view_options 写的就是这两个 ViewSettings 属性），
+    // 工具栏按引擎状态高亮，不再本地记一份猜测（旧实现用 .uno:ControlCodes 切换语义）。
+    try { view.formattingMarks = !!ctrl.getViewSettings().getPropertyValue('ShowNonprintingCharacters'); } catch (e) {}
+    try { view.ruler = !!ctrl.getViewSettings().getPropertyValue('ShowHoriRuler'); } catch (e) {}
     try { view.recordChanges = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
     // 修订显示三态（dev-board#368）。工具栏的当前态读的就是这里——真实读回引擎，
     // 不给宿主留本地猜测的余地。Calc/Impress 没有修订机制，字段整个不给。
@@ -4630,6 +4671,29 @@ const EXEC = {
       }
       out.applied.rulers = r;
     }
+    return out;
+  },
+  // 纯视图开关（自建工具栏「¶ 格式标记」「标尺」，默认都开、开关落在用户偏好里）。
+  // 直写 ViewSettings 而不是派发 .uno:ControlCodes / .uno:Ruler：后两者是切换语义，
+  // 宿主想设成确定状态就得先读再判，而 load_document 换文档后视图设置会回到引擎
+  // 默认值，宿主要能无条件「设成 X」。不改一个字节的内容。
+  // {formattingMarks?, ruler?}；都不带 = 只读回。ruler 同时管横竖两条（ShowRulers 是总闸）。
+  set_view_options(p) {
+    const req = p || {};
+    let vs = null;
+    try { vs = ctrl.getViewSettings(); } catch (e) { return { success: false, message: 'no view settings: ' + errStr(e) }; }
+    if (req.formattingMarks != null) {
+      try { vs.setPropertyValue('ShowNonprintingCharacters', !!req.formattingMarks); } catch (e) {}
+    }
+    if (req.ruler != null) {
+      for (const k of ['ShowRulers', 'ShowHoriRuler', 'ShowVertRuler']) {
+        try { vs.setPropertyValue(k, !!req.ruler); } catch (e) {}
+      }
+    }
+    const out = { success: true };
+    try { out.formattingMarks = !!vs.getPropertyValue('ShowNonprintingCharacters'); } catch (e) {}
+    try { out.ruler = !!vs.getPropertyValue('ShowHoriRuler'); } catch (e) {}
+    try { out.verticalRuler = !!vs.getPropertyValue('ShowVertRuler'); } catch (e) {}
     return out;
   },
   // 修订开关（工具栏的「修订」按钮）。RecordChanges 是文档属性，直接写比派发
@@ -5058,9 +5122,16 @@ const EXEC = {
   // [格式] character formatting on the CURRENT selection (select first, then
   // format — same order a human works in). Any subset of the params applies;
   // booleans false/'none' explicitly clear. CJK-safe via Asian/Complex siblings.
+  // atCursor:true（自建工具栏传）= Word 语义：没有选区时把格式设在光标处，之后在这里
+  // 敲的字沿用新格式。真引擎实证（24.2.8-zhcn-r5）：塌陷视图光标上 setPropertyValue
+  // 会在光标处留一个空提示（empty hint），紧接着的 insertString（IME 提交走的就是它）
+  // 把它撑开，新字即是新字号/字体；`get_ui_state` 读回的也是新值，工具栏显示跟得上。
+  // AI 管线不传 atCursor，没选区照旧明确报错——否则模型会以为「格式已设」而文档上
+  // 什么都看不见。
   format_selection(p) {
     const vc = ctrl.getViewCursor();
-    if ((vc.getString() || '').length === 0) return { success: false, message: 'nothing selected — select first, then format' };
+    const collapsed = (vc.getString() || '').length === 0;
+    if (collapsed && !p.atCursor) return { success: false, message: 'nothing selected — select first, then format' };
     const applied = {};
     if (p.bold != null) { setCharProp(vc, 'CharWeight', p.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); applied.bold = !!p.bold; }
     if (p.italic != null) { setCharProp(vc, 'CharPosture', p.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); applied.italic = !!p.italic; }
@@ -5081,7 +5152,7 @@ const EXEC = {
     // 中文字体单独设（fontName 已把西文/中文/复杂文种三项一起设成同一字体；中西文分设时后设中文）
     if (p.fontNameAsian != null) { vc.setPropertyValue('CharFontNameAsian', String(p.fontNameAsian)); applied.fontNameAsian = String(p.fontNameAsian); }
     if (Object.keys(applied).length === 0) return { success: false, message: 'no format params given' };
-    return { success: true, applied: applied, selectedText: vc.getString().slice(0, 100) };
+    return { success: true, applied: applied, selectedText: vc.getString().slice(0, 100), atCursor: collapsed };
   },
   // [格式] paragraph-level formatting on the selection's paragraph(s): alignment,
   // paragraph style, line spacing, space before/after, indents. headingLevel 1-9
