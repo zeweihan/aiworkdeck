@@ -595,6 +595,19 @@ class MobileRelayClientHttpTest {
     }
 
     @Test
+    void transferListReportsTotalBeyondUploadLimitWithoutReadingFileBytes() throws Exception {
+        addNode(null, "文件夹", true);
+        for (int i = 0; i < 2001; i++) addNode(null, "file-" + i + ".txt", false);
+        transferCommandsJson = "{\"code\":0,\"commands\":[{\"id\":1,\"kind\":\"LIST\",\"projectKey\":\"42\"}],\"hot\":false}";
+        service().pollInbox();
+        assertEquals(1, transferFilesBodies.size());
+        var body = new com.fasterxml.jackson.databind.ObjectMapper().readTree(transferFilesBodies.get(0));
+        assertEquals(2000, body.path("files").size());
+        assertEquals(2001, body.path("totalCount").asInt());
+        verify(storageService, never()).load(anyString());
+    }
+
+    @Test
     @DisplayName("传输命令 PULL：本机文件流式回传，multipart 请求体含文件字节与 filename")
     void transferPullCommandUploadsFileBytes() {
         ProjectFile file = addNode(null, "合同.docx", false);

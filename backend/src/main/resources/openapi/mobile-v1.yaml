@@ -70,6 +70,60 @@ components:
           description: |
             仅 kind=ALREADY_PAID / IDEMPOTENCY_CONFLICT 时出现：官网连同 409 一起回的既有商户订单号。
             这是「App 被杀、本地没存下单号」的恢复路径，客户端拿它调 /recharge/status 查单。
+    TransferFile:
+      type: object
+      required: [id, name, path, size]
+      properties:
+        id: { type: string, description: 桌面本地文件 id，只能连 deviceId/projectKey 使用 }
+        name: { type: string }
+        path: { type: string, description: 项目内相对展示路径，不是下载 URL }
+        size: { type: integer, format: int64 }
+    Transfer:
+      type: object
+      required: [id, kind, status, fileName, fileSize, credits, error, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        kind: { type: string, enum: [LIST, PULL, PUSH] }
+        status: { type: string, enum: [PENDING, STAGED, DONE, DELIVERED, FAILED, EXPIRED] }
+        fileName: { type: string, nullable: true }
+        fileSize: { type: integer, format: int64, nullable: true, description: STAGED 时为实际上传大小，优先于 LIST 时的估计值 }
+        credits: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+        createdAt: { type: string, nullable: true, description: ISO 本地时间，不含时区 }
+        files:
+          type: array
+          maxItems: 2000
+          items: { $ref: '#/components/schemas/TransferFile' }
+          description: 仅 LIST DONE 返回；不含文件夹，按 path 分组展示
+        count: { type: integer, minimum: 0, description: LIST DONE 返回的文件数量 }
+        totalCount:
+          type: integer
+          nullable: true
+          minimum: 0
+          description: 桌面报告的项目文件总数；旧桌面或旧记录达到 2000 条时未知，返回 null
+        truncated:
+          type: boolean
+          description: LIST DONE 清单不完整或旧桌面在 2000 条边界无法确认完整；客户端必须提示
+    TransferCreated:
+      type: object
+      required: [code, id]
+      properties:
+        code: { type: integer, enum: [0] }
+        id: { type: integer, format: int64 }
+        credits: { type: integer, nullable: true, description: PULL 返回，创建请求时已扣费 }
+    TransferQuote:
+      type: object
+      required: [code, credits, balanceCents]
+      properties:
+        code: { type: integer, enum: [0] }
+        credits: { type: integer }
+        balanceCents: { type: integer, format: int64, nullable: true }
+    TransferStatus:
+      type: object
+      required: [code, transfer]
+      properties:
+        code: { type: integer, enum: [0] }
+        transfer: { $ref: '#/components/schemas/Transfer' }
     RelayProject:
       type: object
       required: [deviceId, key, name]
@@ -589,3 +643,145 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/RechargeStatus'
                   - $ref: '#/components/schemas/Envelope'
+  /api/mobile/transfer/list:
+    post:
+      summary: 请求在线桌面返回项目文件清单（不扣费）
+      description: |
+        桌面心跳 180 秒内才接受新请求。requestId 为用户范围 UUID 幂等键；同一操作重试沿用，
+        不同项目、LIST/PULL 不得复用。成功只返回请求 id，轮询 GET /transfer/{id} 至 DONE。
+        LIST PENDING 10 分钟过期。清单最多 2000 条，必须展示截断提示，不可作为完整目录。
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, projectKey, requestId]
+              properties:
+                deviceId: { type: string }
+                projectKey: { type: string }
+                requestId: { type: string, format: uuid }
+      responses:
+        "200":
+          description: 请求已创建；未登录 code 4010；离线、参数等业务错误 code 1（无 kind）
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/TransferCreated' }
+                  - { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/transfer/{id}:
+    get:
+      summary: 查询传输请求状态及 LIST 结果
+      description: |
+        仅当前用户可读。LIST PENDING→DONE；PULL PENDING→STAGED→DELIVERED；
+        FAILED/EXPIRED 为失败终态，error 为可展示文案。PULL PENDING 24 小时、STAGED 7 天过期。
+        旧服务端可能没有 count/totalCount/truncated；缺失不证明清单完整。
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 成功返回 transfer；未登录或业务错误返回信封
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/TransferStatus' }
+                  - { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/transfer/quote:
+    get:
+      summary: 按文件大小查询传输报价和余额（不扣费）
+      description: 必须先展示报价供用户确认再发起 PULL；bytes 小于 1 时按 1 报价。
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: bytes, in: query, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 成功返回 credits 与 balanceCents；错误为 code 1/4010 信封，无 transfer 专属 kind
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/TransferQuote' }
+                  - { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/transfer/pull:
+    post:
+      summary: 用户确认报价后请求从在线桌面拉取单个文件（创建即扣费）
+      description: |
+        requestId 必须预先生成并持久化；网络重试沿用同一 UUID，不能复用于另一个操作。
+        单文件最大 200 MiB。等到 STAGED 后才下载；下载成功并本地可靠保存后 ACK。
+        实际上传大小会更新 fileSize，因此 STAGED 的 fileSize 为下载长度校验依据。
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, projectKey, remoteFileId, fileName, fileSize, requestId]
+              properties:
+                deviceId: { type: string }
+                projectKey: { type: string }
+                remoteFileId: { type: string }
+                fileName: { type: string }
+                fileSize: { type: integer, format: int64, minimum: 0, maximum: 209715200 }
+                requestId: { type: string, format: uuid }
+      responses:
+        "200":
+          description: 返回 id 与已扣 credits；离线、余额不足或未开通均为 code 1 信封
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/TransferCreated' }
+                  - { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/transfer/{id}/content:
+    get:
+      summary: 下载 STAGED 的 PULL/PUSH 原始字节
+      description: |
+        必须校验 2xx、application/octet-stream、Content-Length 及 STAGED fileSize；
+        错误可能仍是 HTTP 200 的 JSON 信封，不可保存为文件。不重定向，不提供内容哈希。
+        校验后原子落盘，再 ACK；失败保留 STAGED 供重试，不能 ACK 或假称下载成功。
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: octet-stream 成功裸字节，或 JSON 错误信封
+          headers:
+            Content-Length:
+              schema: { type: integer, format: int64 }
+              description: 成功时为文件字节长度
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/transfer/{id}/ack:
+    post:
+      summary: 本地可靠保存后确认已下载，立即删除云端 blob
+      description: PULL/PUSH STAGED→DELIVERED，重复 ACK 已 DELIVERED 幂等成功。删除不可逆，只有本地完整保存后才调用。
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 成功 code 0；未登录 code 4010；业务错误 code 1
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+  /api/mobile/transfer/{id}/cancel:
+    post:
+      summary: 取消尚在等待桌面响应的 LIST/PULL 请求
+      description: 只允许 PENDING；转 FAILED 并对已扣费 PULL 退款。STAGED 不可取消，下载失败应保留等待重试。重复取消返回业务错误。
+      parameters:
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 成功 code 0；未登录 code 4010；业务错误 code 1
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }

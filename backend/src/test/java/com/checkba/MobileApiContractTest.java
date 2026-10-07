@@ -11,6 +11,8 @@ import com.checkba.repository.AccountBindingRepository;
 import com.checkba.service.ai.tools.WebTools;
 import com.checkba.service.mobile.MobileBillingClient;
 import com.checkba.service.mobile.MobileBillingKind;
+import com.checkba.service.mobile.MobileRelayStoreService;
+import com.checkba.service.mobile.TransferBillingClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -41,6 +43,8 @@ import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 
 /**
  * API 契约测试：手机端调用的各端点，真实响应必须合 src/main/resources/openapi/mobile-v1.yaml。
@@ -72,6 +76,8 @@ class MobileApiContractTest {
     // 统一账户余额/充值（dev-board#425）的上游是官网内部记账口，契约测试只关心响应形状，
     // 用桩给出三个成功形状即可，不打网络
     @MockBean private MobileBillingClient billing;
+    @MockBean private TransferBillingClient transferBilling;
+    @Autowired private MobileRelayStoreService relayStore;
 
     @BeforeAll
     static void loadSpec() throws Exception {
@@ -148,6 +154,85 @@ class MobileApiContractTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.quotaBytes").isNumber())
                 .andExpect(openApi().isValid(validator));
+    }
+
+    @Test
+    void transferEndpointsMatchSpec() throws Exception {
+        String sid = register("contract_transfer_" + System.nanoTime());
+        Long userId = om.readTree(mvc.perform(get("/api/auth/me").header("X-Session-Id", sid))
+                .andReturn().getResponse().getContentAsString()).path("data").path("id").asLong();
+        relayStore.touchDevice(userId, "dev-transfer");
+        AccountBinding binding = new AccountBinding();
+        binding.setUserId(userId);
+        binding.setExternalAccountId("acct-transfer-" + userId);
+        binding.setCreatedAt(LocalDateTime.now());
+        accountBindingRepository.save(binding);
+        when(transferBilling.quote(anyString(), anyLong()))
+                .thenReturn(new TransferBillingClient.QuoteResult(1, 500L));
+        when(transferBilling.charge(anyString(), anyLong(), anyString(), anyString()))
+                .thenReturn(new TransferBillingClient.ChargeResult(1, "contract-ledger"));
+
+        mvc.perform(get("/api/mobile/transfer/quote").param("bytes", "4"))
+                .andExpect(jsonPath("$.code").value(4010)).andExpect(openApi().isValid(validator));
+        mvc.perform(get("/api/mobile/transfer/quote").param("bytes", "4").header("X-Session-Id", sid))
+                .andExpect(jsonPath("$.credits").value(1)).andExpect(openApi().isValid(validator));
+        String listBody = om.writeValueAsString(Map.of("deviceId", "dev-transfer", "projectKey", "42",
+                "requestId", java.util.UUID.randomUUID().toString()));
+        MvcResult listed = mvc.perform(post("/api/mobile/transfer/list").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON).content(listBody))
+                .andExpect(jsonPath("$.code").value(0)).andExpect(openApi().isValid(validator)).andReturn();
+        long listId = om.readTree(listed.getResponse().getContentAsString()).path("id").asLong();
+        mvc.perform(get("/api/mobile/transfer/" + listId).header("X-Session-Id", sid))
+                .andExpect(jsonPath("$.transfer.status").value("PENDING"))
+                .andExpect(openApi().isValid(validator));
+        mvc.perform(post("/api/mobile/transfer/" + listId + "/files").header("X-Session-Id", sid)
+                        .contentType(APPLICATION_JSON).content("""
+                                {"files":[{"id":"7","name":"memo.txt","path":"合同/memo.txt","size":4}],"totalCount":2001}"""))
+                .andExpect(jsonPath("$.code").value(0));
+        mvc.perform(get("/api/mobile/transfer/" + listId).header("X-Session-Id", sid))
+                .andExpect(jsonPath("$.transfer.status").value("DONE"))
+                .andExpect(jsonPath("$.transfer.count").value(1))
+                .andExpect(jsonPath("$.transfer.totalCount").value(2001))
+                .andExpect(jsonPath("$.transfer.truncated").value(true))
+                .andExpect(openApi().isValid(validator));
+
+        for (boolean cancel : new boolean[]{false, true}) {
+            String pullBody = om.writeValueAsString(Map.of("deviceId", "dev-transfer", "projectKey", "42",
+                    "remoteFileId", "7", "fileName", "memo.txt", "fileSize", 4,
+                    "requestId", java.util.UUID.randomUUID().toString()));
+            MvcResult pulled = mvc.perform(post("/api/mobile/transfer/pull").header("X-Session-Id", sid)
+                            .contentType(APPLICATION_JSON).content(pullBody))
+                    .andExpect(jsonPath("$.credits").value(1)).andExpect(openApi().isValid(validator)).andReturn();
+            long id = om.readTree(pulled.getResponse().getContentAsString()).path("id").asLong();
+            if (cancel) {
+                mvc.perform(post("/api/mobile/transfer/" + id + "/cancel").header("X-Session-Id", sid))
+                        .andExpect(jsonPath("$.code").value(0)).andExpect(openApi().isValid(validator));
+                mvc.perform(get("/api/mobile/transfer/" + id).header("X-Session-Id", sid))
+                        .andExpect(jsonPath("$.transfer.status").value("FAILED"))
+                        .andExpect(openApi().isValid(validator));
+                continue;
+            }
+            byte[] bytes = "MEMO".getBytes(StandardCharsets.UTF_8);
+            mvc.perform(multipart("/api/mobile/transfer/" + id + "/upload")
+                            .file(new MockMultipartFile("file", "memo.txt", "application/octet-stream", bytes))
+                            .header("X-Session-Id", sid)).andExpect(jsonPath("$.code").value(0));
+            mvc.perform(get("/api/mobile/transfer/" + id).header("X-Session-Id", sid))
+                    .andExpect(jsonPath("$.transfer.status").value("STAGED"))
+                    .andExpect(jsonPath("$.transfer.fileSize").value(4)).andExpect(openApi().isValid(validator));
+            mvc.perform(get("/api/mobile/transfer/" + id + "/content").header("X-Session-Id", sid))
+                    .andExpect(status().isOk()).andExpect(content().contentType("application/octet-stream"))
+                    .andExpect(header().string("Content-Length", "4")).andExpect(content().bytes(bytes))
+                    .andExpect(openApi().isValid(validator));
+            mvc.perform(post("/api/mobile/transfer/" + id + "/cancel").header("X-Session-Id", sid))
+                    .andExpect(jsonPath("$.code").value(1)).andExpect(openApi().isValid(validator));
+            mvc.perform(post("/api/mobile/transfer/" + id + "/ack").header("X-Session-Id", sid))
+                    .andExpect(jsonPath("$.code").value(0)).andExpect(openApi().isValid(validator));
+            mvc.perform(get("/api/mobile/transfer/" + id).header("X-Session-Id", sid))
+                    .andExpect(jsonPath("$.transfer.status").value("DELIVERED"))
+                    .andExpect(openApi().isValid(validator));
+            mvc.perform(get("/api/mobile/transfer/" + id + "/content").header("X-Session-Id", sid))
+                    .andExpect(jsonPath("$.code").value(1)).andExpect(openApi().isValid(validator));
+        }
     }
 
     @Test

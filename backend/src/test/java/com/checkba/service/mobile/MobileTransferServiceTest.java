@@ -264,6 +264,55 @@ class MobileTransferServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.cancel(USER_B, row.getId()));
     }
 
+    @Test
+    void listTruncationMetadataSurvivesDesktopAndServerLimits() {
+        relayStore.touchDevice(USER_A, "dev-a");
+        List<Map<String, Object>> files = java.util.stream.IntStream.range(0, 2001)
+                .mapToObj(i -> Map.<String, Object>of("id", "" + i, "name", "f" + i, "path", "f" + i, "size", 1L))
+                .toList();
+        for (boolean desktopCapped : new boolean[]{false, true}) {
+            MobileTransferRequest row = service.list(USER_A, "dev-a", "42", newRequestId());
+            service.submitFiles(USER_A, row.getId(), desktopCapped ? files.subList(0, 2000) : files,
+                    desktopCapped ? 2001 : null);
+            Map<?, ?> result = (Map<?, ?>) service.get(USER_A, row.getId()).get("transfer");
+            assertEquals(2000, result.get("count"));
+            assertEquals(2001, result.get("totalCount"));
+            assertEquals(true, result.get("truncated"));
+            assertEquals(2000, ((List<?>) result.get("files")).size());
+        }
+    }
+
+    @Test
+    void listLegacyBoundaryIsUnknownButExplicitExactBoundaryIsComplete() {
+        relayStore.touchDevice(USER_A, "dev-a");
+        List<Map<String, Object>> files = java.util.Collections.nCopies(2000,
+                Map.of("id", "1", "name", "f", "path", "f", "size", 1));
+        for (boolean hasTotal : new boolean[]{false, true}) {
+            MobileTransferRequest row = service.list(USER_A, "dev-a", "42", newRequestId());
+            service.submitFiles(USER_A, row.getId(), files, hasTotal ? 2000 : null);
+            Map<?, ?> result = (Map<?, ?>) service.get(USER_A, row.getId()).get("transfer");
+            assertEquals(2000, result.get("count"));
+            assertEquals(hasTotal ? 2000 : null, result.get("totalCount"));
+            assertEquals(!hasTotal, result.get("truncated"));
+        }
+    }
+
+    @Test
+    void listOldStoredArrayIsStillReadable() throws Exception {
+        relayStore.touchDevice(USER_A, "dev-a");
+        for (int count : new int[]{0, 1, 2000}) {
+            MobileTransferRequest row = service.list(USER_A, "dev-a", "42", newRequestId());
+            row.setStatus("DONE");
+            row.setPayloadJson(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
+                    java.util.Collections.nCopies(count, Map.of("id", "7", "name", "f", "path", "f", "size", 1))));
+            transferRepository.save(row);
+            Map<?, ?> result = (Map<?, ?>) service.get(USER_A, row.getId()).get("transfer");
+            assertEquals(count, result.get("count"));
+            assertEquals(count < 2000 ? count : null, result.get("totalCount"));
+            assertEquals(count == 2000, result.get("truncated"));
+        }
+    }
+
     // ==================== PUSH：属主校验 + 配额共池 ====================
 
     @Test

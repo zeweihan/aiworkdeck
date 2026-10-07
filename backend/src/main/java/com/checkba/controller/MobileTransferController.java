@@ -166,6 +166,7 @@ public class MobileTransferController {
     @Data
     public static class FilesRequest {
         private List<Map<String, Object>> files;
+        private Integer totalCount;
     }
 
     @PostMapping("/{id}/files")
@@ -173,7 +174,7 @@ public class MobileTransferController {
             @PathVariable("id") Long id,
             @RequestBody FilesRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        service.submitFiles(requireUser(sessionId), id, request.getFiles());
+        service.submitFiles(requireUser(sessionId), id, request.getFiles(), request.getTotalCount());
         return Map.of("code", 0);
     }
 
