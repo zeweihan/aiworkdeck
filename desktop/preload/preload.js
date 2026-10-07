@@ -249,6 +249,13 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   zetaoffice: {
     getEditor: () => ipcRenderer.invoke('checkba:zetaoffice-editor')
   },
+  // 编辑器本机字体（仅桌面）：list({refresh}) → { platform, fonts, enabledBytes,
+  // maxRecommendedBytes }；setEnabled(ids) → { ok, enabledBytes, count }。
+  // 保存后对新打开的文档生效（字体在引擎启动时注入）。
+  systemFonts: {
+    list: (opts) => ipcRenderer.invoke('checkba:system-fonts-list', opts),
+    setEnabled: (ids) => ipcRenderer.invoke('checkba:system-fonts-set', ids)
+  },
   // 内嵌 draw.io 编辑器（诉讼可视化出的 .drawio 是唯一可继续编辑的版本）。
   // getEditor() 返回 { available, kind, origin, url }；available=false 表示这次
   // 构建没烙 draw.io 资源，调用点应退回下载。

@@ -165,6 +165,37 @@ function startEditorServer() {
           }
           return proxyUrl(LOWA_CDN + rel, res)
         }
+        // 本机字体（desktop/main/system-fonts.js）：editor-main.js 启动前取启用清单，
+        // bootZetaOffice 逐个 fetch 注入 MEMFS。只出「当前启用集」里的 id——路由按 id
+        // 反查路径，绝不接受路径参数，任何未启用/未知 id 一律 404。
+        if (urlPath === '/sysfonts/enabled.json') {
+          let fonts = []
+          try {
+            fonts = require('./system-fonts').enabledFontsForEditor()
+              .map((f) => ({ url: '/sysfonts/f/' + f.id, families: f.families, file: f.file }))
+          } catch (e) { fonts = [] } // 扫描异常 = 没有本机字体，编辑器照常启动
+          res.writeHead(200, { 'Content-Type': TYPES['.json'], 'Cache-Control': 'no-store' })
+          res.end(JSON.stringify({ fonts }))
+          return
+        }
+        if (urlPath.startsWith('/sysfonts/f/')) {
+          const id = urlPath.slice('/sysfonts/f/'.length)
+          let fontPath = null
+          try { fontPath = require('./system-fonts').resolveEnabledFontPath(id) } catch (e) { fontPath = null }
+          const st = fontPath ? await stat(fontPath).catch(() => null) : null
+          if (!st || !st.isFile()) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found'); return }
+          const etag = '"' + st.size + '-' + Math.round(st.mtimeMs) + '"'
+          const cacheHeaders = { ETag: etag, 'Cache-Control': 'public, no-cache' }
+          if (req.headers['if-none-match'] === etag) { res.writeHead(304, cacheHeaders); res.end(); return }
+          const ext = path.extname(fontPath).toLowerCase()
+          res.writeHead(200, {
+            'Content-Type': TYPES[ext] || (ext === '.otc' ? 'font/collection' : 'application/octet-stream'),
+            'Content-Length': st.size,
+            ...cacheHeaders,
+          })
+          createReadStream(fontPath).on('error', () => { try { res.destroy() } catch (x) {} }).pipe(res)
+          return
+        }
         if (urlPath === '/') urlPath = '/editor.html'
         // 双根查找：overlay（补丁壳层）优先，内置兜底（增量更新设计 §4.3）
         let body = null

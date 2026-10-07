@@ -55,6 +55,8 @@ function toolbarHost(chromeHidden) {
   // 组件里本来就有，反过来会把桩顶掉、真去发 XMLHttpRequest）。
   const host = Object.assign({}, toolbar.methods, {
     chromeHidden,
+    viewPrefs: { formattingMarks: true, ruler: true },
+    $emit() {},
     async call(action, params) { sent.push([action, params]); return { success: true } },
   })
   return { host, sent }
@@ -63,16 +65,23 @@ function toolbarHost(chromeHidden) {
 test('藏着的时候重新落一次「全藏」', async () => {
   const { host, sent } = toolbarHost(true)
   await host.reapplyChrome()
-  assert.deepEqual(sent, [['set_chrome',
-    { menubar: false, statusbar: false, toolbars: false, rulers: false }]])
+  // 标尺不再跟 LO chrome 绑在一起：它归视图偏好（默认显示），重载后按偏好重设一遍
+  assert.deepEqual(sent, [
+    ['set_chrome', { menubar: false, statusbar: false, toolbars: false }],
+    ['set_view_options', { formattingMarks: true, ruler: true }],
+    ['get_ui_state', {}],
+  ])
   assert.equal(host.chromeHidden, true)
 })
 
 test('律师自己用逃生开关放出来的那一套，不许被一次重载又摁回去', async () => {
   const { host, sent } = toolbarHost(false)
   await host.reapplyChrome()
-  assert.deepEqual(sent, [['set_chrome',
-    { menubar: true, statusbar: true, toolbars: true, rulers: true }]])
+  assert.deepEqual(sent, [
+    ['set_chrome', { menubar: true, statusbar: true, toolbars: true }],
+    ['set_view_options', { formattingMarks: true, ruler: true }],
+    ['get_ui_state', {}],
+  ])
   assert.equal(host.chromeHidden, false)
 })
 

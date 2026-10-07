@@ -1662,6 +1662,11 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
   }
 })
 
+// 编辑器本机字体（desktop/main/system-fonts.js）：设置面板列出/保存启用集；
+// 编辑器页经 zetaoffice-server 的 /sysfonts/* 在引擎启动前取字体。纯本地，无外发。
+ipcMain.handle('checkba:system-fonts-list', (e, opts) => require('./system-fonts').listSystemFonts(opts || {}))
+ipcMain.handle('checkba:system-fonts-set', (e, ids) => require('./system-fonts').setEnabledFonts(ids))
+
 // 内嵌 draw.io：告诉渲染层去哪里加载编辑器 <iframe>。首次询问时才起静态服务。
 // 与 zetaoffice 不同，这里不需要分区也不需要 COOP/COEP——draw.io 是纯 DOM 应用。
 // 资源没烙进这次构建时返回 { available:false }，渲染层据此退回「下载后用其他程序打开」，

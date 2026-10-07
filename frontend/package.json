@@ -58,6 +58,7 @@
     "test:lowa-completion": "node tests/lowa-e2e/completion.mjs",
     "test:lowa-unit": "node --test tests/lowa-unit/*.test.mjs",
     "test:lowa-e2e": "node tests/lowa-e2e/run.mjs",
+    "test:lowa-word-parity": "node tests/lowa-e2e/word-parity.mjs",
     "test:lowa-generated": "node tests/lowa-e2e/generated-docx.mjs",
     "test:lowa-reply": "node tests/lowa-e2e/reply-insertion.mjs",
     "test:lowa-table-retype": "node tests/lowa-e2e/table-retype.mjs",

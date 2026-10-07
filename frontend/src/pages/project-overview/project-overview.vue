@@ -2333,6 +2333,7 @@ import CollabDialog from '@/components/collab/CollabDialog.vue'
 import SubmitDraftGuide from '@/components/collab/SubmitDraftGuide.vue'
 import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
 import { globalOverlayActive } from '@/utils/overlayState.js'
+import { AI_PROMPT_EVENT } from '@/utils/paragraphFormat.js'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
 import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
@@ -3517,6 +3518,10 @@ export default {
       uni.$off('awd:files-changed', this._onFilesChangedSyncTabs)
       this._onFilesChangedSyncTabs = null
     }
+    if (this._onEditorAiPrompt) {
+      uni.$off(AI_PROMPT_EVENT, this._onEditorAiPrompt)
+      this._onEditorAiPrompt = null
+    }
     if (this._onEntitlementsChanged) {
       uni.$off('awd:entitlements-changed', this._onEntitlementsChanged)
       this._onEntitlementsChanged = null
@@ -3945,6 +3950,13 @@ export default {
       this.syncOpenTabsFromFileTree()
     }
     uni.$on('awd:files-changed', this._onFilesChangedSyncTabs)
+    // 编辑器段落面板「交给 AI 调整格式」：把编辑器拼好的那句话以 AGENT 模式发进 AI 对话，
+    // 与插件一键动作（onPluginQuickAction）同一条 resolveChatInterface 路。只让活跃实例接。
+    this._onEditorAiPrompt = (payload) => {
+      if (!this.isActiveOverviewInstance()) return
+      this.onEditorAiPrompt(payload)
+    }
+    uni.$on(AI_PROMPT_EVENT, this._onEditorAiPrompt)
     this.setupResponsiveListener()
     // IDE 化：窗口重新聚焦时刷新文件树——外部改动（Finder 增删改）都发生在
     // 用户切出去的时候，后端 watcher 已把数据库对齐，聚焦拉一次即可见。
@@ -5102,6 +5114,14 @@ export default {
     // 插件启动面板（PluginGuidePane）的一键动作：把 manifest.guide.quickActions 里那句
     // prompt 以 AGENT 模式发进 AI 对话——与股东大会/诉讼可视化同一条 resolveChatInterface 路。
     // prompt 里含 skill 触发词才会命中注入（由插件作者在 manifest 里写对），这里只负责发出去。
+    async onEditorAiPrompt(payload) {
+      const prompt = payload && payload.prompt
+      if (!prompt) return
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
+      await chat.sendExternalPrompt(prompt)
+    },
+
     async onPluginQuickAction({ prompt }) {
       if (!prompt) return
       const chat = await this.resolveChatInterface()
