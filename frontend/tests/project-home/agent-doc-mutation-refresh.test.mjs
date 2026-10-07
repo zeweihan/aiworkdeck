@@ -150,6 +150,41 @@ test('收到 awd:doc-mutated 且是自己这份文档：面板 refreshKey 自增
   assert.equal(vm.reviewRefreshKey, 1)
 })
 
+test('同文件 AI 完成刷新覆盖此前 modified 排队的审阅刷新', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const vm = makeEditorVm({ scheduleAutoSave() {}, scheduleAnchorCheck() {} })
+  METHODS.onDocModified.call(vm)
+  t.mock.timers.tick(300)
+  vm.onDocMutatedEvent({ fileId: 7 })
+  assert.equal(vm.reviewRefreshKey, 1, 'AI 完成后立即刷新')
+  t.mock.timers.tick(1000)
+  assert.equal(vm.reviewRefreshKey, 1, '先前 modified 不应再重读同一批修订与批注')
+})
+
+test('异文档 AI 完成通知不取消本文件已排队的审阅刷新', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const vm = makeEditorVm({ scheduleAutoSave() {}, scheduleAnchorCheck() {} })
+  METHODS.onDocModified.call(vm)
+  vm.onDocMutatedEvent({ fileId: 8 })
+  assert.equal(vm.reviewRefreshKey, 0)
+  t.mock.timers.tick(1000)
+  assert.equal(vm.reviewRefreshKey, 1, '本文件的 modified 仍必须刷新')
+})
+
+test('AI 完成刷新之后的新 modified 仍安排一次审阅刷新', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const vm = makeEditorVm({ scheduleAutoSave() {}, scheduleAnchorCheck() {} })
+  METHODS.onDocModified.call(vm)
+  vm.onDocMutatedEvent({ fileId: 7 })
+  t.mock.timers.tick(1000)
+  assert.equal(vm.reviewRefreshKey, 1)
+  METHODS.onDocModified.call(vm)
+  t.mock.timers.tick(999)
+  assert.equal(vm.reviewRefreshKey, 1)
+  t.mock.timers.tick(1)
+  assert.equal(vm.reviewRefreshKey, 2, '去重不能吞掉后续人工编辑')
+})
+
 test('别人那份文档的写入不刷自己（保活池里同时挂着好几个实例）', () => {
   const vm = makeEditorVm()
   vm.onDocMutatedEvent({ fileId: 8 })

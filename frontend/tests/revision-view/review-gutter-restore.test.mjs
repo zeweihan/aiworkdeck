@@ -39,6 +39,7 @@ function view() {
     // These fixtures are all about documents that DO carry tracked changes; the
     // redline-free shortcut (dev-board#725) is covered by lowa-e2e.
     hasAnyRedline: () => true,
+    agentViewPending: null,
     tableFail: message => ({ success: false, message }),
   })
   vm.runInContext(slice('const REVISION_VIEWS = ', '// 批注插入不该被记成修订') + declaration('runRevisionResolution')
