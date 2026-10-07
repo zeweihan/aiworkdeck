@@ -12,6 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { CN_FONT_SIZES, PT_FONT_SIZES } from '../../src/utils/paragraphFormat.js'
 
 const SRC = readFileSync(new URL('../../src/components/EditorToolbar.vue', import.meta.url), 'utf8')
 const TEMPLATE = SRC.slice(SRC.indexOf('<template>'), SRC.lastIndexOf('</template>'))
@@ -20,7 +21,10 @@ function makeToolbarVm(executor) {
   const script = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import\s[\s\S]*?from\s+'[^']+'\s*;?\s*$/gm, '')
   // eslint-disable-next-line no-new-func
-  const component = new Function('bindHorizontalWheel', script.replace('export default', 'return'))(() => () => {})
+  const component = new Function('bindHorizontalWheel', 'watchScrollEdges', 'isEnglish', 'host',
+    'CN_FONT_SIZES', 'PT_FONT_SIZES', 'ParagraphFormatPanel', 'SystemFontsPanel',
+    script.replace('export default', 'return'))(
+    () => () => {}, () => () => {}, () => false, {}, CN_FONT_SIZES, PT_FONT_SIZES, {}, {})
   const base = { $t: (k, p) => k + (p ? JSON.stringify(p) : ''), $emit: () => {}, $nextTick: (fn) => fn && fn(), executor }
   const vm = Object.assign(base, component.data.call(base), component.methods)
   for (const [k, fn] of Object.entries(component.computed || {})) {
