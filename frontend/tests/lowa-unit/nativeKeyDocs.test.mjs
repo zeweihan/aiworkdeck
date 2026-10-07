@@ -41,12 +41,12 @@ function method(name) {
 const consts = [...SRC.matchAll(/^const NATIVE_[A-Z_]+ = [^\n]*;$/gm)].map((m) => m[0]).join('\n')
 
 const ACTIONS = ['insert_at_cursor', 'insert_paragraph', 'move_cursor', 'delete_backward', 'delete_forward', 'tab_key', 'ui_command']
-const HELPERS = ['isWriterDoc', 'isCalcDoc', 'isImpressDoc', 'nativeKeyDoc', 'postNativeKeys', 'restoreFullScreenSoon']
+const HELPERS = ['isWriterDoc', 'isCalcDoc', 'isImpressDoc', 'nativeKeyDoc', 'postNativeKeys', 'restoreFullScreenSoon', 'typeOverSelection']
 
 const KEY = { DOWN: 1024, UP: 1025, LEFT: 1026, RIGHT: 1027, HOME: 1028, END: 1029, PAGEUP: 1030, PAGEDOWN: 1031, RETURN: 1280, ESCAPE: 1281, TAB: 1282, BACKSPACE: 1283, DELETE: 1286 }
 const SERVICE = { writer: 'com.sun.star.text.TextDocument', calc: 'com.sun.star.sheet.SpreadsheetDocument', impress: 'com.sun.star.presentation.PresentationDocument' }
 
-function build(kind) {
+function build(kind, opts = {}) {
   const seen = { posted: [], dispatched: [], writerInserts: [], timers: [], fullScreen: true }
   const componentWindow = { name: 'component-window' }
   const container = {}
@@ -55,11 +55,15 @@ function build(kind) {
   const vc = {
     collapseToEnd() {}, collapseToStart() {}, goLeft(n, ex) { seen.writerInserts.push('left' + (ex ? '+' : '')) },
     goRight() {}, goUp() {}, goDown() {}, getPropertyValue() { return null },
+    getString: () => opts.selection || '', setString(t) { if (!t) seen.writerInserts.push('<del>') },
     getText: () => ({ insertControlCharacter: () => seen.writerInserts.push('<para>') }),
   }
   const ctrl = { getFrame: () => frame }
   if (kind === 'writer') ctrl.getViewCursor = () => vc
-  const xModel = { supportsService: (s) => s === SERVICE[kind] }
+  const xModel = {
+    supportsService: (s) => s === SERVICE[kind],
+    getUndoManager: () => ({ enterUndoContext: () => opts.undo && opts.undo.push('enter'), leaveUndoContext: () => opts.undo && opts.undo.push('leave') }),
+  }
   const css = {
     awt: {
       Key: KEY, KeyModifier: { SHIFT: 1, MOD1: 2, MOD2: 4 },
@@ -164,4 +168,17 @@ test('writer：原语照旧走视图光标，一个按键都不投递', () => {
   assert.deepEqual(seen.posted, [])
   assert.deepEqual(seen.writerInserts, ['甲乙', '<para>', 'left+'])
   assert.deepEqual(seen.dispatched, ['.uno:SwBackspace', '.uno:Delete', '.uno:GoToStartOfLine'])
+})
+
+test('writer：手打带 replaceSelection 时先删选区再插（Word 覆盖语义），同一撤销组；不带标记照旧追加', () => {
+  const { EXEC, seen } = build('writer')
+  const undo = []
+  assert.equal(EXEC.insert_at_cursor({ text: 'A' }).success, true)
+  assert.deepEqual(seen.writerInserts, ['A'])
+  const { EXEC: E2, seen: s2 } = build('writer', { selection: '旧字', undo })
+  const r = E2.insert_at_cursor({ text: '新', replaceSelection: true })
+  assert.equal(r.success, true, JSON.stringify(r))
+  assert.equal(r.replacedSelection, 2)
+  assert.deepEqual(s2.writerInserts, ['<del>', '新'])
+  assert.deepEqual(undo, ['enter', 'leave'])
 })

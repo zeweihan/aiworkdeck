@@ -55,6 +55,8 @@ export const EDITOR_ACTIONS = [
   // [自建工具栏 P1] 工具栏状态一次性回读、样式下拉数据、LO chrome 开关、修订开关。
   // 全部宿主发起（EditorToolbar → executor），不是 AI 管线。
   'get_ui_state', 'list_styles', 'set_chrome', 'set_track_changes',
+  // 格式标记 / 标尺的确定态开关（直写 ViewSettings，不改内容）。宿主发起。
+  'set_view_options',
   // [修订显示三态 dev-board#368] 全部修订 / 简洁标记（页边） / 最终稿。纯显示切换，
   // 不改内容也不动 RecordChanges；不带 mode 就是只读回引擎的真实状态。
   'set_revision_view',

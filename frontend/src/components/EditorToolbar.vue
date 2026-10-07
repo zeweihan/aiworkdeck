@@ -45,6 +45,9 @@
             <text class="etb-caret">⌄</text>
           </view>
           <scroll-view v-if="menu === 'font'" class="etb-menu w180" :style="popStyle(180)" scroll-y @tap.stop>
+            <view v-if="systemFontsSupported" class="etb-item etb-item-manage" @tap.stop="openSystemFonts">
+              <text class="etb-item-t">{{ $t('editor.systemFonts.manageEntry') }}</text>
+            </view>
             <view v-for="f in fontOptions" :key="f" class="etb-item"
                   :class="{ on: f === state.character.font }" @tap.stop="applyFont(f)">
               <text class="etb-item-t">{{ f }}</text>
@@ -52,11 +55,29 @@
           </scroll-view>
         </view>
 
-        <!-- 字号：引擎的 .uno:Grow/Shrink 是哑弹，这里读回当前值自己步进 -->
-        <view class="etb-stepper" :title="$t('editor.toolbar.fontSize')">
-          <text class="etb-step-b" @tap.stop="stepSize(-1)">−</text>
-          <text class="etb-step-v">{{ sizeLabel }}</text>
-          <text class="etb-step-b" @tap.stop="stepSize(1)">+</text>
+        <!-- 字号：引擎的 .uno:Grow/Shrink 是哑弹，这里读回当前值自己步进；中间的数值
+             点开是字号下拉（中文字号 + 磅值）。没有选区也能设（Word 语义：之后在光标处
+             敲的字用新字号），见 office_thread.js format_selection 的 atCursor。 -->
+        <view class="etb-drop" :class="{ open: menu === 'size' }">
+          <view ref="trig_size" class="etb-stepper" :title="$t('editor.toolbar.fontSize')">
+            <text class="etb-step-b" @tap.stop="stepSize(-1)">−</text>
+            <text class="etb-step-v pick" @tap.stop="toggleMenu('size')">{{ sizeLabel }}</text>
+            <text class="etb-step-b" @tap.stop="stepSize(1)">+</text>
+          </view>
+          <scroll-view v-if="menu === 'size'" class="etb-menu w120" :style="popStyle(120)" scroll-y @tap.stop>
+            <template v-if="showCnSizes">
+              <view v-for="s in CN_FONT_SIZES" :key="'cn' + s.pt" class="etb-item"
+                    :class="{ on: sizeMatches(s.pt) }" @tap.stop="setSize(s.pt)">
+                <text class="etb-item-t">{{ s.name }}</text>
+                <text class="etb-hint">{{ s.pt }}</text>
+              </view>
+              <view class="etb-menu-sep"></view>
+            </template>
+            <view v-for="pt in PT_FONT_SIZES" :key="'pt' + pt" class="etb-item"
+                  :class="{ on: sizeMatches(pt) }" @tap.stop="setSize(pt)">
+              <text class="etb-item-t">{{ pt }}</text>
+            </view>
+          </scroll-view>
         </view>
         <view class="etb-sep"></view>
 
@@ -110,6 +131,18 @@
         </view>
         <view class="etb-btn" :title="$t('editor.toolbar.indentMore')" @tap.stop="ui('indent_more')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.indent" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </view>
+        <!-- 段落格式快捷面板：首行缩进 / 缩进方式 / 段前段后 / 行距 + 一键预设 + 全文交给 AI。
+             LO 自己的段落对话框在本构建上键盘关不掉，不能挂（doc-editor.md），所以是自建面板。 -->
+        <view class="etb-drop" :class="{ open: menu === 'para' }">
+          <view ref="trig_para" class="etb-btn wide" :class="{ on: menu === 'para' }" :title="$t('editor.format.buttonTitle')" @tap.stop="openParagraphPanel">
+            <text class="etb-tx sm">{{ $t('editor.format.button') }}</text>
+            <text class="etb-caret">⌄</text>
+          </view>
+          <view v-if="menu === 'para'" class="etb-menu w320 pad" :style="popStyle(320, true)" @tap.stop>
+            <ParagraphFormatPanel :call="call" :has-selection="!noSelection"
+                                  @applied="onParagraphApplied" @ai-format="onAiFormat" @house-style="runHouseStyle" />
+          </view>
         </view>
         <view class="etb-sep"></view>
 
@@ -185,6 +218,9 @@
 
         <view class="etb-btn" :class="{ on: formattingMarks }" :title="$t('editor.toolbar.formattingMarks')" @tap.stop="toggleMarks">
           <text class="etb-tx">¶</text>
+        </view>
+        <view class="etb-btn" :class="{ on: rulerOn }" :title="$t('editor.toolbar.ruler')" @tap.stop="toggleRuler">
+          <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.ruler" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
 
         <!-- 表格上下文组：光标在表格里才出现（LO 自己那条 singlemode-table 工具栏
@@ -296,6 +332,7 @@
   </view>
   <text v-if="findErr" class="etb-err bar">{{ findErr }}</text>
   </view>
+  <SystemFontsPanel v-if="systemFontsOpen" :visible="systemFontsOpen" @close="systemFontsOpen = false" @saved="onSystemFontsSaved" />
   </view>
 </template>
 
@@ -323,6 +360,11 @@
 
 import { bindHorizontalWheel } from '@/utils/horizontalWheel.js'
 import { watchScrollEdges } from '@/utils/scrollEdges.js'
+import { isEnglish } from '@/utils/appLanguage.js'
+import { host } from '@/services/host.js'
+import { CN_FONT_SIZES, PT_FONT_SIZES } from '@/utils/paragraphFormat.js'
+import ParagraphFormatPanel from './ParagraphFormatPanel.vue'
+import SystemFontsPanel from './SystemFontsPanel.vue'
 
 const ICONS = {
   undo: ['M9 14 4 9l5-5', 'M4 9h10a6 6 0 0 1 0 12h-3'],
@@ -344,6 +386,7 @@ const ICONS = {
   colRight: ['M4 4h7v16H4z', 'M21 12h-7', 'M18 9l3 3-3 3'],
   delRow: ['M4 9h16v6H4z', 'M9 5l6 14'],
   delCol: ['M9 4h6v16H9z', 'M5 9l14 6'],
+  ruler: ['M3 8h18v8H3z', 'M7 8v3', 'M11 8v4', 'M15 8v3', 'M19 8v4'],
 }
 const ALIGNS = [
   { k: 'left', cmd: 'align_left', t: 'alignLeft', icon: 'alignLeft' },
@@ -381,7 +424,20 @@ const REVISION_VIEWS = [
   { k: 'balloons', t: 'revisionViewMargin' },
   { k: 'final', t: 'revisionViewFinal' },
 ]
-const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
+const SIZES = PT_FONT_SIZES
+// 视图偏好（格式标记 / 标尺）：用户级、跨文档，默认都开（维护者要求：标尺与换行符等
+// 格式标记默认显示，给开关）。引擎换文档后视图设置回到默认值，所以每次 bootstrap /
+// reapplyChrome 都按这份偏好重设一遍。
+const VIEW_PREFS_KEY = 'awd_editor_view_prefs'
+const VIEW_PREFS_DEFAULT = { formattingMarks: true, ruler: true }
+function readViewPrefs() {
+  try {
+    const v = uni.getStorageSync(VIEW_PREFS_KEY)
+    const o = typeof v === 'string' && v ? JSON.parse(v) : (v && typeof v === 'object' ? v : {})
+    return Object.assign({}, VIEW_PREFS_DEFAULT, o)
+  } catch (e) { return Object.assign({}, VIEW_PREFS_DEFAULT) }
+}
+function writeViewPrefs(p) { try { uni.setStorageSync(VIEW_PREFS_KEY, JSON.stringify(p)) } catch (e) { /* 存不下就只在本次会话生效 */ } }
 // 插入表格的网格选择器：8 行 × 8 列够覆盖手工建表的绝大多数情形，再大的表
 // 律师是从 Excel 粘过来或让 AI 生成的，不是在这里点出来的。
 const GRID_R = 8, GRID_C = 8
@@ -392,7 +448,8 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state'],
+  components: { ParagraphFormatPanel, SystemFontsPanel },
+  emits: ['toggle-review', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state', 'focus-editor', 'ai-format'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
@@ -408,7 +465,11 @@ export default {
   },
   data() {
     return {
-      state: EMPTY(), styleList: [], fontList: [], menu: '', popPos: null, formattingMarks: false,
+      state: EMPTY(), styleList: [], fontList: [], menu: '', popPos: null,
+      // 视图偏好（格式标记 / 标尺），见 VIEW_PREFS_KEY。按钮高亮以引擎读回为准（get_ui_state
+      // 的 view.formattingMarks / view.ruler），这里只是用户想要的目标值。
+      viewPrefs: readViewPrefs(),
+      systemFontsOpen: false,
       // BUG-13：主命令区还能不能往左/右滚，驱动两端渐隐遮罩；由 bindToolbarWheel
       // 里的原生 scroll/resize 监听实时更新，不是一次性算好就不变。
       canScrollLeft: false, canScrollRight: false,
@@ -426,6 +487,11 @@ export default {
     ICONS: () => ICONS, ALIGNS: () => ALIGNS,
     TEXT_COLORS: () => TEXT_COLORS, HL_COLORS: () => HL_COLORS, GRID_CELLS: () => GRID_CELLS,
     TEXT_FORMS: () => TEXT_FORMS,
+    CN_FONT_SIZES: () => CN_FONT_SIZES, PT_FONT_SIZES: () => PT_FONT_SIZES,
+    showCnSizes: () => !isEnglish(),
+    systemFontsSupported: () => !!(host.systemFonts && typeof host.systemFonts.list === 'function'),
+    formattingMarks() { return this.state.view.formattingMarks != null ? !!this.state.view.formattingMarks : !!this.viewPrefs.formattingMarks },
+    rulerOn() { return this.state.view.ruler != null ? !!this.state.view.ruler : !!this.viewPrefs.ruler },
     inTable() { return this.state.selection.inTable === true },
     // 页边显示要引擎支持（LO 7.1+ 且我们的 r3 表格补丁）。worker 读不到那个视图
     // 设置时回 revisionMarginSupported:false，这里把中间项摘掉——不放做不到的选项。
@@ -545,6 +611,7 @@ export default {
       // 自建工具栏挂上了，LO 自己那套就该退场。只在 Writer 上做——本组件本来
       // 就只给 Writer 渲染；Calc/Impress 没有替代品，藏了会剩一片空白。
       await this.applyChrome(true)
+      await this.applyViewPrefs()
     },
     async refresh() {
       const r = await this.call('get_ui_state', {})
@@ -577,11 +644,17 @@ export default {
       const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null
       this.popPos = rect ? { left: rect.left, top: rect.bottom + 4 } : null
     },
-    popStyle(width) {
+    popStyle(width, tall) {
       if (!this.popPos) return {}
       const vw = (typeof window !== 'undefined' && window.innerWidth) || 0
       const left = vw ? Math.min(this.popPos.left, Math.max(8, vw - width - 8)) : this.popPos.left
-      return { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
+      const st = { position: 'fixed', left: left + 'px', top: this.popPos.top + 'px', zIndex: 900 }
+      // 段落面板比普通下拉高得多：按视口剩余高度封顶并允许内部滚动，别被窗口底边截断
+      if (tall) {
+        const vh = (typeof window !== 'undefined' && window.innerHeight) || 0
+        if (vh) { st.maxHeight = Math.max(240, vh - this.popPos.top - 12) + 'px'; st.overflowY = 'auto' }
+      }
+      return st
     },
     closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
     // BUG-15：点在工具栏 DOM 树之外（文档画布是独立的 webview，够不到；右栏
@@ -729,13 +802,29 @@ export default {
       this.closeMenus()
       return this.call('set_style', { kind: 'paragraph', styleName: name }).then((r) => this.after(r))
     },
+    // 字符格式一律带 atCursor：没有选区时设在光标处、之后敲的字沿用（Word 语义，
+    // 用户实测反馈「没选中内容字号栏就不能操作」）。设完把键盘焦点还给画布，
+    // 用户点完字号直接接着打字，不用再点一下文档。
+    charFormat(params) {
+      return this.call('format_selection', Object.assign({ atCursor: true }, params)).then(async (r) => {
+        await this.after(r, !(r && r.atCursor))
+        this.$emit('focus-editor')
+        return r
+      })
+    },
     applyFont(family) {
       this.closeMenus()
-      return this.call('format_selection', { fontName: family }).then((r) => this.after(r))
+      return this.charFormat({ fontName: family })
     },
     applyColor(kind, value) {
       this.closeMenus()
-      return this.call('format_selection', { [kind]: value }).then((r) => this.after(r))
+      return this.charFormat({ [kind]: value })
+    },
+    sizeMatches(pt) { return Math.abs((Number(this.state.character.sizePt) || 0) - pt) < 0.05 },
+    setSize(pt) {
+      this.closeMenus()
+      if (!(pt > 0)) return null
+      return this.charFormat({ fontSize: pt })
     },
     // 字号步进：本引擎的 .uno:Grow/.uno:Shrink 是哑弹，只能读回当前值再写。
     // 按常用字号表跳档，而不是 ±1——12→14→16 才是人的用法。
@@ -747,7 +836,7 @@ export default {
       else if (dir < 0) idx--
       const next = SIZES[Math.max(0, Math.min(SIZES.length - 1, idx))]
       if (!next || Math.abs(next - cur) < 0.01) return null
-      return this.call('format_selection', { fontSize: next }).then((r) => this.after(r))
+      return this.charFormat({ fontSize: next })
     },
     stepZoom(delta) {
       return this.call('set_zoom', { delta }).then((r) => this.after(r, false))
@@ -765,9 +854,10 @@ export default {
     },
     // LO chrome 开关。hideElement 的返回值不可信，原语内部用 isElementVisible
     // 复核后回报，这里只按结果记状态。
+    // 标尺不再跟着 LO chrome 一起藏：它归视图偏好管（默认显示，见 VIEW_PREFS_KEY）。
     async applyChrome(hide) {
       const res = await this.call('set_chrome', {
-        menubar: !hide, statusbar: !hide, toolbars: !hide, rulers: !hide,
+        menubar: !hide, statusbar: !hide, toolbars: !hide,
       })
       if (res && res.success) this.chromeHidden = hide
       return res
@@ -780,7 +870,25 @@ export default {
     // 标尺（真机反馈 B5）。宿主换完文档后调这一条。
     // 落的是**当前**开关状态而不是一律藏起来：设置里留了把 LO chrome 放出来的逃生开关，
     // 律师自己打开的那一套不该被一次重载又摁回去。
-    reapplyChrome() { return this.applyChrome(this.chromeHidden) },
+    async reapplyChrome() {
+      const res = await this.applyChrome(this.chromeHidden)
+      await this.applyViewPrefs()
+      return res
+    },
+    // 按用户偏好把格式标记 / 标尺设成确定态（set_view_options 直写 ViewSettings）。
+    // changed=false：纯视图，不能标脏触发自动保存。
+    async applyViewPrefs() {
+      const r = await this.call('set_view_options', {
+        formattingMarks: !!this.viewPrefs.formattingMarks, ruler: !!this.viewPrefs.ruler,
+      })
+      if (r && r.success) await this.refresh()
+      return r
+    },
+    setViewPref(key, value) {
+      this.viewPrefs = Object.assign({}, this.viewPrefs, { [key]: !!value })
+      writeViewPrefs(this.viewPrefs)
+      return this.applyViewPrefs()
+    },
 
     // ---- 查找替换 ----
     toggleFind() {
@@ -834,10 +942,43 @@ export default {
       this.findTotal = 0; this.findIndex = 0
       await this.after(res)
     },
-    // 格式标记是纯视图开关，引擎不回报状态，本地记一份
-    toggleMarks() {
-      this.formattingMarks = !this.formattingMarks
-      return this.call('ui_command', { name: 'formatting_marks' }).then((r) => this.after(r, false))
+    // 格式标记 / 标尺：纯视图开关，按引擎读回的当前态取反，写进用户偏好。
+    toggleMarks() { return this.setViewPref('formattingMarks', !this.formattingMarks) },
+    toggleRuler() { return this.setViewPref('ruler', !this.rulerOn) },
+
+    // ---- 段落格式面板 ----
+    openParagraphPanel() {
+      const opening = this.menu !== 'para'
+      this.menu = opening ? 'para' : ''
+      if (opening) { this.capturePopPos('para'); this.refresh() }
+    },
+    onParagraphApplied(r) { this.$emit('changed'); this.refresh(); return r },
+    // 交给 AI：工具栏不知道文件名，交给 LibreOfficeEditor 拼好 prompt 再发进对话
+    onAiFormat(payload) {
+      this.closeMenus()
+      this.$emit('ai-format', payload || {})
+    },
+    // 所内标准格式（全文）：确定性原语 apply_house_style，整篇改动先确认。
+    runHouseStyle() {
+      this.closeMenus()
+      uni.showModal({
+        title: this.$t('editor.format.houseStyleConfirmTitle'),
+        content: this.$t('editor.format.houseStyleConfirm'),
+        success: async (m) => {
+          if (!m || !m.confirm) return
+          const r = await this.call('apply_house_style', {})
+          if (!r || r.success !== true) {
+            uni.showToast({ title: (r && r.message) || this.$t('editor.toolbar.opFailed'), icon: 'none' })
+            return
+          }
+          await this.after(r)
+        },
+      })
+    },
+    // ---- 本机字体 ----
+    openSystemFonts() { this.closeMenus(); this.systemFontsOpen = true },
+    onSystemFontsSaved() {
+      uni.showToast({ title: this.$t('editor.systemFonts.savedToast'), icon: 'none' })
     },
   },
 }
@@ -935,6 +1076,13 @@ export default {
 .w160 { width: 160px; }
 .w180 { width: 180px; }
 .w200 { width: 200px; }
+.w120 { width: 120px; }
+.w320 { width: 320px; box-sizing: border-box; }
+.etb-menu-sep { height: 1px; margin: 4px 2px; background: var(--awd-border); }
+.etb-item-manage { border-bottom: 1px solid var(--awd-border); border-radius: 5px 5px 0 0; margin-bottom: 3px; }
+.etb-item-manage .etb-item-t { color: var(--awd-accent-text); }
+.etb-step-v.pick { cursor: pointer; }
+.etb-step-v.pick:hover { background: var(--awd-surface-2); }
 .w72 { width: 72px; }
 .etb-menu.pad { padding: 6px; }
 .etb-item { display: flex; align-items: baseline; justify-content: space-between; gap: 6px;

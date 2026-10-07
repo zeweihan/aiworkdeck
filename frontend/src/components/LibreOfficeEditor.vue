@@ -86,6 +86,8 @@
       @toggle-writing-assistance="toggleWritingAssistance"
       @changed="onDocModified"
       @ui-state="$emit('menu-state')"
+      @focus-editor="focusEditor"
+      @ai-format="onToolbarAiFormat"
     />
     <!-- 版本身份小条（dev-board#632 起有它，#672 复测改成文件级）：说这份**文件**
          最近一次有名字的版本，磁盘内容领先版本记录时说「已保存，尚未存为版本」。
@@ -199,6 +201,7 @@ import { StaleQueue } from '@/utils/evidenceStaleQueue.js'
 import { createAnchorChecker, resolveKeepText } from '@/composables/useEvidenceAnchors.js'
 import { EVIDENCE_CHANGED_EVENT } from '@/utils/evidenceEvents.js'
 import { DOC_MUTATED_EVENT } from '@/utils/docEvents.js'
+import { buildAiFormatPrompt, AI_PROMPT_EVENT } from '@/utils/paragraphFormat.js'
 import { getResolvedTheme, APP_THEME_EVENT } from '@/utils/appTheme.js'
 import { isEnglish } from '@/utils/appLanguage.js'
 import { stampApplication } from '@/utils/docxAppProps.js'
@@ -768,6 +771,17 @@ export default {
     // Cmd+Z 由覆盖层转成引擎的 undo。
     focusEditor() {
       try { if (this.webviewEl && this.webviewEl.focus) this.webviewEl.focus() } catch (e) { /* ignore */ }
+    },
+    // 段落面板「交给 AI 调整格式」：拼一句带文件名与需求的话，交给工作台发进 AI 对话
+    // （project-overview 订阅 awd:ai-prompt → resolveChatInterface → sendExternalPrompt，
+    // 与插件一键动作同一条路）。AI 用 doc_set_paragraph_format 等工具落地，改动走修订。
+    onToolbarAiFormat(payload) {
+      const prompt = buildAiFormatPrompt({
+        fileName: this.file && this.file.name,
+        requirement: payload && payload.requirement,
+        scope: payload && payload.scope,
+      }, (k, v) => this.$t(k, v))
+      uni.$emit(AI_PROMPT_EVENT, { prompt, fileId: this.file && this.file.id })
     },
     menuOpenFind() {
       const tb = this.$refs.toolbar
