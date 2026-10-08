@@ -4704,3 +4704,12 @@ $color-accent: var(--awd-mint); // Mint Green
     text-decoration: underline;
   }
 }
+
+.plugin-workspace-pending {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--awd-text-3);
+}

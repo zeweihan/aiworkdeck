@@ -14,7 +14,7 @@
 //   2. 每个标签只存白名单字段（下面 SERIALIZERS），深链类一次性字段（pendingLocator、日程的 focus/group、
 //      提交历史的 focus/focusSha/token）不存——重启时再弹一次定位 / 编辑框是打扰。
 //   3. 不存的标签：合并比对稿（裁决只在引擎实例里，关了就没了；后端待决记录会让版本面板再给入口）、
-//      AI 产物 markdown（内容只在内存）、动态插件标签、以及任何认不出来的 tabType（向前兼容：新类型
+//      AI 产物 markdown（内容只在内存）、以及任何认不出来的 tabType（向前兼容：新类型
 //      没登记白名单就不恢复，不会带着缺字段的对象进模板）。
 //   4. 恢复：文件类标签（id 为数字）逐个核对文件仍在（fileExists），不在的静默丢弃；对比标签两份都要在。
 //      无项目态只恢复全局标签（欢迎 / 日程 / 设置 / 插件详情 / 网页）。单例标签（SINGLETON_TAB_TYPES）
@@ -31,10 +31,10 @@ export const TAB_SNAPSHOT_SUFFIX = 'tabs'
 export const TAB_SNAPSHOT_THROTTLE_MS = 300
 
 /** 全局单例标签：一个工作台里至多一个，恢复时跨两窗格按 id 去重 */
-export const SINGLETON_TAB_TYPES = ['welcome', 'calendar', 'admin-settings', 'market-detail', 'commit-history', 'insight-entity']
+export const SINGLETON_TAB_TYPES = ['welcome', 'calendar', 'admin-settings', 'market-detail', 'commit-history', 'insight-entity', 'plugin']
 
 /** 只在有项目时才有意义的标签（文件标签另判） */
-const PROJECT_ONLY_KINDS = ['file', 'dd-request', 'diff', 'version-compare', 'version-text-diff', 'commit-history', 'insight-entity']
+const PROJECT_ONLY_KINDS = ['file', 'dd-request', 'diff', 'version-compare', 'version-text-diff', 'commit-history', 'insight-entity', 'plugin']
 
 const NUMERIC_ID = /^[1-9][0-9]*$/
 
@@ -78,6 +78,9 @@ const SERIALIZERS = {
     id: t.id, requestId: t.requestId, name: str(t.name), type: 'dd-request', fileType: 'dd', isFolder: false,
   }),
   web: (t) => (typeof t.url === 'string' && t.url ? { id: t.id, tabType: 'web', name: str(t.name), url: t.url } : null),
+  plugin: (t) => (typeof t.pluginId === 'string' && t.pluginId ? {
+    id: `plugin-${t.pluginId}`, tabType: 'plugin', pluginId: t.pluginId, name: str(t.name),
+  } : null),
   welcome: (t) => ({ id: t.id, tabType: 'welcome', name: str(t.name) }),
   calendar: (t) => ({ id: t.id, tabType: 'calendar', name: str(t.name) }),
   'admin-settings': (t) => ({
@@ -380,6 +383,7 @@ export const tabSnapshotMethods = {
       this.activeFileIdLeft = merged.activeLeft
       this.activeFileIdRight = merged.activeRight
     }
+    this.reconcilePluginTabs?.()
     this._tabSnapshotReady = true
     this.scheduleTabSnapshotSave()
     return any

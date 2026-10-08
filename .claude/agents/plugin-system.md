@@ -47,13 +47,14 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **「语音」合并插件（dev-board#66，2026-08-20）**：概念模型「左栏一个图标 = 一个插件，skill 只在 AI 对话生效」——text-to-speech 与 meeting-recorder 两个成员 skill 在广场三处 UI 里合并成**一个**「语音」条目（分组定义 `VOICE_PLUGIN_GROUP` + 合成视图 `buildVoiceGroupSkill()`，都在 `leftSidebarPlugins.js`），启停一体：前端开关一次翻全部成员，后端 `SkillRegistry.convergeVoiceMergedSkills()` 每次扫描后把分裂态收敛为「任一启用 → 全部启用」（防「tab 可见但生成纪要 kick-off 命不中 skill」的静默断裂）；meeting-recorder 的 `enabled_by_default` 因此也改为 true。两个 skill 文件本身、AI 对话行为、触发词都没动。
 
-**动态 JAR / Web 插件**：前端 `frontend/src/components/PluginPane.vue`（props url/pluginId/permissions/projectId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）+ `controller/ai/PluginWebController.java`（/api/plugin-web，见下）。
+**动态 JAR / Web 插件（dev-board#1143/#1144，2026-10-08）**：点击 rail 使用 `pluginWorkspaceTabs.js` 的 `openPluginTab(pluginId)` 打开或聚焦工作区单例标签（`tabType:'plugin'`）。左栏 `PluginWorkspaceSummary.vue` 只显示简介与「打开工作区」入口。腾讯会议与尽调报告的 Web 主界面由工作区承载；后续动态插件默认复用该能力，不要再把复杂操作全部塞在左栏。
 
-**动态插件在左栏两种渲染，按有没有 `frontendEntry` 分（dev-board#132，2026-08-23）**：`project-overview.vue` 的 `activeDynamicPlugin` computed 拿到当前 rail 选中的插件后——
-- **有 `frontendEntry`**（Web 插件）→ `PluginPane` iframe；
-- **无 `frontendEntry`**（纯 JAR/skill 插件，如尽调报告）→ 宿主渲染的启动面板 `frontend/src/components/PluginGuidePane.vue`。它就是这类插件的「独立页面」：`manifest.guide`（`{intro, steps[], quickActions[{label,prompt,hint}]}`）渲染成「简介 + 快速开始 + 怎么用 + 该插件为 AI 提供的能力（工具清单）」；quickActions 的按钮点击 `emit('kickoff',{prompt})` → 页面 `onPluginQuickAction` → `resolveChatInterface().sendExternalPrompt`（与股东大会/诉讼可视化同一条 kick-off 路，prompt 里得含 skill 触发词才命中注入）。没写 guide 时用 `description` + 兜底提示 + 工具清单，仍比空面板强。
-  - **后端契约**：`PluginService.PluginMetadata.guide`（`PluginGuide`/`PluginQuickAction`）；`parseManifest` 丢弃 quickActions 里缺 label 或 prompt 的条目；`PluginController.PluginView` 透传 `guide`。测试 `PluginServiceTest.parsesGuideBlock/guideAbsentIsNull`、`frontend/tests/evidence/methodBarTimer.test.mjs` 无关，guide 面板前端无独立单测（真渲染走查配方见 [[ui-live-walkthrough-recipe]]，注入 `/api/plugins/list` 造 guide）。
-  - **地雷（都在 dev-board#132 修掉，别改回去）**：① `dynamicPlugins[].icon` 不要回退 `/static/plugin_default.png`——**那文件不存在**，会 404 成 HTML 破图；registry 的 `icon` 是 emoji（全站禁 emoji、不当图片渲染）。纯工具插件的 rail 图标由模板里 `v-else-if="p.isDynamic"` 的拼图 SVG 兜底。② `toggleLeftPane` **不再** `openFile({fileType:'plugin'})` 开中栏标签——`isFileTypeSupported` 没有 `'plugin'`，那条老路只会弹「无法打开文件」模态、从没渲染出东西；动态插件一律左栏面板渲染（「左栏一个图标 = 一个插件」）。中栏 `activeFileLeft.fileType==='plugin'` 的 PluginPane 分支现已是死代码，留着无害。③ `leftPaneTitle` 要先查 `activeDynamicPlugin.label`，否则动态插件标题掉进兜底显示成「资源管理器」。
+- 有 `frontendEntry` → 工作区 `PluginPane`；无入口 → `PluginGuidePane`（manifest.guide 的 intro/steps/quickActions 与工具清单）。两者都连接 `onPluginQuickAction`，prompt 仍需包含 skill 触发词。
+- 左右工作区分别按标签 `v-for/v-show` 保留实例，普通标签切换不丢输入；关闭、禁用、卸载、封禁或不兼容卸载实例。跨窗格移动可能重建，不承诺未持久化表单保活。插件禁止 Alt 双开。
+- 标签只保存身份，实时 URL/permissions/devInstalled 从 `dynamicPlugins` 解析；快照恢复与插件清单加载两条完成路径都协调清理，清单失败不视为空列表。尚未核验时不挂 iframe。无项目态不提供动态插件入口。
+- 不再走 `openFile({fileType:'plugin'})`：文件类型闸不支持它。旧中栏死分支已由正式插件标签替代。`fileKind` 把插件列入非文档，避免误入编辑器/AI 文档上下文。
+- 图标不要回退不存在的 `/static/plugin_default.png`；rail 仍使用 SVG 兜底。标题取 `activeDynamicPlugin.label`。
+- 新插件须参照 `docs/PLUGIN_SPEC.md §8.1.1` 与 `backend/skills/plugin-dev/prompt.md`，实际走通安装→启用→rail→工作区主要操作，不能只验安装接口。源码支持与客户端发版分开记录。
 
 ### 三方 Web 插件（规范 v2.5，docs/PLUGIN_SPEC.md §8）
 

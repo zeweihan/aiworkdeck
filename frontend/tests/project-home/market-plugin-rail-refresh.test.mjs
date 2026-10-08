@@ -5,6 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { pluginWorkspaceTabMethods } from '../../src/pages/project-overview/pluginWorkspaceTabs.js'
 
 const page = readFileSync(new URL('../../src/pages/project-overview/project-overview.vue', import.meta.url), 'utf8')
 const sidebar = readFileSync(new URL('../../src/components/MarketSidebarPanel.vue', import.meta.url), 'utf8')
@@ -41,6 +42,8 @@ function harness() {
     isAccountLoginRetry: () => false,
   }
   const vm = { dynamicPlugins: [], enabledSkillIds: null, hasProject: true, leftPaneKey: 'files',
+    leftFiles: [], rightFiles: [], lastActiveIdsByMode: { left: {}, right: {} }, saveActiveIdsByMode() {},
+    ...pluginWorkspaceTabMethods,
     applyPanelDocks: rows => rows, applyRailOrder: rows => rows, ttsEnabled: true }
   for (const name of ['loadDynamicPlugins', 'loadEnabledSkills']) vm[name] = method(page, name, deps).bind(vm)
   Object.defineProperty(vm, 'rail', { get: method(page, 'LEFT_SIDEBAR_PLUGINS', deps).bind(vm) })

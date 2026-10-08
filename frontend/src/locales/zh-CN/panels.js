@@ -318,6 +318,10 @@ export default {
   pgStepsTitle: '怎么用',
   pgToolsTitle: '该插件为 AI 提供的能力',
   pgChatHint: '在右侧 AI 对话里说出你的需求即可使用本插件。',
+  pgOpenWorkspace: '打开工作区',
+  pgWorkspaceHint: '在标签页中使用插件，可以与文档分屏查看。',
+  pgWorkspacePending: '正在核验插件是否可用；若未能加载，请重试。',
+  pgWorkspaceRetry: '重新加载',
   pgDefaultIntro: '{name} 已安装。在右侧 AI 对话里描述你的需求即可使用。',
   ppLoadFailed: '无法加载插件：未配置入口地址',
 

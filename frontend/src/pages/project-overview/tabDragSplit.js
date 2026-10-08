@@ -92,6 +92,7 @@ export const tabDragSplitMethods = {
       const list = fromPane === 'left' ? this.leftFiles : this.rightFiles
       const file = (list || []).find(f => f.id === fileId)
       if (!file) return true
+      if (file.tabType === 'plugin') return false
       if (this.isMergeReviewTab(file)) return !!(file.mergeSpec && file.mergeSpec.readonly)
       return !this.useLibreEditor(file) && !this.isPlainTextFile(file) && !this.isDrawioFile(file)
     },

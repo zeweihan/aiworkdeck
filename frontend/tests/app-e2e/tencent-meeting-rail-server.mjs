@@ -16,6 +16,8 @@ const frontend = path.resolve(here, '../..')
 const repo = path.dirname(frontend)
 const pluginWeb = path.join(repo, 'official-plugins/tencent-meeting/web')
 if (!fs.existsSync(path.join(pluginWeb, 'index.html'))) throw new Error('Tencent Meeting plugin web source is missing from this checkout. Update the checkout before starting this fixture.')
+const dueDiligenceWeb = process.env.TMEET_RAIL_DD_WEB ? path.resolve(process.env.TMEET_RAIL_DD_WEB) : null
+if (dueDiligenceWeb && !fs.existsSync(path.join(dueDiligenceWeb, 'index.html'))) throw new Error('TMEET_RAIL_DD_WEB must point to the due-diligence static web directory.')
 const port = Number(process.env.TMEET_RAIL_PORT || 19142)
 const vitePort = Number(process.env.TMEET_RAIL_VITE_PORT || 19143)
 const origin = `http://127.0.0.1:${port}`
@@ -27,12 +29,24 @@ const plugin = {
   permissions: ['file_read', 'file_write', 'network'], tools: ['tencent_meeting_action'], toolCount: 1,
   marketInstalled: true, installedFromMarket: true, languages: ['zh-CN', 'en-US'], priceCents: 0
 }
-let state = { installed: true, enabled: false, revokedReason: null, incompatibleReason: null }
+const plugins = [plugin]
+if (dueDiligenceWeb) plugins.push({
+  id: 'due-diligence', name: '尽调报告', description: '仅供合成 UI 验收：模板选择与主体表单。',
+  version: '0.6.0', author: 'AI WorkDeck synthetic fixture', frontendEntry: 'web/index.html',
+  permissions: ['file_read', 'file_write', 'editor', 'network'], tools: ['dd_templates'], toolCount: 1,
+  marketInstalled: true, installedFromMarket: true, languages: ['zh-CN'], priceCents: 0
+})
+const states = Object.fromEntries(plugins.map(({ id }) => [id, { installed: true, enabled: false, revokedReason: null, incompatibleReason: null }]))
+const state = states[plugin.id] // Keep the original Tencent-only diagnostic fields compatible.
+const pluginViews = () => plugins.filter(({ id }) => states[id].installed).map((entry) => ({ ...entry, ...states[entry.id] }))
 let folderCreated = false
 const requests = []
 const unhandled = new Set()
-function reset(mode) {
-  state = { installed: mode !== 'uninstalled', enabled: mode === 'enabled' || mode === 'revoked' || mode === 'incompatible', revokedReason: mode === 'revoked' ? 'Synthetic revoked fixture' : null, incompatibleReason: mode === 'incompatible' ? 'Synthetic incompatible fixture' : null }
+function reset(mode, pluginId) {
+  for (const id of pluginId ? [pluginId] : Object.keys(states)) {
+    if (!states[id]) throw new Error('Unknown fixture plugin: ' + id)
+    Object.assign(states[id], { installed: mode !== 'uninstalled', enabled: mode === 'enabled' || mode === 'revoked' || mode === 'incompatible', revokedReason: mode === 'revoked' ? 'Synthetic revoked fixture' : null, incompatibleReason: mode === 'incompatible' ? 'Synthetic incompatible fixture' : null })
+  }
   folderCreated = false; requests.length = 0; unhandled.clear()
 }
 const json = (res, body, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)) }
@@ -42,43 +56,58 @@ async function body(req) {
   return text ? JSON.parse(text) : {}
 }
 function skillList() {
-  return state.installed && state.enabled ? [{ id: 'tencent-meeting-market', name: '腾讯会议下载版技能', sourcePluginId: 'tencent-meeting', enabled: true, available: true, activationMode: 'auto', languages: ['zh-CN', 'en-US'] }] : []
+  return plugins.filter(({ id }) => states[id].installed && states[id].enabled).map((entry) => ({ id: entry.id === 'tencent-meeting' ? 'tencent-meeting-market' : entry.id, name: entry.name + '合成技能', sourcePluginId: entry.id, enabled: true, available: true, activationMode: 'auto', languages: entry.languages }))
 }
 async function api(req, res, url) {
   const route = url.pathname, method = req.method
-  requests.push({ sequence: requests.length + 1, method, path: route, installed: state.installed, enabled: state.enabled })
-  if (route === '/api/plugins/list') return json(res, state.installed ? [{ ...plugin, ...state }] : [])
-  if (route === '/api/plugins/market/list') return json(res, { code: 0, plugins: [{ ...plugin, installed: state.installed }], accountConnected: false })
-  if (route === '/api/plugins/market/install' && method === 'POST') {
-    const data = await body(req); if (data.id !== plugin.id) return json(res, { code: 1, message: 'Unknown fixture plugin' })
-    state.installed = true; state.enabled = false; return json(res, { code: 0, pluginId: plugin.id, enabled: false })
+  requests.push({ sequence: requests.length + 1, method, path: route, installed: state.installed, enabled: state.enabled, plugins: structuredClone(states) })
+  if (route === '/api/plugins/list') return json(res, pluginViews())
+  if (route === '/api/plugins/market/list') return json(res, { code: 0, plugins: plugins.map((entry) => ({ ...entry, installed: states[entry.id].installed })), accountConnected: false })
+  if (['/api/plugins/market/install', '/api/plugins/market/uninstall'].includes(route) && method === 'POST') {
+    const data = await body(req), target = states[data.id]
+    if (!target) return json(res, { code: 1, message: 'Unknown fixture plugin' })
+    target.installed = route.endsWith('/install'); target.enabled = false
+    return json(res, { code: 0, pluginId: data.id, enabled: false })
   }
-  if (route === '/api/plugins/market/uninstall' && method === 'POST') { state.installed = false; state.enabled = false; return json(res, ok()) }
-  if (/^\/api\/plugins\/tencent-meeting\/(enable|disable)$/.test(route) && method === 'POST') {
-    state.enabled = route.endsWith('/enable'); return json(res, { code: 0, enabled: state.enabled })
+  const toggle = route.match(/^\/api\/plugins\/([^/]+)\/(enable|disable)$/)
+  if (toggle && method === 'POST') {
+    const target = states[toggle[1]]
+    if (!target?.installed || target.revokedReason || target.incompatibleReason) return json(res, { code: 1, message: 'Fixture plugin unavailable' })
+    target.enabled = toggle[2] === 'enable'; return json(res, { code: 0, enabled: target.enabled })
   }
-  if (route === '/api/plugins/rescan') return json(res, { code: 0, pluginCount: state.installed ? 1 : 0 })
+  if (route === '/api/plugins/rescan') return json(res, { code: 0, pluginCount: pluginViews().length })
   if (route === '/api/skills/rescan') return json(res, { code: 0, skillCount: skillList().length })
   if (route === '/api/skills/list') return json(res, skillList())
   if (route === '/api/skills/market/list') return json(res, { code: 0, skills: [], accountConnected: false })
-  if (route === '/api/plugins/tencent-meeting/settings') return json(res, { code: 0, settings: [] })
+  if (/^\/api\/plugins\/[^/]+\/settings$/.test(route)) return json(res, { code: 0, settings: [] })
   if (route === '/api/plugins/contributed/style-profiles') return json(res, { code: 0, profiles: [] })
   if (route === '/api/plugins/contributed/templates') return json(res, { code: 0, templates: [] })
-  if (route.startsWith('/api/plugin-web/tencent-meeting/')) {
-    if (!state.installed || !state.enabled) return json(res, { code: 1, message: 'Fixture plugin disabled' }, 404)
-    const name = path.basename(route)
-    if (!['index.html', 'panel.js', 'panel.css', 'awd-plugin-sdk.js'].includes(name)) return json(res, {}, 404)
-    const file = path.join(pluginWeb, name)
+  const webRoute = route.match(/^\/api\/plugin-web\/([^/]+)\/([^/]+)$/)
+  if (webRoute) {
+    const [, id, name] = webRoute, target = states[id]
+    if (!target?.installed || !target.enabled) return json(res, { code: 1, message: 'Fixture plugin disabled' }, 404)
+    const webRoot = id === 'tencent-meeting' ? pluginWeb : dueDiligenceWeb
+    const allowed = id === 'tencent-meeting' ? ['index.html', 'panel.js', 'panel.css', 'awd-plugin-sdk.js'] : ['index.html', 'app.js', 'style.css', 'awd-plugin-sdk.js']
+    if (!webRoot || !allowed.includes(name)) return json(res, {}, 404)
+    const file = path.join(webRoot, name)
     if (!fs.existsSync(file)) return json(res, { message: 'Plugin fixture resource missing: ' + name }, 404)
     const type = name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html'
-    const bytes = fs.readFileSync(file)
-    res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' }); return res.end(bytes)
+    res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' }); return res.end(fs.readFileSync(file))
   }
-  if (route === '/api/plugins/tencent-meeting/tools/tencent_meeting_action') {
-    const input = await body(req)
-    const fixture = { status: { cliAvailable: true, loggedIn: false }, config: { lookbackDays: 30, excludeKeywords: [] }, list: { meetings: [] } }
-    const data = fixture[input.args?.action]
-    return json(res, { code: 0, output: JSON.stringify(data ? { success: true, data } : { success: false, error: 'This rail fixture does not run the CLI' }) })
+  const toolRoute = route.match(/^\/api\/plugins\/([^/]+)\/tools\/([^/]+)$/)
+  if (toolRoute) {
+    const [, id, tool] = toolRoute, target = states[id], input = await body(req)
+    if (!target?.installed || !target.enabled) return json(res, { code: 1, message: 'Fixture plugin disabled' })
+    if (id === 'tencent-meeting' && tool === 'tencent_meeting_action') {
+      const fixture = { status: { cliAvailable: true, loggedIn: false }, config: { lookbackDays: 30, excludeKeywords: [] }, list: { meetings: [] } }
+      const data = fixture[input.args?.action]
+      return json(res, { code: 0, output: JSON.stringify(data ? { success: true, data } : { success: false, error: 'This fixture does not run the CLI' }) })
+    }
+    if (id === 'due-diligence' && tool === 'dd_templates') return json(res, { code: 0, output: JSON.stringify({
+      defaultId: 'synthetic-acquisition', current: null,
+      templates: [{ id: 'synthetic-acquisition', name: '合成测试收购报告', basis: '合成验收数据', scenario: '仅用于工作区布局与表单保活验证', chapterCount: 1, chapters: [{ num: 1, title: '合成主体概况' }] }]
+    }) })
+    return json(res, { code: 1, message: 'Unsupported synthetic fixture tool; no business operation was executed' })
   }
   if (route === '/api/auth/me') return json(res, ok(user))
   if (route === '/api/projects/my') return json(res, [project])
@@ -113,8 +142,8 @@ const bootstrap = `<script>window.checkbaDesktop={apiBaseUrl:${JSON.stringify(or
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, origin)
   try {
-    if (url.pathname === '/__fixture/state') return json(res, { ...state, requests, unhandled: [...unhandled] })
-    if (url.pathname === '/__fixture/reset' && req.method === 'POST') { reset(url.searchParams.get('mode') || 'disabled'); return json(res, state) }
+    if (url.pathname === '/__fixture/state') return json(res, { ...state, plugins: states, requests, unhandled: [...unhandled] })
+    if (url.pathname === '/__fixture/reset' && req.method === 'POST') { reset(url.searchParams.get('mode') || 'disabled', url.searchParams.get('plugin')); return json(res, { ...state, plugins: states }) }
     if (url.pathname.startsWith('/api/')) return await api(req, res, url)
     if (url.pathname === '/' && url.searchParams.has('fixture')) reset(url.searchParams.get('fixture'))
     const upstream = http.request({ hostname: '127.0.0.1', port: vitePort, path: req.url, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${vitePort}`, 'accept-encoding': 'identity' } }, (response) => {

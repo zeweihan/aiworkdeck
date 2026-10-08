@@ -119,7 +119,7 @@ filelink 点击定位、多 target 弹窗、method 小条；契约见 ai-doc-bri
 
 ## 面板切换状态机
 
-rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当前 activeFile 存 lastActiveIdsByMode[oldKey]（:3005）→ 同 key 则收/展 sidebarCollapsed（:3011），异 key 则设 leftPaneKey 并展开（:3014）→ 动态插件另在中间开 tab（openFile fileType:'plugin'，:3018）→ 恢复该模式记忆的左右 tab（:3029）→ 持久化到 uni.storage（:3055）。
+rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当前 activeFile 存 lastActiveIdsByMode[oldKey]（:3005）→ 同 key 则收/展 sidebarCollapsed（:3011），异 key 则设 leftPaneKey 并展开（:3014）→ 动态插件通过 `openPluginTab(pluginId)` 打开/聚焦工作区单例（dev-board#1143/#1144，左栏仅 `PluginWorkspaceSummary`）→ 恢复该模式记忆的左右 tab（:3029）→ 持久化到 uni.storage（:3055）。
 顶栏三开关都在 $nextTick 调 triggerWorkbenchResize 派发 window resize 让编辑器/iframe 重排；toggleAiPanel 打开时刷新 AI 上下文 + fetchChatHistory。
 
 ## 左栏入口（frontend/src/config/leftSidebarPlugins.js）
@@ -1035,7 +1035,7 @@ rail 上**没有设置齿轮**：设置入口是下拉里的「设置」（`goTo
   insight-entity `{entitySpec}`；diff `{diffSource,diffTarget}`；version-compare `{compareSpec}`；version-text-diff `{versionSpec}`。
   **一次性深链不存**（`pendingLocator`、日程 focus/group、提交历史 focus/focusSha/token）——重启再弹一次定位/编辑框是打扰；恢复时补默认值。
 - **不存的标签**：合并比对稿（裁决只在引擎实例里；后端待决记录让版本面板再给入口）、AI 产物 markdown（内容只在内存）、
-  动态插件标签、任何认不出来的 tabType（新类型没进白名单就不恢复）。**新增标签类型要在 `SERIALIZERS` 登记才会被恢复。**
+  任何认不出来的 tabType（新类型没进白名单就不恢复）。动态插件 `tabType:plugin` 只存规范 id/pluginId/name，项目限定、跨窗格单例；清单核验后才挂载，运行权限与入口不从快照读取。**新增标签类型要在 `SERIALIZERS` 登记才会被恢复。**
 - **恢复**（`restoreTabSnapshot`，onLoad 调，在 activeTabsByMode 那段之后）：快照里有文件 / 对比标签时发**一个**
   `GET /api/projects/{id}/files?tree=true`（`fetchTabSnapshotFileIndex`，回收站里的不在其中），不存在的文件标签静默丢弃，对比标签两份都在才留；
   清单拉失败就不核对（原样保留）。无项目态只恢复全局标签（欢迎 / 日程 / 设置 / 插件详情 / 网页）。单例（`SINGLETON_TAB_TYPES`）跨两窗格按 id

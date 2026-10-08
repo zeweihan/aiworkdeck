@@ -53,17 +53,14 @@ export const panelSwitchingMethods = {
         // 否则律师下次回到版本面板，还端着上一次右键那份文件的过滤条。
         if (key !== 'version') this.versionFileFilter = null
 
-        // 动态插件（Web 插件 → PluginPane，纯工具/skill 插件 → PluginGuidePane）在
-        // 左栏面板区渲染，与诉讼可视化/脱敏等一致（「左栏一个图标 = 一个插件」）。
-        // 这里**不再** openFile 一个 fileType:'plugin' 的中栏标签——isFileTypeSupported
-        // 没有 'plugin'，那条老路只会弹「无法打开文件」的模态（dev-board#132 真机复现），
-        // 从来没渲染出过东西。leftPaneKey 已经切到本插件，左栏 v-else-if 分支负责显示。
-
         // 标签常驻、与左栏面板解耦（dev-board#394）：切面板不再按 lastActiveIdsByMode
         // 换活跃标签，也不再因「新面板下不可见」把 activeFileId 置空——律师点一下
         // 插件中心，正在改的催款函不该凭空没了。lastActiveIdsByMode 仍照记，
         // 关标签时的兜底（fileOpenTabs.js）与存量本地存储都还读它。
       }
+
+      const plugin = this.dynamicPlugins.find(p => p.key === key)
+      if (plugin) this.openPluginTab(plugin.pluginId)
 
       // Persistence：有项目按项目分，无项目落 global_*（此前无项目态写的是 project_null_*）
       uni.setStorageSync(workbenchStorageKey(this.projectId, 'leftPaneKey'), key)

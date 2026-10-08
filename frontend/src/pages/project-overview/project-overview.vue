@@ -849,22 +849,11 @@
             @open-settings="openSettingsTab($event || {})"
             @open-doc-file="openInsightDocFile($event)"
           />
-          <!-- 有真前端入口（Web 插件）走 iframe 沙箱；纯工具/skill 插件走宿主渲染的
-               启动面板（介绍 + 怎么用 + 一键动作发进 AI 对话），不再是「未配置入口地址」。 -->
-          <PluginPane
-            v-else-if="activeDynamicPlugin && activeDynamicPlugin.hasFrontend"
-            :url="activeDynamicPlugin.frontendEntry"
-            :plugin-id="activeDynamicPlugin.pluginId || ''"
-            :permissions="activeDynamicPlugin.permissions || []"
-            :project-id="projectId"
-            :get-active-editor="getPluginActiveEditor"
-            :dev-installed="!!activeDynamicPlugin.devInstalled"
-            @kickoff="onPluginQuickAction"
-          />
-          <PluginGuidePane
+          <!-- 动态插件左栏保留概要，主要操作界面在工作区标签。 -->
+          <PluginWorkspaceSummary
             v-else-if="activeDynamicPlugin"
             :plugin="activeDynamicPlugin"
-            @kickoff="onPluginQuickAction"
+            @open="openPluginTab(activeDynamicPlugin.pluginId)"
           />
           <view v-else class="sidebar-plugin-placeholder">
             <text class="placeholder-title">{{ leftPaneTitle }}</text>
@@ -1139,7 +1128,30 @@
                       @favorite-added="onBrowserFavoriteAdded"
                     />
                   </view>
-                  <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft) && !isBrowserTab(activeFileLeft)" class="pane-content">
+                  <!-- 仅已打开的插件建实例；切标签只隐藏，关闭/禁用才卸载。 -->
+                  <view
+                    v-for="entry in leftPluginTabs"
+                    :key="'plugin-left-' + entry.tab.id"
+                    v-show="activeFileLeft && activeFileLeft.id === entry.tab.id"
+                    class="pane-content plugin-workspace"
+                  >
+                    <PluginPane
+                      v-if="entry.plugin.hasFrontend"
+                      :url="entry.plugin.frontendEntry"
+                      :plugin-id="entry.plugin.pluginId"
+                      :permissions="entry.plugin.permissions || []"
+                      :project-id="projectId"
+                      :get-active-editor="getPluginActiveEditor"
+                      :dev-installed="!!entry.plugin.devInstalled"
+                      @kickoff="onPluginQuickAction"
+                    />
+                    <PluginGuidePane v-else :plugin="entry.plugin" @kickoff="onPluginQuickAction" />
+                  </view>
+                  <view v-if="activeFileLeft && activeFileLeft.tabType === 'plugin' && !leftPluginTabs.some(entry => entry.tab.id === activeFileLeft.id)" class="pane-content plugin-workspace-pending">
+                    <text>{{ $t('panels.pgWorkspacePending') }}</text>
+                    <button @tap="loadDynamicPlugins">{{ $t('panels.pgWorkspaceRetry') }}</button>
+                  </view>
+                  <view v-if="activeFileLeft && activeFileLeft.tabType !== 'plugin' && !useLibreEditor(activeFileLeft) && !isBrowserTab(activeFileLeft)" class="pane-content">
                     <MarkdownPreview
                       v-if="isMarkdownTab(activeFileLeft)"
                       :content="activeFileLeft.content"
@@ -1278,15 +1290,6 @@
                       :initial-service="activeFileLeft.adminService || ''"
                       @ai-prompt="onPluginQuickAction"
                     />
-                    <PluginPane
-                      v-else-if="activeFileLeft.fileType === 'plugin'"
-                      :url="activeFileLeft.frontendEntry"
-                      :plugin-id="activeFileLeft.pluginId || ''"
-                      :permissions="activeFileLeft.permissions || []"
-                      :project-id="projectId"
-                      :get-active-editor="getPluginActiveEditor"
-                      :dev-installed="!!activeFileLeft.devInstalled"
-                    />
                     <!-- .drawio：诉讼可视化四份产物里唯一的可继续编辑版，走内嵌
                          draw.io。没有这条分支它会落进 FilePreview 的「暂不支持
                          预览」兜底，这个格式就白出了。 -->
@@ -1377,7 +1380,30 @@
                       @favorite-added="onBrowserFavoriteAdded"
                     />
                   </view>
-                  <view v-if="activeFileRight && !useLibreEditor(activeFileRight) && !isBrowserTab(activeFileRight)" class="pane-content">
+                  <!-- 仅已打开的插件建实例；切标签只隐藏，关闭/禁用才卸载。 -->
+                  <view
+                    v-for="entry in rightPluginTabs"
+                    :key="'plugin-right-' + entry.tab.id"
+                    v-show="activeFileRight && activeFileRight.id === entry.tab.id"
+                    class="pane-content plugin-workspace"
+                  >
+                    <PluginPane
+                      v-if="entry.plugin.hasFrontend"
+                      :url="entry.plugin.frontendEntry"
+                      :plugin-id="entry.plugin.pluginId"
+                      :permissions="entry.plugin.permissions || []"
+                      :project-id="projectId"
+                      :get-active-editor="getPluginActiveEditor"
+                      :dev-installed="!!entry.plugin.devInstalled"
+                      @kickoff="onPluginQuickAction"
+                    />
+                    <PluginGuidePane v-else :plugin="entry.plugin" @kickoff="onPluginQuickAction" />
+                  </view>
+                  <view v-if="activeFileRight && activeFileRight.tabType === 'plugin' && !rightPluginTabs.some(entry => entry.tab.id === activeFileRight.id)" class="pane-content plugin-workspace-pending">
+                    <text>{{ $t('panels.pgWorkspacePending') }}</text>
+                    <button @tap="loadDynamicPlugins">{{ $t('panels.pgWorkspaceRetry') }}</button>
+                  </view>
+                  <view v-if="activeFileRight && activeFileRight.tabType !== 'plugin' && !useLibreEditor(activeFileRight) && !isBrowserTab(activeFileRight)" class="pane-content">
                     <MarkdownPreview
                       v-if="isMarkdownTab(activeFileRight)"
                       :content="activeFileRight.content"
@@ -1502,15 +1528,6 @@
                       :initial-nav="activeFileRight.adminNav || ''"
                       :initial-service="activeFileRight.adminService || ''"
                       @ai-prompt="onPluginQuickAction"
-                    />
-                    <PluginPane
-                      v-else-if="activeFileRight.fileType === 'plugin'"
-                      :url="activeFileRight.frontendEntry"
-                      :plugin-id="activeFileRight.pluginId || ''"
-                      :permissions="activeFileRight.permissions || []"
-                      :project-id="projectId"
-                      :get-active-editor="getPluginActiveEditor"
-                      :dev-installed="!!activeFileRight.devInstalled"
                     />
                     <DrawioEditor
                       v-else-if="isDrawioFile(activeFileRight)"
@@ -2299,6 +2316,7 @@ import EvidenceMethodBar from '@/components/EvidenceMethodBar.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
 import PluginGuidePane from '@/components/PluginGuidePane.vue'
+import PluginWorkspaceSummary from '@/components/PluginWorkspaceSummary.vue'
 import PluginDevPanel from '@/components/PluginDevPanel.vue'
 import TencentMeetingPanel from '@/components/tmeet/TencentMeetingPanel.vue'
 import TencentMeetingTranscriptPane from '@/components/tmeet/TencentMeetingTranscriptPane.vue'
@@ -2460,6 +2478,7 @@ import { ocrCaptureMethods } from './ocrCapture.js'
 import { insightEntityTabMethods } from './insightEntityTab.js'
 import { welcomeTabMethods, WELCOME_TAB_ID, loadShowWelcomeOnStartup, saveShowWelcomeOnStartup } from './welcomeTab.js'
 import { calendarTabMethods } from './calendarTab.js'
+import { pluginWorkspaceTabMethods } from './pluginWorkspaceTabs.js'
 import { tmeetTabMethods } from './tmeetTab.js'
 import { tabSnapshotMethods } from './tabSnapshot.js'
 import { isPaneAllowedWithoutProject, NO_PROJECT_DEFAULT_PANE, NO_PROJECT_PANE_KEYS, workbenchStorageKey } from './noProjectShell.js'
@@ -2524,6 +2543,7 @@ export default {
     MarkdownPreview,
     PluginPane, // Added
     PluginGuidePane,
+    PluginWorkspaceSummary,
     PluginDevPanel,
     TencentMeetingPanel,
     TencentMeetingTranscriptPane,
@@ -2874,7 +2894,8 @@ export default {
         left: { 'files': null, 'dd-files': null },
         right: { 'files': null, 'dd-files': null }
       },
-      dynamicPlugins: [], // Added for dynamic sidebar icons
+      dynamicPlugins: [],
+      dynamicPluginsLoaded: false,
       stagingPinned: false, // Added: keeps staging area open via sidebar button
       stagingManuallyCollapsed: false, // Track if user explicitly collapsed staging area
       stagingFolderId: null // ID of the .stagezone folder
@@ -3316,6 +3337,12 @@ export default {
     // 与 leftLibreFiles 同形制：当前激活的网页标签必进池，其余按 LRU 保活，
     // 都用 v-show 藏而不是卸载——BrowserPane 在 Web 下是个 <iframe>，组件一卸载
     // 文档就没了，切回来只能按 tab.url 重新加载（那正是「切走再切回来丢内容」）。
+    leftPluginTabs() {
+      return this.pluginWorkspaceTabs(this.leftFiles)
+    },
+    rightPluginTabs() {
+      return this.pluginWorkspaceTabs(this.rightFiles)
+    },
     leftWebTabs() {
       if (!this.webKeepAliveEnabled) {
         const active = this.activeFileLeft
@@ -4415,6 +4442,7 @@ export default {
     ...insightEntityTabMethods,
     ...welcomeTabMethods,
     ...calendarTabMethods,
+    ...pluginWorkspaceTabMethods,
     ...tmeetTabMethods,
     ...tabSnapshotMethods,
     ...documentLinkPreviewMethods,
@@ -7230,6 +7258,8 @@ export default {
               frontendEntry
             }
           })
+          this.dynamicPluginsLoaded = true
+          this.reconcilePluginTabs()
           if (this.leftPaneKey?.startsWith('plugin-') && !this.activeDynamicPlugin) {
             this.leftPaneKey = this.hasProject ? 'files' : NO_PROJECT_DEFAULT_PANE
           }
