@@ -44,6 +44,8 @@ jobs:
         # backend 以普通依赖引用 com.checkba:plugin-api，它是 backend/plugin-api 独立工程，
         # 不在任何远端仓库，必须先 install 进本机 ~/.m2 再跑 backend 的 Maven。
         run: mvn -B -q -f backend/plugin-api/pom.xml install
+      - name: Build and test Tencent Meeting marketplace plugin
+        run: ./official-plugins/tencent-meeting/build.sh
       - name: Test
         working-directory: backend
         # forkNode 走 TCP 而不是默认的 stdout 管道：套件里有测试进程往 native stdout
@@ -82,6 +84,8 @@ jobs:
         # desktop job 一直是干净的 npm ci）。本地验证过 frontend/ 的 lockfile 与
         # package.json 一致（npm ci 能正常跑通），收紧成单纯 npm ci。
         run: npm ci
+      - name: Test Tencent Meeting plugin panel
+        run: node --test official-plugins/tencent-meeting/tests/web-*.mjs
       - name: Check emit/binding contracts
         working-directory: frontend
         run: npm run check:emits
