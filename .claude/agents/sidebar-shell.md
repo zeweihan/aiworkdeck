@@ -196,6 +196,8 @@ type/priority/notes/assigneeId/remindBefore 与多文件关联表 `project_task_
 **前端只有一套事项组件，四处清单全部复用，别再各画一份**（`components/calendar/`）：
 - `TaskDialog.vue`：唯一的事项弹窗（标题 @ 关联、类型分段、日期/时间/提醒、项目/负责人、关联文件芯片、备注、Esc 关、Cmd/Ctrl+Enter 存）。
   新建时 type=DEADLINE/HEARING 默认「提前 1 天」提醒（`taskUtils.defaultRemindFor`）。
+  欢迎页先开弹窗再异步加载项目，`selectableProjects` watcher 补齐首个可写项目的表单值（已有选择不覆盖）；
+  `AwdSelect` 对同一下标不 emit change，不能只让界面显示首项而不写 `form.projectId`（dev-board#1137）。
 - `TaskRow.vue`：唯一的事项行（根类 `task-row`，锚点 `data-task-id`）。已完成行右侧显灰色日期不显「逾期」；唯一文件与标题同名时不重复显示芯片。
 - `MentionInput.vue` + `mentionText.js`：原生 textarea 的 `@` 选择器（复用 `AgentMessage/MentionPicker.vue`，加了 `item.kind='member'` 分支）；
   选文件 emit `mention-file`（加入关联），选成员 emit `mention-member`（设负责人）；文字里只留 `@名字` 纯文本。
