@@ -361,6 +361,10 @@ export default {
     effectiveProjectId(pid) {
       if (this.visible) this.loadProjectData(pid)
     },
+    selectableProjects() {
+      // 欢迎页先打开弹窗再异步加载项目；下拉默认显示首项时，表单也必须选中它。
+      if (this.visible && this.showProjectSelect && this.form.projectId == null) this.onProjectChange(0)
+    },
     'form.dueTime'(t) {
       // 清掉时间 = 变全天；全天没有「提前 30 分 / 1 小时」，退成「准时」（当天 9:00）
       if (!t && (this.form.remindBefore === 30 || this.form.remindBefore === 60)) this.form.remindBefore = 0
