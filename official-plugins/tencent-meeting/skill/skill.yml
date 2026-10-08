@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+id: tencent-meeting-market
+name: 腾讯会议插件工作流
+name_en: Tencent Meeting plugin workflow
+version: 1.0.0
+author: AI WorkDeck
+license: AGPL-3.0-or-later
+description: 从腾讯会议插件归档的项目文件生成有依据的会议纪要和待办。
+description_en: Produce grounded minutes and action items from project files archived by the Tencent Meeting plugin.
+enabled_by_default: true
+languages: [zh-CN, en-US]
+category: 其他法律事务
+triggers:
+  - 腾讯会议插件纪要
+  - 腾讯会议插件待办
+triggers_en:
+  - Tencent Meeting plugin minutes
+  - Tencent Meeting plugin action items
+prompt: prompt.md
+tool_policy: restrict
+allowed_tools:
+  - read_file
+  - search_project_files
+  - extract_file_text
+  - write_docx
+  - write_file
+  - task_create
+  - task_list
+  - task_update
+  - todo_write

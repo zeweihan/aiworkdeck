@@ -1,6 +1,6 @@
 # AI WorkDeck 隐私说明
 
-更新日期：2026-09-29
+更新日期：2026-10-08
 
 本说明描述 AI WorkDeck 桌面应用的两件事：
 
@@ -58,6 +58,8 @@
 - **你关联的 GitHub / Gitee 仓库**：你在插件里关联仓库后，云后端会使用你提供的访问令牌读取该仓库的文件列表与你要求参考的文件（出站访问 api.github.com 或 gitee.com），**只读、不提交、不推送**；令牌加密保存、不回显、不写进日志，可随时在插件里解除关联。
 
 以上参考材料的文字**不写日志、不入库、不用于任何模型训练**，也不产生 Credits 扣费（整份文件的跨设备传输仍按原有口径计费）。
+
+**腾讯会议插件（可选）。** 从插件广场安装并启用后，插件在你检查连接、登录或同步等操作时调用本机腾讯会议官方 `tmeet` CLI，由该 CLI 直接连接腾讯会议服务。授权凭据由官方 CLI 保管；会议列表和同步设置缓存在本机，按需读取的逐字稿也会保存在本机任务结果中，主动归档的材料写入当前项目，不上传到插件广场。CLI 的登录账号由同一操作系统用户共享；退出授权会影响本机其他使用该 CLI 的程序。主动选择生成纪要或待办时，已归档材料按既有 AI 对话流程交给你选定的模型处理。
 
 ## 二之二、你主动触发的云端中转
 
@@ -171,7 +173,7 @@
 
 # AI WorkDeck Privacy Note
 
-Last updated: 2026-09-29
+Last updated: 2026-10-08
 
 ## Part 1 — Platform services
 
@@ -197,6 +199,8 @@ This decision **does not separately include attachments, chat history or documen
 **Optional-component models come from public model hubs, not from our servers.** The models for the optional components (document parsing, speech synthesis, on-device transcription) are not shipped in the installer. Only when you choose to download one does your machine fetch it directly from ModelScope (modelscope.cn); if that cannot be reached it falls back to a HuggingFace mirror (hf-mirror.com), where larger files may be served by HuggingFace's own CDN. The requests carry only the model and file names being fetched; no documents, conversations, or other user data are uploaded.
 
 **Cross-file reference and editing (Office/WPS add-in).** The AI in the Office/WPS task pane talks to our hosted add-in backend (addin.aiworkdeck.com / addin.workdeck.ai). It can read other files you point it at and edit another document you have open, so the following passes through our servers. **Another open document:** when you ask the AI in document A's pane to use or edit document B, B's text and the edits to be applied are relayed by the cloud backend between two panes **of your own account**, held in memory only and never stored; only a document that currently has the AI WorkDeck pane open can be edited, everything else is read-only. **A file in a desktop project:** the desktop app extracts that file's text on your own machine and the cloud backend relays it to the AI, in memory only, not stored and not charged; for this the desktop app keeps one extra connection to the **existing** add-in backend and adds no other server. **A file in a cloud project or in the official case library:** those files already live with us and are read under the project or matter permissions you already have, read-only, with no extra copy kept. **A GitHub or Gitee repository you link:** once you link one in the add-in, the cloud backend uses the access token you supplied to read that repository's file list and the file you asked for (outbound calls to api.github.com or gitee.com), **read-only, never committing and never pushing**; the token is stored encrypted, never echoed back, never logged, and the link can be removed at any time. In all four cases the reference text is not logged, not stored, and not used to train any model, and reading it is not charged (transferring a whole file across devices is still billed as before).
+
+**Tencent Meeting plugin (optional).** After installation and activation from the marketplace, actions such as checking the connection, signing in or syncing invoke the official `tmeet` CLI on your device, which connects directly to Tencent Meeting. The official CLI manages authorization credentials. Meeting lists and sync settings are cached locally; transcripts are fetched on demand and retained in local job results; materials you choose to archive are written to the current project and are not uploaded to the plugin marketplace. The CLI account is shared by programs running as the same operating-system user, so signing out also affects those programs. When you choose to generate minutes or action items, the archived material is processed by your selected model through the existing AI conversation flow.
 
 **Cloud relays you trigger yourself.** The four items below happen only when you actively use the feature; the content passes through, or is stored on, our servers. Retention and deletion follow the backend code; where the code does not settle it, we say "per server configuration".
 

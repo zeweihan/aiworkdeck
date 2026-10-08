@@ -1,0 +1,54 @@
+<!-- SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>腾讯会议 · AI WorkDeck</title>
+  <link rel="stylesheet" href="panel.css">
+  <script src="awd-plugin-sdk.js"></script>
+  <script src="panel.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">AI WORKDECK</span><h1 data-i18n="title">腾讯会议</h1><p data-i18n="subtitle">连接会议记录，把讨论带回项目。</p></header>
+    <p id="project-notice" class="notice" role="status"></p>
+    <section class="card" aria-labelledby="connection-title">
+      <h2 id="connection-title" data-i18n="connection">连接</h2>
+      <p id="connection-status" role="status"></p>
+      <p class="hint" data-i18n="localCli">需要本机安装腾讯会议 tmeet CLI。登录凭据由 CLI 保存在本机。</p>
+      <div class="actions"><button id="refresh" data-i18n="refresh">检查连接</button><button id="login" data-i18n="login">登录授权</button><button id="logout" data-i18n="logout">退出登录</button></div>
+      <div id="logout-confirmation" class="notice" hidden>
+        <p data-i18n="logoutWarning">退出将清除本机共享的腾讯会议 CLI 授权，其他使用它的应用也需要重新登录。</p>
+        <div class="actions"><button id="confirm-logout" data-i18n="confirmLogout">确认退出本机登录</button><button id="cancel-logout" data-i18n="cancel">取消</button></div>
+      </div>
+      <div id="authorization" hidden>
+        <label for="authorize-url" data-i18n="authHint">复制链接到浏览器完成授权，然后返回这里。</label>
+        <div class="copy-row"><input id="authorize-url" readonly autocomplete="off" spellcheck="false"><button id="copy-url" data-i18n="copy">复制链接</button></div>
+        <p id="login-wait" class="hint" role="status"></p>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="sync-title">
+      <div class="section-heading"><h2 id="sync-title" data-i18n="recordings">会议记录</h2><button id="sync" class="primary" data-i18n="sync">同步会议</button></div>
+      <p class="hint" data-i18n="syncHint">仅在点击同步时读取腾讯会议记录。云录制和智能纪要是否可用取决于账号权限及会议处理状态。</p>
+      <details id="settings"><summary data-i18n="settings">同步范围与排除词</summary>
+        <label for="lookback" data-i18n="lookback">最近多少天</label><input id="lookback" type="number" min="1" max="90" value="30">
+        <label for="exclude" data-i18n="exclude">排除会议标题包含的词（每行一个）</label><textarea id="exclude" rows="3" maxlength="4000"></textarea>
+        <button id="save-config" data-i18n="save">保存设置</button>
+      </details>
+      <label class="search-label" for="search" data-i18n="search">搜索已同步会议</label><input id="search" type="search" autocomplete="off">
+      <p id="list-empty" class="hint"></p><ul id="meetings" aria-label="会议记录"></ul>
+    </section>
+    <section id="detail" class="card" hidden aria-labelledby="meeting-title">
+      <h2 id="meeting-title"></h2><p id="meeting-meta" class="hint"></p>
+      <div id="completeness" class="notice" role="status" hidden></div>
+      <div class="tabs" role="tablist"><button id="transcript-tab" role="tab" aria-selected="true" aria-controls="transcript" data-i18n="transcript">逐字稿</button><button id="minutes-tab" role="tab" aria-selected="false" aria-controls="minutes" data-i18n="minutes">智能纪要</button></div>
+      <div id="transcript" role="tabpanel" aria-labelledby="transcript-tab"></div><div id="minutes" role="tabpanel" aria-labelledby="minutes-tab" hidden></div>
+      <div class="actions detail-actions"><button id="export" data-i18n="export">导出到项目</button><button id="draft-minutes" data-i18n="draftMinutes">生成会议纪要</button><button id="draft-todos" data-i18n="draftTodos">提取待办</button></div>
+      <p class="hint" data-i18n="aiHint">生成纪要或待办会先保存会议材料到当前项目，再交给当前 AI 对话处理。</p>
+    </section>
+    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>
