@@ -319,6 +319,10 @@ export default {
   pgStepsTitle: 'How to use',
   pgToolsTitle: 'Capabilities this plugin gives the AI',
   pgChatHint: 'Describe what you need in the AI chat on the right to use this plugin.',
+  pgOpenWorkspace: 'Open workspace',
+  pgWorkspaceHint: 'Use the plugin in a tab, or alongside a document in split view.',
+  pgWorkspacePending: 'Checking plugin availability. Retry if it does not load.',
+  pgWorkspaceRetry: 'Reload',
   pgDefaultIntro: '{name} is installed. Describe what you need in the AI chat on the right to use it.',
   ppLoadFailed: 'Unable to load the plugin: entry URL not configured',
 
