@@ -168,3 +168,9 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 
 - 后端：`cd backend && mvn test`（JDK 21；SkillMarketService 有测试 seam）。
 - 页面：dev 起后端(9696)+前端(5173) 从 admin 页进插件广场手测；或 `npm run test:app-e2e`。
+
+## 腾讯会议独立分发（dev-board#1140）
+
+源码在 `official-plugins/tencent-meeting/`：公开 PluginHost JAR + sandbox Web 面板 + `tencent-meeting-market` 技能。`build.sh` 输出真实 ZIP；由官网 `publish-plugin.mts` 受理、扫描、审核、签名上架，再同步北京已签名文件与目录至新加坡。目录更新无需客户端发版或网站部署。不要把旧内置 `tencent-meeting` 技能上架当作独立插件：旧客户端没有它依赖的宿主实现。
+
+新插件依赖本机官方 `tmeet` CLI；同步由用户主动触发，先取元数据，打开会议再读正文。长操作使用公开 Jobs SPI，Web 每 3 秒轮询；不可降至 1 秒（插件 SPI 配额）。AI 入口先归档到项目，再以短文件引用触发独立技能；不向聊天塞入整份逐字稿。登录账号由操作系统用户共享，缓存按 WorkDeck 用户/项目区分，二者不是同一种隔离。
