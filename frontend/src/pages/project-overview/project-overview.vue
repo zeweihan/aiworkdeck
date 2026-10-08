@@ -3783,10 +3783,9 @@ export default {
     this.loadDynamicPlugins() // Fetch dynamic plugins
     this.loadEnabledSkills() // 左栏插件位按 skill 启停过滤（诉讼可视化默认不安装）
 
-    // 广场里装/卸了 skill 之后左栏要立刻跟着变。广场有两个宿主（左栏列表面板、
-    // 中栏详情 tab），它们各发一个事件，两个都订上——只订一个的话，从另一个入口
-    // 装完 skill，左栏图标要等下次进页面才出现。
-    this._onMarketChanged = () => this.loadEnabledSkills()
+    // 广场安装、卸载或启停后，同时刷新 skill 门控与动态插件入口。
+    // 左栏列表面板和中栏详情 tab 各发一个事件，两处操作都应立即反映到 rail。
+    this._onMarketChanged = () => Promise.all([this.loadEnabledSkills(), this.loadDynamicPlugins()])
     uni.$on('awd:market-changed', this._onMarketChanged)
     uni.$on('awd:market-changed-from-sidebar', this._onMarketChanged)
     // Web 插件 evidence.locate（PluginPane）要打开底稿：整个 payload（{fileId, locator, linkKey}）
@@ -7190,15 +7189,19 @@ export default {
        this.pastedImages = [] // Clear images too
     },
     async loadDynamicPlugins() {
+      const loadSeq = (this._dynamicPluginsLoadSeq || 0) + 1
+      this._dynamicPluginsLoadSeq = loadSeq
       try {
         const res = await getPlugins()
         // /api/plugins/list 裸返回数组（无 {code,data} 信封，request() 原样透传）；
         // 只认 res.data 会让这里恒为空 = 装了的插件永远不出现在 rail 上，
         // 与下面 loadEnabledSkills 修过的是同一个坑
         const list = Array.isArray(res) ? res : ((res && res.data) || null)
-        if (list) {
-          // Map backend PluginMetadata to frontend plugin structure
-          this.dynamicPlugins = list.map(p => {
+        if (loadSeq !== this._dynamicPluginsLoadSeq) return
+        if (Array.isArray(list)) {
+          // list 同时包含停用、封禁和版本不兼容项；rail 只显示当前可用的插件。
+          // 请求世代防止安装时的旧响应在禁用/卸载后迟到，把入口重新加回来。
+          this.dynamicPlugins = list.filter(p => p && p.enabled === true && !p.revokedReason && !p.incompatibleReason).map(p => {
             const frontendEntry = resolvePluginEntryUrl(p.id, p.frontendEntry)
             return {
               key: `plugin-${p.id}`,
@@ -7227,6 +7230,9 @@ export default {
               frontendEntry
             }
           })
+          if (this.leftPaneKey?.startsWith('plugin-') && !this.activeDynamicPlugin) {
+            this.leftPaneKey = this.hasProject ? 'files' : NO_PROJECT_DEFAULT_PANE
+          }
           console.log('Dynamic plugins loaded:', this.dynamicPlugins)
         }
       } catch (e) {

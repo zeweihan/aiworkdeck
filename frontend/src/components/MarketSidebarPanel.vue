@@ -551,6 +551,7 @@ export default {
           icon: 'none',
         })
         await this.reloadAll()
+        uni.$emit('awd:market-changed-from-sidebar')
       } catch (e) {
         console.error('重新扫描失败:', e)
         uni.showToast({ title: e?.message || this.$t('market.scanFailedNeedAdmin'), icon: 'none' })

@@ -164,6 +164,13 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - `evidence.link/list/locate`（dev-board#106）：宿主端纯函数在 `frontend/src/utils/pluginEvidence.js`（`npm run test:evidence`）；PluginPane 经 `getActiveEditor` prop 从 project-overview 拿 `{executor, fileId}`（fileId 从 executor 反查，不信 activeFile）；`evidence.locate` 带 targetId 走 `uni.$emit('awd:open-evidence-target')` 由工作台 `openFileLinkTarget` 打开。权限映射 list→`file_read`、link/locate→`editor`，不新增权限名。
 - **本仓 `skills/<id>/skill.yml` 里的 `category` 字段，和这里说的 `MarketSkillView.category`（contract/litigation/compliance/… 七类 + icons.js/CategoryIcon.tsx 图标映射）是两套完全不同的东西，只是字段名撞了**：前者是 `SkillDefinition.category`，取值来自 `MatterCategory` 枚举的中文 display（如「合规监管」「争议解决」），只在命中触发词时喂 `matter.classified` 埋点用（见 `SkillRouter.java`），`SkillController.SkillView` 压根不把它序列化进 `/api/skills/list` 响应；后者是**在线 registry**（网站提交时选的 category）才有的字段，只出现在 `GET /api/skills/market/list` 的 `MarketSkillView` 里。随包本地内置的 skill（诉讼可视化、会议录音、脱敏这类，从未经过官网提交流程）在市场面板「已安装」列表里的图标走的是 `isPanelSkill` 判定出的 `ICONS.panelLeft`，根本不读 `category`——本地 skill.yml 的 `category` 值不需要、也不应该对着 icons.js 的七个英文 key 去选，对着 `MatterCategory.java` 的中文枚举值选就对了（2026-08-19 脱敏改造踩过这个概念混淆，核实后确认两者无关联）。
 
+## 安装后的工作台入口（dev-board#1140，2026-10-08）
+
+- `MarketDetailPane` 的 `awd:market-changed` 与左栏的 `awd:market-changed-from-sidebar` 必须同时刷新 `loadEnabledSkills()` 和 `loadDynamicPlugins()`；侧栏重新扫描成功也广播通知。此前只刷新 Skill，造成“已启用”但 rail 没入口。
+- `/api/plugins/list` 包含全部插件；动态 rail 仅接纳 `enabled === true` 且无 `revokedReason` / `incompatibleReason` 的项。迟到的旧请求不能覆盖较新的启停/卸载结果；请求失败保留最后有效列表。
+- 用户实际入口是交付必验项：不重载工作台，从广场安装、启用后立即看见 rail 入口，点击能打开面板；禁用/卸载应移除入口和面板。隔离安装器、SDK、单独 iframe 测试都不能替代这条路径。用户原话：“做好了，显示不出来？等于没做啊，记住这次错误，以后不要再犯。”
+- 当前旧客户端重进项目可恢复快照，但只能称临时恢复；源码合并不能称用户客户端已更新。测试：`node --test frontend/tests/project-home/market-plugin-rail-refresh.test.mjs`（仓库根目录）。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（JDK 21；SkillMarketService 有测试 seam）。
