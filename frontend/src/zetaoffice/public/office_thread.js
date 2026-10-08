@@ -323,8 +323,11 @@ function hasAnyRedline() {
 // 两个文本区间的起点是否重合——list_revisions 用它判断相邻修订是否首尾相接。
 // 跨 XText（正文 vs 表格单元格）比较时引擎抛 IllegalArgumentException：那本来
 // 也不算相接，吞掉当 false。
-function rangeStartsEqual(a, b) {
+function rangeStartsEqual(a, b, body) {
   if (!a || !b) return false;
+  if (body) {
+    try { return body.compareRegionStarts(a, b) === 0; } catch (e) { /* Compare foreign ranges in their own story. */ }
+  }
   try { return a.getText().compareRegionStarts(a, b) === 0; } catch (e) { return false; }
 }
 // ---- 批注↔修订的可比坐标（dev-board#377）-----------------------------------
@@ -335,36 +338,73 @@ function rangeStartsEqual(a, b) {
 // **不按批注正文的前缀识别**（「【修訂理由】」是模型自己写的，不固定），只按位置。
 // 表格单元格、页眉页脚里的区间跨 story，body.compareRegionStarts 会抛
 // IllegalArgumentException——那种情况回 null，宿主据此不做关联（宁可不挂，不猜）。
-function paraKeyOf(body, start) {
+function paraKeyOf(body, start, cache) {
   return withParaIndex(function (ix) {
     if (!ix.total) return -1;
+    // Bind the per-list cache to this index, including withParaIndex's retry
+    // after a stale range. Native boundary proxies are expensive to recreate.
+    if (cache && cache.ranges !== ix.ranges) {
+      cache.ranges = ix.ranges;
+      cache.boundaries = new Map();
+      cache.paragraphTexts = new Map();
+      cache.lastParagraph = null;
+    }
+    function boundary(index, edge) {
+      if (!cache) return edge === 'start' ? ix.ranges[index].getStart() : ix.ranges[index].getEnd();
+      let saved = cache.boundaries.get(index);
+      if (!saved) { saved = {}; cache.boundaries.set(index, saved); }
+      if (!saved[edge]) saved[edge] = edge === 'start' ? ix.ranges[index].getStart() : ix.ranges[index].getEnd();
+      return saved[edge];
+    }
+    // Reuse the last paragraph only for interior positions. Ends and foreign
+    // stories still use the original binary search and boundary checks.
+    if (cache && cache.lastParagraph) {
+      const last = cache.lastParagraph;
+      try {
+        if (body.compareRegionStarts(last.start, start) >= 0
+          && body.compareRegionEnds(last.end, start) < 0) return last.key;
+      } catch (e) { /* A different story must use the normal lookup. */ }
+    }
     let lo = 0, hi = ix.total - 1;
     // compareRegionStarts(A, B) === 1 表示 A 在 B 之前（与 headingChainOf 同口径）：
     // 找「起点不晚于 start」的最后一段。
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (body.compareRegionStarts(ix.ranges[mid].getStart(), start) >= 0) lo = mid; else hi = mid - 1;
+      if (body.compareRegionStarts(boundary(mid, 'start'), start) >= 0) lo = mid; else hi = mid - 1;
     }
-    return body.compareRegionEnds(ix.ranges[lo].getEnd(), start) <= 0 ? lo : -1;
+    const paragraphEnd = boundary(lo, 'end');
+    const key = body.compareRegionEnds(paragraphEnd, start) <= 0 ? lo : -1;
+    if (cache && key >= 0) cache.lastParagraph = { key: key, start: boundary(lo, 'start'), end: paragraphEnd };
+    return key;
   });
 }
-function rangeLocator(start, end) {
+// A private text cursor, never the live selection. Call only after paraKeyOf
+// has confirmed that the start belongs to the body; foreign stories keep their
+// own cursor. Reset the selection before every use, including after failures.
+function reviewBodyCursorAt(cache, start) {
+  if (!cache.cursor) cache.cursor = cache.body.createTextCursorByRange(start);
+  else cache.cursor.gotoRange(start, false);
+  return cache.cursor;
+}
+function rangeLocator(start, end, cache, spanLength) {
   try {
-    const paraKey = paraKeyOf(xModel.getText(), start);
+    const body = cache ? (cache.body || (cache.body = xModel.getText())) : xModel.getText();
+    const paraKey = cache && cache.currentStart === start ? cache.currentParaKey : paraKeyOf(body, start, cache);
     if (!(paraKey >= 0)) return null;
-    const txt = start.getText();
-    const head = txt.createTextCursorByRange(start);
+    const txt = cache ? body : start.getText();
+    const head = cache ? reviewBodyCursorAt(cache, start) : txt.createTextCursorByRange(start);
     head.gotoStartOfParagraph(true);
     const off = String(head.getString() || '').length;
     let len = 0;
     // 正文流里的宽度。页边显示模式下删除型在流里是零宽（文本被移进 redline
     // 对象），start === end 是正常结果，不是取失败。
-    try { const span = txt.createTextCursorByRange(start); span.gotoRange(end, true); len = String(span.getString() || '').length; } catch (e) {}
+    if (spanLength != null) len = spanLength;
+    else try { const span = cache ? reviewBodyCursorAt(cache, start) : txt.createTextCursorByRange(start); span.gotoRange(end, true); len = String(span.getString() || '').length; } catch (e) {}
     return { paraKey: paraKey, start: off, end: off + len };
   } catch (e) { return null; }
 }
-function applyLocator(it, start, end) {
-  const loc = rangeLocator(start, end);
+function applyLocator(it, start, end, cache, spanLength) {
+  const loc = rangeLocator(start, end, cache, spanLength);
   it.paraKey = loc ? loc.paraKey : -1;
   if (loc) { it.start = loc.start; it.end = loc.end; }
 }
@@ -6494,6 +6534,8 @@ const EXEC = {
     // paragraph index after every edit, and review balloons render neither.
     const locate = !(p && p.locate === false);
     const out = [], tableCells = Object.create(null);
+    // This synchronous list owns its caches: nothing survives edits or reloads.
+    const locatorCache = {};
     let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
       const redlines = xModel.getRedlines();
@@ -6531,15 +6573,38 @@ const EXEC = {
             // 删除」并成一条卡片（用户反馈：一个字一条记录很不科学）。页边模式下
             // 删除文本被移出正文流，一串连续删除的区间会塌到同一个正文位置，正好
             // 命中这个判据；同段落里相隔很远的两处删除则不会被误并。
-            it.contiguous = rangeStartsEqual(prevEnd, rs);
+            if (locate) {
+              locatorCache.currentStart = rs;
+              locatorCache.currentParaKey = -1;
+              try {
+                const body = locatorCache.body || (locatorCache.body = xModel.getText());
+                locatorCache.currentParaKey = paraKeyOf(body, rs, locatorCache);
+              } catch (e) { /* Cells and headers have no body paragraph key. */ }
+            }
+            it.contiguous = rangeStartsEqual(prevEnd, rs, locate ? locatorCache.body : null);
+            let spanLength = null;
             if (!it.text) {
-              const rc = rs.getText().createTextCursorByRange(rs);
+              const rc = locate && locatorCache.currentParaKey >= 0
+                ? reviewBodyCursorAt(locatorCache, rs) : rs.getText().createTextCursorByRange(rs);
               rc.gotoRange(re, true);
               it.text = String(rc.getString() || '');
+              spanLength = it.text.length; // Only the body span, never hidden deletion text.
             }
             if (locate) {
-              const pc = rs.getText().createTextCursorByRange(rs);
-              try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+              applyLocator(it, rs, re, locatorCache, spanLength);
+              try {
+                if (it.paraKey >= 0) {
+                  const paragraphTexts = locatorCache.paragraphTexts;
+                  if (!paragraphTexts.has(it.paraKey)) paragraphTexts.set(it.paraKey,
+                    withParaIndex(function (ix) { return String(ix.ranges[it.paraKey].getString() || '').slice(0, 120); }));
+                  it.paragraph = paragraphTexts.get(it.paraKey);
+                } else {
+                  // Cells, headers and other stories have no body paragraph key.
+                  const pc = rs.getText().createTextCursorByRange(rs);
+                  pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true);
+                  it.paragraph = String(pc.getString() || '').slice(0, 120);
+                }
+              } catch (e) {}
             }
             // 表格内的修订：面板要标出来（页边互叠的正是这一类）
             try {
@@ -6551,7 +6616,6 @@ const EXEC = {
                 it.tableCells = tableCells[it.tableName] || (tableCells[it.tableName] = table.getCellNames().filter(function (name) { return !!table.getCellByName(name).getString(); }));
               }
             } catch (e) { it.inTable = false; }
-            if (locate) applyLocator(it, rs, re);   // 批注关联用的可比坐标
           }
         } catch (e) {}
         prevEnd = curEnd;
