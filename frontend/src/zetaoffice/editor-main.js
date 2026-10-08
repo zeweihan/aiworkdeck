@@ -394,8 +394,9 @@ loadSystemFonts().then((systemFonts) => startEditorEndpoint({
       return { success: false, available: false, reason: 'composing', error: 'composing', message: '请先完成当前输入，再生成或采用建议。' }
     if (/^(get_|list_)/.test(action) || action === 'capture_writing_context' || action === 'set_review_balloons' || (action === 'set_revision_view' && !params?.mode)) return executeWithReview(action, params, callOpts)
     reviewBalloons.suspend(action)
+    reviewHover.suspend()
     try { return await executeWithReview(action, params, callOpts) }
-    finally { reviewBalloons.resume() }
+    finally { reviewBalloons.resume(); reviewHover.resume() }
   }
 
   console.log('[zeta-editor] endpoint ready — serving host over transport')

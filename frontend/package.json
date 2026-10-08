@@ -49,6 +49,7 @@
     "test:lowa-review-gutter": "node tests/lowa-e2e/review-gutter.mjs",
     "test:lowa-comment-batch": "node tests/lowa-e2e/comment-batch.mjs",
     "test:lowa-paragraph-performance": "node tests/lowa-e2e/paragraph-edit-performance.mjs",
+    "test:lowa-open-revisions": "node tests/lowa-e2e/open-revisions.mjs",
     "test:lowa-native-caret": "node tests/lowa-e2e/native-caret-dpi.mjs",
     "test:completion": "node --test tests/completion/*.test.mjs",
     "test:writing-ui": "node tests/lowa-e2e/writing-ui.mjs",

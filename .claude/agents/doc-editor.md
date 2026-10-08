@@ -15,6 +15,8 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 ## 关键文件
 
+**复杂文档首开与修订悬停（dev-board#1135）**：`zetaOfficeReviewHover` 启动、文档变化、滚动和 resize 只失效缓存，不读取修订；真实鼠标停留 160ms 后才读几何，命中后通过 `list_revisions({index, locate:false, documentSeq, revision})` 读取单条元数据。worker 用原生 indexed access，先检查文档与修订世代，不带 index 的原清单契约不变。编辑及视图命令期间由 `editor-main` 配对 suspend/resume，恢复不主动扫描。不要恢复首开/resize 时全量 list_revisions：600 处修订本地实测这一步约 5.3 秒，会阻塞首次工具栏初始化。回归 `test:lowa-open-revisions` 使用有头真实引擎验证首屏、鼠标悬停和导出修订保留；私有文档仅本地测量，不入库。
+
 **引擎构建与分发**
 - `desktop/lowa-build/`：README.md（为什么自建 zh-CN）、RECIPE.md（精确配方+产物 sha256）、mega-build.sh（裸机全自动构建，PHASE_1..7）、autogen.input、patches/（两阶段 zh-CN 焙入 + ZZZ-aiworkdeck-locale-zh-CN.xcd 默认 ooLocale）。
 - `desktop/scripts/fetch-lowa-assets.js` — 构建期下载 LOWA 运行时 + OFL CJK 字体到 `frontend/dist/zetaoffice/lowa/`，写 `.encodings.json`（brotli 侧车）；`LOWA_BASE_URL` 指自托管引擎（`https://www.aiworkdeck.com/lowa-engine/24.2.8-zhcn-r5/`，2026-09-11 起（v0.41.0）；r5 = r4 + 原生审阅补丁 0003（`AwdReviewGeometry`/`AwdReviewSidebarWidth`、外部审阅区命中测试越界修复），wasm.br 45.5MB、data.br 20.9MB，metadata 1935 文件与 r4 一致；r4 保留在架作回退。此前 r4：2026-08-07 起；r4 = r3 + Impress/Draw/Math 进包（--with-wasm-module=calc writer impress），wasm.br 42.5MB(+23%)、data.br 18.6MB；r3 保留在架作回退，desktop-build.yml 一行切换）。
