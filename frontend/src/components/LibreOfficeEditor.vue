@@ -1263,7 +1263,7 @@ export default {
         this.statusKey = 'ready'
         this.initWritingAssistance()
         this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
-        this.$nextTick(() => { this.rehideChromeAfterRetarget() })
+        this.$nextTick(() => { this.rehideChromeAfterRetarget?.() })
       }
     },
     // 预热备胎过继（dev-board#539）：备胎可能已经在后台空转好几个小时，其间
@@ -1658,7 +1658,7 @@ export default {
       // 审阅面板同理（dev-board#460）：版本退回 / 检查点恢复 / AI 直改文件都经
       // reloadFromBackend → loadDocument 换文档，面板不刷就端着上一份的修订清单。
       if (this.reviewOpen) this.reviewRefreshKey++
-      await this.rehideChromeAfterRetarget()
+      await this.rehideChromeAfterRetarget?.()
       return true
     },
     // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
@@ -1770,7 +1770,7 @@ export default {
         // 而自建工具栏的 bootstrap 只在 executor 变化时跑——正常打开那条路藏过一次，
         // 就地重载这条路没人藏，编辑区顶上就露出整条原生菜单栏和标尺（真机反馈 B5）。
         // loadDocument 已 rehide；此处再调一次保持 B5 显式语义（幂等）。
-        await this.rehideChromeAfterRetarget()
+        await this.rehideChromeAfterRetarget?.()
         if (!ownsReload()) return false
         this.statusKey = prevStatusKey.endsWith('Failed') ? 'ready' : prevStatusKey
         this.appendLog('reload: 已就地换成后端最新内容')
