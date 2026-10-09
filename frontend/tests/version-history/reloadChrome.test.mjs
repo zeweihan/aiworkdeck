@@ -408,3 +408,47 @@ test('the original editor retry can reconcile its own abandoned barrier without 
   assert.equal(host._docLoadSeq, 4)
   assert.equal(host._checkpointInvalidated, false)
 })
+
+test('byteful loadDocument success re-hides chrome when toolbar is mounted (retry-while-ready)', async () => {
+  const order = []
+  const host = Object.assign({}, editor.methods, {
+    projectId: 'editor-test-' + (++projectSequence),
+    file: { id: 7, name: '合同.docx', fileSize: 100 },
+    executor: { executeCommand: async (action) => {
+      order.push(action)
+      if (action === 'load_document') return { success: true, kind: 'writer' }
+      return { success: true }
+    } },
+    _docLoadSeq: 1,
+    _bytesPromise: Promise.resolve(new Uint8Array([1, 2, 3]).buffer),
+    _checkpointGeneration: 0,
+    uiRefreshKey: 0,
+    reviewOpen: false,
+    $refs: { toolbar: { async reapplyChrome() { order.push('reapplyChrome') } } },
+    appendLog() {},
+    bootMilestone() {},
+  })
+  assert.equal(await editor.methods.loadDocument.call(host), true)
+  assert.ok(order.includes('load_document'))
+  assert.ok(order.includes('reapplyChrome'))
+  assert.ok(order.lastIndexOf('reapplyChrome') > order.indexOf('load_document'))
+})
+
+test('onLateLoadResult success schedules rehideChromeAfterRetarget', async () => {
+  const calls = []
+  const host = Object.assign({}, editor.methods, {
+    docLoadFailed: true,
+    _loadGen: 2,
+    _loadGenAtFailure: 2,
+    openFailCode: 'X',
+    statusKey: 'loadFailed',
+    $nextTick(fn) { fn() },
+    async rehideChromeAfterRetarget() { calls.push('rehide') },
+    initWritingAssistance() {},
+    appendLog() {},
+  })
+  host.onLateLoadResult('load_document', { success: true })
+  assert.deepEqual(calls, ['rehide'])
+  assert.equal(host.docLoadFailed, false)
+  assert.equal(host.statusKey, 'ready')
+})
