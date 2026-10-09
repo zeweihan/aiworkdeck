@@ -269,6 +269,21 @@
       <view class="etb-btn wide" :class="{ on: state.view.recordChanges }" :title="$t('editor.toolbar.trackChanges')" @tap.stop="toggleTrack">
         <text class="etb-tx sm">{{ $t('editor.toolbar.trackChangesShort') }}</text>
       </view>
+      <!-- #66 PR-B：黄金路径「接受/拒绝当前 + 全部」。当前条走 worker
+           resolve_revision_at_cursor（命中光标下 redline 再进既有 resolve_revision）；
+           全部直接 resolve_all_revisions，不必先开审阅面板。文案全 i18n。 -->
+      <view class="etb-btn wide" :class="{ off: resolvingRevision }" :title="$t('editor.toolbar.acceptCurrent')" @tap.stop="resolveAtCursor('accept')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.acceptCurrentShort') }}</text>
+      </view>
+      <view class="etb-btn wide" :class="{ off: resolvingRevision }" :title="$t('editor.toolbar.rejectCurrent')" @tap.stop="resolveAtCursor('reject')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.rejectCurrentShort') }}</text>
+      </view>
+      <view class="etb-btn wide" :class="{ off: resolvingRevision }" :title="$t('editor.toolbar.acceptAll')" @tap.stop="resolveAllRevisions('accept')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.acceptAllShort') }}</text>
+      </view>
+      <view class="etb-btn wide" :class="{ off: resolvingRevision }" :title="$t('editor.toolbar.rejectAll')" @tap.stop="resolveAllRevisions('reject')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.rejectAllShort') }}</text>
+      </view>
       <!-- 修订显示方式三态（dev-board#368）。当前态取自 get_ui_state 的真实读回，
            不是本地记的；引擎不支持页边显示时中间项自动消失（退成两态）。 -->
       <view v-if="state.view.revisionView" class="etb-drop" :class="{ open: menu === 'revview' }">
@@ -477,6 +492,7 @@ export default {
       insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', formText: '', selText: '',
       // 查找替换
       findOpen: false, findText: '', replaceText: '', matchCase: false,
+      resolvingRevision: false,
       findTotal: null, findIndex: 0, findErr: '', findTruncated: false,
       // LO 自己的菜单栏/工具栏/状态栏/标尺。默认藏起来——这条工具栏就是它们的
       // 替代品；留一个开关是逃生阀，不是常规路径（开了那个会关文档的 × 也回来）。
@@ -846,6 +862,40 @@ export default {
       const next = !this.state.view.recordChanges
       return this.call('set_track_changes', { on: next }).then((r) => this.after(r, false))
     },
+    // #66 PR-B：接受/拒绝光标处那一条。失败（光标不在修订上）用 toast，不标脏。
+    async resolveAtCursor(action) {
+      if (this.resolvingRevision) return null
+      this.closeMenus()
+      this.resolvingRevision = true
+      try {
+        const r = await this.call('resolve_revision_at_cursor', { action })
+        if (!r || r.success !== true) {
+          const msg = (r && r.message) || this.$t('editor.toolbar.resolveCurrentFailed')
+          try { uni.showToast({ title: msg, icon: 'none' }) } catch (e) {}
+          return r
+        }
+        return await this.after(r)
+      } finally {
+        this.resolvingRevision = false
+      }
+    },
+    async resolveAllRevisions(action) {
+      if (this.resolvingRevision) return null
+      this.closeMenus()
+      this.resolvingRevision = true
+      try {
+        const r = await this.call('resolve_all_revisions', { action })
+        if (!r || r.success !== true) {
+          const msg = (r && r.message) || this.$t('editor.toolbar.resolveAllFailed')
+          try { uni.showToast({ title: msg, icon: 'none' }) } catch (e) {}
+          return r
+        }
+        return await this.after(r)
+      } finally {
+        this.resolvingRevision = false
+      }
+    },
+
     // 修订显示方式。changed=false：一个字节都没改，别把文档标脏触发自动保存。
     // 高亮不在这里本地置位——after() 会重跑 get_ui_state，按引擎读回的真实态刷新。
     pickRevisionView(mode) {

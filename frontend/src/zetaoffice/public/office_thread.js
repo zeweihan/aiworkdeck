@@ -3022,6 +3022,29 @@ function installReviewCommentInterceptor(controller) {
 // predicate held, so exactly one of the two menus opens.
 let hostContextMenu = { enabled: false, maxLength: 0 };
 let contextMenuInterceptor = null;
+
+// 光标（或选区）落在哪一条 redline 上——工具条「接受/拒绝当前」用。与
+// selectionTouchesDeletion 同口径的区间相交：compareRegionStarts(A,B)>0 表示 A 在 B 前，
+// ==0 表示重合。零宽删除（页边态塌到一点）靠端点相等也能命中。
+function revisionIndexAtCursor() {
+  try {
+    const vc = ctrl.getViewCursor();
+    const text = vc.getText(), start = vc.getStart(), end = vc.getEnd();
+    const en = xModel.getRedlines().createEnumeration();
+    let index = 0;
+    while (en.hasMoreElements()) {
+      const r = en.nextElement();
+      try {
+        const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
+        if (!rs || !re) { index++; continue; }
+        // 相交：start 不在 re 之后，且 rs 不在 end 之后（含端点贴合）。
+        if (text.compareRegionStarts(start, re) >= 0 && text.compareRegionStarts(rs, end) >= 0) return index;
+      } catch (ignored) {}
+      index++;
+    }
+  } catch (e) {}
+  return -1;
+}
 function selectionTouchesDeletion(vc) {
   const text = vc.getText(), start = vc.getStart(), end = vc.getEnd();
   const e = xModel.getRedlines().createEnumeration();
@@ -6658,6 +6681,15 @@ const EXEC = {
       ? { success: true, index: Number(p.index), selected: String(ctrl.getViewCursor().getString() || '') }
       : { success: false, message: 'could not select revision range' };
   },
+  // 工具条「接受/拒绝当前」：按视图光标命中的那条 redline 走既有 resolve_revision。
+  // 不新开 UNO 白名单——AcceptTrackedChange 仍须正确选区，统一走 selectRedlineRange。
+  resolve_revision_at_cursor(p) {
+    const action = String((p && p.action) || 'accept').toLowerCase();
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
+    const index = revisionIndexAtCursor();
+    if (index < 0) return tableFail('光标处没有修订');
+    return EXEC.resolve_revision(Object.assign({}, p || {}, { index: index, action: action }));
+  },
   // 逐条处置。**光标摆放是硬要求**（真机探针实证）：视图光标必须跨过 redline
   // 区间——插入型这样才选中正文里的新增文本；删除型按显示模式分支（页边模式下
   // 正文流里是零宽，退化成定位到起点；内联模式下删除文字就在流里，同样要跨选），
@@ -9394,7 +9426,7 @@ function runAgentCommandInMarginView(action, fn) {
   return out;
 }
 
-const RESOLVE_REVISION_ACTIONS = new Set(['resolve_revision', 'resolve_revisions', 'resolve_all_revisions']);
+const RESOLVE_REVISION_ACTIONS = new Set(['resolve_revision', 'resolve_revisions', 'resolve_all_revisions', 'resolve_revision_at_cursor']);
 // Keep an open comment draft usable across unrelated edits and delayed view
 // notifications. Its native identity, full state and document must still match.
 function matchCommentSnapshot(p) {
