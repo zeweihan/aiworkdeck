@@ -1241,6 +1241,18 @@ export default {
     // 时才撤回失败态——世代号不符说明文档已切换/已重试/组件已卸载后订阅已断开
     // （dispose() 会取消订阅，届时这个回调根本不会再被触发），这些情形一律
     // 按兵不动，不能让一个作废的迟到结果去污染当前状态。
+    // After load_document retarget, LO LayoutManager resurrects native chrome.
+    // Toolbar bootstrap only runs when executor identity changes — same-executor
+    // loads (retry / late success) must re-hide here. Missing toolbar = no-op.
+    async rehideChromeAfterRetarget() {
+      const toolbar = this.$refs && this.$refs.toolbar
+      if (!toolbar || typeof toolbar.reapplyChrome !== 'function') return
+      try {
+        await toolbar.reapplyChrome()
+      } catch (e) {
+        this.appendLog('reapply chrome failed: ' + e)
+      }
+    },
     onLateLoadResult(action, result) {
       if (action !== 'load_document') return
       if (!this.docLoadFailed) return
@@ -1251,6 +1263,7 @@ export default {
         this.statusKey = 'ready'
         this.initWritingAssistance()
         this.appendLog('迟到的 load_document 结果实际成功，撤回失败态 / late load_document result arrived successful, reverting loadFailed')
+        this.$nextTick(() => { this.rehideChromeAfterRetarget?.() })
       }
     },
     // 预热备胎过继（dev-board#539）：备胎可能已经在后台空转好几个小时，其间
@@ -1645,6 +1658,7 @@ export default {
       // 审阅面板同理（dev-board#460）：版本退回 / 检查点恢复 / AI 直改文件都经
       // reloadFromBackend → loadDocument 换文档，面板不刷就端着上一份的修订清单。
       if (this.reviewOpen) this.reviewRefreshKey++
+      await this.rehideChromeAfterRetarget?.()
       return true
     },
     // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
@@ -1755,12 +1769,8 @@ export default {
         // 它还把 LO 原生那套 chrome（菜单栏 / 工具栏 / 状态栏 / 标尺）重新拉了出来，
         // 而自建工具栏的 bootstrap 只在 executor 变化时跑——正常打开那条路藏过一次，
         // 就地重载这条路没人藏，编辑区顶上就露出整条原生菜单栏和标尺（真机反馈 B5）。
-        // 工具栏只给 Writer 渲染、boot 期间也不在，取不到就什么都不做；藏不成顶多多
-        // 一条菜单栏，绝不能让它把重载本身弄失败（所以自己 try 住）。
-        const toolbar = this.$refs && this.$refs.toolbar
-        if (toolbar && typeof toolbar.reapplyChrome === 'function') {
-          try { await toolbar.reapplyChrome() } catch (e) { this.appendLog('reapply chrome failed: ' + e) }
-        }
+        // loadDocument 已 rehide；此处再调一次保持 B5 显式语义（幂等）。
+        await this.rehideChromeAfterRetarget?.()
         if (!ownsReload()) return false
         this.statusKey = prevStatusKey.endsWith('Failed') ? 'ready' : prevStatusKey
         this.appendLog('reload: 已就地换成后端最新内容')
