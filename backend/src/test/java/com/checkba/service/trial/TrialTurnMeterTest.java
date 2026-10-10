@@ -29,46 +29,75 @@ class TrialTurnMeterTest {
     void setUp() {
         account = mock(AccountService.class);
         cache = mock(TrialBalanceService.class);
-        when(account.isConnected()).thenReturn(true);
+        when(account.accountFingerprintOrNull()).thenReturn("account-a");
         meter = new TrialTurnMeter(account, cache, Runnable::run,
-                Clock.fixed(Instant.parse("2026-10-10T00:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(Instant.parse("2026-10-10T00:00:00Z"), ZoneOffset.UTC), true);
     }
 
     @Test
     void completedWithTextOnPlatform_reportsOnce_withRunIdAsTurnId_andCachesSiteBalance() {
         Map<String, Object> bal = Map.of("granted", true, "callsUsed", 1);
-        when(account.reportTrialTurn(anyMap())).thenReturn(Map.of("counted", true, "balance", bal));
-        assertTrue(meter.onTurnEnded("run-1", 7L, "finished", true, true));
-        verify(account).reportTrialTurn(argThat(m -> "run-1".equals(m.get("turnId"))
+        when(account.reportTrialTurn(eq("account-a"), anyMap())).thenReturn(Map.of("counted", true, "balance", bal));
+        assertTrue(meter.onTurnEnded("run-1", 7L, "account-a", "finished", true, true));
+        verify(account).reportTrialTurn(eq("account-a"), argThat(m -> "run-1".equals(m.get("turnId"))
                 && "completed".equals(m.get("outcome")) && Boolean.TRUE.equals(m.get("hasAssistantResult"))));
         verify(account).clearTrialCache();
-        verify(cache).cacheFromAccount(7L, bal);
+        verify(cache).cacheFromAccount(7L, "account-a", bal);
     }
 
     @Test
     void awaitingInput_countsAsCompleted() {
-        when(account.reportTrialTurn(anyMap())).thenReturn(Map.of());
-        assertTrue(meter.onTurnEnded("run-2", 7L, "awaiting_input", true, true));
+        when(account.reportTrialTurn(eq("account-a"), anyMap())).thenReturn(Map.of());
+        assertTrue(meter.onTurnEnded("run-2", 7L, "account-a", "awaiting_input", true, true));
     }
 
     @Test
     void notCounted_failedCancelledPausedNoTextLocalOrDisconnected() {
-        assertFalse(meter.onTurnEnded("r", 7L, "error", true, true));
-        assertFalse(meter.onTurnEnded("r", 7L, "cancelled", true, true));
-        assertFalse(meter.onTurnEnded("r", 7L, "paused", true, true));
-        assertFalse(meter.onTurnEnded("r", 7L, "awaiting_approval", true, true));
-        assertFalse(meter.onTurnEnded("r", 7L, "finished", false, true), "无可展示正文不计");
-        assertFalse(meter.onTurnEnded("r", 7L, "finished", true, false), "纯本地/BYOK 不计");
-        when(account.isConnected()).thenReturn(false);
-        assertFalse(meter.onTurnEnded("r", 7L, "finished", true, true));
-        verify(account, never()).reportTrialTurn(anyMap());
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "error", true, true));
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "cancelled", true, true));
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "paused", true, true));
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "awaiting_approval", true, true));
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "finished", false, true), "无可展示正文不计");
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "finished", true, false), "纯本地/BYOK 不计");
+        when(account.accountFingerprintOrNull()).thenReturn(null);
+        assertFalse(meter.onTurnEnded("r", 7L, "account-a", "finished", true, true));
+        verify(account, never()).reportTrialTurn(eq("account-a"), anyMap());
     }
 
     @Test
     void reportFailure_isSwallowed_andNeverWritesLocalBalance() {
-        when(account.reportTrialTurn(anyMap())).thenThrow(
+        when(account.reportTrialTurn(eq("account-a"), anyMap())).thenThrow(
                 new AccountException(AccountException.Kind.NETWORK, "down"));
-        assertDoesNotThrow(() -> meter.onTurnEnded("run-3", 7L, "finished", true, true));
+        assertDoesNotThrow(() -> meter.onTurnEnded("run-3", 7L, "account-a", "finished", true, true));
+        verifyNoInteractions(cache);
+    }
+
+    @Test
+    void serverModeNeverReportsTenantTurnThroughMachineAccount() {
+        meter = new TrialTurnMeter(account, cache, Runnable::run, Clock.systemUTC(), false);
+        assertNull(meter.accountFingerprint());
+        assertFalse(meter.onTurnEnded("tenant-run", 7L, "account-a", "finished", true, true));
+        verifyNoInteractions(account, cache);
+    }
+
+    @Test
+    void accountChangedDuringTurnDoesNotEnqueueReport() {
+        when(account.accountFingerprintOrNull()).thenReturn("account-b");
+        assertFalse(meter.onTurnEnded("run-a", 7L, "account-a", "finished", true, true));
+        verify(account, never()).reportTrialTurn(anyString(), anyMap());
+        verifyNoInteractions(cache);
+    }
+
+    @Test
+    void queuedReportRetainsOriginalOwnerForAtomicAccountCheck() {
+        java.util.List<Runnable> queue = new java.util.ArrayList<>();
+        meter = new TrialTurnMeter(account, cache, queue::add, Clock.systemUTC(), true);
+        assertTrue(meter.onTurnEnded("run-a", 7L, "account-a", "finished", true, true));
+        when(account.accountFingerprintOrNull()).thenReturn("account-b");
+        when(account.reportTrialTurn(eq("account-a"), anyMap())).thenReturn(Map.of());
+        queue.get(0).run();
+        verify(account).reportTrialTurn(eq("account-a"), anyMap());
+        verify(account, never()).reportTrialTurn(eq("account-b"), anyMap());
         verifyNoInteractions(cache);
     }
 

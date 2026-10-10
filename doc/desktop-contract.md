@@ -1,12 +1,14 @@
 # 桌面/插件 ↔ 官网契约：本仓侧待办条目
 
 **权威契约文档在官网仓** `doc/desktop-contract.md`（人读版）+ `scripts/contract-check.mts`
-（机器可执行版）。本文件只记录由本仓（桌面/server 后端）一侧先行提出、**官网侧尚未实施**的
-契约条目；官网侧落地后应把条目并入权威文档与 contract-check，并从此处删除。
+（机器可执行版）。本文件记录本仓（桌面/server 后端）一侧的接线说明与待办；
+官网侧落地后以权威文档与 contract-check 为准，下方已落地条目仅作历史留档。
 
-## 待官网侧实施
+## 已落地条目（留档，便于回溯当初的判断）
 
-### 试用计量 v0.1.1：`GET /api/account/trial` 与 `POST /api/account/trial/turns`（2026-10-10 提出）
+### 试用计量 v0.1.1：`GET /api/account/trial` 与 `POST /api/account/trial/turns`（官网已实现，2026-10-10 核对）
+
+官网 PR #228 已实现，以下保留桌面侧接线说明；权威定义仍在官网仓。核对源码为 `14fd257` 的 `app/api/account/trial/route.ts`、`turns/route.ts` 与 `lib/trial.ts`，不是生产认证计费验收。
 
 依据：`试用计量规格-v0.1.md` v0.1.1（14 天或 80 次 AI 回合，先到为准）+ 总经理 2026-10-09 决定
 「**权威在账户站**」。桌面后端只代理、缓存、展示，**不判定、不扣减**；代理方式与
@@ -52,9 +54,7 @@
 `{"error":"trial_expired"}`。桌面已在 `AccountService#rejectedMessage` 备好人话（条款只写「以协议为准」），
 **不**在本机做任何拦截；本地打开/编辑文件不受影响。
 
-**4. 契约检查**：官网侧落地后并入 `doc/desktop-contract.md` 与 `scripts/contract-check.mts`，并从此处删除。
-
-## 已落地条目（留档，便于回溯当初的判断）
+**4. 桌面缓存与归属**（dev-board#1166）：仅同账户最后一次确认的完整快照可离线展示，并标记非权威；无缓存不合成默认额度。回合开始记录账户指纹，发送前在连接锁内复核，换账户放弃上报。server 普通租户不能读取机器余额；per-user 计量接线前，server 模式不通过机器账户上报。
 
 ### `POST /api/internal/collab-directory` 同事名录（2026-09-10 实施，dev-board#550 #551）
 

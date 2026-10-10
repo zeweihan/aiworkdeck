@@ -31,6 +31,14 @@ public class TrialBalance {
     @Column(nullable = false)
     private Long userId;
 
+    /** 账户站缓存归属；旧行为空，不能作为任何账户的展示兜底。 */
+    @Column(length = 12)
+    private String accountFingerprint;
+
+    /** 账户站最后确认的完整余额；离线展示不按本机时间重新推算。 */
+    @Column(columnDefinition = "TEXT")
+    private String accountSnapshot;
+
     /** = trial_grant 时刻 */
     @Column(nullable = false)
     private Instant trialStartedAt;
@@ -65,6 +73,10 @@ public class TrialBalance {
     public void setId(Long id) { this.id = id; }
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
+    public String getAccountFingerprint() { return accountFingerprint; }
+    public void setAccountFingerprint(String accountFingerprint) { this.accountFingerprint = accountFingerprint; }
+    public String getAccountSnapshot() { return accountSnapshot; }
+    public void setAccountSnapshot(String accountSnapshot) { this.accountSnapshot = accountSnapshot; }
     public Instant getTrialStartedAt() { return trialStartedAt; }
     public void setTrialStartedAt(Instant trialStartedAt) { this.trialStartedAt = trialStartedAt; }
     public Instant getTrialEndsAt() { return trialEndsAt; }

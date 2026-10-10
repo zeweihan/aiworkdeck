@@ -4,6 +4,7 @@
 package com.checkba.controller;
 
 import com.checkba.service.account.AccountService;
+import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.trial.TrialBalanceService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +20,8 @@ import static org.mockito.Mockito.*;
 
 /** GET /api/trial/balance：权威取自账户站（同 /api/account/balance 代理），本地只缓存 + 兜底展示。 */
 class TrialControllerTest {
+
+    private final MachineAccountGuard guard = mock(MachineAccountGuard.class);
 
     @BeforeEach
     @AfterEach
@@ -37,7 +40,7 @@ class TrialControllerTest {
     void noSession_returns401_andDoesNotTouchAnything() {
         TrialBalanceService svc = mock(TrialBalanceService.class);
         AccountService acc = mock(AccountService.class);
-        ResponseEntity<Map<String, Object>> r = new TrialController(svc, acc).balance(null);
+        ResponseEntity<Map<String, Object>> r = new TrialController(svc, acc, guard).balance(null);
         assertEquals(HttpStatus.UNAUTHORIZED, r.getStatusCode());
         verifyNoInteractions(svc, acc);
     }
@@ -49,7 +52,7 @@ class TrialControllerTest {
         AccountService acc = mock(AccountService.class);
         when(acc.trialSnapshot()).thenReturn(Map.of("connected", false));
         @SuppressWarnings("unchecked")
-        Map<String, Object> data = (Map<String, Object>) new TrialController(svc, acc).balance(null).getBody().get("data");
+        Map<String, Object> data = (Map<String, Object>) new TrialController(svc, acc, guard).balance(null).getBody().get("data");
         assertEquals(false, data.get("connected"));
         assertEquals("以协议为准", data.get("termsNotice"));
         verify(svc, never()).balance(anyLong());
@@ -61,15 +64,15 @@ class TrialControllerTest {
         TrialBalanceService svc = mock(TrialBalanceService.class);
         AccountService acc = mock(AccountService.class);
         Map<String, Object> site = Map.of("granted", true, "status", "active", "remainingDays", 9, "remainingCalls", 61);
-        when(acc.trialSnapshot()).thenReturn(Map.of("connected", true, "available", true, "trial", site));
-        ResponseEntity<Map<String, Object>> r = new TrialController(svc, acc).balance(null);
+        when(acc.trialSnapshot()).thenReturn(Map.of("accountFingerprint", "account-a", "connected", true, "available", true, "trial", site));
+        ResponseEntity<Map<String, Object>> r = new TrialController(svc, acc, guard).balance(null);
         assertEquals(0, r.getBody().get("code"));
         @SuppressWarnings("unchecked") Map<String, Object> data = (Map<String, Object>) r.getBody().get("data");
         assertEquals(61, data.get("remainingCalls"));
         assertEquals(9, data.get("remainingDays"));
         assertEquals(true, data.get("authoritative"));
         assertEquals("account", data.get("source"));
-        verify(svc).cacheFromAccount(42L, site);
+        verify(svc).cacheFromAccount(42L, "account-a", site);
     }
 
     @Test
@@ -77,13 +80,41 @@ class TrialControllerTest {
         localUser(42L);
         TrialBalanceService svc = mock(TrialBalanceService.class);
         AccountService acc = mock(AccountService.class);
-        when(acc.trialSnapshot()).thenReturn(Map.of("connected", true, "available", false));
-        when(svc.balance(42L)).thenReturn(Map.of("remainingCalls", 50, "authoritative", false));
+        when(acc.trialSnapshot()).thenReturn(Map.of("accountFingerprint", "account-a", "connected", true, "available", false));
+        when(svc.cachedBalance(42L, "account-a")).thenReturn(Map.of("remainingCalls", 50, "authoritative", false));
         @SuppressWarnings("unchecked")
-        Map<String, Object> data = (Map<String, Object>) new TrialController(svc, acc).balance(null).getBody().get("data");
+        Map<String, Object> data = (Map<String, Object>) new TrialController(svc, acc, guard).balance(null).getBody().get("data");
         assertEquals(50, data.get("remainingCalls"));
         assertEquals(false, data.get("authoritative"));
         assertEquals(true, data.get("stale"));
         assertEquals(false, data.get("available"));
+    }
+
+    @Test
+    void serverTenantCannotReadMachineTrialBalance() {
+        localUser(42L);
+        TrialBalanceService svc = mock(TrialBalanceService.class);
+        AccountService acc = mock(AccountService.class);
+        doThrow(new IllegalArgumentException("仅管理员账号可操作")).when(guard).requireMachineScope("tenant-session");
+        Map<String, Object> body = new TrialController(svc, acc, guard).balance("tenant-session").getBody();
+        assertEquals(1, body.get("code"));
+        assertFalse(body.containsKey("data"));
+        verifyNoInteractions(svc, acc);
+    }
+
+    @Test
+    void siteUnreachableWithoutConfirmedCacheDoesNotInventQuota() {
+        localUser(42L);
+        TrialBalanceService svc = mock(TrialBalanceService.class);
+        AccountService acc = mock(AccountService.class);
+        when(acc.trialSnapshot()).thenReturn(Map.of("accountFingerprint", "account-b", "connected", true, "available", false));
+        when(svc.cachedBalance(42L, "account-b")).thenReturn(Map.of());
+        Map<String, Object> data = new TrialController(svc, acc, guard).snapshot(42L);
+        assertEquals(false, data.get("available"));
+        assertEquals(false, data.get("authoritative"));
+        assertFalse(data.containsKey("status"));
+        assertFalse(data.containsKey("remainingCalls"));
+        assertFalse(data.containsKey("remainingDays"));
+        verify(svc, never()).balance(anyLong());
     }
 }

@@ -7,6 +7,10 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 职责边界：AI 对话功能本身（编排循环、工具注册分发、记忆、SSE、前端聊天 UI、评测）。AI→编辑器指令链路属 ai-doc-bridge 领域；skill 机制属 plugin-system 领域（但 SkillRouter 在编排循环里有两处旁路接入点）。
 
+## 试用回合归属（dev-board#1166，2026-10-10）
+
+`launchTurn` 在入执行队列前把当前账户指纹写入 `RunGuard`，收尾原样交给 `TrialTurnMeter`；不得到异步上报时才取当前账户。换账户则放弃旧回合，发送与账户切换共享锁；server 未接 per-user 试用上报前停用机器级计量。接线测试 `AgentOrchestratorTrialHookTest` 验证入队捕获与收尾传递，账户/缓存契约见 licensing-billing。
+
 ## 清单首发与状态更新耗时（dev-board#1130，2026-10-07）
 
 本机 0.53.1 日志出现首轮约 158 秒后才写清单，下一轮约 212 秒只调用 `todo_write`；未发现重复提交整轮或重复修改同段的证据。中英基底提示与 `TodoTools` 描述要求范围明确后、细读分析前先发简短步骤，不先推演全部修改；状态更新与下一已确定且不依赖中间结果的工具同次响应，保留澄清、结果依赖、实际完成、依据核验及最终回读边界。`ContextAssemblerServiceTest` 验真实组装与工具 schema 中的契约；提示测试不证明实模提速。编辑器 ACK 等待应与模型生成分开计时，不提前执行尚未完整生成的工具参数。

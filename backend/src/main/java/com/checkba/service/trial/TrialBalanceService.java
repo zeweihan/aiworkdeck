@@ -4,6 +4,9 @@
 package com.checkba.service.trial;
 
 import com.checkba.model.entity.TrialBalance;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.repository.TrialBalanceRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -24,7 +27,7 @@ import java.util.Optional;
  * {@link #cacheFromAccount} 是正式路径唯一的写入口（拿账户站回包覆盖）。
  *
  * <ul>
- *   <li>{@link #balance(Long)} —— GET /api/trial/balance 的数据源；纯读，不写库、不扣次。</li>
+ *   <li>{@link #cachedBalance(Long, String)} —— 只返回同一账户的已确认缓存；纯读，不写库、不扣次。</li>
  *   <li>{@link #grant(Long, String)} —— 幂等发放（规格 §3.2 trial_grant）。本 spike <b>没有</b>
  *       HTTP 入口、也没有调用方；接线留给后续 PR（POST /api/trial/grant 或注册钩子）。</li>
  * </ul>
@@ -36,6 +39,7 @@ import java.util.Optional;
 @Service
 public class TrialBalanceService {
 
+    private static final ObjectMapper JSON = new ObjectMapper();
     private final TrialBalanceRepository repository;
     private final Clock clock;
 
@@ -49,7 +53,25 @@ public class TrialBalanceService {
         this.clock = clock;
     }
 
-    /** 只读余额快照。无行 = 未发放（status=none），按规格 §5 展示「剩余 14 天 / 80 次」。 */
+    /** 无缓存、旧版无归属行或换账户时返回未知，不能伪造默认额度。 */
+    @Transactional(readOnly = true)
+    public Map<String, Object> cachedBalance(Long userId, String owner) {
+        if (owner == null || owner.isBlank()) return Map.of();
+        Optional<TrialBalance> row = repository.findByUserId(userId)
+                .filter(b -> owner.equals(b.getAccountFingerprint()));
+        if (row.isEmpty() || row.get().getAccountSnapshot() == null) return Map.of();
+        try {
+            Map<String, Object> out = JSON.readValue(row.get().getAccountSnapshot(), new TypeReference<>() {});
+            out.put("authoritative", false);
+            out.put("source", "local_cache");
+            out.put("termsNotice", TrialPolicy.TERMS_NOTICE);
+            return out;
+        } catch (JsonProcessingException e) {
+            return Map.of();
+        }
+    }
+
+    /** 内部 spike 的只读余额；正式 HTTP 离线路径必须使用 cachedBalance。 */
     @Transactional(readOnly = true)
     public Map<String, Object> balance(Long userId) {
         Optional<TrialBalance> row = repository.findByUserId(userId);
@@ -118,12 +140,17 @@ public class TrialBalanceService {
     }
 
     /**
-     * 用账户站回包覆盖本地缓存行。账户站说「未发放」时不建行。
+     * 用账户站回包覆盖本地缓存行并绑定归属；明确未发放时清掉该账户的旧缓存。
      * 字段名按账户站契约（camelCase）：trialStartedAt / trialEndsAt / callsQuota / callsUsed / status / policy / region。
      */
     @Transactional
-    public void cacheFromAccount(Long userId, Map<String, Object> site) {
-        if (userId == null || site == null) return;
+    public void cacheFromAccount(Long userId, String owner, Map<String, Object> site) {
+        if (userId == null || owner == null || owner.isBlank() || site == null) return;
+        if (Boolean.FALSE.equals(site.get("granted"))) {
+            repository.findByUserId(userId).filter(b -> owner.equals(b.getAccountFingerprint()))
+                    .ifPresent(repository::delete);
+            return;
+        }
         if (!Boolean.TRUE.equals(site.get("granted"))) return;
         Instant started = parseInstant(site.get("trialStartedAt"));
         Instant ends = parseInstant(site.get("trialEndsAt"));
@@ -135,6 +162,12 @@ public class TrialBalanceService {
             fresh.setCreatedAt(now);
             return fresh;
         });
+        try {
+            b.setAccountSnapshot(JSON.writeValueAsString(site));
+        } catch (JsonProcessingException e) {
+            return;
+        }
+        b.setAccountFingerprint(owner);
         b.setTrialStartedAt(started);
         b.setTrialEndsAt(ends);
         b.setCallsQuota(intOr(site.get("callsQuota"), TrialPolicy.TRIAL_CALLS));

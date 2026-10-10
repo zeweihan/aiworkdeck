@@ -719,10 +719,24 @@ class AccountServiceTest {
     void reportTrialTurnPosts() {
         AccountService service = connected();
         transport.enqueue(200, "{\"counted\":true}");
-        Map<String, Object> r = service.reportTrialTurn(Map.of("turnId", "run-1", "outcome", "completed"));
+        Map<String, Object> r = service.reportTrialTurn(service.accountFingerprintOrNull(), Map.of("turnId", "run-1", "outcome", "completed"));
         assertEquals("POST https://www.aiworkdeck.com/api/account/trial/turns", transport.calls.get(transport.calls.size() - 1));
         assertTrue(transport.bodies.get(transport.bodies.size() - 1).contains("run-1"));
         assertEquals(true, r.get("counted"));
+    }
+
+    @Test
+    void trialReportAfterAccountSwitchNeverSendsUnderNewAccount() {
+        AccountService service = connected();
+        String owner = service.accountFingerprintOrNull();
+        transport.enqueue(200, ME);
+        service.connect("awdk_SecondSyntheticAccountKey0123456789");
+        int calls = transport.calls.size();
+        assertTrue(service.reportTrialTurn(owner, Map.of("turnId", "run-a")).isEmpty());
+        assertEquals(calls, transport.calls.size());
+        service.disconnect();
+        assertTrue(service.reportTrialTurn(owner, Map.of("turnId", "run-a")).isEmpty());
+        assertEquals(calls, transport.calls.size());
     }
 
     @Test

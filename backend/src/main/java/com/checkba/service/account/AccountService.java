@@ -685,7 +685,9 @@ public class AccountService {
      * POST /api/account/trial/turns —— 上报一次已完成、有可展示结果的 AI 回合。
      * 是否计次、是否超额全部由官网判定（按 turnId 幂等）；本机只转发、不做任何扣减。
      */
-    public Map<String, Object> reportTrialTurn(Map<String, Object> turn) {
+    public synchronized Map<String, Object> reportTrialTurn(String owner, Map<String, Object> turn) {
+        // 与 connect/disconnect 共用锁，检查归属和取凭据/发送不可被换账户插入。
+        if (owner == null || !owner.equals(accountFingerprintOrNull())) return Map.of();
         return sendJson("POST", "/api/account/trial/turns", turn);
     }
 
@@ -699,9 +701,9 @@ public class AccountService {
             return Map.of("connected", false);
         }
         String owner = accountFingerprintOrNull();
-        if (owner == null) owner = "unknown";
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("connected", true);
+        result.put("accountFingerprint", owner);
         Map<String, Object> trial;
         Cached<Map<String, Object>> cache = trialCache;
         if (cache != null && cache.fresh(owner, TRIAL_TTL_MS)) {
