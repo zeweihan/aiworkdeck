@@ -105,6 +105,24 @@ class SubAgentServiceTest {
     }
 
     @Test
+    void generatedFilesInheritParentRunFolderWithoutInheritingSkillState() {
+        when(registry.getAllSpecifications(any())).thenReturn(List.of(
+                ToolSpecification.builder().name("write_docx").description("create document").build()));
+        ToolContext parent = new ToolContext(42L, "conv-main", 7L, AUX_MODEL, List.of(), null,
+                "parent-run", java.util.Set.of("files"), null, 9L);
+        for (ToolContext context : new ToolContext[]{parent, null}) {
+            org.mockito.Mockito.clearInvocations(registry);
+            when(model.generate(anyList(), anyList())).thenReturn(toolCallTurn("write_docx", "{}"), textTurn("完成"));
+            assertTrue(newService().dispatch("创建文件", "文件", List.of("write_docx"), context).success());
+            ArgumentCaptor<ToolContext> captured = ArgumentCaptor.forClass(ToolContext.class);
+            verify(registry).execute(eq("write_docx"), any(), captured.capture());
+            assertEquals(context == null ? null : Long.valueOf(9), captured.getValue().defaultOutputFolderId());
+            assertNull(captured.getValue().runId());
+            assertNull(captured.getValue().disclosedCategories());
+        }
+    }
+
+    @Test
     void invalidQuotedXmlIsNotExecutedAndErrorAllowsCorrection() {
         when(model.generate(anyList(), anyList())).thenReturn(
                 textTurn("<tool_code>search_web(query=\"原稿称\"无条件\"，有误\")</tool_code>"),

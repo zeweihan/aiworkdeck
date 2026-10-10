@@ -1796,8 +1796,10 @@ export default {
     const draggingCreatedFile = ref(false)
     const handleCreatedFileDragStart = (event, file) => {
         draggingCreatedFile.value = startCreatedFileDrag(event, file, props.projectId)
+        if (draggingCreatedFile.value) uni.$emit('file-drag-start')
     }
     const handleCreatedFileDragEnd = () => {
+        if (draggingCreatedFile.value) uni.$emit('file-drag-end')
         draggingCreatedFile.value = false
         endCreatedFileDrag()
     }

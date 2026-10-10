@@ -111,6 +111,8 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 
 ## AI 新建文件的默认位置与拖拽（dev-board#1181）
 
+产品内子代理透传父轮 defaultOutputFolderId，但不继承父技能 runId/披露状态。聊天新增文件拖拽须配对发既有 file-drag-start/end 信号；否则目录节点可接收，根空白/空树却不会显示或接收投放。
+
 `pdf_to_word` 独立沿用源 PDF 的可见目录（省略 parentId），显式目录优先、0 明确根目录；目录解析在同轮转换幂等 key 之前完成。它不继承后来打开的参考文档目录。
 
 `GeneratedFileLocation` 是新建落点策略；`ToolRegistry` 只对白名单

@@ -16,7 +16,7 @@ try {
   const errors = []; page.on('pageerror', e => errors.push(e.message))
   await page.setViewport({ width: 960, height: 800 })
   await page.goto('http://127.0.0.1:5218/generated-files.html')
-  await page.addStyleTag({ content: 'html,body{margin:0;font-family:sans-serif} view,scroll-view{display:block} #app{position:absolute;right:0;top:0;width:460px;height:800px} #file-tree{position:absolute;left:0;top:0;width:430px;height:800px} .tree-item{min-height:32px} .status-popup-item{min-height:32px} .status-popup.up{background:white;color:black;z-index:9999}' })
+  await page.addStyleTag({ content: 'html,body{margin:0;font-family:sans-serif} view,scroll-view{display:block} #app{position:absolute;right:0;top:0;width:460px;height:800px} #file-tree{position:absolute;left:0;top:0;width:430px;height:800px} .tree-content{min-height:650px} .tree-item{min-height:32px} .status-popup-item{min-height:32px} .status-popup.up{background:white;color:black;z-index:9999}' })
   await page.waitForFunction(() => window.dragFixtureReady && document.querySelector('[data-file-id="90"]'))
   await page.evaluate(() => {
     window.chatState.fileChanges.push({ fileId: 99, projectId: 1, fileName: '新报告.docx', changeType: 'ADDED' })
@@ -31,7 +31,24 @@ try {
   assert.deepEqual(await page.evaluate(() => window.fileMoves[0]), { projectId: 1, fileId: 99, parentId: 90, sortOrder: 0 })
   assert.equal(await page.evaluate(() => window.projectFiles.find(f => f.id === 98).parentId), 1, 'same-name source must remain untouched')
   await page.waitForFunction(() => !document.__checkbaDraggedFile)
+  for (const empty of [false, true]) {
+    if (empty) await page.evaluate(() => { window.fileTree.files = []; window.fileTree.allFiles = [] })
+    const card = await page.$('.status-popup-item[draggable="true"]')
+    const box = await card.boundingBox(), blank = { x: 180, y: 450 }
+    const drag = await page.mouse.drag({ x: box.x + box.width / 2, y: box.y + box.height / 2 }, blank)
+    await page.waitForFunction(() => window.fileTree.isAnyDragging, { timeout: 5000 })
+    let target = blank
+    if (empty) {
+      const zone = await page.waitForSelector('.root-drop-zone-empty')
+      const bounds = await zone.boundingBox(); target = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+    }
+    await page.mouse.dragEnter(target, drag); await page.mouse.dragOver(target, drag)
+    await page.mouse.drop(target, drag); await page.mouse.up()
+    await page.waitForFunction(count => window.fileMoves.length === count, { timeout: 5000 }, empty ? 3 : 2)
+    assert.equal(await page.evaluate(() => window.fileMoves.at(-1).parentId), null)
+    await page.waitForFunction(() => !window.fileTree.isAnyDragging && !document.__checkbaDraggedFile)
+  }
   await page.screenshot({ path: '/tmp/generated-files-drag.png', fullPage: true })
   assert.deepEqual(errors, [])
-  console.log('PASS: native drag from real chat to real folder moved id=99, preserved same-name id=98, cleared fallback')
+  console.log('PASS: native drag from real chat to real folder moved id=99, preserved same-name id=98, accepted blank root and empty tree, cleared fallback')
 } finally { await browser.close(); await server.close() }
