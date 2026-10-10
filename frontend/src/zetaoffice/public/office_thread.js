@@ -4057,18 +4057,23 @@ const EXEC = {
   // text becomes a paragraph break (insertTextAtCursor).
   replace_selection(p) {
     const vc = ctrl.getViewCursor();
-    // 最小修订颗粒度：选区与新文本只差几个字时，只对差异字符落修订。仅在修订
-    // 模式开启时启用——RecordChanges 关闭意味着调用方要的是硬替换（如测试 reset）。
-    let rcOn = false; try { rcOn = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
-    if (rcOn && (vc.getString() || '').length > 0 && applyMinimalRedline(vc, p.text || '')) {
+    // One paste may contain hundreds of paragraphs. Batch native layout and
+    // JS modify callbacks for the entire replacement, including tracked edits.
+    lockModel();
+    try {
+      // 最小修订颗粒度：选区与新文本只差几个字时，只对差异字符落修订。仅在修订
+      // 模式开启时启用——RecordChanges 关闭意味着调用方要的是硬替换（如测试 reset）。
+      let rcOn = false; try { rcOn = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+      if (rcOn && (vc.getString() || '').length > 0 && applyMinimalRedline(vc, p.text || '')) {
+        vc.collapseToEnd();
+        return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
+      }
+      if ((vc.getString() || '').length > 0) vc.setString(''); // drop the selection (tracked)
+      vc.collapseToEnd();
+      insertTextAtCursor(vc, p.text || '');
       vc.collapseToEnd();
       return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
-    }
-    if ((vc.getString() || '').length > 0) vc.setString(''); // drop the selection (tracked)
-    vc.collapseToEnd();
-    insertTextAtCursor(vc, p.text || '');
-    vc.collapseToEnd();
-    return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
+    } finally { unlockModel(); }
   },
   // [verified] model-native search + redline (RFC §0.2: no integer offsets).
   // 全部替换走引擎原生 replaceAll（见 nativeTrackedReplaceAll：150 命中 0.2s）；
