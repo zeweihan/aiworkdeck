@@ -25,7 +25,7 @@
   "build": {
     "appId": "com.aiworkdeck.desktop",
     "productName": "AI WorkDeck",
-    "copyright": "Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors. Licensed under the GNU AGPL v3.0 or later. Source: https://github.com/zeweihan/aiworkdeck",
+    "copyright": "Copyright 2026 Beijing Jingwei Ziyi Technology Co., Ltd. and AI WorkDeck contributors. Licensed under the GNU AGPL v3.0 or later. Source: https://github.com/AI-WorkDeck/aiworkdeck",
     "directories": {
       "output": "release"
     },

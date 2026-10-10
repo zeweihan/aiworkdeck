@@ -57,9 +57,9 @@ const FULL_NOTICE = [
   'Released under the GNU Affero General Public License v3.0 or later, with ABSOLUTELY NO WARRANTY.',
   '为北京京微资易科技有限公司的商标，再分发修改版时不得用作产品名',
   'is a trademark of Beijing Jingwei Ziyi Technology Co., Ltd.',
-  'https://github.com/zeweihan/aiworkdeck"',
-  'https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE',
-  'https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md'
+  'https://github.com/AI-WorkDeck/aiworkdeck"',
+  'https://github.com/AI-WorkDeck/aiworkdeck/blob/master/LICENSE',
+  'https://github.com/AI-WorkDeck/aiworkdeck/blob/master/legal/TRADEMARKS.md'
 ]
 
 /** 折叠行上必须点到的东西（中英各一套）：品牌 + 许可证 + 三个去处 */

@@ -61,9 +61,10 @@ jobs:
         # workflow_dispatch runs.
         os: ${{ fromJSON((startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && '["macos-latest", "windows-latest"]' || '["windows-latest"]') }}
     runs-on: ${{ matrix.os }}
-    # Windows 代码签名的 OIDC 主体固定为 repo:zeweihan/aiworkdeck:environment:windows-signing
-    # （Azure 侧联合凭据只认这一条），所以 job 必须挂这个 environment；tag 每版不同，
-    # 按 ref 建凭据要靠通配的预览功能，用 environment 绕开。环境本身无保护规则。
+    # 组织迁移后 GitHub 启用 immutable OIDC subject（2026-10-10 API 已核对）：
+    # repo:AI-WorkDeck@340410259/aiworkdeck@1138989235:environment:windows-signing
+    # Azure 联合凭据 github-aiworkdeck-org-windows-signing 已匹配，旧信任暂保留；
+    # 尚未做迁移后签名发版验证。job 必须保留此 environment，tag / 分支共用主体。
     environment: windows-signing
     steps:
       - uses: actions/checkout@v4

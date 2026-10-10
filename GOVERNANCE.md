@@ -52,11 +52,11 @@ Small, reversible changes never need an RFC. When unsure, open an issue and ask.
 
 ## Community call
 
-A monthly community call is held online (announced in [GitHub Discussions](https://github.com/zeweihan/aiworkdeck/discussions) at least one week ahead, with agenda collected in the announcement thread). Notes are posted back to the same thread. The call covers: what shipped, roadmap movement, open RFCs, and open floor.
+A monthly community call is held online (announced in [GitHub Discussions](https://github.com/AI-WorkDeck/aiworkdeck/discussions) at least one week ahead, with agenda collected in the announcement thread). Notes are posted back to the same thread. The call covers: what shipped, roadmap movement, open RFCs, and open floor.
 
 ## Roadmap
 
-The public roadmap lives in the [README's Roadmap section](README.md#roadmap) and is refreshed as items ship. Larger directional items land as RFCs first. Feature requests: [GitHub issues](https://github.com/zeweihan/aiworkdeck/issues) or the [feature-request form](https://www.aiworkdeck.com/en/feature-request).
+The public roadmap lives in the [README's Roadmap section](README.md#roadmap) and is refreshed as items ship. Larger directional items land as RFCs first. Feature requests: [GitHub issues](https://github.com/AI-WorkDeck/aiworkdeck/issues) or the [feature-request form](https://www.aiworkdeck.com/en/feature-request).
 
 ## Code of conduct
 

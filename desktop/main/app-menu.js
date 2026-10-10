@@ -284,9 +284,9 @@ function applyAboutPanel() {
     '本软件依 GNU Affero General Public License v3.0 或更高版本发布，不提供任何担保。',
     'Released under the GNU AGPL v3.0 or later, with ABSOLUTELY NO WARRANTY.',
     '',
-    '源代码 / Source code: https://github.com/zeweihan/aiworkdeck',
-    '许可证全文 / Full license: https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE',
-    '商标说明 / Trademark notice: https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md',
+    '源代码 / Source code: https://github.com/AI-WorkDeck/aiworkdeck',
+    '许可证全文 / Full license: https://github.com/AI-WorkDeck/aiworkdeck/blob/master/LICENSE',
+    '商标说明 / Trademark notice: https://github.com/AI-WorkDeck/aiworkdeck/blob/master/legal/TRADEMARKS.md',
     '',
     '「AI WorkDeck」为北京京微资易科技有限公司的商标，再分发修改版时不得使用该名称作为产品名。',
   ].join('\n')
@@ -300,7 +300,7 @@ function applyAboutPanel() {
       // 就是视觉上重复了一遍。不设置 credits，AGPL 许可告示（源码/许可证/
       // 商标说明链接）仍完整保留在 copyright 里，只出现一次。
       copyright,
-      website: 'https://github.com/zeweihan/aiworkdeck',
+      website: 'https://github.com/AI-WorkDeck/aiworkdeck',
     })
   } catch (e) {
     // 面板文案不是功能，拿不到就算了，绝不让它挡住菜单初始化

@@ -49,14 +49,14 @@ class SourceCodeNoticeFilterTest {
     void getResponseCarriesSourceCodeHeader() throws Exception {
         mvc().perform(get("/api/anything"))
                 .andExpect(status().isOk())
-                .andExpect(header().string("X-Source-Code", "https://github.com/zeweihan/aiworkdeck"));
+                .andExpect(header().string("X-Source-Code", "https://github.com/AI-WorkDeck/aiworkdeck"));
     }
 
     @Test
     void postResponseCarriesSourceCodeHeader() throws Exception {
         mvc().perform(post("/api/echo").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk())
-                .andExpect(header().string("X-Source-Code", "https://github.com/zeweihan/aiworkdeck"));
+                .andExpect(header().string("X-Source-Code", "https://github.com/AI-WorkDeck/aiworkdeck"));
     }
 
     /** 非成功响应也是「网络服务给出的响应」，AGPL §13 的告示不该只在成功路径上有。 */
@@ -64,13 +64,13 @@ class SourceCodeNoticeFilterTest {
     void notFoundResponseAlsoCarriesSourceCodeHeader() throws Exception {
         mvc().perform(get("/api/no-such-endpoint"))
                 .andExpect(status().isNotFound())
-                .andExpect(header().string("X-Source-Code", "https://github.com/zeweihan/aiworkdeck"));
+                .andExpect(header().string("X-Source-Code", "https://github.com/AI-WorkDeck/aiworkdeck"));
     }
 
     /** 常量本身也锁一道：下游改成自己的源码地址是允许的，我们自己改错了要能发现。 */
     @Test
     void headerNameAndUrlAreTheDeclaredContract() {
         assertEquals("X-Source-Code", SourceCodeNoticeFilter.HEADER);
-        assertEquals("https://github.com/zeweihan/aiworkdeck", SourceCodeNoticeFilter.SOURCE_URL);
+        assertEquals("https://github.com/AI-WorkDeck/aiworkdeck", SourceCodeNoticeFilter.SOURCE_URL);
     }
 }

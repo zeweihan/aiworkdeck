@@ -31,7 +31,7 @@ MCowBQYDK2VwAyEARzNmFaY6rOsiGPnduwi+O09OROxpYidwiQNLUXksFMs=
 // CHECKBA_UPDATE_PUBKEY_FILE——仅本机环境变量可设，不扩大远程攻击面）。
 const DEFAULT_MANIFEST_URLS = [
   'https://www.aiworkdeck.com/update/desktop/manifest.json',
-  'https://github.com/zeweihan/aiworkdeck/releases/latest/download/manifest.json'
+  'https://github.com/AI-WorkDeck/aiworkdeck/releases/latest/download/manifest.json'
 ]
 
 const CHECK_DELAY_MS = 2 * 60 * 1000        // 启动后首查延迟

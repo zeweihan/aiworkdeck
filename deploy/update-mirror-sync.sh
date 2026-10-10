@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-REPO="${REPO:-zeweihan/aiworkdeck}"
+REPO="${REPO:-AI-WorkDeck/aiworkdeck}"
 WEB_ROOT="${WEB_ROOT:-/www/wwwroot/update/desktop}"
 # 不能用 releases/latest：它是仓库级「最新」，native pack 的 release
 # （tag pack-*-v*，见 pack-release.yml）也算数。2026-08-19 实测：pack 上架后到

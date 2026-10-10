@@ -32,7 +32,7 @@ echo "# AI WorkDeck 每日 QA — $DAY" > "$REPORT"
 
 # ---- 更新专用克隆 ----
 if [[ ! -d "$REPO/.git" ]]; then
-  git clone --depth 20 https://github.com/zeweihan/aiworkdeck.git "$REPO" || { echo "clone 失败" >> "$REPORT"; exit 1 }
+  git clone --depth 20 https://github.com/AI-WorkDeck/aiworkdeck.git "$REPO" || { echo "clone 失败" >> "$REPORT"; exit 1 }
 fi
 cd "$REPO"
 git fetch origin master --depth 20 && git reset --hard origin/master >> /dev/null
@@ -84,7 +84,7 @@ fi
 # ---- 汇报 ----
 if [[ $FAILED -ne 0 ]]; then
   echo "\n**结论：有失败 ❌**" >> "$REPORT"
-  gh issue create -R zeweihan/aiworkdeck \
+  gh issue create -R AI-WorkDeck/aiworkdeck \
     --title "每日 QA 失败 $DAY / nightly QA failures" \
     --body-file "$REPORT" --label bug 2>> "$REPORT" || true
 else

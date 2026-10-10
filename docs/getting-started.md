@@ -5,7 +5,7 @@
 
 > Originally contributed by @AzazelSensei in #730; refreshed 2026-09-29.
 
-This is the from-source path for contributors and self-hosters. If you only want to try the product, download a [desktop release](https://github.com/zeweihan/aiworkdeck/releases/latest) instead; it bundles the backend, a JRE, and a local database, so none of the prerequisites below are needed.
+This is the from-source path for contributors and self-hosters. If you only want to try the product, download a [desktop release](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest) instead; it bundles the backend, a JRE, and a local database, so none of the prerequisites below are needed.
 
 > **Root `docker-compose.yml` is not a full stack / 根目录 compose 不是全栈.** It only starts the MinerU and PPTX sidecars; the backend, frontend, and PostgreSQL run on the host via `restart-all.sh`. See [docker-sidecars.md](docker-sidecars.md). Law-firm evaluators should start with [firm-eval-topology-a.md](firm-eval-topology-a.md) (desktop release, no prerequisites).
 
@@ -25,7 +25,7 @@ This is the from-source path for contributors and self-hosters. If you only want
 ## Run the stack
 
 ```bash
-git clone https://github.com/zeweihan/aiworkdeck.git
+git clone https://github.com/AI-WorkDeck/aiworkdeck.git
 cd aiworkdeck
 
 cp backend/.env.example backend/.env.production

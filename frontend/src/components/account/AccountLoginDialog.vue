@@ -203,7 +203,7 @@ import { recordAccountConsents } from '@/utils/accountConsent.js'
 import { showDialog } from '@/utils/dialog.js'
 
 // 与站点无关（GitHub README），不走 siteBaseUrl()
-const TRIAL_CODE_URL = 'https://github.com/zeweihan/aiworkdeck#readme'
+const TRIAL_CODE_URL = 'https://github.com/AI-WorkDeck/aiworkdeck#readme'
 
 // 共创开发者计划注册赠金的窗口末端：北京时间 2026-10-01 00:00（= 2026-09-30 16:00 UTC）。
 const PROMO_END_TS = Date.parse('2026-09-30T16:00:00Z')
