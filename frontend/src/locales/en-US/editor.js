@@ -3,6 +3,25 @@
 // Document editor domain: user-visible copy for LibreOfficeEditor / ReviewPanel /
 // DocDiffViewer / CompareDocDialog / VariablePanel / DrawioEditor.
 export default {
+  visualReview: {
+    "title": "Layout check",
+    "pagesTitle": "Layout check: choose pages",
+    "pagesHint": "Consecutive pages, e.g. 1-6; up to 6 per check",
+    "badPages": "Enter 1–6 consecutive pages, for example 2-4.",
+    "consent": "Pages {startPage}–{endPage} of the current document will be rendered as images and sent to your auxiliary model. This may take about a minute and uses model credits. The document is unchanged. If fewer pages exist, only those pages are checked. Continue?",
+    "start": "Check layout",
+    "cancel": "Not now",
+    "busy": "Checking layout…",
+    "stale": "The document changed during the check. Please check again.",
+    "snapshotFailed": "Cannot confirm the document state. Wait for it to load and retry.",
+    "exportFailed": "Could not generate the PDF for checking.",
+    "sizeLimit": "The PDF is empty or exceeds 12MB. Reduce the document and retry.",
+    "empty": "No usable layout-check result was returned.",
+    "failed": "Layout check failed. Please retry later.",
+    "scope": "Checked pages {pages} of {total}.",
+    "allPages": "All pages of this snapshot were covered. Verify AI findings.",
+    "partial": "Other pages have not been checked. Select another range to continue."
+},
   saveBeforeLeaving: 'Some documents are not saved. Retry saving, or close those documents first to handle unsaved changes.',
   retrySave: 'Retry Save',
   saveTimeout: 'Saving timed out. Check your connection and retry.',

@@ -450,10 +450,14 @@ cd frontend && npm run build:h5 && npm run build:zetaoffice   # 改 editor-main.
 ## 即时审校（dev-board#547）
 
 `POST /api/projects/{projectId}/insight/review` 接收当前未保存的正文段落
-`{docFileId, paragraphs:[{index,text}], deep, truncated}`，返回
+`{docFileId, paragraphs:[{index,text,numbering?}], deep, truncated}`，返回
 `{findings, summary, truncated, scope:"body", deep}`。段落 index 为 0 基；finding 带当前段落全文
 `expectedParagraph` 和定位区间，宿主必须按同一编辑器 revision 接收结果，过期响应直接丢弃。
 
+- 编号元数据（dev-board#1176）透传 `numbering:{available,label,listId,level,hasLabel}`，含义见 ai-doc-bridge。
+  `summary.numberingKnownParagraphs/numberingUnknownParagraphs` 分别统计已读取/未知覆盖，不把失败当“无列表”。
+  宿主规则缓存包含编号元数据，正文不变但标签/列表/层级变化也重查；模型去重仍只看实际发送的正文，单改编号不增加自动 AI 调用。
+  自动标签不拼入 `text/expectedParagraph/quote`，重复前缀与自动/手写混用只报疑点供核对，不自动修改。
 - `deep:false` 只运行 `ContractStructureAudit` 的字形、编号、交叉引用、待定内容、同段算术规则，
   以及 `DocInsightChecks.usccIssues`。不调模型、不查外部库、不写 insight run/entity/finding 表。
 - `deep:true` 只能由有写权限的用户点击“深入审校”触发：辅助模型在一次分块调用中抽取 claims

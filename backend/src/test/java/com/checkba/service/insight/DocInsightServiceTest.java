@@ -1253,6 +1253,32 @@ class DocInsightServiceTest {
     }
 
     @Test
+    void localReviewPreservesNativeNumberingAndOriginalAnchorWithoutPaidCalls() throws Exception {
+        ParagraphInput paragraph = new ObjectMapper().readValue("""
+                {"index":7,"text":"2. 工作计划","numbering":
+                  {"available":true,"label":"2.","listId":"list-a","level":0,"hasLabel":true}}
+                """, ParagraphInput.class);
+        ReviewResult result = svc.review(UID, PID, DOC, List.of(paragraph), false, false);
+        var finding = result.findings().stream().filter(f -> "NUMBERING".equals(f.kind())
+                && f.message().contains("自动编号与手写编号重复")).findFirst().orElseThrow();
+        assertEquals(7, finding.paragraphIndex());
+        assertEquals("2. 工作计划", finding.expectedParagraph());
+        assertEquals(finding.quote(), paragraph.text().substring(finding.start(), finding.end()));
+        assertNull(finding.replacement());
+        assertEquals(1, result.summary().get("numberingKnownParagraphs"));
+        assertEquals(0, result.summary().get("numberingUnknownParagraphs"));
+        ReviewResult legacy = svc.review(UID, PID, DOC, List.of(new ParagraphInput(0, "正文")), false, false);
+        assertEquals(1, legacy.summary().get("numberingUnknownParagraphs"));
+        verify(chatModelFactory, never()).getAuxChatModel(any(java.time.Duration.class));
+        verify(chatModelFactory, never()).ensurePaidAccess(any());
+        verify(gateway, never()).ensureConnected();
+        verify(qichacha, never()).queryEciInfoJson(anyString());
+        verify(mcp, never()).callTool(anyString(), anyString(), anyMap());
+        verify(runs, never()).save(any());
+        verify(findingRepo, never()).save(any());
+    }
+
+    @Test
     void deepReviewPreservesAccountErrorInsteadOfPartialResult() {
         when(chatModelFactory.getAuxChatModel(any(java.time.Duration.class))).thenThrow(
                 new com.checkba.service.account.AccountException(

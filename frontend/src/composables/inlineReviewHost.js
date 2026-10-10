@@ -8,8 +8,9 @@ const hashKey = value => {
   for (const ch of String(value ?? '')) { hash ^= ch.codePointAt(0); hash = Math.imul(hash, 16777619) }
   return (hash >>> 0).toString(36)
 }
+const bodyHash = (snap) => hashKey(JSON.stringify([snap.truncated, snap.paragraphs.map(p => [p.index, p.text])]))
 const snapshotHash = (snap) => hashKey(
-  (snap.truncated ? 't|' : 'f|') + snap.paragraphs.map((p) => p.index + ':' + p.text).join(''))
+  JSON.stringify([snap.truncated, snap.paragraphs.map(p => [p.index, p.text, p.numbering || null])]))
 
 // 停笔多久才自动跑一次 AI 审校（dev-board#749）。
 // 2.5 秒是规则检查的防抖——那一层不花钱，停一下就该给结果；AI 那一层要扣 Credits，
@@ -60,9 +61,9 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
   let state = { session, layoutKey, revision: null, ai, hidden, active, writable, status: 'stale', deepStatus: 'idle', findings: [], truncated: false, autoBlocked: '' }
   let deepRevision = null, autoBlocked = '', lastAutoAt = 0
   // 全文快照没变就不再发 POST：律师改一处格式、滚一次页、切回标签都会让 revision 前进，
-  // 但正文一个字没动时上一轮的结论逐条仍然成立（dev-board#724 降资源第二项）。
-  // deepHash 是同一把尺子量 AI 那一层：正文没动就没有新东西值得再花一次钱。
-  let cachedHash = null, cachedResult = null, deepHash = null
+  // 正文及编号元数据都没动时才复用规则结论（dev-board#1176）。
+  // AI 当前只收正文；单改编号只重跑免费规则，不增加模型调用。
+  let cachedHash = null, cachedBodyHash = null, cachedResult = null, deepHash = null
   const publish = (next = {}) => {
     if (disposed) return
     state = { ...state, ...next, session, layoutKey, ai, hidden, active, writable, autoBlocked }
@@ -85,7 +86,7 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
   function scheduleAi() {
     clearAiTimer()
     if (disposed || !ai || !active || !writable || deepBusy || autoBlocked) return
-    if (!cachedHash || cachedHash === deepHash) return
+    if (!cachedBodyHash || cachedBodyHash === deepHash) return
     const wait = Math.max(AUTO_AI_IDLE_MS, lastAutoAt + AUTO_AI_MIN_GAP_MS - now())
     aiTimer = timers.set(() => { aiTimer = null; lastAutoAt = now(); return run(true) }, wait)
   }
@@ -136,7 +137,7 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
         if (p.text.length > 15000) { truncated = true; continue }
         const size = p.text.length + (paragraphs.length ? 1 : 0)
         if (paragraphs.length >= 10000 || chars + size > 200000) { truncated = true; exhausted = true; break }
-        paragraphs.push({ index: p.index, text: p.text }); chars += size
+        paragraphs.push({ index: p.index, text: p.text, ...(p.numbering ? { numbering: p.numbering } : {}) }); chars += size
       }
       if (exhausted || !result.truncated) break
       if (!Number.isInteger(result.nextStartParagraph) || result.nextStartParagraph <= start) throw new Error('REVIEW_SNAPSHOT_FAILED')
@@ -167,10 +168,10 @@ export function createInlineReviewHost({ projectId, fileId, userId, execute, sen
       if (context.reason === 'inline-revisions') throw new Error('REVIEW_INLINE_REVISIONS')
       if (context?.revision !== snap.revision) { invalidate(); return false }
       if (!result || !Array.isArray(result.findings)) throw new Error('REVIEW_FAILED')
-      if (!deep) { cachedHash = hash; cachedResult = result }
+      if (!deep) { cachedHash = hash; cachedBodyHash = bodyHash(snap); cachedResult = result }
       if (!deep && deepRevision === snap.revision) return true
       const deepComplete = !deep || result.summary?.deepComplete !== false
-      if (deep && deepComplete) { deepRevision = snap.revision; deepHash = hash }
+      if (deep && deepComplete) { deepRevision = snap.revision; deepHash = bodyHash(snap) }
       const reason = deep && !deepComplete ? String(result.summary?.deepReason || '') : ''
       if (AUTO_AI_BLOCKING.has(reason)) autoBlocked = reason
       const byIndex = new Map(snap.paragraphs.map((p) => [p.index, p.text]))

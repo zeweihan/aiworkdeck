@@ -303,6 +303,9 @@
       </view>
       <!-- 「审校」按钮已随 dev-board#749 撤掉：开关归正文那颗浮球（开关必须和它
            控制的东西待在一起），工具栏这里只留「审阅」。 -->
+      <view class="etb-btn wide" :title="$t('editor.visualReview.title')" @tap.stop="$emit('visual-review')">
+        <text class="etb-tx sm">{{ $t('editor.visualReview.title') }}</text>
+      </view>
       <!-- 写作一组：「有据续写」（dev-board#748）与「自动补全」（dev-board#755）。
            两块面板本体都长在客体页里（要跟着正文光标走），这里是它们的唯一入口：
            点一下给客体发开合指令，按下态等客体回报，宿主不本地乐观翻。
@@ -464,7 +467,7 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 export default {
   name: 'EditorToolbar',
   components: { ParagraphFormatPanel, SystemFontsPanel },
-  emits: ['toggle-review', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state', 'focus-editor', 'ai-format'],
+  emits: ['visual-review', 'toggle-review', 'toggle-semantic-writing', 'toggle-writing-assistance', 'changed', 'ui-state', 'focus-editor', 'ai-format'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },

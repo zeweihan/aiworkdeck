@@ -79,6 +79,16 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 **system prompt 第 7 节表里已登记**（zh/en 同步），Precise Execution 加了第 4 条「审查类任务的边界是整份文件」，
 Operational Rules 第 2 条那句「revision mode disabled、改动立即生效」是陈年错话，已改成修订痕迹口径。
 
+### 原生编号元数据（dev-board#1176）
+
+`get_document_text` / `get_document_outline` / `get_review_context` 的段落另带
+`numbering:{available,label,listId,level,hasLabel}`；`text` 始终是原文，不拼接自动标签，避免改变引用和定位偏移。
+worker 只读 `ListLabelString/ListId/NumberingLevel/NumberingIsNumber`，不枚举 NumberingRules。
+读取失败为 `available:false`（其余 null），与成功读取的无列表段落有区别。bullet 可以是空 label、非空 listId、hasLabel:true，不能当作无编号。
+`DocumentAuditTools` 与即时审校透传元数据；`ContractStructureAudit` 比较原生标签和正文前缀：同数同层报告重复、异数同层只报疑点。
+混用检测收窄到同一 listId/level 的两个相邻自动段之间的已知无列表段，且序号可连续衔接；未知元数据、跨层级、跨列表和重新起号不推断混用。
+日期/金额/正常子层级不作为双重编号。原生序列允许有意重新起号；未提供 restart 意图时不直接报跳号错误。旧两参 Paragraph 保持兼容，报告明确未读取原生编号的覆盖缺口；本地规则不调用模型，不改文档。
+
 ## 关键文件
 
 **后端工具原语**

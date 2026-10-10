@@ -136,6 +136,75 @@ class ContractStructureAuditTest {
         assertTrue(any(r.numbering, "「一、」编号从 2 跳到 4"), r.numbering.toString());
     }
 
+    private static Paragraph numbered(int index, String text, boolean available, String label, String listId, int level, boolean hasLabel) throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+                .disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        return mapper.readValue(mapper.writeValueAsString(Map.of("index", index, "text", text,
+                "numbering", Map.of("available", available, "label", label, "listId", listId,
+                        "level", level, "hasLabel", hasLabel))), Paragraph.class);
+    }
+
+    private static Report audit(List<Paragraph> paragraphs) {
+        return ContractStructureAudit.run(paragraphs, List.of(), null);
+    }
+
+    @Test
+    void nativeAndTypedSameNumberIsDuplicateWithoutChangingBody() throws Exception {
+        Paragraph p = numbered(0, "2. 工作计划", true, "2.", "list-a", 0, true);
+        Report r = audit(List.of(p));
+        assertTrue(any(r.numbering, "自动编号与手写编号重复"), r.numbering.toString());
+        assertEquals("2. 工作计划", p.text());
+        assertTrue(r.numbering.stream().allMatch(f -> f.paragraph() == 0));
+        Report different = audit(List.of(numbered(0, "3. 工作计划", true, "2.", "list-a", 0, true)));
+        assertTrue(any(different.numbering, "疑似双重编号"), different.numbering.toString());
+    }
+
+    @Test
+    void sameNativeListAroundManualItemIsReportedAsPossibleMixing() throws Exception {
+        Report r = audit(List.of(numbered(0, "首项", true, "1.", "a", 0, true),
+                numbered(1, "2. 第二项", true, "", "", 0, false),
+                numbered(2, "第三项", true, "3.", "a", 0, true)));
+        assertTrue(any(r.numbering, "疑似混用自动编号与手写编号"), r.numbering.toString());
+        assertFalse(any(r.numbering, "从 2 开始"), r.numbering.toString());
+    }
+
+    @Test
+    void nativeNumberingDoesNotConfuseNormalListsDatesMoneyOrLevels() throws Exception {
+        for (String body : List.of("正常正文", "2026.10.10 发布", "2.5万元", "2.5 万元", "第2条另有规定", "2.1 子项", "(1) 子项", "（一）子项")) {
+            Report r = audit(List.of(numbered(0, body, true, "2.", "a", 0, true)));
+            assertTrue(r.numbering.isEmpty(), body + ": " + r.numbering);
+        }
+        Report plainMoney = run("2.5万元", "2.5 万元", "2026.10.10 发布");
+        assertTrue(plainMoney.numbering.isEmpty(), plainMoney.numbering.toString());
+        // Native bullets have an empty label but still have a list id and hasLabel=true.
+        Report bullet = audit(List.of(numbered(0, "1. 第一个要点", true, "", "bullet-a", 0, true)));
+        assertFalse(any(bullet.numbering, "自动编号"), bullet.numbering.toString());
+        Report nested = audit(List.of(numbered(0, "总项", true, "1.", "a", 0, true),
+                numbered(1, "子项", true, "1.1", "a", 1, true),
+                numbered(2, "另一个总项", true, "2.", "a", 0, true),
+                numbered(3, "新章节从五开始", true, "5.", "b", 0, true)));
+        assertTrue(nested.numbering.isEmpty(), nested.numbering.toString());
+    }
+
+    @Test
+    void manualMixingRequiresKnownNoneAndSameAdjacentNativeListAndLevel() throws Exception {
+        for (List<Paragraph> paragraphs : List.of(
+                List.of(numbered(0, "第一项", true, "1.", "a", 0, true), numbered(1, "2. 正文", false, "", "", 0, false), numbered(2, "第三项", true, "3.", "a", 0, true)),
+                List.of(numbered(0, "第一项", true, "1.", "a", 0, true), numbered(1, "2. 正文", true, "", "", 0, false), numbered(2, "第三项", true, "3.", "b", 0, true)),
+                List.of(numbered(0, "第一项", true, "1.", "a", 0, true), numbered(1, "2. 正文", true, "", "", 0, false), numbered(2, "子项", true, "3.", "a", 1, true)),
+                List.of(numbered(0, "第一项", true, "1.", "a", 0, true), numbered(1, "2. 正文", true, "", "", 0, false), numbered(2, "重启", true, "1.", "a", 0, true)))) {
+            Report r = audit(paragraphs);
+            assertFalse(any(r.numbering, "疑似混用"), r.numbering.toString());
+        }
+    }
+
+    @Test
+    void missingNativeMetadataIsUnknownNotAClaimThatNativeListsPassed() {
+        Report r = run("1. 正文", "2. 正文");
+        assertTrue(r.render().contains("尚未核验自动编号"), r.render());
+        assertTrue(r.numbering.isEmpty(), r.numbering.toString());
+    }
+
     // ---------------------------------------------------------------- 3. 交叉引用
 
     @Test

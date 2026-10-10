@@ -40,7 +40,18 @@ public final class ContractStructureAudit {
     }
 
     /** 一个段落：编辑器 get_document_text 返回的 index（0 基）+ 正文。 */
-    public record Paragraph(int index, String text) {
+    public record Paragraph(int index, String text, Numbering numbering) {
+        public Paragraph(int index, String text) { this(index, text, null); }
+    }
+
+    /** Native list metadata. Missing/failed reads are unknown, never an unnumbered paragraph. */
+    public record Numbering(Boolean available, String label, String listId, Integer level, Boolean hasLabel) {
+        public boolean known() {
+            return Boolean.TRUE.equals(available) && label != null && listId != null && level != null && level >= 0;
+        }
+        public boolean plain() {
+            return known() && label.isEmpty() && listId.isEmpty() && !Boolean.TRUE.equals(hasLabel);
+        }
     }
 
     /** 一条既有修订：来自编辑器 list_revisions（text/paragraph 均已被 worker 截到 120 字符）。 */
@@ -70,6 +81,8 @@ public final class ContractStructureAudit {
         public final List<String> revisionSample = new ArrayList<>();
         public boolean findingsTruncated;
         public int totalParagraphs;
+        public int numberingKnownParagraphs;
+        public int numberingUnknownParagraphs;
         public int totalRevisions;
         public String revisionNote;
 
@@ -91,8 +104,12 @@ public final class ContractStructureAudit {
             sb.append("识别到的条款序列：")
               .append(clauseSequence.isEmpty() ? "（未识别到「第X条」式编号）" : String.join(" → ", clauseSequence))
               .append('\n');
+            sb.append("自动编号元数据：已读取 ").append(numberingKnownParagraphs).append(" 段");
+            if (numberingUnknownParagraphs > 0) sb.append("；").append(numberingUnknownParagraphs)
+                    .append(" 段未提供或读取失败，尚未核验自动编号");
+            sb.append('\n');
             sb.append("编号异常：\n");
-            appendFindings(sb, numbering, "（各套编号连续）");
+            appendFindings(sb, numbering, "（已读取的编号未发现异常；未读取的自动编号不在此结论内）");
 
             sb.append("\n## 3. 交叉引用\n");
             appendFindings(sb, danglingReferences, "（正文引用的条款/附表都找得到）");
@@ -171,6 +188,7 @@ public final class ContractStructureAudit {
         List<Paragraph> paras = paragraphs == null ? List.of() : paragraphs;
         r.totalParagraphs = paras.size();
         auditScript(paras, r);
+        auditNativeNumbering(paras, r);
         auditNumbering(paras, r);
         auditCrossReferences(paras, r);
         auditBlanks(paras, r);
@@ -253,6 +271,87 @@ public final class ContractStructureAudit {
     static final Pattern P_PAREN_LATIN = Pattern.compile("^\\s*[（(]\\s*([a-zA-Z])\\s*[)）]");
     static final Pattern P_PAREN_NUM = Pattern.compile("^\\s*[（(]\\s*(\\d{1,2})\\s*[)）]");
 
+    // Delimited list markers only: decimals/dates/amounts are not paragraph numbers.
+    private static final Pattern NUMBER_PREFIX = Pattern.compile(
+            "^\\s*(?:([0-9]{1,3}(?:\\.[0-9]{1,3})+)[.．]?(?=\\s|$)|"
+            + "([0-9]{1,3})[.．、](?![0-9])|[（(]([0-9]{1,3}|[一二三四五六七八九十百]+|[a-zA-Z])[)）]|"
+            + "([一二三四五六七八九十百]+)[、．.]|第([一二三四五六七八九十百0-9]+)[条條])");
+    private static final Pattern NUMBER_UNIT = Pattern.compile("^(?:万元|萬元|亿元|億元|元|美元|港元|人民币|人民幣|年|月|日|%|％)(?:\\s|$|[^a-zA-Z])");
+
+    private record NumberToken(String family, List<Integer> parts, String display, int end) {}
+
+    private static NumberToken numberToken(String text, boolean label) {
+        if (text == null) return null;
+        Matcher m = NUMBER_PREFIX.matcher(text);
+        if (!m.find() || label && !text.substring(m.end()).isBlank()) return null;
+        if (!label && NUMBER_UNIT.matcher(text.substring(m.end()).stripLeading()).find()) return null;
+        List<Integer> parts = new ArrayList<>();
+        String family = "number";
+        if (m.group(1) != null) {
+            for (String part : m.group(1).split("\\.")) parts.add(Integer.parseInt(part));
+        } else {
+            String n = m.group(2) != null ? m.group(2) : m.group(3) != null ? m.group(3)
+                    : m.group(4) != null ? m.group(4) : m.group(5);
+            if (m.group(3) != null) family = "parenthesized";
+            if (m.group(4) != null) family = "enum";
+            if (n.matches("[a-zA-Z]")) { family = "letter"; parts.add(Character.toLowerCase(n.charAt(0)) - 'a' + 1); }
+            else parts.add(ChineseNumerals.parse(n));
+            if (m.group(5) != null) family = "article";
+        }
+        if (parts.stream().anyMatch(n -> n <= 0)) return null;
+        return new NumberToken(family, parts, m.group().trim(), m.end());
+    }
+
+    private static NumberToken nativeNumber(Paragraph p) {
+        Numbering n = p.numbering();
+        return n != null && n.known() && !Boolean.FALSE.equals(n.hasLabel()) ? numberToken(n.label(), true) : null;
+    }
+
+    private static boolean sameLevel(NumberToken a, NumberToken b) {
+        return a != null && b != null && a.family().equals(b.family()) && a.parts().size() == b.parts().size();
+    }
+
+    private static boolean nextNumber(NumberToken a, NumberToken b) {
+        if (!sameLevel(a, b)) return false;
+        int last = a.parts().size() - 1;
+        return a.parts().subList(0, last).equals(b.parts().subList(0, last))
+                && b.parts().get(last) == a.parts().get(last) + 1;
+    }
+
+    private static void auditNativeNumbering(List<Paragraph> paras, Report r) {
+        for (int i = 0; i < paras.size(); i++) {
+            Paragraph p = paras.get(i);
+            Numbering meta = p.numbering();
+            if (meta != null && meta.known()) r.numberingKnownParagraphs++;
+            else r.numberingUnknownParagraphs++;
+            NumberToken auto = nativeNumber(p), typed = numberToken(p.text(), false);
+            if (sameLevel(auto, typed)) {
+                String issue = auto.parts().equals(typed.parts()) ? "自动编号与手写编号重复" : "疑似双重编号，请核对";
+                r.numbering.add(new Finding(p.index(), issue + "：自动标签「" + auto.display()
+                        + "」，正文开头「" + typed.display() + "」；未自动修改正文。"));
+            }
+            // A known plain paragraph between two items of the same native list/level
+            // is stronger evidence than merely finding two styles somewhere in a file.
+            if (meta == null || !meta.plain() || typed == null || i == 0 || i + 1 == paras.size()) continue;
+            Paragraph before = paras.get(i - 1), after = paras.get(i + 1);
+            NumberToken left = nativeNumber(before), right = nativeNumber(after);
+            if (!nextNumber(left, typed) || !sameLevel(typed, right)
+                    || !(nextNumber(typed, right) || typed.parts().equals(right.parts()))
+                    || before.index() + 1 != p.index() || p.index() + 1 != after.index()) continue;
+            Numbering a = before.numbering(), b = after.numbering();
+            if (a.listId().isBlank() || !a.listId().equals(b.listId()) || !a.level().equals(b.level())) continue;
+            r.numbering.add(new Finding(p.index(), "相邻同层序列疑似混用自动编号与手写编号：前后段为同一自动列表，"
+                    + "本段「" + typed.display() + "」为正文手写编号；请核对是否有意插入，未自动修改。"));
+        }
+    }
+
+    // Only the audit's private view receives labels. Public text and quote offsets
+    // always remain the worker's original paragraph text.
+    private static String numberingText(Paragraph p) {
+        NumberToken token = nativeNumber(p);
+        return token == null ? p.text() : token.display() + " " + p.text();
+    }
+
     private static final class Run {
         int scope = -1;
         int last;
@@ -270,9 +369,10 @@ public final class ContractStructureAudit {
         int scope1 = 0;          // 次层作用域：随顶层换号，也随 N. / N.M 换号
         int lastTiao = 0;
         int lastTiaoParagraph = -1;
-        boolean hasTiao = paras.stream().anyMatch(p -> P_TIAO.matcher(p.text()).find());
+        boolean hasTiao = paras.stream().anyMatch(p -> P_TIAO.matcher(numberingText(p)).find());
         Set<Integer> seenTiao = new LinkedHashSet<>();
         int previousParagraph = -1;
+        String nativeListScope = null;
         for (Paragraph p : paras) {
             if (previousParagraph >= 0 && p.index() != previousParagraph + 1) {
                 // An omitted paragraph may contain a heading or restart a numbered list.
@@ -280,7 +380,16 @@ public final class ContractStructureAudit {
                 scope0++; scope1++;
             }
             previousParagraph = p.index();
-            String t = p.text();
+            NumberToken nativeToken = nativeNumber(p);
+            if (nativeToken != null) {
+                String identity = p.numbering().listId() + ":" + p.numbering().level();
+                if (!identity.equals(nativeListScope)) {
+                    runs.clear(); seenTiao.clear(); lastTiao = 0; lastTiaoParagraph = -1;
+                    scope0++; scope1++;
+                }
+                nativeListScope = identity;
+            }
+            String t = numberingText(p);
             Matcher m;
             if ((m = P_TIAO.matcher(t)).find()) {
                 int n = ChineseNumerals.parse(m.group(1));
@@ -288,9 +397,9 @@ public final class ContractStructureAudit {
                 scope1++;
                 if (n > 0) {
                     r.clauseSequence.add("第" + n + "条");
-                    if (seenTiao.contains(n)) {
+                    if (nativeToken == null && seenTiao.contains(n)) {
                         r.numbering.add(new Finding(p.index(), "第" + n + "条重复出现（上一次在段 " + lastTiaoParagraph + "）"));
-                    } else if (lastTiao > 0 && n != lastTiao + 1) {
+                    } else if (nativeToken == null && lastTiao > 0 && n != lastTiao + 1) {
                         r.numbering.add(new Finding(p.index(), n > lastTiao
                                 ? "第" + lastTiao + "条之后直接是第" + n + "条，中间缺 " + (n - lastTiao - 1) + " 条（可能有条款没编号，或编号漏排）"
                                 : "第" + lastTiao + "条之后出现第" + n + "条，编号倒退"));
@@ -314,10 +423,11 @@ public final class ContractStructureAudit {
                 continue;
             }
             if ((m = P_DOTTED.matcher(t)).find()) {
+                if (nativeToken == null && NUMBER_UNIT.matcher(t.substring(m.end()).stripLeading()).find()) continue;
                 int major = Integer.parseInt(m.group(1));
                 int minor = Integer.parseInt(m.group(2));
                 check(runs, "N.M(" + major + ")", scope0, minor, p, r);
-                if (hasTiao && lastTiao > 0 && major != lastTiao) {
+                if (nativeToken == null && hasTiao && lastTiao > 0 && major != lastTiao) {
                     r.numbering.add(new Finding(p.index(), "「" + major + "." + minor + "」出现在第" + lastTiao
                             + "条范围内，主号与所在条不一致"));
                 }
@@ -354,7 +464,9 @@ public final class ContractStructureAudit {
         if (n <= 0) return;
         Run run = runs.computeIfAbsent(scheme, k -> new Run());
         String label = scheme.startsWith("N.M") ? "N.M" : scheme;
-        if (run.scope != scope) {
+        if (nativeNumber(p) != null) {
+            // Native lists may intentionally restart; metadata does not assert restart intent.
+        } else if (run.scope != scope) {
             // 新作用域里的第一条：不是从 1 起就点名（(k) 款接在上一条的 (j) 之后是常见错位）
             if (n != 1 && !"一、".equals(scheme)) {
                 r.numbering.add(new Finding(p.index(), "「" + label + "」编号在新条款里从 " + render(scheme, n)
@@ -386,9 +498,9 @@ public final class ContractStructureAudit {
         Set<String> dotted = new LinkedHashSet<>();
         Set<String> annexes = new LinkedHashSet<>();
         for (Paragraph p : paras) {
-            Matcher m = P_TIAO.matcher(p.text());
+            Matcher m = P_TIAO.matcher(numberingText(p));
             if (m.find()) tiao.add(ChineseNumerals.parse(m.group(1)));
-            m = P_DOTTED.matcher(p.text());
+            m = P_DOTTED.matcher(numberingText(p));
             if (m.find()) dotted.add(m.group(1) + "." + m.group(2));
             m = P_DEF_ANNEX.matcher(p.text());
             if (m.find()) annexes.add(m.group(1).charAt(0) + normalizeAnnex(m.group(2)));

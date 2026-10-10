@@ -482,6 +482,10 @@ export const fileOpenTabsMethods = {
 
       const type = file.fileType.toLowerCase()
 
+      // PDF must reach FilePreview even when FileTree supplies a legacy wpsFileId.
+      // Writer otherwise imports its binary bytes as text (dev-board#1178).
+      if (type === 'pdf') return false
+
       // 1. Force native preview for media types (Images, Video, Audio)
       const mediaTypes = [
           // Images

@@ -1367,3 +1367,7 @@ rail 上**没有设置齿轮**：设置入口是下拉里的「设置」（`goTo
 ### 工作台底栏手机收件（dev-board#1171）
 
 `MobileReceiveStatus` 位于底栏 spacer 之前，桌面态常驻（含无项目态），点击展开本机收件详情；不依赖左栏面板或当前项目。设备完整 ID 与当前项目编号/本地路径用于和手机核对同名项目；列表为全设备最近 100 件本次运行记录。新收到且保存完成的当前项目资料抛 `received`，由工作台 `onVersionReloadFiles` 刷新文件树。后端定时取件、状态生命周期和验证边界见 mobile-sync.md 的 #1171 节。
+
+## PDF 路由（2026-10-10，dev-board#1178）
+
+`isEditorOpenableFile` 必须在 `wpsFileId` 兼容兜底之前明确排除 PDF；FileTree 会为导入文件合成这个旧字段，不能据此把 PDF 送进 Writer。PDF 继续走 FilePreview 的 Chromium iframe，不改导出字节。回归 `project-home/pdf-editor-routing.test.mjs` 包括有/无旧ID及大写扩展名。
