@@ -1363,3 +1363,7 @@ rail 上**没有设置齿轮**：设置入口是下拉里的「设置」（`goTo
 同批：脱敏面板的「浏览」现在要求工作台同步回执（`handleDesensitizeSelectFile(callback, ack)`
 里的 `ack()`），拿不到回执面板就报 `panels.deBrowseUnavailable`，不再静默。
 面板侧契约细节见 `.claude/agents/plugin-system.md`。
+
+### 工作台底栏手机收件（dev-board#1171）
+
+`MobileReceiveStatus` 位于底栏 spacer 之前，桌面态常驻（含无项目态），点击展开本机收件详情；不依赖左栏面板或当前项目。设备完整 ID 与当前项目编号/本地路径用于和手机核对同名项目；列表为全设备最近 100 件本次运行记录。新收到且保存完成的当前项目资料抛 `received`，由工作台 `onVersionReloadFiles` 刷新文件树。后端定时取件、状态生命周期和验证边界见 mobile-sync.md 的 #1171 节。

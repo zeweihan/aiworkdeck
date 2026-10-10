@@ -2278,6 +2278,7 @@
         <view class="status-dot" :class="collabTone"></view>
         <text>{{ collabStateText }}</text>
       </view>
+      <MobileReceiveStatus v-if="isDesktopApp" :project-id="projectId" @received="onVersionReloadFiles([])" />
       <view class="status-spacer"></view>
       <view v-if="activeFileLeft" class="status-item status-file">
         <text>{{ activeFileLeft.name }}</text>
@@ -2489,6 +2490,7 @@ import ProjectListPane from '@/components/project-list/ProjectListPane.vue'
 import WelcomePane from '@/components/welcome/WelcomePane.vue'
 import AccountEntry from '@/components/account/AccountEntry.vue'
 import OptionalComponentsDialog from '@/components/OptionalComponentsDialog.vue'
+import MobileReceiveStatus from '@/components/MobileReceiveStatus.vue'
 import {
   shouldPromptOptionalComponents,
   mergePromptedPackIds,
@@ -2518,6 +2520,7 @@ export default {
     }
   },
   components: {
+    MobileReceiveStatus,
     LibreOfficeEditor,
     BrowserPane,
     QuickOpenPanel,
