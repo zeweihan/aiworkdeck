@@ -95,6 +95,18 @@ public class Project {
      */
     private LocalDateTime updatedAt;
 
+    /** Account catalogue identity, independent of the database's device-local numeric id. */
+    @Column(length = 36)
+    private String uid;
+
+    public String getUid() { return uid; }
+    public void setUid(String uid) { this.uid = uid; }
+
+    @jakarta.persistence.PrePersist
+    void assignUid() {
+        if (uid == null || uid.isBlank()) uid = java.util.UUID.randomUUID().toString();
+    }
+
     public Long getId() {
         return id;
     }

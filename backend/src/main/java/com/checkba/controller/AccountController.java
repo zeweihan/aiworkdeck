@@ -853,6 +853,7 @@ public class AccountController {
         try {
             Map<String, Object> profile = accountService.fetchProfile();
             platform.put("balanceCents", profile.get("balanceCents"));
+        platform.put("subscription", profile.get("subscription"));
             platform.put("plan", profile.get("plan"));
             platform.put("allocations", accountService.fetchLedger().stream()
                     .filter(entry -> "ai_alloc".equals(entry.get("kind")))

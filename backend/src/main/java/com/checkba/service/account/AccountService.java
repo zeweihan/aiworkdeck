@@ -625,6 +625,7 @@ public class AccountService {
             return result;
         }
         result.put("balanceCents", profile.get("balanceCents"));
+        result.put("subscription", profile.get("subscription"));
         result.put("plan", profile.get("plan"));
         Map<String, Object> membership = null;
         try {

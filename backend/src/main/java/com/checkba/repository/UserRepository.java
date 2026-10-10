@@ -9,6 +9,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Optional;
 
 public interface UserRepository extends JpaRepository<User, Long> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("SELECT u FROM User u WHERE u.id = :id")
+    Optional<User> lockStorageOwner(Long id);
+
     Optional<User> findByUsername(String username);
 
     /** 同一访问码名下已建出的客户用户数（username 前缀 client_inv{invitationId}_，dev-board#1050）。 */

@@ -45,7 +45,7 @@ import java.util.regex.Pattern;
  *   <li>删除由桌面端 ACK 触发（删 blob 留行），30 天 TTL 只是兜底（行与残留 blob 一并删）。</li>
  * </ul>
  *
- * <p>容量口径（dev-board#226）：每用户 3GB，只计<b>未投递的 blob</b>（storagePath 非空的行）——
+ * <p>容量口径（dev-board#226）：每用户 200MB 临时空间，只计<b>未投递的 blob</b>（storagePath 非空的行）——
  * ACK 即删 blob 就是释放配额，空间循环利用。配额检查在写盘之前按声明大小做，两笔并发上传
  * 可能同时通过检查而略超上限（最多超一件的量，nginx 单请求 200MB 封顶），接受这个软度，
  * 换取不引锁。
@@ -63,8 +63,8 @@ public class MobileRelayStoreService {
      * 证据就被清掉——手机本地虽默认保留原件，但用户感知是「传上去的丢了」。
      */
     static final Duration TTL = Duration.ofDays(30);
-    /** 每用户中转区配额：3GB，只计未投递的 blob（ACK 即删 = 释放配额）。 */
-    static final long QUOTA_BYTES = 3L * 1024 * 1024 * 1024;
+    /** 每用户中转区配额：200MB，只计未投递的 blob（ACK 即删 = 释放配额）。 */
+    static final long QUOTA_BYTES = CloudStorageQuotaService.RELAY_BYTES;
     /**
      * 在线判定窗口（dev-board#250）：桌面端 60 秒轮询一次 inbox，3 个周期没有心跳
      * 才判离线，容忍单次轮询抖动。isDeviceOnline（#251 跨设备传输复用）与 listDevices
@@ -73,11 +73,14 @@ public class MobileRelayStoreService {
     static final Duration ONLINE_WINDOW = Duration.ofSeconds(180);
 
     private final MobileProjectDirRepository dirRepository;
+    @Autowired
+    private CloudStorageQuotaService cloudStorageQuota;
+
     private final MobileMediaInboxRepository inboxRepository;
     private final MobileDeviceStateRepository deviceStateRepository;
     private final MobileRelayBlobStore blobStore;
     /**
-     * 配额共池（dev-board#251）：3GB 配额现在是影像中转 + 跨设备传输两张表未投递 blob
+     * 配额共池（dev-board#251）：200MB 临时配额现在是影像中转 + 跨设备传输两张表未投递 blob
      * 之和，不再是本表单独的字节数——跨设备传输占用会挤掉影像中转的可用额度，反之亦然。
      */
     private final MobileTransferRequestRepository transferRequestRepository;
@@ -105,7 +108,12 @@ public class MobileRelayStoreService {
         this.transferRequestRepository = transferRequestRepository;
     }
 
-    public record DirEntry(String key, String name) {}
+    @Autowired(required = false)
+    private com.checkba.repository.MobileProjectManifestRepository directoryManifests;
+
+    public record DirEntry(String key, String name, String projectUid, Long cloudProjectId) {
+        public DirEntry(String key, String name) { this(key, name, null, null); }
+    }
 
     /**
      * storedCount 是实际入库的条数（截断到 MAX_DIR_ENTRIES 时小于 totalCount）；
@@ -143,6 +151,10 @@ public class MobileRelayStoreService {
         boolean truncated = totalCount > MAX_DIR_ENTRIES;
         List<DirEntry> toStore = truncated ? projects.subList(0, MAX_DIR_ENTRIES) : projects;
 
+        Map<String, MobileProjectDir> previous = new java.util.HashMap<>();
+        for (MobileProjectDir row : dirRepository.findByUserIdAndDeviceId(userId, deviceId)) {
+            previous.put(row.getProjectKey(), row);
+        }
         dirRepository.deleteByUserIdAndDeviceId(userId, deviceId);
         // Hibernate 的动作队列把 INSERT 排在实体级 DELETE 之前，同键重推会先撞唯一约束——
         // 删除必须先落库
@@ -160,6 +172,15 @@ public class MobileRelayStoreService {
             row.setDeviceName(truncate(deviceName, 128));
             row.setProjectKey(truncate(entry.key().trim(), 64));
             row.setName(truncate(entry.name().trim(), 512));
+            MobileProjectDir old = previous.get(row.getProjectKey());
+            String uid = ProjectCatalogService.validUid(entry.projectUid());
+            row.setProjectUid(uid != null ? uid : old == null ? null : old.getProjectUid());
+            row.setCloudProjectId(entry.projectUid() != null || entry.cloudProjectId() != null ? entry.cloudProjectId()
+                    : old == null ? null : old.getCloudProjectId());
+            if (directoryManifests != null && (old == null || !java.util.Objects.equals(old.getProjectUid(), row.getProjectUid()))) {
+                directoryManifests.findByUserIdAndDeviceIdAndProjectKey(userId, deviceId, row.getProjectKey())
+                        .ifPresent(directoryManifests::delete);
+            }
             row.setUpdatedAt(now);
             dirRepository.save(row);
             stored++;
@@ -389,12 +410,12 @@ public class MobileRelayStoreService {
 
         // 配额检查在写盘之前、按声明大小做（controller 传 MultipartFile.getSize()，就是实际
         // 字节数）。只计未投递的 blob：桌面端收走（ACK）即释放，空间循环利用。
-        // dev-board#251：配额是共池，跨设备传输（MobileTransferRequest）未投递的 blob 也占这份 3GB。
+        // dev-board#251：配额是共池，跨设备传输（MobileTransferRequest）未投递的 blob 也占这份 200MB。
         long usedBytes = inboxRepository.sumPendingBytes(userId) + transferRequestRepository.sumPendingBytes(userId);
         if (usedBytes + Math.max(0, declaredSize) > QUOTA_BYTES) {
             throw new IllegalArgumentException(LangText.of(
-                    "云端空间已满（3GB）：请在桌面端打开 AI WorkDeck 收取已上传的文件后重试",
-                    "Cloud relay storage is full (3GB). Open AI WorkDeck on your desktop to collect pending items, then retry."));
+                    "云端临时中转空间已满（200MB）：请在桌面端打开 AI WorkDeck 收取已上传的文件后重试",
+                    "Cloud relay storage is full (200MB). Open AI WorkDeck on your desktop to collect pending items, then retry."));
         }
 
         MobileRelayBlobStore.StoredBlob stored;
@@ -478,8 +499,9 @@ public class MobileRelayStoreService {
     /** 中转区用量（只计未投递 blob）与配额，手机端设置页展示用。 */
     public Map<String, Object> usage(Long userId) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("usedBytes", inboxRepository.sumPendingBytes(userId));
+        m.put("usedBytes", inboxRepository.sumPendingBytes(userId) + transferRequestRepository.sumPendingBytes(userId));
         m.put("quotaBytes", QUOTA_BYTES);
+        if (cloudStorageQuota != null) m.putAll(cloudStorageQuota.usage(userId));
         return m;
     }
 

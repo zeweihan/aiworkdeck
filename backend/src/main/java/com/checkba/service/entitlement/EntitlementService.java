@@ -92,6 +92,8 @@ public class EntitlementService {
     static class Cache {
         public String syncedAt;
         public List<String> features = new ArrayList<>();
+        public Map<String, String> expiresAt = new LinkedHashMap<>();
+        public String owner;
     }
 
     // ==================== 单一出口 ====================
@@ -197,14 +199,27 @@ public class EntitlementService {
             return false;
         }
         try {
+            String owner = accountService.accountFingerprintOrNull();
             List<Map<String, Object>> entitlements = accountService.fetchEntitlements();
+            if (!java.util.Objects.equals(owner, accountService.accountFingerprintOrNull())) return false;
             Cache cache = new Cache();
             cache.syncedAt = Instant.now().toString();
-            cache.features = new ArrayList<>(new LinkedHashSet<>(entitlements.stream()
-                    .map(e -> e.get("feature"))
-                    .filter(f -> f instanceof String s && !s.isBlank())
-                    .map(String::valueOf)
-                    .toList()));
+            cache.owner = owner;
+            for (Map<String, Object> entitlement : entitlements) {
+                if (!(entitlement.get("feature") instanceof String feature) || feature.isBlank()) continue;
+                Object expiry = entitlement.get("expiresAt");
+                String expiresAt = expiry == null ? null : String.valueOf(expiry);
+                // Multiple grants may overlap; a permanent purchase always survives a subscription expiry.
+                if (!cache.features.contains(feature)) {
+                    cache.features.add(feature);
+                    cache.expiresAt.put(feature, expiresAt);
+                } else {
+                    String previous = cache.expiresAt.get(feature);
+                    if (previous != null && (expiresAt == null || laterExpiry(expiresAt, previous))) {
+                        cache.expiresAt.put(feature, expiresAt);
+                    }
+                }
+            }
             saveCache(cache);
             log.info("账户权益已同步，共 {} 项", cache.features.size());
             return true;
@@ -259,7 +274,25 @@ public class EntitlementService {
         if (cache.syncedAt == null || olderThan(cache.syncedAt, OFFLINE_GRACE)) {
             return Set.of();
         }
-        return new LinkedHashSet<>(cache.features);
+        if (cache.owner != null && !cache.owner.equals(accountService.accountFingerprintOrNull())) return Set.of();
+        Set<String> active = new LinkedHashSet<>();
+        for (String feature : cache.features) {
+            String expiry = cache.expiresAt == null ? null : cache.expiresAt.get(feature);
+            // Legacy Pro caches never recorded an expiry: refresh before accepting that temporary grant.
+            if (expiry == null && ("pro".equals(feature) || FeatureCatalog.PLAN_PRO.equals(feature))) continue;
+            if (expiry == null || validUntil(expiry)) active.add(feature);
+        }
+        return active;
+    }
+
+    private static boolean validUntil(String expiry) {
+        try { return Instant.parse(expiry).isAfter(Instant.now()); }
+        catch (Exception e) { return false; }
+    }
+
+    private static boolean laterExpiry(String candidate, String previous) {
+        try { return Instant.parse(candidate).isAfter(Instant.parse(previous)); }
+        catch (Exception e) { return validUntil(candidate); }
     }
 
     /** ISO 时间戳距今是否超过 duration；无法解析按「已超过」处理。 */

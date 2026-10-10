@@ -38,6 +38,8 @@ import java.util.Map;
 public class MobileRelayController {
 
     private final MobileRelayStoreService store;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.mobile.MobileCloudCaptureService cloudCaptures;
 
     public MobileRelayController(MobileRelayStoreService store) {
         this.store = store;
@@ -53,6 +55,8 @@ public class MobileRelayController {
         public static class Entry {
             private String key;
             private String name;
+            private String projectUid;
+            private Long cloudProjectId;
         }
     }
 
@@ -68,7 +72,7 @@ public class MobileRelayController {
         List<MobileRelayStoreService.DirEntry> entries = new ArrayList<>();
         if (request.getProjects() != null) {
             for (DirectoryRequest.Entry e : request.getProjects()) {
-                if (e != null) entries.add(new MobileRelayStoreService.DirEntry(e.getKey(), e.getName()));
+                if (e != null) entries.add(new MobileRelayStoreService.DirEntry(e.getKey(), e.getName(), e.getProjectUid(), e.getCloudProjectId()));
             }
         }
         MobileRelayStoreService.DirectoryReplaceResult result =
@@ -113,6 +117,10 @@ public class MobileRelayController {
         }
         LocalDateTime captured = parseCapturedAt(capturedAt);
         try (InputStream in = file.getInputStream()) {
+            if ("cloud".equals(deviceId)) {
+                return cloudCaptures.store(userId, projectKey, clientMediaId, fileName, mediaType,
+                        captured, file.getSize(), in);
+            }
             MobileMediaInbox item = store.storeMedia(
                     userId, deviceId, projectKey, clientMediaId, fileName, mediaType, captured,
                     file.getSize(), in);
@@ -144,7 +152,9 @@ public class MobileRelayController {
         for (String id : clientMediaIds.split(",")) {
             if (!id.isBlank()) ids.add(id.trim());
         }
-        return store.status(userId, ids);
+        List<Map<String, Object>> status = new ArrayList<>(store.status(userId, ids));
+        if (cloudCaptures != null) status.addAll(cloudCaptures.status(userId, ids));
+        return status;
     }
 
     /** 桌面端：本设备待取件（元数据，裸数组）。 */

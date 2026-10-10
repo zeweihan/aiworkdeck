@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
  * 跨设备文件传输（dev-board#251，spec 见
  * docs/superpowers/specs/2026-08-28-cross-device-transfer.md 二）。
  *
- * <p>与影像中转（{@link MobileRelayStoreService}）共用：blob 存储、配额（3GB，两表
+ * <p>与影像中转（{@link MobileRelayStoreService}）共用：blob 存储、配额（200MB，两表
  * 未投递 blob 之和）、幂等 requestId 围栏。B 在线判定复用
  * {@link MobileRelayStoreService#isDeviceOnline}（LIST/PULL 要求在线，PUSH 不要求）。
  *
@@ -49,6 +49,8 @@ import java.util.regex.Pattern;
 @Service
 @Slf4j
 public class MobileTransferService {
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProjectCatalogService projectCatalog;
 
     static final String KIND_LIST = "LIST";
     static final String KIND_PULL = "PULL";
@@ -447,6 +449,8 @@ public class MobileTransferService {
             if (f == null) continue;
             Map<String, Object> s = new LinkedHashMap<>();
             s.put("id", truncate(str(f.get("id")), 128));
+            String uid = ProjectCatalogService.validUid(str(f.get("uid")));
+            if (uid != null) s.put("uid", uid);
             s.put("name", truncate(str(f.get("name")), 512));
             s.put("path", truncate(str(f.get("path")), 1024));
             Object sizeObj = f.get("size");
@@ -458,6 +462,7 @@ public class MobileTransferService {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to serialize file list", e);
         }
+        if (projectCatalog != null) projectCatalog.rememberFiles(userId, row.getDeviceId(), row.getProjectKey(), row.getPayloadJson());
         row.setStatus(STATUS_DONE);
         row.setUpdatedAt(LocalDateTime.now());
         repository.save(row);
@@ -652,13 +657,13 @@ public class MobileTransferService {
         }
     }
 
-    /** 配额共池：媒体中转 + 跨设备传输两表的未投递 blob 之和，与 MobileRelayStoreService 同一份 3GB。 */
+    /** 配额共池：媒体中转 + 跨设备传输两表的未投递 blob 之和，与 MobileRelayStoreService 同一份 200MB。 */
     private void checkQuota(Long userId, long declaredSize) {
         long used = mediaInboxRepository.sumPendingBytes(userId) + repository.sumPendingBytes(userId);
         if (used + Math.max(0, declaredSize) > MobileRelayStoreService.QUOTA_BYTES) {
             throw new IllegalArgumentException(LangText.of(
-                    "云端空间已满（3GB）：请在桌面端打开 AI WorkDeck 收取已上传的文件后重试",
-                    "Cloud relay storage is full (3GB). Open AI WorkDeck on your desktop to collect pending items, then retry."));
+                    "云端临时中转空间已满（200MB）：请在桌面端打开 AI WorkDeck 收取已上传的文件后重试",
+                    "Cloud relay storage is full (200MB). Open AI WorkDeck on your desktop to collect pending items, then retry."));
         }
     }
 

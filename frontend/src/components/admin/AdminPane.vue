@@ -369,6 +369,17 @@
                 </view>
             </SettingsSection>
 
+            <SettingsSection v-if="subscription && subscription.active" :title="$t('admin.subscriptionTitle')" :description="$t('admin.subscriptionSeparate')">
+              <view class="provider-card">
+                <text class="provider-name">{{ $t('admin.subscriptionMonth', { used: subscriptionCredits(subscription.monthlyUsedCents), limit: subscriptionCredits(subscription.monthlyLimitCents) }) }}</text>
+                <text class="account-note">{{ $t('admin.subscriptionWeek', { used: subscriptionCredits(subscription.weeklyUsedCents), limit: subscriptionCredits(subscription.weeklyLimitCents) }) }}</text>
+                <text class="account-note">{{ $t('admin.subscriptionReset', { date: formatUsageTime(subscription.weeklyEnd) }) }}</text>
+                <text class="account-note">{{ $t('admin.subscriptionEnds', { date: formatUsageTime(subscription.periodEnd) }) }}</text>
+                <text class="account-note">{{ $t(subscription.walletFallbackEnabled ? 'admin.subscriptionFallbackOn' : 'admin.subscriptionFallbackOff') }}</text>
+                <button class="comp-btn" @tap="openSubscriptionAccount">{{ $t('admin.subscriptionManage') }}</button>
+              </view>
+            </SettingsSection>
+
             <SettingsSection :title="$t('admin.accountTitle')" :description="$t('admin.accountConnectedSubtitle')">
                 <!-- 账户卡（dev-board#200/#205）：一行排布——左边身份（头像/展示名），
                      右边两个动作按齐。「断开连接」已统一成「退出登录」（utils/signOut.js
@@ -1321,6 +1332,9 @@ export default {
       return Number.isNaN(d.getTime()) ? this.crossBorderConsentAt : d.toLocaleString()
     },
     // 平台结算段：官网不可达时 available=false，其余字段不可信
+    subscription() {
+      return this.walletData.available !== false ? this.walletData.subscription : null
+    },
     accountPlatform() {
       return (this.accountUsage && this.accountUsage.platform) || null
     },
@@ -2283,6 +2297,12 @@ export default {
     },
     // 会员钱包卡（dev-board#183）：余额与会员数据分开取、分开失败——
     // membership 拿不到时余额那半照常显示，反之亦然
+    subscriptionCredits(cents) {
+      return typeof cents === 'number' && Number.isFinite(cents) ? (cents / 100).toFixed(2) : '—'
+    },
+    openSubscriptionAccount() {
+      openExternalUrl(accountPageUrl())
+    },
     async loadWallet() {
       try {
         const b = await getAccountBalance()
@@ -2291,6 +2311,7 @@ export default {
             loaded: true,
             available: b.available !== false,
             balanceCents: b.balanceCents,
+            subscription: b.subscription || null,
           }
         } else {
           this.walletData = { loaded: false, available: true, balanceCents: null }

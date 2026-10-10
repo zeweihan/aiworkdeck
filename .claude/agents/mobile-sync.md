@@ -7,10 +7,42 @@ description: 手机端同步领域。任务涉及手机端项目目录镜像、�
 
 手机端（独立仓 `1-3 aiworkdeck_mobile`：iOS Swift + 微信小程序）拍现场影像与录音，归档到
 桌面端项目的「现场影像/YYYY-MM-DD/」（image/video）或「现场录音/YYYY-MM-DD/」（audio，
-dev-board#228）。**桌面端是项目的唯一权威源**，云端只做两件事：
+dev-board#228）。**旧设备镜像协议**以桌面项目为来源；2026-10-11 的账户统一目录见下节，云端统一项目/文件身份，字节仍分布存储。既有中转协议做两件事：
 目录镜像（手机「选择项目」的数据源）与影像中转区（ACK 即删 + 30 天 TTL 兜底）。
 权威 spec：`aiworkdeck_mobile/docs/specs/2026-08-20-project-sync-relay.md`（根因复盘见
 dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
+
+## 账户统一目录与持久云归档（dev-board#1188，2026-10-11）
+
+- `GET /api/mobile/catalog` 是账户级统一目录：`{projectUid,name,locations[]}`；位置为
+  `desktop(deviceId,key,deviceName,online)` 或 `cloud(deviceId="cloud",key,cloudProjectId,online=true)`。
+  项目名称不是身份。Project.uid 新建即赋 UUID，存量用 CAS 回填；桌面目录推 `projectUid`，
+  老桌面缺字段时使用用户/设备/本地键的确定性 UUID，旧 `/mobile/projects` 不变。
+- `ProjectRemote` 只有连接地址匹配当前 relay 站点且本地连接属当前用户才上报 `cloudProjectId`；
+  云端再次验证云项目属当前账户。`AddinProjectLink` 影子容器折叠进同一目录条目，云位置带
+  `archiveOnly:true`；它仅有插件归档内容，不能当桌面全部原件的替代来源。
+- 文件身份复用 `ProjectFile.uid`（新建生成、存量 CAS 回填），LIST 的 `id` 仍是本地路由，
+  增量 `uid` 是跨端身份。成功 LIST 的元数据存 `MobileProjectManifest`；
+  `GET /catalog/{uid}/files` 合并云文件与最后一次桌面快照，每文件带 `source/deviceId/projectKey`，
+  同 uid 优先云副本，无 uid 按位置+id区分。缺桌面快照或任一清单截断时 `truncated:true`。
+  缓存只含相对路径与元数据，不含字节；桌面实时列表仍走 LIST。
+- 云原件下载 `GET /catalog/{uid}/files/{fileUid}/content`：校验账号/项目归属，裸字节、
+  `application/octet-stream` 与实际长度；持久原件不 ACK、不随下载删除。
+- 采集仍用 `POST /mobile/media`，`deviceId=cloud` 与目录中的云 key 表示持久归档。
+  `MobileCloudCaptureService` 在同一用户行锁事务下做幂等收据、订阅额度、临时字节落盘→move→
+  文件元数据→`MobileCloudReceipt`。收据不走临时 TTL，重试原样返回身份，换项目重用 UUID 拒绝；
+  `UploadResult` 和 `MediaStatus` 返回 `projectUid/fileUid/fileId`。回滚（含提交失败）删除新 blob。
+- 临时中转池是 **200MiB 同时占用**，媒体与传输一起计算，ACK 即释放；Pro 持久池 **3GiB**
+  独立计量。具体权益与通用云写入闸由 `CloudStorageQuotaService` 实施，不能退回机器级账户。
+- 桌面 `AccountProjectCatalog` 挂左栏项目面板，所有位置可见，既有本地项目也能看云附件；
+  本机代理 `/api/mobile-receive/catalog/*` 只在 local-mode 注册，持有设备令牌，渲染层拿不到令牌。
+  请求与导入必须带当前账户二次哈希 `accountScope`，换账户立即拒旧面板操作；PULL UUID
+  在用户确认报价后按账户/项目/来源持久化，重试不重复扣费；字节核长→move→建库后才 ACK。
+- 插件优先用统一目录生成一条项目选项，普通云项目保持旧云 id，桌面项目仍走归档绑定。
+  只有目录端点 404 才回旧 `/projects/my` + `/mobile/devices`，网络失败不可误报空目录。
+- 验证：`ProjectCatalogServiceTest`、`ProjectCatalogIdentityRepositoryTest`、
+  `MobileCloudCaptureServiceTest`、`MobileApiContractTest.unifiedCatalogAndCloudCaptureMatchSpecAndPreserveBytes`、
+  `MobileRelayClientHttpTest.catalog*`。手机端以 OpenAPI 钉版文件为唯一接口来源。
 
 ## 关键文件
 

@@ -81,6 +81,177 @@ public class MobileRelayClientService {
     private final boolean enabled;
     private final boolean localMode;
     private final String baseUrl;
+    @Autowired(required = false) private ProjectCatalogService projectCatalog;
+    @Autowired(required = false) private com.checkba.repository.ProjectRemoteRepository projectRemotes;
+    @Autowired(required = false) private com.checkba.repository.CloudConnectionRepository cloudConnections;
+
+    /** Local authenticated proxy; cloud device tokens never enter the renderer. */
+    public List<Map<String, Object>> catalog() {
+        if (!active()) return List.of();
+        String scope = catalogAccountScope();
+        pushDirectory();
+        CatalogSession session = beginCatalogSession(scope);
+        try {
+            HttpResponse<String> response = catalogExchange(session, "GET", "/api/mobile/catalog", null);
+            if (response == null || response.statusCode() == 404) return List.of();
+            if (response.statusCode() != 200) throw new IOException("Cloud catalogue unavailable");
+            JsonNode data = mapper.readTree(response.body());
+            if (!data.isArray()) throw new IOException("Cloud catalogue unavailable");
+            List<Map<String, Object>> result = mapper.convertValue(data, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            for (Map<String, Object> item : result) {
+                item.put("accountScope", scope);
+                JsonNode locations = mapper.valueToTree(item.get("locations"));
+                for (JsonNode location : locations) {
+                    if ("desktop".equals(location.path("kind").asText()) && deviceId().equals(location.path("deviceId").asText())) {
+                        Long id = parseLongOrNull(location.path("key").asText());
+                        if (id != null && projectRepository.findById(id).filter(p -> localIdentityService.localUserId().equals(p.getUserId())).isPresent()) {
+                            item.put("localProjectId", id);
+                        }
+                    }
+                }
+            }
+            requireCatalogAccountScope(scope);
+            return result;
+        } catch (IOException e) { throw new IllegalStateException(LangText.of("云端项目目录暂不可用", "Cloud project catalogue is unavailable"), e); }
+    }
+
+    public String catalogAccountScope() {
+        String fingerprint = accountService.accountFingerprintOrNull();
+        return fingerprint == null ? "" : sha256("catalog:" + fingerprint);
+    }
+    public void requireCatalogAccountScope(String scope) {
+        if (scope == null || scope.isBlank() || !scope.equals(catalogAccountScope())) throw new IllegalArgumentException(
+                LangText.of("账户已变化，请刷新项目目录", "Account changed; refresh the project catalogue"));
+    }
+
+    private record CatalogSession(String scope, String token) {}
+    private CatalogSession beginCatalogSession(String scope) {
+        requireCatalogAccountScope(scope);
+        String token = currentToken();
+        requireCatalogAccountScope(scope);
+        if (token == null) throw new IllegalArgumentException(LangText.of("请先连接账户", "Connect your account first"));
+        return new CatalogSession(scope, token);
+    }
+    /** A catalogue operation never rebinds credentials halfway through an account switch. */
+    private HttpResponse<String> catalogExchange(CatalogSession session, String method, String path, String body) {
+        requireCatalogAccountScope(session.scope());
+        HttpRequest.Builder builder = request(path).header("X-Session-Id", session.token()).header("Content-Type", "application/json");
+        builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
+        try {
+            HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+            requireCatalogAccountScope(session.scope());
+            return response;
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new IllegalStateException(LangText.of("云端请求失败", "Cloud request failed"), e);
+        }
+    }
+    private void acknowledgeCatalogTransfer(CatalogSession session, Long transferId) {
+        if (transferId == null) { requireCatalogAccountScope(session.scope()); return; }
+        if (!okEnvelope(catalogExchange(session, "POST", "/api/mobile/transfer/" + transferId + "/ack", "{}"))) {
+            throw new IllegalStateException(LangText.of("文件已保存，收件确认待重试", "File saved; retry to confirm delivery"));
+        }
+    }
+    public JsonNode catalogRequest(String method, String path, JsonNode body, String scope) {
+        return readCatalogJson(beginCatalogSession(scope), method, path, body);
+    }
+
+    private JsonNode readCatalogJson(CatalogSession session, String method, String path, JsonNode body) {
+        boolean allowed = "GET".equals(method) && (path.matches("/api/mobile/catalog/[0-9a-f-]{36}/files")
+                || path.matches("/api/mobile/transfer/[0-9]+") || path.matches("/api/mobile/transfer/quote\\?bytes=[0-9]+"))
+                || "POST".equals(method) && (path.equals("/api/mobile/transfer/list") || path.equals("/api/mobile/transfer/pull"));
+        if (!allowed || !active()) throw new IllegalArgumentException("Invalid catalogue operation");
+        try {
+            HttpResponse<String> response = catalogExchange(session, method, path, body == null ? null : mapper.writeValueAsString(body));
+            if (response == null || response.statusCode() != 200) throw new IOException("Cloud unavailable");
+            JsonNode result = mapper.readTree(response.body());
+            if (result.has("code") && result.path("code").asInt() != 0) throw new IllegalArgumentException(result.path("message").asText("Cloud request failed"));
+            requireCatalogAccountScope(session.scope());
+            return result;
+        } catch (IOException e) { throw new IllegalStateException(LangText.of("云端请求失败", "Cloud request failed"), e); }
+    }
+
+    /** Download to a local project before acknowledging a disposable transfer. */
+    public synchronized Map<String, Object> importCatalogFile(Long targetProjectId, String projectUid, String fileUid, Long transferId, String scope) {
+        if (!active()) throw new IllegalArgumentException(LangText.of("请先连接账户", "Connect your account first"));
+        CatalogSession session = beginCatalogSession(scope);
+        Long userId = localIdentityService.localUserId();
+        projectRepository.findById(targetProjectId).filter(p -> userId.equals(p.getUserId()))
+                .orElseThrow(() -> new IllegalArgumentException("Project not found"));
+        String name, marker, path;
+        long size;
+        boolean alreadyDelivered = false;
+        if (transferId != null) {
+            JsonNode transfer = readCatalogJson(session, "GET", "/api/mobile/transfer/" + transferId, null).path("transfer");
+            alreadyDelivered = "DELIVERED".equals(transfer.path("status").asText());
+            if (!alreadyDelivered && !"STAGED".equals(transfer.path("status").asText())) throw new IllegalArgumentException("Transfer is not ready");
+            name = transfer.path("fileName").asText(); size = transfer.path("fileSize").asLong();
+            marker = "transfer-" + transferId; path = "/api/mobile/transfer/" + transferId + "/content";
+        } else {
+            if (ProjectCatalogService.validUid(projectUid) == null || ProjectCatalogService.validUid(fileUid) == null) throw new IllegalArgumentException("Invalid file identity");
+            JsonNode list = readCatalogJson(session, "GET", "/api/mobile/catalog/" + projectUid + "/files", null);
+            JsonNode found = null;
+            for (JsonNode file : list.path("files")) if (fileUid.equals(file.path("uid").asText()) && "cloud".equals(file.path("source").asText())) found = file;
+            if (found == null) throw new IllegalArgumentException("File not found");
+            name = found.path("name").asText(); size = found.path("size").asLong(); marker = fileUid;
+            path = "/api/mobile/catalog/" + projectUid + "/files/" + fileUid + "/content";
+        }
+        String clean = name.replace('\\', '/'); clean = clean.substring(clean.lastIndexOf('/') + 1);
+        int dot = clean.lastIndexOf('.');
+        String stem = dot > 0 ? clean.substring(0, dot) : clean;
+        String ext = dot > 0 ? clean.substring(dot) : "";
+        if (stem.length() > 100) stem = stem.substring(0,100);
+        String landed = stem + "-" + marker + ext;
+        ProjectFile folder = projectFileService.getFilesByParent(targetProjectId, null).stream()
+                .filter(f -> Boolean.TRUE.equals(f.getIsFolder()) && "云端文件".equals(f.getName())).findFirst()
+                .orElseGet(() -> projectFileService.createFolder(targetProjectId, null, "云端文件", userId));
+        ProjectFile existing = projectFileService.getFilesByParent(targetProjectId, folder.getId()).stream()
+                .filter(f -> !Boolean.TRUE.equals(f.getIsFolder()) && landed.equals(f.getName())).findFirst().orElse(null);
+        if (existing != null) {
+            requireCatalogAccountScope(scope);
+            if (projectCatalog != null) projectCatalog.preserveImportedFileUid(existing, fileUid);
+            acknowledgeCatalogTransfer(session, transferId);
+            return Map.of("fileId", existing.getId(), "projectId", targetProjectId);
+        }
+        if (alreadyDelivered) throw new IllegalArgumentException(LangText.of("文件已取回，请在原目标项目查找", "File was already downloaded; check the original destination project"));
+        String storagePath = "projects/" + targetProjectId + "/云端文件/" + landed;
+        String temp = "projects/" + targetProjectId + "/.catalog-" + UUID.randomUUID() + ".tmp";
+        var store = storageServiceFactory.getStorageService();
+        boolean moved = false;
+        ProjectFile landedFile;
+        try {
+            requireCatalogAccountScope(scope);
+            HttpRequest request = request(path, Duration.ofMinutes(10)).header("X-Session-Id", session.token()).GET().build();
+            HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            try (InputStream content = response.body()) {
+                if (response.statusCode() != 200 || !response.headers().firstValue("Content-Type").orElse("").startsWith("application/octet-stream")) throw new IOException("Invalid file response");
+                store.save(temp, content);
+                if (store.load(temp).contentLength() != size) throw new IOException("File length mismatch");
+            }
+            requireCatalogAccountScope(scope);
+            store.move(temp, storagePath); moved = true;
+            requireCatalogAccountScope(scope);
+            landedFile = projectFileService.createFile(targetProjectId, folder.getId(), landed,
+                    fileTypeOf(landed, "bin"), size, storagePath, null, userId);
+        } catch (IOException | InterruptedException | RuntimeException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            try { store.delete(moved ? storagePath : temp); } catch (Exception ignored) {}
+            throw new IllegalStateException(LangText.of("取回失败，请重试", "Download failed; please retry"), e);
+        }
+        requireCatalogAccountScope(scope);
+        if (projectCatalog != null) projectCatalog.preserveImportedFileUid(landedFile, fileUid);
+        acknowledgeCatalogTransfer(session, transferId);
+        return Map.of("fileId", landedFile.getId(), "projectId", targetProjectId);
+    }
+
+    private Long cloudProjectId(Project project) {
+        if (projectRemotes == null || cloudConnections == null) return null;
+        return projectRemotes.findByProjectId(project.getId()).flatMap(remote ->
+                cloudConnections.findById(remote.getConnectionId()).filter(connection ->
+                        project.getUserId().equals(connection.getUserId()) &&
+                        baseUrl.replaceAll("/+$", "").equals(connection.getServerUrl().replaceAll("/+$", "")))
+                        .map(connection -> parseLongOrNull(remote.getRemoteProjectId()))).orElse(null);
+    }
     private final AccountService accountService;
     private final LocalIdentityService localIdentityService;
     private final ProjectRepository projectRepository;
@@ -278,6 +449,9 @@ public class MobileRelayClientService {
                 ObjectNode e = arr.addObject();
                 e.put("key", String.valueOf(p.getId()));
                 e.put("name", p.getName());
+                if (projectCatalog != null) e.put("projectUid", projectCatalog.ensureProjectUid(p));
+                Long cloudId = cloudProjectId(p);
+                if (cloudId != null) e.put("cloudProjectId", cloudId);
             }
             // 空清单不推送：同一台机器上 e2e/dev/优化者等多个后端实例共享同一份
             // ~/.aiworkdeck/mobile-relay.json 的 relay 身份，测试实例本地库是空的，
@@ -769,6 +943,8 @@ public class MobileRelayClientService {
             if (files.size() >= 2000) continue; // 只上报前 2000 条，仍统计完整数量
             ObjectNode e = files.addObject();
             e.put("id", String.valueOf(f.getId()));
+            if (projectCatalog != null) e.put("uid", projectCatalog.ensureFileUid(f));
+            else if (f.getUid() != null) e.put("uid", f.getUid());
             e.put("name", f.getName());
             e.put("path", listEntryPath(f, byId));
             e.put("size", f.getFileSize() == null ? 0L : f.getFileSize());

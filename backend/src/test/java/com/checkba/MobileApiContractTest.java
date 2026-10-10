@@ -32,6 +32,7 @@ import java.util.Map;
 
 import static com.atlassian.oai.validator.mockmvc.OpenApiValidationMatchers.openApi;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -105,6 +106,46 @@ class MobileApiContractTest {
         String sid = json.path("data").path("sessionId").asText();
         assertFalse(sid.isEmpty(), "注册应返回 sessionId：" + r.getResponse().getContentAsString());
         return sid;
+    }
+
+    @Test
+    void unifiedCatalogAndCloudCaptureMatchSpecAndPreserveBytes() throws Exception {
+        String sid = register("catalog_" + System.nanoTime());
+        Long userId = com.checkba.controller.AuthController.getUserIdFromSession(sid);
+        AccountBinding binding = new AccountBinding(); binding.setUserId(userId);
+        binding.setExternalAccountId("catalog-account-" + userId); binding.setCreatedAt(LocalDateTime.now());
+        accountBindingRepository.save(binding);
+        when(billing.balance(anyString())).thenReturn(new MobileBillingClient.BalanceResult(0L, "CNY", "paid",
+                Map.of("active", true, "expiresAt", "2030-01-01T00:00:00Z", "cloudStorageBytes", 3L*1024*1024*1024)));
+        MvcResult created = mvc.perform(post("/api/projects").header("X-Session-Id", sid).contentType(APPLICATION_JSON)
+                .content("{\"projectType\":\"BLANK\",\"name\":\"Catalogue fixture\"}"))
+                .andExpect(status().isOk()).andReturn();
+        long projectId = om.readTree(created.getResponse().getContentAsString()).path("id").asLong();
+        assertTrue(projectId > 0, created.getResponse().getContentAsString());
+        MvcResult catalog = mvc.perform(get("/api/mobile/catalog").header("X-Session-Id", sid))
+                .andExpect(status().isOk()).andExpect(openApi().isValid(validator)).andReturn();
+        String uid = om.readTree(catalog.getResponse().getContentAsString()).get(0).path("projectUid").asText();
+        byte[] bytes = "original audio bytes".getBytes(StandardCharsets.UTF_8);
+        String clientId = java.util.UUID.randomUUID().toString();
+        var upload = multipart("/api/mobile/media").file(new MockMultipartFile("file", "memo.m4a", "audio/mp4", bytes))
+                .param("deviceId", "cloud").param("projectKey", Long.toString(projectId))
+                .param("clientMediaId", clientId).param("fileName", "memo.m4a").param("mediaType", "audio").header("X-Session-Id", sid);
+        MvcResult receipt = mvc.perform(upload).andExpect(status().isOk()).andExpect(jsonPath("$.delivered").value(true))
+                .andExpect(openApi().isValid(validator)).andReturn();
+        String fileUid = om.readTree(receipt.getResponse().getContentAsString()).path("fileUid").asText();
+        mvc.perform(upload).andExpect(jsonPath("$.fileUid").value(fileUid)).andExpect(openApi().isValid(validator));
+        mvc.perform(get("/api/mobile/catalog/" + uid + "/files").header("X-Session-Id", sid))
+                .andExpect(jsonPath("$.count").value(1)).andExpect(jsonPath("$.files[0].source").value("cloud"))
+                .andExpect(openApi().isValid(validator));
+        mvc.perform(get("/api/mobile/catalog/" + uid + "/files/" + fileUid + "/content").header("X-Session-Id", sid))
+                .andExpect(content().contentType("application/octet-stream")).andExpect(content().bytes(bytes))
+                .andExpect(header().longValue("Content-Length", bytes.length)).andExpect(openApi().isValid(validator));
+        mvc.perform(get("/api/mobile/media/status").param("clientMediaIds", clientId).header("X-Session-Id", sid))
+                .andExpect(jsonPath("$[0].delivered").value(true)).andExpect(jsonPath("$[0].fileUid").value(fileUid))
+                .andExpect(jsonPath("$[0].projectUid").value(uid)).andExpect(openApi().isValid(validator));
+        String other = register("catalog_other_" + System.nanoTime());
+        mvc.perform(get("/api/mobile/catalog/" + uid + "/files/" + fileUid + "/content").header("X-Session-Id", other))
+                .andExpect(jsonPath("$.code").value(1)).andExpect(openApi().isValid(validator));
     }
 
     @Test

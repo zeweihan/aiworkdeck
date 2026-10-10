@@ -2,6 +2,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Project list page + Project overview page (project-list.vue / project-home.vue and its five project-home/* subcomponents)
 export default {
+  accountCatalog: 'Account project catalogue',
+  catalogRefresh: 'Refresh',
+  catalogAllLocal: 'Account projects are on this device. Connect your account to sync other devices.',
+  catalogDestination: 'Save into a local project',
+  catalogChooseLocal: 'Choose a local project',
+  catalogIncomplete: 'Some device file lists are incomplete. Online devices are queried on demand.',
+  catalogWorking: 'Connecting or downloading…',
+  catalogNoFiles: 'No files are available yet.',
+  catalogCloud: 'Cloud storage',
+  catalogOnline: 'Online',
+  catalogOffline: 'Offline',
+  catalogImport: 'Retrieve file',
+  catalogFailed: 'Transfer failed',
+  catalogPending: 'The device has not responded. Retry to continue the same request.',
+  catalogQuote: 'This transfer costs {credits} Credits. Continue?',
+  catalogSaved: 'File saved',
+
   // project-list.vue: header and empty states
   myProjects: 'My Projects',
   pullFromTeamLibrary: 'Pull a Case File from the Team Case Library',

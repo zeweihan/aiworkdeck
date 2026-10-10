@@ -84,6 +84,18 @@ class HttpMobileBillingClientTest {
         return new HttpMobileBillingClient(base, "secret", om);
     }
 
+    @Test
+    void balancePreservesSubscriptionSeparatelyFromCash() {
+        HttpMobileBillingClient client = stubbed(200, """
+                {"balanceCents":0,"currency":"CNY","plan":"paid","subscription":{"active":true,"availableCents":4500,"cloudStorageBytes":3221225472}}
+                """);
+        var result = client.balance("acct-test");
+        assertEquals(0, result.balanceCents());
+        assertEquals(true, result.subscription().get("active"));
+        assertEquals(4500, result.subscription().get("availableCents"));
+        assertEquals(3221225472L, ((Number) result.subscription().get("cloudStorageBytes")).longValue());
+    }
+
     // ==================== 短路与网络 ====================
 
     @Test

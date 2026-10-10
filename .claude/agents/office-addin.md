@@ -446,3 +446,10 @@ spec `docs/superpowers/specs/2026-09-18-addin-cross-file-design.md`。一句话�
 - `cd office-addin && npm test` —— 新增 `paneHeartbeat.test.js`、`chatSessionIdentity.test.js`（身份广播与补发）、`referenceRead.test.js` / `referenceReadOffice.test.js` / `referenceReadWps.test.js`（locator 解析、按页/标题切段、截断、不支持即报错）、`crossDocWrite.test.js`（强制修订、拒绝分支、快照与冲突撤销）、`crossDocChat.test.js`（origin 分流、串行、必定回传）、`officeCrossDoc.test.js` / `wpsCrossDoc.test.js`（两个家族的快照读写接缝）、`revisionLog.test.js` / `revisionLogUi.test.js` / `revisionLogPanel.test.js` / `revisionLocate.test.js`、`gitLink.test.js`、`api.test.js`（心跳/告别/git-links 的请求形状）。
 - UI/vite 动过就再 `npm run build`（与 `npm run build:wps`）。
 - **真机走查是这批的判据，不是可选项**（spec §10）：Mac 上 Word A + Word B 互读互改、Word A 改 Excel/PPT B 并撤销、WPS（Parallels）同样两轮、桌面端常连的冷热耗时与断网回落、案件库与 GitHub 各读一份 docx。未做的项在卡上与汇报里如实标「未验证」。
+
+## 统一项目目录（dev-board#1188，2026-10-11）
+
+`App.refreshProjects` 读取 `/api/mobile/catalog`，`lib/projectCatalog.js` 按 projectUid 生成一条选择项；
+已有普通云项目保留其云 id，桌面项目选在线位置并走既有 ensure-addin-link 归档绑定。
+同名不同项目不合并；影子容器属于同一项目的云位置，不能与完整桌面原件混同。
+目录接口仅 404 兼容旧设备列表，连接失败显示原有重试入口；护栏 `projectCatalog.test.js`。

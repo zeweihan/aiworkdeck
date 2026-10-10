@@ -9,6 +9,13 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface ProjectRepository extends JpaRepository<Project, Long> {
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Project p SET p.uid = :uid WHERE p.id = :id AND ((:previous IS NULL AND p.uid IS NULL) OR p.uid = :previous)")
+    int assignCatalogUidIfUnchanged(Long id, String previous, String uid);
+
+    @org.springframework.data.jpa.repository.Query("SELECT p.uid FROM Project p WHERE p.id = :id")
+    String readCatalogUid(Long id);
+
     /**
      * 根据用户 ID 查询项目列表，按创建时间倒序
      */

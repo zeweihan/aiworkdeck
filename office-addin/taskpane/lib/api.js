@@ -857,3 +857,14 @@ export async function postCancel({ serverUrl, token }, conversationId) {
     // 停止是尽力而为：连接断了也要允许前端解锁
   }
 }
+
+/** The catalogue is authoritative when available; only an old server (404) falls back. */
+export async function fetchProjectCatalog({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  const response = await fetch(`${base}/api/mobile/catalog`, { headers: headers(token) })
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(t('apiConnectFailedHttp', { status: response.status }))
+  const rows = await response.json()
+  if (!Array.isArray(rows)) throw new Error(t('apiBadResponseFormat'))
+  return rows
+}

@@ -29,6 +29,9 @@ public class ProjectFileService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProjectFileService.class);
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.mobile.CloudStorageQuotaService cloudStorageQuota;
+
     private final ProjectFileRepository projectFileRepository;
     private final ProjectRagService projectRagService;
     private final StorageServiceFactory storageServiceFactory;
@@ -249,6 +252,14 @@ public class ProjectFileService {
         Optional<ProjectFile> existing = projectFileRepository.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(projectId, parentId, name);
         if (existing.isPresent()) {
             ProjectFile f = existing.get();
+            if (cloudStorageQuota != null && cloudStorageQuota.isEnabled()) {
+                cloudStorageQuota.lockFileForWrite(f);
+                // Metadata updates cannot hide physical bytes or orphan the previous storage key.
+                if (StringUtils.hasText(filePath) && !Objects.equals(f.getFilePath(), requireProjectScopedPath(projectId, filePath))) {
+                    throw new IllegalArgumentException("Use the file move operation to change a cloud storage path");
+                }
+                fileSize = cloudStorageQuota.measuredBytes(f);
+            }
             f.setFileSize(fileSize);
             f.setUpdatedAt(LocalDateTime.now());
             // If wpsFileId is provided, update it (or keep existing if new is null?? usually overwrite)
@@ -309,6 +320,8 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + finalName);
         }
 
+        if (cloudStorageQuota != null) cloudStorageQuota.requireProjectCapacity(projectId, fileSize == null ? 0 : fileSize);
+
         // 获取当前父文件夹下的最大排序序号（单条聚合查询，见 ProjectFileRepository.maxSortOrder）
         Integer maxSortOrder = projectFileRepository.maxSortOrder(projectId, parentId);
 
@@ -337,10 +350,20 @@ public class ProjectFileService {
         // 从模板物化物理文件。此前这里调的是 load()——靠「读不到就造一个」的副作用来建文件，
         // 于是读路径也被迫保留那个副作用，任何一份正文丢失的文档都会被静默读成空白模板。
         // 建与读拆开后，这里明确表达「创建」，load() 得以回归纯读（文件不存在就报错）。
+        boolean officialCloud = cloudStorageQuota != null && cloudStorageQuota.isEnabled();
+        boolean existedBeforeTemplate = officialCloud && storageServiceFactory.getStorageService().exists(filePath);
+        if (officialCloud && !existedBeforeTemplate) removeNewCloudFileOnRollback(projectId, filePath);
         try {
             storageServiceFactory.getStorageService().createFromTemplate(filePath);
+            if (officialCloud) cloudStorageQuota.requireCurrentProjectUsage(projectId);
             log.info("物理文件创建成功: {}", filePath);
         } catch (Exception e) {
+            if (officialCloud) {
+                if (!existedBeforeTemplate && storageServiceFactory.getStorageService().exists(filePath)) {
+                    storageServiceFactory.getStorageService().delete(filePath);
+                }
+                throw e;
+            }
             log.warn("物理文件创建失败（首次保存时会重新写入）: {}", filePath, e);
         }
 
@@ -376,6 +399,7 @@ public class ProjectFileService {
             throw new IllegalArgumentException(LangText.of("比对稿不是有效的 DOCX 文档", "The comparison is not a valid DOCX document"), e);
         }
         requireWithinProjectSizeLimit(projectId, bytes.length);
+        if (cloudStorageQuota != null) cloudStorageQuota.requireProjectCapacity(projectId, bytes.length);
         String name = resolveConflictingName(projectId, parentId, comparisonStem(base.getName())
                 + LangText.of("与", " vs ") + comparisonStem(revised.getName()) + LangText.of("（比对稿）.docx", " (comparison).docx"));
         validateNodeName(name);
@@ -782,6 +806,8 @@ public class ProjectFileService {
         ProjectFile file = projectFileRepository.findById(fileId)
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
+        if (cloudStorageQuota != null) cloudStorageQuota.lockFileForWrite(file);
+
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
         String oldName = file.getName();
@@ -923,6 +949,7 @@ public class ProjectFileService {
         }
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
+        if (cloudStorageQuota != null) cloudStorageQuota.lockFileForWrite(file);
         purgeRecursive(file, true);
     }
 
@@ -933,7 +960,8 @@ public class ProjectFileService {
      */
     @Transactional
     public void permDelete(Long fileId, Long userId, boolean diskHandled) {
-        if (!diskHandled) {
+        if (!diskHandled || (cloudStorageQuota != null && cloudStorageQuota.isEnabled())) {
+            // A client cannot attest that bytes on the official cloud disk have been deleted.
             permDelete(fileId, userId);
             return;
         }
@@ -1039,6 +1067,9 @@ public class ProjectFileService {
                 storageServiceFactory.getStorageService().delete(path);
                 log.info("物理文件/文件夹彻底删除成功: path={}", path);
             } catch (Exception e) {
+                if (cloudStorageQuota != null && cloudStorageQuota.isEnabled()) {
+                    throw new IllegalStateException("Cloud file deletion failed; retaining its storage record", e);
+                }
                 log.warn("物理文件/文件夹彻底删除失败，继续删除数据库记录: path={}", path, e);
             }
         }
@@ -1165,6 +1196,8 @@ public class ProjectFileService {
 
         ProjectFile file = projectFileRepository.findById(fileId)
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
+
+        if (cloudStorageQuota != null) cloudStorageQuota.lockFileForWrite(file);
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
@@ -1389,6 +1422,10 @@ public class ProjectFileService {
         }
 
         // file
+        if (cloudStorageQuota != null && cloudStorageQuota.isEnabled()) {
+            cloudStorageQuota.lockFileForWrite(source);
+            cloudStorageQuota.requireProjectCapacity(projectId, cloudStorageQuota.measuredBytes(source));
+        }
         String desiredName = source.getName();
         if (Objects.equals(source.getParentId(), targetParentId)) {
             desiredName = LangText.of("【副本】", "Copy of ") + desiredName;
@@ -1412,13 +1449,28 @@ public class ProjectFileService {
 
         // copy physical
         if (StringUtils.hasText(source.getFilePath())) {
+            boolean officialCloud = cloudStorageQuota != null && cloudStorageQuota.isEnabled();
+            if (officialCloud) removeNewCloudFileOnRollback(projectId, newPath);
             try {
                 copyPhysicalFile(source.getFilePath(), newPath);
             } catch (Exception e) {
+                if (officialCloud) throw new IllegalStateException("Cloud file copy failed", e);
                 log.warn("复制物理文件失败: sourcePath={}, targetPath={}", source.getFilePath(), newPath, e);
             }
         }
         return saved;
+    }
+
+    private void removeNewCloudFileOnRollback(Long projectId, String path) {
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) return;
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override public void afterCompletion(int status) {
+                        if (status == STATUS_COMMITTED) return;
+                        try { cloudStorageQuota.removeRolledBackFile(projectId, path); }
+                        catch (Exception e) { log.error("Cloud rollback could not remove new file: {}", path, e); }
+                    }
+                });
     }
 
     private String resolveUniqueName(Long projectId, Long parentId, String desiredName) {
@@ -1646,6 +1698,10 @@ public class ProjectFileService {
             throw new IllegalStateException("文件没有存储路径: " + fileId);
         }
         byte[] bytes = (text == null ? "" : text).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (cloudStorageQuota != null) {
+            cloudStorageQuota.requireFileCapacity(file, bytes.length, false);
+            key = StringUtils.hasText(file.getFilePath()) ? file.getFilePath() : file.getWpsFileId();
+        }
         storageServiceFactory.getStorageService().save(key, new java.io.ByteArrayInputStream(bytes));
         file.setFileSize((long) bytes.length);
         file.setUpdatedAt(LocalDateTime.now());
@@ -1809,6 +1865,8 @@ public class ProjectFileService {
         if (existing.isPresent()) {
             // 更新内容
             ProjectFile file = existing.get();
+            if (cloudStorageQuota != null) cloudStorageQuota.requireFileCapacity(file,
+                    content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, false);
             try {
                 // 更新物理文件
                 storageServiceFactory.getStorageService().save(file.getFilePath(), new java.io.ByteArrayInputStream(content.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
@@ -1821,6 +1879,8 @@ public class ProjectFileService {
             }
         } else {
             // 创建新文件
+            if (cloudStorageQuota != null) cloudStorageQuota.requireProjectCapacity(projectId,
+                    content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
             String logicalPath = "AI Assistant Files/" + convFolder.getName() + "/" + finalName;
             String physicalPath = buildPhysicalPath(projectId, convFolder.getId(), finalName);
             
@@ -2236,4 +2296,3 @@ public class ProjectFileService {
         }
     }
 }
-

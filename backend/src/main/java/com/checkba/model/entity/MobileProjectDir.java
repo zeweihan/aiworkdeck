@@ -45,6 +45,12 @@ public class MobileProjectDir {
     @Column(nullable = false, length = 512)
     private String name;
 
+    @Column(length = 36)
+    private String projectUid;
+
+    /** Only trusted after matching this account's owned cloud project. */
+    private Long cloudProjectId;
+
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 }

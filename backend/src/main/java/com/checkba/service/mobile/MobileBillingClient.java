@@ -3,6 +3,8 @@
 
 package com.checkba.service.mobile;
 
+import java.util.Map;
+
 /**
  * 手机端「统一账户」余额与充值口（dev-board#425，spec
  * {@code aiworkdeck_mobile/docs/specs/2026-09-04-mobile-recharge-design.md} §3.2）。
@@ -30,7 +32,11 @@ public interface MobileBillingClient {
      *                     只返回 {@code paid} / {@code free}，<b>不是套餐名，也基本不会为 null</b>
      *                     （只有上游没给这个字段时才是 null）。各端不要当套餐名直接渲染。
      */
-    record BalanceResult(long balanceCents, String currency, String plan) {}
+    record BalanceResult(long balanceCents, String currency, String plan, Map<String, Object> subscription) {
+        public BalanceResult(long balanceCents, String currency, String plan) {
+            this(balanceCents, currency, plan, Map.of());
+        }
+    }
 
     /**
      * 充值单。{@code present} = {@code "qrcode"}（codeUrl/qrCode 有值）、

@@ -4321,3 +4321,13 @@ export function getMobileReceiveStatus(projectKey = '') {
 export function checkMobileReceive() {
   return request({ url: '/api/mobile-receive/check', method: 'POST' })
 }
+
+export function getAccountProjectCatalog() {
+  return request({ url: '/api/mobile-receive/catalog', method: 'GET' })
+}
+export function requestAccountCatalog(method, path, body, accountScope) {
+  return request({ url: '/api/mobile-receive/catalog/request', method: 'POST', data: { method, path, body, accountScope } })
+}
+export function importAccountCatalogFile(data) {
+  return request({ url: '/api/mobile-receive/catalog/import', method: 'POST', data, timeout: 600000 })
+}

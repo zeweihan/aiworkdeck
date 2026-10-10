@@ -17,6 +17,16 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 总 Spec 见 `docs/superpowers/specs/2026-08-05-commercialization-redesign.md`，
 **Spec 与实现有偏差时以代码为准**，偏差逐条记在该文件末尾「实现与 Spec 的偏差记录」一节。
 
+## Pro 订阅与充值分账（dev-board#1187，2026-10-11）
+
+官网仍是余额与权益权威源，149 元购买一次 30 天，不自动续费。订阅服务额度和充值 Credits 分账；当前实现初值为 149 Credits / 30 天、45 Credits / 7 天（经营数值待用户确认，不是已上线承诺）。周/月窗口从订阅周期开始时刻计算。官网 `subscription` 快照由账户余额和平台用量接口透传，桌面 AdminPane 展示两层额度、重置时间及充值余额续用开关状态；开关在官网账户页修改。
+
+`EntitlementService` 缓存逐项到期时间与账户指纹，离线宽限不能延长订阅权益，单独购买的永久权益仍保留。Pro 派生 `plan.pro`、`clipboard.unlimited`、`stage.unlimited`、`cloud.storage.3gb`；旧缓存的 Pro 无到期时间时须刷新。
+
+`CloudStorageQuotaService` 通过当前云用户的 MobileBilling 绑定查询权益，不能借机器管理员账户。官方 cloud profile 开启普通项目写入配额校验；desktop/self-host 默认关闭。Pro 为 3GiB 持久空间，免费账户无持久空间；到期已有文件仍能读、删。云写入以所属用户行锁串行计量，复制、编辑、AI 产物和模板都计入；优先核算实际磁盘字节，回收站中仍在磁盘上的文件继续占用。所有账户临时中转池为 200MiB，同时包含手机上传及桌面取件暂存，ACK 后释放，不是每月流量。
+
+验证入口：`EntitlementServiceTest`、`HttpMobileBillingClientTest`、`CloudStorageQuotaServiceTest`、`ProjectFileServiceCloudQuotaTest`、`MobileRelayStoreServiceTest`、`MobileTransferServiceTest`；官网独立空目录脚本 `verify-subscription-allowance.mts`。跨仓细节及经营测算见 `docs/handoffs/2026-10-11-subscription-project-unification.md`。合并不等于部署。
+
 ## 试用缓存与回合归属（dev-board#1166，2026-10-10）
 
 `GET /api/trial/balance` 以账户站 `/api/account/trial` 为权威；断网时只展示本机 `trial_balance.account_fingerprint` 与当前账户一致的已确认缓存。无行、旧版无归属行、另一账户行均返回未知，不推定 14 天 / 80 次；官网明确未发放时清掉同账户旧行。归属与完整 `account_snapshot` 两列可空，由既有 Hibernate update 升级；离线保留官网回包，不按本机时间重算状态或剩余天数。前端不把 null 当成 0。

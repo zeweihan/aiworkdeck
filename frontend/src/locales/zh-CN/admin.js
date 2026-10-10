@@ -2,6 +2,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 统一「设置」页（components/admin/AdminPane.vue）文案。语言分区（appLanguage）自带双语三元表达式，不在此列。
 export default {
+  subscriptionTitle: "个人 Pro 订阅",
+  subscriptionSeparate: "订阅额度与充值余额分开记录；订阅额度到期不结转。",
+  subscriptionMonth: "本周期：{used} / {limit} Credits",
+  subscriptionWeek: "本周：{used} / {limit} Credits",
+  subscriptionReset: "周额度重置：{date}",
+  subscriptionEnds: "本周期结束：{date}",
+  subscriptionFallbackOn: "超额后使用充值余额：已开启",
+  subscriptionFallbackOff: "超额后暂停，不自动使用充值余额",
+  subscriptionManage: "管理订阅与超额设置",
+
   // 左侧导航
   navCardTitle: '设置',
   // 两个分组标题（2026-08-20 个人中心并入设置）
