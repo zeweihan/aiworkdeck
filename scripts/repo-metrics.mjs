@@ -9,7 +9,7 @@ import { mkdir, appendFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const token = process.env.STAR_TOKEN || process.env.GITHUB_TOKEN;
-const repo = process.env.GITHUB_REPOSITORY || 'zeweihan/aiworkdeck';
+const repo = process.env.GITHUB_REPOSITORY || 'AI-WorkDeck/aiworkdeck';
 const out = process.env.METRICS_FILE || 'metrics/traffic.jsonl';
 if (!token) throw new Error('GITHUB_TOKEN or STAR_TOKEN required');
 

@@ -30,7 +30,7 @@ const https = require('https')
 const http = require('http')
 
 const MIRROR_ASSET_BASE = 'https://www.aiworkdeck.com/update/desktop/assets/'
-const GH_RELEASE_BASE = 'https://github.com/zeweihan/aiworkdeck/releases/download/'
+const GH_RELEASE_BASE = 'https://github.com/AI-WorkDeck/aiworkdeck/releases/download/'
 const DOWNLOAD_PAGE = 'https://www.aiworkdeck.com'
 
 // 壳层组件排除项：LOWA 引擎与全部 CJK 字体只随大版本走（fetch-lowa-assets 烙入）。
@@ -241,7 +241,7 @@ async function main() {
   const channels = { ...(prev && prev.channels ? prev.channels : {}) }
   channels[major] = {
     latest: version,
-    notes: `https://github.com/zeweihan/aiworkdeck/releases/tag/v${version}`,
+    notes: `https://github.com/AI-WorkDeck/aiworkdeck/releases/tag/v${version}`,
     components
   }
   // latestMajor 单调不降：本次发布的大版本与上一版记录取大者

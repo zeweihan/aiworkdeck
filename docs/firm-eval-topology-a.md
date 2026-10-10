@@ -11,7 +11,7 @@
 
 ## 推荐路径（多数律所试用）/ Recommended path
 
-1. 下载[最新桌面 release](https://github.com/zeweihan/aiworkdeck/releases/latest)（macOS / Windows）。
+1. 下载[最新桌面 release](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest)（macOS / Windows）。
 2. 安装并启动。社区版安装包与商业授权是同一二进制。启动即进工作台，无需登录。
 3. 项目文件默认存在本机（以官网隐私说明为准）。
 4. 首次使用 AI 或市场付费能力时，按提示就地登录对应区域站点（aiworkdeck.com 或 workdeck.ai）。

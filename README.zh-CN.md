@@ -11,13 +11,13 @@
 
 <p align="center">
   <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="AGPL-3.0-or-later"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=2E5A50" alt="最新版本"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml"><img src="https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml/badge.svg" alt="持续集成状态"></a>
+  <a href="https://github.com/AI-WorkDeck/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/AI-WorkDeck/aiworkdeck?color=2E5A50" alt="最新版本"></a>
+  <a href="https://github.com/AI-WorkDeck/aiworkdeck/actions/workflows/ci.yml"><img src="https://github.com/AI-WorkDeck/aiworkdeck/actions/workflows/ci.yml/badge.svg" alt="持续集成状态"></a>
 </p>
 
 <p align="center">
   <a href="README.md">English</a> · <strong>简体中文</strong><br>
-  <a href="WHY.zh-CN.md">产品判断</a> · <a href="#一起建设">一起建设</a> · <a href="docs/architecture.md">技术架构</a> · <a href="https://github.com/zeweihan/aiworkdeck/releases/latest">下载体验</a> · <a href="mailto:hi@aiworkdeck.com">投资与合作</a>
+  <a href="WHY.zh-CN.md">产品判断</a> · <a href="#一起建设">一起建设</a> · <a href="docs/architecture.md">技术架构</a> · <a href="https://github.com/AI-WorkDeck/aiworkdeck/releases/latest">下载体验</a> · <a href="mailto:hi@aiworkdeck.com">投资与合作</a>
 </p>
 
 一份合同能够交付，意味着有人愿意对它负责。为此，需要核对依据、协商修改、保留文档结构，也需要知道哪一版经过了谁的审阅。写出初稿，只是其中一步。
@@ -41,7 +41,7 @@ AI 编程工具已经展示了智能体进入实际工作环境的价值。专�
 
 ## 今天已经可以检查什么
 
-本仓库包含桌面应用、工作台、智能体后端、文档编辑器集成和插件运行时。这里有可以运行的代码、[桌面安装包](https://github.com/zeweihan/aiworkdeck/releases)、[公开开发记录](https://github.com/zeweihan/aiworkdeck/commits/master/)和[持续集成结果](https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml)。
+本仓库包含桌面应用、工作台、智能体后端、文档编辑器集成和插件运行时。这里有可以运行的代码、[桌面安装包](https://github.com/AI-WorkDeck/aiworkdeck/releases)、[公开开发记录](https://github.com/AI-WorkDeck/aiworkdeck/commits/master/)和[持续集成结果](https://github.com/AI-WorkDeck/aiworkdeck/actions/workflows/ci.yml)。
 
 | 基础能力 | 对专业工作的价值 | 查看实现 |
 |---|---|---|
@@ -62,7 +62,7 @@ AI 编程工具已经展示了智能体进入实际工作环境的价值。专�
   <img src=".github/assets/marketplace-live.png" alt="应用内插件与可复用 Skill 广场" width="1000">
 </p>
 
-以上为早期版本截图，材料为虚构演示内容。实际评估请使用[最新版本](https://github.com/zeweihan/aiworkdeck/releases/latest)。
+以上为早期版本截图，材料为虚构演示内容。实际评估请使用[最新版本](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest)。
 
 </details>
 
@@ -82,7 +82,7 @@ AI 编程工具已经展示了智能体进入实际工作环境的价值。专�
 
 ### 参与贡献
 
-可以先把你熟悉的一项审查或研究流程做成扩展。如果更愿意改进核心能力，也可以从一个小而可复现的问题开始：某份文档丢失了格式，某条依据无法重新定位，某次修改保存后重开不一致，或者某个安装步骤不够清楚。请使用合成或适当脱敏的材料，说明预期结果。较大的改动，先在 [Issue](https://github.com/zeweihan/aiworkdeck/issues) 中讨论范围。
+可以先把你熟悉的一项审查或研究流程做成扩展。如果更愿意改进核心能力，也可以从一个小而可复现的问题开始：某份文档丢失了格式，某条依据无法重新定位，某次修改保存后重开不一致，或者某个安装步骤不够清楚。请使用合成或适当脱敏的材料，说明预期结果。较大的改动，先在 [Issue](https://github.com/AI-WorkDeck/aiworkdeck/issues) 中讨论范围。
 
 提交前阅读[贡献指南](.github/CONTRIBUTING.md)。代码贡献需一次性签署 [CLA](legal/CLA.md)：贡献者保留著作权，并授权项目管理方按开源与商业许可两种方式分发。重要 API 改动走 [RFC 流程](GOVERNANCE.md#rfc-process)。[治理规则](GOVERNANCE.md)提供了从贡献者到审阅者、维护者的成长路径，[现任维护者](MAINTAINERS.md)公开列明。
 
@@ -97,7 +97,7 @@ AI 编程工具已经展示了智能体进入实际工作环境的价值。专�
 - <strong>更短的开发起步路径：</strong>清晰的本地演示、私有部署说明、更多插件样例与双语贡献文档。
 - <strong>能够重复执行的专业流程：</strong>把范围明确的任务做成 Skill 和扩展，说明输入、审阅环节以及可检验的输出。
 
-欢迎带着具体场景参与 [Discussions](https://github.com/zeweihan/aiworkdeck/discussions)，或提出范围清楚的 [Issue](https://github.com/zeweihan/aiworkdeck/issues)。开发者与专业人士可以一起定义这些工作。
+欢迎带着具体场景参与 [Discussions](https://github.com/AI-WorkDeck/aiworkdeck/discussions)，或提出范围清楚的 [Issue](https://github.com/AI-WorkDeck/aiworkdeck/issues)。开发者与专业人士可以一起定义这些工作。
 
 ## 开源与商业如何相互支持
 
@@ -115,9 +115,9 @@ AI 编程工具已经展示了智能体进入实际工作环境的价值。专�
 
 ## 进一步了解
 
-- <strong>体验产品：</strong>[macOS / Windows 安装包](https://github.com/zeweihan/aiworkdeck/releases/latest) · [产品演示](https://www.aiworkdeck.com/zh/showcase)。
+- <strong>体验产品：</strong>[macOS / Windows 安装包](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest) · [产品演示](https://www.aiworkdeck.com/zh/showcase)。
 - <strong>阅读或运行源码：</strong>[开发入门](docs/getting-started.md) · [技术架构](docs/architecture.md)。贡献者环境使用 JDK 21、Maven、Node/npm 和 PostgreSQL；可选服务另有依赖。
 - <strong>核对数据流向：</strong>[隐私与服务数据说明](legal/PRIVACY.md)。桌面编辑默认使用本地存储；云端模型、平台服务、托管加载项和同步各有数据路径，私有部署需要结合配置逐项验证。
 - <strong>了解许可：</strong>[AGPL-3.0-or-later](legal/LICENSE) · [CLA](legal/CLA.md) · [商业许可](legal/COMMERCIAL-LICENSE.md)。
 
-可以从关注[版本更新](https://github.com/zeweihan/aiworkdeck/releases)、参与一场[讨论](https://github.com/zeweihan/aiworkdeck/discussions)，或写一个小扩展开始。具体的成果，会让我们更清楚下一步值得一起做什么。
+可以从关注[版本更新](https://github.com/AI-WorkDeck/aiworkdeck/releases)、参与一场[讨论](https://github.com/AI-WorkDeck/aiworkdeck/discussions)，或写一个小扩展开始。具体的成果，会让我们更清楚下一步值得一起做什么。

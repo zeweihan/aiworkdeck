@@ -33,7 +33,7 @@ public class SourceCodeNoticeFilter extends OncePerRequestFilter implements Orde
 
     /** AGPL §13 要求可取得的「对应源码」位置。 */
     static final String HEADER = "X-Source-Code";
-    static final String SOURCE_URL = "https://github.com/zeweihan/aiworkdeck";
+    static final String SOURCE_URL = "https://github.com/AI-WorkDeck/aiworkdeck";
 
     /**
      * 排在最后（最靠近 DispatcherServlet）：告示是纯附加信息，不该抢在准入闸

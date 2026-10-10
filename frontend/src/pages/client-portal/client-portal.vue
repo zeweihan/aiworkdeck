@@ -45,7 +45,7 @@ import { clientLogin } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { codeFromHash } from '@/utils/memberLookup.js'
 
-const SOURCE_URL = 'https://github.com/zeweihan/aiworkdeck'
+const SOURCE_URL = 'https://github.com/AI-WorkDeck/aiworkdeck'
 const LIST_URL = '/pages/project-list/project-list'
 
 export default {

@@ -17,7 +17,7 @@ GitHub 推送凭据和一个能写代码的 Agent——把它放到生产站那�
 
 1. **仓库工作副本**（优化者会在它上面开临时 worktree，不动你当前的工作区）：
    ```bash
-   git clone git@github.com:zeweihan/aiworkdeck.git ~/aiworkdeck-optimizer
+   git clone git@github.com:AI-WorkDeck/aiworkdeck.git ~/aiworkdeck-optimizer
    ```
 2. **`gh` 已登录**且对该仓库有推送权限：`gh auth status`
 3. **编码 Agent 已登录**：`claude` 或 `codex`。注意它是被后端进程 spawn 的，
@@ -60,7 +60,7 @@ curl -s -X POST http://127.0.0.1:9799/api/optimizer/run
 
 ```bash
 # 在 mini 上
-git clone git@github.com:zeweihan/aiworkdeck.git ~/aiworkdeck-optimizer
+git clone git@github.com:AI-WorkDeck/aiworkdeck.git ~/aiworkdeck-optimizer
 mkdir -p ~/aiworkdeck-optimizer-run
 scp <旧机>:~/aiworkdeck-optimizer-run/{backend.jar,optimizer.env} ~/aiworkdeck-optimizer-run/
 cp deploy/optimizer/com.aiworkdeck.optimizer.plist ~/Library/LaunchAgents/

@@ -22,7 +22,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           path-to-signatures: 'signatures/version1/cla.json'
-          path-to-document: 'https://github.com/zeweihan/aiworkdeck/blob/master/legal/CLA.md'
+          path-to-document: 'https://github.com/AI-WorkDeck/aiworkdeck/blob/master/legal/CLA.md'
           # signatures live on an unprotected branch; master requires PRs and would reject the bot's push
           branch: 'cla-signatures'
           allowlist: zeweihan,claude,*[bot]

@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const REPO = process.env.STAR_REPO || 'zeweihan/aiworkdeck'
+const REPO = process.env.STAR_REPO || 'AI-WorkDeck/aiworkdeck'
 const TOKEN = process.env.STAR_TOKEN || process.env.GITHUB_TOKEN
 if (!TOKEN) { console.error('缺少 GITHUB_TOKEN'); process.exit(2) }
 

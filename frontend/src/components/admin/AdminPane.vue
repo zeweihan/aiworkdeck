@@ -1035,9 +1035,9 @@ export default {
       // 「关于」区块的三条链接（AGPL §0 告示）。仓库根 LICENSE = AGPL-3.0，
       // 商标说明 = legal/TRADEMARKS.md，都指 master 分支的常驻路径。
       LEGAL_URLS: {
-        source: 'https://github.com/zeweihan/aiworkdeck',
-        license: 'https://github.com/zeweihan/aiworkdeck/blob/master/LICENSE',
-        trademarks: 'https://github.com/zeweihan/aiworkdeck/blob/master/legal/TRADEMARKS.md',
+        source: 'https://github.com/AI-WorkDeck/aiworkdeck',
+        license: 'https://github.com/AI-WorkDeck/aiworkdeck/blob/master/LICENSE',
+        trademarks: 'https://github.com/AI-WorkDeck/aiworkdeck/blob/master/legal/TRADEMARKS.md',
       },
       // 侧栏用户卡（头像/昵称/@用户名）。loadUserInfo() 先读缓存再拉 /api/auth/me 合并。
       userInfo: {

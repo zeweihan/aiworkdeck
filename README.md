@@ -11,13 +11,13 @@
 
 <p align="center">
   <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="AGPL-3.0-or-later"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=2E5A50" alt="Latest release"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml"><img src="https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/AI-WorkDeck/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/AI-WorkDeck/aiworkdeck?color=2E5A50" alt="Latest release"></a>
+  <a href="https://github.com/AI-WorkDeck/aiworkdeck/actions/workflows/ci.yml"><img src="https://github.com/AI-WorkDeck/aiworkdeck/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
 </p>
 
 <p align="center">
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a><br>
-  <a href="WHY.md">Our thesis</a> · <a href="#build-with-us">Build with us</a> · <a href="docs/architecture.md">Architecture</a> · <a href="https://github.com/zeweihan/aiworkdeck/releases/latest">Download</a> · <a href="mailto:hi@aiworkdeck.com">Investment & partnerships</a>
+  <a href="WHY.md">Our thesis</a> · <a href="#build-with-us">Build with us</a> · <a href="docs/architecture.md">Architecture</a> · <a href="https://github.com/AI-WorkDeck/aiworkdeck/releases/latest">Download</a> · <a href="mailto:hi@aiworkdeck.com">Investment & partnerships</a>
 </p>
 
 A contract is ready when someone can stand behind it. That means checking its sources, negotiating changes, preserving the document's structure, and knowing which version was approved. Producing the first draft is only part of the job.
@@ -41,7 +41,7 @@ We are starting with legal work because these requirements meet in almost every 
 
 ## What you can inspect today
 
-This repository contains the desktop app, workbench, agent backend, document-editor integration, and plugin runtime. It is a working codebase with [desktop releases](https://github.com/zeweihan/aiworkdeck/releases), [public development history](https://github.com/zeweihan/aiworkdeck/commits/master/), and [CI](https://github.com/zeweihan/aiworkdeck/actions/workflows/ci.yml).
+This repository contains the desktop app, workbench, agent backend, document-editor integration, and plugin runtime. It is a working codebase with [desktop releases](https://github.com/AI-WorkDeck/aiworkdeck/releases), [public development history](https://github.com/AI-WorkDeck/aiworkdeck/commits/master/), and [CI](https://github.com/AI-WorkDeck/aiworkdeck/actions/workflows/ci.yml).
 
 | Foundation | Why it matters | Explore it |
 |---|---|---|
@@ -62,7 +62,7 @@ The engineering focus is the quality of the resulting file: preserving structure
   <img src=".github/assets/marketplace-live.png" alt="The in-app marketplace for plugins and reusable Skills" width="1000">
 </p>
 
-Earlier product captures using fictional demo materials. For an evaluation build, use the [latest release](https://github.com/zeweihan/aiworkdeck/releases/latest).
+Earlier product captures using fictional demo materials. For an evaluation build, use the [latest release](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest).
 
 </details>
 
@@ -82,7 +82,7 @@ Web plugins use a sandboxed iframe and a permission-checked bridge. Java plugins
 
 ### Contributing
 
-Start by turning a review or research task you know well into an extension. If you prefer improving the core, a small reproducible case is especially valuable: a document that loses formatting, a source link that no longer resolves, an edit that fails to round-trip, or an unclear setup step. Use synthetic or appropriately redacted materials and describe the expected result. Discuss the scope in an [issue](https://github.com/zeweihan/aiworkdeck/issues) before starting a large change.
+Start by turning a review or research task you know well into an extension. If you prefer improving the core, a small reproducible case is especially valuable: a document that loses formatting, a source link that no longer resolves, an edit that fails to round-trip, or an unclear setup step. Use synthetic or appropriately redacted materials and describe the expected result. Discuss the scope in an [issue](https://github.com/AI-WorkDeck/aiworkdeck/issues) before starting a large change.
 
 Read the [contribution guide](.github/CONTRIBUTING.md). Code contributions require a one-time [CLA](legal/CLA.md); contributors retain copyright and grant the steward dual-licensing rights. Substantial API changes use the [RFC process](GOVERNANCE.md#rfc-process). The [governance model](GOVERNANCE.md) provides a path from contributor to reviewer to maintainer, and the [current maintainers](MAINTAINERS.md) are public.
 
@@ -97,7 +97,7 @@ The next stage is about making this foundation easier to trust and easier to bui
 - **A shorter path for builders:** a clean local demo, clearer self-hosting instructions, more plugin examples, and bilingual contributor documentation.
 - **Repeatable professional workflows:** turn narrowly scoped tasks into Skills and extensions with explicit inputs, review steps, and testable outputs.
 
-Bring a concrete use case to [Discussions](https://github.com/zeweihan/aiworkdeck/discussions) or propose a focused [issue](https://github.com/zeweihan/aiworkdeck/issues). Developers and practitioners can help define the work together.
+Bring a concrete use case to [Discussions](https://github.com/AI-WorkDeck/aiworkdeck/discussions) or propose a focused [issue](https://github.com/AI-WorkDeck/aiworkdeck/issues). Developers and practitioners can help define the work together.
 
 ## Open source and the business
 
@@ -115,9 +115,9 @@ The steward's existing policy allocates **20% of net commercial-licensing revenu
 
 ## Evaluate the project
 
-- **Try the product:** [macOS / Windows releases](https://github.com/zeweihan/aiworkdeck/releases/latest) · [Product walkthrough](https://www.aiworkdeck.com/zh/showcase).
+- **Try the product:** [macOS / Windows releases](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest) · [Product walkthrough](https://www.aiworkdeck.com/zh/showcase).
 - **Explore or run the source:** [Getting started](docs/getting-started.md) · [Architecture](docs/architecture.md). The contributor stack uses JDK 21, Maven, Node/npm, and PostgreSQL; optional sidecars have additional requirements.
 - **Understand the data paths:** [Privacy and service data flows](legal/PRIVACY.md). Desktop editing uses local storage by default; cloud models, platform services, hosted add-ins, and sync have different data paths. Self-hosting requires configuration and deployment-specific verification.
 - **Understand the rights:** [AGPL-3.0-or-later](legal/LICENSE) · [CLA](legal/CLA.md) · [Commercial licensing](legal/COMMERCIAL-LICENSE.md).
 
-Follow [releases](https://github.com/zeweihan/aiworkdeck/releases), join a [discussion](https://github.com/zeweihan/aiworkdeck/discussions), or build a small extension. The most useful next step is something we can inspect and improve together.
+Follow [releases](https://github.com/AI-WorkDeck/aiworkdeck/releases), join a [discussion](https://github.com/AI-WorkDeck/aiworkdeck/discussions), or build a small extension. The most useful next step is something we can inspect and improve together.
