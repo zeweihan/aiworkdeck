@@ -49,6 +49,8 @@
     "test:lowa-review-gutter": "node tests/lowa-e2e/review-gutter.mjs",
     "test:lowa-comment-batch": "node tests/lowa-e2e/comment-batch.mjs",
     "test:lowa-paragraph-performance": "node tests/lowa-e2e/paragraph-edit-performance.mjs",
+    "test:lowa-paste-large": "node tests/lowa-e2e/paste-large.mjs",
+    "test:lowa-view-boundaries": "node tests/lowa-e2e/view-boundaries.mjs",
     "test:lowa-open-revisions": "node tests/lowa-e2e/open-revisions.mjs",
     "test:lowa-review-list-performance": "node tests/lowa-e2e/review-list-performance.mjs",
     "test:lowa-native-caret": "node tests/lowa-e2e/native-caret-dpi.mjs",

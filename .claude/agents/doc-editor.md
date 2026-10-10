@@ -7,6 +7,12 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 职责边界：编辑器内核与宿主集成。AI 发编辑指令的链路属 ai-doc-bridge 领域。引擎 = LibreOffice 24.2.8 自建 zh-CN 版（LO core 分支 distro/allotropia/zeta-24-2）。
 
+## 大段粘贴与文本边界（dev-board#1172/#1173，2026-10-10）
+
+覆盖层 Cmd/Ctrl+V 读取剪贴板纯文本后走 `replace_selection`，不是 `insert_at_cursor`。整次替换（含字符级修订分支）须配对 `lockModel/unlockModel`，用 `finally` 释放；否则多段粘贴会逐段触发布局与 JS 修改监听。`test:lowa-paste-large` 通过真实键盘和浏览器剪贴板测试 180 段约 1.8 万字、HTML+纯文本剪贴板、长单段、继续输入及导出重开全文一致；富文本剪贴板仍沿用原有纯文本粘贴语义，不代表保留 HTML 格式。
+
+Writer 的 `ShowTextBoundaries` 与格式标记联动：打开 ¶ 时会把文本范围画成整页矩形。`EditorToolbar.applyViewPrefs` 显式传 `textBoundaries:false`，保留既有 ¶ 和标尺偏好；`set_view_options` 无参依旧只读，返回原生真实状态。不要改页边距、段落边框或使用 toggle。`test:lowa-view-boundaries` 用 r5 有头引擎核对矩形前后截图、格式标记/标尺、页尺寸与边距、干净/已脏状态及重载。
+
 ## AI 逐段修订与显示切换（dev-board#1131/#1132，2026-10-07）
 
 `modify_paragraph` 的字符级差异须在既有 `lockModel/unlockModel` 内一次落完，并用 `finally` 解锁；否则每个差异片段触发布局及 JS 修改监听器，累计修订越多越慢。不得以整段替换或丢弃修订换取提速。异步最终文本命令由 `agentViewPending` 串行等待；显式 `set_revision_view` 在批次结束后执行，不能中途改变最终正文语义，也不能被旧显示态恢复覆盖。命令署名在真正执行的闭包内设置，排队时不改变在飞命令的作者。
