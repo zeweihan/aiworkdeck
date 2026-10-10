@@ -2755,6 +2755,10 @@ export default {
 
                   if (rawData) {
                       const data = JSON.parse(rawData)
+                      if (data.projectId != null && String(data.projectId) !== String(projectId)) {
+                          uni.showToast({ title: this.$t('fileTree.dropInvalidTarget'), icon: 'none' })
+                          return
+                      }
                       if (data.fileId) {
                           droppedFileId = data.fileId
                           droppedFileName = data.name
@@ -2765,6 +2769,11 @@ export default {
 
           // Fallback global check
           if (!droppedFileId && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
+              if (document.__checkbaDraggedFile.projectId != null && String(document.__checkbaDraggedFile.projectId) !== String(projectId)) {
+                  document.__checkbaDraggedFile = null
+                  uni.showToast({ title: this.$t('fileTree.dropInvalidTarget'), icon: 'none' })
+                  return
+              }
               droppedFileId = document.__checkbaDraggedFile.fileId
               droppedFileName = document.__checkbaDraggedFile.name
               document.__checkbaDraggedFile = null // Consume
@@ -2879,11 +2888,20 @@ export default {
                   if (!rawData) rawData = e.dataTransfer.getData('text/checkba-file-json')
                   if (rawData) {
                       const data = JSON.parse(rawData)
+                      if (data.projectId != null && String(data.projectId) !== String(projectId)) {
+                          uni.showToast({ title: this.$t('fileTree.dropInvalidTarget'), icon: 'none' })
+                          return
+                      }
                       if (data.fileId) droppedFileId = data.fileId
                   }
               } catch (err) {}
           }
           if (!droppedFileId && typeof document !== 'undefined' && document.__checkbaDraggedFile) {
+              if (document.__checkbaDraggedFile.projectId != null && String(document.__checkbaDraggedFile.projectId) !== String(projectId)) {
+                  document.__checkbaDraggedFile = null
+                  uni.showToast({ title: this.$t('fileTree.dropInvalidTarget'), icon: 'none' })
+                  return
+              }
               droppedFileId = document.__checkbaDraggedFile.fileId
               document.__checkbaDraggedFile = null
           }

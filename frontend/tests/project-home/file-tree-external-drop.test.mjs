@@ -354,3 +354,19 @@ test('importDroppedLocalFiles 是暂存区能直接调的公开方法：吃 File
     assert.equal(vm.calls.loadFiles, 1)
   } finally { restore() }
 })
+
+test('generated files only move within the payload project, including global fallback', async () => {
+  const restore = installGlobals()
+  try {
+    for (const root of [false, true]) for (const fallback of [false, true]) for (const projectId of [42, 99]) {
+      const vm = makeVm(); vm.windowedDisplayFiles = [folder]; vm.displayFiles = [folder]
+      const payload = { fileId: 123, name: '生成.docx', projectId, source: 'chat-generated' }
+      document.__checkbaDraggedFile = fallback ? payload : null
+      const dt = { files: [], types: ['application/x-checkba-file'], getData: () => fallback ? '' : JSON.stringify(payload) }
+      const e = wrappedEvent({ dataTransfer: dt })
+      if (root) await vm.onRootDrop(e); else await vm.handleDrop(e, 0)
+      assert.equal(vm.calls.moveFile.length, projectId === 42 ? 1 : 0)
+      if (projectId === 42) assert.equal(vm.calls.moveFile[0][1], 123)
+    }
+  } finally { restore() }
+})
