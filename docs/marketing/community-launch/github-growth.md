@@ -127,13 +127,13 @@ should mean.
 LibreOffice，AI 的每处修改都以字符级修订留痕，由人逐条接受或拒绝。桌面端本地
 存储，AGPL 开源，另有 Office/WPS 加载项与 iOS 取证同步。
 
-https://github.com/zeweihan/aiworkdeck
+https://github.com/AI-WorkDeck/aiworkdeck
 （配图：仓库 README 首屏截图 .github/assets/workspace-ai.png）
 ```
 
 ### HelloGitHub 提交（hellogithub.com「提交项目」）
 
-- 仓库：https://github.com/zeweihan/aiworkdeck
+- 仓库：https://github.com/AI-WorkDeck/aiworkdeck
 - 类别：AI / 其他（编辑器）
 - 一句话（限 100 字）：
 
@@ -146,7 +146,7 @@ LibreOffice，AI 修改全部以字符级修订留痕、由人接受或拒绝，
 
 | 仓库 | 星 | 位置 | 条目 |
 |---|---|---|---|
-| sindresorhus/awesome-electron | 27k | Apps → Open Source → Other | `- [AI WorkDeck](https://github.com/zeweihan/aiworkdeck) - AI workbench for legal and document-heavy work, with LibreOffice compiled to WebAssembly as the editor.` |
+| sindresorhus/awesome-electron | 27k | Apps → Open Source → Other | `- [AI WorkDeck](https://github.com/AI-WorkDeck/aiworkdeck) - AI workbench for legal and document-heavy work, with LibreOffice compiled to WebAssembly as the editor.` |
 | punkpeye/awesome-mcp-clients | 6.6k | 按其表格格式 | Desktop workbench for legal/document work; MCP client for case-law and registry lookups. |
 | e2b-dev/awesome-ai-agents | 30k | Open Source → 最近的垂直类目 | 同上口径 |
 | Vaquill-AI/awesome-legaltech | 214 | 开源工具 | 同上口径（小但正中靶心） |
@@ -216,7 +216,7 @@ fork 均在 zeweihan 名下，分支 add-ai-workdeck；被要求修改时直接�
 
 1. **awesome-legaltech#102 是重复提交，已关闭并致歉。** 榜单第 125 行早有「AI Workdeck」条目，
    是 6 月那一轮加的。当时查重断言写的是区分大小写的 `'AI WorkDeck' not in t`，没有命中。
-   以后查重一律不区分大小写，并同时匹配仓库 URL `zeweihan/aiworkdeck`。
+   以后查重一律不区分大小写，并同时匹配仓库 URL `AI-WorkDeck/aiworkdeck`（及历史路径 `zeweihan/aiworkdeck`）。
 2. **awesome-electron 暂停提交。** 它的门槛是 100 星，扣掉可疑星后自然星约 94，
    不应拿刷出来的数过门槛。等自然星数过百再投（fork 分支 add-ai-workdeck 保留），
    另外该仓的互动限制仍未解除。hermes 每日重试任务同步取消。

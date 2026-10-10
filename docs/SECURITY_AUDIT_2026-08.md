@@ -14,7 +14,7 @@ Electron、前端 XSS、AI 工具与提示注入、Python 服务、配置与部�
 
 ## 一、最紧急：公开仓库的 git 历史里有可用的 API Key
 
-`github.com/zeweihan/aiworkdeck` 是公开仓库（69 star / 11 fork）。以下两个凭证
+`github.com/AI-WorkDeck/aiworkdeck` 是公开仓库（69 star / 11 fork）。以下两个凭证
 可以直接从历史里取出：
 
 - Google/Gemini：`AIzaSyDpX0_...RLUCc`

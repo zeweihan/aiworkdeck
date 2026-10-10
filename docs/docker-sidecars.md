@@ -42,7 +42,7 @@ Those run on the host via `restart-all.sh` (which also brings the sidecars up).
 ## 律所自托管 / Firm self-host
 
 律师默认评估路径（拓扑 A，桌面端）见 [firm-eval-topology-a.md](firm-eval-topology-a.md)。
-所内全自托管主栈（拓扑 B：Postgres + 后端 + 前端 compose）在 [#3](https://github.com/zeweihan/aiworkdeck/issues/3)
+所内全自托管主栈（拓扑 B：Postgres + 后端 + 前端 compose）在 [#3](https://github.com/AI-WorkDeck/aiworkdeck/issues/3)
 跟踪，暂缓到有实际律所需求时再做。
 The default lawyer evaluation path (topology A) is in `firm-eval-topology-a.md`. A fully self-hosted
 main stack (topology B) is tracked in #3 and deferred until a real firm needs it.
