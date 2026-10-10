@@ -27,8 +27,18 @@ A contract is ready when someone can stand behind it. That means checking its so
 **We are building a shared foundation for professional AI:** start with demanding legal workflows, make the underlying document operations reusable, and enable specialists to build the next applications on top.
 
 <p align="center">
-  <img src=".github/assets/workdeck-redline.png" alt="AI-authored tracked changes in a contract, with individual accept and reject controls beside the document" width="1000">
-  <br><sub>Real product capture from an earlier build, using fictional materials. Interface details vary by release.</sub>
+  <img src="docs/images/marketing/01-workspace.png" alt="Project files, document editor, and AI conversation in one workspace" width="1000">
+  <br><sub>Workspace — project files, the document, and AI side by side. Demo materials are fictional.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/marketing/02-revision-toolbar.png" alt="Tracked changes in a contract with accept and reject controls on the revision toolbar" width="1000">
+  <br><sub>Accept / reject revisions — AI writes tracked changes; you review each one.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/marketing/03-evidence-jump.png" alt="Clicking an evidence citation jumps to the highlighted source passage in another document" width="1000">
+  <br><sub>Evidence jump — open a citation and land on the supporting source passage.</sub>
 </p>
 
 ## Why this is worth building
@@ -55,14 +65,13 @@ This repository contains the desktop app, workbench, agent backend, document-edi
 The engineering focus is the quality of the resulting file: preserving structure, making edits reviewable, and keeping sources traceable through revision. The [roadmap](#roadmap) identifies the next problems contributors can help solve.
 
 <details>
-<summary><strong>See the workspace and extension marketplace</strong></summary>
+<summary><strong>See the extension marketplace</strong></summary>
 
 <p align="center">
-  <img src=".github/assets/workspace-ai.png" alt="Project files, document view, and AI conversation in the same workspace" width="1000">
   <img src=".github/assets/marketplace-live.png" alt="The in-app marketplace for plugins and reusable Skills" width="1000">
 </p>
 
-Earlier product captures using fictional demo materials. For an evaluation build, use the [latest release](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest).
+In-app marketplace capture using fictional demo materials. For an evaluation build, use the [latest release](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest).
 
 </details>
 
