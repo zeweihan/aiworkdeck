@@ -10,6 +10,8 @@
 CREATE TABLE IF NOT EXISTS trial_balance (
     id                 BIGSERIAL    PRIMARY KEY,
     user_id            BIGINT       NOT NULL,
+    account_fingerprint VARCHAR(12),
+    account_snapshot TEXT,
     trial_started_at   TIMESTAMP(6) WITH TIME ZONE NOT NULL,
     trial_ends_at      TIMESTAMP(6) WITH TIME ZONE NOT NULL,
     calls_quota        INTEGER      NOT NULL,

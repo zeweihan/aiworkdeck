@@ -50,8 +50,13 @@ class TrialBalanceRepositoryTest {
 
     @Test
     void saveAndFindByUserId() {
-        repository.saveAndFlush(row(101L));
+        TrialBalance saved = row(101L);
+        saved.setAccountFingerprint("account-a");
+        saved.setAccountSnapshot("{\"remainingCalls\":61}");
+        repository.saveAndFlush(saved);
         TrialBalance got = repository.findByUserId(101L).orElseThrow();
+        assertEquals("account-a", got.getAccountFingerprint());
+        assertEquals("{\"remainingCalls\":61}", got.getAccountSnapshot());
         assertEquals(80, got.getCallsQuota());
         assertEquals("min_of_days_or_calls", got.getPolicy());
         assertTrue(repository.findByUserId(102L).isEmpty());

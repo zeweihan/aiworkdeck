@@ -153,6 +153,7 @@ public class AgentOrchestrator {
         private volatile boolean producedText;
         /** 试用计量：发起本轮的本机用户（只用于写本地缓存行）。 */
         volatile Long userId;
+        volatile String trialAccountFingerprint;
         /** 试用计量：同一轮只上报一次（bubble_end 可能从多处发出）。 */
         final java.util.concurrent.atomic.AtomicBoolean trialReported =
                 new java.util.concurrent.atomic.AtomicBoolean();
@@ -578,7 +579,7 @@ public class AgentOrchestrator {
         if (!com.checkba.service.trial.TrialTurnMeter.COMPLETED_STATUSES.contains(status)) return;
         if (!guard.trialReported.compareAndSet(false, true)) return;
         try {
-            meter.onTurnEnded(guard.runId, guard.userId, status, guard.producedText, guard.platformUsed.get());
+            meter.onTurnEnded(guard.runId, guard.userId, guard.trialAccountFingerprint, status, guard.producedText, guard.platformUsed.get());
         } catch (RuntimeException e) {
             log.warn("Trial metering hook failed for run {}", guard.runId, e);
         }
@@ -1367,6 +1368,7 @@ public class AgentOrchestrator {
         // 不跟着池线程走，而 system prompt 选中英文版正是在这条循环里做的（ContextAssembler）。
         // 缺省（桌面端不上送）时 AppLanguageScope 不覆盖任何东西，照旧读全局 app.language。
         guard.userId = userId;
+        guard.trialAccountFingerprint = trialTurnMeter == null ? null : trialTurnMeter.accountFingerprint();
         Runnable turn = () -> com.checkba.service.AppLanguageScope.run(request.getAppLanguage(),
                 () -> PlatformAiUserScope.run(userId,
                         () -> com.checkba.service.trial.TrialTurnScope.run(guard.platformUsed,

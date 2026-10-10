@@ -5,6 +5,7 @@ package com.checkba.controller;
 
 import com.checkba.service.LangText;
 import com.checkba.service.account.AccountService;
+import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.trial.TrialBalanceService;
 import com.checkba.service.trial.TrialPolicy;
 import org.springframework.http.HttpStatus;
@@ -31,10 +32,13 @@ public class TrialController {
 
     private final TrialBalanceService trialBalanceService;
     private final AccountService accountService;
+    private final MachineAccountGuard machineAccountGuard;
 
-    public TrialController(TrialBalanceService trialBalanceService, AccountService accountService) {
+    public TrialController(TrialBalanceService trialBalanceService, AccountService accountService,
+                           MachineAccountGuard machineAccountGuard) {
         this.trialBalanceService = trialBalanceService;
         this.accountService = accountService;
+        this.machineAccountGuard = machineAccountGuard;
     }
 
     @GetMapping("/api/trial/balance")
@@ -47,6 +51,13 @@ public class TrialController {
             result.put("message", LangText.of("请先登录", "Please sign in first"));
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(result);
         }
+        try {
+            machineAccountGuard.requireMachineScope(sessionId);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return ResponseEntity.ok(result);
+        }
         result.put("code", 0);
         result.put("data", snapshot(userId));
         return ResponseEntity.ok(result);
@@ -54,6 +65,7 @@ public class TrialController {
 
     Map<String, Object> snapshot(Long userId) {
         Map<String, Object> snap = accountService.trialSnapshot();
+        String owner = (String) snap.get("accountFingerprint");
         Map<String, Object> data = new LinkedHashMap<>();
         if (!Boolean.TRUE.equals(snap.get("connected"))) {
             data.put("connected", false);
@@ -62,7 +74,9 @@ public class TrialController {
         }
         if (!Boolean.TRUE.equals(snap.get("available")) || !(snap.get("trial") instanceof Map<?, ?>)) {
             // 官网不可达：回本地缓存做展示兜底，明确标非权威
-            data.putAll(trialBalanceService.balance(userId));
+            data.putAll(trialBalanceService.cachedBalance(userId, owner));
+            data.put("authoritative", false);
+            data.put("termsNotice", TrialPolicy.TERMS_NOTICE);
             data.put("connected", true);
             data.put("available", false);
             data.put("stale", true);
@@ -71,7 +85,7 @@ public class TrialController {
         @SuppressWarnings("unchecked")
         Map<String, Object> trial = (Map<String, Object>) snap.get("trial");
         try {
-            trialBalanceService.cacheFromAccount(userId, trial);
+            trialBalanceService.cacheFromAccount(userId, owner, trial);
         } catch (RuntimeException ignore) {
             // 缓存写失败不影响展示权威值
         }

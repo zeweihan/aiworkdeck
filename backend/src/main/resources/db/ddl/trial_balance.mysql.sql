@@ -10,6 +10,8 @@
 CREATE TABLE IF NOT EXISTS `trial_balance` (
     `id`               BIGINT       NOT NULL AUTO_INCREMENT,
     `user_id`          BIGINT       NOT NULL,
+    `account_fingerprint` VARCHAR(12),
+    `account_snapshot` TEXT,
     `trial_started_at` DATETIME(6)  NOT NULL,
     `trial_ends_at`    DATETIME(6)  NOT NULL,
     `calls_quota`      INT          NOT NULL,

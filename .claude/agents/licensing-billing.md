@@ -17,6 +17,12 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 总 Spec 见 `docs/superpowers/specs/2026-08-05-commercialization-redesign.md`，
 **Spec 与实现有偏差时以代码为准**，偏差逐条记在该文件末尾「实现与 Spec 的偏差记录」一节。
 
+## 试用缓存与回合归属（dev-board#1166，2026-10-10）
+
+`GET /api/trial/balance` 以账户站 `/api/account/trial` 为权威；断网时只展示本机 `trial_balance.account_fingerprint` 与当前账户一致的已确认缓存。无行、旧版无归属行、另一账户行均返回未知，不推定 14 天 / 80 次；官网明确未发放时清掉同账户旧行。归属与完整 `account_snapshot` 两列可空，由既有 Hibernate update 升级；离线保留官网回包，不按本机时间重算状态或剩余天数。前端不把 null 当成 0。
+
+`AgentOrchestrator` 在回合开始时记录账户指纹，`TrialTurnMeter` 收尾及 `AccountService.reportTrialTurn` 发送前校验归属；发送与 connect/disconnect 使用同一锁，队列中的旧账户回合不得用新账户凭据上报。切账户时保守少计，不在本机扣次。查询复用 `MachineAccountGuard`，server 普通租户不可读机器余额；回合上报仅 `security.local-mode=true` 启用，server 未接 per-user 试用契约前不借机器管理员账户计次。官网 `app/api/account/trial/{route.ts,turns/route.ts}` 已实现 GET 与 POST；本仓旧说明中的“待实现”不是部署状态证据。验证为本地桩与单测，不代表生产账户端到端计费已验证。
+
 ## 关键文件地图
 
 **解锁门（PR-A）**

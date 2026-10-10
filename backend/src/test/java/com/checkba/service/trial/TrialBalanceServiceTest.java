@@ -35,6 +35,7 @@ class TrialBalanceServiceTest {
         rows.clear();
         repo = mock(TrialBalanceRepository.class);
         when(repo.findByUserId(anyLong())).thenAnswer(inv -> Optional.ofNullable(rows.get(inv.getArgument(0, Long.class))));
+        doAnswer(inv -> { rows.remove(((TrialBalance) inv.getArgument(0)).getUserId()); return null; }).when(repo).delete(any(TrialBalance.class));
         when(repo.saveAndFlush(any(TrialBalance.class))).thenAnswer(inv -> {
             TrialBalance b = inv.getArgument(0);
             if (b.getId() == null) b.setId((long) rows.size() + 1);
@@ -169,22 +170,53 @@ class TrialBalanceServiceTest {
         site.put("trialEndsAt", "2026-10-15T00:00:00Z");
         site.put("callsQuota", 80);
         site.put("callsUsed", 33);
+        site.put("remainingDays", 6);
+        site.put("remainingCalls", 47);
         site.put("status", "active");
         site.put("region", "cn");
-        at(T0).cacheFromAccount(7L, site);
+        at(T0).cacheFromAccount(7L, "account-a", site);
         TrialBalance row = rows.get(7L);
         assertNotNull(row);
+        assertEquals("account-a", row.getAccountFingerprint());
         assertEquals(33, row.getCallsUsed());
         assertEquals(Instant.parse("2026-10-15T00:00:00Z"), row.getTrialEndsAt());
+        Map<String, Object> offline = at(T0.plus(Duration.ofDays(30))).cachedBalance(7L, "account-a");
+        assertEquals("active", offline.get("status"), "离线保留官网状态，不按本机时钟改判");
+        assertEquals(6, offline.get("remainingDays"));
+        assertEquals(47, offline.get("remainingCalls"));
         site.put("callsUsed", 34);
-        at(T0).cacheFromAccount(7L, site);
+        at(T0).cacheFromAccount(7L, "account-a", site);
         assertEquals(34, rows.get(7L).getCallsUsed());
         assertEquals(46, at(T0).balance(7L).get("remainingCalls"));
     }
 
     @Test
+    void cacheRequiresConfirmedMatchingOwner_notLocalGrantOrLegacyRow() {
+        assertTrue(at(T0).cachedBalance(7L, "account-a").isEmpty());
+        at(T0).grant(7L, "cn");
+        assertTrue(at(T0).cachedBalance(7L, "account-a").isEmpty());
+        rows.get(7L).setAccountFingerprint("account-a");
+        rows.get(7L).setCallsUsed(30);
+        rows.get(7L).setAccountSnapshot("{\"status\":\"active\",\"remainingCalls\":50}");
+        assertEquals(50, at(T0).cachedBalance(7L, "account-a").get("remainingCalls"));
+        assertTrue(at(T0).cachedBalance(7L, "account-b").isEmpty());
+        assertTrue(at(T0).cachedBalance(7L, null).isEmpty());
+    }
+
+    @Test
+    void authoritativeNotGrantedClearsSameOwnerCache() {
+        at(T0).grant(7L, "cn");
+        rows.get(7L).setAccountFingerprint("account-a");
+        at(T0).cacheFromAccount(7L, "account-b", Map.of("granted", false));
+        assertTrue(rows.containsKey(7L));
+        at(T0).cacheFromAccount(7L, "account-a", Map.of("granted", false));
+        assertTrue(rows.isEmpty());
+        assertTrue(at(T0).cachedBalance(7L, "account-a").isEmpty());
+    }
+
+    @Test
     void cacheFromAccount_notGranted_writesNothing() {
-        at(T0).cacheFromAccount(7L, Map.of("granted", false));
+        at(T0).cacheFromAccount(7L, "account-a", Map.of("granted", false));
         assertTrue(rows.isEmpty());
         verify(repo, never()).saveAndFlush(any());
     }

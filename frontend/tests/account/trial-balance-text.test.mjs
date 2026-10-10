@@ -31,3 +31,13 @@ test('hidden when disconnected, failed, converted or numbers missing; stale is m
 test('terms copy is only 以协议为准', () => {
   assert.equal(zh.trialTerms, '以协议为准')
 })
+
+test('unknown offline balance and null quota never become a new trial or zero quota', () => {
+  for (const dict of [zh, en]) {
+    assert.equal(trialBalanceText({ connected: true, available: false, stale: true }, tr(dict)), '')
+    for (const value of [null, undefined, '', '0', NaN]) {
+      assert.equal(trialBalanceText({ connected: true, status: 'active', remainingDays: value, remainingCalls: 80 }, tr(dict)), '')
+      assert.equal(trialBalanceText({ connected: true, status: 'none', remainingDays: 14, remainingCalls: value }, tr(dict)), '')
+    }
+  }
+})

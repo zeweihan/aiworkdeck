@@ -8,8 +8,8 @@ export function trialBalanceText(data, t) {
   if (!data || data.connected !== true) return ''
   const status = data.status
   if (!status || status === 'converted') return ''
-  const days = Number.isFinite(Number(data.remainingDays)) ? Number(data.remainingDays) : null
-  const calls = Number.isFinite(Number(data.remainingCalls)) ? Number(data.remainingCalls) : null
+  const days = Number.isFinite(data.remainingDays) ? data.remainingDays : null
+  const calls = Number.isFinite(data.remainingCalls) ? data.remainingCalls : null
   let text = ''
   if (status === 'exhausted_calls') text = t('account.trialExhaustedCalls')
   else if (status === 'expired_days') text = t('account.trialExpiredDays')

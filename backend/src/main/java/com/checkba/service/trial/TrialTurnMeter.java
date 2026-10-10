@@ -8,6 +8,7 @@ import com.checkba.service.account.AccountService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -41,18 +42,21 @@ public class TrialTurnMeter {
     private final TrialBalanceService trialBalanceService;
     private final Executor executor;
     private final Clock clock;
+    private final boolean localMode;
 
     @Autowired
-    public TrialTurnMeter(AccountService accountService, TrialBalanceService trialBalanceService) {
-        this(accountService, trialBalanceService, defaultExecutor(), Clock.systemUTC());
+    public TrialTurnMeter(AccountService accountService, TrialBalanceService trialBalanceService,
+                          @Value("${security.local-mode:false}") boolean localMode) {
+        this(accountService, trialBalanceService, defaultExecutor(), Clock.systemUTC(), localMode);
     }
 
     TrialTurnMeter(AccountService accountService, TrialBalanceService trialBalanceService,
-                   Executor executor, Clock clock) {
+                   Executor executor, Clock clock, boolean localMode) {
         this.accountService = accountService;
         this.trialBalanceService = trialBalanceService;
         this.executor = executor;
         this.clock = clock;
+        this.localMode = localMode;
     }
 
     private static ExecutorService defaultExecutor() {
@@ -63,38 +67,44 @@ public class TrialTurnMeter {
         });
     }
 
+    public String accountFingerprint() {
+        // server 的平台通道可能属于租户，不能用机器管理员账户代报。
+        return localMode ? accountService.accountFingerprintOrNull() : null;
+    }
+
     /**
      * 回合收尾钩子。
      *
      * @param turnId             runId（一次用户提交 = 一个 runId）
      * @param userId             本机用户（只用于写本地缓存行）
+     * @param owner              回合开始时的账户指纹；换账户则放弃上报
      * @param bubbleStatus       bubble_end 的 status 字面量
      * @param hasAssistantResult 本轮是否已向用户交付过非空助手正文
      * @param platformUsed       本轮是否调用过云端平台通道
      * @return 是否已提交上报（测试用）
      */
-    public boolean onTurnEnded(String turnId, Long userId, String bubbleStatus,
+    public boolean onTurnEnded(String turnId, Long userId, String owner, String bubbleStatus,
                                boolean hasAssistantResult, boolean platformUsed) {
         if (turnId == null || !COMPLETED_STATUSES.contains(bubbleStatus)) return false;
         if (!hasAssistantResult || !platformUsed) return false;
-        if (!accountService.isConnected()) return false;
+        if (owner == null || !owner.equals(accountFingerprint())) return false;
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("turnId", turnId);
         body.put("outcome", "completed");
         body.put("hasAssistantResult", true);
         body.put("endedAt", clock.instant().toString());
-        executor.execute(() -> report(userId, body));
+        executor.execute(() -> report(userId, owner, body));
         return true;
     }
 
-    private void report(Long userId, Map<String, Object> body) {
+    private void report(Long userId, String owner, Map<String, Object> body) {
         try {
-            Map<String, Object> reply = accountService.reportTrialTurn(body);
+            Map<String, Object> reply = accountService.reportTrialTurn(owner, body);
             accountService.clearTrialCache();
             if (userId != null && reply != null && reply.get("balance") instanceof Map<?, ?> balance) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> b = (Map<String, Object>) balance;
-                trialBalanceService.cacheFromAccount(userId, b);
+                trialBalanceService.cacheFromAccount(userId, owner, b);
             }
         } catch (AccountException e) {
             log.info("试用回合上报未成功（不影响本地功能，账户站以自身记录为准）: {}", e.getMessage());
