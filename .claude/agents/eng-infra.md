@@ -75,8 +75,22 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
    `cd backend && rm -f target/backend-*.jar && JAVA_HOME=<jdk21> mvn -B -DskipTests
    -Djavacpp.platform=linux-x86_64 clean package`（瘦包 ~424M，先删旧产物防脏包坑）
    → rsync --partial **串行**传两台 `/opt/aiworkdeck/cloud/backend.jar.new` →
-   sha256 对账 → 旧件备份 `backend.jar.rollback-<date>` → mv 换入 →
-   `systemctl restart aiworkdeck-cloud` → 冒烟：journal 无 ERROR、新端点返回体。
+   sha256 对账 → 保留旧 JAR 与静态文件备份 → `systemctl stop aiworkdeck-cloud`
+   → 确认 `MainPID=0` 且 `ActiveState=inactive` → 同一文件系统内原子 `mv` 换入
+   → `systemctl start aiworkdeck-cloud` → 核验健康接口、新进程启动日志和文件哈希后再切静态文件/稳定链接。
+   **不能先换运行中的 JAR 再 restart；回退也先停稳，再原子换回旧件并 start。**
+   2026-10-10 v0.57.0 部署（dev-board#1183）实见先换件后旧 PID 停止时报 Spring
+   `NoClassDefFoundError`，新 PID 随后正常启动；旧 JVM 延迟读取嵌套 JAR 是推断，未做内部加载追踪。
+   该旧停止异常须单独保留，不能混入新启动 ERROR 门禁，也不能从部署记录中抹掉。
+   **现有 unit 的 143 特例**：未声明 `SuccessExitStatus`，Java 对请求的 SIGTERM 退出为 143，
+   systemd 可能记为 failed。仅在本次 `stop` 命令成功、`MainPID=0`、`ActiveState=failed`、
+   `ExecMainStatus=143`、`Result=exit-code` 同时成立时，才 `reset-failed` 并重新确认 inactive；
+   其他退出码、结果、非零 PID 或 stop 失败均拒绝换件，不为本次发版泛化修改 unit。
+   发布与回退复用同一停稳判据。
+   **日志按本次进程分界**：保存新 `InvocationID`、`MainPID` 与启动时间，优先按
+   `_SYSTEMD_INVOCATION_ID` 查询；若字段缺失或无法匹配本轮成功启动行，保留原查询结果，
+   显式退到 `_PID=<新 MainPID>` 加本轮起始时间。必须取得非空日志且含该 PID 的
+   `Started CheckbaApplication`，再断言 ERROR 为零；空日志不能判成功。失败 attempt 与最初回退件分别保留。
    新加坡实例 env 另有 `AI_ACCOUNT_BASE_URL=https://www.workdeck.ai`（代码默认值是国内站，
    漏了国际站账号登录整条断，2026-09-16 实测），换 env 文件或重建机器时别丢
    不再与「不存在的端点」相同（后者恒为 `{"code":1,"message":"服务器内部错误"}` + 200，
