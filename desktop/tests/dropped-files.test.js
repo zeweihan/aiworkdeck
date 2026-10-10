@@ -17,7 +17,8 @@ test('staged bytes are exact, private, uniquely named, and released by owner tok
         assert.equal(first.ok, true); assert.equal(second.ok, true);
         assert.notEqual(first.path, second.path);
         assert.deepEqual(await fs.readFile(first.path), Buffer.from(bytes));
-        assert.equal((await fs.stat(first.path)).mode & 0o777, 0o600);
+        // Windows reports synthesized mode bits; owner/group POSIX permissions apply only on Unix.
+        if (process.platform !== 'win32') assert.equal((await fs.stat(first.path)).mode & 0o777, 0o600);
         assert.equal((await store.release(2, first.token)).ok, false);
         assert.equal((await store.release(1, first.path)).ok, false, 'paths cannot authorize deletion');
         assert.equal((await store.release(1, first.token)).ok, true);

@@ -16,3 +16,5 @@
 - 主任务重新运行真实 ChatInterface、FileTree 组件及 Chromium 原生拖拽，生成文件 ID 99 移到目标目录 90，同名 ID 98 不动；移动 API 为本机夹具。PDF 转 Word 默认源目录/显式根/显式目录、跨项目拒绝的回归旧版 2 项失败，修改后通过。截图 `/tmp/generated-files-drag.png`。
 - 第二视角审阅发现 items-only 空条目压缩后目录标记错配，已修复并有负例。窗口销毁时清理残留暂存；渲染进程单独崩溃或刷新留下的孤立 token 可能保留至关窗口，受 100MB 配额约束。
 - 微信实际 DataTransfer/原生 pasteboard 载荷未采集，纯 NSFilePromise 尚未增加原生兑现桥；不宣称微信原窗口已复测。Windows 运行未本地实测。新字节暂存需要新的桌面代码，不能仅热更新前端就称已在旧客户端生效。
+
+Windows CI 首轮发现新增测试错误地要求 POSIX 0600 mode bits；仅将该权限位断言限于非 Windows，字节、路径唯一性、owner token 和清理断言仍在 Windows 全部执行，等待重跑结果。
