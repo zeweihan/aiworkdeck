@@ -398,14 +398,14 @@ public class FileTools implements AgentToolComponent {
     @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
     @Tool("Write a plain-text file (txt / md / csv / json ...) into the project and register it in the file tree, "
             + "so it shows up there and can be opened in the editor. Returns the db_id. "
-            + "It goes to the project root unless you pass parentFolderId (a folder id from list_project_folders "
-            + "or create_folder) - same meaning as write_docx's parentFolderId. A file with the same name in that "
+            + "Omit parentFolderId to use the folder of the document open when this run started (or root if none). Pass 0 for project root, or a folder id from list_project_folders "
+            + "or create_folder - same meaning as write_docx's parentFolderId. A file with the same name in that "
             + "folder is overwritten. fileName is a bare file name, never a path. For a Word document use write_docx.")
     public String write_file(
             @P("File name only, no folder path (e.g. 'notes.txt')") String fileName,
             @P("File content") String content,
             @P("Project ID (Required for DB registration)") Long projectId,
-            @P(value = "Target folder ID (optional; omit for the project root). Folder IDs come from "
+            @P(value = "Target folder ID (optional; omit to inherit the initial active document folder; 0 means root). Folder IDs come from "
                     + "list_project_folders or create_folder.", required = false) Long parentFolderId
     ) {
         log.info("Tool: write_file called for {} (folder={})", fileName, parentFolderId);
@@ -445,8 +445,7 @@ public class FileTools implements AgentToolComponent {
                          projectId, null, fileName, getFileType(fileName), Files.size(path),
                          "projects/" + projectId + "/" + fileName, null, AGENT_USER_ID);
                  editorBridgeService.sendRefreshFilesAction();
-                 return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
-                         pf.getId(), path.toAbsolutePath().toString().replace("\\", "\\\\"));
+                 return GeneratedFileLocation.createdResult(pf, null);
              } catch (Exception e) {
                  log.warn("write_file DB register failed for {}", fileName, e);
                  // 补救路径不再指 scan_files（它已不下发，dev-board#1065）：同名再写一次，
@@ -488,10 +487,7 @@ public class FileTools implements AgentToolComponent {
                     null, null, AGENT_USER_ID);
             ProjectFile written = projectFileService.overwriteTextContent(projectId, pf.getId(), text, AGENT_USER_ID);
             editorBridgeService.sendRefreshFilesAction();
-            String storedPath = written != null && written.getFilePath() != null
-                    ? written.getFilePath() : pf.getFilePath();
-            return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
-                    pf.getId(), String.valueOf(storedPath).replace("\\", "\\\\"));
+            return GeneratedFileLocation.createdResult(written != null ? written : pf, null);
         } catch (Exception e) {
             log.warn("write_file into folder {} failed for {}", parentFolderId, fileName, e);
             return "Error writing file into folder " + parentFolderId + ": " + e.getMessage();
@@ -506,7 +502,7 @@ public class FileTools implements AgentToolComponent {
             @P("新文件名 (如 '报告.docx')") String fileName,
             @P("Markdown 内容") String markdownContent,
             @P("项目ID") Long projectId,
-            @P(value = "目标文件夹ID（可选，不填则放项目根目录）", required = false) Long parentFolderId,
+            @P(value = "目标文件夹ID（可选；省略沿用本轮开始时打开文档所在目录，没有有效文档则根目录；传0明确放根目录）", required = false) Long parentFolderId,
             @P(value = "样式画像 JSON（可选；docx_inspect_template 的输出或其子集。不填自动取项目 _模板/画像.json，"
                     + "没有则用系统默认 / 律所标准格式）", required = false) String styleProfileJson
     ) {
@@ -519,8 +515,8 @@ public class FileTools implements AgentToolComponent {
             if (existingId != null) {
                 ProjectFile existing = projectFileService.findFile(existingId).orElse(null);
                 if (existing != null && !Boolean.TRUE.equals(existing.getIsDeleted())) {
-                    return com.checkba.service.ai.EditorBridgeService.reusedGeneratedMessage(
-                            existing.getName(), existing.getId());
+                    return GeneratedFileLocation.createdResult(existing,
+                            com.checkba.service.ai.EditorBridgeService.reusedGeneratedMessage(existing.getName(), existing.getId()));
                 }
                 editorBridgeService.forgetGenerated(runKey);
             }
@@ -533,14 +529,9 @@ public class FileTools implements AgentToolComponent {
         return out;
     }
 
-    private static final java.util.regex.Pattern SUCCESS_DB_ID =
-            java.util.regex.Pattern.compile("^\\{\"status\":\"success\", \"db_id\":(\\d+)");
-
-    /** write_docx 成功回执里的 db_id；不是成功回执返回 null。 */
+    /** Parse the structured success receipt; names are never an identity. */
     static Long successDbId(String out) {
-        if (out == null) return null;
-        java.util.regex.Matcher m = SUCCESS_DB_ID.matcher(out);
-        return m.find() ? Long.valueOf(m.group(1)) : null;
+        return GeneratedFileLocation.createdId(out);
     }
 
     private String writeDocxDispatch(String fileName, String markdownContent, Long projectId,
@@ -559,8 +550,7 @@ public class FileTools implements AgentToolComponent {
                 ProjectFile pf = aiDocxExportService.exportMarkdownToDocx(
                         projectId, parentFolderId, AGENT_USER_ID, fileName, markdownContent, profile);
                 editorBridgeService.sendRefreshFilesAction();
-                return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
-                        pf.getId(), String.valueOf(pf.getFilePath()).replace("\\", "\\\\"));
+                return GeneratedFileLocation.createdResult(pf, null);
             } catch (Exception e) {
                 log.error("write_docx to folder failed", e);
                 return "Error creating DOCX in folder " + parentFolderId + ": " + e.getMessage();
@@ -634,7 +624,7 @@ public class FileTools implements AgentToolComponent {
                 // 通知前端刷新文件列表
                 editorBridgeService.sendRefreshFilesAction();
                 
-                return String.format("{\"status\":\"success\", \"db_id\":%d, \"wps_file_id\":\"%s\", \"file_path\":\"%s\"}", pf.getId(), wpsId, targetPath.toAbsolutePath().toString().replace("\\", "\\\\"));
+                return GeneratedFileLocation.createdResult(pf, null);
             } catch (Exception e) {
                 return "File created at " + targetPath + " but DB register failed (Ownership lost): " + e.getMessage();
             }

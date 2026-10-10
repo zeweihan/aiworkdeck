@@ -287,7 +287,7 @@ public class DocumentEditTools implements AgentToolComponent {
     @Tool("开始实时流式写入文档。使用此工具后，模型生成的后续内容将直接写入打开的文档中。" +
           "**重要：创建新文件时必须提供 fileName 参数（fileId 传 null）。** " +
           "用户指名了要放进哪个文件夹时，先调 list_project_folders 拿到该文件夹的 ID，再作为 parentFolderId 传进来；" +
-          "不传就落在项目根目录——不要在用户指定了文件夹时省略它。" +
+          "省略则沿用本轮开始时打开文档所在目录，没有有效文档才用根目录；传0明确放根目录。" +
           "调用此工具后，你必须立即开始生成文档内容，并且必须使用严格的 Markdown 格式（Markdown Heading #, ##, ### 等）。" +
           "不要在调用此工具后输出任何非文档内容的闲聊，也不要把正文包进 <artifact>/<process>/<thinking> 等协议标签"
           + "（标签内的文字不会进入文档，会得到一份空白文件），直接开始输出文档标题和正文。"
@@ -296,7 +296,7 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("要打开的文件ID (如果是新建文件则传 null)") Long fileId,
             @P("新建文件名 (如 '法律意见书.docx')，仅当 fileId=null 时必填") String fileName,
             @P("项目ID，仅当 fileId=null 时必填") Long projectId,
-            @P(value = "目标文件夹ID（可选，不填则放项目根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
+            @P(value = "目标文件夹ID（可选；省略沿用本轮源文档目录，传0明确放根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
                required = false) Long parentFolderId
     ) {
         log.info("Tool: doc_start_stream called fileId={}, fileName={}, projectId={}, parentFolderId={}",
@@ -333,7 +333,7 @@ public class DocumentEditTools implements AgentToolComponent {
                 if (existingId != null) {
                     ProjectFile existing = projectFileService.findFile(existingId).orElse(null);
                     if (existing != null && !Boolean.TRUE.equals(existing.getIsDeleted())) {
-                        return EditorBridgeService.reusedGeneratedMessage(existing.getName(), existing.getId());
+                        return GeneratedFileLocation.createdResult(existing, EditorBridgeService.reusedGeneratedMessage(existing.getName(), existing.getId()));
                     }
                     editorBridgeService.forgetGenerated(runKey);
                 }
@@ -391,11 +391,12 @@ public class DocumentEditTools implements AgentToolComponent {
             // 3. 开启流式模式
             editorBridgeService.setStreamingMode(conversationId, true);
 
-            return "文档流式写入模式已激活，文件: " + file.getName() + "。请立即开始生成文档内容。" +
+            String message = "文档流式写入模式已激活，文件: " + file.getName() + "。请立即开始生成文档内容。" +
                     "**务必使用严格的 Markdown 格式输出**（主标题=#、小标题=##/###、表格用 | 语法、列表用 - 或 1.、加粗用 **）。" +
                     "Markdown 标记不会原样落入文档：编辑器会实时把它转换成律所标准格式" +
                     "（楷体_GB2312/Arial、主标题 16 号加粗居中、正文 12 号两端对齐、表格 Grid 边框等），" +
                     "所以不要为了排版手动加空行或符号装饰。";
+            return createdHere == null ? message : GeneratedFileLocation.createdResult(file, message);
         } catch (Exception e) {
             log.error("Failed to start doc stream", e);
             return "Error: " + e.getMessage();
@@ -2510,7 +2511,7 @@ public class DocumentEditTools implements AgentToolComponent {
     public String sheet_create_file(
             @P("文件名，如 '费用明细表.xlsx'（.xlsx 后缀可省略）") String fileName,
             @P("项目ID") Long projectId,
-            @P(value = "目标文件夹ID（可选，不填则放项目根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
+            @P(value = "目标文件夹ID（可选；省略沿用本轮源文档目录，传0明确放根目录）。用户指名文件夹时必须传，ID 用 list_project_folders 取。",
                required = false) Long parentFolderId
     ) {
         log.info("Tool: sheet_create_file called fileName={}, projectId={}, parentFolderId={}",
@@ -2540,8 +2541,8 @@ public class DocumentEditTools implements AgentToolComponent {
 
             editorBridgeService.sendRefreshFilesAction();
             editorBridgeService.sendOpenFileAction(file);
-            return String.format("已创建空白表格文件并发送打开指令。文件ID: %d, 文件名: %s。" +
-                    "请等待编辑器加载完成后，用 sheet_write_cells 写入内容。", file.getId(), file.getName());
+            return GeneratedFileLocation.createdResult(file, String.format("已创建空白表格文件并发送打开指令。文件ID: %d, 文件名: %s。" +
+                    "请等待编辑器加载完成后，用 sheet_write_cells 写入内容。", file.getId(), file.getName()));
         } catch (Exception e) {
             log.error("Failed to create xlsx file", e);
             return "Error: " + e.getMessage();

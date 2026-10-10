@@ -273,6 +273,8 @@ public class AgentOrchestrator {
         int overflowCompactions;
         // 当前活跃文档 ID（来自 activeContext 或 doc_open_file），用于修改前自动创建检查点
         Long activeFileId;
+        // Frozen at run start; opening reference files must not redirect new outputs.
+        Long defaultOutputFolderId;
         // 活跃文档名（仅用于给模型的反馈文案）
         String activeFileName;
         /**
@@ -954,14 +956,15 @@ public class AgentOrchestrator {
                         guard == null ? List.of() : guard.roundCandidates,
                         guard == null ? null : guard.roundOffered,
                         guard == null ? null : guard.runId,
-                        disclosedCategories, guard == null ? null : guard::isCancelled);
+                        disclosedCategories, guard == null ? null : guard::isCancelled,
+                        guard == null ? null : guard.defaultOutputFolderId);
         long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
         // 目录展开只在下一轮生效：本轮的工具集已经发给模型了，中途加进去会让
         // 「一轮内工具集不变」那条契约失效（只加不减，所以不会让已宣布的工具消失）。
         noteToolCategoryExpansion(guard, toolName, argsJson, result, disclosedCategories);
         recordToolTelemetry(toolName, result, conversationId, System.currentTimeMillis() - toolStartMs);
-        applyToolSideEffects(result, toolName, argsJson, conversationId, guard);
+        applyToolSideEffects(result, toolName, argsJson, conversationId, guard, projectId);
 
         // 模型仍去列文件时，把活跃文档钉在结果里，让它下一轮自己纠回来（不阻断跨文档场景）
         if (guard != null && guard.activeFileId != null
@@ -1136,7 +1139,7 @@ public class AgentOrchestrator {
      * 根据 @ToolMeta 元数据处理工具副作用（取代原先散落在手写分发链里的硬编码通知）。
      */
     private void applyToolSideEffects(ToolRegistry.ToolResult result, String toolName, String argsJson,
-                                      String conversationId, RunGuard guard) {
+                                      String conversationId, RunGuard guard, Long projectId) {
         if (!result.success() || result.tool() == null || result.tool().meta() == null) {
             return;
         }
@@ -1149,13 +1152,20 @@ public class AgentOrchestrator {
         if (!meta.fileEffect().isEmpty() && result.fileChanged()) {
             String fileName = meta.fileArg().isEmpty() ? null : extractArg(argsJson, meta.fileArg());
             Long fileId = null;
-            if ((fileName == null || fileName.isEmpty()) && guard != null && guard.activeFileId != null
+            com.checkba.model.entity.ProjectFile generated = com.checkba.service.ai.tools.GeneratedFileLocation
+                    .createdFile(projectFileService, projectId, toolName, result.output());
+            if (generated != null) {
+                fileId = generated.getId();
+                fileName = generated.getName();
+            } else if ((fileName == null || fileName.isEmpty()) && guard != null && guard.activeFileId != null
                     && actsOnActiveDocument(toolName)) {
                 // doc_* / sheet_* / slide_* 改的就是编辑器里那份活跃文档（dev-board#852）：
                 // 报它的真名与 id，前端改动卡片才能把用户带回这份文件
                 fileId = guard.activeFileId;
                 fileName = activeFileNameOrLookup(guard);
-            } else if ((fileName == null || fileName.isEmpty()) && !actsOnActiveDocument(toolName)) {
+            } else if ((fileName == null || fileName.isEmpty()) && !actsOnActiveDocument(toolName)
+                    && com.checkba.service.ai.tools.GeneratedFileLocation.parentParameter(
+                            toolName, extractArg(argsJson, "fileId")) == null) {
                 // pdf_* / text_* 一族没有 fileArg，但参数里指名了 fileId：按 id 查回真名。
                 // 查不到就当不知道，不把一个查无此文件的 id 发给前端
                 com.checkba.model.entity.ProjectFile target = fileByIdArg(argsJson);
@@ -1169,7 +1179,8 @@ public class AgentOrchestrator {
                 // 它仍要发出去——检查点与改动卡片都靠这条 MODIFIED
                 fileName = activeDocDisplayName(null);
             }
-            notifyFileChange(conversationId, fileName, fileId, meta.fileEffect());
+            notifyFileChange(conversationId, fileName, fileId, generated != null && "doc_start_stream".equals(toolName)
+                    && extractArg(argsJson, "fileId") == null ? "ADDED" : meta.fileEffect(), projectId);
         }
     }
 
@@ -1419,6 +1430,14 @@ public class AgentOrchestrator {
         TurnTimings timings = TurnTimings.start(log, "prep", conversationId);
 
         try {
+            if (request.getActiveContext() != null && request.getActiveContext().getId() != null) {
+                try {
+                    guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());
+                    guard.activeFileName = request.getActiveContext().getName();
+                } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
+            }
+            guard.defaultOutputFolderId = com.checkba.service.ai.tools.GeneratedFileLocation.initialParent(
+                    projectFileService, request.getProjectId(), guard.activeFileId);
             if (request.isDecisionAssistEnabled() && toolDecisionPolicy != null && agentMode != AgentMode.ASK) {
                 // Resolve the real channel once for this run; never promote a local run to cloud later.
                 try {
@@ -1573,12 +1592,6 @@ public class AgentOrchestrator {
             documentCheckpointService.clearForNewRun(conversationId);
             // 本轮的整段插入去重闸也一并重置（dev-board#464）——闸只在一轮内有效
             editorBridgeService.clearForNewRun(conversationId);
-            if (request.getActiveContext() != null && request.getActiveContext().getId() != null) {
-                try {
-                    guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());
-                    guard.activeFileName = request.getActiveContext().getName();
-                } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
-            }
             // dev-board#1097：本轮最初的用户指令（门控）与最初绑定的活跃文档（核验目标）
             if (clarification != null) guard.opinionInstructions.addAll(clarification.instructions());
             guard.opinionInstructions.add(request.getMessage());
@@ -3658,7 +3671,7 @@ public class AgentOrchestrator {
     // =================================================================================
     // Helper to notify frontend of file changes (Added/Modified)
     // =================================================================================
-    private void notifyFileChange(String conversationId, String fileName, Long fileId, String changeType) {
+    private void notifyFileChange(String conversationId, String fileName, Long fileId, String changeType, Long projectId) {
         try {
             // Determine pure filename if path is given
             String name = fileName;
@@ -3674,6 +3687,7 @@ public class AgentOrchestrator {
             payload.put("fileName", name);
             payload.put("changeType", changeType);
             payload.put("fileId", fileId);
+            payload.put("projectId", projectId);
             sseEmitterService.send(conversationId, "file_change", SKILL_UPDATE_MAPPER.writeValueAsString(payload));
 
             // Persist to database for history retrieval

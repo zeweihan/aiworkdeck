@@ -106,7 +106,9 @@ class DocumentEditToolsNewFileFolderTest {
         Harness h = harness(dir);
 
         String out = h.tools().doc_start_stream(null, "核查备忘录-注册资本与出资.docx", PROJECT_ID, FOLDER_ID);
-        assertTrue(out.startsWith("文档流式写入模式已激活"), "应当正常激活流式写入，实际：" + out);
+        assertEquals(999L, GeneratedFileLocation.createdId(out));
+        assertTrue(cn.hutool.json.JSONUtil.parseObj(out).getStr("message").startsWith("文档流式写入模式已激活"), out);
+        assertEquals("08-尽调清单与工作底稿/核查备忘录-注册资本与出资.docx", cn.hutool.json.JSONUtil.parseObj(out).getStr("file_path"));
 
         ArgumentCaptor<Long> parentId = ArgumentCaptor.forClass(Long.class);
         verify(h.fileService()).createFile(eq(PROJECT_ID), parentId.capture(), anyString(), eq("docx"),
@@ -192,7 +194,8 @@ class DocumentEditToolsNewFileFolderTest {
         Harness h = harness(dir);
 
         String out = h.tools().sheet_create_file("费用明细表", PROJECT_ID, FOLDER_ID);
-        assertTrue(out.startsWith("已创建空白表格文件"), "实际：" + out);
+        assertEquals(999L, GeneratedFileLocation.createdId(out));
+        assertTrue(cn.hutool.json.JSONUtil.parseObj(out).getStr("message").startsWith("已创建空白表格文件"), out);
 
         ArgumentCaptor<Long> parentId = ArgumentCaptor.forClass(Long.class);
         verify(h.fileService()).createFile(eq(PROJECT_ID), parentId.capture(), eq("费用明细表.xlsx"), eq("xlsx"),

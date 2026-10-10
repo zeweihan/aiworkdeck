@@ -1751,7 +1751,7 @@ export function useAgentStream() {
                 const d = JSON.parse(dataStr)
                 // d: { fileName: "...", changeType: "ADDED" | "MODIFIED", fileId: 42 | null }
                 // fileId（dev-board#852）：后端知道是哪份文件时带上，卡片按 id 打开；旧后端没有这个字段。
-                const change = { fileName: d.fileName, changeType: d.changeType, fileId: d.fileId ?? null }
+                const change = { fileName: d.fileName, changeType: d.changeType, fileId: d.fileId ?? null, projectId: d.projectId ?? null }
                 const exists = fileChanges.value.some(f => isSameFileChange(f, change))
                 if (!exists) {
                     fileChanges.value.push(change)

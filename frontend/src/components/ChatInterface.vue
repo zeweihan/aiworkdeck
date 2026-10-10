@@ -648,12 +648,16 @@
                        <text class="status-btn-label">{{ $t('chat.createdCount', { count: createdFiles.length }) }}</text>
                    </view>
                    <view v-if="showNewPopup && createdFiles.length > 0" class="status-popup up">
-                       <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
+                       <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item"
+                             :draggable="canDragCreatedFile(f, projectId)"
+                             @dragstart="handleCreatedFileDragStart($event, f)" @dragend="handleCreatedFileDragEnd"
+                             @tap.stop="handleOpenFile(f)">
                            <image src="/static/document.png" class="file-icon-mini"/>
                            <text class="file-name-text">{{ fileChangeLabel(f) }}</text>
                        </view>
                    </view>
-                   <view v-if="showNewPopup && createdFiles.length > 0" class="popup-mask-transparent" @tap.stop="showNewPopup = false"></view>
+                   <view v-if="showNewPopup && createdFiles.length > 0" class="popup-mask-transparent"
+                         :style="{ pointerEvents: draggingCreatedFile ? 'none' : '' }" @tap.stop="showNewPopup = false"></view>
                </view>
            </view>
 
@@ -876,6 +880,8 @@ import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
 import { saveLastConversation } from '@/utils/lastConversation.js'
 import { isContextEligibleTab } from '@/pages/project-overview/activeTabContext.js'
 import { isCurrentDocSentinel } from '@/utils/chatFileChange.js'
+import { canDragCreatedFile, startCreatedFileDrag, endCreatedFileDrag } from '@/utils/generatedFileDrag.js'
+import { warmDragImage } from '@/utils/dragImage.js'
 import {
   DEFAULT_CONTEXT_LIMITS,
   normalizeContextLimits,
@@ -1783,9 +1789,18 @@ export default {
       return folder ? folder.name : t('chat.rootFolder')
     })
 
+    warmDragImage()
     // --- File Changes Logic ---
     const showModifiedPopup = ref(false)
     const showNewPopup = ref(false)
+    const draggingCreatedFile = ref(false)
+    const handleCreatedFileDragStart = (event, file) => {
+        draggingCreatedFile.value = startCreatedFileDrag(event, file, props.projectId)
+    }
+    const handleCreatedFileDragEnd = () => {
+        draggingCreatedFile.value = false
+        endCreatedFileDrag()
+    }
 
     const createdFiles = computed(() => {
         return (fileChanges.value || []).filter(f => f.changeType === 'ADDED')
@@ -4249,7 +4264,7 @@ export default {
        showNewPopup,
        toggleModifiedPopup,
        toggleNewPopup,
-       handleOpenFile
+       handleOpenFile, canDragCreatedFile, draggingCreatedFile, handleCreatedFileDragStart, handleCreatedFileDragEnd
     }
   }
 }

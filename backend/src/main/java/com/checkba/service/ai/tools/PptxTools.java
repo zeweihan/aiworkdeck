@@ -89,11 +89,11 @@ public class PptxTools implements AgentToolComponent {
                     .collect(Collectors.toList());
             
             if (folders.isEmpty()) {
-                return "项目中没有文件夹。使用 pptx_generate 时可以将 parentId 留空，文件将保存在项目根目录。";
+                return "项目中没有文件夹。可传 parentId=0 明确保存到项目根目录。";
             }
             
             StringBuilder sb = new StringBuilder("项目文件夹列表 (共 " + folders.size() + " 个):\n");
-            sb.append("- ID: null, 名称: 根目录 (不传 parentId 时默认)\n");
+            sb.append("- ID: 0, 名称: 根目录 (明确选择；省略时沿用本轮源文档目录)\n");
             
             for (ProjectFile f : folders) {
                 String folderPath = getFileFolderPath(f.getParentId(), allFiles);
@@ -304,14 +304,14 @@ public class PptxTools implements AgentToolComponent {
     @ToolMeta(displayName = "生成PPT演示文稿", category = "pptx", fileEffect = "ADDED", fileArg = "fileName",
               requiresHost = ToolMeta.Host.LOWA)
     @Tool("根据主题一键生成 PPTX 演示文稿。AI 将自动生成大纲、内容描述和幻灯片图片，最终输出可编辑的 PPTX 文件。"
-            + "默认保存到项目根目录（parentId 不传或传 null），只有用户明确指定保存位置时才需要查询文件夹。"
+            + "省略parentId则沿用本轮开始时打开文档所在目录，没有有效文档才用根目录；传0明确放根目录，指定其他位置时查询文件夹。"
             + "**生成之后要改内容或格式，一律用 doc_open_file 打开它，再用 slide_* 那套原语编辑**"
             + "（slide_get_overview 看结构、slide_set_shape_text 改文字、slide_format_text 改格式，页码都是 1 起）；"
             + "不要为了改几个字重新生成一遍——重新生成会换掉整份文件，用户此前的手工修改全部丢失。")
     public String pptx_generate(
             @P("PPT 主题或详细描述，如：'AI 在法律行业的应用' 或 '公司年度总结报告，包含业绩、成就和未来规划'") String topic,
             @P("项目 ID，生成的 PPTX 将关联到此项目") Long projectId,
-            @P("父文件夹 ID（可选，传 null 表示保存到项目根目录）。可以调用 list_project_folders 获取可用的文件夹 ID。") Long parentId,
+            @P("父文件夹 ID（可选；省略沿用本轮源文档目录，传0明确放根目录）。可以调用 list_project_folders 获取可用的文件夹 ID。") Long parentId,
             @P("自定义文件名（可选，不含扩展名）。不指定则自动生成。") String fileName,
             @P("PPT 风格描述（可选），如：'科技风'、'商务简约'、'学术正式'。留空则使用默认风格。") String style,
             @P("输出语言：zh（中文，默认）、en（英文）、ja（日语）") String language
