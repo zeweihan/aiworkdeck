@@ -111,6 +111,8 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 
 ## AI 新建文件的默认位置与拖拽（dev-board#1181）
 
+`pdf_to_word` 独立沿用源 PDF 的可见目录（省略 parentId），显式目录优先、0 明确根目录；目录解析在同轮转换幂等 key 之前完成。它不继承后来打开的参考文档目录。
+
 `GeneratedFileLocation` 是新建落点策略；`ToolRegistry` 只对白名单
 `write_file/write_docx/doc_start_stream（fileId 为空）/sheet_create_file/pptx_generate` 在反射绑定前解析目录。
 显式正 folder ID 优先，`0` 明确表示根目录；省略/null 用本轮启动时从活跃文件查到的可见源目录，无有效源文件才回根。

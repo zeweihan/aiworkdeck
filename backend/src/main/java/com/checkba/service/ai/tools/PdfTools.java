@@ -496,7 +496,7 @@ public class PdfTools implements AgentToolComponent {
           "返回信息会注明实际使用的转换路径，向用户如实转述。同一轮里对同一份 PDF 再调一次会直接复用已转出的那份。")
     public String pdf_to_word(
             @P("PDF 文件 ID") Long fileId,
-            @P("目标文件夹 ID（可选，传 null 放项目根目录）") Long parentId,
+            @P("目标文件夹 ID（可选，省略跟随源 PDF 所在目录；传 0 明确放项目根目录）") Long parentId,
             @P(value = "版式级转换失败时是否允许退回只保留文字的结构级转换（表格与版式会丢失）。"
                     + "默认 false；只有用户明确同意后才传 true", required = false) Boolean allowStructuralFallback
     ) {
@@ -504,6 +504,8 @@ public class PdfTools implements AgentToolComponent {
                 fileId, parentId, allowStructuralFallback);
         try {
             ProjectFile file = getPdfFile(fileId);
+            parentId = GeneratedFileLocation.resolve(projectFileService, file.getProjectId(), parentId,
+                    GeneratedFileLocation.initialParent(projectFileService, file.getProjectId(), fileId));
             // 同一轮对同一份 PDF 再转一次：直接复用（dev-board#1017，RENAME 会再多一份同名 docx）
             String runKey = EditorBridgeService.pdfToWordKey(file.getId(), parentId);
             String reused = reuseGenerated(runKey);
