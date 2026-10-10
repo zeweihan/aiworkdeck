@@ -2344,6 +2344,9 @@ export function evidenceRefCounts(projectId, fileIds) {
 // 四个端点全在 /api/projects/{pid}/insight 之下；未登录一律 200 + {code:4010}，
 // 由 request() 的统一信封处理（这里不另做分支）。
 /** 发起解析（异步）。返回时 run 已落库为 RUNNING，调用方立刻可以轮询 getInsight。 */
+export function reviewDocumentLayout(projectId, data) {
+  return request({ url: `/api/projects/${projectId}/visual-review`, method: 'POST', data, logBody: false, timeout: 120000 })
+}
 export function reviewDocInsight(projectId, data) {
   return request({ url: `/api/projects/${projectId}/insight/review`, method: 'POST', data, logBody: false, timeout: data.deep ? 120000 : 30000 })
 }

@@ -79,6 +79,7 @@
       :writing-assistance-on="writingAssistanceOpen"
       :writing-assistance-available="writingAssistanceAvailable"
       @toggle-review="reviewOpen = !reviewOpen"
+      @visual-review="runVisualReview"
       @toggle-semantic-writing="toggleSemanticWriting"
       @toggle-writing-assistance="toggleWritingAssistance"
       @changed="onDocModified"
@@ -823,6 +824,23 @@ export default {
         if (input) input.focus()
       })
       return { ok: true }
+    },
+    async runVisualReview() {
+      if (this._visualReviewBusy || !this.ready || !this.executor || !this.file?.id || !this.canWrite) return
+      this._visualReviewBusy = true
+      const executor = this.executor, fileId = this.file.id
+      try {
+        const [{ runDocumentVisualReview }, { showDialog }, { reviewDocumentLayout }] = await Promise.all([
+          import('@/composables/documentVisualReview.mjs'), import('@/utils/dialog.js'), import('@/services/api.js'),
+        ])
+        await runDocumentVisualReview({
+          execute: (action, params) => executor.executeCommand(action, params),
+          request: data => reviewDocumentLayout(this.projectId, data), dialog: showDialog,
+          busy: on => on ? uni.showLoading({ title: this.$t('editor.visualReview.busy'), mask: false }) : uni.hideLoading(),
+          current: () => this.ready && this.executor === executor && this.file?.id === fileId,
+          t: (key, params) => this.$t('editor.visualReview.' + key, params), fileId,
+        })
+      } finally { this._visualReviewBusy = false }
     },
     // 原生「文件→导出为→直接导出 PDF / 导出为 PDF…」与原生工具栏 PDF 图标（dev-board#886）。
     // 引擎在 WASM 里起不来文件选择器，派发静默结束；worker 拦下这两条命令转成

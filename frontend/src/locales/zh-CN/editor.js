@@ -3,6 +3,25 @@
 // 文档编辑器域：LibreOfficeEditor / ReviewPanel / DocDiffViewer /
 // CompareDocDialog / VariablePanel / DrawioEditor 的用户可见文案。
 export default {
+  visualReview: {
+    "title": "版面检查",
+    "pagesTitle": "版面检查：选择页码",
+    "pagesHint": "连续页码，例如 1-6，每次最多6页",
+    "badPages": "请输入连续的1–6页，例如 2-4。",
+    "consent": "将把当前文档第 {startPage}–{endPage} 页渲染为图片，交给辅助模型检查。可能需要约一分钟并使用模型额度，不改原文。实际页数不足时只检查已有页面。是否继续？",
+    "start": "开始版面检查",
+    "cancel": "暂不检查",
+    "busy": "正在检查版面…",
+    "stale": "检查期间文档已变化，结果不再适用，请重新检查。",
+    "snapshotFailed": "无法确认当前文档状态，请等待文档就绪后重试。",
+    "exportFailed": "无法生成检查用PDF。",
+    "sizeLimit": "检查用PDF为空或超过12MB，请缩小文档后重试。",
+    "empty": "本次没有取得可用的版面检查结果。",
+    "failed": "版面检查失败，请稍后重试。",
+    "scope": "已检查第 {pages} 页；文档共 {total} 页。",
+    "allPages": "已覆盖本次快照的全部页面；AI结果仍需核对。",
+    "partial": "其余页面尚未检查；可再次选择页码继续。"
+},
   saveBeforeLeaving: '仍有文档未保存，请重试保存，或先关闭该文档处理未保存的更改。',
   retrySave: '重试保存',
   saveTimeout: '保存超时，请检查网络后重试。',

@@ -13,6 +13,14 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 Writer 的 `ShowTextBoundaries` 与格式标记联动：打开 ¶ 时会把文本范围画成整页矩形。`EditorToolbar.applyViewPrefs` 显式传 `textBoundaries:false`，保留既有 ¶ 和标尺偏好；`set_view_options` 无参依旧只读，返回原生真实状态。不要改页边距、段落边框或使用 toggle。`test:lowa-view-boundaries` 用 r5 有头引擎核对矩形前后截图、格式标记/标尺、页尺寸与边距、干净/已脏状态及重载。
 
+## 编号与可选版面检查（dev-board#1176/#1177，2026-10-10）
+
+段落正文不包含自动编号。`get_document_text` / `get_paragraph` / `get_review_context` 返回独立的 `numbering` 元数据；不能为了让 AI 看见编号而往正文拼标签，否则字符偏移与修订定位会失真。原生项目符号可能有 listId、hasLabel 而没有可读 label，不能当作数字编号。文本审阅检测见 ai-doc-bridge 的编号契约。
+
+工具栏「版面检查」由用户选连续 1–6 页、确认耗时和用量后才导出当前编辑器 PDF；`documentVisualReview.mjs` 在导出前后及返回结果时核对 revision 和当前编辑器，变化则丢弃旧结果。后端 `DocumentVisualReviewService` 校验项目权限和文档归属，用 PDFBox 将选页转成图片，调用支持视觉的辅助模型一次；不支持视觉即提示，不暗中降级 OCR。每次 PDF 上限 12MB，报告说明实际页码和是否覆盖全文。它不自动运行、不自动改文档，也不能把文本读取检查称为视觉验收。
+
+当前位置接受/拒绝要完整经过宿主和客体两侧 `EDITOR_ACTIONS`。旧 0.56.0 安装包的客体 bundle 缺 `resolve_revision_at_cursor` 会报 Unknown action；源码白名单已有修复，还须重建客体产物。r5 的 RedlineStart/RedlineEnd 可能倒置，命中比较前排序区间；不要为规避命中问题调用接受全部。`revision-toolbar-route.test.mjs` 与真实引擎 `revision-at-cursor.mjs` 覆盖路由及插入/删除、行内/气泡、接受/拒绝、保留其他修订和导出重开。
+
 ## AI 逐段修订与显示切换（dev-board#1131/#1132，2026-10-07）
 
 `modify_paragraph` 的字符级差异须在既有 `lockModel/unlockModel` 内一次落完，并用 `finally` 解锁；否则每个差异片段触发布局及 JS 修改监听器，累计修订越多越慢。不得以整段替换或丢弃修订换取提速。异步最终文本命令由 `agentViewPending` 串行等待；显式 `set_revision_view` 在批次结束后执行，不能中途改变最终正文语义，也不能被旧显示态恢复覆盖。命令署名在真正执行的闭包内设置，排队时不改变在飞命令的作者。
