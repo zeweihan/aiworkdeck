@@ -5,6 +5,12 @@
 // text that is byte-identical across pages (e.g. "Standard User", "Back to Projects")
 // keeps a single key.
 export default {
+  trialNotStarted: 'Trial not started · {days} days / {calls} AI turns',
+  trialActive: 'Trial · {days} days left · {calls} AI turns left',
+  trialExhaustedCalls: 'Trial AI turns used up',
+  trialExpiredDays: 'Trial ended',
+  trialStale: '(offline, balance pending sync)',
+  trialTerms: 'Subject to the agreement',
   // ---- shared across the three pages ----
   standardUserRole: 'Standard User',
   backToProjectList: 'Back to Projects',

@@ -18,7 +18,10 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 试用计量 v0.1.1 spike：服务端权威的试用余额（只读 + 幂等发放）。
+ * 试用计量 v0.1.1：试用余额的<b>本地缓存</b>（权威在账户站，见 {@code AccountService#trialSnapshot}）。
+ *
+ * <p>本地行只用于离线 / 官网不可达时的展示兜底；任何扣减、拦截都不读它。
+ * {@link #cacheFromAccount} 是正式路径唯一的写入口（拿账户站回包覆盖）。
  *
  * <ul>
  *   <li>{@link #balance(Long)} —— GET /api/trial/balance 的数据源；纯读，不写库、不扣次。</li>
@@ -79,7 +82,9 @@ public class TrialBalanceService {
             out.put("region", b.getRegion());
         }
         out.put("serverTime", clock.instant().toString());
-        out.put("authoritative", true);
+        // 本地行只是账户站余额的缓存（总经理 2026-10-09：权威在账户站），不得据此扣减或拦截
+        out.put("authoritative", false);
+        out.put("source", "local_cache");
         out.put("termsNotice", TrialPolicy.TERMS_NOTICE);
         return out;
     }
@@ -110,6 +115,56 @@ public class TrialBalanceService {
         } catch (DataIntegrityViolationException race) {
             return repository.findByUserId(userId).orElseThrow(() -> race);
         }
+    }
+
+    /**
+     * 用账户站回包覆盖本地缓存行。账户站说「未发放」时不建行。
+     * 字段名按账户站契约（camelCase）：trialStartedAt / trialEndsAt / callsQuota / callsUsed / status / policy / region。
+     */
+    @Transactional
+    public void cacheFromAccount(Long userId, Map<String, Object> site) {
+        if (userId == null || site == null) return;
+        if (!Boolean.TRUE.equals(site.get("granted"))) return;
+        Instant started = parseInstant(site.get("trialStartedAt"));
+        Instant ends = parseInstant(site.get("trialEndsAt"));
+        if (started == null || ends == null) return;
+        Instant now = clock.instant();
+        TrialBalance b = repository.findByUserId(userId).orElseGet(() -> {
+            TrialBalance fresh = new TrialBalance();
+            fresh.setUserId(userId);
+            fresh.setCreatedAt(now);
+            return fresh;
+        });
+        b.setTrialStartedAt(started);
+        b.setTrialEndsAt(ends);
+        b.setCallsQuota(intOr(site.get("callsQuota"), TrialPolicy.TRIAL_CALLS));
+        b.setCallsUsed(intOr(site.get("callsUsed"), 0));
+        Object status = site.get("status");
+        b.setStatus(status instanceof String st && !st.isBlank() && !TrialPolicy.STATUS_NONE.equals(st)
+                ? st : TrialPolicy.STATUS_ACTIVE);
+        Object policy = site.get("policy");
+        b.setPolicy(policy instanceof String p && !p.isBlank() ? p : TrialPolicy.POLICY_MIN_OF_DAYS_OR_CALLS);
+        Object region = site.get("region");
+        b.setRegion(region instanceof String r ? r : null);
+        b.setUpdatedAt(now);
+        try {
+            repository.saveAndFlush(b);
+        } catch (DataIntegrityViolationException race) {
+            // 并发两次 GET 同时建行：输的一方放弃，缓存下一次再覆盖
+        }
+    }
+
+    private static Instant parseInstant(Object v) {
+        if (!(v instanceof String s) || s.isBlank()) return null;
+        try {
+            return Instant.parse(s);
+        } catch (java.time.format.DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    private static int intOr(Object v, int fallback) {
+        return v instanceof Number n ? n.intValue() : fallback;
     }
 
     static String effectiveStatus(TrialBalance b, Instant now, int quota, int used) {

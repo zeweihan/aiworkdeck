@@ -57,6 +57,11 @@
         </view>
         <text class="avatar-menu-wallet-label">{{ $t('workbench.walletMenuLabel') }}</text>
       </view>
+      <!-- 试用余额（试用计量 v0.1.1）：剩余天数与次数，权威在账户站 -->
+      <view v-if="trialText" class="avatar-menu-trial">
+        <text class="avatar-menu-trial-text">{{ trialText }}</text>
+        <text class="avatar-menu-wallet-label">{{ $t('account.trialTerms') }}</text>
+      </view>
       <!-- 宽限 / 试用提示（原顶栏 chip）：「需联网验证 · 剩 N 天」一类，点开说明弹窗 -->
       <view v-if="noticeText" class="avatar-menu-notice" @tap.stop="emitAndClose('grace-info')">
         <text class="avatar-menu-notice-text">{{ noticeText }}</text>
@@ -89,6 +94,7 @@ export default {
     walletText: { type: String, default: '' },
     walletLow: { type: Boolean, default: false },
     walletTier: { type: String, default: '' },
+    trialText: { type: String, default: '' },
     /** 宽限 / 试用提示文案（「需联网验证 · 剩 N 天」「试用版」）；空串不显示 */
     noticeText: { type: String, default: '' },
     /** 宿主的客户视角（isClientView）：客户看不到事项，下拉里不出「我的日程」 */
@@ -315,6 +321,17 @@ export default {
   background: var(--awd-accent);
   border-radius: 3px;
   padding: 0 5px;
+}
+
+.avatar-menu-trial {
+  margin: 0 0 4px;
+  padding: 6px 10px;
+}
+
+.avatar-menu-trial-text {
+  display: block;
+  font-size: 12px;
+  color: var(--awd-text-2);
 }
 
 .avatar-menu-wallet-label {

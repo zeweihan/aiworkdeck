@@ -4,6 +4,13 @@
 // 新建/打开项目页（newproject/index.vue）。三个页面共用一个命名空间，跨页面完全同字
 // 的文案（如「标准用户」「返回项目列表」）只留一个键。
 export default {
+  // ---- 试用计量 v0.1.1（账户菜单里的试用余额行；权威在账户站，本地只展示） ----
+  trialNotStarted: '试用未开始 · 剩余 {days} 天 / {calls} 次',
+  trialActive: '试用中 · 剩余 {days} 天 · 剩余 {calls} 次 AI 调用',
+  trialExhaustedCalls: '试用 AI 调用次数已用完',
+  trialExpiredDays: '试用已到期',
+  trialStale: '（离线，余额待同步）',
+  trialTerms: '以协议为准',
   // ---- 三页共用 ----
   standardUserRole: '标准用户',
   backToProjectList: '返回项目列表',

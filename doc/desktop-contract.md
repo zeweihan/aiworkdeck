@@ -6,7 +6,53 @@
 
 ## 待官网侧实施
 
-（当前无待办条目。）
+### 试用计量 v0.1.1：`GET /api/account/trial` 与 `POST /api/account/trial/turns`（2026-10-10 提出）
+
+依据：`试用计量规格-v0.1.md` v0.1.1（14 天或 80 次 AI 回合，先到为准）+ 总经理 2026-10-09 决定
+「**权威在账户站**」。桌面后端只代理、缓存、展示，**不判定、不扣减**；代理方式与
+`/api/account/balance` 完全一致（`AccountService#getJson` / `#sendJson`，Bearer `awdk_`，
+同一套状态码分类：401/403 = Key 失效，5xx/网络 = 降级 `available:false`，4xx `{"error":"code"}` = 业务码）。
+
+**1. `GET /api/account/trial`**（Bearer awdk_）→ 200：
+
+```json
+{
+  "granted": true,
+  "status": "active",              // none | active | exhausted_calls | expired_days | converted
+  "policy": "min_of_days_or_calls",
+  "daysQuota": 14, "callsQuota": 80, "callsUsed": 19,
+  "remainingDays": 9,              // 向上取整，到期为 0
+  "remainingCalls": 61,
+  "trialStartedAt": "2026-10-01T02:00:00Z",   // = trial_grant 时刻（不是首次 AI 调用）
+  "trialEndsAt": "2026-10-15T02:00:00Z",
+  "region": "cn",
+  "serverTime": "2026-10-06T08:00:00Z"
+}
+```
+
+未发放：`granted:false, status:"none", remainingDays:14, remainingCalls:80`，时间字段为 null。
+发放（`trial_grant`）由官网在注册/首登时幂等完成；`trial_activated` 只是漏斗指标，不发放、不扣次。
+
+**2. `POST /api/account/trial/turns`**（Bearer awdk_），请求体：
+
+```json
+{ "turnId": "<桌面 runId，UUID>", "outcome": "completed", "hasAssistantResult": true, "endedAt": "ISO-8601" }
+```
+
+- 桌面**只**上报：成功收尾（bubble_end status=finished / awaiting_input）+ 已交付非空助手正文 +
+  本轮确实调用过平台云端通道。失败、超时、首包前取消、首包后断流、纯本地/BYOK 回合**一律不上报**。
+- 同一次用户提交（工具多跳、编排内重试）只有一个 `turnId`。
+- 官网按 `(accountId, turnId)` **幂等**：重复上报返回 `duplicate:true`，不重复扣。
+- 官网侧落 `ai_turn_ledger`（规格 §3.1）并在 `billable=true` 时 `calls_used += 1`。
+- 响应 200：`{ "counted": true|false, "duplicate": false, "balance": { ...同 GET 的形状... } }`。
+  已转付费 / 未发放 → `counted:false`（不是错误）。
+
+**3. 用尽 / 到期的拦截在官网侧**：试用用户（无付费套餐、无余额）在 `trial_exhausted` / `trial_expired`
+时，`GET /api/account/ai-usage` 与平台 AI key 签发返回 409 `{"error":"trial_exhausted"}` /
+`{"error":"trial_expired"}`。桌面已在 `AccountService#rejectedMessage` 备好人话（条款只写「以协议为准」），
+**不**在本机做任何拦截；本地打开/编辑文件不受影响。
+
+**4. 契约检查**：官网侧落地后并入 `doc/desktop-contract.md` 与 `scripts/contract-check.mts`，并从此处删除。
 
 ## 已落地条目（留档，便于回溯当初的判断）
 

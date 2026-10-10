@@ -3,6 +3,7 @@
 
 package com.checkba.controller;
 
+import com.checkba.service.account.AccountService;
 import com.checkba.service.trial.TrialBalanceService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,10 +14,10 @@ import org.springframework.http.ResponseEntity;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** GET /api/trial/balance 接线：无会话 401；有会话按 userId 取余额，信封 {code:0,data}。 */
+/** GET /api/trial/balance：权威取自账户站（同 /api/account/balance 代理），本地只缓存 + 兜底展示。 */
 class TrialControllerTest {
 
     @BeforeEach
@@ -25,28 +26,64 @@ class TrialControllerTest {
         AuthController.registerLocalIdentityService(null);
     }
 
+    private void localUser(long id) {
+        com.checkba.service.LocalIdentityService local = mock(com.checkba.service.LocalIdentityService.class);
+        when(local.isLocalMode()).thenReturn(true);
+        when(local.localUserId()).thenReturn(id);
+        AuthController.registerLocalIdentityService(local);
+    }
+
     @Test
-    void noSession_returns401_andDoesNotTouchService() {
+    void noSession_returns401_andDoesNotTouchAnything() {
         TrialBalanceService svc = mock(TrialBalanceService.class);
-        ResponseEntity<Map<String, Object>> r = new TrialController(svc).balance(null);
+        AccountService acc = mock(AccountService.class);
+        ResponseEntity<Map<String, Object>> r = new TrialController(svc, acc).balance(null);
         assertEquals(HttpStatus.UNAUTHORIZED, r.getStatusCode());
-        assertEquals(1, r.getBody().get("code"));
+        verifyNoInteractions(svc, acc);
+    }
+
+    @Test
+    void notConnected_returnsConnectedFalse_noLocalAuthority() {
+        localUser(42L);
+        TrialBalanceService svc = mock(TrialBalanceService.class);
+        AccountService acc = mock(AccountService.class);
+        when(acc.trialSnapshot()).thenReturn(Map.of("connected", false));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) new TrialController(svc, acc).balance(null).getBody().get("data");
+        assertEquals(false, data.get("connected"));
+        assertEquals("以协议为准", data.get("termsNotice"));
         verify(svc, never()).balance(anyLong());
     }
 
     @Test
-    void localMode_resolvesLocalUser_andWrapsEnvelope() {
-        com.checkba.service.LocalIdentityService local = mock(com.checkba.service.LocalIdentityService.class);
-        when(local.isLocalMode()).thenReturn(true);
-        when(local.localUserId()).thenReturn(42L);
-        AuthController.registerLocalIdentityService(local);
-
+    void connected_returnsSiteValuesAsAuthoritative_andWritesCache() {
+        localUser(42L);
         TrialBalanceService svc = mock(TrialBalanceService.class);
-        when(svc.balance(42L)).thenReturn(Map.of("status", "none", "remainingCalls", 80));
-        ResponseEntity<Map<String, Object>> r = new TrialController(svc).balance(null);
-        assertEquals(HttpStatus.OK, r.getStatusCode());
+        AccountService acc = mock(AccountService.class);
+        Map<String, Object> site = Map.of("granted", true, "status", "active", "remainingDays", 9, "remainingCalls", 61);
+        when(acc.trialSnapshot()).thenReturn(Map.of("connected", true, "available", true, "trial", site));
+        ResponseEntity<Map<String, Object>> r = new TrialController(svc, acc).balance(null);
         assertEquals(0, r.getBody().get("code"));
-        assertEquals(Map.of("status", "none", "remainingCalls", 80), r.getBody().get("data"));
-        verify(svc).balance(42L);
+        @SuppressWarnings("unchecked") Map<String, Object> data = (Map<String, Object>) r.getBody().get("data");
+        assertEquals(61, data.get("remainingCalls"));
+        assertEquals(9, data.get("remainingDays"));
+        assertEquals(true, data.get("authoritative"));
+        assertEquals("account", data.get("source"));
+        verify(svc).cacheFromAccount(42L, site);
+    }
+
+    @Test
+    void siteUnreachable_fallsBackToCache_markedStaleNonAuthoritative() {
+        localUser(42L);
+        TrialBalanceService svc = mock(TrialBalanceService.class);
+        AccountService acc = mock(AccountService.class);
+        when(acc.trialSnapshot()).thenReturn(Map.of("connected", true, "available", false));
+        when(svc.balance(42L)).thenReturn(Map.of("remainingCalls", 50, "authoritative", false));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) new TrialController(svc, acc).balance(null).getBody().get("data");
+        assertEquals(50, data.get("remainingCalls"));
+        assertEquals(false, data.get("authoritative"));
+        assertEquals(true, data.get("stale"));
+        assertEquals(false, data.get("available"));
     }
 }
