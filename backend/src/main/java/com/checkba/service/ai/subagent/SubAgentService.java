@@ -361,7 +361,7 @@ public class SubAgentService {
                 ? new ToolContext(null, null, null, modelId, specs, allowed, null, null,
                         () -> progress.isCancelled(null))
                 : new ToolContext(parentCtx.projectId(), parentCtx.conversationId(), parentCtx.userId(), modelId,
-                        specs, allowed, null, null, () -> progress.isCancelled(parentCtx));
+                        specs, allowed, null, null, () -> progress.isCancelled(parentCtx), parentCtx.defaultOutputFolderId());
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(buildSystemPrompt(expectedOutput, allowed)));

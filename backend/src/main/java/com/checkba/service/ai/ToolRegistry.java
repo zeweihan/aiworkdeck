@@ -199,6 +199,9 @@ public class ToolRegistry {
     private final PluginService pluginService;
     private final ClientCapabilityService clientCapabilityService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.ProjectFileService projectFileService;
+
     private final Map<String, RegisteredTool> builtinTools = new ConcurrentHashMap<>();
     private final Map<String, RegisteredTool> pluginToolCache = new ConcurrentHashMap<>();
     private final List<ToolSpecification> builtinSpecifications = new ArrayList<>();
@@ -649,6 +652,15 @@ public class ToolRegistry {
                         + "Please re-emit the call to '" + resolvedName
                         + "' with a well-formed JSON object of named arguments. Parse error: "
                         + badArgs.getMessage(), tool, true);
+            }
+            String parentParameter = com.checkba.service.ai.tools.GeneratedFileLocation.parentParameter(
+                    resolvedName, rawArg(args, "fileId"));
+            if (parentParameter != null && projectFileService != null) {
+                Long requested = (Long) convert(rawArg(args, parentParameter), Long.class);
+                for (String alias : ARG_ALIASES.getOrDefault(parentParameter, List.of())) args.remove(alias);
+                args.set(parentParameter, com.checkba.service.ai.tools.GeneratedFileLocation.resolve(
+                        projectFileService, ctx == null ? null : ctx.projectId(), requested,
+                        ctx == null ? null : ctx.defaultOutputFolderId()));
             }
             Object[] boundArgs = bindArguments(resolvedName, tool.method(), args, ctx);
             Object result = tool.method().invoke(tool.bean(), boundArgs);

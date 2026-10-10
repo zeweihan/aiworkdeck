@@ -286,14 +286,13 @@ dev-board#97 的「中键关闭标签」就这么静默失效了一整轮：auxc
 （`npm run test:project-home`）。
 
 **落点定了之后只有一条路：import-local（dev-board#409 立，#513 收敛为唯一通道）**。
-`importExternalDrop(dt, targetParentId)` 取 `dataTransfer.files` 里的**顶层条目**
-（每条可能是文件，也可能是目录），逐个用 `resolveDroppedFilePath`（`host.fs.getPathForFile`，
+`importExternalDrop(dt, targetParentId)` 在 drop 同步阶段用 `captureDroppedFiles` 取 `dataTransfer.files`（为空则回退 `items.getAsFile()`）里的**顶层条目**
+（每条可能是文件，也可能是目录），逐个由共享 helper 用 `host.fs.getPathForFile`（
 Electron 的 webUtils）解析出本机绝对路径，交给
 **`POST /api/projects/{id}/files/import-local`**（`{sourcePath, parentId}`，
 `ProjectFileController.importLocal` → `ProjectFileService.importLocalFile`），
 让后端把它**复制**进项目目录；**目录由后端递归建行、递归复制**，前端不再用
-`webkitGetAsEntry` 展开目录。解析不出路径（不在桌面壳里跑）= 一条都导不了，
-只弹一句 `fileTree.importDesktopOnly`（「拖入导入仅桌面端支持」）——工作台的 H5 部署
+`webkitGetAsEntry` 展开目录。纯浏览器没有 `host.fs` 时提示 `fileTree.importDesktopOnly`（「拖入导入仅桌面端支持」）——工作台的 H5 部署
 已于 2026-08-19 下线，资源管理器是桌面端专属。逐条循环 + 一次 `loadFiles()` 收尾的
 `importDroppedLocalFiles(fileList, parentId)` 是**公开方法**，暂存区
 （`stagingArea.js#onStagingDropFiles`）直接调它，不另起一套。
@@ -309,6 +308,8 @@ xhr 只给一句 `Network Error`，后端看到 `ClientAbortException`），三�
 后置钩子（RAG 增量索引 + 自动打标签）与上传完成时同源。
 **这条路径不插乐观行**——没有传输阶段，返回时字节已经在目录里，`loadFiles()` 一刷即最终形态。
 后端测试 `ProjectFileServiceImportLocalTest` / `ProjectFileControllerImportLocalTest`。
+
+**无路径 File 的兼容（dev-board#1182）**：树、暂存区和 AI 对话共用 `captureDroppedFiles`，在原生 drop 回调返回前提取 files/items，并立刻开始读取无路径 File 的字节（暂存区创建文件夹可能先 await）。真实本机路径仍直接 import-local。仅有非空可读字节时，桌面 `fs:stageDroppedFile` 写入独立临时目录，返回当前窗口所属的随机 token；import-local 成功或失败后均 `releaseDroppedFile(token)`，窗口销毁也清理。只收字节与单段文件名，不收读写路径；100 MB/批字节预算不限制原生路径的大文件。无路径的空壳、目录、不可读 File、仅 file URL 文本或仅 promise 声明均不创建项目行，明确提示先保存到本机文件夹再拖入，不能误说“仅桌面端支持”。**file URL 文本不是本机文件读取授权**，不得解析后直接交 import-local。当前合成来源/隔离 Electron 已验证 items-only、字节无路径和 Finder 等价的磁盘 File；未采集微信原生 payload，不宣称覆盖全部微信来源，未增加 NSFilePromiseReceiver 原生桥。回归：`file-tree-external-drop.test.mjs`、`drop-byte-import.test.mjs`、`chat-external-drop.test.mjs`、`staging-drop-external-files.test.mjs`、`desktop/tests/dropped-files.test.js`。
 
 **拖进 AI 对话区是另一条路，别与文件树那条混用（dev-board#779 K6，2026-09-22）**：
 落点是整块 `.side-panel-ai`（`handleAiDrop`），但**高亮画在输入框卡片上**——
@@ -327,10 +328,10 @@ ChatInterface 的 `.input-card.is-drop-target`，由新 prop `:drag-active="drag
    会捡到上一个文件，用户拖了别的东西却看见「已添加: 上一个文件」（实测复现过）。
 5. **本机文件**（Finder / 资源管理器）：三种应用内格式都落空才轮到它，`dataTransfer` 走
    `utils/fileTreeExternalDrop.js` 的 `nativeDataTransfer(e)` 取（uni 重建 `<view>` 事件对象
-   的老地雷）。**走的是 HTTP 上传路而不是资源管理器那条 `import-local`**：对话区加材料的
+   的老地雷）。**桌面壳同样走 `import-local`，无路径 File 走上述受限字节暂存；纯浏览器才保留 HTTP 上传**：对话区加材料的
    落点是「项目里多一份文件 + 挂进本轮上下文」，复用 ChatInterface 暴露的
    `uploadLocalFilesAndAddContext(fileList)`（内部与上传对话框共用 `uploadFilesAndAttach`：
-   createFile + uploadFileContent + addFile）。**落点固定项目根目录**——工作台没有「当前
+   桌面 import-local + addFile；纯浏览器 createFile + uploadFileContent + addFile）。**落点固定项目根目录**——工作台没有「当前
    文件夹」这个概念（文件树的选中项跟着编辑器标签走，是一份文件不是一个目录），toast 里
    点名落点。目录条目在 `dataTransfer.files` 里是 0 字节空壳，照传会在项目里建出空文件，
    所以先用 `webkitGetAsEntry` 挡一道，请用户拖到左侧资源管理器（那条有整套递归导入）。

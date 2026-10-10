@@ -109,6 +109,28 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 - **通道/计费**：仅当前 OpenRouter 平台或 BYOK 通道可用，本地 Ollama 不外发，不为 Jev 自动换供应商。关闭时在凭据解析/平台 Key 配发前短路，零 Jev 请求/费用；开启但本次不适合预选（如 ASK）同样跳过。平台用既有累计用量对账，BYOK 可记 Jev 返回的实际 cost；不要把平台累计差额与 Jev 响应 cost 叠加双算。主模型选择不变。
 - **验证入口**：`frontend/tests/chat-presentation-ui/decision-assist.mjs` 用真实组件+合成 HTTP 验开关、键盘、窄窗、中英、POST/queue/steer/重新生成、发送期间切换及身份隔离；`frontend/tests/project-home/decision-assist-preference.test.mjs` 验默认关闭/脏值/重试。后端须覆盖 DTO 严格布尔、Inbox 持久化、候选收窄/发现兜底、取消/迟到、默认零调用及平台/BYOK/本地边界；不能只用 POST 字段存在断言代替执行链验证。真实模型对照只用合成材料，比较完成质量、端到端总耗时和完整费用。
 
+## AI 新建文件的默认位置与拖拽（dev-board#1181）
+
+产品内子代理透传父轮 defaultOutputFolderId，但不继承父技能 runId/披露状态。聊天新增文件拖拽须配对发既有 file-drag-start/end 信号；否则目录节点可接收，根空白/空树却不会显示或接收投放。
+
+`pdf_to_word` 独立沿用源 PDF 的可见目录（省略 parentId），显式目录优先、0 明确根目录；目录解析在同轮转换幂等 key 之前完成。它不继承后来打开的参考文档目录。
+
+`GeneratedFileLocation` 是新建落点策略；`ToolRegistry` 只对白名单
+`write_file/write_docx/doc_start_stream（fileId 为空）/sheet_create_file/pptx_generate` 在反射绑定前解析目录。
+显式正 folder ID 优先，`0` 明确表示根目录；省略/null 用本轮启动时从活跃文件查到的可见源目录，无有效源文件才回根。
+`RunGuard.defaultOutputFolderId → ToolContext.defaultOutputFolderId` 固定此默认值，后续 `doc_open_file` 看参考材料不改变它。
+只继承同项目、未删除、真实文件的父目录；隐藏 `.stagezone/__staging_area__` 及其后代不作为默认。
+显式/已冻结目录已失效或跨项目时返回错误，不悄悄换位置；既有文件编辑、移动及 PDF 衍生工具不适用本策略。
+目录先解析再进入工具，因此 `newDocxKey` 使用真正目的地；PPT 配置弹窗也拿到已解析目录。
+
+`write_*`、新建流式 Word 和新建表格返回成功 JSON，`db_id` 是数据库身份，`file_path` 只输出项目内相对路径。
+`file_change` 对此白名单仅从成功 JSON 的整数 db_id 查同项目有效文件，回传冲突改名后的真名/id，绝不按名字反查；事件另带 projectId。
+聊天“新增”清单只有同项目且有真实 id 的项可拖：两种既有 MIME `application/x-checkba-file/text/checkba-file-json`
+与 global fallback 都使用 `{fileId,projectId,name,fileType,source:'chat-generated'}`。旧历史缺 id/projectId 不可猜着拖。
+FileTree 沿既有移动 API 处理落点；dragend 清理本来源 fallback，避免下一次拖错。
+验证：`GeneratedFileLocationTest`、`AgentOrchestratorFileChangeTargetTest`、`generated-file-drag.test.mjs`、
+`node frontend/tests/chat-presentation-ui/generated-files.mjs`（隔离 Chromium、真组件和原生拖拽，HTTP 合成，无模型调用）。
+
 ## 关键文件（后端包根 backend/src/main/java/com/checkba/）
 
 **编排核心**
@@ -1009,8 +1031,8 @@ connected / bubble_start / text_delta / **reasoning_delta**（思考型模型的
 
 **事件名与本清单的对拍有测试守着**（`SseEventNameDocContractTest`）：后端发出的每个字面量事件名都必须在这一节里出现——「加了事件、文档没加」不会有任何东西报错，下一个照着文档写客户端的人只会认为那个事件不存在。反向不校验（清单里可以留已经摘掉的旧名，如 wps_stream_data 那条双轨）。
 
-**`file_change` 载荷** `{fileName, changeType: ADDED|MODIFIED, fileId: Long|null}`（`fileId` 是 dev-board#852 新增字段，只加不改，旧客户端不读它）。
-由 `AgentOrchestrator.applyToolSideEffects` 按 `@ToolMeta` 发出：有 `fileArg` 取参数里的文件名、`fileId` 为 null；
+**`file_change` 载荷** `{fileName, changeType: ADDED|MODIFIED, fileId: Long|null, projectId: Long|null}`（`fileId` 是 dev-board#852 新增字段，只加不改，旧客户端不读它）。
+由 `AgentOrchestrator.applyToolSideEffects` 按 `@ToolMeta` 发出：新建白名单先取结构化成功结果的真实 ID（见 #1181）；其他有 `fileArg` 的取参数里的文件名、`fileId` 为 null；
 没有 `fileArg` 的 doc_\*/sheet_\*/slide_\*（`actsOnActiveDocument`，排除 `sheet_create_file`/`doc_start_stream` 这两个新建类）
 用本轮活跃文档（`RunGuard.activeFileId/activeFileName`，名字为空时按 id 查 `ProjectFileService.getFile`）的**真名 + fileId**；
 其余没有 `fileArg` 的工具（pdf_\* / text_\* 一族）参数里有数字型 `fileId` 时按它查回**真名 + 该 id**（`fileByIdArg`），查不到则当作不知道；

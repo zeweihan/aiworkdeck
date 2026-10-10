@@ -283,6 +283,71 @@ class AgentOrchestratorFileChangeTargetTest {
     }
 
     @Test
+    void generatedFileChangeUsesStructuredIdAndActualName() throws Exception {
+        var created = new com.checkba.model.entity.ProjectFile();
+        created.setId(99L); created.setProjectId(1L); created.setName("费用明细表 (1).xlsx");
+        when(projectFileService.findFile(99L)).thenReturn(java.util.Optional.of(created));
+        when(toolRegistry.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult(
+                "{\"status\":\"success\",\"db_id\":99}", tool("fakeSheetCreateFile", "sheet_create_file"), true));
+        run("conv-1181-id", "42", "材料.xlsx", call("sheet_create_file", "{\"fileName\":\"费用明细表.xlsx\"}"), AiMessage.from("完成"));
+        var d = json(eventDataAll("file_change").get(0));
+        assertEquals(99, d.path("fileId").asLong());
+        assertEquals("费用明细表 (1).xlsx", d.path("fileName").asText());
+    }
+
+    @Test
+    void defaultOutputFolderIsCapturedFromValidatedInitialActiveFile() throws Exception {
+        var source = new com.checkba.model.entity.ProjectFile();
+        source.setId(42L); source.setProjectId(1L); source.setParentId(7L);
+        var folder = new com.checkba.model.entity.ProjectFile();
+        folder.setId(7L); folder.setProjectId(1L); folder.setIsFolder(true);
+        when(projectFileService.findFile(42L)).thenReturn(java.util.Optional.of(source));
+        when(projectFileService.findFile(7L)).thenReturn(java.util.Optional.of(folder));
+        var contexts = new ArrayList<com.checkba.service.ai.tools.ToolContext>();
+        when(toolRegistry.execute(any(), any(), any())).thenAnswer(inv -> {
+            contexts.add(inv.getArgument(2));
+            return new ToolRegistry.ToolResult("已创建", tool("fakeSheetCreateFile", "sheet_create_file"), true);
+        });
+        run("conv-1181-folder", "42", "材料.xlsx", call("sheet_create_file", "{}"), AiMessage.from("完成"));
+        var data = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(contexts.get(0));
+        assertEquals(7, data.path("defaultOutputFolderId").asLong(), "创建工具必须接到本轮源目录");
+    }
+
+    @Test
+    void openingReferenceFileDoesNotChangeFrozenOutputFolder() throws Exception {
+        var source = new com.checkba.model.entity.ProjectFile();
+        source.setId(42L); source.setProjectId(1L); source.setParentId(7L);
+        var folder = new com.checkba.model.entity.ProjectFile();
+        folder.setId(7L); folder.setProjectId(1L); folder.setIsFolder(true);
+        when(projectFileService.findFile(42L)).thenReturn(java.util.Optional.of(source));
+        when(projectFileService.findFile(7L)).thenReturn(java.util.Optional.of(folder));
+        var contexts = new ArrayList<com.checkba.service.ai.tools.ToolContext>();
+        when(toolRegistry.execute(any(), any(), any())).thenAnswer(inv -> {
+            contexts.add(inv.getArgument(2));
+            return new ToolRegistry.ToolResult("已完成", null, true);
+        });
+        run("conv-1181-reference", "42", "材料.xlsx", call("doc_open_file", "{\"fileId\":90}"),
+                call("sheet_create_file", "{}"), AiMessage.from("完成"));
+        assertEquals(2, contexts.size());
+        assertTrue(contexts.stream().allMatch(c -> Long.valueOf(7).equals(c.defaultOutputFolderId())));
+    }
+
+    @Test
+    void generatedResultCannotExposeAnotherProjectsFileId() throws Exception {
+        var foreign = new com.checkba.model.entity.ProjectFile();
+        foreign.setId(99L); foreign.setProjectId(2L); foreign.setName("其他项目文件.xlsx");
+        when(projectFileService.findFile(99L)).thenReturn(java.util.Optional.of(foreign));
+        when(projectFileService.getFile(99L)).thenReturn(foreign);
+        when(toolRegistry.execute(any(), any(), any())).thenReturn(new ToolRegistry.ToolResult(
+                "{\"status\":\"success\",\"db_id\":99}", tool("fakeSheetCreateFile", "sheet_create_file"), true));
+        run("conv-1181-foreign", "42", "材料.xlsx", call("sheet_create_file", "{\"fileId\":99}"), AiMessage.from("完成"));
+        var d = json(eventDataAll("file_change").get(0));
+        assertTrue(d.path("fileId").isNull());
+        assertEquals(1, d.path("projectId").asLong());
+        assertNotEquals("其他项目文件.xlsx", d.path("fileName").asText());
+    }
+
+    @Test
     @DisplayName("非活跃文档工具带数字 fileId 参数（pdf_* / text_* 一族）：按 id 查回真名，file_change 带该 id")
     void fileIdArgumentResolvedToRealName() throws Exception {
         com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();

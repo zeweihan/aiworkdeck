@@ -648,12 +648,16 @@
                        <text class="status-btn-label">{{ $t('chat.createdCount', { count: createdFiles.length }) }}</text>
                    </view>
                    <view v-if="showNewPopup && createdFiles.length > 0" class="status-popup up">
-                       <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
+                       <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item"
+                             :draggable="canDragCreatedFile(f, projectId)"
+                             @dragstart="handleCreatedFileDragStart($event, f)" @dragend="handleCreatedFileDragEnd"
+                             @tap.stop="handleOpenFile(f)">
                            <image src="/static/document.png" class="file-icon-mini"/>
                            <text class="file-name-text">{{ fileChangeLabel(f) }}</text>
                        </view>
                    </view>
-                   <view v-if="showNewPopup && createdFiles.length > 0" class="popup-mask-transparent" @tap.stop="showNewPopup = false"></view>
+                   <view v-if="showNewPopup && createdFiles.length > 0" class="popup-mask-transparent"
+                         :style="{ pointerEvents: draggingCreatedFile ? 'none' : '' }" @tap.stop="showNewPopup = false"></view>
                </view>
            </view>
 
@@ -862,6 +866,7 @@ import { createFile, importLocalFile, getProjectFiles, getApiBaseUrl, getAiHisto
 import { audioNeedingTranscription, isTranscribableMedia, transcribedAudioFileIds } from '@/utils/audioAttachment.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
+import { captureDroppedFiles, importDroppedFile } from '@/utils/fileTreeExternalDrop.js'
 import DecisionAssistControl from './DecisionAssistControl.vue'
 import ModelSelectorDropdown from './ModelSelectorDropdown.vue'
 import { createDecisionAssistState, decisionAssistPreferenceKey, decisionAssistUser } from '@/utils/decisionAssistPreference.js'
@@ -875,6 +880,8 @@ import { pendingInboxItems } from '@/composables/agentInboxState.mjs'
 import { saveLastConversation } from '@/utils/lastConversation.js'
 import { isContextEligibleTab } from '@/pages/project-overview/activeTabContext.js'
 import { isCurrentDocSentinel } from '@/utils/chatFileChange.js'
+import { canDragCreatedFile, startCreatedFileDrag, endCreatedFileDrag } from '@/utils/generatedFileDrag.js'
+import { warmDragImage } from '@/utils/dragImage.js'
 import {
   DEFAULT_CONTEXT_LIMITS,
   normalizeContextLimits,
@@ -1782,9 +1789,20 @@ export default {
       return folder ? folder.name : t('chat.rootFolder')
     })
 
+    warmDragImage()
     // --- File Changes Logic ---
     const showModifiedPopup = ref(false)
     const showNewPopup = ref(false)
+    const draggingCreatedFile = ref(false)
+    const handleCreatedFileDragStart = (event, file) => {
+        draggingCreatedFile.value = startCreatedFileDrag(event, file, props.projectId)
+        if (draggingCreatedFile.value) uni.$emit('file-drag-start')
+    }
+    const handleCreatedFileDragEnd = () => {
+        if (draggingCreatedFile.value) uni.$emit('file-drag-end')
+        draggingCreatedFile.value = false
+        endCreatedFileDrag()
+    }
 
     const createdFiles = computed(() => {
         return (fileChanges.value || []).filter(f => f.changeType === 'ADDED')
@@ -3654,16 +3672,17 @@ export default {
       // 字节上传失败的文件名：这些不并入附件，收尾时要点名告诉用户
       const failedUploads = []
       const failedImports = []
+      let dropFailureCode = ''
       let addedCount = 0
 
+      captureDroppedFiles({ files: filesToUpload.map(file => file.fileObject).filter(Boolean) }, host.fs)
       try {
         for (const file of filesToUpload) {
           // 桌面壳：本机文件交给 import-local，由后端从磁盘复制进项目，一步到位（dev-board#1034）。
           // 老路「createFile 建空行再传字节」会在字节失效时留下空白文件（dev-board#409）。
-          const localPath = localPathOf(file.fileObject)
-          if (localPath) {
+          if (host.fs) {
             try {
-              const res = await importLocalFile(projectId, localPath, parentId)
+              const res = await importDroppedFile(file.fileObject, host.fs, path => importLocalFile(projectId, path, parentId))
               const imported = res && res.data
               if (!imported || !imported.id) throw new Error('import-local returned no file')
               addFile({
@@ -3675,8 +3694,8 @@ export default {
               })
               addedCount++
             } catch (importErr) {
-              console.warn('[ChatInterface] import-local failed, not attaching:', importErr)
               failedImports.push(file.name)
+              if (importErr?.dropCode) dropFailureCode = importErr.dropCode
             }
             continue
           }
@@ -3727,7 +3746,7 @@ export default {
 
         if (failedImports.length) {
           uni.showToast({
-            title: t('chat.importContentFailed', { names: failedImports.join('、') }),
+            title: dropFailureCode ? t('fileTree.' + dropFailureCode) : t('chat.importContentFailed', { names: failedImports.join('、') }),
             icon: 'none',
             duration: 3000
           })
@@ -3764,21 +3783,6 @@ export default {
         .map(f => ({ name: f.name, size: f.size, fileObject: f }))
       if (!files.length) return
       await uploadFilesAndAttach(files, null)
-    }
-
-    // File → 本机绝对路径（桌面壳 webUtils，同 FileTree.resolveDroppedFilePath）。
-    // 「+」对话框的 uni.chooseFile 在 H5 下返回的就是 <input type=file> 的原生 File，
-    // 拖入的是 dataTransfer 的 File，两者都拿得到。粘贴的 blob、纯浏览器恒为空串。
-    // preload 在 webUtils 缺席时回落 file.path，而 uni.chooseFile 把 path 定义成 blob: URL，
-    // 所以只认绝对路径。
-    const localPathOf = (fileObject) => {
-      try {
-        if (!fileObject || !host.fs || typeof host.fs.getPathForFile !== 'function') return ''
-        const p = host.fs.getPathForFile(fileObject) || ''
-        return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(p) ? p : ''
-      } catch (e) {
-        return ''
-      }
     }
 
     // Upload file content to storage（纯浏览器与粘贴图片用；URL 一律用数字主键）
@@ -4262,7 +4266,7 @@ export default {
        showNewPopup,
        toggleModifiedPopup,
        toggleNewPopup,
-       handleOpenFile
+       handleOpenFile, canDragCreatedFile, draggingCreatedFile, handleCreatedFileDragStart, handleCreatedFileDragEnd
     }
   }
 }

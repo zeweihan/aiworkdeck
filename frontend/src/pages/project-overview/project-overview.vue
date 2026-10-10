@@ -2302,7 +2302,7 @@ import { flushDirtyEditors } from './flushDirtyEditors.js'
 import { flushActiveDocument } from './flushActiveDocument.js'
 import { isTabVisibleInPane } from './tabVisibility.js'
 import { pickActiveContextTab, isContextEligibleTab } from './activeTabContext.js'
-import { nativeDataTransfer } from '@/utils/fileTreeExternalDrop.js'
+import { nativeDataTransfer, captureDroppedFiles, isExternalFileDrag } from '@/utils/fileTreeExternalDrop.js'
 import { AI_CONTEXT_FOLDER_FILE_LIMIT, countDescendantFiles } from '@/utils/aiContextFiles.js'
 import { saveSensitiveInput } from './sensitiveWorkflow.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
@@ -7018,7 +7018,7 @@ export default {
         //    应用内三种格式都落空才轮到这里。dataTransfer 要从正在派发的原生事件上取
         //    （uni-h5 重建 <view> 事件对象时把 drag 系字段全丢了，utils/fileTreeExternalDrop.js）。
         const dt = nativeDataTransfer(e)
-        const dropped = dt && dt.files ? Array.from(dt.files) : []
+        const dropped = captureDroppedFiles(dt, host.fs)
         if (dropped.length) {
              // 文件夹在 dataTransfer.files 里是一个 0 字节、无类型的条目，照上传会在项目里
              // 建出一份空壳文件。资源管理器有整套目录导入（import-local），这里只收文件。
@@ -7034,7 +7034,7 @@ export default {
              return
         }
 
-        uni.showToast({ title: this.$t('workbench.dragUnsupported'), icon: 'none' })
+        uni.showToast({ title: this.$t(isExternalFileDrag(dt) ? 'fileTree.importDropUnreadable' : 'workbench.dragUnsupported'), icon: 'none' })
     },
     /** 把一份项目文件挂进 AI 上下文（文件树、暂存区、编辑器标签三种来源共用） */
     addDraggedFileToAiContext(file, opts = {}) {

@@ -23,19 +23,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { captureDroppedFiles, isExternalFileDrag, importDroppedFile } from '../../src/utils/fileTreeExternalDrop.js'
 
 const SRC = readFileSync(new URL('../../src/components/FileStagingArea.vue', import.meta.url), 'utf8')
 
-function loadOptions() {
+function loadOptions(host = {}) {
   const body = SRC.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, '')
     .replace(/export default \{/, 'return {')
-  const factory = new Function('ICONS', 'UnlockHint', 'FileTypeIcon', body)
-  return factory({}, {}, {})
+  const factory = new Function('ICONS', 'UnlockHint', 'FileTypeIcon', 'host', 'captureDroppedFiles', 'isExternalFileDrag', body)
+  return factory({}, {}, {}, host, captureDroppedFiles, isExternalFileDrag)
 }
 
-function makeVm() {
-  const options = loadOptions()
+function makeVm(host) {
+  const options = loadOptions(host)
   const vm = Object.assign({}, options.data())
   for (const [k, fn] of Object.entries(options.methods)) vm[k] = fn.bind(vm)
   vm.emitted = []
@@ -120,4 +121,23 @@ test('全局兜底变量路径对普通文件仍然照常工作（回归保护�
   } finally {
     globalThis.document = priorDocument
   }
+})
+
+test('#1182 暂存区 items-only File 在创建暂存目录前同步启动字节读取', async () => {
+  let stillInDrop = true, reads = 0, released = false
+  const fs = {
+    getPathForFile: () => '',
+    stageDroppedFile: async ({ bytes }) => { assert.equal(new Uint8Array(bytes)[0], 97); return { ok: true, path: '/tmp/awd-drop-fixture/a.txt', token: 'token' } },
+    releaseDroppedFile: async () => { released = true },
+  }
+  const vm = makeVm({ fs })
+  const file = { name: 'a.txt', size: 1, arrayBuffer() { assert.equal(stillInDrop, true); reads++; return Promise.resolve(Uint8Array.of(97).buffer) } }
+  vm.onDrop({ dataTransfer: { files: [], items: [{ kind: 'file', getAsFile: () => file }], getData: () => '' } })
+  stillInDrop = false
+  assert.equal(reads, 1)
+  assert.deepEqual(vm.emitted, [{ name: 'drop-files', payload: [file] }])
+  await Promise.resolve() // ensureStagingFolder may await before FileTree sees the File
+  await importDroppedFile(vm.emitted[0].payload[0], fs, async () => ({ id: 1 }))
+  assert.equal(reads, 1)
+  assert.equal(released, true)
 })
