@@ -3052,8 +3052,10 @@ function revisionIndexAtCursor() {
     while (en.hasMoreElements()) {
       const r = en.nextElement();
       try {
-        const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
+        let rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
         if (!rs || !re) { index++; continue; }
+        // UNO may return the redline endpoints in reverse order (r5).
+        if (text.compareRegionStarts(rs, re) < 0) { const tmp = rs; rs = re; re = tmp; }
         // 相交：start 不在 re 之后，且 rs 不在 end 之后（含端点贴合）。
         if (text.compareRegionStarts(start, re) >= 0 && text.compareRegionStarts(rs, end) >= 0) return index;
       } catch (ignored) {}
