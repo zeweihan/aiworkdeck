@@ -224,6 +224,23 @@ function paragraphTextOf(range) {
     return cur.getString();
   } catch (e) { return null; }
 }
+// Keep the rendered list label separate from text: all text offsets remain UTF-16
+// offsets into the unprefixed paragraph. NumberingIsNumber means a label is shown,
+// including bullets; it does not distinguish numeric lists from bullet lists.
+function paragraphNumberingOf(paragraph) {
+  try {
+    const label = paragraph.getPropertyValue('ListLabelString');
+    const listId = paragraph.getPropertyValue('ListId');
+    const level = paragraph.getPropertyValue('NumberingLevel');
+    const hasLabel = paragraph.getPropertyValue('NumberingIsNumber');
+    if (typeof label === 'string' && typeof listId === 'string' && Number.isInteger(level)
+      && (hasLabel == null || typeof hasLabel === 'boolean')) {
+      return { available: true, label: label, listId: listId, level: level, hasLabel: hasLabel == null ? null : hasLabel };
+    }
+  } catch (e) {}
+  // Unavailable properties must never look like a confirmed unnumbered paragraph.
+  return { available: false, label: null, listId: null, level: null, hasLabel: null };
+}
 // ---- 段落索引缓存（dev-board#108 G3）------------------------------------------
 // 每次 get_document_text / get_paragraph 都从头枚举 900+ 段是 O(n)（150 页实测
 // 2-5s/次，AI 逐页读一遍报告 = 每页付一次全扫）。这里一次枚举把每段的 XTextRange
@@ -3870,6 +3887,7 @@ const EXEC = {
       if (text == null) return Object.assign(completionUnavailable('unavailable-context'), { revision: currentReviewRevision() });
       return { success: true, available: text.length <= 15000, revision: currentReviewRevision(),
         paragraphIndex: locator.paraKey, text: text.slice(0, 15000), truncated: text.length > 15000,
+        numbering: paragraphNumberingOf(paraAt(locator.paraKey)),
         offset: locator.start, selectedText: String(vc.getString() || '').slice(0, 15000), hasSelection: !vc.isCollapsed(),
         cursorRectRaw: EXEC.get_cursor_rect(), scope: 'body-paragraphs' };
     } catch (e) { return Object.assign(completionUnavailable('unavailable-context'), { revision: currentReviewRevision() }); }
@@ -4231,7 +4249,7 @@ const EXEC = {
     const idx = Number(p.index) || 0;
     const el = paraAt(idx);
     if (!el) return { success: false, message: 'paragraph index out of range: ' + idx + ' (count ' + getParaIndex().total + ')' };
-    return { success: true, index: idx, text: el.getString() };
+    return { success: true, index: idx, text: el.getString(), numbering: paragraphNumberingOf(el) };
   },
   // [verified-extend] modify the Nth paragraph's text under RecordChanges.
   modify_paragraph(p) {
@@ -5159,7 +5177,7 @@ const EXEC = {
       let chars = 0;
       for (let i = start; i < total && paragraphs.length < maxParas && chars < charBudget; i++) {
         const el = ix.ranges[i];
-        const item = { index: i, text: el.getString() };
+        const item = { index: i, text: el.getString(), numbering: paragraphNumberingOf(el) };
         try {
           const lvl = el.getPropertyValue('OutlineLevel') || 0;
           if (lvl > 0) { item.headingLevel = lvl; item.style = el.getPropertyValue('ParaStyleName') || ''; }
