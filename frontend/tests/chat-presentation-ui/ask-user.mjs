@@ -241,6 +241,40 @@ try {
   await page.click(`${latestCard()} .q-choice-other`)
   assert.equal(await page.$eval(`${latestCard()} .q-submit`, el => el.textContent.trim()), 'Send answer')
 
+  // #1175: the model's nested wrapper used to leak its shell and JSON into
+  // prose, while the question below had no choices. No canonical event here.
+  await page.goto('http://127.0.0.1:5211/?legacy=1')
+  await page.addStyleTag({ content: `${tokens}\nhtml,body,#app {margin:0;height:100%;} *{box-sizing:border-box;} #app{height:100dvh;}` })
+  await wait(() => window.ready)
+  await page.evaluate(() => window.loadFixture('single'))
+  await submitText('请根据材料起草纪要')
+  await wait(() => window.chatState.isStreaming)
+  const legacy = '<ask_user>\n<question>请确认会议日期和地点。</question>\n<options>'
+    + JSON.stringify([{ label: '按现有信息起草', description: '未确认的信息留空' }, { label: '补充信息', description: '我来提供准确内容' }])
+    + '</options>\n</ask_user>'
+  for (let i = 0; i < legacy.length; i += 7) await send('text_delta', { content: legacy.slice(i, i + 7) })
+  await send('bubble_end', { status: 'awaiting_input' })
+  await wait(() => !window.chatState.isStreaming && window.chatState.bubbles.at(-1).question?.options.length === 2)
+  const legacyVisible = await page.$eval('.message-list', el => el.textContent)
+  assert.ok(!legacyVisible.includes('<ask_user>') && !legacyVisible.includes('<options>') && !legacyVisible.includes('"label"'))
+  assert.ok(legacyVisible.includes('未确认的信息留空'))
+  assert.equal(await page.$$eval(card, els => els.length), 1)
+  const legacyPosts = await page.evaluate(() => window.chatPosts.length)
+  await page.click(`${card} .q-choice`)
+  await wait(n => window.chatPosts.length === n + 1, legacyPosts)
+  const legacyAnswer = await lastPost()
+  assert.equal(legacyAnswer.displayText, '按现有信息起草')
+  assert.ok(legacyAnswer.message.includes('Selected:\n- 按现有信息起草'))
+  await page.evaluate(({ legacy, answer }) => window.chat.loadMessages('legacy-history', [
+    { id: 'l1', role: 'USER', content: '请根据材料起草纪要' },
+    { id: 'l2', role: 'ASSISTANT', content: legacy },
+    { id: 'l3', role: 'USER', content: answer, displayContent: '按现有信息起草' },
+  ]), { legacy, answer: legacyAnswer.message })
+  await wait(() => document.querySelector('.q-choice.is-chosen'))
+  assert.equal(await page.$eval('.q-choice.is-chosen .q-choice-label', el => el.textContent.trim()), '按现有信息起草')
+  assert.ok(!(await page.$eval('.message-list', el => el.textContent)).includes('<options>'))
+  await page.screenshot({ path: `${shots}/awd-ask-user-legacy-history.png` })
+
   assert.deepEqual(errors, [], 'page errors: ' + errors.join('\n'))
   console.log('ask-user question card: all checks passed; screenshots in ' + shots)
 } finally {

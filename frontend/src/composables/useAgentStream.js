@@ -11,6 +11,7 @@ import { nextBubbleId } from './bubbleId.js'
 import { documentEditedFromProcesses } from '@/utils/useInDocumentVisibility.js'
 import { isSameFileChange } from '@/utils/chatFileChange.js'
 import { ASK_USER_KIND, decodeAttr, normalizeAskUserEvent } from '@/utils/askUserAnswer.mjs'
+import { createLegacyAskUserMarkup } from './legacyAskUserMarkup.mjs'
 import { isUserQuestionAwaiting } from './awaitingInput.mjs'
 import { applyInboxReceipt, applyInboxSnapshot, applyInputApplied, createInboxState, markInboxEvent, removeInboxItem, replaceInboxItem } from './agentInboxState.mjs'
 
@@ -245,6 +246,7 @@ export function useAgentStream() {
 
     // Parser State (Local to the current stream)
     let parserBuffer = ''
+    let legacyAskUserMarkup = createLegacyAskUserMarkup()
     // 解析器用的时钟（dev-board#1060）：state_recovery 按序重放时临时指向那段事件发生的时刻
     // （已换算成本机时钟），思考卡与工具卡的起止时间、「已思考 N 秒」因此按真实发生时间续算，
     // 而不是全挤在重连那一毫秒。平时恒为 null = Date.now()。
@@ -358,6 +360,7 @@ export function useAgentStream() {
     // --- RESET PARSER STATE ---
     const resetParser = () => {
         parserBuffer = ''
+        legacyAskUserMarkup = createLegacyAskUserMarkup()
         activeTag = null
         activeProcessId = null
         thinkingParentProcessId = null
@@ -1913,7 +1916,7 @@ export function useAgentStream() {
     }
 
     // Flush any remaining content in parserBuffer (called when stream ends)
-    const flushRemainingBuffer = () => {
+    const flushRemainingParserBuffer = () => {
         flushToolCarries(currentAssistantBubble.value)
         if (parserBuffer && parserBuffer.trim()) {
             console.log('[AgentStream] Flushing remaining buffer:', parserBuffer.length, 'chars')
@@ -2432,8 +2435,35 @@ export function useAgentStream() {
         }
     }
 
-    // --- XML STREAM PROCESSOR ---
+    // Legacy model output wraps a normal question in <ask_user>/<options> JSON.
+    // Decode before the general tag parser so nested question tags cannot escape
+    // first and leave their wrapper/options behind in body text (#1175).
+    const consumeLegacyAskUserParts = (parts, history) => {
+        for (const part of parts) {
+            if (part.kind === 'text') processProtocolText(part.text, history)
+            else {
+                flushRemainingParserBuffer()
+                if (part.kind === 'literal' || ![null, 'final', 'process'].includes(activeTag)) flushContent(part.text || part.raw)
+                else {
+                    const bubble = currentAssistantBubble.value
+                    if (!bubble) continue
+                    settleRootThinking(bubble)
+                    bubble.question = normalizeAskUserEvent(part.question)
+                }
+                captureChatTimeline(currentAssistantBubble.value)
+            }
+        }
+    }
     const processTextStream = (text, history = false) => {
+        consumeLegacyAskUserParts(legacyAskUserMarkup.push(text), history)
+    }
+    const flushRemainingBuffer = () => {
+        consumeLegacyAskUserParts(legacyAskUserMarkup.push('', true), !stripFences)
+        flushRemainingParserBuffer()
+    }
+
+    // --- XML STREAM PROCESSOR ---
+    const processProtocolText = (text, history = false) => {
         // FILTER: Detect and strip orphaned JSON content artifacts (e.g. {"content":""} or {"content":"..."})
         // This mitigates the issue where the model echoes the hidden JSON protocol
         if (text.trim().startsWith('{"content":') && text.trim().endsWith('}')) {
@@ -2569,7 +2599,7 @@ export function useAgentStream() {
         for (const [tail, key] of HISTORY_INTERRUPT_TAIL) {
             if (content.endsWith(tail)) { content = content.slice(0, -tail.length); stopNoticeKey = key; break }
         }
-        const saved = { bubble: currentAssistantBubble.value, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, stripFences, fenceOpen: fenceState.open, fencePending: fenceState.pending, handler: clientActionHandler.value }
+        const saved = { bubble: currentAssistantBubble.value, legacyAskUserMarkup, parserBuffer, activeTag, activeProcessId, thinkingParentProcessId, activeToolItem, stripFences, fenceOpen: fenceState.open, fencePending: fenceState.pending, handler: clientActionHandler.value }
         const bubble = createAssistantBubble()
         bubble.planTodos = []
         try {
@@ -2620,6 +2650,7 @@ export function useAgentStream() {
         } finally {
             currentAssistantBubble.value = saved.bubble
             parserBuffer = saved.parserBuffer
+            legacyAskUserMarkup = saved.legacyAskUserMarkup
             activeTag = saved.activeTag
             activeProcessId = saved.activeProcessId
             thinkingParentProcessId = saved.thinkingParentProcessId
