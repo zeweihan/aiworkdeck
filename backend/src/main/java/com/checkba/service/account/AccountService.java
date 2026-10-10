@@ -665,6 +665,66 @@ public class AccountService {
         return fresh;
     }
 
+    // ==================== 试用计量 v0.1.1（权威在官网，本机只缓存 + 展示） ====================
+
+    /** 试用余额保鲜期：同 profile（{@link #BALANCE_TTL_MS}），扣次上报后立即作废。 */
+    private static final long TRIAL_TTL_MS = BALANCE_TTL_MS;
+
+    private volatile Cached<Map<String, Object>> trialCache;
+
+    /**
+     * GET /api/account/trial —— 官网侧试用余额（权威）。代理方式与 {@link #balanceSnapshot()}
+     * 完全一致：Bearer awdk_、同一个 {@link #getJson}、同一套状态码分类。
+     * 字段契约见官网 doc/desktop-contract.md「试用计量」节（本仓 docs/trial-metering-account-contract.md）。
+     */
+    public Map<String, Object> fetchTrialBalance() {
+        return getJson("/api/account/trial", requireKey());
+    }
+
+    /**
+     * POST /api/account/trial/turns —— 上报一次已完成、有可展示结果的 AI 回合。
+     * 是否计次、是否超额全部由官网判定（按 turnId 幂等）；本机只转发、不做任何扣减。
+     */
+    public Map<String, Object> reportTrialTurn(Map<String, Object> turn) {
+        return sendJson("POST", "/api/account/trial/turns", turn);
+    }
+
+    /**
+     * GET /api/trial/balance 的权威数据源，形状对齐 {@link #balanceSnapshot()}：
+     * 未连接 {@code {connected:false}}；官网不可达 {@code {connected:true, available:false}}；
+     * 否则 {@code {connected:true, available:true, trial:{...官网原样...}}}。TTL 缓存按账户指纹隔离。
+     */
+    public synchronized Map<String, Object> trialSnapshot() {
+        if (!isConnected()) {
+            return Map.of("connected", false);
+        }
+        String owner = accountFingerprintOrNull();
+        if (owner == null) owner = "unknown";
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("connected", true);
+        Map<String, Object> trial;
+        Cached<Map<String, Object>> cache = trialCache;
+        if (cache != null && cache.fresh(owner, TRIAL_TTL_MS)) {
+            trial = cache.value();
+        } else {
+            try {
+                trial = fetchTrialBalance();
+            } catch (AccountException e) {
+                result.put("available", false);
+                return result;
+            }
+            trialCache = new Cached<>(trial, System.currentTimeMillis(), owner);
+        }
+        result.put("available", true);
+        result.put("trial", trial);
+        return result;
+    }
+
+    /** 回合上报成功后作废，下一次读余额拿官网新值。 */
+    public void clearTrialCache() {
+        trialCache = null;
+    }
+
     /**
      * 作废余额/等级缓存——机器级缓存装的是账户级内容。三类调用方：
      * 换账户（{@link AccountSwitchCleanup} 的 afterConnect/afterDisconnect）、
@@ -674,6 +734,7 @@ public class AccountService {
     public void clearBalanceCache() {
         profileCache = null;
         membershipSummaryCache = null;
+        trialCache = null;
     }
 
     // ==================== 团队（dev-board#496） ====================
@@ -1007,6 +1068,8 @@ public class AccountService {
     public static String rejectedMessage(String code) {
         return switch (code) {
             case "phone_required" -> LangText.of("当前连接的账户没有绑定手机号，不能创建或加入团队。到官网账户页绑定即可；如果这个手机号已经注册过另一个账户，请断开当前账户，改用手机号验证码重新连接", "The connected account has no phone number bound, so it cannot create or join a team. Bind one on the website account page; if that phone number already belongs to another account, disconnect and reconnect with a phone verification code instead");
+            case "trial_exhausted" -> LangText.of("试用的 AI 调用次数已用完，具体以协议为准", "Your trial AI turns are used up. Subject to the agreement");
+            case "trial_expired" -> LangText.of("试用期已结束，具体以协议为准", "Your trial period has ended. Subject to the agreement");
             case "already_in_team" -> LangText.of("这个账户已经在一个团队里了", "This account already belongs to a team");
             case "already_in_firm" -> LangText.of("这个团队已经在一家律所里了", "This team already belongs to a firm");
             case "bad_code" -> LangText.of("邀请码不存在或已失效", "That invite code does not exist or has expired");

@@ -451,6 +451,8 @@ public class ChatModelFactory {
         // 余额闸排在取 key 之前：本地已经缓存过 key 时 apiKey() 根本不联网，
         // 「没充值就不能用」不能只靠取 key 那一刻的 409（见 PlatformCreditsGate）
         platformCreditsGate.ensureCredits(userId);
+        // 试用计量：标记本轮真的走了云端平台通道（纯本地/BYOK 回合不计次，规格 §1.4）
+        com.checkba.service.trial.TrialTurnScope.markPlatformUse();
         String key = platformAiChannel.apiKey();
         // 请求发出前先把用量基线建起来，否则重启后第一条消息只够建基线、cost 永远留空
         usageAccountant.ensureBaselineAsync(userId);

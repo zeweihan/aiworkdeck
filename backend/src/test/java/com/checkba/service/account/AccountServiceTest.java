@@ -674,6 +674,66 @@ class AccountServiceTest {
         assertTrue(transport.calls.isEmpty());
     }
 
+    // ==================== 试用计量 v0.1.1（权威在账户站） ====================
+
+    @Test
+    @DisplayName("trial：未连接 {connected:false}，一个请求都不发")
+    void trialSnapshotNotConnected() {
+        transport = new StubTransport();
+        assertEquals(false, service().trialSnapshot().get("connected"));
+        assertTrue(transport.calls.isEmpty());
+    }
+
+    @Test
+    @DisplayName("trial：与 /api/account/balance 同一代理——Bearer awdk_ 打 GET /api/account/trial，60 秒内走缓存")
+    void trialSnapshotProxiesAndCaches() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"granted\":true,\"status\":\"active\",\"remainingDays\":12,\"remainingCalls\":70}");
+        Map<String, Object> first = service.trialSnapshot();
+        assertEquals("GET https://www.aiworkdeck.com/api/account/trial", transport.calls.get(transport.calls.size() - 1));
+        assertEquals(KEY, transport.lastBearer);
+        assertEquals(true, first.get("available"));
+        @SuppressWarnings("unchecked") Map<String, Object> trial = (Map<String, Object>) first.get("trial");
+        assertEquals(70, trial.get("remainingCalls"));
+        int calls = transport.calls.size();
+        service.trialSnapshot();
+        assertEquals(calls, transport.calls.size(), "TTL 内不该再出站");
+        service.clearTrialCache();
+        transport.enqueue(200, "{\"granted\":true,\"remainingCalls\":69}");
+        service.trialSnapshot();
+        assertEquals(calls + 1, transport.calls.size());
+    }
+
+    @Test
+    @DisplayName("trial：官网不可达降级 available:false，不抛")
+    void trialSnapshotDegradesOnNetworkFailure() {
+        AccountService service = connected();
+        transport.enqueueNetworkFailure();
+        Map<String, Object> r = service.trialSnapshot();
+        assertEquals(true, r.get("connected"));
+        assertEquals(false, r.get("available"));
+    }
+
+    @Test
+    @DisplayName("trial：回合上报 POST /api/account/trial/turns 原样转发 turnId")
+    void reportTrialTurnPosts() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"counted\":true}");
+        Map<String, Object> r = service.reportTrialTurn(Map.of("turnId", "run-1", "outcome", "completed"));
+        assertEquals("POST https://www.aiworkdeck.com/api/account/trial/turns", transport.calls.get(transport.calls.size() - 1));
+        assertTrue(transport.bodies.get(transport.bodies.size() - 1).contains("run-1"));
+        assertEquals(true, r.get("counted"));
+    }
+
+    @Test
+    @DisplayName("trial：trial_exhausted / trial_expired 机器码有人话，条款只写「以协议为准」")
+    void trialRejectMessages() {
+        assertTrue(AccountService.rejectedMessage("trial_exhausted").contains("以协议为准")
+                || AccountService.rejectedMessage("trial_exhausted").contains("agreement"));
+        assertTrue(AccountService.rejectedMessage("trial_expired").contains("以协议为准")
+                || AccountService.rejectedMessage("trial_expired").contains("agreement"));
+    }
+
     @Test
     @DisplayName("balance：未连接账户返回 {connected:false}，一个请求都不发")
     void balanceSnapshotNotConnected() {

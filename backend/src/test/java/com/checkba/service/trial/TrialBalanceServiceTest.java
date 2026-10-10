@@ -153,4 +153,39 @@ class TrialBalanceServiceTest {
         verify(repo, never()).saveAndFlush(any());
         assertEquals("active", rows.get(7L).getStatus());
     }
+
+    @Test
+    void balance_isMarkedLocalCache_notAuthoritative() {
+        Map<String, Object> b = at(T0).balance(7L);
+        assertEquals(false, b.get("authoritative"));
+        assertEquals("local_cache", b.get("source"));
+    }
+
+    @Test
+    void cacheFromAccount_overwritesRowWithSiteValues() {
+        Map<String, Object> site = new HashMap<>();
+        site.put("granted", true);
+        site.put("trialStartedAt", "2026-10-01T00:00:00Z");
+        site.put("trialEndsAt", "2026-10-15T00:00:00Z");
+        site.put("callsQuota", 80);
+        site.put("callsUsed", 33);
+        site.put("status", "active");
+        site.put("region", "cn");
+        at(T0).cacheFromAccount(7L, site);
+        TrialBalance row = rows.get(7L);
+        assertNotNull(row);
+        assertEquals(33, row.getCallsUsed());
+        assertEquals(Instant.parse("2026-10-15T00:00:00Z"), row.getTrialEndsAt());
+        site.put("callsUsed", 34);
+        at(T0).cacheFromAccount(7L, site);
+        assertEquals(34, rows.get(7L).getCallsUsed());
+        assertEquals(46, at(T0).balance(7L).get("remainingCalls"));
+    }
+
+    @Test
+    void cacheFromAccount_notGranted_writesNothing() {
+        at(T0).cacheFromAccount(7L, Map.of("granted", false));
+        assertTrue(rows.isEmpty());
+        verify(repo, never()).saveAndFlush(any());
+    }
 }

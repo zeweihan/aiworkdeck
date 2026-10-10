@@ -254,6 +254,7 @@
           :wallet-text="walletChipText"
           :wallet-low="walletLow"
           :wallet-tier="walletTierName"
+          :trial-text="trialMenuText"
           :notice-text="accountNoticeText"
           :client-view="isClientView"
           @login="onAccountLogin"
@@ -2295,6 +2296,7 @@
 
 <script>
 import { defineAsyncComponent } from 'vue'
+import { trialBalanceText } from '@/utils/trialBalanceText.js'
 import { flushDirtyEditors } from './flushDirtyEditors.js'
 import { flushActiveDocument } from './flushActiveDocument.js'
 import { isTabVisibleInPane } from './tabVisibility.js'
@@ -2393,6 +2395,7 @@ import {
   getMyProjects, // 最近项目切换器
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
   getLicenseStatus, // 试用版/正式版标识（含 accountConnected 组合口径）
+  getTrialBalance, // 试用余额（试用计量 v0.1.1，权威在账户站）
   getAccountBalance, // Credits 余额 chip（dev-board#187，后端带 TTL 缓存的轻端点）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
   checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
@@ -2616,6 +2619,7 @@ export default {
       // Credits 余额 chip（dev-board#187）。loaded=false 或 connected=false 时不渲染，
       // 绝不显示 0 冒充余额；available=false（官网不可达）时余额位显示「—」。
       wallet: { loaded: false, connected: false, available: true, balanceCents: null, membership: null },
+      trialBalance: null,
 
       // 布局状态
       sidebarWidth: 260, // 侧边栏宽度
@@ -2972,6 +2976,9 @@ export default {
     },
     railScheduleCount() {
       return this.railScheduleSummary.overdue + this.railScheduleSummary.today
+    },
+    trialMenuText() {
+      return trialBalanceText(this.trialBalance, (k, v) => this.$t(k, v))
     },
     walletChipText() {
       // 官网不可达：余额未知，显示「—」而不是 0
@@ -4382,6 +4389,7 @@ export default {
     // 绝不摆一个「¥0.00」冒充余额。
     async loadWalletBalance() {
       if (!isDesktopHost()) return
+      this.loadTrialBalance()
       try {
         const data = await getAccountBalance()
         if (data && data.connected) {
@@ -4398,6 +4406,14 @@ export default {
       } catch (e) {
         // 旧后端没有该端点 / 请求失败：chip 不渲染
         this.wallet = { loaded: false, connected: false, available: true, balanceCents: null, membership: null }
+      }
+    },
+    // 试用余额行：失败 / 未连接一律不渲染，绝不本地编造剩余次数
+    async loadTrialBalance() {
+      try {
+        this.trialBalance = await getTrialBalance()
+      } catch (e) {
+        this.trialBalance = null
       }
     },
     /** 宽限弹窗的主按钮：联网复验那条去账户设置，其余去官网。 */

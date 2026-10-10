@@ -1508,6 +1508,16 @@ export function getAccountBalance() {
   }).then(unwrapEnvelope);
 }
 
+// 试用余额（试用计量 v0.1.1）。权威在账户站，后端代理方式同 /api/account/balance：
+// 未连接 { connected:false }；官网不可达 { connected:true, available:false, stale:true, ...本地缓存 }；
+// 否则 { connected:true, available:true, authoritative:true, status, remainingDays, remainingCalls, ... }。
+export function getTrialBalance() {
+  return request({
+    url: '/api/trial/balance',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
 // 会员等级/成长值全量（官网透传，不缓存）：
 // { growthPoints, topupCents, spendCents,
 //   tier: { key, level, nameZh, nameEn, bonusPermille },

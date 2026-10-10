@@ -146,6 +146,17 @@ public class AgentOrchestrator {
          */
         private volatile boolean documentEdited;
 
+        /** 试用计量：本轮是否调用过云端平台通道（{@link com.checkba.service.trial.TrialTurnScope}）。 */
+        final java.util.concurrent.atomic.AtomicBoolean platformUsed =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        /** 试用计量：本轮是否已向用户交付过非空助手正文（「可展示结果」，规格 §2）。 */
+        private volatile boolean producedText;
+        /** 试用计量：发起本轮的本机用户（只用于写本地缓存行）。 */
+        volatile Long userId;
+        /** 试用计量：同一轮只上报一次（bubble_end 可能从多处发出）。 */
+        final java.util.concurrent.atomic.AtomicBoolean trialReported =
+                new java.util.concurrent.atomic.AtomicBoolean();
+
         RunGuard(String conversationId, String runId, long connectionEpoch) {
             this.conversationId = conversationId;
             this.runId = runId;
@@ -155,6 +166,7 @@ public class AgentOrchestrator {
         /** 流式 token 与恢复快照跨线程（HTTP 流线程写、SSE /connect 线程读），必须同步。 */
         void appendStream(String token) {
             if (token == null || token.isEmpty()) return;
+            if (!token.isBlank()) producedText = true;
             trace.recordText(token);
             synchronized (streamContent) {
                 appendBoundedTail(streamContent, token, STREAM_RECOVERY_LIMIT,
@@ -552,6 +564,32 @@ public class AgentOrchestrator {
     private void sendRunEvent(RunGuard guard, String eventName, Object payload) {
         if (!isCurrentRun(guard)) return;
         sseEmitterService.send(guard.conversationId, eventName, payload);
+        if ("bubble_end".equals(eventName)) meterTrialTurn(guard, payload);
+    }
+
+    /**
+     * 试用计量 v0.1.1：成功收尾的 bubble_end 交给 {@link com.checkba.service.trial.TrialTurnMeter}
+     * 判定是否上报账户站。本机不扣减、不拦截；error / cancelled 事件根本不走到这里（不计次）。
+     */
+    private void meterTrialTurn(RunGuard guard, Object payload) {
+        com.checkba.service.trial.TrialTurnMeter meter = this.trialTurnMeter;
+        if (meter == null || guard == null || !(payload instanceof String json)) return;
+        String status = bubbleEndStatus(json);
+        if (!com.checkba.service.trial.TrialTurnMeter.COMPLETED_STATUSES.contains(status)) return;
+        if (!guard.trialReported.compareAndSet(false, true)) return;
+        try {
+            meter.onTurnEnded(guard.runId, guard.userId, status, guard.producedText, guard.platformUsed.get());
+        } catch (RuntimeException e) {
+            log.warn("Trial metering hook failed for run {}", guard.runId, e);
+        }
+    }
+
+    /** bubbleEndPayload 的 status 字面量（固定以 {"status":" 开头）。 */
+    static String bubbleEndStatus(String json) {
+        String prefix = "{\"status\":\"";
+        if (json == null || !json.startsWith(prefix)) return null;
+        int end = json.indexOf('"', prefix.length());
+        return end < 0 ? null : json.substring(prefix.length(), end);
     }
 
     /**
@@ -1240,6 +1278,14 @@ public class AgentOrchestrator {
      */
     private volatile ToolDisclosurePolicy toolDisclosurePolicy;
 
+    /** 试用计量回合上报（v0.1.1）。为空（单元测试直接 new）= 不上报。走 setter 同上。 */
+    private volatile com.checkba.service.trial.TrialTurnMeter trialTurnMeter;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTrialTurnMeter(com.checkba.service.trial.TrialTurnMeter trialTurnMeter) {
+        this.trialTurnMeter = trialTurnMeter;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setToolDisclosurePolicy(ToolDisclosurePolicy toolDisclosurePolicy) {
         this.toolDisclosurePolicy = toolDisclosurePolicy;
@@ -1320,9 +1366,11 @@ public class AgentOrchestrator {
         // 界面语言同理要建在**执行线程**上：HTTP 线程上 AppLanguageRequestFilter 建的作用域
         // 不跟着池线程走，而 system prompt 选中英文版正是在这条循环里做的（ContextAssembler）。
         // 缺省（桌面端不上送）时 AppLanguageScope 不覆盖任何东西，照旧读全局 app.language。
+        guard.userId = userId;
         Runnable turn = () -> com.checkba.service.AppLanguageScope.run(request.getAppLanguage(),
                 () -> PlatformAiUserScope.run(userId,
-                        () -> handleUserMessageInScope(request, userId, guard)));
+                        () -> com.checkba.service.trial.TrialTurnScope.run(guard.platformUsed,
+                                () -> handleUserMessageInScope(request, userId, guard))));
         java.util.concurrent.Executor executor = this.turnExecutor;
         if (executor == null) {
             turn.run();
