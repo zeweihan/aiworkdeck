@@ -684,7 +684,7 @@ import { groupByParent, buildTreeFromGroups } from '@/utils/fileTreeBuild.js'
 import { evidenceRefCounts } from '@/services/api.js'
 import { createRefCountsFetcher } from '@/utils/fileTreeRefCounts.js'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
-import { nativeDataTransfer, isExternalFileDrag, claimExternalDrop } from '@/utils/fileTreeExternalDrop.js'
+import { nativeDataTransfer, isExternalFileDrag, claimExternalDrop, captureDroppedFiles, importDroppedFile } from '@/utils/fileTreeExternalDrop.js'
 import { isTranscribableMedia as isTranscribableMediaItem } from '@/utils/audioAttachment.js'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -3054,34 +3054,21 @@ export default {
       this.rootDropActive = false
       this.dragOverIndex = -1
     },
-    // 落点确定之后统一走这里（dev-board#513）。资源管理器只剩「导入本机路径」一条通道：
-    // 取 dataTransfer.files 里的**顶层条目**（每条可能是文件，也可能是目录），逐个解析出
-    // 本机绝对路径交给 import-local，让后端把它复制进项目目录，目录由后端递归建行。
-    // 不再用 webkitGetAsEntry 在前端展开目录——那是给 HTTP 分片上传通道准备的，
-    // 那条通道连同上传对话框、上传队列一起撤了（工作台是桌面端专属，H5 部署已于
-    // 2026-08-19 下线）。桌面端的项目本来就是本机的一个文件夹，「拖入 = 复制进来」
-    // 正是用户的心理模型；而老的上传路会先建一份空白模板行、再把已经失效的临时 blob
-    // 传上去（Chromium ERR_UPLOAD_FILE_CHANGED，用户目录里留下 5KB 空白 docx，
-    // dev-board#409）。
+    // 落点确定后统一 import-local（#513/#1182）。稳定路径直接由后端复制；
+    // 无路径 File 同步启动字节快照，再由桌面暂存，复制完成后释放临时 token。
+    // 不恢复 createFile + HTTP 上传旧链，避免临时源失效后遗留空白模板（#409）。
     async importExternalDrop(dt, targetParentId) {
       const native = typeof window !== 'undefined' ? window.event : null
       if (!claimExternalDrop(native)) return
       this.resetExternalDrag()
-      // files 必须在 drop 的同步阶段取——处理器一返回，dataTransfer 就作废了
-      const fileList = dt && dt.files ? Array.from(dt.files) : []
-      if (!fileList.length) return
+      // files/items 与无路径 File 的字节读取必须在 drop 同步阶段开始。
+      const fileList = captureDroppedFiles(dt, host.fs)
+      if (!fileList.length) {
+        uni.showToast({ title: this.$t('fileTree.importDropUnreadable'), icon: 'none' })
+        return
+      }
       if (targetParentId != null && this.showTree) this.expandedFolders.add(targetParentId)
       await this.importDroppedLocalFiles(fileList, targetParentId)
-    },
-    // File → 本机绝对路径。只有桌面壳给得出（Electron 32 起 File.path 没了，走 webUtils），
-    // 浏览器端 host.fs 整个缺席，恒返回空串 = 这次拖入没有可导入的东西。
-    resolveDroppedFilePath(fileObject) {
-      try {
-        if (!fileObject || !host.fs || typeof host.fs.getPathForFile !== 'function') return ''
-        return host.fs.getPathForFile(fileObject) || ''
-      } catch (e) {
-        return ''
-      }
     },
     // 顶层条目逐个调 import-local。暂存区（stagingArea.js#onStagingDropFiles）也直接调它。
     // 不做乐观插行：这条路径没有「传输中」这个阶段，后端返回时字节已经在项目目录里，
@@ -3090,31 +3077,25 @@ export default {
       const items = Array.from(fileList || [])
       if (!items.length) return
       const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-      const entries = []
-      let unresolved = 0
-      for (const fileObject of items) {
-        const path = this.resolveDroppedFilePath(fileObject)
-        if (path) entries.push({ name: (fileObject && fileObject.name) || '', path })
-        else unresolved++
-      }
-      // 解析不出本机路径 = 不在桌面壳里跑（工作台只有桌面端），这条路走不通，一次 drop 只说一遍
-      if (unresolved > 0) {
-        uni.showToast({ title: this.$t('fileTree.importDesktopOnly'), icon: 'none' })
-      }
-      if (!entries.length) return
-
+      // Start all transient byte reads before the first import request.
+      captureDroppedFiles({ files: items }, host.fs)
       let successCount = 0
       let failCount = 0
       let lastError = ''
-      for (const entry of entries) {
+      let sourceFailCount = 0
+      for (const file of items) {
         try {
-          await importLocalFile(projectId, entry.path, targetParentId)
+          await importDroppedFile(file, host.fs, path => importLocalFile(projectId, path, targetParentId))
           successCount++
         } catch (e) {
           failCount++
-          lastError = (e && e.message) || ''
-          console.error('导入本机文件失败:', entry.name, e)
+          if (e && e.dropCode) sourceFailCount++
+          lastError = e && e.dropCode ? this.$t('fileTree.' + e.dropCode) : ((e && e.message) || '')
         }
+      }
+      if (sourceFailCount === items.length) {
+        uni.showToast({ title: lastError, icon: 'none' })
+        return
       }
       await this.loadFiles()
       if (failCount === 0) {

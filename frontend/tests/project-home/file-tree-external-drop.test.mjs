@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs'
 import {
   nativeDataTransfer,
   isExternalFileDrag,
-  claimExternalDrop,
+  claimExternalDrop, captureDroppedFiles, importDroppedFile,
 } from '../../src/utils/fileTreeExternalDrop.js'
 
 const SRC = readFileSync(new URL('../../src/components/FileTree.vue', import.meta.url), 'utf8')
@@ -38,7 +38,7 @@ const IMPORT_NAMES = [
   'warmDragImage', 'applyDragImage', 'FileTypeIcon', 'TagChip', 'TagSelector',
   'TagManager', 'AwdDatePicker', 'ICONS', 'getProjectTags', 'addTagToFile', 'removeTagFromFile',
   'createTag', 'createTask', 'importLocalFile',
-  'nativeDataTransfer', 'isExternalFileDrag', 'claimExternalDrop',
+  'nativeDataTransfer', 'isExternalFileDrag', 'claimExternalDrop', 'captureDroppedFiles', 'importDroppedFile',
 ]
 
 function loadOptions(stubs) {
@@ -52,13 +52,13 @@ function loadOptions(stubs) {
 
 // desktopPaths: File 对象 → 本机绝对路径的映射（桌面壳 host.fs.getPathForFile 的桩）。
 // 不传 = 浏览器态，host.fs 整个缺席，一条都导不进去。
-function makeVm({ moveFile, createFolder, desktopPaths, importLocalFails } = {}) {
+function makeVm({ moveFile, createFolder, desktopPaths, desktopFs, importLocalFails } = {}) {
   const calls = { moveFile: [], importLocal: [], loadFiles: 0, emits: [], toasts: [] }
   const stubs = {
     moveFile: async (...a) => { calls.moveFile.push(a); return { parentId: a[2] } },
     createFolder: createFolder || (async () => ({ id: 999 })),
     ICONS: {},
-    host: desktopPaths
+    host: desktopFs ? { fs: desktopFs } : desktopPaths
       ? { fs: { getPathForFile: (f) => desktopPaths.get(f) || '' } }
       : {},
     importLocalFile: async (...a) => {
@@ -66,7 +66,7 @@ function makeVm({ moveFile, createFolder, desktopPaths, importLocalFails } = {})
       if (importLocalFails) throw new Error('boom')
       return { id: 100 + calls.importLocal.length }
     },
-    nativeDataTransfer, isExternalFileDrag, claimExternalDrop,
+    nativeDataTransfer, isExternalFileDrag, claimExternalDrop, captureDroppedFiles, importDroppedFile,
   }
   if (moveFile) stubs.moveFile = moveFile
   const options = loadOptions(stubs)
@@ -261,7 +261,7 @@ test('非桌面端（解析不出本机路径）：只提示「仅桌面端支�
     await vm2.handleDrop(
       wrappedEvent({ dataTransfer: osDataTransfer([osFile('b.pdf'), osFile('c.pdf')]) }), 0)
     assert.deepEqual(vm2.calls.importLocal, [])
-    assert.deepEqual(vm2.calls.toasts, ['fileTree.importDesktopOnly'], '一次 drop 只提示一次')
+    assert.deepEqual(vm2.calls.toasts, ['fileTree.importDropUnreadable'], '一次 drop 只提示一次')
   } finally { restore() }
 })
 
@@ -368,5 +368,55 @@ test('generated files only move within the payload project, including global fal
       assert.equal(vm.calls.moveFile.length, projectId === 42 ? 1 : 0)
       if (projectId === 42) assert.equal(vm.calls.moveFile[0][1], 123)
     }
+  } finally { restore() }
+})
+
+test('#1182 items-only 文件拖放也进入 import-local', async () => {
+  const restore = installGlobals()
+  try {
+    const file = osFile('items.txt')
+    const vm = makeVm({ desktopPaths: new Map([[file, '/tmp/awd-drop-fixture/items.txt']]) })
+    await vm.onRootDrop(wrappedEvent({ dataTransfer: { files: [], types: [], items: [
+      { kind: 'file', getAsFile: () => file },
+    ], getData: () => '' } }))
+    assert.deepEqual(vm.calls.importLocal, [[42, '/tmp/awd-drop-fixture/items.txt', null]])
+  } finally { restore() }
+})
+
+test('#1182 只有 file URL 的拖放明确提示，不能把字符串当本机文件授权', async () => {
+  const restore = installGlobals()
+  try {
+    const vm = makeVm({ desktopPaths: new Map() })
+    await vm.onTreeDrop(wrappedEvent({ dataTransfer: { files: [], types: ['text/uri-list'], items: [],
+      getData: type => type === 'text/uri-list' ? 'file:///tmp/awd-drop-fixture/example.txt' : '' } }))
+    assert.deepEqual(vm.calls.importLocal, [])
+    assert.deepEqual(vm.calls.toasts, ['fileTree.importDropUnreadable'])
+  } finally { restore() }
+})
+
+test('#1182 桌面无路径且不可读的 File 不能误报为非桌面', async () => {
+  const restore = installGlobals()
+  try {
+    const vm = makeVm({ desktopPaths: new Map() })
+    await vm.onRootDrop(wrappedEvent({ dataTransfer: osDataTransfer([osFile('missing.txt')]) }))
+    assert.deepEqual(vm.calls.importLocal, [])
+    assert.deepEqual(vm.calls.toasts, ['fileTree.importDropUnreadable'])
+  } finally { restore() }
+})
+
+test('#1182 无本机路径的 File 先按字节暂存，再原子导入并释放token', async () => {
+  const restore = installGlobals()
+  try {
+    const calls = [], file = new File(['full original bytes'], 'source.txt')
+    const vm = makeVm({ desktopFs: {
+      getPathForFile: () => '',
+      stageDroppedFile: async item => { calls.push(['stage', await new Blob([item.bytes]).text()]); return { ok: true, path: '/tmp/awd-drop-fixture/source.txt', token: 'fixture-token' } },
+      releaseDroppedFile: async token => { calls.push(['release', token]); return { ok: true } },
+    } })
+    await vm.onRootDrop(wrappedEvent({ dataTransfer: osDataTransfer([file]) }))
+    assert.deepEqual(calls, [['stage', 'full original bytes'], ['release', 'fixture-token']])
+    assert.deepEqual(vm.calls.importLocal, [[42, '/tmp/awd-drop-fixture/source.txt', null]])
+    assert.deepEqual(vm.calls.toasts, ['fileTree.importSuccessCount'])
+    assert.equal(vm.calls.loadFiles, 1)
   } finally { restore() }
 })

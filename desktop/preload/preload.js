@@ -211,6 +211,8 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
       ipcRenderer.on('checkba:download-done', listener)
       return () => ipcRenderer.removeListener('checkba:download-done', listener)
     },
+    stageDroppedFile: (file) => ipcRenderer.invoke('fs:stageDroppedFile', file),
+    releaseDroppedFile: (token) => ipcRenderer.invoke('fs:releaseDroppedFile', token),
     // 拖放的 File 对象 → 绝对路径（Electron 32 起 File.path 移除，webUtils 是正途）
     getPathForFile: (file) => {
       try {

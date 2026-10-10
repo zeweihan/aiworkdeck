@@ -14,6 +14,7 @@ const { execFile, spawn } = require('child_process');
  */
 function initLocalFileService() {
     console.log('[LocalFileService] Initializing...');
+    require('./dropped-files').initDroppedFileService(ipcMain);
 
     // Handler: Open File Dialog（仅弹系统选择框，安全）
     ipcMain.handle('fs:showOpenDialog', async (event, options) => {

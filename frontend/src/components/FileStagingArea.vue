@@ -114,6 +114,8 @@ import { ICONS } from '@/config/icons.js'
 import { warmDragImage, applyDragImage } from '@/utils/dragImage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
+import { host } from '@/services/host.js'
+import { captureDroppedFiles, isExternalFileDrag } from '@/utils/fileTreeExternalDrop.js'
 export default {
   name: 'FileStagingArea',
   components: { UnlockHint, FileTypeIcon },
@@ -356,9 +358,11 @@ export default {
       const nativeDt = (e && e.dataTransfer)
         || (typeof window !== 'undefined' && window.event && window.event.dataTransfer)
         || null
-      const osFiles = nativeDt && nativeDt.files
-      if (osFiles && osFiles.length > 0) {
-          this.$emit('drop-files', Array.from(osFiles))
+      const osFiles = captureDroppedFiles(nativeDt, host.fs)
+      if (osFiles.length > 0) {
+          this.$emit('drop-files', osFiles)
+      } else if (isExternalFileDrag(nativeDt)) {
+          uni.showToast({ title: this.$t('fileTree.importDropUnreadable'), icon: 'none' })
       }
     },
     
