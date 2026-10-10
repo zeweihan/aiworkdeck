@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 北京京微资易科技有限公司 and AI WorkDeck contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# 证据闭环报告（#1076）：AI 依据项目材料写报告/备忘录时，每条有依据的结论都用 doc_link_evidence
+# 挂回原文（supports / partial），缺证据的结论只在正文里写明缺什么、不挂链接。
+#
+# 为什么是 passthrough：写报告要用到的编辑面因会话而异（新建 write_docx、续写已开文档、插表、
+# 改格式……），收窄白名单必然漏掉某一类，表现就是「命中之后 AI 不会改文档了」（dev-board#799）。
+# 本 skill 只注入工作流，并靠 allowed_tools 把 evidence 类目在渐进披露下预先放回
+# （ToolDisclosurePolicy.categoriesCoveredBy），不裁剪任何工具。
+# 触发词刻意不用单字「报告」「核查」：它们与合同审查 / 法律意见书审查等 restrict skill 同句出现时，
+# passthrough 会让整轮放弃裁剪（SKILL_SPEC：收窄必须全体同意）。
+id: evidence-linked-report
+name: 证据闭环报告
+name_en: Evidence-Linked Report
+description: 依据项目材料撰写报告或备忘录时，逐条把有依据的结论链接回原文出处（可一键跳转高亮）；找不到证据的结论在正文中写明缺少什么材料，不挂链接、不写成定论。
+
+author: AI Workdeck
+author_url: https://www.aiworkdeck.com
+version: 1.0.0
+license: AGPL-3.0-or-later
+
+category: 尽职调查
+
+languages:
+  - zh-CN
+  - en-US
+
+triggers:
+  - 证据闭环
+  - 尽调报告
+  - 尽职调查报告
+  - 风险报告
+  - 法律备忘录
+  - 备忘录
+  - 附出处
+  - 标注出处
+  - 证据链接
+
+triggers_en:
+  - due diligence report
+  - legal memo
+  - memorandum
+  - evidence-linked
+  - cite the source
+
+prompt: prompt.md
+
+tool_policy: passthrough
+allowed_tools:
+  - write_docx
+  - doc_open_file
+  - doc_get_document_text
+  - doc_find_text
+  # doc_* / office_* 两族同时列出：ClientCapabilityService 按客户端只放行一族
+  - office_get_text
+  - office_search
+  - doc_link_evidence
+  - doc_list_evidence
+  - extract_file_text
+  - search_project_content
+  - search_project_files
+  - doc_list_project_files

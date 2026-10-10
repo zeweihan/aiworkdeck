@@ -31,6 +31,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -236,6 +237,8 @@ class BuiltinSkillsTest {
                 "tencent-meeting", SkillDefinition.ToolPolicy.RESTRICT,
                 "desensitize", SkillDefinition.ToolPolicy.PASSTHROUGH,
                 "text-to-speech", SkillDefinition.ToolPolicy.PASSTHROUGH));
+        // Map.of 最多 10 对，第 11 个起逐个 put
+        expected.put("evidence-linked-report", SkillDefinition.ToolPolicy.PASSTHROUGH);
         Map<String, SkillDefinition.ToolPolicy> actual = new TreeMap<>();
         for (SkillDefinition skill : registry.getSkills()) {
             actual.put(skill.getId(), skill.getToolPolicy());
@@ -456,6 +459,29 @@ class BuiltinSkillsTest {
             boolean expected = registry.isEnabled(skill.getId());
             assertEquals(expected, registry.isAvailable(skill),
                     "zh-CN 下 " + skill.getId() + " 的可用性不应被语言过滤改变");
+        }
+    }
+
+    @Test
+    @DisplayName("#1076 证据闭环报告：passthrough 不裁工具；白名单放回 evidence 类目；正文缺证不挂链接")
+    void evidenceLinkedReportSkillIsWiredUp() {
+        SkillDefinition s = registry.getSkill("evidence-linked-report").orElse(null);
+        assertNotNull(s, "evidence-linked-report 未注册");
+        assertEquals(SkillDefinition.ToolPolicy.PASSTHROUGH, s.getToolPolicy());
+        assertTrue(s.getAllowedTools().containsAll(List.of("doc_link_evidence", "doc_list_evidence", "write_docx", "doc_open_file")));
+        assertTrue(new ToolDisclosurePolicy(true).categoriesCoveredBy(s.getAllowedTools()).contains("evidence"),
+                "渐进披露下必须把 evidence 类目预先放回，否则模型看不见 doc_link_evidence");
+        String zh = s.getPromptTemplate();
+        String en = s.getPromptTemplateEn();
+        for (String must : List.of("doc_link_evidence", "supports", "partial", "doc_list_evidence", "不挂链接", "以协议为准")) {
+            assertTrue(zh.contains(must), "zh prompt 缺: " + must);
+        }
+        for (String must : List.of("doc_link_evidence", "supports", "partial", "doc_list_evidence", "no link", "subject to the agreement")) {
+            assertTrue(en.contains(must), "en prompt 缺: " + must);
+        }
+        // 触发词不得用会与 restrict 审查类 skill 同句高频共现的单字词（passthrough 会让整轮放弃裁剪）
+        for (String banned : List.of("报告", "核查", "审查", "证据")) {
+            assertFalse(s.getTriggers().contains(banned), "触发词过宽: " + banned);
         }
     }
 }
