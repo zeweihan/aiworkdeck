@@ -930,6 +930,8 @@ export default {
     async applyViewPrefs() {
       const r = await this.call('set_view_options', {
         formattingMarks: !!this.viewPrefs.formattingMarks, ruler: !!this.viewPrefs.ruler,
+        // Writer 开格式标记时会把文本边界画成整页矩形；只隐藏辅助线，保留 ¶ 和标尺偏好。
+        textBoundaries: false,
       })
       if (r && r.success) await this.refresh()
       return r
