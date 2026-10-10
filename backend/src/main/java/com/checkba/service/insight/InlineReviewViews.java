@@ -10,7 +10,10 @@ import java.util.Map;
 public final class InlineReviewViews {
     private InlineReviewViews() {}
 
-    public record ParagraphInput(int index, String text) {}
+    public record ParagraphInput(int index, String text,
+                                 com.checkba.service.ai.review.ContractStructureAudit.Numbering numbering) {
+        public ParagraphInput(int index, String text) { this(index, text, null); }
+    }
 
     public record ReviewResult(List<Fact> findings, Map<String, Object> summary,
                                boolean truncated, String scope, boolean deep) {}

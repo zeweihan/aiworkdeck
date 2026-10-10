@@ -236,7 +236,7 @@ public class DocInsightService {
         requireDoc(projectId, docFileId);
         List<ParagraphInput> safe = inputs == null ? List.of() : inputs.stream()
                 .filter(java.util.Objects::nonNull)
-                .map(p -> new ParagraphInput(p.index(), p.text() == null ? "" : p.text()))
+                .map(p -> new ParagraphInput(p.index(), p.text() == null ? "" : p.text(), p.numbering()))
                 .toList();
         if (safe.size() > 10_000) throw new IllegalArgumentException("too many paragraphs");
         Set<Integer> indexes = new HashSet<>();
@@ -251,7 +251,7 @@ public class DocInsightService {
 
         List<Fact> out = new ArrayList<>();
         ContractStructureAudit.Report report = ContractStructureAudit.run(
-                safe.stream().map(p -> new ContractStructureAudit.Paragraph(p.index(), p.text())).toList(),
+                safe.stream().map(p -> new ContractStructureAudit.Paragraph(p.index(), p.text(), p.numbering())).toList(),
                 List.of(), null);
         addAudit(out, "SCRIPT_OUTLIER", "warn", LangText.of("字形不一致", "Inconsistent script"), report.scriptOutliers, safe);
         addAudit(out, "NUMBERING", "warn", LangText.of("编号异常", "Numbering issue"), report.numbering, safe);
@@ -286,6 +286,8 @@ public class DocInsightService {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("findingCount", out.size());
         summary.put("paragraphCount", safe.size());
+        summary.put("numberingKnownParagraphs", report.numberingKnownParagraphs);
+        summary.put("numberingUnknownParagraphs", report.numberingUnknownParagraphs);
         summary.put("dominantScript", report.dominantScript);
         summary.put("currencies", report.currencies);
         summary.put("deepComplete", deepComplete);

@@ -62,6 +62,18 @@ class DocumentAuditToolsTest {
     }
 
     @Test
+    void nativeNumberingFromWorkerReachesAuditWithoutBeingPrefixedIntoBody() {
+        EditorBridgeService bridge = Mockito.mock(EditorBridgeService.class);
+        when(bridge.executeEditorCommand(eq("get_document_text"), any())).thenReturn("""
+                {"success":true,"paragraphs":[{"index":0,"text":"2. 工作计划","numbering":
+                {"available":true,"label":"2.","listId":"list-a","level":0,"hasLabel":true}}]}
+                """);
+        when(bridge.executeEditorCommand(eq("list_revisions"), any())).thenReturn("{\"revisions\":[]}");
+        String report = new DocumentAuditTools(bridge).doc_audit_structure();
+        assertTrue(report.contains("自动编号与手写编号重复"), report);
+    }
+
+    @Test
     @DisplayName("编辑器桥返回 {\"error\"} 时原样转成 Error，不去读修订")
     void bridgeErrorIsSurfaced() {
         EditorBridgeService bridge = Mockito.mock(EditorBridgeService.class);

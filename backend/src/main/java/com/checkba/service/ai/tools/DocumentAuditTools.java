@@ -78,7 +78,7 @@ public class DocumentAuditTools implements AgentToolComponent {
             }
             int before = paragraphs.size();
             for (JsonNode p : arr) {
-                paragraphs.add(new Paragraph(p.path("index").asInt(paragraphs.size()), p.path("text").asText("")));
+                paragraphs.add(new Paragraph(p.path("index").asInt(paragraphs.size()), p.path("text").asText(""), numbering(p.get("numbering"))));
             }
             if (!node.path("truncated").asBoolean(false) || paragraphs.size() == before) {
                 break;
@@ -108,6 +108,12 @@ public class DocumentAuditTools implements AgentToolComponent {
         }
 
         return ContractStructureAudit.run(paragraphs, revisions, revisionNote).render();
+    }
+
+    private static ContractStructureAudit.Numbering numbering(JsonNode node) {
+        if (node == null || !node.isObject()) return null;
+        try { return MAPPER.treeToValue(node, ContractStructureAudit.Numbering.class); }
+        catch (Exception invalid) { return null; }
     }
 
     private static JsonNode parse(String raw) {

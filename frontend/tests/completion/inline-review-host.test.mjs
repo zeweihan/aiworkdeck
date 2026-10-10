@@ -380,3 +380,38 @@ test('面板上的重新检查与深入审校走同一条宿主接口', async (t
   await f.host.runDeep()
   assert.equal(f.calls.at(-1).body.deep, true)
 })
+
+
+test('native numbering survives snapshot and numbering-only edits invalidate rule results', async t => {
+  const f = fixture(t)
+  f.host.setAiEnabled(false)
+  let revision = 1
+  let numbering = { available: true, label: '1.', listId: 'list-a', level: 0, hasLabel: true }
+  f.dependencies.execute = async action => action === 'get_review_context'
+    ? { success: true, revision }
+    : { success: true, revision, paragraphs: [{ index: 0, text: '1. 工作计划', numbering }] }
+  f.host.start(); await f.tick()
+  assert.deepEqual(f.calls[0].body.paragraphs[0].numbering, numbering)
+  assert.equal(f.calls[0].body.paragraphs[0].text, '1. 工作计划')
+  numbering = { ...numbering, label: '2.' }; revision++; f.host.modified(); await f.tick()
+  assert.equal(f.calls.length, 2, 'same body with changed native label must be checked again')
+  numbering = { ...numbering, listId: 'list-b' }; revision++; f.host.modified(); await f.tick()
+  assert.equal(f.calls.length, 3, 'list identity is part of structural state')
+  numbering = { ...numbering, available: false }; revision++; f.host.modified(); await f.tick()
+  assert.equal(f.calls.length, 4, 'unknown metadata cannot reuse an earlier complete review')
+  assert.ok(f.calls.every(c => c.body.deep === false))
+})
+
+test('numbering-only changes refresh free rules without repeating completed automatic AI', async t => {
+  const f = fixture(t)
+  let revision = 1
+  let numbering = { available: true, label: '1.', listId: 'list-a', level: 0, hasLabel: true }
+  f.dependencies.execute = async action => action === 'get_review_context'
+    ? { success: true, revision }
+    : { success: true, revision, paragraphs: [{ index: 0, text: '工作计划', numbering }] }
+  f.host.start(); await f.tick(); await f.tick()
+  assert.deepEqual(f.calls.map(c => c.body.deep), [false, true])
+  numbering = { ...numbering, label: '2.' }; revision++; f.host.modified(); await f.tick()
+  assert.deepEqual(f.calls.map(c => c.body.deep), [false, true, false])
+  assert.equal(f.tasks.size, 0, 'native-only edits are absent from the model input and need no paid recheck')
+})
