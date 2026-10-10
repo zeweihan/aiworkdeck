@@ -27,8 +27,18 @@
 <strong>我们希望把它建设成专业 AI 的共同基础：</strong>从要求严格的法律场景切入，将底层文档能力做成可复用的接口，让不同领域的开发者能够在其上继续创造。
 
 <p align="center">
-  <img src=".github/assets/workdeck-redline.png" alt="合同中的 AI 署名修订，右侧可逐项接受或拒绝修改" width="1000">
-  <br><sub>早期版本的真实产品截图，使用虚构演示材料；界面细节随版本更新。</sub>
+  <img src="docs/images/marketing/01-workspace.png" alt="同一工作台中的项目文件、文档编辑器与 AI 对话" width="1000">
+  <br><sub>工作台 — 项目文件、文档与 AI 同屏。演示材料为虚构内容。</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/marketing/02-revision-toolbar.png" alt="合同中的修订标记，工具栏可接受或拒绝修改" width="1000">
+  <br><sub>接受 / 拒绝修订 — AI 以修订写入文档，由你逐项审阅。</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/marketing/03-evidence-jump.png" alt="点击依据引用后跳转到另一份文档中高亮的来源段落" width="1000">
+  <br><sub>证据跳转 — 打开引用即可落到支撑结论的原文位置。</sub>
 </p>
 
 ## 为什么值得做
@@ -55,14 +65,13 @@ AI 编程工具已经展示了智能体进入实际工作环境的价值。专�
 工程工作的重点，是最终文件的质量：保留结构、让修改可以审阅、让依据在多轮修订后仍可核查。[下一步](#下一步)列出了值得贡献者共同解决的问题。
 
 <details>
-<summary><strong>查看工作台与扩展广场</strong></summary>
+<summary><strong>查看扩展广场</strong></summary>
 
 <p align="center">
-  <img src=".github/assets/workspace-ai.png" alt="同一工作台中的项目文件、文档视图与 AI 对话" width="1000">
   <img src=".github/assets/marketplace-live.png" alt="应用内插件与可复用 Skill 广场" width="1000">
 </p>
 
-以上为早期版本截图，材料为虚构演示内容。实际评估请使用[最新版本](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest)。
+扩展广场截图使用虚构演示材料。实际评估请使用[最新版本](https://github.com/AI-WorkDeck/aiworkdeck/releases/latest)。
 
 </details>
 
