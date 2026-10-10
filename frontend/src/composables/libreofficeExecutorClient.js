@@ -138,6 +138,8 @@ export const EDITOR_ACTIONS = [
   // doc_list_revisions/doc_accept(_all)_revision(s)/doc_reject(_all)_revision(s)、
   // doc_get_comments/doc_resolve_comment/doc_delete_comment 直接复用同一批 action。
   'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_revisions', 'resolve_all_revisions',
+  // [#1088 / #66 PR-B] toolbar Accept/Reject current — worker has the action; whitelist was missed.
+  'resolve_revision_at_cursor',
   'list_comments', 'goto_comment', 'set_comment_resolved', 'delete_comment',
   // [批注回复] doc_reply_comment 的落点——同一批注锚点上追加一条新批注，见
   // office_thread.js reply_comment 的实现注释（原生线程属性 best-effort）。
