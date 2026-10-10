@@ -72,7 +72,7 @@
 
 目标：用最小代价证明路线 A 的三个生死项。**这三关任一过不了，A 不走，转 B。**
 
-**验收结果（go/no-go）→ 结论：GO，路线 A 走**（harness 在 `experiments/zetaoffice-spike/`，分支 `feat/libreoffice-migration`；实测见 [issue #39](https://github.com/zeweihan/aiworkdeck/issues/39)）：
+**验收结果（go/no-go）→ 结论：GO，路线 A 走**（harness 在 `experiments/zetaoffice-spike/`，分支 `feat/libreoffice-migration`；实测见 [issue #39](https://github.com/AI-WorkDeck/aiworkdeck/issues/39)）：
 - [x] **中文 IME + 字体** → ✅ **解决，但两层各需一项工程**：①**渲染**——CDN 默认 LOWA 构建无 CJK 字体（中文显示豆腐块），PoC 证实**往字体目录注入 CJK 字体即正确渲染**（简繁皆可）；②**输入**——Qt5-WASM 上游无 IME（候选框不弹），PoC 证实**自建"真 input 承接系统 IME → `compositionend` → UNO 在光标处 `insertString` 插入"的输入桥可正常连续中文输入**（含焦点交还、追加不替换/不选中）。
 - [x] **zetajs 程序化能力** → ✅ **全部通过**：取选区（`XSelectionSupplier.getSelection`）、模型原生搜索定位（`createSearchDescriptor`/`findFirst`/`findNext`）、`RecordChanges=true` 下替换留修订痕——**RFC 0.2 的"弃 offset、用模型原生"主张功能性验证通过**。
 - [~] **性能** → ⚠️ **部分**：UNO 批量生成 50 页 ≈ 26.5s（仅程序化写入，**非真实编辑**）；**待补测**"加载既有 50 页 docx"打开/保存耗时与编辑流畅度（更接近真实场景）。

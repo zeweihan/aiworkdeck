@@ -6,7 +6,7 @@
 > 目标：干净机器 ≤30 分钟到「能打开项目并跑一次 AI」。
 > Goal: from a clean machine to "open a project and run one AI turn" in ≤30 minutes.
 >
-> 拓扑 B（所内全自托管主栈）**暂缓**，等有实际律所需求再做，跟踪见 [#3](https://github.com/zeweihan/aiworkdeck/issues/3)。
+> 拓扑 B（所内全自托管主栈）**暂缓**，等有实际律所需求再做，跟踪见 [#3](https://github.com/AI-WorkDeck/aiworkdeck/issues/3)。
 > Topology B (fully self-hosted main stack) is deferred until a real firm needs it; tracked in #3.
 
 ## 推荐路径（多数律所试用）/ Recommended path

@@ -1,6 +1,6 @@
 # 证据检索契约 evidence.retrieve.v1
 
-> 源起：RFC [#14](https://github.com/zeweihan/aiworkdeck/issues/14) 社区讨论（@mheilimo 的评论）。
+> 源起：RFC [#14](https://github.com/AI-WorkDeck/aiworkdeck/issues/14) 社区讨论（@mheilimo 的评论）。
 > 核心取向：**契约稳定、传输可插拔**——MCP 只是传输适配层之一，不是证据契约本身。
 > 本地记忆、远程服务、MCP 服务器都以同一契约接入；Skill 声明依赖能力，插件负责实现。
 

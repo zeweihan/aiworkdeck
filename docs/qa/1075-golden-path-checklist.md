@@ -1,6 +1,6 @@
 # #1075 合同审查黄金路径 · 手测清单
 
-跟踪：[#1075](https://github.com/zeweihan/aiworkdeck/issues/1075)  
+跟踪：[#1075](https://github.com/AI-WorkDeck/aiworkdeck/issues/1075)  
 夹具：[`fixtures/contracts/`](../../fixtures/contracts/)（**合成材料，禁止真实客户数据**）
 
 ## 夹具
