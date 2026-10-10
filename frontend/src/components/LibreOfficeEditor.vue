@@ -2,10 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <template>
   <view class="libre-editor-wrapper" :class="{ 'evidence-drop-armed': evidenceDropArmed }">
-    <!-- NO full-width bar — it read as alien chrome on top of the document
-         (user feedback). Status floats over the editor's top-right corner;
-         the pill only appears while something is happening (saving/failure)
-         and vanishes when ready. -->
+    <!-- 保存状态沿用版本身份细栏，保持固定位置；加载与其它错误仍走原有浮层。 -->
     <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
          把过程阶段化展示出来（用户反馈：不能更快，也要看得见进展）。 -->
     <view v-if="loadingOverlayVisible" class="libre-loading">
@@ -95,12 +92,18 @@
          为什么不再逐段跟光标：律师在这里要读的是「我现在看的这份文件存进版本记录了
          吗、是哪一版」，而光标随便一动那句话就换个名字、落进表格还整条消失。
          逐段归属一个字没动，仍在审阅面板的「溯源」标签里（设计稿 §5.5）。 -->
-    <view v-if="provenanceBarVisible" class="libre-prov-bar">
+    <view v-if="saveStateText || provenanceBarVisible" class="libre-prov-bar">
       <text
+        v-if="provenanceBarVisible"
         class="libre-prov-text"
         :class="{ clickable: !!provSha }"
         @tap="openProvenanceHistory"
       >{{ provText }}</text>
+      <view v-if="saveStateText" class="libre-save-state" :class="{ error: isError && !saving }" role="status">
+        <text class="libre-save-label" :title="saveStateText">{{ saveStateText }}</text>
+        <text v-if="(statusKey === 'saveFailed' || statusKey === 'movedSaveFailed') && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
+        <text v-if="statusKey === 'movedSaveFailed' && !saving" class="libre-save-retry" @tap="saveCopyAs">{{ $t('editor.saveCopyAs') }}</text>
+      </view>
     </view>
     <!-- review-overview-open：审阅概览现在浮在画布右侧（不挤宽画布），画布上的
          宿主浮层据此让出面板宽度，见样式 .libre-review-overview 之后那一段。 -->
@@ -133,14 +136,9 @@
           <text class="libre-evidence-hint">{{ $t('workbench.evidence.dropHint') }}</text>
         </view>
         <view class="libre-float">
-          <!-- No manual save button: edits auto-save (modify listener → debounced
-               saveDocument). 保存状态只在「慢」和「失败」时出声——见 saveDocument。 -->
           <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
             <view v-if="!isError && !ready" class="libre-spin"></view>
             <text>{{ displayStatus }}</text>
-            <text v-if="(statusKey === 'saveFailed' || statusKey === 'movedSaveFailed') && !saving" class="libre-save-retry" @tap="retrySave">{{ $t('editor.retrySave') }}</text>
-            <!-- 对账认不出新位置时重试永远 409：给一条「另存为…」出口，让律师自选位置留住改动（BUG-14） -->
-            <text v-if="statusKey === 'movedSaveFailed' && !saving" class="libre-save-retry" @tap="saveCopyAs">{{ $t('editor.saveCopyAs') }}</text>
           </view>
           <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
                Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。
@@ -382,8 +380,17 @@ export default {
     aiReviewEnabled() {
       return !this.inlineReviewState || this.inlineReviewState.ai !== false
     },
-    // Stays quiet once ready — no permanent "就绪" badge.
+    // 不用浮动胶囊提示保存，固定细栏在防抖等待期间也明确显示未落盘状态。
+    saveStateText() {
+      if (!this.ready || !this.file || this.loadingOverlayVisible || this.docLoadFailed) return ''
+      if (this.saving) return this.$t('editor.status.saving')
+      if (this.statusKey === 'saveFailed' || this.statusKey === 'movedSaveFailed') return this.$t('editor.status.' + this.statusKey)
+      if (this.statusKey !== 'ready') return ''
+      if (this.dirty) return this.$t('editor.status.pendingSave')
+      return this.$t('editor.status.' + (this.file.fileSize > 0 || this._savedOnce ? 'saved' : 'noPendingChanges'))
+    },
     displayStatus() {
+      if (this.saveStateText) return ''
       return this.statusKey === 'ready' ? '' : this.$t('editor.status.' + this.statusKey)
     },
     bootStageText() {
@@ -2176,9 +2183,7 @@ export default {
       if (lease === null) return false
       let safeToOverwrite = true // false only while an HTTP upload has an uncertain outcome
       this.saving = true
-      // 保存状态别抢戏：绝大多数保存几百毫秒就完了，闪一下「保存中…→已保存」
-      // 纯粹是干扰（用户反馈：经常有变化，不好看且会打扰）。规则改成——慢到 2s
-      // 以上才提示「保存中…」，成功后安静收回、不报「已保存」，失败才常驻显示。
+      // 固定细栏通过 saving/dirty 显示保存状态；statusKey 保留慢保存的兼容状态。
       // 上一次的「保存失败」不能当成要恢复的状态，这次成功了就该回到就绪。
       // （i18n：判据全部按 statusKey 走，不比较 $t 渲染出的显示串。）
       const prevStatusKey = this.statusKey.endsWith('Failed') ? 'ready' : this.statusKey
@@ -2350,6 +2355,10 @@ export default {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .libre-prov-text.clickable { color: var(--awd-accent-text); text-decoration: underline; cursor: pointer; }
+.libre-save-state { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; margin-left: auto; font-size: 11px; color: var(--awd-text-2); }
+.libre-save-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.libre-save-state .libre-save-retry { flex-shrink: 0; }
+.libre-save-state.error { color: var(--awd-danger); }
 
 /* 概览打开时，画布上的宿主浮层让出面板那 320px（= ReviewPanel .rp 的宽度），画布本身
    不挤宽。不让的话：保存失败的「重试」、改字 stale 条右侧的 保留/打开/忽略、拖拽关联

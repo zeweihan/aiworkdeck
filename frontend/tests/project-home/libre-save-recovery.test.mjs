@@ -185,3 +185,97 @@ for (const outcome of ['false', 'dirty', 'saving', 'throws', 'saved']) {
     assert.equal(toasts.length, outcome === 'saved' ? 0 : 1)
   })
 }
+
+
+test('Office 慢保存超过十秒仍保持等待，真正落盘后才关闭', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { vm, close, modals } = makeCloseVm(false)
+  const gate = deferred()
+  const inst = makeVm({ uploadBytes: () => gate.promise })
+  vm._libreRefs['left:7'] = inst
+  const saving = inst.autoSave()
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+  const closing = close(7, 'left')
+  t.mock.timers.tick(11000)
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+  assert.equal(inst.saving, true)
+  assert.equal(vm.leftFiles.length, 1)
+  assert.equal(modals.length, 0, '仍在保存不能弹失败/放弃对话框')
+  gate.resolve()
+  await saving
+  t.mock.timers.tick(100)
+  await closing
+  assert.equal(vm.leftFiles.length, 0)
+  assert.equal(inst.dirty, false)
+})
+
+test('Office 保存期间重复关闭只等同一次保存，不弹多个放弃对话框', async () => {
+  const { vm, close, modals } = makeCloseVm(false)
+  const inst = vm._libreRefs['left:7']
+  const gate = deferred()
+  let calls = 0
+  inst.flushSave = async () => {
+    calls++
+    inst.dirty = false
+    inst.saving = true
+    await gate.promise
+    inst.saving = false
+    inst.dirty = true
+    return false
+  }
+  const first = close(7, 'left')
+  const second = close(7, 'left')
+  gate.resolve()
+  await Promise.all([first, second])
+  assert.equal(calls, 1)
+  assert.equal(modals.length, 1)
+  assert.equal(vm.leftFiles.length, 1)
+})
+
+for (const state of ['dirty', 'saving']) {
+  test(`Office flush 成功回执之后仍然 ${state} 时保留标签`, async () => {
+    const { vm, close, modals, toasts } = makeCloseVm(false)
+    const inst = vm._libreRefs['left:7']
+    inst.isError = false
+    inst.flushSave = async () => {
+      inst.dirty = state === 'dirty'
+      inst.saving = state === 'saving'
+      return true
+    }
+    await close(7, 'left')
+    assert.equal(vm.leftFiles.length, 1)
+    assert.equal(modals.length, 0, '保存期间新输入不伪装成保存失败')
+    assert.equal(toasts.length, 1)
+  })
+}
+
+test('保存状态固定展示待保存、保存中、已保存及失败；不再使用保存浮动胶囊', () => {
+  const options = new Function(...Object.keys(barriers), 'ReviewPanel', 'EditorToolbar', 'EvidenceStaleBar', body)(...Object.values(barriers), null, null, null)
+  const vm = { ready: true, file: { id: 7, fileSize: 100 }, statusKey: 'ready', dirty: true, saving: false, $t: k => k }
+  const state = () => options.computed.saveStateText.call(vm)
+  assert.equal(state(), 'editor.status.pendingSave')
+  vm.saving = true
+  assert.equal(state(), 'editor.status.saving')
+  vm.dirty = false
+  vm.saving = false
+  assert.equal(state(), 'editor.status.saved')
+  vm.statusKey = 'saveFailed'
+  vm.dirty = true
+  assert.equal(state(), 'editor.status.saveFailed')
+  vm.saving = true
+  assert.equal(state(), 'editor.status.saving', '重试期间不能继续说保存失败')
+  vm.saving = false
+  vm.statusKey = 'ready'
+  vm.dirty = false
+  vm.file.fileSize = 0
+  assert.equal(state(), 'editor.status.noPendingChanges', '新建空模板尚未上传，不谎称已落盘')
+  vm._savedOnce = true
+  assert.equal(state(), 'editor.status.saved')
+  vm.docLoadFailed = true
+  assert.equal(state(), '', '装载失败不显示已保存')
+  assert.match(source, /class="libre-save-state"/)
+  assert.match(source, /v-if="saveStateText \|\| provenanceBarVisible"/)
+  for (const statusKey of ['saving', 'saveFailed', 'movedSaveFailed']) {
+    assert.equal(options.computed.displayStatus.call({ statusKey, saveStateText: 'status', $t: k => k }), '')
+  }
+})

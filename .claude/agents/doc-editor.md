@@ -7,6 +7,12 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 职责边界：编辑器内核与宿主集成。AI 发编辑指令的链路属 ai-doc-bridge 领域。引擎 = LibreOffice 24.2.8 自建 zh-CN 版（LO core 分支 distro/allotropia/zeta-24-2）。
 
+## 大段粘贴与文本边界（dev-board#1172/#1173，2026-10-10）
+
+覆盖层 Cmd/Ctrl+V 读取剪贴板纯文本后走 `replace_selection`，不是 `insert_at_cursor`。整次替换（含字符级修订分支）须配对 `lockModel/unlockModel`，用 `finally` 释放；否则多段粘贴会逐段触发布局与 JS 修改监听。`test:lowa-paste-large` 通过真实键盘和浏览器剪贴板测试 180 段约 1.8 万字、HTML+纯文本剪贴板、长单段、继续输入及导出重开全文一致；富文本剪贴板仍沿用原有纯文本粘贴语义，不代表保留 HTML 格式。
+
+Writer 的 `ShowTextBoundaries` 与格式标记联动：打开 ¶ 时会把文本范围画成整页矩形。`EditorToolbar.applyViewPrefs` 显式传 `textBoundaries:false`，保留既有 ¶ 和标尺偏好；`set_view_options` 无参依旧只读，返回原生真实状态。不要改页边距、段落边框或使用 toggle。`test:lowa-view-boundaries` 用 r5 有头引擎核对矩形前后截图、格式标记/标尺、页尺寸与边距、干净/已脏状态及重载。
+
 ## AI 逐段修订与显示切换（dev-board#1131/#1132，2026-10-07）
 
 `modify_paragraph` 的字符级差异须在既有 `lockModel/unlockModel` 内一次落完，并用 `finally` 解锁；否则每个差异片段触发布局及 JS 修改监听器，累计修订越多越慢。不得以整段替换或丢弃修订换取提速。异步最终文本命令由 `agentViewPending` 串行等待；显式 `set_revision_view` 在批次结束后执行，不能中途改变最终正文语义，也不能被旧显示态恢复覆盖。命令署名在真正执行的闭包内设置，排队时不改变在飞命令的作者。
@@ -72,7 +78,9 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 - `LibreOfficeEditor.uploadBytes` 的 XHR 必须有 60s 超时与中止终态；导出沿用三层 180s 预算。
 - 失败保留 `dirty`，暂停自动重试并在状态胶囊给「重试保存」。引擎超时不代表导出已停止，不能每 15s 再排一笔。
-- `flushSave` 返回布尔结果，默认等完成；标签关闭与 LRU 显式给 10s 等待预算。超时仅返回 false，不并发另起保存，也不清掉在途操作。
+- `flushSave` 返回布尔结果，默认等完成；交互标签关闭等待真实保存结果，不能用 10s 把慢导出报成失败（dev-board#1174）。LRU 保留 10s 等待预算：超时仅返回 false，不并发另起保存，也不清掉在途操作。
+- 同一 Office 实例保存期间的重复关闭去重，完成后重查 dirty/saving；若等待期间有新输入，保留标签并继续自动保存，不弹失败/放弃提示。真实保存失败仍保留明确放弃的出口。
+- 保存状态固定显示在版本身份细栏：待保存、保存中、已保存或失败；新建零字节模板在首次上传前只显示“无待保存更改”。保存状态不再使用浮动胶囊，失败的重试/另存为入口随状态留在细栏。
 - `closeFile` 保存失败时让用户选「继续编辑 / 放弃并关闭」；不能用 `isError` 跳过保存（保存失败也算 isError）。只有 `docLoadFailed` 才表示空白 boot 文档，不得覆盖后端真文件。
 - 明确放弃走 `discardPendingSave`：关掉上传闸并中止当前 XHR，迟到导出不得再上传。LRU 遇到失败/超时保留实例。
 - flush 期间的修改暂缓自动保存；`_flushPromise` 清除后必须补排仍然 dirty 的内容，否则取消关闭后会永久停在 dirty + ready。

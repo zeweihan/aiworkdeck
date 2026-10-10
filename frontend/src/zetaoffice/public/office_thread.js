@@ -4057,18 +4057,23 @@ const EXEC = {
   // text becomes a paragraph break (insertTextAtCursor).
   replace_selection(p) {
     const vc = ctrl.getViewCursor();
-    // 最小修订颗粒度：选区与新文本只差几个字时，只对差异字符落修订。仅在修订
-    // 模式开启时启用——RecordChanges 关闭意味着调用方要的是硬替换（如测试 reset）。
-    let rcOn = false; try { rcOn = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
-    if (rcOn && (vc.getString() || '').length > 0 && applyMinimalRedline(vc, p.text || '')) {
+    // One paste may contain hundreds of paragraphs. Batch native layout and
+    // JS modify callbacks for the entire replacement, including tracked edits.
+    lockModel();
+    try {
+      // 最小修订颗粒度：选区与新文本只差几个字时，只对差异字符落修订。仅在修订
+      // 模式开启时启用——RecordChanges 关闭意味着调用方要的是硬替换（如测试 reset）。
+      let rcOn = false; try { rcOn = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+      if (rcOn && (vc.getString() || '').length > 0 && applyMinimalRedline(vc, p.text || '')) {
+        vc.collapseToEnd();
+        return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
+      }
+      if ((vc.getString() || '').length > 0) vc.setString(''); // drop the selection (tracked)
+      vc.collapseToEnd();
+      insertTextAtCursor(vc, p.text || '');
       vc.collapseToEnd();
       return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
-    }
-    if ((vc.getString() || '').length > 0) vc.setString(''); // drop the selection (tracked)
-    vc.collapseToEnd();
-    insertTextAtCursor(vc, p.text || '');
-    vc.collapseToEnd();
-    return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
+    } finally { unlockModel(); }
   },
   // [verified] model-native search + redline (RFC §0.2: no integer offsets).
   // 全部替换走引擎原生 replaceAll（见 nativeTrackedReplaceAll：150 命中 0.2s）；
@@ -4746,13 +4751,17 @@ const EXEC = {
   // 直写 ViewSettings 而不是派发 .uno:ControlCodes / .uno:Ruler：后两者是切换语义，
   // 宿主想设成确定状态就得先读再判，而 load_document 换文档后视图设置会回到引擎
   // 默认值，宿主要能无条件「设成 X」。不改一个字节的内容。
-  // {formattingMarks?, ruler?}；都不带 = 只读回。ruler 同时管横竖两条（ShowRulers 是总闸）。
+  // {formattingMarks?, ruler?, textBoundaries?}；都不带 = 只读回。
+  // ruler 同时管横竖两条（ShowRulers 是总闸）；textBoundaries 是辅助线，不是文档边框。
   set_view_options(p) {
     const req = p || {};
     let vs = null;
     try { vs = ctrl.getViewSettings(); } catch (e) { return { success: false, message: 'no view settings: ' + errStr(e) }; }
     if (req.formattingMarks != null) {
       try { vs.setPropertyValue('ShowNonprintingCharacters', !!req.formattingMarks); } catch (e) {}
+    }
+    if (req.textBoundaries != null) {
+      try { vs.setPropertyValue('ShowTextBoundaries', !!req.textBoundaries); } catch (e) {}
     }
     if (req.ruler != null) {
       for (const k of ['ShowRulers', 'ShowHoriRuler', 'ShowVertRuler']) {
@@ -4761,6 +4770,7 @@ const EXEC = {
     }
     const out = { success: true };
     try { out.formattingMarks = !!vs.getPropertyValue('ShowNonprintingCharacters'); } catch (e) {}
+    try { out.textBoundaries = !!vs.getPropertyValue('ShowTextBoundaries'); } catch (e) {}
     try { out.ruler = !!vs.getPropertyValue('ShowHoriRuler'); } catch (e) {}
     try { out.verticalRuler = !!vs.getPropertyValue('ShowVertRuler'); } catch (e) {}
     return out;

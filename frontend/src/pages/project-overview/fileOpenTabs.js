@@ -351,21 +351,30 @@ export const fileOpenTabsMethods = {
       // （画布是空白原型，保存会覆盖真文件，同 evictLibreInstance）。
       if (file && this.useLibreEditor(file)) {
         const inst = (this._libreRefs || {})[pane + ':' + fileId]
+        if (inst && inst._closePending) return
         if (inst && inst.ready && !inst.docLoadFailed && inst.file && (inst.dirty || inst.saving)) {
-          let saved = false
-          try { saved = (await inst.flushSave({ timeoutMs: 10000 })) !== false } catch (e) { console.warn('[ProjectOverview] close flush-save failed:', e) }
-          if (!saved) {
-            const discard = await new Promise((resolve) => uni.showModal({
-              title: this.$t('editor.unsavedCloseTitle'),
-              content: this.$t('editor.unsavedCloseBody'),
-              confirmText: this.$t('editor.discardAndClose'),
-              cancelText: this.$t('editor.keepEditing'),
-              success: (res) => resolve(!!res.confirm),
-              fail: () => resolve(false),
-            }))
-            if (!discard) return
-            inst.discardPendingSave()
-          }
+          inst._closePending = true
+          try {
+            let saved = false, failed = false
+            // 交互关闭等真实保存结果，不沿用后台 LRU 的十秒预算把慢保存报成失败。
+            try { saved = (await inst.flushSave()) !== false } catch (e) { failed = true; console.warn('[ProjectOverview] close flush-save failed:', e) }
+            if (!saved || inst.dirty || inst.saving) {
+              if (!failed && !inst.isError && !inst._savePaused && (inst.dirty || inst.saving)) {
+                uni.showToast({ title: this.$t('editor.closeNewChanges'), icon: 'none' })
+                return
+              }
+              const discard = await new Promise((resolve) => uni.showModal({
+                title: this.$t('editor.unsavedCloseTitle'),
+                content: this.$t('editor.unsavedCloseBody'),
+                confirmText: this.$t('editor.discardAndClose'),
+                cancelText: this.$t('editor.keepEditing'),
+                success: (res) => resolve(!!res.confirm),
+                fail: () => resolve(false),
+              }))
+              if (!discard) return
+              inst.discardPendingSave()
+            }
+          } finally { inst._closePending = false }
         }
         // 落盘期间列表可能已变（并发关闭）——重新定位，已被移除则到此为止
         idx = list.findIndex(f => f.id === fileId)

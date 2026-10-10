@@ -78,6 +78,13 @@ dev-board#1107 后续完整来源探针发现：仅删“全部”仍保留无�
 - 代码围栏、普通示例文字及 thinking/final/其他容器内部不识别为新别名；不恢复非自闭合或不完整输出。ASK 仍经原工具权限闸，未改 PLAN 既有行为。
 - 回归：`XmlToolCallParserTest` 保存完整实际失败形态；`AskUserOrchestratorFlowTest` 验证提问事件、持久化、同批后续写入不执行及 ASK 拒绝。`AskUserLiveEvaluationTest` 只量提问/进入编辑工具的行为，不代表真实文档删改成功。
 
+## 嵌套提问标记的显示兼容（dev-board#1175，2026-10-10）
+
+- 用户截图中的 `<ask_user><question>…</question><options>[JSON]</options></ask_user>` 不属于标准工具协议；旧前端先拿走 question 建卡，把外壳和选项 JSON 留在正文。`legacyAskUserMarkup.mjs` 在通用解析器之前暂存该容器，仅对独立行、有效 question 与 options 结构生成现有问题卡，保留选项说明与“其他”输入。正常 SSE `ask_user` 事件仍以服务端 id 覆盖。
+- 这是显示兼容，不增加工具执行别名、不生成授权 id；后端仍按嵌套 `<question>` 走原 AWAITING_INPUT 路径。回答走既有结构化回答格式；旧形态没有服务端问题 id，因此不恢复 ask_user 工具专有的授权快照。
+- 流式、断线恢复、历史回灌同路，历史解析须保存/恢复实时解码器实例。围栏/行内代码和普通示例、thinking/tool 作用域不建问题卡；无法校验的 JSON、未知容器与不完整问题保留原文，不静默丢内容。只缺容器的最后闭合而问题/选项已经完整时，终态可恢复问题卡。
+- 回归 `legacy-ask-user-stream.test.mjs` 覆盖五种分片、旧实现失败、上下文隔离、事件覆盖与恢复；`chat-presentation-ui/ask-user.mjs` 覆盖真实 ChatInterface 的嵌套原文 → 点选 → POST → 历史选中状态。合成浏览器验证不等于正式桌面包或用户原会话实测。
+
 ## XML 命名字符串的引号拒绝（dev-board#1117，2026-10-01）
 
 - 命名字符串内未转义的同型引号可能把批注等参数静默截为前缀。`XmlToolCallParser.ParsedCall.parseError` 在提取前拒绝此类歧义，参数不成为可执行的半截 JSON；合法转义、单双引号与既有三引号路径继续沿用原解析。
