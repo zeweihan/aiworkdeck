@@ -423,3 +423,12 @@ find-or-create，影子项目从 `/api/projects/my` 滤掉）。绑定后两条�
   `DoorbellStreamPoolReleaseTest` 真起几条 SSE 再看连接池——用 mock 绕过去等于没测那条 OSIV 地雷（见地雷 10）。
   `MobileRelayClientDoorbellTest` 对着真 HTTP 桩守地雷 15、16：先确认传输取件**确实还堵着**再看参考取件跑完了（否则是空断言），换账号那条看的是第二次建流带的**新令牌**而不只是连接次数。
 - 云端冒烟：`curl -s -o /dev/null -w '%{http_code}\n' 'https://addin.aiworkdeck.com/api/mobile/desktop/stream?deviceId=x'` 无凭据应 **401**（裸 401，不是 4010 信封）。
+
+## 桌面手机收件进度（dev-board#1171）
+
+- 工作台底栏常驻 `frontend/src/components/MobileReceiveStatus.vue`，包括无项目态；点击可看本设备全部项目的收件记录、立即检查。后台 `pollInbox` 本来就是设备级定时任务，**与当前打开的项目、页面无关**，仍按每轮完成后 60 秒检查。
+- 本地专用 `MobileReceiveController`：`GET /api/mobile-receive/status?projectKey=` 返回 active/checking/最近成功检查时间、设备名与完整 deviceId、当前项目 key/name/localRoot、最近 100 件收件状态；`POST /api/mobile-receive/check` 异步触发同一个取件流程。控制器仅在 `security.local-mode=true` 注册，沿用会话身份闸，不返回令牌。**云端 /api/mobile/* 协议未改变**。
+- 收件状态由实际落盘流程更新：pending → receiving → saved；磁盘/下载/目标项目失败为 failed，原件不 ACK；字节与元数据成功而 ACK 失败为 savedPendingAck，下轮走原有幂等补确认。状态只存本进程内存，最多 100 件，换账户清空；重启后不能把空列表说成“云端没有待收件”。首次轮询前不知道云端数量，界面明确周期、最近成功检查和手动检查入口。
+- `inboxRunning` 保证手动检查与定时取件不并发下载/落同一件。状态不能把 `landAndAck` 的早退当成功：项目不存在、鉴权失败、下载响应不符合裸字节契约均单独记失败。
+- 重名项目核对必须同时看 **完整 deviceId + 项目 key**，项目路径仅做本机辅助。不得按项目名称匹配。手机改变已上传条目的本地归属不会改变中转行：现有 POST /media 按 clientMediaId 幂等返回原行，没有重分配接口；ACK 后原 blob 删除，不可伪装成可移动。
+- 验证：JDK 21 `mvn test -Dtest='MobileReceiveControllerTest,MobileRelayClientHttpTest,MobileRelayClientServiceTest,MobileRelayClientDoorbellTest'`；前端 `npm run test:media`。`frontend/tests/mobile-receive/ui.mjs` 对实际 dev:h5 工作台跑鼠标入口/检查/状态变更/同名编号/无项目态与双主题截图（API 用合成响应，不代表正式 Electron 或线上跨端实测）。

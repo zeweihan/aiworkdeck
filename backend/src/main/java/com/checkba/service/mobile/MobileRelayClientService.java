@@ -41,6 +41,8 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Objects;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -144,6 +146,82 @@ public class MobileRelayClientService {
      */
     static long DOORBELL_STABLE_MS = 30_000L;
 
+    // 本次运行的收件记录：只保留最近 100 件，不持久化第二套文件台账。
+    private final AtomicBoolean inboxRunning = new AtomicBoolean(false);
+    private final Map<Long, Map<String, Object>> receiptItems = new LinkedHashMap<>();
+    private String receiptAccount;
+    private volatile String inboxAccount;
+    private volatile long lastInboxCheck;
+    private volatile String inboxError = "";
+
+    public synchronized Map<String, Object> receiveStatus(String projectKey) {
+        resetReceiptsForAccount();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("active", active());
+        out.put("checking", inboxRunning.get() && Objects.equals(inboxAccount, receiptAccount));
+        out.put("deviceId", deviceId());
+        out.put("deviceName", deviceName());
+        out.put("lastCheckedAt", lastInboxCheck);
+        out.put("error", inboxError);
+        out.put("project", projectInfo(projectKey));
+        out.put("items", receiptItems.values().stream().map(LinkedHashMap::new).toList());
+        return out;
+    }
+
+    public void receiveNow() {
+        if (active() && !inboxRunning.get()) dispatchNudge("media", this::pollInbox);
+    }
+
+    private synchronized void resetReceiptsForAccount() {
+        String fingerprint = accountService.accountFingerprintOrNull();
+        if (!Objects.equals(receiptAccount, fingerprint)) {
+            receiptItems.clear();
+            lastInboxCheck = 0;
+            inboxError = "";
+            receiptAccount = fingerprint;
+        }
+    }
+
+    private synchronized void updateInboxCheck(String account, Long checkedAt, String error) {
+        resetReceiptsForAccount();
+        if (!Objects.equals(account, receiptAccount)) return;
+        if (checkedAt != null) lastInboxCheck = checkedAt;
+        inboxError = error;
+    }
+
+    private Map<String, Object> projectInfo(String key) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("key", key == null ? "" : key);
+        try {
+            projectRepository.findById(Long.parseLong(key)).filter(p ->
+                    localIdentityService.localUserId().equals(p.getUserId())).ifPresent(p -> {
+                out.put("name", p.getName());
+                out.put("path", p.getLocalRoot() == null ? "" : p.getLocalRoot());
+            });
+        } catch (NumberFormatException ignored) { }
+        return out;
+    }
+
+    private synchronized void receipt(JsonNode item, String phase, String message) {
+        resetReceiptsForAccount();
+        if (!Objects.equals(inboxAccount, receiptAccount)) return;
+        long id = item.path("id").asLong();
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", id);
+        row.put("fileName", item.path("fileName").asText());
+        row.put("project", projectInfo(item.path("projectKey").asText()));
+        row.put("phase", phase);
+        row.put("message", message);
+        String root = "audio".equals(item.path("mediaType").asText()) ? AUDIO_ROOT_FOLDER : MEDIA_ROOT_FOLDER;
+        row.put("savedPath", "document".equals(item.path("mediaType").asText())
+                ? ADDIN_DOC_ROOT_FOLDER + "/" + sanitizedDocName(item.path("fileName").asText())
+                : root + "/" + captureDate(item) + "/" + landedFileName(item.path("fileName").asText(), item.path("clientMediaId").asText()));
+        row.put("updatedAt", System.currentTimeMillis());
+        receiptItems.remove(id);
+        receiptItems.put(id, row);
+        while (receiptItems.size() > 100) receiptItems.remove(receiptItems.keySet().iterator().next());
+    }
+
     /** 持久化结构：~/.aiworkdeck/mobile-relay.json */
     public static class RelayState {
         public String deviceId;
@@ -242,33 +320,51 @@ public class MobileRelayClientService {
     /** 影像取件：每 60 秒轮询，逐件落盘 + ACK。任一件失败不影响其余。 */
     @Scheduled(initialDelay = 60_000, fixedDelay = 60_000)
     public void pollInbox() {
-        if (!active()) return;
+        if (!active() || !inboxRunning.compareAndSet(false, true)) return;
+        resetReceiptsForAccount();
+        inboxAccount = accountService.accountFingerprintOrNull();
+        updateInboxCheck(inboxAccount, null, "");
         try {
             HttpResponse<String> resp = authed("GET", "/api/mobile/inbox?deviceId=" + deviceId(), null);
-            if (resp == null || resp.statusCode() < 200 || resp.statusCode() >= 300) return;
+            if (resp == null || resp.statusCode() < 200 || resp.statusCode() >= 300) {
+                updateInboxCheck(inboxAccount, null, "connection");
+                return;
+            }
             JsonNode items = mapper.readTree(resp.body());
-            if (!items.isArray() || items.isEmpty()) return;
+            if (!items.isArray()) {
+                updateInboxCheck(inboxAccount, null, "connection");
+                return;
+            }
+            updateInboxCheck(inboxAccount, System.currentTimeMillis(), "");
+            for (JsonNode item : items) receipt(item, "pending", "");
             for (JsonNode item : items) {
                 try {
+                    receipt(item, "receiving", "");
                     landAndAck(item);
                 } catch (Exception e) {
+                    receipt(item, "failed", "save");
                     log.warn("手机同步：影像 {} 落盘失败（留在中转区下轮重试）",
                             item.path("id").asLong(), e);
                 }
             }
         } catch (Exception e) {
+            updateInboxCheck(inboxAccount, null, "connection");
             log.warn("手机同步：取件轮询异常（下轮重试）", e);
         } finally {
-            // 跨设备文件传输（dev-board#251 B 侧）跟在同一轮询节奏后面，不单独占一个
-            // @Scheduled——放 finally 而不是紧跟 try-catch 之后，是因为上面 try 块里
-            // 有好几处 return（空收件箱/响应异常），那些 return 会直接跳出整个方法，
-            // 不放 finally 的话大多数轮次（收件箱通常是空的）根本轮不到这一句。
-            pollTransferCommands();
-            // 插件对话镜像（dev-board#298）同理挂在 finally：早 return 不能把它饿死。
-            pollConversationSync();
-            // 参考读取（dev-board#718）：门铃是「快一点」，这一轮才是兜底——门铃断线、
-            // 旧云端没有门铃流时，取件全靠这里。同样必须在 finally。
-            pollReferenceRequests();
+            try {
+                // 跨设备文件传输（dev-board#251 B 侧）跟在同一轮询节奏后面，不单独占一个
+                // @Scheduled——放 finally 而不是紧跟 try-catch 之后，是因为上面 try 块里
+                // 有好几处 return（空收件箱/响应异常），那些 return 会直接跳出整个方法，
+                // 不放 finally 的话大多数轮次（收件箱通常是空的）根本轮不到这一句。
+                pollTransferCommands();
+                // 插件对话镜像（dev-board#298）同理挂在 finally：早 return 不能把它饿死。
+                pollConversationSync();
+                // 参考读取（dev-board#718）：门铃是「快一点」，这一轮才是兜底——门铃断线、
+                // 旧云端没有门铃流时，取件全靠这里。同样必须在 finally。
+                pollReferenceRequests();
+            } finally {
+                inboxRunning.set(false);
+            }
         }
     }
 
@@ -290,6 +386,7 @@ public class MobileRelayClientService {
             projectId = Long.parseLong(item.path("projectKey").asText());
         } catch (NumberFormatException e) {
             log.warn("手机同步：影像 {} 的项目标识无法解析: {}", itemId, item.path("projectKey").asText());
+            receipt(item, "failed", "project");
             return;
         }
         Long userId = localIdentityService.localUserId();
@@ -297,6 +394,7 @@ public class MobileRelayClientService {
         if (project.isEmpty() || !userId.equals(project.get().getUserId())) {
             // 项目已删或不属于本机用户：不 ACK（云端 7 天 TTL 兜底），只告警
             log.warn("手机同步：影像 {} 指向的项目 {} 不存在或不属于本机用户，留置", itemId, projectId);
+            receipt(item, "failed", "project");
             return;
         }
         if ("document".equals(item.path("mediaType").asText(""))) {
@@ -323,7 +421,7 @@ public class MobileRelayClientService {
                 .anyMatch(f -> !Boolean.TRUE.equals(f.getIsFolder()) && landedName.equals(f.getName()));
         if (!already) {
             String token = currentToken();
-            if (token == null) return;
+            if (token == null) { receipt(item, "failed", "connection"); return; }
             HttpRequest req = request("/api/mobile/inbox/" + itemId + "/content")
                     .header("X-Session-Id", token).GET().build();
             HttpResponse<InputStream> content = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
@@ -335,6 +433,7 @@ public class MobileRelayClientService {
                 try (InputStream in = content.body()) { in.transferTo(OutputStream.nullOutputStream()); }
                 log.warn("手机同步：影像 {} 内容下载失败 status={} contentType={}",
                         itemId, content.statusCode(), contentType);
+                receipt(item, "failed", "download");
                 return;
             }
 
@@ -378,6 +477,7 @@ public class MobileRelayClientService {
                     itemId, projectId, rootFolderName, dateStr, landedName);
         }
         HttpResponse<String> ack = authed("POST", "/api/mobile/inbox/" + itemId + "/ack", "{}");
+        receipt(item, okEnvelope(ack) ? "saved" : "savedPendingAck", "");
         if (!okEnvelope(ack)) {
             log.warn("手机同步：影像 {} ACK 失败（已落盘，下轮按同名幂等补发）", itemId);
         }
@@ -398,7 +498,7 @@ public class MobileRelayClientService {
         ProjectFile root = ensureFolder(projectId, null, ADDIN_DOC_ROOT_FOLDER, userId);
 
         String token = currentToken();
-        if (token == null) return;
+        if (token == null) { receipt(item, "failed", "connection"); return; }
         HttpRequest req = request("/api/mobile/inbox/" + itemId + "/content")
                 .header("X-Session-Id", token).GET().build();
         HttpResponse<InputStream> content = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
@@ -408,6 +508,7 @@ public class MobileRelayClientService {
             try (InputStream in = content.body()) { in.transferTo(OutputStream.nullOutputStream()); }
             log.warn("手机同步：插件文档 {} 内容下载失败 status={} contentType={}",
                     itemId, content.statusCode(), contentType);
+            receipt(item, "failed", "download");
             return;
         }
 
@@ -427,6 +528,7 @@ public class MobileRelayClientService {
             } catch (Exception ignored) {
                 // 临时文件残留无害，TTL/人工清理兜底
             }
+            receipt(item, "failed", "save");
             return;
         }
         String ext = "";
@@ -438,6 +540,7 @@ public class MobileRelayClientService {
                 ADDIN_DOC_ROOT_FOLDER, landedName);
 
         HttpResponse<String> ack = authed("POST", "/api/mobile/inbox/" + itemId + "/ack", "{}");
+        receipt(item, okEnvelope(ack) ? "saved" : "savedPendingAck", "");
         if (!okEnvelope(ack)) {
             log.warn("手机同步：插件文档 {} ACK 失败（已落盘，重放覆盖无害）", itemId);
         }

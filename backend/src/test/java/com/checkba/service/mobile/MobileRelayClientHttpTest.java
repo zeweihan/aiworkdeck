@@ -30,6 +30,10 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -70,6 +74,7 @@ class MobileRelayClientHttpTest {
     private final List<String> dirBodies = new CopyOnWriteArrayList<>();
     private final List<String> acked = new CopyOnWriteArrayList<>();
     private volatile String inboxJson = "[]";
+    private volatile String ackResponse = "{\"code\":0}";
     // 目录推送响应体：默认与旧行为一致（普通成功，无截断），尽调 P3#5 的截断告警用例改它。
     private volatile String projectsResponseBody = "{\"code\":0}";
 
@@ -116,7 +121,7 @@ class MobileRelayClientHttpTest {
                 respond(ex, 200, "JPEG-BYTES");
             } else if (path.endsWith("/ack")) {
                 acked.add(path);
-                respond(ex, 200, "{\"code\":0}");
+                respond(ex, 200, ackResponse);
             } else {
                 respond(ex, 200, inboxJson);
             }
@@ -344,6 +349,136 @@ class MobileRelayClientHttpTest {
 
         assertTrue(dirBodies.isEmpty(), "空清单不该出站——那会顶掉真桌面端的云端目录");
         assertTrue(bridgeBodies.isEmpty(), "没有出站需求就不该触发桥接");
+    }
+
+    private void statusFixture(String key) {
+        inboxJson = "[{\"id\":9,\"projectKey\":\"" + key + "\",\"clientMediaId\":\"" + MEDIA_ID + "\","
+                + "\"fileName\":\"现场录音.m4a\",\"mediaType\":\"audio\",\"fileSize\":10,"
+                + "\"capturedAt\":\"2026-10-10T10:00:00\"}]";
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> firstReceipt(MobileRelayClientService svc) {
+        return ((List<Map<String, Object>>) svc.receiveStatus("42").get("items")).get(0);
+    }
+
+    @Test
+    void receiveStatusTracksActualSavingAndBlocksDuplicatePoll() throws Exception {
+        statusFixture("42");
+        var svc = service();
+        CountDownLatch saving = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(storageService.save(anyString(), any(InputStream.class))).thenAnswer(inv -> {
+            saving.countDown();
+            assertTrue(release.await(5, TimeUnit.SECONDS));
+            savedBytes.add(inv.getArgument(1, InputStream.class).readAllBytes());
+            return inv.getArgument(0);
+        });
+        var run = CompletableFuture.runAsync(svc::pollInbox);
+        try {
+            assertTrue(saving.await(5, TimeUnit.SECONDS), "必须真的到达落盘步骤");
+            assertEquals("receiving", firstReceipt(svc).get("phase"));
+            assertEquals(true, svc.receiveStatus("42").get("checking"));
+            assertTrue(acked.isEmpty(), "字节未落盘不能确认");
+            svc.pollInbox();
+            verify(storageService, times(1)).save(anyString(), any(InputStream.class));
+        } finally { release.countDown(); }
+        run.get(5, TimeUnit.SECONDS);
+        assertEquals("saved", firstReceipt(svc).get("phase"));
+        assertEquals("现场录音/2026-10-10/现场录音-0a1b2c3d.m4a", firstReceipt(svc).get("savedPath"));
+        assertEquals("JPEG-BYTES", new String(savedBytes.get(0), StandardCharsets.UTF_8));
+        assertEquals(1, acked.size());
+        assertEquals(false, svc.receiveStatus("42").get("checking"));
+        assertTrue((Long) svc.receiveStatus("42").get("lastCheckedAt") > 0);
+    }
+
+    @Test
+    void receiveStatusFailureCanRecoverAndClearsOnAccountSwitch() throws Exception {
+        statusFixture("42");
+        var svc = service();
+        when(storageService.save(anyString(), any(InputStream.class)))
+                .thenThrow(new StorageException("disk full")).thenReturn("saved");
+        svc.pollInbox();
+        assertEquals("failed", firstReceipt(svc).get("phase"));
+        assertEquals("save", firstReceipt(svc).get("message"));
+        assertTrue(acked.isEmpty());
+        svc.pollInbox();
+        assertEquals("saved", firstReceipt(svc).get("phase"));
+        assertEquals(1, acked.size());
+        when(accountService.accountFingerprintOrNull()).thenReturn("different-account");
+        assertEquals(List.of(), svc.receiveStatus("42").get("items"));
+    }
+
+    @Test
+    void receiveStatusDoesNotClaimSuccessForMissingProjectOrBadResponse() {
+        statusFixture("999");
+        var svc = service();
+        svc.pollInbox();
+        assertEquals("failed", firstReceipt(svc).get("phase"));
+        assertEquals("project", firstReceipt(svc).get("message"));
+        assertTrue(acked.isEmpty());
+        inboxJson = "{\"code\":4010}";
+        svc.pollInbox();
+        assertEquals("connection", svc.receiveStatus("42").get("error"));
+    }
+
+    @Test
+    void oldAccountInboxResponseCannotUpdateNewAccountsCheckState() throws Exception {
+        server.removeContext("/api/mobile/inbox");
+        for (String response : List.of("[]", "{\"code\":1}")) {
+            when(accountService.accountFingerprintOrNull()).thenReturn("old-account");
+            var svc = service();
+            CountDownLatch requested = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            server.createContext("/api/mobile/inbox", ex -> {
+                requested.countDown();
+                try {
+                    if (!release.await(5, TimeUnit.SECONDS)) throw new IOException("test timed out");
+                    respond(ex, 200, response);
+                } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            var run = CompletableFuture.runAsync(svc::pollInbox);
+            try {
+                assertTrue(requested.await(5, TimeUnit.SECONDS), "旧账户请求必须真的在途");
+                when(accountService.accountFingerprintOrNull()).thenReturn("new-account");
+                assertEquals(0L, svc.receiveStatus("42").get("lastCheckedAt"));
+                assertEquals(false, svc.receiveStatus("42").get("checking"));
+            } finally { release.countDown(); }
+            run.get(5, TimeUnit.SECONDS);
+            assertEquals(0L, svc.receiveStatus("42").get("lastCheckedAt"));
+            assertEquals("", svc.receiveStatus("42").get("error"));
+            server.removeContext("/api/mobile/inbox");
+        }
+    }
+
+    @Test
+    void receiveStatusDistinguishesSavedBytesFromCloudAcknowledgement() {
+        statusFixture("42");
+        ackResponse = "{\"code\":1}";
+        var svc = service();
+        svc.pollInbox();
+        assertEquals("savedPendingAck", firstReceipt(svc).get("phase"));
+        assertEquals(1, savedBytes.size());
+        ackResponse = "{\"code\":0}";
+        svc.pollInbox();
+        assertEquals("saved", firstReceipt(svc).get("phase"));
+        assertEquals(1, savedBytes.size(), "确认重试不重复落盘");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void receiveStatusIdentifiesSameNamedProjectsByKeyAndPath() {
+        Project other = new Project();
+        other.setId(43L); other.setName("金冠纾困"); other.setUserId(7L); other.setLocalRoot("/synthetic/second-project");
+        when(projectRepository.findById(43L)).thenReturn(Optional.of(other));
+        var svc = service();
+        Map<String, Object> first = (Map<String, Object>) svc.receiveStatus("42").get("project");
+        Map<String, Object> second = (Map<String, Object>) svc.receiveStatus("43").get("project");
+        assertEquals(first.get("name"), second.get("name"));
+        assertNotEquals(first.get("key"), second.get("key"));
+        assertEquals("/synthetic/second-project", second.get("path"));
+        assertEquals(svc.deviceId(), svc.receiveStatus("42").get("deviceId"));
+        assertFalse(svc.receiveStatus("42").containsKey("token"));
     }
 
     @Test

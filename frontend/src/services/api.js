@@ -4300,3 +4300,11 @@ export function getTmeetTodosPrompt(recordId) {
 }
 
 
+
+// 桌面本机手机收件状态（不改变云端中转契约）。
+export function getMobileReceiveStatus(projectKey = '') {
+  return request({ url: '/api/mobile-receive/status', method: 'GET', data: { projectKey } })
+}
+export function checkMobileReceive() {
+  return request({ url: '/api/mobile-receive/check', method: 'POST' })
+}
