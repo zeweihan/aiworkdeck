@@ -44,6 +44,7 @@ public class MobileBillingController {
         out.put("balanceCents", r.balanceCents());
         out.put("currency", r.currency());
         out.put("plan", r.plan());
+        out.put("subscription", r.subscription());
         return out;
     }
 

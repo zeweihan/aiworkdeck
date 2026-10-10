@@ -283,6 +283,84 @@ class MobileRelayClientHttpTest {
     }
 
     @Test
+    void catalogImportDownloadsOriginalBeforeMetadataAndNeverAcknowledgesCloudCopies() throws Exception {
+        String uid = "11111111-1111-4111-8111-111111111111";
+        String fileUid = "22222222-2222-4222-8222-222222222222";
+        server.createContext("/api/mobile/catalog/" + uid + "/files", exchange -> {
+            if (exchange.getRequestURI().getPath().endsWith("/content")) {
+                exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+                respond(exchange, 200, "ORIGINAL");
+            } else respond(exchange, 200, "{\"files\":[{\"uid\":\"" + fileUid + "\",\"source\":\"cloud\",\"name\":\"a.docx\",\"size\":8}]}");
+        });
+        when(storageService.load(anyString())).thenAnswer(inv -> new ByteArrayResource(savedBytes.get(savedBytes.size()-1)));
+        MobileRelayClientService svc = service();
+        ProjectCatalogService identities = mock(ProjectCatalogService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "projectCatalog", identities);
+        var result = svc.importCatalogFile(42L, uid, fileUid, null, svc.catalogAccountScope());
+        verify(identities).preserveImportedFileUid(any(ProjectFile.class), eq(fileUid));
+        assertNotNull(result.get("fileId")); assertArrayEquals("ORIGINAL".getBytes(StandardCharsets.UTF_8), savedBytes.get(0));
+        assertTrue(callOrder.get(0).startsWith("save:")); assertTrue(callOrder.get(1).startsWith("move:"));
+        assertTrue(callOrder.get(2).startsWith("createFile:")); assertTrue(transferAcked.isEmpty());
+        svc.importCatalogFile(42L, uid, fileUid, null, svc.catalogAccountScope());
+        assertEquals(1, savedBytes.size(), "Retry reuses the successful local copy");
+    }
+
+    @Test
+    void catalogImportRejectsTruncatedBytesWithoutCreatingMetadataOrAck() throws Exception {
+        server.createContext("/api/mobile/transfer/900", exchange -> {
+            if (exchange.getRequestURI().getPath().endsWith("/content")) {
+                exchange.getResponseHeaders().add("Content-Type", "application/octet-stream"); respond(exchange,200,"short");
+            } else respond(exchange,200,"{\"code\":0,\"transfer\":{\"status\":\"STAGED\",\"fileName\":\"a.docx\",\"fileSize\":100}}");
+        });
+        when(storageService.load(anyString())).thenAnswer(inv -> new ByteArrayResource(savedBytes.get(savedBytes.size()-1)));
+        MobileRelayClientService svc = service();
+        assertThrows(IllegalStateException.class, () -> svc.importCatalogFile(42L,"","",900L,svc.catalogAccountScope()));
+        verify(projectFileService,never()).createFile(anyLong(),any(),anyString(),anyString(),anyLong(),any(),any(),anyLong());
+        assertTrue(transferAcked.isEmpty()); verify(storageService).delete(contains(".catalog-"));
+    }
+
+    @Test
+    void accountSwitchDuringDownloadCannotLandFileOrAckUsingAnotherAccount() throws Exception {
+        List<String> tokens = new CopyOnWriteArrayList<>();
+        server.createContext("/api/mobile/transfer/901", exchange -> {
+            tokens.add(exchange.getRequestHeaders().getFirst("X-Session-Id"));
+            if (exchange.getRequestURI().getPath().endsWith("/content")) {
+                when(accountService.accountFingerprintOrNull()).thenReturn("switched-account");
+                exchange.getResponseHeaders().add("Content-Type", "application/octet-stream"); respond(exchange,200,"ORIGINAL");
+            } else if(exchange.getRequestURI().getPath().endsWith("/ack")) {
+                transferAcked.add("wrong-ack");respond(exchange,200,"{\"code\":0}");
+            } else respond(exchange,200,"{\"code\":0,\"transfer\":{\"status\":\"STAGED\",\"fileName\":\"a.docx\",\"fileSize\":8}}");
+        });
+        when(storageService.load(anyString())).thenAnswer(inv -> new ByteArrayResource(savedBytes.get(savedBytes.size()-1)));
+        MobileRelayClientService svc=service();String scope=svc.catalogAccountScope();
+        assertThrows(IllegalStateException.class,()->svc.importCatalogFile(42L,"","",901L,scope));
+        assertEquals(List.of("awdt_test_token","awdt_test_token"),tokens);
+        verify(projectFileService,never()).createFile(anyLong(),any(),anyString(),anyString(),anyLong(),any(),any(),anyLong());
+        assertTrue(transferAcked.isEmpty());assertEquals(1,bridgeBodies.size(),"No new-account rebind during download");
+        verify(storageService).delete(contains(".catalog-"));
+    }
+
+    @Test
+    void accountSwitchWhileCatalogueLoadsCannotRelabelOldRowsWithNewScope() {
+        server.createContext("/api/mobile/catalog",exchange->{
+            when(accountService.accountFingerprintOrNull()).thenReturn("switched-account");
+            respond(exchange,200,"[{\"projectUid\":\"old-account\",\"name\":\"A\",\"locations\":[]}]");
+        });
+        assertThrows(IllegalArgumentException.class,()->service().catalog());
+        assertEquals(1,bridgeBodies.size());
+    }
+
+    @Test
+    void catalogAccountScopeRejectsOldRendererAfterAccountSwitch() {
+        MobileRelayClientService svc=service(); String scope=svc.catalogAccountScope();
+        svc.requireCatalogAccountScope(scope);
+        when(accountService.accountFingerprintOrNull()).thenReturn("another-account");
+        assertThrows(IllegalArgumentException.class,()->svc.requireCatalogAccountScope(scope));
+        assertThrows(IllegalArgumentException.class,()->svc.requireCatalogAccountScope(""));
+        assertTrue(bridgeBodies.isEmpty(),"No out-of-account transfer may be sent");
+    }
+
+    @Test
     @DisplayName("目录推送：首次出站先桥接，请求带 deviceId 与项目清单；同清单第二轮不重复出站")
     void pushDirectoryBridgesAndDedupes() {
         MobileRelayClientService svc = service();

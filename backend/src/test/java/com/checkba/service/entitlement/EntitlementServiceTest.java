@@ -63,6 +63,40 @@ class EntitlementServiceTest {
                 .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接 AI WorkDeck 服务器"));
     }
 
+    @Test
+    void subscriptionExpiresEvenWithinOfflineGraceAndPermanentGrantSurvives() {
+        when(accountService.isConnected()).thenReturn(true);
+        when(accountService.fetchEntitlements()).thenReturn(List.of(
+                Map.of("feature", FeatureCatalog.STAGE_UNLIMITED, "expiresAt", Instant.now().minusSeconds(1).toString()),
+                Map.of("feature", FeatureCatalog.CLIPBOARD_UNLIMITED, "expiresAt", Instant.now().minusSeconds(1).toString()),
+                Map.of("feature", FeatureCatalog.CLIPBOARD_UNLIMITED),
+                Map.of("feature", FeatureCatalog.PLAN_PRO, "expiresAt", Instant.now().plusSeconds(3600).toString())));
+        EntitlementService svc = service();
+        assertTrue(svc.refreshQuietly());
+        networkDown();
+        assertFalse(svc.isEnabled(FeatureCatalog.STAGE_UNLIMITED));
+        assertTrue(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED));
+        assertTrue(svc.isEnabled(FeatureCatalog.PLAN_PRO));
+        EntitlementService reloaded = service();
+        assertFalse(reloaded.isEnabled(FeatureCatalog.STAGE_UNLIMITED));
+        assertTrue(reloaded.isEnabled(FeatureCatalog.PLAN_PRO));
+    }
+
+    @Test
+    void malformedExpiryAndChangedAccountDoNotGrantFeatures() {
+        when(accountService.isConnected()).thenReturn(true);
+        when(accountService.accountFingerprintOrNull()).thenReturn("account-a");
+        when(accountService.fetchEntitlements()).thenReturn(List.of(
+                Map.of("feature", FeatureCatalog.STAGE_UNLIMITED, "expiresAt", "broken"),
+                Map.of("feature", FeatureCatalog.CLIPBOARD_UNLIMITED)));
+        EntitlementService svc = service();
+        assertTrue(svc.refreshQuietly());
+        assertFalse(svc.isEnabled(FeatureCatalog.STAGE_UNLIMITED));
+        assertTrue(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED));
+        when(accountService.accountFingerprintOrNull()).thenReturn("account-b");
+        assertFalse(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED));
+    }
+
     // ==================== 合并 ====================
 
     @Test

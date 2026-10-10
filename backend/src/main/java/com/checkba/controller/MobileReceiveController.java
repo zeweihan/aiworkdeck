@@ -22,6 +22,30 @@ public class MobileReceiveController {
         if (AuthController.getUserIdFromSession(session) == null) throw new IllegalStateException("请先登录");
     }
 
+    @GetMapping("/catalog")
+    public java.util.List<Map<String, Object>> catalog(
+            @RequestHeader(value = "X-Session-Id", required = false) String session) {
+        requireUser(session);
+        return client.catalog();
+    }
+
+    @PostMapping("/catalog/request")
+    public com.fasterxml.jackson.databind.JsonNode catalogRequest(
+            @RequestBody com.fasterxml.jackson.databind.JsonNode body,
+            @RequestHeader(value = "X-Session-Id", required = false) String session) {
+        requireUser(session);
+        client.requireCatalogAccountScope(body.path("accountScope").asText());
+        return client.catalogRequest(body.path("method").asText(), body.path("path").asText(), body.get("body"), body.path("accountScope").asText());
+    }
+    @PostMapping("/catalog/import")
+    public Map<String, Object> importFile(@RequestBody com.fasterxml.jackson.databind.JsonNode body,
+            @RequestHeader(value = "X-Session-Id", required = false) String session) {
+        requireUser(session);
+        client.requireCatalogAccountScope(body.path("accountScope").asText());
+        return client.importCatalogFile(body.path("targetProjectId").asLong(), body.path("projectUid").asText(),
+                body.path("fileUid").asText(), body.hasNonNull("transferId") ? body.get("transferId").asLong() : null, body.path("accountScope").asText());
+    }
+
     @GetMapping("/status")
     public Map<String, Object> status(
             @RequestHeader(value = "X-Session-Id", required = false) String session,

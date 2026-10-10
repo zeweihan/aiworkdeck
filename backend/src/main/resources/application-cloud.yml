@@ -61,6 +61,8 @@ ai:
     provider: awd-cloud
 
 storage:
+  subscription-quota:
+    enabled: true
   type: local
   local:
     root-path: /opt/aiworkdeck/cloud/data

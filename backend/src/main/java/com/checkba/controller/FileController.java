@@ -46,6 +46,12 @@ public class FileController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FileController.class);
 
     @Autowired
+    private com.checkba.service.mobile.CloudStorageQuotaService cloudStorageQuota;
+
+    @org.springframework.beans.factory.annotation.Value("${storage.subscription-quota.enabled:false}")
+    private boolean subscriptionQuotaEnabled;
+
+    @Autowired
     private StorageServiceFactory storageServiceFactory;
 
     @Autowired
@@ -362,6 +368,7 @@ public class FileController {
      * 上传接口
      * ...
      */
+    @org.springframework.transaction.annotation.Transactional
     @PostMapping("/{fileId}/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(
             @PathVariable("fileId") String fileId,
@@ -458,8 +465,14 @@ public class FileController {
             // 1. 确定存储路径（首块与追加块必须解析到同一路径：此前追加块直接用
             // 裸 wpsFileId 作路径，>5MB 文件的第 2+ 块被追加到存储根的孤儿文件里，
             // 正式路径上只剩首块 5MB —— 下载得到截断的 zip，文档加载失败）
+            if (subscriptionQuotaEnabled) {
+                long incoming = multipartFile != null ? multipartFile.getSize() : request.getContentLengthLong();
+                if (incoming < 0) throw new IllegalArgumentException("Cloud uploads require Content-Length");
+                ProjectFile target = projectFileOpt.get();
+                cloudStorageQuota.requireFileCapacity(target, incoming, offset != null && offset > 0);
+            }
+            // Quota admission refreshes the managed row after locking its owner, so resolve the path now.
             String storagePath = resolveUploadStoragePath(fileId, projectFileOpt);
-
             String savedPath;
             if (offset != null && offset > 0) {
                  // 追加模式
@@ -467,6 +480,12 @@ public class FileController {
             } else {
                  // 覆盖/新传模式
                  savedPath = getStorageService().save(storagePath, inputStream);
+            }
+
+            if (subscriptionQuotaEnabled) {
+                ProjectFile target = projectFileOpt.get();
+                target.setFileSize(getStorageService().getSize(savedPath));
+                projectFileRepository.saveAndFlush(target);
             }
 
             // 检查是否完成上传并触发RAG (Async)

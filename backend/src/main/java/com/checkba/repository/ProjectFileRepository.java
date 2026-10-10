@@ -12,6 +12,13 @@ import java.util.List;
 import java.util.Optional;
 
 public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> {
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE ProjectFile p SET p.uid = :uid WHERE p.id = :id AND ((:previous IS NULL AND p.uid IS NULL) OR p.uid = :previous)")
+    int assignCatalogUidIfUnchanged(Long id, String previous, String uid);
+
+    @org.springframework.data.jpa.repository.Query("SELECT p.uid FROM ProjectFile p WHERE p.id = :id")
+    String readCatalogUid(Long id);
+
     /**
      * 根据项目 ID 查询所有文件（包含已删除），用于文件树清单采集
      */
@@ -122,6 +129,10 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
      */
     @org.springframework.data.jpa.repository.Query("SELECT SUM(pf.fileSize) FROM ProjectFile pf WHERE pf.projectId = :projectId AND pf.isDeleted = false")
     Long sumSizeByProjectId(Long projectId);
+
+    // Include soft-deleted rows: trash still occupies physical storage until bytes are deleted.
+    @org.springframework.data.jpa.repository.Query("SELECT pf FROM ProjectFile pf WHERE pf.isFolder = false AND pf.projectId IN (SELECT p.id FROM Project p WHERE p.userId = :userId)")
+    List<ProjectFile> findCloudFilesByOwner(Long userId);
 
     /**
      * 根据物理文件路径查询

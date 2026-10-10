@@ -70,11 +70,49 @@ components:
           description: |
             仅 kind=ALREADY_PAID / IDEMPOTENCY_CONFLICT 时出现：官网连同 409 一起回的既有商户订单号。
             这是「App 被杀、本地没存下单号」的恢复路径，客户端拿它调 /recharge/status 查单。
+    CatalogLocation:
+      type: object
+      required: [kind, deviceId, key, online]
+      properties:
+        kind: { type: string, enum: [desktop, cloud] }
+        deviceId: { type: string, description: cloud 为持久云归档目标，其余为桌面设备 }
+        deviceName: { type: string }
+        key: { type: string, description: 此来源的本地项目编号，必须连 deviceId 使用 }
+        cloudProjectId: { type: integer, format: int64 }
+        archiveOnly: { type: boolean, description: 插件影子容器，仅包含插件归档内容 }
+        online: { type: boolean }
+    CatalogProject:
+      type: object
+      required: [projectUid, name, locations]
+      properties:
+        projectUid: { type: string, format: uuid }
+        name: { type: string }
+        locations:
+          type: array
+          items: { $ref: '#/components/schemas/CatalogLocation' }
+    CatalogFiles:
+      type: object
+      required: [files, count, truncated, source, cached]
+      properties:
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/TransferFile' }
+        count: { type: integer }
+        totalCount: { type: integer, nullable: true }
+        truncated: { type: boolean }
+        source: { type: string, enum: [desktop, cloud, catalog] }
+        cached: { type: boolean }
+        updatedAt: { type: string }
     TransferFile:
       type: object
       required: [id, name, path, size]
       properties:
-        id: { type: string, description: 桌面本地文件 id，只能连 deviceId/projectKey 使用 }
+        id: { type: string, description: 来源本地文件 id，只能连 deviceId/projectKey 使用 }
+        uid: { type: string, format: uuid, description: 稳定文件身份，旧桌面可能缺失 }
+        source: { type: string, enum: [desktop, cloud], description: catalogue 列表明确每件的字节来源 }
+        deviceId: { type: string }
+        projectKey: { type: string }
+        online: { type: boolean }
         name: { type: string }
         path: { type: string, description: 项目内相对展示路径，不是下载 URL }
         size: { type: integer, format: int64 }
@@ -136,6 +174,9 @@ components:
       type: object
       required: [clientMediaId, delivered, waitingSeconds]
       properties:
+        projectUid: { type: string, format: uuid, description: 持久云归档的项目身份 }
+        fileUid: { type: string, format: uuid, description: 持久云归档的文件身份 }
+        fileId: { type: integer, format: int64 }
         clientMediaId: { type: string }
         delivered: { type: boolean, description: 桌面端已 ACK 落盘（中转区已删） }
         waitingSeconds: { type: integer, format: int64, description: 已投递为 0 }
@@ -144,17 +185,23 @@ components:
       type: object
       required: [usedBytes, quotaBytes]
       description: |
-        usedBytes 只统计 inbox 待取件字节（sumPendingBytes）；而配额执行（storeMedia 时的 3GB 判断）
-        同时计入 inbox 与 transfer。手机端设置页显示的用量可能低于实际被计费的量。服务端行为，本轮不改。
+        临时中转 usedBytes 同时统计 inbox 与 transfer 未取件字节；quotaBytes 为 200MiB 临时占用上限，ACK 后释放。
+        订阅持久云空间为独立的 3GiB 配额，不因下载 ACK 删除；这两个池不混算。
       properties:
         usedBytes: { type: integer, format: int64 }
         quotaBytes: { type: integer, format: int64 }
+        persistentUsedBytes: { type: integer, format: int64, description: 持久云文件实际占用，独立于临时中转 }
+        persistentQuotaBytes: { type: integer, format: int64, nullable: true, description: 当前订阅持久额度；上游不可用时为 null，不能当作免费账户 }
+        persistentQuotaAvailable: { type: boolean, description: 上游不可用时明确返回 false }
     UploadResult:
       type: object
       required: [code, id, clientMediaId, delivered]
       properties:
         code: { type: integer, enum: [0] }
         id: { type: integer, format: int64 }
+        projectUid: { type: string, format: uuid, description: 持久云归档的项目身份 }
+        fileId: { type: integer, format: int64, description: cloud 持久归档返回 }
+        fileUid: { type: string, format: uuid, description: cloud 持久归档返回 }
         clientMediaId: { type: string }
         delivered: { type: boolean, description: 幂等重传命中已投递记录时为 true }
     AccountUser:
@@ -199,6 +246,25 @@ components:
       properties:
         balanceCents: { type: integer, format: int64, description: 余额，整数分（Credits 1 元 = 100 分） }
         currency: { type: string, enum: [CNY, USD], description: 站点币种，由部署站点决定 }
+        subscription:
+          type: object
+          description: 订阅服务额度快照，与充值余额分账；旧服务器可能缺失
+          properties:
+            active: { type: boolean }
+            expiresAt: { type: string, nullable: true }
+            periodId: { type: integer, nullable: true }
+            periodStart: { type: string, nullable: true }
+            periodEnd: { type: string, nullable: true }
+            monthlyLimitCents: { type: integer }
+            monthlyUsedCents: { type: integer }
+            weeklyStart: { type: string, nullable: true }
+            weeklyEnd: { type: string, nullable: true }
+            weeklyLimitCents: { type: integer }
+            weeklyUsedCents: { type: integer }
+            availableCents: { type: integer }
+            walletFallbackEnabled: { type: boolean }
+            cloudStorageBytes: { type: integer, format: int64 }
+            relayBytes: { type: integer, format: int64 }
         plan:
           type: string
           nullable: true
@@ -327,6 +393,59 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LoginEnvelope' }
+  /api/mobile/catalog:
+    get:
+      summary: 账户统一项目清单；projectUid 为身份，locations 为可用存储位置
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        "200":
+          description: 项目清单或错误信封
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: { $ref: '#/components/schemas/CatalogProject' }
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/catalog/{uid}/files:
+    get:
+      summary: 持久云文件或最后成功的桌面清单；首次桌面清单仍需 LIST
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: uid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 文件清单或错误信封
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/CatalogFiles'
+                  - $ref: '#/components/schemas/Envelope'
+  /api/mobile/catalog/{uid}/files/{fileUid}/content:
+    get:
+      summary: 下载持久云文件原件；不需要 ACK，也不删除云原件
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: uid
+          in: path
+          required: true
+          schema: { type: string }
+        - name: fileUid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 裸字节与实际 Content-Length；出错为 JSON 信封
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
   /api/mobile/projects:
     get:
       summary: 手机端：该账号全部设备的项目目录并集（裸数组）
@@ -377,7 +496,8 @@ paths:
                   - $ref: '#/components/schemas/Envelope'
   /api/mobile/media:
     post:
-      summary: 手机端：上传一件现场影像到中转区（幂等键 clientMediaId）
+      summary: 手机采集归档（幂等键 clientMediaId）
+      description: deviceId=cloud 时 projectKey 为目录返回的云项目编号，保存至订阅持久云空间并立即 delivered；其他设备走 ACK 即删的临时中转。
       parameters: [{ $ref: '#/components/parameters/SessionId' }]
       requestBody:
         required: true

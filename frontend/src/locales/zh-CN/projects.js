@@ -2,6 +2,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 项目列表页 + 项目概览页（project-list.vue / project-home.vue 及其五个 project-home/* 子组件）
 export default {
+  accountCatalog: '云端统一项目目录',
+  catalogRefresh: '刷新',
+  catalogAllLocal: '账户项目已在本机，连接账户后自动同步其他设备目录。',
+  catalogDestination: '取回文件到本机项目',
+  catalogChooseLocal: '选择本机项目',
+  catalogIncomplete: '部分设备尚未同步完整文件清单；在线设备正在按需读取。',
+  catalogWorking: '正在连接设备或取回文件…',
+  catalogNoFiles: '此项目尚无可读取文件。',
+  catalogCloud: '云端存储',
+  catalogOnline: '在线',
+  catalogOffline: '离线',
+  catalogImport: '取回文件',
+  catalogFailed: '取件失败',
+  catalogPending: '设备暂未响应，稍后重试将继续原取件请求。',
+  catalogQuote: '本次取件需 {credits} Credits，是否继续？',
+  catalogSaved: '文件已保存',
+
   // project-list.vue：页头与空态
   myProjects: '我的项目',
   pullFromTeamLibrary: '从团队案件库取一份案卷',

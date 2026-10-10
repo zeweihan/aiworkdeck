@@ -93,7 +93,11 @@ public class HttpMobileBillingClient implements MobileBillingClient {
         return new BalanceResult(
                 json.path("balanceCents").asLong(0),
                 json.path("currency").asText("CNY"),
-                json.hasNonNull("plan") ? json.path("plan").asText() : null);
+                json.hasNonNull("plan") ? json.path("plan").asText() : null,
+                json.path("subscription").isObject()
+                        ? new com.fasterxml.jackson.databind.ObjectMapper().convertValue(json.path("subscription"),
+                            new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {})
+                        : Map.of());
     }
 
     @Override

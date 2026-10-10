@@ -1372,3 +1372,10 @@ rail 上**没有设置齿轮**：设置入口是下拉里的「设置」（`goTo
 ## PDF 路由（2026-10-10，dev-board#1178）
 
 `isEditorOpenableFile` 必须在 `wpsFileId` 兼容兜底之前明确排除 PDF；FileTree 会为导入文件合成这个旧字段，不能据此把 PDF 送进 Writer。PDF 继续走 FilePreview 的 Chromium iframe，不改导出字节。回归 `project-home/pdf-editor-routing.test.mjs` 包括有/无旧ID及大写扩展名。
+
+## 账户统一项目目录（dev-board#1188，2026-10-11）
+
+桌面左栏 `ProjectListPane` 在本机项目视图旁挂 `AccountProjectCatalog`，通过本机代理读取账户云目录。
+同一个项目只有一个 projectUid，可从此处查看云附件与其他设备文件，包括已有本地副本的项目。
+目标本机项目必须明确选择；云文件直接取回，桌面文件先报价确认，再持久化 requestId 后 PULL；
+读取各来源失败保留已成功加载部分并说明原因。账户scope守卫、落盘/ACK顺序见 mobile-sync.md。

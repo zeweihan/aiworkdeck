@@ -71,6 +71,7 @@
           <text v-if="busy" class="create-busy-hint">{{ busyText }}</text>
         </view>
 
+        <AccountProjectCatalog v-if="isDesktop && !isClientUser" :local-projects="projects" :current-project-id="currentProjectId" @imported="onCatalogImported" />
         <view class="panel-projects">
           <!-- 事项概览条（dev-board#898，spec 2026-09-25-task-calendar-redesign E2）：取代原来那张
                「N 全部项目」大统计卡。后三格可点，进日程页并滚到对应分组。
@@ -401,6 +402,7 @@ import { formatMonthDay, timeOf } from '@/components/calendar/taskUtils.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
+import AccountProjectCatalog from './AccountProjectCatalog.vue'
 import { SORT_KEYS, DEFAULT_SORT, SORT_STORAGE_KEY, normalizeSort, nextSort, filterAndSortProjects } from '@/utils/projectListSort.js'
 
 const VIEW_MODE_KEY = 'checkba_project_list_view'
@@ -417,6 +419,7 @@ export default {
     InviteMemberDialog,
     CloudAcceptDialog,
     AwdSelect,
+    AccountProjectCatalog,
   },
   // 宿主是工作台时由 project-overview.vue 的 provide() 注入；项目列表薄壳页之外没有别的宿主，
   // 缺省 null 只为 node 静态测试与未来别的宿主兜底。
@@ -561,6 +564,9 @@ export default {
     setGlobalOverlay(false, this._overlayHolder)
   },
   methods: {
+    onCatalogImported(result) {
+      this.goToProject(result.projectId)
+    },
     async loadUserInfo() {
       const user = getCurrentUser()
       if (user) this.userInfo = user

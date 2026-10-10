@@ -2,6 +2,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Unified Settings page (components/admin/AdminPane.vue) copy. The language section keeps its own bilingual ternaries.
 export default {
+  subscriptionTitle: "Personal Pro",
+  subscriptionSeparate: "Subscription allowance is separate from your wallet and expires each period.",
+  subscriptionMonth: "This period: {used} / {limit} Credits",
+  subscriptionWeek: "This week: {used} / {limit} Credits",
+  subscriptionReset: "Weekly reset: {date}",
+  subscriptionEnds: "Period ends: {date}",
+  subscriptionFallbackOn: "Wallet spending beyond allowance: enabled",
+  subscriptionFallbackOff: "Stops at the allowance; wallet spending is disabled",
+  subscriptionManage: "Manage allowance and wallet spending",
+
   // Sidebar navigation
   navCardTitle: 'Settings',
   // The two sidebar groups (profile merged into settings, 2026-08-20)

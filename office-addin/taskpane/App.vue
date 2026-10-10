@@ -227,7 +227,7 @@ import {
   loadArchiveLinks, saveArchiveLink, mergeArchiveLinks
 } from './lib/settings.js'
 import {
-  fetchMyProjects, ensureAddinDefaultProject, fetchMe, postLogout,
+  fetchMyProjects, fetchProjectCatalog, ensureAddinDefaultProject, fetchMe, postLogout,
   createProject, fetchPlatformAiStatus, fetchMobileDevices,
   ensureAddinLink, fetchAddinLinks, postPaneHeartbeat, sendPaneBye
 } from './lib/api.js'
@@ -399,11 +399,12 @@ const quotaText = computed(() => {
  * - 一个都没有：让后端懒建「插件临时项目」并静默选中，用户无感。
  *   旧后端没有该端点时降级为现状（空态提示去选项目），不报错。
  */
+import { catalogOptions } from './lib/projectCatalog.js'
+
 async function refreshProjects() {
   if (!configured.value) return
   // 远程设备目录（dev-board#250）：与本项目列表并行拉，null 容忍——拿不到就没有
   // 这组下拉项，不影响本服务项目的正常选择
-  fetchMobileDevices(settings).then((devices) => { remoteDevices.value = devices || [] })
   projectsError.value = false
   try {
     // 归档绑定权威清单先到位（dev-board#297）：webview 清过缓存时靠它重建本地映射，
@@ -412,7 +413,15 @@ async function refreshProjects() {
     if (serverLinks.length) archiveLinks.value = mergeArchiveLinks(serverLinks)
 
     const list = await fetchMyProjects(settings)
-    projects.value = list
+    const catalog = await fetchProjectCatalog(settings)
+    if (catalog) {
+      const options = catalogOptions(catalog, list)
+      projects.value = options.projects
+      remoteDevices.value = options.devices
+    } else {
+      projects.value = list
+      remoteDevices.value = await fetchMobileDevices(settings) || []
+    }
     // 记住的项目已不存在时清空选择——绑定的影子项目刻意不在列表里，豁免
     if (projectId.value && !list.some(p => String(p.id) === projectId.value)
         && !archiveLinks.value[projectId.value]) {

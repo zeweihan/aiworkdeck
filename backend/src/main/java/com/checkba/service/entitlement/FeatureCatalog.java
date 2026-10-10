@@ -33,7 +33,7 @@ public final class FeatureCatalog {
     /** Stage 文件缓存区无限版：免费额度为最多 20 个文件、总量 500MB。 */
     public static final String STAGE_UNLIMITED = "stage.unlimited";
 
-    /** 预留：整体 Pro 订阅。本轮不实现订阅状态机，仅占位以免后续改名。 */
+    /** 整体 Pro 订阅；有效期以官网账户权益为准。 */
     public static final String PLAN_PRO = "plan.pro";
 
     /** feature -> 面向用户的中文名。插入顺序即 GET /api/entitlements 的返回顺序。 */

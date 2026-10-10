@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * - ACK：置 deliveredAt + 立即删 blob，行保留供 status 查询；
  * - status：delivered 与等待秒数，未投递件带 expiresAt；
  * - 30 天 TTL 清理：删行 + 删残留 blob（ACK 是主机制，TTL 只是兜底）；
- * - 3GB 每用户配额：只计未投递 blob，ACK 即释放（dev-board#226）。
+ * - 200MB 每用户配额：只计未投递 blob，ACK 即释放（dev-board#226）。
  *
  * 内存 H2（MODE=PostgreSQL）约定同 WorkSessionRepositoryTest。
  */
@@ -254,9 +254,9 @@ class MobileRelayStoreServiceTest {
     }
 
     @Test
-    @DisplayName("配额：未投递 blob 占满 3GB 后拒绝新上传，ACK 释放后恢复；重传不受配额影响")
+    @DisplayName("配额：未投递 blob 占满 200MB 后拒绝新上传，ACK 释放后恢复；重传不受配额影响")
     void quotaBlocksNewUploadsAndAckFrees() throws Exception {
-        // 直接造一行占满配额的未投递件（不真写 3GB 字节）
+        // 直接造一行占满配额的未投递件（不真写 200MB 字节）
         Path bigBlob = blobRoot.resolve("1").resolve("big-blob");
         Files.createDirectories(bigBlob.getParent());
         Files.writeString(bigBlob, "placeholder");
@@ -274,7 +274,7 @@ class MobileRelayStoreServiceTest {
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> store(MEDIA_ID, "one-more-byte"));
-        assertTrue(e.getMessage().contains("云端空间已满"), "配额拒绝要给用户可读的原因，实际: " + e.getMessage());
+        assertTrue(e.getMessage().contains("云端临时中转空间已满"), "配额拒绝要给用户可读的原因，实际: " + e.getMessage());
 
         // 同 clientMediaId 的重传是幂等命中，配额满也不能拒（不占新空间）
         MobileMediaInbox again = service.storeMedia(1L, "dev-a", "42", big.getClientMediaId(),
@@ -447,7 +447,7 @@ class MobileRelayStoreServiceTest {
     /**
      * dev-board#251：配额从「只计影像中转」改成「影像中转 + 跨设备传输两表未投递 blob 之和」
      * 共池——跨设备传输占用的空间会挤掉影像中转的可用额度，反之亦然，两条业务线抢的是
-     * 同一份 3GB，不是各自 3GB。
+     * 同一份 200MB，不是各自 200MB。
      */
     @Test
     @DisplayName("配额共池：跨设备传输占用的字节会挤掉影像中转的可用额度")
@@ -470,7 +470,7 @@ class MobileRelayStoreServiceTest {
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> store(MEDIA_ID, "one-more-byte"));
-        assertTrue(e.getMessage().contains("云端空间已满"),
+        assertTrue(e.getMessage().contains("云端临时中转空间已满"),
                 "跨设备传输占满配额时，影像中转的上传也该被拒，实际: " + e.getMessage());
 
         // 传输请求投递后释放配额（storagePath 置空），影像中转的上传应恢复

@@ -110,6 +110,11 @@ public class ProjectFile {
     @Column(length = 36)
     private String uid;
 
+    @jakarta.persistence.PrePersist
+    void assignUid() {
+        if (uid == null || uid.isBlank()) uid = java.util.UUID.randomUUID().toString();
+    }
+
     public String getUid() { return uid; }
     public void setUid(String uid) { this.uid = uid; }
 

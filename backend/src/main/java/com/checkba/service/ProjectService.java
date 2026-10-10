@@ -53,6 +53,11 @@ public class ProjectService {
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.mobile.CloudStorageQuotaService cloudStorageQuota;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.storage.StorageServiceFactory storageServiceFactory;
+
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProjectService.class);
 
     /**
@@ -277,6 +282,8 @@ public class ProjectService {
      */
     @Transactional
     public void deleteProject(Long id) {
+        boolean officialCloud = cloudStorageQuota != null && cloudStorageQuota.isEnabled();
+        if (officialCloud) cloudStorageQuota.lockProjectForWrite(id);
         Project project = entityManager.find(Project.class, id, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
         if (project == null) {
             throw new IllegalArgumentException(LangText.of("项目不存在: ", "Project not found: ") + id);
@@ -291,6 +298,18 @@ public class ProjectService {
         String memoryRepoKey = com.checkba.version.memory.MemoryRealm.project(id).repoKey();
         Path memoryGitDir = memoryRepoService.gitDir(memoryRepoKey);
         Path memoryWorkTree = memoryRepoService.workTree(memoryRepoKey);
+
+        // Cloud bytes must disappear before their accounting records. A failed deletion remains retryable.
+        if (officialCloud) {
+            Set<String> keys = new HashSet<>();
+            for (var file : projectFileRepository.findByProjectId(id)) {
+                if (Boolean.TRUE.equals(file.getIsFolder())) continue;
+                String key = StringUtils.hasText(file.getFilePath()) ? file.getFilePath() : file.getWpsFileId();
+                if (StringUtils.hasText(key)) keys.add(key);
+            }
+            for (String key : keys) storageServiceFactory.getStorageService().delete(key);
+            deleteDirectoryStrictly(projectDir);
+        }
 
         // evidence_link_target 没有 project_id 列，只能先按 link id 级联，再删 evidence_link 本身。
         entityManager.createQuery(
@@ -316,10 +335,19 @@ public class ProjectService {
 
         // 磁盘清理失败不回滚：库里已经删干净了，剩下的目录是可再清的垃圾，
         // 为它报错反而会让用户以为项目没删掉。
-        deleteDirectoryQuietly(projectDir);
+        if (!officialCloud) deleteDirectoryQuietly(projectDir);
         deleteDirectoryQuietly(gitDir);
         deleteDirectoryQuietly(memoryGitDir);
         deleteDirectoryQuietly(memoryWorkTree);
+    }
+
+    private void deleteDirectoryStrictly(Path dir) {
+        if (dir == null || !Files.exists(dir)) return;
+        try (var walk = Files.walk(dir)) {
+            for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+        } catch (IOException e) {
+            throw new IllegalStateException("Cloud project deletion failed; retaining its storage records", e);
+        }
     }
 
     /** 递归删目录，失败只记日志。 */
